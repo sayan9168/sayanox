@@ -1,42 +1,54 @@
-# Self-Hosting Sayanox — Phase 4
+# Self-Hosting Sayanox — Phase 5
 
 ## Goal
 
-Bootstrap the Sayanox compiler in Sayanox itself.
+One Sayanox program that runs the full pipeline:
 
-## Phase 4 (current)
+**source text → lexer → parser (AST) → C codegen**
 
-### Codegen (`codegen.sa`)
-- Walks AST parallel arrays
-- Emits C: header, `main`, `printf` for `show`, assign for `hold`, `return` for `give`
-- Supports expression kinds: number, ident, binary
+## Files
 
-### Pipeline (`pipeline.sa`)
-- Minimal end-to-end: tokens → AST → C text
+| File | Role |
+|------|------|
+| `compiler.sa` | **Unified driver (Phase 5)** |
+| `lexer.sa` | Standalone lexer (Phase 2) |
+| `ast.sa` | AST demo (Phase 3) |
+| `parser.sa` | Standalone parser (Phase 3) |
+| `codegen.sa` | Standalone codegen (Phase 4) |
+| `pipeline.sa` | Tiny tokens→AST→C (Phase 4) |
 
-### Previous
-- Phase 2: `lexer.sa`
-- Phase 3: `ast.sa`, `parser.sa`
-
-## Run
+## Run the self-hosted compiler
 
 ```bash
 cargo build --release
-./target/release/sayanox selfhost/codegen.sa -o cg.c && gcc cg.c -o cg && ./cg
-./target/release/sayanox selfhost/pipeline.sa -o pipe.c && gcc pipe.c -o pipe && ./pipe
+./target/release/sayanox selfhost/compiler.sa -o compiler.c
+gcc compiler.c -o compiler && ./compiler
 ```
 
-## Next (Phase 5)
+It compiles the built-in demo source `"show 42"` and prints generated C.
 
-1. Merge lexer + parser + codegen into one `.sa` compiler driver
-2. Read real source strings end-to-end
-3. Bootstrap: use output to compile more Sayanox
+## What works
+
+- Character scan of source
+- Token list + number values
+- AST via parallel arrays
+- C emission for `show` / `hold` / `give`
+
+## Still limited
+
+- Nested loop control in lexer (long identifiers/numbers)
+- Full keyword matching (first-letter heuristic)
+- Binary expressions / blocks / make
+- Reading source from a real file (needs I/O builtins)
+- Writing output to a `.c` file from Sayanox itself
 
 ## Roadmap
 
-| Phase | Content | Status |
-|-------|---------|--------|
-| 2.0 | Lexer | ✅ |
-| 3.0 | AST + parser | ✅ |
-| 4.0 | Codegen in Sayanox | ✅ |
-| 5.0 | Unified self-host driver | 🚧 |
+| Phase | Status |
+|-------|--------|
+| 2 Lexer | ✅ |
+| 3 AST + parser | ✅ |
+| 4 Codegen | ✅ |
+| 5 Unified driver | ✅ |
+| 6 File I/O + richer language | 🚧 |
+| 7 True bootstrap | 🚧 |

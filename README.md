@@ -5,15 +5,14 @@ File extension: `.sa`
 
 Created by **Sayan Mahata**.
 
-## Current Features (v0.3.12)
+## Current Features (v0.3.13)
 
 | Feature | Status |
 |---------|--------|
 | Core language + C backend | ✅ |
 | Full AOT (Cranelift) | ✅ |
-| Self-hosted lexer | ✅ |
-| Self-hosted AST + parser | ✅ |
-| Self-hosted codegen | ✅ Phase 4 |
+| Self-hosted lexer / parser / AST / codegen | ✅ |
+| **Unified self-host compiler driver** | ✅ Phase 5 |
 
 ## Build
 
@@ -23,11 +22,11 @@ cd sayanox
 cargo build --release
 ```
 
-### Self-hosting Phase 4
+### Self-hosted compiler (Phase 5)
 
 ```bash
-./target/release/sayanox selfhost/codegen.sa -o cg.c && gcc cg.c -o cg && ./cg
-./target/release/sayanox selfhost/pipeline.sa -o pipe.c && gcc pipe.c -o pipe && ./pipe
+./target/release/sayanox selfhost/compiler.sa -o compiler.c
+gcc compiler.c -o compiler && ./compiler
 ```
 
 ## License
