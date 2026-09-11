@@ -1,84 +1,90 @@
-# Sayanox 🚀
+# Sayanox
 
-**Sayanox** is a completely original programming language with easy syntax and its own compiler written in Rust.  
-File extension: **`.sa`**
+**Sayanox** is a completely original programming language designed for simplicity and power.  
+File extension: `.sa`
 
 Created by **Sayan Mahata**.
 
 ## Philosophy
 - Extremely easy and clean syntax
-- Many features (growing fast)
+- Growing feature set
 - Own compiler written in Rust
-- No unnecessary complexity
+- Path toward native code generation and self-hosting
 
-## Current Features (v0.2)
-- `show` – print numbers & strings
-- `hold` – declare variables
-- `make` – define functions
-- `give` – return from function
-- `when` / `otherwise` – conditionals
-- `while` – loops
-- Arithmetic: `+ - * /`
-- Comparison: `> < == != >= <=`
-- Comments with `//`
+## Current Features (v0.3)
+
+| Feature              | Status |
+|----------------------|--------|
+| show (print)         | ✅     |
+| hold (variables)     | ✅     |
+| make / give (functions) | ✅  |
+| when / otherwise     | ✅     |
+| while loops          | ✅     |
+| Arrays `[1, 2, 3]` + indexing | ✅ |
+| Structs              | ✅     |
+| Field access `p.x`   | ✅     |
+| C Code Generation    | ✅     |
+| Native (Cranelift)   | 🚧 Skeleton |
+| Self-hosting         | 🚧 Planned |
 
 ## Example
 
 ```sa
 show "Hello from Sayanox!"
 
-hold x = 42
-
 make double(n) {
     give n * 2
 }
 
-show double(x)
+hold nums = [10, 20, 30]
+show nums[1]
 
-when x > 10 {
-    show "Big number"
-} otherwise {
-    show "Small number"
+make struct Point {
+    x, y
 }
 
-hold i = 1
-while i <= 5 {
-    show i
-    hold i = i + 1
-}
+hold p = Point { x: 5, y: 15 }
+show p.x
 ```
 
-## How to use
+## Build & Run
 
-### 1. Install Rust
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-### 2. Build the compiler
 ```bash
 git clone https://github.com/sayan9168/sayanox.git
 cd sayanox
 cargo build --release
-```
 
-### 3. Compile a Sayanox program
-```bash
 ./target/release/sayanox examples/hello.sa -o hello.c
 gcc hello.c -o hello
 ./hello
 ```
 
 ## Roadmap
+
 - [x] Lexer + Parser + AST
 - [x] C Code Generation
 - [x] while loops
-- [ ] Native code generation (Cranelift)
+- [x] Arrays + Indexing
+- [x] Structs + Field access
+- [ ] Full Native Code Generation (Cranelift)
 - [ ] Self-hosting compiler
-- [ ] Arrays, structs, better type system
+- [ ] Better type system & memory model
 - [ ] Standard library
+
+## Native Code Generation (Cranelift)
+
+A foundation is ready for Cranelift integration.  
+Next major milestone is emitting machine code directly instead of C.
+
+## Self-hosting
+
+Plan:
+1. Keep the Rust bootstrap compiler stable.
+2. Implement a minimal subset of Sayanox that can express the compiler.
+3. Rewrite the frontend in Sayanox itself.
+4. Achieve full self-hosting.
 
 ## License
 MIT
 
-Made with ❤️ by Sayan
+Made with care by Sayan
