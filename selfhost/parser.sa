@@ -1,0 +1,95 @@
+// ============================================================
+// Sayanox Self-Hosting — Phase 2.0
+// Minimal Parser sketch written in pure Sayanox
+// ============================================================
+//
+// Consumes a token list (as numbers) and walks statements.
+// Full AST building needs structs + dynamic trees (later).
+
+show "=== Sayanox Self-Hosted Parser Phase 2.0 ==="
+
+hold TOK_EOF    = 0
+hold TOK_SHOW   = 1
+hold TOK_HOLD   = 2
+hold TOK_MAKE   = 3
+hold TOK_NUMBER = 11
+hold TOK_IDENT  = 10
+
+// Demo token stream from lexer for: show 42
+hold tokens = []
+push(tokens, TOK_SHOW)
+push(tokens, TOK_NUMBER)
+push(tokens, TOK_EOF)
+
+hold pos = 0
+hold n = len(tokens)
+
+make peek() {
+    when pos < n {
+        give tokens[pos]
+    } otherwise {
+        give TOK_EOF
+    }
+}
+
+make advance() {
+    when pos < n {
+        hold pos = pos + 1
+    } otherwise {
+        hold pos = pos
+    }
+    give 0
+}
+
+make parse_statement() {
+    hold t = peek()
+    when t == TOK_SHOW {
+        show "parse: show statement"
+        advance()
+        hold t2 = peek()
+        when t2 == TOK_NUMBER {
+            show "parse: number expression"
+            advance()
+        } otherwise {
+            when t2 == TOK_IDENT {
+                show "parse: ident expression"
+                advance()
+            } otherwise {
+                show "parse error: expected expression after show"
+            }
+        }
+        give 1
+    } otherwise {
+        when t == TOK_HOLD {
+            show "parse: hold statement"
+            advance()
+            give 1
+        } otherwise {
+            when t == TOK_MAKE {
+                show "parse: make statement"
+                advance()
+                give 1
+            } otherwise {
+                when t == TOK_EOF {
+                    give 0
+                } otherwise {
+                    show "parse error: unexpected token"
+                    advance()
+                    give 0
+                }
+            }
+        }
+    }
+}
+
+show "Parsing token stream..."
+while pos < n {
+    hold t = peek()
+    when t == TOK_EOF {
+        hold pos = n
+    } otherwise {
+        parse_statement()
+    }
+}
+
+show "Self-hosted parser Phase 2.0 finished"
