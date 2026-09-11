@@ -8,6 +8,12 @@ license = "MIT"
 repository = "https://github.com/sayan9168/sayanox"
 
 [dependencies]
+# Cranelift will be added when the native backend is fully activated:
+# cranelift-codegen = "0.108"
+# cranelift-frontend = "0.108"
+# cranelift-module = "0.108"
+# cranelift-object = "0.108"
+# target-lexicon = "0.12"
 
 [[bin]]
 name = "sayanox"

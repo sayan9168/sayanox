@@ -1,0 +1,29 @@
+// Self-hosting Phase 1 - Minimal lexer sketch written in Sayanox
+// This is the beginning of rewriting the compiler in itself.
+
+show "Sayanox Self-Hosting - Phase 1"
+show "Minimal lexer sketch"
+
+// Simple character categories (conceptual)
+make is_digit(c) {
+    // Placeholder - real implementation will inspect character codes
+    give 0
+}
+
+make is_alpha(c) {
+    give 0
+}
+
+// Token kinds (using numbers for now)
+hold TOK_SHOW = 1
+hold TOK_HOLD = 2
+hold TOK_NUMBER = 3
+hold TOK_IDENT = 4
+hold TOK_EOF = 99
+
+show "Token constants defined"
+show TOK_SHOW
+show TOK_EOF
+
+// Future: real character-by-character scanning will live here
+show "Self-hosting frontend started successfully"

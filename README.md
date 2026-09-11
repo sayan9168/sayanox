@@ -9,23 +9,19 @@ Created by **Sayan Mahata**.
 - Extremely easy and clean syntax
 - Growing feature set
 - Own compiler written in Rust
-- Path toward native code generation and self-hosting
+- Path toward native code generation (Cranelift) and full self-hosting
 
 ## Current Features (v0.3)
 
-| Feature              | Status |
-|----------------------|--------|
-| show (print)         | ✅     |
-| hold (variables)     | ✅     |
-| make / give (functions) | ✅  |
-| when / otherwise     | ✅     |
-| while loops          | ✅     |
-| Arrays `[1, 2, 3]` + indexing | ✅ |
-| Structs              | ✅     |
-| Field access `p.x`   | ✅     |
-| C Code Generation    | ✅     |
-| Native (Cranelift)   | 🚧 Skeleton |
-| Self-hosting         | 🚧 Planned |
+| Feature                        | Status          |
+|--------------------------------|-----------------|
+| show / hold / make / give      | ✅              |
+| when / otherwise / while       | ✅              |
+| Arrays + Indexing              | ✅              |
+| Structs + Field access         | ✅              |
+| C Code Generation              | ✅ Stable       |
+| Native Backend (Cranelift)     | 🚧 Skeleton     |
+| Self-hosting                   | 🚧 Phase 1      |
 
 ## Example
 
@@ -59,30 +55,28 @@ gcc hello.c -o hello
 ./hello
 ```
 
+## Native Code Generation (Cranelift)
+
+The `src/native/` module contains the foundation for a Cranelift-based backend.
+Full machine-code emission and linking is the next major milestone.
+
+## Self-Hosting (Phase 1)
+
+See the `selfhost/` directory.
+
+- `selfhost/README.md` – plan and minimal subset definition
+- `selfhost/minimal_lexer.sa` – first experimental self-hosted frontend sketch
+
+The long-term goal is a compiler written entirely in Sayanox that can compile itself.
+
 ## Roadmap
 
 - [x] Lexer + Parser + AST
 - [x] C Code Generation
-- [x] while loops
-- [x] Arrays + Indexing
-- [x] Structs + Field access
-- [ ] Full Native Code Generation (Cranelift)
-- [ ] Self-hosting compiler
-- [ ] Better type system & memory model
-- [ ] Standard library
-
-## Native Code Generation (Cranelift)
-
-A foundation is ready for Cranelift integration.  
-Next major milestone is emitting machine code directly instead of C.
-
-## Self-hosting
-
-Plan:
-1. Keep the Rust bootstrap compiler stable.
-2. Implement a minimal subset of Sayanox that can express the compiler.
-3. Rewrite the frontend in Sayanox itself.
-4. Achieve full self-hosting.
+- [x] while, Arrays, Structs
+- [ ] Full Cranelift Native Backend
+- [ ] Self-hosting (Phase 1 → complete)
+- [ ] Standard library + package system
 
 ## License
 MIT
