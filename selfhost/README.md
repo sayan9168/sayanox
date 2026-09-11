@@ -1,37 +1,46 @@
-# Self-Hosting Sayanox - Phase 1
+# Self-Hosting Sayanox
 
-This directory contains the first steps toward a self-hosting Sayanox compiler.
+This directory contains the first steps toward a fully self-hosted Sayanox compiler.
 
 ## Goal
-Eventually rewrite the entire Sayanox compiler in Sayanox itself so that:
+
+Write the entire Sayanox compiler in Sayanox itself so that:
 
 ```
 sayanox compiler.sa -o compiler
 ```
 
-can produce a new compiler binary.
+produces a new working compiler binary.
 
-## Phase 1 (Current)
-- Define a **minimal subset** of Sayanox that is powerful enough to express a simple lexer and parser.
-- Write the first pieces of a self-hosted frontend in pure Sayanox.
-- Keep the Rust bootstrap compiler as the host until the self-hosted version is complete.
+## Current Phase: 1.2
 
-## Minimal Subset for Self-Hosting
-The self-hosted compiler will initially support only:
+- A realistic **minimal lexer** structure is written in pure Sayanox
+  (`minimal_lexer.sa`).
+- Token kinds, keyword lookup skeleton, and a demo token stream are present.
+- The file clearly documents the language features that are still missing
+  before a real character-by-character scanner can be finished.
 
-- `show`, `hold`, `make`/`give`
-- `when` / `otherwise`
-- `while`
+## Minimal Language Subset Required for Self-Hosting
+
+The self-hosted compiler will initially need only:
+
+- `show`, `hold`, `make` / `give`
+- `when` / `otherwise`, `while`
 - Basic arithmetic and comparisons
-- Arrays (for token lists)
-- Simple structs (for Token, AST nodes)
+- Arrays + indexing
+- Simple structs (for Token and AST nodes)
+- String indexing and character codes (coming soon)
+
+## Roadmap
+
+1. Stabilize the Rust bootstrap compiler (current C backend).
+2. Finish the missing language features (string indexing, char codes, dynamic arrays).
+3. Port the lexer completely into Sayanox.
+4. Port the parser.
+5. Port the code generator.
+6. Achieve full self-hosting.
 
 ## Files
-- `minimal_lexer.sa` – First experimental self-hosted lexer sketch
-- More files will be added as the subset grows.
 
-## How to progress
-1. Stabilize the Rust bootstrap (current C backend).
-2. Implement the minimal subset completely and reliably.
-3. Port lexer → parser → codegen one module at a time into Sayanox.
-4. Once the self-hosted compiler can compile itself, switch the default.
+- `minimal_lexer.sa` – Phase 1.2 self-hosted lexer sketch
+- `README.md` – this file
