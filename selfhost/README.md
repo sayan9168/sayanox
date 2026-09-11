@@ -1,44 +1,48 @@
-# Self-Hosting Sayanox — Phase 2.0
+# Self-Hosting Sayanox — Phase 3
 
 ## Goal
 
 Bootstrap the Sayanox compiler in Sayanox itself.
 
-## Current Phase: 2.0
+## Phase 3 (current)
 
-### Lexer (`lexer.sa`)
-- Character-by-character scan of source text
-- Uses `len`, string indexing (char codes), `push`, `while`, `when`
-- Recognizes: whitespace, numbers, identifiers/keywords (by first letter), operators
+### AST (`ast.sa`)
+- Node kinds for statements and expressions
+- Parallel arrays: `kind`, `left`, `right`, `value`
+- `ast_new` allocates a node and returns its id
 
 ### Parser (`parser.sa`)
-- Minimal recursive-style statement walker
-- Handles `show`, `hold`, `make` token sequences
-- Demo token stream for `show 42`
+- Token stream + `peek` / `advance`
+- `parse_primary` → number / ident
+- `parse_expression`
+- `parse_statement` → show / hold / give / make / when / while
+- Builds a real AST for `show 42`
 
-## Still needed for full self-hosting
+### Lexer (`lexer.sa`)
+- Character-by-character scanner (Phase 2)
 
-1. String builder (collect full identifiers / string literals)
-2. Nested loops without overshoot (richer control flow)
-3. Structs for Token `{ kind, value }` and AST nodes
-4. Full expression / block parsing
-5. Codegen ported to Sayanox
-6. Ability to run `.sa` compiler files producing C or native output
-
-## Run with bootstrap compiler
+## Run
 
 ```bash
 cargo build --release
-./target/release/sayanox selfhost/lexer.sa -o lexer.c
-gcc lexer.c -o lexer && ./lexer
-
-./target/release/sayanox selfhost/parser.sa -o parser.c
-gcc parser.c -o parser && ./parser
+./target/release/sayanox selfhost/ast.sa -o ast.c && gcc ast.c -o ast && ./ast
+./target/release/sayanox selfhost/parser.sa -o parser.c && gcc parser.c -o parser && ./parser
+./target/release/sayanox selfhost/lexer.sa -o lexer.c && gcc lexer.c -o lexer && ./lexer
 ```
+
+## Next (Phase 4+)
+
+1. Binary operator parsing (`+ - * /`)
+2. Blocks `{ ... }`
+3. Wire lexer output → parser input
+4. Codegen in Sayanox (AST → C or tokens)
+5. Full self-host
 
 ## Roadmap
 
-- Phase 2.x — richer lexer (full keywords, strings)
-- Phase 3 — AST structs + full parser
-- Phase 4 — codegen in Sayanox
-- Phase 5 — self-host (compiler compiles itself)
+| Phase | Content              | Status   |
+|-------|----------------------|----------|
+| 2.0   | Lexer + parser sketch| ✅       |
+| 3.0   | AST + fuller parser  | ✅       |
+| 4.0   | Codegen in Sayanox   | 🚧       |
+| 5.0   | Self-host            | 🚧       |
