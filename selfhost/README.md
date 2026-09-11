@@ -1,46 +1,44 @@
-# Self-Hosting Sayanox
-
-This directory contains the first steps toward a fully self-hosted Sayanox compiler.
+# Self-Hosting Sayanox — Phase 2.0
 
 ## Goal
 
-Write the entire Sayanox compiler in Sayanox itself so that:
+Bootstrap the Sayanox compiler in Sayanox itself.
 
+## Current Phase: 2.0
+
+### Lexer (`lexer.sa`)
+- Character-by-character scan of source text
+- Uses `len`, string indexing (char codes), `push`, `while`, `when`
+- Recognizes: whitespace, numbers, identifiers/keywords (by first letter), operators
+
+### Parser (`parser.sa`)
+- Minimal recursive-style statement walker
+- Handles `show`, `hold`, `make` token sequences
+- Demo token stream for `show 42`
+
+## Still needed for full self-hosting
+
+1. String builder (collect full identifiers / string literals)
+2. Nested loops without overshoot (richer control flow)
+3. Structs for Token `{ kind, value }` and AST nodes
+4. Full expression / block parsing
+5. Codegen ported to Sayanox
+6. Ability to run `.sa` compiler files producing C or native output
+
+## Run with bootstrap compiler
+
+```bash
+cargo build --release
+./target/release/sayanox selfhost/lexer.sa -o lexer.c
+gcc lexer.c -o lexer && ./lexer
+
+./target/release/sayanox selfhost/parser.sa -o parser.c
+gcc parser.c -o parser && ./parser
 ```
-sayanox compiler.sa -o compiler
-```
-
-produces a new working compiler binary.
-
-## Current Phase: 1.2
-
-- A realistic **minimal lexer** structure is written in pure Sayanox
-  (`minimal_lexer.sa`).
-- Token kinds, keyword lookup skeleton, and a demo token stream are present.
-- The file clearly documents the language features that are still missing
-  before a real character-by-character scanner can be finished.
-
-## Minimal Language Subset Required for Self-Hosting
-
-The self-hosted compiler will initially need only:
-
-- `show`, `hold`, `make` / `give`
-- `when` / `otherwise`, `while`
-- Basic arithmetic and comparisons
-- Arrays + indexing
-- Simple structs (for Token and AST nodes)
-- String indexing and character codes (coming soon)
 
 ## Roadmap
 
-1. Stabilize the Rust bootstrap compiler (current C backend).
-2. Finish the missing language features (string indexing, char codes, dynamic arrays).
-3. Port the lexer completely into Sayanox.
-4. Port the parser.
-5. Port the code generator.
-6. Achieve full self-hosting.
-
-## Files
-
-- `minimal_lexer.sa` – Phase 1.2 self-hosted lexer sketch
-- `README.md` – this file
+- Phase 2.x — richer lexer (full keywords, strings)
+- Phase 3 — AST structs + full parser
+- Phase 4 — codegen in Sayanox
+- Phase 5 — self-host (compiler compiles itself)

@@ -5,15 +5,15 @@ File extension: `.sa`
 
 Created by **Sayan Mahata**.
 
-## Current Features (v0.3.9)
+## Current Features (v0.3.10)
 
 | Feature | Status |
 |---------|--------|
 | Core language + C backend | ✅ |
 | Dynamic `push`, `concat`, `len` | ✅ |
-| Cranelift expression / control-flow | ✅ |
-| **Full AOT** (object + link → binary) | ✅ New |
-| Self-hosting | 🚧 |
+| Full AOT (Cranelift + cc) | ✅ |
+| Self-hosted lexer (char-by-char) | 🚧 Phase 2.0 |
+| Self-hosted parser sketch | 🚧 Phase 2.0 |
 
 ## Build
 
@@ -23,26 +23,22 @@ cd sayanox
 cargo build --release
 ```
 
-### C backend (default)
+### Self-hosting Phase 2.0
 
 ```bash
-./target/release/sayanox examples/phase_a.sa -o out.c
-gcc out.c -o out && ./out
+./target/release/sayanox selfhost/lexer.sa -o lexer.c
+gcc lexer.c -o lexer && ./lexer
+
+./target/release/sayanox selfhost/parser.sa -o parser.c
+gcc parser.c -o parser && ./parser
 ```
 
-### Full AOT native binary
+### Full AOT
 
 ```bash
 cargo build --features native --release
-./target/release/sayanox examples/phase_b.sa --native -o myprog
+./target/release/sayanox examples/aot_demo.sa --native -o myprog
 ./myprog
-echo $?   # exit code is the computed numeric result
-```
-
-### JIT
-
-```bash
-./target/release/sayanox examples/phase_b.sa --jit
 ```
 
 ## License
