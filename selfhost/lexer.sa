@@ -1,0 +1,137 @@
+// ============================================================
+// Sayanox Self-Hosting — Phase 2.0
+// Character-by-character Lexer written in pure Sayanox
+// ============================================================
+// Uses: len, string indexing (char codes), push, while, when
+
+hold TOK_EOF     = 0
+hold TOK_SHOW    = 1
+hold TOK_HOLD    = 2
+hold TOK_MAKE    = 3
+hold TOK_GIVE    = 4
+hold TOK_WHEN    = 5
+hold TOK_WHILE   = 7
+hold TOK_IDENT   = 10
+hold TOK_NUMBER  = 11
+hold TOK_STRING  = 12
+hold TOK_PLUS    = 20
+hold TOK_MINUS   = 21
+hold TOK_STAR    = 22
+hold TOK_SLASH   = 23
+hold TOK_ASSIGN  = 24
+hold TOK_LPAREN  = 30
+hold TOK_RPAREN  = 31
+hold TOK_LBRACE  = 32
+hold TOK_RBRACE  = 33
+hold TOK_COMMA   = 36
+
+show "=== Sayanox Self-Hosted Lexer Phase 2.0 ==="
+
+hold source = "show 42"
+hold n = len(source)
+hold pos = 0
+hold tokens = []
+
+make is_digit(c) {
+    when c >= 48 {
+        when c <= 57 { give 1 } otherwise { give 0 }
+    } otherwise { give 0 }
+}
+
+make is_alpha(c) {
+    when c >= 65 {
+        when c <= 90 { give 1 } otherwise {
+            when c >= 97 {
+                when c <= 122 { give 1 } otherwise { give 0 }
+            } otherwise { give 0 }
+        }
+    } otherwise { give 0 }
+}
+
+make is_space(c) {
+    when c == 32 { give 1 } otherwise {
+        when c == 9 { give 1 } otherwise {
+            when c == 10 { give 1 } otherwise { give 0 }
+        }
+    }
+}
+
+while pos < n {
+    hold c = source[pos]
+    when is_space(c) == 1 {
+        hold pos = pos + 1
+    } otherwise {
+        when is_digit(c) == 1 {
+            push(tokens, TOK_NUMBER)
+            hold pos = pos + 1
+            while pos < n {
+                hold c2 = source[pos]
+                when is_digit(c2) == 1 {
+                    hold pos = pos + 1
+                } otherwise {
+                    hold pos = n
+                }
+            }
+        } otherwise {
+            when is_alpha(c) == 1 {
+                when c == 115 { push(tokens, TOK_SHOW) } otherwise {
+                    when c == 104 { push(tokens, TOK_HOLD) } otherwise {
+                        when c == 109 { push(tokens, TOK_MAKE) } otherwise {
+                            when c == 103 { push(tokens, TOK_GIVE) } otherwise {
+                                when c == 119 { push(tokens, TOK_WHEN) } otherwise {
+                                    push(tokens, TOK_IDENT)
+                                }
+                            }
+                        }
+                    }
+                }
+                hold pos = pos + 1
+                while pos < n {
+                    hold c3 = source[pos]
+                    when is_alpha(c3) == 1 {
+                        hold pos = pos + 1
+                    } otherwise {
+                        when is_digit(c3) == 1 {
+                            hold pos = pos + 1
+                        } otherwise {
+                            hold pos = n
+                        }
+                    }
+                }
+            } otherwise {
+                when c == 43 { push(tokens, TOK_PLUS) hold pos = pos + 1 } otherwise {
+                    when c == 45 { push(tokens, TOK_MINUS) hold pos = pos + 1 } otherwise {
+                        when c == 42 { push(tokens, TOK_STAR) hold pos = pos + 1 } otherwise {
+                            when c == 47 { push(tokens, TOK_SLASH) hold pos = pos + 1 } otherwise {
+                                when c == 61 { push(tokens, TOK_ASSIGN) hold pos = pos + 1 } otherwise {
+                                    when c == 40 { push(tokens, TOK_LPAREN) hold pos = pos + 1 } otherwise {
+                                        when c == 41 { push(tokens, TOK_RPAREN) hold pos = pos + 1 } otherwise {
+                                            when c == 123 { push(tokens, TOK_LBRACE) hold pos = pos + 1 } otherwise {
+                                                when c == 125 { push(tokens, TOK_RBRACE) hold pos = pos + 1 } otherwise {
+                                                    hold pos = pos + 1
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+push(tokens, TOK_EOF)
+
+show "Source:"
+show source
+show "Tokens produced:"
+hold i = 0
+while i < len(tokens) {
+    show tokens[i]
+    hold i = i + 1
+}
+
+show "Self-hosted lexer Phase 2.0 finished"
