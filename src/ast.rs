@@ -13,6 +13,10 @@ pub enum Stmt {
         then_body: Vec<Stmt>,
         otherwise_body: Option<Vec<Stmt>>,
     },
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
     Expr(Expr),
 }
 

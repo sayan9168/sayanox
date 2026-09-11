@@ -1,30 +1,30 @@
 # Sayanox 🚀
 
-**Sayanox** is a completely original programming language designed for simplicity and power.  
+**Sayanox** is a completely original programming language with easy syntax and its own compiler written in Rust.  
 File extension: **`.sa`**
 
 Created by **Sayan Mahata**.
 
 ## Philosophy
 - Extremely easy and clean syntax
-- Many features (growing)
+- Many features (growing fast)
 - Own compiler written in Rust
 - No unnecessary complexity
 
-## Current Features (v0.1)
-- `show` – print anything
-- `hold` – declare variables (numbers & strings)
+## Current Features (v0.2)
+- `show` – print numbers & strings
+- `hold` – declare variables
 - `make` – define functions
 - `give` – return from function
 - `when` / `otherwise` – conditionals
-- Basic arithmetic: `+ - * /`
+- `while` – loops
+- Arithmetic: `+ - * /`
 - Comparison: `> < == != >= <=`
 - Comments with `//`
 
 ## Example
 
 ```sa
-// hello.sa
 show "Hello from Sayanox!"
 
 hold x = 42
@@ -41,8 +41,11 @@ when x > 10 {
     show "Small number"
 }
 
-hold result = double(21)
-show result
+hold i = 1
+while i <= 5 {
+    show i
+    hold i = i + 1
+}
 ```
 
 ## How to use
@@ -62,25 +65,18 @@ cargo build --release
 ### 3. Compile a Sayanox program
 ```bash
 ./target/release/sayanox examples/hello.sa -o hello.c
-```
-
-This will generate `hello.c`. Then compile it with GCC:
-
-```bash
 gcc hello.c -o hello
 ./hello
 ```
 
 ## Roadmap
-- [x] Lexer
-- [x] Parser
-- [x] AST
-- [x] C Code Generation (transpiler)
-- [ ] Native code generation (Cranelift / LLVM)
-- [ ] Self-hosting compiler (rewrite in Sayanox)
-- [ ] More types, arrays, structs
+- [x] Lexer + Parser + AST
+- [x] C Code Generation
+- [x] while loops
+- [ ] Native code generation (Cranelift)
+- [ ] Self-hosting compiler
+- [ ] Arrays, structs, better type system
 - [ ] Standard library
-- [ ] Package manager
 
 ## License
 MIT

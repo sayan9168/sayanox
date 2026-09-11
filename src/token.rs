@@ -7,6 +7,7 @@ pub enum TokenKind {
     Give,
     When,
     Otherwise,
+    While,
 
     // Literals
     Ident(String),

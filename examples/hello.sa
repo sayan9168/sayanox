@@ -1,4 +1,4 @@
-// Hello World in Sayanox
+// Sayanox v0.2 - with while loop
 show "Hello from Sayanox!"
 
 hold x = 42
@@ -13,6 +13,12 @@ when x > 10 {
     show "Big number"
 } otherwise {
     show "Small number"
+}
+
+hold i = 1
+while i <= 5 {
+    show i
+    hold i = i + 1
 }
 
 hold result = double(21)
