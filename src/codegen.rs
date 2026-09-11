@@ -1,5 +1,6 @@
 //! C Code Generator for Sayanox
 //! Translates Sayanox AST into readable C code.
+//! Phase A: dynamic lists (push), string concat, len().
 
 use crate::ast::*;
 use std::collections::HashMap;
@@ -28,6 +29,31 @@ impl Codegen {
         self.output.push_str("#include <stdio.h>\n");
         self.output.push_str("#include <stdlib.h>\n");
         self.output.push_str("#include <string.h>\n\n");
+        // Runtime: dynamic lists + string concat
+        self.output.push_str(
+            "typedef struct { double *data; int len; int cap; } SxList;\n\
+static SxList sx_list_new(void) { SxList l; l.data=NULL; l.len=0; l.cap=0; return l; }\n\
+static void sx_list_push(SxList *l, double v) {\n\
+  if (l->len >= l->cap) {\n\
+    int ncap = l->cap==0 ? 8 : l->cap*2;\n\
+    double *nd = (double*)realloc(l->data, sizeof(double)*ncap);\n\
+    if (!nd) { fprintf(stderr,\"Sayanox: out of memory\\n\"); exit(1); }\n\
+    l->data = nd; l->cap = ncap;\n\
+  }\n\
+  l->data[l->len++] = v;\n\
+}\n\
+static double sx_list_get(SxList *l, int i) {\n\
+  if (i<0 || i>=l->len) { fprintf(stderr,\"Sayanox: index out of bounds\\n\"); exit(1); }\n\
+  return l->data[i];\n\
+}\n\
+static int sx_list_len(SxList *l) { return l->len; }\n\
+static char *sx_concat(const char *a, const char *b) {\n\
+  size_t la=strlen(a), lb=strlen(b);\n\
+  char *r=(char*)malloc(la+lb+1);\n\
+  if (!r) { fprintf(stderr,\"Sayanox: out of memory\\n\"); exit(1); }\n\
+  memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r;\n\
+}\n\n",
+        );
 
         for stmt in &program.statements {
             match stmt {
@@ -49,7 +75,11 @@ impl Codegen {
             self.output.push_str(&format!("}} {};\n\n", name));
         }
 
-        let functions: Vec<_> = self.functions.iter().map(|(n, (p, b))| (n.clone(), p.clone(), b.clone())).collect();
+        let functions: Vec<_> = self
+            .functions
+            .iter()
+            .map(|(n, (p, b))| (n.clone(), p.clone(), b.clone()))
+            .collect();
         for (name, params, body) in functions {
             self.gen_function(&name, &params, &body);
         }
@@ -60,8 +90,7 @@ impl Codegen {
                 self.gen_stmt(stmt, 1);
             }
         }
-        self.output.push_str("    return 0;\n");
-        self.output.push_str("}\n");
+        self.output.push_str("    return 0;\n}\n");
 
         self.output.clone()
     }
@@ -70,72 +99,114 @@ impl Codegen {
         let c_name = format!("sx_{}", name);
         self.output.push_str(&format!("double {}(", c_name));
         for (i, p) in params.iter().enumerate() {
-            if i > 0 { self.output.push_str(", "); }
+            if i > 0 {
+                self.output.push_str(", ");
+            }
             self.output.push_str(&format!("double {}", p));
         }
         self.output.push_str(") {\n");
-        for stmt in body { self.gen_stmt(stmt, 1); }
+        for stmt in body {
+            self.gen_stmt(stmt, 1);
+        }
         self.output.push_str("    return 0.0;\n}\n\n");
     }
 
     fn gen_stmt(&mut self, stmt: &Stmt, indent: usize) {
         let ind = "    ".repeat(indent);
         match stmt {
-            Stmt::Show(expr) => {
-                match expr {
-                    Expr::String(s) => self.output.push_str(&format!("{}printf(\"%s\\n\", \"{}\");\n", ind, escape_c(s))),
-                    Expr::Number(n) => self.output.push_str(&format!("{}printf(\"%g\\n\", {});\n", ind, n)),
-                    _ => {
-                        let code = self.gen_expr(expr);
-                        self.output.push_str(&format!("{}printf(\"%g\\n\", {});\n", ind, code));
+            Stmt::Show(expr) => match expr {
+                Expr::String(s) => self.output.push_str(&format!(
+                    "{}printf(\"%s\\n\", \"{}\");\n",
+                    ind,
+                    escape_c(s)
+                )),
+                Expr::Number(n) => self
+                    .output
+                    .push_str(&format!("{}printf(\"%g\\n\", {});\n", ind, n)),
+                _ => {
+                    let code = self.gen_expr(expr);
+                    self.output
+                        .push_str(&format!("{}printf(\"%g\\n\", {});\n", ind, code));
+                }
+            },
+            Stmt::Hold { name, value } => match value {
+                Expr::String(s) => self.output.push_str(&format!(
+                    "{}const char* {} = \"{}\";\n",
+                    ind,
+                    name,
+                    escape_c(s)
+                )),
+                Expr::Array(elements) if elements.is_empty() => {
+                    self.output
+                        .push_str(&format!("{}SxList {} = sx_list_new();\n", ind, name));
+                }
+                Expr::Array(elements) => {
+                    let len = elements.len();
+                    self.output
+                        .push_str(&format!("{}double {}[{}] = {{", ind, name, len));
+                    for (i, e) in elements.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.output.push_str(&self.gen_expr(e));
+                    }
+                    self.output.push_str("};\n");
+                }
+                Expr::StructLit { name: sname, fields } => {
+                    self.output
+                        .push_str(&format!("{}{} {} = {{", ind, sname, name));
+                    for (i, (_, val)) in fields.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.output.push_str(&self.gen_expr(val));
+                    }
+                    self.output.push_str("};\n");
+                }
+                _ => {
+                    let code = self.gen_expr(value);
+                    // concat returns char*
+                    if matches!(value, Expr::Call { name, .. } if name == "concat") {
+                        self.output
+                            .push_str(&format!("{}char* {} = {};\n", ind, name, code));
+                    } else {
+                        self.output
+                            .push_str(&format!("{}double {} = {};\n", ind, name, code));
                     }
                 }
-            }
-            Stmt::Hold { name, value } => {
-                match value {
-                    Expr::String(s) => self.output.push_str(&format!("{}const char* {} = \"{}\";\n", ind, name, escape_c(s))),
-                    Expr::Array(elements) => {
-                        let len = elements.len();
-                        self.output.push_str(&format!("{}double {}[{}] = {{", ind, name, len));
-                        for (i, e) in elements.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
-                            self.output.push_str(&self.gen_expr(e));
-                        }
-                        self.output.push_str("};\n");
-                    }
-                    Expr::StructLit { name: sname, fields } => {
-                        self.output.push_str(&format!("{}{} {} = {{", ind, sname, name));
-                        for (i, (_, val)) in fields.iter().enumerate() {
-                            if i > 0 { self.output.push_str(", "); }
-                            self.output.push_str(&self.gen_expr(val));
-                        }
-                        self.output.push_str("};\n");
-                    }
-                    _ => {
-                        let code = self.gen_expr(value);
-                        self.output.push_str(&format!("{}double {} = {};\n", ind, name, code));
-                    }
-                }
-            }
+            },
             Stmt::Give(expr) => {
                 let code = self.gen_expr(expr);
-                self.output.push_str(&format!("{}return {};\n", ind, code));
+                self.output
+                    .push_str(&format!("{}return {};\n", ind, code));
             }
-            Stmt::When { condition, then_body, otherwise_body } => {
+            Stmt::When {
+                condition,
+                then_body,
+                otherwise_body,
+            } => {
                 let cond = self.gen_expr(condition);
-                self.output.push_str(&format!("{}if ({}) {{\n", ind, cond));
-                for s in then_body { self.gen_stmt(s, indent + 1); }
+                self.output
+                    .push_str(&format!("{}if ({}) {{\n", ind, cond));
+                for s in then_body {
+                    self.gen_stmt(s, indent + 1);
+                }
                 self.output.push_str(&format!("{}}}\n", ind));
                 if let Some(else_body) = otherwise_body {
                     self.output.push_str(&format!("{}else {{\n", ind));
-                    for s in else_body { self.gen_stmt(s, indent + 1); }
+                    for s in else_body {
+                        self.gen_stmt(s, indent + 1);
+                    }
                     self.output.push_str(&format!("{}}}\n", ind));
                 }
             }
             Stmt::While { condition, body } => {
                 let cond = self.gen_expr(condition);
-                self.output.push_str(&format!("{}while ({}) {{\n", ind, cond));
-                for s in body { self.gen_stmt(s, indent + 1); }
+                self.output
+                    .push_str(&format!("{}while ({}) {{\n", ind, cond));
+                for s in body {
+                    self.gen_stmt(s, indent + 1);
+                }
                 self.output.push_str(&format!("{}}}\n", ind));
             }
             Stmt::StructDef { .. } | Stmt::Make { .. } => {}
@@ -155,43 +226,74 @@ impl Codegen {
                 let l = self.gen_expr(left);
                 let r = self.gen_expr(right);
                 let op_str = match op {
-                    BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*", BinOp::Div => "/",
-                    BinOp::Gt => ">", BinOp::Lt => "<", BinOp::Eq => "==", BinOp::Neq => "!=",
-                    BinOp::Gte => ">=", BinOp::Lte => "<=",
+                    BinOp::Add => "+",
+                    BinOp::Sub => "-",
+                    BinOp::Mul => "*",
+                    BinOp::Div => "/",
+                    BinOp::Gt => ">",
+                    BinOp::Lt => "<",
+                    BinOp::Eq => "==",
+                    BinOp::Neq => "!=",
+                    BinOp::Gte => ">=",
+                    BinOp::Lte => "<=",
                 };
                 format!("({} {} {})", l, op_str, r)
             }
             Expr::Call { name, args } => {
-                // Builtin len()
                 if name == "len" && args.len() == 1 {
                     match &args[0] {
                         Expr::String(s) => format!("{}", s.chars().count()),
                         Expr::Array(elements) => format!("{}", elements.len()),
-                        Expr::Ident(id) => format!("((double)strlen({}))", id),
+                        Expr::Ident(id) => format!("((double)sx_list_len(&{}))", id),
                         other => format!("((double)strlen({}))", self.gen_expr(other)),
                     }
+                } else if name == "push" && args.len() == 2 {
+                    let list = self.gen_expr(&args[0]);
+                    let val = self.gen_expr(&args[1]);
+                    format!("(sx_list_push(&{}, {}), 0.0)", list, val)
+                } else if name == "concat" && args.len() == 2 {
+                    let a = self.gen_expr(&args[0]);
+                    let b = self.gen_expr(&args[1]);
+                    format!("sx_concat({}, {})", a, b)
                 } else {
-                    let args_code: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
+                    let args_code: Vec<String> =
+                        args.iter().map(|a| self.gen_expr(a)).collect();
                     format!("sx_{}({})", name, args_code.join(", "))
                 }
             }
             Expr::Array(elements) => {
-                let elems: Vec<String> = elements.iter().map(|e| self.gen_expr(e)).collect();
-                format!("{{{}}}", elems.join(", "))
+                if elements.is_empty() {
+                    "sx_list_new()".to_string()
+                } else {
+                    let elems: Vec<String> =
+                        elements.iter().map(|e| self.gen_expr(e)).collect();
+                    format!("{{{}}}", elems.join(", "))
+                }
             }
-            Expr::Index { array, index } => {
-                // Strings return character code; arrays use normal indexing
-                format!("((int)({}[(int)({})]))", self.gen_expr(array), self.gen_expr(index))
-            }
+            Expr::Index { array, index } => match array.as_ref() {
+                Expr::Ident(name) => {
+                    format!("sx_list_get(&{}, (int)({}))", name, self.gen_expr(index))
+                }
+                _ => format!(
+                    "((int)({}[(int)({})]))",
+                    self.gen_expr(array),
+                    self.gen_expr(index)
+                ),
+            },
             Expr::StructLit { name, fields } => {
-                let vals: Vec<String> = fields.iter().map(|(_, v)| self.gen_expr(v)).collect();
+                let vals: Vec<String> =
+                    fields.iter().map(|(_, v)| self.gen_expr(v)).collect();
                 format!("({}){{{}}}", name, vals.join(", "))
             }
-            Expr::Field { object, field } => format!("{}.{}", self.gen_expr(object), field),
+            Expr::Field { object, field } => {
+                format!("{}.{}", self.gen_expr(object), field)
+            }
         }
     }
 }
 
 fn escape_c(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
