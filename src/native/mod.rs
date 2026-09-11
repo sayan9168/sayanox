@@ -3,11 +3,11 @@
 //! Enable with:
 //!   cargo build --features native --release
 //!
-//! v0.3.5 capabilities:
-//! - Real Cranelift JIT for constant folding and simple arithmetic
-//! - Binary operators (+ - * /) lowered to Cranelift IR
-//! - Function call structure prepared
-//! - Clear path toward full AOT emission
+//! v0.3.6:
+//! - Full expression tree lowering for arithmetic (+ - * /)
+//! - Real Cranelift IR generation for binary expressions
+//! - Constant folding + JIT execution path
+//! - Prepared for function calls and control flow
 
 use crate::ast::Program;
 
@@ -16,77 +16,54 @@ mod backend {
     use super::*;
     use crate::ast::{BinOp, Expr, Stmt};
     use cranelift_codegen::ir::types;
-    use cranelift_codegen::ir::{AbiParam, InstBuilder};
+    use cranelift_codegen::ir::{AbiParam, InstBuilder, Value};
     use cranelift_codegen::settings::{self, Configurable};
     use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
     use cranelift_jit::{JITBuilder, JITModule};
     use cranelift_module::{Linkage, Module};
 
-    /// Public entry: try to evaluate a simple program via Cranelift JIT.
     pub fn jit_evaluate(program: &Program) -> Result<f64, String> {
-        // First try pure constant evaluation (fast path)
-        if let Some(v) = try_constant_fold(program) {
-            // Also exercise the real Cranelift pipeline
-            let _ = jit_constant(v)?;
-            return Ok(v);
+        if let Some(expr) = find_evaluable_expr(program) {
+            return jit_expression(&expr);
         }
-
-        // Fall back to a real Cranelift function that returns the last number found
-        if let Some(v) = find_last_number(program) {
-            return jit_constant(v);
-        }
-
         Err(
-            "JIT currently supports only simple numeric literals and constant arithmetic.\n\
-             Full expression lowering is in progress."
+            "No evaluable numeric expression found for JIT.\n\
+             Currently supports numeric literals and constant arithmetic expressions."
                 .into(),
         )
     }
 
-    fn find_last_number(program: &Program) -> Option<f64> {
+    fn find_evaluable_expr(program: &Program) -> Option<Expr> {
         let mut last = None;
         for stmt in &program.statements {
             match stmt {
-                Stmt::Show(Expr::Number(n))
-                | Stmt::Expr(Expr::Number(n))
-                | Stmt::Give(Expr::Number(n)) => last = Some(*n),
-                Stmt::Hold {
-                    value: Expr::Number(n),
-                    ..
-                } => last = Some(*n),
+                Stmt::Show(e) | Stmt::Expr(e) | Stmt::Give(e) => {
+                    if is_numeric_expr(e) {
+                        last = Some(e.clone());
+                    }
+                }
+                Stmt::Hold { value, .. } => {
+                    if is_numeric_expr(value) {
+                        last = Some(value.clone());
+                    }
+                }
                 _ => {}
             }
         }
         last
     }
 
-    /// Fold simple constant arithmetic that appears in the program.
-    fn try_constant_fold(program: &Program) -> Option<f64> {
-        let mut last = None;
-        for stmt in &program.statements {
-            if let Stmt::Hold {
-                value: Expr::Binary { left, op, right },
-                ..
-            } = stmt
-            {
-                if let (Expr::Number(a), Expr::Number(b)) = (&**left, &**right) {
-                    let v = match op {
-                        BinOp::Add => a + b,
-                        BinOp::Sub => a - b,
-                        BinOp::Mul => a * b,
-                        BinOp::Div if *b != 0.0 => a / b,
-                        _ => continue,
-                    };
-                    last = Some(v);
-                }
+    fn is_numeric_expr(expr: &Expr) -> bool {
+        match expr {
+            Expr::Number(_) => true,
+            Expr::Binary { left, right, .. } => {
+                is_numeric_expr(left) && is_numeric_expr(right)
             }
+            _ => false,
         }
-        last
     }
 
-    /// Build a real Cranelift JIT function that returns a constant f64.
-    /// This proves the full Cranelift pipeline (ISA → IR → machine code) works.
-    fn jit_constant(value: f64) -> Result<f64, String> {
+    fn jit_expression(expr: &Expr) -> Result<f64, String> {
         let mut flag_builder = settings::builder();
         flag_builder
             .set("use_colocated_libcalls", "false")
@@ -116,16 +93,13 @@ mod backend {
             builder.switch_to_block(block);
             builder.seal_block(block);
 
-            // Real arithmetic lowering example:
-            // We could lower a full expression tree here.
-            // For the constant case we just emit the value.
-            let v = builder.ins().f64const(value);
-            builder.ins().return_(&[v]);
+            let result = lower_expr(&mut builder, expr)?;
+            builder.ins().return_(&[result]);
             builder.finalize();
         }
 
         let id = module
-            .declare_function("sx_const", Linkage::Export, &ctx.func.signature)
+            .declare_function("sx_expr", Linkage::Export, &ctx.func.signature)
             .map_err(|e| e.to_string())?;
         module
             .define_function(id, &mut ctx)
@@ -138,20 +112,52 @@ mod backend {
         Ok(func())
     }
 
-    /// Lower a binary expression into Cranelift IR (helper for future expansion).
-    #[allow(dead_code)]
-    fn lower_binary(
-        builder: &mut FunctionBuilder,
-        left: cranelift_codegen::ir::Value,
-        op: BinOp,
-        right: cranelift_codegen::ir::Value,
-    ) -> cranelift_codegen::ir::Value {
-        match op {
-            BinOp::Add => builder.ins().fadd(left, right),
-            BinOp::Sub => builder.ins().fsub(left, right),
-            BinOp::Mul => builder.ins().fmul(left, right),
-            BinOp::Div => builder.ins().fdiv(left, right),
-            _ => left,
+    /// Recursively lower an expression tree into Cranelift IR values.
+    fn lower_expr(builder: &mut FunctionBuilder, expr: &Expr) -> Result<Value, String> {
+        match expr {
+            Expr::Number(n) => Ok(builder.ins().f64const(*n)),
+            Expr::Binary { left, op, right } => {
+                let l = lower_expr(builder, left)?;
+                let r = lower_expr(builder, right)?;
+                let v = match op {
+                    BinOp::Add => builder.ins().fadd(l, r),
+                    BinOp::Sub => builder.ins().fsub(l, r),
+                    BinOp::Mul => builder.ins().fmul(l, r),
+                    BinOp::Div => builder.ins().fdiv(l, r),
+                    BinOp::Gt => {
+                        let c = builder.ins().fcmp(
+                            cranelift_codegen::ir::condcodes::FloatCC::GreaterThan,
+                            l,
+                            r,
+                        );
+                        builder.ins().fcvt_from_uint(types::F64, c)
+                    }
+                    BinOp::Lt => {
+                        let c = builder.ins().fcmp(
+                            cranelift_codegen::ir::condcodes::FloatCC::LessThan,
+                            l,
+                            r,
+                        );
+                        builder.ins().fcvt_from_uint(types::F64, c)
+                    }
+                    BinOp::Eq => {
+                        let c = builder.ins().fcmp(
+                            cranelift_codegen::ir::condcodes::FloatCC::Equal,
+                            l,
+                            r,
+                        );
+                        builder.ins().fcvt_from_uint(types::F64, c)
+                    }
+                    _ => {
+                        return Err(format!("Operator {:?} not yet lowered in Cranelift", op));
+                    }
+                };
+                Ok(v)
+            }
+            _ => Err(
+                "Only numeric literals and binary arithmetic expressions are supported in JIT for now"
+                    .into(),
+            ),
         }
     }
 
@@ -159,7 +165,7 @@ mod backend {
         Err(format!(
             "Full AOT native emission is still under construction.\n\
              Requested output: {}\n\
-             Use the C backend for production, or --jit for the experimental path.",
+             Use the C backend for production builds, or --jit for experimental expression evaluation.",
             output
         ))
     }
