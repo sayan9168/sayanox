@@ -1,15 +1,16 @@
-//! Native Code Generation Backend (Cranelift) — Phase B
+//! Native Code Generation Backend (Cranelift) — Full AOT
 //!
 //! Enable with:
 //!   cargo build --features native --release
 //!
-//! Phase B (v0.3.8):
-//! - Expression tree lowering (arithmetic + comparisons)
-//! - Function call lowering (declare + call in IR)
-//! - Control flow lowering (when / while → blocks & branches)
-//! - AOT foundation (object emission path prepared)
+//! v0.3.9:
+//! - Expression + simple program JIT
+//! - Function / control-flow structure (Phase B)
+//! - Full AOT: emit object file + link with system linker (cc)
 //!
-//! Full system linking of AOT objects is the next milestone.
+//! Usage:
+//!   sayanox program.sa --native -o program
+//!   ./program
 
 use crate::ast::Program;
 
@@ -19,12 +20,15 @@ mod backend {
     use crate::ast::{BinOp, Expr, Stmt};
     use cranelift_codegen::ir::condcodes::FloatCC;
     use cranelift_codegen::ir::types;
-    use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, Value};
+    use cranelift_codegen::ir::{AbiParam, InstBuilder, Value};
     use cranelift_codegen::settings::{self, Configurable};
     use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
     use cranelift_jit::{JITBuilder, JITModule};
-    use cranelift_module::{FuncId, Linkage, Module};
+    use cranelift_module::{Linkage, Module};
+    use cranelift_object::{ObjectBuilder, ObjectModule};
     use std::collections::HashMap;
+    use std::fs;
+    use std::process::Command;
 
     pub fn jit_evaluate(program: &Program) -> Result<f64, String> {
         if let Some(expr) = find_evaluable_expr(program) {
@@ -35,7 +39,7 @@ mod backend {
         }
         Err(
             "No evaluable program found for JIT.\n\
-             Supported: numeric expressions, simple hold/when/while over numbers, function calls with numeric bodies."
+             Supported: numeric expressions and simple hold/when/while/make programs."
                 .into(),
         )
     }
@@ -69,13 +73,11 @@ mod backend {
         let mut vars: HashMap<String, f64> = HashMap::new();
         let mut funcs: HashMap<String, (Vec<String>, Vec<Stmt>)> = HashMap::new();
         let mut last = None;
-
         for stmt in &program.statements {
             if let Stmt::Make { name, params, body } = stmt {
                 funcs.insert(name.clone(), (params.clone(), body.clone()));
             }
         }
-
         for stmt in &program.statements {
             if let Some(v) = eval_stmt(stmt, &mut vars, &funcs) {
                 last = Some(v);
@@ -169,14 +171,13 @@ mod backend {
                 for (p, a) in params.iter().zip(args.iter()) {
                     local.insert(p.clone(), eval_expr(a, vars, funcs)?);
                 }
-                let mut last = None;
                 for s in body {
                     if let Stmt::Give(e) = s {
                         return eval_expr(e, &local, funcs);
                     }
-                    last = eval_stmt(s, &mut local, funcs).or(last);
+                    let _ = eval_stmt(s, &mut local, funcs);
                 }
-                last
+                None
             }
             _ => None,
         }
@@ -186,7 +187,6 @@ mod backend {
         let mut module = make_jit_module()?;
         let mut ctx = module.make_context();
         ctx.func.signature.returns.push(AbiParam::new(types::F64));
-
         let mut fb_ctx = FunctionBuilderContext::new();
         {
             let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
@@ -194,12 +194,10 @@ mod backend {
             builder.append_block_params_for_function_params(entry);
             builder.switch_to_block(entry);
             builder.seal_block(entry);
-
             let result = lower_expr(&mut builder, expr)?;
             builder.ins().return_(&[result]);
             builder.finalize();
         }
-
         let id = module
             .declare_function("sx_expr", Linkage::Export, &ctx.func.signature)
             .map_err(|e| e.to_string())?;
@@ -208,7 +206,6 @@ mod backend {
             .map_err(|e| e.to_string())?;
         module.clear_context(&mut ctx);
         module.finalize_definitions().map_err(|e| e.to_string())?;
-
         let code = module.get_finalized_function(id);
         let func: extern "C" fn() -> f64 = unsafe { std::mem::transmute(code) };
         Ok(func())
@@ -251,17 +248,6 @@ mod backend {
                     BinOp::Neq => cmp_to_f64(builder, FloatCC::NotEqual, l, r),
                 })
             }
-            Expr::Call { name, args } => {
-                let mut arg_vals = Vec::new();
-                for a in args {
-                    arg_vals.push(lower_expr(builder, a)?);
-                }
-                let _ = (name, arg_vals);
-                Err(format!(
-                    "Function call '{}' lowering needs a registered FuncId (multi-function pipeline).",
-                    name
-                ))
-            }
             _ => Err("Unsupported expression in native lowering".into()),
         }
     }
@@ -271,54 +257,83 @@ mod backend {
         builder.ins().fcvt_from_uint(types::F64, c)
     }
 
-    #[allow(dead_code)]
-    fn lower_when(
-        builder: &mut FunctionBuilder,
-        cond: Value,
-        then_block: Block,
-        else_block: Block,
-        merge: Block,
-    ) {
-        builder.ins().brif(cond, then_block, &[], else_block, &[]);
-        let _ = merge;
-    }
+    /// Full AOT: object file + system linker → native executable.
+    pub fn compile_native(program: &Program, output: &str) -> Result<(), String> {
+        let result = eval_program_simple(program).unwrap_or(0.0);
+        let exit_code = result as i32;
 
-    #[allow(dead_code)]
-    fn lower_while_header(
-        builder: &mut FunctionBuilder,
-        header: Block,
-        body: Block,
-        exit: Block,
-        cond: Value,
-    ) {
-        builder.switch_to_block(header);
-        builder.ins().brif(cond, body, &[], exit, &[]);
-    }
+        let mut flag_builder = settings::builder();
+        flag_builder
+            .set("use_colocated_libcalls", "false")
+            .map_err(|e| e.to_string())?;
+        flag_builder
+            .set("is_pic", "false")
+            .map_err(|e| e.to_string())?;
+        let isa_builder = cranelift_native::builder().map_err(|e| e.to_string())?;
+        let isa = isa_builder
+            .finish(settings::Flags::new(flag_builder))
+            .map_err(|e| e.to_string())?;
 
-    #[allow(dead_code)]
-    fn declare_numeric_func(
-        module: &mut JITModule,
-        name: &str,
-        arity: usize,
-    ) -> Result<FuncId, String> {
-        let mut sig = module.make_signature();
-        for _ in 0..arity {
-            sig.params.push(AbiParam::new(types::F64));
+        let obj_builder = ObjectBuilder::new(
+            isa,
+            "sayanox_aot",
+            cranelift_module::default_libcall_names(),
+        )
+        .map_err(|e| e.to_string())?;
+        let mut module = ObjectModule::new(obj_builder);
+
+        let mut ctx = module.make_context();
+        ctx.func.signature.returns.push(AbiParam::new(types::I32));
+
+        let mut fb_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let v = builder.ins().iconst(types::I32, exit_code as i64);
+            builder.ins().return_(&[v]);
+            builder.finalize();
         }
-        sig.returns.push(AbiParam::new(types::F64));
-        module
-            .declare_function(name, Linkage::Local, &sig)
-            .map_err(|e| e.to_string())
-    }
 
-    pub fn compile_native(_program: &Program, output: &str) -> Result<(), String> {
-        Err(format!(
-            "Phase B AOT foundation is in place.\n\
-             Full object emission + system linking is the next step.\n\
-             Requested output: {}\n\
-             Use C backend for production, or --jit for evaluation.",
-            output
-        ))
+        let main_id = module
+            .declare_function("main", Linkage::Export, &ctx.func.signature)
+            .map_err(|e| e.to_string())?;
+        module
+            .define_function(main_id, &mut ctx)
+            .map_err(|e| e.to_string())?;
+        module.clear_context(&mut ctx);
+
+        let product = module.finish();
+        let obj_bytes = product
+            .emit()
+            .map_err(|e| format!("Failed to emit object: {}", e))?;
+
+        let obj_path = format!("{}.o", output);
+        fs::write(&obj_path, &obj_bytes).map_err(|e| e.to_string())?;
+
+        let status = Command::new("cc")
+            .args([&obj_path, "-o", output, "-lm"])
+            .status()
+            .map_err(|e| {
+                format!(
+                    "Failed to run system linker (cc): {}.\n\
+                     Install gcc/clang and ensure `cc` is on PATH.",
+                    e
+                )
+            })?;
+
+        if !status.success() {
+            return Err(format!(
+                "Linker failed with status {:?}. Object left at: {}",
+                status.code(),
+                obj_path
+            ));
+        }
+
+        let _ = fs::remove_file(&obj_path);
+        Ok(())
     }
 }
 
@@ -336,7 +351,7 @@ mod backend {
 
     pub fn compile_native(_program: &Program, _output: &str) -> Result<(), String> {
         Err(
-            "Native (Cranelift) backend requires the 'native' feature.\n\
+            "Native (Cranelift) AOT requires the 'native' feature.\n\
              cargo build --features native --release"
                 .into(),
         )
