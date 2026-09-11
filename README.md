@@ -5,19 +5,19 @@ File extension: `.sa`
 
 Created by **Sayan Mahata**.
 
-## Current Features (v0.3.6)
+## Current Features (v0.3.7 — Phase A complete)
 
-| Feature                        | Status                            |
-|--------------------------------|-----------------------------------|
-| show / hold / make / give      | ✅                                |
-| when / otherwise / while       | ✅                                |
-| Arrays + Indexing              | ✅                                |
-| Structs + Field access         | ✅                                |
-| String indexing → char code    | ✅                                |
-| len(string) / len(array)       | ✅ New                            |
-| C Code Generation              | ✅ Stable                         |
-| Native Backend (Cranelift)     | 🚧 Full expression tree lowering  |
-| Self-hosting                   | 🚧 Phase 1.4                      |
+| Feature                        | Status |
+|--------------------------------|--------|
+| Core language + C backend      | ✅     |
+| Arrays, Structs, while         | ✅     |
+| String indexing (char codes)   | ✅     |
+| `len(string)` / `len(list)`    | ✅     |
+| Dynamic list `push`            | ✅ New |
+| String `concat`                | ✅ New |
+| Improved error messages        | ✅ New |
+| Cranelift native (expr JIT)    | 🚧     |
+| Self-hosting                   | 🚧 Phase 1.5 |
 
 ## Build
 
@@ -25,35 +25,22 @@ Created by **Sayan Mahata**.
 git clone https://github.com/sayan9168/sayanox.git
 cd sayanox
 cargo build --release
+./target/release/sayanox examples/phase_a.sa -o out.c
+gcc out.c -o out && ./out
 ```
 
-### Experimental Native / JIT
-
-```bash
-cargo build --features native --release
-./target/release/sayanox examples/hello.sa --jit
-```
-
-## Example
+## Phase A Example
 
 ```sa
-hold s = "hello"
-show s[0]           // char code of 'h'
-show len(s)         // 5
+hold xs = []
+push(xs, 10)
+push(xs, 20)
+show len(xs)
+show xs[0]
 
-hold nums = [10, 20, 30]
-show len(nums)      // 3
-show nums[1]
+hold msg = concat("Hello, ", "Sayanox!")
+show msg
 ```
-
-## Native (Cranelift)
-
-Full recursive expression tree lowering for arithmetic is implemented.
-The JIT path can evaluate constant numeric expressions via real machine code.
-
-## Self-Hosting
-
-See `selfhost/`. Phase 1.4 lexer uses string indexing + `len()`.
 
 ## License
 

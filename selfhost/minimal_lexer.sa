@@ -1,122 +1,16 @@
-// ============================================================
-// Sayanox Self-Hosting - Phase 1.4
-// Minimal Lexer written entirely in Sayanox
-// ============================================================
-//
-// New language features used:
-//   - String indexing → character codes   (source[i])
-//   - len(string)                          (returns length)
-//
-// Still missing for a fully dynamic scanner:
-//   - Dynamic array push (token list growth)
-//   - Mutable string building
-//
-// With the features we have now we can already demonstrate
-// a realistic scanning loop structure.
+// Self-Hosting Phase 1.5 — uses Phase A features
+show "=== Self-Hosting Phase 1.5 ==="
 
-show "=== Sayanox Self-Hosting Phase 1.4 ==="
-show "Minimal Lexer written in pure Sayanox"
+hold TOK_SHOW = 1
+hold TOK_NUMBER = 11
+hold TOK_EOF = 0
 
-// ------------------------------------------------------------
-// Token kind constants
-// ------------------------------------------------------------
-hold TOK_EOF        = 0
-hold TOK_SHOW       = 1
-hold TOK_HOLD       = 2
-hold TOK_MAKE       = 3
-hold TOK_GIVE       = 4
-hold TOK_WHEN       = 5
-hold TOK_OTHERWISE  = 6
-hold TOK_WHILE      = 7
-hold TOK_STRUCT     = 8
-hold TOK_IDENT      = 10
-hold TOK_NUMBER     = 11
-hold TOK_STRING     = 12
-hold TOK_PLUS       = 20
-hold TOK_MINUS      = 21
-hold TOK_STAR       = 22
-hold TOK_SLASH      = 23
-hold TOK_ASSIGN     = 24
-hold TOK_EQEQ       = 25
-hold TOK_LPAREN     = 30
-hold TOK_RPAREN     = 31
-hold TOK_LBRACE     = 32
-hold TOK_RBRACE     = 33
-hold TOK_LBRACKET   = 34
-hold TOK_RBRACKET   = 35
-hold TOK_COMMA      = 36
-hold TOK_DOT        = 37
-hold TOK_COLON      = 38
-
-show "Token constants defined"
-
-// ------------------------------------------------------------
-// Source to scan
-// ------------------------------------------------------------
 hold source = "show 42"
 hold source_len = len(source)
-
-show "Source text:"
 show source
-show "Source length (via len()):"
 show source_len
 
-// ------------------------------------------------------------
-// Character classification using real character codes
-// ------------------------------------------------------------
-make is_digit_code(code) {
-    when code >= 48 {
-        when code <= 57 {
-            give 1
-        } otherwise {
-            give 0
-        }
-    } otherwise {
-        give 0
-    }
-}
-
-make is_alpha_code(code) {
-    when code >= 65 {
-        when code <= 90 {
-            give 1
-        } otherwise {
-            when code >= 97 {
-                when code <= 122 {
-                    give 1
-                } otherwise {
-                    give 0
-                }
-            } otherwise {
-                give 0
-            }
-        }
-    } otherwise {
-        give 0
-    }
-}
-
-make is_whitespace_code(code) {
-    // space = 32, tab = 9, newline = 10
-    when code == 32 {
-        give 1
-    } otherwise {
-        when code == 9 {
-            give 1
-        } otherwise {
-            when code == 10 {
-                give 1
-            } otherwise {
-                give 0
-            }
-        }
-    }
-}
-
-// ------------------------------------------------------------
-// Demonstrate walking the source with string indexing + len
-// ------------------------------------------------------------
-show "Walking source characters (codes):"
+// Walk characters
 hold i = 0
 while i < source_len {
     hold code = source[i]
@@ -124,27 +18,17 @@ while i < source_len {
     hold i = i + 1
 }
 
-// ------------------------------------------------------------
-// Demo token stream that a complete scanner would produce
-// ------------------------------------------------------------
-hold tokens = [1, 11, 0]
-hold token_count = len(tokens)
+// Dynamic token list with push
+hold tokens = []
+push(tokens, TOK_SHOW)
+push(tokens, TOK_NUMBER)
+push(tokens, TOK_EOF)
 
-show "Demo tokens for 'show 42':"
+show "Tokens:"
 hold j = 0
-while j < token_count {
+while j < len(tokens) {
     show tokens[j]
     hold j = j + 1
 }
 
-// ------------------------------------------------------------
-// Status
-// ------------------------------------------------------------
-show "Features now available for self-hosting:"
-show "  - string indexing (char codes)"
-show "  - len(string) / len(array)"
-show "Still needed for a fully dynamic lexer:"
-show "  - dynamic array push / grow"
-show "  - string builder / concatenation"
-
-show "Phase 1.4 complete"
+show "Phase 1.5 complete — dynamic push + len + string walk"

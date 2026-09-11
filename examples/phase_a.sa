@@ -1,0 +1,25 @@
+// Phase A demo: dynamic push, concat, len, better errors
+show "=== Phase A features ==="
+
+// Dynamic list
+hold xs = []
+push(xs, 10)
+push(xs, 20)
+push(xs, 30)
+
+show "List length:"
+show len(xs)
+show "Elements:"
+show xs[0]
+show xs[1]
+show xs[2]
+
+// String concatenation
+hold a = "Hello, "
+hold b = "Sayanox!"
+hold msg = concat(a, b)
+show msg
+show len(msg)
+
+// String indexing still works
+show msg[0]
