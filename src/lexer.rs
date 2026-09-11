@@ -137,6 +137,7 @@ impl Lexer {
             "give" => TokenKind::Give,
             "when" => TokenKind::When,
             "otherwise" => TokenKind::Otherwise,
+            "while" => TokenKind::While,
             _ => TokenKind::Ident(ident),
         }
     }
