@@ -1,6 +1,6 @@
 [package]
 name = "sayanox"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 authors = ["Sayan Mahata <sm6881164@gmail.com>"]
 description = "Sayanox - An original easy programming language with its own compiler"
@@ -8,7 +8,6 @@ license = "MIT"
 repository = "https://github.com/sayan9168/sayanox"
 
 [dependencies]
-# Cranelift for native code generation (optional feature)
 cranelift-codegen = { version = "0.110", optional = true }
 cranelift-frontend = { version = "0.110", optional = true }
 cranelift-module = { version = "0.110", optional = true }

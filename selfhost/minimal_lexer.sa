@@ -1,25 +1,24 @@
 // ============================================================
-// Sayanox Self-Hosting - Phase 1.2
-// More realistic Minimal Lexer written entirely in Sayanox
+// Sayanox Self-Hosting - Phase 1.3
+// Minimal Lexer written entirely in Sayanox
 // ============================================================
 //
-// Goal of this file:
-//   Demonstrate the structure of a real lexer using only the
-//   features currently available in Sayanox.
+// Progress:
+//   - String indexing now returns character codes in the C backend
+//   - This file is ready to become a real scanner once a few
+//     more helpers (string length, dynamic arrays) are added.
 //
-// Limitations of the current language (to be removed later):
-//   - No real string indexing yet (source[i])
-//   - No character-code access
-//   - No dynamic push to arrays
-//
-// When those features arrive, this file will become a working
-// character-by-character scanner.
+// Current language support used here:
+//   - Arrays + indexing
+//   - while loops
+//   - functions
+//   - string indexing (returns char code)
 
-show "=== Sayanox Self-Hosting Phase 1.2 ==="
+show "=== Sayanox Self-Hosting Phase 1.3 ==="
 show "Minimal Lexer written in pure Sayanox"
 
 // ------------------------------------------------------------
-// 1. Token kind constants
+// Token kind constants
 // ------------------------------------------------------------
 hold TOK_EOF        = 0
 hold TOK_SHOW       = 1
@@ -52,64 +51,62 @@ hold TOK_COLON      = 38
 show "Token constants defined"
 
 // ------------------------------------------------------------
-// 2. Source text that a real lexer would scan
+// Source we will conceptually scan
 // ------------------------------------------------------------
 hold source = "show 42"
-hold source_len = 7
 
 show "Source text:"
 show source
-show "Source length (hard-coded for now):"
-show source_len
+
+// Demonstrate string indexing → character code
+// "s" of "show" should produce the numeric code of 's'
+hold first_char_code = source[0]
+show "First character code of source:"
+show first_char_code
 
 // ------------------------------------------------------------
-// 3. Character classification helpers
-//    (stubs until the language supports char codes)
+// Character classification (now can use real codes later)
 // ------------------------------------------------------------
-make is_digit(c) {
-    // Future: return 1 when c is in '0'..'9'
-    give 0
+make is_digit_code(code) {
+    // '0' = 48, '9' = 57 in ASCII
+    when code >= 48 {
+        when code <= 57 {
+            give 1
+        } otherwise {
+            give 0
+        }
+    } otherwise {
+        give 0
+    }
 }
 
-make is_alpha(c) {
-    // Future: return 1 when c is letter or underscore
-    give 0
-}
-
-make is_whitespace(c) {
-    // Future: space, tab, newline
-    give 0
-}
-
-make is_operator(c) {
-    // Future: + - * / = etc.
-    give 0
-}
-
-// ------------------------------------------------------------
-// 4. Keyword recognition (structure only)
-// ------------------------------------------------------------
-make lookup_keyword(word) {
-    // In a complete self-hosted lexer this function would
-    // compare the collected identifier against the keyword table.
-    // For now we just return TOK_IDENT as a placeholder.
-    give TOK_IDENT
+make is_alpha_code(code) {
+    // rough check for letters (A-Z / a-z)
+    when code >= 65 {
+        when code <= 90 {
+            give 1
+        } otherwise {
+            when code >= 97 {
+                when code <= 122 {
+                    give 1
+                } otherwise {
+                    give 0
+                }
+            } otherwise {
+                give 0
+            }
+        }
+    } otherwise {
+        give 0
+    }
 }
 
 // ------------------------------------------------------------
-// 5. Demo: the token stream that a real scanner would produce
-//    for the source "show 42"
+// Demo token stream for "show 42"
 // ------------------------------------------------------------
-hold tokens = [1, 11, 0]   // TOK_SHOW, TOK_NUMBER, TOK_EOF
+hold tokens = [1, 11, 0]
 
-show "Tokens that would be produced for the source:"
-show tokens[0]
-show tokens[1]
-show tokens[2]
-
-// ------------------------------------------------------------
-// 6. Tiny driver that walks the demo token list
-// ------------------------------------------------------------
+show "Tokens for source 'show 42':"
 hold i = 0
 while i < 3 {
     show tokens[i]
@@ -117,14 +114,12 @@ while i < 3 {
 }
 
 // ------------------------------------------------------------
-// 7. Status and next language features needed
+// Status
 // ------------------------------------------------------------
-show "Self-hosted lexer structure is ready"
-show "Missing language features required for a complete scanner:"
-show "  1. String indexing          source[i]"
-show "  2. Character code access"
-show "  3. String length            len(source)"
-show "  4. Dynamic arrays / push"
-show "  5. String comparison"
+show "String indexing (char codes) is now available"
+show "Remaining for a complete self-hosted lexer:"
+show "  - string length helper"
+show "  - dynamic token list / push"
+show "  - full character-by-character loop over source"
 
-show "Phase 1.2 finished - waiting for the features above"
+show "Phase 1.3 complete"
