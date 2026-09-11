@@ -1,34 +1,40 @@
 //! Native code generation backend using Cranelift
 //!
-//! This module provides the foundation for emitting native machine code
-//! instead of C. Full AOT compilation with linking is the long-term goal.
+//! Goal: Emit real machine code instead of C.
 //!
-//! Current status (v0.3):
-//! - Module structure ready
-//! - Planned: Cranelift IR lowering for expressions, functions, control flow
-//! - Planned: Object file emission + system linker integration
+//! Current status:
+//! - Module layout ready
+//! - Basic API defined
+//! - Full Cranelift IR lowering for arithmetic + functions is the next implementation step
 //!
-//! To enable later:
-//!   cargo build --features native
+//! When ready, add to Cargo.toml:
+//!   cranelift-codegen = "0.108"
+//!   cranelift-frontend = "0.108"
+//!   cranelift-module = "0.108"
+//!   cranelift-object = "0.108"
+//!   target-lexicon = "0.12"
 //!
-//! Dependencies that will be added:
-//!   cranelift-codegen, cranelift-frontend, cranelift-module,
-//!   cranelift-object, target-lexicon, etc.
+//! Then implement:
+//! 1. Type mapping (Sayanox values → Cranelift types)
+//! 2. Expression lowering
+//! 3. Function & control-flow lowering
+//! 4. Object file emission + linking
 
 use crate::ast::Program;
 
-/// Placeholder for the native backend.
-/// Returns an error until Cranelift integration is completed.
-pub fn compile_native(_program: &Program, _output: &str) -> Result<(), String> {
-    Err(
+/// Compile a Sayanox program to a native object / executable.
+/// Currently returns a clear message until the full backend is finished.
+pub fn compile_native(_program: &Program, output: &str) -> Result<(), String> {
+    Err(format!(
         "Native (Cranelift) backend is under active development.\n\
-         Current version uses the stable C backend.\n\
-         See README.md for the roadmap."
-            .to_string(),
-    )
+         Requested output: {}\n\
+         The stable C backend is currently used.\n\
+         See src/native/mod.rs and README.md for the implementation plan.",
+        output
+    ))
 }
 
-/// Future entry point for JIT execution of simple expressions.
+/// Future JIT entry point for quick evaluation of simple expressions.
 pub fn jit_evaluate(_program: &Program) -> Result<f64, String> {
-    Err("JIT evaluation not yet implemented".to_string())
+    Err("JIT evaluation not yet implemented — coming with the Cranelift backend.".to_string())
 }

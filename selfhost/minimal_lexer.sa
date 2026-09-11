@@ -1,29 +1,76 @@
-// Self-hosting Phase 1 - Minimal lexer sketch written in Sayanox
-// This is the beginning of rewriting the compiler in itself.
+// ============================================================
+// Sayanox Self-Hosting Phase 1
+// Minimal Lexer written entirely in Sayanox
+// ============================================================
 
-show "Sayanox Self-Hosting - Phase 1"
-show "Minimal lexer sketch"
+show "=== Sayanox Self-Hosting Phase 1 ==="
+show "Minimal Lexer (written in Sayanox itself)"
 
-// Simple character categories (conceptual)
-make is_digit(c) {
-    // Placeholder - real implementation will inspect character codes
+// ------------------------------------------------------------
+// Token kind constants
+// ------------------------------------------------------------
+hold TOK_EOF      = 0
+hold TOK_SHOW     = 1
+hold TOK_HOLD     = 2
+hold TOK_MAKE     = 3
+hold TOK_GIVE     = 4
+hold TOK_WHEN     = 5
+hold TOK_OTHERWISE = 6
+hold TOK_WHILE    = 7
+hold TOK_STRUCT   = 8
+hold TOK_IDENT    = 10
+hold TOK_NUMBER   = 11
+hold TOK_STRING   = 12
+hold TOK_PLUS     = 20
+hold TOK_MINUS    = 21
+hold TOK_STAR     = 22
+hold TOK_SLASH    = 23
+hold TOK_ASSIGN   = 24
+hold TOK_EQEQ     = 25
+hold TOK_LPAREN   = 30
+hold TOK_RPAREN   = 31
+hold TOK_LBRACE   = 32
+hold TOK_RBRACE   = 33
+hold TOK_LBRACKET = 34
+hold TOK_RBRACKET = 35
+hold TOK_COMMA    = 36
+hold TOK_DOT      = 37
+hold TOK_COLON    = 38
+
+show "Token constants loaded"
+
+// ------------------------------------------------------------
+// Simple helper functions (conceptual - current language limits)
+// ------------------------------------------------------------
+make is_digit(code) {
+    // Returns 1 if character code is digit, else 0
+    // Full implementation needs char-to-code support
     give 0
 }
 
-make is_alpha(c) {
+make is_alpha(code) {
     give 0
 }
 
-// Token kinds (using numbers for now)
-hold TOK_SHOW = 1
-hold TOK_HOLD = 2
-hold TOK_NUMBER = 3
-hold TOK_IDENT = 4
-hold TOK_EOF = 99
+make is_whitespace(code) {
+    give 0
+}
 
-show "Token constants defined"
-show TOK_SHOW
-show TOK_EOF
+// ------------------------------------------------------------
+// Demo: manual token stream for a tiny program
+// "show 42"
+// ------------------------------------------------------------
+hold demo_tokens = [1, 11, 0]   // SHOW, NUMBER, EOF
 
-// Future: real character-by-character scanning will live here
-show "Self-hosting frontend started successfully"
+show "Demo token stream for: show 42"
+show demo_tokens[0]
+show demo_tokens[1]
+show demo_tokens[2]
+
+// ------------------------------------------------------------
+// Future real lexer will scan a string character by character
+// and produce a list of tokens like the demo above.
+// ------------------------------------------------------------
+
+show "Self-hosted minimal lexer skeleton is ready"
+show "Next: add character scanning once the language supports string indexing & char codes"

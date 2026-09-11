@@ -11,7 +11,7 @@ Created by **Sayan Mahata**.
 - Own compiler written in Rust
 - Path toward native code generation (Cranelift) and full self-hosting
 
-## Current Features (v0.3)
+## Current Features (v0.3.2)
 
 | Feature                        | Status          |
 |--------------------------------|-----------------|
@@ -20,6 +20,7 @@ Created by **Sayan Mahata**.
 | Arrays + Indexing              | ✅              |
 | Structs + Field access         | ✅              |
 | C Code Generation              | ✅ Stable       |
+| Full parser + codegen on GitHub| ✅              |
 | Native Backend (Cranelift)     | 🚧 Skeleton     |
 | Self-hosting                   | 🚧 Phase 1      |
 
@@ -65,7 +66,7 @@ Full machine-code emission and linking is the next major milestone.
 See the `selfhost/` directory.
 
 - `selfhost/README.md` – plan and minimal subset definition
-- `selfhost/minimal_lexer.sa` – first experimental self-hosted frontend sketch
+- `selfhost/minimal_lexer.sa` – expanded self-hosted lexer written in Sayanox
 
 The long-term goal is a compiler written entirely in Sayanox that can compile itself.
 
@@ -74,6 +75,7 @@ The long-term goal is a compiler written entirely in Sayanox that can compile it
 - [x] Lexer + Parser + AST
 - [x] C Code Generation
 - [x] while, Arrays, Structs
+- [x] Complete source on GitHub (builds from clone)
 - [ ] Full Cranelift Native Backend
 - [ ] Self-hosting (Phase 1 → complete)
 - [ ] Standard library + package system
