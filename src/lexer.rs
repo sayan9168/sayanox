@@ -1,3 +1,5 @@
+//! Lexer for Sayanox
+
 use crate::token::{Token, TokenKind};
 
 pub struct Lexer {
@@ -35,7 +37,11 @@ impl Lexer {
                 ')' => TokenKind::RParen,
                 '{' => TokenKind::LBrace,
                 '}' => TokenKind::RBrace,
+                '[' => TokenKind::LBracket,
+                ']' => TokenKind::RBracket,
                 ',' => TokenKind::Comma,
+                ':' => TokenKind::Colon,
+                '.' => TokenKind::Dot,
                 '+' => TokenKind::Plus,
                 '-' => TokenKind::Minus,
                 '*' => TokenKind::Star,
@@ -138,6 +144,7 @@ impl Lexer {
             "when" => TokenKind::When,
             "otherwise" => TokenKind::Otherwise,
             "while" => TokenKind::While,
+            "struct" => TokenKind::Struct,
             _ => TokenKind::Ident(ident),
         }
     }
