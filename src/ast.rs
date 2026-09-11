@@ -1,0 +1,52 @@
+#[derive(Debug, Clone)]
+pub enum Stmt {
+    Show(Expr),
+    Hold { name: String, value: Expr },
+    Make {
+        name: String,
+        params: Vec<String>,
+        body: Vec<Stmt>,
+    },
+    Give(Expr),
+    When {
+        condition: Expr,
+        then_body: Vec<Stmt>,
+        otherwise_body: Option<Vec<Stmt>>,
+    },
+    Expr(Expr),
+}
+
+#[derive(Debug, Clone)]
+pub enum Expr {
+    Number(f64),
+    String(String),
+    Ident(String),
+    Binary {
+        left: Box<Expr>,
+        op: BinOp,
+        right: Box<Expr>,
+    },
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Gt,
+    Lt,
+    Eq,
+    Neq,
+    Gte,
+    Lte,
+}
+
+#[derive(Debug, Clone)]
+pub struct Program {
+    pub statements: Vec<Stmt>,
+}
