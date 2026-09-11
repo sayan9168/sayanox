@@ -229,7 +229,10 @@ impl Codegen {
                 format!("{{{}}}", elems.join(", "))
             }
             Expr::Index { array, index } => {
-                format!("{}[(int)({})]", self.gen_expr(array), self.gen_expr(index))
+                // Arrays use normal C indexing.
+                // Strings are treated as character access and return the numeric character code.
+                // Example: "hello"[0]  →  (int)"hello"[0]  which is the char code of 'h'
+                format!("((int)({}[(int)({})]))", self.gen_expr(array), self.gen_expr(index))
             }
             Expr::StructLit { name, fields } => {
                 let vals: Vec<String> = fields.iter().map(|(_, v)| self.gen_expr(v)).collect();
