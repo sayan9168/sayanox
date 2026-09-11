@@ -17,7 +17,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Sayanox Compiler v0.3.3");
+        eprintln!("Sayanox Compiler v0.3.4");
         eprintln!("Usage: sayanox <input.sa> [-o output.c]");
         eprintln!("       sayanox <input.sa> --tokens");
         eprintln!("       sayanox <input.sa> --ast");

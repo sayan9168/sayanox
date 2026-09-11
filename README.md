@@ -5,17 +5,17 @@ File extension: `.sa`
 
 Created by **Sayan Mahata**.
 
-## Current Features (v0.3.3)
+## Current Features (v0.3.4)
 
-| Feature                        | Status                  |
-|--------------------------------|-------------------------|
-| show / hold / make / give      | ✅                      |
-| when / otherwise / while       | ✅                      |
-| Arrays + Indexing              | ✅                      |
-| Structs + Field access         | ✅                      |
-| C Code Generation              | ✅ Stable               |
-| Native (Cranelift)             | 🚧 Feature-gated start  |
-| Self-hosting                   | 🚧 Phase 1.1            |
+| Feature                        | Status                     |
+|--------------------------------|----------------------------|
+| show / hold / make / give      | ✅                         |
+| when / otherwise / while       | ✅                         |
+| Arrays + Indexing              | ✅                         |
+| Structs + Field access         | ✅                         |
+| C Code Generation              | ✅ Stable                  |
+| Native Backend (Cranelift)     | 🚧 Feature-gated + JIT demo|
+| Self-hosting                   | 🚧 Phase 1.2               |
 
 ## Build
 
@@ -26,6 +26,7 @@ cargo build --release
 ```
 
 ### Experimental Native / JIT
+
 ```bash
 cargo build --features native --release
 ./target/release/sayanox examples/hello.sa --jit
@@ -51,9 +52,18 @@ hold p = Point { x: 5, y: 15 }
 show p.x
 ```
 
+## Native Code Generation (Cranelift)
+
+The `src/native/` module contains a real (feature-gated) Cranelift integration.
+A minimal JIT path is already present and will be expanded to full expression lowering.
+
 ## Self-Hosting
 
-See `selfhost/` directory. The minimal lexer is written in pure Sayanox and is becoming more realistic.
+See the `selfhost/` directory.
+
+- Phase 1.2 minimal lexer is written in pure Sayanox
+- Clear list of language features still needed for a complete scanner
 
 ## License
+
 MIT
