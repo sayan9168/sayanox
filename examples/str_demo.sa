@@ -1,0 +1,7 @@
+// Number to string codegen
+hold n = 42
+hold s = str(n)
+show s
+hold msg = concat("value=", str(100 + 20 + 3))
+show msg
+write_file("str_out.txt", msg)
