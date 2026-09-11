@@ -1,6 +1,5 @@
 //! C Code Generator for Sayanox
-//! Translates Sayanox AST into readable C code.
-//! Phase A: dynamic lists (push), string concat, len().
+//! Phase 6: dynamic lists, concat, len, read_file, write_file
 
 use crate::ast::*;
 use std::collections::HashMap;
@@ -29,7 +28,6 @@ impl Codegen {
         self.output.push_str("#include <stdio.h>\n");
         self.output.push_str("#include <stdlib.h>\n");
         self.output.push_str("#include <string.h>\n\n");
-        // Runtime: dynamic lists + string concat
         self.output.push_str(
             "typedef struct { double *data; int len; int cap; } SxList;\n\
 static SxList sx_list_new(void) { SxList l; l.data=NULL; l.len=0; l.cap=0; return l; }\n\
@@ -52,6 +50,26 @@ static char *sx_concat(const char *a, const char *b) {\n\
   char *r=(char*)malloc(la+lb+1);\n\
   if (!r) { fprintf(stderr,\"Sayanox: out of memory\\n\"); exit(1); }\n\
   memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r;\n\
+}\n\
+static char *sx_read_file(const char *path) {\n\
+  FILE *f = fopen(path, \"rb\");\n\
+  if (!f) { fprintf(stderr,\"Sayanox: cannot open %s\\n\", path); exit(1); }\n\
+  fseek(f, 0, SEEK_END);\n\
+  long n = ftell(f);\n\
+  fseek(f, 0, SEEK_SET);\n\
+  char *buf = (char*)malloc((size_t)n + 1);\n\
+  if (!buf) { fprintf(stderr,\"Sayanox: out of memory\\n\"); exit(1); }\n\
+  fread(buf, 1, (size_t)n, f);\n\
+  buf[n] = 0;\n\
+  fclose(f);\n\
+  return buf;\n\
+}\n\
+static double sx_write_file(const char *path, const char *data) {\n\
+  FILE *f = fopen(path, \"wb\");\n\
+  if (!f) { fprintf(stderr,\"Sayanox: cannot write %s\\n\", path); exit(1); }\n\
+  fputs(data, f);\n\
+  fclose(f);\n\
+  return 0.0;\n\
 }\n\n",
         );
 
@@ -123,6 +141,17 @@ static char *sx_concat(const char *a, const char *b) {\n\
                 Expr::Number(n) => self
                     .output
                     .push_str(&format!("{}printf(\"%g\\n\", {});\n", ind, n)),
+                Expr::Call { name, .. } if name == "read_file" || name == "concat" => {
+                    let code = self.gen_expr(expr);
+                    self.output
+                        .push_str(&format!("{}printf(\"%s\\n\", {});\n", ind, code));
+                }
+                Expr::Ident(_) => {
+                    let code = self.gen_expr(expr);
+                    // Prefer string print for idents that may be char*
+                    self.output
+                        .push_str(&format!("{}printf(\"%s\\n\", {});\n", ind, code));
+                }
                 _ => {
                     let code = self.gen_expr(expr);
                     self.output
@@ -165,8 +194,10 @@ static char *sx_concat(const char *a, const char *b) {\n\
                 }
                 _ => {
                     let code = self.gen_expr(value);
-                    // concat returns char*
-                    if matches!(value, Expr::Call { name, .. } if name == "concat") {
+                    if matches!(
+                        value,
+                        Expr::Call { name: n, .. } if n == "concat" || n == "read_file"
+                    ) {
                         self.output
                             .push_str(&format!("{}char* {} = {};\n", ind, name, code));
                     } else {
@@ -255,6 +286,14 @@ static char *sx_concat(const char *a, const char *b) {\n\
                     let a = self.gen_expr(&args[0]);
                     let b = self.gen_expr(&args[1]);
                     format!("sx_concat({}, {})", a, b)
+                } else if name == "read_file" && args.len() == 1 {
+                    format!("sx_read_file({})", self.gen_expr(&args[0]))
+                } else if name == "write_file" && args.len() == 2 {
+                    format!(
+                        "sx_write_file({}, {})",
+                        self.gen_expr(&args[0]),
+                        self.gen_expr(&args[1])
+                    )
                 } else {
                     let args_code: Vec<String> =
                         args.iter().map(|a| self.gen_expr(a)).collect();
