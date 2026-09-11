@@ -1,3 +1,6 @@
+//! Sayanox Compiler - Entry point
+//! An original easy programming language with its own compiler.
+
 mod ast;
 mod codegen;
 mod lexer;
@@ -13,7 +16,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Sayanox Compiler v0.1");
+        eprintln!("Sayanox Compiler v0.3");
         eprintln!("Usage: sayanox <input.sa> [-o output.c]");
         eprintln!("       sayanox <input.sa> --tokens");
         eprintln!("       sayanox <input.sa> --ast");
@@ -92,7 +95,7 @@ fn main() {
         return;
     }
 
-    // Codegen
+    // Codegen to C
     let mut codegen = codegen::Codegen::new();
     let c_code = codegen.generate(&program);
 
