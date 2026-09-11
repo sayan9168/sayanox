@@ -1,3 +1,5 @@
+//! Tokens for the Sayanox language
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Keywords
@@ -8,6 +10,7 @@ pub enum TokenKind {
     When,
     Otherwise,
     While,
+    Struct,
 
     // Literals
     Ident(String),
@@ -26,13 +29,17 @@ pub enum TokenKind {
     Lt,
     Gte,
     Lte,
+    Dot,
 
     // Delimiters
     LParen,
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Comma,
+    Colon,
 
     Eof,
 }

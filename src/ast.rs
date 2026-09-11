@@ -1,7 +1,12 @@
+//! Abstract Syntax Tree for Sayanox
+
 #[derive(Debug, Clone)]
 pub enum Stmt {
     Show(Expr),
-    Hold { name: String, value: Expr },
+    Hold {
+        name: String,
+        value: Expr,
+    },
     Make {
         name: String,
         params: Vec<String>,
@@ -16,6 +21,11 @@ pub enum Stmt {
     While {
         condition: Expr,
         body: Vec<Stmt>,
+    },
+    /// Struct definition: make struct Name { field1, field2 }
+    StructDef {
+        name: String,
+        fields: Vec<String>,
     },
     Expr(Expr),
 }
@@ -33,6 +43,23 @@ pub enum Expr {
     Call {
         name: String,
         args: Vec<Expr>,
+    },
+    /// Array literal: [1, 2, 3]
+    Array(Vec<Expr>),
+    /// Indexing: arr[0]
+    Index {
+        array: Box<Expr>,
+        index: Box<Expr>,
+    },
+    /// Struct literal: Point { x: 10, y: 20 }
+    StructLit {
+        name: String,
+        fields: Vec<(String, Expr)>,
+    },
+    /// Field access: p.x
+    Field {
+        object: Box<Expr>,
+        field: String,
     },
 }
 
