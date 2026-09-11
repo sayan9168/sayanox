@@ -5,19 +5,17 @@ File extension: `.sa`
 
 Created by **Sayan Mahata**.
 
-## Current Features (v0.3.7 — Phase A complete)
+## Current Features (v0.3.8)
 
-| Feature                        | Status |
-|--------------------------------|--------|
-| Core language + C backend      | ✅     |
-| Arrays, Structs, while         | ✅     |
-| String indexing (char codes)   | ✅     |
-| `len(string)` / `len(list)`    | ✅     |
-| Dynamic list `push`            | ✅ New |
-| String `concat`                | ✅ New |
-| Improved error messages        | ✅ New |
-| Cranelift native (expr JIT)    | 🚧     |
-| Self-hosting                   | 🚧 Phase 1.5 |
+| Feature | Status |
+|---------|--------|
+| Core language + C backend | ✅ |
+| Dynamic `push`, `concat`, `len` | ✅ Phase A |
+| Cranelift expression lowering | ✅ |
+| Function call lowering (structure) | 🚧 Phase B |
+| Control flow lowering (when/while) | 🚧 Phase B |
+| Simple program eval via `--jit` | ✅ Phase B |
+| Full AOT object + link | 🚧 Next |
 
 ## Build
 
@@ -25,21 +23,14 @@ Created by **Sayan Mahata**.
 git clone https://github.com/sayan9168/sayanox.git
 cd sayanox
 cargo build --release
-./target/release/sayanox examples/phase_a.sa -o out.c
-gcc out.c -o out && ./out
+./target/release/sayanox examples/phase_a.sa -o out.c && gcc out.c -o out && ./out
 ```
 
-## Phase A Example
+### Native / JIT (Phase B)
 
-```sa
-hold xs = []
-push(xs, 10)
-push(xs, 20)
-show len(xs)
-show xs[0]
-
-hold msg = concat("Hello, ", "Sayanox!")
-show msg
+```bash
+cargo build --features native --release
+./target/release/sayanox examples/phase_b.sa --jit
 ```
 
 ## License

@@ -1,0 +1,29 @@
+// Phase B demo — functions, when, while (evaluated via native JIT path when enabled)
+show "=== Phase B ==="
+
+make double(n) {
+    give n * 2
+}
+
+make add(a, b) {
+    give a + b
+}
+
+hold x = 21
+hold y = double(x)
+show y
+
+hold z = add(10, 32)
+show z
+
+hold n = 1
+while n <= 3 {
+    show n
+    hold n = n + 1
+}
+
+when y > 40 {
+    show 1
+} otherwise {
+    show 0
+}
