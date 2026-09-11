@@ -5,18 +5,19 @@ File extension: `.sa`
 
 Created by **Sayan Mahata**.
 
-## Current Features (v0.3.5)
+## Current Features (v0.3.6)
 
-| Feature                        | Status                          |
-|--------------------------------|---------------------------------|
-| show / hold / make / give      | ✅                              |
-| when / otherwise / while       | ✅                              |
-| Arrays + Indexing              | ✅                              |
-| Structs + Field access         | ✅                              |
-| String indexing → char code    | ✅ New                          |
-| C Code Generation              | ✅ Stable                       |
-| Native Backend (Cranelift)     | 🚧 Arithmetic + JIT path        |
-| Self-hosting                   | 🚧 Phase 1.3                    |
+| Feature                        | Status                            |
+|--------------------------------|-----------------------------------|
+| show / hold / make / give      | ✅                                |
+| when / otherwise / while       | ✅                                |
+| Arrays + Indexing              | ✅                                |
+| Structs + Field access         | ✅                                |
+| String indexing → char code    | ✅                                |
+| len(string) / len(array)       | ✅ New                            |
+| C Code Generation              | ✅ Stable                         |
+| Native Backend (Cranelift)     | 🚧 Full expression tree lowering  |
+| Self-hosting                   | 🚧 Phase 1.4                      |
 
 ## Build
 
@@ -36,27 +37,23 @@ cargo build --features native --release
 ## Example
 
 ```sa
-show "Hello from Sayanox!"
-
 hold s = "hello"
-show s[0]          // character code of 'h'
-
-make double(n) {
-    give n * 2
-}
+show s[0]           // char code of 'h'
+show len(s)         // 5
 
 hold nums = [10, 20, 30]
+show len(nums)      // 3
 show nums[1]
 ```
 
 ## Native (Cranelift)
 
-Real Cranelift JIT pipeline is present (feature-gated).  
-Arithmetic operators can be lowered to Cranelift IR; full AOT is next.
+Full recursive expression tree lowering for arithmetic is implemented.
+The JIT path can evaluate constant numeric expressions via real machine code.
 
 ## Self-Hosting
 
-See `selfhost/`. Phase 1.3 lexer now uses string indexing for character codes.
+See `selfhost/`. Phase 1.4 lexer uses string indexing + `len()`.
 
 ## License
 

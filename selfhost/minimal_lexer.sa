@@ -1,20 +1,20 @@
 // ============================================================
-// Sayanox Self-Hosting - Phase 1.3
+// Sayanox Self-Hosting - Phase 1.4
 // Minimal Lexer written entirely in Sayanox
 // ============================================================
 //
-// Progress:
-//   - String indexing now returns character codes in the C backend
-//   - This file is ready to become a real scanner once a few
-//     more helpers (string length, dynamic arrays) are added.
+// New language features used:
+//   - String indexing → character codes   (source[i])
+//   - len(string)                          (returns length)
 //
-// Current language support used here:
-//   - Arrays + indexing
-//   - while loops
-//   - functions
-//   - string indexing (returns char code)
+// Still missing for a fully dynamic scanner:
+//   - Dynamic array push (token list growth)
+//   - Mutable string building
+//
+// With the features we have now we can already demonstrate
+// a realistic scanning loop structure.
 
-show "=== Sayanox Self-Hosting Phase 1.3 ==="
+show "=== Sayanox Self-Hosting Phase 1.4 ==="
 show "Minimal Lexer written in pure Sayanox"
 
 // ------------------------------------------------------------
@@ -51,24 +51,20 @@ hold TOK_COLON      = 38
 show "Token constants defined"
 
 // ------------------------------------------------------------
-// Source we will conceptually scan
+// Source to scan
 // ------------------------------------------------------------
 hold source = "show 42"
+hold source_len = len(source)
 
 show "Source text:"
 show source
-
-// Demonstrate string indexing → character code
-// "s" of "show" should produce the numeric code of 's'
-hold first_char_code = source[0]
-show "First character code of source:"
-show first_char_code
+show "Source length (via len()):"
+show source_len
 
 // ------------------------------------------------------------
-// Character classification (now can use real codes later)
+// Character classification using real character codes
 // ------------------------------------------------------------
 make is_digit_code(code) {
-    // '0' = 48, '9' = 57 in ASCII
     when code >= 48 {
         when code <= 57 {
             give 1
@@ -81,7 +77,6 @@ make is_digit_code(code) {
 }
 
 make is_alpha_code(code) {
-    // rough check for letters (A-Z / a-z)
     when code >= 65 {
         when code <= 90 {
             give 1
@@ -101,25 +96,55 @@ make is_alpha_code(code) {
     }
 }
 
+make is_whitespace_code(code) {
+    // space = 32, tab = 9, newline = 10
+    when code == 32 {
+        give 1
+    } otherwise {
+        when code == 9 {
+            give 1
+        } otherwise {
+            when code == 10 {
+                give 1
+            } otherwise {
+                give 0
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------
-// Demo token stream for "show 42"
+// Demonstrate walking the source with string indexing + len
+// ------------------------------------------------------------
+show "Walking source characters (codes):"
+hold i = 0
+while i < source_len {
+    hold code = source[i]
+    show code
+    hold i = i + 1
+}
+
+// ------------------------------------------------------------
+// Demo token stream that a complete scanner would produce
 // ------------------------------------------------------------
 hold tokens = [1, 11, 0]
+hold token_count = len(tokens)
 
-show "Tokens for source 'show 42':"
-hold i = 0
-while i < 3 {
-    show tokens[i]
-    hold i = i + 1
+show "Demo tokens for 'show 42':"
+hold j = 0
+while j < token_count {
+    show tokens[j]
+    hold j = j + 1
 }
 
 // ------------------------------------------------------------
 // Status
 // ------------------------------------------------------------
-show "String indexing (char codes) is now available"
-show "Remaining for a complete self-hosted lexer:"
-show "  - string length helper"
-show "  - dynamic token list / push"
-show "  - full character-by-character loop over source"
+show "Features now available for self-hosting:"
+show "  - string indexing (char codes)"
+show "  - len(string) / len(array)"
+show "Still needed for a fully dynamic lexer:"
+show "  - dynamic array push / grow"
+show "  - string builder / concatenation"
 
-show "Phase 1.3 complete"
+show "Phase 1.4 complete"
