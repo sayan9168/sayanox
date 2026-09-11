@@ -1,95 +1,194 @@
 // ============================================================
-// Sayanox Self-Hosting — Phase 2.0
-// Minimal Parser sketch written in pure Sayanox
+// Sayanox Self-Hosting — Phase 3
+// Fuller Parser that builds AST nodes (parallel arrays)
 // ============================================================
-//
-// Consumes a token list (as numbers) and walks statements.
-// Full AST building needs structs + dynamic trees (later).
 
-show "=== Sayanox Self-Hosted Parser Phase 2.0 ==="
+show "=== Sayanox Self-Hosted Parser Phase 3 ==="
 
 hold TOK_EOF    = 0
 hold TOK_SHOW   = 1
 hold TOK_HOLD   = 2
 hold TOK_MAKE   = 3
-hold TOK_NUMBER = 11
+hold TOK_GIVE   = 4
+hold TOK_WHEN   = 5
+hold TOK_WHILE  = 7
 hold TOK_IDENT  = 10
+hold TOK_NUMBER = 11
+hold TOK_PLUS   = 20
+hold TOK_MINUS  = 21
+hold TOK_STAR   = 22
+hold TOK_SLASH  = 23
+hold TOK_ASSIGN = 24
+hold TOK_LPAREN = 30
+hold TOK_RPAREN = 31
+hold TOK_LBRACE = 32
+hold TOK_RBRACE = 33
 
-// Demo token stream from lexer for: show 42
+hold ST_SHOW   = 1
+hold ST_HOLD   = 2
+hold ST_MAKE   = 3
+hold ST_GIVE   = 4
+hold ST_WHEN   = 5
+hold ST_WHILE  = 6
+hold ST_EXPR   = 7
+hold EX_NUMBER = 10
+hold EX_IDENT  = 11
+hold EX_BINARY = 12
+hold EX_CALL   = 13
+hold OP_ADD = 20
+hold OP_SUB = 21
+hold OP_MUL = 22
+hold OP_DIV = 23
+
 hold tokens = []
 push(tokens, TOK_SHOW)
 push(tokens, TOK_NUMBER)
 push(tokens, TOK_EOF)
+hold tok_pos = 0
+hold tok_n = len(tokens)
 
-hold pos = 0
-hold n = len(tokens)
+hold num_vals = []
+push(num_vals, 42)
+hold num_pos = 0
+
+hold kind  = []
+hold left  = []
+hold right = []
+hold value = []
+hold ast_count = 0
+
+make ast_new(k, l, r, v) {
+    push(kind, k)
+    push(left, l)
+    push(right, r)
+    push(value, v)
+    hold id = ast_count
+    hold ast_count = ast_count + 1
+    give id
+}
 
 make peek() {
-    when pos < n {
-        give tokens[pos]
+    when tok_pos < tok_n {
+        give tokens[tok_pos]
     } otherwise {
         give TOK_EOF
     }
 }
 
 make advance() {
-    when pos < n {
-        hold pos = pos + 1
+    when tok_pos < tok_n {
+        hold tok_pos = tok_pos + 1
     } otherwise {
-        hold pos = pos
+        hold tok_pos = tok_pos
     }
     give 0
+}
+
+make parse_primary() {
+    hold t = peek()
+    when t == TOK_NUMBER {
+        hold v = num_vals[num_pos]
+        hold num_pos = num_pos + 1
+        advance()
+        give ast_new(EX_NUMBER, -1, -1, v)
+    } otherwise {
+        when t == TOK_IDENT {
+            advance()
+            give ast_new(EX_IDENT, -1, -1, 0)
+        } otherwise {
+            show "parse error: expected primary"
+            give -1
+        }
+    }
+}
+
+make parse_expression() {
+    give parse_primary()
 }
 
 make parse_statement() {
     hold t = peek()
     when t == TOK_SHOW {
-        show "parse: show statement"
         advance()
-        hold t2 = peek()
-        when t2 == TOK_NUMBER {
-            show "parse: number expression"
-            advance()
-        } otherwise {
-            when t2 == TOK_IDENT {
-                show "parse: ident expression"
-                advance()
-            } otherwise {
-                show "parse error: expected expression after show"
-            }
-        }
-        give 1
+        hold e = parse_expression()
+        give ast_new(ST_SHOW, e, -1, 0)
     } otherwise {
         when t == TOK_HOLD {
-            show "parse: hold statement"
             advance()
-            give 1
+            hold e = parse_expression()
+            give ast_new(ST_HOLD, e, -1, 0)
         } otherwise {
-            when t == TOK_MAKE {
-                show "parse: make statement"
+            when t == TOK_GIVE {
                 advance()
-                give 1
+                hold e = parse_expression()
+                give ast_new(ST_GIVE, e, -1, 0)
             } otherwise {
-                when t == TOK_EOF {
-                    give 0
-                } otherwise {
-                    show "parse error: unexpected token"
+                when t == TOK_MAKE {
                     advance()
-                    give 0
+                    show "parse: make (body not fully expanded in Phase 3)"
+                    give ast_new(ST_MAKE, -1, -1, 0)
+                } otherwise {
+                    when t == TOK_WHEN {
+                        advance()
+                        show "parse: when (condition/body Phase 3 stub)"
+                        give ast_new(ST_WHEN, -1, -1, 0)
+                    } otherwise {
+                        when t == TOK_WHILE {
+                            advance()
+                            show "parse: while (stub)"
+                            give ast_new(ST_WHILE, -1, -1, 0)
+                        } otherwise {
+                            when t == TOK_EOF {
+                                give -1
+                            } otherwise {
+                                show "parse error: unexpected token"
+                                advance()
+                                give -1
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-show "Parsing token stream..."
-while pos < n {
+hold stmts = []
+show "Parsing..."
+while tok_pos < tok_n {
     hold t = peek()
     when t == TOK_EOF {
-        hold pos = n
+        hold tok_pos = tok_n
     } otherwise {
-        parse_statement()
+        hold node = parse_statement()
+        when node >= 0 {
+            push(stmts, node)
+        } otherwise {
+            hold tok_pos = tok_n
+        }
     }
 }
 
-show "Self-hosted parser Phase 2.0 finished"
+show "Statements parsed:"
+show len(stmts)
+show "AST node count:"
+show ast_count
+
+when len(stmts) > 0 {
+    hold root = stmts[0]
+    show "First stmt kind (1=SHOW):"
+    show kind[root]
+    when left[root] >= 0 {
+        hold child = left[root]
+        show "Child expr kind (10=NUMBER):"
+        show kind[child]
+        show "Number value:"
+        show value[child]
+    } otherwise {
+        show "No child"
+    }
+} otherwise {
+    show "No statements"
+}
+
+show "Self-hosted Parser Phase 3 finished"
