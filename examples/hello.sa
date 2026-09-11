@@ -1,0 +1,19 @@
+// Hello World in Sayanox
+show "Hello from Sayanox!"
+
+hold x = 42
+
+make double(n) {
+    give n * 2
+}
+
+show double(x)
+
+when x > 10 {
+    show "Big number"
+} otherwise {
+    show "Small number"
+}
+
+hold result = double(21)
+show result

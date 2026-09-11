@@ -1,0 +1,14 @@
+[package]
+name = "sayanox"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sayan Mahata <sm6881164@gmail.com>"]
+description = "Sayanox - An original easy programming language with its own compiler"
+license = "MIT"
+repository = "https://github.com/sayan9168/sayanox"
+
+[dependencies]
+
+[[bin]]
+name = "sayanox"
+path = "src/main.rs"
