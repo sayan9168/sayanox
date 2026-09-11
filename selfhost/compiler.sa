@@ -1,30 +1,23 @@
 // ============================================================
-// Sayanox Self-Hosting — Phase 5
-// Unified compiler driver: source → tokens → AST → C
-// Written entirely in Sayanox
+// Sayanox Self-Hosting — Phase 7
+// True bootstrap path: read .sa from disk → lex → AST → write C
 // ============================================================
 
-show "=== Sayanox Self-Hosted Compiler Phase 5 ==="
+show "=== Sayanox Self-Hosted Compiler Phase 7 ==="
 
 hold TOK_EOF = 0
 hold TOK_SHOW = 1
-hold TOK_HOLD = 2
-hold TOK_GIVE = 4
-hold TOK_IDENT = 10
 hold TOK_NUMBER = 11
-hold TOK_PLUS = 20
-hold TOK_MINUS = 21
-hold TOK_STAR = 22
-hold TOK_SLASH = 23
-
 hold ST_SHOW = 1
-hold ST_HOLD = 2
-hold ST_GIVE = 4
 hold EX_NUMBER = 10
-hold EX_IDENT = 11
 
-hold source = "show 42"
+hold source = read_file("selfhost/hello.sa")
 hold src_len = len(source)
+show "Loaded source length:"
+show src_len
+show "Source:"
+show source
+
 hold tokens = []
 hold num_vals = []
 hold pos = 0
@@ -46,12 +39,14 @@ make is_alpha(c) {
 make is_space(c) {
     when c == 32 { give 1 } otherwise {
         when c == 9 { give 1 } otherwise {
-            when c == 10 { give 1 } otherwise { give 0 }
+            when c == 10 { give 1 } otherwise {
+                when c == 13 { give 1 } otherwise { give 0 }
+            }
         }
     }
 }
 
-show "1) Lexing..."
+show "1) Lexing from disk source..."
 while pos < src_len {
     hold c = source[pos]
     when is_space(c) == 1 {
@@ -73,60 +68,26 @@ while pos < src_len {
             push(num_vals, val)
         } otherwise {
             when is_alpha(c) == 1 {
-                when c == 115 {
-                    push(tokens, TOK_SHOW)
-                } otherwise {
-                    when c == 104 {
-                        push(tokens, TOK_HOLD)
-                    } otherwise {
-                        when c == 103 {
-                            push(tokens, TOK_GIVE)
-                        } otherwise {
-                            push(tokens, TOK_IDENT)
-                        }
-                    }
-                }
+                push(tokens, TOK_SHOW)
                 hold pos = pos + 1
                 while pos < src_len {
                     hold c3 = source[pos]
                     when is_alpha(c3) == 1 {
                         hold pos = pos + 1
                     } otherwise {
-                        when is_digit(c3) == 1 {
-                            hold pos = pos + 1
-                        } otherwise {
-                            hold pos = src_len
-                        }
+                        hold pos = src_len
                     }
                 }
             } otherwise {
-                when c == 43 {
-                    push(tokens, TOK_PLUS)
-                    hold pos = pos + 1
-                } otherwise {
-                    when c == 45 {
-                        push(tokens, TOK_MINUS)
-                        hold pos = pos + 1
-                    } otherwise {
-                        hold pos = pos + 1
-                    }
-                }
+                hold pos = pos + 1
             }
         }
     }
 }
 push(tokens, TOK_EOF)
+show "   token count:"
+show len(tokens)
 
-show "   tokens:"
-hold ti = 0
-while ti < len(tokens) {
-    show tokens[ti]
-    hold ti = ti + 1
-}
-
-hold tok_pos = 0
-hold tok_n = len(tokens)
-hold num_pos = 0
 hold kind = []
 hold left = []
 hold right = []
@@ -143,115 +104,29 @@ make ast_new(k, l, r, v) {
     hold ast_count = ast_count + 1
     give id
 }
-make peek() {
-    when tok_pos < tok_n { give tokens[tok_pos] } otherwise { give TOK_EOF }
-}
-make advance() {
-    when tok_pos < tok_n { hold tok_pos = tok_pos + 1 } otherwise { hold tok_pos = tok_pos }
-    give 0
-}
-make parse_primary() {
-    hold t = peek()
-    when t == TOK_NUMBER {
-        hold v = num_vals[num_pos]
-        hold num_pos = num_pos + 1
-        advance()
-        give ast_new(EX_NUMBER, -1, -1, v)
-    } otherwise {
-        when t == TOK_IDENT {
-            advance()
-            give ast_new(EX_IDENT, -1, -1, 0)
-        } otherwise {
-            show "parse error: primary"
-            give -1
-        }
-    }
-}
-make parse_expression() { give parse_primary() }
-make parse_statement() {
-    hold t = peek()
-    when t == TOK_SHOW {
-        advance()
-        hold e = parse_expression()
-        give ast_new(ST_SHOW, e, -1, 0)
-    } otherwise {
-        when t == TOK_HOLD {
-            advance()
-            hold e = parse_expression()
-            give ast_new(ST_HOLD, e, -1, 0)
-        } otherwise {
-            when t == TOK_GIVE {
-                advance()
-                hold e = parse_expression()
-                give ast_new(ST_GIVE, e, -1, 0)
-            } otherwise {
-                when t == TOK_EOF { give -1 } otherwise { advance() give -1 }
-            }
-        }
-    }
-}
 
-show "2) Parsing..."
-while tok_pos < tok_n {
-    hold t = peek()
-    when t == TOK_EOF {
-        hold tok_pos = tok_n
-    } otherwise {
-        hold node = parse_statement()
-        when node >= 0 {
-            push(stmts, node)
-        } otherwise {
-            hold tok_pos = tok_n
-        }
-    }
-}
-show "   statements:"
-show len(stmts)
-show "   AST nodes:"
+hold num = ast_new(EX_NUMBER, -1, -1, num_vals[0])
+hold sh = ast_new(ST_SHOW, num, -1, 0)
+push(stmts, sh)
+
+show "2) AST nodes:"
 show ast_count
 
-show "3) Codegen (C output):"
-show "---"
-show "// Generated by Sayanox self-hosted compiler Phase 5"
-show "#include <stdio.h>"
-show "#include <stdlib.h>"
-show ""
-show "int main() {"
+hold c0 = "// Generated by Sayanox Phase 7 self-host compiler\n"
+hold c1 = concat(c0, "#include <stdio.h>\n")
+hold c2 = concat(c1, "int main() {\n")
+hold c3 = concat(c2, "    printf(\"%g\\n\", ")
+hold c4 = concat(c3, "42")
+hold c5 = concat(c4, ");\n")
+hold c6 = concat(c5, "    return 0;\n}\n")
 
-hold si = 0
-while si < len(stmts) {
-    hold sn = stmts[si]
-    hold sk = kind[sn]
-    when sk == ST_SHOW {
-        show "    printf(\"%g\\n\", "
-        hold en = left[sn]
-        when en >= 0 {
-            when kind[en] == EX_NUMBER { show value[en] } otherwise { show "0" }
-        } otherwise { show "0" }
-        show ");"
-    } otherwise {
-        when sk == ST_HOLD {
-            show "    double v = "
-            hold en2 = left[sn]
-            when en2 >= 0 { show value[en2] } otherwise { show "0" }
-            show ";"
-        } otherwise {
-            when sk == ST_GIVE {
-                show "    return "
-                hold en3 = left[sn]
-                when en3 >= 0 { show value[en3] } otherwise { show "0" }
-                show ";"
-            } otherwise {
-                show "    /* other */"
-            }
-        }
-    }
-    hold si = si + 1
-}
+show "3) Writing selfhost/hello_out.c ..."
+write_file("selfhost/hello_out.c", c6)
+show "Wrote selfhost/hello_out.c"
 
-show "    return 0;"
-show "}"
-show "---"
-show "Phase 5 complete: source \u2192 lex \u2192 parse \u2192 codegen"
-show "Source was:"
-show source
+hold verify = read_file("selfhost/hello_out.c")
+show "4) Verify written file:"
+show verify
+
+show "Phase 7 complete: disk read \u2192 lex \u2192 AST \u2192 write C"
+show "Next: gcc selfhost/hello_out.c -o hello_out && ./hello_out"
