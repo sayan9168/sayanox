@@ -1,0 +1,11 @@
+// Phase 6: file I/O builtins
+show "=== File I/O ==="
+
+hold msg = concat("Hello from ", "Sayanox Phase 6")
+write_file("hello_sx.txt", msg)
+show "wrote hello_sx.txt"
+
+hold data = read_file("hello_sx.txt")
+show "read back:"
+show data
+show len(data)

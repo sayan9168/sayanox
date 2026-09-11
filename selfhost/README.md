@@ -1,54 +1,40 @@
-# Self-Hosting Sayanox — Phase 5
+# Self-Hosting Sayanox — Phase 6
 
-## Goal
+## New language builtins (bootstrap compiler)
 
-One Sayanox program that runs the full pipeline:
+| Builtin | Meaning |
+|---------|---------|
+| `read_file(path)` | Read entire file as string |
+| `write_file(path, data)` | Write string to file |
+| `concat(a, b)` | String concat |
+| `len(x)` | Length |
+| `push(list, v)` | Dynamic list grow |
 
-**source text → lexer → parser (AST) → C codegen**
+## Example
 
-## Files
+```sa
+hold data = read_file("input.sa")
+write_file("out.c", data)
+```
 
-| File | Role |
-|------|------|
-| `compiler.sa` | **Unified driver (Phase 5)** |
-| `lexer.sa` | Standalone lexer (Phase 2) |
-| `ast.sa` | AST demo (Phase 3) |
-| `parser.sa` | Standalone parser (Phase 3) |
-| `codegen.sa` | Standalone codegen (Phase 4) |
-| `pipeline.sa` | Tiny tokens→AST→C (Phase 4) |
+See `examples/file_io.sa`.
 
-## Run the self-hosted compiler
+## Self-host driver
+
+`compiler.sa` still runs the in-memory pipeline and can call `write_file`.
+
+## Run
 
 ```bash
 cargo build --release
-./target/release/sayanox selfhost/compiler.sa -o compiler.c
-gcc compiler.c -o compiler && ./compiler
+./target/release/sayanox examples/file_io.sa -o fio.c && gcc fio.c -o fio && ./fio
+./target/release/sayanox selfhost/compiler.sa -o c6.c && gcc c6.c -o c6 && ./c6
 ```
-
-It compiles the built-in demo source `"show 42"` and prints generated C.
-
-## What works
-
-- Character scan of source
-- Token list + number values
-- AST via parallel arrays
-- C emission for `show` / `hold` / `give`
-
-## Still limited
-
-- Nested loop control in lexer (long identifiers/numbers)
-- Full keyword matching (first-letter heuristic)
-- Binary expressions / blocks / make
-- Reading source from a real file (needs I/O builtins)
-- Writing output to a `.c` file from Sayanox itself
 
 ## Roadmap
 
 | Phase | Status |
 |-------|--------|
-| 2 Lexer | ✅ |
-| 3 AST + parser | ✅ |
-| 4 Codegen | ✅ |
 | 5 Unified driver | ✅ |
-| 6 File I/O + richer language | 🚧 |
-| 7 True bootstrap | 🚧 |
+| 6 File I/O + richer builtins | ✅ |
+| 7 True bootstrap (compiler compiles .sa files from disk end-to-end) | 🚧 |

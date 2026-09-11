@@ -1,6 +1,6 @@
 [package]
 name = "sayanox"
-version = "0.3.13"
+version = "0.3.14"
 edition = "2021"
 authors = ["Sayan Mahata <sm6881164@gmail.com>"]
 description = "Sayanox - An original easy programming language with its own compiler"
