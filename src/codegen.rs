@@ -1,5 +1,5 @@
 //! C Code Generator for Sayanox
-//! Phase 6: dynamic lists, concat, len, read_file, write_file
+//! Builtins: len, push, concat, read_file, write_file, str
 
 use crate::ast::*;
 use std::collections::HashMap;
@@ -54,22 +54,21 @@ static char *sx_concat(const char *a, const char *b) {\n\
 static char *sx_read_file(const char *path) {\n\
   FILE *f = fopen(path, \"rb\");\n\
   if (!f) { fprintf(stderr,\"Sayanox: cannot open %s\\n\", path); exit(1); }\n\
-  fseek(f, 0, SEEK_END);\n\
-  long n = ftell(f);\n\
-  fseek(f, 0, SEEK_SET);\n\
+  fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);\n\
   char *buf = (char*)malloc((size_t)n + 1);\n\
   if (!buf) { fprintf(stderr,\"Sayanox: out of memory\\n\"); exit(1); }\n\
-  fread(buf, 1, (size_t)n, f);\n\
-  buf[n] = 0;\n\
-  fclose(f);\n\
-  return buf;\n\
+  fread(buf, 1, (size_t)n, f); buf[n]=0; fclose(f); return buf;\n\
 }\n\
 static double sx_write_file(const char *path, const char *data) {\n\
   FILE *f = fopen(path, \"wb\");\n\
   if (!f) { fprintf(stderr,\"Sayanox: cannot write %s\\n\", path); exit(1); }\n\
-  fputs(data, f);\n\
-  fclose(f);\n\
-  return 0.0;\n\
+  fputs(data, f); fclose(f); return 0.0;\n\
+}\n\
+static char *sx_str(double n) {\n\
+  char *buf = (char*)malloc(64);\n\
+  if (!buf) { fprintf(stderr,\"Sayanox: out of memory\\n\"); exit(1); }\n\
+  snprintf(buf, 64, \"%g\", n);\n\
+  return buf;\n\
 }\n\n",
         );
 
@@ -109,7 +108,6 @@ static double sx_write_file(const char *path, const char *data) {\n\
             }
         }
         self.output.push_str("    return 0;\n}\n");
-
         self.output.clone()
     }
 
@@ -134,21 +132,20 @@ static double sx_write_file(const char *path, const char *data) {\n\
         match stmt {
             Stmt::Show(expr) => match expr {
                 Expr::String(s) => self.output.push_str(&format!(
-                    "{}printf(\"%s\\n\", \"{}\");\n",
-                    ind,
-                    escape_c(s)
+                    "{}printf(\"%s\\n\", \"{}\");\n", ind, escape_c(s)
                 )),
                 Expr::Number(n) => self
                     .output
                     .push_str(&format!("{}printf(\"%g\\n\", {});\n", ind, n)),
-                Expr::Call { name, .. } if name == "read_file" || name == "concat" => {
+                Expr::Call { name, .. }
+                    if name == "read_file" || name == "concat" || name == "str" =>
+                {
                     let code = self.gen_expr(expr);
                     self.output
                         .push_str(&format!("{}printf(\"%s\\n\", {});\n", ind, code));
                 }
                 Expr::Ident(_) => {
                     let code = self.gen_expr(expr);
-                    // Prefer string print for idents that may be char*
                     self.output
                         .push_str(&format!("{}printf(\"%s\\n\", {});\n", ind, code));
                 }
@@ -160,10 +157,7 @@ static double sx_write_file(const char *path, const char *data) {\n\
             },
             Stmt::Hold { name, value } => match value {
                 Expr::String(s) => self.output.push_str(&format!(
-                    "{}const char* {} = \"{}\";\n",
-                    ind,
-                    name,
-                    escape_c(s)
+                    "{}const char* {} = \"{}\";\n", ind, name, escape_c(s)
                 )),
                 Expr::Array(elements) if elements.is_empty() => {
                     self.output
@@ -196,7 +190,8 @@ static double sx_write_file(const char *path, const char *data) {\n\
                     let code = self.gen_expr(value);
                     if matches!(
                         value,
-                        Expr::Call { name: n, .. } if n == "concat" || n == "read_file"
+                        Expr::Call { name: n, .. }
+                            if n == "concat" || n == "read_file" || n == "str"
                     ) {
                         self.output
                             .push_str(&format!("{}char* {} = {};\n", ind, name, code));
@@ -208,8 +203,7 @@ static double sx_write_file(const char *path, const char *data) {\n\
             },
             Stmt::Give(expr) => {
                 let code = self.gen_expr(expr);
-                self.output
-                    .push_str(&format!("{}return {};\n", ind, code));
+                self.output.push_str(&format!("{}return {};\n", ind, code));
             }
             Stmt::When {
                 condition,
@@ -217,8 +211,7 @@ static double sx_write_file(const char *path, const char *data) {\n\
                 otherwise_body,
             } => {
                 let cond = self.gen_expr(condition);
-                self.output
-                    .push_str(&format!("{}if ({}) {{\n", ind, cond));
+                self.output.push_str(&format!("{}if ({}) {{\n", ind, cond));
                 for s in then_body {
                     self.gen_stmt(s, indent + 1);
                 }
@@ -233,8 +226,7 @@ static double sx_write_file(const char *path, const char *data) {\n\
             }
             Stmt::While { condition, body } => {
                 let cond = self.gen_expr(condition);
-                self.output
-                    .push_str(&format!("{}while ({}) {{\n", ind, cond));
+                self.output.push_str(&format!("{}while ({}) {{\n", ind, cond));
                 for s in body {
                     self.gen_stmt(s, indent + 1);
                 }
@@ -279,13 +271,17 @@ static double sx_write_file(const char *path, const char *data) {\n\
                         other => format!("((double)strlen({}))", self.gen_expr(other)),
                     }
                 } else if name == "push" && args.len() == 2 {
-                    let list = self.gen_expr(&args[0]);
-                    let val = self.gen_expr(&args[1]);
-                    format!("(sx_list_push(&{}, {}), 0.0)", list, val)
+                    format!(
+                        "(sx_list_push(&{}, {}), 0.0)",
+                        self.gen_expr(&args[0]),
+                        self.gen_expr(&args[1])
+                    )
                 } else if name == "concat" && args.len() == 2 {
-                    let a = self.gen_expr(&args[0]);
-                    let b = self.gen_expr(&args[1]);
-                    format!("sx_concat({}, {})", a, b)
+                    format!(
+                        "sx_concat({}, {})",
+                        self.gen_expr(&args[0]),
+                        self.gen_expr(&args[1])
+                    )
                 } else if name == "read_file" && args.len() == 1 {
                     format!("sx_read_file({})", self.gen_expr(&args[0]))
                 } else if name == "write_file" && args.len() == 2 {
@@ -294,6 +290,8 @@ static double sx_write_file(const char *path, const char *data) {\n\
                         self.gen_expr(&args[0]),
                         self.gen_expr(&args[1])
                     )
+                } else if name == "str" && args.len() == 1 {
+                    format!("sx_str({})", self.gen_expr(&args[0]))
                 } else {
                     let args_code: Vec<String> =
                         args.iter().map(|a| self.gen_expr(a)).collect();
