@@ -17,11 +17,12 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Sayanox Compiler v0.3.4");
-        eprintln!("Usage: sayanox <input.sa> [-o output.c]");
+        eprintln!("Sayanox Compiler v0.3.9");
+        eprintln!("Usage: sayanox <input.sa> [-o output]");
         eprintln!("       sayanox <input.sa> --tokens");
         eprintln!("       sayanox <input.sa> --ast");
-        eprintln!("       sayanox <input.sa> --jit          (experimental native)");
+        eprintln!("       sayanox <input.sa> --jit              (JIT evaluate)");
+        eprintln!("       sayanox <input.sa> --native -o bin    (Full AOT binary)");
         process::exit(1);
     }
 
@@ -30,6 +31,7 @@ fn main() {
     let mut show_tokens = false;
     let mut show_ast = false;
     let mut use_jit = false;
+    let mut use_native = false;
 
     let mut i = 2;
     while i < args.len() {
@@ -55,6 +57,10 @@ fn main() {
                 use_jit = true;
                 i += 1;
             }
+            "--native" => {
+                use_native = true;
+                i += 1;
+            }
             _ => {
                 eprintln!("Unknown argument: {}", args[i]);
                 process::exit(1);
@@ -70,7 +76,6 @@ fn main() {
         }
     };
 
-    // Lex
     let mut lexer = lexer::Lexer::new(&source);
     let tokens = match lexer.tokenize() {
         Ok(t) => t,
@@ -87,7 +92,6 @@ fn main() {
         return;
     }
 
-    // Parse
     let mut parser = parser::Parser::new(tokens);
     let program = match parser.parse() {
         Ok(p) => p,
@@ -104,9 +108,7 @@ fn main() {
 
     if use_jit {
         match native::jit_evaluate(&program) {
-            Ok(v) => {
-                println!("JIT result: {}", v);
-            }
+            Ok(v) => println!("JIT result: {}", v),
             Err(e) => {
                 eprintln!("JIT error: {}", e);
                 process::exit(1);
@@ -115,7 +117,33 @@ fn main() {
         return;
     }
 
-    // Codegen to C (stable path)
+    if use_native {
+        let out = output
+            .unwrap_or_else(|| {
+                let mut p = input.clone();
+                p.set_extension("");
+                p
+            })
+            .to_string_lossy()
+            .to_string();
+        let out = if out.is_empty() || out == "." {
+            "a.out".to_string()
+        } else {
+            out
+        };
+        match native::compile_native(&program, &out) {
+            Ok(()) => {
+                println!("\u2713 AOT native binary \u2192 {}", out);
+                println!("  Run: ./{}", out);
+            }
+            Err(e) => {
+                eprintln!("AOT error: {}", e);
+                process::exit(1);
+            }
+        }
+        return;
+    }
+
     let mut codegen = codegen::Codegen::new();
     let c_code = codegen.generate(&program);
 
@@ -130,7 +158,6 @@ fn main() {
         process::exit(1);
     }
 
-    println!("✓ Compiled successfully → {}", output_path.display());
-    println!("  Next step:");
-    println!("  gcc {} -o program && ./program", output_path.display());
+    println!("\u2713 Compiled successfully \u2192 {}", output_path.display());
+    println!("  Next: gcc {} -o program && ./program", output_path.display());
 }
