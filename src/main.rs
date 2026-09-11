@@ -4,6 +4,7 @@
 mod ast;
 mod codegen;
 mod lexer;
+mod native;
 mod parser;
 mod token;
 
@@ -16,10 +17,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Sayanox Compiler v0.3");
+        eprintln!("Sayanox Compiler v0.3.3");
         eprintln!("Usage: sayanox <input.sa> [-o output.c]");
         eprintln!("       sayanox <input.sa> --tokens");
         eprintln!("       sayanox <input.sa> --ast");
+        eprintln!("       sayanox <input.sa> --jit          (experimental native)");
         process::exit(1);
     }
 
@@ -27,6 +29,7 @@ fn main() {
     let mut output: Option<PathBuf> = None;
     let mut show_tokens = false;
     let mut show_ast = false;
+    let mut use_jit = false;
 
     let mut i = 2;
     while i < args.len() {
@@ -46,6 +49,10 @@ fn main() {
             }
             "--ast" => {
                 show_ast = true;
+                i += 1;
+            }
+            "--jit" => {
+                use_jit = true;
                 i += 1;
             }
             _ => {
@@ -95,7 +102,20 @@ fn main() {
         return;
     }
 
-    // Codegen to C
+    if use_jit {
+        match native::jit_evaluate(&program) {
+            Ok(v) => {
+                println!("JIT result: {}", v);
+            }
+            Err(e) => {
+                eprintln!("JIT error: {}", e);
+                process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // Codegen to C (stable path)
     let mut codegen = codegen::Codegen::new();
     let c_code = codegen.generate(&program);
 

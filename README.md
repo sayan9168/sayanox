@@ -5,24 +5,31 @@ File extension: `.sa`
 
 Created by **Sayan Mahata**.
 
-## Philosophy
-- Extremely easy and clean syntax
-- Growing feature set
-- Own compiler written in Rust
-- Path toward native code generation (Cranelift) and full self-hosting
+## Current Features (v0.3.3)
 
-## Current Features (v0.3.2)
+| Feature                        | Status                  |
+|--------------------------------|-------------------------|
+| show / hold / make / give      | ✅                      |
+| when / otherwise / while       | ✅                      |
+| Arrays + Indexing              | ✅                      |
+| Structs + Field access         | ✅                      |
+| C Code Generation              | ✅ Stable               |
+| Native (Cranelift)             | 🚧 Feature-gated start  |
+| Self-hosting                   | 🚧 Phase 1.1            |
 
-| Feature                        | Status          |
-|--------------------------------|-----------------|
-| show / hold / make / give      | ✅              |
-| when / otherwise / while       | ✅              |
-| Arrays + Indexing              | ✅              |
-| Structs + Field access         | ✅              |
-| C Code Generation              | ✅ Stable       |
-| Full parser + codegen on GitHub| ✅              |
-| Native Backend (Cranelift)     | 🚧 Skeleton     |
-| Self-hosting                   | 🚧 Phase 1      |
+## Build
+
+```bash
+git clone https://github.com/sayan9168/sayanox.git
+cd sayanox
+cargo build --release
+```
+
+### Experimental Native / JIT
+```bash
+cargo build --features native --release
+./target/release/sayanox examples/hello.sa --jit
+```
 
 ## Example
 
@@ -44,43 +51,9 @@ hold p = Point { x: 5, y: 15 }
 show p.x
 ```
 
-## Build & Run
+## Self-Hosting
 
-```bash
-git clone https://github.com/sayan9168/sayanox.git
-cd sayanox
-cargo build --release
-
-./target/release/sayanox examples/hello.sa -o hello.c
-gcc hello.c -o hello
-./hello
-```
-
-## Native Code Generation (Cranelift)
-
-The `src/native/` module contains the foundation for a Cranelift-based backend.
-Full machine-code emission and linking is the next major milestone.
-
-## Self-Hosting (Phase 1)
-
-See the `selfhost/` directory.
-
-- `selfhost/README.md` – plan and minimal subset definition
-- `selfhost/minimal_lexer.sa` – expanded self-hosted lexer written in Sayanox
-
-The long-term goal is a compiler written entirely in Sayanox that can compile itself.
-
-## Roadmap
-
-- [x] Lexer + Parser + AST
-- [x] C Code Generation
-- [x] while, Arrays, Structs
-- [x] Complete source on GitHub (builds from clone)
-- [ ] Full Cranelift Native Backend
-- [ ] Self-hosting (Phase 1 → complete)
-- [ ] Standard library + package system
+See `selfhost/` directory. The minimal lexer is written in pure Sayanox and is becoming more realistic.
 
 ## License
 MIT
-
-Made with care by Sayan
