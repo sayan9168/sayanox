@@ -17,7 +17,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Sayanox Compiler v0.3.9");
+        eprintln!("Sayanox Compiler v0.3.24");
         eprintln!("Usage: sayanox <input.sa> [-o output]");
         eprintln!("       sayanox <input.sa> --tokens");
         eprintln!("       sayanox <input.sa> --ast");
@@ -133,7 +133,7 @@ fn main() {
         };
         match native::compile_native(&program, &out) {
             Ok(()) => {
-                println!("\u2713 AOT native binary \u2192 {}", out);
+                println!("OK AOT native binary -> {}", out);
                 println!("  Run: ./{}", out);
             }
             Err(e) => {
@@ -158,6 +158,6 @@ fn main() {
         process::exit(1);
     }
 
-    println!("\u2713 Compiled successfully \u2192 {}", output_path.display());
-    println!("  Next: gcc {} -o program && ./program", output_path.display());
+    println!("OK Compiled successfully -> {}", output_path.display());
+    println!("  Next: clang {} -o program && ./program", output_path.display());
 }
