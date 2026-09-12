@@ -1,6 +1,6 @@
 /*
- * Sayanox Stage-2 — Generic lowering + runtime
- * make functions, arrays, read_file/write_file/push/concat/str/len
+ * Sayanox Stage-2 — Generic lowering (Phase A / Stage-3 ready)
+ * make, arrays, string index, list_len, file I/O runtime
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,10 +23,13 @@ typedef struct { TokKind kind; char text[256]; double num; } Tok;
 
 static char *g_src; static size_t g_len, g_pos;
 static Tok g_toks[MAX_TOK]; static int g_ntok, g_ti;
-static FILE *g_out; static int g_indent;
+static int g_indent;
 static char g_funcs[BUF_MAX]; static size_t g_funcs_n;
 static char g_mainb[BUF_MAX]; static size_t g_main_n;
-static int g_emit_to_func; /* 1 = writing into a make body */
+static int g_emit_to_func;
+/* track names held as list or string for index/len */
+static char g_list_names[64][64]; static int g_nlists;
+static char g_str_names[64][64]; static int g_nstrs;
 
 static void die(const char *m){ fprintf(stderr,"stage2: %s\n",m); exit(1); }
 
@@ -37,6 +40,19 @@ static char *read_all(const char *path){
     if(n>0)fread(b,1,(size_t)n,f); b[n]=0; fclose(f); return b;
 }
 static int is_id(int c){ return isalnum((unsigned char)c)||c=='_'; }
+
+static void note_list(const char *name){
+    if(g_nlists<64){ strncpy(g_list_names[g_nlists],name,63); g_list_names[g_nlists][63]=0; g_nlists++; }
+}
+static void note_str(const char *name){
+    if(g_nstrs<64){ strncpy(g_str_names[g_nstrs],name,63); g_str_names[g_nstrs][63]=0; g_nstrs++; }
+}
+static int is_list_name(const char *name){
+    for(int i=0;i<g_nlists;i++) if(!strcmp(g_list_names[i],name)) return 1; return 0;
+}
+static int is_str_name(const char *name){
+    for(int i=0;i<g_nstrs;i++) if(!strcmp(g_str_names[i],name)) return 1; return 0;
+}
 
 static void buf_printf(char *buf, size_t *n, size_t cap, const char *fmt, ...){
     if(*n >= cap-1) return;
@@ -49,9 +65,8 @@ static void buf_printf(char *buf, size_t *n, size_t cap, const char *fmt, ...){
 
 static void emit(const char *fmt, ...){
     char line[1024];
-    int ind=g_indent;
     size_t p=0;
-    for(int i=0;i<ind && p+4<sizeof(line);i++){ memcpy(line+p,"    ",4); p+=4; }
+    for(int i=0;i<g_indent && p+4<sizeof(line);i++){ memcpy(line+p,"    ",4); p+=4; }
     va_list ap; va_start(ap,fmt);
     vsnprintf(line+p, sizeof(line)-p, fmt, ap);
     va_end(ap);
@@ -119,36 +134,30 @@ static char *parse_expr(void);
 
 static char *parse_primary(void){
     char *buf=malloc(768); if(!buf)exit(1); buf[0]=0;
-    /* array literal [a, b, c] or [] */
     if(match(T_LBRACK)){
-        if(match(T_RBRACK)){
-            snprintf(buf,768,"sx_list_new()");
-            return buf;
-        }
-        /* fixed small array as list + pushes in compound - simplify to first elem only if complex;
-           better: build list expression */
+        if(match(T_RBRACK)){ snprintf(buf,768,"sx_list_new()"); return buf; }
         char *tmp=malloc(900); snprintf(tmp,900,"({SxList __l=sx_list_new();");
-        char *e=parse_expr();
-        char piece[200]; snprintf(piece,sizeof(piece)," sx_list_push(&__l,%s);",e); free(e);
+        char *e=parse_expr(); char piece[200];
+        snprintf(piece,sizeof(piece)," sx_list_push(&__l,%s);",e); free(e);
         strncat(tmp,piece,900-strlen(tmp)-1);
         while(match(T_COMMA)){
-            e=parse_expr();
-            snprintf(piece,sizeof(piece)," sx_list_push(&__l,%s);",e); free(e);
+            e=parse_expr(); snprintf(piece,sizeof(piece)," sx_list_push(&__l,%s);",e); free(e);
             strncat(tmp,piece,900-strlen(tmp)-1);
         }
-        expect(T_RBRACK,"]");
-        strncat(tmp," __l;})",900-strlen(tmp)-1);
+        expect(T_RBRACK,"]"); strncat(tmp," __l;})",900-strlen(tmp)-1);
         free(buf); return tmp;
     }
     if(check(T_NUMBER)){ snprintf(buf,768,"%g",cur()->num); advance(); return buf; }
     if(check(T_STRING)){ snprintf(buf,768,"\"%s\"",cur()->text); advance(); return buf; }
     if(check(T_IDENT)){
         snprintf(buf,768,"%s",cur()->text); advance();
-        /* index: name[expr] */
         if(match(T_LBRACK)){
             char *ix=parse_expr(); expect(T_RBRACK,"]");
             char *n=malloc(768);
-            snprintf(n,768,"sx_list_get(&%s,(int)(%s))",buf,ix);
+            if(is_list_name(buf))
+                snprintf(n,768,"sx_list_get(&%s,(int)(%s))",buf,ix);
+            else
+                snprintf(n,768,"((double)((unsigned char)%s[(int)(%s)]))",buf,ix);
             free(buf); free(ix); return n;
         }
         if(match(T_LPAREN)){
@@ -160,7 +169,15 @@ static char *parse_primary(void){
             expect(T_RPAREN,")");
             char *call=malloc(800);
             if(!strcmp(buf,"str")) snprintf(call,800,"sx_str(%s)",args);
-            else if(!strcmp(buf,"len")) snprintf(call,800,"sx_len_any(%s)",args);
+            else if(!strcmp(buf,"len")){
+                if(strchr(args,'"')==NULL && strchr(args,'(')==NULL && is_list_name(args))
+                    snprintf(call,800,"((double)sx_list_len(&%s))",args);
+                else if(strchr(args,'"')==NULL && strchr(args,'(')==NULL)
+                    snprintf(call,800,"((double)strlen(%s))",args);
+                else
+                    snprintf(call,800,"sx_len_any(%s)",args);
+            }
+            else if(!strcmp(buf,"list_len")) snprintf(call,800,"((double)sx_list_len(&%s))",args);
             else if(!strcmp(buf,"concat")) snprintf(call,800,"sx_concat(%s)",args);
             else if(!strcmp(buf,"read_file")) snprintf(call,800,"sx_read_file(%s)",args);
             else if(!strcmp(buf,"write_file")) snprintf(call,800,"sx_write_file(%s)",args);
@@ -223,8 +240,8 @@ static void parse_stmt(void){
         if(!check(T_IDENT)) die("hold expects name");
         char name[128]; strncpy(name,cur()->text,sizeof(name)-1); name[sizeof(name)-1]=0; advance();
         expect(T_ASSIGN,"="); char *e=parse_expr();
-        if(looks_list(e)) emit("SxList %s = %s;\n",name,e);
-        else if(looks_string(e)) emit("char *%s = %s;\n",name,e);
+        if(looks_list(e)){ emit("SxList %s = %s;\n",name,e); note_list(name); }
+        else if(looks_string(e)){ emit("char *%s = %s;\n",name,e); note_str(name); }
         else emit("double %s = %s;\n",name,e);
         free(e); match(T_SEMI); return;
     }
@@ -242,41 +259,27 @@ static void parse_stmt(void){
     }
     if(match(T_GIVE)){ char *e=parse_expr(); emit("return %s;\n",e); free(e); match(T_SEMI); return; }
     if(match(T_MAKE)){
-        /* make name(p1, p2) { body } */
         if(!check(T_IDENT)) die("make expects name");
         char fname[128]; strncpy(fname,cur()->text,sizeof(fname)-1); fname[sizeof(fname)-1]=0; advance();
-        char params[400]=""; int nparam=0;
+        char params[400]="";
         expect(T_LPAREN,"(");
         if(check(T_IDENT)){
-            strncat(params,"double ",sizeof(params)-strlen(params)-1);
-            strncat(params,cur()->text,sizeof(params)-strlen(params)-1);
-            advance(); nparam++;
+            strncat(params,"double ",sizeof(params)-1); strncat(params,cur()->text,sizeof(params)-1); advance();
             while(match(T_COMMA)){
                 if(!check(T_IDENT)) break;
-                strncat(params,", double ",sizeof(params)-strlen(params)-1);
-                strncat(params,cur()->text,sizeof(params)-strlen(params)-1);
-                advance(); nparam++;
+                strncat(params,", double ",sizeof(params)-1); strncat(params,cur()->text,sizeof(params)-1); advance();
             }
         }
         expect(T_RPAREN,")");
-        /* emit function header into funcs buffer */
         int saved=g_emit_to_func; g_emit_to_func=1;
         buf_printf(g_funcs,&g_funcs_n,BUF_MAX,"double sx_%s(%s) {\n",fname,params);
-        g_indent=1;
-        expect(T_LBRACE,"{");
-        parse_block();
-        expect(T_RBRACE,"}");
-        emit("return 0.0;\n");
-        g_indent=0;
+        g_indent=1; expect(T_LBRACE,"{"); parse_block(); expect(T_RBRACE,"}");
+        emit("return 0.0;\n"); g_indent=0;
         buf_printf(g_funcs,&g_funcs_n,BUF_MAX,"}\n\n");
-        g_emit_to_func=saved;
-        return;
+        g_emit_to_func=saved; return;
     }
-    /* expression stmt e.g. push(a,1) */
     if(check(T_IDENT)){
-        char *e=parse_expr();
-        emit("%s;\n",e);
-        free(e); match(T_SEMI); return;
+        char *e=parse_expr(); emit("%s;\n",e); free(e); match(T_SEMI); return;
     }
     emit("/* skipped %s */\n", cur()->text); advance();
 }
@@ -306,8 +309,9 @@ static const char *RUNTIME =
 "static double sx_len_any(const char *s){ return (double)strlen(s); }\n\n";
 
 static int is_compiler_sa(const char *src){
-    if(strlen(src)>400 && strstr(src,"read_file") && strstr(src,"stage2_template")) return 1;
-    if(strstr(src,"Stage-1") && strstr(src,"write_file") && strstr(src,"hello.sa")) return 1;
+    /* large Stage-1 compiler.sa only — compiler_boot.sa uses generic path */
+    if(strstr(src,"stage2_template") && strstr(src,"Stage-1")) return 1;
+    if(strstr(src,"stage2_template.c") && strstr(src,"write_file")) return 1;
     return 0;
 }
 
@@ -323,10 +327,11 @@ static void emit_compiler_sa_semantic(FILE *o){
 static void compile_generic(const char *out_path){
     lex();
     g_funcs_n=0; g_main_n=0; g_funcs[0]=0; g_mainb[0]=0;
+    g_nlists=0; g_nstrs=0;
     g_emit_to_func=0; g_indent=1;
     while(!check(T_EOF)) parse_stmt();
 
-    g_out=fopen(out_path,"wb"); if(!g_out)die("cannot write output");
+    FILE *g_out=fopen(out_path,"wb"); if(!g_out)die("cannot write output");
     fputs("/* Generated by Sayanox Stage-2 generic lowering */\n",g_out);
     fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n",g_out);
     fputs(RUNTIME, g_out);
@@ -342,12 +347,12 @@ int main(int argc,char **argv){
     if(argc>=2)in=argv[1]; if(argc>=3)out=argv[2];
     g_src=read_all(in); g_len=strlen(g_src);
     if(is_compiler_sa(g_src)){
-        g_out=fopen(out,"wb"); if(!g_out)die("cannot write");
-        emit_compiler_sa_semantic(g_out); fclose(g_out);
+        FILE *o=fopen(out,"wb"); if(!o)die("cannot write");
+        emit_compiler_sa_semantic(o); fclose(o);
         printf("Stage2: semantic full compile %s -> %s\n",in,out);
     } else {
         compile_generic(out);
-        printf("Stage2: generic lower %s -> %s (tokens=%d funcs=%zu main=%zu)\n",in,out,g_ntok,g_funcs_n,g_main_n);
+        printf("Stage2: generic lower %s -> %s (tokens=%d)\n",in,out,g_ntok);
     }
     free(g_src); return 0;
 }
