@@ -1,37 +1,44 @@
-# Self-Hosting Sayanox
+# Self-Hosting Sayanox — Stage 2
 
-## What works now (Stage 1)
+## Pipeline
 
 ```text
-Rust sayanox  --compiles-->  compiler.sa  --gcc-->  stage1 (Sayanox-built binary)
-stage1        --reads----->  hello.sa
-              --writes---->  hello_out.c
-gcc hello_out.c && ./hello_out
+Stage 0  Rust sayanox
+           compiles compiler.sa  ->  stage1.c  ->  stage1 binary
+
+Stage 1  ./stage1  (Sayanox-built)
+           reads  hello.sa  ->  hello_out.c
+           emits  stage2_cc.c   (Stage-2 mini compiler source)
+
+Stage 2  gcc stage2_cc.c -o stage2
+         ./stage2
+           reads  hello.sa  ->  stage2_out.c
+         gcc stage2_out.c && ./stage2_out
 ```
 
-Run:
+## Run
 
 ```bash
 ./selfhost/bootstrap.sh
 ```
 
-## Features used by the Stage-1 compiler
+## What Stage 2 is
 
-- `read_file` / `write_file`
-- `len` / `push` / `concat` / `str`
-- Character lexer (keywords, numbers, operators)
-- C emission for `show <number>`
+- Stage 2 compiler **source is produced by the Sayanox-built Stage 1 binary**
+- Stage 2 is a C mini-compiler for the subset `show <number>`
+- Stage 2 reads `.sa` from disk and writes `.c`
 
-## What is still left for full self-host (Stage 2)
+## What Stage 2 is not (yet)
 
-Stage 1 cannot yet compile **`compiler.sa` itself**, because that file uses nested `make`, complex control flow, and heavy string building.
-
-Closing the loop needs full C lowering of every construct in `compiler.sa`.
+- Stage 2 does **not** compile full `compiler.sa`
+- That needs complete self-host C lowering of every construct in `compiler.sa`
 
 ## Files
 
 | File | Role |
 |------|------|
-| `compiler.sa` | Stage-1 compiler source |
+| `compiler.sa` | Stage-1 source |
 | `hello.sa` | Sample input |
-| `bootstrap.sh` | Stage 0 → Stage 1 |
+| `stage2_cc.c` | Emitted by Stage 1 |
+| `stage2_out.c` | Emitted by Stage 2 |
+| `bootstrap.sh` | Stage 0/1/2 driver |
