@@ -22,17 +22,17 @@ make is_space(c) {
 }
 
 while pos < src_len {
-    hold c = source[pos]
-    when is_space(c) == 1 {
+    hold ch = source[pos]
+    when is_space(ch) == 1 {
         hold pos = pos + 1
     } otherwise {
-        when is_digit(c) == 1 {
-            hold val = c - 48
+        when is_digit(ch) == 1 {
+            hold val = ch - 48
             hold pos = pos + 1
             while pos < src_len {
-                hold c2 = source[pos]
-                when is_digit(c2) == 1 {
-                    hold val = val * 10 + (c2 - 48)
+                hold ch2 = source[pos]
+                when is_digit(ch2) == 1 {
+                    hold val = val * 10 + (ch2 - 48)
                     hold pos = pos + 1
                 } otherwise {
                     hold pos = src_len
@@ -54,11 +54,11 @@ when len(num_vals) > 0 {
 
 show nval
 
-hold a = "#include <stdio.h>\nint main(void){ puts("
-hold b = str(nval)
-hold c = "); return 0; }\n"
-hold out = concat(a, b)
-hold out = concat(out, c)
+hold part_a = "#include <stdio.h>\nint main(void){ puts("
+hold part_b = str(nval)
+hold part_c = "); return 0; }\n"
+hold out = concat(part_a, part_b)
+hold out = concat(out, part_c)
 write_file("selfhost/hello_out.c", out)
 show "Stage1: wrote hello_out.c"
 

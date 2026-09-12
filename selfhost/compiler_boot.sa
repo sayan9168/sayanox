@@ -8,17 +8,17 @@ hold nval = 0
 hold found = 0
 
 while pos < n {
-    hold c = source[pos]
-    when c >= 48 {
-        when c <= 57 {
+    hold ch = source[pos]
+    when ch >= 48 {
+        when ch <= 57 {
             when found == 0 {
-                hold nval = c - 48
+                hold nval = ch - 48
                 hold pos = pos + 1
                 while pos < n {
-                    hold c2 = source[pos]
-                    when c2 >= 48 {
-                        when c2 <= 57 {
-                            hold nval = nval * 10 + (c2 - 48)
+                    hold ch2 = source[pos]
+                    when ch2 >= 48 {
+                        when ch2 <= 57 {
+                            hold nval = nval * 10 + (ch2 - 48)
                             hold pos = pos + 1
                         } otherwise {
                             hold pos = n
@@ -41,11 +41,10 @@ while pos < n {
 
 show nval
 
-// Reliable emit: puts("42") style — no %g inside Sayanox strings
-hold a = "#include <stdio.h>\nint main(void){ puts("
-hold b = str(nval)
-hold c = "); return 0; }\n"
-hold out = concat(a, b)
-hold out = concat(out, c)
+hold part_a = "#include <stdio.h>\nint main(void){ puts("
+hold part_b = str(nval)
+hold part_c = "); return 0; }\n"
+hold out = concat(part_a, part_b)
+hold out = concat(out, part_c)
 write_file("selfhost/hello_out.c", out)
 show "compiler_boot: wrote hello_out.c"
