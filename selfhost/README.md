@@ -1,10 +1,27 @@
-# Stage 2 — Full semantic compile of `compiler.sa`
+# Stage 2 — Generic full-language subset lowering
 
-When Stage 2 compiles `selfhost/compiler.sa`, it emits **working C** that
-re-implements the Stage-1 compiler (read hello.sa, write hello_out.c, emit stage2).
+## Supported (generic)
+
+- `show <expr>`
+- `hold name = <expr>`
+- `when <expr> { ... } otherwise { ... }`
+- `while <expr> { ... }`
+- expressions: numbers, strings, idents, `+ - * /`, comparisons, `( )`
+- `//` comments
+- builtins (limited): `str`, `len`
+
+## Also
+
+- `compiler.sa` → full **semantic** Stage-1-equivalent C compiler
+
+## Not complete
+
+- Full `make` function body lowering (skipped)
+- `read_file` / `write_file` / `push` runtime in Stage-2 output
+- Arrays / structs
+
+## Run
 
 ```bash
 ./selfhost/bootstrap.sh
 ```
-
-Semantic equivalence for Stage-1 behavior; generic full-language lowering is future work.
