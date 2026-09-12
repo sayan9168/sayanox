@@ -1,5 +1,4 @@
 // Stage-1 self-host compiler (generic Stage-2 path)
-// Emits hello_out.c that prints the real number found in hello.sa
 show "=== Sayanox Stage-1 ==="
 
 hold source = read_file("selfhost/hello.sa")
@@ -53,14 +52,15 @@ when len(num_vals) > 0 {
     hold nval = 0
 }
 
-// Build C source: printf("%g\n", <nval>);
-hold p1 = "#include <stdio.h>\nint main(void){ printf(\"%g\\n\", "
-hold out = concat(p1, str(nval))
-hold p2 = "); return 0; }\n"
-hold out = concat(out, p2)
+show nval
+
+hold a = "#include <stdio.h>\nint main(void){ puts("
+hold b = str(nval)
+hold c = "); return 0; }\n"
+hold out = concat(a, b)
+hold out = concat(out, c)
 write_file("selfhost/hello_out.c", out)
 show "Stage1: wrote hello_out.c"
-show nval
 
 hold tpl = read_file("selfhost/stage2_template.c")
 write_file("selfhost/stage2_cc.c", tpl)

@@ -1,4 +1,4 @@
-// Minimal compiler for Stage-3 — emits real nval
+// Minimal compiler for Stage-3 — emits real nval via puts
 show "=== compiler_boot ==="
 
 hold source = read_file("selfhost/hello.sa")
@@ -39,10 +39,13 @@ while pos < n {
     }
 }
 
-hold p1 = "#include <stdio.h>\nint main(void){ printf(\"%g\\n\", "
-hold out = concat(p1, str(nval))
-hold p2 = "); return 0; }\n"
-hold out = concat(out, p2)
+show nval
+
+// Reliable emit: puts("42") style — no %g inside Sayanox strings
+hold a = "#include <stdio.h>\nint main(void){ puts("
+hold b = str(nval)
+hold c = "); return 0; }\n"
+hold out = concat(a, b)
+hold out = concat(out, c)
 write_file("selfhost/hello_out.c", out)
 show "compiler_boot: wrote hello_out.c"
-show nval
