@@ -5,6 +5,7 @@ pub enum Stmt {
     Show(Expr),
     Hold { name: String, value: Expr },
     Assign { name: String, value: Expr },
+    Use { path: String },
     Make { name: String, params: Vec<String>, body: Vec<Stmt> },
     Give(Expr),
     When { condition: Expr, then_body: Vec<Stmt>, otherwise_body: Option<Vec<Stmt>> },
