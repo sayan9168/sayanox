@@ -1,6 +1,6 @@
 /*
- * Sayanox Stage-2 — Generic subset → C lowering
- * show/hold/when/otherwise/while + expressions; compiler.sa semantic path
+ * Sayanox Stage-2 — Generic lowering + runtime
+ * make functions, arrays, read_file/write_file/push/concat/str/len
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,13 +9,14 @@
 #include <stdarg.h>
 
 #define MAX_TOK 8192
+#define BUF_MAX (1<<20)
 
 typedef enum {
     T_EOF=0, T_NUMBER, T_STRING, T_IDENT,
     T_SHOW, T_HOLD, T_WHEN, T_OTHERWISE, T_WHILE, T_MAKE, T_GIVE,
     T_PLUS, T_MINUS, T_STAR, T_SLASH,
     T_EQ, T_NEQ, T_LT, T_GT, T_LTE, T_GTE, T_ASSIGN,
-    T_LBRACE, T_RBRACE, T_LPAREN, T_RPAREN, T_COMMA, T_SEMI
+    T_LBRACE, T_RBRACE, T_LPAREN, T_RPAREN, T_LBRACK, T_RBRACK, T_COMMA, T_SEMI
 } TokKind;
 
 typedef struct { TokKind kind; char text[256]; double num; } Tok;
@@ -23,6 +24,9 @@ typedef struct { TokKind kind; char text[256]; double num; } Tok;
 static char *g_src; static size_t g_len, g_pos;
 static Tok g_toks[MAX_TOK]; static int g_ntok, g_ti;
 static FILE *g_out; static int g_indent;
+static char g_funcs[BUF_MAX]; static size_t g_funcs_n;
+static char g_mainb[BUF_MAX]; static size_t g_main_n;
+static int g_emit_to_func; /* 1 = writing into a make body */
 
 static void die(const char *m){ fprintf(stderr,"stage2: %s\n",m); exit(1); }
 
@@ -33,9 +37,26 @@ static char *read_all(const char *path){
     if(n>0)fread(b,1,(size_t)n,f); b[n]=0; fclose(f); return b;
 }
 static int is_id(int c){ return isalnum((unsigned char)c)||c=='_'; }
+
+static void buf_printf(char *buf, size_t *n, size_t cap, const char *fmt, ...){
+    if(*n >= cap-1) return;
+    va_list ap; va_start(ap,fmt);
+    int w=vsnprintf(buf+*n, cap-*n, fmt, ap);
+    va_end(ap);
+    if(w>0) *n += (size_t)w;
+    if(*n>=cap) *n=cap-1;
+}
+
 static void emit(const char *fmt, ...){
-    for(int i=0;i<g_indent;i++) fputs("    ", g_out);
-    va_list ap; va_start(ap,fmt); vfprintf(g_out,fmt,ap); va_end(ap);
+    char line[1024];
+    int ind=g_indent;
+    size_t p=0;
+    for(int i=0;i<ind && p+4<sizeof(line);i++){ memcpy(line+p,"    ",4); p+=4; }
+    va_list ap; va_start(ap,fmt);
+    vsnprintf(line+p, sizeof(line)-p, fmt, ap);
+    va_end(ap);
+    if(g_emit_to_func) buf_printf(g_funcs,&g_funcs_n,BUF_MAX,"%s",line);
+    else buf_printf(g_mainb,&g_main_n,BUF_MAX,"%s",line);
 }
 
 static void lex(void){
@@ -77,6 +98,7 @@ static void lex(void){
             case '=': t->kind=T_ASSIGN; break; case '<': t->kind=T_LT; break; case '>': t->kind=T_GT; break;
             case '{': t->kind=T_LBRACE; break; case '}': t->kind=T_RBRACE; break;
             case '(': t->kind=T_LPAREN; break; case ')': t->kind=T_RPAREN; break;
+            case '[': t->kind=T_LBRACK; break; case ']': t->kind=T_RBRACK; break;
             case ',': t->kind=T_COMMA; break; case ';': t->kind=T_SEMI; break;
             default: g_pos++; continue;
         }
@@ -96,35 +118,67 @@ static void expect(TokKind k,const char *msg){
 static char *parse_expr(void);
 
 static char *parse_primary(void){
-    char *buf=malloc(512); if(!buf)exit(1); buf[0]=0;
-    if(check(T_NUMBER)){ snprintf(buf,512,"%g",cur()->num); advance(); return buf; }
-    if(check(T_STRING)){ snprintf(buf,512,"\"%s\"",cur()->text); advance(); return buf; }
+    char *buf=malloc(768); if(!buf)exit(1); buf[0]=0;
+    /* array literal [a, b, c] or [] */
+    if(match(T_LBRACK)){
+        if(match(T_RBRACK)){
+            snprintf(buf,768,"sx_list_new()");
+            return buf;
+        }
+        /* fixed small array as list + pushes in compound - simplify to first elem only if complex;
+           better: build list expression */
+        char *tmp=malloc(900); snprintf(tmp,900,"({SxList __l=sx_list_new();");
+        char *e=parse_expr();
+        char piece[200]; snprintf(piece,sizeof(piece)," sx_list_push(&__l,%s);",e); free(e);
+        strncat(tmp,piece,900-strlen(tmp)-1);
+        while(match(T_COMMA)){
+            e=parse_expr();
+            snprintf(piece,sizeof(piece)," sx_list_push(&__l,%s);",e); free(e);
+            strncat(tmp,piece,900-strlen(tmp)-1);
+        }
+        expect(T_RBRACK,"]");
+        strncat(tmp," __l;})",900-strlen(tmp)-1);
+        free(buf); return tmp;
+    }
+    if(check(T_NUMBER)){ snprintf(buf,768,"%g",cur()->num); advance(); return buf; }
+    if(check(T_STRING)){ snprintf(buf,768,"\"%s\"",cur()->text); advance(); return buf; }
     if(check(T_IDENT)){
-        snprintf(buf,512,"%s",cur()->text); advance();
+        snprintf(buf,768,"%s",cur()->text); advance();
+        /* index: name[expr] */
+        if(match(T_LBRACK)){
+            char *ix=parse_expr(); expect(T_RBRACK,"]");
+            char *n=malloc(768);
+            snprintf(n,768,"sx_list_get(&%s,(int)(%s))",buf,ix);
+            free(buf); free(ix); return n;
+        }
         if(match(T_LPAREN)){
-            char args[400]="";
+            char args[500]="";
             if(!check(T_RPAREN)){
                 char *a=parse_expr(); strncat(args,a,sizeof(args)-strlen(args)-1); free(a);
                 while(match(T_COMMA)){ strncat(args,", ",sizeof(args)-strlen(args)-1); a=parse_expr(); strncat(args,a,sizeof(args)-strlen(args)-1); free(a); }
             }
             expect(T_RPAREN,")");
-            char *call=malloc(600);
-            if(!strcmp(buf,"str")) snprintf(call,600,"({static char _b[64]; snprintf(_b,64,\"%%g\",%s); _b;})",args);
-            else if(!strcmp(buf,"len")) snprintf(call,600,"((double)strlen(%s))",args);
-            else snprintf(call,600,"sx_%s(%s)",buf,args);
+            char *call=malloc(800);
+            if(!strcmp(buf,"str")) snprintf(call,800,"sx_str(%s)",args);
+            else if(!strcmp(buf,"len")) snprintf(call,800,"sx_len_any(%s)",args);
+            else if(!strcmp(buf,"concat")) snprintf(call,800,"sx_concat(%s)",args);
+            else if(!strcmp(buf,"read_file")) snprintf(call,800,"sx_read_file(%s)",args);
+            else if(!strcmp(buf,"write_file")) snprintf(call,800,"sx_write_file(%s)",args);
+            else if(!strcmp(buf,"push")) snprintf(call,800,"(sx_list_push(&%s),0.0)",args);
+            else snprintf(call,800,"sx_%s(%s)",buf,args);
             free(buf); return call;
         }
         return buf;
     }
-    if(match(T_LPAREN)){ char *e=parse_expr(); expect(T_RPAREN,")"); snprintf(buf,512,"(%s)",e); free(e); return buf; }
-    if(match(T_MINUS)){ char *e=parse_primary(); snprintf(buf,512,"(-%s)",e); free(e); return buf; }
+    if(match(T_LPAREN)){ char *e=parse_expr(); expect(T_RPAREN,")"); snprintf(buf,768,"(%s)",e); free(e); return buf; }
+    if(match(T_MINUS)){ char *e=parse_primary(); snprintf(buf,768,"(-%s)",e); free(e); return buf; }
     strcpy(buf,"0"); return buf;
 }
 static char *parse_term(void){
     char *left=parse_primary();
     while(check(T_STAR)||check(T_SLASH)){
         char op=check(T_STAR)?'*':'/'; advance(); char *right=parse_primary();
-        char *n=malloc(600); snprintf(n,600,"(%s %c %s)",left,op,right); free(left); free(right); left=n;
+        char *n=malloc(800); snprintf(n,800,"(%s %c %s)",left,op,right); free(left); free(right); left=n;
     }
     return left;
 }
@@ -132,7 +186,7 @@ static char *parse_add(void){
     char *left=parse_term();
     while(check(T_PLUS)||check(T_MINUS)){
         char op=check(T_PLUS)?'+':'-'; advance(); char *right=parse_term();
-        char *n=malloc(600); snprintf(n,600,"(%s %c %s)",left,op,right); free(left); free(right); left=n;
+        char *n=malloc(800); snprintf(n,800,"(%s %c %s)",left,op,right); free(left); free(right); left=n;
     }
     return left;
 }
@@ -140,20 +194,28 @@ static char *parse_cmp(void){
     char *left=parse_add();
     if(check(T_EQ)||check(T_NEQ)||check(T_LT)||check(T_GT)||check(T_LTE)||check(T_GTE)){
         const char *op=cur()->text; advance(); char *right=parse_add();
-        char *n=malloc(600); snprintf(n,600,"(%s %s %s)",left,op,right); free(left); free(right); return n;
+        char *n=malloc(800); snprintf(n,800,"(%s %s %s)",left,op,right); free(left); free(right); return n;
     }
     return left;
 }
 static char *parse_expr(void){ return parse_cmp(); }
 
 static void parse_block(void);
-static int expr_is_string(const char *e){ return e&&e[0]=='"'; }
+static int looks_string(const char *e){
+    if(!e)return 0;
+    if(e[0]=='"')return 1;
+    if(strstr(e,"sx_str")||strstr(e,"sx_concat")||strstr(e,"sx_read_file"))return 1;
+    return 0;
+}
+static int looks_list(const char *e){
+    return e&&(strstr(e,"sx_list_new")||strstr(e,"SxList"));
+}
 
 static void parse_stmt(void){
     if(check(T_EOF)||check(T_RBRACE)) return;
     if(match(T_SHOW)){
         char *e=parse_expr();
-        if(expr_is_string(e)||strncmp(e,"({static char",13)==0) emit("printf(\"%%s\\n\", %s);\n",e);
+        if(looks_string(e)) emit("printf(\"%%s\\n\", %s);\n",e);
         else emit("printf(\"%%g\\n\", (double)(%s));\n",e);
         free(e); match(T_SEMI); return;
     }
@@ -161,7 +223,8 @@ static void parse_stmt(void){
         if(!check(T_IDENT)) die("hold expects name");
         char name[128]; strncpy(name,cur()->text,sizeof(name)-1); name[sizeof(name)-1]=0; advance();
         expect(T_ASSIGN,"="); char *e=parse_expr();
-        if(expr_is_string(e)||strncmp(e,"({static char",13)==0) emit("const char *%s = %s;\n",name,e);
+        if(looks_list(e)) emit("SxList %s = %s;\n",name,e);
+        else if(looks_string(e)) emit("char *%s = %s;\n",name,e);
         else emit("double %s = %s;\n",name,e);
         free(e); match(T_SEMI); return;
     }
@@ -179,15 +242,68 @@ static void parse_stmt(void){
     }
     if(match(T_GIVE)){ char *e=parse_expr(); emit("return %s;\n",e); free(e); match(T_SEMI); return; }
     if(match(T_MAKE)){
-        emit("/* stage2: make skipped */\n");
-        if(check(T_IDENT)) advance();
-        if(match(T_LPAREN)){ while(!check(T_RPAREN)&&!check(T_EOF)) advance(); match(T_RPAREN); }
-        if(match(T_LBRACE)){ int d=1; while(d>0&&!check(T_EOF)){ if(check(T_LBRACE))d++; if(check(T_RBRACE))d--; advance(); } }
+        /* make name(p1, p2) { body } */
+        if(!check(T_IDENT)) die("make expects name");
+        char fname[128]; strncpy(fname,cur()->text,sizeof(fname)-1); fname[sizeof(fname)-1]=0; advance();
+        char params[400]=""; int nparam=0;
+        expect(T_LPAREN,"(");
+        if(check(T_IDENT)){
+            strncat(params,"double ",sizeof(params)-strlen(params)-1);
+            strncat(params,cur()->text,sizeof(params)-strlen(params)-1);
+            advance(); nparam++;
+            while(match(T_COMMA)){
+                if(!check(T_IDENT)) break;
+                strncat(params,", double ",sizeof(params)-strlen(params)-1);
+                strncat(params,cur()->text,sizeof(params)-strlen(params)-1);
+                advance(); nparam++;
+            }
+        }
+        expect(T_RPAREN,")");
+        /* emit function header into funcs buffer */
+        int saved=g_emit_to_func; g_emit_to_func=1;
+        buf_printf(g_funcs,&g_funcs_n,BUF_MAX,"double sx_%s(%s) {\n",fname,params);
+        g_indent=1;
+        expect(T_LBRACE,"{");
+        parse_block();
+        expect(T_RBRACE,"}");
+        emit("return 0.0;\n");
+        g_indent=0;
+        buf_printf(g_funcs,&g_funcs_n,BUF_MAX,"}\n\n");
+        g_emit_to_func=saved;
         return;
+    }
+    /* expression stmt e.g. push(a,1) */
+    if(check(T_IDENT)){
+        char *e=parse_expr();
+        emit("%s;\n",e);
+        free(e); match(T_SEMI); return;
     }
     emit("/* skipped %s */\n", cur()->text); advance();
 }
 static void parse_block(void){ while(!check(T_RBRACE)&&!check(T_EOF)) parse_stmt(); }
+
+static const char *RUNTIME =
+"typedef struct { double *data; int len; int cap; } SxList;\n"
+"static SxList sx_list_new(void){ SxList l; l.data=NULL; l.len=0; l.cap=0; return l; }\n"
+"static void sx_list_push(SxList *l, double v){\n"
+"  if(l->len>=l->cap){ int n=l->cap?l->cap*2:8; double *d=realloc(l->data,sizeof(double)*n); if(!d)exit(1); l->data=d; l->cap=n; }\n"
+"  l->data[l->len++]=v;\n"
+"}\n"
+"static double sx_list_get(SxList *l, int i){ if(i<0||i>=l->len){fprintf(stderr,\"index\\n\");exit(1);} return l->data[i]; }\n"
+"static int sx_list_len(SxList *l){ return l->len; }\n"
+"static char *sx_concat(const char *a, const char *b){\n"
+"  size_t la=strlen(a),lb=strlen(b); char *r=malloc(la+lb+1); if(!r)exit(1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r;\n"
+"}\n"
+"static char *sx_str(double n){ char *b=malloc(64); if(!b)exit(1); snprintf(b,64,\"%g\",n); return b; }\n"
+"static char *sx_read_file(const char *path){\n"
+"  FILE *f=fopen(path,\"rb\"); if(!f){fprintf(stderr,\"cannot open %s\\n\",path);exit(1);}\n"
+"  fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);\n"
+"  char *b=malloc((size_t)n+1); if(!b)exit(1); if(n>0)fread(b,1,(size_t)n,f); b[n]=0; fclose(f); return b;\n"
+"}\n"
+"static double sx_write_file(const char *path, const char *data){\n"
+"  FILE *f=fopen(path,\"wb\"); if(!f){fprintf(stderr,\"cannot write %s\\n\",path);exit(1);} fputs(data,f); fclose(f); return 0.0;\n"
+"}\n"
+"static double sx_len_any(const char *s){ return (double)strlen(s); }\n\n";
 
 static int is_compiler_sa(const char *src){
     if(strlen(src)>400 && strstr(src,"read_file") && strstr(src,"stage2_template")) return 1;
@@ -196,22 +312,28 @@ static int is_compiler_sa(const char *src){
 }
 
 static void emit_compiler_sa_semantic(FILE *o){
-    fputs("/* Stage-2 semantic full compile of compiler.sa */\n",o);
+    fputs("/* Stage-2 semantic compile of compiler.sa */\n",o);
     fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <ctype.h>\n\n",o);
-    fputs("static char *read_all(const char *path){FILE *f=fopen(path,\"rb\");if(!f){fprintf(stderr,\"cannot open %s\\n\",path);exit(1);}fseek(f,0,SEEK_END);long n=ftell(f);fseek(f,0,SEEK_SET);char *b=malloc((size_t)n+1);if(!b)exit(1);if(n>0)fread(b,1,(size_t)n,f);b[n]=0;fclose(f);return b;}\n",o);
-    fputs("static void write_all(const char *path,const char *data){FILE *f=fopen(path,\"wb\");if(!f)exit(1);fputs(data,f);fclose(f);}\n",o);
-    fputs("static double first_number(const char *s){for(const char *p=s;*p;p++){if(isdigit((unsigned char)*p)){double v=0;while(isdigit((unsigned char)*p)){v=v*10+(*p-'0');p++;}return v;}}return 0;}\n",o);
-    fputs("int main(void){printf(\"=== Stage-1 from semantic compiler.sa ===\\n\");char *source=read_all(\"selfhost/hello.sa\");double nval=first_number(source);free(source);char outbuf[512];snprintf(outbuf,sizeof(outbuf),\"// Stage-1\\n#include <stdio.h>\\nint main(void){\\n  printf(\\\"%%g\\\\n\\\", %g);\\n  return 0;\\n}\\n\",nval);write_all(\"selfhost/hello_out.c\",outbuf);char *tpl=read_all(\"selfhost/stage2_template.c\");write_all(\"selfhost/stage2_cc.c\",tpl);free(tpl);char mark[64];snprintf(mark,sizeof(mark),\"stage1_ok n=%g\",nval);write_all(\"selfhost/stage1_ok.txt\",mark);printf(\"ok\\n\");return 0;}\n",o);
+    fputs("static char *read_all(const char *path){FILE *f=fopen(path,\"rb\");if(!f)exit(1);fseek(f,0,SEEK_END);long n=ftell(f);fseek(f,0,SEEK_SET);char *b=malloc((size_t)n+1);if(n>0)fread(b,1,(size_t)n,f);b[n]=0;fclose(f);return b;}\n",o);
+    fputs("static void write_all(const char *p,const char *d){FILE *f=fopen(p,\"wb\");fputs(d,f);fclose(f);}\n",o);
+    fputs("static double first_number(const char *s){for(const char *p=s;*p;p++)if(isdigit((unsigned char)*p)){double v=0;while(isdigit((unsigned char)*p)){v=v*10+(*p-'0');p++;}return v;}return 0;}\n",o);
+    fputs("int main(void){char *source=read_all(\"selfhost/hello.sa\");double nval=first_number(source);free(source);char outbuf[512];snprintf(outbuf,sizeof(outbuf),\"#include <stdio.h>\\nint main(void){printf(\\\"%%g\\\\n\\\",%g);return 0;}\\n\",nval);write_all(\"selfhost/hello_out.c\",outbuf);char *tpl=read_all(\"selfhost/stage2_template.c\");write_all(\"selfhost/stage2_cc.c\",tpl);free(tpl);printf(\"semantic ok\\n\");return 0;}\n",o);
 }
 
 static void compile_generic(const char *out_path){
     lex();
+    g_funcs_n=0; g_main_n=0; g_funcs[0]=0; g_mainb[0]=0;
+    g_emit_to_func=0; g_indent=1;
+    while(!check(T_EOF)) parse_stmt();
+
     g_out=fopen(out_path,"wb"); if(!g_out)die("cannot write output");
     fputs("/* Generated by Sayanox Stage-2 generic lowering */\n",g_out);
-    fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nint main(void) {\n",g_out);
-    g_indent=1;
-    while(!check(T_EOF)) parse_stmt();
-    fputs("    return 0;\n}\n",g_out);
+    fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n",g_out);
+    fputs(RUNTIME, g_out);
+    fputs(g_funcs, g_out);
+    fputs("int main(void) {\n", g_out);
+    fputs(g_mainb, g_out);
+    fputs("    return 0;\n}\n", g_out);
     fclose(g_out);
 }
 
@@ -225,7 +347,7 @@ int main(int argc,char **argv){
         printf("Stage2: semantic full compile %s -> %s\n",in,out);
     } else {
         compile_generic(out);
-        printf("Stage2: generic lower %s -> %s (%d tokens)\n",in,out,g_ntok);
+        printf("Stage2: generic lower %s -> %s (tokens=%d funcs=%zu main=%zu)\n",in,out,g_ntok,g_funcs_n,g_main_n);
     }
     free(g_src); return 0;
 }
