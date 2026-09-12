@@ -1,0 +1,19 @@
+// Sayanox standard library tour
+
+hold raw = "  Sayanox  "
+hold clean = trim(raw)
+show clean
+show upper(clean)
+show lower(clean)
+show contains(clean, "yan")
+show starts_with(clean, "S")
+show ends_with(clean, "x")
+show len(clean)
+
+hold numbers = [10, 20, 30]
+push(numbers, 40)
+show list_len(numbers)
+show list_get(numbers, 2)
+
+show concat("Sayan", "ox")
+show str(2026)
