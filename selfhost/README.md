@@ -1,18 +1,10 @@
-# Self-Hosting — Stage 2
+# Stage 2 — Full semantic compile of `compiler.sa`
 
-## Pipeline
-
-```text
-Stage 0  Rust → compiler.sa → stage1
-Stage 1  stage1 → hello_out.c + stage2_cc.c (from template)
-Stage 2  stage2 hello.sa → stage2_out.c
-         stage2 compiler.sa → compiler_stage2_out.c (partial)
-```
-
-## Run
+When Stage 2 compiles `selfhost/compiler.sa`, it emits **working C** that
+re-implements the Stage-1 compiler (read hello.sa, write hello_out.c, emit stage2).
 
 ```bash
 ./selfhost/bootstrap.sh
 ```
 
-Stage 2 **opens and analyzes** full `compiler.sa` and emits a runnable report program. Full semantic re-emit of the compiler is not done yet.
+Semantic equivalence for Stage-1 behavior; generic full-language lowering is future work.

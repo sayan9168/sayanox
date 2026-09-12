@@ -1,10 +1,4 @@
-// ============================================================
-// Sayanox Stage-1 self-host compiler
-// 1) Compile selfhost/hello.sa -> hello_out.c
-// 2) Copy Stage-2 template -> stage2_cc.c
-// All comments in English.
-// ============================================================
-
+// Stage-1 self-host compiler (Sayanox)
 show "=== Sayanox Stage-1 ==="
 
 hold source = read_file("selfhost/hello.sa")
@@ -65,7 +59,7 @@ show "Stage1: wrote hello_out.c"
 
 hold tpl = read_file("selfhost/stage2_template.c")
 write_file("selfhost/stage2_cc.c", tpl)
-show "Stage1: emitted stage2_cc.c from template"
+show "Stage1: emitted stage2_cc.c"
 
 write_file("selfhost/stage1_ok.txt", concat("stage1_ok n=", str(nval)))
 show "Stage1 finished"

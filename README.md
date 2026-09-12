@@ -1,18 +1,15 @@
 # Sayanox
 
-**Sayanox** is a completely original programming language. Extension: `.sa`
+**Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-Created by **Sayan Mahata**.
-
-## v0.3.19
+## v0.3.20
 
 | Feature | Status |
 |---------|--------|
-| Stage 0 / 1 bootstrap | Yes |
-| Stage 2 mini compiler | Yes |
-| Stage 2 compiles `hello.sa` | Yes |
-| Stage 2 compiles `compiler.sa` | Partial (analysis program) |
-| Full semantic self-compile | Not yet |
+| Stage 0 / 1 | Yes |
+| Stage 2 subset (`hello.sa`) | Yes |
+| **Stage 2 full semantic C for `compiler.sa`** | Yes |
+| Generic full-language self-host lowering | Future |
 
 ## Bootstrap
 
