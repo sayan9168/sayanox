@@ -2,30 +2,20 @@
 
 **Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-## v0.3.21
+## v0.3.22
 
-| Feature | Status |
-|---------|--------|
-| Core + C backend | Yes |
-| Stage 0 / 1 bootstrap | Yes |
-| **Stage 2 generic lowering** | Yes |
-| Stage 2 supports | `show` `hold` `when`/`otherwise` `while` exprs |
-| Stage 2 semantic `compiler.sa` | Yes |
-| Full `make` body lowering | Partial (skipped with comment) |
+Stage-2 generic lowering now includes:
 
-## Bootstrap
+- `make` function body → C functions
+- Runtime: `read_file` `write_file` `push` `concat` `str` `len`
+- Arrays: `[]`, `[1,2,3]`, `a[i]`
+- `show` `hold` `when` `while` expressions
 
 ```bash
 cargo build --release
 ./selfhost/bootstrap.sh
-```
-
-## Generic Stage-2 example
-
-```bash
 gcc -o selfhost/stage2 selfhost/stage2_template.c
-./selfhost/stage2 selfhost/generic_demo.sa out.c
-gcc out.c -o out && ./out
+./selfhost/stage2 selfhost/generic_demo.sa out.c && gcc out.c -o out && ./out
 ```
 
 ## License

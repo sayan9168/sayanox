@@ -1,15 +1,33 @@
-// Generic Stage-2 demo
+// Generic Stage-2 demo: control flow + make + array + builtins
 show "hello generic"
+
 hold x = 10
 hold y = 20
 show x + y
+
 when x < y {
     show 1
 } otherwise {
     show 0
 }
+
 hold i = 0
 while i < 3 {
     show i
     hold i = i + 1
 }
+
+make add(a, b) {
+    give a + b
+}
+
+show add(2, 3)
+
+hold xs = []
+push(xs, 10)
+push(xs, 20)
+show xs[0]
+show xs[1]
+
+hold msg = concat("hi-", str(42))
+show msg

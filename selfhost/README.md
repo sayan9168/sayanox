@@ -1,27 +1,22 @@
-# Stage 2 — Generic full-language subset lowering
+# Stage 2 generic lowering (v0.3.22)
 
-## Supported (generic)
+## Supported
 
-- `show <expr>`
-- `hold name = <expr>`
-- `when <expr> { ... } otherwise { ... }`
-- `while <expr> { ... }`
-- expressions: numbers, strings, idents, `+ - * /`, comparisons, `( )`
-- `//` comments
-- builtins (limited): `str`, `len`
-
-## Also
-
-- `compiler.sa` → full **semantic** Stage-1-equivalent C compiler
-
-## Not complete
-
-- Full `make` function body lowering (skipped)
-- `read_file` / `write_file` / `push` runtime in Stage-2 output
-- Arrays / structs
+| Feature | Status |
+|---------|--------|
+| show / hold / when / while / give | Yes |
+| expressions + comparisons | Yes |
+| **make name(params) { body }** | Yes → `sx_name` |
+| **arrays** `[]` `[1,2]` `a[i]` | Yes |
+| **push** | Yes |
+| **read_file / write_file / concat / str / len** | Yes (runtime) |
+| structs | Limited (not full field syntax yet) |
+| compiler.sa semantic path | Yes |
 
 ## Run
 
 ```bash
-./selfhost/bootstrap.sh
+gcc -o stage2 stage2_template.c
+./stage2 generic_demo.sa out.c
+gcc out.c -o out && ./out
 ```
