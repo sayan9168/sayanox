@@ -1,5 +1,5 @@
 /*
- * Sayanox Stage-2 — always generic (Termux-fixed string escapes)
+ * Sayanox Stage-2 — generic lowering + line-numbered errors + CLI-friendly
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,9 +19,10 @@ typedef enum {
     T_LBRACE, T_RBRACE, T_LPAREN, T_RPAREN, T_LBRACK, T_RBRACK, T_COMMA, T_SEMI, T_DOT
 } TokKind;
 
-typedef struct { TokKind kind; char text[1024]; double num; } Tok;
+typedef struct { TokKind kind; char text[1024]; double num; int line; } Tok;
 
 static char *g_src; static size_t g_len, g_pos;
+static int g_line; static const char *g_path;
 static Tok g_toks[MAX_TOK]; static int g_ntok, g_ti;
 static int g_indent;
 static char g_funcs[BUF_MAX]; static size_t g_funcs_n;
@@ -34,9 +35,9 @@ static char g_decl_names[128][64]; static int g_ndecl;
 static char g_struct_names[32][64]; static int g_nstruct;
 static char g_struct_fields[32][8][64]; static int g_struct_nf[32];
 
-static void die(const char *m){ fprintf(stderr,"stage2: %s\n",m); exit(1); }
+static void die(const char *m){ fprintf(stderr,"stage2: %s:%d: error: %s\n", g_path?g_path:"input", (g_ti<g_ntok&&g_toks[g_ti].line)?g_toks[g_ti].line:g_line, m); exit(1); }
 static char *read_all(const char *path){
-    FILE *f=fopen(path,"rb"); if(!f){fprintf(stderr,"stage2: cannot open %s\n",path);exit(1);}
+    FILE *f=fopen(path,"rb"); if(!f){fprintf(stderr,"stage2: error: cannot open '%s'\n",path);perror("fopen");exit(1);}
     fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
     char *b=malloc((size_t)n+1); if(!b)exit(1);
     if(n>0)fread(b,1,(size_t)n,f); b[n]=0; fclose(f); return b;
@@ -62,12 +63,13 @@ static void emit(const char *fmt, ...){
 }
 
 static void lex(void){
-    g_ntok=0; g_pos=0;
+    g_ntok=0; g_pos=0; g_line=1;
     while(g_pos<g_len && g_ntok<MAX_TOK-1){
         char c=g_src[g_pos];
-        if(c==' '||c=='\t'||c=='\r'||c=='\n'){g_pos++;continue;}
+        if(c=='\n'){g_line++; g_pos++; continue;}
+        if(c==' '||c=='\t'||c=='\r'){g_pos++;continue;}
         if(c=='/'&&g_pos+1<g_len&&g_src[g_pos+1]=='/'){while(g_pos<g_len&&g_src[g_pos]!='\n')g_pos++;continue;}
-        Tok *t=&g_toks[g_ntok]; memset(t,0,sizeof(*t));
+        Tok *t=&g_toks[g_ntok]; memset(t,0,sizeof(*t)); t->line=g_line;
         if(isdigit((unsigned char)c)){
             double v=0; while(g_pos<g_len&&isdigit((unsigned char)g_src[g_pos])){v=v*10+(g_src[g_pos]-'0');g_pos++;}
             t->kind=T_NUMBER; t->num=v; snprintf(t->text,sizeof(t->text),"%g",v); g_ntok++; continue;
@@ -82,6 +84,7 @@ static void lex(void){
                     if(n+1<sizeof(t->text)) t->text[n++]=out; continue;
                 }
                 if(g_src[g_pos]=='"'){ g_pos++; break; }
+                if(g_src[g_pos]=='\n') g_line++;
                 if(n+1<sizeof(t->text)) t->text[n++]=g_src[g_pos];
                 g_pos++;
             }
@@ -113,18 +116,24 @@ static void lex(void){
             case '(':t->kind=T_LPAREN;break;case ')':t->kind=T_RPAREN;break;
             case '[':t->kind=T_LBRACK;break;case ']':t->kind=T_RBRACK;break;
             case ',':t->kind=T_COMMA;break;case ';':t->kind=T_SEMI;break;case '.':t->kind=T_DOT;break;
-            default:g_pos++;continue;
+            default: fprintf(stderr,"stage2: %s:%d: error: unexpected character '%c'\n", g_path?g_path:"input", g_line, c); exit(1);
         }
         t->text[0]=c;t->text[1]=0;g_pos++;g_ntok++;
     }
-    g_toks[g_ntok].kind=T_EOF; g_ti=0;
+    g_toks[g_ntok].kind=T_EOF; g_toks[g_ntok].line=g_line; g_ti=0;
 }
 
 static Tok *cur(void){return &g_toks[g_ti];}
 static Tok *advance(void){if(g_ti<g_ntok)g_ti++;return cur();}
 static int check(TokKind k){return cur()->kind==k;}
 static int match(TokKind k){if(check(k)){advance();return 1;}return 0;}
-static void expect(TokKind k,const char *msg){ if(!match(k)){fprintf(stderr,"stage2: parse error: %s (got %s)\n",msg,cur()->text);exit(1);} }
+static void expect(TokKind k,const char *msg){
+    if(!match(k)){
+        fprintf(stderr,"stage2: %s:%d: error: expected %s, got '%s'\n",
+            g_path?g_path:"input", cur()->line, msg, cur()->text[0]?cur()->text:"EOF");
+        exit(1);
+    }
+}
 
 static char *parse_expr(void);
 static char *parse_primary(void){
@@ -170,7 +179,7 @@ static char *parse_primary(void){
             expect(T_RBRACE,"}"); strncat(tmp,"})",900-strlen(tmp)-1); free(buf); return tmp;
         }
         while(match(T_DOT)){
-            if(!check(T_IDENT)) die("field name");
+            if(!check(T_IDENT)) die("expected field name after '.'");
             char *n=malloc(900); snprintf(n,900,"%s.%s",buf,cur()->text); advance(); free(buf); buf=n;
         }
         if(match(T_LBRACK)){
@@ -208,7 +217,7 @@ static char *parse_primary(void){
     }
     if(match(T_LPAREN)){char *e=parse_expr();expect(T_RPAREN,")");snprintf(buf,900,"(%s)",e);free(e);return buf;}
     if(match(T_MINUS)){char *e=parse_primary();snprintf(buf,900,"(-%s)",e);free(e);return buf;}
-    strcpy(buf,"0"); return buf;
+    die("expected expression"); return buf;
 }
 static char *parse_term(void){
     char *left=parse_primary();
@@ -241,7 +250,7 @@ static const char *struct_type_of_expr(const char *e){ for(int i=0;i<g_nstruct;i
 static void parse_stmt(void){
     if(check(T_EOF)||check(T_RBRACE)) return;
     if(match(T_STRUCT)){
-        if(!check(T_IDENT)) die("struct name");
+        if(!check(T_IDENT)) die("expected struct name");
         char sname[64]; strncpy(sname,cur()->text,63); sname[63]=0; advance();
         expect(T_LBRACE,"{"); int si=g_nstruct;
         if(si<32){ strncpy(g_struct_names[si],sname,63); g_struct_names[si][63]=0; g_struct_nf[si]=0; }
@@ -261,7 +270,7 @@ static void parse_stmt(void){
         free(e); match(T_SEMI); return;
     }
     if(match(T_HOLD)){
-        if(!check(T_IDENT)) die("hold expects name");
+        if(!check(T_IDENT)) die("expected name after hold");
         char name[128]; strncpy(name,cur()->text,sizeof(name)-1); name[sizeof(name)-1]=0; advance();
         expect(T_ASSIGN,"="); char *e=parse_expr();
         if(is_declared(name)) emit("%s = %s;\n",name,e);
@@ -286,7 +295,7 @@ static void parse_stmt(void){
     }
     if(match(T_GIVE)){ char *e=parse_expr(); emit("return %s;\n",e); free(e); match(T_SEMI); return; }
     if(match(T_MAKE)){
-        if(!check(T_IDENT)) die("make expects name");
+        if(!check(T_IDENT)) die("expected function name after make");
         char fname[128]; strncpy(fname,cur()->text,sizeof(fname)-1); fname[sizeof(fname)-1]=0; advance();
         char params[400]=""; expect(T_LPAREN,"(");
         if(check(T_IDENT)){ strncat(params,"double ",sizeof(params)-1); strncat(params,cur()->text,sizeof(params)-1); advance();
@@ -298,7 +307,8 @@ static void parse_stmt(void){
         buf_printf(g_funcs,&g_funcs_n,BUF_MAX,"}\n\n"); g_emit_to_func=saved; return;
     }
     if(check(T_IDENT)){ char *e=parse_expr(); emit("%s;\n",e); free(e); match(T_SEMI); return; }
-    emit("/* skipped %s */\n",cur()->text); advance();
+    fprintf(stderr,"stage2: %s:%d: error: unexpected token '%s'\n", g_path?g_path:"input", cur()->line, cur()->text);
+    exit(1);
 }
 static void parse_block(void){ while(!check(T_RBRACE)&&!check(T_EOF)) parse_stmt(); }
 
@@ -327,7 +337,7 @@ static void compile_generic(const char *out_path){
     g_nlists=0; g_nstrs=0; g_ndecl=0; g_nstruct=0; g_emit_to_func=0; g_indent=1;
     while(!check(T_EOF)) parse_stmt();
     FILE *o=fopen(out_path,"wb");
-    if(!o){ fprintf(stderr,"stage2: cannot write %s\n", out_path); perror("fopen"); exit(1); }
+    if(!o){ fprintf(stderr,"stage2: error: cannot write '%s'\n", out_path); perror("fopen"); exit(1); }
     fputs("/* Generated by Sayanox Stage-2 GENERIC */\n",o);
     fputs("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n",o);
     fputs(RUNTIME,o); fputs(g_types,o); fputs(g_funcs,o);
@@ -338,8 +348,12 @@ static void compile_generic(const char *out_path){
 int main(int argc,char **argv){
     const char *in="selfhost/hello.sa"; const char *out="selfhost/stage2_out.c";
     if(argc>=2)in=argv[1]; if(argc>=3)out=argv[2];
-    g_src=read_all(in); g_len=strlen(g_src);
+    if(argc>=2 && (!strcmp(argv[1],"-h")||!strcmp(argv[1],"--help"))){
+        fprintf(stderr,"Usage: stage2 <input.sa> [output.c]\n");
+        return 0;
+    }
+    g_path=in; g_src=read_all(in); g_len=strlen(g_src);
     compile_generic(out);
-    printf("Stage2: GENERIC lower %s -> %s (tokens=%d)\n",in,out,g_ntok);
+    printf("stage2: ok %s -> %s (%d tokens)\n",in,out,g_ntok);
     free(g_src); return 0;
 }
