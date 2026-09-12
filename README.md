@@ -5,15 +5,15 @@ File extension: `.sa`
 
 Created by **Sayan Mahata**.
 
-## Current Features (v0.3.16)
+## Current Features (v0.3.17)
 
 | Feature | Status |
 |---------|--------|
-| Core language + C backend | ✅ |
-| Full AOT (Cranelift) | ✅ |
-| Self-host pipeline | ✅ |
-| `str(number)` number→string | ✅ New |
-| Disk bootstrap (`bootstrap.sh`) | ✅ |
+| Core language + C backend | Yes |
+| Full AOT (Cranelift) | Yes (limited) |
+| File I/O, `str`, `concat`, `push` | Yes |
+| **Stage-1 self-host binary** | Yes |
+| Stage-2 (stage1 compiles `compiler.sa`) | In progress |
 
 ## Build
 
@@ -23,17 +23,13 @@ cd sayanox
 cargo build --release
 ```
 
-### Number to string
-
-```bash
-./target/release/sayanox examples/str_demo.sa -o s.c && gcc s.c -o s && ./s
-```
-
-### Bootstrap
+## Bootstrap (Stage 0 → Stage 1)
 
 ```bash
 ./selfhost/bootstrap.sh
 ```
+
+This builds a **Sayanox-built** `selfhost/stage1` binary that compiles `selfhost/hello.sa` from disk.
 
 ## License
 
