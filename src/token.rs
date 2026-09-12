@@ -11,6 +11,7 @@ pub enum TokenKind {
     Otherwise,
     While,
     Struct,
+    Use,
 
     // Literals
     Ident(String),
