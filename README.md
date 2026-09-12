@@ -2,17 +2,16 @@
 
 **Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-## v0.3.24
+## v0.3.26
 
-- Stage-2 **always generic** (including `compiler.sa`)
-- `hold` reassignment (no double declare)
-- **struct** `Point { x, y }` + `p.x` + `Point { 1, 2 }`
+Self-host compilers emit **real numbers** in `hello_out.c` (not a NUM placeholder).
 
 ```bash
-gcc -o selfhost/stage2 selfhost/stage2_template.c
-./selfhost/stage2 selfhost/compiler.sa selfhost/compiler_generic_out.c
-gcc -o selfhost/compiler_generic selfhost/compiler_generic_out.c
-./selfhost/compiler_generic
+./selfhost/bootstrap_stage3.sh
+# hello_out: 42
+
+./selfhost/bootstrap_generic_compiler.sh
+# hello: 42
 ```
 
 ## License

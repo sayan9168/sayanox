@@ -1,4 +1,4 @@
-// Minimal compiler for Stage-3 (avoid complex escapes)
+// Minimal compiler for Stage-3 — emits real nval
 show "=== compiler_boot ==="
 
 hold source = read_file("selfhost/hello.sa")
@@ -39,9 +39,10 @@ while pos < n {
     }
 }
 
-hold h1 = "#include <stdio.h>\n"
-hold h2 = "int main(void){printf(\"42\\n\");return 0;}\n"
-hold out = concat(h1, h2)
+hold p1 = "#include <stdio.h>\nint main(void){ printf(\"%g\\n\", "
+hold out = concat(p1, str(nval))
+hold p2 = "); return 0; }\n"
+hold out = concat(out, p2)
 write_file("selfhost/hello_out.c", out)
 show "compiler_boot: wrote hello_out.c"
 show nval
