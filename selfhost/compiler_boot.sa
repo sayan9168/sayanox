@@ -1,4 +1,4 @@
-// Minimal compiler for Stage-3 — emits real nval via puts
+// Minimal compiler for Stage-3 — emits puts("42")
 show "=== compiler_boot ==="
 
 hold source = read_file("selfhost/hello.sa")
@@ -41,9 +41,10 @@ while pos < n {
 
 show nval
 
-hold part_a = "#include <stdio.h>\nint main(void){ puts("
+// Must include quotes: puts("42");
+hold part_a = "#include <stdio.h>\nint main(void){ puts(\""
 hold part_b = str(nval)
-hold part_c = "); return 0; }\n"
+hold part_c = "\"); return 0; }\n"
 hold out = concat(part_a, part_b)
 hold out = concat(out, part_c)
 write_file("selfhost/hello_out.c", out)

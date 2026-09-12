@@ -54,9 +54,9 @@ when len(num_vals) > 0 {
 
 show nval
 
-hold part_a = "#include <stdio.h>\nint main(void){ puts("
+hold part_a = "#include <stdio.h>\nint main(void){ puts(\""
 hold part_b = str(nval)
-hold part_c = "); return 0; }\n"
+hold part_c = "\"); return 0; }\n"
 hold out = concat(part_a, part_b)
 hold out = concat(out, part_c)
 write_file("selfhost/hello_out.c", out)
