@@ -1,25 +1,20 @@
-# Stage-2 v0.3.24
+# Self-host CLI (v0.3.27)
 
-## Always generic
-
-`compiler.sa` is lowered by the **same** generic path as any `.sa` file (no semantic shortcut).
+## Compile any `.sa` file
 
 ```bash
-./selfhost/bootstrap_generic_compiler.sh
+chmod +x selfhost/sx
+./selfhost/sx selfhost/hello.sa --run
+./selfhost/sx selfhost/struct_demo.sa -o /tmp/s --run
+./selfhost/sx path/to/any.sa -o outname
+```
+
+## Errors
+
+Stage-2 prints **line number**, expected token, and got token on parse failure.
+
+## Stage-3
+
+```bash
 ./selfhost/bootstrap_stage3.sh
 ```
-
-## Struct syntax
-
-```sa
-struct Point {
-    x,
-    y
-}
-hold p = Point { 3, 4 }
-show p.x
-```
-
-## hold reassignment
-
-`hold pos = pos + 1` emits assignment if `pos` already declared.

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Sayanox CLI — compile any .sa file (Stage-2 based)
+# Usage:
+#   sx <file.sa>              # -> file.c + binary next to source
+#   sx <file.sa> -o name      # -> name.c + name
+#   sx <file.sa> --run        # compile and run
+#   sx <file.sa> -o name --run
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+if [[ $# -lt 1 ]]; then
+  echo "Sayanox CLI (Stage-2)"
+  echo "Usage: sx <file.sa> [-o outname] [--run]"
+  echo "  sx selfhost/hello.sa"
+  echo "  sx selfhost/struct_demo.sa -o /tmp/struct --run"
+  exit 1
+fi
+
+IN="$1"
+shift
+OUT=""
+RUN=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o)
+      OUT="$2"
+      shift 2
+      ;;
+    --run)
+      RUN=1
+      shift
+      ;;
+    *)
+      echo "sx: unknown arg: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ! -f "$IN" ]]; then
+  echo "sx: error: input not found: $IN" >&2
+  exit 1
+fi
+
+if [[ ! -x selfhost/stage2 ]]; then
+  echo "sx: building Stage-2..."
+  if command -v clang >/dev/null 2>&1; then
+    clang -o selfhost/stage2 selfhost/stage2_template.c
+  else
+    gcc -o selfhost/stage2 selfhost/stage2_template.c
+  fi
+fi
+
+if [[ -z "$OUT" ]]; then
+  OUT="${IN%.sa}"
+fi
+C_OUT="${OUT}.c"
+BIN_OUT="$OUT"
+
+echo "sx: compile $IN -> $C_OUT"
+if ! ./selfhost/stage2 "$IN" "$C_OUT"; then
+  echo "sx: error: Stage-2 failed for $IN" >&2
+  exit 1
+fi
+
+echo "sx: link $C_OUT -> $BIN_OUT"
+if command -v clang >/dev/null 2>&1; then
+  clang -o "$BIN_OUT" "$C_OUT"
+else
+  gcc -o "$BIN_OUT" "$C_OUT"
+fi
+
+echo "sx: OK binary: $BIN_OUT"
+if [[ "$RUN" -eq 1 ]]; then
+  echo "sx: run $BIN_OUT"
+  echo "-----"
+  "$BIN_OUT"
+  echo "-----"
+fi

@@ -2,17 +2,17 @@
 
 **Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-## v0.3.26
+## v0.3.27
 
-Self-host compilers emit **real numbers** in `hello_out.c` (not a NUM placeholder).
+Full CLI for **any** `.sa` path:
 
 ```bash
-./selfhost/bootstrap_stage3.sh
-# hello_out: 42
-
-./selfhost/bootstrap_generic_compiler.sh
-# hello: 42
+chmod +x selfhost/sx
+./selfhost/sx selfhost/hello.sa --run
+./selfhost/sx selfhost/struct_demo.sa -o out --run
 ```
+
+Stage-2 errors include **line numbers**.
 
 ## License
 
