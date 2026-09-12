@@ -1,7 +1,7 @@
-// Sayanox v0.3 - Arrays, Structs, While, Functions
-show "Hello from Sayanox v0.3!"
+// Sayanox beginner tour
 
-// Functions
+show "Hello from Sayanox!"
+
 make double(n) {
     give n * 2
 }
@@ -9,26 +9,24 @@ make double(n) {
 hold x = 42
 show double(x)
 
-// Conditionals
 when x > 10 {
     show "Big number"
 } otherwise {
     show "Small number"
 }
 
-// While loop
 hold i = 1
 while i <= 5 {
     show i
-    hold i = i + 1
+    i = i + 1
 }
 
-// Arrays
 hold nums = [10, 20, 30, 40]
 show nums[0]
 show nums[2]
+push(nums, 50)
+show list_len(nums)
 
-// Structs
 make struct Point {
     x, y
 }
