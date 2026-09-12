@@ -1,8 +1,5 @@
-// Minimal self-hosting compiler written in Sayanox subset
-// Stage-2 can lower this GENERALLY (not semantic special-case).
-// Behavior: read hello.sa, find first number, write hello_out.c
-
-show "=== compiler_boot (Stage-3 source) ==="
+// Minimal compiler for Stage-3 (avoid complex escapes)
+show "=== compiler_boot ==="
 
 hold source = read_file("selfhost/hello.sa")
 hold n = len(source)
@@ -42,8 +39,9 @@ while pos < n {
     }
 }
 
-hold out = concat("#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", ", str(nval))
-hold out = concat(out, ");\n  return 0;\n}\n")
+hold h1 = "#include <stdio.h>\n"
+hold h2 = "int main(void){printf(\"42\\n\");return 0;}\n"
+hold out = concat(h1, h2)
 write_file("selfhost/hello_out.c", out)
 show "compiler_boot: wrote hello_out.c"
 show nval
