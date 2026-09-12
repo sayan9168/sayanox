@@ -1,0 +1,10 @@
+// Struct field syntax demo for Stage-2
+struct Point {
+    x,
+    y
+}
+
+hold p = Point { 3, 4 }
+show p.x
+show p.y
+show p.x + p.y

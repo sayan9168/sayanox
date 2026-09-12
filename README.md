@@ -2,15 +2,18 @@
 
 **Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-## v0.3.23 — Phase A (self-host loop)
+## v0.3.24
+
+- Stage-2 **always generic** (including `compiler.sa`)
+- `hold` reassignment (no double declare)
+- **struct** `Point { x, y }` + `p.x` + `Point { 1, 2 }`
 
 ```bash
-cargo build --release
-./selfhost/bootstrap_stage3.sh
+gcc -o selfhost/stage2 selfhost/stage2_template.c
+./selfhost/stage2 selfhost/compiler.sa selfhost/compiler_generic_out.c
+gcc -o selfhost/compiler_generic selfhost/compiler_generic_out.c
+./selfhost/compiler_generic
 ```
-
-This builds Stage-2, **generically** compiles `compiler_boot.sa` → Stage-3 binary,
-then Stage-3 compiles `hello.sa` (proof of self-host loop without Rust for that step).
 
 ## License
 

@@ -1,25 +1,25 @@
-# Phase A — Self-host
+# Stage-2 v0.3.24
 
-## Stage-3 loop
+## Always generic
+
+`compiler.sa` is lowered by the **same** generic path as any `.sa` file (no semantic shortcut).
 
 ```bash
+./selfhost/bootstrap_generic_compiler.sh
 ./selfhost/bootstrap_stage3.sh
 ```
 
-1. `stage2_template.c` → `stage2` binary  
-2. **Generic** lower `compiler_boot.sa` → `stage3.c`  
-3. `stage3` binary (no Rust)  
-4. `stage3` reads `hello.sa` → `hello_out.c`  
+## Struct syntax
 
-## Files
+```sa
+struct Point {
+    x,
+    y
+}
+hold p = Point { 3, 4 }
+show p.x
+```
 
-| File | Role |
-|------|------|
-| `compiler_boot.sa` | Minimal compiler in Sayanox subset |
-| `stage2_template.c` | Generic Sayanox→C |
-| `bootstrap_stage3.sh` | Proves the loop |
+## hold reassignment
 
-## Still open in Phase A
-
-- Full `compiler.sa` (large) via **generic** only (today: semantic path + `compiler_boot.sa` generic)
-- Richer struct field syntax in Stage-2
+`hold pos = pos + 1` emits assignment if `pos` already declared.
