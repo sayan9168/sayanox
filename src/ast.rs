@@ -8,7 +8,6 @@ pub enum Stmt {
     Make { name: String, params: Vec<String>, body: Vec<Stmt> },
     Give(Expr),
     When { condition: Expr, then_body: Vec<Stmt>, otherwise_body: Option<Vec<Stmt>> },
-    While { condition: Expr, then_body: Vec<Stmt>, otherwise_body: Option<Vec<Stmt>> },
     While { condition: Expr, body: Vec<Stmt> },
     StructDef { name: String, fields: Vec<String> },
     Expr(Expr),
