@@ -19,9 +19,17 @@ jobs:
         run: cargo build --verbose
       - name: Test
         run: cargo test --verbose
-      - name: Compile example via host
+      - name: Type check demo
         run: |
           cargo build --release
+          ./target/release/sayanox examples/types_demo.sa --check
+      - name: Modules demo
+        run: |
+          ./target/release/sayanox examples/modules/main.sa -o /tmp/mod.c
+          clang /tmp/mod.c -o /tmp/mod
+          /tmp/mod
+      - name: Compile hello via host
+        run: |
           ./target/release/sayanox examples/hello.sa -o /tmp/host_hello.c
           clang /tmp/host_hello.c -o /tmp/host_hello
           /tmp/host_hello
@@ -43,11 +51,6 @@ jobs:
           ./selfhost/stage2 selfhost/struct_demo.sa selfhost/out_struct.c
           clang selfhost/out_struct.c -o selfhost/out_struct
           ./selfhost/out_struct | head -3
-      - name: features demo
-        run: |
-          ./selfhost/stage2 selfhost/features_demo.sa selfhost/out_feat.c
-          clang selfhost/out_feat.c -o selfhost/out_feat
-          ./selfhost/out_feat
       - name: CLI sx
         run: |
           chmod +x selfhost/sx

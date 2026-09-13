@@ -2,56 +2,28 @@
 
 **Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-## v0.3.30
+## v0.3.31
 
-| Feature | Status |
-| --- | --- |
-| Modules (`use "file.sa"`) | Yes |
-| Light type checker | Yes (`--check`) |
-| Cranelift AOT | Stronger link path (`--features native`) |
-| Package manager | `tools/sxpkg` |
-
-## Quick start
+- **Diagnostics**: snippet + caret on lexer/parser paths; richer hints
+- **Deeper types**: arity checks, struct fields, `give` scope, when/while conditions
+- **Modules**: `use "file.sa"` + `export make` / `export hold` / `export struct`
 
 ```bash
 cargo build --release
-./target/release/sayanox examples/hello.sa -o hello.c
-clang hello.c -o hello && ./hello
-
-# Multi-file
-./target/release/sayanox examples/modules/main.sa -o /tmp/mod.c
-
-# Type check
+./target/release/sayanox examples/modules/main.sa -o /tmp/m.c && clang /tmp/m.c -o /tmp/m && /tmp/m
 ./target/release/sayanox examples/types_demo.sa --check
-
-# Stage-2 CLI (no Rust needed at runtime)
-./selfhost/sx selfhost/hello.sa --run
+cargo test
 ```
 
-## Modules
+### Export example
 
 ```sayanox
+// math.sa
+export make double(n) { give n * 2 }
+
+// main.sa
 use "math.sa"
-hold x = double(21)
-show x
-```
-
-## Package manager
-
-```bash
-chmod +x tools/sxpkg
-./tools/sxpkg init
-# edit Sayanox.toml [deps]
-./tools/sxpkg install
-./tools/sxpkg list
-```
-
-## Native AOT (Cranelift)
-
-```bash
-cargo build --release --features native
-./target/release/sayanox examples/hello.sa --native -o hello_aot
-./hello_aot
+show double(21)
 ```
 
 ## License
