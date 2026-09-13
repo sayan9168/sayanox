@@ -1,34 +1,32 @@
 #!/usr/bin/env bash
-# Deep self-host + Step1/2 in .sa
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-
 echo "=== Sayanox deep self-host ==="
 CC=clang; command -v clang >/dev/null 2>&1 || CC=gcc
-chmod +x selfhost/restore_stage2.sh selfhost/sx selfhost/step1_lexer.sh selfhost/step2_parser.sh 2>/dev/null || true
+chmod +x selfhost/restore_stage2.sh selfhost/sx selfhost/step1_lexer.sh selfhost/step2_parser.sh selfhost/step3_codegen.sh 2>/dev/null || true
 
-echo "[1/9] Stage-2 build"
+echo "[1/10] Stage-2"
 ./selfhost/restore_stage2.sh
 
-echo "[2/9] hello.sa"
+echo "[2/10] hello"
 ./selfhost/stage2 selfhost/hello.sa selfhost/out_hello.c
 $CC -o selfhost/out_hello selfhost/out_hello.c
 test "$(./selfhost/out_hello)" = "42"
 echo "  OK"
 
-echo "[3/9] sx CLI"
+echo "[3/10] sx"
 ./selfhost/sx selfhost/hello.sa -o selfhost/cli_hello --run >/dev/null
 test "$(./selfhost/cli_hello)" = "42"
 echo "  OK"
 
-echo "[4/9] modules"
+echo "[4/10] modules"
 ./selfhost/stage2 selfhost/modules/main.sa selfhost/out_mod.c
 $CC -o selfhost/out_mod selfhost/out_mod.c
 test "$(./selfhost/out_mod)" = "42"
 echo "  OK"
 
-echo "[5/9] Stage-3"
+echo "[5/10] Stage-3"
 ./selfhost/stage2 selfhost/compiler_boot.sa selfhost/stage3.c
 $CC -o selfhost/stage3 selfhost/stage3.c
 ./selfhost/stage3 >/dev/null
@@ -36,7 +34,7 @@ $CC -o selfhost/hello_out selfhost/hello_out.c
 test "$(./selfhost/hello_out)" = "42"
 echo "  OK"
 
-echo "[6/9] compiler.sa"
+echo "[6/10] compiler.sa"
 if [[ -f selfhost/compiler.sa ]]; then
   ./selfhost/stage2 selfhost/compiler.sa selfhost/compiler_out.c
   $CC -o selfhost/compiler_bin selfhost/compiler_out.c
@@ -44,19 +42,27 @@ if [[ -f selfhost/compiler.sa ]]; then
   echo "  OK"
 fi
 
-echo "[7/9] lexer.sa (Step 1)"
+echo "[7/10] lexer.sa"
 ./selfhost/stage2 selfhost/lexer.sa selfhost/lexer_out.c
 $CC -o selfhost/lexer_bin selfhost/lexer_out.c
 ./selfhost/lexer_bin | grep -q NUMBER
 echo "  OK"
 
-echo "[8/9] parser.sa (Step 2)"
+echo "[8/10] parser.sa"
 ./selfhost/stage2 selfhost/parser.sa selfhost/parser_out.c
 $CC -o selfhost/parser_bin selfhost/parser_out.c
 ./selfhost/parser_bin | grep -q "parse OK"
 echo "  OK"
 
-echo "[9/9] struct"
+echo "[9/10] codegen.sa (Step 3)"
+./selfhost/stage2 selfhost/codegen.sa selfhost/codegen_driver.c
+$CC -o selfhost/codegen_bin selfhost/codegen_driver.c
+./selfhost/codegen_bin | grep -q "codegen OK"
+$CC -o selfhost/codegen_run selfhost/codegen_emit.c
+test "$(./selfhost/codegen_run)" = "42"
+echo "  OK"
+
+echo "[10/10] struct"
 if [[ -f selfhost/struct_demo.sa ]]; then
   ./selfhost/stage2 selfhost/struct_demo.sa selfhost/out_struct.c
   $CC -o selfhost/out_struct selfhost/out_struct.c
@@ -66,5 +72,5 @@ fi
 
 echo ""
 echo "=== DEEP SELF-HOST COMPLETE ==="
-echo "Steps 1-2 done in .sa (lexer + parser)"
-echo "Next: codegen.sa"
+echo "Steps 1-3 done in .sa: lexer + parser + codegen"
+echo "Next: expand grammar / self-compile loop"
