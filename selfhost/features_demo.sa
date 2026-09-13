@@ -1,0 +1,26 @@
+// Feature demo: stdlib strings, %, bare assign, lists
+show "=== features ==="
+
+hold name = "  Sayanox  "
+hold clean = trim(name)
+show upper(clean)
+show lower(clean)
+show contains(clean, "yan")
+show starts_with(clean, "Say")
+show ends_with(clean, "nox")
+
+hold n = 10
+show n % 3
+
+hold nums = [1, 2, 3]
+push(nums, 4)
+show list_len(nums)
+show list_get(nums, 0)
+
+hold i = 0
+while i < 3 {
+    show i
+    i = i + 1
+}
+
+show "=== done ==="

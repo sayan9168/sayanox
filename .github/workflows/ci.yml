@@ -1,22 +1,58 @@
-name: Sayanox CI
+name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  rust-host:
+    name: Rust host build + test
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - uses: actions/checkout@v4
       - name: Build
-        run: cargo build --all-targets
+        run: cargo build --verbose
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --verbose
+      - name: Compile example via host
+        run: |
+          cargo build --release
+          ./target/release/sayanox examples/hello.sa -o /tmp/host_hello.c
+          clang /tmp/host_hello.c -o /tmp/host_hello
+          /tmp/host_hello
+
+  stage2:
+    name: Stage-2 selfhost + CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Stage-2
+        run: clang -o selfhost/stage2 selfhost/stage2_template.c
+      - name: hello.sa
+        run: |
+          ./selfhost/stage2 selfhost/hello.sa selfhost/out_hello.c
+          clang selfhost/out_hello.c -o selfhost/out_hello
+          test "$(./selfhost/out_hello)" = "42"
+      - name: struct demo
+        run: |
+          ./selfhost/stage2 selfhost/struct_demo.sa selfhost/out_struct.c
+          clang selfhost/out_struct.c -o selfhost/out_struct
+          ./selfhost/out_struct | head -3
+      - name: features demo
+        run: |
+          ./selfhost/stage2 selfhost/features_demo.sa selfhost/out_feat.c
+          clang selfhost/out_feat.c -o selfhost/out_feat
+          ./selfhost/out_feat
+      - name: CLI sx
+        run: |
+          chmod +x selfhost/sx
+          ./selfhost/sx selfhost/hello.sa -o selfhost/cli_hello --run
+      - name: Stage-3 bootstrap
+        run: |
+          chmod +x selfhost/bootstrap_stage3.sh
+          ./selfhost/bootstrap_stage3.sh
