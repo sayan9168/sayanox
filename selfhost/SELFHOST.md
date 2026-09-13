@@ -1,29 +1,31 @@
-# Sayanox self-hosting
+# Deep self-host (done)
 
-## Pipeline
-
-```text
-stage2_template.c  --clang-->  stage2 binary
-      |
-      +-- compiles any .sa subset --> C --> clang --> native binary
-      |
-      +-- compiles compiler_boot.sa --> stage3 --> writes hello_out.c --> 42
-      |
-      +-- CLI: ./selfhost/sx file.sa [--run]
-```
-
-## Prove it
+## One command
 
 ```bash
-chmod +x selfhost/bootstrap_selfhost.sh
 ./selfhost/bootstrap_selfhost.sh
 ```
 
-## What “full self-host” means here
+This will:
+1. Download + complete Stage-2 template (English, use, modulo)
+2. Build `selfhost/stage2`
+3. Prove hello, sx CLI, modules, Stage-3, compiler.sa path
 
-1. **Stage-2** is the production self-host compiler for the Sayanox subset (no Rust needed to compile `.sa`).
-2. **sx** is the path-based CLI over Stage-2.
-3. **Stage-3** is a Sayanox program (`compiler_boot.sa`) compiled by Stage-2 that itself emits C.
-4. Optional: `use "file.sa"` when `expand_uses` is present in `stage2_template.c`.
+After that, **only** use:
 
-Rust host remains available for diagnostics / types / export modules (`cargo build --release`).
+```bash
+./selfhost/sx any_file.sa --run
+```
+
+No further manual steps required for normal compiling.
+
+## What is self-hosted
+
+| Layer | Role |
+|-------|------|
+| Stage-2 (`stage2_template.c` completed) | Production `.sa` -> C compiler |
+| `sx` | CLI over Stage-2 for any path |
+| Stage-3 (`compiler_boot.sa`) | Sayanox program that emits C |
+| `compiler.sa` | Stage-1 style self-host driver |
+
+Rust host is optional (richer types / export / errors).
