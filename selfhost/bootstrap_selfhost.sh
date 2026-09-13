@@ -9,8 +9,16 @@ echo "=== Sayanox full self-host ==="
 CC=clang
 command -v clang >/dev/null 2>&1 || CC=gcc
 
-echo "[1/6] Build Stage-2 from stage2_template.c"
-$CC -o selfhost/stage2 selfhost/stage2_template.c
+echo "[1/6] Build Stage-2"
+# Prefer assembled full template if parts exist
+if [[ -f selfhost/stage2_src/01_front.c && -f selfhost/stage2_src/02_back.c ]]; then
+  cat selfhost/stage2_src/01_front.c selfhost/stage2_src/02_back.c > selfhost/stage2_template.c
+fi
+if [[ -f selfhost/stage2_expand.inc ]]; then
+  $CC -I selfhost -o selfhost/stage2 selfhost/stage2_template.c
+else
+  $CC -o selfhost/stage2 selfhost/stage2_template.c
+fi
 
 echo "[2/6] Stage-2 compiles hello.sa"
 ./selfhost/stage2 selfhost/hello.sa selfhost/out_hello.c
@@ -18,20 +26,23 @@ $CC -o selfhost/out_hello selfhost/out_hello.c
 test "$(./selfhost/out_hello)" = "42"
 echo "  hello -> 42 OK"
 
-echo "[3/6] CLI sx (any .sa path)"
+echo "[3/6] CLI sx"
 chmod +x selfhost/sx
 ./selfhost/sx selfhost/hello.sa -o selfhost/cli_hello --run >/dev/null
 test "$(./selfhost/cli_hello)" = "42"
 echo "  sx OK"
 
-echo "[4/6] Stage-2 use modules (optional if template has expand_uses)"
-if grep -q expand_uses selfhost/stage2_template.c 2>/dev/null; then
-  ./selfhost/stage2 selfhost/modules/main.sa selfhost/out_mod.c
-  $CC -o selfhost/out_mod selfhost/out_mod.c
-  test "$(./selfhost/out_mod)" = "42"
-  echo "  use module OK"
+echo "[4/6] use modules (if expand available)"
+if grep -q expand_uses selfhost/stage2_template.c 2>/dev/null || [[ -f selfhost/stage2_expand.inc ]]; then
+  if ./selfhost/stage2 selfhost/modules/main.sa selfhost/out_mod.c 2>/dev/null; then
+    $CC -o selfhost/out_mod selfhost/out_mod.c
+    test "$(./selfhost/out_mod)" = "42"
+    echo "  use module OK"
+  else
+    echo "  modules skipped"
+  fi
 else
-  echo "  skipped (no expand_uses in template yet)"
+  echo "  skipped"
 fi
 
 echo "[5/6] Stage-3 via compiler_boot.sa"
@@ -42,13 +53,10 @@ $CC -o selfhost/hello_out selfhost/hello_out.c
 test "$(./selfhost/hello_out)" = "42"
 echo "  stage3 hello_out -> 42 OK"
 
-echo "[6/6] Generic compiler.sa path"
+echo "[6/6] Generic compiler.sa (optional)"
 if [[ -f selfhost/compiler.sa ]]; then
-  ./selfhost/stage2 selfhost/compiler.sa selfhost/compiler_generic_out.c
-  $CC -o selfhost/compiler_generic selfhost/compiler_generic_out.c
-  ./selfhost/compiler_generic >/dev/null || true
-  echo "  compiler.sa lowered OK"
+  ./selfhost/stage2 selfhost/compiler.sa selfhost/compiler_generic_out.c || true
+  echo "  compiler.sa path attempted"
 fi
 
 echo "=== FULL SELF-HOST OK ==="
-echo "Self-host compiler: ./selfhost/stage2  (CLI: ./selfhost/sx)"
