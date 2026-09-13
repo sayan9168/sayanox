@@ -3,9 +3,18 @@
 #[derive(Debug, Clone)]
 pub enum Stmt {
     Show(Expr),
-    Hold { name: String, value: Expr },
+    Hold {
+        name: String,
+        value: Expr,
+        exported: bool,
+    },
     Assign { name: String, value: Expr },
-    Make { name: String, params: Vec<String>, body: Vec<Stmt> },
+    Make {
+        name: String,
+        params: Vec<String>,
+        body: Vec<Stmt>,
+        exported: bool,
+    },
     Give(Expr),
     When {
         condition: Expr,
@@ -13,7 +22,11 @@ pub enum Stmt {
         otherwise_body: Option<Vec<Stmt>>,
     },
     While { condition: Expr, body: Vec<Stmt> },
-    StructDef { name: String, fields: Vec<String> },
+    StructDef {
+        name: String,
+        fields: Vec<String>,
+        exported: bool,
+    },
     /// Import another .sa file (resolved relative to the current file).
     Use { path: String },
     Expr(Expr),

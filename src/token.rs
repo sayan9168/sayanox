@@ -11,6 +11,7 @@ pub enum TokenKind {
     While,
     Struct,
     Use,
+    Export,
 
     Ident(String),
     Number(f64),
