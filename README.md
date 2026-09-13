@@ -2,32 +2,56 @@
 
 **Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-## v0.3.29
+## v0.3.30
 
-New in this release:
+| Feature | Status |
+| --- | --- |
+| Modules (`use "file.sa"`) | Yes |
+| Light type checker | Yes (`--check`) |
+| Cranelift AOT | Stronger link path (`--features native`) |
+| Package manager | `tools/sxpkg` |
 
-- String stdlib: `contains`, `starts_with`, `ends_with`, `upper`, `lower`, `trim`
-- Modulo `%`
-- Bare assignment `i = i + 1` (after `hold`)
-- Type-safe `hold` reassignment (number/string/list mismatch errors)
-- GitHub Actions CI (Rust host + Stage-2 + Stage-3)
-
-## Quick start (Termux / Linux)
+## Quick start
 
 ```bash
-git clone https://github.com/sayan9168/sayanox.git
-cd sayanox
-clang -o selfhost/stage2 selfhost/stage2_template.c
-chmod +x selfhost/sx
+cargo build --release
+./target/release/sayanox examples/hello.sa -o hello.c
+clang hello.c -o hello && ./hello
+
+# Multi-file
+./target/release/sayanox examples/modules/main.sa -o /tmp/mod.c
+
+# Type check
+./target/release/sayanox examples/types_demo.sa --check
+
+# Stage-2 CLI (no Rust needed at runtime)
 ./selfhost/sx selfhost/hello.sa --run
-./selfhost/sx selfhost/features_demo.sa --run
 ```
 
-## Stage-3 / generic compiler
+## Modules
+
+```sayanox
+use "math.sa"
+hold x = double(21)
+show x
+```
+
+## Package manager
 
 ```bash
-./selfhost/bootstrap_stage3.sh
-./selfhost/bootstrap_generic_compiler.sh
+chmod +x tools/sxpkg
+./tools/sxpkg init
+# edit Sayanox.toml [deps]
+./tools/sxpkg install
+./tools/sxpkg list
+```
+
+## Native AOT (Cranelift)
+
+```bash
+cargo build --release --features native
+./target/release/sayanox examples/hello.sa --native -o hello_aot
+./hello_aot
 ```
 
 ## License

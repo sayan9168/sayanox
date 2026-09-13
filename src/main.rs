@@ -1,21 +1,22 @@
 //! Sayanox Compiler - Entry point
-//! An original easy programming language with its own compiler.
 
 mod ast;
 mod codegen;
 mod diagnostic;
 mod lexer;
+mod module;
 mod native;
 mod parser;
 mod stdlib;
 mod token;
+mod types;
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-const VERSION: &str = "0.3.28";
+const VERSION: &str = "0.3.30";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -25,9 +26,11 @@ fn main() {
         eprintln!("Usage: sayanox <input.sa> [-o output]");
         eprintln!("       sayanox <input.sa> --tokens");
         eprintln!("       sayanox <input.sa> --ast");
+        eprintln!("       sayanox <input.sa> --check          (type check only)");
         eprintln!("       sayanox <input.sa> --jit");
         eprintln!("       sayanox <input.sa> --native -o bin");
-        eprintln!("\nBuilt-in library: {} helpers", stdlib::BUILTINS.len());
+        eprintln!("\nModules:  use \"other.sa\"");
+        eprintln!("Packages: tools/sxpkg init | install | list");
         process::exit(1);
     }
 
@@ -35,8 +38,10 @@ fn main() {
     let mut output: Option<PathBuf> = None;
     let mut show_tokens = false;
     let mut show_ast = false;
+    let mut check_only = false;
     let mut use_jit = false;
     let mut use_native = false;
+    let mut skip_types = false;
 
     let mut i = 2;
     while i < args.len() {
@@ -50,51 +55,89 @@ fn main() {
                     process::exit(1);
                 }
             }
-            "--tokens" => { show_tokens = true; i += 1; }
-            "--ast" => { show_ast = true; i += 1; }
-            "--jit" => { use_jit = true; i += 1; }
-            "--native" => { use_native = true; i += 1; }
+            "--tokens" => {
+                show_tokens = true;
+                i += 1;
+            }
+            "--ast" => {
+                show_ast = true;
+                i += 1;
+            }
+            "--check" => {
+                check_only = true;
+                i += 1;
+            }
+            "--no-check" => {
+                skip_types = true;
+                i += 1;
+            }
+            "--jit" => {
+                use_jit = true;
+                i += 1;
+            }
+            "--native" => {
+                use_native = true;
+                i += 1;
+            }
             _ => {
                 eprintln!("error: unknown argument `{}`", args[i]);
-                eprintln!("hint: run `sayanox` without arguments to see usage");
                 process::exit(1);
             }
         }
     }
 
-    let source = match fs::read_to_string(&input) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: failed to read {}: {}", input.display(), e);
-            process::exit(1);
-        }
-    };
-
-    let mut lexer = lexer::Lexer::new(&source);
-    let tokens = match lexer.tokenize() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("{}", diagnostic::render_error("lexer", &e, &source, &input));
-            process::exit(1);
-        }
-    };
-
-    if show_tokens {
-        for t in &tokens { println!("{:?}", t); }
-        return;
-    }
-
-    let mut parser = parser::Parser::new(tokens);
-    let program = match parser.parse() {
+    // Multi-file: resolve `use` imports
+    let program = match module::load_program(&input) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{}", diagnostic::render_error("parser", &e, &source, &input));
-            process::exit(1);
+            // Fallback: single-file path if module loader fails on non-use programs
+            let source = match fs::read_to_string(&input) {
+                Ok(s) => s,
+                Err(err) => {
+                    eprintln!("error: {}", e);
+                    eprintln!("also: {}", err);
+                    process::exit(1);
+                }
+            };
+            let mut lexer = lexer::Lexer::new(&source);
+            let tokens = match lexer.tokenize() {
+                Ok(t) => t,
+                Err(err) => {
+                    eprintln!("{}", diagnostic::render_error("lexer", &err, &source, &input));
+                    process::exit(1);
+                }
+            };
+            if show_tokens {
+                for t in &tokens {
+                    println!("{:?}", t);
+                }
+                return;
+            }
+            let mut parser = parser::Parser::new(tokens);
+            match parser.parse() {
+                Ok(p) => p,
+                Err(err) => {
+                    eprintln!("{}", diagnostic::render_error("parser", &err, &source, &input));
+                    process::exit(1);
+                }
+            }
         }
     };
 
     if show_ast {
         println!("{:#?}", program);
+        return;
+    }
+
+    if !skip_types {
+        if let Err(e) = types::check(&program) {
+            eprintln!("error[types]: {}", e);
+            process::exit(1);
+        }
+    }
+
+    if check_only {
+        println!("OK type check passed ({})", input.display());
         return;
     }
 
@@ -110,12 +153,19 @@ fn main() {
     }
 
     if use_native {
-        let out = output.unwrap_or_else(|| {
-            let mut p = input.clone();
-            p.set_extension("");
-            p
-        }).to_string_lossy().to_string();
-        let out = if out.is_empty() || out == "." { "a.out".to_string() } else { out };
+        let out = output
+            .unwrap_or_else(|| {
+                let mut p = input.clone();
+                p.set_extension("");
+                p
+            })
+            .to_string_lossy()
+            .to_string();
+        let out = if out.is_empty() || out == "." {
+            "a.out".to_string()
+        } else {
+            out
+        };
         match native::compile_native(&program, &out) {
             Ok(()) => {
                 println!("OK AOT native binary -> {}", out);
@@ -143,5 +193,8 @@ fn main() {
     }
 
     println!("OK compiled successfully -> {}", output_path.display());
-    println!("  Next: clang {} -o program && ./program", output_path.display());
+    println!(
+        "  Next: clang {} -o program && ./program",
+        output_path.display()
+    );
 }

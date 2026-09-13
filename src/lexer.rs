@@ -21,17 +21,13 @@ impl Lexer {
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
         let mut tokens = Vec::new();
-
         while !self.is_at_end() {
             self.skip_whitespace_and_comments();
-
             if self.is_at_end() {
                 break;
             }
-
             let start_col = self.column;
             let ch = self.advance();
-
             let kind = match ch {
                 '(' => TokenKind::LParen,
                 ')' => TokenKind::RParen,
@@ -46,6 +42,7 @@ impl Lexer {
                 '-' => TokenKind::Minus,
                 '*' => TokenKind::Star,
                 '/' => TokenKind::Slash,
+                '%' => TokenKind::Percent,
                 '=' => {
                     if self.match_char('=') {
                         TokenKind::EqEq
@@ -84,38 +81,49 @@ impl Lexer {
                     ));
                 }
             };
-
             tokens.push(Token {
                 kind,
                 line: self.line,
                 column: start_col,
             });
         }
-
         tokens.push(Token {
             kind: TokenKind::Eof,
             line: self.line,
             column: self.column,
         });
-
         Ok(tokens)
     }
 
     fn string(&mut self) -> Result<TokenKind, String> {
         let mut value = String::new();
         while !self.is_at_end() && self.peek() != '"' {
+            if self.peek() == '\\' {
+                self.advance();
+                if self.is_at_end() {
+                    break;
+                }
+                let e = self.advance();
+                value.push(match e {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    '"' => '"',
+                    '\\' => '\\',
+                    other => other,
+                });
+                continue;
+            }
             if self.peek() == '\n' {
                 self.line += 1;
                 self.column = 0;
             }
             value.push(self.advance());
         }
-
         if self.is_at_end() {
             return Err(format!("Unterminated string at line {}", self.line));
         }
-
-        self.advance(); // closing "
+        self.advance();
         Ok(TokenKind::String(value))
     }
 
@@ -124,7 +132,6 @@ impl Lexer {
         while !self.is_at_end() && (self.peek().is_ascii_digit() || self.peek() == '.') {
             num.push(self.advance());
         }
-
         num.parse::<f64>()
             .map(TokenKind::Number)
             .map_err(|_| format!("Invalid number '{}' at line {}", num, self.line))
@@ -135,7 +142,6 @@ impl Lexer {
         while !self.is_at_end() && (self.peek().is_alphanumeric() || self.peek() == '_') {
             ident.push(self.advance());
         }
-
         match ident.as_str() {
             "show" => TokenKind::Show,
             "hold" => TokenKind::Hold,
@@ -145,6 +151,7 @@ impl Lexer {
             "otherwise" => TokenKind::Otherwise,
             "while" => TokenKind::While,
             "struct" => TokenKind::Struct,
+            "use" => TokenKind::Use,
             _ => TokenKind::Ident(ident),
         }
     }
@@ -154,7 +161,6 @@ impl Lexer {
             if self.is_at_end() {
                 break;
             }
-
             match self.peek() {
                 ' ' | '\t' | '\r' => {
                     self.advance();
