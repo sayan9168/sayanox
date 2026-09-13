@@ -1,194 +1,134 @@
-// ============================================================
-// Sayanox Self-Hosting — Phase 3
-// Fuller Parser that builds AST nodes (parallel arrays)
-// ============================================================
+// Sayanox-written parser (Step 2)
+// Parses: show <number>  from selfhost/hello.sa
+// Stage-2 rule: make() cannot see outer holds — pure helpers only; parse loop is flat.
+//
+// Build:
+//   ./selfhost/step2_parser.sh
+// Expected: AST Show / 42 / parse OK
 
-show "=== Sayanox Self-Hosted Parser Phase 3 ==="
+show "=== Sayanox parser.sa ==="
 
-hold TOK_EOF    = 0
-hold TOK_SHOW   = 1
-hold TOK_HOLD   = 2
-hold TOK_MAKE   = 3
-hold TOK_GIVE   = 4
-hold TOK_WHEN   = 5
-hold TOK_WHILE  = 7
-hold TOK_IDENT  = 10
-hold TOK_NUMBER = 11
-hold TOK_PLUS   = 20
-hold TOK_MINUS  = 21
-hold TOK_STAR   = 22
-hold TOK_SLASH  = 23
-hold TOK_ASSIGN = 24
-hold TOK_LPAREN = 30
-hold TOK_RPAREN = 31
-hold TOK_LBRACE = 32
-hold TOK_RBRACE = 33
+hold path = "selfhost/hello.sa"
+hold source = read_file(path)
+hold n = len(source)
+hold pos = 0
+hold ch = 0
+hold ch2 = 0
+hold val = 0
+hold scanning = 0
+hold tok_val = 0
+hold parse_ok = 0
+hold ast_number = 0
+hold phase = 0
+// phase: 0=want show, 1=want number, 2=ok, 3=fail
 
-hold ST_SHOW   = 1
-hold ST_HOLD   = 2
-hold ST_MAKE   = 3
-hold ST_GIVE   = 4
-hold ST_WHEN   = 5
-hold ST_WHILE  = 6
-hold ST_EXPR   = 7
-hold EX_NUMBER = 10
-hold EX_IDENT  = 11
-hold EX_BINARY = 12
-hold EX_CALL   = 13
-hold OP_ADD = 20
-hold OP_SUB = 21
-hold OP_MUL = 22
-hold OP_DIV = 23
-
-hold tokens = []
-push(tokens, TOK_SHOW)
-push(tokens, TOK_NUMBER)
-push(tokens, TOK_EOF)
-hold tok_pos = 0
-hold tok_n = len(tokens)
-
-hold num_vals = []
-push(num_vals, 42)
-hold num_pos = 0
-
-hold kind  = []
-hold left  = []
-hold right = []
-hold value = []
-hold ast_count = 0
-
-make ast_new(k, l, r, v) {
-    push(kind, k)
-    push(left, l)
-    push(right, r)
-    push(value, v)
-    hold id = ast_count
-    hold ast_count = ast_count + 1
-    give id
+make is_digit(c) {
+    when c >= 48 {
+        when c <= 57 { give 1 } otherwise { give 0 }
+    } otherwise { give 0 }
 }
 
-make peek() {
-    when tok_pos < tok_n {
-        give tokens[tok_pos]
-    } otherwise {
-        give TOK_EOF
+make is_alpha(c) {
+    when c == 95 { give 1 } otherwise {
+        when c >= 65 {
+            when c <= 90 { give 1 } otherwise {
+                when c >= 97 {
+                    when c <= 122 { give 1 } otherwise { give 0 }
+                } otherwise { give 0 }
+            }
+        } otherwise { give 0 }
     }
 }
 
-make advance() {
-    when tok_pos < tok_n {
-        hold tok_pos = tok_pos + 1
-    } otherwise {
-        hold tok_pos = tok_pos
-    }
-    give 0
-}
-
-make parse_primary() {
-    hold t = peek()
-    when t == TOK_NUMBER {
-        hold v = num_vals[num_pos]
-        hold num_pos = num_pos + 1
-        advance()
-        give ast_new(EX_NUMBER, -1, -1, v)
-    } otherwise {
-        when t == TOK_IDENT {
-            advance()
-            give ast_new(EX_IDENT, -1, -1, 0)
-        } otherwise {
-            show "parse error: expected primary"
-            give -1
+make is_space(c) {
+    when c == 32 { give 1 } otherwise {
+        when c == 9 { give 1 } otherwise {
+            when c == 10 { give 1 } otherwise {
+                when c == 13 { give 1 } otherwise { give 0 }
+            }
         }
     }
 }
 
-make parse_expression() {
-    give parse_primary()
-}
+hold phase = 0
+hold parse_ok = 0
+hold ast_number = 0
 
-make parse_statement() {
-    hold t = peek()
-    when t == TOK_SHOW {
-        advance()
-        hold e = parse_expression()
-        give ast_new(ST_SHOW, e, -1, 0)
+while phase < 2 {
+    when pos >= n {
+        hold phase = 3
     } otherwise {
-        when t == TOK_HOLD {
-            advance()
-            hold e = parse_expression()
-            give ast_new(ST_HOLD, e, -1, 0)
+        hold ch = source[pos]
+        when is_space(ch) == 1 {
+            hold pos = pos + 1
         } otherwise {
-            when t == TOK_GIVE {
-                advance()
-                hold e = parse_expression()
-                give ast_new(ST_GIVE, e, -1, 0)
-            } otherwise {
-                when t == TOK_MAKE {
-                    advance()
-                    show "parse: make (body not fully expanded in Phase 3)"
-                    give ast_new(ST_MAKE, -1, -1, 0)
-                } otherwise {
-                    when t == TOK_WHEN {
-                        advance()
-                        show "parse: when (condition/body Phase 3 stub)"
-                        give ast_new(ST_WHEN, -1, -1, 0)
-                    } otherwise {
-                        when t == TOK_WHILE {
-                            advance()
-                            show "parse: while (stub)"
-                            give ast_new(ST_WHILE, -1, -1, 0)
+            when is_digit(ch) == 1 {
+                hold val = 0
+                hold scanning = 1
+                while scanning == 1 {
+                    when pos < n {
+                        hold ch2 = source[pos]
+                        when is_digit(ch2) == 1 {
+                            hold val = val * 10 + (ch2 - 48)
+                            hold pos = pos + 1
                         } otherwise {
-                            when t == TOK_EOF {
-                                give -1
+                            hold scanning = 0
+                        }
+                    } otherwise {
+                        hold scanning = 0
+                    }
+                }
+                when phase == 1 {
+                    hold ast_number = val
+                    hold phase = 2
+                    hold parse_ok = 1
+                } otherwise {
+                    hold phase = 3
+                }
+            } otherwise {
+                when is_alpha(ch) == 1 {
+                    hold tok_val = ch
+                    hold scanning = 1
+                    while scanning == 1 {
+                        when pos < n {
+                            hold ch2 = source[pos]
+                            when is_alpha(ch2) == 1 {
+                                hold pos = pos + 1
                             } otherwise {
-                                show "parse error: unexpected token"
-                                advance()
-                                give -1
+                                when is_digit(ch2) == 1 {
+                                    hold pos = pos + 1
+                                } otherwise {
+                                    hold scanning = 0
+                                }
                             }
+                        } otherwise {
+                            hold scanning = 0
                         }
                     }
+                    when phase == 0 {
+                        when tok_val == 115 {
+                            hold phase = 1
+                        } otherwise {
+                            hold phase = 3
+                        }
+                    } otherwise {
+                        hold phase = 3
+                    }
+                } otherwise {
+                    hold pos = pos + 1
+                    hold phase = 3
                 }
             }
         }
     }
 }
 
-hold stmts = []
-show "Parsing..."
-while tok_pos < tok_n {
-    hold t = peek()
-    when t == TOK_EOF {
-        hold tok_pos = tok_n
-    } otherwise {
-        hold node = parse_statement()
-        when node >= 0 {
-            push(stmts, node)
-        } otherwise {
-            hold tok_pos = tok_n
-        }
-    }
-}
-
-show "Statements parsed:"
-show len(stmts)
-show "AST node count:"
-show ast_count
-
-when len(stmts) > 0 {
-    hold root = stmts[0]
-    show "First stmt kind (1=SHOW):"
-    show kind[root]
-    when left[root] >= 0 {
-        hold child = left[root]
-        show "Child expr kind (10=NUMBER):"
-        show kind[child]
-        show "Number value:"
-        show value[child]
-    } otherwise {
-        show "No child"
-    }
+when parse_ok == 1 {
+    show "AST Show"
+    show ast_number
+    show "parse OK"
 } otherwise {
-    show "No statements"
+    show "parse FAIL"
 }
 
-show "Self-hosted Parser Phase 3 finished"
+show "=== parser done ==="
