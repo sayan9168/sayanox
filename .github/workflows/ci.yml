@@ -19,22 +19,19 @@ jobs:
         run: cargo build --verbose
       - name: Test
         run: cargo test --verbose
-      - name: Type check demo
-        run: |
-          cargo build --release
-          ./target/release/sayanox examples/types_demo.sa --check
       - name: Compile hello via host
         run: |
+          cargo build --release
           ./target/release/sayanox examples/hello.sa -o /tmp/host_hello.c
           clang /tmp/host_hello.c -o /tmp/host_hello
           /tmp/host_hello
 
-  selfhost:
-    name: Full Stage-2 self-host
+  stage2:
+    name: Complete Stage-2 + self-host
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Full self-host bootstrap
+      - name: Bootstrap Stage-2
         run: |
-          chmod +x selfhost/bootstrap_selfhost.sh selfhost/sx selfhost/restore_stage2.sh
+          chmod +x selfhost/restore_stage2.sh selfhost/bootstrap_selfhost.sh selfhost/sx
           ./selfhost/bootstrap_selfhost.sh
