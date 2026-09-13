@@ -3,14 +3,8 @@
 //! Enable with:
 //!   cargo build --features native --release
 //!
-//! v0.3.9:
-//! - Expression + simple program JIT
-//! - Function / control-flow structure (Phase B)
-//! - Full AOT: emit object file + link with system linker (cc)
-//!
 //! Usage:
 //!   sayanox program.sa --native -o program
-//!   ./program
 
 use crate::ast::Program;
 
@@ -51,7 +45,7 @@ mod backend {
                 Stmt::Show(e) | Stmt::Expr(e) | Stmt::Give(e) if is_numeric_expr(e) => {
                     last = Some(e.clone());
                 }
-                Stmt::Hold { value, .. } if is_numeric_expr(value) => {
+                Stmt::Hold { value, .. } | Stmt::Assign { value, .. } if is_numeric_expr(value) => {
                     last = Some(value.clone());
                 }
                 _ => {}
@@ -92,7 +86,7 @@ mod backend {
         funcs: &HashMap<String, (Vec<String>, Vec<Stmt>)>,
     ) -> Option<f64> {
         match stmt {
-            Stmt::Hold { name, value } => {
+            Stmt::Hold { name, value } | Stmt::Assign { name, value } => {
                 let v = eval_expr(value, vars, funcs)?;
                 vars.insert(name.clone(), v);
                 Some(v)
@@ -105,9 +99,9 @@ mod backend {
             } => {
                 let c = eval_expr(condition, vars, funcs)?;
                 let body = if c != 0.0 {
-                    then_body
+                    then_body.as_slice()
                 } else {
-                    otherwise_body.as_ref()?
+                    otherwise_body.as_ref()?.as_slice()
                 };
                 let mut last = None;
                 for s in body {
@@ -129,7 +123,7 @@ mod backend {
                 }
                 last
             }
-            Stmt::Make { .. } | Stmt::StructDef { .. } => None,
+            Stmt::Make { .. } | Stmt::StructDef { .. } | Stmt::Use { .. } => None,
         }
     }
 
@@ -154,12 +148,54 @@ mod backend {
                         }
                         a / b
                     }
-                    BinOp::Gt => if a > b { 1.0 } else { 0.0 },
-                    BinOp::Lt => if a < b { 1.0 } else { 0.0 },
-                    BinOp::Gte => if a >= b { 1.0 } else { 0.0 },
-                    BinOp::Lte => if a <= b { 1.0 } else { 0.0 },
-                    BinOp::Eq => if (a - b).abs() < f64::EPSILON { 1.0 } else { 0.0 },
-                    BinOp::Neq => if (a - b).abs() >= f64::EPSILON { 1.0 } else { 0.0 },
+                    BinOp::Mod => {
+                        if b == 0.0 {
+                            return None;
+                        }
+                        a % b
+                    }
+                    BinOp::Gt => {
+                        if a > b {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    BinOp::Lt => {
+                        if a < b {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    BinOp::Gte => {
+                        if a >= b {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    BinOp::Lte => {
+                        if a <= b {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    BinOp::Eq => {
+                        if (a - b).abs() < f64::EPSILON {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    BinOp::Neq => {
+                        if (a - b).abs() >= f64::EPSILON {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
                 })
             }
             Expr::Call { name, args } => {
@@ -240,6 +276,14 @@ mod backend {
                     BinOp::Sub => builder.ins().fsub(l, r),
                     BinOp::Mul => builder.ins().fmul(l, r),
                     BinOp::Div => builder.ins().fdiv(l, r),
+                    // f64 modulo via truncating remainder approximation
+                    BinOp::Mod => {
+                        let q = builder.ins().fdiv(l, r);
+                        let qi = builder.ins().fcvt_to_sint(types::I64, q);
+                        let qf = builder.ins().fcvt_from_sint(types::F64, qi);
+                        let prod = builder.ins().fmul(qf, r);
+                        builder.ins().fsub(l, prod)
+                    }
                     BinOp::Gt => cmp_to_f64(builder, FloatCC::GreaterThan, l, r),
                     BinOp::Lt => cmp_to_f64(builder, FloatCC::LessThan, l, r),
                     BinOp::Gte => cmp_to_f64(builder, FloatCC::GreaterThanOrEqual, l, r),
@@ -255,6 +299,32 @@ mod backend {
     fn cmp_to_f64(builder: &mut FunctionBuilder, cc: FloatCC, l: Value, r: Value) -> Value {
         let c = builder.ins().fcmp(cc, l, r);
         builder.ins().fcvt_from_uint(types::F64, c)
+    }
+
+    fn link_object(obj_path: &str, output: &str) -> Result<(), String> {
+        for linker in ["cc", "clang", "gcc"] {
+            let status = Command::new(linker)
+                .args([obj_path, "-o", output, "-lm"])
+                .status();
+            match status {
+                Ok(s) if s.success() => return Ok(()),
+                Ok(s) => {
+                    eprintln!(
+                        "aot: linker `{}` exited with {:?}, trying next...",
+                        linker,
+                        s.code()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("aot: linker `{}` not runnable ({})", linker, e);
+                }
+            }
+        }
+        Err(format!(
+            "All linkers failed (tried cc, clang, gcc). Object left at: {}\n\
+             Install a C toolchain and ensure one of cc/clang/gcc is on PATH.",
+            obj_path
+        ))
     }
 
     /// Full AOT: object file + system linker → native executable.
@@ -313,25 +383,7 @@ mod backend {
         let obj_path = format!("{}.o", output);
         fs::write(&obj_path, &obj_bytes).map_err(|e| e.to_string())?;
 
-        let status = Command::new("cc")
-            .args([&obj_path, "-o", output, "-lm"])
-            .status()
-            .map_err(|e| {
-                format!(
-                    "Failed to run system linker (cc): {}.\n\
-                     Install gcc/clang and ensure `cc` is on PATH.",
-                    e
-                )
-            })?;
-
-        if !status.success() {
-            return Err(format!(
-                "Linker failed with status {:?}. Object left at: {}",
-                status.code(),
-                obj_path
-            ));
-        }
-
+        link_object(&obj_path, output)?;
         let _ = fs::remove_file(&obj_path);
         Ok(())
     }
