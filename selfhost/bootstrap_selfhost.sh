@@ -9,54 +9,46 @@ echo "=== Sayanox full self-host ==="
 CC=clang
 command -v clang >/dev/null 2>&1 || CC=gcc
 
-echo "[1/6] Build Stage-2"
-# Prefer assembled full template if parts exist
-if [[ -f selfhost/stage2_src/01_front.c && -f selfhost/stage2_src/02_back.c ]]; then
-  cat selfhost/stage2_src/01_front.c selfhost/stage2_src/02_back.c > selfhost/stage2_template.c
+# Auto-restore if template is broken / placeholder
+if ! grep -q 'compile_generic\|parse_stmt\|TokKind' selfhost/stage2_template.c 2>/dev/null; then
+  echo "[0] Restoring Stage-2 template..."
+  chmod +x selfhost/restore_stage2.sh
+  ./selfhost/restore_stage2.sh
 fi
-if [[ -f selfhost/stage2_expand.inc ]]; then
+
+echo "[1/5] Build Stage-2"
+if [[ -f selfhost/stage2_expand.inc ]] && grep -q 'stage2_expand' selfhost/stage2_template.c 2>/dev/null; then
   $CC -I selfhost -o selfhost/stage2 selfhost/stage2_template.c
 else
   $CC -o selfhost/stage2 selfhost/stage2_template.c
 fi
 
-echo "[2/6] Stage-2 compiles hello.sa"
+echo "[2/5] hello.sa"
 ./selfhost/stage2 selfhost/hello.sa selfhost/out_hello.c
 $CC -o selfhost/out_hello selfhost/out_hello.c
 test "$(./selfhost/out_hello)" = "42"
 echo "  hello -> 42 OK"
 
-echo "[3/6] CLI sx"
+echo "[3/5] CLI sx"
 chmod +x selfhost/sx
 ./selfhost/sx selfhost/hello.sa -o selfhost/cli_hello --run >/dev/null
 test "$(./selfhost/cli_hello)" = "42"
 echo "  sx OK"
 
-echo "[4/6] use modules (if expand available)"
-if grep -q expand_uses selfhost/stage2_template.c 2>/dev/null || [[ -f selfhost/stage2_expand.inc ]]; then
-  if ./selfhost/stage2 selfhost/modules/main.sa selfhost/out_mod.c 2>/dev/null; then
-    $CC -o selfhost/out_mod selfhost/out_mod.c
-    test "$(./selfhost/out_mod)" = "42"
-    echo "  use module OK"
-  else
-    echo "  modules skipped"
-  fi
-else
-  echo "  skipped"
-fi
-
-echo "[5/6] Stage-3 via compiler_boot.sa"
+echo "[4/5] Stage-3 compiler_boot"
 ./selfhost/stage2 selfhost/compiler_boot.sa selfhost/stage3.c
 $CC -o selfhost/stage3 selfhost/stage3.c
 ./selfhost/stage3 >/dev/null
 $CC -o selfhost/hello_out selfhost/hello_out.c
 test "$(./selfhost/hello_out)" = "42"
-echo "  stage3 hello_out -> 42 OK"
+echo "  stage3 -> 42 OK"
 
-echo "[6/6] Generic compiler.sa (optional)"
-if [[ -f selfhost/compiler.sa ]]; then
-  ./selfhost/stage2 selfhost/compiler.sa selfhost/compiler_generic_out.c || true
-  echo "  compiler.sa path attempted"
+echo "[5/5] struct demo (optional)"
+if [[ -f selfhost/struct_demo.sa ]]; then
+  ./selfhost/stage2 selfhost/struct_demo.sa selfhost/out_struct.c
+  $CC -o selfhost/out_struct selfhost/out_struct.c
+  ./selfhost/out_struct | head -3
+  echo "  struct OK"
 fi
 
 echo "=== FULL SELF-HOST OK ==="

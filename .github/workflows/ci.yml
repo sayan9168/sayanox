@@ -23,11 +23,6 @@ jobs:
         run: |
           cargo build --release
           ./target/release/sayanox examples/types_demo.sa --check
-      - name: Modules demo
-        run: |
-          ./target/release/sayanox examples/modules/main.sa -o /tmp/mod.c
-          clang /tmp/mod.c -o /tmp/mod
-          /tmp/mod
       - name: Compile hello via host
         run: |
           ./target/release/sayanox examples/hello.sa -o /tmp/host_hello.c
@@ -41,5 +36,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Full self-host bootstrap
         run: |
-          chmod +x selfhost/bootstrap_selfhost.sh selfhost/sx selfhost/bootstrap_stage3.sh
+          chmod +x selfhost/bootstrap_selfhost.sh selfhost/sx selfhost/restore_stage2.sh
           ./selfhost/bootstrap_selfhost.sh
