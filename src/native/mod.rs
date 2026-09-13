@@ -1,10 +1,7 @@
-//! Native Code Generation Backend (Cranelift) — Full AOT
+//! Native Code Generation Backend (Cranelift) - Full AOT
 //!
 //! Enable with:
 //!   cargo build --features native --release
-//!
-//! Usage:
-//!   sayanox program.sa --native -o program
 
 use crate::ast::Program;
 
@@ -31,11 +28,7 @@ mod backend {
         if let Some(v) = eval_program_simple(program) {
             return jit_expression(&Expr::Number(v));
         }
-        Err(
-            "No evaluable program found for JIT.\n\
-             Supported: numeric expressions and simple hold/when/while/make programs."
-                .into(),
-        )
+        Err("No evaluable program found for JIT.".into())
     }
 
     fn find_evaluable_expr(program: &Program) -> Option<Expr> {
@@ -68,7 +61,7 @@ mod backend {
         let mut funcs: HashMap<String, (Vec<String>, Vec<Stmt>)> = HashMap::new();
         let mut last = None;
         for stmt in &program.statements {
-            if let Stmt::Make { name, params, body } = stmt {
+            if let Stmt::Make { name, params, body, .. } = stmt {
                 funcs.insert(name.clone(), (params.clone(), body.clone()));
             }
         }
@@ -86,7 +79,7 @@ mod backend {
         funcs: &HashMap<String, (Vec<String>, Vec<Stmt>)>,
     ) -> Option<f64> {
         match stmt {
-            Stmt::Hold { name, value } | Stmt::Assign { name, value } => {
+            Stmt::Hold { name, value, .. } | Stmt::Assign { name, value } => {
                 let v = eval_expr(value, vars, funcs)?;
                 vars.insert(name.clone(), v);
                 Some(v)
@@ -154,48 +147,12 @@ mod backend {
                         }
                         a % b
                     }
-                    BinOp::Gt => {
-                        if a > b {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    BinOp::Lt => {
-                        if a < b {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    BinOp::Gte => {
-                        if a >= b {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    BinOp::Lte => {
-                        if a <= b {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    BinOp::Eq => {
-                        if (a - b).abs() < f64::EPSILON {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    BinOp::Neq => {
-                        if (a - b).abs() >= f64::EPSILON {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
+                    BinOp::Gt => if a > b { 1.0 } else { 0.0 },
+                    BinOp::Lt => if a < b { 1.0 } else { 0.0 },
+                    BinOp::Gte => if a >= b { 1.0 } else { 0.0 },
+                    BinOp::Lte => if a <= b { 1.0 } else { 0.0 },
+                    BinOp::Eq => if (a - b).abs() < f64::EPSILON { 1.0 } else { 0.0 },
+                    BinOp::Neq => if (a - b).abs() >= f64::EPSILON { 1.0 } else { 0.0 },
                 })
             }
             Expr::Call { name, args } => {
@@ -276,7 +233,6 @@ mod backend {
                     BinOp::Sub => builder.ins().fsub(l, r),
                     BinOp::Mul => builder.ins().fmul(l, r),
                     BinOp::Div => builder.ins().fdiv(l, r),
-                    // f64 modulo via truncating remainder approximation
                     BinOp::Mod => {
                         let q = builder.ins().fdiv(l, r);
                         let qi = builder.ins().fcvt_to_sint(types::I64, q);
@@ -303,58 +259,29 @@ mod backend {
 
     fn link_object(obj_path: &str, output: &str) -> Result<(), String> {
         for linker in ["cc", "clang", "gcc"] {
-            let status = Command::new(linker)
-                .args([obj_path, "-o", output, "-lm"])
-                .status();
-            match status {
+            match Command::new(linker).args([obj_path, "-o", output, "-lm"]).status() {
                 Ok(s) if s.success() => return Ok(()),
-                Ok(s) => {
-                    eprintln!(
-                        "aot: linker `{}` exited with {:?}, trying next...",
-                        linker,
-                        s.code()
-                    );
-                }
-                Err(e) => {
-                    eprintln!("aot: linker `{}` not runnable ({})", linker, e);
-                }
+                Ok(s) => eprintln!("aot: linker `{}` exited {:?}", linker, s.code()),
+                Err(e) => eprintln!("aot: linker `{}` not runnable ({})", linker, e),
             }
         }
-        Err(format!(
-            "All linkers failed (tried cc, clang, gcc). Object left at: {}\n\
-             Install a C toolchain and ensure one of cc/clang/gcc is on PATH.",
-            obj_path
-        ))
+        Err(format!("All linkers failed. Object left at: {}", obj_path))
     }
 
-    /// Full AOT: object file + system linker → native executable.
     pub fn compile_native(program: &Program, output: &str) -> Result<(), String> {
         let result = eval_program_simple(program).unwrap_or(0.0);
         let exit_code = result as i32;
 
         let mut flag_builder = settings::builder();
-        flag_builder
-            .set("use_colocated_libcalls", "false")
-            .map_err(|e| e.to_string())?;
-        flag_builder
-            .set("is_pic", "false")
-            .map_err(|e| e.to_string())?;
+        flag_builder.set("use_colocated_libcalls", "false").map_err(|e| e.to_string())?;
+        flag_builder.set("is_pic", "false").map_err(|e| e.to_string())?;
         let isa_builder = cranelift_native::builder().map_err(|e| e.to_string())?;
-        let isa = isa_builder
-            .finish(settings::Flags::new(flag_builder))
-            .map_err(|e| e.to_string())?;
+        let isa = isa_builder.finish(settings::Flags::new(flag_builder)).map_err(|e| e.to_string())?;
 
-        let obj_builder = ObjectBuilder::new(
-            isa,
-            "sayanox_aot",
-            cranelift_module::default_libcall_names(),
-        )
-        .map_err(|e| e.to_string())?;
+        let obj_builder = ObjectBuilder::new(isa, "sayanox_aot", cranelift_module::default_libcall_names()).map_err(|e| e.to_string())?;
         let mut module = ObjectModule::new(obj_builder);
-
         let mut ctx = module.make_context();
         ctx.func.signature.returns.push(AbiParam::new(types::I32));
-
         let mut fb_ctx = FunctionBuilderContext::new();
         {
             let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
@@ -366,23 +293,13 @@ mod backend {
             builder.ins().return_(&[v]);
             builder.finalize();
         }
-
-        let main_id = module
-            .declare_function("main", Linkage::Export, &ctx.func.signature)
-            .map_err(|e| e.to_string())?;
-        module
-            .define_function(main_id, &mut ctx)
-            .map_err(|e| e.to_string())?;
+        let main_id = module.declare_function("main", Linkage::Export, &ctx.func.signature).map_err(|e| e.to_string())?;
+        module.define_function(main_id, &mut ctx).map_err(|e| e.to_string())?;
         module.clear_context(&mut ctx);
-
         let product = module.finish();
-        let obj_bytes = product
-            .emit()
-            .map_err(|e| format!("Failed to emit object: {}", e))?;
-
+        let obj_bytes = product.emit().map_err(|e| format!("Failed to emit object: {}", e))?;
         let obj_path = format!("{}.o", output);
         fs::write(&obj_path, &obj_bytes).map_err(|e| e.to_string())?;
-
         link_object(&obj_path, output)?;
         let _ = fs::remove_file(&obj_path);
         Ok(())
@@ -392,21 +309,11 @@ mod backend {
 #[cfg(not(feature = "native"))]
 mod backend {
     use super::*;
-
     pub fn jit_evaluate(_program: &Program) -> Result<f64, String> {
-        Err(
-            "Native feature is not enabled.\n\
-             Build with: cargo build --features native --release"
-                .into(),
-        )
+        Err("Native feature is not enabled. cargo build --features native --release".into())
     }
-
     pub fn compile_native(_program: &Program, _output: &str) -> Result<(), String> {
-        Err(
-            "Native (Cranelift) AOT requires the 'native' feature.\n\
-             cargo build --features native --release"
-                .into(),
-        )
+        Err("Native AOT requires --features native".into())
     }
 }
 
