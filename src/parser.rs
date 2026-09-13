@@ -25,16 +25,84 @@ impl Parser {
     }
 
     fn statement(&mut self) -> Result<Stmt, String> {
+        let exported = self.match_token(&TokenKind::Export);
         match &self.peek().kind {
-            TokenKind::Show => self.show_stmt(),
-            TokenKind::Hold => self.hold_stmt(),
-            TokenKind::Make => self.make_or_struct(),
-            TokenKind::Give => self.give_stmt(),
-            TokenKind::When => self.when_stmt(),
-            TokenKind::While => self.while_stmt(),
-            TokenKind::Use => self.use_stmt(),
-            TokenKind::Ident(_) if self.peek_next_is(&TokenKind::Assign) => self.assign_stmt(),
-            _ => Ok(Stmt::Expr(self.expression()?)),
+            TokenKind::Show => {
+                if exported {
+                    return Err(format!(
+                        "cannot export show at line {} column {}",
+                        self.peek().line,
+                        self.peek().column
+                    ));
+                }
+                self.show_stmt()
+            }
+            TokenKind::Hold => self.hold_stmt(exported),
+            TokenKind::Make => self.make_or_struct(exported),
+            TokenKind::Struct => {
+                self.advance();
+                self.struct_def(exported)
+            }
+            TokenKind::Give => {
+                if exported {
+                    return Err(format!(
+                        "cannot export give at line {} column {}",
+                        self.peek().line,
+                        self.peek().column
+                    ));
+                }
+                self.give_stmt()
+            }
+            TokenKind::When => {
+                if exported {
+                    return Err(format!(
+                        "cannot export when at line {} column {}",
+                        self.peek().line,
+                        self.peek().column
+                    ));
+                }
+                self.when_stmt()
+            }
+            TokenKind::While => {
+                if exported {
+                    return Err(format!(
+                        "cannot export while at line {} column {}",
+                        self.peek().line,
+                        self.peek().column
+                    ));
+                }
+                self.while_stmt()
+            }
+            TokenKind::Use => {
+                if exported {
+                    return Err(format!(
+                        "cannot export use at line {} column {}",
+                        self.peek().line,
+                        self.peek().column
+                    ));
+                }
+                self.use_stmt()
+            }
+            TokenKind::Ident(_) if self.peek_next_is(&TokenKind::Assign) => {
+                if exported {
+                    return Err(format!(
+                        "use `export hold name = ...` at line {} column {}",
+                        self.peek().line,
+                        self.peek().column
+                    ));
+                }
+                self.assign_stmt()
+            }
+            _ => {
+                if exported {
+                    return Err(format!(
+                        "export must precede make/hold/struct at line {} column {}",
+                        self.peek().line,
+                        self.peek().column
+                    ));
+                }
+                Ok(Stmt::Expr(self.expression()?))
+            }
         }
     }
 
@@ -62,12 +130,16 @@ impl Parser {
         Ok(Stmt::Show(self.expression()?))
     }
 
-    fn hold_stmt(&mut self) -> Result<Stmt, String> {
+    fn hold_stmt(&mut self, exported: bool) -> Result<Stmt, String> {
         self.advance();
         let name = self.consume_ident("Expected variable name after 'hold'")?;
         self.consume(&TokenKind::Assign, "Expected '=' after variable name")?;
         let value = self.expression()?;
-        Ok(Stmt::Hold { name, value })
+        Ok(Stmt::Hold {
+            name,
+            value,
+            exported,
+        })
     }
 
     fn assign_stmt(&mut self) -> Result<Stmt, String> {
@@ -77,15 +149,15 @@ impl Parser {
         Ok(Stmt::Assign { name, value })
     }
 
-    fn make_or_struct(&mut self) -> Result<Stmt, String> {
+    fn make_or_struct(&mut self, exported: bool) -> Result<Stmt, String> {
         self.advance();
         if self.match_token(&TokenKind::Struct) {
-            return self.struct_def();
+            return self.struct_def(exported);
         }
-        self.make_stmt()
+        self.make_stmt(exported)
     }
 
-    fn struct_def(&mut self) -> Result<Stmt, String> {
+    fn struct_def(&mut self, exported: bool) -> Result<Stmt, String> {
         let name = self.consume_ident("Expected struct name")?;
         self.consume(&TokenKind::LBrace, "Expected '{' after struct name")?;
         let mut fields = Vec::new();
@@ -98,10 +170,14 @@ impl Parser {
             }
         }
         self.consume(&TokenKind::RBrace, "Expected '}' after struct fields")?;
-        Ok(Stmt::StructDef { name, fields })
+        Ok(Stmt::StructDef {
+            name,
+            fields,
+            exported,
+        })
     }
 
-    fn make_stmt(&mut self) -> Result<Stmt, String> {
+    fn make_stmt(&mut self, exported: bool) -> Result<Stmt, String> {
         let name = self.consume_ident("Expected function name after 'make'")?;
         self.consume(&TokenKind::LParen, "Expected '(' after function name")?;
         let mut params = Vec::new();
@@ -120,7 +196,12 @@ impl Parser {
             body.push(self.statement()?);
         }
         self.consume(&TokenKind::RBrace, "Expected '}' after function body")?;
-        Ok(Stmt::Make { name, params, body })
+        Ok(Stmt::Make {
+            name,
+            params,
+            body,
+            exported,
+        })
     }
 
     fn give_stmt(&mut self) -> Result<Stmt, String> {

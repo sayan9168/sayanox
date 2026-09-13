@@ -1,8 +1,13 @@
-// Shared math helpers for multi-file demo
-make double(n) {
+// Shared math module with exports
+export make double(n) {
     give n * 2
 }
 
-make add(a, b) {
+export make add(a, b) {
     give a + b
+}
+
+// private helper (renamed when imported)
+make private_scale(n) {
+    give n * 10
 }
