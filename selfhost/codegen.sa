@@ -1,13 +1,11 @@
-// Sayanox-written codegen (Step 3)
-// Parse show <number> from hello.sa and emit C to selfhost/codegen_emit.c
-// Pipeline is entirely driven from .sa (lex/parse/emit logic).
+// Step 4.1 codegen: hold name = number; show name|number
+// State machine in Sayanox. Emits selfhost/codegen_emit.c
 //
-//   ./selfhost/step3_codegen.sh
-// Expected: codegen OK, emitted binary prints 42
+//   ./selfhost/step4_hold_show.sh
 
-show "=== Sayanox codegen.sa ==="
+show "=== codegen 4.1 hold+show ==="
 
-hold path = "selfhost/hello.sa"
+hold path = "selfhost/hold_show.sa"
 hold source = read_file(path)
 hold n = len(source)
 hold pos = 0
@@ -15,21 +13,20 @@ hold ch = 0
 hold ch2 = 0
 hold val = 0
 hold scanning = 0
-hold tok_val = 0
-hold parse_ok = 0
-hold ast_number = 0
-hold phase = 0
-hold part_a = ""
-hold part_b = ""
-hold part_c = ""
-hold out = ""
+hold first_char = 0
+hold st = 0
+hold var_first = 0
+hold var_val = 0
+hold has_var = 0
+hold emit = ""
+hold piece = ""
+hold ok = 1
 
 make is_digit(c) {
     when c >= 48 {
         when c <= 57 { give 1 } otherwise { give 0 }
     } otherwise { give 0 }
 }
-
 make is_alpha(c) {
     when c == 95 { give 1 } otherwise {
         when c >= 65 {
@@ -41,7 +38,6 @@ make is_alpha(c) {
         } otherwise { give 0 }
     }
 }
-
 make is_space(c) {
     when c == 32 { give 1 } otherwise {
         when c == 9 { give 1 } otherwise {
@@ -52,92 +48,125 @@ make is_space(c) {
     }
 }
 
-hold phase = 0
-hold parse_ok = 0
-hold ast_number = 0
+hold emit = "#include <stdio.h>\nint main(void){\n"
 
-while phase < 2 {
-    when pos >= n {
-        hold phase = 3
+while pos < n {
+    hold ch = source[pos]
+    when is_space(ch) == 1 {
+        hold pos = pos + 1
     } otherwise {
-        hold ch = source[pos]
-        when is_space(ch) == 1 {
-            hold pos = pos + 1
+        when is_digit(ch) == 1 {
+            hold val = 0
+            hold scanning = 1
+            while scanning == 1 {
+                when pos < n {
+                    hold ch2 = source[pos]
+                    when is_digit(ch2) == 1 {
+                        hold val = val * 10 + (ch2 - 48)
+                        hold pos = pos + 1
+                    } otherwise {
+                        hold scanning = 0
+                    }
+                } otherwise {
+                    hold scanning = 0
+                }
+            }
+            when st == 3 {
+                hold var_val = val
+                hold has_var = 1
+                hold piece = "  double v = "
+                hold emit = concat(emit, piece)
+                hold emit = concat(emit, str(val))
+                hold piece = ";\n"
+                hold emit = concat(emit, piece)
+                hold st = 0
+            } otherwise {
+                when st == 4 {
+                    hold piece = "  printf(\"%g\\n\", (double)("
+                    hold emit = concat(emit, piece)
+                    hold emit = concat(emit, str(val))
+                    hold piece = "));\n"
+                    hold emit = concat(emit, piece)
+                    hold st = 0
+                } otherwise {
+                    hold ok = 0
+                    hold pos = n
+                }
+            }
         } otherwise {
-            when is_digit(ch) == 1 {
-                hold val = 0
+            when is_alpha(ch) == 1 {
+                hold first_char = ch
                 hold scanning = 1
                 while scanning == 1 {
                     when pos < n {
                         hold ch2 = source[pos]
-                        when is_digit(ch2) == 1 {
-                            hold val = val * 10 + (ch2 - 48)
+                        when is_alpha(ch2) == 1 {
                             hold pos = pos + 1
                         } otherwise {
-                            hold scanning = 0
+                            when is_digit(ch2) == 1 {
+                                hold pos = pos + 1
+                            } otherwise {
+                                hold scanning = 0
+                            }
                         }
                     } otherwise {
                         hold scanning = 0
                     }
                 }
-                when phase == 1 {
-                    hold ast_number = val
-                    hold phase = 2
-                    hold parse_ok = 1
-                } otherwise {
-                    hold phase = 3
-                }
-            } otherwise {
-                when is_alpha(ch) == 1 {
-                    hold tok_val = ch
-                    hold scanning = 1
-                    while scanning == 1 {
-                        when pos < n {
-                            hold ch2 = source[pos]
-                            when is_alpha(ch2) == 1 {
-                                hold pos = pos + 1
-                            } otherwise {
-                                when is_digit(ch2) == 1 {
-                                    hold pos = pos + 1
-                                } otherwise {
-                                    hold scanning = 0
-                                }
-                            }
+                when st == 0 {
+                    when first_char == 104 {
+                        hold st = 1
+                    } otherwise {
+                        when first_char == 115 {
+                            hold st = 4
                         } otherwise {
-                            hold scanning = 0
+                            hold ok = 0
+                            hold pos = n
                         }
                     }
-                    when phase == 0 {
-                        when tok_val == 115 {
-                            hold phase = 1
-                        } otherwise {
-                            hold phase = 3
-                        }
+                } otherwise {
+                    when st == 1 {
+                        hold var_first = first_char
+                        hold st = 2
                     } otherwise {
-                        hold phase = 3
+                        when st == 4 {
+                            hold piece = "  printf(\"%g\\n\", v);\n"
+                            hold emit = concat(emit, piece)
+                            hold st = 0
+                        } otherwise {
+                            hold ok = 0
+                            hold pos = n
+                        }
+                    }
+                }
+            } otherwise {
+                when ch == 61 {
+                    hold pos = pos + 1
+                    when st == 2 {
+                        hold st = 3
+                    } otherwise {
+                        hold ok = 0
+                        hold pos = n
                     }
                 } otherwise {
                     hold pos = pos + 1
-                    hold phase = 3
+                    hold ok = 0
+                    hold pos = n
                 }
             }
         }
     }
 }
 
-when parse_ok == 1 {
-    show "AST Show"
-    show ast_number
-    hold part_a = "#include <stdio.h>\nint main(void){ puts(\""
-    hold part_b = str(ast_number)
-    hold part_c = "\"); return 0; }\n"
-    hold out = concat(part_a, part_b)
-    hold out = concat(out, part_c)
-    write_file("selfhost/codegen_emit.c", out)
-    show "wrote selfhost/codegen_emit.c"
+hold piece = "  return 0;\n}\n"
+hold emit = concat(emit, piece)
+write_file("selfhost/codegen_emit.c", emit)
+
+when ok == 1 {
     show "codegen OK"
+    show has_var
+    show var_val
 } otherwise {
     show "codegen FAIL"
 }
-
-show "=== codegen done ==="
+show "=== codegen 4.1 done ==="
