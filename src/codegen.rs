@@ -29,11 +29,11 @@ impl Codegen {
 
         for stmt in &program.statements {
             match stmt {
-                Stmt::Make { name, params, body } => {
+                Stmt::Make { name, params, body, .. } => {
                     self.functions
                         .insert(name.clone(), (params.clone(), body.clone()));
                 }
-                Stmt::StructDef { name, fields } => {
+                Stmt::StructDef { name, fields, .. } => {
                     self.structs.insert(name.clone(), fields.clone());
                 }
                 _ => {}
@@ -93,7 +93,7 @@ impl Codegen {
                         .push_str(&format!("{}printf(\"%g\\n\", {});\n", ind, code));
                 }
             }
-            Stmt::Hold { name, value } => self.gen_hold(&ind, name, value),
+            Stmt::Hold { name, value, .. } => self.gen_hold(&ind, name, value),
             Stmt::Assign { name, value } => {
                 self.output
                     .push_str(&format!("{}{} = {};\n", ind, name, self.gen_expr(value)));
@@ -203,19 +203,6 @@ impl Codegen {
             Expr::String(s) => format!("\"{}\"", escape_c(s)),
             Expr::Ident(name) => name.clone(),
             Expr::Binary { left, op, right } => {
-                let operator = match op {
-                    BinOp::Add => "+",
-                    BinOp::Sub => "-",
-                    BinOp::Mul => "*",
-                    BinOp::Div => "/",
-                    BinOp::Mod => "%",
-                    BinOp::Gt => ">",
-                    BinOp::Lt => "<",
-                    BinOp::Eq => "==",
-                    BinOp::Neq => "!=",
-                    BinOp::Gte => ">=",
-                    BinOp::Lte => "<=",
-                };
                 if *op == BinOp::Mod {
                     format!(
                         "((double)((long)({}) % (long)({})))",
@@ -223,6 +210,19 @@ impl Codegen {
                         self.gen_expr(right)
                     )
                 } else {
+                    let operator = match op {
+                        BinOp::Add => "+",
+                        BinOp::Sub => "-",
+                        BinOp::Mul => "*",
+                        BinOp::Div => "/",
+                        BinOp::Mod => "%",
+                        BinOp::Gt => ">",
+                        BinOp::Lt => "<",
+                        BinOp::Eq => "==",
+                        BinOp::Neq => "!=",
+                        BinOp::Gte => ">=",
+                        BinOp::Lte => "<=",
+                    };
                     format!(
                         "({} {} {})",
                         self.gen_expr(left),
