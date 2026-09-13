@@ -54,7 +54,7 @@ impl Lexer {
                     if self.match_char('=') {
                         TokenKind::BangEq
                     } else {
-                        return Err(format!("Unexpected character '!' at line {}", self.line));
+                        return Err(format!("Unexpected character '!' at line {} column {}", self.line, start_col));
                     }
                 }
                 '>' => {
@@ -71,8 +71,8 @@ impl Lexer {
                         TokenKind::Lt
                     }
                 }
-                '"' => self.string()?,
-                c if c.is_ascii_digit() => self.number(c)?,
+                '"' => self.string(start_col)?,
+                c if c.is_ascii_digit() => self.number(c, start_col)?,
                 c if c.is_alphabetic() || c == '_' => self.identifier(c),
                 _ => {
                     return Err(format!(
@@ -95,7 +95,7 @@ impl Lexer {
         Ok(tokens)
     }
 
-    fn string(&mut self) -> Result<TokenKind, String> {
+    fn string(&mut self, start_col: usize) -> Result<TokenKind, String> {
         let mut value = String::new();
         while !self.is_at_end() && self.peek() != '"' {
             if self.peek() == '\\' {
@@ -121,20 +121,26 @@ impl Lexer {
             value.push(self.advance());
         }
         if self.is_at_end() {
-            return Err(format!("Unterminated string at line {}", self.line));
+            return Err(format!(
+                "Unterminated string at line {} column {}",
+                self.line, start_col
+            ));
         }
         self.advance();
         Ok(TokenKind::String(value))
     }
 
-    fn number(&mut self, first: char) -> Result<TokenKind, String> {
+    fn number(&mut self, first: char, start_col: usize) -> Result<TokenKind, String> {
         let mut num = first.to_string();
         while !self.is_at_end() && (self.peek().is_ascii_digit() || self.peek() == '.') {
             num.push(self.advance());
         }
-        num.parse::<f64>()
-            .map(TokenKind::Number)
-            .map_err(|_| format!("Invalid number '{}' at line {}", num, self.line))
+        num.parse::<f64>().map(TokenKind::Number).map_err(|_| {
+            format!(
+                "Invalid number '{}' at line {} column {}",
+                num, self.line, start_col
+            )
+        })
     }
 
     fn identifier(&mut self, first: char) -> TokenKind {
@@ -152,6 +158,7 @@ impl Lexer {
             "while" => TokenKind::While,
             "struct" => TokenKind::Struct,
             "use" => TokenKind::Use,
+            "export" => TokenKind::Export,
             _ => TokenKind::Ident(ident),
         }
     }
