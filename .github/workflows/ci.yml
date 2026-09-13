@@ -34,28 +34,12 @@ jobs:
           clang /tmp/host_hello.c -o /tmp/host_hello
           /tmp/host_hello
 
-  stage2:
-    name: Stage-2 selfhost + CLI
+  selfhost:
+    name: Full Stage-2 self-host
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build Stage-2
-        run: clang -o selfhost/stage2 selfhost/stage2_template.c
-      - name: hello.sa
+      - name: Full self-host bootstrap
         run: |
-          ./selfhost/stage2 selfhost/hello.sa selfhost/out_hello.c
-          clang selfhost/out_hello.c -o selfhost/out_hello
-          test "$(./selfhost/out_hello)" = "42"
-      - name: struct demo
-        run: |
-          ./selfhost/stage2 selfhost/struct_demo.sa selfhost/out_struct.c
-          clang selfhost/out_struct.c -o selfhost/out_struct
-          ./selfhost/out_struct | head -3
-      - name: CLI sx
-        run: |
-          chmod +x selfhost/sx
-          ./selfhost/sx selfhost/hello.sa -o selfhost/cli_hello --run
-      - name: Stage-3 bootstrap
-        run: |
-          chmod +x selfhost/bootstrap_stage3.sh
-          ./selfhost/bootstrap_stage3.sh
+          chmod +x selfhost/bootstrap_selfhost.sh selfhost/sx selfhost/bootstrap_stage3.sh
+          ./selfhost/bootstrap_selfhost.sh

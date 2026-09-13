@@ -1,0 +1,2 @@
+use "math.sa"
+show double(21)
