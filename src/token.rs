@@ -2,7 +2,6 @@
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
-    // Keywords
     Show,
     Hold,
     Make,
@@ -11,17 +10,17 @@ pub enum TokenKind {
     Otherwise,
     While,
     Struct,
+    Use,
 
-    // Literals
     Ident(String),
     Number(f64),
     String(String),
 
-    // Operators
     Plus,
     Minus,
     Star,
     Slash,
+    Percent,
     Assign,
     EqEq,
     BangEq,
@@ -31,7 +30,6 @@ pub enum TokenKind {
     Lte,
     Dot,
 
-    // Delimiters
     LParen,
     RParen,
     LBrace,

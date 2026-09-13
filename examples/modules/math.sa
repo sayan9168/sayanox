@@ -1,0 +1,8 @@
+// Shared math helpers for multi-file demo
+make double(n) {
+    give n * 2
+}
+
+make add(a, b) {
+    give a + b
+}

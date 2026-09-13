@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# sxpkg — minimal Sayanox package manager
+# Manifest: Sayanox.toml next to your project
+#
+# Commands:
+#   sxpkg init              create Sayanox.toml
+#   sxpkg install           install deps listed in [deps]
+#   sxpkg list              show installed packages under .sx/pkg
+#   sxpkg add name path|url add a dependency line
+set -euo pipefail
+
+ROOT="${SXPKG_ROOT:-.}"
+MANIFEST="$ROOT/Sayanox.toml"
+PKG_DIR="$ROOT/.sx/pkg"
+
+cmd="${1:-}"
+
+init_manifest() {
+  if [[ -f "$MANIFEST" ]]; then
+    echo "sxpkg: $MANIFEST already exists"
+    exit 0
+  fi
+  cat > "$MANIFEST" <<'EOF'
+[package]
+name = "my-sayanox-app"
+version = "0.1.0"
+
+[deps]
+# example = { path = "../libs/example" }
+# remote  = { git = "https://github.com/user/repo.git" }
+EOF
+  echo "sxpkg: created $MANIFEST"
+}
+
+install_deps() {
+  if [[ ! -f "$MANIFEST" ]]; then
+    echo "sxpkg: error: no Sayanox.toml (run sxpkg init)" >&2
+    exit 1
+  fi
+  mkdir -p "$PKG_DIR"
+  # Very small TOML subset: lines like  name = { path = "..." } or git = "..."
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*\{[[:space:]]*path[[:space:]]*=[[:space:]]*\"([^"]+)\" ]]; then
+      name="${BASH_REMATCH[1]}"
+      path="${BASH_REMATCH[2]}"
+      dest="$PKG_DIR/$name"
+      rm -rf "$dest"
+      mkdir -p "$dest"
+      if [[ -d "$path" ]]; then
+        cp -R "$path"/. "$dest"/
+        echo "sxpkg: installed $name from path $path"
+      else
+        echo "sxpkg: error: path not found for $name: $path" >&2
+        exit 1
+      fi
+    elif [[ "$line" =~ ^([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*\{[[:space:]]*git[[:space:]]*=[[:space:]]*\"([^"]+)\" ]]; then
+      name="${BASH_REMATCH[1]}"
+      url="${BASH_REMATCH[2]}"
+      dest="$PKG_DIR/$name"
+      rm -rf "$dest"
+      git clone --depth 1 "$url" "$dest"
+      echo "sxpkg: installed $name from git $url"
+    fi
+  done < "$MANIFEST"
+  echo "sxpkg: done (packages in $PKG_DIR)"
+}
+
+list_pkgs() {
+  if [[ ! -d "$PKG_DIR" ]]; then
+    echo "(no packages)"
+    exit 0
+  fi
+  ls -1 "$PKG_DIR"
+}
+
+case "$cmd" in
+  init) init_manifest ;;
+  install) install_deps ;;
+  list) list_pkgs ;;
+  ""|-h|--help)
+    echo "sxpkg — Sayanox package manager"
+    echo "  sxpkg init"
+    echo "  sxpkg install"
+    echo "  sxpkg list"
+    ;;
+  *)
+    echo "sxpkg: unknown command: $cmd" >&2
+    exit 1
+    ;;
+esac

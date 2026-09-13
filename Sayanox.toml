@@ -1,0 +1,7 @@
+[package]
+name = "sayanox"
+version = "0.3.30"
+
+[deps]
+# Add project dependencies here, e.g.:
+# math = { path = "examples/modules/math" }

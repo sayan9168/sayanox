@@ -1,0 +1,6 @@
+// Type checker demo (valid)
+hold n = 1
+hold s = "hi"
+hold n = n + 1
+show n
+show s

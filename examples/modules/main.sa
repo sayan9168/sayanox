@@ -1,0 +1,7 @@
+// Multi-file module demo
+use "math.sa"
+
+hold x = double(21)
+show x
+hold y = add(10, 32)
+show y
