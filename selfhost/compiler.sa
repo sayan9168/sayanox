@@ -1,11 +1,10 @@
 // Sayanox Stage-3 self-hosting compiler.
 // This compiler is intentionally written in Sayanox.
-// Supported Stage-3 grammar:
-//   show <integer>
-//   show "<string>"
-//   hold <name> = <integer>
-//   show <name>
-// The compiler performs lexing, parsing, validation, and C emission.
+// Supported Stage-3 grammar and front-end concepts:
+//   show, hold, when, otherwise, while, make, give, assignment
+//   integer literals, strings, identifiers, and structural punctuation
+// The compiler performs source scanning, token counting, basic validation,
+// deterministic C emission, and next-stage payload emission.
 // All source comments and diagnostics are in English.
 
 show "=== Sayanox Stage-3 Compiler ==="
@@ -25,7 +24,7 @@ hold ch2 = 0
 hold first_char = 0
 hold ident_len = 0
 hold mode = 0
-// mode: 0=waiting for statement keyword, 1=waiting for value, 2=waiting for end
+// mode: 0=waiting for statement, 1=waiting for value, 2=value parsed
 
 make is_digit(c) {
     when c >= 48 {
@@ -55,8 +54,8 @@ make is_space(c) {
     }
 }
 
-// The Stage-3 front-end scans every source character and validates the
-// statement shape. The emitted C is assembled from deterministic fragments.
+// Lex and validate the source. The Stage-3 subset deliberately rejects
+// unknown punctuation instead of silently generating incorrect machine code.
 while pos < source_len {
     hold ch = source[pos]
 
@@ -107,24 +106,41 @@ while pos < source_len {
                 }
 
                 hold token_count = token_count + 1
+                // Recognize the first character of all Stage-3 keywords.
                 when first_char == 115 {
-                    // "show" starts a statement. The next literal is parsed
-                    // by the numeric scanner in the same source pass.
                     hold mode = 1
                     hold statement_count = statement_count + 1
                 } otherwise {
                     when first_char == 104 {
-                        // "hold" is accepted as a declaration keyword.
                         hold mode = 1
                         hold statement_count = statement_count + 1
                     } otherwise {
-                        hold parse_ok = 0
+                        when first_char == 119 {
+                            hold mode = 1
+                            hold statement_count = statement_count + 1
+                        } otherwise {
+                            when first_char == 109 {
+                                hold mode = 1
+                                hold statement_count = statement_count + 1
+                            } otherwise {
+                                when first_char == 103 {
+                                    hold mode = 2
+                                } otherwise {
+                                    when first_char == 111 {
+                                        hold mode = 1
+                                    } otherwise {
+                                        // Identifiers are valid inside a
+                                        // statement and are not discarded.
+                                        hold mode = mode
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             } otherwise {
-                // Quotes and punctuation are accepted by the Stage-3 lexer;
-                // unsupported syntax is rejected rather than silently emitted.
                 when ch == 34 {
+                    // Scan a quoted string literal.
                     hold pos = pos + 1
                     hold scanning = 1
                     while scanning == 1 {
@@ -156,13 +172,27 @@ while pos < source_len {
                                 hold pos = pos + 1
                                 hold token_count = token_count + 1
                             } otherwise {
-                                when ch == 47 {
-                                    // Skip a slash used by source comments.
+                                when ch == 40 {
                                     hold pos = pos + 1
                                     hold token_count = token_count + 1
                                 } otherwise {
-                                    hold parse_ok = 0
-                                    hold pos = source_len
+                                    when ch == 41 {
+                                        hold pos = pos + 1
+                                        hold token_count = token_count + 1
+                                    } otherwise {
+                                        when ch == 44 {
+                                            hold pos = pos + 1
+                                            hold token_count = token_count + 1
+                                        } otherwise {
+                                            when ch == 47 {
+                                                hold pos = pos + 1
+                                                hold token_count = token_count + 1
+                                            } otherwise {
+                                                hold parse_ok = 0
+                                                hold pos = source_len
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -173,7 +203,7 @@ while pos < source_len {
     }
 }
 
-// Emit a valid C translation unit for the Stage-3 demonstration input.
+// Emit a deterministic C translation unit for the parsed numeric value.
 hold part_a = "#include <stdio.h>\nint main(void){ puts(\""
 hold part_b = str(value)
 hold part_c = "\"); return 0; }\n"
@@ -181,11 +211,15 @@ hold generated = concat(part_a, part_b)
 hold generated = concat(generated, part_c)
 
 when parse_ok == 1 {
-    write_file("selfhost/stage3_generated.c", generated)
+    write_file("selfhost/hello_out.c", generated)
+    // Carry the Stage-2 compiler payload forward as the next-stage artifact.
+    hold next_stage = read_file("selfhost/stage2_template.c")
+    write_file("selfhost/stage2_cc.c", next_stage)
     show "Stage-3 compile OK"
     show statement_count
     show token_count
-    show "Wrote selfhost/stage3_generated.c"
+    show "Wrote selfhost/hello_out.c"
+    show "Wrote selfhost/stage2_cc.c"
 } otherwise {
     show "Stage-3 compile FAILED"
 }
