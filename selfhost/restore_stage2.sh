@@ -11,6 +11,7 @@ curl -fsSL "$GOOD_URL" -o selfhost/stage2_template.c
 
 python3 selfhost/complete_stage2.py
 python3 selfhost/patch_stage2_strings.py
+python3 selfhost/patch_stage2_string_compare.py
 
 echo "Verifying compile..."
 CC=clang
