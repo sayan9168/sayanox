@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Complete Stage-2 template: English header, modulo fix, use expansion."""
+"""Complete Stage-2 template: English header, modulo fix, use expansion, and lexer runtime builtins."""
 from pathlib import Path
 
 p = Path("selfhost/stage2_template.c")
@@ -7,7 +7,7 @@ src = p.read_text()
 
 header = """/* Sayanox Stage-2 - generic .sa to C compiler (self-host path).
  * Features: show/hold/when/while/make/struct, lists, strings, modulo,
- * bare assign, type-safe hold, stdlib, use "file.sa" expansion.
+ * bare assign, type-safe hold, stdlib, use expansion, Unicode lexer helpers.
  * All messages in English.
  */
 """
@@ -18,6 +18,24 @@ src = src.replace(
     'snprintf(n,900,"((double)((long)(%s)%(long)(%s)))",left,right);',
     'snprintf(n,900,"((double)((long)(%s)%%(long)(%s)))",left,right);',
 )
+
+# Teach Stage-2 type inference that character-producing builtins return strings.
+src = src.replace(
+    'strstr(e,\\"sx_trim\\")?1:0;',
+    'strstr(e,\\"sx_trim\\")||strstr(e,\\"sx_char_at\\")||strstr(e,\\"sx_char_from_code\\")?1:0;',
+)
+
+# Extend the generated program runtime with Unicode-aware string primitives.
+runtime_anchor = 'static int sx_list_len(SxList *l){ return l->len; }'
+runtime_helpers = r'''static int sx_list_len(SxList *l){ return l->len; }\
+static size_t sx_utf8_next(const unsigned char *p){ if(p[0]<0x80)return 1; if((p[0]&0xE0)==0xC0)return 2; if((p[0]&0xF0)==0xE0)return 3; if((p[0]&0xF8)==0xF0)return 4; fprintf(stderr,"invalid UTF-8 string\n"); exit(1); return 1; }\
+static size_t sx_string_len(const char *s){ size_t i=0,n=0; while(s[i]){ i+=sx_utf8_next((const unsigned char*)s+i); n++; } return n; }\
+static unsigned int sx_char_code(const char *s,int index){ size_t i=0; for(int n=0;n<index;n++){ if(!s[i]){fprintf(stderr,"string index out of bounds\n");exit(1);} i+=sx_utf8_next((const unsigned char*)s+i); } if(!s[i]){fprintf(stderr,"string index out of bounds\n");exit(1);} const unsigned char *p=(const unsigned char*)s+i; if(p[0]<0x80)return p[0]; if((p[0]&0xE0)==0xC0)return ((p[0]&0x1F)<<6)|(p[1]&0x3F); if((p[0]&0xF0)==0xE0)return ((p[0]&0x0F)<<12)|((p[1]&0x3F)<<6)|(p[2]&0x3F); return ((p[0]&0x07)<<18)|((p[1]&0x3F)<<12)|((p[2]&0x3F)<<6)|(p[3]&0x3F); }\
+static char *sx_char_at(const char *s,int index){ size_t i=0; for(int n=0;n<index;n++){ if(!s[i]){fprintf(stderr,"string index out of bounds\n");exit(1);} i+=sx_utf8_next((const unsigned char*)s+i); } if(!s[i]){fprintf(stderr,"string index out of bounds\n");exit(1);} size_t w=sx_utf8_next((const unsigned char*)s+i); char *r=malloc(w+1); if(!r)exit(1); memcpy(r,s+i,w); r[w]=0; return r; }\
+static char *sx_char_from_code(unsigned int code){ if(code>0x10FFFFU||(code>=0xD800U&&code<=0xDFFFU)){fprintf(stderr,"invalid Unicode scalar value\n");exit(1);} int w=code<0x80?1:code<0x800?2:code<0x10000?3:4; char *r=malloc((size_t)w+1); if(!r)exit(1); if(w==1)r[0]=(char)code; else if(w==2){r[0]=(char)(0xC0|(code>>6));r[1]=(char)(0x80|(code&0x3F));} else if(w==3){r[0]=(char)(0xE0|(code>>12));r[1]=(char)(0x80|((code>>6)&0x3F));r[2]=(char)(0x80|(code&0x3F));} else {r[0]=(char)(0xF0|(code>>18));r[1]=(char)(0x80|((code>>12)&0x3F));r[2]=(char)(0x80|((code>>6)&0x3F));r[3]=(char)(0x80|(code&0x3F));} r[w]=0; return r; }\
+'''
+if runtime_anchor in src and "sx_string_len" not in src:
+    src = src.replace(runtime_anchor, runtime_helpers, 1)
 
 expand = r"""
 static char *dirname_of(const char *path){
