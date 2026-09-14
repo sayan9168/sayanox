@@ -10,13 +10,14 @@ mod parser;
 mod stdlib;
 mod token;
 mod types;
+mod vm;
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-const VERSION: &str = "0.3.30";
+const VERSION: &str = "0.4.0";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -27,6 +28,7 @@ fn main() {
         eprintln!("       sayanox <input.sa> --tokens");
         eprintln!("       sayanox <input.sa> --ast");
         eprintln!("       sayanox <input.sa> --check          (type check only)");
+        eprintln!("       sayanox <input.sa> --run            (built-in Sayanox VM)");
         eprintln!("       sayanox <input.sa> --jit");
         eprintln!("       sayanox <input.sa> --native -o bin");
         eprintln!("\nModules:  use \"other.sa\"");
@@ -39,6 +41,7 @@ fn main() {
     let mut show_tokens = false;
     let mut show_ast = false;
     let mut check_only = false;
+    let mut run_vm = false;
     let mut use_jit = false;
     let mut use_native = false;
     let mut skip_types = false;
@@ -55,30 +58,13 @@ fn main() {
                     process::exit(1);
                 }
             }
-            "--tokens" => {
-                show_tokens = true;
-                i += 1;
-            }
-            "--ast" => {
-                show_ast = true;
-                i += 1;
-            }
-            "--check" => {
-                check_only = true;
-                i += 1;
-            }
-            "--no-check" => {
-                skip_types = true;
-                i += 1;
-            }
-            "--jit" => {
-                use_jit = true;
-                i += 1;
-            }
-            "--native" => {
-                use_native = true;
-                i += 1;
-            }
+            "--tokens" => { show_tokens = true; i += 1; }
+            "--ast" => { show_ast = true; i += 1; }
+            "--check" => { check_only = true; i += 1; }
+            "--no-check" => { skip_types = true; i += 1; }
+            "--run" => { run_vm = true; i += 1; }
+            "--jit" => { use_jit = true; i += 1; }
+            "--native" => { use_native = true; i += 1; }
             _ => {
                 eprintln!("error: unknown argument `{}`", args[i]);
                 process::exit(1);
@@ -86,11 +72,10 @@ fn main() {
         }
     }
 
-    // Multi-file: resolve `use` imports
+    // Multi-file: resolve `use` imports before any backend runs.
     let program = match module::load_program(&input) {
         Ok(p) => p,
         Err(e) => {
-            // Fallback: single-file path if module loader fails on non-use programs
             let source = match fs::read_to_string(&input) {
                 Ok(s) => s,
                 Err(err) => {
@@ -108,9 +93,7 @@ fn main() {
                 }
             };
             if show_tokens {
-                for t in &tokens {
-                    println!("{:?}", t);
-                }
+                for t in &tokens { println!("{:?}", t); }
                 return;
             }
             let mut parser = parser::Parser::new(tokens);
@@ -124,10 +107,7 @@ fn main() {
         }
     };
 
-    if show_ast {
-        println!("{:#?}", program);
-        return;
-    }
+    if show_ast { println!("{:#?}", program); return; }
 
     if !skip_types {
         if let Err(e) = types::check(&program) {
@@ -138,6 +118,22 @@ fn main() {
 
     if check_only {
         println!("OK type check passed ({})", input.display());
+        return;
+    }
+
+    // First-party runtime: no C compiler, linker, or third-party runtime needed.
+    if run_vm {
+        match vm::run(&program) {
+            Ok(v) => {
+                if !matches!(v, vm::Value::Null) {
+                    println!("{}", v.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("error[runtime]: {}", e);
+                process::exit(1);
+            }
+        }
         return;
     }
 
@@ -161,11 +157,7 @@ fn main() {
             })
             .to_string_lossy()
             .to_string();
-        let out = if out.is_empty() || out == "." {
-            "a.out".to_string()
-        } else {
-            out
-        };
+        let out = if out.is_empty() || out == "." { "a.out".to_string() } else { out };
         match native::compile_native(&program, &out) {
             Ok(()) => {
                 println!("OK AOT native binary -> {}", out);
@@ -193,8 +185,5 @@ fn main() {
     }
 
     println!("OK compiled successfully -> {}", output_path.display());
-    println!(
-        "  Next: clang {} -o program && ./program",
-        output_path.display()
-    );
+    println!("  Next: clang {} -o program && ./program", output_path.display());
 }
