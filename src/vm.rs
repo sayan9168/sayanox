@@ -125,9 +125,7 @@ impl Vm {
                         Flow::Return(value) => return Ok(Flow::Return(value)),
                     }
                     guard += 1;
-                    if guard > 10_000_000 {
-                        return Err("runtime error: loop iteration limit exceeded".into());
-                    }
+                    if guard > 10_000_000 { return Err("runtime error: loop iteration limit exceeded".into()); }
                 }
                 Ok(Flow::Normal(last))
             }
@@ -168,9 +166,7 @@ impl Vm {
             },
             Expr::StructLit { name, fields } => {
                 let mut object = HashMap::new();
-                for (field, value) in fields {
-                    object.insert(field.clone(), self.eval(value)?);
-                }
+                for (field, value) in fields { object.insert(field.clone(), self.eval(value)?); }
                 Ok(Value::Struct { name: name.clone(), fields: object })
             }
             Expr::Binary { left, op, right } => {
@@ -191,14 +187,9 @@ impl Vm {
             },
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 let (a, b) = numbers(left, right)?;
-                if matches!(op, BinOp::Div | BinOp::Mod) && b == 0.0 {
-                    return Err("runtime error: division by zero".into());
-                }
+                if matches!(op, BinOp::Div | BinOp::Mod) && b == 0.0 { return Err("runtime error: division by zero".into()); }
                 Ok(Value::Number(match op {
-                    BinOp::Sub => a - b,
-                    BinOp::Mul => a * b,
-                    BinOp::Div => a / b,
-                    BinOp::Mod => a % b,
+                    BinOp::Sub => a - b, BinOp::Mul => a * b, BinOp::Div => a / b, BinOp::Mod => a % b,
                     _ => unreachable!(),
                 }))
             }
@@ -218,28 +209,21 @@ impl Vm {
     }
 
     fn call(&mut self, name: &str, args: &[Expr]) -> Result<Value, String> {
-        if let Some(value) = self.builtin(name, args)? {
-            return Ok(value);
-        }
+        if let Some(value) = self.builtin(name, args)? { return Ok(value); }
         let function = self.functions.get(name).cloned().ok_or_else(|| format!("unknown function `{name}`"))?;
-        if args.len() != function.params.len() {
-            return Err(format!("function `{name}` expects {} argument(s), got {}", function.params.len(), args.len()));
-        }
+        if args.len() != function.params.len() { return Err(format!("function `{name}` expects {} argument(s), got {}", function.params.len(), args.len())); }
         let values = args.iter().map(|expr| self.eval(expr)).collect::<Result<Vec<_>, _>>()?;
         self.scopes.push(function.params.iter().cloned().zip(values).collect());
         let result = self.exec_block(Some(&function.body));
         self.scopes.pop();
-        match result? {
-            Flow::Normal(value) | Flow::Return(value) => Ok(value),
-        }
+        match result? { Flow::Normal(value) | Flow::Return(value) => Ok(value) }
     }
 
     fn builtin(&mut self, name: &str, args: &[Expr]) -> Result<Option<Value>, String> {
         let mut values = || args.iter().map(|expr| self.eval(expr)).collect::<Result<Vec<_>, _>>();
         let value = match name {
             "len" | "list_len" => {
-                let args = values()?;
-                require_arity(name, &args, 1)?;
+                let args = values()?; require_arity(name, &args, 1)?;
                 Some(Value::Number(match &args[0] {
                     Value::String(value) => value.chars().count() as f64,
                     Value::List(value) => value.len() as f64,
@@ -247,78 +231,44 @@ impl Vm {
                 }))
             }
             "concat" => {
-                let args = values()?;
-                require_arity(name, &args, 2)?;
-                Some(Value::String(format!("{}{}", args[0].display(), args[1].display())))
+                let args = values()?; require_arity(name, &args, 2)?;
+                let a = match &args[0] { Value::String(v) => v, _ => return Err("concat expects two strings".into()) };
+                let b = match &args[1] { Value::String(v) => v, _ => return Err("concat expects two strings".into()) };
+                Some(Value::String(format!("{}{}", a, b)))
+            }
+            "char_at" => {
+                let args = values()?; require_arity(name, &args, 2)?;
+                let value = match &args[0] { Value::String(v) => v, _ => return Err("char_at expects a string".into()) };
+                let index = number_index(&args[1])?;
+                Some(Value::String(value.chars().nth(index).map(|c| c.to_string()).ok_or("index out of bounds")?))
             }
             "contains" | "starts_with" | "ends_with" => {
-                let args = values()?;
-                require_arity(name, &args, 2)?;
-                let (x, y) = match (&args[0], &args[1]) {
-                    (Value::String(x), Value::String(y)) => (x, y),
-                    _ => return Err(format!("{name} expects two strings")),
-                };
-                Some(Value::Bool(match name {
-                    "contains" => x.contains(y),
-                    "starts_with" => x.starts_with(y),
-                    _ => x.ends_with(y),
-                }))
+                let args = values()?; require_arity(name, &args, 2)?;
+                let (x, y) = match (&args[0], &args[1]) { (Value::String(x), Value::String(y)) => (x, y), _ => return Err(format!("{name} expects two strings")) };
+                Some(Value::Bool(match name { "contains" => x.contains(y), "starts_with" => x.starts_with(y), _ => x.ends_with(y) }))
             }
             "upper" | "lower" | "trim" => {
-                let args = values()?;
-                require_arity(name, &args, 1)?;
-                let value = match &args[0] {
-                    Value::String(value) => value,
-                    _ => return Err(format!("{name} expects a string")),
-                };
-                Some(Value::String(match name {
-                    "upper" => value.to_uppercase(),
-                    "lower" => value.to_lowercase(),
-                    _ => value.trim().to_string(),
-                }))
+                let args = values()?; require_arity(name, &args, 1)?;
+                let value = match &args[0] { Value::String(value) => value, _ => return Err(format!("{name} expects a string")) };
+                Some(Value::String(match name { "upper" => value.to_uppercase(), "lower" => value.to_lowercase(), _ => value.trim().to_string() }))
             }
-            "str" => {
-                let args = values()?;
-                require_arity(name, &args, 1)?;
-                Some(Value::String(args[0].display()))
-            }
+            "str" => { let args = values()?; require_arity(name, &args, 1)?; Some(Value::String(args[0].display())) }
             "list_get" => {
-                let args = values()?;
-                require_arity(name, &args, 2)?;
-                let index = number_index(&args[1])?;
-                match &args[0] {
-                    Value::List(values) => Some(values.get(index).cloned().ok_or("index out of bounds")?),
-                    _ => return Err("list_get expects a list".into()),
-                }
+                let args = values()?; require_arity(name, &args, 2)?; let index = number_index(&args[1])?;
+                match &args[0] { Value::List(values) => Some(values.get(index).cloned().ok_or("index out of bounds")?), _ => return Err("list_get expects a list".into()) }
             }
             "push" => {
-                let args = values()?;
-                require_arity(name, &args, 2)?;
-                match &args[0] {
-                    Value::List(values) => {
-                        let mut result = values.clone();
-                        result.push(args[1].clone());
-                        Some(Value::List(result))
-                    }
-                    _ => return Err("push expects a list".into()),
-                }
+                let args = values()?; require_arity(name, &args, 2)?;
+                match &args[0] { Value::List(values) => { let mut result = values.clone(); result.push(args[1].clone()); Some(Value::List(result)) }, _ => return Err("push expects a list".into()) }
             }
             "read_file" => {
-                let args = values()?;
-                require_arity(name, &args, 1)?;
-                let path = match &args[0] {
-                    Value::String(path) => path,
-                    _ => return Err("read_file expects a path string".into()),
-                };
+                let args = values()?; require_arity(name, &args, 1)?;
+                let path = match &args[0] { Value::String(path) => path, _ => return Err("read_file expects a path string".into()) };
                 Some(Value::String(fs::read_to_string(path).map_err(|e| format!("read_file: {e}"))?))
             }
             "write_file" => {
-                let args = values()?;
-                require_arity(name, &args, 2)?;
-                let path = match &args[0] {
-                    Value::String(path) => path,
-                    _ => return Err("write_file expects a path string".into()),
-                };
+                let args = values()?; require_arity(name, &args, 2)?;
+                let path = match &args[0] { Value::String(path) => path, _ => return Err("write_file expects a path string".into()) };
                 fs::write(path, args[1].display()).map_err(|e| format!("write_file: {e}"))?;
                 Some(Value::Null)
             }
@@ -329,49 +279,23 @@ impl Vm {
 }
 
 fn require_arity(name: &str, args: &[Value], expected: usize) -> Result<(), String> {
-    if args.len() == expected {
-        Ok(())
-    } else {
-        Err(format!("{name} expects {expected} argument(s), got {}", args.len()))
-    }
+    if args.len() == expected { Ok(()) } else { Err(format!("{name} expects {expected} argument(s), got {}", args.len())) }
 }
 
 fn numbers(a: Value, b: Value) -> Result<(f64, f64), String> {
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => Ok((x, y)),
-        _ => Err("arithmetic requires numbers".into()),
-    }
+    match (a, b) { (Value::Number(x), Value::Number(y)) => Ok((x, y)), _ => Err("arithmetic requires numbers".into()) }
 }
 
 fn number_index(value: &Value) -> Result<usize, String> {
-    match value {
-        Value::Number(number) if number.is_finite() && number.fract() == 0.0 && *number >= 0.0 => Ok(*number as usize),
-        _ => Err("index must be a non-negative integer".into()),
-    }
+    match value { Value::Number(number) if number.is_finite() && number.fract() == 0.0 && *number >= 0.0 => Ok(*number as usize), _ => Err("index must be a non-negative integer".into()) }
 }
 
 fn cmp(a: f64, b: f64, op: BinOp) -> bool {
-    match op {
-        BinOp::Gt => a > b,
-        BinOp::Lt => a < b,
-        BinOp::Eq => a == b,
-        BinOp::Neq => a != b,
-        BinOp::Gte => a >= b,
-        BinOp::Lte => a <= b,
-        _ => false,
-    }
+    match op { BinOp::Gt => a > b, BinOp::Lt => a < b, BinOp::Eq => a == b, BinOp::Neq => a != b, BinOp::Gte => a >= b, BinOp::Lte => a <= b, _ => false }
 }
 
 fn cmp_str(a: &str, b: &str, op: BinOp) -> bool {
-    match op {
-        BinOp::Gt => a > b,
-        BinOp::Lt => a < b,
-        BinOp::Eq => a == b,
-        BinOp::Neq => a != b,
-        BinOp::Gte => a >= b,
-        BinOp::Lte => a <= b,
-        _ => false,
-    }
+    match op { BinOp::Gt => a > b, BinOp::Lt => a < b, BinOp::Eq => a == b, BinOp::Neq => a != b, BinOp::Gte => a >= b, BinOp::Lte => a <= b, _ => false }
 }
 
 #[cfg(test)]
@@ -384,21 +308,22 @@ mod tests {
 
     #[test]
     fn arithmetic() {
-        let program = program(vec![Stmt::Expr(Expr::Binary {
-            left: Box::new(number(6.0)),
-            op: BinOp::Mul,
-            right: Box::new(number(7.0)),
-        })]);
+        let program = program(vec![Stmt::Expr(Expr::Binary { left: Box::new(number(6.0)), op: BinOp::Mul, right: Box::new(number(7.0)) })]);
         assert_eq!(run(&program).unwrap(), Value::Number(42.0));
     }
 
     #[test]
     fn div_zero() {
-        let program = program(vec![Stmt::Expr(Expr::Binary {
-            left: Box::new(number(1.0)),
-            op: BinOp::Div,
-            right: Box::new(number(0.0)),
-        })]);
+        let program = program(vec![Stmt::Expr(Expr::Binary { left: Box::new(number(1.0)), op: BinOp::Div, right: Box::new(number(0.0)) })]);
         assert!(run(&program).is_err());
+    }
+
+    #[test]
+    fn char_at_returns_unicode_character() {
+        let program = program(vec![Stmt::Expr(Expr::Call {
+            name: "char_at".into(),
+            args: vec![Expr::String("Aβ".into()), Expr::Number(1.0)],
+        })]);
+        assert_eq!(run(&program).unwrap(), Value::String("β".into()));
     }
 }
