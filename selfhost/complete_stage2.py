@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Complete Stage-2 template with use expansion and lexer runtime support."""
+import re
 from pathlib import Path
 
 p = Path("selfhost/stage2_template.c")
@@ -30,6 +31,35 @@ for index, line in enumerate(lines):
         )
         lines[index] = line
 src = "".join(lines)
+
+# Teach the bootstrap compiler that the two lexer formatting helpers are
+# string-returning functions. All other Sayanox functions keep numeric ABI.
+make_pattern = re.compile(
+    r'if\(check\(T_IDENT\)\)\{strncat\(params,"double ",sizeof\(params\)-1\);.*?expect\(T_RPAREN,"\)"\);',
+    re.S,
+)
+make_replacement = '''int string_function=!strcmp(fname,"emit")||!strcmp(fname,"error_record");
+expect(T_LPAREN,"(");
+int param_index=0;
+if(check(T_IDENT)){
+const int string_limit=!strcmp(fname,"emit")?2:(!strcmp(fname,"error_record")?1:0);
+strncat(params,(param_index<string_limit)?"char *":"double ",sizeof(params)-1);strncat(params,cur()->text,sizeof(params)-1);advance();param_index++;
+while(match(T_COMMA)){if(!check(T_IDENT))break;strncat(params,(param_index<string_limit)?", char *":", double ",sizeof(params)-1);strncat(params,cur()->text,sizeof(params)-1);advance();param_index++;}}
+expect(T_RPAREN,")");'''
+src, make_count = make_pattern.subn(make_replacement, src, count=1)
+if make_count != 1:
+    raise SystemExit("Stage-2 make-function pattern was not found")
+
+src = src.replace(
+    'buf_printf(g_funcs,&g_funcs_n,BUF_MAX,"double sx_%s(%s) {\\n",fname,params);',
+    'buf_printf(g_funcs,&g_funcs_n,BUF_MAX,"%s sx_%s(%s) {\\n",string_function?"char *":"double",fname,params);',
+    1,
+)
+src = src.replace(
+    'emit("return 0.0;\\n");g_indent=0;',
+    'if(string_function)emit("return NULL;\\n");else emit("return 0.0;\\n");g_indent=0;',
+    1,
+)
 
 # Emit extra runtime functions as ordinary generated C instead of embedding them
 # inside the legacy RUNTIME string. This keeps the generated Stage-2 C valid.
