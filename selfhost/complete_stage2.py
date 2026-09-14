@@ -20,7 +20,6 @@ src = src.replace(
     'snprintf(n,900,"((double)((long)(%s)%%(long)(%s)))",left,right);',
 )
 
-# Teach Stage-2 type inference that character-producing builtins return strings.
 lines = src.splitlines(True)
 for index, line in enumerate(lines):
     if "static int looks_string" in line and "sx_char_at" not in line:
@@ -39,7 +38,6 @@ make_pattern = re.compile(
     re.S,
 )
 make_replacement = '''int string_function=!strcmp(fname,"emit")||!strcmp(fname,"error_record");
-expect(T_LPAREN,"(");
 int param_index=0;
 if(check(T_IDENT)){
 const int string_limit=!strcmp(fname,"emit")?2:(!strcmp(fname,"error_record")?1:0);
