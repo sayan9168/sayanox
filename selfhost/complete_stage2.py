@@ -19,10 +19,17 @@ src = src.replace(
     'snprintf(n,900,"((double)((long)(%s)%%(long)(%s)))",left,right);',
 )
 
-src = src.replace(
-    'strstr(e,\\"sx_trim\\")?1:0;',
-    'strstr(e,\\"sx_trim\\")||strstr(e,\\"sx_char_at\\")||strstr(e,\\"sx_char_from_code\\")?1:0;',
-)
+# Teach Stage-2 type inference that character-producing builtins return strings.
+lines = src.splitlines(True)
+for index, line in enumerate(lines):
+    if "static int looks_string" in line and "sx_char_at" not in line:
+        line = line.replace(
+            "?1:0;",
+            r'||strstr(e,"sx_char_at")||strstr(e,"sx_char_from_code")?1:0;',
+            1,
+        )
+        lines[index] = line
+src = "".join(lines)
 
 # Emit extra runtime functions as ordinary generated C instead of embedding them
 # inside the legacy RUNTIME string. This keeps the generated Stage-2 C valid.
