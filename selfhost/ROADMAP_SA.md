@@ -1,22 +1,21 @@
-# Compiler in Sayanox (.sa) — subset complete
+# Compiler in Sayanox (.sa)
 
-| Step | What | Status |
-|------|------|--------|
-| 1 | lexer.sa | DONE |
-| 2 | parser.sa | DONE |
-| 3–4.3 | codegen: hold show when while make give call | DONE |
-| 5 | all demos via step5_all.sh | DONE |
+## Status: subset complete
+
+| Feature | In codegen.sa |
+|---------|----------------|
+| hold / assign number | yes |
+| show number / name / call | yes |
+| when / while | yes |
+| make fn() / give number | yes |
 
 ```bash
 ./selfhost/step5_all.sh
 ```
 
-## Subset (one variable `v`, one function `sx_f`)
+Installs full `codegen.sa` then runs all demos (expect 42 each).
 
-- `hold name = number` / assign
-- `show number` / `show name` / `show fn()`
-- `when cond { ... }` / `while cond { ... }`
-- `make fn() { give number }`
+## Still out of subset
 
-Beyond this: multi-var, params, otherwise, structs → later expansions.
-Stage-2 C remains the bootstrap host for running `.sa` tools.
+Multi-var names, params, otherwise, structs, strings/lists in .sa codegen.
+Stage-2 C remains bootstrap for running `.sa` tools / general programs via `sx`.
