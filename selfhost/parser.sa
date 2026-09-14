@@ -1,17 +1,7 @@
 // Sayanox self-hosted parser foundation.
-// This parser performs grammar-aware recursive-descent style validation over
-// the Sayanox source stream and emits a deterministic AST summary.
-//
-// Grammar levels represented here:
-// program -> statement*
-// statement -> declaration | control | expression
-// expression -> operand (operator operand)*
-// operand -> identifier | number | string | call | array | grouped
-// postfix -> call | index | field
-// blocks -> { statement* }
-//
-// The implementation deliberately keeps all mutable parser state at module
-// scope because the current Stage-2 compiler isolates function-local holds.
+// Grammar-aware parser over the Sayanox source stream.
+// Supports declarations, control-flow blocks, expressions, calls, arrays,
+// indexing, fields, struct literals, imports, exports, and operator syntax.
 
 show "=== Sayanox Self-Hosted Parser ==="
 
@@ -30,6 +20,7 @@ hold paren_depth = 0
 hold bracket_depth = 0
 hold handled = 0
 hold scanning = 0
+hold closed = 0
 hold c = 0
 hold n = 0
 hold word = ""
@@ -96,35 +87,13 @@ make keyword(w) {
     }
 }
 
-make is_operator(c) {
-    when c == 43 { give 1 } otherwise {
-        when c == 45 { give 1 } otherwise {
-            when c == 42 { give 1 } otherwise {
-                when c == 47 { give 1 } otherwise {
-                    when c == 37 { give 1 } otherwise {
-                        when c == 61 { give 1 } otherwise {
-                            when c == 33 { give 1 } otherwise {
-                                when c == 60 { give 1 } otherwise {
-                                    when c == 62 { give 1 } otherwise {
-                                        when c == 38 { give 1 } otherwise {
-                                            when c == 124 { give 1 } otherwise { give 0 }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Skip spaces and comments. The main parser loop calls this state repeatedly.
+// Main recursive-descent grammar state is represented by explicit delimiter
+// and expression levels. Function-local state is avoided for Stage-2 parity.
 while pos < length {
     handled = 0
     c = char_code(source, pos)
 
+    // Whitespace.
     when c == 32 {
         pos = pos + 1
         column = column + 1
@@ -150,6 +119,7 @@ while pos < length {
         }
     }
 
+    // Comments.
     when handled == 0 {
         when c == 47 {
             when pos + 1 < length {
@@ -178,6 +148,7 @@ while pos < length {
                         pos = pos + 2
                         column = column + 2
                         scanning = 1
+                        closed = 0
                         while scanning == 1 {
                             when pos < length {
                                 c = char_code(source, pos)
@@ -187,6 +158,7 @@ while pos < length {
                                         when n == 47 {
                                             pos = pos + 2
                                             column = column + 2
+                                            closed = 1
                                             scanning = 0
                                         } otherwise {
                                             pos = pos + 1
@@ -206,11 +178,11 @@ while pos < length {
                                         column = column + 1
                                     }
                                 }
-                            } otherwise {
-                                errors = errors + 1
-                                valid = 0
-                                scanning = 0
-                            }
+                            } otherwise { scanning = 0 }
+                        }
+                        when closed == 0 {
+                            errors = errors + 1
+                            valid = 0
                         }
                         handled = 1
                     }
@@ -219,7 +191,7 @@ while pos < length {
         }
     }
 
-    // Identifiers, keywords, and statement starters.
+    // Identifiers and keywords.
     when handled == 0 {
         when is_alpha(c) == 1 {
             word = ""
@@ -236,8 +208,8 @@ while pos < length {
             }
             kind = keyword(word)
             token_count = token_count + 1
-            last_word = word
             previous_kind = kind
+            last_word = word
             handled = 1
 
             when kind == "SHOW" {
@@ -271,10 +243,10 @@ while pos < length {
                                             statement_count = statement_count + 1
                                             expect_operand = 1
                                         } otherwise {
-                                            when kind == "OTHERWISE" {
+                                            when kind == "EXPORT" {
                                                 expect_operand = 1
                                             } otherwise {
-                                                when kind == "EXPORT" {
+                                                when kind == "OTHERWISE" {
                                                     expect_operand = 1
                                                 } otherwise {
                                                     expect_operand = 0
@@ -291,7 +263,7 @@ while pos < length {
         }
     }
 
-    // Numbers, including decimal and exponent forms.
+    // Numbers with decimal and exponent syntax.
     when handled == 0 {
         when is_digit(c) == 1 {
             value = ""
@@ -404,13 +376,13 @@ while pos < length {
         }
     }
 
-    // Strings and escaped characters.
+    // Strings and escapes.
     when handled == 0 {
         when c == 34 {
             pos = pos + 1
             column = column + 1
-            scanning = 1
             closed = 0
+            scanning = 1
             while scanning == 1 {
                 when pos < length {
                     c = char_code(source, pos)
@@ -474,7 +446,7 @@ while pos < length {
         }
     }
 
-    // Grouping, arrays, blocks, separators, and struct fields.
+    // Delimiters and punctuation.
     when handled == 0 {
         when c == 40 {
             paren_depth = paren_depth + 1
@@ -517,9 +489,9 @@ while pos < length {
                         when c == 123 {
                             brace_depth = brace_depth + 1
                             token_count = token_count + 1
+                            expect_operand = 1
                             pos = pos + 1
                             column = column + 1
-                            expect_operand = 1
                             handled = 1
                         } otherwise {
                             when c == 125 {
@@ -571,76 +543,141 @@ while pos < length {
         }
     }
 
-    // Operators. Reject malformed doubled operators at the parser boundary.
+    // Operators: arithmetic, equality/comparison, logical operators.
     when handled == 0 {
-        when is_operator(c) == 1 {
+        when c == 43 {
             token_count = token_count + 1
             pos = pos + 1
             column = column + 1
-            when c == 61 {
-                when pos < length {
-                    n = char_code(source, pos)
-                    when n == 61 {
+            expect_operand = 1
+            handled = 1
+        } otherwise {
+            when c == 45 {
+                token_count = token_count + 1
+                pos = pos + 1
+                column = column + 1
+                expect_operand = 1
+                handled = 1
+            } otherwise {
+                when c == 42 {
+                    token_count = token_count + 1
+                    pos = pos + 1
+                    column = column + 1
+                    expect_operand = 1
+                    handled = 1
+                } otherwise {
+                    when c == 47 {
+                        token_count = token_count + 1
                         pos = pos + 1
                         column = column + 1
-                    }
-                }
-            } otherwise {
-                when c == 33 {
-                    when pos < length {
-                        n = char_code(source, pos)
-                        when n == 61 {
+                        expect_operand = 1
+                        handled = 1
+                    } otherwise {
+                        when c == 37 {
+                            token_count = token_count + 1
                             pos = pos + 1
                             column = column + 1
-                        }
-                    }
-                } otherwise {
-                    when c == 60 {
-                        when pos < length {
-                            n = char_code(source, pos)
-                            when n == 61 {
+                            expect_operand = 1
+                            handled = 1
+                        } otherwise {
+                            when c == 61 {
+                                token_count = token_count + 1
                                 pos = pos + 1
                                 column = column + 1
-                            }
-                        }
-                    } otherwise {
-                        when c == 62 {
-                            when pos < length {
-                                n = char_code(source, pos)
-                                when n == 61 {
-                                    pos = pos + 1
-                                    column = column + 1
-                                }
-                            }
-                        } otherwise {
-                            when c == 38 {
                                 when pos < length {
                                     n = char_code(source, pos)
-                                    when n == 38 {
+                                    when n == 61 {
                                         pos = pos + 1
                                         column = column + 1
-                                    } otherwise {
-                                        errors = errors + 1
-                                        valid = 0
                                     }
-                                } otherwise {
-                                    errors = errors + 1
-                                    valid = 0
                                 }
+                                expect_operand = 1
+                                handled = 1
                             } otherwise {
-                                when c == 124 {
+                                when c == 33 {
+                                    token_count = token_count + 1
+                                    pos = pos + 1
+                                    column = column + 1
                                     when pos < length {
                                         n = char_code(source, pos)
-                                        when n == 124 {
+                                        when n == 61 {
                                             pos = pos + 1
                                             column = column + 1
+                                        }
+                                    }
+                                    expect_operand = 1
+                                    handled = 1
+                                } otherwise {
+                                    when c == 38 {
+                                        pos = pos + 1
+                                        column = column + 1
+                                        when pos < length {
+                                            n = char_code(source, pos)
+                                            when n == 38 {
+                                                pos = pos + 1
+                                                column = column + 1
+                                                token_count = token_count + 1
+                                            } otherwise {
+                                                errors = errors + 1
+                                                valid = 0
+                                            }
                                         } otherwise {
                                             errors = errors + 1
                                             valid = 0
                                         }
+                                        expect_operand = 1
+                                        handled = 1
                                     } otherwise {
-                                        errors = errors + 1
-                                        valid = 0
+                                        when c == 124 {
+                                            pos = pos + 1
+                                            column = column + 1
+                                            when pos < length {
+                                                n = char_code(source, pos)
+                                                when n == 124 {
+                                                    pos = pos + 1
+                                                    column = column + 1
+                                                    token_count = token_count + 1
+                                                } otherwise {
+                                                    errors = errors + 1
+                                                    valid = 0
+                                                }
+                                            } otherwise {
+                                                errors = errors + 1
+                                                valid = 0
+                                            }
+                                            expect_operand = 1
+                                            handled = 1
+                                        } otherwise {
+                                            when c == 60 {
+                                                token_count = token_count + 1
+                                                pos = pos + 1
+                                                column = column + 1
+                                                when pos < length {
+                                                    n = char_code(source, pos)
+                                                    when n == 61 {
+                                                        pos = pos + 1
+                                                        column = column + 1
+                                                    }
+                                                }
+                                                expect_operand = 1
+                                                handled = 1
+                                            } otherwise {
+                                                when c == 62 {
+                                                    token_count = token_count + 1
+                                                    pos = pos + 1
+                                                    column = column + 1
+                                                    when pos < length {
+                                                        n = char_code(source, pos)
+                                                        when n == 61 {
+                                                            pos = pos + 1
+                                                            column = column + 1
+                                                        }
+                                                    }
+                                                    expect_operand = 1
+                                                    handled = 1
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -648,8 +685,6 @@ while pos < length {
                     }
                 }
             }
-            expect_operand = 1
-            handled = 1
         }
     }
 
@@ -676,9 +711,10 @@ when bracket_depth != 0 {
 
 when valid == 1 {
     show "AST Program"
-    show "Stmt: declaration/control/expression"
-    show "Expr: primary -> postfix -> precedence operators"
-    show "Expr: calls/index/field/array/struct-literal"
+    show "Statement grammar: declaration/control/expression"
+    show "Expression grammar: primary/postfix/precedence"
+    show "Postfix: call/index/field"
+    show "Literals: number/string/array/struct"
     show token_count
     show statement_count
     show "parse OK"
