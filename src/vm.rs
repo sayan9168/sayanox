@@ -30,7 +30,8 @@ impl Value {
         }
     }
 
-    fn display(&self) -> String {
+    /// Render a runtime value for `show` and the CLI `--run` result path.
+    pub fn display(&self) -> String {
         match self {
             Self::Number(v) => {
                 if v.fract() == 0.0 { format!("{:.0}", v) } else { v.to_string() }
