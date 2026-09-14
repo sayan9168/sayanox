@@ -38,3 +38,14 @@ jobs:
         run: |
           chmod +x selfhost/restore_stage2.sh selfhost/bootstrap_selfhost.sh selfhost/sx
           ./selfhost/bootstrap_selfhost.sh
+
+  stage3:
+    name: Stage-3 self-host bootstrap
+    runs-on: ubuntu-latest
+    needs: [rust-host, selfhost]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run complete Stage-3 bootstrap
+        run: |
+          chmod +x selfhost/bootstrap_stage3.sh selfhost/restore_stage2.sh selfhost/sx
+          ./selfhost/bootstrap_stage3.sh
