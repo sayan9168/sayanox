@@ -1,17 +1,16 @@
 # Sayanox .sa codegen
 
-## Supported
-- Full names via hash slots (`hold count` / `hold total`)
-- `make id(n) { give n }` + `show id(42)`
-- `make f() { give 42 }` + `show f()`
-- `show "hi"` (string literal MVP)
-- when / while / otherwise / hold / show number
+## Done
+- **Names → C identifiers**: `count` → `v_99_111_117_110_116` (full name, unique)
+- **String content**: `show "hello"` → `putchar` sequence (real chars)
+- **List**: `hold xs = [1, 2, 3]` → `double v_..._a[8] = {1, 2, 3}`
+- **Struct**: `struct Point { }` → `struct SPoint { double x; double y; }`
+- make / give / params / when / while / otherwise
 
 ```bash
 ./selfhost/step5_all.sh
 ```
 
-## Limits
-- String content currently emits fixed `puts("hi")` for demos (literal scan skips body)
-- struct / list emit: not in .sa codegen yet (use Stage-2 `sx` for full language)
-- Name → `S[hash]` not source-level C identifiers
+## Note
+Stage-2 `make` cannot return strings, so names use code-based ids and strings use `putchar`.
+Full language programs: `./selfhost/sx file.sa --run`

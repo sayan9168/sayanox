@@ -19,10 +19,9 @@ run_demo() {
   echo
 }
 run_demo fullname_demo
-run_demo param_demo
 run_demo string_demo
+run_demo list_demo
+run_demo struct_demo_cg
 run_demo make_demo
-run_demo when_demo
-run_demo while_demo
-run_demo otherwise_demo
-echo "=== FULL-NAME / PARAMS / STRING OK ==="
+run_demo param_demo
+echo "=== NAMES / STRING / LIST / STRUCT OK ==="
