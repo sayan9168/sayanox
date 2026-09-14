@@ -1,4 +1,7 @@
-//! Tokens for the Sayanox language
+//! Tokens for the Sayanox language.
+//!
+//! The token model is deliberately independent from the parser so the lexer
+//! can be tested as a complete source-to-token boundary.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
@@ -25,6 +28,9 @@ pub enum TokenKind {
     Assign,
     EqEq,
     BangEq,
+    Bang,
+    AndAnd,
+    OrOr,
     Gt,
     Lt,
     Gte,
@@ -39,11 +45,12 @@ pub enum TokenKind {
     RBracket,
     Comma,
     Colon,
+    Semicolon,
 
     Eof,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
     pub line: usize,
