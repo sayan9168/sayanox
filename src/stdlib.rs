@@ -3,7 +3,7 @@
 //! The registry is the canonical compiler-facing description of the first
 //! standard library surface. Runtime implementations live in the VM and
 //! generated C runtime, while this module provides stable names, categories,
-//! arity, and documentation for future type checking and tooling.
+//! arity, and documentation for compiler tooling.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinKind {
@@ -25,6 +25,7 @@ pub struct BuiltinSpec {
 pub const BUILTINS: &[BuiltinSpec] = &[
     BuiltinSpec { name: "len", kind: BuiltinKind::String, min_args: 1, max_args: 1, description: "Return the length of a string or list." },
     BuiltinSpec { name: "concat", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Concatenate two strings." },
+    BuiltinSpec { name: "char_at", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Return the Unicode character at an index." },
     BuiltinSpec { name: "contains", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Check whether a string contains another string." },
     BuiltinSpec { name: "starts_with", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Check whether a string starts with a prefix." },
     BuiltinSpec { name: "ends_with", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Check whether a string ends with a suffix." },
@@ -43,9 +44,7 @@ pub fn builtin(name: &str) -> Option<&'static BuiltinSpec> {
     BUILTINS.iter().find(|spec| spec.name == name)
 }
 
-pub fn is_builtin(name: &str) -> bool {
-    builtin(name).is_some()
-}
+pub fn is_builtin(name: &str) -> bool { builtin(name).is_some() }
 
 pub fn accepts_arity(name: &str, argc: usize) -> bool {
     builtin(name).is_some_and(|spec| argc >= spec.min_args && argc <= spec.max_args)
@@ -58,6 +57,7 @@ mod tests {
     #[test]
     fn registry_contains_runtime_builtins() {
         assert!(is_builtin("len"));
+        assert!(is_builtin("char_at"));
         assert!(is_builtin("push"));
         assert!(is_builtin("read_file"));
         assert!(!is_builtin("missing_builtin"));
@@ -67,6 +67,8 @@ mod tests {
     fn builtin_arity_is_available_to_compiler_layers() {
         assert!(accepts_arity("concat", 2));
         assert!(!accepts_arity("concat", 1));
+        assert!(accepts_arity("char_at", 2));
+        assert!(!accepts_arity("char_at", 1));
         assert!(accepts_arity("len", 1));
         assert!(!accepts_arity("len", 2));
     }
