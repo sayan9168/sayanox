@@ -20,14 +20,18 @@ src = src.replace(
     'snprintf(n,900,"((double)((long)(%s)%%(long)(%s)))",left,right);',
 )
 
+# Normalize the legacy string detector so sx_string_len is not mistaken for
+# the sx_str conversion builtin.
 lines = src.splitlines(True)
 for index, line in enumerate(lines):
-    if "static int looks_string" in line and "sx_char_at" not in line:
-        line = line.replace(
-            "?1:0;",
-            r'||strstr(e,"sx_char_at")||strstr(e,"sx_char_from_code")?1:0;',
-            1,
-        )
+    if "static int looks_string" in line:
+        line = line.replace(r'strstr(e,"sx_str")', r'strstr(e,"sx_str(")')
+        if "sx_char_at" not in line:
+            line = line.replace(
+                "?1:0;",
+                r'||strstr(e,"sx_char_at")||strstr(e,"sx_char_from_code")?1:0;',
+                1,
+            )
         lines[index] = line
 src = "".join(lines)
 
@@ -59,8 +63,6 @@ src = src.replace(
     1,
 )
 
-# Emit extra runtime functions as ordinary generated C instead of embedding them
-# inside the legacy RUNTIME string. This keeps the generated Stage-2 C valid.
 extra_runtime = r'''fputs("static size_t sx_utf8_next(const unsigned char *p){ if(p[0]<0x80)return 1; if((p[0]&0xE0)==0xC0)return 2; if((p[0]&0xF0)==0xE0)return 3; if((p[0]&0xF8)==0xF0)return 4; return 1; }\nstatic size_t sx_string_len(const char *s){ size_t i=0,n=0; while(s[i]){ i+=sx_utf8_next((const unsigned char*)s+i); n++; } return n; }\nstatic unsigned int sx_char_code(const char *s,int index){ size_t i=0; for(int n=0;n<index && s[i];n++) i+=sx_utf8_next((const unsigned char*)s+i); if(!s[i])return 0; const unsigned char *p=(const unsigned char*)s+i; if(p[0]<0x80)return p[0]; if((p[0]&0xE0)==0xC0)return ((p[0]&0x1F)<<6)|(p[1]&0x3F); if((p[0]&0xF0)==0xE0)return ((p[0]&0x0F)<<12)|((p[1]&0x3F)<<6)|(p[2]&0x3F); return ((p[0]&0x07)<<18)|((p[1]&0x3F)<<12)|((p[2]&0x3F)<<6)|(p[3]&0x3F); }\nstatic char *sx_char_at(const char *s,int index){ size_t i=0; for(int n=0;n<index && s[i];n++) i+=sx_utf8_next((const unsigned char*)s+i); if(!s[i]){ char *z=malloc(1); z[0]=0; return z; } size_t w=sx_utf8_next((const unsigned char*)s+i); char *r=malloc(w+1); if(!r)exit(1); memcpy(r,s+i,w); r[w]=0; return r; }\nstatic char *sx_char_from_code(unsigned int code){ int w=code<0x80?1:code<0x800?2:code<0x10000?3:4; char *r=malloc((size_t)w+1); if(!r)exit(1); if(w==1)r[0]=(char)code; else if(w==2){r[0]=(char)(0xC0|(code>>6));r[1]=(char)(0x80|(code&0x3F));} else if(w==3){r[0]=(char)(0xE0|(code>>12));r[1]=(char)(0x80|((code>>6)&0x3F));r[2]=(char)(0x80|(code&0x3F));} else {r[0]=(char)(0xF0|(code>>18));r[1]=(char)(0x80|((code>>12)&0x3F));r[2]=(char)(0x80|((code>>6)&0x3F));r[3]=(char)(0x80|(code&0x3F));} r[w]=0; return r; }\n",o);
 '''
 if 'sx_string_len' not in src:
