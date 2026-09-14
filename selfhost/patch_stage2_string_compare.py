@@ -6,7 +6,7 @@ import re
 path = Path("selfhost/stage2_template.c")
 src = path.read_text()
 
-helper = r'''static int is_str_expr(const char *e){if(!e)return 0;if(e[0]=='"')return 1;if(strstr(e,"sx_concat")||strstr(e,"sx_str")||strstr(e,"sx_read_file")||strstr(e,"sx_upper")||strstr(e,"sx_lower")||strstr(e,"sx_trim")||strstr(e,"sx_char_at")||strstr(e,"sx_char_from_code"))return 1;for(int i=0;i<g_nstrs;i++)if(!strcmp(g_str_names[i],e))return 1;return 0;}\n'''
+helper = r'''static int is_str_expr(const char *e){if(!e)return 0;if(e[0]=='"')return 1;if(strstr(e,"sx_concat")||strstr(e,"sx_str")||strstr(e,"sx_read_file")||strstr(e,"sx_upper")||strstr(e,"sx_lower")||strstr(e,"sx_trim")||strstr(e,"sx_char_at")||strstr(e,"sx_char_from_code"))return 1;for(int i=0;i<g_nstrs;i++)if(!strcmp(g_str_names[i],e))return 1;return 0;}'''
 marker = 'static char *parse_expr(void);'
 if 'static int is_str_expr(' not in src:
     src = src.replace(marker, helper + marker, 1)
