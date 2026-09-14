@@ -48,33 +48,20 @@ impl Value {
 }
 
 #[derive(Clone)]
-struct Function {
-    params: Vec<String>,
-    body: Vec<Stmt>,
-}
-
-enum Flow {
-    Normal(Value),
-    Return(Value),
-}
+struct Function { params: Vec<String>, body: Vec<Stmt> }
+enum Flow { Normal(Value), Return(Value) }
 
 pub fn run(program: &Program) -> Result<Value, String> {
     let mut vm = Vm { scopes: vec![HashMap::new()], functions: HashMap::new() };
     vm.collect_functions(program);
     let mut last = Value::Null;
     for statement in &program.statements {
-        match vm.exec(statement)? {
-            Flow::Normal(value) => last = value,
-            Flow::Return(value) => return Ok(value),
-        }
+        match vm.exec(statement)? { Flow::Normal(value) => last = value, Flow::Return(value) => return Ok(value) }
     }
     Ok(last)
 }
 
-struct Vm {
-    scopes: Vec<HashMap<String, Value>>,
-    functions: HashMap<String, Function>,
-}
+struct Vm { scopes: Vec<HashMap<String, Value>>, functions: HashMap<String, Function> }
 
 impl Vm {
     fn collect_functions(&mut self, program: &Program) {
@@ -85,31 +72,19 @@ impl Vm {
         }
     }
 
-    fn get(&self, name: &str) -> Option<Value> {
-        self.scopes.iter().rev().find_map(|scope| scope.get(name).cloned())
-    }
+    fn get(&self, name: &str) -> Option<Value> { self.scopes.iter().rev().find_map(|scope| scope.get(name).cloned()) }
 
     fn set(&mut self, name: &str, value: Value) {
         for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(name) {
-                scope.insert(name.into(), value);
-                return;
-            }
+            if scope.contains_key(name) { scope.insert(name.into(), value); return; }
         }
         self.scopes.last_mut().unwrap().insert(name.into(), value);
     }
 
     fn exec(&mut self, statement: &Stmt) -> Result<Flow, String> {
         match statement {
-            Stmt::Show(expr) => {
-                println!("{}", self.eval(expr)?.display());
-                Ok(Flow::Normal(Value::Null))
-            }
-            Stmt::Hold { name, value, .. } | Stmt::Assign { name, value } => {
-                let value = self.eval(value)?;
-                self.set(name, value.clone());
-                Ok(Flow::Normal(value))
-            }
+            Stmt::Show(expr) => { println!("{}", self.eval(expr)?.display()); Ok(Flow::Normal(Value::Null)) }
+            Stmt::Hold { name, value, .. } | Stmt::Assign { name, value } => { let value = self.eval(value)?; self.set(name, value.clone()); Ok(Flow::Normal(value)) }
             Stmt::Give(expr) => Ok(Flow::Return(self.eval(expr)?)),
             Stmt::Expr(expr) => Ok(Flow::Normal(self.eval(expr)?)),
             Stmt::When { condition, then_body, otherwise_body } => {
@@ -120,10 +95,7 @@ impl Vm {
                 let mut last = Value::Null;
                 let mut guard = 0usize;
                 while self.eval(condition)?.truthy() {
-                    match self.exec_block(Some(body))? {
-                        Flow::Normal(value) => last = value,
-                        Flow::Return(value) => return Ok(Flow::Return(value)),
-                    }
+                    match self.exec_block(Some(body))? { Flow::Normal(value) => last = value, Flow::Return(value) => return Ok(Flow::Return(value)) }
                     guard += 1;
                     if guard > 10_000_000 { return Err("runtime error: loop iteration limit exceeded".into()); }
                 }
@@ -137,10 +109,7 @@ impl Vm {
         let Some(body) = body else { return Ok(Flow::Normal(Value::Null)); };
         let mut last = Value::Null;
         for statement in body {
-            match self.exec(statement)? {
-                Flow::Normal(value) => last = value,
-                Flow::Return(value) => return Ok(Flow::Return(value)),
-            }
+            match self.exec(statement)? { Flow::Normal(value) => last = value, Flow::Return(value) => return Ok(Flow::Return(value)) }
         }
         Ok(Flow::Normal(last))
     }
@@ -169,11 +138,7 @@ impl Vm {
                 for (field, value) in fields { object.insert(field.clone(), self.eval(value)?); }
                 Ok(Value::Struct { name: name.clone(), fields: object })
             }
-            Expr::Binary { left, op, right } => {
-                let left_value = self.eval(left)?;
-                let right_value = self.eval(right)?;
-                self.binary(left_value, *op, right_value)
-            }
+            Expr::Binary { left, op, right } => { let left_value = self.eval(left)?; let right_value = self.eval(right)?; self.binary(left_value, *op, right_value) }
             Expr::Call { name, args } => self.call(name, args),
         }
     }
@@ -188,20 +153,13 @@ impl Vm {
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 let (a, b) = numbers(left, right)?;
                 if matches!(op, BinOp::Div | BinOp::Mod) && b == 0.0 { return Err("runtime error: division by zero".into()); }
-                Ok(Value::Number(match op {
-                    BinOp::Sub => a - b, BinOp::Mul => a * b, BinOp::Div => a / b, BinOp::Mod => a % b,
-                    _ => unreachable!(),
-                }))
+                Ok(Value::Number(match op { BinOp::Sub => a - b, BinOp::Mul => a * b, BinOp::Div => a / b, BinOp::Mod => a % b, _ => unreachable!() }))
             }
             BinOp::Gt | BinOp::Lt | BinOp::Eq | BinOp::Neq | BinOp::Gte | BinOp::Lte => {
                 let result = match (&left, &right) {
                     (Value::Number(a), Value::Number(b)) => cmp(*a, *b, op),
                     (Value::String(a), Value::String(b)) => cmp_str(a, b, op),
-                    _ => match op {
-                        BinOp::Eq => left == right,
-                        BinOp::Neq => left != right,
-                        _ => return Err("ordered comparison requires matching numbers or strings".into()),
-                    },
+                    _ => match op { BinOp::Eq => left == right, BinOp::Neq => left != right, _ => return Err("ordered comparison requires matching numbers or strings".into()) },
                 };
                 Ok(Value::Bool(result))
             }
@@ -212,17 +170,10 @@ impl Vm {
         if name == "push" {
             if args.len() != 2 { return Err("push expects 2 argument(s)".into()); }
             let value = self.eval(&args[1])?;
-            let variable = match &args[0] {
-                Expr::Ident(name) => name,
-                _ => return Err("push expects a list variable as its first argument".into()),
-            };
+            let variable = match &args[0] { Expr::Ident(name) => name, _ => return Err("push expects a list variable as its first argument".into()) };
             let list = self.get(variable).ok_or_else(|| format!("undefined variable `{variable}`"))?;
             match list {
-                Value::List(mut values) => {
-                    values.push(value);
-                    self.set(variable, Value::List(values));
-                    Ok(Value::Null)
-                }
+                Value::List(mut values) => { values.push(value); self.set(variable, Value::List(values)); Ok(Value::Null) }
                 _ => Err("push expects a list variable as its first argument".into()),
             }
         } else {
@@ -240,127 +191,40 @@ impl Vm {
     fn builtin(&mut self, name: &str, args: &[Expr]) -> Result<Option<Value>, String> {
         let mut values = || args.iter().map(|expr| self.eval(expr)).collect::<Result<Vec<_>, _>>();
         let value = match name {
-            "len" | "list_len" => {
-                let args = values()?; require_arity(name, &args, 1)?;
-                Some(Value::Number(match &args[0] {
-                    Value::String(value) => value.chars().count() as f64,
-                    Value::List(value) => value.len() as f64,
-                    _ => return Err("len expects a string or list".into()),
-                }))
-            }
-            "string_len" => {
-                let args = values()?; require_arity(name, &args, 1)?;
-                match &args[0] { Value::String(value) => Some(Value::Number(value.chars().count() as f64)), _ => return Err("string_len expects a string".into()) }
-            }
-            "concat" => {
-                let args = values()?; require_arity(name, &args, 2)?;
-                let a = match &args[0] { Value::String(v) => v, _ => return Err("concat expects two strings".into()) };
-                let b = match &args[1] { Value::String(v) => v, _ => return Err("concat expects two strings".into()) };
-                Some(Value::String(format!("{}{}", a, b)))
-            }
-            "char_at" => {
-                let args = values()?; require_arity(name, &args, 2)?;
-                let value = match &args[0] { Value::String(v) => v, _ => return Err("char_at expects a string".into()) };
-                let index = number_index(&args[1])?;
-                Some(Value::String(value.chars().nth(index).map(|c| c.to_string()).ok_or("index out of bounds")?))
-            }
-            "char_code" => {
-                let args = values()?; require_arity(name, &args, 2)?;
-                let value = match &args[0] { Value::String(v) => v, _ => return Err("char_code expects a string".into()) };
-                let index = number_index(&args[1])?;
-                Some(Value::Number(value.chars().nth(index).map(|c| c as u32 as f64).ok_or("index out of bounds")?))
-            }
-            "contains" | "starts_with" | "ends_with" => {
-                let args = values()?; require_arity(name, &args, 2)?;
-                let (x, y) = match (&args[0], &args[1]) { (Value::String(x), Value::String(y)) => (x, y), _ => return Err(format!("{name} expects two strings")) };
-                Some(Value::Bool(match name { "contains" => x.contains(y), "starts_with" => x.starts_with(y), _ => x.ends_with(y) }))
-            }
-            "upper" | "lower" | "trim" => {
-                let args = values()?; require_arity(name, &args, 1)?;
-                let value = match &args[0] { Value::String(value) => value, _ => return Err(format!("{name} expects a string")) };
-                Some(Value::String(match name { "upper" => value.to_uppercase(), "lower" => value.to_lowercase(), _ => value.trim().to_string() }))
-            }
+            "len" | "list_len" => { let args = values()?; require_arity(name, &args, 1)?; Some(Value::Number(match &args[0] { Value::String(value) => value.chars().count() as f64, Value::List(value) => value.len() as f64, _ => return Err("len expects a string or list".into()) })) }
+            "string_len" => { let args = values()?; require_arity(name, &args, 1)?; match &args[0] { Value::String(value) => Some(Value::Number(value.chars().count() as f64)), _ => return Err("string_len expects a string".into()) } }
+            "concat" => { let args = values()?; require_arity(name, &args, 2)?; let a = match &args[0] { Value::String(v) => v, _ => return Err("concat expects two strings".into()) }; let b = match &args[1] { Value::String(v) => v, _ => return Err("concat expects two strings".into()) }; Some(Value::String(format!("{}{}", a, b))) }
+            "char_at" => { let args = values()?; require_arity(name, &args, 2)?; let value = match &args[0] { Value::String(v) => v, _ => return Err("char_at expects a string".into()) }; let index = number_index(&args[1])?; Some(Value::String(value.chars().nth(index).map(|c| c.to_string()).ok_or("index out of bounds")?)) }
+            "char_code" => { let args = values()?; require_arity(name, &args, 2)?; let value = match &args[0] { Value::String(v) => v, _ => return Err("char_code expects a string".into()) }; let index = number_index(&args[1])?; Some(Value::Number(value.chars().nth(index).map(|c| c as u32 as f64).ok_or("index out of bounds")?)) }
+            "char_from_code" => { let args = values()?; require_arity(name, &args, 1)?; let number = match &args[0] { Value::Number(v) if v.is_finite() && v.fract() == 0.0 && *v >= 0.0 && *v <= 0x10FFFF as f64 => *v as u32, _ => return Err("char_from_code expects a valid Unicode scalar value".into()) }; match char::from_u32(number) { Some(c) if !(0xD800..=0xDFFF).contains(&number) => Some(Value::String(c.to_string())), _ => return Err("char_from_code received an invalid Unicode scalar value".into()) } }
+            "contains" | "starts_with" | "ends_with" => { let args = values()?; require_arity(name, &args, 2)?; let (x, y) = match (&args[0], &args[1]) { (Value::String(x), Value::String(y)) => (x, y), _ => return Err(format!("{name} expects two strings")) }; Some(Value::Bool(match name { "contains" => x.contains(y), "starts_with" => x.starts_with(y), _ => x.ends_with(y) })) }
+            "upper" | "lower" | "trim" => { let args = values()?; require_arity(name, &args, 1)?; let value = match &args[0] { Value::String(value) => value, _ => return Err(format!("{name} expects a string")) }; Some(Value::String(match name { "upper" => value.to_uppercase(), "lower" => value.to_lowercase(), _ => value.trim().to_string() })) }
             "str" => { let args = values()?; require_arity(name, &args, 1)?; Some(Value::String(args[0].display())) }
-            "list_get" => {
-                let args = values()?; require_arity(name, &args, 2)?; let index = number_index(&args[1])?;
-                match &args[0] { Value::List(values) => Some(values.get(index).cloned().ok_or("index out of bounds")?), _ => return Err("list_get expects a list".into()) }
-            }
-            "read_file" => {
-                let args = values()?; require_arity(name, &args, 1)?;
-                let path = match &args[0] { Value::String(path) => path, _ => return Err("read_file expects a path string".into()) };
-                Some(Value::String(fs::read_to_string(path).map_err(|e| format!("read_file: {e}"))?))
-            }
-            "write_file" => {
-                let args = values()?; require_arity(name, &args, 2)?;
-                let path = match &args[0] { Value::String(path) => path, _ => return Err("write_file expects a path string".into()) };
-                fs::write(path, args[1].display()).map_err(|e| format!("write_file: {e}"))?;
-                Some(Value::Null)
-            }
+            "list_get" => { let args = values()?; require_arity(name, &args, 2)?; let index = number_index(&args[1])?; match &args[0] { Value::List(values) => Some(values.get(index).cloned().ok_or("index out of bounds")?), _ => return Err("list_get expects a list".into()) } }
+            "read_file" => { let args = values()?; require_arity(name, &args, 1)?; let path = match &args[0] { Value::String(path) => path, _ => return Err("read_file expects a path string".into()) }; Some(Value::String(fs::read_to_string(path).map_err(|e| format!("read_file: {e}"))?)) }
+            "write_file" => { let args = values()?; require_arity(name, &args, 2)?; let path = match &args[0] { Value::String(path) => path, _ => return Err("write_file expects a path string".into()) }; fs::write(path, args[1].display()).map_err(|e| format!("write_file: {e}"))?; Some(Value::Null) }
             _ => None,
         };
         Ok(value)
     }
 }
 
-fn require_arity(name: &str, args: &[Value], expected: usize) -> Result<(), String> {
-    if args.len() == expected { Ok(()) } else { Err(format!("{name} expects {expected} argument(s), got {}", args.len())) }
-}
-
-fn numbers(a: Value, b: Value) -> Result<(f64, f64), String> {
-    match (a, b) { (Value::Number(x), Value::Number(y)) => Ok((x, y)), _ => Err("arithmetic requires numbers".into()) }
-}
-
-fn number_index(value: &Value) -> Result<usize, String> {
-    match value { Value::Number(number) if number.is_finite() && number.fract() == 0.0 && *number >= 0.0 => Ok(*number as usize), _ => Err("index must be a non-negative integer".into()) }
-}
-
-fn cmp(a: f64, b: f64, op: BinOp) -> bool {
-    match op { BinOp::Gt => a > b, BinOp::Lt => a < b, BinOp::Eq => a == b, BinOp::Neq => a != b, BinOp::Gte => a >= b, BinOp::Lte => a <= b, _ => false }
-}
-
-fn cmp_str(a: &str, b: &str, op: BinOp) -> bool {
-    match op { BinOp::Gt => a > b, BinOp::Lt => a < b, BinOp::Eq => a == b, BinOp::Neq => a != b, BinOp::Gte => a >= b, BinOp::Lte => a <= b, _ => false }
-}
+fn require_arity(name: &str, args: &[Value], expected: usize) -> Result<(), String> { if args.len() == expected { Ok(()) } else { Err(format!("{name} expects {expected} argument(s), got {}", args.len())) } }
+fn numbers(a: Value, b: Value) -> Result<(f64, f64), String> { match (a, b) { (Value::Number(x), Value::Number(y)) => Ok((x, y)), _ => Err("arithmetic requires numbers".into()) } }
+fn number_index(value: &Value) -> Result<usize, String> { match value { Value::Number(number) if number.is_finite() && number.fract() == 0.0 && *number >= 0.0 => Ok(*number as usize), _ => Err("index must be a non-negative integer".into()) } }
+fn cmp(a: f64, b: f64, op: BinOp) -> bool { match op { BinOp::Gt => a > b, BinOp::Lt => a < b, BinOp::Eq => a == b, BinOp::Neq => a != b, BinOp::Gte => a >= b, BinOp::Lte => a <= b, _ => false } }
+fn cmp_str(a: &str, b: &str, op: BinOp) -> bool { match op { BinOp::Gt => a > b, BinOp::Lt => a < b, BinOp::Eq => a == b, BinOp::Neq => a != b, BinOp::Gte => a >= b, BinOp::Lte => a <= b, _ => false } }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::{Expr, Program, Stmt};
-
     fn program(statements: Vec<Stmt>) -> Program { Program { statements } }
     fn number(value: f64) -> Expr { Expr::Number(value) }
-
-    #[test]
-    fn arithmetic() {
-        let program = program(vec![Stmt::Expr(Expr::Binary { left: Box::new(number(6.0)), op: BinOp::Mul, right: Box::new(number(7.0)) })]);
-        assert_eq!(run(&program).unwrap(), Value::Number(42.0));
-    }
-
-    #[test]
-    fn div_zero() {
-        let program = program(vec![Stmt::Expr(Expr::Binary { left: Box::new(number(1.0)), op: BinOp::Div, right: Box::new(number(0.0)) })]);
-        assert!(run(&program).is_err());
-    }
-
-    #[test]
-    fn char_at_returns_unicode_character() {
-        let program = program(vec![Stmt::Expr(Expr::Call { name: "char_at".into(), args: vec![Expr::String("Aβ".into()), Expr::Number(1.0)] })]);
-        assert_eq!(run(&program).unwrap(), Value::String("β".into()));
-    }
-
-    #[test]
-    fn char_code_returns_unicode_scalar() {
-        let program = program(vec![Stmt::Expr(Expr::Call { name: "char_code".into(), args: vec![Expr::String("A😀".into()), Expr::Number(1.0)] })]);
-        assert_eq!(run(&program).unwrap(), Value::Number('😀' as u32 as f64));
-    }
-
-    #[test]
-    fn push_mutates_a_list_variable() {
-        let program = program(vec![
-            Stmt::Hold { name: "items".into(), value: Expr::Array(vec![number(1.0)]), exported: false },
-            Stmt::Expr(Expr::Call { name: "push".into(), args: vec![Expr::Ident("items".into()), number(2.0)] }),
-            Stmt::Expr(Expr::Call { name: "list_len".into(), args: vec![Expr::Ident("items".into())] }),
-        ]);
-        assert_eq!(run(&program).unwrap(), Value::Number(2.0));
-    }
+    #[test] fn arithmetic() { let program = program(vec![Stmt::Expr(Expr::Binary { left: Box::new(number(6.0)), op: BinOp::Mul, right: Box::new(number(7.0)) })]); assert_eq!(run(&program).unwrap(), Value::Number(42.0)); }
+    #[test] fn div_zero() { let program = program(vec![Stmt::Expr(Expr::Binary { left: Box::new(number(1.0)), op: BinOp::Div, right: Box::new(number(0.0)) })]); assert!(run(&program).is_err()); }
+    #[test] fn char_at_returns_unicode_character() { let program = program(vec![Stmt::Expr(Expr::Call { name: "char_at".into(), args: vec![Expr::String("Aβ".into()), Expr::Number(1.0)] })]); assert_eq!(run(&program).unwrap(), Value::String("β".into())); }
+    #[test] fn char_code_returns_unicode_scalar() { let program = program(vec![Stmt::Expr(Expr::Call { name: "char_code".into(), args: vec![Expr::String("A😀".into()), Expr::Number(1.0)] })]); assert_eq!(run(&program).unwrap(), Value::Number('😀' as u32 as f64)); }
+    #[test] fn char_from_code_returns_unicode_character() { let program = program(vec![Stmt::Expr(Expr::Call { name: "char_from_code".into(), args: vec![number('😀' as u32 as f64)] })]); assert_eq!(run(&program).unwrap(), Value::String("😀".into())); }
+    #[test] fn push_mutates_a_list_variable() { let program = program(vec![Stmt::Hold { name: "items".into(), value: Expr::Array(vec![number(1.0)]), exported: false }, Stmt::Expr(Expr::Call { name: "push".into(), args: vec![Expr::Ident("items".into()), number(2.0)] }), Stmt::Expr(Expr::Call { name: "list_len".into(), args: vec![Expr::Ident("items".into())] })]); assert_eq!(run(&program).unwrap(), Value::Number(2.0)); }
 }
