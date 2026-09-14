@@ -1,0 +1,4 @@
+hold a = 10
+hold b = 32
+show a
+show b

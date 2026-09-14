@@ -1,21 +1,24 @@
 # Compiler in Sayanox (.sa)
 
-## Status: subset complete
+## Done (1 + 2)
 
-| Feature | In codegen.sa |
-|---------|----------------|
-| hold / assign number | yes |
-| show number / name / call | yes |
-| when / while | yes |
-| make fn() / give number | yes |
+### 1. Expanded .sa codegen
+- Multi-var via `S[charCode]` slots (`hold a` / `hold b`)
+- `show` number / name / `fn()`
+- `when` / `while` / `otherwise`
+- `make fn() { give number }`
+
+### 2. Bootstrap role
+- Stage-2 C remains the **thin host** that executes `.sa` (cannot invent a CPU from nothing)
+- Compiler **logic** for the subset lives in `codegen.sa` (Sayanox)
+- Install: `python3 selfhost/install_codegen.py` then `./selfhost/step5_all.sh`
 
 ```bash
+git pull
 ./selfhost/step5_all.sh
 ```
 
-Installs full `codegen.sa` then runs all demos (expect 42 each).
-
-## Still out of subset
-
-Multi-var names, params, otherwise, structs, strings/lists in .sa codegen.
-Stage-2 C remains bootstrap for running `.sa` tools / general programs via `sx`.
+## Still later (optional)
+- Full param expressions, structs/strings/lists in .sa codegen
+- Replace more of Stage-2 C with .sa incrementally
+- LSP / GC / package registry
