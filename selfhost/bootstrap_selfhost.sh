@@ -45,7 +45,16 @@ fi
 echo "[7/10] lexer.sa"
 ./selfhost/stage2 selfhost/lexer.sa selfhost/lexer_out.c
 $CC -o selfhost/lexer_bin selfhost/lexer_out.c
-./selfhost/lexer_bin | grep -q NUMBER
+set +e
+./selfhost/lexer_bin >selfhost/lexer_runtime.log 2>&1
+lexer_status=$?
+set -e
+if [[ $lexer_status -ne 0 ]]; then
+  echo "lexer.sa runtime failed with exit code $lexer_status"
+  cat selfhost/lexer_runtime.log
+  exit "$lexer_status"
+fi
+grep -q NUMBER selfhost/lexer_runtime.log
 echo "  OK"
 
 echo "[8/10] parser.sa"
