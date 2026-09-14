@@ -39,9 +39,8 @@ pub fn check(program: &Program) -> Result<(), String> {
     let mut structs: HashMap<String, Vec<String>> = HashMap::new();
     let mut funcs: HashMap<String, (Vec<Ty>, Ty)> = HashMap::new();
 
-    // builtins arity
-    for (name, _, _) in stdlib::BUILTINS {
-        let _ = name;
+    for spec in stdlib::BUILTINS {
+        let _ = spec;
     }
 
     for stmt in &program.statements {
@@ -58,17 +57,13 @@ fn check_stmt(
     in_fn: bool,
 ) -> Result<(), String> {
     match stmt {
-        Stmt::Hold {
-            name, value, ..
-        } => {
+        Stmt::Hold { name, value, .. } => {
             let ty = infer_expr(value, vars, structs, funcs)?;
             if let Some(prev) = vars.get(name) {
                 if !prev.compatible(&ty) {
                     return Err(format!(
                         "type error: cannot reassign `{}` from {} to {}",
-                        name,
-                        prev.name(),
-                        ty.name()
+                        name, prev.name(), ty.name()
                     ));
                 }
             }
@@ -84,9 +79,7 @@ fn check_stmt(
                 )),
                 Some(prev) if !prev.compatible(&ty) => Err(format!(
                     "type error: cannot assign {} to `{}` (was {})",
-                    ty.name(),
-                    name,
-                    prev.name()
+                    ty.name(), name, prev.name()
                 )),
                 _ => Ok(()),
             }
@@ -95,18 +88,12 @@ fn check_stmt(
             structs.insert(name.clone(), fields.clone());
             Ok(())
         }
-        Stmt::Make {
-            name, params, body, ..
-        } => {
+        Stmt::Make { name, params, body, .. } => {
             let param_tys = vec![Ty::Number; params.len()];
             funcs.insert(name.clone(), (param_tys.clone(), Ty::Number));
             let mut local = vars.clone();
-            for p in params {
-                local.insert(p.clone(), Ty::Number);
-            }
-            for s in body {
-                check_stmt(s, &mut local, structs, funcs, true)?;
-            }
+            for p in params { local.insert(p.clone(), Ty::Number); }
+            for s in body { check_stmt(s, &mut local, structs, funcs, true)?; }
             Ok(())
         }
         Stmt::Show(e) | Stmt::Expr(e) => {
@@ -114,45 +101,27 @@ fn check_stmt(
             Ok(())
         }
         Stmt::Give(e) => {
-            if !in_fn {
-                return Err("type error: `give` is only valid inside a function".into());
-            }
+            if !in_fn { return Err("type error: `give` is only valid inside a function".into()); }
             infer_expr(e, vars, structs, funcs)?;
             Ok(())
         }
-        Stmt::When {
-            condition,
-            then_body,
-            otherwise_body,
-        } => {
+        Stmt::When { condition, then_body, otherwise_body } => {
             let ct = infer_expr(condition, vars, structs, funcs)?;
             if !ct.compatible(&Ty::Number) {
-                return Err(format!(
-                    "type error: when condition must be number-like, got {}",
-                    ct.name()
-                ));
+                return Err(format!("type error: when condition must be number-like, got {}", ct.name()));
             }
-            for s in then_body {
-                check_stmt(s, vars, structs, funcs, in_fn)?;
-            }
+            for s in then_body { check_stmt(s, vars, structs, funcs, in_fn)?; }
             if let Some(body) = otherwise_body {
-                for s in body {
-                    check_stmt(s, vars, structs, funcs, in_fn)?;
-                }
+                for s in body { check_stmt(s, vars, structs, funcs, in_fn)?; }
             }
             Ok(())
         }
         Stmt::While { condition, body } => {
             let ct = infer_expr(condition, vars, structs, funcs)?;
             if !ct.compatible(&Ty::Number) {
-                return Err(format!(
-                    "type error: while condition must be number-like, got {}",
-                    ct.name()
-                ));
+                return Err(format!("type error: while condition must be number-like, got {}", ct.name()));
             }
-            for s in body {
-                check_stmt(s, vars, structs, funcs, in_fn)?;
-            }
+            for s in body { check_stmt(s, vars, structs, funcs, in_fn)?; }
             Ok(())
         }
         Stmt::Use { .. } => Ok(()),
@@ -174,16 +143,11 @@ fn infer_expr(
             if let Some(expected) = structs.get(name) {
                 for (fname, _) in fields {
                     if !expected.iter().any(|f| f == fname) {
-                        return Err(format!(
-                            "type error: struct `{}` has no field `{}`",
-                            name, fname
-                        ));
+                        return Err(format!("type error: struct `{}` has no field `{}`", name, fname));
                     }
                 }
             }
-            for (_, v) in fields {
-                infer_expr(v, vars, structs, funcs)?;
-            }
+            for (_, v) in fields { infer_expr(v, vars, structs, funcs)?; }
             Ok(Ty::Struct(name.clone()))
         }
         Expr::Field { object, field } => {
@@ -191,10 +155,7 @@ fn infer_expr(
             if let Ty::Struct(sname) = &ot {
                 if let Some(fields) = structs.get(sname) {
                     if !fields.iter().any(|f| f == field) {
-                        return Err(format!(
-                            "type error: struct `{}` has no field `{}`",
-                            sname, field
-                        ));
+                        return Err(format!("type error: struct `{}` has no field `{}`", sname, field));
                     }
                 }
             }
@@ -203,29 +164,24 @@ fn infer_expr(
         Expr::Index { array, index } => {
             let at = infer_expr(array, vars, structs, funcs)?;
             let it = infer_expr(index, vars, structs, funcs)?;
-            if !it.compatible(&Ty::Number) {
-                return Err("type error: index must be a number".into());
-            }
+            if !it.compatible(&Ty::Number) { return Err("type error: index must be a number".into()); }
             match at {
                 Ty::List | Ty::String | Ty::Unknown => Ok(Ty::Number),
-                other => Err(format!(
-                    "type error: cannot index {}",
-                    other.name()
-                )),
+                other => Err(format!("type error: cannot index {}", other.name())),
             }
         }
         Expr::Call { name, args } => {
-            for a in args {
-                infer_expr(a, vars, structs, funcs)?;
-            }
-            // builtin arity
-            if let Some(expected) = builtin_arity(name) {
-                if args.len() != expected {
+            for a in args { infer_expr(a, vars, structs, funcs)?; }
+            if let Some(spec) = stdlib::builtin(name) {
+                if args.len() < spec.min_args || args.len() > spec.max_args {
+                    let expected = if spec.min_args == spec.max_args {
+                        spec.min_args.to_string()
+                    } else {
+                        format!("{}..{}", spec.min_args, spec.max_args)
+                    };
                     return Err(format!(
                         "type error: wrong number of arguments for `{}`: expected {}, got {}",
-                        name,
-                        expected,
-                        args.len()
+                        name, expected, args.len()
                     ));
                 }
             }
@@ -233,9 +189,7 @@ fn infer_expr(
                 if params.len() != args.len() {
                     return Err(format!(
                         "type error: wrong number of arguments for `{}`: expected {}, got {}",
-                        name,
-                        params.len(),
-                        args.len()
+                        name, params.len(), args.len()
                     ));
                 }
                 return Ok(ret.clone());
@@ -250,39 +204,23 @@ fn infer_expr(
         Expr::Binary { left, op, right } => {
             let l = infer_expr(left, vars, structs, funcs)?;
             let r = infer_expr(right, vars, structs, funcs)?;
-            if matches!(
-                op,
-                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
-            ) && (l == Ty::String || r == Ty::String)
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod)
+                && (l == Ty::String || r == Ty::String)
             {
-                return Err(format!(
-                    "type error: cannot use arithmetic on string values ({:?})",
-                    op
-                ));
+                return Err(format!("type error: cannot use arithmetic on string values ({:?})", op));
             }
-            if matches!(
-                op,
-                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
-            ) && !l.compatible(&Ty::Number)
-                && l != Ty::Unknown
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod)
+                && !l.compatible(&Ty::Number) && l != Ty::Unknown
             {
-                return Err(format!(
-                    "type error: left operand of {:?} must be number, got {}",
-                    op,
-                    l.name()
-                ));
+                return Err(format!("type error: left operand of {:?} must be number, got {}", op, l.name()));
+            }
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod)
+                && !r.compatible(&Ty::Number) && r != Ty::Unknown
+            {
+                return Err(format!("type error: right operand of {:?} must be number, got {}", op, r.name()));
             }
             Ok(Ty::Number)
         }
-    }
-}
-
-fn builtin_arity(name: &str) -> Option<usize> {
-    match name {
-        "len" | "list_len" | "upper" | "lower" | "trim" | "str" | "read_file" => Some(1),
-        "concat" | "contains" | "starts_with" | "ends_with" | "push" | "list_get"
-        | "write_file" => Some(2),
-        _ => None,
     }
 }
 
@@ -293,25 +231,27 @@ mod tests {
 
     #[test]
     fn rejects_string_math() {
-        let program = Program {
-            statements: vec![Stmt::Show(Expr::Binary {
-                left: Box::new(Expr::String("a".into())),
-                op: BinOp::Add,
-                right: Box::new(Expr::Number(1.0)),
-            })],
-        };
+        let program = Program { statements: vec![Stmt::Show(Expr::Binary {
+            left: Box::new(Expr::String("a".into())), op: BinOp::Add,
+            right: Box::new(Expr::Number(1.0)),
+        })]};
         assert!(check(&program).is_err());
     }
 
     #[test]
     fn accepts_number_math() {
-        let program = Program {
-            statements: vec![Stmt::Show(Expr::Binary {
-                left: Box::new(Expr::Number(1.0)),
-                op: BinOp::Add,
-                right: Box::new(Expr::Number(2.0)),
-            })],
-        };
+        let program = Program { statements: vec![Stmt::Show(Expr::Binary {
+            left: Box::new(Expr::Number(1.0)), op: BinOp::Add,
+            right: Box::new(Expr::Number(2.0)),
+        })]};
         assert!(check(&program).is_ok());
+    }
+
+    #[test]
+    fn checks_builtin_arity_from_registry() {
+        let program = Program { statements: vec![Stmt::Show(Expr::Call {
+            name: "concat".into(), args: vec![Expr::String("a".into())],
+        })]};
+        assert!(check(&program).is_err());
     }
 }
