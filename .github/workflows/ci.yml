@@ -49,3 +49,14 @@ jobs:
         run: |
           chmod +x selfhost/bootstrap_stage3.sh selfhost/restore_stage2.sh selfhost/sx
           ./selfhost/bootstrap_stage3.sh
+
+  stage4:
+    name: Stage-4 self-hosted toolchain
+    runs-on: ubuntu-latest
+    needs: [stage3]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Rust-free compiler chain
+        run: |
+          chmod +x selfhost/stage4_toolchain.sh selfhost/restore_stage2.sh
+          ./selfhost/stage4_toolchain.sh
