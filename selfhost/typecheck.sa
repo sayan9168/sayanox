@@ -1,0 +1,38 @@
+// Sayanox bootstrap type checker written in Sayanox.
+// Types are represented by stable integer tags during bootstrap.
+
+show "=== Sayanox Type Checker ==="
+
+hold TYPE_UNKNOWN = 0
+hold TYPE_NUMBER = 1
+hold TYPE_STRING = 2
+hold TYPE_BOOL = 3
+
+make same_type(left, right) {
+    when left == right {
+        give 1
+    } otherwise {
+        give 0
+    }
+}
+
+hold checked = 0
+hold errors = 0
+
+when same_type(TYPE_NUMBER, TYPE_NUMBER) == 1 {
+    hold checked = checked + 1
+} otherwise {
+    hold errors = errors + 1
+}
+
+when same_type(TYPE_NUMBER, TYPE_STRING) == 1 {
+    hold errors = errors + 1
+} otherwise {
+    hold checked = checked + 1
+}
+
+show "checked"
+show checked
+show "errors"
+show errors
+show "=== Type checker done ==="

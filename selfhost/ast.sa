@@ -1,54 +1,38 @@
-// ============================================================
-// Sayanox Self-Hosting — Phase 3
-// AST node kinds and a simple tree stored in parallel arrays
-// ============================================================
+// Sayanox AST layer written in Sayanox.
+// This bootstrap representation uses parallel arrays and stable integer tags.
 
-show "=== Sayanox Self-Hosted AST Phase 3 ==="
+show "=== Sayanox AST ==="
 
-hold ST_SHOW   = 1
-hold ST_HOLD   = 2
-hold ST_MAKE   = 3
-hold ST_GIVE   = 4
-hold ST_WHEN   = 5
-hold ST_WHILE  = 6
-hold ST_EXPR   = 7
-
-hold EX_NUMBER = 10
-hold EX_IDENT  = 11
-hold EX_BINARY = 12
-hold EX_CALL   = 13
-
-hold OP_ADD = 20
-hold OP_SUB = 21
-hold OP_MUL = 22
-hold OP_DIV = 23
-
-hold kind  = []
-hold left  = []
+hold kinds = []
+hold values = []
+hold left = []
 hold right = []
-hold value = []
 hold count = 0
 
-make ast_new(k, l, r, v) {
-    push(kind, k)
-    push(left, l)
-    push(right, r)
-    push(value, v)
+make ast_number(value) {
+    push(kinds, 1)
+    push(values, value)
+    push(left, -1)
+    push(right, -1)
     hold id = count
     hold count = count + 1
     give id
 }
 
-hold num = ast_new(EX_NUMBER, -1, -1, 42)
-hold sh  = ast_new(ST_SHOW, num, -1, 0)
+make ast_binary(kind, lhs, rhs) {
+    push(kinds, kind)
+    push(values, 0)
+    push(left, lhs)
+    push(right, rhs)
+    hold id = count
+    hold count = count + 1
+    give id
+}
 
-show "AST node count:"
+hold n = ast_number(42)
+hold root = ast_binary(2, n, n)
+show "AST nodes"
 show count
-show "Show node kind (should be 1):"
-show kind[sh]
-show "Show points to number node:"
-show left[sh]
-show "Number value:"
-show value[num]
-
-show "AST Phase 3 core ready"
+show "AST root"
+show root
+show "=== AST done ==="

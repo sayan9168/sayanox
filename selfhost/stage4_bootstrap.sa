@@ -1,0 +1,23 @@
+// Sayanox Stage-4 bootstrap coordinator.
+// All source code and diagnostics are intentionally written in English.
+
+show "=== Sayanox Stage-4 Bootstrap ==="
+
+hold stages = []
+push(stages, "lexer.sa")
+push(stages, "parser.sa")
+push(stages, "ast.sa")
+push(stages, "typecheck.sa")
+push(stages, "codegen.sa")
+
+hold i = 0
+while i < len(stages) {
+    show "SELFHOST STAGE"
+    show stages[i]
+    hold i = i + 1
+}
+
+hold manifest = "Sayanox self-hosting pipeline\nlexer -> parser -> AST -> type checker -> code generator\n"
+write_file("selfhost/bootstrap.manifest", manifest)
+show "Stage-4 bootstrap manifest written"
+show "Stage-4 bootstrap complete"
