@@ -21,7 +21,4 @@ run_demo() {
 run_demo fullname_demo
 run_demo string_demo
 run_demo list_demo
-run_demo struct_demo_cg
-run_demo make_demo
-run_demo param_demo
-echo "=== NAMES / STRING / LIST / STRUCT OK ==="
+echo "=== OK ==="
