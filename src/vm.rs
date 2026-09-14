@@ -209,14 +209,32 @@ impl Vm {
     }
 
     fn call(&mut self, name: &str, args: &[Expr]) -> Result<Value, String> {
-        if let Some(value) = self.builtin(name, args)? { return Ok(value); }
-        let function = self.functions.get(name).cloned().ok_or_else(|| format!("unknown function `{name}`"))?;
-        if args.len() != function.params.len() { return Err(format!("function `{name}` expects {} argument(s), got {}", function.params.len(), args.len())); }
-        let values = args.iter().map(|expr| self.eval(expr)).collect::<Result<Vec<_>, _>>()?;
-        self.scopes.push(function.params.iter().cloned().zip(values).collect());
-        let result = self.exec_block(Some(&function.body));
-        self.scopes.pop();
-        match result? { Flow::Normal(value) | Flow::Return(value) => Ok(value) }
+        if name == "push" {
+            if args.len() != 2 { return Err("push expects 2 argument(s)".into()); }
+            let value = self.eval(&args[1])?;
+            let variable = match &args[0] {
+                Expr::Ident(name) => name,
+                _ => return Err("push expects a list variable as its first argument".into()),
+            };
+            let list = self.get(variable).ok_or_else(|| format!("undefined variable `{variable}`"))?;
+            match list {
+                Value::List(mut values) => {
+                    values.push(value);
+                    self.set(variable, Value::List(values));
+                    Ok(Value::Null)
+                }
+                _ => Err("push expects a list variable as its first argument".into()),
+            }
+        } else {
+            if let Some(value) = self.builtin(name, args)? { return Ok(value); }
+            let function = self.functions.get(name).cloned().ok_or_else(|| format!("unknown function `{name}`"))?;
+            if args.len() != function.params.len() { return Err(format!("function `{name}` expects {} argument(s), got {}", function.params.len(), args.len())); }
+            let values = args.iter().map(|expr| self.eval(expr)).collect::<Result<Vec<_>, _>>()?;
+            self.scopes.push(function.params.iter().cloned().zip(values).collect());
+            let result = self.exec_block(Some(&function.body));
+            self.scopes.pop();
+            match result? { Flow::Normal(value) | Flow::Return(value) => Ok(value) }
+        }
     }
 
     fn builtin(&mut self, name: &str, args: &[Expr]) -> Result<Option<Value>, String> {
@@ -230,6 +248,10 @@ impl Vm {
                     _ => return Err("len expects a string or list".into()),
                 }))
             }
+            "string_len" => {
+                let args = values()?; require_arity(name, &args, 1)?;
+                match &args[0] { Value::String(value) => Some(Value::Number(value.chars().count() as f64)), _ => return Err("string_len expects a string".into()) }
+            }
             "concat" => {
                 let args = values()?; require_arity(name, &args, 2)?;
                 let a = match &args[0] { Value::String(v) => v, _ => return Err("concat expects two strings".into()) };
@@ -241,6 +263,12 @@ impl Vm {
                 let value = match &args[0] { Value::String(v) => v, _ => return Err("char_at expects a string".into()) };
                 let index = number_index(&args[1])?;
                 Some(Value::String(value.chars().nth(index).map(|c| c.to_string()).ok_or("index out of bounds")?))
+            }
+            "char_code" => {
+                let args = values()?; require_arity(name, &args, 2)?;
+                let value = match &args[0] { Value::String(v) => v, _ => return Err("char_code expects a string".into()) };
+                let index = number_index(&args[1])?;
+                Some(Value::Number(value.chars().nth(index).map(|c| c as u32 as f64).ok_or("index out of bounds")?))
             }
             "contains" | "starts_with" | "ends_with" => {
                 let args = values()?; require_arity(name, &args, 2)?;
@@ -256,10 +284,6 @@ impl Vm {
             "list_get" => {
                 let args = values()?; require_arity(name, &args, 2)?; let index = number_index(&args[1])?;
                 match &args[0] { Value::List(values) => Some(values.get(index).cloned().ok_or("index out of bounds")?), _ => return Err("list_get expects a list".into()) }
-            }
-            "push" => {
-                let args = values()?; require_arity(name, &args, 2)?;
-                match &args[0] { Value::List(values) => { let mut result = values.clone(); result.push(args[1].clone()); Some(Value::List(result)) }, _ => return Err("push expects a list".into()) }
             }
             "read_file" => {
                 let args = values()?; require_arity(name, &args, 1)?;
@@ -320,10 +344,23 @@ mod tests {
 
     #[test]
     fn char_at_returns_unicode_character() {
-        let program = program(vec![Stmt::Expr(Expr::Call {
-            name: "char_at".into(),
-            args: vec![Expr::String("Aβ".into()), Expr::Number(1.0)],
-        })]);
+        let program = program(vec![Stmt::Expr(Expr::Call { name: "char_at".into(), args: vec![Expr::String("Aβ".into()), Expr::Number(1.0)] })]);
         assert_eq!(run(&program).unwrap(), Value::String("β".into()));
+    }
+
+    #[test]
+    fn char_code_returns_unicode_scalar() {
+        let program = program(vec![Stmt::Expr(Expr::Call { name: "char_code".into(), args: vec![Expr::String("A😀".into()), Expr::Number(1.0)] })]);
+        assert_eq!(run(&program).unwrap(), Value::Number('😀' as u32 as f64));
+    }
+
+    #[test]
+    fn push_mutates_a_list_variable() {
+        let program = program(vec![
+            Stmt::Hold { name: "items".into(), value: Expr::Array(vec![number(1.0)]), exported: false },
+            Stmt::Expr(Expr::Call { name: "push".into(), args: vec![Expr::Ident("items".into()), number(2.0)] }),
+            Stmt::Expr(Expr::Call { name: "list_len".into(), args: vec![Expr::Ident("items".into())] }),
+        ]);
+        assert_eq!(run(&program).unwrap(), Value::Number(2.0));
     }
 }
