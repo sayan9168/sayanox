@@ -37,31 +37,31 @@ impl Vm {
  fn eval(&mut self,e:&Expr)->Result<Value,String>{match e{
   Expr::Number(v)=>Ok(Value::Number(*v)),Expr::String(v)=>Ok(Value::String(v.clone())),Expr::Ident(n)=>self.get(n).ok_or_else(||format!("undefined variable `{n}`")),
   Expr::Array(xs)=>Ok(Value::List(xs.iter().map(|x|self.eval(x)).collect::<Result<Vec<_>,_>>()?)),
-  Expr::Index{array,index}=>{let a=self.eval(array)?;let i=self.eval(index)?;let n=number_index(&i)?;match a{Value::List(v)=>v.get(n).cloned().ok_or_else(||"index out of bounds".into()),Value::String(v)=>v.chars().nth(n).map(|c|Value::String(c.to_string())).ok_or_else(||"index out of bounds".into()),_=>(Err("value is not indexable".into()))}},
-  Expr::Field{object,field}=>match self.eval(object)?{Value::Struct{fields,..}=>fields.get(field).cloned().ok_or_else(||format!("unknown field `{field}`")),_=>(Err("field access requires a struct value".into()))},
+  Expr::Index{array,index}=>{let a=self.eval(array)?;let i=self.eval(index)?;let n=number_index(&i)?;match a{Value::List(v)=>v.get(n).cloned().ok_or_else(||"index out of bounds".into()),Value::String(v)=>v.chars().nth(n).map(|c|Value::String(c.to_string())).ok_or_else(||"index out of bounds".into()),_=>Err("value is not indexable".into())}},
+  Expr::Field{object,field}=>match self.eval(object)?{Value::Struct{fields,..}=>fields.get(field).cloned().ok_or_else(||format!("unknown field `{field}`")),_=>Err("field access requires a struct value".into())},
   Expr::StructLit{name,fields}=>{let mut o=HashMap::new();for(k,v)in fields{o.insert(k.clone(),self.eval(v)?);}Ok(Value::Struct{name:name.clone(),fields:o})},
   Expr::Binary{left,op,right}=>{let l=self.eval(left)?;let r=self.eval(right)?;self.binary(l,*op,r)},Expr::Call{name,args}=>self.call(name,args),
  }}
  fn binary(&self,l:Value,op:BinOp,r:Value)->Result<Value,String>{match op{
-  BinOp::Add=>match(l,r){(Value::Number(a),Value::Number(b))=>Ok(Value::Number(a+b)),(Value::String(a),Value::String(b))=>Ok(Value::String(a+&b)),_=>(Err("`+` requires two numbers or two strings".into()))},
+  BinOp::Add=>match(l,r){(Value::Number(a),Value::Number(b))=>Ok(Value::Number(a+b)),(Value::String(a),Value::String(b))=>Ok(Value::String(a+&b)),_=>Err("`+` requires two numbers or two strings".into())},
   BinOp::Sub|BinOp::Mul|BinOp::Div|BinOp::Mod=>{let(a,b)=numbers(l,r)?;if matches!(op,BinOp::Div|BinOp::Mod)&&b==0.0{return Err("runtime error: division by zero".into())}Ok(Value::Number(match op{BinOp::Sub=>a-b,BinOp::Mul=>a*b,BinOp::Div=>a/b,BinOp::Mod=>a%b,_=>unreachable!()}))},
-  BinOp::Gt|BinOp::Lt|BinOp::Eq|BinOp::Neq|BinOp::Gte|BinOp::Lte=>{let x=match(&l,&r){(Value::Number(a),Value::Number(b))=>cmp(*a,*b,op),(Value::String(a),Value::String(b))=>cmp_str(a,b,op),_=>(match op{BinOp::Eq=>l==r,BinOp::Neq=>l!=r,_=>return Err("ordered comparison requires matching numbers or strings".into())})};Ok(Value::Bool(x))}
+  BinOp::Gt|BinOp::Lt|BinOp::Eq|BinOp::Neq|BinOp::Gte|BinOp::Lte=>{let x=match(&l,&r){(Value::Number(a),Value::Number(b))=>cmp(*a,*b,op),(Value::String(a),Value::String(b))=>cmp_str(a,b,op),_=>match op{BinOp::Eq=>l==r,BinOp::Neq=>l!=r,_=>return Err("ordered comparison requires matching numbers or strings".into())}};Ok(Value::Bool(x))}
  }}
  fn call(&mut self,n:&str,args:&[Expr])->Result<Value,String>{if let Some(v)=self.builtin(n,args)?{return Ok(v)}let f=self.functions.get(n).cloned().ok_or_else(||format!("unknown function `{n}`"))?;if args.len()!=f.params.len(){return Err(format!("function `{n}` expects {} argument(s), got {}",f.params.len(),args.len()))}let vals=args.iter().map(|e|self.eval(e)).collect::<Result<Vec<_>,_>>()?;self.scopes.push(f.params.iter().cloned().zip(vals).collect());let r=self.exec_block(Some(&f.body));self.scopes.pop();match r?{Flow::Normal(v)|Flow::Return(v)=>Ok(v)}}
- fn builtin(&mut self,n:&str,args:&[Expr])->Result<Option<Value>,String>{let a=args.iter().map(|e|self.eval(e)).collect::<Result<Vec<_>,_>>()?;let v=match n{
-  "len"|"list_len"=>{require_arity(n,&a,1)?;Some(Value::Number(match &a[0]{Value::String(s)=>s.chars().count()as f64,Value::List(v)=>v.len()as f64,_=>return Err("len expects a string or list".into())}))},
-  "concat"=>{require_arity(n,&a,2)?;Some(Value::String(format!("{}{}",a[0].display(),a[1].display())))},
-  "contains"|"starts_with"|"ends_with"=>{require_arity(n,&a,2)?;let(x,y)=match(&a[0],&a[1]){(Value::String(x),Value::String(y))=>(x,y),_=>(return Err(format!("{n} expects two strings")))};Some(Value::Bool(match n{"contains"=>x.contains(y),"starts_with"=>x.starts_with(y),_=>x.ends_with(y)}))},
-  "upper"|"lower"|"trim"=>{require_arity(n,&a,1)?;let x=match&a[0]{Value::String(s)=>s,_=>return Err(format!("{n} expects a string"))};Some(Value::String(match n{"upper"=>x.to_uppercase(),"lower"=>x.to_lowercase(),_=>x.trim().to_string()}))},
-  "str"=>{require_arity(n,&a,1)?;Some(Value::String(a[0].display()))},
-  "list_get"=>{require_arity(n,&a,2)?;let i=number_index(&a[1])?;match&a[0]{Value::List(v)=>Some(v.get(i).cloned().ok_or("index out of bounds")?),_=>(return Err("list_get expects a list".into()))}},
-  "push"=>{require_arity(n,&a,2)?;match&a[0]{Value::List(v)=>{let mut x=v.clone();x.push(a[1].clone());Some(Value::List(x))},_=>(return Err("push expects a list".into()))}},
-  "read_file"=>{require_arity(n,&a,1)?;let p=match&a[0]{Value::String(s)=>s,_=>return Err("read_file expects a path string".into())};Some(Value::String(fs::read_to_string(p).map_err(|e|format!("read_file: {e}"))?))},
-  "write_file"=>{require_arity(n,&a,2)?;let p=match&a[0]{Value::String(s)=>s,_=>return Err("write_file expects a path string".into())};fs::write(p,a[1].display()).map_err(|e|format!("write_file: {e}"))?;Some(Value::Null)},_=>None};Ok(v)}
+ fn builtin(&mut self,n:&str,args:&[Expr])->Result<Option<Value>,String>{let mut values=||args.iter().map(|e|self.eval(e)).collect::<Result<Vec<_>,_>>();let v=match n{
+  "len"|"list_len"=>{let a=values()?;require_arity(n,&a,1)?;Some(Value::Number(match &a[0]{Value::String(s)=>s.chars().count()as f64,Value::List(v)=>v.len()as f64,_=>return Err("len expects a string or list".into())}))},
+  "concat"=>{let a=values()?;require_arity(n,&a,2)?;Some(Value::String(format!("{}{}",a[0].display(),a[1].display())))},
+  "contains"|"starts_with"|"ends_with"=>{let a=values()?;require_arity(n,&a,2)?;let(x,y)=match(&a[0],&a[1]){(Value::String(x),Value::String(y))=>(x,y),_=>return Err(format!("{n} expects two strings"))};Some(Value::Bool(match n{"contains"=>x.contains(y),"starts_with"=>x.starts_with(y),_=>x.ends_with(y)}))},
+  "upper"|"lower"|"trim"=>{let a=values()?;require_arity(n,&a,1)?;let x=match&a[0]{Value::String(s)=>s,_=>return Err(format!("{n} expects a string"))};Some(Value::String(match n{"upper"=>x.to_uppercase(),"lower"=>x.to_lowercase(),_=>x.trim().to_string()}))},
+  "str"=>{let a=values()?;require_arity(n,&a,1)?;Some(Value::String(a[0].display()))},
+  "list_get"=>{let a=values()?;require_arity(n,&a,2)?;let i=number_index(&a[1])?;match&a[0]{Value::List(v)=>Some(v.get(i).cloned().ok_or("index out of bounds")?),_=>return Err("list_get expects a list".into())}},
+  "push"=>{let a=values()?;require_arity(n,&a,2)?;match&a[0]{Value::List(v)=>{let mut x=v.clone();x.push(a[1].clone());Some(Value::List(x))},_=>return Err("push expects a list".into())}},
+  "read_file"=>{let a=values()?;require_arity(n,&a,1)?;let p=match&a[0]{Value::String(s)=>s,_=>return Err("read_file expects a path string".into())};Some(Value::String(fs::read_to_string(p).map_err(|e|format!("read_file: {e}"))?))},
+  "write_file"=>{let a=values()?;require_arity(n,&a,2)?;let p=match&a[0]{Value::String(s)=>s,_=>return Err("write_file expects a path string".into())};fs::write(p,a[1].display()).map_err(|e|format!("write_file: {e}"))?;Some(Value::Null)},_=>None};Ok(v)}
 }
 fn require_arity(n:&str,a:&[Value],x:usize)->Result<(),String>{if a.len()==x{Ok(())}else{Err(format!("{n} expects {x} argument(s), got {}",a.len()))}}
-fn numbers(a:Value,b:Value)->Result<(f64,f64),String>{match(a,b){(Value::Number(x),Value::Number(y))=>Ok((x,y)),_=>(Err("arithmetic requires numbers".into()))}}
-fn number_index(v:&Value)->Result<usize,String>{match v{Value::Number(n)if n.is_finite()&&n.fract()==0.0&&*n>=0.0=>Ok(*n as usize),_=>(Err("index must be a non-negative integer".into()))}}
+fn numbers(a:Value,b:Value)->Result<(f64,f64),String>{match(a,b){(Value::Number(x),Value::Number(y))=>Ok((x,y)),_=>Err("arithmetic requires numbers".into())}}
+fn number_index(v:&Value)->Result<usize,String>{match v{Value::Number(n)if n.is_finite()&&n.fract()==0.0&&*n>=0.0=>Ok(*n as usize),_=>Err("index must be a non-negative integer".into())}}
 fn cmp(a:f64,b:f64,o:BinOp)->bool{match o{BinOp::Gt=>a>b,BinOp::Lt=>a<b,BinOp::Eq=>a==b,BinOp::Neq=>a!=b,BinOp::Gte=>a>=b,BinOp::Lte=>a<=b,_=>false}}
 fn cmp_str(a:&str,b:&str,o:BinOp)->bool{match o{BinOp::Gt=>a>b,BinOp::Lt=>a<b,BinOp::Eq=>a==b,BinOp::Neq=>a!=b,BinOp::Gte=>a>=b,BinOp::Lte=>a<=b,_=>false}}
 #[cfg(test)]mod tests{use super::*;use crate::ast::{Expr,Program,Stmt};fn p(s:Vec<Stmt>)->Program{Program{statements:s}}fn n(x:f64)->Expr{Expr::Number(x)}#[test]fn arithmetic(){let p=p(vec![Stmt::Expr(Expr::Binary{left:Box::new(n(6.0)),op:BinOp::Mul,right:Box::new(n(7.0))})]);assert_eq!(run(&p).unwrap(),Value::Number(42.0))}#[test]fn div_zero(){let p=p(vec![Stmt::Expr(Expr::Binary{left:Box::new(n(1.0)),op:BinOp::Div,right:Box::new(n(0.0))})]);assert!(run(&p).is_err())}}
