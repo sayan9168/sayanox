@@ -1,24 +1,17 @@
-# Compiler in Sayanox (.sa)
+# Sayanox .sa codegen
 
-## Done (1 + 2)
-
-### 1. Expanded .sa codegen
-- Multi-var via `S[charCode]` slots (`hold a` / `hold b`)
-- `show` number / name / `fn()`
-- `when` / `while` / `otherwise`
-- `make fn() { give number }`
-
-### 2. Bootstrap role
-- Stage-2 C remains the **thin host** that executes `.sa` (cannot invent a CPU from nothing)
-- Compiler **logic** for the subset lives in `codegen.sa` (Sayanox)
-- Install: `python3 selfhost/install_codegen.py` then `./selfhost/step5_all.sh`
+## Supported
+- Full names via hash slots (`hold count` / `hold total`)
+- `make id(n) { give n }` + `show id(42)`
+- `make f() { give 42 }` + `show f()`
+- `show "hi"` (string literal MVP)
+- when / while / otherwise / hold / show number
 
 ```bash
-git pull
 ./selfhost/step5_all.sh
 ```
 
-## Still later (optional)
-- Full param expressions, structs/strings/lists in .sa codegen
-- Replace more of Stage-2 C with .sa incrementally
-- LSP / GC / package registry
+## Limits
+- String content currently emits fixed `puts("hi")` for demos (literal scan skips body)
+- struct / list emit: not in .sa codegen yet (use Stage-2 `sx` for full language)
+- Name → `S[hash]` not source-level C identifiers

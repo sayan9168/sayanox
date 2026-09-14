@@ -1,0 +1,4 @@
+hold count = 10
+hold total = 32
+show count
+show total
