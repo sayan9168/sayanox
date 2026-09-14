@@ -1,0 +1,21 @@
+// Parser fixture covering declarations, expressions, calls, arrays,
+// indexing, fields, control flow, functions, structs, and imports.
+export hold base = 10
+hold values = [1, 2, 3]
+hold total = add(base, values[0] * 2)
+show total
+when total >= 12 {
+    show "high"
+} otherwise {
+    show "low"
+}
+while total > 0 {
+    total = total - 1
+}
+struct User { name, age }
+hold user = User { name: "Sayan", age: 18 }
+show user.name
+make add(a, b) {
+    give a + b
+}
+use "math.sa"
