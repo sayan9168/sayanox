@@ -1,7 +1,6 @@
 // Complete Sayanox lexer implemented in Sayanox.
-// It mirrors the current lexical contract: whitespace, line and block comments,
-// Unicode-aware identifiers, decimal and exponent numbers, escaped strings,
-// operators, punctuation, source locations, deterministic output, and errors.
+// It covers whitespace, comments, identifiers, keywords, numbers, strings,
+// operators, punctuation, source locations, and lexical errors.
 
 show "=== Sayanox Self-Hosted Lexer ==="
 
@@ -14,6 +13,30 @@ hold column = 1
 hold output = ""
 hold errors = 0
 hold token_count = 0
+hold ch = 0
+hold next = 0
+hold handled = 0
+hold scanning = 0
+hold c = 0
+hold start_line = 1
+hold start_column = 1
+hold closed = 0
+hold n2 = 0
+hold word = ""
+hold kind = ""
+hold number = ""
+hold value = ""
+hold after_dot = 0
+hold exponent = 0
+hold sign = 0
+hold first_exp = 0
+hold d = 0
+hold e = 0
+hold h1 = 0
+hold h2 = 0
+hold code = 0
+hold escape_line = 1
+hold escape_column = 1
 
 make is_digit(c) {
     when c >= 48 {
@@ -56,17 +79,11 @@ make is_hex(c) {
 }
 
 make hex_value(c) {
-    when c >= 48 {
-        when c <= 57 { give c - 48 } otherwise {
-            when c >= 65 {
-                when c <= 70 { give c - 55 } otherwise {
-                    when c >= 97 {
-                        when c <= 102 { give c - 87 } otherwise { give -1 }
-                    } otherwise { give -1 }
-                }
-            } otherwise { give -1 }
-        }
-    } otherwise { give -1 }
+    when is_digit(c) == 1 { give c - 48 } otherwise {
+        when c >= 65 {
+            when c <= 70 { give c - 55 } otherwise { give c - 87 }
+        } otherwise { give c - 87 }
+    }
 }
 
 make emit(kind, lexeme, at_line, at_column) {
@@ -85,469 +102,414 @@ make error_record(message, at_line, at_column) {
 }
 
 while pos < length {
-    hold ch = char_code(source, pos)
+    ch = char_code(source, pos)
+    handled = 0
 
     when ch == 32 {
-        hold pos = pos + 1
-        hold column = column + 1
+        pos = pos + 1
+        column = column + 1
+        handled = 1
     } otherwise {
         when ch == 9 {
-            hold pos = pos + 1
-            hold column = column + 1
+            pos = pos + 1
+            column = column + 1
+            handled = 1
         } otherwise {
             when ch == 10 {
-                hold pos = pos + 1
-                hold line = line + 1
-                hold column = 1
+                pos = pos + 1
+                line = line + 1
+                column = 1
+                handled = 1
             } otherwise {
                 when ch == 13 {
-                    hold pos = pos + 1
-                    hold column = column + 1
+                    pos = pos + 1
+                    column = column + 1
+                    handled = 1
+                }
+            }
+        }
+    }
+
+    when handled == 0 {
+        when ch == 47 {
+            when pos + 1 < length {
+                next = char_code(source, pos + 1)
+                when next == 47 {
+                    handled = 1
+                    pos = pos + 2
+                    column = column + 2
+                    scanning = 1
+                    while scanning == 1 {
+                        when pos < length {
+                            c = char_code(source, pos)
+                            when c == 10 {
+                                pos = pos + 1
+                                line = line + 1
+                                column = 1
+                                scanning = 0
+                            } otherwise {
+                                pos = pos + 1
+                                column = column + 1
+                            }
+                        } otherwise { scanning = 0 }
+                    }
                 } otherwise {
-                    when ch == 47 {
-                        hold handled = 0
-                        when pos + 1 < length {
-                            hold next = char_code(source, pos + 1)
-                            when next == 47 {
-                                hold handled = 1
-                                hold pos = pos + 2
-                                hold column = column + 2
-                                hold scanning = 1
-                                while scanning == 1 {
-                                    when pos < length {
-                                        hold c = char_code(source, pos)
-                                        when c == 10 {
-                                            hold pos = pos + 1
-                                            hold line = line + 1
-                                            hold column = 1
-                                            hold scanning = 0
+                    when next == 42 {
+                        handled = 1
+                        start_line = line
+                        start_column = column
+                        pos = pos + 2
+                        column = column + 2
+                        closed = 0
+                        scanning = 1
+                        while scanning == 1 {
+                            when pos < length {
+                                c = char_code(source, pos)
+                                when c == 42 {
+                                    when pos + 1 < length {
+                                        n2 = char_code(source, pos + 1)
+                                        when n2 == 47 {
+                                            pos = pos + 2
+                                            column = column + 2
+                                            closed = 1
+                                            scanning = 0
                                         } otherwise {
-                                            hold pos = pos + 1
-                                            hold column = column + 1
-                                        }
-                                    } otherwise { hold scanning = 0 }
-                                }
-                            } otherwise {
-                                when next == 42 {
-                                    hold handled = 1
-                                    hold start_line = line
-                                    hold start_column = column
-                                    hold pos = pos + 2
-                                    hold column = column + 2
-                                    hold closed = 0
-                                    hold scanning = 1
-                                    while scanning == 1 {
-                                        when pos < length {
-                                            hold c = char_code(source, pos)
-                                            when c == 42 {
-                                                when pos + 1 < length {
-                                                    hold n2 = char_code(source, pos + 1)
-                                                    when n2 == 47 {
-                                                        hold pos = pos + 2
-                                                        hold column = column + 2
-                                                        hold closed = 1
-                                                        hold scanning = 0
-                                                    } otherwise {
-                                                        hold pos = pos + 1
-                                                        hold column = column + 1
-                                                    }
-                                                } otherwise {
-                                                    hold pos = pos + 1
-                                                    hold column = column + 1
-                                                }
-                                            } otherwise {
-                                                when c == 10 {
-                                                    hold pos = pos + 1
-                                                    hold line = line + 1
-                                                    hold column = 1
-                                                } otherwise {
-                                                    hold pos = pos + 1
-                                                    hold column = column + 1
-                                                }
-                                            }
-                                        } otherwise { hold scanning = 0 }
-                                    }
-                                    when closed == 0 {
-                                        hold errors = errors + 1
-                                        hold output = concat(output, error_record("unterminated_block_comment", start_line, start_column))
-                                    }
-                                }
-                            }
-                        }
-                        when handled == 0 {
-                            hold output = concat(output, emit("SLASH", "/", line, column))
-                            hold token_count = token_count + 1
-                            hold pos = pos + 1
-                            hold column = column + 1
-                        }
-                    } otherwise {
-                        when is_alpha(ch) == 1 {
-                            hold start_line = line
-                            hold start_column = column
-                            hold word = ""
-                            hold scanning = 1
-                            while scanning == 1 {
-                                when pos < length {
-                                    hold c = char_code(source, pos)
-                                    when is_alnum(c) == 1 {
-                                        hold word = concat(word, char_at(source, pos))
-                                        hold pos = pos + 1
-                                        hold column = column + 1
-                                    } otherwise { hold scanning = 0 }
-                                } otherwise { hold scanning = 0 }
-                            }
-                            hold kind = "IDENT"
-                            when word == "show" { hold kind = "SHOW" } otherwise {
-                                when word == "hold" { hold kind = "HOLD" } otherwise {
-                                    when word == "make" { hold kind = "MAKE" } otherwise {
-                                        when word == "give" { hold kind = "GIVE" } otherwise {
-                                            when word == "when" { hold kind = "WHEN" } otherwise {
-                                                when word == "otherwise" { hold kind = "OTHERWISE" } otherwise {
-                                                    when word == "while" { hold kind = "WHILE" } otherwise {
-                                                        when word == "struct" { hold kind = "STRUCT" } otherwise {
-                                                            when word == "use" { hold kind = "USE" } otherwise {
-                                                                when word == "export" { hold kind = "EXPORT" }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            hold output = concat(output, emit(kind, word, start_line, start_column))
-                            hold token_count = token_count + 1
-                        } otherwise {
-                            when is_digit(ch) == 1 {
-                                hold start_line = line
-                                hold start_column = column
-                                hold number = ""
-                                hold scanning = 1
-                                while scanning == 1 {
-                                    when pos < length {
-                                        hold c = char_code(source, pos)
-                                        when is_digit(c) == 1 {
-                                            hold number = concat(number, char_at(source, pos))
-                                            hold pos = pos + 1
-                                            hold column = column + 1
-                                        } otherwise { hold scanning = 0 }
-                                    } otherwise { hold scanning = 0 }
-                                }
-                                when pos < length {
-                                    hold c = char_code(source, pos)
-                                    when c == 46 {
-                                        when pos + 1 < length {
-                                            hold after_dot = char_code(source, pos + 1)
-                                            when is_digit(after_dot) == 1 {
-                                                hold number = concat(number, ".")
-                                                hold pos = pos + 1
-                                                hold column = column + 1
-                                                hold scanning = 1
-                                                while scanning == 1 {
-                                                    when pos < length {
-                                                        hold d = char_code(source, pos)
-                                                        when is_digit(d) == 1 {
-                                                            hold number = concat(number, char_at(source, pos))
-                                                            hold pos = pos + 1
-                                                            hold column = column + 1
-                                                        } otherwise { hold scanning = 0 }
-                                                    } otherwise { hold scanning = 0 }
-                                                }
-                                            } otherwise {
-                                                hold errors = errors + 1
-                                                hold output = concat(output, error_record("invalid_number", start_line, start_column))
-                                                hold pos = pos + 1
-                                                hold column = column + 1
-                                            }
-                                        } otherwise {
-                                            hold errors = errors + 1
-                                            hold output = concat(output, error_record("invalid_number", start_line, start_column))
-                                            hold pos = pos + 1
-                                            hold column = column + 1
-                                        }
-                                    }
-                                }
-                                when pos < length {
-                                    hold exponent = char_code(source, pos)
-                                    when exponent == 101 {
-                                        hold number = concat(number, "e")
-                                        hold pos = pos + 1
-                                        hold column = column + 1
-                                        when pos < length {
-                                            hold sign = char_code(source, pos)
-                                            when sign == 43 {
-                                                hold number = concat(number, "+")
-                                                hold pos = pos + 1
-                                                hold column = column + 1
-                                            } otherwise {
-                                                when sign == 45 {
-                                                    hold number = concat(number, "-")
-                                                    hold pos = pos + 1
-                                                    hold column = column + 1
-                                                }
-                                            }
-                                        }
-                                        when pos < length {
-                                            hold first_exp = char_code(source, pos)
-                                            when is_digit(first_exp) == 1 {
-                                                hold scanning = 1
-                                                while scanning == 1 {
-                                                    when pos < length {
-                                                        hold d = char_code(source, pos)
-                                                        when is_digit(d) == 1 {
-                                                            hold number = concat(number, char_at(source, pos))
-                                                            hold pos = pos + 1
-                                                            hold column = column + 1
-                                                        } otherwise { hold scanning = 0 }
-                                                    } otherwise { hold scanning = 0 }
-                                                }
-                                            } otherwise {
-                                                hold errors = errors + 1
-                                                hold output = concat(output, error_record("invalid_exponent", start_line, start_column))
-                                            }
-                                        } otherwise {
-                                            hold errors = errors + 1
-                                            hold output = concat(output, error_record("invalid_exponent", start_line, start_column))
+                                            pos = pos + 1
+                                            column = column + 1
                                         }
                                     } otherwise {
-                                        when exponent == 69 {
-                                            hold number = concat(number, "E")
-                                            hold pos = pos + 1
-                                            hold column = column + 1
-                                            when pos < length {
-                                                hold sign = char_code(source, pos)
-                                                when sign == 43 {
-                                                    hold number = concat(number, "+")
-                                                    hold pos = pos + 1
-                                                    hold column = column + 1
-                                                } otherwise {
-                                                    when sign == 45 {
-                                                        hold number = concat(number, "-")
-                                                        hold pos = pos + 1
-                                                        hold column = column + 1
-                                                    }
-                                                }
-                                            }
-                                            when pos < length {
-                                                hold first_exp = char_code(source, pos)
-                                                when is_digit(first_exp) == 1 {
-                                                    hold scanning = 1
-                                                    while scanning == 1 {
-                                                        when pos < length {
-                                                            hold d = char_code(source, pos)
-                                                            when is_digit(d) == 1 {
-                                                                hold number = concat(number, char_at(source, pos))
-                                                                hold pos = pos + 1
-                                                                hold column = column + 1
-                                                            } otherwise { hold scanning = 0 }
-                                                        } otherwise { hold scanning = 0 }
-                                                    }
-                                                } otherwise {
-                                                    hold errors = errors + 1
-                                                    hold output = concat(output, error_record("invalid_exponent", start_line, start_column))
-                                                }
-                                            } otherwise {
-                                                hold errors = errors + 1
-                                                hold output = concat(output, error_record("invalid_exponent", start_line, start_column))
-                                            }
-                                        }
-                                    }
-                                }
-                                hold output = concat(output, emit("NUMBER", number, start_line, start_column))
-                                hold token_count = token_count + 1
-                            } otherwise {
-                                when ch == 34 {
-                                    hold start_line = line
-                                    hold start_column = column
-                                    hold value = ""
-                                    hold closed = 0
-                                    hold pos = pos + 1
-                                    hold column = column + 1
-                                    hold scanning = 1
-                                    while scanning == 1 {
-                                        when pos < length {
-                                            hold c = char_code(source, pos)
-                                            when c == 34 {
-                                                hold closed = 1
-                                                hold pos = pos + 1
-                                                hold column = column + 1
-                                                hold scanning = 0
-                                            } otherwise {
-                                                when c == 92 {
-                                                    hold escape_line = line
-                                                    hold escape_column = column
-                                                    hold pos = pos + 1
-                                                    hold column = column + 1
-                                                    when pos < length {
-                                                        hold e = char_code(source, pos)
-                                                        when e == 110 { hold value = concat(value, "\n") } otherwise {
-                                                            when e == 114 { hold value = concat(value, "\r") } otherwise {
-                                                                when e == 116 { hold value = concat(value, "\t") } otherwise {
-                                                                    when e == 48 { hold value = concat(value, "\0") } otherwise {
-                                                                        when e == 98 { hold value = concat(value, "\b") } otherwise {
-                                                                            when e == 102 { hold value = concat(value, "\f") } otherwise {
-                                                                                when e == 118 { hold value = concat(value, "\v") } otherwise {
-                                                                                    when e == 97 { hold value = concat(value, "\a") } otherwise {
-                                                                                        when e == 34 { hold value = concat(value, "\"") } otherwise {
-                                                                                            when e == 92 { hold value = concat(value, "\\") } otherwise {
-                                                                                                when e == 120 {
-                                                                                                    when pos + 2 < length {
-                                                                                                        hold h1 = char_code(source, pos + 1)
-                                                                                                        hold h2 = char_code(source, pos + 2)
-                                                                                                        when is_hex(h1) == 1 {
-                                                                                                            when is_hex(h2) == 1 {
-                                                                                                                hold code = hex_value(h1) * 16 + hex_value(h2)
-                                                                                                                hold value = concat(value, char_from_code(code))
-                                                                                                                hold pos = pos + 2
-                                                                                                                hold column = column + 2
-                                                                                                            } otherwise {
-                                                                                                                hold errors = errors + 1
-                                                                                                                hold output = concat(output, error_record("invalid_hex_escape", escape_line, escape_column))
-                                                                                                            }
-                                                                                                        } otherwise {
-                                                                                                            hold errors = errors + 1
-                                                                                                            hold output = concat(output, error_record("invalid_hex_escape", escape_line, escape_column))
-                                                                                                        }
-                                                                                                    } otherwise {
-                                                                                                        hold errors = errors + 1
-                                                                                                        hold output = concat(output, error_record("incomplete_hex_escape", escape_line, escape_column))
-                                                                                                    }
-                                                                                                } otherwise {
-                                                                                                    hold errors = errors + 1
-                                                                                                    hold output = concat(output, error_record("unknown_escape_sequence", escape_line, escape_column))
-                                                                                                }
-                                                                                            }
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        hold pos = pos + 1
-                                                        hold column = column + 1
-                                                    } otherwise {
-                                                        hold errors = errors + 1
-                                                        hold output = concat(output, error_record("unterminated_escape_sequence", escape_line, escape_column))
-                                                        hold scanning = 0
-                                                    }
-                                                } otherwise {
-                                                    hold value = concat(value, char_at(source, pos))
-                                                    when c == 10 {
-                                                        hold pos = pos + 1
-                                                        hold line = line + 1
-                                                        hold column = 1
-                                                    } otherwise {
-                                                        hold pos = pos + 1
-                                                        hold column = column + 1
-                                                    }
-                                                }
-                                            }
-                                        } otherwise { hold scanning = 0 }
-                                    }
-                                    when closed == 1 {
-                                        hold output = concat(output, emit("STRING", value, start_line, start_column))
-                                        hold token_count = token_count + 1
-                                    } otherwise {
-                                        hold errors = errors + 1
-                                        hold output = concat(output, error_record("unterminated_string", start_line, start_column))
+                                        pos = pos + 1
+                                        column = column + 1
                                     }
                                 } otherwise {
-                                    hold start_line = line
-                                    hold start_column = column
-                                    hold kind = "ERROR"
-                                    hold lexeme = char_at(source, pos)
-                                    hold width = 1
-                                    when ch == 40 { hold kind = "LPAREN" } otherwise {
-                                        when ch == 41 { hold kind = "RPAREN" } otherwise {
-                                            when ch == 123 { hold kind = "LBRACE" } otherwise {
-                                                when ch == 125 { hold kind = "RBRACE" } otherwise {
-                                                    when ch == 91 { hold kind = "LBRACKET" } otherwise {
-                                                        when ch == 93 { hold kind = "RBRACKET" } otherwise {
-                                                            when ch == 44 { hold kind = "COMMA" } otherwise {
-                                                                when ch == 58 { hold kind = "COLON" } otherwise {
-                                                                    when ch == 59 { hold kind = "SEMICOLON" } otherwise {
-                                                                        when ch == 43 { hold kind = "PLUS" } otherwise {
-                                                                            when ch == 45 { hold kind = "MINUS" } otherwise {
-                                                                                when ch == 42 { hold kind = "STAR" } otherwise {
-                                                                                    when ch == 37 { hold kind = "PERCENT" } otherwise {
-                                                                                        when ch == 46 { hold kind = "DOT" } otherwise {
-                                                                                            when ch == 61 {
-                                                                                                hold kind = "ASSIGN"
-                                                                                                when pos + 1 < length {
-                                                                                                    hold next = char_code(source, pos + 1)
-                                                                                                    when next == 61 {
-                                                                                                        hold kind = "EQEQ"
-                                                                                                        hold width = 2
-                                                                                                        hold lexeme = concat(lexeme, char_at(source, pos + 1))
-                                                                                                    }
-                                                                                                }
-                                                                                            } otherwise {
-                                                                                                when ch == 33 {
-                                                                                                    hold kind = "BANG"
-                                                                                                    when pos + 1 < length {
-                                                                                                        hold next = char_code(source, pos + 1)
-                                                                                                        when next == 61 {
-                                                                                                            hold kind = "BANGEQ"
-                                                                                                            hold width = 2
-                                                                                                            hold lexeme = concat(lexeme, char_at(source, pos + 1))
-                                                                                                        }
-                                                                                                    }
-                                                                                                } otherwise {
-                                                                                                    when ch == 62 {
-                                                                                                        hold kind = "GT"
-                                                                                                        when pos + 1 < length {
-                                                                                                            hold next = char_code(source, pos + 1)
-                                                                                                            when next == 61 {
-                                                                                                                hold kind = "GTE"
-                                                                                                                hold width = 2
-                                                                                                                hold lexeme = concat(lexeme, char_at(source, pos + 1))
-                                                                                                            }
-                                                                                                        }
-                                                                                                    } otherwise {
-                                                                                                        when ch == 60 {
-                                                                                                            hold kind = "LT"
-                                                                                                            when pos + 1 < length {
-                                                                                                                hold next = char_code(source, pos + 1)
-                                                                                                                when next == 61 {
-                                                                                                                    hold kind = "LTE"
-                                                                                                                    hold width = 2
-                                                                                                                    hold lexeme = concat(lexeme, char_at(source, pos + 1))
-                                                                                                                }
-                                                                                                            }
-                                                                                                        } otherwise {
-                                                                                                            when ch == 38 {
-                                                                                                                when pos + 1 < length {
-                                                                                                                    hold next = char_code(source, pos + 1)
-                                                                                                                    when next == 38 {
-                                                                                                                        hold kind = "ANDAND"
-                                                                                                                        hold width = 2
-                                                                                                                        hold lexeme = concat(lexeme, char_at(source, pos + 1))
-                                                                                                                    }
-                                                                                                                }
-                                                                                                            } otherwise {
-                                                                                                                when ch == 124 {
-                                                                                                                    when pos + 1 < length {
-                                                                                                                        hold next = char_code(source, pos + 1)
-                                                                                                                        when next == 124 {
-                                                                                                                            hold kind = "OROR"
-                                                                                                                            hold width = 2
-                                                                                                                            hold lexeme = concat(lexeme, char_at(source, pos + 1))
-                                                                                                                        }
-                                                                                                                    }
-                                                                                                                }
-                                                                                                            }
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            }
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            }
+                                    when c == 10 {
+                                        pos = pos + 1
+                                        line = line + 1
+                                        column = 1
+                                    } otherwise {
+                                        pos = pos + 1
+                                        column = column + 1
+                                    }
+                                }
+                            } otherwise { scanning = 0 }
+                        }
+                        when closed == 0 {
+                            errors = errors + 1
+                            output = concat(output, error_record("unterminated_block_comment", start_line, start_column))
+                        }
+                    }
+                }
+            }
+            when handled == 0 {
+                output = concat(output, emit("SLASH", "/", line, column))
+                token_count = token_count + 1
+                pos = pos + 1
+                column = column + 1
+                handled = 1
+            }
+        }
+    }
+
+    when handled == 0 {
+        when is_alpha(ch) == 1 {
+            start_line = line
+            start_column = column
+            word = ""
+            scanning = 1
+            while scanning == 1 {
+                when pos < length {
+                    c = char_code(source, pos)
+                    when is_alnum(c) == 1 {
+                        word = concat(word, char_at(source, pos))
+                        pos = pos + 1
+                        column = column + 1
+                    } otherwise { scanning = 0 }
+                } otherwise { scanning = 0 }
+            }
+            kind = "IDENT"
+            when word == "show" { kind = "SHOW" } otherwise {
+                when word == "hold" { kind = "HOLD" } otherwise {
+                    when word == "when" { kind = "WHEN" } otherwise {
+                        when word == "otherwise" { kind = "OTHERWISE" } otherwise {
+                            when word == "while" { kind = "WHILE" } otherwise {
+                                when word == "make" { kind = "MAKE" } otherwise {
+                                    when word == "give" { kind = "GIVE" } otherwise {
+                                        when word == "struct" { kind = "STRUCT" } otherwise {
+                                            when word == "use" { kind = "USE" } otherwise {
+                                                when word == "export" { kind = "EXPORT" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            output = concat(output, emit(kind, word, start_line, start_column))
+            token_count = token_count + 1
+            handled = 1
+        }
+    }
+
+    when handled == 0 {
+        when is_digit(ch) == 1 {
+            start_line = line
+            start_column = column
+            number = ""
+            scanning = 1
+            while scanning == 1 {
+                when pos < length {
+                    c = char_code(source, pos)
+                    when is_digit(c) == 1 {
+                        number = concat(number, char_at(source, pos))
+                        pos = pos + 1
+                        column = column + 1
+                    } otherwise { scanning = 0 }
+                } otherwise { scanning = 0 }
+            }
+            when pos < length {
+                c = char_code(source, pos)
+                when c == 46 {
+                    when pos + 1 < length {
+                        after_dot = char_code(source, pos + 1)
+                        when is_digit(after_dot) == 1 {
+                            number = concat(number, ".")
+                            pos = pos + 1
+                            column = column + 1
+                            scanning = 1
+                            while scanning == 1 {
+                                when pos < length {
+                                    d = char_code(source, pos)
+                                    when is_digit(d) == 1 {
+                                        number = concat(number, char_at(source, pos))
+                                        pos = pos + 1
+                                        column = column + 1
+                                    } otherwise { scanning = 0 }
+                                } otherwise { scanning = 0 }
+                            }
+                        } otherwise {
+                            errors = errors + 1
+                            output = concat(output, error_record("invalid_number", start_line, start_column))
+                            pos = pos + 1
+                            column = column + 1
+                        }
+                    } otherwise {
+                        errors = errors + 1
+                        output = concat(output, error_record("invalid_number", start_line, start_column))
+                        pos = pos + 1
+                        column = column + 1
+                    }
+                }
+            }
+            when pos < length {
+                exponent = char_code(source, pos)
+                when exponent == 101 {
+                    number = concat(number, "e")
+                    pos = pos + 1
+                    column = column + 1
+                    sign = 0
+                    when pos < length {
+                        sign = char_code(source, pos)
+                        when sign == 43 {
+                            number = concat(number, "+")
+                            pos = pos + 1
+                            column = column + 1
+                        } otherwise {
+                            when sign == 45 {
+                                number = concat(number, "-")
+                                pos = pos + 1
+                                column = column + 1
+                            }
+                        }
+                    }
+                    first_exp = 0
+                    when pos < length { first_exp = char_code(source, pos) }
+                    when is_digit(first_exp) == 1 {
+                        scanning = 1
+                        while scanning == 1 {
+                            when pos < length {
+                                d = char_code(source, pos)
+                                when is_digit(d) == 1 {
+                                    number = concat(number, char_at(source, pos))
+                                    pos = pos + 1
+                                    column = column + 1
+                                } otherwise { scanning = 0 }
+                            } otherwise { scanning = 0 }
+                        }
+                    } otherwise {
+                        errors = errors + 1
+                        output = concat(output, error_record("invalid_exponent", start_line, start_column))
+                    }
+                } otherwise {
+                    when exponent == 69 {
+                        number = concat(number, "E")
+                        pos = pos + 1
+                        column = column + 1
+                        sign = 0
+                        when pos < length {
+                            sign = char_code(source, pos)
+                            when sign == 43 {
+                                number = concat(number, "+")
+                                pos = pos + 1
+                                column = column + 1
+                            } otherwise {
+                                when sign == 45 {
+                                    number = concat(number, "-")
+                                    pos = pos + 1
+                                    column = column + 1
+                                }
+                            }
+                        }
+                        first_exp = 0
+                        when pos < length { first_exp = char_code(source, pos) }
+                        when is_digit(first_exp) == 1 {
+                            scanning = 1
+                            while scanning == 1 {
+                                when pos < length {
+                                    d = char_code(source, pos)
+                                    when is_digit(d) == 1 {
+                                        number = concat(number, char_at(source, pos))
+                                        pos = pos + 1
+                                        column = column + 1
+                                    } otherwise { scanning = 0 }
+                                } otherwise { scanning = 0 }
+                            }
+                        } otherwise {
+                            errors = errors + 1
+                            output = concat(output, error_record("invalid_exponent", start_line, start_column))
+                        }
+                    }
+                }
+            }
+            output = concat(output, emit("NUMBER", number, start_line, start_column))
+            token_count = token_count + 1
+            handled = 1
+        }
+    }
+
+    when handled == 0 {
+        when ch == 34 {
+            start_line = line
+            start_column = column
+            value = ""
+            closed = 0
+            pos = pos + 1
+            column = column + 1
+            scanning = 1
+            while scanning == 1 {
+                when pos < length {
+                    c = char_code(source, pos)
+                    when c == 34 {
+                        closed = 1
+                        pos = pos + 1
+                        column = column + 1
+                        scanning = 0
+                    } otherwise {
+                        when c == 92 {
+                            escape_line = line
+                            escape_column = column
+                            pos = pos + 1
+                            column = column + 1
+                            when pos < length {
+                                e = char_code(source, pos)
+                                when e == 110 { value = concat(value, "\n") } otherwise {
+                                    when e == 114 { value = concat(value, "\r") } otherwise {
+                                        when e == 116 { value = concat(value, "\t") } otherwise {
+                                            when e == 34 { value = concat(value, "\"") } otherwise {
+                                                when e == 92 { value = concat(value, "\\") } otherwise {
+                                                    when e == 120 {
+                                                        when pos + 2 < length {
+                                                            h1 = char_code(source, pos + 1)
+                                                            h2 = char_code(source, pos + 2)
+                                                            when is_hex(h1) == 1 {
+                                                                when is_hex(h2) == 1 {
+                                                                    code = hex_value(h1) * 16 + hex_value(h2)
+                                                                    value = concat(value, char_from_code(code))
+                                                                    pos = pos + 2
+                                                                    column = column + 2
+                                                                } otherwise {
+                                                                    errors = errors + 1
+                                                                    output = concat(output, error_record("invalid_hex_escape", escape_line, escape_column))
+                                                                }
+                                                            } otherwise {
+                                                                errors = errors + 1
+                                                                output = concat(output, error_record("invalid_hex_escape", escape_line, escape_column))
+                                                            }
+                                                        } otherwise {
+                                                            errors = errors + 1
+                                                            output = concat(output, error_record("incomplete_hex_escape", escape_line, escape_column))
+                                                        }
+                                                    } otherwise {
+                                                        errors = errors + 1
+                                                        output = concat(output, error_record("unknown_escape_sequence", escape_line, escape_column))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                pos = pos + 1
+                                column = column + 1
+                            } otherwise {
+                                errors = errors + 1
+                                output = concat(output, error_record("unterminated_escape_sequence", escape_line, escape_column))
+                                scanning = 0
+                            }
+                        } otherwise {
+                            value = concat(value, char_at(source, pos))
+                            pos = pos + 1
+                            when c == 10 {
+                                line = line + 1
+                                column = 1
+                            } otherwise {
+                                column = column + 1
+                            }
+                        }
+                    }
+                } otherwise { scanning = 0 }
+            }
+            when closed == 0 {
+                errors = errors + 1
+                output = concat(output, error_record("unterminated_string", start_line, start_column))
+            }
+            output = concat(output, emit("STRING", value, start_line, start_column))
+            token_count = token_count + 1
+            handled = 1
+        }
+    }
+
+    when handled == 0 {
+        when ch == 43 { output = concat(output, emit("PLUS", "+", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+            when ch == 45 { output = concat(output, emit("MINUS", "-", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                when ch == 42 { output = concat(output, emit("STAR", "*", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                    when ch == 37 { output = concat(output, emit("PERCENT", "%", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                        when ch == 40 { output = concat(output, emit("LPAREN", "(", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                            when ch == 41 { output = concat(output, emit("RPAREN", ")", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                when ch == 123 { output = concat(output, emit("LBRACE", "{", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                    when ch == 125 { output = concat(output, emit("RBRACE", "}", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                        when ch == 91 { output = concat(output, emit("LBRACKET", "[", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                            when ch == 93 { output = concat(output, emit("RBRACKET", "]", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                                when ch == 44 { output = concat(output, emit("COMMA", ",", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                                    when ch == 58 { output = concat(output, emit("COLON", ":", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                                        when ch == 59 { output = concat(output, emit("SEMICOLON", ";", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                                            when ch == 46 { output = concat(output, emit("DOT", ".", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                                                when ch == 61 {
+                                                                    when pos + 1 < length {
+                                                                        next = char_code(source, pos + 1)
+                                                                        when next == 61 { output = concat(output, emit("EQ", "==", line, column)); pos = pos + 2; column = column + 2 } otherwise { output = concat(output, emit("ASSIGN", "=", line, column)); pos = pos + 1; column = column + 1 }
+                                                                    } otherwise { output = concat(output, emit("ASSIGN", "=", line, column)); pos = pos + 1; column = column + 1 }
+                                                                    token_count = token_count + 1
+                                                                    handled = 1
+                                                                } otherwise {
+                                                                    when ch == 33 {
+                                                                        when pos + 1 < length {
+                                                                            next = char_code(source, pos + 1)
+                                                                            when next == 61 { output = concat(output, emit("NEQ", "!=", line, column)); pos = pos + 2; column = column + 2; token_count = token_count + 1; handled = 1 } otherwise { errors = errors + 1; output = concat(output, error_record("unexpected_character", line, column)); pos = pos + 1; column = column + 1; handled = 1 }
+                                                                        } otherwise { errors = errors + 1; output = concat(output, error_record("unexpected_character", line, column)); pos = pos + 1; column = column + 1; handled = 1 }
+                                                                    } otherwise {
+                                                                        when ch == 62 { output = concat(output, emit("GT", ">", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 } otherwise {
+                                                                            when ch == 60 { output = concat(output, emit("LT", "<", line, column)); pos = pos + 1; column = column + 1; token_count = token_count + 1; handled = 1 }
                                                                         }
                                                                     }
                                                                 }
@@ -558,15 +520,6 @@ while pos < length {
                                             }
                                         }
                                     }
-                                    when kind == "ERROR" {
-                                        hold errors = errors + 1
-                                        hold output = concat(output, error_record("unexpected_character", start_line, start_column))
-                                    } otherwise {
-                                        hold output = concat(output, emit(kind, lexeme, start_line, start_column))
-                                        hold token_count = token_count + 1
-                                    }
-                                    hold pos = pos + width
-                                    hold column = column + width
                                 }
                             }
                         }
@@ -575,12 +528,19 @@ while pos < length {
             }
         }
     }
+
+    when handled == 0 {
+        errors = errors + 1
+        output = concat(output, error_record("unexpected_character", line, column))
+        pos = pos + 1
+        column = column + 1
+    }
 }
 
-hold output = concat(output, emit("EOF", "", line, column))
-write_file("selfhost/tokens.sxt", output)
-show "Tokens written"
+output = concat(output, emit("EOF", "", line, column))
+write_file("selfhost/lexer_tokens.txt", output)
+show "Lexer token count"
 show token_count
-show "Lexer errors"
+show "Lexer error count"
 show errors
-show "=== Sayanox Self-Hosted Lexer Complete ==="
+show "=== lexer done ==="
