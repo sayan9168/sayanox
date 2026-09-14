@@ -1,11 +1,9 @@
-// Step 4.1 codegen: hold name = number; show name|number
-// State machine in Sayanox. Emits selfhost/codegen_emit.c
-//
-//   ./selfhost/step4_hold_show.sh
+// Step 4.2: hold, show, when, while, braces, assign (Sayanox)
+// Keywords: hold/show by first char; when len=4, while len>=5
 
-show "=== codegen 4.1 hold+show ==="
+show "=== codegen 4.2 when/while ==="
 
-hold path = "selfhost/hold_show.sa"
+hold path = "selfhost/when_demo.sa"
 hold source = read_file(path)
 hold n = len(source)
 hold pos = 0
@@ -14,13 +12,12 @@ hold ch2 = 0
 hold val = 0
 hold scanning = 0
 hold first_char = 0
+hold ident_len = 0
 hold st = 0
-hold var_first = 0
-hold var_val = 0
-hold has_var = 0
 hold emit = ""
 hold piece = ""
 hold ok = 1
+hold depth = 0
 
 make is_digit(c) {
     when c >= 48 {
@@ -48,45 +45,25 @@ make is_space(c) {
     }
 }
 
-hold emit = "#include <stdio.h>\nint main(void){\n"
+hold emit = "#include <stdio.h>\nint main(void){\n  double v = 0;\n"
 
 while pos < n {
     hold ch = source[pos]
     when is_space(ch) == 1 {
         hold pos = pos + 1
     } otherwise {
-        when is_digit(ch) == 1 {
-            hold val = 0
-            hold scanning = 1
-            while scanning == 1 {
-                when pos < n {
-                    hold ch2 = source[pos]
-                    when is_digit(ch2) == 1 {
-                        hold val = val * 10 + (ch2 - 48)
-                        hold pos = pos + 1
-                    } otherwise {
-                        hold scanning = 0
-                    }
-                } otherwise {
-                    hold scanning = 0
-                }
-            }
-            when st == 3 {
-                hold var_val = val
-                hold has_var = 1
-                hold piece = "  double v = "
+        when ch == 123 {
+            hold pos = pos + 1
+            when st == 6 {
+                hold piece = " {\n"
                 hold emit = concat(emit, piece)
-                hold emit = concat(emit, str(val))
-                hold piece = ";\n"
-                hold emit = concat(emit, piece)
+                hold depth = depth + 1
                 hold st = 0
             } otherwise {
-                when st == 4 {
-                    hold piece = "  printf(\"%g\\n\", (double)("
+                when st == 8 {
+                    hold piece = " {\n"
                     hold emit = concat(emit, piece)
-                    hold emit = concat(emit, str(val))
-                    hold piece = "));\n"
-                    hold emit = concat(emit, piece)
+                    hold depth = depth + 1
                     hold st = 0
                 } otherwise {
                     hold ok = 0
@@ -94,51 +71,16 @@ while pos < n {
                 }
             }
         } otherwise {
-            when is_alpha(ch) == 1 {
-                hold first_char = ch
-                hold scanning = 1
-                while scanning == 1 {
-                    when pos < n {
-                        hold ch2 = source[pos]
-                        when is_alpha(ch2) == 1 {
-                            hold pos = pos + 1
-                        } otherwise {
-                            when is_digit(ch2) == 1 {
-                                hold pos = pos + 1
-                            } otherwise {
-                                hold scanning = 0
-                            }
-                        }
-                    } otherwise {
-                        hold scanning = 0
-                    }
-                }
-                when st == 0 {
-                    when first_char == 104 {
-                        hold st = 1
-                    } otherwise {
-                        when first_char == 115 {
-                            hold st = 4
-                        } otherwise {
-                            hold ok = 0
-                            hold pos = n
-                        }
-                    }
+            when ch == 125 {
+                hold pos = pos + 1
+                hold piece = "  }\n"
+                hold emit = concat(emit, piece)
+                when depth > 0 {
+                    hold depth = depth - 1
                 } otherwise {
-                    when st == 1 {
-                        hold var_first = first_char
-                        hold st = 2
-                    } otherwise {
-                        when st == 4 {
-                            hold piece = "  printf(\"%g\\n\", v);\n"
-                            hold emit = concat(emit, piece)
-                            hold st = 0
-                        } otherwise {
-                            hold ok = 0
-                            hold pos = n
-                        }
-                    }
+                    hold depth = 0
                 }
+                hold st = 0
             } otherwise {
                 when ch == 61 {
                     hold pos = pos + 1
@@ -149,9 +91,134 @@ while pos < n {
                         hold pos = n
                     }
                 } otherwise {
-                    hold pos = pos + 1
-                    hold ok = 0
-                    hold pos = n
+                    when is_digit(ch) == 1 {
+                        hold val = 0
+                        hold scanning = 1
+                        while scanning == 1 {
+                            when pos < n {
+                                hold ch2 = source[pos]
+                                when is_digit(ch2) == 1 {
+                                    hold val = val * 10 + (ch2 - 48)
+                                    hold pos = pos + 1
+                                } otherwise {
+                                    hold scanning = 0
+                                }
+                            } otherwise {
+                                hold scanning = 0
+                            }
+                        }
+                        when st == 3 {
+                            hold piece = "  v = "
+                            hold emit = concat(emit, piece)
+                            hold emit = concat(emit, str(val))
+                            hold piece = ";\n"
+                            hold emit = concat(emit, piece)
+                            hold st = 0
+                        } otherwise {
+                            when st == 4 {
+                                hold piece = "  printf(\"%g\\n\", (double)("
+                                hold emit = concat(emit, piece)
+                                hold emit = concat(emit, str(val))
+                                hold piece = "));\n"
+                                hold emit = concat(emit, piece)
+                                hold st = 0
+                            } otherwise {
+                                when st == 5 {
+                                    hold piece = "  if ("
+                                    hold emit = concat(emit, piece)
+                                    hold emit = concat(emit, str(val))
+                                    hold piece = ")"
+                                    hold emit = concat(emit, piece)
+                                    hold st = 6
+                                } otherwise {
+                                    when st == 7 {
+                                        hold piece = "  while ("
+                                        hold emit = concat(emit, piece)
+                                        hold emit = concat(emit, str(val))
+                                        hold piece = ")"
+                                        hold emit = concat(emit, piece)
+                                        hold st = 8
+                                    } otherwise {
+                                        hold ok = 0
+                                        hold pos = n
+                                    }
+                                }
+                            }
+                        }
+                    } otherwise {
+                        when is_alpha(ch) == 1 {
+                            hold first_char = ch
+                            hold ident_len = 0
+                            hold scanning = 1
+                            while scanning == 1 {
+                                when pos < n {
+                                    hold ch2 = source[pos]
+                                    when is_alpha(ch2) == 1 {
+                                        hold ident_len = ident_len + 1
+                                        hold pos = pos + 1
+                                    } otherwise {
+                                        when is_digit(ch2) == 1 {
+                                            hold ident_len = ident_len + 1
+                                            hold pos = pos + 1
+                                        } otherwise {
+                                            hold scanning = 0
+                                        }
+                                    }
+                                } otherwise {
+                                    hold scanning = 0
+                                }
+                            }
+                            when st == 0 {
+                                when first_char == 104 {
+                                    hold st = 1
+                                } otherwise {
+                                    when first_char == 115 {
+                                        hold st = 4
+                                    } otherwise {
+                                        when first_char == 119 {
+                                            when ident_len >= 5 {
+                                                hold st = 7
+                                            } otherwise {
+                                                hold st = 5
+                                            }
+                                        } otherwise {
+                                            hold ok = 0
+                                            hold pos = n
+                                        }
+                                    }
+                                }
+                            } otherwise {
+                                when st == 1 {
+                                    hold st = 2
+                                } otherwise {
+                                    when st == 4 {
+                                        hold piece = "  printf(\"%g\\n\", v);\n"
+                                        hold emit = concat(emit, piece)
+                                        hold st = 0
+                                    } otherwise {
+                                        when st == 5 {
+                                            hold piece = "  if (v)"
+                                            hold emit = concat(emit, piece)
+                                            hold st = 6
+                                        } otherwise {
+                                            when st == 7 {
+                                                hold piece = "  while (v)"
+                                                hold emit = concat(emit, piece)
+                                                hold st = 8
+                                            } otherwise {
+                                                hold ok = 0
+                                                hold pos = n
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } otherwise {
+                            hold pos = pos + 1
+                            hold ok = 0
+                            hold pos = n
+                        }
+                    }
                 }
             }
         }
@@ -161,12 +228,9 @@ while pos < n {
 hold piece = "  return 0;\n}\n"
 hold emit = concat(emit, piece)
 write_file("selfhost/codegen_emit.c", emit)
-
 when ok == 1 {
     show "codegen OK"
-    show has_var
-    show var_val
 } otherwise {
     show "codegen FAIL"
 }
-show "=== codegen 4.1 done ==="
+show "=== 4.2 done ==="

@@ -1,0 +1,4 @@
+hold x = 1
+when x {
+  show 42
+}

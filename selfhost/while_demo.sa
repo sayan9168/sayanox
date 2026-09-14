@@ -1,0 +1,5 @@
+hold i = 1
+while i {
+  show 42
+  hold i = 0
+}
