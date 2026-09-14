@@ -9,13 +9,7 @@
 pub enum BuiltinKind { String, List, Io, Conversion }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BuiltinSpec {
-    pub name: &'static str,
-    pub kind: BuiltinKind,
-    pub min_args: usize,
-    pub max_args: usize,
-    pub description: &'static str,
-}
+pub struct BuiltinSpec { pub name: &'static str, pub kind: BuiltinKind, pub min_args: usize, pub max_args: usize, pub description: &'static str }
 
 pub const BUILTINS: &[BuiltinSpec] = &[
     BuiltinSpec { name: "len", kind: BuiltinKind::String, min_args: 1, max_args: 1, description: "Return the length of a string or list." },
@@ -23,6 +17,7 @@ pub const BUILTINS: &[BuiltinSpec] = &[
     BuiltinSpec { name: "concat", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Concatenate two strings." },
     BuiltinSpec { name: "char_at", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Return the Unicode character at an index." },
     BuiltinSpec { name: "char_code", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Return the Unicode scalar value at an index." },
+    BuiltinSpec { name: "char_from_code", kind: BuiltinKind::String, min_args: 1, max_args: 1, description: "Create a one-character string from a Unicode scalar value." },
     BuiltinSpec { name: "contains", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Check whether a string contains another string." },
     BuiltinSpec { name: "starts_with", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Check whether a string starts with a prefix." },
     BuiltinSpec { name: "ends_with", kind: BuiltinKind::String, min_args: 2, max_args: 2, description: "Check whether a string ends with a suffix." },
@@ -44,6 +39,6 @@ pub fn accepts_arity(name: &str, argc: usize) -> bool { builtin(name).is_some_an
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn registry_contains_runtime_builtins() { assert!(is_builtin("len")); assert!(is_builtin("string_len")); assert!(is_builtin("char_at")); assert!(is_builtin("char_code")); assert!(is_builtin("push")); assert!(is_builtin("read_file")); assert!(!is_builtin("missing_builtin")); }
-    #[test] fn builtin_arity_is_available_to_compiler_layers() { assert!(accepts_arity("concat", 2)); assert!(!accepts_arity("concat", 1)); assert!(accepts_arity("string_len", 1)); assert!(accepts_arity("char_at", 2)); assert!(accepts_arity("char_code", 2)); assert!(!accepts_arity("len", 2)); }
+    #[test] fn registry_contains_runtime_builtins() { assert!(is_builtin("len")); assert!(is_builtin("string_len")); assert!(is_builtin("char_at")); assert!(is_builtin("char_code")); assert!(is_builtin("char_from_code")); assert!(is_builtin("push")); assert!(is_builtin("read_file")); assert!(!is_builtin("missing_builtin")); }
+    #[test] fn builtin_arity_is_available_to_compiler_layers() { assert!(accepts_arity("concat", 2)); assert!(!accepts_arity("concat", 1)); assert!(accepts_arity("string_len", 1)); assert!(accepts_arity("char_at", 2)); assert!(accepts_arity("char_code", 2)); assert!(accepts_arity("char_from_code", 1)); assert!(!accepts_arity("len", 2)); }
 }
