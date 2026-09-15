@@ -10,14 +10,14 @@ DIR="selfhost/stage2_blob"
 if [[ -d "$DIR" ]] && ls "$DIR"/chunk_* >/dev/null 2>&1; then
   echo "Assembling Stage-2 template (no Python)..."
   cat "$DIR"/chunk_* > /tmp/sx_stage2.b64
-  base64 -d < /tmp/sx_stage2.b64 | gzip -d > "$TEMPLATE"
+  if ! base64 -d < /tmp/sx_stage2.b64 2>/dev/null | gzip -d > "$TEMPLATE" 2>/dev/null; then
+    echo "warn: blob incomplete, trying curl base..." >&2
+    curl -fsSL "https://raw.githubusercontent.com/sayan9168/sayanox/bef338f0cc1344fa0167b64b827f2409dddb8200/selfhost/stage2_template.c" -o "$TEMPLATE"
+  fi
   rm -f /tmp/sx_stage2.b64
-elif [[ -f selfhost/stage2_template.c.gz.b64 ]]; then
-  echo "Decoding Stage-2 template..."
-  base64 -d < selfhost/stage2_template.c.gz.b64 | gzip -d > "$TEMPLATE" || true
 elif [[ ! -f "$TEMPLATE" ]]; then
-  echo "error: no Stage-2 template sources" >&2
-  exit 1
+  echo "Fetching Stage-2 base template..."
+  curl -fsSL "https://raw.githubusercontent.com/sayan9168/sayanox/bef338f0cc1344fa0167b64b827f2409dddb8200/selfhost/stage2_template.c" -o "$TEMPLATE"
 fi
 
 echo "Building Stage-2..."
