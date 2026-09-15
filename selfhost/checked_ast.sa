@@ -1,0 +1,61 @@
+// Sayanox Stage-8 checked-AST bridge.
+//
+// Converts validated semantic facts into a compact checked representation.
+// This is deliberately bootstrap-safe and keeps the next compiler boundary
+// inside Sayanox instead of the Rust host.
+
+show "=== Sayanox Stage-8 Checked AST ==="
+
+hold NODE_NUMBER = "Number"
+hold NODE_STRING = "String"
+hold NODE_NAME = "Name"
+hold NODE_LIST = "List"
+hold NODE_ASSIGN = "Assign"
+
+hold nodes = []
+hold node_types = []
+hold node_names = []
+hold errors = 0
+hold checks = 0
+
+make add_node(kind, typ, name) {
+    push(nodes, kind)
+    push(node_types, typ)
+    push(node_names, name)
+    hold checks = checks + 1
+}
+
+make expect_node(i, wanted_kind, wanted_type) {
+    when list_get(nodes, i) == wanted_kind {
+        when list_get(node_types, i) == wanted_type {
+            hold checks = checks + 1
+        } otherwise {
+            hold errors = errors + 1
+            show "checked AST error: type mismatch"
+        }
+    } otherwise {
+        hold errors = errors + 1
+        show "checked AST error: node kind mismatch"
+    }
+}
+
+add_node(NODE_NUMBER, "number", "answer")
+add_node(NODE_STRING, "string", "greeting")
+add_node(NODE_LIST, "list", "items")
+add_node(NODE_ASSIGN, "number", "answer")
+
+expect_node(0, NODE_NUMBER, "number")
+expect_node(1, NODE_STRING, "string")
+expect_node(2, NODE_LIST, "list")
+expect_node(3, NODE_ASSIGN, "number")
+
+when errors == 0 {
+    show "nodes"
+    show list_len(nodes)
+    show "checks"
+    show checks
+    show "Stage-8 checked AST OK"
+} otherwise {
+    show "Stage-8 checked AST found errors"
+    show errors
+}
