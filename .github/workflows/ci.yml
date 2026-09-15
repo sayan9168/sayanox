@@ -34,9 +34,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Bootstrap smoke
+      - name: Bootstrap smoke (no Python)
         run: |
-          chmod +x selfhost/restore_stage2.sh selfhost/bootstrap_selfhost.sh selfhost/sx
+          chmod +x selfhost/restore_stage2.sh selfhost/bootstrap_selfhost.sh selfhost/sx tools/sxfmt.sh
           ./selfhost/bootstrap_selfhost.sh
       - name: Examples smoke
         run: |
@@ -44,8 +44,10 @@ jobs:
           ./selfhost/sx examples/hello.sa --run
           ./selfhost/sx examples/countdown.sa --run
           ./selfhost/sx examples/greet.sa --run
-      - name: Formatter smoke
-        run: python3 tools/sxfmt.py examples/hello.sa | grep -q show
+      - name: Formatter smoke (awk, no Python)
+        run: |
+          chmod +x tools/sxfmt.sh
+          ./tools/sxfmt.sh examples/hello.sa | grep -q show
 
   stage3:
     name: Stage-3 bootstrap

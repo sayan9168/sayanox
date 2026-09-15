@@ -1,24 +1,22 @@
 #!/usr/bin/env bash
+# Stage-2 build — zero Python dependency
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-GOOD_URL="https://raw.githubusercontent.com/sayan9168/sayanox/bef338f0cc1344fa0167b64b827f2409dddb8200/selfhost/stage2_template.c"
+TEMPLATE="selfhost/stage2_template.c"
+BLOB="selfhost/stage2_template.c.gz.b64"
 
-echo "Downloading known-good Stage-2 base..."
-curl -fsSL "$GOOD_URL" -o selfhost/stage2_template.c
+if [[ -f "$BLOB" ]]; then
+  echo "Decoding committed Stage-2 template (no Python)..."
+  base64 -d < "$BLOB" | gzip -d > "$TEMPLATE"
+elif [[ ! -f "$TEMPLATE" ]]; then
+  echo "error: missing $TEMPLATE and $BLOB" >&2
+  exit 1
+fi
 
-python3 selfhost/complete_stage2.py
-python3 selfhost/patch_stage2_strings.py || echo "warn: string patch skipped"
-python3 selfhost/patch_stage2_string_compare.py || echo "warn: string-compare patch skipped"
-python3 selfhost/patch_stage2_keyword.py || echo "warn: keyword patch skipped"
-python3 selfhost/patch_stage2_rc.py || echo "warn: RC/arena patch skipped"
-python3 selfhost/patch_stage2_strname.py || echo "warn: strname patch skipped"
-python3 selfhost/patch_stage2_looks_list.py || echo "warn: looks_list patch skipped"
-python3 selfhost/patch_stage2_autodrop.py || echo "warn: autodrop patch skipped"
-
-echo "Verifying compile..."
+echo "Building Stage-2..."
 CC=clang
 command -v clang >/dev/null 2>&1 || CC=gcc
-$CC -o selfhost/stage2 selfhost/stage2_template.c
+$CC -O2 -o selfhost/stage2 "$TEMPLATE"
 echo "Stage-2 complete and compiled OK"
