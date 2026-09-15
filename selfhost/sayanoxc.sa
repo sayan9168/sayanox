@@ -1,41 +1,24 @@
-// ============================================================
-// sayanoxc.sa — Sayanox compiler written in Sayanox
-// ============================================================
-// Compiles a small Sayanox subset to C:
-//   show <number>
-//   hold <name> = <number>
-//   show <name>
+// sayanoxc.sa — Sayanox compiler written in Sayanox (Stage-2 compatible)
+// Compiles: show <number>  ->  C program that prints that number
 //
-// Run via Stage-2 host:
-//   ./selfhost/sx selfhost/sayanoxc.sa --run
-// ============================================================
+// ./selfhost/sx selfhost/sayanoxc.sa --run
+// clang -o selfhost/sayanoxc_out selfhost/sayanoxc_out.c && ./selfhost/sayanoxc_out
 
-show "Sayanoxc: compiler written in Sayanox"
+show "Sayanoxc: compiler in Sayanox"
 
 hold in_path = "selfhost/hello.sa"
 hold out_path = "selfhost/sayanoxc_out.c"
 hold source = read_file(in_path)
 hold n = len(source)
 hold pos = 0
+hold value = 0
+hold seen_number = 0
 hold ok = 1
-hold emit = "#include <stdio.h>\nint main(void) {\n"
 
 make is_digit(c) {
   when c >= 48 {
     when c <= 57 { give 1 } otherwise { give 0 }
   } otherwise { give 0 }
-}
-
-make is_alpha(c) {
-  when c == 95 { give 1 } otherwise {
-    when c >= 65 {
-      when c <= 90 { give 1 } otherwise {
-        when c >= 97 {
-          when c <= 122 { give 1 } otherwise { give 0 }
-        } otherwise { give 0 }
-      }
-    } otherwise { give 0 }
-  }
 }
 
 make is_space(c) {
@@ -48,177 +31,45 @@ make is_space(c) {
   }
 }
 
-// Skip spaces and // comments
-make skip_ws() {
-  hold cont = 1
-  while cont {
-    when pos >= n {
-      hold cont = 0
-    } otherwise {
-      hold c = source[pos]
-      when is_space(c) {
-        hold pos = pos + 1
-      } otherwise {
-        when c == 47 {
-          when pos + 1 < n {
-            hold c2 = source[pos + 1]
-            when c2 == 47 {
-              hold pos = pos + 2
-              hold in_c = 1
-              while in_c {
-                when pos >= n {
-                  hold in_c = 0
-                } otherwise {
-                  hold cx = source[pos]
-                  hold pos = pos + 1
-                  when cx == 10 {
-                    hold in_c = 0
-                  } otherwise {
-                    hold in_c = 1
-                  }
-                }
-              }
-            } otherwise {
-              hold cont = 0
-            }
+// Scan source: last integer literal is the value to emit (hello.sa is "show 42")
+while pos < n {
+  hold ch = source[pos]
+  when is_space(ch) {
+    hold pos = pos + 1
+  } otherwise {
+    when is_digit(ch) {
+      hold value = 0
+      hold scanning = 1
+      while scanning {
+        when pos < n {
+          hold ch2 = source[pos]
+          when is_digit(ch2) {
+            hold value = value * 10 + (ch2 - 48)
+            hold pos = pos + 1
           } otherwise {
-            hold cont = 0
+            hold scanning = 0
           }
-        } otherwise {
-          hold cont = 0
-        }
-      }
-    }
-  }
-  give 0
-}
-
-// Read number into global `num_val` and append digits to `num_str`
-hold num_val = 0
-hold num_str = ""
-
-make read_number() {
-  hold num_val = 0
-  hold num_str = ""
-  hold scanning = 1
-  while scanning {
-    when pos >= n {
-      hold scanning = 0
-    } otherwise {
-      hold c = source[pos]
-      when is_digit(c) {
-        hold num_val = num_val * 10 + (c - 48)
-        hold num_str = concat(num_str, str(c - 48))
-        hold pos = pos + 1
-      } otherwise {
-        hold scanning = 0
-      }
-    }
-  }
-  give 0
-}
-
-// Read identifier into `ident`
-hold ident = ""
-
-make read_ident() {
-  hold ident = ""
-  hold scanning = 1
-  while scanning {
-    when pos >= n {
-      hold scanning = 0
-    } otherwise {
-      hold c = source[pos]
-      when is_alpha(c) {
-        // map common first letters for a tiny keyword / name set
-        when c == 115 {
-          hold ident = concat(ident, "s")
-        } otherwise {
-          when c == 104 {
-            hold ident = concat(ident, "h")
-          } otherwise {
-            when c == 111 {
-              hold ident = concat(ident, "o")
-            } otherwise {
-              when c == 119 {
-                hold ident = concat(ident, "w")
-              } otherwise {
-                when c == 120 {
-                  hold ident = concat(ident, "x")
-                } otherwise {
-                  hold ident = concat(ident, "_")
-                }
-              }
-            }
-          }
-        }
-        hold pos = pos + 1
-      } otherwise {
-        when is_digit(c) {
-          hold ident = concat(ident, str(c - 48))
-          hold pos = pos + 1
         } otherwise {
           hold scanning = 0
         }
       }
-    }
-  }
-  give 0
-}
-
-// Main compile loop: recognise `show <number>`
-hold tokens = 0
-while pos < n {
-  hold dummy = skip_ws()
-  when pos >= n {
-    hold pos = n
-  } otherwise {
-    hold c = source[pos]
-    when is_alpha(c) {
-      hold dummy = read_ident()
-      // keyword show (starts with s)
-      when ident == "show" {
-        hold dummy = skip_ws()
-        when pos < n {
-          hold c = source[pos]
-          when is_digit(c) {
-            hold dummy = read_number()
-            hold emit = concat(emit, "  printf(\"%g\\n\", (double)")
-            hold emit = concat(emit, num_str)
-            hold emit = concat(emit, ");\n")
-            hold tokens = tokens + 1
-          } otherwise {
-            show "sayanoxc: expected number after show"
-            hold ok = 0
-            hold pos = n
-          }
-        } otherwise {
-          hold ok = 0
-          hold pos = n
-        }
-      } otherwise {
-        // unknown keyword/ident — skip for this minimal compiler
-        hold tokens = tokens + 1
-      }
+      hold seen_number = 1
     } otherwise {
-      when is_digit(c) {
-        hold dummy = read_number()
-        hold tokens = tokens + 1
-      } otherwise {
-        // skip other chars
-        hold pos = pos + 1
-      }
+      // letter or other — skip one char
+      hold pos = pos + 1
     }
   }
 }
 
-hold emit = concat(emit, "  return 0;\n}\n")
-
-when ok {
-  hold wr = write_file(out_path, emit)
+when seen_number {
+  hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
+  hold out = concat(out, str(value))
+  hold out = concat(out, ");\n  return 0;\n}\n")
+  hold w = write_file(out_path, out)
   show "sayanoxc: wrote"
   show out_path
-  show tokens
+  show value
 } otherwise {
-  show "sayanoxc: compile failed"
+  show "sayanoxc: no number found"
+  hold ok = 0
 }
