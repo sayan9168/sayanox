@@ -1,13 +1,13 @@
-// Fibonacci: print first terms until > 100
+// Fibonacci until value exceeds 50
 hold a = 0
 hold b = 1
+hold cont = 1
 show a
 show b
-hold n = 0
-while n {
+while cont {
   hold c = a + b
-  when c > 100 {
-    hold n = 0
+  when c > 50 {
+    hold cont = 0
   } otherwise {
     show c
     hold a = b
