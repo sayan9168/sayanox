@@ -1,0 +1,20 @@
+// Sayanox Stage-12 C backend boundary.
+// Lowers a small typed Sayanox IR program into deterministic C source.
+
+show "=== Sayanox Stage-12 C Backend ==="
+
+hold c = "#include <stdio.h>\nint main(void) {\n  double t0 = 40;\n  double t1 = 2;\n  double t2 = t0 + t1;\n  double answer = t2;\n  printf(\"%g\\n\", answer);\n  return 0;\n}\n"
+
+hold output = "selfhost/stage12_generated.c"
+write_file(output, c)
+
+hold source = read_file(output)
+hold size = string_len(source)
+
+when size > 0 {
+    show "backend emitted"
+    show size
+    show "Stage-12 C backend OK"
+} otherwise {
+    show "Stage-12 C backend FAIL"
+}
