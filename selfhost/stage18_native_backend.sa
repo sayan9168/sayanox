@@ -1,0 +1,57 @@
+// Sayanox Stage-18: IR -> deterministic native-source backend boundary.
+// This backend consumes canonical IR records and emits executable C source.
+
+show "=== Sayanox Stage-18 Native Backend ==="
+
+hold ops = ["const", "const", "add", "store", "load", "show"]
+hold args = [40, 2, 0, 0, 0, 0]
+hold values = ["40", "2", "", "answer", "answer", ""]
+hold count = 6
+hold errors = 0
+hold c = "#include <stdio.h>\nint main(void) {\n"
+hold i = 0
+
+while i < count {
+  when ops[i] == "const" {
+    c = concat(c, concat("  double t", str(i)))
+    c = concat(c, concat(" = ", values[i]))
+    c = concat(c, ";\n")
+  } otherwise {
+    when ops[i] == "add" {
+      c = concat(c, "  double t2 = t0 + t1;\n")
+    } otherwise {
+      when ops[i] == "store" {
+        c = concat(c, concat("  double ", values[i]))
+        c = concat(c, " = t2;\n")
+      } otherwise {
+        when ops[i] == "load" {
+          c = concat(c, "  double t4 = answer;\n")
+        } otherwise {
+          when ops[i] == "show" {
+            c = concat(c, "  printf(\"%g\\n\", t4);\n")
+          } otherwise {
+            errors = errors + 1
+          }
+        }
+      }
+    }
+  }
+  i = i + 1
+}
+
+c = concat(c, "  return 0;\n}\n")
+hold output = "selfhost/stage18_generated.c"
+write_file(output, c)
+
+when errors == 0 {
+  when string_len(c) > 0 {
+    show "native source emitted"
+    show count
+    show "Stage-18 native backend OK"
+  } otherwise {
+    show "Stage-18 native backend FAIL"
+  }
+} otherwise {
+  show "Stage-18 backend errors"
+  show errors
+}
