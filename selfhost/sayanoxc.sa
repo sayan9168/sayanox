@@ -1,19 +1,17 @@
-// sayanoxc.sa — Sayanox compiler written in Sayanox (Stage-2 compatible)
-// Compiles: show <number>  ->  C program that prints that number
+// sayanoxc.sa — Sayanox compiler written in Sayanox
+// Input:  selfhost/hello.sa  (expects a number, e.g. show 42)
+// Output: selfhost/sayanoxc_out.c
 //
 // ./selfhost/sx selfhost/sayanoxc.sa --run
-// clang -o selfhost/sayanoxc_out selfhost/sayanoxc_out.c && ./selfhost/sayanoxc_out
+// clang selfhost/sayanoxc_out.c -o selfhost/sayanoxc_out && ./selfhost/sayanoxc_out
 
-show "Sayanoxc: compiler in Sayanox"
+show 1
 
-hold in_path = "selfhost/hello.sa"
-hold out_path = "selfhost/sayanoxc_out.c"
-hold source = read_file(in_path)
+hold source = read_file("selfhost/hello.sa")
 hold n = len(source)
 hold pos = 0
 hold value = 0
 hold seen_number = 0
-hold ok = 1
 
 make is_digit(c) {
   when c >= 48 {
@@ -31,7 +29,6 @@ make is_space(c) {
   }
 }
 
-// Scan source: last integer literal is the value to emit (hello.sa is "show 42")
 while pos < n {
   hold ch = source[pos]
   when is_space(ch) {
@@ -55,7 +52,6 @@ while pos < n {
       }
       hold seen_number = 1
     } otherwise {
-      // letter or other — skip one char
       hold pos = pos + 1
     }
   }
@@ -65,11 +61,8 @@ when seen_number {
   hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
   hold out = concat(out, str(value))
   hold out = concat(out, ");\n  return 0;\n}\n")
-  hold w = write_file(out_path, out)
-  show "sayanoxc: wrote"
-  show out_path
+  hold w = write_file("selfhost/sayanoxc_out.c", out)
   show value
 } otherwise {
-  show "sayanoxc: no number found"
-  hold ok = 0
+  show 0
 }
