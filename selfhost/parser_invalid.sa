@@ -1,0 +1,4 @@
+// Invalid parser fixture: missing closing brace.
+hold value = 42
+when value > 0 {
+    show value
