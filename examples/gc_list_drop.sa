@@ -1,0 +1,6 @@
+// List auto-drop on reassignment (RC + drop)
+hold xs = [1, 2, 3]
+show xs[0]
+hold xs = [9, 8, 7]
+show xs[0]
+show "drop-ok"

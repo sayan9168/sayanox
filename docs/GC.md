@@ -1,29 +1,31 @@
-# Memory: ownership + region GC (MVP)
+# Memory: ownership + GC
 
-## Model
+## Implemented (Stage-2 C backend)
 
-### Numbers — values
-Copied on assignment.
+| Mechanism | What |
+|-----------|------|
+| **Arena (region)** | Strings from `concat` / `str` / `upper` / … → `sx_alloc`, freed at process exit |
+| **List RC** | `SxList.rc`; `sx_list_retain` / `sx_list_drop` |
+| **Auto-drop** | `hold xs = …` when `xs` already a list → `sx_list_drop(&xs)` before assign |
 
-### Strings (Stage-2 C) — **arena / region GC**
-- `concat`, `str`, `upper`, `lower`, `trim`, `read_file` → `sx_alloc` bump allocator
-- Entire arena freed at **process exit** (`atexit`)
-- No use-after-free on temporary strings
+## Ownership rules
 
-### Lists — **unique ownership**
-- Buffer owned by `SxList`; `sx_list_drop` frees
-- Auto-drop on reassignment: future work
-
-### Rust `--run` VM — **owned values**
-Rust `String` / `Vec` ownership; no manual free.
-
-## Apply
-
-```bash
-./selfhost/restore_stage2.sh   # includes patch_stage2_rc.py
-./selfhost/sx examples/gc_arena_demo.sa --run
-./selfhost/sx examples/greet.sa --run
+```sayanox
+hold xs = [1, 2, 3]   // rc = 1, owns buffer
+hold xs = [9, 8]      // drop old buffer, own new
+hold s = concat("a","b")  // arena string
 ```
 
-## Future
-Ref-count headers, auto-drop on `hold` reassignment, `--gc=rc|arena`.
+## Not yet
+
+- Full mark-sweep concurrent GC
+- String per-object refcount (arena covers temps)
+- Shared list aliasing (`hold ys = xs`) without deep copy
+
+## Test
+
+```bash
+./selfhost/restore_stage2.sh
+./selfhost/sx examples/gc_arena_demo.sa --run
+./selfhost/sx examples/gc_list_drop.sa --run
+```

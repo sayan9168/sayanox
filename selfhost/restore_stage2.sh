@@ -14,6 +14,7 @@ python3 selfhost/patch_stage2_string_compare.py || echo "warn: string-compare pa
 python3 selfhost/patch_stage2_keyword.py || echo "warn: keyword patch skipped"
 python3 selfhost/patch_stage2_rc.py || echo "warn: RC/arena patch skipped"
 python3 selfhost/patch_stage2_strname.py || echo "warn: strname patch skipped"
+python3 selfhost/patch_stage2_autodrop.py || echo "warn: autodrop patch skipped"
 
 echo "Verifying compile..."
 CC=clang
