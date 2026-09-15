@@ -1,0 +1,54 @@
+// Sayanox Stage-9 intermediate representation.
+// The IR is the compiler boundary between checked source and lowering/codegen.
+
+hold OP_CONST = "const"
+hold OP_LOAD = "load"
+hold OP_STORE = "store"
+hold OP_SHOW = "show"
+
+hold ops = []
+hold types = []
+hold values = []
+hold errors = 0
+hold checks = 0
+
+make emit(op, typ, value) {
+    push(ops, op)
+    push(types, typ)
+    push(values, value)
+}
+
+make check(i, wanted_op, wanted_type) {
+    when list_get(ops, i) == wanted_op {
+        when list_get(types, i) == wanted_type {
+            hold checks = checks + 1
+        } otherwise {
+            hold errors = errors + 1
+            show "IR error: operand type mismatch"
+        }
+    } otherwise {
+        hold errors = errors + 1
+        show "IR error: opcode mismatch"
+    }
+}
+
+emit(OP_CONST, "number", "42")
+emit(OP_STORE, "number", "answer")
+emit(OP_LOAD, "number", "answer")
+emit(OP_SHOW, "number", "answer")
+
+check(0, OP_CONST, "number")
+check(1, OP_STORE, "number")
+check(2, OP_LOAD, "number")
+check(3, OP_SHOW, "number")
+
+when errors == 0 {
+    show "IR instructions"
+    show list_len(ops)
+    show "IR checks"
+    show checks
+    show "Stage-9 IR OK"
+} otherwise {
+    show "Stage-9 IR found errors"
+    show errors
+}
