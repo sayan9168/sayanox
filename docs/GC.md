@@ -1,24 +1,18 @@
-# Memory model (no prior limits)
+# Memory model
 
 ## Features
 
 | Feature | Behavior |
 |---------|----------|
-| **String RC** | All `hold` strings (including literals) become heap RC via `sx_str_dup` / `sx_str_new` |
-| **List deep copy** | `hold ys = xs` → `sx_list_clone` (independent buffer) |
-| **Auto release** | Reassignment drops/releases previous value |
-| **Mark-sweep** | `sx_gc()` / `sx_gc_sweep()` cleans tracked dead heap strings |
-
-## Examples
+| **String RC** | Literals and copies become heap strings via `sx_str_dup` / `sx_str_new` |
+| **List deep copy** | `hold ys = xs` → `sx_list_clone` (independent buffer; push to ys does not change xs) |
+| **Auto release** | Reassignment drops list / releases string |
+| **Mark-sweep** | `sx_gc()` cleans tracked dead heap strings |
 
 ```bash
 ./selfhost/restore_stage2.sh
 ./selfhost/sx examples/gc_deep_list.sa --run
 ./selfhost/sx examples/gc_literal_rc.sa --run
-./selfhost/sx examples/gc_str_rc.sa --run
-./selfhost/sx examples/gc_list_drop.sa --run
 ```
 
-## Note on concurrency
-
-Stop-the-world mark-sweep + RC runs in the program thread. True concurrent/moving GC needs a different runtime (not required for correctness here).
+Stop-the-world RC + mark-sweep runs on the program thread (correctness without concurrent collector).
