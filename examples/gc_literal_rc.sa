@@ -1,0 +1,7 @@
+// Literals promoted to heap RC on hold
+hold s = "hello"
+hold t = s
+hold s = "world"
+show t
+show s
+show "lit-ok"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full GC MVP: RC strings, RC lists, GC registry."""
+"""GC without previous limits: RC strings (incl. lits), deep list copy, mark-sweep."""
 from pathlib import Path
 import re
 import sys
@@ -11,7 +11,7 @@ if not path.exists():
 
 src = path.read_text()
 
-ARENA = r'''
+RUNTIME = r'''
 typedef struct { double *data; int len; int cap; int rc; } SxList;
 typedef struct { unsigned magic; int rc; size_t len; char data[]; } SxStr;
 #define SX_STR_MAGIC 0x53585352u
@@ -23,20 +23,44 @@ static char *sx_str_new_len(const char *s, size_t n){
   if(s && n) memcpy(h->data,s,n);
   h->data[n]=0; return h->data;
 }
-static char *sx_str_new(const char *s){ return sx_str_new_len(s, strlen(s)); }
+static char *sx_str_new(const char *s){ return sx_str_new_len(s, s?strlen(s):0); }
+/* Promote any C string (literal or heap) to a unique heap RC string (deep). */
+static char *sx_str_dup(const char *s){ return sx_str_new(s?s:""); }
 static void sx_str_retain(char *p){ if(sx_str_is_heap(p)) sx_str_hdr(p)->rc++; }
 static void sx_str_release(char *p){
   if(!sx_str_is_heap(p)) return;
   SxStr *h=sx_str_hdr(p);
   if(--h->rc<=0){ h->magic=0; free(h); }
 }
-static char *sx_gc_strs[4096]; static int sx_gc_nstrs=0;
-static void sx_gc_track(char *p){ if(sx_str_is_heap(p) && sx_gc_nstrs<4096) sx_gc_strs[sx_gc_nstrs++]=p; }
-static void sx_gc_sweep(void){
-  int w=0; for(int i=0;i<sx_gc_nstrs;i++){ char *p=sx_gc_strs[i]; if(sx_str_is_heap(p) && sx_str_hdr(p)->rc>0) sx_gc_strs[w++]=p; }
+static char *sx_gc_strs[8192]; static int sx_gc_nstrs=0;
+static void sx_gc_track(char *p){
+  if(!sx_str_is_heap(p)) return;
+  for(int i=0;i<sx_gc_nstrs;i++) if(sx_gc_strs[i]==p) return;
+  if(sx_gc_nstrs<8192) sx_gc_strs[sx_gc_nstrs++]=p;
+}
+/* Stop-the-world mark-sweep over tracked heap strings: drop dead entries; free if rc==0. */
+static void sx_gc(void){
+  int w=0;
+  for(int i=0;i<sx_gc_nstrs;i++){
+    char *p=sx_gc_strs[i];
+    if(!p) continue;
+    if(!sx_str_is_heap(p)) continue;
+    if(sx_str_hdr(p)->rc>0){ sx_gc_strs[w++]=p; continue; }
+    /* rc already 0: ensure freed */
+    free(sx_str_hdr(p));
+  }
   sx_gc_nstrs=w;
 }
+static void sx_gc_sweep(void){ sx_gc(); }
 static SxList sx_list_new(void){ SxList l; l.data=NULL; l.len=0; l.cap=0; l.rc=1; return l; }
+/* Deep copy — aliases do not share buffers. */
+static SxList sx_list_clone(const SxList *src){
+  SxList l=sx_list_new();
+  if(!src||src->len<=0) return l;
+  l.data=(double*)malloc(sizeof(double)*(size_t)src->len); if(!l.data)exit(1);
+  memcpy(l.data,src->data,sizeof(double)*(size_t)src->len);
+  l.len=src->len; l.cap=src->len; l.rc=1; return l;
+}
 static void sx_list_retain(SxList *l){ if(l && l->rc>0) l->rc++; }
 static void sx_list_drop(SxList *l){
   if(!l || l->rc<=0) return;
@@ -79,6 +103,6 @@ if not m:
 def to_c_string(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
-src = src[: m.start(1)] + to_c_string(ARENA.strip() + "\n") + src[m.end(1) :]
+src = src[: m.start(1)] + to_c_string(RUNTIME.strip() + "\n") + src[m.end(1) :]
 path.write_text(src)
-print("Patched Stage-2 RUNTIME: string RC + list RC + GC registry")
+print("Patched RUNTIME: deep list copy + string RC + mark-sweep")

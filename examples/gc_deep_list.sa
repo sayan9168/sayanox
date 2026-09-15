@@ -1,0 +1,8 @@
+// Deep copy: mutating ys must not change xs
+hold xs = [1, 2, 3]
+hold ys = xs
+push(ys, 99)
+show xs[0]
+show xs[2]
+show ys[3]
+show "deep-ok"
