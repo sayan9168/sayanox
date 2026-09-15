@@ -1,0 +1,114 @@
+// Sayanox Stage-11 compiler pipeline.
+// Builds a control-flow-aware IR program with temporaries and basic blocks.
+
+show "=== Sayanox Stage-11 IR Pipeline ==="
+
+hold BLOCK_ENTRY = "entry"
+hold BLOCK_THEN = "then"
+hold BLOCK_ELSE = "else"
+hold BLOCK_EXIT = "exit"
+
+hold OP_CONST = "const"
+hold OP_LOAD = "load"
+hold OP_ADD = "add"
+hold OP_STORE = "store"
+hold OP_BRANCH = "branch"
+hold OP_JUMP = "jump"
+hold OP_SHOW = "show"
+
+hold blocks = []
+hold ops = []
+hold args = []
+hold types = []
+hold temp_ids = []
+hold errors = 0
+hold checks = 0
+hold next_temp = 0
+
+make new_temp() {
+    hold id = next_temp
+    hold next_temp = next_temp + 1
+    return id
+}
+
+make begin_block(name) {
+    push(blocks, name)
+    hold checks = checks + 1
+}
+
+make emit(op, arg, typ, temp) {
+    push(ops, op)
+    push(args, arg)
+    push(types, typ)
+    push(temp_ids, temp)
+    hold checks = checks + 1
+}
+
+make require(index, wanted_op, wanted_type) {
+    when list_get(ops, index) == wanted_op {
+        when list_get(types, index) == wanted_type {
+            hold checks = checks + 1
+        } otherwise {
+            hold errors = errors + 1
+            show "IR pipeline error: type mismatch"
+        }
+    } otherwise {
+        hold errors = errors + 1
+        show "IR pipeline error: opcode mismatch"
+    }
+}
+
+// Entry: answer = 40 + 2
+begin_block(BLOCK_ENTRY)
+hold t0 = new_temp()
+emit(OP_CONST, "40", "number", t0)
+hold t1 = new_temp()
+emit(OP_CONST, "2", "number", t1)
+hold t2 = new_temp()
+emit(OP_ADD, "t0,t1", "number", t2)
+emit(OP_STORE, "answer", "number", t2)
+emit(OP_BRANCH, "t2 != 0", "bool", -1)
+
+// Structured control-flow blocks are represented explicitly.
+begin_block(BLOCK_THEN)
+emit(OP_LOAD, "answer", "number", t2)
+emit(OP_SHOW, "answer", "number", t2)
+emit(OP_JUMP, BLOCK_EXIT, "label", -1)
+
+begin_block(BLOCK_ELSE)
+emit(OP_CONST, "0", "number", t3)
+emit(OP_SHOW, "0", "number", t3)
+emit(OP_JUMP, BLOCK_EXIT, "label", -1)
+
+begin_block(BLOCK_EXIT)
+
+require(0, OP_CONST, "number")
+require(1, OP_CONST, "number")
+require(2, OP_ADD, "number")
+require(3, OP_STORE, "number")
+require(4, OP_BRANCH, "bool")
+require(5, OP_LOAD, "number")
+require(6, OP_SHOW, "number")
+require(7, OP_JUMP, "label")
+
+when list_len(blocks) == 4 {
+    hold checks = checks + 1
+} otherwise {
+    hold errors = errors + 1
+    show "IR pipeline error: basic-block count mismatch"
+}
+
+when errors == 0 {
+    show "basic blocks"
+    show list_len(blocks)
+    show "IR instructions"
+    show list_len(ops)
+    show "temporaries"
+    show next_temp
+    show "checks"
+    show checks
+    show "Stage-11 IR pipeline OK"
+} otherwise {
+    show "Stage-11 IR pipeline found errors"
+    show errors
+}
