@@ -1,0 +1,6 @@
+// Stage-5 semantic checker fixture.
+hold answer = 42
+hold greeting = "hello"
+hold numbers = [1, 2, 3]
+hold copy = answer
+show copy
