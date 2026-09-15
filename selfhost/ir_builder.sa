@@ -1,0 +1,50 @@
+// Sayanox Stage-10 IR builder.
+// Provides a stable instruction-construction boundary for later codegen.
+
+hold IR_VERSION = "sx-ir-0.1"
+hold VALUE_NUMBER = "number"
+hold VALUE_STRING = "string"
+hold VALUE_BOOL = "bool"
+
+hold opcode_const = "const"
+hold opcode_load = "load"
+hold opcode_store = "store"
+hold opcode_show = "show"
+hold opcode_add = "add"
+hold opcode_jump = "jump"
+hold opcode_branch = "branch"
+
+hold instruction_count = 0
+hold validation_errors = 0
+
+make instruction(op, operand, typ) {
+    when op == "" {
+        hold validation_errors = validation_errors + 1
+        show "IR error: empty opcode"
+    } otherwise {
+        when typ == "" {
+            hold validation_errors = validation_errors + 1
+            show "IR error: missing type"
+        } otherwise {
+            hold instruction_count = instruction_count + 1
+        }
+    }
+}
+
+instruction(opcode_const, "42", VALUE_NUMBER)
+instruction(opcode_store, "answer", VALUE_NUMBER)
+instruction(opcode_load, "answer", VALUE_NUMBER)
+instruction(opcode_show, "answer", VALUE_NUMBER)
+instruction(opcode_add, "answer", VALUE_NUMBER)
+instruction(opcode_jump, "L0", VALUE_BOOL)
+instruction(opcode_branch, "L1", VALUE_BOOL)
+
+when validation_errors == 0 {
+    show IR_VERSION
+    show "instructions"
+    show instruction_count
+    show "Stage-10 IR builder OK"
+} otherwise {
+    show "Stage-10 IR builder found errors"
+    show validation_errors
+}
