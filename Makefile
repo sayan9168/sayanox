@@ -1,5 +1,5 @@
 # Sayanox - one command self-host
-.PHONY: all stage2 test selfhost clean
+.PHONY: all stage2 test selfhost clean examples repl fmt cheatsheet
 
 all: stage2
 
@@ -10,6 +10,23 @@ stage2:
 test selfhost:
 	chmod +x selfhost/bootstrap_selfhost.sh
 	./selfhost/bootstrap_selfhost.sh
+
+examples: stage2
+	chmod +x selfhost/sx
+	./selfhost/sx examples/hello.sa --run
+	./selfhost/sx examples/countdown.sa --run
+	./selfhost/sx examples/greet.sa --run
+
+echo-help:
+	@echo "make stage2 | test | examples | repl | fmt"
+
+repl:
+	chmod +x tools/sxrepl.sh
+	./tools/sxrepl.sh
+
+fmt:
+	@test -n "$(FILE)" || (echo "usage: make fmt FILE=path.sa"; exit 1)
+	python3 tools/sxfmt.py $(FILE) --write
 
 clean:
 	rm -f selfhost/stage2 selfhost/out_* selfhost/cli_* selfhost/stage3 \

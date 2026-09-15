@@ -1,0 +1,6 @@
+hold n = 5
+while n {
+  show n
+  hold n = n - 1
+}
+show "done"

@@ -1,0 +1,16 @@
+// Fibonacci: print first terms until > 100
+hold a = 0
+hold b = 1
+show a
+show b
+hold n = 0
+while n {
+  hold c = a + b
+  when c > 100 {
+    hold n = 0
+  } otherwise {
+    show c
+    hold a = b
+    hold b = c
+  }
+}

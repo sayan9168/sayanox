@@ -1,0 +1,3 @@
+hold name = "Sayanox"
+show "Hello"
+show name

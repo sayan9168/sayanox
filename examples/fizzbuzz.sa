@@ -1,0 +1,24 @@
+// FizzBuzz 1..20
+hold i = 1
+while i {
+  when i > 20 {
+    hold i = 0
+  } otherwise {
+    hold f3 = i % 3
+    hold f5 = i % 5
+    when f3 == 0 {
+      when f5 == 0 {
+        show "FizzBuzz"
+      } otherwise {
+        show "Fizz"
+      }
+    } otherwise {
+      when f5 == 0 {
+        show "Buzz"
+      } otherwise {
+        show i
+      }
+    }
+    hold i = i + 1
+  }
+}
