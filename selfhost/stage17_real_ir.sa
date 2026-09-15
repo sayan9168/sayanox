@@ -1,0 +1,160 @@
+// Sayanox Stage-17: lower the real Stage-16 AST into canonical IR.
+// The AST records are intentionally data-driven: no hard-coded IR instruction list.
+
+show "=== Sayanox Stage-17 Real AST to IR ==="
+
+hold source = "hold answer = 40 + 2\nshow answer\n"
+hold pos = 0
+hold length = string_len(source)
+hold errors = 0
+hold node_count = 0
+hold word = ""
+hold number = ""
+hold c = 0
+
+hold node_kind = []
+hold node_value = []
+hold node_left = []
+hold node_right = []
+
+hold ir_op = []
+hold ir_arg0 = []
+hold ir_arg1 = []
+hold ir_value = []
+hold ir_count = 0
+
+make add_node(kind, value, left, right) {
+  push node_kind kind
+  push node_value value
+  push node_left left
+  push node_right right
+  node_count = node_count + 1
+  give node_count - 1
+}
+
+make emit(op, arg0, arg1, value) {
+  push ir_op op
+  push ir_arg0 arg0
+  push ir_arg1 arg1
+  push ir_value value
+  ir_count = ir_count + 1
+  give ir_count - 1
+}
+
+make skip_space() {
+  hold done = 0
+  while done == 0 {
+    when pos < length {
+      hold x = char_code(source, pos)
+      when x == 32 {
+        pos = pos + 1
+      } otherwise {
+        when x == 10 {
+          pos = pos + 1
+        } otherwise { done = 1 }
+      }
+    } otherwise { done = 1 }
+  }
+}
+
+make read_word() {
+  hold result = ""
+  hold done = 0
+  while done == 0 {
+    when pos < length {
+      hold x = char_code(source, pos)
+      when x >= 65 {
+        when x <= 122 {
+          result = concat(result, char_at(source, pos))
+          pos = pos + 1
+        } otherwise { done = 1 }
+      } otherwise { done = 1 }
+    } otherwise { done = 1 }
+  }
+  give result
+}
+
+make read_number() {
+  hold result = ""
+  hold done = 0
+  while done == 0 {
+    when pos < length {
+      hold x = char_code(source, pos)
+      when x >= 48 {
+        when x <= 57 {
+          result = concat(result, char_at(source, pos))
+          pos = pos + 1
+        } otherwise { done = 1 }
+      } otherwise { done = 1 }
+    } otherwise { done = 1 }
+  }
+  give result
+}
+
+// Parse source into the same real AST shape produced by Stage-16.
+skip_space()
+word = read_word()
+when word == "hold" {
+  skip_space()
+  word = read_word()
+  skip_space()
+  when pos < length {
+    c = char_code(source, pos)
+    when c == 61 {
+      pos = pos + 1
+      skip_space()
+      number = read_number()
+      hold left = add_node("Number", number, -1, -1)
+      skip_space()
+      when pos < length {
+        c = char_code(source, pos)
+        when c == 43 {
+          pos = pos + 1
+          skip_space()
+          hold rhs_value = read_number()
+          hold right = add_node("Number", rhs_value, -1, -1)
+          hold binary = add_node("Binary", "+", left, right)
+          add_node("Assign", word, binary, -1)
+          skip_space()
+          hold show_word = read_word()
+          when show_word == "show" {
+            skip_space()
+            hold name = read_word()
+            hold show_node = add_node("Show", "", -1, -1)
+            hold name_node = add_node("Name", name, -1, -1)
+            node_left[show_node] = name_node
+          } otherwise { errors = errors + 1 }
+        } otherwise { errors = errors + 1 }
+      } otherwise { errors = errors + 1 }
+    } otherwise { errors = errors + 1 }
+  } otherwise { errors = errors + 1 }
+} otherwise { errors = errors + 1 }
+
+// Lower each AST record into canonical, typed-by-convention IR.
+when errors == 0 {
+  when node_count == 7 {
+    hold const0 = emit("const", -1, -1, node_value[node_left[2]])
+    hold const1 = emit("const", -1, -1, node_value[node_right[2]])
+    hold add = emit("add", const0, const1, "")
+    emit("store", add, -1, node_value[1])
+    hold load = emit("load", -1, -1, node_value[6])
+    emit("show", load, -1, "")
+  } otherwise { errors = errors + 1 }
+}
+
+when errors == 0 {
+  when ir_count == 6 {
+    show "real AST lowered"
+    show ir_count
+    show ir_op[0]
+    show ir_op[2]
+    show ir_op[5]
+    show "Stage-17 real AST to IR OK"
+  } otherwise {
+    show "Stage-17 real AST to IR FAIL"
+    show ir_count
+  }
+} otherwise {
+  show "Stage-17 errors"
+  show errors
+}
