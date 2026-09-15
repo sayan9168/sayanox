@@ -1,0 +1,6 @@
+// Shared list alias with retain
+hold xs = [1, 2, 3]
+hold ys = xs
+show ys[0]
+show ys[2]
+show "alias-ok"

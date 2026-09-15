@@ -1,0 +1,6 @@
+// String RC: reassignment releases old heap string
+hold s = concat("hello", "!")
+show s
+hold s = concat("bye", "!")
+show s
+show "str-rc-ok"

@@ -1,0 +1,6 @@
+// Allocate temps then continue (registry tracks heap strings)
+hold a = concat("a", "1")
+hold b = concat("b", "2")
+hold c = concat(a, b)
+show c
+show "sweep-ok"
