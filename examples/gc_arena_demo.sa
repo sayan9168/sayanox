@@ -1,13 +1,6 @@
-// Allocates many temporary strings — arena holds them until process exit
+// Arena GC: string temps live until process exit
 hold s = "hello"
-hold i = 0
-while i {
-  when i > 20 {
-    hold i = 0
-  } otherwise {
-    hold s = concat(s, "!")
-    hold i = i + 1
-  }
-}
+hold s = concat(s, "!")
+hold s = concat(s, "!")
 show s
 show "arena-ok"
