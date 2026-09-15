@@ -1,0 +1,66 @@
+// Sayanox Stage-7 compiler pipeline coordinator.
+// This stage makes the phase order explicit and validates the hand-off
+// contract between source loading, lexical analysis, parsing, semantic
+// analysis, diagnostics, and code generation.
+
+hold PHASE_SOURCE = "source"
+hold PHASE_LEXER = "lexer"
+hold PHASE_PARSER = "parser"
+hold PHASE_SEMANTIC = "semantic"
+hold PHASE_DIAGNOSTICS = "diagnostics"
+hold PHASE_CODEGEN = "codegen"
+
+hold phases = []
+hold completed = []
+hold errors = 0
+
+make mark(phase) {
+    push(phases, phase)
+    push(completed, 1)
+}
+
+make require_order(a, b) {
+    hold i = 0
+    hold left = -1
+    hold right = -1
+    while i < list_len(phases) {
+        when list_get(phases, i) == a { left = i }
+        when list_get(phases, i) == b { right = i }
+        hold i = i + 1
+    }
+    when left < 0 {
+        hold errors = errors + 1
+    } otherwise {
+        when right <= left {
+            hold errors = errors + 1
+        }
+    }
+}
+
+// Stage-7 pipeline contract.
+mark(PHASE_SOURCE)
+mark(PHASE_LEXER)
+mark(PHASE_PARSER)
+mark(PHASE_SEMANTIC)
+mark(PHASE_DIAGNOSTICS)
+mark(PHASE_CODEGEN)
+
+require_order(PHASE_SOURCE, PHASE_LEXER)
+require_order(PHASE_LEXER, PHASE_PARSER)
+require_order(PHASE_PARSER, PHASE_SEMANTIC)
+require_order(PHASE_SEMANTIC, PHASE_DIAGNOSTICS)
+require_order(PHASE_DIAGNOSTICS, PHASE_CODEGEN)
+
+show "=== Sayanox Stage-7 Compiler Pipeline ==="
+show "phases"
+show list_len(phases)
+show "completed"
+show list_len(completed)
+show "errors"
+show errors
+
+when errors == 0 {
+    show "Stage-7 pipeline contract OK"
+} otherwise {
+    show "Stage-7 pipeline contract FAILED"
+}
