@@ -1,0 +1,59 @@
+// Sayanox Stage-7 diagnostics engine.
+// Keeps compiler diagnostics structured: severity, phase, message, hint,
+// and source location. The implementation is bootstrap-safe.
+
+hold DIAG_ERROR = "error"
+hold DIAG_WARNING = "warning"
+hold DIAG_NOTE = "note"
+
+hold severities = []
+hold phases = []
+hold messages = []
+hold hints = []
+hold lines = []
+hold columns = []
+hold count = 0
+
+make add(severity, phase, message, hint, line, column) {
+    push(severities, severity)
+    push(phases, phase)
+    push(messages, message)
+    push(hints, hint)
+    push(lines, line)
+    push(columns, column)
+    hold count = count + 1
+}
+
+make error(phase, message, hint, line, column) {
+    add(DIAG_ERROR, phase, message, hint, line, column)
+}
+
+make warning(phase, message, hint, line, column) {
+    add(DIAG_WARNING, phase, message, hint, line, column)
+}
+
+make note(phase, message, hint, line, column) {
+    add(DIAG_NOTE, phase, message, hint, line, column)
+}
+
+make render(i) {
+    show list_get(severities, i)
+    show list_get(phases, i)
+    show list_get(messages, i)
+    show list_get(hints, i)
+    show list_get(lines, i)
+    show list_get(columns, i)
+}
+
+// Smoke fixture: diagnostics are data first, presentation second.
+error("typecheck", "type mismatch: number assigned to string", "check the value on the right side", 4, 9)
+warning("parser", "unused declaration", "remove it or use the value", 7, 1)
+note("compiler", "diagnostic engine ready", "", 1, 1)
+
+show "=== Sayanox Stage-7 Diagnostics ==="
+show "diagnostics"
+show count
+render(0)
+render(1)
+render(2)
+show "Stage-7 diagnostics OK"
