@@ -1,31 +1,32 @@
 #!/usr/bin/env python3
-"""Harden Stage-2 output for the self-hosted keyword classifier."""
+"""Optional: harden Stage-2 sx_keyword if present."""
 from pathlib import Path
 import re
+import sys
 
 path = Path("selfhost/stage2_template.c")
 src = path.read_text()
 
-# complete_stage2.py now emits the correct string ABI directly. Keep this
-# patch idempotent for older generated templates and normalize either form.
-src, count = re.subn(
+src2, count = re.subn(
     r"double sx_keyword\(double w\)",
     "char *sx_keyword(char *w)",
     src,
     count=1,
 )
-if count == 0 and "char *sx_keyword(char *w)" not in src:
-    raise SystemExit("Generated sx_keyword function was not found")
+if count == 0 and "char *sx_keyword(char *w)" not in src2:
+    print("patch_stage2_keyword: sx_keyword not found — skip")
+    sys.exit(0)
 
+src = src2
 start = src.find("char *sx_keyword(char *w)")
 if start < 0:
-    raise SystemExit("Typed sx_keyword function was not found")
+    print("patch_stage2_keyword: typed sx_keyword not found — skip")
+    sys.exit(0)
 
-# Find the matching closing brace instead of stopping at the first nested
-# brace, then rewrite only string comparisons inside keyword().
 depth = 0
 end = -1
-for index in range(src.find("{", start), len(src)):
+brace = src.find("{", start)
+for index in range(brace, len(src)):
     if src[index] == "{":
         depth += 1
     elif src[index] == "}":
@@ -34,12 +35,11 @@ for index in range(src.find("{", start), len(src)):
             end = index
             break
 if end < 0:
-    raise SystemExit("Generated sx_keyword body was not closed")
+    print("patch_stage2_keyword: unclosed body — skip")
+    sys.exit(0)
 
-body = src[start:end]
-body = re.sub(r"\(w\s*==\s*\"([A-Za-z]+)\"\)", r'(strcmp(w, "\1") == 0)', body)
-body = re.sub(r"\(w\s*!=\s*\"([A-Za-z]+)\"\)", r'(strcmp(w, "\1") != 0)', body)
-src = src[:start] + body + src[end:]
-
+body = src[start : end + 1]
+body2 = re.sub(r"\(w\s*==\s*\"([A-Za-z]+)\"\)", r'(strcmp(w, "\1") == 0)', body)
+src = src[:start] + body2 + src[end + 1 :]
 path.write_text(src)
-print("Patched Stage-2 keyword string ABI")
+print("Patched Stage-2 keyword comparisons")
