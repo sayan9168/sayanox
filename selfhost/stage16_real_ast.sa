@@ -1,0 +1,145 @@
+// Sayanox Stage-16: real source scanning into AST nodes.
+// This stage replaces the fixed AST fixture with nodes derived from source text.
+
+show "=== Sayanox Stage-16 Real AST ==="
+
+hold source = "hold answer = 40 + 2\nshow answer\n"
+hold pos = 0
+hold length = string_len(source)
+hold token_count = 0
+hold node_count = 0
+hold errors = 0
+hold word = ""
+hold number = ""
+hold c = 0
+hold scanning = 0
+
+hold node_kind = []
+hold node_value = []
+hold node_left = []
+hold node_right = []
+
+make add_node(kind, value, left, right) {
+  push node_kind kind
+  push node_value value
+  push node_left left
+  push node_right right
+  node_count = node_count + 1
+  give node_count - 1
+}
+
+make skip_space() {
+  hold done = 0
+  while done == 0 {
+    when pos < length {
+      hold x = char_code(source, pos)
+      when x == 32 {
+        pos = pos + 1
+      } otherwise {
+        when x == 10 {
+          pos = pos + 1
+        } otherwise {
+          done = 1
+        }
+      }
+    } otherwise { done = 1 }
+  }
+}
+
+make read_word() {
+  hold result = ""
+  hold done = 0
+  while done == 0 {
+    when pos < length {
+      hold x = char_code(source, pos)
+      when x >= 65 {
+        when x <= 122 {
+          result = concat(result, char_at(source, pos))
+          pos = pos + 1
+        } otherwise { done = 1 }
+      } otherwise { done = 1 }
+    } otherwise { done = 1 }
+  }
+  give result
+}
+
+make read_number() {
+  hold result = ""
+  hold done = 0
+  while done == 0 {
+    when pos < length {
+      hold x = char_code(source, pos)
+      when x >= 48 {
+        when x <= 57 {
+          result = concat(result, char_at(source, pos))
+          pos = pos + 1
+        } otherwise { done = 1 }
+      } otherwise { done = 1 }
+    } otherwise { done = 1 }
+  }
+  give result
+}
+
+// Parse the deliberately small Stage-16 grammar from the actual source.
+skip_space()
+word = read_word()
+when word == "hold" {
+  token_count = token_count + 1
+  skip_space()
+  word = read_word()
+  token_count = token_count + 1
+  skip_space()
+  when pos < length {
+    c = char_code(source, pos)
+    when c == 61 {
+      pos = pos + 1
+      token_count = token_count + 1
+      skip_space()
+      number = read_number()
+      token_count = token_count + 1
+      hold left = add_node("Number", number, -1, -1)
+      skip_space()
+      when pos < length {
+        c = char_code(source, pos)
+        when c == 43 {
+          pos = pos + 1
+          token_count = token_count + 1
+          skip_space()
+          hold rhs_value = read_number()
+          token_count = token_count + 1
+          hold right = add_node("Number", rhs_value, -1, -1)
+          hold binary = add_node("Binary", "+", left, right)
+          hold assign = add_node("Assign", word, binary, -1)
+          skip_space()
+          hold show_word = read_word()
+          when show_word == "show" {
+            token_count = token_count + 1
+            skip_space()
+            hold name = read_word()
+            token_count = token_count + 1
+            hold show_node = add_node("Show", "", name, -1)
+            hold name_node = add_node("Name", name, -1, -1)
+            // Keep the Show payload explicit in the final node records.
+            node_left[show_node] = name_node
+            show "source parsed"
+          } otherwise { errors = errors + 1 }
+        } otherwise { errors = errors + 1 }
+      } otherwise { errors = errors + 1 }
+    } otherwise { errors = errors + 1 }
+  } otherwise { errors = errors + 1 }
+} otherwise { errors = errors + 1 }
+
+when errors == 0 {
+  when node_count == 7 {
+    show "real AST materialized"
+    show token_count
+    show node_count
+    show "Stage-16 real AST OK"
+  } otherwise {
+    show "Stage-16 real AST FAIL"
+    show node_count
+  }
+} otherwise {
+  show "Stage-16 parser errors"
+  show errors
+}
