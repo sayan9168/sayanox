@@ -5,9 +5,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 bash selfhost/restore_stage2.sh
+rm -f selfhost/typeenv selfhost/typeenv.c
 bash selfhost/sx selfhost/typeenv.sa
 
-BIN="selfhost/stage2/typeenv"
+BIN="selfhost/typeenv"
 if [ ! -x "$BIN" ]; then
   echo "Stage-6 error: expected $BIN"
   exit 1
