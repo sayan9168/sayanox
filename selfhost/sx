@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
 # Sayanox CLI - compile any .sa file (Stage-2 self-host)
-# Usage:
-#   sx <file.sa>
-#   sx <file.sa> -o name
-#   sx <file.sa> --run
-#   sx <file.sa> -o name --run
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -33,7 +28,6 @@ if [[ ! -f "$IN" ]]; then
   exit 1
 fi
 
-# Ensure Stage-2 binary exists and template is complete
 ensure_stage2() {
   if [[ ! -x selfhost/stage2 ]] || ! grep -q 'compile_generic\|TokKind' selfhost/stage2_template.c 2>/dev/null; then
     echo "sx: preparing Stage-2 (one-time)..."
@@ -50,22 +44,18 @@ C_OUT="${OUT}.c"
 BIN_OUT="$OUT"
 
 echo "sx: compile $IN -> $C_OUT"
-if ! ./selfhost/stage2 "$IN" "$C_OUT"; then
-  echo "sx: error: Stage-2 failed for $IN" >&2
-  exit 1
-fi
+./selfhost/stage2 "$IN" "$C_OUT"
 
+CC=clang
+command -v clang >/dev/null 2>&1 || CC=gcc
 echo "sx: link $C_OUT -> $BIN_OUT"
-if command -v clang >/dev/null 2>&1; then
-  clang -o "$BIN_OUT" "$C_OUT"
-else
-  gcc -o "$BIN_OUT" "$C_OUT"
-fi
-
+# -pthread for concurrent GC runtime
+$CC -O2 -pthread -o "$BIN_OUT" "$C_OUT"
 echo "sx: OK binary: $BIN_OUT"
+
 if [[ "$RUN" -eq 1 ]]; then
   echo "sx: run $BIN_OUT"
   echo "-----"
-  "$BIN_OUT"
+  "./$BIN_OUT"
   echo "-----"
 fi

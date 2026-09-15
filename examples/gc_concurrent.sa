@@ -1,0 +1,12 @@
+// Concurrent GC: many heap strings while bg thread sweeps
+hold s = "start"
+hold i = 1
+while i {
+  when i > 30 {
+    hold i = 0
+  } otherwise {
+    hold s = concat(s, "x")
+    hold i = i + 1
+  }
+}
+show "concurrent-ok"
