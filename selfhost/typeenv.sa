@@ -1,0 +1,118 @@
+// Sayanox Stage-6 type environment.
+//
+// This module makes type information explicit and scoped instead of keeping
+// semantic state as a flat name/type list. It is intentionally bootstrap-safe
+// so the environment itself is implemented in Sayanox.
+
+show "=== Sayanox Stage-6 Type Environment ==="
+
+hold TYPE_UNKNOWN = "unknown"
+hold TYPE_NUMBER = "number"
+hold TYPE_STRING = "string"
+hold TYPE_BOOL = "bool"
+hold TYPE_LIST = "list"
+
+hold names = []
+hold types = []
+hold scopes = []
+hold current_scope = 0
+hold errors = 0
+hold checks = 0
+
+make eqs(a, b) {
+    when a == b { give 1 } otherwise { give 0 }
+}
+
+make enter_scope() {
+    hold current_scope = current_scope + 1
+}
+
+make leave_scope() {
+    when current_scope > 0 {
+        hold current_scope = current_scope - 1
+    } otherwise {
+        hold errors = errors + 1
+        show "typeenv error: cannot leave root scope"
+    }
+}
+
+make find_local(name) {
+    hold i = list_len(names) - 1
+    while i >= 0 {
+        when eqs(list_get(names, i), name) == 1 {
+            when list_get(scopes, i) == current_scope {
+                give i
+            }
+        }
+        hold i = i - 1
+    }
+    give -1
+}
+
+make declare(name, kind) {
+    hold existing = find_local(name)
+    when existing >= 0 {
+        hold errors = errors + 1
+        show "typeenv error: duplicate declaration"
+        show name
+    } otherwise {
+        push(names, name)
+        push(types, kind)
+        push(scopes, current_scope)
+        hold checks = checks + 1
+    }
+}
+
+make lookup(name) {
+    hold i = list_len(names) - 1
+    while i >= 0 {
+        when eqs(list_get(names, i), name) == 1 {
+            when list_get(scopes, i) <= current_scope {
+                give list_get(types, i)
+            }
+        }
+        hold i = i - 1
+    }
+    give TYPE_UNKNOWN
+}
+
+make expect(name, wanted) {
+    hold actual = lookup(name)
+    when eqs(actual, wanted) == 0 {
+        hold errors = errors + 1
+        show "typeenv error: type mismatch"
+        show name
+    } otherwise {
+        hold checks = checks + 1
+    }
+}
+
+// Root scope.
+declare("answer", TYPE_NUMBER)
+declare("greeting", TYPE_STRING)
+expect("answer", TYPE_NUMBER)
+expect("greeting", TYPE_STRING)
+
+// Nested scope shadows a name without corrupting the outer binding.
+enter_scope()
+declare("answer", TYPE_STRING)
+declare("items", TYPE_LIST)
+expect("answer", TYPE_STRING)
+expect("items", TYPE_LIST)
+expect("greeting", TYPE_STRING)
+leave_scope()
+
+// After leaving, the root binding is visible again.
+expect("answer", TYPE_NUMBER)
+expect("greeting", TYPE_STRING)
+
+when errors == 0 {
+    show "checks"
+    show checks
+    show "bindings"
+    show list_len(names)
+    show "Stage-6 type environment OK"
+} otherwise {
+    show "Stage-6 type environment found errors"
+    show errors
+}
