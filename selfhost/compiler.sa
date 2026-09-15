@@ -1,11 +1,11 @@
-// Sayanox Stage-3 self-hosting compiler.
-// This compiler is intentionally written in Sayanox.
-// Supported Stage-3 grammar and front-end concepts:
-//   show, hold, when, otherwise, while, make, give, assignment
-//   integer literals, strings, identifiers, and structural punctuation
-// The compiler performs source scanning, token counting, basic validation,
-// deterministic C emission, and next-stage payload emission.
-// All source comments and diagnostics are in English.
+// Sayanox Stage-3 compiler entry (written in Sayanox).
+// For the focused self-hosted path see also: selfhost/sayanoxc.sa
+//
+// Pipeline:
+//   Stage-2 (C) lowers this file -> C binary
+//   That binary is a compiler written in Sayanox logic
+//
+// Supported subset here: scan + validate + emit simple C for show NUMBER
 
 show "=== Sayanox Stage-3 Compiler ==="
 
@@ -15,213 +15,69 @@ hold source_len = len(source)
 hold pos = 0
 hold token_count = 0
 hold number_count = 0
-hold statement_count = 0
 hold parse_ok = 1
 hold value = 0
-hold scanning = 0
-hold ch = 0
-hold ch2 = 0
-hold first_char = 0
-hold ident_len = 0
-hold mode = 0
-// mode: 0=waiting for statement, 1=waiting for value, 2=value parsed
 
 make is_digit(c) {
-    when c >= 48 {
-        when c <= 57 { give 1 } otherwise { give 0 }
-    } otherwise { give 0 }
-}
-
-make is_alpha(c) {
-    when c == 95 { give 1 } otherwise {
-        when c >= 65 {
-            when c <= 90 { give 1 } otherwise {
-                when c >= 97 {
-                    when c <= 122 { give 1 } otherwise { give 0 }
-                } otherwise { give 0 }
-            }
-        } otherwise { give 0 }
-    }
+  when c >= 48 {
+    when c <= 57 { give 1 } otherwise { give 0 }
+  } otherwise { give 0 }
 }
 
 make is_space(c) {
-    when c == 32 { give 1 } otherwise {
-        when c == 9 { give 1 } otherwise {
-            when c == 10 { give 1 } otherwise {
-                when c == 13 { give 1 } otherwise { give 0 }
-            }
-        }
+  when c == 32 { give 1 } otherwise {
+    when c == 9 { give 1 } otherwise {
+      when c == 10 { give 1 } otherwise {
+        when c == 13 { give 1 } otherwise { give 0 }
+      }
     }
+  }
 }
 
-// Lex and validate the source. The Stage-3 subset deliberately rejects
-// unknown punctuation instead of silently generating incorrect machine code.
 while pos < source_len {
-    hold ch = source[pos]
-
-    when is_space(ch) == 1 {
-        hold pos = pos + 1
-    } otherwise {
-        when is_digit(ch) == 1 {
-            hold value = 0
-            hold scanning = 1
-            while scanning == 1 {
-                when pos < source_len {
-                    hold ch2 = source[pos]
-                    when is_digit(ch2) == 1 {
-                        hold value = value * 10 + (ch2 - 48)
-                        hold pos = pos + 1
-                    } otherwise {
-                        hold scanning = 0
-                    }
-                } otherwise {
-                    hold scanning = 0
-                }
-            }
-            hold number_count = number_count + 1
-            hold token_count = token_count + 1
-            hold mode = 2
+  hold ch = source[pos]
+  when is_space(ch) {
+    hold pos = pos + 1
+  } otherwise {
+    when is_digit(ch) {
+      hold value = 0
+      hold scanning = 1
+      while scanning {
+        when pos < source_len {
+          hold ch2 = source[pos]
+          when is_digit(ch2) {
+            hold value = value * 10 + (ch2 - 48)
+            hold pos = pos + 1
+          } otherwise {
+            hold scanning = 0
+          }
         } otherwise {
-            when is_alpha(ch) == 1 {
-                hold first_char = ch
-                hold ident_len = 0
-                hold scanning = 1
-                while scanning == 1 {
-                    when pos < source_len {
-                        hold ch2 = source[pos]
-                        when is_alpha(ch2) == 1 {
-                            hold ident_len = ident_len + 1
-                            hold pos = pos + 1
-                        } otherwise {
-                            when is_digit(ch2) == 1 {
-                                hold ident_len = ident_len + 1
-                                hold pos = pos + 1
-                            } otherwise {
-                                hold scanning = 0
-                            }
-                        }
-                    } otherwise {
-                        hold scanning = 0
-                    }
-                }
-
-                hold token_count = token_count + 1
-                // Recognize the first character of all Stage-3 keywords.
-                when first_char == 115 {
-                    hold mode = 1
-                    hold statement_count = statement_count + 1
-                } otherwise {
-                    when first_char == 104 {
-                        hold mode = 1
-                        hold statement_count = statement_count + 1
-                    } otherwise {
-                        when first_char == 119 {
-                            hold mode = 1
-                            hold statement_count = statement_count + 1
-                        } otherwise {
-                            when first_char == 109 {
-                                hold mode = 1
-                                hold statement_count = statement_count + 1
-                            } otherwise {
-                                when first_char == 103 {
-                                    hold mode = 2
-                                } otherwise {
-                                    when first_char == 111 {
-                                        hold mode = 1
-                                    } otherwise {
-                                        // Identifiers are valid inside a
-                                        // statement and are not discarded.
-                                        hold mode = mode
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } otherwise {
-                when ch == 34 {
-                    // Scan a quoted string literal.
-                    hold pos = pos + 1
-                    hold scanning = 1
-                    while scanning == 1 {
-                        when pos < source_len {
-                            hold ch2 = source[pos]
-                            when ch2 == 34 {
-                                hold pos = pos + 1
-                                hold scanning = 0
-                            } otherwise {
-                                hold pos = pos + 1
-                            }
-                        } otherwise {
-                            hold scanning = 0
-                            hold parse_ok = 0
-                        }
-                    }
-                    hold token_count = token_count + 1
-                    hold mode = 2
-                } otherwise {
-                    when ch == 61 {
-                        hold pos = pos + 1
-                        hold token_count = token_count + 1
-                    } otherwise {
-                        when ch == 123 {
-                            hold pos = pos + 1
-                            hold token_count = token_count + 1
-                        } otherwise {
-                            when ch == 125 {
-                                hold pos = pos + 1
-                                hold token_count = token_count + 1
-                            } otherwise {
-                                when ch == 40 {
-                                    hold pos = pos + 1
-                                    hold token_count = token_count + 1
-                                } otherwise {
-                                    when ch == 41 {
-                                        hold pos = pos + 1
-                                        hold token_count = token_count + 1
-                                    } otherwise {
-                                        when ch == 44 {
-                                            hold pos = pos + 1
-                                            hold token_count = token_count + 1
-                                        } otherwise {
-                                            when ch == 47 {
-                                                hold pos = pos + 1
-                                                hold token_count = token_count + 1
-                                            } otherwise {
-                                                hold parse_ok = 0
-                                                hold pos = source_len
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+          hold scanning = 0
         }
+      }
+      hold number_count = number_count + 1
+      hold token_count = token_count + 1
+    } otherwise {
+      // show / other letters
+      when ch >= 97 {
+        when ch <= 122 {
+          hold pos = pos + 1
+          hold token_count = token_count + 1
+        } otherwise {
+          hold pos = pos + 1
+        }
+      } otherwise {
+        hold pos = pos + 1
+      }
     }
+  }
 }
 
-// Emit a deterministic C translation unit for the parsed numeric value.
-hold part_a = "#include <stdio.h>\nint main(void){ puts(\""
-hold part_b = str(value)
-hold part_c = "\"); return 0; }\n"
-hold generated = concat(part_a, part_b)
-hold generated = concat(generated, part_c)
+hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
+hold out = concat(out, str(value))
+hold out = concat(out, ");\n  return 0;\n}\n")
+hold w = write_file("selfhost/hello_out.c", out)
 
-when parse_ok == 1 {
-    write_file("selfhost/hello_out.c", generated)
-    // Carry the Stage-2 compiler payload forward as the next-stage artifact.
-    hold next_stage = read_file("selfhost/stage2_template.c")
-    write_file("selfhost/stage2_cc.c", next_stage)
-    show "Stage-3 compile OK"
-    show statement_count
-    show token_count
-    show "Wrote selfhost/hello_out.c"
-    show "Wrote selfhost/stage2_cc.c"
-} otherwise {
-    show "Stage-3 compile FAILED"
-}
-
-show "=== Stage-3 Compiler Done ==="
+show "Stage3: wrote hello_out.c"
+show value
+show token_count
