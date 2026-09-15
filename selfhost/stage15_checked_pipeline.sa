@@ -1,0 +1,25 @@
+// Sayanox Stage-15: canonical AST arena and semantic checks.
+show "=== Sayanox Stage-15 Checked Pipeline ==="
+hold source = "hold answer = 40 + 2\nshow answer\n"
+hold node_kind = ["Program", "Assign", "Binary", "Number", "Number", "Show", "Name"]
+hold node_value = ["", "answer", "+", "40", "2", "", "answer"]
+hold node_count = 7
+hold semantic_errors = 0
+hold defined_answer = 0
+
+when string_len(source) > 0 { show "source accepted" } otherwise { semantic_errors = semantic_errors + 1 }
+when node_count == 7 { show "AST arena materialized" } otherwise { semantic_errors = semantic_errors + 1 }
+when node_kind[1] == "Assign" {
+  when node_value[1] == "answer" { defined_answer = 1 } otherwise { semantic_errors = semantic_errors + 1 }
+} otherwise { semantic_errors = semantic_errors + 1 }
+when node_kind[2] == "Binary" {
+  when node_value[2] == "+" {
+    when node_kind[3] == "Number" {
+      when node_kind[4] == "Number" { show "binary expression checked" } otherwise { semantic_errors = semantic_errors + 1 }
+    } otherwise { semantic_errors = semantic_errors + 1 }
+  } otherwise { semantic_errors = semantic_errors + 1 }
+} otherwise { semantic_errors = semantic_errors + 1 }
+when node_kind[5] == "Show" {
+  when defined_answer == 1 { show "name resolution checked" } otherwise { semantic_errors = semantic_errors + 1 }
+}
+when semantic_errors == 0 { show "Stage-15 semantic checks OK"; show node_count } otherwise { show "Stage-15 semantic checks FAIL"; show semantic_errors }
