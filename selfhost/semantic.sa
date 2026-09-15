@@ -1,0 +1,186 @@
+// Sayanox semantic pass written in Sayanox.
+//
+// Stage-5 goal: move semantic work out of the Rust host.
+// This pass performs primitive type inference for `hold` declarations and
+// checks simple assignments in a .sa source file.
+//
+// Supported inferred types: number, string, list, unknown.
+
+show "=== Sayanox Stage-5 Semantic Pass ==="
+
+hold input_path = "selfhost/semantic_demo.sa"
+hold source = read_file(input_path)
+hold source_len = len(source)
+hold pos = 0
+hold errors = 0
+hold declarations = 0
+hold names = []
+hold types = []
+
+make eqs(a, b) {
+    when len(a) == len(b) {
+        when starts_with(a, b) { give 1 } otherwise { give 0 }
+    } otherwise { give 0 }
+}
+
+make is_space(c) {
+    when c == 32 { give 1 } otherwise {
+        when c == 9 { give 1 } otherwise {
+            when c == 10 { give 1 } otherwise {
+                when c == 13 { give 1 } otherwise { give 0 }
+            }
+        }
+    }
+}
+
+make is_digit(c) {
+    when c >= 48 {
+        when c <= 57 { give 1 } otherwise { give 0 }
+    } otherwise { give 0 }
+}
+
+make is_alpha(c) {
+    when c == 95 { give 1 } otherwise {
+        when c >= 65 {
+            when c <= 90 { give 1 } otherwise {
+                when c >= 97 {
+                    when c <= 122 { give 1 } otherwise { give 0 }
+                } otherwise { give 0 }
+            }
+        } otherwise { give 0 }
+    }
+}
+
+make is_alnum(c) {
+    when is_alpha(c) == 1 { give 1 } otherwise { give is_digit(c) }
+}
+
+make skip_space() {
+    hold running = 1
+    while running {
+        when pos < source_len {
+            hold c = char_code(source, pos)
+            when is_space(c) == 1 {
+                hold pos = pos + 1
+            } otherwise {
+                running = 0
+            }
+        } otherwise {
+            running = 0
+        }
+    }
+    give 0
+}
+
+make scan_word() {
+    hold word = ""
+    hold running = 1
+    while running {
+        when pos < source_len {
+            hold c = char_code(source, pos)
+            when is_alnum(c) == 1 {
+                hold word = concat(word, char_at(source, pos))
+                hold pos = pos + 1
+            } otherwise {
+                running = 0
+            }
+        } otherwise {
+            running = 0
+        }
+    }
+    give word
+}
+
+make lookup(name) {
+    hold i = 0
+    while i < list_len(names) {
+        when eqs(list_get(names, i), name) == 1 {
+            give list_get(types, i)
+        }
+        hold i = i + 1
+    }
+    give "unknown"
+}
+
+make infer_at() {
+    when pos >= source_len { give "unknown" }
+    hold c = char_code(source, pos)
+    when c == 34 { give "string" }
+    when c == 91 { give "list" }
+    when is_digit(c) == 1 { give "number" }
+    when is_alpha(c) == 1 {
+        hold ref = scan_word()
+        give lookup(ref)
+    }
+    give "unknown"
+}
+
+while pos < source_len {
+    skip_space()
+    when pos < source_len {
+        hold word = scan_word()
+        when eqs(word, "hold") == 1 {
+            skip_space()
+            hold name = scan_word()
+            skip_space()
+            when pos < source_len {
+                when char_code(source, pos) == 61 {
+                    hold pos = pos + 1
+                    skip_space()
+                    hold inferred = infer_at()
+                    push(names, name)
+                    push(types, inferred)
+                    hold declarations = declarations + 1
+                }
+            }
+        } otherwise {
+            when eqs(word, "show") == 1 {
+                skip_space()
+                infer_at()
+            } otherwise {
+                skip_space()
+                when pos < source_len {
+                    when char_code(source, pos) == 61 {
+                        hold pos = pos + 1
+                        skip_space()
+                        hold assigned = infer_at()
+                        hold expected = lookup(word)
+                        when eqs(expected, "unknown") == 1 {
+                            hold errors = errors + 1
+                            show "semantic error: assignment to unknown name"
+                            show word
+                        } otherwise {
+                            when eqs(assigned, "unknown") == 1 {
+                                hold errors = errors + 1
+                                show "semantic error: unknown value type"
+                            } otherwise {
+                                when eqs(expected, assigned) == 0 {
+                                    hold errors = errors + 1
+                                    show "semantic error: type mismatch"
+                                    show word
+                                }
+                            }
+                        }
+                    } otherwise {
+                        when pos < source_len {
+                            hold pos = pos + 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+    when pos < source_len {
+        hold pos = pos + 1
+    }
+}
+
+show "declarations"
+show declarations
+show "errors"
+show errors
+when errors == 0 {
+    show "Stage-5 semantic pass OK"
+} otherwise {
+    show "Stage-5 semantic pass found errors"
+}
