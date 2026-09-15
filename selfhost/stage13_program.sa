@@ -1,0 +1,5 @@
+// Sayanox Stage-13 real-source lowering fixture.
+// This is the first executable source-to-IR contract driven by .sa source.
+
+hold answer = 40 + 2
+show answer
