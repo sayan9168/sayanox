@@ -111,16 +111,19 @@ $CC -o selfhost/codegen_bin selfhost/codegen_driver.c
 ./selfhost/codegen_bin >selfhost/codegen_runtime.log 2>&1
 cat selfhost/codegen_runtime.log
 grep -q "codegen OK" selfhost/codegen_runtime.log
+test -s selfhost/codegen_emit.c
 $CC -o selfhost/codegen_run selfhost/codegen_emit.c
-test "$(./selfhost/codegen_run)" = "42"
+codegen_output="$(./selfhost/codegen_run)"
+test "$codegen_output" = "42"
 echo "  OK"
 
 echo "[10/10] struct"
-if [[ -f selfhost/struct_demo.sa ]]; then
-  ./selfhost/stage2 selfhost/struct_demo.sa selfhost/out_struct.c
-  $CC -o selfhost/out_struct selfhost/out_struct.c
-  ./selfhost/out_struct | head -2
-fi
+test -f selfhost/struct_demo.sa
+./selfhost/stage2 selfhost/struct_demo.sa selfhost/out_struct.c
+$CC -o selfhost/out_struct selfhost/out_struct.c
+struct_output="$(./selfhost/out_struct)"
+printf '%s\n' "$struct_output"
+test "$struct_output" = $'3\n4\n7'
 echo "  OK"
 
 echo ""
