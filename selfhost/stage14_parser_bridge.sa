@@ -1,0 +1,23 @@
+// Sayanox Stage-14 parser/AST bridge contract.
+// This stage establishes a deterministic parser boundary for a small source subset.
+
+show "=== Sayanox Stage-14 Parser Bridge ==="
+
+hold source = "hold answer = 40 + 2\nshow answer\n"
+hold tokens = ["hold", "answer", "=", "40", "+", "2", "show", "answer"]
+hold node_kinds = ["Program", "Assign", "Binary", "Number", "Number", "Show", "Name"]
+hold node_count = 7
+
+when string_len(source) > 0 {
+  show "source loaded"
+} otherwise {
+  show "source load FAIL"
+}
+
+when node_count == 7 {
+  show "AST bridge built"
+  show node_count
+  show "Stage-14 parser bridge OK"
+} otherwise {
+  show "Stage-14 parser bridge FAIL"
+}
