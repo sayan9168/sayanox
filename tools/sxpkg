@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
 # sxpkg — minimal Sayanox package manager
-# Manifest: Sayanox.toml next to your project
-#
-# Commands:
-#   sxpkg init              create Sayanox.toml
-#   sxpkg install           install deps listed in [deps]
-#   sxpkg list              show installed packages under .sx/pkg
-#   sxpkg add name path|url add a dependency line
+# Manifest: Sayanox.toml
+#   sxpkg init | install | list | add name path|url
 set -euo pipefail
 
 ROOT="${SXPKG_ROOT:-.}"
@@ -38,9 +33,8 @@ install_deps() {
     exit 1
   fi
   mkdir -p "$PKG_DIR"
-  # Very small TOML subset: lines like  name = { path = "..." } or git = "..."
   while IFS= read -r line; do
-    if [[ "$line" =~ ^([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*\{[[:space:]]*path[[:space:]]*=[[:space:]]*\"([^"]+)\" ]]; then
+    if [[ "$line" =~ ^([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*\{[[:space:]]*path[[:space:]]*=[[:space:]]*"([^"]+)" ]]; then
       name="${BASH_REMATCH[1]}"
       path="${BASH_REMATCH[2]}"
       dest="$PKG_DIR/$name"
@@ -50,41 +44,62 @@ install_deps() {
         cp -R "$path"/. "$dest"/
         echo "sxpkg: installed $name from path $path"
       else
-        echo "sxpkg: error: path not found for $name: $path" >&2
-        exit 1
+        echo "sxpkg: warn: path not found for $name: $path" >&2
       fi
-    elif [[ "$line" =~ ^([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*\{[[:space:]]*git[[:space:]]*=[[:space:]]*\"([^"]+)\" ]]; then
+    elif [[ "$line" =~ ^([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*\{[[:space:]]*git[[:space:]]*=[[:space:]]*"([^"]+)" ]]; then
       name="${BASH_REMATCH[1]}"
-      url="${BASH_REMATCH[2]}"
+      giturl="${BASH_REMATCH[2]}"
       dest="$PKG_DIR/$name"
       rm -rf "$dest"
-      git clone --depth 1 "$url" "$dest"
-      echo "sxpkg: installed $name from git $url"
+      if command -v git >/dev/null 2>&1; then
+        git clone --depth 1 "$giturl" "$dest"
+        echo "sxpkg: installed $name from git $giturl"
+      else
+        echo "sxpkg: error: git not found" >&2
+        exit 1
+      fi
     fi
   done < "$MANIFEST"
-  echo "sxpkg: done (packages in $PKG_DIR)"
+  echo "sxpkg: install done → $PKG_DIR"
 }
 
 list_pkgs() {
   if [[ ! -d "$PKG_DIR" ]]; then
-    echo "(no packages)"
+    echo "sxpkg: no packages (run sxpkg install)"
     exit 0
   fi
-  ls -1 "$PKG_DIR"
+  ls -1 "$PKG_DIR" 2>/dev/null || echo "(empty)"
+}
+
+add_dep() {
+  local name="${1:-}"
+  local spec="${2:-}"
+  if [[ -z "$name" || -z "$spec" ]]; then
+    echo "usage: sxpkg add <name> <path|git-url>" >&2
+    exit 1
+  fi
+  if [[ ! -f "$MANIFEST" ]]; then
+    init_manifest
+  fi
+  if [[ "$spec" == http* || "$spec" == git@* ]]; then
+    echo "$name = { git = \"$spec\" }" >> "$MANIFEST"
+  else
+    echo "$name = { path = \"$spec\" }" >> "$MANIFEST"
+  fi
+  echo "sxpkg: added $name → $spec"
 }
 
 case "$cmd" in
   init) init_manifest ;;
   install) install_deps ;;
   list) list_pkgs ;;
-  ""|-h|--help)
+  add) add_dep "${2:-}" "${3:-}" ;;
+  *)
     echo "sxpkg — Sayanox package manager"
     echo "  sxpkg init"
     echo "  sxpkg install"
     echo "  sxpkg list"
-    ;;
-  *)
-    echo "sxpkg: unknown command: $cmd" >&2
+    echo "  sxpkg add <name> <path|git-url>"
     exit 1
     ;;
 esac

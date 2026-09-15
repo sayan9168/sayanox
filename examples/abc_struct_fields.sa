@@ -1,0 +1,8 @@
+// Full language via Stage-2 / Rust host (not subset codegen)
+struct Point {
+  x
+  y
+}
+hold p = Point { x: 3, y: 4 }
+show p.x
+show p.y

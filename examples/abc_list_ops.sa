@@ -1,0 +1,7 @@
+hold xs = []
+push(xs, 10)
+push(xs, 20)
+push(xs, 30)
+show len(xs)
+show xs[0]
+show xs[2]

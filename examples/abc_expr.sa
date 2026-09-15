@@ -1,0 +1,4 @@
+hold a = 2
+hold b = 3
+hold c = a * b + 10
+show c
