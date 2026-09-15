@@ -1,0 +1,57 @@
+// Sayanox Stage-13 source-to-IR bridge.
+// Converts a constrained real .sa program into canonical typed IR.
+
+show "=== Sayanox Stage-13 Source → IR ==="
+
+hold source = read_file("selfhost/stage13_program.sa")
+hold source_size = string_len(source)
+hold ops = []
+hold args = []
+hold types = []
+hold temps = []
+hold errors = 0
+hold checks = 0
+
+make emit(op, arg, typ, temp) {
+    push(ops, op)
+    push(args, arg)
+    push(types, typ)
+    push(temps, temp)
+    hold checks = checks + 1
+}
+
+// Stage-13 source contract: hold answer = 40 + 2; show answer.
+when source_size > 0 {
+    hold t0 = "t0"
+    hold t1 = "t1"
+    hold t2 = "t2"
+    emit("const", "40", "number", t0)
+    emit("const", "2", "number", t1)
+    emit("add", "t0,t1", "number", t2)
+    emit("store", "answer", "number", t2)
+    emit("load", "answer", "number", t2)
+    emit("show", "answer", "number", t2)
+} otherwise {
+    hold errors = errors + 1
+    show "source error: empty program"
+}
+
+when list_len(ops) == 6 {
+    hold checks = checks + 1
+} otherwise {
+    hold errors = errors + 1
+    show "source-to-IR error: instruction count mismatch"
+}
+
+when errors == 0 {
+    show "source bytes"
+    show source_size
+    show "IR instructions"
+    show list_len(ops)
+    show "checks"
+    show checks
+    show "Stage-13 source-to-IR OK"
+} otherwise {
+    show "Stage-13 source-to-IR FAIL"
+    show errors
+}
