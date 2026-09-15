@@ -58,6 +58,5 @@ use "other.sa"
 |------|--------|
 | CLI | `./selfhost/sx file.sa --run` |
 | Packages | `./tools/sxpkg init` |
-| Formatter | `python3 tools/sxfmt.py file.sa` |
+| Formatter | `./tools/sxfmt.sh file.sa` |
 | REPL | `./tools/sxrepl.sh` |
-| LSP | `python3 tools/sayanox-lsp.py` |

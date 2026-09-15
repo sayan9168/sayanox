@@ -11,26 +11,22 @@ cd sayanox
 ./selfhost/sx examples/hello.sa --run
 ```
 
-## A / B / C
+## Toolchain
 
-See [docs/ABC_COMPLETE.md](docs/ABC_COMPLETE.md).
-
-| Track | Summary |
-|-------|--------|
-| **A** codegen depth | struct/list/expr via `sx`; subset in `codegen.sa` |
-| **B** bootstrap | Stage-2 C host + `.sa` tools |
-| **C** ecosystem | `tools/sxpkg`, `tools/sayanox-lsp.py`, Cranelift `--features native`, [docs/GC.md](docs/GC.md) |
+| Tool | Role |
+|------|------|
+| Stage-2 | C compiler (`restore_stage2.sh` + `clang`) |
+| `selfhost/sx` | compile / run `.sa` |
+| `tools/sxfmt.sh` | formatter |
+| `tools/sxpkg` | packages |
+| `tools/sxrepl.sh` | REPL |
 
 ```bash
-# packages
 ./tools/sxpkg init && ./tools/sxpkg install
-
-# LSP MVP
-python3 tools/sayanox-lsp.py
-
-# optional native
-cargo build --release --features native
+cargo build --release --features native   # optional host native backend
 ```
+
+See [docs/ABC_COMPLETE.md](docs/ABC_COMPLETE.md) and [docs/GC.md](docs/GC.md).
 
 ## License
 
