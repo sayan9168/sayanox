@@ -19,6 +19,17 @@ jobs:
         run: cargo build --verbose
       - name: Test
         run: cargo test --verbose
+      - name: Parser conformance - valid
+        run: cargo run --quiet -- selfhost/parser_demo.sa --check
+      - name: Parser conformance - invalid
+        shell: bash
+        run: |
+          set +e
+          cargo run --quiet -- selfhost/parser_invalid.sa --check >/tmp/parser_invalid.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -Eq 'line|column|Expected|Unexpected' /tmp/parser_invalid.log
       - name: Hello via first-party VM
         run: |
           cargo build --release
