@@ -5,13 +5,18 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 TEMPLATE="selfhost/stage2_template.c"
-BLOB="selfhost/stage2_template.c.gz.b64"
+DIR="selfhost/stage2_blob"
 
-if [[ -f "$BLOB" ]]; then
-  echo "Decoding committed Stage-2 template (no Python)..."
-  base64 -d < "$BLOB" | gzip -d > "$TEMPLATE"
+if [[ -d "$DIR" ]] && ls "$DIR"/chunk_* >/dev/null 2>&1; then
+  echo "Assembling Stage-2 template (no Python)..."
+  cat "$DIR"/chunk_* > /tmp/sx_stage2.b64
+  base64 -d < /tmp/sx_stage2.b64 | gzip -d > "$TEMPLATE"
+  rm -f /tmp/sx_stage2.b64
+elif [[ -f selfhost/stage2_template.c.gz.b64 ]]; then
+  echo "Decoding Stage-2 template..."
+  base64 -d < selfhost/stage2_template.c.gz.b64 | gzip -d > "$TEMPLATE" || true
 elif [[ ! -f "$TEMPLATE" ]]; then
-  echo "error: missing $TEMPLATE and $BLOB" >&2
+  echo "error: no Stage-2 template sources" >&2
   exit 1
 fi
 
