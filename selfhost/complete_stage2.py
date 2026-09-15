@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Complete Stage-2 template with use expansion and lexer runtime support."""
+"""Complete Stage-2 template with use expansion and self-host runtime support."""
 import re
 from pathlib import Path
 
@@ -20,8 +20,8 @@ src = src.replace(
     'snprintf(n,900,"((double)((long)(%s)%%(long)(%s)))",left,right);',
 )
 
-# Normalize the legacy string detector so sx_string_len is not mistaken for
-# the sx_str conversion builtin.
+# Keep string detection precise: sx_string_len is numeric, while sx_str()
+# and the character conversion helpers return strings.
 lines = src.splitlines(True)
 for index, line in enumerate(lines):
     if "static int looks_string" in line:
@@ -35,18 +35,18 @@ for index, line in enumerate(lines):
         lines[index] = line
 src = "".join(lines)
 
-# Teach the bootstrap compiler that the two lexer formatting helpers are
-# string-returning functions. All other Sayanox functions keep numeric ABI.
+# Stage-2 cannot infer arbitrary user-function types yet. These compiler
+# helpers are known to return strings and therefore need typed C signatures.
 make_pattern = re.compile(
     r'if\(check\(T_IDENT\)\)\{strncat\(params,"double ",sizeof\(params\)-1\);.*?expect\(T_RPAREN,"\)"\);',
     re.S,
 )
-make_replacement = '''int string_function=!strcmp(fname,"emit")||!strcmp(fname,"error_record");
+make_replacement = '''int string_function=!strcmp(fname,"emit")||!strcmp(fname,"error_record")||!strcmp(fname,"keyword");
 int param_index=0;
 if(check(T_IDENT)){
-const int string_limit=!strcmp(fname,"emit")?2:(!strcmp(fname,"error_record")?1:0);
+const int string_limit=!strcmp(fname,"emit")?2:(!strcmp(fname,"error_record")?1:(!strcmp(fname,"keyword")?1:0));
 strncat(params,(param_index<string_limit)?"char *":"double ",sizeof(params)-1);strncat(params,cur()->text,sizeof(params)-1);advance();param_index++;
-while(match(T_COMMA)){if(!check(T_IDENT))break;strncat(params,(param_index<string_limit)?", char *":", double ",sizeof(params)-1);strncat(params,cur()->text,sizeof(params)-1);advance();param_index++;}}
+while(match(T_COMMA)){if(!check(T_IDENT))break;strncat(params,(param_index<string_limit)?", char *":", double ",",sizeof(params)-1);strncat(params,cur()->text,sizeof(params)-1);advance();param_index++;}}
 expect(T_RPAREN,")");'''
 src, make_count = make_pattern.subn(make_replacement, src, count=1)
 if make_count != 1:
