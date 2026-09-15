@@ -15,6 +15,7 @@ python3 selfhost/complete_stage2.py
 python3 selfhost/patch_stage2_strings.py || echo "warn: string patch skipped"
 python3 selfhost/patch_stage2_string_compare.py || echo "warn: string-compare patch skipped"
 python3 selfhost/patch_stage2_keyword.py || echo "warn: keyword patch skipped (optional)"
+python3 selfhost/patch_stage2_rc.py || echo "warn: RC/arena patch skipped"
 
 echo "Verifying compile..."
 CC=clang

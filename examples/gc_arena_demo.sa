@@ -1,0 +1,13 @@
+// Allocates many temporary strings — arena holds them until process exit
+hold s = "hello"
+hold i = 0
+while i {
+  when i > 20 {
+    hold i = 0
+  } otherwise {
+    hold s = concat(s, "!")
+    hold i = i + 1
+  }
+}
+show s
+show "arena-ok"
