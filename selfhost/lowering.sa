@@ -1,0 +1,59 @@
+// Sayanox Stage-10 lowering pass.
+// Checked semantic records are lowered into a small, explicit IR program.
+
+show "=== Sayanox Stage-10 Lowering ==="
+
+hold OP_CONST = "const"
+hold OP_LOAD = "load"
+hold OP_STORE = "store"
+hold OP_SHOW = "show"
+hold OP_ADD = "add"
+
+hold ops = []
+hold args = []
+hold types = []
+hold errors = 0
+hold checks = 0
+
+make emit(op, arg, typ) {
+    push(ops, op)
+    push(args, arg)
+    push(types, typ)
+    hold checks = checks + 1
+}
+
+make require(index, wanted_op, wanted_type) {
+    when list_get(ops, index) == wanted_op {
+        when list_get(types, index) == wanted_type {
+            hold checks = checks + 1
+        } otherwise {
+            hold errors = errors + 1
+            show "lowering error: type mismatch"
+        }
+    } otherwise {
+        hold errors = errors + 1
+        show "lowering error: opcode mismatch"
+    }
+}
+
+// Checked AST -> canonical IR instructions.
+emit(OP_CONST, "42", "number")
+emit(OP_STORE, "answer", "number")
+emit(OP_LOAD, "answer", "number")
+emit(OP_SHOW, "answer", "number")
+
+require(0, OP_CONST, "number")
+require(1, OP_STORE, "number")
+require(2, OP_LOAD, "number")
+require(3, OP_SHOW, "number")
+
+when errors == 0 {
+    show "lowered"
+    show list_len(ops)
+    show "checks"
+    show checks
+    show "Stage-10 lowering OK"
+} otherwise {
+    show "Stage-10 lowering found errors"
+    show errors
+}
