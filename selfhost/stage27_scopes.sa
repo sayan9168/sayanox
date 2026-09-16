@@ -1,0 +1,104 @@
+// Sayanox Stage-27: lexical scopes for functions and parameters.
+// Builds a compiler-owned scope stack and resolves names by nearest scope.
+
+show "=== Sayanox Stage-27 Lexical Scopes ==="
+
+hold scope_names = ["global", "add"]
+hold scope_parent = [-1, 0]
+hold scope_depth = [0, 1]
+hold scope_count = 2
+
+hold symbol_names = ["answer", "a", "b", "local"]
+hold symbol_scopes = [0, 1, 1, 1]
+hold symbol_types = ["number", "number", "number", "number"]
+hold symbol_count = 4
+
+hold errors = 0
+hold checks = 0
+
+make resolve_in_scope(name, scope_id) {
+  hold i = symbol_count - 1
+  while i >= 0 {
+    when symbol_names[i] == name {
+      when symbol_scopes[i] == scope_id {
+        give i
+      }
+    }
+    i = i - 1
+  }
+  give -1
+}
+
+make resolve(name, scope_id) {
+  hold current = scope_id
+  while current >= 0 {
+    hold found = resolve_in_scope(name, current)
+    when found >= 0 {
+      give found
+    }
+    current = scope_parent[current]
+  }
+  give -1
+}
+
+make require_resolves(name, scope_id) {
+  hold found = resolve(name, scope_id)
+  when found >= 0 {
+    checks = checks + 1
+    give 1
+  } otherwise {
+    errors = errors + 1
+    show "undefined name"
+    show name
+    give 0
+  }
+}
+
+make require_not_visible(name, scope_id) {
+  hold found = resolve(name, scope_id)
+  when found < 0 {
+    checks = checks + 1
+    give 1
+  } otherwise {
+    errors = errors + 1
+    show "unexpected visible name"
+    show name
+    give 0
+  }
+}
+
+// Function parameters are visible inside the function scope.
+require_resolves("a", 1)
+require_resolves("b", 1)
+require_resolves("answer", 1)
+
+// A function-local symbol is visible only in its own function scope.
+require_resolves("local", 1)
+require_not_visible("local", 0)
+
+// Unknown names must fail resolution.
+require_not_visible("missing", 1)
+
+when scope_count == 2 {
+  when scope_parent[1] == 0 {
+    when scope_depth[1] == 1 {
+      when errors == 0 {
+        show "scope stack built"
+        show scope_count
+        show "parameter visibility checked"
+        show "parent scope lookup checked"
+        show "undefined-name rejection checked"
+        show "Stage-27 lexical scopes OK"
+      } otherwise {
+        show "Stage-27 lexical scopes FAIL"
+        show errors
+      }
+    } otherwise {
+      show "Stage-27 invalid scope depth"
+    }
+  } otherwise {
+    show "Stage-27 invalid scope parent"
+  }
+} otherwise {
+  show "Stage-27 invalid scope count"
+}
