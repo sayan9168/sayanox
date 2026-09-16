@@ -1,0 +1,218 @@
+// Sayanox Stage-24: real source scanning for function declarations and calls.
+// This stage replaces the Stage-23 signature fixture with a compiler-owned
+// source reader that discovers function names, parameters, return types, and
+// call sites from a small but real Sayanox source subset.
+
+show "=== Sayanox Stage-24 Real Function Pipeline ==="
+
+hold source = "make add(a, b) {\n  give a + b\n}\nhold result = add(40, 2)\nshow result\n"
+hold pos = 0
+hold source_size = string_len(source)
+hold errors = 0
+hold checks = 0
+
+hold function_names = []
+hold function_param_counts = []
+hold function_return_types = []
+hold function_count = 0
+
+hold call_name = ""
+hold call_arg_count = 0
+hold call_found = 0
+
+make skip_space() {
+  while pos < source_size {
+    hold c = char_code(char_at(source, pos))
+    when c == 32 {
+      pos = pos + 1
+    } otherwise {
+      when c == 10 {
+        pos = pos + 1
+      } otherwise {
+        when c == 9 {
+          pos = pos + 1
+        } otherwise {
+          give 0
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make read_word() {
+  hold word = ""
+  while pos < source_size {
+    hold c = char_code(char_at(source, pos))
+    when (c >= 65 && c <= 90) {
+      word = concat(word, char_at(source, pos))
+      pos = pos + 1
+    } otherwise {
+      when (c >= 97 && c <= 122) {
+        word = concat(word, char_at(source, pos))
+        pos = pos + 1
+      } otherwise {
+        when (c == 95) {
+          word = concat(word, char_at(source, pos))
+          pos = pos + 1
+        } otherwise {
+          give word
+        }
+      }
+    }
+  }
+  give word
+}
+
+make skip_until(ch) {
+  while pos < source_size {
+    when char_at(source, pos) == ch {
+      give 0
+    } otherwise {
+      pos = pos + 1
+    }
+  }
+  give 0
+}
+
+make find_function(name) {
+  hold i = 0
+  hold found = -1
+  while i < function_count {
+    when function_names[i] == name {
+      found = i
+    }
+    i = i + 1
+  }
+  give found
+}
+
+make register_function(name, params, return_type) {
+  when find_function(name) >= 0 {
+    errors = errors + 1
+    show "duplicate function"
+    show name
+    give 0
+  }
+  function_names = function_names + [name]
+  function_param_counts = function_param_counts + [params]
+  function_return_types = function_return_types + [return_type]
+  function_count = function_count + 1
+  checks = checks + 1
+  give 1
+}
+
+// Parse the concrete declaration: make add(a, b) { ... }
+skip_space()
+hold keyword = read_word()
+when keyword == "make" {
+  skip_space()
+  hold name = read_word()
+  skip_space()
+  when char_at(source, pos) == "(" {
+    pos = pos + 1
+    hold param_count = 0
+    skip_space()
+    when char_at(source, pos) == ")" {
+      pos = pos + 1
+    } otherwise {
+      while pos < source_size {
+        hold parameter = read_word()
+        when string_len(parameter) > 0 {
+          param_count = param_count + 1
+        }
+        skip_space()
+        when char_at(source, pos) == "," {
+          pos = pos + 1
+          skip_space()
+        } otherwise {
+          when char_at(source, pos) == ")" {
+            pos = pos + 1
+            give 0
+          } otherwise {
+            errors = errors + 1
+            give 0
+          }
+        }
+      }
+    }
+    register_function(name, param_count, "number")
+  } otherwise {
+    errors = errors + 1
+    show "function parameter list expected"
+  }
+} otherwise {
+  errors = errors + 1
+  show "function declaration expected"
+}
+
+// Discover the call site after the declaration body.
+skip_until("h")
+skip_space()
+hold declaration = read_word()
+when declaration == "hold" {
+  skip_space()
+  hold result_name = read_word()
+  skip_space()
+  when char_at(source, pos) == "=" {
+    pos = pos + 1
+    skip_space()
+    call_name = read_word()
+    skip_space()
+    when char_at(source, pos) == "(" {
+      pos = pos + 1
+      skip_space()
+      while pos < source_size {
+        hold arg = read_word()
+        when string_len(arg) > 0 {
+          call_arg_count = call_arg_count + 1
+        }
+        skip_space()
+        when char_at(source, pos) == "," {
+          pos = pos + 1
+          skip_space()
+        } otherwise {
+          when char_at(source, pos) == ")" {
+            pos = pos + 1
+            give 0
+          } otherwise {
+            errors = errors + 1
+            give 0
+          }
+        }
+      }
+    }
+  }
+}
+
+hold function_index = find_function(call_name)
+when function_index >= 0 {
+  call_found = 1
+  checks = checks + 1
+  when call_arg_count == function_param_counts[function_index] {
+    checks = checks + 1
+  } otherwise {
+    errors = errors + 1
+    show "argument count mismatch"
+    show call_arg_count
+    show function_param_counts[function_index]
+  }
+} otherwise {
+  errors = errors + 1
+  show "undefined function"
+  show call_name
+}
+
+when errors == 0 {
+  show "real function declaration parsed"
+  show function_count
+  show "real call discovered"
+  show call_name
+  show call_arg_count
+  show "signature linked"
+  show function_return_types[function_index]
+  show "Stage-24 real function pipeline OK"
+} otherwise {
+  show "Stage-24 real function pipeline FAIL"
+  show errors
+}
