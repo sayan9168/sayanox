@@ -1,0 +1,174 @@
+// Sayanox Stage-26: function body AST.
+// Extends the concrete function declaration with a return expression body.
+
+show "=== Sayanox Stage-26 Function Body AST ==="
+
+hold source = "make add(a, b) {\n  give a + b\n}\n"
+hold pos = 0
+hold size = string_len(source)
+hold errors = 0
+
+hold kinds = []
+hold values = []
+hold left = []
+hold right = []
+hold node_count = 0
+
+make add_node(kind, value, lhs, rhs) {
+  kinds = kinds + [kind]
+  values = values + [value]
+  left = left + [lhs]
+  right = right + [rhs]
+  hold id = node_count
+  node_count = node_count + 1
+  give id
+}
+
+make skip_space() {
+  while pos < size {
+    hold c = char_code(char_at(source, pos))
+    when c == 32 {
+      pos = pos + 1
+    } otherwise {
+      when c == 10 {
+        pos = pos + 1
+      } otherwise {
+        when c == 9 {
+          pos = pos + 1
+        } otherwise {
+          give 0
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make read_word() {
+  hold word = ""
+  while pos < size {
+    hold c = char_code(char_at(source, pos))
+    when (c >= 65 && c <= 90) {
+      word = concat(word, char_at(source, pos))
+      pos = pos + 1
+    } otherwise {
+      when (c >= 97 && c <= 122) {
+        word = concat(word, char_at(source, pos))
+        pos = pos + 1
+      } otherwise {
+        when c == 95 {
+          word = concat(word, char_at(source, pos))
+          pos = pos + 1
+        } otherwise {
+          give word
+        }
+      }
+    }
+  }
+  give word
+}
+
+make read_number() {
+  hold value = ""
+  while pos < size {
+    hold c = char_code(char_at(source, pos))
+    when (c >= 48 && c <= 57) {
+      value = concat(value, char_at(source, pos))
+      pos = pos + 1
+    } otherwise {
+      give value
+    }
+  }
+  give value
+}
+
+skip_space()
+when read_word() == "make" {
+  skip_space()
+  hold function_name = read_word()
+  hold function_id = add_node("Function", function_name, -1, -1)
+  skip_space()
+  when char_at(source, pos) == "(" {
+    pos = pos + 1
+    skip_space()
+    while pos < size {
+      when char_at(source, pos) == ")" {
+        pos = pos + 1
+        give 0
+      } otherwise {
+        hold parameter = read_word()
+        when string_len(parameter) > 0 {
+          add_node("Parameter", parameter, function_id, -1)
+        } otherwise {
+          errors = errors + 1
+        }
+        skip_space()
+        when char_at(source, pos) == "," {
+          pos = pos + 1
+          skip_space()
+        } otherwise {
+          when char_at(source, pos) == ")" {
+            pos = pos + 1
+            give 0
+          } otherwise {
+            errors = errors + 1
+            give 0
+          }
+        }
+      }
+    }
+  }
+
+  skip_space()
+  when char_at(source, pos) == "{" {
+    pos = pos + 1
+    skip_space()
+    hold give_keyword = read_word()
+    when give_keyword == "give" {
+      skip_space()
+      hold lhs_name = read_word()
+      skip_space()
+      when char_at(source, pos) == "+" {
+        pos = pos + 1
+        skip_space()
+        hold rhs_name = read_word()
+        when string_len(rhs_name) == 0 {
+          hold rhs_number = read_number()
+          hold rhs_id = add_node("Number", rhs_number, -1, -1)
+          hold lhs_id = add_node("Name", lhs_name, -1, -1)
+          hold binary_id = add_node("Binary", "+", lhs_id, rhs_id)
+          hold return_id = add_node("Return", "", binary_id, -1)
+          hold body_id = add_node("Block", "", return_id, -1)
+          left[function_id] = body_id
+        } otherwise {
+          hold lhs_id = add_node("Name", lhs_name, -1, -1)
+          hold rhs_id = add_node("Name", rhs_name, -1, -1)
+          hold binary_id = add_node("Binary", "+", lhs_id, rhs_id)
+          hold return_id = add_node("Return", "", binary_id, -1)
+          hold body_id = add_node("Block", "", return_id, -1)
+          left[function_id] = body_id
+        }
+      } otherwise {
+        errors = errors + 1
+      }
+    } otherwise {
+      errors = errors + 1
+    }
+  } otherwise {
+    errors = errors + 1
+  }
+
+  when errors == 0 {
+    show "function body parsed"
+    show function_name
+    show "return expression built"
+    show "AST nodes"
+    show node_count
+    show "Stage-26 function body AST OK"
+  } otherwise {
+    show "Stage-26 function body AST FAIL"
+    show errors
+  }
+} otherwise {
+  show "function declaration expected"
+}
