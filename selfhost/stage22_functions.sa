@@ -1,0 +1,89 @@
+// Sayanox Stage-22: functions, parameters, and return-type checking.
+// This stage validates a compiler-owned function signature table and call sites.
+
+show "=== Sayanox Stage-22 Function Type Checker ==="
+
+hold function_names = ["add"]
+hold function_return_types = ["number"]
+hold function_param_counts = [2]
+hold function_param_types = ["number", "number"]
+hold function_count = 1
+
+hold call_name = "add"
+hold call_arg_types = ["number", "number"]
+hold call_arg_count = 2
+hold expected_return = "number"
+
+hold errors = 0
+hold checks = 0
+
+make find_function(name) {
+  hold i = 0
+  hold found = -1
+  while i < function_count {
+    when function_names[i] == name {
+      found = i
+    }
+    i = i + 1
+  }
+  give found
+}
+
+make require_type(actual, expected) {
+  checks = checks + 1
+  when actual == expected {
+    give 1
+  } otherwise {
+    errors = errors + 1
+    show "function type mismatch"
+    show actual
+    show expected
+    give 0
+  }
+}
+
+make check_call(name, args, arg_count) {
+  hold index = find_function(name)
+  when index < 0 {
+    errors = errors + 1
+    show "undefined function"
+    show name
+    give "unknown"
+  }
+
+  when arg_count == function_param_counts[index] {
+    checks = checks + 1
+  } otherwise {
+    errors = errors + 1
+    show "argument count mismatch"
+    show arg_count
+    show function_param_counts[index]
+  }
+
+  hold i = 0
+  hold limit = arg_count
+  when function_param_counts[index] < limit {
+    limit = function_param_counts[index]
+  }
+  while i < limit {
+    require_type(args[i], function_param_types[i])
+    i = i + 1
+  }
+
+  give function_return_types[index]
+}
+
+hold result_type = check_call(call_name, call_arg_types, call_arg_count)
+require_type(result_type, expected_return)
+
+when errors == 0 {
+  show "function signature resolved"
+  show function_count
+  show "parameters checked"
+  show call_arg_count
+  show "return type checked"
+  show "Stage-22 function checker OK"
+} otherwise {
+  show "Stage-22 function checker FAIL"
+  show errors
+}
