@@ -1,0 +1,113 @@
+// Sayanox Stage-28: parameters and local-variable semantic model.
+// Builds a compiler-owned function scope with parameters and locals,
+// then resolves their bindings from use sites.
+
+show "=== Sayanox Stage-28 Parameters & Locals ==="
+
+hold function_name = "add"
+hold parameter_names = ["a", "b"]
+hold parameter_types = ["number", "number"]
+hold local_names = ["sum"]
+hold local_types = ["number"]
+hold parameter_count = 2
+hold local_count = 1
+
+hold symbols = []
+hold symbol_kinds = []
+hold symbol_types = []
+hold symbol_scope = []
+hold errors = 0
+hold checks = 0
+
+make declare(name, kind, type_name, scope_id) {
+  hold i = 0
+  while i < string_len(name) {
+    i = i + 1
+  }
+  symbols = symbols + [name]
+  symbol_kinds = symbol_kinds + [kind]
+  symbol_types = symbol_types + [type_name]
+  symbol_scope = symbol_scope + [scope_id]
+  checks = checks + 1
+  give 0
+}
+
+make resolve(name, scope_id) {
+  hold i = 0
+  hold found = -1
+  while i < string_len(symbols) {
+    when symbols[i] == name {
+      when symbol_scope[i] == scope_id {
+        found = i
+      }
+    }
+    i = i + 1
+  }
+  when found < 0 {
+    errors = errors + 1
+    show "undefined local or parameter"
+    show name
+  } otherwise {
+    checks = checks + 1
+  }
+  give found
+}
+
+// Scope 0 = module/global. Scope 1 = function-local.
+declare(function_name, "function", "function", 0)
+
+hold p = 0
+while p < parameter_count {
+  declare(parameter_names[p], "parameter", parameter_types[p], 1)
+  p = p + 1
+}
+
+hold l = 0
+while l < local_count {
+  declare(local_names[l], "local", local_types[l], 1)
+  l = l + 1
+}
+
+hold a_id = resolve("a", 1)
+hold b_id = resolve("b", 1)
+hold sum_id = resolve("sum", 1)
+hold missing_id = resolve("missing", 1)
+
+// The missing binding is intentionally tested as an error case and then
+// removed from the final error count so the successful path remains explicit.
+when missing_id < 0 {
+  errors = errors - 1
+}
+
+when symbol_types[a_id] == "number" {
+  checks = checks + 1
+} otherwise {
+  errors = errors + 1
+}
+
+when symbol_types[b_id] == "number" {
+  checks = checks + 1
+} otherwise {
+  errors = errors + 1
+}
+
+when symbol_types[sum_id] == "number" {
+  checks = checks + 1
+} otherwise {
+  errors = errors + 1
+}
+
+when errors == 0 {
+  show "function scope created"
+  show function_name
+  show "parameters bound"
+  show parameter_count
+  show "local variables bound"
+  show local_count
+  show "parameter/local resolution OK"
+  show checks
+  show "Stage-28 parameters and locals OK"
+} otherwise {
+  show "Stage-28 parameters and locals FAIL"
+  show errors
+}
