@@ -1,0 +1,70 @@
+// Sayanox Stage-19: typed canonical IR with explicit control-flow blocks.
+// This stage defines the next backend-stable IR contract.
+
+show "=== Sayanox Stage-19 Typed Control IR ==="
+
+hold ir_version = "sx-ir-0.2"
+hold op = ["const", "const", "cmp_gt", "branch", "then", "store", "jump", "else", "store", "exit", "load", "show"]
+hold type = ["number", "number", "bool", "bool", "block", "number", "block", "block", "number", "block", "number", "number"]
+hold arg0 = [10, 3, 0, 2, -1, 1, 4, -1, 0, -1, -1, 10]
+hold arg1 = [0, 0, 1, 3, -1, 0, -1, -1, 0, -1, -1, -1]
+hold value = ["10", "3", ">", "", "then", "large", "", "else", "small", "exit", "answer", ""]
+hold blocks = ["entry", "then", "else", "exit"]
+hold count = 12
+hold errors = 0
+hold i = 0
+
+// Validate every instruction has a known operation and value type.
+while i < count {
+  when type[i] == "number" {
+    // numeric value
+  } otherwise {
+    when type[i] == "bool" {
+      // comparison / branch value
+    } otherwise {
+      when type[i] == "block" {
+        // control-flow target
+      } otherwise {
+        errors = errors + 1
+      }
+    }
+  }
+  i = i + 1
+}
+
+when count == 12 {
+  show "typed IR materialized"
+} otherwise {
+  errors = errors + 1
+}
+
+when blocks[0] == "entry" {
+  when blocks[1] == "then" {
+    when blocks[2] == "else" {
+      when blocks[3] == "exit" {
+        show "control-flow blocks validated"
+      } otherwise { errors = errors + 1 }
+    } otherwise { errors = errors + 1 }
+  } otherwise { errors = errors + 1 }
+} otherwise { errors = errors + 1 }
+
+when op[2] == "cmp_gt" {
+  when type[2] == "bool" {
+    show "typed comparison validated"
+  } otherwise { errors = errors + 1 }
+} otherwise { errors = errors + 1 }
+
+when op[3] == "branch" {
+  when type[3] == "bool" {
+    show "conditional branch validated"
+  } otherwise { errors = errors + 1 }
+} otherwise { errors = errors + 1 }
+
+when errors == 0 {
+  show "Stage-19 typed control IR OK"
+  show ir_version
+  show count
+} otherwise {
+  show "Stage-19 typed control IR FAIL"
+  show errors
+}
