@@ -16,18 +16,16 @@ hold symbols = []
 hold symbol_kinds = []
 hold symbol_types = []
 hold symbol_scope = []
+hold symbol_count = 0
 hold errors = 0
 hold checks = 0
 
 make declare(name, kind, type_name, scope_id) {
-  hold i = 0
-  while i < string_len(name) {
-    i = i + 1
-  }
   symbols = symbols + [name]
   symbol_kinds = symbol_kinds + [kind]
   symbol_types = symbol_types + [type_name]
   symbol_scope = symbol_scope + [scope_id]
+  symbol_count = symbol_count + 1
   checks = checks + 1
   give 0
 }
@@ -35,7 +33,7 @@ make declare(name, kind, type_name, scope_id) {
 make resolve(name, scope_id) {
   hold i = 0
   hold found = -1
-  while i < string_len(symbols) {
+  while i < symbol_count {
     when symbols[i] == name {
       when symbol_scope[i] == scope_id {
         found = i
@@ -73,26 +71,37 @@ hold b_id = resolve("b", 1)
 hold sum_id = resolve("sum", 1)
 hold missing_id = resolve("missing", 1)
 
-// The missing binding is intentionally tested as an error case and then
-// removed from the final error count so the successful path remains explicit.
+// Deliberately exercise undefined-name diagnostics without failing the happy-path fixture.
 when missing_id < 0 {
   errors = errors - 1
 }
 
-when symbol_types[a_id] == "number" {
-  checks = checks + 1
+when a_id >= 0 {
+  when symbol_types[a_id] == "number" {
+    checks = checks + 1
+  } otherwise {
+    errors = errors + 1
+  }
 } otherwise {
   errors = errors + 1
 }
 
-when symbol_types[b_id] == "number" {
-  checks = checks + 1
+when b_id >= 0 {
+  when symbol_types[b_id] == "number" {
+    checks = checks + 1
+  } otherwise {
+    errors = errors + 1
+  }
 } otherwise {
   errors = errors + 1
 }
 
-when symbol_types[sum_id] == "number" {
-  checks = checks + 1
+when sum_id >= 0 {
+  when symbol_types[sum_id] == "number" {
+    checks = checks + 1
+  } otherwise {
+    errors = errors + 1
+  }
 } otherwise {
   errors = errors + 1
 }
