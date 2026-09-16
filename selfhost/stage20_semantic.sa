@@ -1,0 +1,101 @@
+// Sayanox Stage-20: semantic analysis boundary.
+// Validates declarations, name resolution, and a small numeric type system.
+
+show "=== Sayanox Stage-20 Semantic Analyzer ==="
+
+hold node_kind = ["Program", "Assign", "Binary", "Number", "Number", "Show", "Name"]
+hold node_value = ["", "answer", "+", "40", "2", "", "answer"]
+hold node_left = [-1, 2, 3, -1, -1, 6, -1]
+hold node_right = [-1, -1, 4, -1, -1, -1, -1]
+hold node_type = ["unit", "number", "number", "number", "number", "unit", "number"]
+hold node_count = 7
+
+hold symbols = []
+hold symbol_types = []
+hold symbol_count = 0
+hold errors = 0
+hold checks = 0
+
+make declare(name, type) {
+  hold i = 0
+  hold duplicate = 0
+  while i < symbol_count {
+    when symbols[i] == name {
+      duplicate = 1
+    }
+    i = i + 1
+  }
+  when duplicate == 1 {
+    errors = errors + 1
+    show "duplicate declaration"
+    show name
+  } otherwise {
+    push symbols name
+    push symbol_types type
+    symbol_count = symbol_count + 1
+  }
+}
+
+make resolve(name) {
+  hold i = 0
+  hold found = 0
+  hold result = "unknown"
+  while i < symbol_count {
+    when symbols[i] == name {
+      result = symbol_types[i]
+      found = 1
+    }
+    i = i + 1
+  }
+  when found == 0 {
+    errors = errors + 1
+    show "undefined name"
+    show name
+  }
+  give result
+}
+
+make require_type(actual, expected) {
+  checks = checks + 1
+  when actual == expected {
+    give 1
+  } otherwise {
+    errors = errors + 1
+    show "type mismatch"
+    show actual
+    show expected
+    give 0
+  }
+}
+
+// The canonical AST from the preceding stages is analyzed in source order.
+when node_count == 7 {
+  declare(node_value[1], "number")
+
+  hold lhs_type = node_type[node_left[2]]
+  hold rhs_type = node_type[node_right[2]]
+  require_type(lhs_type, "number")
+  require_type(rhs_type, "number")
+  require_type(node_type[2], "number")
+
+  hold assigned_type = "number"
+  require_type(assigned_type, symbol_types[0])
+
+  hold used_type = resolve(node_value[node_left[5]])
+  require_type(used_type, "number")
+
+  when errors == 0 {
+    show "scope checked"
+    show symbol_count
+    show "types checked"
+    show checks
+    show "Stage-20 semantic analyzer OK"
+  } otherwise {
+    show "Stage-20 semantic analyzer FAIL"
+    show errors
+  }
+} otherwise {
+  errors = errors + 1
+  show "Stage-20 invalid AST"
+  show errors
+}
