@@ -1,5 +1,5 @@
 // Sayanox Stage-17: lower the real Stage-16 AST into canonical IR.
-// The AST records are intentionally data-driven: no hard-coded IR instruction list.
+// The AST records are data-driven: no hard-coded IR instruction list.
 
 show "=== Sayanox Stage-17 Real AST to IR ==="
 
@@ -49,9 +49,7 @@ make skip_space() {
       when x == 32 {
         pos = pos + 1
       } otherwise {
-        when x == 10 {
-          pos = pos + 1
-        } otherwise { done = 1 }
+        when x == 10 { pos = pos + 1 } otherwise { done = 1 }
       }
     } otherwise { done = 1 }
   }
@@ -91,7 +89,9 @@ make read_number() {
   give result
 }
 
-// Parse source into the same real AST shape produced by Stage-16.
+// Materialize a Program root plus its concrete children.
+hold program = add_node("Program", "", -1, -1)
+
 skip_space()
 word = read_word()
 when word == "hold" {
@@ -114,7 +114,8 @@ when word == "hold" {
           hold rhs_value = read_number()
           hold right = add_node("Number", rhs_value, -1, -1)
           hold binary = add_node("Binary", "+", left, right)
-          add_node("Assign", word, binary, -1)
+          hold assign = add_node("Assign", word, binary, -1)
+          node_left[program] = assign
           skip_space()
           hold show_word = read_word()
           when show_word == "show" {
@@ -123,6 +124,7 @@ when word == "hold" {
             hold show_node = add_node("Show", "", -1, -1)
             hold name_node = add_node("Name", name, -1, -1)
             node_left[show_node] = name_node
+            node_right[program] = show_node
           } otherwise { errors = errors + 1 }
         } otherwise { errors = errors + 1 }
       } otherwise { errors = errors + 1 }
@@ -130,14 +132,20 @@ when word == "hold" {
   } otherwise { errors = errors + 1 }
 } otherwise { errors = errors + 1 }
 
-// Lower each AST record into canonical, typed-by-convention IR.
+// Lower by following AST relationships.
 when errors == 0 {
   when node_count == 7 {
-    hold const0 = emit("const", -1, -1, node_value[node_left[2]])
-    hold const1 = emit("const", -1, -1, node_value[node_right[2]])
+    hold assign = node_left[program]
+    hold binary = node_left[assign]
+    hold lhs = node_left[binary]
+    hold rhs = node_right[binary]
+    hold const0 = emit("const", -1, -1, node_value[lhs])
+    hold const1 = emit("const", -1, -1, node_value[rhs])
     hold add = emit("add", const0, const1, "")
-    emit("store", add, -1, node_value[1])
-    hold load = emit("load", -1, -1, node_value[6])
+    emit("store", add, -1, node_value[assign])
+    hold show_node = node_right[program]
+    hold name_node = node_left[show_node]
+    hold load = emit("load", -1, -1, node_value[name_node])
     emit("show", load, -1, "")
   } otherwise { errors = errors + 1 }
 }
