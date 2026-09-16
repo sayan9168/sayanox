@@ -1,0 +1,132 @@
+// Sayanox Stage-25: real function declaration AST.
+// Parses a concrete function declaration from source into an arena.
+
+show "=== Sayanox Stage-25 Function AST ==="
+
+hold source = "make add(a, b) {\n  give a + b\n}\n"
+hold pos = 0
+hold size = string_len(source)
+hold errors = 0
+
+hold kinds = []
+hold names = []
+hold left = []
+hold right = []
+hold counts = []
+hold node_count = 0
+
+make add_node(kind, name, lhs, rhs, count) {
+  kinds = kinds + [kind]
+  names = names + [name]
+  left = left + [lhs]
+  right = right + [rhs]
+  counts = counts + [count]
+  hold id = node_count
+  node_count = node_count + 1
+  give id
+}
+
+make skip_space() {
+  while pos < size {
+    hold c = char_code(char_at(source, pos))
+    when c == 32 {
+      pos = pos + 1
+    } otherwise {
+      when c == 10 {
+        pos = pos + 1
+      } otherwise {
+        when c == 9 {
+          pos = pos + 1
+        } otherwise {
+          give 0
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make read_word() {
+  hold word = ""
+  while pos < size {
+    hold c = char_code(char_at(source, pos))
+    when (c >= 65 && c <= 90) {
+      word = concat(word, char_at(source, pos))
+      pos = pos + 1
+    } otherwise {
+      when (c >= 97 && c <= 122) {
+        word = concat(word, char_at(source, pos))
+        pos = pos + 1
+      } otherwise {
+        when c == 95 {
+          word = concat(word, char_at(source, pos))
+          pos = pos + 1
+        } otherwise {
+          give word
+        }
+      }
+    }
+  }
+  give word
+}
+
+skip_space()
+hold keyword = read_word()
+when keyword == "make" {
+  skip_space()
+  hold function_name = read_word()
+  skip_space()
+  when char_at(source, pos) == "(" {
+    pos = pos + 1
+    hold param_count = 0
+    skip_space()
+    while pos < size {
+      when char_at(source, pos) == ")" {
+        pos = pos + 1
+        give 0
+      } otherwise {
+        hold parameter = read_word()
+        when string_len(parameter) > 0 {
+          add_node("Parameter", parameter, -1, -1, 0)
+          param_count = param_count + 1
+        } otherwise {
+          errors = errors + 1
+        }
+        skip_space()
+        when char_at(source, pos) == "," {
+          pos = pos + 1
+          skip_space()
+        } otherwise {
+          when char_at(source, pos) == ")" {
+            pos = pos + 1
+            give 0
+          } otherwise {
+            errors = errors + 1
+            give 0
+          }
+        }
+      }
+    }
+
+    hold function_id = add_node("Function", function_name, 0, -1, param_count)
+    hold body_id = add_node("Block", "", function_id, -1, 1)
+    left[function_id] = body_id
+
+    when errors == 0 {
+      show "function declaration parsed"
+      show function_name
+      show "parameters"
+      show param_count
+      show "AST nodes"
+      show node_count
+      show "Stage-25 function AST OK"
+    } otherwise {
+      show "Stage-25 function AST FAIL"
+      show errors
+    }
+  } otherwise {
+    show "parameter list expected"
+  }
+} otherwise {
+  show "function declaration expected"
+}
