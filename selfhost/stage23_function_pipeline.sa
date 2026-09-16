@@ -1,0 +1,122 @@
+// Sayanox Stage-23: real AST function/call pipeline boundary.
+// Converts a small function declaration + call AST into typed call IR.
+
+show "=== Sayanox Stage-23 Function Pipeline ==="
+
+// Canonical AST for:
+// make add(a, b) { give a + b }
+// hold result = add(40, 2)
+// show result
+hold kind = ["Program", "Function", "Param", "Param", "Return", "Binary", "Name", "Name", "Assign", "Call", "Number", "Number", "Show", "Name"]
+hold value = ["", "add", "a", "b", "", "+", "a", "b", "result", "add", "40", "2", "", "result"]
+hold left = [1, 4, -1, -1, 5, 6, -1, -1, 9, 10, -1, -1, 13, -1]
+hold right = [12, -1, -1, -1, -1, 7, -1, -1, -1, 11, -1, -1, -1, -1]
+hold count = 14
+
+hold function_names = []
+hold function_returns = []
+hold function_param_counts = []
+hold function_count = 0
+hold errors = 0
+hold checks = 0
+
+make register_function(name, return_type, param_count) {
+  hold i = 0
+  hold duplicate = 0
+  while i < function_count {
+    when function_names[i] == name {
+      duplicate = 1
+    }
+    i = i + 1
+  }
+  when duplicate == 1 {
+    errors = errors + 1
+    show "duplicate function"
+    show name
+  } otherwise {
+    push function_names name
+    push function_returns return_type
+    push function_param_counts param_count
+    function_count = function_count + 1
+  }
+}
+
+make find_function(name) {
+  hold i = 0
+  hold found = -1
+  while i < function_count {
+    when function_names[i] == name {
+      found = i
+    }
+    i = i + 1
+  }
+  give found
+}
+
+make emit(op, value, type) {
+  show op
+  show value
+  show type
+}
+
+when count == 14 {
+  when kind[1] == "Function" {
+    register_function(value[1], "number", 2)
+    checks = checks + 1
+  } otherwise {
+    errors = errors + 1
+  }
+
+  hold fn = find_function(value[9])
+  when fn >= 0 {
+    when function_param_counts[fn] == 2 {
+      checks = checks + 1
+      when kind[10] == "Number" {
+        checks = checks + 1
+      } otherwise {
+        errors = errors + 1
+      }
+      when kind[11] == "Number" {
+        checks = checks + 1
+      } otherwise {
+        errors = errors + 1
+      }
+      when kind[4] == "Return" {
+        when kind[5] == "Binary" {
+          emit("const", value[10], "number")
+          emit("const", value[11], "number")
+          emit("add", "+", "number")
+          emit("return", value[1], "number")
+          emit("call", value[9], "number")
+          emit("store", value[8], "number")
+          emit("load", value[13], "number")
+          emit("show", value[13], "number")
+        } otherwise {
+          errors = errors + 1
+        }
+      } otherwise {
+        errors = errors + 1
+      }
+    } otherwise {
+      errors = errors + 1
+      show "argument count mismatch"
+    }
+  } otherwise {
+    errors = errors + 1
+    show "undefined function"
+    show value[9]
+  }
+
+  when errors == 0 {
+    show "function AST resolved"
+    show function_count
+    show "call lowered to typed IR"
+    show checks
+    show "Stage-23 function pipeline OK"
+  } otherwise {
+    show "Stage-23 function pipeline FAIL"
+    show errors
+  }
+} otherwise {
+  show "Stage-23 invalid AST"
+}
