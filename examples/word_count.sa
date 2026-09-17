@@ -1,0 +1,4 @@
+hold text = "sayanox makes systems software simple"
+hold words = ["sayanox", "makes", "systems", "software", "simple"]
+show len(words)
+show text
