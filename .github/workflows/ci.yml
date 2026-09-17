@@ -8,43 +8,25 @@ on:
 
 jobs:
   selfhost:
-    name: Stage-2 self-host smoke
+    name: Supported self-host smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Bootstrap smoke
-        run: |
-          chmod +x selfhost/restore_stage2.sh selfhost/bootstrap_selfhost.sh selfhost/sx tools/sxfmt.sh
-          ./selfhost/bootstrap_selfhost.sh
+
+      - name: Build Stage-2 through Make
+        run: make stage2
+
+      - name: Production bootstrap
+        run: bash selfhost/bootstrap_production.sh
+
       - name: Examples smoke
         run: |
           chmod +x selfhost/sx
           ./selfhost/sx examples/hello.sa --run
           ./selfhost/sx examples/countdown.sa --run
           ./selfhost/sx examples/greet.sa --run
+
       - name: Formatter smoke
         run: |
           chmod +x tools/sxfmt.sh
           ./tools/sxfmt.sh examples/hello.sa | grep -q show
-
-  stage3:
-    name: Stage-3 bootstrap
-    runs-on: ubuntu-latest
-    needs: [selfhost]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Stage-3
-        run: |
-          chmod +x selfhost/bootstrap_stage3.sh selfhost/restore_stage2.sh selfhost/sx
-          ./selfhost/bootstrap_stage3.sh
-
-  stage4:
-    name: Stage-4 toolchain
-    runs-on: ubuntu-latest
-    needs: [stage3]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Stage-4
-        run: |
-          chmod +x selfhost/stage4_toolchain.sh selfhost/restore_stage2.sh
-          ./selfhost/stage4_toolchain.sh
