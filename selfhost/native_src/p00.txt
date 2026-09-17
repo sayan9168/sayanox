@@ -1,0 +1,161 @@
+/* Sayanox native AOT - Linux x86_64 REAL machine code (no clang for .sa output).
+ * hold/show/when/while, + - * /, strings, lists, struct fields
+ * Usage: native_aot in.sa out
+ */
+#include <ctype.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
+#define MAX_CODE 65536
+#define MAX_FIX 1024
+#define POOL 8192
+#define MAX_LIST_ELEMS 16
+#define NUM_LISTS 8
+
+static unsigned char code[MAX_CODE];
+static size_t cpos;
+static char pool[POOL];
+static size_t pool_n;
+
+enum { FIX_REL32 = 1, FIX_VAR = 2, FIX_POOL = 3, FIX_ITOA = 4, FIX_LIST_LEN = 5, FIX_LIST_ELEM = 6 };
+typedef struct { int kind; size_t at; int aux; } Fix;
+static Fix fixes[MAX_FIX];
+static int nfix;
+
+static void em(unsigned char b) { if (cpos >= MAX_CODE) exit(1); code[cpos++] = b; }
+static void em32(uint32_t v) { em(v); em(v >> 8); em(v >> 16); em(v >> 24); }
+static void em64(uint64_t v) { for (int i = 0; i < 8; i++) em((unsigned char)(v >> (8 * i))); }
+
+static void mov_rax_imm(uint64_t v) { em(0x48); em(0xb8); em64(v); }
+static void push_rax(void) { em(0x50); }
+static void pop_rbx(void) { em(0x5b); }
+static void pop_rax(void) { em(0x58); }
+static void xchg_rax_rbx(void) { em(0x48); em(0x93); }
+static void add_rax_rbx(void) { em(0x48); em(0x01); em(0xd8); }
+static void sub_rax_rbx(void) { em(0x48); em(0x29); em(0xd8); }
+static void imul_rax_rbx(void) { em(0x48); em(0x0f); em(0xaf); em(0xc3); }
+static void idiv_rbx(void) { em(0x48); em(0x99); em(0x48); em(0xf7); em(0xfb); }
+static void neg_rax(void) { em(0x48); em(0xf7); em(0xd8); }
+static void test_rax(void) { em(0x48); em(0x85); em(0xc0); }
+
+static void store_var(int slot) {
+  em(0x48); em(0x89); em(0x05);
+  fixes[nfix++] = (Fix){FIX_VAR, cpos, slot}; em32(0);
+}
+static void load_var(int slot) {
+  em(0x48); em(0x8b); em(0x05);
+  fixes[nfix++] = (Fix){FIX_VAR, cpos, slot}; em32(0);
+}
+static void load_list_len(int lslot) {
+  em(0x48); em(0x8b); em(0x05);
+  fixes[nfix++] = (Fix){FIX_LIST_LEN, cpos, lslot}; em32(0);
+}
+static void store_list_len(int lslot) {
+  em(0x48); em(0x89); em(0x05);
+  fixes[nfix++] = (Fix){FIX_LIST_LEN, cpos, lslot}; em32(0);
+}
+static void load_list_elem(int lslot) {
+  em(0x48); em(0x89); em(0xc3);
+  em(0x48); em(0x8d); em(0x0d);
+  fixes[nfix++] = (Fix){FIX_LIST_ELEM, cpos, lslot}; em32(0);
+  em(0x48); em(0x8b); em(0x04); em(0xd9);
+}
+static void store_list_elem(int lslot) {
+  em(0x48); em(0x8d); em(0x0d);
+  fixes[nfix++] = (Fix){FIX_LIST_ELEM, cpos, lslot}; em32(0);
+  em(0x48); em(0x89); em(0x04); em(0xd9);
+}
+
+static int jz_rel(void) {
+  em(0x0f); em(0x84); int id = nfix;
+  fixes[nfix++] = (Fix){FIX_REL32, cpos, 0}; em32(0); return id;
+}
+static int jmp_rel(void) {
+  em(0xe9); int id = nfix;
+  fixes[nfix++] = (Fix){FIX_REL32, cpos, 0}; em32(0); return id;
+}
+static void set_fix_target(int id, size_t code_off) { fixes[id].aux = (int)code_off; }
+
+static void emit_print_rax(void) {
+  em(0x48); em(0x89); em(0xc3);
+  em(0x4d); em(0x31); em(0xc9);
+  em(0x48); em(0x85); em(0xdb);
+  em(0x0f); em(0x89); size_t jns_at = cpos; em32(0);
+  em(0x48); em(0xf7); em(0xdb);
+  em(0x49); em(0xc7); em(0xc1); em32(1);
+  size_t skip = cpos;
+  { int32_t r = (int32_t)(skip - (jns_at + 4)); memcpy(code + jns_at, &r, 4); }
+  em(0x48); em(0x8d); em(0x3d);
+  fixes[nfix++] = (Fix){FIX_ITOA, cpos, 31}; em32(0);
+  em(0xc6); em(0x07); em(0x0a);
+  em(0x48); em(0xc7); em(0xc1); em32(1);
+  size_t loop = cpos;
+  em(0x48); em(0x89); em(0xd8);
+  em(0x48); em(0x99);
+  em(0x49); em(0xc7); em(0xc0); em32(10);
+  em(0x49); em(0xf7); em(0xf8);
+  em(0x48); em(0x89); em(0xc3);
+  em(0x80); em(0xc2); em(0x30);
+  em(0x48); em(0xff); em(0xcf);
+  em(0x88); em(0x17);
+  em(0x48); em(0xff); em(0xc1);
+  em(0x48); em(0x85); em(0xdb);
+  em(0x0f); em(0x85);
+  { int32_t r = (int32_t)(loop - (cpos + 4)); em32((uint32_t)r); }
+  em(0x4d); em(0x85); em(0xc9);
+  em(0x0f); em(0x84); size_t jz_at = cpos; em32(0);
+  em(0x48); em(0xff); em(0xcf);
+  em(0xc6); em(0x07); em(0x2d);
+  em(0x48); em(0xff); em(0xc1);
+  size_t after_neg = cpos;
+  { int32_t r = (int32_t)(after_neg - (jz_at + 4)); memcpy(code + jz_at, &r, 4); }
+  em(0x48); em(0x89); em(0xfe);
+  em(0x48); em(0x89); em(0xca);
+  em(0x48); em(0xc7); em(0xc0); em32(1);
+  em(0x48); em(0xc7); em(0xc7); em32(1);
+  em(0x0f); em(0x05);
+}
+
+static void emit_write_pool(size_t off, size_t len) {
+  em(0x48); em(0xc7); em(0xc0); em32(1);
+  em(0x48); em(0xc7); em(0xc7); em32(1);
+  em(0x48); em(0x8d); em(0x35);
+  fixes[nfix++] = (Fix){FIX_POOL, cpos, (int)off}; em32(0);
+  em(0x48); em(0xc7); em(0xc2); em32((uint32_t)len);
+  em(0x0f); em(0x05);
+}
+
+static void emit_exit0(void) {
+  em(0x48); em(0xc7); em(0xc0); em32(60);
+  em(0x48); em(0x31); em(0xff);
+  em(0x0f); em(0x05);
+}
+
+static void sw(const char **p) { while (**p && isspace((unsigned char)**p)) (*p)++; }
+static int id0(char c) { return isalpha((unsigned char)c) || c == '_'; }
+static int id(char c) { return isalnum((unsigned char)c) || c == '_'; }
+static int slot_of(const char *n) {
+  unsigned char c = (unsigned char)n[0];
+  if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+  return (c >= 'a' && c <= 'z') ? (c - 'a') % 8 : 0;
+}
+static int mkw(const char **p, const char *k) {
+  size_t n = strlen(k);
+  if (strncmp(*p, k, n) || id((*p)[n])) return 0;
+  *p += n; return 1;
+}
+static int pid(const char **p, char *b, size_t c) {
+  sw(p); if (!id0(**p)) return 0;
+  size_t i = 0; while (id(**p) && i + 1 < c) b[i++] = *(*p)++;
+  b[i] = 0; return 1;
+}
+static int pint(const char **p, long *o) {
+  sw(p); if (!isdigit((unsigned char)**p)) return 0;
+  long v = 0; while (isdigit((unsigned char)**p)) v = v * 10 + (*(*p)++ - '0');
+  *o = v; return 1;
+}
+
+static int parse_expr(const char **p);
