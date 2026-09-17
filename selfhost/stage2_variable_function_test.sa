@@ -1,0 +1,20 @@
+// Stage-2 regression source for locals + function calls + returns.
+
+make add(a, b) {
+  hold sum = a + b
+  give sum
+}
+
+make twice(value) {
+  hold result = add(value, value)
+  give result
+}
+
+hold left = 10
+hold right = 16
+hold total = add(left, right)
+hold answer = twice(total)
+show left
+show right
+show total
+show answer
