@@ -1,0 +1,18 @@
+// Stage-2 function contract.
+// Functions have a name, parameters, a lexical scope, and an explicit return value.
+// Calls are represented as language-level operations before backend lowering.
+
+make add(a, b) {
+  hold result = a + b
+  give result
+}
+
+make square(value) {
+  hold result = value * value
+  give result
+}
+
+hold first = add(10, 32)
+hold second = square(first)
+show first
+show second
