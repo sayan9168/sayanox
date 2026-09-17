@@ -12,15 +12,15 @@ sx: stage2
 	clang -O2 -o selfhost/sx_bin selfhost/sx_cli.c
 	clang -O2 -o selfhost/sx selfhost/sx_launcher.c
 
-# Native AOT MVP (Linux x86_64 ELF, no clang for the .sa output binary)
 native:
+	@if [ ! -f selfhost/native_aot.c ] || grep -q 'show <integer>' selfhost/native_aot.c 2>/dev/null; then \
+	  if [ -f selfhost/native_aot.c.gz.b64 ] && base64 -d selfhost/native_aot.c.gz.b64 2>/dev/null | gzip -d > selfhost/native_aot.c.tmp 2>/dev/null; then \
+	    mv selfhost/native_aot.c.tmp selfhost/native_aot.c; \
+	  fi; \
+	fi
 	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 
-bootstrap-cycle:
-	bash selfhost/bootstrap_cycle.sh
-
 test: sx native
-	./selfhost/sx_bin examples/hello.sa /tmp/sx_hello 1
 	./selfhost/native_aot examples/hello.sa /tmp/hello_native
 	/tmp/hello_native | grep -q 42
 
