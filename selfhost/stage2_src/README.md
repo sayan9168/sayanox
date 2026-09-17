@@ -7,4 +7,14 @@ cat selfhost/stage2_src/01_front.c selfhost/stage2_src/02_back.c > selfhost/stag
 clang -o selfhost/stage2 selfhost/stage2_template.c
 ```
 
-Or run `./selfhost/bootstrap_selfhost.sh` which does this automatically.
+The supported repository-level equivalent is:
+
+```bash
+make stage2
+```
+
+or:
+
+```bash
+./selfhost/restore_stage2.sh
+```
