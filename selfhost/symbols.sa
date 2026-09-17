@@ -1,0 +1,56 @@
+// Sayanox-owned symbol and scope table for the self-host compiler.
+// Names and slots are represented explicitly so LOAD/STORE no longer depend
+// on backend-specific variable spelling.
+
+hold symbol_names = []
+hold symbol_slots = []
+hold symbol_depths = []
+hold symbol_count = 0
+hold current_depth = 0
+
+make enter_scope() {
+  hold current_depth = current_depth + 1
+  give current_depth
+}
+
+make leave_scope() {
+  when current_depth > 0 {
+    hold current_depth = current_depth - 1
+  }
+  give current_depth
+}
+
+make declare(name) {
+  hold slot = symbol_count
+  push(symbol_names, name)
+  push(symbol_slots, slot)
+  push(symbol_depths, current_depth)
+  hold symbol_count = symbol_count + 1
+  give slot
+}
+
+make lookup(name) {
+  hold i = symbol_count - 1
+  while i >= 0 {
+    when list_get(symbol_names, i) == name {
+      give list_get(symbol_slots, i)
+    }
+    hold i = i - 1
+  }
+  give -1
+}
+
+enter_scope()
+hold answer_slot = declare("answer")
+hold nested_depth = enter_scope()
+hold local_slot = declare("local")
+hold answer_lookup = lookup("answer")
+hold local_lookup = lookup("local")
+leave_scope()
+hold after_lookup = lookup("answer")
+
+show answer_slot
+show local_slot
+show answer_lookup
+show local_lookup
+show after_lookup
