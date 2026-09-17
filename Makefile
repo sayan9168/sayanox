@@ -1,35 +1,19 @@
-# Sayanox - one command self-host
-.PHONY: all stage2 test selfhost clean examples repl fmt
+# Sayanox — core path without Bash scripts
+.PHONY: all stage2 sx test clean
 
-all: stage2
+all: stage2 sx
 
 stage2:
-	chmod +x selfhost/restore_stage2.sh selfhost/sx
-	./selfhost/restore_stage2.sh
+	clang -O2 -o selfhost/build_stage2 selfhost/build_stage2.c
+	./selfhost/build_stage2
 
-test selfhost:
-	chmod +x selfhost/bootstrap_selfhost.sh
-	./selfhost/bootstrap_selfhost.sh
+sx: stage2
+	./selfhost/stage2 selfhost/sx.sa selfhost/sx_cli.c
+	clang -O2 -o selfhost/sx_bin selfhost/sx_cli.c
+	clang -O2 -o selfhost/sx selfhost/sx_launcher.c
 
-examples: stage2
-	chmod +x selfhost/sx
-	./selfhost/sx examples/hello.sa --run
-	./selfhost/sx examples/countdown.sa --run
-	./selfhost/sx examples/greet.sa --run
-
-echo-help:
-	@echo "make stage2 | test | examples | repl | fmt"
-
-repl:
-	chmod +x tools/sxrepl.sh
-	./tools/sxrepl.sh
-
-fmt:
-	@test -n "$(FILE)" || (echo "usage: make fmt FILE=path.sa"; exit 1)
-	chmod +x tools/sxfmt.sh
-	./tools/sxfmt.sh $(FILE) --write
+test: sx
+	./selfhost/sx_bin examples/hello.sa /tmp/sx_hello 1
 
 clean:
-	rm -f selfhost/stage2 selfhost/out_* selfhost/cli_* selfhost/stage3 \
-	      selfhost/hello_out selfhost/hello_out.c selfhost/*.c \
-	      selfhost/compiler_bin selfhost/compiler_out.c 2>/dev/null || true
+	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx selfhost/sx_cli.c

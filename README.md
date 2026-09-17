@@ -2,36 +2,27 @@
 
 **Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-**No Rust. No Cargo.** Compiler path is Stage-2 (C) + `sx`.
+**No Rust. Core path: Sayanox + C (no Bash scripts required).**
 
 ## Quick start
 
 ```bash
 git clone https://github.com/sayan9168/sayanox.git
 cd sayanox
-./selfhost/restore_stage2.sh
-./selfhost/sx examples/hello.sa --run
+make stage2
+make sx
+./selfhost/sx_bin examples/hello.sa /tmp/hello 1
 ```
 
-Needs: `bash`, `curl`, `clang` or `gcc`.
+Needs: `clang` or `gcc`, `make` optional.
 
-## Self-host
+## How it works
 
-```bash
-./selfhost/bootstrap_full_language_selfhost.sh
-./selfhost/bootstrap_full_selfhost.sh
-./selfhost/bootstrap_all.sh
-```
+1. `stage2` (C) compiles `.sa` → `.c`
+2. `sx.sa` (Sayanox) drives compile + link + run via `run` / `arg`
+3. `clang` produces the binary
 
-## Tools
-
-| Tool | Command |
-|------|--------|
-| CLI | `./selfhost/sx file.sa --run` |
-| Format | `./tools/sxfmt.sh file.sa` |
-| Packages | `./tools/sxpkg init && ./tools/sxpkg install` |
-| REPL | `./tools/sxrepl.sh` |
-| LSP | `./tools/sayanox-lsp.sh` |
+See [docs/NO_BASH.md](docs/NO_BASH.md).
 
 ## License
 

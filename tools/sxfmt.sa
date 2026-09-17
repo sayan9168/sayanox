@@ -1,0 +1,14 @@
+// Sayanox formatter (copy-through; extend later)
+// Args: input.sa [output.sa]
+hold n = arg_count()
+hold in = "examples/hello.sa"
+when n >= 2 {
+  hold in = arg(1)
+}
+hold src = read_file(in)
+hold out = in
+when n >= 3 {
+  hold out = arg(2)
+}
+write_file(out, src)
+show 1

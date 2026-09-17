@@ -1,0 +1,40 @@
+// Sayanox CLI (replaces Bash sx)
+// Args: <input.sa> [out_binary] [run]
+// run = any third arg means execute after link
+
+hold n = arg_count()
+hold ok = 1
+when n < 2 {
+  hold ok = 0
+}
+
+hold in = "examples/hello.sa"
+hold out = "out_bin"
+hold do_run = 0
+
+when n >= 2 {
+  hold in = arg(1)
+}
+when n >= 3 {
+  hold out = arg(2)
+}
+when n >= 4 {
+  hold do_run = 1
+}
+
+hold c_out = concat(out, ".c")
+hold cmd = concat("./selfhost/stage2 ", in)
+hold cmd = concat(cmd, " ")
+hold cmd = concat(cmd, c_out)
+hold st = run(cmd)
+
+hold cmd = concat("clang -O2 -pthread -o ", out)
+hold cmd = concat(cmd, " ")
+hold cmd = concat(cmd, c_out)
+hold st = run(cmd)
+
+when do_run == 1 {
+  hold st = run(out)
+}
+
+show ok
