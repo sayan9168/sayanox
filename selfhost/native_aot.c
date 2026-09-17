@@ -1,153 +1,60 @@
-/*
- * Sayanox minimal native AOT (Linux x86_64 ELF) — no clang for the output binary.
- * Supports: repeated `show <integer>` (best-effort scan).
- * Usage: ./selfhost/native_aot input.sa output_bin
- */
+/* Sayanox native AOT step2 — Linux x86_64 ELF, no clang for output.
+   hold/show/when/while + ints. Usage: native_aot in.sa out */
 #include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-
-#define MAX_SHOWS 64
-#define MAX_SRC (1 << 20)
-
-static char *read_file(const char *path, size_t *out_n) {
-  FILE *f = fopen(path, "rb");
-  if (!f) { perror(path); exit(1); }
-  fseek(f, 0, SEEK_END);
-  long n = ftell(f);
-  fseek(f, 0, SEEK_SET);
-  if (n < 0 || n > MAX_SRC) { fprintf(stderr, "native_aot: file too large\n"); exit(1); }
-  char *b = malloc((size_t)n + 1);
-  if (!b) exit(1);
-  if (n && fread(b, 1, (size_t)n, f) != (size_t)n) exit(1);
-  b[n] = 0;
-  fclose(f);
-  *out_n = (size_t)n;
-  return b;
+#define OC 8192
+#define IT 10000
+static char*rf(const char*p,size_t*n){FILE*f=fopen(p,"rb");if(!f){perror(p);exit(1);}fseek(f,0,SEEK_END);long N=ftell(f);fseek(f,0,SEEK_SET);char*b=malloc((size_t)N+1);fread(b,1,(size_t)N,f);b[N]=0;fclose(f);*n=(size_t)N;return b;}
+static void sw(const char**p){while(**p&&isspace((unsigned char)**p))(*p)++;}
+static int id0(char c){return isalpha((unsigned char)c)||c=='_';}
+static int id(char c){return isalnum((unsigned char)c)||c=='_';}
+static int slot(const char*n){unsigned char c=(unsigned char)n[0];if(c>='A'&&c<='Z')c=(unsigned char)(c-'A'+'a');return (c>='a'&&c<='z')?(c-'a')%8:0;}
+static int mkw(const char**p,const char*k){size_t n=strlen(k);if(strncmp(*p,k,n)||id((*p)[n]))return 0;*p+=n;return 1;}
+static int pid(const char**p,char*b,size_t c){sw(p);if(!id0(**p))return 0;size_t i=0;while(id(**p)&&i+1<c)b[i++]=*(*p)++;b[i]=0;return 1;}
+static int pint(const char**p,long*o){sw(p);if(!isdigit((unsigned char)**p))return 0;long v=0;while(isdigit((unsigned char)**p))v=v*10+(*(*p)++-'0');*o=v;return 1;}
+static void an(char*o,size_t*op,size_t cap,long v){char t[32];int n=snprintf(t,32,"%ld\n",v);if(n>0&&*op+(size_t)n<cap){memcpy(o+*op,t,(size_t)n);*op+=(size_t)n;}}
+static void eblk(const char**p,long*V,char*o,size_t*op,size_t cap,int*e);
+static void skipb(const char**p){int d=1;while(**p&&d){if(**p=='{')d++;else if(**p=='}')d--;if(d)(*p)++;}if(**p=='}')(*p)++;}
+static void estmt(const char**p,long*V,char*o,size_t*op,size_t cap,int*e){
+ sw(p);if(!**p||**p=='}')return;
+ if(mkw(p,"hold")){char n[64];long v;if(!pid(p,n,64)){*e=1;return;}sw(p);if(**p!='='){*e=1;return;}(*p)++;if(!pint(p,&v)){*e=1;return;}V[slot(n)]=v;return;}
+ if(mkw(p,"show")){sw(p);long v;char n[64];if(pint(p,&v)){an(o,op,cap,v);return;}if(pid(p,n,64)){an(o,op,cap,V[slot(n)]);return;}*e=1;return;}
+ if(mkw(p,"when")){char n[64];long cnd=0;sw(p);if(pint(p,&cnd)){}else if(pid(p,n,64))cnd=V[slot(n)];else{*e=1;return;}sw(p);if(**p!='{'){*e=1;return;}(*p)++;
+  if(cnd)eblk(p,V,o,op,cap,e);else skipb(p);
+  sw(p);if(mkw(p,"otherwise")){sw(p);if(**p!='{'){*e=1;return;}(*p)++;if(!cnd)eblk(p,V,o,op,cap,e);else skipb(p);}return;}
+ if(mkw(p,"while")){char n[64];int un=0;long lit=0;sw(p);if(pint(p,&lit))un=0;else if(pid(p,n,64))un=1;else{*e=1;return;}sw(p);if(**p!='{'){*e=1;return;}
+  const char*body=*p+1;const char*sc=body;int d=1;while(*sc&&d){if(*sc=='{')d++;else if(*sc=='}')d--;if(d)sc++;}
+  int it=0;while(it++<IT){long cnd=un?V[slot(n)]:lit;if(!cnd)break;const char*bp=body;eblk(&bp,V,o,op,cap,e);if(*e)return;if(!un)break;}
+  *p=sc;if(**p=='}')(*p)++;return;}
+ if((*p)[0]=='/'&&(*p)[1]=='/'){while(**p&&**p!='\n')(*p)++;return;}
+ if(**p)(*p)++;
 }
-
-static int collect_shows(const char *src, long *vals, int maxv) {
-  int n = 0;
-  const char *p = src;
-  while (*p && n < maxv) {
-    if ((p == src || !isalnum((unsigned char)p[-1])) &&
-        p[0] == 's' && p[1] == 'h' && p[2] == 'o' && p[3] == 'w' &&
-        !isalnum((unsigned char)p[4])) {
-      p += 4;
-      while (*p == ' ' || *p == '\t') p++;
-      if (isdigit((unsigned char)*p)) {
-        long v = 0;
-        while (isdigit((unsigned char)*p)) { v = v * 10 + (*p - '0'); p++; }
-        vals[n++] = v;
-        continue;
-      }
-    }
-    p++;
-  }
-  return n;
-}
-
-static size_t build_msg(long *vals, int nv, char *msg, size_t cap) {
-  size_t pos = 0;
-  for (int i = 0; i < nv; i++) {
-    char tmp[32];
-    int m = snprintf(tmp, sizeof(tmp), "%ld\n", vals[i]);
-    if (m < 0 || pos + (size_t)m >= cap) break;
-    memcpy(msg + pos, tmp, (size_t)m);
-    pos += (size_t)m;
-  }
-  return pos;
-}
-
-#pragma pack(push, 1)
-typedef struct {
-  unsigned char e_ident[16];
-  uint16_t e_type, e_machine;
-  uint32_t e_version;
-  uint64_t e_entry, e_phoff, e_shoff;
-  uint32_t e_flags;
-  uint16_t e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx;
-} Elf64_Ehdr;
-typedef struct {
-  uint32_t p_type, p_flags;
-  uint64_t p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align;
-} Elf64_Phdr;
+static void eblk(const char**p,long*V,char*o,size_t*op,size_t cap,int*e){while(**p&&**p!='}'&&!*e){const char*b=*p;estmt(p,V,o,op,cap,e);if(*p==b&&**p&&**p!='}')(*p)++;sw(p);}if(**p=='}')(*p)++;}
+static int eval(const char*src,char*o,size_t cap,size_t*ol){long V[8]={0};size_t op=0;int e=0;const char*p=src;while(*p&&!e){sw(&p);if(!*p)break;const char*b=p;estmt(&p,V,o,&op,cap,&e);if(p==b&&*p)p++;}*ol=op;return e;}
+#pragma pack(push,1)
+typedef struct{unsigned char i[16];uint16_t t,m;uint32_t v;uint64_t e,ph,sh;uint32_t f;uint16_t eh,ps,pn,ss,sn,si;}EH;
+typedef struct{uint32_t t,f;uint64_t o,va,pa,fs,ms,a;}PH;
 #pragma pack(pop)
-
-static void emit_elf(const char *out_path, const char *msg, size_t msg_len) {
-  const uint64_t base = 0x400000;
-  size_t hdr = sizeof(Elf64_Ehdr) + sizeof(Elf64_Phdr);
-  unsigned char code[64];
-  size_t c = 0;
-  code[c++] = 0x48; code[c++] = 0xc7; code[c++] = 0xc0; code[c++] = 0x01; code[c++] = 0; code[c++] = 0; code[c++] = 0;
-  code[c++] = 0x48; code[c++] = 0xc7; code[c++] = 0xc7; code[c++] = 0x01; code[c++] = 0; code[c++] = 0; code[c++] = 0;
-  size_t lea_disp_at = c + 3;
-  code[c++] = 0x48; code[c++] = 0x8d; code[c++] = 0x35;
-  code[c++] = 0; code[c++] = 0; code[c++] = 0; code[c++] = 0;
-  code[c++] = 0x48; code[c++] = 0xc7; code[c++] = 0xc2;
-  uint32_t ml = (uint32_t)msg_len;
-  memcpy(code + c, &ml, 4); c += 4;
-  code[c++] = 0x0f; code[c++] = 0x05;
-  code[c++] = 0x48; code[c++] = 0xc7; code[c++] = 0xc0; code[c++] = 0x3c; code[c++] = 0; code[c++] = 0; code[c++] = 0;
-  code[c++] = 0x48; code[c++] = 0x31; code[c++] = 0xff;
-  code[c++] = 0x0f; code[c++] = 0x05;
-
-  size_t code_off = hdr;
-  size_t msg_off = code_off + c;
-  size_t file_sz = msg_off + msg_len;
-  uint64_t rip_next = base + code_off + lea_disp_at + 4;
-  uint64_t msg_va = base + msg_off;
-  int32_t disp = (int32_t)(msg_va - rip_next);
-  memcpy(code + lea_disp_at, &disp, 4);
-
-  Elf64_Ehdr eh;
-  memset(&eh, 0, sizeof(eh));
-  eh.e_ident[0] = 0x7f; eh.e_ident[1] = 'E'; eh.e_ident[2] = 'L'; eh.e_ident[3] = 'F';
-  eh.e_ident[4] = 2; eh.e_ident[5] = 1; eh.e_ident[6] = 1;
-  eh.e_type = 2; eh.e_machine = 62; eh.e_version = 1;
-  eh.e_entry = base + code_off;
-  eh.e_phoff = sizeof(Elf64_Ehdr);
-  eh.e_ehsize = sizeof(Elf64_Ehdr);
-  eh.e_phentsize = sizeof(Elf64_Phdr);
-  eh.e_phnum = 1;
-
-  Elf64_Phdr ph;
-  memset(&ph, 0, sizeof(ph));
-  ph.p_type = 1; ph.p_flags = 5;
-  ph.p_offset = 0; ph.p_vaddr = base; ph.p_paddr = base;
-  ph.p_filesz = file_sz; ph.p_memsz = file_sz; ph.p_align = 0x1000;
-
-  FILE *o = fopen(out_path, "wb");
-  if (!o) { perror(out_path); exit(1); }
-  fwrite(&eh, 1, sizeof(eh), o);
-  fwrite(&ph, 1, sizeof(ph), o);
-  fwrite(code, 1, c, o);
-  fwrite(msg, 1, msg_len, o);
-  fclose(o);
-  chmod(out_path, 0755);
+static void elf(const char*path,const char*msg,size_t ml){
+ const uint64_t B=0x400000;size_t hdr=sizeof(EH)+sizeof(PH);unsigned char c[64];size_t n=0;
+ c[n++]=0x48;c[n++]=0xc7;c[n++]=0xc0;c[n++]=1;c[n++]=0;c[n++]=0;c[n++]=0;
+ c[n++]=0x48;c[n++]=0xc7;c[n++]=0xc7;c[n++]=1;c[n++]=0;c[n++]=0;c[n++]=0;
+ size_t ld=n+3;c[n++]=0x48;c[n++]=0x8d;c[n++]=0x35;c[n++]=0;c[n++]=0;c[n++]=0;c[n++]=0;
+ c[n++]=0x48;c[n++]=0xc7;c[n++]=0xc2;uint32_t m=(uint32_t)ml;memcpy(c+n,&m,4);n+=4;c[n++]=0x0f;c[n++]=0x05;
+ c[n++]=0x48;c[n++]=0xc7;c[n++]=0xc0;c[n++]=0x3c;c[n++]=0;c[n++]=0;c[n++]=0;c[n++]=0x48;c[n++]=0x31;c[n++]=0xff;c[n++]=0x0f;c[n++]=0x05;
+ size_t co=hdr,mo=co+n,fs=mo+ml;int32_t d=(int32_t)((B+mo)-(B+co+ld+4));memcpy(c+ld,&d,4);
+ EH eh;memset(&eh,0,sizeof eh);eh.i[0]=0x7f;eh.i[1]='E';eh.i[2]='L';eh.i[3]='F';eh.i[4]=2;eh.i[5]=1;eh.i[6]=1;
+ eh.t=2;eh.m=62;eh.v=1;eh.e=B+co;eh.ph=sizeof(EH);eh.eh=sizeof(EH);eh.ps=sizeof(PH);eh.pn=1;
+ PH ph;memset(&ph,0,sizeof ph);ph.t=1;ph.f=5;ph.va=B;ph.pa=B;ph.fs=fs;ph.ms=fs;ph.a=0x1000;
+ FILE*o=fopen(path,"wb");fwrite(&eh,1,sizeof eh,o);fwrite(&ph,1,sizeof ph,o);fwrite(c,1,n,o);fwrite(msg,1,ml,o);fclose(o);chmod(path,0755);
 }
-
-int main(int argc, char **argv) {
-  if (argc < 3) {
-    fprintf(stderr, "Usage: native_aot <input.sa> <output_bin>\n");
-    fprintf(stderr, "Linux x86_64 native backend MVP. Supports: show <int>\n");
-    return 1;
-  }
-  size_t n = 0;
-  char *src = read_file(argv[1], &n);
-  long vals[MAX_SHOWS];
-  int nv = collect_shows(src, vals, MAX_SHOWS);
-  free(src);
-  if (nv == 0) {
-    fprintf(stderr, "native_aot: no `show <integer>` in %s\n", argv[1]);
-    return 1;
-  }
-  char msg[4096];
-  size_t ml = build_msg(vals, nv, msg, sizeof(msg));
-  emit_elf(argv[2], msg, ml);
-  printf("native_aot: %s -> %s (%d show(s), no clang)\n", argv[1], argv[2], nv);
-  return 0;
+int main(int argc,char**argv){
+ if(argc<3){fprintf(stderr,"Usage: native_aot <in.sa> <out>\n");return 1;}
+ size_t n;char*s=rf(argv[1],&n);char o[OC];size_t ol=0;int e=eval(s,o,OC,&ol);free(s);
+ if(e||!ol){fprintf(stderr,"native_aot: no output\n");return 1;}
+ elf(argv[2],o,ol);printf("native_aot: %s -> %s (%zu bytes, no clang)\n",argv[1],argv[2],ol);return 0;
 }

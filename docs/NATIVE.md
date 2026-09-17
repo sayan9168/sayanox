@@ -1,38 +1,23 @@
-# Native backend
+# Native backend (step 2)
 
-Linux **x86_64** ELF — **no clang** for the user binary.
-
-## Build
+Linux **x86_64** ELF — **no clang** for the user program binary.
 
 ```sh
 make native
-# clang -O2 -o selfhost/native_aot selfhost/native_aot.c
-```
-
-## Use
-
-```sh
 ./selfhost/native_aot examples/hello.sa hello_native
 ./hello_native
 ```
 
-## Step 2 support
+## Supported
 
-| Feature | Status |
-|---------|--------|
-| `show <int>` | yes |
-| `hold name = <int>` | yes (8 slots by name) |
-| `show name` | yes |
-| `when name/int { }` | yes |
-| `otherwise { }` | yes |
-| `while name { }` | yes (max 10000 iters) |
+- `hold name = <int>`
+- `show <int>` / `show name`
+- `when` / `otherwise`
+- `while` (name or int condition)
 
-Evaluation is done at AOT time; the ELF embeds the printed output and `write`s it.
+AOT evaluates the subset, embeds printed text in the ELF, then `write`s it.
 
 ## Not yet
 
-- Strings, structs, lists, arithmetic expressions
-- True runtime machine code for loops (currently static eval)
-- non-Linux / non-x86_64
-
-Full-language path remains Stage-2 → C → clang.
+Strings, arithmetic, structs/lists, live machine-code loops (full ISA).
+Full language: Stage-2 → C → clang.
