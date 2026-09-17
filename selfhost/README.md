@@ -1,4 +1,31 @@
-# Self-host CLI (v0.3.27)
+# Self-host CLI
+
+## Supported bootstrap
+
+Build Stage-2 with:
+
+```bash
+make stage2
+```
+
+or:
+
+```bash
+./selfhost/restore_stage2.sh
+```
+
+Production smoke/bootstrap:
+
+```bash
+./selfhost/bootstrap_production.sh
+```
+
+Full self-host paths:
+
+```bash
+./selfhost/bootstrap_full_selfhost.sh
+./selfhost/bootstrap_full_language_selfhost.sh
+```
 
 ## Compile any `.sa` file
 
@@ -11,10 +38,6 @@ chmod +x selfhost/sx
 
 ## Errors
 
-Stage-2 prints **line number**, expected token, and got token on parse failure.
+Stage-2 reports the line number, expected token, and received token on parse failure.
 
-## Stage-3
-
-```bash
-./selfhost/bootstrap_stage3.sh
-```
+Numbered `stage*.sh` and `step*.sh` scripts are retired and are not supported CLI entry points.
