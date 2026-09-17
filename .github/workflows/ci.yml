@@ -19,6 +19,11 @@ jobs:
       - name: Production bootstrap
         run: bash selfhost/bootstrap_production.sh
 
+      - name: Struct/list codegen smoke
+        run: |
+          chmod +x selfhost/codegen_struct_list_test.sh selfhost/sx selfhost/restore_stage2.sh
+          bash selfhost/codegen_struct_list_test.sh
+
       - name: Examples smoke
         run: |
           chmod +x selfhost/sx
