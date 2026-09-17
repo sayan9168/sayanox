@@ -3,7 +3,7 @@
 // source -> lexer boundary -> symbols/scopes -> checked local operations -> IR -> C backend.
 // The native backend remains the next bootstrap milestone.
 
-hold input_path = "selfhost/hello.sa"
+hold input_path = "selfhost/compiler_wiring_demo.sa"
 hold source = read_file(input_path)
 hold source_len = len(source)
 hold pos = 0
@@ -12,9 +12,6 @@ hold errors = 0
 hold current_depth = 0
 hold next_slot = 0
 
-// ------------------------------------------------------------
-// Language-owned symbol table
-// ------------------------------------------------------------
 hold symbol_names = []
 hold symbol_slots = []
 hold symbol_depths = []
@@ -66,9 +63,7 @@ make declare_symbol(name) {
   hold i = symbol_count - 1
   while i >= 0 {
     when list_get(symbol_names, i) == name {
-      when list_get(symbol_depths, i) == current_depth {
-        give -1
-      }
+      when list_get(symbol_depths, i) == current_depth { give -1 }
     }
     hold i = i - 1
   }
@@ -84,30 +79,26 @@ make declare_symbol(name) {
 make lookup_symbol(name) {
   hold i = symbol_count - 1
   while i >= 0 {
-    when list_get(symbol_names, i) == name {
-      give list_get(symbol_slots, i)
-    }
+    when list_get(symbol_names, i) == name { give list_get(symbol_slots, i) }
     hold i = i - 1
   }
   give -1
 }
 
-// ------------------------------------------------------------
-// Language-owned IR
-// ------------------------------------------------------------
+// Canonical Stage-3 local IR.
 hold ir_ops = []
 hold ir_names = []
 hold ir_values = []
 hold ir_count = 0
 
-make emit_local_store(name, value) {
+make emit_store(name, value) {
   push(ir_ops, "store")
   push(ir_names, name)
   push(ir_values, value)
   hold ir_count = ir_count + 1
 }
 
-make emit_local_load(name) {
+make emit_load(name) {
   hold slot = lookup_symbol(name)
   when slot < 0 {
     hold errors = errors + 1
@@ -127,33 +118,22 @@ make emit_show(value) {
   hold ir_count = ir_count + 1
 }
 
-// ------------------------------------------------------------
-// Scanner helpers
-// ------------------------------------------------------------
 make skip_spaces() {
   while pos < source_len {
     hold c = char_code(source, pos)
-    when is_space(c) {
-      hold pos = pos + 1
-    } otherwise {
-      give pos
-    }
+    when is_space(c) { hold pos = pos + 1 } otherwise { give pos }
   }
   give pos
 }
 
 make read_identifier() {
   hold name = ""
-  hold started = 0
   while pos < source_len {
     hold c = char_code(source, pos)
     when is_alnum(c) {
       hold name = concat(name, char_at(source, pos))
-      hold started = 1
       hold pos = pos + 1
-    } otherwise {
-      give name
-    }
+    } otherwise { give name }
   }
   give name
 }
@@ -162,35 +142,22 @@ make read_until_line_end() {
   hold text = ""
   while pos < source_len {
     hold c = char_code(source, pos)
-    when c == 10 {
-      give text
-    } otherwise {
-      hold text = concat(text, char_at(source, pos))
-      hold pos = pos + 1
-    }
+    when c == 10 { give text }
+    hold text = concat(text, char_at(source, pos))
+    hold pos = pos + 1
   }
   give text
 }
 
-// Remove leading/trailing whitespace from a compiler-owned expression.
-make trim_expr(text) {
-  hold out = text
-  // The runtime trim operation is the canonical string boundary.
-  hold out = trim(out)
-  give out
-}
+make trim_expr(text) { give trim(text) }
 
-// ------------------------------------------------------------
-// Stage-3 source -> symbol/IR wiring
-// ------------------------------------------------------------
+// Source -> symbols/IR. This is the compiler entry path, not a disconnected demo.
 while pos < source_len {
   skip_spaces()
   when pos >= source_len {
     hold pos = source_len
   } otherwise {
     hold ch = char_code(source, pos)
-
-    // `hold <identifier> = <expression>` becomes STORE.
     when ch == 104 {
       hold keyword = ""
       hold scanning = 1
@@ -200,45 +167,24 @@ while pos < source_len {
           when is_alpha(c) {
             hold keyword = concat(keyword, char_at(source, pos))
             hold pos = pos + 1
-          } otherwise {
-            hold scanning = 0
-          }
-        } otherwise {
-          hold scanning = 0
-        }
+          } otherwise { hold scanning = 0 }
+        } otherwise { hold scanning = 0 }
       }
-
       when keyword == "hold" {
         skip_spaces()
         hold name = read_identifier()
-        when name == "" {
-          hold errors = errors + 1
-        } otherwise {
-          skip_spaces()
-          when pos < source_len {
-            hold eq = char_code(source, pos)
-            when eq == 61 {
-              hold pos = pos + 1
-              skip_spaces()
-              hold expr = trim_expr(read_until_line_end())
-              hold slot = declare_symbol(name)
-              when slot < 0 {
-                hold errors = errors + 1
-              } otherwise {
-                emit_local_store(name, expr)
-              }
-            } otherwise {
-              hold errors = errors + 1
-            }
-          } otherwise {
-            hold errors = errors + 1
-          }
-        }
-      } otherwise {
-        hold pos = pos + 1
-      }
+        skip_spaces()
+        when pos < source_len {
+          when char_code(source, pos) == 61 {
+            hold pos = pos + 1
+            skip_spaces()
+            hold expr = trim_expr(read_until_line_end())
+            hold slot = declare_symbol(name)
+            when slot < 0 { hold errors = errors + 1 } otherwise { emit_store(name, expr) }
+          } otherwise { hold errors = errors + 1 }
+        } otherwise { hold errors = errors + 1 }
+      } otherwise { hold pos = pos + 1 }
     } otherwise {
-      // `show <expression>` becomes SHOW after validating referenced locals.
       when ch == 115 {
         hold keyword = ""
         hold scanning = 1
@@ -248,56 +194,39 @@ while pos < source_len {
             when is_alpha(c) {
               hold keyword = concat(keyword, char_at(source, pos))
               hold pos = pos + 1
-            } otherwise {
-              hold scanning = 0
-            }
-          } otherwise {
-            hold scanning = 0
-          }
+            } otherwise { hold scanning = 0 }
+          } otherwise { hold scanning = 0 }
         }
         when keyword == "show" {
           skip_spaces()
           hold expr = trim_expr(read_until_line_end())
-          when expr == "" {
-            hold errors = errors + 1
-          } otherwise {
-            // Identifier expressions are resolved through the symbol table.
+          when expr == "" { hold errors = errors + 1 } otherwise {
+            // A bare identifier is resolved now; compound expressions are
+            // preserved for the expression-lowering pass.
             when is_alpha(char_code(expr, 0)) {
-              hold slot = emit_local_load(expr)
+              hold slot = lookup_symbol(expr)
+              when slot < 0 { hold errors = errors + 1 } otherwise { emit_load(expr) }
             }
             emit_show(expr)
           }
-        } otherwise {
-          hold pos = pos + 1
-        }
+        } otherwise { hold pos = pos + 1 }
       } otherwise {
-        // Braces are scope boundaries for the Stage-3 symbol environment.
-        when ch == 123 {
-          enter_scope()
-          hold pos = pos + 1
-        } otherwise {
-          when ch == 125 {
-            leave_scope()
-            hold pos = pos + 1
-          } otherwise {
-            hold pos = pos + 1
-          }
+        when ch == 123 { enter_scope() } otherwise {
+          when ch == 125 { leave_scope() }
         }
+        hold pos = pos + 1
       }
     }
   }
 }
 
-// ------------------------------------------------------------
-// IR -> C backend
-// ------------------------------------------------------------
+// IR -> backend C. The IR, not source text, drives this emission.
 hold out = "#include <stdio.h>\nint main(void){\n"
 hold i = 0
 while i < ir_count {
   hold op = list_get(ir_ops, i)
   hold name = list_get(ir_names, i)
   hold value = list_get(ir_values, i)
-
   when op == "store" {
     hold out = concat(out, "  double ")
     hold out = concat(out, name)
