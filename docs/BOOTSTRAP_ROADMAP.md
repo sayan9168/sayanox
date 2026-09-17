@@ -8,7 +8,7 @@ The goal is **not** to remove C/Clang in one jump. The immediate goal is to move
 
 ## Current bootstrap boundary
 
-Today the repository still has a small C Stage-2 implementation. `make stage2` / `selfhost/restore_stage2.sh` produces the Stage-2 binary, and that binary is used to run Sayanox compiler sources.
+Today the repository still has a C Stage-2 implementation. `make stage2` / `selfhost/restore_stage2.sh` produces the Stage-2 binary, and that binary is used to run Sayanox compiler sources.
 
 The important architectural boundary is:
 
@@ -41,7 +41,7 @@ This means the C implementation is being treated as a bootstrap mechanism, not a
 
 ### Stage B — Port Stage-2 lowering into Sayanox
 
-**Status: next**
+**Status: active — first arithmetic boundary implemented**
 
 Move more of the lowering logic out of the Stage-2 C implementation and into:
 
@@ -51,15 +51,17 @@ Move more of the lowering logic out of the Stage-2 C implementation and into:
 
 The first targets should be small, composable lowering operations:
 
-1. constants and primitive values
-2. local variable load/store
-3. arithmetic expressions
-4. comparisons
-5. basic control-flow lowering
-6. function calls and returns
-7. structured values already represented by the self-host pipeline
+1. constants and primitive values — **implemented as a Sayanox-owned lowering boundary**
+2. local variable load/store — next
+3. arithmetic expressions — **first binary-expression lowering boundary added in `compiler.sa`**
+4. comparisons — planned
+5. basic control-flow lowering — planned
+6. function calls and returns — planned
+7. structured values already represented by the self-host pipeline — planned
 
-Each port should have a Sayanox-side representation and a small smoke example before the corresponding C bootstrap logic is considered unnecessary.
+The current arithmetic step lowers simple numeric binary expressions into a canonical backend expression before C emission. It is intentionally not a native CPU backend and does not yet replace the existing Stage-2 path.
+
+Each larger port should have a Sayanox-side representation and a small smoke example before the corresponding C bootstrap logic is considered unnecessary.
 
 ### Stage C — Make the Sayanox lowering pipeline authoritative
 
