@@ -13,24 +13,24 @@ echo -n selfhost/multi_demo.sa > selfhost/SX_TARGET
 clang -o out selfhost/codegen_emit.c && ./out
 ```
 
-## 2. Production bootstrap (minimal C residual)
+## 2. Production bootstrap
 
 ```sh
-chmod +x selfhost/bootstrap_production.sh
-./selfhost/bootstrap_production.sh
+make stage2
+bash selfhost/bootstrap_production.sh
 ```
 
-**Honest limit:** machine code still needs **clang** and a one-time **Stage-2 C** binary to lower Sayanox→C. There is no pure-Sayanox CPU codegen yet.
+The supported path keeps the Stage-2 C host boundary explicit while the compiler backend is being moved toward a fully self-hosted implementation.
 
-## 3. Legacy `.sh` cleanup
+## 3. Supported self-host tooling
 
-Prefer:
+- `selfhost/restore_stage2.sh` or `make stage2` — Stage-2 bootstrap.
+- `selfhost/bootstrap_production.sh` — production codegen smoke path.
+- `selfhost/bootstrap_full_selfhost.sh` — full self-host bootstrap.
+- `selfhost/bootstrap_full_language_selfhost.sh` — full-language self-host bootstrap.
+- `selfhost/sx` and documented `tools/` utilities — normal developer workflow.
 
-- `make stage2` / `make sx`
-- `selfhost/sx.sa` / `codegen.sa`
-- `bootstrap_production.sh`
-
-Old `stageN_*.sh` scripts are obsolete; remove locally if present.
+Numbered `stage*.sh` and `step*.sh` scripts have been removed. They are not supported entry points and should not be recreated for normal development.
 
 ## 4. LSP + package registry
 
