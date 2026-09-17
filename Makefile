@@ -13,6 +13,7 @@ sx: stage2
 	clang -O2 -o selfhost/sx selfhost/sx_launcher.c
 
 native:
+	base64 -d selfhost/native_aot.c.gz.b64 | gzip -d > selfhost/native_aot.c
 	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 
 test: native
