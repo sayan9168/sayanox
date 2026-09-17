@@ -1,6 +1,6 @@
-# Native backend (step 2)
+# Native backend (step 3)
 
-Linux **x86_64** ELF — **no clang** for the user program binary.
+Linux **x86_64** ELF — **no clang** for the user binary.
 
 ```sh
 make native
@@ -10,14 +10,15 @@ make native
 
 ## Supported
 
-- `hold name = <int>`
-- `show <int>` / `show name`
-- `when` / `otherwise`
-- `while` (name or int condition)
-
-AOT evaluates the subset, embeds printed text in the ELF, then `write`s it.
+| Feature | Example |
+|---------|---------|
+| `hold` / `show` ints | `hold x = 42` / `show x` |
+| Arithmetic | `hold x = 10 + 32` / `show a * b` |
+| `+ - * /` and `()` | `show (1+2)*3` |
+| Strings | `show "Hello"` |
+| `when` / `otherwise` / `while` | yes |
 
 ## Not yet
 
-Strings, arithmetic, structs/lists, live machine-code loops (full ISA).
+Structs, lists, true runtime ISA loops (still AOT-eval then embed).
 Full language: Stage-2 → C → clang.
