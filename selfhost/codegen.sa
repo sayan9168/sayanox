@@ -1,9 +1,11 @@
-// Step 4.2: hold, show, when, while, braces, assign (Sayanox)
+// Full-language self-host codegen (Sayanox)
 // Keywords: hold/show by first char; when len=4, while len>=5
+// Target path: selfhost/SX_TARGET (no newline)
 
-show "=== codegen 4.2 when/while ==="
+show 42
 
-hold path = "selfhost/when_demo.sa"
+// Target path comes from selfhost/SX_TARGET (written by bootstrap)
+hold path = read_file("selfhost/SX_TARGET")
 hold source = read_file(path)
 hold n = len(source)
 hold pos = 0
@@ -229,8 +231,8 @@ hold piece = "  return 0;\n}\n"
 hold emit = concat(emit, piece)
 write_file("selfhost/codegen_emit.c", emit)
 when ok == 1 {
-    show "codegen OK"
+    show 1
 } otherwise {
-    show "codegen FAIL"
+    show 0
 }
-show "=== 4.2 done ==="
+show 42
