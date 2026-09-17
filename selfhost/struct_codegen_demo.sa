@@ -1,0 +1,10 @@
+// Stage-2 input for the Sayanox-written struct codegen.
+struct Point {
+    x,
+    y
+}
+
+hold p = Point { 3, 4 }
+show p.x
+show p.y
+show p.x + p.y
