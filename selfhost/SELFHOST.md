@@ -1,31 +1,45 @@
-# Deep self-host (done)
+# Self-hosting
 
-## One command
+## Supported bootstrap paths
+
+Build Stage-2 directly:
 
 ```bash
-./selfhost/bootstrap_selfhost.sh
+make stage2
 ```
 
-This will:
-1. Download + complete Stage-2 template (English, use, modulo)
-2. Build `selfhost/stage2`
-3. Prove hello, sx CLI, modules, Stage-3, compiler.sa path
+Or use the supported shell bootstrap:
 
-After that, **only** use:
+```bash
+./selfhost/restore_stage2.sh
+```
+
+For the production codegen smoke path:
+
+```bash
+./selfhost/bootstrap_production.sh
+```
+
+For the full compiler bootstrap paths:
+
+```bash
+./selfhost/bootstrap_full_selfhost.sh
+./selfhost/bootstrap_full_language_selfhost.sh
+```
+
+After Stage-2 is available, normal `.sa` compilation uses:
 
 ```bash
 ./selfhost/sx any_file.sa --run
 ```
 
-No further manual steps required for normal compiling.
-
-## What is self-hosted
+## Supported compiler boundary
 
 | Layer | Role |
 |-------|------|
-| Stage-2 (`stage2_template.c` completed) | Production `.sa` -> C compiler |
-| `sx` | CLI over Stage-2 for any path |
-| Stage-3 (`compiler_boot.sa`) | Sayanox program that emits C |
-| `compiler.sa` | Stage-1 style self-host driver |
+| `build_stage2.c` / `restore_stage2.sh` | Builds the Stage-2 compiler |
+| `sx` | CLI over Stage-2 for normal `.sa` compilation |
+| `codegen.sa` | Sayanox-written code generation path |
+| `bootstrap_production.sh` | Supported production smoke/bootstrap path |
 
-Rust host is optional (richer types / export / errors).
+Numbered `stage*.sh` and `step*.sh` scripts are retired and are not part of the supported self-hosting workflow.
