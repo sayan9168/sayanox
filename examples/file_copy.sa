@@ -1,0 +1,3 @@
+hold input = read_file("input.txt")
+hold status = write_file("output.txt", input)
+show status
