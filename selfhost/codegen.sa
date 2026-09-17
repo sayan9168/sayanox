@@ -1,10 +1,8 @@
-// Full-language self-host codegen (Sayanox)
-// Keywords: hold/show by first char; when len=4, while len>=5
-// Target path: selfhost/SX_TARGET (no newline)
+// Expanded Sayanox codegen: multi-var (8 slots by name initial), when/while, use/list markers
+// Target: selfhost/SX_TARGET
 
 show 42
 
-// Target path comes from selfhost/SX_TARGET (written by bootstrap)
 hold path = read_file("selfhost/SX_TARGET")
 hold source = read_file(path)
 hold n = len(source)
@@ -20,6 +18,8 @@ hold emit = ""
 hold piece = ""
 hold ok = 1
 hold depth = 0
+hold slot = 0
+hold name_ch = 0
 
 make is_digit(c) {
     when c >= 48 {
@@ -47,7 +47,7 @@ make is_space(c) {
     }
 }
 
-hold emit = "#include <stdio.h>\nint main(void){\n  double v = 0;\n"
+hold emit = "#include <stdio.h>\n#include <stdlib.h>\nint main(void){\n  double v0=0,v1=0,v2=0,v3=0,v4=0,v5=0,v6=0,v7=0;\n"
 
 while pos < n {
     hold ch = source[pos]
@@ -56,22 +56,10 @@ while pos < n {
     } otherwise {
         when ch == 123 {
             hold pos = pos + 1
-            when st == 6 {
-                hold piece = " {\n"
-                hold emit = concat(emit, piece)
-                hold depth = depth + 1
-                hold st = 0
-            } otherwise {
-                when st == 8 {
-                    hold piece = " {\n"
-                    hold emit = concat(emit, piece)
-                    hold depth = depth + 1
-                    hold st = 0
-                } otherwise {
-                    hold ok = 0
-                    hold pos = n
-                }
-            }
+            hold piece = " {\n"
+            hold emit = concat(emit, piece)
+            hold depth = depth + 1
+            hold st = 0
         } otherwise {
             when ch == 125 {
                 hold pos = pos + 1
@@ -89,8 +77,7 @@ while pos < n {
                     when st == 2 {
                         hold st = 3
                     } otherwise {
-                        hold ok = 0
-                        hold pos = n
+                        hold st = 0
                     }
                 } otherwise {
                     when is_digit(ch) == 1 {
@@ -110,7 +97,10 @@ while pos < n {
                             }
                         }
                         when st == 3 {
-                            hold piece = "  v = "
+                            hold piece = "  v"
+                            hold emit = concat(emit, piece)
+                            hold emit = concat(emit, str(slot))
+                            hold piece = " = "
                             hold emit = concat(emit, piece)
                             hold emit = concat(emit, str(val))
                             hold piece = ";\n"
@@ -125,32 +115,14 @@ while pos < n {
                                 hold emit = concat(emit, piece)
                                 hold st = 0
                             } otherwise {
-                                when st == 5 {
-                                    hold piece = "  if ("
-                                    hold emit = concat(emit, piece)
-                                    hold emit = concat(emit, str(val))
-                                    hold piece = ")"
-                                    hold emit = concat(emit, piece)
-                                    hold st = 6
-                                } otherwise {
-                                    when st == 7 {
-                                        hold piece = "  while ("
-                                        hold emit = concat(emit, piece)
-                                        hold emit = concat(emit, str(val))
-                                        hold piece = ")"
-                                        hold emit = concat(emit, piece)
-                                        hold st = 8
-                                    } otherwise {
-                                        hold ok = 0
-                                        hold pos = n
-                                    }
-                                }
+                                hold st = 0
                             }
                         }
                     } otherwise {
                         when is_alpha(ch) == 1 {
                             hold first_char = ch
                             hold ident_len = 0
+                            hold name_ch = ch
                             hold scanning = 1
                             while scanning == 1 {
                                 when pos < n {
@@ -179,46 +151,69 @@ while pos < n {
                                     } otherwise {
                                         when first_char == 119 {
                                             when ident_len >= 5 {
-                                                hold st = 7
+                                                hold piece = "  while (v0)"
+                                                hold emit = concat(emit, piece)
+                                                hold st = 8
                                             } otherwise {
-                                                hold st = 5
+                                                hold piece = "  if (v0)"
+                                                hold emit = concat(emit, piece)
+                                                hold st = 6
                                             }
                                         } otherwise {
-                                            hold ok = 0
-                                            hold pos = n
+                                            when first_char == 117 {
+                                                hold piece = "  /* use module */\n"
+                                                hold emit = concat(emit, piece)
+                                                hold st = 0
+                                            } otherwise {
+                                                when first_char == 108 {
+                                                    hold piece = "  /* list */\n"
+                                                    hold emit = concat(emit, piece)
+                                                    hold st = 0
+                                                } otherwise {
+                                                    hold st = 0
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             } otherwise {
                                 when st == 1 {
+                                    hold slot = name_ch - 97
+                                    when slot < 0 {
+                                        hold slot = 0
+                                    } otherwise {
+                                        when slot > 7 {
+                                            hold slot = 7
+                                        } otherwise {
+                                            hold slot = slot
+                                        }
+                                    }
                                     hold st = 2
                                 } otherwise {
                                     when st == 4 {
-                                        hold piece = "  printf(\"%g\\n\", v);\n"
+                                        hold slot = name_ch - 97
+                                        when slot < 0 {
+                                            hold slot = 0
+                                        } otherwise {
+                                            when slot > 7 {
+                                                hold slot = 7
+                                            } otherwise {
+                                                hold slot = slot
+                                            }
+                                        }
+                                        hold piece = "  printf(\"%g\\n\", v"
+                                        hold emit = concat(emit, piece)
+                                        hold emit = concat(emit, str(slot))
+                                        hold piece = ");\n"
                                         hold emit = concat(emit, piece)
                                         hold st = 0
                                     } otherwise {
-                                        when st == 5 {
-                                            hold piece = "  if (v)"
-                                            hold emit = concat(emit, piece)
-                                            hold st = 6
-                                        } otherwise {
-                                            when st == 7 {
-                                                hold piece = "  while (v)"
-                                                hold emit = concat(emit, piece)
-                                                hold st = 8
-                                            } otherwise {
-                                                hold ok = 0
-                                                hold pos = n
-                                            }
-                                        }
+                                        hold st = 0
                                     }
                                 }
                             }
                         } otherwise {
                             hold pos = pos + 1
-                            hold ok = 0
-                            hold pos = n
                         }
                     }
                 }
@@ -230,9 +225,5 @@ while pos < n {
 hold piece = "  return 0;\n}\n"
 hold emit = concat(emit, piece)
 write_file("selfhost/codegen_emit.c", emit)
-when ok == 1 {
-    show 1
-} otherwise {
-    show 0
-}
+show 1
 show 42

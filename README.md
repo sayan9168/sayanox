@@ -2,24 +2,22 @@
 
 Original language (`.sa`) by **Sayan Mahata**.
 
-**No Rust. CLI logic in Sayanox (not Bash).** Host compiler is Stage-2 C → clang.
-
 ## Quick start
 
 ```sh
 git clone https://github.com/sayan9168/sayanox.git
 cd sayanox
-make stage2
-make sx
-./selfhost/sx_bin examples/hello.sa /tmp/hello 1
+./selfhost/restore_stage2.sh
+./selfhost/bootstrap_production.sh
 ```
 
-## Layout
+## Features
 
-- `selfhost/sx.sa` — CLI written in **Sayanox**
-- `selfhost/stage2` — `.sa` → `.c` (C)
-- `tools/*.sa` — tools in **Sayanox**
+- Stage-2 full grammar (C host → clang)
+- **codegen.sa** multi-var self-host path
+- `sx.sa` CLI, `sxpkg` + local **registry**, **LSP**
+- No Rust
 
-See [docs/NO_BASH.md](docs/NO_BASH.md).
+See [docs/COMPLETE.md](docs/COMPLETE.md).
 
 MIT

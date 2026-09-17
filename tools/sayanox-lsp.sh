@@ -1,74 +1,53 @@
-#!/usr/bin/env bash
-# Minimal Sayanox LSP (stdio, JSON-RPC) — no third-party runtime
-# Capabilities: initialize, completion, hover
-set -euo pipefail
-
-KEYWORDS='hold show when otherwise while make give struct use give true false'
-STDLIB='concat len push read_file write_file str upper lower trim'
-
-read_message() {
-  local content_length=0 line
+#!/bin/sh
+# Sayanox LSP — initialize, completion, hover, definition stub, diagnostics stub
+set -e
+KEYWORDS="hold show when otherwise while make give struct use true false concat len push read_file write_file str upper lower trim run arg arg_count"
+read_msg() {
+  cl=0
   while IFS= read -r line; do
-    line="${line%$'\r'}"
-    [[ -z "$line" ]] && break
-    if [[ "$line" =~ [Cc]ontent-[Ll]ength:[[:space:]]*([0-9]+) ]]; then
-      content_length="${BASH_REMATCH[1]}"
-    fi
+    line=$(printf '%s' "$line" | tr -d '\r')
+    [ -z "$line" ] && break
+    case "$line" in
+      [Cc]ontent-[Ll]ength:*) cl=$(printf '%s' "$line" | sed 's/.*: *//') ;;
+    esac
   done
-  if [[ "$content_length" -gt 0 ]]; then
-    head -c "$content_length"
-  fi
+  [ "$cl" -gt 0 ] 2>/dev/null && head -c "$cl" || true
 }
-
-send_message() {
-  local body="$1"
-  local len
-  len=$(printf '%s' "$body" | wc -c)
-  printf 'Content-Length: %s\r\n\r\n%s' "$len" "$body"
+send() {
+  body=$1
+  n=$(printf '%s' "$body" | wc -c)
+  printf 'Content-Length: %s\r\n\r\n%s' "$n" "$body"
 }
-
-completion_items() {
-  local items="[" first=1
-  for w in $KEYWORDS $STDLIB; do
-    [[ $first -eq 1 ]] || items+=","
-    first=0
-    items+=$(printf '{"label":"%s","kind":14}' "$w")
-  done
-  items+="]"
-  printf '%s' "$items"
-}
-
+items='['
+f=1
+for w in $KEYWORDS; do
+  [ "$f" = 1 ] || items="$items,"
+  f=0
+  items="$items{\"label\":\"$w\",\"kind\":14}"
+done
+items="$items]"
 while true; do
-  msg=$(read_message) || exit 0
-  [[ -z "$msg" ]] && continue
-  # extract id if present
-  id=$(printf '%s' "$msg" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+  msg=$(read_msg) || exit 0
+  [ -z "$msg" ] && continue
+  id=$(printf '%s' "$msg" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
   method=$(printf '%s' "$msg" | sed -n 's/.*"method"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-
   case "$method" in
     initialize)
-      body=$(printf '{"jsonrpc":"2.0","id":%s,"result":{"capabilities":{"textDocumentSync":1,"completionProvider":{"triggerCharacters":["."]},"hoverProvider":true},"serverInfo":{"name":"sayanox-lsp","version":"0.1.0"}}}' "${id:-1}")
-      send_message "$body"
-      ;;
-    initialized)
+      send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"hoverProvider\":true,\"definitionProvider\":true,\"diagnosticProvider\":true},\"serverInfo\":{\"name\":\"sayanox-lsp\",\"version\":\"0.2.0\"}}}"
       ;;
     textDocument/completion)
-      items=$(completion_items)
-      body=$(printf '{"jsonrpc":"2.0","id":%s,"result":{"isIncomplete":false,"items":%s}}' "${id:-1}" "$items")
-      send_message "$body"
+      send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":{\"isIncomplete\":false,\"items\":$items}}"
       ;;
     textDocument/hover)
-      body=$(printf '{"jsonrpc":"2.0","id":%s,"result":{"contents":{"kind":"markdown","value":"**Sayanox** — hold / show / when / while / make / struct"}}}' "${id:-1}")
-      send_message "$body"
+      send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":{\"contents\":{\"kind\":\"markdown\",\"value\":\"**Sayanox** hold show when while make struct use run arg\"}}}"
       ;;
-    shutdown)
-      body=$(printf '{"jsonrpc":"2.0","id":%s,"result":null}' "${id:-1}")
-      send_message "$body"
+    textDocument/definition)
+      send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":null}"
       ;;
-    exit)
-      exit 0
+    textDocument/diagnostic|textDocument/publishDiagnostics)
+      send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":{\"kind\":\"full\",\"items\":[]}}"
       ;;
-    *)
-      ;;
+    shutdown) send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":null}" ;;
+    exit) exit 0 ;;
   esac
 done
