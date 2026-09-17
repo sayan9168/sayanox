@@ -1,0 +1,25 @@
+// Sayanox bootstrap contract.
+// This module defines the supported self-host compiler pipeline as Sayanox-owned stages.
+// It is intentionally small: each stage can be replaced by a more capable implementation
+// without changing the bootstrap driver contract.
+
+make stage(name, input, output) {
+  hold stage_name = name
+  hold stage_input = input
+  hold stage_output = output
+  give stage_name
+}
+
+hold lexer_stage = stage("lexer", "source.sa", "tokens")
+hold parser_stage = stage("parser", "tokens", "ast")
+hold semantic_stage = stage("semantic", "ast", "checked_ast")
+hold ir_stage = stage("ir", "checked_ast", "sayanox_ir")
+hold lowering_stage = stage("lowering", "sayanox_ir", "lowered_ir")
+hold backend_stage = stage("backend", "lowered_ir", "native_or_bootstrap")
+
+show lexer_stage
+show parser_stage
+show semantic_stage
+show ir_stage
+show lowering_stage
+show backend_stage
