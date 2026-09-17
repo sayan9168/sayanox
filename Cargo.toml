@@ -1,34 +1,15 @@
 [package]
 name = "sayanox"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Sayan Mahata <sm6881164@gmail.com>"]
-description = "Sayanox - An original easy programming language with its own compiler"
+description = "Sayanox optional Rust host (std only). Primary compiler is Stage-2 C + sx."
 license = "MIT"
 repository = "https://github.com/sayan9168/sayanox"
 
+# Zero external crates — Rust standard library only.
+# You do NOT need Cargo for normal Sayanox use (use ./selfhost/sx).
 [dependencies]
-cranelift-codegen = { version = "0.110", optional = true }
-cranelift-frontend = { version = "0.110", optional = true }
-cranelift-module = { version = "0.110", optional = true }
-cranelift-native = { version = "0.110", optional = true }
-cranelift-jit = { version = "0.110", optional = true }
-cranelift-object = { version = "0.110", optional = true }
-target-lexicon = { version = "0.12", optional = true }
-object = { version = "0.36", optional = true }
-
-[features]
-default = []
-native = [
-    "cranelift-codegen",
-    "cranelift-frontend",
-    "cranelift-module",
-    "cranelift-native",
-    "cranelift-jit",
-    "cranelift-object",
-    "target-lexicon",
-    "object",
-]
 
 [[bin]]
 name = "sayanox"

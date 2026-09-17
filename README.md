@@ -2,7 +2,7 @@
 
 **Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-## Quick start
+## Quick start (no Rust required)
 
 ```bash
 git clone https://github.com/sayan9168/sayanox.git
@@ -11,12 +11,14 @@ cd sayanox
 ./selfhost/sx examples/hello.sa --run
 ```
 
+Needs: `bash`, `curl`, `clang` or `gcc`.
+
 ## Self-host
 
 ```bash
-./selfhost/bootstrap_full_language_selfhost.sh   # hold/show/when/while in Sayanox
-./selfhost/bootstrap_full_selfhost.sh            # Stage-3 loop
-./selfhost/bootstrap_all.sh                      # everything smoke
+./selfhost/bootstrap_full_language_selfhost.sh
+./selfhost/bootstrap_full_selfhost.sh
+./selfhost/bootstrap_all.sh
 ```
 
 ## Tools
@@ -26,13 +28,18 @@ cd sayanox
 | CLI | `./selfhost/sx file.sa --run` |
 | Format | `./tools/sxfmt.sh file.sa` |
 | Packages | `./tools/sxpkg init && ./tools/sxpkg install` |
-| Lock | `./tools/sxpkg lock` → `sx.lock` |
 | REPL | `./tools/sxrepl.sh` |
 | LSP | `./tools/sayanox-lsp.sh` |
 
-Optional native host: `cargo build --release --features native`
+## Optional Rust host
 
-See [docs/STATUS.md](docs/STATUS.md).
+Zero external crates (std only). **Not required** for normal use.
+
+```bash
+cargo build --release   # optional
+```
+
+See [docs/RUST_OPTIONAL.md](docs/RUST_OPTIONAL.md).
 
 ## License
 

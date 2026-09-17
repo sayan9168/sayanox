@@ -1,11 +1,11 @@
-# Cranelift native backend (C)
+# Cranelift status
+
+Cranelift integration was **removed** to eliminate heavy optional crates.
+
+Native executables:
 
 ```bash
-cargo build --release --features native
-./target/release/sayanox examples/hello.sa --jit
-./target/release/sayanox examples/hello.sa --native -o /tmp/hello
+./selfhost/sx program.sa -o program --run
 ```
 
-Feature flag: `native` in `Cargo.toml` (cranelift-codegen, object, …).
-
-MVP: arithmetic / control flow lowering; not full stdlib parity with C backend.
+Stage-2 emits C; `clang`/`gcc` produces the binary.

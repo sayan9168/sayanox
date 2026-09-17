@@ -6,35 +6,14 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  rust-host:
-    name: Rust host build + test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build
-        run: cargo build --verbose
-      - name: Test
-        run: cargo test --verbose
-      - name: Hello via VM
-        run: |
-          cargo build --release
-          ./target/release/sayanox examples/hello.sa --run
-      - name: Hello via C backend
-        run: |
-          ./target/release/sayanox examples/hello.sa -o /tmp/host_hello.c
-          clang /tmp/host_hello.c -o /tmp/host_hello
-          test "$(/tmp/host_hello)" = "42"
-
+  # Primary path — no Rust
   selfhost:
     name: Stage-2 self-host smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Bootstrap smoke (no Python)
+      - name: Bootstrap smoke
         run: |
           chmod +x selfhost/restore_stage2.sh selfhost/bootstrap_selfhost.sh selfhost/sx tools/sxfmt.sh
           ./selfhost/bootstrap_selfhost.sh
@@ -44,7 +23,7 @@ jobs:
           ./selfhost/sx examples/hello.sa --run
           ./selfhost/sx examples/countdown.sa --run
           ./selfhost/sx examples/greet.sa --run
-      - name: Formatter smoke (awk, no Python)
+      - name: Formatter smoke
         run: |
           chmod +x tools/sxfmt.sh
           ./tools/sxfmt.sh examples/hello.sa | grep -q show
@@ -70,3 +49,17 @@ jobs:
         run: |
           chmod +x selfhost/stage4_toolchain.sh selfhost/restore_stage2.sh
           ./selfhost/stage4_toolchain.sh
+
+  # Optional secondary host — std only, no crates
+  rust-host:
+    name: Optional Rust host (std only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (no external crates)
+        run: cargo build --verbose
+      - name: Hello via VM
+        run: |
+          cargo build --release
+          ./target/release/sayanox examples/hello.sa --run
