@@ -1,0 +1,2 @@
+use "examples/mod_lib.sa"
+show 1

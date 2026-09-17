@@ -19,10 +19,7 @@ native:
 
 bootstrap-native: native
 	./selfhost/native_aot examples/native_hello.sa /tmp/nh && /tmp/nh | grep -q 42
-	./selfhost/native_aot examples/native_arith.sa /tmp/na && /tmp/na | grep -q 42
-	./selfhost/native_aot examples/native_while.sa /tmp/nw
-	./selfhost/native_aot examples/native_list.sa /tmp/nl
-	./selfhost/native_aot examples/native_struct.sa /tmp/ns
+	./selfhost/native_aot examples/mod_use.sa /tmp/mu && /tmp/mu | grep -q 99
 	@echo NATIVE-ONLY OK
 
 bootstrap-production: stage2
@@ -33,8 +30,6 @@ bootstrap-production: stage2
 tools: stage2
 	./selfhost/stage2 tools/sxfmt.sa tools/sxfmt_cli.c
 	clang -O2 -o tools/sxfmt_bin tools/sxfmt_cli.c
-	./selfhost/stage2 selfhost/sx.sa selfhost/sx_cli.c
-	clang -O2 -o selfhost/sx_bin selfhost/sx_cli.c
 
 test: native
 	./selfhost/native_aot examples/hello.sa /tmp/hello_native

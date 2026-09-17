@@ -1,19 +1,30 @@
 # Sayanox Native Compiler
 
-Linux **x86_64** AOT — **no clang** for user `.sa` binaries.
-
 ```sh
 make native
-./selfhost/native_aot program.sa out_bin
-./out_bin
+./selfhost/native_aot program.sa out && ./out
 ```
 
-## Subset
+No clang for the user binary.
 
-- hold / show / `+ - * / %`
-- `== != < > <= >=`
-- when / otherwise / while
-- strings, lists, fields
-- **make name(a,b) { ... }** and **name(1,2)**
+## Supported (native)
 
-Full language still uses Stage-2.
+| Feature | Notes |
+|---------|--------|
+| hold/show/arith/%/compare | yes |
+| when/while/make functions | yes |
+| lists/fields | yes |
+| **use "file.sa"** | modules inlined at compile time |
+| **write_file("p","c")** | string literals, syscalls |
+| **arg_count()** | from process argc |
+| **run("cmd")** | fork/wait stub (child exits; full shell later) |
+| GC heap region | reserved 256KB in binary |
+
+## Still Stage-2 for full power
+
+- `read_file` / `concat` returning live strings in expressions
+- full `run` with `/bin/sh -c` execve
+- concurrent GC / ownership
+- all Stage-2 IR features
+
+Native path keeps growing toward Stage-2 parity.
