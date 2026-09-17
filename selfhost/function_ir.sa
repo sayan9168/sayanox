@@ -1,0 +1,57 @@
+// Sayanox-owned function IR contract.
+// Function definitions, calls, parameters and returns are explicit IR records.
+
+hold OP_FUNCTION = "function"
+hold OP_PARAM = "param"
+hold OP_LOAD_LOCAL = "load_local"
+hold OP_STORE_LOCAL = "store_local"
+hold OP_CALL = "call"
+hold OP_RETURN = "return"
+
+hold ops = []
+hold args = []
+hold types = []
+hold errors = 0
+
+make emit(op, arg, typ) {
+  push(ops, op)
+  push(args, arg)
+  push(types, typ)
+}
+
+make require(index, wanted) {
+  when list_get(ops, index) == wanted {
+    show "IR OK"
+  } otherwise {
+    hold errors = errors + 1
+    show "function IR error"
+  }
+}
+
+// Example canonical lowering for:
+// make add(a, b) { give a + b }
+// hold result = add(10, 32)
+emit(OP_FUNCTION, "add", "function")
+emit(OP_PARAM, "a", "number")
+emit(OP_PARAM, "b", "number")
+emit(OP_LOAD_LOCAL, "a", "number")
+emit(OP_LOAD_LOCAL, "b", "number")
+emit("add", "a,b", "number")
+emit(OP_RETURN, "add.result", "number")
+emit(OP_CALL, "add(10,32)", "number")
+emit(OP_STORE_LOCAL, "result", "number")
+
+require(0, OP_FUNCTION)
+require(1, OP_PARAM)
+require(2, OP_PARAM)
+require(3, OP_LOAD_LOCAL)
+require(4, OP_LOAD_LOCAL)
+require(6, OP_RETURN)
+require(7, OP_CALL)
+require(8, OP_STORE_LOCAL)
+
+when errors == 0 {
+  show "Stage-2 function IR OK"
+} otherwise {
+  show errors
+}
