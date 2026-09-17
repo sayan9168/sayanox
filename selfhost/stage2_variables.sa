@@ -1,0 +1,23 @@
+// Stage-2 variable lowering contract.
+// This file defines the language-level operations used by the compiler:
+// STORE binds a value to a local slot; LOAD reads that slot.
+// The actual machine/backend representation is supplied later.
+
+make store(slot_index, value) {
+  hold s = slot_index
+  hold v = value
+  give v
+}
+
+make load(slot_index, value) {
+  hold s = slot_index
+  hold v = value
+  give v
+}
+
+hold x_slot = 0
+hold y_slot = 1
+hold x = store(x_slot, 10)
+hold y = store(y_slot, 32)
+hold total = load(x_slot, x) + load(y_slot, y)
+show total
