@@ -1,6 +1,7 @@
 // Sayanox Stage-3 compiler entry — written in Sayanox.
 // Full self-host path: Stage-2 lowers this file to a native binary.
-// That binary scans input and emits C for show <number>.
+// The compiler now owns a small lowering boundary for primitive constants.
+// Native CPU instruction selection is intentionally NOT implemented here.
 
 show 3
 
@@ -26,6 +27,13 @@ make is_space(c) {
       }
     }
   }
+}
+
+// First Sayanox-owned lowering step: represent a numeric constant as the
+// canonical backend expression. Keeping this decision here means later
+// backends can consume the same lowered value without re-scanning source.
+make lower_number(number) {
+  give str(number)
 }
 
 while pos < source_len {
@@ -59,8 +67,9 @@ while pos < source_len {
 }
 
 when seen {
+  hold lowered_value = lower_number(value)
   hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
-  hold out = concat(out, str(value))
+  hold out = concat(out, lowered_value)
   hold out = concat(out, ");\n  return 0;\n}\n")
   hold w = write_file("selfhost/hello_out.c", out)
   show value
