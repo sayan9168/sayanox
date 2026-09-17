@@ -1,6 +1,8 @@
 // Sayanox-written C code generator.
 // Target path is read from selfhost/SX_TARGET.
-// Struct/list lowering is added before the legacy v0-v7 numeric path.
+// Struct/list lowering is kept as an existing compatibility path.
+// Primitive lowering helpers are now represented in Sayanox before emission.
+// This is incremental self-hosting work, not a native CPU backend.
 
 hold path = read_file("selfhost/SX_TARGET")
 hold source = read_file(path)
@@ -43,6 +45,13 @@ make is_space(c) {
             }
         }
     }
+}
+
+// Sayanox-owned primitive lowering boundary. The returned text is a backend
+// expression, not a CPU instruction. Future native backends can consume the
+// same lowered value without depending on the C emitter.
+make lower_number(value) {
+    give str(value)
 }
 
 // Struct lowering for the Stage-2 struct syntax used by struct_codegen_demo.sa.
@@ -129,13 +138,13 @@ when contains(source, "struct ") {
                                     hold emit = concat(emit, piece)
                                     hold emit = concat(emit, str(slot))
                                     hold emit = concat(emit, " = ")
-                                    hold emit = concat(emit, str(val))
+                                    hold emit = concat(emit, lower_number(val))
                                     hold emit = concat(emit, ";\n")
                                     hold st = 0
                                 } otherwise {
                                     when st == 4 {
                                         hold emit = concat(emit, "  printf(\"%g\\n\", (double)(")
-                                        hold emit = concat(emit, str(val))
+                                        hold emit = concat(emit, lower_number(val))
                                         hold emit = concat(emit, "));\n")
                                         hold st = 0
                                     } otherwise { hold st = 0 }
