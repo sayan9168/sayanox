@@ -1,0 +1,18 @@
+// Regression source for function declarations, parameters, calls and returns.
+
+make add(first_number, second_number) {
+  hold sum_value = first_number + second_number
+  give sum_value
+}
+
+make twice(input_value) {
+  hold doubled_value = add(input_value, input_value)
+  give doubled_value
+}
+
+hold left_value = 10
+hold right_value = 16
+hold total_value = add(left_value, right_value)
+hold answer_value = twice(total_value)
+show total_value
+show answer_value
