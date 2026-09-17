@@ -1,22 +1,59 @@
 #!/bin/sh
 # Sayanox package manager + local registry
-# sxpkg init | install | list | add | lock | registry | publish
+# sxpkg init | search | install | list | add | lock | registry | publish
 set -e
 ROOT=${SXPKG_ROOT:-.}
 MANIFEST=$ROOT/Sayanox.toml
 PKG=$ROOT/.sx/pkg
 LOCK=$ROOT/sx.lock
 REG=$ROOT/.sx/registry
+INDEX=$REG/index.txt
 cmd=${1:-}
+
+usage() {
+  echo "Usage: sxpkg <command> [args]"
+  echo "Commands:"
+  echo "  init                 Create Sayanox.toml"
+  echo "  search <name>        Search the package registry index"
+  echo "  install [name]       Install manifest dependencies or a registry package"
+  echo "  list                 List installed packages"
+  echo "  lock                 Show sx.lock"
+  echo "  add <name> <path>    Add a local path dependency"
+  echo "  registry             Rebuild and show the local registry index"
+  echo "  publish <name>       Publish a package to the local registry"
+}
+
 init() {
   [ -f "$MANIFEST" ] && echo "exists $MANIFEST" && exit 0
   printf '%s\n' '[package]' 'name = "app"' 'version = "0.1.0"' '' '[deps]' > "$MANIFEST"
   echo "sxpkg: created $MANIFEST"
 }
-install() {
+
+registry_source() {
+  if [ -n "${REGISTRY_URL:-}" ]; then
+    command -v curl >/dev/null 2>&1 || { echo "sxpkg: curl is required when REGISTRY_URL is set" >&2; exit 1; }
+    curl -fsSL "$REGISTRY_URL"
+  elif [ -f "$INDEX" ]; then
+    cat "$INDEX"
+  else
+    echo "sxpkg: registry index not found: $INDEX" >&2
+    return 1
+  fi
+}
+
+search() {
+  name=${2:-}
+  [ -n "$name" ] || { echo "sxpkg: search requires a package name" >&2; usage; exit 1; }
+  registry_source | grep -F "$name" || {
+    echo "sxpkg: no packages found for '$name'"
+    return 1
+  }
+}
+
+install_manifest() {
   [ -f "$MANIFEST" ] || { echo "no Sayanox.toml"; exit 1; }
   mkdir -p "$PKG" "$REG"
-  echo "# sx.lock" > "$LOCK"
+  [ -f "$LOCK" ] || echo "# sx.lock" > "$LOCK"
   while IFS= read -r line; do
     case "$line" in
       *path*=*)
@@ -24,6 +61,8 @@ install() {
         path=$(printf '%s' "$line" | sed 's/.*path *= *"\([^"]*\)".*/\1/')
         if [ -d "$path" ]; then
           rm -rf "$PKG/$name"; mkdir -p "$PKG/$name"; cp -R "$path"/. "$PKG/$name"/
+          grep -Fv "$name path:" "$LOCK" > "$LOCK.tmp" 2>/dev/null || true
+          mv "$LOCK.tmp" "$LOCK"
           echo "$name path:$path" >> "$LOCK"
           echo "installed $name"
         fi
@@ -38,27 +77,79 @@ install() {
   done < "$MANIFEST"
   echo "sxpkg: done"
 }
+
+install_registry() {
+  name=$2
+  [ -n "$name" ] || { echo "sxpkg: install requires a registry package name" >&2; usage; exit 1; }
+  mkdir -p "$PKG" "$REG"
+
+  if [ -n "${REGISTRY_URL:-}" ]; then
+    command -v curl >/dev/null 2>&1 || { echo "sxpkg: curl is required when REGISTRY_URL is set" >&2; exit 1; }
+    entry=$(registry_source | awk -v n="$name" '$1 == n { print; exit }')
+    [ -n "$entry" ] || { echo "sxpkg: package not found: $name" >&2; exit 1; }
+    source=$(printf '%s' "$entry" | awk '{print $2}')
+    [ -n "$source" ] || { echo "sxpkg: invalid registry entry for $name" >&2; exit 1; }
+    rm -rf "$PKG/$name"
+    mkdir -p "$PKG/$name"
+    curl -fsSL "$source" -o "$PKG/$name/package.sa"
+    ;
+  else
+    source="$REG/$name"
+    [ -d "$source" ] || { echo "sxpkg: package not found in local registry: $name" >&2; exit 1; }
+    rm -rf "$PKG/$name"
+    mkdir -p "$PKG/$name"
+    cp -R "$source"/. "$PKG/$name"/
+  fi
+
+  [ -f "$LOCK" ] || echo "# sx.lock" > "$LOCK"
+  grep -Fv "$name registry:" "$LOCK" > "$LOCK.tmp" 2>/dev/null || true
+  mv "$LOCK.tmp" "$LOCK"
+  if [ -n "${REGISTRY_URL:-}" ]; then
+    echo "$name registry:$REGISTRY_URL" >> "$LOCK"
+  else
+    echo "$name registry:local" >> "$LOCK"
+  fi
+  echo "installed $name"
+}
+
+install() {
+  if [ -n "${2:-}" ]; then
+    install_registry "$@"
+  else
+    install_manifest
+  fi
+}
+
 registry() {
   mkdir -p "$REG"
-  echo "# local registry index" > "$REG/index.txt"
-  ls -1 "$PKG" 2>/dev/null >> "$REG/index.txt" || true
-  echo "registry at $REG/index.txt"
-  cat "$REG/index.txt"
+  echo "# local registry index" > "$INDEX"
+  for dir in "$REG"/*; do
+    [ -d "$dir" ] || continue
+    basename "$dir"
+  done >> "$INDEX"
+  echo "registry at $INDEX"
+  cat "$INDEX"
 }
+
 publish() {
   name=${2:-local}
   mkdir -p "$REG/$name"
   cp -R . "$REG/$name/" 2>/dev/null || true
-  echo "$name" >> "$REG/index.txt"
+  mkdir -p "$REG"
+  touch "$INDEX"
+  grep -Fxq "$name" "$INDEX" 2>/dev/null || echo "$name" >> "$INDEX"
   echo "published $name -> $REG/$name"
 }
+
 case "$cmd" in
   init) init ;;
-  install) install ;;
+  search) search "$@" ;;
+  install) install "$@" ;;
   list) ls -1 "$PKG" 2>/dev/null || echo "(empty)" ;;
   lock) cat "$LOCK" 2>/dev/null || echo "no lock" ;;
   add) echo "$2 = { path = \"$3\" }" >> "$MANIFEST"; echo "added $2" ;;
   registry) registry ;;
   publish) publish "$@" ;;
-  *) echo "sxpkg init|install|list|lock|add|registry|publish" ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 1 ;;
 esac
