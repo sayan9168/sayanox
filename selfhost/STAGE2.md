@@ -1,26 +1,48 @@
-# Stage-2 (complete)
+# Stage-2
 
-Stage-2 is the self-host `.sa` → C compiler.
+Stage-2 is the **full** Sayanox `.sa` → C compiler (bootstrap host).
 
 ## Build
 
 ```bash
+chmod +x selfhost/restore_stage2.sh
 ./selfhost/restore_stage2.sh
-# produces selfhost/stage2 binary
 ```
 
-## Features (English messages)
+Produces `selfhost/stage2`.
 
-- show / hold / when / otherwise / while / make / give / struct
-- lists, strings, indexing, modulo `%`
-- bare assignment, type-safe hold
-- stdlib: len, concat, str, read_file, write_file, upper, lower, trim, ...
-- `use "file.sa"` multi-file expansion
-
-## Verify
+## Use
 
 ```bash
-./selfhost/bootstrap_selfhost.sh
+./selfhost/stage2 input.sa output.c
+clang -o prog output.c && ./prog
+
+# wrapper
+./selfhost/sx input.sa --run
 ```
 
-Expect: `=== STAGE-2 COMPLETE + SELF-HOST OK ===`
+## Language features
+
+| Feature | Support |
+|---------|--------|
+| `show` / `hold` | yes |
+| `when` / `otherwise` / `while` | yes |
+| `make` / `give` | yes |
+| `struct` | yes |
+| strings + `show name` | yes |
+| lists | yes |
+| arithmetic / compare / modulo | yes |
+| `use` modules | yes |
+| stdlib (`concat`, `len`, `read_file`, …) | yes |
+
+## Smoke tests
+
+```bash
+./selfhost/sx examples/hello.sa --run
+./selfhost/sx examples/countdown.sa --run
+./selfhost/sx examples/greet.sa --run
+```
+
+## Role in self-host
+
+Stage-2 lowers Sayanox-written compilers (`sayanoxc.sa`, `compiler.sa`) to native binaries. See `docs/FULL_SELFHOST.md`.
