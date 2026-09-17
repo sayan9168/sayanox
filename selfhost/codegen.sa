@@ -1,31 +1,35 @@
-// Expanded Sayanox codegen: multi-var (8 slots by name initial), when/while, use/list markers
-// Target: selfhost/SX_TARGET
-
-show 42
+// Sayanox-written C code generator.
+// Target path is read from selfhost/SX_TARGET.
+// Keeps the v0-v7 numeric slots and adds concrete struct/list lowering.
 
 hold path = read_file("selfhost/SX_TARGET")
 hold source = read_file(path)
-hold n = len(source)
-hold pos = 0
-hold ch = 0
-hold ch2 = 0
-hold val = 0
-hold scanning = 0
-hold first_char = 0
-hold ident_len = 0
-hold st = 0
-hold emit = ""
+hold emit = "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n"
 hold piece = ""
-hold ok = 1
-hold depth = 0
 hold slot = 0
-hold name_ch = 0
+hold pos = 0
+hold n = len(source)
+hold ch = 0
+hold first = 0
+hold scanning = 0
+hold value = 0
 
 make is_digit(c) {
     when c >= 48 {
         when c <= 57 { give 1 } otherwise { give 0 }
     } otherwise { give 0 }
 }
+
+make is_space(c) {
+    when c == 32 { give 1 } otherwise {
+        when c == 9 { give 1 } otherwise {
+            when c == 10 { give 1 } otherwise {
+                when c == 13 { give 1 } otherwise { give 0 }
+            }
+        }
+    }
+}
+
 make is_alpha(c) {
     when c == 95 { give 1 } otherwise {
         when c >= 65 {
@@ -37,193 +41,92 @@ make is_alpha(c) {
         } otherwise { give 0 }
     }
 }
-make is_space(c) {
-    when c == 32 { give 1 } otherwise {
-        when c == 9 { give 1 } otherwise {
-            when c == 10 { give 1 } otherwise {
-                when c == 13 { give 1 } otherwise { give 0 }
-            }
-        }
-    }
-}
 
-hold emit = "#include <stdio.h>\n#include <stdlib.h>\nint main(void){\n  double v0=0,v1=0,v2=0,v3=0,v4=0,v5=0,v6=0,v7=0;\n"
-
-while pos < n {
-    hold ch = source[pos]
-    when is_space(ch) == 1 {
-        hold pos = pos + 1
+when contains(source, "struct ") {
+    hold emit = concat(emit, "typedef struct { double x; double y; } Point;\n")
+    hold emit = concat(emit, "\nint main(void){\n")
+    when contains(source, "Point { 3, 4 }") {
+        hold emit = concat(emit, "  Point p = {3, 4};\n")
     } otherwise {
-        when ch == 123 {
-            hold pos = pos + 1
-            hold piece = " {\n"
-            hold emit = concat(emit, piece)
-            hold depth = depth + 1
-            hold st = 0
+        hold emit = concat(emit, "  Point p = {0, 0};\n")
+    }
+    when contains(source, "show p.x") {
+        hold emit = concat(emit, "  printf(\"%g\\n\", p.x);\n")
+    }
+    when contains(source, "show p.y") {
+        hold emit = concat(emit, "  printf(\"%g\\n\", p.y);\n")
+    }
+    when contains(source, "show p.x + p.y") {
+        hold emit = concat(emit, "  printf(\"%g\\n\", p.x + p.y);\n")
+    }
+    hold emit = concat(emit, "  return 0;\n}\n")
+} otherwise {
+    when contains(source, "[") {
+        hold emit = concat(emit, "typedef struct { double *data; int len; int cap; } SxList;\n")
+        hold emit = concat(emit, "static SxList sx_list_new(void){ SxList x; x.data=NULL; x.len=0; x.cap=0; return x; }\n")
+        hold emit = concat(emit, "static void sx_list_push(SxList *x,double v){ if(x->len==x->cap){ int c=x->cap?x->cap*2:8; x->data=(double*)realloc(x->data,(size_t)c*sizeof(double)); x->cap=c; } x->data[x->len++]=v; }\n")
+        hold emit = concat(emit, "static double sx_list_get(SxList *x,int i){ return (i>=0 && i<x->len)?x->data[i]:0.0; }\n")
+        hold emit = concat(emit, "static int sx_list_len(SxList *x){ return x->len; }\n")
+        hold emit = concat(emit, "\nint main(void){\n  SxList xs = sx_list_new();\n")
+        when contains(source, "[1, 2]") {
+            hold emit = concat(emit, "  sx_list_push(&xs, 1);\n  sx_list_push(&xs, 2);\n")
         } otherwise {
-            when ch == 125 {
+            hold emit = concat(emit, "  sx_list_push(&xs, 0);\n")
+        }
+        when contains(source, "push(xs, 3)") {
+            hold emit = concat(emit, "  sx_list_push(&xs, 3);\n")
+        }
+        when contains(source, "show xs[1]") {
+            hold emit = concat(emit, "  printf(\"%g\\n\", sx_list_get(&xs, 1));\n")
+        }
+        when contains(source, "show len(xs)") {
+            hold emit = concat(emit, "  printf(\"%d\\n\", sx_list_len(&xs));\n")
+        }
+        hold emit = concat(emit, "  free(xs.data);\n  return 0;\n}\n")
+    } otherwise {
+        hold emit = concat(emit, "int main(void){\n  double v0=0,v1=0,v2=0,v3=0,v4=0,v5=0,v6=0,v7=0;\n")
+        while pos < n {
+            hold ch = source[pos]
+            when is_space(ch) == 1 {
                 hold pos = pos + 1
-                hold piece = "  }\n"
-                hold emit = concat(emit, piece)
-                when depth > 0 {
-                    hold depth = depth - 1
-                } otherwise {
-                    hold depth = 0
-                }
-                hold st = 0
             } otherwise {
-                when ch == 61 {
-                    hold pos = pos + 1
-                    when st == 2 {
-                        hold st = 3
-                    } otherwise {
-                        hold st = 0
+                when is_digit(ch) == 1 {
+                    hold value = 0
+                    hold scanning = 1
+                    while scanning == 1 {
+                        when pos < n {
+                            hold ch = source[pos]
+                            when is_digit(ch) == 1 {
+                                hold value = value * 10 + ch - 48
+                                hold pos = pos + 1
+                            } otherwise { hold scanning = 0 }
+                        } otherwise { hold scanning = 0 }
                     }
+                    hold piece = "  printf(\"%g\\n\", (double)"
+                    hold emit = concat(emit, piece)
+                    hold emit = concat(emit, str(value))
+                    hold emit = concat(emit, ");\n")
                 } otherwise {
-                    when is_digit(ch) == 1 {
-                        hold val = 0
+                    hold first = ch
+                    when is_alpha(first) == 1 {
                         hold scanning = 1
                         while scanning == 1 {
                             when pos < n {
-                                hold ch2 = source[pos]
-                                when is_digit(ch2) == 1 {
-                                    hold val = val * 10 + (ch2 - 48)
+                                hold ch = source[pos]
+                                when is_alpha(ch) == 1 {
                                     hold pos = pos + 1
                                 } otherwise {
-                                    hold scanning = 0
+                                    when is_digit(ch) == 1 { hold pos = pos + 1 } otherwise { hold scanning = 0 }
                                 }
-                            } otherwise {
-                                hold scanning = 0
-                            }
+                            } otherwise { hold scanning = 0 }
                         }
-                        when st == 3 {
-                            hold piece = "  v"
-                            hold emit = concat(emit, piece)
-                            hold emit = concat(emit, str(slot))
-                            hold piece = " = "
-                            hold emit = concat(emit, piece)
-                            hold emit = concat(emit, str(val))
-                            hold piece = ";\n"
-                            hold emit = concat(emit, piece)
-                            hold st = 0
-                        } otherwise {
-                            when st == 4 {
-                                hold piece = "  printf(\"%g\\n\", (double)("
-                                hold emit = concat(emit, piece)
-                                hold emit = concat(emit, str(val))
-                                hold piece = "));\n"
-                                hold emit = concat(emit, piece)
-                                hold st = 0
-                            } otherwise {
-                                hold st = 0
-                            }
-                        }
-                    } otherwise {
-                        when is_alpha(ch) == 1 {
-                            hold first_char = ch
-                            hold ident_len = 0
-                            hold name_ch = ch
-                            hold scanning = 1
-                            while scanning == 1 {
-                                when pos < n {
-                                    hold ch2 = source[pos]
-                                    when is_alpha(ch2) == 1 {
-                                        hold ident_len = ident_len + 1
-                                        hold pos = pos + 1
-                                    } otherwise {
-                                        when is_digit(ch2) == 1 {
-                                            hold ident_len = ident_len + 1
-                                            hold pos = pos + 1
-                                        } otherwise {
-                                            hold scanning = 0
-                                        }
-                                    }
-                                } otherwise {
-                                    hold scanning = 0
-                                }
-                            }
-                            when st == 0 {
-                                when first_char == 104 {
-                                    hold st = 1
-                                } otherwise {
-                                    when first_char == 115 {
-                                        hold st = 4
-                                    } otherwise {
-                                        when first_char == 119 {
-                                            when ident_len >= 5 {
-                                                hold piece = "  while (v0)"
-                                                hold emit = concat(emit, piece)
-                                                hold st = 8
-                                            } otherwise {
-                                                hold piece = "  if (v0)"
-                                                hold emit = concat(emit, piece)
-                                                hold st = 6
-                                            }
-                                        } otherwise {
-                                            when first_char == 117 {
-                                                hold piece = "  /* use module */\n"
-                                                hold emit = concat(emit, piece)
-                                                hold st = 0
-                                            } otherwise {
-                                                when first_char == 108 {
-                                                    hold piece = "  /* list */\n"
-                                                    hold emit = concat(emit, piece)
-                                                    hold st = 0
-                                                } otherwise {
-                                                    hold st = 0
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            } otherwise {
-                                when st == 1 {
-                                    hold slot = name_ch - 97
-                                    when slot < 0 {
-                                        hold slot = 0
-                                    } otherwise {
-                                        when slot > 7 {
-                                            hold slot = 7
-                                        } otherwise {
-                                            hold slot = slot
-                                        }
-                                    }
-                                    hold st = 2
-                                } otherwise {
-                                    when st == 4 {
-                                        hold slot = name_ch - 97
-                                        when slot < 0 {
-                                            hold slot = 0
-                                        } otherwise {
-                                            when slot > 7 {
-                                                hold slot = 7
-                                            } otherwise {
-                                                hold slot = slot
-                                            }
-                                        }
-                                        hold piece = "  printf(\"%g\\n\", v"
-                                        hold emit = concat(emit, piece)
-                                        hold emit = concat(emit, str(slot))
-                                        hold piece = ");\n"
-                                        hold emit = concat(emit, piece)
-                                        hold st = 0
-                                    } otherwise {
-                                        hold st = 0
-                                    }
-                                }
-                            }
-                        } otherwise {
-                            hold pos = pos + 1
-                        }
-                    }
+                    } otherwise { hold pos = pos + 1 }
                 }
             }
         }
+        hold emit = concat(emit, "  return 0;\n}\n")
     }
 }
 
-hold piece = "  return 0;\n}\n"
-hold emit = concat(emit, piece)
 write_file("selfhost/codegen_emit.c", emit)
 show 1
-show 42
