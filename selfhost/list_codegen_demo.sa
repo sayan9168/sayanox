@@ -1,0 +1,5 @@
+// Stage-2 input for the Sayanox-written list codegen.
+hold xs = [1, 2]
+push(xs, 3)
+show xs[1]
+show len(xs)
