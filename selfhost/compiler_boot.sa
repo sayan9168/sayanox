@@ -1,5 +1,7 @@
-// Minimal compiler for Stage-3 — emits puts("42")
-show "=== compiler_boot ==="
+// Minimal Stage-3 compiler written in Sayanox.
+// Scans hello.sa for an integer and emits C that prints it.
+
+show 3
 
 hold source = read_file("selfhost/hello.sa")
 hold n = len(source)
@@ -8,44 +10,43 @@ hold nval = 0
 hold found = 0
 
 while pos < n {
-    hold ch = source[pos]
-    when ch >= 48 {
-        when ch <= 57 {
-            when found == 0 {
-                hold nval = ch - 48
-                hold pos = pos + 1
-                while pos < n {
-                    hold ch2 = source[pos]
-                    when ch2 >= 48 {
-                        when ch2 <= 57 {
-                            hold nval = nval * 10 + (ch2 - 48)
-                            hold pos = pos + 1
-                        } otherwise {
-                            hold pos = n
-                        }
-                    } otherwise {
-                        hold pos = n
-                    }
-                }
-                hold found = 1
-            } otherwise {
-                hold pos = pos + 1
-            }
-        } otherwise {
-            hold pos = pos + 1
-        }
-    } otherwise {
+  hold ch = source[pos]
+  when ch >= 48 {
+    when ch <= 57 {
+      when found == 0 {
+        hold nval = ch - 48
         hold pos = pos + 1
+        while pos < n {
+          hold ch2 = source[pos]
+          when ch2 >= 48 {
+            when ch2 <= 57 {
+              hold nval = nval * 10 + (ch2 - 48)
+              hold pos = pos + 1
+            } otherwise {
+              hold pos = n
+            }
+          } otherwise {
+            hold pos = n
+          }
+        }
+        hold found = 1
+      } otherwise {
+        hold pos = pos + 1
+      }
+    } otherwise {
+      hold pos = pos + 1
     }
+  } otherwise {
+    hold pos = pos + 1
+  }
 }
 
 show nval
 
-// Must include quotes: puts("42");
-hold part_a = "#include <stdio.h>\nint main(void){ puts(\""
+hold part_a = "#include <stdio.h>\nint main(void){ printf(\"%g\\n\", (double)"
 hold part_b = str(nval)
-hold part_c = "\"); return 0; }\n"
+hold part_c = "); return 0; }\n"
 hold out = concat(part_a, part_b)
 hold out = concat(out, part_c)
-write_file("selfhost/hello_out.c", out)
-show "compiler_boot: wrote hello_out.c"
+hold w = write_file("selfhost/hello_out.c", out)
+show 1

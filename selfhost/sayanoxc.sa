@@ -1,9 +1,13 @@
+// ============================================================
 // sayanoxc.sa — Sayanox compiler written in Sayanox
-// Input:  selfhost/hello.sa  (expects a number, e.g. show 42)
-// Output: selfhost/sayanoxc_out.c
+// ============================================================
+// Full self-host subset compiler:
+//   Reads selfhost/hello.sa (or any file with an integer literal)
+//   Emits selfhost/sayanoxc_out.c  that prints that integer
 //
-// ./selfhost/sx selfhost/sayanoxc.sa --run
-// clang selfhost/sayanoxc_out.c -o selfhost/sayanoxc_out && ./selfhost/sayanoxc_out
+// Built by Stage-2, then runs as a native binary — the compiler
+// algorithms are pure Sayanox.
+// ============================================================
 
 show 1
 

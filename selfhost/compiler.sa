@@ -1,22 +1,16 @@
-// Sayanox Stage-3 compiler entry (written in Sayanox).
-// For the focused self-hosted path see also: selfhost/sayanoxc.sa
-//
-// Pipeline:
-//   Stage-2 (C) lowers this file -> C binary
-//   That binary is a compiler written in Sayanox logic
-//
-// Supported subset here: scan + validate + emit simple C for show NUMBER
+// Sayanox Stage-3 compiler entry — written in Sayanox.
+// Full self-host path: Stage-2 lowers this file to a native binary.
+// That binary scans input and emits C for show <number>.
 
-show "=== Sayanox Stage-3 Compiler ==="
+show 3
 
 hold input_path = "selfhost/hello.sa"
 hold source = read_file(input_path)
 hold source_len = len(source)
 hold pos = 0
 hold token_count = 0
-hold number_count = 0
-hold parse_ok = 1
 hold value = 0
+hold seen = 0
 
 make is_digit(c) {
   when c >= 48 {
@@ -55,29 +49,22 @@ while pos < source_len {
           hold scanning = 0
         }
       }
-      hold number_count = number_count + 1
+      hold seen = 1
       hold token_count = token_count + 1
     } otherwise {
-      // show / other letters
-      when ch >= 97 {
-        when ch <= 122 {
-          hold pos = pos + 1
-          hold token_count = token_count + 1
-        } otherwise {
-          hold pos = pos + 1
-        }
-      } otherwise {
-        hold pos = pos + 1
-      }
+      hold pos = pos + 1
+      hold token_count = token_count + 1
     }
   }
 }
 
-hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
-hold out = concat(out, str(value))
-hold out = concat(out, ");\n  return 0;\n}\n")
-hold w = write_file("selfhost/hello_out.c", out)
-
-show "Stage3: wrote hello_out.c"
-show value
-show token_count
+when seen {
+  hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
+  hold out = concat(out, str(value))
+  hold out = concat(out, ");\n  return 0;\n}\n")
+  hold w = write_file("selfhost/hello_out.c", out)
+  show value
+  show token_count
+} otherwise {
+  show 0
+}
