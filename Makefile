@@ -1,4 +1,4 @@
-# Sayanox — supported build targets
+# Sayanox
 .PHONY: all stage2 sx native test clean
 
 all: stage2 sx
@@ -12,9 +12,8 @@ sx: stage2
 	clang -O2 -o selfhost/sx_bin selfhost/sx_cli.c
 	clang -O2 -o selfhost/sx selfhost/sx_launcher.c
 
-# Decode step-2 native AOT source if needed, then compile
 native:
-	base64 -d selfhost/native_aot.c.gz.b64 | gzip -d > selfhost/native_aot.c
+	cat selfhost/native_src/p*.txt > selfhost/native_aot.c
 	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 
 test: native
