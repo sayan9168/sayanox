@@ -1,0 +1,7 @@
+// Stage-3 compiler wiring regression.
+// Multi-character names must resolve through the language-owned symbol table.
+
+hold first_value = 10
+hold second_value = 32
+hold total_value = first_value + second_value
+show total_value
