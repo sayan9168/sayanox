@@ -1,12 +1,18 @@
-# Editor support
-
-Sayanox does not ship a language-server binary in this tree yet.
-
-Use the CLI and formatter:
+# Sayanox LSP
 
 ```bash
-./selfhost/sx file.sa --run
-./tools/sxfmt.sh file.sa
+chmod +x tools/sayanox-lsp.sh
+# Point your editor's language server command at:
+#   /path/to/sayanox/tools/sayanox-lsp.sh
 ```
 
-Syntax highlighting can use a generic text grammar for `.sa` until a dedicated LSP is added in Sayanox itself.
+## Capabilities
+
+| Method | Support |
+|--------|--------|
+| `initialize` | yes |
+| `textDocument/completion` | keywords + stdlib |
+| `textDocument/hover` | brief language tip |
+| `shutdown` / `exit` | yes |
+
+stdio JSON-RPC, no extra runtime.
