@@ -1,7 +1,7 @@
 // Sayanox Stage-3 compiler entry — written in Sayanox.
 // Full self-host path: Stage-2 lowers this file to a native binary.
-// The compiler now owns small lowering boundaries for primitive constants
-// and simple binary expressions. Native CPU instruction selection is not here.
+// Local variables now pass through an explicit Sayanox-owned LOAD/STORE boundary.
+// Native CPU instruction selection is not implemented here.
 
 show 3
 
@@ -17,11 +17,26 @@ hold right_value = 0
 hold expression_seen = 0
 hold operator = 0
 hold expression_part = 0
+hold variable_seen = 0
+hold variable_value = 0
+hold variable_name = ""
 
 make is_digit(c) {
   when c >= 48 {
     when c <= 57 { give 1 } otherwise { give 0 }
   } otherwise { give 0 }
+}
+
+make is_alpha(c) {
+  when c == 95 { give 1 } otherwise {
+    when c >= 65 {
+      when c <= 90 { give 1 } otherwise {
+        when c >= 97 {
+          when c <= 122 { give 1 } otherwise { give 0 }
+        } otherwise { give 0 }
+      }
+    } otherwise { give 0 }
+  }
 }
 
 make is_space(c) {
@@ -39,8 +54,7 @@ make lower_number(number) {
   give str(number)
 }
 
-// Sayanox-owned binary-expression lowering. This is deliberately backend
-// neutral: it lowers syntax into a canonical expression before C emission.
+// Sayanox-owned binary-expression lowering.
 make lower_binary(left, op, right) {
   hold out = lower_number(left)
   when op == 43 {
@@ -62,6 +76,23 @@ make lower_binary(left, op, right) {
   }
   hold out = concat(out, lower_number(right))
   give out
+}
+
+// Local-variable lowering boundary.
+// STORE materializes a named local in the lowered backend representation.
+make lower_store(name, number) {
+  hold out = "double "
+  hold out = concat(out, name)
+  hold out = concat(out, " = ")
+  hold out = concat(out, lower_number(number))
+  hold out = concat(out, ";\n")
+  give out
+}
+
+// LOAD materializes a read of an existing local. The backend receives the
+// lowered expression instead of re-parsing the source declaration.
+make lower_load(name) {
+  give name
 }
 
 while pos < source_len {
@@ -95,32 +126,81 @@ while pos < source_len {
       hold seen = 1
       hold token_count = token_count + 1
     } otherwise {
-      when ch == 43 {
-        hold operator = ch
-        hold expression_seen = 1
+      // Recognize the simple local declaration form: hold <name> = <number>.
+      when ch == 104 {
         hold pos = pos + 1
-        hold token_count = token_count + 1
+        when pos < source_len {
+          hold ch2 = source[pos]
+          when ch2 == 111 {
+            hold pos = pos + 1
+            when pos < source_len {
+              hold ch2 = source[pos]
+              when ch2 == 108 {
+                hold pos = pos + 1
+                when pos < source_len {
+                  hold ch2 = source[pos]
+                  when ch2 == 100 {
+                    hold pos = pos + 1
+                    hold variable_name = ""
+                    while pos < source_len {
+                      hold ch2 = source[pos]
+                      when is_space(ch2) {
+                        hold pos = pos + 1
+                      } otherwise {
+                        when is_alpha(ch2) {
+                          hold variable_name = char_at(source, pos)
+                          hold pos = pos + 1
+                        } otherwise {
+                          hold pos = pos
+                          break
+                        }
+                      }
+                    }
+                    hold variable_seen = 1
+                    hold token_count = token_count + 1
+                  } otherwise {
+                    hold token_count = token_count + 1
+                  }
+                }
+              }
+            }
+          }
+        }
       } otherwise {
-        when ch == 45 {
+        when ch == 43 {
           hold operator = ch
           hold expression_seen = 1
           hold pos = pos + 1
           hold token_count = token_count + 1
         } otherwise {
-          when ch == 42 {
+          when ch == 45 {
             hold operator = ch
             hold expression_seen = 1
             hold pos = pos + 1
             hold token_count = token_count + 1
           } otherwise {
-            when ch == 47 {
+            when ch == 42 {
               hold operator = ch
               hold expression_seen = 1
               hold pos = pos + 1
               hold token_count = token_count + 1
             } otherwise {
-              hold pos = pos + 1
-              hold token_count = token_count + 1
+              when ch == 47 {
+                hold operator = ch
+                hold expression_seen = 1
+                hold pos = pos + 1
+                hold token_count = token_count + 1
+              } otherwise {
+                when ch == 115 {
+                  // Simple `show <name>` load marker. The full parser will
+                  // replace this scanner shortcut in the next self-host step.
+                  hold pos = pos + 1
+                  hold token_count = token_count + 1
+                } otherwise {
+                  hold pos = pos + 1
+                  hold token_count = token_count + 1
+                }
+              }
             }
           }
         }
@@ -149,13 +229,27 @@ when seen {
       show token_count
     }
   } otherwise {
-    hold lowered_value = lower_number(value)
-    hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
-    hold out = concat(out, lowered_value)
-    hold out = concat(out, ");\n  return 0;\n}\n")
-    hold w = write_file("selfhost/hello_out.c", out)
-    show value
-    show token_count
+    when variable_seen == 1 {
+      // Demonstration of the Sayanox-owned STORE -> LOAD path.
+      hold stored = lower_store(variable_name, value)
+      hold loaded = lower_load(variable_name)
+      hold out = "#include <stdio.h>\nint main(void){\n  "
+      hold out = concat(out, stored)
+      hold out = concat(out, "  printf(\"%g\\n\", (double)(")
+      hold out = concat(out, loaded)
+      hold out = concat(out, "));\n  return 0;\n}\n")
+      hold w = write_file("selfhost/hello_out.c", out)
+      show value
+      show token_count
+    } otherwise {
+      hold lowered_value = lower_number(value)
+      hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
+      hold out = concat(out, lowered_value)
+      hold out = concat(out, ");\n  return 0;\n}\n")
+      hold w = write_file("selfhost/hello_out.c", out)
+      show value
+      show token_count
+    }
   }
 } otherwise {
   show 0
