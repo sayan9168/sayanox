@@ -2,7 +2,9 @@
 
 **Sayanox** — original language (`.sa`). By **Sayan Mahata**.
 
-## Quick start (no Rust required)
+**No Rust. No Cargo.** Compiler path is Stage-2 (C) + `sx`.
+
+## Quick start
 
 ```bash
 git clone https://github.com/sayan9168/sayanox.git
@@ -30,16 +32,6 @@ Needs: `bash`, `curl`, `clang` or `gcc`.
 | Packages | `./tools/sxpkg init && ./tools/sxpkg install` |
 | REPL | `./tools/sxrepl.sh` |
 | LSP | `./tools/sayanox-lsp.sh` |
-
-## Optional Rust host
-
-Zero external crates (std only). **Not required** for normal use.
-
-```bash
-cargo build --release   # optional
-```
-
-See [docs/RUST_OPTIONAL.md](docs/RUST_OPTIONAL.md).
 
 ## License
 

@@ -7,7 +7,6 @@ on:
     branches: [main]
 
 jobs:
-  # Primary path — no Rust
   selfhost:
     name: Stage-2 self-host smoke
     runs-on: ubuntu-latest
@@ -49,17 +48,3 @@ jobs:
         run: |
           chmod +x selfhost/stage4_toolchain.sh selfhost/restore_stage2.sh
           ./selfhost/stage4_toolchain.sh
-
-  # Optional secondary host — std only, no crates
-  rust-host:
-    name: Optional Rust host (std only)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build (no external crates)
-        run: cargo build --verbose
-      - name: Hello via VM
-        run: |
-          cargo build --release
-          ./target/release/sayanox examples/hello.sa --run
