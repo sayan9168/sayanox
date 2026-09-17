@@ -39,8 +39,6 @@ json_string_field() {
 }
 
 unescape_json_text() {
-  # LSP source text normally arrives as JSON string data. Handle the common
-  # escapes without requiring a non-POSIX JSON parser.
   printf '%s' "$1" | sed 's/\\n/\
 /g; s/\\r//g; s/\\t/	/g; s/\\"/"/g; s/\\\\/\\/g'
 }
@@ -73,15 +71,10 @@ is_keyword() {
   return 1
 }
 
-is_identifier() {
-  printf '%s' "$1" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'
-}
-
 looks_like_unknown_keyword() {
   word=$1
   case "$word" in
-    hol[dD]|holdd|sh[oO]w|shwo|wh[eE]n|whne|wh[iI]le|whlie|oth[eE]rwise|othwerwise|mak[eE]|mak|giv[eE]|giv|str[uU]ct|strcut|u[sS]e|ue|tru[eE]|tru|fals[eE]|flase)
-      is_keyword "$word" && return 1
+    holdd|shwo|whne|whlie|othwerwise|mak|giv|strcut|ue|tru|flase)
       return 0
       ;;
   esac
@@ -97,20 +90,14 @@ analyze_document() {
   DIAG_FIRST=1
   brace_depth=0
   line_no=0
+  scan_file="/tmp/sayanox-lsp.$$"
+  printf '%s\n' "$DOC_TEXT" > "$scan_file"
 
-  # Feed the source through a temporary FIFO-free line loop. The here-string
-  # equivalent is avoided because POSIX sh has no here-string syntax.
-  old_ifs=$IFS
-  IFS='
-'
-  printf '%s\n' "$DOC_TEXT" | while IFS= read -r raw || [ -n "$raw" ]; do
+  while IFS= read -r raw || [ -n "$raw" ]; do
     line="$raw"
     trimmed=$(line_prefix "$line")
-
-    # Strip simple // comments for the line-oriented checks.
     code_line=$(printf '%s' "$line" | sed 's|//.*$||')
 
-    # Bad token: characters which are never valid in the Sayanox source subset.
     case "$code_line" in
       *'`'*|*'@'*|*'$'*)
         badcol=$(printf '%s' "$code_line" | awk '{ for (i=1;i<=length($0);i++) { c=substr($0,i,1); if (c=="`" || c=="@" || c=="$") { print i-1; exit } } }')
@@ -118,22 +105,12 @@ analyze_document() {
         ;;
     esac
 
-    # Unknown statement keyword: only inspect the first identifier in a
-    # statement position, so ordinary user variables are not reported.
     first=$(printf '%s' "$trimmed" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p')
-    if [ -n "$first" ] && ! is_keyword "$first"; then
-      case "$first" in
-        [A-Z]*|_*|[a-z]*=*) : ;;
-        *)
-          if looks_like_unknown_keyword "$first"; then
-            col=$(printf '%s' "$line" | awk -v w="$first" '{ p=index($0,w); print p-1 }')
-            add_item "$(make_item 2 "$line_no" "${col:-0}" "unknown keyword: $first" "SX1002")"
-          fi
-          ;;
-      esac
+    if [ -n "$first" ] && looks_like_unknown_keyword "$first"; then
+      col=$(printf '%s' "$line" | awk -v w="$first" '{ p=index($0,w); print p-1 }')
+      add_item "$(make_item 2 "$line_no" "${col:-0}" "unknown keyword: $first" "SX1002")"
     fi
 
-    # hold requires an assignment operator on the same statement line.
     case "$trimmed" in
       hold[[:space:]]*)
         if ! printf '%s' "$code_line" | grep -q '='; then
@@ -143,7 +120,6 @@ analyze_document() {
         ;;
     esac
 
-    # Best-effort empty show expression detection.
     case "$trimmed" in
       show|show[[:space:]])
         col=$(printf '%s' "$line" | awk '{ p=index($0,"show"); print p-1 }')
@@ -151,7 +127,6 @@ analyze_document() {
         ;;
     esac
 
-    # Braces are tracked across lines. Ignore braces occurring after //.
     opens=$(printf '%s' "$code_line" | tr -cd '{' | wc -c | tr -d ' ')
     closes=$(printf '%s' "$code_line" | tr -cd '}' | wc -c | tr -d ' ')
     i=0
@@ -168,8 +143,9 @@ analyze_document() {
     done
 
     line_no=$((line_no + 1))
-  done
-  IFS=$old_ifs
+  done < "$scan_file"
+
+  rm -f "$scan_file"
 
   if [ "$brace_depth" -gt 0 ]; then
     last_line=$line_no
@@ -203,8 +179,7 @@ while true; do
     initialize)
       send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"hoverProvider\":true,\"definitionProvider\":true,\"diagnosticProvider\":{\"interFileDependencies\":false,\"workspaceDiagnostics\":false}},\"serverInfo\":{\"name\":\"sayanox-lsp\",\"version\":\"0.3.0\"}}}"
       ;;
-    initialized)
-      ;;
+    initialized) ;;
     textDocument/didOpen)
       DOC_URI=$(json_string_field uri "$msg")
       DOC_TEXT=$(unescape_json_text "$(json_string_field text "$msg")")
