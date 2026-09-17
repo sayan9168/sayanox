@@ -12,10 +12,9 @@ sx: stage2
 	clang -O2 -o selfhost/sx selfhost/sx_launcher.c
 
 native:
-	sed 's/d6h0tAJKGM/d6h4tAJKGM/g' selfhost/native_src/p02.gz.b64 > /tmp/p02_fix.b64
 	base64 -d selfhost/native_src/p00.gz.b64 | gzip -d > selfhost/native_aot.c
 	base64 -d selfhost/native_src/p01.gz.b64 | gzip -d >> selfhost/native_aot.c
-	base64 -d /tmp/p02_fix.b64 | gzip -d >> selfhost/native_aot.c
+	base64 -d selfhost/native_src/p02.gz.b64 | gzip -d >> selfhost/native_aot.c
 	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 
 bootstrap-native: native
@@ -42,4 +41,4 @@ test: native
 	/tmp/hello_native | grep -q 42
 
 clean:
-	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx selfhost/native_aot tools/sxfmt_bin selfhost/bootstrap_production_bin
+	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx selfhost/native_aot tools/sxfmt_bin

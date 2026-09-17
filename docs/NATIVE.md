@@ -1,20 +1,19 @@
-# Native backend
+# Sayanox Native Compiler
 
-Runtime **x86_64** (no clang for user binary).
+Linux **x86_64** AOT — **no clang** for user `.sa` binaries.
 
 ```sh
 make native
-./selfhost/native_aot examples/hello.sa out && ./out
+./selfhost/native_aot program.sa out_bin
+./out_bin
 ```
 
-## Supported
+## Subset
 
-- hold / show / arithmetic / when / while / strings
-- lists: `hold xs = [1,2,3]`, `xs[i]`, `len(xs)`, `push(xs,v)`
-- fields: `hold p.x = 3`, `show p.y`
+- hold / show / `+ - * / %`
+- `== != < > <= >=`
+- when / otherwise / while
+- strings, lists, fields
+- **make name(a,b) { ... }** and **name(1,2)**
 
-## Full language
-
-Still Stage-2 → C → clang for modules/GC/all builtins.
-
-Hex parts under `selfhost/native_src/h*.hex` assemble via `make native`.
+Full language still uses Stage-2.
