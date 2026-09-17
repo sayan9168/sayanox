@@ -1,5 +1,5 @@
-# Sayanox — core path without legacy stage scripts
-.PHONY: all stage2 sx test bootstrap-cycle clean
+# Sayanox — supported build targets
+.PHONY: all stage2 sx native test bootstrap-cycle clean
 
 all: stage2 sx
 
@@ -12,12 +12,17 @@ sx: stage2
 	clang -O2 -o selfhost/sx_bin selfhost/sx_cli.c
 	clang -O2 -o selfhost/sx selfhost/sx_launcher.c
 
-# Canonical Step-1 self-host compiler bootstrap cycle.
+# Native AOT MVP (Linux x86_64 ELF, no clang for the .sa output binary)
+native:
+	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
+
 bootstrap-cycle:
 	bash selfhost/bootstrap_cycle.sh
 
-test: sx
+test: sx native
 	./selfhost/sx_bin examples/hello.sa /tmp/sx_hello 1
+	./selfhost/native_aot examples/hello.sa /tmp/hello_native
+	/tmp/hello_native | grep -q 42
 
 clean:
-	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx selfhost/sx_cli.c
+	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx selfhost/sx_cli.c selfhost/native_aot

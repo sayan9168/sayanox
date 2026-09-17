@@ -2,19 +2,18 @@
 
 | Item | State |
 |------|--------|
-| Multi-var codegen.sa | done (8 slots) |
-| Struct/list codegen demos | done (`codegen_struct_list_test.sh`) |
-| Production bootstrap | supported |
-| Stage-2 build | fixed PLACEHOLDER via `build_stage2.c` |
-| Full self-host / language bootstrap | supported scripts |
-| LSP diagnostics | brace / hold / typo scan |
-| Package registry | local + `search` / `REGISTRY_URL` |
-| Zero C host | **not possible yet** |
-| Legacy stage/step scripts | removed |
+| Multi-var / struct / list codegen | demos + tests |
+| Production / self-host scripts | supported |
+| Stage-2 PLACEHOLDER fix | `build_stage2.c` |
+| **Native AOT MVP** | **Linux x86_64 `show <int>` — no clang for output** |
+| LSP / sxpkg | supported |
+| Full native (all features) | **not yet** |
+| Zero C for bootstrap | not yet |
 
 ```sh
 make stage2
-bash selfhost/bootstrap_production.sh
-bash selfhost/codegen_struct_list_test.sh
-./selfhost/sx examples/hello.sa --run
+make native
+./selfhost/native_aot examples/hello.sa /tmp/hello_native && /tmp/hello_native
 ```
+
+See [docs/NATIVE.md](NATIVE.md).
