@@ -12,7 +12,7 @@ sx: stage2
 	clang -O2 -o selfhost/sx selfhost/sx_launcher.c
 
 native:
-	python3 -c "from pathlib import Path;d=bytes.fromhex(''.join(p.read_text() for p in sorted(Path('selfhost/native_src').glob('h*.hex'))));Path('selfhost/native_aot.c').write_bytes(d)"
+	cat selfhost/native_src/h*.hex | tr -d '\n' | perl -pe 's/([0-9a-fA-F]{2})/chr(hex($$1))/ge' > selfhost/native_aot.c
 	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 
 test: native

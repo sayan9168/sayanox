@@ -1,20 +1,20 @@
-# Native backend (runtime x86_64)
+# Native backend
+
+Runtime **x86_64** (no clang for user binary).
 
 ```sh
 make native
-./selfhost/native_aot input.sa out_bin
-./out_bin
+./selfhost/native_aot examples/hello.sa out && ./out
 ```
 
-No clang for the user binary.
+## Supported
 
-## Supported (runtime machine code)
-
-- `hold` / `show` / arithmetic / `when` / `while`
-- `show "string"`
-- **lists:** `hold xs = [1, 2, 3]`, `show xs[i]`, `show len(xs)`, `push(xs, v)`
-- **struct fields:** `hold p.x = 3`, `show p.y` (slot fold)
+- hold / show / arithmetic / when / while / strings
+- lists: `hold xs = [1,2,3]`, `xs[i]`, `len(xs)`, `push(xs,v)`
+- fields: `hold p.x = 3`, `show p.y`
 
 ## Full language
 
-Modules, GC, all builtins, full struct types → **Stage-2 → C → clang**.
+Still Stage-2 → C → clang for modules/GC/all builtins.
+
+Hex parts under `selfhost/native_src/h*.hex` assemble via `make native`.
