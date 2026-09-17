@@ -1,12 +1,12 @@
-# Native backend (MVP)
+# Native backend
 
-Linux **x86_64** ELF writer — **does not call clang** to produce the program binary.
+Linux **x86_64** ELF — **no clang** for the user binary.
 
 ## Build
 
 ```sh
-clang -O2 -o selfhost/native_aot selfhost/native_aot.c
-# or: make native
+make native
+# clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 ```
 
 ## Use
@@ -14,18 +14,25 @@ clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 ```sh
 ./selfhost/native_aot examples/hello.sa hello_native
 ./hello_native
-# 42
 ```
 
-## Supported (MVP)
+## Step 2 support
 
-- One or more `show <integer>` lines
-- Output is a static ELF that `write`s the numbers and exits
+| Feature | Status |
+|---------|--------|
+| `show <int>` | yes |
+| `hold name = <int>` | yes (8 slots by name) |
+| `show name` | yes |
+| `when name/int { }` | yes |
+| `otherwise { }` | yes |
+| `while name { }` | yes (max 10000 iters) |
+
+Evaluation is done at AOT time; the ELF embeds the printed output and `write`s it.
 
 ## Not yet
 
-- `hold`, loops, strings, structs, lists
-- non-x86_64 / non-Linux
-- Full Stage-2 parity
+- Strings, structs, lists, arithmetic expressions
+- True runtime machine code for loops (currently static eval)
+- non-Linux / non-x86_64
 
-This is the first step toward “no clang for user programs.” The Stage-2 → C path remains the full-language path.
+Full-language path remains Stage-2 → C → clang.

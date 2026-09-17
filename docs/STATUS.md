@@ -2,18 +2,14 @@
 
 | Item | State |
 |------|--------|
-| Multi-var / struct / list codegen | demos + tests |
-| Production / self-host scripts | supported |
-| Stage-2 PLACEHOLDER fix | `build_stage2.c` |
-| **Native AOT MVP** | **Linux x86_64 `show <int>` — no clang for output** |
+| Stage-2 full path | supported |
+| codegen.sa multi-var / struct / list demos | supported |
+| **Native AOT step 2** | **hold / show / when / while — no clang for binary** |
 | LSP / sxpkg | supported |
-| Full native (all features) | **not yet** |
-| Zero C for bootstrap | not yet |
+| Full native (all features + live codegen) | later |
+| Zero C bootstrap | later |
 
 ```sh
-make stage2
 make native
-./selfhost/native_aot examples/hello.sa /tmp/hello_native && /tmp/hello_native
+./selfhost/native_aot examples/hello.sa /tmp/n && /tmp/n
 ```
-
-See [docs/NATIVE.md](NATIVE.md).
