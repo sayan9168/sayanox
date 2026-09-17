@@ -1,0 +1,3 @@
+hold xs = [1, 2, 3]
+show xs[1]
+show len(xs)

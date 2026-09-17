@@ -1,5 +1,4 @@
-// Sayanox formatter (copy-through; extend later)
-// Args: input.sa [output.sa]
+// Sayanox formatter (copy-through)
 hold n = arg_count()
 hold in = "examples/hello.sa"
 when n >= 2 {

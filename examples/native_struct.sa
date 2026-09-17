@@ -1,0 +1,4 @@
+hold p.x = 3
+hold p.y = 4
+show p.x
+show p.y

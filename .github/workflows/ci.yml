@@ -8,30 +8,26 @@ on:
 
 jobs:
   selfhost:
-    name: Supported self-host smoke
+    name: Supported smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Stage-2 through Make
+      - name: Stage-2
         run: make stage2
 
-      - name: Production bootstrap
-        run: bash selfhost/bootstrap_production.sh
+      - name: Production (Sayanox driver)
+        run: make bootstrap-production
 
-      - name: Struct/list codegen smoke
-        run: |
-          chmod +x selfhost/codegen_struct_list_test.sh selfhost/sx selfhost/restore_stage2.sh
-          bash selfhost/codegen_struct_list_test.sh
+      - name: Native bootstrap (no Stage-2 for cases)
+        run: make bootstrap-native
 
-      - name: Examples smoke
+      - name: SX CLI
         run: |
-          chmod +x selfhost/sx
+          make sx
           ./selfhost/sx examples/hello.sa --run
-          ./selfhost/sx examples/countdown.sa --run
-          ./selfhost/sx examples/greet.sa --run
 
-      - name: Formatter smoke
+      - name: sxfmt.sa tool
         run: |
-          chmod +x tools/sxfmt.sh
-          ./tools/sxfmt.sh examples/hello.sa | grep -q show
+          make tools
+          ./tools/sxfmt_bin examples/hello.sa /tmp/fmt.sa

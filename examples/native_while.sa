@@ -1,0 +1,5 @@
+hold i = 3
+while i {
+  show i
+  hold i = i - 1
+}

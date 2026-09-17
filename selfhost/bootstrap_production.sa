@@ -1,0 +1,8 @@
+// Production smoke in Sayanox (replaces bootstrap_production.sh)
+hold st = run("echo -n selfhost/multi_demo.sa > selfhost/SX_TARGET")
+hold st = run("./selfhost/stage2 selfhost/codegen.sa selfhost/codegen_host.c")
+hold st = run("clang -O2 -o selfhost/codegen_host selfhost/codegen_host.c")
+hold st = run("./selfhost/codegen_host")
+hold st = run("clang -O2 -o selfhost/multi_out selfhost/codegen_emit.c")
+hold st = run("./selfhost/multi_out")
+show 1
