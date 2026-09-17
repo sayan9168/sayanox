@@ -1,12 +1,9 @@
-# Sayanox toolchain
+# Toolchain (no Bash core)
 
-Build and run with **shell + C + optional Rust host** only.
-
-```bash
-./selfhost/restore_stage2.sh
-./selfhost/sx examples/hello.sa --run
-./tools/sxfmt.sh examples/hello.sa
-./tools/sxpkg init
+```
+make stage2   # C: build_stage2.c → stage2
+make sx       # Sayanox: sx.sa → sx_bin
+./selfhost/sx_bin file.sa out 1
 ```
 
-No third-party scripting languages are required for the core path.
+Builtins in Stage-2 for tooling: `run`, `arg`, `arg_count`.
