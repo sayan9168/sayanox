@@ -1,6 +1,7 @@
-# Native backend (step 3)
+# Native backend (step 4 — runtime machine code)
 
-Linux **x86_64** ELF — **no clang** for the user binary.
+Linux **x86_64** ELF with **real runtime instructions** (not only AOT-eval embed).
+**No clang** is used to build the user `.sa` binary.
 
 ```sh
 make native
@@ -8,17 +9,21 @@ make native
 ./hello_native
 ```
 
-## Supported
+## Runtime-supported
 
-| Feature | Example |
-|---------|---------|
-| `hold` / `show` ints | `hold x = 42` / `show x` |
-| Arithmetic | `hold x = 10 + 32` / `show a * b` |
-| `+ - * /` and `()` | `show (1+2)*3` |
-| Strings | `show "Hello"` |
-| `when` / `otherwise` / `while` | yes |
+| Feature | Notes |
+|---------|--------|
+| `hold` / `show` | 8 int slots by name initial |
+| `+ - * /` `()` | live x86 |
+| `when` / `otherwise` / `while` | real jumps |
+| `show "string"` | write syscall |
 
-## Not yet
+## Not full Stage-2 parity
 
-Structs, lists, true runtime ISA loops (still AOT-eval then embed).
-Full language: Stage-2 → C → clang.
+| Feature | Path |
+|---------|------|
+| Full struct / list / GC / modules | **Stage-2 → C → clang** |
+| All builtins (`read_file`, …) | Stage-2 |
+| Non-x86_64 / non-Linux | not yet |
+
+Honest goal: native subset grows; full language remains Stage-2 until ISA coverage is complete.

@@ -2,12 +2,10 @@
 
 | Item | State |
 |------|--------|
-| Stage-2 full path | supported |
-| codegen.sa multi-var / struct / list demos | supported |
-| **Native AOT step 2** | **hold / show / when / while — no clang for binary** |
-| LSP / sxpkg | supported |
-| Full native (all features + live codegen) | later |
-| Zero C bootstrap | later |
+| Stage-2 full language | supported |
+| **Native runtime x86_64** | **hold/show/when/while/arith/strings** |
+| Full Stage-2 parity on native | **not yet** (use Stage-2) |
+| struct/list on native | limited / deferred to Stage-2 |
 
 ```sh
 make native
