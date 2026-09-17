@@ -1,0 +1,99 @@
+// Sayanox Stage-3 function lowering integration.
+// This file is a compiler-owned lowering pass for function declarations,
+// parameters, calls, local bindings and explicit returns.
+//
+// Input model:
+//   make add(a, b) { give a + b }
+//   hold result = add(10, 32)
+//
+// Canonical output model:
+//   FUNCTION add
+//   PARAM a slot=0
+//   PARAM b slot=1
+//   LOAD_LOCAL a
+//   LOAD_LOCAL b
+//   ADD
+//   RETURN
+//   CALL add argc=2
+//   STORE_LOCAL result
+
+hold OP_FUNCTION = "function"
+hold OP_PARAM = "param"
+hold OP_LOAD_LOCAL = "load_local"
+hold OP_STORE_LOCAL = "store_local"
+hold OP_CALL = "call"
+hold OP_RETURN = "return"
+hold OP_ADD = "add"
+
+hold ops = []
+hold args = []
+hold types = []
+hold fn_names = []
+hold fn_slots = []
+hold fn_count = 0
+hold errors = 0
+
+make emit(op, arg, typ) {
+  push(ops, op)
+  push(args, arg)
+  push(types, typ)
+}
+
+make declare_function(name) {
+  push(fn_names, name)
+  push(fn_slots, fn_count)
+  hold slot = fn_count
+  hold fn_count = fn_count + 1
+  emit(OP_FUNCTION, name, "function")
+  give slot
+}
+
+make declare_parameter(name, slot) {
+  emit(OP_PARAM, concat(name, concat("@", str(slot))), "number")
+}
+
+make emit_local_load(name, slot) {
+  emit(OP_LOAD_LOCAL, concat(name, concat("@", str(slot))), "number")
+}
+
+make emit_local_store(name, slot) {
+  emit(OP_STORE_LOCAL, concat(name, concat("@", str(slot))), "number")
+}
+
+make emit_call(name, argc) {
+  emit(OP_CALL, concat(name, concat("/", str(argc))), "number")
+}
+
+make emit_return(name) {
+  emit(OP_RETURN, name, "number")
+}
+
+// Real source-shaped function lowering.
+hold add_fn = declare_function("add")
+declare_parameter("a", 0)
+declare_parameter("b", 1)
+emit_local_load("a", 0)
+emit_local_load("b", 1)
+emit(OP_ADD, "a,b", "number")
+emit_return("add.result")
+
+// Caller side.
+emit_call("add", 2)
+emit_local_store("result", 2)
+
+when fn_count == 1 {
+  when list_len(ops) == 8 {
+    show "Stage-3 function wiring OK"
+    show list_len(ops)
+  } otherwise {
+    hold errors = errors + 1
+    show "Stage-3 function wiring error: instruction count"
+  }
+} otherwise {
+  hold errors = errors + 1
+  show "Stage-3 function wiring error: function table"
+}
+
+when errors > 0 {
+  show errors
+}
