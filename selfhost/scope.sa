@@ -1,0 +1,22 @@
+// Sayanox Stage-2 scope model.
+// The bootstrap compiler uses this model as the language-owned representation
+// for lexical locals. Backend-specific storage is deliberately kept outside it.
+
+make scope_depth(parent_depth) {
+  give parent_depth + 1
+}
+
+make slot(index) {
+  give index
+}
+
+hold global_depth = 0
+hold function_depth = scope_depth(global_depth)
+hold local_slot_0 = slot(0)
+hold local_slot_1 = slot(1)
+hold local_slot_2 = slot(2)
+
+show function_depth
+show local_slot_0
+show local_slot_1
+show local_slot_2
