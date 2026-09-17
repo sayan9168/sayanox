@@ -1,25 +1,24 @@
 // Sayanox Stage-3 compiler entry — written in Sayanox.
-// Full self-host path: Stage-2 lowers this file to a native binary.
-// Local variables now pass through an explicit Sayanox-owned LOAD/STORE boundary.
-// Native CPU instruction selection is not implemented here.
-
-show 3
+// Stage-2 is only the bootstrap host. This compiler owns the Stage-3 pipeline:
+// source -> lexer boundary -> symbols/scopes -> checked local operations -> IR -> C backend.
+// The native backend remains the next bootstrap milestone.
 
 hold input_path = "selfhost/hello.sa"
 hold source = read_file(input_path)
 hold source_len = len(source)
 hold pos = 0
-hold token_count = 0
-hold value = 0
-hold seen = 0
-hold left_value = 0
-hold right_value = 0
-hold expression_seen = 0
-hold operator = 0
-hold expression_part = 0
-hold variable_seen = 0
-hold variable_value = 0
-hold variable_name = ""
+hold line = 1
+hold errors = 0
+hold current_depth = 0
+hold next_slot = 0
+
+// ------------------------------------------------------------
+// Language-owned symbol table
+// ------------------------------------------------------------
+hold symbol_names = []
+hold symbol_slots = []
+hold symbol_depths = []
+hold symbol_count = 0
 
 make is_digit(c) {
   when c >= 48 {
@@ -39,6 +38,10 @@ make is_alpha(c) {
   }
 }
 
+make is_alnum(c) {
+  when is_alpha(c) == 1 { give 1 } otherwise { give is_digit(c) }
+}
+
 make is_space(c) {
   when c == 32 { give 1 } otherwise {
     when c == 9 { give 1 } otherwise {
@@ -49,65 +52,153 @@ make is_space(c) {
   }
 }
 
-// Sayanox-owned primitive lowering: canonical backend expression.
-make lower_number(number) {
-  give str(number)
+make enter_scope() {
+  hold current_depth = current_depth + 1
+  give current_depth
 }
 
-// Sayanox-owned binary-expression lowering.
-make lower_binary(left, op, right) {
-  hold out = lower_number(left)
-  when op == 43 {
-    hold out = concat(out, " + ")
-  } otherwise {
-    when op == 45 {
-      hold out = concat(out, " - ")
-    } otherwise {
-      when op == 42 {
-        hold out = concat(out, " * ")
-      } otherwise {
-        when op == 47 {
-          hold out = concat(out, " / ")
-        } otherwise {
-          hold out = concat(out, " ? ")
-        }
+make leave_scope() {
+  when current_depth > 0 { hold current_depth = current_depth - 1 }
+  give current_depth
+}
+
+make declare_symbol(name) {
+  hold i = symbol_count - 1
+  while i >= 0 {
+    when list_get(symbol_names, i) == name {
+      when list_get(symbol_depths, i) == current_depth {
+        give -1
       }
     }
+    hold i = i - 1
   }
-  hold out = concat(out, lower_number(right))
-  give out
+  hold slot = next_slot
+  hold next_slot = next_slot + 1
+  push(symbol_names, name)
+  push(symbol_slots, slot)
+  push(symbol_depths, current_depth)
+  hold symbol_count = symbol_count + 1
+  give slot
 }
 
-// Local-variable lowering boundary.
-// STORE materializes a named local in the lowered backend representation.
-make lower_store(name, number) {
-  hold out = "double "
-  hold out = concat(out, name)
-  hold out = concat(out, " = ")
-  hold out = concat(out, lower_number(number))
-  hold out = concat(out, ";\n")
-  give out
+make lookup_symbol(name) {
+  hold i = symbol_count - 1
+  while i >= 0 {
+    when list_get(symbol_names, i) == name {
+      give list_get(symbol_slots, i)
+    }
+    hold i = i - 1
+  }
+  give -1
 }
 
-// LOAD materializes a read of an existing local. The backend receives the
-// lowered expression instead of re-parsing the source declaration.
-make lower_load(name) {
+// ------------------------------------------------------------
+// Language-owned IR
+// ------------------------------------------------------------
+hold ir_ops = []
+hold ir_names = []
+hold ir_values = []
+hold ir_count = 0
+
+make emit_local_store(name, value) {
+  push(ir_ops, "store")
+  push(ir_names, name)
+  push(ir_values, value)
+  hold ir_count = ir_count + 1
+}
+
+make emit_local_load(name) {
+  hold slot = lookup_symbol(name)
+  when slot < 0 {
+    hold errors = errors + 1
+    give -1
+  }
+  push(ir_ops, "load")
+  push(ir_names, name)
+  push(ir_values, str(slot))
+  hold ir_count = ir_count + 1
+  give slot
+}
+
+make emit_show(value) {
+  push(ir_ops, "show")
+  push(ir_names, "")
+  push(ir_values, value)
+  hold ir_count = ir_count + 1
+}
+
+// ------------------------------------------------------------
+// Scanner helpers
+// ------------------------------------------------------------
+make skip_spaces() {
+  while pos < source_len {
+    hold c = char_code(source, pos)
+    when is_space(c) {
+      hold pos = pos + 1
+    } otherwise {
+      give pos
+    }
+  }
+  give pos
+}
+
+make read_identifier() {
+  hold name = ""
+  hold started = 0
+  while pos < source_len {
+    hold c = char_code(source, pos)
+    when is_alnum(c) {
+      hold name = concat(name, char_at(source, pos))
+      hold started = 1
+      hold pos = pos + 1
+    } otherwise {
+      give name
+    }
+  }
   give name
 }
 
+make read_until_line_end() {
+  hold text = ""
+  while pos < source_len {
+    hold c = char_code(source, pos)
+    when c == 10 {
+      give text
+    } otherwise {
+      hold text = concat(text, char_at(source, pos))
+      hold pos = pos + 1
+    }
+  }
+  give text
+}
+
+// Remove leading/trailing whitespace from a compiler-owned expression.
+make trim_expr(text) {
+  hold out = text
+  // The runtime trim operation is the canonical string boundary.
+  hold out = trim(out)
+  give out
+}
+
+// ------------------------------------------------------------
+// Stage-3 source -> symbol/IR wiring
+// ------------------------------------------------------------
 while pos < source_len {
-  hold ch = source[pos]
-  when is_space(ch) {
-    hold pos = pos + 1
+  skip_spaces()
+  when pos >= source_len {
+    hold pos = source_len
   } otherwise {
-    when is_digit(ch) {
-      hold value = 0
+    hold ch = char_code(source, pos)
+
+    // `hold <identifier> = <expression>` becomes STORE.
+    when ch == 104 {
+      hold keyword = ""
       hold scanning = 1
       while scanning {
         when pos < source_len {
-          hold ch2 = source[pos]
-          when is_digit(ch2) {
-            hold value = value * 10 + (ch2 - 48)
+          hold c = char_code(source, pos)
+          when is_alpha(c) {
+            hold keyword = concat(keyword, char_at(source, pos))
             hold pos = pos + 1
           } otherwise {
             hold scanning = 0
@@ -116,92 +207,80 @@ while pos < source_len {
           hold scanning = 0
         }
       }
-      when expression_part == 0 {
-        hold left_value = value
-        hold expression_part = 1
-      } otherwise {
-        hold right_value = value
-        hold expression_part = 2
-      }
-      hold seen = 1
-      hold token_count = token_count + 1
-    } otherwise {
-      // Recognize the simple local declaration form: hold <name> = <number>.
-      when ch == 104 {
-        hold pos = pos + 1
-        when pos < source_len {
-          hold ch2 = source[pos]
-          when ch2 == 111 {
-            hold pos = pos + 1
-            when pos < source_len {
-              hold ch2 = source[pos]
-              when ch2 == 108 {
-                hold pos = pos + 1
-                when pos < source_len {
-                  hold ch2 = source[pos]
-                  when ch2 == 100 {
-                    hold pos = pos + 1
-                    hold variable_name = ""
-                    while pos < source_len {
-                      hold ch2 = source[pos]
-                      when is_space(ch2) {
-                        hold pos = pos + 1
-                      } otherwise {
-                        when is_alpha(ch2) {
-                          hold variable_name = char_at(source, pos)
-                          hold pos = pos + 1
-                        } otherwise {
-                          hold pos = pos
-                          break
-                        }
-                      }
-                    }
-                    hold variable_seen = 1
-                    hold token_count = token_count + 1
-                  } otherwise {
-                    hold token_count = token_count + 1
-                  }
-                }
+
+      when keyword == "hold" {
+        skip_spaces()
+        hold name = read_identifier()
+        when name == "" {
+          hold errors = errors + 1
+        } otherwise {
+          skip_spaces()
+          when pos < source_len {
+            hold eq = char_code(source, pos)
+            when eq == 61 {
+              hold pos = pos + 1
+              skip_spaces()
+              hold expr = trim_expr(read_until_line_end())
+              hold slot = declare_symbol(name)
+              when slot < 0 {
+                hold errors = errors + 1
+              } otherwise {
+                emit_local_store(name, expr)
               }
+            } otherwise {
+              hold errors = errors + 1
             }
+          } otherwise {
+            hold errors = errors + 1
           }
         }
       } otherwise {
-        when ch == 43 {
-          hold operator = ch
-          hold expression_seen = 1
-          hold pos = pos + 1
-          hold token_count = token_count + 1
-        } otherwise {
-          when ch == 45 {
-            hold operator = ch
-            hold expression_seen = 1
-            hold pos = pos + 1
-            hold token_count = token_count + 1
-          } otherwise {
-            when ch == 42 {
-              hold operator = ch
-              hold expression_seen = 1
+        hold pos = pos + 1
+      }
+    } otherwise {
+      // `show <expression>` becomes SHOW after validating referenced locals.
+      when ch == 115 {
+        hold keyword = ""
+        hold scanning = 1
+        while scanning {
+          when pos < source_len {
+            hold c = char_code(source, pos)
+            when is_alpha(c) {
+              hold keyword = concat(keyword, char_at(source, pos))
               hold pos = pos + 1
-              hold token_count = token_count + 1
             } otherwise {
-              when ch == 47 {
-                hold operator = ch
-                hold expression_seen = 1
-                hold pos = pos + 1
-                hold token_count = token_count + 1
-              } otherwise {
-                when ch == 115 {
-                  // Simple `show <name>` load marker. The full parser will
-                  // replace this scanner shortcut in the next self-host step.
-                  hold pos = pos + 1
-                  hold token_count = token_count + 1
-                } otherwise {
-                  hold pos = pos + 1
-                  hold token_count = token_count + 1
-                }
-              }
+              hold scanning = 0
             }
+          } otherwise {
+            hold scanning = 0
+          }
+        }
+        when keyword == "show" {
+          skip_spaces()
+          hold expr = trim_expr(read_until_line_end())
+          when expr == "" {
+            hold errors = errors + 1
+          } otherwise {
+            // Identifier expressions are resolved through the symbol table.
+            when is_alpha(char_code(expr, 0)) {
+              hold slot = emit_local_load(expr)
+            }
+            emit_show(expr)
+          }
+        } otherwise {
+          hold pos = pos + 1
+        }
+      } otherwise {
+        // Braces are scope boundaries for the Stage-3 symbol environment.
+        when ch == 123 {
+          enter_scope()
+          hold pos = pos + 1
+        } otherwise {
+          when ch == 125 {
+            leave_scope()
+            hold pos = pos + 1
+          } otherwise {
+            hold pos = pos + 1
           }
         }
       }
@@ -209,48 +288,37 @@ while pos < source_len {
   }
 }
 
-when seen {
-  when expression_seen == 1 {
-    when expression_part == 2 {
-      hold lowered_value = lower_binary(left_value, operator, right_value)
-      hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)("
-      hold out = concat(out, lowered_value)
-      hold out = concat(out, "));\n  return 0;\n}\n")
-      hold w = write_file("selfhost/hello_out.c", out)
-      show right_value
-      show token_count
-    } otherwise {
-      hold lowered_value = lower_number(value)
-      hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
-      hold out = concat(out, lowered_value)
-      hold out = concat(out, ");\n  return 0;\n}\n")
-      hold w = write_file("selfhost/hello_out.c", out)
-      show value
-      show token_count
-    }
+// ------------------------------------------------------------
+// IR -> C backend
+// ------------------------------------------------------------
+hold out = "#include <stdio.h>\nint main(void){\n"
+hold i = 0
+while i < ir_count {
+  hold op = list_get(ir_ops, i)
+  hold name = list_get(ir_names, i)
+  hold value = list_get(ir_values, i)
+
+  when op == "store" {
+    hold out = concat(out, "  double ")
+    hold out = concat(out, name)
+    hold out = concat(out, " = ")
+    hold out = concat(out, value)
+    hold out = concat(out, ";\n")
   } otherwise {
-    when variable_seen == 1 {
-      // Demonstration of the Sayanox-owned STORE -> LOAD path.
-      hold stored = lower_store(variable_name, value)
-      hold loaded = lower_load(variable_name)
-      hold out = "#include <stdio.h>\nint main(void){\n  "
-      hold out = concat(out, stored)
+    when op == "show" {
       hold out = concat(out, "  printf(\"%g\\n\", (double)(")
-      hold out = concat(out, loaded)
-      hold out = concat(out, "));\n  return 0;\n}\n")
-      hold w = write_file("selfhost/hello_out.c", out)
-      show value
-      show token_count
-    } otherwise {
-      hold lowered_value = lower_number(value)
-      hold out = "#include <stdio.h>\nint main(void){\n  printf(\"%g\\n\", (double)"
-      hold out = concat(out, lowered_value)
-      hold out = concat(out, ");\n  return 0;\n}\n")
-      hold w = write_file("selfhost/hello_out.c", out)
-      show value
-      show token_count
+      hold out = concat(out, value)
+      hold out = concat(out, "));\n")
     }
   }
+  hold i = i + 1
+}
+hold out = concat(out, "  return 0;\n}\n")
+
+when errors == 0 {
+  hold written = write_file("selfhost/hello_out.c", out)
+  show ir_count
+  show symbol_count
 } otherwise {
-  show 0
+  show errors
 }
