@@ -1,4 +1,4 @@
-.PHONY: all stage2 sx native test clean
+.PHONY: all stage2 sx native test bootstrap-native clean
 
 all: stage2 sx
 
@@ -21,6 +21,11 @@ native:
 test: native
 	./selfhost/native_aot examples/hello.sa /tmp/hello_native
 	/tmp/hello_native | grep -q 42
+
+# No Stage-2 for subset programs (clang only once for native_aot)
+bootstrap-native: native
+	chmod +x selfhost/bootstrap_native_only.sh
+	./selfhost/bootstrap_native_only.sh
 
 clean:
 	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx selfhost/native_aot

@@ -2,12 +2,15 @@
 
 | Item | State |
 |------|--------|
-| Stage-2 full language | supported |
-| **Native runtime x86_64** | **hold/show/when/while/arith/strings** |
-| Full Stage-2 parity on native | **not yet** (use Stage-2) |
-| struct/list on native | limited / deferred to Stage-2 |
+| Stage-2 full path | supported |
+| Native runtime x86 (list/struct/control) | supported |
+| **Bootstrap without Stage-2 (subset)** | **`make bootstrap-native`** |
+| Full language without Stage-2/clang | not yet |
+| LSP / sxpkg | supported |
 
 ```sh
 make native
-./selfhost/native_aot examples/hello.sa /tmp/n && /tmp/n
+make bootstrap-native
 ```
+
+See [BOOTSTRAP_NO_C_HOST.md](BOOTSTRAP_NO_C_HOST.md).
