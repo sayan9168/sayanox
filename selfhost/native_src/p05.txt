@@ -1,0 +1,4 @@
+  int rc = compile(s, argv[2]);
+  free(s);
+  return rc;
+}

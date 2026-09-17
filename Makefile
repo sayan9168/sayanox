@@ -12,7 +12,7 @@ sx: stage2
 	clang -O2 -o selfhost/sx selfhost/sx_launcher.c
 
 native:
-	cat selfhost/native_src/h*.hex | tr -d '\n' | perl -pe 's/([0-9a-fA-F]{2})/chr(hex($$1))/ge' > selfhost/native_aot.c
+	cat selfhost/native_src/p*.txt > selfhost/native_aot.c
 	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 
 test: native
