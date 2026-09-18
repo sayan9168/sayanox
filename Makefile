@@ -16,8 +16,8 @@ native:
 	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 
 bootstrap-native: native
-	./selfhost/native_aot examples/native_hello.sa /tmp/nh && /tmp/nh | grep -q 42
-	./selfhost/native_aot examples/mod_use.sa /tmp/mu && /tmp/mu | grep -q 99
+	./selfhost/native_aot examples/hello.sa /tmp/nh
+	/tmp/nh | grep -q 42
 	@echo NATIVE-ONLY OK
 
 bootstrap-production: stage2

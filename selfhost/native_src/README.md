@@ -1,3 +1,10 @@
 # native_src
 
-Parts of `native_aot.c` (step 2: hold / when / while). Assembled by `make native`.
+`c00.part` … `c19.part` assemble into `native_aot.c`:
+
+```sh
+cat selfhost/native_src/c*.part > selfhost/native_aot.c
+clang -O2 -o selfhost/native_aot selfhost/native_aot.c
+```
+
+Or: `make native`
