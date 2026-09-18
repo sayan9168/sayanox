@@ -1,0 +1,57 @@
+// Sayanox-owned expression IR contract.
+// Expressions are lowered into explicit values instead of raw source strings.
+//
+// Example:
+//   hold total = first_value + second_value
+//
+// becomes:
+//   LOAD first_value
+//   LOAD second_value
+//   ADD
+//   STORE total
+
+hold OP_CONST = "const"
+hold OP_LOAD = "load"
+hold OP_ADD = "add"
+hold OP_SUB = "sub"
+hold OP_MUL = "mul"
+hold OP_DIV = "div"
+hold OP_STORE = "store"
+hold OP_SHOW = "show"
+
+hold ops = []
+hold args = []
+hold count = 0
+hold errors = 0
+
+make emit(op, arg) {
+  push(ops, op)
+  push(args, arg)
+  hold count = count + 1
+}
+
+make expect(i, wanted) {
+  when list_get(ops, i) == wanted {
+    give 1
+  } otherwise {
+    hold errors = errors + 1
+    give 0
+  }
+}
+
+// Canonical expression:
+// first_value + second_value
+emit(OP_LOAD, "first_value")
+emit(OP_LOAD, "second_value")
+emit(OP_ADD, "t0")
+emit(OP_STORE, "total_value")
+
+when expect(0, OP_LOAD) == 1 {
+  when expect(1, OP_LOAD) == 1 {
+    when expect(2, OP_ADD) == 1 {
+      when expect(3, OP_STORE) == 1 {
+        show "Stage-3 expression IR OK"
+      }
+    }
+  }
+}
