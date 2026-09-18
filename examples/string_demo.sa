@@ -1,0 +1,6 @@
+show "hello" + " " + "sayanox"
+show len("abcd")
+show ord("A")
+hold n = len("sayanox")
+show n
+run("echo NATIVE_OK")
