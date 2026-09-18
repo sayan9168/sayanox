@@ -5,18 +5,17 @@ make native
 ./selfhost/native_aot program.sa out && ./out
 ```
 
-## Features
+## Strings
 
-| Feature | Example |
-|---------|---------|
-| hold/show/arith | `hold x = 1 + 2 % 3` |
-| when/otherwise | `when x == 1 { ... } otherwise { ... }` |
-| while | `while x < 10 { ... }` |
-| string concat | `show "hi" + " " + "there"` |
-| len / ord | `show len("abcd")` / `show ord("A")` |
-| functions | `make f(a) { show a }` |
-| modules | `use "lib.sa"` |
-| write_file | `write_file("/tmp/a.txt", "hi\n")` |
-| read_file | `read_file("/tmp/a.txt")` |
-| run | `run("echo hi")` |
-| arg_count | `show arg_count()` |
+```sa
+hold s = "hello"
+show s
+hold t = "say" + "anox"
+show t
+show len(s)
+```
+
+Strings are tagged pool offsets (prefix SAYA). Numbers print as decimal; tagged values print as text.
+
+## Other features
+hold/show, arith, when/otherwise, while, lists, fields, make/call, use, write_file, read_file, run, arg_count, len, ord

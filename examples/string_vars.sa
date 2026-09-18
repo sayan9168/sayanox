@@ -1,0 +1,8 @@
+hold s = "hello"
+show s
+hold t = "say" + "anox"
+show t
+show len(s)
+show len(t)
+hold n = 42
+show n

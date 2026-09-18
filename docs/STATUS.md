@@ -1,20 +1,14 @@
 # Status
 
 ## Native AOT (latest)
-- hold/show/arith/%/compare/when/otherwise/while
-- lists, fields, make/call, modules (`use`)
+- hold/show/arith/compare/when/otherwise/while
+- **Runtime strings**: `hold s = "hi"`, `hold t = "a" + "b"`, `show s`, `show len(s)`
+- String tag `SAYA` (no clash with numbers)
+- lists, fields, make/call, modules
 - write_file / read_file / run(execve)
-- **string concat** in show: `show "a" + "b" + "c"`
-- **len("str")** and **ord("c")**
-- arg_count()
-
-## Examples
-```sh
-make native
-./selfhost/native_aot examples/string_demo.sa /tmp/s && /tmp/s
-```
+- len("str") / ord("c") / arg_count()
 
 ## Still later
-- runtime string values in variables
-- concurrent GC
-- full Stage-2 IR without C host
+- Concurrent GC / heap realloc for dynamic concat of runtime strings
+- Full Stage-2 IR without C host
+- Package manager / LSP
