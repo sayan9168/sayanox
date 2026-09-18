@@ -5,26 +5,15 @@ make native
 ./selfhost/native_aot program.sa out && ./out
 ```
 
-No clang for the user binary.
+## Features
 
-## Supported (native)
-
-| Feature | Notes |
-|---------|--------|
-| hold/show/arith/%/compare | yes |
-| when/while/make functions | yes |
-| lists/fields | yes |
-| **use "file.sa"** | modules inlined at compile time |
-| **write_file("p","c")** | string literals, syscalls |
-| **arg_count()** | from process argc |
-| **run("cmd")** | fork/wait stub (child exits; full shell later) |
-| GC heap region | reserved 256KB in binary |
-
-## Still Stage-2 for full power
-
-- `read_file` / `concat` returning live strings in expressions
-- full `run` with `/bin/sh -c` execve
-- concurrent GC / ownership
-- all Stage-2 IR features
-
-Native path keeps growing toward Stage-2 parity.
+| Feature | Example |
+|---------|---------|
+| hold/show/arith | `hold x = 1 + 2 % 3` |
+| compare/when/while | `when x == 1 { ... }` |
+| functions | `make f(a) { show a }` |
+| modules | `use "lib.sa"` |
+| write_file | `write_file("/tmp/a.txt", "hi\n")` |
+| **read_file** | `read_file("/tmp/a.txt")` |
+| **run** | `run("echo hi")` |
+| arg_count | `show arg_count()` |

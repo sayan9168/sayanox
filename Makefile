@@ -1,4 +1,4 @@
-.PHONY: all stage2 sx native test bootstrap-native bootstrap-production tools clean
+.PHONY: all stage2 sx native test bootstrap-native clean
 
 all: stage2 sx
 
