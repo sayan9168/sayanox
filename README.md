@@ -1,22 +1,39 @@
 # Sayanox
 
-Original language (`.sa`) by **Sayan Mahata**.
+**Sayanox is the language.** Programs and the compiler are written in **`.sa`**.
+
+Other files (small C seed, Makefile) exist only so a computer can **bootstrap** the first binary — the same necessity every language has.
+
+See [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
+
+## Quick start
 
 ```sh
 git clone https://github.com/sayan9168/sayanox.git
 cd sayanox
+
+# One-time seed (not “writing in C as the language”)
+make native
+
+# Then only Sayanox programs:
+./selfhost/native_aot examples/native_hello.sa hello
+./hello
+```
+
+Full language path:
+
+```sh
 make stage2
-make bootstrap-production
 make sx
 ./selfhost/sx examples/hello.sa --run
 ```
 
-Native subset (no Stage-2 for user programs after one build):
+## Layout
 
-```sh
-make native && make bootstrap-native
-```
+| Path | Role |
+|------|------|
+| `*.sa` | **The language** — compiler, tools, demos |
+| `selfhost/native_*` / Stage-2 C | **Bootstrap seed only** |
+| `Makefile` | Build the seed once |
 
-Drivers are **Sayanox** (`*.sa`) + **Makefile**. Prefer `make` over old shell scripts.
-
-MIT
+MIT — Sayan Mahata
