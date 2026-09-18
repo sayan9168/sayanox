@@ -1,0 +1,11 @@
+hold a = "hello"
+hold b = "world"
+hold c = a + " " + b
+show c
+gc
+show c
+hold d = c + "!"
+show d
+gc
+show d
+show len(d)

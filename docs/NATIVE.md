@@ -5,17 +5,17 @@ make native
 ./selfhost/native_aot program.sa out && ./out
 ```
 
-## Strings
+## GC
 
 ```sa
 hold a = "hello"
-hold b = "world"
-hold c = a + " " + b
-show c
-show len(c)
+hold b = a + " world"
+gc
+show b
 ```
 
-Compile-time literal concat and **runtime** string concat both work. Dynamic results live in a heap bump region after the string pool.
+`gc` runs a stop-the-world mark-copy of live string variables into a high to-space.
 
-## Other
-arith, when/otherwise, while, lists, fields, make/call, use, write_file, read_file, run, arg_count, len, ord
+## Strings / concat / packages / LSP
+
+See STATUS.md, NATIVE_IR.md, LSP.md, and `./tools/sxpkg.sh`.

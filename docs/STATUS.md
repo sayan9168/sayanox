@@ -1,14 +1,27 @@
 # Status
 
-## Native AOT (latest)
-- hold/show/arith/compare/when/otherwise/while
-- Runtime strings + **runtime concat** (`hold d = a + b`)
-- Heap bump allocator for dynamic strings
-- lists, fields, make/call, modules
-- write_file / read_file / run(execve)
-- len / ord / arg_count
+## Native AOT
+- Strings: hold/show/concat/runtime `+` / len / ord
+- **gc()** — stop-the-world mark-copy (to-space at 128KiB)
+- lists, fields, make/call, modules, files, run
 
-## Still later
-- Concurrent GC (bump allocator is linear only)
-- Full Stage-2 IR without C host
-- Package manager / LSP
+## Concurrent GC
+- Stage-2 / `sx` path: pthread mark-sweep (docs/GC.md)
+- Native path: STW `gc()` (safe mark-copy); concurrent collector remains Stage-2
+
+## Stage-2 IR ↔ native
+- See docs/NATIVE_IR.md — native covers most Stage-2 user language
+
+## Package manager
+```sh
+./tools/sxpkg.sh init
+./tools/sxpkg.sh add mylib
+./tools/sxpkg.sh install
+./tools/sxpkg.sh list
+```
+
+## LSP
+```sh
+./tools/sayanox-lsp.sh   # stdio JSON-RPC
+```
+See docs/LSP.md
