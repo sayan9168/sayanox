@@ -1,0 +1,8 @@
+hold a = "hello"
+hold b = " "
+hold c = "world"
+hold d = a + b + c
+show d
+show len(d)
+hold x = 10 + 32
+show x

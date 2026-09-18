@@ -8,14 +8,14 @@ make native
 ## Strings
 
 ```sa
-hold s = "hello"
-show s
-hold t = "say" + "anox"
-show t
-show len(s)
+hold a = "hello"
+hold b = "world"
+hold c = a + " " + b
+show c
+show len(c)
 ```
 
-Strings are tagged pool offsets (prefix SAYA). Numbers print as decimal; tagged values print as text.
+Compile-time literal concat and **runtime** string concat both work. Dynamic results live in a heap bump region after the string pool.
 
-## Other features
-hold/show, arith, when/otherwise, while, lists, fields, make/call, use, write_file, read_file, run, arg_count, len, ord
+## Other
+arith, when/otherwise, while, lists, fields, make/call, use, write_file, read_file, run, arg_count, len, ord
