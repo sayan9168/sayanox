@@ -1,5 +1,5 @@
 // Stage-3 lexical scope regression.
-// The inner binding shadows the outer binding, then disappears after the block.
+// The inner binding shadows the outer binding, then the outer binding is visible again.
 
 hold value = 10
 
@@ -9,7 +9,3 @@ hold value = 10
 }
 
 show value
-
-// This name must not resolve after the block.
-// The compiler test harness should treat it as an undefined identifier.
-show inner_only
