@@ -2,12 +2,15 @@
 // Stage-2 is only the bootstrap host. This compiler owns the Stage-3 pipeline:
 // source -> lexer boundary -> symbols/scopes -> checked local operations -> IR -> C backend.
 // The native backend remains the next bootstrap milestone.
+//
+// Scope rule:
+// lookup only considers symbols whose lexical depth is active. This prevents
+// an identifier declared inside a closed block from leaking into outer scope.
 
 hold input_path = "selfhost/compiler_wiring_demo.sa"
 hold source = read_file(input_path)
 hold source_len = len(source)
 hold pos = 0
-hold line = 1
 hold errors = 0
 hold current_depth = 0
 hold next_slot = 0
@@ -76,16 +79,22 @@ make declare_symbol(name) {
   give slot
 }
 
+// Only active lexical scopes participate in lookup.
+// Searching backwards still guarantees nearest-scope shadowing.
 make lookup_symbol(name) {
   hold i = symbol_count - 1
   while i >= 0 {
-    when list_get(symbol_names, i) == name { give list_get(symbol_slots, i) }
+    hold depth = list_get(symbol_depths, i)
+    when depth <= current_depth {
+      when list_get(symbol_names, i) == name {
+        give list_get(symbol_slots, i)
+      }
+    }
     hold i = i - 1
   }
   give -1
 }
 
-// Canonical Stage-3 local IR.
 hold ir_ops = []
 hold ir_names = []
 hold ir_values = []
@@ -151,7 +160,6 @@ make read_until_line_end() {
 
 make trim_expr(text) { give trim(text) }
 
-// Source -> symbols/IR. This is the compiler entry path, not a disconnected demo.
 while pos < source_len {
   skip_spaces()
   when pos >= source_len {
@@ -201,8 +209,6 @@ while pos < source_len {
           skip_spaces()
           hold expr = trim_expr(read_until_line_end())
           when expr == "" { hold errors = errors + 1 } otherwise {
-            // A bare identifier is resolved now; compound expressions are
-            // preserved for the expression-lowering pass.
             when is_alpha(char_code(expr, 0)) {
               hold slot = lookup_symbol(expr)
               when slot < 0 { hold errors = errors + 1 } otherwise { emit_load(expr) }
@@ -220,7 +226,6 @@ while pos < source_len {
   }
 }
 
-// IR -> backend C. The IR, not source text, drives this emission.
 hold out = "#include <stdio.h>\nint main(void){\n"
 hold i = 0
 while i < ir_count {
