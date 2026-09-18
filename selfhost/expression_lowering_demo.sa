@@ -1,0 +1,8 @@
+// Stage-3 expression lowering regression.
+// The compiler must resolve both identifiers before emitting ADD.
+
+hold first_value = 10
+hold second_value = 32
+hold total_value = first_value + second_value
+hold final_value = total_value * 2
+show final_value
