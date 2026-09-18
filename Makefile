@@ -18,8 +18,8 @@ native:
 bootstrap-native: native
 	./selfhost/native_aot examples/hello.sa /tmp/nh
 	/tmp/nh | grep -q 42
-	./selfhost/native_aot examples/runtime_concat.sa /tmp/nc
-	/tmp/nc | grep -q "hello world"
+	./selfhost/native_aot examples/gc_native.sa /tmp/ng
+	/tmp/ng | grep -q "hello world"
 	@echo NATIVE-ONLY OK
 
 test: native
