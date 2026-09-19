@@ -1,4 +1,4 @@
-.PHONY: all stage2 sx native test bootstrap-native selfhost clean
+.PHONY: all stage2 sx native test bootstrap-native selfhost selfhost-fn clean
 
 all: stage2 sx
 
@@ -43,6 +43,15 @@ selfhost: stage2
 	./selfhost/sxc_run | grep -q 99
 	@echo SELFHOST-OK
 
+selfhost-fn: stage2
+	@if [ -f selfhost/sxc_fn.sa.b64 ]; then cat selfhost/sxc_fn.sa.b64 | tr -d '\n' | base64 -d | gzip -d > selfhost/sxc_fn.sa; fi
+	./selfhost/stage2 selfhost/sxc_fn.sa selfhost/sxc_fn_out.c
+	clang -O2 -pthread -o selfhost/sxc_fn selfhost/sxc_fn_out.c
+	./selfhost/sxc_fn
+	clang -O2 -o selfhost/sxc_fn_run selfhost/sxc_fn_emit.c
+	./selfhost/sxc_fn_run | grep -q 42
+	@echo SELFHOST-FN-OK
+
 clean:
 	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx \
-	  selfhost/native_aot selfhost/sxc selfhost/sxc_run selfhost/inject_chr
+	  selfhost/native_aot selfhost/sxc selfhost/sxc_run selfhost/sxc_fn selfhost/sxc_fn_run selfhost/inject_chr
