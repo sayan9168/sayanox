@@ -1,4 +1,11 @@
-hold a = 10
-hold b = 32
-show a
-show b
+hold n = 0
+while n < 3 {
+  show n
+  hold n = n + 1
+}
+hold x = 2
+when x == 2 {
+  show 99
+} otherwise {
+  show 0
+}

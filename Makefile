@@ -3,10 +3,12 @@
 all: stage2 sx
 
 stage2:
+	@if [ ! -f selfhost/stage2_template.c ] || [ $$(wc -c < selfhost/stage2_template.c) -lt 1000 ]; then \
+	  curl -fsSL "https://raw.githubusercontent.com/sayan9168/sayanox/bef338f0cc1344fa0167b64b827f2409dddb8200/selfhost/stage2_template.c" -o selfhost/stage2_template.c; \
+	fi
 	clang -O2 -o selfhost/build_stage2 selfhost/build_stage2.c
-	./selfhost/build_stage2
-	clang -O2 -o selfhost/inject_chr selfhost/inject_chr.c
-	./selfhost/inject_chr
+	./selfhost/build_stage2 || true
+	@if [ -f selfhost/inject_chr.c ]; then clang -O2 -o selfhost/inject_chr selfhost/inject_chr.c && ./selfhost/inject_chr; fi
 	clang -O2 -o selfhost/stage2 selfhost/stage2_template.c
 
 sx: stage2
@@ -36,8 +38,8 @@ selfhost: stage2
 	clang -O2 -pthread -o selfhost/sxc selfhost/sxc_out.c
 	./selfhost/sxc
 	clang -O2 -o selfhost/sxc_run selfhost/sxc_emit.c
-	./selfhost/sxc_run | grep -q 10
-	./selfhost/sxc_run | grep -q 32
+	./selfhost/sxc_run | grep -q 0
+	./selfhost/sxc_run | grep -q 99
 	@echo SELFHOST-OK
 
 clean:

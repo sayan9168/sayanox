@@ -1,20 +1,19 @@
 # Status
 
-## Self-host Stage-3 — hold/show keyword parse
+## Self-host Stage-3 — hold/show/while/when
 ```sh
-make selfhost   # SELFHOST-OK
+make selfhost   # SELFHOST-OK → 0 1 2 99
 ```
-- Parses `hold NAME = NUM` and `show NAME|NUM`
-- Emits real C identifiers (`double a = 10;`)
-- `chr` / `substr` in stage2 runtime
+Parses:
+- `hold NAME = NUM` / `hold NAME = NAME + NUM`
+- `show NAME` / `show NUM`
+- `while NAME < NUM { ... }`
+- `when NAME == NUM { ... } otherwise { ... }`
 
 ## Native AOT
 for/for-in/elif/break/continue · read/abs/pow · strings · gc · modules
 
-## Package / LSP
-`./tools/sxpkg.sh` · `./tools/sayanox-lsp.sh`
-
 ## Next
-- when/while inside sxc input
+- make/functions inside sxc
 - sxc self-compile without stage2
 - concurrent GC · deep types · remote registry
