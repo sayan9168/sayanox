@@ -2,11 +2,11 @@
 
 | Feature | Example |
 |---------|--------|
-| Comments | `// line` · `/* block */` |
-| Logic | `not a` · `a and b` · `x or y` |
-| Index | `s[i]` char code · `list[i]` |
-| Assert | `assert x > 0` |
-| Args | `arg_count()` · `arg(1)` |
-| Functions | `make f(n) { give n*2 }` |
-| Recursion | `fib(n-1)+fib(n-2)` |
-| GC | `gc` · auto on pressure |
+| break/continue | `when x { break }` |
+| not / and / or | `when not a and b` |
+| s[i] | `show s[0]` char code |
+| chr / ord | `chr(65)` · `ord("A")` |
+| assert | `assert x > 0` |
+| gc / gc_info | `gc` · `show gc_info()` |
+| make/give | recursive functions |
+| arg | `arg(1)` · `arg_count()` |

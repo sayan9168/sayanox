@@ -1,0 +1,9 @@
+// break / continue
+hold i = 0
+while i < 10 {
+  hold i = i + 1
+  when i == 3 { continue }
+  when i == 7 { break }
+  show i
+}
+show 99

@@ -1,0 +1,5 @@
+hold c = chr(72)
+show c
+show gc_info()
+gc
+show gc_info()
