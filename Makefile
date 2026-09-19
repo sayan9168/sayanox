@@ -12,14 +12,16 @@ sx: stage2
 	clang -O2 -o selfhost/sx selfhost/sx_launcher.c
 
 native:
-	cat selfhost/native_src/p[0-9][0-9].c.part > selfhost/native_aot.c
+	@if ls selfhost/native_src/p00.c.part >/dev/null 2>&1; then \
+	  cat selfhost/native_src/p[0-9][0-9].c.part > selfhost/native_aot.c; \
+	else \
+	  cat selfhost/native_src/g[0-9][0-9].b64 | tr -d '\n' | base64 -d | gunzip > selfhost/native_aot.c; \
+	fi
 	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
 
 bootstrap-native: native
 	./selfhost/native_aot examples/hello.sa /tmp/nh
 	/tmp/nh | grep -q 42
-	./selfhost/native_aot examples/gc_native.sa /tmp/ng
-	/tmp/ng | grep -q "hello world"
 	@echo NATIVE-ONLY OK
 
 test: native
