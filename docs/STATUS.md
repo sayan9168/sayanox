@@ -1,18 +1,21 @@
 # Status
 
-## Unified Stage-3 self-host ✅
+## Unified Stage-3 + CLI ✅
 ```sh
 make selfhost
+./selfhost/sxc input.sa output.c
 # → 0 1 2 42 99
 ```
 
-One Sayanox compiler (`sxc.sa`) handles:
-- `make` / `give` / call
-- `hold` / `show`
-- `while` / `when` / `otherwise`
+### Grammar
+- make / give / call
+- hold / show
+- while / when / otherwise
 
-## Package / GC / types
-`sxpkg fetch|types` · `gc`/`gc_step` · runtime tags
+### CLI
+```
+sxc [input.sa] [output.c]
+```
+Defaults: `selfhost/sxc_test_in.sa` → `selfhost/sxc_emit.c`
 
-## Bootstrap
-Stage2 once → `sxc` binary → apps without re-running stage2
+Stage-2 runtime: `arg_count()` · `arg(i)`
