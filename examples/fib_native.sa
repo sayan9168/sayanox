@@ -1,0 +1,9 @@
+make fib(n) {
+  when n <= 1 {
+    give n
+  } else {
+    give fib(n - 1) + fib(n - 2)
+  }
+}
+hold result = fib(10)
+show result
