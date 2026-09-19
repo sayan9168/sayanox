@@ -1,0 +1,13 @@
+hold a = 1
+hold b = 0
+when a and 1 {
+  show 11
+}
+when b or 0 {
+  show 99
+} else {
+  show 22
+}
+when a or b {
+  show 33
+}

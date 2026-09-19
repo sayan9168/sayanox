@@ -1,0 +1,4 @@
+// print argv
+show arg_count()
+show arg(0)
+show arg(1)
