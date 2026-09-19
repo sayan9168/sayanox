@@ -1,24 +1,14 @@
 # Status
 
 ## Done
-```sh
-make selfhost          # once (uses stage2)
-make app FILE=x.sa OUT=x.c BIN=x   # stage2-free after that
-```
-
-| Feature | |
-|---------|--|
-| make/give/call | ✅ |
-| hold/show num+var | ✅ |
-| show "string" | ✅ |
-| while / when / elif / otherwise | ✅ |
-| CLI paths | ✅ |
-| Stage2-free app path | ✅ |
+- Unified sxc (make/while/when/elif/show string/CLI)
+- **Static type checker** (number/string/list/struct, ops, undefined)
+- Stage2-free app path after first selfhost
+- Native AOT path, sxpkg, cooperative GC
 
 ## Remaining
-1. Full static types
 2. OS-thread concurrent GC
-3. sxc compiling full sxc.sa (still needs stage2 to *build* sxc)
+3. sxc compiling full sxc.sa without stage2
 4. Lists/structs in sxc path
-5. One unified native+selfhost backend
-6. Online package registry / full LSP
+5. Unified native+selfhost backend
+6. Online registry / full LSP

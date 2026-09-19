@@ -1,15 +1,18 @@
-# Type system
+# Static types (Stage-2)
 
-## Runtime tags (native)
-- `is_str(v)` / `is_num(v)`
+Kinds: **number** · **string** · **list** · **struct**
 
-## Stage-2
-- Decl kinds: number vs string vs list
-- `sxpkg types file.sa` heuristic report
+## Rules
+- `hold` locks a name's type; wrong reassignment is an error
+- `+` on two strings → concat; mixed number/string → type error
+- `* / %` require numbers
+- comparisons require matching kinds
+- bare names must be declared with `hold` first
+- `show` uses `%s` for string-typed names
 
-## Annotations
-```sa
-// type: num
-hold n = 1
-when is_num(n) == 1 { show n }
+## Errors
+```
+stage2: file.sa:4: type error: string +: expected string, got number
+stage2: file.sa:2: type error: name: undefined variable 'nope' ...
+stage2: file.sa:3: error: cannot reassign 'a' to a different type
 ```
