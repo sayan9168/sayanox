@@ -34,6 +34,7 @@ test: native
 	/tmp/hello_native | grep -q 42
 
 selfhost: stage2
+	@if [ -f selfhost/sxc.sa.b64 ]; then cat selfhost/sxc.sa.b64 | tr -d '\n' | base64 -d | gzip -d > selfhost/sxc.sa; fi
 	./selfhost/stage2 selfhost/sxc.sa selfhost/sxc_out.c
 	clang -O2 -pthread -o selfhost/sxc selfhost/sxc_out.c
 	./selfhost/sxc
