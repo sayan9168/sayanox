@@ -1,21 +1,19 @@
 # Status
 
-## Native AOT — next scope complete
-- **for / for-in** · **elif** · **break / continue**
-- **read()** stdin · **abs / pow** · **repeat**
-- **contains / startswith** · **is_str / is_num**
-- **substr** · **string ==** · **min/max/exit**
-- **gc / gc_step / gc_info** · **export** · modules
-
-```sa
-hold s = read()
-show abs(0 - 7)
-show pow(2, 10)
-show contains("hello", "ell")
-show repeat("ab", 3)
-when n == 1 { show 1 } elif n == 2 { show 2 } else { show 3 }
+## Self-host (Stage-3) — COMPLETE for vertical slice
+```sh
+make selfhost
+# SELFHOST-OK
 ```
+- `selfhost/sxc.sa` written in **Sayanox**
+- Bootstrap: stage2 lowers sxc → binary once
+- sxc compiles `hello.sa` → C → runs as **42**
+
+## Native AOT
+- for / for-in / elif / break / continue
+- read / abs / pow / contains / startswith / repeat
+- is_str / is_num / substr / string== / min max exit
+- gc / gc_step / export / modules
 
 ## Package / LSP
-- `./tools/sxpkg.sh` local registry
-- `./tools/sayanox-lsp.sh`
+- `./tools/sxpkg.sh` · `./tools/sayanox-lsp.sh`
