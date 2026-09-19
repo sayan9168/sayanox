@@ -1,21 +1,23 @@
-# Self-host
+# Self-host + CLI
 
-## Compilers written in Sayanox
-| Binary | Source | Grammar |
-|--------|--------|--------|
-| sxc | sxc.sa / sxc.sa.b64 | hold show while when |
-| sxc_fn | sxc_fn.sa | make give call hold show |
-
-## Bootstrap once
+## Build once
 ```sh
-make stage2
 make selfhost
-make selfhost-fn
 ```
 
-## Then no stage2 for app compile
+## Compile any matching .sa
 ```sh
-./selfhost/sxc
-./selfhost/sxc_fn
-clang -o app selfhost/sxc_emit.c && ./app
+./selfhost/sxc path/to/file.sa path/to/out.c
+clang -O2 -o app path/to/out.c
+./app
 ```
+
+Defaults if args omitted:
+- input: `selfhost/sxc_test_in.sa`
+- output: `selfhost/sxc_emit.c`
+
+## Grammar
+make/give/call · hold/show · while · when/otherwise
+
+## Stage-2 helpers
+`arg_count()` · `arg(i)` · `chr` · `substr`
