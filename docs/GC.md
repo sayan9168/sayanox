@@ -1,21 +1,21 @@
-# GC
+# Garbage collection
 
-## Native
-| Call | Behavior |
-|------|----------|
-| `gc` | Stop-the-world mark-copy all string slots |
-| `gc_step` | Incremental: copy 2 live string slots (cooperative) |
-| `gc_info()` | Current bump offset |
+## Modes
+| Mode | API | Notes |
+|------|-----|--------|
+| Stop-the-world | `gc()` | Full collect |
+| Cooperative concurrent-style | `gc_step()` | Incremental; call in long loops |
+| Info | `gc_info()` | heap stats |
 
-## Stage-2
-- pthread concurrent mark-sweep
+## Concurrent design
+Native ELF has no pthread → cooperative `gc_step()` is the concurrent-style path.
+Stage-2 C host may use `-pthread` for optional mark threads later.
 
-## Design
-True OS-thread concurrent GC in pure ELF (no libc/pthread) is limited.
-`gc_step` gives cooperative concurrent-style collection for long loops:
 ```sa
-while work {
-  gc_step
-  // ...
+hold i = 0
+while i < 10000 {
+  when i % 100 == 0 { gc_step() }
+  hold i = i + 1
 }
+gc()
 ```

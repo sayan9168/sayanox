@@ -1,22 +1,15 @@
-# Type system (lightweight)
+# Type system
 
-Stage-2 tracks declaration kinds at compile time:
+## Runtime tags (native)
+- `is_str(v)` / `is_num(v)`
 
-| Kind | Code | Examples |
-|------|------|----------|
-| number | 0 | `hold x = 42` |
-| string | 1 | `hold s = "hi"` |
-| list | 2 | `hold xs = [1, 2]` |
-| struct | 3 | `hold p = Point { ... }` |
+## Stage-2
+- Decl kinds: number vs string vs list
+- `sxpkg types file.sa` heuristic report
 
-## Rules
-
-- Reassigning a name to a **different kind** is a hard error.
-- `show` picks `%g` vs `%s` from expression / declared kind.
-- No full inference or generics yet — kinds are local and explicit via usage.
-
-## Future
-
-- Function signatures
-- Struct field types beyond `double`
-- Cross-module type export
+## Annotations
+```sa
+// type: num
+hold n = 1
+when is_num(n) == 1 { show n }
+```
