@@ -1,4 +1,4 @@
-.PHONY: all stage2 sx native test bootstrap-native clean
+.PHONY: all stage2 sx native test bootstrap-native selfhost clean
 
 all: stage2 sx
 
@@ -28,5 +28,14 @@ test: native
 	./selfhost/native_aot examples/hello.sa /tmp/hello_native
 	/tmp/hello_native | grep -q 42
 
+# Stage-3 self-host: Sayanox compiler (sxc.sa) compiles a program
+selfhost: stage2
+	./selfhost/stage2 selfhost/sxc.sa selfhost/sxc_out.c
+	clang -O2 -pthread -o selfhost/sxc selfhost/sxc_out.c
+	./selfhost/sxc
+	clang -O2 -o selfhost/hello_from_sxc selfhost/hello_out.c
+	./selfhost/hello_from_sxc | grep -q 42
+	@echo SELFHOST-OK
+
 clean:
-	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx selfhost/native_aot
+	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx selfhost/native_aot selfhost/sxc selfhost/hello_from_sxc
