@@ -1,8 +1,13 @@
+make double(x) {
+  give x + x
+}
 hold n = 0
 while n < 3 {
   show n
   hold n = n + 1
 }
+hold a = 21
+show double(a)
 hold x = 2
 when x == 2 {
   show 99

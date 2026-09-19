@@ -1,28 +1,18 @@
-# Status — remaining steps completed (slices)
+# Status
 
-## 1. Self-host control flow + functions
+## Unified Stage-3 self-host ✅
 ```sh
-make selfhost      # while/when → 0 1 2 99
-make selfhost-fn   # make/give/call → 42
-```
-- `sxc.sa` — hold/show/while/when/otherwise
-- `sxc_fn.sa` — make NAME(p) { give p + p } + call
-
-## 2. Day-to-day without re-running stage2
-Once `sxc` / `sxc_fn` binaries exist, they compile matching `.sa` → C without stage2.
-Stage2 is **bootstrap only** (build the Sayanox compilers once).
-
-## 3. Package manager remote
-```sh
-./tools/sxpkg.sh fetch <url> [name]
-./tools/sxpkg.sh types file.sa
+make selfhost
+# → 0 1 2 42 99
 ```
 
-## 4. GC
-- STW `gc` + cooperative concurrent-style `gc_step` (see docs/GC.md)
+One Sayanox compiler (`sxc.sa`) handles:
+- `make` / `give` / call
+- `hold` / `show`
+- `while` / `when` / `otherwise`
 
-## 5. Types
-- Runtime tags + Stage-2 decl checks + `sxpkg types` (see docs/TYPES.md)
+## Package / GC / types
+`sxpkg fetch|types` · `gc`/`gc_step` · runtime tags
 
-## Native AOT
-for/for-in/elif/break/continue · strings · modules · gc
+## Bootstrap
+Stage2 once → `sxc` binary → apps without re-running stage2
