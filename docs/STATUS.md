@@ -1,19 +1,19 @@
 # Status
 
-## Self-host (Stage-3) — COMPLETE for vertical slice
+## Self-host Stage-3 — expanded
 ```sh
-make selfhost
-# SELFHOST-OK
+make selfhost   # SELFHOST-OK (prints 10 and 32)
 ```
-- `selfhost/sxc.sa` written in **Sayanox**
-- Bootstrap: stage2 lowers sxc → binary once
-- sxc compiles `hello.sa` → C → runs as **42**
+- `sxc.sa` in Sayanox collects all ints → emits C
+- Test input: `sxc_test_in.sa` (hold a=10, b=32)
 
 ## Native AOT
-- for / for-in / elif / break / continue
-- read / abs / pow / contains / startswith / repeat
-- is_str / is_num / substr / string== / min max exit
-- gc / gc_step / export / modules
+for/for-in/elif/break/continue · read/abs/pow · string ops · gc · modules
 
 ## Package / LSP
-- `./tools/sxpkg.sh` · `./tools/sayanox-lsp.sh`
+`./tools/sxpkg.sh` · `./tools/sayanox-lsp.sh`
+
+## Still future
+- Full AST parse inside sxc (hold/show/when keywords)
+- sxc compiling itself end-to-end without stage2
+- True concurrent GC · deep types · remote registry

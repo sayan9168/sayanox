@@ -1,34 +1,37 @@
 # Full self-host (Stage-3)
 
 ## Claim
-The **compiler logic** is written in Sayanox (`selfhost/sxc.sa`).
-Bootstrap host (`stage2`, C) is only used once to lower `sxc.sa` → C → binary.
+Compiler logic is **Sayanox** (`selfhost/sxc.sa`).
+C `stage2` is bootstrap only (one lower step).
 
 ## Loop
 ```
-stage2  (C bootstrap)  compiles  sxc.sa  →  sxc binary
-sxc     (Sayanox)      compiles  hello.sa →  hello_out.c
-clang                                  →  hello_from_sxc
-run                                    →  42
+stage2   compiles  sxc.sa           → sxc
+sxc      reads     sxc_test_in.sa   → sxc_emit.c  (all integers → printf)
+clang    links                      → sxc_run
+run                                 → 10 / 32
 ```
 
 ## Commands
 ```sh
 make selfhost
-# or
-./selfhost/bootstrap_selfhost.sh
 ```
 
-## Files
-| File | Role |
-|------|------|
-| `selfhost/sxc.sa` | Stage-3 compiler in Sayanox |
-| `selfhost/sxc` | Binary produced by stage2 from sxc.sa |
-| `selfhost/hello_out.c` | C emitted by sxc |
-| `selfhost/compiler.sa` | Larger pipeline (still expanding) |
+## What sxc does
+- Reads source text (`read_file`)
+- Scans **all integer literals**
+- Emits C that prints each value
+- Supports up to 8 numbers per file
 
-## Limits (honest)
-- Current `sxc.sa` handles the **numeric literal → C print** vertical slice used by `hello.sa`.
-- Full grammar (all of `compiler.sa` / `parser.sa`) still expands on this path.
-- Bootstrap still needs **one** C stage2 binary and **clang** to link C output.
-- Next: grow `sxc.sa` until it emits all of itself, then replace stage2.
+## Input example (`sxc_test_in.sa`)
+```sa
+hold a = 10
+hold b = 32
+show a
+show b
+```
+
+## Limits
+- Not full grammar yet (no full parse of hold/show AST)
+- Still needs stage2 once + clang to link emitted C
+- Grow toward parsing keywords next; then replace stage2

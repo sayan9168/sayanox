@@ -1,39 +1,56 @@
-// Sayanox self-hosted Stage-3 compiler
-// Reads .sa, extracts first integer, emits C that prints it.
-// Default: selfhost/hello.sa -> selfhost/hello_out.c
+// Sayanox Stage-3 self-hosted compiler
+// Collects all integer literals from source and emits C that prints each.
+// Input:  selfhost/sxc_test_in.sa
+// Output: selfhost/sxc_emit.c
 
 show 3
 
-hold source = read_file("selfhost/hello.sa")
+hold source = read_file("selfhost/sxc_test_in.sa")
 hold n = len(source)
 hold pos = 0
-hold nval = 0
-hold found = 0
+hold count = 0
+hold v0 = 0
+hold v1 = 0
+hold v2 = 0
+hold v3 = 0
+hold v4 = 0
+hold v5 = 0
+hold v6 = 0
+hold v7 = 0
 
 while pos < n {
   hold ch = source[pos]
   when ch >= 48 {
     when ch <= 57 {
-      when found == 0 {
-        hold nval = ch - 48
-        hold pos = pos + 1
-        while pos < n {
+      hold nval = ch - 48
+      hold pos = pos + 1
+      hold scanning = 1
+      while scanning == 1 {
+        when pos >= n {
+          hold scanning = 0
+        } otherwise {
           hold ch2 = source[pos]
           when ch2 >= 48 {
             when ch2 <= 57 {
               hold nval = nval * 10 + (ch2 - 48)
               hold pos = pos + 1
             } otherwise {
-              hold pos = n
+              hold scanning = 0
             }
           } otherwise {
-            hold pos = n
+            hold scanning = 0
           }
         }
-        hold found = 1
-      } otherwise {
-        hold pos = pos + 1
       }
+      hold count = count + 1
+      when count == 1 { hold v0 = nval }
+      when count == 2 { hold v1 = nval }
+      when count == 3 { hold v2 = nval }
+      when count == 4 { hold v3 = nval }
+      when count == 5 { hold v4 = nval }
+      when count == 6 { hold v5 = nval }
+      when count == 7 { hold v6 = nval }
+      when count == 8 { hold v7 = nval }
     } otherwise {
       hold pos = pos + 1
     }
@@ -42,11 +59,52 @@ while pos < n {
   }
 }
 
-hold part_a = "#include <stdio.h>\nint main(void){ printf(\"%g\\n\", (double)"
-hold part_b = str(nval)
-hold part_c = "); return 0; }\n"
-hold out = concat(part_a, part_b)
-hold out = concat(out, part_c)
-hold w = write_file("selfhost/hello_out.c", out)
-show nval
+hold out = "#include <stdio.h>\nint main(void){\n"
+when count >= 1 {
+  hold out = concat(out, "  printf(\"%g\\n\", (double)")
+  hold out = concat(out, str(v0))
+  hold out = concat(out, ");\n")
+}
+when count >= 2 {
+  hold out = concat(out, "  printf(\"%g\\n\", (double)")
+  hold out = concat(out, str(v1))
+  hold out = concat(out, ");\n")
+}
+when count >= 3 {
+  hold out = concat(out, "  printf(\"%g\\n\", (double)")
+  hold out = concat(out, str(v2))
+  hold out = concat(out, ");\n")
+}
+when count >= 4 {
+  hold out = concat(out, "  printf(\"%g\\n\", (double)")
+  hold out = concat(out, str(v3))
+  hold out = concat(out, ");\n")
+}
+when count >= 5 {
+  hold out = concat(out, "  printf(\"%g\\n\", (double)")
+  hold out = concat(out, str(v4))
+  hold out = concat(out, ");\n")
+}
+when count >= 6 {
+  hold out = concat(out, "  printf(\"%g\\n\", (double)")
+  hold out = concat(out, str(v5))
+  hold out = concat(out, ");\n")
+}
+when count >= 7 {
+  hold out = concat(out, "  printf(\"%g\\n\", (double)")
+  hold out = concat(out, str(v6))
+  hold out = concat(out, ");\n")
+}
+when count >= 8 {
+  hold out = concat(out, "  printf(\"%g\\n\", (double)")
+  hold out = concat(out, str(v7))
+  hold out = concat(out, ");\n")
+}
+hold out = concat(out, "  return 0;\n}\n")
+hold w = write_file("selfhost/sxc_emit.c", out)
+hold w2 = write_file("selfhost/hello_out.c", out)
+
+show count
+show v0
+show v1
 show 1

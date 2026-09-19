@@ -28,14 +28,16 @@ test: native
 	./selfhost/native_aot examples/hello.sa /tmp/hello_native
 	/tmp/hello_native | grep -q 42
 
-# Stage-3 self-host: Sayanox compiler (sxc.sa) compiles a program
+# Stage-3 self-host: Sayanox sxc.sa compiles sxc_test_in.sa → C → 10 32
 selfhost: stage2
 	./selfhost/stage2 selfhost/sxc.sa selfhost/sxc_out.c
 	clang -O2 -pthread -o selfhost/sxc selfhost/sxc_out.c
 	./selfhost/sxc
-	clang -O2 -o selfhost/hello_from_sxc selfhost/hello_out.c
-	./selfhost/hello_from_sxc | grep -q 42
+	clang -O2 -o selfhost/sxc_run selfhost/sxc_emit.c
+	./selfhost/sxc_run | grep -q 10
+	./selfhost/sxc_run | grep -q 32
 	@echo SELFHOST-OK
 
 clean:
-	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx selfhost/native_aot selfhost/sxc selfhost/hello_from_sxc
+	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx \
+	  selfhost/native_aot selfhost/sxc selfhost/sxc_run selfhost/hello_from_sxc
