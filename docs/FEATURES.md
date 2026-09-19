@@ -2,11 +2,13 @@
 
 | Feature | Example |
 |---------|--------|
+| for loop | `for i = 1 to 10 { show i }` |
 | break/continue | `when x { break }` |
-| not / and / or | `when not a and b` |
-| s[i] | `show s[0]` char code |
-| chr / ord | `chr(65)` · `ord("A")` |
+| substr | `substr(s, 1, 3)` |
+| string == | `when s == "hi"` |
+| min/max | `min(a,b)` · `max(a,b)` |
+| exit | `exit(0)` |
+| ! / not | `when !a` |
+| chr / ord | `chr(65)` |
 | assert | `assert x > 0` |
-| gc / gc_info | `gc` · `show gc_info()` |
-| make/give | recursive functions |
-| arg | `arg(1)` · `arg_count()` |
+| gc | `gc` · `gc_info()` |
