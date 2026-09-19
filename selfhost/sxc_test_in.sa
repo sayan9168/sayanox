@@ -16,3 +16,4 @@ when x == 1 {
 } otherwise {
   show 0
 }
+show "done"

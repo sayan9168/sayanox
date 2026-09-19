@@ -1,27 +1,24 @@
 # Status
 
-## Done (Stage-3 unified sxc)
+## Done
 ```sh
-make selfhost
-./selfhost/sxc in.sa out.c   # CLI
-# output: 0 1 2 42 99
+make selfhost          # once (uses stage2)
+make app FILE=x.sa OUT=x.c BIN=x   # stage2-free after that
 ```
 
-| Feature | Status |
-|---------|--------|
-| make / give / call | ✅ |
-| hold / show | ✅ |
-| while | ✅ |
-| when / elif / otherwise | ✅ |
-| CLI arg paths | ✅ |
-| Native AOT (separate) | ✅ many features |
-| sxpkg fetch/types | ✅ |
-| gc / gc_step | ✅ cooperative |
+| Feature | |
+|---------|--|
+| make/give/call | ✅ |
+| hold/show num+var | ✅ |
+| show "string" | ✅ |
+| while / when / elif / otherwise | ✅ |
+| CLI paths | ✅ |
+| Stage2-free app path | ✅ |
 
-## Still remaining (honest)
-1. **Full static type checker** (beyond tags + Stage-2 decls)
-2. **OS-thread concurrent GC** (native has no pthread)
-3. **Stage2-free bootstrap** of sxc itself (still need stage2 once)
-4. **Richer exprs** in sxc (floats, lists, strings in self-host path)
-5. **Unified native + self-host** (one backend only)
-6. **LSP / package registry online** (local + fetch URL only)
+## Remaining
+1. Full static types
+2. OS-thread concurrent GC
+3. sxc compiling full sxc.sa (still needs stage2 to *build* sxc)
+4. Lists/structs in sxc path
+5. One unified native+selfhost backend
+6. Online package registry / full LSP
