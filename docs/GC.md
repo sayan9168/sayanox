@@ -3,19 +3,29 @@
 ## Modes
 | Mode | API | Notes |
 |------|-----|--------|
-| Stop-the-world | `gc()` | Full collect |
-| Cooperative concurrent-style | `gc_step()` | Incremental; call in long loops |
-| Info | `gc_info()` | heap stats |
+| **Start bg thread** | `gc_start()` | OS pthread; sweeps every ~50ms |
+| Stop-the-world | `gc()` | Full registry sweep now |
+| Cooperative | `gc_step()` | One sweep under same lock |
+| Info | `gc_info()` | Live registered heap bytes |
+| Manual | `release(s)` | Drop RC on a heap string |
 
-## Concurrent design
-Native ELF has no pthread → cooperative `gc_step()` is the concurrent-style path.
-Stage-2 C host may use `-pthread` for optional mark threads later.
+## Concurrent design (Stage-2 C host)
+- Heap strings from `concat` / `str` are **registered** with RC=1
+- Reassigning a string `hold` **releases** the previous pointer
+- Background thread (`gc_start`) periodically sweeps RC≤0 slots under a mutex
+- Native ELF path remains cooperative (`gc_step` only; no pthread)
 
 ```sa
+hold _ = gc_start()
+hold s = "a"
 hold i = 0
-while i < 10000 {
-  when i % 100 == 0 { gc_step() }
+while i < 100 {
+  hold s = concat(s, "x")
   hold i = i + 1
 }
-gc()
+show gc_info()
+hold _ = gc()
+show "ok"
 ```
+
+Build: `clang -O2 -pthread ...`

@@ -8,6 +8,7 @@ stage2:
 	fi
 	@if [ -f selfhost/inject_chr.c ]; then clang -O2 -o selfhost/inject_chr selfhost/inject_chr.c && ./selfhost/inject_chr; fi
 	@if [ -f selfhost/inject_types.c ]; then clang -O2 -o selfhost/inject_types selfhost/inject_types.c && ./selfhost/inject_types; fi
+	@if [ -f selfhost/inject_gc.c ]; then clang -O2 -o selfhost/inject_gc selfhost/inject_gc.c && ./selfhost/inject_gc; fi
 	clang -O2 -o selfhost/stage2 selfhost/stage2_template.c
 
 selfhost: stage2
@@ -22,7 +23,7 @@ selfhost: stage2
 app:
 	@test -x selfhost/sxc || (echo "Run make selfhost first"; exit 1)
 	./selfhost/sxc $(FILE) $(OUT)
-	clang -O2 -o $(BIN) $(OUT)
+	clang -O2 -pthread -o $(BIN) $(OUT)
 
 native:
 	@if ls selfhost/native_src/p00.c.part >/dev/null 2>&1; then \
@@ -37,4 +38,4 @@ test: native
 	/tmp/hello_native | grep -q 42
 
 clean:
-	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_run selfhost/inject_chr selfhost/inject_types selfhost/native_aot
+	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_run selfhost/inject_chr selfhost/inject_types selfhost/inject_gc selfhost/native_aot

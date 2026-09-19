@@ -1,12 +1,19 @@
-// Concurrent GC: many heap strings while bg thread sweeps
+// Concurrent GC: background pthread sweeps while mutator allocates
+hold _ = gc_start()
 hold s = "start"
-hold i = 1
-while i {
-  when i > 30 {
-    hold i = 0
-  } otherwise {
-    hold s = concat(s, "x")
-    hold i = i + 1
+hold i = 0
+while i < 40 {
+  hold s = concat(s, "x")
+  hold i = i + 1
+  when i % 10 == 0 {
+    hold _ = gc_step()
   }
 }
+hold before = gc_info()
+show before
+hold s = "done"
+hold _ = release(s)
+hold _ = gc()
+hold after = gc_info()
+show after
 show "concurrent-ok"
