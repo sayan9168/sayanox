@@ -1,0 +1,5 @@
+hold x = 10
+assert x > 5
+when not (x < 0) {
+  show 42
+}

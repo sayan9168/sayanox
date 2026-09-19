@@ -4,17 +4,16 @@
 - Strings + concat + **gc()** + auto-gc
 - **16 var slots**, **make / give / recursion**
 - **else**, **// and /* */ comments**
-- **arg(i)** / **arg_count()**, **and** / **or**
+- **arg(i)** / **arg_count()**, **and** / **or** / **not**
+- **s[i]** string index (char code) · list index
+- **assert** · better errors (line + caret)
 - lists, fields, modules, files, run
 
 ```sa
-// comments work
-when a and b { show 1 }
-show arg(1)
-make fib(n) {
-  when n <= 1 { give n }
-  else { give fib(n - 1) + fib(n - 2) }
-}
+hold s = "Hi"
+show s[0]          // 72
+assert s[0] == 72
+when not (x < 0) { show 1 }
 ```
 
 ## Concurrent GC

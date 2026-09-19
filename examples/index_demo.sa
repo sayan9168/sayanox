@@ -1,0 +1,6 @@
+// string indexing -> char codes
+hold s = "Hi"
+show s[0]
+show s[1]
+assert s[0] == 72
+show 1
