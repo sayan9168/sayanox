@@ -1,0 +1,5 @@
+export helper
+make helper(n) {
+  give n + 1
+}
+show helper(41)

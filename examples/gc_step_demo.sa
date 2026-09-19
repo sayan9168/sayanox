@@ -1,0 +1,6 @@
+hold a = "live"
+gc_step
+gc_step
+show a
+gc
+show 1
