@@ -55,9 +55,34 @@ remove() {
   rm -rf "$PKGDIR/$name" "$REG/$name"; echo "sxpkg: removed $name"
 }
 info() { [ -f "$REG/$1/pkg.meta" ] && cat "$REG/$1/pkg.meta" || echo "unknown $1"; }
+
+fetch() {
+  url="$1"
+  [ -n "$url" ] || { echo "usage: sxpkg fetch <url> [name]"; exit 1; }
+  name="${2:-remote_pkg}"
+  mkdir -p "$REG/$name" "$PKGDIR/$name"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$REG/$name/main.sa" || { echo "sxpkg: fetch failed"; exit 1; }
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$REG/$name/main.sa" "$url" || { echo "sxpkg: fetch failed"; exit 1; }
+  else
+    echo "sxpkg: need curl or wget"; exit 1
+  fi
+  printf "name=%s\nversion=0.0.0\nsource=%s\n" "$name" "$url" > "$REG/$name/pkg.meta"
+  grep -q "^$name=" "$LOCK" 2>/dev/null || echo "$name=0.0.0" >> "$LOCK"
+  cp -r "$REG/$name/." "$PKGDIR/$name/"
+  echo "sxpkg: fetched $name from $url"
+}
+types_check() {
+  f="$1"
+  [ -f "$f" ] || { echo "usage: sxpkg types <file.sa>"; exit 1; }
+  echo "sxpkg: type tags (heuristic)"
+  grep -nE "hold |is_str|is_num|make |struct " "$f" | head -40 || true
+}
 case "$cmd" in
   init) init ;; add) add "$@" ;; list) list ;; install) install ;;
   search) search "$@" ;; publish) publish ;; remove) remove "$@" ;;
   info) info "$@" ;; seed) seed_registry; echo seeded ;;
-  *) echo "sxpkg: init|add|list|install|search|publish|remove|info|seed" ;;
+  fetch) fetch "$@" ;; types) types_check "$@" ;;
+  *) echo "sxpkg: init|add|list|install|search|publish|remove|info|seed|fetch|types" ;;
 esac
