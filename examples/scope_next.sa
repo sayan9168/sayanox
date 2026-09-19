@@ -1,0 +1,16 @@
+show abs(0 - 7)
+show pow(2, 10)
+show contains("hello", "ell")
+show startswith("hello", "he")
+hold t = repeat("ab", 3)
+show t
+show is_str("x")
+show is_num(42)
+hold n = 2
+when n == 1 {
+  show 11
+} elif n == 2 {
+  show 22
+} else {
+  show 33
+}
