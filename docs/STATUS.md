@@ -1,10 +1,10 @@
 # Status
 
 ## Done
-- Unified sxc (make/while/when/elif/show string/CLI)
-- **Static type checker** (number/string/list/struct, ops, undefined)
-- Stage2-free app path after first selfhost
-- Native AOT path, sxpkg, cooperative GC
+1. **Static type checker** ✅ (`inject_types.c`)
+2. Unified sxc + CLI + elif + show string
+3. Stage2-free app path
+4. Native AOT, sxpkg, cooperative GC
 
 ## Remaining
 2. OS-thread concurrent GC

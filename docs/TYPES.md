@@ -3,16 +3,17 @@
 Kinds: **number** · **string** · **list** · **struct**
 
 ## Rules
-- `hold` locks a name's type; wrong reassignment is an error
-- `+` on two strings → concat; mixed number/string → type error
-- `* / %` require numbers
-- comparisons require matching kinds
-- bare names must be declared with `hold` first
+- `hold` locks type; wrong reassignment → error
+- `+` two strings → concat; mixed → type error
+- `* / %` need numbers
+- comparisons need matching kinds
+- undeclared names → error
 - `show` uses `%s` for string-typed names
 
-## Errors
-```
-stage2: file.sa:4: type error: string +: expected string, got number
-stage2: file.sa:2: type error: name: undefined variable 'nope' ...
-stage2: file.sa:3: error: cannot reassign 'a' to a different type
+## Examples
+```sa
+hold a = 1
+hold s = "hi"
+hold z = a + s   // type error
+show nope        // undefined
 ```

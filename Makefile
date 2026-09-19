@@ -3,12 +3,11 @@
 all: stage2
 
 stage2:
-	@if [ -f selfhost/stage2_template.c.b64 ]; then \
-	  cat selfhost/stage2_template.c.b64 | tr -d '\n' | base64 -d | gzip -d > selfhost/stage2_template.c; \
-	elif [ ! -f selfhost/stage2_template.c ] || [ $$(wc -c < selfhost/stage2_template.c) -lt 1000 ]; then \
+	@if [ ! -f selfhost/stage2_template.c ] || [ $$(wc -c < selfhost/stage2_template.c) -lt 1000 ]; then \
 	  curl -fsSL "https://raw.githubusercontent.com/sayan9168/sayanox/bef338f0cc1344fa0167b64b827f2409dddb8200/selfhost/stage2_template.c" -o selfhost/stage2_template.c; \
 	fi
 	@if [ -f selfhost/inject_chr.c ]; then clang -O2 -o selfhost/inject_chr selfhost/inject_chr.c && ./selfhost/inject_chr; fi
+	@if [ -f selfhost/inject_types.c ]; then clang -O2 -o selfhost/inject_types selfhost/inject_types.c && ./selfhost/inject_types; fi
 	clang -O2 -o selfhost/stage2 selfhost/stage2_template.c
 
 selfhost: stage2
@@ -38,4 +37,4 @@ test: native
 	/tmp/hello_native | grep -q 42
 
 clean:
-	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_run selfhost/inject_chr selfhost/native_aot
+	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_run selfhost/inject_chr selfhost/inject_types selfhost/native_aot
