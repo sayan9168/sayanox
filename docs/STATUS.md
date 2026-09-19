@@ -1,19 +1,20 @@
 # Status
 
-## Self-host Stage-3 — expanded
+## Self-host Stage-3 — hold/show keyword parse
 ```sh
-make selfhost   # SELFHOST-OK (prints 10 and 32)
+make selfhost   # SELFHOST-OK
 ```
-- `sxc.sa` in Sayanox collects all ints → emits C
-- Test input: `sxc_test_in.sa` (hold a=10, b=32)
+- Parses `hold NAME = NUM` and `show NAME|NUM`
+- Emits real C identifiers (`double a = 10;`)
+- `chr` / `substr` in stage2 runtime
 
 ## Native AOT
-for/for-in/elif/break/continue · read/abs/pow · string ops · gc · modules
+for/for-in/elif/break/continue · read/abs/pow · strings · gc · modules
 
 ## Package / LSP
 `./tools/sxpkg.sh` · `./tools/sayanox-lsp.sh`
 
-## Still future
-- Full AST parse inside sxc (hold/show/when keywords)
-- sxc compiling itself end-to-end without stage2
-- True concurrent GC · deep types · remote registry
+## Next
+- when/while inside sxc input
+- sxc self-compile without stage2
+- concurrent GC · deep types · remote registry
