@@ -1,48 +1,45 @@
 #!/bin/sh
-# Sayanox package manager — minimal, no Node/Python
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
-REG="$ROOT/packages"
+# sxpkg — Sayanox package manager
+set -e
+ROOT="${SXPKG_ROOT:-.}"
+PKGDIR="$ROOT/.sayanox/pkgs"
+REG="$ROOT/.sayanox/registry"
 LOCK="$ROOT/sx.lock"
-PKGDIR="$ROOT/.sx/pkgs"
-cmd=${1:-help}
+MANIFEST="$ROOT/sx.toml"
+cmd="${1:-help}"; shift 2>/dev/null || true
 case "$cmd" in
   init)
-    mkdir -p "$REG" "$PKGDIR"
+    mkdir -p "$PKGDIR" "$REG"
     [ -f "$LOCK" ] || printf '# sx.lock\nversion=1\n' > "$LOCK"
-    [ -f "$ROOT/sx.toml" ] || printf 'name = "app"\nversion = "0.1.0"\n' > "$ROOT/sx.toml"
-    echo "sxpkg: initialized"
-    ;;
+    [ -f "$MANIFEST" ] || printf 'name = "my-pkg"\nversion = "0.1.0"\n' > "$MANIFEST"
+    echo "sxpkg: init ok" ;;
   add)
-    name=$2
-    [ -n "$name" ] || { echo "usage: sxpkg add <name>"; exit 1; }
-    mkdir -p "$REG/$name"
-    printf 'name=%s\nversion=0.1.0\n' "$name" > "$REG/$name/pkg.meta"
-    printf 'show "%s loaded"\n' "$name" > "$REG/$name/lib.sa"
-    grep -q "^$name=" "$LOCK" 2>/dev/null || echo "$name=0.1.0" >> "$LOCK"
-    echo "sxpkg: added $name"
-    ;;
+    name="$1"; ver="${2:-0.1.0}"
+    [ -n "$name" ] || { echo "usage: sxpkg add <name> [ver]"; exit 1; }
+    mkdir -p "$PKGDIR" "$REG/$name"
+    grep -q "^$name=" "$LOCK" 2>/dev/null || echo "$name=$ver" >> "$LOCK"
+    printf 'name=%s\nversion=%s\n' "$name" "$ver" > "$REG/$name/pkg.meta"
+    echo "sxpkg: added $name $ver" ;;
   list)
-    echo "Installed / registered:"
-    [ -f "$LOCK" ] && grep -v '^#' "$LOCK" || echo "(none)"
-    ;;
+    echo "sxpkg: packages"; [ -f "$LOCK" ] && grep -v '^#' "$LOCK" | grep -v '^$' || echo "(none)" ;;
   install)
-    mkdir -p "$PKGDIR"
-    if [ -f "$LOCK" ]; then
-      while IFS='=' read -r n v; do
-        case "$n" in \#*|"") continue ;; esac
-        if [ -d "$REG/$n" ]; then
-          mkdir -p "$PKGDIR/$n"
-          cp -r "$REG/$n/." "$PKGDIR/$n/" 2>/dev/null
-          echo "sxpkg: installed $n $v"
-        else
-          echo "sxpkg: missing registry entry for $n"
-        fi
-      done < "$LOCK"
-    fi
-    echo "sxpkg: install done"
-    ;;
-  help|*)
-    echo "sxpkg — Sayanox package manager"
-    echo "  init | add <name> | list | install"
-    ;;
+    mkdir -p "$PKGDIR"; [ -f "$LOCK" ] || exit 1
+    while IFS='=' read -r n v; do
+      case "$n" in \#*|"") continue ;; esac
+      [ -d "$REG/$n" ] && { mkdir -p "$PKGDIR/$n"; cp -r "$REG/$n/." "$PKGDIR/$n/" 2>/dev/null; echo "sxpkg: installed $n"; }
+    done < "$LOCK"; echo "sxpkg: install done" ;;
+  search)
+    q="$1"; echo "sxpkg: search '$q'"
+    for d in "$REG"/*; do [ -d "$d" ] || continue; bn=$(basename "$d"); case "$bn" in *$q*) echo "  $bn" ;; esac; done ;;
+  publish)
+    name=$(grep '^name' "$MANIFEST" 2>/dev/null | sed 's/.*= *"\?\([^"]*\)"\?.*/\1/' || echo local)
+    ver=$(grep '^version' "$MANIFEST" 2>/dev/null | sed 's/.*= *"\?\([^"]*\)"\?.*/\1/' || echo 0.1.0)
+    mkdir -p "$REG/$name"; printf 'name=%s\nversion=%s\n' "$name" "$ver" > "$REG/$name/pkg.meta"
+    echo "sxpkg: published $name $ver" ;;
+  remove)
+    name="$1"; [ -n "$name" ] || exit 1
+    [ -f "$LOCK" ] && { tmp=$(mktemp); grep -v "^$name=" "$LOCK" > "$tmp" && mv "$tmp" "$LOCK"; }
+    rm -rf "$PKGDIR/$name" "$REG/$name"; echo "sxpkg: removed $name" ;;
+  *)
+    echo "sxpkg: init|add|list|install|search|publish|remove" ;;
 esac
