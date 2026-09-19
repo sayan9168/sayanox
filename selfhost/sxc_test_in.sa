@@ -9,7 +9,9 @@ while n < 3 {
 hold a = 21
 show double(a)
 hold x = 2
-when x == 2 {
+when x == 1 {
+  show 11
+} elif x == 2 {
   show 99
 } otherwise {
   show 0
