@@ -5,6 +5,9 @@ all: stage2 sx
 stage2:
 	clang -O2 -o selfhost/build_stage2 selfhost/build_stage2.c
 	./selfhost/build_stage2
+	clang -O2 -o selfhost/inject_chr selfhost/inject_chr.c
+	./selfhost/inject_chr
+	clang -O2 -o selfhost/stage2 selfhost/stage2_template.c
 
 sx: stage2
 	./selfhost/stage2 selfhost/sx.sa selfhost/sx_cli.c
@@ -28,7 +31,6 @@ test: native
 	./selfhost/native_aot examples/hello.sa /tmp/hello_native
 	/tmp/hello_native | grep -q 42
 
-# Stage-3 self-host: Sayanox sxc.sa compiles sxc_test_in.sa → C → 10 32
 selfhost: stage2
 	./selfhost/stage2 selfhost/sxc.sa selfhost/sxc_out.c
 	clang -O2 -pthread -o selfhost/sxc selfhost/sxc_out.c
@@ -40,4 +42,4 @@ selfhost: stage2
 
 clean:
 	rm -f selfhost/stage2 selfhost/build_stage2 selfhost/sx_bin selfhost/sx \
-	  selfhost/native_aot selfhost/sxc selfhost/sxc_run selfhost/hello_from_sxc
+	  selfhost/native_aot selfhost/sxc selfhost/sxc_run selfhost/inject_chr
