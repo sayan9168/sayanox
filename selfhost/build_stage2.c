@@ -1,4 +1,4 @@
-/* Stage-2 builder. Prefer local stage2_template.c when valid. */
+/* Stage-2 builder. Prefer local template; fall back to sxc_full.c seed. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +14,6 @@ static int is_bad_template(void) {
   if (n < 20) return 1;
   if (strstr(buf, "PLACEHOLDER") != NULL) return 1;
   if (strstr(buf, "#include") == NULL) return 1;
-  remove("selfhost/stage2_template.c.tmp");
   return 0;
 }
 
@@ -37,47 +36,62 @@ static int has_chr_helper(void) {
   return ok;
 }
 
+static int compile_stage2(const char *src) {
+  char cmd[512];
+  int st;
+  snprintf(cmd, sizeof(cmd), "clang -O2 -o selfhost/stage2 %s 2>/dev/null", src);
+  st = system(cmd);
+  if (st != 0) {
+    snprintf(cmd, sizeof(cmd), "gcc -O2 -o selfhost/stage2 %s", src);
+    st = system(cmd);
+  }
+  return st;
+}
+
 int main(void) {
   int st;
   if (!is_bad_template() && has_chr_helper()) {
-    st = system("clang -O2 -o selfhost/stage2 selfhost/stage2_template.c 2>/dev/null");
-    if (st != 0)
-      st = system("gcc -O2 -o selfhost/stage2 selfhost/stage2_template.c");
+    st = compile_stage2("selfhost/stage2_template.c");
     if (st != 0) {
       fprintf(stderr, "build_stage2: compile failed\n");
       return 1;
     }
-    puts("Stage-2 built OK (local template + chr/substr)");
+    puts("Stage-2 built OK (local template)");
     return 0;
   }
 
-  if (is_bad_template()) {
-    st = system(
-        "base64 -d selfhost/stage2_template.c.b64 > selfhost/stage2_template.c.tmp 2>/dev/null && "
-        "gzip -t selfhost/stage2_template.c.tmp 2>/dev/null && "
-        "gzip -cd selfhost/stage2_template.c.tmp > selfhost/stage2_template.c");
-    if (st != 0 || is_bad_template()) {
-      st = system(
-        "cat selfhost/stage2_template_parts/p00.b64 2>/dev/null | tr -d '\\n' | "
-        "base64 -d 2>/dev/null | gzip -cd > selfhost/stage2_template.c");
-    }
-    if (st != 0 || is_bad_template()) {
-      st = system(
-          "cat selfhost/stage2_blob/chunk_00 selfhost/stage2_blob/chunk_01 2>/dev/null | "
-          "tr -d '\\n' | base64 -d 2>/dev/null | gzip -d > selfhost/stage2_template.c");
-    }
-    if (st != 0 || is_bad_template()) {
-      fprintf(stderr, "build_stage2: template missing and all bootstrap blobs failed\n");
-      return 1;
+  {
+    FILE *f = fopen("selfhost/sxc_full.c", "rb");
+    if (f) {
+      fclose(f);
+      st = system("cp selfhost/sxc_full.c selfhost/stage2_template.c");
+      if (st == 0) {
+        st = compile_stage2("selfhost/stage2_template.c");
+        if (st == 0) {
+          puts("Stage-2 built OK (from sxc_full.c seed)");
+          return 0;
+        }
+      }
     }
   }
-  st = system("clang -O2 -o selfhost/stage2 selfhost/stage2_template.c 2>/dev/null");
-  if (st != 0)
-    st = system("gcc -O2 -o selfhost/stage2 selfhost/stage2_template.c");
-  if (st != 0) {
-    fprintf(stderr, "build_stage2: compile failed\n");
-    return 1;
+
+  /* Try decode from sxc_full_b64 */
+  st = system(
+      "if [ -d selfhost/sxc_full_b64 ]; then "
+      "cat selfhost/sxc_full_b64/b*.txt | tr -d '\\n' | base64 -d | gzip -d > selfhost/sxc_full.c; fi");
+  {
+    FILE *f = fopen("selfhost/sxc_full.c", "rb");
+    if (f) {
+      fclose(f);
+      system("cp selfhost/sxc_full.c selfhost/stage2_template.c");
+      st = compile_stage2("selfhost/stage2_template.c");
+      if (st == 0) {
+        puts("Stage-2 built OK (from sxc_full_b64)");
+        return 0;
+      }
+    }
   }
-  puts("Stage-2 built OK");
-  return 0;
+
+  fprintf(stderr, "build_stage2: template missing and all bootstrap blobs failed\n");
+  return 1;
 }
