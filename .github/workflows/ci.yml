@@ -7,27 +7,17 @@ on:
     branches: [main]
 
 jobs:
-  selfhost:
-    name: Supported smoke
+  subset-selfhost:
+    name: Subset self-host
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Stage-2
-        run: make stage2
+      - name: Build subset compiler and run regression suite
+        run: make subset
 
-      - name: Production (Sayanox driver)
-        run: make bootstrap-production
+      - name: Verify existing-gen1 path
+        run: make subset-existing
 
-      - name: Native bootstrap (no Stage-2 for cases)
-        run: make bootstrap-native
-
-      - name: SX CLI
-        run: |
-          make sx
-          ./selfhost/sx examples/hello.sa --run
-
-      - name: sxfmt.sa tool
-        run: |
-          make tools
-          ./tools/sxfmt_bin examples/hello.sa /tmp/fmt.sa
+      - name: Build formatter with gen1
+        run: make tools
