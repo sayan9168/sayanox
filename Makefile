@@ -1,4 +1,4 @@
-.PHONY: all test complete subset subset-existing stage2 sx tools bootstrap-production native native-test bootstrap-native clean
+.PHONY: all test complete subset subset-existing stage2 sx tools bootstrap-production native native-test bootstrap-native gc-test clean
 
 all: subset
 
@@ -42,6 +42,14 @@ native-test: native
 	./selfhost/native_aot examples/native_hello.sa selfhost/_native_test
 	./selfhost/_native_test | grep -qx '42'
 	rm -f selfhost/_native_test
+
+gc-test: stage2
+	clang -O2 -o selfhost/inject_gc selfhost/inject_gc.c
+	./selfhost/inject_gc
+	./selfhost/stage2 examples/gc_rc_loop.sa selfhost/_gc.c
+	clang -O2 -o selfhost/_gc selfhost/_gc.c
+	./selfhost/_gc | grep -qx '2005'
+	./selfhost/_gc | grep -qx 'gc-rc-ok'
 
 bootstrap-native: native
 	./selfhost/native_aot examples/hello.sa selfhost/native_hello
