@@ -1,25 +1,25 @@
-# Stage-3 self-host without stage2
+# Pure Sayanox self-host loop
 
-## Fast path (no stage2 binary)
-```sh
-make selfhost-fast
-# decodes selfhost/sxc_out_c/*.b64 → sxc_out.c → clang → ./selfhost/sxc
+```
+sxc_full  →  compiler_min.sa  →  gen1
+gen1      →  mini_*.sa        →  runnable C
 ```
 
-`sxc_out.c` is the Stage-2 lowering of `sxc.sa`, stored compressed so **building the Stage-3 compiler only needs clang**.
+## Proven
+| Step | Result |
+|------|--------|
+| Gen1 from pure `.sa` | ✅ |
+| Gen1 → while/when/make | ✅ 0 1 2 42 99 |
+| Gen1 → field `p.x` | ✅ 3 4 |
+| Gen1 → list/struct/string | ✅ |
+| Deterministic | ✅ |
 
-## App path (also no stage2)
+## Run
 ```sh
-./selfhost/sxc my.sa my.c
-clang -O2 -o my my.c
+./selfhost/bootstrap_selfhost_loop.sh
+# SELFHOST-LOOP-OK
 ```
 
-## Regenerating sxc_out (when sxc.sa changes)
-```sh
-make selfhost   # uses stage2 once
-# then re-pack selfhost/sxc_out.c into sxc_out_c/*.b64
-```
-
-## Limit
-Re-lowering the full `sxc.sa` source still requires stage2 (or a future full-language sxc).
-Running and compiling **user programs** in the supported subset does **not**.
+## Next
+Gen1 compiles `compiler_min.sa` itself (requires hold RHS builtins:
+`read_file`, `concat`, `chr`, `str`, `len`, indexing).

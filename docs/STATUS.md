@@ -1,9 +1,10 @@
 # Status
 
 ## Done
-- Pure `.sa` compiler_min: hold / show / while / when / make
-- Pure `.sa` list / struct / string
-- Pure `.sa` **field access** `p.x` / `p.y` → 3 / 4
+- Pure `.sa` compiler_min: hold/show/while/when/make/list/struct/string/field
+- **Self-host loop**: gen1 from pure `.sa` compiles the full subset
+- `./selfhost/bootstrap_selfhost_loop.sh` → SELFHOST-LOOP-OK
 
 ## Frontier
-- compiler_min compiles improved compiler_min (true .sa self-host loop)
+- Gen1 compiles compiler_min.sa itself (builtin expr on hold RHS)
+- Drop sxc_full for subset path entirely
