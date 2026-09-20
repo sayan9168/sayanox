@@ -52,8 +52,13 @@ int main(void) {
 
   if (is_bad_template()) {
     st = system(
+        "cat selfhost/stage2_template.c.b64 2>/dev/null | tr -d '\\n' | "
+        "base64 -d 2>/dev/null | gzip -d > selfhost/stage2_template.c");
+    if (st != 0 || is_bad_template()) {
+      st = system(
         "cat selfhost/stage2_template_parts/p00.b64 2>/dev/null | tr -d '\\n' | "
         "base64 -d 2>/dev/null | gzip -d > selfhost/stage2_template.c");
+    }
     if (st != 0 || is_bad_template()) {
       st = system(
           "cat selfhost/stage2_blob/chunk_00 selfhost/stage2_blob/chunk_01 2>/dev/null | "
