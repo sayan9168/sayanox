@@ -65,7 +65,7 @@ int main(void) {
           "tr -d '\\n' | base64 -d 2>/dev/null | gzip -d > selfhost/stage2_template.c");
     }
     if (st != 0 || is_bad_template()) {
-      fprintf(stderr, "build_stage2: template missing and all bootstrap blobs failed\\n");
+      fprintf(stderr, "build_stage2: template missing and all bootstrap blobs failed\n");
       return 1;
     }
   }
