@@ -6,17 +6,28 @@ cd "$ROOT"
 
 echo "=== Sayanox true self-compile ==="
 
-if [ ! -x selfhost/sxc_full ]; then
-  if [ ! -f selfhost/sxc_full.c ]; then
-    echo "error: selfhost/sxc_full is missing and selfhost/sxc_full.c is unavailable" >&2
+if [ -x selfhost/gen1 ]; then
+  echo "[1] Reuse existing gen1"
+elif [ -x selfhost/stage2 ]; then
+  echo "[1] Build gen1 from existing stage2"
+  ./selfhost/stage2 selfhost/compiler_min.sa selfhost/gen1.c
+  clang -O2 -o selfhost/gen1 selfhost/gen1.c
+else
+  echo "[1] Bootstrap gen1 from the C seed"
+  if [ ! -f selfhost/build_stage2.c ] && [ ! -f selfhost/sxc_full.c ]; then
+    echo "error: no bootstrap seed is available" >&2
     exit 1
   fi
-  clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
+  if [ -f selfhost/build_stage2.c ]; then
+    clang -O2 -o selfhost/build_stage2 selfhost/build_stage2.c
+    ./selfhost/build_stage2
+    ./selfhost/stage2 selfhost/compiler_min.sa selfhost/gen1.c
+  else
+    clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
+    ./selfhost/sxc_full selfhost/compiler_min.sa selfhost/gen1.c
+  fi
+  clang -O2 -o selfhost/gen1 selfhost/gen1.c
 fi
-
-echo "[1] Build gen1 from compiler_min.sa"
-./selfhost/sxc_full selfhost/compiler_min.sa selfhost/gen1.c
-clang -O2 -o selfhost/gen1 selfhost/gen1.c
 
 echo "[2] Gen1 compiles compiler_min.sa into gen2.c"
 rm -f selfhost/gen2.c selfhost/gen2
