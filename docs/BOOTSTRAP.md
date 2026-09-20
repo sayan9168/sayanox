@@ -25,19 +25,20 @@ gen1
 
 ## What still needs clang
 
-A C compiler is still required only to create the first executable compiler when no trusted bootstrap compiler is already available.
+A C compiler is still required to create the first executable bootstrap compiler when no trusted bootstrap compiler is already available.
 
-The remaining C-dependent step is:
+The normal seed path is Stage-2:
 
 ```sh
-clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
-./selfhost/sxc_full selfhost/compiler_min.sa selfhost/gen1.c
+clang -O2 -o selfhost/build_stage2 selfhost/build_stage2.c
+./selfhost/build_stage2
+./selfhost/stage2 selfhost/compiler_min.sa selfhost/gen1.c
 clang -O2 -o selfhost/gen1 selfhost/gen1.c
 ```
 
 The reason is bootstrapping: a machine needs at least one executable compiler before it can execute the Sayanox compiler.
 
-After gen1 exists, the subset path does not need sxc_full.c for source compilation.
+After gen1 exists, the subset path does not need sxc_full.c or Stage-2 for source compilation.
 
 ## Preferred subset path
 
@@ -66,7 +67,7 @@ The generated application is still C in the current subset backend, so clang is 
 
 ## Bootstrap fallback
 
-gen1 is the preferred bootstrap compiler once it exists. sxc_full.c is only the seed fallback.
+gen1 is the preferred compiler once it exists. Stage-2 is only a bootstrap seed. sxc_full.c is retained only as a last-resort fallback where that seed is still available.
 
 A known-good generated gen1.c may be frozen as a last-resort bootstrap artifact when reproducible bootstrapping requires it. It is not the normal subset compilation path.
 
@@ -100,4 +101,4 @@ That script prefers an existing gen1; it falls back to the C seed only when no g
 
 The compiler implementation for the subset is in Sayanox source under selfhost/.
 
-The C seed exists only to solve the initial bootstrap problem. The long-term goal is to eliminate that seed from the normal development path.
+The C seed exists only to solve the initial bootstrap problem. The long-term goal is to eliminate the C seed from the normal development path.
