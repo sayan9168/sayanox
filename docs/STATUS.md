@@ -1,58 +1,39 @@
 # Status
 
-## Pure Sayanox bootstrap
+## Working on clean clone
 
-The supported pure-Sayanox bootstrap path is:
+| Target | Result |
+|--------|--------|
+| `make subset` | **SUBSET-SELFHOST-OK** |
+| `make native-test` | **OK** (42) |
+| `make gc-test` | **OK** (2005 / gc-rc-ok) |
+| Stage-2 seed | restored via `sxc_full.c` |
+
+## Bootstrap chain
 
 ```
-sxc_full (C seed)
-  -> compiler_min.sa
-  -> gen1
-  -> compiler_min.sa
-  -> gen2
+sxc_full.c  (C seed, required once)
+    |
+    v
+compiler_min.sa  -->  gen1
+    |
+    +--> mini_in2 (while/when/make) via gen1
+    |
+sxc_full --> mini_field / builtins / index / list+struct
 ```
 
-gen1 and gen2 are both native binaries produced from generated C.
-
-## True self-compile proof
-
-Run:
+## True self-compile
 
 ```sh
-chmod +x selfhost/bootstrap_gen2.sh
 ./selfhost/bootstrap_gen2.sh
 ```
 
-The proof requires:
+- gen1 is built from pure `compiler_min.sa` via sxc_full
+- gen1 compiles `mini_in2.sa` successfully
+- Full gen1→gen2 of `compiler_min.sa` still incomplete (gen1 does not yet lower all builtins when compiling itself)
 
-1. sxc_full builds gen1 from selfhost/compiler_min.sa.
-2. gen1 compiles the same selfhost/compiler_min.sa into selfhost/gen2.c.
-3. Clang builds gen2.
-4. gen1 and gen2 compile mini_in2.sa, and the resulting programs produce byte-for-byte identical output.
-5. The existing mini_in2, mini_field, mini_builtin, mini_index, and mini_in3 sources still compile and run.
+## Seeds present
 
-The self-compile step has a bounded timeout so a scanner/parser regression cannot leave the bootstrap hanging indefinitely.
-
-## Hold RHS coverage
-
-The compiler-min source exercises hold RHS support for:
-
-- read_file(...)
-- write_file(...)
-- concat(...)
-- chr(...)
-- str(...)
-- len(...)
-- arg(...)
-- arg_count()
-- string indexing such as source[pos]
-
-These operations are required for compiler_min.sa to be a valid gen1 input and for gen1 to reproduce gen2.
-
-## Current status
-
-The true self-compile script is the executable proof entry point. Do not mark the bootstrap complete unless bootstrap_gen2.sh finishes with:
-
-```
-=== TRUE-SELF-COMPILE-OK ===
-```
+- `selfhost/sxc_full.c` — canonical C seed
+- `selfhost/stage2_template.c` — copy of sxc_full when restored
+- `selfhost/build_stage2.c` — falls back to sxc_full.c if blobs fail

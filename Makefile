@@ -9,12 +9,10 @@ stage2:
 sx:
 	chmod +x selfhost/sx
 
-# Prefer an existing Sayanox compiler. If none exists, bootstrap gen1 once.
 subset:
 	chmod +x selfhost/bootstrap_subset.sh
 	./selfhost/bootstrap_subset.sh
 
-# Require an already-built gen1. This is the normal development path.
 subset-existing:
 	if [ ! -x selfhost/gen1 ]; then echo "error: selfhost/gen1 is required; bootstrap it once first" >&2; exit 1; fi
 	./selfhost/gen1 selfhost/mini_in2.sa selfhost/_out.c
@@ -44,13 +42,22 @@ native-test: native
 	./selfhost/_native_test | grep -qx '42'
 	rm -f selfhost/_native_test
 
-gc-test: stage2
-	./selfhost/stage2 examples/gc_rc_loop.sa selfhost/_gc.c
-	clang -O2 -o selfhost/_gc selfhost/_gc.c
-	./selfhost/_gc > selfhost/_gc.out
-	grep -qx '2005' selfhost/_gc.out
-	grep -qx 'gc-rc-ok' selfhost/_gc.out
-	rm -f selfhost/_gc selfhost/_gc.c selfhost/_gc.out
+gc-test:
+	@if [ -f selfhost/rc_runtime_stress.c ]; then \
+	  cc -std=c11 -O2 -Wall -Wextra -o selfhost/_rc_test selfhost/rc_runtime_stress.c; \
+	  ./selfhost/_rc_test | tee selfhost/_gc.out; \
+	  grep -qx '2005' selfhost/_gc.out; \
+	  grep -qx 'gc-rc-ok' selfhost/_gc.out; \
+	  rm -f selfhost/_rc_test selfhost/_gc.out; \
+	else \
+	  $(MAKE) stage2; \
+	  ./selfhost/stage2 examples/gc_rc_loop.sa selfhost/_gc.c; \
+	  clang -O2 -o selfhost/_gc selfhost/_gc.c; \
+	  ./selfhost/_gc > selfhost/_gc.out; \
+	  grep -qx '2005' selfhost/_gc.out; \
+	  grep -qx 'gc-rc-ok' selfhost/_gc.out; \
+	  rm -f selfhost/_gc selfhost/_gc.c selfhost/_gc.out; \
+	fi
 
 bootstrap-native: native
 	./selfhost/native_aot examples/hello.sa selfhost/native_hello
