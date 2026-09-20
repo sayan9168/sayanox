@@ -15,7 +15,11 @@ hold scanning = 0
 hold first_char = 0
 hold ident_len = 0
 hold st = 0
-hold emit = "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
+hold emit = "#include <stdio.h>\\n#include <stdlib.h>\\n#include <string.h>\\n\\n/* Sayanox single-threaded reference-counted runtime. */\\n"
+hold emit = concat(emit, "typedef struct { size_t refs; size_t len; double *data; } SxRcList;\\n")
+hold emit = concat(emit, "static SxRcList sx_list_new(void){ SxRcList x; x.refs=1; x.len=0; x.data=NULL; return x; }\\n")
+hold emit = concat(emit, "static void sx_list_retain(SxRcList *x){ if(x) x->refs++; }\\n")
+hold emit = concat(emit, "static void sx_list_release(SxRcList *x){ if(x && x->refs && --x->refs==0){ free(x->data); x->data=NULL; x->len=0; } }\\n")
 hold piece = ""
 hold depth = 0
 hold slot = 0
@@ -75,8 +79,8 @@ when contains(source, "struct ") {
 } otherwise {
     // List lowering uses the Stage-2 SxList helper names and pointer convention.
     when contains(source, "[") {
-        hold emit = concat(emit, "typedef struct { double *data; int len; int cap; } SxList;\n")
-        hold emit = concat(emit, "static SxList sx_list_new(void){ SxList x; x.data=NULL; x.len=0; x.cap=0; return x; }\n")
+        hold emit = concat(emit, "typedef struct { double *data; int len; int cap; size_t refs; } SxList;\n")
+        hold emit = concat(emit, "static SxList sx_list_new(void){ SxList x; x.data=NULL; x.len=0; x.cap=0; x.refs=1; return x; }\nstatic void sx_list_retain(SxList *x){ if(x) x->refs++; }\nstatic void sx_list_release(SxList *x){ if(x && x->refs && --x->refs==0){ free(x->data); x->data=NULL; x->len=0; x->cap=0; } }\n")
         hold emit = concat(emit, "static void sx_list_push(SxList *x,double v){ if(x->len==x->cap){ int c=x->cap?x->cap*2:8; x->data=(double*)realloc(x->data,(size_t)c*sizeof(double)); x->cap=c; } x->data[x->len++]=v; }\n")
         hold emit = concat(emit, "static double sx_list_get(SxList *x,int i){ return (i>=0 && i<x->len)?x->data[i]:0.0; }\n")
         hold emit = concat(emit, "static int sx_list_len(SxList *x){ return x->len; }\n\nint main(void){\n  SxList xs = sx_list_new();\n")
@@ -94,7 +98,7 @@ when contains(source, "struct ") {
         when contains(source, "show len(xs)") {
             hold emit = concat(emit, "  printf(\"%d\\n\", sx_list_len(&xs));\n")
         }
-        hold emit = concat(emit, "  free(xs.data);\n  return 0;\n}\n")
+        hold emit = concat(emit, "  sx_list_release(&xs);\n  return 0;\n}\n")
     } otherwise {
         // Legacy multi-variable generator. Initial letters a-h map to v0-v7.
         hold emit = concat(emit, "int main(void){\n  double v0=0,v1=0,v2=0,v3=0,v4=0,v5=0,v6=0,v7=0;\n")
