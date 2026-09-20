@@ -40,7 +40,7 @@ native:
 
 native-test: native
 	./selfhost/native_aot examples/native_hello.sa selfhost/_native_test
-	test "$(shell ./selfhost/_native_test)" = "42"
+	./selfhost/_native_test | grep -qx '42'
 	rm -f selfhost/_native_test
 
 bootstrap-native: native
