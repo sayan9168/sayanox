@@ -1,0 +1,16 @@
+hold msg = "hello"
+hold a = " world"
+hold s = concat(msg, a)
+show s
+hold n = len(s)
+show n
+hold c = s[0]
+show c
+hold path = "examples/builtins_demo.sa"
+hold data = read_file(path)
+hold ln = len(data)
+show ln
+hold ac = arg_count()
+show ac
+hold w = write_file("/tmp/sx_out.txt", s)
+show w

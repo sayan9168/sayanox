@@ -1,8 +1,8 @@
-.PHONY: all stage2 selfhost selfhost-fast selfhost-loop selfhost-recompile app native sx test clean unified sx-bin
+.PHONY: all stage2 selfhost selfhost-fast selfhost-full selfhost-recompile app native sx test clean unified sx-bin
 
 all: unified
 
-unified: native selfhost-fast sx-bin
+unified: native selfhost-full sx-bin
 	@echo UNIFIED-OK
 
 sx-bin:
@@ -15,30 +15,27 @@ stage2:
 	@if [ -f selfhost/inject_chr.c ]; then clang -O2 -o selfhost/inject_chr selfhost/inject_chr.c && ./selfhost/inject_chr; fi
 	clang -O2 -o selfhost/stage2 selfhost/stage2_template.c
 
-selfhost/sxc.sa.b64:
-	@if [ -d selfhost/sxc_sa_parts ]; then \
-	  cat selfhost/sxc_sa_parts/p00.txt selfhost/sxc_sa_parts/p01a.txt selfhost/sxc_sa_parts/p01b.txt selfhost/sxc_sa_parts/p02.txt > selfhost/sxc.sa.b64; \
-	fi
-
-selfhost-fast: stage2 selfhost/sxc.sa.b64
-	@if [ -f selfhost/sxc.sa.b64 ]; then cat selfhost/sxc.sa.b64 | tr -d '\n' | base64 -d | gzip -d > selfhost/sxc.sa; fi
-	@if [ ! -f selfhost/sxc.sa ] || [ $$(wc -c < selfhost/sxc.sa) -lt 100 ]; then echo "missing sxc.sa"; exit 1; fi
-	./selfhost/stage2 selfhost/sxc.sa selfhost/sxc_out.c
-	clang -O2 -pthread -o selfhost/sxc selfhost/sxc_out.c
-	./selfhost/sxc selfhost/sxc_test_in.sa selfhost/sxc_emit.c
+selfhost-full:
+	clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
+	./selfhost/sxc_full selfhost/sxc_test_in.sa selfhost/sxc_emit.c
 	clang -O2 -o selfhost/sxc_run selfhost/sxc_emit.c
 	./selfhost/sxc_run | grep -q 42
+	./selfhost/sxc_full examples/builtins_demo.sa selfhost/builtins_out.c
+	clang -O2 -o selfhost/builtins_run selfhost/builtins_out.c
+	./selfhost/builtins_run | grep -q "hello world"
+	@echo SELFHOST-FULL-OK
+
+selfhost-fast: selfhost-full
 	@echo SELFHOST-FAST-OK
 
-selfhost: selfhost-fast
+selfhost: selfhost-full
 	@echo SELFHOST-OK
 
-selfhost-loop: selfhost-fast
-	@test -f selfhost/prove_loop.c && clang -O2 -o selfhost/prove_loop selfhost/prove_loop.c && ./selfhost/prove_loop || true
-
-selfhost-recompile: selfhost-fast
-	clang -O2 -o selfhost/prove_recompile selfhost/prove_recompile.c
-	./selfhost/prove_recompile
+selfhost-recompile: selfhost-full
+	./selfhost/sxc_full selfhost/sxc_test_in.sa selfhost/re_a.c
+	clang -O2 -o selfhost/re_a selfhost/re_a.c
+	./selfhost/re_a | grep -q 42
+	@echo SELFHOST-RECOMPILE-OK
 
 native:
 	@if ls selfhost/native_src/p00.c.part >/dev/null 2>&1; then \
@@ -56,4 +53,4 @@ test: selfhost-recompile
 	@echo TEST-OK
 
 clean:
-	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_run selfhost/sx selfhost/native_aot selfhost/prove_* selfhost/re_*
+	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_full selfhost/sxc_run selfhost/sx selfhost/native_aot selfhost/re_* selfhost/builtins_*

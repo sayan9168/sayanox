@@ -1,10 +1,11 @@
 # Status
 
 ## Done
-1–8 prior milestones
-**#1 progress:** richer emit runtime + hold reassignment fix + `make selfhost-recompile`
+1–8 prior + **sxc_full builtins**
+- read_file / write_file / len / concat / arg / index
+- symbol table (reassignment + string vs num)
+- `make selfhost-full`
 
 ## Frontier
-- sxc frontend parses full `sxc.sa` (no stage2 to regen)
+- Port sxc_full → pure `.sa` (zero C-written frontend)
 - Custom struct decl beyond Point/Box/Vec3
-- Native/sxc feature parity
