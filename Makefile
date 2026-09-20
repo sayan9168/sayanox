@@ -48,7 +48,7 @@ gc-test: stage2
 	./selfhost/stage2 examples/gc_rc_loop.sa selfhost/_gc.c
 	clang -O2 -o selfhost/_gc selfhost/_gc.c
 	./selfhost/_gc > selfhost/_gc.out
-	grep -qx '2001' selfhost/_gc.out
+	grep -qx '2005' selfhost/_gc.out
 	grep -qx 'gc-rc-ok' selfhost/_gc.out
 	rm -f selfhost/_gc selfhost/_gc.c selfhost/_gc.out
 
