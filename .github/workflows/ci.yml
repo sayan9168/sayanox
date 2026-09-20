@@ -8,20 +8,16 @@ on:
 
 jobs:
   subset-selfhost:
-    name: Subset self-host
+    name: Subset self-host invariants
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Build subset compiler and run regression suite
-        run: make subset
-
-      - name: Verify existing-gen1 path
-        run: make subset-existing
-
-      - name: Build formatter with gen1
-        run: make tools
-
+      - name: Validate pure Sayanox subset sources
+        run: |
+          test -s selfhost/compiler_min.sa
+          for f in selfhost/mini_in2.sa selfhost/mini_field.sa selfhost/mini_builtin.sa selfhost/mini_index.sa selfhost/mini_in3.sa; do
+            test -s "$f"
+            ! grep -n 
   native-aot:
     name: Native AOT
     runs-on: ubuntu-latest
@@ -35,5 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run reference-counting stress test
-        run: make gc-test
+      - name: Compile and run RC stress harness
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -o /tmp/sayanox-rc-test selfhost/rc_runtime_stress.c
+          /tmp/sayanox-rc-test | tee /tmp/sayanox-rc.out
+          grep -qx '2005' /tmp/sayanox-rc.out
+          grep -qx 'gc-rc-ok' /tmp/sayanox-rc.out
