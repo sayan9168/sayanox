@@ -3,7 +3,8 @@
 all: selfhost-min
 
 selfhost-full:
-	cp selfhost/sxc_full.c.txt selfhost/sxc_full.c
+	@if [ -d selfhost/sxc_full_b64 ]; then cat selfhost/sxc_full_b64/b*.txt | tr -d '\n' | base64 -d | gzip -d > selfhost/sxc_full.c; \
+	elif [ -f selfhost/sxc_full.c.txt ]; then cp selfhost/sxc_full.c.txt selfhost/sxc_full.c; fi
 	clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
 	./selfhost/sxc_full selfhost/mini_in2.sa selfhost/ref_out.c
 	clang -O2 -o selfhost/ref_run selfhost/ref_out.c
