@@ -7,14 +7,27 @@ cd "$ROOT"
 if [ -x selfhost/gen1 ]; then
   echo "[subset] using existing gen1"
 else
-  echo "[bootstrap] gen1 is missing; using the C seed once"
-  if [ ! -f selfhost/sxc_full.c ]; then
-    echo "error: selfhost/gen1 is missing and the C bootstrap seed is unavailable" >&2
+  echo "[bootstrap] gen1 is missing; bootstrapping once"
+  if [ ! -x selfhost/stage2 ]; then
+    if [ -f selfhost/build_stage2.c ]; then
+      echo "[bootstrap] building the C seed stage2 with clang"
+      clang -O2 -o selfhost/build_stage2 selfhost/build_stage2.c
+      ./selfhost/build_stage2
+    fi
+  fi
+  if [ -x selfhost/stage2 ]; then
+    echo "[bootstrap] stage2 -> gen1"
+    ./selfhost/stage2 selfhost/compiler_min.sa selfhost/gen1.c
+    clang -O2 -o selfhost/gen1 selfhost/gen1.c
+  elif [ -f selfhost/sxc_full.c ]; then
+    echo "[bootstrap] falling back to sxc_full.c"
+    clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
+    ./selfhost/sxc_full selfhost/compiler_min.sa selfhost/gen1.c
+    clang -O2 -o selfhost/gen1 selfhost/gen1.c
+  else
+    echo "error: no existing gen1 and no C bootstrap seed is available" >&2
     exit 1
   fi
-  clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
-  ./selfhost/sxc_full selfhost/compiler_min.sa selfhost/gen1.c
-  clang -O2 -o selfhost/gen1 selfhost/gen1.c
 fi
 
 echo "[subset] gen1 -> mini_in2"
