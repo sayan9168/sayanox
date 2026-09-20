@@ -1,0 +1,8 @@
+hold xs = [10, 20, 30]
+show xs
+hold p = Point{3, 4}
+show p.x
+show p.y
+hold msg = "hi"
+show msg
+show "done"
