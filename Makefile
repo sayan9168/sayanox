@@ -11,6 +11,7 @@ selfhost-full:
 	@echo SELFHOST-FULL-OK
 
 selfhost-min: selfhost-full
+	@if [ -d selfhost/compiler_min_parts ]; then cat selfhost/compiler_min_parts/p*.txt > selfhost/compiler_min.sa; fi
 	./selfhost/sxc_full selfhost/compiler_min.sa selfhost/compiler_min_out.c
 	clang -O2 -o selfhost/compiler_min selfhost/compiler_min_out.c
 	./selfhost/compiler_min selfhost/mini_in.sa selfhost/mini_out.c
