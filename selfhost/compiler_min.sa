@@ -1,0 +1,350 @@
+// Pure Sayanox mini-compiler (subset)
+// Compiles: hold name = NUMBER, show NUMBER|name, show "string"
+// Built by sxc_full — pure-.sa self-host step
+
+hold in_path = "selfhost/mini_in.sa"
+hold out_path = "selfhost/mini_out.c"
+hold na = arg_count()
+when na >= 2 {
+  hold in_path = arg(1)
+}
+when na >= 3 {
+  hold out_path = arg(2)
+}
+
+hold source = read_file(in_path)
+hold n = len(source)
+hold pos = 0
+hold body = ""
+hold holds = 0
+hold shows = 0
+hold sk = 0
+hold rn = 0
+hold skipc = 0
+hold name = ""
+hold val = 0
+hold c = 0
+hold c1 = 0
+hold c2 = 0
+hold c3 = 0
+hold cs = 0
+hold cq = 0
+hold s = ""
+hold cn = 0
+hold cd = 0
+hold q = chr(34)
+hold nl = chr(10)
+hold bs = chr(92)
+
+hold running = 1
+while running == 1 {
+  when pos >= n {
+    hold running = 0
+  } otherwise {
+    hold c = source[pos]
+    when c == 32 {
+      hold pos = pos + 1
+    } otherwise {
+      when c == 10 {
+        hold pos = pos + 1
+      } otherwise {
+        when c == 13 {
+          hold pos = pos + 1
+        } otherwise {
+          when c == 9 {
+            hold pos = pos + 1
+          } otherwise {
+            when c == 47 {
+              when pos + 1 < n {
+                hold c2 = source[pos + 1]
+                when c2 == 47 {
+                  hold pos = pos + 2
+                  hold skipc = 1
+                  while skipc == 1 {
+                    when pos >= n {
+                      hold skipc = 0
+                    } otherwise {
+                      hold c3 = source[pos]
+                      when c3 == 10 {
+                        hold skipc = 0
+                      } otherwise {
+                        hold pos = pos + 1
+                      }
+                    }
+                  }
+                } otherwise {
+                  hold pos = pos + 1
+                }
+              } otherwise {
+                hold pos = pos + 1
+              }
+            } otherwise {
+              when c == 104 {
+                when pos + 3 < n {
+                  hold c1 = source[pos + 1]
+                  hold c2 = source[pos + 2]
+                  hold c3 = source[pos + 3]
+                  when c1 == 111 {
+                    when c2 == 108 {
+                      when c3 == 100 {
+                        hold pos = pos + 4
+                        hold sk = 1
+                        while sk == 1 {
+                          when pos >= n {
+                            hold sk = 0
+                          } otherwise {
+                            hold cs = source[pos]
+                            when cs == 32 {
+                              hold pos = pos + 1
+                            } otherwise {
+                              hold sk = 0
+                            }
+                          }
+                        }
+                        hold name = ""
+                        hold rn = 1
+                        while rn == 1 {
+                          when pos >= n {
+                            hold rn = 0
+                          } otherwise {
+                            hold cn = source[pos]
+                            when cn >= 97 {
+                              when cn <= 122 {
+                                hold name = concat(name, chr(cn))
+                                hold pos = pos + 1
+                              } otherwise {
+                                hold rn = 0
+                              }
+                            } otherwise {
+                              hold rn = 0
+                            }
+                          }
+                        }
+                        hold sk = 1
+                        while sk == 1 {
+                          when pos >= n {
+                            hold sk = 0
+                          } otherwise {
+                            hold cs = source[pos]
+                            when cs == 32 {
+                              hold pos = pos + 1
+                            } otherwise {
+                              when cs == 61 {
+                                hold pos = pos + 1
+                                hold sk = 0
+                              } otherwise {
+                                hold sk = 0
+                              }
+                            }
+                          }
+                        }
+                        hold sk = 1
+                        while sk == 1 {
+                          when pos >= n {
+                            hold sk = 0
+                          } otherwise {
+                            hold cs = source[pos]
+                            when cs == 32 {
+                              hold pos = pos + 1
+                            } otherwise {
+                              hold sk = 0
+                            }
+                          }
+                        }
+                        hold val = 0
+                        hold rn = 1
+                        while rn == 1 {
+                          when pos >= n {
+                            hold rn = 0
+                          } otherwise {
+                            hold cd = source[pos]
+                            when cd >= 48 {
+                              when cd <= 57 {
+                                hold val = val * 10 + (cd - 48)
+                                hold pos = pos + 1
+                              } otherwise {
+                                hold rn = 0
+                              }
+                            } otherwise {
+                              hold rn = 0
+                            }
+                          }
+                        }
+                        hold body = concat(body, "  double ")
+                        hold body = concat(body, name)
+                        hold body = concat(body, " = ")
+                        hold body = concat(body, str(val))
+                        hold body = concat(body, ";")
+                        hold body = concat(body, nl)
+                        hold holds = holds + 1
+                      } otherwise {
+                        hold pos = pos + 1
+                      }
+                    } otherwise {
+                      hold pos = pos + 1
+                    }
+                  } otherwise {
+                    hold pos = pos + 1
+                  }
+                } otherwise {
+                  hold pos = pos + 1
+                }
+              } otherwise {
+                when c == 115 {
+                  when pos + 3 < n {
+                    hold c1 = source[pos + 1]
+                    hold c2 = source[pos + 2]
+                    hold c3 = source[pos + 3]
+                    when c1 == 104 {
+                      when c2 == 111 {
+                        when c3 == 119 {
+                          hold pos = pos + 4
+                          hold sk = 1
+                          while sk == 1 {
+                            when pos >= n {
+                              hold sk = 0
+                            } otherwise {
+                              hold cs = source[pos]
+                              when cs == 32 {
+                                hold pos = pos + 1
+                              } otherwise {
+                                hold sk = 0
+                              }
+                            }
+                          }
+                          when pos < n {
+                            hold cs = source[pos]
+                            when cs == 34 {
+                              hold pos = pos + 1
+                              hold s = ""
+                              hold rn = 1
+                              while rn == 1 {
+                                when pos >= n {
+                                  hold rn = 0
+                                } otherwise {
+                                  hold cq = source[pos]
+                                  when cq == 34 {
+                                    hold pos = pos + 1
+                                    hold rn = 0
+                                  } otherwise {
+                                    hold s = concat(s, chr(cq))
+                                    hold pos = pos + 1
+                                  }
+                                }
+                              }
+                              hold body = concat(body, "  puts(")
+                              hold body = concat(body, q)
+                              hold body = concat(body, s)
+                              hold body = concat(body, q)
+                              hold body = concat(body, ");")
+                              hold body = concat(body, nl)
+                              hold shows = shows + 1
+                            } otherwise {
+                              when cs >= 48 {
+                                when cs <= 57 {
+                                  hold val = 0
+                                  hold rn = 1
+                                  while rn == 1 {
+                                    when pos >= n {
+                                      hold rn = 0
+                                    } otherwise {
+                                      hold cd = source[pos]
+                                      when cd >= 48 {
+                                        when cd <= 57 {
+                                          hold val = val * 10 + (cd - 48)
+                                          hold pos = pos + 1
+                                        } otherwise {
+                                          hold rn = 0
+                                        }
+                                      } otherwise {
+                                        hold rn = 0
+                                      }
+                                    }
+                                  }
+                                  hold body = concat(body, "  printf(")
+                                  hold body = concat(body, q)
+                                  hold body = concat(body, "%g")
+                                  hold body = concat(body, bs)
+                                  hold body = concat(body, "n")
+                                  hold body = concat(body, q)
+                                  hold body = concat(body, ", (double)")
+                                  hold body = concat(body, str(val))
+                                  hold body = concat(body, ");")
+                                  hold body = concat(body, nl)
+                                  hold shows = shows + 1
+                                } otherwise {
+                                  hold name = ""
+                                  hold rn = 1
+                                  while rn == 1 {
+                                    when pos >= n {
+                                      hold rn = 0
+                                    } otherwise {
+                                      hold cn = source[pos]
+                                      when cn >= 97 {
+                                        when cn <= 122 {
+                                          hold name = concat(name, chr(cn))
+                                          hold pos = pos + 1
+                                        } otherwise {
+                                          hold rn = 0
+                                        }
+                                      } otherwise {
+                                        hold rn = 0
+                                      }
+                                    }
+                                  }
+                                  hold body = concat(body, "  printf(")
+                                  hold body = concat(body, q)
+                                  hold body = concat(body, "%g")
+                                  hold body = concat(body, bs)
+                                  hold body = concat(body, "n")
+                                  hold body = concat(body, q)
+                                  hold body = concat(body, ", ")
+                                  hold body = concat(body, name)
+                                  hold body = concat(body, ");")
+                                  hold body = concat(body, nl)
+                                  hold shows = shows + 1
+                                }
+                              } otherwise {
+                                hold pos = pos + 1
+                              }
+                            }
+                          } otherwise {
+                            hold pos = pos + 1
+                          }
+                        } otherwise {
+                          hold pos = pos + 1
+                        }
+                      } otherwise {
+                        hold pos = pos + 1
+                      }
+                    } otherwise {
+                      hold pos = pos + 1
+                    }
+                  } otherwise {
+                    hold pos = pos + 1
+                  }
+                } otherwise {
+                  hold pos = pos + 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+hold out = "#include <stdio.h>"
+hold out = concat(out, nl)
+hold out = concat(out, "int main(void){")
+hold out = concat(out, nl)
+hold out = concat(out, body)
+hold out = concat(out, "  return 0;")
+hold out = concat(out, nl)
+hold out = concat(out, "}")
+hold out = concat(out, nl)
+hold w = write_file(out_path, out)
+show holds
+show shows
+show 1

@@ -1,0 +1,4 @@
+// mini test
+hold answer = 42
+show answer
+show "done"

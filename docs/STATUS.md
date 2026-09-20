@@ -1,11 +1,10 @@
 # Status
 
 ## Done
-1–8 prior + **sxc_full builtins**
-- read_file / write_file / len / concat / arg / index
-- symbol table (reassignment + string vs num)
-- `make selfhost-full`
+- sxc_full builtins
+- **Pure Sayanox mini-compiler** (`compiler_min.sa`)
+  - `make selfhost-min` → SELFHOST-MIN-OK
 
 ## Frontier
-- Port sxc_full → pure `.sa` (zero C-written frontend)
-- Custom struct decl beyond Point/Box/Vec3
+- Grow compiler_min toward full grammar (while/when/make)
+- Shrink C frontend as .sa compiler grows
