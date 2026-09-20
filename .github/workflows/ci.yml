@@ -17,6 +17,9 @@ jobs:
           test -s selfhost/compiler_min.sa
           for f in selfhost/mini_in2.sa selfhost/mini_field.sa selfhost/mini_builtin.sa selfhost/mini_index.sa selfhost/mini_in3.sa; do
             test -s "$f"
+      - name: Build subset-compatible native smoke
+        run: make native-test
+
   native-aot:
     name: Native AOT
     runs-on: ubuntu-latest
