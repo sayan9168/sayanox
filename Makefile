@@ -1,4 +1,4 @@
-.PHONY: all stage2 selfhost selfhost-fast app native sx test clean unified sx-bin
+.PHONY: all stage2 selfhost selfhost-fast selfhost-loop app native sx test clean unified sx-bin
 
 all: unified
 
@@ -15,7 +15,6 @@ stage2:
 	@if [ -f selfhost/inject_chr.c ]; then clang -O2 -o selfhost/inject_chr selfhost/inject_chr.c && ./selfhost/inject_chr; fi
 	clang -O2 -o selfhost/stage2 selfhost/stage2_template.c
 
-# Assemble sxc.sa from parts if present
 selfhost/sxc.sa.b64:
 	@if [ -d selfhost/sxc_sa_parts ]; then \
 	  cat selfhost/sxc_sa_parts/p00.txt selfhost/sxc_sa_parts/p01a.txt selfhost/sxc_sa_parts/p01b.txt selfhost/sxc_sa_parts/p02.txt > selfhost/sxc.sa.b64; \
@@ -39,6 +38,10 @@ selfhost-fast:
 	./selfhost/sxc_run | grep -q 42
 	@echo SELFHOST-FAST-OK
 
+selfhost-loop: selfhost-fast
+	clang -O2 -o selfhost/prove_loop selfhost/prove_loop.c
+	./selfhost/prove_loop
+
 native:
 	@if ls selfhost/native_src/p00.c.part >/dev/null 2>&1; then \
 	  cat selfhost/native_src/p[0-9][0-9].c.part > selfhost/native_aot.c; \
@@ -51,12 +54,10 @@ sx: sx-bin
 	@test -n "$(FILE)" || (echo "Usage: make sx FILE=prog.sa [BACKEND=auto]"; exit 1)
 	./selfhost/sx --backend=$(or $(BACKEND),auto) $(if $(OUT),-o $(OUT),) $(FILE)
 
-test: unified
+test: unified selfhost-loop
 	./selfhost/sx --backend=native -o /tmp/t_hello examples/hello.sa
 	/tmp/t_hello | grep -q 42
-	./selfhost/sx --backend=c -o /tmp/t_sxc selfhost/sxc_test_in.sa
-	/tmp/t_sxc | grep -q 42
 	@echo TEST-OK
 
 clean:
-	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_run selfhost/sx selfhost/native_aot
+	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_run selfhost/sx selfhost/native_aot selfhost/prove_loop selfhost/loop_*

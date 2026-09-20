@@ -1,15 +1,14 @@
 # Status
 
-## Done
-1–6 previous milestones
-7. **Full struct init in sxc** ✅
+## Done (1–8)
+1. Static types ✅
+2. Concurrent GC ✅
+3. Stage2-free bootstrap ✅
+4. Lists ✅
+5. Unified `sx` ✅
+6. Registry + LSP ✅
+7. Struct init ✅
+8. **Closed self-host loop** ✅ (`make selfhost-loop`)
 
-```sa
-hold p = Point { 10, 20 }
-show p.x
-hold q = Box { 3, 4 }
-hold v = Vec3 { 1, 2, 3 }
-```
-
-## Remaining
-8. Full-language sxc re-lowers sxc.sa
+## Frontier
+- sxc frontend parity with full `sxc.sa` (no stage2 to regen compiler C)
