@@ -1,4 +1,4 @@
-.PHONY: all test complete subset subset-existing stage2 sx tools bootstrap-production native bootstrap-native clean
+.PHONY: all test complete subset subset-existing stage2 sx tools bootstrap-production native native-test bootstrap-native clean
 
 all: subset
 
@@ -37,6 +37,11 @@ bootstrap-production: stage2
 
 native:
 	clang -O2 -o selfhost/native_aot selfhost/native_aot.c
+
+native-test: native
+	./selfhost/native_aot examples/native_hello.sa selfhost/_native_test
+	test "$(shell ./selfhost/_native_test)" = "42"
+	rm -f selfhost/_native_test
 
 bootstrap-native: native
 	./selfhost/native_aot examples/hello.sa selfhost/native_hello
