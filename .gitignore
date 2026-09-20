@@ -5,3 +5,7 @@
 *.exe
 program
 hello
+
+!selfhost/*.c.txt
+!selfhost/sxc_full_lines/
+!selfhost/sxc_full_lines/**

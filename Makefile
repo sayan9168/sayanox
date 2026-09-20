@@ -16,7 +16,7 @@ stage2:
 	clang -O2 -o selfhost/stage2 selfhost/stage2_template.c
 
 selfhost-full:
-	cat selfhost/sxc_full_a.c.txt selfhost/sxc_full_b.c.txt > selfhost/sxc_full.c
+	cat selfhost/sxc_full_lines/L*.txt > selfhost/sxc_full.c
 	clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
 	./selfhost/sxc_full selfhost/sxc_test_in.sa selfhost/sxc_emit.c
 	clang -O2 -o selfhost/sxc_run selfhost/sxc_emit.c
