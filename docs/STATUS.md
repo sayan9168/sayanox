@@ -1,9 +1,9 @@
 # Status
 
 ## Done
-- **while / when / make** on Stage-3 `sxc_full` (`mini_in2.sa` → 0 1 2 42 99 done)
-- Pure Sayanox `compiler_min.sa` (hold/show subset)
+- **Pure `.sa` compiler_min** with while / when / make / hold / show
+- `make selfhost-min` → SELFHOST-MIN-OK
 
 ## Frontier
-- Grow pure `.sa` `compiler_min` to parse while/when/make
-- Retire C-written sxc_full when `.sa` catches up
+- Grow pure compiler (lists, structs, string builtins)
+- compiler_min compiles improved compiler_min (true .sa self-host loop)
