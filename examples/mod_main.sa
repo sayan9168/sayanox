@@ -1,0 +1,3 @@
+// Relative module import demonstration.
+use "mod_lib.sa"
+show 1
