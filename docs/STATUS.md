@@ -3,12 +3,12 @@
 ## Done
 1. Static type checker ✅
 2. OS-thread concurrent GC ✅
-3. **Stage2-free sxc bootstrap** ✅ (`make selfhost-fast`)
-4. Unified sxc + CLI + elif + show string
-5. Native AOT, sxpkg
+3. Stage2-free sxc bootstrap ✅
+4. **Lists in sxc path** ✅ (`[1,2,3]`, `xs[i]`)
+5. Field show `p.x` + built-in `Point` typedef in sxc runtime
 
 ## Remaining
-4. Lists/structs in sxc path
 5. Unified native+selfhost backend
 6. Online registry / full LSP
-7. Full-language sxc that re-lowers sxc.sa itself (still stage2 for regenerating C)
+7. Full struct init `Point { x, y }` in sxc (typedef ready; init next)
+8. Full-language sxc re-lowers sxc.sa

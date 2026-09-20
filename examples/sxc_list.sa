@@ -1,0 +1,4 @@
+hold xs = [10, 20, 30]
+show xs[0]
+show xs[1]
+show xs[2]
