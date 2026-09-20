@@ -1,0 +1,15 @@
+  const char *in_path = "selfhost/sxc_test_in.sa";
+  const char *out_path = "selfhost/sxc_emit.c";
+  if (argc >= 2) in_path = argv[1];
+  if (argc >= 3) out_path = argv[2];
+  src = load_file(in_path); n = (int)strlen(src); pos = 0;
+  body[0]=0; funcs[0]=0; makes=holds=shows=whiles=whens=0; nknown=0;
+  while (pos < n) { skip_ws(); if (pos>=n) break; parse_stmt(); }
+  FILE *o = fopen(out_path,"wb");
+  if (!o) { fprintf(stderr,"cannot write %s\n",out_path); return 1; }
+  fputs(PREAMBLE,o); fputs(funcs,o);
+  fputs("int main(int argc, char **argv){\n  sx_argc=argc; sx_argv=argv;\n",o);
+  fputs(body,o); fputs("  return 0;\n}\n",o); fclose(o);
+  printf("%d\n%d\n%d\n%d\n%d\n1\n", makes, holds, shows, whiles, whens);
+  return 0;
+}

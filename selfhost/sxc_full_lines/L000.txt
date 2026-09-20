@@ -1,0 +1,40 @@
+/*
+ * Sayanox Stage-3 frontend with builtins (self-host path)
+ * hold/show/while/when/elif/otherwise/make/give
+ * read_file, write_file, len, concat, arg_count, arg, indexing, strings, lists, structs
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+static char *src; static int n, pos;
+static char body[256000], funcs[64000];
+static int makes, holds, shows, whiles, whens;
+static char known[256][64]; static int known_kind[256]; static int nknown;
+
+static int find_known(const char *name) {
+  for (int i=0;i<nknown;i++) if (!strcmp(known[i], name)) return i;
+  return -1;
+}
+static void add_known(const char *name, int kind) {
+  int i = find_known(name);
+  if (i >= 0) { known_kind[i] = kind; return; }
+  if (nknown < 256) { strncpy(known[nknown], name, 63); known_kind[nknown] = kind; nknown++; }
+}
+
+static void skip_ws(void) {
+  while (pos < n) {
+    char c = src[pos];
+    if (c==' '||c=='\t'||c=='\n'||c=='\r') { pos++; continue; }
+    if (c=='/' && pos+1<n && src[pos+1]=='/') { while (pos<n && src[pos]!='\n') pos++; continue; }
+    break;
+  }
+}
+static int match(const char *kw) {
+  int k = (int)strlen(kw);
+  if (pos+k > n) return 0;
+  if (strncmp(src+pos, kw, k) != 0) return 0;
+  if (pos+k < n && (isalnum((unsigned char)src[pos+k]) || src[pos+k]=='_')) return 0;
+  return 1;
+}
