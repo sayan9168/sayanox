@@ -3,7 +3,6 @@ hold s = "start"
 hold i = 0
 while i < 2000 {
   hold next = concat(s, "x")
-  release(s)
   hold s = next
   hold i = i + 1
 }
