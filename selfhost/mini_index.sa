@@ -1,0 +1,6 @@
+hold msg = "Hi"
+hold c0 = msg[0]
+show c0
+hold c1 = msg[1]
+show c1
+show "done"
