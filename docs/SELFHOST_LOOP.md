@@ -16,8 +16,8 @@ gen1      →  mini_*.sa        →  runnable C
 
 ## Run
 ```sh
-./selfhost/bootstrap_selfhost_loop.sh
-# SELFHOST-LOOP-OK
+make subset
+# SUBSET-SELFHOST-OK
 ```
 
 ## Next
