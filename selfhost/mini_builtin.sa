@@ -1,0 +1,12 @@
+hold n = arg_count()
+show n
+hold a = chr(65)
+show "A"
+hold s = concat("hello", "!")
+show "hello!"
+hold ln = len(s)
+show ln
+hold x = 10
+hold y = str(x)
+show "10"
+show "done"

@@ -1,14 +1,21 @@
-# Stage-3 builtins (sxc_full)
+# Hold RHS builtins (pure .sa gen1)
 
-| Builtin | Example | Emit |
-|---------|---------|------|
-| string hold | `hold s = "hi"` | `char *s = "hi";` |
-| `concat` | `hold t = concat(a, b)` | `sx_concat(a,b)` |
-| `len` | `hold n = len(s)` | `sx_len(s)` |
-| index | `hold c = s[0]` | `sx_index(s,0)` |
-| `read_file` | `hold d = read_file(path)` | `sx_read_file(path)` |
-| `write_file` | `hold w = write_file(p, d)` | `sx_write_file(p,d)` |
-| `arg_count` / `arg` | `hold n = arg_count()` | `sx_arg_count()` |
-| `chr` / `str` | `hold s = chr(65)` | `sx_chr(65)` |
+Gen1 lowers these function calls on the right-hand side of `hold`:
 
-Build: `make selfhost-full`
+| Sayanox | Emitted C |
+|---------|-----------|
+| `arg_count()` | `sx_arg_count()` |
+| `arg(i)` | `sx_arg(i)` |
+| `read_file(path)` | `sx_read_file(path)` |
+| `write_file(path, data)` | `sx_write_file(path, data)` |
+| `concat(a, b)` | `sx_concat(a, b)` |
+| `chr(n)` | `sx_chr(n)` |
+| `str(n)` | `sx_str(n)` |
+| `len(s)` | `sx_len(s)` |
+
+## Test
+```sh
+./selfhost/gen1 selfhost/mini_builtin.sa /tmp/out.c
+clang -o /tmp/out /tmp/out.c && /tmp/out a b
+# 3 / A / hello! / 6 / 10 / done
+```
