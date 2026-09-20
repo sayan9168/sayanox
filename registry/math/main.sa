@@ -1,0 +1,6 @@
+make double(n) {
+  give n + n
+}
+make square(n) {
+  give n * n
+}
