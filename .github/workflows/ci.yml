@@ -21,3 +21,11 @@ jobs:
 
       - name: Build formatter with gen1
         run: make tools
+
+  native-aot:
+    name: Native AOT
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native compiler and run executable smoke test
+        run: make native-test
