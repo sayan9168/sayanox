@@ -1,0 +1,4 @@
+hold p = Point{3, 4}
+show p.x
+show p.y
+show "done"

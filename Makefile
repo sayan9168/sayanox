@@ -17,9 +17,9 @@ selfhost-min: selfhost-full
 	./selfhost/compiler_min selfhost/mini_in2.sa selfhost/mini_out2.c
 	clang -O2 -o selfhost/mini_run2 selfhost/mini_out2.c
 	./selfhost/mini_run2 | grep -q 42
-	./selfhost/compiler_min selfhost/mini_in3.sa selfhost/mini_out3.c
-	clang -O2 -o selfhost/mini_run3 selfhost/mini_out3.c
-	./selfhost/mini_run3 | grep -q listok
+	./selfhost/compiler_min selfhost/mini_field.sa selfhost/mini_out_field.c
+	clang -O2 -o selfhost/mini_run_field selfhost/mini_out_field.c
+	./selfhost/mini_run_field | grep -q 3
 	@echo SELFHOST-MIN-OK
 
 selfhost: selfhost-min
@@ -27,4 +27,4 @@ test: selfhost-min
 	@echo TEST-OK
 
 clean:
-	rm -f selfhost/sxc_full selfhost/compiler_min selfhost/mini_run* selfhost/ref_run selfhost/*_out.c
+	rm -f selfhost/sxc_full selfhost/compiler_min selfhost/mini_run* selfhost/ref_run selfhost/*_out*.c
