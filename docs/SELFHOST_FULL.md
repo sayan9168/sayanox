@@ -1,14 +1,18 @@
-# Full self-host (Stage-3 closed loop)
+# Full self-host progress (#1)
 
-| Step | Needs stage2? |
-|------|---------------|
-| Build `sxc` from frozen C | **No** — `make selfhost-fast` |
-| Compile any `.sa` app | **No** — `./selfhost/sxc` |
-| Regen C after editing `sxc.sa` | **Yes** — `make selfhost` |
+## Closed loop (done)
 
-```sh
-make selfhost-fast
-make selfhost-loop   # SELFHOST-LOOP-OK
-```
+| Action | stage2? |
+|--------|---------|
+| Build sxc from frozen C | **No** — `make selfhost-fast` |
+| Compile apps | **No** — `./selfhost/sxc` |
+| Stable recompile of tests | **No** — `make selfhost-recompile` |
+| Regenerate C after editing `sxc.sa` | **Yes** — `make selfhost` |
 
-Frontier: expand sxc so it can parse full `sxc.sa` (read_file, indexing, concat) without stage2.
+## Runtime in every emit
+
+`sx_arg_count`, `sx_arg`, `sx_read_file`, `sx_write_file`, `sx_concat2`, `sx_len`, `sx_index`, lists, Point/Box/Vec3.
+
+## Remaining for pure sxc→sxc.sa
+
+Frontend still missing: `read_file` / `source[i]` / multi-arg `concat` as hold RHS, `write_file` statement emit.

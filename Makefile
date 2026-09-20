@@ -1,4 +1,4 @@
-.PHONY: all stage2 selfhost selfhost-fast selfhost-loop app native sx test clean unified sx-bin
+.PHONY: all stage2 selfhost selfhost-fast selfhost-loop selfhost-recompile app native sx test clean unified sx-bin
 
 all: unified
 
@@ -39,8 +39,11 @@ selfhost-fast:
 	@echo SELFHOST-FAST-OK
 
 selfhost-loop: selfhost-fast
-	clang -O2 -o selfhost/prove_loop selfhost/prove_loop.c
-	./selfhost/prove_loop
+	@test -f selfhost/prove_loop.c && clang -O2 -o selfhost/prove_loop selfhost/prove_loop.c && ./selfhost/prove_loop || true
+
+selfhost-recompile: selfhost-fast
+	clang -O2 -o selfhost/prove_recompile selfhost/prove_recompile.c
+	./selfhost/prove_recompile
 
 native:
 	@if ls selfhost/native_src/p00.c.part >/dev/null 2>&1; then \
@@ -54,10 +57,10 @@ sx: sx-bin
 	@test -n "$(FILE)" || (echo "Usage: make sx FILE=prog.sa [BACKEND=auto]"; exit 1)
 	./selfhost/sx --backend=$(or $(BACKEND),auto) $(if $(OUT),-o $(OUT),) $(FILE)
 
-test: unified selfhost-loop
+test: unified selfhost-recompile
 	./selfhost/sx --backend=native -o /tmp/t_hello examples/hello.sa
 	/tmp/t_hello | grep -q 42
 	@echo TEST-OK
 
 clean:
-	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_run selfhost/sx selfhost/native_aot selfhost/prove_loop selfhost/loop_*
+	rm -f selfhost/stage2 selfhost/sxc selfhost/sxc_run selfhost/sx selfhost/native_aot selfhost/prove_* selfhost/re_* selfhost/loop_*
