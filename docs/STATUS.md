@@ -6,8 +6,8 @@
 3. Stage2-free sxc bootstrap ✅
 4. Lists in sxc path ✅
 5. Unified native + selfhost backend ✅
-6. **Online registry + full LSP** ✅
+6. Online registry + full LSP ✅
+7. **Full struct init in sxc** ✅ (`Point{}` `Box{}` `Vec3{}` field show)
 
 ## Remaining
-7. Full struct init in sxc
 8. Full-language sxc re-lowers sxc.sa

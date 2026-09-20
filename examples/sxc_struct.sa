@@ -1,0 +1,6 @@
+hold p = Point { 10, 20 }
+show p.x
+show p.y
+hold q = Box { 3, 4 }
+show q.a
+show q.b
