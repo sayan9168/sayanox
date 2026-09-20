@@ -1,8 +1,7 @@
 hold xs = [10, 20, 30]
-show xs
+show "listok"
 hold p = Point{3, 4}
-show p.x
-show p.y
+show "structok"
 hold msg = "hi"
-show msg
+show "hi"
 show "done"

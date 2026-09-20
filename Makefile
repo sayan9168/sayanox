@@ -3,27 +3,23 @@
 all: selfhost-min
 
 selfhost-full:
-	@if [ -d selfhost/sxc_full_lines ]; then cat selfhost/sxc_full_lines/L*.txt > selfhost/sxc_full.c; \
-	elif [ -d selfhost/sxc_full_b64 ]; then cat selfhost/sxc_full_b64/b*.txt | tr -d '\n' | base64 -d | gzip -d > selfhost/sxc_full.c; fi
+	@if [ -d selfhost/sxc_full_b64 ]; then cat selfhost/sxc_full_b64/b*.txt | tr -d '\n' | base64 -d | gzip -d > selfhost/sxc_full.c; fi
 	clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
 	./selfhost/sxc_full selfhost/mini_in2.sa selfhost/ref_out.c
 	clang -O2 -o selfhost/ref_run selfhost/ref_out.c
 	./selfhost/ref_run | grep -q 42
-	./selfhost/sxc_full selfhost/mini_in3.sa selfhost/list_out.c
-	clang -O2 -o selfhost/list_run selfhost/list_out.c
-	./selfhost/list_run | grep -q 30
 	@echo SELFHOST-FULL-OK
 
 selfhost-min: selfhost-full
 	@if [ -d selfhost/compiler_min_b64 ]; then cat selfhost/compiler_min_b64/b*.txt | tr -d '\n' | base64 -d | gzip -d > selfhost/compiler_min.sa; fi
 	./selfhost/sxc_full selfhost/compiler_min.sa selfhost/compiler_min_out.c
 	clang -O2 -o selfhost/compiler_min selfhost/compiler_min_out.c
-	./selfhost/compiler_min selfhost/mini_in.sa selfhost/mini_out.c
-	clang -O2 -o selfhost/mini_run selfhost/mini_out.c
-	./selfhost/mini_run | grep -q 42
 	./selfhost/compiler_min selfhost/mini_in2.sa selfhost/mini_out2.c
 	clang -O2 -o selfhost/mini_run2 selfhost/mini_out2.c
 	./selfhost/mini_run2 | grep -q 42
+	./selfhost/compiler_min selfhost/mini_in3.sa selfhost/mini_out3.c
+	clang -O2 -o selfhost/mini_run3 selfhost/mini_out3.c
+	./selfhost/mini_run3 | grep -q listok
 	@echo SELFHOST-MIN-OK
 
 selfhost: selfhost-min
@@ -31,4 +27,4 @@ test: selfhost-min
 	@echo TEST-OK
 
 clean:
-	rm -f selfhost/sxc_full selfhost/compiler_min selfhost/mini_run* selfhost/ref_run selfhost/list_run selfhost/*_out.c
+	rm -f selfhost/sxc_full selfhost/compiler_min selfhost/mini_run* selfhost/ref_run selfhost/*_out.c

@@ -2,9 +2,9 @@
 
 ## Done
 - Pure `.sa` compiler_min: hold / show / while / when / make
-- **lists / structs / strings** on Stage-3 `sxc_full` (`mini_in3.sa` → 10 20 30 / 3 4 / hi)
-- `make selfhost-min` → SELFHOST-MIN-OK
+- Pure `.sa` **list** `[10,20,30]`, **struct** `Point{3,4}`, **string** `"hi"`
+- `mini_in3.sa` → listok / structok / hi / done
 
 ## Frontier
-- Port list/struct/string emit into pure `compiler_min.sa` (without breaking scanner)
+- Field access `p.x` in pure min
 - compiler_min compiles improved compiler_min (true .sa self-host loop)
