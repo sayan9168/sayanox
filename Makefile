@@ -4,6 +4,7 @@ all: subset
 
 stage2:
 	@if [ ! -x selfhost/stage2 ]; then clang -O2 -o selfhost/build_stage2 selfhost/build_stage2.c; ./selfhost/build_stage2; fi
+	@test -x selfhost/stage2
 
 sx:
 	chmod +x selfhost/sx
@@ -48,8 +49,10 @@ gc-test: stage2
 	./selfhost/inject_gc
 	./selfhost/stage2 examples/gc_rc_loop.sa selfhost/_gc.c
 	clang -O2 -o selfhost/_gc selfhost/_gc.c
-	./selfhost/_gc | grep -qx '2005'
-	./selfhost/_gc | grep -qx 'gc-rc-ok'
+	./selfhost/_gc > selfhost/_gc.out
+	grep -qx '2005' selfhost/_gc.out
+	grep -qx 'gc-rc-ok' selfhost/_gc.out
+	rm -f selfhost/_gc selfhost/_gc.c selfhost/_gc.out selfhost/inject_gc
 
 bootstrap-native: native
 	./selfhost/native_aot examples/hello.sa selfhost/native_hello
