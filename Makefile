@@ -1,4 +1,4 @@
-.PHONY: all test subset pure-gen2 native native-test gc-test clean
+.PHONY: all test subset pure-gen2 lang-quality native native-test gc-test clean
 
 all: subset
 
@@ -10,7 +10,11 @@ pure-gen2: subset
 	chmod +x selfhost/bootstrap_pure_gen2.sh
 	./selfhost/bootstrap_pure_gen2.sh
 
-test: subset pure-gen2
+lang-quality: subset
+	chmod +x selfhost/lang_quality.sh
+	./selfhost/lang_quality.sh
+
+test: subset pure-gen2 lang-quality
 	@echo TEST-OK
 
 native:
