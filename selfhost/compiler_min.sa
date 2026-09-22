@@ -22,7 +22,6 @@ hold sk = 0
 hold rn = 0
 hold skipc = 0
 hold name = ""
-hold expr = ""
 hold val = 0
 hold c = 0
 hold c1 = 0
@@ -80,54 +79,7 @@ while running == 1 {
                 hold pos = pos + 1
               }
             } otherwise {
-              when c == 109 {
-                // make <name>(<expr>) is emitted as a C function definition.
-                when pos + 3 < n {
-                  hold c1 = sx_index(source,pos + 1)
-                  hold c2 = sx_index(source,pos + 2)
-                  hold c3 = sx_index(source,pos + 3)
-                  when c1 == 97 {
-                    when c2 == 107 {
-                      when c3 == 101 {
-                        hold pos = pos + 4
-                        hold sk = 1
-                        while sk == 1 {
-                          when pos >= n { hold sk = 0 } otherwise {
-                            hold cs = sx_index(source,pos)
-                            when cs == 32 { hold pos = pos + 1 } otherwise { hold sk = 0 }
-                          }
-                        }
-                        hold name = ""
-                        hold rn = 1
-                        while rn == 1 {
-                          when pos >= n { hold rn = 0 } otherwise {
-                            hold cn = sx_index(source,pos)
-                            when cn >= 97 {
-                              when cn <= 122 {
-                                hold name = concat(name, chr(cn))
-                                hold pos = pos + 1
-                              } otherwise { hold rn = 0 }
-                            } otherwise { hold rn = 0 }
-                          }
-                        }
-                        hold sk = 1
-                        while sk == 1 {
-                          when pos >= n { hold sk = 0 } otherwise {
-                            hold cs = sx_index(source,pos)
-                            when cs == 32 { hold pos = pos + 1 } otherwise { hold sk = 0 }
-                          }
-                        }
-                        hold pos = pos + 1
-                        hold body = concat(body, "  double ")
-                        hold body = concat(body, name)
-                        hold body = concat(body, "(double x){ return x + x; }")
-                        hold body = concat(body, nl)
-                      } otherwise { hold pos = pos + 1 }
-                    } otherwise { hold pos = pos + 1 }
-                  } otherwise { hold pos = pos + 1 }
-                } otherwise { hold pos = pos + 1 }
-              } otherwise {
-                
+              when c == 104 {
                 when pos + 3 < n {
                   hold c1 = sx_index(source,pos + 1)
                   hold c2 = sx_index(source,pos + 2)
