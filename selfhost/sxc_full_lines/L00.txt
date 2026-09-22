@@ -1,0 +1,40 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+static char *g_src; static int g_n, g_pos;
+static char g_body[512000], g_funcs[128000];
+static int g_makes, g_holds, g_shows, g_whiles, g_whens;
+static char g_known[256][64]; static int g_kind[256]; static int g_nk;
+static int find_k(const char *n){ for(int i=0;i<g_nk;i++) if(!strcmp(g_known[i],n)) return i; return -1; }
+static void add_k(const char *n, int k){ int i=find_k(n); if(i>=0){g_kind[i]=k;return;} if(g_nk<256){strncpy(g_known[g_nk],n,63);g_known[g_nk][63]=0;g_kind[g_nk]=k;g_nk++;} }
+static void skip(void){ while(g_pos<g_n){ char c=g_src[g_pos]; if(c==' '||c=='\t'||c=='\n'||c=='\r'){g_pos++;continue;} if(c=='/'&&g_pos+1<g_n&&g_src[g_pos+1]=='/'){while(g_pos<g_n&&g_src[g_pos]!='\n')g_pos++;continue;} break; } }
+static int match(const char *kw){ int k=(int)strlen(kw); if(g_pos+k>g_n)return 0; if(strncmp(g_src+g_pos,kw,k)!=0)return 0; if(g_pos+k<g_n&&(isalnum((unsigned char)g_src[g_pos+k])||g_src[g_pos+k]=='_'))return 0; return 1; }
+static void rident(char *o,int m){ int i=0; while(g_pos<g_n&&i<m-1&&(isalnum((unsigned char)g_src[g_pos])||g_src[g_pos]=='_')) o[i++]=g_src[g_pos++]; o[i]=0; }
+static double rnum(void){ double v=0; while(g_pos<g_n&&isdigit((unsigned char)g_src[g_pos])){v=v*10+(g_src[g_pos]-'0');g_pos++;} return v; }
+static void rstr(char *o,int m){ int i=0; if(g_pos<g_n&&g_src[g_pos]=='"')g_pos++; while(g_pos<g_n&&i<m-1){ if(g_src[g_pos]=='"'){g_pos++;break;} if(g_src[g_pos]=='\\'&&g_pos+1<g_n){g_pos++; char e=g_src[g_pos++]; if(e=='n')o[i++]='\n'; else if(e=='t')o[i++]='\t'; else if(e=='"')o[i++]='"'; else if(e=='\\')o[i++]='\\'; else o[i++]=e; continue;} o[i++]=g_src[g_pos++]; } o[i]=0; }
+static void emit(const char *s){ size_t L=strlen(g_body),l=strlen(s); if(L+l+1>=sizeof(g_body)){fprintf(stderr,"overflow\n");exit(1);} memcpy(g_body+L,s,l+1); }
+static void emitf(const char *s){ size_t L=strlen(g_funcs),l=strlen(s); if(L+l+1>=sizeof(g_funcs)){fprintf(stderr,"overflow\n");exit(1);} memcpy(g_funcs+L,s,l+1); }
+static void pexpr(char *o, int m);
+static void pexpr(char *o, int m){
+  skip(); o[0]=0; if(g_pos>=g_n) return;
+  if(g_src[g_pos]=='"'){ char s[512]; rstr(s,sizeof(s)); char e[1024]; int ei=0; for(int i=0;s[i]&&ei<1000;i++){ if(s[i]=='"'||s[i]=='\\'){e[ei++]='\\';e[ei++]=s[i];} else if(s[i]=='\n'){e[ei++]='\\';e[ei++]='n';} else e[ei++]=s[i]; } e[ei]=0; snprintf(o,m,"\"%s\"",e); return; }
+  if(isdigit((unsigned char)g_src[g_pos])){ snprintf(o,m,"%.0f",rnum()); goto bin; }
+  if(isalpha((unsigned char)g_src[g_pos])||g_src[g_pos]=='_'){
+    char id[128]; rident(id,sizeof(id)); skip();
+    if(g_pos<g_n&&g_src[g_pos]=='('){
+      g_pos++; char a[8][256]; int na=0; skip();
+      if(g_pos<g_n&&g_src[g_pos]!=')'){ while(na<8){ pexpr(a[na],sizeof(a[0])); na++; skip(); if(g_pos<g_n&&g_src[g_pos]==','){g_pos++;skip();continue;} break; } }
+      if(g_pos<g_n&&g_src[g_pos]==')') g_pos++;
+      if(!strcmp(id,"arg_count")) snprintf(o,m,"sx_arg_count()");
+      else if(!strcmp(id,"arg")&&na>=1) snprintf(o,m,"sx_arg(%s)",a[0]);
+      else if(!strcmp(id,"read_file")&&na>=1) snprintf(o,m,"sx_read_file(%s)",a[0]);
+      else if(!strcmp(id,"write_file")&&na>=2) snprintf(o,m,"sx_write_file(%s,%s)",a[0],a[1]);
+      else if(!strcmp(id,"len")&&na>=1) snprintf(o,m,"sx_len(%s)",a[0]);
+      else if(!strcmp(id,"concat")&&na>=2){ char t[1024]; snprintf(t,sizeof(t),"sx_concat(%s,%s)",a[0],a[1]); for(int i=2;i<na;i++){ char t2[1024]; snprintf(t2,sizeof(t2),"sx_concat(%s,%s)",t,a[i]); strncpy(t,t2,sizeof(t)-1);} snprintf(o,m,"%s",t); }
+      else if(!strcmp(id,"chr")&&na>=1) snprintf(o,m,"sx_chr(%s)",a[0]);
+      else if(!strcmp(id,"str")&&na>=1) snprintf(o,m,"sx_str(%s)",a[0]);
+      else if(na>=1) snprintf(o,m,"%s_(%s)",id,a[0]);
+      else snprintf(o,m,"%s_()",id);
+      goto bin;
+    }
