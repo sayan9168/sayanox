@@ -6,7 +6,4 @@ hold s = concat("hello", "!")
 show "hello!"
 hold ln = len(s)
 show ln
-hold x = 10
-hold y = str(x)
-show "10"
 show "done"

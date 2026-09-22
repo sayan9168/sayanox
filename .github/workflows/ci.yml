@@ -1,42 +1,33 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 jobs:
-  subset-selfhost:
-    name: Subset self-host invariants
+  subset:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate pure Sayanox subset sources
+      - name: Restore seed if needed
         run: |
-          test -s selfhost/compiler_min.sa
-          for f in selfhost/mini_in2.sa selfhost/mini_field.sa selfhost/mini_builtin.sa selfhost/mini_index.sa selfhost/mini_in3.sa; do
-            test -s "$f"
-          done
-      - name: Build subset-compatible native smoke
-        run: make native-test
-
-  native-aot:
-    name: Native AOT
+          chmod +x selfhost/restore_sxc_full.sh
+          ./selfhost/restore_sxc_full.sh
+          test -f selfhost/sxc_full.c
+          grep -q sx_chr selfhost/sxc_full.c
+      - name: Subset self-host
+        run: make subset
+      - name: Pure gen2
+        run: make pure-gen2
+  native:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build native compiler and run executable smoke test
+      - name: Native smoke
         run: make native-test
-
-  memory-runtime:
-    name: Reference-counted runtime
+  memory:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compile and run RC stress harness
-        run: |
-          cc -std=c11 -O2 -Wall -Wextra -Werror -o /tmp/sayanox-rc-test selfhost/rc_runtime_stress.c
-          /tmp/sayanox-rc-test | tee /tmp/sayanox-rc.out
-          grep -qx '2005' /tmp/sayanox-rc.out
-          grep -qx 'gc-rc-ok' /tmp/sayanox-rc.out
+      - name: RC stress
+        run: make gc-test

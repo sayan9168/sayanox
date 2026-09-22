@@ -1,39 +1,25 @@
 # Status
 
-## Working on clean clone
-
-| Target | Result |
-|--------|--------|
-| `make subset` | **SUBSET-SELFHOST-OK** |
-| `make native-test` | **OK** (42) |
-| `make gc-test` | **OK** (2005 / gc-rc-ok) |
-| Stage-2 seed | restored via `sxc_full.c` |
-
-## Bootstrap chain
-
-```
-sxc_full.c  (C seed, required once)
-    |
-    v
-compiler_min.sa  -->  gen1
-    |
-    +--> mini_in2 (while/when/make) via gen1
-    |
-sxc_full --> mini_field / builtins / index / list+struct
-```
-
-## True self-compile
+## Working path (clean clone)
 
 ```sh
-./selfhost/bootstrap_gen2.sh
+make subset          # SUBSET-SELFHOST-OK
+make pure-gen2       # PURE-GEN2-OK
+./selfhost/bootstrap_gen2.sh  # TRUE-SELF-COMPILE-OK
 ```
 
-- gen1 is built from pure `compiler_min.sa` via sxc_full
-- gen1 compiles `mini_in2.sa` successfully
-- Full gen1→gen2 of `compiler_min.sa` still incomplete (gen1 does not yet lower all builtins when compiling itself)
+| Item | Status |
+|------|--------|
+| `selfhost/sxc_full.c` plain seed | ✅ (no gzip) |
+| `sxc_full_lines/L*.txt` backup | ✅ cat-only restore |
+| pure `compiler_min.sa` → gen1 | ✅ |
+| gen1 → mini_in2 | ✅ |
+| gen2 without sxc_full (frozen pure C) | ✅ |
+| gen1 parses own source (no hang) | ✅ |
 
-## Seeds present
+## Do not use
+- `selfhost/sxc_full_b64/*.txt` (corrupt gzip archives)
 
-- `selfhost/sxc_full.c` — canonical C seed
-- `selfhost/stage2_template.c` — copy of sxc_full when restored
-- `selfhost/build_stage2.c` — falls back to sxc_full.c if blobs fail
+## Optional next
+- Live gen1→gen2.c clang-clean without frozen copy
+- Modules / types / LSP
