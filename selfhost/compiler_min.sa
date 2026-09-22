@@ -41,7 +41,7 @@ while running == 1 {
   when pos >= n {
     hold running = 0
   } otherwise {
-    hold c = source[pos]
+    hold c = sx_index(source,pos)
     when c == 32 {
       hold pos = pos + 1
     } otherwise {
@@ -56,7 +56,7 @@ while running == 1 {
           } otherwise {
             when c == 47 {
               when pos + 1 < n {
-                hold c2 = source[pos + 1]
+                hold c2 = sx_index(source,pos + 1)
                 when c2 == 47 {
                   hold pos = pos + 2
                   hold skipc = 1
@@ -64,7 +64,7 @@ while running == 1 {
                     when pos >= n {
                       hold skipc = 0
                     } otherwise {
-                      hold c3 = source[pos]
+                      hold c3 = sx_index(source,pos)
                       when c3 == 10 {
                         hold skipc = 0
                       } otherwise {
@@ -81,9 +81,9 @@ while running == 1 {
             } otherwise {
               when c == 104 {
                 when pos + 3 < n {
-                  hold c1 = source[pos + 1]
-                  hold c2 = source[pos + 2]
-                  hold c3 = source[pos + 3]
+                  hold c1 = sx_index(source,pos + 1)
+                  hold c2 = sx_index(source,pos + 2)
+                  hold c3 = sx_index(source,pos + 3)
                   when c1 == 111 {
                     when c2 == 108 {
                       when c3 == 100 {
@@ -93,7 +93,7 @@ while running == 1 {
                           when pos >= n {
                             hold sk = 0
                           } otherwise {
-                            hold cs = source[pos]
+                            hold cs = sx_index(source,pos)
                             when cs == 32 {
                               hold pos = pos + 1
                             } otherwise {
@@ -107,7 +107,7 @@ while running == 1 {
                           when pos >= n {
                             hold rn = 0
                           } otherwise {
-                            hold cn = source[pos]
+                            hold cn = sx_index(source,pos)
                             when cn >= 97 {
                               when cn <= 122 {
                                 hold name = concat(name, chr(cn))
@@ -125,7 +125,7 @@ while running == 1 {
                           when pos >= n {
                             hold sk = 0
                           } otherwise {
-                            hold cs = source[pos]
+                            hold cs = sx_index(source,pos)
                             when cs == 32 {
                               hold pos = pos + 1
                             } otherwise {
@@ -143,7 +143,7 @@ while running == 1 {
                           when pos >= n {
                             hold sk = 0
                           } otherwise {
-                            hold cs = source[pos]
+                            hold cs = sx_index(source,pos)
                             when cs == 32 {
                               hold pos = pos + 1
                             } otherwise {
@@ -157,7 +157,7 @@ while running == 1 {
                           when pos >= n {
                             hold rn = 0
                           } otherwise {
-                            hold cd = source[pos]
+                            hold cd = sx_index(source,pos)
                             when cd >= 48 {
                               when cd <= 57 {
                                 hold val = val * 10 + (cd - 48)
@@ -192,9 +192,9 @@ while running == 1 {
               } otherwise {
                 when c == 115 {
                   when pos + 3 < n {
-                    hold c1 = source[pos + 1]
-                    hold c2 = source[pos + 2]
-                    hold c3 = source[pos + 3]
+                    hold c1 = sx_index(source,pos + 1)
+                    hold c2 = sx_index(source,pos + 2)
+                    hold c3 = sx_index(source,pos + 3)
                     when c1 == 104 {
                       when c2 == 111 {
                         when c3 == 119 {
@@ -204,7 +204,7 @@ while running == 1 {
                             when pos >= n {
                               hold sk = 0
                             } otherwise {
-                              hold cs = source[pos]
+                              hold cs = sx_index(source,pos)
                               when cs == 32 {
                                 hold pos = pos + 1
                               } otherwise {
@@ -213,7 +213,7 @@ while running == 1 {
                             }
                           }
                           when pos < n {
-                            hold cs = source[pos]
+                            hold cs = sx_index(source,pos)
                             when cs == 34 {
                               hold pos = pos + 1
                               hold s = ""
@@ -222,7 +222,7 @@ while running == 1 {
                                 when pos >= n {
                                   hold rn = 0
                                 } otherwise {
-                                  hold cq = source[pos]
+                                  hold cq = sx_index(source,pos)
                                   when cq == 34 {
                                     hold pos = pos + 1
                                     hold rn = 0
@@ -248,7 +248,7 @@ while running == 1 {
                                     when pos >= n {
                                       hold rn = 0
                                     } otherwise {
-                                      hold cd = source[pos]
+                                      hold cd = sx_index(source,pos)
                                       when cd >= 48 {
                                         when cd <= 57 {
                                           hold val = val * 10 + (cd - 48)
@@ -279,7 +279,7 @@ while running == 1 {
                                     when pos >= n {
                                       hold rn = 0
                                     } otherwise {
-                                      hold cn = source[pos]
+                                      hold cn = sx_index(source,pos)
                                       when cn >= 97 {
                                         when cn <= 122 {
                                           hold name = concat(name, chr(cn))
