@@ -1,0 +1,6 @@
+hold count = 42
+hold name = "Sayan"
+hold values = [1, 2, 3]
+show count
+show name
+show values[0]
