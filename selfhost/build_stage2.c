@@ -75,22 +75,31 @@ int main(void) {
     }
   }
 
-  /* Try decode from sxc_full_b64 */
-  st = system(
-      "if [ -d selfhost/sxc_full_b64 ]; then "
-      "cat selfhost/sxc_full_b64/b*.txt | tr -d '\\n' | base64 -d | gzip -d > selfhost/sxc_full.c; fi");
+  /* Never decode the retired gzip/base64 seed format. Restore plain
+     source from selfhost/sxc_full.c or selfhost/stage2_src/*.c only. */
   {
-    FILE *f = fopen("selfhost/sxc_full.c", "rb");
-    if (f) {
-      fclose(f);
-      system("cp selfhost/sxc_full.c selfhost/stage2_template.c");
-      st = compile_stage2("selfhost/stage2_template.c");
-      if (st == 0) {
-        puts("Stage-2 built OK (from sxc_full_b64)");
-        return 0;
+    int rc = system(
+        "if [ -f selfhost/restore_sxc_full.sh ]; then "
+        "chmod +x selfhost/restore_sxc_full.sh && "
+        "./selfhost/restore_sxc_full.sh; "
+        "fi");
+    (void)rc;
+    {
+      FILE *f = fopen("selfhost/sxc_full.c", "rb");
+      if (f) {
+        fclose(f);
+        st = system("cp selfhost/sxc_full.c selfhost/stage2_template.c");
+        if (st == 0) {
+          st = compile_stage2("selfhost/stage2_template.c");
+          if (st == 0) {
+            puts("Stage-2 built OK (plain sxc_full.c)");
+            return 0;
+          }
+        }
       }
     }
   }
+
 
   fprintf(stderr, "build_stage2: template missing and all bootstrap blobs failed\n");
   return 1;
