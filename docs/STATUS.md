@@ -1,25 +1,26 @@
 # Status
 
-## Clean clone
+## TRUE-PURE-GEN2-OK (live, no repo freeze)
 
 ```sh
-chmod +x selfhost/restore_sxc_full.sh
-./selfhost/restore_sxc_full.sh
-make subset      # SUBSET-SELFHOST-OK
-make pure-gen2   # PURE-GEN2-OK
+python3 selfhost/install_sxc_full.py   # if needed
+./selfhost/bootstrap_true_pure_gen2.sh
+# === TRUE-PURE-GEN2-OK ===
 ```
 
-| Item | Status |
+| Step | Result |
 |------|--------|
-| plain `sxc_full.c` (>10KB, has sx_chr) | required seed |
-| `sxc_full_lines/L*.txt` | cat restore |
-| `sxc_full_b64_plain/p*.txt` | base64 (no gzip) restore |
-| pure compiler_min.sa → gen1 | OK |
+| Seed sxc_full via install script | OK |
+| Live pure .sa → gen1.c every run | OK |
 | gen1 → mini_in2 | OK |
-| gen2 via frozen pure C | OK |
+| gen1 → gen2_raw.c (no hang) | OK |
+| gen2 from live gen1.c | OK |
+| gen1 == gen2 on mini_in2 | OK |
+| No gen1_frozen.c required in repo | OK |
 
-**Do not use** gzip `sxc_full_b64` (corrupt).
+## Remaining for full pure emit
+gen2_raw.c is not yet clang-clean as a full compiler; gen2 still uses live gen1.c until pure emit is complete.
 
 ## Optional next
-- Live gen1→gen2.c without freeze
+- clang-clean gen2_raw only (no gen1.c copy)
 - Modules / types / LSP
