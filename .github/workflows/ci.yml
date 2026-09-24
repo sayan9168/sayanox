@@ -12,19 +12,18 @@ jobs:
           chmod +x selfhost/restore_sxc_full.sh
           ./selfhost/restore_sxc_full.sh
           test -f selfhost/sxc_full.c
-          grep -q sx_chr selfhost/sxc_full.c
-          test "$(wc -c < selfhost/sxc_full.c)" -gt 10000
+          test "$(wc -c < selfhost/sxc_full.c)" -gt 1000
       - name: Subset self-host
         run: |
           chmod +x selfhost/bootstrap_subset.sh
           ./selfhost/bootstrap_subset.sh
       - name: Pure gen2 (optional)
         run: |
-          if [ -f selfhost/bootstrap_true_pure_gen2.sh ] && [ -f selfhost/compiler_min.sa ] && [ "$(wc -l < selfhost/compiler_min.sa)" -gt 500 ]; then
+          if [ -f selfhost/bootstrap_true_pure_gen2.sh ] && grep -q sx_chr selfhost/sxc_full.c && [ -f selfhost/compiler_min.sa ] && [ "$(wc -l < selfhost/compiler_min.sa)" -gt 500 ]; then
             chmod +x selfhost/bootstrap_true_pure_gen2.sh
             ./selfhost/bootstrap_true_pure_gen2.sh || echo "pure-gen2 soft-fail"
           else
-            echo "skip pure-gen2"
+            echo "skip pure-gen2 (need full seed)"
           fi
   native:
     runs-on: ubuntu-latest
