@@ -1,0 +1,5 @@
+hold n = 0
+hold n = 1
+hold n = n + 1
+show n
+show "done"
