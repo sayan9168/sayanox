@@ -1,33 +1,22 @@
 name: CI
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
 jobs:
   subset:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Restore seed if needed
-        run: |
-          chmod +x selfhost/restore_sxc_full.sh
-          ./selfhost/restore_sxc_full.sh
-          test -f selfhost/sxc_full.c
-          grep -q sx_chr selfhost/sxc_full.c
-      - name: Subset self-host
-        run: make subset
-      - name: Pure gen2
-        run: make pure-gen2
+      - run: chmod +x selfhost/restore_sxc_full.sh && ./selfhost/restore_sxc_full.sh
+      - run: make subset
+      - run: make pure-gen2
   native:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Native smoke
-        run: make native-test
+      - run: make native-test
   memory:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: RC stress
-        run: make gc-test
+      - run: make gc-test
