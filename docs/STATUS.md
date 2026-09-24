@@ -1,20 +1,16 @@
 # Status
 
-## PURE-EMIT-OK
+## CI seed restore
 
 ```sh
-./selfhost/bootstrap_pure_emit.sh
-# === PURE-EMIT-OK ===
+./selfhost/restore_sxc_full.sh
+# uses install_sxc_full.py (or .a+.b parts) — never aborts on bad base64
+make subset   # SUBSET-SELFHOST-OK
 ```
 
-| Path | Index | Reassign | mini_in2 |
-|------|-------|----------|----------|
-| sxc_full (seed) | yes | yes | yes |
-| gen1 (pure min) | partial | yes via fixup_emit | yes |
+Broken `sxc_full_b64_plain` incomplete parts are ignored.
 
-## Tools
-- `selfhost/fixup_emit.c` — second `double x =` becomes `x =`
-
-## Next
-- Pure min: emit sx_index for msg[i]
-- Live gen2_raw clang-clean without gen1.c copy
+## Working markers
+- SUBSET-SELFHOST-OK
+- PURE-EMIT-OK
+- TRUE-PURE-GEN2-OK (when full compiler_min present)
