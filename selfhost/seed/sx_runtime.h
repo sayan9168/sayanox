@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 
 typedef struct { size_t refs; size_t len; char data[1]; } SxStrHdr;
 typedef struct { size_t refs; size_t n, cap; double *v; } SxList;
@@ -46,7 +47,8 @@ static void sx_tab_add(void*obj,int kind){
   sx_tab_obj[sx_tab_n]=obj; sx_tab_kind[sx_tab_n]=(char)kind; sx_tab_epoch[sx_tab_n]=sx_epoch; sx_tab_n++;
 }
 static int sx_tab_find(void*obj){ /* linear scan from end (recent first) */
-  for(int i=sx_tab_n-1;i>=0;i--) if(sx_tab_obj[i]==obj) return i; return -1;
+  for(int i=sx_tab_n-1;i>=0;i--){ if(sx_tab_obj[i]==obj) return i; }
+  return -1;
 }
 /* classify a double value: returns 0=num, 1=str, 2=list */
 static int sx_kind(double v){
@@ -60,6 +62,10 @@ static int sx_kind(double v){
 }
 static int sx_is_str(double v){ return sx_kind(v)==1; }
 static int sx_is_list(double v){ return sx_kind(v)==2; }
+
+/* ---- packing ---- */
+static double sx_pack(void*p){ return (double)(long long)(uintptr_t)p; }
+static void  *sx_upack(double d){ return (void*)(uintptr_t)(long long)d; }
 
 /* ---- strings ---- */
 static SxStrHdr *sx_sh(const char*p){ return p?(SxStrHdr*)((char*)p-sizeof(SxStrHdr)):NULL; }
@@ -80,16 +86,17 @@ static char *sx_concat_c(const char*a,const char*b){ size_t x=a?strlen(a):0,y=b?
   char*r=sx_alloc_str("",x+y); if(x)memcpy(r,a,x); if(y)memcpy(r+x,b,y); return r; }
 
 /* ---- lists ---- */
-static SxList *sx_list_alloc(size_t cap){ SxList*l=malloc(sizeof*SxList); if(!l)exit(1);
-  l->refs=1; l->n=0; l->cap=cap?cap:4; l->v=malloc(sizeof(double)*l->cap);
+static SxList *sx_list_alloc(size_t cap){ SxList*l=malloc(sizeof(SxList)); if(!l){fprintf(stderr,"sx: out of memory\n");exit(1);}
+  if(cap<4)cap=4;
+  l->refs=1; l->n=0; l->cap=cap; l->v=malloc(sizeof(double)*cap);
+  if(!l->v){fprintf(stderr,"sx: out of memory\n");exit(1);}
   sx_tab_add(l,2); return l; }
 static void sx_list_retain(SxList*l){ if(l)l->refs++; }
 static void sx_list_release(SxList*l){ if(l){ if(!l->refs){fprintf(stderr,"sx: double release of list\n");exit(1);}
-  if(--l->refs==0){ int i=sx_tab_find(l); if(i>=0){sx_tab_obj[i]=NULL;sx_tab_kind[i]=0;} free(l->v); free(l); } } }
-
-/* ---- packing ---- */
-static double sx_pack(void*p){ return (double)(long long)(uintptr_t)p; }
-static void  *sx_upack(double d){ return (void*)(uintptr_t)(long long)d; }
+  if(--l->refs==0){ int i=sx_tab_find(l); if(i>=0){sx_tab_obj[i]=NULL;sx_tab_kind[i]=0;}
+    for(size_t e=0;e<l->n;e++){ int k=sx_kind(l->v[e]);
+      if(k==1)sx_release_s((char*)sx_upack(l->v[e])); else if(k==2)sx_list_release(sx_upack(l->v[e])); }
+    free(l->v); free(l); } } }
 
 /* ---- number formatting ---- */
 static void sx_fmt_num(char*buf,size_t cap,double v){
@@ -120,22 +127,25 @@ static double sx_add(double a,double b){
   int ka=sx_kind(a),kb=sx_kind(b);
   if(ka==1||kb==1){ char*x=sx_to_chars(a),*y=sx_to_chars(b); char*z=sx_concat_c(x,y);
     sx_release_s(x); sx_release_s(y); return sx_pack(z); }
-  if(ka==2&&kb==2){ SxList*A=sx_upack(a),*B=sx_upack(b); SxList*R=sx_list_alloc(A->n+B->n+1);
-    for(size_t i=0;i<A->n;i++)R->v[R->n++]=A->v[i];
-    for(size_t i=0;i<B->n;i++)R->v[R->n++]=B->v[i];
+  if(ka==2&&kb==2){ SxList*A=sx_upack(a),*B=sx_upack(b); SxList*R=sx_list_alloc(A->n+B->n);
+    for(size_t i=0;i<A->n;i++){ R->v[R->n]=A->v[i];
+      int kk=sx_kind(R->v[R->n]); if(kk==1)sx_retain_s((char*)sx_upack(R->v[R->n])); else if(kk==2)sx_list_retain(sx_upack(R->v[R->n])); R->n++; }
+    for(size_t i=0;i<B->n;i++){ R->v[R->n]=B->v[i];
+      int kk=sx_kind(R->v[R->n]); if(kk==1)sx_retain_s((char*)sx_upack(R->v[R->n])); else if(kk==2)sx_list_retain(sx_upack(R->v[R->n])); R->n++; }
     return sx_pack(R); }
   if(ka==2||kb==2){ fprintf(stderr,"sx: cannot add list and num\n"); exit(1); }
   return a+b;
 }
+static double sx_modv(double a,double b);
 static double sx_arith(const char*op,double a,double b){
   int ka=sx_kind(a),kb=sx_kind(b);
   if(ka==1||kb==1){ fprintf(stderr,"sx: arithmetic '%s' on string\n",op); exit(1); }
   if(ka==2||kb==2){ fprintf(stderr,"sx: arithmetic '%s' on list\n",op); exit(1); }
   if(op[0]=='-')return a-b; if(op[0]=='*')return a*b;
   if(op[0]=='/'){ if(b==0){fprintf(stderr,"sx: division by zero\n");exit(1);} return a/b; }
-  /* % */ { if(b==0){fprintf(stderr,"sx: modulo by zero\n");exit(1);} double q=a/b; double qq=q-(fmod(q,1)); return a-qq*b; }
+  /* % */ { return sx_modv(a,b); }
 }
-#include <math.h>
+
 static double sx_modv(double a,double b){ if(b==0){fprintf(stderr,"sx: modulo by zero\n");exit(1);}
   double r=fmod(a,b); if(r!=0 && ((r<0)!=(b<0))) r+=b; return r; }
 static double sx_bool2d(double c){ return c?1.0:0.0; }
@@ -214,16 +224,23 @@ static double sx_b_arg(double v){ long i=(long)v;
   return sx_pack(sx_lit(sx_argv[i])); }
 static double sx_b_arg_count(void){ return (double)sx_argc; }
 static double sx_b_string_eq(double a,double b){
-  if(sx_kind(a)!=1||sx_kind(b)!=1) return 0.0;
-  return sx_bool2d(!strcmp((char*)sx_upack(a),(char*)sx_upack(b))); }
+  /* accepts packed str values or anything coercible via sx_to_chars */
+  char*x=sx_to_chars(a),*y=sx_to_chars(b); double r=sx_bool2d(!strcmp(x,y));
+  sx_release_s(x); sx_release_s(y); return r; }
 static double sx_b_list_new(void){ return sx_pack(sx_list_alloc(4)); }
 static double sx_b_list_get(double l,double i){ return sx_index_v(l,i); }
 static double sx_b_list_set(double l,double i,double val){
+  if(sx_kind(l)!=2){ fprintf(stderr,"sx: list_set requires a list\n"); exit(1); }
   SxList*L=sx_upack(l); long idx=(long)i;
   if(idx<0||idx>=(long)L->n){fprintf(stderr,"sx: list index out of range\n");exit(1);}
+  int k=sx_kind(val); if(k==1)sx_retain_s((char*)sx_upack(val)); else if(k==2)sx_list_retain(sx_upack(val));
+  if(sx_kind(L->v[idx])==1) sx_release_s((char*)sx_upack(L->v[idx]));
+  else if(sx_kind(L->v[idx])==2) sx_list_release(sx_upack(L->v[idx]));
   L->v[idx]=val; return 0.0; }
 static double sx_b_push(double l,double val){
+  if(sx_kind(l)!=2){ fprintf(stderr,"sx: push requires a list\n"); exit(1); }
   SxList*L=sx_upack(l); if(L->n==L->cap){ L->cap=L->cap?L->cap*2:4; L->v=realloc(L->v,sizeof(double)*L->cap);}
+  int k=sx_kind(val); if(k==1)sx_retain_s((char*)sx_upack(val)); else if(k==2)sx_list_retain(sx_upack(val));
   L->v[L->n++]=val; return l; }
 static double sx_b_type_of(double v){ int k=sx_kind(v);
   return sx_pack(sx_lit(k==1?"str":k==2?"list":"num")); }
