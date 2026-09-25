@@ -1,21 +1,8 @@
 #!/usr/bin/env bash
+# Supported pure-gen2 entrypoint.
+# Keep the public target on the live path so it never silently falls back to
+# selfhost/gen1_frozen.c. The true script owns seed restoration, live gen1
+# generation, and the TRUE-PURE-GEN2-OK marker.
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
-if [ ! -x selfhost/gen1 ]; then
-  [ -f selfhost/gen1_frozen.c ] && clang -O2 -o selfhost/gen1 selfhost/gen1_frozen.c
-  [ -x selfhost/gen1 ] || { echo "need gen1"; exit 1; }
-fi
-./selfhost/gen1 selfhost/mini_in2.sa selfhost/gen1_mini.c
-clang -O2 -o selfhost/gen1_mini selfhost/gen1_mini.c
-./selfhost/gen1_mini | tee /tmp/sx-g1.out | grep -q 42
-SRC=selfhost/gen1_frozen.c
-[ -f "$SRC" ] || SRC=selfhost/gen1.c
-cp "$SRC" selfhost/gen2.c
-clang -O2 -o selfhost/gen2 selfhost/gen2.c
-./selfhost/gen2 selfhost/mini_in2.sa selfhost/gen2_mini.c
-clang -O2 -o selfhost/gen2_mini selfhost/gen2_mini.c
-./selfhost/gen2_mini > /tmp/sx-g2.out
-diff -u /tmp/sx-g1.out /tmp/sx-g2.out
-timeout 30 ./selfhost/gen1 selfhost/compiler_min.sa selfhost/gen2_raw.c
-test -s selfhost/gen2_raw.c
-echo "=== PURE-GEN2-OK ==="
+exec ./selfhost/bootstrap_true_pure_gen2.sh
