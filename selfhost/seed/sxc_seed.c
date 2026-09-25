@@ -101,6 +101,7 @@ static void tokenize(const char*src){
     P1('<',T_LT) P1('>',T_GT) P1('+',T_PLUS) P1('-',T_MINUS) P1('*',T_STAR)
     P1('/',T_SLASH) P1('%',T_PERCENT) P1('=',T_ASSIGN) P1(',',T_COMMA) P1('.',T_DOT)
     P1('&',T_AMP) P1('|',T_BAR) P1('?',T_QUEST) P1(':',T_COLON)
+    P1('!',T_BANG)
     P1('[',T_LB) P1(']',T_RB) P1('{',T_LC) P1('}',T_RC) P1('(',T_LPAREN) P1(')',T_RPAREN)
     { char b[2]={c,0}; SYERR(sl,sc,"unexpected character '%s'",b); i++; col++; }
   }
@@ -108,8 +109,8 @@ static void tokenize(const char*src){
 }
 
 /* ================= AST ================= */
-typedef enum { E_NU,E_ST,E_ID,E_BIN,E_NEG,E_CALL,E_INDEX,E_LIST,E_NOT,E_AND,E_OR,E_IFS,E_IFT,E_STRUC,E_FIELD } EKind;
-typedef enum { S_HOLD,S_SHOW,S_WHEN,S_WHILE,S_GIVE,S_ASSIGN,S_SETIDX,S_EXPR,S_PRINT,S_ASSERT } SKind;
+typedef enum { E_NU,E_ST,E_ID,E_BIN,E_NEG,E_CALL,E_INDEX,E_LIST,E_NOT,E_AND,E_OR,E_IFS,E_STRUC,E_FIELD } EKind;
+typedef enum { S_HOLD,S_SHOW,S_WHEN,S_WHILE,S_GIVE,S_ASSIGN,S_SETIDX,S_EXPR,S_ASSERT } SKind;
 typedef enum { TY_UNK,TY_NUM,TY_STR,TY_LIST,TY_ANY } Type;
 
 typedef struct Expr Expr;
@@ -160,9 +161,6 @@ static Expr *p_expr(void);
 static Expr *p_ternary(void);
 static void p_stmt_into(Block*b);
 
-static int is_stmt_start_kw(void){
-  return atkw("hold")||atkw("show")||atkw("when")||atkw("while")||atkw("give")||atkw("make")||atkw("import");
-}
 
 static Expr *p_primary(void){
   skip_nl();
@@ -298,7 +296,7 @@ static Block *p_block(void){
 }
 
 static void p_hold(Block*b){
-  Tok h=*cu(); adv(); skip_nl();
+  adv(); skip_nl();
   if(!at(T_ID)){ SYERR(cu()->line,cu()->col,"expected variable name after 'hold'"); return; }
   Tok name=*cu(); adv(); skip_nl();
   if(!at(T_ASSIGN)){ SYERR(name.line,name.col,"expected '=' after variable name '%s'",name.s); return; }
@@ -373,7 +371,7 @@ static void p_make(void){
   f->body=p_block();
   nfuncs++;
 }
-static void p_import(Block*b){
+static void p_import(void){
   Tok t=*cu(); adv(); skip_nl();
   if(!at(T_ST)){ SYERR(t.line,t.col,"import expects a string path"); return; }
   adv(); /* path already spliced by the module loader */
@@ -417,7 +415,7 @@ static void p_stmt_into(Block*b){
   if(atkw("when")){ p_when(b); return; }
   if(atkw("while")){ p_while(b); return; }
   if(atkw("give")){ p_give(b); return; }
-  if(atkw("import")){ p_import(b); return; }
+  if(atkw("import")){ p_import(); return; }
   if(atkw("print")){ /* deprecated alias of show */ 
     Tok t=*cu(); adv(); Expr*e=p_expr();
     Stmt*s=news(S_SHOW,t.line,t.col); s->e=e; badd(b,s); return; }
@@ -430,14 +428,10 @@ static void p_stmt_into(Block*b){
 
 /* ================= type checker ================= */
 static const char *tyname(Type t){ return t==TY_NUM?"num":t==TY_STR?"str":t==TY_LIST?"list":"any"; }
-typedef struct { char *name; Type ty; int depth; } Var;
 #define MAXVARS 8192
-static Var vars[MAXVARS]; static int nvars=0; static int scope_depth=0;
-static Var *find_var(const char*n){ for(int i=nvars-1;i>=0;i--) if(vars[i].depth<=scope_depth&&!strcmp(vars[i].name,n)) return &vars[i]; return NULL; }
+static int scope_depth=0;
 static Func *cur_fn;
 typedef struct { char *name; Type ty; int depth; char *sname; } Var2;
-#undef MAXVARS
-#define MAXVARS 8192
 static Var2 vars2[MAXVARS]; static int nvars2=0;
 static Var2 *find_var2(const char*n){ for(int i=nvars2-1;i>=0;i--) if(vars2[i].depth<=scope_depth&&!strcmp(vars2[i].name,n)) return &vars2[i]; return NULL; }
 static void declare_var(const char*n,Type ty,int l,int c,const char*sname){
@@ -452,19 +446,6 @@ static void declare_var(const char*n,Type ty,int l,int c,const char*sname){
 static void redeclare_var(const char*n,Type ty,int l,int c,const char*sname){ declare_var(n,ty,l,c,sname); }
 /* legacy declare_var kept for parameter registration */
 static void declare_param(const char*n,Type ty,int l,int c){ declare_var(n,ty,l,c,NULL); }
-#if 0
-static void declare_var_legacy(const char*n,Type ty,int l,int c){
-  Var*v=find_var(n);
-  if(v){
-    if(v->ty==ty) return;
-    if(v->ty==TY_ANY||ty==TY_ANY){ v->ty=ty==TY_ANY?v->ty:TY_ANY; return; }
-    TYERR(l,c,"cannot assign %s to variable '%s' previously declared as %s",tyname(ty),n,tyname(v->ty));
-    return;
-  }
-  if(nvars>=MAXVARS){ SEMERR(l,c,"too many variables (limit %d)",MAXVARS); return; }
-  vars[nvars].name=strdup(n); vars[nvars].ty=ty; vars[nvars].depth=scope_depth; nvars++;
-}
-#endif
 static int builtin_arity(const char*n){
   if(!strcmp(n,"len")||!strcmp(n,"chr")||!strcmp(n,"str")||!strcmp(n,"read_file")||!strcmp(n,"arg")||!strcmp(n,"type_of"))return 1;
   if(!strcmp(n,"concat")||!strcmp(n,"sx_index")||!strcmp(n,"write_file")||!strcmp(n,"string_eq")||!strcmp(n,"list_get")||!strcmp(n,"push"))return 2;
@@ -484,7 +465,6 @@ static int rguard=0;
 #define GUARD() do{ if(++rguard>4000000){ fprintf(stderr,"compiler limit: recursion too deep\n"); exit(1);} }while(0)
 
 static Type check_expr(Expr*e);
-static void check_block(Block*b);
 
 static Type check_binop_plus(Expr*e,Type a,Type b){
   if(a==TY_LIST||b==TY_LIST){ if(a!=b){ TYERR(e->line,e->col,"operator '+' cannot combine %s and %s",tyname(a),tyname(b)); return TY_LIST; } return TY_LIST; }
@@ -530,10 +510,9 @@ static Type check_expr(Expr*e){
       e->ty=(t==f)?t:TY_ANY; break; }
     case E_FIELD: {
       Type c=check_expr(e->a);
-      StructDef*sd=find_struct(e->a->s?e->a->s:"");
       if(c==TY_ANY){ e->ty=TY_ANY; break; }
-      /* struct value: we track via ty==TY_STR? use dedicated: structs are lists internally.
-         Field lookup uses variable's declared struct name stored in e->a->sfx */
+      /* struct values are lists at runtime; the static struct type name is
+         tracked per-variable (sname) and per-expression (structof). */
       char *sn=e->structof;
       if(!sn && e->a->k==E_ID) sn=e->a->struct_name;
       if(!sn){ TYERR(e->line,e->col,"field access '.%s' requires a struct value",e->s); e->ty=TY_ANY; break; }
@@ -600,7 +579,6 @@ static void check_block_scoped(Block*b){
   for(int i=0;i<b->n;i++) check_stmt(b->items[i]);
   scope_depth=save_depth; nvars2=mark;
 }
-static void collect_gives(Block*b);
 static void check_stmt(Stmt*s){
   GUARD();
   switch(s->k){
@@ -658,20 +636,12 @@ static void check_program(void){
 /* ================= C backend ================= */
 static FILE *out;
 static int tmpc=0;
-static int var_slot(const char*n){ /* find unique var; codegen uses flat naming with counter suffix */
-  return -1;
-}
 /* variable table for codegen: each declaration gets fresh slot name */
 typedef struct { char *src; char *cname; int live; } CGVar;
 static CGVar cgvars[MAXVARS]; static int ncgvars=0;
 static CGVar*cg_find(const char*n){ for(int i=ncgvars-1;i>=0;i--) if(cgvars[i].live&&!strcmp(cgvars[i].src,n)) return &cgvars[i]; return NULL; }
-static CGVar*cg_declare(const char*n){
-  CGVar*v=cg_find(n);
+static CGVar*cg_declare(const char*n){ /* always creates a fresh C slot (parameters) */
   char cname[64]; snprintf(cname,sizeof cname,"x%d",tmpc++);
-  if(v){ strcpy(v->src,n); /* redeclaration reuses slot conceptually; we emit assignment */ 
-         /* but we want fresh C name only on first declaration */ 
-         static int dummy; (void)dummy;
-         return v; }
   if(ncgvars>=MAXVARS){ fprintf(stderr,"codegen: too many variables\n"); exit(1); }
   cgvars[ncgvars].src=strdup(n); cgvars[ncgvars].cname=strdup(cname); cgvars[ncgvars].live=1;
   return &cgvars[ncgvars++];
@@ -705,8 +675,8 @@ static void emit_indent(int n){ for(int i=0;i<n;i++) fputs("  ",out); }
 
 static void emit_call(Expr*e){
   int ar=builtin_arity(e->fn);
-  const char*bi=NULL;
   if(ar!=-2){
+    const char*bi="sx_b_unknown";
     if(!strcmp(e->fn,"len"))bi="sx_b_len"; else if(!strcmp(e->fn,"chr"))bi="sx_b_chr";
     else if(!strcmp(e->fn,"str"))bi="sx_b_str"; else if(!strcmp(e->fn,"concat"))bi="sx_b_concat";
     else if(!strcmp(e->fn,"sx_index"))bi="sx_index_v"; else if(!strcmp(e->fn,"read_file"))bi="sx_b_read_file";
@@ -720,10 +690,8 @@ static void emit_call(Expr*e){
     fputc(')',out);
     return;
   }
-  Func*f=find_fn(e->fn);
   fprintf(out,"fn_%s(",e->fn);
   for(int i=0;i<e->nargs;i++){ if(i)fputs(",",out); emit_expr(e->args[i]); }
-  (void)f;
   fputc(')',out);
 }
 static void emit_expr(Expr*e){
@@ -738,7 +706,7 @@ static void emit_expr(Expr*e){
       for(int i=0;i<e->nargs;i++){ fputs(",",out); emit_expr(e->args[i]); }
       fputc(')',out); break; }
     case E_FIELD: fputs("sx_index_v(",out); emit_expr(e->a); fprintf(out,",((double)%d))",e->field); break;
-    case E_ST: fprintf(out,"sx_lit("); emit_str_lit(e->s); fputc(')',out); break;
+    case E_ST: fputs("sx_pack(sx_lit(",out); emit_str_lit(e->s); fputs("))",out); break;
     case E_ID: { CGVar*v=cg_find(e->s); fprintf(out,"%s",v?v->cname:"0.0"); break; }
     case E_LIST: {
       fprintf(out,"sx_lit_list(%d",e->nargs);
@@ -756,14 +724,18 @@ static void emit_expr(Expr*e){
       else if(!strcmp(op,"*")) fputs("sx_mul(",out);
       else if(!strcmp(op,"/")) fputs("sx_div(",out);
       else if(!strcmp(op,"%")) fputs("sx_modv(",out);
-      else if(!strcmp(op,"&&")) fputs("SX_AND(",out);
-      else if(!strcmp(op,"||")) fputs("SX_OR(",out);
+      else if(!strcmp(op,"&&")){ /* short-circuit */
+        fputs("(sx_truthy(",out); emit_expr(e->a); fputs(")?(",out); emit_expr(e->b); fputs("):0.0)",out);
+        break; }
+      else if(!strcmp(op,"||")){
+        fputs("(sx_truthy(",out); emit_expr(e->a); fputs(")?1.0:(",out); emit_expr(e->b); fputs("))",out);
+        break; }
       else if(!strcmp(op,"==")) fputs("sx_eq(",out);
-      else if(!strcmp(op,"!=")) fputs("sx_notb(sx_eq(",out);
-      else if(!strcmp(op,"<")) fputs("sx_lt(",out);
-      else if(!strcmp(op,"<=")) fputs("sx_le(",out);
-      else if(!strcmp(op,">")) fputs("sx_gt(",out);
-      else if(!strcmp(op,">=")) fputs("sx_ge(",out);
+      else if(!strcmp(op,"!=")) fputs("sx_bool2d(1.0-sx_eq(",out);
+      else if(!strcmp(op,"<")) fputs("sx_cmpnum(\"<\",",out);
+      else if(!strcmp(op,"<=")) fputs("sx_cmpnum(\"<=\",",out);
+      else if(!strcmp(op,">")) fputs("sx_cmpnum(\">\",",out);
+      else if(!strcmp(op,">=")) fputs("sx_cmpnum(\">=\",",out);
       emit_expr(e->a); fputs(",",out); emit_expr(e->b);
       if(!strcmp(op,"!="))fputs("))",out); else fputs(")",out);
       break; }
@@ -779,33 +751,32 @@ static void emit_block(Block*b,int indent){
   }
 }
 static void emit_stmt(Stmt*s,int indent){
-  emit_indent(indent);
   switch(s->k){
     case S_HOLD: {
       int first=0;
       CGVar*v=cg_get_or_declare_first(s->name,&first);
-      if(first) fprintf(out,"double %s;\n",v->cname);
+      if(first){ emit_indent(indent); fprintf(out,"double %s=0.0;\n",v->cname); }
       emit_indent(indent); fprintf(out,"sx_assign(&%s,",v->cname); emit_expr(s->e); fputs(");\n",out);
       return; }
-    case S_SHOW: fputs("sx_show(",out); emit_expr(s->e); fputs(");\n",out); return;
-    case S_ASSERT: fputs("sx_assert(",out); emit_expr(s->e); fprintf(out,"%d,%d);\n",s->line,s->col); return;
-    case S_EXPR: emit_expr(s->e); fputs(";\n",out); return;
+    case S_SHOW: emit_indent(indent); fputs("sx_show(",out); emit_expr(s->e); fputs(");\n",out); return;
+    case S_ASSERT: emit_indent(indent); fputs("sx_assert(",out); emit_expr(s->e); fprintf(out,",%d,%d);\n",s->line,s->col); return;
+    case S_EXPR: emit_indent(indent); emit_expr(s->e); fputs(";\n",out); return;
     case S_ASSIGN: {
       CGVar*v=cg_find(s->name);
       if(!v){ fprintf(stderr,"codegen: undefined variable %s\n",s->name); exit(1); }
-      fprintf(out,"sx_assign(&%s,",v->cname); emit_expr(s->e); fputs(");\n",out); return; }
+      emit_indent(indent); fprintf(out,"sx_assign(&%s,",v->cname); emit_expr(s->e); fputs(");\n",out); return; }
     case S_SETIDX: {
       CGVar*v=cg_find(s->name);
       if(!v){ fprintf(stderr,"codegen: undefined variable %s\n",s->name); exit(1); }
-      fprintf(out,"sx_setidx(&%s,",v->cname); emit_expr(s->idx); fputs(",",out); emit_expr(s->val); fputs(");\n",out); return; }
-    case S_GIVE: fputs("return ",out); if(s->e) emit_expr(s->e); else fputs("0.0",out); fputs(";\n",out); return;
+      emit_indent(indent); fprintf(out,"sx_setidx(&%s,",v->cname); emit_expr(s->idx); fputs(",",out); emit_expr(s->val); fputs(");\n",out); return; }
+    case S_GIVE: emit_indent(indent); fputs("return ",out); if(s->e) emit_expr(s->e); else fputs("0.0",out); fputs(";\n",out); return;
     case S_WHEN: {
-      fputs("if(sx_truthy(",out); emit_expr(s->e); fputs(")){\n",out);
+      emit_indent(indent); fputs("if(sx_truthy(",out); emit_expr(s->e); fputs(")){\n",out);
       emit_block(s->body,indent+1); emit_indent(indent); fputs("}\n",out);
-      if(s->els){ emit_indent(indent); fputs("{\n",out); emit_block(s->els,indent+1); emit_indent(indent); fputs("}\n",out); }
+      if(s->els){ emit_indent(indent); fputs("else {\n",out); emit_block(s->els,indent+1); emit_indent(indent); fputs("}\n",out); }
       return; }
     case S_WHILE: {
-      fputs("while(sx_truthy(",out); emit_expr(s->e); fputs(")){\n",out);
+      emit_indent(indent); fputs("while(sx_truthy(",out); emit_expr(s->e); fputs(")){\n",out);
       emit_block(s->body,indent+1); emit_indent(indent); fputs("}\n",out);
       return; }
   }
@@ -855,10 +826,9 @@ static char *slurp(const char*p,long*sz){
   FILE*f=fopen(p,"rb"); if(!f) return NULL;
   fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
   char*b=malloc((size_t)n+1); size_t rd=fread(b,1,(size_t)n,f); b[rd]=0; fclose(f);
-  if(sz)*sz=rd; return b;
+  if(sz){ *sz=(long)rd; }
+  return b;
 }
-static char *load_recursive(const char*path,const char*base,int depth,char**cycle_stack);
-
 /* Replace every top-level `import "path" ...` line with the (recursively
    spliced) module source, or with a same-length comment when the module was
    already loaded (duplicate-import cache). Detects cycles and rejects
@@ -964,6 +934,7 @@ int main(int argc,char**argv){
         case S_WHEN: printf("  when expr@%d:%d { ... }\n",s->e->line,s->e->col); break;
         case S_WHILE: printf("  while expr@%d:%d { ... }\n",s->e->line,s->e->col); break;
         case S_GIVE: printf("  give\n"); break;
+        default: printf("  stmt@%d:%d\n",s->line,s->col); break;
       }
     }
     printf("}\n");
