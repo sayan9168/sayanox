@@ -1,6 +1,6 @@
-.PHONY: all test subset pure-gen2 seed native native-test gc-test clean
+.PHONY: all test subset pure-gen2 seed gen1 native native-test gc-test clean
 
-all: subset seed
+all: subset seed gen1
 
 subset:
 	chmod +x selfhost/bootstrap_subset.sh
@@ -10,13 +10,17 @@ seed:
 	chmod +x selfhost/bootstrap_seed.sh
 	./selfhost/bootstrap_seed.sh
 
+gen1:
+	chmod +x selfhost/bootstrap_gen1.sh
+	./selfhost/bootstrap_gen1.sh
+
 pure-gen2: subset
 	@if [ -f selfhost/bootstrap_pure_gen2.sh ]; then \
 	  chmod +x selfhost/bootstrap_pure_gen2.sh; \
 	  ./selfhost/bootstrap_pure_gen2.sh || echo "pure-gen2 soft-fail"; \
 	else echo "skip pure-gen2"; fi
 
-test: subset seed
+test: subset seed gen1
 	@echo TEST-OK
 
 native:
@@ -33,6 +37,6 @@ gc-test:
 	else echo "rc skip"; fi
 
 clean:
-	rm -f selfhost/sxc_full selfhost/gen1 selfhost/gen2 selfhost/_run selfhost/_out.c
+	rm -f selfhost/sxc_full selfhost/gen1 selfhost/gen2 selfhost/_run selfhost/_out.c selfhost/gen1.c
 	rm -rf selfhost/seed_tests
 	rm -f selfhost/seed/sxc_seed
