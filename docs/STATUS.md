@@ -1,16 +1,30 @@
 # Status
 
-## CI seed restore
+## Seed compiler (Phase 2) — SEED-OK
 
 ```sh
-./selfhost/restore_sxc_full.sh
-# uses install_sxc_full.py (or .a+.b parts) — never aborts on bad base64
-make subset   # SUBSET-SELFHOST-OK
+make seed
+# === SEED-OK ===
 ```
 
-Broken `sxc_full_b64_plain` incomplete parts are ignored.
+Fixed in `selfhost/seed/sxc_seed.c` + `sx_runtime.h`:
 
-## Working markers
-- SUBSET-SELFHOST-OK
-- PURE-EMIT-OK
-- TRUE-PURE-GEN2-OK (when full compiler_min present)
+| Bug | Fix |
+|-----|-----|
+| Operator token string was `'<'` not `<` | P1 macro uses 1-char buffer |
+| Output only to stdout | `sxc_seed in.sa out.c` or `-o out.c` |
+| `sx_n` undeclared | default return `0.0` |
+| Missing `stdarg.h` in generated C | emitted in prologue |
+| String kind miss (data vs header) | `sx_kind` recovers string header |
+
+Verified: hold, when/otherwise, while, make/give, index, concat, len, reassign, list, mini2.
+
+## CI
+
+- `subset` — minimal smoke
+- `seed` — full seed suite (hard fail)
+
+## Next
+
+- True Gen1 from pure `compiler_min.sa` via seed
+- Gen2 without `cp gen1.c gen2.c`
