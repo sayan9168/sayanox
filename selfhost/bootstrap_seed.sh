@@ -6,6 +6,7 @@ cd "$(cd "$(dirname "$0")/.." && pwd)"
 echo "=== SEED COMPILER ==="
 test -f selfhost/seed/sxc_seed.c
 test -f selfhost/seed/sx_runtime.h
+python3 selfhost/seed/apply_seed_fixes.py
 clang -O2 -o selfhost/seed/sxc_seed selfhost/seed/sxc_seed.c -I selfhost/seed
 
 run() {
@@ -14,7 +15,15 @@ run() {
   local src="selfhost/seed_tests/${name}.sa"
   mkdir -p selfhost/seed_tests
   cat > "$src"
-  ./selfhost/seed/sxc_seed "$src" "selfhost/seed_tests/${name}.c"
+  # Support seed that writes to stdout (legacy) or to out path (fixed)
+  if ./selfhost/seed/sxc_seed "$src" "selfhost/seed_tests/${name}.c" 2>/tmp/sx_seed_err; then
+    if [ ! -s "selfhost/seed_tests/${name}.c" ]; then
+      ./selfhost/seed/sxc_seed "$src" > "selfhost/seed_tests/${name}.c"
+    fi
+  else
+    ./selfhost/seed/sxc_seed "$src" > "selfhost/seed_tests/${name}.c"
+  fi
+  test -s "selfhost/seed_tests/${name}.c"
   clang -O2 -o "selfhost/seed_tests/${name}" "selfhost/seed_tests/${name}.c" -I selfhost/seed
   local out
   out=$("selfhost/seed_tests/${name}")
