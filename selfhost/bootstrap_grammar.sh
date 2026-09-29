@@ -35,40 +35,7 @@ check() {
   echo "[OK] $name"
 }
 
-check condition_and_or 
-hold x = 2
-when x >= 1 && x <= 3 {
-  show 1
-} otherwise {
-  show 0
-}
-when x < 1 || x > 3 {
-  show 0
-} otherwise {
-  show 0
-}
-SA
-
-check while_arithmetic $'0\n1' <<'SA'
-hold n = 3
-hold pos = 0
-while pos + 1 < n {
-  show pos
-  hold pos = pos + 1
-}
-SA
-
-check nested_builtin 'aB' <<'SA'
-hold s = concat("a", chr(66))
-show s
-SA
-
-grep -q 'if (x >= 1 && x <= 3) {' "$T/condition_and_or.c"
-grep -q 'while (pos + 1 < n) {' "$T/while_arithmetic.c"
-grep -q 'sx_cat("a", sx_chr(66))' "$T/nested_builtin.c"
-
-echo "=== GRAMMAR-GROW-OK ==="
-1\n0' <<'SA'
+check condition_and_or $'1\n0' <<'SA'
 hold x = 2
 when x >= 1 && x <= 3 {
   show 1
