@@ -341,13 +341,14 @@ while running == 1 {
           hold pos = pos + 1
           hold argv_txt = ""
           hold inq = 0
+          hold pdepth = 0
           hold rn = 1
           while rn == 1 {
             when pos >= n {
               hold rn = 0
             } otherwise {
               hold cn = sx_index(source,pos)
-              when cn == 41 && inq == 0 {
+              when cn == 41 && inq == 0 && pdepth == 0 {
                 hold rn = 0
               } otherwise {
                 hold pos = pos + 1
@@ -364,6 +365,12 @@ while running == 1 {
                     }
                   }
                 } otherwise {
+                  when cn == 40 {
+                    hold pdepth = pdepth + 1
+                  }
+                  when cn == 41 {
+                    hold pdepth = pdepth - 1
+                  }
                   when cn == 34 {
                     hold inq = 1
                     hold argv_txt = concat(argv_txt, chr(cn))
@@ -885,13 +892,14 @@ while running == 1 {
           hold pos = pos + 1
           hold argv_txt = ""
           hold inq = 0
+          hold pdepth = 0
           hold rn = 1
           while rn == 1 {
             when pos >= n {
               hold rn = 0
             } otherwise {
               hold cn = sx_index(source,pos)
-              when cn == 41 && inq == 0 {
+              when cn == 41 && inq == 0 && pdepth == 0 {
                 hold rn = 0
               } otherwise {
                 hold pos = pos + 1
@@ -908,6 +916,12 @@ while running == 1 {
                     }
                   }
                 } otherwise {
+                  when cn == 40 {
+                    hold pdepth = pdepth + 1
+                  }
+                  when cn == 41 {
+                    hold pdepth = pdepth - 1
+                  }
                   when cn == 34 {
                     hold inq = 1
                     hold argv_txt = concat(argv_txt, chr(cn))
