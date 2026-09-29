@@ -1,1 +1,3 @@
-show 42
+hold x = 40
+hold x = x + 2
+show x
