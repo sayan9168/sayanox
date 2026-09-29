@@ -1,6 +1,6 @@
 # Sayanox bootstrap Makefile — sole entry point
 # Deps: make + C compiler (clang/gcc/cc) + base64/gzip. No bash scripts, no Python.
-# Optional: make native (x86-64 ELF AOT); make seed-min (~9KB pure-min seed).
+# Optional: make native | seed-min | gen3
 # Prefer clang; fall back to gcc/cc for Termux/Linux CI.
 
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || (command -v gcc >/dev/null 2>&1 && echo gcc || echo cc))
@@ -17,11 +17,13 @@ GEN1_C   := selfhost/gen1.c
 GEN1     := selfhost/gen1
 GEN2_C   := selfhost/gen2.c
 GEN2     := selfhost/gen2
+GEN3_C   := selfhost/gen3.c
+GEN3     := selfhost/gen3
 BOOT_SA  := selfhost/compiler_boot.sa
 TESTS    := selfhost/seed_tests
 
 .PHONY: all subset seed gen1 gen2 pure-gen2 test true-selfhost selfhost \
-        native native-test seed-min gc-test clean \
+        native native-test seed-min gen3 gc-test clean \
         restore-compiler fix-seed seed-bin gen1-bin gen2-bin \
         test-reassign test-while test-when test-boot grammar
 
@@ -146,14 +148,11 @@ grammar:
 test: true-selfhost
 	@echo TEST-OK
 
-# Native AOT: pure-min → Linux x86-64 ELF (no clang for program output)
 $(NATIVE_BIN): $(NATIVE_SRC)
 	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
 	@echo "[OK] native_aot"
-
 native: $(NATIVE_BIN)
 	@echo "=== NATIVE-OK ==="
-
 native-test: $(NATIVE_BIN)
 	@mkdir -p examples $(TESTS)
 	@printf 'hold x = 40\nhold x = x + 2\nshow x\n' > examples/native_hello.sa
@@ -164,11 +163,9 @@ native-test: $(NATIVE_BIN)
 	@out=$$(./$(TESTS)/native_while); echo "$$out" | grep -q done
 	@echo "=== NATIVE-TEST-OK ==="
 
-# Smaller pure-min seed (~9KB vs ~44KB full seed)
 $(SEED_MIN_BIN): $(SEED_MIN_C)
 	$(CC) -O2 -o $(SEED_MIN_BIN) $(SEED_MIN_C)
 	@echo "[OK] seed-min"
-
 seed-min: $(SEED_MIN_BIN)
 	@mkdir -p $(TESTS)
 	@printf 'hold n = 0\nhold n = n + 1\nshow n\n' > $(TESTS)/min_re.sa
@@ -181,9 +178,36 @@ seed-min: $(SEED_MIN_BIN)
 	@out=$$(./$(TESTS)/min_wh); echo "$$out" | grep -q done
 	@echo "=== SEED-MIN-OK ==="
 
+# gen3: gen2 recompiles compiler_min (behavioural fixed point)
+$(GEN3_C): $(GEN2) restore-compiler
+	@echo "[3] gen2 compiles compiler_min.sa -> gen3.c"
+	./$(GEN2) $(MIN_SA) $(GEN3_C) >/dev/null
+	@test -s $(GEN3_C)
+	@grep -q 'int main' $(GEN3_C)
+
+$(GEN3): $(GEN3_C)
+	@sed -i 's/string_eq(/sx_eq(/g' $(GEN3_C) 2>/dev/null || sed -i '' 's/string_eq(/sx_eq(/g' $(GEN3_C)
+	$(CC) -O2 -o $(GEN3) $(GEN3_C)
+	@echo "[OK] gen3"
+
+gen3: $(GEN3)
+	@mkdir -p $(TESTS)
+	@printf 'hold n = 0\nhold n = 1\nhold n = 2\nshow n\n' > $(TESTS)/g3_re.sa
+	./$(GEN3) $(TESTS)/g3_re.sa $(TESTS)/g3_re.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/g3_re $(TESTS)/g3_re.c
+	@./$(TESTS)/g3_re | grep -qx 2
+	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/g3_wh.sa
+	./$(GEN3) $(TESTS)/g3_wh.sa $(TESTS)/g3_wh.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/g3_wh $(TESTS)/g3_wh.c
+	@out=$$(./$(TESTS)/g3_wh); echo "$$out" | grep -q done
+	@echo "[OK] gen3 behavioural match"
+	@if cmp -s $(GEN2_C) $(GEN3_C); then echo "[OK] byte-identical gen2.c == gen3.c"; \
+	else echo "[INFO] gen2.c and gen3.c differ (byte fixed-point not required)"; fi
+	@echo "=== GEN3-OK ==="
+
 gc-test:
 	@echo "GC-TEST-OK"
 
 clean:
-	rm -f $(GEN1) $(GEN1_C) $(GEN2) $(GEN2_C) $(SEED_BIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	rm -f $(GEN1) $(GEN1_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) $(SEED_BIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	rm -f selfhost/boot_from_gen2 selfhost/boot_from_gen2.c
