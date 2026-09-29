@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-30 (TRUE FULL SELF-HOST; no Python on happy path).
+Last updated: 2026-09-30 (TRUE FULL SELF-HOST; Makefile-only entry).
 
 ## Summary
 
@@ -10,7 +10,7 @@ Last updated: 2026-09-30 (TRUE FULL SELF-HOST; no Python on happy path).
 | C seed tests | `SEED-OK` | `make seed` |
 | seed → gen1 (pure minim compiler) | `GEN1-OK` | `make gen1` |
 | gen1 → boot → boot2 (pure pipeline) | `GEN2-PARTIAL` | `make gen2` |
-| **gen1 compiles compiler_min → gen2** | **`TRUE-FULL-SELFHOST-OK`** | `bash selfhost/bootstrap_true_selfhost.sh` |
+| **gen1 compiles compiler_min → gen2** | **`TRUE-FULL-SELFHOST-OK`** | **`make true-selfhost`** |
 | everything | all of the above | `make all` / `make test` |
 
 Everything above runs with clang (CI, Termux) and with gcc/cc on plain Linux.
@@ -33,19 +33,13 @@ Verified:
 
 ### Fixes that closed the gap
 
-1. **Declaration hoisting** – first `hold` (even inside nested when/while) emits
-   `type name = 0;` / `char *name = "";` into a top-level `decls_c` block;
-   the body always gets an assignment. Nested first-holds stay in scope.
-2. **String escape hardening** – `\` in a source string literal emits `\` into C;
-   `\"` emits `\"`. Closing quotes no longer break the generated C.
-3. **`string_eq` → `sx_eq` in conditions** – condition text is scanned and every
-   occurrence of the identifier `string_eq` is rewritten to the generated helper
-   `sx_eq` before emission.
-4. **`SX_TAB_CAP` raised to 2 097 152** – self-compile of the ~43 KB source
-   allocates enough tagged strings; the default 262 144 overflowed.
-5. **Body chunking** – when `len(body) > 4096`, flush into `body_old` so string
-   growth is O(n · chunk) instead of full O(n²). Pure-min has no lists; this is
-   the practical speedup without expanding the dialect.
+1. **Declaration hoisting** – first `hold` emits decls into top-level `decls_c`
+2. **String escape hardening** – `\` / `\"` emit correctly into C
+3. **`string_eq` → `sx_eq` in conditions**
+4. **`SX_TAB_CAP` 2 097 152** for self-compile
+5. **Body chunking** at 4096 chars
+6. **P1 token macro** – operators store `+` not `'+'`
+7. **String object table** – register data ptr (matches `sx_pack`), not header
 
 ### Language dependencies (bootstrap)
 
@@ -53,31 +47,24 @@ Verified:
 |-------|----------|------|
 | Trusted seed | **C only** | `sxc_seed.c` + `sx_runtime.h` — once |
 | Compiler | **`.sa` only** | `compiler_min.sa` → gen1 → gen2 |
-| Orchestration | **bash** | `bootstrap_true_selfhost.sh` |
+| Orchestration | **make** | `make true-selfhost` (primary) |
 | C compiler | clang/gcc/cc | Compile seed + emitted C |
 
-**No Python on the happy path.** Seed fixes are applied with `sed` in the bootstrap
-script; `compiler_min.sa` is restored from gzip+b64 parts with `base64` + `gzip`
-(standard Unix tools). Python scripts remain in-tree only for older workflows.
+**Primary entry: `make true-selfhost`.** No bash script required.
+Seed fixes (P1, offsetof, string-tab) apply via make recipes; `compiler_min.sa`
+restores from gzip+b64 parts with `base64` + `gzip`. Bash scripts are thin
+wrappers that call `make`. Python is not used on the happy path.
 
 ### Remaining optional work
 
 - Byte-identical fixed point of gen2 recompiling compiler_min (gen3 vs gen2)
-  is not yet asserted; behavioural agreement is verified via the boot path.
-- List-based body builder (dialect growth) for further speed if needed.
+- List-based body builder (dialect growth) for further speed if needed
 
 ## GEN1-OK target language
-
-`selfhost/gen1` (and `gen2`) accept:
 
 ```
 hold NAME = NUMBER | NAME | "string" | NAME + NUMBER | call(...)
 show  NUMBER | NAME | "string" | call(...)
 while COND { ... }
 when  COND { ... } [ otherwise { ... } ]
-// line comments
 ```
-
-COND is copied as C expression text (supports `&&` / `||` / arithmetic).
-Call names `concat`/`len`/`sx_index`/`chr`/`read_file`/`write_file`/`arg`/
-`arg_count`/`string_eq` map to the emitted static helpers.
