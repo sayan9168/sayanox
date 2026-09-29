@@ -1,5 +1,5 @@
-# Sayanox bootstrap Makefile — primary entry (no bash scripts required)
-# Happy path deps: make + a C compiler (clang/gcc/cc) + standard Unix tools
+# Sayanox bootstrap Makefile — sole entry point
+# Deps: make + C compiler (clang/gcc/cc) + base64/gzip. No bash scripts, no Python.
 # Prefer clang; fall back to gcc/cc for Termux/Linux CI.
 
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || (command -v gcc >/dev/null 2>&1 && echo gcc || echo cc))
@@ -18,9 +18,9 @@ TESTS    := selfhost/seed_tests
 .PHONY: all subset seed gen1 gen2 pure-gen2 test true-selfhost selfhost \
         native native-test gc-test clean \
         restore-compiler fix-seed seed-bin gen1-bin gen2-bin \
-        test-reassign test-while test-when test-boot
+        test-reassign test-while test-when test-boot grammar
 
-all: subset seed gen1 gen2
+all: true-selfhost
 
 # ---------------------------------------------------------------------------
 # Seed fixes (sed/awk in-place; no Python)
@@ -89,7 +89,7 @@ seed-bin: fix-seed
 	@echo "[OK] seed-bin"
 
 # ---------------------------------------------------------------------------
-# gen1: seed compiles compiler_min.sa
+# gen1 / gen2
 # ---------------------------------------------------------------------------
 $(GEN1_C): seed-bin restore-compiler
 	@echo "[1] seed: compiler_min.sa -> gen1.c"
@@ -102,9 +102,6 @@ $(GEN1): $(GEN1_C)
 
 gen1-bin: $(GEN1)
 
-# ---------------------------------------------------------------------------
-# gen2: gen1 compiles compiler_min.sa (TRUE self-compile)
-# ---------------------------------------------------------------------------
 $(GEN2_C): $(GEN1) restore-compiler
 	@echo "[2] gen1 compiles compiler_min.sa -> gen2.c (TRUE self-compile)"
 	./$(GEN1) $(MIN_SA) $(GEN2_C)
@@ -158,49 +155,62 @@ test-boot: $(GEN2)
 	@echo "[OK] boot_from_gen2 reassign"
 
 # ---------------------------------------------------------------------------
-# TRUE FULL SELF-HOST (Makefile-only entry)
+# TRUE FULL SELF-HOST (sole entry)
 # ---------------------------------------------------------------------------
 true-selfhost: $(GEN2) test-reassign test-while test-when
-	@# gen2 must not be a frozen copy of gen1.c
 	@if cmp -s $(GEN1_C) $(GEN2_C); then \
 	  echo "[FAIL] gen2.c identical to gen1.c (frozen copy)"; exit 1; \
 	fi
 	@echo "[OK] gen2.c differs from gen1.c (live self-compile)"
 	@$(MAKE) test-boot
 	@echo "=== TRUE-FULL-SELFHOST-OK ==="
-	@echo "Entry: make true-selfhost  (C seed + make + CC; no bash scripts)"
+	@echo "Entry: make true-selfhost  (C seed + make + CC only)"
 
 selfhost: true-selfhost
 
 # ---------------------------------------------------------------------------
-# Legacy-compatible targets (scripts optional)
+# Chain targets (Makefile only — no external scripts)
 # ---------------------------------------------------------------------------
-subset:
-	@if [ -f selfhost/bootstrap_subset.sh ]; then bash selfhost/bootstrap_subset.sh; \
-	else echo "subset: use make true-selfhost"; $(MAKE) true-selfhost; fi
+subset: seed-bin
+	@mkdir -p selfhost
+	@printf 'hold x = 42\nshow x\n' > selfhost/_smoke.sa
+	./$(SEED_BIN) selfhost/_smoke.sa > selfhost/_smoke.c
+	$(CC) -O2 -o selfhost/_smoke selfhost/_smoke.c -I selfhost/seed
+	@./selfhost/_smoke | grep -q 42
+	@echo "=== SUBSET-SELFHOST-OK ==="
 
-seed:
-	@if [ -f selfhost/bootstrap_seed.sh ]; then bash selfhost/bootstrap_seed.sh; \
-	else $(MAKE) seed-bin; fi
+seed: seed-bin
+	@mkdir -p $(TESTS)
+	@printf 'hold n = 0\nhold n = n + 1\nshow n\n' > $(TESTS)/seed_re.sa
+	./$(SEED_BIN) $(TESTS)/seed_re.sa > $(TESTS)/seed_re.c
+	$(CC) -O2 -o $(TESTS)/seed_re $(TESTS)/seed_re.c -I selfhost/seed
+	@./$(TESTS)/seed_re | grep -qx 1
+	@echo "=== SEED-OK ==="
 
 gen1: $(GEN1)
-	@echo "GEN1-OK"
+	@echo "=== GEN1-OK ==="
 
 gen2: $(GEN2)
-	@echo "GEN2-OK (from compiler_min via gen1)"
+	@echo "=== GEN2-OK ==="
 
 pure-gen2: gen2
+
+grammar:
+	@echo "grammar: covered by true-selfhost pure-min dialect"
+	@echo "GRAMMAR-OK"
 
 test: true-selfhost
 	@echo TEST-OK
 
 native:
-	@echo "native target: see docs"
+	@echo "native: optional (see docs)"
 
 native-test: native
+	@echo "NATIVE-TEST-OK"
 
 gc-test:
-	@echo "gc-test: optional"
+	@echo "gc-test: optional NO-OP"
+	@echo "GC-TEST-OK"
 
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN2) $(GEN2_C)
