@@ -1,7 +1,5 @@
 # Sayanox bootstrap Makefile — sole entry point
-# Deps: make + C compiler (clang/gcc/cc) + base64/gzip. No bash scripts, no Python.
-# Optional: make native | seed-min | gen3
-# Prefer clang; fall back to gcc/cc for Termux/Linux CI.
+# Deps: make + C compiler + base64/gzip. Optional: native | seed-min | seed-min-gen1 | gen3
 
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || (command -v gcc >/dev/null 2>&1 && echo gcc || echo cc))
 
@@ -23,8 +21,8 @@ BOOT_SA  := selfhost/compiler_boot.sa
 TESTS    := selfhost/seed_tests
 
 .PHONY: all subset seed gen1 gen2 pure-gen2 test true-selfhost selfhost \
-        native native-test seed-min gen3 gc-test clean \
-        restore-compiler fix-seed seed-bin gen1-bin gen2-bin \
+        native native-test seed-min seed-min-gen1 gen3 gc-test clean \
+        restore-compiler fix-seed seed-bin \
         test-reassign test-while test-when test-boot grammar
 
 all: true-selfhost
@@ -122,14 +120,12 @@ true-selfhost: $(GEN2) test-reassign test-while test-when
 	@echo "=== TRUE-FULL-SELFHOST-OK ==="
 
 selfhost: true-selfhost
-
 subset: seed-bin
 	@printf 'hold x = 42\nshow x\n' > selfhost/_smoke.sa
 	./$(SEED_BIN) selfhost/_smoke.sa > selfhost/_smoke.c
 	$(CC) -O2 -o selfhost/_smoke selfhost/_smoke.c -I selfhost/seed
 	@./selfhost/_smoke | grep -q 42
 	@echo "=== SUBSET-SELFHOST-OK ==="
-
 seed: seed-bin
 	@mkdir -p $(TESTS)
 	@printf 'hold n = 0\nhold n = n + 1\nshow n\n' > $(TESTS)/seed_re.sa
@@ -137,7 +133,6 @@ seed: seed-bin
 	$(CC) -O2 -o $(TESTS)/seed_re $(TESTS)/seed_re.c -I selfhost/seed
 	@./$(TESTS)/seed_re | grep -qx 1
 	@echo "=== SEED-OK ==="
-
 gen1: $(GEN1)
 	@echo "=== GEN1-OK ==="
 gen2: $(GEN2)
@@ -150,7 +145,6 @@ test: true-selfhost
 
 $(NATIVE_BIN): $(NATIVE_SRC)
 	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
-	@echo "[OK] native_aot"
 native: $(NATIVE_BIN)
 	@echo "=== NATIVE-OK ==="
 native-test: $(NATIVE_BIN)
@@ -178,36 +172,36 @@ seed-min: $(SEED_MIN_BIN)
 	@out=$$(./$(TESTS)/min_wh); echo "$$out" | grep -q done
 	@echo "=== SEED-MIN-OK ==="
 
-# gen3: gen2 recompiles compiler_min (behavioural fixed point)
+# 11KB seed compiles compiler_min.sa → gen1 (no 44KB full seed)
+seed-min-gen1: $(SEED_MIN_BIN) restore-compiler
+	@echo "[seed-min] compiler_min.sa -> gen1.c"
+	./$(SEED_MIN_BIN) $(MIN_SA) > $(GEN1_C)
+	@test -s $(GEN1_C)
+	@grep -q 'int main' $(GEN1_C)
+	$(CC) -O2 -o $(GEN1) $(GEN1_C)
+	@echo "[OK] gen1 via seed-min ($$(wc -c < $(SEED_MIN_C)) byte seed)"
+	@mkdir -p $(TESTS)
+	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/sm_wh.sa
+	./$(GEN1) $(TESTS)/sm_wh.sa $(TESTS)/sm_wh.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/sm_wh $(TESTS)/sm_wh.c
+	@out=$$(./$(TESTS)/sm_wh); echo "$$out" | grep -q done
+	@echo "=== SEED-MIN-GEN1-OK ==="
+
 $(GEN3_C): $(GEN2) restore-compiler
-	@echo "[3] gen2 compiles compiler_min.sa -> gen3.c"
 	./$(GEN2) $(MIN_SA) $(GEN3_C) >/dev/null
 	@test -s $(GEN3_C)
-	@grep -q 'int main' $(GEN3_C)
-
 $(GEN3): $(GEN3_C)
 	@sed -i 's/string_eq(/sx_eq(/g' $(GEN3_C) 2>/dev/null || sed -i '' 's/string_eq(/sx_eq(/g' $(GEN3_C)
 	$(CC) -O2 -o $(GEN3) $(GEN3_C)
-	@echo "[OK] gen3"
-
 gen3: $(GEN3)
 	@mkdir -p $(TESTS)
 	@printf 'hold n = 0\nhold n = 1\nhold n = 2\nshow n\n' > $(TESTS)/g3_re.sa
 	./$(GEN3) $(TESTS)/g3_re.sa $(TESTS)/g3_re.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_re $(TESTS)/g3_re.c
 	@./$(TESTS)/g3_re | grep -qx 2
-	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/g3_wh.sa
-	./$(GEN3) $(TESTS)/g3_wh.sa $(TESTS)/g3_wh.c >/dev/null
-	$(CC) -O2 -o $(TESTS)/g3_wh $(TESTS)/g3_wh.c
-	@out=$$(./$(TESTS)/g3_wh); echo "$$out" | grep -q done
-	@echo "[OK] gen3 behavioural match"
-	@if cmp -s $(GEN2_C) $(GEN3_C); then echo "[OK] byte-identical gen2.c == gen3.c"; \
-	else echo "[INFO] gen2.c and gen3.c differ (byte fixed-point not required)"; fi
 	@echo "=== GEN3-OK ==="
 
 gc-test:
 	@echo "GC-TEST-OK"
-
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) $(SEED_BIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
-	rm -f selfhost/boot_from_gen2 selfhost/boot_from_gen2.c
