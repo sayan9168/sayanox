@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# TRUE GEN1: seed compiles pure compiler_min.sa → gen1 binary (no cp freeze)
+# TRUE GEN1: seed compiles pure compiler_min.sa → gen1 (hold/reassign/while/when)
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p selfhost/seed_tests
@@ -16,41 +16,63 @@ grep -q sx_boot selfhost/gen1.c
 echo "[2] clang: gen1.c -> gen1"
 clang -O2 -o selfhost/gen1 selfhost/gen1.c -I selfhost/seed
 
-echo "[3] gen1 compiles hold/show programs"
-cat > selfhost/seed_tests/g1_hold.sa << 'SA'
-hold a = 10
-hold b = 20
-show a
-show b
+echo "[3] reassign"
+cat > selfhost/seed_tests/g1_re.sa << 'SA'
+hold n = 0
+hold n = 1
+hold n = 2
+show n
 SA
-./selfhost/gen1 selfhost/seed_tests/g1_hold.sa selfhost/seed_tests/g1_hold.c
-clang -O2 -o selfhost/seed_tests/g1_hold selfhost/seed_tests/g1_hold.c
-out=$(./selfhost/seed_tests/g1_hold)
-echo "$out" | grep -q 10
-echo "$out" | grep -q 20
-echo "[OK] multi-hold"
+./selfhost/gen1 selfhost/seed_tests/g1_re.sa selfhost/seed_tests/g1_re.c
+clang -O2 -o selfhost/seed_tests/g1_re selfhost/seed_tests/g1_re.c
+out=$(./selfhost/seed_tests/g1_re)
+echo "$out" | grep -qx 2
+echo "[OK] reassign"
 
-cat > selfhost/seed_tests/g1_str.sa << 'SA'
-hold x = 42
-show x
-show "hi"
+echo "[4] while + n = n + 1"
+cat > selfhost/seed_tests/g1_wh.sa << 'SA'
+hold n = 0
+while n < 3 {
+  show n
+  hold n = n + 1
+}
+show "done"
 SA
-./selfhost/gen1 selfhost/seed_tests/g1_str.sa selfhost/seed_tests/g1_str.c
-clang -O2 -o selfhost/seed_tests/g1_str selfhost/seed_tests/g1_str.c
-out=$(./selfhost/seed_tests/g1_str)
-echo "$out" | grep -q 42
-echo "$out" | grep -q hi
-echo "[OK] string show"
+./selfhost/gen1 selfhost/seed_tests/g1_wh.sa selfhost/seed_tests/g1_wh.c
+clang -O2 -o selfhost/seed_tests/g1_wh selfhost/seed_tests/g1_wh.c
+out=$(./selfhost/seed_tests/g1_wh)
+echo "$out" | grep -q done
+echo "$out" | grep -q 0
+echo "$out" | grep -q 1
+echo "$out" | grep -q 2
+echo "[OK] while"
 
+echo "[5] when"
+cat > selfhost/seed_tests/g1_wn.sa << 'SA'
+hold x = 2
+when x == 1 {
+  show 11
+}
+show 99
+show "done"
+SA
+./selfhost/gen1 selfhost/seed_tests/g1_wn.sa selfhost/seed_tests/g1_wn.c
+clang -O2 -o selfhost/seed_tests/g1_wn selfhost/seed_tests/g1_wn.c
+out=$(./selfhost/seed_tests/g1_wn)
+echo "$out" | grep -q 99
+echo "$out" | grep -q done
+if echo "$out" | grep -q '^11$'; then echo "FAIL: when body ran"; exit 1; fi
+echo "[OK] when"
+
+echo "[6] mini_in"
 if [ -f selfhost/mini_in.sa ]; then
   ./selfhost/gen1 selfhost/mini_in.sa selfhost/seed_tests/g1_mini.c
   clang -O2 -o selfhost/seed_tests/g1_mini selfhost/seed_tests/g1_mini.c
   ./selfhost/seed_tests/g1_mini | grep -q 42
-  echo "[OK] mini_in.sa"
+  echo "[OK] mini_in"
 fi
 
-test -f selfhost/gen1.c
-grep -q "sx_b_concat\|sx_b_read_file\|sx_b_arg" selfhost/gen1.c
-echo "[OK] gen1.c is seed-emitted pure-compiler (not frozen artifact)"
+grep -q "sx_b_concat\|sx_b_read_file" selfhost/gen1.c
+echo "[OK] gen1.c is seed-emitted (not frozen)"
 
 echo "=== GEN1-OK ==="
