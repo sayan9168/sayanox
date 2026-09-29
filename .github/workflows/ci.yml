@@ -1,45 +1,77 @@
 name: CI
+
 on:
-  push: { branches: [main] }
-  pull_request: { branches: [main] }
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sayanox-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  subset:
+  bootstrap:
+    name: Bootstrap / grammar / pure-gen2
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - run: |
-          chmod +x selfhost/restore_sxc_full.sh
-          ./selfhost/restore_sxc_full.sh
-          chmod +x selfhost/bootstrap_subset.sh
-          ./selfhost/bootstrap_subset.sh
-  seed:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang gcc make python3
+
+      - name: Verify shell scripts
+        run: |
+          bash -n selfhost/bootstrap_subset.sh
+          bash -n selfhost/bootstrap_seed.sh
+          bash -n selfhost/bootstrap_gen1.sh
+          bash -n selfhost/bootstrap_gen2.sh
+          bash -n selfhost/bootstrap_grammar.sh
+
+      - name: Full bootstrap
+        run: make all
+
+      - name: Grammar growth regression
+        run: make grammar
+
+      - name: Full test suite
+        run: make test
+
+      - name: Native target
+        run: make native-test
+
+      - name: Runtime / GC target
+        run: make gc-test
+
+  clean-tree:
+    name: Generated-file hygiene
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - run: |
-          chmod +x selfhost/bootstrap_seed.sh
-          ./selfhost/bootstrap_seed.sh
-  gen1:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: |
-          chmod +x selfhost/bootstrap_gen1.sh
-          ./selfhost/bootstrap_gen1.sh
-  gen2:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: |
-          chmod +x selfhost/bootstrap_gen2.sh
-          ./selfhost/bootstrap_gen2.sh
-  native:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: make native-test || echo "native skip"
-  memory:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: make gc-test || echo "rc skip"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify clean checkout
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Check tracked generated artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e selfhost/gen1.c
+          test ! -e selfhost/gen2.c
+          test ! -e selfhost/boot.c
+          test ! -e selfhost/boot2.c
+          test ! -e selfhost/gen1
+          test ! -e selfhost/gen2
+          test ! -e selfhost/boot
+          test ! -e selfhost/boot2
