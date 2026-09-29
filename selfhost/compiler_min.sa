@@ -1363,7 +1363,7 @@ when rt == 1 {
   hold out = concat(out, "static double sx_idx(const char *s,double v){ long i=(long)v; long L=(long)strlen(s); if(i<0) i=i+L; if(i<0||i>=L){ fputs(\"sx: string index out of range\",stderr); exit(1); } return (double)(unsigned char)s[i]; }\n")
   hold out = concat(out, "static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return \"\"; fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET); char *b=(char*)malloc((size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f); return b; }\n")
   hold out = concat(out, "static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0.0; fputs(s,f); return fclose(f)==0?1.0:0.0; }\n")
-  hold out = concat(out, "static double sx_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\\n")
+  hold out = concat(out, "static double sx_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
   hold out = concat(out, "\n")
 } otherwise {
   hold out = concat(out, "#include <stdio.h>\n\n")
