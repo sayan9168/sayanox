@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-29 (TRUE FULL SELF-HOST).
+Last updated: 2026-09-30 (TRUE FULL SELF-HOST + body chunking).
 
 ## Summary
 
@@ -43,13 +43,15 @@ Verified:
    `sx_eq` before emission.
 4. **`SX_TAB_CAP` raised to 2 097 152** – self-compile of the ~43 KB source
    allocates enough tagged strings; the default 262 144 overflowed.
+5. **Body chunking** – when `len(body) > 4096`, flush into `body_old` so string
+   growth is O(n · chunk) instead of full O(n²). Pure-min has no lists; this is
+   the practical speedup without expanding the dialect.
 
 ### Remaining optional work
 
-- Quadratic `concat` on large sources (no lists in pure-min) – self-compile of
-  compiler_min takes ~60–90 s. A list-based body builder would make it fast.
 - Byte-identical fixed point of gen2 recompiling compiler_min (gen3 vs gen2)
   is not yet asserted; behavioural agreement is verified via the boot path.
+- List-based body builder (dialect growth) for further speed if needed.
 
 ## GEN1-OK target language
 
