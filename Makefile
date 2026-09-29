@@ -1,4 +1,4 @@
-.PHONY: all test subset seed gen1 gen2 grammar pure-gen2 native native-test gc-test clean
+.PHONY: all test subset seed gen1 gen2 grammar pure-gen2 native native-test gc-test clean ci
 
 # The bootstrap chain: subset (seed smoke) -> seed -> gen1 -> gen2 (pure)
 all: subset seed gen1 gen2
@@ -52,3 +52,6 @@ clean:
 	rm -f selfhost/_run selfhost/_out.c selfhost/_smoke selfhost/_smoke.c selfhost/_smoke.sa
 	rm -rf selfhost/seed_tests selfhost/gen2_tests
 	rm -f selfhost/seed/sxc_seed
+
+ci: all grammar test native-test gc-test
+	@echo CI-OK
