@@ -89,13 +89,18 @@ make subset-existing
 
 `make complete` remains an alias for the supported subset smoke test for compatibility.
 
-The true self-compile proof remains:
+The pure pipeline proof is:
 
 ```sh
-./selfhost/bootstrap_gen2.sh
+make gen2          # === GEN2-PARTIAL ===
 ```
 
-That script prefers an existing gen1; it falls back to the C seed only when no gen1 executable is available.
+`selfhost/bootstrap_gen2.sh` uses the C seed exactly once (to build gen1 from
+`selfhost/compiler_min.sa`), then gen1 builds the pure compiler `boot` from
+`selfhost/compiler_boot.sa`, `boot` compiles pure-min programs, and `boot`
+recompiling its own source gives a byte-identical `boot2.c`. Nothing is
+copied. It is *partial*: gen1 still cannot compile `compiler_min.sa` itself —
+the exact limits are in `docs/STATUS.md`.
 
 ## Source of truth
 

@@ -1,1 +1,20 @@
-(empty)
+# generated compilers and their C output (rebuilt by the bootstrap scripts)
+selfhost/gen1
+selfhost/gen1.c
+selfhost/gen2
+selfhost/gen2.c
+selfhost/boot
+selfhost/boot.c
+selfhost/boot2
+selfhost/boot2.c
+selfhost/seed_tests/
+selfhost/gen2_tests/
+# scratch programs used by the bootstrap scripts
+selfhost/_smoke
+selfhost/_smoke.c
+selfhost/_smoke.sa
+selfhost/_run
+selfhost/_out.c
+selfhost/mini_out.c
+selfhost/hello_out.c
+selfhost/sxc_full

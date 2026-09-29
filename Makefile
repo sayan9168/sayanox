@@ -1,6 +1,7 @@
-.PHONY: all test subset pure-gen2 seed gen1 native native-test gc-test clean
+.PHONY: all test subset seed gen1 gen2 pure-gen2 native native-test gc-test clean
 
-all: subset seed gen1
+# The bootstrap chain: subset (seed smoke) -> seed -> gen1 -> gen2 (pure)
+all: subset seed gen1 gen2
 
 subset:
 	chmod +x selfhost/bootstrap_subset.sh
@@ -10,17 +11,22 @@ seed:
 	chmod +x selfhost/bootstrap_seed.sh
 	./selfhost/bootstrap_seed.sh
 
+# gen1: the C seed compiles selfhost/compiler_min.sa into selfhost/gen1.c
 gen1:
 	chmod +x selfhost/bootstrap_gen1.sh
 	./selfhost/bootstrap_gen1.sh
 
-pure-gen2: subset
-	@if [ -f selfhost/bootstrap_pure_gen2.sh ]; then \
-	  chmod +x selfhost/bootstrap_pure_gen2.sh; \
-	  ./selfhost/bootstrap_pure_gen2.sh || echo "pure-gen2 soft-fail"; \
-	else echo "skip pure-gen2"; fi
+# gen2: gen1 compiles selfhost/compiler_boot.sa into a pure compiler (boot),
+# which compiles pure-min programs, and boot.c == boot2.c (fixed point).
+# Nothing is copied; see docs/STATUS.md ("GEN2-PARTIAL") for the exact limits.
+gen2:
+	chmod +x selfhost/bootstrap_gen2.sh
+	./selfhost/bootstrap_gen2.sh
 
-test: subset seed gen1
+# kept for compatibility: pure-gen2 is the same target as gen2
+pure-gen2: gen2
+
+test: subset seed gen1 gen2
 	@echo TEST-OK
 
 native:
@@ -37,6 +43,8 @@ gc-test:
 	else echo "rc skip"; fi
 
 clean:
-	rm -f selfhost/sxc_full selfhost/gen1 selfhost/gen2 selfhost/_run selfhost/_out.c selfhost/gen1.c
-	rm -rf selfhost/seed_tests
+	rm -f selfhost/sxc_full selfhost/gen1 selfhost/gen1.c selfhost/gen2 selfhost/gen2.c
+	rm -f selfhost/boot selfhost/boot.c selfhost/boot2 selfhost/boot2.c
+	rm -f selfhost/_run selfhost/_out.c selfhost/_smoke selfhost/_smoke.c selfhost/_smoke.sa
+	rm -rf selfhost/seed_tests selfhost/gen2_tests
 	rm -f selfhost/seed/sxc_seed

@@ -1,7 +1,38 @@
-// Pure Sayanox mini-compiler (subset)
-// Compiles: hold (+reassign NUMBER), show NUMBER|name|"string"
-// Built by sxc_full — pure-.sa self-host step
+// compiler_min.sa - pure Sayanox mini-compiler (generation 1 source).
+//
+// The C seed (selfhost/seed/sxc_seed.c) compiles this file into selfhost/gen1.c.
+// gen1 accepts the "pure min" target language and emits standalone C:
+//
+//   hold NAME = NUMBER | NAME | "text" | NAME + NUMBER | call(...)
+//   show NUMBER | NAME | "text" | call(...)
+//   while NAME OP NUMBER|NAME { ... }
+//   when  NAME OP NUMBER|NAME { ... } otherwise { ... }
+//   // line comments
+//
+//   OP is one of  ==  !=  <  <=  >  >=
+//
+// String builtins exposed to target programs (only what target programs need):
+//   concat / len / sx_index / chr / read_file / write_file / arg / arg_count
+// The runtime-name aliases (sx_cat, sx_len, sx_idx, sx_chr, sx_read, sx_write,
+// sx_arg, sx_argc) are accepted too so that a child compiler can copy call
+// text without a name table.
+//
+// Design notes
+//   * The whole compiler is ONE flat top-level program.  The seed has no
+//     closures, so a `make` helper could not see pos/body: there are none.
+//   * Statements are recognised by a single character scanner with a brace
+//     depth counter.  Bodies are NOT skipped by a nested parser, so hold and
+//     show inside while/when bodies are compiled as well.
+//   * Numeric programs get clean standalone C (`double n = 0;`, `n = n + 1;`,
+//     `while (n < 3) {`).  Programs that use string calls get a small static
+//     helper block emitted above main; no external runtime header is needed.
+//   * First `hold name = ...` declares (`double` or `char *`), later ones
+//     assign.  Membership is tracked in the "|name|" strings decls/sdecls.
+//
+// See docs/STATUS.md for the exact scope, and selfhost/compiler_boot.sa for a
+// reduced pure-min compiler written in the subset this compiler accepts.
 
+// ---------------- command line ----------------
 hold in_path = "selfhost/mini_in.sa"
 hold out_path = "selfhost/mini_out.c"
 hold na = arg_count()
@@ -12,381 +43,1269 @@ when na >= 3 {
   hold out_path = arg(2)
 }
 
+// ---------------- compiler state ----------------
 hold source = read_file(in_path)
 hold n = len(source)
 hold pos = 0
 hold body = ""
 hold decls = "|"
+hold sdecls = "|"
 hold depth = 0
+hold running = 1
 hold holds = 0
 hold shows = 0
 hold whiles = 0
 hold whens = 0
-hold isnum = 0
-hold sk = 0
-hold rn = 0
-hold skipc = 0
-hold name = ""
-hold val = 0
+hold rt = 0
+
+// ---------------- scratch ----------------
+hold key = ""
+hold nm = ""
+hold nm2 = ""
+hold op = ""
+hold operand = ""
+hold opnd = ""
+hold oq = 0
+hold nm3 = ""
+hold rhs = ""
+hold opch = 0
+hold argv_txt = ""
+hold numtxt = ""
+hold ind = ""
+hold w9 = ""
+hold out = ""
+hold q = chr(34)
+hold nl = chr(10)
+hold bs = chr(92)
+hold act = 0
 hold c = 0
 hold c1 = 0
 hold c2 = 0
 hold c3 = 0
 hold cs = 0
 hold cq = 0
-hold s = ""
 hold cn = 0
 hold cd = 0
-hold q = chr(34)
-hold nl = chr(10)
-hold bs = chr(92)
+hold cw = 0
+hold sk = 0
+hold rn = 0
+hold skipc = 0
+hold skipw = 0
+hold wsc = 0
+hold isspace = 0
+hold inq = 0
+hold iscall = 0
+hold iswhile = 0
+hold rk = 0
+hold fk = 0
+hold wi = 0
+hold wk = 0
+hold wfound = 0
+hold d2 = 0
+hold found = 0
+hold sfind = 0
+hold di = 0
+hold dl = 0
+hold kl = 0
+hold j = 0
+hold ok = 0
+hold aa = 0
+hold bb = 0
 
-hold running = 1
+// =====================================================================
+// main scan loop
+// =====================================================================
 while running == 1 {
-  when pos >= n {
-    hold running = 0
-  } otherwise {
-    hold c = sx_index(source,pos)
-    when c == 32 {
-      hold pos = pos + 1
+
+  // ---- phase 1: skip blanks and // comments ----
+  hold skipw = 1
+  while skipw == 1 {
+    when pos >= n {
+      hold skipw = 0
+      hold running = 0
     } otherwise {
-      when c == 10 {
+      hold c = sx_index(source,pos)
+      hold isspace = 0
+      when c == 32 || c == 9 || c == 13 || c == 10 {
+        hold isspace = 1
+      }
+      when isspace == 1 {
         hold pos = pos + 1
       } otherwise {
-        when c == 13 {
-          hold pos = pos + 1
-        } otherwise {
-          when c == 9 {
-            hold pos = pos + 1
-          } otherwise {
-            when c == 47 {
-              when pos + 1 < n {
-                hold c2 = sx_index(source,pos + 1)
-                when c2 == 47 {
-                  hold pos = pos + 2
-                  hold skipc = 1
-                  while skipc == 1 {
-                    when pos >= n {
-                      hold skipc = 0
-                    } otherwise {
-                      hold c3 = sx_index(source,pos)
-                      when c3 == 10 {
-                        hold skipc = 0
-                      } otherwise {
-                        hold pos = pos + 1
-                      }
-                    }
-                  }
-                } otherwise {
-                  hold pos = pos + 1
-                }
+        when c == 47 {
+          hold c2 = 0
+          when pos + 1 < n {
+            hold c2 = sx_index(source,pos + 1)
+          }
+          when c2 == 47 {
+            // line comment: run to the end of the line
+            hold pos = pos + 2
+            hold skipc = 1
+            while skipc == 1 {
+              when pos >= n {
+                hold skipc = 0
+                hold running = 0
               } otherwise {
-                hold pos = pos + 1
-              }
-            } otherwise {
-              when c == 104 {
-                when pos + 3 < n {
-                  hold c1 = sx_index(source,pos + 1)
-                  hold c2 = sx_index(source,pos + 2)
-                  hold c3 = sx_index(source,pos + 3)
-                  when c1 == 111 {
-                    when c2 == 108 {
-                      when c3 == 100 {
-                        hold pos = pos + 4
-                        hold sk = 1
-                        while sk == 1 {
-                          when pos >= n {
-                            hold sk = 0
-                          } otherwise {
-                            hold cs = sx_index(source,pos)
-                            when cs == 32 {
-                              hold pos = pos + 1
-                            } otherwise {
-                              hold sk = 0
-                            }
-                          }
-                        }
-                        hold name = ""
-                        hold rn = 1
-                        while rn == 1 {
-                          when pos >= n {
-                            hold rn = 0
-                          } otherwise {
-                            hold cn = sx_index(source,pos)
-                            when cn >= 97 {
-                              when cn <= 122 {
-                                hold name = concat(name, chr(cn))
-                                hold pos = pos + 1
-                              } otherwise {
-                                hold rn = 0
-                              }
-                            } otherwise {
-                              hold rn = 0
-                            }
-                          }
-                        }
-                        hold sk = 1
-                        while sk == 1 {
-                          when pos >= n {
-                            hold sk = 0
-                          } otherwise {
-                            hold cs = sx_index(source,pos)
-                            when cs == 32 {
-                              hold pos = pos + 1
-                            } otherwise {
-                              when cs == 61 {
-                                hold pos = pos + 1
-                                hold sk = 0
-                              } otherwise {
-                                hold sk = 0
-                              }
-                            }
-                          }
-                        }
-                        hold sk = 1
-                        while sk == 1 {
-                          when pos >= n {
-                            hold sk = 0
-                          } otherwise {
-                            hold cs = sx_index(source,pos)
-                            when cs == 32 {
-                              hold pos = pos + 1
-                            } otherwise {
-                              hold sk = 0
-                            }
-                          }
-                        }
-                        hold val = 0
-                        hold rn = 1
-                        while rn == 1 {
-                          when pos >= n {
-                            hold rn = 0
-                          } otherwise {
-                            hold cd = sx_index(source,pos)
-                            when cd >= 48 {
-                              when cd <= 57 {
-                                hold val = val * 10 + (cd - 48)
-                                hold pos = pos + 1
-                              } otherwise {
-                                hold rn = 0
-                              }
-                            } otherwise {
-                              hold rn = 0
-                            }
-                          }
-                        }
-                        hold key = concat("|", name)
-                        hold key = concat(key, "|")
-                        hold found = 0
-                        hold di = 0
-                        hold dl = len(decls)
-                        hold kl = len(key)
-                        while di + kl <= dl {
-                          hold ok = 1
-                          hold j = 0
-                          while j < kl {
-                            hold aa = sx_index(decls, di + j)
-                            hold bb = sx_index(key, j)
-                            when aa == bb {
-                              hold j = j + 1
-                            } otherwise {
-                              hold ok = 0
-                              hold j = kl
-                            }
-                          }
-                          when ok == 1 {
-                            hold found = 1
-                            hold di = dl
-                          } otherwise {
-                            hold di = di + 1
-                          }
-                        }
-                        when found == 1 {
-                          hold body = concat(body, "  ")
-                          hold body = concat(body, name)
-                          hold body = concat(body, " = ")
-                          hold body = concat(body, str(val))
-                          hold body = concat(body, ";")
-                          hold body = concat(body, nl)
-                        } otherwise {
-                          hold decls = concat(decls, name)
-                          hold decls = concat(decls, "|")
-                          hold body = concat(body, "  double ")
-                          hold body = concat(body, name)
-                          hold body = concat(body, " = ")
-                          hold body = concat(body, str(val))
-                          hold body = concat(body, ";")
-                          hold body = concat(body, nl)
-                        }
-                        hold holds = holds + 1
-                      } otherwise {
-                        hold pos = pos + 1
-                      }
-                    } otherwise {
-                      hold pos = pos + 1
-                    }
-                  } otherwise {
-                    hold pos = pos + 1
-                  }
-                } otherwise {
-                  hold pos = pos + 1
-                }
-              } otherwise {
-                when c == 115 {
-                  when pos + 3 < n {
-                    hold c1 = sx_index(source,pos + 1)
-                    hold c2 = sx_index(source,pos + 2)
-                    hold c3 = sx_index(source,pos + 3)
-                    when c1 == 104 {
-                      when c2 == 111 {
-                        when c3 == 119 {
-                          hold pos = pos + 4
-                          hold sk = 1
-                          while sk == 1 {
-                            when pos >= n {
-                              hold sk = 0
-                            } otherwise {
-                              hold cs = sx_index(source,pos)
-                              when cs == 32 {
-                                hold pos = pos + 1
-                              } otherwise {
-                                hold sk = 0
-                              }
-                            }
-                          }
-                          when pos < n {
-                            hold cs = sx_index(source,pos)
-                            when cs == 34 {
-                              hold pos = pos + 1
-                              hold s = ""
-                              hold rn = 1
-                              while rn == 1 {
-                                when pos >= n {
-                                  hold rn = 0
-                                } otherwise {
-                                  hold cq = sx_index(source,pos)
-                                  when cq == 34 {
-                                    hold pos = pos + 1
-                                    hold rn = 0
-                                  } otherwise {
-                                    hold s = concat(s, chr(cq))
-                                    hold pos = pos + 1
-                                  }
-                                }
-                              }
-                              hold body = concat(body, "  puts(")
-                              hold body = concat(body, q)
-                              hold body = concat(body, s)
-                              hold body = concat(body, q)
-                              hold body = concat(body, ");")
-                              hold body = concat(body, nl)
-                              hold shows = shows + 1
-                            } otherwise {
-                              when cs >= 48 {
-                                when cs <= 57 {
-                                  hold val = 0
-                                  hold rn = 1
-                                  while rn == 1 {
-                                    when pos >= n {
-                                      hold rn = 0
-                                    } otherwise {
-                                      hold cd = sx_index(source,pos)
-                                      when cd >= 48 {
-                                        when cd <= 57 {
-                                          hold val = val * 10 + (cd - 48)
-                                          hold pos = pos + 1
-                                        } otherwise {
-                                          hold rn = 0
-                                        }
-                                      } otherwise {
-                                        hold rn = 0
-                                      }
-                                    }
-                                  }
-                                  hold body = concat(body, "  printf(")
-                                  hold body = concat(body, q)
-                                  hold body = concat(body, "%g")
-                                  hold body = concat(body, bs)
-                                  hold body = concat(body, "n")
-                                  hold body = concat(body, q)
-                                  hold body = concat(body, ", (double)")
-                                  hold body = concat(body, str(val))
-                                  hold body = concat(body, ");")
-                                  hold body = concat(body, nl)
-                                  hold shows = shows + 1
-                                } otherwise {
-                                  hold name = ""
-                                  hold rn = 1
-                                  while rn == 1 {
-                                    when pos >= n {
-                                      hold rn = 0
-                                    } otherwise {
-                                      hold cn = sx_index(source,pos)
-                                      when cn >= 97 {
-                                        when cn <= 122 {
-                                          hold name = concat(name, chr(cn))
-                                          hold pos = pos + 1
-                                        } otherwise {
-                                          hold rn = 0
-                                        }
-                                      } otherwise {
-                                        hold rn = 0
-                                      }
-                                    }
-                                  }
-                                  hold body = concat(body, "  printf(")
-                                  hold body = concat(body, q)
-                                  hold body = concat(body, "%g")
-                                  hold body = concat(body, bs)
-                                  hold body = concat(body, "n")
-                                  hold body = concat(body, q)
-                                  hold body = concat(body, ", ")
-                                  hold body = concat(body, name)
-                                  hold body = concat(body, ");")
-                                  hold body = concat(body, nl)
-                                  hold shows = shows + 1
-                                }
-                              } otherwise {
-                                hold pos = pos + 1
-                              }
-                            }
-                          } otherwise {
-                            hold pos = pos + 1
-                          }
-                        } otherwise {
-                          hold pos = pos + 1
-                        }
-                      } otherwise {
-                        hold pos = pos + 1
-                      }
-                    } otherwise {
-                      hold pos = pos + 1
-                    }
-                  } otherwise {
-                    hold pos = pos + 1
-                  }
+                hold c3 = sx_index(source,pos)
+                when c3 == 10 {
+                  hold skipc = 0
                 } otherwise {
                   hold pos = pos + 1
                 }
               }
             }
+          } otherwise {
+            hold pos = pos + 1
           }
+        } otherwise {
+          hold skipw = 0
         }
       }
     }
   }
+
+  // ---- phase 2: one statement ----
+  when running == 1 {
+    hold c = sx_index(source,pos)
+
+    // dispatch on the first character; act is 0 for "not a statement"
+    hold act = 0
+    when c == 104 {
+      hold act = 1
+    }
+    when c == 115 {
+      hold act = 2
+    }
+    when c == 119 {
+      hold act = 3
+    }
+    when c == 125 {
+      hold act = 4
+    }
+
+    // ================= hold NAME = RHS =================
+    when act == 1 {
+      hold pos = pos + 4
+      // blank skip
+      hold sk = 1
+      while sk == 1 {
+        when pos >= n {
+          hold sk = 0
+        } otherwise {
+          hold cs = sx_index(source,pos)
+          when cs == 32 || cs == 9 || cs == 13 {
+            hold pos = pos + 1
+          } otherwise {
+            hold sk = 0
+          }
+        }
+      }
+      // name
+      hold nm = ""
+      hold rn = 1
+      while rn == 1 {
+        when pos >= n {
+          hold rn = 0
+        } otherwise {
+          hold cn = sx_index(source,pos)
+          when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+            hold nm = concat(nm, chr(cn))
+            hold pos = pos + 1
+          } otherwise {
+            hold rn = 0
+          }
+        }
+      }
+      // blanks then '='
+      hold sk = 1
+      while sk == 1 {
+        when pos >= n {
+          hold sk = 0
+        } otherwise {
+          hold cs = sx_index(source,pos)
+          when cs == 32 || cs == 9 || cs == 13 {
+            hold pos = pos + 1
+          } otherwise {
+            when cs == 61 {
+              hold pos = pos + 1
+            }
+            hold sk = 0
+          }
+        }
+      }
+      // blanks
+      hold sk = 1
+      while sk == 1 {
+        when pos >= n {
+          hold sk = 0
+        } otherwise {
+          hold cs = sx_index(source,pos)
+          when cs == 32 || cs == 9 || cs == 13 {
+            hold pos = pos + 1
+          } otherwise {
+            hold sk = 0
+          }
+        }
+      }
+
+      // ---------- right hand side ----------
+      hold rhs = ""
+      hold rk = 0
+      hold c1 = 0
+      when pos < n {
+        hold c1 = sx_index(source,pos)
+      }
+
+      // RHS: string literal
+      when c1 == 34 {
+        hold pos = pos + 1
+        hold rhs = "\""
+        hold rn = 1
+        while rn == 1 {
+          when pos >= n {
+            hold rn = 0
+          } otherwise {
+            hold cq = sx_index(source,pos)
+            when cq == 34 {
+              hold pos = pos + 1
+              hold rhs = concat(rhs, "\"")
+              hold rn = 0
+            } otherwise {
+              when cq == 92 {
+                hold rhs = concat(rhs, bs)
+                hold pos = pos + 1
+              } otherwise {
+                hold rhs = concat(rhs, chr(cq))
+                hold pos = pos + 1
+              }
+            }
+          }
+        }
+        hold rk = 1
+        hold rt = 1
+      }
+
+      // RHS: number
+      when (c1 >= 48 && c1 <= 57) || c1 == 45 {
+        hold numtxt = ""
+        when c1 == 45 {
+          hold numtxt = "-"
+          hold pos = pos + 1
+        }
+        hold rn = 1
+        while rn == 1 {
+          when pos >= n {
+            hold rn = 0
+          } otherwise {
+            hold cd = sx_index(source,pos)
+            when cd >= 48 && cd <= 57 {
+              hold numtxt = concat(numtxt, chr(cd))
+              hold pos = pos + 1
+            } otherwise {
+              hold rn = 0
+            }
+          }
+        }
+        hold rhs = numtxt
+        hold rk = 0
+      }
+
+      // RHS: name, name + number, or call(...)
+      when (c1 >= 97 && c1 <= 122) || (c1 >= 65 && c1 <= 90) {
+        hold nm2 = ""
+        hold rn = 1
+        while rn == 1 {
+          when pos >= n {
+            hold rn = 0
+          } otherwise {
+            hold cn = sx_index(source,pos)
+            when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+              hold nm2 = concat(nm2, chr(cn))
+              hold pos = pos + 1
+            } otherwise {
+              hold rn = 0
+            }
+          }
+        }
+        hold iscall = 0
+        hold c2 = 0
+        when pos < n {
+          hold c2 = sx_index(source,pos)
+        }
+        when c2 == 40 {
+          hold iscall = 1
+        }
+
+        // ---- call(...) ----
+        when iscall == 1 {
+          hold pos = pos + 1
+          hold argv_txt = ""
+          hold inq = 0
+          hold rn = 1
+          while rn == 1 {
+            when pos >= n {
+              hold rn = 0
+            } otherwise {
+              hold cn = sx_index(source,pos)
+              when cn == 41 && inq == 0 {
+                hold rn = 0
+              } otherwise {
+                hold pos = pos + 1
+                when inq == 1 {
+                  hold argv_txt = concat(argv_txt, chr(cn))
+                  when cn == 34 {
+                    hold inq = 0
+                  }
+                  when cn == 92 {
+                    when pos < n {
+                      hold cq = sx_index(source,pos)
+                      hold argv_txt = concat(argv_txt, chr(cq))
+                      hold pos = pos + 1
+                    }
+                  }
+                } otherwise {
+                  when cn == 34 {
+                    hold inq = 1
+                    hold argv_txt = concat(argv_txt, chr(cn))
+                  } otherwise {
+                    when cn == 32 || cn == 9 {
+                    } otherwise {
+                      hold argv_txt = concat(argv_txt, chr(cn))
+                    }
+                  }
+                }
+              }
+            }
+          }
+          hold pos = pos + 1
+          // which builtin?
+          hold fk = 0
+          when string_eq(nm2, "concat") {
+            hold fk = 1
+          }
+          when string_eq(nm2, "len") {
+            hold fk = 2
+          }
+          when string_eq(nm2, "sx_index") {
+            hold fk = 3
+          }
+          when string_eq(nm2, "chr") {
+            hold fk = 4
+          }
+          when string_eq(nm2, "read_file") {
+            hold fk = 5
+          }
+          when string_eq(nm2, "write_file") {
+            hold fk = 6
+          }
+          when string_eq(nm2, "arg") {
+            hold fk = 7
+          }
+          when string_eq(nm2, "arg_count") {
+            hold fk = 8
+          }
+          when string_eq(nm2, "sx_cat") {
+            hold fk = 1
+          }
+          when string_eq(nm2, "sx_len") {
+            hold fk = 2
+          }
+          when string_eq(nm2, "sx_idx") {
+            hold fk = 3
+          }
+          when string_eq(nm2, "sx_chr") {
+            hold fk = 4
+          }
+          when string_eq(nm2, "sx_read") {
+            hold fk = 5
+          }
+          when string_eq(nm2, "sx_write") {
+            hold fk = 6
+          }
+          when string_eq(nm2, "sx_arg") {
+            hold fk = 7
+          }
+          when string_eq(nm2, "sx_argc") {
+            hold fk = 8
+          }
+          hold rk = 0
+          hold rhs = "0"
+          when fk == 1 {
+            hold rhs = concat("sx_cat(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 2 {
+            hold rhs = concat("sx_len(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 3 {
+            hold rhs = concat("sx_idx(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 4 {
+            hold rhs = concat("sx_chr(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 5 {
+            hold rhs = concat("sx_read(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 6 {
+            hold rhs = concat("sx_write(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 7 {
+            hold rhs = concat("sx_arg(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 8 {
+            hold rhs = "sx_argc()"
+            hold rt = 1
+          }
+        }
+
+        // ---- plain name, or name + number ----
+        when iscall == 0 {
+          // is nm2 a string variable?
+          hold key = concat("|", nm2)
+          hold key = concat(key, "|")
+          hold sfind = 0
+          hold di = 0
+          hold dl = len(sdecls)
+          hold kl = len(key)
+          while di + kl <= dl {
+            hold ok = 1
+            hold j = 0
+            while j < kl {
+              hold aa = sx_index(sdecls, di + j)
+              hold bb = sx_index(key, j)
+              when aa == bb {
+                hold j = j + 1
+              } otherwise {
+                hold ok = 0
+                hold j = kl
+              }
+            }
+            when ok == 1 {
+              hold sfind = 1
+              hold di = dl
+            } otherwise {
+              hold di = di + 1
+            }
+          }
+          hold rk = 0
+          when sfind == 1 {
+            hold rk = 1
+          }
+          hold rhs = nm2
+          // optional "+"/"-" operand: NUMBER or NAME (kept flat, no parser)
+          hold sk = 1
+          while sk == 1 {
+            when pos >= n {
+              hold sk = 0
+            } otherwise {
+              hold cs = sx_index(source,pos)
+              when cs == 32 || cs == 9 || cs == 13 {
+                hold pos = pos + 1
+              } otherwise {
+                hold sk = 0
+              }
+            }
+          }
+          hold c2 = 0
+          when pos < n {
+            hold c2 = sx_index(source,pos)
+          }
+          when c2 == 43 || c2 == 45 {
+            hold opch = c2
+            hold pos = pos + 1
+            hold sk = 1
+            while sk == 1 {
+              when pos >= n {
+                hold sk = 0
+              } otherwise {
+                hold cs = sx_index(source,pos)
+                when cs == 32 || cs == 9 || cs == 13 {
+                  hold pos = pos + 1
+                } otherwise {
+                  hold sk = 0
+                }
+              }
+            }
+            hold numtxt = ""
+            hold nm3 = ""
+            hold opnd = ""
+            hold c3 = 0
+            when pos < n {
+              hold c3 = sx_index(source,pos)
+            }
+            hold oq = 0
+            // number operand
+            when (c3 >= 48 && c3 <= 57) || c3 == 45 {
+              when c3 == 45 {
+                hold numtxt = "-"
+                hold pos = pos + 1
+              }
+              hold rn = 1
+              while rn == 1 {
+                when pos >= n {
+                  hold rn = 0
+                } otherwise {
+                  hold cd = sx_index(source,pos)
+                  when cd >= 48 && cd <= 57 {
+                    hold numtxt = concat(numtxt, chr(cd))
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold rn = 0
+                  }
+                }
+              }
+              hold opnd = numtxt
+            }
+            // string literal operand (copied verbatim, escapes kept)
+            when c3 == 34 {
+              hold oq = 1
+              hold pos = pos + 1
+              hold opnd = "\""
+              hold rn = 1
+              while rn == 1 {
+                when pos >= n {
+                  hold rn = 0
+                } otherwise {
+                  hold cq = sx_index(source,pos)
+                  when cq == 34 {
+                    hold pos = pos + 1
+                    hold opnd = concat(opnd, "\"")
+                    hold rn = 0
+                  } otherwise {
+                    when cq == 92 {
+                      hold opnd = concat(opnd, bs)
+                      hold pos = pos + 1
+                    } otherwise {
+                      hold opnd = concat(opnd, chr(cq))
+                      hold pos = pos + 1
+                    }
+                  }
+                }
+              }
+            }
+            // name operand
+            when (c3 >= 97 && c3 <= 122) || (c3 >= 65 && c3 <= 90) {
+              hold rn = 1
+              while rn == 1 {
+                when pos >= n {
+                  hold rn = 0
+                } otherwise {
+                  hold cn = sx_index(source,pos)
+                  when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+                    hold nm3 = concat(nm3, chr(cn))
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold rn = 0
+                  }
+                }
+              }
+              hold opnd = nm3
+            }
+            when rk == 1 {
+              // string variable on the left: append the operand as text
+              hold rhs = concat("sx_cat(", nm2)
+              hold rhs = concat(rhs, ", ")
+              when oq == 0 {
+                hold rhs = concat(rhs, q)
+              }
+              hold rhs = concat(rhs, opnd)
+              when oq == 0 {
+                hold rhs = concat(rhs, q)
+              }
+              hold rhs = concat(rhs, ")")
+              hold rt = 1
+            } otherwise {
+              hold rhs = concat(rhs, " ")
+              hold rhs = concat(rhs, chr(opch))
+              hold rhs = concat(rhs, " ")
+              hold rhs = concat(rhs, opnd)
+            }
+          }
+        }
+      }
+
+      // ---------- emit ----------
+      hold ind = "  "
+      hold wk = 0
+      while wk < depth {
+        hold ind = concat(ind, "  ")
+        hold wk = wk + 1
+      }
+      hold key = concat("|", nm)
+      hold key = concat(key, "|")
+      hold found = 0
+      hold di = 0
+      hold dl = len(decls)
+      hold kl = len(key)
+      while di + kl <= dl {
+        hold ok = 1
+        hold j = 0
+        while j < kl {
+          hold aa = sx_index(decls, di + j)
+          hold bb = sx_index(key, j)
+          when aa == bb {
+            hold j = j + 1
+          } otherwise {
+            hold ok = 0
+            hold j = kl
+          }
+        }
+        when ok == 1 {
+          hold found = 1
+          hold di = dl
+        } otherwise {
+          hold di = di + 1
+        }
+      }
+      when found == 1 {
+        hold body = concat(body, ind)
+        hold body = concat(body, nm)
+        hold body = concat(body, " = ")
+        hold body = concat(body, rhs)
+        hold body = concat(body, ";")
+        hold body = concat(body, nl)
+      } otherwise {
+        hold body = concat(body, ind)
+        when rk == 1 {
+          hold body = concat(body, "char *")
+        } otherwise {
+          hold body = concat(body, "double ")
+        }
+        hold body = concat(body, nm)
+        hold body = concat(body, " = ")
+        hold body = concat(body, rhs)
+        hold body = concat(body, ";")
+        hold body = concat(body, nl)
+        hold decls = concat(decls, nm)
+        hold decls = concat(decls, "|")
+        when rk == 1 {
+          hold sdecls = concat(sdecls, nm)
+          hold sdecls = concat(sdecls, "|")
+        }
+      }
+      hold holds = holds + 1
+    }
+
+    // ================= show EXPR =================
+    when act == 2 {
+      hold pos = pos + 4
+      hold sk = 1
+      while sk == 1 {
+        when pos >= n {
+          hold sk = 0
+        } otherwise {
+          hold cs = sx_index(source,pos)
+          when cs == 32 || cs == 9 || cs == 13 {
+            hold pos = pos + 1
+          } otherwise {
+            hold sk = 0
+          }
+        }
+      }
+      hold rhs = ""
+      hold rk = 0
+      hold c1 = 0
+      when pos < n {
+        hold c1 = sx_index(source,pos)
+      }
+
+      // string literal
+      when c1 == 34 {
+        hold pos = pos + 1
+        hold rhs = "\""
+        hold rn = 1
+        while rn == 1 {
+          when pos >= n {
+            hold rn = 0
+          } otherwise {
+            hold cq = sx_index(source,pos)
+            when cq == 34 {
+              hold pos = pos + 1
+              hold rhs = concat(rhs, "\"")
+              hold rn = 0
+            } otherwise {
+              when cq == 92 {
+                hold rhs = concat(rhs, bs)
+                hold pos = pos + 1
+              } otherwise {
+                hold rhs = concat(rhs, chr(cq))
+                hold pos = pos + 1
+              }
+            }
+          }
+        }
+        hold rk = 1
+      }
+
+      // number
+      when (c1 >= 48 && c1 <= 57) || c1 == 45 {
+        hold numtxt = ""
+        when c1 == 45 {
+          hold numtxt = "-"
+          hold pos = pos + 1
+        }
+        hold rn = 1
+        while rn == 1 {
+          when pos >= n {
+            hold rn = 0
+          } otherwise {
+            hold cd = sx_index(source,pos)
+            when cd >= 48 && cd <= 57 {
+              hold numtxt = concat(numtxt, chr(cd))
+              hold pos = pos + 1
+            } otherwise {
+              hold rn = 0
+            }
+          }
+        }
+        hold rhs = numtxt
+        hold rk = 0
+      }
+
+      // name or call
+      when (c1 >= 97 && c1 <= 122) || (c1 >= 65 && c1 <= 90) {
+        hold nm2 = ""
+        hold rn = 1
+        while rn == 1 {
+          when pos >= n {
+            hold rn = 0
+          } otherwise {
+            hold cn = sx_index(source,pos)
+            when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+              hold nm2 = concat(nm2, chr(cn))
+              hold pos = pos + 1
+            } otherwise {
+              hold rn = 0
+            }
+          }
+        }
+        hold iscall = 0
+        hold c2 = 0
+        when pos < n {
+          hold c2 = sx_index(source,pos)
+        }
+        when c2 == 40 {
+          hold iscall = 1
+        }
+        when iscall == 1 {
+          hold pos = pos + 1
+          hold argv_txt = ""
+          hold inq = 0
+          hold rn = 1
+          while rn == 1 {
+            when pos >= n {
+              hold rn = 0
+            } otherwise {
+              hold cn = sx_index(source,pos)
+              when cn == 41 && inq == 0 {
+                hold rn = 0
+              } otherwise {
+                hold pos = pos + 1
+                when inq == 1 {
+                  hold argv_txt = concat(argv_txt, chr(cn))
+                  when cn == 34 {
+                    hold inq = 0
+                  }
+                  when cn == 92 {
+                    when pos < n {
+                      hold cq = sx_index(source,pos)
+                      hold argv_txt = concat(argv_txt, chr(cq))
+                      hold pos = pos + 1
+                    }
+                  }
+                } otherwise {
+                  when cn == 34 {
+                    hold inq = 1
+                    hold argv_txt = concat(argv_txt, chr(cn))
+                  } otherwise {
+                    when cn == 32 || cn == 9 {
+                    } otherwise {
+                      hold argv_txt = concat(argv_txt, chr(cn))
+                    }
+                  }
+                }
+              }
+            }
+          }
+          hold pos = pos + 1
+          hold fk = 0
+          when string_eq(nm2, "concat") {
+            hold fk = 1
+          }
+          when string_eq(nm2, "len") {
+            hold fk = 2
+          }
+          when string_eq(nm2, "sx_index") {
+            hold fk = 3
+          }
+          when string_eq(nm2, "chr") {
+            hold fk = 4
+          }
+          when string_eq(nm2, "read_file") {
+            hold fk = 5
+          }
+          when string_eq(nm2, "write_file") {
+            hold fk = 6
+          }
+          when string_eq(nm2, "arg") {
+            hold fk = 7
+          }
+          when string_eq(nm2, "arg_count") {
+            hold fk = 8
+          }
+          when string_eq(nm2, "sx_cat") {
+            hold fk = 1
+          }
+          when string_eq(nm2, "sx_len") {
+            hold fk = 2
+          }
+          when string_eq(nm2, "sx_idx") {
+            hold fk = 3
+          }
+          when string_eq(nm2, "sx_chr") {
+            hold fk = 4
+          }
+          when string_eq(nm2, "sx_read") {
+            hold fk = 5
+          }
+          when string_eq(nm2, "sx_write") {
+            hold fk = 6
+          }
+          when string_eq(nm2, "sx_arg") {
+            hold fk = 7
+          }
+          when string_eq(nm2, "sx_argc") {
+            hold fk = 8
+          }
+          hold rhs = "0"
+          when fk == 1 {
+            hold rhs = concat("sx_cat(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 2 {
+            hold rhs = concat("sx_len(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 3 {
+            hold rhs = concat("sx_idx(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 4 {
+            hold rhs = concat("sx_chr(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 5 {
+            hold rhs = concat("sx_read(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 6 {
+            hold rhs = concat("sx_write(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 7 {
+            hold rhs = concat("sx_arg(", argv_txt)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 8 {
+            hold rhs = "sx_argc()"
+            hold rt = 1
+          }
+        }
+        when iscall == 0 {
+          hold rhs = nm2
+          hold rk = 0
+          hold key = concat("|", nm2)
+          hold key = concat(key, "|")
+          hold sfind = 0
+          hold di = 0
+          hold dl = len(sdecls)
+          hold kl = len(key)
+          while di + kl <= dl {
+            hold ok = 1
+            hold j = 0
+            while j < kl {
+              hold aa = sx_index(sdecls, di + j)
+              hold bb = sx_index(key, j)
+              when aa == bb {
+                hold j = j + 1
+              } otherwise {
+                hold ok = 0
+                hold j = kl
+              }
+            }
+            when ok == 1 {
+              hold sfind = 1
+              hold di = dl
+            } otherwise {
+              hold di = di + 1
+            }
+          }
+          when sfind == 1 {
+            hold rk = 1
+          }
+        }
+      }
+
+      // emit
+      hold ind = "  "
+      hold wk = 0
+      while wk < depth {
+        hold ind = concat(ind, "  ")
+        hold wk = wk + 1
+      }
+      hold body = concat(body, ind)
+      when rk == 1 {
+        hold body = concat(body, "puts(")
+        hold body = concat(body, rhs)
+        hold body = concat(body, ");")
+        hold body = concat(body, nl)
+      } otherwise {
+        hold body = concat(body, "printf(\"%g\\n\", (double)")
+        hold body = concat(body, rhs)
+        hold body = concat(body, ");")
+        hold body = concat(body, nl)
+      }
+      hold shows = shows + 1
+    }
+
+    // ================= while NAME OP X / when NAME OP X =================
+    when act == 3 {
+      hold pos = pos + 1
+      hold iswhile = 0
+      hold ok = 0
+      hold c1 = 0
+      when pos < n {
+        hold c1 = sx_index(source,pos)
+      }
+      // both keywords start with "wh": while -> i, when -> e
+      when c1 == 104 {
+        hold c2 = 0
+        when pos + 1 < n {
+          hold c2 = sx_index(source,pos + 1)
+        }
+        when c2 == 105 {
+          hold iswhile = 1
+        }
+        hold ok = 1
+      }
+      when ok == 1 {
+        hold pos = pos + 4
+        // blanks
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+        // condition variable
+        hold nm = ""
+        hold rn = 1
+        while rn == 1 {
+          when pos >= n {
+            hold rn = 0
+          } otherwise {
+            hold cn = sx_index(source,pos)
+            when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+              hold nm = concat(nm, chr(cn))
+              hold pos = pos + 1
+            } otherwise {
+              hold rn = 0
+            }
+          }
+        }
+        // blanks
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+        // operator
+        hold op = ""
+        hold c2 = 0
+        when pos < n {
+          hold c2 = sx_index(source,pos)
+        }
+        when c2 == 61 || c2 == 33 || c2 == 60 || c2 == 62 {
+          hold op = chr(c2)
+          hold pos = pos + 1
+          hold c3 = 0
+          when pos < n {
+            hold c3 = sx_index(source,pos)
+          }
+          when c3 == 61 {
+            hold op = concat(op, "=")
+            hold pos = pos + 1
+          }
+        }
+        // blanks
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+        // right operand: NUMBER or NAME
+        hold operand = "0"
+        hold c2 = 0
+        when pos < n {
+          hold c2 = sx_index(source,pos)
+        }
+        when (c2 >= 48 && c2 <= 57) || c2 == 45 {
+          hold numtxt = ""
+          when c2 == 45 {
+            hold numtxt = "-"
+            hold pos = pos + 1
+          }
+          hold rn = 1
+          while rn == 1 {
+            when pos >= n {
+              hold rn = 0
+            } otherwise {
+              hold cd = sx_index(source,pos)
+              when cd >= 48 && cd <= 57 {
+                hold numtxt = concat(numtxt, chr(cd))
+                hold pos = pos + 1
+              } otherwise {
+                hold rn = 0
+              }
+            }
+          }
+          hold operand = numtxt
+        }
+        when (c2 >= 97 && c2 <= 122) || (c2 >= 65 && c2 <= 90) {
+          hold nm2 = ""
+          hold rn = 1
+          while rn == 1 {
+            when pos >= n {
+              hold rn = 0
+            } otherwise {
+              hold cn = sx_index(source,pos)
+              when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+                hold nm2 = concat(nm2, chr(cn))
+                hold pos = pos + 1
+              } otherwise {
+                hold rn = 0
+              }
+            }
+          }
+          hold operand = nm2
+        }
+        // blanks, then '{'
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+        hold c2 = 0
+        when pos < n {
+          hold c2 = sx_index(source,pos)
+        }
+        when c2 == 123 {
+          hold pos = pos + 1
+        }
+        // emit the header line
+        hold ind = "  "
+        hold wk = 0
+        while wk < depth {
+          hold ind = concat(ind, "  ")
+          hold wk = wk + 1
+        }
+        hold body = concat(body, ind)
+        when iswhile == 1 {
+          hold body = concat(body, "while (")
+          hold whiles = whiles + 1
+        } otherwise {
+          hold body = concat(body, "if (")
+          hold whens = whens + 1
+        }
+        hold body = concat(body, nm)
+        hold body = concat(body, " ")
+        hold body = concat(body, op)
+        hold body = concat(body, " ")
+        hold body = concat(body, operand)
+        hold body = concat(body, ") {")
+        hold body = concat(body, nl)
+        hold depth = depth + 1
+      } otherwise {
+        hold pos = pos + 1
+      }
+    }
+
+    // ================= } and } otherwise { =================
+    when act == 4 {
+      hold pos = pos + 1
+      // look ahead over blanks for the word "otherwise"
+      hold wi = pos
+      hold wsc = 1
+      while wsc == 1 {
+        when wi >= n {
+          hold wsc = 0
+        } otherwise {
+          hold cw = sx_index(source,wi)
+          when cw == 32 || cw == 9 || cw == 13 || cw == 10 {
+            hold wi = wi + 1
+          } otherwise {
+            hold wsc = 0
+          }
+        }
+      }
+      hold wfound = 0
+      when wi + 9 <= n {
+        hold w9 = ""
+        hold wk = 0
+        while wk < 9 {
+          hold w9 = concat(w9, chr(sx_index(source,wi + wk)))
+          hold wk = wk + 1
+        }
+        hold wfound = string_eq(w9, "otherwise")
+      }
+      when wfound == 1 {
+        // "} otherwise {" becomes "} else {"
+        hold pos = wi + 9
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+        hold c2 = 0
+        when pos < n {
+          hold c2 = sx_index(source,pos)
+        }
+        when c2 == 123 {
+          hold pos = pos + 1
+        }
+        hold ind = "  "
+        hold wk = 0
+        hold d2 = depth - 1
+        while wk < d2 {
+          hold ind = concat(ind, "  ")
+          hold wk = wk + 1
+        }
+        hold body = concat(body, ind)
+        hold body = concat(body, "} else {")
+        hold body = concat(body, nl)
+      } otherwise {
+        when depth > 0 {
+          hold depth = depth - 1
+        }
+        hold ind = "  "
+        hold wk = 0
+        while wk < depth {
+          hold ind = concat(ind, "  ")
+          hold wk = wk + 1
+        }
+        hold body = concat(body, ind)
+        hold body = concat(body, "}")
+        hold body = concat(body, nl)
+      }
+    }
+
+    // not a statement character: skip it
+    when act == 0 {
+      hold pos = pos + 1
+    }
+  }
 }
 
-hold out = "#include <stdio.h>"
-hold out = concat(out, nl)
-hold out = concat(out, "int main(void){")
-hold out = concat(out, nl)
+// =====================================================================
+// emit the C translation unit
+// =====================================================================
+hold out = ""
+when rt == 1 {
+  hold out = concat(out, "#include <stdio.h>\n")
+  hold out = concat(out, "#include <stdlib.h>\n")
+  hold out = concat(out, "#include <string.h>\n")
+  hold out = concat(out, "static int sx_argn=0; static char **sx_argv_p=0;\n")
+  hold out = concat(out, "static double sx_argc(void){ return (double)sx_argn; }\n")
+  hold out = concat(out, "static char *sx_arg(double v){ long i=(long)v; if(i<0||i>=sx_argn) return \"\"; return sx_argv_p[i]; }\n")
+  hold out = concat(out, "static char *sx_chr(double v){ char *b=(char*)malloc(2); b[0]=(char)(long)v; b[1]=0; return b; }\n")
+  hold out = concat(out, "static char *sx_cat(const char *a,const char *b){ size_t la=strlen(a), lb=strlen(b); char *r=(char*)malloc(la+lb+1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r; }\n")
+  hold out = concat(out, "static double sx_len(const char *s){ return (double)strlen(s); }\n")
+  hold out = concat(out, "static double sx_idx(const char *s,double v){ long i=(long)v; long L=(long)strlen(s); if(i<0) i=i+L; if(i<0||i>=L){ fputs(\"sx: string index out of range\",stderr); exit(1); } return (double)(unsigned char)s[i]; }\n")
+  hold out = concat(out, "static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return \"\"; fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET); char *b=(char*)malloc((size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f); return b; }\n")
+  hold out = concat(out, "static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0.0; fputs(s,f); return fclose(f)==0?1.0:0.0; }\n")
+  hold out = concat(out, "\n")
+} otherwise {
+  hold out = concat(out, "#include <stdio.h>\n\n")
+}
+when rt == 1 {
+  hold out = concat(out, "int main(int argc,char**argv){\n")
+  hold out = concat(out, "  sx_argn=argc; sx_argv_p=argv;\n")
+} otherwise {
+  hold out = concat(out, "int main(void){\n")
+}
 hold out = concat(out, body)
-hold out = concat(out, "  return 0;")
-hold out = concat(out, nl)
-hold out = concat(out, "}")
-hold out = concat(out, nl)
+hold out = concat(out, "  return 0;\n")
+hold out = concat(out, "}\n")
 hold w = write_file(out_path, out)
+
+// counters go to stdout (they are the compiler's own output, not the target's)
 show holds
 show shows
 show whiles

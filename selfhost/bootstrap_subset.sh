@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
+# Portable C compiler pick: $CC, else clang (CI, Termux), else gcc/cc (Linux).
+if [ -z "${CC:-}" ]; then
+  for c in clang gcc cc; do
+    if command -v "$c" >/dev/null 2>&1; then CC="$c"; break; fi
+  done
+fi
+: "${CC:?no C compiler found; set CC=clang or CC=gcc}"
+
 chmod +x selfhost/restore_sxc_full.sh
 ./selfhost/restore_sxc_full.sh
-clang -O2 -o selfhost/sxc_full selfhost/sxc_full.c
+$CC -O2 -o selfhost/sxc_full selfhost/sxc_full.c
 
 # Smoke always works with minimal or full seed
 echo 'hold x = 42
 show x' > selfhost/_smoke.sa
 ./selfhost/sxc_full selfhost/_smoke.sa selfhost/_smoke.c
-clang -O2 -o selfhost/_smoke selfhost/_smoke.c
+$CC -O2 -o selfhost/_smoke selfhost/_smoke.c
 ./selfhost/_smoke | grep -q 42
 echo "[OK] smoke 42"
 
@@ -19,10 +27,10 @@ if [ -f selfhost/compiler_min.sa ] && [ "$(wc -l < selfhost/compiler_min.sa)" -g
     echo "seed is minimal; skip full gen1"
   else
     ./selfhost/sxc_full selfhost/compiler_min.sa selfhost/gen1.c
-    clang -O2 -o selfhost/gen1 selfhost/gen1.c
+    $CC -O2 -o selfhost/gen1 selfhost/gen1.c
     if [ -f selfhost/mini_in2.sa ]; then
       ./selfhost/gen1 selfhost/mini_in2.sa selfhost/_out.c
-      clang -O2 -o selfhost/_run selfhost/_out.c
+      $CC -O2 -o selfhost/_run selfhost/_out.c
       ./selfhost/_run | grep -q 42
       echo "[OK] mini_in2"
     fi

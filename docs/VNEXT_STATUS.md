@@ -25,10 +25,13 @@ commands listed in "Exact test commands".
 
 ## Fake / broken things found (must be fixed)
 
-1. **Fake Gen2**: `bootstrap_true_pure_gen2.sh` step [4] literally does
-   `cp selfhost/gen1.c selfhost/gen2.c` and then prints `TRUE-PURE-GEN2-OK`.
-   The emitted `gen2_raw.c` (from gen1 compiling compiler_min.sa) is never
-   compiled or checked. This violates the absolute rule of this upgrade.
+1. **[FIXED 2026-09-29] Fake Gen2**: `bootstrap_true_pure_gen2.sh` did
+   `cp selfhost/gen1.c selfhost/gen2.c` and then printed `TRUE-PURE-GEN2-OK`.
+   That script is deleted. `selfhost/bootstrap_gen2.sh` (used by
+   `make gen2`/`make pure-gen2` and CI) builds the chain
+   seed → gen1 → boot → boot2 without copying a translation unit and checks
+   `boot.c == boot2.c` with `cmp`. The chain is honest but partial: see
+   `docs/STATUS.md`, section "GEN2 limits".
 2. **Seed too weak**: `sxc_full.c` cannot compile `compiler_min.sa`
    (no `arg_count/read_file/len/index/chr/str/write_file`, no expressions,
    no `give`, no blocks). Therefore no genuine generation chain exists today.
