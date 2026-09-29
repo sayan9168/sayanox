@@ -118,6 +118,15 @@ make gen2                    # === GEN2-PARTIAL ===
 CC=clang ./selfhost/bootstrap_gen1.sh
 CC=gcc   ./selfhost/bootstrap_gen2.sh
 
+# fully manual gen1 (the seed C in the repo needs the fixer applied first;
+# the bootstrap scripts do this for you):
+python3 selfhost/seed/apply_seed_fixes.py
+gcc -O2 -o selfhost/seed/sxc_seed selfhost/seed/sxc_seed.c -I selfhost/seed
+./selfhost/seed/sxc_seed selfhost/compiler_min.sa > selfhost/gen1.c
+clang -O2 -o selfhost/gen1 selfhost/gen1.c -I selfhost/seed
+./selfhost/gen1 selfhost/mini_in.sa selfhost/mini_out.c
+clang -O2 -o selfhost/_mini selfhost/mini_out.c && ./selfhost/_mini   # 42 / done
+
 # a program of your own through both pure compilers
 printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > /tmp/loop.sa
 ./selfhost/gen1 /tmp/loop.sa /tmp/loop.gen1.c && $CC -O2 -o /tmp/loop.gen1 /tmp/loop.gen1.c && /tmp/loop.gen1
