@@ -1,5 +1,5 @@
 /* Sayanox native AOT step3 — Linux x86_64 ELF (no clang for output).
-   hold/show/when/while, ints, + - * /, show "string"
+   hold/show/when/while, ints, + - * /, == != < > <= >=, show "string"
    Usage: native_aot in.sa out */
 #include <ctype.h>
 #include <stdint.h>
@@ -25,10 +25,20 @@ static int parse_term(const char**p,long*V,long*out,int*e){
   for(;;){sw(p);char op=**p;if(op!='*'&&op!='/')break;(*p)++;long r=0;if(!parse_prim(p,V,&r,e)||*e)return 0;
     if(op=='*')*out=*out*r;else{if(r==0){*e=1;return 0;}*out=*out/r;}}
   return 1;}
-static int parse_expr(const char**p,long*V,long*out,int*e){
+static int parse_rel(const char**p,long*V,long*out,int*e){
   if(!parse_term(p,V,out,e)||*e)return 0;
   for(;;){sw(p);char op=**p;if(op!='+'&&op!='-')break;(*p)++;long r=0;if(!parse_term(p,V,&r,e)||*e)return 0;
     if(op=='+')*out=*out+r;else*out=*out-r;}
+  return 1;}
+static int parse_expr(const char**p,long*V,long*out,int*e){
+  if(!parse_rel(p,V,out,e)||*e)return 0;
+  sw(p);
+  if((*p)[0]=='='&&(*p)[1]=='='){(*p)+=2;long r=0;if(!parse_rel(p,V,&r,e)||*e)return 0;*out=(*out==r);return 1;}
+  if((*p)[0]=='!'&&(*p)[1]=='='){(*p)+=2;long r=0;if(!parse_rel(p,V,&r,e)||*e)return 0;*out=(*out!=r);return 1;}
+  if((*p)[0]=='<'&&(*p)[1]=='='){(*p)+=2;long r=0;if(!parse_rel(p,V,&r,e)||*e)return 0;*out=(*out<=r);return 1;}
+  if((*p)[0]=='>'&&(*p)[1]=='='){(*p)+=2;long r=0;if(!parse_rel(p,V,&r,e)||*e)return 0;*out=(*out>=r);return 1;}
+  if(**p=='<'){(*p)++;long r=0;if(!parse_rel(p,V,&r,e)||*e)return 0;*out=(*out<r);return 1;}
+  if(**p=='>'){(*p)++;long r=0;if(!parse_rel(p,V,&r,e)||*e)return 0;*out=(*out>r);return 1;}
   return 1;}
 static int parse_prim(const char**p,long*V,long*out,int*e){
   sw(p);
@@ -53,12 +63,12 @@ static void estmt(const char**p,long*V,char*o,size_t*op,size_t cap,int*e){
  if(mkw(p,"when")){long cnd=0;sw(p);if(!parse_expr(p,V,&cnd,e)||*e){*e=1;return;}sw(p);if(**p!='{'){*e=1;return;}(*p)++;
   if(cnd)eblk(p,V,o,op,cap,e);else skipb(p);
   sw(p);if(mkw(p,"otherwise")){sw(p);if(**p!='{'){*e=1;return;}(*p)++;if(!cnd)eblk(p,V,o,op,cap,e);else skipb(p);}return;}
- if(mkw(p,"while")){char n[64];int un=0;long lit=0;const char*save=*p;sw(p);
-  if(pid(p,n,64)){sw(p);if(**p=='{'){un=1;}else{*p=save;un=0;if(!parse_expr(p,V,&lit,e)){*e=1;return;}}}
-  else{if(!parse_expr(p,V,&lit,e)){*e=1;return;}}
+ if(mkw(p,"while")){sw(p);const char*cstart=*p;
+  long lit=0;if(!parse_expr(p,V,&lit,e)||*e){*e=1;return;}
   sw(p);if(**p!='{'){*e=1;return;}
   const char*body=*p+1;const char*sc=body;int d=1;while(*sc&&d){if(*sc=='{')d++;else if(*sc=='}')d--;if(d)sc++;}
-  int it=0;while(it++<IT){long cnd=un?V[slot(n)]:lit;if(!cnd)break;const char*bp=body;eblk(&bp,V,o,op,cap,e);if(*e)return;if(!un)break;}
+  int it=0;while(it++<IT){const char*cp=cstart;long cnd=0;if(!parse_expr(&cp,V,&cnd,e)||*e)return;if(!cnd)break;
+   const char*bp=body;eblk(&bp,V,o,op,cap,e);if(*e)return;}
   *p=sc;if(**p=='}')(*p)++;return;}
  if((*p)[0]=='/'&&(*p)[1]=='/'){while(**p&&**p!='\n')(*p)++;return;}
  if(**p)(*p)++;
