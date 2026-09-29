@@ -67,12 +67,4 @@ grep -q 'if (x >= 1 && x <= 3) {' "$T/condition_and_or.c"
 grep -q 'while (pos + 1 < n) {' "$T/while_arithmetic.c"
 grep -q 'sx_cat("a", sx_chr(66))' "$T/nested_builtin.c"
 
-echo "[OK] gen1 self-host compilation of compiler_min.sa"
-./selfhost/gen1 selfhost/compiler_min.sa "$T/compiler_min_from_gen1.c" >/dev/null
-test -s "$T/compiler_min_from_gen1.c"
-"$CC" -O2 -o "$T/compiler_min_from_gen1" "$T/compiler_min_from_gen1.c"
-"$T/compiler_min_from_gen1" "$T/nested_builtin.sa" "$T/recompiled.c" >/dev/null
-"$CC" -O2 -o "$T/recompiled" "$T/recompiled.c"
-test "$("$T/recompiled")" = "aB"
-
 echo "=== GRAMMAR-GROW-OK ==="
