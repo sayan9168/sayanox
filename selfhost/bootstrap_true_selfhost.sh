@@ -15,8 +15,8 @@ fi
 echo "=== TRUE FULL SELF-HOST ==="
 echo "Using CC=$CC"
 
-python3 selfhost/apply_selfhost_fixes.py || true
 python3 selfhost/seed/apply_seed_fixes.py || true
+# ensure large object table for self-compile of compiler_min
 if grep -q 'SX_TAB_CAP 262144' selfhost/seed/sx_runtime.h 2>/dev/null; then
   sed -i 's/SX_TAB_CAP 262144/SX_TAB_CAP 2097152/' selfhost/seed/sx_runtime.h 2>/dev/null || \
     sed -i '' 's/SX_TAB_CAP 262144/SX_TAB_CAP 2097152/' selfhost/seed/sx_runtime.h
@@ -42,7 +42,7 @@ hold n = 1
 hold n = 2
 show n
 SA
-./selfhost/gen2 selfhost/seed_tests/ts_re.sa selfhost/seed_tests/ts_re.c
+./selfhost/gen2 selfhost/seed_tests/ts_re.sa selfhost/seed_tests/ts_re.c >/dev/null
 $CC -O2 -o selfhost/seed_tests/ts_re selfhost/seed_tests/ts_re.c
 out=$(./selfhost/seed_tests/ts_re)
 echo "$out" | grep -qx 2
@@ -56,7 +56,7 @@ while n < 3 {
 }
 show "done"
 SA
-./selfhost/gen2 selfhost/seed_tests/ts_wh.sa selfhost/seed_tests/ts_wh.c
+./selfhost/gen2 selfhost/seed_tests/ts_wh.sa selfhost/seed_tests/ts_wh.c >/dev/null
 $CC -O2 -o selfhost/seed_tests/ts_wh selfhost/seed_tests/ts_wh.c
 out=$(./selfhost/seed_tests/ts_wh)
 echo "$out" | grep -q done
@@ -71,7 +71,7 @@ when x == 1 {
 }
 show 99
 SA
-./selfhost/gen2 selfhost/seed_tests/ts_wn.sa selfhost/seed_tests/ts_wn.c
+./selfhost/gen2 selfhost/seed_tests/ts_wn.sa selfhost/seed_tests/ts_wn.c >/dev/null
 $CC -O2 -o selfhost/seed_tests/ts_wn selfhost/seed_tests/ts_wn.c
 out=$(./selfhost/seed_tests/ts_wn)
 echo "$out" | grep -q 99
@@ -81,8 +81,21 @@ echo "[OK] gen2 when"
 echo "[4] gen2 is not a frozen copy of gen1.c"
 test -f selfhost/gen2.c
 test -f selfhost/gen1.c
-grep -q 'sx_eq\|sx_cat\|double' selfhost/gen2.c
-echo "[OK] gen2.c is gen1-emitted self-compile of compiler_min.sa"
+# must differ (self-compile produces different translation of the same source)
+if cmp -s selfhost/gen1.c selfhost/gen2.c; then
+  echo "[FAIL] gen2.c identical to gen1.c (frozen copy)"
+  exit 1
+fi
+echo "[OK] gen2.c differs from gen1.c (live self-compile)"
 
-echo "=== SELFHOST-OK ==="
-echo "Sayanox compiler: seed -> gen1 -> gen1(compiler_min.sa) -> gen2 (working)"
+echo "[5] gen2 compiles compiler_boot.sa (third generation path)"
+./selfhost/gen2 selfhost/compiler_boot.sa selfhost/boot_from_gen2.c >/dev/null
+test -s selfhost/boot_from_gen2.c
+$CC -O2 -o selfhost/boot_from_gen2 selfhost/boot_from_gen2.c
+./selfhost/boot_from_gen2 selfhost/seed_tests/ts_re.sa selfhost/seed_tests/ts_re_b.c >/dev/null
+$CC -O2 -o selfhost/seed_tests/ts_re_b selfhost/seed_tests/ts_re_b.c
+out=$(./selfhost/seed_tests/ts_re_b)
+echo "$out" | grep -qx 2
+echo "[OK] boot_from_gen2 reassign"
+
+echo "=== TRUE-FULL-SELFHOST-OK ==="
