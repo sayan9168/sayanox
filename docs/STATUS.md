@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-30 (TRUE FULL SELF-HOST + body chunking).
+Last updated: 2026-09-30 (TRUE FULL SELF-HOST; no Python on happy path).
 
 ## Summary
 
@@ -46,6 +46,19 @@ Verified:
 5. **Body chunking** – when `len(body) > 4096`, flush into `body_old` so string
    growth is O(n · chunk) instead of full O(n²). Pure-min has no lists; this is
    the practical speedup without expanding the dialect.
+
+### Language dependencies (bootstrap)
+
+| Layer | Language | Role |
+|-------|----------|------|
+| Trusted seed | **C only** | `sxc_seed.c` + `sx_runtime.h` — once |
+| Compiler | **`.sa` only** | `compiler_min.sa` → gen1 → gen2 |
+| Orchestration | **bash** | `bootstrap_true_selfhost.sh` |
+| C compiler | clang/gcc/cc | Compile seed + emitted C |
+
+**No Python on the happy path.** Seed fixes are applied with `sed` in the bootstrap
+script; `compiler_min.sa` is restored from gzip+b64 parts with `base64` + `gzip`
+(standard Unix tools). Python scripts remain in-tree only for older workflows.
 
 ### Remaining optional work
 
