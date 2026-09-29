@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # TRUE FULL SELF-HOST: seed → gen1 → gen1 compiles compiler_min.sa → gen2 → tests
+# Happy path dependencies: bash + a C compiler (clang/gcc/cc). No Python.
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p selfhost/seed_tests
@@ -13,15 +14,47 @@ if [ -z "$CC" ]; then
 fi
 
 echo "=== TRUE FULL SELF-HOST ==="
-echo "Using CC=$CC"
+echo "Using CC=$CC (no Python required)"
 
-python3 selfhost/apply_selfhost_fixes.py || true
-python3 selfhost/seed/apply_seed_fixes.py || true
-# ensure large object table for self-compile of compiler_min
-if grep -q 'SX_TAB_CAP 262144' selfhost/seed/sx_runtime.h 2>/dev/null; then
-  sed -i 's/SX_TAB_CAP 262144/SX_TAB_CAP 2097152/' selfhost/seed/sx_runtime.h 2>/dev/null || \
-    sed -i '' 's/SX_TAB_CAP 262144/SX_TAB_CAP 2097152/' selfhost/seed/sx_runtime.h
+# ---- bake seed fixes in-place with sed (replaces apply_seed_fixes.py) ----
+SEED=selfhost/seed/sxc_seed.c
+RT=selfhost/seed/sx_runtime.h
+# P1 macro: avoid stringizing char literal
+if grep -q 'ptok(k,(const char*)#ch' "$SEED" 2>/dev/null; then
+  sed -i 's/ptok(k,(const char\*)#ch,0,sl,sc);/{ char _b[2]={(char)(ch),0}; ptok(k,_b,0,sl,sc);}/' "$SEED" 2>/dev/null || \
+    sed -i '' 's/ptok(k,(const char\*)#ch,0,sl,sc);/{ char _b[2]={(char)(ch),0}; ptok(k,_b,0,sl,sc);}/' "$SEED"
 fi
+# stdarg include in emitted prologue
+if grep -q 'sx_runtime.h\\"\\n\\n' "$SEED" 2>/dev/null; then
+  sed -i 's/sx_runtime.h\\"\\n\\n/sx_runtime.h\\"\\n#include <stdarg.h>\\n\\n/' "$SEED" 2>/dev/null || \
+    sed -i '' 's/sx_runtime.h\\"\\n\\n/sx_runtime.h\\"\\n#include <stdarg.h>\\n\\n/' "$SEED"
+fi
+# string header via offsetof
+if grep -q 'sizeof(SxStrHdr)' "$RT" 2>/dev/null; then
+  sed -i 's/(char\*)p-sizeof(SxStrHdr)/(char*)p-offsetof(SxStrHdr,data)/g' "$RT" 2>/dev/null || \
+    sed -i '' 's/(char\*)p-sizeof(SxStrHdr)/(char*)p-offsetof(SxStrHdr,data)/g' "$RT"
+  sed -i 's/malloc(sizeof(\*h)+n+1)/malloc(offsetof(SxStrHdr,data)+n+1)/g' "$RT" 2>/dev/null || \
+    sed -i '' 's/malloc(sizeof(\*h)+n+1)/malloc(offsetof(SxStrHdr,data)+n+1)/g' "$RT"
+fi
+if ! grep -q '#include <stddef.h>' "$RT" 2>/dev/null; then
+  sed -i 's/#include <stdint.h>/#include <stdint.h>\n#include <stddef.h>/' "$RT" 2>/dev/null || \
+    sed -i '' 's/#include <stdint.h>/#include <stdint.h>\
+#include <stddef.h>/' "$RT"
+fi
+if grep -q 'SX_TAB_CAP 262144' "$RT" 2>/dev/null; then
+  sed -i 's/SX_TAB_CAP 262144/SX_TAB_CAP 2097152/' "$RT" 2>/dev/null || \
+    sed -i '' 's/SX_TAB_CAP 262144/SX_TAB_CAP 2097152/' "$RT"
+fi
+
+# Restore fixed compiler_min.sa from gzip+b64 parts (shell only: base64 + gzip)
+if [ -f selfhost/compiler_min.sa.gz.b64.p0 ]; then
+  if [ ! -s selfhost/compiler_min.sa ] || ! grep -q 'decls_c' selfhost/compiler_min.sa 2>/dev/null; then
+    echo "Restoring compiler_min.sa from parts (base64+gzip)..."
+    cat selfhost/compiler_min.sa.gz.b64.p* | tr -d '\n' | base64 -d | gzip -d > selfhost/compiler_min.sa
+  fi
+fi
+test -s selfhost/compiler_min.sa
+grep -q 'decls_c' selfhost/compiler_min.sa
 
 $CC -O2 -o selfhost/seed/sxc_seed selfhost/seed/sxc_seed.c -I selfhost/seed
 
@@ -80,12 +113,9 @@ if echo "$out" | grep -q '^11$'; then echo "FAIL when"; exit 1; fi
 echo "[OK] gen2 when"
 
 echo "[4] gen2 is not a frozen copy of gen1.c"
-test -f selfhost/gen2.c
-test -f selfhost/gen1.c
-# must differ (self-compile produces different translation of the same source)
+test -f selfhost/gen2.c && test -f selfhost/gen1.c
 if cmp -s selfhost/gen1.c selfhost/gen2.c; then
-  echo "[FAIL] gen2.c identical to gen1.c (frozen copy)"
-  exit 1
+  echo "[FAIL] gen2.c identical to gen1.c (frozen copy)"; exit 1
 fi
 echo "[OK] gen2.c differs from gen1.c (live self-compile)"
 
@@ -100,3 +130,4 @@ echo "$out" | grep -qx 2
 echo "[OK] boot_from_gen2 reassign"
 
 echo "=== TRUE-FULL-SELFHOST-OK ==="
+echo "Deps: C seed + bash + CC only (base64/gzip for optional parts restore)."
