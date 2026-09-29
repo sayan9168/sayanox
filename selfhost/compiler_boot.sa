@@ -1,52 +1,977 @@
-// Minimal Stage-3 compiler written in Sayanox.
-// Scans hello.sa for an integer and emits C that prints it.
+// compiler_boot.sa - reduced pure-min compiler written IN the pure-min subset.
+//
+// Pipeline (no C seed and no copied generation after gen1):
+//   seed (C)          : compiler_min.sa -> gen1.c -> gen1
+//   gen1 (pure min)   : compiler_boot.sa -> boot.c  -> boot
+//   boot (pure min)   : pure-min program -> C
+//   boot (again)      : compiler_boot.sa -> boot2.c -> boot2   (fixed point:
+//                       boot.c and boot2.c are the same translation unit)
+//
+// boot accepts the same statement shapes gen1 accepts and emits the same C for
+// them, so a pure compiler builds the next pure compiler with no C seed.
+//
+// Subset accepted by boot (one statement per line):
+//   hold NAME = NUMBER | NAME | "text" | NAME + NUMBER | NAME - NUMBER | call
+//   show NUMBER | NAME | "text" | call
+//   while COND { ... }
+//   when  COND { ... } otherwise { ... }
+//   // comment lines
+// COND is copied verbatim inside parentheses, so any C comparison round-trips.
+// Type rule for a first `hold`: `char *` when the right hand side is a string
+// literal or an sx_cat/sx_chr/sx_read/sx_arg call, otherwise `double`.
+//
+// Written in the flat style the seed/gen1 require: one top-level program, all
+// state declared up front, no helper functions, no nesting of calls.
 
-show 3
+// ---------------- command line ----------------
+hold in_path = "selfhost/mini_in.sa"
+hold out_path = "selfhost/mini_out.c"
+hold na = sx_argc()
+when na >= 2 {
+  hold in_path = sx_arg(1)
+}
+when na >= 3 {
+  hold out_path = sx_arg(2)
+}
 
-hold source = read_file("selfhost/hello.sa")
-hold n = len(source)
-hold pos = 0
-hold nval = 0
+// ---------------- compiler state ----------------
+hold src = sx_read(in_path)
+hold n = sx_len(src)
+hold i = 0
+hold depth = 1
+hold decls = "|"
+hold sdecls = "|"
+hold out = ""
+hold holds = 0
+hold shows = 0
+hold whiles = 0
+hold whens = 0
+
+// ---------------- scratch (declared once, reused everywhere) ----------------
+hold ln = ""
+hold nm = ""
+hold t = ""
+hold key = ""
+hold ind = ""
+hold ch = ""
+hold q = sx_chr(34)
+hold c = 0
+hold c0 = 0
+hold c2 = 0
+hold c3 = 0
+hold c7 = 0
+hold c9 = 0
+hold j = 0
+hold j1 = 0
+hold j2 = 0
+hold j3 = 0
+hold j4 = 0
+hold j5 = 0
+hold j6 = 0
+hold j7 = 0
+hold j8 = 0
+hold jc = 0
+hold jj = 0
+hold k = 0
+hold lim = 0
+hold lim2 = 0
+hold lim3 = 0
+hold sp = 0
+hold sp2 = 0
+hold sp3 = 0
+hold inq = 0
+hold rl = 0
+hold run = 0
+hold over = 0
+hold more = 0
+hold nxt = 0
+hold eol = 0
+hold cq2 = 0
+hold isid = 0
+hold nmr = 0
+hold rr = 0
+hold stop = 0
+hold isblank = 0
+hold blank = 0
+hold quoted = 0
+hold other = 0
+hold has = 0
+hold esc = 0
+hold act = 0
+hold q0 = 0
+hold lnl = 0
+hold go = 0
+hold rk = 0
+hold tl = 0
 hold found = 0
+hold ok = 0
+hold di = 0
+hold dl = 0
+hold kl = 0
+hold p1 = 0
+hold aa = 0
+hold bb = 0
+hold b1 = 0
+hold eq = 0
+hold sk = 0
+hold iswhile = 0
+hold isel = 0
+hold vx = 0
+hold eol2 = 0
+hold wasinq = 0
+hold lead = 0
+hold inparen = 0
+hold plain = 0
+hold scan = 0
+hold stop2 = 0
+hold cc = 0
+hold letter = 0
+hold tbl = ""
+hold found2 = 0
+hold jj2 = 0
 
-while pos < n {
-  hold ch = source[pos]
-  when ch >= 48 {
-    when ch <= 57 {
-      when found == 0 {
-        hold nval = ch - 48
-        hold pos = pos + 1
-        while pos < n {
-          hold ch2 = source[pos]
-          when ch2 >= 48 {
-            when ch2 <= 57 {
-              hold nval = nval * 10 + (ch2 - 48)
-              hold pos = pos + 1
-            } otherwise {
-              hold pos = n
-            }
-          } otherwise {
-            hold pos = n
+// ---------------- C header + shared mini runtime ----------------
+hold out = "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
+hold out = sx_cat(out, "static int sx_argn=0; static char **sx_argv_p=0;\n")
+hold out = sx_cat(out, "static double sx_argc(void){ return (double)sx_argn; }\n")
+hold out = sx_cat(out, "static char *sx_arg(double v){ long i=(long)v; if(i<0||i>=sx_argn) return \"\"; return sx_argv_p[i]; }\n")
+hold out = sx_cat(out, "static char *sx_chr(double v){ char *b=(char*)malloc(2); b[0]=(char)(long)v; b[1]=0; return b; }\n")
+hold out = sx_cat(out, "static char *sx_cat(const char *a,const char *b){ size_t la=strlen(a), lb=strlen(b); char *r=(char*)malloc(la+lb+1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r; }\n")
+hold out = sx_cat(out, "static double sx_len(const char *s){ return (double)strlen(s); }\n")
+hold out = sx_cat(out, "static double sx_idx(const char *s,double v){ long i=(long)v; long L=(long)strlen(s); if(i<0) i=i+L; if(i<0||i>=L){ fputs(\"sx: string index out of range\",stderr); exit(1); } return (double)(unsigned char)s[i]; }\n")
+hold out = sx_cat(out, "static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return \"\"; fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET); char *b=(char*)malloc((size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f); return b; }\n")
+hold out = sx_cat(out, "static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0.0; fputs(s,f); return fclose(f)==0?1.0:0.0; }\n")
+hold out = sx_cat(out, "\n")
+hold out = sx_cat(out, "int main(int argc,char**argv){\n")
+hold out = sx_cat(out, "  sx_argn=argc; sx_argv_p=argv;\n")
+
+// =====================================================================
+// scan one line at a time and translate it
+// =====================================================================
+hold run = 1
+while run == 1 {
+
+  // ---- read a line into ln: blanks collapse, string bodies kept ----
+  hold ln = ""
+  hold sp = 0
+  hold inq = 0
+  hold inparen = 0
+  hold more = 0
+  when i < n {
+    hold more = 1
+  }
+  hold rl = more
+  while rl == 1 {
+    hold c = sx_idx(src, i)
+    hold eol = 0
+    when c == 10 {
+      hold eol = 1
+    }
+    when eol == 1 {
+      hold rl = 0
+    }
+    when eol == 0 {
+      hold wasinq = inq
+      when wasinq == 1 {
+        hold ch = sx_chr(c)
+        hold ln = sx_cat(ln, ch)
+        when c == 34 {
+          hold inq = 0
+        }
+        hold i = i + 1
+        hold esc = 0
+        when c == 92 {
+          hold esc = 1
+        }
+        when esc == 1 {
+          hold has = 0
+          when i < n {
+            hold has = 1
+          }
+          when has == 1 {
+            hold cq2 = sx_idx(src, i)
+            hold ch = sx_chr(cq2)
+            hold ln = sx_cat(ln, ch)
+            hold i = i + 1
           }
         }
-        hold found = 1
-      } otherwise {
-        hold pos = pos + 1
       }
-    } otherwise {
-      hold pos = pos + 1
+      when wasinq == 0 {
+        hold quoted = 0
+        when c == 34 {
+          hold quoted = 1
+        }
+        hold blank = 0
+        when c == 32 {
+          hold blank = 1
+        }
+        when c == 9 {
+          hold blank = 1
+        }
+        when c == 13 {
+          hold blank = 1
+        }
+        hold other = 0
+        when blank == 0 {
+          hold other = 1
+        }
+        when quoted == 1 {
+          hold other = 0
+        }
+        when c == 40 {
+          hold inparen = 1
+        }
+        when c == 41 {
+          hold inparen = 0
+        }
+        when quoted == 1 {
+          hold ch = sx_chr(c)
+          hold ln = sx_cat(ln, ch)
+          hold sp = 0
+          hold inq = 1
+          hold i = i + 1
+        }
+        when blank == 1 {
+          when inparen == 0 {
+            hold sp = sp + 1
+          }
+          when inparen == 1 {
+            hold sp = 0
+          }
+          hold i = i + 1
+        }
+        when other == 1 {
+          hold lead = 1
+          hold lnl = sx_len(ln)
+          when lnl > 0 {
+            hold lead = 0
+          }
+          hold k = 0
+          when lead == 0 {
+            while k < sp {
+              hold ln = sx_cat(ln, " ")
+              hold k = k + 1
+            }
+          }
+          hold sp = 0
+          hold ch = sx_chr(c)
+          hold ln = sx_cat(ln, ch)
+          hold i = i + 1
+        }
+      }
+      hold nxt = 0
+      when i < n {
+        hold nxt = 1
+      }
+      hold rl = nxt
     }
-  } otherwise {
-    hold pos = pos + 1
+  }
+
+  // ---- dispatch the line ----
+  hold lnl = sx_len(ln)
+  hold go = 0
+  when lnl > 0 {
+    hold go = 1
+  }
+  when go == 1 {
+    hold q0 = sx_idx(ln, 0)
+    hold act = 0
+    when q0 == 104 {
+      hold act = 1
+    }
+    when q0 == 115 {
+      hold act = 2
+    }
+    when q0 == 119 {
+      hold act = 3
+    }
+    when q0 == 125 {
+      hold act = 4
+    }
+
+    // ============ hold NAME = RHS ============
+    when act == 1 {
+      hold lim = sx_len(ln)
+      hold j = 4
+      hold sk = 1
+      while sk == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold b1 = 0
+        when jc == 32 {
+          hold b1 = 1
+        }
+        when b1 == 1 {
+          hold j = j + 1
+        }
+        when b1 == 0 {
+          hold sk = 0
+        }
+      }
+      hold nm = ""
+      hold nmr = 1
+      while nmr == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold isid = 0
+        when jc >= 97 {
+          when jc <= 122 {
+            hold isid = 1
+          }
+        }
+        when jc >= 65 {
+          when jc <= 90 {
+            hold isid = 1
+          }
+        }
+        when jc >= 48 {
+          when jc <= 57 {
+            hold isid = 1
+          }
+        }
+        when jc == 95 {
+          hold isid = 1
+        }
+        when isid == 1 {
+          hold ch = sx_chr(jc)
+          hold nm = sx_cat(nm, ch)
+          hold j = j + 1
+        }
+        when isid == 0 {
+          hold nmr = 0
+        }
+      }
+      // skip blanks, take '='
+      hold sk = 1
+      while sk == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold b1 = 0
+        when jc == 32 {
+          hold b1 = 1
+        }
+        when b1 == 1 {
+          hold j = j + 1
+        }
+        when b1 == 0 {
+          hold sk = 0
+        }
+      }
+      hold eq = 0
+      when j < lim {
+        hold eq = sx_idx(ln, j)
+      }
+      when eq == 61 {
+        hold j = j + 1
+      }
+      hold sk = 1
+      while sk == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold b1 = 0
+        when jc == 32 {
+          hold b1 = 1
+        }
+        when b1 == 1 {
+          hold j = j + 1
+        }
+        when b1 == 0 {
+          hold sk = 0
+        }
+      }
+      // the right hand side is the rest of the line
+      hold t = ""
+      hold rr = 1
+      while rr == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold stop = 0
+        when jc == 0 {
+          hold stop = 1
+        }
+        when stop == 1 {
+          hold rr = 0
+        }
+        when stop == 0 {
+          hold ch = sx_chr(jc)
+          hold t = sx_cat(t, ch)
+          hold j = j + 1
+        }
+      }
+      // first declaration?  search "|nm|" inside the table
+      hold tbl = decls
+      hold key = sx_cat("|", nm)
+      hold key = sx_cat(key, "|")
+      hold found = 0
+      hold di = 0
+      hold dl = sx_len(tbl)
+      hold kl = sx_len(key)
+      hold lim3 = di + kl
+      while lim3 <= dl {
+        hold ok = 1
+        hold jj = 0
+        while jj < kl {
+          hold p1 = di + jj
+          hold aa = sx_idx(tbl, p1)
+          hold bb = sx_idx(key, jj)
+          when aa == bb {
+            hold jj = jj + 1
+          }
+          when aa != bb {
+            hold ok = 0
+            hold jj = kl
+          }
+        }
+        when ok == 1 {
+          hold found = 1
+          hold di = dl
+        }
+        when ok == 0 {
+          hold di = di + 1
+        }
+        hold lim3 = di + kl
+      }
+      // is the right hand side a single plain name?
+      hold plain = 0
+      hold tl = sx_len(t)
+      when tl > 0 {
+        hold cc = sx_idx(t, 0)
+        hold letter = 0
+        when cc >= 97 {
+          when cc <= 122 {
+            hold letter = 1
+          }
+        }
+        when cc >= 65 {
+          when cc <= 90 {
+            hold letter = 1
+          }
+        }
+        hold plain = letter
+      }
+      hold jj2 = 0
+      hold scan = plain
+      while scan == 1 {
+        hold cc = 0
+        when jj2 < tl {
+          hold cc = sx_idx(t, jj2)
+        }
+        hold stop2 = 0
+        when jj2 >= tl {
+          hold stop2 = 1
+        }
+        when cc == 32 {
+          hold stop2 = 1
+        }
+        when cc == 40 {
+          hold stop2 = 1
+        }
+        when stop2 == 0 {
+          hold jj2 = jj2 + 1
+        }
+        when stop2 == 1 {
+          hold scan = 0
+          when jj2 < tl {
+            hold plain = 0
+          }
+        }
+      }
+      // type of the right hand side
+      hold rk = 0
+      hold tl = sx_len(t)
+      hold c0 = 0
+      when tl > 0 {
+        hold c0 = sx_idx(t, 0)
+      }
+      when c0 == 34 {
+        hold rk = 1
+      }
+      when c0 == 115 {
+        hold c3 = 0
+        when tl > 3 {
+          hold c3 = sx_idx(t, 3)
+        }
+        when c3 == 99 {
+          hold rk = 1
+        }
+        when c3 == 114 {
+          hold rk = 1
+        }
+        when c3 == 97 {
+          hold c7 = 0
+          when tl > 6 {
+            hold c7 = sx_idx(t, 6)
+          }
+          when c7 == 40 {
+            hold rk = 1
+          }
+        }
+      }
+      when plain == 1 {
+        // string variable?  search "|t|" inside sdecls
+        hold tbl = sdecls
+        hold key = sx_cat("|", t)
+        hold key = sx_cat(key, "|")
+        hold found2 = 0
+        hold di = 0
+        hold dl = sx_len(tbl)
+        hold kl = sx_len(key)
+        hold lim3 = di + kl
+        while lim3 <= dl {
+          hold ok = 1
+          hold jj = 0
+          while jj < kl {
+            hold p1 = di + jj
+            hold aa = sx_idx(tbl, p1)
+            hold bb = sx_idx(key, jj)
+            when aa == bb {
+              hold jj = jj + 1
+            }
+            when aa != bb {
+              hold ok = 0
+              hold jj = kl
+            }
+          }
+          when ok == 1 {
+            hold found2 = 1
+            hold di = dl
+          }
+          when ok == 0 {
+            hold di = di + 1
+          }
+          hold lim3 = di + kl
+        }
+        when found2 == 1 {
+          hold rk = 1
+        }
+      }
+      // indent
+      hold ind = ""
+      hold k = 0
+      while k < depth {
+        hold ind = sx_cat(ind, "  ")
+        hold k = k + 1
+      }
+      // emit
+      hold out = sx_cat(out, ind)
+      when found == 0 {
+        when rk == 1 {
+          hold out = sx_cat(out, "char *")
+        }
+        when rk == 0 {
+          hold out = sx_cat(out, "double ")
+        }
+      }
+      hold out = sx_cat(out, nm)
+      hold out = sx_cat(out, " = ")
+      hold out = sx_cat(out, t)
+      hold out = sx_cat(out, ";\n")
+      when found == 0 {
+        hold decls = sx_cat(decls, nm)
+        hold decls = sx_cat(decls, "|")
+        when rk == 1 {
+          hold sdecls = sx_cat(sdecls, nm)
+          hold sdecls = sx_cat(sdecls, "|")
+        }
+      }
+      hold holds = holds + 1
+    }
+
+    // ============ show EXPR ============
+    when act == 2 {
+      hold lim = sx_len(ln)
+      hold j = 4
+      hold sk = 1
+      while sk == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold b1 = 0
+        when jc == 32 {
+          hold b1 = 1
+        }
+        when b1 == 1 {
+          hold j = j + 1
+        }
+        when b1 == 0 {
+          hold sk = 0
+        }
+      }
+      hold t = ""
+      hold rr = 1
+      while rr == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold stop = 0
+        when jc == 0 {
+          hold stop = 1
+        }
+        when stop == 1 {
+          hold rr = 0
+        }
+        when stop == 0 {
+          hold ch = sx_chr(jc)
+          hold t = sx_cat(t, ch)
+          hold j = j + 1
+        }
+      }
+      // is the right hand side a single plain name?
+      hold plain = 0
+      hold tl = sx_len(t)
+      when tl > 0 {
+        hold cc = sx_idx(t, 0)
+        hold letter = 0
+        when cc >= 97 {
+          when cc <= 122 {
+            hold letter = 1
+          }
+        }
+        when cc >= 65 {
+          when cc <= 90 {
+            hold letter = 1
+          }
+        }
+        hold plain = letter
+      }
+      hold jj2 = 0
+      hold scan = plain
+      while scan == 1 {
+        hold cc = 0
+        when jj2 < tl {
+          hold cc = sx_idx(t, jj2)
+        }
+        hold stop2 = 0
+        when jj2 >= tl {
+          hold stop2 = 1
+        }
+        when cc == 32 {
+          hold stop2 = 1
+        }
+        when cc == 40 {
+          hold stop2 = 1
+        }
+        when stop2 == 0 {
+          hold jj2 = jj2 + 1
+        }
+        when stop2 == 1 {
+          hold scan = 0
+          when jj2 < tl {
+            hold plain = 0
+          }
+        }
+      }
+      hold rk = 0
+      hold tl = sx_len(t)
+      hold c0 = 0
+      when tl > 0 {
+        hold c0 = sx_idx(t, 0)
+      }
+      when c0 == 34 {
+        hold rk = 1
+      }
+      when c0 == 115 {
+        hold c3 = 0
+        when tl > 3 {
+          hold c3 = sx_idx(t, 3)
+        }
+        when c3 == 99 {
+          hold rk = 1
+        }
+        when c3 == 114 {
+          hold rk = 1
+        }
+        when c3 == 97 {
+          hold c7 = 0
+          when tl > 7 {
+            hold c7 = sx_idx(t, 7)
+          }
+          when c7 == 40 {
+            hold rk = 1
+          }
+        }
+      }
+      when plain == 1 {
+        // string variable?  search "|t|" inside sdecls
+        hold tbl = sdecls
+        hold key = sx_cat("|", t)
+        hold key = sx_cat(key, "|")
+        hold found2 = 0
+        hold di = 0
+        hold dl = sx_len(tbl)
+        hold kl = sx_len(key)
+        hold lim3 = di + kl
+        while lim3 <= dl {
+          hold ok = 1
+          hold jj = 0
+          while jj < kl {
+            hold p1 = di + jj
+            hold aa = sx_idx(tbl, p1)
+            hold bb = sx_idx(key, jj)
+            when aa == bb {
+              hold jj = jj + 1
+            }
+            when aa != bb {
+              hold ok = 0
+              hold jj = kl
+            }
+          }
+          when ok == 1 {
+            hold found2 = 1
+            hold di = dl
+          }
+          when ok == 0 {
+            hold di = di + 1
+          }
+          hold lim3 = di + kl
+        }
+        when found2 == 1 {
+          hold rk = 1
+        }
+      }
+      hold ind = ""
+      hold k = 0
+      while k < depth {
+        hold ind = sx_cat(ind, "  ")
+        hold k = k + 1
+      }
+      hold out = sx_cat(out, ind)
+      when rk == 1 {
+        hold out = sx_cat(out, "puts(")
+        hold out = sx_cat(out, t)
+        hold out = sx_cat(out, ");\n")
+      }
+      when rk == 0 {
+        hold out = sx_cat(out, "printf(\"%g\\n\", (double)")
+        hold out = sx_cat(out, t)
+        hold out = sx_cat(out, ");\n")
+      }
+      hold shows = shows + 1
+    }
+
+    // ============ while COND { / when COND { ============
+    when act == 3 {
+      hold lim = sx_len(ln)
+      hold c2 = 0
+      when lim > 2 {
+        hold c2 = sx_idx(ln, 2)
+      }
+      hold iswhile = 0
+      when c2 == 105 {
+        hold iswhile = 1
+      }
+      hold j = 5
+      hold sk = 1
+      while sk == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold b1 = 0
+        when jc == 32 {
+          hold b1 = 1
+        }
+        when b1 == 1 {
+          hold j = j + 1
+        }
+        when b1 == 0 {
+          hold sk = 0
+        }
+      }
+      hold t = ""
+      hold sp2 = 0
+      hold rr = 1
+      while rr == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold stop = 0
+        when jc == 0 {
+          hold stop = 1
+        }
+        when jc == 123 {
+          hold stop = 1
+        }
+        when stop == 1 {
+          hold rr = 0
+        }
+        when stop == 0 {
+          hold isblank = 0
+          when jc == 32 {
+            hold isblank = 1
+          }
+          when isblank == 1 {
+            hold sp2 = sp2 + 1
+            hold j = j + 1
+          }
+          when isblank == 0 {
+            hold k = 0
+            while k < sp2 {
+              hold t = sx_cat(t, " ")
+              hold k = k + 1
+            }
+            hold sp2 = 0
+            hold ch = sx_chr(jc)
+            hold t = sx_cat(t, ch)
+            hold j = j + 1
+          }
+        }
+      }
+      hold ind = ""
+      hold k = 0
+      while k < depth {
+        hold ind = sx_cat(ind, "  ")
+        hold k = k + 1
+      }
+      hold out = sx_cat(out, ind)
+      when iswhile == 1 {
+        hold out = sx_cat(out, "while (")
+        hold whiles = whiles + 1
+      }
+      when iswhile == 0 {
+        hold out = sx_cat(out, "if (")
+        hold whens = whens + 1
+      }
+      hold out = sx_cat(out, t)
+      hold out = sx_cat(out, ") {\n")
+      hold depth = depth + 1
+    }
+
+    // ============ } and } otherwise { ============
+    when act == 4 {
+      hold lim = sx_len(ln)
+      hold j = 1
+      hold sk = 1
+      while sk == 1 {
+        hold jc = 0
+        when j < lim {
+          hold jc = sx_idx(ln, j)
+        }
+        hold b1 = 0
+        when jc == 32 {
+          hold b1 = 1
+        }
+        when b1 == 1 {
+          hold j = j + 1
+        }
+        when b1 == 0 {
+          hold sk = 0
+        }
+      }
+      hold j1 = j + 1
+      hold j2 = j + 2
+      hold j3 = j + 3
+      hold j4 = j + 4
+      hold j5 = j + 5
+      hold j6 = j + 6
+      hold j7 = j + 7
+      hold j8 = j + 8
+      hold lim3 = j + 9
+      hold isel = 1
+      when lim3 > lim {
+        hold isel = 0
+      }
+      when isel == 1 {
+        hold vx = sx_idx(ln, j)
+        when vx != 111 {
+          hold isel = 0
+        }
+        hold vx = sx_idx(ln, j1)
+        when vx != 116 {
+          hold isel = 0
+        }
+        hold vx = sx_idx(ln, j2)
+        when vx != 104 {
+          hold isel = 0
+        }
+        hold vx = sx_idx(ln, j3)
+        when vx != 101 {
+          hold isel = 0
+        }
+        hold vx = sx_idx(ln, j4)
+        when vx != 114 {
+          hold isel = 0
+        }
+        hold vx = sx_idx(ln, j5)
+        when vx != 119 {
+          hold isel = 0
+        }
+        hold vx = sx_idx(ln, j6)
+        when vx != 105 {
+          hold isel = 0
+        }
+        hold vx = sx_idx(ln, j7)
+        when vx != 115 {
+          hold isel = 0
+        }
+        hold vx = sx_idx(ln, j8)
+        when vx != 101 {
+          hold isel = 0
+        }
+      }
+      when isel == 1 {
+        // "} otherwise {" -> "} else {" at the depth of the closed block
+        hold ind = ""
+        hold k = 1
+        while k < depth {
+          hold ind = sx_cat(ind, "  ")
+          hold k = k + 1
+        }
+        hold out = sx_cat(out, ind)
+        hold out = sx_cat(out, "} else {\n")
+      }
+      when isel == 0 {
+        hold depth = depth - 1
+        hold ind = ""
+        hold k = 0
+        while k < depth {
+          hold ind = sx_cat(ind, "  ")
+          hold k = k + 1
+        }
+        hold out = sx_cat(out, ind)
+        hold out = sx_cat(out, "}\n")
+      }
+    }
+  }
+
+  // ---- consume the newline and stop at end of input ----
+  hold eol2 = 0
+  when i < n {
+    hold eol2 = sx_idx(src, i)
+  }
+  when eol2 == 10 {
+    hold i = i + 1
+  }
+  hold over = 0
+  when i >= n {
+    hold over = 1
+  }
+  when over == 1 {
+    hold run = 0
   }
 }
 
-show nval
-
-hold part_a = "#include <stdio.h>\nint main(void){ printf(\"%g\\n\", (double)"
-hold part_b = str(nval)
-hold part_c = "); return 0; }\n"
-hold out = concat(part_a, part_b)
-hold out = concat(out, part_c)
-hold w = write_file("selfhost/hello_out.c", out)
+// =====================================================================
+// finish and write
+// =====================================================================
+hold out = sx_cat(out, "  return 0;\n")
+hold out = sx_cat(out, "}\n")
+hold w = sx_write(out_path, out)
+show holds
+show shows
+show whiles
+show whens
 show 1

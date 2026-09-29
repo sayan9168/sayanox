@@ -4,10 +4,18 @@ set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "=== SEED COMPILER ==="
+# Portable C compiler pick: $CC, else clang (CI, Termux), else gcc/cc (Linux).
+if [ -z "${CC:-}" ]; then
+  for c in clang gcc cc; do
+    if command -v "$c" >/dev/null 2>&1; then CC="$c"; break; fi
+  done
+fi
+: "${CC:?no C compiler found; set CC=clang or CC=gcc}"
+
 test -f selfhost/seed/sxc_seed.c
 test -f selfhost/seed/sx_runtime.h
 python3 selfhost/seed/apply_seed_fixes.py
-clang -O2 -o selfhost/seed/sxc_seed selfhost/seed/sxc_seed.c -I selfhost/seed
+$CC -O2 -o selfhost/seed/sxc_seed selfhost/seed/sxc_seed.c -I selfhost/seed
 
 run() {
   local name=$1 expect=$2
@@ -24,7 +32,7 @@ run() {
     ./selfhost/seed/sxc_seed "$src" > "selfhost/seed_tests/${name}.c"
   fi
   test -s "selfhost/seed_tests/${name}.c"
-  clang -O2 -o "selfhost/seed_tests/${name}" "selfhost/seed_tests/${name}.c" -I selfhost/seed
+  $CC -O2 -o "selfhost/seed_tests/${name}" "selfhost/seed_tests/${name}.c" -I selfhost/seed
   local out
   out=$("selfhost/seed_tests/${name}")
   echo "$out" | grep -q "$expect"

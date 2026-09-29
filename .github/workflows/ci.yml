@@ -26,6 +26,13 @@ jobs:
       - run: |
           chmod +x selfhost/bootstrap_gen1.sh
           ./selfhost/bootstrap_gen1.sh
+  gen2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          chmod +x selfhost/bootstrap_gen2.sh
+          ./selfhost/bootstrap_gen2.sh
   native:
     runs-on: ubuntu-latest
     steps:
