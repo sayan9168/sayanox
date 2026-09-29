@@ -1,4 +1,4 @@
-.PHONY: all test subset seed gen1 gen2 pure-gen2 native native-test gc-test clean
+.PHONY: all test subset seed gen1 gen2 grammar pure-gen2 native native-test gc-test clean
 
 # The bootstrap chain: subset (seed smoke) -> seed -> gen1 -> gen2 (pure)
 all: subset seed gen1 gen2
@@ -26,7 +26,11 @@ gen2:
 # kept for compatibility: pure-gen2 is the same target as gen2
 pure-gen2: gen2
 
-test: subset seed gen1 gen2
+grammar: gen1
+	chmod +x selfhost/bootstrap_grammar.sh
+	./selfhost/bootstrap_grammar.sh
+
+test: subset seed gen1 gen2 grammar
 	@echo TEST-OK
 
 native:
