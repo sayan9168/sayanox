@@ -57,10 +57,7 @@ if [ -f selfhost/mini_in.sa ]; then
   echo "[OK] mini_in"
 fi
 
-if grep -q 'decls' selfhost/compiler_min.sa 2>/dev/null; then
-  echo "[OK] pure min has reassign tracking"
-fi
-
+grep -q decls selfhost/compiler_min.sa && echo "[OK] pure min has reassign tracking"
 grep -q "sx_b_concat\|sx_b_read_file" selfhost/gen1.c
 echo "[OK] gen1.c is seed-emitted (not frozen)"
 
