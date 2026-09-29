@@ -15,6 +15,7 @@ fi
 echo "=== TRUE FULL SELF-HOST ==="
 echo "Using CC=$CC"
 
+python3 selfhost/apply_selfhost_fixes.py || true
 python3 selfhost/seed/apply_seed_fixes.py || true
 # ensure large object table for self-compile of compiler_min
 if grep -q 'SX_TAB_CAP 262144' selfhost/seed/sx_runtime.h 2>/dev/null; then
