@@ -15,6 +15,30 @@ Last updated: 2026-09-29 (pure minim compiler + Gen2 pipeline).
 Everything above runs with clang (CI, Termux) and with gcc/cc on plain Linux.
 The scripts pick `$CC`, else `clang`, else `gcc`, else `cc`.
 
+## GRAMMAR-GROW
+
+This change extends the true gen1 target grammar in selfhost/compiler_min.sa without changing the seed -> gen1 -> boot architecture.
+
+Implemented:
+- condition text now accepts && and || chains;
+- arithmetic comparison text such as pos + 1 < n is preserved into generated C;
+- nested builtin identifiers in call arguments are translated to the existing sx_* helpers, including concat("a", chr(66));
+- string_eq(...) is mapped to a small generated sx_eq(...) helper because compiler_min.sa uses it internally;
+- selfhost/bootstrap_grammar.sh contains focused regression tests for these cases.
+
+Required verification commands:
+
+    make gen1
+    make gen2
+    ./selfhost/bootstrap_grammar.sh
+
+The grammar-growth script additionally checks:
+- when x >= 1 && x <= 3 { ... } and an || condition;
+- while pos + 1 < n { ... };
+- hold s = concat("a", chr(66)); show s;
+- generated C contains the corresponding logical/arithmetic condition text and nested sx_cat(..., sx_chr(...)).
+
+Verification status in this update: NOT EXECUTED IN THIS ENVIRONMENT. No GEN1-OK, GEN2-PARTIAL, or GRAMMAR-GROW-OK result is claimed here until those commands are run. If the new grammar still rejects compiler_min.sa, the remaining diagnostic should be recorded here rather than treating the grammar expansion as full self-hosting.
 ## GEN1-OK — the target language of `selfhost/compiler_min.sa`
 
 `selfhost/gen1` is produced by the C seed from `selfhost/compiler_min.sa`
