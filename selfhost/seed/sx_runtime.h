@@ -34,7 +34,7 @@ typedef struct { size_t refs; size_t len; char data[1]; } SxStrHdr;
 typedef struct { size_t refs; size_t n, cap; double *v; } SxList;
 
 /* ---- object registry (str/list identification + temp epochs) ---- */
-#define SX_TAB_CAP 262144
+#define SX_TAB_CAP 2097152
 static void   *sx_tab_obj[SX_TAB_CAP];   /* base pointer of header */
 static char    sx_tab_kind[SX_TAB_CAP];  /* 1=str 2=list */
 static long    sx_tab_epoch[SX_TAB_CAP]; /* creation epoch */
