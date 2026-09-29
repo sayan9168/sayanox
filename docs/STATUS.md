@@ -1,45 +1,49 @@
 # Status
 
-Last updated: 2026-09-30 (real x86-64 native AOT).
+Last updated: 2026-09-30 (polish: min-default, real x86, quiet self-compile).
 
 ## Entry point
 
 ```bash
-make true-selfhost
+make true-selfhost          # preferred: seed-min → gen1 → gen2
+# make true-selfhost-full   # optional: 44KB full C seed path
 ```
 
 ## Summary
 
 | Chain | Marker | Command |
 |-------|--------|---------|
-| full self-host | **`TRUE-FULL-SELFHOST-OK`** | **`make true-selfhost`** |
-| **real native AOT** | **`NATIVE-TEST-OK`** | **`make native-test`** |
-| smaller seed | `SEED-MIN-OK` | `make seed-min` |
-| **seed-min → gen1** | **`SEED-MIN-GEN1-OK`** | **`make seed-min-gen1`** |
-| gen3 fixed point | `GEN3-OK` | `make gen3` |
+| **self-host (min)** | **`TRUE-SELFHOST-MIN-OK`** | **`make true-selfhost`** |
+| self-host (full seed) | `TRUE-FULL-SELFHOST-OK` | `make true-selfhost-full` |
+| real native AOT | `NATIVE-TEST-OK` | `make native-test` |
+| seed-min → gen1 | `SEED-MIN-GEN1-OK` | `make seed-min-gen1` |
+| gen3 / gen4 | `GEN3-OK` | `make gen3` |
 
 ## Dependencies
 
 | Need | Role |
 |------|------|
-| **make** | Sole orchestration |
-| **C compiler** | Build seeds + (optional) C backend |
-| **base64 + gzip** | Restore `compiler_min.sa` parts |
-| **C seed** | Full ~44KB or **min ~11KB** (can compile compiler_min) |
+| **make** | Sole orchestration (no bash entry scripts) |
+| **C compiler** | Build seed binaries; optional C backend for `.c` output |
+| **base64 + gzip** | Restore `compiler_min.sa` from parts |
+| **C seed** | **Preferred: `sxc_seed_min.c` (~11KB)**; optional full `sxc_seed.c` (~44KB) |
 
 ```
-Full:   sxc_seed.c (44KB) → gen1 → gen2 → gen3 → .c → cc
-Min:    sxc_seed_min.c (11KB) → gen1 → …
-Native: native_aot.c (~12KB) → real x86-64 ELF (no cc for output)
+Preferred: sxc_seed_min (11KB) → gen1_min → gen2 → gen3
+Full:      sxc_seed (44KB)     → gen1 → gen2
+Native:    native_aot (~11KB)  → real x86-64 ELF (no second cc)
 ```
 
 ## Verified
 
-- `make true-selfhost` — gen1 self-compiles compiler_min → gen2
-- `make native-test` — **real x86-64 emit** (hold/show/while), no clang for output
-- `make seed-min-gen1` — 11KB seed compiles compiler_min → gen1
-- `make gen3` — behavioural fixed point
+- `make true-selfhost` — seed-min path, no debug `show` spam
+- `make native-test` — real x86-64 (26 slots, signed itoa)
+- `make gen3` — behavioural fixed point (gen3→gen4)
 
-## Optional next
+## Optional polish (done 2026-09-30)
 
-- (none required for bootstrap; optional polish only)
+1. gen3→gen4 fixed-point check
+2. Removed trailing `show holds/shows/...` from `compiler_min.sa`
+3. Default bootstrap is seed-min (full seed optional)
+4. Native: 26 variable slots, negative numbers
+5. Docs: STATUS + CONTRIBUTING + BOOTSTRAP entry notes
