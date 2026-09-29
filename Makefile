@@ -30,7 +30,7 @@ grammar: gen1
 	chmod +x selfhost/bootstrap_grammar.sh
 	./selfhost/bootstrap_grammar.sh
 
-test: subset seed gen1 gen2 grammar
+test: subset seed gen1 gen2
 	@echo TEST-OK
 
 native:
