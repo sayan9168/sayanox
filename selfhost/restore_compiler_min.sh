@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
-python3 - <<'PY'
-import gzip, base64
-from pathlib import Path
-parts = sorted(Path("selfhost/compiler_min_parts").glob("p*.b64"))
-b64 = "".join(p.read_text().strip() for p in parts)
-raw = gzip.decompress(base64.b64decode(b64))
-Path("selfhost/compiler_min.sa").write_bytes(raw)
-print("restored compiler_min.sa", len(raw), "bytes")
-PY
+if [ -d selfhost/compiler_min_lines ] && ls selfhost/compiler_min_lines/L*.txt >/dev/null 2>&1; then
+  cat selfhost/compiler_min_lines/L*.txt > selfhost/compiler_min.sa
+  echo "restored from lines ($(wc -c < selfhost/compiler_min.sa) bytes)"
+elif [ -f selfhost/compiler_min.sa ]; then
+  echo "keeping compiler_min.sa ($(wc -l < selfhost/compiler_min.sa) lines)"
+else
+  echo "missing compiler_min.sa"; exit 1
+fi

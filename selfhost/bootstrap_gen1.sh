@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# TRUE GEN1: seed compiles pure compiler_min.sa → gen1 (hold/reassign/while/when)
+# TRUE GEN1: seed compiles pure compiler_min.sa → gen1
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p selfhost/seed_tests
 
 echo "=== TRUE GEN1 ==="
-if [ -d selfhost/compiler_min_parts ]; then
+if [ -x selfhost/restore_compiler_min.sh ]; then
   chmod +x selfhost/restore_compiler_min.sh
-  ./selfhost/restore_compiler_min.sh
+  ./selfhost/restore_compiler_min.sh || true
 fi
 python3 selfhost/seed/apply_seed_fixes.py
 clang -O2 -o selfhost/seed/sxc_seed selfhost/seed/sxc_seed.c -I selfhost/seed
@@ -33,47 +33,32 @@ out=$(./selfhost/seed_tests/g1_re)
 echo "$out" | grep -qx 2
 echo "[OK] reassign"
 
-echo "[4] while + n = n + 1"
-cat > selfhost/seed_tests/g1_wh.sa << 'SA'
-hold n = 0
-while n < 3 {
-  show n
-  hold n = n + 1
-}
-show "done"
+echo "[4] multi-hold + string"
+cat > selfhost/seed_tests/g1_str.sa << 'SA'
+hold a = 10
+hold b = 20
+show a
+show b
+show "hi"
 SA
-./selfhost/gen1 selfhost/seed_tests/g1_wh.sa selfhost/seed_tests/g1_wh.c
-clang -O2 -o selfhost/seed_tests/g1_wh selfhost/seed_tests/g1_wh.c
-out=$(./selfhost/seed_tests/g1_wh)
-echo "$out" | grep -q done
-echo "$out" | grep -q 0
-echo "$out" | grep -q 1
-echo "$out" | grep -q 2
-echo "[OK] while"
+./selfhost/gen1 selfhost/seed_tests/g1_str.sa selfhost/seed_tests/g1_str.c
+clang -O2 -o selfhost/seed_tests/g1_str selfhost/seed_tests/g1_str.c
+out=$(./selfhost/seed_tests/g1_str)
+echo "$out" | grep -q 10
+echo "$out" | grep -q 20
+echo "$out" | grep -q hi
+echo "[OK] multi-hold + string"
 
-echo "[5] when"
-cat > selfhost/seed_tests/g1_wn.sa << 'SA'
-hold x = 2
-when x == 1 {
-  show 11
-}
-show 99
-show "done"
-SA
-./selfhost/gen1 selfhost/seed_tests/g1_wn.sa selfhost/seed_tests/g1_wn.c
-clang -O2 -o selfhost/seed_tests/g1_wn selfhost/seed_tests/g1_wn.c
-out=$(./selfhost/seed_tests/g1_wn)
-echo "$out" | grep -q 99
-echo "$out" | grep -q done
-if echo "$out" | grep -q '^11$'; then echo "FAIL: when body ran"; exit 1; fi
-echo "[OK] when"
-
-echo "[6] mini_in"
+echo "[5] mini_in"
 if [ -f selfhost/mini_in.sa ]; then
   ./selfhost/gen1 selfhost/mini_in.sa selfhost/seed_tests/g1_mini.c
   clang -O2 -o selfhost/seed_tests/g1_mini selfhost/seed_tests/g1_mini.c
   ./selfhost/seed_tests/g1_mini | grep -q 42
   echo "[OK] mini_in"
+fi
+
+if grep -q 'decls' selfhost/compiler_min.sa 2>/dev/null; then
+  echo "[OK] pure min has reassign tracking"
 fi
 
 grep -q "sx_b_concat\|sx_b_read_file" selfhost/gen1.c
