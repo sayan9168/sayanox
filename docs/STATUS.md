@@ -30,7 +30,7 @@ Required verification commands:
 
     make gen1
     make gen2
-    ./selfhost/bootstrap_grammar.sh
+    bash ./selfhost/bootstrap_grammar.sh
 
 The grammar-growth script additionally checks:
 - when x >= 1 && x <= 3 { ... } and an || condition;
