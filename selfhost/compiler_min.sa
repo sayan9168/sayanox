@@ -1183,6 +1183,11 @@ while running == 1 {
           hold iswhile = 1
         }
       }
+      when iswhile == 1 {
+        hold pos = pos + 4
+      } otherwise {
+        hold pos = pos + 3
+      }
       hold sk = 1
       while sk == 1 {
         when pos >= n {
