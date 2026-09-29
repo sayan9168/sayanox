@@ -38,7 +38,7 @@ The grammar-growth script additionally checks:
 - hold s = concat("a", chr(66)); show s;
 - generated C contains the corresponding logical/arithmetic condition text and nested sx_cat(..., sx_chr(...)).
 
-Verification status in this update: NOT EXECUTED IN THIS ENVIRONMENT. No GEN1-OK, GEN2-PARTIAL, or GRAMMAR-GROW-OK result is claimed here until those commands are run. If the new grammar still rejects compiler_min.sa, the remaining diagnostic should be recorded here rather than treating the grammar expansion as full self-hosting.
+Verification status: grammar fixtures are CI regression tests. Full gen1 compilation of compiler_min.sa remains outside the grammar test until the remaining syntax gaps are implemented; CI must not claim full self-hosting.
 ## GEN1-OK — the target language of `selfhost/compiler_min.sa`
 
 `selfhost/gen1` is produced by the C seed from `selfhost/compiler_min.sa`
