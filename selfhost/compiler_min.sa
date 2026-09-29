@@ -1,5 +1,5 @@
 // Pure Sayanox mini-compiler (subset)
-// Compiles: hold name = NUMBER, show NUMBER|name, show "string"
+// Compiles: hold (+reassign NUMBER), show NUMBER|name|"string"
 // Built by sxc_full — pure-.sa self-host step
 
 hold in_path = "selfhost/mini_in.sa"
@@ -16,8 +16,13 @@ hold source = read_file(in_path)
 hold n = len(source)
 hold pos = 0
 hold body = ""
+hold decls = "|"
+hold depth = 0
 hold holds = 0
 hold shows = 0
+hold whiles = 0
+hold whens = 0
+hold isnum = 0
 hold sk = 0
 hold rn = 0
 hold skipc = 0
@@ -170,12 +175,49 @@ while running == 1 {
                             }
                           }
                         }
-                        hold body = concat(body, "  double ")
-                        hold body = concat(body, name)
-                        hold body = concat(body, " = ")
-                        hold body = concat(body, str(val))
-                        hold body = concat(body, ";")
-                        hold body = concat(body, nl)
+                        hold key = concat("|", name)
+                        hold key = concat(key, "|")
+                        hold found = 0
+                        hold di = 0
+                        hold dl = len(decls)
+                        hold kl = len(key)
+                        while di + kl <= dl {
+                          hold ok = 1
+                          hold j = 0
+                          while j < kl {
+                            hold aa = sx_index(decls, di + j)
+                            hold bb = sx_index(key, j)
+                            when aa == bb {
+                              hold j = j + 1
+                            } otherwise {
+                              hold ok = 0
+                              hold j = kl
+                            }
+                          }
+                          when ok == 1 {
+                            hold found = 1
+                            hold di = dl
+                          } otherwise {
+                            hold di = di + 1
+                          }
+                        }
+                        when found == 1 {
+                          hold body = concat(body, "  ")
+                          hold body = concat(body, name)
+                          hold body = concat(body, " = ")
+                          hold body = concat(body, str(val))
+                          hold body = concat(body, ";")
+                          hold body = concat(body, nl)
+                        } otherwise {
+                          hold decls = concat(decls, name)
+                          hold decls = concat(decls, "|")
+                          hold body = concat(body, "  double ")
+                          hold body = concat(body, name)
+                          hold body = concat(body, " = ")
+                          hold body = concat(body, str(val))
+                          hold body = concat(body, ";")
+                          hold body = concat(body, nl)
+                        }
                         hold holds = holds + 1
                       } otherwise {
                         hold pos = pos + 1
@@ -347,4 +389,6 @@ hold out = concat(out, nl)
 hold w = write_file(out_path, out)
 show holds
 show shows
+show whiles
+show whens
 show 1
