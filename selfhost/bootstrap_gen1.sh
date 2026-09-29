@@ -5,6 +5,10 @@ cd "$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p selfhost/seed_tests
 
 echo "=== TRUE GEN1 ==="
+if [ -d selfhost/compiler_min_parts ]; then
+  chmod +x selfhost/restore_compiler_min.sh
+  ./selfhost/restore_compiler_min.sh
+fi
 python3 selfhost/seed/apply_seed_fixes.py
 clang -O2 -o selfhost/seed/sxc_seed selfhost/seed/sxc_seed.c -I selfhost/seed
 
