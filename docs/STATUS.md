@@ -33,4 +33,4 @@ selfhost/native_aot.c emits real x86-64 ELF code. Variable slots are mapped acro
 - No full-language self-host claim is made.
 - No byte-identical gen3->gen4 claim is made unless cmp actually passes.
 
-Final verification status is recorded after the clean-clone/CI verification run.
+Verification branch only: clean-clone CI is being run against this exact bootstrap tree.
