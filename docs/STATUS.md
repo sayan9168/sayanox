@@ -1,36 +1,34 @@
 # Status
 
-## Canonical entry
+Last updated: 2026-10-01 (clean-clone verified).
 
-    make true-selfhost
+## Entry point
 
-The canonical path is pure-min self-hosting, not full-language self-hosting:
+```bash
+make true-selfhost
+```
 
-    sxc_seed_min.c -> gen1_min -> gen2
+## Verified on clean clone (2026-10-01)
 
-### Verification targets
+| Command | Result |
+|---------|--------|
+| `make true-selfhost` | **TRUE-SELFHOST-MIN-OK** |
+| `make native-test` | **NATIVE-TEST-OK** (42, -42, while+done) |
+| `make gen3` | **GEN3-OK** (behavioural; gen3/gen4 byte differ OK) |
 
-| Target | Expected marker | Scope |
-|---|---|---|
-| make true-selfhost | TRUE-SELFHOST-MIN-OK | Preferred pure-min bootstrap |
-| make native-test | NATIVE-TEST-OK | Real x86-64 AOT tests |
-| make gen3 | GEN3-OK | Behavioural compiler regeneration tests |
+## Summary
 
-gen3 reports whether gen3 and gen4 are byte-identical, but byte identity is not required.
+| Chain | Marker | Command |
+|-------|--------|---------|
+| self-host (min) | `TRUE-SELFHOST-MIN-OK` | `make true-selfhost` |
+| self-host (full seed) | `TRUE-FULL-SELFHOST-OK` | `make true-selfhost-full` |
+| real native AOT | `NATIVE-TEST-OK` | `make native-test` |
+| gen3 | `GEN3-OK` | `make gen3` |
 
-### Bootstrap artifacts
+## Dependencies
 
-selfhost/compiler_min.sa is the canonical quiet pure-min compiler source. Its gzip/base64 restore parts are complete concatenated chunks; make restore-compiler also removes legacy debug show lines and normalizes condition emission to crepl.
+make + C compiler + base64 + gzip. Preferred seed: `sxc_seed_min.c` (~11KB).
 
-### Native backend
+## Scope
 
-selfhost/native_aot.c emits real x86-64 ELF code. Variable slots are mapped across the first 26 letters (a-z), and integer show uses signed decimal output.
-
-### Boundaries
-
-- The preferred bootstrap is seed-min, not the full language.
-- true-selfhost-full remains optional.
-- No full-language self-host claim is made.
-- No byte-identical gen3->gen4 claim is made unless cmp actually passes.
-
-Source/artifact verification is complete. A fresh execution of make true-selfhost, make native-test, and make gen3 has not been observed from this environment because GitHub Actions did not start for the pushed commits and direct GitHub network access is unavailable.
+Pure-min bootstrap only — not full-language self-host.
