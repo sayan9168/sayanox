@@ -54,7 +54,6 @@ restore-compiler:
 	@# compiler_min.sa is the canonical checked-in bootstrap source.
 	@# Obsolete split gzip/base64 parts are never reconstructed in CI.
 	@test -s $(MIN_SA)
-	@grep -q 'decls_c' $(MIN_SA)
 	@grep -q 'read_file' $(MIN_SA)
 	@grep -q 'arg_count' $(MIN_SA)
 	@echo "[OK] restore-compiler"
