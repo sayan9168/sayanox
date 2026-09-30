@@ -176,7 +176,7 @@ native-test: $(NATIVE_BIN)
 	@out=$$(./$(TESTS)/native_while); echo "$$out" | grep -q done
 	@echo "=== NATIVE-TEST-OK ==="
 
-grammar: $(GEN2)
+grammar: true-selfhost-min
 	@mkdir -p $(TESTS)
 	@printf 'hold n = 0\nwhile n < 3 {\n  hold n = n + 1\n}\nwhen n == 3 {\n  show "grammar-ok"\n} otherwise {\n  show "grammar-fail"\n}\n' > $(TESTS)/grammar.sa
 	./$(GEN2) $(TESTS)/grammar.sa $(TESTS)/grammar.c >/dev/null
