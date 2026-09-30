@@ -33,4 +33,4 @@ selfhost/native_aot.c emits real x86-64 ELF code. Variable slots are mapped acro
 - No full-language self-host claim is made.
 - No byte-identical gen3->gen4 claim is made unless cmp actually passes.
 
-Final verification status is recorded after the clean-clone/CI verification run.
+Source/artifact verification is complete. A fresh execution of make true-selfhost, make native-test, and make gen3 has not been observed from this environment because GitHub Actions did not start for the pushed commits and direct GitHub network access is unavailable.
