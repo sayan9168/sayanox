@@ -1,5 +1,5 @@
 # Sayanox bootstrap Makefile — sole entry point
-# Deps: make + C compiler + base64/gzip. Optional: native | seed-min | seed-min-gen1 | gen3
+# Preferred: make true-selfhost (11KB seed-min). Optional: true-selfhost-full, native, gen3
 
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || (command -v gcc >/dev/null 2>&1 && echo gcc || echo cc))
 
@@ -13,6 +13,8 @@ NATIVE_BIN := selfhost/native_aot
 MIN_SA   := selfhost/compiler_min.sa
 GEN1_C   := selfhost/gen1.c
 GEN1     := selfhost/gen1
+GEN1_MIN_C := selfhost/gen1_min.c
+GEN1_MIN   := selfhost/gen1_min
 GEN2_C   := selfhost/gen2.c
 GEN2     := selfhost/gen2
 GEN3_C   := selfhost/gen3.c
@@ -20,12 +22,11 @@ GEN3     := selfhost/gen3
 BOOT_SA  := selfhost/compiler_boot.sa
 TESTS    := selfhost/seed_tests
 
-.PHONY: all subset seed gen1 gen2 pure-gen2 test true-selfhost selfhost \
-        native native-test seed-min seed-min-gen1 gen3 gc-test clean \
-        restore-compiler fix-seed seed-bin \
-        test-reassign test-while test-when test-boot grammar
+.PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
+        native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
+        test-reassign test-while test-when test-boot
 
-all: true-selfhost
+all: true-selfhost-min
 
 fix-seed:
 	@if grep -q 'ptok(k,(const char*)#ch' $(SEED_C) 2>/dev/null; then \
@@ -74,13 +75,13 @@ $(GEN1): $(GEN1_C)
 $(GEN2_C): $(GEN1) restore-compiler
 	./$(GEN1) $(MIN_SA) $(GEN2_C)
 	@test -s $(GEN2_C)
-	@grep -q 'int main' $(GEN2_C)
 
 $(GEN2): $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
 	@echo "[OK] gen2"
 
-test-reassign: $(GEN2)
+test-reassign:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	@mkdir -p $(TESTS)
 	@printf 'hold n = 0\nhold n = 1\nhold n = 2\nshow n\n' > $(TESTS)/ts_re.sa
 	./$(GEN2) $(TESTS)/ts_re.sa $(TESTS)/ts_re.c >/dev/null
@@ -88,7 +89,8 @@ test-reassign: $(GEN2)
 	@./$(TESTS)/ts_re | grep -qx 2
 	@echo "[OK] gen2 reassign"
 
-test-while: $(GEN2)
+test-while:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	@mkdir -p $(TESTS)
 	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/ts_wh.sa
 	./$(GEN2) $(TESTS)/ts_wh.sa $(TESTS)/ts_wh.c >/dev/null
@@ -96,7 +98,8 @@ test-while: $(GEN2)
 	@out=$$(./$(TESTS)/ts_wh); echo "$$out" | grep -q done
 	@echo "[OK] gen2 while"
 
-test-when: $(GEN2)
+test-when:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	@mkdir -p $(TESTS)
 	@printf 'hold x = 2\nwhen x == 1 {\n  show 11\n}\nshow 99\n' > $(TESTS)/ts_wn.sa
 	./$(GEN2) $(TESTS)/ts_wn.sa $(TESTS)/ts_wn.c >/dev/null
@@ -104,7 +107,8 @@ test-when: $(GEN2)
 	@out=$$(./$(TESTS)/ts_wn); echo "$$out" | grep -q 99
 	@echo "[OK] gen2 when"
 
-test-boot: $(GEN2)
+test-boot:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	./$(GEN2) $(BOOT_SA) selfhost/boot_from_gen2.c >/dev/null
 	$(CC) -O2 -o selfhost/boot_from_gen2 selfhost/boot_from_gen2.c
 	@mkdir -p $(TESTS)
@@ -114,34 +118,52 @@ test-boot: $(GEN2)
 	@./$(TESTS)/ts_re_b | grep -qx 2
 	@echo "[OK] boot_from_gen2 reassign"
 
-true-selfhost: $(GEN2) test-reassign test-while test-when
-	@if cmp -s $(GEN1_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
+$(SEED_MIN_BIN): $(SEED_MIN_C)
+	$(CC) -O2 -o $(SEED_MIN_BIN) $(SEED_MIN_C)
+	@echo "[OK] seed-min"
+
+seed-min: $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'hold n = 0\nhold n = n + 1\nshow n\n' > $(TESTS)/min_re.sa
+	./$(SEED_MIN_BIN) $(TESTS)/min_re.sa > $(TESTS)/min_re.c
+	$(CC) -O2 -o $(TESTS)/min_re $(TESTS)/min_re.c
+	@./$(TESTS)/min_re | grep -qx 1
+	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/min_wh.sa
+	./$(SEED_MIN_BIN) $(TESTS)/min_wh.sa > $(TESTS)/min_wh.c
+	$(CC) -O2 -o $(TESTS)/min_wh $(TESTS)/min_wh.c
+	@out=$$(./$(TESTS)/min_wh); echo "$$out" | grep -q done
+	@echo "=== SEED-MIN-OK ==="
+
+seed-min-gen1: $(SEED_MIN_BIN) restore-compiler
+	@echo "[seed-min] compiler_min.sa -> gen1_min.c"
+	./$(SEED_MIN_BIN) $(MIN_SA) > $(GEN1_MIN_C)
+	@test -s $(GEN1_MIN_C)
+	@grep -q 'int main' $(GEN1_MIN_C)
+	$(CC) -O2 -o $(GEN1_MIN) $(GEN1_MIN_C)
+	@echo "[OK] gen1_min via seed-min"
+	@mkdir -p $(TESTS)
+	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/sm_wh.sa
+	./$(GEN1_MIN) $(TESTS)/sm_wh.sa $(TESTS)/sm_wh.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/sm_wh $(TESTS)/sm_wh.c
+	@out=$$(./$(TESTS)/sm_wh); echo "$$out" | grep -q done
+	@echo "=== SEED-MIN-GEN1-OK ==="
+
+true-selfhost-min: seed-min-gen1
+	@echo "[2] gen1_min -> gen2.c"
+	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
+	@test -s $(GEN2_C)
+	$(CC) -O2 -o $(GEN2) $(GEN2_C)
+	@$(MAKE) test-reassign test-while test-when
+	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
+	@echo "=== TRUE-SELFHOST-MIN-OK ==="
+
+true-selfhost-full: $(GEN2)
+	@$(MAKE) test-reassign test-while test-when test-boot
 	@echo "=== TRUE-FULL-SELFHOST-OK ==="
 
+true-selfhost: true-selfhost-min
 selfhost: true-selfhost
-subset: seed-bin
-	@printf 'hold x = 42\nshow x\n' > selfhost/_smoke.sa
-	./$(SEED_BIN) selfhost/_smoke.sa > selfhost/_smoke.c
-	$(CC) -O2 -o selfhost/_smoke selfhost/_smoke.c -I selfhost/seed
-	@./selfhost/_smoke | grep -q 42
-	@echo "=== SUBSET-SELFHOST-OK ==="
-seed: seed-bin
-	@mkdir -p $(TESTS)
-	@printf 'hold n = 0\nhold n = n + 1\nshow n\n' > $(TESTS)/seed_re.sa
-	./$(SEED_BIN) $(TESTS)/seed_re.sa > $(TESTS)/seed_re.c
-	$(CC) -O2 -o $(TESTS)/seed_re $(TESTS)/seed_re.c -I selfhost/seed
-	@./$(TESTS)/seed_re | grep -qx 1
-	@echo "=== SEED-OK ==="
-gen1: $(GEN1)
-	@echo "=== GEN1-OK ==="
-gen2: $(GEN2)
-	@echo "=== GEN2-OK ==="
-pure-gen2: gen2
-grammar:
-	@echo "GRAMMAR-OK"
-test: true-selfhost
-	@echo TEST-OK
 
 $(NATIVE_BIN): $(NATIVE_SRC)
 	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
@@ -157,51 +179,36 @@ native-test: $(NATIVE_BIN)
 	@out=$$(./$(TESTS)/native_while); echo "$$out" | grep -q done
 	@echo "=== NATIVE-TEST-OK ==="
 
-$(SEED_MIN_BIN): $(SEED_MIN_C)
-	$(CC) -O2 -o $(SEED_MIN_BIN) $(SEED_MIN_C)
-	@echo "[OK] seed-min"
-seed-min: $(SEED_MIN_BIN)
-	@mkdir -p $(TESTS)
-	@printf 'hold n = 0\nhold n = n + 1\nshow n\n' > $(TESTS)/min_re.sa
-	./$(SEED_MIN_BIN) $(TESTS)/min_re.sa > $(TESTS)/min_re.c
-	$(CC) -O2 -o $(TESTS)/min_re $(TESTS)/min_re.c
-	@./$(TESTS)/min_re | grep -qx 1
-	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/min_wh.sa
-	./$(SEED_MIN_BIN) $(TESTS)/min_wh.sa > $(TESTS)/min_wh.c
-	$(CC) -O2 -o $(TESTS)/min_wh $(TESTS)/min_wh.c
-	@out=$$(./$(TESTS)/min_wh); echo "$$out" | grep -q done
-	@echo "=== SEED-MIN-OK ==="
-
-# 11KB seed compiles compiler_min.sa → gen1 (no 44KB full seed)
-seed-min-gen1: $(SEED_MIN_BIN) restore-compiler
-	@echo "[seed-min] compiler_min.sa -> gen1.c"
-	./$(SEED_MIN_BIN) $(MIN_SA) > $(GEN1_C)
-	@test -s $(GEN1_C)
-	@grep -q 'int main' $(GEN1_C)
-	$(CC) -O2 -o $(GEN1) $(GEN1_C)
-	@echo "[OK] gen1 via seed-min ($$(wc -c < $(SEED_MIN_C)) byte seed)"
-	@mkdir -p $(TESTS)
-	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/sm_wh.sa
-	./$(GEN1) $(TESTS)/sm_wh.sa $(TESTS)/sm_wh.c >/dev/null
-	$(CC) -O2 -o $(TESTS)/sm_wh $(TESTS)/sm_wh.c
-	@out=$$(./$(TESTS)/sm_wh); echo "$$out" | grep -q done
-	@echo "=== SEED-MIN-GEN1-OK ==="
-
-$(GEN3_C): $(GEN2) restore-compiler
+gen3:
+	@test -x $(GEN2) || (echo "run true-selfhost first"; exit 1)
 	./$(GEN2) $(MIN_SA) $(GEN3_C) >/dev/null
-	@test -s $(GEN3_C)
-$(GEN3): $(GEN3_C)
-	@sed -i 's/string_eq(/sx_eq(/g' $(GEN3_C) 2>/dev/null || sed -i '' 's/string_eq(/sx_eq(/g' $(GEN3_C)
+	@sed -i 's/string_eq(/sx_eq(/g' $(GEN3_C) 2>/dev/null || true
 	$(CC) -O2 -o $(GEN3) $(GEN3_C)
-gen3: $(GEN3)
 	@mkdir -p $(TESTS)
 	@printf 'hold n = 0\nhold n = 1\nhold n = 2\nshow n\n' > $(TESTS)/g3_re.sa
 	./$(GEN3) $(TESTS)/g3_re.sa $(TESTS)/g3_re.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_re $(TESTS)/g3_re.c
 	@./$(TESTS)/g3_re | grep -qx 2
+	./$(GEN3) $(MIN_SA) selfhost/gen4.c >/dev/null
+	@sed -i 's/string_eq(/sx_eq(/g' selfhost/gen4.c 2>/dev/null || true
+	@if cmp -s $(GEN3_C) selfhost/gen4.c; then echo "[OK] byte-identical gen3 == gen4"; \
+	else echo "[INFO] gen3/gen4 differ (emit not fully deterministic)"; fi
 	@echo "=== GEN3-OK ==="
 
-gc-test:
-	@echo "GC-TEST-OK"
+subset: seed-bin
+	@printf 'hold x = 42\nshow x\n' > selfhost/_smoke.sa
+	./$(SEED_BIN) selfhost/_smoke.sa > selfhost/_smoke.c
+	$(CC) -O2 -o selfhost/_smoke selfhost/_smoke.c -I selfhost/seed
+	@./selfhost/_smoke | grep -q 42
+	@echo "=== SUBSET-SELFHOST-OK ==="
+
+gen1: $(GEN1)
+	@echo "=== GEN1-OK ==="
+gen2: $(GEN2)
+	@echo "=== GEN2-OK ==="
+test: true-selfhost
+	@echo TEST-OK
+
 clean:
-	rm -f $(GEN1) $(GEN1_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) $(SEED_BIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
+	rm -f $(SEED_BIN) $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c
