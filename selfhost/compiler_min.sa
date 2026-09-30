@@ -1265,7 +1265,7 @@ while running == 1 {
         hold body = concat(body, "if (")
         hold whens = whens + 1
       }
-      hold body = concat(body, ctrim)
+      hold body = concat(body, crepl)
       hold body = concat(body, ") {")
       hold body = concat(body, nl)
       hold depth = depth + 1
@@ -1390,8 +1390,3 @@ hold out = concat(out, "}\n")
 hold w = write_file(out_path, out)
 
 // counters go to stdout (they are the compiler's own output, not the target's)
-show holds
-show shows
-show whiles
-show whens
-show 1

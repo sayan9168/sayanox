@@ -56,6 +56,8 @@ restore-compiler:
 	@test -s $(MIN_SA)
 	@grep -q 'read_file' $(MIN_SA)
 	@grep -q 'arg_count' $(MIN_SA)
+	@sed -i '/^[[:space:]]*show holds[[:space:]]*$/d; /^[[:space:]]*show shows[[:space:]]*$/d; /^[[:space:]]*show whiles[[:space:]]*$/d; /^[[:space:]]*show whens[[:space:]]*$/d; /^[[:space:]]*show 1[[:space:]]*$/d' $(MIN_SA) 2>/dev/null || true
+	@sed -i 's/concat(body, ctrim)/concat(body, crepl)/g' $(MIN_SA) 2>/dev/null || true
 	@echo "[OK] restore-compiler"
 seed-bin: fix-seed
 	$(CC) -O2 -o $(SEED_BIN) $(SEED_C) -I selfhost/seed

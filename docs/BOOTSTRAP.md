@@ -1,26 +1,26 @@
 # Sayanox bootstrap
 
-**Canonical entry (no bash scripts):**
+Canonical entry (no bash/Python critical path):
 
-```bash
-make true-selfhost
-```
+    make true-selfhost
 
-This uses the **11KB** `sxc_seed_min.c` to compile `compiler_min.sa` → gen1_min → gen2.
+This is the pure-min seed bootstrap: sxc_seed_min.c -> gen1_min -> gen2.
 
-### Optional paths
+Verification commands:
+
+    make true-selfhost    # TRUE-SELFHOST-MIN-OK
+    make native-test      # NATIVE-TEST-OK
+    make gen3             # GEN3-OK; byte identity is reported, not required
+
+Optional paths:
 
 | Command | Role |
-|---------|------|
-| `make true-selfhost-full` | 44KB `sxc_seed.c` path (legacy full seed) |
-| `make seed-min-gen1` | Only build gen1 via min seed |
-| `make gen3` | gen2 recompiles compiler_min; gen3→gen4 check |
-| `make native-test` | Real x86-64 ELF, no second C compile for the program |
+|---|---|
+| make true-selfhost-full | Optional 44KB full C seed path |
+| make seed-min-gen1 | Build gen1 from the min seed |
+| make gen3 | Behavioural gen3 tests; gen3->gen4 byte identity is informational only |
+| make native-test | Real x86-64 AOT executable tests |
 
-### Why a C seed still exists
+The repository does not claim full-language self-hosting here. The canonical path covers the pure-min bootstrap only.
 
-A machine needs one executable compiler before it can run the Sayanox compiler. After gen1 exists, day-to-day work does not need the full 44KB seed.
-
-Python and bash entry scripts are **not** part of the critical path.
-
-See `docs/STATUS.md` for verified markers.
+A C seed remains necessary as the initial executable compiler.
