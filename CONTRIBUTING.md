@@ -20,14 +20,13 @@ The intended pipeline is:
 source -> lexer -> parser -> AST -> semantic analysis -> checked AST -> IR -> lowering -> backend
 ```
 
-The tiny Stage-2 host is bootstrap infrastructure, not the long-term language implementation.
+The C seed exists only to build gen1; preferred path is `make true-selfhost` (seed-min).
 
 ## Local workflow
 
 ```sh
-make stage2
-bash selfhost/bootstrap_production.sh
-./selfhost/sx examples/hello.sa --run
+make true-selfhost
+make native-test
 ```
 
 For changes to compiler stages, also inspect the generated output and run the repository CI checks.
@@ -43,7 +42,7 @@ For changes to compiler stages, also inspect the generated output and run the re
 7. Update the active backend.
 8. Add a small `.sa` example and regression coverage.
 9. Update `docs/SYNTAX.md` and `docs/TUTORIAL.md` when user-visible syntax changes.
-10. Verify the bootstrap path from Stage-2.
+10. Verify with `make true-selfhost`.
 
 ## Standard library changes
 
