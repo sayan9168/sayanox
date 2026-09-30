@@ -26,7 +26,7 @@ static int id(char c){ return isalnum((unsigned char)c)||c=='_'; }
 static int mkw(const char**p,const char*k){ size_t n=strlen(k); if(strncmp(*p,k,n)||id((*p)[n])) return 0; *p+=n; return 1; }
 static int pid(const char**p,char*b,size_t c){ sw(p); if(!id0(**p)) return 0; size_t i=0; while(id(**p)&&i+1<c) b[i++]=*(*p)++; b[i]=0; return 1; }
 static int pint(const char**p,long*o){ sw(p); if(!isdigit((unsigned char)**p)) return 0; long v=0; while(isdigit((unsigned char)**p)) v=v*10+(*(*p)++-'0'); *o=v; return 1; }
-static int slot(const char*n){ unsigned char c=(unsigned char)n[0]; if(c>='A'&&c<='Z') c=(unsigned char)(c-'A'+'a'); return (c>='a'&&c<='z')?(c-'a')%8:0; }
+static int slot(const char*n){ unsigned char c=(unsigned char)n[0]; if(c>='A'&&c<='Z') c=(unsigned char)(c-'A'+'a'); return (c>='a'&&c<='z')?(c-'a')%26:0; }
 
 static void emit_load_slot(int s){ eb(0x48); eb(0x8b); eb(0x45); eb((unsigned char)(0x100-8*(s+1))); }
 static void emit_store_slot(int s){ eb(0x48); eb(0x89); eb(0x45); eb((unsigned char)(0x100-8*(s+1))); }
