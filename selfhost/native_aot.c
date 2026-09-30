@@ -28,8 +28,8 @@ static int pid(const char**p,char*b,size_t c){ sw(p); if(!id0(**p)) return 0; si
 static int pint(const char**p,long*o){ sw(p); if(!isdigit((unsigned char)**p)) return 0; long v=0; while(isdigit((unsigned char)**p)) v=v*10+(*(*p)++-'0'); *o=v; return 1; }
 static int slot(const char*n){ unsigned char c=(unsigned char)n[0]; if(c>='A'&&c<='Z') c=(unsigned char)(c-'A'+'a'); return (c>='a'&&c<='z')?(c-'a')%26:0; }
 
-static void emit_load_slot(int s){ eb(0x48); eb(0x8b); eb(0x85); eu32((uint32_t)(-8*(s+1))); }
-static void emit_store_slot(int s){ eb(0x48); eb(0x89); eb(0x85); eu32((uint32_t)(-8*(s+1))); }
+static void emit_load_slot(int s){ int d=-8*(s+1); if(d>=-128){eb(0x48);eb(0x8b);eb(0x45);eb((unsigned char)d);}else{eb(0x48);eb(0x8b);eb(0x85);eu32((uint32_t)d);} }
+static void emit_store_slot(int s){ int d=-8*(s+1); if(d>=-128){eb(0x48);eb(0x89);eb(0x45);eb((unsigned char)d);}else{eb(0x48);eb(0x89);eb(0x85);eu32((uint32_t)d);} }
 static void emit_mov_imm(long v){ eb(0x48); eb(0xb8); eu64((uint64_t)(int64_t)v); }
 
 static size_t itoa_off, wstr_off;
@@ -147,48 +147,49 @@ static void eblk(const char**p,int*e){
 }
 
 static void emit_itoa_write(void){
+  /* rax = signed value; write decimal + newline to fd 1 */
   itoa_off=cn;
-  eb(0x48); eb(0x83); eb(0xec); eb(0x30);
-  eb(0x48); eb(0x8d); eb(0x74); eb(0x24); eb(0x2f);
+  eb(0x48); eb(0x89); eb(0xc1); /* mov rcx, rax */
+  eb(0x48); eb(0x83); eb(0xec); eb(0x28);
+  eb(0x48); eb(0x8d); eb(0x74); eb(0x24); eb(0x27);
   eb(0xc6); eb(0x06); eb(0x0a);
-  eb(0x48); eb(0x89); eb(0xc8);
-  eb(0x45); eb(0x31); eb(0xc0);
-  eb(0x48); eb(0x85); eb(0xc0);
+  eb(0x49); eb(0xc7); eb(0xc0); eu32(0);
+  eb(0x48); eb(0x85); eb(0xc9);
   eb(0x0f); eb(0x89); size_t jns=cn; eu32(0);
-  eb(0x48); eb(0xf7); eb(0xd8);
-  eb(0x41); eb(0xc7); eb(0xc0); eu32(1);
-  size_t positive=cn; erel32(jns,positive);
-  eb(0x48); eb(0x85); eb(0xc0);
-  eb(0x0f); eb(0x84); size_t jz=cn; eu32(0);
+  eb(0x49); eb(0xc7); eb(0xc0); eu32(1);
+  eb(0x48); eb(0xf7); eb(0xd9);
+  size_t pos=cn; erel32(jns,pos);
+  eb(0x48); eb(0x85); eb(0xc9);
+  eb(0x0f); eb(0x85); size_t jnz_dig=cn; eu32(0);
+  eb(0x48); eb(0xff); eb(0xce);
+  eb(0xc6); eb(0x06); eb(0x30);
+  eb(0xe9); size_t jmp_w=cn; eu32(0);
+  size_t dig=cn; erel32(jnz_dig,dig);
   size_t loop=cn;
   eb(0x48); eb(0x31); eb(0xd2);
-  eb(0x41); eb(0xb9); eu32(10);
+  eb(0x48); eb(0x89); eb(0xc8);
+  eb(0x49); eb(0xc7); eb(0xc1); eu32(10);
   eb(0x49); eb(0xf7); eb(0xf1);
+  eb(0x48); eb(0x89); eb(0xc1);
   eb(0x80); eb(0xc2); eb(0x30);
   eb(0x48); eb(0xff); eb(0xce);
   eb(0x88); eb(0x16);
-  eb(0x48); eb(0x85); eb(0xc0);
-  eb(0x0f); eb(0x85); size_t jnz=cn; eu32(0);
-  erel32(jnz,loop);
-  size_t sign_or_zero=cn; erel32(jz,sign_or_zero);
-  eb(0x48); eb(0x85); eb(0xc0);
-  eb(0x0f); eb(0x85); size_t jnz_zero=cn; eu32(0);
-  eb(0x48); eb(0xff); eb(0xce);
-  eb(0xc6); eb(0x06); eb(0x30);
-  size_t after_zero=cn; erel32(jnz_zero,after_zero);
-  eb(0x45); eb(0x85); eb(0xc0);
-  eb(0x0f); eb(0x84); size_t jz_sign=cn; eu32(0);
+  eb(0x48); eb(0x85); eb(0xc9);
+  eb(0x0f); eb(0x85); size_t jnz=cn; eu32(0); erel32(jnz,loop);
+  eb(0x4d); eb(0x85); eb(0xc0);
+  eb(0x0f); eb(0x84); size_t jz_s=cn; eu32(0);
   eb(0x48); eb(0xff); eb(0xce);
   eb(0xc6); eb(0x06); eb(0x2d);
-  size_t write=cn; erel32(jz_sign,write);
-  eb(0x48); eb(0x8d); eb(0x54); eb(0x24); eb(0x30);
+  size_t wr=cn; erel32(jz_s,wr); erel32(jmp_w,wr);
+  eb(0x48); eb(0x8d); eb(0x54); eb(0x24); eb(0x28);
   eb(0x48); eb(0x29); eb(0xf2);
   eb(0x48); eb(0xc7); eb(0xc0); eu32(1);
   eb(0x48); eb(0xc7); eb(0xc7); eu32(1);
   eb(0x0f); eb(0x05);
-  eb(0x48); eb(0x83); eb(0xc4); eb(0x30);
+  eb(0x48); eb(0x83); eb(0xc4); eb(0x28);
   eb(0xc3);
 }
+
 static void emit_wstr(void){
   wstr_off=cn;
   eb(0x50); eb(0x51); eb(0x52); eb(0x56); eb(0x57);
