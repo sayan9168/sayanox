@@ -179,6 +179,19 @@ native-test: $(NATIVE_BIN)
 	@out=$$(./$(TESTS)/native_while); echo "$$out" | grep -q done
 	@echo "=== NATIVE-TEST-OK ==="
 
+grammar: $(GEN2)
+	@mkdir -p $(TESTS)
+	@printf 'hold n = 0\nwhile n < 3 {\n  hold n = n + 1\n}\nwhen n == 3 {\n  show "grammar-ok"\n} otherwise {\n  show "grammar-fail"\n}\n' > $(TESTS)/grammar.sa
+	./$(GEN2) $(TESTS)/grammar.sa $(TESTS)/grammar.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/grammar $(TESTS)/grammar.c
+	@./$(TESTS)/grammar | grep -qx 'grammar-ok'
+	@echo "=== GRAMMAR-OK ==="
+
+gc-test:
+	$(CC) -O2 -o $(TESTS)/rc_runtime_stress selfhost/rc_runtime_stress.c
+	@./$(TESTS)/rc_runtime_stress | grep -qx 'gc-rc-ok'
+	@echo "=== GC-RC-OK ==="
+
 gen3:
 	@test -x $(GEN2) || (echo "run true-selfhost first"; exit 1)
 	./$(GEN2) $(MIN_SA) $(GEN3_C) >/dev/null
