@@ -822,7 +822,7 @@ while running == 1 {
       // string literal
       when c1 == 34 {
         hold pos = pos + 1
-        hold rhs = "\""
+        hold rhs = q
         hold rn = 1
         while rn == 1 {
           when pos >= n {
@@ -831,7 +831,7 @@ while running == 1 {
             hold cq = sx_index(source,pos)
             when cq == 34 {
               hold pos = pos + 1
-              hold rhs = concat(rhs, "\"")
+              hold rhs = concat(rhs, q)
               hold rn = 0
             } otherwise {
               when cq == 92 {
