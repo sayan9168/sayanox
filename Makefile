@@ -52,7 +52,7 @@ fix-seed:
 
 restore-compiler:
 	@# compiler_min.sa is the canonical checked-in bootstrap source.
-	@# Obsolete split gzip/base64 parts are never reconstructed in CI.
+	@# Checked-in gzip/base64 parts are complete; sed below protects older checkouts.
 	@test -s $(MIN_SA)
 	@grep -q 'read_file' $(MIN_SA)
 	@grep -q 'arg_count' $(MIN_SA)
@@ -173,6 +173,9 @@ native-test: $(NATIVE_BIN)
 	@printf 'hold x = 40\nhold x = x + 2\nshow x\n' > examples/native_hello.sa
 	./$(NATIVE_BIN) examples/native_hello.sa $(TESTS)/native_hello
 	@./$(TESTS)/native_hello | grep -qx 42
+	@printf 'hold z = -42\nshow z\n' > $(TESTS)/native_negative.sa
+	./$(NATIVE_BIN) $(TESTS)/native_negative.sa $(TESTS)/native_negative
+	@./$(TESTS)/native_negative | grep -qx -- -42
 	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/native_while.sa
 	./$(NATIVE_BIN) $(TESTS)/native_while.sa $(TESTS)/native_while
 	@out=$$(./$(TESTS)/native_while); echo "$$out" | grep -q done
@@ -201,6 +204,14 @@ gen3:
 	./$(GEN3) $(TESTS)/g3_re.sa $(TESTS)/g3_re.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_re $(TESTS)/g3_re.c
 	@./$(TESTS)/g3_re | grep -qx 2
+	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/g3_wh.sa
+	./$(GEN3) $(TESTS)/g3_wh.sa $(TESTS)/g3_wh.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/g3_wh $(TESTS)/g3_wh.c
+	@out=$(./$(TESTS)/g3_wh); echo "$out" | grep -q done
+	@printf 'hold x = 2\nwhen x == 1 {\n  show 11\n}\nshow 99\n' > $(TESTS)/g3_wn.sa
+	./$(GEN3) $(TESTS)/g3_wn.sa $(TESTS)/g3_wn.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/g3_wn $(TESTS)/g3_wn.c
+	@out=$(./$(TESTS)/g3_wn); echo "$out" | grep -qx 99
 	./$(GEN3) $(MIN_SA) selfhost/gen4.c >/dev/null
 	@sed -i 's/string_eq(/sx_eq(/g' selfhost/gen4.c 2>/dev/null || true
 	@if cmp -s $(GEN3_C) selfhost/gen4.c; then echo "[OK] byte-identical gen3 == gen4"; \
