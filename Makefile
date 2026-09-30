@@ -51,15 +51,13 @@ fix-seed:
 	@echo "[OK] fix-seed"
 
 restore-compiler:
-	@if [ -f selfhost/compiler_min.sa.gz.b64.p0 ]; then \
-	  if [ ! -s $(MIN_SA) ] || ! grep -q 'decls_c' $(MIN_SA) 2>/dev/null; then \
-	    cat selfhost/compiler_min.sa.gz.b64.p* | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA); \
-	  fi; \
-	fi
+	@# compiler_min.sa is the canonical checked-in bootstrap source.
+	@# Obsolete split gzip/base64 parts are never reconstructed in CI.
 	@test -s $(MIN_SA)
 	@grep -q 'decls_c' $(MIN_SA)
+	@grep -q 'read_file' $(MIN_SA)
+	@grep -q 'arg_count' $(MIN_SA)
 	@echo "[OK] restore-compiler"
-
 seed-bin: fix-seed
 	$(CC) -O2 -o $(SEED_BIN) $(SEED_C) -I selfhost/seed
 	@echo "[OK] seed-bin"
