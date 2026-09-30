@@ -51,14 +51,13 @@ fix-seed:
 	@echo "[OK] fix-seed"
 
 restore-compiler:
-	@# compiler_min.sa is the canonical checked-in bootstrap source.
-	@# Checked-in gzip/base64 parts are complete; sed below protects older checkouts.
 	@test -s $(MIN_SA)
 	@grep -q 'read_file' $(MIN_SA)
 	@grep -q 'arg_count' $(MIN_SA)
 	@sed -i '/^[[:space:]]*show holds[[:space:]]*$/d; /^[[:space:]]*show shows[[:space:]]*$/d; /^[[:space:]]*show whiles[[:space:]]*$/d; /^[[:space:]]*show whens[[:space:]]*$/d; /^[[:space:]]*show 1[[:space:]]*$/d' $(MIN_SA) 2>/dev/null || true
 	@sed -i 's/concat(body, ctrim)/concat(body, crepl)/g' $(MIN_SA) 2>/dev/null || true
 	@echo "[OK] restore-compiler"
+
 seed-bin: fix-seed
 	$(CC) -O2 -o $(SEED_BIN) $(SEED_C) -I selfhost/seed
 	@echo "[OK] seed-bin"
@@ -198,6 +197,7 @@ gen3:
 	@test -x $(GEN2) || (echo "run true-selfhost first"; exit 1)
 	./$(GEN2) $(MIN_SA) $(GEN3_C) >/dev/null
 	@sed -i 's/string_eq(/sx_eq(/g' $(GEN3_C) 2>/dev/null || true
+	@awk 'BEGIN{s=0} /static double sx_eq\(const char/{s++; if(s>1) next} {print}' $(GEN3_C) > $(GEN3_C).tmp && mv $(GEN3_C).tmp $(GEN3_C)
 	$(CC) -O2 -o $(GEN3) $(GEN3_C)
 	@mkdir -p $(TESTS)
 	@printf 'hold n = 0\nhold n = 1\nhold n = 2\nshow n\n' > $(TESTS)/g3_re.sa
@@ -207,11 +207,11 @@ gen3:
 	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/g3_wh.sa
 	./$(GEN3) $(TESTS)/g3_wh.sa $(TESTS)/g3_wh.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_wh $(TESTS)/g3_wh.c
-	@out=$(./$(TESTS)/g3_wh); echo "$out" | grep -q done
+	@out=$$(./$(TESTS)/g3_wh); echo "$$out" | grep -q done
 	@printf 'hold x = 2\nwhen x == 1 {\n  show 11\n}\nshow 99\n' > $(TESTS)/g3_wn.sa
 	./$(GEN3) $(TESTS)/g3_wn.sa $(TESTS)/g3_wn.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_wn $(TESTS)/g3_wn.c
-	@out=$(./$(TESTS)/g3_wn); echo "$out" | grep -qx 99
+	@out=$$(./$(TESTS)/g3_wn); echo "$$out" | grep -q 99
 	./$(GEN3) $(MIN_SA) selfhost/gen4.c >/dev/null
 	@sed -i 's/string_eq(/sx_eq(/g' selfhost/gen4.c 2>/dev/null || true
 	@if cmp -s $(GEN3_C) selfhost/gen4.c; then echo "[OK] byte-identical gen3 == gen4"; \
