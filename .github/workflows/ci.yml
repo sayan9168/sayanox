@@ -42,7 +42,10 @@ jobs:
       - name: Full test suite
         run: make test
 
-      - name: Native / GC placeholders
+      - name: Gen3 fixed-point (behavioural)
+        run: make gen3
+
+      - name: Native + GC
         run: |
           make native-test
           make gc-test
