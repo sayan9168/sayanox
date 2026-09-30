@@ -28,8 +28,8 @@ static int pid(const char**p,char*b,size_t c){ sw(p); if(!id0(**p)) return 0; si
 static int pint(const char**p,long*o){ sw(p); if(!isdigit((unsigned char)**p)) return 0; long v=0; while(isdigit((unsigned char)**p)) v=v*10+(*(*p)++-'0'); *o=v; return 1; }
 static int slot(const char*n){ unsigned char c=(unsigned char)n[0]; if(c>='A'&&c<='Z') c=(unsigned char)(c-'A'+'a'); return (c>='a'&&c<='z')?(c-'a')%26:0; }
 
-static void emit_load_slot(int s){ eb(0x48); eb(0x8b); eb(0x45); eb((unsigned char)(0x100-8*(s+1))); }
-static void emit_store_slot(int s){ eb(0x48); eb(0x89); eb(0x45); eb((unsigned char)(0x100-8*(s+1))); }
+static void emit_load_slot(int s){ eb(0x48); eb(0x8b); eb(0x85); eu32((uint32_t)(-8*(s+1))); }
+static void emit_store_slot(int s){ eb(0x48); eb(0x89); eb(0x85); eu32((uint32_t)(-8*(s+1))); }
 static void emit_mov_imm(long v){ eb(0x48); eb(0xb8); eu64((uint64_t)(int64_t)v); }
 
 static size_t itoa_off, wstr_off;
