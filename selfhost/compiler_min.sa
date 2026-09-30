@@ -111,6 +111,15 @@ hold j = 0
 hold ok = 0
 hold aa = 0
 hold bb = 0
+hold pdepth = 0
+hold argv_c = ""
+hold ai = 0
+hold al = 0
+hold arun = 0
+hold ac = 0
+hold islet = 0
+hold atok = ""
+hold tokrun = 0
 
 // =====================================================================
 // main scan loop
@@ -259,7 +268,7 @@ while running == 1 {
       // RHS: string literal
       when c1 == 34 {
         hold pos = pos + 1
-        hold rhs = "\""
+        hold rhs = q
         hold rn = 1
         while rn == 1 {
           when pos >= n {
@@ -268,7 +277,7 @@ while running == 1 {
             hold cq = sx_index(source,pos)
             when cq == 34 {
               hold pos = pos + 1
-              hold rhs = concat(rhs, "\"")
+              hold rhs = concat(rhs, q)
               hold rn = 0
             } otherwise {
               when cq == 92 {
@@ -661,7 +670,7 @@ while running == 1 {
             when c3 == 34 {
               hold oq = 1
               hold pos = pos + 1
-              hold opnd = "\""
+              hold opnd = q
               hold rn = 1
               while rn == 1 {
                 when pos >= n {
@@ -670,7 +679,7 @@ while running == 1 {
                   hold cq = sx_index(source,pos)
                   when cq == 34 {
                     hold pos = pos + 1
-                    hold opnd = concat(opnd, "\"")
+                    hold opnd = concat(opnd, q)
                     hold rn = 0
                   } otherwise {
                     when cq == 92 {
@@ -1364,6 +1373,7 @@ when rt == 1 {
   hold out = concat(out, "static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return \"\"; fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET); char *b=(char*)malloc((size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f); return b; }\n")
   hold out = concat(out, "static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0.0; fputs(s,f); return fclose(f)==0?1.0:0.0; }\n")
   hold out = concat(out, "static double sx_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
+  hold out = concat(out, "static double string_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
   hold out = concat(out, "\n")
 } otherwise {
   hold out = concat(out, "#include <stdio.h>\n\n")
