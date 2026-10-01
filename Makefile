@@ -58,7 +58,7 @@ restore-compiler:
 	@test -s $(MIN_SA)
 	@grep -q 'read_file' $(MIN_SA)
 	@grep -q 'arg_count' $(MIN_SA)
-	@grep -q 'hold crepl' $(MIN_SA) || (echo "FAIL: compiler_min missing crepl"; exit 1)
+	@grep -q 'sx_eq' $(MIN_SA) || (echo "FAIL: compiler_min missing sx_eq"; exit 1)
 	@echo "[OK] restore-compiler ($$(wc -c < $(MIN_SA)) bytes, offline, no Python)"
 
 seed-bin: fix-seed
@@ -199,8 +199,7 @@ gc-test:
 gen3:
 	@test -x $(GEN2) || (echo "run true-selfhost first"; exit 1)
 	./$(GEN2) $(MIN_SA) $(GEN3_C) >/dev/null
-	@sed -i 's/string_eq(/sx_eq(/g' $(GEN3_C) 2>/dev/null || true
-	@awk 'BEGIN{s=0} /static double sx_eq\(const char/{s++; if(s>1) next} {print}' $(GEN3_C) > $(GEN3_C).tmp && mv $(GEN3_C).tmp $(GEN3_C)
+	@test -s $(GEN3_C)
 	$(CC) -O2 -o $(GEN3) $(GEN3_C)
 	@mkdir -p $(TESTS)
 	@printf 'hold n = 0\nhold n = 1\nhold n = 2\nshow n\n' > $(TESTS)/g3_re.sa
@@ -216,9 +215,8 @@ gen3:
 	$(CC) -O2 -o $(TESTS)/g3_wn $(TESTS)/g3_wn.c
 	@out=$$(./$(TESTS)/g3_wn); echo "$$out" | grep -q 99
 	./$(GEN3) $(MIN_SA) selfhost/gen4.c >/dev/null
-	@sed -i 's/string_eq(/sx_eq(/g' selfhost/gen4.c 2>/dev/null || true
 	@if cmp -s $(GEN3_C) selfhost/gen4.c; then echo "[OK] byte-identical gen3 == gen4"; \
-	else echo "[INFO] gen3/gen4 differ (emit not fully deterministic)"; fi
+	else echo "[FAIL] gen3/gen4 differ"; exit 1; fi
 	@echo "=== GEN3-OK ==="
 
 subset: seed-bin
