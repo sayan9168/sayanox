@@ -13,31 +13,24 @@ make true-selfhost
 `selfhost/compiler_min.sa` is restored **offline** from `selfhost/compiler_min_gz/*.b64`
 using only `base64` + `gzip` (shell). No Python, no curl.
 
-## CI (`.github/workflows/ci.yml`)
+## CI
 
 - `make true-selfhost`
 - `make native-test`
-- `make gen3` (requires byte-identical gen3 == gen4)
-- `make grammar` / `make gc-test`
-- `make test-fn` (Phase-1 make/give via seed-min)
+- `make gen3` (byte-identical gen3 == gen4)
+- `make test-fn` (make/give via seed-min and gen2)
 
 ## Clean-clone verified
 
 | Target | Result |
 |--------|--------|
 | `make true-selfhost` | TRUE-SELFHOST-MIN-OK |
-| `make native-test` | NATIVE-TEST-OK |
-| `make gen3` | GEN3-OK + byte-identical gen3 == gen4 |
-| `make test-fn` | TEST-FN-OK (make/give → C functions) |
+| `make gen3` | GEN3-OK + byte-identical |
+| `make test-fn` | TEST-FN-OK |
 
-## Fixed point
+## Phase-1b functions (self-host)
 
-gen2(compiler_min) produces gen3.c; gen3(compiler_min) produces gen4.c;
-`cmp gen3.c gen4.c` succeeds.
-
-## Phase-1 functions
-
-`sxc_seed_min` supports:
+Both **seed-min** and **compiler_min / gen2** support:
 
 ```sa
 make add(a, b) {
@@ -47,9 +40,8 @@ hold r = add(40, 2)
 show r
 ```
 
-Params are numeric (`double`) in Phase-1. `compiler_min.sa` still pure-min
-(no make/give yet); function programs use the seed path.
+Numeric params only in Phase-1. Fixed-point still holds with make/give in the compiler.
 
 ## Scope
 
-Pure-min bootstrap complete. Full-language self-host is phased (Phase-1 = functions in seed).
+Pure-min + functions. Next: lists (Phase-2), structs (Phase-3).
