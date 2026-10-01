@@ -1,5 +1,4 @@
-/* sxc_seed_min.c — pure-min → C seed capable of compiling compiler_min.sa
- * Smaller alternative to sxc_seed.c (~11KB vs ~44KB).
+/* sxc_seed_min.c — pure-min → C seed (hold/show/when/while/make/give)
  * Usage: sxc_seed_min in.sa > out.c
  */
 #include <ctype.h>
@@ -10,6 +9,7 @@
 static char *S; static size_t N, P;
 enum { TY_NUM=0, TY_STR=1 };
 static char *vn[512]; static int vt[512]; static int nv;
+static int in_fn;
 
 static void die(const char *m){ fprintf(stderr,"seed_min: %s at %zu\n", m, P); exit(1); }
 static void skip(void){
@@ -44,6 +44,8 @@ static void setv(const char *n, int ty){
 static int getty(const char *n){ int i=findv(n); return i<0?TY_NUM:vt[i]; }
 
 static char *expr(int *oty);
+static void stmt(void);
+static void block(void);
 
 static char *primary(int *oty){
   skip();
@@ -52,6 +54,10 @@ static char *primary(int *oty){
     P++; size_t a=P; while(P<N && S[P]!='"'){ if(S[P]=='\\' && P+1<N) P+=2; else P++; }
     size_t n=P-a; if(P<N && S[P]=='"') P++;
     char *r=malloc(n+3); r[0]='"'; memcpy(r+1,S+a,n); r[1+n]='"'; r[2+n]=0; *oty=TY_STR; return r;
+  }
+  if(P<N && (S[P]=='-'||S[P]=='+') && P+1<N && isdigit((unsigned char)S[P+1])){
+    size_t a=P; P++; while(P<N && isdigit((unsigned char)S[P])) P++;
+    size_t n=P-a; char *r=malloc(n+1); memcpy(r,S+a,n); r[n]=0; *oty=TY_NUM; return r;
   }
   if(P<N && isdigit((unsigned char)S[P])){
     size_t a=P; while(P<N && isdigit((unsigned char)S[P])) P++;
@@ -89,27 +95,40 @@ static char *primary(int *oty){
         for(int i=0;i<na;i++) o+=snprintf(buf+o,sizeof buf-o,"%s%s",i?",":"",args[i]);
         snprintf(buf+o,sizeof buf-o,")"); *oty=TY_NUM;
       }
-      for(int i=0;i<na;i++) free(args[i]); free(id);
-      return strdup(buf);
+      for(int i=0;i<na;i++) free(args[i]);
+      free(id); return strdup(buf);
     }
-    *oty=getty(id); char *r=strdup(id); free(id); return r;
+    *oty=getty(id); return id;
   }
-  die("primary"); return NULL;
+  die("primary"); return 0;
 }
+
 static char *unary(int *oty){
-  skip(); if(P<N && S[P]=='-'){ P++; char *e=unary(oty); char *r=malloc(strlen(e)+8); sprintf(r,"-(%s)",e); free(e); *oty=TY_NUM; return r; }
+  skip();
+  if(P<N && S[P]=='-'){ P++; char *e=unary(oty); char *t=malloc(strlen(e)+4); sprintf(t,"(-%s)",e); free(e); *oty=TY_NUM; return t; }
   return primary(oty);
 }
+
 static char *mul(int *oty){
   char *l=unary(oty);
-  for(;;){ skip(); if(P>=N||(S[P]!='*'&&S[P]!='/')) break; char op=S[P++]; int rt; char *r=unary(&rt);
-    char *t=malloc(strlen(l)+strlen(r)+8); sprintf(t,"(%s%c%s)",l,op,r); free(l); free(r); l=t; *oty=TY_NUM; }
+  for(;;){
+    skip(); char op=0;
+    if(P<N && (S[P]=='*'||S[P]=='/')){ op=S[P]; P++; }
+    else break;
+    int rt; char *r=unary(&rt);
+    char *t=malloc(strlen(l)+strlen(r)+8); sprintf(t,"(%s%c%s)",l,op,r); free(l); free(r); l=t; *oty=TY_NUM;
+  }
   return l;
 }
+
 static char *add(int *oty){
   char *l=mul(oty);
-  for(;;){ skip(); if(P>=N||(S[P]!='+'&&S[P]!='-')) break; char op=S[P++]; int rt; char *r=mul(&rt);
-    if(op=='+' && (*oty==TY_STR||rt==TY_STR)){
+  for(;;){
+    skip(); char op=0;
+    if(P<N && (S[P]=='+'||S[P]=='-')){ op=S[P]; P++; }
+    else break;
+    int rt; char *r=mul(&rt);
+    if(*oty==TY_STR||rt==TY_STR){
       char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"sx_cat(%s,%s)",l,r); free(l); free(r); l=t; *oty=TY_STR;
     } else {
       char *t=malloc(strlen(l)+strlen(r)+8); sprintf(t,"(%s%c%s)",l,op,r); free(l); free(r); l=t; *oty=TY_NUM;
@@ -117,8 +136,10 @@ static char *add(int *oty){
   }
   return l;
 }
-static char *cmp(int *oty){
-  char *l=add(oty); skip();
+
+static char *cmp_(int *oty){
+  char *l=add(oty);
+  skip();
   if(P+1<N && S[P]=='='&&S[P+1]=='='){ P+=2; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)==(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
   if(P+1<N && S[P]=='!'&&S[P+1]=='='){ P+=2; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)!=(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
   if(P+1<N && S[P]=='<'&&S[P+1]=='='){ P+=2; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)<=(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
@@ -127,30 +148,72 @@ static char *cmp(int *oty){
   if(P<N && S[P]=='>'){ P++; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)>(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
   return l;
 }
-static char *andexpr(int *oty){
-  char *l=cmp(oty);
-  for(;;){ skip(); if(!(P+1<N && S[P]=='&'&&S[P+1]=='&')) break; P+=2; int rt; char *r=cmp(&rt);
-    char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)&&(%s))",l,r); free(l); free(r); l=t; *oty=TY_NUM; }
-  return l;
-}
-static char *expr(int *oty){
-  char *l=andexpr(oty);
-  for(;;){ skip(); if(!(P+1<N && S[P]=='|'&&S[P+1]=='|')) break; P+=2; int rt; char *r=andexpr(&rt);
-    char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)||(%s))",l,r); free(l); free(r); l=t; *oty=TY_NUM; }
+
+static char *and_(int *oty){
+  char *l=cmp_(oty);
+  for(;;){
+    skip(); if(!(P+1<N && S[P]=='&'&&S[P+1]=='&')) break;
+    P+=2; int rt; char *r=cmp_(&rt);
+    char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)&&(%s))",l,r); free(l); free(r); l=t; *oty=TY_NUM;
+  }
   return l;
 }
 
-static void stmt(void);
+static char *expr(int *oty){
+  char *l=and_(oty);
+  for(;;){
+    skip(); if(!(P+1<N && S[P]=='|'&&S[P+1]=='|')) break;
+    P+=2; int rt; char *r=and_(&rt);
+    char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)||(%s))",l,r); free(l); free(r); l=t; *oty=TY_NUM;
+  }
+  return l;
+}
+
 static void block(void){
   skip(); eat("{");
   for(;;){ skip(); if(P>=N) die("}"); if(S[P]=='}'){ P++; return; } stmt(); }
 }
 
+static void skip_block(void){
+  skip(); if(P>=N||S[P]!='{') die("{");
+  int d=0;
+  while(P<N){
+    if(S[P]=='"'){ P++; while(P<N&&S[P]!='"'){ if(S[P]=='\\'&&P+1<N)P+=2; else P++; } if(P<N)P++; continue; }
+    if(S[P]=='{'){ d++; P++; continue; }
+    if(S[P]=='}'){ d--; P++; if(d==0) return; continue; }
+    P++;
+  }
+  die("} skip");
+}
+
 static void stmt(void){
   skip(); if(P>=N||S[P]=='}') return;
+
+  if(at("make")){
+    if(in_fn) die("nested make");
+    P+=4; free(parse_id()); skip(); eat("(");
+    for(;;){ skip(); if(P<N&&S[P]==')'){P++;break;} free(parse_id()); skip(); if(P<N&&S[P]==','){P++;continue;} }
+    skip_block();
+    return;
+  }
+
+  if(at("give")){
+    P+=4; skip();
+    int ty; char *e=expr(&ty);
+    printf("  return %s;\n", e);
+    free(e); return;
+  }
+
   if(at("hold")){
-    P+=4; char *n=parse_id(); skip(); eat("="); int ty; char *e=expr(&ty); setv(n,ty);
-    printf("  %s = %s;\n", n, e);
+    P+=4; char *n=parse_id(); skip(); eat("="); int ty; char *e=expr(&ty);
+    int i=findv(n);
+    if(i<0){
+      setv(n,ty);
+      if(ty==TY_STR) printf("  char *%s = %s;\n", n, e);
+      else printf("  double %s = %s;\n", n, e);
+    } else {
+      printf("  %s = %s;\n", n, e);
+    }
     free(n); free(e); return;
   }
   if(at("show")){
@@ -170,6 +233,48 @@ static void stmt(void){
   die("stmt");
 }
 
+static void emit_one_fn(void){
+  eat("make");
+  char *name=parse_id();
+  skip(); eat("(");
+  char *params[16]; int np=0;
+  skip();
+  if(P>=N||S[P]!=')'){
+    for(;;){
+      params[np++]=parse_id();
+      skip(); if(P<N&&S[P]==','){P++;skip();continue;} break;
+    }
+  }
+  eat(")");
+  printf("static double %s(", name);
+  for(int i=0;i<np;i++) printf("%sdouble %s", i?", ":"", params[i]);
+  printf("){\n");
+
+  int saved_nv=nv;
+  for(int i=0;i<np;i++) setv(params[i], TY_NUM);
+
+  in_fn=1;
+  skip(); eat("{");
+  for(;;){ skip(); if(P>=N) die("}"); if(S[P]=='}'){ P++; break; } stmt(); }
+  in_fn=0;
+
+  printf("  return 0;\n}\n\n");
+  while(nv>saved_nv){ free(vn[nv-1]); nv--; }
+  for(int i=0;i<np;i++) free(params[i]);
+  free(name);
+}
+
+static void emit_all_fns(void){
+  size_t save=P;
+  while(P<N){
+    skip(); if(P>=N) break;
+    if(at("make")){ emit_one_fn(); continue; }
+    if(S[P]=='"'){ P++; while(P<N&&S[P]!='"'){ if(S[P]=='\\'&&P+1<N)P+=2; else P++; } if(P<N)P++; continue; }
+    P++;
+  }
+  P=save;
+}
+
 static void preamble(void){
   puts("#include <stdio.h>");
   puts("#include <stdlib.h>");
@@ -184,13 +289,18 @@ static void preamble(void){
   puts("static char *sx_arg(int i){ return (i>=0&&i<g_argc)?g_argv[i]:\"\"; }");
   puts("static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return strdup(\"\"); fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET); char *b=malloc((size_t)n+1); size_t rd=fread(b,1,(size_t)n,f); b[rd]=0; fclose(f); return b; }");
   puts("static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0; fputs(s?s:\"\",f); fclose(f); return 1; }");
-  puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
 }
 
 static void collect(void){
   size_t save=P; nv=0;
   while(P<N){
     skip(); if(P>=N) break;
+    if(at("make")){
+      P+=4; free(parse_id()); skip(); eat("(");
+      for(;;){ skip(); if(P<N&&S[P]==')'){P++;break;} free(parse_id()); skip(); if(P<N&&S[P]==','){P++;continue;} }
+      skip_block();
+      continue;
+    }
     if(at("hold")){
       P+=4; char *id=parse_id(); skip(); if(at("=")){ P++; skip();
         int ty=TY_NUM;
@@ -222,7 +332,11 @@ int main(int argc, char **argv){
   S=malloc((size_t)n+1); N=(size_t)fread(S,1,(size_t)n,f); S[N]=0; fclose(f); P=0;
   for(int pass=0;pass<4;pass++) collect();
   P=0;
-  preamble(); decls();
+  preamble();
+  emit_all_fns();
+  puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
+  decls();
+  P=0;
   while(P<N){ skip(); if(P>=N) break; stmt(); }
   puts("  return 0;\n}");
   return 0;
