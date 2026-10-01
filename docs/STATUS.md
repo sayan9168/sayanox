@@ -8,40 +8,34 @@ Last updated: 2026-10-02
 make true-selfhost
 ```
 
-## Source restore (no Python)
+## Phase-2 lists (seed-min)
 
-`selfhost/compiler_min.sa` is restored **offline** from `selfhost/compiler_min_gz/*.b64`
-using only `base64` + `gzip` (shell). No Python, no curl.
+```sa
+hold xs = [10, 20, 30]
+show xs[0]
+hold xs = push(xs, 40)
+show len(xs)
+```
 
-## CI
+Runtime: `sx_list` + `sx_llit` / `sx_lget` / `sx_llen` / `sx_lpush`.
 
-- `make true-selfhost`
-- `make native-test`
-- `make gen3` (byte-identical gen3 == gen4)
-- `make test-fn` (make/give via seed-min and gen2)
+`make test-list` → TEST-LIST-OK.
 
-## Clean-clone verified
+Lists in **compiler_min / gen2** not yet (seed path only).
+
+## Phase-1b functions
+
+seed-min + compiler_min / gen2: `make` / `give`.
+
+## Clean-clone
 
 | Target | Result |
 |--------|--------|
-| `make true-selfhost` | TRUE-SELFHOST-MIN-OK |
-| `make gen3` | GEN3-OK + byte-identical |
-| `make test-fn` | TEST-FN-OK |
-
-## Phase-1b functions (self-host)
-
-Both **seed-min** and **compiler_min / gen2** support:
-
-```sa
-make add(a, b) {
-  give a + b
-}
-hold r = add(40, 2)
-show r
-```
-
-Numeric params only in Phase-1. Fixed-point still holds with make/give in the compiler.
+| true-selfhost | TRUE-SELFHOST-MIN-OK |
+| gen3 | byte-identical |
+| test-fn | TEST-FN-OK |
+| test-list | TEST-LIST-OK |
 
 ## Scope
 
-Pure-min + functions. Next: lists (Phase-2), structs (Phase-3).
+Pure-min + functions + lists (seed). Next: lists in compiler_min, then structs.
