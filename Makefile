@@ -51,19 +51,15 @@ fix-seed:
 	@echo "[OK] fix-seed"
 
 restore-compiler:
-	@# Offline: complete gzip-b64 parts. Else keep local crepl source. Else fetch+patch.
-	@if [ -f selfhost/compiler_min_gz/00.b64 ] && [ -f selfhost/compiler_min_gz/06.b64 ]; then \
-	  cat selfhost/compiler_min_gz/*.b64 | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA); \
-	elif [ ! -s $(MIN_SA) ] || ! grep -q 'hold crepl' $(MIN_SA) 2>/dev/null; then \
-	  echo "[restore] fetching base compiler_min.sa + applying crepl patch"; \
-	  curl -fsSL "https://raw.githubusercontent.com/sayan9168/sayanox/bd3dbf9/selfhost/compiler_min.sa" -o $(MIN_SA); \
-	  python3 selfhost/patch_crepl.py $(MIN_SA); \
-	fi
+	@# Pure offline: decode selfhost/compiler_min_gz/*.b64 (gzip+base64). No Python.
+	@test -f selfhost/compiler_min_gz/00.b64 -a -f selfhost/compiler_min_gz/06.b64 || \
+	  (echo "FAIL: missing selfhost/compiler_min_gz/00.b64..06.b64"; exit 1)
+	@cat selfhost/compiler_min_gz/*.b64 | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA)
 	@test -s $(MIN_SA)
 	@grep -q 'read_file' $(MIN_SA)
 	@grep -q 'arg_count' $(MIN_SA)
 	@grep -q 'hold crepl' $(MIN_SA) || (echo "FAIL: compiler_min missing crepl"; exit 1)
-	@echo "[OK] restore-compiler ($$(wc -c < $(MIN_SA)) bytes)"
+	@echo "[OK] restore-compiler ($$(wc -c < $(MIN_SA)) bytes, offline, no Python)"
 
 seed-bin: fix-seed
 	$(CC) -O2 -o $(SEED_BIN) $(SEED_C) -I selfhost/seed
