@@ -24,7 +24,7 @@ TESTS    := selfhost/seed_tests
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
-        test-reassign test-while test-when test-boot
+        test-reassign test-while test-when test-boot test-fn
 
 all: true-selfhost-min
 
@@ -134,6 +134,15 @@ seed-min: $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/min_wh $(TESTS)/min_wh.c
 	@out=$$(./$(TESTS)/min_wh); echo "$$out" | grep -q done
 	@echo "=== SEED-MIN-OK ==="
+
+test-fn: $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'make add(a, b) {\n  give a + b\n}\nmake square(x) {\n  give x * x\n}\nhold r = add(40, 2)\nshow r\nhold s = square(5)\nshow s\n' > $(TESTS)/fn.sa
+	./$(SEED_MIN_BIN) $(TESTS)/fn.sa > $(TESTS)/fn.c
+	$(CC) -O2 -o $(TESTS)/fn $(TESTS)/fn.c
+	@out=$$(./$(TESTS)/fn); echo "$$out" | grep -qx 42; echo "$$out" | grep -q 25
+	@echo "[OK] seed-min make/give"
+	@echo "=== TEST-FN-OK ==="
 
 seed-min-gen1: $(SEED_MIN_BIN) restore-compiler
 	@echo "[seed-min] compiler_min.sa -> gen1_min.c"
