@@ -8,11 +8,10 @@ Last updated: 2026-10-01
 make true-selfhost
 ```
 
-## Source restore
+## Source restore (no Python)
 
 `selfhost/compiler_min.sa` is restored **offline** from `selfhost/compiler_min_gz/*.b64`
-(gzip+base64 of full production compiler with crepl).
-Fallback: curl known-good base + `patch_crepl.py`.
+using only `base64` + `gzip` (shell). No Python, no curl.
 
 ## CI (`.github/workflows/ci.yml`)
 
