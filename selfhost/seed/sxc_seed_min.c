@@ -1,4 +1,4 @@
-/* sxc_seed_min.c — pure-min → C seed (hold/show/when/while/make/give)
+/* sxc_seed_min.c — pure-min + make/give + lists
  * Usage: sxc_seed_min in.sa > out.c
  */
 #include <ctype.h>
@@ -7,7 +7,7 @@
 #include <string.h>
 
 static char *S; static size_t N, P;
-enum { TY_NUM=0, TY_STR=1 };
+enum { TY_NUM=0, TY_STR=1, TY_LIST=2 };
 static char *vn[512]; static int vt[512]; static int nv;
 static int in_fn;
 
@@ -47,9 +47,26 @@ static char *expr(int *oty);
 static void stmt(void);
 static void block(void);
 
-static char *primary(int *oty){
+static char *atom(int *oty){
   skip();
   if(P<N && S[P]=='('){ P++; char *e=expr(oty); skip(); if(P>=N||S[P]!=')') die(")"); P++; return e; }
+  if(P<N && S[P]=='['){
+    P++; char *els[64]; int ne=0; skip();
+    if(P>=N||S[P]!=']'){
+      for(;;){
+        int et; els[ne++]=expr(&et); if(ne>=64) die("list too big");
+        skip(); if(P<N&&S[P]==','){P++;skip();continue;} break;
+      }
+    }
+    skip(); if(P>=N||S[P]!=']') die("]"); P++;
+    size_t need=32; for(int i=0;i<ne;i++) need+=strlen(els[i])+16;
+    char *buf=malloc(need+32);
+    size_t o=0; o+=snprintf(buf+o,need,"sx_llit(%d",ne);
+    for(int i=0;i<ne;i++) o+=snprintf(buf+o,need-o,",(double)(%s)",els[i]);
+    snprintf(buf+o,need-o,")");
+    for(int i=0;i<ne;i++) free(els[i]);
+    *oty=TY_LIST; return buf;
+  }
   if(P<N && S[P]=='"'){
     P++; size_t a=P; while(P<N && S[P]!='"'){ if(S[P]=='\\' && P+1<N) P+=2; else P++; }
     size_t n=P-a; if(P<N && S[P]=='"') P++;
@@ -75,11 +92,14 @@ static char *primary(int *oty){
       if(!strcmp(id,"concat")&&na==2){
         snprintf(buf,sizeof buf,"sx_cat(%s,%s)",args[0],args[1]); *oty=TY_STR;
       } else if((!strcmp(id,"len")||!strcmp(id,"sx_len"))&&na==1){
-        snprintf(buf,sizeof buf,"sx_len(%s)",args[0]); *oty=TY_NUM;
+        if(aty[0]==TY_LIST){ snprintf(buf,sizeof buf,"sx_llen(%s)",args[0]); *oty=TY_NUM; }
+        else { snprintf(buf,sizeof buf,"sx_len(%s)",args[0]); *oty=TY_NUM; }
       } else if((!strcmp(id,"chr")||!strcmp(id,"sx_chr"))&&na==1){
         snprintf(buf,sizeof buf,"sx_chr(%s)",args[0]); *oty=TY_STR;
       } else if((!strcmp(id,"sx_index")||!strcmp(id,"sx_idx")||!strcmp(id,"index"))&&na==2){
-        snprintf(buf,sizeof buf,"sx_idx(%s,%s)",args[0],args[1]); *oty=TY_NUM;
+        if(aty[0]==TY_LIST) snprintf(buf,sizeof buf,"sx_lget(%s,%s)",args[0],args[1]);
+        else snprintf(buf,sizeof buf,"sx_idx(%s,%s)",args[0],args[1]);
+        *oty=TY_NUM;
       } else if((!strcmp(id,"string_eq")||!strcmp(id,"sx_eq"))&&na==2){
         snprintf(buf,sizeof buf,"sx_eq(%s,%s)",args[0],args[1]); *oty=TY_NUM;
       } else if((!strcmp(id,"arg")||!strcmp(id,"sx_arg"))&&na==1){
@@ -90,6 +110,8 @@ static char *primary(int *oty){
         snprintf(buf,sizeof buf,"sx_read(%s)",args[0]); *oty=TY_STR;
       } else if((!strcmp(id,"write_file")||!strcmp(id,"sx_write"))&&na==2){
         snprintf(buf,sizeof buf,"sx_write(%s,%s)",args[0],args[1]); *oty=TY_NUM;
+      } else if(!strcmp(id,"push")&&na==2){
+        snprintf(buf,sizeof buf,"sx_lpush(%s,(double)(%s))",args[0],args[1]); *oty=TY_LIST;
       } else {
         size_t o=0; o+=snprintf(buf+o,sizeof buf-o,"%s(",id);
         for(int i=0;i<na;i++) o+=snprintf(buf+o,sizeof buf-o,"%s%s",i?",":"",args[i]);
@@ -101,6 +123,23 @@ static char *primary(int *oty){
     *oty=getty(id); return id;
   }
   die("primary"); return 0;
+}
+
+static char *primary(int *oty){
+  char *l=atom(oty);
+  for(;;){
+    skip();
+    if(P<N && S[P]=='['){
+      P++; int it; char *ix=expr(&it); skip();
+      if(P>=N||S[P]!=']') die("]"); P++;
+      char *t=malloc(strlen(l)+strlen(ix)+24);
+      if(*oty==TY_LIST){ sprintf(t,"sx_lget(%s,%s)",l,ix); *oty=TY_NUM; }
+      else if(*oty==TY_STR){ sprintf(t,"sx_idx(%s,%s)",l,ix); *oty=TY_NUM; }
+      else die("index on non-list/str");
+      free(l); free(ix); l=t;
+    } else break;
+  }
+  return l;
 }
 
 static char *unary(int *oty){
@@ -188,7 +227,6 @@ static void skip_block(void){
 
 static void stmt(void){
   skip(); if(P>=N||S[P]=='}') return;
-
   if(at("make")){
     if(in_fn) die("nested make");
     P+=4; free(parse_id()); skip(); eat("(");
@@ -196,20 +234,16 @@ static void stmt(void){
     skip_block();
     return;
   }
-
   if(at("give")){
-    P+=4; skip();
-    int ty; char *e=expr(&ty);
-    printf("  return %s;\n", e);
-    free(e); return;
+    P+=4; skip(); int ty; char *e=expr(&ty); printf("  return %s;\n", e); free(e); return;
   }
-
   if(at("hold")){
     P+=4; char *n=parse_id(); skip(); eat("="); int ty; char *e=expr(&ty);
     int i=findv(n);
     if(i<0){
       setv(n,ty);
       if(ty==TY_STR) printf("  char *%s = %s;\n", n, e);
+      else if(ty==TY_LIST) printf("  sx_list *%s = %s;\n", n, e);
       else printf("  double %s = %s;\n", n, e);
     } else {
       printf("  %s = %s;\n", n, e);
@@ -219,6 +253,7 @@ static void stmt(void){
   if(at("show")){
     P+=4; skip(); int ty; char *e=expr(&ty);
     if(ty==TY_STR) printf("  puts(%s);\n", e);
+    else if(ty==TY_LIST) printf("  printf(\"[list len=%%g]\\n\", sx_llen(%s));\n", e);
     else printf("  printf(\"%%g\\n\", (double)(%s));\n", e);
     free(e); return;
   }
@@ -234,34 +269,23 @@ static void stmt(void){
 }
 
 static void emit_one_fn(void){
-  eat("make");
-  char *name=parse_id();
-  skip(); eat("(");
-  char *params[16]; int np=0;
-  skip();
+  eat("make"); char *name=parse_id(); skip(); eat("(");
+  char *params[16]; int np=0; skip();
   if(P>=N||S[P]!=')'){
-    for(;;){
-      params[np++]=parse_id();
-      skip(); if(P<N&&S[P]==','){P++;skip();continue;} break;
-    }
+    for(;;){ params[np++]=parse_id(); skip(); if(P<N&&S[P]==','){P++;skip();continue;} break; }
   }
   eat(")");
   printf("static double %s(", name);
   for(int i=0;i<np;i++) printf("%sdouble %s", i?", ":"", params[i]);
   printf("){\n");
-
   int saved_nv=nv;
   for(int i=0;i<np;i++) setv(params[i], TY_NUM);
-
-  in_fn=1;
-  skip(); eat("{");
+  in_fn=1; skip(); eat("{");
   for(;;){ skip(); if(P>=N) die("}"); if(S[P]=='}'){ P++; break; } stmt(); }
   in_fn=0;
-
   printf("  return 0;\n}\n\n");
   while(nv>saved_nv){ free(vn[nv-1]); nv--; }
-  for(int i=0;i<np;i++) free(params[i]);
-  free(name);
+  for(int i=0;i<np;i++) free(params[i]); free(name);
 }
 
 static void emit_all_fns(void){
@@ -276,9 +300,12 @@ static void emit_all_fns(void){
 }
 
 static void preamble(void){
-  puts("#include <stdio.h>");
-  puts("#include <stdlib.h>");
-  puts("#include <string.h>");
+  puts("#include <stdio.h>"); puts("#include <stdlib.h>"); puts("#include <string.h>"); puts("#include <stdarg.h>");
+  puts("typedef struct { double *d; long n; long cap; } sx_list;");
+  puts("static sx_list *sx_llit(int n,...){ sx_list *L=malloc(sizeof*L); L->n=n; L->cap=n<4?4:n; L->d=malloc(sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }");
+  puts("static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\\n\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\\n\",stderr);exit(1);} return L->d[i]; }");
+  puts("static double sx_llen(sx_list *L){ return L?(double)L->n:0.0; }");
+  puts("static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=malloc(sizeof*L); L->n=0; L->cap=4; L->d=malloc(sizeof(double)*4);} if(L->n>=L->cap){ L->cap*=2; L->d=realloc(L->d,sizeof(double)*(size_t)L->cap);} L->d[L->n++]=v; return L; }");
   puts("static char *sx_cat(const char *a,const char *b){ if(!a)a=\"\"; if(!b)b=\"\"; size_t la=strlen(a),lb=strlen(b); char *r=malloc(la+lb+1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r; }");
   puts("static double sx_len(const char *s){ return (double)strlen(s?s:\"\"); }");
   puts("static char *sx_chr(double v){ char *r=malloc(2); r[0]=(char)(long)v; r[1]=0; return r; }");
@@ -298,19 +325,19 @@ static void collect(void){
     if(at("make")){
       P+=4; free(parse_id()); skip(); eat("(");
       for(;;){ skip(); if(P<N&&S[P]==')'){P++;break;} free(parse_id()); skip(); if(P<N&&S[P]==','){P++;continue;} }
-      skip_block();
-      continue;
+      skip_block(); continue;
     }
     if(at("hold")){
       P+=4; char *id=parse_id(); skip(); if(at("=")){ P++; skip();
         int ty=TY_NUM;
         if(P<N && S[P]=='"') ty=TY_STR;
+        else if(P<N && S[P]=='[') ty=TY_LIST;
         else if(at("concat")||at("chr")||at("read_file")||at("arg")||at("sx_cat")||at("sx_chr")||at("sx_read")||at("sx_arg")) ty=TY_STR;
-        else if(P<N && isid0(S[P])){ char *t=parse_id(); int i=findv(t); if(i>=0&&vt[i]==TY_STR) ty=TY_STR; free(t); }
+        else if(at("push")) ty=TY_LIST;
+        else if(P<N && isid0(S[P])){ char *t=parse_id(); int i=findv(t); if(i>=0) ty=vt[i]; free(t); }
         setv(id,ty);
       }
-      free(id);
-      continue;
+      free(id); continue;
     }
     if(S[P]=='"'){ P++; while(P<N&&S[P]!='"'){ if(S[P]=='\\'&&P+1<N)P+=2; else P++; } if(P<N)P++; continue; }
     P++;
@@ -321,6 +348,7 @@ static void collect(void){
 static void decls(void){
   for(int i=0;i<nv;i++){
     if(vt[i]==TY_STR) printf("  char *%s = \"\";\n", vn[i]);
+    else if(vt[i]==TY_LIST) printf("  sx_list *%s = 0;\n", vn[i]);
     else printf("  double %s = 0;\n", vn[i]);
   }
 }
@@ -331,12 +359,9 @@ int main(int argc, char **argv){
   fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
   S=malloc((size_t)n+1); N=(size_t)fread(S,1,(size_t)n,f); S[N]=0; fclose(f); P=0;
   for(int pass=0;pass<4;pass++) collect();
-  P=0;
-  preamble();
-  emit_all_fns();
+  P=0; preamble(); emit_all_fns();
   puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
-  decls();
-  P=0;
+  decls(); P=0;
   while(P<N){ skip(); if(P>=N) break; stmt(); }
   puts("  return 0;\n}");
   return 0;
