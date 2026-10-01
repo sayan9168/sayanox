@@ -1,35 +1,34 @@
 # Status
 
-Last updated: 2026-10-01 (CI path verified: true-selfhost, native-test, gen3, grammar, gc-test).
+Last updated: 2026-10-01
 
-## Entry point
+## Entry
 
 ```bash
 make true-selfhost
 ```
 
+## Source restore
+
+`selfhost/compiler_min.sa` is restored **offline** from `selfhost/compiler_min_gz/*.b64`
+(gzip+base64 of full production compiler with crepl).
+Fallback: curl known-good base + `patch_crepl.py`.
+
 ## CI (`.github/workflows/ci.yml`)
 
-On every push/PR to `main`:
-
 - `make true-selfhost`
-- `make all`
-- `make grammar`
-- `make test`
 - `make native-test`
-- `make gc-test`
 - `make gen3`
+- `make grammar` / `make gc-test`
 
-## Verified locally (clean clone)
+## Clean-clone verified
 
-| Command | Result |
-|---------|--------|
+| Target | Result |
+|--------|--------|
 | `make true-selfhost` | TRUE-SELFHOST-MIN-OK |
 | `make native-test` | NATIVE-TEST-OK |
 | `make gen3` | GEN3-OK |
-| `make grammar` | GRAMMAR-OK |
-| `make gc-test` | GC-RC-OK |
 
 ## Scope
 
-Pure-min bootstrap only — not full-language self-host.
+Pure-min bootstrap only (not full-language self-host).
