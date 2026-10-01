@@ -51,8 +51,10 @@ fix-seed:
 	@echo "[OK] fix-seed"
 
 restore-compiler:
-	@# If local source already has crepl, keep it. Otherwise fetch known-good base + patch.
-	@if [ ! -s $(MIN_SA) ] || ! grep -q 'hold crepl' $(MIN_SA) 2>/dev/null; then \
+	@# Offline: complete gzip-b64 parts. Else keep local crepl source. Else fetch+patch.
+	@if [ -f selfhost/compiler_min_gz/00.b64 ] && [ -f selfhost/compiler_min_gz/06.b64 ]; then \
+	  cat selfhost/compiler_min_gz/*.b64 | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA); \
+	elif [ ! -s $(MIN_SA) ] || ! grep -q 'hold crepl' $(MIN_SA) 2>/dev/null; then \
 	  echo "[restore] fetching base compiler_min.sa + applying crepl patch"; \
 	  curl -fsSL "https://raw.githubusercontent.com/sayan9168/sayanox/bd3dbf9/selfhost/compiler_min.sa" -o $(MIN_SA); \
 	  python3 selfhost/patch_crepl.py $(MIN_SA); \
