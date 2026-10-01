@@ -19,6 +19,7 @@ using only `base64` + `gzip` (shell). No Python, no curl.
 - `make native-test`
 - `make gen3` (requires byte-identical gen3 == gen4)
 - `make grammar` / `make gc-test`
+- `make test-fn` (Phase-1 make/give via seed-min)
 
 ## Clean-clone verified
 
@@ -26,13 +27,29 @@ using only `base64` + `gzip` (shell). No Python, no curl.
 |--------|--------|
 | `make true-selfhost` | TRUE-SELFHOST-MIN-OK |
 | `make native-test` | NATIVE-TEST-OK |
-| `make gen3` | GEN3-OK + **byte-identical gen3 == gen4** |
+| `make gen3` | GEN3-OK + byte-identical gen3 == gen4 |
+| `make test-fn` | TEST-FN-OK (make/give → C functions) |
 
 ## Fixed point
 
 gen2(compiler_min) produces gen3.c; gen3(compiler_min) produces gen4.c;
-`cmp gen3.c gen4.c` succeeds. Emit is deterministic for the pure-min dialect.
+`cmp gen3.c gen4.c` succeeds.
+
+## Phase-1 functions
+
+`sxc_seed_min` supports:
+
+```sa
+make add(a, b) {
+  give a + b
+}
+hold r = add(40, 2)
+show r
+```
+
+Params are numeric (`double`) in Phase-1. `compiler_min.sa` still pure-min
+(no make/give yet); function programs use the seed path.
 
 ## Scope
 
-Pure-min bootstrap only (not full-language self-host).
+Pure-min bootstrap complete. Full-language self-host is phased (Phase-1 = functions in seed).
