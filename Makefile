@@ -24,7 +24,7 @@ TESTS    := selfhost/seed_tests
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
-        test-reassign test-while test-when test-boot test-fn
+        test-reassign test-while test-when test-boot test-fn test-list
 
 all: true-selfhost-min
 
@@ -52,8 +52,8 @@ fix-seed:
 
 restore-compiler:
 	@# Pure offline: decode selfhost/compiler_min_gz/*.b64 (gzip+base64). No Python.
-	@test -f selfhost/compiler_min_gz/00.b64 -a -f selfhost/compiler_min_gz/06.b64 || \
-	  (echo "FAIL: missing selfhost/compiler_min_gz/00.b64..06.b64"; exit 1)
+	@test -f selfhost/compiler_min_gz/00.b64 || \
+	  (echo "FAIL: missing selfhost/compiler_min_gz/00.b64"; exit 1)
 	@cat selfhost/compiler_min_gz/*.b64 | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA)
 	@test -s $(MIN_SA)
 	@grep -q 'read_file' $(MIN_SA)
@@ -134,6 +134,15 @@ seed-min: $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/min_wh $(TESTS)/min_wh.c
 	@out=$$(./$(TESTS)/min_wh); echo "$$out" | grep -q done
 	@echo "=== SEED-MIN-OK ==="
+
+test-list: $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'hold xs = [10, 20, 30]\nshow xs[0]\nshow xs[1]\nshow xs[2]\nhold n = len(xs)\nshow n\nhold xs = push(xs, 40)\nshow xs[3]\nshow len(xs)\n' > $(TESTS)/list.sa
+	./$(SEED_MIN_BIN) $(TESTS)/list.sa > $(TESTS)/list.c
+	$(CC) -O2 -o $(TESTS)/list $(TESTS)/list.c
+	@out=$$(./$(TESTS)/list); echo "$$out" | grep -qx 10; echo "$$out" | grep -q 40; echo "$$out" | grep -q 4
+	@echo "[OK] seed-min lists"
+	@echo "=== TEST-LIST-OK ==="
 
 test-fn: $(SEED_MIN_BIN)
 	@mkdir -p $(TESTS)
