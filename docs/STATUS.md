@@ -8,26 +8,33 @@ Last updated: 2026-10-02
 make true-selfhost
 ```
 
-## Phase-2b lists (seed-min + compiler_min/gen2)
+## Phase-3 structs (seed-min)
 
 ```sa
-hold xs = [10, 20, 30]
-hold a = xs[0]
-show a
+struct Point {
+  x,
+  y
+}
+hold p = Point { 3, 4 }
+show p.x
+show p.y
 ```
 
-Runtime: `sx_list` + `sx_llit` / `sx_lget` / `sx_llen` / `sx_lpush`.
+Also supports named fields: `Point { x: 10, y: 20 }`.
 
-| Path | Lists |
-|------|-------|
-| seed-min | literal, index, push, len |
-| gen2 / compiler_min | literal + index |
+Emits C `typedef struct { double x; double y; } Point;`.
 
-Fixed-point still holds (gen3 == gen4).
+`make test-struct` → TEST-STRUCT-OK.
 
-## Phase-1b functions
+Structs in **compiler_min / gen2** not yet (seed path only).
 
-seed-min + compiler_min / gen2: `make` / `give`.
+## Phase-2 lists
+
+seed-min: full. gen2: literal + index.
+
+## Phase-1 functions
+
+seed-min + gen2: `make` / `give`.
 
 ## Clean-clone
 
@@ -35,8 +42,8 @@ seed-min + compiler_min / gen2: `make` / `give`.
 |--------|--------|
 | true-selfhost | TRUE-SELFHOST-MIN-OK |
 | gen3 | byte-identical |
-| gen2 lists | 10 / 20 / 30 |
+| test-fn / test-list / test-struct | OK |
 
 ## Scope
 
-Pure-min + functions + lists. Next: push/len in gen2 path, structs (Phase-3).
+Pure-min + functions + lists + structs (seed). Next: structs in compiler_min.
