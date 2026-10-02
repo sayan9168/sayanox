@@ -1,4 +1,4 @@
-/* sxc_seed_min.c — pure-min + make/give + lists
+/* sxc_seed_min.c — pure-min + make/give + lists + structs
  * Usage: sxc_seed_min in.sa > out.c
  */
 #include <ctype.h>
@@ -7,9 +7,13 @@
 #include <string.h>
 
 static char *S; static size_t N, P;
-enum { TY_NUM=0, TY_STR=1, TY_LIST=2 };
-static char *vn[512]; static int vt[512]; static int nv;
+enum { TY_NUM=0, TY_STR=1, TY_LIST=2, TY_STRUCT=3 };
+static char *vn[512]; static int vt[512]; static int vs[512];
+static int nv;
 static int in_fn;
+
+typedef struct { char *name; char *fields[16]; int nf; } StructDef;
+static StructDef SD[32]; static int nsd;
 
 static void die(const char *m){ fprintf(stderr,"seed_min: %s at %zu\n", m, P); exit(1); }
 static void skip(void){
@@ -36,16 +40,46 @@ static char *parse_id(void){
   size_t n=P-a; char *s=malloc(n+1); memcpy(s,S+a,n); s[n]=0; return s;
 }
 static int findv(const char *n){ for(int i=0;i<nv;i++) if(!strcmp(vn[i],n)) return i; return -1; }
+static int find_struct(const char *n){ for(int i=0;i<nsd;i++) if(!strcmp(SD[i].name,n)) return i; return -1; }
 static void setv(const char *n, int ty){
   int i=findv(n);
-  if(i<0){ if(nv>=512) die("too many vars"); vn[nv]=strdup(n); vt[nv]=ty; nv++; }
+  if(i<0){ if(nv>=512) die("too many vars"); vn[nv]=strdup(n); vt[nv]=ty; vs[nv]=-1; nv++; }
   else vt[i]=ty;
 }
+static void setv_struct(const char *n, int si){
+  int i=findv(n);
+  if(i<0){ if(nv>=512) die("too many vars"); vn[nv]=strdup(n); vt[nv]=TY_STRUCT; vs[nv]=si; nv++; }
+  else { vt[i]=TY_STRUCT; vs[i]=si; }
+}
 static int getty(const char *n){ int i=findv(n); return i<0?TY_NUM:vt[i]; }
+static int getsi(const char *n){ int i=findv(n); return i<0?-1:vs[i]; }
 
 static char *expr(int *oty);
 static void stmt(void);
 static void block(void);
+
+static void parse_struct_def(void){
+  eat("struct");
+  char *name=parse_id();
+  if(find_struct(name)>=0){ free(name); skip(); eat("{"); int d=1; P++;
+    while(P<N&&d){ if(S[P]=='{')d++; else if(S[P]=='}')d--; P++; }
+    return;
+  }
+  if(nsd>=32) die("too many structs");
+  StructDef *D=&SD[nsd];
+  D->name=name; D->nf=0;
+  skip(); eat("{");
+  for(;;){
+    skip();
+    if(P>=N) die("}");
+    if(S[P]=='}'){ P++; break; }
+    if(S[P]==','){ P++; continue; }
+    if(!isid0(S[P])){ P++; continue; }
+    if(D->nf>=16) die("too many fields");
+    D->fields[D->nf++]=parse_id();
+  }
+  nsd++;
+}
 
 static char *atom(int *oty){
   skip();
@@ -82,6 +116,33 @@ static char *atom(int *oty){
   }
   if(P<N && isid0(S[P])){
     char *id=parse_id(); skip();
+    int si=find_struct(id);
+    if(si>=0 && P<N && S[P]=='{'){
+      P++; char *vals[16]; int nvv=0;
+      skip();
+      if(P>=N||S[P]!='}'){
+        for(;;){
+          skip();
+          if(P<N && isid0(S[P])){
+            size_t save=P;
+            char *maybe=parse_id(); skip();
+            if(P<N && S[P]==':'){ P++; free(maybe); }
+            else { P=save; free(maybe); }
+          }
+          int et; vals[nvv++]=expr(&et);
+          if(nvv>=16) die("too many field values");
+          skip(); if(P<N&&S[P]==','){P++;continue;} break;
+        }
+      }
+      skip(); if(P>=N||S[P]!='}') die("}"); P++;
+      size_t need=64; for(int i=0;i<nvv;i++) need+=strlen(vals[i])+4;
+      char *buf=malloc(need);
+      size_t o=0; o+=snprintf(buf+o,need,"((%s){", SD[si].name);
+      for(int i=0;i<nvv;i++) o+=snprintf(buf+o,need-o,"%s%s", i?",":"", vals[i]);
+      snprintf(buf+o,need-o,"})");
+      for(int i=0;i<nvv;i++) free(vals[i]);
+      free(id); *oty=TY_STRUCT; return buf;
+    }
     if(P<N && S[P]=='('){
       P++; char *args[16]; int aty[16]; int na=0; skip();
       if(P>=N||S[P]!=')'){
@@ -137,6 +198,11 @@ static char *primary(int *oty){
       else if(*oty==TY_STR){ sprintf(t,"sx_idx(%s,%s)",l,ix); *oty=TY_NUM; }
       else die("index on non-list/str");
       free(l); free(ix); l=t;
+    } else if(P<N && S[P]=='.'){
+      P++; char *fld=parse_id();
+      char *t=malloc(strlen(l)+strlen(fld)+4);
+      sprintf(t,"%s.%s",l,fld);
+      free(l); free(fld); l=t; *oty=TY_NUM;
     } else break;
   }
   return l;
@@ -227,6 +293,10 @@ static void skip_block(void){
 
 static void stmt(void){
   skip(); if(P>=N||S[P]=='}') return;
+  if(at("struct")){
+    P+=6; free(parse_id()); skip_block();
+    return;
+  }
   if(at("make")){
     if(in_fn) die("nested make");
     P+=4; free(parse_id()); skip(); eat("(");
@@ -241,10 +311,25 @@ static void stmt(void){
     P+=4; char *n=parse_id(); skip(); eat("="); int ty; char *e=expr(&ty);
     int i=findv(n);
     if(i<0){
-      setv(n,ty);
-      if(ty==TY_STR) printf("  char *%s = %s;\n", n, e);
-      else if(ty==TY_LIST) printf("  sx_list *%s = %s;\n", n, e);
-      else printf("  double %s = %s;\n", n, e);
+      if(ty==TY_STRUCT){
+        setv_struct(n, 0);
+        const char *p=e;
+        if(p[0]=='('&&p[1]=='('){
+          p+=2; char tname[64]; int ti=0;
+          while(*p && *p!='{' && *p!=')' && ti<63) tname[ti++]=*p++;
+          tname[ti]=0;
+          int si=find_struct(tname);
+          if(si>=0) setv_struct(n, si);
+        }
+        int si=getsi(n);
+        if(si>=0) printf("  %s %s = %s;\n", SD[si].name, n, e);
+        else printf("  /* struct */ %s = %s;\n", n, e);
+      } else {
+        setv(n,ty);
+        if(ty==TY_STR) printf("  char *%s = %s;\n", n, e);
+        else if(ty==TY_LIST) printf("  sx_list *%s = %s;\n", n, e);
+        else printf("  double %s = %s;\n", n, e);
+      }
     } else {
       printf("  %s = %s;\n", n, e);
     }
@@ -293,10 +378,19 @@ static void emit_all_fns(void){
   while(P<N){
     skip(); if(P>=N) break;
     if(at("make")){ emit_one_fn(); continue; }
+    if(at("struct")){ P+=6; free(parse_id()); skip_block(); continue; }
     if(S[P]=='"'){ P++; while(P<N&&S[P]!='"'){ if(S[P]=='\\'&&P+1<N)P+=2; else P++; } if(P<N)P++; continue; }
     P++;
   }
   P=save;
+}
+
+static void emit_typedefs(void){
+  for(int i=0;i<nsd;i++){
+    printf("typedef struct {");
+    for(int f=0;f<SD[i].nf;f++) printf(" double %s;", SD[i].fields[f]);
+    printf(" } %s;\n", SD[i].name);
+  }
 }
 
 static void preamble(void){
@@ -316,12 +410,25 @@ static void preamble(void){
   puts("static char *sx_arg(int i){ return (i>=0&&i<g_argc)?g_argv[i]:\"\"; }");
   puts("static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return strdup(\"\"); fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET); char *b=malloc((size_t)n+1); size_t rd=fread(b,1,(size_t)n,f); b[rd]=0; fclose(f); return b; }");
   puts("static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0; fputs(s?s:\"\",f); fclose(f); return 1; }");
+  emit_typedefs();
+}
+
+static void scan_structs(void){
+  size_t save=P; nsd=0;
+  while(P<N){
+    skip(); if(P>=N) break;
+    if(at("struct")){ parse_struct_def(); continue; }
+    if(S[P]=='"'){ P++; while(P<N&&S[P]!='"'){ if(S[P]=='\\'&&P+1<N)P+=2; else P++; } if(P<N)P++; continue; }
+    P++;
+  }
+  P=save;
 }
 
 static void collect(void){
   size_t save=P; nv=0;
   while(P<N){
     skip(); if(P>=N) break;
+    if(at("struct")){ P+=6; free(parse_id()); skip_block(); continue; }
     if(at("make")){
       P+=4; free(parse_id()); skip(); eat("(");
       for(;;){ skip(); if(P<N&&S[P]==')'){P++;break;} free(parse_id()); skip(); if(P<N&&S[P]==','){P++;continue;} }
@@ -329,13 +436,20 @@ static void collect(void){
     }
     if(at("hold")){
       P+=4; char *id=parse_id(); skip(); if(at("=")){ P++; skip();
-        int ty=TY_NUM;
+        int ty=TY_NUM; int si=-1;
         if(P<N && S[P]=='"') ty=TY_STR;
         else if(P<N && S[P]=='[') ty=TY_LIST;
         else if(at("concat")||at("chr")||at("read_file")||at("arg")||at("sx_cat")||at("sx_chr")||at("sx_read")||at("sx_arg")) ty=TY_STR;
         else if(at("push")) ty=TY_LIST;
-        else if(P<N && isid0(S[P])){ char *t=parse_id(); int i=findv(t); if(i>=0) ty=vt[i]; free(t); }
-        setv(id,ty);
+        else if(P<N && isid0(S[P])){
+          char *t=parse_id();
+          si=find_struct(t);
+          if(si>=0) ty=TY_STRUCT;
+          else { int i=findv(t); if(i>=0){ ty=vt[i]; si=vs[i]; } }
+          free(t);
+        }
+        if(ty==TY_STRUCT && si>=0) setv_struct(id, si);
+        else setv(id,ty);
       }
       free(id); continue;
     }
@@ -349,6 +463,7 @@ static void decls(void){
   for(int i=0;i<nv;i++){
     if(vt[i]==TY_STR) printf("  char *%s = \"\";\n", vn[i]);
     else if(vt[i]==TY_LIST) printf("  sx_list *%s = 0;\n", vn[i]);
+    else if(vt[i]==TY_STRUCT && vs[i]>=0) printf("  %s %s = {0};\n", SD[vs[i]].name, vn[i]);
     else printf("  double %s = 0;\n", vn[i]);
   }
 }
@@ -358,6 +473,7 @@ int main(int argc, char **argv){
   FILE *f=fopen(argv[1],"rb"); if(!f) die("open");
   fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
   S=malloc((size_t)n+1); N=(size_t)fread(S,1,(size_t)n,f); S[N]=0; fclose(f); P=0;
+  scan_structs();
   for(int pass=0;pass<4;pass++) collect();
   P=0; preamble(); emit_all_fns();
   puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
