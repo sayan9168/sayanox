@@ -24,7 +24,7 @@ TESTS    := selfhost/seed_tests
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
-        test-reassign test-while test-when test-boot test-fn test-list
+        test-reassign test-while test-when test-boot test-fn test-list test-struct
 
 all: true-selfhost-min
 
@@ -134,6 +134,15 @@ seed-min: $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/min_wh $(TESTS)/min_wh.c
 	@out=$$(./$(TESTS)/min_wh); echo "$$out" | grep -q done
 	@echo "=== SEED-MIN-OK ==="
+
+test-struct: $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'struct Point {\n  x,\n  y\n}\nhold p = Point { 3, 4 }\nshow p.x\nshow p.y\nshow p.x + p.y\n' > $(TESTS)/struct.sa
+	./$(SEED_MIN_BIN) $(TESTS)/struct.sa > $(TESTS)/struct.c
+	$(CC) -O2 -o $(TESTS)/struct $(TESTS)/struct.c
+	@out=$$(./$(TESTS)/struct); echo "$$out" | grep -qx 3; echo "$$out" | grep -q 7
+	@echo "[OK] seed-min structs"
+	@echo "=== TEST-STRUCT-OK ==="
 
 test-list: $(SEED_MIN_BIN)
 	@mkdir -p $(TESTS)
