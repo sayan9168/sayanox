@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-02
+Last updated: 2026-10-03
 
 ## Entry
 
@@ -8,7 +8,17 @@ Last updated: 2026-10-02
 make true-selfhost
 ```
 
-## Phase-3 structs (seed-min)
+## Language coverage (seed-min + gen2)
+
+| Feature | seed-min | gen2 / compiler_min |
+|---------|----------|---------------------|
+| hold/show/when/while | yes | yes |
+| make/give | yes | yes |
+| lists `[...]` index | yes | yes |
+| list `len` / `push` | yes | **yes** |
+| structs def/literal/field | yes | **yes** |
+
+## Examples
 
 ```sa
 struct Point {
@@ -17,33 +27,23 @@ struct Point {
 }
 hold p = Point { 3, 4 }
 show p.x
-show p.y
+
+hold xs = [10, 20, 30]
+show len(xs)
+hold xs = push(xs, 40)
 ```
 
-Also supports named fields: `Point { x: 10, y: 20 }`.
-
-Emits C `typedef struct { double x; double y; } Point;`.
-
-`make test-struct` → TEST-STRUCT-OK.
-
-Structs in **compiler_min / gen2** not yet (seed path only).
-
-## Phase-2 lists
-
-seed-min: full. gen2: literal + index.
-
-## Phase-1 functions
-
-seed-min + gen2: `make` / `give`.
-
-## Clean-clone
+## Tests
 
 | Target | Result |
 |--------|--------|
 | true-selfhost | TRUE-SELFHOST-MIN-OK |
 | gen3 | byte-identical |
-| test-fn / test-list / test-struct | OK |
+| test-struct / test-list / test-fn | OK |
+| test-gen2-struct | TEST-GEN2-STRUCT-OK |
+| test-gen2-list | TEST-GEN2-LIST-OK |
 
 ## Scope
 
-Pure-min + functions + lists + structs (seed). Next: structs in compiler_min.
+Pure-min self-host with functions, lists, and structs end-to-end on gen2.
+Next optional: modules, string fields, nested structs.
