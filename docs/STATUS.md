@@ -8,42 +8,22 @@ Last updated: 2026-10-03
 make true-selfhost
 ```
 
-## Language coverage (seed-min + gen2)
+## Coverage
 
-| Feature | seed-min | gen2 / compiler_min |
-|---------|----------|---------------------|
+| Feature | seed-min | gen2 |
+|---------|----------|------|
 | hold/show/when/while | yes | yes |
 | make/give | yes | yes |
-| lists `[...]` index | yes | yes |
-| list `len` / `push` | yes | **yes** |
-| structs def/literal/field | yes | **yes** |
+| lists + len + push | yes | yes |
+| structs + field | yes | yes |
+| `%` modulo | **yes** | not yet |
+| `else` | **yes** | not yet |
+| `use "file.sa"` | **yes** | not yet |
 
-## Examples
+## Honest boundary
 
-```sa
-struct Point {
-  x,
-  y
-}
-hold p = Point { 3, 4 }
-show p.x
+`%` / `else` / `use` ship on **seed-min** today. gen2 keeps structs/lists stable. Expanding `compiler_min` for `%`/`else` desynced gen2 self-compile (string escapes); rolled back that path so `make true-selfhost` stays green.
 
-hold xs = [10, 20, 30]
-show len(xs)
-hold xs = push(xs, 40)
-```
+## Later
 
-## Tests
-
-| Target | Result |
-|--------|--------|
-| true-selfhost | TRUE-SELFHOST-MIN-OK |
-| gen3 | byte-identical |
-| test-struct / test-list / test-fn | OK |
-| test-gen2-struct | TEST-GEN2-STRUCT-OK |
-| test-gen2-list | TEST-GEN2-LIST-OK |
-
-## Scope
-
-Pure-min self-host with functions, lists, and structs end-to-end on gen2.
-Next optional: modules, string fields, nested structs.
+modules on gen2, string/nested fields, native lists/structs, Stage-2 parity.
