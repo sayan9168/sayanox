@@ -25,7 +25,8 @@ TESTS    := selfhost/seed_tests
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
-        test-boot test-fn test-fn2 test-list test-struct test-parity pack-compiler
+        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod \
+        pack-compiler
 
 all: true-selfhost-min
 
@@ -124,6 +125,39 @@ test-mod:
 	@out=$$(./$(TESTS)/ts_mod); test "$$(echo "$$out" | wc -l)" = "2"; \
 	 echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
 	@echo "[OK] gen2 modulo + else"
+
+test-chain:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold t = "b"\nhold s = "a"\nshow s + t\nhold u = s + t + "!"\nshow u\nhold a = 1\nhold b = 2\nhold c = 3\nshow a + b + c\nshow a * b + c\nshow 1 + 2 * 3\nhold d = 10 - 2 - 3\nshow d\nshow 10 %% 4 + 1\nshow a %% 2 + b * c\n' > $(TESTS)/ts_chain.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_chain.sa > $(TESTS)/ts_chain_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_chain_sm $(TESTS)/ts_chain_sm.c
+	./$(GEN2) $(TESTS)/ts_chain.sa $(TESTS)/ts_chain_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_chain_g2 $(TESTS)/ts_chain_g2.c
+	@./$(TESTS)/ts_chain_sm > $(TESTS)/ts_chain_sm.out; ./$(TESTS)/ts_chain_g2 > $(TESTS)/ts_chain_g2.out; \
+	 diff $(TESTS)/ts_chain_sm.out $(TESTS)/ts_chain_g2.out
+	@test "$$(sed -n 1p $(TESTS)/ts_chain_g2.out)" = "ab"
+	@test "$$(sed -n 2p $(TESTS)/ts_chain_g2.out)" = "ab!"
+	@test "$$(sed -n 3p $(TESTS)/ts_chain_g2.out)" = "6"
+	@test "$$(sed -n 4p $(TESTS)/ts_chain_g2.out)" = "5"
+	@test "$$(sed -n 5p $(TESTS)/ts_chain_g2.out)" = "7"
+	@test "$$(sed -n 6p $(TESTS)/ts_chain_g2.out)" = "5"
+	@test "$$(sed -n 7p $(TESTS)/ts_chain_g2.out)" = "3"
+	@test "$$(sed -n 8p $(TESTS)/ts_chain_g2.out)" = "7"
+	@echo "[OK] gen2 chained + - * / % (and string + name) agree with seed-min"
+
+test-condmod:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold a = 17\nwhile a %% 10 > 0 {\n  show a %% 10\n  hold a = a - 3\n}\nwhen 10 %% 3 == 1 {\n  show "mod-ok"\n}\n' > $(TESTS)/ts_cm.sa
+	./$(GEN2) $(TESTS)/ts_cm.sa $(TESTS)/ts_cm.c >/dev/null
+	@grep -q '(double)((long)(a' $(TESTS)/ts_cm.c
+	@grep -q '%(long)(10)' $(TESTS)/ts_cm.c
+	$(CC) -O2 -o $(TESTS)/ts_cm $(TESTS)/ts_cm.c
+	@out=$$(./$(TESTS)/ts_cm); test "$$(echo "$$out" | sed -n 1p)" = "7"; \
+	 test "$$(echo "$$out" | sed -n 4p)" = "8"; test "$$(echo "$$out" | sed -n 7p)" = "mod-ok"
+	@echo "[OK] gen2 while/when condition % long-cast rewrite"
 
 test-struct2:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -302,7 +336,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-parity
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-parity
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
