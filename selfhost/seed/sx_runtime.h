@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <math.h>
 
 typedef struct { size_t refs; size_t len; char data[1]; } SxStrHdr;
@@ -68,11 +69,11 @@ static double sx_pack(void*p){ return (double)(long long)(uintptr_t)p; }
 static void  *sx_upack(double d){ return (void*)(uintptr_t)(long long)d; }
 
 /* ---- strings ---- */
-static SxStrHdr *sx_sh(const char*p){ return p?(SxStrHdr*)((char*)p-sizeof(SxStrHdr)):NULL; }
+static SxStrHdr *sx_sh(const char*p){ return p?(SxStrHdr*)((char*)p-offsetof(SxStrHdr,data)):NULL; }
 static char *sx_alloc_str(const char*s,size_t n){
-  SxStrHdr*h=malloc(sizeof(*h)+n+1); if(!h){fprintf(stderr,"sx: out of memory\n");exit(1);}
+  SxStrHdr*h=malloc(offsetof(SxStrHdr,data)+n+1); if(!h){fprintf(stderr,"sx: out of memory\n");exit(1);}
   h->refs=1; h->len=n; if(n)memcpy(h->data,s,n); h->data[n]=0;
-  sx_tab_add(h,1);
+  sx_tab_add(h->data,1);
   return h->data;
 }
 static char *sx_lit(const char*s){ return sx_alloc_str(s,strlen(s)); }
@@ -80,7 +81,7 @@ static void  sx_retain_s(const char*p){ if(p){ SxStrHdr*h=sx_sh(p); if(!h->refs)
 static void  sx_release_s(const char*p){
   if(p){ SxStrHdr*h=sx_sh(p);
     if(!h->refs){ fprintf(stderr,"sx: double release of string\n"); exit(1); }
-    if(--h->refs==0){ int i=sx_tab_find(h); if(i>=0){ sx_tab_obj[i]=NULL; sx_tab_kind[i]=0; } free(h); } }
+    if(--h->refs==0){ int i=sx_tab_find((void*)p); if(i>=0){ sx_tab_obj[i]=NULL; sx_tab_kind[i]=0; } free(h); } }
 }
 static char *sx_concat_c(const char*a,const char*b){ size_t x=a?strlen(a):0,y=b?strlen(b):0;
   char*r=sx_alloc_str("",x+y); if(x)memcpy(r,a,x); if(y)memcpy(r+x,b,y); return r; }

@@ -1,10 +1,83 @@
-/* sxc_seed_min.c — pure-min + make/give + lists + structs
+/* sxc_seed_min.c — pure-min + make/give + lists + structs + use (modules)
  * Usage: sxc_seed_min in.sa > out.c
+ *
+ * `use "file.sa"` statements are expanded before parsing: the file text is
+ * spliced in place, up to depth 8.  Only a use that starts a statement is
+ * expanded; strings and // comments are copied verbatim.  A missing file is
+ * a hard error (never silent).
  */
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static char *USEDIR = "";   /* directory of the main input file */
+
+static char *read_all(const char *p){
+  FILE *f=fopen(p,"rb"); if(!f) return NULL;
+  fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
+  if(n<0) n=0;
+  char *b=malloc((size_t)n+1); if(!b) exit(1);
+  size_t rd=fread(b,1,(size_t)n,f); b[rd]=0; fclose(f); return b;
+}
+
+/* expand use "path" statements; depth counts nested includes (max 8) */
+static char *expand_use(const char *src, int depth){
+  size_t n=strlen(src), i=0, o=0, cap=n+64;
+  char *out=malloc(cap); if(!out) exit(1);
+  int st=1;                                  /* at a statement start? */
+  while(i<n){
+    char c=src[i];
+    if(c=='"'){                              /* string literal: copy verbatim */
+      if(o+2>cap){ cap=cap*2+64; out=realloc(out,cap); }
+      out[o++]=src[i++];
+      while(i<n){
+        char d=src[i++];
+        if(o+3>cap){ cap=cap*2+64; out=realloc(out,cap); }
+        out[o++]=d;
+        if(d=='\\'&&i<n) out[o++]=src[i++];
+        else if(d=='"') break;
+      }
+      st=0; continue;
+    }
+    if(c=='/'&&i+1<n&&src[i+1]=='/'){        /* comment: copy to end of line */
+      while(i<n && src[i]!='\n'){
+        if(o+2>cap){ cap=cap*2+64; out=realloc(out,cap); }
+        out[o++]=src[i++];
+      }
+      continue;
+    }
+    if(st && strncmp(src+i,"use",3)==0 &&
+       !(isalnum((unsigned char)src[i+3])||src[i+3]=='_')){
+      size_t j=i+3;
+      while(j<n && (src[j]==' '||src[j]=='\t'||src[j]=='\r')) j++;
+      if(j<n && src[j]=='"'){
+        j++; size_t a=j; while(j<n && src[j]!='"') j++;
+        char *path=malloc(j-a+1); memcpy(path,src+a,j-a); path[j-a]=0;
+        if(depth>=8){ fprintf(stderr,"seed_min: use nesting deeper than 8: %s\n",path); exit(1); }
+        char *sub=read_all(path);
+        if(!sub && USEDIR[0]){
+          char *full=malloc(strlen(USEDIR)+strlen(path)+1);
+          strcpy(full,USEDIR); strcat(full,path); sub=read_all(full); free(full);
+        }
+        if(!sub){ fprintf(stderr,"seed_min: cannot open use file: %s\n",path); exit(1); }
+        char *ex=expand_use(sub,depth+1);
+        size_t el=strlen(ex);
+        if(o+el+1>cap){ cap=(o+el+1)*2; out=realloc(out,cap); }
+        memcpy(out+o,ex,el); o+=el;
+        free(ex); free(sub); free(path);
+        if(j<n) j++;                          /* closing quote */
+        i=j; st=1; continue;
+      }
+    }
+    if(o+2>cap){ cap=cap*2+64; out=realloc(out,cap); }
+    out[o++]=c; i++;
+    if(c=='{'||c=='}'||c=='\n') st=1;
+    else if(c==' '||c=='\t'||c=='\r'){ /* keep st */ }
+    else st=0;
+  }
+  out[o]=0; return out;
+}
 
 static char *S; static size_t N, P;
 enum { TY_NUM=0, TY_STR=1, TY_LIST=2, TY_STRUCT=3 };
@@ -479,9 +552,16 @@ static void decls(void){
 
 int main(int argc, char **argv){
   if(argc<2){ fprintf(stderr,"Usage: sxc_seed_min <in.sa>\n"); return 1; }
-  FILE *f=fopen(argv[1],"rb"); if(!f) die("open");
-  fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
-  S=malloc((size_t)n+1); N=(size_t)fread(S,1,(size_t)n,f); S[N]=0; fclose(f); P=0;
+  {                                    /* directory of the input file */
+    const char *p=argv[1]; const char *sl=strrchr(p,'/');
+    if(sl){ size_t d=(size_t)(sl-p)+1; USEDIR=malloc(d+1); memcpy(USEDIR,p,d); USEDIR[d]=0; }
+  }
+  {
+    char *raw=read_all(argv[1]); if(!raw) die("open");
+    S=expand_use(raw,0); free(raw);
+    N=strlen(S);
+  }
+  P=0;
   scan_structs();
   for(int pass=0;pass<4;pass++) collect();
   P=0; preamble(); emit_all_fns();

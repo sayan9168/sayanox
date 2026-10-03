@@ -24,7 +24,8 @@ TESTS    := selfhost/seed_tests
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
-        test-reassign test-while test-when test-mod test-boot test-fn test-list test-struct
+        test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
+        test-boot test-fn test-fn2 test-list test-struct test-parity pack-compiler
 
 all: true-selfhost-min
 
@@ -49,6 +50,10 @@ fix-seed:
 	  sed -i 's/sx_tab_find(h);/sx_tab_find((void*)p);/' $(SEED_H) 2>/dev/null || true; \
 	fi
 	@echo "[OK] fix-seed"
+
+pack-compiler:
+	@# Regenerate selfhost/compiler_min_gz/*.b64 from selfhost/compiler_min.sa
+	./selfhost/pack_compiler_min.sh
 
 restore-compiler:
 	@# Pure offline: decode selfhost/compiler_min_gz/*.b64 (gzip+base64). No Python.
@@ -120,6 +125,84 @@ test-mod:
 	 echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
 	@echo "[OK] gen2 modulo + else"
 
+test-struct2:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'struct Point {\n  x,\n  y\n}\nstruct Pair {\n  a,\n  b\n}\nhold p = Point { x: 3, y: 4 }\nshow p.x\nshow p.y\nshow p.x + p.y\nhold q = Pair { a: 5, b: 6 }\nshow q.a + q.b\n' > $(TESTS)/ts_st2.sa
+	./$(GEN2) $(TESTS)/ts_st2.sa $(TESTS)/ts_st2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_st2 $(TESTS)/ts_st2.c
+	@out=$$(./$(TESTS)/ts_st2); \
+	 test "$$(echo "$$out" | sed -n 1p)" = "3"; test "$$(echo "$$out" | sed -n 2p)" = "4"; \
+	 test "$$(echo "$$out" | sed -n 3p)" = "7"; test "$$(echo "$$out" | sed -n 4p)" = "11"
+	@echo "[OK] gen2 structs: named fields, two structs, field expr"
+
+test-list2:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold xs = [10, 20, 30]\nshow xs[0]\nshow len(xs)\nhold xs = push(xs, 40)\nshow len(xs)\nshow xs[3]\n' > $(TESTS)/ts_li2.sa
+	./$(GEN2) $(TESTS)/ts_li2.sa $(TESTS)/ts_li2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_li2 $(TESTS)/ts_li2.c
+	@out=$$(./$(TESTS)/ts_li2); \
+	 test "$$(echo "$$out" | sed -n 1p)" = "10"; test "$$(echo "$$out" | sed -n 2p)" = "3"; \
+	 test "$$(echo "$$out" | sed -n 3p)" = "4"; test "$$(echo "$$out" | sed -n 4p)" = "40"
+	@printf 'hold xs = [5, 6]\nshow xs[1] + 1\nshow len(xs)\n' > $(TESTS)/ts_li3.sa
+	./$(GEN2) $(TESTS)/ts_li3.sa $(TESTS)/ts_li3.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_li3 $(TESTS)/ts_li3.c
+	@out=$$(./$(TESTS)/ts_li3); test "$$(echo "$$out" | sed -n 1p)" = "7"; test "$$(echo "$$out" | sed -n 2p)" = "2"
+	@printf 'hold xs = [5, 6]\nshow len(xs) + 1\nshow 10 %% 3\nhold y = 10 + 2\nshow y\n' > $(TESTS)/ts_li4.sa
+	./$(GEN2) $(TESTS)/ts_li4.sa $(TESTS)/ts_li4.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_li4 $(TESTS)/ts_li4.c
+	@out=$$(./$(TESTS)/ts_li4); \
+	 test "$$(echo "$$out" | sed -n 1p)" = "3"; test "$$(echo "$$out" | sed -n 2p)" = "1"; \
+	 test "$$(echo "$$out" | sed -n 3p)" = "12"
+	@printf 'hold xs = [5, 6]\nshow xs[len(xs) - 1]\n' > $(TESTS)/ts_li5.sa
+	./$(GEN2) $(TESTS)/ts_li5.sa $(TESTS)/ts_li5.c >/dev/null
+	@grep -q '#error' $(TESTS)/ts_li5.c
+	@echo "[OK] gen2 lists: literal, index, len, push, guards"
+
+test-use:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold z = 99\n' > $(TESTS)/ts_other.sa
+	@printf 'use "selfhost/seed_tests/ts_other.sa"\nshow z\n' > $(TESTS)/ts_use.sa
+	./$(GEN2) $(TESTS)/ts_use.sa $(TESTS)/ts_use.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_use $(TESTS)/ts_use.c
+	@./$(TESTS)/ts_use | grep -qx 99
+	@printf 'use "selfhost/seed_tests/ts_other.sa"\nhold y = 1\n' > $(TESTS)/ts_mid.sa
+	@printf 'use "selfhost/seed_tests/ts_mid.sa"\nshow z\nshow y\n' > $(TESTS)/ts_top.sa
+	./$(GEN2) $(TESTS)/ts_top.sa $(TESTS)/ts_top.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_top $(TESTS)/ts_top.c
+	@out=$$(./$(TESTS)/ts_top); test "$$(echo "$$out" | sed -n 1p)" = "99"; test "$$(echo "$$out" | sed -n 2p)" = "1"
+	@printf 'use "selfhost/seed_tests/no_such_file.sa"\nshow 1\n' > $(TESTS)/ts_miss.sa
+	@./$(GEN2) $(TESTS)/ts_miss.sa $(TESTS)/ts_miss.c >/dev/null 2>&1 || true
+	@grep -q '#error' $(TESTS)/ts_miss.c
+	@printf 'use other.sa\nshow 1\n' > $(TESTS)/ts_uq.sa
+	./$(GEN2) $(TESTS)/ts_uq.sa $(TESTS)/ts_uq.c >/dev/null
+	@grep -q '#error' $(TESTS)/ts_uq.c
+	@echo "[OK] gen2 use: splice, nested depth 2, missing file and unquoted path are hard errors"
+
+test-parity:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold lib = 7\n' > $(TESTS)/par_lib.sa
+	@printf 'use "selfhost/seed_tests/par_lib.sa"\n' > $(TESTS)/par.sa
+	@printf 'struct Point {\n  x,\n  y\n}\n' >> $(TESTS)/par.sa
+	@printf 'make twice(n) {\n  when n <= 0 {\n    give 0\n  }\n  give n * 2\n}\n' >> $(TESTS)/par.sa
+	@printf 'hold p = Point { x: 3, y: 4 }\n' >> $(TESTS)/par.sa
+	@printf 'hold xs = [10, 20, 30]\nhold i = 0\n' >> $(TESTS)/par.sa
+	@printf 'while i < 3 {\n  show i\n  hold i = i + 1\n}\n' >> $(TESTS)/par.sa
+	@printf 'when p.x < p.y {\n  show p.x + p.y\n} else {\n  show 0\n}\n' >> $(TESTS)/par.sa
+	@printf 'show lib\nshow 10 %% 3\nshow twice(21)\nshow xs[2]\n' >> $(TESTS)/par.sa
+	@printf 'hold xs = push(xs, 40)\nshow len(xs)\nshow concat("a", "b")\n' >> $(TESTS)/par.sa
+	./$(SEED_MIN_BIN) $(TESTS)/par.sa > $(TESTS)/par_sm.c
+	$(CC) -O2 -o $(TESTS)/par_sm $(TESTS)/par_sm.c
+	./$(GEN2) $(TESTS)/par.sa $(TESTS)/par_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/par_g2 $(TESTS)/par_g2.c
+	@./$(TESTS)/par_sm > $(TESTS)/par_sm.out; ./$(TESTS)/par_g2 > $(TESTS)/par_g2.out; \
+	 diff $(TESTS)/par_sm.out $(TESTS)/par_g2.out && echo "[OK] seed-min and gen2 agree on the shared dialect"
+	@echo "=== TEST-PARITY-OK ==="
+
 test-boot:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	./$(GEN2) $(BOOT_SA) selfhost/boot_from_gen2.c >/dev/null
@@ -150,6 +233,13 @@ seed-min: $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/min_mod $(TESTS)/min_mod.c
 	@grep -q '(double)((long)(a)%(long)(3))' $(TESTS)/min_mod.c
 	@out=$$(./$(TESTS)/min_mod); echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
+	@printf 'hold z = 99\n' > $(TESTS)/min_other.sa
+	@printf 'use "selfhost/seed_tests/min_other.sa"\nshow z\n' > $(TESTS)/min_use.sa
+	./$(SEED_MIN_BIN) $(TESTS)/min_use.sa > $(TESTS)/min_use.c
+	$(CC) -O2 -o $(TESTS)/min_use $(TESTS)/min_use.c
+	@./$(TESTS)/min_use | grep -qx 99
+	@printf 'use "selfhost/seed_tests/min_missing.sa"\nshow 1\n' > $(TESTS)/min_miss.sa
+	@! ./$(SEED_MIN_BIN) $(TESTS)/min_miss.sa > /dev/null 2>&1
 	@echo "=== SEED-MIN-OK ==="
 
 test-struct: $(SEED_MIN_BIN)
@@ -179,6 +269,20 @@ test-fn: $(SEED_MIN_BIN)
 	@echo "[OK] seed-min make/give"
 	@echo "=== TEST-FN-OK ==="
 
+test-fn2:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'make add(a, b) {\n  give a + b\n}\nmake fac(n) {\n  when n <= 1 {\n    give 1\n  }\n  give n * fac(n - 1)\n}\nhold r = add(40, 2)\nshow r\nshow fac(5)\nshow add(r, 1)\n' > $(TESTS)/ts_fn2.sa
+	./$(GEN2) $(TESTS)/ts_fn2.sa $(TESTS)/ts_fn2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_fn2 $(TESTS)/ts_fn2.c
+	@out=$$(./$(TESTS)/ts_fn2); \
+	 test "$$(echo "$$out" | sed -n 1p)" = "42"; test "$$(echo "$$out" | sed -n 2p)" = "120"; \
+	 test "$$(echo "$$out" | sed -n 3p)" = "43"
+	@printf 'make f(n) {\n  when n <= 0 { give 0 }\n  give n * 2\n}\nshow f(3)\n' > $(TESTS)/ts_fn3.sa
+	./$(GEN2) $(TESTS)/ts_fn3.sa $(TESTS)/ts_fn3.c >/dev/null
+	@grep -q '#error' $(TESTS)/ts_fn3.c
+	@echo "[OK] gen2 functions: params, calls in show, recursion (fac 5 = 120), one-line give rejected"
+
 seed-min-gen1: $(SEED_MIN_BIN) restore-compiler
 	@echo "[seed-min] compiler_min.sa -> gen1_min.c"
 	./$(SEED_MIN_BIN) $(MIN_SA) > $(GEN1_MIN_C)
@@ -198,7 +302,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-parity
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -225,6 +329,14 @@ native-test: $(NATIVE_BIN)
 	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/native_while.sa
 	./$(NATIVE_BIN) $(TESTS)/native_while.sa $(TESTS)/native_while
 	@out=$$(./$(TESTS)/native_while); echo "$$out" | grep -q done
+	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/native_mod.sa
+	./$(NATIVE_BIN) $(TESTS)/native_mod.sa $(TESTS)/native_mod
+	@out=$$(./$(TESTS)/native_mod); test "$$(echo "$$out" | sed -n 1p)" = "1"; test "$$(echo "$$out" | sed -n 2p)" = "1"
+	@printf 'hold xs = [1, 2, 3]\nshow xs[0]\n' > $(TESTS)/native_unsup.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_unsup.sa $(TESTS)/native_unsup 2>/dev/null; then \
+	  echo "[FAIL] native accepted lists (silently wrong code)"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_unsup.sa $(TESTS)/native_unsup 2>&1 | grep -q 'unsupported'
+	@echo "[OK] native: modulo, else alias, unsupported constructs rejected"
 	@echo "=== NATIVE-TEST-OK ==="
 
 grammar: true-selfhost-min
