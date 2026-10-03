@@ -3,13 +3,15 @@
 // The C seed (selfhost/seed/sxc_seed.c) compiles this file into selfhost/gen1.c.
 // gen1 accepts the "pure min" target language and emits standalone C:
 //
-//   hold NAME = NUMBER | NAME | "text" | call(...) | [v, v, ...]
-//             | Struct { f: v, ... } | NAME.field | NAME[i]
-//             | BASE OP NUMBER|NAME|NAME.field|NAME[i]|call(...)
-//   show NUMBER | NAME | "text" | call(...) | NAME.field | NAME[i]
-//             | BASE OP NUMBER|NAME|NAME.field|NAME[i]|call(...)
+//   hold NAME = EXPR          show EXPR
+//   EXPR: BASE followed by a chain of + - * / %   (* / % bind tighter,
+//         left-associative; `%` lowers to (double)((long)(a)%(long)(b))).
+//   BASE: NUMBER | NAME | "text" | call(...) | [v, v, ...]
+//         | Struct { f: v, ... } | NAME.field | NAME[i] | (EXPR)
 //   while COND { ... }        when COND { ... } otherwise { ... }
 //         ("else" is an alias of "otherwise"; both emit "} else {")
+//         COND is copied verbatim (C precedence matches pure-min) except
+//         `%`, which gets the same long-cast rewrite.
 //   make f(a, b) { ... give EXPR }        (top level, numeric, recursive OK)
 //   struct S { f, g }         (numeric fields; `Point { x: 3, y: 4 }`)
 //   use "file.sa"             (splice before parsing, depth <= 8)
@@ -220,6 +222,110 @@ hold ac = 0
 hold islet = 0
 hold atok = ""
 hold tokrun = 0
+// chained binary operands (two-register mul/add machine)
+hold opfldstr = 0
+hold fc = 0
+hold ct = ""
+hold addacc = ""
+hold addop = 0
+hold isstr = 0
+hold moreop = 0
+hold osfind = 0
+hold oterm = ""
+// struct field types (string fields) + string-field access table
+hold ftypes = ""
+hold sflds = ""
+hold sfkey = ""
+hold sfk = 0
+hold sfl = 0
+hold sfhit = 0
+hold sfi = 0
+hold sfeq = 0
+hold sfj = 0
+hold sfa = 0
+hold sfb = 0
+hold sfnew = ""
+hold fsn = 0
+hold faa = 0
+hold fbb = 0
+hold fpk = 0
+hold tda = 0
+hold tdb = 0
+hold tdpk = 0
+hold svars = ""
+hold sfpos = 0
+hold fpos = 0
+hold fnf = 0
+hold fscan = 0
+hold frun = 0
+hold lb = ""
+hold lbl = 0
+hold fname = ""
+hold fkx = 0
+hold lsame = 0
+hold ety = 0
+hold nkey = ""
+hold ndi = 0
+hold ndl = 0
+hold nkl = 0
+hold nok = 0
+hold nj = 0
+hold naa = 0
+hold nbb = 0
+hold fkey = ""
+hold fk2 = 0
+hold fl2 = 0
+hold fprv = 0
+hold fsp = 0
+hold feq = 0
+hold fj = 0
+hold fnamelen = 0
+hold cd2 = 0
+hold exbad6 = 0
+hold exbad7 = 0
+hold exbad8 = 0
+hold exbad9 = 0
+hold isnest = 0
+hold cs3 = 0
+hold stype = ""
+hold sv2 = ""
+hold svk = 0
+hold svl = 0
+hold svi = 0
+hold sveq = 0
+hold svj = 0
+hold sva = 0
+hold svb = 0
+hold svval = 0
+hold tdname = ""
+hold tdfld = ""
+hold tdi = 0
+hold tdn = 0
+hold tdc = 0
+hold tdrun = 0
+hold tdkey = ""
+hold tdk = 0
+hold tdl = 0
+hold tdhit = 0
+hold tdp = 0
+hold tdeq = 0
+hold tdj = 0
+hold tdf = 0
+// condition '%' rewrite scratch
+hold crepl = ""
+hold cwi = 0
+hold ccx = 0
+hold cwrun = 0
+hold cwal = 0
+hold cwnb = 0
+hold cwbd = 0
+hold cwj = 0
+hold cwri = 0
+hold cwre = 0
+hold cwl = ""
+hold cwr = ""
+hold cwnew = ""
+hold cwn = 0
 
 // =====================================================================
 // main scan loop
@@ -902,6 +1008,7 @@ while running == 1 {
                 hold aa = sx_index(sdefs, di + kl)
                 when aa == 58 {
                   hold sfind2 = 1
+                  hold sfpos = di
                   hold di = dl
                 } otherwise {
                   hold di = di + 1
@@ -917,6 +1024,30 @@ while running == 1 {
             hold pos = pos + 1
             hold lelems = ""
             hold nels = 0
+            // Field names are walked in sdefs order (fpos..): each value must
+            // be given in declaration order, a label (if present) must name
+            // that field, and every field must be filled -- a short or
+            // reordered literal is reported, never silently reshaped.
+            hold fpos = sfpos + kl + 1
+            hold fnf = 1
+            hold fscan = fpos
+            hold fsn = len(sdefs)
+            hold frun = 1
+            while frun == 1 {
+              when fscan >= fsn {
+                hold frun = 0
+              } otherwise {
+                hold fc = sx_index(sdefs, fscan)
+                when fc == 59 {
+                  hold frun = 0
+                } otherwise {
+                  when fc == 44 {
+                    hold fnf = fnf + 1
+                  }
+                  hold fscan = fscan + 1
+                }
+              }
+            }
             hold lr = 1
             while lr == 1 {
               hold sk = 1
@@ -941,48 +1072,82 @@ while running == 1 {
                   hold pos = pos + 1
                   hold lr = 0
                 } otherwise {
-                  // skip optional field name + colon
-                  when (cs >= 97 && cs <= 122) || (cs >= 65 && cs <= 90) {
-                    hold savep = pos
-                    hold rn = 1
-                    while rn == 1 {
-                      when pos >= n {
-                        hold rn = 0
-                      } otherwise {
-                        hold cn = sx_index(source,pos)
-                        when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-                          hold pos = pos + 1
-                        } otherwise {
-                          hold rn = 0
-                        }
-                      }
-                    }
-                    hold sk = 1
-                    while sk == 1 {
-                      when pos >= n {
-                        hold sk = 0
-                      } otherwise {
-                        hold cs2 = sx_index(source,pos)
-                        when cs2 == 32 || cs2 == 9 {
-                          hold pos = pos + 1
-                        } otherwise {
-                          hold sk = 0
-                        }
-                      }
-                    }
-                    when pos < n {
-                      hold cs2 = sx_index(source,pos)
-                      when cs2 == 58 {
+                  // ---- optional field label ----
+                  hold lb = ""
+                  hold rn = 1
+                  while rn == 1 {
+                    when pos >= n {
+                      hold rn = 0
+                    } otherwise {
+                      hold cn = sx_index(source,pos)
+                      when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+                        hold lb = concat(lb, chr(cn))
                         hold pos = pos + 1
                       } otherwise {
-                        hold pos = savep
+                        hold rn = 0
                       }
-                    } otherwise {
-                      hold pos = savep
                     }
                   }
-                  // number value
+                  hold sk = 1
+                  while sk == 1 {
+                    when pos >= n {
+                      hold sk = 0
+                    } otherwise {
+                      hold cs2 = sx_index(source,pos)
+                      when cs2 == 32 || cs2 == 9 {
+                        hold pos = pos + 1
+                      } otherwise {
+                        hold sk = 0
+                      }
+                    }
+                  }
+                  hold lbl = 0
+                  when pos < n {
+                    hold cs2 = sx_index(source,pos)
+                    when cs2 == 58 {
+                      hold pos = pos + 1
+                      hold lbl = 1
+                    }
+                  }
+                  when lbl == 0 {
+                    // no label: what was read is the value itself
+                    hold pos = savep2
+                  }
+                  // ---- the field this value has to fill ----
+                  hold fname = ""
+                  hold fkx = 0
+                  hold fscan = fpos
+                  hold frun = 1
+                  while frun == 1 {
+                    when fscan >= fsn {
+                      hold frun = 0
+                    } otherwise {
+                      hold fc = sx_index(sdefs, fscan)
+                      when fc == 44 || fc == 59 {
+                        when fkx == nels {
+                          hold frun = 0
+                        } otherwise {
+                          hold fkx = fkx + 1
+                          hold fscan = fscan + 1
+                        }
+                      } otherwise {
+                        when fkx == nels {
+                          hold fname = concat(fname, chr(fc))
+                        }
+                        hold fscan = fscan + 1
+                      }
+                    }
+                  }
+                  when lbl == 1 {
+                    hold lsame = sx_eq(lb, fname)
+                    when lsame == 0 {
+                      hold exbad7 = 1
+                    }
+                  }
+                  // ---- value: number, string literal or a name ----
                   hold el = ""
+                  hold ety = 0
+                  hold isnest = 0
                   hold sk = 1
                   while sk == 1 {
                     when pos >= n {
@@ -1020,19 +1185,209 @@ while running == 1 {
                       }
                     }
                   }
+                  // string literal value (escapes kept)
+                  when ec == 34 {
+                    hold ety = 1
+                    hold pos = pos + 1
+                    hold el = q
+                    hold rn = 1
+                    while rn == 1 {
+                      when pos >= n {
+                        hold rn = 0
+                      } otherwise {
+                        hold cd = sx_index(source,pos)
+                        when cd == 34 {
+                          hold pos = pos + 1
+                          hold el = concat(el, q)
+                          hold rn = 0
+                        } otherwise {
+                          when cd == 92 {
+                            hold el = concat(el, bs)
+                            hold pos = pos + 1
+                            when pos < n {
+                              hold cd2 = sx_index(source,pos)
+                              hold el = concat(el, chr(cd2))
+                              hold pos = pos + 1
+                            }
+                          } otherwise {
+                            hold el = concat(el, chr(cd))
+                            hold pos = pos + 1
+                          }
+                        }
+                      }
+                    }
+                  }
+                  // name value: a name tracked as a string is a string
+                  when (ec >= 97 && ec <= 122) || (ec >= 65 && ec <= 90) {
+                    hold el = ""
+                    hold rn = 1
+                    while rn == 1 {
+                      when pos >= n {
+                        hold rn = 0
+                      } otherwise {
+                        hold cd = sx_index(source,pos)
+                        when (cd >= 97 && cd <= 122) || (cd >= 65 && cd <= 90) || (cd >= 48 && cd <= 57) || cd == 95 {
+                          hold el = concat(el, chr(cd))
+                          hold pos = pos + 1
+                        } otherwise {
+                          hold rn = 0
+                        }
+                      }
+                    }
+                    hold ety = 0
+                    hold nkey = concat("|", el)
+                    hold nkey = concat(nkey, "|")
+                    hold ndi = 0
+                    hold ndl = len(sdecls)
+                    hold nkl = len(nkey)
+                    while ndi + nkl <= ndl {
+                      hold nok = 1
+                      hold nj = 0
+                      while nj < nkl {
+                        hold naa = sx_index(sdecls, ndi + nj)
+                        hold nbb = sx_index(nkey, nj)
+                        when naa == nbb {
+                          hold nj = nj + 1
+                        } otherwise {
+                          hold nok = 0
+                          hold nj = nkl
+                        }
+                      }
+                      when nok == 1 {
+                        hold ety = 1
+                        hold ndi = ndl
+                      } otherwise {
+                        hold ndi = ndi + 1
+                      }
+                    }
+                  }
+                  // a nested struct literal value is not supported here: report
+                  // it clearly and skip its balanced span so the outer literal
+                  // walk stays in sync and no follow-up errors are reported
+                  hold sk = 1
+                  while sk == 1 {
+                    when pos >= n {
+                      hold sk = 0
+                    } otherwise {
+                      hold cs3 = sx_index(source,pos)
+                      when cs3 == 32 || cs3 == 9 {
+                        hold pos = pos + 1
+                      } otherwise {
+                        hold sk = 0
+                      }
+                    }
+                  }
+                  when pos < n {
+                    hold cs3 = sx_index(source,pos)
+                    when cs3 == 123 {
+                      hold exbad9 = 1
+                      hold isnest = 1
+                      hold nst = 1
+                      hold ins = 0
+                      hold pos = pos + 1
+                      while nst > 0 {
+                        when pos >= n {
+                          hold nst = 0
+                        } otherwise {
+                          hold cd3 = sx_index(source,pos)
+                          when ins == 1 {
+                            when cd3 == 92 {
+                              hold pos = pos + 1
+                            } otherwise {
+                              when cd3 == 34 {
+                                hold ins = 0
+                              }
+                            }
+                          } otherwise {
+                            when cd3 == 34 {
+                              hold ins = 1
+                            } otherwise {
+                              when cd3 == 123 {
+                                hold nst = nst + 1
+                              } otherwise {
+                                when cd3 == 125 {
+                                  hold nst = nst - 1
+                                }
+                              }
+                            }
+                          }
+                          hold pos = pos + 1
+                        }
+                      }
+                    }
+                  }
+                  // ---- record the field type: the first literal wins ----
+                  hold fkey = concat("|", nm2)
+                  hold fkey = concat(fkey, ".")
+                  hold fkey = concat(fkey, fname)
+                  hold fkey = concat(fkey, "=")
+                  hold fk2 = len(fkey)
+                  hold fl2 = len(ftypes)
+                  hold fprv = -1
+                  hold fsp = 0
+                  while fsp + fk2 < fl2 {
+                    hold feq = 1
+                    hold fj = 0
+                    while fj < fk2 {
+                      hold faa = sx_index(ftypes, fsp + fj)
+                      hold fbb = sx_index(fkey, fj)
+                      when faa == fbb {
+                        hold fj = fj + 1
+                      } otherwise {
+                        hold feq = 0
+                        hold fj = fk2
+                      }
+                    }
+                    when feq == 1 {
+                      hold fpk = sx_index(ftypes, fsp + fk2)
+                      when fpk == 49 {
+                        hold fprv = 1
+                      } otherwise {
+                        hold fprv = 0
+                      }
+                      hold fsp = fl2
+                    } otherwise {
+                      hold fsp = fsp + 1
+                    }
+                  }
+                  hold fnamelen = len(fname)
+                  when (fnamelen > 0) && (isnest == 0) {
+                    when fprv == -1 {
+                      hold ftypes = concat(ftypes, fkey)
+                      when ety == 1 {
+                        hold ftypes = concat(ftypes, "1|")
+                      } otherwise {
+                        hold ftypes = concat(ftypes, "0|")
+                      }
+                    } otherwise {
+                      when fprv != ety {
+                        hold exbad6 = 1
+                      }
+                    }
+                    when ety == 1 {
+                      // `varname.field` reads as a string from now on
+                      hold sfnew = concat("|", nm)
+                      hold sfnew = concat(sfnew, ".")
+                      hold sfnew = concat(sfnew, fname)
+                      hold sfnew = concat(sfnew, "|")
+                      hold sflds = concat(sflds, sfnew)
+                    }
+                  }
                   when nels > 0 {
                     hold lelems = concat(lelems, ",")
                   }
                   hold lelems = concat(lelems, el)
                   hold nels = nels + 1
-                  // progress guard: struct fields are numeric only, so a
-                  // string/expression value must not spin here forever
+                  // progress guard: a value must consume at least one char
                   when pos == savep2 {
                     hold exbad = 1
                     hold pos = pos + 1
                   }
                 }
               }
+            }
+            when nels != fnf {
+              hold exbad8 = 1
             }
             hold rhs = "(("
             hold rhs = concat(rhs, nm2)
@@ -1532,39 +1887,52 @@ hold ec = 0
             hold rhs = concat(rhs, ".")
             hold rhs = concat(rhs, opfld)
             hold rk = 0
+            hold sfkey = concat("|", nm2)
+            hold sfkey = concat(sfkey, ".")
+            hold sfkey = concat(sfkey, opfld)
+            hold sfkey = concat(sfkey, "|")
+            hold sfk = len(sfkey)
+            hold sfl = len(sflds)
+            hold sfhit = 0
+            hold sfi = 0
+            while sfi + sfk <= sfl {
+              hold sfeq = 1
+              hold sfj = 0
+              while sfj < sfk {
+                hold sfa = sx_index(sflds, sfi + sfj)
+                hold sfb = sx_index(sfkey, sfj)
+                when sfa == sfb {
+                  hold sfj = sfj + 1
+                } otherwise {
+                  hold sfeq = 0
+                  hold sfj = sfk
+                }
+              }
+              when sfeq == 1 {
+                hold sfhit = 1
+                hold sfi = sfl
+              } otherwise {
+                hold sfi = sfi + 1
+              }
+            }
+            when sfhit == 1 {
+              hold rk = 1
+            }
           }
         }
       }
-      // optional binary operand: + - * / % (NUMBER or NAME, no parser)
-      hold sk = 1
-      while sk == 1 {
-        when pos >= n {
-          hold sk = 0
-        } otherwise {
-          hold cs = sx_index(source,pos)
-          when cs == 32 || cs == 9 || cs == 13 {
-            hold pos = pos + 1
-          } otherwise {
-            hold sk = 0
-          }
-        }
-      }
-      hold c2 = 0
-      when pos < n {
-        hold c2 = sx_index(source,pos)
-      }
-      // a '/' that starts a // comment is not division
-      when c2 == 47 {
-        when pos + 1 < n {
-          hold cs = sx_index(source,pos + 1)
-          when cs == 47 {
-            hold c2 = 0
-          }
-        }
-      }
-      when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 47 || c2 == 37 {
-        hold opch = c2
-        hold pos = pos + 1
+      // ---- chained binary operands: + - * / % (* / % bind tighter) ----
+      // Two registers keep precedence and left-associativity straight:
+      //   ct     = the mul-level term currently being built
+      //   addacc = the reduced add-level value; addop = the pending + or -
+      // A single operand still emits the same text as before.
+      hold ct = rhs
+      hold addacc = ""
+      hold addop = 0
+      hold isstr = rk
+      hold moreop = 1
+      while moreop == 1 {
+        hold moreop = 0
         hold sk = 1
         while sk == 1 {
           when pos >= n {
@@ -1578,93 +1946,100 @@ hold ec = 0
             }
           }
         }
-        hold numtxt = ""
-        hold nm3 = ""
-        hold opnd = ""
-        hold c3 = 0
+        hold c2 = 0
         when pos < n {
-          hold c3 = sx_index(source,pos)
+          hold c2 = sx_index(source,pos)
         }
-        hold oq = 0
-        // number operand
-        when (c3 >= 48 && c3 <= 57) || c3 == 45 {
-          when c3 == 45 {
-            hold numtxt = "-"
-            hold pos = pos + 1
+        // a '/' that starts a // comment is not division
+        when c2 == 47 {
+          when pos + 1 < n {
+            hold cs = sx_index(source,pos + 1)
+            when cs == 47 {
+              hold c2 = 0
+            }
           }
-          hold rn = 1
-          while rn == 1 {
+        }
+        when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 47 || c2 == 37 {
+          hold opch = c2
+          hold pos = pos + 1
+          hold sk = 1
+          while sk == 1 {
             when pos >= n {
-              hold rn = 0
+              hold sk = 0
             } otherwise {
-              hold cd = sx_index(source,pos)
-              when cd >= 48 && cd <= 57 {
-                hold numtxt = concat(numtxt, chr(cd))
+              hold cs = sx_index(source,pos)
+              when cs == 32 || cs == 9 || cs == 13 {
                 hold pos = pos + 1
               } otherwise {
-                hold rn = 0
+                hold sk = 0
               }
             }
           }
-          hold opnd = numtxt
-        }
-        // string literal operand (copied verbatim, escapes kept)
-        when c3 == 34 {
-          hold oq = 1
-          hold pos = pos + 1
-          hold opnd = q
-          hold rn = 1
-          while rn == 1 {
-            when pos >= n {
-              hold rn = 0
-            } otherwise {
-              hold cq = sx_index(source,pos)
-              when cq == 34 {
-                hold pos = pos + 1
-                hold opnd = concat(opnd, q)
+          hold numtxt = ""
+          hold nm3 = ""
+          hold opnd = ""
+          hold opfldstr = 0
+          hold c3 = 0
+          when pos < n {
+            hold c3 = sx_index(source,pos)
+          }
+          hold oq = 0
+          // number operand
+          when (c3 >= 48 && c3 <= 57) || c3 == 45 {
+            when c3 == 45 {
+              hold numtxt = "-"
+              hold pos = pos + 1
+            }
+            hold rn = 1
+            while rn == 1 {
+              when pos >= n {
                 hold rn = 0
               } otherwise {
-                when cq == 92 {
-                  hold opnd = concat(opnd, bs)
+                hold cd = sx_index(source,pos)
+                when cd >= 48 && cd <= 57 {
+                  hold numtxt = concat(numtxt, chr(cd))
                   hold pos = pos + 1
-                  when pos < n {
-                    hold cq2 = sx_index(source,pos)
-                    hold opnd = concat(opnd, chr(cq2))
+                } otherwise {
+                  hold rn = 0
+                }
+              }
+            }
+            hold opnd = numtxt
+          }
+          // string literal operand (copied verbatim, escapes kept)
+          when c3 == 34 {
+            hold oq = 1
+            hold pos = pos + 1
+            hold opnd = q
+            hold rn = 1
+            while rn == 1 {
+              when pos >= n {
+                hold rn = 0
+              } otherwise {
+                hold cq = sx_index(source,pos)
+                when cq == 34 {
+                  hold pos = pos + 1
+                  hold opnd = concat(opnd, q)
+                  hold rn = 0
+                } otherwise {
+                  when cq == 92 {
+                    hold opnd = concat(opnd, bs)
+                    hold pos = pos + 1
+                    when pos < n {
+                      hold cq2 = sx_index(source,pos)
+                      hold opnd = concat(opnd, chr(cq2))
+                      hold pos = pos + 1
+                    }
+                  } otherwise {
+                    hold opnd = concat(opnd, chr(cq))
                     hold pos = pos + 1
                   }
-                } otherwise {
-                  hold opnd = concat(opnd, chr(cq))
-                  hold pos = pos + 1
                 }
               }
             }
           }
-        }
-        // name operand
-        when (c3 >= 97 && c3 <= 122) || (c3 >= 65 && c3 <= 90) {
-          hold rn = 1
-          while rn == 1 {
-            when pos >= n {
-              hold rn = 0
-            } otherwise {
-              hold cn = sx_index(source,pos)
-              when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-                hold nm3 = concat(nm3, chr(cn))
-                hold pos = pos + 1
-              } otherwise {
-                hold rn = 0
-              }
-            }
-          }
-          hold opnd = nm3
-          // postfix .field
-          hold opcq = 0
-          when pos < n {
-            hold opcq = sx_index(source,pos)
-          }
-          when opcq == 46 {
-            hold pos = pos + 1
-            hold opfld = ""
+          // name operand
+          when (c3 >= 97 && c3 <= 122) || (c3 >= 65 && c3 <= 90) {
             hold rn = 1
             while rn == 1 {
               when pos >= n {
@@ -1672,75 +2047,107 @@ hold ec = 0
               } otherwise {
                 hold cn = sx_index(source,pos)
                 when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-                  hold opfld = concat(opfld, chr(cn))
+                  hold nm3 = concat(nm3, chr(cn))
                   hold pos = pos + 1
                 } otherwise {
                   hold rn = 0
                 }
               }
             }
-            hold opnd = concat(opnd, ".")
-            hold opnd = concat(opnd, opfld)
-          }
-          // postfix [index]
-          when opcq == 91 {
-            hold pos = pos + 1
-            hold opix = ""
-            hold rn = 1
-            while rn == 1 {
-              when pos >= n {
-                hold rn = 0
-              } otherwise {
-                hold cn = sx_index(source,pos)
-                when (cn >= 48 && cn <= 57) || (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || cn == 95 {
-                  hold opix = concat(opix, chr(cn))
-                  hold pos = pos + 1
-                } otherwise {
-                  hold rn = 0
-                }
-              }
-            }
+            hold opnd = nm3
+            // postfix .field
+            hold opcq = 0
             when pos < n {
-              hold cn = sx_index(source,pos)
-              when cn == 93 {
-                hold pos = pos + 1
-              }
+              hold opcq = sx_index(source,pos)
             }
-            // list or string index (by declaration table)
-            hold opk3 = concat("|", nm3)
-            hold opk3 = concat(opk3, "|")
-            hold opfd = 0
-            hold opd3 = 0
-            hold opl3 = len(ldecls)
-            hold opn3 = len(opk3)
-            while opd3 + opn3 <= opl3 {
-              hold opok = 1
-              hold opj3 = 0
-              while opj3 < opn3 {
-                hold opa3 = sx_index(ldecls, opd3 + opj3)
-                hold opb3 = sx_index(opk3, opj3)
-                when opa3 == opb3 {
-                  hold opj3 = opj3 + 1
+            when opcq == 46 {
+              hold pos = pos + 1
+              hold opfld = ""
+              hold rn = 1
+              while rn == 1 {
+                when pos >= n {
+                  hold rn = 0
                 } otherwise {
-                  hold opok = 0
-                  hold opj3 = opn3
+                  hold cn = sx_index(source,pos)
+                  when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+                    hold opfld = concat(opfld, chr(cn))
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold rn = 0
+                  }
                 }
               }
-              when opok == 1 {
-                hold opfd = 1
-                hold opd3 = opl3
-              } otherwise {
-                hold opd3 = opd3 + 1
+              hold opnd = concat(opnd, ".")
+              hold opnd = concat(opnd, opfld)
+              hold opfldstr = 0
+              hold sfkey = concat("|", nm3)
+              hold sfkey = concat(sfkey, ".")
+              hold sfkey = concat(sfkey, opfld)
+              hold sfkey = concat(sfkey, "|")
+              hold sfk = len(sfkey)
+              hold sfl = len(sflds)
+              hold sfhit = 0
+              hold sfi = 0
+              while sfi + sfk <= sfl {
+                hold sfeq = 1
+                hold sfj = 0
+                while sfj < sfk {
+                  hold sfa = sx_index(sflds, sfi + sfj)
+                  hold sfb = sx_index(sfkey, sfj)
+                  when sfa == sfb {
+                    hold sfj = sfj + 1
+                  } otherwise {
+                    hold sfeq = 0
+                    hold sfj = sfk
+                  }
+                }
+                when sfeq == 1 {
+                  hold sfhit = 1
+                  hold sfi = sfl
+                } otherwise {
+                  hold sfi = sfi + 1
+                }
+              }
+              when sfhit == 1 {
+                hold opfldstr = 1
               }
             }
-            when opfd == 0 {
+            // postfix [index]
+            when opcq == 91 {
+              hold pos = pos + 1
+              hold opix = ""
+              hold rn = 1
+              while rn == 1 {
+                when pos >= n {
+                  hold rn = 0
+                } otherwise {
+                  hold cn = sx_index(source,pos)
+                  when (cn >= 48 && cn <= 57) || (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || cn == 95 {
+                    hold opix = concat(opix, chr(cn))
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold rn = 0
+                  }
+                }
+              }
+              when pos < n {
+                hold cn = sx_index(source,pos)
+                when cn == 93 {
+                  hold pos = pos + 1
+                }
+              }
+              // list or string index (by declaration table)
+              hold opk3 = concat("|", nm3)
+              hold opk3 = concat(opk3, "|")
+              hold opfd = 0
               hold opd3 = 0
-              hold opl3 = len(sdecls)
+              hold opl3 = len(ldecls)
+              hold opn3 = len(opk3)
               while opd3 + opn3 <= opl3 {
                 hold opok = 1
                 hold opj3 = 0
                 while opj3 < opn3 {
-                  hold opa3 = sx_index(sdecls, opd3 + opj3)
+                  hold opa3 = sx_index(ldecls, opd3 + opj3)
                   hold opb3 = sx_index(opk3, opj3)
                   when opa3 == opb3 {
                     hold opj3 = opj3 + 1
@@ -1750,58 +2157,165 @@ hold ec = 0
                   }
                 }
                 when opok == 1 {
-                  hold opfd = 2
+                  hold opfd = 1
                   hold opd3 = opl3
                 } otherwise {
                   hold opd3 = opd3 + 1
                 }
               }
-            }
-            when opfd == 1 {
-              hold opnd = concat("sx_lget(", opnd)
-              hold opnd = concat(opnd, ",")
-              hold opnd = concat(opnd, opix)
-              hold opnd = concat(opnd, ")")
-            } otherwise {
-              when opfd == 2 {
-                hold opnd = concat("sx_idx(", opnd)
+              when opfd == 0 {
+                hold opd3 = 0
+                hold opl3 = len(sdecls)
+                while opd3 + opn3 <= opl3 {
+                  hold opok = 1
+                  hold opj3 = 0
+                  while opj3 < opn3 {
+                    hold opa3 = sx_index(sdecls, opd3 + opj3)
+                    hold opb3 = sx_index(opk3, opj3)
+                    when opa3 == opb3 {
+                      hold opj3 = opj3 + 1
+                    } otherwise {
+                      hold opok = 0
+                      hold opj3 = opn3
+                    }
+                  }
+                  when opok == 1 {
+                    hold opfd = 2
+                    hold opd3 = opl3
+                  } otherwise {
+                    hold opd3 = opd3 + 1
+                  }
+                }
+              }
+              when opfd == 1 {
+                hold opnd = concat("sx_lget(", opnd)
                 hold opnd = concat(opnd, ",")
                 hold opnd = concat(opnd, opix)
                 hold opnd = concat(opnd, ")")
+              } otherwise {
+                when opfd == 2 {
+                  hold opnd = concat("sx_idx(", opnd)
+                  hold opnd = concat(opnd, ",")
+                  hold opnd = concat(opnd, opix)
+                  hold opnd = concat(opnd, ")")
+                }
+              }
+            }
+          }
+          // is the operand a string value? (string literal, or a name whose
+          // base name is tracked as a string)
+          hold osfind = 0
+          when oq == 1 {
+            hold osfind = 1
+          }
+          when opfldstr == 1 {
+            hold osfind = 1
+          }
+          when (c3 >= 97 && c3 <= 122) || (c3 >= 65 && c3 <= 90) {
+            hold key = concat("|", nm3)
+            hold key = concat(key, "|")
+            hold di = 0
+            hold dl = len(sdecls)
+            hold kl = len(key)
+            while di + kl <= dl {
+              hold ok = 1
+              hold j = 0
+              while j < kl {
+                hold aa = sx_index(sdecls, di + j)
+                hold bb = sx_index(key, j)
+                when aa == bb {
+                  hold j = j + 1
+                } otherwise {
+                  hold ok = 0
+                  hold j = kl
+                }
+              }
+              when ok == 1 {
+                hold osfind = 1
+                hold di = dl
+              } otherwise {
+                hold di = di + 1
+              }
+            }
+          }
+          // the operand as text: while building a string a plain number or
+          // unknown name is quoted (the same text as before), a string value
+          // is used as-is
+          hold oterm = opnd
+          when isstr == 1 {
+            when osfind == 0 {
+              hold oterm = concat(q, opnd)
+              hold oterm = concat(oterm, q)
+            }
+          }
+          hold moreop = 1
+          when opch == 43 || opch == 45 {
+            // flush the mul-level term built so far into the add accumulator
+            when addop == 0 {
+              hold addacc = ct
+            } otherwise {
+              when isstr == 1 {
+                hold addacc = concat("sx_cat(", addacc)
+                hold addacc = concat(addacc, ", ")
+                hold addacc = concat(addacc, ct)
+                hold addacc = concat(addacc, ")")
+              } otherwise {
+                hold addacc = concat("(", addacc)
+                hold addacc = concat(addacc, " ")
+                hold addacc = concat(addacc, chr(addop))
+                hold addacc = concat(addacc, " ")
+                hold addacc = concat(addacc, ct)
+                hold addacc = concat(addacc, ")")
+              }
+            }
+            hold addop = opch
+            hold ct = oterm
+          } otherwise {
+            // mul level: combine straight into the current term
+            when isstr == 1 {
+              hold ct = concat("sx_cat(", ct)
+              hold ct = concat(ct, ", ")
+              hold ct = concat(ct, oterm)
+              hold ct = concat(ct, ")")
+            } otherwise {
+              when opch == 37 {
+                // modulo: (double)((long)(a)%(long)(b))
+                hold ct = concat("(double)((long)(", ct)
+                hold ct = concat(ct, ")")
+                hold ct = concat(ct, chr(opch))
+                hold ct = concat(ct, "(long)(")
+                hold ct = concat(ct, oterm)
+                hold ct = concat(ct, "))")
+              } otherwise {
+                hold ct = concat("(", ct)
+                hold ct = concat(ct, " ")
+                hold ct = concat(ct, chr(opch))
+                hold ct = concat(ct, " ")
+                hold ct = concat(ct, oterm)
+                hold ct = concat(ct, ")")
               }
             }
           }
         }
-        when rk == 1 {
-          // string variable on the left: append the operand as text
-          hold rhs = concat("sx_cat(", nm2)
+      }
+      // flush a pending + / - at the end of the chain
+      hold rhs = ct
+      when addop != 0 {
+        when isstr == 1 {
+          hold rhs = concat("sx_cat(", addacc)
           hold rhs = concat(rhs, ", ")
-          when oq == 0 {
-            hold rhs = concat(rhs, q)
-          }
-          hold rhs = concat(rhs, opnd)
-          when oq == 0 {
-            hold rhs = concat(rhs, q)
-          }
+          hold rhs = concat(rhs, ct)
           hold rhs = concat(rhs, ")")
-          hold rt = 1
         } otherwise {
-          when opch == 37 {
-            // modulo: (double)((long)(a)%(long)(b))
-            hold rhs = concat("(double)((long)(", rhs)
-            hold rhs = concat(rhs, ")")
-            hold rhs = concat(rhs, chr(opch))
-            hold rhs = concat(rhs, "(long)(")
-            hold rhs = concat(rhs, opnd)
-            hold rhs = concat(rhs, "))")
-          } otherwise {
-            hold rhs = concat(rhs, " ")
-            hold rhs = concat(rhs, chr(opch))
-            hold rhs = concat(rhs, " ")
-            hold rhs = concat(rhs, opnd)
-          }
+          hold rhs = concat("(", addacc)
+          hold rhs = concat(rhs, " ")
+          hold rhs = concat(rhs, chr(addop))
+          hold rhs = concat(rhs, " ")
+          hold rhs = concat(rhs, ct)
+          hold rhs = concat(rhs, ")")
         }
       }
+      hold rk = isstr
 
       // ---------- emit ----------
       hold ind = "  "
@@ -2287,6 +2801,37 @@ hold ec = 0
             hold rhs = concat(nm2, ".")
             hold rhs = concat(rhs, sf)
             hold rk = 0
+            hold sfkey = concat("|", nm2)
+            hold sfkey = concat(sfkey, ".")
+            hold sfkey = concat(sfkey, sf)
+            hold sfkey = concat(sfkey, "|")
+            hold sfk = len(sfkey)
+            hold sfl = len(sflds)
+            hold sfhit = 0
+            hold sfi = 0
+            while sfi + sfk <= sfl {
+              hold sfeq = 1
+              hold sfj = 0
+              while sfj < sfk {
+                hold sfa = sx_index(sflds, sfi + sfj)
+                hold sfb = sx_index(sfkey, sfj)
+                when sfa == sfb {
+                  hold sfj = sfj + 1
+                } otherwise {
+                  hold sfeq = 0
+                  hold sfj = sfk
+                }
+              }
+              when sfeq == 1 {
+                hold sfhit = 1
+                hold sfi = sfl
+              } otherwise {
+                hold sfi = sfi + 1
+              }
+            }
+            when sfhit == 1 {
+              hold rk = 1
+            }
           }
           hold key = concat("|", nm2)
           hold key = concat(key, "|")
@@ -2462,36 +3007,18 @@ hold ec = 0
           }
         }
       }
-      // optional binary operand: + - * / % (NUMBER or NAME, no parser)
-      hold sk = 1
-      while sk == 1 {
-        when pos >= n {
-          hold sk = 0
-        } otherwise {
-          hold cs = sx_index(source,pos)
-          when cs == 32 || cs == 9 || cs == 13 {
-            hold pos = pos + 1
-          } otherwise {
-            hold sk = 0
-          }
-        }
-      }
-      hold c2 = 0
-      when pos < n {
-        hold c2 = sx_index(source,pos)
-      }
-      // a '/' that starts a // comment is not division
-      when c2 == 47 {
-        when pos + 1 < n {
-          hold cs = sx_index(source,pos + 1)
-          when cs == 47 {
-            hold c2 = 0
-          }
-        }
-      }
-      when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 47 || c2 == 37 {
-        hold opch = c2
-        hold pos = pos + 1
+      // ---- chained binary operands: + - * / % (* / % bind tighter) ----
+      // Two registers keep precedence and left-associativity straight:
+      //   ct     = the mul-level term currently being built
+      //   addacc = the reduced add-level value; addop = the pending + or -
+      // A single operand still emits the same text as before.
+      hold ct = rhs
+      hold addacc = ""
+      hold addop = 0
+      hold isstr = rk
+      hold moreop = 1
+      while moreop == 1 {
+        hold moreop = 0
         hold sk = 1
         while sk == 1 {
           when pos >= n {
@@ -2505,93 +3032,100 @@ hold ec = 0
             }
           }
         }
-        hold numtxt = ""
-        hold nm3 = ""
-        hold opnd = ""
-        hold oq = 0
-        hold c3 = 0
+        hold c2 = 0
         when pos < n {
-          hold c3 = sx_index(source,pos)
+          hold c2 = sx_index(source,pos)
         }
-        // number operand
-        when (c3 >= 48 && c3 <= 57) || c3 == 45 {
-          when c3 == 45 {
-            hold numtxt = "-"
-            hold pos = pos + 1
+        // a '/' that starts a // comment is not division
+        when c2 == 47 {
+          when pos + 1 < n {
+            hold cs = sx_index(source,pos + 1)
+            when cs == 47 {
+              hold c2 = 0
+            }
           }
-          hold rn = 1
-          while rn == 1 {
+        }
+        when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 47 || c2 == 37 {
+          hold opch = c2
+          hold pos = pos + 1
+          hold sk = 1
+          while sk == 1 {
             when pos >= n {
-              hold rn = 0
+              hold sk = 0
             } otherwise {
-              hold cd = sx_index(source,pos)
-              when cd >= 48 && cd <= 57 {
-                hold numtxt = concat(numtxt, chr(cd))
+              hold cs = sx_index(source,pos)
+              when cs == 32 || cs == 9 || cs == 13 {
                 hold pos = pos + 1
               } otherwise {
-                hold rn = 0
+                hold sk = 0
               }
             }
           }
-          hold opnd = numtxt
-        }
-        // string literal operand (copied verbatim, escapes kept)
-        when c3 == 34 {
-          hold oq = 1
-          hold pos = pos + 1
-          hold opnd = q
-          hold rn = 1
-          while rn == 1 {
-            when pos >= n {
-              hold rn = 0
-            } otherwise {
-              hold cq = sx_index(source,pos)
-              when cq == 34 {
-                hold pos = pos + 1
-                hold opnd = concat(opnd, q)
+          hold numtxt = ""
+          hold nm3 = ""
+          hold opnd = ""
+          hold opfldstr = 0
+          hold c3 = 0
+          when pos < n {
+            hold c3 = sx_index(source,pos)
+          }
+          hold oq = 0
+          // number operand
+          when (c3 >= 48 && c3 <= 57) || c3 == 45 {
+            when c3 == 45 {
+              hold numtxt = "-"
+              hold pos = pos + 1
+            }
+            hold rn = 1
+            while rn == 1 {
+              when pos >= n {
                 hold rn = 0
               } otherwise {
-                when cq == 92 {
-                  hold opnd = concat(opnd, bs)
+                hold cd = sx_index(source,pos)
+                when cd >= 48 && cd <= 57 {
+                  hold numtxt = concat(numtxt, chr(cd))
                   hold pos = pos + 1
-                  when pos < n {
-                    hold cq2 = sx_index(source,pos)
-                    hold opnd = concat(opnd, chr(cq2))
+                } otherwise {
+                  hold rn = 0
+                }
+              }
+            }
+            hold opnd = numtxt
+          }
+          // string literal operand (copied verbatim, escapes kept)
+          when c3 == 34 {
+            hold oq = 1
+            hold pos = pos + 1
+            hold opnd = q
+            hold rn = 1
+            while rn == 1 {
+              when pos >= n {
+                hold rn = 0
+              } otherwise {
+                hold cq = sx_index(source,pos)
+                when cq == 34 {
+                  hold pos = pos + 1
+                  hold opnd = concat(opnd, q)
+                  hold rn = 0
+                } otherwise {
+                  when cq == 92 {
+                    hold opnd = concat(opnd, bs)
+                    hold pos = pos + 1
+                    when pos < n {
+                      hold cq2 = sx_index(source,pos)
+                      hold opnd = concat(opnd, chr(cq2))
+                      hold pos = pos + 1
+                    }
+                  } otherwise {
+                    hold opnd = concat(opnd, chr(cq))
                     hold pos = pos + 1
                   }
-                } otherwise {
-                  hold opnd = concat(opnd, chr(cq))
-                  hold pos = pos + 1
                 }
               }
             }
           }
-        }
-        // name operand
-        when (c3 >= 97 && c3 <= 122) || (c3 >= 65 && c3 <= 90) {
-          hold rn = 1
-          while rn == 1 {
-            when pos >= n {
-              hold rn = 0
-            } otherwise {
-              hold cn = sx_index(source,pos)
-              when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-                hold nm3 = concat(nm3, chr(cn))
-                hold pos = pos + 1
-              } otherwise {
-                hold rn = 0
-              }
-            }
-          }
-          hold opnd = nm3
-          // postfix .field
-          hold opcq = 0
-          when pos < n {
-            hold opcq = sx_index(source,pos)
-          }
-          when opcq == 46 {
-            hold pos = pos + 1
-            hold opfld = ""
+          // name operand
+          when (c3 >= 97 && c3 <= 122) || (c3 >= 65 && c3 <= 90) {
             hold rn = 1
             while rn == 1 {
               when pos >= n {
@@ -2599,75 +3133,107 @@ hold ec = 0
               } otherwise {
                 hold cn = sx_index(source,pos)
                 when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-                  hold opfld = concat(opfld, chr(cn))
+                  hold nm3 = concat(nm3, chr(cn))
                   hold pos = pos + 1
                 } otherwise {
                   hold rn = 0
                 }
               }
             }
-            hold opnd = concat(opnd, ".")
-            hold opnd = concat(opnd, opfld)
-          }
-          // postfix [index]
-          when opcq == 91 {
-            hold pos = pos + 1
-            hold opix = ""
-            hold rn = 1
-            while rn == 1 {
-              when pos >= n {
-                hold rn = 0
-              } otherwise {
-                hold cn = sx_index(source,pos)
-                when (cn >= 48 && cn <= 57) || (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || cn == 95 {
-                  hold opix = concat(opix, chr(cn))
-                  hold pos = pos + 1
-                } otherwise {
-                  hold rn = 0
-                }
-              }
-            }
+            hold opnd = nm3
+            // postfix .field
+            hold opcq = 0
             when pos < n {
-              hold cn = sx_index(source,pos)
-              when cn == 93 {
-                hold pos = pos + 1
-              }
+              hold opcq = sx_index(source,pos)
             }
-            // list or string index (by declaration table)
-            hold opk3 = concat("|", nm3)
-            hold opk3 = concat(opk3, "|")
-            hold opfd = 0
-            hold opd3 = 0
-            hold opl3 = len(ldecls)
-            hold opn3 = len(opk3)
-            while opd3 + opn3 <= opl3 {
-              hold opok = 1
-              hold opj3 = 0
-              while opj3 < opn3 {
-                hold opa3 = sx_index(ldecls, opd3 + opj3)
-                hold opb3 = sx_index(opk3, opj3)
-                when opa3 == opb3 {
-                  hold opj3 = opj3 + 1
+            when opcq == 46 {
+              hold pos = pos + 1
+              hold opfld = ""
+              hold rn = 1
+              while rn == 1 {
+                when pos >= n {
+                  hold rn = 0
                 } otherwise {
-                  hold opok = 0
-                  hold opj3 = opn3
+                  hold cn = sx_index(source,pos)
+                  when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+                    hold opfld = concat(opfld, chr(cn))
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold rn = 0
+                  }
                 }
               }
-              when opok == 1 {
-                hold opfd = 1
-                hold opd3 = opl3
-              } otherwise {
-                hold opd3 = opd3 + 1
+              hold opnd = concat(opnd, ".")
+              hold opnd = concat(opnd, opfld)
+              hold opfldstr = 0
+              hold sfkey = concat("|", nm3)
+              hold sfkey = concat(sfkey, ".")
+              hold sfkey = concat(sfkey, opfld)
+              hold sfkey = concat(sfkey, "|")
+              hold sfk = len(sfkey)
+              hold sfl = len(sflds)
+              hold sfhit = 0
+              hold sfi = 0
+              while sfi + sfk <= sfl {
+                hold sfeq = 1
+                hold sfj = 0
+                while sfj < sfk {
+                  hold sfa = sx_index(sflds, sfi + sfj)
+                  hold sfb = sx_index(sfkey, sfj)
+                  when sfa == sfb {
+                    hold sfj = sfj + 1
+                  } otherwise {
+                    hold sfeq = 0
+                    hold sfj = sfk
+                  }
+                }
+                when sfeq == 1 {
+                  hold sfhit = 1
+                  hold sfi = sfl
+                } otherwise {
+                  hold sfi = sfi + 1
+                }
+              }
+              when sfhit == 1 {
+                hold opfldstr = 1
               }
             }
-            when opfd == 0 {
+            // postfix [index]
+            when opcq == 91 {
+              hold pos = pos + 1
+              hold opix = ""
+              hold rn = 1
+              while rn == 1 {
+                when pos >= n {
+                  hold rn = 0
+                } otherwise {
+                  hold cn = sx_index(source,pos)
+                  when (cn >= 48 && cn <= 57) || (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || cn == 95 {
+                    hold opix = concat(opix, chr(cn))
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold rn = 0
+                  }
+                }
+              }
+              when pos < n {
+                hold cn = sx_index(source,pos)
+                when cn == 93 {
+                  hold pos = pos + 1
+                }
+              }
+              // list or string index (by declaration table)
+              hold opk3 = concat("|", nm3)
+              hold opk3 = concat(opk3, "|")
+              hold opfd = 0
               hold opd3 = 0
-              hold opl3 = len(sdecls)
+              hold opl3 = len(ldecls)
+              hold opn3 = len(opk3)
               while opd3 + opn3 <= opl3 {
                 hold opok = 1
                 hold opj3 = 0
                 while opj3 < opn3 {
-                  hold opa3 = sx_index(sdecls, opd3 + opj3)
+                  hold opa3 = sx_index(ldecls, opd3 + opj3)
                   hold opb3 = sx_index(opk3, opj3)
                   when opa3 == opb3 {
                     hold opj3 = opj3 + 1
@@ -2677,58 +3243,165 @@ hold ec = 0
                   }
                 }
                 when opok == 1 {
-                  hold opfd = 2
+                  hold opfd = 1
                   hold opd3 = opl3
                 } otherwise {
                   hold opd3 = opd3 + 1
                 }
               }
-            }
-            when opfd == 1 {
-              hold opnd = concat("sx_lget(", opnd)
-              hold opnd = concat(opnd, ",")
-              hold opnd = concat(opnd, opix)
-              hold opnd = concat(opnd, ")")
-            } otherwise {
-              when opfd == 2 {
-                hold opnd = concat("sx_idx(", opnd)
+              when opfd == 0 {
+                hold opd3 = 0
+                hold opl3 = len(sdecls)
+                while opd3 + opn3 <= opl3 {
+                  hold opok = 1
+                  hold opj3 = 0
+                  while opj3 < opn3 {
+                    hold opa3 = sx_index(sdecls, opd3 + opj3)
+                    hold opb3 = sx_index(opk3, opj3)
+                    when opa3 == opb3 {
+                      hold opj3 = opj3 + 1
+                    } otherwise {
+                      hold opok = 0
+                      hold opj3 = opn3
+                    }
+                  }
+                  when opok == 1 {
+                    hold opfd = 2
+                    hold opd3 = opl3
+                  } otherwise {
+                    hold opd3 = opd3 + 1
+                  }
+                }
+              }
+              when opfd == 1 {
+                hold opnd = concat("sx_lget(", opnd)
                 hold opnd = concat(opnd, ",")
                 hold opnd = concat(opnd, opix)
                 hold opnd = concat(opnd, ")")
+              } otherwise {
+                when opfd == 2 {
+                  hold opnd = concat("sx_idx(", opnd)
+                  hold opnd = concat(opnd, ",")
+                  hold opnd = concat(opnd, opix)
+                  hold opnd = concat(opnd, ")")
+                }
+              }
+            }
+          }
+          // is the operand a string value? (string literal, or a name whose
+          // base name is tracked as a string)
+          hold osfind = 0
+          when oq == 1 {
+            hold osfind = 1
+          }
+          when opfldstr == 1 {
+            hold osfind = 1
+          }
+          when (c3 >= 97 && c3 <= 122) || (c3 >= 65 && c3 <= 90) {
+            hold key = concat("|", nm3)
+            hold key = concat(key, "|")
+            hold di = 0
+            hold dl = len(sdecls)
+            hold kl = len(key)
+            while di + kl <= dl {
+              hold ok = 1
+              hold j = 0
+              while j < kl {
+                hold aa = sx_index(sdecls, di + j)
+                hold bb = sx_index(key, j)
+                when aa == bb {
+                  hold j = j + 1
+                } otherwise {
+                  hold ok = 0
+                  hold j = kl
+                }
+              }
+              when ok == 1 {
+                hold osfind = 1
+                hold di = dl
+              } otherwise {
+                hold di = di + 1
+              }
+            }
+          }
+          // the operand as text: while building a string a plain number or
+          // unknown name is quoted (the same text as before), a string value
+          // is used as-is
+          hold oterm = opnd
+          when isstr == 1 {
+            when osfind == 0 {
+              hold oterm = concat(q, opnd)
+              hold oterm = concat(oterm, q)
+            }
+          }
+          hold moreop = 1
+          when opch == 43 || opch == 45 {
+            // flush the mul-level term built so far into the add accumulator
+            when addop == 0 {
+              hold addacc = ct
+            } otherwise {
+              when isstr == 1 {
+                hold addacc = concat("sx_cat(", addacc)
+                hold addacc = concat(addacc, ", ")
+                hold addacc = concat(addacc, ct)
+                hold addacc = concat(addacc, ")")
+              } otherwise {
+                hold addacc = concat("(", addacc)
+                hold addacc = concat(addacc, " ")
+                hold addacc = concat(addacc, chr(addop))
+                hold addacc = concat(addacc, " ")
+                hold addacc = concat(addacc, ct)
+                hold addacc = concat(addacc, ")")
+              }
+            }
+            hold addop = opch
+            hold ct = oterm
+          } otherwise {
+            // mul level: combine straight into the current term
+            when isstr == 1 {
+              hold ct = concat("sx_cat(", ct)
+              hold ct = concat(ct, ", ")
+              hold ct = concat(ct, oterm)
+              hold ct = concat(ct, ")")
+            } otherwise {
+              when opch == 37 {
+                // modulo: (double)((long)(a)%(long)(b))
+                hold ct = concat("(double)((long)(", ct)
+                hold ct = concat(ct, ")")
+                hold ct = concat(ct, chr(opch))
+                hold ct = concat(ct, "(long)(")
+                hold ct = concat(ct, oterm)
+                hold ct = concat(ct, "))")
+              } otherwise {
+                hold ct = concat("(", ct)
+                hold ct = concat(ct, " ")
+                hold ct = concat(ct, chr(opch))
+                hold ct = concat(ct, " ")
+                hold ct = concat(ct, oterm)
+                hold ct = concat(ct, ")")
               }
             }
           }
         }
-        when rk == 1 {
-          // string value on the left: append the operand as text
-          hold rhs = concat("sx_cat(", rhs)
+      }
+      // flush a pending + / - at the end of the chain
+      hold rhs = ct
+      when addop != 0 {
+        when isstr == 1 {
+          hold rhs = concat("sx_cat(", addacc)
           hold rhs = concat(rhs, ", ")
-          when oq == 0 {
-            hold rhs = concat(rhs, q)
-          }
-          hold rhs = concat(rhs, opnd)
-          when oq == 0 {
-            hold rhs = concat(rhs, q)
-          }
+          hold rhs = concat(rhs, ct)
           hold rhs = concat(rhs, ")")
-          hold rt = 1
         } otherwise {
-          when opch == 37 {
-            // modulo: (double)((long)(a)%(long)(b))
-            hold rhs = concat("(double)((long)(", rhs)
-            hold rhs = concat(rhs, ")")
-            hold rhs = concat(rhs, chr(opch))
-            hold rhs = concat(rhs, "(long)(")
-            hold rhs = concat(rhs, opnd)
-            hold rhs = concat(rhs, "))")
-          } otherwise {
-            hold rhs = concat(rhs, " ")
-            hold rhs = concat(rhs, chr(opch))
-            hold rhs = concat(rhs, " ")
-            hold rhs = concat(rhs, opnd)
-          }
+          hold rhs = concat("(", addacc)
+          hold rhs = concat(rhs, " ")
+          hold rhs = concat(rhs, chr(addop))
+          hold rhs = concat(rhs, " ")
+          hold rhs = concat(rhs, ct)
+          hold rhs = concat(rhs, ")")
         }
       }
+      hold rk = isstr
 
       // emit
       hold ind = "  "
@@ -2824,7 +3497,196 @@ hold ec = 0
         hold ctrim = concat(ctrim, chr(sx_index(cond,ci)))
         hold ci = ci + 1
       }
-      hold crepl = ctrim
+      // ---- rewrite '%' in the condition to the long-cast form ----
+      // C precedence already matches pure-min for + - * / and the
+      // comparisons, so only '%' needs work here:
+      //   L % R   ->   (double)((long)(L)%(long)(R))
+      // L is the maximal * / % chain to the left, R is the next atom.
+      hold crepl = ""
+      hold cwi = 0
+      while cwi < cl {
+        hold ccx = sx_index(ctrim, cwi)
+        when ccx == 34 {
+          // string literal: copy verbatim, escapes kept
+          hold crepl = concat(crepl, chr(ccx))
+          hold cwi = cwi + 1
+          hold cwrun = 1
+          while cwrun == 1 {
+            when cwi >= cl {
+              hold cwrun = 0
+            } otherwise {
+              hold ccx = sx_index(ctrim, cwi)
+              hold crepl = concat(crepl, chr(ccx))
+              hold cwi = cwi + 1
+              when ccx == 92 {
+                when cwi < cl {
+                  hold crepl = concat(crepl, chr(sx_index(ctrim, cwi)))
+                  hold cwi = cwi + 1
+                }
+              } otherwise {
+                when ccx == 34 {
+                  hold cwrun = 0
+                }
+              }
+            }
+          }
+        } otherwise {
+          when ccx == 37 {
+            // ---- left operand: scan back over the mul-level chain ----
+            hold cwal = len(crepl)
+            hold cwrun = 1
+            while cwrun == 1 {
+              hold cwrun = 0
+              when cwal > 0 {
+                hold ccx = sx_index(crepl, cwal - 1)
+                when ccx == 41 || ccx == 93 {
+                  // skip a balanced (..) / [..] group, then keep going
+                  hold cwbd = 1
+                  hold cwal = cwal - 1
+                  while cwbd > 0 {
+                    when cwal <= 0 {
+                      hold cwbd = 0
+                    } otherwise {
+                      hold ccx = sx_index(crepl, cwal - 1)
+                      when ccx == 41 || ccx == 93 {
+                        hold cwbd = cwbd + 1
+                      }
+                      when ccx == 40 || ccx == 91 {
+                        hold cwbd = cwbd - 1
+                      }
+                      hold cwal = cwal - 1
+                    }
+                  }
+                  hold cwrun = 1
+                } otherwise {
+                  when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 || ccx == 46 || ccx == 42 || ccx == 47 || ccx == 32 || ccx == 9 {
+                    hold cwal = cwal - 1
+                    hold cwrun = 1
+                  }
+                }
+              }
+            }
+            // ---- right operand: the next atom (with .field / [i] / (..)) ----
+            hold cwri = cwi + 1
+            hold cwnb = 1
+            while cwnb == 1 {
+              when cwri >= cl {
+                hold cwnb = 0
+              } otherwise {
+                hold ccx = sx_index(ctrim, cwri)
+                when ccx == 32 || ccx == 9 {
+                  hold cwri = cwri + 1
+                } otherwise {
+                  hold cwnb = 0
+                }
+              }
+            }
+            hold cwre = cwri
+            when cwre < cl {
+              hold ccx = sx_index(ctrim, cwre)
+              when ccx == 45 || ccx == 43 {
+                hold cwre = cwre + 1
+              }
+            }
+            when cwre < cl {
+              hold ccx = sx_index(ctrim, cwre)
+              when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 || ccx == 46 {
+                hold cwnb = 1
+                while cwnb == 1 {
+                  when cwre >= cl {
+                    hold cwnb = 0
+                  } otherwise {
+                    hold ccx = sx_index(ctrim, cwre)
+                    when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 || ccx == 46 {
+                      hold cwre = cwre + 1
+                    } otherwise {
+                      hold cwnb = 0
+                    }
+                  }
+                }
+              }
+            }
+            // postfix groups and .field, repeated
+            hold cwnb = 1
+            while cwnb == 1 {
+              hold cwnb = 0
+              when cwre < cl {
+                hold ccx = sx_index(ctrim, cwre)
+                when ccx == 40 || ccx == 91 {
+                  hold cwbd = 0
+                  hold cwrun = 1
+                  while cwrun == 1 {
+                    when cwre >= cl {
+                      hold cwrun = 0
+                    } otherwise {
+                      hold ccx = sx_index(ctrim, cwre)
+                      when ccx == 40 || ccx == 91 {
+                        hold cwbd = cwbd + 1
+                      }
+                      when ccx == 41 || ccx == 93 {
+                        hold cwbd = cwbd - 1
+                      }
+                      hold cwre = cwre + 1
+                      when cwbd <= 0 {
+                        hold cwrun = 0
+                      }
+                    }
+                  }
+                  hold cwnb = 1
+                } otherwise {
+                  when ccx == 46 {
+                    hold cwre = cwre + 1
+                    hold cwrun = 1
+                    while cwrun == 1 {
+                      when cwre >= cl {
+                        hold cwrun = 0
+                      } otherwise {
+                        hold ccx = sx_index(ctrim, cwre)
+                        when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 {
+                          hold cwre = cwre + 1
+                        } otherwise {
+                          hold cwrun = 0
+                        }
+                      }
+                    }
+                    hold cwnb = 1
+                  }
+                }
+              }
+            }
+            // ---- L, R, and cut crepl back to the start of L ----
+            hold cwl = ""
+            hold cwn = len(crepl)
+            hold cwj = cwal
+            while cwj < cwn {
+              hold cwl = concat(cwl, chr(sx_index(crepl, cwj)))
+              hold cwj = cwj + 1
+            }
+            hold cwr = ""
+            hold cwj = cwri
+            while cwj < cwre {
+              hold cwr = concat(cwr, chr(sx_index(ctrim, cwj)))
+              hold cwj = cwj + 1
+            }
+            hold cwnew = ""
+            hold cwj = 0
+            while cwj < cwal {
+              hold cwnew = concat(cwnew, chr(sx_index(crepl, cwj)))
+              hold cwj = cwj + 1
+            }
+            hold cwnew = concat(cwnew, "(double)((long)(")
+            hold cwnew = concat(cwnew, cwl)
+            hold cwnew = concat(cwnew, ")%(long)(")
+            hold cwnew = concat(cwnew, cwr)
+            hold cwnew = concat(cwnew, "))")
+            hold crepl = cwnew
+            hold cwi = cwre
+          } otherwise {
+            hold crepl = concat(crepl, chr(ccx))
+            hold cwi = cwi + 1
+          }
+        }
+      }
       when pos < n {
         hold cs = sx_index(source,pos)
         when cs == 123 {
@@ -3232,7 +4094,7 @@ hold ec = 0
       }
       hold sfields = ""
       hold firstp = 1
-      hold typedefs = concat(typedefs, "typedef struct {")
+      hold tdskip = 1
       hold rn = 1
       while rn == 1 {
         hold sk = 1
@@ -3277,9 +4139,7 @@ hold ec = 0
               }
               hold sfields = concat(sfields, sf)
               hold firstp = 0
-              hold typedefs = concat(typedefs, " double ")
-              hold typedefs = concat(typedefs, sf)
-              hold typedefs = concat(typedefs, ";")
+              hold sfields2 = concat(sfields2, sf)
             } otherwise {
               hold pos = pos + 1
             }
@@ -3290,10 +4150,6 @@ hold ec = 0
       hold sdefs = concat(sdefs, ":")
       hold sdefs = concat(sdefs, sfields)
       hold sdefs = concat(sdefs, ";")
-      hold typedefs = concat(typedefs, " } ")
-      hold typedefs = concat(typedefs, stname)
-      hold typedefs = concat(typedefs, ";")
-      hold typedefs = concat(typedefs, nl)
     }
 
     when act == 0 {
@@ -3339,7 +4195,101 @@ when rt == 1 {
   hold out = concat(out, "static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=(sx_list*)malloc(sizeof(sx_list)); L->n=0; L->cap=4; L->d=(double*)malloc(sizeof(double)*4);} if(L->n>=L->cap){ L->cap*=2; L->d=(double*)realloc(L->d,sizeof(double)*(size_t)L->cap);} L->d[L->n++]=v; return L; }\n\n")
 }
 hold out = concat(out, fns)
-hold out = concat(out, typedefs)
+// ---------------- struct typedefs (field types come from literals) ----------------
+hold tdi = 0
+hold tdn = len(sdefs)
+while tdi < tdn {
+  hold tdname = ""
+  hold tdrun = 1
+  while tdrun == 1 {
+    when tdi >= tdn {
+      hold tdrun = 0
+    } otherwise {
+      hold tdc = sx_index(sdefs, tdi)
+      when tdc == 58 {
+        hold tdrun = 0
+      } otherwise {
+        hold tdname = concat(tdname, chr(tdc))
+      }
+      hold tdi = tdi + 1
+    }
+  }
+  hold out = concat(out, "typedef struct {")
+  hold tdrun = 1
+  while tdrun == 1 {
+    when tdi >= tdn {
+      hold tdrun = 0
+    } otherwise {
+      hold tdc = sx_index(sdefs, tdi)
+      when tdc == 59 {
+        hold tdrun = 0
+        hold tdi = tdi + 1
+      } otherwise {
+        when tdc == 44 {
+          hold tdi = tdi + 1
+        } otherwise {
+          hold tdfld = ""
+          hold tdf = 1
+          while tdf == 1 {
+            when tdi >= tdn {
+              hold tdf = 0
+            } otherwise {
+              hold tdc = sx_index(sdefs, tdi)
+              when tdc == 44 || tdc == 59 {
+                hold tdf = 0
+              } otherwise {
+                hold tdfld = concat(tdfld, chr(tdc))
+                hold tdi = tdi + 1
+              }
+            }
+          }
+          hold tdkey = concat("|", tdname)
+          hold tdkey = concat(tdkey, ".")
+          hold tdkey = concat(tdkey, tdfld)
+          hold tdkey = concat(tdkey, "=")
+          hold tdk = len(tdkey)
+          hold tdl = len(ftypes)
+          hold tdhit = 0
+          hold tdp = 0
+          while tdp + tdk < tdl {
+            hold tdeq = 1
+            hold tdj = 0
+            while tdj < tdk {
+              hold tda = sx_index(ftypes, tdp + tdj)
+              hold tdb = sx_index(tdkey, tdj)
+              when tda == tdb {
+                hold tdj = tdj + 1
+              } otherwise {
+                hold tdeq = 0
+                hold tdj = tdk
+              }
+            }
+            when tdeq == 1 {
+              hold tdpk = sx_index(ftypes, tdp + tdk)
+              when tdpk == 49 {
+                hold tdhit = 1
+              }
+              hold tdp = tdl
+            } otherwise {
+              hold tdp = tdp + 1
+            }
+          }
+          when tdhit == 1 {
+            hold out = concat(out, " char *")
+          } otherwise {
+            hold out = concat(out, " double ")
+          }
+          hold out = concat(out, tdfld)
+          hold out = concat(out, ";")
+        }
+      }
+    }
+  }
+  hold out = concat(out, " } ")
+  hold out = concat(out, tdname)
+  hold out = concat(out, ";")
+  hold out = concat(out, nl)
+}
 when rt == 1 {
   hold out = concat(out, "int main(int argc,char**argv){\n")
   hold out = concat(out, "  sx_argn=argc; sx_argv_p=argv;\n")
@@ -3370,6 +4320,26 @@ when exbad5 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: use must be followed by a quoted path, e.g. use \"lib.sa\"")
   hold exerr = concat(exerr, nl)
   show "min: use must be followed by a quoted path, e.g. use \"lib.sa\""
+}
+when exbad6 == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: struct field is used with two different types (string vs number)")
+  hold exerr = concat(exerr, nl)
+  show "min: struct field used with two different types (string vs number)"
+}
+when exbad7 == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: struct literal fields must be given in declaration order")
+  hold exerr = concat(exerr, nl)
+  show "min: struct literal fields must be given in declaration order"
+}
+when exbad8 == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: struct literal must fill every field")
+  hold exerr = concat(exerr, nl)
+  show "min: struct literal must fill every field"
+}
+when exbad9 == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: nested struct literal values are not supported by the self-hosted compiler (the seed compiler supports them)")
+  hold exerr = concat(exerr, nl)
+  show "min: nested struct literal values are not supported by the self-hosted compiler (the seed compiler supports them)"
 }
 when exbad4 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: a '}' ended up inside a give expression; put one statement per line")

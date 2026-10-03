@@ -25,7 +25,8 @@ TESTS    := selfhost/seed_tests
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
-        test-boot test-fn test-fn2 test-list test-struct test-parity pack-compiler
+        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest \
+        pack-compiler
 
 all: true-selfhost-min
 
@@ -125,6 +126,68 @@ test-mod:
 	 echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
 	@echo "[OK] gen2 modulo + else"
 
+test-user:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'struct User {\n  name,\n  age\n}\nhold u = User { name: "Ada", age: 36 }\nshow u.name\nshow u.age\nhold s = u.name\nshow s\nshow u.name + "!"\nshow u.age + 1\nhold v = User { "Bob", 7 }\nshow v.name\nshow len(v.name)\n' > $(TESTS)/ts_user.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_user.sa > $(TESTS)/ts_user_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_user_sm $(TESTS)/ts_user_sm.c
+	./$(GEN2) $(TESTS)/ts_user.sa $(TESTS)/ts_user_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_user_g2 $(TESTS)/ts_user_g2.c
+	@grep -q 'char \*name; double age' $(TESTS)/ts_user_sm.c
+	@grep -q 'char \*name; double age' $(TESTS)/ts_user_g2.c
+	@./$(TESTS)/ts_user_sm > $(TESTS)/ts_user_sm.out; ./$(TESTS)/ts_user_g2 > $(TESTS)/ts_user_g2.out; \
+	 diff $(TESTS)/ts_user_sm.out $(TESTS)/ts_user_g2.out
+	@out=$$(./$(TESTS)/ts_user_g2); \
+	 test "$$(echo "$$out" | sed -n 1p)" = "Ada"; test "$$(echo "$$out" | sed -n 2p)" = "36"; \
+	 test "$$(echo "$$out" | sed -n 4p)" = "Ada!"; test "$$(echo "$$out" | sed -n 5p)" = "37"; \
+	 test "$$(echo "$$out" | sed -n 6p)" = "Bob"; test "$$(echo "$$out" | sed -n 7p)" = "3"
+	@printf 'struct User {\n  name,\n  age\n}\nhold a = User { name: "Ada", age: 36 }\nhold b = User { name: 1, age: 2 }\n' > $(TESTS)/ts_userbad.sa
+	@./$(GEN2) $(TESTS)/ts_userbad.sa $(TESTS)/ts_userbad.c >/dev/null; grep -q '#error' $(TESTS)/ts_userbad.c
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_userbad.sa > /dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a struct field type mismatch"; exit 1; fi
+	@printf 'struct User {\n  name,\n  age\n}\nhold u = User { age: 1, name: "Ada" }\n' > $(TESTS)/ts_order.sa
+	@./$(GEN2) $(TESTS)/ts_order.sa $(TESTS)/ts_order.c >/dev/null; grep -q '#error' $(TESTS)/ts_order.c
+	@printf 'struct User {\n  name,\n  age\n}\nhold u = User { age: 36, name: "Ada" }\nshow u.name\nshow u.age\n' > $(TESTS)/ts_part.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_part.sa > $(TESTS)/ts_part_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_part_sm $(TESTS)/ts_part_sm.c
+	@out=$$(./$(TESTS)/ts_part_sm); test "$$(echo "$$out" | sed -n 1p)" = "Ada"; test "$$(echo "$$out" | sed -n 2p)" = "36"
+	@echo "[OK] struct string fields (User name/age): seed-min and gen2 agree; mismatches rejected"
+
+test-chain:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold t = "b"\nhold s = "a"\nshow s + t\nhold u = s + t + "!"\nshow u\nhold a = 1\nhold b = 2\nhold c = 3\nshow a + b + c\nshow a * b + c\nshow 1 + 2 * 3\nhold d = 10 - 2 - 3\nshow d\nshow 10 %% 4 + 1\nshow a %% 2 + b * c\n' > $(TESTS)/ts_chain.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_chain.sa > $(TESTS)/ts_chain_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_chain_sm $(TESTS)/ts_chain_sm.c
+	./$(GEN2) $(TESTS)/ts_chain.sa $(TESTS)/ts_chain_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_chain_g2 $(TESTS)/ts_chain_g2.c
+	@./$(TESTS)/ts_chain_sm > $(TESTS)/ts_chain_sm.out; ./$(TESTS)/ts_chain_g2 > $(TESTS)/ts_chain_g2.out; \
+	 diff $(TESTS)/ts_chain_sm.out $(TESTS)/ts_chain_g2.out
+	@test "$$(sed -n 1p $(TESTS)/ts_chain_g2.out)" = "ab"
+	@test "$$(sed -n 2p $(TESTS)/ts_chain_g2.out)" = "ab!"
+	@test "$$(sed -n 3p $(TESTS)/ts_chain_g2.out)" = "6"
+	@test "$$(sed -n 4p $(TESTS)/ts_chain_g2.out)" = "5"
+	@test "$$(sed -n 5p $(TESTS)/ts_chain_g2.out)" = "7"
+	@test "$$(sed -n 6p $(TESTS)/ts_chain_g2.out)" = "5"
+	@test "$$(sed -n 7p $(TESTS)/ts_chain_g2.out)" = "3"
+	@test "$$(sed -n 8p $(TESTS)/ts_chain_g2.out)" = "7"
+	@echo "[OK] gen2 chained + - * / % (and string + name) agree with seed-min"
+
+test-condmod:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold a = 17\nwhile a %% 10 > 0 {\n  show a %% 10\n  hold a = a - 3\n}\nwhen 10 %% 3 == 1 {\n  show "mod-ok"\n}\n' > $(TESTS)/ts_cm.sa
+	./$(GEN2) $(TESTS)/ts_cm.sa $(TESTS)/ts_cm.c >/dev/null
+	@grep -q '(double)((long)(a' $(TESTS)/ts_cm.c
+	@grep -q '%(long)(10)' $(TESTS)/ts_cm.c
+	$(CC) -O2 -o $(TESTS)/ts_cm $(TESTS)/ts_cm.c
+	@out=$$(./$(TESTS)/ts_cm); test "$$(echo "$$out" | sed -n 1p)" = "7"; \
+	 test "$$(echo "$$out" | sed -n 4p)" = "8"; test "$$(echo "$$out" | sed -n 7p)" = "mod-ok"
+	@echo "[OK] gen2 while/when condition % long-cast rewrite"
+
 test-struct2:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	@mkdir -p $(TESTS)
@@ -180,6 +243,37 @@ test-use:
 	./$(GEN2) $(TESTS)/ts_uq.sa $(TESTS)/ts_uq.c >/dev/null
 	@grep -q '#error' $(TESTS)/ts_uq.c
 	@echo "[OK] gen2 use: splice, nested depth 2, missing file and unquoted path are hard errors"
+
+test-nest:
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'struct Point {\n  name,\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: Point { name: "p1", x: 1 }, b: Point { name: "p2", x: 2 } }\nshow l.a.name\nshow l.a.x\nshow l.b.name\nshow l.b.x\nhold m = l.b\nshow m.name\nshow m.x\n' > $(TESTS)/ts_nest.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_nest.sa > $(TESTS)/ts_nest_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_nest_sm $(TESTS)/ts_nest_sm.c
+	@grep -q 'typedef struct { char \*name; double x; } Point;' $(TESTS)/ts_nest_sm.c
+	@grep -q 'typedef struct { Point a; Point b; } Line;' $(TESTS)/ts_nest_sm.c
+	@out=$$(./$(TESTS)/ts_nest_sm); \
+	 test "$$(echo "$$out" | sed -n 1p)" = "p1"; test "$$(echo "$$out" | sed -n 2p)" = "1"; \
+	 test "$$(echo "$$out" | sed -n 3p)" = "p2"; test "$$(echo "$$out" | sed -n 4p)" = "2"; \
+	 test "$$(echo "$$out" | sed -n 5p)" = "p2"; test "$$(echo "$$out" | sed -n 6p)" = "2"
+	@# the self-hosted compiler does not support nested literals yet: it must
+	@# say so plainly and emit #error, never silently wrong code
+	@./$(GEN2) $(TESTS)/ts_nest.sa $(TESTS)/ts_nest_g2.c >/dev/null
+	@grep -q 'nested struct literal values are not supported' $(TESTS)/ts_nest_g2.c
+	@# a nested struct must be declared before the struct that nests it
+	@printf 'struct Line {\n  a\n}\nstruct Point {\n  x\n}\nhold l = Line { a: Point { 1 } }\n' > $(TESTS)/ts_nestfwd.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestfwd.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a nested struct declared later"; exit 1; fi
+	@# a list still cannot be a struct field
+	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: [1], b: Point { 2 } }\n' > $(TESTS)/ts_nestlist.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestlist.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a list in a struct field"; exit 1; fi
+	@# chaining through a field with no struct type is a clear error, not bad C
+	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: Point { 1 } }\nshow l.b.x\n' > $(TESTS)/ts_nestmiss.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestmiss.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a chain through an untyped struct field"; exit 1; fi
+	@echo "[OK] nested structs in seed-min (typed fields, ordered typedefs, .a.x chains); gen2 rejects them explicitly"
 
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -302,7 +396,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-parity
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-parity
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -336,7 +430,25 @@ native-test: $(NATIVE_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/native_unsup.sa $(TESTS)/native_unsup 2>/dev/null; then \
 	  echo "[FAIL] native accepted lists (silently wrong code)"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_unsup.sa $(TESTS)/native_unsup 2>&1 | grep -q 'unsupported'
-	@echo "[OK] native: modulo, else alias, unsupported constructs rejected"
+	@# one slot per name: names sharing a first letter must not share storage
+	@printf 'hold ab = 1\nhold ac = 2\nshow ab\nshow ac\n' > $(TESTS)/native_slot.sa
+	./$(NATIVE_BIN) $(TESTS)/native_slot.sa $(TESTS)/native_slot
+	@out=$$(./$(TESTS)/native_slot); test "$$(echo "$$out" | sed -n 1p)" = "1"; test "$$(echo "$$out" | sed -n 2p)" = "2"
+	@# an undeclared name must be a hard error, never a silent 0
+	@printf 'hold x = 1\nshow y\n' > $(TESTS)/native_undef.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_undef.sa $(TESTS)/native_undef 2>/dev/null; then \
+	  echo "[FAIL] native accepted an undefined variable (silently wrong code)"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_undef.sa $(TESTS)/native_undef 2>&1 | grep -q 'undefined variable'
+	@# structs and field access are rejected, not mis-compiled
+	@printf 'struct Point {\n  x,\n  y\n}\nhold p = Point { 1, 2 }\nshow p.x\n' > $(TESTS)/native_struct.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_struct.sa $(TESTS)/native_struct 2>/dev/null; then \
+	  echo "[FAIL] native accepted structs (silently wrong code)"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_struct.sa $(TESTS)/native_struct 2>&1 | grep -q 'structs are not in the native subset'
+	@printf 'hold a = 1\nshow a.x\n' > $(TESTS)/native_fld.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_fld.sa $(TESTS)/native_fld 2>/dev/null; then \
+	  echo "[FAIL] native accepted field access (silently wrong code)"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_fld.sa $(TESTS)/native_fld 2>&1 | grep -q 'unsupported'
+	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists/structs rejected"
 	@echo "=== NATIVE-TEST-OK ==="
 
 grammar: true-selfhost-min

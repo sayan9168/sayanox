@@ -84,8 +84,15 @@ enum { TY_NUM=0, TY_STR=1, TY_LIST=2, TY_STRUCT=3 };
 static char *vn[512]; static int vt[512]; static int vs[512];
 static int nv;
 static int in_fn;
+/* index of the struct the last atom() built (a struct literal); -1 otherwise.
+ * Used to type a nested literal value while a struct literal is parsed. */
+static int last_si = -1;
 
-typedef struct { char *name; char *fields[16]; int nf; } StructDef;
+/* fty[f] is the C type of a field: 0 = double, 1 = char * (string).
+ * fset[f] is 1 once a struct literal has fixed that field's type: the first
+ * literal that mentions a field decides, later literals must agree (a
+ * mismatch is a hard error, never a silently wrong typedef). */
+typedef struct { char *name; char *fields[16]; int nf; int fty[16]; int fsi[16]; int fset[16]; } StructDef;
 static StructDef SD[32]; static int nsd;
 
 static void die(const char *m){ fprintf(stderr,"seed_min: %s at %zu\n", m, P); exit(1); }
@@ -114,6 +121,12 @@ static char *parse_id(void){
 }
 static int findv(const char *n){ for(int i=0;i<nv;i++) if(!strcmp(vn[i],n)) return i; return -1; }
 static int find_struct(const char *n){ for(int i=0;i<nsd;i++) if(!strcmp(SD[i].name,n)) return i; return -1; }
+/* how a struct field's type is named in a diagnostic */
+static const char *ftyname(int si, int f){
+  if(SD[si].fty[f]==1) return "a string";
+  if(SD[si].fty[f]==2) return "a struct";
+  return "a number";
+}
 static void setv(const char *n, int ty){
   int i=findv(n);
   if(i<0){ if(nv>=512) die("too many vars"); vn[nv]=strdup(n); vt[nv]=ty; vs[nv]=-1; nv++; }
@@ -130,6 +143,7 @@ static int getsi(const char *n){ int i=findv(n); return i<0?-1:vs[i]; }
 static char *expr(int *oty);
 static void stmt(void);
 static void block(void);
+static int field_type(const char *base, const char *fld, int *osi);
 
 static void parse_struct_def(void){
   eat("struct");
@@ -141,6 +155,9 @@ static void parse_struct_def(void){
   if(nsd>=32) die("too many structs");
   StructDef *D=&SD[nsd];
   D->name=name; D->nf=0;
+  memset(D->fty,0,sizeof D->fty);
+  for(int i=0;i<16;i++) D->fsi[i]=-1;
+  memset(D->fset,0,sizeof D->fset);
   skip(); eat("{");
   for(;;){
     skip();
@@ -155,13 +172,14 @@ static void parse_struct_def(void){
 }
 
 static char *atom(int *oty){
-  skip();
+  skip(); last_si = -1;
   if(P<N && S[P]=='('){ P++; char *e=expr(oty); skip(); if(P>=N||S[P]!=')') die(")"); P++; return e; }
   if(P<N && S[P]=='['){
     P++; char *els[64]; int ne=0; skip();
     if(P>=N||S[P]!=']'){
       for(;;){
         int et; els[ne++]=expr(&et); if(ne>=64) die("list too big");
+        if(et==TY_STRUCT) die("a list cannot hold a struct value");
         skip(); if(P<N&&S[P]==','){P++;skip();continue;} break;
       }
     }
@@ -191,30 +209,82 @@ static char *atom(int *oty){
     char *id=parse_id(); skip();
     int si=find_struct(id);
     if(si>=0 && P<N && S[P]=='{'){
-      P++; char *vals[16]; int nvv=0;
+      P++; char *slot[16]; int nvv=0;
+      for(int f=0;f<16;f++) slot[f]=0;
       skip();
       if(P>=N||S[P]!='}'){
         for(;;){
+          int fidx=-1;                 /* -1: positional value */
           skip();
           if(P<N && isid0(S[P])){
             size_t save=P;
             char *maybe=parse_id(); skip();
-            if(P<N && S[P]==':'){ P++; free(maybe); }
+            if(P<N && S[P]==':'){ P++;
+              for(int f=0;f<SD[si].nf;f++) if(!strcmp(SD[si].fields[f],maybe)){ fidx=f; break; }
+              if(fidx<0) die("unknown struct field in literal");
+              free(maybe);
+            }
             else { P=save; free(maybe); }
           }
-          int et; vals[nvv++]=expr(&et);
-          if(nvv>=16) die("too many field values");
+          int fi=(fidx>=0)?fidx:nvv;
+          if(fi<0 || fi>=SD[si].nf) die("struct literal has more values than the struct has fields");
+          if(slot[fi]) die("struct literal gives the same field twice");
+          int et; char *v=expr(&et);
+          slot[fi]=v; nvv++;
+          if(et==TY_STR || et==TY_NUM){
+            int ft=(et==TY_STR)?1:0;
+            if(SD[si].fset[fi] && SD[si].fty[fi]!=ft){
+              char msg[256];
+              snprintf(msg,sizeof msg,"struct %s field '%s' is %s here, %s in an earlier literal",
+                       SD[si].name, SD[si].fields[fi], ft?"a string":"a number",
+                       ftyname(si,fi));
+              die(msg);
+            }
+            SD[si].fty[fi]=ft; SD[si].fset[fi]=1;
+          } else if(et==TY_STRUCT){
+            /* a nested struct literal: only the literal form is supported,
+             * and the nested struct must be declared first so the emitted
+             * C typedefs are in an order a C compiler accepts (1 level) */
+            if(last_si<0)
+              die("a struct field must be filled by a nested struct literal");
+            if(last_si>=si){
+              char msg[256];
+              snprintf(msg,sizeof msg,"struct %s must be declared before %s to nest it",
+                       SD[last_si].name, SD[si].name);
+              die(msg);
+            }
+            if(SD[si].fset[fi] && (SD[si].fty[fi]!=2 || SD[si].fsi[fi]!=last_si)){
+              char msg[256];
+              snprintf(msg,sizeof msg,"struct %s field '%s' is a struct here, %s in an earlier literal",
+                       SD[si].name, SD[si].fields[fi], ftyname(si,fi));
+              die(msg);
+            }
+            SD[si].fty[fi]=2; SD[si].fsi[fi]=last_si; SD[si].fset[fi]=1;
+          } else if(et==TY_LIST){
+            die("a struct field cannot hold a list");
+          }
           skip(); if(P<N&&S[P]==','){P++;continue;} break;
         }
       }
       skip(); if(P>=N||S[P]!='}') die("}"); P++;
-      size_t need=64; for(int i=0;i<nvv;i++) need+=strlen(vals[i])+4;
+      size_t need=128;
+      for(int f=0;f<SD[si].nf;f++) need += (slot[f]?strlen(slot[f]):0) + 8;
       char *buf=malloc(need);
       size_t o=0; o+=snprintf(buf+o,need,"((%s){", SD[si].name);
-      for(int i=0;i<nvv;i++) o+=snprintf(buf+o,need-o,"%s%s", i?",":"", vals[i]);
+      for(int f=0;f<SD[si].nf;f++){
+        const char *val=slot[f];
+        if(!val && SD[si].fset[f] && SD[si].fty[f]==2){
+          char msg[256];
+          snprintf(msg,sizeof msg,"struct %s field '%s' is a struct and must be filled in every literal",
+                   SD[si].name, SD[si].fields[f]);
+          die(msg);
+        }
+        if(!val) val = SD[si].fty[f] ? "\"\"" : "0";
+        o+=snprintf(buf+o,need-o,"%s%s", f?",":"", val);
+      }
       snprintf(buf+o,need-o,"})");
-      for(int i=0;i<nvv;i++) free(vals[i]);
-      free(id); *oty=TY_STRUCT; return buf;
+      for(int f=0;f<16;f++) free(slot[f]);
+      free(id); *oty=TY_STRUCT; last_si=si; return buf;
     }
     if(P<N && S[P]=='('){
       P++; char *args[16]; int aty[16]; int na=0; skip();
@@ -273,9 +343,11 @@ static char *primary(int *oty){
       free(l); free(ix); l=t;
     } else if(P<N && S[P]=='.'){
       P++; char *fld=parse_id();
+      int fsi=-1;
+      int ft=field_type(l,fld,&fsi);
       char *t=malloc(strlen(l)+strlen(fld)+4);
       sprintf(t,"%s.%s",l,fld);
-      free(l); free(fld); l=t; *oty=TY_NUM;
+      free(l); free(fld); l=t; *oty=ft;
     } else break;
   }
   return l;
@@ -470,9 +542,70 @@ static void emit_all_fns(void){
 static void emit_typedefs(void){
   for(int i=0;i<nsd;i++){
     printf("typedef struct {");
-    for(int f=0;f<SD[i].nf;f++) printf(" double %s;", SD[i].fields[f]);
+    for(int f=0;f<SD[i].nf;f++){
+      if(SD[i].fty[f]==2) printf(" %s %s;", SD[SD[i].fsi[f]].name, SD[i].fields[f]);
+      else if(SD[i].fty[f]) printf(" char *%s;", SD[i].fields[f]);
+      else printf(" double %s;", SD[i].fields[f]);
+    }
     printf(" } %s;\n", SD[i].name);
   }
+}
+
+/* struct index of field `fld` in struct `si` when it is used as the base of a
+ * further .field; a field that never got a nested struct literal has no struct
+ * type and cannot be chained through, so that is a hard error */
+static int nested_si(int si, const char *fld){
+  for(int f=0;f<SD[si].nf;f++)
+    if(!strcmp(SD[si].fields[f],fld)){
+      if(SD[si].fty[f]==2) return SD[si].fsi[f];
+      char msg[256];
+      snprintf(msg,sizeof msg,
+               "struct %s field '%s' has no struct type; fill it with a nested struct literal",
+               SD[si].name, fld);
+      die(msg);
+    }
+  return -1;   /* unknown field: keep the old "treat as a number" behaviour */
+}
+
+/* the struct a dotted expression like `l` or `l.a` names, -1 if it is not a
+ * struct or the chain passes through a non-struct field */
+static int resolve_base_si(const char *base){
+  size_t bl=strlen(base), k=0;
+  while(k<bl && isid(base[k])) k++;
+  if(k==0 || k>=255) return -1;
+  char sv[256]; memcpy(sv,base,k); sv[k]=0;
+  int vi=findv(sv);
+  if(vi<0 || vt[vi]!=TY_STRUCT || vs[vi]<0) return -1;
+  int si=vs[vi];
+  for(size_t j=k;j<bl;){
+    if(base[j]!='.') return -1;
+    size_t s2=j+1, e2=s2;
+    while(e2<bl && isid(base[e2])) e2++;
+    size_t fl=e2-s2;
+    if(fl==0 || fl>=64) return -1;
+    char fs[64]; memcpy(fs,base+s2,fl); fs[fl]=0;
+    int ff=-1;
+    for(int f=0;f<SD[si].nf;f++) if(!strcmp(SD[si].fields[f],fs)){ ff=f; break; }
+    if(ff<0) return -1;
+    si=nested_si(si,fs);               /* dies when the link is not a struct */
+    if(si<0) return -1;
+    j=e2;
+  }
+  return si;
+}
+
+/* type of field `fld` reached from the dotted expression `base` (which may
+ * itself be a chain, e.g. `l.a`), with the nested struct index in *osi */
+static int field_type(const char *base, const char *fld, int *osi){
+  if(osi) *osi=-1;
+  int si=resolve_base_si(base);
+  if(si<0) return TY_NUM;
+  for(int f=0;f<SD[si].nf;f++)
+    if(!strcmp(SD[si].fields[f],fld)){
+      if(SD[si].fty[f]==2){ if(osi) *osi=SD[si].fsi[f]; return TY_STRUCT; }
+      return SD[si].fty[f] ? TY_STR : TY_NUM;
+    }
+  return TY_NUM;
 }
 
 static void preamble(void){
@@ -527,7 +660,35 @@ static void collect(void){
           char *t=parse_id();
           si=find_struct(t);
           if(si>=0) ty=TY_STRUCT;
-          else { int i=findv(t); if(i>=0){ ty=vt[i]; si=vs[i]; } }
+          else {
+            int i=findv(t); if(i>=0){ ty=vt[i]; si=vs[i]; }
+            /* a postfix .field or [index] yields the element's type */
+            if(P<N && S[P]=='.'){
+              /* walk the whole .field chain: l.a.x keeps the nested type */
+              int cur=(i>=0 && vt[i]==TY_STRUCT)?vs[i]:-1;
+              while(P<N && S[P]=='.'){
+                P++; char *fld=parse_id();
+                ty=TY_NUM; si=-1;
+                int ff=-1;
+                if(cur>=0)
+                  for(int f=0;f<SD[cur].nf;f++)
+                    if(!strcmp(SD[cur].fields[f],fld)){ ff=f; break; }
+                if(ff>=0){
+                  if(SD[cur].fty[ff]==2){ ty=TY_STRUCT; si=SD[cur].fsi[ff]; }
+                  else if(P<N && S[P]=='.') nested_si(cur,fld);   /* dies */
+                  else ty=SD[cur].fty[ff]?TY_STR:TY_NUM;
+                }
+                free(fld);
+                cur=si;    /* only a nested struct keeps the chain going */
+              }
+              if(cur>=0){ si=cur; ty=TY_STRUCT; }   /* ended on a nested struct */
+            } else if(P<N && S[P]=='['){
+              /* skip to the matching ']' -- a list/string element is numeric */
+              int d=1; P++;
+              while(P<N && d){ if(S[P]=='[')d++; else if(S[P]==']')d--; P++; }
+              ty=TY_NUM; si=-1;
+            }
+          }
           free(t);
         }
         if(ty==TY_STRUCT && si>=0) setv_struct(id, si);
@@ -538,6 +699,45 @@ static void collect(void){
     if(S[P]=='"'){ P++; while(P<N&&S[P]!='"'){ if(S[P]=='\\'&&P+1<N)P+=2; else P++; } if(P<N)P++; continue; }
     P++;
   }
+  P=save;
+}
+
+/* ---- struct field type scan -------------------------------------------
+ * The C typedef of a struct has to be printed before the body, but a
+ * field's type is only known from the literals that fill it.  This pass
+ * walks the whole program with the real expression parser (output is not
+ * produced: expr() only returns text) so that every struct literal fixes
+ * its field types before emit_typedefs() runs.  The first literal that
+ * mentions a field decides; a conflicting later literal is a hard error.
+ */
+static void scan_stmt(void);
+static void scan_body(void){
+  skip(); eat("{");
+  for(;;){ skip(); if(P>=N) die("}"); if(S[P]=='}'){ P++; return; } scan_stmt(); }
+}
+static void scan_stmt(void){
+  skip(); if(P>=N||S[P]=='}') return;
+  if(at("struct")){ P+=6; free(parse_id()); skip_block(); return; }
+  if(at("make")){
+    P+=4; char *mn=parse_id(); free(mn); skip(); eat("(");
+    for(;;){ skip(); if(P<N&&S[P]==')'){P++;break;} char *pn=parse_id(); free(pn); skip(); if(P<N&&S[P]==','){P++;continue;} }
+    scan_body(); return;
+  }
+  if(at("give")){ P+=4; int ty; char *e=expr(&ty); free(e); return; }
+  if(at("hold")){ P+=4; char *n=parse_id(); skip(); eat("="); int ty; char *e=expr(&ty); free(e); free(n); return; }
+  if(at("show")){ P+=4; int ty; char *e=expr(&ty); free(e); return; }
+  if(at("when")){
+    P+=4; int ty; char *c=expr(&ty); free(c); scan_body(); skip();
+    if(at("otherwise")){ P+=9; scan_body(); }
+    else if(at("else")){ P+=4; scan_body(); }
+    return;
+  }
+  if(at("while")){ P+=5; int ty; char *c=expr(&ty); free(c); scan_body(); return; }
+  die("stmt");
+}
+static void scan_literals(void){
+  size_t save=P; P=0;
+  while(P<N){ skip(); if(P>=N) break; scan_stmt(); }
   P=save;
 }
 
@@ -563,7 +763,10 @@ int main(int argc, char **argv){
   }
   P=0;
   scan_structs();
-  for(int pass=0;pass<4;pass++) collect();
+  /* struct field types come from literals, and literal values can name
+   * variables whose type is only known after collect(); alternate both
+   * until they are stable (4 rounds, same as the original collect budget) */
+  for(int pass=0;pass<4;pass++){ collect(); scan_literals(); }
   P=0; preamble(); emit_all_fns();
   puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
   decls(); P=0;
