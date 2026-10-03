@@ -25,7 +25,7 @@ TESTS    := selfhost/seed_tests
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
-        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod \
+        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user \
         pack-compiler
 
 all: true-selfhost-min
@@ -125,6 +125,35 @@ test-mod:
 	@out=$$(./$(TESTS)/ts_mod); test "$$(echo "$$out" | wc -l)" = "2"; \
 	 echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
 	@echo "[OK] gen2 modulo + else"
+
+test-user:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'struct User {\n  name,\n  age\n}\nhold u = User { name: "Ada", age: 36 }\nshow u.name\nshow u.age\nhold s = u.name\nshow s\nshow u.name + "!"\nshow u.age + 1\nhold v = User { "Bob", 7 }\nshow v.name\nshow len(v.name)\n' > $(TESTS)/ts_user.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_user.sa > $(TESTS)/ts_user_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_user_sm $(TESTS)/ts_user_sm.c
+	./$(GEN2) $(TESTS)/ts_user.sa $(TESTS)/ts_user_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_user_g2 $(TESTS)/ts_user_g2.c
+	@grep -q 'char \*name; double age' $(TESTS)/ts_user_sm.c
+	@grep -q 'char \*name; double age' $(TESTS)/ts_user_g2.c
+	@./$(TESTS)/ts_user_sm > $(TESTS)/ts_user_sm.out; ./$(TESTS)/ts_user_g2 > $(TESTS)/ts_user_g2.out; \
+	 diff $(TESTS)/ts_user_sm.out $(TESTS)/ts_user_g2.out
+	@out=$$(./$(TESTS)/ts_user_g2); \
+	 test "$$(echo "$$out" | sed -n 1p)" = "Ada"; test "$$(echo "$$out" | sed -n 2p)" = "36"; \
+	 test "$$(echo "$$out" | sed -n 4p)" = "Ada!"; test "$$(echo "$$out" | sed -n 5p)" = "37"; \
+	 test "$$(echo "$$out" | sed -n 6p)" = "Bob"; test "$$(echo "$$out" | sed -n 7p)" = "3"
+	@printf 'struct User {\n  name,\n  age\n}\nhold a = User { name: "Ada", age: 36 }\nhold b = User { name: 1, age: 2 }\n' > $(TESTS)/ts_userbad.sa
+	@./$(GEN2) $(TESTS)/ts_userbad.sa $(TESTS)/ts_userbad.c >/dev/null; grep -q '#error' $(TESTS)/ts_userbad.c
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_userbad.sa > /dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a struct field type mismatch"; exit 1; fi
+	@printf 'struct User {\n  name,\n  age\n}\nhold u = User { age: 1, name: "Ada" }\n' > $(TESTS)/ts_order.sa
+	@./$(GEN2) $(TESTS)/ts_order.sa $(TESTS)/ts_order.c >/dev/null; grep -q '#error' $(TESTS)/ts_order.c
+	@printf 'struct User {\n  name,\n  age\n}\nhold u = User { age: 36, name: "Ada" }\nshow u.name\nshow u.age\n' > $(TESTS)/ts_part.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_part.sa > $(TESTS)/ts_part_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_part_sm $(TESTS)/ts_part_sm.c
+	@out=$$(./$(TESTS)/ts_part_sm); test "$$(echo "$$out" | sed -n 1p)" = "Ada"; test "$$(echo "$$out" | sed -n 2p)" = "36"
+	@echo "[OK] struct string fields (User name/age): seed-min and gen2 agree; mismatches rejected"
 
 test-chain:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -336,7 +365,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-parity
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-parity
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
