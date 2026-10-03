@@ -1,5 +1,6 @@
 /* Sayanox native AOT — real Linux x86-64 machine code (not fold-only).
- * hold/show/when/while, ints, + - * /, comparisons, show "str"
+ * hold/show/when/else/while, ints, + - * / %, comparisons, show "str"
+ * Lists/structs/functions/use are rejected with a clear error (never wrong code)
  * Usage: native_aot in.sa out
  */
 #include <ctype.h>
@@ -44,9 +45,12 @@ static int parse_prim(const char**p,int*e);
 static int parse_term(const char**p,int*e);
 static int parse_rel(const char**p,int*e);
 static int parse_expr(const char**p,int*e);
+static void unsup(const char*what,const char*at);
 
 static int parse_prim(const char**p,int*e){
   sw(p);
+  if(**p=='[') unsup("list literals are not in the native subset",*p);
+  if(**p=='"') unsup("string values are not in the native subset",*p);
   if(**p=='('){ (*p)++; if(!parse_expr(p,e)) return 0; sw(p); if(**p!=')'){*e=1;return 0;} (*p)++; return 1; }
   if(**p=='-'){ (*p)++; if(!parse_prim(p,e)) return 0; eb(0x48); eb(0xf7); eb(0xd8); return 1; }
   long v=0; if(pint(p,&v)){ emit_mov_imm(v); return 1; }
@@ -55,11 +59,14 @@ static int parse_prim(const char**p,int*e){
 }
 static int parse_term(const char**p,int*e){
   if(!parse_prim(p,e)||*e) return 0;
-  for(;;){ sw(p); char op=**p; if(op!='*'&&op!='/') break; (*p)++;
+  for(;;){ sw(p); char op=**p; if(op!='*'&&op!='/'&&op!='%') break; (*p)++;
     eb(0x50); if(!parse_prim(p,e)||*e) return 0;
     eb(0x48); eb(0x89); eb(0xc1); eb(0x58);
     if(op=='*'){ eb(0x48); eb(0x0f); eb(0xaf); eb(0xc1); }
-    else { eb(0x48); eb(0x99); eb(0x48); eb(0xf7); eb(0xf9); }
+    else {
+      eb(0x48); eb(0x99); eb(0x48); eb(0xf7); eb(0xf9);   /* idiv rcx */
+      if(op=='%'){ eb(0x48); eb(0x89); eb(0xd0); }          /* mov rax,rdx */
+    }
   }
   return 1;
 }
@@ -99,21 +106,49 @@ static int pstr(const char**p,char*buf,size_t cap,size_t*len){
   if(**p=='"') (*p)++; buf[i]=0; *len=i; return 1;
 }
 
+/* Unsupported constructs are a hard error: never emit wrong code. */
+static void unsup(const char*what,const char*at){
+  char near[24]; size_t i=0;
+  while(at[i]&&i<20){ char c=at[i]; near[i]=(c=='\n'||c=='\r')?' ':c; i++; }
+  near[i]=0;
+  fprintf(stderr,"native_aot: unsupported: %s (near \"%s\")\n",what,near);
+  exit(1);
+}
+/* after a statement: EOF, block end, comment, or the next statement keyword.
+ * anything else (indexing, calls, struct/list literals) is a hard error. */
+static void endstmt(const char**p,const char*what){
+  const char*q=*p; sw(&q);
+  if(!*q||*q=='}'){ *p=q; return; }
+  if(q[0]=='/'&&q[1]=='/'){ *p=q; return; }
+  const char*r=q;
+  if(mkw(&r,"hold")||mkw(&r,"show")||mkw(&r,"when")||mkw(&r,"while")||mkw(&r,"otherwise")||mkw(&r,"else")){ *p=q; return; }
+  unsup(what,*p);
+}
+
 static void eblk(const char**p,int*e);
 static void estmt(const char**p,int*e){
   sw(p); if(!**p||**p=='}') return;
+  if((*p)[0]=='/'&&(*p)[1]=='/'){ while(**p&&**p!='\n')(*p)++; return; }
+  if(mkw(p,"struct")) unsup("structs are not in the native subset",*p);
+  if(mkw(p,"make"))   unsup("functions (make/give) are not in the native subset",*p);
+  if(mkw(p,"give"))   unsup("give outside a function",*p);
+  if(mkw(p,"use"))    unsup("use/modules are not in the native subset",*p);
   if(mkw(p,"hold")){
     char n[64]; if(!pid(p,n,64)){*e=1;return;} sw(p); if(**p!='='){*e=1;return;} (*p)++;
-    if(!parse_expr(p,e)||*e){*e=1;return;} emit_store_slot(slot(n)); return;
+    if(!parse_expr(p,e)||*e){*e=1;return;}
+    endstmt(p,"expression form after hold (lists, structs, indexing?)");
+    emit_store_slot(slot(n)); return;
   }
   if(mkw(p,"show")){
     sw(p); char sb[512]; size_t sl=0;
     if(pstr(p,sb,sizeof sb,&sl)){
       if(rn+sl>=RMAX){fprintf(stderr,"rodata\n");exit(1);}
       str_off[nst]=rn; str_len[nst]=sl; memcpy(rodata+rn,sb,sl); rn+=sl; nst++;
-      emit_mov_imm((long)(nst-1)); call_wstr(); return;
+      emit_mov_imm((long)(nst-1)); call_wstr();
+      endstmt(p,"trailing text after show \"string\""); return;
     }
     if(!parse_expr(p,e)||*e){*e=1;return;}
+    endstmt(p,"expression form after show (lists, structs, indexing?)");
     call_itoa(); return;
   }
   if(mkw(p,"when")){
@@ -122,7 +157,7 @@ static void estmt(const char**p,int*e){
     eb(0x0f); eb(0x84); size_t jz=cn; eu32(0);
     sw(p); if(**p!='{'){*e=1;return;} (*p)++; eblk(p,e);
     sw(p);
-    if(mkw(p,"otherwise")){
+    if(mkw(p,"otherwise")||mkw(p,"else")){
       eb(0xe9); size_t jend=cn; eu32(0); erel32(jz,cn);
       sw(p); if(**p!='{'){*e=1;return;} (*p)++; eblk(p,e); erel32(jend,cn);
     } else erel32(jz,cn);
@@ -138,7 +173,12 @@ static void estmt(const char**p,int*e){
     erel32(jz,cn);
     return;
   }
-  if((*p)[0]=='/'&&(*p)[1]=='/'){ while(**p&&**p!='\n')(*p)++; return; }
+  // unknown statement: a word is a real error, stray punctuation is skipped
+  { int w=0; const char*q=*p; sw(&q); if(id0(*q)){
+      while(id(*q)) q++;
+      fprintf(stderr,"native_aot: unsupported statement: \"%.*s\" (native subset is hold/show/when/else/while)\n",(int)(q-*p),*p);
+      exit(1);
+    } }
   if(**p) (*p)++;
 }
 static void eblk(const char**p,int*e){

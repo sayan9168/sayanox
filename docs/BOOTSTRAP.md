@@ -25,7 +25,13 @@ Verification commands:
 ## Source
 
 `selfhost/compiler_min.sa` is restored offline from `selfhost/compiler_min_gz/*.b64`
-(`base64` + `gzip` only).
+(`base64` + `gzip` only, no Python):
+
+    make restore-compiler     # decode the blobs -> selfhost/compiler_min.sa
+    make pack-compiler        # regenerate the blobs from compiler_min.sa
+
+`pack-compiler` runs `selfhost/pack_compiler_min.sh` (gzip -9 -n | base64 -w0,
+1100-char parts) and verifies the round trip byte-for-byte.
 
 ## Scope
 

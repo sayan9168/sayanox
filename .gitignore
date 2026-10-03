@@ -3,10 +3,19 @@ selfhost/gen1
 selfhost/gen1.c
 selfhost/gen2
 selfhost/gen2.c
+selfhost/gen1_min
+selfhost/gen1_min.c
+selfhost/gen3
+selfhost/gen3.c
+selfhost/gen4.c
 selfhost/boot
 selfhost/boot.c
 selfhost/boot2
 selfhost/boot2.c
+selfhost/boot_from_gen2
+selfhost/boot_from_gen2.c
+selfhost/native_aot
+selfhost/seed/sxc_seed_min
 selfhost/seed_tests/
 selfhost/gen2_tests/
 # scratch programs used by the bootstrap scripts

@@ -11,29 +11,34 @@ See [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 ```sh
 git clone https://github.com/sayan9168/sayanox.git
 cd sayanox
-
-# One-time seed (not “writing in C as the language”)
-make native
-
-# Then only Sayanox programs:
-./selfhost/native_aot examples/native_hello.sa hello
-./hello
+make true-selfhost          # seed-min -> gen1_min -> gen2 -> tests
+make gen3                   # gen3 == gen4 byte-identical
 ```
 
-Full language path:
+Then compile a Sayanox program with a Sayanox-written compiler:
 
 ```sh
-make stage2
-make sx
-./selfhost/sx examples/hello.sa --run
+./selfhost/gen2 examples/hello.sa hello.c && cc -o hello hello.c && ./hello
 ```
+
+## Status (honest)
+
+The **pure-min** dialect is self-hosting and reproducible: `hold / show /
+when / while`, `otherwise` and its `else` alias, `make / give` (with
+recursion), lists (`[..]`, `xs[i]`, `len`, `push`), numeric structs with named
+fields, `%`, and `use "file.sa"` modules. See
+[docs/STATUS.md](docs/STATUS.md) for the verified seed-min / gen2 / native
+table and for what is explicitly *not* supported (string struct fields, nested
+structs, namespaced modules, a full standard library).
 
 ## Layout
 
 | Path | Role |
 |------|------|
 | `*.sa` | **The language** — compiler, tools, demos |
-| `selfhost/native_*` / Stage-2 C | **Bootstrap seed only** |
-| `Makefile` | Build the seed once |
+| `selfhost/compiler_min.sa` | the pure-min compiler in Sayanox (gen2 source) |
+| `selfhost/seed/*.c` | bootstrap seed only |
+| `selfhost/native_aot.c` | x86-64 backend (limited subset, rejects the rest) |
+| `Makefile` | the only entry point |
 
 MIT — Sayan Mahata
