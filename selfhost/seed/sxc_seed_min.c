@@ -218,10 +218,17 @@ static char *mul(int *oty){
   char *l=unary(oty);
   for(;;){
     skip(); char op=0;
-    if(P<N && (S[P]=='*'||S[P]=='/')){ op=S[P]; P++; }
+    if(P<N && (S[P]=='*'||S[P]=='/'||S[P]=='%')){ op=S[P]; P++; }
     else break;
     int rt; char *r=unary(&rt);
-    char *t=malloc(strlen(l)+strlen(r)+8); sprintf(t,"(%s%c%s)",l,op,r); free(l); free(r); l=t; *oty=TY_NUM;
+    if(op=='%'){
+      /* modulo: (double)((long)(a)%(long)(b)) */
+      char *t=malloc(strlen(l)+strlen(r)+32);
+      sprintf(t,"(double)((long)(%s)%%(long)(%s))",l,r);
+      free(l); free(r); l=t; *oty=TY_NUM;
+    } else {
+      char *t=malloc(strlen(l)+strlen(r)+8); sprintf(t,"(%s%c%s)",l,op,r); free(l); free(r); l=t; *oty=TY_NUM;
+    }
   }
   return l;
 }
@@ -344,7 +351,9 @@ static void stmt(void){
   }
   if(at("when")){
     P+=4; int ty; char *c=expr(&ty); printf("  if(%s) {\n", c); free(c); block();
-    skip(); if(at("otherwise")){ P+=9; printf("  } else {\n"); block(); }
+    skip();
+    if(at("otherwise")){ P+=9; printf("  } else {\n"); block(); }
+    else if(at("else")){ P+=4; printf("  } else {\n"); block(); }
     printf("  }\n"); return;
   }
   if(at("while")){

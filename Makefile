@@ -24,7 +24,7 @@ TESTS    := selfhost/seed_tests
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
-        test-reassign test-while test-when test-boot test-fn test-list test-struct
+        test-reassign test-while test-when test-mod test-boot test-fn test-list test-struct
 
 all: true-selfhost-min
 
@@ -108,6 +108,18 @@ test-when:
 	@out=$$(./$(TESTS)/ts_wn); echo "$$out" | grep -q 99
 	@echo "[OK] gen2 when"
 
+test-mod:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/ts_mod.sa
+	./$(GEN2) $(TESTS)/ts_mod.sa $(TESTS)/ts_mod.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_mod $(TESTS)/ts_mod.c
+	@grep -q '(double)((long)(a)%(long)(3))' $(TESTS)/ts_mod.c
+	@grep -q '} else {' $(TESTS)/ts_mod.c
+	@out=$$(./$(TESTS)/ts_mod); test "$$(echo "$$out" | wc -l)" = "2"; \
+	 echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
+	@echo "[OK] gen2 modulo + else"
+
 test-boot:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	./$(GEN2) $(BOOT_SA) selfhost/boot_from_gen2.c >/dev/null
@@ -133,6 +145,11 @@ seed-min: $(SEED_MIN_BIN)
 	./$(SEED_MIN_BIN) $(TESTS)/min_wh.sa > $(TESTS)/min_wh.c
 	$(CC) -O2 -o $(TESTS)/min_wh $(TESTS)/min_wh.c
 	@out=$$(./$(TESTS)/min_wh); echo "$$out" | grep -q done
+	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/min_mod.sa
+	./$(SEED_MIN_BIN) $(TESTS)/min_mod.sa > $(TESTS)/min_mod.c
+	$(CC) -O2 -o $(TESTS)/min_mod $(TESTS)/min_mod.c
+	@grep -q '(double)((long)(a)%(long)(3))' $(TESTS)/min_mod.c
+	@out=$$(./$(TESTS)/min_mod); echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
 	@echo "=== SEED-MIN-OK ==="
 
 test-struct: $(SEED_MIN_BIN)
@@ -181,7 +198,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when
+	@$(MAKE) test-reassign test-while test-when test-mod
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -241,6 +258,12 @@ gen3:
 	./$(GEN3) $(TESTS)/g3_wn.sa $(TESTS)/g3_wn.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_wn $(TESTS)/g3_wn.c
 	@out=$$(./$(TESTS)/g3_wn); echo "$$out" | grep -q 99
+	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/g3_mod.sa
+	./$(GEN3) $(TESTS)/g3_mod.sa $(TESTS)/g3_mod.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/g3_mod $(TESTS)/g3_mod.c
+	@out=$$(./$(TESTS)/g3_mod); test "$$(echo "$$out" | wc -l)" = "2"; \
+	 echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
+	@echo "[OK] gen3 modulo + else"
 	./$(GEN3) $(MIN_SA) selfhost/gen4.c >/dev/null
 	@if cmp -s $(GEN3_C) selfhost/gen4.c; then echo "[OK] byte-identical gen3 == gen4"; \
 	else echo "[FAIL] gen3/gen4 differ"; exit 1; fi
