@@ -25,7 +25,7 @@ TESTS    := selfhost/seed_tests
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
-        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user \
+        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest \
         pack-compiler
 
 all: true-selfhost-min
@@ -244,6 +244,37 @@ test-use:
 	@grep -q '#error' $(TESTS)/ts_uq.c
 	@echo "[OK] gen2 use: splice, nested depth 2, missing file and unquoted path are hard errors"
 
+test-nest:
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'struct Point {\n  name,\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: Point { name: "p1", x: 1 }, b: Point { name: "p2", x: 2 } }\nshow l.a.name\nshow l.a.x\nshow l.b.name\nshow l.b.x\nhold m = l.b\nshow m.name\nshow m.x\n' > $(TESTS)/ts_nest.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_nest.sa > $(TESTS)/ts_nest_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_nest_sm $(TESTS)/ts_nest_sm.c
+	@grep -q 'typedef struct { char \*name; double x; } Point;' $(TESTS)/ts_nest_sm.c
+	@grep -q 'typedef struct { Point a; Point b; } Line;' $(TESTS)/ts_nest_sm.c
+	@out=$$(./$(TESTS)/ts_nest_sm); \
+	 test "$$(echo "$$out" | sed -n 1p)" = "p1"; test "$$(echo "$$out" | sed -n 2p)" = "1"; \
+	 test "$$(echo "$$out" | sed -n 3p)" = "p2"; test "$$(echo "$$out" | sed -n 4p)" = "2"; \
+	 test "$$(echo "$$out" | sed -n 5p)" = "p2"; test "$$(echo "$$out" | sed -n 6p)" = "2"
+	@# the self-hosted compiler does not support nested literals yet: it must
+	@# say so plainly and emit #error, never silently wrong code
+	@./$(GEN2) $(TESTS)/ts_nest.sa $(TESTS)/ts_nest_g2.c >/dev/null
+	@grep -q 'nested struct literal values are not supported' $(TESTS)/ts_nest_g2.c
+	@# a nested struct must be declared before the struct that nests it
+	@printf 'struct Line {\n  a\n}\nstruct Point {\n  x\n}\nhold l = Line { a: Point { 1 } }\n' > $(TESTS)/ts_nestfwd.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestfwd.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a nested struct declared later"; exit 1; fi
+	@# a list still cannot be a struct field
+	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: [1], b: Point { 2 } }\n' > $(TESTS)/ts_nestlist.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestlist.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a list in a struct field"; exit 1; fi
+	@# chaining through a field with no struct type is a clear error, not bad C
+	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: Point { 1 } }\nshow l.b.x\n' > $(TESTS)/ts_nestmiss.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestmiss.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a chain through an untyped struct field"; exit 1; fi
+	@echo "[OK] nested structs in seed-min (typed fields, ordered typedefs, .a.x chains); gen2 rejects them explicitly"
+
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
@@ -365,7 +396,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-parity
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-parity
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

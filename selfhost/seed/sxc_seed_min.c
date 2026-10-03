@@ -84,12 +84,15 @@ enum { TY_NUM=0, TY_STR=1, TY_LIST=2, TY_STRUCT=3 };
 static char *vn[512]; static int vt[512]; static int vs[512];
 static int nv;
 static int in_fn;
+/* index of the struct the last atom() built (a struct literal); -1 otherwise.
+ * Used to type a nested literal value while a struct literal is parsed. */
+static int last_si = -1;
 
 /* fty[f] is the C type of a field: 0 = double, 1 = char * (string).
  * fset[f] is 1 once a struct literal has fixed that field's type: the first
  * literal that mentions a field decides, later literals must agree (a
  * mismatch is a hard error, never a silently wrong typedef). */
-typedef struct { char *name; char *fields[16]; int nf; int fty[16]; int fset[16]; } StructDef;
+typedef struct { char *name; char *fields[16]; int nf; int fty[16]; int fsi[16]; int fset[16]; } StructDef;
 static StructDef SD[32]; static int nsd;
 
 static void die(const char *m){ fprintf(stderr,"seed_min: %s at %zu\n", m, P); exit(1); }
@@ -118,6 +121,12 @@ static char *parse_id(void){
 }
 static int findv(const char *n){ for(int i=0;i<nv;i++) if(!strcmp(vn[i],n)) return i; return -1; }
 static int find_struct(const char *n){ for(int i=0;i<nsd;i++) if(!strcmp(SD[i].name,n)) return i; return -1; }
+/* how a struct field's type is named in a diagnostic */
+static const char *ftyname(int si, int f){
+  if(SD[si].fty[f]==1) return "a string";
+  if(SD[si].fty[f]==2) return "a struct";
+  return "a number";
+}
 static void setv(const char *n, int ty){
   int i=findv(n);
   if(i<0){ if(nv>=512) die("too many vars"); vn[nv]=strdup(n); vt[nv]=ty; vs[nv]=-1; nv++; }
@@ -134,7 +143,7 @@ static int getsi(const char *n){ int i=findv(n); return i<0?-1:vs[i]; }
 static char *expr(int *oty);
 static void stmt(void);
 static void block(void);
-static int field_is_str(const char *base, const char *fld);
+static int field_type(const char *base, const char *fld, int *osi);
 
 static void parse_struct_def(void){
   eat("struct");
@@ -147,6 +156,7 @@ static void parse_struct_def(void){
   StructDef *D=&SD[nsd];
   D->name=name; D->nf=0;
   memset(D->fty,0,sizeof D->fty);
+  for(int i=0;i<16;i++) D->fsi[i]=-1;
   memset(D->fset,0,sizeof D->fset);
   skip(); eat("{");
   for(;;){
@@ -162,13 +172,14 @@ static void parse_struct_def(void){
 }
 
 static char *atom(int *oty){
-  skip();
+  skip(); last_si = -1;
   if(P<N && S[P]=='('){ P++; char *e=expr(oty); skip(); if(P>=N||S[P]!=')') die(")"); P++; return e; }
   if(P<N && S[P]=='['){
     P++; char *els[64]; int ne=0; skip();
     if(P>=N||S[P]!=']'){
       for(;;){
         int et; els[ne++]=expr(&et); if(ne>=64) die("list too big");
+        if(et==TY_STRUCT) die("a list cannot hold a struct value");
         skip(); if(P<N&&S[P]==','){P++;skip();continue;} break;
       }
     }
@@ -226,12 +237,31 @@ static char *atom(int *oty){
               char msg[256];
               snprintf(msg,sizeof msg,"struct %s field '%s' is %s here, %s in an earlier literal",
                        SD[si].name, SD[si].fields[fi], ft?"a string":"a number",
-                       SD[si].fty[fi]?"a string":"a number");
+                       ftyname(si,fi));
               die(msg);
             }
             SD[si].fty[fi]=ft; SD[si].fset[fi]=1;
-          } else if(et==TY_LIST || et==TY_STRUCT){
-            die("a struct field cannot hold a list or a nested struct");
+          } else if(et==TY_STRUCT){
+            /* a nested struct literal: only the literal form is supported,
+             * and the nested struct must be declared first so the emitted
+             * C typedefs are in an order a C compiler accepts (1 level) */
+            if(last_si<0)
+              die("a struct field must be filled by a nested struct literal");
+            if(last_si>=si){
+              char msg[256];
+              snprintf(msg,sizeof msg,"struct %s must be declared before %s to nest it",
+                       SD[last_si].name, SD[si].name);
+              die(msg);
+            }
+            if(SD[si].fset[fi] && (SD[si].fty[fi]!=2 || SD[si].fsi[fi]!=last_si)){
+              char msg[256];
+              snprintf(msg,sizeof msg,"struct %s field '%s' is a struct here, %s in an earlier literal",
+                       SD[si].name, SD[si].fields[fi], ftyname(si,fi));
+              die(msg);
+            }
+            SD[si].fty[fi]=2; SD[si].fsi[fi]=last_si; SD[si].fset[fi]=1;
+          } else if(et==TY_LIST){
+            die("a struct field cannot hold a list");
           }
           skip(); if(P<N&&S[P]==','){P++;continue;} break;
         }
@@ -243,12 +273,18 @@ static char *atom(int *oty){
       size_t o=0; o+=snprintf(buf+o,need,"((%s){", SD[si].name);
       for(int f=0;f<SD[si].nf;f++){
         const char *val=slot[f];
+        if(!val && SD[si].fset[f] && SD[si].fty[f]==2){
+          char msg[256];
+          snprintf(msg,sizeof msg,"struct %s field '%s' is a struct and must be filled in every literal",
+                   SD[si].name, SD[si].fields[f]);
+          die(msg);
+        }
         if(!val) val = SD[si].fty[f] ? "\"\"" : "0";
         o+=snprintf(buf+o,need-o,"%s%s", f?",":"", val);
       }
       snprintf(buf+o,need-o,"})");
       for(int f=0;f<16;f++) free(slot[f]);
-      free(id); *oty=TY_STRUCT; return buf;
+      free(id); *oty=TY_STRUCT; last_si=si; return buf;
     }
     if(P<N && S[P]=='('){
       P++; char *args[16]; int aty[16]; int na=0; skip();
@@ -307,10 +343,11 @@ static char *primary(int *oty){
       free(l); free(ix); l=t;
     } else if(P<N && S[P]=='.'){
       P++; char *fld=parse_id();
-      int fs=field_is_str(l,fld);
+      int fsi=-1;
+      int ft=field_type(l,fld,&fsi);
       char *t=malloc(strlen(l)+strlen(fld)+4);
       sprintf(t,"%s.%s",l,fld);
-      free(l); free(fld); l=t; *oty=fs?TY_STR:TY_NUM;
+      free(l); free(fld); l=t; *oty=ft;
     } else break;
   }
   return l;
@@ -506,25 +543,69 @@ static void emit_typedefs(void){
   for(int i=0;i<nsd;i++){
     printf("typedef struct {");
     for(int f=0;f<SD[i].nf;f++){
-      if(SD[i].fty[f]) printf(" char *%s;", SD[i].fields[f]);
+      if(SD[i].fty[f]==2) printf(" %s %s;", SD[SD[i].fsi[f]].name, SD[i].fields[f]);
+      else if(SD[i].fty[f]) printf(" char *%s;", SD[i].fields[f]);
       else printf(" double %s;", SD[i].fields[f]);
     }
     printf(" } %s;\n", SD[i].name);
   }
 }
 
-/* is field `fld` of the struct variable named by the leading identifier of
- * `base` a string field? (used to type NAME.field expressions) */
-static int field_is_str(const char *base, const char *fld){
+/* struct index of field `fld` in struct `si` when it is used as the base of a
+ * further .field; a field that never got a nested struct literal has no struct
+ * type and cannot be chained through, so that is a hard error */
+static int nested_si(int si, const char *fld){
+  for(int f=0;f<SD[si].nf;f++)
+    if(!strcmp(SD[si].fields[f],fld)){
+      if(SD[si].fty[f]==2) return SD[si].fsi[f];
+      char msg[256];
+      snprintf(msg,sizeof msg,
+               "struct %s field '%s' has no struct type; fill it with a nested struct literal",
+               SD[si].name, fld);
+      die(msg);
+    }
+  return -1;   /* unknown field: keep the old "treat as a number" behaviour */
+}
+
+/* the struct a dotted expression like `l` or `l.a` names, -1 if it is not a
+ * struct or the chain passes through a non-struct field */
+static int resolve_base_si(const char *base){
   size_t bl=strlen(base), k=0;
   while(k<bl && isid(base[k])) k++;
-  if(k==0 || k>=255) return 0;
+  if(k==0 || k>=255) return -1;
   char sv[256]; memcpy(sv,base,k); sv[k]=0;
   int vi=findv(sv);
-  if(vi<0 || vt[vi]!=TY_STRUCT || vs[vi]<0) return 0;
+  if(vi<0 || vt[vi]!=TY_STRUCT || vs[vi]<0) return -1;
   int si=vs[vi];
-  for(int f=0;f<SD[si].nf;f++) if(!strcmp(SD[si].fields[f],fld)) return SD[si].fty[f];
-  return 0;
+  for(size_t j=k;j<bl;){
+    if(base[j]!='.') return -1;
+    size_t s2=j+1, e2=s2;
+    while(e2<bl && isid(base[e2])) e2++;
+    size_t fl=e2-s2;
+    if(fl==0 || fl>=64) return -1;
+    char fs[64]; memcpy(fs,base+s2,fl); fs[fl]=0;
+    int ff=-1;
+    for(int f=0;f<SD[si].nf;f++) if(!strcmp(SD[si].fields[f],fs)){ ff=f; break; }
+    if(ff<0) return -1;
+    si=nested_si(si,fs);               /* dies when the link is not a struct */
+    if(si<0) return -1;
+    j=e2;
+  }
+  return si;
+}
+
+/* type of field `fld` reached from the dotted expression `base` (which may
+ * itself be a chain, e.g. `l.a`), with the nested struct index in *osi */
+static int field_type(const char *base, const char *fld, int *osi){
+  if(osi) *osi=-1;
+  int si=resolve_base_si(base);
+  if(si<0) return TY_NUM;
+  for(int f=0;f<SD[si].nf;f++)
+    if(!strcmp(SD[si].fields[f],fld)){
+      if(SD[si].fty[f]==2){ if(osi) *osi=SD[si].fsi[f]; return TY_STRUCT; }
+      return SD[si].fty[f] ? TY_STR : TY_NUM;
+    }
+  return TY_NUM;
 }
 
 static void preamble(void){
@@ -583,12 +664,24 @@ static void collect(void){
             int i=findv(t); if(i>=0){ ty=vt[i]; si=vs[i]; }
             /* a postfix .field or [index] yields the element's type */
             if(P<N && S[P]=='.'){
-              P++; char *fld=parse_id();
-              ty=TY_NUM;
-              if(i>=0 && vt[i]==TY_STRUCT && si>=0)
-                for(int f=0;f<SD[si].nf;f++)
-                  if(!strcmp(SD[si].fields[f],fld)){ if(SD[si].fty[f]) ty=TY_STR; break; }
-              si=-1; free(fld);
+              /* walk the whole .field chain: l.a.x keeps the nested type */
+              int cur=(i>=0 && vt[i]==TY_STRUCT)?vs[i]:-1;
+              while(P<N && S[P]=='.'){
+                P++; char *fld=parse_id();
+                ty=TY_NUM; si=-1;
+                int ff=-1;
+                if(cur>=0)
+                  for(int f=0;f<SD[cur].nf;f++)
+                    if(!strcmp(SD[cur].fields[f],fld)){ ff=f; break; }
+                if(ff>=0){
+                  if(SD[cur].fty[ff]==2){ ty=TY_STRUCT; si=SD[cur].fsi[ff]; }
+                  else if(P<N && S[P]=='.') nested_si(cur,fld);   /* dies */
+                  else ty=SD[cur].fty[ff]?TY_STR:TY_NUM;
+                }
+                free(fld);
+                cur=si;    /* only a nested struct keeps the chain going */
+              }
+              if(cur>=0){ si=cur; ty=TY_STRUCT; }   /* ended on a nested struct */
             } else if(P<N && S[P]=='['){
               /* skip to the matching ']' -- a list/string element is numeric */
               int d=1; P++;

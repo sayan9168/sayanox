@@ -284,6 +284,9 @@ hold cd2 = 0
 hold exbad6 = 0
 hold exbad7 = 0
 hold exbad8 = 0
+hold exbad9 = 0
+hold isnest = 0
+hold cs3 = 0
 hold stype = ""
 hold sv2 = ""
 hold svk = 0
@@ -1144,6 +1147,7 @@ while running == 1 {
                   // ---- value: number, string literal or a name ----
                   hold el = ""
                   hold ety = 0
+                  hold isnest = 0
                   hold sk = 1
                   while sk == 1 {
                     when pos >= n {
@@ -1257,6 +1261,61 @@ while running == 1 {
                       }
                     }
                   }
+                  // a nested struct literal value is not supported here: report
+                  // it clearly and skip its balanced span so the outer literal
+                  // walk stays in sync and no follow-up errors are reported
+                  hold sk = 1
+                  while sk == 1 {
+                    when pos >= n {
+                      hold sk = 0
+                    } otherwise {
+                      hold cs3 = sx_index(source,pos)
+                      when cs3 == 32 || cs3 == 9 {
+                        hold pos = pos + 1
+                      } otherwise {
+                        hold sk = 0
+                      }
+                    }
+                  }
+                  when pos < n {
+                    hold cs3 = sx_index(source,pos)
+                    when cs3 == 123 {
+                      hold exbad9 = 1
+                      hold isnest = 1
+                      hold nst = 1
+                      hold ins = 0
+                      hold pos = pos + 1
+                      while nst > 0 {
+                        when pos >= n {
+                          hold nst = 0
+                        } otherwise {
+                          hold cd3 = sx_index(source,pos)
+                          when ins == 1 {
+                            when cd3 == 92 {
+                              hold pos = pos + 1
+                            } otherwise {
+                              when cd3 == 34 {
+                                hold ins = 0
+                              }
+                            }
+                          } otherwise {
+                            when cd3 == 34 {
+                              hold ins = 1
+                            } otherwise {
+                              when cd3 == 123 {
+                                hold nst = nst + 1
+                              } otherwise {
+                                when cd3 == 125 {
+                                  hold nst = nst - 1
+                                }
+                              }
+                            }
+                          }
+                          hold pos = pos + 1
+                        }
+                      }
+                    }
+                  }
                   // ---- record the field type: the first literal wins ----
                   hold fkey = concat("|", nm2)
                   hold fkey = concat(fkey, ".")
@@ -1292,7 +1351,7 @@ while running == 1 {
                     }
                   }
                   hold fnamelen = len(fname)
-                  when fnamelen > 0 {
+                  when (fnamelen > 0) && (isnest == 0) {
                     when fprv == -1 {
                       hold ftypes = concat(ftypes, fkey)
                       when ety == 1 {
@@ -4276,6 +4335,11 @@ when exbad8 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: struct literal must fill every field")
   hold exerr = concat(exerr, nl)
   show "min: struct literal must fill every field"
+}
+when exbad9 == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: nested struct literal values are not supported by the self-hosted compiler (the seed compiler supports them)")
+  hold exerr = concat(exerr, nl)
+  show "min: nested struct literal values are not supported by the self-hosted compiler (the seed compiler supports them)"
 }
 when exbad4 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: a '}' ended up inside a give expression; put one statement per line")
