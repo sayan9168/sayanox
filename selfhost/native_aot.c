@@ -27,7 +27,23 @@ static int id(char c){ return isalnum((unsigned char)c)||c=='_'; }
 static int mkw(const char**p,const char*k){ size_t n=strlen(k); if(strncmp(*p,k,n)||id((*p)[n])) return 0; *p+=n; return 1; }
 static int pid(const char**p,char*b,size_t c){ sw(p); if(!id0(**p)) return 0; size_t i=0; while(id(**p)&&i+1<c) b[i++]=*(*p)++; b[i]=0; return 1; }
 static int pint(const char**p,long*o){ sw(p); if(!isdigit((unsigned char)**p)) return 0; long v=0; while(isdigit((unsigned char)**p)) v=v*10+(*(*p)++-'0'); *o=v; return 1; }
-static int slot(const char*n){ unsigned char c=(unsigned char)n[0]; if(c>='A'&&c<='Z') c=(unsigned char)(c-'A'+'a'); return (c>='a'&&c<='z')?(c-'a')%26:0; }
+/* One stack slot per distinct name (the first letter is not an index: two
+ * names sharing a first letter must not share a slot, and an undeclared name
+ * must not silently read as 0). */
+static void unsup(const char*what,const char*at);
+#define NSLOT 64
+static char sym_name[NSLOT][64]; static int nsym;
+static int sym_find(const char*n){ for(int i=0;i<nsym;i++) if(!strcmp(sym_name[i],n)) return i; return -1; }
+static int sym_decl(const char*n){
+  int i=sym_find(n); if(i>=0) return i;
+  if(nsym>=NSLOT){ fprintf(stderr,"native_aot: too many variables (native subset: %d)\n",NSLOT); exit(1); }
+  snprintf(sym_name[nsym],64,"%s",n); return nsym++;
+}
+static int sym_use(const char*n,const char*at){
+  int i=sym_find(n);
+  if(i<0){ char m[96]; snprintf(m,sizeof m,"undefined variable '%s' (hold it first)",n); unsup(m,at); }
+  return i;
+}
 
 static void emit_load_slot(int s){ int d=-8*(s+1); if(d>=-128){eb(0x48);eb(0x8b);eb(0x45);eb((unsigned char)d);}else{eb(0x48);eb(0x8b);eb(0x85);eu32((uint32_t)d);} }
 static void emit_store_slot(int s){ int d=-8*(s+1); if(d>=-128){eb(0x48);eb(0x89);eb(0x45);eb((unsigned char)d);}else{eb(0x48);eb(0x89);eb(0x85);eu32((uint32_t)d);} }
@@ -54,7 +70,7 @@ static int parse_prim(const char**p,int*e){
   if(**p=='('){ (*p)++; if(!parse_expr(p,e)) return 0; sw(p); if(**p!=')'){*e=1;return 0;} (*p)++; return 1; }
   if(**p=='-'){ (*p)++; if(!parse_prim(p,e)) return 0; eb(0x48); eb(0xf7); eb(0xd8); return 1; }
   long v=0; if(pint(p,&v)){ emit_mov_imm(v); return 1; }
-  char n[64]; if(pid(p,n,64)){ emit_load_slot(slot(n)); return 1; }
+  char n[64]; if(pid(p,n,64)){ emit_load_slot(sym_use(n,*p)); return 1; }
   return 0;
 }
 static int parse_term(const char**p,int*e){
@@ -137,7 +153,7 @@ static void estmt(const char**p,int*e){
     char n[64]; if(!pid(p,n,64)){*e=1;return;} sw(p); if(**p!='='){*e=1;return;} (*p)++;
     if(!parse_expr(p,e)||*e){*e=1;return;}
     endstmt(p,"expression form after hold (lists, structs, indexing?)");
-    emit_store_slot(slot(n)); return;
+    emit_store_slot(sym_decl(n)); return;
   }
   if(mkw(p,"show")){
     sw(p); char sb[512]; size_t sl=0;
@@ -299,8 +315,8 @@ int main(int argc,char**argv){
   size_t n; char*s=rf(argv[1],&n);
   eb(0x55);
   eb(0x48); eb(0x89); eb(0xe5);
-  eb(0x48); eb(0x81); eb(0xec); eu32(26*8);
-  for(int i=0;i<26;i++){ emit_mov_imm(0); emit_store_slot(i); }
+  eb(0x48); eb(0x81); eb(0xec); eu32(NSLOT*8);
+  for(int i=0;i<NSLOT;i++){ emit_mov_imm(0); emit_store_slot(i); }
   int e=0; const char*p=s;
   while(*p&&!e){ sw(&p); if(!*p) break; const char*b=p; estmt(&p,&e); if(p==b&&*p) p++; }
   free(s);

@@ -430,7 +430,25 @@ native-test: $(NATIVE_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/native_unsup.sa $(TESTS)/native_unsup 2>/dev/null; then \
 	  echo "[FAIL] native accepted lists (silently wrong code)"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_unsup.sa $(TESTS)/native_unsup 2>&1 | grep -q 'unsupported'
-	@echo "[OK] native: modulo, else alias, unsupported constructs rejected"
+	@# one slot per name: names sharing a first letter must not share storage
+	@printf 'hold ab = 1\nhold ac = 2\nshow ab\nshow ac\n' > $(TESTS)/native_slot.sa
+	./$(NATIVE_BIN) $(TESTS)/native_slot.sa $(TESTS)/native_slot
+	@out=$$(./$(TESTS)/native_slot); test "$$(echo "$$out" | sed -n 1p)" = "1"; test "$$(echo "$$out" | sed -n 2p)" = "2"
+	@# an undeclared name must be a hard error, never a silent 0
+	@printf 'hold x = 1\nshow y\n' > $(TESTS)/native_undef.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_undef.sa $(TESTS)/native_undef 2>/dev/null; then \
+	  echo "[FAIL] native accepted an undefined variable (silently wrong code)"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_undef.sa $(TESTS)/native_undef 2>&1 | grep -q 'undefined variable'
+	@# structs and field access are rejected, not mis-compiled
+	@printf 'struct Point {\n  x,\n  y\n}\nhold p = Point { 1, 2 }\nshow p.x\n' > $(TESTS)/native_struct.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_struct.sa $(TESTS)/native_struct 2>/dev/null; then \
+	  echo "[FAIL] native accepted structs (silently wrong code)"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_struct.sa $(TESTS)/native_struct 2>&1 | grep -q 'structs are not in the native subset'
+	@printf 'hold a = 1\nshow a.x\n' > $(TESTS)/native_fld.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_fld.sa $(TESTS)/native_fld 2>/dev/null; then \
+	  echo "[FAIL] native accepted field access (silently wrong code)"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_fld.sa $(TESTS)/native_fld 2>&1 | grep -q 'unsupported'
+	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists/structs rejected"
 	@echo "=== NATIVE-TEST-OK ==="
 
 grammar: true-selfhost-min
