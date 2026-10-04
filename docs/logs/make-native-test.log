@@ -1,3 +1,4 @@
+cc -O2 -o selfhost/native_aot selfhost/native_aot.c
 ./selfhost/native_aot examples/native_hello.sa selfhost/seed_tests/native_hello
 native_aot: examples/native_hello.sa -> selfhost/seed_tests/native_hello (real x86-64, 1353 code bytes, no clang)
 ./selfhost/native_aot selfhost/seed_tests/native_negative.sa selfhost/seed_tests/native_negative
