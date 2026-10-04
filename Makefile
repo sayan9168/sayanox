@@ -23,49 +23,110 @@ BOOT_SA  := selfhost/compiler_boot.sa
 TESTS    := selfhost/seed_tests
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
-        native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed seed-bin \
+        native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
+        seed-bin doctor \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest \
         pack-compiler
 
 all: true-selfhost-min
 
-fix-seed:
-	@if grep -q 'ptok(k,(const char*)#ch' $(SEED_C) 2>/dev/null; then \
-	  awk '{ if (index($$0, "ptok(k,(const char*)#ch,0,sl,sc);") && index($$0, "define P1")) { sub(/ptok\(k,\(const char\*\)#ch,0,sl,sc\);/, "{ char _b[2]={(char)(ch),0}; ptok(k,_b,0,sl,sc);}"); } print; }' $(SEED_C) > $(SEED_C).tmp && mv $(SEED_C).tmp $(SEED_C); \
-	fi
-	@if grep -q 'sizeof(SxStrHdr)' $(SEED_H) 2>/dev/null; then \
-	  sed -i 's/(char\*)p-sizeof(SxStrHdr)/(char*)p-offsetof(SxStrHdr,data)/g' $(SEED_H) 2>/dev/null || true; \
-	  sed -i 's/malloc(sizeof(\*h)+n+1)/malloc(offsetof(SxStrHdr,data)+n+1)/g' $(SEED_H) 2>/dev/null || true; \
-	fi
-	@if ! grep -q '#include <stddef.h>' $(SEED_H) 2>/dev/null; then \
-	  sed -i 's/#include <stdint.h>/#include <stdint.h>\n#include <stddef.h>/' $(SEED_H) 2>/dev/null || true; \
-	fi
-	@if grep -q 'SX_TAB_CAP 262144' $(SEED_H) 2>/dev/null; then \
-	  sed -i 's/SX_TAB_CAP 262144/SX_TAB_CAP 2097152/' $(SEED_H) 2>/dev/null || true; \
-	fi
-	@if grep -q 'sx_tab_add(h,1);' $(SEED_H) 2>/dev/null; then \
-	  sed -i 's/sx_tab_add(h,1);/sx_tab_add(h->data,1);/' $(SEED_H) 2>/dev/null || true; \
-	fi
-	@if grep -q 'sx_tab_find(h);' $(SEED_H) 2>/dev/null; then \
-	  sed -i 's/sx_tab_find(h);/sx_tab_find((void*)p);/' $(SEED_H) 2>/dev/null || true; \
-	fi
-	@echo "[OK] fix-seed"
+# ---------------------------------------------------------------------------
+# assert-out: run a program and compare its ENTIRE stdout to an expected value.
+#
+#   $(call assert-out,<program>,<expected text, \n between lines>)
+#
+# Uses only shell builtins -- command substitution, parameter expansion, printf
+# and test. No sed, awk, grep, head, tail, wc or diff. It replaced ~40 uses of
+# `... | sed -n Np` line extraction across the test targets.
+#
+# Comparing the whole output is strictly stronger than the per-line checks it
+# replaced: a spurious extra line now fails, where `sed -n 1p` would not notice.
+# Write a literal % in the expected text as % (make does not unescape %% here).
+# ---------------------------------------------------------------------------
+assert-out = @__got=$$($(1)); __want=$$(printf '%b' '$(2)'); \
+  if [ "$$__got" = "$$__want" ]; then :; else \
+    echo "[FAIL] $(1): stdout does not match"; \
+    echo "--- want ---"; printf '%s\n' "$$__want"; \
+    echo "--- got ---";  printf '%s\n' "$$__got"; exit 1; fi
+
+# ---------------------------------------------------------------------------
+# verify-seed: assert the checked-in seed sources are in their known-good state.
+#
+# This target used to be `fix-seed`: ~20 lines of awk + `sed -i` that rewrote
+# the seed sources in place before every build. Audited 2026-10-04 -- every one
+# of those edits was dead code:
+#
+#   * The awk guard grepped for `ptok(k,(const char*)#ch`. As a BRE, `r*` means
+#     "zero or more r", so that pattern can never match the literal text
+#     `ptok(k,(const char*)#ch` in sxc_seed.c. The awk body never ran. (The
+#     rewrite was unnecessary anyway: P1 is only instantiated with single-char
+#     punctuation literals, so `#ch` already stringizes correctly.)
+#   * All six `sed -i` guards searched for pre-fix text that is no longer
+#     present in the checked-in sx_runtime.h, so they were all no-ops.
+#
+# The correct sources are checked in, so there is nothing left to patch at
+# build time. Runtime patching of tracked sources is therefore replaced by a
+# read-only assertion: a stale checkout now fails loudly instead of having its
+# files silently rewritten. Uses only grep + test. `fix-seed` is kept as an
+# alias so existing invocations keep working.
+# ---------------------------------------------------------------------------
+verify-seed:
+	@test -f $(SEED_C) || { echo "FAIL: missing $(SEED_C)"; exit 1; }
+	@test -f $(SEED_H) || { echo "FAIL: missing $(SEED_H)"; exit 1; }
+	@grep -q -F 'offsetof(SxStrHdr,data)' $(SEED_H) \
+	  || { echo "FAIL: $(SEED_H) is stale: missing offsetof(SxStrHdr,data)"; exit 1; }
+	@grep -q -F '#include <stddef.h>' $(SEED_H) \
+	  || { echo "FAIL: $(SEED_H) is stale: missing #include <stddef.h>"; exit 1; }
+	@grep -q -F 'SX_TAB_CAP 2097152' $(SEED_H) \
+	  || { echo "FAIL: $(SEED_H) is stale: SX_TAB_CAP is not 2097152"; exit 1; }
+	@grep -q -F 'sx_tab_add(h->data,1);' $(SEED_H) \
+	  || { echo "FAIL: $(SEED_H) is stale: missing sx_tab_add(h->data,1);"; exit 1; }
+	@grep -q -F 'sx_tab_find((void*)p);' $(SEED_H) \
+	  || { echo "FAIL: $(SEED_H) is stale: missing sx_tab_find((void*)p);"; exit 1; }
+	@if grep -q -F '(char*)p-sizeof(SxStrHdr)' $(SEED_H); then \
+	  echo "FAIL: $(SEED_H) is stale: pre-fix sizeof(SxStrHdr) arithmetic present"; exit 1; fi
+	@if grep -q -F 'SX_TAB_CAP 262144' $(SEED_H); then \
+	  echo "FAIL: $(SEED_H) is stale: pre-fix SX_TAB_CAP 262144 present"; exit 1; fi
+	@echo "[OK] verify-seed (checked-in sources verified; no awk/sed patching)"
+
+fix-seed: verify-seed
 
 pack-compiler:
 	@# Regenerate selfhost/compiler_min_gz/*.b64 from selfhost/compiler_min.sa
 	./selfhost/pack_compiler_min.sh
 
+# ---------------------------------------------------------------------------
+# restore-compiler: guarantee selfhost/compiler_min.sa is present and sane.
+#
+# Fully offline -- this target never touches the network.
+#
+# Fast path (the normal case): compiler_min.sa is a checked-in source file, so
+# we only verify its markers. This path needs no base64, no gzip, no cat/tr.
+#
+# Fallback: if the source is absent or corrupt, decode the checked-in
+# gzip+base64 blob in selfhost/compiler_min_gz/*.b64. That blob was verified
+# byte-identical to the checked-in compiler_min.sa (sha256 4b4e65e75ac3d08d...),
+# so both paths produce the same file. base64 and gzip are therefore OPTIONAL
+# dependencies, needed only if the plain source goes missing.
+# ---------------------------------------------------------------------------
 restore-compiler:
-	@# Pure offline: decode selfhost/compiler_min_gz/*.b64 (gzip+base64). No Python.
-	@test -f selfhost/compiler_min_gz/00.b64 || \
-	  (echo "FAIL: missing selfhost/compiler_min_gz/00.b64"; exit 1)
-	@cat selfhost/compiler_min_gz/*.b64 | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA)
-	@test -s $(MIN_SA)
-	@grep -q 'read_file' $(MIN_SA)
-	@grep -q 'arg_count' $(MIN_SA)
-	@grep -q 'sx_eq' $(MIN_SA) || (echo "FAIL: compiler_min missing sx_eq"; exit 1)
-	@echo "[OK] restore-compiler ($$(wc -c < $(MIN_SA)) bytes, offline, no Python)"
+	@if test -s $(MIN_SA) \
+	   && grep -q 'read_file' $(MIN_SA) \
+	   && grep -q 'arg_count' $(MIN_SA) \
+	   && grep -q 'sx_eq' $(MIN_SA); then \
+	  echo "[OK] restore-compiler (checked-in source verified; no base64/gzip used)"; \
+	  exit 0; \
+	fi; \
+	echo "[restore-compiler] $(MIN_SA) absent or incomplete -> decoding gzip+base64 parts (offline)"; \
+	test -f selfhost/compiler_min_gz/00.b64 \
+	  || { echo "FAIL: no $(MIN_SA) and no selfhost/compiler_min_gz/00.b64 to restore from"; exit 1; }; \
+	cat selfhost/compiler_min_gz/*.b64 | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA) \
+	  || { echo "FAIL: could not decode selfhost/compiler_min_gz/*.b64 (need base64 and gzip)"; exit 1; }; \
+	test -s $(MIN_SA) || { echo "FAIL: decoded $(MIN_SA) is empty"; exit 1; }; \
+	grep -q 'read_file' $(MIN_SA) && grep -q 'arg_count' $(MIN_SA) && grep -q 'sx_eq' $(MIN_SA) \
+	  || { echo "FAIL: restored compiler_min is missing expected markers"; exit 1; }; \
+	echo "[OK] restore-compiler (restored offline from gzip+base64 parts; no Python, no network)"
 
 seed-bin: fix-seed
 	$(CC) -O2 -o $(SEED_BIN) $(SEED_C) -I selfhost/seed
@@ -93,7 +154,7 @@ test-reassign:
 	@printf 'hold n = 0\nhold n = 1\nhold n = 2\nshow n\n' > $(TESTS)/ts_re.sa
 	./$(GEN2) $(TESTS)/ts_re.sa $(TESTS)/ts_re.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_re $(TESTS)/ts_re.c
-	@./$(TESTS)/ts_re | grep -qx 2
+	$(call assert-out,./$(TESTS)/ts_re,2)
 	@echo "[OK] gen2 reassign"
 
 test-while:
@@ -102,7 +163,7 @@ test-while:
 	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/ts_wh.sa
 	./$(GEN2) $(TESTS)/ts_wh.sa $(TESTS)/ts_wh.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_wh $(TESTS)/ts_wh.c
-	@out=$$(./$(TESTS)/ts_wh); echo "$$out" | grep -q done
+	$(call assert-out,./$(TESTS)/ts_wh,0\n1\n2\ndone)
 	@echo "[OK] gen2 while"
 
 test-when:
@@ -111,7 +172,7 @@ test-when:
 	@printf 'hold x = 2\nwhen x == 1 {\n  show 11\n}\nshow 99\n' > $(TESTS)/ts_wn.sa
 	./$(GEN2) $(TESTS)/ts_wn.sa $(TESTS)/ts_wn.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_wn $(TESTS)/ts_wn.c
-	@out=$$(./$(TESTS)/ts_wn); echo "$$out" | grep -q 99
+	$(call assert-out,./$(TESTS)/ts_wn,99)
 	@echo "[OK] gen2 when"
 
 test-mod:
@@ -122,8 +183,7 @@ test-mod:
 	$(CC) -O2 -o $(TESTS)/ts_mod $(TESTS)/ts_mod.c
 	@grep -q '(double)((long)(a)%(long)(3))' $(TESTS)/ts_mod.c
 	@grep -q '} else {' $(TESTS)/ts_mod.c
-	@out=$$(./$(TESTS)/ts_mod); test "$$(echo "$$out" | wc -l)" = "2"; \
-	 echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
+	$(call assert-out,./$(TESTS)/ts_mod,1\n1)
 	@echo "[OK] gen2 modulo + else"
 
 test-user:
@@ -138,11 +198,8 @@ test-user:
 	@grep -q 'char \*name; double age' $(TESTS)/ts_user_sm.c
 	@grep -q 'char \*name; double age' $(TESTS)/ts_user_g2.c
 	@./$(TESTS)/ts_user_sm > $(TESTS)/ts_user_sm.out; ./$(TESTS)/ts_user_g2 > $(TESTS)/ts_user_g2.out; \
-	 diff $(TESTS)/ts_user_sm.out $(TESTS)/ts_user_g2.out
-	@out=$$(./$(TESTS)/ts_user_g2); \
-	 test "$$(echo "$$out" | sed -n 1p)" = "Ada"; test "$$(echo "$$out" | sed -n 2p)" = "36"; \
-	 test "$$(echo "$$out" | sed -n 4p)" = "Ada!"; test "$$(echo "$$out" | sed -n 5p)" = "37"; \
-	 test "$$(echo "$$out" | sed -n 6p)" = "Bob"; test "$$(echo "$$out" | sed -n 7p)" = "3"
+	 cmp $(TESTS)/ts_user_sm.out $(TESTS)/ts_user_g2.out
+	$(call assert-out,./$(TESTS)/ts_user_g2,Ada\n36\nAda\nAda!\n37\nBob\n3)
 	@printf 'struct User {\n  name,\n  age\n}\nhold a = User { name: "Ada", age: 36 }\nhold b = User { name: 1, age: 2 }\n' > $(TESTS)/ts_userbad.sa
 	@./$(GEN2) $(TESTS)/ts_userbad.sa $(TESTS)/ts_userbad.c >/dev/null; grep -q '#error' $(TESTS)/ts_userbad.c
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_userbad.sa > /dev/null 2>&1; then \
@@ -152,7 +209,7 @@ test-user:
 	@printf 'struct User {\n  name,\n  age\n}\nhold u = User { age: 36, name: "Ada" }\nshow u.name\nshow u.age\n' > $(TESTS)/ts_part.sa
 	./$(SEED_MIN_BIN) $(TESTS)/ts_part.sa > $(TESTS)/ts_part_sm.c
 	$(CC) -O2 -o $(TESTS)/ts_part_sm $(TESTS)/ts_part_sm.c
-	@out=$$(./$(TESTS)/ts_part_sm); test "$$(echo "$$out" | sed -n 1p)" = "Ada"; test "$$(echo "$$out" | sed -n 2p)" = "36"
+	$(call assert-out,./$(TESTS)/ts_part_sm,Ada\n36)
 	@echo "[OK] struct string fields (User name/age): seed-min and gen2 agree; mismatches rejected"
 
 test-chain:
@@ -165,15 +222,8 @@ test-chain:
 	./$(GEN2) $(TESTS)/ts_chain.sa $(TESTS)/ts_chain_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_chain_g2 $(TESTS)/ts_chain_g2.c
 	@./$(TESTS)/ts_chain_sm > $(TESTS)/ts_chain_sm.out; ./$(TESTS)/ts_chain_g2 > $(TESTS)/ts_chain_g2.out; \
-	 diff $(TESTS)/ts_chain_sm.out $(TESTS)/ts_chain_g2.out
-	@test "$$(sed -n 1p $(TESTS)/ts_chain_g2.out)" = "ab"
-	@test "$$(sed -n 2p $(TESTS)/ts_chain_g2.out)" = "ab!"
-	@test "$$(sed -n 3p $(TESTS)/ts_chain_g2.out)" = "6"
-	@test "$$(sed -n 4p $(TESTS)/ts_chain_g2.out)" = "5"
-	@test "$$(sed -n 5p $(TESTS)/ts_chain_g2.out)" = "7"
-	@test "$$(sed -n 6p $(TESTS)/ts_chain_g2.out)" = "5"
-	@test "$$(sed -n 7p $(TESTS)/ts_chain_g2.out)" = "3"
-	@test "$$(sed -n 8p $(TESTS)/ts_chain_g2.out)" = "7"
+	 cmp $(TESTS)/ts_chain_sm.out $(TESTS)/ts_chain_g2.out
+	$(call assert-out,./$(TESTS)/ts_chain_g2,ab\nab!\n6\n5\n7\n5\n3\n7)
 	@echo "[OK] gen2 chained + - * / % (and string + name) agree with seed-min"
 
 test-condmod:
@@ -184,8 +234,7 @@ test-condmod:
 	@grep -q '(double)((long)(a' $(TESTS)/ts_cm.c
 	@grep -q '%(long)(10)' $(TESTS)/ts_cm.c
 	$(CC) -O2 -o $(TESTS)/ts_cm $(TESTS)/ts_cm.c
-	@out=$$(./$(TESTS)/ts_cm); test "$$(echo "$$out" | sed -n 1p)" = "7"; \
-	 test "$$(echo "$$out" | sed -n 4p)" = "8"; test "$$(echo "$$out" | sed -n 7p)" = "mod-ok"
+	$(call assert-out,./$(TESTS)/ts_cm,7\n4\n1\n8\n5\n2\nmod-ok)
 	@echo "[OK] gen2 while/when condition % long-cast rewrite"
 
 test-struct2:
@@ -194,9 +243,7 @@ test-struct2:
 	@printf 'struct Point {\n  x,\n  y\n}\nstruct Pair {\n  a,\n  b\n}\nhold p = Point { x: 3, y: 4 }\nshow p.x\nshow p.y\nshow p.x + p.y\nhold q = Pair { a: 5, b: 6 }\nshow q.a + q.b\n' > $(TESTS)/ts_st2.sa
 	./$(GEN2) $(TESTS)/ts_st2.sa $(TESTS)/ts_st2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_st2 $(TESTS)/ts_st2.c
-	@out=$$(./$(TESTS)/ts_st2); \
-	 test "$$(echo "$$out" | sed -n 1p)" = "3"; test "$$(echo "$$out" | sed -n 2p)" = "4"; \
-	 test "$$(echo "$$out" | sed -n 3p)" = "7"; test "$$(echo "$$out" | sed -n 4p)" = "11"
+	$(call assert-out,./$(TESTS)/ts_st2,3\n4\n7\n11)
 	@echo "[OK] gen2 structs: named fields, two structs, field expr"
 
 test-list2:
@@ -205,19 +252,15 @@ test-list2:
 	@printf 'hold xs = [10, 20, 30]\nshow xs[0]\nshow len(xs)\nhold xs = push(xs, 40)\nshow len(xs)\nshow xs[3]\n' > $(TESTS)/ts_li2.sa
 	./$(GEN2) $(TESTS)/ts_li2.sa $(TESTS)/ts_li2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_li2 $(TESTS)/ts_li2.c
-	@out=$$(./$(TESTS)/ts_li2); \
-	 test "$$(echo "$$out" | sed -n 1p)" = "10"; test "$$(echo "$$out" | sed -n 2p)" = "3"; \
-	 test "$$(echo "$$out" | sed -n 3p)" = "4"; test "$$(echo "$$out" | sed -n 4p)" = "40"
+	$(call assert-out,./$(TESTS)/ts_li2,10\n3\n4\n40)
 	@printf 'hold xs = [5, 6]\nshow xs[1] + 1\nshow len(xs)\n' > $(TESTS)/ts_li3.sa
 	./$(GEN2) $(TESTS)/ts_li3.sa $(TESTS)/ts_li3.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_li3 $(TESTS)/ts_li3.c
-	@out=$$(./$(TESTS)/ts_li3); test "$$(echo "$$out" | sed -n 1p)" = "7"; test "$$(echo "$$out" | sed -n 2p)" = "2"
+	$(call assert-out,./$(TESTS)/ts_li3,7\n2)
 	@printf 'hold xs = [5, 6]\nshow len(xs) + 1\nshow 10 %% 3\nhold y = 10 + 2\nshow y\n' > $(TESTS)/ts_li4.sa
 	./$(GEN2) $(TESTS)/ts_li4.sa $(TESTS)/ts_li4.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_li4 $(TESTS)/ts_li4.c
-	@out=$$(./$(TESTS)/ts_li4); \
-	 test "$$(echo "$$out" | sed -n 1p)" = "3"; test "$$(echo "$$out" | sed -n 2p)" = "1"; \
-	 test "$$(echo "$$out" | sed -n 3p)" = "12"
+	$(call assert-out,./$(TESTS)/ts_li4,3\n1\n12)
 	@printf 'hold xs = [5, 6]\nshow xs[len(xs) - 1]\n' > $(TESTS)/ts_li5.sa
 	./$(GEN2) $(TESTS)/ts_li5.sa $(TESTS)/ts_li5.c >/dev/null
 	@grep -q '#error' $(TESTS)/ts_li5.c
@@ -230,12 +273,12 @@ test-use:
 	@printf 'use "selfhost/seed_tests/ts_other.sa"\nshow z\n' > $(TESTS)/ts_use.sa
 	./$(GEN2) $(TESTS)/ts_use.sa $(TESTS)/ts_use.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_use $(TESTS)/ts_use.c
-	@./$(TESTS)/ts_use | grep -qx 99
+	$(call assert-out,./$(TESTS)/ts_use,99)
 	@printf 'use "selfhost/seed_tests/ts_other.sa"\nhold y = 1\n' > $(TESTS)/ts_mid.sa
 	@printf 'use "selfhost/seed_tests/ts_mid.sa"\nshow z\nshow y\n' > $(TESTS)/ts_top.sa
 	./$(GEN2) $(TESTS)/ts_top.sa $(TESTS)/ts_top.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_top $(TESTS)/ts_top.c
-	@out=$$(./$(TESTS)/ts_top); test "$$(echo "$$out" | sed -n 1p)" = "99"; test "$$(echo "$$out" | sed -n 2p)" = "1"
+	$(call assert-out,./$(TESTS)/ts_top,99\n1)
 	@printf 'use "selfhost/seed_tests/no_such_file.sa"\nshow 1\n' > $(TESTS)/ts_miss.sa
 	@./$(GEN2) $(TESTS)/ts_miss.sa $(TESTS)/ts_miss.c >/dev/null 2>&1 || true
 	@grep -q '#error' $(TESTS)/ts_miss.c
@@ -253,10 +296,7 @@ test-nest:
 	$(CC) -O2 -o $(TESTS)/ts_nest_sm $(TESTS)/ts_nest_sm.c
 	@grep -q 'typedef struct { char \*name; double x; } Point;' $(TESTS)/ts_nest_sm.c
 	@grep -q 'typedef struct { Point a; Point b; } Line;' $(TESTS)/ts_nest_sm.c
-	@out=$$(./$(TESTS)/ts_nest_sm); \
-	 test "$$(echo "$$out" | sed -n 1p)" = "p1"; test "$$(echo "$$out" | sed -n 2p)" = "1"; \
-	 test "$$(echo "$$out" | sed -n 3p)" = "p2"; test "$$(echo "$$out" | sed -n 4p)" = "2"; \
-	 test "$$(echo "$$out" | sed -n 5p)" = "p2"; test "$$(echo "$$out" | sed -n 6p)" = "2"
+	$(call assert-out,./$(TESTS)/ts_nest_sm,p1\n1\np2\n2\np2\n2)
 	@# the self-hosted compiler does not support nested literals yet: it must
 	@# say so plainly and emit #error, never silently wrong code
 	@./$(GEN2) $(TESTS)/ts_nest.sa $(TESTS)/ts_nest_g2.c >/dev/null
@@ -294,7 +334,7 @@ test-parity:
 	./$(GEN2) $(TESTS)/par.sa $(TESTS)/par_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/par_g2 $(TESTS)/par_g2.c
 	@./$(TESTS)/par_sm > $(TESTS)/par_sm.out; ./$(TESTS)/par_g2 > $(TESTS)/par_g2.out; \
-	 diff $(TESTS)/par_sm.out $(TESTS)/par_g2.out && echo "[OK] seed-min and gen2 agree on the shared dialect"
+	 cmp $(TESTS)/par_sm.out $(TESTS)/par_g2.out && echo "[OK] seed-min and gen2 agree on the shared dialect"
 	@echo "=== TEST-PARITY-OK ==="
 
 test-boot:
@@ -305,7 +345,7 @@ test-boot:
 	@printf 'hold n = 0\nhold n = 1\nhold n = 2\nshow n\n' > $(TESTS)/ts_re.sa
 	./selfhost/boot_from_gen2 $(TESTS)/ts_re.sa $(TESTS)/ts_re_b.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_re_b $(TESTS)/ts_re_b.c
-	@./$(TESTS)/ts_re_b | grep -qx 2
+	$(call assert-out,./$(TESTS)/ts_re_b,2)
 	@echo "[OK] boot_from_gen2 reassign"
 
 $(SEED_MIN_BIN): $(SEED_MIN_C)
@@ -317,21 +357,21 @@ seed-min: $(SEED_MIN_BIN)
 	@printf 'hold n = 0\nhold n = n + 1\nshow n\n' > $(TESTS)/min_re.sa
 	./$(SEED_MIN_BIN) $(TESTS)/min_re.sa > $(TESTS)/min_re.c
 	$(CC) -O2 -o $(TESTS)/min_re $(TESTS)/min_re.c
-	@./$(TESTS)/min_re | grep -qx 1
+	$(call assert-out,./$(TESTS)/min_re,1)
 	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/min_wh.sa
 	./$(SEED_MIN_BIN) $(TESTS)/min_wh.sa > $(TESTS)/min_wh.c
 	$(CC) -O2 -o $(TESTS)/min_wh $(TESTS)/min_wh.c
-	@out=$$(./$(TESTS)/min_wh); echo "$$out" | grep -q done
+	$(call assert-out,./$(TESTS)/min_wh,0\n1\n2\ndone)
 	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/min_mod.sa
 	./$(SEED_MIN_BIN) $(TESTS)/min_mod.sa > $(TESTS)/min_mod.c
 	$(CC) -O2 -o $(TESTS)/min_mod $(TESTS)/min_mod.c
 	@grep -q '(double)((long)(a)%(long)(3))' $(TESTS)/min_mod.c
-	@out=$$(./$(TESTS)/min_mod); echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
+	$(call assert-out,./$(TESTS)/min_mod,1\n1)
 	@printf 'hold z = 99\n' > $(TESTS)/min_other.sa
 	@printf 'use "selfhost/seed_tests/min_other.sa"\nshow z\n' > $(TESTS)/min_use.sa
 	./$(SEED_MIN_BIN) $(TESTS)/min_use.sa > $(TESTS)/min_use.c
 	$(CC) -O2 -o $(TESTS)/min_use $(TESTS)/min_use.c
-	@./$(TESTS)/min_use | grep -qx 99
+	$(call assert-out,./$(TESTS)/min_use,99)
 	@printf 'use "selfhost/seed_tests/min_missing.sa"\nshow 1\n' > $(TESTS)/min_miss.sa
 	@! ./$(SEED_MIN_BIN) $(TESTS)/min_miss.sa > /dev/null 2>&1
 	@echo "=== SEED-MIN-OK ==="
@@ -341,7 +381,7 @@ test-struct: $(SEED_MIN_BIN)
 	@printf 'struct Point {\n  x,\n  y\n}\nhold p = Point { 3, 4 }\nshow p.x\nshow p.y\nshow p.x + p.y\n' > $(TESTS)/struct.sa
 	./$(SEED_MIN_BIN) $(TESTS)/struct.sa > $(TESTS)/struct.c
 	$(CC) -O2 -o $(TESTS)/struct $(TESTS)/struct.c
-	@out=$$(./$(TESTS)/struct); echo "$$out" | grep -qx 3; echo "$$out" | grep -q 7
+	$(call assert-out,./$(TESTS)/struct,3\n4\n7)
 	@echo "[OK] seed-min structs"
 	@echo "=== TEST-STRUCT-OK ==="
 
@@ -350,7 +390,7 @@ test-list: $(SEED_MIN_BIN)
 	@printf 'hold xs = [10, 20, 30]\nshow xs[0]\nshow xs[1]\nshow xs[2]\nhold n = len(xs)\nshow n\nhold xs = push(xs, 40)\nshow xs[3]\nshow len(xs)\n' > $(TESTS)/list.sa
 	./$(SEED_MIN_BIN) $(TESTS)/list.sa > $(TESTS)/list.c
 	$(CC) -O2 -o $(TESTS)/list $(TESTS)/list.c
-	@out=$$(./$(TESTS)/list); echo "$$out" | grep -qx 10; echo "$$out" | grep -q 40; echo "$$out" | grep -q 4
+	$(call assert-out,./$(TESTS)/list,10\n20\n30\n3\n40\n4)
 	@echo "[OK] seed-min lists"
 	@echo "=== TEST-LIST-OK ==="
 
@@ -359,7 +399,7 @@ test-fn: $(SEED_MIN_BIN)
 	@printf 'make add(a, b) {\n  give a + b\n}\nmake square(x) {\n  give x * x\n}\nhold r = add(40, 2)\nshow r\nhold s = square(5)\nshow s\n' > $(TESTS)/fn.sa
 	./$(SEED_MIN_BIN) $(TESTS)/fn.sa > $(TESTS)/fn.c
 	$(CC) -O2 -o $(TESTS)/fn $(TESTS)/fn.c
-	@out=$$(./$(TESTS)/fn); echo "$$out" | grep -qx 42; echo "$$out" | grep -q 25
+	$(call assert-out,./$(TESTS)/fn,42\n25)
 	@echo "[OK] seed-min make/give"
 	@echo "=== TEST-FN-OK ==="
 
@@ -369,9 +409,7 @@ test-fn2:
 	@printf 'make add(a, b) {\n  give a + b\n}\nmake fac(n) {\n  when n <= 1 {\n    give 1\n  }\n  give n * fac(n - 1)\n}\nhold r = add(40, 2)\nshow r\nshow fac(5)\nshow add(r, 1)\n' > $(TESTS)/ts_fn2.sa
 	./$(GEN2) $(TESTS)/ts_fn2.sa $(TESTS)/ts_fn2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_fn2 $(TESTS)/ts_fn2.c
-	@out=$$(./$(TESTS)/ts_fn2); \
-	 test "$$(echo "$$out" | sed -n 1p)" = "42"; test "$$(echo "$$out" | sed -n 2p)" = "120"; \
-	 test "$$(echo "$$out" | sed -n 3p)" = "43"
+	$(call assert-out,./$(TESTS)/ts_fn2,42\n120\n43)
 	@printf 'make f(n) {\n  when n <= 0 { give 0 }\n  give n * 2\n}\nshow f(3)\n' > $(TESTS)/ts_fn3.sa
 	./$(GEN2) $(TESTS)/ts_fn3.sa $(TESTS)/ts_fn3.c >/dev/null
 	@grep -q '#error' $(TESTS)/ts_fn3.c
@@ -388,7 +426,7 @@ seed-min-gen1: $(SEED_MIN_BIN) restore-compiler
 	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/sm_wh.sa
 	./$(GEN1_MIN) $(TESTS)/sm_wh.sa $(TESTS)/sm_wh.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/sm_wh $(TESTS)/sm_wh.c
-	@out=$$(./$(TESTS)/sm_wh); echo "$$out" | grep -q done
+	$(call assert-out,./$(TESTS)/sm_wh,0\n1\n2\ndone)
 	@echo "=== SEED-MIN-GEN1-OK ==="
 
 true-selfhost-min: seed-min-gen1
@@ -416,16 +454,16 @@ native-test: $(NATIVE_BIN)
 	@mkdir -p examples $(TESTS)
 	@printf 'hold x = 40\nhold x = x + 2\nshow x\n' > examples/native_hello.sa
 	./$(NATIVE_BIN) examples/native_hello.sa $(TESTS)/native_hello
-	@./$(TESTS)/native_hello | grep -qx 42
+	$(call assert-out,./$(TESTS)/native_hello,42)
 	@printf 'hold z = -42\nshow z\n' > $(TESTS)/native_negative.sa
 	./$(NATIVE_BIN) $(TESTS)/native_negative.sa $(TESTS)/native_negative
-	@./$(TESTS)/native_negative | grep -qx -- -42
+	$(call assert-out,./$(TESTS)/native_negative,-42)
 	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/native_while.sa
 	./$(NATIVE_BIN) $(TESTS)/native_while.sa $(TESTS)/native_while
-	@out=$$(./$(TESTS)/native_while); echo "$$out" | grep -q done
+	$(call assert-out,./$(TESTS)/native_while,0\n1\n2\ndone)
 	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/native_mod.sa
 	./$(NATIVE_BIN) $(TESTS)/native_mod.sa $(TESTS)/native_mod
-	@out=$$(./$(TESTS)/native_mod); test "$$(echo "$$out" | sed -n 1p)" = "1"; test "$$(echo "$$out" | sed -n 2p)" = "1"
+	$(call assert-out,./$(TESTS)/native_mod,1\n1)
 	@printf 'hold xs = [1, 2, 3]\nshow xs[0]\n' > $(TESTS)/native_unsup.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_unsup.sa $(TESTS)/native_unsup 2>/dev/null; then \
 	  echo "[FAIL] native accepted lists (silently wrong code)"; exit 1; fi
@@ -433,7 +471,7 @@ native-test: $(NATIVE_BIN)
 	@# one slot per name: names sharing a first letter must not share storage
 	@printf 'hold ab = 1\nhold ac = 2\nshow ab\nshow ac\n' > $(TESTS)/native_slot.sa
 	./$(NATIVE_BIN) $(TESTS)/native_slot.sa $(TESTS)/native_slot
-	@out=$$(./$(TESTS)/native_slot); test "$$(echo "$$out" | sed -n 1p)" = "1"; test "$$(echo "$$out" | sed -n 2p)" = "2"
+	$(call assert-out,./$(TESTS)/native_slot,1\n2)
 	@# an undeclared name must be a hard error, never a silent 0
 	@printf 'hold x = 1\nshow y\n' > $(TESTS)/native_undef.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_undef.sa $(TESTS)/native_undef 2>/dev/null; then \
@@ -456,12 +494,15 @@ grammar: true-selfhost-min
 	@printf 'hold n = 0\nwhile n < 3 {\n  hold n = n + 1\n}\nwhen n == 3 {\n  show "grammar-ok"\n} otherwise {\n  show "grammar-fail"\n}\n' > $(TESTS)/grammar.sa
 	./$(GEN2) $(TESTS)/grammar.sa $(TESTS)/grammar.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/grammar $(TESTS)/grammar.c
-	@./$(TESTS)/grammar | grep -qx 'grammar-ok'
+	$(call assert-out,./$(TESTS)/grammar,grammar-ok)
 	@echo "=== GRAMMAR-OK ==="
 
 gc-test:
 	$(CC) -O2 -o $(TESTS)/rc_runtime_stress selfhost/rc_runtime_stress.c
-	@./$(TESTS)/rc_runtime_stress | grep -qx 'gc-rc-ok'
+	@# 2005 = the 5 chars of "start" plus the 2000 appends in the stress loop.
+	@# The old check was `grep -qx gc-rc-ok`, which passed no matter what size
+	@# the concat chain came out as; pinning it makes the length part of the test.
+	$(call assert-out,./$(TESTS)/rc_runtime_stress,2005\ngc-rc-ok)
 	@echo "=== GC-RC-OK ==="
 
 gen3:
@@ -473,20 +514,19 @@ gen3:
 	@printf 'hold n = 0\nhold n = 1\nhold n = 2\nshow n\n' > $(TESTS)/g3_re.sa
 	./$(GEN3) $(TESTS)/g3_re.sa $(TESTS)/g3_re.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_re $(TESTS)/g3_re.c
-	@./$(TESTS)/g3_re | grep -qx 2
+	$(call assert-out,./$(TESTS)/g3_re,2)
 	@printf 'hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/g3_wh.sa
 	./$(GEN3) $(TESTS)/g3_wh.sa $(TESTS)/g3_wh.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_wh $(TESTS)/g3_wh.c
-	@out=$$(./$(TESTS)/g3_wh); echo "$$out" | grep -q done
+	$(call assert-out,./$(TESTS)/g3_wh,0\n1\n2\ndone)
 	@printf 'hold x = 2\nwhen x == 1 {\n  show 11\n}\nshow 99\n' > $(TESTS)/g3_wn.sa
 	./$(GEN3) $(TESTS)/g3_wn.sa $(TESTS)/g3_wn.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_wn $(TESTS)/g3_wn.c
-	@out=$$(./$(TESTS)/g3_wn); echo "$$out" | grep -q 99
+	$(call assert-out,./$(TESTS)/g3_wn,99)
 	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/g3_mod.sa
 	./$(GEN3) $(TESTS)/g3_mod.sa $(TESTS)/g3_mod.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/g3_mod $(TESTS)/g3_mod.c
-	@out=$$(./$(TESTS)/g3_mod); test "$$(echo "$$out" | wc -l)" = "2"; \
-	 echo "$$out" | sed -n 1p | grep -qx 1; echo "$$out" | sed -n 2p | grep -qx 1
+	$(call assert-out,./$(TESTS)/g3_mod,1\n1)
 	@echo "[OK] gen3 modulo + else"
 	./$(GEN3) $(MIN_SA) selfhost/gen4.c >/dev/null
 	@if cmp -s $(GEN3_C) selfhost/gen4.c; then echo "[OK] byte-identical gen3 == gen4"; \
@@ -497,7 +537,7 @@ subset: seed-bin
 	@printf 'hold x = 42\nshow x\n' > selfhost/_smoke.sa
 	./$(SEED_BIN) selfhost/_smoke.sa > selfhost/_smoke.c
 	$(CC) -O2 -o selfhost/_smoke selfhost/_smoke.c -I selfhost/seed
-	@./selfhost/_smoke | grep -q 42
+	$(call assert-out,./selfhost/_smoke,42)
 	@echo "=== SUBSET-SELFHOST-OK ==="
 
 gen1: $(GEN1)
@@ -510,3 +550,53 @@ test: true-selfhost
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
 	rm -f $(SEED_BIN) $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c
+
+# ---------------------------------------------------------------------------
+# doctor: check that the minimal tool set is present. Nothing else is needed to
+# bootstrap Sayanox from this repository.
+#
+#   required : make, a C99 compiler (cc/clang/gcc), a POSIX shell
+#   optional : base64 + gzip -- only for the offline compiler_min.sa fallback
+#
+# Everything else the Makefile uses is provided by the shell itself (printf,
+# test, command substitution, parameter expansion).
+# ---------------------------------------------------------------------------
+doctor:
+	@fail=0; \
+	echo "Sayanox minimal toolchain check"; \
+	echo "--------------------------------"; \
+	printf 'make            '; \
+	if command -v make >/dev/null 2>&1; then echo "OK   $$(command -v make)"; \
+	else echo "FAIL (required)"; fail=1; fi; \
+	printf 'C99 compiler    '; \
+	if [ -n "$$(command -v $(CC) 2>/dev/null)" ]; then echo "OK   $$(command -v $(CC))"; \
+	else echo "FAIL (required: need cc, clang or gcc)"; fail=1; fi; \
+	printf 'POSIX shell     '; \
+	if [ -n "$$(command -v sh 2>/dev/null)" ]; then echo "OK   $$(command -v sh)"; \
+	else echo "FAIL (required)"; fail=1; fi; \
+	printf 'grep            '; \
+	if command -v grep >/dev/null 2>&1; then echo "OK   $$(command -v grep)"; \
+	else echo "FAIL (required: source assertions)"; fail=1; fi; \
+	printf 'cmp             '; \
+	if command -v cmp >/dev/null 2>&1; then echo "OK   $$(command -v cmp)"; \
+	else echo "FAIL (required: fixed-point checks)"; fail=1; fi; \
+	printf 'mkdir           '; \
+	if command -v mkdir >/dev/null 2>&1; then echo "OK   $$(command -v mkdir)"; \
+	else echo "FAIL (required: test scratch dir)"; fail=1; fi; \
+	printf 'base64          '; \
+	if command -v base64 >/dev/null 2>&1; then echo "OK   $$(command -v base64) (optional)"; \
+	else echo "SKIP (optional: only to restore compiler_min.sa from its blob)"; fi; \
+	printf 'gzip            '; \
+	if command -v gzip >/dev/null 2>&1; then echo "OK   $$(command -v gzip) (optional)"; \
+	else echo "SKIP (optional: only to restore compiler_min.sa from its blob)"; fi; \
+	echo "--------------------------------"; \
+	printf 'python          '; command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 \
+	  && echo "present, but NOT used anywhere on the bootstrap path" \
+	  || echo "absent - fine, nothing needs it"; \
+	printf 'node/ruby       '; command -v node >/dev/null 2>&1 || command -v ruby >/dev/null 2>&1 \
+	  && echo "present, but NOT used anywhere on the bootstrap path" \
+	  || echo "absent - fine, nothing needs it"; \
+	echo "--------------------------------"; \
+	if [ $$fail -eq 0 ]; then echo "DOCTOR-OK: minimal tool set is complete"; \
+	else echo "DOCTOR-FAIL: a required tool is missing"; exit 1; fi
+

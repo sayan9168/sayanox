@@ -1,4 +1,6 @@
-[OK] restore-compiler (136883 bytes, offline, no Python)
+cc -O2 -o selfhost/seed/sxc_seed_min selfhost/seed/sxc_seed_min.c
+[OK] seed-min
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
 [seed-min] compiler_min.sa -> gen1_min.c
 ./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
 cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c

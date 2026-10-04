@@ -14,6 +14,49 @@ Everything below was verified by running those commands plus the per-feature
 targets listed at the end of this file. Nothing in the table is aspirational.
 `docs/logs/` holds the raw output of those three runs (2026-10-04).
 
+```bash
+make doctor             # -> DOCTOR-OK, checks the tool set below
+```
+
+## Minimal tool set (2026-10-04)
+
+Full audit, measurements and method: **[`DEPENDENCY.md`](../DEPENDENCY.md)**.
+
+The bootstrap needs a host C toolchain and `make` — that is not "zero
+dependencies" and is not claimed to be. What it does *not* need is any
+interpreted language: no Python, Node or Ruby process is ever started on any
+target, and no such file is tracked in the repository.
+
+| Tool | Needed for | Status |
+|------|-----------|--------|
+| `make` | the only entry point | **required** |
+| C99 compiler (`cc`/`clang`/`gcc`) | building seed-min, gen1_min, gen2, gen3, native_aot | **required** |
+| POSIX shell | recipe lines (verified under dash) | **required** |
+| `grep` | asserting markers in *generated C* | **required** |
+| `cmp` | `gen3 == gen4` fixed point, seed-min/gen2 parity | **required** |
+| `mkdir` | scratch test directory | **required** |
+| `base64`, `gzip` | **only** the offline `compiler_min.sa` fallback | optional |
+
+Measured external commands per target (`as`/`ld` are internal to the compiler):
+
+| Target | External commands |
+|--------|-------------------|
+| `make true-selfhost` | `cc cmp grep make mkdir` |
+| `make gen3` | `cc cmp make mkdir` |
+| `make native-test` | `cc grep make mkdir` |
+
+Removed from the critical path in this pass: `sed`, `awk`, `diff`, `wc`, `cat`,
+`tr`, `base64`, `gzip`. No `curl`/`wget` — the bootstrap is fully offline.
+
+`fix-seed` was ~20 lines of `awk` + `sed -i` rewriting the seed sources in
+place. Every edit in it was dead: the `awk` guard's grep pattern
+`ptok(k,(const char*)#ch` is a BRE where `r*` means "zero or more `r`", so it
+could never match, and all six `sed -i` guards looked for pre-fix text that is
+no longer in the checked-in sources. It is now `verify-seed`, a read-only
+assertion (`fix-seed` remains as an alias). Test assertions moved off
+`sed -n Np` onto a pure-shell `assert-out` helper that compares whole stdout
+using only builtins, which is stricter than the per-line checks it replaced.
+
 ## Bootstrap memory (2026-10-04)
 
 The geometric-grow string builder was rewritten to a simpler "always-fresh
