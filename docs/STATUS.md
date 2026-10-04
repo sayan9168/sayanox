@@ -1,18 +1,28 @@
 # Status
 
-Last updated: 2026-10-03
+Last updated: 2026-10-04
 
 ## Entry
 
 ```bash
-make true-selfhost      # -> TRUE-SELFHOST-MIN-OK      log: docs/logs/true-selfhost.log
-make gen3               # -> GEN3-OK (gen3 == gen4)    log: docs/logs/gen3.log
-make native-test        # -> NATIVE-TEST-OK            log: docs/logs/native-test.log
+make true-selfhost      # -> TRUE-SELFHOST-MIN-OK      log: docs/logs/make-true-selfhost-min.log
+make gen3               # -> GEN3-OK (gen3 == gen4)    log: docs/logs/make-gen3.log
+make native-test        # -> NATIVE-TEST-OK            log: docs/logs/make-native-test.log
 ```
 
 Everything below was verified by running those commands plus the per-feature
 targets listed at the end of this file. Nothing in the table is aspirational.
-`docs/logs/` holds the raw output of those three runs (2026-10-03).
+`docs/logs/` holds the raw output of those three runs (2026-10-04).
+
+## Bootstrap memory (2026-10-04)
+
+The geometric-grow string builder was rewritten to a simpler "always-fresh
+allocation, evaluate RHS to a temp first before freeing the LHS" model.
+Complier_min.sa (137 KB) now compiles in ~7 seconds peak RSS ~120 MB with
+**~21 MB total allocated** across the whole run (down from the 1.7 GB of the
+prior never-free baseline; from the OOM Killed result that motivated this
+fix). There are no reference counts and no manual drops in the emitted code —
+ownership is local to each assignment.
 
 ## Coverage (pure-min dialect)
 
