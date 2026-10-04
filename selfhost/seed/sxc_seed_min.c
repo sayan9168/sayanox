@@ -483,7 +483,18 @@ static void stmt(void){
         else printf("  double %s = %s;\n", n, e);
       }
     } else {
-      printf("  %s = %s;\n", n, e);
+      if(vt[i]==TY_STR){
+        /* Universal safe string reassignment: evaluate RHS into a temp FIRST,
+         * then free the old LHS value, then assign. This avoids use-after-free
+         * when RHS reads the current LHS value (concat-into-self or aliased
+         * variables). Wrap plain literals and bare variable names with
+         * sx_sb_from so the LHS always owns a fresh builder; sx_cat/sx_chr/
+         * sx_arg/sx_read/sx_trim already return fresh owning builders and
+         * must NOT be re-wrapped (that would leak their result). */
+        int need_copy = (e[0]=='"') || (strncmp(e,"sx_",3)!=0 && e[0]!='_');
+        printf("  { char *_sx_v = %s%s%s; sx_sb_free(%s); %s = _sx_v; }\n",
+               need_copy?"sx_sb_from(":"", e, need_copy?")":"", n, n);
+      } else printf("  %s = %s;\n", n, e);
     }
     free(n); free(e); return;
   }
@@ -609,21 +620,66 @@ static int field_type(const char *base, const char *fld, int *osi){
 }
 
 static void preamble(void){
-  puts("#include <stdio.h>"); puts("#include <stdlib.h>"); puts("#include <string.h>"); puts("#include <stdarg.h>");
+  puts("#include <stdio.h>"); puts("#include <stdlib.h>"); puts("#include <string.h>"); puts("#include <stdarg.h>"); puts("#include <stdint.h>"); puts("#include <stddef.h>");
   puts("typedef struct { double *d; long n; long cap; } sx_list;");
   puts("static sx_list *sx_llit(int n,...){ sx_list *L=malloc(sizeof*L); L->n=n; L->cap=n<4?4:n; L->d=malloc(sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }");
   puts("static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\\n\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\\n\",stderr);exit(1);} return L->d[i]; }");
   puts("static double sx_llen(sx_list *L){ return L?(double)L->n:0.0; }");
   puts("static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=malloc(sizeof*L); L->n=0; L->cap=4; L->d=malloc(sizeof(double)*4);} if(L->n>=L->cap){ L->cap*=2; L->d=realloc(L->d,sizeof(double)*(size_t)L->cap);} L->d[L->n++]=v; return L; }");
-  puts("static char *sx_cat(const char *a,const char *b){ if(!a)a=\"\"; if(!b)b=\"\"; size_t la=strlen(a),lb=strlen(b); char *r=malloc(la+lb+1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r; }");
+  puts("/* ----- amortised string builder -------------------------------------\n * Strings returned by sx_cat/sx_chr/sx_sb_from carry a hidden sx_sb header\n * with current length and capacity, so repeated concat() to the same LHS is\n * O(1) amortised instead of O(N^2). String literals, argv[] strings and\n * read_file() results do NOT have a header -- sx_cat detects that and copies\n * them into a fresh builder on first use. ---------------------------- */");
+  puts("#include <stddef.h>");
+  puts("typedef struct { size_t magic; size_t len; size_t cap; char data[1]; } sx_sb;");
+  puts("#define SX_SB_MAGIC 0x53427566UL");
+  puts("static sx_sb *sx_sb_hdr(const char *p){ return (sx_sb*)((char*)p - offsetof(sx_sb,data)); }");
+  puts("static int sx_sb_is(const char *p){");
+  puts("  if(!p) return 0;");
+  puts("  if(((uintptr_t)p) & 7) return 0;");
+  puts("  sx_sb *h=sx_sb_hdr(p);");
+  puts("  if(h->magic!=SX_SB_MAGIC) return 0;");
+  puts("  if(h->len > (1u<<28)) return 0;");
+  puts("  if(h->cap < h->len || h->cap > (1u<<29)) return 0;");
+  puts("  return 1;");
+  puts("}");
+  puts("static char *sx_sb_new(size_t cap){");
+  puts("  if(cap<32) cap=32;");
+  puts("  sx_sb *h=(sx_sb*)malloc(offsetof(sx_sb,data)+cap+1); if(!h){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
+  puts("  h->magic=SX_SB_MAGIC; h->len=0; h->cap=cap; h->data[0]=0; return h->data; }");
+  puts("static char *sx_sb_from(const char *s){ size_t n=strlen(s?s:\"\");");
+  puts("  size_t cap=n<32?32:n; char *r=sx_sb_new(cap); if(n)memcpy(r,s,n); r[n]=0; sx_sb_hdr(r)->len=n; return r; }");
+  puts("static void sx_sb_free(const char *p){ if(sx_sb_is(p)) free(sx_sb_hdr(p)); }");
+  puts("static char *sx_sb_app(const char *a,const char *b){");
+  puts("  const char *aa=a?a:\"\"; const char *bb=b?b:\"\";");
+  puts("  int ia=sx_sb_is(aa);");
+  puts("  size_t la=ia?sx_sb_hdr(aa)->len:strlen(aa);");
+  puts("  size_t lb=strlen(bb);");
+  puts("  /* snapshot b when b is a pointer INTO a's buffer (overlapping src/dst),");
+  puts("   * so the memcpy below cannot clobber b before we read it. */");
+  puts("  int overlap = (bb==aa) || (bb && bb>aa && bb<aa+la+1);");
+  puts("  char btmp[512]; char *bdup=0; const char *bs=bb;");
+  puts("  if(overlap){ if(lb+1<=sizeof(btmp)){memcpy(btmp,bb,lb);btmp[lb]=0;bs=btmp;} else{bdup=malloc(lb+1);memcpy(bdup,bb,lb);bdup[lb]=0;bs=bdup;} }");
+  puts("  size_t need=la+lb;");
+  puts("  /* IMPORTANT: sx_sb_app NEVER frees `a` or `b`. Old `a` is always freed");
+  puts("   * by the assignment wrapper:  { char *_v = sx_cat(a,b); sx_sb_free(a); a=_v; }");
+  puts("   * which evaluates RHS to a temp first, then frees the old LHS. This");
+  puts("   * eliminates all double-free / use-after-free hazards from aliased vars");
+  puts("   * (the LHS may currently point at another variable like `q`, and freeing");
+  puts("   * it here would invalidate q for later use). Starting from a's existing");
+  puts("   * cap when a is a builder keeps total allocations O(N log N) overall. */");
+  puts("  size_t cap=ia?sx_sb_hdr(aa)->cap:32; while(cap<need+1)cap*=2;");
+  puts("  char *r=sx_sb_new(cap); sx_sb *h=sx_sb_hdr(r);");
+  puts("  if(la)memcpy(r,aa,la); memcpy(r+la,bs,lb); r[need]=0; h->len=need;");
+  puts("  free(bdup);");
+  puts("  return r;");
+  puts("}");
+  puts("static char *sx_cat(const char *a,const char *b){ return sx_sb_app((char*)a,b); }");
   puts("static double sx_len(const char *s){ return (double)strlen(s?s:\"\"); }");
-  puts("static char *sx_chr(double v){ char *r=malloc(2); r[0]=(char)(long)v; r[1]=0; return r; }");
+  puts("static char *sx_chr(double v){ char *r=sx_sb_new(32); r[0]=(char)(long)v; r[1]=0; sx_sb_hdr(r)->len=1; return r; }");
   puts("static double sx_eq(const char *a,const char *b){ return strcmp(a?a:\"\",b?b:\"\")==0?1.0:0.0; }");
   puts("static double sx_idx(const char *s,double v){ long i=(long)v; long L=(long)strlen(s?s:\"\"); if(i<0)i+=L; if(i<0||i>=L){fputs(\"sx: index\\n\",stderr);exit(1);} return (double)(unsigned char)s[i]; }");
   puts("static int g_argc; static char **g_argv;");
   puts("static double sx_argc(void){ return (double)g_argc; }");
-  puts("static char *sx_arg(int i){ return (i>=0&&i<g_argc)?g_argv[i]:\"\"; }");
-  puts("static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return strdup(\"\"); fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET); char *b=malloc((size_t)n+1); size_t rd=fread(b,1,(size_t)n,f); b[rd]=0; fclose(f); return b; }");
+  puts("static char *sx_arg(int i){ return (i>=0&&i<g_argc)?sx_sb_from(g_argv[i]):sx_sb_new(1); }");
+  puts("static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return sx_sb_new(1); fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET); char *b=malloc((size_t)n+1); size_t rd=fread(b,1,(size_t)n,f); b[rd]=0; fclose(f); char *r=sx_sb_from(b); free(b); return r; }");
   puts("static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0; fputs(s?s:\"\",f); fclose(f); return 1; }");
   emit_typedefs();
 }
@@ -743,7 +799,7 @@ static void scan_literals(void){
 
 static void decls(void){
   for(int i=0;i<nv;i++){
-    if(vt[i]==TY_STR) printf("  char *%s = \"\";\n", vn[i]);
+    if(vt[i]==TY_STR) printf("  char *%s = sx_sb_new(1);\n", vn[i]);
     else if(vt[i]==TY_LIST) printf("  sx_list *%s = 0;\n", vn[i]);
     else if(vt[i]==TY_STRUCT && vs[i]>=0) printf("  %s %s = {0};\n", SD[vs[i]].name, vn[i]);
     else printf("  double %s = 0;\n", vn[i]);
