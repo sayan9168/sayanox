@@ -28,8 +28,10 @@ when / while`, `otherwise` and its `else` alias, `make / give` (with
 recursion), lists (`[..]`, `xs[i]`, `len`, `push`), numeric structs with named
 fields, `%`, and `use "file.sa"` modules. See
 [docs/STATUS.md](docs/STATUS.md) for the verified seed-min / gen2 / native
-table and for what is explicitly *not* supported (string struct fields, nested
-structs, namespaced modules, a full standard library).
+table — including nested structs and every measured divergence between the
+three backends — and for what is explicitly *not* supported (fractional
+literals, parenthesized base expressions in gen2, namespaced modules, a full
+standard library).
 
 ## Layout
 

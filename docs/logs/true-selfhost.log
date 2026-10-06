@@ -1,4 +1,6 @@
-[OK] restore-compiler (136883 bytes, offline, no Python)
+cc -O2 -o selfhost/seed/sxc_seed_min selfhost/seed/sxc_seed_min.c
+[OK] seed-min
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
 [seed-min] compiler_min.sa -> gen1_min.c
 ./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
 cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
@@ -60,7 +62,13 @@ cc -O2 -o selfhost/seed_tests/ts_part_sm selfhost/seed_tests/ts_part_sm.c
 [OK] struct string fields (User name/age): seed-min and gen2 agree; mismatches rejected
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_nest.sa > selfhost/seed_tests/ts_nest_sm.c
 cc -O2 -o selfhost/seed_tests/ts_nest_sm selfhost/seed_tests/ts_nest_sm.c
-[OK] nested structs in seed-min (typed fields, ordered typedefs, .a.x chains); gen2 rejects them explicitly
+./selfhost/gen2 selfhost/seed_tests/ts_nest.sa selfhost/seed_tests/ts_nest_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_nest_g2 selfhost/seed_tests/ts_nest_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_nest3.sa > selfhost/seed_tests/ts_nest3_sm.c
+cc -O2 -o selfhost/seed_tests/ts_nest3_sm selfhost/seed_tests/ts_nest3_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_nest3.sa selfhost/seed_tests/ts_nest3_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_nest3_g2 selfhost/seed_tests/ts_nest3_g2.c
+[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies); clear errors for forward decls, list fields, bad chains, show-of-struct
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/par.sa > selfhost/seed_tests/par_sm.c
 cc -O2 -o selfhost/seed_tests/par_sm selfhost/seed_tests/par_sm.c
 ./selfhost/gen2 selfhost/seed_tests/par.sa selfhost/seed_tests/par_g2.c >/dev/null

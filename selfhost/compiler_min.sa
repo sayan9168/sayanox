@@ -69,6 +69,7 @@ hold pos = 0
 
 // =====================================================================
 hold body = ""
+hold obody = ""
 hold decls = "|"
 hold sdecls = "|"
 hold depth = 0
@@ -167,12 +168,19 @@ hold exbad = 0
 hold exbad3 = 0
 hold exbad4 = 0
 hold exbad5 = 0
+hold badparen = 0
+hold ppd = 0
+hold ppq = 0
+hold pprun = 0
+hold ppch = 0
 hold ixok = 0
 hold savep2 = 0
 hold exmissp = ""
 hold exerr = ""
 hold exs = ""
 hold exch = ""
+hold exm = ""
+hold exml = 0
 hold excd = 0
 hold exsl = 0
 hold exchl = 0
@@ -456,17 +464,28 @@ while exmore == 1 {
   hold exround = exround + 1
   hold exs = ""
   hold exch = ""
+  hold exm = ""
   hold exchl = 0
+  hold exml = 0
   hold exi = 0
   hold exst = 1
   hold exq = 0
   hold excm = 0
   while exi < n {
-    // flush the pending chunk
-    when exchl >= 300 {
-      hold exs = concat(exs, exch)
+    // flush the pending chunk (two-level: exch -> exm -> exs).  A single
+    // flat accumulator copies everything appended so far on every flush,
+    // which is O(n^2) on the whole input; the mid chunk keeps that to
+    // O(n^(4/3)) while the final text is identical.
+    when exchl >= 128 {
+      hold exm = concat(exm, exch)
       hold exch = ""
       hold exchl = 0
+      hold exml = len(exm)
+      when exml > 8192 {
+        hold exs = concat(exs, exm)
+        hold exm = ""
+        hold exml = 0
+      }
     }
     hold exc = sx_index(source, exi)
     when exq == 1 {
@@ -577,9 +596,15 @@ while exmore == 1 {
                   } otherwise {
                     // flush, then splice the whole file at once
                     when exchl > 0 {
-                      hold exs = concat(exs, exch)
+                      hold exm = concat(exm, exch)
                       hold exch = ""
                       hold exchl = 0
+                      hold exml = len(exm)
+                    }
+                    when exml > 0 {
+                      hold exs = concat(exs, exm)
+                      hold exm = ""
+                      hold exml = 0
                     }
                     hold exs = concat(exs, exsrc)
                     hold exmore = 1
@@ -635,11 +660,17 @@ while exmore == 1 {
       }
     }
   }
-  // flush the tail chunk
+  // flush the tail chunk (both levels)
   when exchl > 0 {
-    hold exs = concat(exs, exch)
+    hold exm = concat(exm, exch)
     hold exch = ""
     hold exchl = 0
+    hold exml = len(exm)
+  }
+  when exml > 0 {
+    hold exs = concat(exs, exm)
+    hold exm = ""
+    hold exml = 0
   }
   when exmore == 1 {
     hold source = exs
@@ -824,6 +855,53 @@ while running == 1 {
       hold c1 = 0
       when pos < n {
         hold c1 = sx_index(source,pos)
+      }
+
+      // `(` as a base.  The C seed copies an expression verbatim and lets C
+      // parse it, so it accepts `(a + 3) * 4`; this compiler parses the
+      // expression structurally and has no parenthesized base.  Report that
+      // clearly (and emit `#error`) instead of silently emitting broken C
+      // such as `double b = ;`.
+      when c1 == 40 {
+        hold badparen = 1
+        hold pos = pos + 1
+        hold ppd = 1
+        hold ppq = 0
+        hold pprun = 1
+        while pprun == 1 {
+          when pos >= n {
+            hold pprun = 0
+          } otherwise {
+            hold ppch = sx_index(source,pos)
+            when ppq == 1 {
+              when ppch == 92 {
+                hold pos = pos + 1
+              } otherwise {
+                when ppch == 34 {
+                  hold ppq = 0
+                }
+              }
+            } otherwise {
+              when ppch == 34 {
+                hold ppq = 1
+              } otherwise {
+                when ppch == 40 {
+                  hold ppd = ppd + 1
+                } otherwise {
+                  when ppch == 41 {
+                    hold ppd = ppd - 1
+                    when ppd == 0 {
+                      hold pprun = 0
+                    }
+                  }
+                }
+              }
+            }
+            hold pos = pos + 1
+          }
+        }
+        hold rhs = "0"
+        hold rk = 0
       }
 
       // RHS: string literal
@@ -3419,6 +3497,53 @@ hold ec = 0
         hold c1 = sx_index(source,pos)
       }
 
+      // `(` as a base.  The C seed copies an expression verbatim and lets C
+      // parse it, so it accepts `(a + 3) * 4`; this compiler parses the
+      // expression structurally and has no parenthesized base.  Report that
+      // clearly (and emit `#error`) instead of silently emitting broken C
+      // such as `double b = ;`.
+      when c1 == 40 {
+        hold badparen = 1
+        hold pos = pos + 1
+        hold ppd = 1
+        hold ppq = 0
+        hold pprun = 1
+        while pprun == 1 {
+          when pos >= n {
+            hold pprun = 0
+          } otherwise {
+            hold ppch = sx_index(source,pos)
+            when ppq == 1 {
+              when ppch == 92 {
+                hold pos = pos + 1
+              } otherwise {
+                when ppch == 34 {
+                  hold ppq = 0
+                }
+              }
+            } otherwise {
+              when ppch == 34 {
+                hold ppq = 1
+              } otherwise {
+                when ppch == 40 {
+                  hold ppd = ppd + 1
+                } otherwise {
+                  when ppch == 41 {
+                    hold ppd = ppd - 1
+                    when ppd == 0 {
+                      hold pprun = 0
+                    }
+                  }
+                }
+              }
+            }
+            hold pos = pos + 1
+          }
+        }
+        hold rhs = "0"
+        hold rk = 0
+      }
+
       // string literal
       when c1 == 34 {
         hold pos = pos + 1
@@ -4941,6 +5066,53 @@ hold ec = 0
       when pos < n {
         hold c1 = sx_index(source,pos)
       }
+
+      // `(` as a base.  The C seed copies an expression verbatim and lets C
+      // parse it, so it accepts `(a + 3) * 4`; this compiler parses the
+      // expression structurally and has no parenthesized base.  Report that
+      // clearly (and emit `#error`) instead of silently emitting broken C
+      // such as `double b = ;`.
+      when c1 == 40 {
+        hold badparen = 1
+        hold pos = pos + 1
+        hold ppd = 1
+        hold ppq = 0
+        hold pprun = 1
+        while pprun == 1 {
+          when pos >= n {
+            hold pprun = 0
+          } otherwise {
+            hold ppch = sx_index(source,pos)
+            when ppq == 1 {
+              when ppch == 92 {
+                hold pos = pos + 1
+              } otherwise {
+                when ppch == 34 {
+                  hold ppq = 0
+                }
+              }
+            } otherwise {
+              when ppch == 34 {
+                hold ppq = 1
+              } otherwise {
+                when ppch == 40 {
+                  hold ppd = ppd + 1
+                } otherwise {
+                  when ppch == 41 {
+                    hold ppd = ppd - 1
+                    when ppd == 0 {
+                      hold pprun = 0
+                    }
+                  }
+                }
+              }
+            }
+            hold pos = pos + 1
+          }
+        }
+        hold rhs = "0"
+        hold rk = 0
+      }
       when c1 == 104 {
         hold c2 = 0
         when pos + 1 < n {
@@ -5661,6 +5833,22 @@ hold ec = 0
     when act == 0 {
       hold pos = pos + 1
     }
+
+    // ---- flush completed output into obody (memory bound) -------------
+    // A flat accumulator would copy the whole body on every append, which is
+    // O(n^2): compiling this file used to allocate ~2.5 GB and get Killed on
+    // low-RAM hosts.  Keep `body` under ~1 KB and append it to `obody` in
+    // that unit instead.  `obody` is only appended at the end, so the emitted
+    // text and its order are byte-for-byte unchanged.  Never flush while a
+    // function body is being collected (`body` belongs to `fns` until the
+    // matching `}` restores it).
+    when in_fn == 0 {
+      hold blen = len(body)
+      when blen > 1024 {
+        hold obody = concat(obody, body)
+        hold body = ""
+      }
+    }
   }
 }
 
@@ -5829,6 +6017,7 @@ when rt == 1 {
 } otherwise {
   hold out = concat(out, "int main(void){\n")
 }
+hold out = concat(out, obody)
 hold out = concat(out, body)
 hold out = concat(out, "  return 0;\n")
 hold out = concat(out, "}\n")
@@ -5910,6 +6099,11 @@ when exbad4 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: a '}' ended up inside a give expression; put one statement per line")
   hold exerr = concat(exerr, nl)
   show "min: a '}' ended up inside a give expression; put one statement per line"
+}
+when badparen == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: a parenthesized base is not supported by this compiler; write the expression without outer parentheses or use a named variable (the C seed accepts it)")
+  hold exerr = concat(exerr, nl)
+  show "min: a parenthesized base is not supported by this compiler; write the expression without outer parentheses"
 }
 when exbad3 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: unsupported index expression (number or name only)")

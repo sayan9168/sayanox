@@ -26,7 +26,7 @@ TESTS    := selfhost/seed_tests
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
         seed-bin doctor \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
-        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest \
+        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec \
         pack-compiler
 
 all: true-selfhost-min
@@ -106,8 +106,9 @@ pack-compiler:
 #
 # Fallback: if the source is absent or corrupt, decode the checked-in
 # gzip+base64 blob in selfhost/compiler_min_gz/*.b64. That blob was verified
-# byte-identical to the checked-in compiler_min.sa (sha256 4b4e65e75ac3d08d...),
-# so both paths produce the same file. base64 and gzip are therefore OPTIONAL
+# byte-identical to the checked-in compiler_min.sa (sha256 aa5ff5ada3b3d91c...,
+# 33 parts of 1100 chars; regenerate with `make pack-compiler`), so both paths
+# produce the same file. base64, gzip, cat, tr and rm are therefore OPTIONAL
 # dependencies, needed only if the plain source goes missing.
 # ---------------------------------------------------------------------------
 restore-compiler:
@@ -121,11 +122,16 @@ restore-compiler:
 	echo "[restore-compiler] $(MIN_SA) absent or incomplete -> decoding gzip+base64 parts (offline)"; \
 	test -f selfhost/compiler_min_gz/00.b64 \
 	  || { echo "FAIL: no $(MIN_SA) and no selfhost/compiler_min_gz/00.b64 to restore from"; exit 1; }; \
-	cat selfhost/compiler_min_gz/*.b64 | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA) \
-	  || { echo "FAIL: could not decode selfhost/compiler_min_gz/*.b64 (need base64 and gzip)"; exit 1; }; \
-	test -s $(MIN_SA) || { echo "FAIL: decoded $(MIN_SA) is empty"; exit 1; }; \
-	grep -q 'read_file' $(MIN_SA) && grep -q 'arg_count' $(MIN_SA) && grep -q 'sx_eq' $(MIN_SA) \
-	  || { echo "FAIL: restored compiler_min is missing expected markers"; exit 1; }; \
+	# decode to a TEMP file and verify it BEFORE touching $(MIN_SA): a failed \
+	# or stale restore must never replace a source file that is already there \
+	# (that is how a newer compiler_min.sa gets silently downgraded to an \
+	# older blob if `grep` happens to be missing from PATH). \
+	cat selfhost/compiler_min_gz/*.b64 | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA).tmp \
+	  || { echo "FAIL: could not decode selfhost/compiler_min_gz/*.b64 (need base64 and gzip)"; rm -f $(MIN_SA).tmp; exit 1; }; \
+	test -s $(MIN_SA).tmp || { echo "FAIL: decoded $(MIN_SA) is empty"; rm -f $(MIN_SA).tmp; exit 1; }; \
+	grep -q 'read_file' $(MIN_SA).tmp && grep -q 'arg_count' $(MIN_SA).tmp && grep -q 'sx_eq' $(MIN_SA).tmp \
+	  || { echo "FAIL: restored compiler_min is missing expected markers (existing $(MIN_SA) left untouched)"; rm -f $(MIN_SA).tmp; exit 1; }; \
+	cat $(MIN_SA).tmp > $(MIN_SA); rm -f $(MIN_SA).tmp; \
 	echo "[OK] restore-compiler (restored offline from gzip+base64 parts; no Python, no network)"
 
 seed-bin: fix-seed
@@ -339,6 +345,31 @@ test-nest:
 	@grep -q 'show value cannot be a struct' $(TESTS)/ts_nestshow_g2.c
 	@echo "[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies); clear errors for forward decls, list fields, bad chains, show-of-struct"
 
+test-prec:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@mkdir -p $(TESTS)
+	@# a + 3 * 4 must be 14 (native used to answer 15: the term-level used r15,
+	@# which is also where emit_rel kept the left operand)
+	@printf 'hold a = 2\nshow a + 3 * 4\nshow a * 3 + 4\nshow 1 + 2 * 3\nshow a + 3 / 3\nshow a + 1 %% 3\n' > $(TESTS)/ts_prec.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_prec.sa > $(TESTS)/ts_prec_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_prec_sm $(TESTS)/ts_prec_sm.c
+	$(call assert-out,./$(TESTS)/ts_prec_sm,14\n10\n7\n3\n3)
+	./$(GEN2) $(TESTS)/ts_prec.sa $(TESTS)/ts_prec_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_prec_g2 $(TESTS)/ts_prec_g2.c
+	$(call assert-out,./$(TESTS)/ts_prec_g2,14\n10\n7\n3\n3)
+	@echo "[OK] precedence: a + 3 * 4 = 14 in seed-min and gen2"
+	@# a parenthesized base is the one known seed/gen2 difference: gen2 reports
+	@# it (with #error) instead of emitting broken C like `double b = ;`
+	@printf 'hold a = 2\nshow (a + 3) * 4\n' > $(TESTS)/ts_paren.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_paren.sa > $(TESTS)/ts_paren_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_paren_sm $(TESTS)/ts_paren_sm.c
+	$(call assert-out,./$(TESTS)/ts_paren_sm,20)
+	./$(GEN2) $(TESTS)/ts_paren.sa $(TESTS)/ts_paren_g2.c >/dev/null
+	@grep -q 'parenthesized base is not supported' $(TESTS)/ts_paren_g2.c
+	@if $(CC) -O2 -o $(TESTS)/ts_paren_g2 $(TESTS)/ts_paren_g2.c 2>/dev/null; then \
+	  echo "[FAIL] gen2 accepted a parenthesized base"; exit 1; fi
+	@echo "[OK] parenthesized base: seed-min runs it, gen2 reports it clearly"
+
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
@@ -474,7 +505,7 @@ $(NATIVE_BIN): $(NATIVE_SRC)
 	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
 native: $(NATIVE_BIN)
 	@echo "=== NATIVE-OK ==="
-native-test: $(NATIVE_BIN)
+native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	@mkdir -p examples $(TESTS)
 	@printf 'hold x = 40\nhold x = x + 2\nshow x\n' > examples/native_hello.sa
 	./$(NATIVE_BIN) examples/native_hello.sa $(TESTS)/native_hello
@@ -488,6 +519,11 @@ native-test: $(NATIVE_BIN)
 	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/native_mod.sa
 	./$(NATIVE_BIN) $(TESTS)/native_mod.sa $(TESTS)/native_mod
 	$(call assert-out,./$(TESTS)/native_mod,1\n1)
+	@# the FALSE branch: `else`/`otherwise` body must actually run (it used to
+	@# fall through a second conditional jump and silently print nothing)
+	@printf 'hold a = 10\nwhen a < 5 { show 1 } else { show 2 }\nwhen a < 5 { show 3 } otherwise { show 4 }\nshow 5\n' > $(TESTS)/native_else.sa
+	./$(NATIVE_BIN) $(TESTS)/native_else.sa $(TESTS)/native_else
+	$(call assert-out,./$(TESTS)/native_else,2\n4\n5)
 	@printf 'hold xs = [1, 2, 3]\nshow xs[0]\nshow len(xs)\n' > $(TESTS)/native_list.sa
 	./$(NATIVE_BIN) $(TESTS)/native_list.sa $(TESTS)/native_list
 	$(call assert-out,./$(TESTS)/native_list,1\n3)
@@ -517,7 +553,43 @@ native-test: $(NATIVE_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/native_fld.sa $(TESTS)/native_fld 2>/dev/null; then \
 	  echo "[FAIL] native accepted field access on a number (silently wrong code)"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fld.sa $(TESTS)/native_fld 2>&1 | grep -q 'cannot access a field'
-	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs"
+	@# ------------- nested structs, end to end (seed-min / gen2 / native) ----
+	@# same source as `make test-nest` (ts_nest / ts_nest3): the native backend
+	@# must agree with seed-min and gen2 on both, field chain and typed copy
+	@printf 'struct Point {\n  name,\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: Point { name: "p1", x: 1 }, b: Point { name: "p2", x: 2 } }\nshow l.a.name\nshow l.a.x\nshow l.b.name\nshow l.b.x\nhold m = l.b\nshow m.name\nshow m.x\n' > $(TESTS)/native_nest.sa
+	./$(NATIVE_BIN) $(TESTS)/native_nest.sa $(TESTS)/native_nest
+	$(call assert-out,./$(TESTS)/native_nest,p1\n1\np2\n2\np2\n2)
+	@printf 'struct Point {\n  x,\n  y\n}\nstruct Rect {\n  o,\n  sz\n}\nstruct Scene {\n  r,\n  label\n}\nhold s = Scene { r: Rect { o: Point { 1, 2 }, sz: Point { 3, 4 } }, label: "main" }\nshow s.r.o.x\nshow s.r.o.y\nshow s.r.sz.x\nshow s.label\nhold rr = s.r\nshow rr.sz.y\n' > $(TESTS)/native_nest3.sa
+	./$(NATIVE_BIN) $(TESTS)/native_nest3.sa $(TESTS)/native_nest3
+	$(call assert-out,./$(TESTS)/native_nest3,1\n2\n3\nmain\n4)
+	@# three-way parity: seed-min == gen2 == native on the nested programs
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min (make seed-min)"; exit 1)
+	./$(SEED_MIN_BIN) $(TESTS)/native_nest3.sa > $(TESTS)/native_nest3_sm.c
+	$(CC) -O2 -o $(TESTS)/native_nest3_sm $(TESTS)/native_nest3_sm.c
+	$(call assert-out,./$(TESTS)/native_nest3_sm,1\n2\n3\nmain\n4)
+	./$(GEN2) $(TESTS)/native_nest3.sa $(TESTS)/native_nest3_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/native_nest3_g2 $(TESTS)/native_nest3_g2.c
+	$(call assert-out,./$(TESTS)/native_nest3_g2,1\n2\n3\nmain\n4)
+	@echo "[OK] native nested structs: l.a.x chains (2 and 3 levels), typed copy; seed-min and gen2 agree"
+	@# nested-struct forms native must reject with a clear error, not mis-compile
+	@printf 'struct Line {\n  a\n}\nstruct Point {\n  x\n}\nhold l = Line { a: Point { 1 } }\n' > $(TESTS)/native_nestfwd.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_nestfwd.sa $(TESTS)/native_nestfwd 2>/dev/null; then \
+	  echo "[FAIL] native accepted a nested struct declared later"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_nestfwd.sa $(TESTS)/native_nestfwd 2>&1 | grep -q 'declare the nested struct first'
+	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: [1], b: Point { 2 } }\n' > $(TESTS)/native_nestlist.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_nestlist.sa $(TESTS)/native_nestlist 2>/dev/null; then \
+	  echo "[FAIL] native accepted a list in a struct field"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_nestlist.sa $(TESTS)/native_nestlist 2>&1 | grep -q 'cannot hold a list'
+	@printf 'struct Point {\n  x\n}\nhold q = Point { x: 1 }\nshow q\n' > $(TESTS)/native_showstruct.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_showstruct.sa $(TESTS)/native_showstruct 2>/dev/null; then \
+	  echo "[FAIL] native accepted show of a struct"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_showstruct.sa $(TESTS)/native_showstruct 2>&1 | grep -q 'show of a struct'
+	@printf 'struct Point {\n  x\n}\nhold p = Point { x: 1 }\nshow p.x.y\n' > $(TESTS)/native_nestchain.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_nestchain.sa $(TESTS)/native_nestchain 2>/dev/null; then \
+	  echo "[FAIL] native accepted a chain through a number field"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_nestchain.sa $(TESTS)/native_nestchain 2>&1 | grep -q 'cannot access a field'
+	@echo "[OK] native rejects (clearly): later-declared nesting, list in struct, show of struct, bad chain"
+	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs"
 	@echo "=== NATIVE-TEST-OK ==="
 
 grammar: true-selfhost-min
@@ -578,9 +650,13 @@ gen2: $(GEN2)
 test: true-selfhost
 	@echo TEST-OK
 
+# clean removes only GENERATED files -- $(SEED_BIN) (selfhost/seed/sxc_seed) is
+# tracked in git, and `make clean` deleting a tracked file used to leave a
+# deleted-but-committed binary in the working tree.  Rebuild it with
+# `make seed-bin` (it is a .PHONY target, so it always rebuilds from source).
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
-	rm -f $(SEED_BIN) $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c
+	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c
 
 # ---------------------------------------------------------------------------
 # doctor: check that the minimal tool set is present. Nothing else is needed to
@@ -620,6 +696,10 @@ doctor:
 	printf 'gzip            '; \
 	if command -v gzip >/dev/null 2>&1; then echo "OK   $$(command -v gzip) (optional)"; \
 	else echo "SKIP (optional: only to restore compiler_min.sa from its blob)"; fi; \
+	printf 'cat/tr/rm       '; \
+	if command -v cat >/dev/null 2>&1 && command -v tr >/dev/null 2>&1 && command -v rm >/dev/null 2>&1; then \
+	  echo "OK   $$(command -v cat), $$(command -v tr), $$(command -v rm) (optional)"; \
+	else echo "SKIP (optional: only when compiler_min.sa is missing and must be decoded)"; fi; \
 	echo "--------------------------------"; \
 	printf 'python          '; command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 \
 	  && echo "present, but NOT used anywhere on the bootstrap path" \
