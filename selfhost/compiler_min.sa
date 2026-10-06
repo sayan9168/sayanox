@@ -13,7 +13,9 @@
 //         COND is copied verbatim (C precedence matches pure-min) except
 //         `%`, which gets the same long-cast rewrite.
 //   make f(a, b) { ... give EXPR }        (top level, numeric, recursive OK)
-//   struct S { f, g }         (numeric fields; `Point { x: 3, y: 4 }`)
+//   struct S { f, g }         (fields: numbers, strings, or structs
+//                               declared earlier; `Line { a: Point { ... },
+//                               b: Point { ... } }` nests one level or more)
 //   use "file.sa"             (splice before parsing, depth <= 8)
 //   // line comments
 //
@@ -284,7 +286,6 @@ hold cd2 = 0
 hold exbad6 = 0
 hold exbad7 = 0
 hold exbad8 = 0
-hold exbad9 = 0
 hold isnest = 0
 hold cs3 = 0
 hold stype = ""
@@ -326,6 +327,95 @@ hold cwl = ""
 hold cwr = ""
 hold cwnew = ""
 hold cwn = 0
+// nested struct literals: a string stack of outer literal frames,
+//   frame = nm2 SEP lelems SEP nels SEP   (SEP = chr(1), never in the text)
+hold nstack = ""
+hold nsep = chr(1)
+hold etyname = ""
+hold pushed = 0
+hold sfposin = 0
+hold sfposcur = 0
+hold o_nm2 = ""
+hold o_lelems = ""
+hold o_nels = 0
+hold slen = 0
+hold pi = 0
+hold p2 = 0
+hold p2stop = -1
+hold p3 = 0
+hold p3stop = -1
+hold p4 = 0
+hold p4stop = -1
+hold dt = ""
+hold lt2 = ""
+hold nt2 = ""
+hold chdv = 0
+hold dl2 = 0
+hold di2 = 0
+hold lvtxt = ""
+hold nn = ""
+hold dtext = ""
+hold dd = 0
+hold drun = 0
+hold drem = 0
+hold doskip = 0
+hold sames = 0
+hold nerrfwd = 0
+hold nerrunk = 0
+hold nerrchain = 0
+hold nerrscop = 0
+hold nunknm = ""
+hold nfwdin = ""
+hold nfwdout = ""
+hold chainmsg = ""
+hold scopmsg = ""
+hold shmsg = ""
+hold fpname = ""
+hold nst = 0
+hold cd3 = 0
+hold ins = 0
+hold klnm2 = 0
+hold bsvkey = ""
+hold bsvk = 0
+hold bsvl = 0
+hold bsvhit = 0
+hold bsvnm = ""
+hold bsvi = 0
+hold bsvi2 = 0
+hold bsvj = 0
+hold bso = 0
+hold bsvrun = 0
+hold bsa = 0
+hold bsb = 0
+hold fsq = 0
+hold frq = 0
+hold fcq = 0
+// svars: "|var=Struct|" table (struct-typed variables, for chain resolution)
+hold svkey = ""
+hold svhit = 0
+hold svnm = ""
+hold svi2 = 0
+hold svrun = 0
+// field-chain resolution (NAME . f . f ...)
+hold curst = ""
+hold curty = 0
+hold chn = 0
+hold chfields = ""
+hold chfld = ""
+hold chrun = 0
+hold chi = 0
+hold chi2 = 0
+hold chl = 0
+hold chtok = ""
+hold chtokrun = 0
+hold chlast = 0
+hold chinn = ""
+// typedef emitter: struct-typed field (inner struct name)
+hold tdclass = 0
+hold tdinn = ""
+hold tdi2 = 0
+hold tdrun2 = 0
+hold tdc2 = 0
 
 // =====================================================================
 // main scan loop
@@ -1050,6 +1140,13 @@ while running == 1 {
             }
             hold lr = 1
             while lr == 1 {
+              // The walk re-enters itself for nested struct literals: each
+              // `Name { ... }` value pushes this level's state on nstack and
+              // restarts the walk for the inner struct; closing the inner
+              // literal pops the frame and hands the text back as the value,
+              // so the outer walk continues exactly where it left off.
+              hold lr = 1
+              while lr == 1 {
               hold sk = 1
               while sk == 1 {
                 when pos >= n {
@@ -1261,9 +1358,14 @@ while running == 1 {
                       }
                     }
                   }
-                  // a nested struct literal value is not supported here: report
-                  // it clearly and skip its balanced span so the outer literal
-                  // walk stays in sync and no follow-up errors are reported
+                  // ---- nested struct literal value: Name { ... } ----
+                  // When the value is a known struct name followed by '{',
+                  // descend into it: push this level's state on nstack and
+                  // re-run the same walk for the inner struct.  The inner
+                  // level's text is handed back as this value when it closes
+                  // (see the pop after the walk).
+                  hold etyname = ""
+                  hold pushed = 0
                   hold sk = 1
                   while sk == 1 {
                     when pos >= n {
@@ -1277,10 +1379,72 @@ while running == 1 {
                       }
                     }
                   }
+                  hold cs3 = 0
                   when pos < n {
                     hold cs3 = sx_index(source,pos)
-                    when cs3 == 123 {
-                      hold exbad9 = 1
+                  }
+                  when cs3 == 123 {
+                    // is el a known struct?
+                    hold sfind2 = 0
+                    hold di = 0
+                    hold dl = len(sdefs)
+                    hold kl = len(el)
+                    while di < dl {
+                      hold ok = 1
+                      hold j = 0
+                      while j < kl {
+                        when di + j >= dl {
+                          hold ok = 0
+                          hold j = kl
+                        } otherwise {
+                          hold aa = sx_index(sdefs, di + j)
+                          hold bb = sx_index(el, j)
+                          when aa == bb {
+                            hold j = j + 1
+                          } otherwise {
+                            hold ok = 0
+                            hold j = kl
+                          }
+                        }
+                      }
+                      when ok == 1 {
+                        when di + kl < dl {
+                          hold aa = sx_index(sdefs, di + kl)
+                          when aa == 58 {
+                            hold sfind2 = 1
+                            hold sfposin = di
+                            hold di = dl
+                          } otherwise {
+                            hold di = di + 1
+                          }
+                        } otherwise {
+                          hold di = di + 1
+                        }
+                      } otherwise {
+                        hold di = di + 1
+                      }
+                    }
+                    hold doskip = 0
+                    when sfind2 == 1 {
+                      // dependency order: the nested struct must be declared
+                      // before the struct that nests it (typedef order)
+                      hold klnm2 = len(nm2)
+                        hold sfposcur = fpos - klnm2 - 1
+                      when sfposin > sfposcur {
+                        hold nerrfwd = 1
+                        hold nfwdin = el
+                        hold nfwdout = nm2
+                        hold doskip = 1
+                      }
+                    } otherwise {
+                      // Name { with an unknown struct name: clear error,
+                      // skip the balanced span so the outer walk stays in
+                      // sync and no follow-up errors are reported
+                      hold nerrunk = 1
+                      hold nunknm = el
+                      hold doskip = 1
+                    }
+                    when doskip == 1 {
                       hold isnest = 1
                       hold nst = 1
                       hold ins = 0
@@ -1314,8 +1478,61 @@ while running == 1 {
                           hold pos = pos + 1
                         }
                       }
+                    } otherwise {
+                      // push this level's frame (nm2, lelems, nels) and
+                      // re-enter the walk for the inner struct
+                      hold pushed = 1
+                      hold dtext = ""
+                      hold dd = nels
+                      when dd == 0 {
+                        hold dtext = "0"
+                      }
+                      hold drun = 1
+                      while drun == 1 {
+                        when dd <= 0 {
+                          hold drun = 0
+                        } otherwise {
+                          hold drem = dd % 10
+                          hold dtext = concat(chr(48 + drem), dtext)
+                          hold dd = dd - drem
+                          hold dd = dd / 10
+                        }
+                      }
+                      hold nstack = concat(nstack, nm2)
+                      hold nstack = concat(nstack, nsep)
+                      hold nstack = concat(nstack, lelems)
+                      hold nstack = concat(nstack, nsep)
+                      hold nstack = concat(nstack, dtext)
+                      hold nstack = concat(nstack, nsep)
+                      hold nm2 = el
+                      hold el = ""
+                      hold lelems = ""
+                      hold nels = 0
+                      hold klnm2 = len(nm2)
+                      hold fpos = sfposin + klnm2 + 1
+                      hold fnf = 1
+                      hold fscan = fpos
+                      hold fsn = len(sdefs)
+                      hold frun = 1
+                      while frun == 1 {
+                        when fscan >= fsn {
+                          hold frun = 0
+                        } otherwise {
+                          hold fc = sx_index(sdefs, fscan)
+                          when fc == 59 {
+                            hold frun = 0
+                          } otherwise {
+                            when fc == 44 {
+                              hold fnf = fnf + 1
+                            }
+                            hold fscan = fscan + 1
+                          }
+                        }
+                      }
+                      hold pos = pos + 1
                     }
                   }
+                  when pushed == 0 {
                   // ---- record the field type: the first literal wins ----
                   hold fkey = concat("|", nm2)
                   hold fkey = concat(fkey, ".")
@@ -1324,6 +1541,7 @@ while running == 1 {
                   hold fk2 = len(fkey)
                   hold fl2 = len(ftypes)
                   hold fprv = -1
+                  hold fpname = ""
                   hold fsp = 0
                   while fsp + fk2 < fl2 {
                     hold feq = 1
@@ -1343,7 +1561,26 @@ while running == 1 {
                       when fpk == 49 {
                         hold fprv = 1
                       } otherwise {
-                        hold fprv = 0
+                        when fpk == 50 {
+                          hold fprv = 2
+                          hold fsq = fsp + fk2 + 2
+                          hold frq = 1
+                          while frq == 1 {
+                            when fsq >= fl2 {
+                              hold frq = 0
+                            } otherwise {
+                              hold fcq = sx_index(ftypes, fsq)
+                              when fcq == 124 {
+                                hold frq = 0
+                              } otherwise {
+                                hold fpname = concat(fpname, chr(fcq))
+                                hold fsq = fsq + 1
+                              }
+                            }
+                          }
+                        } otherwise {
+                          hold fprv = 0
+                        }
                       }
                       hold fsp = fl2
                     } otherwise {
@@ -1354,23 +1591,40 @@ while running == 1 {
                   when (fnamelen > 0) && (isnest == 0) {
                     when fprv == -1 {
                       hold ftypes = concat(ftypes, fkey)
-                      when ety == 1 {
-                        hold ftypes = concat(ftypes, "1|")
+                      when ety == 2 {
+                        hold ftypes = concat(ftypes, "2:")
+                        hold ftypes = concat(ftypes, etyname)
+                        hold ftypes = concat(ftypes, "|")
                       } otherwise {
-                        hold ftypes = concat(ftypes, "0|")
+                        when ety == 1 {
+                          hold ftypes = concat(ftypes, "1|")
+                        } otherwise {
+                          hold ftypes = concat(ftypes, "0|")
+                        }
                       }
                     } otherwise {
                       when fprv != ety {
                         hold exbad6 = 1
                       }
+                      when ety == 2 {
+                        when fprv == 2 {
+                          hold sames = sx_eq(fpname, etyname)
+                          when sames == 0 {
+                            hold exbad6 = 1
+                          }
+                        }
+                      }
                     }
                     when ety == 1 {
                       // `varname.field` reads as a string from now on
-                      hold sfnew = concat("|", nm)
-                      hold sfnew = concat(sfnew, ".")
-                      hold sfnew = concat(sfnew, fname)
-                      hold sfnew = concat(sfnew, "|")
-                      hold sflds = concat(sflds, sfnew)
+                      // (only for the struct the variable itself is)
+                      when sx_eq(nstack, "") == 1 {
+                        hold sfnew = concat("|", nm)
+                        hold sfnew = concat(sfnew, ".")
+                        hold sfnew = concat(sfnew, fname)
+                        hold sfnew = concat(sfnew, "|")
+                        hold sflds = concat(sflds, sfnew)
+                      }
                     }
                   }
                   when nels > 0 {
@@ -1383,20 +1637,263 @@ while running == 1 {
                     hold exbad = 1
                     hold pos = pos + 1
                   }
+                  }
                 }
               }
+              }
+              when nels != fnf {
+                hold exbad8 = 1
+              }
+              // text of the literal at this level
+              hold lvtxt = "(("
+              hold lvtxt = concat(lvtxt, nm2)
+              hold lvtxt = concat(lvtxt, "){")
+              hold lvtxt = concat(lvtxt, lelems)
+              hold lvtxt = concat(lvtxt, "})")
+              when sx_eq(nstack, "") == 0 {
+                // this level was nested in another literal: pop the outer
+                // frame, record the field type, append this level's text as
+                // the value, and continue the outer walk
+                hold slen = len(nstack)
+                hold pi = slen - 1
+                hold p2 = pi - 1
+                hold p2stop = -1
+                hold dt = ""
+                while p2 >= 0 {
+                  hold chdv = sx_index(nstack, p2)
+                  when chdv >= 48 {
+                    when chdv <= 57 {
+                      hold dt = concat(chr(chdv), dt)
+                      hold p2 = p2 - 1
+                    } otherwise {
+                      hold p2stop = p2
+                      hold p2 = -1
+                    }
+                  } otherwise {
+                    hold p2stop = p2
+                    hold p2 = -1
+                  }
+                }
+                hold o_nels = 0
+                hold di2 = 0
+                hold dl2 = len(dt)
+                while di2 < dl2 {
+                  hold chdv = sx_index(dt, di2)
+                  hold chdv = chdv - 48
+                  hold o_nels = o_nels * 10 + chdv
+                  hold di2 = di2 + 1
+                }
+                hold p3 = p2stop - 1
+                hold lt2 = ""
+                hold p3stop = -1
+                while p3 >= 0 {
+                  hold chdv = sx_index(nstack, p3)
+                  when chdv == 1 {
+                    hold p3stop = p3
+                    hold p3 = -1
+                  } otherwise {
+                    hold lt2 = concat(chr(chdv), lt2)
+                    hold p3 = p3 - 1
+                  }
+                }
+                hold p4 = p3stop - 1
+                hold nt2 = ""
+                hold p4stop = -1
+                while p4 >= 0 {
+                  hold chdv = sx_index(nstack, p4)
+                  when chdv == 1 {
+                    hold p4stop = p4
+                    hold p4 = -1
+                  } otherwise {
+                    hold nt2 = concat(chr(chdv), nt2)
+                    hold p4 = p4 - 1
+                  }
+                }
+                // truncate the popped frame from the stack: keep everything
+                // up to (and including) the separator that preceded it
+                hold nn = ""
+                hold di2 = 0
+                while di2 <= p4stop {
+                  hold nn = concat(nn, chr(sx_index(nstack, di2)))
+                  hold di2 = di2 + 1
+                }
+                hold nstack = nn
+                hold el = lvtxt
+                hold ety = 2
+                hold etyname = nm2
+                hold nm2 = nt2
+                hold lelems = lt2
+                hold nels = o_nels
+                // restore this level's field walk state
+                hold sfind2 = 0
+                hold di = 0
+                hold dl = len(sdefs)
+                hold kl = len(nm2)
+                while di < dl {
+                  hold ok = 1
+                  hold j = 0
+                  while j < kl {
+                    when di + j >= dl {
+                      hold ok = 0
+                      hold j = kl
+                    } otherwise {
+                      hold aa = sx_index(sdefs, di + j)
+                      hold bb = sx_index(nm2, j)
+                      when aa == bb {
+                        hold j = j + 1
+                      } otherwise {
+                        hold ok = 0
+                        hold j = kl
+                      }
+                    }
+                  }
+                  when ok == 1 {
+                    when di + kl < dl {
+                      hold aa = sx_index(sdefs, di + kl)
+                      when aa == 58 {
+                        hold sfind2 = 1
+                        hold sfposin = di
+                        hold di = dl
+                      } otherwise {
+                        hold di = di + 1
+                      }
+                    } otherwise {
+                      hold di = di + 1
+                    }
+                  } otherwise {
+                    hold di = di + 1
+                  }
+                }
+                when sfind2 == 1 {
+                  hold fpos = sfposin + kl + 1
+                } otherwise {
+                  hold fpos = len(sdefs)
+                }
+                hold fnf = 1
+                hold fscan = fpos
+                hold fsn = len(sdefs)
+                hold frun = 1
+                while frun == 1 {
+                  when fscan >= fsn {
+                    hold frun = 0
+                  } otherwise {
+                    hold fc = sx_index(sdefs, fscan)
+                    when fc == 59 {
+                      hold frun = 0
+                    } otherwise {
+                      when fc == 44 {
+                        hold fnf = fnf + 1
+                      }
+                      hold fscan = fscan + 1
+                    }
+                  }
+                }
+                // the field this value fills (index nels)
+                hold fname = ""
+                hold fkx = 0
+                hold fscan = fpos
+                hold frun = 1
+                while frun == 1 {
+                  when fscan >= fsn {
+                    hold frun = 0
+                  } otherwise {
+                    hold fc = sx_index(sdefs, fscan)
+                    when fc == 44 || fc == 59 {
+                      when fkx == nels {
+                        hold frun = 0
+                      } otherwise {
+                        hold fkx = fkx + 1
+                        hold fscan = fscan + 1
+                      }
+                    } otherwise {
+                      when fkx == nels {
+                        hold fname = concat(fname, chr(fc))
+                      }
+                      hold fscan = fscan + 1
+                    }
+                  }
+                }
+                // record |nm2.fname=2:etyname| (the first literal wins)
+                hold fkey = concat("|", nm2)
+                hold fkey = concat(fkey, ".")
+                hold fkey = concat(fkey, fname)
+                hold fkey = concat(fkey, "=")
+                hold fk2 = len(fkey)
+                hold fl2 = len(ftypes)
+                hold fprv = -1
+                hold fpname = ""
+                hold fsp = 0
+                while fsp + fk2 < fl2 {
+                  hold feq = 1
+                  hold fj = 0
+                  while fj < fk2 {
+                    hold faa = sx_index(ftypes, fsp + fj)
+                    hold fbb = sx_index(fkey, fj)
+                    when faa == fbb {
+                      hold fj = fj + 1
+                    } otherwise {
+                      hold feq = 0
+                      hold fj = fk2
+                    }
+                  }
+                  when feq == 1 {
+                    hold fpk = sx_index(ftypes, fsp + fk2)
+                    when fpk == 49 {
+                      hold fprv = 1
+                    } otherwise {
+                      when fpk == 50 {
+                        hold fprv = 2
+                        hold fsq = fsp + fk2 + 2
+                        hold frq = 1
+                        while frq == 1 {
+                          when fsq >= fl2 {
+                            hold frq = 0
+                          } otherwise {
+                            hold fcq = sx_index(ftypes, fsq)
+                            when fcq == 124 {
+                              hold frq = 0
+                            } otherwise {
+                              hold fpname = concat(fpname, chr(fcq))
+                              hold fsq = fsq + 1
+                            }
+                          }
+                        }
+                      } otherwise {
+                        hold fprv = 0
+                      }
+                    }
+                    hold fsp = fl2
+                  } otherwise {
+                    hold fsp = fsp + 1
+                  }
+                }
+                when fprv == -1 {
+                  hold ftypes = concat(ftypes, fkey)
+                  hold ftypes = concat(ftypes, "2:")
+                  hold ftypes = concat(ftypes, etyname)
+                  hold ftypes = concat(ftypes, "|")
+                } otherwise {
+                  when fprv != 2 {
+                    hold exbad6 = 1
+                  }
+                  hold sames = sx_eq(fpname, etyname)
+                  when sames == 0 {
+                    hold exbad6 = 1
+                  }
+                }
+                when nels > 0 {
+                  hold lelems = concat(lelems, ",")
+                }
+                hold lelems = concat(lelems, el)
+                hold nels = nels + 1
+                hold lr = 1
+              } otherwise {
+                hold rhs = lvtxt
+                hold rk = 3
+                hold stname = nm2
+                hold iscall = 2
+              }
             }
-            when nels != fnf {
-              hold exbad8 = 1
-            }
-            hold rhs = "(("
-            hold rhs = concat(rhs, nm2)
-            hold rhs = concat(rhs, "){")
-            hold rhs = concat(rhs, lelems)
-            hold rhs = concat(rhs, "})")
-            hold rk = 3
-            hold stname = nm2
-            hold iscall = 2
           }
         }
 
@@ -1705,6 +2202,54 @@ while running == 1 {
           when sfind == 1 {
             hold rk = 1
           }
+          // a struct variable as a plain value: `hold l = q` copies it
+          // (typed declaration from the svars table)
+          hold bsvkey = concat("|", nm2)
+          hold bsvkey = concat(bsvkey, "=")
+          hold bsvk = len(bsvkey)
+          hold bsvl = len(svars)
+          hold bsvhit = 0
+          hold bsvnm = ""
+          hold bsvi = 0
+          while bsvi + bsvk < bsvl {
+            hold bsvj = 0
+            hold bso = 1
+            while bsvj < bsvk {
+              hold bsa = sx_index(svars, bsvi + bsvj)
+              hold bsb = sx_index(bsvkey, bsvj)
+              when bsa == bsb {
+                hold bsvj = bsvj + 1
+              } otherwise {
+                hold bso = 0
+                hold bsvj = bsvk
+              }
+            }
+            when bso == 1 {
+              hold bsvhit = 1
+              hold bsvi2 = bsvi + bsvk
+              hold bsvrun = 1
+              while bsvrun == 1 {
+                when bsvi2 >= bsvl {
+                  hold bsvrun = 0
+                } otherwise {
+                  hold bsa = sx_index(svars, bsvi2)
+                  when bsa == 124 {
+                    hold bsvrun = 0
+                  } otherwise {
+                    hold bsvnm = concat(bsvnm, chr(bsa))
+                    hold bsvi2 = bsvi2 + 1
+                  }
+                }
+              }
+              hold bsvi = bsvl
+            } otherwise {
+              hold bsvi = bsvi + 1
+            }
+          }
+          when bsvhit == 1 {
+            hold rk = 3
+            hold stname = bsvnm
+          }
           hold rhs = nm2
           // optional index xs[i]
           hold sk = 1
@@ -1849,74 +2394,313 @@ hold ec = 0
               }
             }
           }
-          // optional field access p.x (struct value is numeric per field)
-          hold sk = 1
-          while sk == 1 {
-            when pos >= n {
-              hold sk = 0
-            } otherwise {
-              hold cs = sx_index(source,pos)
-              when cs == 32 || cs == 9 || cs == 13 {
-                hold pos = pos + 1
-              } otherwise {
-                hold sk = 0
-              }
-            }
-          }
-          hold c2 = 0
-          when pos < n {
-            hold c2 = sx_index(source,pos)
-          }
-          when c2 == 46 {
-            hold pos = pos + 1
-            hold opfld = ""
-            hold rn = 1
-            while rn == 1 {
+          // optional field chain p.x.y (text is walked as-is; when the base
+          // is a struct variable the final type is resolved through the
+          // svars and ftypes tables, so `l.a.x` and `hold m = l.b` work)
+          hold chn = 0
+          hold chfields = ""
+          hold chrun = 1
+          while chrun == 1 {
+            hold chrun = 0
+            hold sk = 1
+            while sk == 1 {
               when pos >= n {
-                hold rn = 0
+                hold sk = 0
               } otherwise {
-                hold cn = sx_index(source,pos)
-                when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-                  hold opfld = concat(opfld, chr(cn))
+                hold cs = sx_index(source,pos)
+                when cs == 32 || cs == 9 || cs == 13 {
                   hold pos = pos + 1
                 } otherwise {
+                  hold sk = 0
+                }
+              }
+            }
+            hold c2 = 0
+            when pos < n {
+              hold c2 = sx_index(source,pos)
+            }
+            when c2 == 46 {
+              hold pos = pos + 1
+              hold chfld = ""
+              hold rn = 1
+              while rn == 1 {
+                when pos >= n {
                   hold rn = 0
-                }
-              }
-            }
-            hold rhs = concat(rhs, ".")
-            hold rhs = concat(rhs, opfld)
-            hold rk = 0
-            hold sfkey = concat("|", nm2)
-            hold sfkey = concat(sfkey, ".")
-            hold sfkey = concat(sfkey, opfld)
-            hold sfkey = concat(sfkey, "|")
-            hold sfk = len(sfkey)
-            hold sfl = len(sflds)
-            hold sfhit = 0
-            hold sfi = 0
-            while sfi + sfk <= sfl {
-              hold sfeq = 1
-              hold sfj = 0
-              while sfj < sfk {
-                hold sfa = sx_index(sflds, sfi + sfj)
-                hold sfb = sx_index(sfkey, sfj)
-                when sfa == sfb {
-                  hold sfj = sfj + 1
                 } otherwise {
-                  hold sfeq = 0
-                  hold sfj = sfk
+                  hold cn = sx_index(source,pos)
+                  when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+                    hold chfld = concat(chfld, chr(cn))
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold rn = 0
+                  }
                 }
               }
-              when sfeq == 1 {
-                hold sfhit = 1
-                hold sfi = sfl
+              when sx_eq(chfld, "") == 1 {
+                hold nerrchain = 1
+                hold chainmsg = "missing field name after '.'"
+              }
+              when chn > 0 {
+                hold chfields = concat(chfields, nsep)
+              }
+              hold chfields = concat(chfields, chfld)
+              hold rhs = concat(rhs, ".")
+              hold rhs = concat(rhs, chfld)
+              hold chn = chn + 1
+              hold chrun = 1
+            }
+          }
+          when chn >= 1 {
+            // which struct (if any) does the base name denote?
+            hold svkey = concat("|", nm2)
+            hold svkey = concat(svkey, "=")
+            hold svk = len(svkey)
+            hold svl = len(svars)
+            hold svhit = 0
+            hold svnm = ""
+            hold svi = 0
+            while svi + svk < svl {
+              hold sveq = 1
+              hold svj = 0
+              while svj < svk {
+                hold sva = sx_index(svars, svi + svj)
+                hold svb = sx_index(svkey, svj)
+                when sva == svb {
+                  hold svj = svj + 1
+                } otherwise {
+                  hold sveq = 0
+                  hold svj = svk
+                }
+              }
+              when sveq == 1 {
+                hold svhit = 1
+                hold svi2 = svi + svk
+                hold svrun = 1
+                while svrun == 1 {
+                  when svi2 >= svl {
+                    hold svrun = 0
+                  } otherwise {
+                    hold sva = sx_index(svars, svi2)
+                    when sva == 124 {
+                      hold svrun = 0
+                    } otherwise {
+                      hold svnm = concat(svnm, chr(sva))
+                      hold svi2 = svi2 + 1
+                    }
+                  }
+                }
+                hold svi = svl
               } otherwise {
-                hold sfi = sfi + 1
+                hold svi = svi + 1
               }
             }
-            when sfhit == 1 {
-              hold rk = 1
+            when svhit == 1 {
+              hold curst = svnm
+              hold curty = 0
+              hold chi = 0
+              hold chl = len(chfields)
+              hold chrun = 1
+              while chrun == 1 {
+                hold chrun = 0
+                hold chtok = ""
+                hold chi2 = chi
+                hold chtokrun = 1
+                while chtokrun == 1 {
+                  when chi2 >= chl {
+                    hold chtokrun = 0
+                  } otherwise {
+                    hold chdv = sx_index(chfields, chi2)
+                    when chdv == 1 {
+                      hold chtokrun = 0
+                    } otherwise {
+                      hold chtok = concat(chtok, chr(chdv))
+                      hold chi2 = chi2 + 1
+                    }
+                  }
+                }
+                hold chi = chi2 + 1
+                hold chlast = 0
+                when chi >= chl {
+                  hold chlast = 1
+                }
+                hold fkey = concat("|", curst)
+                hold fkey = concat(fkey, ".")
+                hold fkey = concat(fkey, chtok)
+                hold fkey = concat(fkey, "=")
+                hold fk2 = len(fkey)
+                hold fl2 = len(ftypes)
+                hold fprv = -1
+                hold fpname = ""
+                hold fsp = 0
+                while fsp + fk2 < fl2 {
+                  hold feq = 1
+                  hold fj = 0
+                  while fj < fk2 {
+                    hold faa = sx_index(ftypes, fsp + fj)
+                    hold fbb = sx_index(fkey, fj)
+                    when faa == fbb {
+                      hold fj = fj + 1
+                    } otherwise {
+                      hold feq = 0
+                      hold fj = fk2
+                    }
+                  }
+                  when feq == 1 {
+                    hold fpk = sx_index(ftypes, fsp + fk2)
+                    when fpk == 49 {
+                      hold fprv = 1
+                    } otherwise {
+                      when fpk == 50 {
+                        hold fprv = 2
+                        hold fsq = fsp + fk2 + 2
+                        hold frq = 1
+                        while frq == 1 {
+                          when fsq >= fl2 {
+                            hold frq = 0
+                          } otherwise {
+                            hold fcq = sx_index(ftypes, fsq)
+                            when fcq == 124 {
+                              hold frq = 0
+                            } otherwise {
+                              hold fpname = concat(fpname, chr(fcq))
+                              hold fsq = fsq + 1
+                            }
+                          }
+                        }
+                      } otherwise {
+                        hold fprv = 0
+                      }
+                    }
+                    hold fsp = fl2
+                  } otherwise {
+                    hold fsp = fsp + 1
+                  }
+                }
+                when fprv == -1 {
+                  // no literal fixed this field's type: it is a number
+                  // (the emitted typedef uses double)
+                  when chlast == 1 {
+                    hold curty = 0
+                  } otherwise {
+                    hold nerrchain = 1
+                    hold chainmsg = concat("field '", chtok)
+                    hold chainmsg = concat(chainmsg, "' of struct '")
+                    hold chainmsg = concat(chainmsg, curst)
+                    hold chainmsg = concat(chainmsg, "' has no type; the chain must end there")
+                  }
+                } otherwise {
+                  when fprv == 2 {
+                    when chlast == 1 {
+                      hold curty = 2
+                      hold curst = fpname
+                    } otherwise {
+                      hold curst = fpname
+                    }
+                  } otherwise {
+                    when chlast == 1 {
+                      hold curty = fprv
+                    } otherwise {
+                      hold nerrchain = 1
+                      hold chainmsg = concat("field '", chtok)
+                      hold chainmsg = concat(chainmsg, "' of struct '")
+                      hold chainmsg = concat(chainmsg, curst)
+                      hold chainmsg = concat(chainmsg, "' is not a struct; the chain must end there")
+                    }
+                  }
+                }
+                when nerrchain == 0 {
+                  when chi < chl {
+                    hold chrun = 1
+                  }
+                }
+              }
+              when nerrchain == 0 {
+                when curty == 2 {
+                  hold rk = 3
+                  hold stname = curst
+                } otherwise {
+                  when curty == 1 {
+                    hold rk = 1
+                  } otherwise {
+                    hold rk = 0
+                  }
+                }
+              }
+            } otherwise {
+              // base is not a struct variable: keep the old single-field
+              // behaviour (string-field table, numeric otherwise)
+              when chn == 1 {
+                hold rk = 0
+                hold sfkey = concat("|", nm2)
+                hold sfkey = concat(sfkey, ".")
+                hold sfkey = concat(sfkey, chfields)
+                hold sfkey = concat(sfkey, "|")
+                hold sfk = len(sfkey)
+                hold sfl = len(sflds)
+                hold sfhit = 0
+                hold sfi = 0
+                while sfi + sfk <= sfl {
+                  hold sfeq = 1
+                  hold sfj = 0
+                  while sfj < sfk {
+                    hold sfa = sx_index(sflds, sfi + sfj)
+                    hold sfb = sx_index(sfkey, sfj)
+                    when sfa == sfb {
+                      hold sfj = sfj + 1
+                    } otherwise {
+                      hold sfeq = 0
+                      hold sfj = sfk
+                    }
+                  }
+                  when sfeq == 1 {
+                    hold sfhit = 1
+                    hold sfi = sfl
+                  } otherwise {
+                    hold sfi = sfi + 1
+                  }
+                }
+                when sfhit == 1 {
+                  hold rk = 1
+                }
+              } otherwise {
+                hold nerrchain = 1
+                hold chainmsg = concat("chaining through a non-struct value '", nm2)
+                hold chainmsg = concat(chainmsg, "'")
+              }
+            }
+          }
+          // a struct result cannot enter a + - * / % chain
+          when rk == 3 {
+            hold sk = 1
+            while sk == 1 {
+              when pos >= n {
+                hold sk = 0
+              } otherwise {
+                hold cs = sx_index(source,pos)
+                when cs == 32 || cs == 9 || cs == 13 {
+                  hold pos = pos + 1
+                } otherwise {
+                  hold sk = 0
+                }
+              }
+            }
+            hold c2 = 0
+            when pos < n {
+              hold c2 = sx_index(source,pos)
+            }
+            when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 {
+              hold nerrscop = 1
+              hold scopmsg = "a struct value cannot be used with a + - * / % operator"
+            }
+            when c2 == 47 {
+              hold c3 = 0
+              when pos + 1 < n {
+                hold c3 = sx_index(source,pos + 1)
+              }
+              when c3 != 47 {
+                hold nerrscop = 1
+                hold scopmsg = "a struct value cannot be used with a + - * / % operator"
+              }
             }
           }
         }
@@ -2055,64 +2839,276 @@ hold ec = 0
               }
             }
             hold opnd = nm3
-            // postfix .field
+            // postfix field chain .a.b (resolved like the statement bases)
+            hold chn = 0
+            hold chfields = ""
+            hold chrun = 1
+            while chrun == 1 {
+              hold chrun = 0
+              hold sk = 1
+              while sk == 1 {
+                when pos >= n {
+                  hold sk = 0
+                } otherwise {
+                  hold cs = sx_index(source,pos)
+                  when cs == 32 || cs == 9 || cs == 13 {
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold sk = 0
+                  }
+                }
+              }
+              hold c2 = 0
+              when pos < n {
+                hold c2 = sx_index(source,pos)
+              }
+              when c2 == 46 {
+                hold pos = pos + 1
+                hold chfld = ""
+                hold rn = 1
+                while rn == 1 {
+                  when pos >= n {
+                    hold rn = 0
+                  } otherwise {
+                    hold cn = sx_index(source,pos)
+                    when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+                      hold chfld = concat(chfld, chr(cn))
+                      hold pos = pos + 1
+                    } otherwise {
+                      hold rn = 0
+                    }
+                  }
+                }
+                when sx_eq(chfld, "") == 1 {
+                  hold nerrchain = 1
+                  hold chainmsg = "missing field name after '.'"
+                }
+                when chn > 0 {
+                  hold chfields = concat(chfields, nsep)
+                }
+                hold chfields = concat(chfields, chfld)
+                hold opnd = concat(opnd, ".")
+                hold opnd = concat(opnd, chfld)
+                hold chn = chn + 1
+                hold chrun = 1
+              }
+            }
+            when chn >= 1 {
+              hold svkey = concat("|", nm3)
+              hold svkey = concat(svkey, "=")
+              hold svk = len(svkey)
+              hold svl = len(svars)
+              hold svhit = 0
+              hold svnm = ""
+              hold svi = 0
+              while svi + svk < svl {
+                hold sveq = 1
+                hold svj = 0
+                while svj < svk {
+                  hold sva = sx_index(svars, svi + svj)
+                  hold svb = sx_index(svkey, svj)
+                  when sva == svb {
+                    hold svj = svj + 1
+                  } otherwise {
+                    hold sveq = 0
+                    hold svj = svk
+                  }
+                }
+                when sveq == 1 {
+                  hold svhit = 1
+                  hold svi2 = svi + svk
+                  hold svrun = 1
+                  while svrun == 1 {
+                    when svi2 >= svl {
+                      hold svrun = 0
+                    } otherwise {
+                      hold sva = sx_index(svars, svi2)
+                      when sva == 124 {
+                        hold svrun = 0
+                      } otherwise {
+                        hold svnm = concat(svnm, chr(sva))
+                        hold svi2 = svi2 + 1
+                      }
+                    }
+                  }
+                  hold svi = svl
+                } otherwise {
+                  hold svi = svi + 1
+                }
+              }
+              when svhit == 1 {
+                hold curst = svnm
+                hold curty = 0
+                hold chi = 0
+                hold chl = len(chfields)
+                hold chrun = 1
+                while chrun == 1 {
+                  hold chrun = 0
+                  hold chtok = ""
+                  hold chi2 = chi
+                  hold chtokrun = 1
+                  while chtokrun == 1 {
+                    when chi2 >= chl {
+                      hold chtokrun = 0
+                    } otherwise {
+                      hold chdv = sx_index(chfields, chi2)
+                      when chdv == 1 {
+                        hold chtokrun = 0
+                      } otherwise {
+                        hold chtok = concat(chtok, chr(chdv))
+                        hold chi2 = chi2 + 1
+                      }
+                    }
+                  }
+                  hold chi = chi2 + 1
+                  hold chlast = 0
+                  when chi >= chl {
+                    hold chlast = 1
+                  }
+                  hold fkey = concat("|", curst)
+                  hold fkey = concat(fkey, ".")
+                  hold fkey = concat(fkey, chtok)
+                  hold fkey = concat(fkey, "=")
+                  hold fk2 = len(fkey)
+                  hold fl2 = len(ftypes)
+                  hold fprv = -1
+                  hold fpname = ""
+                  hold fsp = 0
+                  while fsp + fk2 < fl2 {
+                    hold feq = 1
+                    hold fj = 0
+                    while fj < fk2 {
+                      hold faa = sx_index(ftypes, fsp + fj)
+                      hold fbb = sx_index(fkey, fj)
+                      when faa == fbb {
+                        hold fj = fj + 1
+                      } otherwise {
+                        hold feq = 0
+                        hold fj = fk2
+                      }
+                    }
+                    when feq == 1 {
+                      hold fpk = sx_index(ftypes, fsp + fk2)
+                      when fpk == 49 {
+                        hold fprv = 1
+                      } otherwise {
+                        when fpk == 50 {
+                          hold fprv = 2
+                          hold fsq = fsp + fk2 + 2
+                          hold frq = 1
+                          while frq == 1 {
+                            when fsq >= fl2 {
+                              hold frq = 0
+                            } otherwise {
+                              hold fcq = sx_index(ftypes, fsq)
+                              when fcq == 124 {
+                                hold frq = 0
+                              } otherwise {
+                                hold fpname = concat(fpname, chr(fcq))
+                                hold fsq = fsq + 1
+                              }
+                            }
+                          }
+                        } otherwise {
+                          hold fprv = 0
+                        }
+                      }
+                      hold fsp = fl2
+                    } otherwise {
+                      hold fsp = fsp + 1
+                    }
+                  }
+                  when fprv == -1 {
+                    when chlast == 1 {
+                      hold curty = 0
+                    } otherwise {
+                      hold nerrchain = 1
+                      hold chainmsg = concat("field '", chtok)
+                      hold chainmsg = concat(chainmsg, "' of struct '")
+                      hold chainmsg = concat(chainmsg, curst)
+                      hold chainmsg = concat(chainmsg, "' has no type; the chain must end there")
+                    }
+                  } otherwise {
+                    when fprv == 2 {
+                      when chlast == 1 {
+                        hold curty = 2
+                        hold curst = fpname
+                      } otherwise {
+                        hold curst = fpname
+                      }
+                    } otherwise {
+                      when chlast == 1 {
+                        hold curty = fprv
+                      } otherwise {
+                        hold nerrchain = 1
+                        hold chainmsg = concat("field '", chtok)
+                        hold chainmsg = concat(chainmsg, "' of struct '")
+                        hold chainmsg = concat(chainmsg, curst)
+                        hold chainmsg = concat(chainmsg, "' is not a struct; the chain must end there")
+                      }
+                    }
+                  }
+                  when nerrchain == 0 {
+                    when chi < chl {
+                      hold chrun = 1
+                    }
+                  }
+                }
+                when nerrchain == 0 {
+                  when curty == 1 {
+                    hold opfldstr = 1
+                  }
+                  when curty == 2 {
+                    hold nerrscop = 1
+                    hold scopmsg = "a struct value cannot be used with a + - * / % operator"
+                  }
+                }
+              } otherwise {
+                when chn == 1 {
+                  hold opfldstr = 0
+                  hold sfkey = concat("|", nm3)
+                  hold sfkey = concat(sfkey, ".")
+                  hold sfkey = concat(sfkey, chfields)
+                  hold sfkey = concat(sfkey, "|")
+                  hold sfk = len(sfkey)
+                  hold sfl = len(sflds)
+                  hold sfhit = 0
+                  hold sfi = 0
+                  while sfi + sfk <= sfl {
+                    hold sfeq = 1
+                    hold sfj = 0
+                    while sfj < sfk {
+                      hold sfa = sx_index(sflds, sfi + sfj)
+                      hold sfb = sx_index(sfkey, sfj)
+                      when sfa == sfb {
+                        hold sfj = sfj + 1
+                      } otherwise {
+                        hold sfeq = 0
+                        hold sfj = sfk
+                      }
+                    }
+                    when sfeq == 1 {
+                      hold sfhit = 1
+                      hold sfi = sfl
+                    } otherwise {
+                      hold sfi = sfi + 1
+                    }
+                  }
+                  when sfhit == 1 {
+                    hold opfldstr = 1
+                  }
+                } otherwise {
+                  hold nerrchain = 1
+                  hold chainmsg = concat("chaining through a non-struct value '", nm3)
+                hold chainmsg = concat(chainmsg, "'")
+                }
+              }
+            }
             hold opcq = 0
             when pos < n {
               hold opcq = sx_index(source,pos)
             }
-            when opcq == 46 {
-              hold pos = pos + 1
-              hold opfld = ""
-              hold rn = 1
-              while rn == 1 {
-                when pos >= n {
-                  hold rn = 0
-                } otherwise {
-                  hold cn = sx_index(source,pos)
-                  when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-                    hold opfld = concat(opfld, chr(cn))
-                    hold pos = pos + 1
-                  } otherwise {
-                    hold rn = 0
-                  }
-                }
-              }
-              hold opnd = concat(opnd, ".")
-              hold opnd = concat(opnd, opfld)
-              hold opfldstr = 0
-              hold sfkey = concat("|", nm3)
-              hold sfkey = concat(sfkey, ".")
-              hold sfkey = concat(sfkey, opfld)
-              hold sfkey = concat(sfkey, "|")
-              hold sfk = len(sfkey)
-              hold sfl = len(sflds)
-              hold sfhit = 0
-              hold sfi = 0
-              while sfi + sfk <= sfl {
-                hold sfeq = 1
-                hold sfj = 0
-                while sfj < sfk {
-                  hold sfa = sx_index(sflds, sfi + sfj)
-                  hold sfb = sx_index(sfkey, sfj)
-                  when sfa == sfb {
-                    hold sfj = sfj + 1
-                  } otherwise {
-                    hold sfeq = 0
-                    hold sfj = sfk
-                  }
-                }
-                when sfeq == 1 {
-                  hold sfhit = 1
-                  hold sfi = sfl
-                } otherwise {
-                  hold sfi = sfi + 1
-                }
-              }
-              when sfhit == 1 {
-                hold opfldstr = 1
-              }
-            }
-            // postfix [index]
+            // postfix [index]            // postfix [index]
             when opcq == 91 {
               hold pos = pos + 1
               hold opix = ""
@@ -2387,6 +3383,14 @@ hold ec = 0
         when rk == 2 {
           hold ldecls = concat(ldecls, nm)
           hold ldecls = concat(ldecls, "|")
+        }
+        when rk == 3 {
+          // struct-typed variable: remembered for field-chain resolution
+          hold svars = concat(svars, "|")
+          hold svars = concat(svars, nm)
+          hold svars = concat(svars, "=")
+          hold svars = concat(svars, stname)
+          hold svars = concat(svars, "|")
         }
       }
       hold holds = holds + 1
@@ -2763,74 +3767,309 @@ hold ec = 0
         when iscall == 0 {
           hold rhs = nm2
           hold rk = 0
-          // field access p.x
-          hold sk = 1
-          while sk == 1 {
-            when pos >= n {
-              hold sk = 0
-            } otherwise {
-              hold cs = sx_index(source,pos)
-              when cs == 32 || cs == 9 {
-                hold pos = pos + 1
-              } otherwise {
-                hold sk = 0
-              }
-            }
-          }
-          hold c2 = 0
-          when pos < n {
-            hold c2 = sx_index(source,pos)
-          }
-          when c2 == 46 {
-            hold pos = pos + 1
-            hold sf = ""
-            hold rn = 1
-            while rn == 1 {
+          // optional field chain p.x.y (resolved like the hold RHS base)
+          hold chn = 0
+          hold chfields = ""
+          hold chrun = 1
+          while chrun == 1 {
+            hold chrun = 0
+            hold sk = 1
+            while sk == 1 {
               when pos >= n {
-                hold rn = 0
+                hold sk = 0
               } otherwise {
-                hold cn = sx_index(source,pos)
-                when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-                  hold sf = concat(sf, chr(cn))
+                hold cs = sx_index(source,pos)
+                when cs == 32 || cs == 9 {
                   hold pos = pos + 1
                 } otherwise {
+                  hold sk = 0
+                }
+              }
+            }
+            hold c2 = 0
+            when pos < n {
+              hold c2 = sx_index(source,pos)
+            }
+            when c2 == 46 {
+              hold pos = pos + 1
+              hold chfld = ""
+              hold rn = 1
+              while rn == 1 {
+                when pos >= n {
                   hold rn = 0
-                }
-              }
-            }
-            hold rhs = concat(nm2, ".")
-            hold rhs = concat(rhs, sf)
-            hold rk = 0
-            hold sfkey = concat("|", nm2)
-            hold sfkey = concat(sfkey, ".")
-            hold sfkey = concat(sfkey, sf)
-            hold sfkey = concat(sfkey, "|")
-            hold sfk = len(sfkey)
-            hold sfl = len(sflds)
-            hold sfhit = 0
-            hold sfi = 0
-            while sfi + sfk <= sfl {
-              hold sfeq = 1
-              hold sfj = 0
-              while sfj < sfk {
-                hold sfa = sx_index(sflds, sfi + sfj)
-                hold sfb = sx_index(sfkey, sfj)
-                when sfa == sfb {
-                  hold sfj = sfj + 1
                 } otherwise {
-                  hold sfeq = 0
-                  hold sfj = sfk
+                  hold cn = sx_index(source,pos)
+                  when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+                    hold chfld = concat(chfld, chr(cn))
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold rn = 0
+                  }
                 }
               }
-              when sfeq == 1 {
-                hold sfhit = 1
-                hold sfi = sfl
+              when sx_eq(chfld, "") == 1 {
+                hold nerrchain = 1
+                hold chainmsg = "missing field name after '.'"
+              }
+              when chn > 0 {
+                hold chfields = concat(chfields, nsep)
+              }
+              hold chfields = concat(chfields, chfld)
+              hold rhs = concat(rhs, ".")
+              hold rhs = concat(rhs, chfld)
+              hold chn = chn + 1
+              hold chrun = 1
+            }
+          }
+          when chn >= 1 {
+            // which struct (if any) does the base name denote?
+            hold svkey = concat("|", nm2)
+            hold svkey = concat(svkey, "=")
+            hold svk = len(svkey)
+            hold svl = len(svars)
+            hold svhit = 0
+            hold svnm = ""
+            hold svi = 0
+            while svi + svk < svl {
+              hold sveq = 1
+              hold svj = 0
+              while svj < svk {
+                hold sva = sx_index(svars, svi + svj)
+                hold svb = sx_index(svkey, svj)
+                when sva == svb {
+                  hold svj = svj + 1
+                } otherwise {
+                  hold sveq = 0
+                  hold svj = svk
+                }
+              }
+              when sveq == 1 {
+                hold svhit = 1
+                hold svi2 = svi + svk
+                hold svrun = 1
+                while svrun == 1 {
+                  when svi2 >= svl {
+                    hold svrun = 0
+                  } otherwise {
+                    hold sva = sx_index(svars, svi2)
+                    when sva == 124 {
+                      hold svrun = 0
+                    } otherwise {
+                      hold svnm = concat(svnm, chr(sva))
+                      hold svi2 = svi2 + 1
+                    }
+                  }
+                }
+                hold svi = svl
               } otherwise {
-                hold sfi = sfi + 1
+                hold svi = svi + 1
               }
             }
-            when sfhit == 1 {
-              hold rk = 1
+            when svhit == 1 {
+              hold curst = svnm
+              hold curty = 0
+              hold chi = 0
+              hold chl = len(chfields)
+              hold chrun = 1
+              while chrun == 1 {
+                hold chrun = 0
+                hold chtok = ""
+                hold chi2 = chi
+                hold chtokrun = 1
+                while chtokrun == 1 {
+                  when chi2 >= chl {
+                    hold chtokrun = 0
+                  } otherwise {
+                    hold chdv = sx_index(chfields, chi2)
+                    when chdv == 1 {
+                      hold chtokrun = 0
+                    } otherwise {
+                      hold chtok = concat(chtok, chr(chdv))
+                      hold chi2 = chi2 + 1
+                    }
+                  }
+                }
+                hold chi = chi2 + 1
+                hold chlast = 0
+                when chi >= chl {
+                  hold chlast = 1
+                }
+                hold fkey = concat("|", curst)
+                hold fkey = concat(fkey, ".")
+                hold fkey = concat(fkey, chtok)
+                hold fkey = concat(fkey, "=")
+                hold fk2 = len(fkey)
+                hold fl2 = len(ftypes)
+                hold fprv = -1
+                hold fpname = ""
+                hold fsp = 0
+                while fsp + fk2 < fl2 {
+                  hold feq = 1
+                  hold fj = 0
+                  while fj < fk2 {
+                    hold faa = sx_index(ftypes, fsp + fj)
+                    hold fbb = sx_index(fkey, fj)
+                    when faa == fbb {
+                      hold fj = fj + 1
+                    } otherwise {
+                      hold feq = 0
+                      hold fj = fk2
+                    }
+                  }
+                  when feq == 1 {
+                    hold fpk = sx_index(ftypes, fsp + fk2)
+                    when fpk == 49 {
+                      hold fprv = 1
+                    } otherwise {
+                      when fpk == 50 {
+                        hold fprv = 2
+                        hold fsq = fsp + fk2 + 2
+                        hold frq = 1
+                        while frq == 1 {
+                          when fsq >= fl2 {
+                            hold frq = 0
+                          } otherwise {
+                            hold fcq = sx_index(ftypes, fsq)
+                            when fcq == 124 {
+                              hold frq = 0
+                            } otherwise {
+                              hold fpname = concat(fpname, chr(fcq))
+                              hold fsq = fsq + 1
+                            }
+                          }
+                        }
+                      } otherwise {
+                        hold fprv = 0
+                      }
+                    }
+                    hold fsp = fl2
+                  } otherwise {
+                    hold fsp = fsp + 1
+                  }
+                }
+                when fprv == -1 {
+                  when chlast == 1 {
+                    hold curty = 0
+                  } otherwise {
+                    hold nerrchain = 1
+                    hold chainmsg = concat("field '", chtok)
+                    hold chainmsg = concat(chainmsg, "' of struct '")
+                    hold chainmsg = concat(chainmsg, curst)
+                    hold chainmsg = concat(chainmsg, "' has no type; the chain must end there")
+                  }
+                } otherwise {
+                  when fprv == 2 {
+                    when chlast == 1 {
+                      hold curty = 2
+                      hold curst = fpname
+                    } otherwise {
+                      hold curst = fpname
+                    }
+                  } otherwise {
+                    when chlast == 1 {
+                      hold curty = fprv
+                    } otherwise {
+                      hold nerrchain = 1
+                      hold chainmsg = concat("field '", chtok)
+                      hold chainmsg = concat(chainmsg, "' of struct '")
+                      hold chainmsg = concat(chainmsg, curst)
+                      hold chainmsg = concat(chainmsg, "' is not a struct; the chain must end there")
+                    }
+                  }
+                }
+                when nerrchain == 0 {
+                  when chi < chl {
+                    hold chrun = 1
+                  }
+                }
+              }
+              when nerrchain == 0 {
+                when curty == 2 {
+                  hold rk = 3
+                  hold stname = curst
+                } otherwise {
+                  when curty == 1 {
+                    hold rk = 1
+                  } otherwise {
+                    hold rk = 0
+                  }
+                }
+              }
+            } otherwise {
+              // base is not a struct variable: keep the old single-field
+              // behaviour (string-field table, numeric otherwise)
+              when chn == 1 {
+                hold rk = 0
+                hold sfkey = concat("|", nm2)
+                hold sfkey = concat(sfkey, ".")
+                hold sfkey = concat(sfkey, chfields)
+                hold sfkey = concat(sfkey, "|")
+                hold sfk = len(sfkey)
+                hold sfl = len(sflds)
+                hold sfhit = 0
+                hold sfi = 0
+                while sfi + sfk <= sfl {
+                  hold sfeq = 1
+                  hold sfj = 0
+                  while sfj < sfk {
+                    hold sfa = sx_index(sflds, sfi + sfj)
+                    hold sfb = sx_index(sfkey, sfj)
+                    when sfa == sfb {
+                      hold sfj = sfj + 1
+                    } otherwise {
+                      hold sfeq = 0
+                      hold sfj = sfk
+                    }
+                  }
+                  when sfeq == 1 {
+                    hold sfhit = 1
+                    hold sfi = sfl
+                  } otherwise {
+                    hold sfi = sfi + 1
+                  }
+                }
+                when sfhit == 1 {
+                  hold rk = 1
+                }
+              } otherwise {
+                hold nerrchain = 1
+                hold chainmsg = concat("chaining through a non-struct value '", nm2)
+                hold chainmsg = concat(chainmsg, "'")
+              }
+            }
+          }
+          // a struct result cannot enter a + - * / % chain
+          when rk == 3 {
+            hold sk = 1
+            while sk == 1 {
+              when pos >= n {
+                hold sk = 0
+              } otherwise {
+                hold cs = sx_index(source,pos)
+                when cs == 32 || cs == 9 {
+                  hold pos = pos + 1
+                } otherwise {
+                  hold sk = 0
+                }
+              }
+            }
+            hold c2 = 0
+            when pos < n {
+              hold c2 = sx_index(source,pos)
+            }
+            when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 {
+              hold nerrscop = 1
+              hold scopmsg = "a struct value cannot be used with a + - * / % operator"
+            }
+            when c2 == 47 {
+              hold c3 = 0
+              when pos + 1 < n {
+                hold c3 = sx_index(source,pos + 1)
+              }
+              when c3 != 47 {
+                hold nerrscop = 1
+                hold scopmsg = "a struct value cannot be used with a + - * / % operator"
+              }
             }
           }
           hold key = concat("|", nm2)
@@ -2861,6 +4100,56 @@ hold ec = 0
           }
           when sfind == 1 {
             hold rk = 1
+          }
+          // a struct variable as a plain show value is an error (caught at
+          // emit); remember the type so the message is accurate
+          hold bsvkey = concat("|", nm2)
+          hold bsvkey = concat(bsvkey, "=")
+          hold bsvk = len(bsvkey)
+          hold bsvl = len(svars)
+          hold bsvhit = 0
+          hold bsvnm = ""
+          hold bsvi = 0
+          while bsvi + bsvk < bsvl {
+            hold bsvj = 0
+            hold bso = 1
+            while bsvj < bsvk {
+              hold bsa = sx_index(svars, bsvi + bsvj)
+              hold bsb = sx_index(bsvkey, bsvj)
+              when bsa == bsb {
+                hold bsvj = bsvj + 1
+              } otherwise {
+                hold bso = 0
+                hold bsvj = bsvk
+              }
+            }
+            when bso == 1 {
+              hold bsvhit = 1
+              hold bsvi2 = bsvi + bsvk
+              hold bsvrun = 1
+              while bsvrun == 1 {
+                when bsvi2 >= bsvl {
+                  hold bsvrun = 0
+                } otherwise {
+                  hold bsa = sx_index(svars, bsvi2)
+                  when bsa == 124 {
+                    hold bsvrun = 0
+                  } otherwise {
+                    hold bsvnm = concat(bsvnm, chr(bsa))
+                    hold bsvi2 = bsvi2 + 1
+                  }
+                }
+              }
+              hold bsvi = bsvl
+            } otherwise {
+              hold bsvi = bsvi + 1
+            }
+          }
+          when bsvhit == 1 {
+            when chn == 0 {
+              hold rk = 3
+              hold stname = bsvnm
+            }
           }
           // optional index xs[i]
           hold sk = 1
@@ -3141,64 +4430,276 @@ hold ec = 0
               }
             }
             hold opnd = nm3
-            // postfix .field
+            // postfix field chain .a.b (resolved like the statement bases)
+            hold chn = 0
+            hold chfields = ""
+            hold chrun = 1
+            while chrun == 1 {
+              hold chrun = 0
+              hold sk = 1
+              while sk == 1 {
+                when pos >= n {
+                  hold sk = 0
+                } otherwise {
+                  hold cs = sx_index(source,pos)
+                  when cs == 32 || cs == 9 || cs == 13 {
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold sk = 0
+                  }
+                }
+              }
+              hold c2 = 0
+              when pos < n {
+                hold c2 = sx_index(source,pos)
+              }
+              when c2 == 46 {
+                hold pos = pos + 1
+                hold chfld = ""
+                hold rn = 1
+                while rn == 1 {
+                  when pos >= n {
+                    hold rn = 0
+                  } otherwise {
+                    hold cn = sx_index(source,pos)
+                    when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+                      hold chfld = concat(chfld, chr(cn))
+                      hold pos = pos + 1
+                    } otherwise {
+                      hold rn = 0
+                    }
+                  }
+                }
+                when sx_eq(chfld, "") == 1 {
+                  hold nerrchain = 1
+                  hold chainmsg = "missing field name after '.'"
+                }
+                when chn > 0 {
+                  hold chfields = concat(chfields, nsep)
+                }
+                hold chfields = concat(chfields, chfld)
+                hold opnd = concat(opnd, ".")
+                hold opnd = concat(opnd, chfld)
+                hold chn = chn + 1
+                hold chrun = 1
+              }
+            }
+            when chn >= 1 {
+              hold svkey = concat("|", nm3)
+              hold svkey = concat(svkey, "=")
+              hold svk = len(svkey)
+              hold svl = len(svars)
+              hold svhit = 0
+              hold svnm = ""
+              hold svi = 0
+              while svi + svk < svl {
+                hold sveq = 1
+                hold svj = 0
+                while svj < svk {
+                  hold sva = sx_index(svars, svi + svj)
+                  hold svb = sx_index(svkey, svj)
+                  when sva == svb {
+                    hold svj = svj + 1
+                  } otherwise {
+                    hold sveq = 0
+                    hold svj = svk
+                  }
+                }
+                when sveq == 1 {
+                  hold svhit = 1
+                  hold svi2 = svi + svk
+                  hold svrun = 1
+                  while svrun == 1 {
+                    when svi2 >= svl {
+                      hold svrun = 0
+                    } otherwise {
+                      hold sva = sx_index(svars, svi2)
+                      when sva == 124 {
+                        hold svrun = 0
+                      } otherwise {
+                        hold svnm = concat(svnm, chr(sva))
+                        hold svi2 = svi2 + 1
+                      }
+                    }
+                  }
+                  hold svi = svl
+                } otherwise {
+                  hold svi = svi + 1
+                }
+              }
+              when svhit == 1 {
+                hold curst = svnm
+                hold curty = 0
+                hold chi = 0
+                hold chl = len(chfields)
+                hold chrun = 1
+                while chrun == 1 {
+                  hold chrun = 0
+                  hold chtok = ""
+                  hold chi2 = chi
+                  hold chtokrun = 1
+                  while chtokrun == 1 {
+                    when chi2 >= chl {
+                      hold chtokrun = 0
+                    } otherwise {
+                      hold chdv = sx_index(chfields, chi2)
+                      when chdv == 1 {
+                        hold chtokrun = 0
+                      } otherwise {
+                        hold chtok = concat(chtok, chr(chdv))
+                        hold chi2 = chi2 + 1
+                      }
+                    }
+                  }
+                  hold chi = chi2 + 1
+                  hold chlast = 0
+                  when chi >= chl {
+                    hold chlast = 1
+                  }
+                  hold fkey = concat("|", curst)
+                  hold fkey = concat(fkey, ".")
+                  hold fkey = concat(fkey, chtok)
+                  hold fkey = concat(fkey, "=")
+                  hold fk2 = len(fkey)
+                  hold fl2 = len(ftypes)
+                  hold fprv = -1
+                  hold fpname = ""
+                  hold fsp = 0
+                  while fsp + fk2 < fl2 {
+                    hold feq = 1
+                    hold fj = 0
+                    while fj < fk2 {
+                      hold faa = sx_index(ftypes, fsp + fj)
+                      hold fbb = sx_index(fkey, fj)
+                      when faa == fbb {
+                        hold fj = fj + 1
+                      } otherwise {
+                        hold feq = 0
+                        hold fj = fk2
+                      }
+                    }
+                    when feq == 1 {
+                      hold fpk = sx_index(ftypes, fsp + fk2)
+                      when fpk == 49 {
+                        hold fprv = 1
+                      } otherwise {
+                        when fpk == 50 {
+                          hold fprv = 2
+                          hold fsq = fsp + fk2 + 2
+                          hold frq = 1
+                          while frq == 1 {
+                            when fsq >= fl2 {
+                              hold frq = 0
+                            } otherwise {
+                              hold fcq = sx_index(ftypes, fsq)
+                              when fcq == 124 {
+                                hold frq = 0
+                              } otherwise {
+                                hold fpname = concat(fpname, chr(fcq))
+                                hold fsq = fsq + 1
+                              }
+                            }
+                          }
+                        } otherwise {
+                          hold fprv = 0
+                        }
+                      }
+                      hold fsp = fl2
+                    } otherwise {
+                      hold fsp = fsp + 1
+                    }
+                  }
+                  when fprv == -1 {
+                    when chlast == 1 {
+                      hold curty = 0
+                    } otherwise {
+                      hold nerrchain = 1
+                      hold chainmsg = concat("field '", chtok)
+                      hold chainmsg = concat(chainmsg, "' of struct '")
+                      hold chainmsg = concat(chainmsg, curst)
+                      hold chainmsg = concat(chainmsg, "' has no type; the chain must end there")
+                    }
+                  } otherwise {
+                    when fprv == 2 {
+                      when chlast == 1 {
+                        hold curty = 2
+                        hold curst = fpname
+                      } otherwise {
+                        hold curst = fpname
+                      }
+                    } otherwise {
+                      when chlast == 1 {
+                        hold curty = fprv
+                      } otherwise {
+                        hold nerrchain = 1
+                        hold chainmsg = concat("field '", chtok)
+                        hold chainmsg = concat(chainmsg, "' of struct '")
+                        hold chainmsg = concat(chainmsg, curst)
+                        hold chainmsg = concat(chainmsg, "' is not a struct; the chain must end there")
+                      }
+                    }
+                  }
+                  when nerrchain == 0 {
+                    when chi < chl {
+                      hold chrun = 1
+                    }
+                  }
+                }
+                when nerrchain == 0 {
+                  when curty == 1 {
+                    hold opfldstr = 1
+                  }
+                  when curty == 2 {
+                    hold nerrscop = 1
+                    hold scopmsg = "a struct value cannot be used with a + - * / % operator"
+                  }
+                }
+              } otherwise {
+                when chn == 1 {
+                  hold opfldstr = 0
+                  hold sfkey = concat("|", nm3)
+                  hold sfkey = concat(sfkey, ".")
+                  hold sfkey = concat(sfkey, chfields)
+                  hold sfkey = concat(sfkey, "|")
+                  hold sfk = len(sfkey)
+                  hold sfl = len(sflds)
+                  hold sfhit = 0
+                  hold sfi = 0
+                  while sfi + sfk <= sfl {
+                    hold sfeq = 1
+                    hold sfj = 0
+                    while sfj < sfk {
+                      hold sfa = sx_index(sflds, sfi + sfj)
+                      hold sfb = sx_index(sfkey, sfj)
+                      when sfa == sfb {
+                        hold sfj = sfj + 1
+                      } otherwise {
+                        hold sfeq = 0
+                        hold sfj = sfk
+                      }
+                    }
+                    when sfeq == 1 {
+                      hold sfhit = 1
+                      hold sfi = sfl
+                    } otherwise {
+                      hold sfi = sfi + 1
+                    }
+                  }
+                  when sfhit == 1 {
+                    hold opfldstr = 1
+                  }
+                } otherwise {
+                  hold nerrchain = 1
+                  hold chainmsg = concat("chaining through a non-struct value '", nm3)
+                hold chainmsg = concat(chainmsg, "'")
+                }
+              }
+            }
             hold opcq = 0
             when pos < n {
               hold opcq = sx_index(source,pos)
             }
-            when opcq == 46 {
-              hold pos = pos + 1
-              hold opfld = ""
-              hold rn = 1
-              while rn == 1 {
-                when pos >= n {
-                  hold rn = 0
-                } otherwise {
-                  hold cn = sx_index(source,pos)
-                  when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-                    hold opfld = concat(opfld, chr(cn))
-                    hold pos = pos + 1
-                  } otherwise {
-                    hold rn = 0
-                  }
-                }
-              }
-              hold opnd = concat(opnd, ".")
-              hold opnd = concat(opnd, opfld)
-              hold opfldstr = 0
-              hold sfkey = concat("|", nm3)
-              hold sfkey = concat(sfkey, ".")
-              hold sfkey = concat(sfkey, opfld)
-              hold sfkey = concat(sfkey, "|")
-              hold sfk = len(sfkey)
-              hold sfl = len(sflds)
-              hold sfhit = 0
-              hold sfi = 0
-              while sfi + sfk <= sfl {
-                hold sfeq = 1
-                hold sfj = 0
-                while sfj < sfk {
-                  hold sfa = sx_index(sflds, sfi + sfj)
-                  hold sfb = sx_index(sfkey, sfj)
-                  when sfa == sfb {
-                    hold sfj = sfj + 1
-                  } otherwise {
-                    hold sfeq = 0
-                    hold sfj = sfk
-                  }
-                }
-                when sfeq == 1 {
-                  hold sfhit = 1
-                  hold sfi = sfl
-                } otherwise {
-                  hold sfi = sfi + 1
-                }
-              }
-              when sfhit == 1 {
-                hold opfldstr = 1
-              }
-            }
-            // postfix [index]
+            // postfix [index]            // postfix [index]
             when opcq == 91 {
               hold pos = pos + 1
               hold opix = ""
@@ -3411,12 +4912,17 @@ hold ec = 0
         hold wk = wk + 1
       }
       hold body = concat(body, ind)
+      when rk == 3 {
+        hold nerrscop = 1
+        hold scopmsg = "show value cannot be a struct"
+      }
       when rk == 1 {
         hold body = concat(body, "puts(")
         hold body = concat(body, rhs)
         hold body = concat(body, ");")
         hold body = concat(body, nl)
-      } otherwise {
+      }
+      when rk == 0 || rk == 2 {
         hold body = concat(body, "printf(\"%g\\n\", (double)")
         hold body = concat(body, rhs)
         hold body = concat(body, ");")
@@ -4243,6 +5749,8 @@ while tdi < tdn {
               }
             }
           }
+          hold tdclass = 0
+          hold tdinn = ""
           hold tdkey = concat("|", tdname)
           hold tdkey = concat(tdkey, ".")
           hold tdkey = concat(tdkey, tdfld)
@@ -4267,17 +5775,42 @@ while tdi < tdn {
             when tdeq == 1 {
               hold tdpk = sx_index(ftypes, tdp + tdk)
               when tdpk == 49 {
-                hold tdhit = 1
+                hold tdclass = 1
+              }
+              when tdpk == 50 {
+                // struct-typed field: the inner struct name follows
+                hold tdclass = 2
+                hold tdi2 = tdp + tdk + 2
+                hold tdrun2 = 1
+                while tdrun2 == 1 {
+                  when tdi2 >= tdl {
+                    hold tdrun2 = 0
+                  } otherwise {
+                    hold tdc2 = sx_index(ftypes, tdi2)
+                    when tdc2 == 124 {
+                      hold tdrun2 = 0
+                    } otherwise {
+                      hold tdinn = concat(tdinn, chr(tdc2))
+                      hold tdi2 = tdi2 + 1
+                    }
+                  }
+                }
               }
               hold tdp = tdl
             } otherwise {
               hold tdp = tdp + 1
             }
           }
-          when tdhit == 1 {
-            hold out = concat(out, " char *")
+          when tdclass == 2 {
+            hold out = concat(out, " ")
+            hold out = concat(out, tdinn)
+            hold out = concat(out, " ")
           } otherwise {
-            hold out = concat(out, " double ")
+            when tdclass == 1 {
+              hold out = concat(out, " char *")
+            } otherwise {
+              hold out = concat(out, " double ")
+            }
           }
           hold out = concat(out, tdfld)
           hold out = concat(out, ";")
@@ -4312,9 +5845,9 @@ when exdeep == 1 {
   show "min: use nesting deeper than 8"
 }
 when exbad == 1 {
-  hold exerr = concat(exerr, "#error sayanox-min: unsupported value in struct/list literal (numeric fields only)")
+  hold exerr = concat(exerr, "#error sayanox-min: struct/list literal value must be a number, string, name, or nested struct")
   hold exerr = concat(exerr, nl)
-  show "min: unsupported value in a struct/list literal (numeric fields only)"
+  show "min: struct/list literal value must be a number, string, name, or nested struct"
 }
 when exbad5 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: use must be followed by a quoted path, e.g. use \"lib.sa\"")
@@ -4336,10 +5869,42 @@ when exbad8 == 1 {
   hold exerr = concat(exerr, nl)
   show "min: struct literal must fill every field"
 }
-when exbad9 == 1 {
-  hold exerr = concat(exerr, "#error sayanox-min: nested struct literal values are not supported by the self-hosted compiler (the seed compiler supports them)")
+when nerrfwd == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: struct '")
+  hold exerr = concat(exerr, nfwdout)
+  hold exerr = concat(exerr, "' nests struct '")
+  hold exerr = concat(exerr, nfwdin)
+  hold exerr = concat(exerr, "' which is declared later; declare the nested struct first")
   hold exerr = concat(exerr, nl)
-  show "min: nested struct literal values are not supported by the self-hosted compiler (the seed compiler supports them)"
+  hold shmsg = concat("min: struct '", nfwdout)
+  hold shmsg = concat(shmsg, "' nests struct '")
+  hold shmsg = concat(shmsg, nfwdin)
+  hold shmsg = concat(shmsg, "' declared later; declare the nested struct first")
+  show shmsg
+}
+when nerrunk == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: struct literal for unknown struct '")
+  hold exerr = concat(exerr, nunknm)
+  hold exerr = concat(exerr, "'")
+  hold exerr = concat(exerr, nl)
+  hold shmsg = "min: struct literal for unknown struct '"
+  hold shmsg = concat(shmsg, nunknm)
+  hold shmsg = concat(shmsg, "'")
+  show shmsg
+}
+when nerrchain == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: ")
+  hold exerr = concat(exerr, chainmsg)
+  hold exerr = concat(exerr, nl)
+  hold shmsg = concat("min: ", chainmsg)
+  show shmsg
+}
+when nerrscop == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: ")
+  hold exerr = concat(exerr, scopmsg)
+  hold exerr = concat(exerr, nl)
+  hold shmsg = concat("min: ", scopmsg)
+  show shmsg
 }
 when exbad4 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: a '}' ended up inside a give expression; put one statement per line")
