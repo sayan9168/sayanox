@@ -82,9 +82,9 @@ ownership is local to each assignment.
 | `%` inside `when`/`while` conditions | yes | yes | yes |
 | `make` / `give` (top level, numeric) | yes | yes | **no (clear error)** |
 | recursion | yes | yes | **no (clear error)** |
-| lists: `[..]`, `xs[i]`, `len`, `push` | yes | yes | **no (clear error)** |
-| structs: number/string fields, `p.x`, `Point { name: "a" }` | yes | yes | **no (clear error)** |
-| structs: nested (`Line { a: Point { 1, 2 } }`, `l.a.x`) | yes | **no (explicit `#error`)** | **no (clear error)** |
+| lists: `[..]`, `xs[i]`, `len`, `push` (grows in place) | yes | yes | yes |
+| structs: number fields, `p.x`, `Point { 1, 2 }` | yes | yes | yes |
+| structs: nested (`Line { a: Point { 1, 2 } }`, `l.a.x`) | yes | yes | **WIP** (literals OK, chained fields broken) |
 | string builtins (`concat len chr sx_index read_file write_file arg arg_count string_eq`) | yes | yes | `show "str"` only |
 | `use "file.sa"` (modules) | yes | yes | **no (clear error)** |
 | base `OP` operand (`10 % 3`, `p.x + p.y`, `xs[1] + 5`, `len(xs) + 1`) | yes | yes | yes |
@@ -102,7 +102,7 @@ later literal is a hard error. `hold s = u.name` is typed as a string.
 ```bash
 make true-selfhost   # seed-min -> gen1_min -> gen2, then every feature test on gen2
 make gen3            # gen3 == gen4 byte-identical + feature tests on gen3
-make native-test     # real x86-64: 42, -42, while/done, 10 % 3, else, slot/undefined/unsupported
+make native-test     # real x86-64: 42, -42, while/done, 10 % 3, else, slot/undefined, lists, structs
 make seed-min        # seed-min: hold/show/while/struct/list/fn/%/else/use
 ```
 
@@ -142,17 +142,15 @@ show l.a.x                  # 1      (seed-min)
 * **Structs** are typed from literals (see above); a missing field defaults to
   `""`/`0` in seed-min, while gen2 requires every field of a literal to be
   present. **Nested structs** (`a: Point { 1, 2 }`, chains such as `l.a.x`)
-  work in **seed-min only**: the nested struct must be declared before the
-  struct that nests it (so typedefs stay dependency-ordered), a struct-valued
-  field must be filled in every literal, and a chain through a field that has
-  no struct type is a hard error. The self-hosted **gen2 does not support
-  nested literals yet** — it emits one explicit
-  `#error ... nested struct literal values are not supported by the
-  self-hosted compiler` and skips the value instead of mis-compiling it.
-  Reason: the pure-min dialect has no string-returning functions or recursive
-  parser entry, so the inline struct-literal parser cannot re-enter itself; a
-  real fix is an architectural change, not a patch. A list inside a struct
-  field and a struct value inside a list are hard errors in both compilers.
+  work in **both seed-min and gen2** (verified with output parity in
+  `make test-nest`, including three levels deep). Rules, enforced by both:
+  the nested struct must be declared before the struct that nests it (so
+  typedefs stay dependency-ordered), a struct-valued field must be filled in
+  every literal, a struct value can be copied with a typed declaration
+  (`hold m = l.b`, `hold r = q`), and a chain through a field that has no
+  struct type is a hard error. A list inside a struct field and a struct
+  value inside a list are hard errors in both compilers; `show` of a struct
+  value is a hard error in gen2.
 * **Lists** are `double`-only, one type per program; `push` returns the list.
 * **Functions**: top level only, numeric params/return, recursion works.
   Calling a user function is supported in `hold` RHS, `show` and `give`.
@@ -170,14 +168,17 @@ show l.a.x                  # 1      (seed-min)
   becomes `(double)((long)(a)%(long)(b))`, so `while a % 10 > 0` is correct;
   the remaining operators must be valid C (`*`, `/` and comparisons are).
 * **native_aot** covers `hold/show/when/else/while`, integers, `+ - * / %`,
-  comparisons and `show "str"`. Every distinct variable name gets its own
-  stack slot (two names sharing a first letter no longer share storage) and an
-  undeclared name is a hard error instead of reading as 0. Lists, structs,
-  field access, functions and `use` are rejected with an `unsupported:`
-  message instead of emitting wrong code.
+  comparisons, `show "str"`, literal lists (`[1, 2]`, `xs[i]`, `len`,
+  `push` — the list grows in place, out-of-range indexes die), and structs
+  (number fields, `Point { 1, 2 }`, `p.x`). Every distinct variable name gets
+  its own stack slot (two names sharing a first letter no longer share
+  storage) and an undeclared name is a hard error instead of reading as 0.
+  Functions (`make`/calls) and `use` are rejected with a clear error rather
+  than emitting untested code; nested-struct field chains are WIP. The
+  runtime is a flat BSS data area plus one `mmap` allocator with a linked
+  free list (malloc/memcpy/copy semantics verified by probe programs).
 * Still not part of pure-min: modules with namespacing/aliases, generics, a
-  GC, and nested struct literals in the self-hosted gen2 — none of these are
-  claimed anywhere.
+  GC — none of these are claimed anywhere.
 
 ## Feature tests
 
@@ -189,11 +190,11 @@ show l.a.x                  # 1      (seed-min)
 | `make test-condmod` | `%` long-cast rewrite inside `when`/`while` conditions |
 | `make test-struct2` | named fields, two structs, `p.x + p.y` |
 | `make test-user` | struct string fields (`User name/age`); mismatches are hard errors |
-| `make test-nest` | nested structs in seed-min (typed fields, ordered typedefs, `.a.x` chains) + explicit gen2 rejection |
+| `make test-nest` | nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies); clear errors for forward decls, list fields, bad chains, show-of-struct |
 | `make test-list2` | literal, index, `len`, `push` |
 | `make test-use` | splice, nested depth 2, missing-file error |
 | `make test-fn2` | params, call in `show`, recursion (`fac 5 = 120`) |
 | `make test-boot` | gen2 compiles `compiler_boot.sa` and the result runs |
 | `make test-parity` | seed-min and gen2 agree on one program using the whole shared dialect |
 | `make seed-min` / `test-struct` / `test-list` / `test-fn` | same features on the C seed |
-| `make native-test` | native subset, one slot per name, undefined names, unsupported constructs rejected |
+| `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, unsupported constructs rejected |

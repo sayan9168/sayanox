@@ -292,28 +292,52 @@ test-nest:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	@mkdir -p $(TESTS)
 	@printf 'struct Point {\n  name,\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: Point { name: "p1", x: 1 }, b: Point { name: "p2", x: 2 } }\nshow l.a.name\nshow l.a.x\nshow l.b.name\nshow l.b.x\nhold m = l.b\nshow m.name\nshow m.x\n' > $(TESTS)/ts_nest.sa
+	@# seed-min reference: ordered struct-typed fields, .a.x chains, run
 	./$(SEED_MIN_BIN) $(TESTS)/ts_nest.sa > $(TESTS)/ts_nest_sm.c
 	$(CC) -O2 -o $(TESTS)/ts_nest_sm $(TESTS)/ts_nest_sm.c
 	@grep -q 'typedef struct { char \*name; double x; } Point;' $(TESTS)/ts_nest_sm.c
 	@grep -q 'typedef struct { Point a; Point b; } Line;' $(TESTS)/ts_nest_sm.c
 	$(call assert-out,./$(TESTS)/ts_nest_sm,p1\n1\np2\n2\np2\n2)
-	@# the self-hosted compiler does not support nested literals yet: it must
-	@# say so plainly and emit #error, never silently wrong code
-	@./$(GEN2) $(TESTS)/ts_nest.sa $(TESTS)/ts_nest_g2.c >/dev/null
-	@grep -q 'nested struct literal values are not supported' $(TESTS)/ts_nest_g2.c
+	@# gen2 must agree byte-for-byte on stdout (output parity with seed-min)
+	./$(GEN2) $(TESTS)/ts_nest.sa $(TESTS)/ts_nest_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_nest_g2 $(TESTS)/ts_nest_g2.c
+	@grep -q 'typedef struct { char \*name; double x; } Point;' $(TESTS)/ts_nest_g2.c
+	@grep -q 'typedef struct { Point a; Point b; } Line;' $(TESTS)/ts_nest_g2.c
+	$(call assert-out,./$(TESTS)/ts_nest_g2,p1\n1\np2\n2\np2\n2)
+	@# three levels deep: Scene -> Rect -> Point, plus a string field and
+	@# a typed struct copy (hold rr = s.r)
+	@printf 'struct Point {\n  x,\n  y\n}\nstruct Rect {\n  o,\n  sz\n}\nstruct Scene {\n  r,\n  label\n}\nhold s = Scene { r: Rect { o: Point { 1, 2 }, sz: Point { 3, 4 } }, label: "main" }\nshow s.r.o.x\nshow s.r.o.y\nshow s.r.sz.x\nshow s.label\nhold rr = s.r\nshow rr.sz.y\n' > $(TESTS)/ts_nest3.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_nest3.sa > $(TESTS)/ts_nest3_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_nest3_sm $(TESTS)/ts_nest3_sm.c
+	$(call assert-out,./$(TESTS)/ts_nest3_sm,1\n2\n3\nmain\n4)
+	./$(GEN2) $(TESTS)/ts_nest3.sa $(TESTS)/ts_nest3_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_nest3_g2 $(TESTS)/ts_nest3_g2.c
+	@grep -q 'typedef struct { Point o; Point sz; } Rect;' $(TESTS)/ts_nest3_g2.c
+	@grep -q 'typedef struct { Rect r; char \*label; } Scene;' $(TESTS)/ts_nest3_g2.c
+	$(call assert-out,./$(TESTS)/ts_nest3_g2,1\n2\n3\nmain\n4)
 	@# a nested struct must be declared before the struct that nests it
 	@printf 'struct Line {\n  a\n}\nstruct Point {\n  x\n}\nhold l = Line { a: Point { 1 } }\n' > $(TESTS)/ts_nestfwd.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestfwd.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted a nested struct declared later"; exit 1; fi
+	@./$(GEN2) $(TESTS)/ts_nestfwd.sa $(TESTS)/ts_nestfwd_g2.c >/dev/null 2>&1 || true
+	@grep -q 'declare the nested struct first' $(TESTS)/ts_nestfwd_g2.c
 	@# a list still cannot be a struct field
 	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: [1], b: Point { 2 } }\n' > $(TESTS)/ts_nestlist.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestlist.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted a list in a struct field"; exit 1; fi
+	@./$(GEN2) $(TESTS)/ts_nestlist.sa $(TESTS)/ts_nestlist_g2.c >/dev/null 2>&1 || true
+	@grep -q '#error' $(TESTS)/ts_nestlist_g2.c
 	@# chaining through a field with no struct type is a clear error, not bad C
-	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: Point { 1 } }\nshow l.b.x\n' > $(TESTS)/ts_nestmiss.sa
+	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a\n}\nhold p = Point { x: 1 }\nhold l = Line { a: p }\nshow l.a.x\n' > $(TESTS)/ts_nestmiss.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestmiss.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted a chain through an untyped struct field"; exit 1; fi
-	@echo "[OK] nested structs in seed-min (typed fields, ordered typedefs, .a.x chains); gen2 rejects them explicitly"
+	@./$(GEN2) $(TESTS)/ts_nestmiss.sa $(TESTS)/ts_nestmiss_g2.c >/dev/null 2>&1 || true
+	@grep -q 'is not a struct' $(TESTS)/ts_nestmiss_g2.c
+	@# a struct value cannot be shown
+	@printf 'struct Point {\n  x\n}\nhold q = Point { x: 1 }\nshow q\n' > $(TESTS)/ts_nestshow.sa
+	@./$(GEN2) $(TESTS)/ts_nestshow.sa $(TESTS)/ts_nestshow_g2.c >/dev/null 2>&1 || true
+	@grep -q 'show value cannot be a struct' $(TESTS)/ts_nestshow_g2.c
+	@echo "[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies); clear errors for forward decls, list fields, bad chains, show-of-struct"
 
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -464,10 +488,17 @@ native-test: $(NATIVE_BIN)
 	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/native_mod.sa
 	./$(NATIVE_BIN) $(TESTS)/native_mod.sa $(TESTS)/native_mod
 	$(call assert-out,./$(TESTS)/native_mod,1\n1)
-	@printf 'hold xs = [1, 2, 3]\nshow xs[0]\n' > $(TESTS)/native_unsup.sa
-	@if ./$(NATIVE_BIN) $(TESTS)/native_unsup.sa $(TESTS)/native_unsup 2>/dev/null; then \
-	  echo "[FAIL] native accepted lists (silently wrong code)"; exit 1; fi
-	@./$(NATIVE_BIN) $(TESTS)/native_unsup.sa $(TESTS)/native_unsup 2>&1 | grep -q 'unsupported'
+	@printf 'hold xs = [1, 2, 3]\nshow xs[0]\nshow len(xs)\n' > $(TESTS)/native_list.sa
+	./$(NATIVE_BIN) $(TESTS)/native_list.sa $(TESTS)/native_list
+	$(call assert-out,./$(TESTS)/native_list,1\n3)
+	@printf 'hold xs = []\npush(xs, 5)\npush(xs, 6)\npush(xs, 7)\npush(xs, 8)\npush(xs, 9)\nshow len(xs)\nshow xs[0]\nshow xs[4]\n' > $(TESTS)/native_push.sa
+	./$(NATIVE_BIN) $(TESTS)/native_push.sa $(TESTS)/native_push
+	$(call assert-out,./$(TESTS)/native_push,5\n5\n9)
+	@printf 'hold xs = [7]\nshow xs[9]\n' > $(TESTS)/native_oob.sa
+	./$(NATIVE_BIN) $(TESTS)/native_oob.sa $(TESTS)/native_oob
+	@if $(TESTS)/native_oob 2>/dev/null; then \
+	  echo "[FAIL] native accepted an out-of-bounds list index"; exit 1; fi
+	@$(TESTS)/native_oob 2>&1 >/dev/null | grep -q 'out of range'
 	@# one slot per name: names sharing a first letter must not share storage
 	@printf 'hold ab = 1\nhold ac = 2\nshow ab\nshow ac\n' > $(TESTS)/native_slot.sa
 	./$(NATIVE_BIN) $(TESTS)/native_slot.sa $(TESTS)/native_slot
@@ -477,16 +508,16 @@ native-test: $(NATIVE_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/native_undef.sa $(TESTS)/native_undef 2>/dev/null; then \
 	  echo "[FAIL] native accepted an undefined variable (silently wrong code)"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_undef.sa $(TESTS)/native_undef 2>&1 | grep -q 'undefined variable'
-	@# structs and field access are rejected, not mis-compiled
-	@printf 'struct Point {\n  x,\n  y\n}\nhold p = Point { 1, 2 }\nshow p.x\n' > $(TESTS)/native_struct.sa
-	@if ./$(NATIVE_BIN) $(TESTS)/native_struct.sa $(TESTS)/native_struct 2>/dev/null; then \
-	  echo "[FAIL] native accepted structs (silently wrong code)"; exit 1; fi
-	@./$(NATIVE_BIN) $(TESTS)/native_struct.sa $(TESTS)/native_struct 2>&1 | grep -q 'structs are not in the native subset'
+	@# structs: declaration, literal, field access
+	@printf 'struct Point {\n  x\n  y\n}\nhold p = Point { 1, 2 }\nshow p.x\nshow p.y\n' > $(TESTS)/native_struct.sa
+	./$(NATIVE_BIN) $(TESTS)/native_struct.sa $(TESTS)/native_struct
+	$(call assert-out,./$(TESTS)/native_struct,1\n2)
+	@# field access on a non-struct value is a hard error, never a mis-compile
 	@printf 'hold a = 1\nshow a.x\n' > $(TESTS)/native_fld.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_fld.sa $(TESTS)/native_fld 2>/dev/null; then \
-	  echo "[FAIL] native accepted field access (silently wrong code)"; exit 1; fi
-	@./$(NATIVE_BIN) $(TESTS)/native_fld.sa $(TESTS)/native_fld 2>&1 | grep -q 'unsupported'
-	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists/structs rejected"
+	  echo "[FAIL] native accepted field access on a number (silently wrong code)"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_fld.sa $(TESTS)/native_fld 2>&1 | grep -q 'cannot access a field'
+	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs"
 	@echo "=== NATIVE-TEST-OK ==="
 
 grammar: true-selfhost-min
