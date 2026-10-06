@@ -1,6 +1,8 @@
 # Dependency audit — bootstrap critical path
 
-Audited 2026-10-04 on branch `arena/01a104c1-sayanox`, base `f0e17a7`.
+Audited 2026-10-04, re-measured end-to-end 2026-10-06 on branch
+`arena/2863bc8a-sayanox` (base `e7e8bdc`). The re-measurement reproduced the
+numbers below and added `make doctor` and `make restore-compiler` to the table.
 
 Every number in this file was measured, not estimated. The method: a PATH shim
 directory was built containing a logging wrapper for all 644 executables in
@@ -19,10 +21,26 @@ strict POSIX shell, not bash.
 | `make true-selfhost` | `as base64 cat cc cmp diff grep gzip ld make mkdir sed tr wc` (14) | `as cc cmp grep ld make mkdir` (7) |
 | `make gen3` | `as cc cmp grep ld make mkdir sed wc` (9) | `as cc cmp ld make mkdir` (6) |
 | `make native-test` | `as cc grep ld make mkdir sed` (7) | `as cc grep ld make mkdir` (6) |
+| `make doctor` | (did not exist) | `make` (1) |
+| `make restore-compiler` (source present) | — | `make grep` (2) |
+| `make restore-compiler` (source missing) | — | `make grep cat tr base64 gzip rm` (7) |
 
 `as` and `ld` are not direct dependencies — they are invoked internally by the C
 compiler. Removing them from the count, the direct tool set for
 `make true-selfhost` went from 12 tools to 5.
+
+Re-verified 2026-10-06, and each of the three "retained" assert tools was proved
+*necessary* by removing it from `PATH` one at a time:
+
+| Missing tool | Target | Result |
+|--------------|--------|--------|
+| `cmp` | `make gen3` | exit 2 — `cmp` is the `gen3 == gen4` fixed point |
+| `grep` | `make true-selfhost` | exit 2 (6 `not found` lines) — generated-C markers |
+| `mkdir` | `make seed-min-gen1` | exit 127 — the scratch test directory |
+
+The positive side of the same experiment: with a `PATH` containing only
+`make cc gcc as ld sh grep cmp mkdir`, `make true-selfhost`, `make gen3` and
+`make native-test` all exit 0 (`=== *-OK ===`). Nothing else is consulted.
 
 Removed from the critical path entirely: **`sed`, `awk`, `diff`, `wc`, `cat`,
 `tr`, `base64`, `gzip`**.
@@ -32,7 +50,7 @@ Removed from the critical path entirely: **`sed`, `awk`, `diff`, `wc`, `cat`,
 | Stage | External tools | Verdict |
 |-------|----------------|---------|
 | `restore-compiler` (normal case) | `make`, `grep` | **required** |
-| `restore-compiler` (fallback: `compiler_min.sa` missing) | `make`, `grep`, `cat`, `tr`, `base64`, `gzip` | `base64`/`gzip`/`cat`/`tr` **optional** |
+| `restore-compiler` (fallback: `compiler_min.sa` missing) | `make`, `grep`, `cat`, `tr`, `base64`, `gzip`, `rm` | `base64`/`gzip`/`cat`/`tr`/`rm` **optional** |
 | `verify-seed` (was `fix-seed`) | `make`, `grep` | **required** |
 | build `sxc_seed_min` | `make`, `cc` (+ `as`, `ld`) | **required** |
 | `seed-min-gen1` | `make`, `cc`, `grep`, `mkdir` | **required** |
@@ -40,6 +58,7 @@ Removed from the critical path entirely: **`sed`, `awk`, `diff`, `wc`, `cat`,
 | `gen3` | `make`, `cc`, `cmp`, `mkdir` | **required** |
 | `native-test` | `make`, `cc`, `grep`, `mkdir` | **required** |
 | tests (all `test-*` targets) | `make`, `cc`, `grep`, `cmp`, `mkdir` | **required** |
+| `doctor` | `make` | **required** |
 
 ### Final minimal tool set
 
@@ -66,6 +85,12 @@ files tracked in the repository at all (`git ls-files` checked).
 bootstrap path" on hosts that have them, and "absent - fine, nothing needs it"
 on hosts that do not.
 
+Re-measured 2026-10-06 across the full logs of `make doctor`,
+`make true-selfhost`, `make gen3`, `make native-test`, `make restore-compiler`
+and every `test-*` target: **zero** invocations of `python`, `python3`, `node`,
+`ruby`, `perl`, `php`, `bash`, `curl`, `wget` or `git`. `git ls-files` still
+shows 0 tracked `.py`/`.rb`/`.js`/`.ts`/`.pl`/`.lua`/`.php` files.
+
 ## 3. Shell scripts
 
 No `.sh` file is on the critical path. Measured: **`bash` is never executed by
@@ -74,7 +99,7 @@ recipe lines run under the POSIX shell.
 
 | Script | Shebang | Reachable from a required target? | Verdict |
 |--------|---------|-----------------------------------|---------|
-| `selfhost/pack_compiler_min.sh` | `#!/bin/bash` | No — only `make pack-compiler` (manual maintenance) | optional |
+| `selfhost/pack_compiler_min.sh` | `#!/bin/bash` (`mktemp`, `awk`, `xargs`, process substitution) | No — only `make pack-compiler` (manual maintenance) | optional |
 | `selfhost/lang_quality.sh` | `#!/usr/bin/env bash` | No | optional |
 | `selfhost/restore_compiler_min.sh` | `#!/usr/bin/env bash` | No — superseded by `make restore-compiler` | removable |
 | `selfhost/restore_stage2.sh` | `#!/usr/bin/env bash` | No | removable |
@@ -98,8 +123,12 @@ that is not invoked by any Makefile target. It honours a
 
 `make restore-compiler` works fully offline. Verified by deleting
 `selfhost/compiler_min.sa` and re-running with the shim: the only external
-commands used were `base64 cat grep gzip make tr`, and the reconstructed file
-was **byte-identical** to the original (sha256 `4b4e65e75ac3d08d…`).
+commands used were `base64 cat grep gzip make rm tr`, and the reconstructed file
+was **byte-identical** to the original (sha256
+`aa5ff5ada3b3d91c8b9381cc2a81bb2f3e94693e171062392662fd254d953b13`, 33 parts
+of 1100 chars). The parts are regenerated by `make pack-compiler`, which is the
+only thing in the repository that needs `bash`/`awk`/`gzip`/`base64`, and it is
+a manual maintenance target — `make restore-compiler` never needs to run it.
 
 ## 5. sed / awk "fix-seed" hacks — removed
 
@@ -178,30 +207,62 @@ selfhost/_smoke.c:17:49: warning: implicit declaration of function 'va_start'
 selfhost/_smoke.c:17:141: error: expected expression before 'double'
 ```
 
+Re-measured 2026-10-06: the four targets still fail on the current tree, and the
+error has moved one stage further. `make subset` now dies in the generated
+smoke program (`selfhost/_smoke.c:17:141: error: expected expression before
+'double'`) and `make gen1`, `make gen2` and `make true-selfhost-full` all die in
+the legacy self-hosted `sxc_seed` with
+`selfhost/compiler_min.sa:543:18: semantic error: undefined function 'sx_eq'`
+(the legacy compiler predates the `sx_eq` builtin that `compiler_min.sa` uses).
+These are pre-existing and untouched by this pass.
+
 `make gen3` is **not** affected: it uses the `gen2` that `true-selfhost-min`
 builds from `compiler_min.sa`, not this chain. CI does not run `subset`,
-`gen1`, `gen2` or `true-selfhost-full`. The likely fix is one line — adding
-`#include <stdarg.h>` to the prelude emitted by `sxc_seed.c` (around line 801,
-where it writes `#include "sx_runtime.h"`) — but it was not attempted here.
+`gen1`, `gen2` or `true-selfhost-full`. Fixing the chain means teaching the
+legacy `sxc_seed` the missing builtins (or dropping the chain); it was not
+attempted here.
 
-### `make clean` deletes a tracked binary
+### `make clean` deleted a tracked binary — fixed 2026-10-06
 
-`selfhost/seed/sxc_seed` is a 51904-byte compiled binary that is checked into
-git, and `clean:` runs `rm -f $(SEED_BIN)`. So a build-then-clean cycle leaves
-the working tree dirty with a deleted tracked file. It was restored after
-testing and is not part of this change. The coherent fix is to stop tracking it
-(`git rm --cached selfhost/seed/sxc_seed` plus a `.gitignore` entry), which
-would also match the CI job "Verify generated artifacts are not tracked". The
-binary is rebuilt from `sxc_seed.c` by `make seed-bin` whenever it is needed.
+`selfhost/seed/sxc_seed` is a checked-in binary and `clean:` used to run
+`rm -f $(SEED_BIN)`, so a build-then-clean cycle left a deleted-but-committed
+file in the working tree. `clean:` no longer touches it: it removes only
+generated artifacts (`gen1*`, `gen2*`, `gen3*`, `gen4.c`, `sxc_seed_min`,
+`native_aot`, the `boot_from_gen2*` scratch programs). `selfhost/seed/sxc_seed`
+is rebuilt from `sxc_seed.c` by the `.PHONY` target `make seed-bin` whenever it
+is needed, so untracking it later stays an option.
+
+### `restore-compiler` could overwrite a good source — fixed 2026-10-06
+
+The fallback decoded the blob straight into `selfhost/compiler_min.sa` and only
+then ran its marker checks. With `grep` missing from `PATH` the checks fail
+*after* the file has been replaced, so an out-of-date blob silently downgraded a
+newer `compiler_min.sa`. Now the decode goes to `compiler_min.sa.tmp`, every
+check runs against the temp file, and only a fully verified decode is copied
+over the real file (`.tmp` is removed on every failure path). Verified: with
+`grep` absent the target exits 2 and the sha256 of the existing source is
+unchanged; with a deliberately corrupted `00.b64` and no source file present,
+the target exits 2 and creates no file and no stray `.tmp`.
 
 ## 8. Reproducing this audit
 
 ```bash
-make doctor          # prints the tool table, OK/FAIL per tool
+make doctor          # === DOCTOR-OK ===, tool table
 make true-selfhost   # === TRUE-SELFHOST-MIN-OK ===
 make gen3            # === GEN3-OK ===, [OK] byte-identical gen3 == gen4
 make native-test     # === NATIVE-TEST-OK ===
 ```
+
+Measured on this host (3939 MB RAM, 2 CPUs, `/bin/sh` = dash) from a clean tree:
+
+| Step | Wall time | Peak RSS (VmHWM) |
+|------|-----------|------------------|
+| `make true-selfhost` | 11.9 s | seed-min 1.5 MB, gen1_min 29 MB, gen2 75 MB |
+| `make gen3` | 7.4 s | 75 MB (gen2 compiling `compiler_min.sa`) |
+| `make native-test` | 0.2 s | — |
+
+No step comes near the OOM killer: `gen2` still produces byte-identical output
+under `ulimit -v 400000` (a 400 MB address-space cap).
 
 To re-measure the external command set yourself, put logging wrappers for your
 `PATH` earlier in `PATH` and diff the resulting invocation log against the

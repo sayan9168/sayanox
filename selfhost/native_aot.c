@@ -23,7 +23,8 @@
  * rdi rsi rdx rcx r8 r9 (ints, <= 6). give = return; a function that
  * falls off returns 0.
  *
- * Scratch policy: r15 = left operand / base held across a sub-emit;
+ * Scratch policy: the left operand of a binary operator is held on the
+ * machine stack (push/pop) across the sub-emit; r15 = short-lived temp;
  * r14 = saved data-scratch across a literal; r11 = literal fill temp;
  * [r12+OFF_SCR] = current literal base; [r12+OFF_HOLD..] = index bases
  * (4 slots, by nesting level). Runtime helpers preserve r12 (and every
@@ -58,7 +59,9 @@ static unsigned char data[DMAX]; static size_t dn;
 #define OFF_END   24  /* end of heap chunk  */
 #define OFF_ARGV  8   /* char **argv        */
 #define OFF_ARGC  16  /* long argc          */
-#define OFF_SCR   24  /* 8-byte scratch     */
+#define OFF_SCR   32  /* 8-byte scratch     */
+                      /* (must NOT alias OFF_END: store_scr() writes here on
+                         every literal, and OFF_END is the heap chunk end) */
 static size_t d_glob; /* globals array      */
 static size_t d_hold; /* index-base slots   */
 static size_t d_err_div, d_err_list, d_err_str, d_err_malloc;
@@ -420,6 +423,11 @@ static void collect_defs(const char*src){
  * (for structs) the struct id of the value just parsed. */
 static int PKX_K=K_NUM, PKX_S=-1;
 static int fkind_seen[MAXS][MAXFD], fkind_val[MAXS][MAXFD], fsid_val[MAXS][MAXFD];
+/* While the kind inference fixpoint runs, a field chain that is not resolved
+   *yet* is normal (the struct table is only filled in one level per round), so
+   it must come back as K_UNK instead of aborting.  The final validation scan
+   and the emit phase run with pk_soft=0 and still report every real error. */
+static int pk_soft=0;
 
 static int pk_prim(const char**p,int depth);
 static int pk_term(const char**p,int depth);
@@ -498,6 +506,13 @@ static int pk_prim(const char**p,int depth){
         }
         int k=pk_rel(p,depth+1);
         if(k==K_STRUCT&&PKX_S<0) k=K_UNK;
+        /* the shared dialect (seed-min and gen2) rejects a list inside a
+           struct field and a struct nested from a later declaration; native
+           must not accept a program the other two reject. */
+        if(k==K_LIST)
+          errx("struct '%s' field '%s' cannot hold a list (seed-min/gen2 reject this)",S[sid].name,S[sid].f[fi].name);
+        if(k==K_STRUCT&&PKX_S>=sid)
+          errx("struct '%s' nests struct '%s' declared later; declare the nested struct first",S[sid].name,S[PKX_S].name);
         if(fkind_seen[sid][fi]){
           if(fkind_val[sid][fi]!=k)
             errx("struct field '%s.%s' is used with two different types",S[sid].name,S[sid].f[fi].name);
@@ -589,17 +604,33 @@ static int pk_term(const char**p,int depth){
       continue;
     }
     if(*q=='.'){
-      if(k!=K_STRUCT) errx("cannot access a field of a %s",kname(k));
+      if(k!=K_STRUCT){
+        if(!pk_soft) errx("cannot access a field of a %s",kname(k));
+        PKX_K=K_UNK; PKX_S=-1;
+      }
       (*p)=q; (*p)++;
       char fn[64];
       if(!pid(p,fn,64)) errx("expected a field name after .");
       int sid=PKX_S;
-      if(sid<0) errx("cannot resolve the struct type here");
+      if(k!=K_STRUCT||sid<0){
+        /* unknown so far: consume the field name and keep K_UNK (soft) or
+           report it (hard) */
+        if(!pk_soft) errx("cannot resolve the struct type here");
+        k=K_UNK; PKX_S=-1; continue;
+      }
       int fi=s_field(sid,fn);
-      if(fi<0) errx("no field '%s' in struct '%s'",fn,S[sid].name);
+      if(fi<0){
+        if(!pk_soft) errx("no field '%s' in struct '%s'",fn,S[sid].name);
+        k=K_UNK; PKX_S=-1; continue;
+      }
       int fk=S[sid].f[fi].kind;
       if(fk==K_STRUCT&&S[sid].f[fi].sid<0) fk=K_UNK;
       k=fk;
+      /* the field may itself be a struct: carry its id so that the next
+         `.name` in a chain (l.a.x) resolves against the inner struct, not
+         against the outer one.  Without this, `l.a.x` looked up `x` in
+         `Line` and was rejected. */
+      PKX_S=(fk==K_STRUCT)?S[sid].f[fi].sid:-1;
       continue;
     }
     break;
@@ -691,17 +722,30 @@ static int infer_round(const char*src){
   }
   return changed;
 }
-static void infer(const char*src){
-  for(int round=0;round<16;round++)
-    if(!infer_round(src)) break;
+/* copy the field kinds learned so far into the struct table; returns 1 when
+   anything changed.  Published after every round (not only at the end) so a
+   chain such as r.q.p.x resolves one `.field` per round. */
+static int infer_publish(void){
+  int changed=0;
   for(int s=0;s<nS;s++) for(int f=0;f<S[s].nf;f++){
+    int k=K_NUM, sid=-1;
     if(fkind_seen[s][f]){
-      S[s].f[f].kind=fkind_val[s][f];
-      S[s].f[f].sid=(fkind_val[s][f]==K_STRUCT)?fsid_val[s][f]:-1;
-    } else {
-      S[s].f[f].kind=K_NUM; S[s].f[f].sid=-1;
+      k=fkind_val[s][f];
+      sid=(k==K_STRUCT)?fsid_val[s][f]:-1;
     }
+    if(S[s].f[f].kind!=k){ S[s].f[f].kind=k; changed=1; }
+    if(S[s].f[f].sid!=sid){ S[s].f[f].sid=sid; changed=1; }
   }
+  return changed;
+}
+static void infer(const char*src){
+  pk_soft=1;
+  for(int round=0;round<16;round++){
+    int changed=infer_round(src);
+    changed|=infer_publish();
+    if(!changed) break;
+  }
+  pk_soft=0;
   const char*p=src;
   while(*p){
     const char*line=p; sw(&p);
@@ -769,9 +813,13 @@ static void load_scr(void){ mv_r64m(AX,12,-1,0,OFF_SCR); }
 static void save_scr(int r){ mv_m64(12,-1,0,OFF_SCR,r); }
 static void load_scr_r(int r){ mv_r64m(r,12,-1,0,OFF_SCR); }
 
-/* literal helpers: save/restore the outer scratch in r14 */
-static void lit_begin(void){ mv_r64m(14,12,-1,0,OFF_SCR); }
-static void lit_end(void){ load_scr(); save_scr(14); } /* rax = this literal; outer scratch back */
+/* literal helpers: the enclosing literal is pushed on the machine stack.
+   r14 alone is not enough -- a nested builtin call (concat) clobbers it, and
+   with three levels of nesting the grandparent was lost, so the inner block
+   was stored into the wrong struct (r.q.p.x read a pointer, not a number).
+   [r12+OFF_SCR] holds the literal currently being built. */
+static void lit_begin(void){ mv_r64m(14,12,-1,0,OFF_SCR); push_r(14); }
+static void lit_end(void){ load_scr(); pop_r(14); save_scr(14); } /* rax = this literal; outer scratch back */
 
 /* ---- primary ---- */
 static void emit_prim(const char**p,int depth){
@@ -881,6 +929,10 @@ static void emit_prim(const char**p,int depth){
           fi=cnt;
         }
         emit_expr(p,depth+1);
+        if(XK==K_LIST)
+          errx("struct '%s' field '%s' cannot hold a list (seed-min/gen2 reject this)",S[sid].name,S[sid].f[cnt].name);
+        if(XK==K_STRUCT&&XS>=sid)
+          errx("struct '%s' nests struct '%s' declared later; declare the nested struct first",S[sid].name,S[XS].name);
         if(S[sid].f[cnt].kind!=XK)
           errx("struct field '%s.%s' is used with two different types",S[sid].name,S[sid].f[cnt].name);
         mv_rr(11,AX);
@@ -1137,11 +1189,15 @@ static void emit_term(const char**p,int depth){
     if(op!='*'&&op!='/'&&op!='%') break;
     if(XK!=K_NUM) errx("%c is numeric-only",op);
     (*p)++;
-    mv_rr(15,AX);                /* r15 = left */
+    /* the left operand MUST live on the machine stack, not in r15: the
+       right side is a full primary and a nested `*`/`/`/`%` used to clobber
+       r15, so `a + 3 * 4` evaluated as (a+3)*4.  push/pop survives every
+       callee (builtins use r9/r11/r13/r14 and calls are balanced). */
+    push_r(AX);                  /* [stack] = left */
     emit_prim(p,depth);
     if(XK!=K_NUM) errx("%c is numeric-only",op);
     mv_rr(CX,AX);                /* rcx = right */
-    mv_rr(AX,15);                /* rax = left */
+    pop_r(AX);                   /* rax = left */
     if(op=='*'){
       rexb(1,0,0,0); e1(0x0f); e1(0xaf); e1((uint8_t)(0xC0|(AX<<3)|CX)); /* imul rax, rcx (reg=dest) */
     } else {
@@ -1167,10 +1223,10 @@ static void emit_rel(const char**p,int depth){
     sw(p); char op=**p;
     if(op!='+'&&op!='-') break;
     (*p)++;
-    mv_rr(15,AX);                /* r15 = left (value or ptr) */
+    push_r(AX);                  /* [stack] = left (value or ptr) */
     int lk=XK;
     emit_term(p,depth);
-    mv_rr(CX,15);
+    pop_r(CX);                   /* rcx = left */
     if(op=='+'){
       if(lk==K_STR||XK==K_STR){
         if(lk==K_STR){ mv_rr(DI,CX); }
@@ -1185,8 +1241,9 @@ static void emit_rel(const char**p,int depth){
       }
     } else {
       if(lk!=K_NUM||XK!=K_NUM) errx("- is numeric-only");
-      mv_rr(CX,AX);              /* rcx = right */
-      mv_rr(AX,15);              /* rax = left */
+      mv_rr(15,AX);              /* r15 = right (short-lived temp) */
+      mv_rr(AX,CX);              /* rax = left */
+      mv_rr(CX,15);              /* rcx = right */
       bin_rr(0x29,AX,CX);        /* sub rax, rcx = left - right */
     }
   }
@@ -1206,10 +1263,10 @@ static void emit_expr(const char**p,int depth){
   if(!op) return;
   if(XK==K_LIST||XK==K_STRUCT) errx("cannot compare %s with a value",kname(XK));
   *p += is2? 2 : 1;
-  mv_rr(15,AX);
+  push_r(AX);                    /* [stack] = left */
   int lk=XK;
   emit_rel(p,depth);
-  mv_rr(CX,15);
+  pop_r(CX);                     /* rcx = left */
   if(lk==K_STR){
     if(XK!=K_STR) errx("string compared with a non-string");
     mv_rr(DI,CX);
@@ -1332,14 +1389,19 @@ static void emit_prog(const char**p,int in_fn,int stop){
       sw(p);
       if(mkw(p,"otherwise")||mkw(p,"else")){
         /* false -> the else block below; the then body must skip over it with
-           an unconditional jump (its instructions destroy the cond flags) */
+           an unconditional jump (its instructions destroy the cond flags).
+           jz_at must target the FIRST BYTE of the else body, i.e. the offset
+           right after that unconditional jump.  It must not target a second
+           conditional jump placed there: control would arrive with the
+           condition's flags still live, so the false case would take that JZ
+           and jump straight past the else body -- silently printing nothing
+           for `when c { .. } else { .. }` when c was false. */
         size_t jmpend_at=cn; jmp_rel32(0);
-        size_t j2=cn; jcc_rel32(JC_Z,0);
+        size_t j2=cn;                      /* else-body entry (no instruction) */
         sw(p);
         if(**p!='{') errx("else needs { ... }");
         (*p)++;
         emit_prog(p,in_fn,1);
-        erel32(j2,cn);
         erel32j(jmpend_at,cn);
         erel32(jz_at,j2);
       } else erel32(jz_at,cn);
@@ -2079,7 +2141,7 @@ int main(int argc,char**argv){
   collect_defs(src);
   infer(src);
 
-  dn=32;
+  dn=40;                /* 0,8,16,24 = cur/argv/argc/end; 32 = literal scratch */
   d_glob=d_alloc(NSLOT*8);
   d_hold=d_alloc(4*8);
   d_err_div=d_str("division by zero");

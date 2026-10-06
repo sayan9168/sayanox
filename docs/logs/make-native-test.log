@@ -1,13 +1,21 @@
 cc -O2 -o selfhost/native_aot selfhost/native_aot.c
 ./selfhost/native_aot examples/native_hello.sa selfhost/seed_tests/native_hello
-native_aot: examples/native_hello.sa -> selfhost/seed_tests/native_hello (real x86-64, 1353 code bytes, no clang)
 ./selfhost/native_aot selfhost/seed_tests/native_negative.sa selfhost/seed_tests/native_negative
-native_aot: selfhost/seed_tests/native_negative.sa -> selfhost/seed_tests/native_negative (real x86-64, 1330 code bytes, no clang)
 ./selfhost/native_aot selfhost/seed_tests/native_while.sa selfhost/seed_tests/native_while
-native_aot: selfhost/seed_tests/native_while.sa -> selfhost/seed_tests/native_while (real x86-64, 1419 code bytes, no clang)
 ./selfhost/native_aot selfhost/seed_tests/native_mod.sa selfhost/seed_tests/native_mod
-native_aot: selfhost/seed_tests/native_mod.sa -> selfhost/seed_tests/native_mod (real x86-64, 1423 code bytes, no clang)
+./selfhost/native_aot selfhost/seed_tests/native_else.sa selfhost/seed_tests/native_else
+./selfhost/native_aot selfhost/seed_tests/native_list.sa selfhost/seed_tests/native_list
+./selfhost/native_aot selfhost/seed_tests/native_push.sa selfhost/seed_tests/native_push
+./selfhost/native_aot selfhost/seed_tests/native_oob.sa selfhost/seed_tests/native_oob
 ./selfhost/native_aot selfhost/seed_tests/native_slot.sa selfhost/seed_tests/native_slot
-native_aot: selfhost/seed_tests/native_slot.sa -> selfhost/seed_tests/native_slot (real x86-64, 1350 code bytes, no clang)
-[OK] native: modulo, else alias, distinct name slots, undefined names, lists/structs rejected
+./selfhost/native_aot selfhost/seed_tests/native_struct.sa selfhost/seed_tests/native_struct
+./selfhost/native_aot selfhost/seed_tests/native_nest.sa selfhost/seed_tests/native_nest
+./selfhost/native_aot selfhost/seed_tests/native_nest3.sa selfhost/seed_tests/native_nest3
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/native_nest3.sa > selfhost/seed_tests/native_nest3_sm.c
+cc -O2 -o selfhost/seed_tests/native_nest3_sm selfhost/seed_tests/native_nest3_sm.c
+./selfhost/gen2 selfhost/seed_tests/native_nest3.sa selfhost/seed_tests/native_nest3_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/native_nest3_g2 selfhost/seed_tests/native_nest3_g2.c
+[OK] native nested structs: l.a.x chains (2 and 3 levels), typed copy; seed-min and gen2 agree
+[OK] native rejects (clearly): later-declared nesting, list in struct, show of struct, bad chain
+[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs
 === NATIVE-TEST-OK ===
