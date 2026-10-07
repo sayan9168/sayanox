@@ -25,6 +25,8 @@ SXFMT_C  := tools/sxfmt.c
 SXFMT_BIN := tools/sxfmt
 SXPKG_C  := tools/sxpkg.c
 SXPKG_BIN := tools/sxpkg
+LSP_C    := tools/sayanox_lsp.c
+LSP_BIN  := tools/sayanox_lsp
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
@@ -182,6 +184,21 @@ $(SXPKG_BIN): $(GEN2) tools/sxpkg.sa
 
 sxpkg: $(SXPKG_BIN)
 tools: sxfmt sxpkg
+
+# The language server is a normal Sayanox program: gen2 compiles it, cc builds it.
+$(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa
+	$(GEN2) tools/sayanox_lsp.sa $(LSP_C)
+	$(CC) -O2 -o $(LSP_BIN) $(LSP_C)
+
+lsp: $(LSP_BIN)
+	@echo "=== LSP-OK ==="
+
+# A full JSON-RPC session against the built server: initialize, didOpen,
+# hover, definition, documentSymbol, completion, diagnostic, didChange,
+# shutdown, exit.  The probe prints one line per verified fact.
+test-lsp: $(LSP_BIN) tools/sayanox-lsp-probe.sh
+	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN),initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change)
+	@echo "[OK] Sayanox LSP: live JSON-RPC session, real diagnostics, symbols, completion, hover, definition"
 
 test-sxfmt: sxfmt
 	@mkdir -p $(TESTS)
@@ -910,7 +927,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-parity test-sxfmt test-sxpkg
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-parity test-sxfmt test-sxpkg test-lsp
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -1178,7 +1195,7 @@ test: true-selfhost
 # `make seed-bin` (it is a .PHONY target, so it always rebuilds from source).
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
-	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C)
+	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C)
 
 # ---------------------------------------------------------------------------
 # doctor: check that the minimal tool set is present. Nothing else is needed to

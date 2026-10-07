@@ -213,6 +213,10 @@ hold aword = ""
 hold atype = ""
 hold dtok = 0
 hold dtok2 = 0
+hold savdecls = "|"
+hold savsdecls = "|"
+hold savldecls = "|"
+hold savsvars = ""
 hold ppi = 0
 hold ppl = 0
 hold ppstart = 0
@@ -311,6 +315,14 @@ hold ocp = 0
 hold ocsk = 0
 hold ocx = 0
 hold ocarg = ""
+hold ocargv = ""
+hold ocargq = 0
+hold ocak = 0
+hold ocakn = 0
+hold ocac = 0
+hold ocaw = ""
+hold ocawr = 0
+hold ocam = ""
 hold ocarg2 = ""
 hold ocarg3 = ""
 hold ocdepth = 0
@@ -558,12 +570,14 @@ hold aa = 0
 hold bb = 0
 hold pdepth = 0
 hold argv_c = ""
+hold argv_q = 0
 hold ai = 0
 hold al = 0
 hold arun = 0
 hold ac = 0
 hold islet = 0
 hold atok = ""
+hold amap = 0
 hold tokrun = 0
 // chained binary operands (two-register mul/add machine)
 hold opfldstr = 0
@@ -2640,6 +2654,11 @@ while running == 1 {
     when act == 1 || act == 2 {
       when bpush == 0 {
         hold pp = pos + 4
+        // an assignment statement keeps the name at pos (no `hold` keyword);
+        // a repeated `hold` of an existing name compiles as an assignment
+        when act == 1 && asmode == 1 {
+          hold pp = pos
+        }
         hold prun = 1
         while prun == 1 {
           when pp >= n {
@@ -4673,11 +4692,19 @@ while running == 1 {
           hold ai = 0
           hold al = len(argv_txt)
           hold arun = 1
+          hold argv_q = 0
           while arun == 1 {
             when ai >= al {
               hold arun = 0
             } otherwise {
               hold ac = sx_index(argv_txt,ai)
+              when argv_q == 1 {
+                hold argv_c = concat(argv_c, chr(ac))
+                when ac == 34 {
+                  hold argv_q = 0
+                }
+                hold ai = ai + 1
+              } otherwise {
               hold islet = 0
               when (ac >= 97 && ac <= 122) || (ac >= 65 && ac <= 90) || ac == 95 {
                 hold islet = 1
@@ -4698,53 +4725,95 @@ while running == 1 {
                     }
                   }
                 }
+                hold amap = 0
                 when sx_eq(atok, "concat") {
                   hold argv_c = concat(argv_c, "sx_cat")
-                } otherwise {
-                  when sx_eq(atok, "len") {
-                    hold argv_c = concat(argv_c, "sx_len")
-                  } otherwise {
-                    when sx_eq(atok, "sx_index") {
-                      hold argv_c = concat(argv_c, "sx_idx")
-                    } otherwise {
-                      when sx_eq(atok, "chr") {
-                        hold argv_c = concat(argv_c, "sx_chr")
-                      } otherwise {
-                        when sx_eq(atok, "read_file") {
-                          hold argv_c = concat(argv_c, "sx_read")
-                        } otherwise {
-                          when sx_eq(atok, "write_file") {
-                            hold argv_c = concat(argv_c, "sx_write")
-                          } otherwise {
-                            when sx_eq(atok, "arg") {
-                              hold argv_c = concat(argv_c, "sx_arg")
-                            } otherwise {
-                              when sx_eq(atok, "arg_count") {
-                                hold argv_c = concat(argv_c, "sx_argc")
-                              } otherwise {
-                                hold argv_c = concat(argv_c, atok)
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
+                  hold amap = 1
+                }
+                when sx_eq(atok, "len") {
+                  hold argv_c = concat(argv_c, "sx_len")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "sx_index") {
+                  hold argv_c = concat(argv_c, "sx_idx")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "index") {
+                  hold argv_c = concat(argv_c, "sx_idx")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "chr") {
+                  hold argv_c = concat(argv_c, "sx_chr")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "read_file") {
+                  hold argv_c = concat(argv_c, "sx_read")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "write_file") {
+                  hold argv_c = concat(argv_c, "sx_write")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "arg") {
+                  hold argv_c = concat(argv_c, "sx_arg")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "arg_count") {
+                  hold argv_c = concat(argv_c, "sx_argc")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "string_eq") {
+                  hold argv_c = concat(argv_c, "sx_eq")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "push") {
+                  hold argv_c = concat(argv_c, "sx_lpush")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "numstr") {
+                  hold argv_c = concat(argv_c, "sx_numstr")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "read_line") {
+                  hold argv_c = concat(argv_c, "sx_read_line")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "read_n") {
+                  hold argv_c = concat(argv_c, "sx_read_n")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "write_out") {
+                  hold argv_c = concat(argv_c, "sx_write_out")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "flush_out") {
+                  hold argv_c = concat(argv_c, "sx_flush_out")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "gc") {
+                  hold argv_c = concat(argv_c, "sx_gc_run")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "gc_live") {
+                  hold argv_c = concat(argv_c, "sx_gc_live")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "gc_runs") {
+                  hold argv_c = concat(argv_c, "sx_gc_count")
+                  hold amap = 1
+                }
+                when amap == 0 {
+                  hold argv_c = concat(argv_c, atok)
                 }
               } otherwise {
+                when ac == 34 {
+                  hold argv_q = 1
+                }
                 hold argv_c = concat(argv_c, chr(ac))
                 hold ai = ai + 1
               }
+              }
             }
-          }
-          when sx_eq(atok, "gc") {
-            hold argv_c = "sx_gc_run"
-          }
-          when sx_eq(atok, "gc_live") {
-            hold argv_c = "sx_gc_live"
-          }
-          when sx_eq(atok, "gc_runs") {
-            hold argv_c = "sx_gc_count"
           }
           hold fk = 0
           when sx_eq(nm2, "concat") {
@@ -4785,6 +4854,21 @@ while running == 1 {
           }
           when sx_eq(nm2, "gc_runs") || sx_eq(nm2, "sx_gc_count") {
             hold fk = 14
+          }
+          when sx_eq(nm2, "read_line") || sx_eq(nm2, "sx_read_line") {
+            hold fk = 15
+          }
+          when sx_eq(nm2, "read_n") || sx_eq(nm2, "sx_read_n") {
+            hold fk = 16
+          }
+          when sx_eq(nm2, "write_out") || sx_eq(nm2, "sx_write_out") {
+            hold fk = 17
+          }
+          when sx_eq(nm2, "flush_out") || sx_eq(nm2, "sx_flush_out") {
+            hold fk = 18
+          }
+          when sx_eq(nm2, "numstr") || sx_eq(nm2, "sx_numstr") {
+            hold fk = 19
           }
           when sx_eq(nm2, "push") {
             hold fk = 10
@@ -4903,6 +4987,32 @@ while running == 1 {
           }
           when fk == 14 {
             hold rhs = "sx_gc_count()"
+          }
+          when fk == 15 {
+            hold rhs = "sx_read_line()"
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 16 {
+            hold rhs = concat("sx_read_n(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 17 {
+            hold rhs = concat("sx_write_out(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 18 {
+            hold rhs = "sx_flush_out()"
+            hold rt = 1
+          }
+          when fk == 19 {
+            hold rhs = concat("sx_numstr(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
           }
           when fk == 10 {
             // the pushed value must be a number: a plain string, list or
@@ -6034,6 +6144,24 @@ hold ec = 0
               when sx_eq(nm3, "gc_runs") || sx_eq(nm3, "sx_gc_count") {
                 hold ocmap = "sx_gc_count"
               }
+              when sx_eq(nm3, "read_line") || sx_eq(nm3, "sx_read_line") {
+                hold ocmap = "sx_read_line"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "read_n") || sx_eq(nm3, "sx_read_n") {
+                hold ocmap = "sx_read_n"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "write_out") || sx_eq(nm3, "sx_write_out") {
+                hold ocmap = "sx_write_out"
+              }
+              when sx_eq(nm3, "flush_out") || sx_eq(nm3, "sx_flush_out") {
+                hold ocmap = "sx_flush_out"
+              }
+              when sx_eq(nm3, "numstr") || sx_eq(nm3, "sx_numstr") {
+                hold ocmap = "sx_numstr"
+                hold ocstr = 1
+              }
               when sx_eq(nm3, "string_eq") || sx_eq(nm3, "sx_eq") {
                 hold ocmap = "sx_eq"
               }
@@ -6155,6 +6283,105 @@ hold ec = 0
                 }
                 hold ocmap = nm3
               }
+              // builtin calls nested in the argument text are mapped here too,
+              // so `concat(a, numstr(n))` works as a right-hand operand
+              hold ocargv = ""
+              hold ocak = 0
+              hold ocakn = len(ocarg)
+              hold ocargq = 0
+              while ocak < ocakn {
+                hold ocac = sx_index(ocarg, ocak)
+                when ocargq == 1 {
+                  hold ocargv = concat(ocargv, chr(ocac))
+                  when ocac == 34 {
+                    hold ocargq = 0
+                  }
+                  hold ocak = ocak + 1
+                } otherwise {
+                when (ocac >= 97 && ocac <= 122) || (ocac >= 65 && ocac <= 90) || ocac == 95 {
+                  hold ocaw = ""
+                  hold ocawr = 1
+                  while ocawr == 1 {
+                    hold ocac = sx_index(ocarg, ocak)
+                    when (ocac >= 97 && ocac <= 122) || (ocac >= 65 && ocac <= 90) || (ocac >= 48 && ocac <= 57) || ocac == 95 {
+                      hold ocaw = concat(ocaw, chr(ocac))
+                      hold ocak = ocak + 1
+                    } otherwise {
+                      hold ocawr = 0
+                    }
+                    when ocak >= ocakn {
+                      hold ocawr = 0
+                    }
+                  }
+                  hold ocam = ocaw
+                  when sx_eq(ocaw, "concat") {
+                    hold ocam = "sx_cat"
+                  }
+                  when sx_eq(ocaw, "len") {
+                    hold ocam = "sx_len"
+                  }
+                  when sx_eq(ocaw, "sx_index") {
+                    hold ocam = "sx_idx"
+                  }
+                  when sx_eq(ocaw, "index") {
+                    hold ocam = "sx_idx"
+                  }
+                  when sx_eq(ocaw, "chr") {
+                    hold ocam = "sx_chr"
+                  }
+                  when sx_eq(ocaw, "read_file") {
+                    hold ocam = "sx_read"
+                  }
+                  when sx_eq(ocaw, "write_file") {
+                    hold ocam = "sx_write"
+                  }
+                  when sx_eq(ocaw, "arg") {
+                    hold ocam = "sx_arg"
+                  }
+                  when sx_eq(ocaw, "arg_count") {
+                    hold ocam = "sx_argc"
+                  }
+                  when sx_eq(ocaw, "string_eq") {
+                    hold ocam = "sx_eq"
+                  }
+                  when sx_eq(ocaw, "push") {
+                    hold ocam = "sx_lpush"
+                  }
+                  when sx_eq(ocaw, "numstr") {
+                    hold ocam = "sx_numstr"
+                  }
+                  when sx_eq(ocaw, "read_line") {
+                    hold ocam = "sx_read_line"
+                  }
+                  when sx_eq(ocaw, "read_n") {
+                    hold ocam = "sx_read_n"
+                  }
+                  when sx_eq(ocaw, "write_out") {
+                    hold ocam = "sx_write_out"
+                  }
+                  when sx_eq(ocaw, "flush_out") {
+                    hold ocam = "sx_flush_out"
+                  }
+                  when sx_eq(ocaw, "gc") {
+                    hold ocam = "sx_gc_run"
+                  }
+                  when sx_eq(ocaw, "gc_live") {
+                    hold ocam = "sx_gc_live"
+                  }
+                  when sx_eq(ocaw, "gc_runs") {
+                    hold ocam = "sx_gc_count"
+                  }
+                  hold ocargv = concat(ocargv, ocam)
+                } otherwise {
+                  when ocac == 34 {
+                    hold ocargq = 1
+                  }
+                  hold ocargv = concat(ocargv, chr(ocac))
+                  hold ocak = ocak + 1
+                }
+                }
+              }
+              hold ocarg = ocargv
               hold opnd = concat(ocmap, "(")
               hold opnd = concat(opnd, ocarg)
               hold opnd = concat(opnd, ")")
@@ -7039,26 +7266,25 @@ hold ec = 0
             }
           }
           hold pos = pos + 1
-          when sx_eq(atok, "gc") {
-            hold argv_c = "sx_gc_run"
-          }
-          when sx_eq(atok, "gc_live") {
-            hold argv_c = "sx_gc_live"
-          }
-          when sx_eq(atok, "gc_runs") {
-            hold argv_c = "sx_gc_count"
-          }
           hold fk = 0
           // Normalize builtin identifiers inside argument text for nested calls.
           hold argv_c = ""
           hold ai = 0
           hold al = len(argv_txt)
           hold arun = 1
+          hold argv_q = 0
           while arun == 1 {
             when ai >= al {
               hold arun = 0
             } otherwise {
               hold ac = sx_index(argv_txt,ai)
+              when argv_q == 1 {
+                hold argv_c = concat(argv_c, chr(ac))
+                when ac == 34 {
+                  hold argv_q = 0
+                }
+                hold ai = ai + 1
+              } otherwise {
               hold islet = 0
               when (ac >= 97 && ac <= 122) || (ac >= 65 && ac <= 90) || ac == 95 {
                 hold islet = 1
@@ -7079,42 +7305,93 @@ hold ec = 0
                     }
                   }
                 }
+                hold amap = 0
                 when sx_eq(atok, "concat") {
                   hold argv_c = concat(argv_c, "sx_cat")
-                } otherwise {
-                  when sx_eq(atok, "len") {
-                    hold argv_c = concat(argv_c, "sx_len")
-                  } otherwise {
-                    when sx_eq(atok, "sx_index") {
-                      hold argv_c = concat(argv_c, "sx_idx")
-                    } otherwise {
-                      when sx_eq(atok, "chr") {
-                        hold argv_c = concat(argv_c, "sx_chr")
-                      } otherwise {
-                        when sx_eq(atok, "read_file") {
-                          hold argv_c = concat(argv_c, "sx_read")
-                        } otherwise {
-                          when sx_eq(atok, "write_file") {
-                            hold argv_c = concat(argv_c, "sx_write")
-                          } otherwise {
-                            when sx_eq(atok, "arg") {
-                              hold argv_c = concat(argv_c, "sx_arg")
-                            } otherwise {
-                              when sx_eq(atok, "arg_count") {
-                                hold argv_c = concat(argv_c, "sx_argc")
-                              } otherwise {
-                                hold argv_c = concat(argv_c, atok)
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
+                  hold amap = 1
+                }
+                when sx_eq(atok, "len") {
+                  hold argv_c = concat(argv_c, "sx_len")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "sx_index") {
+                  hold argv_c = concat(argv_c, "sx_idx")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "index") {
+                  hold argv_c = concat(argv_c, "sx_idx")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "chr") {
+                  hold argv_c = concat(argv_c, "sx_chr")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "read_file") {
+                  hold argv_c = concat(argv_c, "sx_read")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "write_file") {
+                  hold argv_c = concat(argv_c, "sx_write")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "arg") {
+                  hold argv_c = concat(argv_c, "sx_arg")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "arg_count") {
+                  hold argv_c = concat(argv_c, "sx_argc")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "string_eq") {
+                  hold argv_c = concat(argv_c, "sx_eq")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "push") {
+                  hold argv_c = concat(argv_c, "sx_lpush")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "numstr") {
+                  hold argv_c = concat(argv_c, "sx_numstr")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "read_line") {
+                  hold argv_c = concat(argv_c, "sx_read_line")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "read_n") {
+                  hold argv_c = concat(argv_c, "sx_read_n")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "write_out") {
+                  hold argv_c = concat(argv_c, "sx_write_out")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "flush_out") {
+                  hold argv_c = concat(argv_c, "sx_flush_out")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "gc") {
+                  hold argv_c = concat(argv_c, "sx_gc_run")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "gc_live") {
+                  hold argv_c = concat(argv_c, "sx_gc_live")
+                  hold amap = 1
+                }
+                when sx_eq(atok, "gc_runs") {
+                  hold argv_c = concat(argv_c, "sx_gc_count")
+                  hold amap = 1
+                }
+                when amap == 0 {
+                  hold argv_c = concat(argv_c, atok)
                 }
               } otherwise {
+                when ac == 34 {
+                  hold argv_q = 1
+                }
                 hold argv_c = concat(argv_c, chr(ac))
                 hold ai = ai + 1
+              }
               }
             }
           }
@@ -7156,6 +7433,21 @@ hold ec = 0
           }
           when sx_eq(nm2, "gc_runs") || sx_eq(nm2, "sx_gc_count") {
             hold fk = 14
+          }
+          when sx_eq(nm2, "read_line") || sx_eq(nm2, "sx_read_line") {
+            hold fk = 15
+          }
+          when sx_eq(nm2, "read_n") || sx_eq(nm2, "sx_read_n") {
+            hold fk = 16
+          }
+          when sx_eq(nm2, "write_out") || sx_eq(nm2, "sx_write_out") {
+            hold fk = 17
+          }
+          when sx_eq(nm2, "flush_out") || sx_eq(nm2, "sx_flush_out") {
+            hold fk = 18
+          }
+          when sx_eq(nm2, "numstr") || sx_eq(nm2, "sx_numstr") {
+            hold fk = 19
           }
           when sx_eq(nm2, "sx_cat") {
             hold fk = 1
@@ -7270,6 +7562,32 @@ hold ec = 0
           }
           when fk == 14 {
             hold rhs = "sx_gc_count()"
+          }
+          when fk == 15 {
+            hold rhs = "sx_read_line()"
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 16 {
+            hold rhs = concat("sx_read_n(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 17 {
+            hold rhs = concat("sx_write_out(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 18 {
+            hold rhs = "sx_flush_out()"
+            hold rt = 1
+          }
+          when fk == 19 {
+            hold rhs = concat("sx_numstr(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
           }
           when fk == 0 {
             // user-defined function call: forward the text as-is
@@ -8236,6 +8554,24 @@ hold ec = 0
               when sx_eq(nm3, "gc_runs") || sx_eq(nm3, "sx_gc_count") {
                 hold ocmap = "sx_gc_count"
               }
+              when sx_eq(nm3, "read_line") || sx_eq(nm3, "sx_read_line") {
+                hold ocmap = "sx_read_line"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "read_n") || sx_eq(nm3, "sx_read_n") {
+                hold ocmap = "sx_read_n"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "write_out") || sx_eq(nm3, "sx_write_out") {
+                hold ocmap = "sx_write_out"
+              }
+              when sx_eq(nm3, "flush_out") || sx_eq(nm3, "sx_flush_out") {
+                hold ocmap = "sx_flush_out"
+              }
+              when sx_eq(nm3, "numstr") || sx_eq(nm3, "sx_numstr") {
+                hold ocmap = "sx_numstr"
+                hold ocstr = 1
+              }
               when sx_eq(nm3, "string_eq") || sx_eq(nm3, "sx_eq") {
                 hold ocmap = "sx_eq"
               }
@@ -8357,6 +8693,105 @@ hold ec = 0
                 }
                 hold ocmap = nm3
               }
+              // builtin calls nested in the argument text are mapped here too,
+              // so `concat(a, numstr(n))` works as a right-hand operand
+              hold ocargv = ""
+              hold ocak = 0
+              hold ocakn = len(ocarg)
+              hold ocargq = 0
+              while ocak < ocakn {
+                hold ocac = sx_index(ocarg, ocak)
+                when ocargq == 1 {
+                  hold ocargv = concat(ocargv, chr(ocac))
+                  when ocac == 34 {
+                    hold ocargq = 0
+                  }
+                  hold ocak = ocak + 1
+                } otherwise {
+                when (ocac >= 97 && ocac <= 122) || (ocac >= 65 && ocac <= 90) || ocac == 95 {
+                  hold ocaw = ""
+                  hold ocawr = 1
+                  while ocawr == 1 {
+                    hold ocac = sx_index(ocarg, ocak)
+                    when (ocac >= 97 && ocac <= 122) || (ocac >= 65 && ocac <= 90) || (ocac >= 48 && ocac <= 57) || ocac == 95 {
+                      hold ocaw = concat(ocaw, chr(ocac))
+                      hold ocak = ocak + 1
+                    } otherwise {
+                      hold ocawr = 0
+                    }
+                    when ocak >= ocakn {
+                      hold ocawr = 0
+                    }
+                  }
+                  hold ocam = ocaw
+                  when sx_eq(ocaw, "concat") {
+                    hold ocam = "sx_cat"
+                  }
+                  when sx_eq(ocaw, "len") {
+                    hold ocam = "sx_len"
+                  }
+                  when sx_eq(ocaw, "sx_index") {
+                    hold ocam = "sx_idx"
+                  }
+                  when sx_eq(ocaw, "index") {
+                    hold ocam = "sx_idx"
+                  }
+                  when sx_eq(ocaw, "chr") {
+                    hold ocam = "sx_chr"
+                  }
+                  when sx_eq(ocaw, "read_file") {
+                    hold ocam = "sx_read"
+                  }
+                  when sx_eq(ocaw, "write_file") {
+                    hold ocam = "sx_write"
+                  }
+                  when sx_eq(ocaw, "arg") {
+                    hold ocam = "sx_arg"
+                  }
+                  when sx_eq(ocaw, "arg_count") {
+                    hold ocam = "sx_argc"
+                  }
+                  when sx_eq(ocaw, "string_eq") {
+                    hold ocam = "sx_eq"
+                  }
+                  when sx_eq(ocaw, "push") {
+                    hold ocam = "sx_lpush"
+                  }
+                  when sx_eq(ocaw, "numstr") {
+                    hold ocam = "sx_numstr"
+                  }
+                  when sx_eq(ocaw, "read_line") {
+                    hold ocam = "sx_read_line"
+                  }
+                  when sx_eq(ocaw, "read_n") {
+                    hold ocam = "sx_read_n"
+                  }
+                  when sx_eq(ocaw, "write_out") {
+                    hold ocam = "sx_write_out"
+                  }
+                  when sx_eq(ocaw, "flush_out") {
+                    hold ocam = "sx_flush_out"
+                  }
+                  when sx_eq(ocaw, "gc") {
+                    hold ocam = "sx_gc_run"
+                  }
+                  when sx_eq(ocaw, "gc_live") {
+                    hold ocam = "sx_gc_live"
+                  }
+                  when sx_eq(ocaw, "gc_runs") {
+                    hold ocam = "sx_gc_count"
+                  }
+                  hold ocargv = concat(ocargv, ocam)
+                } otherwise {
+                  when ocac == 34 {
+                    hold ocargq = 1
+                  }
+                  hold ocargv = concat(ocargv, chr(ocac))
+                  hold ocak = ocak + 1
+                }
+                }
+              }
+              hold ocarg = ocargv
               hold opnd = concat(ocmap, "(")
               hold opnd = concat(opnd, ocarg)
               hold opnd = concat(opnd, ")")
@@ -9329,6 +9764,26 @@ hold ec = 0
                 when sx_eq(cwid, "gc_runs") || sx_eq(cwid, "sx_gc_count") {
                   hold cwmap = "sx_gc_count"
                 }
+                when sx_eq(cwid, "read_line") {
+                  hold cwmap = "sx_read_line"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "read_n") {
+                  hold cwmap = "sx_read_n"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "write_out") {
+                  hold cwmap = "sx_write_out"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "flush_out") {
+                  hold cwmap = "sx_flush_out"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "numstr") {
+                  hold cwmap = "sx_numstr"
+                  hold rt = 1
+                }
                 when sx_eq(cwid, "string_eq") {
                   hold cwmap = "sx_eq"
                   hold rt = 1
@@ -9654,6 +10109,13 @@ hold ec = 0
         when loopd > 0 {
           hold loopd = loopd - 1
         }
+      }
+      when bkc == 109 {
+        // end of a make body: the enclosing code's variables are visible again
+        hold decls = savdecls
+        hold sdecls = savsdecls
+        hold ldecls = savldecls
+        hold svars = savsvars
       }
       // look ahead over blanks for the word "otherwise"
       hold wi = pos
@@ -10220,6 +10682,14 @@ hold ec = 0
       hold body = concat(body, fn_params)
       hold body = concat(body, ") {")
       hold body = concat(body, nl)
+      // Variables are scoped to their function: save the tables of the
+      // enclosing (top level) code and start the body with an empty set, so
+      // a `hold n = ...` in one function never turns into an assignment
+      // because another function has a parameter or variable named `n`.
+      hold savdecls = decls
+      hold savsdecls = sdecls
+      hold savldecls = ldecls
+      hold savsvars = svars
       // Remember the parameter kinds.  `show name` and `hold name = ...`
       // inside the body must see a `str`/`list` parameter as the existing
       // variable it is (a numeric parameter stays numeric).
@@ -10971,6 +11441,11 @@ when rt == 1 {
   hold out = concat(out, "static double sx_len(const char *s){ return (double)strlen(s); }\n")
   hold out = concat(out, "static double sx_idx(const char *s,double v){ long i=(long)v; long L=(long)strlen(s); if(i<0) i=i+L; if(i<0||i>=L){ fputs(\"sx: string index out of range\",stderr); exit(1); } return (double)(unsigned char)s[i]; }\n")
   hold out = concat(out, "static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return \"\"; fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET); char *b=(char*)sx_gc_alloc(0,(size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f); return b; }\n")
+  hold out = concat(out, "static char *sx_read_line(void){ char b[4096]; if(!fgets(b,sizeof b,stdin)) return \"\"; size_t n=strlen(b); if(n&&b[n-1]==10) b[n-1]=0; n=strlen(b); if(n&&b[n-1]==13) b[n-1]=0; char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
+  hold out = concat(out, "static char *sx_read_n(double v){ long n=(long)v; if(n<0) return \"\"; char *b=(char*)sx_gc_alloc(0,(size_t)n+1); size_t rd=fread(b,1,(size_t)n,stdin); b[rd]=0; return b; }\n")
+  hold out = concat(out, "static double sx_write_out(const char *s){ fputs(s,stdout); return 1.0; }\n")
+  hold out = concat(out, "static double sx_flush_out(void){ fflush(stdout); return 1.0; }\n")
+  hold out = concat(out, "static char *sx_numstr(double v){ char b[64]; snprintf(b,sizeof b,\"%g\",v); size_t n=strlen(b); char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
   hold out = concat(out, "static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0.0; fputs(s,f); return fclose(f)==0?1.0:0.0; }\n")
   hold out = concat(out, "static double sx_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
   hold out = concat(out, "static double string_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
