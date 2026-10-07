@@ -20,6 +20,11 @@ targets listed at the end of this file, on this host (3939 MB RAM, 2 CPUs,
 `/bin/sh` = dash). Nothing in the table is aspirational. `docs/logs/` holds the
 overwritten with today's runs (2026-10-06).
 
+GitHub Actions (`.github/workflows/ci.yml`) runs exactly these four targets —
+`doctor`, `true-selfhost`, `gen3`, `native-test` — on a clean `ubuntu-latest`
+checkout with no package install and no network: the runner's stock toolchain
+is the minimal tool set `doctor` verifies.
+
 ## Minimal tool set (2026-10-06)
 
 Full audit, measurements and method: **[`DEPENDENCY.md`](../DEPENDENCY.md)**.
@@ -86,7 +91,7 @@ hosts. Measured now, from a clean tree:
 | `gen1_min` compiling `compiler_min.sa` -> `gen2.c` | 29 MB |
 | `gen2` compiling `compiler_min.sa` -> `gen3.c` | 75 MB |
 
-`make true-selfhost` takes 11.9 s and `make gen3` 7.4 s on this host, and
+`make true-selfhost` takes ~11 s and `make gen3` ~6 s on this host, and
 `gen2` still produces byte-identical output under `ulimit -v 400000` (a 400 MB
 address-space cap), so there is no realistic way to hit the OOM killer.
 
@@ -104,20 +109,21 @@ address-space cap), so there is no realistic way to hit the OOM killer.
 | `%` modulo | yes | yes | yes |
 | chained ops (`a + b + c`; `* / %` bind tighter, left-assoc) | yes | yes | yes |
 | `%` inside `when`/`while` conditions | yes | yes | yes |
-| `make` / `give` (top level, numeric) | yes | yes | **no (clear error)** |
-| recursion | yes | yes | **no (clear error)** |
+| `make` / `give` (top level, numeric) | yes | yes | yes (enabled 2026-10-06; `hold` inside a body is a clear error) |
+| recursion | yes | yes | yes (`fac(5)` = 120, `fib(20)` = 6765, mutual recursion) |
 | lists: `[..]`, `xs[i]`, `len` | yes | yes | yes |
 | `hold xs = push(xs, v)` (expression form) | yes | yes | yes |
 | bare `push(xs, v)` statement | **no** (`stmt at ...` error) | **no** (emits C that fails to compile) | yes |
 | structs: number fields, `p.x`, `Point { 1, 2 }` | yes | yes | yes |
 | structs: string fields (`name: "ada"`) | yes | yes | yes |
 | structs: nested 2 and 3 deep (`Line { a: Point { 1, 2 } }`, `l.a.x`), typed copy `hold m = l.a` | yes | yes | yes (verified with `make native-test`) |
-| copy of a doubly nested field (`hold p2 = r.q.p`) | **no** (error) | yes | yes |
+| copy of a doubly nested field (`hold p2 = r.q.p`) | yes (fixed 2026-10-06) | yes | yes |
 | string builtins: `concat len chr` | yes | yes | yes |
 | string builtins: `string_eq` | yes | yes | yes (numeric result) |
-| string builtins: `sx_index read_file write_file arg arg_count` | yes | yes | **partial / not supported** (see divergences) |
-| `use "file.sa"` (modules) | yes | yes | **no (clear error)** |
-| base `OP` operand (`10 % 3`, `p.x + p.y`, `xs[1] + 5`, `len(xs) + 1`) | yes | yes | yes |
+| string builtins: `sx_index` and `s[i]` | yes | yes | yes (fixed 2026-10-06) |
+| builtins: `read_file write_file arg arg_count` | yes | yes | **compiled but broken** (see divergences) |
+| `use "file.sa"` (modules) | yes | yes | yes (spliced before parsing; missing file / unquoted path are clear errors) |
+| base `OP` operand on either side (`10 % 3`, `p.x + p.y`, `xs[1] + 5`, `len(xs) + 1`, `3 * xs[0]`, `p.x * p.x`) | yes | yes | yes (right of `* / %` fixed 2026-10-06) |
 | parenthesized base expression (`(a + 3) * 4`) | yes (20) | **no** (clear error) | yes (20) |
 | fractional literal (`hold x = 2.5`) | **no** (`id at ...` error) | **no** (prints 2) | **no** (`expected a field name after .`) |
 
@@ -135,13 +141,13 @@ compile.
 | `hold a = 2` / `show (a + 3) * 4` | `20` | error: `a parenthesized base is not supported...` + `#error` in the emitted C | `20` |
 | `hold x = 2.5` / `show x` | error: `id at 11` | **prints `2`** (silently drops `.5`) | error: `expected a field name after .` |
 | `hold xs = []` / `push(xs, 5)` (bare statement) | error: `stmt at 13` | **C error** (`'s' undeclared`) | `len`/index correct |
-| `hold s = "abc"` / `show sx_index(s, 0)` | `97` | `97` | error: `string index out of range` |
+| `hold s = "abc"` / `show sx_index(s, 0)` | `97` | `97` | `97` (died `string index out of range` before the 2026-10-06 fix) |
 | `show arg_count()` (no arguments) | `1` (argv[0]) | `1` | `0` |
 | `show arg(0)` | path of the binary | path of the binary | **compiles, then segfaults** |
 | `show read_file(p)` (existing file) | `hi` | `hi` | prints nothing (empty string) |
 | `show write_file(p, s)` then `show read_file(p)` | `1` then `zz` | `1` then `zz` | `0` then nothing |
 | bare `write_file(p, s)` statement | error: `stmt at 0` | C error | runs as a call, silently fails |
-| 3-level chain copy `hold p2 = r.q.p` | error (misleading: `struct R field 'q' has no struct type`) | `7` | `7` |
+| 3-level chain copy `hold p2 = r.q.p` | `7` (misleading `struct R field 'q' has no struct type` error before the 2026-10-06 fix) | `7` | `7` |
 
 The documented dialect (see `docs/SYNTAX.md`, `docs/CHEATSHEET.md`) shows
 `push(xs, 4)` as a statement, which only native accepts. Use
@@ -160,7 +166,8 @@ later literal is a hard error. `hold s = u.name` is typed as a string.
 ```bash
 make true-selfhost   # seed-min -> gen1_min -> gen2, then every feature test on gen2
 make gen3            # gen3 == gen4 byte-identical + feature tests on gen3
-make native-test     # real x86-64: 42, -42, while/done, 10 % 3, else, slot/undefined, lists, structs
+make native-test     # real x86-64: 42, -42, while/done, 10 % 3, else, slot/undefined,
+                     # lists, structs, nested structs, use splice, functions/recursion
 make seed-min        # seed-min: hold/show/while/struct/list/fn/%/else/use
 ```
 
@@ -209,11 +216,12 @@ show l.a.x                  # 1      (seed-min)
   (`hold m = l.b`, `hold r = q`), and a chain through a field that has no
   struct type is a hard error. A list inside a struct field and a struct
   value inside a list are hard errors in both compilers; `show` of a struct
-  value is a hard error in gen2. One asymmetry is left: copying a *doubly*
-  nested field (`hold p2 = r.q.p`) is rejected by seed-min with a misleading
-  message (`struct R field 'q' has no struct type`) while gen2 and native
-  accept it — see the divergence table above. Copying one level
-  (`hold m = l.a`) works everywhere.
+  value is a hard error in gen2 and in native. Copying a *doubly* nested
+  field (`hold p2 = r.q.p`) now works in **all three backends** (seed-min's
+  first collect pass used to walk the chain before the literal scan had
+  typed its links and died with a misleading "has no struct type"; fixed
+  2026-10-06, pinned by `make test-nest` and `make native-test`), as does
+  copying one level (`hold m = l.a`).
 * **A parenthesized base expression is not supported by gen2.** `show (a + 3)
   * 4` works in seed-min and native, but `compiler_min` reports
   `a parenthesized base is not supported by this compiler...` and emits a C
@@ -225,8 +233,15 @@ show l.a.x                  # 1      (seed-min)
   error in seed-min and native; gen2 silently reads the integer part and prints
   `2`. Use integers, or compute `10 / 4` instead of writing `2.5`.
 * **Lists** are `double`-only, one type per program; `push` returns the list.
-* **Functions**: top level only, numeric params/return, recursion works.
-  Calling a user function is supported in `hold` RHS, `show` and `give`.
+* **Functions**: top level only, numeric params/return, recursion works in
+  all three backends (native function codegen was fixed and enabled
+  2026-10-06: up to 6 numeric params, forward references, mutual recursion,
+  zero-arg calls, and calls as arguments of other calls). Calling a user
+  function is supported in `hold` RHS, `show` and `give`. Native rejects
+  `hold` inside a `make` body with a clear error — a local would live in the
+  shared data segment and be clobbered by recursion; compute in `give`
+  expressions or assign to a top-level global instead. seed-min and gen2
+  lower a body `hold` to a real C local.
 * **Statements are newline-terminated**: write one statement per line. In
   particular `give 0 }` on one line swallows the `}` into the returned
   expression; the compiler now reports that as an error instead of letting it
@@ -240,25 +255,41 @@ show l.a.x                  # 1      (seed-min)
 * **Conditions** in `when`/`while` are copied as C text with one rewrite: `%`
   becomes `(double)((long)(a)%(long)(b))`, so `while a % 10 > 0` is correct;
   the remaining operators must be valid C (`*`, `/` and comparisons are).
-* **native_aot** covers `hold/show/when/else/while`, integers, `+ - * / %`,
-  comparisons, `show "str"`, string `concat`/`len`/`chr`/`string_eq`, literal
-  lists (`[1, 2]`, `xs[i]`, `len`, `push` — the list grows in place,
-  out-of-range indexes die), and structs including nested ones
+* **native_aot** covers `hold/show/when/else/while`, integers, `+ - * / %`
+  (postfix operands on either side of any operator: `p.x * p.x`, `3 * xs[0]`;
+  `/` and `%` stay left-associative), comparisons, `show "str"`, string
+  `concat`/`len`/`chr`/`string_eq`/`sx_index` and `s[i]` (the index builtin
+  used to lose its index inside its own strlen call; fixed 2026-10-06),
+  literal lists (`[1, 2]`, `xs[i]`, `len`, `push` — the list grows in place,
+  out-of-range indexes die), structs including nested ones
   (`Line { a: Point { 1, 2 } }`, `l.a.x` chains, typed copies of a struct
-  field). Every distinct variable name gets its own stack slot (two names
-  sharing a first letter no longer share storage) and an undeclared name is a
-  hard error instead of reading as 0. `make`/`give`/recursion, `use`, field
-  access on a non-struct, a later-declared nested struct, a list inside a
-  struct field and `show` of a struct value are rejected with a clear error.
-  **Not supported, and not always loudly:** `/` is integer division, the file
-  and argument builtins (`read_file`, `write_file`, `arg`, `arg_count`,
-  `sx_index`) are compiled but do not work (see the divergence table), and a
-  bare `push(xs, v)` statement is accepted although seed-min and gen2 reject
-  the statement form. Native output is x86-64 Linux only.
-  Functions (`make`/calls) and `use` are rejected with a clear error rather
-  than emitting untested code; nested-struct field chains are WIP. The
-  runtime is a flat BSS data area plus one `mmap` allocator with a linked
-  free list (malloc/memcpy/copy semantics verified by probe programs).
+  field, doubly nested copies `hold p2 = t.q.p`), `use "file.sa"` module
+  splice (before parsing, depth <= 8, resolved against the input file's
+  directory then the cwd; missing file and unquoted path are clear errors;
+  the splice buffer grows, so a large library file cannot overflow it), and
+  functions: top-level `make`/`give`, up to 6 numeric params, recursion
+  (`fib(20)` = 6765, `fac(20)` exact), forward references, mutual recursion,
+  zero-arg calls, global assignment from a body, and calls/builtins as
+  arguments of other calls — every staged argument and every index base
+  rides on the machine stack, so a nested or recursive call cannot clobber
+  them. Function codegen was enabled 2026-10-06 after fixing the parameter
+  spills (params 1/3/4 spilled rbx/r13/r9 instead of rdi/rdx/rcx), the frame
+  size (a fixed 32-byte frame let the first push overwrite params 5-6) and
+  argument staging; `make native-test` pins all of it.
+  Every distinct variable name gets its own data slot (two names sharing a
+  first letter no longer share storage) and an undeclared name is a hard
+  error instead of reading as 0. Rejected with a clear error: `hold` inside
+  a `make` body, `give` outside a function, `make` inside a block, a wrong
+  argument count, a non-numeric argument or `give`, field access on a
+  non-struct, a later-declared nested struct, a list inside a struct field
+  and `show` of a struct value.
+  **Not supported, and not always loudly:** `/` is integer division, the
+  file and argument builtins (`read_file`, `write_file`, `arg`, `arg_count`)
+  are compiled but do not work (see the divergence table), and a bare
+  `push(xs, v)` statement is accepted although seed-min and gen2 reject the
+  statement form. Native output is x86-64 Linux only. The runtime is a flat
+  BSS data area plus one bump allocator over lazily `mmap`ped 64 KiB chunks
+  (malloc/memcpy/copy semantics verified by probe programs).
 * Still not part of pure-min: modules with namespacing/aliases, generics, a
   GC — none of these are claimed anywhere.
 
@@ -272,7 +303,7 @@ show l.a.x                  # 1      (seed-min)
 | `make test-condmod` | `%` long-cast rewrite inside `when`/`while` conditions |
 | `make test-struct2` | named fields, two structs, `p.x + p.y` |
 | `make test-user` | struct string fields (`User name/age`); mismatches are hard errors |
-| `make test-nest` | nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies); clear errors for forward decls, list fields, bad chains, show-of-struct |
+| `make test-nest` | nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies including the doubly nested `hold p2 = t.q.p`); clear errors for forward decls, list fields, bad chains, show-of-struct |
 | `make test-list2` | literal, index, `len`, `push` |
 | `make test-use` | splice, nested depth 2, missing-file error |
 | `make test-fn2` | params, call in `show`, recursion (`fac 5 = 120`) |
@@ -280,4 +311,4 @@ show l.a.x                  # 1      (seed-min)
 | `make test-parity` | seed-min and gen2 agree on one program using the whole shared dialect |
 | `make seed-min` / `test-struct` / `test-list` / `test-fn` | same features on the C seed |
 | `make test-prec` | precedence (`a + 3 * 4` = 14 in seed-min and gen2) and the parenthesized-base divergence (seed-min runs it, gen2 reports it) |
-| `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy, seed-min/gen2 output parity), `else`/`otherwise` false branch, unsupported constructs rejected |
+| `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |

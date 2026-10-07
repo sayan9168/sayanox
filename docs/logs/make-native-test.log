@@ -17,5 +17,30 @@ cc -O2 -o selfhost/seed_tests/native_nest3_sm selfhost/seed_tests/native_nest3_s
 cc -O2 -o selfhost/seed_tests/native_nest3_g2 selfhost/seed_tests/native_nest3_g2.c
 [OK] native nested structs: l.a.x chains (2 and 3 levels), typed copy; seed-min and gen2 agree
 [OK] native rejects (clearly): later-declared nesting, list in struct, show of struct, bad chain
-[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs
+./selfhost/native_aot selfhost/seed_tests/native_nestcopy.sa selfhost/seed_tests/native_nestcopy
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/native_nestcopy.sa > selfhost/seed_tests/native_nestcopy_sm.c
+cc -O2 -o selfhost/seed_tests/native_nestcopy_sm selfhost/seed_tests/native_nestcopy_sm.c
+./selfhost/gen2 selfhost/seed_tests/native_nestcopy.sa selfhost/seed_tests/native_nestcopy_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/native_nestcopy_g2 selfhost/seed_tests/native_nestcopy_g2.c
+[OK] doubly nested field copy (hold p2 = t.q.p): seed-min == gen2 == native
+./selfhost/native_aot selfhost/seed_tests/nu_use.sa selfhost/seed_tests/nu_use
+./selfhost/native_aot selfhost/seed_tests/nu_top.sa selfhost/seed_tests/nu_top
+./selfhost/native_aot selfhost/seed_tests/nu_rel.sa selfhost/seed_tests/nu_rel
+[OK] native use: splice, nested depth 2, input-dir resolution; missing file and unquoted path are clear errors
+./selfhost/native_aot selfhost/seed_tests/native_fn.sa selfhost/seed_tests/native_fn
+./selfhost/native_aot selfhost/seed_tests/native_fn2.sa selfhost/seed_tests/native_fn2
+./selfhost/native_aot selfhost/seed_tests/native_fn3.sa selfhost/seed_tests/native_fn3
+./selfhost/native_aot selfhost/seed_tests/native_postmul.sa selfhost/seed_tests/native_postmul
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/native_postmul.sa > selfhost/seed_tests/native_postmul_sm.c
+cc -O2 -o selfhost/seed_tests/native_postmul_sm selfhost/seed_tests/native_postmul_sm.c
+./selfhost/gen2 selfhost/seed_tests/native_postmul.sa selfhost/seed_tests/native_postmul_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/native_postmul_g2 selfhost/seed_tests/native_postmul_g2.c
+[OK] postfix to the right of * / % (p.x * p.x, 3 * xs[0]); / and % left-associative; seed-min == gen2 == native
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/native_fn.sa > selfhost/seed_tests/native_fn_sm.c
+cc -O2 -o selfhost/seed_tests/native_fn_sm selfhost/seed_tests/native_fn_sm.c
+./selfhost/gen2 selfhost/seed_tests/native_fn.sa selfhost/seed_tests/native_fn_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/native_fn_g2 selfhost/seed_tests/native_fn_g2.c
+[OK] native functions: recursion (fac/fib), 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin/string args; seed-min and gen2 agree
+[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give
+[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions
 === NATIVE-TEST-OK ===

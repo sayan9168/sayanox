@@ -68,7 +68,12 @@ cc -O2 -o selfhost/seed_tests/ts_nest_g2 selfhost/seed_tests/ts_nest_g2.c
 cc -O2 -o selfhost/seed_tests/ts_nest3_sm selfhost/seed_tests/ts_nest3_sm.c
 ./selfhost/gen2 selfhost/seed_tests/ts_nest3.sa selfhost/seed_tests/ts_nest3_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/ts_nest3_g2 selfhost/seed_tests/ts_nest3_g2.c
-[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies); clear errors for forward decls, list fields, bad chains, show-of-struct
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_nestcopy.sa > selfhost/seed_tests/ts_nestcopy_sm.c
+cc -O2 -o selfhost/seed_tests/ts_nestcopy_sm selfhost/seed_tests/ts_nestcopy_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_nestcopy.sa selfhost/seed_tests/ts_nestcopy_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_nestcopy_g2 selfhost/seed_tests/ts_nestcopy_g2.c
+[OK] doubly nested field copy (hold p2 = t.q.p): seed-min and gen2 agree; bad chains still hard errors
+[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies incl. doubly nested); clear errors for forward decls, list fields, bad chains, show-of-struct
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/par.sa > selfhost/seed_tests/par_sm.c
 cc -O2 -o selfhost/seed_tests/par_sm selfhost/seed_tests/par_sm.c
 ./selfhost/gen2 selfhost/seed_tests/par.sa selfhost/seed_tests/par_g2.c >/dev/null

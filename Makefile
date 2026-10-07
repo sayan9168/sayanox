@@ -321,6 +321,22 @@ test-nest:
 	@grep -q 'typedef struct { Point o; Point sz; } Rect;' $(TESTS)/ts_nest3_g2.c
 	@grep -q 'typedef struct { Rect r; char \*label; } Scene;' $(TESTS)/ts_nest3_g2.c
 	$(call assert-out,./$(TESTS)/ts_nest3_g2,1\n2\n3\nmain\n4)
+	@# doubly nested field copy: `hold p2 = t.q.p` used to be rejected by
+	@# seed-min's first collect pass (struct field types are only fixed by
+	@# the literal scan that runs after it) with the misleading "field 'q'
+	@# has no struct type"; gen2 always accepted it. Both must print 7.
+	@printf 'struct Point {\n  x\n}\nstruct Mid {\n  p\n}\nstruct Top {\n  q\n}\nhold t = Top { q: Mid { p: Point { x: 7 } } }\nhold p2 = t.q.p\nshow p2.x\n' > $(TESTS)/ts_nestcopy.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_nestcopy.sa > $(TESTS)/ts_nestcopy_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_nestcopy_sm $(TESTS)/ts_nestcopy_sm.c
+	$(call assert-out,./$(TESTS)/ts_nestcopy_sm,7)
+	./$(GEN2) $(TESTS)/ts_nestcopy.sa $(TESTS)/ts_nestcopy_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_nestcopy_g2 $(TESTS)/ts_nestcopy_g2.c
+	$(call assert-out,./$(TESTS)/ts_nestcopy_g2,7)
+	@# a chain that is REALLY invalid must still be a hard error in seed-min
+	@printf 'struct Point {\n  x\n}\nhold q = Point { x: 1 }\nhold p2 = q.x.y\n' > $(TESTS)/ts_nestcopybad.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestcopybad.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a copy through a number field"; exit 1; fi
+	@echo "[OK] doubly nested field copy (hold p2 = t.q.p): seed-min and gen2 agree; bad chains still hard errors"
 	@# a nested struct must be declared before the struct that nests it
 	@printf 'struct Line {\n  a\n}\nstruct Point {\n  x\n}\nhold l = Line { a: Point { 1 } }\n' > $(TESTS)/ts_nestfwd.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestfwd.sa >/dev/null 2>&1; then \
@@ -343,7 +359,7 @@ test-nest:
 	@printf 'struct Point {\n  x\n}\nhold q = Point { x: 1 }\nshow q\n' > $(TESTS)/ts_nestshow.sa
 	@./$(GEN2) $(TESTS)/ts_nestshow.sa $(TESTS)/ts_nestshow_g2.c >/dev/null 2>&1 || true
 	@grep -q 'show value cannot be a struct' $(TESTS)/ts_nestshow_g2.c
-	@echo "[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies); clear errors for forward decls, list fields, bad chains, show-of-struct"
+	@echo "[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies incl. doubly nested); clear errors for forward decls, list fields, bad chains, show-of-struct"
 
 test-prec:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -564,6 +580,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	$(call assert-out,./$(TESTS)/native_nest3,1\n2\n3\nmain\n4)
 	@# three-way parity: seed-min == gen2 == native on the nested programs
 	@test -x $(SEED_MIN_BIN) || (echo "need seed-min (make seed-min)"; exit 1)
+	@test -x $(GEN2) || (echo "need gen2 (run make true-selfhost first)"; exit 1)
 	./$(SEED_MIN_BIN) $(TESTS)/native_nest3.sa > $(TESTS)/native_nest3_sm.c
 	$(CC) -O2 -o $(TESTS)/native_nest3_sm $(TESTS)/native_nest3_sm.c
 	$(call assert-out,./$(TESTS)/native_nest3_sm,1\n2\n3\nmain\n4)
@@ -589,7 +606,106 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	  echo "[FAIL] native accepted a chain through a number field"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_nestchain.sa $(TESTS)/native_nestchain 2>&1 | grep -q 'cannot access a field'
 	@echo "[OK] native rejects (clearly): later-declared nesting, list in struct, show of struct, bad chain"
-	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs"
+	@# doubly nested field copy (same source as test-nest's ts_nestcopy):
+	@# all three backends must print 7
+	@printf 'struct Point {\n  x\n}\nstruct Mid {\n  p\n}\nstruct Top {\n  q\n}\nhold t = Top { q: Mid { p: Point { x: 7 } } }\nhold p2 = t.q.p\nshow p2.x\n' > $(TESTS)/native_nestcopy.sa
+	./$(NATIVE_BIN) $(TESTS)/native_nestcopy.sa $(TESTS)/native_nestcopy
+	$(call assert-out,./$(TESTS)/native_nestcopy,7)
+	./$(SEED_MIN_BIN) $(TESTS)/native_nestcopy.sa > $(TESTS)/native_nestcopy_sm.c
+	$(CC) -O2 -o $(TESTS)/native_nestcopy_sm $(TESTS)/native_nestcopy_sm.c
+	$(call assert-out,./$(TESTS)/native_nestcopy_sm,7)
+	./$(GEN2) $(TESTS)/native_nestcopy.sa $(TESTS)/native_nestcopy_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/native_nestcopy_g2 $(TESTS)/native_nestcopy_g2.c
+	$(call assert-out,./$(TESTS)/native_nestcopy_g2,7)
+	@echo "[OK] doubly nested field copy (hold p2 = t.q.p): seed-min == gen2 == native"
+	@# ------------- use (module splice): same semantics as seed-min/gen2 ----
+	@printf 'hold z = 99\n' > $(TESTS)/nu_other.sa
+	@printf 'use "selfhost/seed_tests/nu_other.sa"\nshow z\n' > $(TESTS)/nu_use.sa
+	./$(NATIVE_BIN) $(TESTS)/nu_use.sa $(TESTS)/nu_use
+	$(call assert-out,./$(TESTS)/nu_use,99)
+	@printf 'use "selfhost/seed_tests/nu_other.sa"\nhold y = 1\n' > $(TESTS)/nu_mid.sa
+	@printf 'use "selfhost/seed_tests/nu_mid.sa"\nshow z\nshow y\n' > $(TESTS)/nu_top.sa
+	./$(NATIVE_BIN) $(TESTS)/nu_top.sa $(TESTS)/nu_top
+	$(call assert-out,./$(TESTS)/nu_top,99\n1)
+	@# a path relative to the INPUT FILE also resolves (native tries the
+	@# input's directory first, then the cwd; seed-min/gen2 try cwd first)
+	@printf 'use "nu_other.sa"\nshow z\n' > $(TESTS)/nu_rel.sa
+	./$(NATIVE_BIN) $(TESTS)/nu_rel.sa $(TESTS)/nu_rel
+	$(call assert-out,./$(TESTS)/nu_rel,99)
+	@# missing file and unquoted path are hard errors with stable messages
+	@printf 'use "selfhost/seed_tests/nu_missing.sa"\nshow 1\n' > $(TESTS)/nu_miss.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/nu_miss.sa $(TESTS)/nu_miss 2>/dev/null; then \
+	  echo "[FAIL] native accepted a use of a missing file"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/nu_miss.sa $(TESTS)/nu_miss 2>&1 | grep -q 'cannot open use file'
+	@printf 'use other.sa\nshow 1\n' > $(TESTS)/nu_uq.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/nu_uq.sa $(TESTS)/nu_uq 2>/dev/null; then \
+	  echo "[FAIL] native accepted an unquoted use path"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/nu_uq.sa $(TESTS)/nu_uq 2>&1 | grep -q 'use needs a quoted path'
+	@echo "[OK] native use: splice, nested depth 2, input-dir resolution; missing file and unquoted path are clear errors"
+	@# ------------- functions: make/give, recursion, calls as values --------
+	@printf 'make add(a, b) {\n  give a + b\n}\nmake fac(n) {\n  when n <= 1 {\n    give 1\n  }\n  give n * fac(n - 1)\n}\nmake fib(n) {\n  when n <= 1 {\n    give n\n  } else {\n    give fib(n - 1) + fib(n - 2)\n  }\n}\nshow add(40, 2)\nshow fac(5)\nshow fib(20)\nhold r = add(fac(4), fib(7))\nshow r\n' > $(TESTS)/native_fn.sa
+	./$(NATIVE_BIN) $(TESTS)/native_fn.sa $(TESTS)/native_fn
+	$(call assert-out,./$(TESTS)/native_fn,42\n120\n6765\n37)
+	@# all six parameter registers (the spills of rdi/rdx/rcx used to be
+	@# mis-encoded, so params 1/3/4 read garbage), a forward reference,
+	@# mutual recursion, a zero-arg call, and a global assigned from a fn
+	@printf 'make sum6(a, b, c, d, e, f) {\n  give a + b + c + d + e + f\n}\nmake later(x) {\n  give helper(x) * 2\n}\nmake helper(x) {\n  give x + 1\n}\nmake is_even(n) {\n  when n == 0 {\n    give 1\n  }\n  give is_odd(n - 1)\n}\nmake is_odd(n) {\n  when n == 0 {\n    give 0\n  }\n  give is_even(n - 1)\n}\nmake z() {\n  give 7\n}\nmake bump(dummy) {\n  cnt = cnt + 1\n  give cnt\n}\nhold cnt = 0\nshow sum6(1, 2, 3, 4, 5, 6)\nshow later(4)\nshow is_even(10)\nshow z()\nshow bump(0)\nshow bump(0)\nshow cnt\n' > $(TESTS)/native_fn2.sa
+	./$(NATIVE_BIN) $(TESTS)/native_fn2.sa $(TESTS)/native_fn2
+	$(call assert-out,./$(TESTS)/native_fn2,21\n10\n1\n7\n1\n2\n2)
+	@# calls with builtin args, and string indexing (r_sget used to lose the
+	@# index inside its strlen call, so every sx_index/s[i] died with
+	@# "string index out of range")
+	@printf 'hold s = "abc"\nmake add(a, b) {\n  give a + b\n}\nshow add(len(s), 2)\nshow sx_index(s, 0)\nshow s[2]\nshow add(s[0], sx_index(s, 1))\n' > $(TESTS)/native_fn3.sa
+	./$(NATIVE_BIN) $(TESTS)/native_fn3.sa $(TESTS)/native_fn3
+	$(call assert-out,./$(TESTS)/native_fn3,5\n97\n99\n195)
+	@# postfix operands to the RIGHT of * / % (p.x * p.x, 3 * xs[0]) used to
+	@# die with "* is numeric-only" (the right side was parsed as a bare
+	@# primary); / and % must also stay left-associative
+	@printf 'struct Point {\n  x,\n  y\n}\nhold p = Point { x: 3, y: 4 }\nhold xs = [10, 20]\nshow p.x * p.x\nshow 2 * p.y\nshow 3 * xs[0]\nshow 100 / 5 / 2\nshow 17 %% 5 %% 3\n' > $(TESTS)/native_postmul.sa
+	./$(NATIVE_BIN) $(TESTS)/native_postmul.sa $(TESTS)/native_postmul
+	$(call assert-out,./$(TESTS)/native_postmul,9\n8\n30\n10\n2)
+	./$(SEED_MIN_BIN) $(TESTS)/native_postmul.sa > $(TESTS)/native_postmul_sm.c
+	$(CC) -O2 -o $(TESTS)/native_postmul_sm $(TESTS)/native_postmul_sm.c
+	$(call assert-out,./$(TESTS)/native_postmul_sm,9\n8\n30\n10\n2)
+	./$(GEN2) $(TESTS)/native_postmul.sa $(TESTS)/native_postmul_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/native_postmul_g2 $(TESTS)/native_postmul_g2.c
+	$(call assert-out,./$(TESTS)/native_postmul_g2,9\n8\n30\n10\n2)
+	@echo "[OK] postfix to the right of * / % (p.x * p.x, 3 * xs[0]); / and % left-associative; seed-min == gen2 == native"
+	@# seed-min and gen2 agree with native on the function program
+	./$(SEED_MIN_BIN) $(TESTS)/native_fn.sa > $(TESTS)/native_fn_sm.c
+	$(CC) -O2 -o $(TESTS)/native_fn_sm $(TESTS)/native_fn_sm.c
+	$(call assert-out,./$(TESTS)/native_fn_sm,42\n120\n6765\n37)
+	./$(GEN2) $(TESTS)/native_fn.sa $(TESTS)/native_fn_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/native_fn_g2 $(TESTS)/native_fn_g2.c
+	$(call assert-out,./$(TESTS)/native_fn_g2,42\n120\n6765\n37)
+	@echo "[OK] native functions: recursion (fac/fib), 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin/string args; seed-min and gen2 agree"
+	@# function forms native must reject with clear, stable errors
+	@printf 'make f(n) {\n  hold t = n * 2\n  give t\n}\nshow f(3)\n' > $(TESTS)/native_fnhold.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_fnhold.sa $(TESTS)/native_fnhold 2>/dev/null; then \
+	  echo "[FAIL] native accepted hold inside a function (a local in the data segment breaks recursion)"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_fnhold.sa $(TESTS)/native_fnhold 2>&1 | grep -q 'hold inside make is not in the native subset'
+	@printf 'give 5\n' > $(TESTS)/native_giveout.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_giveout.sa $(TESTS)/native_giveout 2>/dev/null; then \
+	  echo "[FAIL] native accepted give outside a function"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_giveout.sa $(TESTS)/native_giveout 2>&1 | grep -q 'give outside a make function'
+	@printf 'when 1 == 1 {\n  make g(x) {\n    give x\n  }\n}\n' > $(TESTS)/native_mkin.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_mkin.sa $(TESTS)/native_mkin 2>/dev/null; then \
+	  echo "[FAIL] native accepted make inside a block"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_mkin.sa $(TESTS)/native_mkin 2>&1 | grep -q 'make must be at the top level'
+	@printf 'make f(a) {\n  give a\n}\nshow f(1, 2)\n' > $(TESTS)/native_fnargs.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_fnargs.sa $(TESTS)/native_fnargs 2>/dev/null; then \
+	  echo "[FAIL] native accepted a wrong argument count"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_fnargs.sa $(TESTS)/native_fnargs 2>&1 | grep -q 'takes 1 args, got 2'
+	@printf 'make f(a) {\n  give a\n}\nshow f("x")\n' > $(TESTS)/native_fnty.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_fnty.sa $(TESTS)/native_fnty 2>/dev/null; then \
+	  echo "[FAIL] native accepted a string argument for a numeric function"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_fnty.sa $(TESTS)/native_fnty 2>&1 | grep -q 'takes numbers'
+	@printf 'make f(a) {\n  give "x"\n}\nshow f(1)\n' > $(TESTS)/native_fngive.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>/dev/null; then \
+	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
+	@echo "[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
+	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
 	@echo "=== NATIVE-TEST-OK ==="
 
 grammar: true-selfhost-min

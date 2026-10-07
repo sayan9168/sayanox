@@ -12,7 +12,7 @@ The path is:
 
 The emitted program does not require a generated C file or a second compiler.
 
-The maintained native source covers the core subset including `hold`, `show`, integer expressions, arithmetic, `when` / `otherwise`, and `while`. The split source is under `selfhost/native_src/`.
+The maintained native source (`selfhost/native_aot.c`, canonical and self-contained) covers the pure-min subset: `hold`, `show`, integer expressions (`+ - * / %`, comparisons, parentheses), `when` / `else` / `otherwise`, `while`, lists, strings with the `concat`/`len`/`chr`/`string_eq`/`sx_index` builtins, structs including nested ones and typed copies, `use "file.sa"` module splice (depth <= 8), and top-level `make`/`give` functions with recursion (up to 6 numeric params; `hold` inside a body is rejected with a clear error). Anything else is a hard error with a clear message — see [`docs/STATUS.md`](STATUS.md) for the exact boundaries. The files under `selfhost/native_src/` are historical fragments, not a split of the current source.
 
 ## Cranelift status
 
