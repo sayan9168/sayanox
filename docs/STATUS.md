@@ -93,8 +93,8 @@ hosts. Measured 2026-10-07 (peak RSS from `wait4` `ru_maxrss`):
 | `gen1_min` compiling `compiler_min.sa` -> `gen2.c` | 39.5 MB | 29 MB |
 | `gen2` compiling `compiler_min.sa` -> `gen3.c` | 99.2 MB | 75 MB |
 
-`make true-selfhost` takes ~17 s, `make gen3` ~9 s and `make native-test` ~1 s
-on this host (more tests than on 2026-10-06), and `gen2` still produces
+From a fresh clone, `make true-selfhost` takes ~19 s, `make gen3` ~11 s and
+`make native-test` ~2 s on this host (more tests than on 2026-10-06), and `gen2` still produces
 byte-identical output under `ulimit -v 400000` (a 400 MB address-space cap,
 re-checked 2026-10-07), so there is no realistic way to hit the OOM killer.
 

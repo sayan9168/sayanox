@@ -3,7 +3,7 @@
 Audited 2026-10-04, re-measured end-to-end 2026-10-06 on branch
 `arena/2863bc8a-sayanox` (base `e7e8bdc`). The re-measurement reproduced the
 numbers below and added `make doctor` and `make restore-compiler` to the table.
-Re-measured again 2026-10-07 at commit `263efea` on branch
+Re-measured again 2026-10-07 at commit `280947f` on branch
 `arena/dabcdd33-sayanox` (minimal-`PATH` clean clone, see "Headline" below).
 
 Every number in this file was measured, not estimated. The method: a PATH shim
@@ -44,7 +44,7 @@ The positive side of the same experiment: with a `PATH` containing only
 `make cc gcc as ld sh grep cmp mkdir`, `make true-selfhost`, `make gen3` and
 `make native-test` all exit 0 (`=== *-OK ===`). Nothing else is consulted.
 
-**Re-measured 2026-10-07** on a fresh `git clone` of commit `263efea`, with
+**Re-measured 2026-10-07** on a fresh `git clone` of commit `280947f`, with
 `PATH` set to a directory holding only symlinks to `make cc gcc as ld sh grep
 cmp mkdir` (`/bin/sh` = dash):
 
@@ -283,7 +283,7 @@ make native-test     # === NATIVE-TEST-OK ===
 
 Measured 2026-10-06 on this host (3939 MB RAM, 2 CPUs, `/bin/sh` = dash) from a
 clean tree. On 2026-10-07, with the larger test suite, the minimal-`PATH` clean
-clone took 16.6 s (`true-selfhost`), 8.7 s (`gen3`) and 1.0 s (`native-test`);
+clone took 18.9 s (`true-selfhost`), 11.4 s (`gen3`) and 2.4 s (`native-test`);
 peak RSS was not re-measured.
 
 | Step | Wall time | Peak RSS (VmHWM) |
