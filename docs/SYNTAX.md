@@ -103,6 +103,38 @@ show p.name
 show p.x
 ```
 
+## Generics
+
+A function whose parameters and return type are all the same type parameter is
+compiled once per concrete type its call sites use (`gen2` and `gen1_min`):
+
+```sayanox
+make twice<T>(a: T) -> T {
+  hold x: T = a
+  give pickb(x, x)
+}
+make pickb<T>(a: T, b: T) -> T {
+  give a
+}
+
+hold s = "hi"
+show twice(4)        // 4      - a num copy, twice__n
+show twice(s)        // hi     - a str copy, twice__s
+show len(twice("ab")) // 2
+```
+
+The kind of a call is the kind of its own first argument: a string literal or a
+variable declared `str` selects the string copy, a list literal or a variable
+declared `list` the list copy, anything else the numeric copy. The fixed kinds
+of the builtins, the declared return kinds of ordinary functions and - for a
+nested generic call - that call's own first argument are followed too, so
+`give pickb(x, x)` and `show twice(twice("z"))` work. `T` may only appear as the
+type of every parameter and of the return type; any other generic header is
+reported as an error (`make pair<A, B>` is not supported).
+
+Generics are a full-language (`gen2`) feature: the seed and the pure-min dialect
+do not read `make NAME<T>`. See `make test-generics`.
+
 ## Modules and files
 
 ```sayanox
@@ -116,6 +148,6 @@ hold status = write_file("data.txt", data)
 ## Unsupported forms
 
 The maintained pure-min path does not claim support for every historical
-example. Namespaced exports, a full standard library, generics and portable
-native AOT remain future work. Consult [`FEATURES.md`](FEATURES.md) and
+example. Namespaced exports, a full standard library and portable native AOT
+remain future work. Consult [`FEATURES.md`](FEATURES.md) and
 [`BOOTSTRAP_ROADMAP.md`](BOOTSTRAP_ROADMAP.md).

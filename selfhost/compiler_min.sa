@@ -242,12 +242,15 @@ hold abd = 0
 hold ac1 = 0
 hold ac2 = 0
 hold gwant = ""
+hold gmore = ""
 hold gproto = ""
+hold gdefs = ""
 hold gc = 0
 hold gq = 0
 hold grun = 0
 hold gdep = 0
 hold mkg = 0
+hold mknm = ""
 hold mkrun = 0
 hold mkc = 0
 hold gwtxt = ""
@@ -272,6 +275,93 @@ hold gbdy = ""
 hold gtw = ""
 hold gtC = ""
 hold gspec = ""
+hold zwEnd = 0
+hold zwI = 0
+hold zwT = ""
+hold zwL = 0
+hold zwOut = ""
+hold zwHit = 0
+hold zwC = 0
+hold zwW = ""
+hold zwS = 0
+hold zwStart = 0
+hold zwKey = ""
+hold zwKl = 0
+hold zwLi = 0
+hold zwLl = 0
+hold zwOk = 0
+hold zwJ = 0
+hold zwA = 0
+hold zwB = 0
+hold zwMatch = 0
+hold zwRun = 0
+hold zwKind = 0
+hold zwKk = 0
+hold zwKdone = 0
+hold zwKgo = 0
+hold zwKlev = 0
+hold zwKskip = 0
+hold zwKc = 0
+hold zwKw = ""
+hold zwKs = 0
+hold zwKrun = 0
+hold zwKiscall = 0
+hold zwKbk = 0
+hold zwKgn = 0
+hold zwFkey = ""
+hold zwFkl = 0
+hold zwFl = 0
+hold zwFi = 0
+hold zwFok = 0
+hold zwFj = 0
+hold zwFa = 0
+hold zwFb = 0
+hold zwFk = 0
+hold zwGkey = ""
+hold gskipnm = ""
+hold gskipk = ""
+hold gskipkl = 0
+hold gskipl = 0
+hold gskipi = 0
+hold gskipm = 0
+hold gskipj = 0
+hold gskipa = 0
+hold gskipb = 0
+hold gskipok = 0
+hold zwGkl = 0
+hold zwGl = 0
+hold zwGi = 0
+hold zwGok = 0
+hold zwGj = 0
+hold zwGa = 0
+hold zwGb = 0
+hold zwVkey = ""
+hold zwVkl = 0
+hold zwVl = 0
+hold zwVi = 0
+hold zwVok = 0
+hold zwVj = 0
+hold zwVa = 0
+hold zwVb = 0
+hold zwSrc = ""
+hold gdone = 0
+hold grb = ""
+hold grbl = 0
+hold grl = 0
+hold gri = 0
+hold grok = 0
+hold grj = 0
+hold gra = 0
+hold grc = 0
+hold gihit = 0
+hold ginl = ""
+hold ginll = 0
+hold gint = 0
+hold gini = 0
+hold giok = 0
+hold gij = 0
+hold gia = 0
+hold gib = 0
 hold gpc = ""
 hold gpc2 = ""
 hold gp1 = 0
@@ -1538,6 +1628,7 @@ while fsi < n {
 //   fgtab  <1>name<1>T<1>param,param<1>body<1>
 // =====================================================================
 hold fgtab = chr(1)
+hold fgnames = chr(1)
 hold fgcur = ""
 hold fbgen = 0
 hold fgty = ""
@@ -1918,6 +2009,9 @@ while fgi < n {
                       }
                     }
                   }
+                  hold fgnames = concat(fgnames, chr(1))
+                  hold fgnames = concat(fgnames, fgnm)
+                  hold fgnames = concat(fgnames, chr(1))
                   hold fgtab = concat(fgtab, fgnm)
                   hold fgtab = concat(fgtab, chr(1))
                   hold fgtab = concat(fgtab, fgty2)
@@ -1976,11 +2070,20 @@ while fgi < n {
 while running == 1 {
 
   // ---- phase 0: splice pending generic specialisations ----
+  // Requests come from the statement pass (phase 1.5) and from the
+  // specialisation bodies generated below (a generic calling another one).
+  when len(gmore) > 0 {
+    hold gwant = concat(gwant, gmore)
+    hold gmore = ""
+  }
   // A `make NAME<T>` call asks for a monomorphised copy; the text is
   // inserted right here, at a statement boundary, so the ordinary
   // function machinery compiles it (a prototype goes into gproto so a
   // forward-referenced call still links).
-  when len(gwant) > 0 {
+  // ... and only at function scope: splicing inside a `make` body (a call
+  // made there) would cut the body in half, so those requests wait until the
+  // enclosing definition has been flushed (`in_fn == 0`).
+  when len(gwant) > 0 && in_fn == 0 {
     hold gwtxt = ""
     hold gwi = 1
     hold gwlen = len(gwant)
@@ -2095,6 +2198,35 @@ while running == 1 {
         }
         hold gspec = concat(gwnm, "__")
         hold gspec = concat(gspec, chr(gwk))
+        // emit every specialisation exactly once: `gdefs` is the registry of
+        // definitions that have already been generated
+        hold gdone = 0
+        hold grb = concat(chr(1), gspec)
+        hold grb = concat(grb, chr(1))
+        hold grbl = len(grb)
+        hold grl = len(gdefs)
+        hold gri = 0
+        while gri + grbl <= grl {
+          hold grok = 1
+          hold grj = 0
+          while grj < grbl {
+            hold gra = sx_index(gdefs, gri + grj)
+            hold grc = sx_index(grb, grj)
+            when gra == grc {
+              hold grj = grj + 1
+            } otherwise {
+              hold grok = 0
+              hold grj = grbl
+            }
+          }
+          when grok == 1 {
+            hold gdone = 1
+            hold gri = grl
+          } otherwise {
+            hold gri = gri + 1
+          }
+        }
+        when gdone == 0 {
         hold gpc = ""       // C param list for the prototype
         hold gpc2 = ""      // Sayanox param list for the definition
         hold gp1 = 1
@@ -2156,7 +2288,45 @@ while running == 1 {
             when sx_eq(gwd, gtyp) {
               hold gnew = concat(gnew, gtw)
             } otherwise {
-              hold gnew = concat(gnew, gwd)
+              // a call to another generic function in the same body: use this
+              // specialisation's kind (T is the same type all through)
+              hold gihit = 0
+              hold ginl = concat(chr(1), gwd)
+              hold ginl = concat(ginl, chr(1))
+              hold ginll = len(ginl)
+              hold gint = len(fgnames)
+              hold gini = 0
+              while gini + ginll <= gint {
+                hold giok = 1
+                hold gij = 0
+                while gij < ginll {
+                  hold gia = sx_index(fgnames, gini + gij)
+                  hold gib = sx_index(ginl, gij)
+                  when gia == gib {
+                    hold gij = gij + 1
+                  } otherwise {
+                    hold giok = 0
+                    hold gij = ginll
+                  }
+                }
+                when giok == 1 {
+                  hold gihit = 1
+                  hold gini = gint
+                } otherwise {
+                  hold gini = gini + 1
+                }
+              }
+              when gihit == 1 {
+                hold gnew = concat(gnew, gwd)
+                hold gnew = concat(gnew, "__")
+                hold gnew = concat(gnew, chr(gwk))
+                hold gmore = concat(gmore, chr(1))
+                hold gmore = concat(gmore, gwd)
+                hold gmore = concat(gmore, chr(1))
+                hold gmore = concat(gmore, chr(gwk))
+              } otherwise {
+                hold gnew = concat(gnew, gwd)
+              }
             }
           } otherwise {
             hold gnew = concat(gnew, chr(gbc))
@@ -2190,6 +2360,10 @@ while running == 1 {
         hold fsptx = concat(fsptx, "=")
         hold fsptx = concat(fsptx, gpc)
         hold fsptx = concat(fsptx, "|")
+        hold gdefs = concat(gdefs, chr(1))
+        hold gdefs = concat(gdefs, gspec)
+        hold gdefs = concat(gdefs, chr(1))
+        }
       }
     }
     hold gwant = ""
@@ -2256,6 +2430,392 @@ while running == 1 {
     }
   }
 
+  // ---- phase 1.5: monomorphise the generic calls of this statement -------
+  // `make NAME<T>` is compiled by generating one specialised copy per call.
+  // Rewriting `NAME(...)` here, in the statement text itself, means every
+  // ordinary call path (hold, show, give, when, ...) only ever sees a plain
+  // function call - nested calls included.  The kind of a call is the kind
+  // of its own first argument, looked up through string/list literals,
+  // declared variables, the builtins and the declared return kinds of the
+  // other functions.  The definition is spliced in at the next statement
+  // boundary (see phase 0), but the call site already needs to know the kind
+  // of the result, so it is registered in fsret right here.
+  when running == 1 && len(fgnames) > 1 {
+    hold zwEnd = pos
+    while zwEnd < n && sx_index(source, zwEnd) != 10 {
+      hold zwEnd = zwEnd + 1
+    }
+    hold zwT = ""
+    hold zwI = pos
+    while zwI < zwEnd {
+      hold zwT = concat(zwT, chr(sx_index(source, zwI)))
+      hold zwI = zwI + 1
+    }
+    hold zwL = len(zwT)
+    hold zwOut = ""
+    hold zwHit = 0
+    hold zwI = 0
+    while zwI < zwL {
+      hold zwC = sx_index(zwT, zwI)
+      when zwC == 34 {
+        // a string literal: copy it verbatim, escapes kept
+        hold zwOut = concat(zwOut, chr(zwC))
+        hold zwI = zwI + 1
+        hold zwRun = 1
+        while zwRun == 1 {
+          when zwI >= zwL {
+            hold zwRun = 0
+          } otherwise {
+            hold zwC = sx_index(zwT, zwI)
+            hold zwOut = concat(zwOut, chr(zwC))
+            hold zwI = zwI + 1
+            when zwC == 92 {
+              when zwI < zwL {
+                hold zwOut = concat(zwOut, chr(sx_index(zwT, zwI)))
+                hold zwI = zwI + 1
+              }
+            } otherwise {
+              when zwC == 34 {
+                hold zwRun = 0
+              }
+            }
+          }
+        }
+      } otherwise {
+        when (zwC >= 97 && zwC <= 122) || (zwC >= 65 && zwC <= 90) || zwC == 95 {
+          // an identifier: collect it
+          hold zwStart = zwI
+          hold zwW = ""
+          hold zwRun = 1
+          while zwRun == 1 {
+            when zwI >= zwL {
+              hold zwRun = 0
+            } otherwise {
+              hold zwC = sx_index(zwT, zwI)
+              when (zwC >= 97 && zwC <= 122) || (zwC >= 65 && zwC <= 90) || (zwC >= 48 && zwC <= 57) || zwC == 95 {
+                hold zwW = concat(zwW, chr(zwC))
+                hold zwI = zwI + 1
+              } otherwise {
+                hold zwRun = 0
+              }
+            }
+          }
+          hold zwS = zwI
+          hold zwRun = 1
+          while zwRun == 1 {
+            when zwS >= zwL {
+              hold zwRun = 0
+            } otherwise {
+              hold zwC = sx_index(zwT, zwS)
+              when zwC == 32 || zwC == 9 || zwC == 13 {
+                hold zwS = zwS + 1
+              } otherwise {
+                hold zwRun = 0
+              }
+            }
+          }
+          hold zwMatch = 0
+          when zwS < zwL {
+            when sx_index(zwT, zwS) == 40 {
+              // is the word a declared generic?
+              hold zwKey = concat(chr(1), zwW)
+              hold zwKey = concat(zwKey, chr(1))
+              hold zwKl = len(zwKey)
+              hold zwLl = len(fgnames)
+              hold zwLi = 0
+              while zwLi + zwKl <= zwLl {
+                hold zwOk = 1
+                hold zwJ = 0
+                while zwJ < zwKl {
+                  hold zwA = sx_index(fgnames, zwLi + zwJ)
+                  hold zwB = sx_index(zwKey, zwJ)
+                  when zwA == zwB {
+                    hold zwJ = zwJ + 1
+                  } otherwise {
+                    hold zwOk = 0
+                    hold zwJ = zwKl
+                  }
+                }
+                when zwOk == 1 {
+                  hold zwMatch = 1
+                  hold zwLi = zwLl
+                } otherwise {
+                  hold zwLi = zwLi + 1
+                }
+              }
+            }
+          }
+          when zwMatch == 0 {
+            hold zwOut = concat(zwOut, zwW)
+          } otherwise {
+            // the kind of this call is the kind of its first argument
+            hold zwKind = 110
+            hold zwKk = zwS + 1
+            hold zwKdone = 0
+            hold zwKgo = 0
+            hold zwKlev = 0
+            while zwKdone == 0 {
+              hold zwKgo = 0
+              hold zwKskip = 1
+              while zwKskip == 1 {
+                when zwKk >= zwL {
+                  hold zwKskip = 0
+                } otherwise {
+                  hold zwKc = sx_index(zwT, zwKk)
+                  when zwKc == 32 || zwKc == 9 || zwKc == 13 {
+                    hold zwKk = zwKk + 1
+                  } otherwise {
+                    hold zwKskip = 0
+                  }
+                }
+              }
+              when zwKk >= zwL {
+                hold zwKind = 110
+                hold zwKdone = 1
+              } otherwise {
+                hold zwKc = sx_index(zwT, zwKk)
+                when zwKc == 34 {
+                  hold zwKind = 115
+                  hold zwKdone = 1
+                }
+                when zwKc == 91 {
+                  hold zwKind = 108
+                  hold zwKdone = 1
+                }
+                when (zwKc >= 97 && zwKc <= 122) || (zwKc >= 65 && zwKc <= 90) || zwKc == 95 {
+                  hold zwKw = ""
+                  hold zwKrun = 1
+                  while zwKrun == 1 {
+                    when zwKk >= zwL {
+                      hold zwKrun = 0
+                    } otherwise {
+                      hold zwKc = sx_index(zwT, zwKk)
+                      when (zwKc >= 97 && zwKc <= 122) || (zwKc >= 65 && zwKc <= 90) || (zwKc >= 48 && zwKc <= 57) || zwKc == 95 {
+                        hold zwKw = concat(zwKw, chr(zwKc))
+                        hold zwKk = zwKk + 1
+                      } otherwise {
+                        hold zwKrun = 0
+                      }
+                    }
+                  }
+                  hold zwKs = zwKk
+                  hold zwKrun = 1
+                  while zwKrun == 1 {
+                    when zwKs >= zwL {
+                      hold zwKrun = 0
+                    } otherwise {
+                      hold zwKc = sx_index(zwT, zwKs)
+                      when zwKc == 32 || zwKc == 9 || zwKc == 13 {
+                        hold zwKs = zwKs + 1
+                      } otherwise {
+                        hold zwKrun = 0
+                      }
+                    }
+                  }
+                  hold zwKiscall = 0
+                  when zwKs < zwL {
+                    when sx_index(zwT, zwKs) == 40 {
+                      hold zwKiscall = 1
+                    }
+                  }
+                  // a declared function has a known return kind
+                  hold zwKbk = 0
+                  hold zwFkey = concat("|", zwKw)
+                  hold zwFkey = concat(zwFkey, "=")
+                  hold zwFkl = len(zwFkey)
+                  hold zwFl = len(fsret)
+                  hold zwFi = 0
+                  while zwFi + zwFkl + 1 <= zwFl {
+                    hold zwFok = 1
+                    hold zwFj = 0
+                    while zwFj < zwFkl {
+                      hold zwFa = sx_index(fsret, zwFi + zwFj)
+                      hold zwFb = sx_index(zwFkey, zwFj)
+                      when zwFa == zwFb {
+                        hold zwFj = zwFj + 1
+                      } otherwise {
+                        hold zwFok = 0
+                        hold zwFj = zwFkl
+                      }
+                    }
+                    when zwFok == 1 {
+                      hold zwFk = sx_index(fsret, zwFi + zwFkl)
+                      when zwFk == 115 {
+                        hold zwKbk = 115
+                      }
+                      when zwFk == 108 {
+                        hold zwKbk = 108
+                      }
+                      hold zwFi = zwFl
+                    } otherwise {
+                      hold zwFi = zwFi + 1
+                    }
+                  }
+                  // is the word itself a generic?  its kind must come from
+                  // the call's own argument, never from a return annotation
+                  hold zwKgn = 0
+                  hold zwGkey = concat(chr(1), zwKw)
+                  hold zwGkey = concat(zwGkey, chr(1))
+                  hold zwGkl = len(zwGkey)
+                  hold zwGl = len(fgnames)
+                  hold zwGi = 0
+                  while zwGi + zwGkl <= zwGl {
+                    hold zwGok = 1
+                    hold zwGj = 0
+                    while zwGj < zwGkl {
+                      hold zwGa = sx_index(fgnames, zwGi + zwGj)
+                      hold zwGb = sx_index(zwGkey, zwGj)
+                      when zwGa == zwGb {
+                        hold zwGj = zwGj + 1
+                      } otherwise {
+                        hold zwGok = 0
+                        hold zwGj = zwGkl
+                      }
+                    }
+                    when zwGok == 1 {
+                      hold zwKgn = 1
+                      hold zwGi = zwGl
+                    } otherwise {
+                      hold zwGi = zwGi + 1
+                    }
+                  }
+                  when zwKgn == 1 {
+                    hold zwKbk = 0
+                  }
+                  when zwKiscall == 1 {
+                    // the builtins' kinds are fixed
+                    when sx_eq(zwKw, "concat") || sx_eq(zwKw, "chr") || sx_eq(zwKw, "read_file") || sx_eq(zwKw, "arg") || sx_eq(zwKw, "read_line") || sx_eq(zwKw, "read_n") || sx_eq(zwKw, "numstr") || sx_eq(zwKw, "sx_cat") || sx_eq(zwKw, "sx_chr") || sx_eq(zwKw, "sx_read") || sx_eq(zwKw, "sx_arg") || sx_eq(zwKw, "sx_read_line") || sx_eq(zwKw, "sx_read_n") || sx_eq(zwKw, "sx_numstr") {
+                      hold zwKbk = 115
+                    }
+                    when sx_eq(zwKw, "push") || sx_eq(zwKw, "sx_lpush") {
+                      hold zwKbk = 108
+                    }
+                    when sx_eq(zwKw, "len") || sx_eq(zwKw, "index") || sx_eq(zwKw, "sx_index") || sx_eq(zwKw, "arg_count") || sx_eq(zwKw, "string_eq") || sx_eq(zwKw, "write_file") || sx_eq(zwKw, "write_out") || sx_eq(zwKw, "flush_out") || sx_eq(zwKw, "gc") || sx_eq(zwKw, "gc_live") || sx_eq(zwKw, "gc_runs") || sx_eq(zwKw, "sx_len") || sx_eq(zwKw, "sx_idx") || sx_eq(zwKw, "sx_argc") || sx_eq(zwKw, "sx_eq") || sx_eq(zwKw, "sx_write") || sx_eq(zwKw, "sx_write_out") || sx_eq(zwKw, "sx_flush_out") || sx_eq(zwKw, "sx_gc_run") || sx_eq(zwKw, "sx_gc_live") || sx_eq(zwKw, "sx_gc_count") {
+                      hold zwKbk = 110
+                    }
+                    when zwKbk != 0 {
+                      hold zwKind = zwKbk
+                      hold zwKdone = 1
+                    } otherwise {
+                      // a generic (or any other call): look at the first
+                      // argument of *this* call
+                      hold zwKk = zwKs + 1
+                      hold zwKlev = zwKlev + 1
+                      hold zwKgo = 1
+                      when zwKlev >= 12 {
+                        hold zwKind = 110
+                        hold zwKdone = 1
+                      }
+                    }
+                  } otherwise {
+                    when zwKbk != 0 {
+                      hold zwKind = zwKbk
+                      hold zwKdone = 1
+                    } otherwise {
+                      // a variable: its declared kind, else a number
+                      hold zwKbk = 0
+                      hold zwVkey = concat("|", zwKw)
+                      hold zwVkey = concat(zwVkey, "|")
+                      hold zwVkl = len(zwVkey)
+                      hold zwVl = len(sdecls)
+                      hold zwVi = 0
+                      while zwVi + zwVkl <= zwVl {
+                        hold zwVok = 1
+                        hold zwVj = 0
+                        while zwVj < zwVkl {
+                          hold zwVa = sx_index(sdecls, zwVi + zwVj)
+                          hold zwVb = sx_index(zwVkey, zwVj)
+                          when zwVa == zwVb {
+                            hold zwVj = zwVj + 1
+                          } otherwise {
+                            hold zwVok = 0
+                            hold zwVj = zwVkl
+                          }
+                        }
+                        when zwVok == 1 {
+                          hold zwKbk = 115
+                          hold zwVi = zwVl
+                        } otherwise {
+                          hold zwVi = zwVi + 1
+                        }
+                      }
+                      hold zwVl = len(ldecls)
+                      hold zwVi = 0
+                      while zwVi + zwVkl <= zwVl {
+                        hold zwVok = 1
+                        hold zwVj = 0
+                        while zwVj < zwVkl {
+                          hold zwVa = sx_index(ldecls, zwVi + zwVj)
+                          hold zwVb = sx_index(zwVkey, zwVj)
+                          when zwVa == zwVb {
+                            hold zwVj = zwVj + 1
+                          } otherwise {
+                            hold zwVok = 0
+                            hold zwVj = zwVkl
+                          }
+                        }
+                        when zwVok == 1 {
+                          hold zwKbk = 108
+                          hold zwVi = zwVl
+                        } otherwise {
+                          hold zwVi = zwVi + 1
+                        }
+                      }
+                      when zwKbk == 0 {
+                        hold zwKbk = 110
+                      }
+                      hold zwKind = zwKbk
+                      hold zwKdone = 1
+                    }
+                  }
+                }
+                when zwKdone == 0 && zwKgo == 0 {
+                  // a number, a parenthesized expression, ...: a number
+                  hold zwKind = 110
+                  hold zwKdone = 1
+                }
+              }
+            }
+            hold zwOut = concat(zwOut, zwW)
+            hold zwOut = concat(zwOut, "__")
+            hold zwOut = concat(zwOut, chr(zwKind))
+            hold zwHit = 1
+            // request the specialised copy and remember its result kind
+            hold gmore = concat(gmore, chr(1))
+            hold gmore = concat(gmore, zwW)
+            hold gmore = concat(gmore, chr(1))
+            hold gmore = concat(gmore, chr(zwKind))
+            hold fsret = concat(fsret, zwW)
+            hold fsret = concat(fsret, "__")
+            hold fsret = concat(fsret, chr(zwKind))
+            hold fsret = concat(fsret, "=")
+            hold fsret = concat(fsret, chr(zwKind))
+            hold fsret = concat(fsret, "|")
+          }
+        } otherwise {
+          hold zwOut = concat(zwOut, chr(zwC))
+          hold zwI = zwI + 1
+        }
+      }
+    }
+    when zwHit == 1 {
+      hold zwSrc = ""
+      hold zwI = 0
+      while zwI < pos {
+        hold zwSrc = concat(zwSrc, chr(sx_index(source, zwI)))
+        hold zwI = zwI + 1
+      }
+      hold zwSrc = concat(zwSrc, zwOut)
+      hold zwI = zwEnd
+      while zwI < n {
+        hold zwSrc = concat(zwSrc, chr(sx_index(source, zwI)))
+        hold zwI = zwI + 1
+      }
+      hold source = zwSrc
+      hold n = len(source)
+    }
+  }
+
   // ---- phase 2: one statement ----
   when running == 1 {
     hold c = sx_index(source,pos)
@@ -2305,6 +2865,7 @@ while running == 1 {
         // `make NAME<T>(...)` is a generic: act 15 skips the definition
         // (specialisations are spliced in on demand)
         hold mkg = pos + 4
+        hold mknm = ""
         hold mkrun = 1
         while mkrun == 1 {
           when mkg >= n {
@@ -2325,6 +2886,7 @@ while running == 1 {
           } otherwise {
             hold mkc = sx_index(source, mkg)
             when (mkc >= 97 && mkc <= 122) || (mkc >= 65 && mkc <= 90) || (mkc >= 48 && mkc <= 57) || mkc == 95 {
+              hold mknm = concat(mknm, chr(mkc))
               hold mkg = mkg + 1
             } otherwise {
               hold mkrun = 0
@@ -2350,6 +2912,7 @@ while running == 1 {
         }
         when mkc == 60 {
           hold act = 15
+          hold gskipnm = mknm
         }
       }
 
@@ -11248,6 +11811,43 @@ hold ec = 0
           }
         }
       }
+      // the body of a generic is only kept when every parameter and the
+      // return type are the single type parameter T
+      hold gskipok = 0
+      hold gskipk = concat(chr(1), gskipnm)
+      hold gskipk = concat(gskipk, chr(1))
+      hold gskipkl = len(gskipk)
+      hold gskipl = len(fgnames)
+      hold gskipi = 0
+      while gskipi + gskipkl <= gskipl {
+        hold gskipm = 1
+        hold gskipj = 0
+        while gskipj < gskipkl {
+          hold gskipa = sx_index(fgnames, gskipi + gskipj)
+          hold gskipb = sx_index(gskipk, gskipj)
+          when gskipa == gskipb {
+            hold gskipj = gskipj + 1
+          } otherwise {
+            hold gskipm = 0
+            hold gskipj = gskipkl
+          }
+        }
+        when gskipm == 1 {
+          hold gskipok = 1
+          hold gskipi = gskipl
+        } otherwise {
+          hold gskipi = gskipi + 1
+        }
+      }
+      when gskipok == 0 {
+        when perr == 0 {
+          hold permsg = concat("generic '", gskipnm)
+          hold permsg = concat(permsg, "' must be written with one type parameter used by every parameter and the return type, as in `make ")
+          hold permsg = concat(permsg, gskipnm)
+          hold permsg = concat(permsg, "<T>(a: T, b: T) -> T`")
+        }
+        hold perr = 1
+      }
     }
 
     // ================= break / continue =================
@@ -11438,7 +12038,7 @@ when rt == 1 {
   hold out = concat(out, "static char *sx_arg(double v){ long i=(long)v; if(i<0||i>=sx_argn) return \"\"; return sx_argv_p[i]; }\n")
   hold out = concat(out, "static char *sx_chr(double v){ char *b=(char*)sx_gc_alloc(0,2); b[0]=(char)(long)v; b[1]=0; return b; }\n")
   hold out = concat(out, "static char *sx_cat(const char *a,const char *b){ size_t la=strlen(a), lb=strlen(b); char *r=(char*)sx_gc_alloc(0,la+lb+1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r; }\n")
-  hold out = concat(out, "static double sx_len(const char *s){ return (double)strlen(s); }\n")
+  hold out = concat(out, "static double sx_len(const void *s){ sx_gcb *b = sx_gc_hash_get((char*)s); if (b && b->kind == 1) return (double)((sx_list*)((char*)b + SX_GCH))->n; return (double)strlen((const char*)s); }\n")
   hold out = concat(out, "static double sx_idx(const char *s,double v){ long i=(long)v; long L=(long)strlen(s); if(i<0) i=i+L; if(i<0||i>=L){ fputs(\"sx: string index out of range\",stderr); exit(1); } return (double)(unsigned char)s[i]; }\n")
   hold out = concat(out, "static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return \"\"; fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET); char *b=(char*)sx_gc_alloc(0,(size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f); return b; }\n")
   hold out = concat(out, "static char *sx_read_line(void){ char b[4096]; if(!fgets(b,sizeof b,stdin)) return \"\"; size_t n=strlen(b); if(n&&b[n-1]==10) b[n-1]=0; n=strlen(b); if(n&&b[n-1]==13) b[n-1]=0; char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")

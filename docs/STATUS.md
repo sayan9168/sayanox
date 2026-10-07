@@ -369,9 +369,11 @@ still use shell/C infrastructure. See
   `selfhost/minimal_lexer.sa` (link error), `selfhost/stage2_functions.sa`
   (C error: `'result' undeclared`) and `selfhost/stage2_variables.sa`
   (`#error`). None of them is used by any bootstrap target.
-* Still not part of pure-min: modules with namespacing/aliases and generics —
-  neither is claimed anywhere (see "Out of scope" below). The GC is no longer
-  on that list: gen2-compiled programs link the collector in [`GC.md`](GC.md).
+* Still not part of pure-min: modules with namespacing/aliases — not claimed
+  anywhere (see "Out of scope" below). The GC is no longer on that list:
+  gen2-compiled programs link the collector in [`GC.md`](GC.md). Generics are
+  no longer on it either: `make NAME<T>(a: T, b: T) -> T` monomorphises one
+  copy per call-site kind (`make test-generics`, [`SYNTAX.md`](SYNTAX.md)).
 
 ## Feature tests
 
@@ -396,6 +398,7 @@ still use shell/C infrastructure. See
 | `make test-push-stmt` | bare `push(xs, v)` in seed-min and gen2; push onto a non-list, unknown statements, string + number, number + string, string `-` and `*`, a string list element, 10+ element list literals, struct-in-list, `hold ys = xs`, list arithmetic — all clear errors or correct output |
 | `make test-native-num` (part of `native-test`) | native doubles: `test-float`/`test-parens`/`test-push-stmt` programs give the same output as seed-min and gen2; large integer-only arithmetic, `%` truncation and `% 0` diagnostic, `%g` formatting, IEEE `/ 0`, string + number extension and struct-field string chains |
 | `make test-lsp` | the Sayanox language server in a live JSON-RPC session: initialize/serverInfo, didOpen + publishDiagnostics, SX1001/SX1002/SX1003/SX1005 diagnostics, documentSymbol (function + variable), completion (builtin names survive in string literals), hover, definition, and a didChange that clears the diagnostics |
+| `make test-generics` | `make NAME<T> ... -> T` monomorphises one copy per call-site kind: 14 lines of a program mixing `pickb`/`twice`/`quad` over num, str and list print identically under gen2 and gen1_min; each `NAME__n/s/l` appears exactly once, every call sees a prototype, an unused generic emits nothing, an unsupported header is an error |
 | `make test-gc` | gen2 mark & sweep from the language side: a 2000-iteration `concat` loop stays under 200 KB of live heap after `gc()`, `gc_runs()` counts a collection, `gc()` reclaims bytes, and the surviving string is intact (`len` + first byte) |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |
@@ -411,5 +414,8 @@ Not worked on in this pass and not claimed anywhere in this repository:
 * a package registry or versioned modules (`use "file.sa"` is a textual
   splice; `tools/sxpkg.sh` is an optional, unused script)
 * a full standard library (only the builtins in the coverage table exist)
-* generics or a richer type system (values are doubles, strings, double lists
-  and literal-typed structs)
+* generics beyond the single-type-parameter form: `make NAME<T>(a: T, b: T)
+  -> T` monomorphises, but `make pair<A, B>` (a type parameter per argument)
+  is reported as an error rather than implemented
+* a richer type system (values are doubles, strings, double lists and
+  literal-typed structs)

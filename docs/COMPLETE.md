@@ -29,9 +29,10 @@ source of truth for compiler behavior.
   requires a C compiler to build the resulting program.
 - String-plus-number and bare function/builtin-call statements are documented
   native-only extensions, not part of the shared pure-min dialect.
-- Namespaced/versioned modules, a full standard library, generics, garbage
-  collection, and remote package hosting are not implemented as part of this
-  milestone.
+- Namespaced/versioned modules, a full standard library and remote package
+  hosting are not implemented as part of this milestone. Garbage collection
+  arrived with the gen2 collector ([`GC.md`](GC.md)) and generic functions
+  monomorphise the single-type-parameter form ([`SYNTAX.md`](SYNTAX.md)).
 
 Run the verified checks with:
 

@@ -631,6 +631,50 @@ test-full-lang:
 	@echo "[OK] full language: for/break/continue/elif, typed functions, annotations, and/or/not, compound assignment"
 
 # ---------------------------------------------------------------------------
+# test-generics: `make NAME<T>(a: T, b: T) -> T { ... }`.  A call asks for one
+# specialised copy named NAME__k (k = n, s or l) of the generic body with T
+# replaced by the concrete type; the copy is emitted once per kind, and the
+# kind of a call is the kind of its own first argument (string literal or
+# declared str variable -> s, list literal or declared list variable -> l, the
+# fixed kinds of the builtins, the declared return kinds of the other
+# functions, and - for a nested generic call - its own first argument again),
+# so nested calls, `give`, `when` and arguments of plain calls all work.
+# ---------------------------------------------------------------------------
+test-generics:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(GEN1_MIN) || (echo "need gen1_min"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'make pickb<T>(a: T, b: T) -> T {\n  give a\n}\nmake twice<T>(a: T) -> T {\n  hold x: T = a\n  give pickb(x, x)\n}\nmake quad<T>(a: T) -> T {\n  give twice(twice(a))\n}\nmake wrap<T>(a: T) -> T {\n  hold t: T = a\n  when len(t) > 0 {\n    hold t = a\n  }\n  give t\n}\nmake shout(n: num) -> str {\n  give concat("v=", numstr(n))\n}\nmake unused<T>(a: T) -> T {\n  give a\n}\nhold xs = [1, 2, 3]\nhold s = "hi"\nshow pickb(3, 7)\nshow twice(4)\nshow twice(s)\nshow quad(2)\nshow twice(twice("z"))\nshow len(quad(xs))\nshow len(twice(s))\nhold y = twice(5)\nshow y + 1\nshow shout(twice(9))\nshow pickb("a", "b")\nwhen twice(6) == 6 {\n  show 12\n}\nhold q = pickb(xs, xs)\nshow len(q)\nshow wrap(s)\nshow len(wrap("ab"))\n' > $(TESTS)/tg.sa
+	./$(GEN2) $(TESTS)/tg.sa $(TESTS)/tg.c >/dev/null
+	@if grep -q '#error' $(TESTS)/tg.c; then echo "[FAIL] generics: #error in the output"; exit 1; fi
+	$(CC) -O2 -o $(TESTS)/tg $(TESTS)/tg.c
+	$(call assert-out,./$(TESTS)/tg,3\n4\nhi\n2\nz\n3\n2\n6\nv=9\na\n12\n3\nhi\n2)
+	@# one definition per (name, kind) - exactly one, however many calls ask
+	@test `grep -c 'static double twice__n(double a) {' $(TESTS)/tg.c` = 1
+	@test `grep -c 'static char \*twice__s(char \* a) {' $(TESTS)/tg.c` = 1
+	@test `grep -c 'static sx_list \*twice__l(sx_list \* a) {' $(TESTS)/tg.c` = 1
+	@test `grep -c 'static double quad__n(double a) {' $(TESTS)/tg.c` = 1
+	@test `grep -c 'unused__' $(TESTS)/tg.c` = 0
+	@# every call must see a prototype (a definition further down is fine)
+	@$(CC) -O2 -Wall -o $(TESTS)/tg-w $(TESTS)/tg.c 2>$(TESTS)/tg.warn
+	@if grep -q 'implicit declaration' $(TESTS)/tg.warn; then echo "[FAIL] generics: a call without a prototype"; exit 1; fi
+	@# the same program through the seed-built compiler must agree
+	./$(GEN1_MIN) $(TESTS)/tg.sa $(TESTS)/tg_g1.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/tg_g1 $(TESTS)/tg_g1.c
+	$(call assert-out,./$(TESTS)/tg_g1,3\n4\nhi\n2\nz\n3\n2\n6\nv=9\na\n12\n3\nhi\n2)
+	@# `make NAME<T>` is a full-language feature: the seed cannot read it
+	@if ./$(SEED_MIN_BIN) $(TESTS)/tg.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted a generic definition"; exit 1; fi
+	@# a generic that is not `make NAME<T>(a: T, ...) -> T` gets a clear diagnostic
+	@# instead of an unsuffixed call in the C output
+	@printf 'make pair<A, B>(a: A, b: B) -> A {\n  give a\n}\nshow pair(1, "x")\n' > $(TESTS)/tg_bad.sa
+	@./$(GEN2) $(TESTS)/tg_bad.sa $(TESTS)/tg_bad.c >/dev/null 2>&1 || true
+	@grep -q "must be written with one type parameter" $(TESTS)/tg_bad.c
+	@echo "[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, gen2 and gen1_min agree"
+
+
+# ---------------------------------------------------------------------------
 # test-push-stmt: bare `push(xs, v)` statement == `hold xs = push(xs, v)` on
 # seed-min and gen2 (native already had it).  Pushing onto a non-list, an
 # unknown statement word and leftover tokens are clear errors on both.
@@ -927,7 +971,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-parity test-sxfmt test-sxpkg test-lsp test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-sxfmt test-sxpkg test-lsp test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
