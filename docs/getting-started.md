@@ -1,127 +1,144 @@
-# Getting Started with Sayanox
+# Getting started with Sayanox
 
-Sayanox is an original programming language with `.sa` source files. This guide is for a first-time user.
+Sayanox source files use the `.sa` extension. This guide uses the maintained
+seed-min/gen2 compiler path; it does not require Cargo or a Rust toolchain.
+For the exact supported subset and backend differences, see
+[`STATUS.md`](STATUS.md).
 
-## 1. Build the compiler
+## 1. Build and verify the compiler
 
-Install Rust and a C compiler such as Clang or GCC, then run:
+Install `make`, a POSIX shell and a C99 compiler (`cc`, `clang` or `gcc`), then
+run from the repository root:
 
-```bash
-cargo build --release
+```sh
+make doctor
+make true-selfhost
+make gen3
 ```
+
+`make true-selfhost` builds gen2 from the Sayanox source and runs its feature
+regressions. `make gen3` checks that the compiler has reached a reproducible
+fixed point (`gen3 == gen4`).
 
 ## 2. Run your first program
 
-Create `hello.sa`:
+`examples/hello.sa` contains a minimal program:
 
 ```sayanox
 show "Hello from Sayanox!"
 ```
 
-Compile it to C:
+Compile it to C with gen2, then build and run the generated C:
 
-```bash
-cargo run -- hello.sa -o hello.c
+```sh
+./selfhost/gen2 examples/hello.sa /tmp/hello.c
+cc -O2 -o /tmp/hello /tmp/hello.c
+/tmp/hello
 ```
 
-Build the executable:
+The optional native-AOT subset is available on x86-64 Linux:
 
-```bash
-clang hello.c -o hello
-./hello
+```sh
+make native
+./selfhost/native_aot examples/hello.sa /tmp/hello-native
+/tmp/hello-native
 ```
 
-The bundled helper can do the Stage-2 compile-and-run flow:
-
-```bash
-./selfhost/sx hello.sa --run
-```
-
-## 3. Values and variables
-
-Use `hold` to create a value:
+## 3. Bindings and arithmetic
 
 ```sayanox
 hold name = "Sayan"
-hold age = 17
+hold count = 2.5
 show name
-show age
+show count * 2
+hold count = count + 1
 ```
 
-Use assignment when you need to change an existing numeric variable:
+Numbers are IEEE doubles. `/` is true division; `%` truncates its operands to
+integers and reports `division by zero` for a zero divisor.
+
+## 4. Conditions and loops
 
 ```sayanox
-hold count = 0
-count = count + 1
-show count
+hold n = 3
+when n > 0 {
+  show "positive"
+} else {
+  show "not positive"
+}
+
+hold i = 1
+while i <= 3 {
+  show i
+  hold i = i + 1
+}
 ```
 
-## 4. Functions
+## 5. Functions
 
 ```sayanox
 make square(n) {
-    give n * n
+  give n * n
 }
 
 show square(8)
 ```
 
-## 5. Conditions and loops
+Top-level numeric functions support recursive calls in the maintained subset.
 
-```sayanox
-hold n = 3
+## 6. Lists and structs
 
-when n > 0 {
-    show "positive"
-} otherwise {
-    show "not positive"
-}
-
-hold i = 1
-while i <= 3 {
-    show i
-    i = i + 1
-}
-```
-
-## 6. Lists
-
-Lists contain numeric values in the current compiler:
+Lists hold numbers:
 
 ```sayanox
 hold values = [10, 20, 30]
 push(values, 40)
-show list_len(values)
-show list_get(values, 1)
+show values[1]
+show len(values)
 ```
 
-## 7. Strings
+Struct fields are declared by name and can hold supported number or string
+values; nested structs and field chains are tested:
 
 ```sayanox
-hold text = trim("  hello  ")
-show upper(text)
-show contains(text, "ell")
-show concat(text, " world")
+struct Point {
+  label,
+  x
+}
+hold p = Point { label: "origin", x: 0 }
+show p.label
+show p.x
 ```
 
-## 8. Errors
+## 7. Strings, files and arguments
 
-When the lexer or parser rejects a program, Sayanox reports the phase, source location, nearby lines, a caret, and a hint when possible.
+The shared runtime provides the string operations listed in
+[`STATUS.md`](STATUS.md), including `concat`, `len`, `chr`, `string_eq` and
+string indexing. File and command-line helpers include `read_file`,
+`write_file`, `arg` and `arg_count`.
 
-Try the intentionally invalid example:
-
-```bash
-cargo run -- examples/errors/missing_paren.sa
+```sayanox
+hold text = concat("hello", " Sayanox")
+show text
+show len(text)
 ```
 
-Fix the highlighted line, then run the compiler again.
+## 8. Modules
 
-## 9. Learn by example
+`use` textually splices another `.sa` source file before parsing:
 
-Start with:
+```sayanox
+use "library.sa"
+show answer()
+```
 
-- `examples/hello.sa`
-- `examples/stdlib.sa`
-- `examples/errors/missing_paren.sa`
+This is not namespaced or versioned package importing. See
+[`REGISTRY.md`](REGISTRY.md) for the separate package-tooling status.
 
-For the current language implementation, read `src/lexer.rs`, `src/parser.rs`, `src/ast.rs`, and `src/codegen.rs` together. The parser defines what source syntax is accepted and the code generator defines the current executable behavior.
+## 9. Current boundaries
+
+The maintained bootstrap does not yet include every form shown in historical
+examples. Range/for-in loops, `elif`, namespaced exports, a full standard
+library, generics and automatic memory management across all backends remain
+future work. The native-AOT compiler is x86-64 Linux only. See
+[`BOOTSTRAP_ROADMAP.md`](BOOTSTRAP_ROADMAP.md) for the larger plan.

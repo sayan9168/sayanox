@@ -1,21 +1,28 @@
-# Hold RHS builtins (pure .sa gen1)
+# Builtins in the maintained pure-min subset
 
-Gen1 lowers these function calls on the right-hand side of `hold`:
+This table describes calls covered by the current seed-min/gen2 compiler tests.
+Native AOT coverage and intentional differences are documented in
+[`STATUS.md`](STATUS.md).
 
-| Sayanox | Emitted C |
-|---------|-----------|
-| `arg_count()` | `sx_arg_count()` |
-| `arg(i)` | `sx_arg(i)` |
-| `read_file(path)` | `sx_read_file(path)` |
-| `write_file(path, data)` | `sx_write_file(path, data)` |
-| `concat(a, b)` | `sx_concat(a, b)` |
-| `chr(n)` | `sx_chr(n)` |
-| `str(n)` | `sx_str(n)` |
-| `len(s)` | `sx_len(s)` |
+| Sayanox call | Purpose | seed-min | gen2 | native AOT |
+|--------------|---------|----------|------|------------|
+| `concat(a, b)` | concatenate strings | yes | yes | yes |
+| `len(value)` | string/list length | yes | yes | yes |
+| `chr(n)` | one-byte string from numeric code | yes | yes | yes |
+| `string_eq(a, b)` | string equality as numeric 0/1 | yes | yes | yes |
+| `sx_index(s, i)` / `s[i]` | byte at zero-based index | yes | yes | yes |
+| `arg_count()` / `arg(i)` | process argument count/value | yes | yes | yes |
+| `read_file(path)` | read a file as a string | yes | yes | yes |
+| `write_file(path, data)` | truncate/write a file; numeric status | yes | yes | yes |
+| `push(xs, value)` | append a number to a list | yes | yes | yes |
 
-## Test
-```sh
-./selfhost/gen1 selfhost/mini_builtin.sa /tmp/out.c
-clang -o /tmp/out /tmp/out.c && /tmp/out a b
-# 3 / A / hello! / 6 / 10 / done
-```
+`len` accepts strings and numeric lists. List indexing is zero-based. String
+indexing returns a numeric byte value; use `chr` when a one-byte string is
+needed. The exact edge cases and parity tests are listed in
+[`STATUS.md`](STATUS.md).
+
+The maintained C backends accept the builtins in expressions (for example,
+`hold status = write_file(path, text)`). A bare builtin-call statement is a
+native-AOT extension and is not part of the shared dialect. `string + number`
+is also native-only; keep numeric values separate from strings in portable
+pure-min programs.

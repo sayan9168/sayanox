@@ -1,5 +1,5 @@
 #!/bin/sh
-# sxpkg — Sayanox package manager (local + online registry)
+# Local project/registry commands delegate to Sayanox; online transfers remain shell.
 set -e
 ROOT="${SAYANOX_ROOT:-.}"
 PKGDIR="$ROOT/.sayanox/pkgs"
@@ -8,17 +8,15 @@ LOCK="$ROOT/sx.lock"
 MANIFEST="$ROOT/sx.toml"
 INDEX="$REG/INDEX"
 ONLINE="${SAYANOX_REGISTRY:-https://raw.githubusercontent.com/sayan9168/sayanox/main/registry}"
+case "$0" in
+  */*) SXPKG_SCRIPT_DIR=${0%/*}; [ -n "$SXPKG_SCRIPT_DIR" ] || SXPKG_SCRIPT_DIR=/ ;;
+  *) SXPKG_SCRIPT_DIR=tools ;;
+esac
+SXPKG_SCRIPT_DIR=$(CDPATH= cd "$SXPKG_SCRIPT_DIR" && pwd)
+SAYANOX_REPO_ROOT=$(CDPATH= cd "$SXPKG_SCRIPT_DIR/.." && pwd)
+SXPKG_BIN="$SXPKG_SCRIPT_DIR/sxpkg"
 
 cmd="${1:-help}"; shift 2>/dev/null || true
-
-seed_local() {
-  mkdir -p "$REG/hello" "$REG/math"
-  printf 'name=hello\nversion=0.1.0\ndesc=hello world sample\n' > "$REG/hello/pkg.meta"
-  printf 'show "hello from pkg"\n' > "$REG/hello/main.sa"
-  printf 'name=math\nversion=0.1.0\ndesc=tiny math helpers\n' > "$REG/math/pkg.meta"
-  printf 'make double(n) { give n + n }\n' > "$REG/math/main.sa"
-  printf 'hello=0.1.0\nmath=0.1.0\n' > "$INDEX"
-}
 
 download() {
   url="$1"; dest="$2"
@@ -31,12 +29,29 @@ download() {
   fi
 }
 
+run_sayanox() {
+  sx_cmd="$1"; shift
+  [ -x "$SXPKG_BIN" ] || make -C "$SAYANOX_REPO_ROOT" sxpkg
+  case "$sx_cmd" in
+    init|add) mkdir -p "$PKGDIR" "$REG" ;;
+    seed) mkdir -p "$REG/hello" "$REG/math" ;;
+  esac
+  if (cd "$ROOT" && "$SXPKG_BIN" "$sx_cmd" "$@"); then
+    sx_status=0
+  else
+    sx_status=$?
+  fi
+  if [ "$sx_cmd" = init ] && [ "$sx_status" -eq 0 ] && [ ! -f "$INDEX" ]; then
+    run_sayanox seed
+  fi
+  if [ "$sx_cmd" = remove ] && [ "$sx_status" -eq 0 ] && [ -n "${1:-}" ] && [ -d "$PKGDIR/$1" ]; then
+    rm -rf "$PKGDIR/$1"
+  fi
+  return "$sx_status"
+}
+
 init() {
-  mkdir -p "$PKGDIR" "$REG"
-  [ -f "$LOCK" ] || printf '# sx.lock\n' > "$LOCK"
-  [ -f "$MANIFEST" ] || printf 'name = "my-pkg"\nversion = "0.1.0"\n' > "$MANIFEST"
-  [ -f "$INDEX" ] || seed_local
-  echo "sxpkg: init ok (registry=$REG online=$ONLINE)"
+  run_sayanox init
 }
 
 sync() {
@@ -55,24 +70,17 @@ sync() {
     done < "$INDEX"
   else
     echo "sxpkg: online sync failed; using local seed"
-    seed_local
+    seed
   fi
   rm -f "$tmp"
 }
 
 add() {
-  name="$1"; ver="${2:-0.1.0}"
-  [ -n "$name" ] || { echo "usage: sxpkg add <name> [ver]"; exit 1; }
-  mkdir -p "$PKGDIR" "$REG"
-  grep -q "^$name=" "$LOCK" 2>/dev/null || echo "$name=$ver" >> "$LOCK"
-  echo "sxpkg: locked $name $ver (run install)"
+  run_sayanox add "$@"
 }
 
 list() {
-  echo "sxpkg: locked packages"
-  if [ -f "$LOCK" ]; then
-    grep -v '^#' "$LOCK" | grep -v '^$' | grep -v '^version=' | grep -v '^name=' || echo "(none)"
-  else echo "(none)"; fi
+  run_sayanox list "$@"
 }
 
 install() {
@@ -98,12 +106,8 @@ install() {
 }
 
 search() {
-  q="${1:-}"
-  echo "sxpkg: search '$q'"
   [ -f "$INDEX" ] || sync
-  [ -f "$INDEX" ] && while IFS='=' read -r n v; do
-    case "$n" in \#*|"") continue ;; *$q*) echo "  $n $v" ;; esac
-  done < "$INDEX"
+  run_sayanox search "$@"
 }
 
 publish() {
@@ -118,17 +122,15 @@ publish() {
 }
 
 remove() {
-  name="$1"; [ -n "$name" ] || exit 1
-  [ -f "$LOCK" ] && { tmp=$(mktemp); grep -v "^$name=" "$LOCK" > "$tmp" && mv "$tmp" "$LOCK"; }
-  rm -rf "$PKGDIR/$name"
-  echo "sxpkg: removed $name from lock/pkgs"
+  run_sayanox remove "$@"
 }
 
 info() {
-  n="$1"
-  if [ -f "$REG/$n/pkg.meta" ]; then cat "$REG/$n/pkg.meta"
-  else echo "unknown $n — try: sxpkg sync && sxpkg search"
-  fi
+  run_sayanox info "$@"
+}
+
+seed() {
+  run_sayanox seed
 }
 
 fetch() {
@@ -152,7 +154,7 @@ case "$cmd" in
   publish) publish ;;
   remove) remove "$@" ;;
   info) info "$@" ;;
-  seed) seed_local; echo seeded ;;
+  seed) seed ;;
   fetch) fetch "$@" ;;
   *) echo "sxpkg: init|sync|add|list|install|search|publish|remove|info|seed|fetch"
      echo "  ONLINE registry: $ONLINE"

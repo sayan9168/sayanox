@@ -79,24 +79,26 @@ using only builtins, which is stricter than the per-line checks it replaced.
 
 ## Bootstrap memory (re-measured 2026-10-07)
 
-`selfhost/compiler_min.sa` is 239,782 bytes (234 KB; it was 200,228 bytes on
-2026-10-06 — the growth is the new features and error checks below). The compiler builds its
-output in a `body` buffer that is flushed into `obody` as soon as it passes
-~1 KB (the flush is skipped while a function body is being collected, and the
-emitted text and its order are unchanged). A flat accumulator copied the whole
-program on every append — O(n^2), ~2.5 GB allocated, and `Killed` on low-RAM
-hosts. Measured 2026-10-07 (peak RSS from `wait4` `ru_maxrss`):
+`selfhost/compiler_min.sa` is 244,058 bytes (238 KB; it was 200,228 bytes on
+2026-10-06 — the growth is the newer language checks and compiler fixes). The
+compiler flushes its `body` buffer into `obody` at ~1 KB (except while collecting
+a function body), avoiding a flat O(n^2) accumulator that previously allocated
+~2.5 GB and was killed on low-RAM hosts. A final string/identifier-aware C
+literal pass flushes after at most 512 input bytes per chunk (before `.0`
+expansion), bounding the temporary builder and avoiding a full-prefix copy per
+character.
+Measured 2026-10-07 (peak RSS from `wait4` `ru_maxrss`):
 
 | Step | Peak RSS | (2026-10-06) |
 |------|----------|--------------|
 | `seed-min` compiling `compiler_min.sa` -> `gen1_min.c` | 1.8 MB | 1.5 MB |
-| `gen1_min` compiling `compiler_min.sa` -> `gen2.c` | 39.5 MB | 29 MB |
-| `gen2` compiling `compiler_min.sa` -> `gen3.c` | 99.2 MB | 75 MB |
+| `gen1_min` compiling `compiler_min.sa` -> `gen2.c` | 57.9 MB | 29 MB |
+| `gen2` compiling `compiler_min.sa` -> `gen3.c` | 218.6 MB | 75 MB |
 
-From a fresh clone, `make true-selfhost` takes ~19 s, `make gen3` ~11 s and
-`make native-test` ~2 s on this host (more tests than on 2026-10-06), and `gen2` still produces
-byte-identical output under `ulimit -v 400000` (a 400 MB address-space cap,
-re-checked 2026-10-07), so there is no realistic way to hit the OOM killer.
+On this checkout, `make true-selfhost` takes ~14 s, `make gen3` ~10 s and
+`make native-test` ~1 s. `gen2` produces byte-identical output under
+`ulimit -v 400000` (a 400 MB address-space cap; re-checked 2026-10-07), and
+`make gen3` reaches its fixed point (`gen3 == gen4`) without being killed.
 
 ## Coverage (pure-min dialect)
 
@@ -112,7 +114,7 @@ re-checked 2026-10-07), so there is no realistic way to hit the OOM killer.
 | `/` | yes (10/4 = 2.5) | yes (2.5) | yes (2.5; IEEE double, 2026-10-07) |
 | `/` by zero | `inf` / `-nan` | `inf` / `-nan` | `inf` / `-nan` |
 | `%` modulo (truncates both sides, `-7 % 3` = -1) | yes | yes | yes |
-| `%` by zero | crash: SIGFPE (exit 136) | crash: SIGFPE (exit 136) | exit 1, `division by zero` |
+| `%` by zero | exit 1, `division by zero` | exit 1, `division by zero` | exit 1, `division by zero` |
 | chained ops (`a + b + c`; `* / %` bind tighter, left-assoc) | yes | yes | yes |
 | `%` inside `when`/`while` conditions | yes | yes | yes |
 | `make` / `give` (top level, numeric) | yes | yes | yes (enabled 2026-10-06; `hold` inside a body is a clear error) |
@@ -133,45 +135,43 @@ re-checked 2026-10-07), so there is no realistic way to hit the OOM killer.
 | base `OP` operand on either side (`10 % 3`, `p.x + p.y`, `xs[1] + 5`, `len(xs) + 1`, `3 * xs[0]`, `p.x * p.x`) | yes | yes | yes (right of `* / %` fixed 2026-10-06) |
 | parenthesized base expression (`(a + 3) * 4`) | yes (20) | yes (20; 2026-10-07) | yes (20) |
 | fractional literal (`hold x = 2.5`; `2.` and `1.2.3` are errors) | yes (2026-10-07) | yes (2026-10-07; used to print 2) | yes (2026-10-07) |
+| integer-only arithmetic uses double constants (`100000 * 100000` = `1e+10`) | yes (2026-10-07) | yes (2026-10-07) | yes |
 | list literal with 10+ elements | yes | yes (was invalid C) | yes |
 | whole-list copy `hold ys = xs` | yes | yes (2026-10-07) | yes |
 
-## Measured divergences (2026-10-07)
+## Measured divergences (re-measured 2026-10-07)
 
-Every row was run through all three backends on one file on 2026-10-07.
-"error" means the compiler refused and said why. Rows that agreed on all three
-have been dropped: `10 / 4`, `2.5`, `(a + 3) * 4`, bare `push`, `arg_count()`,
-`arg(0)`, `read_file`, `write_file`, `else`/`otherwise`, `sx_index` and
-`hold p2 = r.q.p` now give identical output everywhere (see the coverage
-table), and 64 of the repository's `.sa` programs produce byte-identical output
-on seed-min, gen2 and native.
+The table below records the remaining differences between the shared pure-min
+subset and native-only extensions. The seed-min and gen2 compilers agree on the
+shared dialect; 64 repository `.sa` programs have also been compared across all
+three backends for byte-identical stdout.
 
 | Program | seed-min | gen2 | native |
 |---------|----------|------|--------|
 | bare `write_file("o.txt", "zz")` statement | error: `unknown statement 'write_file'` | error: `unknown statement 'write_file'` | runs the call (then `read_file` gives `zz`) |
-| `hold s = "a"` / `show s + 1` | error: `+ joins two strings or adds two numbers ...` | error: `+ joins two strings; '1' is not a string ...` | `a1` |
-| `show 7 % 0` | killed by SIGFPE (exit 136) | killed by SIGFPE (exit 136) | exit 1, `division by zero` |
-| `show 100000 * 100000` | **`1.41007e+09`** | **`1.41007e+09`** | `1e+10` |
+| `hold s = "a"` / `show s + 1` | error: strings and numbers cannot be mixed with `+` | error: strings and numbers cannot be mixed with `+` | `a1` (native-only extension) |
 
-The last row is the only *silent* divergence left, and it is pre-existing:
-seed-min and gen2 copy integer literals into the C output verbatim, so a
-`+ - *` (sub-)expression whose operands are *only* integer literals is folded
-by the C compiler in 32-bit `int` and can overflow past 2^31 — also inside a
-larger expression (`a + 100000 * 100000`). An operation with a variable or a
-fractional-literal operand, and every `/`, is computed in `double` and agrees
-on all three (`hold a = 100000` / `show a * 100000` and
-`show 100000 * 100000.0` print `1e+10` everywhere). Fixing it
-means emitting every literal as a C double (`100000.0`) in seed-min and in
-gen2's seven literal readers plus its verbatim condition rewrite; that was not
-done in this pass. Until then, keep large constants in variables.
+Two numeric mismatches from the prior audit are fixed and covered by
+`make test-float` and `make test-native-num`:
+
+* Integer-only expressions now use double literals in generated C. This covers
+  nested arithmetic, conditions, function arguments and `give` expressions;
+  `show 100000 * 100000` prints `1e+10` on seed-min, gen2 and native rather
+  than overflowing as a 32-bit C `int`.
+* `%` now checks the truncated divisor before taking the remainder. Every
+  backend exits non-zero with a clear `division by zero` diagnostic.
+
+In seed-min, integer tokens are emitted with a `.0` suffix. gen2 applies a
+string/identifier-aware integer-token normalization to generated function and
+main code, flushing after at most 512 input bytes per chunk (before `.0`
+expansion). Runtime code, strings and identifiers are unchanged. Native
+arithmetic already uses IEEE doubles. Generated-C modulo expressions use the
+same `sx_mod` helper in seed-min and gen2; native checks for zero before signed
+remainder.
 
 The documented dialect (see `docs/SYNTAX.md`, `docs/CHEATSHEET.md`) shows
-`push(xs, 4)` as a statement; since 2026-10-07 all three backends accept it,
-and `hold xs = push(xs, v)` keeps working everywhere.
-
-`%` lowers to `(double)((long)(a)%(long)(b))` on seed-min and gen2 — including
-inside `when`/`while` conditions — and to a real `idiv`/remainder in the native
-backend, so all three agree on `10 % 3 == 1`.
+`push(xs, 4)` as a statement; all three backends accept it, and
+`hold xs = push(xs, v)` works everywhere.
 
 Struct field types come from the literals that fill them: a field is `double`
 or `char *`, the first literal that mentions it decides, and a conflicting
@@ -182,9 +182,9 @@ later literal is a hard error. `hold s = u.name` is typed as a string.
 ```bash
 make true-selfhost   # seed-min -> gen1_min -> gen2, then every feature test on gen2
 make gen3            # gen3 == gen4 byte-identical + feature tests on gen3
-make native-test     # real x86-64: 42, -42, while/done, 10 % 3, else, slot/undefined,
-                     # lists, structs, nested structs, use splice, functions/recursion,
-                     # doubles (2.5, 10 / 4, %g output), file and argv builtins
+make native-test     # real x86-64: core control flow, lists, structs, modules,
+                     # recursion, double/large-constant math, %0 diagnostics,
+                     # file and argv builtins
 make seed-min        # seed-min: hold/show/while/struct/list/fn/%/else/use
 ```
 
@@ -211,6 +211,25 @@ hold l = Line { a: Point { name: "p1", x: 1 }, b: Point { name: "p2", x: 2 } }
 show l.a.name               # p1     (seed-min)
 show l.a.x                  # 1      (seed-min)
 ```
+
+## Sayanox-written tooling milestone
+
+`tools/sxfmt.sa` is a working, conservative formatter written in Sayanox and
+compiled by the maintained gen2 compiler. `make sxfmt` builds it; `make test-sxfmt`
+checks nested-block indentation, braces inside strings/comments, trailing
+whitespace removal, final-newline normalization and idempotence. It preserves
+tokens and is not yet a syntax-aware formatter.
+
+`tools/sxpkg.sa` implements local `init`, `add`, `list`, `remove`, `seed`,
+`search` and `info`; the shell entrypoint delegates these commands to it.
+`make sxpkg` builds the program and `make test-sxpkg` checks the command path.
+Sync/install/publish/fetch and package-directory operations remain in shell.
+
+These are migration slices, not an "all tools are Sayanox" claim: the LSP,
+online package operations, seed and native backend still use shell/C
+infrastructure. See
+[`ONLY_SAYANOX.md`](ONLY_SAYANOX.md) and
+[`SELF_HOSTING_ROADMAP.md`](SELF_HOSTING_ROADMAP.md).
 
 ## Honest boundaries
 
@@ -244,12 +263,13 @@ show l.a.x                  # 1      (seed-min)
   (`make test-parens`, and native output parity in `make native-test`).
   Parentheses around a non-numeric value and unbalanced parentheses are clear
   errors in gen2.
-* **Numbers are IEEE doubles** in all three backends: fractional literals
-  (`2.5`, `0.75`; `2.` and `1.2.3` are clear errors), `/` is true division
-  (`10 / 4` = 2.5, `1 / 0` = `inf`), `%` truncates both operands to integers
-  first, and `show` prints like C's `printf("%g")` (`0.333333`, `1e+10`). See
-  the divergence table for the integer-literal overflow caveat in seed-min and
-  gen2, and for `%` by zero.
+* **Numbers are IEEE doubles** in all three backends: integer and fractional
+  literals (`2.5`, `0.75`; `2.` and `1.2.3` are clear errors), `/` is true
+  division (`10 / 4` = 2.5, `1 / 0` = `inf`), `%` truncates both operands to
+  integers first, and `show` prints like C's `printf("%g")` (`0.333333`,
+  `1e+10`). Constant-only arithmetic, conditions, function arguments and
+  returns also use double literals, avoiding C's 32-bit integer overflow.
+  `% 0` exits with the same `division by zero` diagnostic in all three.
 * **Strings and numbers do not mix in pure-min**: `+` joins two strings or adds
   two numbers. seed-min and gen2 reject `"a" + 1`, `1 + "a"` and `-`/`*`/`/`/`%`
   on strings with a clear error (gen2 used to paste the variable's *name* into
@@ -283,12 +303,14 @@ show l.a.x                  # 1      (seed-min)
 * **`hold`/`show`** accept a chain of binary operands — number, name, field
   (`p.x + p.y`), index (`xs[1]`), call (`len(xs)`) — with the usual precedence
   (`* / %` bind tighter than `+ -`) and left-associativity; `hold u = s + t +
-  "!"` concatenates strings, and `%` lowers to the long-cast form.
+  "!"` concatenates strings, and `%` lowers through the checked `sx_mod`
+  helper in the C backends.
 * **`use` paths** resolve against the current directory first, then next to
   the input file, so `./selfhost/gen2 dir/main.sa out.c` finds `dir/lib.sa`.
-* **Conditions** in `when`/`while` are copied as C text with one rewrite: `%`
-  becomes `(double)((long)(a)%(long)(b))`, so `while a % 10 > 0` is correct;
-  the remaining operators must be valid C (`*`, `/` and comparisons are).
+* **Conditions** in `when`/`while` are copied as C text with `%` lowered to
+  `sx_mod(a, b)`, so `while a % 10 > 0` uses the same truncation and zero-divisor
+  behavior as ordinary expressions; the remaining operators must be valid C
+  (`*`, `/` and comparisons are).
 * **native_aot** covers `hold/show/when/else/while`, IEEE double numbers
   (fractional literals, true `/`, `%g` output identical to seed-min),
   `+ - * / %`
@@ -321,12 +343,11 @@ show l.a.x                  # 1      (seed-min)
   and `show` of a struct value.
   The file and argument builtins (`read_file`, `write_file`, `arg`,
   `arg_count`) work and match seed-min/gen2 (`make test-native-io`, including
-  a 160 KiB round trip). Differences from seed-min/gen2, all listed in the
-  divergence table: native accepts string + number and a bare builtin call
-  statement, and exits with `division by zero` on `% 0` where the C backends
-  die of SIGFPE. Native output is x86-64 Linux only. The runtime is a flat
-  BSS data area plus one bump allocator over lazily `mmap`ped 64 KiB chunks
-  (malloc/memcpy/copy semantics verified by probe programs).
+  a 160 KiB round trip). The remaining differences from seed-min/gen2, all
+  listed in the divergence table, are native-only extensions: string + number
+  and bare call statements. Native output is x86-64 Linux only. The runtime
+  is a flat BSS data area plus one bump allocator over lazily `mmap`ped 64 KiB
+  chunks (malloc/memcpy/copy semantics verified by probe programs).
 * **Known gen2 gaps outside pure-min**: three Stage-2 demo programs in the
   repository are not in the min dialect and gen2 fails on them loudly:
   `selfhost/minimal_lexer.sa` (link error), `selfhost/stage2_functions.sa`
@@ -342,7 +363,7 @@ show l.a.x                  # 1      (seed-min)
 | `make test-reassign` / `test-while` / `test-when` | core statements |
 | `make test-mod` | `%` lowering + `else` alias |
 | `make test-chain` | chained `+ - * / %`, precedence, string `+` (seed-min and gen2 agree) |
-| `make test-condmod` | `%` long-cast rewrite inside `when`/`while` conditions |
+| `make test-condmod` | checked `%` lowering inside `when`/`while` conditions |
 | `make test-struct2` | named fields, two structs, `p.x + p.y` |
 | `make test-user` | struct string fields (`User name/age`); mismatches are hard errors; a string chain that starts at a struct field links and prints the same in seed-min, gen2 and native (gen2 used to omit `sx_cat`) |
 | `make test-nest` | nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies including the doubly nested `hold p2 = t.q.p`); clear errors for forward decls, list fields, bad chains, show-of-struct |
@@ -353,10 +374,10 @@ show l.a.x                  # 1      (seed-min)
 | `make test-parity` | seed-min and gen2 agree on one program using the whole shared dialect |
 | `make seed-min` / `test-struct` / `test-list` / `test-fn` | same features on the C seed |
 | `make test-prec` | precedence (`a + 3 * 4` = 14 in seed-min and gen2) |
-| `make test-float` | fractional literals and true division in seed-min and gen2 (`2.5`, `10 / 4` = 2.5, `1 / 3` = 0.333333, negative fractions); `2.` and `1.2.3` are errors, but not inside strings or comments |
+| `make test-float` | fractional literals, true division, double constant arithmetic (including large products in conditions and functions), and deterministic `% 0` errors in seed-min and gen2; malformed numbers are rejected outside strings/comments |
 | `make test-parens` | parenthesized expressions in seed-min and gen2 (`(a + 3) * 4` = 20, nesting, unary minus, parens in conditions and `give`); non-numeric and unbalanced parens are clear errors |
 | `make test-push-stmt` | bare `push(xs, v)` in seed-min and gen2; push onto a non-list, unknown statements, string + number, number + string, string `-` and `*`, a string list element, 10+ element list literals, struct-in-list, `hold ys = xs`, list arithmetic — all clear errors or correct output |
-| `make test-native-num` (part of `native-test`) | native doubles: `test-float`/`test-parens`/`test-push-stmt` programs give the same output as seed-min and gen2; `%` truncation, `%g` formatting, `1 / 0` = `inf` (same as seed-min), `% 0` dies, string + number, struct-field string chains |
+| `make test-native-num` (part of `native-test`) | native doubles: `test-float`/`test-parens`/`test-push-stmt` programs give the same output as seed-min and gen2; large integer-only arithmetic, `%` truncation and `% 0` diagnostic, `%g` formatting, IEEE `/ 0`, string + number extension and struct-field string chains |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |
 

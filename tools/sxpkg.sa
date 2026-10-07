@@ -1,3 +1,458 @@
-show "sxpkg: writing sx.lock"
-write_file("sx.lock", "# sx.lock — Sayanox package lock\nversion=1\n")
-show "sxpkg: ok"
+// Local Sayanox package-lock utility.
+//
+// Sayanox owns local init/add/list/remove plus registry seed/search/info.
+// sync/install/publish/fetch still need directory/process/network APIs and
+// remain in the shell entrypoint.
+
+hold argn = arg_count()
+hold command = "help"
+hold name = ""
+hold version = "0.1.0"
+when argn >= 2 {
+  hold command = arg(1)
+}
+when argn >= 3 {
+  hold name = arg(2)
+}
+when argn >= 4 {
+  hold version = arg(3)
+}
+
+// Shared state is declared at the top level because the maintained compiler
+// emits C blocks for when/while scopes.
+hold handled = 0
+hold is_init = string_eq(command, "init")
+hold is_add = string_eq(command, "add")
+hold is_list = string_eq(command, "list")
+hold is_remove = string_eq(command, "remove")
+hold is_search = string_eq(command, "search")
+hold is_info = string_eq(command, "info")
+hold is_seed = string_eq(command, "seed")
+hold query = ""
+when argn >= 3 {
+  hold query = arg(2)
+}
+hold lock_path = "sx.lock"
+hold manifest_path = "sx.toml"
+hold registry_path = ".sayanox/registry"
+hold index_path = ".sayanox/registry/INDEX"
+hold meta_path = ""
+hold index = ""
+hold lock = ""
+hold manifest = ""
+hold result = ""
+hold line = ""
+hold key = ""
+hold lock_len = 0
+hold key_len = 0
+hold pos = 0
+hold c = 0
+hold lc = 0
+hold j = 0
+hold parse_key = 0
+hold same = 0
+hold replaced = 0
+hold removed = 0
+hold has_packages = 0
+hold found = 0
+hold is_comment = 0
+hold is_version = 0
+hold is_name = 0
+hold is_empty = 0
+hold line_len = 0
+hold first_byte = 0
+hold value = ""
+hold value_len = 0
+hold query_len = 0
+hold index_len = 0
+hold after_eq = 0
+hold match_pos = 0
+hold qpos = 0
+hold equal = 1
+hold scan_match = 0
+hold key_byte = 0
+hold query_byte = 0
+hold name_len = 0
+hold invalid = 0
+hold reserved = 0
+hold last_byte = 0
+hold write_status = 0
+hold all_ok = 1
+
+when is_init == 1 {
+  hold handled = 1
+  hold lock = read_file(lock_path)
+  hold lock_len = len(lock)
+  when lock_len == 0 {
+    hold write_status = write_file(lock_path, "# sx.lock\nversion=1\n")
+    when write_status == 0 {
+      hold all_ok = 0
+    }
+  }
+  hold manifest = read_file(manifest_path)
+  hold lock_len = len(manifest)
+  when lock_len == 0 {
+    hold write_status = write_file(manifest_path, "name = \"my-pkg\"\nversion = \"0.1.0\"\n")
+    when write_status == 0 {
+      hold all_ok = 0
+    }
+  }
+  when all_ok == 1 {
+    show "sxpkg: init ok"
+  } otherwise {
+    show "sxpkg: init failed to write project files"
+  }
+}
+
+when is_add == 1 {
+  hold handled = 1
+  when argn < 3 {
+    show "usage: sxpkg add <name> [version]"
+  } otherwise {
+    hold name_len = len(name)
+    hold invalid = 0
+    when name_len == 0 {
+      hold invalid = 1
+    }
+    hold reserved = string_eq(name, "name")
+    when reserved == 1 {
+      hold invalid = 1
+    }
+    hold reserved = string_eq(name, "version")
+    when reserved == 1 {
+      hold invalid = 1
+    }
+    when invalid == 1 {
+      show "sxpkg: invalid or reserved package name"
+    } otherwise {
+      hold lock = read_file(lock_path)
+      hold lock_len = len(lock)
+      when lock_len == 0 {
+        hold lock = "# sx.lock\nversion=1\n"
+      }
+      hold lock_len = len(lock)
+      when lock_len > 0 {
+        hold last_byte = sx_idx(lock, lock_len - 1)
+        when last_byte != 10 {
+          hold lock = concat(lock, "\n")
+        }
+      }
+      hold lock_len = len(lock)
+      hold result = ""
+      hold line = ""
+      hold pos = 0
+      hold replaced = 0
+      while pos < lock_len {
+        hold c = sx_idx(lock, pos)
+        when c == 10 {
+          hold key = ""
+          hold key_len = len(line)
+          hold j = 0
+          hold parse_key = 1
+          while parse_key == 1 {
+            when j < key_len {
+              hold lc = sx_idx(line, j)
+              when lc == 61 {
+                hold parse_key = 0
+              } otherwise {
+                hold key = concat(key, chr(lc))
+                hold j = j + 1
+              }
+            } otherwise {
+              hold parse_key = 0
+            }
+          }
+          hold same = string_eq(key, name)
+          when same == 1 {
+            when replaced == 0 {
+              hold result = concat(result, concat(concat(name, "="), concat(version, "\n")))
+              hold replaced = 1
+            }
+          } otherwise {
+            hold result = concat(result, concat(line, "\n"))
+          }
+          hold line = ""
+        } otherwise {
+          hold line = concat(line, chr(c))
+        }
+        hold pos = pos + 1
+      }
+      when replaced == 0 {
+        hold result = concat(result, concat(concat(name, "="), concat(version, "\n")))
+      }
+      hold write_status = write_file(lock_path, result)
+      when write_status == 1 {
+        show concat("sxpkg: locked ", concat(name, concat(" ", version)))
+      } otherwise {
+        show "sxpkg: failed to write sx.lock"
+      }
+    }
+  }
+}
+
+when is_list == 1 {
+  hold handled = 1
+  hold lock = read_file(lock_path)
+  hold lock_len = len(lock)
+  when lock_len == 0 {
+    show "sxpkg: no sx.lock; run init first"
+  } otherwise {
+    hold last_byte = sx_idx(lock, lock_len - 1)
+    when last_byte != 10 {
+      hold lock = concat(lock, "\n")
+    }
+    hold lock_len = len(lock)
+    hold result = "sxpkg: locked packages"
+    hold has_packages = 0
+    hold line = ""
+    hold pos = 0
+    while pos < lock_len {
+      hold c = sx_idx(lock, pos)
+      when c == 10 {
+        hold key = ""
+        hold key_len = len(line)
+        hold j = 0
+        hold parse_key = 1
+        while parse_key == 1 {
+          when j < key_len {
+            hold lc = sx_idx(line, j)
+            when lc == 61 {
+              hold parse_key = 0
+            } otherwise {
+              hold key = concat(key, chr(lc))
+              hold j = j + 1
+            }
+          } otherwise {
+            hold parse_key = 0
+          }
+        }
+        hold is_version = string_eq(key, "version")
+        hold is_name = string_eq(key, "name")
+        hold is_empty = string_eq(line, "")
+        hold is_comment = 0
+        hold line_len = len(line)
+        when line_len > 0 {
+          hold first_byte = sx_idx(line, 0)
+          when first_byte == 35 {
+            hold is_comment = 1
+          }
+        }
+        when is_version == 0 && is_name == 0 && is_empty == 0 && is_comment == 0 {
+          hold result = concat(result, concat("\n", line))
+          hold has_packages = 1
+        }
+        hold line = ""
+      } otherwise {
+        hold line = concat(line, chr(c))
+      }
+      hold pos = pos + 1
+    }
+    when has_packages == 0 {
+      hold result = concat(result, "\n(none)")
+    }
+    show result
+  }
+}
+
+when is_search == 1 {
+  hold handled = 1
+  hold index = read_file(index_path)
+  hold index_len = len(index)
+  when index_len == 0 {
+    show "sxpkg: no registry index; run sync or seed"
+  } otherwise {
+    hold last_byte = sx_idx(index, index_len - 1)
+    when last_byte != 10 {
+      hold index = concat(index, "\n")
+    }
+    hold index_len = len(index)
+    hold query_len = len(query)
+    hold result = concat("sxpkg: search ", query)
+    hold has_packages = 0
+    hold line = ""
+    hold pos = 0
+    while pos < index_len {
+      hold c = sx_idx(index, pos)
+      when c == 10 {
+        hold key = ""
+        hold value = ""
+        hold after_eq = 0
+        hold line_len = len(line)
+        hold j = 0
+        while j < line_len {
+          hold lc = sx_idx(line, j)
+          when lc == 61 {
+            hold after_eq = 1
+          } otherwise {
+            when after_eq == 1 {
+              hold value = concat(value, chr(lc))
+            } otherwise {
+              hold key = concat(key, chr(lc))
+            }
+          }
+          hold j = j + 1
+        }
+        hold key_len = len(key)
+        hold same = string_eq(key, "version")
+        hold is_version = same
+        hold same = string_eq(key, "name")
+        hold is_name = same
+        hold is_empty = string_eq(key, "")
+        hold is_comment = 0
+        when key_len > 0 {
+          hold first_byte = sx_idx(key, 0)
+          when first_byte == 35 {
+            hold is_comment = 1
+          }
+        }
+        hold found = 0
+        when query_len == 0 {
+          hold found = 1
+        } otherwise {
+          hold match_pos = 0
+          hold scan_match = 1
+          while scan_match == 1 {
+            when match_pos + query_len <= key_len {
+              hold equal = 1
+              hold qpos = 0
+              while qpos < query_len && equal == 1 {
+                hold key_byte = sx_idx(key, match_pos + qpos)
+                hold query_byte = sx_idx(query, qpos)
+                when key_byte != query_byte {
+                  hold equal = 0
+                }
+                hold qpos = qpos + 1
+              }
+              when equal == 1 {
+                hold found = 1
+                hold scan_match = 0
+              } otherwise {
+                hold match_pos = match_pos + 1
+              }
+            } otherwise {
+              hold scan_match = 0
+            }
+          }
+        }
+        when found == 1 && is_version == 0 && is_name == 0 && is_comment == 0 && is_empty == 0 {
+          hold result = concat(result, concat("\n  ", concat(key, concat(" ", value))))
+          hold has_packages = 1
+        }
+        hold line = ""
+      } otherwise {
+        hold line = concat(line, chr(c))
+      }
+      hold pos = pos + 1
+    }
+    when has_packages == 0 {
+      hold result = concat(result, "\n  (no matches)")
+    }
+    show result
+  }
+}
+
+when is_info == 1 {
+  hold handled = 1
+  when argn < 3 {
+    show "usage: sxpkg info <name>"
+  } otherwise {
+    hold meta_path = concat(concat(registry_path, "/"), concat(name, "/pkg.meta"))
+    hold manifest = read_file(meta_path)
+    hold lock_len = len(manifest)
+    when lock_len == 0 {
+      show concat("unknown ", concat(name, " - try: sxpkg sync and search"))
+    } otherwise {
+      show manifest
+    }
+  }
+}
+
+when is_seed == 1 {
+  hold handled = 1
+  hold all_ok = 1
+  hold write_status = write_file(concat(concat(registry_path, "/hello"), "/pkg.meta"), "name=hello\nversion=0.1.0\ndesc=hello world sample\n")
+  when write_status == 0 { hold all_ok = 0 }
+  hold write_status = write_file(concat(concat(registry_path, "/hello"), "/main.sa"), "show \"hello from pkg\"\n")
+  when write_status == 0 { hold all_ok = 0 }
+  hold write_status = write_file(concat(concat(registry_path, "/math"), "/pkg.meta"), "name=math\nversion=0.1.0\ndesc=tiny math helpers\n")
+  when write_status == 0 { hold all_ok = 0 }
+  hold write_status = write_file(concat(concat(registry_path, "/math"), "/main.sa"), "make double(n) { give n + n }\n")
+  when write_status == 0 { hold all_ok = 0 }
+  hold write_status = write_file(index_path, "hello=0.1.0\nmath=0.1.0\n")
+  when write_status == 0 { hold all_ok = 0 }
+  when all_ok == 1 {
+    show "sxpkg: local registry seeded"
+  } otherwise {
+    show "sxpkg: seed failed; run the wrapper to create registry folders"
+  }
+}
+
+when is_remove == 1 {
+  hold handled = 1
+  when argn < 3 {
+    show "usage: sxpkg remove <name>"
+  } otherwise {
+    hold lock = read_file(lock_path)
+    hold lock_len = len(lock)
+    when lock_len == 0 {
+      show "sxpkg: no sx.lock"
+    } otherwise {
+      hold last_byte = sx_idx(lock, lock_len - 1)
+      when last_byte != 10 {
+        hold lock = concat(lock, "\n")
+      }
+      hold lock_len = len(lock)
+      hold result = ""
+      hold line = ""
+      hold pos = 0
+      hold removed = 0
+      while pos < lock_len {
+        hold c = sx_idx(lock, pos)
+        when c == 10 {
+          hold key = ""
+          hold key_len = len(line)
+          hold j = 0
+          hold parse_key = 1
+          while parse_key == 1 {
+            when j < key_len {
+              hold lc = sx_idx(line, j)
+              when lc == 61 {
+                hold parse_key = 0
+              } otherwise {
+                hold key = concat(key, chr(lc))
+                hold j = j + 1
+              }
+            } otherwise {
+              hold parse_key = 0
+            }
+          }
+          hold same = string_eq(key, name)
+          when same == 1 {
+            hold removed = 1
+          } otherwise {
+            hold result = concat(result, concat(line, "\n"))
+          }
+          hold line = ""
+        } otherwise {
+          hold line = concat(line, chr(c))
+        }
+        hold pos = pos + 1
+      }
+      when removed == 1 {
+        hold write_status = write_file(lock_path, result)
+        when write_status == 1 {
+          show concat("sxpkg: removed ", name)
+        } otherwise {
+          show "sxpkg: failed to write sx.lock"
+        }
+      } otherwise {
+        show concat("sxpkg: not locked: ", name)
+      }
+    }
+  }
+}
+
+when handled == 0 {
+  show "sxpkg: local commands: init | add <name> [version] | list | remove <name>"
+  show "sxpkg: sync/install/publish/fetch still require the shell implementation"
+}

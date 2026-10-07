@@ -208,7 +208,18 @@ static char *atom(int *oty){
       P++; while(P<N && isdigit((unsigned char)S[P])) P++;
     }
     if(P<N && (S[P]=='.' || isid0(S[P]))) die("malformed number literal");
-    size_t n=P-a; char *r=malloc(n+1); memcpy(r,S+a,n); r[n]=0; *oty=TY_NUM; return r;
+    size_t n=P-a;
+    int fractional=0;
+    for(size_t i=a;i<P;i++) if(S[i]=='.') fractional=1;
+    /* C treats an integer token as `int`, so a constant-only expression such
+     * as 100000 * 100000 overflows before it can be assigned to a `double`.
+     * Give every integer literal a floating spelling at the source boundary;
+     * this also keeps conditions and function returns on IEEE-double math. */
+    char *r=malloc(n+(fractional?1:3));
+    memcpy(r,S+a,n);
+    if(fractional) r[n]=0;
+    else { r[n]='.'; r[n+1]='0'; r[n+2]=0; }
+    *oty=TY_NUM; return r;
   }
   if(P<N && isid0(S[P])){
     char *id=parse_id(); skip();
@@ -375,9 +386,10 @@ static char *mul(int *oty){
      * either a C error or (for + and -) silent pointer arithmetic */
     if(*oty!=TY_NUM||rt!=TY_NUM) die("* / % need numbers (not a string, list or struct)");
     if(op=='%'){
-      /* modulo: (double)((long)(a)%(long)(b)) */
+      /* sx_mod preserves truncation-toward-zero semantics and turns a zero
+       * divisor into a deterministic language error instead of SIGFPE. */
       char *t=malloc(strlen(l)+strlen(r)+32);
-      sprintf(t,"(double)((long)(%s)%%(long)(%s))",l,r);
+      sprintf(t,"sx_mod((double)(%s),(double)(%s))",l,r);
       free(l); free(r); l=t; *oty=TY_NUM;
     } else if(op=='/'){
       /* always a double division: two integer literals (10 / 4) would
@@ -674,6 +686,7 @@ static int field_type(const char *base, const char *fld, int *osi){
 static void preamble(void){
   puts("#include <stdio.h>"); puts("#include <stdlib.h>"); puts("#include <string.h>"); puts("#include <stdarg.h>"); puts("#include <stdint.h>"); puts("#include <stddef.h>");
   puts("typedef struct { double *d; long n; long cap; } sx_list;");
+  puts("static double sx_mod(double a,double b){ long x=(long)a, y=(long)b; if(!y){fputs(\"division by zero\\n\",stderr);exit(1);} return (double)(x%y); }");
   puts("static sx_list *sx_llit(int n,...){ sx_list *L=malloc(sizeof*L); L->n=n; L->cap=n<4?4:n; L->d=malloc(sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }");
   puts("static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\\n\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\\n\",stderr);exit(1);} return L->d[i]; }");
   puts("static double sx_llen(sx_list *L){ return L?(double)L->n:0.0; }");

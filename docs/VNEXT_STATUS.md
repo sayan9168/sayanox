@@ -1,8 +1,11 @@
 # Sayanox vNext — Repository Audit & Status (Phase 1)
 
-Date: 2026-09-25. This audit was produced by inspecting the actual code,
-not by trusting `docs/STATUS.md`. Every claim below was verified with the
-commands listed in "Exact test commands".
+Date: 2026-09-25. This was a point-in-time audit of the repository at that
+commit. **It is historical, not the current status:** the compiler, native
+backend, tests and CI have since changed substantially. Use
+[`STATUS.md`](STATUS.md) for the current verified feature matrix and
+[`COMPLETE.md`](COMPLETE.md) for the current milestone. The audit below is
+kept only as a record of the earlier vNext plan.
 
 ## Current architecture (as found)
 

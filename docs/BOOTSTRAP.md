@@ -16,9 +16,11 @@ Verification commands:
 
 | Command | Role |
 |---|---|
-| `make true-selfhost` | Canonical pure-min bootstrap |
-| `make true-selfhost-full` | Optional larger C seed path |
-| `make seed-min-gen1` | Build gen1 from the min seed |
+| `make true-selfhost` | Canonical pure-min bootstrap and feature/tool tests |
+| `make true-selfhost-full` | Historical compatibility alias; full Stage-2 is not implemented |
+| `make gen1` / `make seed-min-gen1` | Build gen1-min from the maintained min seed |
+| `make gen2` | Build the maintained gen2 through gen1-min |
+| `make tools` | Build the Sayanox formatter and local package-lock tool |
 | `make gen3` | Behavioural tests + **required** gen3==gen4 byte identity |
 | `make native-test` | Real x86-64 AOT executable tests |
 

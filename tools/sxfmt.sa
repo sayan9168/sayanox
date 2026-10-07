@@ -1,13 +1,177 @@
-// Sayanox formatter (copy-through)
-hold n = arg_count()
-hold in = "examples/hello.sa"
-when n >= 2 {
-  hold in = arg(1)
+// Sayanox source formatter.
+//
+// The formatter is intentionally conservative: it preserves tokens and
+// comments, normalizes indentation from braces to two spaces, strips trailing
+// whitespace, and ensures a final newline. Braces inside strings and //
+// comments do not affect indentation.
+
+hold argn = arg_count()
+hold t = 0
+hold input_path = "examples/hello.sa"
+when argn >= 2 {
+  hold input_path = arg(1)
 }
-hold src = read_file(in)
-hold out = in
-when n >= 3 {
-  hold out = arg(2)
+hold output_path = input_path
+when argn >= 3 {
+  hold output_path = arg(2)
 }
-write_file(out, src)
-show 1
+
+hold source = read_file(input_path)
+hold source_len = len(source)
+when source_len > 0 {
+  when sx_idx(source, source_len - 1) != 10 {
+    hold source = concat(source, "\n")
+  }
+}
+hold source_len = len(source)
+hold pos = 0
+hold depth = 0
+hold result = ""
+hold line = ""
+
+while pos < source_len {
+  hold c = sx_index(source, pos)
+  when c == 10 {
+    hold line_len = len(line)
+
+    // Find the first non-whitespace byte.
+    hold left = 0
+    hold trimming = 1
+    while trimming == 1 {
+      when left < line_len {
+        hold t = sx_index(line, left)
+        when t == 32 || t == 9 || t == 13 {
+          hold left = left + 1
+        } otherwise {
+          hold trimming = 0
+        }
+      } otherwise {
+        hold trimming = 0
+      }
+    }
+
+    // Find the last non-whitespace byte.
+    hold right = line_len
+    hold trimming = 1
+    while trimming == 1 {
+      when right > left {
+        hold t = sx_index(line, right - 1)
+        when t == 32 || t == 9 || t == 13 {
+          hold right = right - 1
+        } otherwise {
+          hold trimming = 0
+        }
+      } otherwise {
+        hold trimming = 0
+      }
+    }
+
+    hold text = ""
+    hold copy_pos = left
+    while copy_pos < right {
+      hold text = concat(text, chr(sx_index(line, copy_pos)))
+      hold copy_pos = copy_pos + 1
+    }
+    hold text_len = len(text)
+
+    // A line that starts with one or more closing braces is indented at the
+    // depth those braces return to. Spaces between leading braces are allowed.
+    hold close_prefix = 0
+    hold lead_pos = 0
+    hold lead_scan = 1
+    while lead_scan == 1 {
+      when lead_pos < text_len {
+        hold t = sx_index(text, lead_pos)
+        when t == 125 {
+          hold close_prefix = close_prefix + 1
+          hold lead_pos = lead_pos + 1
+        } otherwise {
+          when t == 32 || t == 9 {
+            hold lead_pos = lead_pos + 1
+          } otherwise {
+            hold lead_scan = 0
+          }
+        }
+      } otherwise {
+        hold lead_scan = 0
+      }
+    }
+
+    // Count braces while ignoring quoted strings and // comments.
+    hold open_count = 0
+    hold close_count = 0
+    hold in_quote = 0
+    hold escaped = 0
+    hold in_comment = 0
+    hold scan_pos = 0
+    while scan_pos < line_len {
+      hold sc = sx_index(line, scan_pos)
+      when in_comment == 1 {
+        hold scan_pos = scan_pos + 1
+      } otherwise {
+        when in_quote == 1 {
+          when escaped == 1 {
+            hold escaped = 0
+          } otherwise {
+            when sc == 92 {
+              hold escaped = 1
+            } otherwise {
+              when sc == 34 {
+                hold in_quote = 0
+              }
+            }
+          }
+        } otherwise {
+          when sc == 34 {
+            hold in_quote = 1
+          } otherwise {
+            when sc == 47 && scan_pos + 1 < line_len {
+              when sx_idx(line, scan_pos + 1) == 47 {
+                hold in_comment = 1
+              }
+            } otherwise {
+              when sc == 123 {
+                hold open_count = open_count + 1
+              }
+              when sc == 125 {
+                hold close_count = close_count + 1
+              }
+            }
+          }
+        }
+        hold scan_pos = scan_pos + 1
+      }
+    }
+
+    // Blank lines stay blank. Nonblank lines receive two spaces per level.
+    when text_len > 0 {
+      hold line_depth = depth - close_prefix
+      when line_depth < 0 {
+        hold line_depth = 0
+      }
+      hold indent = ""
+      hold indent_pos = 0
+      while indent_pos < line_depth {
+        hold indent = concat(indent, "  ")
+        hold indent_pos = indent_pos + 1
+      }
+      hold result = concat(result, indent)
+      hold result = concat(result, text)
+    }
+    hold result = concat(result, "\n")
+
+    hold depth = depth + open_count - close_count
+    when depth < 0 {
+      hold depth = 0
+    }
+    hold line = ""
+  } otherwise {
+    hold line = concat(line, chr(c))
+  }
+  hold pos = pos + 1
+}
+
+hold written = write_file(output_path, result)
+when written == 0 {
+  show "sxfmt: failed to write output"
+}
