@@ -21,6 +21,26 @@ indexing returns a numeric byte value; use `chr` when a one-byte string is
 needed. The exact edge cases and parity tests are listed in
 [`STATUS.md`](STATUS.md).
 
+## Runtime builtins added with the collector (gen1_min / gen2)
+
+These are compiled and run by `selfhost/gen2` (and by the `gen1_min` built from
+the same source); the checked-in `seed-min` predates them and rejects them.
+
+| Sayanox call | Purpose |
+|--------------|---------|
+| `read_line()` | read one line from stdin, without the newline |
+| `read_n(n)` | read exactly `n` bytes from stdin |
+| `write_out(s)` | write `s` to stdout without a newline |
+| `flush_out()` | flush stdout |
+| `numstr(n)` | format a number as a string (the `%g` form `show` uses) |
+| `gc()` | run a collection now; returns the bytes reclaimed |
+| `gc_live()` | bytes currently held by the managed heap |
+| `gc_runs()` | number of collections so far |
+
+All of them are ordinary expressions, so they nest inside other calls
+(`concat(a, numstr(n))`) and can be stored (`hold n = numstr(v)`). Native AOT
+does not implement them. See [`GC.md`](GC.md).
+
 The maintained C backends accept the builtins in expressions (for example,
 `hold status = write_file(path, text)`). A bare builtin-call statement is a
 native-AOT extension and is not part of the shared dialect. `string + number`

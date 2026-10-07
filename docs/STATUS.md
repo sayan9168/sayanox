@@ -77,28 +77,38 @@ assertion (`fix-seed` remains as an alias). Test assertions moved off
 `sed -n Np` onto a pure-shell `assert-out` helper that compares whole stdout
 using only builtins, which is stricter than the per-line checks it replaced.
 
-## Bootstrap memory (re-measured 2026-10-07)
+## Bootstrap memory (re-measured 2026-10-07, with the collector)
 
-`selfhost/compiler_min.sa` is 244,058 bytes (238 KB; it was 200,228 bytes on
-2026-10-06 — the growth is the newer language checks and compiler fixes). The
+`selfhost/compiler_min.sa` is 400,647 bytes (391 KB; it was 244,058 bytes
+earlier the same day — the growth is the generic pre-pass, the collector text
+and the newer language checks). The
 compiler flushes its `body` buffer into `obody` at ~1 KB (except while collecting
 a function body), avoiding a flat O(n^2) accumulator that previously allocated
 ~2.5 GB and was killed on low-RAM hosts. A final string/identifier-aware C
 literal pass flushes after at most 512 input bytes per chunk (before `.0`
 expansion), bounding the temporary builder and avoiding a full-prefix copy per
 character.
-Measured 2026-10-07 (peak RSS from `wait4` `ru_maxrss`):
+Measured 2026-10-07 after the mark & sweep collector landed (peak RSS from
+`wait4` `ru_maxrss`):
 
-| Step | Peak RSS | (2026-10-06) |
-|------|----------|--------------|
-| `seed-min` compiling `compiler_min.sa` -> `gen1_min.c` | 1.8 MB | 1.5 MB |
-| `gen1_min` compiling `compiler_min.sa` -> `gen2.c` | 57.9 MB | 29 MB |
-| `gen2` compiling `compiler_min.sa` -> `gen3.c` | 218.6 MB | 75 MB |
+| Step | Peak RSS (with GC) | (pre-GC, same day) |
+|------|--------------------|--------------------|
+| `seed-min` compiling `compiler_min.sa` -> `gen1_min.c` | 1.9 MB | 1.8 MB |
+| `gen1_min` compiling `compiler_min.sa` -> `gen2.c` | 100.6 MB | 57.9 MB |
+| `gen2` compiling `compiler_min.sa` -> `gen3.c` | 32.6 MB | 218.6 MB |
 
-On this checkout, `make true-selfhost` takes ~14 s, `make gen3` ~10 s and
-`make native-test` ~1 s. `gen2` produces byte-identical output under
-`ulimit -v 400000` (a 400 MB address-space cap; re-checked 2026-10-07), and
-`make gen3` reaches its fixed point (`gen3 == gen4`) without being killed.
+`gen2`'s own peak fell 6.7x: it is built by `gen1_min`, emits the collector
+into itself, and now frees the strings it allocates while compiling.
+`gen1_min` is built by the malloc-only seed and reads a bigger source than
+before, so its peak grew; it runs once per bootstrap and is not on the
+memory-critical path.
+
+On this checkout `gen1_min` and `gen2` each need ~20 s to compile
+`compiler_min.sa`, `make gen2` ~35 s, `make true-selfhost` ~2 min,
+`make gen3` ~1 min and `make native-test` ~3 s. `gen2` produces byte-identical
+output under `ulimit -v 65536` (a 64 MB address-space cap, down from 400 MB
+before the collector), and `make gen3` reaches its fixed point
+(`gen3 == gen4`) without being killed.
 
 ## Coverage (pure-min dialect)
 
@@ -225,9 +235,11 @@ tokens and is not yet a syntax-aware formatter.
 `make sxpkg` builds the program and `make test-sxpkg` checks the command path.
 Sync/install/publish/fetch and package-directory operations remain in shell.
 
-These are migration slices, not an "all tools are Sayanox" claim: the LSP,
-online package operations, seed and native backend still use shell/C
-infrastructure. See
+The language server is a full Sayanox program (`tools/sayanox_lsp.sa`, built
+by gen2 and covered by `make test-lsp`); `tools/sayanox-lsp.sh` remains as a
+dependency-free shell fallback. These are migration slices, not an "all tools
+are Sayanox" claim: online package operations, the seed and the native backend
+still use shell/C infrastructure. See
 [`ONLY_SAYANOX.md`](ONLY_SAYANOX.md) and
 [`SELF_HOSTING_ROADMAP.md`](SELF_HOSTING_ROADMAP.md).
 
@@ -278,10 +290,14 @@ infrastructure. See
   use `concat(s, n)` if a program has to run everywhere.
 * **Statements**: a statement starts with `hold show when while make give
   struct use` (plus `otherwise`/`else` after a `}`) or is a bare
-  `push(xs, v)`. Anything else — `continue`, `gc`, a
-  misspelled keyword, a bare `write_file(...)` call — is an `unknown
-  statement` error in seed-min and gen2 (gen2 used to drop such lines silently
-  or emit invalid C). native still runs a bare builtin call statement.
+  `push(xs, v)`. Anything else — `continue`, a misspelled keyword, a bare
+  `write_file(...)` call — is an `unknown statement` error in seed-min and
+  gen2 (gen2 used to drop such lines silently or emit invalid C). native still
+  runs a bare builtin call statement.
+* **Collector builtins** (`gc()`, `gc_live()`, `gc_runs()`) are gen2/gen1_min
+  only: the seed runtime has no collector. They are ordinary expression
+  calls, so `hold freed = gc()` works; a *bare* `gc` statement is still an
+  unknown statement.
 * **Lists** are `double`-only, one type per program; `push` returns the list
   and also works as a bare statement. `hold ys = xs` copies the list
   reference. A string, list or struct as a list element is a clear error in
@@ -353,8 +369,9 @@ infrastructure. See
   `selfhost/minimal_lexer.sa` (link error), `selfhost/stage2_functions.sa`
   (C error: `'result' undeclared`) and `selfhost/stage2_variables.sa`
   (`#error`). None of them is used by any bootstrap target.
-* Still not part of pure-min: modules with namespacing/aliases, generics, a
-  GC — none of these are claimed anywhere (see "Out of scope" below).
+* Still not part of pure-min: modules with namespacing/aliases and generics —
+  neither is claimed anywhere (see "Out of scope" below). The GC is no longer
+  on that list: gen2-compiled programs link the collector in [`GC.md`](GC.md).
 
 ## Feature tests
 
@@ -378,6 +395,8 @@ infrastructure. See
 | `make test-parens` | parenthesized expressions in seed-min and gen2 (`(a + 3) * 4` = 20, nesting, unary minus, parens in conditions and `give`); non-numeric and unbalanced parens are clear errors |
 | `make test-push-stmt` | bare `push(xs, v)` in seed-min and gen2; push onto a non-list, unknown statements, string + number, number + string, string `-` and `*`, a string list element, 10+ element list literals, struct-in-list, `hold ys = xs`, list arithmetic — all clear errors or correct output |
 | `make test-native-num` (part of `native-test`) | native doubles: `test-float`/`test-parens`/`test-push-stmt` programs give the same output as seed-min and gen2; large integer-only arithmetic, `%` truncation and `% 0` diagnostic, `%g` formatting, IEEE `/ 0`, string + number extension and struct-field string chains |
+| `make test-lsp` | the Sayanox language server in a live JSON-RPC session: initialize/serverInfo, didOpen + publishDiagnostics, SX1001/SX1002/SX1003/SX1005 diagnostics, documentSymbol (function + variable), completion (builtin names survive in string literals), hover, definition, and a didChange that clears the diagnostics |
+| `make test-gc` | gen2 mark & sweep from the language side: a 2000-iteration `concat` loop stays under 200 KB of live heap after `gc()`, `gc_runs()` counts a collection, `gc()` reclaims bytes, and the surviving string is intact (`len` + first byte) |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |
 
@@ -386,12 +405,11 @@ infrastructure. See
 Not worked on in this pass and not claimed anywhere in this repository:
 
 * the full Stage-2 language (everything beyond the pure-min dialect above)
-* a garbage collector or any heap redesign (programs compiled by gen2 and
-  native never free their strings and lists; seed-min's runtime frees only
-  the previous value of a reassigned string variable)
+* the native AOT backend still bump-allocates: its programs never free their
+  strings and lists (gen2-compiled programs now use the mark & sweep collector
+  described in [`GC.md`](GC.md))
 * a package registry or versioned modules (`use "file.sa"` is a textual
   splice; `tools/sxpkg.sh` is an optional, unused script)
-* an LSP server or IDE integration
 * a full standard library (only the builtins in the coverage table exist)
 * generics or a richer type system (values are doubles, strings, double lists
   and literal-typed structs)

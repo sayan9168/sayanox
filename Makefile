@@ -927,7 +927,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-parity test-sxfmt test-sxpkg test-lsp
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-parity test-sxfmt test-sxpkg test-lsp test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -1146,6 +1146,17 @@ gc-test:
 	@# the concat chain came out as; pinning it makes the length part of the test.
 	$(call assert-out,./$(TESTS)/rc_runtime_stress,2005\ngc-rc-ok)
 	@echo "=== GC-RC-OK ==="
+
+# gen2's mark & sweep collector, from the language side: a concat loop must
+# not grow the managed heap without bound, collections must happen, gc() must
+# run and the surviving string must stay intact.
+test-gc: $(GEN2)
+	@mkdir -p $(TESTS)
+	@printf 'hold base = gc_live()\nhold s = ""\nhold i = 0\nwhile i < 2000 {\n  s = concat(s, "abc")\n  i = i + 1\n}\nhold got = gc()\nhold after = gc_live()\nwhen after < base + 200000 {\n  show "bounded"\n}\nwhen gc_runs() > 0 {\n  show "ran"\n}\nshow len(s)\nwhen got > 0 {\n  show "reclaimed"\n}\nshow sx_index(s, 0)\n' > $(TESTS)/gc_builtins.sa
+	./$(GEN2) $(TESTS)/gc_builtins.sa $(TESTS)/gc_builtins.c
+	$(CC) -O2 -o $(TESTS)/gc_builtins $(TESTS)/gc_builtins.c
+	$(call assert-out,./$(TESTS)/gc_builtins,bounded\nran\n6000\nreclaimed\n97)
+	@echo "[OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded"
 
 gen3:
 	@test -x $(GEN2) || (echo "run true-selfhost first"; exit 1)

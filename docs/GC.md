@@ -1,59 +1,98 @@
 # Sayanox memory management
 
-## Model: reference counting
+Sayanox has two runtimes, and which one a program gets depends on which
+backend compiles it.
 
-Sayanox's managed string/list runtime uses **single-threaded reference counting**. There is no background collector and no concurrent GC claim.
+## 1. gen2-compiled programs: conservative mark & sweep (the default)
 
-### Managed objects
+Programs compiled by `selfhost/gen2` — and by `gen1_min`, which emits the same
+prelude — link a **non-moving, conservative mark & sweep collector**. The
+collector lives in `selfhost/compiler_min.sa` as part of the emitted prelude,
+so it is exercised by every `make gen2`.
 
-- Heap strings returned by `concat` and `str` use an `SxRcStr` header containing a reference count and byte length.
-- Emitted `SxList` values carry a reference count and own their element buffer.
-- Ordinary compiler/parser scratch allocations remain ordinary C allocations and are not language-level managed objects.
+### What is managed
 
-### API
+* every string byte buffer (`chr`, `concat`, `read_file`, `read_line`,
+  `read_n`, `numstr`, ...)
+* `sx_list` headers and their element buffers (list literals, `push`, growth)
 
-String runtime functions:
+Allocations go through `sx_gc_alloc(kind, payload)`: 26 size classes from
+32 bytes up to 1 GiB (`SX_NCLS`, size `32 << class`), each with its own free
+list, plus a sorted block list for interior-pointer lookups and a hash table
+for O(1) "is this a block?" checks.
 
-- `sx_rc_retain(p)` increments a managed string reference.
-- `sx_rc_release(p)` decrements it and frees the object at zero.
-- `sx_concat(a, b)` creates a managed string with one owning reference.
-- `sx_str(n)` creates a managed string with one owning reference.
+### How it runs
 
-Language-facing compatibility helpers include `release(value)` and `gc()` / `gc_info()`. `release` performs deterministic RC release. `gc()` does not scan memory and currently returns without performing a collection; it exists for source compatibility with older examples.
+* `sx_gc_init(&sx_gcanchor)` runs at the top of `main`; the collector scans the
+  machine stack between that anchor and its own frame, plus the `jmp_buf` it
+  spills the caller-saved registers into (`setjmp`). Anything that looks like a
+  pointer into (or into the interior of) a live block keeps that block alive.
+* Marking recurses into list element buffers; sweeping pushes dead blocks onto
+  the per-class free lists and updates the live-byte counter.
+* A collection triggers automatically when the live bytes since the last
+  collection reach `1.5 * reclaimed + 4 MiB`, and on demand from the language.
 
-List runtime functions emitted by the Sayanox code generator include `sx_list_retain` and `sx_list_release`. A list owns its element buffer until its reference count reaches zero.
+### Language surface
 
-## Lifetime rules
+| call | meaning | C runtime name |
+|------|---------|----------------|
+| `gc()` | collect now, returns the bytes reclaimed | `sx_gc_run` |
+| `gc_live()` | bytes currently held by the managed heap | `sx_gc_live` |
+| `gc_runs()` | number of collections so far | `sx_gc_count` |
 
-1. A newly created managed string/list starts with one reference.
-2. Copying a managed pointer requires retaining the new owner.
-3. Every owner must eventually release its reference.
-4. Release at zero frees the object immediately.
-5. Managed objects are not moved and there is no tracing pass.
-6. The runtime is single-threaded; no pthreads, locks, or background collector are required.
+`make test-gc` compiles a Sayanox program that concatenates in a loop, and
+asserts that the heap stays bounded, that a collection happened, that `gc()`
+runs, and that the surviving string is still intact.
 
-The current subset compiler keeps ownership deliberately explicit. Code paths that do not yet emit automatic retain/release on every variable copy must use the runtime ownership API rather than pretending a tracing collector exists.
+### Honest boundaries
 
-## Why this model
+* **Non-moving**: block addresses are stable, so interior pointers are found by
+  binary search over the sorted block list. No compaction, no handle
+  indirection, no moving/fragmenting collector.
+* **Conservative**: a word that merely looks like a pointer pins a block. This
+  can only delay reclamation, never cause a false reclamation.
+* **Stop the world, single threaded**: no concurrent marking, no background
+  threads, no finalizers, no weak references.
+* The collector costs about 5 KB of C in every emitted program, and the prelude
+  now emits `#include <setjmp.h>` unconditionally.
 
-Reference counting is the smallest predictable step away from malloc-only lifetime management. It provides deterministic reclamation without introducing a root scanner, moving heap, safepoints, or a second GC implementation.
+Peak RSS of the compiler itself dropped from 218.6 MB to 32.6 MB once the
+collector was in place (see the table in [`STATUS.md`](STATUS.md)).
 
-## Stress test
+## 2. Native AOT and the seeds
 
-The regression source `examples/gc_rc_loop.sa` repeatedly creates temporary concatenations and releases the previous owner. The test checks that a large number of allocations completes and that the final string remains valid.
+* `selfhost/native_aot.c` is the x86-64 direct backend. Its runtime is a flat
+  BSS data area plus one bump allocator over lazily `mmap`ped 64 KiB chunks.
+  It never frees; native programs are for demos and small benchmarks.
+* `selfhost/seed/sxc_seed_min` (the bootstrap seed) has a malloc-only prelude
+  and frees only the previous value of a reassigned string variable. Its point
+  is to be small and auditable, not to manage memory well.
+* `selfhost/seed/sx_runtime.h` is the reference-counted runtime used by the
+  full seed `sxc_seed` (`sx_rc_retain` / `sx_rc_release`, `SxRcStr` headers,
+  reference counts on lists). `release(value)` performs a deterministic RC
+  release there.
+* `selfhost/rc_runtime.h` is the standalone reference-counting experiment
+  exercised by `selfhost/rc_runtime_stress.c`. It is the historical slice that
+  `make gc-test` still checks: a managed string header with a reference count,
+  `sx_rc_retain` / `sx_rc_release`, deterministic release at zero, and no
+  background collector.
 
-Run the runtime regression with:
+## Stress tests
 
 ```sh
-make gc-test
+make gc-test     # reference-counting runtime slice (2000 concats, length + ok)
+make test-gc     # gen2 mark & sweep: bounded heap, collections, gc()/gc_live()
 ```
 
-CI also runs the existing `mini_*` subset tests. No GC feature changes the pure `.sa -> gen1` bootstrap path.
+CI runs both as part of `make test`. No GC feature changes the pure
+`.sa -> gen1` bootstrap path: the seed compiler never sees the collector.
 
 ## What is not implemented
 
-- No concurrent GC.
-- No stop-the-world mark/sweep collector.
-- No moving collector.
-- No automatic cycle detection for reference-counted object graphs.
-- No claim that every C `malloc` in compiler tooling is managed.
+* No concurrent or incremental collector.
+* No moving/compacting collector.
+* No finalizers or weak references.
+* No cycle problem *for the collector* (tracing reclaims cycles), but the
+  `rc_runtime.h` slice cannot reclaim cycles.
+* The native AOT backend still bump-allocates and never frees.
+* Not every C `malloc` in the compiler tooling is managed.
