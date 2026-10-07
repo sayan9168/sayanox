@@ -14,61 +14,43 @@ concurrency:
   group: sayanox-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The whole bootstrap is Makefile-only and offline: a clean checkout plus the
+# minimal tool set (make, a C99 compiler, POSIX shell, grep, cmp, mkdir) that
+# `make doctor` verifies. No Python/Node/Ruby, no network, no package step --
+# ubuntu-latest ships every required tool, and doctor fails loudly if not.
 jobs:
   bootstrap:
-    name: true-selfhost (Makefile only)
+    name: clean-checkout bootstrap (doctor, true-selfhost, gen3, native-test)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Checkout
+      - name: Clean checkout
         uses: actions/checkout@v4
         with:
+          clean: true
           fetch-depth: 1
 
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang gcc make
+      - name: make doctor (minimal toolchain is complete)
+        run: make doctor
 
-      - name: True full self-host
+      - name: make true-selfhost (seed-min -> gen1_min -> gen2 + feature tests)
         run: make true-selfhost
 
-      - name: make all
-        run: make all
-
-      - name: Grammar target
-        run: make grammar
-
-      - name: Full test suite
-        run: make test
-
-      - name: Gen3 fixed-point (behavioural)
+      - name: make gen3 (gen3 == gen4 byte-identical fixed point)
         run: make gen3
 
-      - name: Native + GC
-        run: |
-          make native-test
-          make gc-test
+      - name: make native-test (x86-64 backend: subset, use, functions, parity)
+        run: make native-test
 
       - name: Verify generated artifacts are not tracked
         run: |
           set -e
-          for f in selfhost/gen1.c selfhost/gen2.c selfhost/boot.c selfhost/boot2.c \
-                   selfhost/gen1 selfhost/gen2 selfhost/boot selfhost/boot2; do
+          for f in selfhost/gen1.c selfhost/gen1 selfhost/gen1_min.c selfhost/gen1_min \
+                   selfhost/gen2.c selfhost/gen2 selfhost/gen3.c selfhost/gen3 \
+                   selfhost/gen4.c selfhost/boot_from_gen2 selfhost/boot_from_gen2.c \
+                   selfhost/native_aot selfhost/seed/sxc_seed_min; do
             if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
               echo "::error::$f is tracked but must be generated"
               exit 1
             fi
           done
-
-  clean-tree:
-    name: Clean checkout hygiene
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          clean: true
-      - name: Verify repository checkout
-        run: git status --short

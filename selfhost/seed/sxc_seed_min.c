@@ -731,7 +731,17 @@ static void collect(void){
                     if(!strcmp(SD[cur].fields[f],fld)){ ff=f; break; }
                 if(ff>=0){
                   if(SD[cur].fty[ff]==2){ ty=TY_STRUCT; si=SD[cur].fsi[ff]; }
-                  else if(P<N && S[P]=='.') nested_si(cur,fld);   /* dies */
+                  else if(P<N && S[P]=='.'){
+                    /* The link's type may simply be unknown YET: field types
+                     * are fixed by struct literals, which scan_literals() only
+                     * sees after this collect() pass.  Leave the chain
+                     * unresolved for now -- a later pass re-types it once the
+                     * literals have run (this is what makes a doubly nested
+                     * copy `hold p2 = r.q.p` work), and the final emit parse
+                     * still dies with a real error if the link truly is not a
+                     * struct. */
+                    ty=TY_NUM; si=-1;
+                  }
                   else ty=SD[cur].fty[ff]?TY_STR:TY_NUM;
                 }
                 free(fld);

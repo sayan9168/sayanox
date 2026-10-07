@@ -1,10 +1,15 @@
 # native_src
 
-`c00.part` … `c19.part` assemble into `native_aot.c`:
+Historical fragments of an earlier split of the native backend. They do
+**not** assemble into the current `selfhost/native_aot.c` (the full part set
+was never checked in; only `05.cpart` and `c08.part` remain).
+
+The canonical, self-contained source is `selfhost/native_aot.c`. Build it
+with:
 
 ```sh
-cat selfhost/native_src/c*.part > selfhost/native_aot.c
-clang -O2 -o selfhost/native_aot selfhost/native_aot.c
+make native        # cc -O2 -o selfhost/native_aot selfhost/native_aot.c
+make native-test   # full backend test battery
 ```
 
-Or: `make native`
+Do not overwrite `selfhost/native_aot.c` from these parts.

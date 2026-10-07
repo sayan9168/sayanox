@@ -11,8 +11,12 @@
  *            positional, declaration order, every field filled); nesting
  *            any depth (inner declared first); p.x / l.a.x chains;
  *            copies (hold m = l.b, hold r = q)
- *   functions: make f(a, b) { ... give EXPR }, recursion, numbers only
- *   modules: use "file.sa" (spliced before parsing, depth <= 8)
+ *   functions: make f(a, b) { ... give EXPR }, recursion, numbers only,
+ *              top-level definitions only; hold inside a body is a clear
+ *              error (a local would live in the data segment, shared by
+ *              every recursive call)
+ *   modules: use "file.sa" (spliced before parsing, depth <= 8; a missing
+ *              file or an unquoted path is a hard error)
  *
  * Anything outside this is a hard error with a clear message — the
  * backend never emits silently wrong code.
@@ -23,13 +27,13 @@
  * rdi rsi rdx rcx r8 r9 (ints, <= 6). give = return; a function that
  * falls off returns 0.
  *
- * Scratch policy: the left operand of a binary operator is held on the
- * machine stack (push/pop) across the sub-emit; r15 = short-lived temp;
- * r14 = saved data-scratch across a literal; r11 = literal fill temp;
- * [r12+OFF_SCR] = current literal base; [r12+OFF_HOLD..] = index bases
- * (4 slots, by nesting level). Runtime helpers preserve r12 (and every
- * callee-saved register); user functions use an rbp frame and never
- * touch r13-r15.
+ * Scratch policy: the left operand of a binary operator, the base of an
+ * index expression and every staged call argument are held on the machine
+ * stack (push/pop) across the sub-emit, so they survive nested calls,
+ * including recursion; r15 = short-lived temp; r14 = saved data-scratch
+ * across a literal; r11 = literal fill temp; [r12+OFF_SCR] = current
+ * literal base. Runtime helpers preserve r12 (and every callee-saved
+ * register); user functions use an rbp frame and never touch r13-r15.
  *
  * Usage: native_aot in.sa out
  */
@@ -63,7 +67,6 @@ static unsigned char data[DMAX]; static size_t dn;
                       /* (must NOT alias OFF_END: store_scr() writes here on
                          every literal, and OFF_END is the heap chunk end) */
 static size_t d_glob; /* globals array      */
-static size_t d_hold; /* index-base slots   */
 static size_t d_err_div, d_err_list, d_err_str, d_err_malloc;
 static size_t d_list1, d_list2, d_nl, d_empty;
 
@@ -281,18 +284,29 @@ static char*rf(const char*p,size_t*n){
 }
 static char*expand_use(const char*src,size_t sn,const char*dir,int depth){
   if(depth>8){ fprintf(stderr,"native_aot: use nesting deeper than 8\n"); exit(1); }
-  char*out=malloc(sn*2+65536); size_t o=0;
+  /* The buffer MUST grow: a spliced file can be arbitrarily larger than the
+     including one (the old fixed sn*2+64KB overflowed the heap on any use of
+     a big library). */
+  size_t cap=sn+65536, o=0;
+  char*out=malloc(cap);
+  if(!out){ fprintf(stderr,"native_aot: out of memory\n"); exit(1); }
+#define EU_NEED(nbytes) do{ if(o+(nbytes)+1>cap){ \
+    while(o+(nbytes)+1>cap) cap*=2; \
+    char*tmp=realloc(out,cap); \
+    if(!tmp){ fprintf(stderr,"native_aot: out of memory\n"); exit(1); } \
+    out=tmp; } }while(0)
   size_t i=0;
   while(i<=sn){
     size_t ls=i; while(i<=sn&&src[i]!='\n') i++;
     size_t le=i; if(i<=sn) i++;
     const char*q=src+ls;
     while(q<src+le&&isspace((unsigned char)*q)) q++;
-    if(q<src+le&&q[0]=='/'&&q[1]=='/'){ memcpy(out+o,src+ls,le-ls+1); o+=le-ls+1; continue; }
+    if(q<src+le&&q[0]=='/'&&q[1]=='/'){ EU_NEED(le-ls+1); memcpy(out+o,src+ls,le-ls+1); o+=le-ls+1; continue; }
     const char*r=q;
     if(mkw(&r,"use")){
       const char*w=r; sw(&w);
-      if(*w=='"'){
+      if(*w!='"'){ fprintf(stderr,"native_aot: use needs a quoted path: use \"file.sa\"\n"); exit(1); }
+      {
         const char*pe=w+1; while(*pe&&*pe!='"') pe++;
         if(*pe!='"'){ fprintf(stderr,"native_aot: unterminated use path\n"); exit(1); }
         char path[1024]; size_t pl=(size_t)(pe-w-1); if(pl>=1024) pl=1023;
@@ -302,18 +316,23 @@ static char*expand_use(const char*src,size_t sn,const char*dir,int depth){
         snprintf(cand2,sizeof cand2,"%s",path);
         char*body=NULL; size_t bn=0;
         if(access(cand1,R_OK)==0) body=rf(cand1,&bn);
-        if(!body) body=rf(cand2,&bn);
+        else if(access(cand2,R_OK)==0) body=rf(cand2,&bn);
+        if(!body){ fprintf(stderr,"native_aot: cannot open use file: %s\n",path); exit(1); }
         char*sub=expand_use(body,bn,dir,depth+1);
         free(body);
-        memcpy(out+o,sub,strlen(sub)); o+=strlen(sub);
+        size_t sl=strlen(sub);
+        EU_NEED(sl+1);
+        memcpy(out+o,sub,sl); o+=sl;
         free(sub);
-        if(le<sn) out[o++]='\n';
+        if(le<sn){ EU_NEED(1); out[o++]='\n'; }
         continue;
       }
     }
+    EU_NEED(le-ls+1);
     memcpy(out+o,src+ls,le-ls+1); o+=le-ls+1;
   }
   out[o]=0;
+#undef EU_NEED
   return out;
 }
 
@@ -430,6 +449,7 @@ static int fkind_seen[MAXS][MAXFD], fkind_val[MAXS][MAXFD], fsid_val[MAXS][MAXFD
 static int pk_soft=0;
 
 static int pk_prim(const char**p,int depth);
+static int pk_post(const char**p,int depth);
 static int pk_term(const char**p,int depth);
 static int pk_rel(const char**p,int depth);
 
@@ -588,7 +608,11 @@ static int pk_prim(const char**p,int depth){
   errx("bad expression (expected a number, string, list, name)");
   return K_UNK;
 }
-static int pk_term(const char**p,int depth){
+/* primary + postfix ([index] / .field) chains.  Split out of pk_term so the
+   right operand of * / % may carry a postfix too (p.x * p.x, 2 * xs[1]);
+   + - already parsed their right side as a full term, so `p.x + p.y` worked
+   while `p.x * p.y` died with "* is numeric-only". */
+static int pk_post(const char**p,int depth){
   int k=pk_prim(p,depth);
   for(;;){
     const char*q=*p; sw(&q);
@@ -635,11 +659,16 @@ static int pk_term(const char**p,int depth){
     }
     break;
   }
+  PKX_K=k; PKX_S=(k==K_STRUCT)?PKX_S:-1;
+  return k;
+}
+static int pk_term(const char**p,int depth){
+  int k=pk_post(p,depth);
   for(;;){
     sw(p); char op=**p;
     if(op!='*'&&op!='/'&&op!='%') break;
     (*p)++;
-    int k2=pk_prim(p,depth);
+    int k2=pk_post(p,depth);
     if(k!=K_NUM||k2!=K_NUM) errx("%c is numeric-only",op);
     k=K_NUM;
   }
@@ -790,14 +819,16 @@ static void infer(const char*src){
 /* ================= phase 3: emit ================= */
 static int XK=K_NUM, XS=-1;     /* kind / struct id of the value in rax */
 static int cur_fn=-1;           /* -1 = top level */
-static int elvl=0;              /* index nesting depth */
 static size_t builtin_off[32];
+/* argument registers, System V AMD64: rdi rsi rdx rcx r8 r9 */
+static const int argreg[MAXP]={DI,SI,DX,CX,8,9};
 
 enum { B_MALLOC,B_STRLEN,B_CMPSTR,B_CONCAT,B_N2STR,B_PUTSTR,B_WCSTR,B_ITONO,B_ITOWRITE,
        B_SHOWLIST,B_MLIST,B_LGET,B_LLEN,B_LPUSH,B_SGET,B_CHR,B_READFILE,B_WRITEFILE,
        B_ARG,B_ARGC,B_DIE };
 
 static void emit_prim(const char**p,int depth);
+static void emit_post(const char**p,int depth);
 static void emit_term(const char**p,int depth);
 static void emit_rel(const char**p,int depth);
 static void emit_expr(const char**p,int depth);
@@ -954,22 +985,18 @@ static void emit_prim(const char**p,int depth){
       if(is_builtin(n)){ emit_call_builtin(p,n,depth); return; }
       int fi=f_find(n);
       if(fi>=0){
-        errx("function calls are not in the native subset yet (function codegen is unverified)");
         (*p)=q; (*p)++;
         int nargs=0;
         for(;;){
           sw(p);
-          if(**p==')') break;
+          if(**p==')'){ (*p)++; break; }
           emit_expr(p,depth+1);
           if(XK!=K_NUM) errx("function '%s' takes numbers (arg %d is %s)",n,nargs+1,kname(XK));
-          switch(nargs){
-            case 0: mv_rr(DI,AX); break;
-            case 1: mv_rr(SI,AX); break;
-            case 2: mv_rr(DX,AX); break;
-            case 3: mv_rr(CX,AX); break;
-            case 4: mv_rr(8,AX); break;
-            case 5: mv_rr(9,AX); break;
-          }
+          /* every evaluated arg goes on the machine stack: a LATER arg may
+             itself be a call (user function, or a builtin whose malloc maps
+             a fresh chunk), which clobbers the arg registers -- staging in
+             rdi/rsi/... while parsing used to corrupt earlier args. */
+          push_r(AX);
           nargs++;
           sw(p);
           if(**p==','){ (*p)++; continue; }
@@ -977,6 +1004,9 @@ static void emit_prim(const char**p,int depth){
           errx("call needs , or )");
         }
         if(nargs!=F[fi].nparam) errx("function '%s' takes %d args, got %d",n,F[fi].nparam,nargs);
+        /* pop into the arg registers, last pushed first (pop only writes its
+           own register, so no staged arg can be clobbered) */
+        for(int i=nargs-1;i>=0;i--) pop_r(argreg[i]);
         callf(fi);
         XK=K_NUM; XS=-1;
         return;
@@ -998,20 +1028,24 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
   if(**p!='(') errx("expected ( after %s",n,NULL);
   (*p)++;
   if(!strcmp(n,"concat")){
+    /* args are converted to string pointers and staged on the machine
+       stack: the second arg may call a builtin (chr/concat) whose malloc
+       maps a fresh chunk and clobbers rdi/rsi */
     emit_expr(p,0);
-    if(XK==K_STR) mv_rr(DI,AX);
-    else if(XK==K_NUM){ callb(B_N2STR); mv_rr(DI,AX); }
+    if(XK==K_STR) push_r(AX);
+    else if(XK==K_NUM){ callb(B_N2STR); push_r(AX); }
     else errx("concat needs strings or numbers");
     sw(p);
     if(**p!=',') errx("concat takes 2 args");
     (*p)++;
     emit_expr(p,0);
-    if(XK==K_STR) mv_rr(SI,AX);
-    else if(XK==K_NUM){ callb(B_N2STR); mv_rr(SI,AX); }
+    if(XK==K_STR) push_r(AX);
+    else if(XK==K_NUM){ callb(B_N2STR); push_r(AX); }
     else errx("concat needs strings or numbers");
     sw(p);
     if(**p!=')') errx("concat takes 2 args");
     (*p)++;
+    pop_r(SI); pop_r(DI);
     callb(B_CONCAT);
     XK=K_STR; XS=-1;
     return;
@@ -1036,12 +1070,13 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
   if(!strcmp(n,"sx_index")||!strcmp(n,"index")){
     emit_expr(p,0);
     if(XK!=K_STR) errx("%s takes a string",n,NULL);
-    mv_rr(DI,AX);
+    push_r(AX);                    /* stage the string: the index may be a call */
     sw(p); if(**p!=',') errx("%s takes 2 args",n,NULL); (*p)++;
     emit_expr(p,0);
     if(XK!=K_NUM) errx("%s: the index must be a number",n,NULL);
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("%s takes 2 args",n,NULL); (*p)++;
+    pop_r(DI);
     callb(B_SGET);
     XK=K_NUM; XS=-1;
     return;
@@ -1057,12 +1092,13 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
   if(!strcmp(n,"write_file")){
     emit_expr(p,0);
     if(XK!=K_STR) errx("write_file takes (path, text)");
-    mv_rr(DI,AX);
+    push_r(AX);                    /* stage the path: the text may be a call */
     sw(p); if(**p!=',') errx("write_file takes 2 args",n,NULL); (*p)++;
     emit_expr(p,0);
     if(XK!=K_STR) errx("write_file takes (path, text)");
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("write_file takes 2 args",n,NULL); (*p)++;
+    pop_r(DI);
     callb(B_WRITEFILE);
     XK=K_NUM; XS=-1;
     return;
@@ -1086,12 +1122,13 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
   if(!strcmp(n,"string_eq")||!strcmp(n,"sx_eq")){
     emit_expr(p,0);
     if(XK!=K_STR) errx("%s takes 2 strings",n,NULL);
-    mv_rr(DI,AX);
+    push_r(AX);                    /* stage a: b may be a call */
     sw(p); if(**p!=',') errx("%s takes 2 args",n,NULL); (*p)++;
     emit_expr(p,0);
     if(XK!=K_STR) errx("%s takes 2 strings",n,NULL);
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("%s takes 2 args",n,NULL); (*p)++;
+    pop_r(DI);
     callb(B_CMPSTR);
     XK=K_NUM; XS=-1;
     return;
@@ -1106,12 +1143,13 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     if(gi>=0&&*q2!=',') gi=-1;
     emit_expr(p,0);
     if(XK!=K_LIST) errx("push takes (list, number)");
-    mv_rr(DI,AX);
+    push_r(AX);                    /* stage the list: the value may be a call */
     sw(p); if(**p!=',') errx("push takes 2 args"); (*p)++;
     emit_expr(p,0);
     if(XK!=K_NUM) errx("push takes (list, number)");
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("push takes 2 args"); (*p)++;
+    pop_r(DI);
     callb(B_LPUSH);
     if(gi>=0) store_global(gi);
     XK=K_LIST; XS=-1;
@@ -1146,7 +1184,8 @@ static void emit_sdiv(void){
 }
 
 /* ---- term / rel / expr ---- */
-static void emit_term(const char**p,int depth){
+/* primary + postfix chains; see pk_post for why this is its own step */
+static void emit_post(const char**p,int depth){
   emit_prim(p,depth);
   for(;;){
     const char*q=*p; sw(&q);
@@ -1154,17 +1193,22 @@ static void emit_term(const char**p,int depth){
     if(*q=='['){
       if(XK!=K_LIST&&XK!=K_STR) errx("cannot index a %s",kname(XK));
       int base_kind=XK;
-      if(elvl>=4) errx("indexing too deep for the native backend");
-      int slot=(int)(d_hold+8*(size_t)(elvl&3));
       (*p)=q; (*p)++;
-      mv_m64(12,-1,0,slot,AX);   /* save base ptr */
-      elvl++;
+      /* The base pointer rides on the machine stack, not in a global data
+         slot: stack discipline survives a function call INSIDE the index
+         expression (recursion used to clobber the shared slot) and removes
+         the old 4-deep nesting limit. */
+      push_r(AX);                  /* [stack] = base */
       emit_expr(p,depth+1);
-      elvl--;
       if(XK!=K_NUM) errx("index must be a number");
-      mv_rr(SI,AX);
-      mv_r64m(AX,12,-1,0,slot);  /* base */
-      if(base_kind==K_LIST){ mv_rr(DI,AX); callb(B_LGET); } else callb(B_SGET);
+      mv_rr(SI,AX);                /* rsi = index */
+      pop_r(AX);                   /* rax = base */
+      mv_rr(DI,AX);                /* rdi = base: B_LGET and B_SGET both read
+                                      the base from rdi (the old string path
+                                      never set it and read a stale pointer,
+                                      which died as "string index out of
+                                      range" on every s[i]) */
+      if(base_kind==K_LIST) callb(B_LGET); else callb(B_SGET);
       sw(p);
       if(**p!=']') errx("expected ] after index");
       (*p)++;
@@ -1185,16 +1229,24 @@ static void emit_term(const char**p,int depth){
       XS=(XK==K_STRUCT)?S[sid].f[fi].sid:-1;
       continue;
     }
+    break;
+  }
+  return;
+}
+static void emit_term(const char**p,int depth){
+  emit_post(p,depth);
+  for(;;){
     sw(p); char op=**p;
     if(op!='*'&&op!='/'&&op!='%') break;
     if(XK!=K_NUM) errx("%c is numeric-only",op);
     (*p)++;
     /* the left operand MUST live on the machine stack, not in r15: the
-       right side is a full primary and a nested `*`/`/`/`%` used to clobber
-       r15, so `a + 3 * 4` evaluated as (a+3)*4.  push/pop survives every
-       callee (builtins use r9/r11/r13/r14 and calls are balanced). */
+       right side is a full postfix primary and a nested `*`/`/`/`%` used
+       to clobber r15, so `a + 3 * 4` evaluated as (a+3)*4.  push/pop
+       survives every callee (builtins use r9/r11/r13/r14 and calls are
+       balanced). */
     push_r(AX);                  /* [stack] = left */
-    emit_prim(p,depth);
+    emit_post(p,depth);
     if(XK!=K_NUM) errx("%c is numeric-only",op);
     mv_rr(CX,AX);                /* rcx = right */
     pop_r(AX);                   /* rax = left */
@@ -1300,15 +1352,19 @@ static void emit_fn(int fi,const char**p){
   F[fi].start=(int)cn;
   push_r(BP);
   mv_rr(BP,SP);
-  bin_imm8(5,SP,32);                 /* sub rsp, 32 */
+  /* The frame must keep EVERY spill slot above rsp: expression codegen
+     pushes temporaries and calls push return addresses below rsp, so a
+     fixed 32-byte frame let a 5th/6th parameter (rbp-40/rbp-48) be
+     overwritten by the first push or call in the body.  16-aligned so the
+     (push rbp; sub rsp,frame) entry keeps the same alignment everywhere. */
+  int frame=(8*F[fi].nparam+16+15)&~15;
+  bin_imm8(5,SP,(uint8_t)frame);                /* sub rsp, frame */
   lea_r12_data();
-  static const struct { uint8_t b[4]; int d; } sp[] = {
-    {{0x48,0x89,0x5d},0xf8}, {{0x48,0x89,0x75},0xf0}, {{0x49,0x89,0x55},0xe8},
-    {{0x4c,0x89,0x4d},0xe0}, {{0x4c,0x89,0x45},0xd8}, {{0x4c,0x89,0x45},0xd0}
-  };
-  for(int i=0;i<F[fi].nparam;i++){
-    e1(sp[i].b[0]); e1(sp[i].b[1]); e1(sp[i].b[2]); e1((uint8_t)sp[i].d);
-  }
+  /* spill the incoming parameter registers into the frame.  Emitted with
+     the same encoder helpers as everything else -- the old hand-written
+     byte table spilled rbx/r13/r9 for parameters 1/3/4 (rdi/rdx/rcx), so
+     every call read garbage for those arguments. */
+  for(int i=0;i<F[fi].nparam;i++) mv_m64(BP,-1,0,-8*(i+1),argreg[i]);
   /* skip the source: (params) { */
   sw(p);
   if(**p!='(') errx("make %s: expected (params)",F[fi].name,NULL);
@@ -1343,10 +1399,8 @@ static void emit_prog(const char**p,int in_fn,int stop){
     if(mkw(p,"hold")){
       char nm[64];
       if(!pid(p,nm,64)) errx("hold needs a name");
-      if(cur_fn>=0){
-        for(int i=0;i<F[cur_fn].nparam;i++)
-          if(!strcmp(F[cur_fn].params[i],nm)) errx("hold cannot shadow the parameter '%s'",nm,NULL);
-      }
+      if(cur_fn>=0)
+        errx("hold inside make is not in the native subset (a local would live in the shared data segment and be clobbered by recursion); compute in give expressions, or assign to a global held at the top level");
       sw(p);
       if(**p!='=') errx("hold needs '='");
       (*p)++;
@@ -1423,9 +1477,15 @@ static void emit_prog(const char**p,int in_fn,int stop){
       continue;
     }
     if(mkw(p,"make")){
-      /* function codegen (emit_fn) is unverified — reject with a clear
-       * error rather than emit untested code (e.g. fib segfaults). */
-      errx("make (functions) are not in the native subset yet (function codegen is unverified)");
+      /* The definition is only SKIPPED here (it must never run inline);
+         every top-level body is emitted after main's exit syscall by the
+         emit_all_fns walk in main(), and call sites are patched against
+         F[].start, so definition order and recursion are fine.  A make
+         inside a block or another function is not valid in the shared
+         dialect (seed-min rejects it too). */
+      if(in_fn||stop) errx("make must be at the top level (not inside a block or another function)");
+      *p=skip_stmt(line);
+      continue;
     }
     if(mkw(p,"give")){
       if(!in_fn) errx("give outside a make function");
@@ -1899,10 +1959,14 @@ static void emit_builtins(void){
   {
   builtin_off[B_SGET]=cn;
   push_r(12);
+  mv_rr(11,SI);                        /* r11 = i FIRST: B_STRLEN below uses
+                                          rsi as its scan pointer and would
+                                          otherwise eat the index (every
+                                          s[i] died "string index out of
+                                          range" with i = the end pointer) */
   mv_rr(AX,DI);
   callb(B_STRLEN);
   mv_rr(CX,AX);
-  mv_rr(11,SI);                        /* r11 = i */
   bin_imm8(7,11,0);                    /* SF = sign(i) */
   size_t jns=cn; jcc_rel32(JC_JNS,0);  /* i >= 0: skip adjust */
   bin_rr(1,11,CX);                     /* r11 = i + len */
@@ -2110,8 +2174,14 @@ static void write_elf(const char*path){
   { uint64_t e0=0; memcpy(img+data_off+OFF_END,&e0,8); }
   /* patch the IMAGE (relative targets are offset-invariant within it) */
   for(int i=0;i<npc;i++){
-    size_t to = (patch_call[i].kind==PFN)? (size_t)F[patch_call[i].idx].start
-                                         : builtin_off[patch_call[i].idx];
+    size_t to;
+    if(patch_call[i].kind==PFN){
+      if(F[patch_call[i].idx].start<0){
+        fprintf(stderr,"native_aot: function '%s' was called but never emitted\n",F[patch_call[i].idx].name);
+        exit(1);
+      }
+      to=(size_t)F[patch_call[i].idx].start;
+    } else to=builtin_off[patch_call[i].idx];
     int32_t d=(int32_t)(to-(patch_call[i].at+4));
     memcpy(img+code_off+patch_call[i].at,&d,4);
   }
@@ -2143,7 +2213,6 @@ int main(int argc,char**argv){
 
   dn=40;                /* 0,8,16,24 = cur/argv/argc/end; 32 = literal scratch */
   d_glob=d_alloc(NSLOT*8);
-  d_hold=d_alloc(4*8);
   d_err_div=d_str("division by zero");
   d_err_malloc=d_str("out of memory");
   d_err_list=d_str("list index out of range");
@@ -2166,6 +2235,26 @@ int main(int argc,char**argv){
   mov_imm64(AX,60);
   xor_rr(DI,DI);
   e1(0x0f); e1(0x05);
+
+  /* Function bodies: emitted AFTER main's exit syscall, so main can never
+     fall into them.  The walk mirrors collect_defs (same skip_stmt steps),
+     so every top-level make is emitted exactly once; call sites -- in main,
+     in other functions, and recursive ones -- are rel32 patches resolved in
+     write_elf against F[].start, so forward references work. */
+  {
+    const char*q=src;
+    while(*q){
+      const char*line=q; sw(&q);
+      if(!*q) break;
+      if(q[0]=='/'&&q[1]=='/'){ while(*q&&*q!='\n') q++; continue; }
+      char nm[64]; const char*r=q;
+      if(mkw(&r,"make")&&pid(&r,nm,64)){
+        int fi=f_find(nm);
+        if(fi>=0){ q=r; emit_fn(fi,&q); continue; }
+      }
+      q=skip_stmt(line);
+    }
+  }
 
   emit_builtins();
   write_elf(argv[2]);
