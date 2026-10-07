@@ -1,0 +1,1284 @@
+// Sayanox language server (LSP 3.17 subset) — JSON-RPC over stdio.
+//
+// Built like the other tools:
+//
+//   make lsp        -> tools/sayanox_lsp
+//   printf 'Content-Length: N\r\n\r\n{...}' | tools/sayanox_lsp
+//
+// Methods: initialize / initialized / shutdown / exit, textDocument didOpen,
+// didChange, didClose, publishDiagnostics, diagnostic, documentSymbol,
+// completion, hover, definition.
+//
+// The diagnostics are real checks over the document text: unknown statements,
+// brace and paren balance, unterminated strings, and `use` targets that do not
+// resolve next to the document.  Nothing here shells out; it is all Sayanox,
+// compiled by gen2 (the same binary that compiles user programs).
+
+// ---------------------------------------------------------------- scanning
+
+make starts(t: str, i: num, p: str) -> num {
+  hold n = 0
+  hold k = 0
+  hold ok = 1
+  hold c1 = 0
+  hold c2 = 0
+  n = len(p)
+  when i + n > len(t) {
+    give 0
+  }
+  while k < n {
+    c1 = sx_index(t, i + k)
+    c2 = sx_index(p, k)
+    when c1 != c2 {
+      ok = 0
+      k = n
+    }
+    k += 1
+  }
+  give ok
+}
+
+make find_from(t: str, p: str, from: num) -> num {
+  hold n = 0
+  hold m = 0
+  hold i = 0
+  hold hit = 0
+  n = len(t)
+  m = len(p)
+  when m <= 0 {
+    give -1
+  }
+  when from > 0 {
+    i = from
+  }
+  while i + m <= n {
+    hit = starts(t, i, p)
+    when hit == 1 {
+      give i
+    }
+    i += 1
+  }
+  give -1
+}
+
+make find(t: str, p: str) -> num {
+  hold r = 0
+  r = find_from(t, p, 0)
+  give r
+}
+
+make is_ident(c: num) -> num {
+  hold ok = 0
+  when c >= 97 && c <= 122 {
+    ok = 1
+  }
+  when c >= 65 && c <= 90 {
+    ok = 1
+  }
+  when c >= 48 && c <= 57 {
+    ok = 1
+  }
+  when c == 95 {
+    ok = 1
+  }
+  give ok
+}
+
+make is_word(c: num) -> num {
+  hold ok = 0
+  when c >= 97 && c <= 122 {
+    ok = 1
+  }
+  when c >= 65 && c <= 90 {
+    ok = 1
+  }
+  when c == 95 {
+    ok = 1
+  }
+  give ok
+}
+
+// ------------------------------------------------------------ JSON strings
+
+make json_esc(s: str) -> str {
+  hold r = ""
+  hold i = 0
+  hold n = 0
+  hold c = 0
+  n = len(s)
+  while i < n {
+    c = sx_index(s, i)
+    when c == 34 {
+      r = r + "\\\""
+    } otherwise {
+      when c == 92 {
+        r = r + "\\\\"
+      } otherwise {
+        when c == 10 {
+          r = r + "\\n"
+        } otherwise {
+          when c == 13 {
+            r = r + "\\r"
+          } otherwise {
+            when c == 9 {
+              r = r + "\\t"
+            } otherwise {
+              r = r + chr(c)
+            }
+          }
+        }
+      }
+    }
+    i += 1
+  }
+  give r
+}
+
+make unesc(s: str) -> str {
+  hold r = ""
+  hold i = 0
+  hold n = 0
+  hold c = 0
+  hold d = 0
+  hold h = 0
+  hold v = 0
+  hold k = 0
+  hold lim = 0
+  n = len(s)
+  while i < n {
+    c = sx_index(s, i)
+    when c == 92 {
+      d = 0
+      when i + 1 < n {
+        d = sx_index(s, i + 1)
+      }
+      when d == 110 {
+        r = r + "\n"
+        i += 2
+      } otherwise {
+        when d == 116 {
+          r = r + "\t"
+          i += 2
+        } otherwise {
+          when d == 114 {
+            r = r + "\r"
+            i += 2
+          } otherwise {
+            when d == 34 {
+              r = r + "\""
+              i += 2
+            } otherwise {
+              when d == 92 {
+                r = r + "\\"
+                i += 2
+              } otherwise {
+                when d == 47 {
+                  r = r + "/"
+                  i += 2
+                } otherwise {
+                  when d == 117 {
+                    v = 0
+                    k = i + 2
+                    lim = i + 6
+                    when lim > n {
+                      lim = n
+                    }
+                    while k < lim {
+                      h = sx_index(s, k)
+                      v = v * 16
+                      when h >= 48 && h <= 57 {
+                        v += h - 48
+                      }
+                      when h >= 97 && h <= 102 {
+                        v += h - 87
+                      }
+                      when h >= 65 && h <= 70 {
+                        v += h - 55
+                      }
+                      k += 1
+                    }
+                    when v > 255 {
+                      v = 63
+                    }
+                    r = r + chr(v)
+                    i += 6
+                  } otherwise {
+                    r = r + chr(c)
+                    i += 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } otherwise {
+      r = r + chr(c)
+      i += 1
+    }
+  }
+  give r
+}
+
+make str_field(msg: str, key: str) -> str {
+  hold k = ""
+  hold p = 0
+  hold n = 0
+  hold c = 0
+  hold out = ""
+  hold run = 1
+  hold nc = 0
+  k = concat("\"", key)
+  k = concat(k, "\"")
+  p = find(msg, k)
+  when p < 0 {
+    give ""
+  }
+  p = find_from(msg, ":", p + len(k))
+  when p < 0 {
+    give ""
+  }
+  p += 1
+  n = len(msg)
+  while p < n {
+    c = sx_index(msg, p)
+    when c == 32 || c == 9 {
+      p += 1
+    } otherwise {
+      run = 0
+      p = p
+      break
+    }
+  }
+  when p >= n {
+    give ""
+  }
+  when sx_index(msg, p) != 34 {
+    give ""
+  }
+  p += 1
+  run = 1
+  while run == 1 {
+    when p >= n {
+      run = 0
+    } otherwise {
+      c = sx_index(msg, p)
+      when c == 92 {
+        when p + 1 < n {
+          out = out + chr(c)
+          nc = sx_index(msg, p + 1)
+          out = out + chr(nc)
+          p += 2
+        } otherwise {
+          run = 0
+        }
+      } otherwise {
+        when c == 34 {
+          run = 0
+          p += 1
+        } otherwise {
+          out = out + chr(c)
+          p += 1
+        }
+      }
+    }
+  }
+  give unesc(out)
+}
+
+make num_field(msg: str, key: str, def: num) -> num {
+  hold k = ""
+  hold p = 0
+  hold n = 0
+  hold c = 0
+  hold v = 0
+  hold got = 0
+  hold skip = 1
+  k = concat("\"", key)
+  k = concat(k, "\"")
+  p = find(msg, k)
+  when p < 0 {
+    give def
+  }
+  p = find_from(msg, ":", p + len(k))
+  when p < 0 {
+    give def
+  }
+  p += 1
+  n = len(msg)
+  while p < n && skip == 1 {
+    c = sx_index(msg, p)
+    when c == 32 || c == 9 {
+      p += 1
+    } otherwise {
+      skip = 0
+    }
+  }
+  while p < n {
+    c = sx_index(msg, p)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      got = 1
+      p += 1
+    } otherwise {
+      break
+    }
+  }
+  when got == 0 {
+    give def
+  }
+  give v
+}
+
+// ------------------------------------------------------------- line access
+
+make line_start(text: str, line: num) -> num {
+  hold i = 0
+  hold n = 0
+  hold l = 0
+  hold c = 0
+  hold ok = 0
+  n = len(text)
+  when line <= 0 {
+    give 0
+  }
+  while i < n {
+    c = sx_index(text, i)
+    when c == 10 {
+      l += 1
+      when l >= line {
+        give i + 1
+      }
+    }
+    i += 1
+  }
+  give n
+}
+
+make line_end(text: str, line: num) -> num {
+  hold i = 0
+  hold n = 0
+  hold c = 0
+  i = line_start(text, line)
+  n = len(text)
+  while i < n {
+    c = sx_index(text, i)
+    when c == 10 {
+      give i
+    }
+    i += 1
+  }
+  give n
+}
+
+make line_text(text: str, line: num) -> str {
+  hold a = 0
+  hold b = 0
+  hold r = ""
+  hold i = 0
+  hold c = 0
+  a = line_start(text, line)
+  b = line_end(text, line)
+  i = a
+  while i < b {
+    c = sx_index(text, i)
+    when c != 13 {
+      r = r + chr(c)
+    }
+    i += 1
+  }
+  give r
+}
+
+make count_lines(text: str) -> num {
+  hold i = 0
+  hold n = 0
+  hold l = 0
+  hold c = 0
+  n = len(text)
+  while i < n {
+    c = sx_index(text, i)
+    when c == 10 {
+      l += 1
+    }
+    i += 1
+  }
+  when n > 0 {
+    c = sx_index(text, n - 1)
+    when c != 10 {
+      l += 1
+    }
+  }
+  give l
+}
+
+make word_at(text: str, line: num, ch: num) -> str {
+  hold a = 0
+  hold p = 0
+  hold n = 0
+  hold w = ""
+  hold c = 0
+  hold ok = 0
+  a = line_start(text, line)
+  p = a + ch
+  n = len(text)
+  when p > n {
+    p = n
+  }
+  ok = 1
+  while p > a && ok == 1 {
+    c = sx_index(text, p - 1)
+    ok = is_ident(c)
+    when ok == 1 {
+      p -= 1
+    }
+  }
+  ok = 1
+  while p < n && ok == 1 {
+    c = sx_index(text, p)
+    ok = is_ident(c)
+    when ok == 1 {
+      w = w + chr(c)
+      p += 1
+    }
+  }
+  give w
+}
+
+// ------------------------------------------------------ language knowledge
+
+make known_word(w: str) -> num {
+  hold ok = 0
+  when string_eq(w, "hold") || string_eq(w, "show") || string_eq(w, "give") {
+    ok = 1
+  }
+  when string_eq(w, "when") || string_eq(w, "otherwise") || string_eq(w, "else") {
+    ok = 1
+  }
+  when string_eq(w, "elif") || string_eq(w, "while") || string_eq(w, "for") {
+    ok = 1
+  }
+  when string_eq(w, "break") || string_eq(w, "continue") {
+    ok = 1
+  }
+  when string_eq(w, "make") || string_eq(w, "struct") || string_eq(w, "use") {
+    ok = 1
+  }
+  when string_eq(w, "true") || string_eq(w, "false") {
+    ok = 1
+  }
+  when string_eq(w, "and") || string_eq(w, "or") || string_eq(w, "not") {
+    ok = 1
+  }
+  when string_eq(w, "concat") || string_eq(w, "len") || string_eq(w, "chr") {
+    ok = 1
+  }
+  when string_eq(w, "sx_index") || string_eq(w, "index") || string_eq(w, "push") {
+    ok = 1
+  }
+  when string_eq(w, "string_eq") || string_eq(w, "sx_eq") {
+    ok = 1
+  }
+  when string_eq(w, "read_file") || string_eq(w, "write_file") {
+    ok = 1
+  }
+  when string_eq(w, "arg") || string_eq(w, "arg_count") {
+    ok = 1
+  }
+  when string_eq(w, "read_line") || string_eq(w, "read_n") {
+    ok = 1
+  }
+  when string_eq(w, "write_out") || string_eq(w, "flush_out") {
+    ok = 1
+  }
+  when string_eq(w, "numstr") || string_eq(w, "str") {
+    ok = 1
+  }
+  when string_eq(w, "gc") || string_eq(w, "gc_live") || string_eq(w, "gc_runs") {
+    ok = 1
+  }
+  give ok
+}
+
+make declared_in(text: str, w: str) -> num {
+  hold p = 0
+  hold pat = ""
+  hold found = 0
+  pat = concat("hold ", w)
+  p = find(text, pat)
+  when p >= 0 {
+    found = 1
+  }
+  pat = concat("make ", w)
+  p = find(text, pat)
+  when p >= 0 {
+    found = 1
+  }
+  pat = concat("struct ", w)
+  p = find(text, pat)
+  when p >= 0 {
+    found = 1
+  }
+  give found
+}
+
+make doc_for(w: str) -> str {
+  hold d = ""
+  when string_eq(w, "hold") {
+    d = "`hold name = value` declares a variable (or `hold name: type = value`)."
+  }
+  when string_eq(w, "show") {
+    d = "`show EXPR` prints a value."
+  }
+  when string_eq(w, "when") {
+    d = "`when COND { ... }` runs the block when COND is non-zero; `otherwise` is the else branch."
+  }
+  when string_eq(w, "while") {
+    d = "`while COND { ... }` loops while COND is non-zero."
+  }
+  when string_eq(w, "for") {
+    d = "`for i in 0..10 { ... }` counts; `for v in xs { ... }` walks a list."
+  }
+  when string_eq(w, "make") {
+    d = "`make name(a, b: str) -> str { give a }` defines a function."
+  }
+  when string_eq(w, "give") {
+    d = "`give EXPR` returns a value from a function."
+  }
+  when string_eq(w, "struct") {
+    d = "`struct Point { x, y }` declares a struct type."
+  }
+  when string_eq(w, "use") {
+    d = "`use \"file.sa\"` splices another source file in place."
+  }
+  when string_eq(w, "push") {
+    d = "`push(xs, v)` appends a number to a list."
+  }
+  when string_eq(w, "concat") {
+    d = "`concat(a, b)` joins two strings."
+  }
+  when string_eq(w, "len") {
+    d = "`len(s)` is a string's byte length; `len(xs)` a list's element count."
+  }
+  when string_eq(w, "chr") {
+    d = "`chr(n)` is the one-byte string with code n."
+  }
+  when string_eq(w, "sx_index") {
+    d = "`sx_index(s, i)` is the byte at index i (same as `s[i]`)."
+  }
+  when string_eq(w, "gc") {
+    d = "`gc()` collects now and returns the bytes it reclaimed."
+  }
+  when string_eq(w, "gc_live") {
+    d = "`gc_live()` is the bytes held by the managed heap."
+  }
+  when string_eq(w, "gc_runs") {
+    d = "`gc_runs()` is the number of collections so far."
+  }
+  when string_eq(w, "read_line") {
+    d = "`read_line()` reads one line from stdin without the newline."
+  }
+  when string_eq(w, "read_n") {
+    d = "`read_n(n)` reads exactly n bytes from stdin."
+  }
+  when string_eq(w, "write_out") {
+    d = "`write_out(s)` writes s to stdout without a newline."
+  }
+  when string_eq(w, "flush_out") {
+    d = "`flush_out()` flushes stdout."
+  }
+  when string_eq(w, "numstr") {
+    d = "`numstr(n)` formats a number as a string."
+  }
+  when string_eq(w, "read_file") {
+    d = "`read_file(path)` returns the file text, or \"\" when unreadable."
+  }
+  when string_eq(w, "write_file") {
+    d = "`write_file(path, text)` writes a file and returns a status."
+  }
+  when string_eq(w, "arg") {
+    d = "`arg(i)` is command-line argument i."
+  }
+  when string_eq(w, "arg_count") {
+    d = "`arg_count()` is the number of command-line arguments."
+  }
+  give d
+}
+
+// ------------------------------------------------------------- diagnostics
+
+make diag_item(line: num, ch: num, sev: num, code: str, msg: str, first: num) -> str {
+  hold b = ""
+  when first > 0 {
+    b = b + ","
+  }
+  b = b + "{\"range\":{\"start\":{\"line\":"
+  b = b + numstr(line)
+  b = b + ",\"character\":"
+  b = b + numstr(ch)
+  b = b + "},\"end\":{\"line\":"
+  b = b + numstr(line)
+  b = b + ",\"character\":"
+  b = b + numstr(ch + 1)
+  b = b + "}},\"severity\":"
+  b = b + numstr(sev)
+  b = b + ",\"code\":\""
+  b = b + code
+  b = b + "\",\"source\":\"sayanox\",\"message\":\""
+  b = b + json_esc(msg)
+  b = b + "\"}"
+  give b
+}
+
+make diagnostics(text: str, dir: str) -> str {
+  hold items = ""
+  hold count = 0
+  hold lines = 0
+  hold depth = 0
+  hold l = 0
+  hold line = ""
+  hold n = 0
+  hold i = 0
+  hold a = 0
+  hold blank = 0
+  hold bd = 0
+  hold st = 0
+  hold j = 0
+  hold c = 0
+  hold cmt = 0
+  hold pd = 0
+  hold k = 0
+  hold w = ""
+  hold q = 0
+  hold rest = 0
+  hold expected = 0
+  hold is_assign = 0
+  hold is_call = 0
+  hold msg = ""
+  hold u = 0
+  hold v = 0
+  hold path = ""
+  hold full = ""
+  hold body = ""
+  hold z = 0
+  hold l2 = 0
+  lines = count_lines(text)
+  while l < lines {
+    line = line_text(text, l)
+    n = len(line)
+    i = 0
+    while i < n {
+      c = sx_index(line, i)
+      when c == 32 || c == 9 {
+        i += 1
+      } otherwise {
+        break
+      }
+    }
+    a = i
+    blank = 0
+    when i >= n {
+      blank = 1
+    }
+    when blank == 0 {
+      c = sx_index(line, i)
+      when c == 47 && i + 1 < n && sx_index(line, i + 1) == 47 {
+        blank = 1
+      }
+    }
+    when blank == 0 {
+      c = sx_index(line, i)
+      when c == 125 {
+        depth -= 1
+      }
+      when c == 123 {
+        depth += 1
+      }
+      // braces and parens must balance within the statement line
+      bd = 0
+      pd = 0
+      st = 0
+      cmt = 0
+      j = i
+      while j < n {
+        c = sx_index(line, j)
+        when st == 1 {
+          when c == 92 {
+            j += 2
+          } otherwise {
+            when c == 34 {
+              st = 0
+            }
+            j += 1
+          }
+        } otherwise {
+          when c == 34 {
+            st = 1
+            j += 1
+          } otherwise {
+            when c == 47 && j + 1 < n && sx_index(line, j + 1) == 47 {
+              j = n
+              cmt = 1
+            } otherwise {
+              when c == 123 {
+                bd += 1
+              }
+              when c == 125 {
+                bd -= 1
+              }
+              when c == 40 {
+                pd += 1
+              }
+              when c == 41 {
+                pd -= 1
+              }
+              j += 1
+            }
+          }
+        }
+      }
+      when cmt == 0 && st == 1 {
+        items = items + diag_item(l, n - 1, 1, "SX1002", "unterminated string", count)
+        count += 1
+      }
+      when pd != 0 {
+        items = items + diag_item(l, n - 1, 1, "SX1004", "unbalanced parentheses", count)
+        count += 1
+      }
+      c = sx_index(line, a)
+      when is_word(c) == 1 {
+        w = ""
+        q = a
+        while q < n {
+          c = sx_index(line, q)
+          when is_ident(c) == 1 {
+            w = w + chr(c)
+            q += 1
+          } otherwise {
+            break
+          }
+        }
+        expected = known_word(w)
+        rest = q
+        while rest < n {
+          c = sx_index(line, rest)
+          when c == 32 || c == 9 {
+            rest += 1
+          } otherwise {
+            break
+          }
+        }
+        is_assign = 0
+        is_call = 0
+        when rest < n {
+          c = sx_index(line, rest)
+          when c == 61 {
+            is_assign = 1
+          }
+          when c == 46 || c == 91 {
+            is_assign = 1
+          }
+          when c == 40 {
+            is_call = 1
+          }
+        }
+        when expected == 0 && is_assign == 0 && is_call == 0 {
+          when declared_in(text, w) == 0 {
+            msg = concat("unknown statement '", w)
+            msg = concat(msg, "'")
+            items = items + diag_item(l, a, 1, "SX1001", msg, count)
+            count += 1
+          }
+        }
+        when string_eq(w, "use") {
+          u = find_from(line, "\"", q)
+          when u >= 0 {
+            v = find_from(line, "\"", u + 1)
+            when v < 0 {
+              items = items + diag_item(l, n - 1, 1, "SX1005", "unterminated use path", count)
+              count += 1
+            } otherwise {
+              path = ""
+              z = u + 1
+              while z < v {
+                path = path + chr(sx_index(line, z))
+                z += 1
+              }
+              full = path
+              c = sx_index(path, 0)
+              when c != 47 {
+                full = concat(dir, path)
+              }
+              body = read_file(full)
+              when len(body) <= 0 {
+                msg = concat("cannot read module '", path)
+                msg = concat(msg, "' (looked next to the document)")
+                items = items + diag_item(l, u, 2, "SX1005", msg, count)
+                count += 1
+              }
+            }
+          }
+        }
+      }
+    }
+    l += 1
+  }
+  when depth != 0 {
+    l2 = lines - 1
+    when l2 < 0 {
+      l2 = 0
+    }
+    msg = "unbalanced braces: "
+    when depth > 0 {
+      msg = concat(msg, numstr(depth))
+      msg = concat(msg, " block(s) never close")
+    } otherwise {
+      msg = concat(msg, "more '}' than '{'")
+    }
+    items = items + diag_item(l2, 0, 1, "SX1003", msg, count)
+    count += 1
+  }
+  give concat("[", concat(items, "]"))
+}
+
+// ---------------------------------------------------------- documentSymbol
+
+make sym_item(name: str, kind: num, line: num, uri: str, first: num) -> str {
+  hold b = ""
+  when first > 0 {
+    b = b + ","
+  }
+  b = b + "{\"name\":\""
+  b = b + json_esc(name)
+  b = b + "\",\"kind\":"
+  b = b + numstr(kind)
+  b = b + ",\"location\":{\"uri\":\""
+  b = b + json_esc(uri)
+  b = b + "\",\"range\":{\"start\":{\"line\":"
+  b = b + numstr(line)
+  b = b + ",\"character\":0},\"end\":{\"line\":"
+  b = b + numstr(line)
+  b = b + ",\"character\":1}}}}"
+  give b
+}
+
+make symbols(text: str, uri: str) -> str {
+  hold arr = ""
+  hold count = 0
+  hold lines = 0
+  hold l = 0
+  hold line = ""
+  hold n = 0
+  hold i = 0
+  hold kind = 0
+  hold skip = 0
+  hold w = ""
+  hold q = 0
+  hold c = 0
+  lines = count_lines(text)
+  while l < lines {
+    line = line_text(text, l)
+    n = len(line)
+    i = 0
+    while i < n {
+      c = sx_index(line, i)
+      when c == 32 || c == 9 {
+        i += 1
+      } otherwise {
+        break
+      }
+    }
+    kind = 0
+    skip = 0
+    when starts(line, i, "make ") == 1 {
+      kind = 3
+      skip = 5
+    }
+    when starts(line, i, "struct ") == 1 {
+      kind = 5
+      skip = 7
+    }
+    when starts(line, i, "hold ") == 1 {
+      kind = 13
+      skip = 5
+    }
+    when kind != 0 {
+      w = ""
+      q = i + skip
+      while q < n {
+        c = sx_index(line, q)
+        when is_ident(c) == 1 {
+          w = w + chr(c)
+          q += 1
+        } otherwise {
+          break
+        }
+      }
+      when len(w) > 0 {
+        arr = arr + sym_item(w, kind, l, uri, count)
+        count += 1
+      }
+    }
+    l += 1
+  }
+  give concat("[", concat(arr, "]"))
+}
+
+// ------------------------------------------------------------- completion
+
+make completion_items() -> str {
+  hold words = ""
+  hold arr = ""
+  hold count = 0
+  hold n = 0
+  hold i = 0
+  hold c = 0
+  hold d = 0
+  hold w = ""
+  hold item = ""
+  words = "hold show when otherwise else elif while for break continue make give struct use true false and or not push concat len chr sx_index string_eq read_file write_file arg arg_count read_line read_n write_out flush_out numstr gc gc_live gc_runs"
+  n = len(words)
+  while i < n {
+    c = sx_index(words, i)
+    when is_ident(c) == 1 {
+      w = ""
+      while i < n {
+        d = sx_index(words, i)
+        when is_ident(d) == 1 {
+          w = w + chr(d)
+          i += 1
+        } otherwise {
+          break
+        }
+      }
+      item = ""
+      when count > 0 {
+        item = ","
+      }
+      item = item + "{\"label\":\""
+      item = item + w
+      item = item + "\",\"kind\":14,\"detail\":\"standard\"}"
+      arr = arr + item
+      count += 1
+    } otherwise {
+      i += 1
+    }
+  }
+  give concat("[", concat(arr, "]"))
+}
+
+// --------------------------------------------------------- hover / definition
+
+make hover_for(w: str, text: str) -> str {
+  hold d = ""
+  hold md = ""
+  hold pat = ""
+  hold lines = 0
+  hold l = 0
+  hold line = ""
+  hold found = 0
+  hold b = ""
+  hold hd = ""
+  d = doc_for(w)
+  when len(w) <= 0 {
+    md = "**Sayanox** — hold / show / when / while / make / give / struct, lists, and the standard builtins."
+  } otherwise {
+    when len(d) > 0 {
+      md = d
+    } otherwise {
+      pat = concat("make ", w)
+      lines = count_lines(text)
+      while l < lines {
+        line = line_text(text, l)
+        when found == 0 {
+          when starts(line, 0, pat) == 1 {
+            md = concat("`", line)
+            md = concat(md, "`")
+            found = 1
+          }
+        }
+        l += 1
+      }
+      when found == 0 {
+        hd = concat("hold ", w)
+        when find(text, hd) >= 0 {
+          md = concat("`", w)
+          md = concat(md, "` — a variable in this document.")
+        } otherwise {
+          md = concat("`", w)
+          md = concat(md, "` — no declaration in this document.")
+        }
+      }
+    }
+  }
+  b = "{\"contents\":{\"kind\":\"markdown\",\"value\":\""
+  b = b + json_esc(md)
+  b = b + "\"}}"
+  give b
+}
+
+make definition_for(w: str, text: str, uri: str) -> str {
+  hold res = "null"
+  hold lines = 0
+  hold l = 0
+  hold found = 0
+  hold line = ""
+  hold m = 0
+  hold mk = ""
+  hold hd = ""
+  hold sd = ""
+  hold b = ""
+  when len(w) > 0 {
+    lines = count_lines(text)
+    while l < lines {
+      when found == 0 {
+        line = line_text(text, l)
+        m = 0
+        while m < len(line) {
+          when sx_index(line, m) == 32 || sx_index(line, m) == 9 {
+            m += 1
+          } otherwise {
+            break
+          }
+        }
+        mk = concat("make ", w)
+        hd = concat("hold ", w)
+        sd = concat("struct ", w)
+        when starts(line, m, mk) == 1 {
+          found = 1
+        }
+        when starts(line, m, hd) == 1 {
+          found = 1
+        }
+        when starts(line, m, sd) == 1 {
+          found = 1
+        }
+        when found == 1 {
+          b = "{\"uri\":\""
+          b = b + json_esc(uri)
+          b = b + "\",\"range\":{\"start\":{\"line\":"
+          b = b + numstr(l)
+          b = b + ",\"character\":0},\"end\":{\"line\":"
+          b = b + numstr(l)
+          b = b + ",\"character\":1}}"
+          res = b
+        }
+      }
+      l += 1
+    }
+  }
+  give res
+}
+
+// ------------------------------------------------------------- transport
+
+make emit(s: str) -> num {
+  hold r = 0
+  r = write_out(s)
+  give r
+}
+
+make send(body: str) -> num {
+  hold r = 0
+  hold n = 0
+  n = len(body)
+  r = write_out("Content-Length: ")
+  r = write_out(numstr(n))
+  r = write_out("\r\n\r\n")
+  r = write_out(body)
+  r = flush_out()
+  give r
+}
+
+make reply(id: num, result: str) -> num {
+  hold b = ""
+  hold r = 0
+  b = concat("{\"jsonrpc\":\"2.0\",\"id\":", numstr(id))
+  b = concat(b, ",\"result\":")
+  b = concat(b, result)
+  b = concat(b, "}")
+  r = send(b)
+  give r
+}
+
+make notify(method: str, params: str) -> num {
+  hold b = ""
+  hold r = 0
+  b = concat("{\"jsonrpc\":\"2.0\",\"method\":\"", method)
+  b = concat(b, "\",\"params\":")
+  b = concat(b, params)
+  b = concat(b, "}")
+  r = send(b)
+  give r
+}
+
+make capabilities() -> str {
+  hold c = ""
+  c = "{\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\" \"]},"
+  c = concat(c, "\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,")
+  c = concat(c, "\"diagnosticProvider\":{\"interFileDependencies\":false,\"workspaceDiagnostics\":false}}")
+  give c
+}
+
+make dir_of(uri: str) -> str {
+  hold off = 0
+  hold p = 0
+  hold i = 0
+  hold n = 0
+  hold last = 0
+  hold d = ""
+  hold j = 0
+  hold c = 0
+  p = find(uri, "file://")
+  when p >= 0 {
+    off = p + 7
+  }
+  i = off
+  n = len(uri)
+  last = off
+  while i < n {
+    c = sx_index(uri, i)
+    when c == 47 {
+      last = i + 1
+    }
+    i += 1
+  }
+  j = off
+  while j < last {
+    d = d + chr(sx_index(uri, j))
+    j += 1
+  }
+  give d
+}
+
+// --------------------------------------------------------------- main loop
+
+hold doc = ""
+hold docuri = ""
+hold running = 1
+hold hdr = ""
+hold clen = 0
+hold got = 0
+hold body = ""
+hold method = ""
+hold id = 0
+hold uri = ""
+hold text = ""
+hold line = 0
+hold ch = 0
+hold w = ""
+hold res = ""
+hold params = ""
+hold d = 0
+hold c = 0
+hold v = 0
+hold i = 0
+hold n = 0
+hold seen = 0
+hold ln = 0
+
+while running == 1 {
+  hdr = read_line()
+  when len(hdr) <= 0 {
+    running = 0
+  } otherwise {
+    clen = -1
+    got = 0
+    while len(hdr) > 0 {
+      when starts(hdr, 0, "Content-Length:") == 1 {
+        v = 0
+        seen = 0
+        i = 15
+        n = len(hdr)
+        while i < n {
+          c = sx_index(hdr, i)
+          when c >= 48 && c <= 57 {
+            v = v * 10 + (c - 48)
+            seen = 1
+          }
+          i += 1
+        }
+        when seen == 1 {
+          clen = v
+          got = 1
+        }
+      }
+      hdr = read_line()
+    }
+    when got == 1 && clen > 0 {
+      body = read_n(clen)
+      id = num_field(body, "id", -1)
+      method = str_field(body, "method")
+      when len(method) <= 0 {
+        method = ""
+      }
+      uri = str_field(body, "uri")
+      text = str_field(body, "text")
+      ln = num_field(body, "line", 0)
+      ch = num_field(body, "character", 0)
+      when string_eq(method, "initialize") {
+        res = concat("{\"capabilities\":", capabilities())
+        res = concat(res, ",\"serverInfo\":{\"name\":\"sayanox-lsp\",\"version\":\"2.0\"}}")
+        d = reply(id, res)
+      }
+      when string_eq(method, "initialized") {
+        d = 1
+      }
+      when string_eq(method, "shutdown") {
+        d = reply(id, "null")
+      }
+      when string_eq(method, "textDocument/didOpen") {
+        docuri = uri
+        doc = text
+        params = concat("{\"uri\":\"", json_esc(docuri))
+        params = concat(params, "\",\"diagnostics\":")
+        params = concat(params, diagnostics(doc, dir_of(docuri)))
+        params = concat(params, "}")
+        d = notify("textDocument/publishDiagnostics", params)
+      }
+      when string_eq(method, "textDocument/didChange") {
+        when len(uri) > 0 {
+          docuri = uri
+        }
+        when len(text) > 0 {
+          doc = text
+        }
+        params = concat("{\"uri\":\"", json_esc(docuri))
+        params = concat(params, "\",\"diagnostics\":")
+        params = concat(params, diagnostics(doc, dir_of(docuri)))
+        params = concat(params, "}")
+        d = notify("textDocument/publishDiagnostics", params)
+      }
+      when string_eq(method, "textDocument/didClose") {
+        params = concat("{\"uri\":\"", json_esc(uri))
+        params = concat(params, "\",\"diagnostics\":[]}")
+        d = notify("textDocument/publishDiagnostics", params)
+      }
+      when string_eq(method, "textDocument/diagnostic") {
+        res = concat("{\"kind\":\"full\",\"items\":", diagnostics(doc, dir_of(docuri)))
+        res = concat(res, "}")
+        d = reply(id, res)
+      }
+      when string_eq(method, "textDocument/documentSymbol") {
+        d = reply(id, symbols(doc, docuri))
+      }
+      when string_eq(method, "textDocument/completion") {
+        res = concat("{\"isIncomplete\":false,\"items\":", completion_items())
+        res = concat(res, "}")
+        d = reply(id, res)
+      }
+      when string_eq(method, "textDocument/hover") {
+        w = word_at(doc, ln, ch)
+        d = reply(id, hover_for(w, doc))
+      }
+      when string_eq(method, "textDocument/definition") {
+        w = word_at(doc, ln, ch)
+        d = reply(id, definition_for(w, doc, docuri))
+      }
+      when string_eq(method, "exit") {
+        running = 0
+      }
+    }
+  }
+}
+d = flush_out()

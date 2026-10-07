@@ -28,12 +28,13 @@ the C-generating compilers.
 These are roadmap items or older experimental syntax, not promises of the
 current seed-min/gen2/native toolchain:
 
-- range and `for-in` loops, and `elif`;
+- namespaced exports/imports and versioned module resolution;
 - namespaced exports/imports and versioned module resolution;
 - additional string helpers such as `contains`, `starts_with`, `ends_with`,
   `repeat`, and `substr`;
-- a complete standard library, generics, and richer static types;
-- automatic heap ownership/collection across all backends;
+- a complete standard library and richer static types;
+- automatic heap ownership/collection across all backends (gen2-compiled
+  programs have a mark & sweep collector; native AOT still bump-allocates);
 - portable native code generation and remote package publishing/hosting.
 
 Some of these appear in old examples or compiler-stage experiments. Their

@@ -32,3 +32,5 @@ tools/sxfmt
 tools/sxfmt.c
 tools/sxpkg
 tools/sxpkg.c
+tools/sayanox_lsp
+tools/sayanox_lsp.c

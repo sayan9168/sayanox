@@ -133,7 +133,10 @@ systems.
 
 ## 9. Remaining work
 
-Range/for-in loops, `elif`, namespaced modules, a full standard library,
-generics and automatic memory management across all backends are not yet part
-of the maintained subset. This is an incremental milestone, not a claim that
-every language experiment in the repository is production-ready.
+Namespaced modules, a full standard library and automatic memory management
+across all backends are not yet part of the maintained subset. The gen2 path
+does have `for`/`for-in` with `break`/`continue`, `elif`, a mark & sweep
+collector ([`GC.md`](GC.md)) and single-type-parameter generics
+([`SYNTAX.md`](SYNTAX.md)); native AOT still bump-allocates. This is an
+incremental milestone, not a claim that every language experiment in the
+repository is production-ready.

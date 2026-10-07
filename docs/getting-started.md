@@ -138,7 +138,9 @@ This is not namespaced or versioned package importing. See
 ## 9. Current boundaries
 
 The maintained bootstrap does not yet include every form shown in historical
-examples. Range/for-in loops, `elif`, namespaced exports, a full standard
-library, generics and automatic memory management across all backends remain
-future work. The native-AOT compiler is x86-64 Linux only. See
+examples. Namespaced exports, a full standard library and automatic memory
+management across all backends remain future work; the gen2 path has
+`for`/`for-in`/`elif`, single-type-parameter generics and a mark & sweep
+collector, while native AOT still bump-allocates. The native-AOT compiler is
+x86-64 Linux only. See
 [`BOOTSTRAP_ROADMAP.md`](BOOTSTRAP_ROADMAP.md) for the larger plan.
