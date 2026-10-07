@@ -213,6 +213,15 @@ hold aword = ""
 hold atype = ""
 hold dtok = 0
 hold dtok2 = 0
+hold ppi = 0
+hold ppl = 0
+hold ppstart = 0
+hold ppname = ""
+hold ppkind = 0
+hold ppc = 0
+hold ppk = 0
+hold ppj = 0
+hold ppstop = 0
 hold asmode = 0
 hold sufx = ""
 hold liset = 0
@@ -4728,6 +4737,15 @@ while running == 1 {
               }
             }
           }
+          when sx_eq(atok, "gc") {
+            hold argv_c = "sx_gc_run"
+          }
+          when sx_eq(atok, "gc_live") {
+            hold argv_c = "sx_gc_live"
+          }
+          when sx_eq(atok, "gc_runs") {
+            hold argv_c = "sx_gc_count"
+          }
           hold fk = 0
           when sx_eq(nm2, "concat") {
             hold fk = 1
@@ -4758,6 +4776,15 @@ while running == 1 {
           }
           when sx_eq(nm2, "sx_eq") {
             hold fk = 9
+          }
+          when sx_eq(nm2, "gc") || sx_eq(nm2, "sx_gc_run") {
+            hold fk = 12
+          }
+          when sx_eq(nm2, "gc_live") || sx_eq(nm2, "sx_gc_live") {
+            hold fk = 13
+          }
+          when sx_eq(nm2, "gc_runs") || sx_eq(nm2, "sx_gc_count") {
+            hold fk = 14
           }
           when sx_eq(nm2, "push") {
             hold fk = 10
@@ -4867,6 +4894,15 @@ while running == 1 {
             hold rhs = concat("sx_eq(", argv_c)
             hold rhs = concat(rhs, ")")
             hold rt = 1
+          }
+          when fk == 12 {
+            hold rhs = "sx_gc_run()"
+          }
+          when fk == 13 {
+            hold rhs = "sx_gc_live()"
+          }
+          when fk == 14 {
+            hold rhs = "sx_gc_count()"
           }
           when fk == 10 {
             // the pushed value must be a number: a plain string, list or
@@ -5989,6 +6025,15 @@ hold ec = 0
               when sx_eq(nm3, "arg_count") || sx_eq(nm3, "sx_argc") {
                 hold ocmap = "sx_argc"
               }
+              when sx_eq(nm3, "gc") || sx_eq(nm3, "sx_gc_run") {
+                hold ocmap = "sx_gc_run"
+              }
+              when sx_eq(nm3, "gc_live") || sx_eq(nm3, "sx_gc_live") {
+                hold ocmap = "sx_gc_live"
+              }
+              when sx_eq(nm3, "gc_runs") || sx_eq(nm3, "sx_gc_count") {
+                hold ocmap = "sx_gc_count"
+              }
               when sx_eq(nm3, "string_eq") || sx_eq(nm3, "sx_eq") {
                 hold ocmap = "sx_eq"
               }
@@ -6994,6 +7039,15 @@ hold ec = 0
             }
           }
           hold pos = pos + 1
+          when sx_eq(atok, "gc") {
+            hold argv_c = "sx_gc_run"
+          }
+          when sx_eq(atok, "gc_live") {
+            hold argv_c = "sx_gc_live"
+          }
+          when sx_eq(atok, "gc_runs") {
+            hold argv_c = "sx_gc_count"
+          }
           hold fk = 0
           // Normalize builtin identifiers inside argument text for nested calls.
           hold argv_c = ""
@@ -7093,6 +7147,15 @@ hold ec = 0
           }
           when sx_eq(nm2, "sx_eq") {
             hold fk = 9
+          }
+          when sx_eq(nm2, "gc") || sx_eq(nm2, "sx_gc_run") {
+            hold fk = 12
+          }
+          when sx_eq(nm2, "gc_live") || sx_eq(nm2, "sx_gc_live") {
+            hold fk = 13
+          }
+          when sx_eq(nm2, "gc_runs") || sx_eq(nm2, "sx_gc_count") {
+            hold fk = 14
           }
           when sx_eq(nm2, "sx_cat") {
             hold fk = 1
@@ -7198,6 +7261,15 @@ hold ec = 0
             hold rhs = concat("sx_eq(", argv_c)
             hold rhs = concat(rhs, ")")
             hold rt = 1
+          }
+          when fk == 12 {
+            hold rhs = "sx_gc_run()"
+          }
+          when fk == 13 {
+            hold rhs = "sx_gc_live()"
+          }
+          when fk == 14 {
+            hold rhs = "sx_gc_count()"
           }
           when fk == 0 {
             // user-defined function call: forward the text as-is
@@ -8154,6 +8226,15 @@ hold ec = 0
               }
               when sx_eq(nm3, "arg_count") || sx_eq(nm3, "sx_argc") {
                 hold ocmap = "sx_argc"
+              }
+              when sx_eq(nm3, "gc") || sx_eq(nm3, "sx_gc_run") {
+                hold ocmap = "sx_gc_run"
+              }
+              when sx_eq(nm3, "gc_live") || sx_eq(nm3, "sx_gc_live") {
+                hold ocmap = "sx_gc_live"
+              }
+              when sx_eq(nm3, "gc_runs") || sx_eq(nm3, "sx_gc_count") {
+                hold ocmap = "sx_gc_count"
               }
               when sx_eq(nm3, "string_eq") || sx_eq(nm3, "sx_eq") {
                 hold ocmap = "sx_eq"
@@ -9239,6 +9320,15 @@ hold ec = 0
                   hold cwmap = "sx_argc"
                   hold rt = 1
                 }
+                when sx_eq(cwid, "gc") || sx_eq(cwid, "sx_gc_run") {
+                  hold cwmap = "sx_gc_run"
+                }
+                when sx_eq(cwid, "gc_live") || sx_eq(cwid, "sx_gc_live") {
+                  hold cwmap = "sx_gc_live"
+                }
+                when sx_eq(cwid, "gc_runs") || sx_eq(cwid, "sx_gc_count") {
+                  hold cwmap = "sx_gc_count"
+                }
                 when sx_eq(cwid, "string_eq") {
                   hold cwmap = "sx_eq"
                   hold rt = 1
@@ -10130,6 +10220,63 @@ hold ec = 0
       hold body = concat(body, fn_params)
       hold body = concat(body, ") {")
       hold body = concat(body, nl)
+      // Remember the parameter kinds.  `show name` and `hold name = ...`
+      // inside the body must see a `str`/`list` parameter as the existing
+      // variable it is (a numeric parameter stays numeric).
+      hold ppi = 0
+      hold ppl = len(fn_params)
+      hold ppstart = 0
+      hold ppname = ""
+      hold ppkind = 0
+      while ppi <= ppl {
+        hold ppc = 0
+        when ppi < ppl {
+          hold ppc = sx_index(fn_params, ppi)
+        }
+        when ppi == ppl || ppc == 44 {
+          hold ppj = ppi - 1
+          hold ppname = ""
+          hold ppstop = ppstart - 1
+          while ppj >= ppstart {
+            hold ppk = sx_index(fn_params, ppj)
+            when (ppk >= 97 && ppk <= 122) || (ppk >= 65 && ppk <= 90) || (ppk >= 48 && ppk <= 57) || ppk == 95 {
+              hold ppname = concat(chr(ppk), ppname)
+              hold ppj = ppj - 1
+            } otherwise {
+              hold ppj = ppstop
+            }
+          }
+          hold ppkind = 0
+          hold ppj = ppstart
+          while ppj + 7 <= ppi {
+            when sx_index(fn_params, ppj) == 115 && sx_index(fn_params, ppj + 1) == 120 && sx_index(fn_params, ppj + 2) == 95 && sx_index(fn_params, ppj + 3) == 108 && sx_index(fn_params, ppj + 4) == 105 && sx_index(fn_params, ppj + 5) == 115 && sx_index(fn_params, ppj + 6) == 116 {
+              hold ppkind = 2
+            }
+            hold ppj = ppj + 1
+          }
+          hold ppj = ppstart
+          while ppj + 4 <= ppi {
+            when sx_index(fn_params, ppj) == 99 && sx_index(fn_params, ppj + 1) == 104 && sx_index(fn_params, ppj + 2) == 97 && sx_index(fn_params, ppj + 3) == 114 {
+              hold ppkind = 1
+            }
+            hold ppj = ppj + 1
+          }
+          when len(ppname) > 0 {
+            hold decls = concat(decls, ppname)
+            hold decls = concat(decls, "|")
+            when ppkind == 1 {
+              hold sdecls = concat(sdecls, ppname)
+              hold sdecls = concat(sdecls, "|")
+            }
+            when ppkind == 2 {
+              hold ldecls = concat(ldecls, ppname)
+              hold ldecls = concat(ldecls, "|")
+            }
+          }
+          hold ppstart = ppi + 1
+        }
+        hold ppi = ppi + 1
+      }
       hold in_fn = 1
       hold depth = depth + 1
       hold blk = concat(blk, "m")
@@ -10809,39 +10956,49 @@ when rt == 1 {
   hold out = concat(out, "#include <stdio.h>\n")
   hold out = concat(out, "#include <stdlib.h>\n")
   hold out = concat(out, "#include <string.h>\n")
-  hold out = concat(out, "#include <stdarg.h>\n")
+  hold out = concat(out, "#include <stdarg.h>\n#include <setjmp.h>\n")
+  hold out = concat(out, "typedef struct sx_list { double *d; long n; long cap; } sx_list;\ntypedef struct sx_gcb {\n  struct sx_gcb *next;      /* every live block, for the sweep */\n  size_t cls;               /* size class: the free list it goes back to */\n  size_t kind;              /* 0 raw bytes, 1 sx_list, 2 double array */\n  size_t mark;\n} sx_gcb;\n#define SX_GCH ((size_t)32)\n#define SX_NCLS 26\nstatic sx_gcb *sx_gcall = 0;\nstatic sx_gcb *sx_gfree[SX_NCLS];\nstatic char **sx_ghash = 0;               /* payload address -> block */\nstatic sx_gcb **sx_gblk = 0;\nstatic sx_gcb **sx_gsort = 0;             /* blocks by address, for interiors */\nstatic size_t sx_ghcap = 0, sx_ghlive = 0, sx_gsort_n = 0;\nstatic char *sx_stack_bot = 0;\nstatic double sx_gc_n = 0, sx_gc_freed = 0, sx_gc_thresh = 0, sx_gc_bytes = 0;\n\nstatic size_t sx_gc_class_size(size_t c){ return (size_t)32 << c; }\nstatic size_t sx_gc_cls(size_t need){\n")
+  hold out = concat(out, "  size_t c = 0, sz = 32;\n  while (sz < need && c + 1 < SX_NCLS){ sz <<= 1; c += 1; }\n  return c;\n}\n\nstatic void sx_gc_rehash(size_t cap){\n  char **nh;\n  sx_gcb **nb;\n  sx_gcb *b;\n  if (cap < 4096) cap = 4096;\n  while (cap < (sx_ghlive + 1) * 4) cap <<= 1;\n  nh = (char**)calloc(cap, sizeof(char*));\n  nb = (sx_gcb**)calloc(cap, sizeof(sx_gcb*));\n  b = sx_gcall;\n  while (b){\n    char *pay = (char*)b + SX_GCH;\n    size_t h = ((size_t)pay >> 4) & (cap - 1);\n    while (nh[h]) h = (h + 1) & (cap - 1);\n    nh[h] = pay; nb[h] = b;\n    b = b->next;\n  }\n  free(sx_ghash); free(sx_gblk);\n  sx_ghash = nh; sx_gblk = nb; sx_ghcap = cap;\n}\n\nstatic void sx_gc_hash_put(char *pay, sx_gcb *b){\n  size_t h;\n  if (!sx_ghcap) sx_gc_rehash(1u << 12);\n  if ((sx_ghlive + 1) * 4 > sx_ghcap){ sx_gc_rehash(sx_ghcap * 2); return; }\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n")
+  hold out = concat(out, "  while (sx_ghash[h]) h = (h + 1) & (sx_ghcap - 1);\n  sx_ghash[h] = pay; sx_gblk[h] = b;\n}\n\nstatic sx_gcb *sx_gc_hash_get(char *pay){\n  size_t h;\n  if (!sx_ghcap) return 0;\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n  while (sx_ghash[h] && sx_ghash[h] != pay) h = (h + 1) & (sx_ghcap - 1);\n  return sx_ghash[h] ? sx_gblk[h] : 0;\n}\n\nstatic int sx_gc_cmp(const void *a, const void *b){\n  char *pa = (char*)(*(sx_gcb* const*)a) + SX_GCH;\n  char *pb = (char*)(*(sx_gcb* const*)b) + SX_GCH;\n  return pa < pb ? -1 : (pa > pb ? 1 : 0);\n}\nstatic void sx_gc_sorted(void){\n  size_t i = 0;\n  sx_gcb *b = sx_gcall;\n  if (sx_gsort_n != sx_ghlive){\n    free(sx_gsort);\n    sx_gsort = (sx_gcb**)malloc((sx_ghlive + 1) * sizeof(sx_gcb*));\n  }\n  while (b && i < sx_ghlive){ sx_gsort[i] = b; i += 1; b = b->next; }\n  sx_gsort_n = i;\n  qsort(sx_gsort, i, sizeof(sx_gcb*), sx_gc_cmp);\n}\n")
+  hold out = concat(out, "static sx_gcb *sx_gc_containing(char *p){\n  size_t lo = 0, hi = sx_gsort_n;\n  while (lo < hi){\n    size_t mid = (lo + hi) / 2;\n    char *pay = (char*)sx_gsort[mid] + SX_GCH;\n    size_t sz = sx_gc_class_size(sx_gsort[mid]->cls);\n    if (p < pay) hi = mid;\n    else if (p >= pay + sz) lo = mid + 1;\n    else return sx_gsort[mid];\n  }\n  return 0;\n}\n\nstatic void sx_gc_mark(void *p){\n  sx_gcb *b;\n  if (!p) return;\n  b = sx_gc_hash_get((char*)p);\n  if (!b) b = sx_gc_containing((char*)p);\n  if (!b || b->mark) return;\n  b->mark = 1;\n  if (b->kind == 1){\n    sx_list *L = (sx_list*)((char*)b + SX_GCH);\n    if (L->d) sx_gc_mark((char*)L->d);\n  }\n}\n\nstatic void sx_gc_scan(char *lo, char *hi){\n  lo = (char*)(((size_t)lo + 7u) & ~(size_t)7u);\n  while (lo + 8 <= hi){\n    sx_gc_mark(*(char**)lo);\n    lo += 8;\n  }\n}\n\nstatic void sx_gc_init(void *anchor){\n  sx_stack_bot = (char*)anchor;\n")
+  hold out = concat(out, "  if (!sx_gc_thresh) sx_gc_thresh = (double)(8u << 20);\n}\n\nstatic void sx_gc_collect(void){\n  double before = sx_gc_bytes;\n  sx_gcb **pp;\n  if (!sx_gcall || !sx_stack_bot) return;\n  sx_gc_sorted();\n  {\n    jmp_buf jb;\n    setjmp(jb);\n    sx_gc_scan((char*)&jb, (char*)&jb + sizeof(jb));\n    sx_gc_scan((char*)&jb, sx_stack_bot);\n  }\n  pp = &sx_gcall;\n  while (*pp){\n    sx_gcb *b = *pp;\n    if (b->mark){\n      b->mark = 0;\n      pp = &b->next;\n    } else {\n      size_t c = b->cls;\n      *pp = b->next;\n      sx_gc_bytes -= (double)sx_gc_class_size(c);\n      sx_ghlive -= 1;\n      b->next = sx_gfree[c];\n      sx_gfree[c] = b;\n    }\n  }\n  sx_gc_n += 1.0;\n  sx_gc_freed = before - sx_gc_bytes;\n  sx_gsort_n = 0;\n  sx_gc_rehash(4096);\n  sx_gc_thresh = sx_gc_bytes * 1.5 + (double)(4u << 20);\n}\n\nstatic void *sx_gc_alloc(int kind, size_t payload){\n  size_t need = payload + SX_GCH;\n")
+  hold out = concat(out, "  size_t c = sx_gc_cls(need);\n  sx_gcb *b;\n  if (sx_gc_bytes >= sx_gc_thresh) sx_gc_collect();\n  b = sx_gfree[c];\n  if (b) sx_gfree[c] = b->next;\n  else b = (sx_gcb*)malloc(sx_gc_class_size(c));\n  b->cls = c;\n  b->kind = (size_t)kind;\n  b->mark = 0;\n  b->next = sx_gcall;\n  sx_gcall = b;\n  sx_ghlive += 1;\n  sx_gc_hash_put((char*)b + SX_GCH, b);\n  sx_gc_bytes += (double)sx_gc_class_size(c);\n  return (char*)b + SX_GCH;\n}\n\nstatic double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\nstatic double sx_gc_live(void){ return sx_gc_bytes; }\nstatic double sx_gc_count(void){ return sx_gc_n; }\n\n\n")
   hold out = concat(out, "static int sx_argn=0; static char **sx_argv_p=0;\n")
   hold out = concat(out, "static double sx_argc(void){ return (double)sx_argn; }\n")
   hold out = concat(out, "static char *sx_arg(double v){ long i=(long)v; if(i<0||i>=sx_argn) return \"\"; return sx_argv_p[i]; }\n")
-  hold out = concat(out, "static char *sx_chr(double v){ char *b=(char*)malloc(2); b[0]=(char)(long)v; b[1]=0; return b; }\n")
-  hold out = concat(out, "static char *sx_cat(const char *a,const char *b){ size_t la=strlen(a), lb=strlen(b); char *r=(char*)malloc(la+lb+1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r; }\n")
+  hold out = concat(out, "static char *sx_chr(double v){ char *b=(char*)sx_gc_alloc(0,2); b[0]=(char)(long)v; b[1]=0; return b; }\n")
+  hold out = concat(out, "static char *sx_cat(const char *a,const char *b){ size_t la=strlen(a), lb=strlen(b); char *r=(char*)sx_gc_alloc(0,la+lb+1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r; }\n")
   hold out = concat(out, "static double sx_len(const char *s){ return (double)strlen(s); }\n")
   hold out = concat(out, "static double sx_idx(const char *s,double v){ long i=(long)v; long L=(long)strlen(s); if(i<0) i=i+L; if(i<0||i>=L){ fputs(\"sx: string index out of range\",stderr); exit(1); } return (double)(unsigned char)s[i]; }\n")
-  hold out = concat(out, "static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return \"\"; fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET); char *b=(char*)malloc((size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f); return b; }\n")
+  hold out = concat(out, "static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return \"\"; fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET); char *b=(char*)sx_gc_alloc(0,(size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f); return b; }\n")
   hold out = concat(out, "static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0.0; fputs(s,f); return fclose(f)==0?1.0:0.0; }\n")
   hold out = concat(out, "static double sx_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
   hold out = concat(out, "static double string_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
-  hold out = concat(out, "typedef struct { double *d; long n; long cap; } sx_list;\n")
   hold out = concat(out, "static double sx_mod(double a,double b){ long x=(long)a, y=(long)b; if(!y){fputs(\"division by zero\\n\",stderr);exit(1);} return (double)(x%y); }\n")
-  hold out = concat(out, "static sx_list *sx_llit(int n,...){ sx_list *L=(sx_list*)malloc(sizeof(sx_list)); L->n=n; L->cap=n<4?4:n; L->d=(double*)malloc(sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }\n")
+  hold out = concat(out, "static sx_list *sx_llit(int n,...){ sx_list *L=(sx_list*)sx_gc_alloc(1,sizeof(sx_list)); L->n=n; L->cap=n<4?4:n; L->d=(double*)sx_gc_alloc(2,sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }\n")
   hold out = concat(out, "static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return L->d[i]; }\n")
   hold out = concat(out, "static double sx_llen(sx_list *L){ return L?(double)L->n:0.0; }\n")
   hold out = concat(out, "static double sx_lset_idx(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return (double)i; }\n")
   hold out = concat(out, "static sx_list *sx_lset(sx_list *L,double v,double x){ L->d[(long)sx_lset_idx(L,v)]=x; return L; }\n")
-  hold out = concat(out, "static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=(sx_list*)malloc(sizeof(sx_list)); L->n=0; L->cap=4; L->d=(double*)malloc(sizeof(double)*4);} if(L->n>=L->cap){ L->cap*=2; L->d=(double*)realloc(L->d,sizeof(double)*(size_t)L->cap);} L->d[L->n++]=v; return L; }\n")
+  hold out = concat(out, "static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=(sx_list*)sx_gc_alloc(1,sizeof(sx_list)); L->n=0; L->cap=4; L->d=(double*)sx_gc_alloc(2,sizeof(double)*4);} if(L->n>=L->cap){ double *nd=(double*)sx_gc_alloc(2,sizeof(double)*(size_t)(L->cap*2)); memcpy(nd,L->d,sizeof(double)*(size_t)L->n); L->d=nd; L->cap*=2;} L->d[L->n++]=v; return L; }\n")
   hold out = concat(out, "\n")
 } otherwise {
   hold out = concat(out, "#include <stdio.h>\n")
   hold out = concat(out, "#include <stdlib.h>\n")
-  hold out = concat(out, "#include <stdarg.h>\n\n")
-  hold out = concat(out, "typedef struct { double *d; long n; long cap; } sx_list;\n")
+  hold out = concat(out, "#include <stdarg.h>\n#include <string.h>\n#include <setjmp.h>\n\n")
+  hold out = concat(out, "typedef struct sx_list { double *d; long n; long cap; } sx_list;\ntypedef struct sx_gcb {\n  struct sx_gcb *next;      /* every live block, for the sweep */\n  size_t cls;               /* size class: the free list it goes back to */\n  size_t kind;              /* 0 raw bytes, 1 sx_list, 2 double array */\n  size_t mark;\n} sx_gcb;\n#define SX_GCH ((size_t)32)\n#define SX_NCLS 26\nstatic sx_gcb *sx_gcall = 0;\nstatic sx_gcb *sx_gfree[SX_NCLS];\nstatic char **sx_ghash = 0;               /* payload address -> block */\nstatic sx_gcb **sx_gblk = 0;\nstatic sx_gcb **sx_gsort = 0;             /* blocks by address, for interiors */\nstatic size_t sx_ghcap = 0, sx_ghlive = 0, sx_gsort_n = 0;\nstatic char *sx_stack_bot = 0;\nstatic double sx_gc_n = 0, sx_gc_freed = 0, sx_gc_thresh = 0, sx_gc_bytes = 0;\n\nstatic size_t sx_gc_class_size(size_t c){ return (size_t)32 << c; }\nstatic size_t sx_gc_cls(size_t need){\n")
+  hold out = concat(out, "  size_t c = 0, sz = 32;\n  while (sz < need && c + 1 < SX_NCLS){ sz <<= 1; c += 1; }\n  return c;\n}\n\nstatic void sx_gc_rehash(size_t cap){\n  char **nh;\n  sx_gcb **nb;\n  sx_gcb *b;\n  if (cap < 4096) cap = 4096;\n  while (cap < (sx_ghlive + 1) * 4) cap <<= 1;\n  nh = (char**)calloc(cap, sizeof(char*));\n  nb = (sx_gcb**)calloc(cap, sizeof(sx_gcb*));\n  b = sx_gcall;\n  while (b){\n    char *pay = (char*)b + SX_GCH;\n    size_t h = ((size_t)pay >> 4) & (cap - 1);\n    while (nh[h]) h = (h + 1) & (cap - 1);\n    nh[h] = pay; nb[h] = b;\n    b = b->next;\n  }\n  free(sx_ghash); free(sx_gblk);\n  sx_ghash = nh; sx_gblk = nb; sx_ghcap = cap;\n}\n\nstatic void sx_gc_hash_put(char *pay, sx_gcb *b){\n  size_t h;\n  if (!sx_ghcap) sx_gc_rehash(1u << 12);\n  if ((sx_ghlive + 1) * 4 > sx_ghcap){ sx_gc_rehash(sx_ghcap * 2); return; }\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n")
+  hold out = concat(out, "  while (sx_ghash[h]) h = (h + 1) & (sx_ghcap - 1);\n  sx_ghash[h] = pay; sx_gblk[h] = b;\n}\n\nstatic sx_gcb *sx_gc_hash_get(char *pay){\n  size_t h;\n  if (!sx_ghcap) return 0;\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n  while (sx_ghash[h] && sx_ghash[h] != pay) h = (h + 1) & (sx_ghcap - 1);\n  return sx_ghash[h] ? sx_gblk[h] : 0;\n}\n\nstatic int sx_gc_cmp(const void *a, const void *b){\n  char *pa = (char*)(*(sx_gcb* const*)a) + SX_GCH;\n  char *pb = (char*)(*(sx_gcb* const*)b) + SX_GCH;\n  return pa < pb ? -1 : (pa > pb ? 1 : 0);\n}\nstatic void sx_gc_sorted(void){\n  size_t i = 0;\n  sx_gcb *b = sx_gcall;\n  if (sx_gsort_n != sx_ghlive){\n    free(sx_gsort);\n    sx_gsort = (sx_gcb**)malloc((sx_ghlive + 1) * sizeof(sx_gcb*));\n  }\n  while (b && i < sx_ghlive){ sx_gsort[i] = b; i += 1; b = b->next; }\n  sx_gsort_n = i;\n  qsort(sx_gsort, i, sizeof(sx_gcb*), sx_gc_cmp);\n}\n")
+  hold out = concat(out, "static sx_gcb *sx_gc_containing(char *p){\n  size_t lo = 0, hi = sx_gsort_n;\n  while (lo < hi){\n    size_t mid = (lo + hi) / 2;\n    char *pay = (char*)sx_gsort[mid] + SX_GCH;\n    size_t sz = sx_gc_class_size(sx_gsort[mid]->cls);\n    if (p < pay) hi = mid;\n    else if (p >= pay + sz) lo = mid + 1;\n    else return sx_gsort[mid];\n  }\n  return 0;\n}\n\nstatic void sx_gc_mark(void *p){\n  sx_gcb *b;\n  if (!p) return;\n  b = sx_gc_hash_get((char*)p);\n  if (!b) b = sx_gc_containing((char*)p);\n  if (!b || b->mark) return;\n  b->mark = 1;\n  if (b->kind == 1){\n    sx_list *L = (sx_list*)((char*)b + SX_GCH);\n    if (L->d) sx_gc_mark((char*)L->d);\n  }\n}\n\nstatic void sx_gc_scan(char *lo, char *hi){\n  lo = (char*)(((size_t)lo + 7u) & ~(size_t)7u);\n  while (lo + 8 <= hi){\n    sx_gc_mark(*(char**)lo);\n    lo += 8;\n  }\n}\n\nstatic void sx_gc_init(void *anchor){\n  sx_stack_bot = (char*)anchor;\n")
+  hold out = concat(out, "  if (!sx_gc_thresh) sx_gc_thresh = (double)(8u << 20);\n}\n\nstatic void sx_gc_collect(void){\n  double before = sx_gc_bytes;\n  sx_gcb **pp;\n  if (!sx_gcall || !sx_stack_bot) return;\n  sx_gc_sorted();\n  {\n    jmp_buf jb;\n    setjmp(jb);\n    sx_gc_scan((char*)&jb, (char*)&jb + sizeof(jb));\n    sx_gc_scan((char*)&jb, sx_stack_bot);\n  }\n  pp = &sx_gcall;\n  while (*pp){\n    sx_gcb *b = *pp;\n    if (b->mark){\n      b->mark = 0;\n      pp = &b->next;\n    } else {\n      size_t c = b->cls;\n      *pp = b->next;\n      sx_gc_bytes -= (double)sx_gc_class_size(c);\n      sx_ghlive -= 1;\n      b->next = sx_gfree[c];\n      sx_gfree[c] = b;\n    }\n  }\n  sx_gc_n += 1.0;\n  sx_gc_freed = before - sx_gc_bytes;\n  sx_gsort_n = 0;\n  sx_gc_rehash(4096);\n  sx_gc_thresh = sx_gc_bytes * 1.5 + (double)(4u << 20);\n}\n\nstatic void *sx_gc_alloc(int kind, size_t payload){\n  size_t need = payload + SX_GCH;\n")
+  hold out = concat(out, "  size_t c = sx_gc_cls(need);\n  sx_gcb *b;\n  if (sx_gc_bytes >= sx_gc_thresh) sx_gc_collect();\n  b = sx_gfree[c];\n  if (b) sx_gfree[c] = b->next;\n  else b = (sx_gcb*)malloc(sx_gc_class_size(c));\n  b->cls = c;\n  b->kind = (size_t)kind;\n  b->mark = 0;\n  b->next = sx_gcall;\n  sx_gcall = b;\n  sx_ghlive += 1;\n  sx_gc_hash_put((char*)b + SX_GCH, b);\n  sx_gc_bytes += (double)sx_gc_class_size(c);\n  return (char*)b + SX_GCH;\n}\n\nstatic double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\nstatic double sx_gc_live(void){ return sx_gc_bytes; }\nstatic double sx_gc_count(void){ return sx_gc_n; }\n\n\n")
   hold out = concat(out, "static double sx_mod(double a,double b){ long x=(long)a, y=(long)b; if(!y){fputs(\"division by zero\\n\",stderr);exit(1);} return (double)(x%y); }\n")
-  hold out = concat(out, "static sx_list *sx_llit(int n,...){ sx_list *L=(sx_list*)malloc(sizeof(sx_list)); L->n=n; L->cap=n<4?4:n; L->d=(double*)malloc(sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }\n")
+  hold out = concat(out, "static sx_list *sx_llit(int n,...){ sx_list *L=(sx_list*)sx_gc_alloc(1,sizeof(sx_list)); L->n=n; L->cap=n<4?4:n; L->d=(double*)sx_gc_alloc(2,sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }\n")
   hold out = concat(out, "static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return L->d[i]; }\n")
   hold out = concat(out, "static double sx_llen(sx_list *L){ return L?(double)L->n:0.0; }\n")
   hold out = concat(out, "static double sx_lset_idx(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return (double)i; }\n")
   hold out = concat(out, "static sx_list *sx_lset(sx_list *L,double v,double x){ L->d[(long)sx_lset_idx(L,v)]=x; return L; }\n")
-  hold out = concat(out, "static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=(sx_list*)malloc(sizeof(sx_list)); L->n=0; L->cap=4; L->d=(double*)malloc(sizeof(double)*4);} if(L->n>=L->cap){ L->cap*=2; L->d=(double*)realloc(L->d,sizeof(double)*(size_t)L->cap);} L->d[L->n++]=v; return L; }\n\n")
+  hold out = concat(out, "static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=(sx_list*)sx_gc_alloc(1,sizeof(sx_list)); L->n=0; L->cap=4; L->d=(double*)sx_gc_alloc(2,sizeof(double)*4);} if(L->n>=L->cap){ double *nd=(double*)sx_gc_alloc(2,sizeof(double)*(size_t)(L->cap*2)); memcpy(nd,L->d,sizeof(double)*(size_t)L->n); L->d=nd; L->cap*=2;} L->d[L->n++]=v; return L; }\n\n")
 }
 hold fixfrom = len(out)
 hold out = concat(out, gproto)
@@ -10969,10 +11126,10 @@ while tdi < tdn {
   hold out = concat(out, nl)
 }
 when rt == 1 {
-  hold out = concat(out, "int main(int argc,char**argv){\n")
+  hold out = concat(out, "int main(int argc,char**argv){\n  char sx_gcanchor=0; (void)sx_gcanchor; sx_gc_init(&sx_gcanchor);\n")
   hold out = concat(out, "  sx_argn=argc; sx_argv_p=argv;\n")
 } otherwise {
-  hold out = concat(out, "int main(void){\n")
+  hold out = concat(out, "int main(void){\n  double sx_gcanchor=0; (void)sx_gcanchor; sx_gc_init(&sx_gcanchor);\n")
 }
 hold out = concat(out, obody)
 hold out = concat(out, body)
