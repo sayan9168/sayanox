@@ -490,6 +490,14 @@ test-push-stmt:
 	@grep -q 'list elements must be numbers' $(TESTS)/ts_sinl_g2.c
 	@./$(GEN2) $(TESTS)/ts_sinl2.sa $(TESTS)/ts_sinl2_g2.c >/dev/null 2>&1 || true
 	@grep -q "push: 'p' is not a number" $(TESTS)/ts_sinl2_g2.c
+	@printf 'hold s = "a"\nhold n = 4\nshow s + n\n' > $(TESTS)/ts_strnum.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_strnum.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted string + number"; exit 1; fi
+	@./$(GEN2) $(TESTS)/ts_strnum.sa $(TESTS)/ts_strnum_g2.c >/dev/null 2>&1 || true
+	@grep -q "'n' is not a string" $(TESTS)/ts_strnum_g2.c
+	@printf 'hold s = "a"\nshow 3 + s\n' > $(TESTS)/ts_numstr.sa
+	@./$(GEN2) $(TESTS)/ts_numstr.sa $(TESTS)/ts_numstr_g2.c >/dev/null 2>&1 || true
+	@grep -q "is a string but the left side is not" $(TESTS)/ts_numstr_g2.c
+	@echo "[OK] string + number is a clear error on seed-min and gen2 (gen2 used to paste the variable NAME: s + n printed an)"
 	@echo "[OK] list literals with 10+ elements on seed-min and gen2; a struct in a list (literal or push) is a clear error on both"
 	@echo "[OK] hold ys = xs (whole list) on seed-min and gen2; + / - on a list or string-minus-number are clear errors, never pointer arithmetic"
 
@@ -520,10 +528,13 @@ test-native-num: $(NATIVE_BIN)
 	./$(NATIVE_BIN) $(TESTS)/ts_fmt.sa $(TESTS)/ts_fmt_nat
 	@if [ "$$(./$(TESTS)/ts_fmt_nat)" = "$$(./$(TESTS)/ts_fmt_sm)" ]; then :; else \
 	  echo "[FAIL] native number formatting differs from seed-min (printf %g)"; exit 1; fi
-	@printf 'show 1 / 0\n' > $(TESTS)/ts_div0.sa
+	@printf 'show 1 / 0\nshow 0 - 1 / 0\nshow 0 / 0\nhold s = "v="\nshow s + 2.5\nshow 1 + s\n' > $(TESTS)/ts_div0.sa
 	./$(NATIVE_BIN) $(TESTS)/ts_div0.sa $(TESTS)/ts_div0_nat
-	@if ./$(TESTS)/ts_div0_nat >/dev/null 2>&1; then echo "[FAIL] native 1 / 0 did not die"; exit 1; fi
-	@./$(TESTS)/ts_div0_nat 2>&1 | grep -q 'division by zero'
+	$(call assert-out,./$(TESTS)/ts_div0_nat,inf\n-inf\n-nan\nv=2.5\n1v=)
+	@printf 'show 1 / 0\nshow 0 - 1 / 0\nshow 0 / 0\n' > $(TESTS)/ts_div0b.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_div0b.sa > $(TESTS)/ts_div0b_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_div0b_sm $(TESTS)/ts_div0b_sm.c 2>/dev/null
+	$(call assert-out,./$(TESTS)/ts_div0b_sm,inf\n-inf\n-nan)
 	@printf 'show 7 %% 0.5\n' > $(TESTS)/ts_mod0.sa
 	./$(NATIVE_BIN) $(TESTS)/ts_mod0.sa $(TESTS)/ts_mod0_nat
 	@./$(TESTS)/ts_mod0_nat 2>&1 | grep -q 'division by zero'
@@ -546,7 +557,7 @@ test-native-num: $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/ts_l11_nat,11\n11)
 	@if ./$(NATIVE_BIN) $(TESTS)/ts_sinl.sa $(TESTS)/ts_sinl_nat 2>/dev/null; then echo "[FAIL] native accepted a struct in a list"; exit 1; fi
 	@if ./$(NATIVE_BIN) $(TESTS)/ts_sinl2.sa $(TESTS)/ts_sinl2_nat 2>/dev/null; then echo "[FAIL] native accepted push of a struct"; exit 1; fi
-	@echo "[OK] native doubles: 2.5 literals and 10 / 4 = 2.5; % truncates; %g formatting == seed-min; / and % by zero die; same output as seed-min/gen2 for test-float/test-parens/test-push-stmt"
+	@echo "[OK] native doubles: 2.5 literals and 10 / 4 = 2.5; % truncates; %g formatting == seed-min; / is IEEE (1 / 0 = inf; same as seed-min); % by zero dies; string + number; same output as seed-min/gen2 for test-float/test-parens/test-push-stmt"
 
 # ---------------------------------------------------------------------------
 # test-native-io: read_file / write_file / arg / arg_count natively, with

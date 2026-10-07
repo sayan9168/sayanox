@@ -4231,14 +4231,34 @@ hold ec = 0
               }
             }
           }
-          // the operand as text: while building a string a plain number or
-          // unknown name is quoted (the same text as before), a string value
-          // is used as-is
+          // string chains join strings only.  A number or numeric name used
+          // to be quoted as text, so `s + n` printed the NAME ("an" for
+          // n = 4): now string + number, number + string and - * / % on a
+          // string are clear errors (seed-min rejects them the same way)
           hold oterm = opnd
           when isstr == 1 {
             when osfind == 0 {
-              hold oterm = concat(q, opnd)
-              hold oterm = concat(oterm, q)
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings; '", opnd)
+                hold permsg = concat(permsg, "' is not a string (a string + a number is not in the pure-min subset)")
+              }
+              hold perr = 1
+            }
+            when opch != 43 {
+              when perr == 0 {
+                hold permsg = concat("only + works on strings (found '", chr(opch))
+                hold permsg = concat(permsg, "')")
+              }
+              hold perr = 1
+            }
+          }
+          when isstr == 0 {
+            when osfind == 1 {
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings or adds two numbers; '", opnd)
+                hold permsg = concat(permsg, "' is a string but the left side is not")
+              }
+              hold perr = 1
             }
           }
           hold moreop = 1
@@ -5837,14 +5857,34 @@ hold ec = 0
               }
             }
           }
-          // the operand as text: while building a string a plain number or
-          // unknown name is quoted (the same text as before), a string value
-          // is used as-is
+          // string chains join strings only.  A number or numeric name used
+          // to be quoted as text, so `s + n` printed the NAME ("an" for
+          // n = 4): now string + number, number + string and - * / % on a
+          // string are clear errors (seed-min rejects them the same way)
           hold oterm = opnd
           when isstr == 1 {
             when osfind == 0 {
-              hold oterm = concat(q, opnd)
-              hold oterm = concat(oterm, q)
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings; '", opnd)
+                hold permsg = concat(permsg, "' is not a string (a string + a number is not in the pure-min subset)")
+              }
+              hold perr = 1
+            }
+            when opch != 43 {
+              when perr == 0 {
+                hold permsg = concat("only + works on strings (found '", chr(opch))
+                hold permsg = concat(permsg, "')")
+              }
+              hold perr = 1
+            }
+          }
+          when isstr == 0 {
+            when osfind == 1 {
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings or adds two numbers; '", opnd)
+                hold permsg = concat(permsg, "' is a string but the left side is not")
+              }
+              hold perr = 1
             }
           }
           hold moreop = 1

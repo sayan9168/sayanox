@@ -1348,23 +1348,24 @@ static void emit_term(const char**p,int depth){
     pop_r(AX);                   /* rax = left */
     if(op=='*'){
       movq_xr(0,AX); movq_xr(1,CX); mulsd(0,1); movq_rx(AX,0);
+    } else if(op=='/'){
+      /* IEEE division, exactly what seed-min/gen2 compile to: 10 / 4 = 2.5,
+         1 / 0 = inf, 0 / 0 = -nan (all printed like printf("%g")) */
+      movq_xr(0,AX); movq_xr(1,CX); divsd(0,1); movq_rx(AX,0);
     } else {
       /* numbers are doubles: `/` is a true division (10 / 4 = 2.5, as in
          seed-min/gen2); `%` truncates both sides to integers first, exactly
          like the C `(long)a % (long)b` seed-min and gen2 emit. */
+      /* `%` truncates both sides to integers first, like the C
+         `(long)a % (long)b` seed-min and gen2 emit; a zero divisor exits
+         with "division by zero" (the C programs die of SIGFPE there) */
       size_t jz;
-      if(op=='/'){
-        mv_rr(DX,CX); bin_rr(1,DX,DX);   /* add rdx,rdx: drops the sign bit; ZF if +-0.0 */
-        jz=cn; jcc_rel32(JC_Z,0);
-        movq_xr(0,AX); movq_xr(1,CX); divsd(0,1); movq_rx(AX,0);
-      } else {
-        movq_xr(1,CX); cvttsd2si(CX,1);  /* rcx = (long)right */
-        test_rr(CX,CX);                  /* modulo by zero? */
-        jz=cn; jcc_rel32(JC_Z,0);
-        emit_d2i();                      /* rax = (long)left */
-        emit_sdiv();                     /* rdx = left % right */
-        mv_rr(AX,DX); emit_i2d();
-      }
+      movq_xr(1,CX); cvttsd2si(CX,1);    /* rcx = (long)right */
+      test_rr(CX,CX);                    /* modulo by zero? */
+      jz=cn; jcc_rel32(JC_Z,0);
+      emit_d2i();                        /* rax = (long)left */
+      emit_sdiv();                       /* rdx = left % right */
+      mv_rr(AX,DX); emit_i2d();
       size_t jmp_at=cn;
       jmp_rel32(0);             /* skip die code (patched below) */
       size_t die_code=cn;
@@ -1389,10 +1390,20 @@ static void emit_rel(const char**p,int depth){
     pop_r(CX);                   /* rcx = left */
     if(op=='+'){
       if(lk==K_STR||XK==K_STR){
-        if(lk==K_STR){ mv_rr(DI,CX); }
-        else { mv_rr(AX,CX); callb(B_N2STR); mv_rr(DI,AX); }
-        if(XK==K_STR){ mv_rr(SI,AX); }
-        else { callb(B_N2STR); mv_rr(SI,AX); }
+        /* both operands are staged on the machine stack: B_N2STR calls
+           malloc, which clobbers rdi -- `"a" + 1` used to concat the
+           number's buffer with itself and print "11" */
+        if(lk!=K_STR&&lk!=K_NUM) errx("+ is for numbers or strings");
+        if(XK!=K_STR&&XK!=K_NUM) errx("+ is for numbers or strings");
+        push_r(AX);                    /* [right] */
+        mv_rr(AX,CX);
+        if(lk!=K_STR) callb(B_N2STR);  /* rax = left as a string */
+        pop_r(CX);                     /* rcx = right */
+        push_r(AX);                    /* [left string] */
+        mv_rr(AX,CX);
+        if(XK!=K_STR) callb(B_N2STR);  /* rax = right as a string */
+        mv_rr(SI,AX);
+        pop_r(DI);
         callb(B_CONCAT);
         XK=K_STR; XS=-1;
       } else {
@@ -2218,7 +2229,8 @@ static void emit_builtins(void){
   /* r_nfmt: rax=double bits, rdi=buffer (>= 32 bytes) -> rax=buffer holding
      the number formatted exactly like printf("%g") for the values a program
      meets in practice: 6 significant digits, trailing zeros dropped, fixed
-     notation for exponents -4..5, else d.ddddde+XX; inf / nan / -0 -> 0.
+     notation for exponents -4..5, else d.ddddde+XX; inf, -inf, nan, -nan;
+     -0 prints as -0 (as printf does).
      Method: find the decimal exponent e with a table of exact powers of
      ten (1e0..1e308), scale to a 6-digit integer M = round(|x|*10^(5-e))
      (cvtsd2si, round-half-even), fix e if M spilled to 7 or 5 digits, then
@@ -2235,11 +2247,11 @@ static void emit_builtins(void){
   push_r(8); push_r(9); push_r(10); push_r(11); push_r(13);
   mv_rr(11,AX);                         /* r11 = bits */
   mv_rr(10,DI);                         /* r10 = buffer start; rdi = cursor */
-  movq_xr(0,11); ucomisd(0,0); J_cc(0xA,Lnan);      /* jp: NaN */
   test_rr(11,11); J_cc(JC_JNS,Lpos);
-  stb_rdi('-'); incdec_r(1,DI);
+  stb_rdi('-'); incdec_r(1,DI);         /* glibc prints the sign of a NaN too */
   shl_imm(11,1); shr_imm(11,1);         /* |x| */
   L_bind(Lpos);
+  movq_xr(0,11); ucomisd(0,0); J_cc(0xA,Lnan);      /* jp: NaN */
   mov_imm64(AX,0x7ff0000000000000ull);
   bin_rr(0x39,11,AX); J_cc(JC_Z,Linf);  /* cmp r11, rax */
   test_rr(11,11); J_cc(JC_Z,Lzero);
