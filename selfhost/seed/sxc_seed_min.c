@@ -180,6 +180,7 @@ static char *atom(int *oty){
       for(;;){
         int et; els[ne++]=expr(&et); if(ne>=64) die("list too big");
         if(et==TY_STRUCT) die("a list cannot hold a struct value");
+        if(et!=TY_NUM) die("list elements must be numbers (a list cannot hold a string or a list)");
         skip(); if(P<N&&S[P]==','){P++;skip();continue;} break;
       }
     }
@@ -197,12 +198,16 @@ static char *atom(int *oty){
     size_t n=P-a; if(P<N && S[P]=='"') P++;
     char *r=malloc(n+3); r[0]='"'; memcpy(r+1,S+a,n); r[1+n]='"'; r[2+n]=0; *oty=TY_STR; return r;
   }
-  if(P<N && (S[P]=='-'||S[P]=='+') && P+1<N && isdigit((unsigned char)S[P+1])){
-    size_t a=P; P++; while(P<N && isdigit((unsigned char)S[P])) P++;
-    size_t n=P-a; char *r=malloc(n+1); memcpy(r,S+a,n); r[n]=0; *oty=TY_NUM; return r;
-  }
-  if(P<N && isdigit((unsigned char)S[P])){
-    size_t a=P; while(P<N && isdigit((unsigned char)S[P])) P++;
+  /* number literal: digits with an optional fraction (2.5).  The `.` is only
+   * part of the number when a digit follows it, so it is never mistaken for
+   * a field access; C reads the copied text as a double literal. */
+  if(P<N && (((S[P]=='-'||S[P]=='+') && P+1<N && isdigit((unsigned char)S[P+1])) || isdigit((unsigned char)S[P]))){
+    size_t a=P; if(!isdigit((unsigned char)S[P])) P++;
+    while(P<N && isdigit((unsigned char)S[P])) P++;
+    if(P+1<N && S[P]=='.' && isdigit((unsigned char)S[P+1])){
+      P++; while(P<N && isdigit((unsigned char)S[P])) P++;
+    }
+    if(P<N && (S[P]=='.' || isid0(S[P]))) die("malformed number literal");
     size_t n=P-a; char *r=malloc(n+1); memcpy(r,S+a,n); r[n]=0; *oty=TY_NUM; return r;
   }
   if(P<N && isid0(S[P])){
@@ -366,11 +371,18 @@ static char *mul(int *oty){
     if(P<N && (S[P]=='*'||S[P]=='/'||S[P]=='%')){ op=S[P]; P++; }
     else break;
     int rt; char *r=unary(&rt);
+    /* lists, structs and strings are pointers in the C output: `xs * 2` is
+     * either a C error or (for + and -) silent pointer arithmetic */
+    if(*oty!=TY_NUM||rt!=TY_NUM) die("* / % need numbers (not a string, list or struct)");
     if(op=='%'){
       /* modulo: (double)((long)(a)%(long)(b)) */
       char *t=malloc(strlen(l)+strlen(r)+32);
       sprintf(t,"(double)((long)(%s)%%(long)(%s))",l,r);
       free(l); free(r); l=t; *oty=TY_NUM;
+    } else if(op=='/'){
+      /* always a double division: two integer literals (10 / 4) would
+       * otherwise be C integer division and print 2 instead of 2.5 */
+      char *t=malloc(strlen(l)+strlen(r)+16); sprintf(t,"((double)(%s)/%s)",l,r); free(l); free(r); l=t; *oty=TY_NUM;
     } else {
       char *t=malloc(strlen(l)+strlen(r)+8); sprintf(t,"(%s%c%s)",l,op,r); free(l); free(r); l=t; *oty=TY_NUM;
     }
@@ -385,6 +397,10 @@ static char *add(int *oty){
     if(P<N && (S[P]=='+'||S[P]=='-')){ op=S[P]; P++; }
     else break;
     int rt; char *r=mul(&rt);
+    if(*oty==TY_LIST||rt==TY_LIST||*oty==TY_STRUCT||rt==TY_STRUCT)
+      die("+ and - need numbers or strings (not a list or struct; hold ys = xs copies a whole list)");
+    if((*oty==TY_STR||rt==TY_STR)&&op=='-') die("- needs numbers (a string cannot be subtracted)");
+    if((*oty==TY_STR)!=(rt==TY_STR)) die("+ joins two strings or adds two numbers (a string + a number is not in the pure-min subset)");
     if(*oty==TY_STR||rt==TY_STR){
       char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"sx_cat(%s,%s)",l,r); free(l); free(r); l=t; *oty=TY_STR;
     } else {
@@ -441,6 +457,36 @@ static void skip_block(void){
     P++;
   }
   die("} skip");
+}
+
+/* bare `push(NAME, EXPR)`: NAME must be a list variable.  Returns the value
+ * text; *oname gets the list name.  Anything else is a clear error. */
+static char *bare_push(char **oname){
+  P+=4; skip();
+  if(P>=N||S[P]!='(') die("push statement: expected push(list, value)");
+  P++; skip();
+  if(P>=N||!isid0(S[P])) die("push statement: the first argument must be a list variable name, e.g. push(xs, 4)");
+  char *ln=parse_id(); skip();
+  if(getty(ln)!=TY_LIST){
+    char msg[256]; snprintf(msg,sizeof msg,"push statement: '%s' is not a list (hold %s = [] first)",ln,ln); die(msg);
+  }
+  if(P>=N||S[P]!=',') die("push statement: expected push(list, value)");
+  P++;
+  int vt_; char *v=expr(&vt_);
+  if(vt_!=TY_NUM) die("push statement: list elements must be numbers");
+  skip(); if(P>=N||S[P]!=')') die("push statement: expected ) after the value");
+  P++;
+  *oname=ln; return v;
+}
+/* a statement that is not hold/show/when/while/make/give/struct/push */
+static void unknown_stmt(void){
+  char w[64]; size_t i=0, q=P;
+  while(q<N && isid(S[q]) && i+1<sizeof w) w[i++]=S[q++];
+  w[i]=0;
+  char msg[256];
+  if(i) snprintf(msg,sizeof msg,"unknown statement '%s' (statements: hold show when while make give struct push(xs, v))",w);
+  else snprintf(msg,sizeof msg,"unexpected character '%c' at the start of a statement",P<N?S[P]:'?');
+  die(msg);
 }
 
 static void stmt(void){
@@ -515,7 +561,13 @@ static void stmt(void){
   if(at("while")){
     P+=5; int ty; char *c=expr(&ty); printf("  while(%s) {\n", c); free(c); block(); printf("  }\n"); return;
   }
-  die("stmt");
+  if(at("push")){
+    /* bare `push(xs, v)` statement == `hold xs = push(xs, v)` */
+    char *ln; char *v=bare_push(&ln);
+    printf("  %s = sx_lpush(%s,(double)(%s));\n", ln, ln, v);
+    free(ln); free(v); return;
+  }
+  unknown_stmt();
 }
 
 static void emit_one_fn(void){
@@ -799,7 +851,18 @@ static void scan_stmt(void){
     return;
   }
   if(at("while")){ P+=5; int ty; char *c=expr(&ty); free(c); scan_body(); return; }
-  die("stmt");
+  if(at("push")){
+    /* types may not be known yet in this pass: just skip the call */
+    P+=4; skip(); if(P>=N||S[P]!='(') die("push statement: expected push(list, value)");
+    int d=0;
+    while(P<N){
+      if(S[P]=='"'){ P++; while(P<N&&S[P]!='"'){ if(S[P]=='\\'&&P+1<N)P+=2; else P++; } if(P<N)P++; continue; }
+      if(S[P]=='(') d++; else if(S[P]==')'){ d--; if(d==0){ P++; break; } }
+      P++;
+    }
+    return;
+  }
+  unknown_stmt();
 }
 static void scan_literals(void){
   size_t save=P; P=0;

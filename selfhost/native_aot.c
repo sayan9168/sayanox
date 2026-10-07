@@ -69,6 +69,8 @@ static unsigned char data[DMAX]; static size_t dn;
 static size_t d_glob; /* globals array      */
 static size_t d_err_div, d_err_list, d_err_str, d_err_malloc;
 static size_t d_list1, d_list2, d_nl, d_empty;
+static size_t d_pow;    /* 309 doubles 1e0..1e308 (number formatting) */
+static size_t d_numbuf; /* 64-byte buffer: `show <number>` formats here, no heap */
 
 /* ================= x86-64 mini encoder ================= */
 #define AX 0
@@ -102,7 +104,7 @@ static void emit_modrm(int reg,int rm,int scale,int idx,int disp){
   if(disp==-1) m=0;
   else if(disp>=-128&&disp<=127) m=1;
   else m=2;
-  e1((uint8_t)((m<<6)|(reg<<3)|(need_sib?4:(rm&7))));
+  e1((uint8_t)((m<<6)|((reg&7)<<3)|(need_sib?4:(rm&7))));  /* REX.R carries bit 3 */
   if(need_sib){
     int ii = (idx>=0) ? idx : 4;
     e1((uint8_t)((scale<<6)|((ii&7)<<3)|(rm&7)));  /* index field is 3 bits; REX.X extends */
@@ -146,6 +148,55 @@ static void movzx_al_to_rax(void){ rexb(1,0,0,0); e1(0x0f); e1(0xb6); e1(0xc0); 
 static void sar_imm(int r,int v){ rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(7<<3)|(r&7))); e1((uint8_t)v); }
 static void shl_imm(int r,int v){ rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(4<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHL = C1 /4 */
 static void shr_imm(int r,int v){ rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(5<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHR = C1 /5 */
+
+/* ---- SSE2 scalar double (register-direct forms only; xmm0-xmm7) ----
+ * Numbers are IEEE doubles held as raw bits in the same 64-bit slots and
+ * registers that used to hold integers; arithmetic moves them into xmm0/xmm1.
+ * Encoding: [prefix] [REX] 0F op ModRM(11 reg rm).  Verified with objdump. */
+static void sse_rr(int pfx,int op,int W,int reg,int rm){
+  e1((uint8_t)pfx); rexb(W, reg>7, 0, rm>7); e1(0x0f); e1((uint8_t)op);
+  e1((uint8_t)(0xC0|((reg&7)<<3)|(rm&7)));
+}
+static void movq_xr(int x,int r){ sse_rr(0x66,0x6e,1,x,r); }   /* movq xmm, r64 */
+static void movq_rx(int r,int x){ sse_rr(0x66,0x7e,1,x,r); }   /* movq r64, xmm */
+static void addsd(int a,int b){ sse_rr(0xf2,0x58,0,a,b); }
+static void mulsd(int a,int b){ sse_rr(0xf2,0x59,0,a,b); }
+static void subsd(int a,int b){ sse_rr(0xf2,0x5c,0,a,b); }
+static void divsd(int a,int b){ sse_rr(0xf2,0x5e,0,a,b); }
+static void ucomisd(int a,int b){ sse_rr(0x66,0x2e,0,a,b); }
+static void cvtsi2sd(int x,int r){ sse_rr(0xf2,0x2a,1,x,r); }  /* xmm = (double)r64 */
+static void cvttsd2si(int r,int x){ sse_rr(0xf2,0x2c,1,r,x); } /* r64 = (long)xmm, truncating */
+static void cvtsd2si(int r,int x){ sse_rr(0xf2,0x2d,1,r,x); }  /* r64 = round-to-nearest-even */
+/* rax (double bits) -> rax (long, truncated toward zero, like C's cast) */
+static void emit_d2i(void){ movq_xr(0,0); cvttsd2si(0,0); }
+/* rax (long) -> rax (double bits) */
+static void emit_i2d(void){ cvtsi2sd(0,0); movq_rx(0,0); }
+
+/* ---- tiny forward/backward label system for hand-written runtime code ---- */
+#define MAXLBL 96
+static long lbl_pos[MAXLBL]; static int nlbl;
+static size_t lbl_fix[MAXLBL][24]; static int lbl_fixw[MAXLBL][24]; static int lbl_nfix[MAXLBL];
+static int L_new(void){
+  if(nlbl>=MAXLBL){ fprintf(stderr,"native_aot: too many labels\n"); exit(1); }
+  lbl_pos[nlbl]=-1; lbl_nfix[nlbl]=0; return nlbl++;
+}
+static void L_patch(size_t at,int w,size_t to){
+  int32_t d=(int32_t)((long)to-(long)(at+(size_t)w)); memcpy(code+at+(size_t)w-4,&d,4);
+}
+static void L_bind(int l){
+  lbl_pos[l]=(long)cn;
+  for(int i=0;i<lbl_nfix[l];i++) L_patch(lbl_fix[l][i],lbl_fixw[l][i],cn);
+  lbl_nfix[l]=0;
+}
+static void L_ref(int l,size_t at,int w){
+  if(lbl_pos[l]>=0){ L_patch(at,w,(size_t)lbl_pos[l]); return; }
+  if(lbl_nfix[l]>=24){ fprintf(stderr,"native_aot: too many label refs\n"); exit(1); }
+  lbl_fix[l][lbl_nfix[l]]=at; lbl_fixw[l][lbl_nfix[l]]=w; lbl_nfix[l]++;
+}
+static void J_cc(int c,int l){ size_t at=cn; e1(0x0f); e1((uint8_t)(0x80+c)); e32(0); L_ref(l,at,6); }
+static void J_mp(int l){ size_t at=cn; e1(0xe9); e32(0); L_ref(l,at,5); }
+static void stb_rdi(uint8_t v){ e1(0xc6); e1(0x07); e1(v); }  /* mov byte [rdi], imm8 */
+static void stal_rdi(void){ e1(0x88); e1(0x07); }              /* mov [rdi], al */
 /* condition codes for 0F 80+c (jcc) and 0F 90+c (setcc) — same numbering */
 #define JC_B 2      /* <  / setb */
 #define JC_NBE 3    /* >= / setae */
@@ -194,10 +245,24 @@ static int pid(const char**p,char*b,size_t c){
   sw(p); if(!id0(**p)) return 0;
   size_t i=0; while(idc(**p)&&i+1<c) b[i++]=*(*p)++; b[i]=0; return 1;
 }
-static int pint(const char**p,long*o){
+static void errx(const char*fmt,...);
+/* number literal: digits, optionally `.digits` (2.5).  A '.' is only part
+   of the number when a digit follows; `2.` / `2.x` / `1.5.3` are errors
+   (seed-min and gen2 reject them too).  Value parsed by strtod. */
+static int pnum(const char**p,double*o){
   sw(p); if(!isdigit((unsigned char)**p)) return 0;
-  long v=0; while(isdigit((unsigned char)**p)) v=v*10+(*(*p)++-'0'); *o=v; return 1;
+  const char*s0=*p; char buf[64]; size_t i=0;
+  while(isdigit((unsigned char)**p)) (*p)++;
+  if(**p=='.'){
+    if(!isdigit((unsigned char)(*p)[1])) errx("malformed number literal (a '.' must be followed by digits)");
+    (*p)++;
+    while(isdigit((unsigned char)**p)) (*p)++;
+  }
+  if(**p=='.'||id0(**p)) errx("malformed number literal");
+  for(const char*q=s0;q<*p&&i+1<sizeof buf;q++) buf[i++]=*q;
+  buf[i]=0; *o=strtod(buf,NULL); return 1;
 }
+static uint64_t dbits(double d){ uint64_t u; memcpy(&u,&d,8); return u; }
 static int pstr(const char**p,char*buf,size_t cap,size_t*len){
   sw(p); if(**p!='"') return 0; (*p)++; size_t i=0;
   while(**p&&**p!='"'){
@@ -343,6 +408,17 @@ static const char*skip_stmt(const char*p){
     while(*p&&*p!='\n') p++;
     return p;
   }
+  /* only block statements own a { ... }: a call statement such as
+     `push(xs, 7)` used to scan ahead to the NEXT block in the file and skip
+     everything up to its }, so type inference never saw the statements in
+     between ("undefined variable" for a later hold) */
+  { const char*r=p;
+    if(!(mkw(&r,"when")||mkw(&r,"while")||mkw(&r,"make")||mkw(&r,"struct")||
+         mkw(&r,"otherwise")||mkw(&r,"else"))){
+      while(*p&&*p!='\n') p++;
+      return p;
+    }
+  }
   const char*q=p; int inq=0;
   while(*q){
     if(inq){ if(*q=='\\') q++; else if(*q=='"') inq=0; q++; continue; }
@@ -452,6 +528,7 @@ static int pk_prim(const char**p,int depth);
 static int pk_post(const char**p,int depth);
 static int pk_term(const char**p,int depth);
 static int pk_rel(const char**p,int depth);
+static int pk_full(const char**p,int depth);
 
 static int pk_prim(const char**p,int depth){
   sw(p);
@@ -479,7 +556,9 @@ static int pk_prim(const char**p,int depth){
   }
   if(**p=='('){
     (*p)++;
-    int k=pk_rel(p,depth+1);
+    /* the full expression grammar, comparisons included -- emission uses
+       emit_expr here, and `(a > 1) + 1` used to fail with "expected )" */
+    int k=pk_full(p,depth+1);
     sw(p);
     if(**p!=')') errx("expected )");
     (*p)++;
@@ -493,12 +572,14 @@ static int pk_prim(const char**p,int depth){
     PKX_K=K_NUM; PKX_S=-1;
     return K_NUM;
   }
-  long v;
-  if(pint(p,&v)){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
+  double v;
+  if(pnum(p,&v)){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
   char n[64];
   if(pid(p,n,64)){
     const char*q=*p; sw(&q);
-    if(*q=='{'){
+    /* `name {` is a struct literal unless name is a variable and not a
+       struct: `while n {` / `when x {` use a bare variable as the condition */
+    if(*q=='{'&&(s_find(n)>=0||g_find(n)<0)){
       int sid=s_find(n);
       if(sid<0) errx("unknown struct '%s'",n,NULL);
       (*p)=q; (*p)++;
@@ -667,6 +748,7 @@ static int pk_term(const char**p,int depth){
   for(;;){
     sw(p); char op=**p;
     if(op!='*'&&op!='/'&&op!='%') break;
+    if(op=='/'&&(*p)[1]=='/') break;   /* a // comment on the next line, not a division */
     (*p)++;
     int k2=pk_post(p,depth);
     if(k!=K_NUM||k2!=K_NUM) errx("%c is numeric-only",op);
@@ -825,7 +907,7 @@ static const int argreg[MAXP]={DI,SI,DX,CX,8,9};
 
 enum { B_MALLOC,B_STRLEN,B_CMPSTR,B_CONCAT,B_N2STR,B_PUTSTR,B_WCSTR,B_ITONO,B_ITOWRITE,
        B_SHOWLIST,B_MLIST,B_LGET,B_LLEN,B_LPUSH,B_SGET,B_CHR,B_READFILE,B_WRITEFILE,
-       B_ARG,B_ARGC,B_DIE };
+       B_ARG,B_ARGC,B_DIE,B_NFMT,B_SHOWNUM };
 
 static void emit_prim(const char**p,int depth);
 static void emit_post(const char**p,int depth);
@@ -915,11 +997,12 @@ static void emit_prim(const char**p,int depth){
     (*p)++;
     emit_prim(p,depth+1);
     if(XK!=K_NUM) errx("unary - on a non-number");
-    fm7(3,AX);
+    /* 0.0 - x (not a sign-bit flip: -(0) prints 0 like C's 0 - 0.0) */
+    movq_xr(1,AX); xor_rr(AX,AX); movq_xr(0,AX); subsd(0,1); movq_rx(AX,0);
     return;
   }
-  long v;
-  if(pint(p,&v)){ mov_imm64(AX,(uint64_t)(int64_t)v); XK=K_NUM; XS=-1; return; }
+  double v;
+  if(pnum(p,&v)){ mov_imm64(AX,dbits(v)); XK=K_NUM; XS=-1; return; }
   char n[64];
   if(pid(p,n,64)){
     if(cur_fn>=0){
@@ -927,7 +1010,9 @@ static void emit_prim(const char**p,int depth){
         if(!strcmp(F[cur_fn].params[i],n)){ load_param(i); XK=K_NUM; XS=-1; return; }
     }
     const char*q=*p; sw(&q);
-    if(*q=='{'){
+    /* `name {` is a struct literal unless name is a variable and not a
+       struct: `while n {` / `when x {` use a bare variable as the condition */
+    if(*q=='{'&&(s_find(n)>=0||g_find(n)<0)){
       int sid=s_find(n);
       if(sid<0) errx("unknown struct '%s'",n,NULL);
       (*p)=q; (*p)++;
@@ -1055,6 +1140,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     if(XK==K_LIST) callb(B_LLEN);
     else if(XK==K_STR) callb(B_STRLEN);
     else errx("len takes a string or a list");
+    emit_i2d();
     sw(p); if(**p!=')') errx("len takes 1 arg"); (*p)++;
     XK=K_NUM; XS=-1;
     return;
@@ -1062,6 +1148,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
   if(!strcmp(n,"chr")){
     emit_expr(p,0);
     if(XK!=K_NUM) errx("chr takes a number");
+    emit_d2i();
     callb(B_CHR);
     sw(p); if(**p!=')') errx("chr takes 1 arg"); (*p)++;
     XK=K_STR; XS=-1;
@@ -1074,16 +1161,19 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     sw(p); if(**p!=',') errx("%s takes 2 args",n,NULL); (*p)++;
     emit_expr(p,0);
     if(XK!=K_NUM) errx("%s: the index must be a number",n,NULL);
+    emit_d2i();
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("%s takes 2 args",n,NULL); (*p)++;
     pop_r(DI);
     callb(B_SGET);
+    emit_i2d();
     XK=K_NUM; XS=-1;
     return;
   }
   if(!strcmp(n,"read_file")){
     emit_expr(p,0);
     if(XK!=K_STR) errx("read_file takes a string (the path)");
+    mv_rr(DI,AX);                  /* B_READFILE takes the path in rdi */
     callb(B_READFILE);
     sw(p); if(**p!=')') errx("read_file takes 1 arg"); (*p)++;
     XK=K_STR; XS=-1;
@@ -1100,12 +1190,14 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     sw(p); if(**p!=')') errx("write_file takes 2 args",n,NULL); (*p)++;
     pop_r(DI);
     callb(B_WRITEFILE);
+    emit_i2d();
     XK=K_NUM; XS=-1;
     return;
   }
   if(!strcmp(n,"arg")){
     emit_expr(p,0);
     if(XK!=K_NUM) errx("arg takes a number");
+    emit_d2i();
     callb(B_ARG);
     sw(p); if(**p!=')') errx("arg takes 1 arg"); (*p)++;
     XK=K_STR; XS=-1;
@@ -1116,6 +1208,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     if(**p!=')') errx("arg_count takes no args");
     (*p)++;
     callb(B_ARGC);
+    emit_i2d();
     XK=K_NUM; XS=-1;
     return;
   }
@@ -1130,6 +1223,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     sw(p); if(**p!=')') errx("%s takes 2 args",n,NULL); (*p)++;
     pop_r(DI);
     callb(B_CMPSTR);
+    emit_i2d();
     XK=K_NUM; XS=-1;
     return;
   }
@@ -1201,14 +1295,15 @@ static void emit_post(const char**p,int depth){
       push_r(AX);                  /* [stack] = base */
       emit_expr(p,depth+1);
       if(XK!=K_NUM) errx("index must be a number");
-      mv_rr(SI,AX);                /* rsi = index */
+      emit_d2i();
+      mv_rr(SI,AX);                /* rsi = (long)index */
       pop_r(AX);                   /* rax = base */
       mv_rr(DI,AX);                /* rdi = base: B_LGET and B_SGET both read
                                       the base from rdi (the old string path
                                       never set it and read a stale pointer,
                                       which died as "string index out of
                                       range" on every s[i]) */
-      if(base_kind==K_LIST) callb(B_LGET); else callb(B_SGET);
+      if(base_kind==K_LIST) callb(B_LGET); else { callb(B_SGET); emit_i2d(); }
       sw(p);
       if(**p!=']') errx("expected ] after index");
       (*p)++;
@@ -1238,6 +1333,7 @@ static void emit_term(const char**p,int depth){
   for(;;){
     sw(p); char op=**p;
     if(op!='*'&&op!='/'&&op!='%') break;
+    if(op=='/'&&(*p)[1]=='/') break;   /* a // comment on the next line, not a division */
     if(XK!=K_NUM) errx("%c is numeric-only",op);
     (*p)++;
     /* the left operand MUST live on the machine stack, not in r15: the
@@ -1251,12 +1347,25 @@ static void emit_term(const char**p,int depth){
     mv_rr(CX,AX);                /* rcx = right */
     pop_r(AX);                   /* rax = left */
     if(op=='*'){
-      rexb(1,0,0,0); e1(0x0f); e1(0xaf); e1((uint8_t)(0xC0|(AX<<3)|CX)); /* imul rax, rcx (reg=dest) */
+      movq_xr(0,AX); movq_xr(1,CX); mulsd(0,1); movq_rx(AX,0);
+    } else if(op=='/'){
+      /* IEEE division, exactly what seed-min/gen2 compile to: 10 / 4 = 2.5,
+         1 / 0 = inf, 0 / 0 = -nan (all printed like printf("%g")) */
+      movq_xr(0,AX); movq_xr(1,CX); divsd(0,1); movq_rx(AX,0);
     } else {
-      test_rr(CX,CX);            /* divide by zero? */
-      size_t jz=cn; jcc_rel32(JC_Z,0);
-      emit_sdiv();              /* rax = left/right, rdx = left%right */
-      if(op=='%') mv_rr(AX,DX);
+      /* numbers are doubles: `/` is a true division (10 / 4 = 2.5, as in
+         seed-min/gen2); `%` truncates both sides to integers first, exactly
+         like the C `(long)a % (long)b` seed-min and gen2 emit. */
+      /* `%` truncates both sides to integers first, like the C
+         `(long)a % (long)b` seed-min and gen2 emit; a zero divisor exits
+         with "division by zero" (the C programs die of SIGFPE there) */
+      size_t jz;
+      movq_xr(1,CX); cvttsd2si(CX,1);    /* rcx = (long)right */
+      test_rr(CX,CX);                    /* modulo by zero? */
+      jz=cn; jcc_rel32(JC_Z,0);
+      emit_d2i();                        /* rax = (long)left */
+      emit_sdiv();                       /* rdx = left % right */
+      mv_rr(AX,DX); emit_i2d();
       size_t jmp_at=cn;
       jmp_rel32(0);             /* skip die code (patched below) */
       size_t die_code=cn;
@@ -1281,22 +1390,29 @@ static void emit_rel(const char**p,int depth){
     pop_r(CX);                   /* rcx = left */
     if(op=='+'){
       if(lk==K_STR||XK==K_STR){
-        if(lk==K_STR){ mv_rr(DI,CX); }
-        else { mv_rr(AX,CX); callb(B_N2STR); mv_rr(DI,AX); }
-        if(XK==K_STR){ mv_rr(SI,AX); }
-        else { callb(B_N2STR); mv_rr(SI,AX); }
+        /* both operands are staged on the machine stack: B_N2STR calls
+           malloc, which clobbers rdi -- `"a" + 1` used to concat the
+           number's buffer with itself and print "11" */
+        if(lk!=K_STR&&lk!=K_NUM) errx("+ is for numbers or strings");
+        if(XK!=K_STR&&XK!=K_NUM) errx("+ is for numbers or strings");
+        push_r(AX);                    /* [right] */
+        mv_rr(AX,CX);
+        if(lk!=K_STR) callb(B_N2STR);  /* rax = left as a string */
+        pop_r(CX);                     /* rcx = right */
+        push_r(AX);                    /* [left string] */
+        mv_rr(AX,CX);
+        if(XK!=K_STR) callb(B_N2STR);  /* rax = right as a string */
+        mv_rr(SI,AX);
+        pop_r(DI);
         callb(B_CONCAT);
         XK=K_STR; XS=-1;
       } else {
         if(lk!=K_NUM||XK!=K_NUM) errx("+ is for numbers or strings");
-        bin_rr(1,AX,CX);         /* add rax, rcx (env gas: ADD r/m,r = 0x01) */
+        movq_xr(0,CX); movq_xr(1,AX); addsd(0,1); movq_rx(AX,0);   /* left + right */
       }
     } else {
       if(lk!=K_NUM||XK!=K_NUM) errx("- is numeric-only");
-      mv_rr(15,AX);              /* r15 = right (short-lived temp) */
-      mv_rr(AX,CX);              /* rax = left */
-      mv_rr(CX,15);              /* rcx = right */
-      bin_rr(0x29,AX,CX);        /* sub rax, rcx = left - right */
+      movq_xr(0,CX); movq_xr(1,AX); subsd(0,1); movq_rx(AX,0);   /* left - right */
     }
   }
 }
@@ -1329,19 +1445,21 @@ static void emit_expr(const char**p,int depth){
     } else {                          /* != : different -> 1 */
       test_rr(AX,AX); setcc(JC_Z,AX); movzx_al_to_rax();
     }
+    emit_i2d();
   } else {
     if(XK!=K_NUM) errx("number compared with %s",kname(XK));
-    bin_rr(0x39,CX,AX);          /* cmp rcx, rax = left - right (signed cc) */
-    int cc, neg=0;
+    /* ucomisd left, right sets CF/ZF like an UNSIGNED compare */
+    movq_xr(0,CX); movq_xr(1,AX); ucomisd(0,1);
+    int cc;
     if(!strcmp(op,"==")) cc=JC_Z;
     else if(!strcmp(op,"!=")) cc=JC_NZ;
-    else if(!strcmp(op,"<")) cc=JC_L;
-    else if(!strcmp(op,"<=")) cc=JC_LE;
-    else if(!strcmp(op,">")) { cc=JC_LE; neg=1; }  /* a>b = !(a<=b): setle + negate */
-    else cc=JC_GE;
+    else if(!strcmp(op,"<")) cc=JC_B;            /* setb  */
+    else if(!strcmp(op,"<=")) cc=6;              /* setbe */
+    else if(!strcmp(op,">")) cc=7;               /* seta  */
+    else cc=JC_NBE;                              /* setae */
     setcc(cc,AX);
-    if(neg) bin_imm8(6,AX,1);               /* xor rax, 1 */
     movzx_al_to_rax();
+    emit_i2d();                                  /* 0.0 / 1.0 */
   }
   XK=K_NUM; XS=-1;
 }
@@ -1423,7 +1541,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
     if(mkw(p,"show")){
       sw(p);
       emit_expr(p,0);
-      if(XK==K_NUM) callb(B_ITOWRITE);
+      if(XK==K_NUM) callb(B_SHOWNUM);
       else if(XK==K_STR) callb(B_PUTSTR);
       else if(XK==K_LIST) callb(B_SHOWLIST);
       else errx("show of a struct value is not supported");
@@ -1434,7 +1552,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
       emit_expr(p,0);
       if(XK==K_UNK) errx("cannot infer the type of the condition");
       if(XK!=K_NUM) errx("when condition must be a number (got %s)",kname(XK));
-      test_rr(AX,AX);
+      bin_rr(1,AX,AX);             /* add rax,rax: ZF iff the double is +-0.0 */
       size_t jz_at=cn; jcc_rel32(JC_Z,0);
       sw(p);
       if(**p!='{') errx("when needs { ... }");
@@ -1466,7 +1584,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
       emit_expr(p,0);
       if(XK==K_UNK) errx("cannot infer the type of the condition");
       if(XK!=K_NUM) errx("while condition must be a number (got %s)",kname(XK));
-      test_rr(AX,AX);
+      bin_rr(1,AX,AX);             /* add rax,rax: ZF iff the double is +-0.0 */
       size_t jz_at=cn; jcc_rel32(JC_Z,0);
       sw(p);
       if(**p!='{') errx("while needs { ... }");
@@ -1612,6 +1730,7 @@ static void emit_builtins(void){
   push_r(10);
   push_r(9);
   push_r(8);
+  push_r(3);                       /* rbx: the slow path uses it */
   mv_r64m(AX,12,-1,0,OFF_CUR);    /* rax = cursor */
   mv_rr(11,DI);                    /* r11 = size */
   bin_imm8(0,11,7);                /* r11 += 7 */
@@ -1626,7 +1745,11 @@ static void emit_builtins(void){
   mv_rr(3,11);                     /* rbx = size8 (syscalls clobber rcx/r11; rbx is free) */
   mov_imm64(AX,9);                 /* syscall: mmap */
   xor_rr(DI,DI);                   /* addr = NULL */
-  mov_imm64(SI,65536);             /* len */
+  /* len = max(64KiB, request) rounded up to a page: a request bigger than
+     64KiB (read_file of a large file, a long concat) used to get a 64KiB
+     chunk and run off its end */
+  lea_rm(SI,11,-1,0,65536+4095);
+  bin_imm32(4,SI,0xFFFFF000u);     /* and rsi, ~4095 */
   mov_imm64(DX,3);                 /* prot = RW */
   mov_imm64(10,0x22);              /* flags = private|anon */
   mov_imm64(8,-1);                 /* fd = -1 */
@@ -1636,13 +1759,13 @@ static void emit_builtins(void){
   size_t js=cn; jcc_rel32(JC_JS,0); /* js .die (negative errno) */
   mv_rr(11,3);                     /* r11 = size8 (restored; syscall clobbered it) */
   mv_rr(9,AX);                     /* r9 = chunk start */
-  lea_rm(AX,AX,-1,0,65536);        /* rax = chunk start + 64K */
-  mv_m64(12,-1,0,OFF_END,AX);      /* end = chunk start + 64K */
+  lea_rm(AX,AX,SI,0,0);            /* rax = chunk start + len (syscall keeps rsi) */
+  mv_m64(12,-1,0,OFF_END,AX);      /* end = chunk start + len */
   mv_rr(AX,9);                     /* cursor = chunk start */
   erel32(fast,cn);
   lea_rm(8,AX,11,0,0);             /* r8 = cursor + size8 */
   mv_m64(12,-1,0,OFF_CUR,8);       /* cursor += size8 */
-  pop_r(8); pop_r(9); pop_r(10); pop_r(11); pop_r(12); e1(0xc3);
+  pop_r(3); pop_r(8); pop_r(9); pop_r(10); pop_r(11); pop_r(12); e1(0xc3);
   erel32(js,cn);
   lea_rm(AX,12,-1,0,(int)d_err_malloc);
   callb(B_DIE);
@@ -1726,70 +1849,66 @@ static void emit_builtins(void){
   pop_r(12); e1(0xc3);
   }
 
-  /* r_n2str: rax=val -> rax=heap str */
+  /* r_n2str: rax=double bits -> rax=fresh heap string, formatted like %g */
   {
   builtin_off[B_N2STR]=cn;
   push_r(12);
-  mv_rr(11,AX);
-  mov_imm64(DI,32);
+  push_r(AX);
+  mov_imm64(DI,64);
   callb(B_MALLOC);
-  mv_rr(10,AX);
-  lea_rm(SI,10,-1,0,31);
-  rexb(0, 0, 0, 10>7); e1(0xc6); emit_modrm(0, 10, 0, -1, 31); e1(0x00);
-  mov_imm64(8,0);
-  mv_rr(CX,11);
-  emit_digs(31);
-  lea_rm(DX,10,-1,0,31);
-  bin_rr(0x29,DX,SI);
-  mv_rr(AX,10);
+  mv_rr(DI,AX);                    /* rdi = buffer */
+  pop_r(AX);                       /* rax = value */
+  callb(B_NFMT);                   /* rax = buffer */
   pop_r(12); e1(0xc3);
   }
 
-  /* r_putstr: rax=ptr -> write s + '\n' */
+  /* r_shownum: rax=double bits -> write "%g\n" (static buffer, no heap) */
+  {
+  builtin_off[B_SHOWNUM]=cn;
+  push_r(12);
+  lea_rm(DI,12,-1,0,(int)d_numbuf);
+  callb(B_NFMT);
+  callb(B_PUTSTR);
+  pop_r(12); e1(0xc3);
+  }
+
+  /* r_putstr: rax=ptr -> write s + '\n'.  Two direct write(2) calls: the
+     old version copied the string into a 48-byte stack buffer, so any
+     string longer than ~47 bytes overwrote the return address. */
   {
   builtin_off[B_PUTSTR]=cn;
   push_r(12);
-  mv_rr(DI,AX);
-  bin_imm8(5,SP,48);
-  xor_rr(CX,CX);
-  mv_rr(AX,DI);
-  callb(B_STRLEN);
-  xor_rr(CX,CX);          /* strlen leaves rcx=len; reset copy index */
+  push_r(13);
+  mv_rr(13,AX);
+  callb(B_STRLEN);                 /* rax = len */
   mv_rr(DX,AX);
-  emit_cpybyte_stack();
-  rexb(0, 0, CX>7, SP>7); e1(0xc6); emit_modrm(0, SP, 0, CX, -1); e1('\n');
-  incdec_r(1,CX);
+  mv_rr(SI,13);
   mov_imm64(DI,1);
-  mv_rr(SI,SP);
-  mv_rr(DX,CX);
   mov_imm64(AX,1);
-  e1(0x0f); e1(0x05);
-  bin_imm8(0,SP,48);
+  e1(0x0f); e1(0x05);              /* write(1, s, len) */
+  lea_rm(SI,12,-1,0,(int)d_nl);
+  mov_imm64(DX,1);
+  mov_imm64(DI,1);
+  mov_imm64(AX,1);
+  e1(0x0f); e1(0x05);              /* write(1, "\n", 1) */
+  pop_r(13);
   pop_r(12); e1(0xc3);
   }
 
-  /* r_wcstr: rax=ptr -> write s */
+  /* r_wcstr: rax=ptr -> write s (no newline); same direct write */
   {
   builtin_off[B_WCSTR]=cn;
   push_r(12);
-  mv_rr(DI,AX);
-  bin_imm8(5,SP,48);
-  xor_rr(CX,CX);
-  mv_rr(AX,DI);
+  push_r(13);
+  mv_rr(13,AX);
   callb(B_STRLEN);
-  xor_rr(CX,CX);          /* strlen leaves rcx=len; reset copy index */
   mv_rr(DX,AX);
-  emit_cpybyte_stack();
-  test_rr(CX,CX);
-  size_t jz=cn; jcc_rel32(JC_Z,0);
+  mv_rr(SI,13);
   mov_imm64(DI,1);
-  mv_rr(SI,SP);
-  mv_rr(DX,CX);
   mov_imm64(AX,1);
   e1(0x0f); e1(0x05);
-  bin_imm8(0,SP,48);
+  pop_r(13);
   pop_r(12); e1(0xc3);
-  erel32(jz,cn);
   }
 
   /* r_itono: rax=val -> write digits */
@@ -1996,77 +2115,84 @@ static void emit_builtins(void){
   pop_r(12); e1(0xc3);
   }
 
-  /* r_readfile: rdi=path -> str (up to 64KB, else truncated) */
+  /* r_readfile: rdi=path -> whole file as a fresh string; "" if it cannot be
+     opened or sized (same as seed-min/gen2's sx_read).  Size via lseek, one
+     buffer of size+1, pread loop until size bytes or EOF. */
   {
   builtin_off[B_READFILE]=cn;
-  push_r(12);
+  int Lempty=L_new(), Lclose=L_new(), Lloop=L_new(), Ldone=L_new(), Lret=L_new();
+  push_r(12); push_r(3); push_r(13); push_r(14); push_r(15);
   xor_rr(SI,SI);                        /* flags = O_RDONLY */
-  xor_rr(DX,DX);                        /* mode = 0 */
-  mov_imm64(AX,2); e1(0x0f); e1(0x05);  /* open */
-  test_rr(AX,AX);
-  size_t js=cn; jcc_rel32(JC_JS,0);     /* fd < 0 -> empty */
-  mv_rr(9,AX);                          /* r9 = fd */
-  mov_imm64(DI,65536);
-  callb(B_MALLOC);                      /* rax = buf */
-  mv_rr(10,AX);                         /* r10 = buf */
-  xor_rr(8,8);                          /* r8 = total = 0 */
-  {
-    size_t L=cn;
-    mv_rr(DI,9);                        /* fd */
-    mv_rr(SI,10);                       /* buf */
-    mov_imm64(DX,65536);
-    mv_rr(10,8);                        /* r10 = offset */
-    mov_imm64(AX,17); e1(0x0f); e1(0x05);/* pread */
-    test_rr(AX,AX);
-    size_t jle=cn; jcc_rel32(JC_LE,0);  /* n<=0 -> exit */
-    bin_rr(1,8,AX);                     /* total += n */
-    jmp_rel32((int32_t)(L-cn-5));       /* loop */
-    size_t done=cn;
-    erel32(jle,done);
-  }
-  mov_imm64(AX,3); mv_rr(DI,9); e1(0x0f); e1(0x05); /* close */
-  rexb(0,0,8>7,10>7); e1(0xc6); e1(0x04); e1(0x4A); e1(0x00); /* [r10+r8] = 0 */
-  mv_rr(AX,10);                         /* return buf */
-  size_t jmp_at=cn;
-  jmp_rel32(0);                        /* normal -> ret */
-  size_t empty=cn;
+  xor_rr(DX,DX);
+  mov_imm64(AX,2); e1(0x0f); e1(0x05);  /* open(path, 0) */
+  test_rr(AX,AX); J_cc(JC_JS,Lempty);
+  mv_rr(3,AX);                          /* rbx = fd */
+  mv_rr(DI,3); xor_rr(SI,SI); mov_imm64(DX,2);
+  mov_imm64(AX,8); e1(0x0f); e1(0x05);  /* lseek(fd, 0, SEEK_END) = size */
+  test_rr(AX,AX); J_cc(JC_JS,Lclose);
+  mv_rr(13,AX);                         /* r13 = size */
+  lea_rm(DI,13,-1,0,1);
+  callb(B_MALLOC);
+  mv_rr(14,AX);                         /* r14 = buf */
+  xor_rr(15,15);                        /* r15 = total */
+  L_bind(Lloop);
+  bin_rr(0x39,15,13);                   /* cmp total, size */
+  J_cc(JC_GE,Ldone);
+  mv_rr(DI,3);
+  lea_rm(SI,14,15,0,0);                 /* buf + total */
+  mv_rr(DX,13); bin_rr(0x29,DX,15);     /* size - total */
+  mv_rr(10,15);                         /* offset = total */
+  mov_imm64(AX,17); e1(0x0f); e1(0x05); /* pread64 */
+  test_rr(AX,AX); J_cc(JC_LE,Ldone);
+  bin_rr(1,15,AX);
+  J_mp(Lloop);
+  L_bind(Ldone);
+  mov_imm8m(14,15,0,0,0);               /* buf[total] = 0 */
+  mv_rr(DI,3); mov_imm64(AX,3); e1(0x0f); e1(0x05);  /* close */
+  mv_rr(AX,14);
+  J_mp(Lret);
+  L_bind(Lclose);
+  mv_rr(DI,3); mov_imm64(AX,3); e1(0x0f); e1(0x05);
+  L_bind(Lempty);
   lea_rm(AX,12,-1,0,(int)d_empty);
-  { int32_t dd=(int32_t)(cn-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
-  erel32(js,empty);
-  pop_r(12); e1(0xc3);
+  L_bind(Lret);
+  pop_r(15); pop_r(14); pop_r(13); pop_r(3); pop_r(12); e1(0xc3);
+  nlbl=0;
   }
 
-  /* r_writefile: rdi=path rsi=s -> 1/0 */
+  /* r_writefile: rdi=path rsi=s -> 1 written / 0 cannot open.  Like
+     fopen(p,"wb"): O_WRONLY|O_CREAT|O_TRUNC (577), mode 0666 (438) in rdx
+     (the old code put the mode in r10, omitted O_TRUNC and lost s, since
+     syscalls clobber r11). */
   {
   builtin_off[B_WRITEFILE]=cn;
-  push_r(12);
-  mv_rr(11,SI);
-  mov_imm64(AX,2);
-  mv_rr(SI,DI);
-  mov_imm64(DX,65);
-  mov_imm64(10,438);
-  e1(0x0f); e1(0x05);
-  test_rr(AX,AX);
-  size_t js=cn; jcc_rel32(JC_JS,0);
-  mv_rr(9,AX);
-  mv_rr(AX,11);
+  int Lfail=L_new(), Lret=L_new(), Lw=L_new(), Lwdone=L_new();
+  push_r(12); push_r(3); push_r(13); push_r(14);
+  mv_rr(13,SI);                         /* r13 = s */
+  mov_imm64(SI,577);
+  mov_imm64(DX,438);
+  mov_imm64(AX,2); e1(0x0f); e1(0x05);  /* open */
+  test_rr(AX,AX); J_cc(JC_JS,Lfail);
+  mv_rr(3,AX);                          /* rbx = fd */
+  mv_rr(AX,13);
   callb(B_STRLEN);
-  mv_rr(DX,AX);
+  mv_rr(14,AX);                         /* r14 = bytes left */
+  L_bind(Lw);
+  test_rr(14,14); J_cc(JC_Z,Lwdone);
+  mv_rr(DI,3); mv_rr(SI,13); mv_rr(DX,14);
+  mov_imm64(AX,1); e1(0x0f); e1(0x05);  /* write */
+  test_rr(AX,AX); J_cc(JC_LE,Lwdone);
+  bin_rr(1,13,AX); bin_rr(0x29,14,AX);
+  J_mp(Lw);
+  L_bind(Lwdone);
+  mv_rr(DI,3); mov_imm64(AX,3); e1(0x0f); e1(0x05);  /* close */
   mov_imm64(AX,1);
-  mv_rr(DI,9);
-  mv_rr(SI,11);
-  e1(0x0f); e1(0x05);
-  mov_imm64(AX,3);
-  mv_rr(DI,9);
-  e1(0x0f); e1(0x05);
-  mov_imm64(AX,1);
-  size_t jmp_at=cn;
-  jmp_rel32(0);                        /* ok -> ret */
-  size_t fail=cn;
+  J_mp(Lret);
+  L_bind(Lfail);
   xor_rr(AX,AX);
-  { int32_t dd=(int32_t)(cn-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
-  erel32(js,fail);
-  pop_r(12); e1(0xc3);
+  L_bind(Lret);
+  pop_r(14); pop_r(13); pop_r(3); pop_r(12); e1(0xc3);
+  nlbl=0;
   }
 
   /* r_arg: rax=i -> str */
@@ -2098,6 +2224,173 @@ static void emit_builtins(void){
   push_r(12);
   mv_r64m(AX,12,-1,0,OFF_ARGC);
   pop_r(12); e1(0xc3);
+  }
+
+  /* r_nfmt: rax=double bits, rdi=buffer (>= 32 bytes) -> rax=buffer holding
+     the number formatted exactly like printf("%g") for the values a program
+     meets in practice: 6 significant digits, trailing zeros dropped, fixed
+     notation for exponents -4..5, else d.ddddde+XX; inf, -inf, nan, -nan;
+     -0 prints as -0 (as printf does).
+     Method: find the decimal exponent e with a table of exact powers of
+     ten (1e0..1e308), scale to a 6-digit integer M = round(|x|*10^(5-e))
+     (cvtsd2si, round-half-even), fix e if M spilled to 7 or 5 digits, then
+     print the digits.  Preserves every register except rax. */
+  {
+  builtin_off[B_NFMT]=cn;
+  int Lnan=L_new(), Lpos=L_new(), Linf=L_new(), Lzero=L_new(), Lsmall=L_new();
+  int Lbig=L_new(), Lbigdone=L_new(), Lsl=L_new(), Lsdone=L_new(), Lhave=L_new();
+  int Lcklow=L_new(), Ladj=L_new(), Ldg=L_new(), Lstrip=L_new(), Lsd=L_new();
+  int Lexp=L_new(), Lfneg=L_new(), Lfi=L_new(), Lff=L_new(), Lfz=L_new(), Lfzd=L_new();
+  int Lfd=L_new(), Led=L_new(), Lee=L_new(), Lep=L_new(), Lex=L_new(), Le2=L_new();
+  int Lend=L_new(), Lend2=L_new();
+  push_r(3); push_r(CX); push_r(DX); push_r(SI); push_r(DI);
+  push_r(8); push_r(9); push_r(10); push_r(11); push_r(13);
+  mv_rr(11,AX);                         /* r11 = bits */
+  mv_rr(10,DI);                         /* r10 = buffer start; rdi = cursor */
+  test_rr(11,11); J_cc(JC_JNS,Lpos);
+  stb_rdi('-'); incdec_r(1,DI);         /* glibc prints the sign of a NaN too */
+  shl_imm(11,1); shr_imm(11,1);         /* |x| */
+  L_bind(Lpos);
+  movq_xr(0,11); ucomisd(0,0); J_cc(0xA,Lnan);      /* jp: NaN */
+  mov_imm64(AX,0x7ff0000000000000ull);
+  bin_rr(0x39,11,AX); J_cc(JC_Z,Linf);  /* cmp r11, rax */
+  test_rr(11,11); J_cc(JC_Z,Lzero);
+  lea_rm(8,12,-1,0,(int)d_pow);         /* r8 = &pow10[0] */
+  movq_xr(0,11);
+  mov_imm64(AX,dbits(1.0)); movq_xr(1,AX);
+  ucomisd(0,1); J_cc(JC_B,Lsmall);
+  /* |x| >= 1: e = largest k with 10^k <= |x| */
+  xor_rr(CX,CX);
+  L_bind(Lbig);
+  bin_imm32(7,CX,308); J_cc(JC_GE,Lbigdone);
+  mv_r64m(AX,8,CX,3,8); movq_xr(1,AX);  /* pow10[k+1] */
+  ucomisd(0,1); J_cc(JC_B,Lbigdone);
+  incdec_r(1,CX); J_mp(Lbig);
+  L_bind(Lbigdone);
+  mv_rr(9,CX); J_mp(Lhave);
+  /* |x| < 1: e = -(smallest k with |x|*10^k >= 1) */
+  L_bind(Lsmall);
+  mov_imm64(CX,1);
+  L_bind(Lsl);
+  bin_imm32(7,CX,308); J_cc(JC_GE,Lsdone);
+  mv_r64m(AX,8,CX,3,0); movq_xr(1,AX);
+  movq_xr(2,11); mulsd(2,1);
+  mov_imm64(AX,dbits(1.0)); movq_xr(1,AX);
+  ucomisd(2,1); J_cc(JC_NBE,Lsdone);    /* jae */
+  incdec_r(1,CX); J_mp(Lsl);
+  L_bind(Lsdone);
+  mv_rr(9,CX); fm7(3,9);                /* e = -k */
+  L_bind(Lhave);
+  /* SCALE: rax = round(|x| * 10^(5-e)), repeated after adjusting e */
+  for(int pass=0;pass<3;pass++){
+    int Ln=L_new(), Lok=L_new(), Lr=L_new();
+    if(pass==1){ bin_imm32(7,AX,1000000); J_cc(JC_L,Lcklow); incdec_r(1,9); }
+    if(pass==2){ L_bind(Lcklow); bin_imm32(7,AX,100000); J_cc(JC_GE,Ladj); incdec_r(0,9); }
+    mov_imm64(CX,5); bin_rr(0x29,CX,9);  /* s = 5 - e */
+    movq_xr(0,11);
+    test_rr(CX,CX); J_cc(JC_JS,Ln);
+    bin_imm32(7,CX,300); J_cc(JC_LE,Lok);
+    mv_r64m(AX,8,-1,0,300*8); movq_xr(1,AX); mulsd(0,1);
+    bin_imm32(5,CX,300);
+    L_bind(Lok);
+    mv_r64m(AX,8,CX,3,0); movq_xr(1,AX); mulsd(0,1);
+    J_mp(Lr);
+    L_bind(Ln);
+    fm7(3,CX);
+    mv_r64m(AX,8,CX,3,0); movq_xr(1,AX); divsd(0,1);
+    L_bind(Lr);
+    cvtsd2si(AX,0);
+    if(pass==1) J_mp(Ladj);
+  }
+  L_bind(Ladj);
+  /* six digits of M into [rsp+0..5] */
+  bin_imm8(5,SP,16);
+  mov_imm64(CX,5);
+  mov_imm64(3,10);
+  L_bind(Ldg);
+  xor_rr(DX,DX); fm7(6,3);              /* rax = M/10, rdx = M%10 */
+  bin_imm8(0,DX,0x30);
+  rexb(0,0,CX>7,0); e1(0x88); emit_modrm(DX&7,SP,0,CX,-1);   /* mov [rsp+rcx], dl */
+  incdec_r(0,CX); J_cc(JC_JNS,Ldg);
+  /* nd = 6 minus trailing zeros (at least 1) */
+  mov_imm64(13,6);
+  L_bind(Lstrip);
+  bin_imm8(7,13,1); J_cc(JC_LE,Lsd);
+  mv_rr(3,13); incdec_r(0,3);
+  mvz_rm(AX,SP,3,0,-1);
+  bin_imm8(7,AX,'0'); J_cc(JC_NZ,Lsd);
+  incdec_r(0,13); J_mp(Lstrip);
+  L_bind(Lsd);
+  bin_imm8(7,9,(uint8_t)-4); J_cc(JC_L,Lexp);
+  bin_imm8(7,9,6); J_cc(JC_GE,Lexp);
+  test_rr(9,9); J_cc(JC_JS,Lfneg);
+  /* fixed, e >= 0: digits 0..e, then '.' and the rest if any */
+  xor_rr(CX,CX);
+  L_bind(Lfi);
+  mvz_rm(AX,SP,CX,0,-1); stal_rdi(); incdec_r(1,DI);
+  incdec_r(1,CX); bin_rr(0x39,CX,9); J_cc(JC_LE,Lfi);
+  bin_rr(0x39,CX,13); J_cc(JC_GE,Lend);
+  stb_rdi('.'); incdec_r(1,DI);
+  L_bind(Lff);
+  mvz_rm(AX,SP,CX,0,-1); stal_rdi(); incdec_r(1,DI);
+  incdec_r(1,CX); bin_rr(0x39,CX,13); J_cc(JC_L,Lff);
+  J_mp(Lend);
+  /* fixed, e < 0: "0." then -e-1 zeros then the digits */
+  L_bind(Lfneg);
+  stb_rdi('0'); incdec_r(1,DI); stb_rdi('.'); incdec_r(1,DI);
+  mv_rr(CX,9); fm7(3,CX); incdec_r(0,CX);
+  L_bind(Lfz);
+  test_rr(CX,CX); J_cc(JC_Z,Lfzd);
+  stb_rdi('0'); incdec_r(1,DI); incdec_r(0,CX); J_mp(Lfz);
+  L_bind(Lfzd);
+  xor_rr(CX,CX);
+  L_bind(Lfd);
+  mvz_rm(AX,SP,CX,0,-1); stal_rdi(); incdec_r(1,DI);
+  incdec_r(1,CX); bin_rr(0x39,CX,13); J_cc(JC_L,Lfd);
+  J_mp(Lend);
+  /* exponential: d[.ddddd]e(+|-)XX */
+  L_bind(Lexp);
+  mvz_rm(AX,SP,-1,0,0); stal_rdi(); incdec_r(1,DI);
+  bin_imm8(7,13,1); J_cc(JC_LE,Lee);
+  stb_rdi('.'); incdec_r(1,DI);
+  mov_imm64(CX,1);
+  L_bind(Led);
+  mvz_rm(AX,SP,CX,0,-1); stal_rdi(); incdec_r(1,DI);
+  incdec_r(1,CX); bin_rr(0x39,CX,13); J_cc(JC_L,Led);
+  L_bind(Lee);
+  stb_rdi('e'); incdec_r(1,DI);
+  mv_rr(AX,9);
+  test_rr(AX,AX); J_cc(JC_JNS,Lep);
+  stb_rdi('-'); incdec_r(1,DI); fm7(3,AX); J_mp(Lex);
+  L_bind(Lep);
+  stb_rdi('+'); incdec_r(1,DI);
+  L_bind(Lex);
+  bin_imm8(7,AX,100); J_cc(JC_L,Le2);
+  xor_rr(DX,DX); mov_imm64(3,100); fm7(6,3);
+  bin_imm8(0,AX,0x30); stal_rdi(); incdec_r(1,DI);
+  mv_rr(AX,DX);
+  L_bind(Le2);
+  xor_rr(DX,DX); mov_imm64(3,10); fm7(6,3);
+  bin_imm8(0,AX,0x30); stal_rdi(); incdec_r(1,DI);
+  mv_rr(AX,DX); bin_imm8(0,AX,0x30); stal_rdi(); incdec_r(1,DI);
+  L_bind(Lend);
+  bin_imm8(0,SP,16);
+  J_mp(Lend2);
+  L_bind(Lnan);
+  stb_rdi('n'); incdec_r(1,DI); stb_rdi('a'); incdec_r(1,DI); stb_rdi('n'); incdec_r(1,DI);
+  J_mp(Lend2);
+  L_bind(Linf);
+  stb_rdi('i'); incdec_r(1,DI); stb_rdi('n'); incdec_r(1,DI); stb_rdi('f'); incdec_r(1,DI);
+  J_mp(Lend2);
+  L_bind(Lzero);
+  stb_rdi('0'); incdec_r(1,DI);
+  L_bind(Lend2);
+  stb_rdi(0);
+  mv_rr(AX,10);
+  pop_r(13); pop_r(11); pop_r(10); pop_r(9); pop_r(8);
+  pop_r(DI); pop_r(SI); pop_r(DX); pop_r(CX); pop_r(3);
+  e1(0xc3);
+  nlbl=0;
   }
 
   /* r_die: rax=msg -> stderr + exit(1) */
@@ -2213,19 +2506,30 @@ int main(int argc,char**argv){
 
   dn=40;                /* 0,8,16,24 = cur/argv/argc/end; 32 = literal scratch */
   d_glob=d_alloc(NSLOT*8);
-  d_err_div=d_str("division by zero");
-  d_err_malloc=d_str("out of memory");
-  d_err_list=d_str("list index out of range");
-  d_err_str=d_str("string index out of range");
+  d_err_div=d_str("division by zero\n");
+  d_err_malloc=d_str("out of memory\n");
+  d_err_list=d_str("list index out of range\n");
+  d_err_str=d_str("string index out of range\n");
   d_list1=d_str("[list len=");
-  d_list2=d_str("]");
+  d_list2=d_str("]\n");     /* seed-min/gen2 print "[list len=N]\n" */
   d_nl=d_str("\n");
   d_empty=d_str("");
+  d_numbuf=d_alloc(64);
+  d_pow=d_alloc(309*8);
+  for(int i=0;i<=308;i++){       /* exact: strtod of "1eN" is correctly rounded */
+    char t[16]; snprintf(t,sizeof t,"1e%d",i);
+    double d=strtod(t,NULL); memcpy(data+d_pow+8*(size_t)i,&d,8);
+  }
 
   /* main */
   lea_r12_data();
-  mv_m64(12,-1,0,OFF_ARGV,SI);
-  mv_m64(12,-1,0,OFF_ARGC,DI);
+  /* process entry (no libc): [rsp] = argc, rsp+8 = argv[0..argc-1], NULL.
+     The old code stored rdi/rsi, which are 0 at _start, so arg_count() was
+     0 and arg(0) dereferenced NULL. */
+  mv_r64m(AX,SP,-1,0,0);
+  mv_m64(12,-1,0,OFF_ARGC,AX);
+  lea_rm(AX,SP,-1,0,8);
+  mv_m64(12,-1,0,OFF_ARGV,AX);
   lea_rm(DI,12,-1,0,(int)d_glob);
   mov_imm64(CX,(uint64_t)NSLOT);
   xor_rr(AX,AX);

@@ -131,6 +131,55 @@ hold rhs = ""
 hold opch = 0
 hold argv_txt = ""
 hold numtxt = ""
+hold cdn = 0
+hold cond = ""
+hold cr = 0
+hold cl = 0
+hold ctrim = ""
+hold ci = 0
+hold gr = 0
+hold pmode = 0
+hold pp = 0
+hold pc = 0
+hold pc2 = 0
+hold pc3 = 0
+hold pnm = ""
+hold phas = 0
+hold pexpr = ""
+hold pq = 0
+hold prun = 0
+hold perr = 0
+hold permsg = ""
+hold pmsg = ""
+hold pbad = 0
+hold pw = ""
+hold pprev = 0
+hold pstk = ""
+hold pstl = 0
+hold pkey = ""
+hold psrc = ""
+hold pfound = 0
+hold pi2 = 0
+hold pj2 = 0
+hold pa2 = 0
+hold pb2 = 0
+hold pa3 = 0
+hold pb3 = 0
+hold pok2 = 0
+hold pv = 0
+hold pv2 = 0
+hold pv3 = 0
+hold pdot = 0
+hold pstep = 0
+hold pknown = 0
+hold bpush = 0
+hold lop = 0
+hold lbad = 0
+hold lnum = 0
+hold ldig = 0
+hold lcount = ""
+hold ltmp = ""
+hold uword = ""
 hold ind = ""
 hold w9 = ""
 hold out = ""
@@ -677,6 +726,115 @@ while exmore == 1 {
     hold n = len(source)
   }
 }
+
+// ---- malformed number literals (`1.2.3`) are rejected up front ----------
+// Every number reader below accepts `.digits` once more each time it sees
+// one, so a second fractional part would be copied into the C as `1.2.3`
+// (a C compile error).  One scan over the spliced source, skipping strings,
+// `//` comments and identifiers (so `p.x1.y` is not a number), catches it.
+// (all scan variables are declared here: a first `hold` inside a block
+// becomes a C local of that block)
+hold nqp = 0
+hold nqc = 0
+hold nqn = 0
+hold nqk = 0
+hold nqf = 0
+while nqp < n {
+  hold nqc = sx_index(source,nqp)
+  hold nqn = 0
+  when nqp + 1 < n {
+    hold nqn = sx_index(source,nqp + 1)
+  }
+  when nqc == 34 {
+    // a string literal: skip to the closing quote, honouring backslashes
+    hold nqp = nqp + 1
+    hold nqk = 1
+    while nqk == 1 {
+      when nqp >= n {
+        hold nqk = 0
+      } otherwise {
+        hold nqc = sx_index(source,nqp)
+        when nqc == 92 {
+          hold nqp = nqp + 2
+        } otherwise {
+          hold nqp = nqp + 1
+          when nqc == 34 {
+            hold nqk = 0
+          }
+        }
+      }
+    }
+  } otherwise {
+    when nqc == 47 && nqn == 47 {
+      // a line comment: skip to the end of the line
+      hold nqk = 1
+      while nqk == 1 {
+        when nqp >= n {
+          hold nqk = 0
+        } otherwise {
+          hold nqc = sx_index(source,nqp)
+          when nqc == 10 {
+            hold nqk = 0
+          } otherwise {
+            hold nqp = nqp + 1
+          }
+        }
+      }
+    } otherwise {
+      when (nqc >= 97 && nqc <= 122) || (nqc >= 65 && nqc <= 90) || nqc == 95 {
+        // an identifier, digits included
+        hold nqk = 1
+        while nqk == 1 {
+          when nqp >= n {
+            hold nqk = 0
+          } otherwise {
+            hold nqc = sx_index(source,nqp)
+            when (nqc >= 97 && nqc <= 122) || (nqc >= 65 && nqc <= 90) || (nqc >= 48 && nqc <= 57) || nqc == 95 {
+              hold nqp = nqp + 1
+            } otherwise {
+              hold nqk = 0
+            }
+          }
+        }
+      } otherwise {
+        when nqc >= 48 && nqc <= 57 {
+          // a number: digits, then at most one `.digits`
+          hold nqf = 0
+          hold nqk = 1
+          while nqk == 1 {
+            when nqp >= n {
+              hold nqk = 0
+            } otherwise {
+              hold nqc = sx_index(source,nqp)
+              hold nqn = 0
+              when nqp + 1 < n {
+                hold nqn = sx_index(source,nqp + 1)
+              }
+              when nqc >= 48 && nqc <= 57 {
+                hold nqp = nqp + 1
+              } otherwise {
+                when nqc == 46 && nqn >= 48 && nqn <= 57 {
+                  when nqf == 1 {
+                    when perr == 0 {
+                      hold permsg = "malformed number literal (a number has at most one '.', as in 2.5)"
+                    }
+                    hold perr = 1
+                  }
+                  hold nqf = 1
+                  hold nqp = nqp + 1
+                } otherwise {
+                  hold nqk = 0
+                }
+              }
+            }
+          }
+        } otherwise {
+          hold nqp = nqp + 1
+        }
+      }
+    }
+  }
+}
 while running == 1 {
 
   // ---- phase 1: skip blanks and // comments ----
@@ -784,67 +942,720 @@ while running == 1 {
       }
     }
 
-    // ================= hold NAME = RHS =================
-    when act == 1 {
-      hold pos = pos + 4
-      // blank skip
-      hold sk = 1
-      while sk == 1 {
-        when pos >= n {
-          hold sk = 0
+    // ---- statement pre-checks (run before the per-statement blocks) ----
+    //  * a statement word must be a WHOLE keyword: `hello = 1` is not `hold`
+    //    and `write_file(p, s)` is not `while`.  An unknown statement is a
+    //    clear error (its line is skipped), never C that fails to compile.
+    //  * bare `push(xs, v)` compiles as `hold xs = push(xs, v)` (act 1 with
+    //    bpush = 1); xs must already be a list.
+    //  * a hold/show expression with a grouping paren, `(a + 3) * 4`, goes
+    //    through the same verbatim-C + `%` rewrite as conditions (act 8).
+    hold bpush = 0
+    hold pmode = 0
+    hold pbad = 0
+    when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 {
+      hold uword = ""
+      hold pp = pos
+      hold prun = 1
+      while prun == 1 {
+        when pp >= n {
+          hold prun = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
-          when cs == 32 || cs == 9 || cs == 13 {
-            hold pos = pos + 1
+          hold pc = sx_index(source, pp)
+          when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || (pc >= 48 && pc <= 57) || pc == 95 {
+            hold uword = concat(uword, chr(pc))
+            hold pp = pp + 1
           } otherwise {
-            hold sk = 0
+            hold prun = 0
           }
         }
       }
-      // name
-      hold nm = ""
-      hold rn = 1
-      while rn == 1 {
-        when pos >= n {
-          hold rn = 0
-        } otherwise {
-          hold cn = sx_index(source,pos)
-          when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
-            hold nm = concat(nm, chr(cn))
-            hold pos = pos + 1
+      hold pok2 = 0
+      when sx_eq(uword, "hold") || sx_eq(uword, "show") || sx_eq(uword, "when") || sx_eq(uword, "while") {
+        hold pok2 = 1
+      }
+      when sx_eq(uword, "make") || sx_eq(uword, "give") || sx_eq(uword, "struct") {
+        hold pok2 = 1
+      }
+      when sx_eq(uword, "push") {
+        hold pok2 = 2
+      }
+      when pok2 == 2 {
+        // bare push(NAME, EXPR)
+        hold prun = 1
+        while prun == 1 {
+          when pp >= n {
+            hold prun = 0
           } otherwise {
-            hold rn = 0
+            hold pc = sx_index(source, pp)
+            when pc == 32 || pc == 9 || pc == 13 {
+              hold pp = pp + 1
+            } otherwise {
+              hold prun = 0
+            }
+          }
+        }
+        hold pc = 0
+        when pp < n {
+          hold pc = sx_index(source, pp)
+        }
+        hold pnm = ""
+        when pc == 40 {
+          hold pp = pp + 1
+          hold prun = 1
+          while prun == 1 {
+            when pp >= n {
+              hold prun = 0
+            } otherwise {
+              hold pc = sx_index(source, pp)
+              when pc == 32 || pc == 9 || pc == 13 {
+                hold pp = pp + 1
+              } otherwise {
+                hold prun = 0
+              }
+            }
+          }
+          hold prun = 1
+          while prun == 1 {
+            when pp >= n {
+              hold prun = 0
+            } otherwise {
+              hold pc = sx_index(source, pp)
+              when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || (pc >= 48 && pc <= 57) || pc == 95 {
+                hold pnm = concat(pnm, chr(pc))
+                hold pp = pp + 1
+              } otherwise {
+                hold prun = 0
+              }
+            }
+          }
+          hold prun = 1
+          while prun == 1 {
+            when pp >= n {
+              hold prun = 0
+            } otherwise {
+              hold pc = sx_index(source, pp)
+              when pc == 32 || pc == 9 || pc == 13 {
+                hold pp = pp + 1
+              } otherwise {
+                hold prun = 0
+              }
+            }
+          }
+          hold pc = 0
+          when pp < n {
+            hold pc = sx_index(source, pp)
+          }
+          when pc != 44 {
+            hold pnm = ""
+          }
+        }
+        when sx_eq(pnm, "") {
+          hold pmsg = "push statement: expected push(list, value) with a list variable name first, e.g. push(xs, 4)"
+          hold pbad = 1
+        } otherwise {
+          hold psrc = ldecls
+          hold pkey = concat("|", pnm)
+          hold pkey = concat(pkey, "|")
+          hold pfound = 0
+          hold pi2 = 0
+          hold pa2 = len(psrc)
+          hold pb2 = len(pkey)
+          while pi2 + pb2 <= pa2 {
+            hold pok2 = 1
+            hold pj2 = 0
+            while pj2 < pb2 {
+              hold pa3 = sx_index(psrc, pi2 + pj2)
+              hold pb3 = sx_index(pkey, pj2)
+              when pa3 == pb3 {
+                hold pj2 = pj2 + 1
+              } otherwise {
+                hold pok2 = 0
+                hold pj2 = pb2
+              }
+            }
+            when pok2 == 1 {
+              hold pfound = 1
+              hold pi2 = pa2
+            } otherwise {
+              hold pi2 = pi2 + 1
+            }
+          }
+          when pfound == 1 {
+            hold act = 1
+            hold bpush = 1
+            hold nm = pnm
+          } otherwise {
+            hold pmsg = concat("push statement: '", pnm)
+            hold pmsg = concat(pmsg, "' is not a list; hold it as a list first, e.g. hold xs = []")
+            hold pbad = 1
           }
         }
       }
-      // blanks then '='
-      hold sk = 1
-      while sk == 1 {
-        when pos >= n {
-          hold sk = 0
-        } otherwise {
-          hold cs = sx_index(source,pos)
-          when cs == 32 || cs == 9 || cs == 13 {
-            hold pos = pos + 1
+      // (pok2 doubles as scratch in the push search above; a push error
+      // has already set pbad, and its message must win)
+      when pok2 == 0 && pbad == 0 {
+        hold pmsg = concat("unknown statement '", uword)
+        hold pmsg = concat(pmsg, "' (statements are hold show when while make give struct, and push(xs, v))")
+        hold pbad = 1
+      }
+      when pbad == 1 {
+        // skip the rest of the line; the first such error is reported
+        hold act = 9
+        hold prun = 1
+        while prun == 1 {
+          when pos >= n {
+            hold prun = 0
           } otherwise {
-            when cs == 61 {
+            hold pc = sx_index(source, pos)
+            when pc == 10 {
+              hold prun = 0
+            } otherwise {
               hold pos = pos + 1
             }
-            hold sk = 0
           }
         }
       }
-      // blanks
-      hold sk = 1
-      while sk == 1 {
-        when pos >= n {
-          hold sk = 0
-        } otherwise {
-          hold cs = sx_index(source,pos)
-          when cs == 32 || cs == 9 || cs == 13 {
-            hold pos = pos + 1
+    }
+    when act == 1 || act == 2 {
+      when bpush == 0 {
+        hold pp = pos + 4
+        hold prun = 1
+        while prun == 1 {
+          when pp >= n {
+            hold prun = 0
           } otherwise {
+            hold pc = sx_index(source, pp)
+            when pc == 32 || pc == 9 || pc == 13 {
+              hold pp = pp + 1
+            } otherwise {
+              hold prun = 0
+            }
+          }
+        }
+        hold pnm = ""
+        when act == 1 {
+          hold prun = 1
+          while prun == 1 {
+            when pp >= n {
+              hold prun = 0
+            } otherwise {
+              hold pc = sx_index(source, pp)
+              when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || (pc >= 48 && pc <= 57) || pc == 95 {
+                hold pnm = concat(pnm, chr(pc))
+                hold pp = pp + 1
+              } otherwise {
+                hold prun = 0
+              }
+            }
+          }
+          hold prun = 1
+          while prun == 1 {
+            when pp >= n {
+              hold prun = 0
+            } otherwise {
+              hold pc = sx_index(source, pp)
+              when pc == 32 || pc == 9 || pc == 13 {
+                hold pp = pp + 1
+              } otherwise {
+                hold prun = 0
+              }
+            }
+          }
+          when pp < n {
+            hold pc = sx_index(source, pp)
+            when pc == 61 {
+              hold pp = pp + 1
+            }
+          }
+          hold prun = 1
+          while prun == 1 {
+            when pp >= n {
+              hold prun = 0
+            } otherwise {
+              hold pc = sx_index(source, pp)
+              when pc == 32 || pc == 9 || pc == 13 {
+                hold pp = pp + 1
+              } otherwise {
+                hold prun = 0
+              }
+            }
+          }
+        }
+        // the expression text up to the end of the line (or a // comment);
+        // a `(` that does not directly follow a name is a grouping paren
+        hold pexpr = ""
+        hold phas = 0
+        hold pq = 0
+        hold pprev = 0
+        hold prun = 1
+        while prun == 1 {
+          when pp >= n {
+            hold prun = 0
+          } otherwise {
+            hold pc = sx_index(source, pp)
+            when pq == 1 {
+              hold pexpr = concat(pexpr, chr(pc))
+              hold pp = pp + 1
+              when pc == 92 {
+                when pp < n {
+                  hold pexpr = concat(pexpr, chr(sx_index(source, pp)))
+                  hold pp = pp + 1
+                }
+              } otherwise {
+                when pc == 34 {
+                  hold pq = 0
+                  hold pprev = 34
+                }
+              }
+            } otherwise {
+              hold pc2 = 0
+              when pp + 1 < n {
+                hold pc2 = sx_index(source, pp + 1)
+              }
+              when pc == 10 || pc == 13 || (pc == 47 && pc2 == 47) {
+                hold prun = 0
+              } otherwise {
+                when pc == 40 {
+                  when (pprev >= 97 && pprev <= 122) || (pprev >= 65 && pprev <= 90) || (pprev >= 48 && pprev <= 57) || pprev == 95 {
+                  } otherwise {
+                    hold phas = 1
+                  }
+                }
+                when pc == 34 {
+                  hold pq = 1
+                }
+                when pc != 32 && pc != 9 {
+                  hold pprev = pc
+                }
+                hold pexpr = concat(pexpr, chr(pc))
+                hold pp = pp + 1
+              }
+            }
+          }
+        }
+        when phas == 1 {
+          hold pmode = act
+          hold act = 8
+          hold pos = pp
+          // trim trailing blanks -> ctrim / cl (the rewrite input)
+          hold cl = len(pexpr)
+          hold trim = 1
+          while trim == 1 {
+            when cl <= 0 {
+              hold trim = 0
+            } otherwise {
+              hold pc = sx_index(pexpr, cl - 1)
+              when pc == 32 || pc == 9 {
+                hold cl = cl - 1
+              } otherwise {
+                hold trim = 0
+              }
+            }
+          }
+          hold ctrim = ""
+          hold ci = 0
+          while ci < cl {
+            hold ctrim = concat(ctrim, chr(sx_index(pexpr, ci)))
+            hold ci = ci + 1
+          }
+          // validate: numbers, numeric names, make-function calls,
+          // + - * / %, comparisons, && ||, and balanced parens only
+          hold pstk = ""
+          hold pprev = 0
+          hold pv = 0
+          while pv < cl {
+            hold pc = sx_index(ctrim, pv)
+            hold pc2 = 0
+            when pv + 1 < cl {
+              hold pc2 = sx_index(ctrim, pv + 1)
+            }
+            hold pstep = 1
+            hold pknown = 0
+            when pc == 32 || pc == 9 || pc == 43 || pc == 45 || pc == 42 || pc == 47 || pc == 37 {
+              hold pknown = 1
+            }
+            when (pc >= 48 && pc <= 57) || (pc == 46 && pc2 >= 48 && pc2 <= 57) {
+              hold pknown = 1
+              hold pv2 = pv
+              hold pdot = 0
+              hold prun = 1
+              while prun == 1 {
+                when pv2 >= cl {
+                  hold prun = 0
+                } otherwise {
+                  hold pc3 = sx_index(ctrim, pv2)
+                  when pc3 >= 48 && pc3 <= 57 {
+                    hold pv2 = pv2 + 1
+                  } otherwise {
+                    when pc3 == 46 && pdot == 0 {
+                      hold pdot = 1
+                      hold pv2 = pv2 + 1
+                    } otherwise {
+                      hold prun = 0
+                    }
+                  }
+                }
+              }
+              hold pc3 = 0
+              when pv2 < cl {
+                hold pc3 = sx_index(ctrim, pv2)
+              }
+              when (pc3 >= 97 && pc3 <= 122) || (pc3 >= 65 && pc3 <= 90) || pc3 == 95 || pc3 == 46 {
+                hold pmsg = "malformed number literal"
+                hold pbad = 1
+              }
+              hold pstep = pv2 - pv
+              hold pc = 48
+            }
+            when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || pc == 95 {
+              hold pknown = 1
+              hold pw = ""
+              hold pv2 = pv
+              hold prun = 1
+              while prun == 1 {
+                when pv2 >= cl {
+                  hold prun = 0
+                } otherwise {
+                  hold pc3 = sx_index(ctrim, pv2)
+                  when (pc3 >= 97 && pc3 <= 122) || (pc3 >= 65 && pc3 <= 90) || (pc3 >= 48 && pc3 <= 57) || pc3 == 95 {
+                    hold pw = concat(pw, chr(pc3))
+                    hold pv2 = pv2 + 1
+                  } otherwise {
+                    hold prun = 0
+                  }
+                }
+              }
+              hold pstep = pv2 - pv
+              hold pv3 = pv2
+              hold prun = 1
+              while prun == 1 {
+                when pv3 >= cl {
+                  hold prun = 0
+                } otherwise {
+                  hold pc3 = sx_index(ctrim, pv3)
+                  when pc3 == 32 || pc3 == 9 {
+                    hold pv3 = pv3 + 1
+                  } otherwise {
+                    hold prun = 0
+                  }
+                }
+              }
+              hold pc3 = 0
+              when pv3 < cl {
+                hold pc3 = sx_index(ctrim, pv3)
+              }
+              when pc3 == 40 {
+                hold pok2 = 0
+                when sx_eq(pw, "concat") || sx_eq(pw, "len") || sx_eq(pw, "chr") || sx_eq(pw, "sx_index") || sx_eq(pw, "index") || sx_eq(pw, "push") {
+                  hold pok2 = 1
+                }
+                when sx_eq(pw, "read_file") || sx_eq(pw, "write_file") || sx_eq(pw, "arg") || sx_eq(pw, "arg_count") || sx_eq(pw, "string_eq") {
+                  hold pok2 = 1
+                }
+                when sx_eq(pw, "sx_cat") || sx_eq(pw, "sx_len") || sx_eq(pw, "sx_chr") || sx_eq(pw, "sx_idx") || sx_eq(pw, "sx_eq") {
+                  hold pok2 = 1
+                }
+                when sx_eq(pw, "sx_read") || sx_eq(pw, "sx_write") || sx_eq(pw, "sx_arg") || sx_eq(pw, "sx_argc") {
+                  hold pok2 = 1
+                }
+                when pok2 == 1 {
+                  hold pmsg = concat("builtin '", pw)
+                  hold pmsg = concat(pmsg, "' inside a parenthesized expression is not supported by this compiler; hold its result in a variable first")
+                  hold pbad = 1
+                } otherwise {
+                  hold psrc = fns
+                  hold pkey = concat("static double ", pw)
+                  hold pkey = concat(pkey, "(")
+                  hold pfound = 0
+                  hold pi2 = 0
+                  hold pa2 = len(psrc)
+                  hold pb2 = len(pkey)
+                  while pi2 + pb2 <= pa2 {
+                    hold pok2 = 1
+                    hold pj2 = 0
+                    while pj2 < pb2 {
+                      hold pa3 = sx_index(psrc, pi2 + pj2)
+                      hold pb3 = sx_index(pkey, pj2)
+                      when pa3 == pb3 {
+                        hold pj2 = pj2 + 1
+                      } otherwise {
+                        hold pok2 = 0
+                        hold pj2 = pb2
+                      }
+                    }
+                    when pok2 == 1 {
+                      hold pfound = 1
+                      hold pi2 = pa2
+                    } otherwise {
+                      hold pi2 = pi2 + 1
+                    }
+                  }
+                  when in_fn == 1 {
+                    when sx_eq(pw, fn_name) {
+                      hold pfound = 1
+                    }
+                  }
+                  when pfound == 0 {
+                    hold pmsg = concat("unknown function '", pw)
+                    hold pmsg = concat(pmsg, "' in a parenthesized expression (define it with make first)")
+                    hold pbad = 1
+                  }
+                }
+              } otherwise {
+                when pc3 == 46 || pc3 == 91 {
+                  hold pmsg = concat("a field access or index on '", pw)
+                  hold pmsg = concat(pmsg, "' inside a parenthesized expression is not supported by this compiler; hold the value in a variable first")
+                  hold pbad = 1
+                }
+                hold pkey = concat("|", pw)
+                hold pkey = concat(pkey, "|")
+                hold psrc = sdecls
+                hold pfound = 0
+                hold pi2 = 0
+                hold pa2 = len(psrc)
+                hold pb2 = len(pkey)
+                while pi2 + pb2 <= pa2 {
+                  hold pok2 = 1
+                  hold pj2 = 0
+                  while pj2 < pb2 {
+                    hold pa3 = sx_index(psrc, pi2 + pj2)
+                    hold pb3 = sx_index(pkey, pj2)
+                    when pa3 == pb3 {
+                      hold pj2 = pj2 + 1
+                    } otherwise {
+                      hold pok2 = 0
+                      hold pj2 = pb2
+                    }
+                  }
+                  when pok2 == 1 {
+                    hold pfound = 1
+                    hold pi2 = pa2
+                  } otherwise {
+                    hold pi2 = pi2 + 1
+                  }
+                }
+                hold pok2 = pfound
+                hold psrc = ldecls
+                hold pfound = 0
+                hold pi2 = 0
+                hold pa2 = len(psrc)
+                hold pb2 = len(pkey)
+                while pi2 + pb2 <= pa2 {
+                  hold pok2 = 1
+                  hold pj2 = 0
+                  while pj2 < pb2 {
+                    hold pa3 = sx_index(psrc, pi2 + pj2)
+                    hold pb3 = sx_index(pkey, pj2)
+                    when pa3 == pb3 {
+                      hold pj2 = pj2 + 1
+                    } otherwise {
+                      hold pok2 = 0
+                      hold pj2 = pb2
+                    }
+                  }
+                  when pok2 == 1 {
+                    hold pfound = 1
+                    hold pi2 = pa2
+                  } otherwise {
+                    hold pi2 = pi2 + 1
+                  }
+                }
+                when pfound == 1 {
+                  hold pok2 = 1
+                }
+                hold pkey = concat("|", pw)
+                hold pkey = concat(pkey, "=")
+                hold psrc = svars
+                hold pfound = 0
+                hold pi2 = 0
+                hold pa2 = len(psrc)
+                hold pb2 = len(pkey)
+                while pi2 + pb2 <= pa2 {
+                  hold pok2 = 1
+                  hold pj2 = 0
+                  while pj2 < pb2 {
+                    hold pa3 = sx_index(psrc, pi2 + pj2)
+                    hold pb3 = sx_index(pkey, pj2)
+                    when pa3 == pb3 {
+                      hold pj2 = pj2 + 1
+                    } otherwise {
+                      hold pok2 = 0
+                      hold pj2 = pb2
+                    }
+                  }
+                  when pok2 == 1 {
+                    hold pfound = 1
+                    hold pi2 = pa2
+                  } otherwise {
+                    hold pi2 = pi2 + 1
+                  }
+                }
+                when pfound == 1 {
+                  hold pok2 = 1
+                }
+                when pok2 == 1 {
+                  hold pmsg = concat("'", pw)
+                  hold pmsg = concat(pmsg, "' is a string, list or struct; a parenthesized expression must be numeric")
+                  hold pbad = 1
+                }
+              }
+              hold pc = 97
+            }
+            when pc == 40 {
+              hold pknown = 1
+              when (pprev >= 97 && pprev <= 122) || (pprev >= 65 && pprev <= 90) || pprev == 95 {
+                hold pstk = concat(pstk, "c")
+              } otherwise {
+                when pprev == 48 || pprev == 41 {
+                  hold pmsg = "a '(' directly after a value; write an operator between them"
+                  hold pbad = 1
+                }
+                hold pstk = concat(pstk, "g")
+              }
+            }
+            when pc == 41 {
+              hold pknown = 1
+              hold pstl = len(pstk)
+              when pstl == 0 {
+                hold pmsg = "unbalanced ')' in a parenthesized expression"
+                hold pbad = 1
+              } otherwise {
+                hold pw = ""
+                hold pv2 = 0
+                while pv2 < pstl - 1 {
+                  hold pw = concat(pw, chr(sx_index(pstk, pv2)))
+                  hold pv2 = pv2 + 1
+                }
+                hold pstk = pw
+              }
+            }
+            when pc == 44 {
+              hold pknown = 1
+              hold pstl = len(pstk)
+              hold pc3 = 0
+              when pstl > 0 {
+                hold pc3 = sx_index(pstk, pstl - 1)
+              }
+              when pc3 != 99 {
+                hold pmsg = "a ',' outside a function call in a parenthesized expression"
+                hold pbad = 1
+              }
+            }
+            when pc == 61 || pc == 33 || pc == 38 || pc == 124 {
+              hold pknown = 1
+              hold pc3 = 61
+              when pc == 38 || pc == 124 {
+                hold pc3 = pc
+              }
+              when pc2 == pc3 {
+                hold pstep = 2
+              } otherwise {
+                hold pmsg = "unsupported operator in a parenthesized expression (use == != < <= > >= && ||)"
+                hold pbad = 1
+              }
+            }
+            when pc == 60 || pc == 62 {
+              hold pknown = 1
+              when pc2 == 61 {
+                hold pstep = 2
+              }
+            }
+            when pknown == 0 {
+              hold pmsg = concat("unexpected '", chr(pc))
+              hold pmsg = concat(pmsg, "' in a parenthesized expression (strings, lists, fields and struct literals are not supported inside parentheses by this compiler)")
+              hold pbad = 1
+            }
+            when pc != 32 && pc != 9 {
+              hold pprev = pc
+            }
+            hold pv = pv + pstep
+            // the first problem found is the one reported
+            when pbad == 1 && perr == 0 {
+              hold perr = 1
+              hold permsg = pmsg
+            }
+          }
+          when sx_eq(pstk, "") {
+          } otherwise {
+            hold pmsg = "unbalanced '(' in a parenthesized expression"
+            hold pbad = 1
+          }
+        }
+      }
+    }
+    when pbad == 1 {
+      when perr == 0 {
+        hold permsg = pmsg
+      }
+      hold perr = 1
+    }
+
+
+    // ================= hold NAME = RHS =================
+    when act == 1 {
+      // bare push(xs, v): nm is already set and pos sits on `push`
+      when bpush == 0 {
+        hold pos = pos + 4
+        // blank skip
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
             hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+        // name
+        hold nm = ""
+        hold rn = 1
+        while rn == 1 {
+          when pos >= n {
+            hold rn = 0
+          } otherwise {
+            hold cn = sx_index(source,pos)
+            when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
+              hold nm = concat(nm, chr(cn))
+              hold pos = pos + 1
+            } otherwise {
+              hold rn = 0
+            }
+          }
+        }
+        // blanks then '='
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              when cs == 61 {
+                hold pos = pos + 1
+              }
+              hold sk = 0
+            }
+          }
+        }
+        // blanks
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
           }
         }
       }
@@ -857,52 +1668,6 @@ while running == 1 {
         hold c1 = sx_index(source,pos)
       }
 
-      // `(` as a base.  The C seed copies an expression verbatim and lets C
-      // parse it, so it accepts `(a + 3) * 4`; this compiler parses the
-      // expression structurally and has no parenthesized base.  Report that
-      // clearly (and emit `#error`) instead of silently emitting broken C
-      // such as `double b = ;`.
-      when c1 == 40 {
-        hold badparen = 1
-        hold pos = pos + 1
-        hold ppd = 1
-        hold ppq = 0
-        hold pprun = 1
-        while pprun == 1 {
-          when pos >= n {
-            hold pprun = 0
-          } otherwise {
-            hold ppch = sx_index(source,pos)
-            when ppq == 1 {
-              when ppch == 92 {
-                hold pos = pos + 1
-              } otherwise {
-                when ppch == 34 {
-                  hold ppq = 0
-                }
-              }
-            } otherwise {
-              when ppch == 34 {
-                hold ppq = 1
-              } otherwise {
-                when ppch == 40 {
-                  hold ppd = ppd + 1
-                } otherwise {
-                  when ppch == 41 {
-                    hold ppd = ppd - 1
-                    when ppd == 0 {
-                      hold pprun = 0
-                    }
-                  }
-                }
-              }
-            }
-            hold pos = pos + 1
-          }
-        }
-        hold rhs = "0"
-        hold rk = 0
-      }
 
       // RHS: string literal
       when c1 == 34 {
@@ -993,7 +1758,12 @@ while running == 1 {
                     hold rn = 0
                   } otherwise {
                     hold cd = sx_index(source,pos)
-                    when cd >= 48 && cd <= 57 {
+                    // a `.` followed by a digit continues the number (2.5)
+                    hold cdn = 0
+                    when pos + 1 < n {
+                      hold cdn = sx_index(source,pos + 1)
+                    }
+                    when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
                       hold el = concat(el, chr(cd))
                       hold pos = pos + 1
                     } otherwise {
@@ -1018,6 +1788,81 @@ while running == 1 {
                     }
                   }
                 }
+              }
+              // list elements are numbers: a string, list or struct variable
+              // (or anything that is not a number or a name) is a clear error
+              // instead of invalid C such as sx_llit(1,(double)(p))
+              hold lbad = 0
+              hold pexpr = concat("|", el)
+              hold pexpr = concat(pexpr, "|")
+              hold psrc = concat(sdecls, ldecls)
+              hold pkey = pexpr
+              hold pfound = 0
+              hold pi2 = 0
+              hold pa2 = len(psrc)
+              hold pb2 = len(pkey)
+              while pi2 + pb2 <= pa2 {
+                hold pok2 = 1
+                hold pj2 = 0
+                while pj2 < pb2 {
+                  hold pa3 = sx_index(psrc, pi2 + pj2)
+                  hold pb3 = sx_index(pkey, pj2)
+                  when pa3 == pb3 {
+                    hold pj2 = pj2 + 1
+                  } otherwise {
+                    hold pok2 = 0
+                    hold pj2 = pb2
+                  }
+                }
+                when pok2 == 1 {
+                  hold pfound = 1
+                  hold pi2 = pa2
+                } otherwise {
+                  hold pi2 = pi2 + 1
+                }
+              }
+              when pfound == 1 {
+                hold lbad = 1
+              }
+              hold pexpr = concat("|", el)
+              hold pexpr = concat(pexpr, "=")
+              hold psrc = svars
+              hold pkey = pexpr
+              hold pfound = 0
+              hold pi2 = 0
+              hold pa2 = len(psrc)
+              hold pb2 = len(pkey)
+              while pi2 + pb2 <= pa2 {
+                hold pok2 = 1
+                hold pj2 = 0
+                while pj2 < pb2 {
+                  hold pa3 = sx_index(psrc, pi2 + pj2)
+                  hold pb3 = sx_index(pkey, pj2)
+                  when pa3 == pb3 {
+                    hold pj2 = pj2 + 1
+                  } otherwise {
+                    hold pok2 = 0
+                    hold pj2 = pb2
+                  }
+                }
+                when pok2 == 1 {
+                  hold pfound = 1
+                  hold pi2 = pa2
+                } otherwise {
+                  hold pi2 = pi2 + 1
+                }
+              }
+              when pfound == 1 {
+                hold lbad = 1
+              }
+              when sx_eq(el, "") {
+                hold lbad = 1
+              }
+              when lbad == 1 {
+                when perr == 0 {
+                  hold permsg = "list elements must be numbers or numeric variables (a list cannot hold a string, list or struct)"
+                }
+                hold perr = 1
               }
               when nels > 0 {
                 hold lelems = concat(lelems, ",")
@@ -1071,8 +1916,21 @@ while running == 1 {
             hold pos = pos + 1
           }
         }
+        // the element count in decimal (chr(48 + nels) broke at 10 elements)
+        hold lnum = nels
+        hold lcount = ""
+        when lnum == 0 {
+          hold lcount = "0"
+        }
+        while lnum > 0 {
+          hold ldig = lnum % 10
+          hold ltmp = chr(48 + ldig)
+          hold lcount = concat(ltmp, lcount)
+          hold lnum = lnum - ldig
+          hold lnum = lnum / 10
+        }
         hold rhs = "sx_llit("
-        hold rhs = concat(rhs, chr(48 + nels))
+        hold rhs = concat(rhs, lcount)
         when nels > 0 {
           hold rhs = concat(rhs, ",")
           hold rhs = concat(rhs, lelems)
@@ -1095,7 +1953,12 @@ while running == 1 {
             hold rn = 0
           } otherwise {
             hold cd = sx_index(source,pos)
-            when cd >= 48 && cd <= 57 {
+            // a `.` followed by a digit continues the number (2.5)
+            hold cdn = 0
+            when pos + 1 < n {
+              hold cdn = sx_index(source,pos + 1)
+            }
+            when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
               hold numtxt = concat(numtxt, chr(cd))
               hold pos = pos + 1
             } otherwise {
@@ -1351,7 +2214,12 @@ while running == 1 {
                         hold rn = 0
                       } otherwise {
                         hold cd = sx_index(source,pos)
-                        when cd >= 48 && cd <= 57 {
+                        // a `.` followed by a digit continues the number (2.5)
+                        hold cdn = 0
+                        when pos + 1 < n {
+                          hold cdn = sx_index(source,pos + 1)
+                        }
+                        when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
                           hold el = concat(el, chr(cd))
                           hold pos = pos + 1
                         } otherwise {
@@ -2235,6 +3103,103 @@ while running == 1 {
             hold rt = 1
           }
           when fk == 10 {
+            // the pushed value must be a number: a plain string, list or
+            // struct variable is a clear error (it was invalid C)
+            hold pi2 = 0
+            hold pa2 = len(argv_c)
+            hold pv = 0
+            while pi2 < pa2 {
+              hold pa3 = sx_index(argv_c, pi2)
+              hold pi2 = pi2 + 1
+              when pa3 == 44 {
+                hold pv = pi2
+                hold pi2 = pa2
+              }
+            }
+            hold el = ""
+            hold pv2 = 1
+            hold pi2 = pv
+            while pi2 < pa2 {
+              hold pa3 = sx_index(argv_c, pi2)
+              when (pa3 >= 97 && pa3 <= 122) || (pa3 >= 65 && pa3 <= 90) || (pa3 >= 48 && pa3 <= 57) || pa3 == 95 {
+                hold el = concat(el, chr(pa3))
+              } otherwise {
+                hold pv2 = 0
+              }
+              hold pi2 = pi2 + 1
+            }
+            when pv2 == 1 && pv > 0 {
+              hold lbad = 0
+              hold pexpr = concat("|", el)
+              hold pexpr = concat(pexpr, "|")
+              hold psrc = concat(sdecls, ldecls)
+              hold pkey = pexpr
+              hold pfound = 0
+              hold pi2 = 0
+              hold pa2 = len(psrc)
+              hold pb2 = len(pkey)
+              while pi2 + pb2 <= pa2 {
+                hold pok2 = 1
+                hold pj2 = 0
+                while pj2 < pb2 {
+                  hold pa3 = sx_index(psrc, pi2 + pj2)
+                  hold pb3 = sx_index(pkey, pj2)
+                  when pa3 == pb3 {
+                    hold pj2 = pj2 + 1
+                  } otherwise {
+                    hold pok2 = 0
+                    hold pj2 = pb2
+                  }
+                }
+                when pok2 == 1 {
+                  hold pfound = 1
+                  hold pi2 = pa2
+                } otherwise {
+                  hold pi2 = pi2 + 1
+                }
+              }
+              when pfound == 1 {
+                hold lbad = 1
+              }
+              hold pexpr = concat("|", el)
+              hold pexpr = concat(pexpr, "=")
+              hold psrc = svars
+              hold pkey = pexpr
+              hold pfound = 0
+              hold pi2 = 0
+              hold pa2 = len(psrc)
+              hold pb2 = len(pkey)
+              while pi2 + pb2 <= pa2 {
+                hold pok2 = 1
+                hold pj2 = 0
+                while pj2 < pb2 {
+                  hold pa3 = sx_index(psrc, pi2 + pj2)
+                  hold pb3 = sx_index(pkey, pj2)
+                  when pa3 == pb3 {
+                    hold pj2 = pj2 + 1
+                  } otherwise {
+                    hold pok2 = 0
+                    hold pj2 = pb2
+                  }
+                }
+                when pok2 == 1 {
+                  hold pfound = 1
+                  hold pi2 = pa2
+                } otherwise {
+                  hold pi2 = pi2 + 1
+                }
+              }
+              when pfound == 1 {
+                hold lbad = 1
+              }
+              when lbad == 1 {
+                when perr == 0 {
+                  hold permsg = concat("push: '", el)
+                  hold permsg = concat(permsg, "' is not a number (a list cannot hold a string, list or struct)")
+                }
+                hold perr = 1
+              }
+            }
             hold rhs = concat("sx_lpush(", argv_c)
             hold rhs = concat(rhs, ")")
             hold rk = 2
@@ -2346,6 +3311,64 @@ while running == 1 {
           hold c2 = 0
           when pos < n {
             hold c2 = sx_index(source,pos)
+          }
+          // a list variable as a whole value: `hold ys = xs` aliases it, as
+          // in seed-min and native (it used to emit `double ys = xs;`, which
+          // is invalid C).  xs[i] (c2 == '[') stays a number below; anything
+          // else after a list name (xs + 1) is a clear error.
+          when c2 != 91 {
+            hold key = concat("|", nm2)
+            hold key = concat(key, "|")
+            hold lfind = 0
+            hold di = 0
+            hold dl = len(ldecls)
+            hold kl = len(key)
+            while di + kl <= dl {
+              hold ok = 1
+              hold j = 0
+              while j < kl {
+                hold aa = sx_index(ldecls, di + j)
+                hold bb = sx_index(key, j)
+                when aa == bb {
+                  hold j = j + 1
+                } otherwise {
+                  hold ok = 0
+                  hold j = kl
+                }
+              }
+              when ok == 1 {
+                hold lfind = 1
+                hold di = dl
+              } otherwise {
+                hold di = di + 1
+              }
+            }
+            when lfind == 1 {
+              // pos may already be past the newline (at the next statement),
+              // so test for an operator rather than for the end of the line
+              hold lop = 0
+              when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 || c2 == 46 || c2 == 40 {
+                hold lop = 1
+              }
+              when c2 == 47 {
+                hold lop = 1
+                when pos + 1 < n {
+                  hold pc3 = sx_index(source, pos + 1)
+                  when pc3 == 47 {
+                    hold lop = 0
+                  }
+                }
+              }
+              when lop == 0 {
+                hold rk = 2
+              } otherwise {
+                when perr == 0 {
+                  hold permsg = concat("list '", nm2)
+                  hold permsg = concat(permsg, "' can only be held whole (hold ys = xs) or indexed (xs[i]); no operators on a list")
+                }
+                hold perr = 1
+              }
+            }
           }
           when c2 == 91 {
             hold pos = pos + 1
@@ -2858,7 +3881,12 @@ hold ec = 0
                 hold rn = 0
               } otherwise {
                 hold cd = sx_index(source,pos)
-                when cd >= 48 && cd <= 57 {
+                // a `.` followed by a digit continues the number (2.5)
+                hold cdn = 0
+                when pos + 1 < n {
+                  hold cdn = sx_index(source,pos + 1)
+                }
+                when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
                   hold numtxt = concat(numtxt, chr(cd))
                   hold pos = pos + 1
                 } otherwise {
@@ -3312,14 +4340,34 @@ hold ec = 0
               }
             }
           }
-          // the operand as text: while building a string a plain number or
-          // unknown name is quoted (the same text as before), a string value
-          // is used as-is
+          // string chains join strings only.  A number or numeric name used
+          // to be quoted as text, so `s + n` printed the NAME ("an" for
+          // n = 4): now string + number, number + string and - * / % on a
+          // string are clear errors (seed-min rejects them the same way)
           hold oterm = opnd
           when isstr == 1 {
+            when opch != 43 {
+              when perr == 0 {
+                hold permsg = concat("only + works on strings (found '", chr(opch))
+                hold permsg = concat(permsg, "')")
+              }
+              hold perr = 1
+            }
             when osfind == 0 {
-              hold oterm = concat(q, opnd)
-              hold oterm = concat(oterm, q)
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings; '", opnd)
+                hold permsg = concat(permsg, "' is not a string (a string + a number is not in the pure-min subset)")
+              }
+              hold perr = 1
+            }
+          }
+          when isstr == 0 {
+            when osfind == 1 {
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings or adds two numbers; '", opnd)
+                hold permsg = concat(permsg, "' is a string but the left side is not")
+              }
+              hold perr = 1
             }
           }
           hold moreop = 1
@@ -3365,6 +4413,10 @@ hold ec = 0
                 hold ct = concat(ct, " ")
                 hold ct = concat(ct, chr(opch))
                 hold ct = concat(ct, " ")
+                // `/` always divides doubles: 10 / 4 is 2.5, never C's 2
+                when opch == 47 {
+                  hold ct = concat(ct, "(double)")
+                }
                 hold ct = concat(ct, oterm)
                 hold ct = concat(ct, ")")
               }
@@ -3380,6 +4432,9 @@ hold ec = 0
           hold rhs = concat(rhs, ", ")
           hold rhs = concat(rhs, ct)
           hold rhs = concat(rhs, ")")
+          // sx_cat lives in the runtime prelude: request it (a chain that
+          // starts at a struct string field set nothing else that does)
+          hold rt = 1
         } otherwise {
           hold rhs = concat("(", addacc)
           hold rhs = concat(rhs, " ")
@@ -3497,52 +4552,6 @@ hold ec = 0
         hold c1 = sx_index(source,pos)
       }
 
-      // `(` as a base.  The C seed copies an expression verbatim and lets C
-      // parse it, so it accepts `(a + 3) * 4`; this compiler parses the
-      // expression structurally and has no parenthesized base.  Report that
-      // clearly (and emit `#error`) instead of silently emitting broken C
-      // such as `double b = ;`.
-      when c1 == 40 {
-        hold badparen = 1
-        hold pos = pos + 1
-        hold ppd = 1
-        hold ppq = 0
-        hold pprun = 1
-        while pprun == 1 {
-          when pos >= n {
-            hold pprun = 0
-          } otherwise {
-            hold ppch = sx_index(source,pos)
-            when ppq == 1 {
-              when ppch == 92 {
-                hold pos = pos + 1
-              } otherwise {
-                when ppch == 34 {
-                  hold ppq = 0
-                }
-              }
-            } otherwise {
-              when ppch == 34 {
-                hold ppq = 1
-              } otherwise {
-                when ppch == 40 {
-                  hold ppd = ppd + 1
-                } otherwise {
-                  when ppch == 41 {
-                    hold ppd = ppd - 1
-                    when ppd == 0 {
-                      hold pprun = 0
-                    }
-                  }
-                }
-              }
-            }
-            hold pos = pos + 1
-          }
-        }
-        hold rhs = "0"
-        hold rk = 0
-      }
 
       // string literal
       when c1 == 34 {
@@ -3592,7 +4601,12 @@ hold ec = 0
             hold rn = 0
           } otherwise {
             hold cd = sx_index(source,pos)
-            when cd >= 48 && cd <= 57 {
+            // a `.` followed by a digit continues the number (2.5)
+            hold cdn = 0
+            when pos + 1 < n {
+              hold cdn = sx_index(source,pos + 1)
+            }
+            when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
               hold numtxt = concat(numtxt, chr(cd))
               hold pos = pos + 1
             } otherwise {
@@ -4496,7 +5510,12 @@ hold ec = 0
                 hold rn = 0
               } otherwise {
                 hold cd = sx_index(source,pos)
-                when cd >= 48 && cd <= 57 {
+                // a `.` followed by a digit continues the number (2.5)
+                hold cdn = 0
+                when pos + 1 < n {
+                  hold cdn = sx_index(source,pos + 1)
+                }
+                when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
                   hold numtxt = concat(numtxt, chr(cd))
                   hold pos = pos + 1
                 } otherwise {
@@ -4950,14 +5969,34 @@ hold ec = 0
               }
             }
           }
-          // the operand as text: while building a string a plain number or
-          // unknown name is quoted (the same text as before), a string value
-          // is used as-is
+          // string chains join strings only.  A number or numeric name used
+          // to be quoted as text, so `s + n` printed the NAME ("an" for
+          // n = 4): now string + number, number + string and - * / % on a
+          // string are clear errors (seed-min rejects them the same way)
           hold oterm = opnd
           when isstr == 1 {
+            when opch != 43 {
+              when perr == 0 {
+                hold permsg = concat("only + works on strings (found '", chr(opch))
+                hold permsg = concat(permsg, "')")
+              }
+              hold perr = 1
+            }
             when osfind == 0 {
-              hold oterm = concat(q, opnd)
-              hold oterm = concat(oterm, q)
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings; '", opnd)
+                hold permsg = concat(permsg, "' is not a string (a string + a number is not in the pure-min subset)")
+              }
+              hold perr = 1
+            }
+          }
+          when isstr == 0 {
+            when osfind == 1 {
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings or adds two numbers; '", opnd)
+                hold permsg = concat(permsg, "' is a string but the left side is not")
+              }
+              hold perr = 1
             }
           }
           hold moreop = 1
@@ -5003,6 +6042,10 @@ hold ec = 0
                 hold ct = concat(ct, " ")
                 hold ct = concat(ct, chr(opch))
                 hold ct = concat(ct, " ")
+                // `/` always divides doubles: 10 / 4 is 2.5, never C's 2
+                when opch == 47 {
+                  hold ct = concat(ct, "(double)")
+                }
                 hold ct = concat(ct, oterm)
                 hold ct = concat(ct, ")")
               }
@@ -5018,6 +6061,9 @@ hold ec = 0
           hold rhs = concat(rhs, ", ")
           hold rhs = concat(rhs, ct)
           hold rhs = concat(rhs, ")")
+          // sx_cat lives in the runtime prelude: request it (a chain that
+          // starts at a struct string field set nothing else that does)
+          hold rt = 1
         } otherwise {
           hold rhs = concat("(", addacc)
           hold rhs = concat(rhs, " ")
@@ -5067,52 +6113,6 @@ hold ec = 0
         hold c1 = sx_index(source,pos)
       }
 
-      // `(` as a base.  The C seed copies an expression verbatim and lets C
-      // parse it, so it accepts `(a + 3) * 4`; this compiler parses the
-      // expression structurally and has no parenthesized base.  Report that
-      // clearly (and emit `#error`) instead of silently emitting broken C
-      // such as `double b = ;`.
-      when c1 == 40 {
-        hold badparen = 1
-        hold pos = pos + 1
-        hold ppd = 1
-        hold ppq = 0
-        hold pprun = 1
-        while pprun == 1 {
-          when pos >= n {
-            hold pprun = 0
-          } otherwise {
-            hold ppch = sx_index(source,pos)
-            when ppq == 1 {
-              when ppch == 92 {
-                hold pos = pos + 1
-              } otherwise {
-                when ppch == 34 {
-                  hold ppq = 0
-                }
-              }
-            } otherwise {
-              when ppch == 34 {
-                hold ppq = 1
-              } otherwise {
-                when ppch == 40 {
-                  hold ppd = ppd + 1
-                } otherwise {
-                  when ppch == 41 {
-                    hold ppd = ppd - 1
-                    when ppd == 0 {
-                      hold pprun = 0
-                    }
-                  }
-                }
-              }
-            }
-            hold pos = pos + 1
-          }
-        }
-        hold rhs = "0"
-        hold rk = 0
-      }
       when c1 == 104 {
         hold c2 = 0
         when pos + 1 < n {
@@ -5175,6 +6175,86 @@ hold ec = 0
         hold ctrim = concat(ctrim, chr(sx_index(cond,ci)))
         hold ci = ci + 1
       }
+    }
+
+    // ================= give EXPR =================
+    when act == 6 {
+      hold pos = pos + 4
+      hold sk = 1
+      while sk == 1 {
+        when pos >= n {
+          hold sk = 0
+        } otherwise {
+          hold cs = sx_index(source,pos)
+          when cs == 32 || cs == 9 || cs == 13 {
+            hold pos = pos + 1
+          } otherwise {
+            hold sk = 0
+          }
+        }
+      }
+      hold gexpr = ""
+      hold gr = 1
+      while gr == 1 {
+        when pos >= n {
+          hold gr = 0
+        } otherwise {
+          hold cs = sx_index(source,pos)
+          when cs == 10 || cs == 13 {
+            hold gr = 0
+          } otherwise {
+            when cs == 47 {
+              hold c2 = 0
+              when pos + 1 < n {
+                hold c2 = sx_index(source, pos + 1)
+              }
+              when c2 == 47 {
+                hold gr = 0
+              } otherwise {
+                hold gexpr = concat(gexpr, chr(cs))
+                hold pos = pos + 1
+              }
+            } otherwise {
+              // `}` on a give line means the block brace was swallowed:
+              // statements are newline-terminated in pure-min
+              when cs == 125 {
+                hold exbad4 = 1
+              }
+              hold gexpr = concat(gexpr, chr(cs))
+              hold pos = pos + 1
+            }
+          }
+        }
+      }
+      hold gl = len(gexpr)
+      hold trim = 1
+      while trim == 1 {
+        when gl <= 0 {
+          hold trim = 0
+        } otherwise {
+          hold cs = sx_index(gexpr, gl - 1)
+          when cs == 32 || cs == 9 {
+            hold gl = gl - 1
+          } otherwise {
+            hold trim = 0
+          }
+        }
+      }
+      hold gtrim = ""
+      hold gi = 0
+      while gi < gl {
+        hold gtrim = concat(gtrim, chr(sx_index(gexpr, gi)))
+        hold gi = gi + 1
+      }
+      hold ctrim = gtrim
+      hold cl = gl
+    }
+
+    // ---- shared rewrite: conditions (act 3), give (act 6) and
+    //      parenthesized hold/show expressions (act 8) are verbatim C in
+    //      ctrim/cl; lower `%` to the long-cast form and make `/` a double
+    //      division.  Result in crepl. ----
+    when act == 3 || act == 6 || act == 8 {
       // ---- rewrite '%' in the condition to the long-cast form ----
       // C precedence already matches pure-min for + - * / and the
       // comparisons, so only '%' needs work here:
@@ -5361,10 +6441,18 @@ hold ec = 0
             hold cwi = cwre
           } otherwise {
             hold crepl = concat(crepl, chr(ccx))
+            // `/` always divides doubles (10 / 4 is 2.5, never C's 2)
+            when ccx == 47 {
+              hold crepl = concat(crepl, "(double)")
+            }
             hold cwi = cwi + 1
           }
         }
       }
+    }
+
+    // ---- while/when: emit ----
+    when act == 3 {
       when pos < n {
         hold cs = sx_index(source,pos)
         when cs == 123 {
@@ -5389,6 +6477,166 @@ hold ec = 0
       hold body = concat(body, ") {")
       hold body = concat(body, nl)
       hold depth = depth + 1
+    }
+
+    // ---- give: emit ----
+    when act == 6 {
+      hold body = concat(body, "  return ")
+      hold body = concat(body, crepl)
+      hold body = concat(body, ";")
+      hold body = concat(body, nl)
+    }
+
+    // ================= hold/show with a parenthesized expression =================
+    // ctrim was validated in the pre-checks and rewritten into crepl
+    when act == 8 {
+      hold ind = "  "
+      hold wk = 0
+      while wk < depth {
+        hold ind = concat(ind, "  ")
+        hold wk = wk + 1
+      }
+      when pmode == 2 {
+        hold body = concat(body, ind)
+        hold body = concat(body, "printf(\"%g\\n\", (double)(")
+        hold body = concat(body, crepl)
+        hold body = concat(body, "));")
+        hold body = concat(body, nl)
+        hold shows = shows + 1
+      } otherwise {
+        hold pkey = concat("|", pnm)
+        hold pkey = concat(pkey, "|")
+        hold psrc = sdecls
+        hold pfound = 0
+        hold pi2 = 0
+        hold pa2 = len(psrc)
+        hold pb2 = len(pkey)
+        while pi2 + pb2 <= pa2 {
+          hold pok2 = 1
+          hold pj2 = 0
+          while pj2 < pb2 {
+            hold pa3 = sx_index(psrc, pi2 + pj2)
+            hold pb3 = sx_index(pkey, pj2)
+            when pa3 == pb3 {
+              hold pj2 = pj2 + 1
+            } otherwise {
+              hold pok2 = 0
+              hold pj2 = pb2
+            }
+          }
+          when pok2 == 1 {
+            hold pfound = 1
+            hold pi2 = pa2
+          } otherwise {
+            hold pi2 = pi2 + 1
+          }
+        }
+        hold pok2 = pfound
+        hold psrc = ldecls
+        hold pfound = 0
+        hold pi2 = 0
+        hold pa2 = len(psrc)
+        hold pb2 = len(pkey)
+        while pi2 + pb2 <= pa2 {
+          hold pok2 = 1
+          hold pj2 = 0
+          while pj2 < pb2 {
+            hold pa3 = sx_index(psrc, pi2 + pj2)
+            hold pb3 = sx_index(pkey, pj2)
+            when pa3 == pb3 {
+              hold pj2 = pj2 + 1
+            } otherwise {
+              hold pok2 = 0
+              hold pj2 = pb2
+            }
+          }
+          when pok2 == 1 {
+            hold pfound = 1
+            hold pi2 = pa2
+          } otherwise {
+            hold pi2 = pi2 + 1
+          }
+        }
+        when pfound == 1 {
+          hold pok2 = 1
+        }
+        hold pkey = concat("|", pnm)
+        hold pkey = concat(pkey, "=")
+        hold psrc = svars
+        hold pfound = 0
+        hold pi2 = 0
+        hold pa2 = len(psrc)
+        hold pb2 = len(pkey)
+        while pi2 + pb2 <= pa2 {
+          hold pok2 = 1
+          hold pj2 = 0
+          while pj2 < pb2 {
+            hold pa3 = sx_index(psrc, pi2 + pj2)
+            hold pb3 = sx_index(pkey, pj2)
+            when pa3 == pb3 {
+              hold pj2 = pj2 + 1
+            } otherwise {
+              hold pok2 = 0
+              hold pj2 = pb2
+            }
+          }
+          when pok2 == 1 {
+            hold pfound = 1
+            hold pi2 = pa2
+          } otherwise {
+            hold pi2 = pi2 + 1
+          }
+        }
+        when pfound == 1 {
+          hold pok2 = 1
+        }
+        when pok2 == 1 {
+          when perr == 0 {
+            hold permsg = concat("cannot hold a number in '", pnm)
+            hold permsg = concat(permsg, "', which already holds a string, list or struct")
+          }
+          hold perr = 1
+        }
+        hold pkey = concat("|", pnm)
+        hold pkey = concat(pkey, "|")
+        hold psrc = decls
+        hold pfound = 0
+        hold pi2 = 0
+        hold pa2 = len(psrc)
+        hold pb2 = len(pkey)
+        while pi2 + pb2 <= pa2 {
+          hold pok2 = 1
+          hold pj2 = 0
+          while pj2 < pb2 {
+            hold pa3 = sx_index(psrc, pi2 + pj2)
+            hold pb3 = sx_index(pkey, pj2)
+            when pa3 == pb3 {
+              hold pj2 = pj2 + 1
+            } otherwise {
+              hold pok2 = 0
+              hold pj2 = pb2
+            }
+          }
+          when pok2 == 1 {
+            hold pfound = 1
+            hold pi2 = pa2
+          } otherwise {
+            hold pi2 = pi2 + 1
+          }
+        }
+        hold body = concat(body, ind)
+        when pfound == 0 {
+          hold body = concat(body, "double ")
+          hold decls = concat(decls, pnm)
+          hold decls = concat(decls, "|")
+        }
+        hold body = concat(body, pnm)
+        hold body = concat(body, " = (")
+        hold body = concat(body, crepl)
+        hold body = concat(body, ");")
+        hold body = concat(body, nl)
+        hold holds = holds + 1
+      }
     }
 
     // ================= } and } otherwise { =================
@@ -5642,81 +6890,6 @@ hold ec = 0
       hold depth = depth + 1
     }
 
-    // ================= give EXPR =================
-    when act == 6 {
-      hold pos = pos + 4
-      hold sk = 1
-      while sk == 1 {
-        when pos >= n {
-          hold sk = 0
-        } otherwise {
-          hold cs = sx_index(source,pos)
-          when cs == 32 || cs == 9 || cs == 13 {
-            hold pos = pos + 1
-          } otherwise {
-            hold sk = 0
-          }
-        }
-      }
-      hold gexpr = ""
-      hold gr = 1
-      while gr == 1 {
-        when pos >= n {
-          hold gr = 0
-        } otherwise {
-          hold cs = sx_index(source,pos)
-          when cs == 10 || cs == 13 {
-            hold gr = 0
-          } otherwise {
-            when cs == 47 {
-              hold c2 = 0
-              when pos + 1 < n {
-                hold c2 = sx_index(source, pos + 1)
-              }
-              when c2 == 47 {
-                hold gr = 0
-              } otherwise {
-                hold gexpr = concat(gexpr, chr(cs))
-                hold pos = pos + 1
-              }
-            } otherwise {
-              // `}` on a give line means the block brace was swallowed:
-              // statements are newline-terminated in pure-min
-              when cs == 125 {
-                hold exbad4 = 1
-              }
-              hold gexpr = concat(gexpr, chr(cs))
-              hold pos = pos + 1
-            }
-          }
-        }
-      }
-      hold gl = len(gexpr)
-      hold trim = 1
-      while trim == 1 {
-        when gl <= 0 {
-          hold trim = 0
-        } otherwise {
-          hold cs = sx_index(gexpr, gl - 1)
-          when cs == 32 || cs == 9 {
-            hold gl = gl - 1
-          } otherwise {
-            hold trim = 0
-          }
-        }
-      }
-      hold gtrim = ""
-      hold gi = 0
-      while gi < gl {
-        hold gtrim = concat(gtrim, chr(sx_index(gexpr, gi)))
-        hold gi = gi + 1
-      }
-      hold body = concat(body, "  return ")
-      hold body = concat(body, gtrim)
-      hold body = concat(body, ";")
-      hold body = concat(body, nl)
-    }
-
     // not a statement character: skip it
 
 
@@ -5830,7 +7003,16 @@ hold ec = 0
       hold sdefs = concat(sdefs, ";")
     }
 
+    // not the start of any statement: a stray character left over after a
+    // statement (`hold x = 2.`, `show a b`) is a clear error, never skipped
     when act == 0 {
+      when c != 47 {
+        when perr == 0 {
+          hold permsg = concat("unexpected '", chr(c))
+          hold permsg = concat(permsg, "' (expected the end of the statement or a new statement)")
+        }
+        hold perr = 1
+      }
       hold pos = pos + 1
     }
 
@@ -6100,10 +7282,12 @@ when exbad4 == 1 {
   hold exerr = concat(exerr, nl)
   show "min: a '}' ended up inside a give expression; put one statement per line"
 }
-when badparen == 1 {
-  hold exerr = concat(exerr, "#error sayanox-min: a parenthesized base is not supported by this compiler; write the expression without outer parentheses or use a named variable (the C seed accepts it)")
+when perr == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: ")
+  hold exerr = concat(exerr, permsg)
   hold exerr = concat(exerr, nl)
-  show "min: a parenthesized base is not supported by this compiler; write the expression without outer parentheses"
+  hold shmsg = concat("min: ", permsg)
+  show shmsg
 }
 when exbad3 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: unsupported index expression (number or name only)")
