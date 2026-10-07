@@ -4323,6 +4323,9 @@ hold ec = 0
           hold rhs = concat(rhs, ", ")
           hold rhs = concat(rhs, ct)
           hold rhs = concat(rhs, ")")
+          // sx_cat lives in the runtime prelude: request it (a chain that
+          // starts at a struct string field set nothing else that does)
+          hold rt = 1
         } otherwise {
           hold rhs = concat("(", addacc)
           hold rhs = concat(rhs, " ")
@@ -5949,6 +5952,9 @@ hold ec = 0
           hold rhs = concat(rhs, ", ")
           hold rhs = concat(rhs, ct)
           hold rhs = concat(rhs, ")")
+          // sx_cat lives in the runtime prelude: request it (a chain that
+          // starts at a struct string field set nothing else that does)
+          hold rt = 1
         } otherwise {
           hold rhs = concat("(", addacc)
           hold rhs = concat(rhs, " ")

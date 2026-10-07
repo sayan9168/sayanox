@@ -205,6 +205,15 @@ test-user:
 	@grep -q 'char \*name; double age' $(TESTS)/ts_user_g2.c
 	@./$(TESTS)/ts_user_sm > $(TESTS)/ts_user_sm.out; ./$(TESTS)/ts_user_g2 > $(TESTS)/ts_user_g2.out; \
 	 cmp $(TESTS)/ts_user_sm.out $(TESTS)/ts_user_g2.out
+	@# a program whose ONLY string operation is a chain starting at a struct
+	@# field: gen2 used to leave sx_cat out of the runtime (link error)
+	@printf 'struct U {\n  name\n}\nhold u = U { name: "x" }\nhold t = u.name + "y"\nshow t\nshow u.name + "z"\n' > $(TESTS)/ts_fcat.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_fcat.sa > $(TESTS)/ts_fcat_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_fcat_sm $(TESTS)/ts_fcat_sm.c
+	$(call assert-out,./$(TESTS)/ts_fcat_sm,xy\nxz)
+	./$(GEN2) $(TESTS)/ts_fcat.sa $(TESTS)/ts_fcat_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_fcat_g2 $(TESTS)/ts_fcat_g2.c
+	$(call assert-out,./$(TESTS)/ts_fcat_g2,xy\nxz)
 	$(call assert-out,./$(TESTS)/ts_user_g2,Ada\n36\nAda\nAda!\n37\nBob\n3)
 	@printf 'struct User {\n  name,\n  age\n}\nhold a = User { name: "Ada", age: 36 }\nhold b = User { name: 1, age: 2 }\n' > $(TESTS)/ts_userbad.sa
 	@./$(GEN2) $(TESTS)/ts_userbad.sa $(TESTS)/ts_userbad.c >/dev/null; grep -q '#error' $(TESTS)/ts_userbad.c
@@ -531,6 +540,9 @@ test-native-num: $(NATIVE_BIN)
 	@printf 'show 1 / 0\nshow 0 - 1 / 0\nshow 0 / 0\nhold s = "v="\nshow s + 2.5\nshow 1 + s\n' > $(TESTS)/ts_div0.sa
 	./$(NATIVE_BIN) $(TESTS)/ts_div0.sa $(TESTS)/ts_div0_nat
 	$(call assert-out,./$(TESTS)/ts_div0_nat,inf\n-inf\n-nan\nv=2.5\n1v=)
+	@printf 'struct U {\n  name\n}\nhold u = U { name: "x" }\nhold t = u.name + "y"\nshow t\nshow u.name + "z"\n' > $(TESTS)/ts_fcat_n.sa
+	./$(NATIVE_BIN) $(TESTS)/ts_fcat_n.sa $(TESTS)/ts_fcat_nat
+	$(call assert-out,./$(TESTS)/ts_fcat_nat,xy\nxz)
 	@printf 'show 1 / 0\nshow 0 - 1 / 0\nshow 0 / 0\n' > $(TESTS)/ts_div0b.sa
 	./$(SEED_MIN_BIN) $(TESTS)/ts_div0b.sa > $(TESTS)/ts_div0b_sm.c
 	$(CC) -O2 -o $(TESTS)/ts_div0b_sm $(TESTS)/ts_div0b_sm.c 2>/dev/null
