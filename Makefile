@@ -580,11 +580,18 @@ test-push-stmt:
 	@./$(SEED_MIN_BIN) $(TESTS)/ts_pushbad.sa 2>&1 >/dev/null | grep -q "'n' is not a list"
 	@./$(GEN2) $(TESTS)/ts_pushbad.sa $(TESTS)/ts_pushbad_g2.c >/dev/null 2>&1 || true
 	@grep -q "'n' is not a list" $(TESTS)/ts_pushbad_g2.c
-	@printf 'hold i = 0\nwhile i < 3 {\n  hold i = i + 1\n  when i == 2 { continue }\n}\n' > $(TESTS)/ts_unkstmt.sa
+	@printf 'hold i = 0\nwhile i < 3 {\n  hold i = i + 1\n  when i == 2 { kantho }\n}\n' > $(TESTS)/ts_unkstmt.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_unkstmt.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted an unknown statement"; exit 1; fi
 	@./$(GEN2) $(TESTS)/ts_unkstmt.sa $(TESTS)/ts_unkstmt_g2.c >/dev/null 2>&1 || true
-	@grep -q "unknown statement 'continue'" $(TESTS)/ts_unkstmt_g2.c
+	@grep -q "unknown statement 'kantho'" $(TESTS)/ts_unkstmt_g2.c
+	@# continue is a full-language (gen2+) statement, still unknown to the seed
+	@printf 'hold i = 0\nwhile i < 3 {\n  hold i = i + 1\n  when i == 2 { continue }\n}\nshow i\n' > $(TESTS)/ts_cont.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_cont.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted continue (a gen2-only statement)"; exit 1; fi
+	./$(GEN2) $(TESTS)/ts_cont.sa $(TESTS)/ts_cont_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_cont_g2 $(TESTS)/ts_cont_g2.c
+	$(call assert-out,./$(TESTS)/ts_cont_g2,3)
 	@printf 'hold a = 1\nshow a b\n' > $(TESTS)/ts_junk.sa
 	@./$(GEN2) $(TESTS)/ts_junk.sa $(TESTS)/ts_junk_g2.c >/dev/null 2>&1 || true
 	@grep -q '#error' $(TESTS)/ts_junk_g2.c

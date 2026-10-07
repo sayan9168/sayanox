@@ -81,7 +81,7 @@ static char *expand_use(const char *src, int depth){
 
 static char *S; static size_t N, P;
 enum { TY_NUM=0, TY_STR=1, TY_LIST=2, TY_STRUCT=3 };
-static char *vn[512]; static int vt[512]; static int vs[512];
+static char *vn[2048]; static int vt[2048]; static int vs[2048];
 static int nv;
 static int in_fn;
 /* index of the struct the last atom() built (a struct literal); -1 otherwise.
@@ -129,12 +129,12 @@ static const char *ftyname(int si, int f){
 }
 static void setv(const char *n, int ty){
   int i=findv(n);
-  if(i<0){ if(nv>=512) die("too many vars"); vn[nv]=strdup(n); vt[nv]=ty; vs[nv]=-1; nv++; }
+  if(i<0){ if(nv>=2048) die("too many vars"); vn[nv]=strdup(n); vt[nv]=ty; vs[nv]=-1; nv++; }
   else vt[i]=ty;
 }
 static void setv_struct(const char *n, int si){
   int i=findv(n);
-  if(i<0){ if(nv>=512) die("too many vars"); vn[nv]=strdup(n); vt[nv]=TY_STRUCT; vs[nv]=si; nv++; }
+  if(i<0){ if(nv>=2048) die("too many vars"); vn[nv]=strdup(n); vt[nv]=TY_STRUCT; vs[nv]=si; nv++; }
   else { vt[i]=TY_STRUCT; vs[i]=si; }
 }
 static int getty(const char *n){ int i=findv(n); return i<0?TY_NUM:vt[i]; }

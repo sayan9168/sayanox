@@ -119,6 +119,130 @@ hold gl = 0
 hold gi = 0
 hold trim = 0
 
+// ---------------- full-language state ----------------
+// blk: the kind of every open block, innermost last ('w' while, 'f' for,
+//      'i' when, 'e' else/elif body, 'm' make).  It is what makes
+//      `break`/`continue` outside a loop a compile-time error instead of
+//      invalid C, and it lets act 4 close the right thing.
+// loopd: number of open loops (blk entries that are 'w' or 'f').
+// cmpop: 0 = plain `=`, otherwise the operator char of `+= -= *= /= %=`.
+hold blk = ""
+hold loopd = 0
+hold cmpop = 0
+hold fvname = ""
+hold fva = ""
+hold fvb = ""
+hold fvok = 0
+hold elcond = ""
+hold elmode = 0
+hold enormal = 1
+// elif (`} elif COND {`) state
+hold iselif = 0
+hold elen = 0
+hold ekw = ""
+hold eki = 0
+hold enx = 0
+hold eident = 0
+hold ew4 = ""
+hold ep = 0
+hold eskip = 0
+hold ec2 = 0
+hold eif = ""
+hold src2 = ""
+hold si = 0
+hold eclose = 0
+hold eck = 0
+hold ecc = 0
+hold ekt = ""
+hold eki2 = 0
+// close bookkeeping
+hold bkc = 0
+hold bkn = 0
+hold bkt = ""
+hold bki = 0
+hold bkt2 = ""
+hold bkl2 = 0
+// for-loop state
+hold fc2 = 0
+hold fva2 = ""
+hold fva3 = 0
+hold fvb2 = ""
+hold fvb3 = 0
+hold fvok2 = 0
+hold ferr = 0
+hold fmsg = ""
+hold fvkey = ""
+hold fvsrc = ""
+hold fvi = 0
+hold fvln = 0
+hold fvkl = 0
+hold fvj = 0
+hold fvli = 0
+hold fvrun = 0
+hold fvrun2 = 0
+hold fvchk = 0
+hold fl = 0
+hold fi = 0
+hold fwin = ""
+hold eci = 0
+hold edone = 0
+hold frk2 = 0
+hold frky = ""
+hold frky2 = 0
+hold frkl = 0
+hold frki = 0
+hold frkok = 0
+hold frkj = 0
+hold frka = 0
+hold frkb = 0
+hold declk = -1
+hold declt = ""
+hold aword = ""
+hold atype = ""
+hold dtok = 0
+hold dtok2 = 0
+hold cwid = ""
+hold cwj2 = 0
+hold cww = 0
+hold cwnx = 0
+hold cwcall = 0
+hold cwmap = ""
+hold cwarg = ""
+hold cwai = 0
+hold cwal2 = 0
+hold cwt = 0
+hold cwarg2 = ""
+hold cwa2 = 0
+hold cwlkey = ""
+hold cwlkl = 0
+hold cwll = 0
+hold cwli = 0
+hold cwlf = 0
+hold cwlok = 0
+hold cwlj = 0
+hold cwla = 0
+hold cwlb = 0
+hold fsret2 = 0
+hold fn_retkind = 110
+hold fn_params = ""
+hold fpt2 = ""
+hold fky = ""
+hold fkl = 0
+hold fksrc = ""
+hold fki = 0
+hold fkln = 0
+hold fkfound = 0
+hold fkok = 0
+hold fkj = 0
+hold fka = 0
+hold fkb = 0
+hold fkend = 0
+hold fkrun = 0
+hold rtword = ""
+hold fnnx = 0
+hold fnnx2 = 0
+hold cs2 = 0
+
 // ---------------- scratch ----------------
 hold key = ""
 hold nm = ""
@@ -854,6 +978,394 @@ while nqp < n {
     }
   }
 }
+// =====================================================================
+// function signature table (full language)
+//
+//   make NAME(a, b: str) -> num
+//
+// Collected in one pass over the spliced source BEFORE the main scan, so a
+// call can be typed even when the `make` line appears later in the file
+// (forward references are already allowed).  Three flat tables:
+//
+//   fsret  |name=K|          K is n (num), s (str) or l (list)
+//   fsptx  |name=double a, char *b|
+//   fspk   |name=ns|
+//
+// A function with no annotations stays numeric, exactly as before, so the
+// pure-min dialect is unchanged.
+// =====================================================================
+hold fsret = "|"
+hold fsptx = "|"
+hold fspk = "|"
+hold fsi = 0
+hold fsstart = 1
+hold fsstr = 0
+hold fscm = 0
+hold fsw = ""
+hold fsj = 0
+hold fsnx = 0
+hold fsp = 0
+hold fsname = ""
+hold fsrun = 0
+hold fsc3 = 0
+hold fstx = ""
+hold fspks = ""
+hold fspfirst = 0
+hold fsprun = 0
+hold fspn = ""
+hold fspk2 = 0
+hold fstype = ""
+hold fsret2 = 0
+hold fsc4 = 0
+hold fshave = 0
+hold fsrk = ""
+hold fsrkl = 0
+hold fsrl = 0
+hold fsri = 0
+hold fsok = 0
+hold fsrj = 0
+hold fsra = 0
+hold fsrb = 0
+hold fsc2 = 0
+hold fsc = 0
+while fsi < n {
+  hold fsc = sx_index(source, fsi)
+  when fsstr == 1 {
+    // inside a string literal
+    when fsc == 92 {
+      hold fsi = fsi + 2
+    } otherwise {
+      when fsc == 34 {
+        hold fsstr = 0
+      }
+      hold fsi = fsi + 1
+    }
+  } otherwise {
+    when fscm == 1 {
+      // inside a // comment
+      when fsc == 10 {
+        hold fscm = 0
+        hold fsstart = 1
+      }
+      hold fsi = fsi + 1
+    } otherwise {
+      when fsc == 34 {
+        hold fsstr = 1
+        hold fsstart = 0
+        hold fsi = fsi + 1
+      } otherwise {
+        when fsstart == 1 && fsc == 109 && fsi + 4 <= n {
+          hold fsw = ""
+          hold fsj = 0
+          while fsj < 4 {
+            hold fsw = concat(fsw, chr(sx_index(source, fsi + fsj)))
+            hold fsj = fsj + 1
+          }
+          hold fsnx = 0
+          when fsi + 4 < n {
+            hold fsnx = sx_index(source, fsi + 4)
+          }
+          when sx_eq(fsw, "make") && (fsnx == 32 || fsnx == 9 || fsnx == 40) {
+            // ---- parse `make NAME ( params ) -> TYPE` ----
+            hold fsp = fsi + 4
+            hold fsrun = 1
+            while fsrun == 1 {
+              when fsp >= n {
+                hold fsrun = 0
+              } otherwise {
+                hold fsc3 = sx_index(source, fsp)
+                when fsc3 == 32 || fsc3 == 9 || fsc3 == 13 || fsc3 == 10 {
+                  hold fsp = fsp + 1
+                } otherwise {
+                  hold fsrun = 0
+                }
+              }
+            }
+            hold fsname = ""
+            hold fsrun = 1
+            while fsrun == 1 {
+              when fsp >= n {
+                hold fsrun = 0
+              } otherwise {
+                hold fsc3 = sx_index(source, fsp)
+                when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) || (fsc3 >= 48 && fsc3 <= 57) || fsc3 == 95 {
+                  hold fsname = concat(fsname, chr(fsc3))
+                  hold fsp = fsp + 1
+                } otherwise {
+                  hold fsrun = 0
+                }
+              }
+            }
+            hold fsrun = 1
+            while fsrun == 1 {
+              when fsp >= n {
+                hold fsrun = 0
+              } otherwise {
+                hold fsc3 = sx_index(source, fsp)
+                when fsc3 == 32 || fsc3 == 9 || fsc3 == 13 || fsc3 == 10 {
+                  hold fsp = fsp + 1
+                } otherwise {
+                  hold fsrun = 0
+                }
+              }
+            }
+            hold fsc3 = 0
+            when fsp < n {
+              hold fsc3 = sx_index(source, fsp)
+            }
+            when fsc3 == 40 && sx_eq(fsname, "") == 0 {
+              hold fsp = fsp + 1
+              hold fstx = ""
+              hold fspks = ""
+              hold fspfirst = 1
+              hold fsprun = 1
+              while fsprun == 1 {
+                hold fsc3 = 0
+                when fsp < n {
+                  hold fsc3 = sx_index(source, fsp)
+                }
+                when fsp >= n {
+                  hold fsprun = 0
+                } otherwise {
+                  when fsc3 == 41 {
+                    hold fsp = fsp + 1
+                    hold fsprun = 0
+                  } otherwise {
+                    when fsc3 == 32 || fsc3 == 9 || fsc3 == 13 || fsc3 == 10 || fsc3 == 44 {
+                      hold fsp = fsp + 1
+                    } otherwise {
+                      when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) || fsc3 == 95 {
+                        hold fspn = ""
+                        hold fsrun = 1
+                        while fsrun == 1 {
+                          when fsp >= n {
+                            hold fsrun = 0
+                          } otherwise {
+                            hold fsc3 = sx_index(source, fsp)
+                            when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) || (fsc3 >= 48 && fsc3 <= 57) || fsc3 == 95 {
+                              hold fspn = concat(fspn, chr(fsc3))
+                              hold fsp = fsp + 1
+                            } otherwise {
+                              hold fsrun = 0
+                            }
+                          }
+                        }
+                        hold fsrun = 1
+                        while fsrun == 1 {
+                          when fsp >= n {
+                            hold fsrun = 0
+                          } otherwise {
+                            hold fsc3 = sx_index(source, fsp)
+                            when fsc3 == 32 || fsc3 == 9 || fsc3 == 13 {
+                              hold fsp = fsp + 1
+                            } otherwise {
+                              hold fsrun = 0
+                            }
+                          }
+                        }
+                        hold fspk2 = 110
+                        hold fsc3 = 0
+                        when fsp < n {
+                          hold fsc3 = sx_index(source, fsp)
+                        }
+                        when fsc3 == 58 {
+                          hold fsp = fsp + 1
+                          hold fsrun = 1
+                          while fsrun == 1 {
+                            when fsp >= n {
+                              hold fsrun = 0
+                            } otherwise {
+                              hold fsc3 = sx_index(source, fsp)
+                              when fsc3 == 32 || fsc3 == 9 || fsc3 == 13 {
+                                hold fsp = fsp + 1
+                              } otherwise {
+                                hold fsrun = 0
+                              }
+                            }
+                          }
+                          hold fstype = ""
+                          hold fsrun = 1
+                          while fsrun == 1 {
+                            when fsp >= n {
+                              hold fsrun = 0
+                            } otherwise {
+                              hold fsc3 = sx_index(source, fsp)
+                              when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) {
+                                hold fstype = concat(fstype, chr(fsc3))
+                                hold fsp = fsp + 1
+                              } otherwise {
+                                hold fsrun = 0
+                              }
+                            }
+                          }
+                          when sx_eq(fstype, "str") {
+                            hold fspk2 = 115
+                          }
+                          when sx_eq(fstype, "string") {
+                            hold fspk2 = 115
+                          }
+                          when sx_eq(fstype, "list") {
+                            hold fspk2 = 108
+                          }
+                          when sx_eq(fstype, "num") || sx_eq(fstype, "number") || sx_eq(fstype, "bool") || sx_eq(fstype, "double") {
+                            hold fspk2 = 110
+                          }
+                        }
+                        when fspfirst == 0 {
+                          hold fstx = concat(fstx, ", ")
+                        }
+                        when fspk2 == 115 {
+                          hold fstx = concat(fstx, "char *")
+                        } otherwise {
+                          when fspk2 == 108 {
+                            hold fstx = concat(fstx, "sx_list *")
+                          } otherwise {
+                            hold fstx = concat(fstx, "double ")
+                          }
+                        }
+                        hold fstx = concat(fstx, fspn)
+                        hold fspks = concat(fspks, chr(fspk2))
+                        hold fspfirst = 0
+                      } otherwise {
+                        hold fsp = fsp + 1
+                      }
+                    }
+                  }
+                }
+              }
+              // optional `-> TYPE`
+              hold fsrun = 1
+              while fsrun == 1 {
+                when fsp >= n {
+                  hold fsrun = 0
+                } otherwise {
+                  hold fsc3 = sx_index(source, fsp)
+                  when fsc3 == 32 || fsc3 == 9 || fsc3 == 13 {
+                    hold fsp = fsp + 1
+                  } otherwise {
+                    hold fsrun = 0
+                  }
+                }
+              }
+              hold fsret2 = 110
+              hold fsc3 = 0
+              hold fsc4 = 0
+              when fsp < n {
+                hold fsc3 = sx_index(source, fsp)
+              }
+              when fsp + 1 < n {
+                hold fsc4 = sx_index(source, fsp + 1)
+              }
+              when fsc3 == 45 && fsc4 == 62 {
+                hold fsp = fsp + 2
+                hold fsrun = 1
+                while fsrun == 1 {
+                  when fsp >= n {
+                    hold fsrun = 0
+                  } otherwise {
+                    hold fsc3 = sx_index(source, fsp)
+                    when fsc3 == 32 || fsc3 == 9 || fsc3 == 13 {
+                      hold fsp = fsp + 1
+                    } otherwise {
+                      hold fsrun = 0
+                    }
+                  }
+                }
+                hold fstype = ""
+                hold fsrun = 1
+                while fsrun == 1 {
+                  when fsp >= n {
+                    hold fsrun = 0
+                  } otherwise {
+                    hold fsc3 = sx_index(source, fsp)
+                    when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) {
+                      hold fstype = concat(fstype, chr(fsc3))
+                      hold fsp = fsp + 1
+                    } otherwise {
+                      hold fsrun = 0
+                    }
+                  }
+                }
+                when sx_eq(fstype, "str") || sx_eq(fstype, "string") {
+                  hold fsret2 = 115
+                }
+                when sx_eq(fstype, "list") {
+                  hold fsret2 = 108
+                }
+              }
+              // record it once (a later redefinition keeps the first)
+              hold fsrk = concat("|", fsname)
+              hold fsrk = concat(fsrk, "=")
+              hold fsrkl = len(fsrk)
+              hold fsrl = len(fsret)
+              hold fsri = 0
+              hold fshave = 0
+              while fsri + fsrkl <= fsrl {
+                hold fsok = 1
+                hold fsrj = 0
+                while fsrj < fsrkl {
+                  hold fsra = sx_index(fsret, fsri + fsrj)
+                  hold fsrb = sx_index(fsrk, fsrj)
+                  when fsra == fsrb {
+                    hold fsrj = fsrj + 1
+                  } otherwise {
+                    hold fsok = 0
+                    hold fsrj = fsrkl
+                  }
+                }
+                when fsok == 1 {
+                  hold fshave = 1
+                  hold fsri = fsrl
+                } otherwise {
+                  hold fsri = fsri + 1
+                }
+              }
+              when fshave == 0 {
+                hold fsret = concat(fsret, fsname)
+                hold fsret = concat(fsret, "=")
+                hold fsret = concat(fsret, chr(fsret2))
+                hold fsret = concat(fsret, "|")
+                hold fsptx = concat(fsptx, fsname)
+                hold fsptx = concat(fsptx, "=")
+                hold fsptx = concat(fsptx, fstx)
+                hold fsptx = concat(fsptx, "|")
+                hold fspk = concat(fspk, fsname)
+                hold fspk = concat(fspk, "=")
+                hold fspk = concat(fspk, fspks)
+                hold fspk = concat(fspk, "|")
+              }
+              hold fsi = fsp
+              hold fsstart = 0
+            } otherwise {
+              hold fsstart = 0
+              hold fsi = fsi + 1
+            }
+          } otherwise {
+            when fsc == 10 || fsc == 123 || fsc == 125 || fsc == 59 {
+              hold fsstart = 1
+            } otherwise {
+              when fsc == 32 || fsc == 9 || fsc == 13 {
+              } otherwise {
+                hold fsstart = 0
+              }
+            }
+            hold fsi = fsi + 1
+          }
+        } otherwise {
+          when fsc == 10 || fsc == 123 || fsc == 125 || fsc == 59 {
+            hold fsstart = 1
+          } otherwise {
+            when fsc == 32 || fsc == 9 || fsc == 13 {
+            } otherwise {
+              hold fsstart = 0
+            }
+          }
+          hold fsi = fsi + 1
+        }
+      }
+    }
+  }
+}
 while running == 1 {
 
   // ---- phase 1: skip blanks and // comments ----
@@ -972,6 +1484,7 @@ while running == 1 {
     hold bpush = 0
     hold pmode = 0
     hold pbad = 0
+    hold cmpop = 0
     when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 {
       hold uword = ""
       hold pp = pos
@@ -998,6 +1511,13 @@ while running == 1 {
       }
       when sx_eq(uword, "push") {
         hold pok2 = 2
+      }
+      // full-language statements: for / break / continue
+      when sx_eq(uword, "for") {
+        hold pok2 = 3
+      }
+      when sx_eq(uword, "break") || sx_eq(uword, "continue") {
+        hold pok2 = 4
       }
       when pok2 == 2 {
         // bare push(NAME, EXPR)
@@ -1135,6 +1655,20 @@ while running == 1 {
           }
         }
       }
+      // for NAME in A..B { ... }  ->  act 10 (full language)
+      when pok2 == 3 && pbad == 0 {
+        hold act = 10
+        hold pos = pp
+      }
+      // break / continue -> act 11 / act 12
+      when pok2 == 4 && pbad == 0 {
+        when sx_eq(uword, "break") {
+          hold act = 11
+        } otherwise {
+          hold act = 12
+        }
+        hold pos = pp
+      }
     }
     when act == 1 || act == 2 {
       when bpush == 0 {
@@ -1181,10 +1715,72 @@ while running == 1 {
               }
             }
           }
+          // optional `: TYPE` annotation (full language)
+          hold pc = 0
+          when pp < n {
+            hold pc = sx_index(source, pp)
+          }
+          when pc == 58 {
+            hold pp = pp + 1
+            hold prun = 1
+            while prun == 1 {
+              when pp >= n {
+                hold prun = 0
+              } otherwise {
+                hold pc = sx_index(source, pp)
+                when pc == 32 || pc == 9 || pc == 13 {
+                  hold pp = pp + 1
+                } otherwise {
+                  hold prun = 0
+                }
+              }
+            }
+            hold aword = ""
+            hold prun = 1
+            while prun == 1 {
+              when pp >= n {
+                hold prun = 0
+              } otherwise {
+                hold pc = sx_index(source, pp)
+                when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || (pc >= 48 && pc <= 57) || pc == 95 {
+                  hold aword = concat(aword, chr(pc))
+                  hold pp = pp + 1
+                } otherwise {
+                  hold prun = 0
+                }
+              }
+            }
+            hold atype = aword
+            hold prun = 1
+            while prun == 1 {
+              when pp >= n {
+                hold prun = 0
+              } otherwise {
+                hold pc = sx_index(source, pp)
+                when pc == 32 || pc == 9 || pc == 13 {
+                  hold pp = pp + 1
+                } otherwise {
+                  hold prun = 0
+                }
+              }
+            }
+          }
           when pp < n {
             hold pc = sx_index(source, pp)
             when pc == 61 {
               hold pp = pp + 1
+            } otherwise {
+              // compound assignment: NAME += EXPR (also -= *= /= %=)
+              hold pc2 = 0
+              when pp + 1 < n {
+                hold pc2 = sx_index(source, pp + 1)
+              }
+              when pc2 == 61 {
+                when pc == 43 || pc == 45 || pc == 42 || pc == 47 || pc == 37 {
+                  hold cmpop = pc
+                  hold pp = pp + 2
+                }
+              }
             }
           }
           hold prun = 1
@@ -1613,6 +2209,8 @@ while running == 1 {
 
     // ================= hold NAME = RHS =================
     when act == 1 {
+      hold declk = -1
+      hold declt = ""
       // bare push(xs, v): nm is already set and pos sits on `push`
       when bpush == 0 {
         hold pos = pos + 4
@@ -1646,7 +2244,74 @@ while running == 1 {
             }
           }
         }
-        // blanks then '='
+        // optional `: TYPE` annotation (full language): the declared kind
+        // is checked against the value's kind below
+        hold pc = 0
+        when pos < n {
+          hold pc = sx_index(source,pos)
+        }
+        when pc == 58 {
+          hold pos = pos + 1
+          hold sk = 1
+          while sk == 1 {
+            when pos >= n {
+              hold sk = 0
+            } otherwise {
+              hold cs = sx_index(source,pos)
+              when cs == 32 || cs == 9 || cs == 13 {
+                hold pos = pos + 1
+              } otherwise {
+                hold sk = 0
+              }
+            }
+          }
+          hold declt = ""
+          hold sk = 1
+          while sk == 1 {
+            when pos >= n {
+              hold sk = 0
+            } otherwise {
+              hold cs = sx_index(source,pos)
+              when (cs >= 97 && cs <= 122) || (cs >= 65 && cs <= 90) || (cs >= 48 && cs <= 57) || cs == 95 {
+                hold declt = concat(declt, chr(cs))
+                hold pos = pos + 1
+              } otherwise {
+                hold sk = 0
+              }
+            }
+          }
+          hold dtok2 = 0
+          when sx_eq(declt, "str") || sx_eq(declt, "string") {
+            hold declk = 1
+            hold dtok2 = 1
+          }
+          when sx_eq(declt, "list") {
+            hold declk = 2
+            hold dtok2 = 1
+          }
+          when sx_eq(declt, "num") || sx_eq(declt, "number") || sx_eq(declt, "bool") || sx_eq(declt, "double") {
+            hold declk = 0
+            hold dtok2 = 1
+          }
+          when dtok2 == 0 {
+            // a struct type name
+            hold declk = 3
+          }
+          hold sk = 1
+          while sk == 1 {
+            when pos >= n {
+              hold sk = 0
+            } otherwise {
+              hold cs = sx_index(source,pos)
+              when cs == 32 || cs == 9 || cs == 13 {
+                hold pos = pos + 1
+              } otherwise {
+                hold sk = 0
+              }
+            }
+          }
+        }
+        // blanks then '=' (or a compound operator: `+= -= *= /= %=`)
         hold sk = 1
         while sk == 1 {
           when pos >= n {
@@ -1658,8 +2323,71 @@ while running == 1 {
             } otherwise {
               when cs == 61 {
                 hold pos = pos + 1
+              } otherwise {
+                hold cs2 = 0
+                when pos + 1 < n {
+                  hold cs2 = sx_index(source,pos + 1)
+                }
+                when cs2 == 61 {
+                  when cs == 43 || cs == 45 || cs == 42 || cs == 47 || cs == 37 {
+                    hold cmpop = cs
+                    hold pos = pos + 2
+                  }
+                }
               }
               hold sk = 0
+            }
+          }
+        }
+        // blanks after the assignment operator
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+        // a compound assignment always targets an existing variable, and
+        // the operator itself decides the kind (num vs str) so the shared
+        // compound emit below can build `x = x op EXPR`
+        when cmpop != 0 {
+          hold found2 = 0
+          hold k2 = concat("|", nm)
+          hold k2 = concat(k2, "|")
+          hold d2i = 0
+          hold d2l = len(decls)
+          hold k2l = len(k2)
+          while d2i + k2l <= d2l {
+            hold ok2 = 1
+            hold j2 = 0
+            while j2 < k2l {
+              hold aa2 = sx_index(decls, d2i + j2)
+              hold bb2 = sx_index(k2, j2)
+              when aa2 == bb2 {
+                hold j2 = j2 + 1
+              } otherwise {
+                hold ok2 = 0
+                hold j2 = k2l
+              }
+            }
+            when ok2 == 1 {
+              hold found2 = 1
+              hold d2i = d2l
+            } otherwise {
+              hold d2i = d2i + 1
+            }
+          }
+          when found2 == 0 {
+            hold nerrscop = 1
+            when sx_eq(scopmsg, "") {
+              hold scopmsg = concat("compound assignment to undeclared '", nm)
+              hold scopmsg = concat(scopmsg, "'; declare it with hold first")
             }
           }
         }
@@ -3228,6 +3956,41 @@ while running == 1 {
             hold rhs = concat(nm2, "(")
             hold rhs = concat(rhs, argv_c)
             hold rhs = concat(rhs, ")")
+            // a `-> str` function yields a string value
+            hold frk2 = 0
+            hold frky = concat("|", nm2)
+            hold frky = concat(frky, "=")
+            hold frky2 = len(frky)
+            hold frkl = len(fsret)
+            hold frki = 0
+            while frki + frky2 + 1 <= frkl {
+              hold frkok = 1
+              hold frkj = 0
+              while frkj < frky2 {
+                hold frka = sx_index(fsret, frki + frkj)
+                hold frkb = sx_index(frky, frkj)
+                when frka == frkb {
+                  hold frkj = frkj + 1
+                } otherwise {
+                  hold frkok = 0
+                  hold frkj = frky2
+                }
+              }
+              when frkok == 1 {
+                hold frk2 = sx_index(fsret, frki + frky2)
+                hold frki = frkl
+              } otherwise {
+                hold frki = frki + 1
+              }
+            }
+            when frk2 == 115 {
+              hold rk = 1
+              hold rt = 1
+            }
+            when frk2 == 108 {
+              hold rk = 2
+              hold lt = 1
+            }
           }
         }
 
@@ -4463,6 +5226,45 @@ hold ec = 0
       }
       hold rk = isstr
 
+      // ---- declared type check (full language) ----
+      when declk >= 0 {
+        hold dtok = 0
+        when declk == 0 && rk == 0 {
+          hold dtok = 1
+        }
+        when declk == 1 && rk == 1 {
+          hold dtok = 1
+        }
+        when declk == 2 && rk == 2 {
+          hold dtok = 1
+        }
+        when declk == 3 && rk == 3 {
+          when sx_eq(declt, stname) {
+            hold dtok = 1
+          }
+        }
+        when dtok == 0 {
+          hold nerrscop = 1
+          when sx_eq(scopmsg, "") {
+            hold scopmsg = concat("type error: '", nm)
+            hold scopmsg = concat(scopmsg, "' is declared ")
+            hold scopmsg = concat(scopmsg, declt)
+            when rk == 0 {
+              hold scopmsg = concat(scopmsg, " but the value is a number")
+            } otherwise {
+              when rk == 1 {
+                hold scopmsg = concat(scopmsg, " but the value is a string")
+              } otherwise {
+                when rk == 2 {
+                  hold scopmsg = concat(scopmsg, " but the value is a list")
+                } otherwise {
+                  hold scopmsg = concat(scopmsg, " but the value is a struct")
+                }
+              }
+            }
+          }
+        }
+      }
       // ---------- emit ----------
       hold ind = "  "
       hold wk = 0
@@ -4498,13 +5300,60 @@ hold ec = 0
       }
       when found == 1 {
         hold body = concat(body, ind)
-        hold body = concat(body, nm)
-        hold body = concat(body, " = ")
-        hold body = concat(body, rhs)
-        hold body = concat(body, ";")
+        when cmpop != 0 {
+          // compound assignment: NAME op= EXPR (the name is evaluated once)
+          when rk == 1 {
+            // strings: `+=` concatenates, the other operators are errors
+            when cmpop == 43 {
+              hold body = concat(body, nm)
+              hold body = concat(body, " = sx_cat(")
+              hold body = concat(body, nm)
+              hold body = concat(body, ", ")
+              hold body = concat(body, rhs)
+              hold body = concat(body, ");")
+              hold rt = 1
+            } otherwise {
+              hold nerrscop = 1
+              hold scopmsg = "compound assignment on a string supports only +="
+            }
+          } otherwise {
+            when rk == 0 {
+              hold body = concat(body, nm)
+              hold body = concat(body, " = ")
+              when cmpop == 37 {
+                hold body = concat(body, "sx_mod(")
+                hold body = concat(body, nm)
+                hold body = concat(body, ", ")
+                hold body = concat(body, rhs)
+                hold body = concat(body, ")")
+              } otherwise {
+                hold body = concat(body, "(")
+                hold body = concat(body, nm)
+                hold body = concat(body, " ")
+                hold body = concat(body, chr(cmpop))
+                hold body = concat(body, " ")
+                hold body = concat(body, rhs)
+                hold body = concat(body, ")")
+              }
+              hold body = concat(body, ";")
+            } otherwise {
+              hold nerrscop = 1
+              hold scopmsg = "compound assignment needs a number or string variable"
+            }
+          }
+        } otherwise {
+          hold body = concat(body, nm)
+          hold body = concat(body, " = ")
+          hold body = concat(body, rhs)
+          hold body = concat(body, ";")
+        }
         hold body = concat(body, nl)
       } otherwise {
         hold body = concat(body, ind)
+        when cmpop != 0 {
+          hold nerrscop = 1
+          hold scopmsg = "compound assignment needs an existing variable; hold it first"
+        }
         when rk == 1 {
           hold body = concat(body, "char *")
         } otherwise {
@@ -4918,6 +5767,41 @@ hold ec = 0
             hold rhs = concat(nm2, "(")
             hold rhs = concat(rhs, argv_c)
             hold rhs = concat(rhs, ")")
+            // a `-> str` function yields a string value
+            hold frk2 = 0
+            hold frky = concat("|", nm2)
+            hold frky = concat(frky, "=")
+            hold frky2 = len(frky)
+            hold frkl = len(fsret)
+            hold frki = 0
+            while frki + frky2 + 1 <= frkl {
+              hold frkok = 1
+              hold frkj = 0
+              while frkj < frky2 {
+                hold frka = sx_index(fsret, frki + frkj)
+                hold frkb = sx_index(frky, frkj)
+                when frka == frkb {
+                  hold frkj = frkj + 1
+                } otherwise {
+                  hold frkok = 0
+                  hold frkj = frky2
+                }
+              }
+              when frkok == 1 {
+                hold frk2 = sx_index(fsret, frki + frky2)
+                hold frki = frkl
+              } otherwise {
+                hold frki = frki + 1
+              }
+            }
+            when frk2 == 115 {
+              hold rk = 1
+              hold rt = 1
+            }
+            when frk2 == 108 {
+              hold rk = 2
+              hold lt = 1
+            }
           }
         }
         when iscall == 0 {
@@ -6455,12 +7339,196 @@ hold ec = 0
             hold crepl = cwnew
             hold cwi = cwre
           } otherwise {
-            hold crepl = concat(crepl, chr(ccx))
-            // `/` always divides doubles (10 / 4 is 2.5, never C's 2)
-            when ccx == 47 {
-              hold crepl = concat(crepl, "(double)")
+            when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || ccx == 95 {
+              // ---- an identifier: lower a builtin call to its runtime
+              //      helper, so a `give`, a condition or a parenthesized
+              //      expression may call concat/len/chr/... directly ----
+              hold cwid = ""
+              hold cwj2 = cwi
+              hold cww = 1
+              while cww == 1 {
+                when cwj2 >= cl {
+                  hold cww = 0
+                } otherwise {
+                  hold ccx = sx_index(ctrim, cwj2)
+                  when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 {
+                    hold cwid = concat(cwid, chr(ccx))
+                    hold cwj2 = cwj2 + 1
+                  } otherwise {
+                    hold cww = 0
+                  }
+                }
+              }
+              hold cwnx = cwj2
+              hold cww = 1
+              while cww == 1 {
+                when cwnx >= cl {
+                  hold cww = 0
+                } otherwise {
+                  hold ccx = sx_index(ctrim, cwnx)
+                  when ccx == 32 || ccx == 9 {
+                    hold cwnx = cwnx + 1
+                  } otherwise {
+                    hold cww = 0
+                  }
+                }
+              }
+              hold cwcall = 0
+              when cwnx < cl {
+                hold ccx = sx_index(ctrim, cwnx)
+                when ccx == 40 {
+                  hold cwcall = 1
+                }
+              }
+              hold cwmap = ""
+              // word operators and boolean literals (full language)
+              when sx_eq(cwid, "and") {
+                hold cwmap = "&&"
+              }
+              when sx_eq(cwid, "or") {
+                hold cwmap = "||"
+              }
+              when sx_eq(cwid, "not") {
+                hold cwmap = "!"
+              }
+              when sx_eq(cwid, "true") {
+                hold cwmap = "1"
+              }
+              when sx_eq(cwid, "false") {
+                hold cwmap = "0"
+              }
+              when cwcall == 1 && sx_eq(cwmap, "") {
+                when sx_eq(cwid, "concat") {
+                  hold cwmap = "sx_cat"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "chr") {
+                  hold cwmap = "sx_chr"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "sx_index") {
+                  hold cwmap = "sx_idx"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "read_file") {
+                  hold cwmap = "sx_read"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "write_file") {
+                  hold cwmap = "sx_write"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "arg") {
+                  hold cwmap = "sx_arg"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "arg_count") {
+                  hold cwmap = "sx_argc"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "string_eq") {
+                  hold cwmap = "sx_eq"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "push") {
+                  hold cwmap = "sx_lpush"
+                  hold lt = 1
+                }
+                when sx_eq(cwid, "len") {
+                  // len(xs) on a list variable is sx_llen, otherwise sx_len
+                  hold cwarg = ""
+                  hold cwai = cwnx + 1
+                  hold cwbd = 1
+                  hold cww = 1
+                  while cww == 1 {
+                    when cwai >= cl {
+                      hold cww = 0
+                    } otherwise {
+                      hold ccx = sx_index(ctrim, cwai)
+                      when ccx == 40 || ccx == 91 {
+                        hold cwbd = cwbd + 1
+                      }
+                      when ccx == 41 || ccx == 93 {
+                        hold cwbd = cwbd - 1
+                      }
+                      when cwbd == 0 {
+                        hold cww = 0
+                      } otherwise {
+                        hold cwarg = concat(cwarg, chr(ccx))
+                      }
+                      hold cwai = cwai + 1
+                    }
+                  }
+                  hold cwal2 = len(cwarg)
+                  hold cwt = 1
+                  while cwt == 1 {
+                    when cwal2 <= 0 {
+                      hold cwt = 0
+                    } otherwise {
+                      hold ccx = sx_index(cwarg, cwal2 - 1)
+                      when ccx == 32 || ccx == 9 {
+                        hold cwal2 = cwal2 - 1
+                      } otherwise {
+                        hold cwt = 0
+                      }
+                    }
+                  }
+                  hold cwarg2 = ""
+                  hold cwa2 = 0
+                  while cwa2 < cwal2 {
+                    hold cwarg2 = concat(cwarg2, chr(sx_index(cwarg, cwa2)))
+                    hold cwa2 = cwa2 + 1
+                  }
+                  hold cwlkey = concat("|", cwarg2)
+                  hold cwlkey = concat(cwlkey, "|")
+                  hold cwlkl = len(cwlkey)
+                  hold cwll = len(ldecls)
+                  hold cwli = 0
+                  hold cwlf = 0
+                  while cwli + cwlkl <= cwll {
+                    hold cwlok = 1
+                    hold cwlj = 0
+                    while cwlj < cwlkl {
+                      hold cwla = sx_index(ldecls, cwli + cwlj)
+                      hold cwlb = sx_index(cwlkey, cwlj)
+                      when cwla == cwlb {
+                        hold cwlj = cwlj + 1
+                      } otherwise {
+                        hold cwlok = 0
+                        hold cwlj = cwlkl
+                      }
+                    }
+                    when cwlok == 1 {
+                      hold cwlf = 1
+                      hold cwli = cwll
+                    } otherwise {
+                      hold cwli = cwli + 1
+                    }
+                  }
+                  when cwlf == 1 {
+                    hold cwmap = "sx_llen"
+                    hold lt = 1
+                  } otherwise {
+                    hold cwmap = "sx_len"
+                    hold rt = 1
+                  }
+                }
+              }
+              when sx_eq(cwmap, "") {
+                hold crepl = concat(crepl, cwid)
+              } otherwise {
+                // keep the call's own spacing: only the name is replaced
+                hold crepl = concat(crepl, cwmap)
+              }
+              hold cwi = cwj2
+            } otherwise {
+              hold crepl = concat(crepl, chr(ccx))
+              // `/` always divides doubles (10 / 4 is 2.5, never C's 2)
+              when ccx == 47 {
+                hold crepl = concat(crepl, "(double)")
+              }
+              hold cwi = cwi + 1
             }
-            hold cwi = cwi + 1
           }
         }
       }
@@ -6492,6 +7560,12 @@ hold ec = 0
       hold body = concat(body, ") {")
       hold body = concat(body, nl)
       hold depth = depth + 1
+      when iswhile == 1 {
+        hold blk = concat(blk, "w")
+        hold loopd = loopd + 1
+      } otherwise {
+        hold blk = concat(blk, "i")
+      }
     }
 
     // ---- give: emit ----
@@ -6654,9 +7728,30 @@ hold ec = 0
       }
     }
 
-    // ================= } and } otherwise { =================
+    // ================= } and } otherwise { and } elif =================
     when act == 4 {
       hold pos = pos + 1
+      // close bookkeeping: what kind of block does this `}` end?
+      // ('w' while, 'f' for, 'i' when, 'e' else, 'E' elif-chain else,
+      //  'm' make)  A closed loop lowers loopd, which is what makes
+      // `break`/`continue` outside a loop a compile-time error.
+      hold bkc = 0
+      hold bkn = len(blk)
+      when bkn > 0 {
+        hold bkc = sx_index(blk, bkn - 1)
+        hold bkt = ""
+        hold bki = 0
+        while bki + 1 < bkn {
+          hold bkt = concat(bkt, chr(sx_index(blk, bki)))
+          hold bki = bki + 1
+        }
+        hold blk = bkt
+      }
+      when bkc == 119 || bkc == 102 {
+        when loopd > 0 {
+          hold loopd = loopd - 1
+        }
+      }
       // look ahead over blanks for the word "otherwise"
       hold wi = pos
       hold wsc = 1
@@ -6710,6 +7805,124 @@ hold ec = 0
           }
         }
       }
+      // ---- `} elif COND {` / `} else if COND {` (full language) ----
+      // Both are compiled without a second parser: `} else {` is emitted
+      // here and the keyword itself is rewritten to `when` in the source
+      // (same byte count), so the ordinary `when` statement compiles the
+      // condition - including the checked `%` rewrite - and opens a block
+      // that the chain's closing `}` ends.  The chain's extra `else` level
+      // is remembered as 'E' in blk and closed with the extra `}` when the
+      // chain ends.
+      hold iselif = 0
+      hold elen = 0
+      when wi + 4 <= n {
+        hold ekw = ""
+        hold eki = 0
+        while eki < 4 {
+          hold ekw = concat(ekw, chr(sx_index(source, wi + eki)))
+          hold eki = eki + 1
+        }
+        when sx_eq(ekw, "elif") {
+          hold enx = 0
+          when wi + 4 < n {
+            hold enx = sx_index(source, wi + 4)
+          }
+          hold eident = 0
+          when (enx >= 97 && enx <= 122) || (enx >= 65 && enx <= 90) || (enx >= 48 && enx <= 57) || enx == 95 {
+            hold eident = 1
+          }
+          when eident == 0 {
+            hold iselif = 1
+            hold elen = 4
+          }
+        }
+      }
+      when iselif == 0 {
+        hold ew4 = ""
+        hold eki = 0
+        while eki < 4 {
+          when wi + eki < n {
+            hold ew4 = concat(ew4, chr(sx_index(source, wi + eki)))
+          }
+          hold eki = eki + 1
+        }
+        when sx_eq(ew4, "else") {
+          hold ep = wi + 4
+          hold eskip = 1
+          while eskip == 1 {
+            hold eskip = 0
+            when ep < n {
+              hold ec2 = sx_index(source, ep)
+              when ec2 == 32 || ec2 == 9 || ec2 == 13 {
+                hold ep = ep + 1
+                hold eskip = 1
+              }
+            }
+          }
+          hold eif = ""
+          hold eki = 0
+          while eki < 2 {
+            when ep + eki < n {
+              hold eif = concat(eif, chr(sx_index(source, ep + eki)))
+            }
+            hold eki = eki + 1
+          }
+          when sx_eq(eif, "if") {
+            hold enx = 0
+            when ep + 2 < n {
+              hold enx = sx_index(source, ep + 2)
+            }
+            hold eident = 0
+            when (enx >= 97 && enx <= 122) || (enx >= 65 && enx <= 90) || (enx >= 48 && enx <= 57) || enx == 95 {
+              hold eident = 1
+            }
+            when eident == 0 {
+              hold iselif = 1
+              hold elen = ep + 2 - wi
+            }
+          }
+        }
+      }
+      when iselif == 1 {
+        hold ind = "  "
+        hold wk = 0
+        hold d2 = depth - 1
+        while wk < d2 {
+          hold ind = concat(ind, "  ")
+          hold wk = wk + 1
+        }
+        hold body = concat(body, ind)
+        hold body = concat(body, "} else {")
+        hold body = concat(body, nl)
+        // rewrite the keyword in place: `elif` -> `when`,
+        // `else if` -> `when` + blanks (identical byte count)
+        hold src2 = ""
+        hold si = 0
+        while si < wi {
+          hold src2 = concat(src2, chr(sx_index(source, si)))
+          hold si = si + 1
+        }
+        hold src2 = concat(src2, "when")
+        hold si = wi + 4
+        while si < wi + elen {
+          hold src2 = concat(src2, " ")
+          hold si = si + 1
+        }
+        while si < n {
+          hold src2 = concat(src2, chr(sx_index(source, si)))
+          hold si = si + 1
+        }
+        hold source = src2
+        hold pos = wi
+        hold blk = concat(blk, "E")
+      }
+      hold enormal = 1
+      when iselif == 1 {
+        hold enormal = 0
+      }
+      when wfound == 1 {
+        hold enormal = 0
+      }
       when wfound == 1 {
         // "} otherwise {" and "} else {" both become "} else {"
         hold pos = wi + wlen
@@ -6743,7 +7956,45 @@ hold ec = 0
         hold body = concat(body, ind)
         hold body = concat(body, "} else {")
         hold body = concat(body, nl)
-      } otherwise {
+        // keep the block kind: inside an `elif` chain this else is the
+        // chain's else ('E'), otherwise a plain one ('e')
+        hold bkt2 = ""
+        hold bkl2 = len(blk)
+        when bkl2 > 0 {
+          hold bkt2 = chr(sx_index(blk, bkl2 - 1))
+        }
+        when bkt2 == "E" {
+          hold blk = concat(blk, "E")
+        } otherwise {
+          hold blk = concat(blk, "e")
+        }
+      }
+      when enormal == 1 {
+        // Does this `}` end an `elif` chain?  Then the chain's extra
+        // `else {` level ('E' in blk) also closes here, with one more `}`.
+        hold eclose = 0
+        hold eck = len(blk)
+        hold edone = 0
+        while edone == 0 {
+          when eck > 0 {
+            hold ecc = sx_index(blk, eck - 1)
+            when ecc == 69 {
+              hold eclose = eclose + 1
+              hold ekt = ""
+              hold eki2 = 0
+              while eki2 + 1 < eck {
+                hold ekt = concat(ekt, chr(sx_index(blk, eki2)))
+                hold eki2 = eki2 + 1
+              }
+              hold blk = ekt
+              hold eck = eck - 1
+            } otherwise {
+              hold edone = 1
+            }
+          } otherwise {
+            hold edone = 1
+          }
+        }
         when depth > 0 {
           hold depth = depth - 1
         }
@@ -6775,6 +8026,30 @@ hold ec = 0
           hold body = concat(body, "}")
           hold body = concat(body, nl)
         }
+        // the extra closes of an `elif` chain: one per `else {` level the
+        // chain opened (see the note in act 4)
+        hold eci = 0
+        while eci < eclose {
+          when depth > 0 {
+            hold depth = depth - 1
+          }
+          when in_fn == 1 && depth == 0 {
+            // the function body was just flushed; the extra brace still
+            // belongs to the function text
+            hold fns = concat(fns, "}\n")
+          } otherwise {
+            hold ind = "  "
+            hold wk = 0
+            while wk < depth {
+              hold ind = concat(ind, "  ")
+              hold wk = wk + 1
+            }
+            hold body = concat(body, ind)
+            hold body = concat(body, "}")
+            hold body = concat(body, nl)
+          }
+          hold eci = eci + 1
+        }
       }
     }
 
@@ -6783,6 +8058,7 @@ hold ec = 0
       hold pos = pos + 4
       hold firstp = 1
       hold fn_params = ""
+      hold fn_retkind = 110
       hold sk = 1
       while sk == 1 {
         when pos >= n {
@@ -6887,6 +8163,90 @@ hold ec = 0
           }
         }
       }
+      // optional `-> TYPE` (full language): the return type is recorded by
+      // the signature pre-pass, so this only has to be skipped here
+      hold cs = 0
+      hold cs2 = 0
+      when pos < n {
+        hold cs = sx_index(source,pos)
+      }
+      when pos + 1 < n {
+        hold cs2 = sx_index(source,pos + 1)
+      }
+      when cs == 45 && cs2 == 62 {
+        hold pos = pos + 2
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+        hold rtword = ""
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when (cs >= 97 && cs <= 122) || (cs >= 65 && cs <= 90) {
+              hold rtword = concat(rtword, chr(cs))
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+        hold fnnx = 0
+        when pos < n {
+          hold fnnx = sx_index(source,pos)
+        }
+        hold fnnx2 = 0
+        when pos + 1 < n {
+          hold fnnx2 = sx_index(source,pos + 1)
+        }
+        when sx_eq(rtword, "str") && fnnx != 45 {
+          hold fn_retkind = 115
+        }
+        when sx_eq(rtword, "str") && fnnx == 45 && fnnx2 != 62 {
+          hold fn_retkind = 115
+        }
+        when sx_eq(rtword, "list") {
+          hold fn_retkind = 108
+        }
+        hold sk = 1
+        while sk == 1 {
+          when pos >= n {
+            hold sk = 0
+          } otherwise {
+            hold cs = sx_index(source,pos)
+            when cs == 32 || cs == 9 || cs == 13 {
+              hold pos = pos + 1
+            } otherwise {
+              hold sk = 0
+            }
+          }
+        }
+      }
+      hold sk = 1
+      while sk == 1 {
+        when pos >= n {
+          hold sk = 0
+        } otherwise {
+          hold cs = sx_index(source,pos)
+          when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
+            hold pos = pos + 1
+          } otherwise {
+            hold sk = 0
+          }
+        }
+      }
       when pos < n {
         hold cs = sx_index(source,pos)
         when cs == 123 {
@@ -6895,14 +8255,464 @@ hold ec = 0
       }
       hold saved_body = body
       hold body = ""
-      hold body = concat(body, "static double ")
+      when fn_retkind == 115 {
+        hold body = concat(body, "static char *")
+      } otherwise {
+        when fn_retkind == 108 {
+          hold body = concat(body, "static sx_list *")
+        } otherwise {
+          hold body = concat(body, "static double ")
+        }
+      }
       hold body = concat(body, fn_name)
       hold body = concat(body, "(")
+      // the parameter list comes from the signature pre-pass:
+      // `double a, char *b` for `make f(a, b: str)`
+      hold fpt2 = ""
+      hold fky = concat("|", fn_name)
+      hold fky = concat(fky, "=")
+      hold fkl = len(fky)
+      hold fksrc = fsptx
+      hold fki = 0
+      hold fkln = len(fksrc)
+      hold fkfound = 0
+      while fki + fkl <= fkln {
+        hold fkok = 1
+        hold fkj = 0
+        while fkj < fkl {
+          hold fka = sx_index(fksrc, fki + fkj)
+          hold fkb = sx_index(fky, fkj)
+          when fka == fkb {
+            hold fkj = fkj + 1
+          } otherwise {
+            hold fkok = 0
+            hold fkj = fkl
+          }
+        }
+        when fkok == 1 {
+          hold fkfound = 1
+          hold fkend = fki + fkl
+          hold fkrun = 1
+          while fkrun == 1 {
+            when fkend >= fkln {
+              hold fkrun = 0
+            } otherwise {
+              hold fka = sx_index(fksrc, fkend)
+              when fka == 124 {
+                hold fkrun = 0
+              } otherwise {
+                hold fpt2 = concat(fpt2, chr(fka))
+                hold fkend = fkend + 1
+              }
+            }
+          }
+          hold fki = fkln
+        } otherwise {
+          hold fki = fki + 1
+        }
+      }
+      when fkfound == 1 {
+        hold fn_params = fpt2
+      }
       hold body = concat(body, fn_params)
       hold body = concat(body, ") {")
       hold body = concat(body, nl)
       hold in_fn = 1
       hold depth = depth + 1
+      hold blk = concat(blk, "m")
+    }
+
+    // ================= for NAME in A..B { =================
+    // full-language statement (gen2 and later; the C seed never reads it):
+    //   for i in 0..10 { ... }        counts A, A+1, ... while i < B
+    // The counter is declared as a normal numeric variable the first time,
+    // so it keeps the flat pure-min scoping rules; a later `for i in ...`
+    // reuses it.  A and B are copied as C expressions (no `%`, which would
+    // need the checked sx_mod rewrite) and are validated so nothing can
+    // reach the output that is not a number, name, field, index or
+    // + - * / ( ) chain.
+    when act == 10 {
+      // `pos` already points just past the word `for`
+      hold fvname = ""
+      hold fva = ""
+      hold fvb = ""
+      hold fvok = 0
+      hold ferr = 0
+      hold fmsg = ""
+      hold sk = 1
+      while sk == 1 {
+        when pos >= n {
+          hold sk = 0
+        } otherwise {
+          hold fc = sx_index(source, pos)
+          when fc == 32 || fc == 9 || fc == 13 {
+            hold pos = pos + 1
+          } otherwise {
+            hold sk = 0
+          }
+        }
+      }
+      // the counter name
+      hold rn = 1
+      while rn == 1 {
+        when pos >= n {
+          hold rn = 0
+        } otherwise {
+          hold fc = sx_index(source, pos)
+          when (fc >= 97 && fc <= 122) || (fc >= 65 && fc <= 90) || fc == 95 {
+            hold fvname = concat(fvname, chr(fc))
+            hold pos = pos + 1
+          } otherwise {
+            hold rn = 0
+          }
+        }
+      }
+      when sx_eq(fvname, "") {
+        hold ferr = 1
+        hold fmsg = "for loop: expected a counter name, e.g. for i in 0..10 {"
+      }
+      // blanks, then the word `in`
+      hold sk = 1
+      while sk == 1 {
+        when pos >= n {
+          hold sk = 0
+        } otherwise {
+          hold fc = sx_index(source, pos)
+          when fc == 32 || fc == 9 || fc == 13 {
+            hold pos = pos + 1
+          } otherwise {
+            hold sk = 0
+          }
+        }
+      }
+      hold fwin = ""
+      hold rn = 1
+      while rn == 1 {
+        when pos >= n {
+          hold rn = 0
+        } otherwise {
+          hold fc = sx_index(source, pos)
+          when (fc >= 97 && fc <= 122) || (fc >= 65 && fc <= 90) {
+            hold fwin = concat(fwin, chr(fc))
+            hold pos = pos + 1
+          } otherwise {
+            hold rn = 0
+          }
+        }
+      }
+      when sx_eq(fwin, "in") {
+      } otherwise {
+        hold ferr = 1
+        hold fmsg = "for loop: expected `in` after the counter name, e.g. for i in 0..10 {"
+      }
+      // blanks before A
+      hold sk = 1
+      while sk == 1 {
+        when pos >= n {
+          hold sk = 0
+        } otherwise {
+          hold fc = sx_index(source, pos)
+          when fc == 32 || fc == 9 || fc == 13 {
+            hold pos = pos + 1
+          } otherwise {
+            hold sk = 0
+          }
+        }
+      }
+      // A: text up to the `..`
+      hold fvrun = 1
+      while fvrun == 1 {
+        when pos >= n {
+          hold fvrun = 0
+        } otherwise {
+          hold fc = sx_index(source, pos)
+          when fc == 46 {
+            hold fc2 = 0
+            when pos + 1 < n {
+              hold fc2 = sx_index(source, pos + 1)
+            }
+            when fc2 == 46 {
+              hold fvrun = 0
+            } otherwise {
+              hold fva = concat(fva, chr(fc))
+              hold pos = pos + 1
+            }
+          } otherwise {
+            when fc == 10 || fc == 13 {
+              hold fvrun = 0
+              hold ferr = 1
+              hold fmsg = "for loop: expected `A..B` (two dots) before the `{`"
+            } otherwise {
+              hold fva = concat(fva, chr(fc))
+              hold pos = pos + 1
+            }
+          }
+        }
+      }
+      hold fc = 0
+      when pos < n {
+        hold fc = sx_index(source, pos)
+      }
+      when fc == 46 {
+        hold pos = pos + 2
+      } otherwise {
+        when ferr == 0 {
+          hold ferr = 1
+          hold fmsg = "for loop: expected `A..B` (two dots) before the `{`"
+        }
+      }
+      // B: text up to the `{`
+      hold fvrun2 = 1
+      while fvrun2 == 1 {
+        when pos >= n {
+          hold fvrun2 = 0
+        } otherwise {
+          hold fc = sx_index(source, pos)
+          when fc == 123 {
+            hold pos = pos + 1
+            hold fvrun2 = 0
+          } otherwise {
+            when fc == 10 || fc == 13 {
+              hold fvrun2 = 0
+              hold ferr = 1
+              hold fmsg = "for loop: expected `{` at the end of the for line"
+            } otherwise {
+              hold fvb = concat(fvb, chr(fc))
+              hold pos = pos + 1
+            }
+          }
+        }
+      }
+      // trim both range expressions
+      hold fl = len(fva)
+      hold trim = 1
+      while trim == 1 {
+        when fl <= 0 {
+          hold trim = 0
+        } otherwise {
+          hold fc = sx_index(fva, fl - 1)
+          when fc == 32 || fc == 9 || fc == 13 {
+            hold fl = fl - 1
+          } otherwise {
+            hold trim = 0
+          }
+        }
+      }
+      hold fva2 = ""
+      hold fi = 0
+      while fi < fl {
+        hold fva2 = concat(fva2, chr(sx_index(fva, fi)))
+        hold fi = fi + 1
+      }
+      hold fva = fva2
+      hold fl = len(fvb)
+      hold trim = 1
+      while trim == 1 {
+        when fl <= 0 {
+          hold trim = 0
+        } otherwise {
+          hold fc = sx_index(fvb, fl - 1)
+          when fc == 32 || fc == 9 || fc == 13 {
+            hold fl = fl - 1
+          } otherwise {
+            hold trim = 0
+          }
+        }
+      }
+      hold fvb2 = ""
+      hold fi = 0
+      while fi < fl {
+        hold fvb2 = concat(fvb2, chr(sx_index(fvb, fi)))
+        hold fi = fi + 1
+      }
+      hold fvb = fvb2
+      when sx_eq(fva, "") || sx_eq(fvb, "") {
+        when ferr == 0 {
+          hold ferr = 1
+          hold fmsg = "for loop: the range is empty; write `for i in 0..10 {`"
+        }
+      }
+      // validate: only characters that are safe C text for a numeric range
+      hold fvchk = 0
+      hold fvi = 0
+      hold fvln = len(fva)
+      while fvi < fvln {
+        hold fc = sx_index(fva, fvi)
+        when (fc >= 48 && fc <= 57) || (fc >= 97 && fc <= 122) || (fc >= 65 && fc <= 90) || fc == 95 || fc == 46 {
+          hold fvchk = 1
+        } otherwise {
+          when fc == 32 || fc == 9 || fc == 43 || fc == 45 || fc == 42 || fc == 47 || fc == 40 || fc == 41 || fc == 91 || fc == 93 {
+            hold fvchk = 1
+          } otherwise {
+            hold fvchk = 0
+            hold fvi = fvln
+          }
+        }
+        when fvchk == 1 {
+          hold fvi = fvi + 1
+        } otherwise {
+          hold fvi = fvln
+        }
+      }
+      when fvchk == 0 && ferr == 0 {
+        hold ferr = 1
+        hold fmsg = "for loop: the start expression may use numbers, names, fields, indexes and + - * / ( ) only"
+      }
+      hold fvchk = 0
+      hold fvi = 0
+      hold fvln = len(fvb)
+      while fvi < fvln {
+        hold fc = sx_index(fvb, fvi)
+        when (fc >= 48 && fc <= 57) || (fc >= 97 && fc <= 122) || (fc >= 65 && fc <= 90) || fc == 95 || fc == 46 {
+          hold fvchk = 1
+        } otherwise {
+          when fc == 32 || fc == 9 || fc == 43 || fc == 45 || fc == 42 || fc == 47 || fc == 40 || fc == 41 || fc == 91 || fc == 93 {
+            hold fvchk = 1
+          } otherwise {
+            hold fvchk = 0
+            hold fvi = fvln
+          }
+        }
+        when fvchk == 1 {
+          hold fvi = fvi + 1
+        } otherwise {
+          hold fvi = fvln
+        }
+      }
+      when fvchk == 0 && ferr == 0 {
+        hold ferr = 1
+        hold fmsg = "for loop: the end expression may use numbers, names, fields, indexes and + - * / ( ) only"
+      }
+      // the counter must not already be a string or list
+      when ferr == 0 {
+        hold fvkey = concat("|", fvname)
+        hold fvkey = concat(fvkey, "|")
+        hold fvsrc = sdecls
+        hold fvi = 0
+        hold fvln = len(fvsrc)
+        hold fvkl = len(fvkey)
+        while fvi + fvkl <= fvln {
+          hold fvok2 = 1
+          hold fvj = 0
+          while fvj < fvkl {
+            hold fva3 = sx_index(fvsrc, fvi + fvj)
+            hold fvb3 = sx_index(fvkey, fvj)
+            when fva3 == fvb3 {
+              hold fvj = fvj + 1
+            } otherwise {
+              hold fvok2 = 0
+              hold fvj = fvkl
+            }
+          }
+          when fvok2 == 1 {
+            hold ferr = 1
+            hold fvli = fvi
+            hold fvi = fvln
+          } otherwise {
+            hold fvi = fvi + 1
+          }
+        }
+        when ferr == 1 {
+          hold fmsg = concat("for loop: '", fvname)
+          hold fmsg = concat(fmsg, "' is not a number; pick another counter name")
+        }
+      }
+      // is the counter already declared as a number?
+      when ferr == 0 {
+        hold fvkey = concat("|", fvname)
+        hold fvkey = concat(fvkey, "|")
+        hold fvsrc = decls
+        hold fvi = 0
+        hold fvln = len(fvsrc)
+        hold fvkl = len(fvkey)
+        hold fvok = 1
+        while fvi + fvkl <= fvln {
+          hold fvok2 = 1
+          hold fvj = 0
+          while fvj < fvkl {
+            hold fva3 = sx_index(fvsrc, fvi + fvj)
+            hold fvb3 = sx_index(fvkey, fvj)
+            when fva3 == fvb3 {
+              hold fvj = fvj + 1
+            } otherwise {
+              hold fvok2 = 0
+              hold fvj = fvkl
+            }
+          }
+          when fvok2 == 1 {
+            hold fvok = 0
+            hold fvi = fvln
+          } otherwise {
+            hold fvi = fvi + 1
+          }
+        }
+      }
+      when ferr == 1 {
+        hold nerrscop = 1
+        when sx_eq(scopmsg, "") {
+          hold scopmsg = fmsg
+        }
+      } otherwise {
+        hold ind = "  "
+        hold wk = 0
+        while wk < depth {
+          hold ind = concat(ind, "  ")
+          hold wk = wk + 1
+        }
+        when fvok == 1 {
+          hold body = concat(body, ind)
+          hold body = concat(body, "double ")
+          hold body = concat(body, fvname)
+          hold body = concat(body, " = ")
+          hold body = concat(body, fva)
+          hold body = concat(body, ";")
+          hold body = concat(body, nl)
+          hold decls = concat(decls, fvname)
+          hold decls = concat(decls, "|")
+        }
+        hold body = concat(body, ind)
+        hold body = concat(body, "for (")
+        hold body = concat(body, fvname)
+        hold body = concat(body, " = ")
+        hold body = concat(body, fva)
+        hold body = concat(body, "; ")
+        hold body = concat(body, fvname)
+        hold body = concat(body, " < ")
+        hold body = concat(body, fvb)
+        hold body = concat(body, "; ")
+        hold body = concat(body, fvname)
+        hold body = concat(body, " = ")
+        hold body = concat(body, fvname)
+        hold body = concat(body, " + 1) {")
+        hold body = concat(body, nl)
+        hold depth = depth + 1
+        hold blk = concat(blk, "f")
+        hold loopd = loopd + 1
+      }
+    }
+
+    // ================= break / continue =================
+    when act == 11 || act == 12 {
+      hold ind = "  "
+      hold wk = 0
+      while wk < depth {
+        hold ind = concat(ind, "  ")
+        hold wk = wk + 1
+      }
+      when loopd == 0 {
+        hold nerrscop = 1
+        when sx_eq(scopmsg, "") {
+          hold scopmsg = "break/continue outside a loop"
+        }
+      } otherwise {
+        hold body = concat(body, ind)
+        when act == 11 {
+          hold body = concat(body, "break;")
+        } otherwise {
+          hold body = concat(body, "continue;")
+        }
+        hold body = concat(body, nl)
+      }
     }
 
     // not a statement character: skip it
