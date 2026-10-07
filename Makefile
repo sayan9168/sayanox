@@ -30,7 +30,7 @@ SXPKG_BIN := tools/sxpkg
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
         seed-bin doctor tools sxfmt test-sxfmt sxpkg test-sxpkg test-sxpkg-wrapper \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
-        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-native-num test-native-io \
+        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io \
         pack-compiler
 
 all: true-selfhost-min
@@ -559,6 +559,61 @@ test-parens:
 	@echo "[OK] parenthesized expressions: seed-min and gen2 agree ((a + 3) * 4 = 20); non-numeric parens and unbalanced parens are clear errors"
 
 # ---------------------------------------------------------------------------
+# test-full-lang: the Stage-2 full language on gen2 (the C seed stays
+# pure-min and is expected to REJECT these forms, which is asserted too):
+#   for i in A..B { }        for v in LIST { }      break / continue
+#   } elif COND { } / } else if COND { }
+#   hold x: TYPE = value     make f(a, b: str) -> str
+#   and / or / not / true / false
+#   += -= *= /= %=           builtins inside give / conditions / parens
+# ---------------------------------------------------------------------------
+test-full-lang:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold total = 0\nfor i in 0..5 {\n  hold total = total + i\n}\nshow total\nhold k = 1\nfor k in 1..100 {\n  when k == 4 {\n    break\n  }\n}\nshow k\nhold odd = 0\nfor i in 0..10 {\n  when i %% 2 == 0 {\n    continue\n  }\n  hold odd = odd + 1\n}\nshow odd\n' > $(TESTS)/fl_for.sa
+	./$(GEN2) $(TESTS)/fl_for.sa $(TESTS)/fl_for.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fl_for $(TESTS)/fl_for.c
+	$(call assert-out,./$(TESTS)/fl_for,10\n4\n5)
+	@if ./$(SEED_MIN_BIN) $(TESTS)/fl_for.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted for/break/continue (gen2-only)"; exit 1; fi
+	@printf 'hold xs = [3, 4, 5]\nhold sum = 0\nfor v in xs {\n  hold sum = sum + v\n}\nshow sum\nfor v in xs {\n  when v == 4 {\n    continue\n  }\n  show v\n}\n' > $(TESTS)/fl_list.sa
+	./$(GEN2) $(TESTS)/fl_list.sa $(TESTS)/fl_list.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fl_list $(TESTS)/fl_list.c
+	$(call assert-out,./$(TESTS)/fl_list,12\n3\n5)
+	@printf 'hold grade = 0\nhold score = 85\nwhen score >= 90 {\n  hold grade = 4\n} elif score >= 80 {\n  hold grade = 3\n} elif score >= 70 {\n  hold grade = 2\n} otherwise {\n  hold grade = 1\n}\nshow grade\nwhen score >= 80 {\n  hold grade = 9\n} elif score >= 70 {\n  hold grade = 8\n}\nshow grade\n' > $(TESTS)/fl_elif.sa
+	./$(GEN2) $(TESTS)/fl_elif.sa $(TESTS)/fl_elif.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fl_elif $(TESTS)/fl_elif.c
+	$(call assert-out,./$(TESTS)/fl_elif,3\n9)
+	@if ./$(SEED_MIN_BIN) $(TESTS)/fl_elif.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted elif (gen2-only)"; exit 1; fi
+	@printf 'make greet(name: str) -> str {\n  give concat("hi ", name)\n}\nmake twice(n: num) -> num {\n  give n * 2\n}\nhold m = greet("ada")\nshow m\nshow twice(21)\nshow len(m)\n' > $(TESTS)/fl_fn.sa
+	./$(GEN2) $(TESTS)/fl_fn.sa $(TESTS)/fl_fn.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fl_fn $(TESTS)/fl_fn.c
+	$(call assert-out,./$(TESTS)/fl_fn,hi ada\n42\n6)
+	@printf 'hold n: num = 4\nhold s: str = "abc"\nhold xs: list = [1, 2]\nshow n + len(xs)\nshow s\nhold ok = 0\nwhen n > 2 and s != "z" {\n  hold ok = 1\n}\nshow ok\nwhen not ok or n == 0 {\n  show 7\n} otherwise {\n  show 8\n}\nhold flag = true\nshow flag\n' > $(TESTS)/fl_type.sa
+	./$(GEN2) $(TESTS)/fl_type.sa $(TESTS)/fl_type.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fl_type $(TESTS)/fl_type.c
+	$(call assert-out,./$(TESTS)/fl_type,6\nabc\n1\n8\n1)
+	@printf 'hold s = "a"\nhold s += "b"\nshow s\nhold x = 10\nhold x += 5\nhold x -= 3\nhold x *= 2\nshow x\nhold x /= 4\nhold x %%= 4\nshow x\n' > $(TESTS)/fl_comp.sa
+	./$(GEN2) $(TESTS)/fl_comp.sa $(TESTS)/fl_comp.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fl_comp $(TESTS)/fl_comp.c
+	$(call assert-out,./$(TESTS)/fl_comp,ab\n24\n2)
+	@printf 'hold n: str = 5\n' > $(TESTS)/fl_badtype.sa
+	./$(GEN2) $(TESTS)/fl_badtype.sa $(TESTS)/fl_badtype.c >/dev/null 2>&1 || true
+	@grep -q "type error: 'n' is declared str but the value is a number" $(TESTS)/fl_badtype.c
+	@printf 'hold n = 1\nbreak\n' > $(TESTS)/fl_badbreak.sa
+	./$(GEN2) $(TESTS)/fl_badbreak.sa $(TESTS)/fl_badbreak.c >/dev/null 2>&1 || true
+	@grep -q "break/continue outside a loop" $(TESTS)/fl_badbreak.c
+	@printf 'hold n = 1\nhold m += 1\n' > $(TESTS)/fl_badcomp.sa
+	./$(GEN2) $(TESTS)/fl_badcomp.sa $(TESTS)/fl_badcomp.c >/dev/null 2>&1 || true
+	@grep -q "compound assignment needs an existing variable" $(TESTS)/fl_badcomp.c
+	@printf 'hold xs = [1, 2]\nfor v in xs {\n  break\n}\nhold ys = 1\nfor v in ys {\n}\n' > $(TESTS)/fl_badlist.sa
+	./$(GEN2) $(TESTS)/fl_badlist.sa $(TESTS)/fl_badlist.c >/dev/null 2>&1 || true
+	@grep -q "for loop: 'ys' is not a list" $(TESTS)/fl_badlist.c
+	@echo "[OK] full language: for/break/continue/elif, typed functions, annotations, and/or/not, compound assignment"
+
+# ---------------------------------------------------------------------------
 # test-push-stmt: bare `push(xs, v)` statement == `hold xs = push(xs, v)` on
 # seed-min and gen2 (native already had it).  Pushing onto a non-list, an
 # unknown statement word and leftover tokens are clear errors on both.
@@ -855,7 +910,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-parity test-sxfmt test-sxpkg
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-parity test-sxfmt test-sxpkg
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

@@ -197,10 +197,58 @@ hold frka = 0
 hold frkb = 0
 hold declk = -1
 hold declt = ""
+hold fvmode = 0
+hold forcnt = 0
+hold fvix = ""
+hold fvlkey = ""
+hold fvlkl = 0
+hold fvll = 0
+hold fvli2 = 0
+hold fvlf = 0
+hold fvlok = 0
+hold fvlj = 0
+hold fvla = 0
+hold fvlb = 0
 hold aword = ""
 hold atype = ""
 hold dtok = 0
 hold dtok2 = 0
+hold ocnx = 0
+hold ocp = 0
+hold ocsk = 0
+hold ocx = 0
+hold ocarg = ""
+hold ocarg2 = ""
+hold ocarg3 = ""
+hold ocdepth = 0
+hold ocq = 0
+hold ocrun = 0
+hold ocmap = ""
+hold ocstr = 0
+hold oclist = 0
+hold ocai = 0
+hold ocbd = 0
+hold ocw = 0
+hold ocl2 = 0
+hold octr = 0
+hold ockey = ""
+hold ockl = 0
+hold ocll = 0
+hold ocli = 0
+hold oclf = 0
+hold oclok = 0
+hold oclj = 0
+hold ocla = 0
+hold oclb = 0
+hold ocfrk = 0
+hold ocfky = ""
+hold ocfkl = 0
+hold ocfki = 0
+hold ocfn = 0
+hold ocfok = 0
+hold ocfj = 0
+hold ocfa = 0
+hold ocfb = 0
 hold cwid = ""
 hold cwj2 = 0
 hold cww = 0
@@ -3996,6 +4044,13 @@ while running == 1 {
 
         // ---- plain name, or name + number ----
         when iscall == 0 {
+          // boolean literals (full language)
+          when sx_eq(nm2, "true") {
+            hold nm2 = "1"
+          }
+          when sx_eq(nm2, "false") {
+            hold nm2 = "0"
+          }
           // is nm2 a string variable?
           hold key = concat("|", nm2)
           hold key = concat(key, "|")
@@ -4727,8 +4782,239 @@ hold ec = 0
               }
             }
             hold opnd = nm3
+            // ---- a call as the right operand of a chain ----
+            // `1 + len(xs)`, `2 * len(s)`, `"a" + concat("b", "c")` and
+            // user functions were previously left as un-mapped names (and
+            // the `(` then failed).  Map the builtin here with the same
+            // runtime names the statement-level call path uses; the
+            // argument text is copied verbatim (nested builtin calls in an
+            // argument are still a documented limitation).
+            hold ocnx = 0
+            hold ocp = pos
+            hold ocsk = 1
+            while ocsk == 1 {
+              when ocp >= n {
+                hold ocsk = 0
+              } otherwise {
+                hold ocx = sx_index(source, ocp)
+                when ocx == 32 || ocx == 9 || ocx == 13 {
+                  hold ocp = ocp + 1
+                } otherwise {
+                  hold ocnx = ocx
+                  hold ocsk = 0
+                }
+              }
+            }
+            when ocnx == 40 {
+              hold pos = ocp + 1
+              hold ocarg = ""
+              hold ocdepth = 1
+              hold ocq = 0
+              hold ocrun = 1
+              while ocrun == 1 {
+                when pos >= n {
+                  hold ocrun = 0
+                } otherwise {
+                  hold ocx = sx_index(source, pos)
+                  when ocq == 1 {
+                    hold ocarg = concat(ocarg, chr(ocx))
+                    hold pos = pos + 1
+                    when ocx == 92 {
+                      when pos < n {
+                        hold ocarg = concat(ocarg, chr(sx_index(source, pos)))
+                        hold pos = pos + 1
+                      }
+                    } otherwise {
+                      when ocx == 34 {
+                        hold ocq = 0
+                      }
+                    }
+                  } otherwise {
+                    when ocx == 34 {
+                      hold ocq = 1
+                      hold ocarg = concat(ocarg, chr(ocx))
+                      hold pos = pos + 1
+                    } otherwise {
+                      when ocx == 40 {
+                        hold ocdepth = ocdepth + 1
+                      }
+                      when ocx == 41 {
+                        hold ocdepth = ocdepth - 1
+                      }
+                      when ocdepth == 0 {
+                        hold pos = pos + 1
+                        hold ocrun = 0
+                      } otherwise {
+                        hold ocarg = concat(ocarg, chr(ocx))
+                        hold pos = pos + 1
+                      }
+                    }
+                  }
+                }
+              }
+              hold ocmap = ""
+              hold ocstr = 0
+              hold oclist = 0
+              when sx_eq(nm3, "concat") || sx_eq(nm3, "sx_cat") {
+                hold ocmap = "sx_cat"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "chr") || sx_eq(nm3, "sx_chr") {
+                hold ocmap = "sx_chr"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "read_file") || sx_eq(nm3, "sx_read") {
+                hold ocmap = "sx_read"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "arg") || sx_eq(nm3, "sx_arg") {
+                hold ocmap = "sx_arg"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "sx_index") || sx_eq(nm3, "sx_idx") {
+                hold ocmap = "sx_idx"
+              }
+              when sx_eq(nm3, "write_file") || sx_eq(nm3, "sx_write") {
+                hold ocmap = "sx_write"
+              }
+              when sx_eq(nm3, "arg_count") || sx_eq(nm3, "sx_argc") {
+                hold ocmap = "sx_argc"
+              }
+              when sx_eq(nm3, "string_eq") || sx_eq(nm3, "sx_eq") {
+                hold ocmap = "sx_eq"
+              }
+              when sx_eq(nm3, "push") || sx_eq(nm3, "sx_lpush") {
+                hold ocmap = "sx_lpush"
+                hold oclist = 1
+              }
+              when sx_eq(nm3, "len") || sx_eq(nm3, "sx_len") || sx_eq(nm3, "sx_llen") {
+                // list variable -> sx_llen, otherwise sx_len
+                hold ocarg2 = ""
+                hold ocai = 0
+                hold ocbd = 1
+                hold ocw = 1
+                while ocw == 1 {
+                  when ocai >= len(ocarg) {
+                    hold ocw = 0
+                  } otherwise {
+                    hold ocx = sx_index(ocarg, ocai)
+                    when ocx == 40 || ocx == 91 {
+                      hold ocbd = ocbd + 1
+                    }
+                    when ocx == 41 || ocx == 93 {
+                      hold ocbd = ocbd - 1
+                    }
+                    when ocbd == 0 {
+                      hold ocw = 0
+                    } otherwise {
+                      hold ocarg2 = concat(ocarg2, chr(ocx))
+                    }
+                    hold ocai = ocai + 1
+                  }
+                }
+                hold ocarg3 = ""
+                hold ocai = 0
+                hold ocl2 = len(ocarg2)
+                hold octr = 1
+                while octr == 1 {
+                  when ocl2 <= 0 {
+                    hold octr = 0
+                  } otherwise {
+                    hold ocx = sx_index(ocarg2, ocl2 - 1)
+                    when ocx == 32 || ocx == 9 {
+                      hold ocl2 = ocl2 - 1
+                    } otherwise {
+                      hold octr = 0
+                    }
+                  }
+                }
+                while ocai < ocl2 {
+                  hold ocarg3 = concat(ocarg3, chr(sx_index(ocarg2, ocai)))
+                  hold ocai = ocai + 1
+                }
+                hold ockey = concat("|", ocarg3)
+                hold ockey = concat(ockey, "|")
+                hold ockl = len(ockey)
+                hold ocll = len(ldecls)
+                hold ocli = 0
+                hold oclf = 0
+                while ocli + ockl <= ocll {
+                  hold oclok = 1
+                  hold oclj = 0
+                  while oclj < ockl {
+                    hold ocla = sx_index(ldecls, ocli + oclj)
+                    hold oclb = sx_index(ockey, oclj)
+                    when ocla == oclb {
+                      hold oclj = oclj + 1
+                    } otherwise {
+                      hold oclok = 0
+                      hold oclj = ockl
+                    }
+                  }
+                  when oclok == 1 {
+                    hold oclf = 1
+                    hold ocli = ocll
+                  } otherwise {
+                    hold ocli = ocli + 1
+                  }
+                }
+                when oclf == 1 {
+                  hold ocmap = "sx_llen"
+                  hold oclist = 1
+                } otherwise {
+                  hold ocmap = "sx_len"
+                }
+              }
+              when sx_eq(ocmap, "") {
+                // a user function: the return kind decides the value kind
+                hold ocfrk = 0
+                hold ocfky = concat("|", nm3)
+                hold ocfky = concat(ocfky, "=")
+                hold ocfkl = len(fsret)
+                hold ocfki = 0
+                hold ocfn = len(ocfky)
+                while ocfki + ocfn + 1 <= ocfkl {
+                  hold ocfok = 1
+                  hold ocfj = 0
+                  while ocfj < ocfn {
+                    hold ocfa = sx_index(fsret, ocfki + ocfj)
+                    hold ocfb = sx_index(ocfky, ocfj)
+                    when ocfa == ocfb {
+                      hold ocfj = ocfj + 1
+                    } otherwise {
+                      hold ocfok = 0
+                      hold ocfj = ocfn
+                    }
+                  }
+                  when ocfok == 1 {
+                    hold ocfrk = sx_index(fsret, ocfki + ocfn)
+                    hold ocfki = ocfkl
+                  } otherwise {
+                    hold ocfki = ocfki + 1
+                  }
+                }
+                when ocfrk == 115 {
+                  hold ocstr = 1
+                }
+                when ocfrk == 108 {
+                  hold oclist = 1
+                }
+                hold ocmap = nm3
+              }
+              hold opnd = concat(ocmap, "(")
+              hold opnd = concat(opnd, ocarg)
+              hold opnd = concat(opnd, ")")
+              when ocstr == 1 {
+                hold opfldstr = 1
+                hold rt = 1
+              }
+              when oclist == 1 {
+                hold lt = 1
+              }
+            }
             // postfix field chain .a.b (resolved like the statement bases)
             hold chn = 0
+
             hold chfields = ""
             hold chrun = 1
             while chrun == 1 {
@@ -5805,6 +6091,13 @@ hold ec = 0
           }
         }
         when iscall == 0 {
+          // boolean literals (full language)
+          when sx_eq(nm2, "true") {
+            hold nm2 = "1"
+          }
+          when sx_eq(nm2, "false") {
+            hold nm2 = "0"
+          }
           hold rhs = nm2
           hold rk = 0
           // optional field chain p.x.y (resolved like the hold RHS base)
@@ -6475,8 +6768,239 @@ hold ec = 0
               }
             }
             hold opnd = nm3
+            // ---- a call as the right operand of a chain ----
+            // `1 + len(xs)`, `2 * len(s)`, `"a" + concat("b", "c")` and
+            // user functions were previously left as un-mapped names (and
+            // the `(` then failed).  Map the builtin here with the same
+            // runtime names the statement-level call path uses; the
+            // argument text is copied verbatim (nested builtin calls in an
+            // argument are still a documented limitation).
+            hold ocnx = 0
+            hold ocp = pos
+            hold ocsk = 1
+            while ocsk == 1 {
+              when ocp >= n {
+                hold ocsk = 0
+              } otherwise {
+                hold ocx = sx_index(source, ocp)
+                when ocx == 32 || ocx == 9 || ocx == 13 {
+                  hold ocp = ocp + 1
+                } otherwise {
+                  hold ocnx = ocx
+                  hold ocsk = 0
+                }
+              }
+            }
+            when ocnx == 40 {
+              hold pos = ocp + 1
+              hold ocarg = ""
+              hold ocdepth = 1
+              hold ocq = 0
+              hold ocrun = 1
+              while ocrun == 1 {
+                when pos >= n {
+                  hold ocrun = 0
+                } otherwise {
+                  hold ocx = sx_index(source, pos)
+                  when ocq == 1 {
+                    hold ocarg = concat(ocarg, chr(ocx))
+                    hold pos = pos + 1
+                    when ocx == 92 {
+                      when pos < n {
+                        hold ocarg = concat(ocarg, chr(sx_index(source, pos)))
+                        hold pos = pos + 1
+                      }
+                    } otherwise {
+                      when ocx == 34 {
+                        hold ocq = 0
+                      }
+                    }
+                  } otherwise {
+                    when ocx == 34 {
+                      hold ocq = 1
+                      hold ocarg = concat(ocarg, chr(ocx))
+                      hold pos = pos + 1
+                    } otherwise {
+                      when ocx == 40 {
+                        hold ocdepth = ocdepth + 1
+                      }
+                      when ocx == 41 {
+                        hold ocdepth = ocdepth - 1
+                      }
+                      when ocdepth == 0 {
+                        hold pos = pos + 1
+                        hold ocrun = 0
+                      } otherwise {
+                        hold ocarg = concat(ocarg, chr(ocx))
+                        hold pos = pos + 1
+                      }
+                    }
+                  }
+                }
+              }
+              hold ocmap = ""
+              hold ocstr = 0
+              hold oclist = 0
+              when sx_eq(nm3, "concat") || sx_eq(nm3, "sx_cat") {
+                hold ocmap = "sx_cat"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "chr") || sx_eq(nm3, "sx_chr") {
+                hold ocmap = "sx_chr"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "read_file") || sx_eq(nm3, "sx_read") {
+                hold ocmap = "sx_read"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "arg") || sx_eq(nm3, "sx_arg") {
+                hold ocmap = "sx_arg"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "sx_index") || sx_eq(nm3, "sx_idx") {
+                hold ocmap = "sx_idx"
+              }
+              when sx_eq(nm3, "write_file") || sx_eq(nm3, "sx_write") {
+                hold ocmap = "sx_write"
+              }
+              when sx_eq(nm3, "arg_count") || sx_eq(nm3, "sx_argc") {
+                hold ocmap = "sx_argc"
+              }
+              when sx_eq(nm3, "string_eq") || sx_eq(nm3, "sx_eq") {
+                hold ocmap = "sx_eq"
+              }
+              when sx_eq(nm3, "push") || sx_eq(nm3, "sx_lpush") {
+                hold ocmap = "sx_lpush"
+                hold oclist = 1
+              }
+              when sx_eq(nm3, "len") || sx_eq(nm3, "sx_len") || sx_eq(nm3, "sx_llen") {
+                // list variable -> sx_llen, otherwise sx_len
+                hold ocarg2 = ""
+                hold ocai = 0
+                hold ocbd = 1
+                hold ocw = 1
+                while ocw == 1 {
+                  when ocai >= len(ocarg) {
+                    hold ocw = 0
+                  } otherwise {
+                    hold ocx = sx_index(ocarg, ocai)
+                    when ocx == 40 || ocx == 91 {
+                      hold ocbd = ocbd + 1
+                    }
+                    when ocx == 41 || ocx == 93 {
+                      hold ocbd = ocbd - 1
+                    }
+                    when ocbd == 0 {
+                      hold ocw = 0
+                    } otherwise {
+                      hold ocarg2 = concat(ocarg2, chr(ocx))
+                    }
+                    hold ocai = ocai + 1
+                  }
+                }
+                hold ocarg3 = ""
+                hold ocai = 0
+                hold ocl2 = len(ocarg2)
+                hold octr = 1
+                while octr == 1 {
+                  when ocl2 <= 0 {
+                    hold octr = 0
+                  } otherwise {
+                    hold ocx = sx_index(ocarg2, ocl2 - 1)
+                    when ocx == 32 || ocx == 9 {
+                      hold ocl2 = ocl2 - 1
+                    } otherwise {
+                      hold octr = 0
+                    }
+                  }
+                }
+                while ocai < ocl2 {
+                  hold ocarg3 = concat(ocarg3, chr(sx_index(ocarg2, ocai)))
+                  hold ocai = ocai + 1
+                }
+                hold ockey = concat("|", ocarg3)
+                hold ockey = concat(ockey, "|")
+                hold ockl = len(ockey)
+                hold ocll = len(ldecls)
+                hold ocli = 0
+                hold oclf = 0
+                while ocli + ockl <= ocll {
+                  hold oclok = 1
+                  hold oclj = 0
+                  while oclj < ockl {
+                    hold ocla = sx_index(ldecls, ocli + oclj)
+                    hold oclb = sx_index(ockey, oclj)
+                    when ocla == oclb {
+                      hold oclj = oclj + 1
+                    } otherwise {
+                      hold oclok = 0
+                      hold oclj = ockl
+                    }
+                  }
+                  when oclok == 1 {
+                    hold oclf = 1
+                    hold ocli = ocll
+                  } otherwise {
+                    hold ocli = ocli + 1
+                  }
+                }
+                when oclf == 1 {
+                  hold ocmap = "sx_llen"
+                  hold oclist = 1
+                } otherwise {
+                  hold ocmap = "sx_len"
+                }
+              }
+              when sx_eq(ocmap, "") {
+                // a user function: the return kind decides the value kind
+                hold ocfrk = 0
+                hold ocfky = concat("|", nm3)
+                hold ocfky = concat(ocfky, "=")
+                hold ocfkl = len(fsret)
+                hold ocfki = 0
+                hold ocfn = len(ocfky)
+                while ocfki + ocfn + 1 <= ocfkl {
+                  hold ocfok = 1
+                  hold ocfj = 0
+                  while ocfj < ocfn {
+                    hold ocfa = sx_index(fsret, ocfki + ocfj)
+                    hold ocfb = sx_index(ocfky, ocfj)
+                    when ocfa == ocfb {
+                      hold ocfj = ocfj + 1
+                    } otherwise {
+                      hold ocfok = 0
+                      hold ocfj = ocfn
+                    }
+                  }
+                  when ocfok == 1 {
+                    hold ocfrk = sx_index(fsret, ocfki + ocfn)
+                    hold ocfki = ocfkl
+                  } otherwise {
+                    hold ocfki = ocfki + 1
+                  }
+                }
+                when ocfrk == 115 {
+                  hold ocstr = 1
+                }
+                when ocfrk == 108 {
+                  hold oclist = 1
+                }
+                hold ocmap = nm3
+              }
+              hold opnd = concat(ocmap, "(")
+              hold opnd = concat(opnd, ocarg)
+              hold opnd = concat(opnd, ")")
+              when ocstr == 1 {
+                hold opfldstr = 1
+                hold rt = 1
+              }
+              when oclist == 1 {
+                hold lt = 1
+              }
+            }
             // postfix field chain .a.b (resolved like the statement bases)
             hold chn = 0
+
             hold chfields = ""
             hold chrun = 1
             while chrun == 1 {
@@ -8419,32 +8943,40 @@ hold ec = 0
           }
         }
       }
-      // A: text up to the `..`
+      // A (or the list, for `for v in xs {`): text up to `..` or `{`
+      hold fvmode = 0
       hold fvrun = 1
       while fvrun == 1 {
         when pos >= n {
           hold fvrun = 0
         } otherwise {
           hold fc = sx_index(source, pos)
-          when fc == 46 {
-            hold fc2 = 0
-            when pos + 1 < n {
-              hold fc2 = sx_index(source, pos + 1)
-            }
-            when fc2 == 46 {
-              hold fvrun = 0
-            } otherwise {
-              hold fva = concat(fva, chr(fc))
-              hold pos = pos + 1
-            }
+          when fc == 123 {
+            // no `..`: this is `for V in LIST {`
+            hold pos = pos + 1
+            hold fvmode = 1
+            hold fvrun = 0
           } otherwise {
-            when fc == 10 || fc == 13 {
-              hold fvrun = 0
-              hold ferr = 1
-              hold fmsg = "for loop: expected `A..B` (two dots) before the `{`"
+            when fc == 46 {
+              hold fc2 = 0
+              when pos + 1 < n {
+                hold fc2 = sx_index(source, pos + 1)
+              }
+              when fc2 == 46 {
+                hold fvrun = 0
+              } otherwise {
+                hold fva = concat(fva, chr(fc))
+                hold pos = pos + 1
+              }
             } otherwise {
-              hold fva = concat(fva, chr(fc))
-              hold pos = pos + 1
+              when fc == 10 || fc == 13 {
+                hold fvrun = 0
+                hold ferr = 1
+                hold fmsg = "for loop: expected `A..B` or a list name before the `{`"
+              } otherwise {
+                hold fva = concat(fva, chr(fc))
+                hold pos = pos + 1
+              }
             }
           }
         }
@@ -8453,17 +8985,21 @@ hold ec = 0
       when pos < n {
         hold fc = sx_index(source, pos)
       }
-      when fc == 46 {
-        hold pos = pos + 2
+      when fvmode == 1 {
+        hold pos = pos
       } otherwise {
-        when ferr == 0 {
-          hold ferr = 1
-          hold fmsg = "for loop: expected `A..B` (two dots) before the `{`"
+        when fc == 46 {
+          hold pos = pos + 2
+        } otherwise {
+          when ferr == 0 {
+            hold ferr = 1
+            hold fmsg = "for loop: expected `A..B` (two dots) before the `{`"
+          }
         }
       }
-      // B: text up to the `{`
+      // B: text up to the `{` (range mode only)
       hold fvrun2 = 1
-      while fvrun2 == 1 {
+      while fvrun2 == 1 && fvmode == 0 {
         when pos >= n {
           hold fvrun2 = 0
         } otherwise {
@@ -8483,7 +9019,7 @@ hold ec = 0
           }
         }
       }
-      // trim both range expressions
+      // trim both range expressions (range mode; list mode trims A below)
       hold fl = len(fva)
       hold trim = 1
       while trim == 1 {
@@ -8526,6 +9062,9 @@ hold ec = 0
         hold fi = fi + 1
       }
       hold fvb = fvb2
+      when fvmode == 1 {
+        hold fvb = "1"
+      }
       when sx_eq(fva, "") || sx_eq(fvb, "") {
         when ferr == 0 {
           hold ferr = 1
@@ -8582,6 +9121,40 @@ hold ec = 0
       when fvchk == 0 && ferr == 0 {
         hold ferr = 1
         hold fmsg = "for loop: the end expression may use numbers, names, fields, indexes and + - * / ( ) only"
+      }
+      // list mode: the iterated expression must be a list variable
+      when fvmode == 1 && ferr == 0 {
+        hold fvlkey = concat("|", fva)
+        hold fvlkey = concat(fvlkey, "|")
+        hold fvlkl = len(fvlkey)
+        hold fvll = len(ldecls)
+        hold fvli2 = 0
+        hold fvlf = 0
+        while fvli2 + fvlkl <= fvll {
+          hold fvlok = 1
+          hold fvlj = 0
+          while fvlj < fvlkl {
+            hold fvla = sx_index(ldecls, fvli2 + fvlj)
+            hold fvlb = sx_index(fvlkey, fvlj)
+            when fvla == fvlb {
+              hold fvlj = fvlj + 1
+            } otherwise {
+              hold fvlok = 0
+              hold fvlj = fvlkl
+            }
+          }
+          when fvlok == 1 {
+            hold fvlf = 1
+            hold fvli2 = fvll
+          } otherwise {
+            hold fvli2 = fvli2 + 1
+          }
+        }
+        when fvlf == 0 {
+          hold ferr = 1
+          hold fmsg = concat("for loop: '", fva)
+          hold fmsg = concat(fmsg, "' is not a list; write `for i in 0..N {` to count")
+        }
       }
       // the counter must not already be a string or list
       when ferr == 0 {
@@ -8664,27 +9237,61 @@ hold ec = 0
           hold body = concat(body, "double ")
           hold body = concat(body, fvname)
           hold body = concat(body, " = ")
-          hold body = concat(body, fva)
+          when fvmode == 1 {
+            hold body = concat(body, "0.0")
+          } otherwise {
+            hold body = concat(body, fva)
+          }
           hold body = concat(body, ";")
           hold body = concat(body, nl)
           hold decls = concat(decls, fvname)
           hold decls = concat(decls, "|")
         }
-        hold body = concat(body, ind)
-        hold body = concat(body, "for (")
-        hold body = concat(body, fvname)
-        hold body = concat(body, " = ")
-        hold body = concat(body, fva)
-        hold body = concat(body, "; ")
-        hold body = concat(body, fvname)
-        hold body = concat(body, " < ")
-        hold body = concat(body, fvb)
-        hold body = concat(body, "; ")
-        hold body = concat(body, fvname)
-        hold body = concat(body, " = ")
-        hold body = concat(body, fvname)
-        hold body = concat(body, " + 1) {")
-        hold body = concat(body, nl)
+        when fvmode == 1 {
+          // for v in xs { ... }  ->  index walk over the list
+          // the walk index lives in the for-init, so C scoping gives every
+          // nested list loop its own copy
+          hold fvix = "__sx_ix"
+          hold body = concat(body, ind)
+          hold body = concat(body, "for (double ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, " = 0.0; ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, " < sx_llen(")
+          hold body = concat(body, fva)
+          hold body = concat(body, "); ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, " = ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, " + 1.0) {")
+          hold body = concat(body, nl)
+          hold lt = 1
+          hold body = concat(body, ind)
+          hold body = concat(body, "  ")
+          hold body = concat(body, fvname)
+          hold body = concat(body, " = sx_lget(")
+          hold body = concat(body, fva)
+          hold body = concat(body, ", ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, ");")
+          hold body = concat(body, nl)
+        } otherwise {
+          hold body = concat(body, ind)
+          hold body = concat(body, "for (")
+          hold body = concat(body, fvname)
+          hold body = concat(body, " = ")
+          hold body = concat(body, fva)
+          hold body = concat(body, "; ")
+          hold body = concat(body, fvname)
+          hold body = concat(body, " < ")
+          hold body = concat(body, fvb)
+          hold body = concat(body, "; ")
+          hold body = concat(body, fvname)
+          hold body = concat(body, " = ")
+          hold body = concat(body, fvname)
+          hold body = concat(body, " + 1) {")
+          hold body = concat(body, nl)
+        }
         hold depth = depth + 1
         hold blk = concat(blk, "f")
         hold loopd = loopd + 1
