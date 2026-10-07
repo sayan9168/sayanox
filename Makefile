@@ -26,7 +26,7 @@ TESTS    := selfhost/seed_tests
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
         seed-bin doctor \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
-        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec \
+        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt \
         pack-compiler
 
 all: true-selfhost-min
@@ -374,17 +374,92 @@ test-prec:
 	$(CC) -O2 -o $(TESTS)/ts_prec_g2 $(TESTS)/ts_prec_g2.c
 	$(call assert-out,./$(TESTS)/ts_prec_g2,14\n10\n7\n3\n3)
 	@echo "[OK] precedence: a + 3 * 4 = 14 in seed-min and gen2"
-	@# a parenthesized base is the one known seed/gen2 difference: gen2 reports
-	@# it (with #error) instead of emitting broken C like `double b = ;`
-	@printf 'hold a = 2\nshow (a + 3) * 4\n' > $(TESTS)/ts_paren.sa
-	./$(SEED_MIN_BIN) $(TESTS)/ts_paren.sa > $(TESTS)/ts_paren_sm.c
-	$(CC) -O2 -o $(TESTS)/ts_paren_sm $(TESTS)/ts_paren_sm.c
-	$(call assert-out,./$(TESTS)/ts_paren_sm,20)
-	./$(GEN2) $(TESTS)/ts_paren.sa $(TESTS)/ts_paren_g2.c >/dev/null
-	@grep -q 'parenthesized base is not supported' $(TESTS)/ts_paren_g2.c
-	@if $(CC) -O2 -o $(TESTS)/ts_paren_g2 $(TESTS)/ts_paren_g2.c 2>/dev/null; then \
-	  echo "[FAIL] gen2 accepted a parenthesized base"; exit 1; fi
-	@echo "[OK] parenthesized base: seed-min runs it, gen2 reports it clearly"
+	@# (parenthesized expressions moved to `make test-parens`: gen2 runs them now)
+
+# ---------------------------------------------------------------------------
+# test-float: fractional literals and true `/` (seed-min and gen2 agree).
+# `10 / 4` is 2.5 on every path -- two integer literals used to be C integer
+# division (2) in both seed-min and gen2.  A malformed literal is an error.
+# ---------------------------------------------------------------------------
+test-float:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold x = 2.5\nshow x\nshow x * 2\nshow 10 / 4\nshow 7 / 2 * 2\nshow 1 / 3\nhold xs = [1.5, 2]\nshow xs[0]\nstruct P {\n  v\n}\nhold p = P { v: 1.25 }\nshow p.v\nwhen x > 2.4 {\n  show 1\n}\nshow 10 %% 4\nshow 0.5 + 0.25\nhold y = -1.5\nshow y\nshow 5 %% 2.5\n' > $(TESTS)/ts_float.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_float.sa > $(TESTS)/ts_float_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_float_sm $(TESTS)/ts_float_sm.c
+	$(call assert-out,./$(TESTS)/ts_float_sm,2.5\n5\n2.5\n7\n0.333333\n1.5\n1.25\n1\n2\n0.75\n-1.5\n1)
+	./$(GEN2) $(TESTS)/ts_float.sa $(TESTS)/ts_float_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_float_g2 $(TESTS)/ts_float_g2.c
+	$(call assert-out,./$(TESTS)/ts_float_g2,2.5\n5\n2.5\n7\n0.333333\n1.5\n1.25\n1\n2\n0.75\n-1.5\n1)
+	@printf 'hold x = 2.\nshow x\n' > $(TESTS)/ts_floatbad.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_floatbad.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted the malformed literal 2."; exit 1; fi
+	@./$(GEN2) $(TESTS)/ts_floatbad.sa $(TESTS)/ts_floatbad_g2.c >/dev/null 2>&1 || true
+	@grep -q '#error' $(TESTS)/ts_floatbad_g2.c
+	@echo "[OK] fractional literals + true division: seed-min and gen2 print 2.5 for 2.5 and 10 / 4; 2. is an error"
+
+# ---------------------------------------------------------------------------
+# test-parens: parenthesized expressions on seed-min and gen2.  gen2 compiles
+# a hold/show with a grouping paren through the verbatim-C + `%` rewrite it
+# uses for conditions; non-numeric content inside the parens (strings,
+# lists, fields, builtins) is a clear #error, never broken C.
+# ---------------------------------------------------------------------------
+test-parens:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold a = 2\nshow (a + 3) * 4\nshow 4 * (a + 3)\nhold b = (a + 1) %% 2\nshow b\nshow ((a))\nshow (10 / 4) * 2\nshow -(a + 1)\nshow (a %% 3 + 1) * 2\nhold b = (b + 1) * 10\nshow b\nshow (a < 3) + 1\nmake f(x) {\n  give (x + 1) * 2\n}\nshow (f(2) + 1) * 2\nmake g(x) {\n  give x %% 3\n}\nshow g(7)\nwhen (a + 1) * 2 == 6 {\n  show 6\n}\n' > $(TESTS)/ts_parens.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_parens.sa > $(TESTS)/ts_parens_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_parens_sm $(TESTS)/ts_parens_sm.c
+	$(call assert-out,./$(TESTS)/ts_parens_sm,20\n20\n1\n2\n5\n-3\n6\n20\n2\n14\n1\n6)
+	./$(GEN2) $(TESTS)/ts_parens.sa $(TESTS)/ts_parens_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_parens_g2 $(TESTS)/ts_parens_g2.c
+	$(call assert-out,./$(TESTS)/ts_parens_g2,20\n20\n1\n2\n5\n-3\n6\n20\n2\n14\n1\n6)
+	@printf 'hold s = "x"\nshow (s + 1) * 2\n' > $(TESTS)/ts_parenstr.sa
+	@./$(GEN2) $(TESTS)/ts_parenstr.sa $(TESTS)/ts_parenstr_g2.c >/dev/null 2>&1 || true
+	@grep -q 'parenthesized expression must be numeric' $(TESTS)/ts_parenstr_g2.c
+	@printf 'show (len("ab") + 1) * 2\n' > $(TESTS)/ts_parenb.sa
+	@./$(GEN2) $(TESTS)/ts_parenb.sa $(TESTS)/ts_parenb_g2.c >/dev/null 2>&1 || true
+	@grep -q "builtin 'len' inside a parenthesized expression" $(TESTS)/ts_parenb_g2.c
+	@printf 'show (1 + 2\n' > $(TESTS)/ts_parenu.sa
+	@./$(GEN2) $(TESTS)/ts_parenu.sa $(TESTS)/ts_parenu_g2.c >/dev/null 2>&1 || true
+	@grep -q "unbalanced '('" $(TESTS)/ts_parenu_g2.c
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_parenu.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted an unbalanced paren"; exit 1; fi
+	@echo "[OK] parenthesized expressions: seed-min and gen2 agree ((a + 3) * 4 = 20); non-numeric parens and unbalanced parens are clear errors"
+
+# ---------------------------------------------------------------------------
+# test-push-stmt: bare `push(xs, v)` statement == `hold xs = push(xs, v)` on
+# seed-min and gen2 (native already had it).  Pushing onto a non-list, an
+# unknown statement word and leftover tokens are clear errors on both.
+# ---------------------------------------------------------------------------
+test-push-stmt:
+	@test -x $(GEN2) || (echo "need gen2"; exit 1)
+	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
+	@mkdir -p $(TESTS)
+	@printf 'hold xs = []\npush(xs, 5)\npush(xs, 6 + 1)\nhold i = 0\nwhile i < 3 {\n  push(xs, i * 10)\n  hold i = i + 1\n}\nshow len(xs)\nshow xs[1]\nshow xs[4]\n' > $(TESTS)/ts_push.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_push.sa > $(TESTS)/ts_push_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_push_sm $(TESTS)/ts_push_sm.c
+	$(call assert-out,./$(TESTS)/ts_push_sm,5\n7\n20)
+	./$(GEN2) $(TESTS)/ts_push.sa $(TESTS)/ts_push_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_push_g2 $(TESTS)/ts_push_g2.c
+	$(call assert-out,./$(TESTS)/ts_push_g2,5\n7\n20)
+	@printf 'hold n = 1\npush(n, 5)\n' > $(TESTS)/ts_pushbad.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_pushbad.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted push onto a number"; exit 1; fi
+	@./$(SEED_MIN_BIN) $(TESTS)/ts_pushbad.sa 2>&1 >/dev/null | grep -q "'n' is not a list"
+	@./$(GEN2) $(TESTS)/ts_pushbad.sa $(TESTS)/ts_pushbad_g2.c >/dev/null 2>&1 || true
+	@grep -q "'n' is not a list" $(TESTS)/ts_pushbad_g2.c
+	@printf 'hold i = 0\nwhile i < 3 {\n  hold i = i + 1\n  when i == 2 { continue }\n}\n' > $(TESTS)/ts_unkstmt.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_unkstmt.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted an unknown statement"; exit 1; fi
+	@./$(GEN2) $(TESTS)/ts_unkstmt.sa $(TESTS)/ts_unkstmt_g2.c >/dev/null 2>&1 || true
+	@grep -q "unknown statement 'continue'" $(TESTS)/ts_unkstmt_g2.c
+	@printf 'hold a = 1\nshow a b\n' > $(TESTS)/ts_junk.sa
+	@./$(GEN2) $(TESTS)/ts_junk.sa $(TESTS)/ts_junk_g2.c >/dev/null 2>&1 || true
+	@grep -q '#error' $(TESTS)/ts_junk_g2.c
+	@echo "[OK] bare push(xs, v): seed-min and gen2 agree; push onto a non-list and unknown statements are clear errors"
 
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -505,7 +580,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-parity
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-parity
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
