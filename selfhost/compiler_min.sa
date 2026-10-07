@@ -213,6 +213,90 @@ hold aword = ""
 hold atype = ""
 hold dtok = 0
 hold dtok2 = 0
+hold asmode = 0
+hold sufx = ""
+hold liset = 0
+hold lidx = ""
+hold sc = 0
+hold srun = 0
+hold srun2 = 0
+hold sbd = 0
+hold ap = 0
+hold aok = 0
+hold arun = 0
+hold arun2 = 0
+hold abd = 0
+hold ac1 = 0
+hold ac2 = 0
+hold gwant = ""
+hold gproto = ""
+hold gc = 0
+hold gq = 0
+hold grun = 0
+hold gdep = 0
+hold mkg = 0
+hold mkrun = 0
+hold mkc = 0
+hold gwtxt = ""
+hold gwi = 0
+hold gwlen = 0
+hold gwnm = ""
+hold gwc = 0
+hold gwk = 0
+hold gkey = ""
+hold gkl = 0
+hold gtl = 0
+hold gti = 0
+hold gtf = 0
+hold gtok = 0
+hold gtj = 0
+hold gta = 0
+hold gtb = 0
+hold gtyp = ""
+hold gtc = 0
+hold gprm = ""
+hold gbdy = ""
+hold gtw = ""
+hold gtC = ""
+hold gspec = ""
+hold gpc = ""
+hold gpc2 = ""
+hold gp1 = 0
+hold gpi = 0
+hold gpl = 0
+hold gpn2 = ""
+hold gnew = ""
+hold gbi = 0
+hold gbl = 0
+hold gbc = 0
+hold gwd = ""
+hold gsrc = ""
+hold gsi = 0
+hold gkey2 = ""
+hold gk2l = 0
+hold gt2l = 0
+hold gi2 = 0
+hold gfound = 0
+hold gok2 = 0
+hold gj2 = 0
+hold ga2 = 0
+hold gb2 = 0
+hold gcall2 = ""
+hold gkch = 0
+hold gai2 = 0
+hold gal2 = 0
+hold gsk2 = 0
+hold gac = 0
+hold ganm = ""
+hold grun3 = 0
+hold gakey = ""
+hold gakl = 0
+hold ga1 = 0
+hold gai3 = 0
+hold gaok = 0
+hold gaj3 = 0
+hold gaa = 0
+hold gab = 0
 hold ocnx = 0
 hold ocp = 0
 hold ocsk = 0
@@ -1414,7 +1498,693 @@ while fsi < n {
     }
   }
 }
+// =====================================================================
+// generic function table (full language)
+//
+//   make NAME<T>(a: T, b: T) -> T { ... }
+//
+// A generic function is not emitted itself: it is recorded here and
+// monomorphised on demand, one specialised copy per argument kind
+// (`NAME__n`, `NAME__s`, `NAME__l`).  The specialised definition is
+// spliced into the source at the next statement boundary, so it is
+// compiled by the ordinary `make`/`hold`/`give` machinery - including
+// `hold x: T = ...` inside the body, after T is replaced by the concrete
+// type word.  Entries are delimited by chr(1), which cannot appear in a
+// source file.
+//
+//   fgtab  <1>name<1>T<1>param,param<1>body<1>
+// =====================================================================
+hold fgtab = chr(1)
+hold fgcur = ""
+hold fbgen = 0
+hold fgty = ""
+hold fgname = ""
+hold fgpn = ""
+hold fgbody = ""
+hold fgallt = 0
+hold fgntot = 0
+hold fgretT = 0
+hold fgi = 0
+hold fgstart = 1
+hold fgstr = 0
+hold fgcm = 0
+hold fgw = ""
+hold fgj = 0
+hold fgnx = 0
+hold fgp = 0
+hold fgrun = 0
+hold fgc = 0
+hold fgnm = ""
+hold fgpn1 = ""
+hold fgtype = ""
+hold fgfirst = 0
+hold fgprun = 0
+hold fgdep = 0
+hold fgbd = 0
+hold fgq = 0
+while fgi < n {
+  hold fgc = sx_index(source, fgi)
+  when fgstr == 1 {
+    when fgc == 92 {
+      hold fgi = fgi + 2
+    } otherwise {
+      when fgc == 34 {
+        hold fgstr = 0
+      }
+      hold fgi = fgi + 1
+    }
+  } otherwise {
+    when fgcm == 1 {
+      when fgc == 10 {
+        hold fgcm = 0
+        hold fgstart = 1
+      }
+      hold fgi = fgi + 1
+    } otherwise {
+      when fgc == 34 {
+        hold fgstr = 1
+        hold fgstart = 0
+        hold fgi = fgi + 1
+      } otherwise {
+        when fgstart == 1 && fgc == 109 && fgi + 4 <= n {
+          hold fgw = ""
+          hold fgj = 0
+          while fgj < 4 {
+            hold fgw = concat(fgw, chr(sx_index(source, fgi + fgj)))
+            hold fgj = fgj + 1
+          }
+          hold fgnx = 0
+          when fgi + 4 < n {
+            hold fgnx = sx_index(source, fgi + 4)
+          }
+          hold fgok = 0
+          when sx_eq(fgw, "make") && (fgnx == 32 || fgnx == 9) {
+            hold fgok = 1
+          }
+          when fgok == 1 {
+            hold fgp = fgi + 4
+            hold fgrun = 1
+            while fgrun == 1 {
+              when fgp >= n {
+                hold fgrun = 0
+              } otherwise {
+                hold fgc = sx_index(source, fgp)
+                when fgc == 32 || fgc == 9 || fgc == 13 || fgc == 10 {
+                  hold fgp = fgp + 1
+                } otherwise {
+                  hold fgrun = 0
+                }
+              }
+            }
+            hold fgnm = ""
+            hold fgrun = 1
+            while fgrun == 1 {
+              when fgp >= n {
+                hold fgrun = 0
+              } otherwise {
+                hold fgc = sx_index(source, fgp)
+                when (fgc >= 97 && fgc <= 122) || (fgc >= 65 && fgc <= 90) || (fgc >= 48 && fgc <= 57) || fgc == 95 {
+                  hold fgnm = concat(fgnm, chr(fgc))
+                  hold fgp = fgp + 1
+                } otherwise {
+                  hold fgrun = 0
+                }
+              }
+            }
+            hold fgc = 0
+            when fgp < n {
+              hold fgc = sx_index(source, fgp)
+            }
+            hold fgbgen = 0
+            hold fgty2 = ""
+            when fgc == 60 {
+              // `make NAME<T>(`
+              hold fgp = fgp + 1
+              hold fgrun = 1
+              while fgrun == 1 {
+                when fgp >= n {
+                  hold fgrun = 0
+                } otherwise {
+                  hold fgc = sx_index(source, fgp)
+                  when (fgc >= 65 && fgc <= 90) || (fgc >= 97 && fgc <= 122) || fgc == 95 {
+                    hold fgty2 = concat(fgty2, chr(fgc))
+                    hold fgp = fgp + 1
+                  } otherwise {
+                    hold fgrun = 0
+                  }
+                }
+              }
+              hold fgrun = 1
+              while fgrun == 1 {
+                when fgp >= n {
+                  hold fgrun = 0
+                } otherwise {
+                  hold fgc = sx_index(source, fgp)
+                  when fgc == 32 || fgc == 9 {
+                    hold fgp = fgp + 1
+                  } otherwise {
+                    when fgc == 62 {
+                      hold fgp = fgp + 1
+                    }
+                    hold fgrun = 0
+                  }
+                }
+              }
+              hold fgbgen = 1
+            }
+            when fgbgen == 1 && sx_eq(fgnm, "") == 0 {
+              // params: NAME : TYPE, comma separated
+              hold fgrun = 1
+              while fgrun == 1 {
+                when fgp >= n {
+                  hold fgrun = 0
+                } otherwise {
+                  hold fgc = sx_index(source, fgp)
+                  when fgc == 32 || fgc == 9 || fgc == 13 || fgc == 10 {
+                    hold fgp = fgp + 1
+                  } otherwise {
+                    hold fgrun = 0
+                  }
+                }
+              }
+              hold fgc = 0
+              when fgp < n {
+                hold fgc = sx_index(source, fgp)
+              }
+              when fgc == 40 {
+                hold fgp = fgp + 1
+                hold fgpn1 = ""
+                hold fgntot = 0
+                hold fgallt = 1
+                hold fgfirst = 1
+                hold fgprun = 1
+                while fgprun == 1 {
+                  hold fgc = 0
+                  when fgp < n {
+                    hold fgc = sx_index(source, fgp)
+                  }
+                  when fgp >= n {
+                    hold fgprun = 0
+                  } otherwise {
+                    when fgc == 41 {
+                      hold fgp = fgp + 1
+                      hold fgprun = 0
+                    } otherwise {
+                      when fgc == 32 || fgc == 9 || fgc == 13 || fgc == 10 || fgc == 44 {
+                        hold fgp = fgp + 1
+                      } otherwise {
+                        when (fgc >= 97 && fgc <= 122) || (fgc >= 65 && fgc <= 90) || fgc == 95 {
+                          hold fgpn = ""
+                          hold fgrun = 1
+                          while fgrun == 1 {
+                            when fgp >= n {
+                              hold fgrun = 0
+                            } otherwise {
+                              hold fgc = sx_index(source, fgp)
+                              when (fgc >= 97 && fgc <= 122) || (fgc >= 65 && fgc <= 90) || (fgc >= 48 && fgc <= 57) || fgc == 95 {
+                                hold fgpn = concat(fgpn, chr(fgc))
+                                hold fgp = fgp + 1
+                              } otherwise {
+                                hold fgrun = 0
+                              }
+                            }
+                          }
+                          hold fgrun = 1
+                          while fgrun == 1 {
+                            when fgp >= n {
+                              hold fgrun = 0
+                            } otherwise {
+                              hold fgc = sx_index(source, fgp)
+                              when fgc == 32 || fgc == 9 {
+                                hold fgp = fgp + 1
+                              } otherwise {
+                                hold fgrun = 0
+                              }
+                            }
+                          }
+                          hold fgtype = ""
+                          hold fgc = 0
+                          when fgp < n {
+                            hold fgc = sx_index(source, fgp)
+                          }
+                          when fgc == 58 {
+                            hold fgp = fgp + 1
+                            hold fgrun = 1
+                            while fgrun == 1 {
+                              when fgp >= n {
+                                hold fgrun = 0
+                              } otherwise {
+                                hold fgc = sx_index(source, fgp)
+                                when fgc == 32 || fgc == 9 {
+                                  hold fgp = fgp + 1
+                                } otherwise {
+                                  hold fgrun = 0
+                                }
+                              }
+                            }
+                            hold fgrun = 1
+                            while fgrun == 1 {
+                              when fgp >= n {
+                                hold fgrun = 0
+                              } otherwise {
+                                hold fgc = sx_index(source, fgp)
+                                when (fgc >= 97 && fgc <= 122) || (fgc >= 65 && fgc <= 90) {
+                                  hold fgtype = concat(fgtype, chr(fgc))
+                                  hold fgp = fgp + 1
+                                } otherwise {
+                                  hold fgrun = 0
+                                }
+                              }
+                            }
+                          }
+                          when fgfirst == 0 {
+                            hold fgpn1 = concat(fgpn1, ",")
+                          }
+                          hold fgpn1 = concat(fgpn1, fgpn)
+                          hold fgfirst = 0
+                          hold fgntot = fgntot + 1
+                          when sx_eq(fgtype, fgty2) {
+                          } otherwise {
+                            hold fgallt = 0
+                          }
+                        } otherwise {
+                          hold fgp = fgp + 1
+                        }
+                      }
+                    }
+                  }
+                }
+                // optional `-> TYPE`
+                hold fgretT = 0
+                hold fgrun = 1
+                while fgrun == 1 {
+                  when fgp >= n {
+                    hold fgrun = 0
+                  } otherwise {
+                    hold fgc = sx_index(source, fgp)
+                    when fgc == 32 || fgc == 9 || fgc == 13 {
+                      hold fgp = fgp + 1
+                    } otherwise {
+                      hold fgrun = 0
+                    }
+                  }
+                }
+                hold fgc = 0
+                hold fgc2 = 0
+                when fgp < n {
+                  hold fgc = sx_index(source, fgp)
+                }
+                when fgp + 1 < n {
+                  hold fgc2 = sx_index(source, fgp + 1)
+                }
+                when fgc == 45 && fgc2 == 62 {
+                  hold fgp = fgp + 2
+                  hold fgrun = 1
+                  while fgrun == 1 {
+                    when fgp >= n {
+                      hold fgrun = 0
+                    } otherwise {
+                      hold fgc = sx_index(source, fgp)
+                      when fgc == 32 || fgc == 9 {
+                        hold fgp = fgp + 1
+                      } otherwise {
+                        hold fgrun = 0
+                      }
+                    }
+                  }
+                  hold fgtype = ""
+                  hold fgrun = 1
+                  while fgrun == 1 {
+                    when fgp >= n {
+                      hold fgrun = 0
+                    } otherwise {
+                      hold fgc = sx_index(source, fgp)
+                      when (fgc >= 97 && fgc <= 122) || (fgc >= 65 && fgc <= 90) {
+                        hold fgtype = concat(fgtype, chr(fgc))
+                        hold fgp = fgp + 1
+                      } otherwise {
+                        hold fgrun = 0
+                      }
+                    }
+                  }
+                  when sx_eq(fgtype, fgty2) {
+                    hold fgretT = 1
+                  }
+                }
+                // a generic: every parameter and the return are T
+                when fgallt == 1 && fgntot > 0 && fgretT == 1 {
+                  // capture the body text up to the matching `}`
+                  hold fgrun = 1
+                  while fgrun == 1 {
+                    when fgp >= n {
+                      hold fgrun = 0
+                    } otherwise {
+                      hold fgc = sx_index(source, fgp)
+                      when fgc == 32 || fgc == 9 || fgc == 13 || fgc == 10 {
+                        hold fgp = fgp + 1
+                      } otherwise {
+                        when fgc == 123 {
+                          hold fgp = fgp + 1
+                        }
+                        hold fgrun = 0
+                      }
+                    }
+                  }
+                  hold fgbd = 1
+                  hold fgq = 0
+                  hold fgb2 = 0
+                  hold fgbody = ""
+                  hold fgrun = 1
+                  while fgrun == 1 {
+                    when fgp >= n {
+                      hold fgrun = 0
+                    } otherwise {
+                      hold fgc = sx_index(source, fgp)
+                      when fgq == 1 {
+                        hold fgbody = concat(fgbody, chr(fgc))
+                        hold fgp = fgp + 1
+                        when fgc == 92 {
+                          when fgp < n {
+                            hold fgbody = concat(fgbody, chr(sx_index(source, fgp)))
+                            hold fgp = fgp + 1
+                          }
+                        } otherwise {
+                          when fgc == 34 {
+                            hold fgq = 0
+                          }
+                        }
+                      } otherwise {
+                        when fgc == 34 {
+                          hold fgq = 1
+                          hold fgbody = concat(fgbody, chr(fgc))
+                          hold fgp = fgp + 1
+                        } otherwise {
+                          when fgc == 123 {
+                            hold fgbd = fgbd + 1
+                          }
+                          when fgc == 125 {
+                            hold fgbd = fgbd - 1
+                          }
+                          when fgbd == 0 && fgc == 125 {
+                            hold fgrun = 0
+                          } otherwise {
+                            hold fgbody = concat(fgbody, chr(fgc))
+                          }
+                          hold fgp = fgp + 1
+                        }
+                      }
+                    }
+                  }
+                  hold fgtab = concat(fgtab, fgnm)
+                  hold fgtab = concat(fgtab, chr(1))
+                  hold fgtab = concat(fgtab, fgty2)
+                  hold fgtab = concat(fgtab, chr(1))
+                  hold fgtab = concat(fgtab, fgpn1)
+                  hold fgtab = concat(fgtab, chr(1))
+                  hold fgtab = concat(fgtab, fgbody)
+                  hold fgtab = concat(fgtab, chr(1))
+                  hold fgi = fgp
+                } otherwise {
+                  hold fgi = fgi + 1
+                }
+                hold fgstart = 0
+              } otherwise {
+                hold fgstart = 0
+                hold fgi = fgi + 1
+              }
+            } otherwise {
+              when fgc == 10 || fgc == 123 || fgc == 125 || fgc == 59 {
+                hold fgstart = 1
+              } otherwise {
+                when fgc == 32 || fgc == 9 || fgc == 13 {
+                } otherwise {
+                  hold fgstart = 0
+                }
+              }
+              hold fgi = fgi + 1
+            }
+          } otherwise {
+            when fgc == 10 || fgc == 123 || fgc == 125 || fgc == 59 {
+              hold fgstart = 1
+            } otherwise {
+              when fgc == 32 || fgc == 9 || fgc == 13 {
+              } otherwise {
+                hold fgstart = 0
+              }
+            }
+            hold fgi = fgi + 1
+          }
+        } otherwise {
+          when fgc == 10 || fgc == 123 || fgc == 125 || fgc == 59 {
+            hold fgstart = 1
+          } otherwise {
+            when fgc == 32 || fgc == 9 || fgc == 13 {
+            } otherwise {
+              hold fgstart = 0
+            }
+          }
+          hold fgi = fgi + 1
+        }
+      }
+    }
+  }
+}
+
 while running == 1 {
+
+  // ---- phase 0: splice pending generic specialisations ----
+  // A `make NAME<T>` call asks for a monomorphised copy; the text is
+  // inserted right here, at a statement boundary, so the ordinary
+  // function machinery compiles it (a prototype goes into gproto so a
+  // forward-referenced call still links).
+  when len(gwant) > 0 {
+    hold gwtxt = ""
+    hold gwi = 1
+    hold gwlen = len(gwant)
+    while gwi < gwlen {
+      hold gwnm = ""
+      hold gwrun = 1
+      while gwrun == 1 {
+        when gwi >= gwlen {
+          hold gwrun = 0
+        } otherwise {
+          hold gwc = sx_index(gwant, gwi)
+          when gwc == 1 {
+            hold gwi = gwi + 1
+            hold gwrun = 0
+          } otherwise {
+            hold gwnm = concat(gwnm, chr(gwc))
+            hold gwi = gwi + 1
+          }
+        }
+      }
+      hold gwk = 0
+      when gwi < gwlen {
+        hold gwk = sx_index(gwant, gwi)
+        hold gwi = gwi + 1
+      }
+      // look the generic up: fgtab <1>name<1>T<1>params<1>body<1>
+      hold gkey = concat(chr(1), gwnm)
+      hold gkey = concat(gkey, chr(1))
+      hold gkl = len(gkey)
+      hold gtl = len(fgtab)
+      hold gti = 0
+      hold gtf = 0
+      hold gtstop = 0
+      while gti + gkl <= gtl && gtstop == 0 {
+        hold gtok = 1
+        hold gtj = 0
+        while gtj < gkl {
+          hold gta = sx_index(fgtab, gti + gtj)
+          hold gtb = sx_index(gkey, gtj)
+          when gta == gtb {
+            hold gtj = gtj + 1
+          } otherwise {
+            hold gtok = 0
+            hold gtj = gkl
+          }
+        }
+        when gtok == 1 {
+          hold gtf = 1
+          hold gtstop = 1
+          hold gti = gti + gkl
+        } otherwise {
+          hold gti = gti + 1
+        }
+      }
+      when gtf == 1 {
+        // read T, params, body
+        hold gtyp = ""
+        hold grun = 1
+        while grun == 1 {
+          when gti >= gtl {
+            hold grun = 0
+          } otherwise {
+            hold gtc = sx_index(fgtab, gti)
+            hold gti = gti + 1
+            when gtc == 1 {
+              hold grun = 0
+            } otherwise {
+              hold gtyp = concat(gtyp, chr(gtc))
+            }
+          }
+        }
+        hold gprm = ""
+        hold grun = 1
+        while grun == 1 {
+          when gti >= gtl {
+            hold grun = 0
+          } otherwise {
+            hold gtc = sx_index(fgtab, gti)
+            hold gti = gti + 1
+            when gtc == 1 {
+              hold grun = 0
+            } otherwise {
+              hold gprm = concat(gprm, chr(gtc))
+            }
+          }
+        }
+        hold gbdy = ""
+        hold grun = 1
+        while grun == 1 {
+          when gti >= gtl {
+            hold grun = 0
+          } otherwise {
+            hold gtc = sx_index(fgtab, gti)
+            hold gti = gti + 1
+            when gtc == 1 {
+              hold grun = 0
+            } otherwise {
+              hold gbdy = concat(gbdy, chr(gtc))
+            }
+          }
+        }
+        // concrete type word for this call
+        hold gtw = "num"
+        hold gtC = "double "
+        when gwk == 115 {
+          hold gtw = "str"
+          hold gtC = "char * "
+        }
+        when gwk == 108 {
+          hold gtw = "list"
+          hold gtC = "sx_list * "
+        }
+        hold gspec = concat(gwnm, "__")
+        hold gspec = concat(gspec, chr(gwk))
+        hold gpc = ""       // C param list for the prototype
+        hold gpc2 = ""      // Sayanox param list for the definition
+        hold gp1 = 1
+        hold gpi = 0
+        hold gprm = concat(gprm, ",")
+        hold gpl = len(gprm)
+        while gpi < gpl {
+          hold gpn2 = ""
+          hold grun = 1
+          while grun == 1 {
+            when gpi >= gpl {
+              hold grun = 0
+            } otherwise {
+              hold gtc = sx_index(gprm, gpi)
+              when gtc == 44 {
+                hold gpi = gpi + 1
+                hold grun = 0
+              } otherwise {
+                hold gpn2 = concat(gpn2, chr(gtc))
+                hold gpi = gpi + 1
+              }
+            }
+          }
+          when sx_eq(gpn2, "") == 0 {
+            when gp1 == 0 {
+              hold gpc = concat(gpc, ", ")
+              hold gpc2 = concat(gpc2, ", ")
+            }
+            hold gpc = concat(gpc, gtC)
+            hold gpc = concat(gpc, gpn2)
+            hold gpc2 = concat(gpc2, gpn2)
+            hold gpc2 = concat(gpc2, ": ")
+            hold gpc2 = concat(gpc2, gtw)
+            hold gp1 = 0
+          }
+        }
+        // body with whole-word `T` replaced by the concrete type word
+        hold gnew = ""
+        hold gbi = 0
+        hold gbl = len(gbdy)
+        while gbi < gbl {
+          hold gbc = sx_index(gbdy, gbi)
+          when (gbc >= 97 && gbc <= 122) || (gbc >= 65 && gbc <= 90) || gbc == 95 {
+            hold gwd = ""
+            hold grun = 1
+            while grun == 1 {
+              when gbi >= gbl {
+                hold grun = 0
+              } otherwise {
+                hold gbc = sx_index(gbdy, gbi)
+                when (gbc >= 97 && gbc <= 122) || (gbc >= 65 && gbc <= 90) || (gbc >= 48 && gbc <= 57) || gbc == 95 {
+                  hold gwd = concat(gwd, chr(gbc))
+                  hold gbi = gbi + 1
+                } otherwise {
+                  hold grun = 0
+                }
+              }
+            }
+            when sx_eq(gwd, gtyp) {
+              hold gnew = concat(gnew, gtw)
+            } otherwise {
+              hold gnew = concat(gnew, gwd)
+            }
+          } otherwise {
+            hold gnew = concat(gnew, chr(gbc))
+            hold gbi = gbi + 1
+          }
+        }
+        // definition + prototype + signature tables for the specialised name
+        hold gwtxt = concat(gwtxt, "make ")
+        hold gwtxt = concat(gwtxt, gspec)
+        hold gwtxt = concat(gwtxt, "(")
+        hold gwtxt = concat(gwtxt, gpc2)
+        hold gwtxt = concat(gwtxt, ") -> ")
+        hold gwtxt = concat(gwtxt, gtw)
+        hold gwtxt = concat(gwtxt, " {")
+        hold gwtxt = concat(gwtxt, gnew)
+        hold gwtxt = concat(gwtxt, "}")
+        hold gwtxt = concat(gwtxt, nl)
+        hold gproto = concat(gproto, "static ")
+        hold gproto = concat(gproto, gtC)
+        hold gproto = concat(gproto, " ")
+        hold gproto = concat(gproto, gspec)
+        hold gproto = concat(gproto, "(")
+        hold gproto = concat(gproto, gpc)
+        hold gproto = concat(gproto, ");")
+        hold gproto = concat(gproto, nl)
+        hold fsret = concat(fsret, gspec)
+        hold fsret = concat(fsret, "=")
+        hold fsret = concat(fsret, chr(gwk))
+        hold fsret = concat(fsret, "|")
+        hold fsptx = concat(fsptx, gspec)
+        hold fsptx = concat(fsptx, "=")
+        hold fsptx = concat(fsptx, gpc)
+        hold fsptx = concat(fsptx, "|")
+      }
+    }
+    hold gwant = ""
+    // splice the text at the current statement boundary
+    hold gsrc = ""
+    hold gsi = 0
+    while gsi < pos {
+      hold gsrc = concat(gsrc, chr(sx_index(source, gsi)))
+      hold gsi = gsi + 1
+    }
+    hold gsrc = concat(gsrc, gwtxt)
+    while gsi < n {
+      hold gsrc = concat(gsrc, chr(sx_index(source, gsi)))
+      hold gsi = gsi + 1
+    }
+    hold source = gsrc
+    hold n = len(source)
+  }
 
   // ---- phase 1: skip blanks and // comments ----
   hold skipw = 1
@@ -1466,6 +2236,11 @@ while running == 1 {
   // ---- phase 2: one statement ----
   when running == 1 {
     hold c = sx_index(source,pos)
+    // per-statement assignment state: `NAME = EXPR`, `NAME.f = EXPR` and
+    // `NAME[i] = EXPR` reuse the hold parser (act 1) with asmode = 1
+    hold asmode = 0
+    hold liset = 0
+    hold lidx = ""
 
     // dispatch on the first character; act is 0 for "not a statement"
     hold act = 0
@@ -1504,7 +2279,57 @@ while running == 1 {
       }
       when sx_eq(kw, "make") {
         hold act = 5
+        // `make NAME<T>(...)` is a generic: act 15 skips the definition
+        // (specialisations are spliced in on demand)
+        hold mkg = pos + 4
+        hold mkrun = 1
+        while mkrun == 1 {
+          when mkg >= n {
+            hold mkrun = 0
+          } otherwise {
+            hold mkc = sx_index(source, mkg)
+            when mkc == 32 || mkc == 9 {
+              hold mkg = mkg + 1
+            } otherwise {
+              hold mkrun = 0
+            }
+          }
+        }
+        hold mkrun = 1
+        while mkrun == 1 {
+          when mkg >= n {
+            hold mkrun = 0
+          } otherwise {
+            hold mkc = sx_index(source, mkg)
+            when (mkc >= 97 && mkc <= 122) || (mkc >= 65 && mkc <= 90) || (mkc >= 48 && mkc <= 57) || mkc == 95 {
+              hold mkg = mkg + 1
+            } otherwise {
+              hold mkrun = 0
+            }
+          }
+        }
+        hold mkrun = 1
+        while mkrun == 1 {
+          when mkg >= n {
+            hold mkrun = 0
+          } otherwise {
+            hold mkc = sx_index(source, mkg)
+            when mkc == 32 || mkc == 9 {
+              hold mkg = mkg + 1
+            } otherwise {
+              hold mkrun = 0
+            }
+          }
+        }
+        hold mkc = 0
+        when mkg < n {
+          hold mkc = sx_index(source, mkg)
+        }
+        when mkc == 60 {
+          hold act = 15
+        }
       }
+
     }
     // give
     when c == 103 {
@@ -1682,9 +2507,94 @@ while running == 1 {
       // (pok2 doubles as scratch in the push search above; a push error
       // has already set pbad, and its message must win)
       when pok2 == 0 && pbad == 0 {
-        hold pmsg = concat("unknown statement '", uword)
-        hold pmsg = concat(pmsg, "' (statements are hold show when while make give struct, and push(xs, v))")
-        hold pbad = 1
+        // an assignment statement: NAME = EXPR, NAME.field = EXPR,
+        // NAME[i] = EXPR, or a compound `+= -= *= /= %=`
+        hold ap = pp
+        hold aok = 0
+        hold arun = 1
+        while arun == 1 {
+          when ap >= n {
+            hold arun = 0
+          } otherwise {
+            hold ac1 = sx_index(source, ap)
+            when ac1 == 32 || ac1 == 9 || ac1 == 13 {
+              hold ap = ap + 1
+            } otherwise {
+              when ac1 == 61 {
+                hold ac2 = 0
+                when ap + 1 < n {
+                  hold ac2 = sx_index(source, ap + 1)
+                }
+                when ac2 == 61 {
+                  hold arun = 0
+                } otherwise {
+                  hold aok = 1
+                  hold arun = 0
+                }
+              } otherwise {
+                when ac1 == 43 || ac1 == 45 || ac1 == 42 || ac1 == 47 || ac1 == 37 {
+                  hold ac2 = 0
+                  when ap + 1 < n {
+                    hold ac2 = sx_index(source, ap + 1)
+                  }
+                  when ac2 == 61 {
+                    hold aok = 1
+                  }
+                  hold arun = 0
+                } otherwise {
+                  when ac1 == 46 {
+                    hold ap = ap + 1
+                    hold arun2 = 1
+                    while arun2 == 1 {
+                      when ap >= n {
+                        hold arun2 = 0
+                      } otherwise {
+                        hold ac2 = sx_index(source, ap)
+                        when (ac2 >= 97 && ac2 <= 122) || (ac2 >= 65 && ac2 <= 90) || (ac2 >= 48 && ac2 <= 57) || ac2 == 95 {
+                          hold ap = ap + 1
+                        } otherwise {
+                          hold arun2 = 0
+                        }
+                      }
+                    }
+                  } otherwise {
+                    when ac1 == 91 {
+                      hold abd = 0
+                      hold arun2 = 1
+                      while arun2 == 1 {
+                        when ap >= n {
+                          hold arun2 = 0
+                        } otherwise {
+                          hold ac2 = sx_index(source, ap)
+                          when ac2 == 91 {
+                            hold abd = abd + 1
+                          }
+                          when ac2 == 93 {
+                            hold abd = abd - 1
+                          }
+                          hold ap = ap + 1
+                          when abd == 0 {
+                            hold arun2 = 0
+                          }
+                        }
+                      }
+                    } otherwise {
+                      hold arun = 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        when aok == 1 {
+          hold act = 1
+          hold asmode = 1
+        } otherwise {
+          hold pmsg = concat("unknown statement '", uword)
+          hold pmsg = concat(pmsg, "' (statements are hold show when while make give struct, for, while and push(xs, v))")
+          hold pbad = 1
+        }
       }
       when pbad == 1 {
         // skip the rest of the line; the first such error is reported
@@ -2261,7 +3171,9 @@ while running == 1 {
       hold declt = ""
       // bare push(xs, v): nm is already set and pos sits on `push`
       when bpush == 0 {
-        hold pos = pos + 4
+        when asmode == 0 {
+          hold pos = pos + 4
+        }
         // blank skip
         hold sk = 1
         while sk == 1 {
@@ -2289,6 +3201,65 @@ while running == 1 {
               hold pos = pos + 1
             } otherwise {
               hold rn = 0
+            }
+          }
+        }
+        // assignment target: an optional `.field` / `[index]` chain is
+        // copied verbatim (a pure-min struct field or list element)
+        hold sufx = ""
+        hold srun = 1
+        while srun == 1 {
+          hold srun = 0
+          when pos < n {
+            hold sc = sx_index(source, pos)
+            when sc == 46 {
+              hold srun2 = 1
+              while srun2 == 1 {
+                when pos >= n {
+                  hold srun2 = 0
+                } otherwise {
+                  hold sc = sx_index(source, pos)
+                  when (sc >= 97 && sc <= 122) || (sc >= 65 && sc <= 90) || (sc >= 48 && sc <= 57) || sc == 95 || sc == 46 {
+                    hold sufx = concat(sufx, chr(sc))
+                    hold pos = pos + 1
+                  } otherwise {
+                    hold srun2 = 0
+                  }
+                }
+              }
+              hold srun = 1
+            } otherwise {
+              when sc == 91 {
+                // `NAME[i] = v` becomes `NAME = sx_lset(NAME, i, v)`
+                hold pos = pos + 1
+                hold sbd = 0
+                hold srun2 = 1
+                while srun2 == 1 {
+                  when pos >= n {
+                    hold srun2 = 0
+                  } otherwise {
+                    hold sc = sx_index(source, pos)
+                    when sc == 91 {
+                      hold sbd = sbd + 1
+                    }
+                    when sc == 93 {
+                      when sbd == 0 {
+                        hold srun2 = 0
+                      }
+                      hold sbd = sbd - 1
+                    }
+                    when srun2 == 1 {
+                      hold lidx = concat(lidx, chr(sc))
+                      hold pos = pos + 1
+                    }
+                  }
+                }
+                when pos < n {
+                  hold pos = pos + 1
+                }
+                hold liset = 1
+                hold srun = 1
+              }
             }
           }
         }
@@ -4001,7 +4972,145 @@ while running == 1 {
             hold lt = 1
           }
           when fk == 0 {
-            hold rhs = concat(nm2, "(")
+            // a generic function: request the specialised copy for the
+            // kind of the first argument and call that instead
+            hold gkey2 = concat(chr(1), nm2)
+            hold gkey2 = concat(gkey2, chr(1))
+            hold gk2l = len(gkey2)
+            hold gt2l = len(fgtab)
+            hold gi2 = 0
+            hold gfound = 0
+            while gi2 + gk2l <= gt2l {
+              hold gok2 = 1
+              hold gj2 = 0
+              while gj2 < gk2l {
+                hold ga2 = sx_index(fgtab, gi2 + gj2)
+                hold gb2 = sx_index(gkey2, gj2)
+                when ga2 == gb2 {
+                  hold gj2 = gj2 + 1
+                } otherwise {
+                  hold gok2 = 0
+                  hold gj2 = gk2l
+                }
+              }
+              when gok2 == 1 {
+                hold gfound = 1
+                hold gi2 = gt2l
+              } otherwise {
+                hold gi2 = gi2 + 1
+              }
+            }
+            hold gcall2 = nm2
+            when gfound == 1 {
+              // kind of the first argument: num unless it is a string
+              // literal or a name declared str/list
+              hold gkch = 110
+              hold gai2 = 0
+              hold gal2 = len(argv_c)
+              hold gsk2 = 1
+              while gsk2 == 1 {
+                when gai2 >= gal2 {
+                  hold gsk2 = 0
+                } otherwise {
+                  hold gac = sx_index(argv_c, gai2)
+                  when gac == 32 || gac == 9 {
+                    hold gai2 = gai2 + 1
+                  } otherwise {
+                    hold gsk2 = 0
+                  }
+                }
+              }
+              hold gac = 0
+              when gai2 < gal2 {
+                hold gac = sx_index(argv_c, gai2)
+              }
+              when gac == 34 {
+                hold gkch = 115
+              }
+              when gac == 91 {
+                hold gkch = 108
+              }
+              when (gac >= 97 && gac <= 122) || (gac >= 65 && gac <= 90) || gac == 95 {
+                hold ganm = ""
+                hold grun3 = 1
+                while grun3 == 1 {
+                  when gai2 >= gal2 {
+                    hold grun3 = 0
+                  } otherwise {
+                    hold gac = sx_index(argv_c, gai2)
+                    when (gac >= 97 && gac <= 122) || (gac >= 65 && gac <= 90) || (gac >= 48 && gac <= 57) || gac == 95 {
+                      hold ganm = concat(ganm, chr(gac))
+                      hold gai2 = gai2 + 1
+                    } otherwise {
+                      hold grun3 = 0
+                    }
+                  }
+                }
+                hold gakey = concat(ganm, "|")
+                hold gakl = len(gakey)
+                hold ga1 = len(sdecls)
+                hold gai3 = 0
+                while gai3 + gakl <= ga1 {
+                  hold gaok = 1
+                  hold gaj3 = 0
+                  while gaj3 < gakl {
+                    hold gaa = sx_index(sdecls, gai3 + gaj3)
+                    hold gab = sx_index(gakey, gaj3)
+                    when gaa == gab {
+                      hold gaj3 = gaj3 + 1
+                    } otherwise {
+                      hold gaok = 0
+                      hold gaj3 = gakl
+                    }
+                  }
+                  when gaok == 1 && (gai3 == 0 || sx_index(sdecls, gai3 - 1) == 124) {
+                    hold gkch = 115
+                    hold gai3 = ga1
+                  } otherwise {
+                    hold gai3 = gai3 + 1
+                  }
+                }
+                hold ga1 = len(ldecls)
+                hold gai3 = 0
+                while gai3 + gakl <= ga1 {
+                  hold gaok = 1
+                  hold gaj3 = 0
+                  while gaj3 < gakl {
+                    hold gaa = sx_index(ldecls, gai3 + gaj3)
+                    hold gab = sx_index(gakey, gaj3)
+                    when gaa == gab {
+                      hold gaj3 = gaj3 + 1
+                    } otherwise {
+                      hold gaok = 0
+                      hold gaj3 = gakl
+                    }
+                  }
+                  when gaok == 1 && (gai3 == 0 || sx_index(ldecls, gai3 - 1) == 124) {
+                    hold gkch = 108
+                    hold gai3 = ga1
+                  } otherwise {
+                    hold gai3 = gai3 + 1
+                  }
+                }
+              }
+              hold gcall2 = concat(nm2, "__")
+              hold gcall2 = concat(gcall2, chr(gkch))
+              // remember the request: the specialised copy is spliced in
+              // at the next statement boundary
+              hold gwant = concat(gwant, chr(1))
+              hold gwant = concat(gwant, nm2)
+              hold gwant = concat(gwant, chr(1))
+              hold gwant = concat(gwant, chr(gkch))
+              when gkch == 115 {
+                hold rk = 1
+                hold rt = 1
+              }
+              when gkch == 108 {
+                hold rk = 2
+                hold lt = 1
+              }
+            }
+            hold rhs = concat(gcall2, "(")
             hold rhs = concat(rhs, argv_c)
             hold rhs = concat(rhs, ")")
             // a `-> str` function yields a string value
@@ -5584,9 +6693,45 @@ hold ec = 0
           hold di = di + 1
         }
       }
+      // an assignment target keeps its `.field` / `[index]` suffix; the
+      // table lookup above uses the base name
+      hold nm = concat(nm, sufx)
       when found == 1 {
         hold body = concat(body, ind)
-        when cmpop != 0 {
+        when liset == 1 {
+          // list element assignment: NAME = sx_lset(NAME, index, value)
+          hold body = concat(body, nm)
+          hold body = concat(body, " = sx_lset(")
+          hold body = concat(body, nm)
+          hold body = concat(body, ", ")
+          hold body = concat(body, lidx)
+          hold body = concat(body, ", ")
+          when cmpop == 0 {
+            hold body = concat(body, rhs)
+          } otherwise {
+            when cmpop == 37 {
+              hold body = concat(body, "sx_mod(sx_lget(")
+              hold body = concat(body, nm)
+              hold body = concat(body, ", ")
+              hold body = concat(body, lidx)
+              hold body = concat(body, "), ")
+              hold body = concat(body, rhs)
+              hold body = concat(body, ")")
+            } otherwise {
+              hold body = concat(body, "(sx_lget(")
+              hold body = concat(body, nm)
+              hold body = concat(body, ", ")
+              hold body = concat(body, lidx)
+              hold body = concat(body, ") ")
+              hold body = concat(body, chr(cmpop))
+              hold body = concat(body, " ")
+              hold body = concat(body, rhs)
+              hold body = concat(body, ")")
+            }
+          }
+          hold body = concat(body, ");")
+        }
+        when liset == 0 && cmpop != 0 {
           // compound assignment: NAME op= EXPR (the name is evaluated once)
           when rk == 1 {
             // strings: `+=` concatenates, the other operators are errors
@@ -5627,7 +6772,8 @@ hold ec = 0
               hold scopmsg = "compound assignment needs a number or string variable"
             }
           }
-        } otherwise {
+        }
+        when liset == 0 && cmpop == 0 {
           hold body = concat(body, nm)
           hold body = concat(body, " = ")
           hold body = concat(body, rhs)
@@ -5636,6 +6782,11 @@ hold ec = 0
         hold body = concat(body, nl)
       } otherwise {
         hold body = concat(body, ind)
+        when asmode == 1 {
+          hold nerrscop = 1
+          hold scopmsg = concat("assignment: '", nm)
+          hold scopmsg = concat(scopmsg, "' does not exist yet; hold it first")
+        }
         when cmpop != 0 {
           hold nerrscop = 1
           hold scopmsg = "compound assignment needs an existing variable; hold it first"
@@ -6050,7 +7201,145 @@ hold ec = 0
           }
           when fk == 0 {
             // user-defined function call: forward the text as-is
-            hold rhs = concat(nm2, "(")
+            // a generic function: request the specialised copy for the
+            // kind of the first argument and call that instead
+            hold gkey2 = concat(chr(1), nm2)
+            hold gkey2 = concat(gkey2, chr(1))
+            hold gk2l = len(gkey2)
+            hold gt2l = len(fgtab)
+            hold gi2 = 0
+            hold gfound = 0
+            while gi2 + gk2l <= gt2l {
+              hold gok2 = 1
+              hold gj2 = 0
+              while gj2 < gk2l {
+                hold ga2 = sx_index(fgtab, gi2 + gj2)
+                hold gb2 = sx_index(gkey2, gj2)
+                when ga2 == gb2 {
+                  hold gj2 = gj2 + 1
+                } otherwise {
+                  hold gok2 = 0
+                  hold gj2 = gk2l
+                }
+              }
+              when gok2 == 1 {
+                hold gfound = 1
+                hold gi2 = gt2l
+              } otherwise {
+                hold gi2 = gi2 + 1
+              }
+            }
+            hold gcall2 = nm2
+            when gfound == 1 {
+              // kind of the first argument: num unless it is a string
+              // literal or a name declared str/list
+              hold gkch = 110
+              hold gai2 = 0
+              hold gal2 = len(argv_c)
+              hold gsk2 = 1
+              while gsk2 == 1 {
+                when gai2 >= gal2 {
+                  hold gsk2 = 0
+                } otherwise {
+                  hold gac = sx_index(argv_c, gai2)
+                  when gac == 32 || gac == 9 {
+                    hold gai2 = gai2 + 1
+                  } otherwise {
+                    hold gsk2 = 0
+                  }
+                }
+              }
+              hold gac = 0
+              when gai2 < gal2 {
+                hold gac = sx_index(argv_c, gai2)
+              }
+              when gac == 34 {
+                hold gkch = 115
+              }
+              when gac == 91 {
+                hold gkch = 108
+              }
+              when (gac >= 97 && gac <= 122) || (gac >= 65 && gac <= 90) || gac == 95 {
+                hold ganm = ""
+                hold grun3 = 1
+                while grun3 == 1 {
+                  when gai2 >= gal2 {
+                    hold grun3 = 0
+                  } otherwise {
+                    hold gac = sx_index(argv_c, gai2)
+                    when (gac >= 97 && gac <= 122) || (gac >= 65 && gac <= 90) || (gac >= 48 && gac <= 57) || gac == 95 {
+                      hold ganm = concat(ganm, chr(gac))
+                      hold gai2 = gai2 + 1
+                    } otherwise {
+                      hold grun3 = 0
+                    }
+                  }
+                }
+                hold gakey = concat(ganm, "|")
+                hold gakl = len(gakey)
+                hold ga1 = len(sdecls)
+                hold gai3 = 0
+                while gai3 + gakl <= ga1 {
+                  hold gaok = 1
+                  hold gaj3 = 0
+                  while gaj3 < gakl {
+                    hold gaa = sx_index(sdecls, gai3 + gaj3)
+                    hold gab = sx_index(gakey, gaj3)
+                    when gaa == gab {
+                      hold gaj3 = gaj3 + 1
+                    } otherwise {
+                      hold gaok = 0
+                      hold gaj3 = gakl
+                    }
+                  }
+                  when gaok == 1 && (gai3 == 0 || sx_index(sdecls, gai3 - 1) == 124) {
+                    hold gkch = 115
+                    hold gai3 = ga1
+                  } otherwise {
+                    hold gai3 = gai3 + 1
+                  }
+                }
+                hold ga1 = len(ldecls)
+                hold gai3 = 0
+                while gai3 + gakl <= ga1 {
+                  hold gaok = 1
+                  hold gaj3 = 0
+                  while gaj3 < gakl {
+                    hold gaa = sx_index(ldecls, gai3 + gaj3)
+                    hold gab = sx_index(gakey, gaj3)
+                    when gaa == gab {
+                      hold gaj3 = gaj3 + 1
+                    } otherwise {
+                      hold gaok = 0
+                      hold gaj3 = gakl
+                    }
+                  }
+                  when gaok == 1 && (gai3 == 0 || sx_index(ldecls, gai3 - 1) == 124) {
+                    hold gkch = 108
+                    hold gai3 = ga1
+                  } otherwise {
+                    hold gai3 = gai3 + 1
+                  }
+                }
+              }
+              hold gcall2 = concat(nm2, "__")
+              hold gcall2 = concat(gcall2, chr(gkch))
+              // remember the request: the specialised copy is spliced in
+              // at the next statement boundary
+              hold gwant = concat(gwant, chr(1))
+              hold gwant = concat(gwant, nm2)
+              hold gwant = concat(gwant, chr(1))
+              hold gwant = concat(gwant, chr(gkch))
+              when gkch == 115 {
+                hold rk = 1
+                hold rt = 1
+              }
+              when gkch == 108 {
+                hold rk = 2
+                hold lt = 1
+              }
+            }
+            hold rhs = concat(gcall2, "(")
             hold rhs = concat(rhs, argv_c)
             hold rhs = concat(rhs, ")")
             // a `-> str` function yields a string value
@@ -9298,6 +10587,52 @@ hold ec = 0
       }
     }
 
+    // ================= make NAME<T> ... { } (generic: skip, act 15) =====
+    // A generic definition is not compiled here; the pre-pass stored its
+    // body, and it is monomorphised on demand (see gwant below).
+    when act == 15 {
+      // skip from the current position up to the matching `}` of the header
+      hold pos = pos + 4
+      hold gdep = 0
+      hold gq = 0
+      hold grun = 1
+      while grun == 1 {
+        when pos >= n {
+          hold grun = 0
+        } otherwise {
+          hold gc = sx_index(source, pos)
+          when gq == 1 {
+            hold pos = pos + 1
+            when gc == 92 {
+              when pos < n {
+                hold pos = pos + 1
+              }
+            } otherwise {
+              when gc == 34 {
+                hold gq = 0
+              }
+            }
+          } otherwise {
+            when gc == 34 {
+              hold gq = 1
+              hold pos = pos + 1
+            } otherwise {
+              when gc == 123 {
+                hold gdep = gdep + 1
+              }
+              when gc == 125 {
+                hold gdep = gdep - 1
+              }
+              hold pos = pos + 1
+              when gdep == 0 && gc == 125 {
+                hold grun = 0
+              }
+            }
+          }
+        }
+      }
+    }
+
     // ================= break / continue =================
     when act == 11 || act == 12 {
       hold ind = "  "
@@ -9491,6 +10826,8 @@ when rt == 1 {
   hold out = concat(out, "static sx_list *sx_llit(int n,...){ sx_list *L=(sx_list*)malloc(sizeof(sx_list)); L->n=n; L->cap=n<4?4:n; L->d=(double*)malloc(sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }\n")
   hold out = concat(out, "static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return L->d[i]; }\n")
   hold out = concat(out, "static double sx_llen(sx_list *L){ return L?(double)L->n:0.0; }\n")
+  hold out = concat(out, "static double sx_lset_idx(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return (double)i; }\n")
+  hold out = concat(out, "static sx_list *sx_lset(sx_list *L,double v,double x){ L->d[(long)sx_lset_idx(L,v)]=x; return L; }\n")
   hold out = concat(out, "static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=(sx_list*)malloc(sizeof(sx_list)); L->n=0; L->cap=4; L->d=(double*)malloc(sizeof(double)*4);} if(L->n>=L->cap){ L->cap*=2; L->d=(double*)realloc(L->d,sizeof(double)*(size_t)L->cap);} L->d[L->n++]=v; return L; }\n")
   hold out = concat(out, "\n")
 } otherwise {
@@ -9502,9 +10839,12 @@ when rt == 1 {
   hold out = concat(out, "static sx_list *sx_llit(int n,...){ sx_list *L=(sx_list*)malloc(sizeof(sx_list)); L->n=n; L->cap=n<4?4:n; L->d=(double*)malloc(sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }\n")
   hold out = concat(out, "static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return L->d[i]; }\n")
   hold out = concat(out, "static double sx_llen(sx_list *L){ return L?(double)L->n:0.0; }\n")
+  hold out = concat(out, "static double sx_lset_idx(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return (double)i; }\n")
+  hold out = concat(out, "static sx_list *sx_lset(sx_list *L,double v,double x){ L->d[(long)sx_lset_idx(L,v)]=x; return L; }\n")
   hold out = concat(out, "static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=(sx_list*)malloc(sizeof(sx_list)); L->n=0; L->cap=4; L->d=(double*)malloc(sizeof(double)*4);} if(L->n>=L->cap){ L->cap*=2; L->d=(double*)realloc(L->d,sizeof(double)*(size_t)L->cap);} L->d[L->n++]=v; return L; }\n\n")
 }
 hold fixfrom = len(out)
+hold out = concat(out, gproto)
 hold out = concat(out, fns)
 // ---------------- struct typedefs (field types come from literals) ----------------
 hold tdi = 0
