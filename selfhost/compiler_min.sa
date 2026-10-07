@@ -726,6 +726,115 @@ while exmore == 1 {
     hold n = len(source)
   }
 }
+
+// ---- malformed number literals (`1.2.3`) are rejected up front ----------
+// Every number reader below accepts `.digits` once more each time it sees
+// one, so a second fractional part would be copied into the C as `1.2.3`
+// (a C compile error).  One scan over the spliced source, skipping strings,
+// `//` comments and identifiers (so `p.x1.y` is not a number), catches it.
+// (all scan variables are declared here: a first `hold` inside a block
+// becomes a C local of that block)
+hold nqp = 0
+hold nqc = 0
+hold nqn = 0
+hold nqk = 0
+hold nqf = 0
+while nqp < n {
+  hold nqc = sx_index(source,nqp)
+  hold nqn = 0
+  when nqp + 1 < n {
+    hold nqn = sx_index(source,nqp + 1)
+  }
+  when nqc == 34 {
+    // a string literal: skip to the closing quote, honouring backslashes
+    hold nqp = nqp + 1
+    hold nqk = 1
+    while nqk == 1 {
+      when nqp >= n {
+        hold nqk = 0
+      } otherwise {
+        hold nqc = sx_index(source,nqp)
+        when nqc == 92 {
+          hold nqp = nqp + 2
+        } otherwise {
+          hold nqp = nqp + 1
+          when nqc == 34 {
+            hold nqk = 0
+          }
+        }
+      }
+    }
+  } otherwise {
+    when nqc == 47 && nqn == 47 {
+      // a line comment: skip to the end of the line
+      hold nqk = 1
+      while nqk == 1 {
+        when nqp >= n {
+          hold nqk = 0
+        } otherwise {
+          hold nqc = sx_index(source,nqp)
+          when nqc == 10 {
+            hold nqk = 0
+          } otherwise {
+            hold nqp = nqp + 1
+          }
+        }
+      }
+    } otherwise {
+      when (nqc >= 97 && nqc <= 122) || (nqc >= 65 && nqc <= 90) || nqc == 95 {
+        // an identifier, digits included
+        hold nqk = 1
+        while nqk == 1 {
+          when nqp >= n {
+            hold nqk = 0
+          } otherwise {
+            hold nqc = sx_index(source,nqp)
+            when (nqc >= 97 && nqc <= 122) || (nqc >= 65 && nqc <= 90) || (nqc >= 48 && nqc <= 57) || nqc == 95 {
+              hold nqp = nqp + 1
+            } otherwise {
+              hold nqk = 0
+            }
+          }
+        }
+      } otherwise {
+        when nqc >= 48 && nqc <= 57 {
+          // a number: digits, then at most one `.digits`
+          hold nqf = 0
+          hold nqk = 1
+          while nqk == 1 {
+            when nqp >= n {
+              hold nqk = 0
+            } otherwise {
+              hold nqc = sx_index(source,nqp)
+              hold nqn = 0
+              when nqp + 1 < n {
+                hold nqn = sx_index(source,nqp + 1)
+              }
+              when nqc >= 48 && nqc <= 57 {
+                hold nqp = nqp + 1
+              } otherwise {
+                when nqc == 46 && nqn >= 48 && nqn <= 57 {
+                  when nqf == 1 {
+                    when perr == 0 {
+                      hold permsg = "malformed number literal (a number has at most one '.', as in 2.5)"
+                    }
+                    hold perr = 1
+                  }
+                  hold nqf = 1
+                  hold nqp = nqp + 1
+                } otherwise {
+                  hold nqk = 0
+                }
+              }
+            }
+          }
+        } otherwise {
+          hold nqp = nqp + 1
+        }
+      }
+    }
+  }
+}
 while running == 1 {
 
   // ---- phase 1: skip blanks and // comments ----
@@ -4237,17 +4346,17 @@ hold ec = 0
           // string are clear errors (seed-min rejects them the same way)
           hold oterm = opnd
           when isstr == 1 {
-            when osfind == 0 {
-              when perr == 0 {
-                hold permsg = concat("+ joins two strings; '", opnd)
-                hold permsg = concat(permsg, "' is not a string (a string + a number is not in the pure-min subset)")
-              }
-              hold perr = 1
-            }
             when opch != 43 {
               when perr == 0 {
                 hold permsg = concat("only + works on strings (found '", chr(opch))
                 hold permsg = concat(permsg, "')")
+              }
+              hold perr = 1
+            }
+            when osfind == 0 {
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings; '", opnd)
+                hold permsg = concat(permsg, "' is not a string (a string + a number is not in the pure-min subset)")
               }
               hold perr = 1
             }
@@ -5866,17 +5975,17 @@ hold ec = 0
           // string are clear errors (seed-min rejects them the same way)
           hold oterm = opnd
           when isstr == 1 {
-            when osfind == 0 {
-              when perr == 0 {
-                hold permsg = concat("+ joins two strings; '", opnd)
-                hold permsg = concat(permsg, "' is not a string (a string + a number is not in the pure-min subset)")
-              }
-              hold perr = 1
-            }
             when opch != 43 {
               when perr == 0 {
                 hold permsg = concat("only + works on strings (found '", chr(opch))
                 hold permsg = concat(permsg, "')")
+              }
+              hold perr = 1
+            }
+            when osfind == 0 {
+              when perr == 0 {
+                hold permsg = concat("+ joins two strings; '", opnd)
+                hold permsg = concat(permsg, "' is not a string (a string + a number is not in the pure-min subset)")
               }
               hold perr = 1
             }

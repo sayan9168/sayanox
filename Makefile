@@ -406,7 +406,16 @@ test-float:
 	  echo "[FAIL] seed-min accepted the malformed literal 2."; exit 1; fi
 	@./$(GEN2) $(TESTS)/ts_floatbad.sa $(TESTS)/ts_floatbad_g2.c >/dev/null 2>&1 || true
 	@grep -q '#error' $(TESTS)/ts_floatbad_g2.c
-	@echo "[OK] fractional literals + true division: seed-min and gen2 print 2.5 for 2.5 and 10 / 4; 2. is an error"
+	@# two fractional parts: gen2 used to copy `1.2.3` into the C verbatim
+	@printf 'hold x = 1.2.3\nshow x\nshow "v1.2.3"\n' > $(TESTS)/ts_float3.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_float3.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted 1.2.3"; exit 1; fi
+	@./$(GEN2) $(TESTS)/ts_float3.sa $(TESTS)/ts_float3_g2.c >/dev/null 2>&1 || true
+	@grep -q 'malformed number literal' $(TESTS)/ts_float3_g2.c
+	@printf 'show "v1.2.3"\n// 4.5.6 in a comment\nhold v1 = 2.5\nshow v1\n' > $(TESTS)/ts_float4.sa
+	./$(GEN2) $(TESTS)/ts_float4.sa $(TESTS)/ts_float4_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_float4_g2 $(TESTS)/ts_float4_g2.c
+	$(call assert-out,./$(TESTS)/ts_float4_g2,v1.2.3\n2.5)
+	@echo "[OK] fractional literals + true division: seed-min and gen2 print 2.5 for 2.5 and 10 / 4; 2. and 1.2.3 are errors (but not inside strings or comments)"
 
 # ---------------------------------------------------------------------------
 # test-parens: parenthesized expressions on seed-min and gen2.  gen2 compiles
@@ -506,7 +515,14 @@ test-push-stmt:
 	@printf 'hold s = "a"\nshow 3 + s\n' > $(TESTS)/ts_numstr.sa
 	@./$(GEN2) $(TESTS)/ts_numstr.sa $(TESTS)/ts_numstr_g2.c >/dev/null 2>&1 || true
 	@grep -q "is a string but the left side is not" $(TESTS)/ts_numstr_g2.c
-	@echo "[OK] string + number is a clear error on seed-min and gen2 (gen2 used to paste the variable NAME: s + n printed an)"
+	@printf 'hold s = "a"\nshow s * 2\n' > $(TESTS)/ts_strmul.sa
+	@./$(GEN2) $(TESTS)/ts_strmul.sa $(TESTS)/ts_strmul_g2.c >/dev/null 2>&1 || true
+	@grep -q "only + works on strings (found '\*')" $(TESTS)/ts_strmul_g2.c
+	@printf 'hold xs = ["a"]\n' > $(TESTS)/ts_strlist.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_strlist.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted a string list element"; exit 1; fi
+	@./$(GEN2) $(TESTS)/ts_strlist.sa $(TESTS)/ts_strlist_g2.c >/dev/null 2>&1 || true
+	@grep -q 'list elements must be numbers' $(TESTS)/ts_strlist_g2.c
+	@echo "[OK] string + number, string * number and a string list element are clear errors on seed-min and gen2 (gen2 used to paste the variable NAME: s + n printed an; seed-min emitted invalid C for [\"a\"])"
 	@echo "[OK] list literals with 10+ elements on seed-min and gen2; a struct in a list (literal or push) is a clear error on both"
 	@echo "[OK] hold ys = xs (whole list) on seed-min and gen2; + / - on a list or string-minus-number are clear errors, never pointer arithmetic"
 

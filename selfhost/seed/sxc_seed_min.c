@@ -180,6 +180,7 @@ static char *atom(int *oty){
       for(;;){
         int et; els[ne++]=expr(&et); if(ne>=64) die("list too big");
         if(et==TY_STRUCT) die("a list cannot hold a struct value");
+        if(et!=TY_NUM) die("list elements must be numbers (a list cannot hold a string or a list)");
         skip(); if(P<N&&S[P]==','){P++;skip();continue;} break;
       }
     }
