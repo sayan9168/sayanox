@@ -173,6 +173,12 @@ hold pdot = 0
 hold pstep = 0
 hold pknown = 0
 hold bpush = 0
+hold lop = 0
+hold lbad = 0
+hold lnum = 0
+hold ldig = 0
+hold lcount = ""
+hold ltmp = ""
 hold uword = ""
 hold ind = ""
 hold w9 = ""
@@ -977,7 +983,9 @@ while running == 1 {
           }
         }
       }
-      when pok2 == 0 {
+      // (pok2 doubles as scratch in the push search above; a push error
+      // has already set pbad, and its message must win)
+      when pok2 == 0 && pbad == 0 {
         hold pmsg = concat("unknown statement '", uword)
         hold pmsg = concat(pmsg, "' (statements are hold show when while make give struct, and push(xs, v))")
         hold pbad = 1
@@ -1672,6 +1680,81 @@ while running == 1 {
                   }
                 }
               }
+              // list elements are numbers: a string, list or struct variable
+              // (or anything that is not a number or a name) is a clear error
+              // instead of invalid C such as sx_llit(1,(double)(p))
+              hold lbad = 0
+              hold pexpr = concat("|", el)
+              hold pexpr = concat(pexpr, "|")
+              hold psrc = concat(sdecls, ldecls)
+              hold pkey = pexpr
+              hold pfound = 0
+              hold pi2 = 0
+              hold pa2 = len(psrc)
+              hold pb2 = len(pkey)
+              while pi2 + pb2 <= pa2 {
+                hold pok2 = 1
+                hold pj2 = 0
+                while pj2 < pb2 {
+                  hold pa3 = sx_index(psrc, pi2 + pj2)
+                  hold pb3 = sx_index(pkey, pj2)
+                  when pa3 == pb3 {
+                    hold pj2 = pj2 + 1
+                  } otherwise {
+                    hold pok2 = 0
+                    hold pj2 = pb2
+                  }
+                }
+                when pok2 == 1 {
+                  hold pfound = 1
+                  hold pi2 = pa2
+                } otherwise {
+                  hold pi2 = pi2 + 1
+                }
+              }
+              when pfound == 1 {
+                hold lbad = 1
+              }
+              hold pexpr = concat("|", el)
+              hold pexpr = concat(pexpr, "=")
+              hold psrc = svars
+              hold pkey = pexpr
+              hold pfound = 0
+              hold pi2 = 0
+              hold pa2 = len(psrc)
+              hold pb2 = len(pkey)
+              while pi2 + pb2 <= pa2 {
+                hold pok2 = 1
+                hold pj2 = 0
+                while pj2 < pb2 {
+                  hold pa3 = sx_index(psrc, pi2 + pj2)
+                  hold pb3 = sx_index(pkey, pj2)
+                  when pa3 == pb3 {
+                    hold pj2 = pj2 + 1
+                  } otherwise {
+                    hold pok2 = 0
+                    hold pj2 = pb2
+                  }
+                }
+                when pok2 == 1 {
+                  hold pfound = 1
+                  hold pi2 = pa2
+                } otherwise {
+                  hold pi2 = pi2 + 1
+                }
+              }
+              when pfound == 1 {
+                hold lbad = 1
+              }
+              when sx_eq(el, "") {
+                hold lbad = 1
+              }
+              when lbad == 1 {
+                when perr == 0 {
+                  hold permsg = "list elements must be numbers or numeric variables (a list cannot hold a string, list or struct)"
+                }
+                hold perr = 1
+              }
               when nels > 0 {
                 hold lelems = concat(lelems, ",")
               }
@@ -1724,8 +1807,21 @@ while running == 1 {
             hold pos = pos + 1
           }
         }
+        // the element count in decimal (chr(48 + nels) broke at 10 elements)
+        hold lnum = nels
+        hold lcount = ""
+        when lnum == 0 {
+          hold lcount = "0"
+        }
+        while lnum > 0 {
+          hold ldig = lnum % 10
+          hold ltmp = chr(48 + ldig)
+          hold lcount = concat(ltmp, lcount)
+          hold lnum = lnum - ldig
+          hold lnum = lnum / 10
+        }
         hold rhs = "sx_llit("
-        hold rhs = concat(rhs, chr(48 + nels))
+        hold rhs = concat(rhs, lcount)
         when nels > 0 {
           hold rhs = concat(rhs, ",")
           hold rhs = concat(rhs, lelems)
@@ -2898,6 +2994,103 @@ while running == 1 {
             hold rt = 1
           }
           when fk == 10 {
+            // the pushed value must be a number: a plain string, list or
+            // struct variable is a clear error (it was invalid C)
+            hold pi2 = 0
+            hold pa2 = len(argv_c)
+            hold pv = 0
+            while pi2 < pa2 {
+              hold pa3 = sx_index(argv_c, pi2)
+              hold pi2 = pi2 + 1
+              when pa3 == 44 {
+                hold pv = pi2
+                hold pi2 = pa2
+              }
+            }
+            hold el = ""
+            hold pv2 = 1
+            hold pi2 = pv
+            while pi2 < pa2 {
+              hold pa3 = sx_index(argv_c, pi2)
+              when (pa3 >= 97 && pa3 <= 122) || (pa3 >= 65 && pa3 <= 90) || (pa3 >= 48 && pa3 <= 57) || pa3 == 95 {
+                hold el = concat(el, chr(pa3))
+              } otherwise {
+                hold pv2 = 0
+              }
+              hold pi2 = pi2 + 1
+            }
+            when pv2 == 1 && pv > 0 {
+              hold lbad = 0
+              hold pexpr = concat("|", el)
+              hold pexpr = concat(pexpr, "|")
+              hold psrc = concat(sdecls, ldecls)
+              hold pkey = pexpr
+              hold pfound = 0
+              hold pi2 = 0
+              hold pa2 = len(psrc)
+              hold pb2 = len(pkey)
+              while pi2 + pb2 <= pa2 {
+                hold pok2 = 1
+                hold pj2 = 0
+                while pj2 < pb2 {
+                  hold pa3 = sx_index(psrc, pi2 + pj2)
+                  hold pb3 = sx_index(pkey, pj2)
+                  when pa3 == pb3 {
+                    hold pj2 = pj2 + 1
+                  } otherwise {
+                    hold pok2 = 0
+                    hold pj2 = pb2
+                  }
+                }
+                when pok2 == 1 {
+                  hold pfound = 1
+                  hold pi2 = pa2
+                } otherwise {
+                  hold pi2 = pi2 + 1
+                }
+              }
+              when pfound == 1 {
+                hold lbad = 1
+              }
+              hold pexpr = concat("|", el)
+              hold pexpr = concat(pexpr, "=")
+              hold psrc = svars
+              hold pkey = pexpr
+              hold pfound = 0
+              hold pi2 = 0
+              hold pa2 = len(psrc)
+              hold pb2 = len(pkey)
+              while pi2 + pb2 <= pa2 {
+                hold pok2 = 1
+                hold pj2 = 0
+                while pj2 < pb2 {
+                  hold pa3 = sx_index(psrc, pi2 + pj2)
+                  hold pb3 = sx_index(pkey, pj2)
+                  when pa3 == pb3 {
+                    hold pj2 = pj2 + 1
+                  } otherwise {
+                    hold pok2 = 0
+                    hold pj2 = pb2
+                  }
+                }
+                when pok2 == 1 {
+                  hold pfound = 1
+                  hold pi2 = pa2
+                } otherwise {
+                  hold pi2 = pi2 + 1
+                }
+              }
+              when pfound == 1 {
+                hold lbad = 1
+              }
+              when lbad == 1 {
+                when perr == 0 {
+                  hold permsg = concat("push: '", el)
+                  hold permsg = concat(permsg, "' is not a number (a list cannot hold a string, list or struct)")
+                }
+                hold perr = 1
+              }
+            }
             hold rhs = concat("sx_lpush(", argv_c)
             hold rhs = concat(rhs, ")")
             hold rk = 2
@@ -3009,6 +3202,64 @@ while running == 1 {
           hold c2 = 0
           when pos < n {
             hold c2 = sx_index(source,pos)
+          }
+          // a list variable as a whole value: `hold ys = xs` aliases it, as
+          // in seed-min and native (it used to emit `double ys = xs;`, which
+          // is invalid C).  xs[i] (c2 == '[') stays a number below; anything
+          // else after a list name (xs + 1) is a clear error.
+          when c2 != 91 {
+            hold key = concat("|", nm2)
+            hold key = concat(key, "|")
+            hold lfind = 0
+            hold di = 0
+            hold dl = len(ldecls)
+            hold kl = len(key)
+            while di + kl <= dl {
+              hold ok = 1
+              hold j = 0
+              while j < kl {
+                hold aa = sx_index(ldecls, di + j)
+                hold bb = sx_index(key, j)
+                when aa == bb {
+                  hold j = j + 1
+                } otherwise {
+                  hold ok = 0
+                  hold j = kl
+                }
+              }
+              when ok == 1 {
+                hold lfind = 1
+                hold di = dl
+              } otherwise {
+                hold di = di + 1
+              }
+            }
+            when lfind == 1 {
+              // pos may already be past the newline (at the next statement),
+              // so test for an operator rather than for the end of the line
+              hold lop = 0
+              when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 || c2 == 46 || c2 == 40 {
+                hold lop = 1
+              }
+              when c2 == 47 {
+                hold lop = 1
+                when pos + 1 < n {
+                  hold pc3 = sx_index(source, pos + 1)
+                  when pc3 == 47 {
+                    hold lop = 0
+                  }
+                }
+              }
+              when lop == 0 {
+                hold rk = 2
+              } otherwise {
+                when perr == 0 {
+                  hold permsg = concat("list '", nm2)
+                  hold permsg = concat(permsg, "' can only be held whole (hold ys = xs) or indexed (xs[i]); no operators on a list")
+                }
+                hold perr = 1
+              }
+            }
           }
           when c2 == 91 {
             hold pos = pos + 1

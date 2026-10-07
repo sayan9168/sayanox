@@ -370,6 +370,9 @@ static char *mul(int *oty){
     if(P<N && (S[P]=='*'||S[P]=='/'||S[P]=='%')){ op=S[P]; P++; }
     else break;
     int rt; char *r=unary(&rt);
+    /* lists, structs and strings are pointers in the C output: `xs * 2` is
+     * either a C error or (for + and -) silent pointer arithmetic */
+    if(*oty!=TY_NUM||rt!=TY_NUM) die("* / % need numbers (not a string, list or struct)");
     if(op=='%'){
       /* modulo: (double)((long)(a)%(long)(b)) */
       char *t=malloc(strlen(l)+strlen(r)+32);
@@ -393,6 +396,10 @@ static char *add(int *oty){
     if(P<N && (S[P]=='+'||S[P]=='-')){ op=S[P]; P++; }
     else break;
     int rt; char *r=mul(&rt);
+    if(*oty==TY_LIST||rt==TY_LIST||*oty==TY_STRUCT||rt==TY_STRUCT)
+      die("+ and - need numbers or strings (not a list or struct; hold ys = xs copies a whole list)");
+    if((*oty==TY_STR||rt==TY_STR)&&op=='-') die("- needs numbers (a string cannot be subtracted)");
+    if((*oty==TY_STR)!=(rt==TY_STR)) die("+ joins two strings or adds two numbers (a string + a number is not in the pure-min subset)");
     if(*oty==TY_STR||rt==TY_STR){
       char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"sx_cat(%s,%s)",l,r); free(l); free(r); l=t; *oty=TY_STR;
     } else {
