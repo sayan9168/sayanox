@@ -5,13 +5,14 @@
 //
 //   hold NAME = EXPR          show EXPR
 //   EXPR: BASE followed by a chain of + - * / %   (* / % bind tighter,
-//         left-associative; `%` lowers to (double)((long)(a)%(long)(b))).
+//         left-associative; `%` lowers through checked `sx_mod(a, b)`).
 //   BASE: NUMBER | NAME | "text" | call(...) | [v, v, ...]
 //         | Struct { f: v, ... } | NAME.field | NAME[i] | (EXPR)
 //   while COND { ... }        when COND { ... } otherwise { ... }
 //         ("else" is an alias of "otherwise"; both emit "} else {")
-//         COND is copied verbatim (C precedence matches pure-min) except
-//         `%`, which gets the same long-cast rewrite.
+//         COND is copied as a C expression (C precedence matches pure-min);
+//         `%` lowers through checked sx_mod, and integer tokens are emitted
+//         as doubles by the final string-aware C normalization pass.
 //   make f(a, b) { ... give EXPR }        (top level, numeric, recursive OK)
 //   struct S { f, g }         (fields: numbers, strings, or structs
 //                               declared earlier; `Line { a: Point { ... },
@@ -20,7 +21,7 @@
 //   // line comments
 //
 //   OP is one of  ==  !=  <  <=  >  >=  (and, where a single operand
-//   follows, + - * / % ; `%` lowers to (double)((long)(a)%(long)(b)))
+//   follows, + - * / % ; `%` lowers through the checked sx_mod helper)
 //
 //   String literals keep backslash escapes intact while scanning (a `\"`
 //   does not terminate the literal), in every string / argv / opnd path.
@@ -182,6 +183,24 @@ hold ltmp = ""
 hold uword = ""
 hold ind = ""
 hold w9 = ""
+// final C-emission literal normalizer: C integer constants otherwise make
+// constant-only arithmetic run in 32-bit int before reaching double.
+hold fixfrom = 0
+hold fixout = ""
+hold fixchunk = ""
+hold fixi = 0
+hold fixflush = 0
+hold fixn = 0
+hold fixc = 0
+hold fixd = 0
+hold fixnext = 0
+hold fixdot = 0
+hold fixnum = ""
+hold fixrun = 0
+hold fixprev = 0
+hold fixquote = 0
+hold fixes = 0
+hold fixident = 0
 hold out = ""
 hold q = chr(34)
 hold nl = chr(10)
@@ -4401,11 +4420,9 @@ hold ec = 0
               hold ct = concat(ct, ")")
             } otherwise {
               when opch == 37 {
-                // modulo: (double)((long)(a)%(long)(b))
-                hold ct = concat("(double)((long)(", ct)
-                hold ct = concat(ct, ")")
-                hold ct = concat(ct, chr(opch))
-                hold ct = concat(ct, "(long)(")
+                // modulo truncates both operands and diagnoses a zero divisor.
+                hold ct = concat("sx_mod((double)(", ct)
+                hold ct = concat(ct, "),(double)(")
                 hold ct = concat(ct, oterm)
                 hold ct = concat(ct, "))")
               } otherwise {
@@ -6030,11 +6047,9 @@ hold ec = 0
               hold ct = concat(ct, ")")
             } otherwise {
               when opch == 37 {
-                // modulo: (double)((long)(a)%(long)(b))
-                hold ct = concat("(double)((long)(", ct)
-                hold ct = concat(ct, ")")
-                hold ct = concat(ct, chr(opch))
-                hold ct = concat(ct, "(long)(")
+                // modulo truncates both operands and diagnoses a zero divisor.
+                hold ct = concat("sx_mod((double)(", ct)
+                hold ct = concat(ct, "),(double)(")
                 hold ct = concat(ct, oterm)
                 hold ct = concat(ct, "))")
               } otherwise {
@@ -6252,13 +6267,13 @@ hold ec = 0
 
     // ---- shared rewrite: conditions (act 3), give (act 6) and
     //      parenthesized hold/show expressions (act 8) are verbatim C in
-    //      ctrim/cl; lower `%` to the long-cast form and make `/` a double
-    //      division.  Result in crepl. ----
+    //      ctrim/cl; lower `%` through checked sx_mod and make `/` a double
+    //      division. Result in crepl. ----
     when act == 3 || act == 6 || act == 8 {
-      // ---- rewrite '%' in the condition to the long-cast form ----
+      // ---- rewrite '%' to the checked helper ----
       // C precedence already matches pure-min for + - * / and the
       // comparisons, so only '%' needs work here:
-      //   L % R   ->   (double)((long)(L)%(long)(R))
+      //   L % R   ->   sx_mod(L, R)
       // L is the maximal * / % chain to the left, R is the next atom.
       hold crepl = ""
       hold cwi = 0
@@ -6432,9 +6447,9 @@ hold ec = 0
               hold cwnew = concat(cwnew, chr(sx_index(crepl, cwj)))
               hold cwj = cwj + 1
             }
-            hold cwnew = concat(cwnew, "(double)((long)(")
+            hold cwnew = concat(cwnew, "sx_mod((double)(")
             hold cwnew = concat(cwnew, cwl)
-            hold cwnew = concat(cwnew, ")%(long)(")
+            hold cwnew = concat(cwnew, "),(double)(")
             hold cwnew = concat(cwnew, cwr)
             hold cwnew = concat(cwnew, "))")
             hold crepl = cwnew
@@ -7055,6 +7070,7 @@ when rt == 1 {
   hold out = concat(out, "static double sx_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
   hold out = concat(out, "static double string_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
   hold out = concat(out, "typedef struct { double *d; long n; long cap; } sx_list;\n")
+  hold out = concat(out, "static double sx_mod(double a,double b){ long x=(long)a, y=(long)b; if(!y){fputs(\"division by zero\\n\",stderr);exit(1);} return (double)(x%y); }\n")
   hold out = concat(out, "static sx_list *sx_llit(int n,...){ sx_list *L=(sx_list*)malloc(sizeof(sx_list)); L->n=n; L->cap=n<4?4:n; L->d=(double*)malloc(sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }\n")
   hold out = concat(out, "static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return L->d[i]; }\n")
   hold out = concat(out, "static double sx_llen(sx_list *L){ return L?(double)L->n:0.0; }\n")
@@ -7065,11 +7081,13 @@ when rt == 1 {
   hold out = concat(out, "#include <stdlib.h>\n")
   hold out = concat(out, "#include <stdarg.h>\n\n")
   hold out = concat(out, "typedef struct { double *d; long n; long cap; } sx_list;\n")
+  hold out = concat(out, "static double sx_mod(double a,double b){ long x=(long)a, y=(long)b; if(!y){fputs(\"division by zero\\n\",stderr);exit(1);} return (double)(x%y); }\n")
   hold out = concat(out, "static sx_list *sx_llit(int n,...){ sx_list *L=(sx_list*)malloc(sizeof(sx_list)); L->n=n; L->cap=n<4?4:n; L->d=(double*)malloc(sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }\n")
   hold out = concat(out, "static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return L->d[i]; }\n")
   hold out = concat(out, "static double sx_llen(sx_list *L){ return L?(double)L->n:0.0; }\n")
   hold out = concat(out, "static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=(sx_list*)malloc(sizeof(sx_list)); L->n=0; L->cap=4; L->d=(double*)malloc(sizeof(double)*4);} if(L->n>=L->cap){ L->cap*=2; L->d=(double*)realloc(L->d,sizeof(double)*(size_t)L->cap);} L->d[L->n++]=v; return L; }\n\n")
 }
+hold fixfrom = len(out)
 hold out = concat(out, fns)
 // ---------------- struct typedefs (field types come from literals) ----------------
 hold tdi = 0
@@ -7294,6 +7312,120 @@ when exbad3 == 1 {
   hold exerr = concat(exerr, nl)
   show "min: unsupported index expression (number or name only)"
 }
+// Rewrite every generated C integer token in user code to a double token.
+// `fixfrom` is the end of the runtime preamble; that preamble intentionally
+// keeps its integer constants, while function/main expressions become `N.0`.
+// String literals are copied without inspection, and digits inside C names
+// are left alone. Output is appended after at most 512 input bytes per chunk
+// (plus any `.0` expansions), bounding the temporary builder and avoiding a
+// full-prefix copy for every character. This keeps C's integer folding from
+// diverging from Sayanox's IEEE-double arithmetic.
+hold fixn = len(out)
+hold fixi = 0
+hold fixout = ""
+while fixi < fixfrom {
+  hold fixchunk = concat(fixchunk, chr(sx_index(out,fixi)))
+  hold fixi = fixi + 1
+  when fixi - fixflush >= 512 {
+    hold fixout = concat(fixout, fixchunk)
+    hold fixchunk = ""
+    hold fixflush = fixi
+  }
+}
+hold fixquote = 0
+hold fixes = 0
+hold fixprev = 0
+while fixi < fixn {
+  hold fixc = sx_index(out,fixi)
+  when fixquote == 1 {
+    hold fixchunk = concat(fixchunk, chr(fixc))
+    hold fixi = fixi + 1
+    when fixes == 1 {
+      hold fixes = 0
+    } otherwise {
+      when fixc == 92 {
+        hold fixes = 1
+      } otherwise {
+        when fixc == 34 {
+          hold fixquote = 0
+        }
+      }
+    }
+    hold fixprev = fixc
+  } otherwise {
+    when fixc == 34 {
+      hold fixchunk = concat(fixchunk, chr(fixc))
+      hold fixquote = 1
+      hold fixprev = fixc
+      hold fixi = fixi + 1
+    } otherwise {
+      when fixc >= 48 && fixc <= 57 {
+        hold fixident = 0
+        when (fixprev >= 48 && fixprev <= 57) || (fixprev >= 65 && fixprev <= 90) || (fixprev >= 97 && fixprev <= 122) || fixprev == 95 {
+          hold fixident = 1
+        }
+        when fixident == 1 {
+          hold fixchunk = concat(fixchunk, chr(fixc))
+          hold fixprev = fixc
+          hold fixi = fixi + 1
+        } otherwise {
+          hold fixnum = ""
+          hold fixdot = 0
+          hold fixrun = 1
+          while fixrun == 1 {
+            when fixi >= fixn {
+              hold fixrun = 0
+            } otherwise {
+              hold fixd = sx_index(out,fixi)
+              when fixd >= 48 && fixd <= 57 {
+                hold fixnum = concat(fixnum, chr(fixd))
+                hold fixprev = fixd
+                hold fixi = fixi + 1
+              } otherwise {
+                when fixd == 46 {
+                  hold fixnext = 0
+                  when fixi + 1 < fixn {
+                    hold fixnext = sx_index(out,fixi + 1)
+                  }
+                  when fixnext >= 48 && fixnext <= 57 {
+                    hold fixnum = concat(fixnum, chr(fixd))
+                    hold fixdot = 1
+                    hold fixprev = fixd
+                    hold fixi = fixi + 1
+                  } otherwise {
+                    hold fixrun = 0
+                  }
+                } otherwise {
+                  hold fixrun = 0
+                }
+              }
+            }
+          }
+          when fixdot == 0 {
+            hold fixnum = concat(fixnum, ".0")
+            hold fixprev = 48
+          }
+          hold fixchunk = concat(fixchunk, fixnum)
+        }
+      } otherwise {
+        hold fixchunk = concat(fixchunk, chr(fixc))
+        hold fixprev = fixc
+        hold fixi = fixi + 1
+      }
+    }
+  }
+  when fixi - fixflush >= 512 {
+    hold fixout = concat(fixout, fixchunk)
+    hold fixchunk = ""
+    hold fixflush = fixi
+  }
+}
+when fixi > fixflush {
+  hold fixout = concat(fixout, fixchunk)
+  hold fixchunk = ""
+  hold fixflush = fixi
+}
+hold out = fixout
 hold out = concat(exerr, out)
 hold w = write_file(out_path, out)
 

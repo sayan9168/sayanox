@@ -1,5 +1,5 @@
 # Sayanox bootstrap Makefile — sole entry point
-# Preferred: make true-selfhost (11KB seed-min). Optional: true-selfhost-full, native, gen3
+# Preferred: make true-selfhost (seed-min -> gen1-min -> gen2). Optional: native, gen3; full is not yet implemented
 
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || (command -v gcc >/dev/null 2>&1 && echo gcc || echo cc))
 
@@ -21,10 +21,14 @@ GEN3_C   := selfhost/gen3.c
 GEN3     := selfhost/gen3
 BOOT_SA  := selfhost/compiler_boot.sa
 TESTS    := selfhost/seed_tests
+SXFMT_C  := tools/sxfmt.c
+SXFMT_BIN := tools/sxfmt
+SXPKG_C  := tools/sxpkg.c
+SXPKG_BIN := tools/sxpkg
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
-        seed-bin doctor \
+        seed-bin doctor tools sxfmt test-sxfmt sxpkg test-sxpkg test-sxpkg-wrapper \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-native-num test-native-io \
         pack-compiler
@@ -146,13 +150,100 @@ $(GEN1): $(GEN1_C)
 	$(CC) -O2 -o $(GEN1) $(GEN1_C) -I selfhost/seed
 	@echo "[OK] gen1"
 
-$(GEN2_C): $(GEN1) restore-compiler
-	./$(GEN1) $(MIN_SA) $(GEN2_C)
+# The maintained gen2 path is bootstrapped by the small pure-min C seed.
+# The older full-seed route is experimental and does not define this target.
+$(GEN1_MIN_C): $(SEED_MIN_BIN) restore-compiler
+	./$(SEED_MIN_BIN) $(MIN_SA) > $(GEN1_MIN_C)
+	@test -s $(GEN1_MIN_C)
+
+$(GEN1_MIN): $(GEN1_MIN_C)
+	$(CC) -O2 -o $(GEN1_MIN) $(GEN1_MIN_C)
+	@echo "[OK] gen1_min"
+
+$(GEN2_C): $(GEN1_MIN) restore-compiler
+	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C)
 	@test -s $(GEN2_C)
 
 $(GEN2): $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
 	@echo "[OK] gen2"
+
+$(SXFMT_BIN): $(GEN2) tools/sxfmt.sa
+	./$(GEN2) tools/sxfmt.sa $(SXFMT_C) >/dev/null
+	$(CC) -O2 -o $(SXFMT_BIN) $(SXFMT_C)
+	@echo "[OK] Sayanox formatter built from tools/sxfmt.sa"
+
+sxfmt: $(SXFMT_BIN)
+
+$(SXPKG_BIN): $(GEN2) tools/sxpkg.sa
+	./$(GEN2) tools/sxpkg.sa $(SXPKG_C) >/dev/null
+	$(CC) -O2 -o $(SXPKG_BIN) $(SXPKG_C)
+	@echo "[OK] Sayanox local package-lock tool built from tools/sxpkg.sa"
+
+sxpkg: $(SXPKG_BIN)
+tools: sxfmt sxpkg
+
+test-sxfmt: sxfmt
+	@mkdir -p $(TESTS)
+	@printf 'hold x = 1  \nwhen x > 0 {  \nshow "brace } // not comment"\n// comment { }\nwhen x == 1 {\n  show 42   \n}\n}\n' > $(TESTS)/sxfmt-in.sa
+	@printf 'hold x = 1\nwhen x > 0 {\n  show "brace } // not comment"\n  // comment { }\n  when x == 1 {\n    show 42\n  }\n}\n' > $(TESTS)/sxfmt-want.sa
+	./$(SXFMT_BIN) $(TESTS)/sxfmt-in.sa $(TESTS)/sxfmt-out.sa
+	cmp $(TESTS)/sxfmt-want.sa $(TESTS)/sxfmt-out.sa
+	./$(SXFMT_BIN) $(TESTS)/sxfmt-out.sa $(TESTS)/sxfmt-again.sa
+	cmp $(TESTS)/sxfmt-out.sa $(TESTS)/sxfmt-again.sa
+	@printf 'hold x = 7  ' > $(TESTS)/sxfmt-no-final-newline.sa
+	./$(SXFMT_BIN) $(TESTS)/sxfmt-no-final-newline.sa $(TESTS)/sxfmt-final-newline.sa
+	@printf 'hold x = 7\n' > $(TESTS)/sxfmt-final-want.sa
+	cmp $(TESTS)/sxfmt-final-want.sa $(TESTS)/sxfmt-final-newline.sa
+	@echo "[OK] Sayanox formatter: indentation, strings/comments, final newline, idempotence"
+
+test-sxpkg: sxpkg
+	@mkdir -p $(TESTS)/sxpkg
+	@printf '' > $(TESTS)/sxpkg/sx.lock
+	@printf '' > $(TESTS)/sxpkg/sx.toml
+	cd $(TESTS)/sxpkg && ../../../$(SXPKG_BIN) init
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg/sx.lock-want
+	cmp $(TESTS)/sxpkg/sx.lock-want $(TESTS)/sxpkg/sx.lock
+	@printf 'name = "my-pkg"\nversion = "0.1.0"\n' > $(TESTS)/sxpkg/sx.toml-want
+	cmp $(TESTS)/sxpkg/sx.toml-want $(TESTS)/sxpkg/sx.toml
+	cd $(TESTS)/sxpkg && ../../../$(SXPKG_BIN) add math 0.1.0
+	cd $(TESTS)/sxpkg && ../../../$(SXPKG_BIN) add math 0.2.0
+	cd $(TESTS)/sxpkg && ../../../$(SXPKG_BIN) add strings
+	@printf '# sx.lock\nversion=1\nmath=0.2.0\nstrings=0.1.0\n' > $(TESTS)/sxpkg/sx.lock-want
+	cmp $(TESTS)/sxpkg/sx.lock-want $(TESTS)/sxpkg/sx.lock
+	$(call assert-out,cd $(TESTS)/sxpkg && ../../../$(SXPKG_BIN) list,sxpkg: locked packages\nmath=0.2.0\nstrings=0.1.0)
+	cd $(TESTS)/sxpkg && ../../../$(SXPKG_BIN) remove math
+	@printf '# sx.lock\nversion=1\nstrings=0.1.0\n' > $(TESTS)/sxpkg/sx.lock-want
+	cmp $(TESTS)/sxpkg/sx.lock-want $(TESTS)/sxpkg/sx.lock
+	cd $(TESTS)/sxpkg && ../../../$(SXPKG_BIN) init >/dev/null
+	cmp $(TESTS)/sxpkg/sx.lock-want $(TESTS)/sxpkg/sx.lock
+	@echo "[OK] Sayanox package tool: init/add/update/list/remove"
+
+test-sxpkg-wrapper: sxpkg tools/sxpkg.sh
+	@mkdir -p $(TESTS)/sxpkg-wrapper
+	@printf '' > $(TESTS)/sxpkg-wrapper/sx.lock
+	@printf '' > $(TESTS)/sxpkg-wrapper/sx.toml
+	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh init >/dev/null
+	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh add local-pkg >/dev/null
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh list,sxpkg: locked packages\nlocal-pkg=0.1.0)
+	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh remove local-pkg >/dev/null
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh list,sxpkg: locked packages\n(none))
+	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh seed >/dev/null
+	@printf 'hello=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-wrapper/index-want
+	cmp $(TESTS)/sxpkg-wrapper/index-want $(TESTS)/sxpkg-wrapper/.sayanox/registry/INDEX
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh search math,sxpkg: search 'math'\n  math 0.1.0)
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh info math,name=math\nversion=0.1.0\ndesc=tiny math helpers)
+	@mkdir -p $(TESTS)/sxpkg-wrapper/project
+	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.lock
+	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.toml
+	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh init >/dev/null
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-wrapper/project/lock-want
+	cmp $(TESTS)/sxpkg-wrapper/project/lock-want $(TESTS)/sxpkg-wrapper/project/sx.lock
+	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh add rooted 0.1.0 >/dev/null
+	@printf '# sx.lock\nversion=1\nrooted=0.1.0\n' > $(TESTS)/sxpkg-wrapper/project/lock-want
+	cmp $(TESTS)/sxpkg-wrapper/project/lock-want $(TESTS)/sxpkg-wrapper/project/sx.lock
+	@echo "[OK] sxpkg.sh delegates local commands to Sayanox"
+
 
 test-reassign:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -187,7 +278,7 @@ test-mod:
 	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/ts_mod.sa
 	./$(GEN2) $(TESTS)/ts_mod.sa $(TESTS)/ts_mod.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_mod $(TESTS)/ts_mod.c
-	@grep -q '(double)((long)(a)%(long)(3))' $(TESTS)/ts_mod.c
+	@grep -q 'sx_mod((double)(a),(double)(3.0))' $(TESTS)/ts_mod.c
 	@grep -q '} else {' $(TESTS)/ts_mod.c
 	$(call assert-out,./$(TESTS)/ts_mod,1\n1)
 	@echo "[OK] gen2 modulo + else"
@@ -246,11 +337,11 @@ test-condmod:
 	@mkdir -p $(TESTS)
 	@printf 'hold a = 17\nwhile a %% 10 > 0 {\n  show a %% 10\n  hold a = a - 3\n}\nwhen 10 %% 3 == 1 {\n  show "mod-ok"\n}\n' > $(TESTS)/ts_cm.sa
 	./$(GEN2) $(TESTS)/ts_cm.sa $(TESTS)/ts_cm.c >/dev/null
-	@grep -q '(double)((long)(a' $(TESTS)/ts_cm.c
-	@grep -q '%(long)(10)' $(TESTS)/ts_cm.c
+	@grep -q 'sx_mod((double)(a)' $(TESTS)/ts_cm.c
+	@grep -q 'sx_mod((double)(10.0' $(TESTS)/ts_cm.c
 	$(CC) -O2 -o $(TESTS)/ts_cm $(TESTS)/ts_cm.c
 	$(call assert-out,./$(TESTS)/ts_cm,7\n4\n1\n8\n5\n2\nmod-ok)
-	@echo "[OK] gen2 while/when condition % long-cast rewrite"
+	@echo "[OK] gen2 while/when condition % uses checked sx_mod"
 
 test-struct2:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -386,9 +477,9 @@ test-prec:
 	@# (parenthesized expressions moved to `make test-parens`: gen2 runs them now)
 
 # ---------------------------------------------------------------------------
-# test-float: fractional literals and true `/` (seed-min and gen2 agree).
-# `10 / 4` is 2.5 on every path -- two integer literals used to be C integer
-# division (2) in both seed-min and gen2.  A malformed literal is an error.
+# test-float: fractional literals, true `/`, and IEEE-double constant math
+# (seed-min and gen2 agree). `10 / 4` is 2.5; integer-only products do not
+# overflow in C `int`, and `% 0` is a deterministic language diagnostic.
 # ---------------------------------------------------------------------------
 test-float:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -415,7 +506,27 @@ test-float:
 	./$(GEN2) $(TESTS)/ts_float4.sa $(TESTS)/ts_float4_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_float4_g2 $(TESTS)/ts_float4_g2.c
 	$(call assert-out,./$(TESTS)/ts_float4_g2,v1.2.3\n2.5)
-	@echo "[OK] fractional literals + true division: seed-min and gen2 print 2.5 for 2.5 and 10 / 4; 2. and 1.2.3 are errors (but not inside strings or comments)"
+	@# Every integer literal must reach C arithmetic as a double: two constant
+	@# operands used to overflow in 32-bit int before assignment to a double.
+	@printf 'show 100000 * 100000\nshow 100000 + 100000 * 100000\nshow 100000 * 100000.0\nshow (100000 * 100000) / 2\nhold a = 100000\nshow a * 100000\nwhen 100000 * 100000 > 2000000000 {\n  show 1\n} else {\n  show 0\n}\nmake big() {\n  give 100000 * 100000\n}\nmake pass(n) {\n  give n\n}\nshow big()\nshow pass(100000 * 100000)\n' > $(TESTS)/ts_big.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_big.sa > $(TESTS)/ts_big_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_big_sm $(TESTS)/ts_big_sm.c
+	$(call assert-out,./$(TESTS)/ts_big_sm,1e+10\n1.00001e+10\n1e+10\n5e+09\n1e+10\n1\n1e+10\n1e+10)
+	./$(GEN2) $(TESTS)/ts_big.sa $(TESTS)/ts_big_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_big_g2 $(TESTS)/ts_big_g2.c
+	$(call assert-out,./$(TESTS)/ts_big_g2,1e+10\n1.00001e+10\n1e+10\n5e+09\n1e+10\n1\n1e+10\n1e+10)
+	@# Both C backends diagnose modulo-by-zero consistently, including a
+	@# runtime divisor; all backends must report the language diagnostic.
+	@printf 'hold zero = 0\nshow 7 %% zero\n' > $(TESTS)/ts_modzero.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_modzero.sa > $(TESTS)/ts_modzero_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_modzero_sm $(TESTS)/ts_modzero_sm.c
+	@if ./$(TESTS)/ts_modzero_sm >/dev/null 2>$(TESTS)/ts_modzero_sm.err; then echo "[FAIL] seed-min accepted modulo by zero"; exit 1; fi
+	@grep -q 'division by zero' $(TESTS)/ts_modzero_sm.err
+	./$(GEN2) $(TESTS)/ts_modzero.sa $(TESTS)/ts_modzero_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ts_modzero_g2 $(TESTS)/ts_modzero_g2.c
+	@if ./$(TESTS)/ts_modzero_g2 >/dev/null 2>$(TESTS)/ts_modzero_g2.err; then echo "[FAIL] gen2 accepted modulo by zero"; exit 1; fi
+	@grep -q 'division by zero' $(TESTS)/ts_modzero_g2.err
+	@echo "[OK] fractional/double literals, integer-only overflow, true division, and modulo-zero diagnostics: seed-min and gen2 agree"
 
 # ---------------------------------------------------------------------------
 # test-parens: parenthesized expressions on seed-min and gen2.  gen2 compiles
@@ -530,7 +641,8 @@ test-push-stmt:
 # test-native-num: native numbers are IEEE doubles, like seed-min and gen2.
 # The same programs as test-float / test-parens / test-push-stmt must give
 # the same output natively; `show` formats like printf("%g") (checked against
-# seed-min over ~3500 values); / and % by zero die cleanly; regressions for
+# seed-min over ~3500 values); / by zero follows IEEE and % by zero reports
+# `division by zero`; regressions for
 # native parser fixes found while doing this (comment line after a number,
 # `while n {`, a comparison inside parens, a call statement before a block,
 # the missing newline after "[list len=N]").
@@ -538,11 +650,16 @@ test-push-stmt:
 test-native-num: $(NATIVE_BIN)
 	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
 	@mkdir -p $(TESTS)
-	@test -f $(TESTS)/ts_float.sa || $(MAKE) --no-print-directory test-float
+	@test -f $(TESTS)/ts_big.sa && test -f $(TESTS)/ts_modzero.sa || $(MAKE) --no-print-directory test-float
 	@test -f $(TESTS)/ts_parens.sa || $(MAKE) --no-print-directory test-parens
 	@test -f $(TESTS)/ts_push.sa || $(MAKE) --no-print-directory test-push-stmt
 	./$(NATIVE_BIN) $(TESTS)/ts_float.sa $(TESTS)/ts_float_nat
 	$(call assert-out,./$(TESTS)/ts_float_nat,2.5\n5\n2.5\n7\n0.333333\n1.5\n1.25\n1\n2\n0.75\n-1.5\n1)
+	./$(NATIVE_BIN) $(TESTS)/ts_big.sa $(TESTS)/ts_big_nat
+	$(call assert-out,./$(TESTS)/ts_big_nat,1e+10\n1.00001e+10\n1e+10\n5e+09\n1e+10\n1\n1e+10\n1e+10)
+	./$(NATIVE_BIN) $(TESTS)/ts_modzero.sa $(TESTS)/ts_modzero_nat
+	@if ./$(TESTS)/ts_modzero_nat >/dev/null 2>$(TESTS)/ts_modzero_nat.err; then echo "[FAIL] native accepted modulo by zero"; exit 1; fi
+	@grep -q 'division by zero' $(TESTS)/ts_modzero_nat.err
 	./$(NATIVE_BIN) $(TESTS)/ts_parens.sa $(TESTS)/ts_parens_nat
 	$(call assert-out,./$(TESTS)/ts_parens_nat,20\n20\n1\n2\n5\n-3\n6\n20\n2\n14\n1\n6)
 	./$(NATIVE_BIN) $(TESTS)/ts_push.sa $(TESTS)/ts_push_nat
@@ -585,7 +702,7 @@ test-native-num: $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/ts_l11_nat,11\n11)
 	@if ./$(NATIVE_BIN) $(TESTS)/ts_sinl.sa $(TESTS)/ts_sinl_nat 2>/dev/null; then echo "[FAIL] native accepted a struct in a list"; exit 1; fi
 	@if ./$(NATIVE_BIN) $(TESTS)/ts_sinl2.sa $(TESTS)/ts_sinl2_nat 2>/dev/null; then echo "[FAIL] native accepted push of a struct"; exit 1; fi
-	@echo "[OK] native doubles: 2.5 literals and 10 / 4 = 2.5; % truncates; %g formatting == seed-min; / is IEEE (1 / 0 = inf; same as seed-min); % by zero dies; string + number; same output as seed-min/gen2 for test-float/test-parens/test-push-stmt"
+	@echo "[OK] native doubles: literals, large constant arithmetic, true division, truncating % and matching % by zero diagnostic; %g formatting and shared tests match seed-min/gen2 (string + number remains a native extension)"
 
 # ---------------------------------------------------------------------------
 # test-native-io: read_file / write_file / arg / arg_count natively, with
@@ -662,7 +779,7 @@ seed-min: $(SEED_MIN_BIN)
 	@printf 'hold a = 10\nshow a %% 3\nwhen a > 5 { show 1 } else { show 0 }\n' > $(TESTS)/min_mod.sa
 	./$(SEED_MIN_BIN) $(TESTS)/min_mod.sa > $(TESTS)/min_mod.c
 	$(CC) -O2 -o $(TESTS)/min_mod $(TESTS)/min_mod.c
-	@grep -q '(double)((long)(a)%(long)(3))' $(TESTS)/min_mod.c
+	@grep -q 'sx_mod((double)(a),(double)(3.0))' $(TESTS)/min_mod.c
 	$(call assert-out,./$(TESTS)/min_mod,1\n1)
 	@printf 'hold z = 99\n' > $(TESTS)/min_other.sa
 	@printf 'use "selfhost/seed_tests/min_other.sa"\nshow z\n' > $(TESTS)/min_use.sa
@@ -731,14 +848,14 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-parity
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-parity test-sxfmt test-sxpkg
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
 
-true-selfhost-full: $(GEN2)
-	@$(MAKE) test-reassign test-while test-when test-boot
-	@echo "=== TRUE-FULL-SELFHOST-OK ==="
+# Retain the historical target name without claiming full Stage-2 support.
+true-selfhost-full: true-selfhost-min
+	@echo "[INFO] full Stage-2 remains unfinished; only the pure-min path is verified"
 
 true-selfhost: true-selfhost-min
 selfhost: true-selfhost
@@ -986,8 +1103,8 @@ subset: seed-bin
 	$(call assert-out,./selfhost/_smoke,42)
 	@echo "=== SUBSET-SELFHOST-OK ==="
 
-gen1: $(GEN1)
-	@echo "=== GEN1-OK ==="
+gen1: $(GEN1_MIN)
+	@echo "=== GEN1-MIN-OK ==="
 gen2: $(GEN2)
 	@echo "=== GEN2-OK ==="
 test: true-selfhost
@@ -999,7 +1116,7 @@ test: true-selfhost
 # `make seed-bin` (it is a .PHONY target, so it always rebuilds from source).
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
-	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c
+	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C)
 
 # ---------------------------------------------------------------------------
 # doctor: check that the minimal tool set is present. Nothing else is needed to

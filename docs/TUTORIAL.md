@@ -1,129 +1,139 @@
-# Sayanox Language Tutorial
+# Sayanox language tutorial
 
-Sayanox is a general-purpose programming language with `.sa` source files. The compiler is being self-hosted: the supported bootstrap keeps a tiny Stage-2 host while progressively moving parsing, semantic analysis, lowering, and code generation into Sayanox.
+This tutorial targets the maintained seed-min/gen2 subset. The complete
+verified feature matrix is in [`STATUS.md`](STATUS.md); the broader language
+and native-AOT plans are in [`BOOTSTRAP_ROADMAP.md`](BOOTSTRAP_ROADMAP.md).
 
 ## 1. Hello world
 
-```sa
+```sayanox
 show "Hello, Sayanox!"
 ```
 
-Run it with:
+Bootstrap the Sayanox-written compiler and run the example through generated
+C:
 
 ```sh
-make stage2
-./selfhost/sx examples/hello.sa --run
+make true-selfhost
+./selfhost/gen2 examples/hello.sa /tmp/hello.c
+cc -O2 -o /tmp/hello /tmp/hello.c
+/tmp/hello
 ```
 
-## 2. Variables
+## 2. Variables and numbers
 
-Use `hold` for a local binding.
-
-```sa
+```sayanox
 hold name = "Sayan"
 hold year = 2026
 show name
 show year
+
+hold total = 100000 * 100000
+show total                 // 1e+10
+show 10 / 4                // 2.5
 ```
 
-## 3. Conditions
+Use `hold name = expression` to reassign a name already introduced with
+`hold`. Numbers are IEEE doubles; `%` truncates its operands and checks for a
+zero divisor.
 
-```sa
+## 3. Conditions and loops
+
+```sayanox
 hold age = 18
 when age >= 18 {
   show "adult"
 } otherwise {
   show "minor"
 }
-```
 
-## 4. Loops
-
-```sa
-hold n = 1
-while n <= 5 {
-  show n
-  hold n = n + 1
+hold i = 1
+while i <= 3 {
+  show i
+  hold i = i + 1
 }
 ```
 
-## 5. Functions
+`else` can be used in place of `otherwise`.
 
-```sa
+## 4. Functions
+
+```sayanox
 make add(a, b) {
   give a + b
 }
 
-hold result = add(20, 22)
-show result
+show add(20, 22)
 ```
 
-## 6. Strings
+The maintained subset supports top-level numeric functions, calls and
+recursion.
 
-The standard library exposes string helpers such as `len`, `concat`, `char_at`, `char_code`, `contains`, `starts_with`, `ends_with`, `upper`, `lower`, `trim`, and `str`.
+## 5. Lists and structs
 
-```sa
-hold first = "Sayan"
-hold last = "ox"
-show concat(first, last)
-show upper(first)
-show len(first)
-```
-
-## 7. Lists
-
-Lists use square brackets. Indexing is zero-based.
-
-```sa
+```sayanox
 hold numbers = [10, 20, 30]
 push(numbers, 40)
 show numbers[1]
 show len(numbers)
+
+struct Point {
+  name
+  x
+}
+hold p = Point { name: "home", x: 4 }
+show p.name
+show p.x
 ```
 
-## 8. File I/O
+Lists are numeric. Tested compilers support nested structs, named fields and
+string fields.
 
-```sa
+## 6. Strings and file I/O
+
+```sayanox
+hold first = "Sayan"
+hold last = "ox"
+hold word = concat(first, last)
+show word
+show len(word)
+show word[0]
+
 hold text = read_file("input.txt")
 hold status = write_file("output.txt", text)
 show status
 ```
 
-## 9. Building larger programs
+The shared subset's supported builtins are listed in [`BUILTINS.md`](BUILTINS.md)
+and [`STATUS.md`](STATUS.md).
 
-Prefer small functions, explicit locals, and clear names. Keep I/O at program boundaries and keep transformation logic in functions so it can later be lowered to the Sayanox IR without backend-specific assumptions.
+## 7. Modules
 
-## 10. Self-hosting model
-
-The bootstrap currently has this shape:
-
-```text
-Tiny C Stage-2 bootstrap
-        |
-        v
-Sayanox compiler sources
-        |
-        v
-Sayanox-owned AST / semantic / IR / lowering
-        |
-        v
-Backend
+```sayanox
+use "library.sa"
+show answer()
 ```
 
-The final C-free bootstrap requires a native backend. Until that exists, claims of complete C/Clang independence would be incorrect.
+`use` textually splices a file before parsing; it does not provide namespaces,
+version resolution or package isolation.
 
-## 11. From beginner to advanced
+## 8. Native AOT
 
-After the basics, read:
+A tested native subset can be built on x86-64 Linux:
 
-1. `docs/SYNTAX.md` for the syntax reference.
-2. `docs/BOOTSTRAP_ROADMAP.md` for the self-hosting plan.
-3. `selfhost/SELFHOST.md` for the current bootstrap path.
-4. `docs/LSP.md` for editor integration.
-5. `tools/sxpkg` for local package management.
-
-Then study the compiler sources in this order:
-
-```text
-lexer -> parser -> AST -> semantic analysis -> checked AST -> IR -> lowering -> backend
+```sh
+make native
+./selfhost/native_aot examples/hello.sa /tmp/hello-native
+/tmp/hello-native
 ```
+
+The portable path emits C and still requires a C compiler to build each
+program. Native AOT is not yet portable to other architectures or operating
+systems.
+
+## 9. Remaining work
+
+Range/for-in loops, `elif`, namespaced modules, a full standard library,
+generics and automatic memory management across all backends are not yet part
+of the maintained subset. This is an incremental milestone, not a claim that
+every language experiment in the repository is production-ready.

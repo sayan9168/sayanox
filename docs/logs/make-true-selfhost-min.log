@@ -50,7 +50,7 @@ cc -O2 -o selfhost/seed_tests/ts_chain_g2 selfhost/seed_tests/ts_chain_g2.c
 [OK] gen2 chained + - * / % (and string + name) agree with seed-min
 ./selfhost/gen2 selfhost/seed_tests/ts_cm.sa selfhost/seed_tests/ts_cm.c >/dev/null
 cc -O2 -o selfhost/seed_tests/ts_cm selfhost/seed_tests/ts_cm.c
-[OK] gen2 while/when condition % long-cast rewrite
+[OK] gen2 while/when condition % uses checked sx_mod
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_user.sa > selfhost/seed_tests/ts_user_sm.c
 cc -O2 -o selfhost/seed_tests/ts_user_sm selfhost/seed_tests/ts_user_sm.c
 ./selfhost/gen2 selfhost/seed_tests/ts_user.sa selfhost/seed_tests/ts_user_g2.c >/dev/null
@@ -87,7 +87,15 @@ cc -O2 -o selfhost/seed_tests/ts_float_sm selfhost/seed_tests/ts_float_sm.c
 cc -O2 -o selfhost/seed_tests/ts_float_g2 selfhost/seed_tests/ts_float_g2.c
 ./selfhost/gen2 selfhost/seed_tests/ts_float4.sa selfhost/seed_tests/ts_float4_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/ts_float4_g2 selfhost/seed_tests/ts_float4_g2.c
-[OK] fractional literals + true division: seed-min and gen2 print 2.5 for 2.5 and 10 / 4; 2. and 1.2.3 are errors (but not inside strings or comments)
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_big.sa > selfhost/seed_tests/ts_big_sm.c
+cc -O2 -o selfhost/seed_tests/ts_big_sm selfhost/seed_tests/ts_big_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_big.sa selfhost/seed_tests/ts_big_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_big_g2 selfhost/seed_tests/ts_big_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_modzero.sa > selfhost/seed_tests/ts_modzero_sm.c
+cc -O2 -o selfhost/seed_tests/ts_modzero_sm selfhost/seed_tests/ts_modzero_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_modzero.sa selfhost/seed_tests/ts_modzero_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_modzero_g2 selfhost/seed_tests/ts_modzero_g2.c
+[OK] fractional/double literals, integer-only overflow, true division, and modulo-zero diagnostics: seed-min and gen2 agree
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_parens.sa > selfhost/seed_tests/ts_parens_sm.c
 cc -O2 -o selfhost/seed_tests/ts_parens_sm selfhost/seed_tests/ts_parens_sm.c
 ./selfhost/gen2 selfhost/seed_tests/ts_parens.sa selfhost/seed_tests/ts_parens_g2.c >/dev/null
@@ -115,6 +123,43 @@ cc -O2 -o selfhost/seed_tests/par_sm selfhost/seed_tests/par_sm.c
 cc -O2 -o selfhost/seed_tests/par_g2 selfhost/seed_tests/par_g2.c
 [OK] seed-min and gen2 agree on the shared dialect
 === TEST-PARITY-OK ===
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 tools/sxfmt.sa tools/sxfmt.c >/dev/null
+cc -O2 -o tools/sxfmt tools/sxfmt.c
+[OK] Sayanox formatter built from tools/sxfmt.sa
+./tools/sxfmt selfhost/seed_tests/sxfmt-in.sa selfhost/seed_tests/sxfmt-out.sa
+cmp selfhost/seed_tests/sxfmt-want.sa selfhost/seed_tests/sxfmt-out.sa
+./tools/sxfmt selfhost/seed_tests/sxfmt-out.sa selfhost/seed_tests/sxfmt-again.sa
+cmp selfhost/seed_tests/sxfmt-out.sa selfhost/seed_tests/sxfmt-again.sa
+./tools/sxfmt selfhost/seed_tests/sxfmt-no-final-newline.sa selfhost/seed_tests/sxfmt-final-newline.sa
+cmp selfhost/seed_tests/sxfmt-final-want.sa selfhost/seed_tests/sxfmt-final-newline.sa
+[OK] Sayanox formatter: indentation, strings/comments, final newline, idempotence
+./selfhost/gen2 tools/sxpkg.sa tools/sxpkg.c >/dev/null
+cc -O2 -o tools/sxpkg tools/sxpkg.c
+[OK] Sayanox local package-lock tool built from tools/sxpkg.sa
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init
+sxpkg: init ok
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cmp selfhost/seed_tests/sxpkg/sx.toml-want selfhost/seed_tests/sxpkg/sx.toml
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.1.0
+sxpkg: locked math 0.1.0
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.2.0
+sxpkg: locked math 0.2.0
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add strings
+sxpkg: locked strings 0.1.0
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg remove math
+sxpkg: removed math
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init >/dev/null
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+[OK] Sayanox package tool: init/add/update/list/remove
 make[1]: Leaving directory '/home/user/sayanox'
 make[1]: Entering directory '/home/user/sayanox'
 ./selfhost/gen2 selfhost/compiler_boot.sa selfhost/boot_from_gen2.c >/dev/null
