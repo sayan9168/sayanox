@@ -20,7 +20,7 @@ concurrency:
 # ubuntu-latest ships every required tool, and doctor fails loudly if not.
 jobs:
   bootstrap:
-    name: clean-checkout bootstrap (doctor, true-selfhost, gen3, native-test)
+    name: "clean-checkout bootstrap (doctor, true-selfhost, gen3, native-test)"
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -30,16 +30,16 @@ jobs:
           clean: true
           fetch-depth: 1
 
-      - name: make doctor (minimal toolchain is complete)
+      - name: "make doctor (minimal toolchain is complete)"
         run: make doctor
 
-      - name: make true-selfhost (seed-min -> gen1_min -> gen2 + feature tests)
+      - name: "make true-selfhost (seed-min -> gen1_min -> gen2 + feature tests)"
         run: make true-selfhost
 
-      - name: make gen3 (gen3 == gen4 byte-identical fixed point)
+      - name: "make gen3 (gen3 == gen4 byte-identical fixed point)"
         run: make gen3
 
-      - name: make native-test (x86-64 backend: subset, use, functions, parity)
+      - name: "make native-test (x86-64 backend - subset, use, functions, parity)"
         run: make native-test
 
       - name: Verify generated artifacts are not tracked
