@@ -16,7 +16,11 @@ targets listed at the end of this file, on this host (3939 MB RAM, 2 CPUs,
 x86-64, `/bin/sh` = dash). Nothing in the tables is aspirational. `docs/logs/`
 holds the raw output of the four commands above; each run overwrites them, and
 they were last regenerated 2026-10-08 (after the package, stdlib, native-memory,
-Stage-2-demo and statement-parity test additions described below).
+Stage-2-demo and statement-parity test additions described below). The
+`true-selfhost` log was taken with no `selfhost/native_aot` present, i.e. in the
+state a clean checkout is in, and the native half of `test-stage2-demos` prints
+an explicit `skipped` line there; `make native-test` builds that binary and runs
+the check.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs exactly these four targets —
 `doctor`, `true-selfhost`, `gen3`, `native-test` — on a clean `ubuntu-latest`
@@ -429,7 +433,7 @@ still use shell/C infrastructure. See
 | `make test-gc` | gen2 mark & sweep from the language side: a 2000-iteration `concat` loop stays under 200 KB of live heap after `gc()`, `gc_runs()` counts a collection, `gc()` reclaims bytes, and the surviving string is intact (`len` + first byte) |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make test-native-mem` (part of `native-test`) | native memory: 2000 `concat`s and 1500 `push`es keep every value and index; a 200k-`concat` loop prints `200000` normally and dies with `out of memory` under a 4 MiB address-space cap; `gc()`/`gc_live()` are compile-time errors |
-| `make test-stage2-demos` | the three Stage-2 contract demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) compile byte-identically under seed-min and gen2, and the string-only one also runs natively |
+| `make test-stage2-demos` | the three Stage-2 contract demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) compile byte-identically under seed-min and gen2; the string-only one also runs natively when `native_aot` is built (the native half is skipped, loudly, on the portable `true-selfhost` path, and executed in `make native-test`) |
 | `make test-stdlib` | `stdlib/tiny.sa` spliced with `use`: `min2`/`max2`/`absv`/`sum_to`/`pow_int`/`is_even`/`gcd` give the same answers on seed-min, gen2 and (when built) native |
 | `make test-pkgs` | the offline package path: `sxpkg.sh init`+`seed` write `.sayanox/registry/{hello,math}` with no network, `sxpkg add` records the lock, and a program with `use ".sayanox/registry/math/main.sa"` runs the same on seed-min, gen2 and native |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |

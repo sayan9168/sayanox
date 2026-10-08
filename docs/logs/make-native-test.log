@@ -1,3 +1,4 @@
+cc -O2 -o selfhost/native_aot selfhost/native_aot.c
 ./selfhost/native_aot examples/native_hello.sa selfhost/seed_tests/native_hello
 ./selfhost/native_aot selfhost/seed_tests/native_negative.sa selfhost/seed_tests/native_negative
 ./selfhost/native_aot selfhost/seed_tests/native_while.sa selfhost/seed_tests/native_while
@@ -80,5 +81,19 @@ cc -O2 -o selfhost/seed_tests/std_sm selfhost/seed_tests/std_sm.c
 ./selfhost/gen2 selfhost/seed_tests/std_t.sa selfhost/seed_tests/std_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/std_g2 selfhost/seed_tests/std_g2.c
 [OK] tiny stdlib via use: seed-min == gen2 (== native when built) on min2/max2/absv/sum_to/pow_int/is_even/gcd
+./selfhost/seed/sxc_seed_min selfhost/minimal_lexer.sa > selfhost/seed_tests/stage2_lexer_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_lexer_sm selfhost/seed_tests/stage2_lexer_sm.c
+./selfhost/gen2 selfhost/minimal_lexer.sa selfhost/seed_tests/stage2_lexer_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_lexer_g2 selfhost/seed_tests/stage2_lexer_g2.c
+[stage2] native lexer: stdout identical to seed-min/gen2
+./selfhost/seed/sxc_seed_min selfhost/stage2_functions.sa > selfhost/seed_tests/stage2_fn_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_fn_sm selfhost/seed_tests/stage2_fn_sm.c
+./selfhost/gen2 selfhost/stage2_functions.sa selfhost/seed_tests/stage2_fn_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_fn_g2 selfhost/seed_tests/stage2_fn_g2.c
+./selfhost/seed/sxc_seed_min selfhost/stage2_variables.sa > selfhost/seed_tests/stage2_var_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_var_sm selfhost/seed_tests/stage2_var_sm.c
+./selfhost/gen2 selfhost/stage2_variables.sa selfhost/seed_tests/stage2_var_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
+[OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 byte for byte, plus the lexer natively when native_aot is built; contract sketches, not the full Stage-2 language
 [OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions
 === NATIVE-TEST-OK ===

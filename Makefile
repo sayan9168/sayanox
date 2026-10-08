@@ -914,7 +914,9 @@ test-native-mem: $(NATIVE_BIN)
 # test-stage2-demos: the three Stage-2 contract demos in selfhost/ are
 # pure-min programs (top-level slots, numeric functions, string loops).  They
 # must stay runnable: seed-min and gen2 compile them and print byte-identical
-# stdout, and the string-only one (minimal_lexer) also runs natively.  This
+# stdout, and the string-only one (minimal_lexer) also runs natively when
+# native_aot is built (this target is part of `make native-test`, and its
+# native half is skipped on the portable `true-selfhost` path).  This
 # does NOT claim the full Stage-2 language - the demos are a contract sketch,
 # which is exactly why they are in the shared dialect.
 # ---------------------------------------------------------------------------
@@ -927,9 +929,18 @@ test-stage2-demos: $(GEN2) $(SEED_MIN_BIN)
 	@./$(TESTS)/stage2_lexer_sm > $(TESTS)/stage2_lexer_sm.out; ./$(TESTS)/stage2_lexer_g2 > $(TESTS)/stage2_lexer_g2.out; \
 	  cmp $(TESTS)/stage2_lexer_sm.out $(TESTS)/stage2_lexer_g2.out
 	$(call assert-out,./$(TESTS)/stage2_lexer_g2,=== Self-Hosting Phase 1.5 ===\nshow 42\n7\n115\n104\n111\n119\n32\n52\n50\nTokens:\n1\n11\n0\nPhase 1.5 complete — dynamic push + len + string walk)
-	./$(NATIVE_BIN) selfhost/minimal_lexer.sa $(TESTS)/stage2_lexer_nat
-	@./$(TESTS)/stage2_lexer_nat > $(TESTS)/stage2_lexer_nat.out; \
-	  cmp $(TESTS)/stage2_lexer_sm.out $(TESTS)/stage2_lexer_nat.out
+	@# native_aot is built by `make native-test`, not by the portable
+	@# `true-selfhost` path, so its lexer check runs only when the binary is
+	@# there (a clean checkout has neither) -- `make native-test` includes this
+	@# target, so the native half is executed for real there.
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/minimal_lexer.sa $(TESTS)/stage2_lexer_nat && \
+	  ./$(TESTS)/stage2_lexer_nat > $(TESTS)/stage2_lexer_nat.out && \
+	  cmp $(TESTS)/stage2_lexer_sm.out $(TESTS)/stage2_lexer_nat.out && \
+	  echo "[stage2] native lexer: stdout identical to seed-min/gen2"; \
+	else \
+	  echo "[stage2] native lexer: skipped (native_aot is not built here)"; \
+	fi
 	@# the two demos with make/give: seed-min and gen2 agree byte for byte
 	./$(SEED_MIN_BIN) selfhost/stage2_functions.sa > $(TESTS)/stage2_fn_sm.c
 	$(CC) -O2 -o $(TESTS)/stage2_fn_sm $(TESTS)/stage2_fn_sm.c
@@ -943,7 +954,7 @@ test-stage2-demos: $(GEN2) $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/stage2_var_g2 $(TESTS)/stage2_var_g2.c
 	$(call assert-out,./$(TESTS)/stage2_var_sm,42)
 	$(call assert-out,./$(TESTS)/stage2_var_g2,42)
-	@echo "[OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 == native (lexer), seed-min == gen2; contract sketches, not the full Stage-2 language"
+	@echo "[OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 byte for byte, plus the lexer natively when native_aot is built; contract sketches, not the full Stage-2 language"
 
 # ---------------------------------------------------------------------------
 # test-stdlib: the tiny portable library stdlib/tiny.sa is used with a plain
@@ -1350,7 +1361,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
 	@echo "[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
-	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib
+	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
 	@echo "=== NATIVE-TEST-OK ==="
 

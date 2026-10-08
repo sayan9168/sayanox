@@ -158,7 +158,7 @@ cc -O2 -o selfhost/gen2 selfhost/gen2.c
 cc -O2 -o selfhost/seed_tests/stage2_lexer_sm selfhost/seed_tests/stage2_lexer_sm.c
 ./selfhost/gen2 selfhost/minimal_lexer.sa selfhost/seed_tests/stage2_lexer_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/stage2_lexer_g2 selfhost/seed_tests/stage2_lexer_g2.c
-./selfhost/native_aot selfhost/minimal_lexer.sa selfhost/seed_tests/stage2_lexer_nat
+[stage2] native lexer: skipped (native_aot is not built here)
 ./selfhost/seed/sxc_seed_min selfhost/stage2_functions.sa > selfhost/seed_tests/stage2_fn_sm.c
 cc -O2 -o selfhost/seed_tests/stage2_fn_sm selfhost/seed_tests/stage2_fn_sm.c
 ./selfhost/gen2 selfhost/stage2_functions.sa selfhost/seed_tests/stage2_fn_g2.c >/dev/null
@@ -167,7 +167,7 @@ cc -O2 -o selfhost/seed_tests/stage2_fn_g2 selfhost/seed_tests/stage2_fn_g2.c
 cc -O2 -o selfhost/seed_tests/stage2_var_sm selfhost/seed_tests/stage2_var_sm.c
 ./selfhost/gen2 selfhost/stage2_variables.sa selfhost/seed_tests/stage2_var_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
-[OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 == native (lexer), seed-min == gen2; contract sketches, not the full Stage-2 language
+[OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 byte for byte, plus the lexer natively when native_aot is built; contract sketches, not the full Stage-2 language
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/std_t.sa > selfhost/seed_tests/std_sm.c
 cc -O2 -o selfhost/seed_tests/std_sm selfhost/seed_tests/std_sm.c
 ./selfhost/gen2 selfhost/seed_tests/std_t.sa selfhost/seed_tests/std_g2.c >/dev/null
