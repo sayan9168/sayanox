@@ -5,8 +5,9 @@
  *   ints: + - * / % , == != < <= > >= , parentheses, unary -
  *   lists: [1, 2, 3], xs[i], len(xs), push(xs, v), show xs -> [list len=N]
  *   strings: "lit", concat, len, sx_index, chr, read_file, write_file,
- *            arg, arg_count, string_eq (sx_eq), string + number,
+ *            arg, arg_count, string_eq (sx_eq),
  *            s == t / s != t (strcmp semantics), show of strings
+ *            (string + number is rejected, as in seed-min and gen2)
  *   structs: struct S { f, g }; S { x: 3, y: "a" } literals (labels or
  *            positional, declaration order, every field filled); nesting
  *            any depth (inner declared first); p.x / l.a.x chains;
@@ -22,7 +23,10 @@
  * backend never emits silently wrong code.
  *
  * ABI: globals live in a data segment (r12 = data base, set in every
- * prologue). Heap is brk-based (r_malloc). Strings are NUL-terminated.
+ * prologue). The heap is a bump allocator (r_malloc) over lazily `mmap`ped
+ * 64 KiB chunks and never frees anything (GC.md, "Native AOT and the
+ * seeds"); r_malloc rounds to 8 bytes and exits with `out of memory` when
+ * mmap fails. Strings are NUL-terminated.
  * sx_list = { long n; long cap; long *d; }. Function args go in
  * rdi rsi rdx rcx r8 r9 (ints, <= 6). give = return; a function that
  * falls off returns 0.
@@ -297,7 +301,7 @@ static void endstmt(const char**p){
     while(idc(*r)&&i+1<64) w[i++]=*r++; w[i]=0;
     sw(&r);
     if(*r=='='&&(g_find(w)>=0)) return;                /* next line is an assignment */
-    if(*r=='('&&(is_builtin(w)||f_find(w)>=0)) return; /* next line is a call statement */
+    if(*r=='('&&!strcmp(w,"push")) return;             /* next line is a call statement (push only, as in seed-min/gen2) */
   }
   errx("unexpected token after statement (expected end of line or next statement)",*p,NULL);
 }
@@ -769,7 +773,12 @@ static int pk_rel(const char**p,int depth){
       k=K_NUM;
     } else {
       if(k==K_STR||k2==K_STR){
-        if(k==K_UNK||k2==K_UNK) k=K_UNK; else k=K_STR;
+        if(k==K_UNK||k2==K_UNK) k=K_UNK;
+        else if(k==K_STR&&k2==K_STR) k=K_STR;
+        /* seed-min and gen2 both reject a string joined to a number, so the
+           shared pure-min subset rejects it here too (it used to be accepted
+           and silently rendered the number with %g) */
+        else errx("+ joins two strings or adds two numbers (a string + a number is not in the pure-min subset)");
       } else {
         if(k!=K_NUM||k2!=K_NUM) errx("+ is for numbers or strings");
         k=K_NUM;
@@ -879,7 +888,7 @@ static void infer(const char*src){
       char w[64]; const char*r2=rp; int wi=0;
       while(idc(*r2)&&wi+1<64) w[wi++]=*r2++; w[wi]=0;
       const char*r3=r2; sw(&r3);
-      if(wi>0&&*r3=='('&&(is_builtin(w)||f_find(w)>=0)){
+      if(wi>0&&*r3=='('&&!strcmp(w,"push")){
         (void)pk_full(&rp,0);
       } else if(wi>0&&*r3=='='){
         int gi=g_find(w);
@@ -1646,13 +1655,16 @@ static void emit_prog(const char**p,int in_fn,int stop){
         endstmt(p);
         continue;
       }
-      if(i>0&&*q2=='('&&(is_builtin(w)||f_find(w)>=0)){
-        /* bare call statement, e.g. `push(xs, 1)` */
+      if(i>0&&*q2=='('&&!strcmp(w,"push")){
+        /* bare call statement.  Only push(xs, v) is part of the statement set
+           seed-min and gen2 share; a bare `write_file(...)` (or any other
+           call) is `unknown statement` there, so native rejects it too
+           instead of quietly accepting a wider subset. */
         emit_expr(p,0);
         endstmt(p);
         continue;
       }
-      errx("unknown statement: \"%s\" (native speaks hold/show/when/else/while/make/give/struct, or a call like push(xs, 1))",w,NULL);
+      errx("unknown statement: \"%s\" (native speaks hold/show/when/else/while/make/give/struct, or the bare call push(xs, v))",w,NULL);
     }
   }
 }

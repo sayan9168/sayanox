@@ -1,6 +1,6 @@
-make double(n) {
+make dbl(n) {
   give n + n
 }
-make square(n) {
+make sqr(n) {
   give n * n
 }

@@ -1,7 +1,7 @@
 // Phase B demo — functions, when, while (evaluated via native JIT path when enabled)
 show "=== Phase B ==="
 
-make double(n) {
+make dbl(n) {
     give n * 2
 }
 
@@ -10,7 +10,7 @@ make add(a, b) {
 }
 
 hold x = 21
-hold y = double(x)
+hold y = dbl(x)
 show y
 
 hold z = add(10, 32)

@@ -62,8 +62,19 @@ collector was in place (see the table in [`STATUS.md`](STATUS.md)).
 ## 2. Native AOT and the seeds
 
 * `selfhost/native_aot.c` is the x86-64 direct backend. Its runtime is a flat
-  BSS data area plus one bump allocator over lazily `mmap`ped 64 KiB chunks.
-  It never frees; native programs are for demos and small benchmarks.
+  BSS data area plus one bump allocator over lazily `mmap`ped 64 KiB chunks
+  (a request bigger than 64 KiB gets its own page-rounded chunk). It never
+  frees; native programs are for demos and small benchmarks. That is not
+  "zero memory management": when `mmap` fails, `r_malloc` dies with the
+  documented `out of memory` message and a non-zero exit status instead of
+  corrupting memory. `make test-native-mem` pins all of it: a 2000-iteration
+  `concat` loop and a 1500-element `push` loop keep computing correct values
+  and indexes, the same big-allocation program under a 4 MiB
+  `ulimit -v` cap dies loudly, and the gen2-only collector builtins
+  (`gc()`, `gc_live()`, `gc_runs()`) are compile-time errors in native.
+  A real free path would need ownership and aliasing information the
+  hand-written emitter does not track (a string slot can be aliased by a
+  copy, a struct field or a loop-carried value), so it is not claimed.
 * `selfhost/seed/sxc_seed_min` (the bootstrap seed) has a malloc-only prelude
   and frees only the previous value of a reassigned string variable. Its point
   is to be small and auditable, not to manage memory well.
