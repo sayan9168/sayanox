@@ -5269,6 +5269,145 @@ while running == 1 {
           }
           hold pos = pos + 1
           // which builtin?
+          // ---- '%' inside builtin-call argument text: sx_mod(L, R) ----
+          // Same rule as the shared condition rewrite: L is the * / %
+          // chain to the left (balanced groups included), R is the next
+          // atom (name, number, .field, [i], (..)). argv_txt has no blanks
+          // outside string literals, so no blank handling is needed here.
+          hold axo = ""
+          hold axi = 0
+          hold axn = len(argv_txt)
+          hold axc = 0
+          hold axq = 0
+          hold axal = 0
+          hold axrun = 0
+          hold axd = 0
+          hold axbd = 0
+          hold axe = 0
+          hold axri = 0
+          hold axnb = 0
+          hold axf = 0
+          hold axg = 0
+          hold axL = ""
+          hold axR = ""
+          hold axj = 0
+          hold axP = ""
+          while axi < axn {
+            hold axc = sx_index(argv_txt, axi)
+            when axc == 34 {
+              // string literal: copy verbatim, escapes kept
+              hold axo = concat(axo, chr(34))
+              hold axi = axi + 1
+              hold axq = 1
+              while axq == 1 && axi < axn {
+                hold axc = sx_index(argv_txt, axi)
+                hold axo = concat(axo, chr(axc))
+                hold axi = axi + 1
+                when axc == 92 && axi < axn {
+                  hold axo = concat(axo, chr(sx_index(argv_txt, axi)))
+                  hold axi = axi + 1
+                } otherwise {
+                  when axc == 34 {
+                    hold axq = 0
+                  }
+                }
+              }
+            } otherwise {
+              when axc == 37 {
+                // left operand: scan back over the chain already in axo
+                hold axal = len(axo)
+                hold axrun = 1
+                while axrun == 1 {
+                  hold axrun = 0
+                  when axal > 0 {
+                    hold axd = sx_index(axo, axal - 1)
+                    when axd == 41 || axd == 93 {
+                      // skip a balanced (..) or [..] group, then keep going
+                      hold axbd = 1
+                      hold axal = axal - 1
+                      while axbd > 0 {
+                        when axal <= 0 {
+                          hold axbd = 0
+                        } otherwise {
+                          hold axe = sx_index(axo, axal - 1)
+                          when axe == 41 || axe == 93 {
+                            hold axbd = axbd + 1
+                          }
+                          when axe == 40 || axe == 91 {
+                            hold axbd = axbd - 1
+                          }
+                          hold axal = axal - 1
+                        }
+                      }
+                      hold axrun = 1
+                    } otherwise {
+                      when (axd >= 97 && axd <= 122) || (axd >= 65 && axd <= 90) || (axd >= 48 && axd <= 57) || axd == 95 || axd == 46 || axd == 42 || axd == 47 {
+                        hold axal = axal - 1
+                        hold axrun = 1
+                      }
+                    }
+                  }
+                }
+                // right operand: the next atom in argv_txt
+                hold axri = axi + 1
+                hold axnb = 1
+                while axnb == 1 && axri < axn {
+                  hold axnb = 0
+                  hold axf = sx_index(argv_txt, axri)
+                  when (axf >= 97 && axf <= 122) || (axf >= 65 && axf <= 90) || (axf >= 48 && axf <= 57) || axf == 95 || axf == 46 {
+                    hold axri = axri + 1
+                    hold axnb = 1
+                  } otherwise {
+                    when axf == 40 || axf == 91 {
+                      hold axbd = 1
+                      hold axri = axri + 1
+                      while axbd > 0 && axri < axn {
+                        hold axg = sx_index(argv_txt, axri)
+                        when axg == 40 || axg == 91 {
+                          hold axbd = axbd + 1
+                        }
+                        when axg == 41 || axg == 93 {
+                          hold axbd = axbd - 1
+                        }
+                        hold axri = axri + 1
+                      }
+                      hold axnb = 1
+                    }
+                  }
+                }
+                // rebuild: the left chain is replaced by sx_mod(L, R)
+                hold axL = ""
+                hold axj = axal
+                while axj < len(axo) {
+                  hold axL = concat(axL, chr(sx_index(axo, axj)))
+                  hold axj = axj + 1
+                }
+                hold axR = ""
+                hold axj = axi + 1
+                while axj < axri {
+                  hold axR = concat(axR, chr(sx_index(argv_txt, axj)))
+                  hold axj = axj + 1
+                }
+                hold axP = ""
+                hold axj = 0
+                while axj < axal {
+                  hold axP = concat(axP, chr(sx_index(axo, axj)))
+                  hold axj = axj + 1
+                }
+                hold axo = axP
+                hold axo = concat(axo, "sx_mod(")
+                hold axo = concat(axo, axL)
+                hold axo = concat(axo, ",")
+                hold axo = concat(axo, axR)
+                hold axo = concat(axo, ")")
+                hold axi = axri
+              } otherwise {
+                hold axo = concat(axo, chr(axc))
+                hold axi = axi + 1
+              }
+            }
+          }
+          hold argv_txt = axo
           // Normalize builtin identifiers inside argument text for nested calls.
           hold argv_c = ""
           hold ai = 0
@@ -7906,6 +8045,145 @@ hold ec = 0
           }
           hold pos = pos + 1
           hold fk = 0
+          // ---- '%' inside builtin-call argument text: sx_mod(L, R) ----
+          // Same rule as the shared condition rewrite: L is the * / %
+          // chain to the left (balanced groups included), R is the next
+          // atom (name, number, .field, [i], (..)). argv_txt has no blanks
+          // outside string literals, so no blank handling is needed here.
+          hold bxo = ""
+          hold bxi = 0
+          hold bxn = len(argv_txt)
+          hold bxc = 0
+          hold bxq = 0
+          hold bxal = 0
+          hold bxrun = 0
+          hold bxd = 0
+          hold bxbd = 0
+          hold bxe = 0
+          hold bxri = 0
+          hold bxnb = 0
+          hold bxf = 0
+          hold bxg = 0
+          hold bxL = ""
+          hold bxR = ""
+          hold bxj = 0
+          hold bxP = ""
+          while bxi < bxn {
+            hold bxc = sx_index(argv_txt, bxi)
+            when bxc == 34 {
+              // string literal: copy verbatim, escapes kept
+              hold bxo = concat(bxo, chr(34))
+              hold bxi = bxi + 1
+              hold bxq = 1
+              while bxq == 1 && bxi < bxn {
+                hold bxc = sx_index(argv_txt, bxi)
+                hold bxo = concat(bxo, chr(bxc))
+                hold bxi = bxi + 1
+                when bxc == 92 && bxi < bxn {
+                  hold bxo = concat(bxo, chr(sx_index(argv_txt, bxi)))
+                  hold bxi = bxi + 1
+                } otherwise {
+                  when bxc == 34 {
+                    hold bxq = 0
+                  }
+                }
+              }
+            } otherwise {
+              when bxc == 37 {
+                // left operand: scan back over the chain already in bxo
+                hold bxal = len(bxo)
+                hold bxrun = 1
+                while bxrun == 1 {
+                  hold bxrun = 0
+                  when bxal > 0 {
+                    hold bxd = sx_index(bxo, bxal - 1)
+                    when bxd == 41 || bxd == 93 {
+                      // skip a balanced (..) or [..] group, then keep going
+                      hold bxbd = 1
+                      hold bxal = bxal - 1
+                      while bxbd > 0 {
+                        when bxal <= 0 {
+                          hold bxbd = 0
+                        } otherwise {
+                          hold bxe = sx_index(bxo, bxal - 1)
+                          when bxe == 41 || bxe == 93 {
+                            hold bxbd = bxbd + 1
+                          }
+                          when bxe == 40 || bxe == 91 {
+                            hold bxbd = bxbd - 1
+                          }
+                          hold bxal = bxal - 1
+                        }
+                      }
+                      hold bxrun = 1
+                    } otherwise {
+                      when (bxd >= 97 && bxd <= 122) || (bxd >= 65 && bxd <= 90) || (bxd >= 48 && bxd <= 57) || bxd == 95 || bxd == 46 || bxd == 42 || bxd == 47 {
+                        hold bxal = bxal - 1
+                        hold bxrun = 1
+                      }
+                    }
+                  }
+                }
+                // right operand: the next atom in argv_txt
+                hold bxri = bxi + 1
+                hold bxnb = 1
+                while bxnb == 1 && bxri < bxn {
+                  hold bxnb = 0
+                  hold bxf = sx_index(argv_txt, bxri)
+                  when (bxf >= 97 && bxf <= 122) || (bxf >= 65 && bxf <= 90) || (bxf >= 48 && bxf <= 57) || bxf == 95 || bxf == 46 {
+                    hold bxri = bxri + 1
+                    hold bxnb = 1
+                  } otherwise {
+                    when bxf == 40 || bxf == 91 {
+                      hold bxbd = 1
+                      hold bxri = bxri + 1
+                      while bxbd > 0 && bxri < bxn {
+                        hold bxg = sx_index(argv_txt, bxri)
+                        when bxg == 40 || bxg == 91 {
+                          hold bxbd = bxbd + 1
+                        }
+                        when bxg == 41 || bxg == 93 {
+                          hold bxbd = bxbd - 1
+                        }
+                        hold bxri = bxri + 1
+                      }
+                      hold bxnb = 1
+                    }
+                  }
+                }
+                // rebuild: the left chain is replaced by sx_mod(L, R)
+                hold bxL = ""
+                hold bxj = bxal
+                while bxj < len(bxo) {
+                  hold bxL = concat(bxL, chr(sx_index(bxo, bxj)))
+                  hold bxj = bxj + 1
+                }
+                hold bxR = ""
+                hold bxj = bxi + 1
+                while bxj < bxri {
+                  hold bxR = concat(bxR, chr(sx_index(argv_txt, bxj)))
+                  hold bxj = bxj + 1
+                }
+                hold bxP = ""
+                hold bxj = 0
+                while bxj < bxal {
+                  hold bxP = concat(bxP, chr(sx_index(bxo, bxj)))
+                  hold bxj = bxj + 1
+                }
+                hold bxo = bxP
+                hold bxo = concat(bxo, "sx_mod(")
+                hold bxo = concat(bxo, bxL)
+                hold bxo = concat(bxo, ",")
+                hold bxo = concat(bxo, bxR)
+                hold bxo = concat(bxo, ")")
+                hold bxi = bxri
+              } otherwise {
+                hold bxo = concat(bxo, chr(bxc))
+                hold bxi = bxi + 1
+              }
+            }
+          }
+          hold argv_txt = bxo
           // Normalize builtin identifiers inside argument text for nested calls.
           hold argv_c = ""
           hold ai = 0

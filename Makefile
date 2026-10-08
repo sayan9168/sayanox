@@ -1185,6 +1185,13 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 	./$(GEN2) $(TESTS)/gg_streq.sa $(TESTS)/gg_streq.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/gg_streq $(TESTS)/gg_streq.c
 	$(call assert-out,./$(TESTS)/gg_streq,1\n2\n4\n6\n7)
+	@# `%` inside a builtin-call argument: sx_mod(L, R) with the same operand rule as
+	@# the condition rewrite (x * m % 10 is (x * m) % 10); % in a string literal is text
+	@printf 'hold m = 17\nhold d = chr(48 + m %% 10)\nshow d\nshow concat("x", chr(48 + m %% 10))\nhold x = 3\nhold e = chr(48 + x * m %% 10)\nshow e\nshow concat("100%%", chr(50 + m %% 3))\nhold r = concat("v=", chr(48 + m / 2 %% 10))\nshow r\n' > $(TESTS)/gg_pct.sa
+	./$(GEN2) $(TESTS)/gg_pct.sa $(TESTS)/gg_pct.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gg_pct $(TESTS)/gg_pct.c
+	$(call assert-out,./$(TESTS)/gg_pct,7\nx7\n1\n100%4\nv=8)
+	@./$(SEED_MIN_BIN) $(TESTS)/gg_pct.sa > $(TESTS)/gg_pct_sm.c && $(CC) -O2 -o $(TESTS)/gg_pct_sm $(TESTS)/gg_pct_sm.c && ./$(TESTS)/gg_pct_sm > $(TESTS)/gg_pct_sm.out && ./$(TESTS)/gg_pct > $(TESTS)/gg_pct_g2.out && cmp $(TESTS)/gg_pct_sm.out $(TESTS)/gg_pct_g2.out
 	@# the chain forms are gen2 only: seed-min and native must refuse them
 	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_chain.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted an else-when/else-if chain"; exit 1; fi
@@ -1193,7 +1200,7 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 	    echo "[FAIL] native accepted an else-when/else-if chain"; exit 1; fi; \
 	  echo "[gen2-gaps] native rejects the chain forms"; \
 	fi
-	@echo "[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2; seed-min and native refuse the chains"
+	@echo "[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native refuse the chains"
 
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
