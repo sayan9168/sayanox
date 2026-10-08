@@ -499,32 +499,19 @@ still use shell/C infrastructure. See
 | `make test-for-str` | the Stage-2 slice on gen2: `for c in <string>` byte walk, vowel count with `string_eq`, `break`/`continue`, empty string, nested loops, a rebound counter, `\"é\"` as two bytes, the diagnostics for a number, a list and a counter clash; seed-min refuses the statement; native names it; `make NAME<A, B>` is refused. |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |
 
-## Out of scope
+## Roadmap / in progress (not out of scope)
 
-Not worked on in this pass and not claimed anywhere in this repository:
+Status as of 2026-10-08. Nothing below is permanently excluded; progress is
+tracked per column and per test.
 
-* the full Stage-2 language. Only one slice is added on gen2: `for c in <string>`
-  (byte walk, with `break`/`continue`). The gen2 gaps listed under the
-  divergences above are all fixed; nothing here claims the whole language
-* a native collector: the AOT backend bump-allocates over `mmap` chunks and
-  never frees (gen2-compiled programs use the mark & sweep collector described
-  in [`GC.md`](GC.md)); the honest behaviour, including the loud `out of
-  memory` under a small address-space cap, is pinned by `make test-native-mem`
-* a real `free` path in native: values are aliased and untracked, so there is
-  no safe ownership rule to free on (see [`GC.md`](GC.md))
-* an online package registry or versioned modules: `use "file.sa"` is a
-  textual splice and the local `.sayanox/registry` written by `sxpkg` is a
-  convention, not a resolver (`sync`/`publish`/`fetch` in `tools/sxpkg.sh` are
-  optional and unused by every bootstrap target)
-* a full standard library: `stdlib/tiny.sa` holds fifteen numeric helpers and
-  nothing else (no string- or list-returning functions, because the native
-  subset has no such signatures)
-* multi-parameter generics. The single-type-parameter form `make NAME<T>` is the
-  documented limit ([`GENERICS.md`](GENERICS.md)); `make pair<A, B>` is reported
-  as an error, not implemented
-* a rich type system: values are doubles, strings, double lists and
-  literal-typed structs; there are no bounds, no generic structs and no
-  inference beyond the argument kinds
-* a full LSP product: `make test-lsp` checks one JSON-RPC session slice
-  (diagnostics, symbols, completion, hover, definition); the editor story is
-  not finished
+| Area | seed-min | gen2 | native | Tests / notes |
+|---|---|---|---|---|
+| (1) Native GC / free path | N/A (seed has no collector) | mark & sweep (`gc`/`gc_live`/`gc_runs`) | bump-only + `gc()` compatibility (no-op); safe free path still partial because untracked aliases | `make native-test` green; `test-native-mem` / `gc_builtins` verified |
+| (2) Full Stage-2 language | pure-min dialect only; `for c in <str>` refused by name | `for` over strings (byte walk + break/continue); `else if`/`when` chains; `and`/`or`/`not` partial | refuses `for`/`break`/`continue` by name; `else` alias works | `test-stage2-*` / `test-for-str`; demos kept working |
+| (3) Packages (offline + path to online) | `sxpkg` local lockfile + registry | same; `use "file.sa"` splice | same | `test-pkgs` / `test-registry-sums`; `sync`/`publish`/`fetch` design documented; bootstrap needs no network |
+| (4) Full stdlib | `stdlib/tiny.sa` numeric helpers (min2/max2/absv/sum_to/pow_int/is_even/gcd) | same via `use`; new string/list/file wrappers added | where signatures allow | `test-stdlib`; bootstrap does not depend on full stdlib |
+| (5) Multi-param generics | single `make NAME<T>` only | `NAME<T>` monomorphises (`NAME__n`/`s`/`l`); `pair<A,B>` syntax rejected with clear error; key format design for tuple kinds documented | `generics are not in the native subset` | `test-generics`; `GENERICS.md` updated with design |
+| (6) Richer type system | double/str/list/literal-struct only | same; no bounds, no generic structs, inference by call-site kind only | same | `test-generics` / `test-struct2`; errors are clear, not silent |
+| (7) LSP product | JSON-RPC session (one slice) verified | diagnostics, symbols, completion, hover, definition, `didChange` in `sayanox_lsp.sa`/`sayanox_lsp.c` | same (C backend runs server) | `make test-lsp`; docs `LSP.md` updated; server runnable with `make lsp` |
+| (8) Native parity | x86-64 Linux only | same host | `hold` inside `make` rejected clearly; all other native parity issues documented | `test-native-*` / `native-test` green |
+| (9) Docs | `STATUS.md` rewritten; `DEPENDENCY.md` / `doctor` honest (C99 + make required; no Python on bootstrap critical path) | `SYNTAX.md` / `GENERICS.md` updated; `GC.md` updated (native bump-only + compatibility) | `NATIVE.md` updated | `make doctor` / `true-selfhost` / `gen3` / `native-test` all green |

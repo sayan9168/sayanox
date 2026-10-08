@@ -1,0 +1,8 @@
+hold n = 3
+when n == 1 {
+  show 1
+} else when n == 2 {
+  show 2
+} else {
+  show 3
+}

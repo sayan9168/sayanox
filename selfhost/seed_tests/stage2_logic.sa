@@ -1,0 +1,10 @@
+hold a = 1
+hold b = 0
+when a == 1 and b == 0 {
+  show 10
+}
+when a == 1 or b == 1 {
+  show 11
+}
+hold not_b = 1 - b
+show not_b
