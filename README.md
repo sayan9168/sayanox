@@ -1,28 +1,55 @@
 # Sayanox
 
-Sayanox is a programming language whose source files use the `.sa` extension.
-The maintained bootstrap compiler and most examples are written in Sayanox; C
-is still used for the bootstrap seed and the current native-AOT backend.
+### A completely original systems programming language with its own self-hosting compiler
 
-## Quick start
+**File extension: `.sa`** · Bootstrap written in Sayanox itself · Native AOT (x86-64 Linux)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Language](https://img.shields.io/badge/Language-Sayanox-blue)](https://github.com/sayan9168/sayanox)
+[![Status](https://img.shields.io/badge/Status-Active%20Development-orange)](docs/STATUS.md)
+
+> Sayanox is designed to be **easy to read**, **easy to write**, and **powerful enough** for real systems work.  
+> The compiler, tools, and most examples are written in Sayanox.
+
+---
+
+## Why Sayanox?
+
+Most new languages are either:
+- Too academic, or
+- Thin wrappers around existing runtimes.
+
+Sayanox aims for a clean middle ground:
+
+- Simple, readable syntax
+- Strong focus on **self-hosting** (the compiler is written in itself)
+- Native code generation (AOT)
+- Built-in tools: formatter + package manager written in Sayanox
+- Educational + practical at the same time
+
+---
+
+## Quick Start
 
 ```sh
 git clone https://github.com/sayan9168/sayanox.git
 cd sayanox
-make doctor
-make true-selfhost
-make gen3                   # gen3 == gen4 byte-identical
+
+make doctor          # check environment
+make true-selfhost   # build the self-hosted compiler
+make gen3            # gen3 == gen4 (byte-identical)
 ```
 
-Compile a program with the Sayanox-written compiler:
+### Compile a program
 
 ```sh
+# Using the Sayanox-written compiler (produces C)
 ./selfhost/gen2 examples/hello.sa hello.c
 cc -o hello hello.c
 ./hello
 ```
 
-For the tested x86-64 Linux native-AOT subset:
+### Native AOT (x86-64 Linux)
 
 ```sh
 make native
@@ -30,53 +57,99 @@ make native
 ./hello
 ```
 
-## Sayanox-written tools
+---
 
-The formatter and the local package-lock tool are themselves Sayanox programs;
-`make tools` compiles them through gen2:
+## Language Features (Current Milestone)
+
+The **pure-min** dialect currently supports:
+
+| Feature | Status |
+|---------|--------|
+| `hold` / `show` | ✅ |
+| `when` / `while` | ✅ |
+| `else` / `otherwise` | ✅ |
+| Recursive functions (`make` / `give`) | ✅ |
+| Integer + floating arithmetic | ✅ |
+| Checked integer `%` | ✅ |
+| Lists | ✅ |
+| Nested structs | ✅ |
+| Strings | ✅ |
+| File / argument builtins | ✅ |
+| Modules (`use "file.sa"`) | ✅ |
+| Native AOT (x86-64 Linux) | ✅ (subset) |
+
+See [docs/STATUS.md](docs/STATUS.md) for the full tested feature matrix and known limitations.
+
+---
+
+## Sayanox-written Tools
 
 ```sh
 make tools
-./tools/sxfmt input.sa formatted.sa
-./tools/sxpkg init
+
+./tools/sxfmt input.sa formatted.sa     # formatter
+./tools/sxpkg init                      # package manager
 ./tools/sxpkg add math 0.1.0
 ./tools/sxpkg list
 ```
 
-The formatter currently changes whitespace only. The Sayanox package tool supports local `init`/`add`/`list`/`remove`/
-`search`/`info`/`seed`; sync/install/publish/fetch still use the shell
-implementation. See [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md)
-for the full migration boundary.
+The formatter currently handles whitespace. The package tool supports local `init` / `add` / `list` / `remove` / `search` / `info` / `seed`. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 
-## Current supported milestone
+---
 
-The seed-min and gen2 compilers implement the tested **pure-min** dialect:
-`hold`/`show`, `when`/`while`, `else`/`otherwise`, numeric recursive
-`make`/`give` functions, integer and fractional double arithmetic, checked
-integer `%`, lists, nested structs, strings, file/argument builtins, and
-textual `use "file.sa"` modules. `make native-test` checks the documented
-native-AOT subset and parity where supported.
-
-See [docs/STATUS.md](docs/STATUS.md) for the tested feature matrix, known
-backend differences, and exact commands. The full Stage-2 language is not yet
-self-hosted; the shared bootstrap subset does not include every syntax form or
-library shown in older experiments. Native AOT currently targets x86-64 Linux.
-
-## GitHub language display
-
-Sayanox source files are `.sa`, but GitHub Linguist currently has no Sayanox
-language entry or `.sa` mapping. A repository-only `.gitattributes` override
-cannot register a new language; see [docs/GITHUB_LANGUAGE.md](docs/GITHUB_LANGUAGE.md)
-for the required upstream step and current status.
-
-## Layout
+## Project Layout
 
 | Path | Role |
 |------|------|
-| `*.sa` | Sayanox programs, tools, examples and compiler sources |
-| `selfhost/compiler_min.sa` | the maintained pure-min compiler written in Sayanox |
+| `*.sa` | Sayanox source (compiler, tools, examples) |
+| `selfhost/compiler_min.sa` | Maintained pure-min compiler written in Sayanox |
 | `selfhost/seed/*.c` | C bootstrap seed |
-| `selfhost/native_aot.c` | x86-64 Linux native-AOT implementation |
-| `Makefile` | bootstrap, regression tests and verification entry points |
+| `selfhost/native_aot.c` | x86-64 Linux native-AOT backend |
+| `Makefile` | Bootstrap, tests, verification |
+| `docs/` | Status, design notes, language docs |
 
-MIT — Sayan Mahata
+---
+
+## GitHub Language Detection
+
+Sayanox uses the `.sa` extension. GitHub Linguist does not yet have a built-in mapping for it, so the repository may show as C.  
+See [docs/GITHUB_LANGUAGE.md](docs/GITHUB_LANGUAGE.md) for the upstream process.
+
+---
+
+## Roadmap (High Level)
+
+- [x] Self-hosting pure-min dialect
+- [x] Native AOT subset (x86-64 Linux)
+- [x] Formatter + local package tool in Sayanox
+- [ ] Full Stage-2 language self-hosting
+- [ ] Broader platform support
+- [ ] Standard library growth
+- [ ] LSP support
+
+---
+
+## Contributing
+
+This is an active research + engineering project. Issues and pull requests are welcome.
+
+```sh
+make doctor
+make true-selfhost
+make native-test
+```
+
+---
+
+## License
+
+MIT License © [Sayan Mahata](https://github.com/sayan9168) (Sayan the researcher)
+
+---
+
+<div align="center">
+
+**Built by [Sayan the researcher](https://github.com/sayan9168)**  
+[Portfolio](https://sayan9168.github.io) · [GrokOSINT](https://github.com/sayan9168/GrokOSINT)
+
+</div>
