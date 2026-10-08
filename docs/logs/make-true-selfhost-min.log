@@ -182,6 +182,14 @@ cc -O2 -o selfhost/seed_tests/fs_bytes selfhost/seed_tests/fs_bytes.c
 [stage2] native rejects for/break/continue by name
 ./selfhost/gen2 selfhost/seed_tests/fs_pair.sa selfhost/seed_tests/fs_pair.c >/dev/null 2>&1 || true
 [OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name
+./selfhost/gen2 selfhost/seed_tests/gg_len.sa selfhost/seed_tests/gg_len.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gg_len selfhost/seed_tests/gg_len.c
+./selfhost/gen2 selfhost/seed_tests/gg_chain.sa selfhost/seed_tests/gg_chain.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gg_chain selfhost/seed_tests/gg_chain.c
+./selfhost/gen2 selfhost/seed_tests/gg_streq.sa selfhost/seed_tests/gg_streq.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gg_streq selfhost/seed_tests/gg_streq.c
+[gen2-gaps] native rejects the chain forms
+[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2; seed-min and native refuse the chains
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/std_t.sa > selfhost/seed_tests/std_sm.c
 cc -O2 -o selfhost/seed_tests/std_sm selfhost/seed_tests/std_sm.c
 ./selfhost/gen2 selfhost/seed_tests/std_t.sa selfhost/seed_tests/std_g2.c >/dev/null

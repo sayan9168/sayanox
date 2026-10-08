@@ -203,25 +203,38 @@ Struct field types come from the literals that fill them: a field is `double`
 or `char *`, the first literal that mentions it decides, and a conflicting
 later literal is a hard error. `hold s = u.name` is typed as a string.
 
-### gen2 gaps found while adding the Stage-2 slice (recorded, not fixed)
+### gen2 gaps found on 2026-10-08 (status after the fixes)
 
-These were reproduced on the current gen2 during the 2026-10-08 work. None is
-hidden by the test suite; each is a known limit, not a passing case.
+Reproduced on gen2 while adding the Stage-2 slice, then fixed in the same pass
+and pinned by `make test-gen2-gaps` (part of `true-selfhost-min`):
 
-* **`len(` in a range bound.** `for i in 0..len(xs) { ... }` compiles with exit
-  status 0, but the emitted C calls an undefined `len`, so the C compile fails
-  at link time. Workaround: store the length in a `hold` first.
-* **`else when`.** `} else when n > 0 {` compiles with exit status 0 and emits
-  unbalanced braces. Avoid it; `elif` is the supported chain.
-* **`==` on runtime-built strings.** `string == string` compares addresses in
-  gen2, so two equal strings built with `concat` compare as different. Use
-  `string_eq(a, b) == 1`. Never use `==` on strings in test programs.
-* **`%` inside a builtin call argument.** gen2 emits that text raw, so the C
-  compile fails. Statement-level `hold r = m % 10` works, and `tools/sxpkg.sa`
-  works around it that way.
+* **Fixed: `len(` in a range bound.** `for i in 0..len(xs)` (a declared list,
+  `sx_llen`) and `for j in 0..len(s)` (a string, `sx_len`) now compile and
+  run. Before, the C called an undefined `len` and failed at link time.
+* **Fixed: string `==` and `!=`.** `A == B` and `A != B` compile to `sx_eq`
+  (strcmp) when A is a declared string and B is a declared string or a quoted
+  literal. Before, they compared addresses, so two equal strings built with
+  `concat` compared unequal. Narrow on purpose: only plain identifiers and
+  literals are rewritten; other operand shapes are unchanged.
+* **Fixed: `else when`, `else if` and `otherwise when`.** These are chains
+  like `elif`. Before, `} else if COND {` also failed (the plain `else` was
+  emitted twice), so the documented `else if` form did not work on gen2
+  either. `} elif COND {` was always fine.
+
+Still open (recorded, not fixed):
+
+* **`%` inside a builtin call argument.** `chr(48 + m % 10)` or
+  `concat("x", chr(m % 10))` emit raw `%` on doubles, so the C compile fails.
+  Statement-level `hold r = m % 10` followed by `chr(48 + r)` works, and
+  `tools/sxpkg.sa` works around it that way. A correct fix needs the checked
+  `%` rewrite applied to builtin-argument text, with the same operand-chain
+  rule as the condition rewrite (`x * m % 10` is `(x * m) % 10`). A shortcut
+  gets that wrong, so it is not done.
 * **Loop and `when` scope.** In user programs, a `hold x = ...` inside a
   `when` or `while` body assigns to the outer `x` (it does not shadow it).
   Not changed here; avoid relying on it.
+* **String ordering.** `<`, `<=`, `>`, `>=` on two strings compare addresses.
+  Strings have no ordering in the language; do not use them.
 
 ## Verified behaviour
 
@@ -474,6 +487,7 @@ still use shell/C infrastructure. See
 | `make test-stage2-demos` | the three Stage-2 contract demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) compile byte-identically under seed-min and gen2; the string-only one also runs natively when `native_aot` is built (the native half is skipped, loudly, on the portable `true-selfhost` path, and executed in `make native-test`) |
 | `make test-stdlib` | `stdlib/tiny.sa` spliced with `use`: the seven original helpers (`min2`/`max2`/`absv`/`sum_to`/`pow_int`/`is_even`/`gcd`) and eight added ones (`clamp`/`sign`/`is_odd`/`lcm`/`fact`/`fib`/`is_prime`/`no_factor_from`; 20 new printed checks, 30 lines in all) give the same answers on seed-min, gen2 and (when built) native |
 | `make test-pkgs` | the offline package path: `sxpkg.sh init`+`seed` write `.sayanox/registry/{hello,math,strings}` with no network, `sxpkg add` records the lock, a program with `use \".sayanox/registry/math/main.sa\"` runs the same on seed-min, gen2 and native, and `sxpkg verify` passes on a clean project, reports the tampered `main.sa` as a `sum` MISMATCH, and passes again after the re-seed |
+| `make test-gen2-gaps` | the gen2 fixes of 2026-10-08: `len(NAME)` in a range bound (list `sx_llen`, string `sx_len`); string `==`/`!=` between declared strings as strcmp (two equal runtime strings compare equal); `} else when`, `} else if` and `} otherwise when` chains including nested ones, with the same output as `elif`; seed-min and native refuse the chains. Still open: `%` inside a builtin-call argument (see the gen2 gaps above). |
 | `make test-registry-sums` | every `pkg.meta` `sum=` in the repository equals `sxpkg sum` of its `main.sa` (offline integrity; see [`REGISTRY.md`](REGISTRY.md)) |
 | `make test-for-str` | the Stage-2 slice on gen2: `for c in <string>` byte walk, vowel count with `string_eq`, `break`/`continue`, empty string, nested loops, a rebound counter, `\"é\"` as two bytes, the diagnostics for a number, a list and a counter clash; seed-min refuses the statement; native names it; `make NAME<A, B>` is refused. |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |
@@ -484,8 +498,8 @@ Not worked on in this pass and not claimed anywhere in this repository:
 
 * the full Stage-2 language. Only one slice is added on gen2: `for c in <string>`
   (byte walk, with `break`/`continue`). The gen2 gaps listed under the
-  divergences above (`len(` in a range bound, `else when`, `==` on strings, `%`
-  in builtin arguments) remain, and nothing here claims the whole language
+  divergences above are fixed except `%` inside builtin-call arguments, which
+  is still open; nothing here claims the whole language
 * a native collector: the AOT backend bump-allocates over `mmap` chunks and
   never frees (gen2-compiled programs use the mark & sweep collector described
   in [`GC.md`](GC.md)); the honest behaviour, including the loud `out of

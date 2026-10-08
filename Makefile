@@ -33,7 +33,7 @@ LSP_BIN  := tools/sayanox_lsp
         seed-bin doctor tools sxfmt test-sxfmt sxpkg test-sxpkg test-sxpkg-wrapper \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
-        test-for-str test-registry-sums test-stdlib test-pkgs test-stage2-demos \
+        test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos \
         pack-compiler
 
 all: true-selfhost-min
@@ -1158,6 +1158,43 @@ test-registry-sums: sxpkg
 	done
 	@echo "[OK] repository registry: every pkg.meta sum= matches its main.sa"
 
+# ---------------------------------------------------------------------------
+# test-gen2-gaps: the three gen2 gaps that were recorded as divergences on
+# 2026-10-08 and are now fixed (docs/STATUS.md):
+#   * `len(NAME)` inside a range bound: `for i in 0..len(xs)` (list) and
+#     `for j in 0..len(s)` (string) emit sx_llen / sx_len, not a bare `len`;
+#   * `} else when COND {`, `} else if COND {` and `} otherwise when COND {`
+#     are the same chain as `elif` (they used to emit a second `else` level);
+#   * the chain links into a plain `} else {` / `} otherwise {` as before.
+# Seed-min and native refuse the chain forms (they are gen2-only).
+# ---------------------------------------------------------------------------
+test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'hold xs = [1, 2, 3, 4]\nhold s = "abcd"\nfor i in 0..len(xs) {\n  show i\n}\nfor j in 0..len(s) {\n  show j\n}\n' > $(TESTS)/gg_len.sa
+	./$(GEN2) $(TESTS)/gg_len.sa $(TESTS)/gg_len.c >/dev/null
+	@grep -q 'sx_llen(' $(TESTS)/gg_len.c && grep -q 'sx_len(s)' $(TESTS)/gg_len.c
+	$(CC) -O2 -o $(TESTS)/gg_len $(TESTS)/gg_len.c
+	$(call assert-out,./$(TESTS)/gg_len,0\n1\n2\n3\n0\n1\n2\n3)
+	@printf 'hold n = 0\nwhile n < 6 {\n  when n == 0 {\n    show 100\n  } else when n == 1 {\n    show 101\n  } else if n == 2 {\n    show 102\n  } otherwise when n == 3 {\n    show 103\n  } else {\n    show 109\n  }\n  when n >= 4 {\n    when n == 4 {\n      show 7\n    } else when n == 5 {\n      show 8\n    }\n  }\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/gg_chain.sa
+	./$(GEN2) $(TESTS)/gg_chain.sa $(TESTS)/gg_chain.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gg_chain $(TESTS)/gg_chain.c
+	$(call assert-out,./$(TESTS)/gg_chain,100\n101\n102\n103\n109\n7\n109\n8\ndone)
+	@# `==` / `!=` between declared strings is a strcmp, not an address compare:
+	@# two equal strings built at run time (concat) must compare equal
+	@printf 'hold s = "ab"\nhold t = concat("a", "b")\nhold u = concat("a", "c")\nwhen t == s {\n  show 1\n} otherwise {\n  show 0\n}\nwhen t != u {\n  show 2\n} otherwise {\n  show 3\n}\nwhen s == "ab" {\n  show 4\n}\nwhen u == "ab" {\n  show 5\n} otherwise {\n  show 6\n}\nwhen string_eq(t, s) == 1 {\n  show 7\n}\n' > $(TESTS)/gg_streq.sa
+	./$(GEN2) $(TESTS)/gg_streq.sa $(TESTS)/gg_streq.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gg_streq $(TESTS)/gg_streq.c
+	$(call assert-out,./$(TESTS)/gg_streq,1\n2\n4\n6\n7)
+	@# the chain forms are gen2 only: seed-min and native must refuse them
+	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_chain.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted an else-when/else-if chain"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gg_chain.sa $(TESTS)/gg_nat >/dev/null 2>&1; then \
+	    echo "[FAIL] native accepted an else-when/else-if chain"; exit 1; fi; \
+	  echo "[gen2-gaps] native rejects the chain forms"; \
+	fi
+	@echo "[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2; seed-min and native refuse the chains"
+
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
@@ -1277,7 +1314,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-for-str test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

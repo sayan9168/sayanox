@@ -10179,6 +10179,215 @@ hold ec = 0
     //      ctrim/cl; lower `%` through checked sx_mod and make `/` a double
     //      division. Result in crepl. ----
     when act == 3 || act == 6 || act == 8 {
+      // ---- string == and != ----
+      // In C, `a == b` on two char* compares addresses, so two equal strings
+      // built at run time compare unequal. For `A == B` / `A != B` where A is
+      // a declared string (|A| in sdecls) and B is a declared string or a
+      // quoted literal, emit sx_eq (strcmp). Everything else is copied as is.
+      hold seo = ""
+      hold seoi = 0
+      hold seoc = 0
+      hold seoq = 0
+      hold seop = 0
+      hold seoneg = 0
+      hold seoj = 0
+      hold seoe = 0
+      hold seoin = 0
+      hold seoc2 = 0
+      hold seoc3 = 0
+      hold seol = ""
+      hold ser = ""
+      hold seoquo = 0
+      hold seorj = 0
+      hold seols = 0
+      hold seors = 0
+      hold seolk = ""
+      hold seork = ""
+      hold seoli = 0
+      hold seomt = 0
+      hold seoj2 = 0
+      hold seonew = ""
+      hold seoq3 = 0
+      hold seopc = 0
+      while seoi < cl {
+        hold seoc = sx_index(ctrim, seoi)
+        when seoc == 34 {
+          // string literal: copy verbatim, escapes kept
+          hold seo = concat(seo, chr(34))
+          hold seoi = seoi + 1
+          hold seoq = 1
+          while seoq == 1 && seoi < cl {
+            hold seoc = sx_index(ctrim, seoi)
+            hold seo = concat(seo, chr(seoc))
+            hold seoi = seoi + 1
+            when seoc == 92 && seoi < cl {
+              hold seo = concat(seo, chr(sx_index(ctrim, seoi)))
+              hold seoi = seoi + 1
+            } otherwise {
+              when seoc == 34 {
+                hold seoq = 0
+              }
+            }
+          }
+        } otherwise {
+          hold seop = 0
+          when seoc == 61 && seoi + 1 < cl && sx_index(ctrim, seoi + 1) == 61 {
+            hold seop = 1
+          }
+          when seoc == 33 && seoi + 1 < cl && sx_index(ctrim, seoi + 1) == 61 {
+            hold seop = 2
+          }
+          // a == that is part of <= >= or != is not an equality test
+          when seop == 1 && seoi > 0 {
+            hold seopc = sx_index(ctrim, seoi - 1)
+            when seopc == 60 || seopc == 62 || seopc == 61 || seopc == 33 {
+              hold seop = 0
+            }
+          }
+          when seop == 0 {
+            hold seo = concat(seo, chr(seoc))
+            hold seoi = seoi + 1
+          } otherwise {
+            // left operand: the identifier just before the operator
+            hold seoe = len(seo)
+            hold seoj = seoe
+            while seoj > 0 && sx_index(seo, seoj - 1) == 32 {
+              hold seoj = seoj - 1
+            }
+            hold seoe = seoj
+            hold seoin = 1
+            while seoin == 1 {
+              hold seoin = 0
+              when seoj > 0 {
+                hold seoc2 = sx_index(seo, seoj - 1)
+                when (seoc2 >= 97 && seoc2 <= 122) || (seoc2 >= 65 && seoc2 <= 90) || (seoc2 >= 48 && seoc2 <= 57) || seoc2 == 95 {
+                  hold seoj = seoj - 1
+                  hold seoin = 1
+                }
+              }
+            }
+            hold seol = ""
+            hold seoq3 = seoj
+            while seoq3 < seoe {
+              hold seol = concat(seol, chr(sx_index(seo, seoq3)))
+              hold seoq3 = seoq3 + 1
+            }
+            // right operand: a quoted literal or an identifier
+            hold seorj = seoi + 2
+            while seorj < cl && sx_index(ctrim, seorj) == 32 {
+              hold seorj = seorj + 1
+            }
+            hold ser = ""
+            hold seoquo = 0
+            when seorj < cl && sx_index(ctrim, seorj) == 34 {
+              hold seoquo = 1
+              hold ser = chr(34)
+              hold seorj = seorj + 1
+              hold seoq = 1
+              while seoq == 1 && seorj < cl {
+                hold seoc3 = sx_index(ctrim, seorj)
+                hold ser = concat(ser, chr(seoc3))
+                hold seorj = seorj + 1
+                when seoc3 == 92 && seorj < cl {
+                  hold ser = concat(ser, chr(sx_index(ctrim, seorj)))
+                  hold seorj = seorj + 1
+                } otherwise {
+                  when seoc3 == 34 {
+                    hold seoq = 0
+                  }
+                }
+              }
+            } otherwise {
+              hold seoin = 1
+              while seoin == 1 {
+                hold seoin = 0
+                when seorj < cl {
+                  hold seoc2 = sx_index(ctrim, seorj)
+                  when (seoc2 >= 97 && seoc2 <= 122) || (seoc2 >= 65 && seoc2 <= 90) || (seoc2 >= 48 && seoc2 <= 57) || seoc2 == 95 {
+                    hold ser = concat(ser, chr(seoc2))
+                    hold seorj = seorj + 1
+                    hold seoin = 1
+                  }
+                }
+              }
+            }
+            // both sides must be strings: the left is declared, the right is
+            // a quoted literal or a declared string
+            hold seols = 0
+            hold seors = 0
+            when len(seol) > 0 {
+              hold seolk = concat(concat("|", seol), "|")
+              hold seoli = 0
+              while seoli + len(seolk) <= len(sdecls) {
+                hold seomt = 1
+                hold seoj2 = 0
+                while seoj2 < len(seolk) {
+                  when sx_index(sdecls, seoli + seoj2) == sx_index(seolk, seoj2) {
+                    hold seoj2 = seoj2 + 1
+                  } otherwise {
+                    hold seomt = 0
+                    hold seoj2 = len(seolk)
+                  }
+                }
+                when seomt == 1 {
+                  hold seols = 1
+                  hold seoli = len(sdecls)
+                } otherwise {
+                  hold seoli = seoli + 1
+                }
+              }
+            }
+            when seoquo == 0 && len(ser) > 0 {
+              hold seork = concat(concat("|", ser), "|")
+              hold seoli = 0
+              while seoli + len(seork) <= len(sdecls) {
+                hold seomt = 1
+                hold seoj2 = 0
+                while seoj2 < len(seork) {
+                  when sx_index(sdecls, seoli + seoj2) == sx_index(seork, seoj2) {
+                    hold seoj2 = seoj2 + 1
+                  } otherwise {
+                    hold seomt = 0
+                    hold seoj2 = len(seork)
+                  }
+                }
+                when seomt == 1 {
+                  hold seors = 1
+                  hold seoli = len(sdecls)
+                } otherwise {
+                  hold seoli = seoli + 1
+                }
+              }
+            }
+            when seols == 1 && (seoquo == 1 || seors == 1) {
+              // rebuild the output without the left operand, then the strcmp
+              hold seonew = ""
+              hold seoq3 = 0
+              while seoq3 < seoj {
+                hold seonew = concat(seonew, chr(sx_index(seo, seoq3)))
+                hold seoq3 = seoq3 + 1
+              }
+              hold seo = concat(seonew, "sx_eq(")
+              hold seo = concat(seo, seol)
+              hold seo = concat(seo, ", ")
+              hold seo = concat(seo, ser)
+              hold seo = concat(seo, ")")
+              when seop == 1 {
+                hold seo = concat(seo, " == 1.0")
+              } otherwise {
+                hold seo = concat(seo, " == 0.0")
+              }
+              hold seoi = seorj
+            } otherwise {
+              hold seo = concat(seo, chr(seoc))
+              hold seo = concat(seo, chr(sx_index(ctrim, seoi + 1)))
+              hold seoi = seoi + 2
+            }
+          }
+        }
+      }
+      hold ctrim = seo
+      hold cl = len(seo)
       // ---- rewrite '%' to the checked helper ----
       // C precedence already matches pure-min for + - * / and the
       // comparisons, so only '%' needs work here:
@@ -10907,8 +11116,9 @@ hold ec = 0
           }
           hold eki = eki + 1
         }
-        when sx_eq(ew4, "else") {
-          hold ep = wi + 4
+        // `else` and `otherwise` (wfound, length wlen) both start a chain
+        when wfound == 1 {
+          hold ep = wi + wlen
           hold eskip = 1
           while eskip == 1 {
             hold eskip = 0
@@ -10940,6 +11150,29 @@ hold ec = 0
             when eident == 0 {
               hold iselif = 1
               hold elen = ep + 2 - wi
+            }
+          }
+          // `} else when COND {` is the same chain as `else if`: the 4-byte
+          // keyword "when" is already in place, so the rewrite below only
+          // blanks the `else ` prefix (same byte count, same chain close).
+          when sx_eq(eif, "wh") && ep + 4 <= n {
+            hold ewh = ""
+            hold ewk = 0
+            while ewk < 4 {
+              hold ewh = concat(ewh, chr(sx_index(source, ep + ewk)))
+              hold ewk = ewk + 1
+            }
+            hold enx = 0
+            when ep + 4 < n {
+              hold enx = sx_index(source, ep + 4)
+            }
+            hold eident = 0
+            when (enx >= 97 && enx <= 122) || (enx >= 65 && enx <= 90) || (enx >= 48 && enx <= 57) || enx == 95 {
+              hold eident = 1
+            }
+            when sx_eq(ewh, "when") && eident == 0 {
+              hold iselif = 1
+              hold elen = ep + 4 - wi
             }
           }
         }
@@ -10984,7 +11217,10 @@ hold ec = 0
       when wfound == 1 {
         hold enormal = 0
       }
-      when wfound == 1 {
+      // A chain (`} else if COND {`, `} else when COND {`) was already
+      // rewritten to `when` above and emits its own `} else {`: skip the
+      // plain-else emission here, or the chain gets two else levels.
+      when wfound == 1 && iselif == 0 {
         // "} otherwise {" and "} else {" both become "} else {"
         hold pos = wi + wlen
         hold sk = 1
@@ -11960,6 +12196,72 @@ hold ec = 0
           hold body = concat(body, nl)
           }
         } otherwise {
+          // The bound B may call len(NAME), the same builtin a `when`
+          // condition accepts: map it to sx_llen for a declared list and to
+          // sx_len otherwise (same lookup as the condition rewrite). Only the
+          // emitted bound changes; the text is copied unchanged elsewhere.
+          hold fvbc = ""
+          hold fvbn = len(fvb)
+          hold fvbi = 0
+          while fvbi < fvbn {
+            hold fvbhit = 0
+            when fvbi + 3 < fvbn && sx_index(fvb, fvbi) == 108 && sx_index(fvb, fvbi + 1) == 101 && sx_index(fvb, fvbi + 2) == 110 && sx_index(fvb, fvbi + 3) == 40 {
+              hold fvbhit = 1
+              when fvbi > 0 {
+                hold fvbpc = sx_index(fvb, fvbi - 1)
+                when (fvbpc >= 97 && fvbpc <= 122) || (fvbpc >= 65 && fvbpc <= 90) || (fvbpc >= 48 && fvbpc <= 57) || fvbpc == 95 {
+                  hold fvbhit = 0
+                }
+              }
+            }
+            when fvbhit == 1 {
+              // NAME is the text up to the closing ')' (identifiers only)
+              hold fvbnm = ""
+              hold fvbj = fvbi + 4
+              while fvbj < fvbn && sx_index(fvb, fvbj) != 41 {
+                hold fvbnm = concat(fvbnm, chr(sx_index(fvb, fvbj)))
+                hold fvbj = fvbj + 1
+              }
+              hold fvbkey = concat(concat("|", fvbnm), "|")
+              hold fvbkl = len(fvbkey)
+              hold fvbll = len(ldecls)
+              hold fvblf = 0
+              hold fvbli = 0
+              while fvbli + fvbkl <= fvbll {
+                hold fvbok = 1
+                hold fvblj = 0
+                while fvblj < fvbkl {
+                  when sx_index(ldecls, fvbli + fvblj) == sx_index(fvbkey, fvblj) {
+                    hold fvblj = fvblj + 1
+                  } otherwise {
+                    hold fvbok = 0
+                    hold fvblj = fvbkl
+                  }
+                }
+                when fvbok == 1 {
+                  hold fvblf = 1
+                  hold fvbli = fvbll
+                } otherwise {
+                  hold fvbli = fvbli + 1
+                }
+              }
+              when fvblf == 1 {
+                hold fvbc = concat(fvbc, "sx_llen(")
+              } otherwise {
+                hold fvbc = concat(fvbc, "sx_len(")
+              }
+              hold fvbc = concat(fvbc, fvbnm)
+              hold fvbc = concat(fvbc, ")")
+              when fvbj < fvbn {
+                hold fvbi = fvbj + 1
+              } otherwise {
+                hold fvbi = fvbn
+              }
+            } otherwise {
+              hold fvbc = concat(fvbc, chr(sx_index(fvb, fvbi)))
+              hold fvbi = fvbi + 1
+            }
+          }
           hold body = concat(body, ind)
           hold body = concat(body, "for (")
           hold body = concat(body, fvname)
@@ -11968,7 +12270,7 @@ hold ec = 0
           hold body = concat(body, "; ")
           hold body = concat(body, fvname)
           hold body = concat(body, " < ")
-          hold body = concat(body, fvb)
+          hold body = concat(body, fvbc)
           hold body = concat(body, "; ")
           hold body = concat(body, fvname)
           hold body = concat(body, " = ")
