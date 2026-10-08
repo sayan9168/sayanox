@@ -56,3 +56,75 @@ make gcd(a, b) {
   }
   give gcd(b, a % b)
 }
+
+// Added with the 2026-10-08 expansion. Every helper is numeric and uses only
+// the native-AOT subset (no `hold` inside a body, at most 6 parameters).
+
+make clamp(x, lo, hi) {
+  when x < lo {
+    give lo
+  }
+  when x > hi {
+    give hi
+  }
+  give x
+}
+
+make sign(n) {
+  when n > 0 {
+    give 1
+  }
+  when n < 0 {
+    give 0 - 1
+  }
+  give 0
+}
+
+make is_odd(n) {
+  when absv(n) % 2 == 1 {
+    give 1
+  }
+  give 0
+}
+
+make lcm(a, b) {
+  when a == 0 {
+    give 0
+  }
+  when b == 0 {
+    give 0
+  }
+  give absv(a / gcd(a, b) * b)
+}
+
+make fact(n) {
+  when n <= 1 {
+    give 1
+  }
+  give n * fact(n - 1)
+}
+
+make fib(n) {
+  when n < 2 {
+    give n
+  }
+  give fib(n - 1) + fib(n - 2)
+}
+
+// no_factor_from(n, d): 1 when no d' >= d with d'*d <= n divides n
+make no_factor_from(n, d) {
+  when d * d > n {
+    give 1
+  }
+  when n % d == 0 {
+    give 0
+  }
+  give no_factor_from(n, d + 1)
+}
+
+make is_prime(n) {
+  when n < 2 {
+    give 0
+  }
+  give no_factor_from(n, 2)
+}

@@ -1,4 +1,3 @@
-cc -O2 -o selfhost/native_aot selfhost/native_aot.c
 ./selfhost/native_aot examples/native_hello.sa selfhost/seed_tests/native_hello
 ./selfhost/native_aot selfhost/seed_tests/native_negative.sa selfhost/seed_tests/native_negative
 ./selfhost/native_aot selfhost/seed_tests/native_while.sa selfhost/seed_tests/native_while
@@ -68,6 +67,10 @@ cc -O2 -o selfhost/seed_tests/ts_io_sm selfhost/seed_tests/ts_io_sm.c
 ./selfhost/native_aot selfhost/seed_tests/native_mem.sa selfhost/seed_tests/native_mem
 ./selfhost/native_aot selfhost/seed_tests/native_mem_oom.sa selfhost/seed_tests/native_mem_oom
 ./selfhost/native_aot selfhost/seed_tests/native_mem_gc.sa selfhost/seed_tests/native_mem_gc 2>&1 | grep -q "undefined variable 'gc'"
+./selfhost/native_aot selfhost/seed_tests/native_bigalloc.sa selfhost/seed_tests/native_bigalloc
+./selfhost/native_aot selfhost/seed_tests/native_biglist.sa selfhost/seed_tests/native_biglist
+./selfhost/native_aot selfhost/seed_tests/native_mem_fit.sa selfhost/seed_tests/native_mem_fit
+./selfhost/native_aot selfhost/seed_tests/native_oom_out.sa selfhost/seed_tests/native_oom_out
 [OK] native memory: bump-only, correct under long allocating loops, loud 'out of memory' under a 4 MiB cap, collector builtins rejected
 [OK] restore-compiler (checked-in source verified; no base64/gzip used)
 ./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
@@ -95,5 +98,20 @@ cc -O2 -o selfhost/seed_tests/stage2_var_sm selfhost/seed_tests/stage2_var_sm.c
 ./selfhost/gen2 selfhost/stage2_variables.sa selfhost/seed_tests/stage2_var_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
 [OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 byte for byte, plus the lexer natively when native_aot is built; contract sketches, not the full Stage-2 language
+./selfhost/gen2 selfhost/seed_tests/fs_vowels.sa selfhost/seed_tests/fs_vowels.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_vowels selfhost/seed_tests/fs_vowels.c
+./selfhost/gen2 selfhost/seed_tests/fs_brk.sa selfhost/seed_tests/fs_brk.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_brk selfhost/seed_tests/fs_brk.c
+./selfhost/gen2 selfhost/seed_tests/fs_nest.sa selfhost/seed_tests/fs_nest.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_nest selfhost/seed_tests/fs_nest.c
+./selfhost/gen2 selfhost/seed_tests/fs_bytes.sa selfhost/seed_tests/fs_bytes.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_bytes selfhost/seed_tests/fs_bytes.c
+./selfhost/gen2 selfhost/seed_tests/fs_num.sa selfhost/seed_tests/fs_num.c >/dev/null 2>&1 || true
+./selfhost/gen2 selfhost/seed_tests/fs_clash.sa selfhost/seed_tests/fs_clash.c >/dev/null 2>&1 || true
+./selfhost/gen2 selfhost/seed_tests/fs_listclash.sa selfhost/seed_tests/fs_listclash.c >/dev/null 2>&1 || true
+[stage2] native rejects for/break/continue by name
+./selfhost/gen2 selfhost/seed_tests/fs_pair.sa selfhost/seed_tests/fs_pair.c >/dev/null 2>&1 || true
+[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name
 [OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions
 === NATIVE-TEST-OK ===
+EXIT=0

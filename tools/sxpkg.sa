@@ -3,6 +3,131 @@
 // Sayanox owns local init/add/list/remove plus registry seed/search/info.
 // sync/install/publish/fetch still need directory/process/network APIs and
 // remain in the shell entrypoint.
+//
+// Offline package convention (docs/REGISTRY.md): a package is a directory
+// .sayanox/registry/<name>/ with main.sa and pkg.meta; pkg.meta carries
+// name=, version=, desc= and sum= (pkgsum of main.sa). `verify` checks every
+// sx.lock entry against its registry copy. Nothing here touches the network.
+
+// pkgsum: checksum of a file's bytes, h = (h * 31 + byte) mod 1000000007.
+// It detects accidental edits to a locked package; it is not a security hash.
+make pkgsum(s: str) -> num {
+  hold h = 0
+  hold i = 0
+  while i < len(s) {
+    hold t = h * 31 + sx_index(s, i)
+    hold h = t % 1000000007
+    hold i = i + 1
+  }
+  give h
+}
+
+// decstr: decimal text of a whole number. numstr would round to 6 digits.
+make decstr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold s = ""
+  hold m = n
+  while m > 0 {
+    // `%` is taken on its own line: gen2 copies a `%` inside a builtin call
+    // argument as raw C (documented in docs/STATUS.md, divergences)
+    hold r = m % 10
+    hold s = concat(chr(48 + r), s)
+    hold m = (m - r) / 10
+  }
+  give s
+}
+
+// pkgfield: the value of `key=...` on its own line of a pkg.meta text ("" if absent)
+make pkgfield(text: str, key: str) -> str {
+  hold n = len(text)
+  hold kl = len(key)
+  hold p = 0
+  hold bol = 1
+  while p < n {
+    when bol == 1 {
+      hold ok = 1
+      hold j = 0
+      while j < kl {
+        when p + j >= n {
+          hold ok = 0
+          hold j = kl
+        } otherwise {
+          when sx_index(text, p + j) != sx_index(key, j) {
+            hold ok = 0
+            hold j = kl
+          } otherwise {
+            hold j = j + 1
+          }
+        }
+      }
+      when ok == 1 && p + kl < n && sx_index(text, p + kl) == 61 {
+        hold v = ""
+        hold q = p + kl + 1
+        while q < n && sx_index(text, q) != 10 {
+          hold v = concat(v, chr(sx_index(text, q)))
+          hold q = q + 1
+        }
+        give v
+      }
+    }
+    hold bol = 0
+    when sx_index(text, p) == 10 {
+      hold bol = 1
+    }
+    hold p = p + 1
+  }
+  give ""
+}
+
+// line_key / line_val: split one `key=value` lock line at its first `=`
+make line_key(line: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(line) {
+    when sx_index(line, i) == 61 {
+      give out
+    }
+    hold out = concat(out, chr(sx_index(line, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+make line_val(line: str) -> str {
+  hold i = 0
+  while i < len(line) && sx_index(line, i) != 61 {
+    hold i = i + 1
+  }
+  hold out = ""
+  hold j = i + 1
+  while j < len(line) {
+    hold out = concat(out, chr(sx_index(line, j)))
+    hold j = j + 1
+  }
+  give out
+}
+
+// check_pkg: "" when the registry copy of NAME matches the lock VERSION and its
+// pkg.meta sum; otherwise the reason it does not.
+make check_pkg(name: str, version: str) -> str {
+  hold meta = read_file(concat(".sayanox/registry/", concat(name, "/pkg.meta")))
+  when len(meta) == 0 {
+    give "no registry copy (.sayanox/registry/<name>/pkg.meta is missing)"
+  }
+  hold mver = pkgfield(meta, "version")
+  when string_eq(mver, version) == 0 {
+    give concat("locked at ", concat(version, concat(" but the registry has ", mver)))
+  }
+  hold src = read_file(concat(".sayanox/registry/", concat(name, "/main.sa")))
+  hold want = pkgfield(meta, "sum")
+  hold got = decstr(pkgsum(src))
+  when string_eq(want, got) == 0 {
+    give concat("main.sa sums to ", concat(got, concat(" but pkg.meta says ", want)))
+  }
+  give ""
+}
 
 hold argn = arg_count()
 hold command = "help"
@@ -28,6 +153,8 @@ hold is_remove = string_eq(command, "remove")
 hold is_search = string_eq(command, "search")
 hold is_info = string_eq(command, "info")
 hold is_seed = string_eq(command, "seed")
+hold is_verify = string_eq(command, "verify")
+hold is_sum = string_eq(command, "sum")
 hold query = ""
 when argn >= 3 {
   hold query = arg(2)
@@ -370,13 +497,15 @@ when is_info == 1 {
 when is_seed == 1 {
   hold handled = 1
   hold all_ok = 1
-  hold write_status = write_file(concat(concat(registry_path, "/hello"), "/pkg.meta"), "name=hello\nversion=0.1.0\ndesc=hello world sample\n")
+  hold hello_src = "show \"hello from pkg\"\n"
+  hold math_src = "make dbl(n) {\n  give n + n\n}\nmake sqr(n) {\n  give n * n\n}\n"
+  hold write_status = write_file(concat(concat(registry_path, "/hello"), "/main.sa"), hello_src)
   when write_status == 0 { hold all_ok = 0 }
-  hold write_status = write_file(concat(concat(registry_path, "/hello"), "/main.sa"), "show \"hello from pkg\"\n")
+  hold write_status = write_file(concat(concat(registry_path, "/hello"), "/pkg.meta"), concat("name=hello\nversion=0.1.0\ndesc=hello world sample\nsum=", concat(decstr(pkgsum(hello_src)), "\n")))
   when write_status == 0 { hold all_ok = 0 }
-  hold write_status = write_file(concat(concat(registry_path, "/math"), "/pkg.meta"), "name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\n")
+  hold write_status = write_file(concat(concat(registry_path, "/math"), "/main.sa"), math_src)
   when write_status == 0 { hold all_ok = 0 }
-  hold write_status = write_file(concat(concat(registry_path, "/math"), "/main.sa"), "make dbl(n) {\n  give n + n\n}\nmake sqr(n) {\n  give n * n\n}\n")
+  hold write_status = write_file(concat(concat(registry_path, "/math"), "/pkg.meta"), concat("name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\nsum=", concat(decstr(pkgsum(math_src)), "\n")))
   when write_status == 0 { hold all_ok = 0 }
   hold write_status = write_file(index_path, "hello=0.1.0\nmath=0.1.0\n")
   when write_status == 0 { hold all_ok = 0 }
@@ -452,7 +581,74 @@ when is_remove == 1 {
   }
 }
 
+// sum <file>: the checksum `pkgsum` gives a file (used when writing pkg.meta)
+when is_sum == 1 {
+  hold handled = 1
+  when argn < 3 {
+    show "usage: sxpkg sum <file>"
+  } otherwise {
+    hold src = read_file(name)
+    when len(src) == 0 {
+      show concat("sxpkg: cannot read ", name)
+    } otherwise {
+      show concat("sxpkg: sum ", concat(decstr(pkgsum(src)), concat(" ", name)))
+    }
+  }
+}
+
+// verify: every sx.lock entry must match its registry copy (version and sum)
+when is_verify == 1 {
+  hold handled = 1
+  hold lock = read_file(lock_path)
+  hold lock_len = len(lock)
+  when lock_len == 0 {
+    show "sxpkg: no sx.lock; run init first"
+  } otherwise {
+    hold last_byte = sx_index(lock, lock_len - 1)
+    when last_byte != 10 {
+      hold lock = concat(lock, "\n")
+    }
+    hold lock_len = len(lock)
+    hold checked = 0
+    hold problems = 0
+    hold pos = 0
+    hold line = ""
+    while pos < lock_len {
+      hold c = sx_index(lock, pos)
+      when c == 10 {
+        hold vkey = line_key(line)
+        hold vval = line_val(line)
+        hold vlen = len(line)
+        when vlen > 0 && sx_index(line, 0) != 35 && string_eq(vkey, "version") == 0 && string_eq(vkey, "name") == 0 {
+          when len(vkey) == 0 || len(vval) == 0 || len(line) == len(vkey) {
+            hold problems = problems + 1
+            show concat("sxpkg: MISMATCH malformed lock line: ", line)
+          } otherwise {
+            hold checked = checked + 1
+            hold why = check_pkg(vkey, vval)
+            when len(why) == 0 {
+              show concat("sxpkg: verified ", concat(vkey, concat(" ", vval)))
+            } otherwise {
+              hold problems = problems + 1
+              show concat("sxpkg: MISMATCH ", concat(vkey, concat(": ", why)))
+            }
+          }
+        }
+        hold line = ""
+      } otherwise {
+        hold line = concat(line, chr(c))
+      }
+      hold pos = pos + 1
+    }
+    when problems == 0 {
+      show concat("sxpkg: verify ok (", concat(numstr(checked), " locked packages)"))
+    } otherwise {
+      show concat("sxpkg: verify FAILED (", concat(numstr(problems), " problem(s))"))
+    }
+  }
+}
+
 when handled == 0 {
-  show "sxpkg: local commands: init | add <name> [version] | list | remove <name>"
+  show "sxpkg: local commands: init | add <name> [version] | list | remove <name> | seed | search | info | verify | sum <file>"
   show "sxpkg: sync/install/publish/fetch still require the shell implementation"
 }

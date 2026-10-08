@@ -155,8 +155,10 @@ case "$cmd" in
   remove) remove "$@" ;;
   info) info "$@" ;;
   seed) seed ;;
+  verify) run_sayanox verify ;;
+  sum) run_sayanox sum "$@" ;;
   fetch) fetch "$@" ;;
-  *) echo "sxpkg: init|sync|add|list|install|search|publish|remove|info|seed|fetch"
+  *) echo "sxpkg: init|sync|add|list|install|search|publish|remove|info|seed|verify|sum|fetch"
      echo "  ONLINE registry: $ONLINE"
      echo "  override: SAYANOX_REGISTRY=https://..."
      ;;

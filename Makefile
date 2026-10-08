@@ -33,6 +33,7 @@ LSP_BIN  := tools/sayanox_lsp
         seed-bin doctor tools sxfmt test-sxfmt sxpkg test-sxpkg test-sxpkg-wrapper \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
+        test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos \
         pack-compiler
 
 all: true-selfhost-min
@@ -250,7 +251,7 @@ test-sxpkg-wrapper: sxpkg tools/sxpkg.sh
 	@printf 'hello=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-wrapper/index-want
 	cmp $(TESTS)/sxpkg-wrapper/index-want $(TESTS)/sxpkg-wrapper/.sayanox/registry/INDEX
 	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh search math,sxpkg: search math\n  math 0.1.0)
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh info math,name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr))
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh info math,name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\nsum=718013937)
 	@mkdir -p $(TESTS)/sxpkg-wrapper/project
 	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.lock
 	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.toml
@@ -908,6 +909,30 @@ test-native-mem: $(NATIVE_BIN)
 	@printf 'hold x = gc_live()\nshow x\n' > $(TESTS)/native_mem_gcl.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_mem_gcl.sa $(TESTS)/native_mem_gcl 2>/dev/null; then \
 	  echo "[FAIL] native accepted gc_live()"; exit 1; fi
+	@# ---- the bump-only contract, pinned from both sides (docs/GC.md) ----
+	@# a single allocation bigger than one 64 KiB chunk is served whole
+	@printf 'hold s = "x"\nhold i = 0\nwhile i < 18 {\n  hold s = concat(s, s)\n  hold i = i + 1\n}\nshow len(s)\nshow s[262143]\n' > $(TESTS)/native_bigalloc.sa
+	./$(NATIVE_BIN) $(TESTS)/native_bigalloc.sa $(TESTS)/native_bigalloc
+	$(call assert-out,./$(TESTS)/native_bigalloc,262144\n120)
+	@# 100k list elements: growth by doubling crosses many chunks, every value kept
+	@printf 'hold xs = []\nhold j = 0\nwhile j < 100000 {\n  push(xs, j)\n  hold j = j + 1\n}\nshow len(xs)\nshow xs[0]\nshow xs[99999]\n' > $(TESTS)/native_biglist.sa
+	./$(NATIVE_BIN) $(TESTS)/native_biglist.sa $(TESTS)/native_biglist
+	$(call assert-out,./$(TESTS)/native_biglist,100000\n0\n99999)
+	@# the cap counts TOTAL bytes ever allocated, not live ones: 20k iterations
+	@# (~0.8 MB total) fit under 4 MiB, the 200k loop above (~8 MB total) does not
+	@printf 'hold i = 0\nwhile i < 20000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow i\n' > $(TESTS)/native_mem_fit.sa
+	./$(NATIVE_BIN) $(TESTS)/native_mem_fit.sa $(TESTS)/native_mem_fit
+	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/native_mem_fit',20000)
+	@# output written before an out-of-memory exit is kept, the exit is non-zero
+	@printf 'show "before"\nhold s = "abcdefgh"\nhold i = 0\nwhile i < 200000 {\n  hold t = concat(s, s)\n  hold i = i + 1\n}\nshow "after"\n' > $(TESTS)/native_oom_out.sa
+	./$(NATIVE_BIN) $(TESTS)/native_oom_out.sa $(TESTS)/native_oom_out
+	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/native_oom_out 2>/dev/null',before)
+	@if sh -c 'ulimit -v 4096; ./$(TESTS)/native_oom_out >/dev/null 2>&1'; then \
+	  echo "[FAIL] native survived the 4 MiB cap in the OOM program"; exit 1; fi
+	@# the gen2-only collector builtins are rejected by name
+	@printf 'hold x = gc_runs()\nshow x\n' > $(TESTS)/native_mem_gcr.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_mem_gcr.sa $(TESTS)/native_mem_gcr 2>/dev/null; then \
+	  echo "[FAIL] native accepted gc_runs()"; exit 1; fi
 	@echo "[OK] native memory: bump-only, correct under long allocating loops, loud 'out of memory' under a 4 MiB cap, collector builtins rejected"
 
 # ---------------------------------------------------------------------------
@@ -965,14 +990,14 @@ test-stage2-demos: $(GEN2) $(SEED_MIN_BIN)
 # ---------------------------------------------------------------------------
 test-stdlib: $(GEN2) $(SEED_MIN_BIN)
 	@mkdir -p $(TESTS)
-	@printf 'use "stdlib/tiny.sa"\nshow min2(3, 7)\nshow max2(3, 7)\nshow absv(0 - 5)\nshow absv(5)\nshow sum_to(10)\nshow pow_int(2, 10)\nshow is_even(42)\nshow is_even(7)\nshow gcd(48, 36)\nshow gcd(1071, 462)\n' > $(TESTS)/std_t.sa
+	@printf 'use "stdlib/tiny.sa"\nshow min2(3, 7)\nshow max2(3, 7)\nshow absv(0 - 5)\nshow absv(5)\nshow sum_to(10)\nshow pow_int(2, 10)\nshow is_even(42)\nshow is_even(7)\nshow gcd(48, 36)\nshow gcd(1071, 462)\nshow clamp(15, 0, 10)\nshow clamp(0 - 3, 0, 10)\nshow clamp(4, 0, 10)\nshow sign(0 - 9)\nshow sign(0)\nshow sign(12)\nshow is_odd(7)\nshow is_odd(0 - 4)\nshow is_odd(0 - 3)\nshow lcm(4, 6)\nshow lcm(0, 5)\nshow lcm(21, 6)\nshow fact(5)\nshow fact(0)\nshow fib(10)\nshow fib(1)\nshow is_prime(2)\nshow is_prime(1)\nshow is_prime(91)\nshow is_prime(97)\n' > $(TESTS)/std_t.sa
 	./$(SEED_MIN_BIN) $(TESTS)/std_t.sa > $(TESTS)/std_sm.c
 	$(CC) -O2 -o $(TESTS)/std_sm $(TESTS)/std_sm.c
 	./$(GEN2) $(TESTS)/std_t.sa $(TESTS)/std_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/std_g2 $(TESTS)/std_g2.c
 	@./$(TESTS)/std_sm > $(TESTS)/std_sm.out; ./$(TESTS)/std_g2 > $(TESTS)/std_g2.out; \
 	  cmp $(TESTS)/std_sm.out $(TESTS)/std_g2.out
-	$(call assert-out,./$(TESTS)/std_g2,3\n7\n5\n5\n55\n1024\n1\n0\n12\n21)
+	$(call assert-out,./$(TESTS)/std_g2,3\n7\n5\n5\n55\n1024\n1\n0\n12\n21\n10\n0\n4\n-1\n0\n1\n1\n0\n1\n12\n0\n42\n120\n1\n55\n1\n1\n0\n0\n1)
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  ./$(NATIVE_BIN) $(TESTS)/std_t.sa $(TESTS)/std_nat && \
 	  ./$(TESTS)/std_nat > $(TESTS)/std_nat.out && \
@@ -1015,6 +1040,13 @@ test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/pkgs-proj/use_g2 $(TESTS)/pkgs-proj/use_g2.c
 	@cd $(TESTS)/pkgs-proj && ./use_sm > use_sm.out && ./use_g2 > use_g2.out && cmp use_sm.out use_g2.out
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ./use_g2,42\n36)
+	@# offline integrity: the lock is checked against the registry copy (version + pkg.meta sum)
+	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages))
+	@printf 'make dbl(n) {\n  give n + n + 0\n}\n' > $(TESTS)/pkgs-proj/.sayanox/registry/math/main.sa
+	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: MISMATCH math: main.sa sums to 115762249 but pkg.meta says 718013937\nsxpkg: verify FAILED (1 problem(s)))
+	cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages))
+	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) sum .sayanox/registry/math/main.sa,sxpkg: sum 718013937 .sayanox/registry/math/main.sa)
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  ./$(NATIVE_BIN) $(TESTS)/pkgs-proj/use_math.sa $(TESTS)/pkgs-proj/use_nat && \
 	  cd $(TESTS)/pkgs-proj && ./use_nat > use_nat.out && cmp use_sm.out use_nat.out || exit 1; \
@@ -1041,6 +1073,147 @@ test-builtin-names: $(GEN2) $(SEED_MIN_BIN)
 	@./$(TESTS)/bnames_sm > $(TESTS)/bnames_sm.out; ./$(TESTS)/bnames_g2 > $(TESTS)/bnames_g2.out; cmp $(TESTS)/bnames_sm.out $(TESTS)/bnames_g2.out
 	$(call assert-out,./$(TESTS)/bnames_g2,6\n98\n3\nabcA\nA)
 	@echo "[OK] builtin-word names: variables called index/len/arg stay variables, real builtin calls still map (seed-min == gen2)"
+
+# ---------------------------------------------------------------------------
+# test-for-str: the one Stage-2 language slice added on gen2 (2026-10-08).
+#
+#     hold s = "abc"
+#     for c in s {          # c is the one-byte string at each index
+#       show c
+#     }
+#
+# A declared string is walked one byte at a time (sx_index), in the same
+# `for NAME in EXPR {` form as the list walk. The counter is a new name per
+# loop, or a name that is already a string (rebinding), never a number or a
+# list. seed-min and native do not have the statement and must say so.
+# Bytes, not characters: "é" is two iterations. Pinned here on gen2 (and the
+# rejections on seed-min and native when native_aot is built).
+# ---------------------------------------------------------------------------
+test-for-str: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'hold word = "sayanox"\nhold vowels = 0\nhold other = 0\nfor ch in word {\n  when string_eq(ch, "a") == 1 || string_eq(ch, "e") == 1 || string_eq(ch, "i") == 1 || string_eq(ch, "o") == 1 || string_eq(ch, "u") == 1 {\n    hold vowels = vowels + 1\n  } otherwise {\n    hold other = other + 1\n  }\n}\nshow vowels\nshow other\n' > $(TESTS)/fs_vowels.sa
+	./$(GEN2) $(TESTS)/fs_vowels.sa $(TESTS)/fs_vowels.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fs_vowels $(TESTS)/fs_vowels.c
+	$(call assert-out,./$(TESTS)/fs_vowels,3\n4)
+	@# break and continue inside the string loop; `hello world` stops at the first o
+	@printf 'hold s = "hello world"\nhold n = 0\nfor c in s {\n  when string_eq(c, " ") == 1 {\n    continue\n  }\n  hold n = n + 1\n  when string_eq(c, "o") == 1 {\n    break\n  }\n}\nshow n\n' > $(TESTS)/fs_brk.sa
+	./$(GEN2) $(TESTS)/fs_brk.sa $(TESTS)/fs_brk.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fs_brk $(TESTS)/fs_brk.c
+	$(call assert-out,./$(TESTS)/fs_brk,5)
+	@# an empty string runs no body; nested loops; rebinding the same counter name
+	@printf 'hold e = ""\nfor c in e {\n  show "never"\n}\nhold s = "ab"\nfor c in s {\n  for d in s {\n    show concat(c, d)\n  }\n}\nfor c in s {\n  show c\n}\nshow "end"\n' > $(TESTS)/fs_nest.sa
+	./$(GEN2) $(TESTS)/fs_nest.sa $(TESTS)/fs_nest.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fs_nest $(TESTS)/fs_nest.c
+	$(call assert-out,./$(TESTS)/fs_nest,aa\nab\nba\nbb\na\nb\nend)
+	@# bytes, not characters: "é" is two UTF-8 bytes, so two iterations
+	@printf 'hold u = "\303\251"\nhold n = 0\nfor b in u {\n  hold n = n + 1\n}\nshow n\n' > $(TESTS)/fs_bytes.sa
+	./$(GEN2) $(TESTS)/fs_bytes.sa $(TESTS)/fs_bytes.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/fs_bytes $(TESTS)/fs_bytes.c
+	$(call assert-out,./$(TESTS)/fs_bytes,2)
+	@# the clear diagnostics (gen2 writes them as #error lines)
+	@printf 'hold x = 0\nfor c in x {\n  show c\n}\n' > $(TESTS)/fs_num.sa
+	./$(GEN2) $(TESTS)/fs_num.sa $(TESTS)/fs_num.c >/dev/null 2>&1 || true
+	@grep -q "'x' is not a list or a string" $(TESTS)/fs_num.c
+	@printf 'hold n = 5\nhold s = "ab"\nfor n in s {\n  show n\n}\n' > $(TESTS)/fs_clash.sa
+	./$(GEN2) $(TESTS)/fs_clash.sa $(TESTS)/fs_clash.c >/dev/null 2>&1 || true
+	@grep -q "'n' is already a number or a list" $(TESTS)/fs_clash.c
+	@printf 'hold c = [1, 2]\nhold s = "ab"\nfor c in s {\n  show c\n}\n' > $(TESTS)/fs_listclash.sa
+	./$(GEN2) $(TESTS)/fs_listclash.sa $(TESTS)/fs_listclash.c >/dev/null 2>&1 || true
+	@grep -q "'c' is already a number or a list" $(TESTS)/fs_listclash.c
+	@# seed-min is the pure-min dialect: it must refuse the statement
+	@if ./$(SEED_MIN_BIN) $(TESTS)/fs_vowels.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted for c in s (gen2-only statement)"; exit 1; fi
+	@# native (when built) names the statement instead of a misleading error
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) $(TESTS)/fs_vowels.sa $(TESTS)/fs_native 2>&1 | grep -q "'for' is a full-language statement"; \
+	  if ./$(NATIVE_BIN) $(TESTS)/fs_vowels.sa $(TESTS)/fs_native >/dev/null 2>&1; then \
+	    echo "[FAIL] native accepted for c in s"; exit 1; fi; \
+	  echo "[stage2] native rejects for/break/continue by name"; \
+	else \
+	  echo "[stage2] native rejection: skipped (native_aot is not built here)"; \
+	fi
+	@# generics: gen2 monomorphises a single type parameter; native has no generics
+	@printf 'make pair<A, B>(a: A, b: B) -> A {\n  give a\n}\nshow pair(1, "x")\n' > $(TESTS)/fs_pair.sa
+	./$(GEN2) $(TESTS)/fs_pair.sa $(TESTS)/fs_pair.c >/dev/null 2>&1 || true
+	@grep -q "must be written with one type parameter" $(TESTS)/fs_pair.c
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/fs_pair.sa $(TESTS)/fs_pair_nat 2>&1 | grep -q 'generics are not in the native subset'; then :; \
+	  else echo "[FAIL] native did not reject make NAME<...>"; exit 1; fi; \
+	fi
+	@echo "[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name"
+
+# ---------------------------------------------------------------------------
+# test-registry-sums: every repository package carries a `sum=` line in its
+# pkg.meta equal to `sxpkg sum` of its main.sa (the offline integrity sum that
+# `sxpkg verify` checks; see docs/REGISTRY.md). Pure shell + the sxpkg binary.
+# ---------------------------------------------------------------------------
+test-registry-sums: sxpkg
+	@for p in hello math strings; do \
+	  want=""; \
+	  while IFS= read -r l; do case "$$l" in sum=*) want=$${l#sum=};; esac; done < registry/$$p/pkg.meta; \
+	  got=$$(./$(SXPKG_BIN) sum registry/$$p/main.sa); \
+	  if [ -n "$$want" ] && [ "$$got" = "sxpkg: sum $$want registry/$$p/main.sa" ]; then \
+	    echo "  ok registry/$$p sum=$$want"; \
+	  else echo "[FAIL] registry/$$p: pkg.meta sum '$$want' != main.sa ($$got)"; exit 1; fi; \
+	done
+	@echo "[OK] repository registry: every pkg.meta sum= matches its main.sa"
+
+# ---------------------------------------------------------------------------
+# test-gen2-gaps: the three gen2 gaps that were recorded as divergences on
+# 2026-10-08 and are now fixed (docs/STATUS.md):
+#   * `len(NAME)` inside a range bound: `for i in 0..len(xs)` (list) and
+#     `for j in 0..len(s)` (string) emit sx_llen / sx_len, not a bare `len`;
+#   * `} else when COND {`, `} else if COND {` and `} otherwise when COND {`
+#     are the same chain as `elif` (they used to emit a second `else` level);
+#   * the chain links into a plain `} else {` / `} otherwise {` as before.
+# Seed-min and native refuse the chain forms (they are gen2-only).
+# ---------------------------------------------------------------------------
+test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'hold xs = [1, 2, 3, 4]\nhold s = "abcd"\nfor i in 0..len(xs) {\n  show i\n}\nfor j in 0..len(s) {\n  show j\n}\n' > $(TESTS)/gg_len.sa
+	./$(GEN2) $(TESTS)/gg_len.sa $(TESTS)/gg_len.c >/dev/null
+	@grep -q 'sx_llen(' $(TESTS)/gg_len.c && grep -q 'sx_len(s)' $(TESTS)/gg_len.c
+	$(CC) -O2 -o $(TESTS)/gg_len $(TESTS)/gg_len.c
+	$(call assert-out,./$(TESTS)/gg_len,0\n1\n2\n3\n0\n1\n2\n3)
+	@printf 'hold n = 0\nwhile n < 6 {\n  when n == 0 {\n    show 100\n  } else when n == 1 {\n    show 101\n  } else if n == 2 {\n    show 102\n  } otherwise when n == 3 {\n    show 103\n  } else {\n    show 109\n  }\n  when n >= 4 {\n    when n == 4 {\n      show 7\n    } else when n == 5 {\n      show 8\n    }\n  }\n  hold n = n + 1\n}\nshow "done"\n' > $(TESTS)/gg_chain.sa
+	./$(GEN2) $(TESTS)/gg_chain.sa $(TESTS)/gg_chain.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gg_chain $(TESTS)/gg_chain.c
+	$(call assert-out,./$(TESTS)/gg_chain,100\n101\n102\n103\n109\n7\n109\n8\ndone)
+	@# `==` / `!=` between declared strings is a strcmp, not an address compare:
+	@# two equal strings built at run time (concat) must compare equal
+	@printf 'hold s = "ab"\nhold t = concat("a", "b")\nhold u = concat("a", "c")\nwhen t == s {\n  show 1\n} otherwise {\n  show 0\n}\nwhen t != u {\n  show 2\n} otherwise {\n  show 3\n}\nwhen s == "ab" {\n  show 4\n}\nwhen u == "ab" {\n  show 5\n} otherwise {\n  show 6\n}\nwhen string_eq(t, s) == 1 {\n  show 7\n}\n' > $(TESTS)/gg_streq.sa
+	./$(GEN2) $(TESTS)/gg_streq.sa $(TESTS)/gg_streq.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gg_streq $(TESTS)/gg_streq.c
+	$(call assert-out,./$(TESTS)/gg_streq,1\n2\n4\n6\n7)
+	@# `%` inside a builtin-call argument: sx_mod(L, R) with the same operand rule as
+	@# the condition rewrite (x * m % 10 is (x * m) % 10); % in a string literal is text
+	@printf 'hold m = 17\nhold d = chr(48 + m %% 10)\nshow d\nshow concat("x", chr(48 + m %% 10))\nhold x = 3\nhold e = chr(48 + x * m %% 10)\nshow e\nshow concat("100%%", chr(50 + m %% 3))\nhold r = concat("v=", chr(48 + m / 2 %% 10))\nshow r\n' > $(TESTS)/gg_pct.sa
+	./$(GEN2) $(TESTS)/gg_pct.sa $(TESTS)/gg_pct.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gg_pct $(TESTS)/gg_pct.c
+	$(call assert-out,./$(TESTS)/gg_pct,7\nx7\n1\n100%4\nv=8)
+	@./$(SEED_MIN_BIN) $(TESTS)/gg_pct.sa > $(TESTS)/gg_pct_sm.c && $(CC) -O2 -o $(TESTS)/gg_pct_sm $(TESTS)/gg_pct_sm.c && ./$(TESTS)/gg_pct_sm > $(TESTS)/gg_pct_sm.out && ./$(TESTS)/gg_pct > $(TESTS)/gg_pct_g2.out && cmp $(TESTS)/gg_pct_sm.out $(TESTS)/gg_pct_g2.out
+	@# string ordering (< <= > >=) and == / != compare by content: gen2 and seed-min agree
+	@printf 'hold s = "ab"\nhold t = concat("a", "b")\nhold u = concat("a", "c")\nhold n = 3\nwhen t == s {\n  show 1\n}\nwhen t != u {\n  show 2\n}\nwhen s < u {\n  show 3\n}\nwhen u < s {\n  show 4\n} otherwise {\n  show 5\n}\nwhen s <= t {\n  show 6\n}\nwhen u >= t {\n  show 7\n}\nwhen u > t {\n  show 8\n}\nwhen t > u {\n  show 9\n} otherwise {\n  show 10\n}\nwhen n < 5 {\n  show 11\n}\nwhen n >= 3 {\n  show 12\n}\nwhen t < "b" {\n  show 13\n}\nwhen "a" < u {\n  show 14\n} otherwise {\n  show 15\n}\n' > $(TESTS)/gg_ord.sa
+	./$(GEN2) $(TESTS)/gg_ord.sa $(TESTS)/gg_ord.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gg_ord $(TESTS)/gg_ord.c
+	$(call assert-out,./$(TESTS)/gg_ord,1\n2\n3\n5\n6\n7\n8\n10\n11\n12\n13\n14)
+	@./$(SEED_MIN_BIN) $(TESTS)/gg_ord.sa > $(TESTS)/gg_ord_sm.c && $(CC) -O2 -o $(TESTS)/gg_ord_sm $(TESTS)/gg_ord_sm.c && ./$(TESTS)/gg_ord_sm > $(TESTS)/gg_ord_sm.out && ./$(TESTS)/gg_ord > $(TESTS)/gg_ord_g2.out && cmp $(TESTS)/gg_ord_sm.out $(TESTS)/gg_ord_g2.out
+	@# a string against a number is an error on seed-min; native refuses ordering by name
+	@printf 'hold s = "ab"\nhold n = 3\nwhen s < n {\n  show 1\n}\n' > $(TESTS)/gg_ordmix.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_ordmix.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted string < number"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat >/dev/null 2>&1; then echo "[FAIL] native accepted string ordering"; exit 1; fi; \
+	  ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat 2>&1 | grep -q 'not in the native subset'; \
+	fi
+	@# the chain forms are gen2 only: seed-min and native must refuse them
+	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_chain.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted an else-when/else-if chain"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gg_chain.sa $(TESTS)/gg_nat >/dev/null 2>&1; then \
+	    echo "[FAIL] native accepted an else-when/else-if chain"; exit 1; fi; \
+	  echo "[gen2-gaps] native rejects the chain forms"; \
+	fi
+	@echo "[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native refuse the chains"
 
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -1161,7 +1334,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stdlib test-pkgs test-builtin-names test-sxfmt test-sxpkg test-lsp test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -1361,7 +1534,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
 	@echo "[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
-	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos
+	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-for-str
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
 	@echo "=== NATIVE-TEST-OK ==="
 
