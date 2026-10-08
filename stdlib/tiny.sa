@@ -1,0 +1,58 @@
+// Tiny portable standard library (pure-min, all three backends).
+//
+// Only numeric helpers live here.  String-returning user functions and
+// list/string function parameters are not in the native-AOT subset, so a
+// library that has to run everywhere stays numeric; string work uses the
+// builtins (concat/len/chr/read_file/write_file/arg).
+//
+// Use it with a plain file splice:
+//   use "stdlib/tiny.sa"
+
+make min2(a, b) {
+  when a < b {
+    give a
+  }
+  give b
+}
+
+make max2(a, b) {
+  when a > b {
+    give a
+  }
+  give b
+}
+
+make absv(n) {
+  when n < 0 {
+    give 0 - n
+  }
+  give n
+}
+
+make sum_to(n) {
+  when n <= 0 {
+    give 0
+  }
+  give n + sum_to(n - 1)
+}
+
+make pow_int(base, exp) {
+  when exp <= 0 {
+    give 1
+  }
+  give base * pow_int(base, exp - 1)
+}
+
+make is_even(n) {
+  when n % 2 == 0 {
+    give 1
+  }
+  give 0
+}
+
+make gcd(a, b) {
+  when b == 0 {
+    give a
+  }
+  give gcd(b, a % b)
+}

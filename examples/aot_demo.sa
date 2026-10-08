@@ -1,8 +1,8 @@
 // Full AOT demo — result becomes process exit code
-make double(n) {
+make dbl(n) {
     give n * 2
 }
 
 hold x = 21
-hold y = double(x)
+hold y = dbl(x)
 // y == 42 → exit code 42

@@ -374,9 +374,9 @@ when is_seed == 1 {
   when write_status == 0 { hold all_ok = 0 }
   hold write_status = write_file(concat(concat(registry_path, "/hello"), "/main.sa"), "show \"hello from pkg\"\n")
   when write_status == 0 { hold all_ok = 0 }
-  hold write_status = write_file(concat(concat(registry_path, "/math"), "/pkg.meta"), "name=math\nversion=0.1.0\ndesc=tiny math helpers\n")
+  hold write_status = write_file(concat(concat(registry_path, "/math"), "/pkg.meta"), "name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\n")
   when write_status == 0 { hold all_ok = 0 }
-  hold write_status = write_file(concat(concat(registry_path, "/math"), "/main.sa"), "make double(n) { give n + n }\n")
+  hold write_status = write_file(concat(concat(registry_path, "/math"), "/main.sa"), "make dbl(n) {\n  give n + n\n}\nmake sqr(n) {\n  give n * n\n}\n")
   when write_status == 0 { hold all_ok = 0 }
   hold write_status = write_file(index_path, "hello=0.1.0\nmath=0.1.0\n")
   when write_status == 0 { hold all_ok = 0 }

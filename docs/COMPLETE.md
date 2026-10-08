@@ -27,10 +27,16 @@ source of truth for compiler behavior.
   the pure-min subset, not every Sayanox experiment or demo in the repository.
 - Native AOT output is x86-64 Linux only; the portable path emits C and still
   requires a C compiler to build the resulting program.
-- String-plus-number and bare function/builtin-call statements are documented
-  native-only extensions, not part of the shared pure-min dialect.
+- String-plus-number and bare function/builtin-call statements are rejected by
+  all three backends (`make test-native-num`, `make test-push-stmt`); the
+  remaining native differences are `hold` inside a function body, the missing
+  collector and the full-language statements (STATUS.md, "Measured
+  divergences").
 - Namespaced/versioned modules, a full standard library and remote package
-  hosting are not implemented as part of this milestone. Garbage collection
+  hosting are not implemented as part of this milestone; `use "file.sa"` is a
+  textual splice, `stdlib/tiny.sa` is seven numeric helpers and the
+  `.sayanox/registry` written by `sxpkg` is a local convention (`make
+  test-pkgs`), not a resolver. Garbage collection
   arrived with the gen2 collector ([`GC.md`](GC.md)) and generic functions
   monomorphise the single-type-parameter form ([`SYNTAX.md`](SYNTAX.md)).
 

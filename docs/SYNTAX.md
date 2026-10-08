@@ -132,6 +132,15 @@ nested generic call - that call's own first argument are followed too, so
 type of every parameter and of the return type; any other generic header is
 reported as an error (`make pair<A, B>` is not supported).
 
+Single-type-parameter generics are the documented limit on purpose. A
+specialised copy is keyed by exactly one kind per call site (`NAME__n`,
+`NAME__s`, `NAME__l`), so `pair<A, B>` would need a kind *tuple* per call
+site, a per-parameter kind in the emitted C signature, and `__` suffixes
+built from several kinds - including for nested generic calls inside a
+specialised body. That rework is not in this milestone: `make pair<A, B>`
+fails with the clear "one type parameter" diagnostic above instead of
+mis-compiling. The same behaviour is pinned by `make test-generics`.
+
 Generics are a full-language (`gen2`) feature: the seed and the pure-min dialect
 do not read `make NAME<T>`. See `make test-generics`.
 

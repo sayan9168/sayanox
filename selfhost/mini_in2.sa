@@ -3,11 +3,11 @@ while n < 3 {
   show n
   hold n = n + 1
 }
-make double(x) {
+make dbl(x) {
   give x + x
 }
 hold a = 21
-show double(a)
+show dbl(a)
 hold x = 2
 when x == 1 {
   show 11

@@ -32,7 +32,7 @@ LSP_BIN  := tools/sayanox_lsp
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
         seed-bin doctor tools sxfmt test-sxfmt sxpkg test-sxpkg test-sxpkg-wrapper \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
-        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io \
+        test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         pack-compiler
 
 all: true-selfhost-min
@@ -197,7 +197,8 @@ lsp: $(LSP_BIN)
 # hover, definition, documentSymbol, completion, diagnostic, didChange,
 # shutdown, exit.  The probe prints one line per verified fact.
 test-lsp: $(LSP_BIN) tools/sayanox-lsp-probe.sh
-	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN),initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change)
+	@mkdir -p $(TESTS)
+	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change)
 	@echo "[OK] Sayanox LSP: live JSON-RPC session, real diagnostics, symbols, completion, hover, definition"
 
 test-sxfmt: sxfmt
@@ -248,8 +249,8 @@ test-sxpkg-wrapper: sxpkg tools/sxpkg.sh
 	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh seed >/dev/null
 	@printf 'hello=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-wrapper/index-want
 	cmp $(TESTS)/sxpkg-wrapper/index-want $(TESTS)/sxpkg-wrapper/.sayanox/registry/INDEX
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh search math,sxpkg: search 'math'\n  math 0.1.0)
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh info math,name=math\nversion=0.1.0\ndesc=tiny math helpers)
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh search math,sxpkg: search math\n  math 0.1.0)
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh info math,name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr))
 	@mkdir -p $(TESTS)/sxpkg-wrapper/project
 	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.lock
 	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.toml
@@ -768,7 +769,9 @@ test-push-stmt:
 # `division by zero`; regressions for
 # native parser fixes found while doing this (comment line after a number,
 # `while n {`, a comparison inside parens, a call statement before a block,
-# the missing newline after "[list len=N]").
+# the missing newline after "[list len=N]").  The statement/type subset is the
+# pure-min one here too: string + number and a bare call other than
+# push(xs, v) are rejected, matching seed-min and gen2.
 # ---------------------------------------------------------------------------
 test-native-num: $(NATIVE_BIN)
 	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
@@ -793,9 +796,28 @@ test-native-num: $(NATIVE_BIN)
 	./$(NATIVE_BIN) $(TESTS)/ts_fmt.sa $(TESTS)/ts_fmt_nat
 	@if [ "$$(./$(TESTS)/ts_fmt_nat)" = "$$(./$(TESTS)/ts_fmt_sm)" ]; then :; else \
 	  echo "[FAIL] native number formatting differs from seed-min (printf %g)"; exit 1; fi
-	@printf 'show 1 / 0\nshow 0 - 1 / 0\nshow 0 / 0\nhold s = "v="\nshow s + 2.5\nshow 1 + s\n' > $(TESTS)/ts_div0.sa
+	@printf 'show 1 / 0\nshow 0 - 1 / 0\nshow 0 / 0\n' > $(TESTS)/ts_div0.sa
 	./$(NATIVE_BIN) $(TESTS)/ts_div0.sa $(TESTS)/ts_div0_nat
-	$(call assert-out,./$(TESTS)/ts_div0_nat,inf\n-inf\n-nan\nv=2.5\n1v=)
+	$(call assert-out,./$(TESTS)/ts_div0_nat,inf\n-inf\n-nan)
+	@# parity: the shared subset has no string + number and no bare call other
+	@# than push(xs, v).  native used to accept both (the number went through
+	@# %g), so a program that only ran natively looked fine here and failed on
+	@# seed-min/gen2.  Reuse test-push-stmt's programs and pin the rejections.
+	@test -f $(TESTS)/ts_strnum.sa || $(MAKE) --no-print-directory test-push-stmt
+	@if ./$(NATIVE_BIN) $(TESTS)/ts_strnum.sa $(TESTS)/ts_strnum_nat 2>/dev/null; then \
+	  echo "[FAIL] native accepted a string + a number"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/ts_strnum.sa $(TESTS)/ts_strnum_nat 2>&1 | grep -q 'a string + a number is not in the pure-min subset'
+	@if ./$(NATIVE_BIN) $(TESTS)/ts_numstr.sa $(TESTS)/ts_numstr_nat 2>/dev/null; then \
+	  echo "[FAIL] native accepted a number + a string"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/ts_numstr.sa $(TESTS)/ts_numstr_nat 2>&1 | grep -q 'a string + a number is not in the pure-min subset'
+	@printf 'write_file("$(TESTS)/ts_barecall.txt", "x")\nshow 1\n' > $(TESTS)/ts_barecall.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/ts_barecall.sa $(TESTS)/ts_barecall_nat 2>/dev/null; then \
+	  echo "[FAIL] native accepted a bare write_file(...) statement"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/ts_barecall.sa $(TESTS)/ts_barecall_nat 2>&1 | grep -q 'unknown statement: "write_file"'
+	@printf 'make f(n) {\n  give n\n}\nf(1)\n' > $(TESTS)/ts_bareuser.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/ts_bareuser.sa $(TESTS)/ts_bareuser_nat 2>/dev/null; then \
+	  echo "[FAIL] native accepted a bare user-function call statement"; exit 1; fi
+	@./$(NATIVE_BIN) $(TESTS)/ts_bareuser.sa $(TESTS)/ts_bareuser_nat 2>&1 | grep -q 'unknown statement: "f"'
 	@printf 'struct U {\n  name\n}\nhold u = U { name: "x" }\nhold t = u.name + "y"\nshow t\nshow u.name + "z"\n' > $(TESTS)/ts_fcat_n.sa
 	./$(NATIVE_BIN) $(TESTS)/ts_fcat_n.sa $(TESTS)/ts_fcat_nat
 	$(call assert-out,./$(TESTS)/ts_fcat_nat,xy\nxz)
@@ -825,7 +847,7 @@ test-native-num: $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/ts_l11_nat,11\n11)
 	@if ./$(NATIVE_BIN) $(TESTS)/ts_sinl.sa $(TESTS)/ts_sinl_nat 2>/dev/null; then echo "[FAIL] native accepted a struct in a list"; exit 1; fi
 	@if ./$(NATIVE_BIN) $(TESTS)/ts_sinl2.sa $(TESTS)/ts_sinl2_nat 2>/dev/null; then echo "[FAIL] native accepted push of a struct"; exit 1; fi
-	@echo "[OK] native doubles: literals, large constant arithmetic, true division, truncating % and matching % by zero diagnostic; %g formatting and shared tests match seed-min/gen2 (string + number remains a native extension)"
+	@echo "[OK] native doubles: literals, large constant arithmetic, true division, truncating % and matching % by zero diagnostic; %g formatting and shared tests match seed-min/gen2; string + number and bare non-push calls are rejected exactly like seed-min and gen2"
 
 # ---------------------------------------------------------------------------
 # test-native-io: read_file / write_file / arg / arg_count natively, with
@@ -851,6 +873,174 @@ test-native-io: $(NATIVE_BIN)
 	  if [ "$$__got" = "$$__want" ]; then :; else echo "[FAIL] gen2 I/O output differs"; printf '%s\n' "$$__got"; exit 1; fi; \
 	fi
 	@echo "[OK] native read_file/write_file/arg/arg_count: same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as \"\", 160 KiB round trip)"
+
+# ---------------------------------------------------------------------------
+# test-native-mem: native programs bump-allocate over lazy mmap chunks and
+# never free (GC.md, "Native AOT and the seeds").  These tests pin what that
+# actually means, because "never frees" must not mean "silently wrong":
+#
+#   * long allocating loops (4001-byte string built by 2000 concats, 1500
+#     pushes) keep computing correct values and indexes;
+#   * a program that outgrows a 4 MiB address-space cap dies with the
+#     documented `out of memory` diagnostic and a non-zero exit status
+#     instead of corrupting memory (the r_malloc slow path checks mmap);
+#   * there is no collector in native, so the gen2-only collector builtins
+#     are rejected at compile time with a clear message.
+#
+# A real free path would need ownership/alias tracking this hand-written
+# emitter does not have; STATUS.md records that honestly.
+# ---------------------------------------------------------------------------
+test-native-mem: $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'hold s = "x"\nhold i = 0\nwhile i < 2000 {\n  hold s = concat(s, "ab")\n  hold i = i + 1\n}\nshow len(s)\nshow s[0]\nshow s[4000]\nhold xs = []\nhold j = 0\nwhile j < 1500 {\n  push(xs, j * 2)\n  hold j = j + 1\n}\nshow len(xs)\nshow xs[1499]\nhold t = concat("", "tail")\nshow t\n' > $(TESTS)/native_mem.sa
+	./$(NATIVE_BIN) $(TESTS)/native_mem.sa $(TESTS)/native_mem
+	$(call assert-out,./$(TESTS)/native_mem,4001\n120\n98\n1500\n2998\ntail)
+	@printf 'hold i = 0\nwhile i < 200000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow i\n' > $(TESTS)/native_mem_oom.sa
+	./$(NATIVE_BIN) $(TESTS)/native_mem_oom.sa $(TESTS)/native_mem_oom
+	$(call assert-out,./$(TESTS)/native_mem_oom,200000)
+	@if sh -c 'ulimit -v 4096; ./$(TESTS)/native_mem_oom >/dev/null 2>$(TESTS)/native_mem_oom.err'; then \
+	  echo "[FAIL] native outgrew a 4 MiB cap without dying (bump allocator must not corrupt memory)"; exit 1; fi
+	@grep -q 'out of memory' $(TESTS)/native_mem_oom.err
+	@printf 'hold x = gc()\nshow x\n' > $(TESTS)/native_mem_gc.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_mem_gc.sa $(TESTS)/native_mem_gc 2>/dev/null; then \
+	  echo "[FAIL] native accepted gc(): there is no collector in the native runtime"; exit 1; fi
+	./$(NATIVE_BIN) $(TESTS)/native_mem_gc.sa $(TESTS)/native_mem_gc 2>&1 | grep -q "undefined variable 'gc'"
+	@printf 'hold x = gc_live()\nshow x\n' > $(TESTS)/native_mem_gcl.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/native_mem_gcl.sa $(TESTS)/native_mem_gcl 2>/dev/null; then \
+	  echo "[FAIL] native accepted gc_live()"; exit 1; fi
+	@echo "[OK] native memory: bump-only, correct under long allocating loops, loud 'out of memory' under a 4 MiB cap, collector builtins rejected"
+
+# ---------------------------------------------------------------------------
+# test-stage2-demos: the three Stage-2 contract demos in selfhost/ are
+# pure-min programs (top-level slots, numeric functions, string loops).  They
+# must stay runnable: seed-min and gen2 compile them and print byte-identical
+# stdout, and the string-only one (minimal_lexer) also runs natively when
+# native_aot is built (this target is part of `make native-test`, and its
+# native half is skipped on the portable `true-selfhost` path).  This
+# does NOT claim the full Stage-2 language - the demos are a contract sketch,
+# which is exactly why they are in the shared dialect.
+# ---------------------------------------------------------------------------
+test-stage2-demos: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/minimal_lexer.sa > $(TESTS)/stage2_lexer_sm.c
+	$(CC) -O2 -o $(TESTS)/stage2_lexer_sm $(TESTS)/stage2_lexer_sm.c
+	./$(GEN2) selfhost/minimal_lexer.sa $(TESTS)/stage2_lexer_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/stage2_lexer_g2 $(TESTS)/stage2_lexer_g2.c
+	@./$(TESTS)/stage2_lexer_sm > $(TESTS)/stage2_lexer_sm.out; ./$(TESTS)/stage2_lexer_g2 > $(TESTS)/stage2_lexer_g2.out; \
+	  cmp $(TESTS)/stage2_lexer_sm.out $(TESTS)/stage2_lexer_g2.out
+	$(call assert-out,./$(TESTS)/stage2_lexer_g2,=== Self-Hosting Phase 1.5 ===\nshow 42\n7\n115\n104\n111\n119\n32\n52\n50\nTokens:\n1\n11\n0\nPhase 1.5 complete — dynamic push + len + string walk)
+	@# native_aot is built by `make native-test`, not by the portable
+	@# `true-selfhost` path, so its lexer check runs only when the binary is
+	@# there (a clean checkout has neither) -- `make native-test` includes this
+	@# target, so the native half is executed for real there.
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/minimal_lexer.sa $(TESTS)/stage2_lexer_nat && \
+	  ./$(TESTS)/stage2_lexer_nat > $(TESTS)/stage2_lexer_nat.out && \
+	  cmp $(TESTS)/stage2_lexer_sm.out $(TESTS)/stage2_lexer_nat.out && \
+	  echo "[stage2] native lexer: stdout identical to seed-min/gen2"; \
+	else \
+	  echo "[stage2] native lexer: skipped (native_aot is not built here)"; \
+	fi
+	@# the two demos with make/give: seed-min and gen2 agree byte for byte
+	./$(SEED_MIN_BIN) selfhost/stage2_functions.sa > $(TESTS)/stage2_fn_sm.c
+	$(CC) -O2 -o $(TESTS)/stage2_fn_sm $(TESTS)/stage2_fn_sm.c
+	./$(GEN2) selfhost/stage2_functions.sa $(TESTS)/stage2_fn_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/stage2_fn_g2 $(TESTS)/stage2_fn_g2.c
+	$(call assert-out,./$(TESTS)/stage2_fn_sm,42\n1764)
+	$(call assert-out,./$(TESTS)/stage2_fn_g2,42\n1764)
+	./$(SEED_MIN_BIN) selfhost/stage2_variables.sa > $(TESTS)/stage2_var_sm.c
+	$(CC) -O2 -o $(TESTS)/stage2_var_sm $(TESTS)/stage2_var_sm.c
+	./$(GEN2) selfhost/stage2_variables.sa $(TESTS)/stage2_var_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/stage2_var_g2 $(TESTS)/stage2_var_g2.c
+	$(call assert-out,./$(TESTS)/stage2_var_sm,42)
+	$(call assert-out,./$(TESTS)/stage2_var_g2,42)
+	@echo "[OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 byte for byte, plus the lexer natively when native_aot is built; contract sketches, not the full Stage-2 language"
+
+# ---------------------------------------------------------------------------
+# test-stdlib: the tiny portable library stdlib/tiny.sa is used with a plain
+# `use` splice and must behave identically on every backend: seed-min and
+# gen2 are checked here, and the native leg runs too whenever native_aot has
+# been built (native-test).  Numeric helpers only - string-returning
+# functions and list/string parameters are outside the native subset.
+# ---------------------------------------------------------------------------
+test-stdlib: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'use "stdlib/tiny.sa"\nshow min2(3, 7)\nshow max2(3, 7)\nshow absv(0 - 5)\nshow absv(5)\nshow sum_to(10)\nshow pow_int(2, 10)\nshow is_even(42)\nshow is_even(7)\nshow gcd(48, 36)\nshow gcd(1071, 462)\n' > $(TESTS)/std_t.sa
+	./$(SEED_MIN_BIN) $(TESTS)/std_t.sa > $(TESTS)/std_sm.c
+	$(CC) -O2 -o $(TESTS)/std_sm $(TESTS)/std_sm.c
+	./$(GEN2) $(TESTS)/std_t.sa $(TESTS)/std_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/std_g2 $(TESTS)/std_g2.c
+	@./$(TESTS)/std_sm > $(TESTS)/std_sm.out; ./$(TESTS)/std_g2 > $(TESTS)/std_g2.out; \
+	  cmp $(TESTS)/std_sm.out $(TESTS)/std_g2.out
+	$(call assert-out,./$(TESTS)/std_g2,3\n7\n5\n5\n55\n1024\n1\n0\n12\n21)
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) $(TESTS)/std_t.sa $(TESTS)/std_nat && \
+	  ./$(TESTS)/std_nat > $(TESTS)/std_nat.out && \
+	  cmp $(TESTS)/std_sm.out $(TESTS)/std_nat.out || exit 1; \
+	fi
+	@echo "[OK] tiny stdlib via use: seed-min == gen2 (== native when built) on min2/max2/absv/sum_to/pow_int/is_even/gcd"
+
+# ---------------------------------------------------------------------------
+# test-pkgs: the offline package use-path, with no network at all.
+#
+#   * `tools/sxpkg.sh init` (mkdir only) plus the Sayanox `sxpkg seed` writes a
+#     local registry under .sayanox/registry/ - hello and math samples with
+#     mkdir + write_file, no curl/wget, no download;
+#   * `sxpkg add math 0.1.0` records the lock, `list`/`search` read it back;
+#   * a program uses the seeded package with a plain relative `use`:
+#
+#         use ".sayanox/registry/math/main.sa"
+#
+#     and the result compiles and runs identically on seed-min, gen2 and
+#     (when native_aot is built) native.
+#
+# sync/publish/fetch are the online shell commands and are NOT part of this
+# path or of any bootstrap target.  The target deliberately uses no `rm`/`cp`:
+# it has to stay inside the minimal tool set `make doctor` verifies, so it
+# writes over whatever the previous run left behind (the seed overwrites both
+# sample packages, and a `test -s` guards the result).
+# ---------------------------------------------------------------------------
+test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)/pkgs-proj
+	cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh init >/dev/null
+	cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+	cd $(TESTS)/pkgs-proj && test -s .sayanox/registry/math/main.sa
+	cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) add math 0.1.0 >/dev/null
+	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) list,sxpkg: locked packages\nmath=0.1.0)
+	$(call assert-out,cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh search math,sxpkg: search math\n  math 0.1.0)
+	@printf 'use ".sayanox/registry/math/main.sa"\nshow dbl(21)\nshow sqr(6)\n' > $(TESTS)/pkgs-proj/use_math.sa
+	./$(SEED_MIN_BIN) $(TESTS)/pkgs-proj/use_math.sa > $(TESTS)/pkgs-proj/use_sm.c
+	$(CC) -O2 -o $(TESTS)/pkgs-proj/use_sm $(TESTS)/pkgs-proj/use_sm.c
+	./$(GEN2) $(TESTS)/pkgs-proj/use_math.sa $(TESTS)/pkgs-proj/use_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/pkgs-proj/use_g2 $(TESTS)/pkgs-proj/use_g2.c
+	@cd $(TESTS)/pkgs-proj && ./use_sm > use_sm.out && ./use_g2 > use_g2.out && cmp use_sm.out use_g2.out
+	$(call assert-out,cd $(TESTS)/pkgs-proj && ./use_g2,42\n36)
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) $(TESTS)/pkgs-proj/use_math.sa $(TESTS)/pkgs-proj/use_nat && \
+	  cd $(TESTS)/pkgs-proj && ./use_nat > use_nat.out && cmp use_sm.out use_nat.out || exit 1; \
+	fi
+	@echo "[OK] offline packages: sxpkg seed writes .sayanox/registry (no network), use \".sayanox/registry/math/main.sa\" runs the same on seed-min, gen2 (and native when built)"
+
+# ---------------------------------------------------------------------------
+# test-builtin-names: a builtin word only becomes a runtime function when it
+# is really *called*.  `hold index = 1` then `sx_index(s, index)` is legal and
+# must stay legal: before 2026-10-08 the argument-text rewriter mapped every
+# occurrence of `index`, so the second argument was emitted as the runtime
+# function itself (`sx_idx(s, sx_idx)`) and gen2 produced C that did not even
+# compile -- which is why tools/sxpkg.sa's `search` silently matched nothing.
+# seed-min and gen2 must agree on both halves: the variables keep their
+# values, and real builtin calls still map to their runtime helpers.
+# ---------------------------------------------------------------------------
+test-builtin-names: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'hold index = 1\nhold len = 2\nhold arg = 3\nshow index + len + arg\nhold s = "abc"\nshow sx_index(s, index)\nshow len(s)\nshow concat(s, chr(65))\nhold n = 9\nshow chr(n + 56)\n' > $(TESTS)/bnames.sa
+	./$(SEED_MIN_BIN) $(TESTS)/bnames.sa > $(TESTS)/bnames_sm.c
+	$(CC) -O2 -o $(TESTS)/bnames_sm $(TESTS)/bnames_sm.c
+	./$(GEN2) $(TESTS)/bnames.sa $(TESTS)/bnames_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/bnames_g2 $(TESTS)/bnames_g2.c
+	@./$(TESTS)/bnames_sm > $(TESTS)/bnames_sm.out; ./$(TESTS)/bnames_g2 > $(TESTS)/bnames_g2.out; cmp $(TESTS)/bnames_sm.out $(TESTS)/bnames_g2.out
+	$(call assert-out,./$(TESTS)/bnames_g2,6\n98\n3\nabcA\nA)
+	@echo "[OK] builtin-word names: variables called index/len/arg stay variables, real builtin calls still map (seed-min == gen2)"
 
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -971,7 +1161,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-sxfmt test-sxpkg test-lsp test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stdlib test-pkgs test-builtin-names test-sxfmt test-sxpkg test-lsp test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -1171,7 +1361,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
 	@echo "[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
-	@$(MAKE) --no-print-directory test-native-num test-native-io
+	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
 	@echo "=== NATIVE-TEST-OK ==="
 

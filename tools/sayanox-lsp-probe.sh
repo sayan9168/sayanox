@@ -2,19 +2,26 @@
 # LSP probe: drive tools/sayanox_lsp through a full session and print one
 # short line per verified fact.  Used by `make test-lsp`.
 #
-#   selfhost/seed_tests/lsp_probe.sh <lsp-binary>
+#   sh tools/sayanox-lsp-probe.sh <lsp-binary> [work-dir]
 #
-# Writes a document plus a module next to it in a temp directory, so the
-# `use "good.sa"` / `use "nope.sa"` diagnostics are exercised for real.
+# Writes a document plus a module next to it in a work directory, so the
+# `use "good.sa"` / `use "nope.sa"` diagnostics are exercised for real.  The
+# directory defaults to $TMPDIR/sayanox-lsp-probe and is left in place; it is
+# never cleaned up here because rm is not part of the minimal tool set the
+# bootstrap promises (STATUS.md, "Minimal tool set").
+#
+# Only shell builtins, mkdir and the LSP binary are used: the payload length is
+# ${#payload} instead of `wc -c | tr -d`, which is exact because every payload
+# below is pure ASCII.
 set -u
 
 bin="$1"
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-doc="$tmp/doc.sa"
-printf 'hold a = 1\n' > "$tmp/good.sa"
+work="${2:-${TMPDIR:-/tmp}/sayanox-lsp-probe}"
+mkdir -p "$work"
+doc="$work/doc.sa"
+printf 'hold a = 1\n' > "$work/good.sa"
 
-send() { printf 'Content-Length: %s\r\n\r\n%s' "$(printf '%s' "$1" | wc -c | tr -d ' \n')" "$1"; }
+send() { printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"; }
 
 init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
 open='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"uri":"file://'$doc'","text":"hold x = 1\nfrobnicate x\nuse \"good.sa\"\nuse \"nope.sa\"\nmake twice(v: num) -> num {\n  give v + v\n}\nshow twice(x)\nwhen x == 2 {\n  show \"oops\n"}}'

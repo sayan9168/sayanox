@@ -1,2 +1,2 @@
 use "math.sa"
-show double(21)
+show dbl(21)

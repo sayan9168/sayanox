@@ -60,10 +60,40 @@ cc -O2 -o selfhost/seed_tests/ts_div0b_sm selfhost/seed_tests/ts_div0b_sm.c 2>/d
 cc -O2 -o selfhost/seed_tests/ts_natfix_sm selfhost/seed_tests/ts_natfix_sm.c
 ./selfhost/native_aot selfhost/seed_tests/ts_lalias.sa selfhost/seed_tests/ts_lalias_nat
 ./selfhost/native_aot selfhost/seed_tests/ts_l11.sa selfhost/seed_tests/ts_l11_nat
-[OK] native doubles: literals, large constant arithmetic, true division, truncating % and matching % by zero diagnostic; %g formatting and shared tests match seed-min/gen2 (string + number remains a native extension)
+[OK] native doubles: literals, large constant arithmetic, true division, truncating % and matching % by zero diagnostic; %g formatting and shared tests match seed-min/gen2; string + number and bare non-push calls are rejected exactly like seed-min and gen2
 ./selfhost/native_aot selfhost/seed_tests/ts_io.sa selfhost/seed_tests/ts_io_nat
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_io.sa > selfhost/seed_tests/ts_io_sm.c
 cc -O2 -o selfhost/seed_tests/ts_io_sm selfhost/seed_tests/ts_io_sm.c
 [OK] native read_file/write_file/arg/arg_count: same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as "", 160 KiB round trip)
+./selfhost/native_aot selfhost/seed_tests/native_mem.sa selfhost/seed_tests/native_mem
+./selfhost/native_aot selfhost/seed_tests/native_mem_oom.sa selfhost/seed_tests/native_mem_oom
+./selfhost/native_aot selfhost/seed_tests/native_mem_gc.sa selfhost/seed_tests/native_mem_gc 2>&1 | grep -q "undefined variable 'gc'"
+[OK] native memory: bump-only, correct under long allocating loops, loud 'out of memory' under a 4 MiB cap, collector builtins rejected
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/std_t.sa > selfhost/seed_tests/std_sm.c
+cc -O2 -o selfhost/seed_tests/std_sm selfhost/seed_tests/std_sm.c
+./selfhost/gen2 selfhost/seed_tests/std_t.sa selfhost/seed_tests/std_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/std_g2 selfhost/seed_tests/std_g2.c
+[OK] tiny stdlib via use: seed-min == gen2 (== native when built) on min2/max2/absv/sum_to/pow_int/is_even/gcd
+./selfhost/seed/sxc_seed_min selfhost/minimal_lexer.sa > selfhost/seed_tests/stage2_lexer_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_lexer_sm selfhost/seed_tests/stage2_lexer_sm.c
+./selfhost/gen2 selfhost/minimal_lexer.sa selfhost/seed_tests/stage2_lexer_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_lexer_g2 selfhost/seed_tests/stage2_lexer_g2.c
+[stage2] native lexer: stdout identical to seed-min/gen2
+./selfhost/seed/sxc_seed_min selfhost/stage2_functions.sa > selfhost/seed_tests/stage2_fn_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_fn_sm selfhost/seed_tests/stage2_fn_sm.c
+./selfhost/gen2 selfhost/stage2_functions.sa selfhost/seed_tests/stage2_fn_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_fn_g2 selfhost/seed_tests/stage2_fn_g2.c
+./selfhost/seed/sxc_seed_min selfhost/stage2_variables.sa > selfhost/seed_tests/stage2_var_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_var_sm selfhost/seed_tests/stage2_var_sm.c
+./selfhost/gen2 selfhost/stage2_variables.sa selfhost/seed_tests/stage2_var_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
+[OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 byte for byte, plus the lexer natively when native_aot is built; contract sketches, not the full Stage-2 language
 [OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions
 === NATIVE-TEST-OK ===

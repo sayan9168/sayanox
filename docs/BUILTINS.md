@@ -42,7 +42,32 @@ All of them are ordinary expressions, so they nest inside other calls
 does not implement them. See [`GC.md`](GC.md).
 
 The maintained C backends accept the builtins in expressions (for example,
-`hold status = write_file(path, text)`). A bare builtin-call statement is a
-native-AOT extension and is not part of the shared dialect. `string + number`
-is also native-only; keep numeric values separate from strings in portable
-pure-min programs.
+`hold status = write_file(path, text)`). A *statement* is `hold show when
+while make give struct use` or a bare `push(xs, v)`; every other bare call —
+`write_file(path, text)` on its own line, a user-function call — is an
+`unknown statement` in seed-min, gen2 and (since 2026-10-08) native, which
+used to run any bare builtin call. `string + number` is rejected by all three
+for the same reason; build a message with `concat(s, n)` if a program has to
+run everywhere.
+
+## Tiny portable library: `stdlib/tiny.sa`
+
+The repository ships one small library, used with the ordinary module splice:
+
+```sayanox
+use "stdlib/tiny.sa"
+
+show min2(3, 7)      // 3
+show max2(3, 7)      // 7
+show absv(0 - 5)     // 5
+show sum_to(10)      // 55   (recursive)
+show pow_int(2, 10)  // 1024 (recursive)
+show is_even(42)     // 1
+show gcd(48, 36)     // 12   (recursive, uses %)
+```
+
+It is deliberately numeric-only: the native-AOT subset has no string-returning
+functions and no list/string function parameters, so every helper here runs
+unchanged on seed-min, gen2 and native (`make test-stdlib` compares their
+output). Use the builtins above for string and list work. This is not a full
+standard library — [`STATUS.md`](STATUS.md) records that boundary.
