@@ -173,7 +173,7 @@ What is still different, and honest about it:
 |------|----------|------|--------|
 | `hold` inside a `make` body | accepted | accepted (a local slot) | error: `hold inside make is not in the native subset` — a native local would live in the shared data segment and be clobbered by recursion |
 | collector builtins `gc()` / `gc_live()` / `gc_runs()` | error: no collector in the seed runtime | yes (mark & sweep) | error: `undefined variable 'gc'` — native has no collector |
-| full-language statements (`continue`, `for`, `else if`, `and`/`or`/`not`, ...) | error: `unknown statement` | yes, with the generics/`use` extensions | error: `unknown statement` (native implements the pure-min statement set) |
+| full-language statements (`for`, `break`, `continue`, `elif`, `for c in <string>`, `and`/`or`/`not`, ...) | error: `unknown statement` | yes, with the generics/`use` extensions and the string `for` slice | error naming the statement: `'for' is a full-language statement and not in the native subset` (native implements the pure-min statement set) |
 | diagnostic wording | own text (`seed_min: ...`) | own text (`min: ...` / `#error` line) | own text (`native_aot: ...`) |
 | host and memory | any C host, malloc-based | any C host, mark & sweep | x86-64 Linux only; bump-allocated, never freed |
 
@@ -202,6 +202,26 @@ The documented dialect (see `docs/SYNTAX.md`, `docs/CHEATSHEET.md`) shows
 Struct field types come from the literals that fill them: a field is `double`
 or `char *`, the first literal that mentions it decides, and a conflicting
 later literal is a hard error. `hold s = u.name` is typed as a string.
+
+### gen2 gaps found while adding the Stage-2 slice (recorded, not fixed)
+
+These were reproduced on the current gen2 during the 2026-10-08 work. None is
+hidden by the test suite; each is a known limit, not a passing case.
+
+* **`len(` in a range bound.** `for i in 0..len(xs) { ... }` compiles with exit
+  status 0, but the emitted C calls an undefined `len`, so the C compile fails
+  at link time. Workaround: store the length in a `hold` first.
+* **`else when`.** `} else when n > 0 {` compiles with exit status 0 and emits
+  unbalanced braces. Avoid it; `elif` is the supported chain.
+* **`==` on runtime-built strings.** `string == string` compares addresses in
+  gen2, so two equal strings built with `concat` compare as different. Use
+  `string_eq(a, b) == 1`. Never use `==` on strings in test programs.
+* **`%` inside a builtin call argument.** gen2 emits that text raw, so the C
+  compile fails. Statement-level `hold r = m % 10` works, and `tools/sxpkg.sa`
+  works around it that way.
+* **Loop and `when` scope.** In user programs, a `hold x = ...` inside a
+  `when` or `while` body assigns to the outer `x` (it does not shadow it).
+  Not changed here; avoid relying on it.
 
 ## Verified behaviour
 
@@ -247,8 +267,11 @@ whitespace removal, final-newline normalization and idempotence. It preserves
 tokens and is not yet a syntax-aware formatter.
 
 `tools/sxpkg.sa` implements local `init`, `add`, `list`, `remove`, `seed`,
-`search` and `info`; the shell entrypoint delegates these commands to it.
-`make sxpkg` builds the program and `make test-sxpkg` checks the command path.
+`search`, `info`, `verify` and `sum`; the shell entrypoint delegates these
+commands to it. `make sxpkg` builds the program and `make test-sxpkg` checks
+the command path. Offline integrity: `pkg.meta` carries a `sum=` content check
+that `verify` compares against the project's registry copy
+([`REGISTRY.md`](REGISTRY.md)). It is not a security signature.
 Sync/install/publish/fetch and package-directory operations remain in shell.
 
 The language server is a full Sayanox program (`tools/sayanox_lsp.sa`, built
@@ -307,10 +330,23 @@ still use shell/C infrastructure. See
   a string from a number.
 * **Statements**: a statement starts with `hold show when while make give
   struct use` (plus `otherwise`/`else` after a `}`) or is a bare
-  `push(xs, v)`. Anything else — `continue`, a misspelled keyword, a bare
+  `push(xs, v)`. Anything else — a misspelled keyword, a bare
   `write_file(...)` call — is an `unknown statement` error in seed-min,
   gen2 (gen2 used to drop such lines silently or emit invalid C) and, since
   2026-10-08, native (it used to run any bare builtin call).
+  The full-language statements `for`, `break`, `continue` and `elif` are
+  **gen2 only**. seed-min reports `unknown statement`; native (since
+  2026-10-08) names the statement and says it is not in the native subset
+  (`make test-for-str`).
+* **Stage-2 slice (2026-10-08): `for c in <string>` on gen2.** A declared
+  string is walked one byte at a time, each iteration binding `c` to a
+  one-byte string. `break`, `continue`, nesting, the empty string, a counter
+  that rebinds across loops and a string counter reused for a second string
+  all work (`make test-for-str`). Errors are clear: a number or a list as the
+  iterated value, and a counter name that is already a number or a list.
+  Iteration is by byte, so `"é"` is two iterations. seed-min and native refuse
+  the statement. This is one slice of the Stage-2 language, not a claim of
+  it: see the gen2 gaps below and "Out of scope".
 * **Collector builtins** (`gc()`, `gc_live()`, `gc_runs()`) are gen2/gen1_min
   only: the seed runtime has no collector. They are ordinary expression
   calls, so `hold freed = gc()` works; a *bare* `gc` statement is still an
@@ -386,10 +422,12 @@ still use shell/C infrastructure. See
   **Memory is bump-only and never freed**: there is no collector in native,
   so the gen2-only builtins `gc()`/`gc_live()`/`gc_runs()` are compile-time
   errors there. `make test-native-mem` (part of `native-test`) pins the
-  honest behaviour: 2000 `concat`s and 1500 `push`es keep every value and
-  index correct, the same allocating program under a 4 MiB `ulimit -v` cap
-  dies with the documented `out of memory` diagnostic and a non-zero status
-  rather than corrupting memory, and the collector builtins are rejected.
+  honest behaviour: a 262144-byte string (larger than one 64 KiB chunk), a
+  100000-element `push` loop and a 20000-iteration `concat` loop keep every
+  value and index correct; a 200000-iteration loop under a 4 MiB `ulimit -v`
+  cap dies with the documented `out of memory` diagnostic, stdout written
+  before the failure is kept, and the status is non-zero rather than memory
+  being corrupted; and the collector builtins are rejected.
   A real free path is not implemented: a string slot can be aliased (copy,
   struct field, loop-carried value) and the hand-written emitter tracks no
   ownership, so freeing would not be sound.
@@ -432,17 +470,22 @@ still use shell/C infrastructure. See
 | `make test-generics` | `make NAME<T> ... -> T` monomorphises one copy per call-site kind: 14 lines of a program mixing `pickb`/`twice`/`quad` over num, str and list print identically under gen2 and gen1_min; each `NAME__n/s/l` appears exactly once, every call sees a prototype, an unused generic emits nothing, an unsupported header is an error |
 | `make test-gc` | gen2 mark & sweep from the language side: a 2000-iteration `concat` loop stays under 200 KB of live heap after `gc()`, `gc_runs()` counts a collection, `gc()` reclaims bytes, and the surviving string is intact (`len` + first byte) |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
-| `make test-native-mem` (part of `native-test`) | native memory: 2000 `concat`s and 1500 `push`es keep every value and index; a 200k-`concat` loop prints `200000` normally and dies with `out of memory` under a 4 MiB address-space cap; `gc()`/`gc_live()` are compile-time errors |
+| `make test-native-mem` (part of `native-test`) | native memory, bump-only contract: a string doubled to 262144 bytes is served whole; 100000 `push`es keep every value; a 20000-iteration `concat` loop finishes under a 4 MiB `ulimit -v` cap; a 200000-iteration loop under the same cap exits non-zero with stdout written before the failure kept and `out of memory` on stderr; `gc()`/`gc_live()`/`gc_runs()` are compile-time errors. See [`GC.md`](GC.md). |
 | `make test-stage2-demos` | the three Stage-2 contract demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) compile byte-identically under seed-min and gen2; the string-only one also runs natively when `native_aot` is built (the native half is skipped, loudly, on the portable `true-selfhost` path, and executed in `make native-test`) |
-| `make test-stdlib` | `stdlib/tiny.sa` spliced with `use`: `min2`/`max2`/`absv`/`sum_to`/`pow_int`/`is_even`/`gcd` give the same answers on seed-min, gen2 and (when built) native |
-| `make test-pkgs` | the offline package path: `sxpkg.sh init`+`seed` write `.sayanox/registry/{hello,math}` with no network, `sxpkg add` records the lock, and a program with `use ".sayanox/registry/math/main.sa"` runs the same on seed-min, gen2 and native |
+| `make test-stdlib` | `stdlib/tiny.sa` spliced with `use`: the seven original helpers (`min2`/`max2`/`absv`/`sum_to`/`pow_int`/`is_even`/`gcd`) and eight added ones (`clamp`/`sign`/`is_odd`/`lcm`/`fact`/`fib`/`is_prime`/`no_factor_from`; 20 new printed checks, 30 lines in all) give the same answers on seed-min, gen2 and (when built) native |
+| `make test-pkgs` | the offline package path: `sxpkg.sh init`+`seed` write `.sayanox/registry/{hello,math,strings}` with no network, `sxpkg add` records the lock, a program with `use \".sayanox/registry/math/main.sa\"` runs the same on seed-min, gen2 and native, and `sxpkg verify` passes on a clean project, reports the tampered `main.sa` as a `sum` MISMATCH, and passes again after the re-seed |
+| `make test-registry-sums` | every `pkg.meta` `sum=` in the repository equals `sxpkg sum` of its `main.sa` (offline integrity; see [`REGISTRY.md`](REGISTRY.md)) |
+| `make test-for-str` | the Stage-2 slice on gen2: `for c in <string>` byte walk, vowel count with `string_eq`, `break`/`continue`, empty string, nested loops, a rebound counter, `\"é\"` as two bytes, the diagnostics for a number, a list and a counter clash; seed-min refuses the statement; native names it; `make NAME<A, B>` is refused. |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |
 
 ## Out of scope
 
 Not worked on in this pass and not claimed anywhere in this repository:
 
-* the full Stage-2 language (everything beyond the pure-min dialect above)
+* the full Stage-2 language. Only one slice is added on gen2: `for c in <string>`
+  (byte walk, with `break`/`continue`). The gen2 gaps listed under the
+  divergences above (`len(` in a range bound, `else when`, `==` on strings, `%`
+  in builtin arguments) remain, and nothing here claims the whole language
 * a native collector: the AOT backend bump-allocates over `mmap` chunks and
   never frees (gen2-compiled programs use the mark & sweep collector described
   in [`GC.md`](GC.md)); the honest behaviour, including the loud `out of
@@ -453,11 +496,15 @@ Not worked on in this pass and not claimed anywhere in this repository:
   textual splice and the local `.sayanox/registry` written by `sxpkg` is a
   convention, not a resolver (`sync`/`publish`/`fetch` in `tools/sxpkg.sh` are
   optional and unused by every bootstrap target)
-* a full standard library: `stdlib/tiny.sa` holds seven numeric helpers and
+* a full standard library: `stdlib/tiny.sa` holds fifteen numeric helpers and
   nothing else (no string- or list-returning functions, because the native
   subset has no such signatures)
-* generics beyond the single-type-parameter form: `make NAME<T>(a: T, b: T)
-  -> T` monomorphises, but `make pair<A, B>` (a type parameter per argument)
-  is reported as an error rather than implemented
-* a richer type system (values are doubles, strings, double lists and
-  literal-typed structs)
+* multi-parameter generics. The single-type-parameter form `make NAME<T>` is the
+  documented limit ([`GENERICS.md`](GENERICS.md)); `make pair<A, B>` is reported
+  as an error, not implemented
+* a rich type system: values are doubles, strings, double lists and
+  literal-typed structs; there are no bounds, no generic structs and no
+  inference beyond the argument kinds
+* a full LSP product: `make test-lsp` checks one JSON-RPC session slice
+  (diagnostics, symbols, completion, hover, definition); the editor story is
+  not finished

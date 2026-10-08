@@ -209,6 +209,17 @@ hold fvlok = 0
 hold fvlj = 0
 hold fvla = 0
 hold fvlb = 0
+hold fvstr = 0
+hold fvdup = 0
+hold fvsf = 0
+hold fvsl = ""
+hold fvsl2 = 0
+hold fvss = 0
+hold fvsi2 = 0
+hold fvsok = 0
+hold fvsj = 0
+hold fvsa = 0
+hold fvsb = 0
 hold aword = ""
 hold atype = ""
 hold dtok = 0
@@ -11536,6 +11547,9 @@ hold ec = 0
       }
       // A (or the list, for `for v in xs {`): text up to `..` or `{`
       hold fvmode = 0
+      // fvstr = 1: `for c in s {` walks a declared string byte by byte (fvmode 1)
+      hold fvstr = 0
+      hold fvdup = 0
       hold fvrun = 1
       while fvrun == 1 {
         when pos >= n {
@@ -11741,10 +11755,40 @@ hold ec = 0
             hold fvli2 = fvli2 + 1
           }
         }
+        // not a list: a declared string is walked byte by byte
         when fvlf == 0 {
-          hold ferr = 1
-          hold fmsg = concat("for loop: '", fva)
-          hold fmsg = concat(fmsg, "' is not a list; write `for i in 0..N {` to count")
+          hold fvsf = 0
+          hold fvsl = concat(concat("|", fva), "|")
+          hold fvsl2 = len(fvsl)
+          hold fvss = len(sdecls)
+          hold fvsi2 = 0
+          while fvsi2 + fvsl2 <= fvss {
+            hold fvsok = 1
+            hold fvsj = 0
+            while fvsj < fvsl2 {
+              hold fvsa = sx_index(sdecls, fvsi2 + fvsj)
+              hold fvsb = sx_index(fvsl, fvsj)
+              when fvsa == fvsb {
+                hold fvsj = fvsj + 1
+              } otherwise {
+                hold fvsok = 0
+                hold fvsj = fvsl2
+              }
+            }
+            when fvsok == 1 {
+              hold fvsf = 1
+              hold fvsi2 = fvss
+            } otherwise {
+              hold fvsi2 = fvsi2 + 1
+            }
+          }
+          when fvsf == 1 {
+            hold fvstr = 1
+          } otherwise {
+            hold ferr = 1
+            hold fmsg = concat("for loop: '", fva)
+            hold fmsg = concat(fmsg, "' is not a list or a string; write `for i in 0..N {` to count")
+          }
         }
       }
       // the counter must not already be a string or list
@@ -11769,7 +11813,12 @@ hold ec = 0
             }
           }
           when fvok2 == 1 {
-            hold ferr = 1
+            // a string loop may rebind a name that is already a string
+            when fvstr == 1 {
+              hold fvdup = 1
+            } otherwise {
+              hold ferr = 1
+            }
             hold fvli = fvi
             hold fvi = fvln
           } otherwise {
@@ -11778,7 +11827,7 @@ hold ec = 0
         }
         when ferr == 1 {
           hold fmsg = concat("for loop: '", fvname)
-          hold fmsg = concat(fmsg, "' is not a number; pick another counter name")
+          hold fmsg = concat(fmsg, "' is already a string or list; pick another counter name")
         }
       }
       // is the counter already declared as a number?
@@ -11810,6 +11859,12 @@ hold ec = 0
             hold fvi = fvi + 1
           }
         }
+        // a string loop declares a new `char *` counter; a number of that name is an error
+        when fvstr == 1 && fvok == 0 {
+          hold ferr = 1
+          hold fmsg = concat("for loop: '", fvname)
+          hold fmsg = concat(fmsg, "' is already a number or a list; a string loop needs a new counter name")
+        }
       }
       when ferr == 1 {
         hold nerrscop = 1
@@ -11823,7 +11878,17 @@ hold ec = 0
           hold ind = concat(ind, "  ")
           hold wk = wk + 1
         }
-        when fvok == 1 {
+        when fvok == 1 && fvstr == 1 && fvdup == 0 {
+          // for c in s { ... }: the counter is a string, assigned per byte below
+          hold body = concat(body, ind)
+          hold body = concat(body, "char *")
+          hold body = concat(body, fvname)
+          hold body = concat(body, " = \"\";")
+          hold body = concat(body, nl)
+          hold sdecls = concat(sdecls, fvname)
+          hold sdecls = concat(sdecls, "|")
+        }
+        when fvok == 1 && fvstr == 0 {
           hold body = concat(body, ind)
           hold body = concat(body, "double ")
           hold body = concat(body, fvname)
@@ -11839,6 +11904,33 @@ hold ec = 0
           hold decls = concat(decls, "|")
         }
         when fvmode == 1 {
+          when fvstr == 1 {
+          // for c in s { ... }  ->  byte walk over the string: c is the one-byte
+          // string at index __sx_ix (sx_idx is the byte, sx_chr makes a 1-char string)
+          hold fvix = "__sx_ix"
+          hold body = concat(body, ind)
+          hold body = concat(body, "for (double ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, " = 0.0; ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, " < sx_len(")
+          hold body = concat(body, fva)
+          hold body = concat(body, "); ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, " = ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, " + 1.0) {")
+          hold body = concat(body, nl)
+          hold body = concat(body, ind)
+          hold body = concat(body, "  ")
+          hold body = concat(body, fvname)
+          hold body = concat(body, " = sx_chr(sx_idx(")
+          hold body = concat(body, fva)
+          hold body = concat(body, ", ")
+          hold body = concat(body, fvix)
+          hold body = concat(body, "));")
+          hold body = concat(body, nl)
+          } otherwise {
           // for v in xs { ... }  ->  index walk over the list
           // the walk index lives in the for-init, so C scoping gives every
           // nested list loop its own copy
@@ -11866,6 +11958,7 @@ hold ec = 0
           hold body = concat(body, fvix)
           hold body = concat(body, ");")
           hold body = concat(body, nl)
+          }
         } otherwise {
           hold body = concat(body, ind)
           hold body = concat(body, "for (")

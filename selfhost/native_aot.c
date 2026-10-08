@@ -244,6 +244,18 @@ static size_t d_str(const char*s){ size_t n=strlen(s); size_t at=d_alloc(n+1); m
 static void sw(const char**p){ while(**p&&isspace((unsigned char)**p)) (*p)++; }
 static int id0(char c){ return isalpha((unsigned char)c)||c=='_'; }
 static int idc(char c){ return isalnum((unsigned char)c)||c=='_'; }
+/* gen2-only full-language statements: name them and stop, at every pass.
+   Without this, `for c in s { show c }` died in the type-inference pre-pass
+   as "undefined variable 'c'" before the statement walker could say what the
+   real problem was. */
+static void errx(const char*fmt,...);
+static void reject_fullang(const char*p){
+  char w[16]; int i=0;
+  if(!id0(*p)) return;
+  while(idc(*p)&&i+1<16) w[i++]=*p++; w[i]=0;
+  if(!strcmp(w,"for")||!strcmp(w,"break")||!strcmp(w,"continue")||!strcmp(w,"elif"))
+    errx("'%s' is a full-language statement and not in the native subset (native speaks the pure-min statements; use selfhost/gen2)",w,NULL);
+}
 static int mkw(const char**p,const char*k){ size_t n=strlen(k); if(strncmp(*p,k,n)||idc((*p)[n])) return 0; *p+=n; return 1; }
 static int pid(const char**p,char*b,size_t c){
   sw(p); if(!id0(**p)) return 0;
@@ -299,6 +311,8 @@ static void endstmt(const char**p){
   if(id0(*r)){
     char w[64]; int i=0;
     while(idc(*r)&&i+1<64) w[i++]=*r++; w[i]=0;
+    if(!strcmp(w,"for")||!strcmp(w,"break")||!strcmp(w,"continue")||!strcmp(w,"elif"))
+      errx("'%s' is a full-language statement and not in the native subset (native speaks the pure-min statements; use selfhost/gen2)",w,NULL);
     sw(&r);
     if(*r=='='&&(g_find(w)>=0)) return;                /* next line is an assignment */
     if(*r=='('&&!strcmp(w,"push")) return;             /* next line is a call statement (push only, as in seed-min/gen2) */
@@ -489,6 +503,7 @@ static void collect_defs(const char*src){
       if(nF>=MAXF){ fprintf(stderr,"native_aot: too many functions (native limit: %d)\n",MAXF); exit(1); }
       strcpy(F[nF].name,nm); F[nF].nparam=0; F[nF].start=-1;
       sw(&p);
+      if(*p=='<'){ fprintf(stderr,"native_aot: make %s<...>: generics are not in the native subset (gen2 monomorphises make NAME<T>); native has no generic functions\n",nm); exit(1); }
       if(*p!='('){ fprintf(stderr,"native_aot: make %s: expected (params)\n",nm); exit(1); }
       p++;
       for(;;){
@@ -821,6 +836,7 @@ static int infer_round(const char*src){
     if(p[0]=='/'&&p[1]=='/'){ while(*p&&*p!='\n') p++; continue; }
     const char*end=skip_stmt(line);
     const char*rp=line; sw(&rp);
+    reject_fullang(rp);
     if(mkw(&rp,"hold")){
       char nm[64];
       if(pid(&rp,nm,64)){
@@ -1630,6 +1646,11 @@ static void emit_prog(const char**p,int in_fn,int stop){
     {
       char w[64]; const char*q=*p; int i=0;
       while(idc(*q)&&i+1<64) w[i++]=*q++; w[i]=0;
+      /* gen2-only full-language statements: name them, do not let them fall
+         through to the assignment/undefined-variable path (`for c in s` used
+         to die as "undefined variable 'c'") */
+      if(i>0&&(!strcmp(w,"for")||!strcmp(w,"break")||!strcmp(w,"continue")||!strcmp(w,"elif")))
+        errx("'%s' is a full-language statement and not in the native subset (native speaks the pure-min statements; use selfhost/gen2)",w,NULL);
       const char*q2=q; sw(&q2);
       if(i>0&&*q2=='='){
         /* plain assignment statement:  a = expr  (global or parameter) */

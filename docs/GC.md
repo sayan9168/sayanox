@@ -67,14 +67,29 @@ collector was in place (see the table in [`STATUS.md`](STATUS.md)).
   frees; native programs are for demos and small benchmarks. That is not
   "zero memory management": when `mmap` fails, `r_malloc` dies with the
   documented `out of memory` message and a non-zero exit status instead of
-  corrupting memory. `make test-native-mem` pins all of it: a 2000-iteration
-  `concat` loop and a 1500-element `push` loop keep computing correct values
-  and indexes, the same big-allocation program under a 4 MiB
-  `ulimit -v` cap dies loudly, and the gen2-only collector builtins
-  (`gc()`, `gc_live()`, `gc_runs()`) are compile-time errors in native.
-  A real free path would need ownership and aliasing information the
-  hand-written emitter does not track (a string slot can be aliased by a
-  copy, a struct field or a loop-carried value), so it is not claimed.
+  corrupting memory. `make test-native-mem` pins the bump-only contract from
+  both sides:
+  * a string doubled 18 times (262144 bytes, far above one 64 KiB chunk) is
+    served whole and its last byte reads back correctly;
+  * a 100000-element `push` loop (growth crosses many chunks) keeps every
+    value: `len` 100000, `xs[0]` 0, `xs[99999]` 99999;
+  * a 20000-iteration `concat` loop (about 0.8 MB of total allocation) finishes
+    under a 4 MiB `ulimit -v` cap, while a 200000-iteration loop under the same
+    cap exhausts it: stdout written before the failure is kept, the process
+    exits non-zero, and stderr carries `out of memory`;
+  * the gen2-only collector builtins (`gc()`, `gc_live()`, `gc_runs()`) are
+    compile-time errors in native.
+
+  The 4 MiB cap is charged for **total bytes ever allocated**, not live bytes,
+  because nothing is ever returned. A real free path would need ownership and
+  aliasing information the hand-written emitter does not track (a string slot
+  can be aliased by a copy, a struct field or a loop-carried value), so it is
+  not claimed.
+
+  Native also rejects, by name, the full-language statements the bump
+  backend does not model: `for`, `break`, `continue` and `elif` (see the
+  Stage-2 slice in [`STATUS.md`](STATUS.md)). Native programs therefore stay
+  in the pure-min statement set.
 * `selfhost/seed/sxc_seed_min` (the bootstrap seed) has a malloc-only prelude
   and frees only the previous value of a reassigned string variable. Its point
   is to be small and auditable, not to manage memory well.
