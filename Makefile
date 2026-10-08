@@ -1192,6 +1192,19 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/gg_pct $(TESTS)/gg_pct.c
 	$(call assert-out,./$(TESTS)/gg_pct,7\nx7\n1\n100%4\nv=8)
 	@./$(SEED_MIN_BIN) $(TESTS)/gg_pct.sa > $(TESTS)/gg_pct_sm.c && $(CC) -O2 -o $(TESTS)/gg_pct_sm $(TESTS)/gg_pct_sm.c && ./$(TESTS)/gg_pct_sm > $(TESTS)/gg_pct_sm.out && ./$(TESTS)/gg_pct > $(TESTS)/gg_pct_g2.out && cmp $(TESTS)/gg_pct_sm.out $(TESTS)/gg_pct_g2.out
+	@# string ordering (< <= > >=) and == / != compare by content: gen2 and seed-min agree
+	@printf 'hold s = "ab"\nhold t = concat("a", "b")\nhold u = concat("a", "c")\nhold n = 3\nwhen t == s {\n  show 1\n}\nwhen t != u {\n  show 2\n}\nwhen s < u {\n  show 3\n}\nwhen u < s {\n  show 4\n} otherwise {\n  show 5\n}\nwhen s <= t {\n  show 6\n}\nwhen u >= t {\n  show 7\n}\nwhen u > t {\n  show 8\n}\nwhen t > u {\n  show 9\n} otherwise {\n  show 10\n}\nwhen n < 5 {\n  show 11\n}\nwhen n >= 3 {\n  show 12\n}\nwhen t < "b" {\n  show 13\n}\nwhen "a" < u {\n  show 14\n} otherwise {\n  show 15\n}\n' > $(TESTS)/gg_ord.sa
+	./$(GEN2) $(TESTS)/gg_ord.sa $(TESTS)/gg_ord.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gg_ord $(TESTS)/gg_ord.c
+	$(call assert-out,./$(TESTS)/gg_ord,1\n2\n3\n5\n6\n7\n8\n10\n11\n12\n13\n14)
+	@./$(SEED_MIN_BIN) $(TESTS)/gg_ord.sa > $(TESTS)/gg_ord_sm.c && $(CC) -O2 -o $(TESTS)/gg_ord_sm $(TESTS)/gg_ord_sm.c && ./$(TESTS)/gg_ord_sm > $(TESTS)/gg_ord_sm.out && ./$(TESTS)/gg_ord > $(TESTS)/gg_ord_g2.out && cmp $(TESTS)/gg_ord_sm.out $(TESTS)/gg_ord_g2.out
+	@# a string against a number is an error on seed-min; native refuses ordering by name
+	@printf 'hold s = "ab"\nhold n = 3\nwhen s < n {\n  show 1\n}\n' > $(TESTS)/gg_ordmix.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_ordmix.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted string < number"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat >/dev/null 2>&1; then echo "[FAIL] native accepted string ordering"; exit 1; fi; \
+	  ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat 2>&1 | grep -q 'not in the native subset'; \
+	fi
 	@# the chain forms are gen2 only: seed-min and native must refuse them
 	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_chain.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted an else-when/else-if chain"; exit 1; fi

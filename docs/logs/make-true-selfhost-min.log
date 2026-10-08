@@ -190,6 +190,8 @@ cc -O2 -o selfhost/seed_tests/gg_chain selfhost/seed_tests/gg_chain.c
 cc -O2 -o selfhost/seed_tests/gg_streq selfhost/seed_tests/gg_streq.c
 ./selfhost/gen2 selfhost/seed_tests/gg_pct.sa selfhost/seed_tests/gg_pct.c >/dev/null
 cc -O2 -o selfhost/seed_tests/gg_pct selfhost/seed_tests/gg_pct.c
+./selfhost/gen2 selfhost/seed_tests/gg_ord.sa selfhost/seed_tests/gg_ord.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gg_ord selfhost/seed_tests/gg_ord.c
 [gen2-gaps] native rejects the chain forms
 [OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native refuse the chains
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/std_t.sa > selfhost/seed_tests/std_sm.c

@@ -424,14 +424,30 @@ static char *add(int *oty){
 
 static char *cmp_(int *oty){
   char *l=add(oty);
+  int lt=*oty;
   skip();
-  if(P+1<N && S[P]=='='&&S[P+1]=='='){ P+=2; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)==(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
-  if(P+1<N && S[P]=='!'&&S[P+1]=='='){ P+=2; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)!=(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
-  if(P+1<N && S[P]=='<'&&S[P+1]=='='){ P+=2; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)<=(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
-  if(P+1<N && S[P]=='>'&&S[P+1]=='='){ P+=2; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)>=(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
-  if(P<N && S[P]=='<'){ P++; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)<(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
-  if(P<N && S[P]=='>'){ P++; int rt; char *r=add(&rt); char *t=malloc(strlen(l)+strlen(r)+24); sprintf(t,"((%s)>(%s))",l,r); free(l); free(r); *oty=TY_NUM; return t; }
-  return l;
+  int op=0, olen=0;
+  if(P+1<N && S[P]=='='&&S[P+1]=='='){ op=1; olen=2; }
+  else if(P+1<N && S[P]=='!'&&S[P+1]=='='){ op=2; olen=2; }
+  else if(P+1<N && S[P]=='<'&&S[P+1]=='='){ op=3; olen=2; }
+  else if(P+1<N && S[P]=='>'&&S[P+1]=='='){ op=4; olen=2; }
+  else if(P<N && S[P]=='<'){ op=5; olen=1; }
+  else if(P<N && S[P]=='>'){ op=6; olen=1; }
+  if(!op) return l;
+  static const char *cops[]={"","==","!=","<=",">=","<",">"};
+  P+=olen;
+  int rt; char *r=add(&rt);
+  char *t;
+  if(lt==TY_STR || rt==TY_STR){
+    /* strings compare by content (strcmp), never by address */
+    if(lt!=TY_STR || rt!=TY_STR) die("a string can only be compared with a string (not a number, list or struct)");
+    t=malloc(strlen(l)+strlen(r)+48);
+    sprintf(t,"((strcmp(%s,%s))%s0)",l,r,cops[op]);
+  } else {
+    t=malloc(strlen(l)+strlen(r)+24);
+    sprintf(t,"((%s)%s(%s))",l,cops[op],r);
+  }
+  free(l); free(r); *oty=TY_NUM; return t;
 }
 
 static char *and_(int *oty){

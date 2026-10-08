@@ -220,6 +220,10 @@ Reproduced on gen2 while adding the Stage-2 slice, then fixed and pinned by
   `elif`. Before, `} else if COND {` also failed (the plain `else` was emitted
   twice), so the documented `else if` form did not work on gen2 either.
   `} elif COND {` was always fine.
+* **String ordering.** `s < t` and the other orderings on strings were
+  pointer compares, which gave arbitrary answers. Now `sx_cmp` (strcmp) on
+  gen2 and `strcmp` on seed-min, for declared strings and quoted literals on
+  either side (`make test-gen2-gaps`). Native still rejects the orderings.
 * **`%` inside a builtin-call argument.** `chr(48 + m % 10)`,
   `concat("x", chr(m % 10))` and `chr(48 + x * m % 10)` now compile. Each `%`
   becomes `sx_mod(L, R)`, using the same operand rule as the condition
@@ -233,8 +237,11 @@ Design notes (documented behaviour, not gaps):
   or `while` body assigns to the outer `x` and does not shadow it. This is the
   rule the compiler is written against (see the `for` notes in
   `selfhost/compiler_min.sa`). Do not rely on shadowing.
-* **String ordering.** `<`, `<=`, `>`, `>=` on two strings have no defined
-  meaning in the language and are not supported.
+* **String ordering and equality (2026-10-08).** `<`, `<=`, `>`, `>=`, `==`
+  and `!=` between two strings compare by content (`strcmp`) on gen2 and on
+  seed-min. A string compared with a number, list or struct is an error on
+  seed-min. Native implements `==`/`!=` (`string_eq`) but not the orderings:
+  it rejects them by name. This is a native gap, recorded below.
 
 ## Verified behaviour
 
@@ -487,7 +494,7 @@ still use shell/C infrastructure. See
 | `make test-stage2-demos` | the three Stage-2 contract demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) compile byte-identically under seed-min and gen2; the string-only one also runs natively when `native_aot` is built (the native half is skipped, loudly, on the portable `true-selfhost` path, and executed in `make native-test`) |
 | `make test-stdlib` | `stdlib/tiny.sa` spliced with `use`: the seven original helpers (`min2`/`max2`/`absv`/`sum_to`/`pow_int`/`is_even`/`gcd`) and eight added ones (`clamp`/`sign`/`is_odd`/`lcm`/`fact`/`fib`/`is_prime`/`no_factor_from`; 20 new printed checks, 30 lines in all) give the same answers on seed-min, gen2 and (when built) native |
 | `make test-pkgs` | the offline package path: `sxpkg.sh init`+`seed` write `.sayanox/registry/{hello,math,strings}` with no network, `sxpkg add` records the lock, a program with `use \".sayanox/registry/math/main.sa\"` runs the same on seed-min, gen2 and native, and `sxpkg verify` passes on a clean project, reports the tampered `main.sa` as a `sum` MISMATCH, and passes again after the re-seed |
-| `make test-gen2-gaps` | the gen2 fixes of 2026-10-08: `len(NAME)` in a range bound (list `sx_llen`, string `sx_len`); string `==`/`!=` between declared strings as strcmp (two equal runtime strings compare equal); `} else when`, `} else if` and `} otherwise when` chains including nested ones, with the same output as `elif`; seed-min and native refuse the chains; `%` inside builtin-call arguments is sx_mod, same as seed-min. |
+| `make test-gen2-gaps` | string `<`/`<=`/`>`/`>=`/`==`/`!=` by content on gen2 and seed-min (same output; native rejects the orderings by name; string vs number is an error on seed-min); the gen2 fixes of 2026-10-08: `len(NAME)` in a range bound (list `sx_llen`, string `sx_len`); string `==`/`!=` between declared strings as strcmp (two equal runtime strings compare equal); `} else when`, `} else if` and `} otherwise when` chains including nested ones, with the same output as `elif`; seed-min and native refuse the chains; `%` inside builtin-call arguments is sx_mod, same as seed-min. |
 | `make test-registry-sums` | every `pkg.meta` `sum=` in the repository equals `sxpkg sum` of its `main.sa` (offline integrity; see [`REGISTRY.md`](REGISTRY.md)) |
 | `make test-for-str` | the Stage-2 slice on gen2: `for c in <string>` byte walk, vowel count with `string_eq`, `break`/`continue`, empty string, nested loops, a rebound counter, `\"é\"` as two bytes, the diagnostics for a number, a list and a counter clash; seed-min refuses the statement; native names it; `make NAME<A, B>` is refused. |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |

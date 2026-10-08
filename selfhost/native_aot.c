@@ -818,7 +818,7 @@ static int pk_full(const char**p,int depth){
     *p += is2? 2 : 1;
     int k2=pk_rel(p,depth);
     if(k==K_STR&&k2!=K_STR) errx("string compared with a non-string");
-    if(k==K_STR&&(c0=='<'||c0=='>')) errx("string comparison with '%s' is not supported (use string_eq for ==/!=)",op);
+    if(k==K_STR&&(c0=='<'||c0=='>')) errx("string comparison with '%s' is not in the native subset (native has string_eq for ==/!=; string ordering runs on seed-min and gen2)",op);
     if(k==K_LIST||k==K_STRUCT||k2==K_LIST||k2==K_STRUCT)
       errx("cannot compare %s with %s",kname(k),kname(k2));
     PKX_K=K_NUM; PKX_S=-1;
