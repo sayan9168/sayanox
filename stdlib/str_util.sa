@@ -1,0 +1,1 @@
+make str_is_empty(s) { when len(s) == 0 { give 1 } give 0 }

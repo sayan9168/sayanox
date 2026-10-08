@@ -346,7 +346,8 @@ static int is_builtin(const char*n){
   return !strcmp(n,"concat")||!strcmp(n,"len")||!strcmp(n,"chr")||!strcmp(n,"sx_index")||
          !strcmp(n,"index")||!strcmp(n,"read_file")||!strcmp(n,"write_file")||
          !strcmp(n,"arg")||!strcmp(n,"arg_count")||!strcmp(n,"string_eq")||
-         !strcmp(n,"sx_eq")||!strcmp(n,"push");
+         !strcmp(n,"sx_eq")||!strcmp(n,"push")||
+         !strcmp(n,"gc")||!strcmp(n,"gc_live")||!strcmp(n,"gc_runs");
 }
 static const char*kname(int k){
   if(k==K_NUM) return "a number";
@@ -668,7 +669,8 @@ static int pk_prim(const char**p,int depth){
         }
         static const struct { const char*nn; int a; } ar[] = {
           {"concat",2},{"len",1},{"chr",1},{"sx_index",2},{"index",2},{"read_file",1},
-          {"write_file",2},{"arg",1},{"arg_count",0},{"string_eq",2},{"sx_eq",2},{"push",2}
+          {"write_file",2},{"arg",1},{"arg_count",0},{"string_eq",2},{"sx_eq",2},{"push",2},
+          {"gc",0},{"gc_live",0},{"gc_runs",0}
         };
         for(int i=0;i<(int)(sizeof ar/sizeof ar[0]);i++)
           if(!strcmp(n,ar[i].nn)){
@@ -932,7 +934,7 @@ static const int argreg[MAXP]={DI,SI,DX,CX,8,9};
 
 enum { B_MALLOC,B_STRLEN,B_CMPSTR,B_CONCAT,B_N2STR,B_PUTSTR,B_WCSTR,B_ITONO,B_ITOWRITE,
        B_SHOWLIST,B_MLIST,B_LGET,B_LLEN,B_LPUSH,B_SGET,B_CHR,B_READFILE,B_WRITEFILE,
-       B_ARG,B_ARGC,B_DIE,B_NFMT,B_SHOWNUM };
+       B_ARG,B_ARGC,B_DIE,B_NFMT,B_SHOWNUM,B_GC,B_GC_LIVE,B_GC_RUNS };
 
 static void emit_prim(const char**p,int depth);
 static void emit_post(const char**p,int depth);
@@ -1272,6 +1274,14 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     callb(B_LPUSH);
     if(gi>=0) store_global(gi);
     XK=K_LIST; XS=-1;
+    return;
+  }
+  if(!strcmp(n,"gc")||!strcmp(n,"gc_live")||!strcmp(n,"gc_runs")){
+    sw(p); if(**p!=')') errx("%s takes no args",n,NULL); (*p)++;
+    if(!strcmp(n,"gc")) callb(B_GC);
+    else if(!strcmp(n,"gc_live")) callb(B_GC_LIVE);
+    else callb(B_GC_RUNS);
+    XK=K_NUM; XS=-1;
     return;
   }
   errx("unknown builtin %s",n,NULL);
@@ -2453,6 +2463,20 @@ static void emit_builtins(void){
   bin_imm8(0,SP,48);
   pop_r(12); e1(0xc3);
   erel32(jz,done);
+  }
+
+  /* gc / gc_live / gc_runs: no-op / compatibility (bump-only native) */
+  {
+  builtin_off[B_GC]=cn;
+  push_r(12); xor_rr(AX,AX); pop_r(12); e1(0xc3);
+  }
+  {
+  builtin_off[B_GC_LIVE]=cn;
+  push_r(12); xor_rr(AX,AX); pop_r(12); e1(0xc3);
+  }
+  {
+  builtin_off[B_GC_RUNS]=cn;
+  push_r(12); xor_rr(AX,AX); pop_r(12); e1(0xc3);
   }
 }
 

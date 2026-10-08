@@ -163,3 +163,24 @@ case "$cmd" in
      echo "  override: SAYANOX_REGISTRY=https://..."
      ;;
 esac
+
+sync() {
+  # Optional fetch from ONLINE registry if network available; otherwise use local registry.
+  if [ -n "$ONLINE" ] && curl -fsSL "$ONLINE/INDEX" -o /tmp/sx_index_tmp 2>/dev/null; then
+    echo "sxpkg: fetched online index"
+    cp /tmp/sx_index_tmp "$REG/INDEX"
+  else
+    echo "sxpkg: offline mode (local registry)"
+  fi
+}
+publish() {
+  echo "sxpkg: publish requires online registry (not implemented in bootstrap)"
+}
+fetch() {
+  sync
+}
+case "$cmd" in
+  sync) sync ;;
+  publish) publish ;;
+  fetch) fetch ;;
+esac

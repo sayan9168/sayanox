@@ -30,15 +30,20 @@ Verified by `make test-generics` (14 lines of a program mixing `pickb`, `twice`
 and `quad` over num, str and list print identically under gen2 and gen1_min)
 and by the `make test-for-str` rejection checks.
 
-## Why not `pair<A, B>`
+## Why not `pair<A, B>` (status: design documented, not fully implemented)
 
 A second type parameter means each call site must select a *tuple* of kinds,
 not one kind. The monomorphiser keys copies on a single kind (`NAME__n`,
 `NAME__s`, `NAME__l`), so `pair<A, B>` needs a new key format for every call
-site, including nested generic calls inside an already-specialised body. That
-rework touches the call-site scanner, the prototype emitter and the naming
-scheme together. Doing it halfway would risk mis-compiled C, so the form is
-rejected instead:
+site (e.g. `pair__n_s`, `pair__s_n`, `pair__n_n`), including nested generic
+calls inside an already-specialised body. Doing it halfway would risk
+mis-compiled C, so the form is rejected with a clear error (`must be written
+with one type parameter`), not silently wrong.
+
+Design for the tuple-key format is documented here; full integration into
+`compiler_min.sa` (call-site scanner, prototype emitter, naming scheme) is
+tracked on the roadmap. The single-type-parameter form remains the verified
+and documented limit.
 
 * gen2 reports `make pair<A, B>` with a clear `must be written with one type parameter`
   error (checked by `make test-for-str`).

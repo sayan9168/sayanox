@@ -1,0 +1,1 @@
+make list_is_empty(xs) { when len(xs) == 0 { give 1 } give 0 }

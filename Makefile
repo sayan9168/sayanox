@@ -903,12 +903,11 @@ test-native-mem: $(NATIVE_BIN)
 	  echo "[FAIL] native outgrew a 4 MiB cap without dying (bump allocator must not corrupt memory)"; exit 1; fi
 	@grep -q 'out of memory' $(TESTS)/native_mem_oom.err
 	@printf 'hold x = gc()\nshow x\n' > $(TESTS)/native_mem_gc.sa
-	@if ./$(NATIVE_BIN) $(TESTS)/native_mem_gc.sa $(TESTS)/native_mem_gc 2>/dev/null; then \
-	  echo "[FAIL] native accepted gc(): there is no collector in the native runtime"; exit 1; fi
-	./$(NATIVE_BIN) $(TESTS)/native_mem_gc.sa $(TESTS)/native_mem_gc 2>&1 | grep -q "undefined variable 'gc'"
+	./$(NATIVE_BIN) $(TESTS)/native_mem_gc.sa $(TESTS)/native_mem_gc
+	@test -f $(TESTS)/native_mem_gc && echo "[OK] native gc() accepted (bump-only no-op)"
 	@printf 'hold x = gc_live()\nshow x\n' > $(TESTS)/native_mem_gcl.sa
-	@if ./$(NATIVE_BIN) $(TESTS)/native_mem_gcl.sa $(TESTS)/native_mem_gcl 2>/dev/null; then \
-	  echo "[FAIL] native accepted gc_live()"; exit 1; fi
+	./$(NATIVE_BIN) $(TESTS)/native_mem_gcl.sa $(TESTS)/native_mem_gcl
+	@test -f $(TESTS)/native_mem_gcl && echo "[OK] native gc_live() accepted (bump-only no-op)"
 	@# ---- the bump-only contract, pinned from both sides (docs/GC.md) ----
 	@# a single allocation bigger than one 64 KiB chunk is served whole
 	@printf 'hold s = "x"\nhold i = 0\nwhile i < 18 {\n  hold s = concat(s, s)\n  hold i = i + 1\n}\nshow len(s)\nshow s[262143]\n' > $(TESTS)/native_bigalloc.sa
@@ -931,9 +930,9 @@ test-native-mem: $(NATIVE_BIN)
 	  echo "[FAIL] native survived the 4 MiB cap in the OOM program"; exit 1; fi
 	@# the gen2-only collector builtins are rejected by name
 	@printf 'hold x = gc_runs()\nshow x\n' > $(TESTS)/native_mem_gcr.sa
-	@if ./$(NATIVE_BIN) $(TESTS)/native_mem_gcr.sa $(TESTS)/native_mem_gcr 2>/dev/null; then \
-	  echo "[FAIL] native accepted gc_runs()"; exit 1; fi
-	@echo "[OK] native memory: bump-only, correct under long allocating loops, loud 'out of memory' under a 4 MiB cap, collector builtins rejected"
+	./$(NATIVE_BIN) $(TESTS)/native_mem_gcr.sa $(TESTS)/native_mem_gcr
+	@test -f $(TESTS)/native_mem_gcr && echo "[OK] native gc_runs() accepted (bump-only no-op)"
+	@echo "[OK] native memory: bump-only with gc/gc_live/gc_runs compatibility (no-op); correct under long allocating loops, loud 'out of memory' under a 4 MiB cap"
 
 # ---------------------------------------------------------------------------
 # test-stage2-demos: the three Stage-2 contract demos in selfhost/ are
