@@ -1,25 +1,3 @@
-cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
-cmp selfhost/seed_tests/sxpkg/sx.toml-want selfhost/seed_tests/sxpkg/sx.toml
-cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.1.0
-sxpkg: locked math 0.1.0
-cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.2.0
-sxpkg: locked math 0.2.0
-cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add strings
-sxpkg: locked strings 0.1.0
-cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
-cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg remove math
-sxpkg: removed math
-cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
-cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init >/dev/null
-cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
-[OK] Sayanox package tool: init/add/update/list/remove
-selfhost/gen2 tools/sayanox_lsp.sa tools/sayanox_lsp.c
-cc -O2 -o tools/sayanox_lsp tools/sayanox_lsp.c
-[OK] Sayanox LSP: live JSON-RPC session, real diagnostics, symbols, completion, hover, definition
-./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
-cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
-[OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded
-make[1]: Leaving directory '/home/user/sayanox'
 make[1]: Entering directory '/home/user/sayanox'
 ./selfhost/gen2 selfhost/compiler_boot.sa selfhost/boot_from_gen2.c >/dev/null
 cc -O2 -o selfhost/boot_from_gen2 selfhost/boot_from_gen2.c

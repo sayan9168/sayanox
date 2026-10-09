@@ -1,16 +1,3 @@
-Sayanox minimal toolchain check
---------------------------------
-make            OK   /usr/bin/make
-C99 compiler    OK   /usr/bin/cc
-POSIX shell     OK   /usr/bin/sh
-grep            OK   /usr/bin/grep
-cmp             OK   /usr/bin/cmp
-mkdir           OK   /usr/bin/mkdir
-base64          OK   /usr/bin/base64 (optional)
-gzip            OK   /usr/bin/gzip (optional)
-cat/tr/rm       OK   /usr/bin/cat, /usr/bin/tr, /usr/bin/rm (optional)
---------------------------------
-python          present, but NOT used anywhere on the bootstrap path
 node/ruby       present, but NOT used anywhere on the bootstrap path
 --------------------------------
 DOCTOR-OK: minimal tool set is complete

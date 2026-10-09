@@ -1,1 +1,144 @@
-make str_is_empty(s) { when len(s) == 0 { give 1 } give 0 }
+// stdlib/str_util.sa -- string helpers.
+//
+// gen2 only.  These functions take and return `str`, and typed parameters
+// (`make s_len(s: str) -> num`) are a full-language feature: seed-min refuses
+// the file by design, and native_aot rejects it with a clear
+// `make s_len: bad param list` diagnostic rather than miscompiling it.  So
+// `use "stdlib/str_util.sa"` is for gen2-compiled programs; the numeric
+// helpers in `stdlib/tiny.sa` are the portable ones.
+//
+// Two rules shape the code below, both forced by the gen2 emitter today:
+//   * one statement per line -- `when x { give y }` on a single line is not
+//     parsed, so every block is written out;
+//   * a helper must be defined before it is called, because a user function
+//     that returns `str` gets no forward prototype in the C output.
+
+make s_len(s: str) -> num {
+  give len(s)
+}
+
+make s_at(s: str, i: num) -> num {
+  give sx_index(s, i)
+}
+
+make s_join(a: str, b: str) -> str {
+  give concat(a, b)
+}
+
+make s_prefix(s: str, n: num) -> str {
+  hold r = ""
+  hold i = 0
+  while i < n {
+    when i < len(s) {
+      hold c = sx_index(s, i)
+      hold r = concat(r, chr(c))
+    }
+    hold i = i + 1
+  }
+  give r
+}
+
+make s_suffix(s: str, n: num) -> str {
+  hold r = ""
+  hold i = 0
+  when n < len(s) {
+    hold i = len(s) - n
+  }
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    hold r = concat(r, chr(c))
+    hold i = i + 1
+  }
+  give r
+}
+
+make s_reverse(s: str) -> str {
+  hold r = ""
+  hold i = len(s) - 1
+  while i >= 0 {
+    hold c = sx_index(s, i)
+    hold r = concat(r, chr(c))
+    hold i = i - 1
+  }
+  give r
+}
+
+make s_repeat(s: str, n: num) -> str {
+  hold r = ""
+  hold i = 0
+  while i < n {
+    hold r = concat(r, s)
+    hold i = i + 1
+  }
+  give r
+}
+
+make s_count(s: str, c: num) -> num {
+  hold k = 0
+  hold i = 0
+  while i < len(s) {
+    hold d = sx_index(s, i)
+    when d == c {
+      hold k = k + 1
+    }
+    hold i = i + 1
+  }
+  give k
+}
+
+make s_contains(s: str, c: num) -> num {
+  when s_count(s, c) > 0 {
+    give 1
+  }
+  give 0
+}
+
+make s_eq(a: str, b: str) -> num {
+  give string_eq(a, b)
+}
+
+make s_upper(s: str) -> str {
+  hold r = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c >= 97 {
+      when c <= 122 {
+        hold c = c - 32
+      }
+    }
+    hold r = concat(r, chr(c))
+    hold i = i + 1
+  }
+  give r
+}
+
+make s_lower(s: str) -> str {
+  hold r = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c >= 65 {
+      when c <= 90 {
+        hold c = c + 32
+      }
+    }
+    hold r = concat(r, chr(c))
+    hold i = i + 1
+  }
+  give r
+}
+
+make s_starts(s: str, p: str) -> num {
+  when len(p) > len(s) {
+    give 0
+  }
+  give s_eq(s_prefix(s, len(p)), p)
+}
+
+make s_ends(s: str, p: str) -> num {
+  when len(p) > len(s) {
+    give 0
+  }
+  give s_eq(s_suffix(s, len(p)), p)
+}

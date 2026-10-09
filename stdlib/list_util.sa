@@ -1,1 +1,97 @@
-make list_is_empty(xs) { when len(xs) == 0 { give 1 } give 0 }
+// stdlib/list_util.sa -- list helpers.
+//
+// gen2 only, for the same reason as `str_util.sa`: a `list` parameter needs
+// the full-language typed parameter (`make l_sum(xs: list) -> num`), which
+// seed-min does not read and native_aot rejects with a clear diagnostic.
+//
+// One statement per line, and helpers defined before use -- see the note at
+// the top of `str_util.sa`.
+
+make l_len(xs: list) -> num {
+  give len(xs)
+}
+
+make l_get(xs: list, i: num) -> num {
+  // `give xs[i]` does not compile: the emitter only casts a list index to an
+  // integer when it appears in a `hold`, so bind it first.
+  hold v = xs[i]
+  give v
+}
+
+make l_sum(xs: list) -> num {
+  hold t = 0
+  hold i = 0
+  while i < len(xs) {
+    hold v = xs[i]
+    hold t = t + v
+    hold i = i + 1
+  }
+  give t
+}
+
+make l_max(xs: list) -> num {
+  hold m = xs[0]
+  hold i = 1
+  while i < len(xs) {
+    hold v = xs[i]
+    when v > m {
+      hold m = v
+    }
+    hold i = i + 1
+  }
+  give m
+}
+
+make l_min(xs: list) -> num {
+  hold m = xs[0]
+  hold i = 1
+  while i < len(xs) {
+    hold v = xs[i]
+    when v < m {
+      hold m = v
+    }
+    hold i = i + 1
+  }
+  give m
+}
+
+make l_count(xs: list, v: num) -> num {
+  hold k = 0
+  hold i = 0
+  while i < len(xs) {
+    hold d = xs[i]
+    when d == v {
+      hold k = k + 1
+    }
+    hold i = i + 1
+  }
+  give k
+}
+
+make l_contains(xs: list, v: num) -> num {
+  when l_count(xs, v) > 0 {
+    give 1
+  }
+  give 0
+}
+
+make l_reverse(xs: list) -> list {
+  hold r = []
+  hold i = len(xs) - 1
+  while i >= 0 {
+    hold v = xs[i]
+    push(r, v)
+    hold i = i - 1
+  }
+  give r
+}
+
+make l_range(n: num) -> list {
+  hold r = []
+  hold i = 0
+  while i < n {
+    push(r, i)
+    hold i = i + 1
+  }
+  give r
+}
