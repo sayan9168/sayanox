@@ -33,7 +33,7 @@ LSP_BIN  := tools/sayanox_lsp
         seed-bin doctor tools sxfmt test-sxfmt sxpkg test-sxpkg test-sxpkg-wrapper \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
-        test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos \
+        test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
         pack-compiler
 
 all: true-selfhost-min
@@ -1156,6 +1156,65 @@ test-builtin-names: $(GEN2) $(SEED_MIN_BIN)
 	@echo "[OK] builtin-word names: variables called index/len/arg stay variables, real builtin calls still map (seed-min == gen2)"
 
 # ---------------------------------------------------------------------------
+# test-stage2: the Stage-2 slice on gen2 beyond the string walk — the word
+# operators `and` / `or` / `not` with `not` binding looser than a comparison,
+# the boolean literals `true` / `false`, `for` over a list (a variable, a list
+# literal, a call returning a list or a string), nested loops, break/continue
+# in a list loop, `elif` chains and `and` inside a `while` condition.
+#
+# `and` / `or` short-circuit because they lower to C's && and ||: the two
+# `10 % 0` guards below would abort with `division by zero` if the right-hand
+# side were evaluated, so reaching the end of the program proves it.
+# ---------------------------------------------------------------------------
+test-stage2: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'make mkl() -> list {\n  hold r = [4, 5]\n  give r\n}\nmake mks() -> str {\n  give "pq"\n}\nmake isone(n: num) -> num {\n  when not n == 5 {\n    give 1\n  }\n  give 0\n}\nhold a = 1\nhold b = 0\nhold s = "hi"\nhold xs = [7, 8]\nhold ys = [1, 2]\nshow true\nshow false\nwhen a == 1 and b == 0 {\n  show 1\n}\nwhen a == 2 or b == 0 {\n  show 2\n}\nwhen not a == 2 and b == 0 {\n  show 3\n}\nwhen not a == 1 or b == 9 {\n  show 4\n}\nwhen not s == "no" {\n  show 5\n}\nwhen not (a == 2) {\n  show 6\n}\nwhen a == 2 and 10 %% 0 == 0 {\n  show 7\n}\nwhen a == 1 or 10 %% 0 == 0 {\n  show 8\n}\nshow isone(4)\nshow isone(5)\nfor v in xs {\n  show v\n}\nfor v in [3, 4] {\n  show v\n}\nfor c in "ab" {\n  show c\n}\nfor c in mks() {\n  show c\n}\nfor v in mkl() {\n  show v\n}\nfor p in xs {\n  for q in ys {\n    show p\n    show q\n  }\n}\nfor v in xs {\n  when v == 7 {\n    continue\n  }\n  show v\n}\nfor v in xs {\n  when v == 8 {\n    break\n  }\n  show v\n}\nhold k = 0\nwhen a == 9 {\n  hold k = 1\n} elif a == 1 {\n  hold k = 2\n} otherwise {\n  hold k = 3\n}\nshow k\nhold m = 0\nwhile m < 3 and a == 1 {\n  hold m = m + 1\n}\nshow m\n' > $(TESTS)/s2.sa
+	./$(GEN2) $(TESTS)/s2.sa $(TESTS)/s2.c >/dev/null
+	@if grep -q '#error' $(TESTS)/s2.c; then echo "[FAIL] stage2: #error in the output"; exit 1; fi
+	$(CC) -O2 -o $(TESTS)/s2 $(TESTS)/s2.c
+	$(call assert-out,./$(TESTS)/s2,1\n0\n1\n2\n3\n5\n6\n8\n1\n0\n7\n8\n3\n4\na\nb\np\nq\n4\n5\n7\n1\n7\n2\n8\n1\n8\n2\n8\n7\n2\n3)
+	@# `not` binds looser than a comparison: `not a == 2 and b == 0` is
+	@# `!(a == 2) && b == 0`, not C's `(!a) == 2 && b == 0`
+	@grep -q 'if (!(a == 2.0) && b == 0.0) {' $(TESTS)/s2.c
+	@grep -q 'if (!(sx_eq(s, "no") == 1.0)) {' $(TESTS)/s2.c
+	@grep -q 'if (!(a == 1.0) || b == 9.0) {' $(TESTS)/s2.c
+	@# `and` / `or` keep C precedence (&& binds tighter than ||) and short-circuit
+	@grep -q 'if (a == 1.0 && b == 0.0) {' $(TESTS)/s2.c
+	@grep -q 'if (a == 2.0 || b == 0.0) {' $(TESTS)/s2.c
+	@grep -q 'while (m < 3.0 && a == 1.0) {' $(TESTS)/s2.c
+	@# `for v in [3, 4]`: the list literal is bound to a hidden variable first
+	@grep -q 'sx_list \*__sx_fv' $(TESTS)/s2.c
+	@grep -q 'for (double __sx_ix = 0.0; __sx_ix < sx_llen(__sx_fv' $(TESTS)/s2.c
+	@# `for c in "ab"` and `for c in mks()`: a string source, byte by byte
+	@grep -q 'c = sx_chr(sx_idx(__sx_fv' $(TESTS)/s2.c
+	@# every call must see a prototype
+	@$(CC) -O2 -Wall -o $(TESTS)/s2-w $(TESTS)/s2.c 2>$(TESTS)/s2.warn
+	@if grep -q 'implicit declaration' $(TESTS)/s2.warn; then echo "[FAIL] stage2: a call without a prototype"; exit 1; fi
+	@# the same program through the seed-built compiler must agree byte for byte
+	./$(GEN1_MIN) $(TESTS)/s2.sa $(TESTS)/s2_g1.c >/dev/null
+	@diff $(TESTS)/s2.c $(TESTS)/s2_g1.c >/dev/null || { echo "[FAIL] stage2: gen1_min output differs"; exit 1; }
+	$(CC) -O2 -o $(TESTS)/s2_g1 $(TESTS)/s2_g1.c
+	$(call assert-out,./$(TESTS)/s2_g1,1\n0\n1\n2\n3\n5\n6\n8\n1\n0\n7\n8\n3\n4\na\nb\np\nq\n4\n5\n7\n1\n7\n2\n8\n1\n8\n2\n8\n7\n2\n3)
+	@# seed-min is the pure-min dialect: it must refuse every Stage-2 form here
+	@if ./$(SEED_MIN_BIN) $(TESTS)/s2.sa >/dev/null 2>&1; then \
+	  echo "[FAIL] seed-min accepted the Stage-2 program"; exit 1; fi
+	@# native names the forms it does not have instead of miscompiling them
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  printf 'hold xs = [1, 2]\nfor v in xs {\n  show v\n}\n' > $(TESTS)/s2_for.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_for.sa $(TESTS)/s2_for 2>&1 | grep -q "'for' is a full-language statement" || { echo "[FAIL] native did not name the for statement"; exit 1; }; \
+	  printf 'hold a = 1\nhold b = 0\nwhen a == 1 and b == 0 {\n  show 1\n}\n' > $(TESTS)/s2_and.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_and.sa $(TESTS)/s2_and 2>&1 | grep -q "'and' is a full-language word operator" || { echo "[FAIL] native did not name the and operator"; exit 1; }; \
+	  printf 'hold a = 1\nwhen not (a == 2) {\n  show 1\n}\n' > $(TESTS)/s2_not.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_not.sa $(TESTS)/s2_not 2>&1 | grep -q "'not' is a full-language word operator" || { echo "[FAIL] native did not name the not operator"; exit 1; }; \
+	  printf 'show true\n' > $(TESTS)/s2_true.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_true.sa $(TESTS)/s2_true 2>&1 | grep -q "'true' is a full-language word operator" || { echo "[FAIL] native did not name the true literal"; exit 1; }; \
+	  echo "  native names for/and/not/true by name"; \
+	else \
+	  echo "[stage2] native rejection: skipped (native_aot is not built here)"; \
+	fi
+	@echo "[OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names the forms"
+
+# ---------------------------------------------------------------------------
 # test-for-str: the one Stage-2 language slice added on gen2 (2026-10-08).
 #
 #     hold s = "abc"
@@ -1415,7 +1474,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -1615,7 +1674,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
 	@echo "[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
-	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-for-str
+	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
 	@echo "=== NATIVE-TEST-OK ==="
 

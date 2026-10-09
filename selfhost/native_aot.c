@@ -275,6 +275,23 @@ static size_t d_str(const char*s){ size_t n=strlen(s); size_t at=d_alloc(n+1); m
 
 /* ---------------- text utilities ---------------- */
 static void sw(const char**p){ while(**p&&isspace((unsigned char)**p)) (*p)++; }
+
+/* The gen2-only word operators and boolean literals.  A native condition
+   stops after one comparison, so `a == 1 and b == 2` used to die as
+   "when needs { ... }"; name the operator instead. */
+static const char* wordop_at(const char*p){
+  while(*p&&isspace((unsigned char)*p)) p++;
+  static const char*ops[]={"and","or","not","true","false",0};
+  for(int i=0;ops[i];i++){
+    size_t L=strlen(ops[i]);
+    if(!strncmp(p,ops[i],L)){
+      unsigned char c=(unsigned char)p[L];
+      if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'))
+        return ops[i];
+    }
+  }
+  return 0;
+}
 static int id0(char c){ return isalpha((unsigned char)c)||c=='_'; }
 static int idc(char c){ return isalnum((unsigned char)c)||c=='_'; }
 /* gen2-only full-language statements: name them and stop, at every pass.
@@ -733,6 +750,11 @@ static int pk_prim(const char**p,int depth){
         return K_NUM;
       }
     }
+    /* gen2-only word operators and boolean literals: name them instead of
+       dying as "undefined variable 'not'" / "when needs { ... }" */
+    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not")||
+       !strcmp(n,"true")||!strcmp(n,"false"))
+      errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",n,NULL);
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
     int k=G[gi].kind;
@@ -1159,6 +1181,11 @@ static void emit_prim(const char**p,int depth){
         return;
       }
     }
+    /* gen2-only word operators and boolean literals: name them instead of
+       dying as "undefined variable 'not'" / "when needs { ... }" */
+    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not")||
+       !strcmp(n,"true")||!strcmp(n,"false"))
+      errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",n,NULL);
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
     if(G[gi].kind==K_UNK) errx("undefined variable '%s' (hold it first)",n,NULL);
@@ -1627,6 +1654,8 @@ static void emit_prog(const char**p,int in_fn,int stop){
     }
     if(mkw(p,"when")){
       emit_expr(p,0);
+      { const char*wo=wordop_at(*p);
+        if(wo) errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",wo,NULL); }
       if(XK==K_UNK) errx("cannot infer the type of the condition");
       if(XK!=K_NUM) errx("when condition must be a number (got %s)",kname(XK));
       bin_rr(1,AX,AX);             /* add rax,rax: ZF iff the double is +-0.0 */
@@ -1659,6 +1688,8 @@ static void emit_prog(const char**p,int in_fn,int stop){
     if(mkw(p,"while")){
       size_t top=cn;
       emit_expr(p,0);
+      { const char*wo=wordop_at(*p);
+        if(wo) errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",wo,NULL); }
       if(XK==K_UNK) errx("cannot infer the type of the condition");
       if(XK!=K_NUM) errx("while condition must be a number (got %s)",kname(XK));
       bin_rr(1,AX,AX);             /* add rax,rax: ZF iff the double is +-0.0 */

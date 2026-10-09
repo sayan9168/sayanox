@@ -152,6 +152,69 @@ dialect do not read `make NAME<...>` at all, and native rejects it with
 `generics are not in the native subset`. See `make test-generics` and
 [`GENERICS.md`](GENERICS.md).
 
+## Full-language extras (`gen2` only)
+
+The reference above is the **pure-min dialect**, which seed-min, gen2 and
+native all accept. gen2 additionally accepts the following forms. seed-min
+reports `unknown statement` for them and native names the one it does not
+have (`'for' is a full-language statement ...`, `'and' is a full-language
+word operator or boolean literal ...`), so nothing is ever mis-compiled.
+
+### Loops over values
+
+```sayanox
+hold xs = [1, 2, 3]
+for v in xs {          // one iteration per element, v is a number
+  show v
+}
+for v in [4, 5] {      // a list literal, a call, ...: any expression
+  show v               // `hold` accepts, bound to a hidden variable first
+}
+hold s = "abc"
+for c in s {           // one iteration per byte, c is a one-character string
+  show c
+}
+for c in "xy" {
+  show c
+}
+for i in 0..10 {       // the counting form: 10 iterations
+  show i
+}
+```
+
+`break` and `continue` work in every loop, and loops nest. The form is
+`for NAME in EXPR {`; `NAME` must not already be a number, a string or a
+list, except that a string loop may rebind a name that is already a string.
+
+### Word operators and boolean literals
+
+```sayanox
+when a == 1 and b == 0 {   // &&  - short-circuits
+when a == 2 or b == 9 {    // ||  - short-circuits
+when not a == 2 {          // !(a == 2): `not` binds looser than a comparison
+when not (a == 2) and b == 0 {
+hold flag = true           // 1
+hold off = false           // 0
+```
+
+`and` binds tighter than `or`, as in C. `not` takes the rest of the
+comparison up to the next `and` / `or`, so `not a == 2 and b == 0` is
+`!(a == 2) && b == 0` — **not** C's `(!a) == 2 && b == 0`. Because `and` and
+`or` lower to `&&` and `||`, the right-hand side is not evaluated when the
+left-hand side already decides the result.
+
+### Condition chains
+
+```sayanox
+when n == 1 {
+  show "one"
+} elif n == 2 {          // `else if`, `else when`, `otherwise when` too
+  show "two"
+} otherwise {
+  show "many"
+}
+```
+
 ## Modules and files
 
 ```sayanox
