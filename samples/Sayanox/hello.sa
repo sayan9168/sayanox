@@ -1,0 +1,30 @@
+// hello.sa -- a command-line greeting.
+//
+// Pure-min dialect: seed-min, gen2 and native_aot all accept it.
+//
+//   hello               ->  hello, world
+//   hello Ada Grace     ->  hello, Ada Grace
+//
+// `arg_count()` is argc and `arg(i)` is argv[i], so argv[0] is the program
+// itself and the real arguments start at index 1.  `show` prints one
+// expression per statement and strings are built with `concat`, never with
+// `string + number`, which every backend rejects.
+
+hold count = arg_count()
+hold greet = "hello"
+
+when count > 1 {
+  hold name = arg(1)
+  hold i = 2
+  while i < count {
+    hold name = concat(concat(name, " "), arg(i))
+    hold i = i + 1
+  }
+  show concat(concat(greet, ", "), name)
+} otherwise {
+  show concat(greet, ", world")
+}
+
+// A number is formatted by `show` itself; building one into a string needs
+// the gen2 builtin `numstr`, so portable code prints it on its own line.
+show count - 1

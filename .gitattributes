@@ -1,0 +1,102 @@
+# .gitattributes -- GitHub Linguist hints for sayan9168/sayanox
+#
+# What this file can and cannot do
+# ---------------------------------
+# Sayanox is NOT yet a language in github-linguist's languages.yml and `.sa` is
+# not claimed by any entry there (verified against lib/linguist/languages.yml).
+# A repository-local .gitattributes cannot register a new language, so until an
+# upstream entry is merged the language bar will keep showing C / Makefile /
+# Shell. The two `*.sa` rules below are inert today and become effective the
+# moment Linguist learns the language -- `linguist-language=Sayanox` resolves to
+# nothing while "Sayanox" is unknown to Linguist, and is simply ignored.
+#
+# `*.sa` is deliberately NOT mapped to Python, C, Rust, SAS or any other
+# existing language: that would inflate the statistics by mislabelling the
+# repository's 173 Sayanox source files as something they are not.
+#
+# The rest of this file marks machine-generated artifacts as generated, so they
+# are excluded from language statistics, from diffs and from blame.
+#
+# See docs/LINGUIST.md for the upstream contribution plan and
+# docs/GITHUB_LANGUAGE.md for the current state.
+
+# ---------------------------------------------------------------------------
+# Sayanox source
+# ---------------------------------------------------------------------------
+*.sa linguist-detectable=true
+*.sa linguist-language=Sayanox
+
+# ---------------------------------------------------------------------------
+# Generated artifacts: base64 chunks of the gzipped bootstrap compiler
+# ---------------------------------------------------------------------------
+# 155 fixed-width .b64 chunk files, plus the split-part variants of
+# selfhost/compiler_min.sa.gz.b64 (.p0 ... .p3).
+*.b64 linguist-generated=true
+*.b64.p[0-9] linguist-generated=true
+
+# Whole directories that hold nothing but chunked base64 / text fragments of
+# selfhost sources. The hand-written README.md files inside some of them are
+# un-marked again by the rule at the bottom of this file.
+selfhost/compiler_min_gz/** linguist-generated=true
+selfhost/native_src/** linguist-generated=true
+selfhost/stage2_src/** linguist-generated=true
+selfhost/sxc_full_b64/** linguist-generated=true
+selfhost/sxc_full_b64_plain/** linguist-generated=true
+selfhost/sxc_full_lines/** linguist-generated=true
+selfhost/sxc_sa_parts/** linguist-generated=true
+
+# Other split-fragment suffixes produced by the bootstrap packing scripts.
+*.part linguist-generated=true
+*.cpart linguist-generated=true
+*.hex linguist-generated=true
+
+# ---------------------------------------------------------------------------
+# Generated artifacts: build and test logs
+# ---------------------------------------------------------------------------
+docs/logs/** linguist-generated=true
+*.log linguist-generated=true
+
+# ---------------------------------------------------------------------------
+# Generated artifacts: C emitted by the self-hosting compilers
+# ---------------------------------------------------------------------------
+# Every one of these is produced by `make` and is already listed in .gitignore;
+# the rules are here so that a stray commit, or a future tracking change, cannot
+# quietly turn generated C into the largest language in the repository.
+#
+# gen1.c / gen1_min.c / gen2.c / gen3.c / gen4.c are compiler output, as are the
+# boot* C files and the scratch programs the Makefile writes.
+selfhost/gen*.c linguist-generated=true
+selfhost/boot.c linguist-generated=true
+selfhost/boot2.c linguist-generated=true
+selfhost/boot_from_gen2.c linguist-generated=true
+selfhost/_smoke.c linguist-generated=true
+selfhost/_out.c linguist-generated=true
+selfhost/mini_out.c linguist-generated=true
+selfhost/hello_out.c linguist-generated=true
+selfhost/compiler_min.sa.tmp linguist-generated=true
+
+# C generated from the Sayanox-written tools.
+tools/sxfmt.c linguist-generated=true
+tools/sxpkg.c linguist-generated=true
+tools/sayanox_lsp.c linguist-generated=true
+
+# ---------------------------------------------------------------------------
+# Explicitly NOT generated: hand-written C that stays in the statistics
+# ---------------------------------------------------------------------------
+# selfhost/seed/sxc_seed.c, selfhost/seed/sxc_seed_min.c (the C bootstrap seed),
+# selfhost/native_aot.c (the x86-64 native AOT backend), selfhost/sxc_full.c,
+# selfhost/sxc_full_minimal.c, selfhost/stage2_template.c,
+# selfhost/stage2_expand.inc, selfhost/build_stage2.c, selfhost/sx_driver.c,
+# selfhost/sx_launcher.c, selfhost/inject_*.c, selfhost/fixup_emit.c,
+# selfhost/prove_*.c, selfhost/rc_runtime_stress.c and the two headers are all
+# written by hand and are intentionally left visible as C.
+selfhost/seed/sxc_seed.c -linguist-generated
+selfhost/seed/sxc_seed_min.c -linguist-generated
+selfhost/native_aot.c -linguist-generated
+
+# ---------------------------------------------------------------------------
+# Hand-written documentation is never an artifact, wherever it lives
+# ---------------------------------------------------------------------------
+# native_src, stage2_src and sxc_full_b64_plain each ship a hand-written
+# README.md next to their chunk files; those stay visible as documentation.
+**/README.md -linguist-generated

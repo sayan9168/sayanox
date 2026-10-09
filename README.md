@@ -110,10 +110,30 @@ The formatter currently handles whitespace. The package tool supports local `ini
 
 ---
 
-## GitHub Language Detection
+## Language on GitHub
 
-Sayanox uses the `.sa` extension. GitHub Linguist does not yet have a built-in mapping for it, so the repository may show as C.  
-See [docs/GITHUB_LANGUAGE.md](docs/GITHUB_LANGUAGE.md) for the upstream process.
+The badge above says **Language: Sayanox** because that is what the source is.
+GitHub's own language bar may still say **C**, and that is expected.
+
+Sayanox uses the `.sa` extension, which is not yet registered in
+[github-linguist](https://github.com/github-linguist/linguist)'s
+`languages.yml`. Linguist only counts languages it knows, so the 173 `.sa`
+files — about 758 KB, roughly 65% of this repository's source — contribute
+nothing to the bar today, and what is left is the hand-written C seed, the
+`Makefile` and the shell scripts. A `.gitattributes` cannot register a new
+language; only an upstream Linguist change can, so **the bar will keep showing
+C until that change is merged**.
+
+`.sa` is deliberately not mapped to Python, C or any other existing language to
+make the statistics look better — that would mislabel the source.
+
+Everything needed for the upstream contribution is prepared in this repository:
+`.gitattributes`, `samples/Sayanox/`, `grammars/sayanox.tmLanguage.json`, the
+exact `languages.yml` snippet, a PR checklist and draft PR text. See
+**[docs/LINGUIST.md](docs/LINGUIST.md)** — including the honest assessment of
+why the pull request has not been opened yet (Linguist requires demonstrated
+in-the-wild usage of an extension). [docs/GITHUB_LANGUAGE.md](docs/GITHUB_LANGUAGE.md)
+has the short version.
 
 ---
 
