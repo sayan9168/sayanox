@@ -162,7 +162,7 @@ cc -O2 -o selfhost/gen2 selfhost/gen2.c
 cc -O2 -o selfhost/seed_tests/stage2_lexer_sm selfhost/seed_tests/stage2_lexer_sm.c
 ./selfhost/gen2 selfhost/minimal_lexer.sa selfhost/seed_tests/stage2_lexer_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/stage2_lexer_g2 selfhost/seed_tests/stage2_lexer_g2.c
-[stage2] native lexer: stdout identical to seed-min/gen2
+[stage2] native lexer: skipped (native_aot is not built here)
 ./selfhost/seed/sxc_seed_min selfhost/stage2_functions.sa > selfhost/seed_tests/stage2_fn_sm.c
 cc -O2 -o selfhost/seed_tests/stage2_fn_sm selfhost/seed_tests/stage2_fn_sm.c
 ./selfhost/gen2 selfhost/stage2_functions.sa selfhost/seed_tests/stage2_fn_g2.c >/dev/null
@@ -176,7 +176,7 @@ cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
 cc -O2 -o selfhost/seed_tests/s2 selfhost/seed_tests/s2.c
 ./selfhost/gen1_min selfhost/seed_tests/s2.sa selfhost/seed_tests/s2_g1.c >/dev/null
 cc -O2 -o selfhost/seed_tests/s2_g1 selfhost/seed_tests/s2_g1.c
-  native names for/and/not/true by name
+[stage2] native rejection: skipped (native_aot is not built here)
 [OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names the forms
 ./selfhost/gen2 selfhost/seed_tests/fs_vowels.sa selfhost/seed_tests/fs_vowels.c >/dev/null
 cc -O2 -o selfhost/seed_tests/fs_vowels selfhost/seed_tests/fs_vowels.c
@@ -189,7 +189,7 @@ cc -O2 -o selfhost/seed_tests/fs_bytes selfhost/seed_tests/fs_bytes.c
 ./selfhost/gen2 selfhost/seed_tests/fs_num.sa selfhost/seed_tests/fs_num.c >/dev/null 2>&1 || true
 ./selfhost/gen2 selfhost/seed_tests/fs_clash.sa selfhost/seed_tests/fs_clash.c >/dev/null 2>&1 || true
 ./selfhost/gen2 selfhost/seed_tests/fs_listclash.sa selfhost/seed_tests/fs_listclash.c >/dev/null 2>&1 || true
-[stage2] native rejects for/break/continue by name
+[stage2] native rejection: skipped (native_aot is not built here)
 ./selfhost/gen2 selfhost/seed_tests/fs_pair.sa selfhost/seed_tests/fs_pair.c >/dev/null 2>&1 || true
 [OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name
 ./selfhost/gen2 selfhost/seed_tests/gg_len.sa selfhost/seed_tests/gg_len.c >/dev/null
@@ -202,7 +202,6 @@ cc -O2 -o selfhost/seed_tests/gg_streq selfhost/seed_tests/gg_streq.c
 cc -O2 -o selfhost/seed_tests/gg_pct selfhost/seed_tests/gg_pct.c
 ./selfhost/gen2 selfhost/seed_tests/gg_ord.sa selfhost/seed_tests/gg_ord.c >/dev/null
 cc -O2 -o selfhost/seed_tests/gg_ord selfhost/seed_tests/gg_ord.c
-[gen2-gaps] native rejects the chain forms
 [OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native refuse the chains
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/std_t.sa > selfhost/seed_tests/std_sm.c
 cc -O2 -o selfhost/seed_tests/std_sm selfhost/seed_tests/std_sm.c
@@ -223,8 +222,13 @@ cd selfhost/seed_tests/pkgs-proj && ../../../tools/sxpkg add math 0.1.0 >/dev/nu
 cc -O2 -o selfhost/seed_tests/pkgs-proj/use_sm selfhost/seed_tests/pkgs-proj/use_sm.c
 ./selfhost/gen2 selfhost/seed_tests/pkgs-proj/use_math.sa selfhost/seed_tests/pkgs-proj/use_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/pkgs-proj/use_g2 selfhost/seed_tests/pkgs-proj/use_g2.c
+cmp selfhost/seed_tests/pkgs-deps/lock-want selfhost/seed_tests/pkgs-deps/sx.lock
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/pkgs-deps/use_calc.sa > selfhost/seed_tests/pkgs-deps/use_calc_sm.c
+cc -O2 -o selfhost/seed_tests/pkgs-deps/use_calc_sm selfhost/seed_tests/pkgs-deps/use_calc_sm.c
+./selfhost/gen2 selfhost/seed_tests/pkgs-deps/use_calc.sa selfhost/seed_tests/pkgs-deps/use_calc_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/pkgs-deps/use_calc_g2 selfhost/seed_tests/pkgs-deps/use_calc_g2.c
 cd selfhost/seed_tests/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
-[OK] offline packages: sxpkg seed writes .sayanox/registry (no network), use ".sayanox/registry/math/main.sa" runs the same on seed-min, gen2 (and native when built)
+[OK] offline packages: sxpkg seed writes .sayanox/registry (no network), deps= resolution pulls a package's dependencies into the lock, install-local copies them out of a local registry directory with their sums checked, and use ".sayanox/registry/<pkg>/main.sa" runs the same on seed-min, gen2 (and native when built)
   ok registry/hello sum=522968026
   ok registry/math sum=718013937
   ok registry/strings sum=120085778
@@ -267,7 +271,6 @@ cc -O2 -o tools/sayanox_lsp tools/sayanox_lsp.c
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded
-[OK] native GC: same program, same results as gen2 (native mark & sweep)
 make[1]: Leaving directory '/home/user/sayanox'
 make[1]: Entering directory '/home/user/sayanox'
 ./selfhost/gen2 selfhost/compiler_boot.sa selfhost/boot_from_gen2.c >/dev/null

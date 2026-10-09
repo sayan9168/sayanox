@@ -1121,6 +1121,36 @@ test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/pkgs-proj/use_g2 $(TESTS)/pkgs-proj/use_g2.c
 	@cd $(TESTS)/pkgs-proj && ./use_sm > use_sm.out && ./use_g2 > use_g2.out && cmp use_sm.out use_g2.out
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ./use_g2,42\n36)
+	@# offline dependency resolve + install: `calc` declares `deps=math@0.1.0`, so
+	@# locking it pulls math in too, and one `install` copies both out of the
+	@# repo's registry/ (a plain directory) with their versions and sums checked.
+	@rm -rf $(TESTS)/pkgs-deps
+	@mkdir -p $(TESTS)/pkgs-deps
+	@rm -rf $(TESTS)/pkgs-deps/registry
+	@cp -r registry $(TESTS)/pkgs-deps/registry
+	@mkdir -p $(TESTS)/pkgs-deps/.sayanox/registry
+	@cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) init >/dev/null
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) add calc 0.1.0,sxpkg: locked math 0.1.0 (dependency of calc)\nsxpkg: locked calc 0.1.0)
+	@printf '# sx.lock\nversion=1\ncalc=0.1.0\nmath=0.1.0\n' > $(TESTS)/pkgs-deps/lock-want
+	cmp $(TESTS)/pkgs-deps/lock-want $(TESTS)/pkgs-deps/sx.lock
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) deps,sxpkg: dependency closure\n  calc 0.1.0\n  math 0.1.0)
+	@# Sayanox has no mkdir, so a bare `install` says so instead of failing silently
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) install registry,sxpkg: MISSING calc: cannot write .sayanox/registry/calc/; run sh tools/sxpkg.sh install-local to create the folders\nsxpkg: MISSING math: cannot write .sayanox/registry/math/; run sh tools/sxpkg.sh install-local to create the folders\nsxpkg: install FAILED (2 problem(s)))
+	$(call assert-out,cd $(TESTS)/pkgs-deps && sh ../../../tools/sxpkg.sh install-local registry,sxpkg: installed calc 0.1.0\nsxpkg: installed math 0.1.0\nsxpkg: install ok)
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) verify,sxpkg: verified calc 0.1.0\nsxpkg: verified math 0.1.0\nsxpkg: verify ok (2 locked packages))
+	@# an installed package may `use` its dependency: calc uses math's dbl/sqr
+	@printf 'use ".sayanox/registry/calc/main.sa"\nshow dblsqr(3)\nshow sqr(5)\n' > $(TESTS)/pkgs-deps/use_calc.sa
+	./$(SEED_MIN_BIN) $(TESTS)/pkgs-deps/use_calc.sa > $(TESTS)/pkgs-deps/use_calc_sm.c
+	$(CC) -O2 -o $(TESTS)/pkgs-deps/use_calc_sm $(TESTS)/pkgs-deps/use_calc_sm.c
+	./$(GEN2) $(TESTS)/pkgs-deps/use_calc.sa $(TESTS)/pkgs-deps/use_calc_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/pkgs-deps/use_calc_g2 $(TESTS)/pkgs-deps/use_calc_g2.c
+	@cd $(TESTS)/pkgs-deps && ./use_calc_sm > uc_sm.out && ./use_calc_g2 > uc_g2.out && cmp uc_sm.out uc_g2.out
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ./use_calc_g2,36\n25)
+	@# a dependency the lock does not pin is an error, not a silent skip
+	@printf '# sx.lock\nversion=1\ncalc=0.1.0\n' > $(TESTS)/pkgs-deps/sx.lock
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) deps,sxpkg: DEP calc needs math@0.1.0 which is not in sx.lock; run: sxpkg add math 0.1.0)
+	@printf '# sx.lock\nversion=1\ncalc=0.1.0\nmath=0.2.0\n' > $(TESTS)/pkgs-deps/sx.lock
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) deps,sxpkg: DEP calc needs math@0.1.0 but sx.lock has 0.2.0)
 	@# offline integrity: the lock is checked against the registry copy (version + pkg.meta sum)
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages))
 	@printf 'make dbl(n) {\n  give n + n + 0\n}\n' > $(TESTS)/pkgs-proj/.sayanox/registry/math/main.sa
@@ -1132,7 +1162,7 @@ test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
 	  ./$(NATIVE_BIN) $(TESTS)/pkgs-proj/use_math.sa $(TESTS)/pkgs-proj/use_nat && \
 	  cd $(TESTS)/pkgs-proj && ./use_nat > use_nat.out && cmp use_sm.out use_nat.out || exit 1; \
 	fi
-	@echo "[OK] offline packages: sxpkg seed writes .sayanox/registry (no network), use \".sayanox/registry/math/main.sa\" runs the same on seed-min, gen2 (and native when built)"
+	@echo "[OK] offline packages: sxpkg seed writes .sayanox/registry (no network), deps= resolution pulls a package's dependencies into the lock, install-local copies them out of a local registry directory with their sums checked, and use \".sayanox/registry/<pkg>/main.sa\" runs the same on seed-min, gen2 (and native when built)"
 
 # ---------------------------------------------------------------------------
 # test-builtin-names: a builtin word only becomes a runtime function when it

@@ -129,6 +129,290 @@ make check_pkg(name: str, version: str) -> str {
   give ""
 }
 
+// ---- dependency resolution ----------------------------------------------
+// A dependency is written `name@version` in pkg.meta's `deps=` line, and the
+// version is an exact pin: there are no ranges.  Resolution walks sx.lock and
+// each package's `deps=`, offline, from the local registry copy only.
+//
+// Lists of specs are plain `|`-delimited strings, "a@1|b@2|": take_field reads
+// the first entry, drop_field removes it, has_field tests membership.
+
+// dep_name / dep_ver: the two halves of one `name@version` spec
+make dep_name(spec: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(spec) {
+    when sx_index(spec, i) == 64 {
+      give out
+    }
+    hold out = concat(out, chr(sx_index(spec, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+make dep_ver(spec: str) -> str {
+  hold i = 0
+  while i < len(spec) && sx_index(spec, i) != 64 {
+    hold i = i + 1
+  }
+  hold out = ""
+  hold j = i + 1
+  while j < len(spec) {
+    hold out = concat(out, chr(sx_index(spec, j)))
+    hold j = j + 1
+  }
+  give out
+}
+
+// take_field: the first `|`-delimited entry of a spec list
+make take_field(list: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(list) {
+    when sx_index(list, i) == 124 {
+      give out
+    }
+    hold out = concat(out, chr(sx_index(list, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// drop_field: the same list without its first entry
+make drop_field(list: str) -> str {
+  hold i = 0
+  while i < len(list) {
+    when sx_index(list, i) == 124 {
+      hold out = ""
+      hold j = i + 1
+      while j < len(list) {
+        hold out = concat(out, chr(sx_index(list, j)))
+        hold j = j + 1
+      }
+      give out
+    }
+    hold i = i + 1
+  }
+  give ""
+}
+
+// has_field: 1 when the spec list already contains this exact entry
+make has_field(list: str, x: str) -> num {
+  hold n = len(list)
+  hold m = len(x)
+  hold i = 0
+  while i + m + 1 <= n {
+    hold ok = 1
+    when i > 0 {
+      when sx_index(list, i - 1) != 124 {
+        hold ok = 0
+      }
+    }
+    when ok == 1 {
+      hold j = 0
+      while j < m {
+        when sx_index(list, i + j) != sx_index(x, j) {
+          hold ok = 0
+          hold j = m
+        } otherwise {
+          hold j = j + 1
+        }
+      }
+      when ok == 1 {
+        when sx_index(list, i + m) == 124 {
+          give 1
+        }
+      }
+    }
+    hold i = i + 1
+  }
+  give 0
+}
+
+// split_deps: the `deps=` value "a@1,b@2" as a spec list "a@1|b@2|"
+make split_deps(text: str) -> str {
+  hold out = ""
+  hold n = len(text)
+  hold cur = ""
+  hold i = 0
+  while i <= n {
+    hold c = 0
+    when i < n {
+      hold c = sx_index(text, i)
+    }
+    when c == 44 || i == n {
+      when len(cur) > 0 {
+        hold out = concat(out, concat(cur, "|"))
+      }
+      hold cur = ""
+    } otherwise {
+      hold cur = concat(cur, chr(c))
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// meta_deps: a pkg.meta's dependencies as a spec list ("" when it has none)
+make meta_deps(meta: str) -> str {
+  give split_deps(pkgfield(meta, "deps"))
+}
+
+// lock_ver: the version sx.lock pins NAME to, "" when it is not locked
+make lock_ver(lock: str, lock_len: num, want: str) -> str {
+  hold p = 0
+  hold lline = ""
+  while p < lock_len {
+    hold c = sx_index(lock, p)
+    when c == 10 {
+      hold k = line_key(lline)
+      when string_eq(k, want) == 1 {
+        give line_val(lline)
+      }
+      hold lline = ""
+    } otherwise {
+      hold lline = concat(lline, chr(c))
+    }
+    hold p = p + 1
+  }
+  give ""
+}
+
+// lock_specs: the locked packages as a spec list "name@version|..."
+make lock_specs(lock: str, lock_len: num) -> str {
+  hold out = ""
+  hold p = 0
+  hold lline = ""
+  while p < lock_len {
+    hold c = sx_index(lock, p)
+    when c == 10 {
+      hold k = line_key(lline)
+      hold v = line_val(lline)
+      hold skip = 0
+      when len(k) == 0 {
+        hold skip = 1
+      }
+      when len(lline) == len(k) {
+        hold skip = 1
+      }
+      when string_eq(k, "version") == 1 {
+        hold skip = 1
+      }
+      when string_eq(k, "name") == 1 {
+        hold skip = 1
+      }
+      when len(lline) > 0 {
+        when sx_index(lline, 0) == 35 {
+          hold skip = 1
+        }
+      }
+      when skip == 0 {
+        hold out = concat(out, concat(k, concat("@", concat(v, "|"))))
+      }
+      hold lline = ""
+    } otherwise {
+      hold lline = concat(lline, chr(c))
+    }
+    hold p = p + 1
+  }
+  give out
+}
+
+// tail1: everything after the first byte (used to drop the "!" error marker)
+make tail1(s: str) -> str {
+  hold out = ""
+  hold i = 1
+  while i < len(s) {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// read_meta: a package's pkg.meta from the project's registry copy, falling
+// back to the source registry directory.  A separate function because an
+// inner `hold` would shadow the outer one instead of replacing it.
+make read_meta(nm: str, src: str) -> str {
+  hold meta = read_file(concat(".sayanox/registry/", concat(nm, "/pkg.meta")))
+  when len(meta) == 0 && len(src) > 0 {
+    give read_file(concat(concat(src, "/"), concat(nm, "/pkg.meta")))
+  }
+  give meta
+}
+
+// discover: NAME@VERSION plus every package its (and their) `deps=` lines
+// declare, read from the project's registry copy or the source registry.
+// A package whose pkg.meta is nowhere to be found is returned on its own:
+// it has not been installed yet, so its dependencies are still unknown.
+make discover(spec: str, src: str) -> str {
+  hold nm = dep_name(spec)
+  hold meta = read_meta(nm, src)
+  hold out = concat(spec, "|")
+  when len(meta) > 0 {
+    hold dl = meta_deps(meta)
+    while len(dl) > 0 {
+      hold d = take_field(dl)
+      hold dl = drop_field(dl)
+      when has_field(out, d) == 0 {
+        hold sub = discover(d, src)
+        hold sl = sub
+        while len(sl) > 0 {
+          hold one = take_field(sl)
+          hold sl = drop_field(sl)
+          when has_field(out, one) == 0 {
+            hold out = concat(out, concat(one, "|"))
+          }
+        }
+      }
+    }
+  }
+  give out
+}
+
+// resolve: the transitive dependency closure of the locked packages.
+// Gives a spec list "name@version|..." on success, or "!" + the reason it
+// could not be resolved.  Every step reads the local registry copy only.
+make resolve(lock: str, src: str, lock_len: num) -> str {
+  hold out = ""
+  hold queue = lock_specs(lock, lock_len)
+  hold guard = 0
+  while len(queue) > 0 && guard < 64 {
+    hold spec = take_field(queue)
+    hold queue = drop_field(queue)
+    hold guard = guard + 1
+    when has_field(out, spec) == 0 {
+      hold out = concat(out, concat(spec, "|"))
+      hold nm = dep_name(spec)
+      hold vr = dep_ver(spec)
+      hold meta = read_meta(nm, src)
+      when len(meta) == 0 {
+        give concat("!", concat(nm, " has no registry copy; run: sxpkg install"))
+      }
+      hold mver = pkgfield(meta, "version")
+      when string_eq(mver, vr) == 0 {
+        give concat("!", concat(nm, concat(" is wanted at ", concat(vr, concat(" but the registry has ", mver)))))
+      }
+      hold dl = meta_deps(meta)
+      while len(dl) > 0 {
+        hold d = take_field(dl)
+        hold dl = drop_field(dl)
+        hold dn = dep_name(d)
+        hold dv = dep_ver(d)
+        hold lv = lock_ver(lock, lock_len, dn)
+        when len(lv) == 0 {
+          give concat("!", concat(nm, concat(" needs ", concat(dn, concat("@", concat(dv, concat(" which is not in sx.lock; run: sxpkg add ", concat(dn, concat(" ", dv)))))))))
+        }
+        when string_eq(lv, dv) == 0 {
+          give concat("!", concat(nm, concat(" needs ", concat(dn, concat("@", concat(dv, concat(" but sx.lock has ", lv)))))))
+        }
+        hold queue = concat(queue, concat(d, "|"))
+      }
+    }
+  }
+  give out
+}
+
 hold argn = arg_count()
 hold command = "help"
 hold name = ""
@@ -155,6 +439,9 @@ hold is_info = string_eq(command, "info")
 hold is_seed = string_eq(command, "seed")
 hold is_verify = string_eq(command, "verify")
 hold is_sum = string_eq(command, "sum")
+hold is_deps = string_eq(command, "deps")
+hold is_install = string_eq(command, "install")
+hold src = "registry"
 hold query = ""
 when argn >= 3 {
   hold query = arg(2)
@@ -205,6 +492,34 @@ hold reserved = 0
 hold last_byte = 0
 hold write_status = 0
 hold all_ok = 1
+// dependency / install state: declared here because the maintained
+// compiler emits C blocks for when/while scopes.
+hold vres = ""
+hold vrest = ""
+hold vspec = ""
+hold vdn = ""
+hold vdv = ""
+hold vdlv = ""
+hold vwhy = ""
+hold ddres = ""
+hold ddrest = ""
+hold ddspec = ""
+hold ddout = ""
+hold ddn = 0
+hold dires = ""
+hold direst = ""
+hold dispec = ""
+hold diproblems = 0
+hold dinm = ""
+hold divr = ""
+hold diwhy = ""
+hold dismeta = ""
+hold disver = ""
+hold dissa = ""
+hold diswant = ""
+hold disgot = ""
+hold diw1 = 0
+hold diw2 = 0
 
 when is_init == 1 {
   hold handled = 1
@@ -306,6 +621,22 @@ when is_add == 1 {
       }
       when replaced == 0 {
         hold result = concat(result, concat(concat(name, "="), concat(version, "\n")))
+      }
+      // pull in what the package declares in `deps=`, transitively, so
+      // `deps` and `install` see a complete set.  Packages that are not
+      // installed or present anywhere yet contribute nothing here.
+      hold dlist = discover(concat(name, concat("@", version)), src)
+      hold drest = dlist
+      while len(drest) > 0 {
+        hold done = take_field(drest)
+        hold drest = drop_field(drest)
+        hold adn = dep_name(done)
+        hold adv = dep_ver(done)
+        hold alv = lock_ver(result, len(result), adn)
+        when len(alv) == 0 {
+          hold result = concat(result, concat(adn, concat("=", concat(adv, "\n"))))
+          show concat(concat("sxpkg: locked ", concat(adn, concat(" ", adv))), concat(" (dependency of ", concat(name, ")")))
+        }
       }
       hold write_status = write_file(lock_path, result)
       when write_status == 1 {
@@ -640,6 +971,35 @@ when is_verify == 1 {
       }
       hold pos = pos + 1
     }
+    // the dependency closure: every package a locked package declares in
+    // `deps=` must itself be present, and only the ones pulled in
+    // transitively (not already counted above) are reported here.
+    hold vres = resolve(lock, "", lock_len)
+    when len(vres) > 0 {
+      when sx_index(vres, 0) == 33 {
+        hold problems = problems + 1
+        show concat("sxpkg: DEP ", tail1(vres))
+      } otherwise {
+        hold vrest = vres
+        while len(vrest) > 0 {
+          hold vspec = take_field(vrest)
+          hold vrest = drop_field(vrest)
+          hold vdn = dep_name(vspec)
+          hold vdv = dep_ver(vspec)
+          hold vdlv = lock_ver(lock, lock_len, vdn)
+          when len(vdlv) == 0 {
+            hold checked = checked + 1
+            hold vwhy = check_pkg(vdn, vdv)
+            when len(vwhy) == 0 {
+              show concat("sxpkg: verified ", concat(vdn, concat(" ", vdv)))
+            } otherwise {
+              hold problems = problems + 1
+              show concat("sxpkg: MISMATCH ", concat(vdn, concat(": ", vwhy)))
+            }
+          }
+        }
+      }
+    }
     when problems == 0 {
       show concat("sxpkg: verify ok (", concat(numstr(checked), " locked packages)"))
     } otherwise {
@@ -648,7 +1008,116 @@ when is_verify == 1 {
   }
 }
 
+// deps: the transitive dependency closure of the locked packages, resolved
+// offline from the local registry copies.
+when is_deps == 1 {
+  hold handled = 1
+  hold lock = read_file(lock_path)
+  hold lock_len = len(lock)
+  when lock_len == 0 {
+    show "sxpkg: no sx.lock; run init first"
+  } otherwise {
+    hold last_byte = sx_idx(lock, lock_len - 1)
+    when last_byte != 10 {
+      hold lock = concat(lock, "\n")
+    }
+    hold lock_len = len(lock)
+    hold ddres = resolve(lock, src, lock_len)
+    when sx_index(ddres, 0) == 33 {
+      show concat("sxpkg: DEP ", tail1(ddres))
+    } otherwise {
+      hold ddout = "sxpkg: dependency closure"
+      hold ddrest = ddres
+      hold ddn = 0
+      while len(ddrest) > 0 {
+        hold ddspec = take_field(ddrest)
+        hold ddrest = drop_field(ddrest)
+        hold ddn = ddn + 1
+        hold ddout = concat(ddout, concat("\n  ", concat(dep_name(ddspec), concat(" ", dep_ver(ddspec)))))
+      }
+      when ddn == 0 {
+        hold ddout = concat(ddout, "\n  (none)")
+      }
+      show ddout
+    }
+  }
+}
+
+// install: copy every locked package (and its closure) from a local registry
+// directory into the project's .sayanox/registry/, checking the version and
+// the content sum on both sides.  Offline: it reads files, never the network.
+// The default source registry is ./registry; the wrapper `sxpkg.sh install`
+// creates the destination folders first and then runs this.
+when is_install == 1 {
+  hold handled = 1
+  when argn >= 3 {
+    hold src = arg(2)
+  }
+  hold lock = read_file(lock_path)
+  hold lock_len = len(lock)
+  when lock_len == 0 {
+    show "sxpkg: no sx.lock; run init first"
+  } otherwise {
+    hold last_byte = sx_idx(lock, lock_len - 1)
+    when last_byte != 10 {
+      hold lock = concat(lock, "\n")
+    }
+    hold lock_len = len(lock)
+    hold dires = resolve(lock, src, lock_len)
+    when sx_index(dires, 0) == 33 {
+      show concat("sxpkg: DEP ", tail1(dires))
+    } otherwise {
+      hold diproblems = 0
+      hold direst = dires
+      while len(direst) > 0 {
+        hold dispec = take_field(direst)
+        hold direst = drop_field(direst)
+        hold dinm = dep_name(dispec)
+        hold divr = dep_ver(dispec)
+        hold diwhy = check_pkg(dinm, divr)
+        when len(diwhy) == 0 {
+          show concat("sxpkg: ok ", concat(dinm, concat(" ", divr)))
+        } otherwise {
+          hold dismeta = read_file(concat(concat(src, "/"), concat(dinm, "/pkg.meta")))
+          when len(dismeta) == 0 {
+            show concat("sxpkg: MISSING ", concat(dinm, concat(": the source registry has no ", concat(src, concat("/", concat(dinm, "/pkg.meta"))))))
+            hold diproblems = diproblems + 1
+          } otherwise {
+            hold disver = pkgfield(dismeta, "version")
+            when string_eq(disver, divr) == 0 {
+              show concat("sxpkg: MISMATCH ", concat(dinm, concat(": the source registry has ", concat(disver, concat(" but sx.lock wants ", divr)))))
+              hold diproblems = diproblems + 1
+            } otherwise {
+              hold dissa = read_file(concat(concat(src, "/"), concat(dinm, "/main.sa")))
+              hold diswant = pkgfield(dismeta, "sum")
+              hold disgot = decstr(pkgsum(dissa))
+              when string_eq(diswant, disgot) == 0 {
+                show concat("sxpkg: MISMATCH ", concat(dinm, concat(": the source main.sa sums to ", concat(disgot, concat(" but its pkg.meta says ", diswant)))))
+                hold diproblems = diproblems + 1
+              } otherwise {
+                hold diw1 = write_file(concat(".sayanox/registry/", concat(dinm, "/pkg.meta")), dismeta)
+                hold diw2 = write_file(concat(".sayanox/registry/", concat(dinm, "/main.sa")), dissa)
+                when diw1 == 1 && diw2 == 1 {
+                  show concat("sxpkg: installed ", concat(dinm, concat(" ", divr)))
+                } otherwise {
+                  show concat("sxpkg: MISSING ", concat(dinm, concat(": cannot write .sayanox/registry/", concat(dinm, "/; run sh tools/sxpkg.sh install-local to create the folders"))))
+                  hold diproblems = diproblems + 1
+                }
+              }
+            }
+          }
+        }
+      }
+      when diproblems == 0 {
+        show "sxpkg: install ok"
+      } otherwise {
+        show concat("sxpkg: install FAILED (", concat(numstr(diproblems), " problem(s))"))
+      }
+    }
+  }
+}
+
 when handled == 0 {
-  show "sxpkg: local commands: init | add <name> [version] | list | remove <name> | seed | search | info | verify | sum <file>"
-  show "sxpkg: sync/install/publish/fetch still require the shell implementation"
+  show "sxpkg: local commands: init | add <name> [version] | list | remove <name> | seed | search | info | deps | install [registry] | verify | sum <file>"
+  show "sxpkg: sync/publish/fetch still require the shell implementation"
 }

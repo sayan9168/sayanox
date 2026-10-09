@@ -1,4 +1,5 @@
 name=math
 version=0.1.0
 desc=tiny math helpers (dbl, sqr)
+deps=
 sum=718013937

@@ -17,7 +17,9 @@ The current shell implementation provides the full, local/online command set:
 ./tools/sxpkg.sh sync
 ./tools/sxpkg.sh search math
 ./tools/sxpkg.sh add math 0.1.0
-./tools/sxpkg.sh install
+./tools/sxpkg.sh install            # online: downloads from $ONLINE
+./tools/sxpkg.sh install-local registry  # offline: local directory only
+./tools/sxpkg.sh deps
 ./tools/sxpkg.sh list
 ./tools/sxpkg.sh info math
 ./tools/sxpkg.sh fetch https://example.com/x.sa mypkg
@@ -28,17 +30,27 @@ A Sayanox implementation of the local lock-file core is also available:
 ```sh
 make sxpkg
 ./tools/sxpkg init
-./tools/sxpkg add math 0.1.0
+./tools/sxpkg add math 0.1.0      # also locks math's `deps=` closure
 ./tools/sxpkg list
+./tools/sxpkg deps                # the resolved closure
 ./tools/sxpkg search math
 ./tools/sxpkg info math
+./tools/sxpkg install [registry]  # offline: copies the closure in, sum-checked
 ./tools/sxpkg remove math
 make test-sxpkg
 ```
 
-The Sayanox binary supports local project/registry commands (`init`, `add`, `verify`, `sum`,
-`list`, `remove`, `seed`, `search`, `info`). It does not yet download, install
-or publish packages.
+`install` needs the destination folders to exist (Sayanox has no `mkdir`), so
+the wrapper creates them first:
+
+```sh
+sh tools/sxpkg.sh install-local registry   # mkdir + the offline install above
+sh tools/sxpkg.sh deps
+```
+
+The Sayanox binary supports local project/registry commands (`init`, `add`,
+`deps`, `install`, `verify`, `sum`, `list`, `remove`, `seed`, `search`,
+`info`). It never downloads, installs from, or publishes to the network.
 
 ## Offline use path (no network)
 
@@ -122,6 +134,88 @@ The sums are regenerated when a package changes (`sxpkg sum` on the new
 `main.sa`, then update `sum=`). `test-pkgs` edits the project's registry copy to show the mismatch,
 then re-seeds the project to restore it.
 
-**Not provided:** an online registry, signatures, dependency resolution, or
-any fetch during verify. `sync`, `publish` and `fetch` in `tools/sxpkg.sh`
-are still the only online commands, and no bootstrap target uses them.
+## Dependencies and the offline install
+
+`pkg.meta` has a fifth line, `deps=`, holding a comma-separated list of
+`name@version` pins:
+
+```
+name=calc
+version=0.1.0
+desc=tiny helpers built on math (dblsqr)
+deps=math@0.1.0
+sum=807763569
+```
+
+A pin is **exact**: there are no ranges and no "compatible with" operator.
+`calc@0.1.0` needs precisely `math@0.1.0`, and anything else is an error.
+
+`registry/calc` is the sample that exercises this: its `main.sa` starts with
+`use ".sayanox/registry/math/main.sa"` and defines `dblsqr`, which calls
+`math`'s `dbl` and `sqr`.
+
+**Resolution.** `sxpkg add calc 0.1.0` locks `calc` *and* walks its `deps=`
+transitively, so the lock ends up holding both:
+
+```sh
+./tools/sxpkg add calc 0.1.0
+#   sxpkg: locked math 0.1.0 (dependency of calc)
+#   sxpkg: locked calc 0.1.0
+#   sx.lock ->  calc=0.1.0
+#               math=0.1.0
+```
+
+`sxpkg deps` prints the closure, and reports the two ways it can be
+unsatisfied:
+
+```
+sxpkg: DEP calc needs math@0.1.0 which is not in sx.lock; run: sxpkg add math 0.1.0
+sxpkg: DEP calc needs math@0.1.0 but sx.lock has 0.2.0
+```
+
+**Install.** `sxpkg install [registry]` copies every package in the closure
+out of a local registry *directory* (default `./registry`, i.e. the one in
+this repository) into `.sayanox/registry/<name>/`. For each package it
+checks, before writing anything:
+
+* the source `pkg.meta` says the version `sx.lock` pins;
+* the source `main.sa` sums to the `sum=` in that `pkg.meta`;
+* the destination copy (if any) already agrees — reported as `ok`, not
+  re-copied.
+
+Because Sayanox cannot create directories, a missing
+`.sayanox/registry/<name>/` is reported rather than ignored:
+
+```
+sxpkg: MISSING calc: cannot write .sayanox/registry/calc/; run sh tools/sxpkg.sh install-local to create the folders
+```
+
+`sh tools/sxpkg.sh install-local [registry]` creates those folders and then
+runs the install, so the usual flow is:
+
+```sh
+sh tools/sxpkg.sh init                     # sx.lock / sx.toml / .sayanox/registry
+./tools/sxpkg add calc 0.1.0               # locks calc + its dep math
+sh tools/sxpkg.sh install-local registry   # copies both in, sum-checked
+./tools/sxpkg verify                       #   sxpkg: verified calc 0.1.0
+                                           #   sxpkg: verified math 0.1.0
+                                           #   sxpkg: verify ok (2 locked packages)
+```
+
+`verify` walks the same closure, so a package pulled in only as a dependency
+is checked too — it is verified even though it is not one of your
+hand-written lock lines.
+
+`use` sees a package's own `use` lines: `use ".sayanox/registry/calc/main.sa"`
+brings in calc, and calc's `use ".sayanox/registry/math/main.sa"` is spliced
+along with it (paths resolve from the main program's directory). seed-min,
+gen2 and native all agree on the result.
+
+`make test-pkgs` pins all of the above, including the two `sxpkg: DEP ...`
+errors and the "cannot write" message.
+
+**Not provided:** signatures, version ranges, a real solver, or any fetch
+during resolve/install/verify — everything above reads local directories
+only. `sync`, `install` (the shell one), `publish` and `fetch` in
+`tools/sxpkg.sh` are still the only online commands, and no bootstrap target
+uses them.

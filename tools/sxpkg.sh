@@ -83,6 +83,27 @@ list() {
   run_sayanox list "$@"
 }
 
+deps() {
+  run_sayanox deps "$@"
+}
+
+# install-local: the offline install.  It creates .sayanox/registry/<name>/
+# for every locked package (Sayanox has no mkdir) and then lets the Sayanox
+# tool copy each package, and its `deps=` closure, out of a local registry
+# directory (default ./registry), checking the version and the pkg.meta sum
+# on the way.  No network: `install` is the online command.
+install_local() {
+  src="${1:-registry}"
+  mkdir -p "$PKGDIR"
+  [ -f "$LOCK" ] || { echo "sxpkg: no sx.lock - run init/add"; exit 1; }
+  case "$src" in /*) ;; *) src=$(CDPATH= cd "$ROOT" && pwd)/"$src" ;; esac
+  while IFS='=' read -r n v; do
+    case "$n" in \#*|"") continue ;; version|name) continue ;; esac
+    mkdir -p "$REG/$n"
+  done < "$LOCK"
+  run_sayanox install "$src"
+}
+
 install() {
   mkdir -p "$PKGDIR"
   [ -f "$LOCK" ] || { echo "sxpkg: no sx.lock — run init/add"; exit 1; }
@@ -149,6 +170,8 @@ case "$cmd" in
   sync) sync ;;
   add) add "$@" ;;
   list) list ;;
+  deps) deps "$@" ;;
+  install-local) install_local "$@" ;;
   install) install ;;
   search) search "$@" ;;
   publish) publish ;;
@@ -158,7 +181,7 @@ case "$cmd" in
   verify) run_sayanox verify ;;
   sum) run_sayanox sum "$@" ;;
   fetch) fetch "$@" ;;
-  *) echo "sxpkg: init|sync|add|list|install|search|publish|remove|info|seed|verify|sum|fetch"
+  *) echo "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"
      echo "  ONLINE registry: $ONLINE"
      echo "  override: SAYANOX_REGISTRY=https://..."
      ;;
