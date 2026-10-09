@@ -1,0 +1,254 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Sayanox",
+  "scopeName": "source.sayanox",
+  "fileTypes": ["sa"],
+  "uuid": "6f1c2a58-9d3e-4b7a-8c1f-2e5d70a94b63",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#struct-declaration" },
+    { "include": "#function-declaration" },
+    { "include": "#use-statement" },
+    { "include": "#keyword-control" },
+    { "include": "#keyword-storage" },
+    { "include": "#keyword-operator-word" },
+    { "include": "#constant-language" },
+    { "include": "#support-type" },
+    { "include": "#builtin" },
+    { "include": "#number" },
+    { "include": "#struct-literal" },
+    { "include": "#function-call" },
+    { "include": "#member-access" },
+    { "include": "#type-annotation" },
+    { "include": "#struct-literal-field" },
+    { "include": "#assignment" },
+    { "include": "#operator" },
+    { "include": "#punctuation" },
+    { "include": "#variable" }
+  ],
+  "repository": {
+    "comment": {
+      "comment": "Sayanox has line comments only; there is no block comment form.",
+      "match": "(//).*$",
+      "captures": {
+        "0": { "name": "comment.line.double-slash.sayanox" },
+        "1": { "name": "punctuation.definition.comment.sayanox" }
+      }
+    },
+    "string": {
+      "comment": "Double-quoted strings. Sayanox has no interpolation. A string may not span lines, so an unmatched quote ends at the line break instead of swallowing the rest of the file.",
+      "name": "string.quoted.double.sayanox",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.sayanox" }
+      },
+      "end": "(\")|(?=$)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.string.end.sayanox" }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.sayanox",
+          "match": "\\\\([\"\\\\bfnrtv]|[0-9]{1,3}|x[0-9a-fA-F]{1,2})"
+        },
+        {
+          "name": "invalid.illegal.unknown-escape.sayanox",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "struct-declaration": {
+      "comment": "struct Point { x, y } -- comma separated field names.",
+      "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.struct.sayanox" },
+        "2": { "name": "entity.name.type.struct.sayanox" }
+      }
+    },
+    "function-declaration": {
+      "comment": "make name(params) and the generic forms make twice<T>(a: T) -> T and make pair<A, B>(a: A, b: B) -> A. One rule has to cover both: a separate <...> rule would never fire, because the `make name` match already consumes the name. The <...> is a type parameter list only directly after a declared name, so it can never be confused with the less-than operator.",
+      "match": "\\b(make)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?:(<)\\s*([A-Za-z_][A-Za-z0-9_]*(?:\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*)*)\\s*(>))?",
+      "captures": {
+        "1": { "name": "storage.type.function.sayanox" },
+        "2": { "name": "entity.name.function.sayanox" },
+        "3": { "name": "punctuation.definition.typeparameters.begin.sayanox" },
+        "4": { "name": "variable.parameter.type.sayanox" },
+        "5": { "name": "punctuation.definition.typeparameters.end.sayanox" }
+      }
+    },
+    "use-statement": {
+      "comment": "use \"stdlib/tiny.sa\" -- a textual source splice, not a namespace.",
+      "match": "\\b(use)\\b",
+      "name": "keyword.control.import.sayanox"
+    },
+    "keyword-control": {
+      "patterns": [
+        {
+          "comment": "when / otherwise, with the else alias and the elif chain forms.",
+          "name": "keyword.control.conditional.sayanox",
+          "match": "\\b(when|otherwise|else|elif)\\b"
+        },
+        {
+          "comment": "while is the portable loop; for NAME in EXPR, break and continue are gen2 full-language forms.",
+          "name": "keyword.control.loop.sayanox",
+          "match": "\\b(while|for|in|break|continue)\\b"
+        },
+        {
+          "name": "keyword.control.return.sayanox",
+          "match": "\\b(give)\\b"
+        },
+        {
+          "name": "keyword.control.export.sayanox",
+          "match": "\\b(export)\\b"
+        }
+      ]
+    },
+    "keyword-storage": {
+      "patterns": [
+        {
+          "comment": "hold introduces a name and also reassigns an existing one.",
+          "name": "storage.type.hold.sayanox",
+          "match": "\\b(hold)\\b"
+        },
+        {
+          "comment": "show prints exactly one expression per statement.",
+          "name": "keyword.other.output.sayanox",
+          "match": "\\b(show)\\b"
+        }
+      ]
+    },
+    "keyword-operator-word": {
+      "comment": "and / or / not lower to && / || / ! and short-circuit. not binds looser than a comparison.",
+      "name": "keyword.operator.word.sayanox",
+      "match": "\\b(and|or|not)\\b"
+    },
+    "constant-language": {
+      "comment": "true is 1 and false is 0.",
+      "name": "constant.language.boolean.sayanox",
+      "match": "\\b(true|false)\\b"
+    },
+    "support-type": {
+      "comment": "Kinds named by typed parameters and return types.",
+      "name": "support.type.sayanox",
+      "match": "\\b(num|number|str|string|list|bool|double)\\b"
+    },
+    "builtin": {
+      "comment": "Pure-min builtins plus the gen2 runtime builtins and the stdlib/tiny.sa helpers.",
+      "name": "support.function.builtin.sayanox",
+      "match": "\\b(concat|len|chr|string_eq|sx_index|index|push|read_file|write_file|arg|arg_count|read_line|read_n|write_out|flush_out|numstr|gc|gc_live|gc_runs|min2|max2|absv|clamp|sign|gcd|lcm|fact|fib|is_even|is_odd|is_prime|is_square|between|sum_to|sum_range|sum_sq|pow_int|count_digits|digit_sum|trunc10|rev_num|reverse_num|no_factor_from|has_sq_from|pickb)\\b"
+    },
+    "number": {
+      "comment": "Every number is an IEEE double. A trailing decimal point (2.) and a second one (1.2.3) are compile errors.",
+      "patterns": [
+        {
+          "name": "constant.numeric.float.sayanox",
+          "match": "\\b[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.exponential.sayanox",
+          "match": "\\b[0-9]+[eE][+-]?[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.sayanox",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "struct-literal": {
+      "comment": "Point { x: 3, y: 4 } -- a capitalised type name followed by a brace.",
+      "match": "\\b([A-Z][A-Za-z0-9_]*)\\s*(?=\\{)",
+      "captures": {
+        "1": { "name": "entity.name.type.struct.sayanox" }
+      }
+    },
+    "function-call": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.sayanox" }
+      }
+    },
+    "member-access": {
+      "comment": "p.x and chained access such as s.origin.x.",
+      "match": "(\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?!\\()",
+      "captures": {
+        "1": { "name": "punctuation.accessor.dot.sayanox" },
+        "2": { "name": "variable.other.member.sayanox" }
+      }
+    },
+    "type-annotation": {
+      "comment": "make s_len(s: str) -> num and hold x: T = a.",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*(num|number|str|string|list|bool|double|[A-Z][A-Za-z0-9_]*|[a-z][A-Za-z0-9_]*)(?=\\s*(?:[,)=]|->|$))",
+      "captures": {
+        "1": { "name": "variable.parameter.sayanox" },
+        "2": { "name": "punctuation.separator.type-annotation.sayanox" },
+        "3": { "name": "support.type.sayanox" }
+      }
+    },
+    "struct-literal-field": {
+      "comment": "The field name in a named struct literal: Point { x: 3 }.",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)(?=\\s*(?:\"|\\[|[A-Z0-9]|-[0-9]))",
+      "captures": {
+        "1": { "name": "variable.other.member.sayanox" },
+        "2": { "name": "punctuation.separator.colon.sayanox" }
+      }
+    },
+    "assignment": {
+      "patterns": [
+        {
+          "comment": "A bare `name = expr` reassignment at the start of a statement; the name must already have been introduced with hold.",
+          "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(=)(?!=)",
+          "captures": {
+            "1": { "name": "variable.other.readwrite.sayanox" },
+            "2": { "name": "keyword.operator.assignment.sayanox" }
+          }
+        },
+        {
+          "match": "(=)(?!=)",
+          "name": "keyword.operator.assignment.sayanox"
+        }
+      ]
+    },
+    "operator": {
+      "patterns": [
+        {
+          "comment": "The declared return arrow; matched before the arithmetic minus.",
+          "name": "storage.type.function.arrow.sayanox",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.range.sayanox",
+          "match": "\\.\\."
+        },
+        {
+          "name": "keyword.operator.comparison.sayanox",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.logical.sayanox",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.arithmetic.sayanox",
+          "match": "\\+|-|\\*|/|%"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.section.block.begin.sayanox", "match": "\\{" },
+        { "name": "punctuation.section.block.end.sayanox", "match": "\\}" },
+        { "name": "punctuation.section.parens.begin.sayanox", "match": "\\(" },
+        { "name": "punctuation.section.parens.end.sayanox", "match": "\\)" },
+        { "name": "punctuation.section.brackets.begin.sayanox", "match": "\\[" },
+        { "name": "punctuation.section.brackets.end.sayanox", "match": "\\]" },
+        { "name": "punctuation.separator.comma.sayanox", "match": "," },
+        { "name": "punctuation.separator.colon.sayanox", "match": ":" }
+      ]
+    },
+    "variable": {
+      "name": "variable.other.sayanox",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  }
+}
