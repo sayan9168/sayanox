@@ -876,39 +876,65 @@ test-native-io: $(NATIVE_BIN)
 	@echo "[OK] native read_file/write_file/arg/arg_count: same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as \"\", 160 KiB round trip)"
 
 # ---------------------------------------------------------------------------
-# test-native-mem: native programs bump-allocate over lazy mmap chunks and
-# never free (GC.md, "Native AOT and the seeds").  These tests pin what that
-# actually means, because "never frees" must not mean "silently wrong":
+# test-native-mem: the native AOT emitter has a real collector (docs/GC.md,
+# "The native collector").  Blocks are 32-byte headers over mmap()ed chunks,
+# r_malloc is first-fit over a free list and then bumps, and a mark & sweep
+# pass runs at every statement boundary once the allocation debt passes a
+# threshold.  These tests pin what that actually means:
 #
 #   * long allocating loops (4001-byte string built by 2000 concats, 1500
 #     pushes) keep computing correct values and indexes;
-#   * a program that outgrows a 4 MiB address-space cap dies with the
-#     documented `out of memory` diagnostic and a non-zero exit status
-#     instead of corrupting memory (the r_malloc slow path checks mmap);
-#   * there is no collector in native, so the gen2-only collector builtins
-#     are rejected at compile time with a clear message.
-#
-# A real free path would need ownership/alias tracking this hand-written
-# emitter does not have; STATUS.md records that honestly.
+#   * a 200k-iteration churn loop (~8 MB allocated, nothing retained) now
+#     stays inside a 4 MiB address-space cap instead of dying -- that is the
+#     whole point of the free path, and it is exactly what the old bump
+#     allocator could not do;
+#   * gc() / gc_live() / gc_runs() are real on native: gc() returns the bytes
+#     it reclaimed, gc_runs() counts the collections and gc_live() reports the
+#     bytes the last sweep saw alive;
+#   * values survive collections: strings, list elements and struct fields all
+#     still read back correctly after tens of thousands of allocating
+#     iterations, so nothing is reclaimed while it is still reachable;
+#   * a program that genuinely retains more than 4 MiB still dies with the
+#     documented `out of memory` diagnostic and a non-zero exit status, and
+#     keeps the output it wrote before dying.
 # ---------------------------------------------------------------------------
 test-native-mem: $(NATIVE_BIN)
 	@mkdir -p $(TESTS)
 	@printf 'hold s = "x"\nhold i = 0\nwhile i < 2000 {\n  hold s = concat(s, "ab")\n  hold i = i + 1\n}\nshow len(s)\nshow s[0]\nshow s[4000]\nhold xs = []\nhold j = 0\nwhile j < 1500 {\n  push(xs, j * 2)\n  hold j = j + 1\n}\nshow len(xs)\nshow xs[1499]\nhold t = concat("", "tail")\nshow t\n' > $(TESTS)/native_mem.sa
 	./$(NATIVE_BIN) $(TESTS)/native_mem.sa $(TESTS)/native_mem
 	$(call assert-out,./$(TESTS)/native_mem,4001\n120\n98\n1500\n2998\ntail)
-	@printf 'hold i = 0\nwhile i < 200000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow i\n' > $(TESTS)/native_mem_oom.sa
+	@# ---- the free path: 200k allocating iterations under a 4 MiB cap ----
+	@printf 'hold i = 0\nwhile i < 200000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow i\nshow gc_runs()\n' > $(TESTS)/native_mem_oom.sa
 	./$(NATIVE_BIN) $(TESTS)/native_mem_oom.sa $(TESTS)/native_mem_oom
-	$(call assert-out,./$(TESTS)/native_mem_oom,200000)
-	@if sh -c 'ulimit -v 4096; ./$(TESTS)/native_mem_oom >/dev/null 2>$(TESTS)/native_mem_oom.err'; then \
-	  echo "[FAIL] native outgrew a 4 MiB cap without dying (bump allocator must not corrupt memory)"; exit 1; fi
-	@grep -q 'out of memory' $(TESTS)/native_mem_oom.err
-	@printf 'hold x = gc()\nshow x\n' > $(TESTS)/native_mem_gc.sa
+	@__o=$$(sh -c 'ulimit -v 4096; ./$(TESTS)/native_mem_oom') || { \
+	  echo "[FAIL] native churn loop died inside a 4 MiB cap (the collector must reclaim)"; exit 1; }; \
+	  __i=$$(printf '%s\n' "$$__o" | sed -n 1p); \
+	  __r=$$(printf '%s\n' "$$__o" | sed -n 2p); \
+	  if [ "$$__i" != "200000" ]; then \
+	    echo "[FAIL] native churn loop under a 4 MiB cap printed $$__o"; exit 1; fi; \
+	  if [ "$$__r" -lt 1 ] 2>/dev/null; then \
+	    echo "[FAIL] native churn loop under a 4 MiB cap ran no collection"; exit 1; fi
+	@echo "[OK] native collector: 200k allocating iterations (~8 MB) stay inside a 4 MiB cap"
+	@# ---- gc() / gc_live() / gc_runs() are real, not no-ops ----
+	@printf 'hold i = 0\nwhile i < 5000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow gc_runs()\nshow gc()\nshow gc_live()\n' > $(TESTS)/native_mem_gc.sa
 	./$(NATIVE_BIN) $(TESTS)/native_mem_gc.sa $(TESTS)/native_mem_gc
-	@test -f $(TESTS)/native_mem_gc && echo "[OK] native gc() accepted (bump-only no-op)"
-	@printf 'hold x = gc_live()\nshow x\n' > $(TESTS)/native_mem_gcl.sa
-	./$(NATIVE_BIN) $(TESTS)/native_mem_gcl.sa $(TESTS)/native_mem_gcl
-	@test -f $(TESTS)/native_mem_gcl && echo "[OK] native gc_live() accepted (bump-only no-op)"
-	@# ---- the bump-only contract, pinned from both sides (docs/GC.md) ----
+	@__o=$$(./$(TESTS)/native_mem_gc); \
+	  __r=$$(printf '%s\n' "$$__o" | sed -n 1p); \
+	  __c=$$(printf '%s\n' "$$__o" | sed -n 2p); \
+	  __l=$$(printf '%s\n' "$$__o" | sed -n 3p); \
+	  if [ "$$__r" -lt 1 ] 2>/dev/null; then \
+	    echo "[FAIL] native gc_runs() reported $$__r after 5000 allocating iterations"; exit 1; fi; \
+	  if [ "$$__c" -lt 1 ] 2>/dev/null; then \
+	    echo "[FAIL] native gc() reclaimed $$__c bytes"; exit 1; fi; \
+	  if [ "$$__l" -lt 1 ] 2>/dev/null; then \
+	    echo "[FAIL] native gc_live() reported $$__l"; exit 1; fi
+	@echo "[OK] native gc()/gc_live()/gc_runs() are real (collections run, bytes are reclaimed, live bytes reported)"
+	@# ---- nothing reachable is reclaimed: strings, lists and structs ----
+	@printf 'struct Box {\n  n,\n  s\n}\nhold b = Box { 1, "hello-world" }\nhold a0 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\nhold a3 = "dddddddddddddddddddddddddddd"\nhold xs = []\nhold i = 0\nwhile i < 30000 {\n  hold junk = concat("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "yyyyyyyyyyyyyyyyyyyyyyyyyy")\n  push(xs, i)\n  hold i = i + 1\n}\nshow len(a0)\nshow a0[0]\nshow a0[47]\nshow a3[27]\nshow b.n\nshow b.s\nshow len(xs)\nshow xs[0]\nshow xs[29999]\n' > $(TESTS)/native_mem_keep.sa
+	./$(NATIVE_BIN) $(TESTS)/native_mem_keep.sa $(TESTS)/native_mem_keep
+	$(call assert-out,./$(TESTS)/native_mem_keep,48\n97\n97\n100\n1\nhello-world\n30000\n0\n29999)
+	@echo "[OK] native collector keeps reachable strings, list elements and struct fields (30k allocating iterations)"
+	@# ---- the bump-only contract that still holds: whole-chunk allocations ----
 	@# a single allocation bigger than one 64 KiB chunk is served whole
 	@printf 'hold s = "x"\nhold i = 0\nwhile i < 18 {\n  hold s = concat(s, s)\n  hold i = i + 1\n}\nshow len(s)\nshow s[262143]\n' > $(TESTS)/native_bigalloc.sa
 	./$(NATIVE_BIN) $(TESTS)/native_bigalloc.sa $(TESTS)/native_bigalloc
@@ -917,22 +943,19 @@ test-native-mem: $(NATIVE_BIN)
 	@printf 'hold xs = []\nhold j = 0\nwhile j < 100000 {\n  push(xs, j)\n  hold j = j + 1\n}\nshow len(xs)\nshow xs[0]\nshow xs[99999]\n' > $(TESTS)/native_biglist.sa
 	./$(NATIVE_BIN) $(TESTS)/native_biglist.sa $(TESTS)/native_biglist
 	$(call assert-out,./$(TESTS)/native_biglist,100000\n0\n99999)
-	@# the cap counts TOTAL bytes ever allocated, not live ones: 20k iterations
-	@# (~0.8 MB total) fit under 4 MiB, the 200k loop above (~8 MB total) does not
+	@# a smaller churn loop still fits under the cap
 	@printf 'hold i = 0\nwhile i < 20000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow i\n' > $(TESTS)/native_mem_fit.sa
 	./$(NATIVE_BIN) $(TESTS)/native_mem_fit.sa $(TESTS)/native_mem_fit
 	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/native_mem_fit',20000)
+	@# ---- what the collector cannot do: a genuinely 8 MiB live set ----
 	@# output written before an out-of-memory exit is kept, the exit is non-zero
-	@printf 'show "before"\nhold s = "abcdefgh"\nhold i = 0\nwhile i < 200000 {\n  hold t = concat(s, s)\n  hold i = i + 1\n}\nshow "after"\n' > $(TESTS)/native_oom_out.sa
+	@printf 'show "before"\nhold s = "abcdefgh"\nhold i = 0\nwhile i < 20 {\n  hold s = concat(s, s)\n  hold i = i + 1\n}\nshow len(s)\nshow "after"\n' > $(TESTS)/native_oom_out.sa
 	./$(NATIVE_BIN) $(TESTS)/native_oom_out.sa $(TESTS)/native_oom_out
 	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/native_oom_out 2>/dev/null',before)
-	@if sh -c 'ulimit -v 4096; ./$(TESTS)/native_oom_out >/dev/null 2>&1'; then \
-	  echo "[FAIL] native survived the 4 MiB cap in the OOM program"; exit 1; fi
-	@# the gen2-only collector builtins are rejected by name
-	@printf 'hold x = gc_runs()\nshow x\n' > $(TESTS)/native_mem_gcr.sa
-	./$(NATIVE_BIN) $(TESTS)/native_mem_gcr.sa $(TESTS)/native_mem_gcr
-	@test -f $(TESTS)/native_mem_gcr && echo "[OK] native gc_runs() accepted (bump-only no-op)"
-	@echo "[OK] native memory: bump-only with gc/gc_live/gc_runs compatibility (no-op); correct under long allocating loops, loud 'out of memory' under a 4 MiB cap"
+	@if sh -c 'ulimit -v 4096; ./$(TESTS)/native_oom_out >/dev/null 2>$(TESTS)/native_oom_out.err'; then \
+	  echo "[FAIL] native survived the 4 MiB cap while retaining 8 MiB"; exit 1; fi
+	@grep -q 'out of memory' $(TESTS)/native_oom_out.err
+	@echo "[OK] native memory: a real free path (churn fits in 4 MiB, reachable values survive, an 8 MiB live set still dies loudly)"
 
 # ---------------------------------------------------------------------------
 # test-stage2-demos: the three Stage-2 contract demos in selfhost/ are
@@ -1563,6 +1586,16 @@ test-gc: $(GEN2)
 	$(CC) -O2 -o $(TESTS)/gc_builtins $(TESTS)/gc_builtins.c
 	$(call assert-out,./$(TESTS)/gc_builtins,bounded\nran\n6000\nreclaimed\n97)
 	@echo "[OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded"
+	@# native runs the same program: the two collectors must agree on the
+	@# language surface, even though the implementations differ (see GC.md)
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) $(TESTS)/gc_builtins.sa $(TESTS)/gc_builtins_nat || exit 1; \
+	  __got=$$(./$(TESTS)/gc_builtins_nat); \
+	  __want=$$(printf 'bounded\nran\n6000\nreclaimed\n97'); \
+	  if [ "$$__got" = "$$__want" ]; then :; else \
+	    echo "[FAIL] native gc_builtins output differs"; printf '%s\n' "$$__got"; exit 1; fi; \
+	  echo "[OK] native GC: same program, same results as gen2 (native mark & sweep)"; \
+	fi
 
 gen3:
 	@test -x $(GEN2) || (echo "run true-selfhost first"; exit 1)

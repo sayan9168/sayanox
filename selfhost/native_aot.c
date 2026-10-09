@@ -70,6 +70,38 @@ static unsigned char data[DMAX]; static size_t dn;
 #define OFF_SCR   32  /* 8-byte scratch     */
                       /* (must NOT alias OFF_END: store_scr() writes here on
                          every literal, and OFF_END is the heap chunk end) */
+/* ---- native mark & sweep collector state (docs/GC.md) ----
+ * Blocks carry a 32-byte header:  +0 size|FREE  +8 magic  +16 mark/next
+ * +24 kind.  The payload starts at +32 and is 16-byte aligned.  Chunks are
+ * mmap()ed and linked through their first 8 bytes, so the collector can walk
+ * every block it ever handed out. */
+#define OFF_CHUNK  40  /* head of the chunk list (chunk->next at +0)      */
+#define OFF_CURCH  48  /* chunk the bump cursor currently lives in        */
+#define OFF_FREE   56  /* free-list head (a block header address)         */
+#define OFF_LIVE   64  /* bytes held by live blocks                       */
+#define OFF_ALLOC  72  /* bytes allocated since the last collection       */
+#define OFF_THRESH 80  /* collect once OFF_ALLOC passes this              */
+#define OFF_RUNS   88  /* number of collections so far                    */
+#define OFF_RECL   96  /* bytes reclaimed by the last collection          */
+#define OFF_STKTOP 104 /* rsp at process entry: conservative scan bound   */
+#define OFF_GPREV  112 /* sweep scratch: previous free block              */
+#define OFF_HLO    120 /* lowest heap byte (chunk windows start here)     */
+#define OFF_HHI    128 /* one past the highest heap byte                  */
+#define OFF_ROOTS  144 /* root table: u64 byte offsets, 0-terminated      */
+#define NROOT      (NSLOT+2)
+#define DNA_START  (OFF_ROOTS + NROOT*8)
+/* block header fields, as byte offsets from the header address */
+#define BH_SIZE  0
+#define BH_MAGIC 8
+#define BH_MARK  16
+#define BH_NEXT  16
+#define BH_KIND  24
+#define BH_HDR   32   /* payload offset; every block is 16-byte aligned */
+#define SX_BLK_MAGIC 0x5A6B7C8D9E0F1A2BULL
+/* block kinds: which payload words the collector has to follow */
+#define BK_OPAQUE 0   /* strings: bytes only, no pointers */
+#define BK_LIST   1   /* doubles only, no pointers        */
+#define BK_STRUCT 2   /* scan every word conservatively   */
 static size_t d_glob; /* globals array      */
 static size_t d_err_div, d_err_list, d_err_str, d_err_malloc;
 static size_t d_list1, d_list2, d_nl, d_empty;
@@ -204,6 +236,7 @@ static void stal_rdi(void){ e1(0x88); e1(0x07); }              /* mov [rdi], al 
 /* condition codes for 0F 80+c (jcc) and 0F 90+c (setcc) — same numbering */
 #define JC_B 2      /* <  / setb */
 #define JC_NBE 3    /* >= / setae */
+#define JC_A   7    /* >  / seta  (unsigned above) */
 #define JC_Z 4      /* == / sete */
 #define JC_NZ 5     /* != / setne */
 #define JC_L 12     /* signed <  (setl / jl) */
@@ -928,13 +961,14 @@ static void infer(const char*src){
 /* ================= phase 3: emit ================= */
 static int XK=K_NUM, XS=-1;     /* kind / struct id of the value in rax */
 static int cur_fn=-1;           /* -1 = top level */
-static size_t builtin_off[32];
+static size_t builtin_off[40];
 /* argument registers, System V AMD64: rdi rsi rdx rcx r8 r9 */
 static const int argreg[MAXP]={DI,SI,DX,CX,8,9};
 
 enum { B_MALLOC,B_STRLEN,B_CMPSTR,B_CONCAT,B_N2STR,B_PUTSTR,B_WCSTR,B_ITONO,B_ITOWRITE,
        B_SHOWLIST,B_MLIST,B_LGET,B_LLEN,B_LPUSH,B_SGET,B_CHR,B_READFILE,B_WRITEFILE,
-       B_ARG,B_ARGC,B_DIE,B_NFMT,B_SHOWNUM,B_GC,B_GC_LIVE,B_GC_RUNS };
+       B_ARG,B_ARGC,B_DIE,B_NFMT,B_SHOWNUM,B_GC,B_GC_LIVE,B_GC_RUNS,
+       B_FINDBLOCK,B_MARK,B_GCCHECK };
 
 static void emit_prim(const char**p,int depth);
 static void emit_post(const char**p,int depth);
@@ -1047,6 +1081,7 @@ static void emit_prim(const char**p,int depth){
       lit_begin();
       mov_imm64(AX,(uint64_t)(uint32_t)(8*nf));
       mv_rr(DI,AX);
+      mov_imm64(SI,BK_STRUCT);          /* every word may be a pointer */
       callb(B_MALLOC);
       store_scr();
       int cnt=0;
@@ -1281,6 +1316,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     if(!strcmp(n,"gc")) callb(B_GC);
     else if(!strcmp(n,"gc_live")) callb(B_GC_LIVE);
     else callb(B_GC_RUNS);
+    emit_i2d();
     XK=K_NUM; XS=-1;
     return;
   }
@@ -1548,6 +1584,12 @@ static void emit_prog(const char**p,int in_fn,int stop){
     if(!**p) return;
     if(stop&&**p=='}'){ (*p)++; return; }
     if(**p=='/'&&(*p)[1]=='/'){ while(**p&&**p!='\n') (*p)++; continue; }
+    /* A statement boundary is a safe point: the only heap pointers live in
+       the globals (precise roots) or on the machine stack (conservative
+       roots), so a collection here cannot free a value an expression still
+       needs.  emit_gc()'s r_gccheck only calls the collector when the
+       allocation debt has passed the threshold. */
+    callb(B_GCCHECK);
     const char*line=*p; sw(p);
     if(mkw(p,"hold")){
       char nm[64];
@@ -1766,32 +1808,99 @@ static void emit_builtins(void){
   /* r_malloc: rdi=size -> rax=ptr */
   {
   builtin_off[B_MALLOC]=cn;
-  /* r_malloc: rdi=size -> rax=ptr. Bump allocator over lazy 64KiB mmap chunks.
-     Preserves r8-r11 (callee-saves) so callers may keep values there. */
-  push_r(12);
-  push_r(11);
-  push_r(10);
-  push_r(9);
-  push_r(8);
-  push_r(3);                       /* rbx: the slow path uses it */
-  mv_r64m(AX,12,-1,0,OFF_CUR);    /* rax = cursor */
-  mv_rr(11,DI);                    /* r11 = size */
-  bin_imm8(0,11,7);                /* r11 += 7 */
-  shr_imm(11,3);                   /* r11 >>= 3 */
-  shl_imm(11,3);                   /* r11 = size rounded up to 8 */
-  lea_rm(8,AX,11,0,0);             /* r8 = cursor + size8 (needed end) */
-  mv_r64m(9,12,-1,0,OFF_END);      /* r9 = end of current chunk */
+  /* r_malloc: rdi=size rsi=kind -> rax=payload.
+     Every block gets a 32-byte header (size|FREE, magic, mark/next, kind) and
+     is 16-byte aligned, so the collector can walk and reclaim it.  Allocation
+     is first-fit over the free list, then bump over lazily mmap()ed chunks
+     (64 KiB, or larger for a big request).  Preserves r8-r11 (callee-saves)
+     so callers may keep values there, plus r12 (the data base). */
+  int Lbump,Lflchk,Lflnext,Lnosplit,Lfound,Lfldone,Lret,Lhh,Lhl;
+  Lbump=L_new(); Lflchk=L_new(); Lflnext=L_new();
+  Lnosplit=L_new(); Lfound=L_new(); Lfldone=L_new(); Lret=L_new();
+  Lhh=L_new(); Lhl=L_new();
+  builtin_off[B_MALLOC]=cn;
+  push_r(12); push_r(13); push_r(11); push_r(10); push_r(9); push_r(8); push_r(3);
+  /* r11 = need (payload rounded to 16, plus the header) */
+  lea_rm(11,DI,-1,0,BH_HDR+15);
+  bin_imm32(4,11,0xFFFFFFF0u);     /* and r11, ~15 */
+  mv_rr(13,SI);                    /* r13 = kind (survives the mmap slow path) */
+
+  /* ---- first fit over the free list ---- */
+  mv_r64m(9,12,-1,0,OFF_FREE);     /* r9 = candidate */
+  xor_rr(8,8);                     /* r8 = predecessor */
+  J_mp(Lflchk);
+  L_bind(Lflnext);
+  mv_rr(8,9);
+  mv_r64m(9,9,-1,0,BH_NEXT);
+  L_bind(Lflchk);
+  test_rr(9,9);
+  J_cc(JC_Z,Lbump);                /* list exhausted -> bump */
+  mv_r64m(DX,9,-1,0,BH_SIZE);
+  bin_imm32(4,DX,0xFFFFFFFEu);     /* rdx = sz = size & ~1 */
+  bin_rr(0x39,DX,11);              /* cmp sz, need */
+  J_cc(JC_B,Lflnext);              /* too small -> next */
+  /* r9 fits: rcx = remainder */
+  mv_rr(CX,DX);
+  bin_rr(0x29,CX,11);              /* rcx = sz - need */
+  bin_imm8(7,CX,BH_HDR+16);        /* cmp rem, 48 */
+  J_cc(JC_B,Lnosplit);             /* remainder too small to be useful */
+  /* split: q = r9 + need takes r9's place in the free list */
+  mv_rr(SI,9);
+  bin_rr(1,SI,11);                 /* rsi = q */
+  mv_rr(AX,CX);
+  bin_imm8(1,AX,1);                /* or rax, 1 -> rem | FREE */
+  mv_m64(SI,-1,0,BH_SIZE,AX);
+  mov_imm64(AX,0);
+  mv_m64(SI,-1,0,BH_MAGIC,AX);
+  mv_r64m(AX,9,-1,0,BH_NEXT);
+  mv_m64(SI,-1,0,BH_NEXT,AX);      /* q->next = r9->next */
+  test_rr(8,8);
+  size_t jzp=cn; jcc_rel32(JC_Z,0);
+  mv_m64(8,-1,0,BH_NEXT,SI);       /* prev->next = q */
+  size_t jmpp=cn; jmp_rel32(0);
+  erel32(jzp,cn);
+  mv_m64(12,-1,0,OFF_FREE,SI);     /* head = q */
+  erel32j(jmpp,cn);
+  J_mp(Lfound);
+  L_bind(Lnosplit);
+  /* Hand out the WHOLE block: the remainder is too small to stand on its own,
+     so the block must keep its real size (rdx = sz).  Writing `need` here
+     used to lose the leftover bytes, which desynchronised the collector's
+     block walk and made it read a size out of unallocated memory. */
+  mv_rr(11,DX);
+  /* hand out the whole block: unlink r9 */
+  mv_r64m(AX,9,-1,0,BH_NEXT);
+  test_rr(8,8);
+  size_t jz2=cn; jcc_rel32(JC_Z,0);
+  mv_m64(8,-1,0,BH_NEXT,AX);       /* prev->next = r9->next */
+  size_t jmp2=cn; jmp_rel32(0);
+  erel32(jz2,cn);
+  mv_m64(12,-1,0,OFF_FREE,AX);     /* head = r9->next */
+  erel32j(jmp2,cn);
+  L_bind(Lfound);
+  /* fill the header and return the payload */
+  mv_m64(9,-1,0,BH_SIZE,11);
+  mov_imm64(AX,SX_BLK_MAGIC); mv_m64(9,-1,0,BH_MAGIC,AX);
+  mov_imm64(AX,0);             mv_m64(9,-1,0,BH_MARK,AX);
+  mv_m64(9,-1,0,BH_KIND,13);
+  lea_rm(AX,9,-1,0,BH_HDR);
+  J_mp(Lfldone);
+
+  /* ---- bump path ---- */
+  L_bind(Lbump);
+  mv_r64m(AX,12,-1,0,OFF_CUR);     /* rax = cursor */
+  lea_rm(8,AX,11,0,0);             /* r8 = cursor + need */
+  mv_r64m(9,12,-1,0,OFF_END);      /* r9 = end of the current chunk */
   bin_rr(0x39,9,8);                /* cmp end, need: flags = end - need */
   size_t fast=cn;
   jcc_rel32(JC_GE,0);              /* jge .ok (end >= need) */
-  /* slow path: mmap a fresh 64KiB chunk */
-  mv_rr(3,11);                     /* rbx = size8 (syscalls clobber rcx/r11; rbx is free) */
+  mv_rr(3,11);                     /* rbx = need (syscalls clobber rcx/r11) */
   mov_imm64(AX,9);                 /* syscall: mmap */
   xor_rr(DI,DI);                   /* addr = NULL */
-  /* len = max(64KiB, request) rounded up to a page: a request bigger than
-     64KiB (read_file of a large file, a long concat) used to get a 64KiB
+  /* len = need + header + 64KiB, rounded up to a page: a request bigger than
+     64KiB (read_file of a large file, a long concat) must not get a 64KiB
      chunk and run off its end */
-  lea_rm(SI,11,-1,0,65536+4095);
+  lea_rm(SI,11,-1,0,65536+4095+BH_HDR);
   bin_imm32(4,SI,0xFFFFF000u);     /* and rsi, ~4095 */
   mov_imm64(DX,3);                 /* prot = RW */
   mov_imm64(10,0x22);              /* flags = private|anon */
@@ -1800,18 +1909,58 @@ static void emit_builtins(void){
   e1(0x0f); e1(0x05);              /* syscall */
   test_rr(AX,AX);
   size_t js=cn; jcc_rel32(JC_JS,0); /* js .die (negative errno) */
-  mv_rr(11,3);                     /* r11 = size8 (restored; syscall clobbered it) */
   mv_rr(9,AX);                     /* r9 = chunk start */
-  lea_rm(AX,AX,SI,0,0);            /* rax = chunk start + len (syscall keeps rsi) */
-  mv_m64(12,-1,0,OFF_END,AX);      /* end = chunk start + len */
-  mv_rr(AX,9);                     /* cursor = chunk start */
+  mv_rr(11,3);                     /* r11 = need (restored) */
+  mv_r64m(AX,12,-1,0,OFF_CHUNK);
+  mv_m64(9,-1,0,0,AX);             /* chunk->next = old head */
+  mv_m64(12,-1,0,OFF_CHUNK,9);     /* head = chunk */
+  mv_m64(9,-1,0,8,SI);             /* chunk->size = mmap length (rsi survives) */
+  lea_rm(AX,9,-1,0,BH_HDR);        /* cursor = chunk + header */
+  mv_rr(CX,AX);
+  bin_rr(1,CX,11);                 /* rcx = cursor + need */
+  mv_m64(9,-1,0,16,CX);            /* chunk->cursor */
+  mv_rr(DX,9);  bin_rr(1,DX,SI);   /* rdx = chunk + size */
+  mv_m64(12,-1,0,OFF_END,DX);
+  mv_m64(12,-1,0,OFF_CURCH,9);
+  { /* keep [OFF_HLO, OFF_HHI) around every chunk ever mapped.
+     * rax still carries the new block here and rcx the new cursor, so this
+     * block only touches rdx (dead: OFF_END is already stored) and r10. */
+    mv_r64m(DX,12,-1,0,OFF_HHI);
+    mv_rr(10,9); bin_rr(1,10,SI);              /* r10 = chunk + size */
+    bin_rr(0x39,10,DX);
+    J_cc(JC_NBE,Lhh);
+    mv_m64(12,-1,0,OFF_HHI,10);
+    L_bind(Lhh);
+    mv_r64m(DX,12,-1,0,OFF_HLO);
+    test_rr(DX,DX);
+    size_t jz0=cn; jcc_rel32(JC_Z,0);
+    bin_rr(0x39,DX,9);
+    J_cc(JC_NBE,Lhl);
+    erel32(jz0,cn);
+    mv_m64(12,-1,0,OFF_HLO,9);
+    L_bind(Lhl); }
+  mv_rr(8,CX);                     /* r8 = new cursor (the needed end) */
   erel32(fast,cn);
-  lea_rm(8,AX,11,0,0);             /* r8 = cursor + size8 */
-  mv_m64(12,-1,0,OFF_CUR,8);       /* cursor += size8 */
-  pop_r(3); pop_r(8); pop_r(9); pop_r(10); pop_r(11); pop_r(12); e1(0xc3);
+  /* rax = block, r8 = cursor + need */
+  mv_m64(12,-1,0,OFF_CUR,8);       /* cursor += need */
+  mv_r64m(CX,12,-1,0,OFF_CURCH);
+  mv_m64(CX,-1,0,16,8);            /* curchunk->cursor = cursor */
+  mv_m64(AX,-1,0,BH_SIZE,11);
+  mov_imm64(DX,SX_BLK_MAGIC); mv_m64(AX,-1,0,BH_MAGIC,DX);
+  mov_imm64(DX,0);             mv_m64(AX,-1,0,BH_MARK,DX);
+  mv_m64(AX,-1,0,BH_KIND,13);
+  lea_rm(AX,AX,-1,0,BH_HDR);       /* rax = payload */
+  L_bind(Lfldone);
+  /* accounting: live bytes and bytes-since-last-collection */
+  mv_r64m(CX,12,-1,0,OFF_LIVE);  bin_rr(1,CX,11); mv_m64(12,-1,0,OFF_LIVE,CX);
+  mv_r64m(CX,12,-1,0,OFF_ALLOC); bin_rr(1,CX,11); mv_m64(12,-1,0,OFF_ALLOC,CX);
+  L_bind(Lret);
+  pop_r(3); pop_r(8); pop_r(9); pop_r(10); pop_r(11); pop_r(13); pop_r(12); e1(0xc3);
+  /* the mmap failure path jumps here (after the normal ret) */
   erel32(js,cn);
   lea_rm(AX,12,-1,0,(int)d_err_malloc);
   callb(B_DIE);
+  nlbl=0;
   }
   /* r_strlen: rax=ptr -> rax=n */
   {
@@ -1875,6 +2024,7 @@ static void emit_builtins(void){
   mv_rr(AX,11);
   bin_rr(1,AX,13);        /* rax = len(a)+len(b) */
   bin_imm8(0,AX,2);
+  xor_rr(SI,SI);                    /* kind 0: a string has no pointers */
   mv_rr(DI,AX);
   callb(B_MALLOC);        /* preserves r8-r11 */
   mv_rr(8,AX);            /* r8 = new buffer */
@@ -1898,6 +2048,7 @@ static void emit_builtins(void){
   push_r(12);
   push_r(AX);
   mov_imm64(DI,64);
+  xor_rr(SI,SI);
   callb(B_MALLOC);
   mv_rr(DI,AX);                    /* rdi = buffer */
   pop_r(AX);                       /* rax = value */
@@ -2020,6 +2171,7 @@ static void emit_builtins(void){
   shl_imm(DX,3);                      /* 8*slots */
   bin_imm8(0,DX,24);                  /* 24 + 8*slots */
   mv_rr(DI,DX);
+  mov_imm64(SI,BK_LIST);
   callb(B_MALLOC);
   mv_rr(10,AX);                       /* r10 = list */
   mv_m64(10,-1,0,0,11);               /* list->n = n */
@@ -2086,6 +2238,7 @@ static void emit_builtins(void){
   mv_rr(10,CX);                       /* r10 = n (the malloc's mmap clobbers rcx; r10 is preserved) */
   mv_rr(13,SI);                       /* r13 = value (the malloc also clobbers rsi) */
   mv_rr(DI,DX);
+  mov_imm64(SI,BK_LIST);
   callb(B_MALLOC);
   mv_rr(9,AX);                        /* r9 = new */
   lea_rm(SI,11,-1,0,24);              /* rsi = old v */
@@ -2151,6 +2304,7 @@ static void emit_builtins(void){
   push_r(12);
   mv_rr(11,AX);
   mov_imm64(DI,2);
+  xor_rr(SI,SI);
   callb(B_MALLOC);
   mv_rr(10,11);
   bin_imm32(4,10,0xff);
@@ -2175,6 +2329,7 @@ static void emit_builtins(void){
   test_rr(AX,AX); J_cc(JC_JS,Lclose);
   mv_rr(13,AX);                         /* r13 = size */
   lea_rm(DI,13,-1,0,1);
+  xor_rr(SI,SI);
   callb(B_MALLOC);
   mv_rr(14,AX);                         /* r14 = buf */
   xor_rr(15,15);                        /* r15 = total */
@@ -2465,18 +2620,372 @@ static void emit_builtins(void){
   erel32(jz,done);
   }
 
-  /* gc / gc_live / gc_runs: no-op / compatibility (bump-only native) */
+}
+
+/* ================= the native collector =================
+ *
+ * Mark & sweep over the blocks r_malloc hands out (see docs/GC.md).
+ *
+ * Roots come from two places:
+ *   * precise -- the root table at OFF_ROOTS lists the byte offset of every
+ *     data-segment word that can hold a heap pointer: every string, list and
+ *     struct global, plus the literal scratch slot.  It is written after
+ *     codegen, when the kind table is final, so it is exact.
+ *   * conservative -- every word between the current rsp and the rsp the
+ *     process started with.  `gc()` is an ordinary call and may appear in the
+ *     middle of an expression, where a half-built value lives only on the
+ *     machine stack; a word that merely looks like a pointer can delay a
+ *     reclamation but can never cause a false one.
+ *
+ * Marking recurses into struct blocks only (their fields may hold strings and
+ * nested structs).  Strings hold bytes and lists hold doubles, so both are
+ * leaves.  A candidate is only accepted at an exact payload start behind a
+ * matching magic word, so a stray double can never make the collector write a
+ * mark into the middle of a live block.
+ *
+ * Every routine below preserves all general purpose registers except rax
+ * (the return value) and, for r_gc, the flags.
+ */
+static void gc_pushall(void){
+  push_r(BX); push_r(CX); push_r(DX); push_r(SI); push_r(DI);
+  push_r(8); push_r(9); push_r(10); push_r(11); push_r(12);
+  push_r(13); push_r(14); push_r(15);
+}
+static void gc_popall(void){
+  pop_r(15); pop_r(14); pop_r(13); pop_r(12); pop_r(11);
+  pop_r(10); pop_r(9); pop_r(8); pop_r(DI); pop_r(SI);
+  pop_r(DX); pop_r(CX); pop_r(BX);
+}
+
+static void emit_gc(void){
+  /* ---- r_findblock: rdi = candidate pointer -> rax = block header, or 0 ---- */
   {
-  builtin_off[B_GC]=cn;
-  push_r(12); xor_rr(AX,AX); pop_r(12); e1(0xc3);
+  int Lnext=L_new(), Lchk=L_new(), Lno=L_new(), Lout=L_new();
+  builtin_off[B_FINDBLOCK]=cn;
+  gc_pushall();
+  mv_r64m(8,12,-1,0,OFF_CHUNK);          /* r8 = chunk */
+  J_mp(Lchk);
+  L_bind(Lnext);
+  mv_r64m(8,8,-1,0,0);                   /* chunk = chunk->next */
+  L_bind(Lchk);
+  test_rr(8,8);
+  J_cc(JC_Z,Lno);
+  lea_rm(9,8,-1,0,BH_HDR);               /* r9 = first block */
+  bin_rr(0x39,DI,9);
+  J_cc(JC_B,Lnext);                      /* p < first */
+  mv_r64m(10,8,-1,0,16);                 /* r10 = chunk->cursor */
+  bin_rr(0x39,DI,10);
+  J_cc(JC_NBE,Lnext);                    /* p >= cursor */
+  lea_rm(AX,DI,-1,0,-BH_HDR);            /* rax = the header this would be */
+  bin_rr(0x39,AX,9);
+  J_cc(JC_B,Lnext);                      /* header before the first block */
+  mv_r64m(11,AX,-1,0,BH_SIZE);
+  mov_imm64(9,1); test_rr(11,9);
+  J_cc(JC_NZ,Lnext);                     /* a free block is not a root */
+  mov_imm64(9,14); test_rr(11,9);
+  J_cc(JC_NZ,Lnext);                     /* the size must be 16-aligned */
+  mov_imm64(9,SX_BLK_MAGIC);
+  mv_r64m(10,AX,-1,0,BH_MAGIC);
+  bin_rr(0x39,10,9);
+  J_cc(JC_NZ,Lnext);                     /* not a block we handed out */
+  mv_r64m(9,8,-1,0,16);                  /* r9 = cursor again */
+  mv_rr(10,AX); bin_rr(1,10,11);         /* r10 = header + size */
+  bin_rr(0x39,10,9);
+  J_cc(JC_A,Lnext);                      /* runs past the cursor -> reject
+                                          * (a block may end exactly on the
+                                          *  cursor: that is the newest one) */
+  J_mp(Lout);
+  L_bind(Lno);
+  xor_rr(AX,AX);
+  L_bind(Lout);
+  gc_popall();
+  e1(0xc3);
+  nlbl=0;
   }
+
+  /* ---- r_mark: rdi = candidate pointer; recursive ---- */
+  {
+  int Lret=L_new(), Lbody=L_new(), Lcond=L_new();
+  builtin_off[B_MARK]=cn;
+  gc_pushall();
+  callb(B_FINDBLOCK);
+  test_rr(AX,AX);
+  J_cc(JC_Z,Lret);
+  mv_r64m(11,AX,-1,0,BH_MARK);
+  test_rr(11,11);
+  J_cc(JC_NZ,Lret);                      /* already marked: stop the recursion */
+  mov_imm64(11,1);
+  mv_m64(AX,-1,0,BH_MARK,11);
+  mv_r64m(11,AX,-1,0,BH_KIND);
+  bin_imm8(7,11,BK_STRUCT);
+  J_cc(JC_NZ,Lret);                      /* a string or a list is a leaf */
+  mv_r64m(9,AX,-1,0,BH_SIZE);            /* struct: walk every payload word */
+  shr_imm(9,3);
+  bin_imm8(5,9,BH_HDR/8);
+  lea_rm(13,AX,-1,0,BH_HDR);
+  J_mp(Lcond);
+  L_bind(Lbody);
+  mv_r64m(DI,13,-1,0,0);
+  callb(B_MARK);
+  bin_imm8(0,13,8);
+  L_bind(Lcond);
+  test_rr(9,9);
+  J_cc(JC_Z,Lret);
+  incdec_r(0,9);
+  J_mp(Lbody);
+  L_bind(Lret);
+  gc_popall();
+  e1(0xc3);
+  nlbl=0;
+  }
+
+  /* ---- r_gc: collect now, rax = bytes reclaimed ---- */
+  {
+  int Lrdone,Lrloop,Lrnext,Lsdone,Lsloop,Lsnext,Lchunk,Lcdone,Lblk,Lbdone,
+      Lbnext,Ldead,Lfreerun,Lnewrun,Lp2chunk,Lp2done,Lp2loop,Lp2next,Lp2cdone,
+      Lp2used,Lp2first,Lp2link,Lkeep,Lrchunk,Lrcdone,Lrcnext,Lrckeep;
+  Lrdone=L_new(); Lrloop=L_new(); Lrnext=L_new();
+  Lsdone=L_new(); Lsloop=L_new(); Lsnext=L_new();
+  Lchunk=L_new(); Lcdone=L_new(); Lblk=L_new(); Lbdone=L_new(); Lbnext=L_new();
+  Ldead=L_new(); Lfreerun=L_new(); Lnewrun=L_new();
+  Lp2chunk=L_new(); Lp2done=L_new(); Lp2loop=L_new(); Lp2next=L_new();
+  Lp2cdone=L_new(); Lp2used=L_new(); Lp2first=L_new(); Lp2link=L_new();
+  Lkeep=L_new(); Lrchunk=L_new(); Lrcdone=L_new(); Lrcnext=L_new();
+  Lrckeep=L_new();
+  builtin_off[B_GC]=cn;
+  gc_pushall();                          /* the saved regs join the stack scan */
+  mov_imm64(AX,0);
+  mv_m64(12,-1,0,OFF_RECL,AX);
+  mv_m64(12,-1,0,OFF_LIVE,AX);           /* recomputed exactly by the sweep */
+
+  /* 1. precise roots: the global slots and the literal scratch */
+  lea_rm(13,12,-1,0,OFF_ROOTS);
+  L_bind(Lrloop);
+  mv_r64m(DI,13,-1,0,0);
+  test_rr(DI,DI);
+  J_cc(JC_Z,Lrdone);                     /* 0 terminates the table */
+  bin_rr(1,DI,12);                       /* rdi = data base + offset */
+  mv_r64m(DI,DI,-1,0,0);
+  callb(B_MARK);
+  bin_imm8(0,13,8);
+  J_mp(Lrloop);
+  L_bind(Lrdone);
+
+  /* 2. conservative roots: [rsp, stktop) */
+  mv_r64m(13,12,-1,0,OFF_STKTOP);
+  mv_rr(14,SP);
+  L_bind(Lsloop);
+  bin_rr(0x39,14,13);
+  J_cc(JC_NBE,Lsdone);
+  mv_r64m(DI,14,-1,0,0);
+  callb(B_MARK);
+  bin_imm8(0,14,8);
+  J_mp(Lsloop);
+  L_bind(Lsdone);
+
+  /* 3a. sweep: free every unmarked block, merging neighbouring free blocks */
+  mov_imm64(AX,0);
+  mv_m64(12,-1,0,OFF_GPREV,AX);          /* no open free run */
+  mv_r64m(15,12,-1,0,OFF_CHUNK);
+  L_bind(Lchunk);
+  test_rr(15,15);
+  J_cc(JC_Z,Lcdone);
+  lea_rm(BX,15,-1,0,BH_HDR);
+  mv_r64m(SI,15,-1,0,16);                /* rsi = chunk->cursor */
+  /* the open free run is per chunk: merging across chunks would add another
+     chunk's bytes to this chunk's block size */
+  mov_imm64(AX,0);
+  mv_m64(12,-1,0,OFF_GPREV,AX);
+  J_mp(Lblk);
+  L_bind(Lbnext);
+  bin_rr(1,BX,10);                       /* rbx = next block (r10 = sz) */
+  L_bind(Lblk);
+  bin_rr(0x39,BX,SI);
+  J_cc(JC_NBE,Lbdone);
+  mv_r64m(9,BX,-1,0,BH_SIZE);
+  mv_rr(10,9);
+  bin_imm32(4,10,0xFFFFFFFEu);           /* r10 = sz = size & ~1 */
+  mov_imm64(AX,SX_BLK_MAGIC);
+  mv_r64m(DX,BX,-1,0,BH_MAGIC);
+  bin_rr(0x39,DX,AX);
+  J_cc(JC_NZ,Lfreerun);                  /* already free */
+  mv_r64m(AX,BX,-1,0,BH_MARK);
+  test_rr(AX,AX);
+  J_cc(JC_Z,Ldead);
+  mv_r64m(AX,12,-1,0,OFF_LIVE);          /* live: keep the bytes */
+  bin_rr(1,AX,10);
+  mv_m64(12,-1,0,OFF_LIVE,AX);
+  mov_imm64(DX,0);                       /* and clear the mark, close the run */
+  mv_m64(BX,-1,0,BH_MARK,DX);
+  mv_m64(12,-1,0,OFF_GPREV,DX);
+  J_mp(Lbnext);
+  L_bind(Ldead);
+  mv_r64m(DX,12,-1,0,OFF_RECL);
+  bin_rr(1,DX,10);
+  mv_m64(12,-1,0,OFF_RECL,DX);           /* reclaimed += sz */
+  L_bind(Lfreerun);
+  mv_r64m(DX,12,-1,0,OFF_GPREV);
+  test_rr(DX,DX);
+  J_cc(JC_Z,Lnewrun);
+  mv_r64m(AX,DX,-1,0,BH_SIZE);           /* merge into the open run */
+  bin_rr(1,AX,10);
+  mv_m64(DX,-1,0,BH_SIZE,AX);
+  J_mp(Lbnext);
+  L_bind(Lnewrun);
+  mv_rr(AX,10);                          /* open a new run here */
+  bin_imm8(1,AX,1);
+  mv_m64(BX,-1,0,BH_SIZE,AX);
+  mov_imm64(AX,0);
+  mv_m64(BX,-1,0,BH_MAGIC,AX);
+  mv_m64(12,-1,0,OFF_GPREV,BX);
+  J_mp(Lbnext);
+  L_bind(Lbdone);
+  mv_r64m(15,15,-1,0,0);                 /* chunk = chunk->next */
+  J_mp(Lchunk);
+  L_bind(Lcdone);
+
+  /* 3a2. give back the chunks the sweep emptied completely.  Without this a
+   * program whose live set keeps growing would keep every chunk it ever
+   * mapped, and r_findblock walks the whole list for every candidate.  A
+   * chunk is empty when its first block is free and covers everything up to
+   * the cursor; the free list is rebuilt afterwards, so no dangling node can
+   * survive this pass. */
+  xor_rr(8,8);                           /* r8 = previous chunk
+                                          * (not r11: syscalls clobber it) */
+  mv_r64m(15,12,-1,0,OFF_CHUNK);
+  L_bind(Lrchunk);
+  test_rr(15,15);
+  J_cc(JC_Z,Lrcdone);
+  mv_r64m(9,15,-1,0,0);                  /* r9 = chunk->next (saved: we may unmap) */
+  mv_r64m(10,12,-1,0,OFF_CURCH);
+  bin_rr(0x39,15,10);
+  J_cc(JC_Z,Lrckeep);                    /* never release the chunk we bump in */
+  lea_rm(AX,15,-1,0,BH_HDR);             /* rax = first block */
+  mv_r64m(DX,AX,-1,0,BH_SIZE);
+  mov_imm64(CX,1);
+  test_rr(DX,CX);
+  J_cc(JC_Z,Lrckeep);                    /* allocated -> keep */
+  mv_rr(SI,DX);
+  bin_imm32(4,SI,0xFFFFFFFEu);           /* rsi = sz */
+  mv_rr(CX,AX);
+  bin_rr(1,CX,SI);                       /* rcx = first + sz */
+  mv_r64m(BX,15,-1,0,16);                /* rbx = chunk->cursor */
+  bin_rr(0x39,CX,BX);
+  J_cc(JC_NZ,Lrckeep);                   /* something after the run -> keep */
+  test_rr(8,8);                          /* unlink */
+  size_t jzh=cn; jcc_rel32(JC_Z,0);
+  mv_m64(8,-1,0,0,9);
+  size_t jmpu=cn; jmp_rel32(0);
+  erel32(jzh,cn);
+  mv_m64(12,-1,0,OFF_CHUNK,9);
+  erel32j(jmpu,cn);
+  mv_r64m(SI,15,-1,0,8);                 /* munmap(chunk, chunk->size) */
+  mv_rr(DI,15);
+  mov_imm64(AX,11);
+  e1(0x0f); e1(0x05);
+  J_mp(Lrcnext);
+  L_bind(Lrckeep);
+  mv_rr(8,15);
+  L_bind(Lrcnext);
+  mv_rr(15,9);
+  J_mp(Lrchunk);
+  L_bind(Lrcdone);
+
+  /* 3b. rebuild the free list from the runs the sweep just produced */
+  mov_imm64(AX,0);
+  mv_m64(12,-1,0,OFF_FREE,AX);
+  mv_m64(12,-1,0,OFF_GPREV,AX);          /* reused: the last linked node */
+  mv_r64m(15,12,-1,0,OFF_CHUNK);
+  L_bind(Lp2chunk);
+  test_rr(15,15);
+  J_cc(JC_Z,Lp2done);
+  lea_rm(BX,15,-1,0,BH_HDR);
+  mv_r64m(SI,15,-1,0,16);
+  mov_imm64(AX,0);                       /* last linked node: per chunk */
+  mv_m64(12,-1,0,OFF_GPREV,AX);
+  J_mp(Lp2loop);
+  L_bind(Lp2next);
+  bin_rr(1,BX,10);
+  L_bind(Lp2loop);
+  bin_rr(0x39,BX,SI);
+  J_cc(JC_NBE,Lp2cdone);
+  mv_r64m(9,BX,-1,0,BH_SIZE);
+  mv_rr(10,9);
+  bin_imm32(4,10,0xFFFFFFFEu);
+  mov_imm64(11,1);
+  test_rr(9,11);
+  J_cc(JC_Z,Lp2used);
+  mv_r64m(DX,12,-1,0,OFF_GPREV);
+  test_rr(DX,DX);
+  J_cc(JC_Z,Lp2first);
+  mv_m64(DX,-1,0,BH_NEXT,BX);
+  J_mp(Lp2link);
+  L_bind(Lp2first);
+  mv_m64(12,-1,0,OFF_FREE,BX);
+  L_bind(Lp2link);
+  mov_imm64(DX,0);
+  mv_m64(BX,-1,0,BH_NEXT,DX);
+  mv_m64(12,-1,0,OFF_GPREV,BX);
+  J_mp(Lp2next);
+  L_bind(Lp2used);
+  mov_imm64(DX,0);
+  mv_m64(12,-1,0,OFF_GPREV,DX);
+  J_mp(Lp2next);
+  L_bind(Lp2cdone);
+  mv_r64m(15,15,-1,0,0);
+  J_mp(Lp2chunk);
+  L_bind(Lp2done);
+
+  /* 4. bookkeeping: live -= reclaimed; runs++; alloc = 0; new threshold */
+  mv_r64m(AX,12,-1,0,OFF_RUNS);
+  incdec_r(1,AX);
+  mv_m64(12,-1,0,OFF_RUNS,AX);
+  mov_imm64(AX,0);
+  mv_m64(12,-1,0,OFF_ALLOC,AX);
+  mv_r64m(AX,12,-1,0,OFF_LIVE);
+  shl_imm(AX,1);                         /* rax = 2 * live */
+  mov_imm64(DX,65536);
+  bin_rr(0x39,AX,DX);
+  J_cc(JC_G,Lkeep);
+  mv_rr(AX,DX);
+  L_bind(Lkeep);
+  mv_m64(12,-1,0,OFF_THRESH,AX);
+  mv_r64m(AX,12,-1,0,OFF_RECL);          /* return value */
+  gc_popall();
+  e1(0xc3);
+  nlbl=0;
+  }
+
+  /* ---- r_gccheck: collect when the allocation debt passes the threshold ----
+   * Emitted at every statement boundary, where the only heap pointers are the
+   * globals (precise roots) and the machine stack (conservative roots), so a
+   * collection there can never free a value a half-finished expression still
+   * needs. */
+  {
+  builtin_off[B_GCCHECK]=cn;
+  push_r(AX);
+  push_r(DI);
+  mv_r64m(AX,12,-1,0,OFF_ALLOC);
+  mv_r64m(DI,12,-1,0,OFF_THRESH);
+  bin_rr(0x39,DI,AX);                    /* flags = thresh - alloc */
+  size_t jg=cn; jcc_rel32(JC_G,0);       /* thresh > alloc -> nothing to do */
+  callb(B_GC);
+  erel32(jg,cn);
+  pop_r(DI);
+  pop_r(AX);
+  e1(0xc3);
+  }
+
+  /* ---- the language surface: gc() / gc_live() / gc_runs() ---- */
   {
   builtin_off[B_GC_LIVE]=cn;
-  push_r(12); xor_rr(AX,AX); pop_r(12); e1(0xc3);
+  mv_r64m(AX,12,-1,0,OFF_LIVE);
+  e1(0xc3);
   }
   {
   builtin_off[B_GC_RUNS]=cn;
-  push_r(12); xor_rr(AX,AX); pop_r(12); e1(0xc3);
+  mv_r64m(AX,12,-1,0,OFF_RUNS);
+  e1(0xc3);
   }
 }
 
@@ -2561,7 +3070,7 @@ int main(int argc,char**argv){
   collect_defs(src);
   infer(src);
 
-  dn=40;                /* 0,8,16,24 = cur/argv/argc/end; 32 = literal scratch */
+  dn=DNA_START;         /* 0..143 = runtime + collector state, 144+ = root table */
   d_glob=d_alloc(NSLOT*8);
   d_err_div=d_str("division by zero\n");
   d_err_malloc=d_str("out of memory\n");
@@ -2587,6 +3096,12 @@ int main(int argc,char**argv){
   mv_m64(12,-1,0,OFF_ARGC,AX);
   lea_rm(AX,SP,-1,0,8);
   mv_m64(12,-1,0,OFF_ARGV,AX);
+  /* the collector scans [rsp, stktop) conservatively; rsp here is the highest
+     frame that will ever be live, so it is the right bound */
+  mv_rr(AX,SP);
+  mv_m64(12,-1,0,OFF_STKTOP,AX);
+  mov_imm64(AX,65536);
+  mv_m64(12,-1,0,OFF_THRESH,AX);
   lea_rm(DI,12,-1,0,(int)d_glob);
   mov_imm64(CX,(uint64_t)NSLOT);
   xor_rr(AX,AX);
@@ -2618,6 +3133,20 @@ int main(int argc,char**argv){
   }
 
   emit_builtins();
+  emit_gc();
+  /* The precise root table: every data word that can hold a heap pointer.
+     Filled after codegen, when the kind of every global is final.  OFF_SCR
+     holds the literal being built, which is not in a global slot yet while a
+     nested field expression runs. */
+  {
+    uint64_t* tab=(uint64_t*)(data+OFF_ROOTS);
+    int n=0;
+    for(int i=0;i<nG;i++)
+      if(G[i].kind==K_STR||G[i].kind==K_LIST||G[i].kind==K_STRUCT)
+        tab[n++]=(uint64_t)(d_glob+8*(size_t)i);
+    tab[n++]=(uint64_t)OFF_SCR;
+    tab[n]=0;
+  }
   write_elf(argv[2]);
   free(src);
   return 0;

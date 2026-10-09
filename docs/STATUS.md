@@ -437,20 +437,30 @@ still use shell/C infrastructure. See
   (`make test-native-num`). The remaining differences are the ones in the
   divergence table (`hold` in a function body, the collector builtins, the
   full-language statements and bump-only memory). Native output is x86-64 Linux only. The runtime
-  is a flat BSS data area plus one bump allocator over lazily `mmap`ped 64 KiB
-  chunks (malloc/memcpy/copy semantics verified by probe programs).
-  **Memory is bump-only and never freed**: there is no collector in native,
-  so the gen2-only builtins `gc()`/`gc_live()`/`gc_runs()` are compile-time
-  errors there. `make test-native-mem` (part of `native-test`) pins the
-  honest behaviour: a 262144-byte string (larger than one 64 KiB chunk), a
-  100000-element `push` loop and a 20000-iteration `concat` loop keep every
-  value and index correct; a 200000-iteration loop under a 4 MiB `ulimit -v`
-  cap dies with the documented `out of memory` diagnostic, stdout written
-  before the failure is kept, and the status is non-zero rather than memory
-  being corrupted; and the collector builtins are rejected.
-  A real free path is not implemented: a string slot can be aliased (copy,
-  struct field, loop-carried value) and the hand-written emitter tracks no
-  ownership, so freeing would not be sound.
+  is a flat BSS data area plus a **real mark & sweep collector** over lazily
+  `mmap`ped chunks (malloc/memcpy/copy semantics verified by probe programs).
+  Blocks carry a 32-byte header (size|FREE, magic, mark/next, kind);
+  `r_malloc` is first-fit over a free list and then bumps; `r_gc` traces from
+  a precise root table (every string/list/struct global plus the literal
+  scratch, filled in after codegen) *and* conservatively from `[rsp,
+  stktop)`, frees what it cannot reach, coalesces adjacent runs, rebuilds the
+  free list and `munmap`s chunks a sweep emptied completely. Collections are
+  triggered at statement boundaries once the bytes allocated since the last
+  one pass `max(2 * live, 64 KiB)`. `gc()`, `gc_live()` and `gc_runs()` are
+  therefore **real on native**, not compatibility no-ops: `gc()` collects and
+  returns the bytes reclaimed.
+  `make test-native-mem` (part of `native-test`) pins the behaviour: a
+  262144-byte string (larger than one 64 KiB chunk), a 100000-element `push`
+  loop and a 20000-iteration `concat` loop keep every value and index correct;
+  a 200000-iteration churn loop (~8 MB allocated, nothing retained) **finishes
+  inside a 4 MiB `ulimit -v` cap** running 200+ collections, and strings,
+  list elements and struct fields still read back correctly after 30000
+  allocating iterations; a program that genuinely retains 8 MiB still dies with
+  the documented `out of memory` diagnostic, stdout written before the failure
+  is kept, and the status is non-zero rather than memory being corrupted.
+  The collector is not compacting and the conservative half of the root set
+  can retain garbage (a stale stack word keeps a block alive); see
+  [`GC.md`](GC.md).
 * **Stage-2 demo programs**: `selfhost/minimal_lexer.sa`,
   `selfhost/stage2_functions.sa` and `selfhost/stage2_variables.sa` are
   written in the pure-min dialect and are compiled and run by both seed-min
@@ -506,7 +516,7 @@ tracked per column and per test.
 
 | Area | seed-min | gen2 | native | Tests / notes |
 |---|---|---|---|---|
-| (1) Native GC / free path | N/A (seed has no collector) | mark & sweep (`gc`/`gc_live`/`gc_runs`) | bump-only + `gc()` compatibility (no-op); safe free path still partial because untracked aliases | `make native-test` green; `test-native-mem` / `gc_builtins` verified |
+| (1) Native GC / free path | N/A (seed has no collector) | mark & sweep (`gc`/`gc_live`/`gc_runs`) | **mark & sweep: 32-byte block headers, first-fit free list + bump, precise root table + conservative stack scan, coalescing sweep, empty chunks `munmap`ped; `gc()`/`gc_live()`/`gc_runs()` real** (not compacting; conservative roots may retain garbage) | `make native-test` green; `test-native-mem` pins churn-inside-4-MiB, no-UAF across 30k iterations, and a loud OOM for an 8 MiB live set; `gc_builtins` verified |
 | (2) Full Stage-2 language | pure-min dialect only; `for c in <str>` refused by name | `for` over strings (byte walk + break/continue); `else if`/`when` chains; `and`/`or`/`not` partial | refuses `for`/`break`/`continue` by name; `else` alias works | `test-stage2-*` / `test-for-str`; demos kept working |
 | (3) Packages (offline + path to online) | `sxpkg` local lockfile + registry | same; `use "file.sa"` splice | same | `test-pkgs` / `test-registry-sums`; `sync`/`publish`/`fetch` design documented; bootstrap needs no network |
 | (4) Full stdlib | `stdlib/tiny.sa` numeric helpers (min2/max2/absv/sum_to/pow_int/is_even/gcd) | same via `use`; new string/list/file wrappers added | where signatures allow | `test-stdlib`; bootstrap does not depend on full stdlib |
@@ -514,4 +524,4 @@ tracked per column and per test.
 | (6) Richer type system | double/str/list/literal-struct only | same; no bounds, no generic structs, inference by call-site kind only | same | `test-generics` / `test-struct2`; errors are clear, not silent |
 | (7) LSP product | JSON-RPC session (one slice) verified | diagnostics, symbols, completion, hover, definition, `didChange` in `sayanox_lsp.sa`/`sayanox_lsp.c` | same (C backend runs server) | `make test-lsp`; docs `LSP.md` updated; server runnable with `make lsp` |
 | (8) Native parity | x86-64 Linux only | same host | `hold` inside `make` rejected clearly; all other native parity issues documented | `test-native-*` / `native-test` green |
-| (9) Docs | `STATUS.md` rewritten; `DEPENDENCY.md` / `doctor` honest (C99 + make required; no Python on bootstrap critical path) | `SYNTAX.md` / `GENERICS.md` updated; `GC.md` updated (native bump-only + compatibility) | `NATIVE.md` updated | `make doctor` / `true-selfhost` / `gen3` / `native-test` all green |
+| (9) Docs | `STATUS.md` rewritten; `DEPENDENCY.md` / `doctor` honest (C99 + make required; no Python on bootstrap critical path) | `SYNTAX.md` / `GENERICS.md` updated; `GC.md` rewritten for the native mark & sweep collector | `NATIVE.md` updated | `make doctor` / `true-selfhost` / `gen3` / `native-test` all green |

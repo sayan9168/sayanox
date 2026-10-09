@@ -12,4 +12,3 @@ cc -O2 -o selfhost/seed_tests/g3_mod selfhost/seed_tests/g3_mod.c
 ./selfhost/gen3 selfhost/compiler_min.sa selfhost/gen4.c >/dev/null
 [OK] byte-identical gen3 == gen4
 === GEN3-OK ===
-EXIT=0

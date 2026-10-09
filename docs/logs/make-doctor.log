@@ -14,4 +14,3 @@ python          present, but NOT used anywhere on the bootstrap path
 node/ruby       present, but NOT used anywhere on the bootstrap path
 --------------------------------
 DOCTOR-OK: minimal tool set is complete
-EXIT=0
