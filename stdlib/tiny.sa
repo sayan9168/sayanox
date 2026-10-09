@@ -138,7 +138,7 @@ make is_prime(n) {
   give no_factor_from(n, 2)
 }
 
-// Added with the 2026-10-09 expansion.  Still numeric only and still inside
+// Added with the 2026-10-08 expansion.  Still numeric only and still inside
 // the native-AOT subset (no `hold` inside a body, at most 6 parameters), so
 // every helper below runs on seed-min, gen2 and native alike.
 
