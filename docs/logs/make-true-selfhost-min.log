@@ -1,3 +1,264 @@
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+[seed-min] compiler_min.sa -> gen1_min.c
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min via seed-min
+./selfhost/gen1_min selfhost/seed_tests/sm_wh.sa selfhost/seed_tests/sm_wh.c >/dev/null
+cc -O2 -o selfhost/seed_tests/sm_wh selfhost/seed_tests/sm_wh.c
+=== SEED-MIN-GEN1-OK ===
+[2] gen1_min -> gen2.c
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c >/dev/null
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+make[1]: Entering directory '/home/user/sayanox'
+./selfhost/gen2 selfhost/seed_tests/ts_re.sa selfhost/seed_tests/ts_re.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_re selfhost/seed_tests/ts_re.c
+[OK] gen2 reassign
+./selfhost/gen2 selfhost/seed_tests/ts_wh.sa selfhost/seed_tests/ts_wh.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_wh selfhost/seed_tests/ts_wh.c
+[OK] gen2 while
+./selfhost/gen2 selfhost/seed_tests/ts_wn.sa selfhost/seed_tests/ts_wn.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_wn selfhost/seed_tests/ts_wn.c
+[OK] gen2 when
+./selfhost/gen2 selfhost/seed_tests/ts_mod.sa selfhost/seed_tests/ts_mod.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_mod selfhost/seed_tests/ts_mod.c
+[OK] gen2 modulo + else
+./selfhost/gen2 selfhost/seed_tests/ts_st2.sa selfhost/seed_tests/ts_st2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_st2 selfhost/seed_tests/ts_st2.c
+[OK] gen2 structs: named fields, two structs, field expr
+./selfhost/gen2 selfhost/seed_tests/ts_li2.sa selfhost/seed_tests/ts_li2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_li2 selfhost/seed_tests/ts_li2.c
+./selfhost/gen2 selfhost/seed_tests/ts_li3.sa selfhost/seed_tests/ts_li3.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_li3 selfhost/seed_tests/ts_li3.c
+./selfhost/gen2 selfhost/seed_tests/ts_li4.sa selfhost/seed_tests/ts_li4.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_li4 selfhost/seed_tests/ts_li4.c
+./selfhost/gen2 selfhost/seed_tests/ts_li5.sa selfhost/seed_tests/ts_li5.c >/dev/null
+[OK] gen2 lists: literal, index, len, push, guards
+./selfhost/gen2 selfhost/seed_tests/ts_use.sa selfhost/seed_tests/ts_use.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_use selfhost/seed_tests/ts_use.c
+./selfhost/gen2 selfhost/seed_tests/ts_top.sa selfhost/seed_tests/ts_top.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_top selfhost/seed_tests/ts_top.c
+./selfhost/gen2 selfhost/seed_tests/ts_uq.sa selfhost/seed_tests/ts_uq.c >/dev/null
+[OK] gen2 use: splice, nested depth 2, missing file and unquoted path are hard errors
+./selfhost/gen2 selfhost/seed_tests/ts_fn2.sa selfhost/seed_tests/ts_fn2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_fn2 selfhost/seed_tests/ts_fn2.c
+./selfhost/gen2 selfhost/seed_tests/ts_fn3.sa selfhost/seed_tests/ts_fn3.c >/dev/null
+[OK] gen2 functions: params, calls in show, recursion (fac 5 = 120), one-line give rejected
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_chain.sa > selfhost/seed_tests/ts_chain_sm.c
+cc -O2 -o selfhost/seed_tests/ts_chain_sm selfhost/seed_tests/ts_chain_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_chain.sa selfhost/seed_tests/ts_chain_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_chain_g2 selfhost/seed_tests/ts_chain_g2.c
+[OK] gen2 chained + - * / % (and string + name) agree with seed-min
+./selfhost/gen2 selfhost/seed_tests/ts_cm.sa selfhost/seed_tests/ts_cm.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_cm selfhost/seed_tests/ts_cm.c
+[OK] gen2 while/when condition % uses checked sx_mod
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_user.sa > selfhost/seed_tests/ts_user_sm.c
+cc -O2 -o selfhost/seed_tests/ts_user_sm selfhost/seed_tests/ts_user_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_user.sa selfhost/seed_tests/ts_user_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_user_g2 selfhost/seed_tests/ts_user_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_fcat.sa > selfhost/seed_tests/ts_fcat_sm.c
+cc -O2 -o selfhost/seed_tests/ts_fcat_sm selfhost/seed_tests/ts_fcat_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_fcat.sa selfhost/seed_tests/ts_fcat_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_fcat_g2 selfhost/seed_tests/ts_fcat_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_part.sa > selfhost/seed_tests/ts_part_sm.c
+cc -O2 -o selfhost/seed_tests/ts_part_sm selfhost/seed_tests/ts_part_sm.c
+[OK] struct string fields (User name/age): seed-min and gen2 agree; mismatches rejected
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_nest.sa > selfhost/seed_tests/ts_nest_sm.c
+cc -O2 -o selfhost/seed_tests/ts_nest_sm selfhost/seed_tests/ts_nest_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_nest.sa selfhost/seed_tests/ts_nest_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_nest_g2 selfhost/seed_tests/ts_nest_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_nest3.sa > selfhost/seed_tests/ts_nest3_sm.c
+cc -O2 -o selfhost/seed_tests/ts_nest3_sm selfhost/seed_tests/ts_nest3_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_nest3.sa selfhost/seed_tests/ts_nest3_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_nest3_g2 selfhost/seed_tests/ts_nest3_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_nestcopy.sa > selfhost/seed_tests/ts_nestcopy_sm.c
+cc -O2 -o selfhost/seed_tests/ts_nestcopy_sm selfhost/seed_tests/ts_nestcopy_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_nestcopy.sa selfhost/seed_tests/ts_nestcopy_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_nestcopy_g2 selfhost/seed_tests/ts_nestcopy_g2.c
+[OK] doubly nested field copy (hold p2 = t.q.p): seed-min and gen2 agree; bad chains still hard errors
+[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies incl. doubly nested); clear errors for forward decls, list fields, bad chains, show-of-struct
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_prec.sa > selfhost/seed_tests/ts_prec_sm.c
+cc -O2 -o selfhost/seed_tests/ts_prec_sm selfhost/seed_tests/ts_prec_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_prec.sa selfhost/seed_tests/ts_prec_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_prec_g2 selfhost/seed_tests/ts_prec_g2.c
+[OK] precedence: a + 3 * 4 = 14 in seed-min and gen2
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_float.sa > selfhost/seed_tests/ts_float_sm.c
+cc -O2 -o selfhost/seed_tests/ts_float_sm selfhost/seed_tests/ts_float_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_float.sa selfhost/seed_tests/ts_float_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_float_g2 selfhost/seed_tests/ts_float_g2.c
+./selfhost/gen2 selfhost/seed_tests/ts_float4.sa selfhost/seed_tests/ts_float4_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_float4_g2 selfhost/seed_tests/ts_float4_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_big.sa > selfhost/seed_tests/ts_big_sm.c
+cc -O2 -o selfhost/seed_tests/ts_big_sm selfhost/seed_tests/ts_big_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_big.sa selfhost/seed_tests/ts_big_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_big_g2 selfhost/seed_tests/ts_big_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_modzero.sa > selfhost/seed_tests/ts_modzero_sm.c
+cc -O2 -o selfhost/seed_tests/ts_modzero_sm selfhost/seed_tests/ts_modzero_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_modzero.sa selfhost/seed_tests/ts_modzero_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_modzero_g2 selfhost/seed_tests/ts_modzero_g2.c
+[OK] fractional/double literals, integer-only overflow, true division, and modulo-zero diagnostics: seed-min and gen2 agree
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_parens.sa > selfhost/seed_tests/ts_parens_sm.c
+cc -O2 -o selfhost/seed_tests/ts_parens_sm selfhost/seed_tests/ts_parens_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_parens.sa selfhost/seed_tests/ts_parens_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_parens_g2 selfhost/seed_tests/ts_parens_g2.c
+[OK] parenthesized expressions: seed-min and gen2 agree ((a + 3) * 4 = 20); non-numeric parens and unbalanced parens are clear errors
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_push.sa > selfhost/seed_tests/ts_push_sm.c
+cc -O2 -o selfhost/seed_tests/ts_push_sm selfhost/seed_tests/ts_push_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_push.sa selfhost/seed_tests/ts_push_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_push_g2 selfhost/seed_tests/ts_push_g2.c
+./selfhost/gen2 selfhost/seed_tests/ts_cont.sa selfhost/seed_tests/ts_cont_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_cont_g2 selfhost/seed_tests/ts_cont_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_lalias.sa > selfhost/seed_tests/ts_lalias_sm.c
+cc -O2 -o selfhost/seed_tests/ts_lalias_sm selfhost/seed_tests/ts_lalias_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_lalias.sa selfhost/seed_tests/ts_lalias_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_lalias_g2 selfhost/seed_tests/ts_lalias_g2.c
+[OK] bare push(xs, v): seed-min and gen2 agree; push onto a non-list and unknown statements are clear errors
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_l11.sa > selfhost/seed_tests/ts_l11_sm.c
+cc -O2 -o selfhost/seed_tests/ts_l11_sm selfhost/seed_tests/ts_l11_sm.c
+./selfhost/gen2 selfhost/seed_tests/ts_l11.sa selfhost/seed_tests/ts_l11_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_l11_g2 selfhost/seed_tests/ts_l11_g2.c
+[OK] string + number, string * number and a string list element are clear errors on seed-min and gen2 (gen2 used to paste the variable NAME: s + n printed an; seed-min emitted invalid C for ["a"])
+[OK] list literals with 10+ elements on seed-min and gen2; a struct in a list (literal or push) is a clear error on both
+[OK] hold ys = xs (whole list) on seed-min and gen2; + / - on a list or string-minus-number are clear errors, never pointer arithmetic
+./selfhost/gen2 selfhost/seed_tests/fl_for.sa selfhost/seed_tests/fl_for.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fl_for selfhost/seed_tests/fl_for.c
+./selfhost/gen2 selfhost/seed_tests/fl_list.sa selfhost/seed_tests/fl_list.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fl_list selfhost/seed_tests/fl_list.c
+./selfhost/gen2 selfhost/seed_tests/fl_elif.sa selfhost/seed_tests/fl_elif.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fl_elif selfhost/seed_tests/fl_elif.c
+./selfhost/gen2 selfhost/seed_tests/fl_fn.sa selfhost/seed_tests/fl_fn.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fl_fn selfhost/seed_tests/fl_fn.c
+./selfhost/gen2 selfhost/seed_tests/fl_type.sa selfhost/seed_tests/fl_type.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fl_type selfhost/seed_tests/fl_type.c
+./selfhost/gen2 selfhost/seed_tests/fl_comp.sa selfhost/seed_tests/fl_comp.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fl_comp selfhost/seed_tests/fl_comp.c
+./selfhost/gen2 selfhost/seed_tests/fl_badtype.sa selfhost/seed_tests/fl_badtype.c >/dev/null 2>&1 || true
+./selfhost/gen2 selfhost/seed_tests/fl_badbreak.sa selfhost/seed_tests/fl_badbreak.c >/dev/null 2>&1 || true
+./selfhost/gen2 selfhost/seed_tests/fl_badcomp.sa selfhost/seed_tests/fl_badcomp.c >/dev/null 2>&1 || true
+./selfhost/gen2 selfhost/seed_tests/fl_badlist.sa selfhost/seed_tests/fl_badlist.c >/dev/null 2>&1 || true
+[OK] full language: for/break/continue/elif, typed functions, annotations, and/or/not, compound assignment
+./selfhost/gen2 selfhost/seed_tests/tg.sa selfhost/seed_tests/tg.c >/dev/null
+cc -O2 -o selfhost/seed_tests/tg selfhost/seed_tests/tg.c
+./selfhost/gen1_min selfhost/seed_tests/tg.sa selfhost/seed_tests/tg_g1.c >/dev/null
+cc -O2 -o selfhost/seed_tests/tg_g1 selfhost/seed_tests/tg_g1.c
+[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, gen2 and gen1_min agree
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/par.sa > selfhost/seed_tests/par_sm.c
+cc -O2 -o selfhost/seed_tests/par_sm selfhost/seed_tests/par_sm.c
+./selfhost/gen2 selfhost/seed_tests/par.sa selfhost/seed_tests/par_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/par_g2 selfhost/seed_tests/par_g2.c
+[OK] seed-min and gen2 agree on the shared dialect
+=== TEST-PARITY-OK ===
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/seed/sxc_seed_min selfhost/minimal_lexer.sa > selfhost/seed_tests/stage2_lexer_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_lexer_sm selfhost/seed_tests/stage2_lexer_sm.c
+./selfhost/gen2 selfhost/minimal_lexer.sa selfhost/seed_tests/stage2_lexer_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_lexer_g2 selfhost/seed_tests/stage2_lexer_g2.c
+[stage2] native lexer: stdout identical to seed-min/gen2
+./selfhost/seed/sxc_seed_min selfhost/stage2_functions.sa > selfhost/seed_tests/stage2_fn_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_fn_sm selfhost/seed_tests/stage2_fn_sm.c
+./selfhost/gen2 selfhost/stage2_functions.sa selfhost/seed_tests/stage2_fn_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_fn_g2 selfhost/seed_tests/stage2_fn_g2.c
+./selfhost/seed/sxc_seed_min selfhost/stage2_variables.sa > selfhost/seed_tests/stage2_var_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_var_sm selfhost/seed_tests/stage2_var_sm.c
+./selfhost/gen2 selfhost/stage2_variables.sa selfhost/seed_tests/stage2_var_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
+[OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 byte for byte, plus the lexer natively when native_aot is built; contract sketches, not the full Stage-2 language
+./selfhost/gen2 selfhost/seed_tests/fs_vowels.sa selfhost/seed_tests/fs_vowels.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_vowels selfhost/seed_tests/fs_vowels.c
+./selfhost/gen2 selfhost/seed_tests/fs_brk.sa selfhost/seed_tests/fs_brk.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_brk selfhost/seed_tests/fs_brk.c
+./selfhost/gen2 selfhost/seed_tests/fs_nest.sa selfhost/seed_tests/fs_nest.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_nest selfhost/seed_tests/fs_nest.c
+./selfhost/gen2 selfhost/seed_tests/fs_bytes.sa selfhost/seed_tests/fs_bytes.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_bytes selfhost/seed_tests/fs_bytes.c
+./selfhost/gen2 selfhost/seed_tests/fs_num.sa selfhost/seed_tests/fs_num.c >/dev/null 2>&1 || true
+./selfhost/gen2 selfhost/seed_tests/fs_clash.sa selfhost/seed_tests/fs_clash.c >/dev/null 2>&1 || true
+./selfhost/gen2 selfhost/seed_tests/fs_listclash.sa selfhost/seed_tests/fs_listclash.c >/dev/null 2>&1 || true
+[stage2] native rejects for/break/continue by name
+./selfhost/gen2 selfhost/seed_tests/fs_pair.sa selfhost/seed_tests/fs_pair.c >/dev/null 2>&1 || true
+[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name
+./selfhost/gen2 selfhost/seed_tests/gg_len.sa selfhost/seed_tests/gg_len.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gg_len selfhost/seed_tests/gg_len.c
+./selfhost/gen2 selfhost/seed_tests/gg_chain.sa selfhost/seed_tests/gg_chain.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gg_chain selfhost/seed_tests/gg_chain.c
+./selfhost/gen2 selfhost/seed_tests/gg_streq.sa selfhost/seed_tests/gg_streq.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gg_streq selfhost/seed_tests/gg_streq.c
+./selfhost/gen2 selfhost/seed_tests/gg_pct.sa selfhost/seed_tests/gg_pct.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gg_pct selfhost/seed_tests/gg_pct.c
+./selfhost/gen2 selfhost/seed_tests/gg_ord.sa selfhost/seed_tests/gg_ord.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gg_ord selfhost/seed_tests/gg_ord.c
+[gen2-gaps] native rejects the chain forms
+[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native refuse the chains
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/std_t.sa > selfhost/seed_tests/std_sm.c
+cc -O2 -o selfhost/seed_tests/std_sm selfhost/seed_tests/std_sm.c
+./selfhost/gen2 selfhost/seed_tests/std_t.sa selfhost/seed_tests/std_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/std_g2 selfhost/seed_tests/std_g2.c
+[OK] tiny stdlib via use: seed-min == gen2 (== native when built) on 30 numeric helpers
+./selfhost/gen2 selfhost/seed_tests/std_sl.sa selfhost/seed_tests/std_sl.c >/dev/null
+cc -O2 -Wall -o selfhost/seed_tests/std_sl selfhost/seed_tests/std_sl.c 2>selfhost/seed_tests/std_sl.warn
+[OK] stdlib str/list/file modules on gen2 (typed parameters); seed-min and native refuse them with a clear error
+./selfhost/gen2 tools/sxpkg.sa tools/sxpkg.c >/dev/null
+cc -O2 -o tools/sxpkg tools/sxpkg.c
+[OK] Sayanox local package-lock tool built from tools/sxpkg.sa
+cd selfhost/seed_tests/pkgs-proj && sh ../../../tools/sxpkg.sh init >/dev/null
+cd selfhost/seed_tests/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+cd selfhost/seed_tests/pkgs-proj && test -s .sayanox/registry/math/main.sa
+cd selfhost/seed_tests/pkgs-proj && ../../../tools/sxpkg add math 0.1.0 >/dev/null
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/pkgs-proj/use_math.sa > selfhost/seed_tests/pkgs-proj/use_sm.c
+cc -O2 -o selfhost/seed_tests/pkgs-proj/use_sm selfhost/seed_tests/pkgs-proj/use_sm.c
+./selfhost/gen2 selfhost/seed_tests/pkgs-proj/use_math.sa selfhost/seed_tests/pkgs-proj/use_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/pkgs-proj/use_g2 selfhost/seed_tests/pkgs-proj/use_g2.c
+cd selfhost/seed_tests/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+[OK] offline packages: sxpkg seed writes .sayanox/registry (no network), use ".sayanox/registry/math/main.sa" runs the same on seed-min, gen2 (and native when built)
+  ok registry/hello sum=522968026
+  ok registry/math sum=718013937
+  ok registry/strings sum=120085778
+[OK] repository registry: every pkg.meta sum= matches its main.sa
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/bnames.sa > selfhost/seed_tests/bnames_sm.c
+cc -O2 -o selfhost/seed_tests/bnames_sm selfhost/seed_tests/bnames_sm.c
+./selfhost/gen2 selfhost/seed_tests/bnames.sa selfhost/seed_tests/bnames_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/bnames_g2 selfhost/seed_tests/bnames_g2.c
+[OK] builtin-word names: variables called index/len/arg stay variables, real builtin calls still map (seed-min == gen2)
+./selfhost/gen2 tools/sxfmt.sa tools/sxfmt.c >/dev/null
+cc -O2 -o tools/sxfmt tools/sxfmt.c
+[OK] Sayanox formatter built from tools/sxfmt.sa
+./tools/sxfmt selfhost/seed_tests/sxfmt-in.sa selfhost/seed_tests/sxfmt-out.sa
+cmp selfhost/seed_tests/sxfmt-want.sa selfhost/seed_tests/sxfmt-out.sa
+./tools/sxfmt selfhost/seed_tests/sxfmt-out.sa selfhost/seed_tests/sxfmt-again.sa
+cmp selfhost/seed_tests/sxfmt-out.sa selfhost/seed_tests/sxfmt-again.sa
+./tools/sxfmt selfhost/seed_tests/sxfmt-no-final-newline.sa selfhost/seed_tests/sxfmt-final-newline.sa
+cmp selfhost/seed_tests/sxfmt-final-want.sa selfhost/seed_tests/sxfmt-final-newline.sa
+[OK] Sayanox formatter: indentation, strings/comments, final newline, idempotence
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init
+sxpkg: init ok
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cmp selfhost/seed_tests/sxpkg/sx.toml-want selfhost/seed_tests/sxpkg/sx.toml
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.1.0
+sxpkg: locked math 0.1.0
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.2.0
+sxpkg: locked math 0.2.0
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add strings
+sxpkg: locked strings 0.1.0
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg remove math
+sxpkg: removed math
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init >/dev/null
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+[OK] Sayanox package tool: init/add/update/list/remove
+selfhost/gen2 tools/sayanox_lsp.sa tools/sayanox_lsp.c
+cc -O2 -o tools/sayanox_lsp tools/sayanox_lsp.c
+[OK] Sayanox LSP: live JSON-RPC session, real diagnostics, symbols, completion, hover, definition
+./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
+cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
+[OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded
+[OK] native GC: same program, same results as gen2 (native mark & sweep)
+make[1]: Leaving directory '/home/user/sayanox'
 make[1]: Entering directory '/home/user/sayanox'
 ./selfhost/gen2 selfhost/compiler_boot.sa selfhost/boot_from_gen2.c >/dev/null
 cc -O2 -o selfhost/boot_from_gen2 selfhost/boot_from_gen2.c

@@ -1,3 +1,120 @@
+./selfhost/native_aot examples/native_hello.sa selfhost/seed_tests/native_hello
+./selfhost/native_aot selfhost/seed_tests/native_negative.sa selfhost/seed_tests/native_negative
+./selfhost/native_aot selfhost/seed_tests/native_while.sa selfhost/seed_tests/native_while
+./selfhost/native_aot selfhost/seed_tests/native_mod.sa selfhost/seed_tests/native_mod
+./selfhost/native_aot selfhost/seed_tests/native_else.sa selfhost/seed_tests/native_else
+./selfhost/native_aot selfhost/seed_tests/native_list.sa selfhost/seed_tests/native_list
+./selfhost/native_aot selfhost/seed_tests/native_push.sa selfhost/seed_tests/native_push
+./selfhost/native_aot selfhost/seed_tests/native_oob.sa selfhost/seed_tests/native_oob
+./selfhost/native_aot selfhost/seed_tests/native_slot.sa selfhost/seed_tests/native_slot
+./selfhost/native_aot selfhost/seed_tests/native_struct.sa selfhost/seed_tests/native_struct
+./selfhost/native_aot selfhost/seed_tests/native_nest.sa selfhost/seed_tests/native_nest
+./selfhost/native_aot selfhost/seed_tests/native_nest3.sa selfhost/seed_tests/native_nest3
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/native_nest3.sa > selfhost/seed_tests/native_nest3_sm.c
+cc -O2 -o selfhost/seed_tests/native_nest3_sm selfhost/seed_tests/native_nest3_sm.c
+./selfhost/gen2 selfhost/seed_tests/native_nest3.sa selfhost/seed_tests/native_nest3_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/native_nest3_g2 selfhost/seed_tests/native_nest3_g2.c
+[OK] native nested structs: l.a.x chains (2 and 3 levels), typed copy; seed-min and gen2 agree
+[OK] native rejects (clearly): later-declared nesting, list in struct, show of struct, bad chain
+./selfhost/native_aot selfhost/seed_tests/native_nestcopy.sa selfhost/seed_tests/native_nestcopy
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/native_nestcopy.sa > selfhost/seed_tests/native_nestcopy_sm.c
+cc -O2 -o selfhost/seed_tests/native_nestcopy_sm selfhost/seed_tests/native_nestcopy_sm.c
+./selfhost/gen2 selfhost/seed_tests/native_nestcopy.sa selfhost/seed_tests/native_nestcopy_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/native_nestcopy_g2 selfhost/seed_tests/native_nestcopy_g2.c
+[OK] doubly nested field copy (hold p2 = t.q.p): seed-min == gen2 == native
+./selfhost/native_aot selfhost/seed_tests/nu_use.sa selfhost/seed_tests/nu_use
+./selfhost/native_aot selfhost/seed_tests/nu_top.sa selfhost/seed_tests/nu_top
+./selfhost/native_aot selfhost/seed_tests/nu_rel.sa selfhost/seed_tests/nu_rel
+[OK] native use: splice, nested depth 2, input-dir resolution; missing file and unquoted path are clear errors
+./selfhost/native_aot selfhost/seed_tests/native_fn.sa selfhost/seed_tests/native_fn
+./selfhost/native_aot selfhost/seed_tests/native_fn2.sa selfhost/seed_tests/native_fn2
+./selfhost/native_aot selfhost/seed_tests/native_fn3.sa selfhost/seed_tests/native_fn3
+./selfhost/native_aot selfhost/seed_tests/native_postmul.sa selfhost/seed_tests/native_postmul
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/native_postmul.sa > selfhost/seed_tests/native_postmul_sm.c
+cc -O2 -o selfhost/seed_tests/native_postmul_sm selfhost/seed_tests/native_postmul_sm.c
+./selfhost/gen2 selfhost/seed_tests/native_postmul.sa selfhost/seed_tests/native_postmul_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/native_postmul_g2 selfhost/seed_tests/native_postmul_g2.c
+[OK] postfix to the right of * / % (p.x * p.x, 3 * xs[0]); / and % left-associative; seed-min == gen2 == native
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/native_fn.sa > selfhost/seed_tests/native_fn_sm.c
+cc -O2 -o selfhost/seed_tests/native_fn_sm selfhost/seed_tests/native_fn_sm.c
+./selfhost/gen2 selfhost/seed_tests/native_fn.sa selfhost/seed_tests/native_fn_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/native_fn_g2 selfhost/seed_tests/native_fn_g2.c
+[OK] native functions: recursion (fac/fib), 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin/string args; seed-min and gen2 agree
+[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give
+./selfhost/native_aot selfhost/seed_tests/ts_float.sa selfhost/seed_tests/ts_float_nat
+./selfhost/native_aot selfhost/seed_tests/ts_big.sa selfhost/seed_tests/ts_big_nat
+./selfhost/native_aot selfhost/seed_tests/ts_modzero.sa selfhost/seed_tests/ts_modzero_nat
+./selfhost/native_aot selfhost/seed_tests/ts_parens.sa selfhost/seed_tests/ts_parens_nat
+./selfhost/native_aot selfhost/seed_tests/ts_push.sa selfhost/seed_tests/ts_push_nat
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_fmt.sa > selfhost/seed_tests/ts_fmt_sm.c
+cc -O2 -o selfhost/seed_tests/ts_fmt_sm selfhost/seed_tests/ts_fmt_sm.c
+./selfhost/native_aot selfhost/seed_tests/ts_fmt.sa selfhost/seed_tests/ts_fmt_nat
+./selfhost/native_aot selfhost/seed_tests/ts_div0.sa selfhost/seed_tests/ts_div0_nat
+./selfhost/native_aot selfhost/seed_tests/ts_fcat_n.sa selfhost/seed_tests/ts_fcat_nat
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_div0b.sa > selfhost/seed_tests/ts_div0b_sm.c
+cc -O2 -o selfhost/seed_tests/ts_div0b_sm selfhost/seed_tests/ts_div0b_sm.c 2>/dev/null
+./selfhost/native_aot selfhost/seed_tests/ts_mod0.sa selfhost/seed_tests/ts_mod0_nat
+./selfhost/native_aot selfhost/seed_tests/ts_natfix.sa selfhost/seed_tests/ts_natfix_nat
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_natfix.sa > selfhost/seed_tests/ts_natfix_sm.c
+cc -O2 -o selfhost/seed_tests/ts_natfix_sm selfhost/seed_tests/ts_natfix_sm.c
+./selfhost/native_aot selfhost/seed_tests/ts_lalias.sa selfhost/seed_tests/ts_lalias_nat
+./selfhost/native_aot selfhost/seed_tests/ts_l11.sa selfhost/seed_tests/ts_l11_nat
+[OK] native doubles: literals, large constant arithmetic, true division, truncating % and matching % by zero diagnostic; %g formatting and shared tests match seed-min/gen2; string + number and bare non-push calls are rejected exactly like seed-min and gen2
+./selfhost/native_aot selfhost/seed_tests/ts_io.sa selfhost/seed_tests/ts_io_nat
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_io.sa > selfhost/seed_tests/ts_io_sm.c
+cc -O2 -o selfhost/seed_tests/ts_io_sm selfhost/seed_tests/ts_io_sm.c
+[OK] native read_file/write_file/arg/arg_count: same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as "", 160 KiB round trip)
+./selfhost/native_aot selfhost/seed_tests/native_mem.sa selfhost/seed_tests/native_mem
+./selfhost/native_aot selfhost/seed_tests/native_mem_oom.sa selfhost/seed_tests/native_mem_oom
+[OK] native collector: 200k allocating iterations (~8 MB) stay inside a 4 MiB cap
+./selfhost/native_aot selfhost/seed_tests/native_mem_gc.sa selfhost/seed_tests/native_mem_gc
+[OK] native gc()/gc_live()/gc_runs() are real (collections run, bytes are reclaimed, live bytes reported)
+./selfhost/native_aot selfhost/seed_tests/native_mem_keep.sa selfhost/seed_tests/native_mem_keep
+[OK] native collector keeps reachable strings, list elements and struct fields (30k allocating iterations)
+./selfhost/native_aot selfhost/seed_tests/native_bigalloc.sa selfhost/seed_tests/native_bigalloc
+./selfhost/native_aot selfhost/seed_tests/native_biglist.sa selfhost/seed_tests/native_biglist
+./selfhost/native_aot selfhost/seed_tests/native_mem_fit.sa selfhost/seed_tests/native_mem_fit
+./selfhost/native_aot selfhost/seed_tests/native_oom_out.sa selfhost/seed_tests/native_oom_out
+[OK] native memory: a real free path (churn fits in 4 MiB, reachable values survive, an 8 MiB live set still dies loudly)
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/std_t.sa > selfhost/seed_tests/std_sm.c
+cc -O2 -o selfhost/seed_tests/std_sm selfhost/seed_tests/std_sm.c
+./selfhost/gen2 selfhost/seed_tests/std_t.sa selfhost/seed_tests/std_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/std_g2 selfhost/seed_tests/std_g2.c
+[OK] tiny stdlib via use: seed-min == gen2 (== native when built) on 30 numeric helpers
+./selfhost/gen2 selfhost/seed_tests/std_sl.sa selfhost/seed_tests/std_sl.c >/dev/null
+cc -O2 -Wall -o selfhost/seed_tests/std_sl selfhost/seed_tests/std_sl.c 2>selfhost/seed_tests/std_sl.warn
+[OK] stdlib str/list/file modules on gen2 (typed parameters); seed-min and native refuse them with a clear error
+./selfhost/seed/sxc_seed_min selfhost/minimal_lexer.sa > selfhost/seed_tests/stage2_lexer_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_lexer_sm selfhost/seed_tests/stage2_lexer_sm.c
+./selfhost/gen2 selfhost/minimal_lexer.sa selfhost/seed_tests/stage2_lexer_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_lexer_g2 selfhost/seed_tests/stage2_lexer_g2.c
+[stage2] native lexer: stdout identical to seed-min/gen2
+./selfhost/seed/sxc_seed_min selfhost/stage2_functions.sa > selfhost/seed_tests/stage2_fn_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_fn_sm selfhost/seed_tests/stage2_fn_sm.c
+./selfhost/gen2 selfhost/stage2_functions.sa selfhost/seed_tests/stage2_fn_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_fn_g2 selfhost/seed_tests/stage2_fn_g2.c
+./selfhost/seed/sxc_seed_min selfhost/stage2_variables.sa > selfhost/seed_tests/stage2_var_sm.c
+cc -O2 -o selfhost/seed_tests/stage2_var_sm selfhost/seed_tests/stage2_var_sm.c
+./selfhost/gen2 selfhost/stage2_variables.sa selfhost/seed_tests/stage2_var_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
+[OK] Stage-2 demos (minimal_lexer, stage2_functions, stage2_variables): seed-min == gen2 byte for byte, plus the lexer natively when native_aot is built; contract sketches, not the full Stage-2 language
+./selfhost/gen2 selfhost/seed_tests/fs_vowels.sa selfhost/seed_tests/fs_vowels.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_vowels selfhost/seed_tests/fs_vowels.c
+./selfhost/gen2 selfhost/seed_tests/fs_brk.sa selfhost/seed_tests/fs_brk.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_brk selfhost/seed_tests/fs_brk.c
+./selfhost/gen2 selfhost/seed_tests/fs_nest.sa selfhost/seed_tests/fs_nest.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_nest selfhost/seed_tests/fs_nest.c
+./selfhost/gen2 selfhost/seed_tests/fs_bytes.sa selfhost/seed_tests/fs_bytes.c >/dev/null
+cc -O2 -o selfhost/seed_tests/fs_bytes selfhost/seed_tests/fs_bytes.c
+./selfhost/gen2 selfhost/seed_tests/fs_num.sa selfhost/seed_tests/fs_num.c >/dev/null 2>&1 || true
+./selfhost/gen2 selfhost/seed_tests/fs_clash.sa selfhost/seed_tests/fs_clash.c >/dev/null 2>&1 || true
 ./selfhost/gen2 selfhost/seed_tests/fs_listclash.sa selfhost/seed_tests/fs_listclash.c >/dev/null 2>&1 || true
 [stage2] native rejects for/break/continue by name
 ./selfhost/gen2 selfhost/seed_tests/fs_pair.sa selfhost/seed_tests/fs_pair.c >/dev/null 2>&1 || true
