@@ -537,7 +537,7 @@ static void collect_defs(const char*src){
       if(nF>=MAXF){ fprintf(stderr,"native_aot: too many functions (native limit: %d)\n",MAXF); exit(1); }
       strcpy(F[nF].name,nm); F[nF].nparam=0; F[nF].start=-1;
       sw(&p);
-      if(*p=='<'){ fprintf(stderr,"native_aot: make %s<...>: generics are not in the native subset (gen2 monomorphises make NAME<T>); native has no generic functions\n",nm); exit(1); }
+      if(*p=='<'){ fprintf(stderr,"native_aot: make %s<...>: generics are not in the native subset (gen2 monomorphises make NAME<T> and make NAME<A, B>); native has no generic functions\n",nm); exit(1); }
       if(*p!='('){ fprintf(stderr,"native_aot: make %s: expected (params)\n",nm); exit(1); }
       p++;
       for(;;){

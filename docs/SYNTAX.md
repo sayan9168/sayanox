@@ -105,8 +105,9 @@ show p.x
 
 ## Generics
 
-A function whose parameters and return type are all the same type parameter is
-compiled once per concrete type its call sites use (`gen2` and `gen1_min`):
+A function whose parameters and return type all name one of its type
+parameters is compiled once per concrete kind combination its call sites use
+(`gen2` and `gen1_min`):
 
 ```sayanox
 make twice<T>(a: T) -> T {
@@ -116,33 +117,40 @@ make twice<T>(a: T) -> T {
 make pickb<T>(a: T, b: T) -> T {
   give a
 }
+make pair<A, B>(a: A, b: B) -> A {
+  give a
+}
 
 hold s = "hi"
-show twice(4)        // 4      - a num copy, twice__n
-show twice(s)        // hi     - a str copy, twice__s
+show twice(4)         // 4      - a num copy, twice__n
+show twice(s)         // hi     - a str copy, twice__s
 show len(twice("ab")) // 2
+show pair(1, "x")     // 1      - pair__ns: A = num, B = str
+show pair(s, [1, 2])  // hi     - pair__sl: A = str, B = list
 ```
 
-The kind of a call is the kind of its own first argument: a string literal or a
-variable declared `str` selects the string copy, a list literal or a variable
-declared `list` the list copy, anything else the numeric copy. The fixed kinds
-of the builtins, the declared return kinds of ordinary functions and - for a
-nested generic call - that call's own first argument are followed too, so
-`give pickb(x, x)` and `show twice(twice("z"))` work. `T` may only appear as the
-type of every parameter and of the return type; any other generic header is
-reported as an error (`make pair<A, B>` is not supported).
+A generic declares one or more type parameters in angle brackets — `NAME<T>`
+or `NAME<A, B>` (comma-separated). Each type parameter's kind is the kind of
+the first argument whose parameter uses it: a string literal or a variable
+declared `str` selects `s`, a list literal or a variable declared `list`
+selects `l`, anything else `n`. The fixed kinds of the builtins, the declared
+return kinds of ordinary functions and - for a nested generic call - that
+call's own arguments are followed too, so `give pickb(x, x)` and
+`show twice(twice("z"))` work.
 
-Single-type-parameter generics are the documented limit on purpose. A
-specialised copy is keyed by exactly one kind per call site (`NAME__n`,
-`NAME__s`, `NAME__l`), so `pair<A, B>` would need a kind *tuple* per call
-site, a per-parameter kind in the emitted C signature, and `__` suffixes
-built from several kinds - including for nested generic calls inside a
-specialised body. That rework is not in this milestone: `make pair<A, B>`
-fails with the clear "one type parameter" diagnostic above instead of
-mis-compiling. The same behaviour is pinned by `make test-generics`.
+The specialised copy is named `NAME__` plus one kind character per type
+parameter: `twice__s`, `pair__ns`, `three__nsl`. Each parameter gets its own
+C type, so `pair__ns` is `double pair__ns(double a, char * b)`.
 
-Generics are a full-language (`gen2`) feature: the seed and the pure-min dialect
-do not read `make NAME<T>`. See `make test-generics`.
+Every parameter's type and the return type must name one of the type
+parameters; any other generic header is reported as an error (`must be
+written with type parameters used by every parameter and the return type`)
+instead of being compiled wrongly.
+
+Generics are a full-language (`gen2`) feature: the seed and the pure-min
+dialect do not read `make NAME<...>` at all, and native rejects it with
+`generics are not in the native subset`. See `make test-generics` and
+[`GENERICS.md`](GENERICS.md).
 
 ## Modules and files
 

@@ -140,7 +140,11 @@ cc -O2 -o selfhost/seed_tests/fl_comp selfhost/seed_tests/fl_comp.c
 cc -O2 -o selfhost/seed_tests/tg selfhost/seed_tests/tg.c
 ./selfhost/gen1_min selfhost/seed_tests/tg.sa selfhost/seed_tests/tg_g1.c >/dev/null
 cc -O2 -o selfhost/seed_tests/tg_g1 selfhost/seed_tests/tg_g1.c
-[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, gen2 and gen1_min agree
+./selfhost/gen2 selfhost/seed_tests/tg_mp.sa selfhost/seed_tests/tg_mp.c >/dev/null
+cc -O2 -o selfhost/seed_tests/tg_mp selfhost/seed_tests/tg_mp.c
+./selfhost/gen1_min selfhost/seed_tests/tg_mp.sa selfhost/seed_tests/tg_mp_g1.c >/dev/null
+cc -O2 -o selfhost/seed_tests/tg_mp_g1 selfhost/seed_tests/tg_mp_g1.c
+[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, multi-parameter <A, B> and <A, B, C>, gen2 and gen1_min agree
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/par.sa > selfhost/seed_tests/par_sm.c
 cc -O2 -o selfhost/seed_tests/par_sm selfhost/seed_tests/par_sm.c
 ./selfhost/gen2 selfhost/seed_tests/par.sa selfhost/seed_tests/par_g2.c >/dev/null

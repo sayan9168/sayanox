@@ -38,7 +38,8 @@ source of truth for compiler behavior.
   `.sayanox/registry` written by `sxpkg` is a local convention (`make
   test-pkgs`), not a resolver. Garbage collection
   arrived with the gen2 collector ([`GC.md`](GC.md)) and generic functions
-  monomorphise the single-type-parameter form ([`SYNTAX.md`](SYNTAX.md)).
+  monomorphise one or more type parameters (`make NAME<T>`, `make NAME<A,
+  B>`), see [`GENERICS.md`](GENERICS.md).
 
 Run the verified checks with:
 

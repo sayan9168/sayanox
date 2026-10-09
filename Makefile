@@ -668,12 +668,53 @@ test-generics:
 	@# `make NAME<T>` is a full-language feature: the seed cannot read it
 	@if ./$(SEED_MIN_BIN) $(TESTS)/tg.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted a generic definition"; exit 1; fi
-	@# a generic that is not `make NAME<T>(a: T, ...) -> T` gets a clear diagnostic
-	@# instead of an unsuffixed call in the C output
-	@printf 'make pair<A, B>(a: A, b: B) -> A {\n  give a\n}\nshow pair(1, "x")\n' > $(TESTS)/tg_bad.sa
+	@# a generic whose parameters or return type name something other than its
+	@# own type parameters gets a clear diagnostic instead of an unsuffixed call
+	@printf 'make pair<T>(a: T, b: num) -> T {\n  give a\n}\nshow pair(1, 2)\n' > $(TESTS)/tg_bad.sa
 	@./$(GEN2) $(TESTS)/tg_bad.sa $(TESTS)/tg_bad.c >/dev/null 2>&1 || true
-	@grep -q "must be written with one type parameter" $(TESTS)/tg_bad.c
-	@echo "[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, gen2 and gen1_min agree"
+	@grep -q "must be written with type parameters used by every parameter" $(TESTS)/tg_bad.c
+	@# a generic whose return type names an undeclared type parameter is refused too
+	@printf 'make f2<T>(a: T) -> U {\n  give a\n}\nshow f2(1)\n' > $(TESTS)/tg_bad2.sa
+	@./$(GEN2) $(TESTS)/tg_bad2.sa $(TESTS)/tg_bad2.c >/dev/null 2>&1 || true
+	@grep -q "must be written with type parameters used by every parameter" $(TESTS)/tg_bad2.c
+	@# ---- multi-parameter generics: make NAME<A, B>(...) ----------------------
+	@# every type parameter gets its own kind, taken from the argument that uses
+	@# it, so the specialised name carries one kind character per parameter
+	@printf 'make pair<A, B>(a: A, b: B) -> A {\n  give a\n}\nmake swap<A, B>(a: A, b: B) -> B {\n  give b\n}\nmake three<A, B, C>(a: A, b: B, c: C) -> C {\n  give c\n}\nmake usefirst<A, B>(a: A, b: B) -> A {\n  hold r: A = pair(a, b)\n  give r\n}\nhold xs = [1, 2, 3]\nhold s = "hi"\nshow pair(1, "x")\nshow swap(1, "x")\nshow swap("x", 1)\nshow pair("x", 1)\nshow pair(1, 2)\nshow len(three(1, "x", xs))\nshow usefirst(5, s)\nshow len(usefirst(xs, s))\nshow len(usefirst(xs, 7))\nshow pair(s, xs)\n' > $(TESTS)/tg_mp.sa
+	./$(GEN2) $(TESTS)/tg_mp.sa $(TESTS)/tg_mp.c >/dev/null
+	@if grep -q '#error' $(TESTS)/tg_mp.c; then echo "[FAIL] multi-param generics: #error in the output"; exit 1; fi
+	$(CC) -O2 -o $(TESTS)/tg_mp $(TESTS)/tg_mp.c
+	$(call assert-out,./$(TESTS)/tg_mp,1\nx\n1\nx\n1\n3\n5\n3\n3\nhi)
+	@# one definition per (name, kinds), however many calls ask for it
+	@test `grep -c 'static double pair__nn(double a, double b) {' $(TESTS)/tg_mp.c` = 1
+	@test `grep -c 'static double  pair__ns(double a, char \* b);' $(TESTS)/tg_mp.c` = 1
+	@test `grep -c 'static char \*  pair__sn(char \* a, double b);' $(TESTS)/tg_mp.c` = 1
+	@test `grep -c 'static sx_list \*  pair__ls(sx_list \* a, char \* b);' $(TESTS)/tg_mp.c` = 1
+	@test `grep -c 'static sx_list \*  pair__ln(sx_list \* a, double b);' $(TESTS)/tg_mp.c` = 1
+	@test `grep -c 'static char \*  pair__sl(char \* a, sx_list \* b);' $(TESTS)/tg_mp.c` = 1
+	@test `grep -c 'static sx_list \*  three__nsl(double a, char \* b, sx_list \* c);' $(TESTS)/tg_mp.c` = 1
+	@# a return type that is the second parameter of the generic, not the first
+	@test `grep -c 'static char \*  swap__ns(double a, char \* b);' $(TESTS)/tg_mp.c` = 1
+	@test `grep -c 'static double  swap__sn(char \* a, double b);' $(TESTS)/tg_mp.c` = 1
+	@# a generic calling a two-parameter generic: the callee is specialised with
+	@# its own kinds, and `hold v: T = callee(..)` inside the body knows the result
+	@test `grep -c 'static sx_list \*  usefirst__ls(sx_list \* a, char \* b);' $(TESTS)/tg_mp.c` = 1
+	@test `grep -c 'static double  usefirst__ns(double a, char \* b);' $(TESTS)/tg_mp.c` = 1
+	@test `grep -c 'sx_list \*r = pair__ls(a,b);' $(TESTS)/tg_mp.c` = 1
+	@# every call must see a prototype
+	@$(CC) -O2 -Wall -o $(TESTS)/tg_mp-w $(TESTS)/tg_mp.c 2>$(TESTS)/tg_mp.warn
+	@if grep -q 'implicit declaration' $(TESTS)/tg_mp.warn; then echo "[FAIL] multi-param generics: a call without a prototype"; exit 1; fi
+	@# the same program through the seed-built compiler must agree byte for byte
+	./$(GEN1_MIN) $(TESTS)/tg_mp.sa $(TESTS)/tg_mp_g1.c >/dev/null
+	@diff $(TESTS)/tg_mp.c $(TESTS)/tg_mp_g1.c >/dev/null || { echo "[FAIL] multi-param generics: gen1_min output differs"; exit 1; }
+	$(CC) -O2 -o $(TESTS)/tg_mp_g1 $(TESTS)/tg_mp_g1.c
+	$(call assert-out,./$(TESTS)/tg_mp_g1,1\nx\n1\nx\n1\n3\n5\n3\n3\nhi)
+	@# native has no generics at all
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/tg_mp.sa $(TESTS)/tg_mp_nat 2>&1 | grep -q 'generics are not in the native subset'; then :; \
+	  else echo "[FAIL] native did not reject make NAME<A, B>"; exit 1; fi; \
+	fi
+	@echo "[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, multi-parameter <A, B> and <A, B, C>, gen2 and gen1_min agree"
 
 
 # ---------------------------------------------------------------------------
@@ -1172,10 +1213,10 @@ test-for-str: $(GEN2) $(SEED_MIN_BIN)
 	else \
 	  echo "[stage2] native rejection: skipped (native_aot is not built here)"; \
 	fi
-	@# generics: gen2 monomorphises a single type parameter; native has no generics
-	@printf 'make pair<A, B>(a: A, b: B) -> A {\n  give a\n}\nshow pair(1, "x")\n' > $(TESTS)/fs_pair.sa
+	@# generics: gen2 monomorphises one or more type parameters; native has none
+	@printf 'make pair<T>(a: T, b: str) -> T {\n  give a\n}\nshow pair(1, "x")\n' > $(TESTS)/fs_pair.sa
 	./$(GEN2) $(TESTS)/fs_pair.sa $(TESTS)/fs_pair.c >/dev/null 2>&1 || true
-	@grep -q "must be written with one type parameter" $(TESTS)/fs_pair.c
+	@grep -q "must be written with type parameters used by every parameter" $(TESTS)/fs_pair.c
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  if ./$(NATIVE_BIN) $(TESTS)/fs_pair.sa $(TESTS)/fs_pair_nat 2>&1 | grep -q 'generics are not in the native subset'; then :; \
 	  else echo "[FAIL] native did not reject make NAME<...>"; exit 1; fi; \
