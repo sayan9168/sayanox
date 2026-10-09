@@ -61,35 +61,97 @@ collector was in place (see the table in [`STATUS.md`](STATUS.md)).
 
 ## 2. Native AOT and the seeds
 
-* `selfhost/native_aot.c` is the x86-64 direct backend. Its runtime is a flat
-  BSS data area plus one bump allocator over lazily `mmap`ped 64 KiB chunks
-  (a request bigger than 64 KiB gets its own page-rounded chunk). It never
-  frees; native programs are for demos and small benchmarks. That is not
-  "zero memory management": when `mmap` fails, `r_malloc` dies with the
-  documented `out of memory` message and a non-zero exit status instead of
-  corrupting memory. `make test-native-mem` pins the bump-only contract from
-  both sides:
-  * a string doubled 18 times (262144 bytes, far above one 64 KiB chunk) is
-    served whole and its last byte reads back correctly;
-  * a 100000-element `push` loop (growth crosses many chunks) keeps every
-    value: `len` 100000, `xs[0]` 0, `xs[99999]` 99999;
-  * a 20000-iteration `concat` loop (about 0.8 MB of total allocation) finishes
-    under a 4 MiB `ulimit -v` cap, while a 200000-iteration loop under the same
-    cap exhausts it: stdout written before the failure is kept, the process
-    exits non-zero, and stderr carries `out of memory`;
-  * the gen2-only collector builtins (`gc()`, `gc_live()`, `gc_runs()`) are
-    compile-time errors in native.
+### The native collector
 
-  The 4 MiB cap is charged for **total bytes ever allocated**, not live bytes,
-  because nothing is ever returned. A real free path would need ownership and
-  aliasing information the hand-written emitter does not track (a string slot
-  can be aliased by a copy, a struct field or a loop-carried value), so it is
-  not claimed.
+`selfhost/native_aot.c` — the x86-64 direct backend — has a real mark & sweep
+collector, not a bump-only arena. It shares the design of §1 (tracing, so
+cycles are not a problem) but is precise about roots instead of fully
+conservative, because the emitter knows exactly where a heap pointer can live.
 
-  Native also rejects, by name, the full-language statements the bump
-  backend does not model: `for`, `break`, `continue` and `elif` (see the
-  Stage-2 slice in [`STATUS.md`](STATUS.md)). Native programs therefore stay
-  in the pure-min statement set.
+**Blocks.** Every value the runtime allocates gets a 32-byte header in front of
+a 16-byte-aligned payload:
+
+```
+  +0   size | FREE   bit 0 marks a free block; bits 1-3 are always 0
+  +8   magic         SX_BLK_MAGIC, so a stray integer never looks like a block
+  +16  mark / next   mark bit during a collection, free-list link otherwise
+  +24  kind          num / str / list / struct
+  +32  payload
+```
+
+**Chunks.** Blocks live in `mmap`ped chunks (64 KiB, or page-rounded `need +
+64 KiB + 4 KiB + header` for a big request). Chunks are linked through their
+first 8 bytes, so the collector can walk every block it ever handed out, and
+`[OFF_HLO, OFF_HHI)` records the whole window so a candidate pointer can be
+rejected with two compares.
+
+**Allocation.** `r_malloc` is first-fit over the free list, splitting a block
+when at least 48 bytes are left over; otherwise it hands the block out whole
+(keeping its real size, so the walk stays in step). If nothing fits it bumps
+the cursor of the current chunk, and if that is exhausted it maps a new chunk.
+
+**Roots.** Two sources, both scanned by `r_gc`:
+
+* *precise* — a root table at `OFF_ROOTS`, filled in after codegen when the
+  kind of every global is final, listing the data-segment offset of every
+  string, list and struct slot plus the literal scratch word;
+* *conservative* — every word in `[rsp, OFF_STKTOP)`. `gc()` is an ordinary
+  call that may sit in the middle of an expression, where a half-built value
+  lives only on the machine stack. A word that merely *looks* like a pointer
+  can delay a reclamation and can never cause a false one, because a candidate
+  is only accepted at an exact payload start behind a matching magic word.
+
+Marking recurses into struct blocks only: strings hold bytes and lists hold
+doubles, so both are leaves.
+
+**Sweep.** Three passes over every chunk: free unmarked blocks (reclaiming
+their bytes) and coalesce adjacent free runs; hand the runs back to the free
+list; then `munmap` any chunk that is now entirely free and is not the chunk
+the bump cursor lives in — without that, a program whose live set keeps
+growing would keep every chunk it ever mapped.
+
+**Trigger.** `r_gccheck` is emitted at every statement boundary, where the only
+heap pointers are globals and the machine stack, and collects once the bytes
+allocated since the last collection pass `max(2 * live, 64 KiB)`.
+
+**Language surface.** `gc()`, `gc_live()` and `gc_runs()` are real on native:
+`gc()` collects now and returns the bytes it reclaimed, `gc_live()` reports the
+bytes the last sweep saw alive (plus whatever has been allocated since), and
+`gc_runs()` counts the collections.
+
+`make test-native-mem` pins that contract:
+
+* a string doubled 18 times (262144 bytes, far above one 64 KiB chunk) is
+  served whole and its last byte reads back correctly;
+* a 100000-element `push` loop (growth crosses many chunks) keeps every value:
+  `len` 100000, `xs[0]` 0, `xs[99999]` 99999;
+* a 200000-iteration churn loop — roughly 8 MB of allocation, nothing
+  retained — **finishes inside a 4 MiB `ulimit -v` cap**, running 200+
+  collections. This is the assertion the old bump allocator failed, and the
+  reason the backend has a collector at all;
+* `gc_runs()` is greater than zero after 5000 allocating iterations, `gc()`
+  returns a positive number of reclaimed bytes, and `gc_live()` reports a
+  positive live count;
+* strings, list elements and struct fields still read back correctly after
+  30000 allocating iterations, so nothing reachable is reclaimed;
+* a program that genuinely *retains* more than 4 MiB (a string doubled 20
+  times, 8 MiB live) still dies with the documented `out of memory` message and
+  a non-zero exit status, keeping the output it wrote first.
+
+### Honest boundaries (native)
+
+* The collector is not compacting and not generational: blocks never move, so
+  a long-running program can still fragment.
+* The conservative half of the root set can retain garbage — a stale stack
+  word that happens to point into the heap keeps that block alive until the
+  word is overwritten. That costs memory, never safety.
+* Chunks are only handed back when a sweep empties one completely; a chunk
+  holding one small live block stays mapped.
+* Native still rejects, by name, the full-language statements the backend does
+  not model: `for`, `break`, `continue` and `elif` (see the Stage-2 slice in
+  [`STATUS.md`](STATUS.md)). Native programs therefore stay in the pure-min
+  statement set.
+
 * `selfhost/seed/sxc_seed_min` (the bootstrap seed) has a malloc-only prelude
   and frees only the previous value of a reassigned string variable. Its point
   is to be small and auditable, not to manage memory well.
@@ -106,11 +168,12 @@ collector was in place (see the table in [`STATUS.md`](STATUS.md)).
 ## Stress tests
 
 ```sh
-make gc-test     # reference-counting runtime slice (2000 concats, length + ok)
-make test-gc     # gen2 mark & sweep: bounded heap, collections, gc()/gc_live()
+make gc-test         # reference-counting runtime slice (2000 concats, length + ok)
+make test-gc         # gen2 mark & sweep: bounded heap, collections, gc()/gc_live()
+make test-native-mem # native mark & sweep: churn inside a 4 MiB cap, no UAF
 ```
 
-CI runs both as part of `make test`. No GC feature changes the pure
+CI runs these as part of `make test`. No GC feature changes the pure
 `.sa -> gen1` bootstrap path: the seed compiler never sees the collector.
 
 ## What is not implemented
@@ -120,5 +183,6 @@ CI runs both as part of `make test`. No GC feature changes the pure
 * No finalizers or weak references.
 * No cycle problem *for the collector* (tracing reclaims cycles), but the
   `rc_runtime.h` slice cannot reclaim cycles.
-* The native AOT backend still bump-allocates and never frees.
+* No compacting or generational collector on either backend: blocks never
+  move, so a long-running program can fragment.
 * Not every C `malloc` in the compiler tooling is managed.

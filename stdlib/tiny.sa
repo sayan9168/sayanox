@@ -1,11 +1,20 @@
 // Tiny portable standard library (pure-min, all three backends).
 //
-// Only numeric helpers live here.  String-returning user functions and
-// list/string function parameters are not in the native-AOT subset, so a
-// library that has to run everywhere stays numeric; string work uses the
-// builtins (concat/len/chr/read_file/write_file/arg).
+// Only numeric helpers live here.  String/list parameters and string returns
+// need the full-language typed parameter (`make f(s: str) -> str`), which the
+// native-AOT subset does not model and seed-min does not read, so a library
+// that has to run on all three backends stays numeric; string work uses the
+// builtins (concat/len/chr/sx_index/read_file/write_file/arg).
 //
-// Use it with a plain file splice:
+// The string, list and file helpers live next door and are gen2-only:
+//   use "stdlib/str_util.sa"    s_len s_at s_join s_prefix s_suffix s_reverse
+//                               s_repeat s_count s_contains s_eq s_upper
+//                               s_lower s_starts s_ends
+//   use "stdlib/list_util.sa"   l_len l_get l_sum l_max l_min l_count
+//                               l_contains l_reverse l_range
+//   use "stdlib/file_util.sa"   f_read f_write f_size f_exists f_lines
+//
+// Use any of them with a plain file splice:
 //   use "stdlib/tiny.sa"
 
 make min2(a, b) {
@@ -127,4 +136,86 @@ make is_prime(n) {
     give 0
   }
   give no_factor_from(n, 2)
+}
+
+// Added with the 2026-10-08 expansion.  Still numeric only and still inside
+// the native-AOT subset (no `hold` inside a body, at most 6 parameters), so
+// every helper below runs on seed-min, gen2 and native alike.
+
+make sum_range(a, b) {
+  when a > b {
+    give 0
+  }
+  give a + sum_range(a + 1, b)
+}
+
+make sum_sq(n) {
+  when n <= 0 {
+    give 0
+  }
+  give n * n + sum_sq(n - 1)
+}
+
+make count_digits(n) {
+  when n < 0 {
+    give count_digits(0 - n)
+  }
+  when n < 10 {
+    give 1
+  }
+  give 1 + count_digits((n - n % 10) / 10)
+}
+
+make digit_sum(n) {
+  when n < 0 {
+    give digit_sum(0 - n)
+  }
+  when n < 10 {
+    give n
+  }
+  give n % 10 + digit_sum((n - n % 10) / 10)
+}
+
+make trunc10(n) {
+  give (n - n % 10) / 10
+}
+
+// helper order matters: a call needs the callee defined above it, because a
+// user function gets no forward prototype in the C output.
+make rev_num(n, acc) {
+  when n <= 0 {
+    give acc
+  }
+  give rev_num(trunc10(n), acc * 10 + n % 10)
+}
+
+make reverse_num(n) {
+  give rev_num(n, 0)
+}
+
+make has_sq_from(n, i) {
+  when i * i > n {
+    give 0
+  }
+  when i * i == n {
+    give 1
+  }
+  give has_sq_from(n, i + 1)
+}
+
+make is_square(n) {
+  when n < 0 {
+    give 0
+  }
+  give has_sq_from(n, 0)
+}
+
+make between(x, lo, hi) {
+  when x < lo {
+    give 0
+  }
+  when x > hi {
+    give 0
+  }
+  give 1
 }

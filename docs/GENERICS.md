@@ -1,9 +1,10 @@
-# Generics: one type parameter, on purpose
+# Generics: type parameters, monomorphised
 
-Status (2026-10-08): **single-type-parameter generics are the supported and
-documented form.** Multi-parameter generics (`make pair<A, B>(...)`) are **not**
-implemented. They are reported as an error, and this is not a planned
-milestone.
+Status (2026-10-09): **generics with one or more type parameters are the
+supported and documented form.** `make twice<T>(a: T) -> T` and
+`make pair<A, B>(a: A, b: B) -> A` both compile; every type parameter is
+resolved at each call site from the argument that uses it, and the whole
+generic is monomorphised into ordinary C.
 
 ## The supported form
 
@@ -11,50 +12,105 @@ milestone.
 make twice<T>(a: T) -> T {
   give a
 }
-show twice(7)
-show twice("ok")
+make pair<A, B>(a: A, b: B) -> A {
+  give a
+}
+show twice(7)          // 7
+show twice("ok")       // ok
+show pair(1, "x")      // 1
+show pair("x", 1)      // x
 ```
 
-* One type parameter, named in angle brackets after the function name:
-  `make NAME<T>(params) -> T`.
-* `T` may be used for any parameter and for the return type. It stands for one
-  of the three value kinds: `num`, `str`, or a double list.
-* gen2 monomorphises the function: one C copy per call-site kind, named
-  `NAME__n`, `NAME__s` or `NAME__l`. Each copy has a prototype before any use.
-* An unused generic emits nothing.
-* It is a gen2 (full-language) feature. seed-min and the pure-min dialect do not
-  read `make NAME<T>`, and native rejects it with
-  `generics are not in the native subset`.
+* One or more type parameters, named in a comma-separated list in angle
+  brackets after the function name: `make NAME<T>(...)` or
+  `make NAME<A, B>(...)`, up to `<A, B, C>` and beyond.
+* Every parameter's type and the return type must name one of the type
+  parameters. A parameter typed `num`, a return type that names nothing, or a
+  return type naming an undeclared parameter is **reported as an error**
+  (`must be written with type parameters used by every parameter and the
+  return type`), never silently compiled.
+* Each type parameter stands for one of the three value kinds: `num`, `str`,
+  or a double list.
+* Type-parameter names are single characters or identifiers; a generic may
+  have up to 10 type parameters (the internal tables store indices as one
+  character each).
 
-Verified by `make test-generics` (14 lines of a program mixing `pickb`, `twice`
-and `quad` over num, str and list print identically under gen2 and gen1_min)
-and by the `make test-for-str` rejection checks.
+## How a call site picks the kinds
 
-## Why not `pair<A, B>` (status: design documented, not fully implemented)
+The kind of a type parameter is the kind of the **first argument whose
+declared parameter uses it**:
 
-A second type parameter means each call site must select a *tuple* of kinds,
-not one kind. The monomorphiser keys copies on a single kind (`NAME__n`,
-`NAME__s`, `NAME__l`), so `pair<A, B>` needs a new key format for every call
-site (e.g. `pair__n_s`, `pair__s_n`, `pair__n_n`), including nested generic
-calls inside an already-specialised body. Doing it halfway would risk
-mis-compiled C, so the form is rejected with a clear error (`must be written
-with one type parameter`), not silently wrong.
+* a string literal, or a variable declared `str`, gives `s`;
+* a list literal, or a variable declared `list`, gives `l`;
+* anything else gives `n`;
+* the fixed kinds of the builtins (`concat` → `s`, `len` → `n`, `push` → `l`,
+  …), the declared return kinds of ordinary functions, and — for a nested
+  generic call — that call's own arguments, are followed too, so
+  `give pickb(x, x)` and `show twice(twice("z"))` work.
 
-Design for the tuple-key format is documented here; full integration into
-`compiler_min.sa` (call-site scanner, prototype emitter, naming scheme) is
-tracked on the roadmap. The single-type-parameter form remains the verified
-and documented limit.
+With one type parameter this is exactly the old "kind of the first argument"
+rule, which is why single-parameter generics keep the names `NAME__n`,
+`NAME__s`, `NAME__l`.
 
-* gen2 reports `make pair<A, B>` with a clear `must be written with one type parameter`
-  error (checked by `make test-for-str`).
-* native reports `generics are not in the native subset`.
+## The specialised name
 
-Multi-parameter generics are a non-goal for the current milestone and are
-listed under "Out of scope" in [`STATUS.md`](STATUS.md).
+A copy is named `NAME__` followed by one kind character per type parameter,
+in declaration order:
+
+| generic | call | copy |
+|---|---|---|
+| `twice<T>` | `twice("x")` | `twice__s` |
+| `pair<A, B>` | `pair(1, "x")` | `pair__ns` |
+| `pair<A, B>` | `pair(s, xs)` | `pair__sl` |
+| `three<A, B, C>` | `three(1, "x", xs)` | `three__nsl` |
+
+Each copy gets a prototype before any use, and is emitted **once** however
+many call sites ask for it. An unused generic emits nothing.
+
+The emitted C signature is per-parameter, not one type for the whole function:
+
+```c
+static double  pair__ns(double a, char * b);   /* A = num, B = str, -> A */
+static char *  pair__sn(char * a, double b);   /* A = str, B = num, -> A */
+static sx_list *  pair__ls(sx_list * a, char * b);
+```
+
+A generic that calls another generic inside its body specialises the callee
+with the kinds it was given itself (`usefirst<A, B>` calling `pair<A, B>`
+produces `pair__ls` inside `usefirst__ls`), and `hold v: T = callee(...)` in
+such a body knows the callee's result kind, because the callee's kind is
+recorded as soon as the nested call is queued.
+
+## Backends
+
+* gen2 and gen1_min implement this; both produce byte-identical C
+  (`make test-generics` diffs the two outputs).
+* It is a full-language feature: seed-min and the pure-min dialect do not read
+  `make NAME<...>` at all and reject the program.
+* native rejects every generic with `generics are not in the native subset`.
+
+## Verified by
+
+`make test-generics` covers, on gen2 with gen1_min agreement:
+
+* the single-parameter program (`pickb`/`twice`/`quad`/`wrap`/`unused` over
+  num, str and list, nested and cross-generic calls, one copy per kind, every
+  call prototyped, an unused generic emitting nothing);
+* a multi-parameter program: `pair<A, B>` (returning `A`), `swap<A, B>`
+  (returning `B`), `three<A, B, C>` (returning `C`), `usefirst<A, B>` calling
+  `pair<A, B>` and binding the result in a `hold`, over the kind combinations
+  `nn`, `ns`, `sn`, `ls`, `ln`, `sl`, `nsl` — each copy asserted to appear
+  exactly once, no `#error`, no implicit declaration;
+* two rejection cases: a parameter that does not use a type parameter, and a
+  return type naming an undeclared one.
 
 ## What this does not claim
 
-* No trait or bound system: `T` has no constraints beyond the three value kinds.
-* No type inference beyond the call site's argument kinds.
+* No trait or bound system: a type parameter has no constraints beyond the
+  three value kinds.
+* No type inference beyond the call site's argument kinds, and no inference
+  for a type parameter that no argument pins down (it falls back to `num`).
 * No generic structs and no generic lists of arbitrary element types. Lists
   remain double-only (see [`SYNTAX.md`](SYNTAX.md)).
+* Kinds are per *value kind*, not per declared type: `A` and `B` can both be
+  `num` without any distinction being made.

@@ -1,0 +1,5 @@
+name=calc
+version=0.1.0
+desc=tiny helpers built on math (dblsqr)
+deps=math@0.1.0
+sum=807763569

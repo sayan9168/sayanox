@@ -1,0 +1,5 @@
+use ".sayanox/registry/math/main.sa"
+make dblsqr(n) {
+  hold d = dbl(n)
+  give sqr(d)
+}

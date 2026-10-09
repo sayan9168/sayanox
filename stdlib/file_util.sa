@@ -1,0 +1,50 @@
+// stdlib/file_util.sa -- file helpers, wrapping the builtins.
+//
+// gen2 only: every signature here needs a typed `str` parameter.  The helpers
+// are thin by design -- the builtins already do the work, these give them
+// readable names and a place to document the contract.
+//
+//   * a missing file reads as "" (that is the builtin's documented result),
+//     so f_exists() is only as good as "the file is readable and non-empty";
+//   * f_write returns 1 on success and 0 when the path cannot be written.
+
+make f_read(p: str) -> str {
+  give read_file(p)
+}
+
+make f_write(p: str, s: str) -> num {
+  give write_file(p, s)
+}
+
+make f_size(p: str) -> num {
+  give len(read_file(p))
+}
+
+make f_exists(p: str) -> num {
+  when len(read_file(p)) > 0 {
+    give 1
+  }
+  give 0
+}
+
+// f_lines(p): how many lines the file holds.  A trailing newline does not
+// start a new line, so "a\nb\n" counts 2 and "" counts 0.
+make f_lines(p: str) -> num {
+  hold s = read_file(p)
+  hold k = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c == 10 {
+      hold k = k + 1
+    }
+    hold i = i + 1
+  }
+  when len(s) > 0 {
+    hold last = sx_index(s, len(s) - 1)
+    when last != 10 {
+      hold k = k + 1
+    }
+  }
+  give k
+}
