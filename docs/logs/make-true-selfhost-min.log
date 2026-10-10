@@ -193,7 +193,7 @@ cc -O2 -o selfhost/seed_tests/fs_bytes selfhost/seed_tests/fs_bytes.c
 ./selfhost/gen2 selfhost/seed_tests/fs_listclash.sa selfhost/seed_tests/fs_listclash.c >/dev/null 2>&1 || true
 [stage2] native rejection: skipped (native_aot is not built here)
 ./selfhost/gen2 selfhost/seed_tests/fs_pair.sa selfhost/seed_tests/fs_pair.c >/dev/null 2>&1 || true
-[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name
+[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min refuses it by name; native runs it
 ./selfhost/gen2 selfhost/seed_tests/gg_len.sa selfhost/seed_tests/gg_len.c >/dev/null
 cc -O2 -o selfhost/seed_tests/gg_len selfhost/seed_tests/gg_len.c
 ./selfhost/gen2 selfhost/seed_tests/gg_chain.sa selfhost/seed_tests/gg_chain.c >/dev/null

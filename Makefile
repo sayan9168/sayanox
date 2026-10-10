@@ -1458,12 +1458,12 @@ test-for-str: $(GEN2) $(SEED_MIN_BIN)
 	@# seed-min is the pure-min dialect: it must refuse the statement
 	@if ./$(SEED_MIN_BIN) $(TESTS)/fs_vowels.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted for c in s (gen2-only statement)"; exit 1; fi
-	@# native (when built) names the statement instead of a misleading error
+	@# native (when built) runs for over a string (since 2026-10-11, test-native-lang)
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  ./$(NATIVE_BIN) $(TESTS)/fs_vowels.sa $(TESTS)/fs_native 2>&1 | grep -q "'for' is a full-language statement"; \
-	  if ./$(NATIVE_BIN) $(TESTS)/fs_vowels.sa $(TESTS)/fs_native >/dev/null 2>&1; then \
-	    echo "[FAIL] native accepted for c in s"; exit 1; fi; \
-	  echo "[stage2] native rejects for/break/continue by name"; \
+	  printf 'hold word = "abc"\nfor ch in word {\n  show ch\n}\n' > $(TESTS)/fs_nat.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/fs_nat.sa $(TESTS)/fs_native || exit 1; \
+	  ./$(TESTS)/fs_native | tr '\n' ' ' | grep -qx 'a b c ' || { echo "[FAIL] native for over a string printed the wrong result"; exit 1; }; \
+	  echo "[stage2] native runs for over a string"; \
 	else \
 	  echo "[stage2] native rejection: skipped (native_aot is not built here)"; \
 	fi
@@ -1475,7 +1475,7 @@ test-for-str: $(GEN2) $(SEED_MIN_BIN)
 	  if ./$(NATIVE_BIN) $(TESTS)/fs_pair.sa $(TESTS)/fs_pair_nat 2>&1 | grep -q 'generics are not in the native subset'; then :; \
 	  else echo "[FAIL] native did not reject make NAME<...>"; exit 1; fi; \
 	fi
-	@echo "[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name"
+	@echo "[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min refuses it by name; native runs it"
 
 # ---------------------------------------------------------------------------
 # test-registry-sums: every repository package carries a `sum=` line in its

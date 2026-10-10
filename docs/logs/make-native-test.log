@@ -122,9 +122,9 @@ cc -O2 -o selfhost/seed_tests/fs_bytes selfhost/seed_tests/fs_bytes.c
 ./selfhost/gen2 selfhost/seed_tests/fs_num.sa selfhost/seed_tests/fs_num.c >/dev/null 2>&1 || true
 ./selfhost/gen2 selfhost/seed_tests/fs_clash.sa selfhost/seed_tests/fs_clash.c >/dev/null 2>&1 || true
 ./selfhost/gen2 selfhost/seed_tests/fs_listclash.sa selfhost/seed_tests/fs_listclash.c >/dev/null 2>&1 || true
-[stage2] native rejects for/break/continue by name
+[stage2] native runs for over a string
 ./selfhost/gen2 selfhost/seed_tests/fs_pair.sa selfhost/seed_tests/fs_pair.c >/dev/null 2>&1 || true
-[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name
+[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min refuses it by name; native runs it
 [OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions
 ./selfhost/native_aot selfhost/native_strord_test.sa selfhost/seed_tests/nso_nat_gate
 ./selfhost/native_aot selfhost/stdlib_growth_test.sa selfhost/seed_tests/sg_nat_gate
