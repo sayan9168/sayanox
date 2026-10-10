@@ -1,0 +1,23 @@
+// give with a list index inside a make (gen2 lowered it wrongly before 2026-10-11)
+make first() {
+  hold xs = [3, 4]
+  give xs[1]
+}
+make weighted() {
+  hold xs = [3, 4]
+  give xs[0] * 10 + xs[1]
+}
+make mixed() {
+  hold xs = [3, 4]
+  give len(xs) + xs[0]
+}
+make literal() {
+  hold xs = [1, 2]
+  give len("xs[0] is text") + xs[1]
+}
+show first()
+show weighted()
+show mixed()
+show literal()
+hold ys = [7, 8]
+show ys[1]

@@ -40,7 +40,7 @@ cc -O2 -o selfhost/seed_tests/native_fn_sm selfhost/seed_tests/native_fn_sm.c
 ./selfhost/gen2 selfhost/seed_tests/native_fn.sa selfhost/seed_tests/native_fn_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/native_fn_g2 selfhost/seed_tests/native_fn_g2.c
 [OK] native functions: recursion (fac/fib), 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin/string args; seed-min and gen2 agree
-[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give
+[OK] native rejects (clearly): give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give
 ./selfhost/native_aot selfhost/seed_tests/ts_float.sa selfhost/seed_tests/ts_float_nat
 ./selfhost/native_aot selfhost/seed_tests/ts_big.sa selfhost/seed_tests/ts_big_nat
 ./selfhost/native_aot selfhost/seed_tests/ts_modzero.sa selfhost/seed_tests/ts_modzero_nat

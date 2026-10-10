@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-sxpkg-online-local
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1242,6 +1242,26 @@ test-native-locals: $(GEN2) $(NATIVE_BIN)
 	@echo "[OK] native: hold inside make (per-call locals, recursion, while, strings, collector keeps a local alive); native == gen2 byte for byte"
 
 # ---------------------------------------------------------------------------
+# test-give-index: `give xs[i]` inside a make (added 2026-10-11).  gen2 used to
+# emit xs[1.0] (the postfix index rewrite only ran on hold/show operands).
+# Source: selfhost/give_index_test.sa; hand-computed output; gen2 and native
+# must both print it.
+# ---------------------------------------------------------------------------
+GIX_WANT := 4\n34\n5\n15\n8
+test-give-index: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/give_index_test.sa $(TESTS)/gix_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gix_g2 $(TESTS)/gix_g2.c
+	$(call assert-out,./$(TESTS)/gix_g2,$(GIX_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/give_index_test.sa $(TESTS)/gix_nat || exit 1; \
+	  ./$(TESTS)/gix_nat > $(TESTS)/gix_nat.out || exit 1; \
+	  ./$(TESTS)/gix_g2 > $(TESTS)/gix_g2.out || exit 1; \
+	  cmp $(TESTS)/gix_g2.out $(TESTS)/gix_nat.out || { echo "[FAIL] native give index differs from gen2"; exit 1; }; \
+	fi
+	@echo "[OK] give xs[i] inside make: gen2 and native print the hand-computed values"
+
+# ---------------------------------------------------------------------------
 # test-native-cond: and / or / not, parentheses, in when and while conditions
 # on native (added 2026-10-11).  Source: selfhost/native_cond_test.sa.  The
 # expected output is hand-computed; gen2 must print it and native must match
@@ -1692,7 +1712,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

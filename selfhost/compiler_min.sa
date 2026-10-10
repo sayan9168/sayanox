@@ -10856,6 +10856,117 @@ hold ec = 0
       }
       hold ctrim = gtrim
       hold cl = gl
+      // a list index in a give expression (`give xs[i]`): the postfix [index]
+      // rewrite lives in the hold/show operand parser and never sees a give
+      // expression, so lower name[idx] to sx_lget(name, idx) here for every
+      // name in ldecls (string literals are copied verbatim)
+      hold lxo = ""
+      hold lxi = 0
+      while lxi < cl {
+        hold lxc = sx_index(ctrim, lxi)
+        when lxc == 34 {
+          hold lxo = concat(lxo, chr(34))
+          hold lxi = lxi + 1
+          hold lxq = 1
+          while lxq == 1 && lxi < cl {
+            hold lxsd = sx_index(ctrim, lxi)
+            hold lxo = concat(lxo, chr(lxsd))
+            hold lxi = lxi + 1
+            when lxsd == 92 && lxi < cl {
+              hold lxo = concat(lxo, chr(sx_index(ctrim, lxi)))
+              hold lxi = lxi + 1
+            } otherwise {
+              when lxsd == 34 {
+                hold lxq = 0
+              }
+            }
+          }
+        } otherwise {
+          when (lxc >= 97 && lxc <= 122) || (lxc >= 65 && lxc <= 90) || lxc == 95 {
+            hold lxe = lxi
+            hold lxr = 1
+            while lxr == 1 && lxe < cl {
+              hold lxid = sx_index(ctrim, lxe)
+              when (lxid >= 97 && lxid <= 122) || (lxid >= 65 && lxid <= 90) || lxid == 95 || (lxid >= 48 && lxid <= 57) {
+                hold lxe = lxe + 1
+              } otherwise {
+                hold lxr = 0
+              }
+            }
+            hold lxw = ""
+            hold lxk = lxi
+            while lxk < lxe {
+              hold lxw = concat(lxw, chr(sx_index(ctrim, lxk)))
+              hold lxk = lxk + 1
+            }
+            hold lxb = 0
+            when lxe < cl && sx_index(ctrim, lxe) == 91 {
+              hold lxp = concat("|", lxw)
+              hold lxp = concat(lxp, "|")
+              hold lxpn = len(lxp)
+              hold lxdn = len(ldecls)
+              hold lxd0 = 0
+              while lxd0 + lxpn <= lxdn {
+                hold lxok = 1
+                hold lxj = 0
+                while lxj < lxpn {
+                  when sx_index(ldecls, lxd0 + lxj) == sx_index(lxp, lxj) {
+                    hold lxj = lxj + 1
+                  } otherwise {
+                    hold lxok = 0
+                    hold lxj = lxpn
+                  }
+                }
+                when lxok == 1 {
+                  hold lxb = 1
+                  hold lxd0 = lxdn
+                } otherwise {
+                  hold lxd0 = lxd0 + 1
+                }
+              }
+            }
+            when lxb == 1 {
+              // find the closing ] (no nested [ inside the index)
+              hold lxq2 = lxe + 1
+              hold lxf = 0 - 1
+              hold lxnest = 0
+              while lxq2 < cl && lxf < 0 {
+                hold lxcd = sx_index(ctrim, lxq2)
+                when lxcd == 91 {
+                  hold lxnest = 1
+                }
+                when lxcd == 93 {
+                  hold lxf = lxq2
+                }
+                hold lxq2 = lxq2 + 1
+              }
+              when lxf >= 0 && lxnest == 0 {
+                hold lxo = concat(lxo, "sx_lget(")
+                hold lxo = concat(lxo, lxw)
+                hold lxo = concat(lxo, ",")
+                hold lxk2 = lxe + 1
+                while lxk2 < lxf {
+                  hold lxo = concat(lxo, chr(sx_index(ctrim, lxk2)))
+                  hold lxk2 = lxk2 + 1
+                }
+                hold lxo = concat(lxo, ")")
+                hold lxi = lxf + 1
+              } otherwise {
+                hold lxo = concat(lxo, lxw)
+                hold lxi = lxe
+              }
+            } otherwise {
+              hold lxo = concat(lxo, lxw)
+              hold lxi = lxe
+            }
+          } otherwise {
+            hold lxo = concat(lxo, chr(lxc))
+            hold lxi = lxi + 1
+          }
+        }
+      }
+      hold ctrim = lxo
+      hold cl = len(ctrim)
     }
 
     // ---- shared rewrite: conditions (act 3), give (act 6) and

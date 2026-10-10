@@ -291,6 +291,12 @@ cc -O2 -o selfhost/seed_tests/nco_g2 selfhost/seed_tests/nco_g2.c
 ./selfhost/gen2 selfhost/native_lang_test.sa selfhost/seed_tests/nla_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/nla_g2 selfhost/seed_tests/nla_g2.c
 [OK] native: true/false, and/or/not in conditions, elif / else if / else when, for over a range, a list and a string, break and continue; native == gen2 byte for byte; seed-min refuses
+./selfhost/gen2 selfhost/native_locals_test.sa selfhost/seed_tests/nlo_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/nlo_g2 selfhost/seed_tests/nlo_g2.c
+[OK] native: hold inside make (per-call locals, recursion, while, strings, collector keeps a local alive); native == gen2 byte for byte
+./selfhost/gen2 selfhost/give_index_test.sa selfhost/seed_tests/gix_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gix_g2 selfhost/seed_tests/gix_g2.c
+[OK] give xs[i] inside make: gen2 and native print the hand-computed values
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded
