@@ -114,3 +114,18 @@ recorded as soon as the nested call is queued.
   remain double-only (see [`SYNTAX.md`](SYNTAX.md)).
 * Kinds are per *value kind*, not per declared type: `A` and `B` can both be
   `num` without any distinction being made.
+
+## Backend parity (decision, 2026-10-10)
+
+Generics are a **gen2 feature**. Parity across backends means the same answer
+on each: the same program is either compiled or refused, never miscompiled.
+
+| Backend | `make NAME<T>(...)` | Checked by |
+|---|---|---|
+| gen2 (and gen1_min, which builds it) | compiled (monomorphised) | `make test-generics` |
+| seed-min | refused: the seed does not read generic definitions | `make test-generics` |
+| native (`native_aot`) | refused with `generics are not in the native subset` | `make test-generics`, `make test-stage2` |
+
+Adding generics to the seed would change the root of the fixed-point chain,
+and native has no monomorphiser. Neither is done, so the refusal is the
+verified parity. This is listed as missing in `docs/STATUS.md`.

@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-08
+Last updated: 2026-10-10
 
 ## Entry
 
@@ -15,7 +15,8 @@ Everything below was verified by running those commands plus the per-feature
 targets listed at the end of this file, on this host (3939 MB RAM, 2 CPUs,
 x86-64, `/bin/sh` = dash). Nothing in the tables is aspirational. `docs/logs/`
 holds the raw output of the four commands above; each run overwrites them, and
-they were last regenerated 2026-10-08 (after the package, stdlib, native-memory,
+they were last regenerated 2026-10-10 (after the LSP error-response, stdlib-growth
+and sxpkg-polish additions, and the earlier package, stdlib, native-memory,
 Stage-2-demo and statement-parity test additions described below). The
 `true-selfhost` log was taken with no `selfhost/native_aot` present, i.e. in the
 state a clean checkout is in, and the native half of `test-stage2-demos` prints
@@ -172,10 +173,10 @@ What is still different, and honest about it:
 | Area | seed-min | gen2 | native |
 |------|----------|------|--------|
 | `hold` inside a `make` body | accepted | accepted (a local slot) | error: `hold inside make is not in the native subset` — a native local would live in the shared data segment and be clobbered by recursion |
-| collector builtins `gc()` / `gc_live()` / `gc_runs()` | error: no collector in the seed runtime | yes (mark & sweep) | error: `undefined variable 'gc'` — native has no collector |
+| collector builtins `gc()` / `gc_live()` / `gc_runs()` | error: no collector in the seed runtime | yes (mark & sweep) | yes (native mark & sweep, see `GC.md`; corrected 2026-10-10 — this row used to say `undefined variable 'gc'`) |
 | full-language statements (`for`, `break`, `continue`, `elif`, `for c in <string>`, `and`/`or`/`not`, ...) | error: `unknown statement` | yes: `for` over strings **and lists** (a variable, a list literal, a string literal or a call), nested loops, `break`/`continue` in both, `elif`/`else when` chains, `and`/`or`/`not` with `not` binding looser than a comparison, `true`/`false`, plus the generics/`use` extensions | error naming the form: `'for' is a full-language statement ...`, `'and'/'or'/'not'/'true'/'false' is a full-language word operator or boolean literal ...` (native implements the pure-min statement set) |
 | diagnostic wording | own text (`seed_min: ...`) | own text (`min: ...` / `#error` line) | own text (`native_aot: ...`) |
-| host and memory | any C host, malloc-based | any C host, mark & sweep | x86-64 Linux only; bump-allocated, never freed |
+| host and memory | any C host, malloc-based, no collector | any C host, mark & sweep | x86-64 Linux only; own heap (first-fit + bump) with a mark & sweep collector (corrected 2026-10-10; was "bump-allocated, never freed") |
 
 Two numeric mismatches from the prior audit are fixed and covered by
 `make test-float` and `make test-native-num`:
@@ -368,7 +369,8 @@ still use shell/C infrastructure. See
   the statement. This is one slice of the Stage-2 language, not a claim of
   it: see the gen2 gaps below and "Out of scope".
 * **Collector builtins** (`gc()`, `gc_live()`, `gc_runs()`) are gen2/gen1_min
-  only: the seed runtime has no collector. They are ordinary expression
+  and native (mark & sweep, corrected 2026-10-10): the seed runtime has no
+  collector. They are ordinary expression
   calls, so `hold freed = gc()` works; a *bare* `gc` statement is still an
   unknown statement.
 * **Lists** are `double`-only, one type per program; `push` returns the list
@@ -510,19 +512,68 @@ still use shell/C infrastructure. See
 | `make test-for-str` | the Stage-2 slice on gen2: `for c in <string>` byte walk, vowel count with `string_eq`, `break`/`continue`, empty string, nested loops, a rebound counter, `\"é\"` as two bytes, the diagnostics for a number, a list and a counter clash; seed-min refuses the statement; native names it; a `make NAME<T>` whose second parameter is not a type parameter is refused with the generic diagnostic. |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |
 
-## Roadmap / in progress (not out of scope)
+## Roadmap: done vs still missing, per backend (synced 2026-10-10)
 
-Status as of 2026-10-08. Nothing below is permanently excluded; progress is
-tracked per column and per test.
+This table replaces the 2026-10-08 roadmap. Every "done" cell names the gate
+that checks it; a "missing" cell says why it is missing. "n/a" means the thing
+does not exist on that backend by design (not a gap that is being hidden).
 
-| Area | seed-min | gen2 | native | Tests / notes |
-|---|---|---|---|---|
-| (1) Native GC / free path | N/A (seed has no collector) | mark & sweep (`gc`/`gc_live`/`gc_runs`) | **mark & sweep: 32-byte block headers, first-fit free list + bump, precise root table + conservative stack scan, coalescing sweep, empty chunks `munmap`ped; `gc()`/`gc_live()`/`gc_runs()` real** (not compacting; conservative roots may retain garbage) | `make native-test` green; `test-native-mem` pins churn-inside-4-MiB, no-UAF across 30k iterations, and a loud OOM for an 8 MiB live set; `gc_builtins` verified |
-| (2) Full Stage-2 language | pure-min dialect only; `for`, `and`/`or`/`not`, `elif` all refused (`unknown statement`) | `for` over **strings and lists** — a variable, a list literal, a string literal or a call whose result kind is known (the source is bound to a hidden variable first, so it may be any expression `hold` accepts); nested loops; `break`/`continue` in both; `elif`/`else when`/`otherwise when` chains incl. nested; `and`/`or`/`not` with C precedence and short-circuit, `not` binding **looser** than a comparison (`not a == 2` is `!(a == 2)`); `true`/`false` literals | refuses by **name**: `'for'/'break'/'continue'/'elif' is a full-language statement …` and `'and'/'or'/'not'/'true'/'false' is a full-language word operator or boolean literal …` (previously `not` died as `undefined variable 'not'` and `and` as `when needs { ... }`); `else` alias works | `test-stage2` (new, 32-output program over every construct, gen2 == gen1_min byte for byte, seed-min refuses, native names each form), `test-for-str`, `test-stage2-demos`, `test-gen2-gaps`; demos kept working |
-| (3) Packages (offline + path to online) | `sxpkg` local lockfile + registry; `use "file.sa"` splice | same, **plus versioned `deps=` metadata and offline dependency resolution**: `pkg.meta` carries `deps=name@version,…` (exact pins), `sxpkg add` locks the transitive closure, `sxpkg deps` prints it and names the two ways it can be unsatisfied (not locked / locked at another version), `sxpkg install [registry]` copies the closure out of a local registry directory with the version and the `pkg.meta` sum checked on both sides, and `sxpkg verify` checks dependency-only packages too | same: `use` splices a package's own `use` lines (a package may depend on another package) | `test-pkgs` now pins the whole flow end to end on a new sample package `registry/calc` (`deps=math@0.1.0`): `add` prints both lock lines, the lock matches byte for byte, `deps` prints the closure, a bare `install` reports the missing folder instead of failing silently, `install-local` installs both, `verify` passes, and a program doing `use "…/calc/main.sa"` prints `36`/`25` identically on seed-min and gen2; the two `sxpkg: DEP …` errors are asserted too. `test-registry-sums` unchanged; `sync`/`install` (online)/`publish`/`fetch` remain shell-only and off the bootstrap path |
-| (4) Full stdlib | `stdlib/tiny.sa` — 30 numeric helpers (min2/max2/absv/sum_to/pow_int/is_even/gcd/clamp/sign/is_odd/lcm/fact/fib/is_prime/sum_range/sum_sq/count_digits/digit_sum/trunc10/reverse_num/is_square/between + 3 internal ones) | same via `use`, **plus** `str_util.sa` (20 string helpers), `list_util.sa` (9 list helpers) and `file_util.sa` (5 file helpers) — these three need typed parameters, so they are gen2-only by design | `tiny.sa` runs on native as well; `str_util`/`list_util`/`file_util` are refused there with a clear `bad param list` diagnostic (not a miscompile) | `test-stdlib` covers both legs: seed-min == gen2 == native on the 30 numeric helpers, and gen2 on 34 str/list/file assertions, with seed-min and native proven to refuse the typed-parameter modules; bootstrap does not depend on the full stdlib |
-| (5) Multi-param generics | refuses any `make NAME<...>` (the seed does not read generics) | **one or more type parameters**: `NAME<T>` and `NAME<A, B>` / `<A, B, C>` all monomorphise — `NAME__n`/`__s`/`__l` for one parameter, `pair__ns` / `swap__sn` / `three__nsl` for several; every parameter gets its own C type; a generic body may call another generic (the callee is specialised with the caller's own kinds) and bind its result in a `hold`; headers that do not type every parameter *and* the return with a declared type parameter are a clear error, never a miscompile | refuses with `generics are not in the native subset (gen2 monomorphises make NAME<T> and make NAME<A, B>)` | `test-generics` (single- and multi-parameter legs, gen2 == gen1_min byte for byte, two rejection cases); `GENERICS.md` rewritten, `SYNTAX.md` generics section rewritten |
-| (6) Richer type system | double/str/list/literal-struct only | same; no bounds, no generic structs, inference by call-site kind only | same | `test-generics` / `test-struct2`; errors are clear, not silent |
-| (7) LSP product | JSON-RPC session (one slice) verified | diagnostics, symbols, completion, hover, definition, `didChange` in `sayanox_lsp.sa`/`sayanox_lsp.c` | same (C backend runs server) | `make test-lsp`; docs `LSP.md` updated; server runnable with `make lsp` |
-| (8) Native parity | x86-64 Linux only | same host | `hold` inside `make` rejected clearly; all other native parity issues documented | `test-native-*` / `native-test` green |
-| (9) Docs | `STATUS.md` rewritten; `DEPENDENCY.md` / `doctor` honest (C99 + make required; no Python on bootstrap critical path) | `SYNTAX.md`: generics rewritten for multi-parameter + a new full-language section; `GENERICS.md` rewritten for multi-parameter generics; `GC.md` rewritten for the native mark & sweep collector | `NATIVE.md` updated | `make doctor` / `true-selfhost` / `gen3` / `native-test` all green |
+The three backends are `seed-min` (the C seed, `selfhost/seed/sxc_seed_min`),
+`gen2` (the compiler built by `gen1_min`, which is what `true-selfhost`
+ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
+
+| Area | seed-min | gen2 | native | Gate(s) | Still missing |
+|---|---|---|---|---|---|
+| Pure-min core: numbers, `when`/`while`, `make`/`give`, recursion, lists, structs, `use` | done | done | done | `true-selfhost`, `native-test` | none in the shared dialect |
+| Numeric stdlib `stdlib/tiny.sa` (36 `make` definitions: 25 before this pass, +9 public numeric helpers and +2 internal ones added 2026-10-10: `tri`, `min3`, `max3`, `ceil_div`, `pow_mod`, `collatz_steps`, `digit_at`, `is_palindrome`, `isqrt`) | done | done | done | `test-stdlib`, `test-stdlib-growth` (hand-computed values; seed-min == gen2 byte for byte), and the native leg in `native-test` | more helpers only when they fit the native subset (no `hold` in a body, at most 6 parameters) |
+| String / list / file stdlib (`str_util`, `list_util`, `file_util`) | refuses (typed parameters) | done | refuses (`bad param list`) | `test-stdlib` | by design gen2-only until typed parameters exist on the other two |
+| Generics `make NAME<T>` / `make NAME<A, B>` | refuses (`make NAME<...>` is not read) | done (one or more parameters, monomorphised) | refuses (`generics are not in the native subset`) | `test-generics`, `test-native-*`, `test-stage2` | seed and native generics are **not** implemented. Parity here means *the same refusal*, which is tested. Adding it to the seed changes the fixed-point root and to native needs a monomorphiser; neither is safe in this pass |
+| Full-language statements: `for` (strings and lists), `break`, `continue`, `elif`, `and`/`or`/`not`, `true`/`false` | refuses (`unknown statement`) | done | refuses by name | `test-stage2`, `test-for-str`, `test-gen2-gaps` | seed and native support — deliberately not done (the native subset is the pure-min set) |
+| Stage-2 demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) | done | done | done (lexer) | `test-stage2-demos` | these are contract sketches, not a full Stage-2 compiler |
+| Collector `gc()` / `gc_live()` / `gc_runs()` | refuses (no collector in the seed runtime) | done (mark & sweep) | done (native mark & sweep, `docs/GC.md`) | `test-gc` (same program, same output on gen2 and native), `test-native-mem` | native is non-compacting and its stack scan is conservative, so it may retain garbage |
+| `hold` inside a `make` body | done | done | **missing** — rejected with a clear error | `test-native-*` (the rejection) | **Deferred (item 7).** A native local lives in the shared data segment and recursion clobbers it. Doing it safely needs stack frames in the native code generator, so it is not done in this pass |
+| Richer types | `double`, `str`, list, literal-struct | same, plus generics; no bounds, no generic structs | same as seed-min | `test-generics`, `test-struct2` | **Deferred (item 6).** Typed list elements, bounds and generic structs need a type-checker that does not exist yet. This pass changed no type rules |
+| Packages `sxpkg` — offline (`init`, `add`, `list`, `remove`, `seed`, `search`, `info`, `deps`, `install-local`, `verify`, `sum`) | n/a (the tool is a Sayanox program, built by gen2) | done | n/a | `test-sxpkg`, `test-sxpkg-wrapper`, `test-sxpkg-polish`, `test-pkgs`, `test-registry-sums` | the `install-local` / `verify` exit codes come from the shell wrapper (the language has no exit builtin) |
+| Packages — online (`sync`, `install`, `fetch`, `publish` over HTTP) | n/a | n/a | n/a | none (never on the bootstrap path) | **Missing, by design for now.** Shell only (`curl`/`wget`), unsigned, and the checksum is not cryptographic. The thin design is in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md) |
+| LSP (`tools/sayanox_lsp.sa`) | n/a | done (diagnostics, symbols, completion, hover, definition, `didChange`, JSON-RPC errors `-32600`/`-32601`/`-32700`) | n/a | `test-lsp`, `test-lsp-robust` | incremental parsing, multi-file analysis, string ids (only numeric ids are echoed) |
+| Documentation and logs | `STATUS.md` synced | `GC.md`, `GENERICS.md`, `LSP.md`, `REGISTRY.md`, `STDLIB.md` current | `NATIVE.md`, `GC.md` current | `docs/logs/` regenerated by the four gate commands | `selfhost/STAGE2.md` describes the legacy `restore_stage2.sh` path, which no Makefile target builds (see below) |
+
+### What "Stage-2" means in this repository (checked 2026-10-10)
+
+* The Stage-2 that the gates exercise is the **full-language statement set
+  compiled by gen2** (`test-stage2`, `test-for-str`, `test-gen2-gaps`), plus the
+  Stage-2 demo programs. It is not a separate binary.
+* `selfhost/STAGE2.md` and `selfhost/restore_stage2.sh` describe an older
+  `selfhost/stage2` binary. No Makefile target builds or tests it, so it is
+  legacy documentation, not a verified state. It is marked as such in that file.
+* The bootstrap that is verified end to end is `seed-min → gen1_min → gen2 →
+  gen3 == gen4` (`true-selfhost`, `gen3`). A "full" self-hosting compiler that
+  compiles the full language is still not built; `true-selfhost-full` says so.
+
+### Corrections made in this pass (were stale)
+
+* Native collector: the divergence table said native had **no** `gc()`
+  (`undefined variable 'gc'`) and "bump-allocated, never freed". Both were wrong:
+  native has a real mark & sweep collector and `test-gc` checks it against gen2.
+  Probed on 2026-10-10: `gc()` prints `1` on gen2 and on native, and is rejected
+  on seed-min.
+* Stdlib count: `tiny.sa` had 25 definitions, not the 30 the old row claimed.
+  The current count is 36 (see the table).
+
+### Pure-min measured divergences (probed 2026-10-10, one line per feature)
+
+| Program | seed-min | gen2 | native |
+|---|---|---|---|
+| `show gc()` | rejected | `1` | `1` |
+| `for v in xs` (list) | rejected | `1` `2` | rejected by name |
+| `break` / `and` / generic `make id<T>` | rejected | works | rejected by name |
+| `hold` inside `make` | `3` | `3` | rejected (item 7, deferred) |
+| `use "stdlib/tiny.sa"`, `isqrt(50)` | `7` | `7` | `7` |
+| `use "stdlib/str_util.sa"`, `s_len("abc")` | rejected (typed params) | `3` | rejected (typed params) |
+| `when s < "c"` on a string | `1` | `1` | rejected |
+| `push(xs, 4)` then `len(xs)` | `1` | `1` | `1` |
+| struct `P { 3 }`, `p.x` | `3` | `3` | `3` |
+
+The probe is a shell loop over the three binaries; it is not a gate. The gates
+are the `test-*` targets named in the table.
+

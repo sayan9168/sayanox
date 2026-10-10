@@ -219,3 +219,15 @@ during resolve/install/verify — everything above reads local directories
 only. `sync`, `install` (the shell one), `publish` and `fetch` in
 `tools/sxpkg.sh` are still the only online commands, and no bootstrap target
 uses them.
+
+## Exit codes and the online design (2026-10-10)
+
+* `tools/sxpkg.sh verify` and `install-local` exit **1** when the Sayanox
+  binary reports a `FAILED` or `DEP` problem. The binary itself cannot set an
+  exit status, so the wrapper reads its report. An unknown command exits **2**.
+  Both are pinned by `make test-sxpkg-polish`.
+* `add` warns when the package has no local registry copy yet.
+* The online commands (`sync`, `install`, `fetch`, `publish`) and their
+  thin-design limits are in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md). That document
+  says what is not verified: atomic downloads, signatures and a cryptographic
+  hash are all missing.

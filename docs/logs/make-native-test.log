@@ -127,4 +127,6 @@ cc -O2 -o selfhost/seed_tests/fs_bytes selfhost/seed_tests/fs_bytes.c
 ./selfhost/gen2 selfhost/seed_tests/fs_pair.sa selfhost/seed_tests/fs_pair.c >/dev/null 2>&1 || true
 [OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name
 [OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions
+./selfhost/native_aot selfhost/stdlib_growth_test.sa selfhost/seed_tests/sg_nat_gate
+[OK] native: stdlib growth helpers (tri, ceil_div, pow_mod, collatz_steps, digit_at, isqrt, ...)
 === NATIVE-TEST-OK ===

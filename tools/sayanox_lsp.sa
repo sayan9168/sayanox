@@ -1101,6 +1101,83 @@ make reply(id: num, result: str) -> num {
   give r
 }
 
+// reply_error: a JSON-RPC 2.0 error response. id < 0 means "no usable id"
+// and is sent as null (the spec's answer for a body that cannot be parsed).
+make reply_error(id: num, code: num, msg: str) -> num {
+  hold b = ""
+  hold r = 0
+  hold idt = "null"
+  when id >= 0 {
+    hold idt = numstr(id)
+  }
+  b = concat("{\"jsonrpc\":\"2.0\",\"id\":", idt)
+  b = concat(b, ",\"error\":{\"code\":")
+  b = concat(b, numstr(code))
+  b = concat(b, ",\"message\":\"")
+  b = concat(b, msg)
+  b = concat(b, "\"}}")
+  r = send(b)
+  give r
+}
+
+// known_method: 1 when the server dispatches this method, else 0. Kept in
+// step with the dispatch chain in main; an unknown *request* gets -32601.
+make known_method(m: str) -> num {
+  when string_eq(m, "initialize") {
+    give 1
+  }
+  when string_eq(m, "initialized") {
+    give 1
+  }
+  when string_eq(m, "shutdown") {
+    give 1
+  }
+  when string_eq(m, "exit") {
+    give 1
+  }
+  when string_eq(m, "textDocument/didOpen") {
+    give 1
+  }
+  when string_eq(m, "textDocument/didChange") {
+    give 1
+  }
+  when string_eq(m, "textDocument/didClose") {
+    give 1
+  }
+  when string_eq(m, "textDocument/diagnostic") {
+    give 1
+  }
+  when string_eq(m, "textDocument/documentSymbol") {
+    give 1
+  }
+  when string_eq(m, "textDocument/completion") {
+    give 1
+  }
+  when string_eq(m, "textDocument/hover") {
+    give 1
+  }
+  when string_eq(m, "textDocument/definition") {
+    give 1
+  }
+  give 0
+}
+
+// first_char: the first non-whitespace byte of a body (-1 if none). A JSON-RPC
+// body must be an object, so anything but '{' is a parse error.
+make first_char(s: str) -> num {
+  hold i = 0
+  hold n = len(s)
+  hold c = -1
+  while i < n {
+    hold c = sx_index(s, i)
+    when c != 32 && c != 9 && c != 10 && c != 13 {
+      give c
+    }
+    hold i = i + 1
+  }
+  give -1
+}
+
 make notify(method: str, params: str) -> num {
   hold b = ""
   hold r = 0
@@ -1277,6 +1354,23 @@ while running == 1 {
       }
       when string_eq(method, "exit") {
         running = 0
+      }
+      // Error paths. A body that is not a JSON object is a parse error (id
+      // null). A method-less body is an invalid request. An unknown method is
+      // answered only when it is a request (has an id): notifications are
+      // silently ignored, as the spec requires, so clients never hang waiting.
+      when first_char(body) != 123 {
+        d = reply_error(-1, -32700, "parse error: body is not a JSON object")
+      } otherwise {
+        when len(method) <= 0 {
+          d = reply_error(id, -32600, "invalid request: no method")
+        } otherwise {
+          when known_method(method) == 0 {
+            when id >= 0 {
+              d = reply_error(id, -32601, "method not found")
+            }
+          }
+        }
       }
     }
   }

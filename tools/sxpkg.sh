@@ -77,6 +77,24 @@ sync() {
 
 add() {
   run_sayanox add "$@"
+  # The Sayanox binary locks any name it is given. Say so when the name has no
+  # local registry copy, so an offline user is not surprised by `verify` later.
+  if [ -n "${1:-}" ] && [ ! -f "$REG/$1/pkg.meta" ]; then
+    echo "sxpkg: note: $1 has no local registry copy yet (run: sxpkg seed; or sxpkg sync when online)"
+  fi
+}
+
+# checked: run a Sayanox subcommand and turn its report into an exit status.
+# The Sayanox binary cannot set its own exit code (the language has no exit
+# builtin), so a failure is recognised from its FAILED line. Output is kept.
+checked() {
+  [ -x "$SXPKG_BIN" ] || make -C "$SAYANOX_REPO_ROOT" sxpkg >/dev/null
+  checked_out=$(cd "$ROOT" && "$SXPKG_BIN" "$@" 2>&1) || true
+  [ -n "$checked_out" ] && printf '%s\n' "$checked_out"
+  case "$checked_out" in
+    *FAILED*|*"sxpkg: DEP "*) return 1 ;;
+  esac
+  return 0
 }
 
 list() {
@@ -101,7 +119,7 @@ install_local() {
     case "$n" in \#*|"") continue ;; version|name) continue ;; esac
     mkdir -p "$REG/$n"
   done < "$LOCK"
-  run_sayanox install "$src"
+  checked install "$src"
 }
 
 install() {
@@ -178,32 +196,17 @@ case "$cmd" in
   remove) remove "$@" ;;
   info) info "$@" ;;
   seed) seed ;;
-  verify) run_sayanox verify ;;
+  verify) checked verify ;;
   sum) run_sayanox sum "$@" ;;
   fetch) fetch "$@" ;;
-  *) echo "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"
+  help|-h|--help)
+     echo "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"
      echo "  ONLINE registry: $ONLINE"
      echo "  override: SAYANOX_REGISTRY=https://..."
      ;;
+  *) echo "sxpkg: unknown command '$cmd'"
+     echo "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"
+     exit 2
+     ;;
 esac
 
-sync() {
-  # Optional fetch from ONLINE registry if network available; otherwise use local registry.
-  if [ -n "$ONLINE" ] && curl -fsSL "$ONLINE/INDEX" -o /tmp/sx_index_tmp 2>/dev/null; then
-    echo "sxpkg: fetched online index"
-    cp /tmp/sx_index_tmp "$REG/INDEX"
-  else
-    echo "sxpkg: offline mode (local registry)"
-  fi
-}
-publish() {
-  echo "sxpkg: publish requires online registry (not implemented in bootstrap)"
-}
-fetch() {
-  sync
-}
-case "$cmd" in
-  sync) sync ;;
-  publish) publish ;;
-  fetch) fetch ;;
-esac

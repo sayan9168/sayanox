@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish
 
 all: true-selfhost-min
 
@@ -201,6 +201,13 @@ test-lsp: $(LSP_BIN) tools/sayanox-lsp-probe.sh
 	@mkdir -p $(TESTS)
 	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change)
 	@echo "[OK] Sayanox LSP: live JSON-RPC session, real diagnostics, symbols, completion, hover, definition"
+
+# Malformed and unexpected JSON-RPC input: unknown requests get -32601,
+# unknown notifications stay silent, bad bodies get -32700 / -32600, and the
+# server keeps serving afterwards. Probe: tools/sayanox-lsp-robust.sh.
+test-lsp-robust: $(LSP_BIN) tools/sayanox-lsp-robust.sh
+	@$(call assert-out,sh tools/sayanox-lsp-robust.sh ./$(LSP_BIN),unknown request -32601\nserver keeps serving after error\nunknown notification ignored\ngarbage body -32700\nno method -32600\njunk header skipped\ntruncated frame ends cleanly)
+	@echo "[OK] Sayanox LSP robustness: JSON-RPC error responses for bad input"
 
 test-sxfmt: sxfmt
 	@mkdir -p $(TESTS)
@@ -1087,6 +1094,47 @@ test-stdlib: $(GEN2) $(SEED_MIN_BIN)
 	@echo "[OK] stdlib str/list/file modules on gen2 (typed parameters); seed-min and native refuse them with a clear error"
 
 # ---------------------------------------------------------------------------
+# test-sxpkg-polish: the wrapper's offline behaviour, pinned. The Sayanox binary
+# cannot set an exit status, so the shell wrapper turns a FAILED/DEP report
+# into rc 1 (verify, install-local), an unknown command is rc 2, and `publish`
+# prints its report once (it used to run twice through a duplicated dispatch).
+test-sxpkg-polish: sxpkg tools/sxpkg.sh
+	@mkdir -p $(TESTS)/sxpkg-polish
+	@printf '' > $(TESTS)/sxpkg-polish/sx.lock
+	@printf 'name = "pol-pkg"\nversion = "0.1.0"\n' > $(TESTS)/sxpkg-polish/sx.toml
+	cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh init >/dev/null
+	cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
+	@if (cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh verify >/dev/null 2>&1); then \
+	  echo "[FAIL] sxpkg verify exited 0 with a missing package"; exit 1; fi
+	@if (cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh install-local $(CURDIR)/registry >/dev/null 2>&1); then \
+	  echo "[FAIL] sxpkg install-local exited 0 with an unresolvable lock entry"; exit 1; fi
+	@cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh bogus >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then echo "[FAIL] unknown sxpkg command exited $$rc, want 2"; exit 1; fi
+	@n=$$(cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh publish | grep -c 'sxpkg: published locally pol-pkg 0.1.0'); \
+	  if [ "$$n" != 1 ]; then echo "[FAIL] sxpkg publish reported $$n times, want 1"; exit 1; fi
+	@echo "[OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once"
+
+# ---------------------------------------------------------------------------
+# test-stdlib-growth: the numeric helpers added to stdlib/tiny.sa on 2026-10-10
+# (tri, min3/max3, ceil_div, pow_mod, collatz_steps, digit_at, is_palindrome,
+# isqrt). Hand-computed expected values; seed-min, gen2 and native (when built)
+# must print identical bytes. Source: selfhost/stdlib_growth_test.sa.
+# ---------------------------------------------------------------------------
+test-stdlib-growth: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/stdlib_growth_test.sa > $(TESTS)/sg_sm.c
+	$(CC) -O2 -o $(TESTS)/sg_sm $(TESTS)/sg_sm.c
+	./$(GEN2) selfhost/stdlib_growth_test.sa $(TESTS)/sg_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/sg_g2 $(TESTS)/sg_g2.c
+	$(call assert-out,./$(TESTS)/sg_g2,55\n0\n0\n2\n9\n-7\n4\n4\n0\n1\n24\n1\n1\n0\n8\n16\n5\n1\n3\n0\n1\n0\n0\n1\n0\n3\n4\n4\n1000)
+	@./$(TESTS)/sg_sm > $(TESTS)/sg_sm.out && ./$(TESTS)/sg_g2 > $(TESTS)/sg_g2.out && cmp $(TESTS)/sg_sm.out $(TESTS)/sg_g2.out
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/stdlib_growth_test.sa $(TESTS)/sg_nat && \
+	  ./$(TESTS)/sg_nat > $(TESTS)/sg_nat.out && cmp $(TESTS)/sg_g2.out $(TESTS)/sg_nat.out || exit 1; \
+	fi
+	@echo "[OK] stdlib growth: 9 new public numeric helpers, seed-min == gen2 (== native when built)"
+
+# ---------------------------------------------------------------------------
 # test-pkgs: the offline package use-path, with no network at all.
 #
 #   * `tools/sxpkg.sh init` (mkdir only) plus the Sayanox `sxpkg seed` writes a
@@ -1504,7 +1552,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -1706,6 +1754,10 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	@echo "[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
 	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
+	@# the 2026-10-10 stdlib helpers, on native, against the hand-computed values
+	./$(NATIVE_BIN) selfhost/stdlib_growth_test.sa $(TESTS)/sg_nat_gate
+	$(call assert-out,./$(TESTS)/sg_nat_gate,55\n0\n0\n2\n9\n-7\n4\n4\n0\n1\n24\n1\n1\n0\n8\n16\n5\n1\n3\n0\n1\n0\n0\n1\n0\n3\n4\n4\n1000)
+	@echo "[OK] native: stdlib growth helpers (tri, ceil_div, pow_mod, collatz_steps, digit_at, isqrt, ...)"
 	@echo "=== NATIVE-TEST-OK ==="
 
 grammar: true-selfhost-min

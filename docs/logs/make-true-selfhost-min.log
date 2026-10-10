@@ -1,3 +1,5 @@
+cc -O2 -o selfhost/seed/sxc_seed_min selfhost/seed/sxc_seed_min.c
+[OK] seed-min
 [OK] restore-compiler (checked-in source verified; no base64/gzip used)
 [seed-min] compiler_min.sa -> gen1_min.c
 ./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
@@ -268,6 +270,15 @@ cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
 selfhost/gen2 tools/sayanox_lsp.sa tools/sayanox_lsp.c
 cc -O2 -o tools/sayanox_lsp tools/sayanox_lsp.c
 [OK] Sayanox LSP: live JSON-RPC session, real diagnostics, symbols, completion, hover, definition
+[OK] Sayanox LSP robustness: JSON-RPC error responses for bad input
+./selfhost/seed/sxc_seed_min selfhost/stdlib_growth_test.sa > selfhost/seed_tests/sg_sm.c
+cc -O2 -o selfhost/seed_tests/sg_sm selfhost/seed_tests/sg_sm.c
+./selfhost/gen2 selfhost/stdlib_growth_test.sa selfhost/seed_tests/sg_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/sg_g2 selfhost/seed_tests/sg_g2.c
+[OK] stdlib growth: 9 new public numeric helpers, seed-min == gen2 (== native when built)
+cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh init >/dev/null
+cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
+[OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded
