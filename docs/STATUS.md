@@ -140,7 +140,7 @@ Four gates on this checkout: `DOCTOR-OK`, `TRUE-SELFHOST-MIN-OK`, `GEN3-OK`,
 | `gc()` / `gc_live()` / `gc_runs()` | missing | done | done | `make test-native-mem` |
 | generics `make f<T>(...)` | refused | done (monomorphised) | missing | `make test-generics` |
 | `and`/`or`/`not` as values (`hold v = a and b`, `show a or b`) | missing | missing | refused by name | not added: gen2 refuses them too, and the language docs define them only in conditions |
-| `hold` inside a `make` body | done | done | missing | deferred: a native local needs a stack frame (native refuses by name) |
+| `hold` inside a `make` body | done | done | done (2026-10-11: a slot in the call's own frame; `make test-native-locals`) |
 | typed list elements and typed `make` signatures | missing | missing | missing | deferred: needs a design decision (list element type, arity and return type rules) |
 
 Still open on native, besides the deferred rows: nothing in the pure-min
@@ -200,7 +200,7 @@ What is still different, and honest about it:
 
 | Area | seed-min | gen2 | native |
 |------|----------|------|--------|
-| `hold` inside a `make` body | accepted | accepted (a local slot) | error: `hold inside make is not in the native subset` — a native local would live in the shared data segment and be clobbered by recursion |
+| `hold` inside a `make` body | accepted | accepted (a local slot) | accepted since 2026-10-11 (a local slot in the call's own frame; the collector scans it) |
 | collector builtins `gc()` / `gc_live()` / `gc_runs()` | error: no collector in the seed runtime | yes (mark & sweep) | yes (native mark & sweep, see `GC.md`; corrected 2026-10-10 — this row used to say `undefined variable 'gc'`) |
 | full-language statements (`for`, `break`, `continue`, `elif`, `for c in <string>`, `and`/`or`/`not`, ...) | error: `unknown statement` | yes: `for` over strings **and lists** (a variable, a list literal, a string literal or a call), nested loops, `break`/`continue` in both, `elif`/`else when` chains, `and`/`or`/`not` with `not` binding looser than a comparison, `true`/`false`, plus the generics/`use` extensions | yes for `for` over a range `0..N`, over lists and strings, `break`/`continue` in `for` and `while`, `elif`/`else if`/`else when` chains, `and`/`or`/`not` in `when`/`while` conditions, `true`/`false` (2026-10-11, `make test-native-lang`, `make test-native-cond`); still refused by name: `and`/`or`/`not` as values, `generics` (see roadmap) |
 | diagnostic wording | own text (`seed_min: ...`) | own text (`min: ...` / `#error` line) | own text (`native_aot: ...`) |

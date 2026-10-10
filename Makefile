@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-sxpkg-online-local
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1219,6 +1219,29 @@ test-native-lang: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@echo "[OK] native: true/false, and/or/not in conditions, elif / else if / else when, for over a range, a list and a string, break and continue; native == gen2 byte for byte; seed-min refuses"
 
 # ---------------------------------------------------------------------------
+# test-native-locals: `hold` inside a make body (added 2026-10-11).  A local
+# is a slot in the call's own frame, so recursion gets fresh locals; the
+# collector sees the frame's values (conservative stack scan).  Source:
+# selfhost/native_locals_test.sa.  Expected output is hand-computed; gen2 must
+# print it and native must match gen2 byte for byte.
+# ---------------------------------------------------------------------------
+NLO_WANT := 20\n1\n2\n10\n7\n6\n4
+test-native-locals: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_locals_test.sa $(TESTS)/nlo_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nlo_g2 $(TESTS)/nlo_g2.c
+	$(call assert-out,./$(TESTS)/nlo_g2,$(NLO_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/native_locals_test.sa $(TESTS)/nlo_nat || exit 1; \
+	  ./$(TESTS)/nlo_nat > $(TESTS)/nlo_nat.out || exit 1; \
+	  ./$(TESTS)/nlo_g2 > $(TESTS)/nlo_g2.out || exit 1; \
+	  cmp $(TESTS)/nlo_g2.out $(TESTS)/nlo_nat.out || { echo "[FAIL] native make locals differ from gen2"; exit 1; }; \
+	  printf 'hold x = 1\nmake f(x) {\n  hold x = 2\n  give x\n}\nshow f(1)\n' > $(TESTS)/nlo_neg1.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nlo_neg1.sa $(TESTS)/nlo_neg1 2>&1 | grep -q 'it is a parameter of make' || { echo "[FAIL] native let a local shadow a parameter"; exit 1; }; \
+	fi
+	@echo "[OK] native: hold inside make (per-call locals, recursion, while, strings, collector keeps a local alive); native == gen2 byte for byte"
+
+# ---------------------------------------------------------------------------
 # test-native-cond: and / or / not, parentheses, in when and while conditions
 # on native (added 2026-10-11).  Source: selfhost/native_cond_test.sa.  The
 # expected output is hand-computed; gen2 must print it and native must match
@@ -1669,7 +1692,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -1845,9 +1868,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	@echo "[OK] native functions: recursion (fac/fib), 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin/string args; seed-min and gen2 agree"
 	@# function forms native must reject with clear, stable errors
 	@printf 'make f(n) {\n  hold t = n * 2\n  give t\n}\nshow f(3)\n' > $(TESTS)/native_fnhold.sa
-	@if ./$(NATIVE_BIN) $(TESTS)/native_fnhold.sa $(TESTS)/native_fnhold 2>/dev/null; then \
-	  echo "[FAIL] native accepted hold inside a function (a local in the data segment breaks recursion)"; exit 1; fi
-	@./$(NATIVE_BIN) $(TESTS)/native_fnhold.sa $(TESTS)/native_fnhold 2>&1 | grep -q 'hold inside make is not in the native subset'
+	@./$(NATIVE_BIN) $(TESTS)/native_fnhold.sa $(TESTS)/native_fnhold && ./$(TESTS)/native_fnhold | grep -qx 6 || { echo "[FAIL] native hold inside a function did not print 6"; exit 1; }
 	@printf 'give 5\n' > $(TESTS)/native_giveout.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_giveout.sa $(TESTS)/native_giveout 2>/dev/null; then \
 	  echo "[FAIL] native accepted give outside a function"; exit 1; fi
@@ -1868,7 +1889,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>/dev/null; then \
 	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
-	@echo "[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
+	@echo "[OK] native rejects (clearly): give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
 	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
 	@# string ordering on native (hand-computed; gen2/seed-min leg in test-native-strord)

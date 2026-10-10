@@ -352,7 +352,7 @@ static void endstmt(const char**p){
 typedef enum { K_NUM=0, K_STR=1, K_LIST=2, K_STRUCT=3 } kind_t;
 #define K_UNK (-1)
 
-typedef struct { char name[64]; int kind; int sid; } Glob;
+typedef struct { char name[64]; int kind; int sid; int off; } Glob;  /* off: BP displacement of a make local, 0 = global */
 typedef struct { char name[64]; int kind; int sid; } Field;
 typedef struct { char name[64]; Field f[MAXFD]; int nf; } SDef;
 typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; } Fn;
@@ -361,11 +361,11 @@ static Glob G[NSLOT]; static int nG;
 static SDef S[MAXS]; static int nS;
 static Fn  F[MAXF]; static int nF;
 
-static int g_find(const char*n){ for(int i=0;i<nG;i++) if(!strcmp(G[i].name,n)) return i; return -1; }
+static int g_find(const char*n){ for(int i=nG-1;i>=0;i--) if(!strcmp(G[i].name,n)) return i; return -1; }
 static int g_decl(const char*n){
   int i=g_find(n); if(i>=0) return i;
   if(nG>=NSLOT){ fprintf(stderr,"native_aot: too many globals (native limit: %d)\n",NSLOT); exit(1); }
-  snprintf(G[nG].name,64,"%s",n); G[nG].kind=K_UNK; G[nG].sid=-1; return nG++;
+  snprintf(G[nG].name,64,"%s",n); G[nG].kind=K_UNK; G[nG].sid=-1; G[nG].off=0; return nG++;
 }
 static int s_find(const char*n){ for(int i=0;i<nS;i++) if(!strcmp(S[i].name,n)) return i; return -1; }
 static int s_field(int sid,const char*n){ for(int i=0;i<S[sid].nf;i++) if(!strcmp(S[sid].f[i].name,n)) return i; return -1; }
@@ -966,6 +966,7 @@ static void infer(const char*src){
 /* ================= phase 3: emit ================= */
 static int XK=K_NUM, XS=-1;     /* kind / struct id of the value in rax */
 static int cur_fn=-1;           /* -1 = top level */
+static int lbase=0, nloc=0;      /* first G index of the current make's locals; local count */
 static size_t builtin_off[40];
 /* argument registers, System V AMD64: rdi rsi rdx rcx r8 r9 */
 static const int argreg[MAXP]={DI,SI,DX,CX,8,9};
@@ -984,8 +985,14 @@ static void emit_prog(const char**p,int in_fn,int stop);
 static void emit_fn(int fi,const char**p);
 static void emit_call_builtin(const char**p,const char*n,int depth);
 
-static void load_global(int gi){ mv_r64m(AX,12,-1,0,(int)(d_glob+8*(size_t)gi)); }
-static void store_global(int gi){ mv_m64(12,-1,0,(int)(d_glob+8*(size_t)gi),AX); }
+static void load_global(int gi){
+  if(G[gi].off) { mv_r64m(AX,BP,-1,0,G[gi].off); return; }
+  mv_r64m(AX,12,-1,0,(int)(d_glob+8*(size_t)gi));
+}
+static void store_global(int gi){
+  if(G[gi].off) { mv_m64(BP,-1,0,G[gi].off,AX); return; }
+  mv_m64(12,-1,0,(int)(d_glob+8*(size_t)gi),AX);
+}
 static void load_param(int i){ mv_r64m(AX,BP,-1,0,-8*(i+1)); }
 static void store_scr(void){ mv_m64(12,-1,0,OFF_SCR,AX); }
 static void load_scr(void){ mv_r64m(AX,12,-1,0,OFF_SCR); }
@@ -1565,8 +1572,8 @@ static void emit_fn(int fi,const char**p){
      fixed 32-byte frame let a 5th/6th parameter (rbp-40/rbp-48) be
      overwritten by the first push or call in the body.  16-aligned so the
      (push rbp; sub rsp,frame) entry keeps the same alignment everywhere. */
-  int frame=(8*F[fi].nparam+16+15)&~15;
-  bin_imm8(5,SP,(uint8_t)frame);                /* sub rsp, frame */
+  /* sub rsp, imm32 -- patched below, once the body has declared its locals */
+  e1(0x48); e1(0x81); e1(0xEC); size_t frame_at=cn; e32(0);
   lea_r12_data();
   /* spill the incoming parameter registers into the frame.  Emitted with
      the same encoder helpers as everything else -- the old hand-written
@@ -1590,9 +1597,14 @@ static void emit_fn(int fi,const char**p){
   sw(p);
   if(**p!='{') errx("make %s: expected { ... }",F[fi].name,NULL);
   (*p)++;
-  cur_fn=fi;
+  cur_fn=fi; lbase=nG; nloc=0;
   emit_prog(p,1,1);                   /* consumes the closing } */
-  cur_fn=-1;
+  {
+    /* frame: the params, then one slot per local, then the spill area */
+    uint32_t fr=(uint32_t)((8*(F[fi].nparam+nloc)+16+15)&~15);
+    memcpy(&code[frame_at],&fr,4);
+  }
+  nG=lbase; cur_fn=-1;               /* the locals go out of scope with the make */
   mov_imm64(AX,0);                   /* fall-off returns 0 */
   e1(0xc9); e1(0xc3);                /* leave; ret */
 }
@@ -1899,12 +1911,23 @@ static void emit_prog(const char**p,int in_fn,int stop){
     if(mkw(p,"hold")){
       char nm[64];
       if(!pid(p,nm,64)) errx("hold needs a name");
-      if(cur_fn>=0)
-        errx("hold inside make is not in the native subset (a local would live in the shared data segment and be clobbered by recursion); compute in give expressions, or assign to a global held at the top level");
       sw(p);
-      if(**p!='=') errx("hold needs '='");
+      if(**p!='=') errx("hold needs '='",NULL,NULL);
       (*p)++;
-      int gi=g_decl(nm);
+      int gi;
+      if(cur_fn>=0){
+        /* a make local: a slot in this call's frame, so recursion gets its own */
+        for(int j=0;j<F[cur_fn].nparam;j++)
+          if(!strcmp(F[cur_fn].params[j],nm)) errx("cannot hold '%s': it is a parameter of make %s",nm,F[cur_fn].name);
+        gi=-1;
+        for(int j=lbase;j<nG;j++) if(!strcmp(G[j].name,nm)){ gi=j; break; }
+        if(gi<0){
+          if(nG>=NSLOT) errx("too many variables (native limit reached)");
+          gi=nG++;
+          snprintf(G[gi].name,64,"%s",nm); G[gi].kind=K_UNK; G[gi].sid=-1;
+          G[gi].off=-8*(F[cur_fn].nparam+1+nloc); nloc++;
+        }
+      } else gi=g_decl(nm);
       emit_expr(p,0);
       int k=XK;
       if(k==K_UNK) errx("cannot infer the type of variable '%s'",nm,NULL);

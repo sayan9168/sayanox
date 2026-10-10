@@ -1,0 +1,46 @@
+// hold inside make: each call has its own locals (native and gen2 must agree)
+make tri(n) {
+  hold t = n * 2
+  when n < 1 {
+    give 0
+  }
+  hold r = tri(n - 1)
+  give t + r
+}
+make label(n) {
+  hold s = "x"
+  when n > 0 {
+    hold s = s + "y"
+  }
+  give len(s)
+}
+make count(n) {
+  hold acc = 0
+  hold i = 0
+  while i < n {
+    hold acc = acc + i
+    hold i = i + 1
+  }
+  give acc
+}
+make pair(a, b) {
+  hold sum = a
+  hold sum = sum + b
+  give sum
+}
+show tri(4)
+show label(0)
+show label(3)
+show count(5)
+show pair(3, 4)
+show tri(2)
+make keep(n) {
+  hold s = "held"
+  hold i = 0
+  while i < n {
+    hold tmp = s + "x"
+    hold i = i + 1
+  }
+  give len(s)
+}
+show keep(300000)
