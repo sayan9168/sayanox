@@ -288,6 +288,9 @@ cc -O2 -o selfhost/seed_tests/nso_g2 selfhost/seed_tests/nso_g2.c
 ./selfhost/gen2 selfhost/native_cond_test.sa selfhost/seed_tests/nco_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/nco_g2 selfhost/seed_tests/nco_g2.c
 [OK] and/or/not and parentheses in when/while conditions: gen2 prints the hand-computed output, native matches gen2 (seed-min refuses)
+./selfhost/gen2 selfhost/native_lang_test.sa selfhost/seed_tests/nla_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/nla_g2 selfhost/seed_tests/nla_g2.c
+[OK] native: true/false, and/or/not in conditions, elif / else if / else when, for over a range, a list and a string, break and continue; native == gen2 byte for byte; seed-min refuses
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded

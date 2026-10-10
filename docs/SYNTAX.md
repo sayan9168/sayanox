@@ -155,13 +155,14 @@ dialect do not read `make NAME<...>` at all, and native rejects it with
 ## Full-language extras (`gen2` only)
 
 The reference above is the **pure-min dialect**, which seed-min, gen2 and
-native all accept. gen2 additionally accepts the following forms. seed-min
-reports `unknown statement` for them and native names the one it does not
-have (`'for' is a full-language statement ...`, `'and' is a full-language
-word operator or boolean literal ...`), so nothing is ever mis-compiled.
-Native accepts `and`, `or`, `not` and parentheses **inside `when` and `while`
-conditions** (short-circuit, the same precedence as gen2); outside a condition
-they are still named and refused, and `true`/`false` are still refused.
+native all accept. gen2 additionally accepts the following forms. seed-min reports `unknown
+statement` for them. Native accepts `for` over a range, a list and a string,
+`break`/`continue`, `elif`/`else if`/`else when`, `true`/`false`, and `and`,
+`or`, `not` with parentheses **inside `when` and `while` conditions**
+(short-circuit, the same precedence as gen2; `make test-native-lang`,
+`make test-native-cond`). Still refused by name, on native and gen2 alike:
+`and`/`or`/`not` as values (`hold v = a and b`, `show a or b`). Native also
+refuses `for` and `hold` inside a `make` body (it needs stack frames).
 
 ### Loops over values
 

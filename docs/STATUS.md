@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-10
+Last updated: 2026-10-11
 
 ## Entry
 
@@ -15,7 +15,7 @@ Everything below was verified by running those commands plus the per-feature
 targets listed at the end of this file, on this host (3939 MB RAM, 2 CPUs,
 x86-64, `/bin/sh` = dash). Nothing in the tables is aspirational. `docs/logs/`
 holds the raw output of the four commands above; each run overwrites them, and
-they were last regenerated 2026-10-10 (after the LSP error-response, stdlib-growth
+they were last regenerated 2026-10-11 (after the LSP error-response, stdlib-growth
 and sxpkg-polish additions, and the earlier package, stdlib, native-memory,
 Stage-2-demo and statement-parity test additions described below). The
 `true-selfhost` log was taken with no `selfhost/native_aot` present, i.e. in the
@@ -119,6 +119,34 @@ output under `ulimit -v 65536` (a 64 MB address-space cap, down from 400 MB
 before the collector), and `make gen3` reaches its fixed point
 (`gen3 == gen4`) without being killed.
 
+## Language roadmap (2026-10-11)
+
+Done means the feature is implemented and a `make` target that runs in a gate
+(or is part of one) checks it. Missing means not implemented on that backend.
+Deferred means it is too large for the current pass; the reason is given.
+Four gates on this checkout: `DOCTOR-OK`, `TRUE-SELFHOST-MIN-OK`, `GEN3-OK`,
+`NATIVE-TEST-OK`.
+
+| Feature | seed-min | gen2 | native | Checked by |
+|---------|----------|------|--------|------------|
+| numbers, strings, `hold`/`show`/`when`/`otherwise`/`while`/`make`/`give`, lists, structs | done | done | done | `make test-stage2`, `make native-test` |
+| string `==` `!=` `<` `<=` `>` `>=` (content compare) | done | done | done (2026-10-10) | `make test-gen2-gaps`, `make test-native-strord` |
+| `and`/`or`/`not` in `when`/`while` conditions | missing | done | done | `make test-stage2`, `make test-native-cond` |
+| `true` / `false` literals | missing | done | done (2026-10-11) | `make test-native-lang`, `make test-stage2` |
+| `elif`, `else if`, `else when` | missing | done | done (2026-10-11) | `make test-native-lang` |
+| `for NAME in A..B` (end exclusive) | missing | done | done (2026-10-11) | `make test-native-lang` |
+| `for NAME in <list or string>` | missing | done | done (2026-10-11) | `make test-for-str`, `make test-native-lang` |
+| `break` / `continue` in `for` and `while` | missing | done | done (2026-10-11) | `make test-native-lang` |
+| `gc()` / `gc_live()` / `gc_runs()` | missing | done | done | `make test-native-mem` |
+| generics `make f<T>(...)` | refused | done (monomorphised) | missing | `make test-generics` |
+| `and`/`or`/`not` as values (`hold v = a and b`, `show a or b`) | missing | missing | refused by name | not added: gen2 refuses them too, and the language docs define them only in conditions |
+| `hold` inside a `make` body | done | done | missing | deferred: a native local needs a stack frame (native refuses by name) |
+| typed list elements and typed `make` signatures | missing | missing | missing | deferred: needs a design decision (list element type, arity and return type rules) |
+
+Still open on native, besides the deferred rows: nothing in the pure-min
+statement set is missing. Generics need a native monomorphiser; `hold` in
+`make` needs stack frames.
+
 ## Coverage (pure-min dialect)
 
 | Feature | seed-min | gen2 (compiler_min) | native (native_aot) |
@@ -174,7 +202,7 @@ What is still different, and honest about it:
 |------|----------|------|--------|
 | `hold` inside a `make` body | accepted | accepted (a local slot) | error: `hold inside make is not in the native subset` — a native local would live in the shared data segment and be clobbered by recursion |
 | collector builtins `gc()` / `gc_live()` / `gc_runs()` | error: no collector in the seed runtime | yes (mark & sweep) | yes (native mark & sweep, see `GC.md`; corrected 2026-10-10 — this row used to say `undefined variable 'gc'`) |
-| full-language statements (`for`, `break`, `continue`, `elif`, `for c in <string>`, `and`/`or`/`not`, ...) | error: `unknown statement` | yes: `for` over strings **and lists** (a variable, a list literal, a string literal or a call), nested loops, `break`/`continue` in both, `elif`/`else when` chains, `and`/`or`/`not` with `not` binding looser than a comparison, `true`/`false`, plus the generics/`use` extensions | error naming the form: `'for' is a full-language statement ...`, `'and'/'or'/'not'/'true'/'false' is a full-language word operator or boolean literal ...` (native implements the pure-min statement set) |
+| full-language statements (`for`, `break`, `continue`, `elif`, `for c in <string>`, `and`/`or`/`not`, ...) | error: `unknown statement` | yes: `for` over strings **and lists** (a variable, a list literal, a string literal or a call), nested loops, `break`/`continue` in both, `elif`/`else when` chains, `and`/`or`/`not` with `not` binding looser than a comparison, `true`/`false`, plus the generics/`use` extensions | yes for `for` over a range `0..N`, over lists and strings, `break`/`continue` in `for` and `while`, `elif`/`else if`/`else when` chains, `and`/`or`/`not` in `when`/`while` conditions, `true`/`false` (2026-10-11, `make test-native-lang`, `make test-native-cond`); still refused by name: `and`/`or`/`not` as values, `generics` (see roadmap) |
 | diagnostic wording | own text (`seed_min: ...`) | own text (`min: ...` / `#error` line) | own text (`native_aot: ...`) |
 | host and memory | any C host, malloc-based, no collector | any C host, mark & sweep | x86-64 Linux only; own heap (first-fit + bump) with a mark & sweep collector (corrected 2026-10-10; was "bump-allocated, never freed") |
 
@@ -356,9 +384,8 @@ still use shell/C infrastructure. See
   gen2 (gen2 used to drop such lines silently or emit invalid C) and, since
   2026-10-08, native (it used to run any bare builtin call).
   The full-language statements `for`, `break`, `continue` and `elif` are
-  **gen2 only**. seed-min reports `unknown statement`; native (since
-  2026-10-08) names the statement and says it is not in the native subset
-  (`make test-for-str`).
+  on gen2 and native (native since 2026-10-11, `make test-native-lang`).
+  seed-min reports `unknown statement` for them (`make test-for-str`).
 * **Stage-2 slice (2026-10-08): `for c in <string>` on gen2.** A declared
   string is walked one byte at a time, each iteration binding `c` to a
   one-byte string. `break`, `continue`, nesting, the empty string, a counter

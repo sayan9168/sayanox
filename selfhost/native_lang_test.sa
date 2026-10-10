@@ -1,0 +1,109 @@
+// native: true/false, elif / else if / else when, for over a range, a list
+// and a string, break and continue, and and/or/not in when conditions.
+// Expected output is hand-computed (test-native-lang).
+hold a = 1
+hold b = 0
+hold c = 7
+show true
+show false
+when true and not false {
+  show 5
+}
+when a and b {
+  show 6
+} otherwise {
+  show 7
+}
+hold n = 5
+when n == 1 {
+  show 100
+} elif n == 2 {
+  show 200
+} otherwise {
+  show 300
+}
+hold n = 2
+when n == 1 {
+  show 100
+} elif n == 2 {
+  show 200
+} otherwise {
+  show 300
+}
+hold n = 1
+when n == 1 {
+  show 100
+} elif n == 2 {
+  show 200
+} otherwise {
+  show 300
+}
+hold n = 1
+when n == 9 {
+  show 1
+} else if n == 1 {
+  show 2
+} else {
+  show 3
+}
+when n == 9 {
+  show 1
+} else when n == 1 {
+  show 4
+} else {
+  show 5
+}
+hold s = 0
+for i in 0..5 {
+  hold s = s + i
+}
+show s
+hold xs = [3, 4, 5]
+hold total = 0
+for x in xs {
+  hold total = total + x
+}
+show total
+hold word = "abc"
+for ch in word {
+  show ch
+}
+for j in 0..10 {
+  when j == 3 {
+    continue
+  }
+  when j == 6 {
+    break
+  }
+  show j
+}
+hold m = 0
+while m < 10 {
+  hold m = m + 1
+  when m == 2 {
+    continue
+  }
+  when m == 4 {
+    break
+  }
+  show m
+}
+show m
+for p in 0..3 {
+  for q in 0..3 {
+    when q == 1 {
+      break
+    }
+    show p * 10 + q
+  }
+}
+make pick(x, y) {
+  when x or y {
+    give 1
+  }
+  give 0
+}
+show pick(0, 9)
+when pick(0, 0) or pick(0, 1) {
+  show 77
+}

@@ -283,13 +283,6 @@ static int idc(char c){ return isalnum((unsigned char)c)||c=='_'; }
    as "undefined variable 'c'" before the statement walker could say what the
    real problem was. */
 static void errx(const char*fmt,...);
-static void reject_fullang(const char*p){
-  char w[16]; int i=0;
-  if(!id0(*p)) return;
-  while(idc(*p)&&i+1<16) w[i++]=*p++; w[i]=0;
-  if(!strcmp(w,"for")||!strcmp(w,"break")||!strcmp(w,"continue")||!strcmp(w,"elif"))
-    errx("'%s' is a full-language statement and not in the native subset (native speaks the pure-min statements; use selfhost/gen2)",w,NULL);
-}
 static int mkw(const char**p,const char*k){ size_t n=strlen(k); if(strncmp(*p,k,n)||idc((*p)[n])) return 0; *p+=n; return 1; }
 static int pid(const char**p,char*b,size_t c){
   sw(p); if(!id0(**p)) return 0;
@@ -341,12 +334,11 @@ static void endstmt(const char**p){
   if(**p=='/'&&(*p)[1]=='/') return;
   const char*r=*p;
   if(mkw(&r,"hold")||mkw(&r,"show")||mkw(&r,"when")||mkw(&r,"while")||
-     mkw(&r,"make")||mkw(&r,"give")||mkw(&r,"struct")||mkw(&r,"otherwise")||mkw(&r,"else")){ return; }
+     mkw(&r,"make")||mkw(&r,"give")||mkw(&r,"struct")||mkw(&r,"otherwise")||mkw(&r,"else")||
+     mkw(&r,"for")||mkw(&r,"break")||mkw(&r,"continue")||mkw(&r,"elif")){ return; }
   if(id0(*r)){
     char w[64]; int i=0;
     while(idc(*r)&&i+1<64) w[i++]=*r++; w[i]=0;
-    if(!strcmp(w,"for")||!strcmp(w,"break")||!strcmp(w,"continue")||!strcmp(w,"elif"))
-      errx("'%s' is a full-language statement and not in the native subset (native speaks the pure-min statements; use selfhost/gen2)",w,NULL);
     if(!strcmp(w,"and")||!strcmp(w,"or")||!strcmp(w,"not"))
       errx("'%s' is a full-language word operator and not in the native subset outside when/while conditions (native speaks the pure-min expressions; use selfhost/gen2)",w,NULL);
     sw(&r);
@@ -469,7 +461,7 @@ static const char*skip_stmt(const char*p){
      between ("undefined variable" for a later hold) */
   { const char*r=p;
     if(!(mkw(&r,"when")||mkw(&r,"while")||mkw(&r,"make")||mkw(&r,"struct")||
-         mkw(&r,"otherwise")||mkw(&r,"else"))){
+         mkw(&r,"otherwise")||mkw(&r,"else")||mkw(&r,"for")||mkw(&r,"elif"))){
       while(*p&&*p!='\n') p++;
       return p;
     }
@@ -585,8 +577,12 @@ static int pk_post(const char**p,int depth);
 static int pk_term(const char**p,int depth);
 static int pk_rel(const char**p,int depth);
 static int pk_full(const char**p,int depth);
-typedef struct { size_t *a; int n, cap; } JL;   /* jump-site list, see gen_cond */
+typedef struct { size_t *a; int n, cap; int j5; } JL;   /* jump-site list, see gen_cond */
+static int cond_nest=0;   /* >0 while a when/while operand or a logic value is being compiled */
 static const char*cond_end(const char*p);
+static void cond_trim(const char**s,const char**e);
+static void emit_when_body(const char**p,int in_fn);
+static void emit_for(const char**p,int in_fn);
 static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const char*what);
 
 static int pk_prim(const char**p,int depth){
@@ -635,6 +631,7 @@ static int pk_prim(const char**p,int depth){
   if(pnum(p,&v)){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
   char n[64];
   if(pid(p,n,64)){
+    if(!strcmp(n,"true")||!strcmp(n,"false")){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
     const char*q=*p; sw(&q);
     /* `name {` is a struct literal unless name is a variable and not a
        struct: `while n {` / `when x {` use a bare variable as the condition */
@@ -739,11 +736,10 @@ static int pk_prim(const char**p,int depth){
         return K_NUM;
       }
     }
-    /* gen2-only word operators and boolean literals: name them instead of
-       dying as "undefined variable 'not'" / "when needs { ... }" */
-    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not")||
-       !strcmp(n,"true")||!strcmp(n,"false"))
-      errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",n,NULL);
+    /* gen2-only word operators: name them instead of dying as "undefined
+       variable 'not'" (and/or/not are fine inside conditions and logic values) */
+    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not"))
+      errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
     int k=G[gi].kind;
@@ -881,7 +877,6 @@ static int infer_round(const char*src){
     if(p[0]=='/'&&p[1]=='/'){ while(*p&&*p!='\n') p++; continue; }
     const char*end=skip_stmt(line);
     const char*rp=line; sw(&rp);
-    reject_fullang(rp);
     if(mkw(&rp,"hold")){
       char nm[64];
       if(pid(&rp,nm,64)){
@@ -1076,6 +1071,7 @@ static void emit_prim(const char**p,int depth){
   if(pnum(p,&v)){ mov_imm64(AX,dbits(v)); XK=K_NUM; XS=-1; return; }
   char n[64];
   if(pid(p,n,64)){
+    if(!strcmp(n,"true")||!strcmp(n,"false")){ mov_imm64(AX,dbits(n[0]=='t'?1.0:0.0)); XK=K_NUM; XS=-1; return; }
     if(cur_fn>=0){
       for(int i=0;i<F[cur_fn].nparam;i++)
         if(!strcmp(F[cur_fn].params[i],n)){ load_param(i); XK=K_NUM; XS=-1; return; }
@@ -1169,11 +1165,10 @@ static void emit_prim(const char**p,int depth){
         return;
       }
     }
-    /* gen2-only word operators and boolean literals: name them instead of
-       dying as "undefined variable 'not'" / "when needs { ... }" */
-    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not")||
-       !strcmp(n,"true")||!strcmp(n,"false"))
-      errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",n,NULL);
+    /* gen2-only word operators: only reachable outside a condition or a logic
+       value, e.g. inside parentheses */
+    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not"))
+      errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
     if(G[gi].kind==K_UNK) errx("undefined variable '%s' (hold it first)",n,NULL);
@@ -1615,7 +1610,15 @@ static void jl_add(JL*l,size_t at){
     if(!l->a){ fprintf(stderr,"native_aot: out of memory\n"); exit(1); } }
   l->a[l->n++]=at;
 }
-static void jl_patch(JL*l,size_t to){ for(int i=0;i<l->n;i++) erel32(l->a[i],to); free(l->a); l->a=0; l->n=l->cap=0; }
+static void jl_add5(JL*l,size_t at){ l->j5=1; jl_add(l,at); }   /* at = a 5-byte jmp rel32 */
+static void jl_patch(JL*l,size_t to){
+  for(int i=0;i<l->n;i++){ if(l->j5) erel32j(l->a[i],to); else erel32(l->a[i],to); }
+  free(l->a); l->a=0; l->n=l->cap=0; l->j5=0;
+}
+/* loop frames: break / continue jump sites, patched when the loop ends */
+typedef struct { JL brk, cont; } LoopF;
+static LoopF loops[64];
+static int nloops=0, nfor=0;
 
 /* end of a condition: the first `{` outside strings and brackets */
 static const char*cond_end(const char*p){
@@ -1637,6 +1640,17 @@ static const char*cond_word(const char*s,const char*e,const char*w){
     if(*q=='('||*q=='[') d++;
     else if(*q==')'||*q==']'){ if(d>0) d--; }
     else if(d==0&&(q==s||!idc(q[-1]))&&q+n<=e&&!strncmp(q,w,n)&&!(q+n<e&&idc(q[n]))) return q;
+  }
+  return 0;
+}
+/* first top-level ".." in [s,e) (the counting form of for), or NULL */
+static const char*top_dots(const char*s,const char*e){
+  int d=0;
+  for(const char*q=s;q+1<e;q++){
+    if(*q=='"'){ q++; while(q<e&&*q!='"'){ if(*q=='\\'&&q+1<e) q++; q++; } continue; }
+    if(*q=='('||*q=='[') d++;
+    else if(*q==')'||*q==']'){ if(d>0) d--; }
+    else if(d==0&&q[0]=='.'&&q[1]=='.') return q;
   }
   return 0;
 }
@@ -1700,15 +1714,12 @@ static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const 
   }
   /* ( ... ) around the whole operand */
   if(cond_wrapped(s,e)){ gen_cond(s+1,e-1,jump_if,out,dry,what); return; }
-  /* atom: a gen2-only word (true/false) is named, not parsed as a struct */
-  if(e-s>=1&&id0(*s)){
-    const char*w=s; while(w<e&&idc(*w)) w++;
-    if((w-s==4&&!strncmp(s,"true",4))||(w-s==5&&!strncmp(s,"false",5)))
-      errx("'%.*s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",(int)(w-s),s,NULL);
-  }
+  /* atom */
+  cond_nest++;
   if(dry){
     const char*q=s;
     int t=pk_full(&q,0);
+    cond_nest--;
     if(t==K_UNK) errx("cannot infer the type of the condition (it must be a number)",NULL,NULL);
     if(t!=K_NUM) errx("condition must be a number (got %s)",kname(t));
     return;
@@ -1720,8 +1731,156 @@ static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const 
     if(XK==K_UNK) errx("cannot infer the type of the %s condition",what,NULL);
     if(XK!=K_NUM) errx("%s condition must be a number (got %s)",what,kname(XK));
   }
+  cond_nest--;
   bin_rr(1,AX,AX);                     /* add rax,rax: ZF iff the double is +-0.0 */
   { size_t at=cn; jcc_rel32(jump_if?JC_NZ:JC_Z,0); jl_add(out,at); }
+}
+
+/* when COND { .. } [elif COND { .. }]* [otherwise|else { .. } | else when ..].
+   The caller has consumed the `when` keyword (or `elif`). */
+static void emit_when_body(const char**p,int in_fn){
+  const char*ce=cond_end(*p);
+  JL fl={0};                   /* false -> the else part (or past the then body) */
+  gen_cond(*p,ce,0,&fl,0,"when");
+  *p=ce;
+  sw(p);
+  if(**p!='{') errx("when needs { ... }");
+  (*p)++;
+  emit_prog(p,in_fn,1);
+  sw(p);
+  int has_else=0, chain=0;
+  if(mkw(p,"elif")){ has_else=1; chain=1; }
+  else if(mkw(p,"otherwise")||mkw(p,"else")){
+    /* false -> the else part below; the then body must skip over it with an
+       unconditional jump (its instructions destroy the cond flags).  The false
+       jumps must target the FIRST BYTE of the else part, i.e. the offset right
+       after that unconditional jump (see the note in the old when handler). */
+    has_else=1; sw(p);
+    if(mkw(p,"when")||mkw(p,"if")) chain=1;
+  }
+  if(has_else){
+    size_t jmpend_at=cn; jmp_rel32(0);
+    size_t j2=cn;
+    if(chain) emit_when_body(p,in_fn);
+    else {
+      sw(p);
+      if(**p!='{') errx("else needs { ... }");
+      (*p)++;
+      emit_prog(p,in_fn,1);
+    }
+    erel32j(jmpend_at,cn);
+    jl_patch(&fl,j2);
+  } else jl_patch(&fl,cn);
+}
+
+/* for NAME in A..B { }   (numbers; B exclusive)
+   for NAME in XS { }     (XS a list: NAME is each number; a string: each byte)
+   Loop state lives in hidden globals, so for is not allowed inside make
+   (a recursive call would share it), like hold. */
+static int for_var(const char*nm,int kind){
+  int gi=g_decl(nm);
+  if(G[gi].kind==K_UNK){ G[gi].kind=kind; G[gi].sid=-1; }
+  else if(G[gi].kind!=kind) errx("variable '%s' is used with two different types",nm,NULL);
+  return gi;
+}
+static int for_hidden(const char*tag,int id,int kind){
+  char hn[64]; snprintf(hn,sizeof hn,"__for%d_%s",id,tag);
+  int gi=g_decl(hn); G[gi].kind=kind; G[gi].sid=-1; return gi;
+}
+/* compile [s,e) as an expression of its own; returns its kind */
+static int eval_sub(const char*s,const char*e){
+  cond_trim(&s,&e);
+  if(s>=e) errx("for needs a value after 'in'",NULL,NULL);
+  char*t=malloc((size_t)(e-s)+1);
+  if(!t){ fprintf(stderr,"native_aot: out of memory\n"); exit(1); }
+  memcpy(t,s,(size_t)(e-s)); t[e-s]=0;
+  const char*q=t;
+  emit_expr(&q,0);
+  sw(&q);
+  if(*q) errx("unexpected text in the for header",NULL,NULL);
+  free(t);
+  return XK;
+}
+static void emit_for_body(const char**p,int in_fn,int f){
+  sw(p);
+  if(**p!='{') errx("for needs { ... }");
+  (*p)++;
+  emit_prog(p,in_fn,1);
+  (void)f;
+}
+static void emit_for(const char**p,int in_fn){
+  if(cur_fn>=0) errx("for inside make is not in the native subset (the loop state would be shared by recursive calls); use while in make");
+  sw(p);
+  char nm[64];
+  if(!pid(p,nm,64)) errx("for needs a name: for NAME in EXPR { ... }",NULL,NULL);
+  sw(p);
+  if(!mkw(p,"in")) errx("for needs 'in': for NAME in EXPR { ... }",NULL,NULL);
+  const char*he=cond_end(*p);
+  const char*hs=*p, *he2=he;
+  cond_trim(&hs,&he2);
+  int id=nfor++;
+  const char*dots=top_dots(hs,he2);
+  int top_gi, src_gi=-1, idx_gi=-1, end_gi=-1, ttop;
+  size_t top=cn;
+  int mode;                    /* 0 = range, 1 = list, 2 = string */
+  if(dots){
+    mode=0;
+    /* start..end, the start is stored in NAME, the end in a hidden global */
+    int k1=eval_sub(hs,dots); if(k1!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
+    top_gi=for_var(nm,K_NUM);
+    store_global(top_gi);
+    int k2=eval_sub(dots+2,he2); if(k2!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
+    end_gi=for_hidden("end",id,K_NUM);
+    store_global(end_gi);
+    top=cn;
+    load_global(top_gi); movq_xr(0,AX);
+    load_global(end_gi); movq_xr(1,AX);
+    ucomisd(0,1);                       /* name < end  <=>  CF set */
+  } else {
+    int k=eval_sub(hs,he2);
+    if(k==K_LIST){ mode=1; src_gi=for_hidden("src",id,K_LIST); top_gi=for_var(nm,K_NUM); }
+    else if(k==K_STR){ mode=2; src_gi=for_hidden("src",id,K_STR); top_gi=for_var(nm,K_STR); }
+    else errx("for needs a range (a..b), a list or a string (got %s)",kname(k),NULL);
+    store_global(src_gi);
+    idx_gi=for_hidden("idx",id,K_NUM);
+    mov_imm64(AX,dbits(0.0)); store_global(idx_gi);
+    top=cn;
+    /* idx < length */
+    load_global(src_gi);
+    if(mode==1) callb(B_LLEN); else callb(B_STRLEN);
+    emit_i2d(); movq_xr(1,AX);
+    load_global(idx_gi); movq_xr(0,AX);
+    ucomisd(0,1);
+  }
+  JL exits={0};
+  size_t exit_at=cn; jcc_rel32(JC_NBE,0);      /* not (name < end): leave */
+  jl_add(&exits,exit_at);                      /* a 6-byte jcc: kept apart from break (5-byte jmp) */
+  if(mode!=0){
+    /* NAME = src[idx] */
+    load_global(idx_gi); emit_d2i(); mv_rr(SI,AX);
+    load_global(src_gi); mv_rr(DI,AX);
+    if(mode==1) callb(B_LGET);
+    else { callb(B_SGET); callb(B_CHR); }
+    store_global(top_gi);
+  }
+  nloops++;
+  *p=he;                        /* the header is compiled from copies: parse on from its { */
+  emit_for_body(p,in_fn,0);
+  nloops--;
+  /* continue lands on the step */
+  LoopF*lf=&loops[nloops];
+  jl_patch(&lf->cont,cn);
+  if(mode==0){
+    load_global(top_gi); movq_xr(0,AX);
+  } else {
+    load_global(idx_gi); movq_xr(0,AX);
+  }
+  mov_imm64(CX,dbits(1.0)); movq_xr(1,CX); addsd(0,1); movq_rx(AX,0);
+  store_global(mode==0?top_gi:idx_gi);
+  jmp_rel32((int32_t)(top-cn-5));
+  jl_patch(&exits,cn);
+  jl_patch(&lf->brk,cn);
+  (void)ttop; (void)end_gi;
 }
 
 static void emit_prog(const char**p,int in_fn,int stop){
@@ -1771,34 +1930,21 @@ static void emit_prog(const char**p,int in_fn,int stop){
       endstmt(p);
       continue;
     }
-    if(mkw(p,"when")){
-      const char*ce=cond_end(*p);
-      JL fl={0};                   /* false -> the else body (or past the then body) */
-      gen_cond(*p,ce,0,&fl,0,"when");
-      *p=ce;
-      sw(p);
-      if(**p!='{') errx("when needs { ... }");
-      (*p)++;
-      emit_prog(p,in_fn,1);
-      sw(p);
-      if(mkw(p,"otherwise")||mkw(p,"else")){
-        /* false -> the else block below; the then body must skip over it with
-           an unconditional jump (its instructions destroy the cond flags).
-           jz_at must target the FIRST BYTE of the else body, i.e. the offset
-           right after that unconditional jump.  It must not target a second
-           conditional jump placed there: control would arrive with the
-           condition's flags still live, so the false case would take that JZ
-           and jump straight past the else body -- silently printing nothing
-           for `when c { .. } else { .. }` when c was false. */
-        size_t jmpend_at=cn; jmp_rel32(0);
-        size_t j2=cn;                      /* else-body entry (no instruction) */
-        sw(p);
-        if(**p!='{') errx("else needs { ... }");
-        (*p)++;
-        emit_prog(p,in_fn,1);
-        erel32j(jmpend_at,cn);
-        jl_patch(&fl,j2);
-      } else jl_patch(&fl,cn);
+    if(mkw(p,"when")){ emit_when_body(p,in_fn); continue; }
+    if(mkw(p,"elif")) errx("elif without a when before it",NULL,NULL);
+    if(mkw(p,"for")){ emit_for(p,in_fn); continue; }
+    if(mkw(p,"break")){
+      if(nloops==0) errx("break outside a loop",NULL,NULL);
+      size_t at=cn; jmp_rel32(0);
+      jl_add5(&loops[nloops-1].brk,at);
+      endstmt(p);
+      continue;
+    }
+    if(mkw(p,"continue")){
+      if(nloops==0) errx("continue outside a loop",NULL,NULL);
+      size_t at=cn; jmp_rel32(0);
+      jl_add5(&loops[nloops-1].cont,at);
+      endstmt(p);
       continue;
     }
     if(mkw(p,"while")){
@@ -1810,9 +1956,13 @@ static void emit_prog(const char**p,int in_fn,int stop){
       sw(p);
       if(**p!='{') errx("while needs { ... }");
       (*p)++;
+      nloops++;
       emit_prog(p,in_fn,1);
+      nloops--;
+      jl_patch(&loops[nloops].cont,top);
       jmp_rel32((int32_t)(top-cn-5));
       jl_patch(&fl,cn);
+      jl_patch(&loops[nloops].brk,cn);
       continue;
     }
     if(mkw(p,"make")){

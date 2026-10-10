@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-sxpkg-online-local
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1191,6 +1191,34 @@ test-native-strord: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@echo "[OK] string ordering < <= > >=: seed-min == gen2 (== native when built)"
 
 # ---------------------------------------------------------------------------
+# test-native-lang: true/false, and/or/not as values, elif / else if / else
+# when, for over a range, a list and a string, break and continue (added
+# 2026-10-11).  Source: selfhost/native_lang_test.sa.  The expected output is
+# hand-computed (and/or give 1 or 0, as C's && and ||); gen2 must print it and
+# native must match gen2 byte for byte.  seed-min refuses the file.
+# ---------------------------------------------------------------------------
+NLA_WANT := 1\n0\n5\n7\n300\n200\n100\n2\n4\n10\n12\na\nb\nc\n0\n1\n2\n4\n5\n1\n3\n4\n0\n10\n20\n1\n77
+test-native-lang: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_lang_test.sa $(TESTS)/nla_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nla_g2 $(TESTS)/nla_g2.c
+	$(call assert-out,./$(TESTS)/nla_g2,$(NLA_WANT))
+	@if ./$(SEED_MIN_BIN) selfhost/native_lang_test.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted the native-lang test"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/native_lang_test.sa $(TESTS)/nla_nat || exit 1; \
+	  ./$(TESTS)/nla_nat > $(TESTS)/nla_nat.out || exit 1; \
+	  ./$(TESTS)/nla_g2 > $(TESTS)/nla_g2.out || exit 1; \
+	  cmp $(TESTS)/nla_g2.out $(TESTS)/nla_nat.out || { echo "[FAIL] native language test differs from gen2"; exit 1; }; \
+	  printf 'make f(n) {\n  for i in 0..2 {\n    show i\n  }\n  give 0\n}\nshow f(1)\n' > $(TESTS)/nla_neg1.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nla_neg1.sa $(TESTS)/nla_neg1 2>&1 | grep -q 'for inside make' || { echo "[FAIL] native accepted for inside make"; exit 1; }; \
+	  printf 'hold a = 1\nbreak\n' > $(TESTS)/nla_neg2.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nla_neg2.sa $(TESTS)/nla_neg2 2>&1 | grep -q 'break outside a loop' || { echo "[FAIL] native accepted break outside a loop"; exit 1; }; \
+	  printf 'hold s = "ab"\nwhen s and 1 {\n  show 1\n}\n' > $(TESTS)/nla_neg3.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nla_neg3.sa $(TESTS)/nla_neg3 2>&1 | grep -q 'must be a number' || { echo "[FAIL] native accepted a string operand of and"; exit 1; }; \
+	fi
+	@echo "[OK] native: true/false, and/or/not in conditions, elif / else if / else when, for over a range, a list and a string, break and continue; native == gen2 byte for byte; seed-min refuses"
+
+# ---------------------------------------------------------------------------
 # test-native-cond: and / or / not, parentheses, in when and while conditions
 # on native (added 2026-10-11).  Source: selfhost/native_cond_test.sa.  The
 # expected output is hand-computed; gen2 must print it and native must match
@@ -1364,16 +1392,18 @@ test-stage2: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN)
 	@# native names the forms it does not have instead of miscompiling them
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  printf 'hold xs = [1, 2]\nfor v in xs {\n  show v\n}\n' > $(TESTS)/s2_for.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/s2_for.sa $(TESTS)/s2_for 2>&1 | grep -q "'for' is a full-language statement" || { echo "[FAIL] native did not name the for statement"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_for.sa $(TESTS)/s2_for || { echo "[FAIL] native refused for over a list"; exit 1; }; \
+	  ./$(TESTS)/s2_for | tr '\n' ' ' | grep -qx '1 2 ' || { echo "[FAIL] native for over a list printed the wrong result"; exit 1; }; \
 	  printf 'hold a = 1\nhold b = 0\nwhen a == 1 and b == 0 {\n  show 1\n}\n' > $(TESTS)/s2_and.sa; \
 	  ./$(NATIVE_BIN) $(TESTS)/s2_and.sa $(TESTS)/s2_and || { echo "[FAIL] native refused and in a when condition"; exit 1; }; \
 	  ./$(TESTS)/s2_and | grep -qx 1 || { echo "[FAIL] native and in a when condition printed the wrong result"; exit 1; }; \
 	  printf 'hold a = 1\nwhen not (a == 2) {\n  show 1\n}\n' > $(TESTS)/s2_not.sa; \
 	  ./$(NATIVE_BIN) $(TESTS)/s2_not.sa $(TESTS)/s2_not || { echo "[FAIL] native refused not in a when condition"; exit 1; }; \
 	  ./$(TESTS)/s2_not | grep -qx 1 || { echo "[FAIL] native not in a when condition printed the wrong result"; exit 1; }; \
-	  printf 'show true\n' > $(TESTS)/s2_true.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/s2_true.sa $(TESTS)/s2_true 2>&1 | grep -q "'true' is a full-language word operator" || { echo "[FAIL] native did not name the true literal"; exit 1; }; \
-	  echo "  native names for/true by name; and/not in conditions run"; \
+	  printf 'show true\nshow false\n' > $(TESTS)/s2_true.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_true.sa $(TESTS)/s2_true || { echo "[FAIL] native refused show true"; exit 1; }; \
+	  ./$(TESTS)/s2_true | tr '\n' ' ' | grep -qx '1 0 ' || { echo "[FAIL] native show true/false printed the wrong result"; exit 1; }; \
+	  echo "  native runs true/false and for; and/not in conditions run (test-native-lang)"; \
 	else \
 	  echo "[stage2] native rejection: skipped (native_aot is not built here)"; \
 	fi
@@ -1639,7 +1669,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
