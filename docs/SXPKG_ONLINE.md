@@ -55,8 +55,12 @@ dependency to the bootstrap, and nothing in it is on any `make` gate.
 
 ### Transfer rules (the shell's job)
 
-* A download that fails leaves no partial file behind. The current code writes
-  straight to the destination, so **this rule is not yet met** (see Missing).
+* A download that fails leaves no partial file behind. `download()` writes to
+  `<dest>.part` and renames it only on success, so a failed transfer leaves no
+  `main.sa` behind (tested by `test-sxpkg-online-local`).
+* A transfer that fails `verify` is removed: `install` deletes the packages it
+  fetched in that run, from the registry and from the project, and exits 1.
+  Package names containing `/` or `..` are refused before any file is touched.
 * A transfer is accepted only when the Sayanox binary's `verify` passes on the
   result. The sum check, not the transport, is the acceptance test.
 * No credentials are read or stored. No authentication is part of the design.
@@ -67,12 +71,13 @@ dependency to the bootstrap, and nothing in it is on any `make` gate.
 version must match `sx.lock`, and `pkgsum(main.sa)` must equal `sum=` in
 `pkg.meta`. Dependency-only packages are checked the same way. A mismatch is
 reported as `MISMATCH` and the wrapper exits 1 (see `test-sxpkg-polish`).
+The online path is tested against a local `file://` registry by
+`make test-sxpkg-online-local` (not a bootstrap gate; skips without curl).
 
 ## Missing (and why it is not in this pass)
 
 | Gap | Why it matters | Why not now |
 |---|---|---|
-| Atomic downloads (temp file, then rename) | A dropped connection can leave a truncated `main.sa`; `verify` would catch it, but only later | needs a `mv` in the shell path, which the offline gates do not otherwise use |
 | Signed index or signed `pkg.meta` | Without a signature a compromised host could publish a matching `sum=` | needs a key and a trust policy, which is a product decision |
 | A cryptographic hash | `pkgsum` is a 31-multiplier hash; collisions are easy to make on purpose | changing the sum changes every `sum=` in the repository and the test fixtures |
 | Version ranges | `deps=` uses exact pins only, so resolution is trivial and reproducible | ranges need a solver; exact pins are the honest first step |

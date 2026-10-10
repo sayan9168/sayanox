@@ -279,9 +279,16 @@ cc -O2 -o selfhost/seed_tests/sg_g2 selfhost/seed_tests/sg_g2.c
 cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh init >/dev/null
 cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
 [OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once
+cc -O2 -o selfhost/native_aot selfhost/native_aot.c
+./selfhost/seed/sxc_seed_min selfhost/native_strord_test.sa > selfhost/seed_tests/nso_sm.c
+cc -O2 -o selfhost/seed_tests/nso_sm selfhost/seed_tests/nso_sm.c
+./selfhost/gen2 selfhost/native_strord_test.sa selfhost/seed_tests/nso_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/nso_g2 selfhost/seed_tests/nso_g2.c
+[OK] string ordering < <= > >=: seed-min == gen2 (== native when built)
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded
+[OK] native GC: same program, same results as gen2 (native mark & sweep)
 make[1]: Leaving directory '/home/user/sayanox'
 make[1]: Entering directory '/home/user/sayanox'
 ./selfhost/gen2 selfhost/compiler_boot.sa selfhost/boot_from_gen2.c >/dev/null

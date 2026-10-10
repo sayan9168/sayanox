@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1114,6 +1114,39 @@ test-sxpkg-polish: sxpkg tools/sxpkg.sh
 	  if [ "$$n" != 1 ]; then echo "[FAIL] sxpkg publish reported $$n times, want 1"; exit 1; fi
 	@echo "[OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once"
 
+
+# ---------------------------------------------------------------------------
+# test-sxpkg-online-local: the online install path, tested against a LOCAL
+# registry through file:// URLs (no network). It is NOT part of the four
+# bootstrap gates: it needs curl and the shell wrapper, and it uses cp/rm.
+#   good remote     -> installed and verified, rc 0
+#   tampered remote -> rejected: verify fails, the download is removed, rc 1
+#   missing remote  -> no partial .part file is left, rc 1
+# ---------------------------------------------------------------------------
+test-sxpkg-online-local: sxpkg tools/sxpkg.sh
+	@command -v curl >/dev/null 2>&1 || { echo "[SKIP] test-sxpkg-online-local: needs curl"; exit 0; }
+	@rm -rf $(TESTS)/sxpkg-online && mkdir -p $(TESTS)/sxpkg-online
+	@cp -r registry $(TESTS)/sxpkg-online/good
+	@cp -r $(TESTS)/sxpkg-online/good $(TESTS)/sxpkg-online/bad
+	@printf 'show 999\n' >> $(TESTS)/sxpkg-online/bad/strings/main.sa
+	@cp -r $(TESTS)/sxpkg-online/good $(TESTS)/sxpkg-online/miss && rm -rf $(TESTS)/sxpkg-online/miss/strings
+	@W=$(CURDIR)/tools/sxpkg.sh; \
+	for c in good bad miss; do \
+	  mkdir -p $(TESTS)/sxpkg-online/p_$$c && cd $(TESTS)/sxpkg-online/p_$$c && \
+	  sh $$W init >/dev/null && sh $$W add strings 0.1.0 >/dev/null || exit 1; \
+	  SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-online/$$c sh $$W install >$(CURDIR)/$(TESTS)/sxpkg-online/$$c.out 2>&1; rc=$$?; \
+	  cd $(CURDIR); \
+	  case $$c in \
+	    good) [ $$rc -eq 0 ] || { echo "[FAIL] good remote: rc=$$rc"; exit 1; }; \
+	          grep -q 'verify ok' $(TESTS)/sxpkg-online/$$c.out || { echo "[FAIL] good remote: not verified"; exit 1; } ;; \
+	    bad)  [ $$rc -eq 1 ] || { echo "[FAIL] tampered remote accepted (rc=$$rc)"; exit 1; }; \
+	          [ ! -e $(TESTS)/sxpkg-online/p_bad/.sayanox/registry/strings/main.sa ] || { echo "[FAIL] tampered package left in the registry"; exit 1; } ;; \
+	    miss) [ $$rc -eq 1 ] || { echo "[FAIL] missing remote not rejected (rc=$$rc)"; exit 1; }; \
+	          [ ! -e $(TESTS)/sxpkg-online/p_miss/.sayanox/registry/strings/main.sa.part ] || { echo "[FAIL] partial download left behind"; exit 1; } ;; \
+	  esac; \
+	done
+	@echo "[OK] sxpkg online install (file:// registry): good accepted, tampered rejected and removed, missing leaves no partial file"
+
 # ---------------------------------------------------------------------------
 # test-stdlib-growth: the numeric helpers added to stdlib/tiny.sa on 2026-10-10
 # (tri, min3/max3, ceil_div, pow_mod, collatz_steps, digit_at, is_palindrome,
@@ -1133,6 +1166,29 @@ test-stdlib-growth: $(GEN2) $(SEED_MIN_BIN)
 	  ./$(TESTS)/sg_nat > $(TESTS)/sg_nat.out && cmp $(TESTS)/sg_g2.out $(TESTS)/sg_nat.out || exit 1; \
 	fi
 	@echo "[OK] stdlib growth: 9 new public numeric helpers, seed-min == gen2 (== native when built)"
+
+# ---------------------------------------------------------------------------
+# test-native-strord: string ordering < <= > >= on native (added 2026-10-10).
+# Native used to refuse it; it now compares bytes as unsigned char, like
+# strcmp. Expected output is hand-computed; seed-min, gen2 and native must all
+# print it. Source: selfhost/native_strord_test.sa.
+# ---------------------------------------------------------------------------
+NSO_WANT := 1\n0\n1\n0\n1\n1\n1\n1\n1\n1\n1\n1\n1\n100\n300
+test-native-strord: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/native_strord_test.sa > $(TESTS)/nso_sm.c
+	$(CC) -O2 -o $(TESTS)/nso_sm $(TESTS)/nso_sm.c
+	./$(GEN2) selfhost/native_strord_test.sa $(TESTS)/nso_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nso_g2 $(TESTS)/nso_g2.c
+	$(call assert-out,./$(TESTS)/nso_sm,$(NSO_WANT))
+	$(call assert-out,./$(TESTS)/nso_g2,$(NSO_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/nso_nat || exit 1; \
+	  ./$(TESTS)/nso_nat > $(TESTS)/nso_nat.out || exit 1; \
+	  ./$(TESTS)/nso_g2 > $(TESTS)/nso_g2.out || exit 1; \
+	  cmp $(TESTS)/nso_g2.out $(TESTS)/nso_nat.out || { echo "[FAIL] native string ordering differs from gen2"; exit 1; }; \
+	fi
+	@echo "[OK] string ordering < <= > >=: seed-min == gen2 (== native when built)"
 
 # ---------------------------------------------------------------------------
 # test-pkgs: the offline package use-path, with no network at all.
@@ -1416,12 +1472,12 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/gg_ord $(TESTS)/gg_ord.c
 	$(call assert-out,./$(TESTS)/gg_ord,1\n2\n3\n5\n6\n7\n8\n10\n11\n12\n13\n14)
 	@./$(SEED_MIN_BIN) $(TESTS)/gg_ord.sa > $(TESTS)/gg_ord_sm.c && $(CC) -O2 -o $(TESTS)/gg_ord_sm $(TESTS)/gg_ord_sm.c && ./$(TESTS)/gg_ord_sm > $(TESTS)/gg_ord_sm.out && ./$(TESTS)/gg_ord > $(TESTS)/gg_ord_g2.out && cmp $(TESTS)/gg_ord_sm.out $(TESTS)/gg_ord_g2.out
-	@# a string against a number is an error on seed-min; native refuses ordering by name
+	@# a string against a number is an error on seed-min and native; native ordering == gen2
 	@printf 'hold s = "ab"\nhold n = 3\nwhen s < n {\n  show 1\n}\n' > $(TESTS)/gg_ordmix.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_ordmix.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted string < number"; exit 1; fi
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat >/dev/null 2>&1; then echo "[FAIL] native accepted string ordering"; exit 1; fi; \
-	  ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat 2>&1 | grep -q 'not in the native subset'; \
+	  ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat >/dev/null 2>&1 && ./$(TESTS)/gg_ordnat > $(TESTS)/gg_ord_nat.out && cmp $(TESTS)/gg_ord_nat.out $(TESTS)/gg_ord_g2.out || { echo "[FAIL] native string ordering differs from gen2"; exit 1; }; \
+	  if ./$(NATIVE_BIN) $(TESTS)/gg_ordmix.sa $(TESTS)/gg_ordmixnat >/dev/null 2>&1; then echo "[FAIL] native accepted string < number"; exit 1; fi; \
 	fi
 	@# the chain forms are gen2 only: seed-min and native must refuse them
 	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_chain.sa >/dev/null 2>&1; then \
@@ -1552,7 +1608,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -1754,6 +1810,9 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	@echo "[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
 	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
+	@# string ordering on native (hand-computed; gen2/seed-min leg in test-native-strord)
+	./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/nso_nat_gate
+	$(call assert-out,./$(TESTS)/nso_nat_gate,$(NSO_WANT))
 	@# the 2026-10-10 stdlib helpers, on native, against the hand-computed values
 	./$(NATIVE_BIN) selfhost/stdlib_growth_test.sa $(TESTS)/sg_nat_gate
 	$(call assert-out,./$(TESTS)/sg_nat_gate,55\n0\n0\n2\n9\n-7\n4\n4\n0\n1\n24\n1\n1\n0\n8\n16\n5\n1\n3\n0\n1\n0\n0\n1\n0\n3\n4\n4\n1000)

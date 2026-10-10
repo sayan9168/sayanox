@@ -875,7 +875,6 @@ static int pk_full(const char**p,int depth){
     *p += is2? 2 : 1;
     int k2=pk_rel(p,depth);
     if(k==K_STR&&k2!=K_STR) errx("string compared with a non-string");
-    if(k==K_STR&&(c0=='<'||c0=='>')) errx("string comparison with '%s' is not in the native subset (native has string_eq for ==/!=; string ordering runs on seed-min and gen2)",op);
     if(k==K_LIST||k==K_STRUCT||k2==K_LIST||k2==K_STRUCT)
       errx("cannot compare %s with %s",kname(k),kname(k2));
     PKX_K=K_NUM; PKX_S=-1;
@@ -990,7 +989,7 @@ static const int argreg[MAXP]={DI,SI,DX,CX,8,9};
 enum { B_MALLOC,B_STRLEN,B_CMPSTR,B_CONCAT,B_N2STR,B_PUTSTR,B_WCSTR,B_ITONO,B_ITOWRITE,
        B_SHOWLIST,B_MLIST,B_LGET,B_LLEN,B_LPUSH,B_SGET,B_CHR,B_READFILE,B_WRITEFILE,
        B_ARG,B_ARGC,B_DIE,B_NFMT,B_SHOWNUM,B_GC,B_GC_LIVE,B_GC_RUNS,
-       B_FINDBLOCK,B_MARK,B_GCCHECK };
+       B_FINDBLOCK,B_MARK,B_GCCHECK,B_STRORD };
 
 static void emit_prim(const char**p,int depth);
 static void emit_post(const char**p,int depth);
@@ -1537,11 +1536,20 @@ static void emit_expr(const char**p,int depth){
     if(XK!=K_STR) errx("string compared with a non-string");
     mv_rr(DI,CX);
     mv_rr(SI,AX);
-    callb(B_CMPSTR);
-    if(op[0]=='='){                   /* == : equal -> 1 */
-      test_rr(AX,AX); setcc(JC_NZ,AX); movzx_al_to_rax();
-    } else {                          /* != : different -> 1 */
-      test_rr(AX,AX); setcc(JC_Z,AX); movzx_al_to_rax();
+    if(!strcmp(op,"==")||!strcmp(op,"!=")){
+      callb(B_CMPSTR);
+      if(op[0]=='='){                 /* == : equal -> 1 */
+        test_rr(AX,AX); setcc(JC_NZ,AX); movzx_al_to_rax();
+      } else {                        /* != : different -> 1 */
+        test_rr(AX,AX); setcc(JC_Z,AX); movzx_al_to_rax();
+      }
+    } else {
+      /* < <= > >= : strcmp(left, right) in -1/0/1, then a signed test of it */
+      callb(B_STRORD);
+      test_rr(AX,AX);
+      int scc = !strcmp(op,"<") ? JC_L : !strcmp(op,"<=") ? JC_LE
+              : !strcmp(op,">") ? JC_G : JC_GE;
+      setcc(scc,AX); movzx_al_to_rax();
     }
     emit_i2d();
   } else {
@@ -2037,6 +2045,38 @@ static void emit_builtins(void){
     { int32_t dd=(int32_t)(ret_at-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
     pop_r(12); e1(0xc3);
     erel32(jne,zc); erel32(jz,eq);
+  }
+  }
+
+  /* r_strord: rdi=a rsi=b -> rax = -1 / 0 / 1 (the sign of strcmp(a, b)).
+     Bytes are compared as unsigned char, as strcmp does. Used for the string
+     orderings < <= > >=; == and != keep B_CMPSTR. */
+  {
+  builtin_off[B_STRORD]=cn;
+  push_r(12);
+  {
+    size_t L=cn;
+    mvz_rm(AX,DI,-1,0,0);              /* eax = a[i] */
+    mvz_rm(11,SI,-1,0,0);              /* r11d = b[i] */
+    bin_rr(0x39,AX,11);                /* cmp rax, r11 */
+    size_t jne=cn; jcc_rel32(JC_NZ,0); /* differ: decide below */
+    test_rr(AX,AX);
+    size_t jz=cn; jcc_rel32(JC_Z,0);   /* both NUL: equal */
+    incdec_r(1,DI);
+    incdec_r(1,SI);
+    jmp_rel32((int32_t)(L-cn-5));
+    size_t diff=cn;
+    setcc(JC_A,AX); movzx_al_to_rax(); /* flags still from the cmp: rax = a[i] > b[i] */
+    bin_rr(0x01,AX,AX);                /* add rax, rax */
+    mov_imm64(11,1);
+    bin_rr(0x29,AX,11);                /* sub rax, r11 : 2*(0|1) - 1 = -1 or 1 */
+    size_t done_at=cn; jmp_rel32(0);
+    size_t eqc=cn;
+    xor_rr(AX,AX);
+    size_t end=cn;
+    { int32_t dd=(int32_t)(end-(done_at+5)); memcpy(code+done_at+1,&dd,4); }
+    pop_r(12); e1(0xc3);
+    erel32(jne,diff); erel32(jz,eqc);
   }
   }
 

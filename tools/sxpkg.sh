@@ -19,14 +19,17 @@ SXPKG_BIN="$SXPKG_SCRIPT_DIR/sxpkg"
 cmd="${1:-help}"; shift 2>/dev/null || true
 
 download() {
-  url="$1"; dest="$2"
+  url="$1"; dest="$2"; part="$dest.part"
+  # Download to a .part file and rename only on success, so an interrupted
+  # transfer never leaves a truncated package where a good one should be.
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$dest"
+    curl -fsSL "$url" -o "$part" || { rm -f "$part"; return 1; }
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$dest" "$url"
+    wget -q -O "$part" "$url" || { rm -f "$part"; return 1; }
   else
     echo "sxpkg: need curl or wget"; return 1
   fi
+  mv -f "$part" "$dest"
 }
 
 run_sayanox() {
@@ -126,14 +129,21 @@ install() {
   mkdir -p "$PKGDIR"
   [ -f "$LOCK" ] || { echo "sxpkg: no sx.lock — run init/add"; exit 1; }
   [ -f "$INDEX" ] || sync
+  fetched=""
   while IFS='=' read -r n v; do
     case "$n" in \#*|"") continue ;; version|name) continue ;; esac
-    if [ ! -d "$REG/$n" ]; then
+    case "$n" in
+      */*|*..*) echo "sxpkg: refusing unsafe package name '$n'"; continue ;;
+    esac
+    # Fetch only what is absent. A package counts as present only when both
+    # files exist: an empty directory left by a failed download is not a copy.
+    if [ ! -f "$REG/$n/pkg.meta" ] || [ ! -f "$REG/$n/main.sa" ]; then
+      fetched="$fetched $n"
       mkdir -p "$REG/$n"
-      download "$ONLINE/$n/pkg.meta" "$REG/$n/pkg.meta" 2>/dev/null || true
-      download "$ONLINE/$n/main.sa" "$REG/$n/main.sa" 2>/dev/null || true
+      download "$ONLINE/$n/pkg.meta" "$REG/$n/pkg.meta" || echo "sxpkg: could not fetch $n/pkg.meta from $ONLINE"
+      download "$ONLINE/$n/main.sa" "$REG/$n/main.sa" || echo "sxpkg: could not fetch $n/main.sa from $ONLINE"
     fi
-    if [ -d "$REG/$n" ]; then
+    if [ -f "$REG/$n/pkg.meta" ] && [ -f "$REG/$n/main.sa" ]; then
       mkdir -p "$PKGDIR/$n"
       cp -r "$REG/$n/." "$PKGDIR/$n/" 2>/dev/null || true
       echo "sxpkg: installed $n -> $PKGDIR/$n"
@@ -142,6 +152,17 @@ install() {
     fi
   done < "$LOCK"
   echo "sxpkg: install done"
+  # A transfer is accepted only if the locked packages now verify (version and
+  # sum). The transport is not trusted; the checksum is the acceptance test.
+  # A failed check removes the packages fetched in this run, so a rejected
+  # download never stays behind in the registry or the project.
+  if ! checked verify; then
+    for f in $fetched; do
+      rm -rf "$REG/$f" "$PKGDIR/$f"
+    done
+    [ -n "$fetched" ] && echo "sxpkg: rejected and removed downloaded:$fetched"
+    return 1
+  fi
 }
 
 search() {

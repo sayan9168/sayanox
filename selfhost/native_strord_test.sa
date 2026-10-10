@@ -1,0 +1,87 @@
+// make test-native-strord: string ordering (< <= > >=) must give the same
+// answers on seed-min, gen2 and native. Comparisons are written as `when`
+// conditions, the form every backend accepts (gen2 has no comparison value).
+// Expected output is hand-computed.
+hold a = "apple"
+hold b = "banana"
+hold e = ""
+hold ea = "a"
+hold ab = "ab"
+hold abc = "abc"
+hold bb = "b"
+hold z = "z"
+hold u = "é"
+hold c = concat("ap", "ple")
+when a < b {
+  show 1
+} otherwise {
+  show 0
+}
+when a > b {
+  show 1
+} otherwise {
+  show 0
+}
+when a <= a {
+  show 1
+} otherwise {
+  show 0
+}
+when a >= b {
+  show 1
+} otherwise {
+  show 0
+}
+when e < ea {
+  show 1
+} otherwise {
+  show 0
+}
+when ab < abc {
+  show 1
+} otherwise {
+  show 0
+}
+when abc > ab {
+  show 1
+} otherwise {
+  show 0
+}
+when bb >= bb {
+  show 1
+} otherwise {
+  show 0
+}
+when z < u {
+  show 1
+} otherwise {
+  show 0
+}
+when u > z {
+  show 1
+} otherwise {
+  show 0
+}
+when c < b {
+  show 1
+} otherwise {
+  show 0
+}
+when c == a {
+  show 1
+} otherwise {
+  show 0
+}
+when c != b {
+  show 1
+} otherwise {
+  show 0
+}
+when a < b {
+  show 100
+}
+when b <= a {
+  show 200
+} otherwise {
+  show 300
+}
