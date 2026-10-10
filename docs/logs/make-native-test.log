@@ -109,8 +109,8 @@ cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
 cc -O2 -o selfhost/seed_tests/s2 selfhost/seed_tests/s2.c
 ./selfhost/gen1_min selfhost/seed_tests/s2.sa selfhost/seed_tests/s2_g1.c >/dev/null
 cc -O2 -o selfhost/seed_tests/s2_g1 selfhost/seed_tests/s2_g1.c
-  native names for/and/not/true by name
-[OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names the forms
+  native names for/true by name; and/not in conditions run
+[OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names for/true and runs and/not in conditions
 ./selfhost/gen2 selfhost/seed_tests/fs_vowels.sa selfhost/seed_tests/fs_vowels.c >/dev/null
 cc -O2 -o selfhost/seed_tests/fs_vowels selfhost/seed_tests/fs_vowels.c
 ./selfhost/gen2 selfhost/seed_tests/fs_brk.sa selfhost/seed_tests/fs_brk.c >/dev/null

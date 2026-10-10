@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-sxpkg-online-local
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -206,7 +206,7 @@ test-lsp: $(LSP_BIN) tools/sayanox-lsp-probe.sh
 # unknown notifications stay silent, bad bodies get -32700 / -32600, and the
 # server keeps serving afterwards. Probe: tools/sayanox-lsp-robust.sh.
 test-lsp-robust: $(LSP_BIN) tools/sayanox-lsp-robust.sh
-	@$(call assert-out,sh tools/sayanox-lsp-robust.sh ./$(LSP_BIN),unknown request -32601\nserver keeps serving after error\nunknown notification ignored\ngarbage body -32700\nno method -32600\njunk header skipped\ntruncated frame ends cleanly)
+	@$(call assert-out,sh tools/sayanox-lsp-robust.sh ./$(LSP_BIN),unknown request -32601\nserver keeps serving after error\nunknown notification ignored\ngarbage body -32700\nno method -32600\njunk header skipped\ntruncated frame ends cleanly\nstring id echoed on a result\nstring id with an escaped quote echoed on an error\nnegative id echoed\nnull id echoed)
 	@echo "[OK] Sayanox LSP robustness: JSON-RPC error responses for bad input"
 
 test-sxfmt: sxfmt
@@ -1191,6 +1191,35 @@ test-native-strord: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@echo "[OK] string ordering < <= > >=: seed-min == gen2 (== native when built)"
 
 # ---------------------------------------------------------------------------
+# test-native-cond: and / or / not, parentheses, in when and while conditions
+# on native (added 2026-10-11).  Source: selfhost/native_cond_test.sa.  The
+# expected output is hand-computed; gen2 must print it and native must match
+# gen2 byte for byte.  seed-min refuses the file.  Word operators outside a
+# condition (show a and b) and bare true/false stay rejected by native.
+# ---------------------------------------------------------------------------
+NCO_WANT := 1\n3\n4\n6\n7\n9\n10\n11\n12\n13\n15\n17\n18\n0\n1\n2\n5\n1\n0
+test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_cond_test.sa $(TESTS)/nco_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nco_g2 $(TESTS)/nco_g2.c
+	$(call assert-out,./$(TESTS)/nco_g2,$(NCO_WANT))
+	@if ./$(SEED_MIN_BIN) selfhost/native_cond_test.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted and/or/not conditions"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/native_cond_test.sa $(TESTS)/nco_nat || exit 1; \
+	  ./$(TESTS)/nco_nat > $(TESTS)/nco_nat.out || exit 1; \
+	  ./$(TESTS)/nco_g2 > $(TESTS)/nco_g2.out || exit 1; \
+	  cmp $(TESTS)/nco_g2.out $(TESTS)/nco_nat.out || { echo "[FAIL] native and/or/not conditions differ from gen2"; exit 1; }; \
+	  printf 'hold s = "ab"\nhold a = 1\nwhen s and a {\n  show 1\n}\n' > $(TESTS)/nco_neg1.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nco_neg1.sa $(TESTS)/nco_neg1 2>&1 | grep -q 'must be a number' || { echo "[FAIL] native accepted a string operand of and"; exit 1; }; \
+	  printf 'hold a = 1\nshow a and a\n' > $(TESTS)/nco_neg2.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nco_neg2.sa $(TESTS)/nco_neg2 2>&1 | grep -q "'and' is a full-language word operator" || { echo "[FAIL] native accepted and in a value"; exit 1; }; \
+	  printf 'hold a = 1\nwhen a and {\n  show 1\n}\n' > $(TESTS)/nco_neg3.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nco_neg3.sa $(TESTS)/nco_neg3 2>&1 | grep -q 'missing operand' || { echo "[FAIL] native accepted a dangling and"; exit 1; }; \
+	fi
+	@echo "[OK] and/or/not and parentheses in when/while conditions: gen2 prints the hand-computed output, native matches gen2 (seed-min refuses)"
+
+
+# ---------------------------------------------------------------------------
 # test-pkgs: the offline package use-path, with no network at all.
 #
 #   * `tools/sxpkg.sh init` (mkdir only) plus the Sayanox `sxpkg seed` writes a
@@ -1337,16 +1366,18 @@ test-stage2: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN)
 	  printf 'hold xs = [1, 2]\nfor v in xs {\n  show v\n}\n' > $(TESTS)/s2_for.sa; \
 	  ./$(NATIVE_BIN) $(TESTS)/s2_for.sa $(TESTS)/s2_for 2>&1 | grep -q "'for' is a full-language statement" || { echo "[FAIL] native did not name the for statement"; exit 1; }; \
 	  printf 'hold a = 1\nhold b = 0\nwhen a == 1 and b == 0 {\n  show 1\n}\n' > $(TESTS)/s2_and.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/s2_and.sa $(TESTS)/s2_and 2>&1 | grep -q "'and' is a full-language word operator" || { echo "[FAIL] native did not name the and operator"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_and.sa $(TESTS)/s2_and || { echo "[FAIL] native refused and in a when condition"; exit 1; }; \
+	  ./$(TESTS)/s2_and | grep -qx 1 || { echo "[FAIL] native and in a when condition printed the wrong result"; exit 1; }; \
 	  printf 'hold a = 1\nwhen not (a == 2) {\n  show 1\n}\n' > $(TESTS)/s2_not.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/s2_not.sa $(TESTS)/s2_not 2>&1 | grep -q "'not' is a full-language word operator" || { echo "[FAIL] native did not name the not operator"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_not.sa $(TESTS)/s2_not || { echo "[FAIL] native refused not in a when condition"; exit 1; }; \
+	  ./$(TESTS)/s2_not | grep -qx 1 || { echo "[FAIL] native not in a when condition printed the wrong result"; exit 1; }; \
 	  printf 'show true\n' > $(TESTS)/s2_true.sa; \
 	  ./$(NATIVE_BIN) $(TESTS)/s2_true.sa $(TESTS)/s2_true 2>&1 | grep -q "'true' is a full-language word operator" || { echo "[FAIL] native did not name the true literal"; exit 1; }; \
-	  echo "  native names for/and/not/true by name"; \
+	  echo "  native names for/true by name; and/not in conditions run"; \
 	else \
 	  echo "[stage2] native rejection: skipped (native_aot is not built here)"; \
 	fi
-	@echo "[OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names the forms"
+	@echo "[OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names for/true and runs and/not in conditions"
 
 # ---------------------------------------------------------------------------
 # test-for-str: the one Stage-2 language slice added on gen2 (2026-10-08).
@@ -1608,7 +1639,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

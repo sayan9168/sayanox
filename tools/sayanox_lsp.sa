@@ -1090,10 +1090,97 @@ make send(body: str) -> num {
   give r
 }
 
-make reply(id: num, result: str) -> num {
+// id_raw: the JSON text of the request id, exactly as sent: a number ("7",
+// "-3"), a string with its quotes and escapes ("\"abc\""), or null.  Empty
+// when the body has no id, which makes it a notification.  The raw text is
+// echoed back unchanged, so a string id keeps its type in the reply.
+make id_raw(msg: str) -> str {
+  hold k = ""
+  hold p = 0
+  hold n = 0
+  hold c = 0
+  hold run = 1
+  hold out = ""
+  k = "\"id\""
+  p = find(msg, k)
+  when p < 0 {
+    give ""
+  }
+  p = find_from(msg, ":", p + len(k))
+  when p < 0 {
+    give ""
+  }
+  p += 1
+  n = len(msg)
+  while p < n {
+    c = sx_index(msg, p)
+    when c == 32 || c == 9 {
+      p += 1
+    } otherwise {
+      break
+    }
+  }
+  when p >= n {
+    give ""
+  }
+  c = sx_index(msg, p)
+  when c == 34 {
+    out = "\""
+    p += 1
+    while run == 1 {
+      when p >= n {
+        run = 0
+      } otherwise {
+        c = sx_index(msg, p)
+        when c == 92 {
+          when p + 1 < n {
+            out = out + chr(c)
+            out = out + chr(sx_index(msg, p + 1))
+            p += 2
+          } otherwise {
+            run = 0
+          }
+        } otherwise {
+          out = out + chr(c)
+          p += 1
+          when c == 34 {
+            run = 0
+          }
+        }
+      }
+    }
+    give out
+  }
+  when starts(msg, p, "null") == 1 {
+    give "null"
+  }
+  when c == 45 || (c >= 48 && c <= 57) {
+    while run == 1 {
+      when p >= n {
+        run = 0
+      } otherwise {
+        c = sx_index(msg, p)
+        when c == 45 || (c >= 48 && c <= 57) {
+          out = out + chr(c)
+          p += 1
+        } otherwise {
+          run = 0
+        }
+      }
+    }
+    give out
+  }
+  give ""
+}
+
+make reply(idraw: str, result: str) -> num {
   hold b = ""
   hold r = 0
-  b = concat("{\"jsonrpc\":\"2.0\",\"id\":", numstr(id))
+  hold idt = idraw
+  when len(idt) <= 0 {
+    idt = "null"
+  }
+  b = concat("{\"jsonrpc\":\"2.0\",\"id\":", idt)
   b = concat(b, ",\"result\":")
   b = concat(b, result)
   b = concat(b, "}")
@@ -1101,14 +1188,14 @@ make reply(id: num, result: str) -> num {
   give r
 }
 
-// reply_error: a JSON-RPC 2.0 error response. id < 0 means "no usable id"
-// and is sent as null (the spec's answer for a body that cannot be parsed).
-make reply_error(id: num, code: num, msg: str) -> num {
+// reply_error: a JSON-RPC 2.0 error response.  An empty idraw means "no usable
+// id" and is sent as null (the spec's answer for a body that cannot be parsed).
+make reply_error(idraw: str, code: num, msg: str) -> num {
   hold b = ""
   hold r = 0
-  hold idt = "null"
-  when id >= 0 {
-    hold idt = numstr(id)
+  hold idt = idraw
+  when len(idt) <= 0 {
+    idt = "null"
   }
   b = concat("{\"jsonrpc\":\"2.0\",\"id\":", idt)
   b = concat(b, ",\"error\":{\"code\":")
@@ -1238,7 +1325,7 @@ hold clen = 0
 hold got = 0
 hold body = ""
 hold method = ""
-hold id = 0
+hold idraw = ""
 hold uri = ""
 hold text = ""
 hold line = 0
@@ -1284,7 +1371,7 @@ while running == 1 {
     }
     when got == 1 && clen > 0 {
       body = read_n(clen)
-      id = num_field(body, "id", -1)
+      idraw = id_raw(body)
       method = str_field(body, "method")
       when len(method) <= 0 {
         method = ""
@@ -1296,13 +1383,13 @@ while running == 1 {
       when string_eq(method, "initialize") {
         res = concat("{\"capabilities\":", capabilities())
         res = concat(res, ",\"serverInfo\":{\"name\":\"sayanox-lsp\",\"version\":\"2.0\"}}")
-        d = reply(id, res)
+        d = reply(idraw, res)
       }
       when string_eq(method, "initialized") {
         d = 1
       }
       when string_eq(method, "shutdown") {
-        d = reply(id, "null")
+        d = reply(idraw, "null")
       }
       when string_eq(method, "textDocument/didOpen") {
         docuri = uri
@@ -1334,23 +1421,23 @@ while running == 1 {
       when string_eq(method, "textDocument/diagnostic") {
         res = concat("{\"kind\":\"full\",\"items\":", diagnostics(doc, dir_of(docuri)))
         res = concat(res, "}")
-        d = reply(id, res)
+        d = reply(idraw, res)
       }
       when string_eq(method, "textDocument/documentSymbol") {
-        d = reply(id, symbols(doc, docuri))
+        d = reply(idraw, symbols(doc, docuri))
       }
       when string_eq(method, "textDocument/completion") {
         res = concat("{\"isIncomplete\":false,\"items\":", completion_items())
         res = concat(res, "}")
-        d = reply(id, res)
+        d = reply(idraw, res)
       }
       when string_eq(method, "textDocument/hover") {
         w = word_at(doc, ln, ch)
-        d = reply(id, hover_for(w, doc))
+        d = reply(idraw, hover_for(w, doc))
       }
       when string_eq(method, "textDocument/definition") {
         w = word_at(doc, ln, ch)
-        d = reply(id, definition_for(w, doc, docuri))
+        d = reply(idraw, definition_for(w, doc, docuri))
       }
       when string_eq(method, "exit") {
         running = 0
@@ -1360,14 +1447,14 @@ while running == 1 {
       // answered only when it is a request (has an id): notifications are
       // silently ignored, as the spec requires, so clients never hang waiting.
       when first_char(body) != 123 {
-        d = reply_error(-1, -32700, "parse error: body is not a JSON object")
+        d = reply_error("", -32700, "parse error: body is not a JSON object")
       } otherwise {
         when len(method) <= 0 {
-          d = reply_error(id, -32600, "invalid request: no method")
+          d = reply_error(idraw, -32600, "invalid request: no method")
         } otherwise {
           when known_method(method) == 0 {
-            when id >= 0 {
-              d = reply_error(id, -32601, "method not found")
+            when len(idraw) > 0 {
+              d = reply_error(idraw, -32601, "method not found")
             }
           }
         }

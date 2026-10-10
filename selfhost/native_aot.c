@@ -276,22 +276,6 @@ static size_t d_str(const char*s){ size_t n=strlen(s); size_t at=d_alloc(n+1); m
 /* ---------------- text utilities ---------------- */
 static void sw(const char**p){ while(**p&&isspace((unsigned char)**p)) (*p)++; }
 
-/* The gen2-only word operators and boolean literals.  A native condition
-   stops after one comparison, so `a == 1 and b == 2` used to die as
-   "when needs { ... }"; name the operator instead. */
-static const char* wordop_at(const char*p){
-  while(*p&&isspace((unsigned char)*p)) p++;
-  static const char*ops[]={"and","or","not","true","false",0};
-  for(int i=0;ops[i];i++){
-    size_t L=strlen(ops[i]);
-    if(!strncmp(p,ops[i],L)){
-      unsigned char c=(unsigned char)p[L];
-      if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'))
-        return ops[i];
-    }
-  }
-  return 0;
-}
 static int id0(char c){ return isalpha((unsigned char)c)||c=='_'; }
 static int idc(char c){ return isalnum((unsigned char)c)||c=='_'; }
 /* gen2-only full-language statements: name them and stop, at every pass.
@@ -363,6 +347,8 @@ static void endstmt(const char**p){
     while(idc(*r)&&i+1<64) w[i++]=*r++; w[i]=0;
     if(!strcmp(w,"for")||!strcmp(w,"break")||!strcmp(w,"continue")||!strcmp(w,"elif"))
       errx("'%s' is a full-language statement and not in the native subset (native speaks the pure-min statements; use selfhost/gen2)",w,NULL);
+    if(!strcmp(w,"and")||!strcmp(w,"or")||!strcmp(w,"not"))
+      errx("'%s' is a full-language word operator and not in the native subset outside when/while conditions (native speaks the pure-min expressions; use selfhost/gen2)",w,NULL);
     sw(&r);
     if(*r=='='&&(g_find(w)>=0)) return;                /* next line is an assignment */
     if(*r=='('&&!strcmp(w,"push")) return;             /* next line is a call statement (push only, as in seed-min/gen2) */
@@ -599,6 +585,9 @@ static int pk_post(const char**p,int depth);
 static int pk_term(const char**p,int depth);
 static int pk_rel(const char**p,int depth);
 static int pk_full(const char**p,int depth);
+typedef struct { size_t *a; int n, cap; } JL;   /* jump-site list, see gen_cond */
+static const char*cond_end(const char*p);
+static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const char*what);
 
 static int pk_prim(const char**p,int depth){
   sw(p);
@@ -949,9 +938,9 @@ static void infer(const char*src){
       int k=pk_full(&rp,0);
       if(k==K_UNK) errx("cannot infer the type of the show value");
     } else if(mkw(&rp,"when")||mkw(&rp,"while")){
-      int k=pk_full(&rp,0);
-      if(k==K_UNK) errx("cannot infer the type of the condition (it must be a number)");
-      if(k!=K_NUM) errx("condition must be a number (got %s)",kname(k));
+      /* every operand of and/or/not is type-checked, not just the first */
+      JL none={0};
+      gen_cond(rp,cond_end(rp),0,&none,1,"when");
     } else if(mkw(&rp,"give")){
       int k=pk_full(&rp,0);
       if(k==K_UNK) errx("cannot infer the type of the give value");
@@ -1613,6 +1602,128 @@ static void emit_fn(int fi,const char**p){
   e1(0xc9); e1(0xc3);                /* leave; ret */
 }
 
+/* ================= boolean conditions: and / or / not in when and while =================
+   A condition is `or` (loosest) over `and` over prefix `not` over atoms, with
+   parentheses.  An atom is one numeric expression; a comparison is one atom,
+   so `not a < b` means `not (a < b)`, as in gen2.  Native emits short-circuit
+   jumps.  gen_cond(s,e,jump_if=0,F) jumps to F when the condition is false and
+   falls through when it is true; jump_if=1 jumps when true.  Each atom is
+   tested with `add rax,rax` (ZF iff the double is +-0.0), like a plain when.
+   dry=1 is the pre-pass: it type-checks the atoms and emits nothing. */
+static void jl_add(JL*l,size_t at){
+  if(l->n==l->cap){ l->cap=l->cap?l->cap*2:8; l->a=realloc(l->a,sizeof(size_t)*(size_t)l->cap);
+    if(!l->a){ fprintf(stderr,"native_aot: out of memory\n"); exit(1); } }
+  l->a[l->n++]=at;
+}
+static void jl_patch(JL*l,size_t to){ for(int i=0;i<l->n;i++) erel32(l->a[i],to); free(l->a); l->a=0; l->n=l->cap=0; }
+
+/* end of a condition: the first `{` outside strings and brackets */
+static const char*cond_end(const char*p){
+  int d=0;
+  while(*p){
+    if(*p=='"'){ p++; while(*p&&*p!='"'){ if(*p=='\\'&&p[1]) p++; p++; } if(*p) p++; continue; }
+    if(*p=='('||*p=='[') d++;
+    else if(*p==')'||*p==']') d--;
+    else if(*p=='{'&&d<=0) return p;
+    p++;
+  }
+  return p;
+}
+/* first top-level occurrence of the word w in [s,e) (outside strings and brackets) */
+static const char*cond_word(const char*s,const char*e,const char*w){
+  size_t n=strlen(w); int d=0;
+  for(const char*q=s;q<e;q++){
+    if(*q=='"'){ q++; while(q<e&&*q!='"'){ if(*q=='\\'&&q+1<e) q++; q++; } continue; }
+    if(*q=='('||*q=='[') d++;
+    else if(*q==')'||*q==']'){ if(d>0) d--; }
+    else if(d==0&&(q==s||!idc(q[-1]))&&q+n<=e&&!strncmp(q,w,n)&&!(q+n<e&&idc(q[n]))) return q;
+  }
+  return 0;
+}
+/* split [s,e) at each top-level word w: returns the part count (<= max) */
+static int cond_split(const char*s,const char*e,const char*w,const char**ps,const char**pe,int max){
+  size_t n=strlen(w); int k=0; const char*r=s;
+  for(;;){
+    const char*x=cond_word(r,e,w);
+    if(k>=max) errx("condition is too long for the native compiler (more than %d operands)",NULL,NULL);
+    ps[k]=r; pe[k]=x?x:e; k++;
+    if(!x) break;
+    r=x+n;
+  }
+  return k;
+}
+static void cond_trim(const char**s,const char**e){
+  while(*s<*e&&isspace((unsigned char)**s)) (*s)++;
+  while(*e>*s&&isspace((unsigned char)(*e)[-1])) (*e)--;
+}
+/* if s is '(' whose matching ')' is the last character of [s,e), return 1 */
+static int cond_wrapped(const char*s,const char*e){
+  if(s>=e||*s!='(') return 0;
+  int d=0;
+  for(const char*q=s;q<e;q++){
+    if(*q=='"'){ q++; while(q<e&&*q!='"'){ if(*q=='\\'&&q+1<e) q++; q++; } continue; }
+    if(*q=='(') d++;
+    else if(*q==')'){ d--; if(d==0) return q==e-1; }
+  }
+  return 0;
+}
+static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const char*what){
+  cond_trim(&s,&e);
+  if(s>=e) errx("missing operand in %s condition",what,NULL);
+  const char *ps[256], *pe[256]; int k;
+  /* or: true if any operand is true */
+  if((k=cond_split(s,e,"or",ps,pe,256))>1){
+    if(jump_if){ for(int i=0;i<k;i++) gen_cond(ps[i],pe[i],1,out,dry,what); }
+    else {
+      JL tl={0};                       /* any true operand: skip the rest */
+      for(int i=0;i<k-1;i++) gen_cond(ps[i],pe[i],1,&tl,dry,what);
+      gen_cond(ps[k-1],pe[k-1],0,out,dry,what);
+      if(!dry) jl_patch(&tl,cn);
+    }
+    return;
+  }
+  /* and: false if any operand is false */
+  if((k=cond_split(s,e,"and",ps,pe,256))>1){
+    if(!jump_if){ for(int i=0;i<k;i++) gen_cond(ps[i],pe[i],0,out,dry,what); }
+    else {
+      JL fl={0};                       /* any false operand: skip the rest */
+      for(int i=0;i<k-1;i++) gen_cond(ps[i],pe[i],0,&fl,dry,what);
+      gen_cond(ps[k-1],pe[k-1],1,out,dry,what);
+      if(!dry) jl_patch(&fl,cn);
+    }
+    return;
+  }
+  /* not: flips the sense; not binds to the operand that follows it */
+  if(e-s>=3&&!strncmp(s,"not",3)&&(s+3==e||!idc(s[3]))){
+    gen_cond(s+3,e,!jump_if,out,dry,what);
+    return;
+  }
+  /* ( ... ) around the whole operand */
+  if(cond_wrapped(s,e)){ gen_cond(s+1,e-1,jump_if,out,dry,what); return; }
+  /* atom: a gen2-only word (true/false) is named, not parsed as a struct */
+  if(e-s>=1&&id0(*s)){
+    const char*w=s; while(w<e&&idc(*w)) w++;
+    if((w-s==4&&!strncmp(s,"true",4))||(w-s==5&&!strncmp(s,"false",5)))
+      errx("'%.*s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",(int)(w-s),s,NULL);
+  }
+  if(dry){
+    const char*q=s;
+    int t=pk_full(&q,0);
+    if(t==K_UNK) errx("cannot infer the type of the condition (it must be a number)",NULL,NULL);
+    if(t!=K_NUM) errx("condition must be a number (got %s)",kname(t));
+    return;
+  }
+  { const char*q=s;
+    emit_expr(&q,0);
+    sw(&q);
+    if(q<e) errx("unexpected text in %s condition (use and, or, not and parentheses between comparisons)",what,NULL);
+    if(XK==K_UNK) errx("cannot infer the type of the %s condition",what,NULL);
+    if(XK!=K_NUM) errx("%s condition must be a number (got %s)",what,kname(XK));
+  }
+  bin_rr(1,AX,AX);                     /* add rax,rax: ZF iff the double is +-0.0 */
+  { size_t at=cn; jcc_rel32(jump_if?JC_NZ:JC_Z,0); jl_add(out,at); }
+}
+
 static void emit_prog(const char**p,int in_fn,int stop){
   for(;;){
     sw(p);
@@ -1661,13 +1772,10 @@ static void emit_prog(const char**p,int in_fn,int stop){
       continue;
     }
     if(mkw(p,"when")){
-      emit_expr(p,0);
-      { const char*wo=wordop_at(*p);
-        if(wo) errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",wo,NULL); }
-      if(XK==K_UNK) errx("cannot infer the type of the condition");
-      if(XK!=K_NUM) errx("when condition must be a number (got %s)",kname(XK));
-      bin_rr(1,AX,AX);             /* add rax,rax: ZF iff the double is +-0.0 */
-      size_t jz_at=cn; jcc_rel32(JC_Z,0);
+      const char*ce=cond_end(*p);
+      JL fl={0};                   /* false -> the else body (or past the then body) */
+      gen_cond(*p,ce,0,&fl,0,"when");
+      *p=ce;
       sw(p);
       if(**p!='{') errx("when needs { ... }");
       (*p)++;
@@ -1689,25 +1797,22 @@ static void emit_prog(const char**p,int in_fn,int stop){
         (*p)++;
         emit_prog(p,in_fn,1);
         erel32j(jmpend_at,cn);
-        erel32(jz_at,j2);
-      } else erel32(jz_at,cn);
+        jl_patch(&fl,j2);
+      } else jl_patch(&fl,cn);
       continue;
     }
     if(mkw(p,"while")){
       size_t top=cn;
-      emit_expr(p,0);
-      { const char*wo=wordop_at(*p);
-        if(wo) errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",wo,NULL); }
-      if(XK==K_UNK) errx("cannot infer the type of the condition");
-      if(XK!=K_NUM) errx("while condition must be a number (got %s)",kname(XK));
-      bin_rr(1,AX,AX);             /* add rax,rax: ZF iff the double is +-0.0 */
-      size_t jz_at=cn; jcc_rel32(JC_Z,0);
+      const char*ce=cond_end(*p);
+      JL fl={0};
+      gen_cond(*p,ce,0,&fl,0,"while");
+      *p=ce;
       sw(p);
       if(**p!='{') errx("while needs { ... }");
       (*p)++;
       emit_prog(p,in_fn,1);
       jmp_rel32((int32_t)(top-cn-5));
-      erel32(jz_at,cn);
+      jl_patch(&fl,cn);
       continue;
     }
     if(mkw(p,"make")){

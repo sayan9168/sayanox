@@ -64,3 +64,26 @@ case "$out" in *'"id":12,"result":null'*) echo 'junk header skipped' ;; *) echo 
 # 6. a truncated frame (EOF inside the body) ends the session cleanly
 { printf 'Content-Length: 500\r\n\r\n{"jsonrpc":"2.0"'; } | "$bin" >/dev/null
 echo 'truncated frame ends cleanly'
+
+# 7. string ids (JSON-RPC allows them): the reply echoes the id as sent, with
+#    its quotes and escapes, so the client can match it to the request
+out=$(
+  {
+    send '{"jsonrpc":"2.0","id":"abc-1","method":"shutdown","params":{}}'
+    send '{"jsonrpc":"2.0","id":"a\"b","method":"textDocument/foldingRange","params":{}}'
+    send '{"jsonrpc":"2.0","method":"exit"}'
+  } | "$bin"
+)
+case "$out" in *'"id":"abc-1","result":null'*) echo 'string id echoed on a result' ;; *) echo 'FAIL string id result'; exit 1 ;; esac
+case "$out" in *'"id":"a\"b","error":{"code":-32601'*) echo 'string id with an escaped quote echoed on an error' ;; *) echo 'FAIL string id error'; exit 1 ;; esac
+
+# 8. numeric, negative and null ids are echoed unchanged
+out=$(
+  {
+    send '{"jsonrpc":"2.0","id":-3,"method":"shutdown"}'
+    send '{"jsonrpc":"2.0","id":null,"method":"shutdown"}'
+    send '{"jsonrpc":"2.0","method":"exit"}'
+  } | "$bin"
+)
+case "$out" in *'"id":-3,"result":null'*) echo 'negative id echoed' ;; *) echo 'FAIL negative id'; exit 1 ;; esac
+case "$out" in *'"id":null,"result":null'*) echo 'null id echoed' ;; *) echo 'FAIL null id'; exit 1 ;; esac

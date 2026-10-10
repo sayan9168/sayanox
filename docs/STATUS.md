@@ -512,7 +512,7 @@ still use shell/C infrastructure. See
 | `make test-for-str` | the Stage-2 slice on gen2: `for c in <string>` byte walk, vowel count with `string_eq`, `break`/`continue`, empty string, nested loops, a rebound counter, `\"é\"` as two bytes, the diagnostics for a number, a list and a counter clash; seed-min refuses the statement; native names it; a `make NAME<T>` whose second parameter is not a type parameter is refused with the generic diagnostic. |
 | `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |
 
-## Roadmap: done vs still missing, per backend (synced 2026-10-10)
+## Roadmap: done vs still missing, per backend (synced 2026-10-11)
 
 This table replaces the 2026-10-08 roadmap. Every "done" cell names the gate
 that checks it; a "missing" cell says why it is missing. "n/a" means the thing
@@ -528,7 +528,7 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 | Numeric stdlib `stdlib/tiny.sa` (36 `make` definitions: 25 before this pass, +9 public numeric helpers and +2 internal ones added 2026-10-10: `tri`, `min3`, `max3`, `ceil_div`, `pow_mod`, `collatz_steps`, `digit_at`, `is_palindrome`, `isqrt`) | done | done | done | `test-stdlib`, `test-stdlib-growth` (hand-computed values; seed-min == gen2 byte for byte), and the native leg in `native-test` | more helpers only when they fit the native subset (no `hold` in a body, at most 6 parameters) |
 | String / list / file stdlib (`str_util`, `list_util`, `file_util`) | refuses (typed parameters) | done | refuses (`bad param list`) | `test-stdlib` | by design gen2-only until typed parameters exist on the other two |
 | Generics `make NAME<T>` / `make NAME<A, B>` | refuses (`make NAME<...>` is not read) | done (one or more parameters, monomorphised) | refuses (`generics are not in the native subset`) | `test-generics`, `test-native-*`, `test-stage2` | seed and native generics are **not** implemented. Parity here means *the same refusal*, which is tested. Adding it to the seed changes the fixed-point root and to native needs a monomorphiser; neither is safe in this pass |
-| Full-language statements: `for` (strings and lists), `break`, `continue`, `elif`, `and`/`or`/`not`, `true`/`false` | refuses (`unknown statement`) | done | refuses by name | `test-stage2`, `test-for-str`, `test-gen2-gaps` | seed and native support — deliberately not done (the native subset is the pure-min set) |
+| Full-language statements: `for` (strings and lists), `break`, `continue`, `elif`, `and`/`or`/`not`, `true`/`false` | refuses (`unknown statement`) | done | `for`, `break`, `continue`, `elif`, `true`/`false` refused by name; `and`/`or`/`not` and parentheses **work in `when`/`while` conditions** (short-circuit jumps, added 2026-10-11) but are still refused by name in value expressions (`show a and b`) | `test-stage2`, `test-for-str`, `test-gen2-gaps`, `test-native-cond` | seed: none of these (the pure-min set). Native: `for`/`break`/`continue`/`elif` and value-position `and`/`or`/`not`/`true`/`false` are still missing (deliberately; the native subset is pure-min plus conditions) |
 | Stage-2 demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) | done | done | done (lexer) | `test-stage2-demos` | these are contract sketches, not a full Stage-2 compiler |
 | String ordering `<` `<=` `>` `>=` (byte order, in `when`/`while` conditions) | done | done | done (`B_STRORD`, added 2026-10-10) | `make test-native-strord` (same output on all three; long shared-prefix case checked against gen2) | Value-form comparisons (`show a < b`, `hold r = a < b`) are rejected by gen2 (`unexpected '<'`), so the test uses conditions only. Not a full collation: byte order only |
 | Collector `gc()` / `gc_live()` / `gc_runs()` | refuses (no collector in the seed runtime) | done (mark & sweep) | done (native mark & sweep, `docs/GC.md`) | `test-gc` (same program, same output on gen2 and native), `test-native-mem` | native is non-compacting and its stack scan is conservative, so it may retain garbage |
@@ -536,7 +536,7 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 | Richer types | `double`, `str`, list, literal-struct | same, plus generics; no bounds, no generic structs | same as seed-min | `test-generics`, `test-struct2` | **Deferred (item 6).** Typed list elements, bounds and generic structs need a type-checker that does not exist yet. This pass changed no type rules |
 | Packages `sxpkg` — offline (`init`, `add`, `list`, `remove`, `seed`, `search`, `info`, `deps`, `install-local`, `verify`, `sum`) | n/a (the tool is a Sayanox program, built by gen2) | done | n/a | `test-sxpkg`, `test-sxpkg-wrapper`, `test-sxpkg-polish`, `test-pkgs`, `test-registry-sums` | the `install-local` / `verify` exit codes come from the shell wrapper (the language has no exit builtin) |
 | Packages — online (`sync`, `install`, `fetch`, `publish` over HTTP) | n/a | n/a | n/a | `test-sxpkg-online-local` (file:// registry; not a bootstrap gate) | **Partly done.** Downloads are atomic (`.part` then rename), and a fetched package that fails `verify` is removed. Still missing: signatures and a cryptographic hash (the sum is a 31-multiplier hash), and `publish` upload. Shell only (`curl`/`wget`). The design is in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md) |
-| LSP (`tools/sayanox_lsp.sa`) | n/a | done (diagnostics, symbols, completion, hover, definition, `didChange`, JSON-RPC errors `-32600`/`-32601`/`-32700`) | n/a | `test-lsp`, `test-lsp-robust` | incremental parsing, multi-file analysis, string ids (only numeric ids are echoed) |
+| LSP (`tools/sayanox_lsp.sa`) | n/a | done (diagnostics, symbols, completion, hover, definition, `didChange`, JSON-RPC errors `-32600`/`-32601`/`-32700`) | n/a | `test-lsp`, `test-lsp-robust` | incremental parsing, multi-file analysis (string ids are echoed as sent since 2026-10-11, `test-lsp-robust`) |
 | Documentation and logs | `STATUS.md` synced | `GC.md`, `GENERICS.md`, `LSP.md`, `REGISTRY.md`, `STDLIB.md` current | `NATIVE.md`, `GC.md` current | `docs/logs/` regenerated by the four gate commands | `selfhost/STAGE2.md` describes the legacy `restore_stage2.sh` path, which no Makefile target builds (see below) |
 
 ### What "Stage-2" means in this repository (checked 2026-10-10)
@@ -567,11 +567,11 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 |---|---|---|---|
 | `show gc()` | rejected | `1` | `1` |
 | `for v in xs` (list) | rejected | `1` `2` | rejected by name |
-| `break` / `and` / generic `make id<T>` | rejected | works | rejected by name |
+| `break` / `and` / generic `make id<T>` | rejected | works | `break` and generics rejected by name; `and` in a `when`/`while` condition works (added 2026-10-11, `test-native-cond`) |
 | `hold` inside `make` | `3` | `3` | rejected (item 7, deferred) |
 | `use "stdlib/tiny.sa"`, `isqrt(50)` | `7` | `7` | `7` |
 | `use "stdlib/str_util.sa"`, `s_len("abc")` | rejected (typed params) | `3` | rejected (typed params) |
-| `when s < "c"` on a string | `1` | `1` | rejected |
+| `when s < "c"` on a string | `1` | `1` | `1` (byte order, added 2026-10-10, `test-native-strord`) |
 | `push(xs, 4)` then `len(xs)` | `1` | `1` | `1` |
 | struct `P { 3 }`, `p.x` | `3` | `3` | `3` |
 

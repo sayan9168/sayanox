@@ -159,6 +159,9 @@ native all accept. gen2 additionally accepts the following forms. seed-min
 reports `unknown statement` for them and native names the one it does not
 have (`'for' is a full-language statement ...`, `'and' is a full-language
 word operator or boolean literal ...`), so nothing is ever mis-compiled.
+Native accepts `and`, `or`, `not` and parentheses **inside `when` and `while`
+conditions** (short-circuit, the same precedence as gen2); outside a condition
+they are still named and refused, and `true`/`false` are still refused.
 
 ### Loops over values
 

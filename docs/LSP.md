@@ -44,9 +44,12 @@ probe `tools/sayanox-lsp-robust.sh`):
 
 After any of these the server keeps serving the next valid request.
 
-Limits, stated plainly: only **numeric** `id`s are echoed (a string id is read
-as absent). Framing needs `Content-Length`, so a header-less stream is ignored
-until one appears.
+Request ids are echoed as sent, so a **string id** (`"id":"abc-1"`) comes back
+with its quotes and escapes, a number or `null` comes back unchanged, and a body
+with no `id` is a notification (no reply). Covered by `test-lsp-robust`.
+
+Limits, stated plainly: framing needs `Content-Length`, so a header-less stream
+is ignored until one appears.
 
 ## Diagnostics
 
