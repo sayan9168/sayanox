@@ -1331,6 +1331,10 @@ while fsi < n {
           }
           when sx_eq(fsw, "make") && (fsnx == 32 || fsnx == 9 || fsnx == 40) {
             // ---- parse `make NAME ( params ) -> TYPE` ----
+            // typed signature check: every parameter and the return, or none
+            hold fsxnp = 0
+            hold fsxnt = 0
+            hold fsxrt = 0
             hold fsp = fsi + 4
             hold fsrun = 1
             while fsrun == 1 {
@@ -1400,6 +1404,7 @@ while fsi < n {
                     } otherwise {
                       when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) || fsc3 == 95 {
                         hold fspn = ""
+                        hold fsxnp = fsxnp + 1
                         hold fsrun = 1
                         while fsrun == 1 {
                           when fsp >= n {
@@ -1433,6 +1438,7 @@ while fsi < n {
                           hold fsc3 = sx_index(source, fsp)
                         }
                         when fsc3 == 58 {
+                          hold fsxnt = fsxnt + 1
                           hold fsp = fsp + 1
                           hold fsrun = 1
                           while fsrun == 1 {
@@ -1522,6 +1528,7 @@ while fsi < n {
               }
               when fsc3 == 45 && fsc4 == 62 {
                 hold fsp = fsp + 2
+                hold fsxrt = 1
                 hold fsrun = 1
                 while fsrun == 1 {
                   when fsp >= n {
@@ -1555,6 +1562,18 @@ while fsi < n {
                 }
                 when sx_eq(fstype, "list") {
                   hold fsret2 = 108
+                }
+              }
+              when fsxnt > 0 || fsxrt == 1 {
+                when fsxnt != fsxnp {
+                  hold exerr = concat(exerr, "#error sayanox-min: a typed make needs a type on every parameter (a: num)")
+                  hold exerr = concat(exerr, nl)
+                  show "min: a typed make needs a type on every parameter (a: num)"
+                }
+                when fsxrt == 0 {
+                  hold exerr = concat(exerr, "#error sayanox-min: a typed make needs a return type (-> num)")
+                  hold exerr = concat(exerr, nl)
+                  show "min: a typed make needs a return type (-> num)"
                 }
               }
               // record it once (a later redefinition keeps the first)

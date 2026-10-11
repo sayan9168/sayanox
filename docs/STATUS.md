@@ -141,7 +141,8 @@ Four gates on this checkout: `DOCTOR-OK`, `TRUE-SELFHOST-MIN-OK`, `GEN3-OK`,
 | generics `make f<T>(...)` | refused | done (monomorphised) | missing | `make test-generics` |
 | `and`/`or`/`not` as values (`hold v = a and b`, `show a or b`) | missing | missing | refused by name | not added: gen2 refuses them too, and the language docs define them only in conditions |
 | `hold` inside a `make` body | done | done | done (2026-10-11: a slot in the call's own frame; `make test-native-locals`) |
-| typed list elements and typed `make` signatures | missing | missing | missing | deferred: needs a design decision (list element type, arity and return type rules) |
+| typed signatures `make f(a: num) -> num` (all or nothing) | refused | done (`str` params also accepted) | done for `num` only; `str`/`list` refused by name (2026-10-11) | `make test-typed-sig` |
+| typed list elements | missing | missing | missing | deferred: needs a design decision (element type rule) |
 
 Still open on native, besides the deferred rows: nothing in the pure-min
 statement set is missing. Generics need a native monomorphiser; `hold` in

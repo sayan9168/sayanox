@@ -235,3 +235,10 @@ The maintained pure-min path does not claim support for every historical
 example. Namespaced exports, a full standard library and portable native AOT
 remain future work. Consult [`FEATURES.md`](FEATURES.md) and
 [`BOOTSTRAP_ROADMAP.md`](BOOTSTRAP_ROADMAP.md).
+
+### Typed signatures
+
+A `make` is either fully typed or fully untyped: `make f(a: num, b: num) -> num`
+or `make f(a, b)`. A partly typed parameter list, or typed parameters without a
+`-> TYPE`, is an error on gen2 and native (`make test-typed-sig`). Native takes
+`num` only; seed-min refuses the typed form.

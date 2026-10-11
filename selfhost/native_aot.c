@@ -367,6 +367,33 @@ static int g_decl(const char*n){
   if(nG>=NSLOT){ fprintf(stderr,"native_aot: too many globals (native limit: %d)\n",NSLOT); exit(1); }
   snprintf(G[nG].name,64,"%s",n); G[nG].kind=K_UNK; G[nG].sid=-1; G[nG].off=0; return nG++;
 }
+/* typed signatures: `make f(a: num, b: num) -> num`.  Native takes only num.
+   A signature is either fully typed (every parameter and the return) or
+   fully untyped (the pure-min form every backend accepts).  The helpers
+   consume the annotations; sig_check decides. */
+static int sig_type(const char**p,const char*nm){
+  sw(p);
+  if(**p!=':') return 0;
+  (*p)++; sw(p);
+  char t[64];
+  if(!pid(p,t,64)) errx("make %s: expected a type after ':'",nm,NULL);
+  if(strcmp(t,"num")) errx("make %s: parameter type '%s' is not in the native subset (native takes num)",nm,t,NULL);
+  return 1;
+}
+static int sig_ret(const char**p,const char*nm){
+  sw(p);
+  if(!((*p)[0]=='-'&&(*p)[1]=='>')) return 0;
+  (*p)+=2; sw(p);
+  char t[64];
+  if(!pid(p,t,64)) errx("make %s: expected a return type after '->'",nm,NULL);
+  if(strcmp(t,"num")) errx("make %s: return type '%s' is not in the native subset (native returns num)",nm,t,NULL);
+  return 1;
+}
+static void sig_check(const char*nm,int nparam,int ntyped,int ret){
+  if(ntyped==0&&!ret) return;
+  if(ntyped!=nparam) errx("make %s: a typed signature needs a type on every parameter (a: num)",nm,NULL);
+  if(!ret) errx("make %s: a typed signature needs a return type (-> num)",nm,NULL);
+}
 static int s_find(const char*n){ for(int i=0;i<nS;i++) if(!strcmp(S[i].name,n)) return i; return -1; }
 static int s_field(int sid,const char*n){ for(int i=0;i<S[sid].nf;i++) if(!strcmp(S[sid].f[i].name,n)) return i; return -1; }
 static int f_find(const char*n){ for(int i=0;i<nF;i++) if(!strcmp(F[i].name,n)) return i; return -1; }
@@ -531,6 +558,7 @@ static void collect_defs(const char*src){
       if(f_find(nm)>=0){ fprintf(stderr,"native_aot: function '%s' declared twice\n",nm); exit(1); }
       if(nF>=MAXF){ fprintf(stderr,"native_aot: too many functions (native limit: %d)\n",MAXF); exit(1); }
       strcpy(F[nF].name,nm); F[nF].nparam=0; F[nF].start=-1;
+      int sig_typed=0;
       sw(&p);
       if(*p=='<'){ fprintf(stderr,"native_aot: make %s<...>: generics are not in the native subset (gen2 monomorphises make NAME<T> and make NAME<A, B>); native has no generic functions\n",nm); exit(1); }
       if(*p!='('){ fprintf(stderr,"native_aot: make %s: expected (params)\n",nm); exit(1); }
@@ -542,10 +570,15 @@ static void collect_defs(const char*src){
         if(!pid(&p,pm,64)){ fprintf(stderr,"native_aot: make %s: bad param list\n",nm); exit(1); }
         if(F[nF].nparam>=MAXP){ fprintf(stderr,"native_aot: make %s: at most %d params\n",nm,MAXP); exit(1); }
         strcpy(F[nF].params[F[nF].nparam++],pm);
+        sig_typed+=sig_type(&p,nm);
         sw(&p);
         if(*p==','){ p++; continue; }
         if(*p==')'){ p++; break; }
         fprintf(stderr,"native_aot: make %s: bad param list\n",nm); exit(1);
+      }
+      {
+        int sig_ret1=sig_ret(&p,nm);
+        sig_check(nm,F[nF].nparam,sig_typed,sig_ret1);
       }
       nF++;
       p=skip_stmt(line);
@@ -1589,11 +1622,13 @@ static void emit_fn(int fi,const char**p){
     if(**p==')'){ (*p)++; break; }
     char pm[64];
     if(!pid(p,pm,64)) errx("make %s: bad param list",F[fi].name,NULL);
+    sig_type(p,F[fi].name);
     sw(p);
     if(**p==','){ (*p)++; continue; }
     if(**p==')'){ (*p)++; break; }
     errx("make %s: bad param list",F[fi].name,NULL);
   }
+  sig_ret(p,F[fi].name);
   sw(p);
   if(**p!='{') errx("make %s: expected { ... }",F[fi].name,NULL);
   (*p)++;

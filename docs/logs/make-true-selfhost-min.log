@@ -297,6 +297,9 @@ cc -O2 -o selfhost/seed_tests/nlo_g2 selfhost/seed_tests/nlo_g2.c
 ./selfhost/gen2 selfhost/give_index_test.sa selfhost/seed_tests/gix_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/gix_g2 selfhost/seed_tests/gix_g2.c
 [OK] give xs[i] inside make: gen2 and native print the hand-computed values
+./selfhost/gen2 selfhost/typed_sig_test.sa selfhost/seed_tests/tsg_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/tsg_g2 selfhost/seed_tests/tsg_g2.c
+[OK] typed signatures: fully typed make runs on gen2 and native (same output); partly typed or return-less signatures are refused; seed-min refuses typed
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded

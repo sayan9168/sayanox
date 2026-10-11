@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-sxpkg-online-local
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1262,6 +1262,34 @@ test-give-index: $(GEN2) $(NATIVE_BIN)
 	@echo "[OK] give xs[i] inside make: gen2 and native print the hand-computed values"
 
 # ---------------------------------------------------------------------------
+# test-typed-sig: typed signatures (added 2026-10-11).  A make is either fully
+# typed (`make f(a: num, b: num) -> num`) or fully untyped (the shared pure-min
+# form); a partly typed parameter list or a missing return type is an error on
+# gen2 and native.  seed-min refuses the typed form.  Source:
+# selfhost/typed_sig_test.sa; expected output hand-computed.
+# ---------------------------------------------------------------------------
+TSG_WANT := 5\n120\n7
+test-typed-sig: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/typed_sig_test.sa $(TESTS)/tsg_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/tsg_g2 $(TESTS)/tsg_g2.c
+	$(call assert-out,./$(TESTS)/tsg_g2,$(TSG_WANT))
+	@if ./$(SEED_MIN_BIN) selfhost/typed_sig_test.sa $(TESTS)/tsg_seed.c >/dev/null 2>&1; then echo "[FAIL] seed-min accepted typed signatures"; exit 1; fi
+	@printf 'make bad(a: num, b) -> num {\n  give a + b\n}\nshow bad(1, 2)\n' > $(TESTS)/tsg_mixed.sa
+	@printf 'make bad(a: num) {\n  give a\n}\nshow bad(1)\n' > $(TESTS)/tsg_noret.sa
+	@./$(GEN2) $(TESTS)/tsg_mixed.sa $(TESTS)/tsg_m.c | grep -q 'a typed make needs a type on every parameter' || { echo "[FAIL] gen2 accepted a partly typed signature"; exit 1; }
+	@./$(GEN2) $(TESTS)/tsg_noret.sa $(TESTS)/tsg_n.c | grep -q 'a typed make needs a return type' || { echo "[FAIL] gen2 accepted a typed signature with no return type"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/typed_sig_test.sa $(TESTS)/tsg_nat || exit 1; \
+	  ./$(TESTS)/tsg_nat > $(TESTS)/tsg_nat.out || exit 1; \
+	  ./$(TESTS)/tsg_g2 > $(TESTS)/tsg_g2.out || exit 1; \
+	  cmp $(TESTS)/tsg_g2.out $(TESTS)/tsg_nat.out || { echo "[FAIL] native typed signatures differ from gen2"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/tsg_mixed.sa $(TESTS)/tsg_m2 2>&1 | grep -q 'a typed signature needs a type on every parameter' || { echo "[FAIL] native accepted a partly typed signature"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/tsg_noret.sa $(TESTS)/tsg_n2 2>&1 | grep -q 'a typed signature needs a return type' || { echo "[FAIL] native accepted a typed signature with no return type"; exit 1; }; \
+	fi
+	@echo "[OK] typed signatures: fully typed make runs on gen2 and native (same output); partly typed or return-less signatures are refused; seed-min refuses typed"
+
+# ---------------------------------------------------------------------------
 # test-native-cond: and / or / not, parentheses, in when and while conditions
 # on native (added 2026-10-11).  Source: selfhost/native_cond_test.sa.  The
 # expected output is hand-computed; gen2 must print it and native must match
@@ -1712,7 +1740,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
