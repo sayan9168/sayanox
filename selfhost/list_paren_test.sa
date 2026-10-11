@@ -1,0 +1,14 @@
+// List literal elements with grouping parentheses (STATUS known gap, item 6).
+// Hand-computed expected output (see LIST_PAREN_WANT in the Makefile):
+//   xs = [5, 4, 10, 5], ys = [7, 2]
+hold a = 5
+hold b = 2
+hold xs = [a, (a - 1), (b + 3) * 2, ((a))]
+show xs[0]
+show xs[1]
+show xs[2]
+show xs[3]
+show len(xs)
+hold ys = [(a + b), b]
+show ys[0]
+show ys[1]

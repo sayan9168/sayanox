@@ -219,3 +219,79 @@ make between(x, lo, hi) {
   }
   give 1
 }
+
+// Added with the 2026-10-10 growth pass (still numeric, still native-subset:
+// no `hold` in a body, at most 6 parameters, helpers defined before use).
+
+make tri(n) {
+  when n <= 0 {
+    give 0
+  }
+  give n * (n + 1) / 2
+}
+
+make min3(a, b, c) {
+  give min2(min2(a, b), c)
+}
+
+make max3(a, b, c) {
+  give max2(max2(a, b), c)
+}
+
+// ceil_div(a, b): ceiling of a / b for a >= 0 and b > 0
+make ceil_div(a, b) {
+  give (a + b - 1 - (a + b - 1) % b) / b
+}
+
+make pow_mod(b, e, m) {
+  when e <= 0 {
+    give 1 % m
+  }
+  give b * pow_mod(b, e - 1, m) % m
+}
+
+// collatz_steps(n): steps for n to reach 1 under the 3n+1 rule (n >= 1)
+make collatz_steps(n) {
+  when n <= 1 {
+    give 0
+  }
+  when n % 2 == 0 {
+    give 1 + collatz_steps(n / 2)
+  }
+  give 1 + collatz_steps(3 * n + 1)
+}
+
+// div_floor(n, p): floor(n / p) for n >= 0 and p > 0
+make div_floor(n, p) {
+  give (n - n % p) / p
+}
+
+// digit_at(n, k): the k-th decimal digit of n >= 0, counting from 0
+make digit_at(n, k) {
+  give div_floor(n, pow_int(10, k)) - 10 * div_floor(n, pow_int(10, k + 1))
+}
+
+make is_palindrome(n) {
+  when n < 0 {
+    give 0
+  }
+  when reverse_num(n) == n {
+    give 1
+  }
+  give 0
+}
+
+make isqrt_from(n, i) {
+  when (i + 1) * (i + 1) > n {
+    give i
+  }
+  give isqrt_from(n, i + 1)
+}
+
+// isqrt(n): floor of the square root, for n >= 0
+make isqrt(n) {
+  when n <= 0 {
+    give 0
+  }
+  give isqrt_from(n, 0)
+}

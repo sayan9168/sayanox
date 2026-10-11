@@ -1,0 +1,71 @@
+hold a = 1
+hold b = 0
+hold c = 5
+hold n = 0
+hold s = "ab"
+when a and c {
+  show 1
+}
+when a and b {
+  show 2
+} otherwise {
+  show 3
+}
+when b or c {
+  show 4
+}
+when b or n {
+  show 5
+} otherwise {
+  show 6
+}
+when not b {
+  show 7
+}
+when not a {
+  show 8
+} otherwise {
+  show 9
+}
+when a or b and n {
+  show 10
+}
+when (b or a) and c {
+  show 11
+}
+when not (a == 2) and c > 3 {
+  show 12
+}
+when a == 1 and s == "ab" {
+  show 13
+}
+when b or (c > 9 or c < 2) {
+  show 14
+} otherwise {
+  show 15
+}
+when a and b {
+  show 16
+} else {
+  show 17
+}
+when not (a and b) or n {
+  show 18
+}
+hold i = 0
+while i < 3 and c > i {
+  show i
+  i = i + 1
+}
+while not (i == 5) and i < 9 {
+  i = i + 1
+}
+show i
+make inrange(x) {
+  when x > 0 and x < 10 {
+    give 1
+  }
+  give 0
+}
+show inrange(5)
+show inrange(12)

@@ -1,0 +1,16 @@
+// typed signatures: every parameter and the return type, or none (2026-10-11)
+make add(a: num, b: num) -> num {
+  give a + b
+}
+make fac(n: num) -> num {
+  when n <= 1 {
+    give 1
+  }
+  give n * fac(n - 1)
+}
+make seven() -> num {
+  give 7
+}
+show add(2, 3)
+show fac(5)
+show seven()

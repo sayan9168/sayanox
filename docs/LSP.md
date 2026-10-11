@@ -27,6 +27,30 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 | `textDocument/definition` | jumps to the `make` / `hold` / `struct` line of the word under the cursor |
 | `shutdown` / `exit` | yes (EOF also ends the session) |
 
+## Error responses (robustness)
+
+A client should never wait for an answer that will not come. The server
+follows JSON-RPC 2.0 for input it cannot dispatch (`make test-lsp-robust`,
+probe `tools/sayanox-lsp-robust.sh`):
+
+| Input | Response |
+|---|---|
+| a request (has an `id`) with a method the server does not implement | error `-32601` "method not found", with the same `id` |
+| a notification (no `id`) with an unknown method | **no response** (the spec says so) |
+| a body that is not a JSON object (`this is not json`) | error `-32700` "parse error", `id: null` |
+| an object with no `method` | error `-32600` "invalid request", with its `id` or `null` |
+| junk lines before a `Content-Length` frame | skipped; the next valid frame is answered |
+| a frame that ends before its declared length | the session ends cleanly; no crash |
+
+After any of these the server keeps serving the next valid request.
+
+Request ids are echoed as sent, so a **string id** (`"id":"abc-1"`) comes back
+with its quotes and escapes, a number or `null` comes back unchanged, and a body
+with no `id` is a notification (no reply). Covered by `test-lsp-robust`.
+
+Limits, stated plainly: framing needs `Content-Length`, so a header-less stream
+is ignored until one appears.
+
 ## Diagnostics
 
 Diagnostics are computed from the document text and the file system — not from

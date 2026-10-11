@@ -87,7 +87,11 @@ recorded as soon as the nested call is queued.
   (`make test-generics` diffs the two outputs).
 * It is a full-language feature: seed-min and the pure-min dialect do not read
   `make NAME<...>` at all and reject the program.
-* native rejects every generic with `generics are not in the native subset`.
+* native compiles a generic over **numbers**: each type parameter is `num`, so
+  `make twice<T>(a: T) -> T` is one numeric function (`make test-native-generics`).
+  A call that passes a string or a list is refused with `generics are not in the
+  native subset for strings and lists`; a generic must be fully typed (every
+  parameter and `-> T`) and every parameter must be a type parameter, as on gen2.
 
 ## Verified by
 
@@ -114,3 +118,20 @@ recorded as soon as the nested call is queued.
   remain double-only (see [`SYNTAX.md`](SYNTAX.md)).
 * Kinds are per *value kind*, not per declared type: `A` and `B` can both be
   `num` without any distinction being made.
+
+## Backend parity (decision, 2026-10-10)
+
+Generics are a **gen2 feature**. Parity across backends means the same answer
+on each: the same program is either compiled or refused, never miscompiled.
+
+| Backend | `make NAME<T>(...)` | Checked by |
+|---|---|---|
+| gen2 (and gen1_min, which builds it) | compiled (monomorphised) | `make test-generics` |
+| seed-min | refused: the seed does not read generic definitions | `make test-generics` |
+| native (`native_aot`) | numbers only (each type parameter is `num`); a string or list argument is refused by name | `make test-native-generics`, `make test-generics`, `make test-stage2` |
+
+Adding generics to the seed would change the root of the fixed-point chain,
+so the seed still refuses them. Native has no string or list kinds for
+generics yet (its calling convention passes numbers only), so it compiles the
+numeric case and refuses the rest by name. The string and list kinds on native
+are missing in `docs/STATUS.md`.

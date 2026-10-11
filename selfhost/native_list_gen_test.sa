@@ -1,0 +1,26 @@
+// Native lists as parameters, return values and generic arguments.
+// Hand-computed expected output (see the test-native-listgen target):
+//   3 / 4 / 6 / 3 / 9 / 2 / 8
+make same_val<T>(x: T) -> T {
+  give x
+}
+make count_of(xs: list) -> num {
+  give len(xs)
+}
+make head(xs: list) -> num {
+  give xs[0]
+}
+make wrap(xs: list) -> list {
+  give same_val(xs)
+}
+hold xs = [4, 5, 6]
+hold zs = [9, 8]
+show count_of(xs)
+show head(xs)
+hold ys = wrap(xs)
+show ys[2]
+show len(same_val(xs))
+show head(same_val(zs))
+show count_of(same_val(zs))
+hold w = same_val(zs)
+show w[1]

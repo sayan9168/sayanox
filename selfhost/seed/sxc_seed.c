@@ -447,7 +447,7 @@ static void redeclare_var(const char*n,Type ty,int l,int c,const char*sname){ de
 /* legacy declare_var kept for parameter registration */
 static void declare_param(const char*n,Type ty,int l,int c){ declare_var(n,ty,l,c,NULL); }
 static int builtin_arity(const char*n){
-  if(!strcmp(n,"len")||!strcmp(n,"chr")||!strcmp(n,"str")||!strcmp(n,"read_file")||!strcmp(n,"arg")||!strcmp(n,"type_of"))return 1;
+  if(!strcmp(n,"len")||!strcmp(n,"chr")||!strcmp(n,"str")||!strcmp(n,"read_file")||!strcmp(n,"http_get")||!strcmp(n,"arg")||!strcmp(n,"type_of"))return 1;
   if(!strcmp(n,"concat")||!strcmp(n,"sx_index")||!strcmp(n,"write_file")||!strcmp(n,"string_eq")||!strcmp(n,"list_get")||!strcmp(n,"push"))return 2;
   if(!strcmp(n,"list_set"))return 3;
   if(!strcmp(n,"arg_count")||!strcmp(n,"list_new")||!strcmp(n,"gc"))return 0;
@@ -455,7 +455,7 @@ static int builtin_arity(const char*n){
 }
 static Type builtin_ret(const char*n){
   if(!strcmp(n,"len")||!strcmp(n,"write_file")||!strcmp(n,"arg_count")||!strcmp(n,"string_eq")||!strcmp(n,"list_set")||!strcmp(n,"gc"))return TY_NUM;
-  if(!strcmp(n,"chr")||!strcmp(n,"str")||!strcmp(n,"concat")||!strcmp(n,"read_file")||!strcmp(n,"arg")||!strcmp(n,"type_of"))return TY_STR;
+  if(!strcmp(n,"chr")||!strcmp(n,"str")||!strcmp(n,"concat")||!strcmp(n,"read_file")||!strcmp(n,"http_get")||!strcmp(n,"arg")||!strcmp(n,"type_of"))return TY_STR;
   if(!strcmp(n,"list_new")||!strcmp(n,"push"))return TY_LIST;
   return TY_ANY;
 }
@@ -680,6 +680,7 @@ static void emit_call(Expr*e){
     if(!strcmp(e->fn,"len"))bi="sx_b_len"; else if(!strcmp(e->fn,"chr"))bi="sx_b_chr";
     else if(!strcmp(e->fn,"str"))bi="sx_b_str"; else if(!strcmp(e->fn,"concat"))bi="sx_b_concat";
     else if(!strcmp(e->fn,"sx_index"))bi="sx_index_v"; else if(!strcmp(e->fn,"read_file"))bi="sx_b_read_file";
+    else if(!strcmp(e->fn,"http_get"))bi="sx_b_http_get";
     else if(!strcmp(e->fn,"write_file"))bi="sx_b_write_file"; else if(!strcmp(e->fn,"arg"))bi="sx_b_arg";
     else if(!strcmp(e->fn,"arg_count"))bi="sx_b_arg_count"; else if(!strcmp(e->fn,"string_eq"))bi="sx_b_string_eq";
     else if(!strcmp(e->fn,"list_new"))bi="sx_b_list_new"; else if(!strcmp(e->fn,"list_get"))bi="sx_b_list_get";

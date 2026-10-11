@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -201,6 +201,13 @@ test-lsp: $(LSP_BIN) tools/sayanox-lsp-probe.sh
 	@mkdir -p $(TESTS)
 	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change)
 	@echo "[OK] Sayanox LSP: live JSON-RPC session, real diagnostics, symbols, completion, hover, definition"
+
+# Malformed and unexpected JSON-RPC input: unknown requests get -32601,
+# unknown notifications stay silent, bad bodies get -32700 / -32600, and the
+# server keeps serving afterwards. Probe: tools/sayanox-lsp-robust.sh.
+test-lsp-robust: $(LSP_BIN) tools/sayanox-lsp-robust.sh
+	@$(call assert-out,sh tools/sayanox-lsp-robust.sh ./$(LSP_BIN),unknown request -32601\nserver keeps serving after error\nunknown notification ignored\ngarbage body -32700\nno method -32600\njunk header skipped\ntruncated frame ends cleanly\nstring id echoed on a result\nstring id with an escaped quote echoed on an error\nnegative id echoed\nnull id echoed)
+	@echo "[OK] Sayanox LSP robustness: JSON-RPC error responses for bad input"
 
 test-sxfmt: sxfmt
 	@mkdir -p $(TESTS)
@@ -569,7 +576,7 @@ test-parens:
 	@grep -q 'parenthesized expression must be numeric' $(TESTS)/ts_parenstr_g2.c
 	@printf 'show (len("ab") + 1) * 2\n' > $(TESTS)/ts_parenb.sa
 	@./$(GEN2) $(TESTS)/ts_parenb.sa $(TESTS)/ts_parenb_g2.c >/dev/null 2>&1 || true
-	@grep -q "builtin 'len' inside a parenthesized expression" $(TESTS)/ts_parenb_g2.c
+	@$(CC) -O2 -o $(TESTS)/ts_parenb_g2 $(TESTS)/ts_parenb_g2.c && test "$$(./$(TESTS)/ts_parenb_g2)" = "6" || { echo "FAILED: len in a parenthesized expression (gen2)"; exit 1; }
 	@printf 'show (1 + 2\n' > $(TESTS)/ts_parenu.sa
 	@./$(GEN2) $(TESTS)/ts_parenu.sa $(TESTS)/ts_parenu_g2.c >/dev/null 2>&1 || true
 	@grep -q "unbalanced '('" $(TESTS)/ts_parenu_g2.c
@@ -709,10 +716,9 @@ test-generics:
 	@diff $(TESTS)/tg_mp.c $(TESTS)/tg_mp_g1.c >/dev/null || { echo "[FAIL] multi-param generics: gen1_min output differs"; exit 1; }
 	$(CC) -O2 -o $(TESTS)/tg_mp_g1 $(TESTS)/tg_mp_g1.c
 	$(call assert-out,./$(TESTS)/tg_mp_g1,1\nx\n1\nx\n1\n3\n5\n3\n3\nhi)
-	@# native has no generics at all
+	@# native refuses tg_mp.sa (it uses a form native does not take; generics are covered by test-native-*)
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/tg_mp.sa $(TESTS)/tg_mp_nat 2>&1 | grep -q 'generics are not in the native subset'; then :; \
-	  else echo "[FAIL] native did not reject make NAME<A, B>"; exit 1; fi; \
+	  if ./$(NATIVE_BIN) $(TESTS)/tg_mp.sa $(TESTS)/tg_mp_nat >/dev/null 2>&1; then echo "[FAIL] native accepted tg_mp.sa (it uses forms native does not take)"; exit 1; fi; \
 	fi
 	@echo "[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, multi-parameter <A, B> and <A, B, C>, gen2 and gen1_min agree"
 
@@ -1081,10 +1087,441 @@ test-stdlib: $(GEN2) $(SEED_MIN_BIN)
 	@if ./$(SEED_MIN_BIN) $(TESTS)/std_sl.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted the str/list module (it must refuse typed parameters)"; exit 1; fi
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/std_sl.sa $(TESTS)/std_sl_nat >/dev/null 2>&1; then \
-	    echo "[FAIL] native accepted the str/list module (it must refuse typed parameters)"; exit 1; fi; \
+	  ./$(NATIVE_BIN) $(TESTS)/std_sl.sa $(TESTS)/std_sl_nat >/dev/null 2>&1 || { echo "[FAIL] native refused the str/list module"; exit 1; }; \
+	  ./$(TESTS)/std_sl_nat > $(TESTS)/std_sl_nat.out; ./$(TESTS)/std_sl > $(TESTS)/std_sl_g2.out; \
+	  cmp $(TESTS)/std_sl_nat.out $(TESTS)/std_sl_g2.out || { echo "[FAIL] native str/list module differs from gen2"; exit 1; }; \
 	fi
-	@echo "[OK] stdlib str/list/file modules on gen2 (typed parameters); seed-min and native refuse them with a clear error"
+	@echo "[OK] stdlib str/list/file modules on gen2 (typed parameters); native runs them with the same output; seed-min refuses them with a clear error"
+
+# ---------------------------------------------------------------------------
+# test-sxpkg-polish: the wrapper's offline behaviour, pinned. The Sayanox binary
+# cannot set an exit status, so the shell wrapper turns a FAILED/DEP report
+# into rc 1 (verify, install-local), an unknown command is rc 2, and `publish`
+# prints its report once (it used to run twice through a duplicated dispatch).
+test-sxpkg-polish: sxpkg tools/sxpkg.sh
+	@mkdir -p $(TESTS)/sxpkg-polish
+	@printf '' > $(TESTS)/sxpkg-polish/sx.lock
+	@printf 'name = "pol-pkg"\nversion = "0.1.0"\n' > $(TESTS)/sxpkg-polish/sx.toml
+	cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh init >/dev/null
+	cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
+	@if (cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh verify >/dev/null 2>&1); then \
+	  echo "[FAIL] sxpkg verify exited 0 with a missing package"; exit 1; fi
+	@if (cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh install-local $(CURDIR)/registry >/dev/null 2>&1); then \
+	  echo "[FAIL] sxpkg install-local exited 0 with an unresolvable lock entry"; exit 1; fi
+	@cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh bogus >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then echo "[FAIL] unknown sxpkg command exited $$rc, want 2"; exit 1; fi
+	@n=$$(cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh publish | grep -c 'sxpkg: published locally pol-pkg 0.1.0'); \
+	  if [ "$$n" != 1 ]; then echo "[FAIL] sxpkg publish reported $$n times, want 1"; exit 1; fi
+	@echo "[OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once"
+
+
+# ---------------------------------------------------------------------------
+# test-sxpkg-online-local: the online install path, tested against a LOCAL
+# registry through file:// URLs (no network). It is NOT part of the four
+# bootstrap gates: it needs curl and the shell wrapper, and it uses cp/rm.
+#   good remote     -> installed and verified, rc 0
+#   tampered remote -> rejected: verify fails, the download is removed, rc 1
+#   missing remote  -> no partial .part file is left, rc 1
+# ---------------------------------------------------------------------------
+test-sxpkg-online-local: sxpkg tools/sxpkg.sh
+	@command -v curl >/dev/null 2>&1 || { echo "[SKIP] test-sxpkg-online-local: needs curl"; exit 0; }
+	@rm -rf $(TESTS)/sxpkg-online && mkdir -p $(TESTS)/sxpkg-online
+	@cp -r registry $(TESTS)/sxpkg-online/good
+	@cp -r $(TESTS)/sxpkg-online/good $(TESTS)/sxpkg-online/bad
+	@printf 'show 999\n' >> $(TESTS)/sxpkg-online/bad/strings/main.sa
+	@cp -r $(TESTS)/sxpkg-online/good $(TESTS)/sxpkg-online/miss && rm -rf $(TESTS)/sxpkg-online/miss/strings
+	@W=$(CURDIR)/tools/sxpkg.sh; \
+	for c in good bad miss; do \
+	  mkdir -p $(TESTS)/sxpkg-online/p_$$c && cd $(TESTS)/sxpkg-online/p_$$c && \
+	  sh $$W init >/dev/null && sh $$W add strings 0.1.0 >/dev/null || exit 1; \
+	  SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-online/$$c sh $$W install >$(CURDIR)/$(TESTS)/sxpkg-online/$$c.out 2>&1; rc=$$?; \
+	  cd $(CURDIR); \
+	  case $$c in \
+	    good) [ $$rc -eq 0 ] || { echo "[FAIL] good remote: rc=$$rc"; exit 1; }; \
+	          grep -q 'verify ok' $(TESTS)/sxpkg-online/$$c.out || { echo "[FAIL] good remote: not verified"; exit 1; } ;; \
+	    bad)  [ $$rc -eq 1 ] || { echo "[FAIL] tampered remote accepted (rc=$$rc)"; exit 1; }; \
+	          [ ! -e $(TESTS)/sxpkg-online/p_bad/.sayanox/registry/strings/main.sa ] || { echo "[FAIL] tampered package left in the registry"; exit 1; } ;; \
+	    miss) [ $$rc -eq 1 ] || { echo "[FAIL] missing remote not rejected (rc=$$rc)"; exit 1; }; \
+	          [ ! -e $(TESTS)/sxpkg-online/p_miss/.sayanox/registry/strings/main.sa.part ] || { echo "[FAIL] partial download left behind"; exit 1; } ;; \
+	  esac; \
+	done
+	@echo "[OK] sxpkg online install (file:// registry): good accepted, tampered rejected and removed, missing leaves no partial file"
+
+# ---------------------------------------------------------------------------
+# test-stdlib-growth: the numeric helpers added to stdlib/tiny.sa on 2026-10-10
+# (tri, min3/max3, ceil_div, pow_mod, collatz_steps, digit_at, is_palindrome,
+# isqrt). Hand-computed expected values; seed-min, gen2 and native (when built)
+# must print identical bytes. Source: selfhost/stdlib_growth_test.sa.
+# ---------------------------------------------------------------------------
+test-stdlib-growth: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/stdlib_growth_test.sa > $(TESTS)/sg_sm.c
+	$(CC) -O2 -o $(TESTS)/sg_sm $(TESTS)/sg_sm.c
+	./$(GEN2) selfhost/stdlib_growth_test.sa $(TESTS)/sg_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/sg_g2 $(TESTS)/sg_g2.c
+	$(call assert-out,./$(TESTS)/sg_g2,55\n0\n0\n2\n9\n-7\n4\n4\n0\n1\n24\n1\n1\n0\n8\n16\n5\n1\n3\n0\n1\n0\n0\n1\n0\n3\n4\n4\n1000)
+	@./$(TESTS)/sg_sm > $(TESTS)/sg_sm.out && ./$(TESTS)/sg_g2 > $(TESTS)/sg_g2.out && cmp $(TESTS)/sg_sm.out $(TESTS)/sg_g2.out
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/stdlib_growth_test.sa $(TESTS)/sg_nat && \
+	  ./$(TESTS)/sg_nat > $(TESTS)/sg_nat.out && cmp $(TESTS)/sg_g2.out $(TESTS)/sg_nat.out || exit 1; \
+	fi
+	@echo "[OK] stdlib growth: 9 new public numeric helpers, seed-min == gen2 (== native when built)"
+
+# ---------------------------------------------------------------------------
+# test-native-strord: string ordering < <= > >= on native (added 2026-10-10).
+# Native used to refuse it; it now compares bytes as unsigned char, like
+# strcmp. Expected output is hand-computed; seed-min, gen2 and native must all
+# print it. Source: selfhost/native_strord_test.sa.
+# ---------------------------------------------------------------------------
+NSO_WANT := 1\n0\n1\n0\n1\n1\n1\n1\n1\n1\n1\n1\n1\n100\n300
+test-native-strord: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/native_strord_test.sa > $(TESTS)/nso_sm.c
+	$(CC) -O2 -o $(TESTS)/nso_sm $(TESTS)/nso_sm.c
+	./$(GEN2) selfhost/native_strord_test.sa $(TESTS)/nso_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nso_g2 $(TESTS)/nso_g2.c
+	$(call assert-out,./$(TESTS)/nso_sm,$(NSO_WANT))
+	$(call assert-out,./$(TESTS)/nso_g2,$(NSO_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/nso_nat || exit 1; \
+	  ./$(TESTS)/nso_nat > $(TESTS)/nso_nat.out || exit 1; \
+	  ./$(TESTS)/nso_g2 > $(TESTS)/nso_g2.out || exit 1; \
+	  cmp $(TESTS)/nso_g2.out $(TESTS)/nso_nat.out || { echo "[FAIL] native string ordering differs from gen2"; exit 1; }; \
+	fi
+	@echo "[OK] string ordering < <= > >=: seed-min == gen2 (== native when built)"
+
+# ---------------------------------------------------------------------------
+# test-native-lang: true/false, and/or/not as values, elif / else if / else
+# when, for over a range, a list and a string, break and continue (added
+# 2026-10-11).  Source: selfhost/native_lang_test.sa.  The expected output is
+# hand-computed (and/or give 1 or 0, as C's && and ||); gen2 must print it and
+# native must match gen2 byte for byte.  seed-min refuses the file.
+# ---------------------------------------------------------------------------
+NLA_WANT := 1\n0\n5\n7\n300\n200\n100\n2\n4\n10\n12\na\nb\nc\n0\n1\n2\n4\n5\n1\n3\n4\n0\n10\n20\n1\n77
+test-native-lang: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_lang_test.sa $(TESTS)/nla_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nla_g2 $(TESTS)/nla_g2.c
+	$(call assert-out,./$(TESTS)/nla_g2,$(NLA_WANT))
+	@if ./$(SEED_MIN_BIN) selfhost/native_lang_test.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted the native-lang test"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/native_lang_test.sa $(TESTS)/nla_nat || exit 1; \
+	  ./$(TESTS)/nla_nat > $(TESTS)/nla_nat.out || exit 1; \
+	  ./$(TESTS)/nla_g2 > $(TESTS)/nla_g2.out || exit 1; \
+	  cmp $(TESTS)/nla_g2.out $(TESTS)/nla_nat.out || { echo "[FAIL] native language test differs from gen2"; exit 1; }; \
+	  printf 'make f(n) {\n  for i in 0..2 {\n    show i\n  }\n  give 0\n}\nshow f(1)\n' > $(TESTS)/nla_neg1.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nla_neg1.sa $(TESTS)/nla_neg1 2>&1 | grep -q 'for inside make' || { echo "[FAIL] native accepted for inside make"; exit 1; }; \
+	  printf 'hold a = 1\nbreak\n' > $(TESTS)/nla_neg2.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nla_neg2.sa $(TESTS)/nla_neg2 2>&1 | grep -q 'break outside a loop' || { echo "[FAIL] native accepted break outside a loop"; exit 1; }; \
+	  printf 'hold s = "ab"\nwhen s and 1 {\n  show 1\n}\n' > $(TESTS)/nla_neg3.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nla_neg3.sa $(TESTS)/nla_neg3 2>&1 | grep -q 'must be a number' || { echo "[FAIL] native accepted a string operand of and"; exit 1; }; \
+	fi
+	@echo "[OK] native: true/false, and/or/not in conditions, elif / else if / else when, for over a range, a list and a string, break and continue; native == gen2 byte for byte; seed-min refuses"
+
+# ---------------------------------------------------------------------------
+# test-native-locals: `hold` inside a make body (added 2026-10-11).  A local
+# is a slot in the call's own frame, so recursion gets fresh locals; the
+# collector sees the frame's values (conservative stack scan).  Source:
+# selfhost/native_locals_test.sa.  Expected output is hand-computed; gen2 must
+# print it and native must match gen2 byte for byte.
+# ---------------------------------------------------------------------------
+NLO_WANT := 20\n1\n2\n10\n7\n6\n4
+test-native-locals: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_locals_test.sa $(TESTS)/nlo_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nlo_g2 $(TESTS)/nlo_g2.c
+	$(call assert-out,./$(TESTS)/nlo_g2,$(NLO_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/native_locals_test.sa $(TESTS)/nlo_nat || exit 1; \
+	  ./$(TESTS)/nlo_nat > $(TESTS)/nlo_nat.out || exit 1; \
+	  ./$(TESTS)/nlo_g2 > $(TESTS)/nlo_g2.out || exit 1; \
+	  cmp $(TESTS)/nlo_g2.out $(TESTS)/nlo_nat.out || { echo "[FAIL] native make locals differ from gen2"; exit 1; }; \
+	  printf 'hold x = 1\nmake f(x) {\n  hold x = 2\n  give x\n}\nshow f(1)\n' > $(TESTS)/nlo_neg1.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nlo_neg1.sa $(TESTS)/nlo_neg1 2>&1 | grep -q 'it is a parameter of make' || { echo "[FAIL] native let a local shadow a parameter"; exit 1; }; \
+	fi
+	@echo "[OK] native: hold inside make (per-call locals, recursion, while, strings, collector keeps a local alive); native == gen2 byte for byte"
+
+# ---------------------------------------------------------------------------
+# test-give-index: `give xs[i]` inside a make (added 2026-10-11).  gen2 used to
+# emit xs[1.0] (the postfix index rewrite only ran on hold/show operands).
+# Source: selfhost/give_index_test.sa; hand-computed output; gen2 and native
+# must both print it.
+# ---------------------------------------------------------------------------
+GIX_WANT := 4\n34\n5\n15\n8
+test-give-index: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/give_index_test.sa $(TESTS)/gix_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gix_g2 $(TESTS)/gix_g2.c
+	$(call assert-out,./$(TESTS)/gix_g2,$(GIX_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/give_index_test.sa $(TESTS)/gix_nat || exit 1; \
+	  ./$(TESTS)/gix_nat > $(TESTS)/gix_nat.out || exit 1; \
+	  ./$(TESTS)/gix_g2 > $(TESTS)/gix_g2.out || exit 1; \
+	  cmp $(TESTS)/gix_g2.out $(TESTS)/gix_nat.out || { echo "[FAIL] native give index differs from gen2"; exit 1; }; \
+	fi
+	@echo "[OK] give xs[i] inside make: gen2 and native print the hand-computed values"
+
+# ---------------------------------------------------------------------------
+# test-typed-sig: typed signatures (added 2026-10-11).  A make is either fully
+# typed (`make f(a: num, b: num) -> num`) or fully untyped (the shared pure-min
+# form); a partly typed parameter list or a missing return type is an error on
+# gen2 and native.  seed-min refuses the typed form.  Source:
+# selfhost/typed_sig_test.sa; expected output hand-computed.
+# ---------------------------------------------------------------------------
+TSG_WANT := 5\n120\n7
+test-typed-sig: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/typed_sig_test.sa $(TESTS)/tsg_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/tsg_g2 $(TESTS)/tsg_g2.c
+	$(call assert-out,./$(TESTS)/tsg_g2,$(TSG_WANT))
+	@if ./$(SEED_MIN_BIN) selfhost/typed_sig_test.sa $(TESTS)/tsg_seed.c >/dev/null 2>&1; then echo "[FAIL] seed-min accepted typed signatures"; exit 1; fi
+	@printf 'make bad(a: num, b) -> num {\n  give a + b\n}\nshow bad(1, 2)\n' > $(TESTS)/tsg_mixed.sa
+	@printf 'make bad(a: num) {\n  give a\n}\nshow bad(1)\n' > $(TESTS)/tsg_noret.sa
+	@./$(GEN2) $(TESTS)/tsg_mixed.sa $(TESTS)/tsg_m.c | grep -q 'a typed make needs a type on every parameter' || { echo "[FAIL] gen2 accepted a partly typed signature"; exit 1; }
+	@./$(GEN2) $(TESTS)/tsg_noret.sa $(TESTS)/tsg_n.c | grep -q 'a typed make needs a return type' || { echo "[FAIL] gen2 accepted a typed signature with no return type"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/typed_sig_test.sa $(TESTS)/tsg_nat || exit 1; \
+	  ./$(TESTS)/tsg_nat > $(TESTS)/tsg_nat.out || exit 1; \
+	  ./$(TESTS)/tsg_g2 > $(TESTS)/tsg_g2.out || exit 1; \
+	  cmp $(TESTS)/tsg_g2.out $(TESTS)/tsg_nat.out || { echo "[FAIL] native typed signatures differ from gen2"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/tsg_mixed.sa $(TESTS)/tsg_m2 2>&1 | grep -q 'a typed signature needs a type on every parameter' || { echo "[FAIL] native accepted a partly typed signature"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/tsg_noret.sa $(TESTS)/tsg_n2 2>&1 | grep -q 'a typed signature needs a return type' || { echo "[FAIL] native accepted a typed signature with no return type"; exit 1; }; \
+	fi
+	@echo "[OK] typed signatures: fully typed make runs on gen2 and native (same output); partly typed or return-less signatures are refused; seed-min refuses typed"
+
+# ---------------------------------------------------------------------------
+# test-list-expr: list literal elements are numeric expressions (added
+# 2026-10-11): `[a, a + 1]`, `[n, n * 2]` inside a make.  A string, list or
+# struct element is refused by name on gen2 and native.  Source:
+# selfhost/list_expr_test.sa; expected output hand-computed.
+# ---------------------------------------------------------------------------
+LEX_WANT := 5\n2\n14\n3\n8
+test-list-expr: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/list_expr_test.sa $(TESTS)/lex_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/lex_g2 $(TESTS)/lex_g2.c
+	$(call assert-out,./$(TESTS)/lex_g2,$(LEX_WANT))
+	@printf 'hold xs = [1, "x"]\nshow len(xs)\n' > $(TESTS)/lex_bad.sa
+	@./$(GEN2) $(TESTS)/lex_bad.sa $(TESTS)/lex_bad_g2.c | grep -q 'list elements must be numbers' || { echo "[FAIL] gen2 accepted a string list element"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/list_expr_test.sa $(TESTS)/lex_nat || exit 1; \
+	  ./$(TESTS)/lex_nat > $(TESTS)/lex_nat.out || exit 1; \
+	  ./$(TESTS)/lex_g2 > $(TESTS)/lex_g2.out || exit 1; \
+	  cmp $(TESTS)/lex_g2.out $(TESTS)/lex_nat.out || { echo "[FAIL] native list expressions differ from gen2"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/lex_bad.sa $(TESTS)/lex_bad_nat 2>&1 | grep -q 'list elements must be numbers' || { echo "[FAIL] native accepted a string list element"; exit 1; }; \
+	fi
+	@echo "[OK] list literal elements are numeric expressions (params, operators, push); string elements refused on gen2 and native"
+
+# test-list-paren: list literal elements with grouping parentheses ([a, (a - 1)]),
+# STATUS known gap (item 6). Hand-computed output; gen2 and native must match.
+test-list-paren: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/list_paren_test.sa $(TESTS)/lp_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/lp_g2 $(TESTS)/lp_g2.c
+	$(call assert-out,./$(TESTS)/lp_g2,5\n4\n10\n5\n4\n7\n2)
+	./$(NATIVE_BIN) selfhost/list_paren_test.sa $(TESTS)/lp_nat
+	./$(TESTS)/lp_nat > $(TESTS)/lp_nat.out
+	./$(TESTS)/lp_g2 > $(TESTS)/lp_g2.out
+	@cmp $(TESTS)/lp_g2.out $(TESTS)/lp_nat.out || { echo "FAILED: native list parens differ from gen2"; exit 1; }
+	@echo "[OK] list literal elements with grouping parens: gen2 and native agree"
+
+# test-native-strfn: native string parameters and string return values (typed `str`).
+# Hand-computed output; gen2 and native must match; type mistakes are refused.
+test-native-strfn: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_str_fn_test.sa $(TESTS)/nsf_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nsf_g2 $(TESTS)/nsf_g2.c
+	./$(NATIVE_BIN) selfhost/native_str_fn_test.sa $(TESTS)/nsf_nat
+	./$(TESTS)/nsf_nat > $(TESTS)/nsf_nat.out
+	./$(TESTS)/nsf_g2 > $(TESTS)/nsf_g2.out
+	@printf 'hi bob\n6\nh\n1\n4\n' > $(TESTS)/nsf_want.out
+	@cmp $(TESTS)/nsf_nat.out $(TESTS)/nsf_want.out || { echo "FAILED: native string functions differ from the hand-computed output"; exit 1; }
+	@cmp $(TESTS)/nsf_g2.out $(TESTS)/nsf_want.out || { echo "FAILED: gen2 string functions differ from the hand-computed output"; exit 1; }
+	@printf 'make count(s: str) -> num {\n  give len(s)\n}\nshow count(5)\n' > $(TESTS)/nsf_bad1.sa
+	@./$(NATIVE_BIN) $(TESTS)/nsf_bad1.sa $(TESTS)/nsf_bad1 2>&1 | grep -q 'takes a string' || { echo "FAILED: native accepted a number for a str parameter"; exit 1; }
+	@printf 'make f(a: num) -> str {\n  give 1\n}\nhold z = f(1)\nshow z\n' > $(TESTS)/nsf_bad2.sa
+	@./$(NATIVE_BIN) $(TESTS)/nsf_bad2.sa $(TESTS)/nsf_bad2 2>&1 | grep -q 'give must give a string' || { echo "FAILED: native accepted a number return for a str function"; exit 1; }
+	@echo "[OK] native string parameters and string returns: same output as gen2; number/string mistakes refused"
+
+# test-native-strgen: native generics over str (one copy per call-site kind),
+# gen2 and native must match; two kinds for one type parameter and list args are refused.
+test-native-strgen: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_str_gen_test.sa $(TESTS)/nsg_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nsg_g2 $(TESTS)/nsg_g2.c
+	./$(NATIVE_BIN) selfhost/native_str_gen_test.sa $(TESTS)/nsg_nat
+	./$(TESTS)/nsg_nat > $(TESTS)/nsg_nat.out
+	./$(TESTS)/nsg_g2 > $(TESTS)/nsg_g2.out
+	@printf 'abc\n42\nyo\n7\n5\nnest\n' > $(TESTS)/nsg_want.out
+	@cmp $(TESTS)/nsg_nat.out $(TESTS)/nsg_want.out || { echo "FAILED: native string generics differ from the hand-computed output"; exit 1; }
+	@cmp $(TESTS)/nsg_g2.out $(TESTS)/nsg_want.out || { echo "FAILED: gen2 string generics differ from the hand-computed output"; exit 1; }
+	@printf 'make pair<T>(a: T, b: T) -> T {\n  give a\n}\nshow pair(1, "x")\n' > $(TESTS)/nsg_bad1.sa
+	@./$(NATIVE_BIN) $(TESTS)/nsg_bad1.sa $(TESTS)/nsg_bad1 2>&1 | grep -q 'given two different kinds' || { echo "FAILED: native accepted two kinds for one type parameter"; exit 1; }
+	@echo "[OK] native generics over str: same output as gen2; two kinds for one type parameter are refused (list generics: test-native-listgen)"
+
+# test-native-listgen: native lists as typed parameters (xs: list), list return values
+# and list generics (make f<T> with T = list); gen2 and native must match; struct and
+# wrong-kind returns are refused.
+test-native-listgen: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_list_gen_test.sa $(TESTS)/nlg_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nlg_g2 $(TESTS)/nlg_g2.c
+	./$(NATIVE_BIN) selfhost/native_list_gen_test.sa $(TESTS)/nlg_nat
+	./$(TESTS)/nlg_nat > $(TESTS)/nlg_nat.out
+	./$(TESTS)/nlg_g2 > $(TESTS)/nlg_g2.out
+	@printf '3\n4\n6\n3\n9\n2\n8\n' > $(TESTS)/nlg_want.out
+	@cmp $(TESTS)/nlg_nat.out $(TESTS)/nlg_want.out || { echo "FAILED: native list functions differ from the hand-computed output"; exit 1; }
+	@cmp $(TESTS)/nlg_g2.out $(TESTS)/nlg_want.out || { echo "FAILED: gen2 list functions differ from the hand-computed output"; exit 1; }
+	@printf 'make f(xs: list) -> num {\n  give xs\n}\nshow f([1])\n' > $(TESTS)/nlg_bad1.sa
+	@./$(NATIVE_BIN) $(TESTS)/nlg_bad1.sa $(TESTS)/nlg_bad1 2>&1 | grep -q 'give must give a number (got a list)' || { echo "FAILED: native accepted a list returned from a number function"; exit 1; }
+	@printf 'make g(s: struct) -> num {\n  give 1\n}\nshow 1\n' > $(TESTS)/nlg_bad2.sa
+	@./$(NATIVE_BIN) $(TESTS)/nlg_bad2.sa $(TESTS)/nlg_bad2 2>&1 | grep -q "not in the native subset" || { echo "FAILED: native accepted a struct parameter"; exit 1; }
+	@echo "[OK] native lists as parameters, return values and generic arguments: same output as gen2 (list is passed by reference on both); wrong-kind returns and struct parameters refused"
+
+# test-native-logicarg: and/or/not as builtin arguments and struct field values (native).
+# Hand-computed output. gen2 still refuses these forms (see docs/STATUS.md).
+test-native-logicarg: $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(NATIVE_BIN) selfhost/native_logic_arg_test.sa $(TESTS)/nla_nat
+	./$(TESTS)/nla_nat > $(TESTS)/nla_nat.out
+	@printf '1\n1\nA\nB\nA\n3\n121\nB\n' > $(TESTS)/nla_want.out
+	@cmp $(TESTS)/nla_nat.out $(TESTS)/nla_want.out || { echo "FAILED: native logic values in builtin arguments and struct fields differ from the hand-computed output"; exit 1; }
+	@echo "[OK] native: and/or/not as builtin arguments (chr, len, sx_index) and as struct field values, hand-computed output"
+
+# test-cond-string: item 9 -- a string or list operand of and/or/not in a when/while
+# condition (or a bare string condition) is refused by gen2 and native; == on strings and
+# a name inside a call stay allowed (gen2 and native agree on the output).
+test-cond-string: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	@for c in 'hold s = "ab"\nhold a = 1\nwhen s and a {\n  show 1\n}' 'hold s = "ab"\nhold a = 1\nwhen a and s {\n  show 1\n}' 'hold s = "ab"\nhold a = 1\nwhen not s {\n  show 1\n}' 'hold s = "ab"\nwhen s {\n  show 1\n}' 'hold s = "ab"\nhold a = 1\nwhile s and a {\n  show 1\n  hold a = 0\n}' 'hold s = "ab"\nhold a = 1\nwhen (s and a) {\n  show 1\n}'; do \
+	  printf "$$c\n" > $(TESTS)/cs_bad.sa; \
+	  if ./$(GEN2) $(TESTS)/cs_bad.sa $(TESTS)/cs_bad.c 2>&1 | grep -q 'a condition must be numeric'; then :; else echo "FAILED: gen2 accepted a string operand in a condition"; exit 1; fi; \
+	  if ./$(NATIVE_BIN) $(TESTS)/cs_bad.sa $(TESTS)/cs_bad >/dev/null 2>&1; then echo "FAILED: native accepted a string operand in a condition"; exit 1; fi; \
+	done
+	./$(GEN2) selfhost/cond_string_ok_test.sa $(TESTS)/cs_ok.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/cs_ok_g2 $(TESTS)/cs_ok.c
+	./$(NATIVE_BIN) selfhost/cond_string_ok_test.sa $(TESTS)/cs_ok_nat
+	@test "$$(./$(TESTS)/cs_ok_g2 | tr '\n' ' ')" = "7 8 " || { echo "FAILED: gen2 output of the valid string conditions"; exit 1; }
+	@test "$$(./$(TESTS)/cs_ok_nat | tr '\n' ' ')" = "7 8 " || { echo "FAILED: native output of the valid string conditions"; exit 1; }
+	@echo "[OK] string operands in and/or/not conditions and bare string conditions refused by gen2 and native; == on strings and calls still accepted (7 8)"
+
+# test-gen2-logic-builtin: and/or/not as operands of numeric builtins (len, sx_index,
+# string_eq) in gen2 and native; hand-computed output. chr stays refused (string result).
+test-gen2-logic-builtin: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/gen2_logic_builtin_test.sa $(TESTS)/glb_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/glb_g2 $(TESTS)/glb_g2.c
+	./$(NATIVE_BIN) selfhost/gen2_logic_builtin_test.sa $(TESTS)/glb_nat
+	./$(TESTS)/glb_g2 > $(TESTS)/glb_g2.out
+	./$(TESTS)/glb_nat > $(TESTS)/glb_nat.out
+	@printf '3\n3\n121\n2\n6\n' > $(TESTS)/glb_want.out
+	@cmp $(TESTS)/glb_g2.out $(TESTS)/glb_want.out || { echo "FAILED: gen2 logic operands of numeric builtins differ from the hand-computed output"; exit 1; }
+	@cmp $(TESTS)/glb_nat.out $(TESTS)/glb_want.out || { echo "FAILED: native logic operands of numeric builtins differ from the hand-computed output"; exit 1; }
+	@echo "[OK] gen2 and native: and/or/not as operands of len, sx_index and string_eq (hand-computed output)"
+
+# test-struct-logic: and/or/not as struct field values (gen2 hoists them to temporaries)
+# on gen2 and native, hand-computed output; a string operand in a logic field stays refused.
+test-struct-logic: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/struct_logic_test.sa $(TESTS)/sl_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/sl_g2 $(TESTS)/sl_g2.c
+	./$(NATIVE_BIN) selfhost/struct_logic_test.sa $(TESTS)/sl_nat
+	./$(TESTS)/sl_g2 > $(TESTS)/sl_g2.out
+	./$(TESTS)/sl_nat > $(TESTS)/sl_nat.out
+	@printf 'x, and {y}: or\n1\ntail and\n0\n3\n2\n' > $(TESTS)/sl_want.out
+	@cmp $(TESTS)/sl_g2.out $(TESTS)/sl_want.out || { echo "FAILED: gen2 struct field logic values differ from the hand-computed output"; exit 1; }
+	@cmp $(TESTS)/sl_nat.out $(TESTS)/sl_want.out || { echo "FAILED: native struct field logic values differ from the hand-computed output"; exit 1; }
+	@printf 'hold s = "x"\nhold a = 1\nstruct Pair {\n  s,\n  n\n}\nhold q = Pair { s: "k", n: s and a }\nshow q.n\n' > $(TESTS)/sl_bad.sa
+	@./$(GEN2) $(TESTS)/sl_bad.sa $(TESTS)/sl_bad_g2.c >/dev/null 2>&1 || true
+	@grep -q '#error' $(TESTS)/sl_bad_g2.c || { echo "FAILED: a string operand in a struct field logic value must be refused by gen2"; exit 1; }
+	@echo "[OK] gen2 and native: and/or/not as struct field values (hand-computed output); a string operand is refused"
+
+# test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
+# the tests use a local HTTP server on 127.0.0.1.
+# test-http-get: http_get(url) network builtin (GET only, http/https only, 1 MB cap,
+# 10 s timeout, no redirects). Local server only; native refuses it explicitly.
+test-http-get: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN) $(NATIVE_BIN)
+	@sh tools/test-http-get.sh $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN) $(NATIVE_BIN) || { echo "[FAIL] test-http-get"; exit 1; }
+
+# test-sayacrawl: sayascrape/crawl.sa, the Sayanox crawler (gen2 full language, typed
+# str helpers). Local server only; exact-output checks for crawl, caps and refusals.
+test-sayacrawl: $(GEN2)
+	@sh tools/test-sayacrawl.sh $(GEN2) sayascrape/crawl.sa || { echo "[FAIL] test-sayacrawl"; exit 1; }
+
+test-scrape:
+	@python3 -m unittest sayascrape.test_sayascrape >/tmp/scrape_test.log 2>&1 || { tail -20 /tmp/scrape_test.log; echo "[FAIL] sayascrape tests"; exit 1; }
+	@tail -3 /tmp/scrape_test.log
+	@echo "[OK] sayascrape: scope allowlist, authorization gate, robots.txt (fail closed on 5xx), delay, page and depth caps, parsing"
+
+# test-logic-value: and / or / not as values (hold, show, give, assignment,
+# parenthesized groups). Expected output is hand-checked; gen2 and native must match.
+LV_WANT := 0\n1\n0\nx and y\n1\n1\n1\n1\n1\n1\n8\n2\n1\n
+test-logic-value: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/logic_value_test.sa $(TESTS)/lv_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/lv_g2 $(TESTS)/lv_g2.c
+	$(call assert-out,./$(TESTS)/lv_g2,$(LV_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/logic_value_test.sa $(TESTS)/lv_nat || exit 1; \
+	  ./$(TESTS)/lv_nat > $(TESTS)/lv_nat.out || exit 1; \
+	  ./$(TESTS)/lv_g2 > $(TESTS)/lv_g2.out || exit 1; \
+	  cmp $(TESTS)/lv_g2.out $(TESTS)/lv_nat.out || { echo "[FAIL] native logic values differ from gen2"; exit 1; }; \
+	  printf 'hold a = 1\nhold v = a and "x"\nshow v\n' > $(TESTS)/lv_bad.sa; \
+	  if ./$(NATIVE_BIN) $(TESTS)/lv_bad.sa $(TESTS)/lv_bad_nat >/dev/null 2>&1; then echo "[FAIL] native accepted a string logic operand"; exit 1; fi; \
+	fi
+	@echo "[OK] and/or/not as values in hold, show, give, assignment and parentheses: gen2 and native agree"
+
+# test-native-generics: make NAME<T> / NAME<A, B> over numbers on native (each T is num).
+# Expected output is hand-computed; gen2 (which monomorphises) and native must match.
+NG_WANT := 7\n1\n4\n4\n10\n11\n6\n
+test-native-generics: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_generics_test.sa $(TESTS)/ng_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/ng_g2 $(TESTS)/ng_g2.c
+	$(call assert-out,./$(TESTS)/ng_g2,$(NG_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/native_generics_test.sa $(TESTS)/ng_nat || exit 1; \
+	  ./$(TESTS)/ng_nat > $(TESTS)/ng_nat.out || exit 1; \
+	  ./$(TESTS)/ng_g2 > $(TESTS)/ng_g2.out || exit 1; \
+	  cmp $(TESTS)/ng_g2.out $(TESTS)/ng_nat.out || { echo "[FAIL] native generics differ from gen2"; exit 1; }; \
+	  printf 'make f<T>(a) {\n  give a\n}\nshow f(1)\n' > $(TESTS)/ng_untyped.sa; \
+	  if ./$(NATIVE_BIN) $(TESTS)/ng_untyped.sa $(TESTS)/ng_untyped >/dev/null 2>&1; then echo "[FAIL] native accepted an untyped generic"; exit 1; fi; \
+	  printf 'make f<T>(a: T) -> T {\n  give a\n}\nshow f("x")\n' > $(TESTS)/ng_str.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/ng_str.sa $(TESTS)/ng_str >/dev/null 2>&1 && $(TESTS)/ng_str | grep -qx x || { echo "[FAIL] native refused a string generic"; exit 1; }; \
+	  printf 'make f<T>(a: T) -> T {\n  give a\n}\nhold l = f([1, 2])\nshow 1\n' > $(TESTS)/ng_list.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/ng_list.sa $(TESTS)/ng_list >/dev/null 2>&1 && $(TESTS)/ng_list | grep -qx 1 || { echo "[FAIL] native refused a list generic"; exit 1; }; \
+	fi
+	@echo "[OK] native generics over numbers: make NAME<T> and NAME<A, B>, generic calling generic, gen2 and native agree; untyped generics refused by native (str and list generics: test-native-strgen, test-native-listgen)"
+
+# ---------------------------------------------------------------------------
+# test-native-cond: and / or / not, parentheses, in when and while conditions
+# on native (added 2026-10-11).  Source: selfhost/native_cond_test.sa.  The
+# expected output is hand-computed; gen2 must print it and native must match
+# gen2 byte for byte.  seed-min refuses the file.  Word operators as values
+# (show a and b) are covered by test-logic-value.
+# ---------------------------------------------------------------------------
+NCO_WANT := 1\n3\n4\n6\n7\n9\n10\n11\n12\n13\n15\n17\n18\n0\n1\n2\n5\n1\n0
+test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_cond_test.sa $(TESTS)/nco_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nco_g2 $(TESTS)/nco_g2.c
+	$(call assert-out,./$(TESTS)/nco_g2,$(NCO_WANT))
+	@if ./$(SEED_MIN_BIN) selfhost/native_cond_test.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted and/or/not conditions"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/native_cond_test.sa $(TESTS)/nco_nat || exit 1; \
+	  ./$(TESTS)/nco_nat > $(TESTS)/nco_nat.out || exit 1; \
+	  ./$(TESTS)/nco_g2 > $(TESTS)/nco_g2.out || exit 1; \
+	  cmp $(TESTS)/nco_g2.out $(TESTS)/nco_nat.out || { echo "[FAIL] native and/or/not conditions differ from gen2"; exit 1; }; \
+	  printf 'hold s = "ab"\nhold a = 1\nwhen s and a {\n  show 1\n}\n' > $(TESTS)/nco_neg1.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nco_neg1.sa $(TESTS)/nco_neg1 2>&1 | grep -q 'must be a number' || { echo "[FAIL] native accepted a string operand of and"; exit 1; }; \
+	  printf 'hold a = 1\nshow a and a\n' > $(TESTS)/nco_neg2.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nco_neg2.sa $(TESTS)/nco_neg2 >/dev/null 2>&1 || { echo "[FAIL] native refused and in a value"; exit 1; }; \
+	  ./$(TESTS)/nco_neg2 | grep -qx 1 || { echo "[FAIL] native value of a and a is not 1"; exit 1; }; \
+	  printf 'hold a = 1\nwhen a and {\n  show 1\n}\n' > $(TESTS)/nco_neg3.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/nco_neg3.sa $(TESTS)/nco_neg3 2>&1 | grep -q 'missing operand' || { echo "[FAIL] native accepted a dangling and"; exit 1; }; \
+	fi
+	@echo "[OK] and/or/not and parentheses in when/while conditions: gen2 prints the hand-computed output, native matches gen2 (seed-min refuses)"
+
 
 # ---------------------------------------------------------------------------
 # test-pkgs: the offline package use-path, with no network at all.
@@ -1231,18 +1668,22 @@ test-stage2: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN)
 	@# native names the forms it does not have instead of miscompiling them
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  printf 'hold xs = [1, 2]\nfor v in xs {\n  show v\n}\n' > $(TESTS)/s2_for.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/s2_for.sa $(TESTS)/s2_for 2>&1 | grep -q "'for' is a full-language statement" || { echo "[FAIL] native did not name the for statement"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_for.sa $(TESTS)/s2_for || { echo "[FAIL] native refused for over a list"; exit 1; }; \
+	  ./$(TESTS)/s2_for | tr '\n' ' ' | grep -qx '1 2 ' || { echo "[FAIL] native for over a list printed the wrong result"; exit 1; }; \
 	  printf 'hold a = 1\nhold b = 0\nwhen a == 1 and b == 0 {\n  show 1\n}\n' > $(TESTS)/s2_and.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/s2_and.sa $(TESTS)/s2_and 2>&1 | grep -q "'and' is a full-language word operator" || { echo "[FAIL] native did not name the and operator"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_and.sa $(TESTS)/s2_and || { echo "[FAIL] native refused and in a when condition"; exit 1; }; \
+	  ./$(TESTS)/s2_and | grep -qx 1 || { echo "[FAIL] native and in a when condition printed the wrong result"; exit 1; }; \
 	  printf 'hold a = 1\nwhen not (a == 2) {\n  show 1\n}\n' > $(TESTS)/s2_not.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/s2_not.sa $(TESTS)/s2_not 2>&1 | grep -q "'not' is a full-language word operator" || { echo "[FAIL] native did not name the not operator"; exit 1; }; \
-	  printf 'show true\n' > $(TESTS)/s2_true.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/s2_true.sa $(TESTS)/s2_true 2>&1 | grep -q "'true' is a full-language word operator" || { echo "[FAIL] native did not name the true literal"; exit 1; }; \
-	  echo "  native names for/and/not/true by name"; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_not.sa $(TESTS)/s2_not || { echo "[FAIL] native refused not in a when condition"; exit 1; }; \
+	  ./$(TESTS)/s2_not | grep -qx 1 || { echo "[FAIL] native not in a when condition printed the wrong result"; exit 1; }; \
+	  printf 'show true\nshow false\n' > $(TESTS)/s2_true.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/s2_true.sa $(TESTS)/s2_true || { echo "[FAIL] native refused show true"; exit 1; }; \
+	  ./$(TESTS)/s2_true | tr '\n' ' ' | grep -qx '1 0 ' || { echo "[FAIL] native show true/false printed the wrong result"; exit 1; }; \
+	  echo "  native runs true/false and for; and/not in conditions run (test-native-lang)"; \
 	else \
 	  echo "[stage2] native rejection: skipped (native_aot is not built here)"; \
 	fi
-	@echo "[OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names the forms"
+	@echo "[OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names for/true and runs and/not in conditions"
 
 # ---------------------------------------------------------------------------
 # test-for-str: the one Stage-2 language slice added on gen2 (2026-10-08).
@@ -1293,12 +1734,12 @@ test-for-str: $(GEN2) $(SEED_MIN_BIN)
 	@# seed-min is the pure-min dialect: it must refuse the statement
 	@if ./$(SEED_MIN_BIN) $(TESTS)/fs_vowels.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted for c in s (gen2-only statement)"; exit 1; fi
-	@# native (when built) names the statement instead of a misleading error
+	@# native (when built) runs for over a string (since 2026-10-11, test-native-lang)
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  ./$(NATIVE_BIN) $(TESTS)/fs_vowels.sa $(TESTS)/fs_native 2>&1 | grep -q "'for' is a full-language statement"; \
-	  if ./$(NATIVE_BIN) $(TESTS)/fs_vowels.sa $(TESTS)/fs_native >/dev/null 2>&1; then \
-	    echo "[FAIL] native accepted for c in s"; exit 1; fi; \
-	  echo "[stage2] native rejects for/break/continue by name"; \
+	  printf 'hold word = "abc"\nfor ch in word {\n  show ch\n}\n' > $(TESTS)/fs_nat.sa; \
+	  ./$(NATIVE_BIN) $(TESTS)/fs_nat.sa $(TESTS)/fs_native || exit 1; \
+	  ./$(TESTS)/fs_native | tr '\n' ' ' | grep -qx 'a b c ' || { echo "[FAIL] native for over a string printed the wrong result"; exit 1; }; \
+	  echo "[stage2] native runs for over a string"; \
 	else \
 	  echo "[stage2] native rejection: skipped (native_aot is not built here)"; \
 	fi
@@ -1307,10 +1748,10 @@ test-for-str: $(GEN2) $(SEED_MIN_BIN)
 	./$(GEN2) $(TESTS)/fs_pair.sa $(TESTS)/fs_pair.c >/dev/null 2>&1 || true
 	@grep -q "must be written with type parameters used by every parameter" $(TESTS)/fs_pair.c
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/fs_pair.sa $(TESTS)/fs_pair_nat 2>&1 | grep -q 'generics are not in the native subset'; then :; \
+	  if ./$(NATIVE_BIN) $(TESTS)/fs_pair.sa $(TESTS)/fs_pair_nat 2>&1 | grep -q 'type parameters used by every parameter'; then :; \
 	  else echo "[FAIL] native did not reject make NAME<...>"; exit 1; fi; \
 	fi
-	@echo "[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min and native refuse it by name"
+	@echo "[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min refuses it by name; native runs it"
 
 # ---------------------------------------------------------------------------
 # test-registry-sums: every repository package carries a `sum=` line in its
@@ -1368,20 +1809,22 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/gg_ord $(TESTS)/gg_ord.c
 	$(call assert-out,./$(TESTS)/gg_ord,1\n2\n3\n5\n6\n7\n8\n10\n11\n12\n13\n14)
 	@./$(SEED_MIN_BIN) $(TESTS)/gg_ord.sa > $(TESTS)/gg_ord_sm.c && $(CC) -O2 -o $(TESTS)/gg_ord_sm $(TESTS)/gg_ord_sm.c && ./$(TESTS)/gg_ord_sm > $(TESTS)/gg_ord_sm.out && ./$(TESTS)/gg_ord > $(TESTS)/gg_ord_g2.out && cmp $(TESTS)/gg_ord_sm.out $(TESTS)/gg_ord_g2.out
-	@# a string against a number is an error on seed-min; native refuses ordering by name
+	@# a string against a number is an error on seed-min and native; native ordering == gen2
 	@printf 'hold s = "ab"\nhold n = 3\nwhen s < n {\n  show 1\n}\n' > $(TESTS)/gg_ordmix.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_ordmix.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted string < number"; exit 1; fi
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat >/dev/null 2>&1; then echo "[FAIL] native accepted string ordering"; exit 1; fi; \
-	  ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat 2>&1 | grep -q 'not in the native subset'; \
+	  ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat >/dev/null 2>&1 && ./$(TESTS)/gg_ordnat > $(TESTS)/gg_ord_nat.out && cmp $(TESTS)/gg_ord_nat.out $(TESTS)/gg_ord_g2.out || { echo "[FAIL] native string ordering differs from gen2"; exit 1; }; \
+	  if ./$(NATIVE_BIN) $(TESTS)/gg_ordmix.sa $(TESTS)/gg_ordmixnat >/dev/null 2>&1; then echo "[FAIL] native accepted string < number"; exit 1; fi; \
 	fi
-	@# the chain forms are gen2 only: seed-min and native must refuse them
+	@# the chain forms: seed-min refuses them; gen2 and native run them
 	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_chain.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted an else-when/else-if chain"; exit 1; fi
+	@# native runs the chain forms too (they landed with elif): it must match gen2
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/gg_chain.sa $(TESTS)/gg_nat >/dev/null 2>&1; then \
-	    echo "[FAIL] native accepted an else-when/else-if chain"; exit 1; fi; \
-	  echo "[gen2-gaps] native rejects the chain forms"; \
+	  ./$(NATIVE_BIN) $(TESTS)/gg_chain.sa $(TESTS)/gg_nat || exit 1; \
+	  ./$(TESTS)/gg_nat > $(TESTS)/gg_nat.out || exit 1; \
+	  ./$(TESTS)/gg_chain > $(TESTS)/gg_chain_g2.out || exit 1; \
+	  cmp $(TESTS)/gg_chain_g2.out $(TESTS)/gg_nat.out || { echo "[FAIL] native else-if chain differs from gen2"; exit 1; }; \
 	fi
 	@echo "[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native refuse the chains"
 
@@ -1504,7 +1947,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -1680,9 +2123,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	@echo "[OK] native functions: recursion (fac/fib), 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin/string args; seed-min and gen2 agree"
 	@# function forms native must reject with clear, stable errors
 	@printf 'make f(n) {\n  hold t = n * 2\n  give t\n}\nshow f(3)\n' > $(TESTS)/native_fnhold.sa
-	@if ./$(NATIVE_BIN) $(TESTS)/native_fnhold.sa $(TESTS)/native_fnhold 2>/dev/null; then \
-	  echo "[FAIL] native accepted hold inside a function (a local in the data segment breaks recursion)"; exit 1; fi
-	@./$(NATIVE_BIN) $(TESTS)/native_fnhold.sa $(TESTS)/native_fnhold 2>&1 | grep -q 'hold inside make is not in the native subset'
+	@./$(NATIVE_BIN) $(TESTS)/native_fnhold.sa $(TESTS)/native_fnhold && ./$(TESTS)/native_fnhold | grep -qx 6 || { echo "[FAIL] native hold inside a function did not print 6"; exit 1; }
 	@printf 'give 5\n' > $(TESTS)/native_giveout.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_giveout.sa $(TESTS)/native_giveout 2>/dev/null; then \
 	  echo "[FAIL] native accepted give outside a function"; exit 1; fi
@@ -1703,9 +2144,16 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>/dev/null; then \
 	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
-	@echo "[OK] native rejects (clearly): hold inside make, give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
+	@echo "[OK] native rejects (clearly): give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
 	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
+	@# string ordering on native (hand-computed; gen2/seed-min leg in test-native-strord)
+	./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/nso_nat_gate
+	$(call assert-out,./$(TESTS)/nso_nat_gate,$(NSO_WANT))
+	@# the 2026-10-10 stdlib helpers, on native, against the hand-computed values
+	./$(NATIVE_BIN) selfhost/stdlib_growth_test.sa $(TESTS)/sg_nat_gate
+	$(call assert-out,./$(TESTS)/sg_nat_gate,55\n0\n0\n2\n9\n-7\n4\n4\n0\n1\n24\n1\n1\n0\n8\n16\n5\n1\n3\n0\n1\n0\n0\n1\n0\n3\n4\n4\n1000)
+	@echo "[OK] native: stdlib growth helpers (tri, ceil_div, pow_mod, collatz_steps, digit_at, isqrt, ...)"
 	@echo "=== NATIVE-TEST-OK ==="
 
 grammar: true-selfhost-min

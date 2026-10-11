@@ -1,0 +1,20 @@
+// Native generics over strings: each call-site kind gets its own copy.
+// Hand-computed expected output (see the test-native-strgen target):
+//   abc / 42 / yo / 7 / 5 / nest
+make same_val<T>(x: T) -> T {
+  give x
+}
+make second<A, B>(a: A, b: B) -> B {
+  give b
+}
+make wrap(s: str) -> str {
+  give same_val(s)
+}
+hold s = same_val("abc")
+show s
+hold n = same_val(41) + 1
+show n
+show second(7, "yo")
+show second("yo", 7)
+show len(same_val("hello"))
+show wrap("nest")

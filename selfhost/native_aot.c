@@ -55,7 +55,7 @@
 #define BASE 0x400000ULL
 #define NSLOT 64
 #define MAXS 32
-#define MAXF 64
+#define MAXF 256
 #define MAXFD 16
 #define MAXP 6
 
@@ -276,22 +276,6 @@ static size_t d_str(const char*s){ size_t n=strlen(s); size_t at=d_alloc(n+1); m
 /* ---------------- text utilities ---------------- */
 static void sw(const char**p){ while(**p&&isspace((unsigned char)**p)) (*p)++; }
 
-/* The gen2-only word operators and boolean literals.  A native condition
-   stops after one comparison, so `a == 1 and b == 2` used to die as
-   "when needs { ... }"; name the operator instead. */
-static const char* wordop_at(const char*p){
-  while(*p&&isspace((unsigned char)*p)) p++;
-  static const char*ops[]={"and","or","not","true","false",0};
-  for(int i=0;ops[i];i++){
-    size_t L=strlen(ops[i]);
-    if(!strncmp(p,ops[i],L)){
-      unsigned char c=(unsigned char)p[L];
-      if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'))
-        return ops[i];
-    }
-  }
-  return 0;
-}
 static int id0(char c){ return isalpha((unsigned char)c)||c=='_'; }
 static int idc(char c){ return isalnum((unsigned char)c)||c=='_'; }
 /* gen2-only full-language statements: name them and stop, at every pass.
@@ -299,13 +283,6 @@ static int idc(char c){ return isalnum((unsigned char)c)||c=='_'; }
    as "undefined variable 'c'" before the statement walker could say what the
    real problem was. */
 static void errx(const char*fmt,...);
-static void reject_fullang(const char*p){
-  char w[16]; int i=0;
-  if(!id0(*p)) return;
-  while(idc(*p)&&i+1<16) w[i++]=*p++; w[i]=0;
-  if(!strcmp(w,"for")||!strcmp(w,"break")||!strcmp(w,"continue")||!strcmp(w,"elif"))
-    errx("'%s' is a full-language statement and not in the native subset (native speaks the pure-min statements; use selfhost/gen2)",w,NULL);
-}
 static int mkw(const char**p,const char*k){ size_t n=strlen(k); if(strncmp(*p,k,n)||idc((*p)[n])) return 0; *p+=n; return 1; }
 static int pid(const char**p,char*b,size_t c){
   sw(p); if(!id0(**p)) return 0;
@@ -357,12 +334,13 @@ static void endstmt(const char**p){
   if(**p=='/'&&(*p)[1]=='/') return;
   const char*r=*p;
   if(mkw(&r,"hold")||mkw(&r,"show")||mkw(&r,"when")||mkw(&r,"while")||
-     mkw(&r,"make")||mkw(&r,"give")||mkw(&r,"struct")||mkw(&r,"otherwise")||mkw(&r,"else")){ return; }
+     mkw(&r,"make")||mkw(&r,"give")||mkw(&r,"struct")||mkw(&r,"otherwise")||mkw(&r,"else")||
+     mkw(&r,"for")||mkw(&r,"break")||mkw(&r,"continue")||mkw(&r,"elif")){ return; }
   if(id0(*r)){
     char w[64]; int i=0;
     while(idc(*r)&&i+1<64) w[i++]=*r++; w[i]=0;
-    if(!strcmp(w,"for")||!strcmp(w,"break")||!strcmp(w,"continue")||!strcmp(w,"elif"))
-      errx("'%s' is a full-language statement and not in the native subset (native speaks the pure-min statements; use selfhost/gen2)",w,NULL);
+    if(!strcmp(w,"and")||!strcmp(w,"or")||!strcmp(w,"not"))
+      errx("'%s' is a full-language word operator and not in the native subset outside when/while conditions (native speaks the pure-min expressions; use selfhost/gen2)",w,NULL);
     sw(&r);
     if(*r=='='&&(g_find(w)>=0)) return;                /* next line is an assignment */
     if(*r=='('&&!strcmp(w,"push")) return;             /* next line is a call statement (push only, as in seed-min/gen2) */
@@ -374,27 +352,110 @@ static void endstmt(const char**p){
 typedef enum { K_NUM=0, K_STR=1, K_LIST=2, K_STRUCT=3 } kind_t;
 #define K_UNK (-1)
 
-typedef struct { char name[64]; int kind; int sid; } Glob;
+typedef struct { char name[64]; int kind; int sid; int off; } Glob;  /* off: BP displacement of a make local, 0 = global */
 typedef struct { char name[64]; int kind; int sid; } Field;
 typedef struct { char name[64]; Field f[MAXFD]; int nf; } SDef;
-typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; } Fn;
+typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; int gen; int ntp; char tps[8][64]; int pk[MAXP]; int rk; int ptp[MAXP]; int rtp; const char*body_at; int inst_of; } Fn;
 
 static Glob G[NSLOT]; static int nG;
 static SDef S[MAXS]; static int nS;
 static Fn  F[MAXF]; static int nF;
+/* Generic instances: a generic called with a str argument gets its own
+   copy of the body (kinds bound from the arguments).  Copies are queued and
+   emitted after the top-level scan, so call sites patch to them normally. */
+static int pend[MAXF]; static int npend=0;
+static const char*kname(int k);
+static int last_sig_tp=-1, last_ret_tp=-1;
+/* kinds[i] is the kind of argument i of a call to generic fi.  Every type
+   parameter binds to one kind; a num-only call keeps the base copy. */
+static int pick_instance(int fi,const int*kinds,int nargs){
+  int bind[8]; for(int i=0;i<8;i++) bind[i]=-1;
+  for(int i=0;i<nargs&&i<F[fi].nparam;i++){
+    int t=F[fi].ptp[i]; if(t<0) continue;
+    if(bind[t]<0) bind[t]=kinds[i];
+    else if(bind[t]!=kinds[i]) errx("make %s: one type parameter is given two different kinds",F[fi].name,NULL);
+  }
+  for(int i=0;i<nargs;i++)
+    if(kinds[i]!=K_NUM&&kinds[i]!=K_STR&&kinds[i]!=K_LIST)
+      errx("generics are not in the native subset for structs (arg %d of '%s' is %s; gen2 monomorphises them)",i+1,F[fi].name,kname(kinds[i]));
+  int allnum=1;
+  for(int i=0;i<8;i++) if(bind[i]==K_STR||bind[i]==K_LIST) allnum=0;
+  if(allnum) return fi;
+  int rk=(F[fi].rtp>=0&&bind[F[fi].rtp]>=0)?bind[F[fi].rtp]:K_NUM;
+  int want[MAXP];
+  for(int i=0;i<F[fi].nparam;i++){
+    int t=F[fi].ptp[i];
+    want[i]=(t>=0&&bind[t]>=0)?bind[t]:K_NUM;
+  }
+  for(int j=0;j<nF;j++){
+    if(F[j].inst_of!=fi||F[j].rk!=rk) continue;
+    int same=1;
+    for(int i=0;i<F[fi].nparam;i++) if(F[j].pk[i]!=want[i]) same=0;
+    if(same) return j;
+  }
+  if(nF>=MAXF){ fprintf(stderr,"native_aot: too many functions and generic instances\n"); exit(1); }
+  F[nF]=F[fi];
+  F[nF].gen=0; F[nF].inst_of=fi; F[nF].start=-1; F[nF].rk=rk;
+  for(int i=0;i<F[fi].nparam;i++) F[nF].pk[i]=want[i];
+  pend[npend++]=nF;
+  return nF++;
+}
 
-static int g_find(const char*n){ for(int i=0;i<nG;i++) if(!strcmp(G[i].name,n)) return i; return -1; }
+static int g_find(const char*n){ for(int i=nG-1;i>=0;i--) if(!strcmp(G[i].name,n)) return i; return -1; }
 static int g_decl(const char*n){
   int i=g_find(n); if(i>=0) return i;
   if(nG>=NSLOT){ fprintf(stderr,"native_aot: too many globals (native limit: %d)\n",NSLOT); exit(1); }
-  snprintf(G[nG].name,64,"%s",n); G[nG].kind=K_UNK; G[nG].sid=-1; return nG++;
+  snprintf(G[nG].name,64,"%s",n); G[nG].kind=K_UNK; G[nG].sid=-1; G[nG].off=0; return nG++;
+}
+/* typed signatures: `make f(a: num, b: num) -> num`.  Native takes only num.
+   A signature is either fully typed (every parameter and the return) or
+   fully untyped (the pure-min form every backend accepts).  The helpers
+   consume the annotations; sig_check decides. */
+/* type parameters of the make being collected (make NAME<T, U>); native
+   compiles a generic for numbers only, so each T is num */
+static char gtp[8][64]; static int ngtp=0;
+static int is_tp(const char*t){ for(int i=0;i<ngtp;i++) if(!strcmp(gtp[i],t)) return 1; return 0; }
+static int tp_index(const char*t){ for(int i=0;i<ngtp;i++) if(!strcmp(gtp[i],t)) return i; return -1; }
+static int last_sig_kind=K_NUM, last_ret_kind=K_NUM;
+static int sig_type(const char**p,const char*nm){
+  last_sig_kind=K_NUM; last_sig_tp=-1;
+  sw(p);
+  if(**p!=':') return 0;
+  (*p)++; sw(p);
+  char t[64];
+  if(!pid(p,t,64)) errx("make %s: expected a type after ':'",nm,NULL);
+  if(is_tp(t)){ last_sig_tp=tp_index(t); return 1; }
+  if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (a parameter type here must be T or another type parameter)",nm,NULL);
+  if(!strcmp(t,"str")){ last_sig_kind=K_STR; return 1; }
+  if(!strcmp(t,"list")){ last_sig_kind=K_LIST; return 1; }
+  if(strcmp(t,"num")) errx("make %s: parameter type '%s' is not in the native subset (native takes num)",nm,t,NULL);
+  return 1;
+}
+static int sig_ret(const char**p,const char*nm){
+  last_ret_kind=K_NUM; last_ret_tp=-1;
+  sw(p);
+  if(!((*p)[0]=='-'&&(*p)[1]=='>')) return 0;
+  (*p)+=2; sw(p);
+  char t[64];
+  if(!pid(p,t,64)) errx("make %s: expected a return type after '->'",nm,NULL);
+  if(is_tp(t)){ last_ret_tp=tp_index(t); return 1; }
+  if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (the return type here must be T or another type parameter)",nm,NULL);
+  if(!strcmp(t,"str")){ last_ret_kind=K_STR; return 1; }
+  if(!strcmp(t,"list")){ last_ret_kind=K_LIST; return 1; }
+  if(strcmp(t,"num")) errx("make %s: return type '%s' is not in the native subset (native returns num)",nm,t,NULL);
+  return 1;
+}
+static void sig_check(const char*nm,int nparam,int ntyped,int ret){
+  if(ntyped==0&&!ret) return;
+  if(ntyped!=nparam) errx("make %s: a typed signature needs a type on every parameter (a: num)",nm,NULL);
+  if(!ret) errx("make %s: a typed signature needs a return type (-> num)",nm,NULL);
 }
 static int s_find(const char*n){ for(int i=0;i<nS;i++) if(!strcmp(S[i].name,n)) return i; return -1; }
 static int s_field(int sid,const char*n){ for(int i=0;i<S[sid].nf;i++) if(!strcmp(S[sid].f[i].name,n)) return i; return -1; }
 static int f_find(const char*n){ for(int i=0;i<nF;i++) if(!strcmp(F[i].name,n)) return i; return -1; }
 static int is_builtin(const char*n){
   return !strcmp(n,"concat")||!strcmp(n,"len")||!strcmp(n,"chr")||!strcmp(n,"sx_index")||
-         !strcmp(n,"index")||!strcmp(n,"read_file")||!strcmp(n,"write_file")||
+         !strcmp(n,"index")||!strcmp(n,"read_file")||!strcmp(n,"http_get")||!strcmp(n,"write_file")||
          !strcmp(n,"arg")||!strcmp(n,"arg_count")||!strcmp(n,"string_eq")||
          !strcmp(n,"sx_eq")||!strcmp(n,"push")||
          !strcmp(n,"gc")||!strcmp(n,"gc_live")||!strcmp(n,"gc_runs");
@@ -483,7 +544,7 @@ static const char*skip_stmt(const char*p){
      between ("undefined variable" for a later hold) */
   { const char*r=p;
     if(!(mkw(&r,"when")||mkw(&r,"while")||mkw(&r,"make")||mkw(&r,"struct")||
-         mkw(&r,"otherwise")||mkw(&r,"else"))){
+         mkw(&r,"otherwise")||mkw(&r,"else")||mkw(&r,"for")||mkw(&r,"elif"))){
       while(*p&&*p!='\n') p++;
       return p;
     }
@@ -552,9 +613,28 @@ static void collect_defs(const char*src){
       if(!pid(&p,nm,64)){ fprintf(stderr,"native_aot: make needs a name\n"); exit(1); }
       if(f_find(nm)>=0){ fprintf(stderr,"native_aot: function '%s' declared twice\n",nm); exit(1); }
       if(nF>=MAXF){ fprintf(stderr,"native_aot: too many functions (native limit: %d)\n",MAXF); exit(1); }
-      strcpy(F[nF].name,nm); F[nF].nparam=0; F[nF].start=-1;
+      strcpy(F[nF].name,nm); F[nF].nparam=0; F[nF].start=-1; F[nF].gen=0;
+      for(int ii=0;ii<MAXP;ii++) F[nF].ptp[ii]=-1;
+      F[nF].rtp=-1; F[nF].inst_of=-1; F[nF].body_at=NULL;
+      int sig_typed=0;
       sw(&p);
-      if(*p=='<'){ fprintf(stderr,"native_aot: make %s<...>: generics are not in the native subset (gen2 monomorphises make NAME<T> and make NAME<A, B>); native has no generic functions\n",nm); exit(1); }
+      ngtp=0;
+      if(*p=='<'){
+        /* make NAME<T, U>: type parameters; native compiles them as num */
+        F[nF].gen=1;
+        p++;
+        for(;;){
+          sw(&p);
+          if(ngtp>=8){ fprintf(stderr,"native_aot: make %s<...>: at most 8 type parameters\n",nm); exit(1); }
+          if(!pid(&p,gtp[ngtp],64)){ fprintf(stderr,"native_aot: make %s<...>: bad type parameter list\n",nm); exit(1); }
+          ngtp++;
+          sw(&p);
+          if(*p==','){ p++; continue; }
+          if(*p=='>'){ p++; break; }
+          fprintf(stderr,"native_aot: make %s<...>: bad type parameter list\n",nm); exit(1);
+        }
+        sw(&p);
+      }
       if(*p!='('){ fprintf(stderr,"native_aot: make %s: expected (params)\n",nm); exit(1); }
       p++;
       for(;;){
@@ -564,11 +644,25 @@ static void collect_defs(const char*src){
         if(!pid(&p,pm,64)){ fprintf(stderr,"native_aot: make %s: bad param list\n",nm); exit(1); }
         if(F[nF].nparam>=MAXP){ fprintf(stderr,"native_aot: make %s: at most %d params\n",nm,MAXP); exit(1); }
         strcpy(F[nF].params[F[nF].nparam++],pm);
+        sig_typed+=sig_type(&p,nm);
+        F[nF].pk[F[nF].nparam-1]=last_sig_kind;
+        F[nF].ptp[F[nF].nparam-1]=last_sig_tp;
         sw(&p);
         if(*p==','){ p++; continue; }
         if(*p==')'){ p++; break; }
         fprintf(stderr,"native_aot: make %s: bad param list\n",nm); exit(1);
       }
+      {
+        int sig_ret1=sig_ret(&p,nm);
+        F[nF].rk=last_ret_kind;
+        F[nF].rtp=last_ret_tp;
+        sig_check(nm,F[nF].nparam,sig_typed,sig_ret1);
+        if(F[nF].gen&&(sig_typed!=F[nF].nparam||!sig_ret1))
+          errx("make %s<...>: a generic needs a type parameter on every parameter and a return type (-> T)",nm,NULL);
+      }
+      F[nF].ntp=ngtp;
+      for(int i=0;i<ngtp;i++) strcpy(F[nF].tps[i],gtp[i]);
+      ngtp=0;
       nF++;
       p=skip_stmt(line);
     }
@@ -599,7 +693,25 @@ static int pk_post(const char**p,int depth);
 static int pk_term(const char**p,int depth);
 static int pk_rel(const char**p,int depth);
 static int pk_full(const char**p,int depth);
+typedef struct { size_t *a; int n, cap; int j5; } JL;   /* jump-site list, see gen_cond */
+static int cond_nest=0;   /* >0 while a when/while operand or a logic value is being compiled */
+static const char*cond_end(const char*p);
+static void cond_trim(const char**s,const char**e);
+static void emit_when_body(const char**p,int in_fn);
+static void emit_for(const char**p,int in_fn);
+static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const char*what);
+static int cond_wrapped(const char*s,const char*e);
+static int pk_rhs(const char**p);
+static int logic_span(const char*s,const char*e);
+static const char*paren_close(const char*o);
+static void emit_logic(const char*s,const char*e);
+static int arg_pk(const char**p,int depth);
+static void arg_emit(const char**p,int depth);
+static int fld_pk(const char**p,int depth);
+static void fld_emit(const char**p,int depth);
+static void emit_rhs(const char**p);
 
+static int cur_fn;  /* defined with its value below */
 static int pk_prim(const char**p,int depth){
   sw(p);
   if(depth>32) errx("expression too deep");
@@ -625,6 +737,15 @@ static int pk_prim(const char**p,int depth){
     return K_STR;
   }
   if(**p=='('){
+    /* a parenthesized and/or/not group is a logic value (1 or 0) */
+    const char*pc=paren_close(*p);
+    if(pc&&logic_span(*p+1,pc)){
+      JL none={0};
+      gen_cond(*p+1,pc,0,&none,1,"value");
+      *p=pc+1;
+      PKX_K=K_NUM; PKX_S=-1;
+      return K_NUM;
+    }
     (*p)++;
     /* the full expression grammar, comparisons included -- emission uses
        emit_expr here, and `(a > 1) + 1` used to fail with "expected )" */
@@ -646,6 +767,7 @@ static int pk_prim(const char**p,int depth){
   if(pnum(p,&v)){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
   char n[64];
   if(pid(p,n,64)){
+    if(!strcmp(n,"true")||!strcmp(n,"false")){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
     const char*q=*p; sw(&q);
     /* `name {` is a struct literal unless name is a variable and not a
        struct: `while n {` / `when x {` use a bare variable as the condition */
@@ -675,7 +797,7 @@ static int pk_prim(const char**p,int depth){
           if(cnt>=nf) errx("too many fields in struct '%s' literal",n,NULL);
           fi=cnt;
         }
-        int k=pk_rel(p,depth+1);
+        int k=fld_pk(p,depth+1);
         if(k==K_STRUCT&&PKX_S<0) k=K_UNK;
         /* the shared dialect (seed-min and gen2) rejects a list inside a
            struct field and a struct nested from a later declaration; native
@@ -706,11 +828,11 @@ static int pk_prim(const char**p,int depth){
     if(*q=='('){
       if(is_builtin(n)){
         (*p)=q; (*p)++;
-        int nargs=0;
+        int nargs=0; int kinds_[MAXP];
         for(;;){
           sw(p);
           if(**p==')'){ (*p)++; break; }
-          (void)pk_rel(p,depth+1);
+          (void)arg_pk(p,depth);
           nargs++;
           sw(p);
           if(**p==','){ (*p)++; continue; }
@@ -718,14 +840,14 @@ static int pk_prim(const char**p,int depth){
           errx("call needs , or )");
         }
         static const struct { const char*nn; int a; } ar[] = {
-          {"concat",2},{"len",1},{"chr",1},{"sx_index",2},{"index",2},{"read_file",1},
+          {"concat",2},{"len",1},{"chr",1},{"sx_index",2},{"index",2},{"read_file",1},{"http_get",1},
           {"write_file",2},{"arg",1},{"arg_count",0},{"string_eq",2},{"sx_eq",2},{"push",2},
           {"gc",0},{"gc_live",0},{"gc_runs",0}
         };
         for(int i=0;i<(int)(sizeof ar/sizeof ar[0]);i++)
           if(!strcmp(n,ar[i].nn)){
             if(nargs!=ar[i].a) errx("%s takes %d args, got %d",n,ar[i].a,nargs);
-            if(!strcmp(n,"concat")||!strcmp(n,"chr")||!strcmp(n,"read_file")||!strcmp(n,"arg")){ PKX_K=K_STR; PKX_S=-1; return K_STR; }
+            if(!strcmp(n,"concat")||!strcmp(n,"chr")||!strcmp(n,"read_file")||!strcmp(n,"http_get")||!strcmp(n,"arg")){ PKX_K=K_STR; PKX_S=-1; return K_STR; }
             if(!strcmp(n,"push")){ PKX_K=K_LIST; PKX_S=-1; return K_LIST; }
             PKX_K=K_NUM; PKX_S=-1; return K_NUM;
           }
@@ -733,28 +855,36 @@ static int pk_prim(const char**p,int depth){
       int fi=f_find(n);
       if(fi>=0){
         (*p)=q; (*p)++;
-        int nargs=0;
+        int nargs=0; int kinds_[MAXP];
         for(;;){
           sw(p);
           if(**p==')'){ (*p)++; break; }
-          int k=pk_rel(p,depth+1);
-          if(k!=K_NUM) errx("function '%s' takes numbers (arg %d is not a number)",n,nargs+1);
+          int k=arg_pk(p,depth);
+          if(nargs>=MAXP) errx("too many arguments to '%s'",n,NULL);
+          kinds_[nargs]=k;
+          if(!F[fi].gen){ int want=(nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
+            if(k!=want&&want==K_NUM) errx("function '%s' takes numbers (arg %d is not a number)",n,nargs+1);
+            if(k!=want) errx("function '%s' takes %s (arg %d is %s)",n,kname(want),nargs+1,kname(k)); }
           nargs++;
           sw(p);
           if(**p==','){ (*p)++; continue; }
           if(**p==')'){ (*p)++; break; }
           errx("call needs , or )");
         }
+        if(F[fi].gen) fi=pick_instance(fi,kinds_,nargs);
         if(nargs!=F[fi].nparam) errx("function '%s' takes %d args, got %d",n,F[fi].nparam,nargs);
-        PKX_K=K_NUM; PKX_S=-1;
-        return K_NUM;
+        PKX_K=F[fi].rk; PKX_S=-1;
+        return F[fi].rk;
       }
     }
-    /* gen2-only word operators and boolean literals: name them instead of
-       dying as "undefined variable 'not'" / "when needs { ... }" */
-    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not")||
-       !strcmp(n,"true")||!strcmp(n,"false"))
-      errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",n,NULL);
+    /* gen2-only word operators: name them instead of dying as "undefined
+       variable 'not'" (and/or/not are fine inside conditions and logic values) */
+    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not"))
+      errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
+    if(cur_fn>=0){
+      for(int i=0;i<F[cur_fn].nparam;i++)
+        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return F[cur_fn].pk[i]; }
+    }
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
     int k=G[gi].kind;
@@ -875,7 +1005,6 @@ static int pk_full(const char**p,int depth){
     *p += is2? 2 : 1;
     int k2=pk_rel(p,depth);
     if(k==K_STR&&k2!=K_STR) errx("string compared with a non-string");
-    if(k==K_STR&&(c0=='<'||c0=='>')) errx("string comparison with '%s' is not in the native subset (native has string_eq for ==/!=; string ordering runs on seed-min and gen2)",op);
     if(k==K_LIST||k==K_STRUCT||k2==K_LIST||k2==K_STRUCT)
       errx("cannot compare %s with %s",kname(k),kname(k2));
     PKX_K=K_NUM; PKX_S=-1;
@@ -893,14 +1022,13 @@ static int infer_round(const char*src){
     if(p[0]=='/'&&p[1]=='/'){ while(*p&&*p!='\n') p++; continue; }
     const char*end=skip_stmt(line);
     const char*rp=line; sw(&rp);
-    reject_fullang(rp);
     if(mkw(&rp,"hold")){
       char nm[64];
       if(pid(&rp,nm,64)){
         sw(&rp);
         if(*rp=='='){
           rp++;
-          int k=pk_full(&rp,0);
+          int k=pk_rhs(&rp);
           int gi=g_decl(nm);
           if(k>=0){
             if(G[gi].kind==K_UNK){ G[gi].kind=k; G[gi].sid=(k==K_STRUCT)?PKX_S:-1; changed=1; }
@@ -947,16 +1075,16 @@ static void infer(const char*src){
     const char*end=skip_stmt(line);
     const char*rp=line; sw(&rp);
     if(mkw(&rp,"show")){
-      int k=pk_full(&rp,0);
+      int k=pk_rhs(&rp);
       if(k==K_UNK) errx("cannot infer the type of the show value");
     } else if(mkw(&rp,"when")||mkw(&rp,"while")){
-      int k=pk_full(&rp,0);
-      if(k==K_UNK) errx("cannot infer the type of the condition (it must be a number)");
-      if(k!=K_NUM) errx("condition must be a number (got %s)",kname(k));
+      /* every operand of and/or/not is type-checked, not just the first */
+      JL none={0};
+      gen_cond(rp,cond_end(rp),0,&none,1,"when");
     } else if(mkw(&rp,"give")){
-      int k=pk_full(&rp,0);
+      int k=pk_rhs(&rp);
       if(k==K_UNK) errx("cannot infer the type of the give value");
-      if(k!=K_NUM) errx("give must give a number (got %s)",kname(k));
+      if(k!=(cur_fn>=0?F[cur_fn].rk:K_NUM)) errx("give must give %s (got %s)",kname(cur_fn>=0?F[cur_fn].rk:K_NUM),kname(k),NULL);
     } else {
       char w[64]; const char*r2=rp; int wi=0;
       while(idc(*r2)&&wi+1<64) w[wi++]=*r2++; w[wi]=0;
@@ -966,8 +1094,8 @@ static void infer(const char*src){
       } else if(wi>0&&*r3=='='){
         int gi=g_find(w);
         if(gi<0) errx("cannot assign to \"%s\" (hold it first)",w,NULL);
-        rp++;
-        int k=pk_full(&rp,0);
+        rp=r3+1;
+        int k=pk_rhs(&rp);
         if(k==K_UNK) errx("cannot infer the type of the assignment value");
         if(G[gi].kind==K_UNK){ G[gi].kind=k; G[gi].sid=(k==K_STRUCT)?-1:-1; }
         else if(G[gi].kind!=k) errx("variable '%s' is used with two different types",w,NULL);
@@ -983,6 +1111,7 @@ static void infer(const char*src){
 /* ================= phase 3: emit ================= */
 static int XK=K_NUM, XS=-1;     /* kind / struct id of the value in rax */
 static int cur_fn=-1;           /* -1 = top level */
+static int lbase=0, nloc=0;      /* first G index of the current make's locals; local count */
 static size_t builtin_off[40];
 /* argument registers, System V AMD64: rdi rsi rdx rcx r8 r9 */
 static const int argreg[MAXP]={DI,SI,DX,CX,8,9};
@@ -990,7 +1119,7 @@ static const int argreg[MAXP]={DI,SI,DX,CX,8,9};
 enum { B_MALLOC,B_STRLEN,B_CMPSTR,B_CONCAT,B_N2STR,B_PUTSTR,B_WCSTR,B_ITONO,B_ITOWRITE,
        B_SHOWLIST,B_MLIST,B_LGET,B_LLEN,B_LPUSH,B_SGET,B_CHR,B_READFILE,B_WRITEFILE,
        B_ARG,B_ARGC,B_DIE,B_NFMT,B_SHOWNUM,B_GC,B_GC_LIVE,B_GC_RUNS,
-       B_FINDBLOCK,B_MARK,B_GCCHECK };
+       B_FINDBLOCK,B_MARK,B_GCCHECK,B_STRORD };
 
 static void emit_prim(const char**p,int depth);
 static void emit_post(const char**p,int depth);
@@ -1001,8 +1130,14 @@ static void emit_prog(const char**p,int in_fn,int stop);
 static void emit_fn(int fi,const char**p);
 static void emit_call_builtin(const char**p,const char*n,int depth);
 
-static void load_global(int gi){ mv_r64m(AX,12,-1,0,(int)(d_glob+8*(size_t)gi)); }
-static void store_global(int gi){ mv_m64(12,-1,0,(int)(d_glob+8*(size_t)gi),AX); }
+static void load_global(int gi){
+  if(G[gi].off) { mv_r64m(AX,BP,-1,0,G[gi].off); return; }
+  mv_r64m(AX,12,-1,0,(int)(d_glob+8*(size_t)gi));
+}
+static void store_global(int gi){
+  if(G[gi].off) { mv_m64(BP,-1,0,G[gi].off,AX); return; }
+  mv_m64(12,-1,0,(int)(d_glob+8*(size_t)gi),AX);
+}
 static void load_param(int i){ mv_r64m(AX,BP,-1,0,-8*(i+1)); }
 static void store_scr(void){ mv_m64(12,-1,0,OFF_SCR,AX); }
 static void load_scr(void){ mv_r64m(AX,12,-1,0,OFF_SCR); }
@@ -1069,6 +1204,12 @@ static void emit_prim(const char**p,int depth){
     return;
   }
   if(**p=='('){
+    const char*pc=paren_close(*p);
+    if(pc&&logic_span(*p+1,pc)){
+      emit_logic(*p+1,pc);
+      *p=pc+1;
+      return;
+    }
     (*p)++;
     emit_expr(p,depth+1);
     sw(p);
@@ -1088,9 +1229,10 @@ static void emit_prim(const char**p,int depth){
   if(pnum(p,&v)){ mov_imm64(AX,dbits(v)); XK=K_NUM; XS=-1; return; }
   char n[64];
   if(pid(p,n,64)){
+    if(!strcmp(n,"true")||!strcmp(n,"false")){ mov_imm64(AX,dbits(n[0]=='t'?1.0:0.0)); XK=K_NUM; XS=-1; return; }
     if(cur_fn>=0){
       for(int i=0;i<F[cur_fn].nparam;i++)
-        if(!strcmp(F[cur_fn].params[i],n)){ load_param(i); XK=K_NUM; XS=-1; return; }
+        if(!strcmp(F[cur_fn].params[i],n)){ load_param(i); XK=F[cur_fn].pk[i]; XS=-1; return; }
     }
     const char*q=*p; sw(&q);
     /* `name {` is a struct literal unless name is a variable and not a
@@ -1128,7 +1270,7 @@ static void emit_prim(const char**p,int depth){
           if(cnt>=nf) errx("too many fields in struct '%s' literal",n,NULL);
           fi=cnt;
         }
-        emit_expr(p,depth+1);
+        fld_emit(p,depth+1);
         if(XK==K_LIST)
           errx("struct '%s' field '%s' cannot hold a list (seed-min/gen2 reject this)",S[sid].name,S[sid].f[cnt].name);
         if(XK==K_STRUCT&&XS>=sid)
@@ -1155,12 +1297,16 @@ static void emit_prim(const char**p,int depth){
       int fi=f_find(n);
       if(fi>=0){
         (*p)=q; (*p)++;
-        int nargs=0;
+        int nargs=0; int kinds_[MAXP];
         for(;;){
           sw(p);
           if(**p==')'){ (*p)++; break; }
-          emit_expr(p,depth+1);
-          if(XK!=K_NUM) errx("function '%s' takes numbers (arg %d is %s)",n,nargs+1,kname(XK));
+          arg_emit(p,depth);
+          if(nargs>=MAXP) errx("too many arguments to '%s'",n,NULL);
+          kinds_[nargs]=XK;
+          if(!F[fi].gen){ int want=(nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
+            if(XK!=want&&want==K_NUM) errx("function '%s' takes numbers (arg %d is %s)",n,nargs+1,kname(XK));
+            if(XK!=want) errx("function '%s' takes %s (arg %d is %s)",n,kname(want),nargs+1,kname(XK)); }
           /* every evaluated arg goes on the machine stack: a LATER arg may
              itself be a call (user function, or a builtin whose malloc maps
              a fresh chunk), which clobbers the arg registers -- staging in
@@ -1172,20 +1318,24 @@ static void emit_prim(const char**p,int depth){
           if(**p==')'){ (*p)++; break; }
           errx("call needs , or )");
         }
+        if(F[fi].gen) fi=pick_instance(fi,kinds_,nargs);
         if(nargs!=F[fi].nparam) errx("function '%s' takes %d args, got %d",n,F[fi].nparam,nargs);
         /* pop into the arg registers, last pushed first (pop only writes its
            own register, so no staged arg can be clobbered) */
         for(int i=nargs-1;i>=0;i--) pop_r(argreg[i]);
         callf(fi);
-        XK=K_NUM; XS=-1;
+        XK=F[fi].rk; XS=-1;
         return;
       }
     }
-    /* gen2-only word operators and boolean literals: name them instead of
-       dying as "undefined variable 'not'" / "when needs { ... }" */
-    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not")||
-       !strcmp(n,"true")||!strcmp(n,"false"))
-      errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",n,NULL);
+    /* gen2-only word operators: only reachable outside a condition or a logic
+       value, e.g. inside parentheses */
+    if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not"))
+      errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
+    if(cur_fn>=0){
+      for(int i=0;i<F[cur_fn].nparam;i++)
+        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return F[cur_fn].pk[i]; }
+    }
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
     if(G[gi].kind==K_UNK) errx("undefined variable '%s' (hold it first)",n,NULL);
@@ -1225,7 +1375,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"len")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK==K_LIST) callb(B_LLEN);
     else if(XK==K_STR) callb(B_STRLEN);
     else errx("len takes a string or a list");
@@ -1235,7 +1385,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"chr")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_NUM) errx("chr takes a number");
     emit_d2i();
     callb(B_CHR);
@@ -1244,11 +1394,11 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"sx_index")||!strcmp(n,"index")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("%s takes a string",n,NULL);
     push_r(AX);                    /* stage the string: the index may be a call */
     sw(p); if(**p!=',') errx("%s takes 2 args",n,NULL); (*p)++;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_NUM) errx("%s: the index must be a number",n,NULL);
     emit_d2i();
     mv_rr(SI,AX);
@@ -1259,8 +1409,9 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     XK=K_NUM; XS=-1;
     return;
   }
+  if(!strcmp(n,"http_get")) errx("http_get is not supported by the native backend yet (use gen2 or the seed)");
   if(!strcmp(n,"read_file")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("read_file takes a string (the path)");
     mv_rr(DI,AX);                  /* B_READFILE takes the path in rdi */
     callb(B_READFILE);
@@ -1269,11 +1420,11 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"write_file")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("write_file takes (path, text)");
     push_r(AX);                    /* stage the path: the text may be a call */
     sw(p); if(**p!=',') errx("write_file takes 2 args",n,NULL); (*p)++;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("write_file takes (path, text)");
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("write_file takes 2 args",n,NULL); (*p)++;
@@ -1284,7 +1435,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"arg")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_NUM) errx("arg takes a number");
     emit_d2i();
     callb(B_ARG);
@@ -1302,11 +1453,11 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"string_eq")||!strcmp(n,"sx_eq")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("%s takes 2 strings",n,NULL);
     push_r(AX);                    /* stage a: b may be a call */
     sw(p); if(**p!=',') errx("%s takes 2 args",n,NULL); (*p)++;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("%s takes 2 strings",n,NULL);
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("%s takes 2 args",n,NULL); (*p)++;
@@ -1324,11 +1475,11 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     int gi=(wi>0)?g_find(w):-1;
     const char*q2=q; sw(&q2);
     if(gi>=0&&*q2!=',') gi=-1;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_LIST) errx("push takes (list, number)");
     push_r(AX);                    /* stage the list: the value may be a call */
     sw(p); if(**p!=',') errx("push takes 2 args"); (*p)++;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_NUM) errx("push takes (list, number)");
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("push takes 2 args"); (*p)++;
@@ -1537,11 +1688,20 @@ static void emit_expr(const char**p,int depth){
     if(XK!=K_STR) errx("string compared with a non-string");
     mv_rr(DI,CX);
     mv_rr(SI,AX);
-    callb(B_CMPSTR);
-    if(op[0]=='='){                   /* == : equal -> 1 */
-      test_rr(AX,AX); setcc(JC_NZ,AX); movzx_al_to_rax();
-    } else {                          /* != : different -> 1 */
-      test_rr(AX,AX); setcc(JC_Z,AX); movzx_al_to_rax();
+    if(!strcmp(op,"==")||!strcmp(op,"!=")){
+      callb(B_CMPSTR);
+      if(op[0]=='='){                 /* == : equal -> 1 */
+        test_rr(AX,AX); setcc(JC_NZ,AX); movzx_al_to_rax();
+      } else {                        /* != : different -> 1 */
+        test_rr(AX,AX); setcc(JC_Z,AX); movzx_al_to_rax();
+      }
+    } else {
+      /* < <= > >= : strcmp(left, right) in -1/0/1, then a signed test of it */
+      callb(B_STRORD);
+      test_rr(AX,AX);
+      int scc = !strcmp(op,"<") ? JC_L : !strcmp(op,"<=") ? JC_LE
+              : !strcmp(op,">") ? JC_G : JC_GE;
+      setcc(scc,AX); movzx_al_to_rax();
     }
     emit_i2d();
   } else {
@@ -1573,8 +1733,8 @@ static void emit_fn(int fi,const char**p){
      fixed 32-byte frame let a 5th/6th parameter (rbp-40/rbp-48) be
      overwritten by the first push or call in the body.  16-aligned so the
      (push rbp; sub rsp,frame) entry keeps the same alignment everywhere. */
-  int frame=(8*F[fi].nparam+16+15)&~15;
-  bin_imm8(5,SP,(uint8_t)frame);                /* sub rsp, frame */
+  /* sub rsp, imm32 -- patched below, once the body has declared its locals */
+  e1(0x48); e1(0x81); e1(0xEC); size_t frame_at=cn; e32(0);
   lea_r12_data();
   /* spill the incoming parameter registers into the frame.  Emitted with
      the same encoder helpers as everything else -- the old hand-written
@@ -1583,6 +1743,13 @@ static void emit_fn(int fi,const char**p){
   for(int i=0;i<F[fi].nparam;i++) mv_m64(BP,-1,0,-8*(i+1),argreg[i]);
   /* skip the source: (params) { */
   sw(p);
+  ngtp=F[fi].ntp;
+  for(int i=0;i<ngtp;i++) strcpy(gtp[i],F[fi].tps[i]);
+  if(**p=='<'){                       /* make NAME<T, U>: the names were read in collection */
+    while(**p&&**p!='>') (*p)++;
+    if(**p=='>') (*p)++;
+    sw(p);
+  }
   if(**p!='(') errx("make %s: expected (params)",F[fi].name,NULL);
   (*p)++;
   for(;;){
@@ -1590,19 +1757,460 @@ static void emit_fn(int fi,const char**p){
     if(**p==')'){ (*p)++; break; }
     char pm[64];
     if(!pid(p,pm,64)) errx("make %s: bad param list",F[fi].name,NULL);
+    sig_type(p,F[fi].name);
     sw(p);
     if(**p==','){ (*p)++; continue; }
     if(**p==')'){ (*p)++; break; }
     errx("make %s: bad param list",F[fi].name,NULL);
   }
+  sig_ret(p,F[fi].name);
+  ngtp=0;
   sw(p);
   if(**p!='{') errx("make %s: expected { ... }",F[fi].name,NULL);
   (*p)++;
-  cur_fn=fi;
+  cur_fn=fi; lbase=nG; nloc=0;
   emit_prog(p,1,1);                   /* consumes the closing } */
-  cur_fn=-1;
+  {
+    /* frame: the params, then one slot per local, then the spill area */
+    uint32_t fr=(uint32_t)((8*(F[fi].nparam+nloc)+16+15)&~15);
+    memcpy(&code[frame_at],&fr,4);
+  }
+  nG=lbase; cur_fn=-1;               /* the locals go out of scope with the make */
   mov_imm64(AX,0);                   /* fall-off returns 0 */
   e1(0xc9); e1(0xc3);                /* leave; ret */
+}
+
+/* ================= boolean conditions: and / or / not in when and while =================
+   A condition is `or` (loosest) over `and` over prefix `not` over atoms, with
+   parentheses.  An atom is one numeric expression; a comparison is one atom,
+   so `not a < b` means `not (a < b)`, as in gen2.  Native emits short-circuit
+   jumps.  gen_cond(s,e,jump_if=0,F) jumps to F when the condition is false and
+   falls through when it is true; jump_if=1 jumps when true.  Each atom is
+   tested with `add rax,rax` (ZF iff the double is +-0.0), like a plain when.
+   dry=1 is the pre-pass: it type-checks the atoms and emits nothing. */
+static void jl_add(JL*l,size_t at){
+  if(l->n==l->cap){ l->cap=l->cap?l->cap*2:8; l->a=realloc(l->a,sizeof(size_t)*(size_t)l->cap);
+    if(!l->a){ fprintf(stderr,"native_aot: out of memory\n"); exit(1); } }
+  l->a[l->n++]=at;
+}
+static void jl_add5(JL*l,size_t at){ l->j5=1; jl_add(l,at); }   /* at = a 5-byte jmp rel32 */
+static void jl_patch(JL*l,size_t to){
+  for(int i=0;i<l->n;i++){ if(l->j5) erel32j(l->a[i],to); else erel32(l->a[i],to); }
+  free(l->a); l->a=0; l->n=l->cap=0; l->j5=0;
+}
+/* ---- value-position and / or / not (hold, show, give, assignment) ----
+   A right-hand side with a top-level and/or/not (outside quotes and
+   brackets), or a whole parenthesized group holding one, is a logic value:
+   it is compiled as a condition and yields 1.0 when it holds, else 0.0. */
+static const char*rhs_end(const char*s){
+  int inq=0;
+  for(const char*q=s;*q;q++){
+    if(inq){ if(*q=='\\'&&q[1]) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='\n'||*q=='{'||*q=='}') return q;
+    if(*q=='/'&&q[1]=='/') return q;
+  }
+  return s+strlen(s);
+}
+static int logic_span(const char*s,const char*e){
+  cond_trim(&s,&e);
+  while(s<e&&cond_wrapped(s,e)){ s++; e--; cond_trim(&s,&e); }
+  int depth=0, inq=0;
+  for(const char*q=s;q<e;q++){
+    if(inq){ if(*q=='\\'&&q+1<e) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='('||*q=='[') depth++;
+    else if(*q==')'||*q==']') depth--;
+    else if(depth==0&&id0(*q)&&(q==s||!idc(q[-1]))){
+      const char*r=q; while(r<e&&idc(*r)) r++;
+      int wl=(int)(r-q);
+      if((wl==3&&!strncmp(q,"and",3))||(wl==2&&!strncmp(q,"or",2))||(wl==3&&!strncmp(q,"not",3)))
+        return 1;
+      q=r-1;
+    }
+  }
+  return 0;
+}
+/* the ) matching the ( at o, skipping strings; NULL if unbalanced */
+static const char*paren_close(const char*o){
+  int d=0, inq=0;
+  for(const char*q=o;*q;q++){
+    if(inq){ if(*q=='\\'&&q[1]) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='(') d++;
+    else if(*q==')'){ if(--d==0) return q; }
+  }
+  return 0;
+}
+/* the end of a call argument: the top-level , or ) (strings skipped) */
+static const char*arg_end(const char*s){
+  int d=0, inq=0;
+  for(const char*q=s;*q;q++){
+    if(inq){ if(*q=='\\'&&q[1]) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='('||*q=='[') d++;
+    else if(*q==')'||*q==']'){ if(d==0) return q; d--; }
+    else if(*q==','&&d==0) return q;
+  }
+  return s+strlen(s);
+}
+/* a struct-literal field value: ends at , or } (a logic value is allowed) */
+static const char*fld_end(const char*s){
+  int d=0, inq=0;
+  for(const char*q=s;*q;q++){
+    if(inq){ if(*q=='\\'&&q[1]) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='('||*q=='[') d++;
+    else if(*q==')'||*q==']'){ if(d==0) return q; d--; }
+    else if(*q=='}'){ if(d==0) return q; }
+    else if(*q==','&&d==0) return q;
+  }
+  return s+strlen(s);
+}
+static int fld_pk(const char**p,int depth){
+  sw(p);
+  const char*fe=fld_end(*p);
+  if(logic_span(*p,fe)){
+    JL none={0};
+    gen_cond(*p,fe,0,&none,1,"value");
+    *p=fe;
+    PKX_K=K_NUM; PKX_S=-1;
+    return K_NUM;
+  }
+  return pk_rel(p,depth);
+}
+static void fld_emit(const char**p,int depth){
+  sw(p);
+  const char*fe=fld_end(*p);
+  if(logic_span(*p,fe)){
+    emit_logic(*p,fe);
+    *p=fe;
+    return;
+  }
+  emit_expr(p,depth);
+}
+/* a user-function argument that is an and/or/not logic value */
+static int arg_pk(const char**p,int depth){
+  sw(p);
+  const char*ae=arg_end(*p);
+  if(logic_span(*p,ae)){
+    JL none={0};
+    gen_cond(*p,ae,0,&none,1,"value");
+    *p=ae;
+    PKX_K=K_NUM; PKX_S=-1;
+    return K_NUM;
+  }
+  return pk_rel(p,depth+1);
+}
+static void arg_emit(const char**p,int depth){
+  sw(p);
+  const char*ae=arg_end(*p);
+  if(logic_span(*p,ae)){
+    emit_logic(*p,ae);
+    *p=ae;
+    return;
+  }
+  emit_expr(p,depth+1);
+}
+static int pk_rhs(const char**p){
+  sw(p);
+  const char*s=*p, *e=rhs_end(s);
+  if(logic_span(s,e)){
+    JL none={0};
+    gen_cond(s,e,0,&none,1,"value");
+    *p=e;
+    PKX_K=K_NUM; PKX_S=-1;
+    return K_NUM;
+  }
+  return pk_full(p,0);
+}
+static void emit_logic(const char*s,const char*e){
+  JL fl={0}, done={0};
+  gen_cond(s,e,0,&fl,0,"value");          /* falls through when the logic holds */
+  mov_imm64(AX,dbits(1.0));
+  size_t at=cn; e1(0xe9); e32(0); jl_add5(&done,at);
+  jl_patch(&fl,cn);
+  mov_imm64(AX,dbits(0.0));
+  jl_patch(&done,cn);
+  XK=K_NUM; XS=-1;
+}
+static void emit_rhs(const char**p){
+  sw(p);
+  const char*s=*p, *e=rhs_end(s);
+  if(logic_span(s,e)){
+    emit_logic(s,e);
+    *p=e;
+    return;
+  }
+  emit_expr(p,0);
+}
+
+/* loop frames: break / continue jump sites, patched when the loop ends */
+typedef struct { JL brk, cont; } LoopF;
+static LoopF loops[64];
+static int nloops=0, nfor=0;
+
+/* end of a condition: the first `{` outside strings and brackets */
+static const char*cond_end(const char*p){
+  int d=0;
+  while(*p){
+    if(*p=='"'){ p++; while(*p&&*p!='"'){ if(*p=='\\'&&p[1]) p++; p++; } if(*p) p++; continue; }
+    if(*p=='('||*p=='[') d++;
+    else if(*p==')'||*p==']') d--;
+    else if(*p=='{'&&d<=0) return p;
+    p++;
+  }
+  return p;
+}
+/* first top-level occurrence of the word w in [s,e) (outside strings and brackets) */
+static const char*cond_word(const char*s,const char*e,const char*w){
+  size_t n=strlen(w); int d=0;
+  for(const char*q=s;q<e;q++){
+    if(*q=='"'){ q++; while(q<e&&*q!='"'){ if(*q=='\\'&&q+1<e) q++; q++; } continue; }
+    if(*q=='('||*q=='[') d++;
+    else if(*q==')'||*q==']'){ if(d>0) d--; }
+    else if(d==0&&(q==s||!idc(q[-1]))&&q+n<=e&&!strncmp(q,w,n)&&!(q+n<e&&idc(q[n]))) return q;
+  }
+  return 0;
+}
+/* first top-level ".." in [s,e) (the counting form of for), or NULL */
+static const char*top_dots(const char*s,const char*e){
+  int d=0;
+  for(const char*q=s;q+1<e;q++){
+    if(*q=='"'){ q++; while(q<e&&*q!='"'){ if(*q=='\\'&&q+1<e) q++; q++; } continue; }
+    if(*q=='('||*q=='[') d++;
+    else if(*q==')'||*q==']'){ if(d>0) d--; }
+    else if(d==0&&q[0]=='.'&&q[1]=='.') return q;
+  }
+  return 0;
+}
+/* split [s,e) at each top-level word w: returns the part count (<= max) */
+static int cond_split(const char*s,const char*e,const char*w,const char**ps,const char**pe,int max){
+  size_t n=strlen(w); int k=0; const char*r=s;
+  for(;;){
+    const char*x=cond_word(r,e,w);
+    if(k>=max) errx("condition is too long for the native compiler (more than %d operands)",NULL,NULL);
+    ps[k]=r; pe[k]=x?x:e; k++;
+    if(!x) break;
+    r=x+n;
+  }
+  return k;
+}
+static void cond_trim(const char**s,const char**e){
+  while(*s<*e&&isspace((unsigned char)**s)) (*s)++;
+  while(*e>*s&&isspace((unsigned char)(*e)[-1])) (*e)--;
+}
+/* if s is '(' whose matching ')' is the last character of [s,e), return 1 */
+static int cond_wrapped(const char*s,const char*e){
+  if(s>=e||*s!='(') return 0;
+  int d=0;
+  for(const char*q=s;q<e;q++){
+    if(*q=='"'){ q++; while(q<e&&*q!='"'){ if(*q=='\\'&&q+1<e) q++; q++; } continue; }
+    if(*q=='(') d++;
+    else if(*q==')'){ d--; if(d==0) return q==e-1; }
+  }
+  return 0;
+}
+static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const char*what){
+  cond_trim(&s,&e);
+  if(s>=e) errx("missing operand in %s condition",what,NULL);
+  const char *ps[256], *pe[256]; int k;
+  /* or: true if any operand is true */
+  if((k=cond_split(s,e,"or",ps,pe,256))>1){
+    if(jump_if){ for(int i=0;i<k;i++) gen_cond(ps[i],pe[i],1,out,dry,what); }
+    else {
+      JL tl={0};                       /* any true operand: skip the rest */
+      for(int i=0;i<k-1;i++) gen_cond(ps[i],pe[i],1,&tl,dry,what);
+      gen_cond(ps[k-1],pe[k-1],0,out,dry,what);
+      if(!dry) jl_patch(&tl,cn);
+    }
+    return;
+  }
+  /* and: false if any operand is false */
+  if((k=cond_split(s,e,"and",ps,pe,256))>1){
+    if(!jump_if){ for(int i=0;i<k;i++) gen_cond(ps[i],pe[i],0,out,dry,what); }
+    else {
+      JL fl={0};                       /* any false operand: skip the rest */
+      for(int i=0;i<k-1;i++) gen_cond(ps[i],pe[i],0,&fl,dry,what);
+      gen_cond(ps[k-1],pe[k-1],1,out,dry,what);
+      if(!dry) jl_patch(&fl,cn);
+    }
+    return;
+  }
+  /* not: flips the sense; not binds to the operand that follows it */
+  if(e-s>=3&&!strncmp(s,"not",3)&&(s+3==e||!idc(s[3]))){
+    gen_cond(s+3,e,!jump_if,out,dry,what);
+    return;
+  }
+  /* ( ... ) around the whole operand */
+  if(cond_wrapped(s,e)){ gen_cond(s+1,e-1,jump_if,out,dry,what); return; }
+  /* atom */
+  cond_nest++;
+  if(dry){
+    const char*q=s;
+    int t=pk_full(&q,0);
+    cond_nest--;
+    if(t==K_UNK) errx("cannot infer the type of the condition (it must be a number)",NULL,NULL);
+    if(t!=K_NUM) errx("condition must be a number (got %s)",kname(t));
+    return;
+  }
+  { const char*q=s;
+    emit_expr(&q,0);
+    sw(&q);
+    if(q<e) errx("unexpected text in %s condition (use and, or, not and parentheses between comparisons)",what,NULL);
+    if(XK==K_UNK) errx("cannot infer the type of the %s condition",what,NULL);
+    if(XK!=K_NUM) errx("%s condition must be a number (got %s)",what,kname(XK));
+  }
+  cond_nest--;
+  bin_rr(1,AX,AX);                     /* add rax,rax: ZF iff the double is +-0.0 */
+  { size_t at=cn; jcc_rel32(jump_if?JC_NZ:JC_Z,0); jl_add(out,at); }
+}
+
+/* when COND { .. } [elif COND { .. }]* [otherwise|else { .. } | else when ..].
+   The caller has consumed the `when` keyword (or `elif`). */
+static void emit_when_body(const char**p,int in_fn){
+  const char*ce=cond_end(*p);
+  JL fl={0};                   /* false -> the else part (or past the then body) */
+  gen_cond(*p,ce,0,&fl,0,"when");
+  *p=ce;
+  sw(p);
+  if(**p!='{') errx("when needs { ... }");
+  (*p)++;
+  emit_prog(p,in_fn,1);
+  sw(p);
+  int has_else=0, chain=0;
+  if(mkw(p,"elif")){ has_else=1; chain=1; }
+  else if(mkw(p,"otherwise")||mkw(p,"else")){
+    /* false -> the else part below; the then body must skip over it with an
+       unconditional jump (its instructions destroy the cond flags).  The false
+       jumps must target the FIRST BYTE of the else part, i.e. the offset right
+       after that unconditional jump (see the note in the old when handler). */
+    has_else=1; sw(p);
+    if(mkw(p,"when")||mkw(p,"if")) chain=1;
+  }
+  if(has_else){
+    size_t jmpend_at=cn; jmp_rel32(0);
+    size_t j2=cn;
+    if(chain) emit_when_body(p,in_fn);
+    else {
+      sw(p);
+      if(**p!='{') errx("else needs { ... }");
+      (*p)++;
+      emit_prog(p,in_fn,1);
+    }
+    erel32j(jmpend_at,cn);
+    jl_patch(&fl,j2);
+  } else jl_patch(&fl,cn);
+}
+
+/* for NAME in A..B { }   (numbers; B exclusive)
+   for NAME in XS { }     (XS a list: NAME is each number; a string: each byte)
+   Loop state lives in hidden globals, so for is not allowed inside make
+   (a recursive call would share it), like hold. */
+static int for_var(const char*nm,int kind){
+  int gi=g_decl(nm);
+  if(G[gi].kind==K_UNK){ G[gi].kind=kind; G[gi].sid=-1; }
+  else if(G[gi].kind!=kind) errx("variable '%s' is used with two different types",nm,NULL);
+  return gi;
+}
+static int for_hidden(const char*tag,int id,int kind){
+  char hn[64]; snprintf(hn,sizeof hn,"__for%d_%s",id,tag);
+  int gi=g_decl(hn); G[gi].kind=kind; G[gi].sid=-1; return gi;
+}
+/* compile [s,e) as an expression of its own; returns its kind */
+static int eval_sub(const char*s,const char*e){
+  cond_trim(&s,&e);
+  if(s>=e) errx("for needs a value after 'in'",NULL,NULL);
+  char*t=malloc((size_t)(e-s)+1);
+  if(!t){ fprintf(stderr,"native_aot: out of memory\n"); exit(1); }
+  memcpy(t,s,(size_t)(e-s)); t[e-s]=0;
+  const char*q=t;
+  emit_expr(&q,0);
+  sw(&q);
+  if(*q) errx("unexpected text in the for header",NULL,NULL);
+  free(t);
+  return XK;
+}
+static void emit_for_body(const char**p,int in_fn,int f){
+  sw(p);
+  if(**p!='{') errx("for needs { ... }");
+  (*p)++;
+  emit_prog(p,in_fn,1);
+  (void)f;
+}
+static void emit_for(const char**p,int in_fn){
+  if(cur_fn>=0) errx("for inside make is not in the native subset (the loop state would be shared by recursive calls); use while in make");
+  sw(p);
+  char nm[64];
+  if(!pid(p,nm,64)) errx("for needs a name: for NAME in EXPR { ... }",NULL,NULL);
+  sw(p);
+  if(!mkw(p,"in")) errx("for needs 'in': for NAME in EXPR { ... }",NULL,NULL);
+  const char*he=cond_end(*p);
+  const char*hs=*p, *he2=he;
+  cond_trim(&hs,&he2);
+  int id=nfor++;
+  const char*dots=top_dots(hs,he2);
+  int top_gi, src_gi=-1, idx_gi=-1, end_gi=-1, ttop;
+  size_t top=cn;
+  int mode;                    /* 0 = range, 1 = list, 2 = string */
+  if(dots){
+    mode=0;
+    /* start..end, the start is stored in NAME, the end in a hidden global */
+    int k1=eval_sub(hs,dots); if(k1!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
+    top_gi=for_var(nm,K_NUM);
+    store_global(top_gi);
+    int k2=eval_sub(dots+2,he2); if(k2!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
+    end_gi=for_hidden("end",id,K_NUM);
+    store_global(end_gi);
+    top=cn;
+    load_global(top_gi); movq_xr(0,AX);
+    load_global(end_gi); movq_xr(1,AX);
+    ucomisd(0,1);                       /* name < end  <=>  CF set */
+  } else {
+    int k=eval_sub(hs,he2);
+    if(k==K_LIST){ mode=1; src_gi=for_hidden("src",id,K_LIST); top_gi=for_var(nm,K_NUM); }
+    else if(k==K_STR){ mode=2; src_gi=for_hidden("src",id,K_STR); top_gi=for_var(nm,K_STR); }
+    else errx("for needs a range (a..b), a list or a string (got %s)",kname(k),NULL);
+    store_global(src_gi);
+    idx_gi=for_hidden("idx",id,K_NUM);
+    mov_imm64(AX,dbits(0.0)); store_global(idx_gi);
+    top=cn;
+    /* idx < length */
+    load_global(src_gi);
+    if(mode==1) callb(B_LLEN); else callb(B_STRLEN);
+    emit_i2d(); movq_xr(1,AX);
+    load_global(idx_gi); movq_xr(0,AX);
+    ucomisd(0,1);
+  }
+  JL exits={0};
+  size_t exit_at=cn; jcc_rel32(JC_NBE,0);      /* not (name < end): leave */
+  jl_add(&exits,exit_at);                      /* a 6-byte jcc: kept apart from break (5-byte jmp) */
+  if(mode!=0){
+    /* NAME = src[idx] */
+    load_global(idx_gi); emit_d2i(); mv_rr(SI,AX);
+    load_global(src_gi); mv_rr(DI,AX);
+    if(mode==1) callb(B_LGET);
+    else { callb(B_SGET); callb(B_CHR); }
+    store_global(top_gi);
+  }
+  nloops++;
+  *p=he;                        /* the header is compiled from copies: parse on from its { */
+  emit_for_body(p,in_fn,0);
+  nloops--;
+  /* continue lands on the step */
+  LoopF*lf=&loops[nloops];
+  jl_patch(&lf->cont,cn);
+  if(mode==0){
+    load_global(top_gi); movq_xr(0,AX);
+  } else {
+    load_global(idx_gi); movq_xr(0,AX);
+  }
+  mov_imm64(CX,dbits(1.0)); movq_xr(1,CX); addsd(0,1); movq_rx(AX,0);
+  store_global(mode==0?top_gi:idx_gi);
+  jmp_rel32((int32_t)(top-cn-5));
+  jl_patch(&exits,cn);
+  jl_patch(&lf->brk,cn);
+  (void)ttop; (void)end_gi;
 }
 
 static void emit_prog(const char**p,int in_fn,int stop){
@@ -1621,13 +2229,24 @@ static void emit_prog(const char**p,int in_fn,int stop){
     if(mkw(p,"hold")){
       char nm[64];
       if(!pid(p,nm,64)) errx("hold needs a name");
-      if(cur_fn>=0)
-        errx("hold inside make is not in the native subset (a local would live in the shared data segment and be clobbered by recursion); compute in give expressions, or assign to a global held at the top level");
       sw(p);
-      if(**p!='=') errx("hold needs '='");
+      if(**p!='=') errx("hold needs '='",NULL,NULL);
       (*p)++;
-      int gi=g_decl(nm);
-      emit_expr(p,0);
+      int gi;
+      if(cur_fn>=0){
+        /* a make local: a slot in this call's frame, so recursion gets its own */
+        for(int j=0;j<F[cur_fn].nparam;j++)
+          if(!strcmp(F[cur_fn].params[j],nm)) errx("cannot hold '%s': it is a parameter of make %s",nm,F[cur_fn].name);
+        gi=-1;
+        for(int j=lbase;j<nG;j++) if(!strcmp(G[j].name,nm)){ gi=j; break; }
+        if(gi<0){
+          if(nG>=NSLOT) errx("too many variables (native limit reached)");
+          gi=nG++;
+          snprintf(G[gi].name,64,"%s",nm); G[gi].kind=K_UNK; G[gi].sid=-1;
+          G[gi].off=-8*(F[cur_fn].nparam+1+nloc); nloc++;
+        }
+      } else gi=g_decl(nm);
+      emit_rhs(p);
       int k=XK;
       if(k==K_UNK) errx("cannot infer the type of variable '%s'",nm,NULL);
       if(G[gi].kind==K_UNK){ G[gi].kind=k; G[gi].sid=(k==K_STRUCT)?XS:-1; }
@@ -1644,7 +2263,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
     }
     if(mkw(p,"show")){
       sw(p);
-      emit_expr(p,0);
+      emit_rhs(p);
       if(XK==K_NUM) callb(B_SHOWNUM);
       else if(XK==K_STR) callb(B_PUTSTR);
       else if(XK==K_LIST) callb(B_SHOWLIST);
@@ -1652,54 +2271,39 @@ static void emit_prog(const char**p,int in_fn,int stop){
       endstmt(p);
       continue;
     }
-    if(mkw(p,"when")){
-      emit_expr(p,0);
-      { const char*wo=wordop_at(*p);
-        if(wo) errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",wo,NULL); }
-      if(XK==K_UNK) errx("cannot infer the type of the condition");
-      if(XK!=K_NUM) errx("when condition must be a number (got %s)",kname(XK));
-      bin_rr(1,AX,AX);             /* add rax,rax: ZF iff the double is +-0.0 */
-      size_t jz_at=cn; jcc_rel32(JC_Z,0);
-      sw(p);
-      if(**p!='{') errx("when needs { ... }");
-      (*p)++;
-      emit_prog(p,in_fn,1);
-      sw(p);
-      if(mkw(p,"otherwise")||mkw(p,"else")){
-        /* false -> the else block below; the then body must skip over it with
-           an unconditional jump (its instructions destroy the cond flags).
-           jz_at must target the FIRST BYTE of the else body, i.e. the offset
-           right after that unconditional jump.  It must not target a second
-           conditional jump placed there: control would arrive with the
-           condition's flags still live, so the false case would take that JZ
-           and jump straight past the else body -- silently printing nothing
-           for `when c { .. } else { .. }` when c was false. */
-        size_t jmpend_at=cn; jmp_rel32(0);
-        size_t j2=cn;                      /* else-body entry (no instruction) */
-        sw(p);
-        if(**p!='{') errx("else needs { ... }");
-        (*p)++;
-        emit_prog(p,in_fn,1);
-        erel32j(jmpend_at,cn);
-        erel32(jz_at,j2);
-      } else erel32(jz_at,cn);
+    if(mkw(p,"when")){ emit_when_body(p,in_fn); continue; }
+    if(mkw(p,"elif")) errx("elif without a when before it",NULL,NULL);
+    if(mkw(p,"for")){ emit_for(p,in_fn); continue; }
+    if(mkw(p,"break")){
+      if(nloops==0) errx("break outside a loop",NULL,NULL);
+      size_t at=cn; jmp_rel32(0);
+      jl_add5(&loops[nloops-1].brk,at);
+      endstmt(p);
+      continue;
+    }
+    if(mkw(p,"continue")){
+      if(nloops==0) errx("continue outside a loop",NULL,NULL);
+      size_t at=cn; jmp_rel32(0);
+      jl_add5(&loops[nloops-1].cont,at);
+      endstmt(p);
       continue;
     }
     if(mkw(p,"while")){
       size_t top=cn;
-      emit_expr(p,0);
-      { const char*wo=wordop_at(*p);
-        if(wo) errx("'%s' is a full-language word operator or boolean literal and not in the native subset (native speaks the pure-min expressions; use selfhost/gen2)",wo,NULL); }
-      if(XK==K_UNK) errx("cannot infer the type of the condition");
-      if(XK!=K_NUM) errx("while condition must be a number (got %s)",kname(XK));
-      bin_rr(1,AX,AX);             /* add rax,rax: ZF iff the double is +-0.0 */
-      size_t jz_at=cn; jcc_rel32(JC_Z,0);
+      const char*ce=cond_end(*p);
+      JL fl={0};
+      gen_cond(*p,ce,0,&fl,0,"while");
+      *p=ce;
       sw(p);
       if(**p!='{') errx("while needs { ... }");
       (*p)++;
+      nloops++;
       emit_prog(p,in_fn,1);
+      nloops--;
+      jl_patch(&loops[nloops].cont,top);
       jmp_rel32((int32_t)(top-cn-5));
-      erel32(jz_at,cn);
+      jl_patch(&fl,cn);
+      jl_patch(&loops[nloops].brk,cn);
       continue;
     }
     if(mkw(p,"make")){
@@ -1715,9 +2319,9 @@ static void emit_prog(const char**p,int in_fn,int stop){
     }
     if(mkw(p,"give")){
       if(!in_fn) errx("give outside a make function");
-      emit_expr(p,0);
+      emit_rhs(p);
       if(XK==K_UNK) errx("cannot infer the type of the give value");
-      if(XK!=K_NUM) errx("give must give a number (got %s)",kname(XK));
+      if(XK!=F[cur_fn].rk) errx("give must give %s (got %s)",kname(F[cur_fn].rk),kname(XK),NULL);
       e1(0xc9); e1(0xc3);             /* leave; ret */
       endstmt(p);
       continue;
@@ -1745,7 +2349,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
         }
         if(gi<0&&pi<0) errx("cannot assign to \"%s\" (hold it first)",w,NULL);
         (*p)=q2; (*p)++;
-        emit_expr(p,0);
+        emit_rhs(p);
         if(XK==K_UNK) errx("cannot infer the type of the assignment value");
         if(pi>=0){
           if(XK!=K_NUM) errx("assignment to parameter '%s' must be a number",w,NULL);
@@ -2037,6 +2641,38 @@ static void emit_builtins(void){
     { int32_t dd=(int32_t)(ret_at-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
     pop_r(12); e1(0xc3);
     erel32(jne,zc); erel32(jz,eq);
+  }
+  }
+
+  /* r_strord: rdi=a rsi=b -> rax = -1 / 0 / 1 (the sign of strcmp(a, b)).
+     Bytes are compared as unsigned char, as strcmp does. Used for the string
+     orderings < <= > >=; == and != keep B_CMPSTR. */
+  {
+  builtin_off[B_STRORD]=cn;
+  push_r(12);
+  {
+    size_t L=cn;
+    mvz_rm(AX,DI,-1,0,0);              /* eax = a[i] */
+    mvz_rm(11,SI,-1,0,0);              /* r11d = b[i] */
+    bin_rr(0x39,AX,11);                /* cmp rax, r11 */
+    size_t jne=cn; jcc_rel32(JC_NZ,0); /* differ: decide below */
+    test_rr(AX,AX);
+    size_t jz=cn; jcc_rel32(JC_Z,0);   /* both NUL: equal */
+    incdec_r(1,DI);
+    incdec_r(1,SI);
+    jmp_rel32((int32_t)(L-cn-5));
+    size_t diff=cn;
+    setcc(JC_A,AX); movzx_al_to_rax(); /* flags still from the cmp: rax = a[i] > b[i] */
+    bin_rr(0x01,AX,AX);                /* add rax, rax */
+    mov_imm64(11,1);
+    bin_rr(0x29,AX,11);                /* sub rax, r11 : 2*(0|1) - 1 = -1 or 1 */
+    size_t done_at=cn; jmp_rel32(0);
+    size_t eqc=cn;
+    xor_rr(AX,AX);
+    size_t end=cn;
+    { int32_t dd=(int32_t)(end-(done_at+5)); memcpy(code+done_at+1,&dd,4); }
+    pop_r(12); e1(0xc3);
+    erel32(jne,diff); erel32(jz,eqc);
   }
   }
 
@@ -3157,12 +3793,13 @@ int main(int argc,char**argv){
       char nm[64]; const char*r=q;
       if(mkw(&r,"make")&&pid(&r,nm,64)){
         int fi=f_find(nm);
-        if(fi>=0){ q=r; emit_fn(fi,&q); continue; }
+        if(fi>=0){ q=r; F[fi].body_at=r; emit_fn(fi,&q); continue; }
       }
       q=skip_stmt(line);
     }
   }
 
+  for(int k=0;k<npend;k++){ int j=pend[k]; const char*q=F[F[j].inst_of].body_at; emit_fn(j,&q); }
   emit_builtins();
   emit_gc();
   /* The precise root table: every data word that can hold a heap pointer.

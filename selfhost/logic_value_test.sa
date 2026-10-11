@@ -1,0 +1,34 @@
+// value-position and / or / not: hold, show, give, assignment, parentheses.
+// Each logic value is 1 when it holds and 0 when it does not.
+hold a = 1
+hold b = 0
+hold v = a and b
+show v
+show a or b
+show not a
+hold s = "x and y"
+show s
+hold w = not b and a
+show w
+hold z = a and (b or a)
+show z
+hold p = (a or b)
+show p
+make f(x) {
+  give x or 0
+}
+make g(x) {
+  give not x
+}
+show f(3)
+show g(0)
+hold c = 0
+c = a and a
+show c
+when a and b {
+  show 9
+} otherwise {
+  show 8
+}
+show 1 + (a or b)
+show f(a or 0)

@@ -1,0 +1,26 @@
+// native generics over numbers: make NAME<T> and make NAME<A, B>.
+// Native compiles each type parameter as num; gen2 monomorphises the same
+// program (strings and lists are gen2-only, see docs/GENERICS.md).
+make twice<T>(a: T) -> T {
+  give a
+}
+make pair<A, B>(a: A, b: B) -> A {
+  give a
+}
+make second<A, B>(a: A, b: B) -> B {
+  give b
+}
+make addtwice<T>(a: T) -> T {
+  hold s = twice(a)
+  give s + s
+}
+make mix<A, B>(a: A, b: B) -> B {
+  give second(a, twice(b)) + 1
+}
+show twice(7)
+show pair(1, 2)
+show second(3, 4)
+show twice(twice(3)) + 1
+show addtwice(5)
+show mix(9, 10)
+show twice(2) * pair(3, 4)

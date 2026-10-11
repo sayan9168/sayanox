@@ -14,7 +14,18 @@ Native AOT coverage and intentional differences are documented in
 | `arg_count()` / `arg(i)` | process argument count/value | yes | yes | yes |
 | `read_file(path)` | read a file as a string | yes | yes | yes |
 | `write_file(path, data)` | truncate/write a file; numeric status | yes | yes | yes |
+| `http_get(url)` | HTTP GET body as a string; `""` on any failure | yes | yes | no (refused with an error) |
 | `push(xs, value)` | append a number to a list | yes | yes | yes |
+
+`http_get(url)` is a network read with these fixed rules: GET only, `http://` or
+`https://` only, no redirects, 1,000,000-byte body cap, 10-second timeout, URL
+length at most 3000 and only the characters `A-Za-z0-9 -._~:/?&=%+#@,;`. Any
+failure (404, timeout, refused scheme, bad character) returns `""`. Consecutive
+requests in one process are at least 1 second apart (the rate limit; it is
+built into the runtime, so no program can turn it off). It shells out to `curl`
+(the seed and gen2 runtimes); the native backend refuses it with an explicit
+error. Tested against a local server only by `make test-http-get`. The Sayanox
+crawler `sayascrape/crawl.sa` is the program that uses it (`make test-sayacrawl`).
 
 `len` accepts strings and numeric lists. List indexing is zero-based. String
 indexing returns a numeric byte value; use `chr` when a one-byte string is

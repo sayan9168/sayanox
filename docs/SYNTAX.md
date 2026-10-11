@@ -148,17 +148,28 @@ written with type parameters used by every parameter and the return type`)
 instead of being compiled wrongly.
 
 Generics are a full-language (`gen2`) feature: the seed and the pure-min
-dialect do not read `make NAME<...>` at all, and native rejects it with
-`generics are not in the native subset`. See `make test-generics` and
+dialect do not read `make NAME<...>` at all. Native compiles generics over
+numbers (`make twice<T>(a: T) -> T`, each T is num; `make test-native-generics`)
+and refuses a string or list argument by name. See `make test-generics` and
 [`GENERICS.md`](GENERICS.md).
 
 ## Full-language extras (`gen2` only)
 
 The reference above is the **pure-min dialect**, which seed-min, gen2 and
-native all accept. gen2 additionally accepts the following forms. seed-min
-reports `unknown statement` for them and native names the one it does not
-have (`'for' is a full-language statement ...`, `'and' is a full-language
-word operator or boolean literal ...`), so nothing is ever mis-compiled.
+native all accept. gen2 additionally accepts the following forms. seed-min reports `unknown
+statement` for them. Native accepts `for` over a range, a list and a string,
+`break`/`continue`, `elif`/`else if`/`else when`, `true`/`false`, and `and`,
+`or`, `not` with parentheses **inside `when` and `while` conditions**
+(short-circuit, the same precedence as gen2; `make test-native-lang`,
+`make test-native-cond`). `and`/`or`/`not` are also values in `hold`, `show`,
+`give` and assignment (`hold v = a and b`, `show a or b`, `give x or 0`, and a
+whole parenthesized group `(a or b)`): the value is 1 when the logic holds and
+0 when it does not (`make test-logic-value`). A group such as `1 + (a or b)`
+and a user-function argument such as `f(a or 0)` also work on native. Still
+refused by native: a logic value as a builtin argument (`len(...)` and the
+like) or as a struct field value. A string operand is refused on native;
+gen2 does not type-check it yet. Native also refuses `for` and `hold`
+inside a `make` body (it needs stack frames).
 
 ### Loops over values
 
@@ -231,3 +242,15 @@ The maintained pure-min path does not claim support for every historical
 example. Namespaced exports, a full standard library and portable native AOT
 remain future work. Consult [`FEATURES.md`](FEATURES.md) and
 [`BOOTSTRAP_ROADMAP.md`](BOOTSTRAP_ROADMAP.md).
+
+### Typed signatures
+
+A `make` is either fully typed or fully untyped: `make f(a: num, b: num) -> num`
+or `make f(a, b)`. A partly typed parameter list, or typed parameters without a
+`-> TYPE`, is an error on gen2 and native (`make test-typed-sig`). Native takes
+`num` only; seed-min refuses the typed form.
+
+### List elements
+
+A list literal holds numbers. Each element is a numeric expression: `[a, a + 1, 2 * n]`
+works in a `make` too. A string, list or struct element is refused by name. A parenthesised element such as `[a, (a - 1)]` works on gen2 and native (`make test-list-paren`); `[a, a - 1]` is also fine (`make test-list-expr`).
