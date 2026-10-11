@@ -707,6 +707,8 @@ static const char*paren_close(const char*o);
 static void emit_logic(const char*s,const char*e);
 static int arg_pk(const char**p,int depth);
 static void arg_emit(const char**p,int depth);
+static int fld_pk(const char**p,int depth);
+static void fld_emit(const char**p,int depth);
 static void emit_rhs(const char**p);
 
 static int cur_fn;  /* defined with its value below */
@@ -795,7 +797,7 @@ static int pk_prim(const char**p,int depth){
           if(cnt>=nf) errx("too many fields in struct '%s' literal",n,NULL);
           fi=cnt;
         }
-        int k=pk_rel(p,depth+1);
+        int k=fld_pk(p,depth+1);
         if(k==K_STRUCT&&PKX_S<0) k=K_UNK;
         /* the shared dialect (seed-min and gen2) rejects a list inside a
            struct field and a struct nested from a later declaration; native
@@ -830,7 +832,7 @@ static int pk_prim(const char**p,int depth){
         for(;;){
           sw(p);
           if(**p==')'){ (*p)++; break; }
-          (void)pk_rel(p,depth+1);
+          (void)arg_pk(p,depth);
           nargs++;
           sw(p);
           if(**p==','){ (*p)++; continue; }
@@ -1268,7 +1270,7 @@ static void emit_prim(const char**p,int depth){
           if(cnt>=nf) errx("too many fields in struct '%s' literal",n,NULL);
           fi=cnt;
         }
-        emit_expr(p,depth+1);
+        fld_emit(p,depth+1);
         if(XK==K_LIST)
           errx("struct '%s' field '%s' cannot hold a list (seed-min/gen2 reject this)",S[sid].name,S[sid].f[cnt].name);
         if(XK==K_STRUCT&&XS>=sid)
@@ -1373,7 +1375,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"len")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK==K_LIST) callb(B_LLEN);
     else if(XK==K_STR) callb(B_STRLEN);
     else errx("len takes a string or a list");
@@ -1383,7 +1385,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"chr")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_NUM) errx("chr takes a number");
     emit_d2i();
     callb(B_CHR);
@@ -1392,11 +1394,11 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"sx_index")||!strcmp(n,"index")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("%s takes a string",n,NULL);
     push_r(AX);                    /* stage the string: the index may be a call */
     sw(p); if(**p!=',') errx("%s takes 2 args",n,NULL); (*p)++;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_NUM) errx("%s: the index must be a number",n,NULL);
     emit_d2i();
     mv_rr(SI,AX);
@@ -1409,7 +1411,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
   }
   if(!strcmp(n,"http_get")) errx("http_get is not supported by the native backend yet (use gen2 or the seed)");
   if(!strcmp(n,"read_file")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("read_file takes a string (the path)");
     mv_rr(DI,AX);                  /* B_READFILE takes the path in rdi */
     callb(B_READFILE);
@@ -1418,11 +1420,11 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"write_file")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("write_file takes (path, text)");
     push_r(AX);                    /* stage the path: the text may be a call */
     sw(p); if(**p!=',') errx("write_file takes 2 args",n,NULL); (*p)++;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("write_file takes (path, text)");
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("write_file takes 2 args",n,NULL); (*p)++;
@@ -1433,7 +1435,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"arg")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_NUM) errx("arg takes a number");
     emit_d2i();
     callb(B_ARG);
@@ -1451,11 +1453,11 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"string_eq")||!strcmp(n,"sx_eq")){
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("%s takes 2 strings",n,NULL);
     push_r(AX);                    /* stage a: b may be a call */
     sw(p); if(**p!=',') errx("%s takes 2 args",n,NULL); (*p)++;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_STR) errx("%s takes 2 strings",n,NULL);
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("%s takes 2 args",n,NULL); (*p)++;
@@ -1473,11 +1475,11 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     int gi=(wi>0)?g_find(w):-1;
     const char*q2=q; sw(&q2);
     if(gi>=0&&*q2!=',') gi=-1;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_LIST) errx("push takes (list, number)");
     push_r(AX);                    /* stage the list: the value may be a call */
     sw(p); if(**p!=',') errx("push takes 2 args"); (*p)++;
-    emit_expr(p,0);
+    arg_emit(p,0);
     if(XK!=K_NUM) errx("push takes (list, number)");
     mv_rr(SI,AX);
     sw(p); if(**p!=')') errx("push takes 2 args"); (*p)++;
@@ -1851,6 +1853,41 @@ static const char*arg_end(const char*s){
     else if(*q==','&&d==0) return q;
   }
   return s+strlen(s);
+}
+/* a struct-literal field value: ends at , or } (a logic value is allowed) */
+static const char*fld_end(const char*s){
+  int d=0, inq=0;
+  for(const char*q=s;*q;q++){
+    if(inq){ if(*q=='\\'&&q[1]) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='('||*q=='[') d++;
+    else if(*q==')'||*q==']'){ if(d==0) return q; d--; }
+    else if(*q=='}'){ if(d==0) return q; }
+    else if(*q==','&&d==0) return q;
+  }
+  return s+strlen(s);
+}
+static int fld_pk(const char**p,int depth){
+  sw(p);
+  const char*fe=fld_end(*p);
+  if(logic_span(*p,fe)){
+    JL none={0};
+    gen_cond(*p,fe,0,&none,1,"value");
+    *p=fe;
+    PKX_K=K_NUM; PKX_S=-1;
+    return K_NUM;
+  }
+  return pk_rel(p,depth);
+}
+static void fld_emit(const char**p,int depth){
+  sw(p);
+  const char*fe=fld_end(*p);
+  if(logic_span(*p,fe)){
+    emit_logic(*p,fe);
+    *p=fe;
+    return;
+  }
+  emit_expr(p,depth);
 }
 /* a user-function argument that is an and/or/not logic value */
 static int arg_pk(const char**p,int depth){

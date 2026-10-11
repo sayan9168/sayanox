@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1378,6 +1378,16 @@ test-native-listgen: $(GEN2) $(NATIVE_BIN)
 	@./$(NATIVE_BIN) $(TESTS)/nlg_bad2.sa $(TESTS)/nlg_bad2 2>&1 | grep -q "not in the native subset" || { echo "FAILED: native accepted a struct parameter"; exit 1; }
 	@echo "[OK] native lists as parameters, return values and generic arguments: same output as gen2 (list is passed by reference on both); wrong-kind returns and struct parameters refused"
 
+# test-native-logicarg: and/or/not as builtin arguments and struct field values (native).
+# Hand-computed output. gen2 still refuses these forms (see docs/STATUS.md).
+test-native-logicarg: $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(NATIVE_BIN) selfhost/native_logic_arg_test.sa $(TESTS)/nla_nat
+	./$(TESTS)/nla_nat > $(TESTS)/nla_nat.out
+	@printf '1\n1\nA\nB\nA\n3\n121\nB\n' > $(TESTS)/nla_want.out
+	@cmp $(TESTS)/nla_nat.out $(TESTS)/nla_want.out || { echo "FAILED: native logic values in builtin arguments and struct fields differ from the hand-computed output"; exit 1; }
+	@echo "[OK] native: and/or/not as builtin arguments (chr, len, sx_index) and as struct field values, hand-computed output"
+
 # test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
 # the tests use a local HTTP server on 127.0.0.1.
 # test-http-get: http_get(url) network builtin (GET only, http/https only, 1 MB cap,
@@ -1889,7 +1899,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

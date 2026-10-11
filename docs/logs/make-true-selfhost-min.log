@@ -324,6 +324,9 @@ cc -O2 -o selfhost/seed_tests/nlg_g2 selfhost/seed_tests/nlg_g2.c
 ./selfhost/seed_tests/nlg_nat > selfhost/seed_tests/nlg_nat.out
 ./selfhost/seed_tests/nlg_g2 > selfhost/seed_tests/nlg_g2.out
 [OK] native lists as parameters, return values and generic arguments: same output as gen2 (list is passed by reference on both); wrong-kind returns and struct parameters refused
+./selfhost/native_aot selfhost/native_logic_arg_test.sa selfhost/seed_tests/nla_nat
+./selfhost/seed_tests/nla_nat > selfhost/seed_tests/nla_nat.out
+[OK] native: and/or/not as builtin arguments (chr, len, sx_index) and as struct field values, hand-computed output
 ./selfhost/gen2 selfhost/logic_value_test.sa selfhost/seed_tests/lv_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/lv_g2 selfhost/seed_tests/lv_g2.c
 [OK] and/or/not as values in hold, show, give, assignment and parentheses: gen2 and native agree

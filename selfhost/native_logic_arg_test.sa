@@ -1,0 +1,19 @@
+// Logic values (and / or / not) as builtin arguments and struct field values on native.
+// Hand-computed expected output (see the test-native-logicarg target):
+//   1 / 1 / A / B / A / 3 / 121 / B
+struct Point {
+  x,
+  y
+}
+hold a = 1
+hold b = 0
+hold p = Point { x: a and a, y: b or a }
+show p.x
+show p.y
+show chr(65 + (a and b))
+show chr(65 + (a or b))
+show chr(64 + (a and a))
+show len(concat("ab", "c"))
+hold s = "xyz"
+show sx_index(s, a and a)
+show chr(65 + (not b))
