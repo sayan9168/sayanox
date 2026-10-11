@@ -55,7 +55,7 @@
 #define BASE 0x400000ULL
 #define NSLOT 64
 #define MAXS 32
-#define MAXF 64
+#define MAXF 256
 #define MAXFD 16
 #define MAXP 6
 
@@ -355,11 +355,51 @@ typedef enum { K_NUM=0, K_STR=1, K_LIST=2, K_STRUCT=3 } kind_t;
 typedef struct { char name[64]; int kind; int sid; int off; } Glob;  /* off: BP displacement of a make local, 0 = global */
 typedef struct { char name[64]; int kind; int sid; } Field;
 typedef struct { char name[64]; Field f[MAXFD]; int nf; } SDef;
-typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; int gen; int ntp; char tps[8][64]; int pk[MAXP]; int rk; } Fn;
+typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; int gen; int ntp; char tps[8][64]; int pk[MAXP]; int rk; int ptp[MAXP]; int rtp; const char*body_at; int inst_of; } Fn;
 
 static Glob G[NSLOT]; static int nG;
 static SDef S[MAXS]; static int nS;
 static Fn  F[MAXF]; static int nF;
+/* Generic instances: a generic called with a str argument gets its own
+   copy of the body (kinds bound from the arguments).  Copies are queued and
+   emitted after the top-level scan, so call sites patch to them normally. */
+static int pend[MAXF]; static int npend=0;
+static const char*kname(int k);
+static int last_sig_tp=-1, last_ret_tp=-1;
+/* kinds[i] is the kind of argument i of a call to generic fi.  Every type
+   parameter binds to one kind; a num-only call keeps the base copy. */
+static int pick_instance(int fi,const int*kinds,int nargs){
+  int bind[8]; for(int i=0;i<8;i++) bind[i]=-1;
+  for(int i=0;i<nargs&&i<F[fi].nparam;i++){
+    int t=F[fi].ptp[i]; if(t<0) continue;
+    if(bind[t]<0) bind[t]=kinds[i];
+    else if(bind[t]!=kinds[i]) errx("make %s: one type parameter is given two different kinds",F[fi].name,NULL);
+  }
+  for(int i=0;i<nargs;i++)
+    if(kinds[i]!=K_NUM&&kinds[i]!=K_STR)
+      errx("generics are not in the native subset for lists and structs (arg %d of '%s' is %s; gen2 monomorphises them)",i+1,F[fi].name,kname(kinds[i]));
+  int allnum=1;
+  for(int i=0;i<8;i++) if(bind[i]==K_STR) allnum=0;
+  if(allnum) return fi;
+  int rk=(F[fi].rtp>=0&&bind[F[fi].rtp]>=0)?bind[F[fi].rtp]:K_NUM;
+  int want[MAXP];
+  for(int i=0;i<F[fi].nparam;i++){
+    int t=F[fi].ptp[i];
+    want[i]=(t>=0&&bind[t]>=0)?bind[t]:K_NUM;
+  }
+  for(int j=0;j<nF;j++){
+    if(F[j].inst_of!=fi||F[j].rk!=rk) continue;
+    int same=1;
+    for(int i=0;i<F[fi].nparam;i++) if(F[j].pk[i]!=want[i]) same=0;
+    if(same) return j;
+  }
+  if(nF>=MAXF){ fprintf(stderr,"native_aot: too many functions and generic instances\n"); exit(1); }
+  F[nF]=F[fi];
+  F[nF].gen=0; F[nF].inst_of=fi; F[nF].start=-1; F[nF].rk=rk;
+  for(int i=0;i<F[fi].nparam;i++) F[nF].pk[i]=want[i];
+  pend[npend++]=nF;
+  return nF++;
+}
 
 static int g_find(const char*n){ for(int i=nG-1;i>=0;i--) if(!strcmp(G[i].name,n)) return i; return -1; }
 static int g_decl(const char*n){
@@ -375,28 +415,29 @@ static int g_decl(const char*n){
    compiles a generic for numbers only, so each T is num */
 static char gtp[8][64]; static int ngtp=0;
 static int is_tp(const char*t){ for(int i=0;i<ngtp;i++) if(!strcmp(gtp[i],t)) return 1; return 0; }
+static int tp_index(const char*t){ for(int i=0;i<ngtp;i++) if(!strcmp(gtp[i],t)) return i; return -1; }
 static int last_sig_kind=K_NUM, last_ret_kind=K_NUM;
 static int sig_type(const char**p,const char*nm){
-  last_sig_kind=K_NUM;
+  last_sig_kind=K_NUM; last_sig_tp=-1;
   sw(p);
   if(**p!=':') return 0;
   (*p)++; sw(p);
   char t[64];
   if(!pid(p,t,64)) errx("make %s: expected a type after ':'",nm,NULL);
-  if(is_tp(t)) return 1;
+  if(is_tp(t)){ last_sig_tp=tp_index(t); return 1; }
   if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (a parameter type here must be T or another type parameter)",nm,NULL);
   if(!strcmp(t,"str")){ last_sig_kind=K_STR; return 1; }
   if(strcmp(t,"num")) errx("make %s: parameter type '%s' is not in the native subset (native takes num)",nm,t,NULL);
   return 1;
 }
 static int sig_ret(const char**p,const char*nm){
-  last_ret_kind=K_NUM;
+  last_ret_kind=K_NUM; last_ret_tp=-1;
   sw(p);
   if(!((*p)[0]=='-'&&(*p)[1]=='>')) return 0;
   (*p)+=2; sw(p);
   char t[64];
   if(!pid(p,t,64)) errx("make %s: expected a return type after '->'",nm,NULL);
-  if(is_tp(t)) return 1;
+  if(is_tp(t)){ last_ret_tp=tp_index(t); return 1; }
   if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (the return type here must be T or another type parameter)",nm,NULL);
   if(!strcmp(t,"str")){ last_ret_kind=K_STR; return 1; }
   if(strcmp(t,"num")) errx("make %s: return type '%s' is not in the native subset (native returns num)",nm,t,NULL);
@@ -571,6 +612,8 @@ static void collect_defs(const char*src){
       if(f_find(nm)>=0){ fprintf(stderr,"native_aot: function '%s' declared twice\n",nm); exit(1); }
       if(nF>=MAXF){ fprintf(stderr,"native_aot: too many functions (native limit: %d)\n",MAXF); exit(1); }
       strcpy(F[nF].name,nm); F[nF].nparam=0; F[nF].start=-1; F[nF].gen=0;
+      for(int ii=0;ii<MAXP;ii++) F[nF].ptp[ii]=-1;
+      F[nF].rtp=-1; F[nF].inst_of=-1; F[nF].body_at=NULL;
       int sig_typed=0;
       sw(&p);
       ngtp=0;
@@ -601,6 +644,7 @@ static void collect_defs(const char*src){
         strcpy(F[nF].params[F[nF].nparam++],pm);
         sig_typed+=sig_type(&p,nm);
         F[nF].pk[F[nF].nparam-1]=last_sig_kind;
+        F[nF].ptp[F[nF].nparam-1]=last_sig_tp;
         sw(&p);
         if(*p==','){ p++; continue; }
         if(*p==')'){ p++; break; }
@@ -609,6 +653,7 @@ static void collect_defs(const char*src){
       {
         int sig_ret1=sig_ret(&p,nm);
         F[nF].rk=last_ret_kind;
+        F[nF].rtp=last_ret_tp;
         sig_check(nm,F[nF].nparam,sig_typed,sig_ret1);
         if(F[nF].gen&&(sig_typed!=F[nF].nparam||!sig_ret1))
           errx("make %s<...>: a generic needs a type parameter on every parameter and a return type (-> T)",nm,NULL);
@@ -779,7 +824,7 @@ static int pk_prim(const char**p,int depth){
     if(*q=='('){
       if(is_builtin(n)){
         (*p)=q; (*p)++;
-        int nargs=0;
+        int nargs=0; int kinds_[MAXP];
         for(;;){
           sw(p);
           if(**p==')'){ (*p)++; break; }
@@ -806,13 +851,14 @@ static int pk_prim(const char**p,int depth){
       int fi=f_find(n);
       if(fi>=0){
         (*p)=q; (*p)++;
-        int nargs=0;
+        int nargs=0; int kinds_[MAXP];
         for(;;){
           sw(p);
           if(**p==')'){ (*p)++; break; }
           int k=arg_pk(p,depth);
-          if(k!=K_NUM&&F[fi].gen) errx("generics are not in the native subset for strings and lists (arg %d of '%s' is not a number; gen2 monomorphises them)",nargs+1,n,NULL);
-          { int want=(!F[fi].gen&&nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
+          if(nargs>=MAXP) errx("too many arguments to '%s'",n,NULL);
+          kinds_[nargs]=k;
+          if(!F[fi].gen){ int want=(nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
             if(k!=want&&want==K_NUM) errx("function '%s' takes numbers (arg %d is not a number)",n,nargs+1);
             if(k!=want) errx("function '%s' takes a string (arg %d is not a string)",n,nargs+1); }
           nargs++;
@@ -821,6 +867,7 @@ static int pk_prim(const char**p,int depth){
           if(**p==')'){ (*p)++; break; }
           errx("call needs , or )");
         }
+        if(F[fi].gen) fi=pick_instance(fi,kinds_,nargs);
         if(nargs!=F[fi].nparam) errx("function '%s' takes %d args, got %d",n,F[fi].nparam,nargs);
         PKX_K=F[fi].rk; PKX_S=-1;
         return F[fi].rk;
@@ -1246,13 +1293,14 @@ static void emit_prim(const char**p,int depth){
       int fi=f_find(n);
       if(fi>=0){
         (*p)=q; (*p)++;
-        int nargs=0;
+        int nargs=0; int kinds_[MAXP];
         for(;;){
           sw(p);
           if(**p==')'){ (*p)++; break; }
           arg_emit(p,depth);
-          if(XK!=K_NUM&&F[fi].gen) errx("generics are not in the native subset for strings and lists (arg %d of '%s' is %s; gen2 monomorphises them)",nargs+1,n,kname(XK),NULL);
-          { int want=(!F[fi].gen&&nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
+          if(nargs>=MAXP) errx("too many arguments to '%s'",n,NULL);
+          kinds_[nargs]=XK;
+          if(!F[fi].gen){ int want=(nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
             if(XK!=want&&want==K_NUM) errx("function '%s' takes numbers (arg %d is %s)",n,nargs+1,kname(XK));
             if(XK!=want) errx("function '%s' takes a string (arg %d is %s)",n,nargs+1,kname(XK)); }
           /* every evaluated arg goes on the machine stack: a LATER arg may
@@ -1266,6 +1314,7 @@ static void emit_prim(const char**p,int depth){
           if(**p==')'){ (*p)++; break; }
           errx("call needs , or )");
         }
+        if(F[fi].gen) fi=pick_instance(fi,kinds_,nargs);
         if(nargs!=F[fi].nparam) errx("function '%s' takes %d args, got %d",n,F[fi].nparam,nargs);
         /* pop into the arg registers, last pushed first (pop only writes its
            own register, so no staged arg can be clobbered) */
@@ -3705,12 +3754,13 @@ int main(int argc,char**argv){
       char nm[64]; const char*r=q;
       if(mkw(&r,"make")&&pid(&r,nm,64)){
         int fi=f_find(nm);
-        if(fi>=0){ q=r; emit_fn(fi,&q); continue; }
+        if(fi>=0){ q=r; F[fi].body_at=r; emit_fn(fi,&q); continue; }
       }
       q=skip_stmt(line);
     }
   }
 
+  for(int k=0;k<npend;k++){ int j=pend[k]; const char*q=F[F[j].inst_of].body_at; emit_fn(j,&q); }
   emit_builtins();
   emit_gc();
   /* The precise root table: every data word that can hold a heap pointer.

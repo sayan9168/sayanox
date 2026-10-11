@@ -312,12 +312,18 @@ cc -O2 -o selfhost/seed_tests/nsf_g2 selfhost/seed_tests/nsf_g2.c
 ./selfhost/seed_tests/nsf_nat > selfhost/seed_tests/nsf_nat.out
 ./selfhost/seed_tests/nsf_g2 > selfhost/seed_tests/nsf_g2.out
 [OK] native string parameters and string returns: same output as gen2; number/string mistakes refused
+./selfhost/gen2 selfhost/native_str_gen_test.sa selfhost/seed_tests/nsg_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/nsg_g2 selfhost/seed_tests/nsg_g2.c
+./selfhost/native_aot selfhost/native_str_gen_test.sa selfhost/seed_tests/nsg_nat
+./selfhost/seed_tests/nsg_nat > selfhost/seed_tests/nsg_nat.out
+./selfhost/seed_tests/nsg_g2 > selfhost/seed_tests/nsg_g2.out
+[OK] native generics over str: same output as gen2; two kinds for one type parameter and list arguments are refused
 ./selfhost/gen2 selfhost/logic_value_test.sa selfhost/seed_tests/lv_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/lv_g2 selfhost/seed_tests/lv_g2.c
 [OK] and/or/not as values in hold, show, give, assignment and parentheses: gen2 and native agree
 ./selfhost/gen2 selfhost/native_generics_test.sa selfhost/seed_tests/ng_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/ng_g2 selfhost/seed_tests/ng_g2.c
-[OK] native generics over numbers: make NAME<T> and NAME<A, B>, generic calling generic, gen2 and native agree; untyped generics and string arguments refused by native
+[OK] native generics over numbers: make NAME<T> and NAME<A, B>, generic calling generic, gen2 and native agree; untyped generics and list arguments refused by native (str generics: test-native-strgen)
 [OK] http_get: gen2, seed-min and seed match; native refuses explicitly; local-only, no internet
 [OK] sayacrawl: authorized crawl (robots Disallow, allowlist, relative+absolute links), page cap, depth cap, and refusals (no --authorized, off-host, no robots.txt)
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c

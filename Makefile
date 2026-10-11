@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -716,9 +716,9 @@ test-generics:
 	@diff $(TESTS)/tg_mp.c $(TESTS)/tg_mp_g1.c >/dev/null || { echo "[FAIL] multi-param generics: gen1_min output differs"; exit 1; }
 	$(CC) -O2 -o $(TESTS)/tg_mp_g1 $(TESTS)/tg_mp_g1.c
 	$(call assert-out,./$(TESTS)/tg_mp_g1,1\nx\n1\nx\n1\n3\n5\n3\n3\nhi)
-	@# native refuses a string or list argument to a generic (numbers only)
+	@# native refuses a list argument to a generic (num and str are allowed)
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/tg_mp.sa $(TESTS)/tg_mp_nat 2>&1 | grep -q 'generics are not in the native subset for strings and lists'; then :; \
+	  if ./$(NATIVE_BIN) $(TESTS)/tg_mp.sa $(TESTS)/tg_mp_nat 2>&1 | grep -q 'generics are not in the native subset for lists and structs'; then :; \
 	  else echo "[FAIL] native did not reject make NAME<A, B>"; exit 1; fi; \
 	fi
 	@echo "[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, multi-parameter <A, B> and <A, B, C>, gen2 and gen1_min agree"
@@ -1343,6 +1343,24 @@ test-native-strfn: $(GEN2) $(NATIVE_BIN)
 	@./$(NATIVE_BIN) $(TESTS)/nsf_bad2.sa $(TESTS)/nsf_bad2 2>&1 | grep -q 'give must give a string' || { echo "FAILED: native accepted a number return for a str function"; exit 1; }
 	@echo "[OK] native string parameters and string returns: same output as gen2; number/string mistakes refused"
 
+# test-native-strgen: native generics over str (one copy per call-site kind),
+# gen2 and native must match; two kinds for one type parameter and list args are refused.
+test-native-strgen: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_str_gen_test.sa $(TESTS)/nsg_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nsg_g2 $(TESTS)/nsg_g2.c
+	./$(NATIVE_BIN) selfhost/native_str_gen_test.sa $(TESTS)/nsg_nat
+	./$(TESTS)/nsg_nat > $(TESTS)/nsg_nat.out
+	./$(TESTS)/nsg_g2 > $(TESTS)/nsg_g2.out
+	@printf 'abc\n42\nyo\n7\n5\nnest\n' > $(TESTS)/nsg_want.out
+	@cmp $(TESTS)/nsg_nat.out $(TESTS)/nsg_want.out || { echo "FAILED: native string generics differ from the hand-computed output"; exit 1; }
+	@cmp $(TESTS)/nsg_g2.out $(TESTS)/nsg_want.out || { echo "FAILED: gen2 string generics differ from the hand-computed output"; exit 1; }
+	@printf 'make pair<T>(a: T, b: T) -> T {\n  give a\n}\nshow pair(1, "x")\n' > $(TESTS)/nsg_bad1.sa
+	@./$(NATIVE_BIN) $(TESTS)/nsg_bad1.sa $(TESTS)/nsg_bad1 2>&1 | grep -q 'given two different kinds' || { echo "FAILED: native accepted two kinds for one type parameter"; exit 1; }
+	@printf 'make same_val<T>(x: T) -> T {\n  give x\n}\nhold l = same_val([1, 2])\nshow 1\n' > $(TESTS)/nsg_bad2.sa
+	@./$(NATIVE_BIN) $(TESTS)/nsg_bad2.sa $(TESTS)/nsg_bad2 2>&1 | grep -q 'not in the native subset for lists and structs' || { echo "FAILED: native accepted a list for a generic"; exit 1; }
+	@echo "[OK] native generics over str: same output as gen2; two kinds for one type parameter and list arguments are refused"
+
 # test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
 # the tests use a local HTTP server on 127.0.0.1.
 # test-http-get: http_get(url) network builtin (GET only, http/https only, 1 MB cap,
@@ -1394,9 +1412,11 @@ test-native-generics: $(GEN2) $(NATIVE_BIN)
 	  printf 'make f<T>(a) {\n  give a\n}\nshow f(1)\n' > $(TESTS)/ng_untyped.sa; \
 	  if ./$(NATIVE_BIN) $(TESTS)/ng_untyped.sa $(TESTS)/ng_untyped >/dev/null 2>&1; then echo "[FAIL] native accepted an untyped generic"; exit 1; fi; \
 	  printf 'make f<T>(a: T) -> T {\n  give a\n}\nshow f("x")\n' > $(TESTS)/ng_str.sa; \
-	  if ./$(NATIVE_BIN) $(TESTS)/ng_str.sa $(TESTS)/ng_str >/dev/null 2>&1; then echo "[FAIL] native accepted a string generic"; exit 1; fi; \
+	  ./$(NATIVE_BIN) $(TESTS)/ng_str.sa $(TESTS)/ng_str >/dev/null 2>&1 && $(TESTS)/ng_str | grep -qx x || { echo "[FAIL] native refused a string generic"; exit 1; }; \
+	  printf 'make f<T>(a: T) -> T {\n  give a\n}\nhold l = f([1, 2])\nshow 1\n' > $(TESTS)/ng_list.sa; \
+	  if ./$(NATIVE_BIN) $(TESTS)/ng_list.sa $(TESTS)/ng_list >/dev/null 2>&1; then echo "[FAIL] native accepted a list generic"; exit 1; fi; \
 	fi
-	@echo "[OK] native generics over numbers: make NAME<T> and NAME<A, B>, generic calling generic, gen2 and native agree; untyped generics and string arguments refused by native"
+	@echo "[OK] native generics over numbers: make NAME<T> and NAME<A, B>, generic calling generic, gen2 and native agree; untyped generics and list arguments refused by native (str generics: test-native-strgen)"
 
 # ---------------------------------------------------------------------------
 # test-native-cond: and / or / not, parentheses, in when and while conditions
@@ -1852,7 +1872,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
