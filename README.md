@@ -4,7 +4,7 @@
 
 **File extension: `.sa`** · Bootstrap written in Sayanox itself · Native AOT (x86-64 Linux)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: Sayanox](https://img.shields.io/badge/License-Sayanox%20v1.1-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/Language-Sayanox-blue)](https://github.com/sayan9168/sayanox)
 [![Status](https://img.shields.io/badge/Status-Active%20Development-orange)](docs/STATUS.md)
 
@@ -163,7 +163,9 @@ make native-test
 
 ## License
 
-MIT License © [Sayan Mahata](https://github.com/sayan9168) (Sayan the researcher)
+[Sayanox License v1.1](LICENSE) © [Sayan](https://github.com/sayan9168) (sayan9168)
+
+Full text: [LICENSE](LICENSE) · License home: [sayanox-license](https://github.com/sayan9168/sayanox-license)
 
 ---
 
