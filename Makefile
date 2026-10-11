@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1419,6 +1419,23 @@ test-gen2-logic-builtin: $(GEN2) $(NATIVE_BIN)
 	@cmp $(TESTS)/glb_nat.out $(TESTS)/glb_want.out || { echo "FAILED: native logic operands of numeric builtins differ from the hand-computed output"; exit 1; }
 	@echo "[OK] gen2 and native: and/or/not as operands of len, sx_index and string_eq (hand-computed output)"
 
+# test-struct-logic: and/or/not as struct field values (gen2 hoists them to temporaries)
+# on gen2 and native, hand-computed output; a string operand in a logic field stays refused.
+test-struct-logic: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/struct_logic_test.sa $(TESTS)/sl_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/sl_g2 $(TESTS)/sl_g2.c
+	./$(NATIVE_BIN) selfhost/struct_logic_test.sa $(TESTS)/sl_nat
+	./$(TESTS)/sl_g2 > $(TESTS)/sl_g2.out
+	./$(TESTS)/sl_nat > $(TESTS)/sl_nat.out
+	@printf 'x, and {y}: or\n1\ntail and\n0\n3\n2\n' > $(TESTS)/sl_want.out
+	@cmp $(TESTS)/sl_g2.out $(TESTS)/sl_want.out || { echo "FAILED: gen2 struct field logic values differ from the hand-computed output"; exit 1; }
+	@cmp $(TESTS)/sl_nat.out $(TESTS)/sl_want.out || { echo "FAILED: native struct field logic values differ from the hand-computed output"; exit 1; }
+	@printf 'hold s = "x"\nhold a = 1\nstruct Pair {\n  s,\n  n\n}\nhold q = Pair { s: "k", n: s and a }\nshow q.n\n' > $(TESTS)/sl_bad.sa
+	@./$(GEN2) $(TESTS)/sl_bad.sa $(TESTS)/sl_bad_g2.c >/dev/null 2>&1 || true
+	@grep -q '#error' $(TESTS)/sl_bad_g2.c || { echo "FAILED: a string operand in a struct field logic value must be refused by gen2"; exit 1; }
+	@echo "[OK] gen2 and native: and/or/not as struct field values (hand-computed output); a string operand is refused"
+
 # test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
 # the tests use a local HTTP server on 127.0.0.1.
 # test-http-get: http_get(url) network builtin (GET only, http/https only, 1 MB cap,
@@ -1930,7 +1947,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

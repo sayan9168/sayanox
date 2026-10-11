@@ -1,0 +1,23 @@
+// and/or/not as struct field values (gen2 hoists them; native takes them directly).
+// Hand-computed expected output (see the test-struct-logic target):
+//   x, and {y}: or / 1 / tail and / 0 / 3 / 2
+struct Pair {
+  s,
+  n
+}
+struct Point {
+  x,
+  y
+}
+hold a = 1
+hold b = 0
+hold q = Pair { s: "x, and {y}: or", n: a or b }
+show q.s
+show q.n
+hold r = Pair { s: "tail and", n: b and a }
+show r.s
+show r.n
+hold p = Point { x: (a and a) + 1, y: a or b }
+show p.x + p.y
+hold t = Point { b and a, 2 }
+show t.x + t.y

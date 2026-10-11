@@ -66,6 +66,371 @@ when na >= 3 {
 // ---------------- compiler state ----------------
 hold source = read_file(in_path)
 hold n = len(source)
+// ---------------- struct field logic values (item 8) ----------------
+// `Name { x: a and b }` on gen2: a field value that is an and/or/not expression
+// is moved to `hold sxlgN = <value>` on the line before the literal, and the
+// field is given the name sxlgN.  Only one-line literals with no quotes and no
+// nested braces are rewritten; every other line is passed through unchanged.
+hold lgsrc = concat(source, "\n")
+hold lgsn = len(lgsrc)
+hold lgout = ""
+hold lgln = ""
+hold lgp = 0
+hold lgcount = 0
+hold lgch = 0
+hold lgnew = ""
+hold lgpre = ""
+hold lgll = 0
+hold lgq = 0
+hold lgrun = 1
+hold lgw = ""
+hold lgj = 0
+hold lgbad = 0
+hold lgob = -1
+hold lgcb = -1
+hold lgq2 = 0
+hold lgfound = 0
+hold lgk = 0
+hold lgwd = ""
+hold lgci = 0
+hold lgcc = 0
+hold lgtxt = ""
+hold lgtl = 0
+hold lgi = 0
+hold lgi2 = 0
+hold lgft = ""
+hold lgbody = ""
+hold lgind = ""
+hold lgval = ""
+hold lgfn = ""
+hold lgdig = ""
+hold lgv = 0
+hold lgdr = 1
+hold lgcol = -1
+hold lgfl = 0
+hold lgs0 = 0
+hold lge0 = 0
+hold lgvk = 0
+hold lglab = ""
+hold lgfq = 0
+hold lgfe = 0
+hold lgstop = 0
+hold lgin = 0
+hold lgesc = 0
+while lgp < lgsn {
+  hold lgch = sx_index(lgsrc, lgp)
+  hold lgp = lgp + 1
+  when lgch != 10 {
+    hold lgln = concat(lgln, chr(lgch))
+  } otherwise {
+    hold lgnew = concat(lgln, "\n")
+    hold lgll = len(lgln)
+    hold lgbad = 0
+    hold lgob = -1
+    hold lgcb = -1
+    hold lgfound = 0
+    // indentation, then the first word of the line
+    hold lgq = 0
+    hold lgrun = 1
+    while lgrun == 1 {
+      when lgq >= lgll {
+        hold lgrun = 0
+      } otherwise {
+        when sx_index(lgln, lgq) == 32 {
+          hold lgq = lgq + 1
+        } otherwise {
+          hold lgrun = 0
+        }
+      }
+    }
+    hold lgw = ""
+    hold lgj = lgq
+    hold lgrun = 1
+    while lgrun == 1 {
+      when lgj >= lgll {
+        hold lgrun = 0
+      } otherwise {
+        hold lgch = sx_index(lgln, lgj)
+        when (lgch >= 97 && lgch <= 122) || (lgch >= 65 && lgch <= 90) || (lgch >= 48 && lgch <= 57) || lgch == 95 {
+          hold lgw = concat(lgw, chr(lgch))
+          hold lgj = lgj + 1
+        } otherwise {
+          hold lgrun = 0
+        }
+      }
+    }
+    // the first brace and its closing brace; a quote or a nested brace disqualifies the line
+    hold lgq2 = 0
+    hold lgin = 0
+    hold lgesc = 0
+    while lgq2 < lgll {
+      hold lgch = sx_index(lgln, lgq2)
+      when lgesc == 1 {
+        hold lgesc = 0
+      } otherwise {
+        when lgin == 1 && lgch == 92 {
+          hold lgesc = 1
+        }
+        when lgch == 34 {
+          hold lgin = 1 - lgin
+        }
+        when lgin == 0 && lgch == 123 {
+          when lgob == -1 {
+            hold lgob = lgq2
+          } otherwise {
+            when lgcb == -1 {
+              hold lgbad = 1
+            }
+          }
+        }
+        when lgin == 0 && lgch == 125 && lgob >= 0 && lgcb == -1 {
+          hold lgcb = lgq2
+        }
+      }
+      hold lgq2 = lgq2 + 1
+    }
+    when lgin == 1 {
+      hold lgbad = 1
+    }
+    when sx_eq(lgw, "hold") && lgob >= 0 && lgcb > lgob && lgbad == 0 {
+      hold lgfound = 1
+    }
+    // does the literal contain an and/or/not word at all?
+    when lgfound == 1 {
+      hold lgtxt = ""
+      hold lgi = lgob + 1
+      while lgi < lgcb {
+        hold lgtxt = concat(lgtxt, chr(sx_index(lgln, lgi)))
+        hold lgi = lgi + 1
+      }
+      hold lgk = 0
+      hold lgwd = ""
+      hold lgci = 0
+      hold lgin = 0
+      hold lgesc = 0
+      hold lgtl = len(lgtxt)
+      while lgci <= lgtl {
+        hold lgcc = 0
+        when lgci < lgtl {
+          hold lgcc = sx_index(lgtxt, lgci)
+        }
+        when lgesc == 1 {
+          hold lgesc = 0
+          hold lgwd = ""
+        } otherwise {
+          when lgin == 1 && lgcc == 92 {
+            hold lgesc = 1
+          }
+          when lgcc == 34 {
+            hold lgin = 1 - lgin
+            hold lgwd = ""
+          } otherwise {
+            when lgin == 1 {
+              hold lgwd = ""
+            } otherwise {
+              when (lgcc >= 97 && lgcc <= 122) || (lgcc >= 65 && lgcc <= 90) || (lgcc >= 48 && lgcc <= 57) || lgcc == 95 {
+                hold lgwd = concat(lgwd, chr(lgcc))
+              } otherwise {
+                when sx_eq(lgwd, "and") || sx_eq(lgwd, "or") || sx_eq(lgwd, "not") {
+                  hold lgk = 1
+                }
+                hold lgwd = ""
+              }
+            }
+          }
+        }
+        hold lgci = lgci + 1
+      }
+
+      when lgk == 0 {
+        hold lgfound = 0
+      }
+    }
+    when lgfound == 1 {
+      hold lgpre = ""
+      hold lgind = ""
+      hold lgi = 0
+      while lgi < lgq {
+        hold lgind = concat(lgind, chr(sx_index(lgln, lgi)))
+        hold lgi = lgi + 1
+      }
+      // the text up to and including '{'
+      hold lgnew = ""
+      hold lgi = 0
+      while lgi <= lgob {
+        hold lgnew = concat(lgnew, chr(sx_index(lgln, lgi)))
+        hold lgi = lgi + 1
+      }
+      // the fields, split at top-level commas
+      hold lgft = ""
+      hold lgbody = ""
+      hold lgi = lgob + 1
+      hold lgfq = 0
+      hold lgfe = 0
+      while lgi <= lgcb {
+        hold lgch = 125
+        when lgi < lgcb {
+          hold lgch = sx_index(lgln, lgi)
+        }
+        when lgfe == 1 {
+          hold lgfe = 0
+        } otherwise {
+          when lgfq == 1 && lgch == 92 {
+            hold lgfe = 1
+          }
+          when lgch == 34 {
+            hold lgfq = 1 - lgfq
+          }
+        }
+        when (lgch == 44 && lgfq == 0) || lgi == lgcb {
+          // ---- one field: optional label, then the value ----
+          hold lgcol = -1
+          hold lgfl = len(lgft)
+          hold lgi2 = 0
+          hold lgstop = 0
+          while lgi2 < lgfl {
+            when lgstop == 0 {
+              hold lgcc = sx_index(lgft, lgi2)
+              when lgcc == 58 {
+                hold lgcol = lgi2
+                hold lgstop = 1
+              } otherwise {
+                when (lgcc >= 97 && lgcc <= 122) || (lgcc >= 65 && lgcc <= 90) || (lgcc >= 48 && lgcc <= 57) || lgcc == 95 || lgcc == 32 {
+                } otherwise {
+                  hold lgstop = 1
+                }
+              }
+            }
+            hold lgi2 = lgi2 + 1
+          }
+          hold lgs0 = 0
+          when lgcol >= 0 {
+            hold lgs0 = lgcol + 1
+          }
+          hold lgvk = lgs0
+          hold lgrun = 1
+          while lgrun == 1 {
+            when lgvk >= lgfl {
+              hold lgrun = 0
+            } otherwise {
+              when sx_index(lgft, lgvk) == 32 {
+                hold lgvk = lgvk + 1
+              } otherwise {
+                hold lgrun = 0
+              }
+            }
+          }
+          hold lge0 = lgfl
+          hold lgrun = 1
+          while lgrun == 1 {
+            when lge0 <= lgvk {
+              hold lgrun = 0
+            } otherwise {
+              when sx_index(lgft, lge0 - 1) == 32 {
+                hold lge0 = lge0 - 1
+              } otherwise {
+                hold lgrun = 0
+              }
+            }
+          }
+          hold lgval = ""
+          hold lgi2 = lgvk
+          while lgi2 < lge0 {
+            hold lgval = concat(lgval, chr(sx_index(lgft, lgi2)))
+            hold lgi2 = lgi2 + 1
+          }
+          hold lgtxt = lgval
+          hold lgk = 0
+          hold lgwd = ""
+          hold lgci = 0
+          hold lgin = 0
+          hold lgesc = 0
+          hold lgtl = len(lgtxt)
+          while lgci <= lgtl {
+            hold lgcc = 0
+            when lgci < lgtl {
+              hold lgcc = sx_index(lgtxt, lgci)
+            }
+            when lgesc == 1 {
+              hold lgesc = 0
+              hold lgwd = ""
+            } otherwise {
+              when lgin == 1 && lgcc == 92 {
+                hold lgesc = 1
+              }
+              when lgcc == 34 {
+                hold lgin = 1 - lgin
+                hold lgwd = ""
+              } otherwise {
+                when lgin == 1 {
+                  hold lgwd = ""
+                } otherwise {
+                  when (lgcc >= 97 && lgcc <= 122) || (lgcc >= 65 && lgcc <= 90) || (lgcc >= 48 && lgcc <= 57) || lgcc == 95 {
+                    hold lgwd = concat(lgwd, chr(lgcc))
+                  } otherwise {
+                    when sx_eq(lgwd, "and") || sx_eq(lgwd, "or") || sx_eq(lgwd, "not") {
+                      hold lgk = 1
+                    }
+                    hold lgwd = ""
+                  }
+                }
+              }
+            }
+            hold lgci = lgci + 1
+          }
+
+          when lgk == 1 {
+            hold lgcount = lgcount + 1
+            // the name sxlgN, N in decimal
+            hold lgdig = ""
+            hold lgv = lgcount
+            hold lgdr = 1
+            while lgdr == 1 {
+              hold lgdig = concat(chr(48 + lgv % 10), lgdig)
+              hold lgv = (lgv - lgv % 10) / 10
+              when lgv < 1 {
+                hold lgdr = 0
+              }
+            }
+            hold lgfn = concat("sxlg", lgdig)
+            hold lgpre = concat(lgpre, concat(lgind, concat("hold ", concat(lgfn, concat(" = ", concat(lgval, "\n"))))))
+            hold lglab = ""
+            when lgcol >= 0 {
+              hold lgi2 = 0
+              while lgi2 <= lgcol {
+                hold lglab = concat(lglab, chr(sx_index(lgft, lgi2)))
+                hold lgi2 = lgi2 + 1
+              }
+              hold lglab = concat(lglab, " ")
+            }
+            hold lgbody = concat(lgbody, concat(lglab, lgfn))
+          } otherwise {
+            hold lgbody = concat(lgbody, lgft)
+          }
+          hold lgft = ""
+          when lgi < lgcb {
+            hold lgbody = concat(lgbody, ",")
+          }
+        } otherwise {
+          hold lgft = concat(lgft, chr(lgch))
+        }
+        hold lgi = lgi + 1
+      }
+      hold lgnew = concat(lgnew, lgbody)
+      // the text after '}' (the '}' itself is at lgcb)
+      hold lgi = lgcb
+      while lgi < lgll {
+        hold lgnew = concat(lgnew, chr(sx_index(lgln, lgi)))
+        hold lgi = lgi + 1
+      }
+      hold lgnew = concat(concat(lgpre, lgnew), "\n")
+    }
+    hold lgout = concat(lgout, lgnew)
+    hold lgln = ""
+  }
+}
+hold source = lgout
+hold n = len(source)
 hold pos = 0
 
 // =====================================================================
