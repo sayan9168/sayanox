@@ -90,7 +90,7 @@ cc -O2 -o selfhost/seed_tests/std_g2 selfhost/seed_tests/std_g2.c
 [OK] tiny stdlib via use: seed-min == gen2 (== native when built) on 30 numeric helpers
 ./selfhost/gen2 selfhost/seed_tests/std_sl.sa selfhost/seed_tests/std_sl.c >/dev/null
 cc -O2 -Wall -o selfhost/seed_tests/std_sl selfhost/seed_tests/std_sl.c 2>selfhost/seed_tests/std_sl.warn
-[OK] stdlib str/list/file modules on gen2 (typed parameters); seed-min and native refuse them with a clear error
+[OK] stdlib str/list/file modules on gen2 (typed parameters); native runs them with the same output; seed-min refuses them with a clear error
 ./selfhost/seed/sxc_seed_min selfhost/minimal_lexer.sa > selfhost/seed_tests/stage2_lexer_sm.c
 cc -O2 -o selfhost/seed_tests/stage2_lexer_sm selfhost/seed_tests/stage2_lexer_sm.c
 ./selfhost/gen2 selfhost/minimal_lexer.sa selfhost/seed_tests/stage2_lexer_g2.c >/dev/null

@@ -376,10 +376,10 @@ static int pick_instance(int fi,const int*kinds,int nargs){
     else if(bind[t]!=kinds[i]) errx("make %s: one type parameter is given two different kinds",F[fi].name,NULL);
   }
   for(int i=0;i<nargs;i++)
-    if(kinds[i]!=K_NUM&&kinds[i]!=K_STR)
-      errx("generics are not in the native subset for lists and structs (arg %d of '%s' is %s; gen2 monomorphises them)",i+1,F[fi].name,kname(kinds[i]));
+    if(kinds[i]!=K_NUM&&kinds[i]!=K_STR&&kinds[i]!=K_LIST)
+      errx("generics are not in the native subset for structs (arg %d of '%s' is %s; gen2 monomorphises them)",i+1,F[fi].name,kname(kinds[i]));
   int allnum=1;
-  for(int i=0;i<8;i++) if(bind[i]==K_STR) allnum=0;
+  for(int i=0;i<8;i++) if(bind[i]==K_STR||bind[i]==K_LIST) allnum=0;
   if(allnum) return fi;
   int rk=(F[fi].rtp>=0&&bind[F[fi].rtp]>=0)?bind[F[fi].rtp]:K_NUM;
   int want[MAXP];
@@ -427,6 +427,7 @@ static int sig_type(const char**p,const char*nm){
   if(is_tp(t)){ last_sig_tp=tp_index(t); return 1; }
   if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (a parameter type here must be T or another type parameter)",nm,NULL);
   if(!strcmp(t,"str")){ last_sig_kind=K_STR; return 1; }
+  if(!strcmp(t,"list")){ last_sig_kind=K_LIST; return 1; }
   if(strcmp(t,"num")) errx("make %s: parameter type '%s' is not in the native subset (native takes num)",nm,t,NULL);
   return 1;
 }
@@ -440,6 +441,7 @@ static int sig_ret(const char**p,const char*nm){
   if(is_tp(t)){ last_ret_tp=tp_index(t); return 1; }
   if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (the return type here must be T or another type parameter)",nm,NULL);
   if(!strcmp(t,"str")){ last_ret_kind=K_STR; return 1; }
+  if(!strcmp(t,"list")){ last_ret_kind=K_LIST; return 1; }
   if(strcmp(t,"num")) errx("make %s: return type '%s' is not in the native subset (native returns num)",nm,t,NULL);
   return 1;
 }
@@ -860,7 +862,7 @@ static int pk_prim(const char**p,int depth){
           kinds_[nargs]=k;
           if(!F[fi].gen){ int want=(nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
             if(k!=want&&want==K_NUM) errx("function '%s' takes numbers (arg %d is not a number)",n,nargs+1);
-            if(k!=want) errx("function '%s' takes a string (arg %d is not a string)",n,nargs+1); }
+            if(k!=want) errx("function '%s' takes %s (arg %d is %s)",n,kname(want),nargs+1,kname(k)); }
           nargs++;
           sw(p);
           if(**p==','){ (*p)++; continue; }
@@ -1080,7 +1082,7 @@ static void infer(const char*src){
     } else if(mkw(&rp,"give")){
       int k=pk_rhs(&rp);
       if(k==K_UNK) errx("cannot infer the type of the give value");
-      if(k!=(cur_fn>=0?F[cur_fn].rk:K_NUM)) errx((cur_fn>=0&&F[cur_fn].rk==K_STR)?"give must give a string (got %s)":"give must give a number (got %s)",kname(k),NULL);
+      if(k!=(cur_fn>=0?F[cur_fn].rk:K_NUM)) errx("give must give %s (got %s)",kname(cur_fn>=0?F[cur_fn].rk:K_NUM),kname(k),NULL);
     } else {
       char w[64]; const char*r2=rp; int wi=0;
       while(idc(*r2)&&wi+1<64) w[wi++]=*r2++; w[wi]=0;
@@ -1302,7 +1304,7 @@ static void emit_prim(const char**p,int depth){
           kinds_[nargs]=XK;
           if(!F[fi].gen){ int want=(nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
             if(XK!=want&&want==K_NUM) errx("function '%s' takes numbers (arg %d is %s)",n,nargs+1,kname(XK));
-            if(XK!=want) errx("function '%s' takes a string (arg %d is %s)",n,nargs+1,kname(XK)); }
+            if(XK!=want) errx("function '%s' takes %s (arg %d is %s)",n,kname(want),nargs+1,kname(XK)); }
           /* every evaluated arg goes on the machine stack: a LATER arg may
              itself be a call (user function, or a builtin whose malloc maps
              a fresh chunk), which clobbers the arg registers -- staging in
@@ -2282,7 +2284,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
       if(!in_fn) errx("give outside a make function");
       emit_rhs(p);
       if(XK==K_UNK) errx("cannot infer the type of the give value");
-      if(XK!=F[cur_fn].rk) errx(F[cur_fn].rk==K_NUM?"give must give a number (got %s)":"give must give a string (got %s)",kname(XK),NULL);
+      if(XK!=F[cur_fn].rk) errx("give must give %s (got %s)",kname(F[cur_fn].rk),kname(XK),NULL);
       e1(0xc9); e1(0xc3);             /* leave; ret */
       endstmt(p);
       continue;
