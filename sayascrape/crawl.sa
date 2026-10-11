@@ -1,0 +1,513 @@
+// sayascrape/crawl.sa -- a small crawler written in Sayanox (gen2, full language).
+//
+// This is the Sayanox counterpart of the Python `sayascrape` package. The same
+// rules apply:
+//   * authorized targets only: the program does nothing unless `--authorized`
+//     is the first option, and it crawls only the one ALLOWED_HOST given;
+//   * robots.txt is fetched first and respected for `User-agent: *` and
+//     `User-agent: sayanox` groups; there is no option to turn that off;
+//   * robots.txt that is empty or cannot be fetched is treated as a refusal
+//     (fail closed). http_get returns "" for both "404" and "network error",
+//     so the crawl stops in both cases;
+//   * page and depth caps: MAX_PAGES (1..50, default 20), MAX_DEPTH (0..5,
+//     default 2);
+//   * one request per second: http_get itself waits at least 1 s between
+//     requests in the same process;
+//   * HTML links: absolute http(s) URLs and root- or path-relative hrefs
+//     (double or single quoted) are resolved. Only the allowed host is queued.
+//
+// Build and run (gen2 compiles this file to C):
+//   selfhost/gen2 sayascrape/crawl.sa crawl.c && cc -O2 -o crawl crawl.c -lm
+//   ./crawl --authorized http://HOST:PORT/index.html HOST:PORT [MAX_PAGES] [MAX_DEPTH]
+//
+// Limits (on purpose): no exit status (gen2 has no `exit`), so a refusal is a
+// REFUSED line on stdout with no requests after it; no native backend (typed
+// `str` functions are gen2-only); no cookies, POST, JavaScript or form
+// handling.
+//
+// Output: one FETCH / SKIP / FAILED line per URL, then DONE.
+
+make ws(c: num) -> num {
+  hold r = 0
+  when c == 32 {
+    hold r = 1
+  }
+  when c == 9 {
+    hold r = 1
+  }
+  when c == 13 {
+    hold r = 1
+  }
+  give r
+}
+
+make lower_c(c: num) -> num {
+  hold r = c
+  when c >= 65 {
+    when c <= 90 {
+      hold r = c + 32
+    }
+  }
+  give r
+}
+
+make lower(s: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold out = concat(out, chr(lower_c(sx_index(s, i))))
+    hold i = i + 1
+  }
+  give out
+}
+
+// 1 when `needle` occurs in `hay` at position i, else 0.
+make sub_at(hay: str, i: num, needle: str) -> num {
+  hold n = len(needle)
+  hold ok = 1
+  when i < 0 {
+    hold ok = 0
+  }
+  when i + n > len(hay) {
+    hold ok = 0
+  }
+  hold k = 0
+  while k < n {
+    when ok == 1 {
+      when sx_index(hay, i + k) != sx_index(needle, k) {
+        hold ok = 0
+      }
+    }
+    hold k = k + 1
+  }
+  give ok
+}
+
+// First index of `needle` in `hay` at or after `start_at`, or -1.
+make find(hay: str, needle: str, start_at: num) -> num {
+  hold res = 0 - 1
+  hold i = start_at
+  when start_at < 0 {
+    hold i = 0
+  }
+  while i + len(needle) <= len(hay) {
+    when res < 0 {
+      when sub_at(hay, i, needle) == 1 {
+        hold res = i
+      }
+    }
+    hold i = i + 1
+  }
+  give res
+}
+
+// Bytes a..b-1 of s.
+make substr(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    when i >= 0 {
+      when i < len(s) {
+        hold out = concat(out, chr(sx_index(s, i)))
+      }
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// Index of the newline at or after a, or len(s) when there is none.
+make line_end(s: str, a: num) -> num {
+  hold i = a
+  hold done = 0
+  while done == 0 {
+    when i >= len(s) {
+      hold done = 1
+    }
+    when done == 0 {
+      when sx_index(s, i) == 10 {
+        hold done = 1
+      }
+    }
+    when done == 0 {
+      hold i = i + 1
+    }
+  }
+  give i
+}
+
+make num_str(n: num) -> str {
+  hold out = ""
+  hold v = n
+  when v == 0 {
+    hold out = "0"
+  }
+  while v > 0 {
+    hold out = concat(chr(48 + v % 10), out)
+    hold v = (v - v % 10) / 10
+  }
+  give out
+}
+
+make count_lines(s: str) -> num {
+  hold n = 0
+  hold i = 0
+  while i < len(s) {
+    when sx_index(s, i) == 10 {
+      hold n = n + 1
+    }
+    hold i = i + 1
+  }
+  give n
+}
+
+make to_num(s: str) -> num {
+  hold r = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c >= 48 {
+      when c <= 57 {
+        hold r = r * 10 + (c - 48)
+      }
+    }
+    hold i = i + 1
+  }
+  give r
+}
+
+make trim(s: str) -> str {
+  hold a = 0
+  hold b = len(s)
+  hold go = 1
+  while go == 1 {
+    hold go = 0
+    when a < b {
+      when ws(sx_index(s, a)) == 1 {
+        hold a = a + 1
+        hold go = 1
+      }
+    }
+  }
+  hold go = 1
+  while go == 1 {
+    hold go = 0
+    when b > a {
+      when ws(sx_index(s, b - 1)) == 1 {
+        hold b = b - 1
+        hold go = 1
+      }
+    }
+  }
+  give substr(s, a, b)
+}
+
+make strip_comment(s: str) -> str {
+  hold out = s
+  hold p = find(s, "#", 0)
+  when p >= 0 {
+    hold out = substr(s, 0, p)
+  }
+  give out
+}
+
+// scheme://host of a URL (the text before the first "/" after "://").
+make origin_of(url: str) -> str {
+  hold p = find(url, "://", 0)
+  hold start = 0
+  when p >= 0 {
+    hold start = p + 3
+  }
+  hold e = find(url, "/", start)
+  when e < 0 {
+    hold e = len(url)
+  }
+  give substr(url, 0, e)
+}
+
+// host[:port] of a URL.
+make host_of(url: str) -> str {
+  hold o = origin_of(url)
+  hold p = find(o, "://", 0)
+  hold start = 0
+  when p >= 0 {
+    hold start = p + 3
+  }
+  give substr(o, start, len(o))
+}
+
+// path plus query, without the fragment; "/" when empty.
+make path_of(url: str) -> str {
+  hold o = origin_of(url)
+  hold rest = substr(url, len(o), len(url))
+  hold h = find(rest, "#", 0)
+  when h >= 0 {
+    hold rest = substr(rest, 0, h)
+  }
+  when len(rest) == 0 {
+    hold rest = "/"
+  }
+  give rest
+}
+
+// Directory of a URL, ending in "/" (scheme://host/dir/).
+make dir_of(base: str) -> str {
+  hold p = path_of(base)
+  hold q = find(p, "?", 0)
+  when q >= 0 {
+    hold p = substr(p, 0, q)
+  }
+  hold k = len(p) - 1
+  hold go = 1
+  while go == 1 {
+    hold go = 0
+    when k > 0 {
+      when sx_index(p, k) != 47 {
+        hold k = k - 1
+        hold go = 1
+      }
+    }
+  }
+  give concat(origin_of(base), substr(p, 0, k + 1))
+}
+
+// Absolute URL for an href found on the page `base`, or "" when the link
+// is not http(s), is protocol-relative, mailto:, javascript:, or a bare #.
+make resolve(base: str, href: str) -> str {
+  hold out = ""
+  when sub_at(href, 0, "http://") == 1 {
+    hold out = href
+  }
+  when sub_at(href, 0, "https://") == 1 {
+    hold out = href
+  }
+  when len(href) > 0 {
+    when sub_at(href, 0, "/") == 1 {
+      when sub_at(href, 1, "/") == 0 {
+        hold out = concat(origin_of(base), href)
+      }
+    }
+  }
+  when len(href) > 0 {
+    when sub_at(href, 0, "/") == 0 {
+      when sub_at(href, 0, "#") == 0 {
+        when find(href, ":", 0) < 0 {
+          hold out = concat(dir_of(base), href)
+        }
+      }
+    }
+  }
+  hold h = find(out, "#", 0)
+  when h >= 0 {
+    hold out = substr(out, 0, h)
+  }
+  give out
+}
+
+// Robots Disallow prefixes that apply to `*` or `sayanox`, one per line.
+make rules_of(robots: str) -> str {
+  hold out = ""
+  hold applies = 0
+  hold v = ""
+  hold i = 0
+  while i < len(robots) {
+    hold e = line_end(robots, i)
+    hold raw = trim(strip_comment(substr(robots, i, e)))
+    hold ln = lower(raw)
+    when sub_at(ln, 0, "user-agent:") == 1 {
+      hold v = lower(trim(substr(raw, 11, len(raw))))
+      hold applies = 0
+      when string_eq(v, "*") == 1 {
+        hold applies = 1
+      }
+      when string_eq(v, "sayanox") == 1 {
+        hold applies = 1
+      }
+    }
+    when sub_at(ln, 0, "disallow:") == 1 {
+      when applies == 1 {
+        hold v = trim(substr(raw, 9, len(raw)))
+        when len(v) > 0 {
+          hold out = concat(out, concat(v, chr(10)))
+        }
+      }
+    }
+    hold i = e + 1
+  }
+  give out
+}
+
+// 1 when `path` is not under any rule in `rules`.
+make allowed(path: str, rules: str) -> num {
+  hold ok = 1
+  hold i = 0
+  while i < len(rules) {
+    hold e = line_end(rules, i)
+    hold r = substr(rules, i, e)
+    when len(r) > 0 {
+      when sub_at(path, 0, r) == 1 {
+        hold ok = 0
+      }
+    }
+    hold i = e + 1
+  }
+  give ok
+}
+
+// Every http(s) link in `html`, resolved against `base`, one per line.
+make extract(html: str, base: str) -> str {
+  hold out = ""
+  hold p = find(html, "href=", 0)
+  while p >= 0 {
+    hold qc = 0
+    when p + 5 < len(html) {
+      hold qc = sx_index(html, p + 5)
+    }
+    hold prev_ok = 0
+    when p == 0 {
+      hold prev_ok = 1
+    }
+    when p > 0 {
+      when ws(sx_index(html, p - 1)) == 1 {
+        hold prev_ok = 1
+      }
+    }
+    hold qv = 0
+    when qc == 34 {
+      hold qv = 1
+    }
+    when qc == 39 {
+      hold qv = 1
+    }
+    when prev_ok == 1 {
+      when qv == 1 {
+        hold e = find(html, chr(qc), p + 6)
+        when e >= 0 {
+          hold r = resolve(base, trim(substr(html, p + 6, e)))
+          when len(r) > 0 {
+            hold out = concat(out, concat(r, chr(10)))
+          }
+        }
+      }
+    }
+    hold p = find(html, "href=", p + 5)
+  }
+  give out
+}
+
+// ---------------------------------------------------------------- main
+
+hold argn = arg_count()
+hold authorized = 0
+when argn >= 4 {
+  when string_eq(arg(1), "--authorized") == 1 {
+    hold authorized = 1
+  }
+}
+
+when authorized == 0 {
+  show "REFUSED: usage: crawl --authorized START_URL ALLOWED_HOST [MAX_PAGES] [MAX_DEPTH]"
+  show "REFUSED: --authorized, START_URL and ALLOWED_HOST are all required; no request was made"
+}
+
+when authorized == 1 {
+  hold start = arg(2)
+  hold host = arg(3)
+  hold max_pages = 20
+  hold max_depth = 2
+  when argn >= 5 {
+    hold max_pages = to_num(arg(4))
+  }
+  when argn >= 6 {
+    hold max_depth = to_num(arg(5))
+  }
+  when max_pages < 1 {
+    hold max_pages = 1
+  }
+  when max_pages > 50 {
+    hold max_pages = 50
+  }
+  when max_depth > 5 {
+    hold max_depth = 5
+  }
+  hold scheme_ok = 0
+  when sub_at(start, 0, "http://") == 1 {
+    hold scheme_ok = 1
+  }
+  when sub_at(start, 0, "https://") == 1 {
+    hold scheme_ok = 1
+  }
+  hold go = 1
+  when scheme_ok == 0 {
+    hold go = 0
+    show "REFUSED: START_URL must be http:// or https://"
+  }
+  when go == 1 {
+    when string_eq(host_of(start), host) == 0 {
+      hold go = 0
+      show "REFUSED: START_URL is not on ALLOWED_HOST"
+    }
+  }
+  when go == 1 {
+    hold robots_url = concat(origin_of(start), "/robots.txt")
+    hold robots = http_get(robots_url)
+    when len(robots) == 0 {
+      hold go = 0
+      show concat("REFUSED: robots.txt missing, empty or unreachable at ", robots_url)
+    }
+    when len(robots) > 0 {
+      hold rules = rules_of(robots)
+      show concat("ROBOTS: ", robots_url)
+      hold seen = concat(chr(10), concat(start, chr(10)))
+      hold cur = concat(start, chr(10))
+      hold depth = 0
+      hold count = 0
+      while len(cur) > 0 and depth <= max_depth {
+        hold nxt = ""
+        hold i = 0
+        while i < len(cur) {
+          hold e = line_end(cur, i)
+          hold u = substr(cur, i, e)
+          hold i = e + 1
+          when len(u) > 0 {
+            when count < max_pages {
+              when allowed(path_of(u), rules) == 0 {
+                show concat("SKIP robots: ", u)
+              }
+              when allowed(path_of(u), rules) == 1 {
+                hold body = http_get(u)
+                when len(body) == 0 {
+                  show concat("FAILED: ", u)
+                }
+                when len(body) > 0 {
+                  hold count = count + 1
+                  hold links = extract(body, u)
+                  show concat("FETCH depth=", concat(num_str(depth), concat(" links=", concat(num_str(count_lines(links)), concat(" ", u)))))
+                  hold j = 0
+                  while j < len(links) {
+                    hold le = line_end(links, j)
+                    hold lk = substr(links, j, le)
+                    hold j = le + 1
+                    when len(lk) > 0 {
+                      when string_eq(host_of(lk), host) == 1 {
+                        when find(seen, concat(chr(10), concat(lk, chr(10))), 0) < 0 {
+                          hold seen = concat(seen, concat(lk, chr(10)))
+                          when depth < max_depth {
+                            hold nxt = concat(nxt, concat(lk, chr(10)))
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        hold cur = nxt
+        hold depth = depth + 1
+      }
+      show concat("DONE pages=", num_str(count))
+    }
+  }
+}

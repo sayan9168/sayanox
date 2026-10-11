@@ -81,3 +81,34 @@ not stopping the crawl, JSON-lines export, and HTML parsing.
 * HTML parsing is `html.parser`-based. There is no CSS or XPath engine.
   `find()` covers tag and attribute or class lookups.
 * No persistent job queue, so a crawl cannot resume after a restart.
+
+## Sayanox crawler (`sayascrape/crawl.sa`)
+
+The same rules, written in Sayanox. It is a gen2 (full-language) program: it
+uses typed `str` helper functions, which the pure-min seed and native backend do
+not accept. It fetches pages with the `http_get` builtin (see
+[`BUILTINS.md`](BUILTINS.md)).
+
+```sh
+selfhost/gen2 sayascrape/crawl.sa crawl.c && cc -O2 -o crawl crawl.c -lm
+./crawl --authorized http://HOST:PORT/index.html HOST:PORT [MAX_PAGES] [MAX_DEPTH]
+```
+
+- `--authorized` must be the first option. Without it, or without both the
+  start URL and `ALLOWED_HOST`, the program prints a `REFUSED` line and makes no
+  request. There is no option to turn robots.txt off.
+- Only `ALLOWED_HOST` (exact `host[:port]`) is crawled; other links are ignored.
+- robots.txt is fetched first. Its `User-agent: *` and `User-agent: sayanox`
+  groups' `Disallow` prefixes are respected. An empty, missing or unreachable
+  robots.txt stops the crawl (`REFUSED`), because `http_get` returns `""` for both
+  a 404 and a network error.
+- `MAX_PAGES` (1..50, default 20) and `MAX_DEPTH` (0..5, default 2) are caps.
+- One request per second: `http_get` waits at least 1 s between requests.
+- Output: `ROBOTS:`, `FETCH depth=D links=N URL`, `SKIP robots: URL`,
+  `FAILED: URL`, then `DONE pages=N`.
+
+Differences from the Python package: there is no exit status (gen2 has no
+`exit`), so refusals are read from stdout; a site without robots.txt is refused,
+where the Python version allows it on 404; there are no retries, cookies, POST
+or JavaScript. Test: `make test-sayacrawl` (a local server only, exact output
+for the crawl, the caps and each refusal).

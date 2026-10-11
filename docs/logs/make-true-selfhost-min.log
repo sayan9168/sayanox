@@ -307,6 +307,7 @@ cc -O2 -o selfhost/seed_tests/lv_g2 selfhost/seed_tests/lv_g2.c
 cc -O2 -o selfhost/seed_tests/ng_g2 selfhost/seed_tests/ng_g2.c
 [OK] native generics over numbers: make NAME<T> and NAME<A, B>, generic calling generic, gen2 and native agree; untyped generics and string arguments refused by native
 [OK] http_get: gen2, seed-min and seed match; native refuses explicitly; local-only, no internet
+[OK] sayacrawl: authorized crawl (robots Disallow, allowlist, relative+absolute links), page cap, depth cap, and refusals (no --authorized, off-host, no robots.txt)
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded

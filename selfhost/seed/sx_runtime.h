@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
+#include <time.h>
 
 typedef struct { size_t refs; size_t len; char data[1]; } SxStrHdr;
 typedef struct { size_t refs; size_t n, cap; double *v; } SxList;
@@ -214,6 +215,7 @@ static double sx_b_read_file(double v){ char*p=sx_upack(v);
   fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
   char*b=malloc((size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f);
   char*r=sx_alloc_str(b,rd); free(b); return sx_pack(r); }
+static struct timespec sx_http_last; static int sx_http_seen=0;
 static double sx_b_http_get(double v){ char*u=sx_upack(v);
   size_t L=strlen(u); if(L>3000) return sx_pack(sx_lit(""));
   if(strncmp(u,"http://",7)&&strncmp(u,"https://",8)) return sx_pack(sx_lit(""));
@@ -221,6 +223,7 @@ static double sx_b_http_get(double v){ char*u=sx_upack(v);
     int ok=(c>=97&&c<=122)||(c>=65&&c<=90)||(c>=48&&c<=57)||(c!=0&&strchr("-._~:/?&=%+#@,;",c));
     if(!ok) return sx_pack(sx_lit("")); }
   char cmd[4096]; snprintf(cmd,sizeof cmd,"curl -sS -f -m 10 --max-filesize 1000000 -A sayanox-http/0.1 '%s' 2>/dev/null",u);
+  if(sx_http_seen){ struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now); double el=(double)(now.tv_sec-sx_http_last.tv_sec)+(double)(now.tv_nsec-sx_http_last.tv_nsec)/1e9; if(el<1.0){ struct timespec w; w.tv_sec=0; w.tv_nsec=(long)((1.0-el)*1e9); nanosleep(&w,NULL); } } sx_http_seen=1; clock_gettime(CLOCK_MONOTONIC,&sx_http_last); 
   FILE*p=popen(cmd,"r"); if(!p) return sx_pack(sx_lit(""));
   char*b=malloc(1000001); size_t rd=fread(b,1,1000000,p); b[rd]=0; pclose(p);
   char*r=sx_alloc_str(b,rd); free(b); return sx_pack(r); }
