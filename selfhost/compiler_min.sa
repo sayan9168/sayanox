@@ -3797,6 +3797,10 @@ while running == 1 {
         hold pq = 0
         hold pprev = 0
         hold prun = 1
+        // a list literal ([a, (a - 1)]) is not a grouping paren expression:
+        // its first non-blank character decides (plist), not the parens inside it
+        hold pseen = 0
+        hold plist = 0
         while prun == 1 {
           when pp >= n {
             hold prun = 0
@@ -3824,10 +3828,18 @@ while running == 1 {
               when pc == 10 || pc == 13 || (pc == 47 && pc2 == 47) {
                 hold prun = 0
               } otherwise {
+                when pc != 32 && pc != 9 && pseen == 0 {
+                  hold pseen = 1
+                  when pc == 91 {
+                    hold plist = 1
+                  }
+                }
                 when pc == 40 {
                   when (pprev >= 97 && pprev <= 122) || (pprev >= 65 && pprev <= 90) || (pprev >= 48 && pprev <= 57) || pprev == 95 {
                   } otherwise {
-                    hold phas = 1
+                    when plist == 0 {
+                      hold phas = 1
+                    }
                   }
                 }
                 when pc == 34 {

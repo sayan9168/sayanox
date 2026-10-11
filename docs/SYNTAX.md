@@ -253,6 +253,4 @@ or `make f(a, b)`. A partly typed parameter list, or typed parameters without a
 ### List elements
 
 A list literal holds numbers. Each element is a numeric expression: `[a, a + 1, 2 * n]`
-works in a `make` too. A string, list or struct element is refused by name. gen2
-does not yet accept a parenthesised element such as `[a, (a - 1)]` (it reports an
-error); native does. Write `[a, a - 1]` for portable code (`make test-list-expr`).
+works in a `make` too. A string, list or struct element is refused by name. A parenthesised element such as `[a, (a - 1)]` works on gen2 and native (`make test-list-paren`); `[a, a - 1]` is also fine (`make test-list-expr`).
