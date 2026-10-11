@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -576,7 +576,7 @@ test-parens:
 	@grep -q 'parenthesized expression must be numeric' $(TESTS)/ts_parenstr_g2.c
 	@printf 'show (len("ab") + 1) * 2\n' > $(TESTS)/ts_parenb.sa
 	@./$(GEN2) $(TESTS)/ts_parenb.sa $(TESTS)/ts_parenb_g2.c >/dev/null 2>&1 || true
-	@grep -q "builtin 'len' inside a parenthesized expression" $(TESTS)/ts_parenb_g2.c
+	@$(CC) -O2 -o $(TESTS)/ts_parenb_g2 $(TESTS)/ts_parenb_g2.c && test "$$(./$(TESTS)/ts_parenb_g2)" = "6" || { echo "FAILED: len in a parenthesized expression (gen2)"; exit 1; }
 	@printf 'show (1 + 2\n' > $(TESTS)/ts_parenu.sa
 	@./$(GEN2) $(TESTS)/ts_parenu.sa $(TESTS)/ts_parenu_g2.c >/dev/null 2>&1 || true
 	@grep -q "unbalanced '('" $(TESTS)/ts_parenu_g2.c
@@ -1405,6 +1405,20 @@ test-cond-string: $(GEN2) $(NATIVE_BIN)
 	@test "$$(./$(TESTS)/cs_ok_nat | tr '\n' ' ')" = "7 8 " || { echo "FAILED: native output of the valid string conditions"; exit 1; }
 	@echo "[OK] string operands in and/or/not conditions and bare string conditions refused by gen2 and native; == on strings and calls still accepted (7 8)"
 
+# test-gen2-logic-builtin: and/or/not as operands of numeric builtins (len, sx_index,
+# string_eq) in gen2 and native; hand-computed output. chr stays refused (string result).
+test-gen2-logic-builtin: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/gen2_logic_builtin_test.sa $(TESTS)/glb_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/glb_g2 $(TESTS)/glb_g2.c
+	./$(NATIVE_BIN) selfhost/gen2_logic_builtin_test.sa $(TESTS)/glb_nat
+	./$(TESTS)/glb_g2 > $(TESTS)/glb_g2.out
+	./$(TESTS)/glb_nat > $(TESTS)/glb_nat.out
+	@printf '3\n3\n121\n2\n6\n' > $(TESTS)/glb_want.out
+	@cmp $(TESTS)/glb_g2.out $(TESTS)/glb_want.out || { echo "FAILED: gen2 logic operands of numeric builtins differ from the hand-computed output"; exit 1; }
+	@cmp $(TESTS)/glb_nat.out $(TESTS)/glb_want.out || { echo "FAILED: native logic operands of numeric builtins differ from the hand-computed output"; exit 1; }
+	@echo "[OK] gen2 and native: and/or/not as operands of len, sx_index and string_eq (hand-computed output)"
+
 # test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
 # the tests use a local HTTP server on 127.0.0.1.
 # test-http-get: http_get(url) network builtin (GET only, http/https only, 1 MB cap,
@@ -1916,7 +1930,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

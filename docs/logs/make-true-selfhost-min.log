@@ -331,6 +331,12 @@ cc -O2 -o selfhost/seed_tests/nlg_g2 selfhost/seed_tests/nlg_g2.c
 cc -O2 -o selfhost/seed_tests/cs_ok_g2 selfhost/seed_tests/cs_ok.c
 ./selfhost/native_aot selfhost/cond_string_ok_test.sa selfhost/seed_tests/cs_ok_nat
 [OK] string operands in and/or/not conditions and bare string conditions refused by gen2 and native; == on strings and calls still accepted (7 8)
+./selfhost/gen2 selfhost/gen2_logic_builtin_test.sa selfhost/seed_tests/glb_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/glb_g2 selfhost/seed_tests/glb_g2.c
+./selfhost/native_aot selfhost/gen2_logic_builtin_test.sa selfhost/seed_tests/glb_nat
+./selfhost/seed_tests/glb_g2 > selfhost/seed_tests/glb_g2.out
+./selfhost/seed_tests/glb_nat > selfhost/seed_tests/glb_nat.out
+[OK] gen2 and native: and/or/not as operands of len, sx_index and string_eq (hand-computed output)
 ./selfhost/gen2 selfhost/logic_value_test.sa selfhost/seed_tests/lv_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/lv_g2 selfhost/seed_tests/lv_g2.c
 [OK] and/or/not as values in hold, show, give, assignment and parentheses: gen2 and native agree

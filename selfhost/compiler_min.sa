@@ -778,6 +778,11 @@ hold tdj = 0
 hold tdf = 0
 // condition '%' rewrite scratch
 hold crepl = ""
+hold pnumb = 0
+hold pnumd = 0
+hold pnume = 0
+hold pnumdone = 0
+hold pnumch = 0
 hold cwi = 0
 hold ccx = 0
 hold cwrun = 0
@@ -4019,10 +4024,33 @@ while running == 1 {
               } otherwise {
               when pc3 == 40 {
                 hold pok2 = 0
-                when sx_eq(pw, "concat") || sx_eq(pw, "len") || sx_eq(pw, "chr") || sx_eq(pw, "sx_index") || sx_eq(pw, "index") || sx_eq(pw, "push") {
+                hold pnumb = 0
+                when sx_eq(pw, "len") || sx_eq(pw, "sx_index") || sx_eq(pw, "string_eq") {
+                  // a numeric builtin (len, sx_index, string_eq): its argument list is
+                  // not validated here (the rewrite maps the name to the C runtime); skip to the matching )
+                  hold pnumb = 1
+                  hold pnumd = 0
+                  hold pnume = pv3
+                  hold pnumdone = 0
+                  while pnumdone == 0 && pnume < cl {
+                    hold pnumch = sx_index(ctrim, pnume)
+                    when pnumch == 40 {
+                      hold pnumd = pnumd + 1
+                    }
+                    when pnumch == 41 {
+                      hold pnumd = pnumd - 1
+                      when pnumd == 0 {
+                        hold pnumdone = 1
+                      }
+                    }
+                    hold pnume = pnume + 1
+                  }
+                  hold pstep = pnume - pv
+                }
+                when sx_eq(pw, "concat") || sx_eq(pw, "chr") || sx_eq(pw, "index") || sx_eq(pw, "push") {
                   hold pok2 = 1
                 }
-                when sx_eq(pw, "read_file") || sx_eq(pw, "http_get") || sx_eq(pw, "write_file") || sx_eq(pw, "arg") || sx_eq(pw, "arg_count") || sx_eq(pw, "string_eq") {
+                when sx_eq(pw, "read_file") || sx_eq(pw, "http_get") || sx_eq(pw, "write_file") || sx_eq(pw, "arg") || sx_eq(pw, "arg_count") {
                   hold pok2 = 1
                 }
                 when sx_eq(pw, "sx_cat") || sx_eq(pw, "sx_len") || sx_eq(pw, "sx_chr") || sx_eq(pw, "sx_idx") || sx_eq(pw, "sx_eq") {
@@ -4068,7 +4096,7 @@ while running == 1 {
                       hold pfound = 1
                     }
                   }
-                  when pfound == 0 {
+                  when pfound == 0 && pnumb == 0 {
                     hold pmsg = concat("unknown function '", pw)
                     hold pmsg = concat(pmsg, "' in a parenthesized expression (define it with make first)")
                     hold pbad = 1

@@ -1,0 +1,11 @@
+// and/or/not as operands of numeric builtins (len, sx_index, string_eq) on gen2 and native.
+// Hand-computed expected output (see the test-gen2-logic-builtin target):
+//   3 / 3 / 121 / 2 / 6
+hold s = "xyz"
+hold a = 1
+hold b = 0
+show len(s) + (a and b)
+show len(s) * (a or b)
+show sx_index(s, a and a)
+show string_eq(s, "xyz") + (a and a)
+show len(s) + (1 + 2)
