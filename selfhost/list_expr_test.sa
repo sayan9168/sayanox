@@ -1,0 +1,15 @@
+// list literals whose elements are numeric expressions (2026-10-11).
+// Elements are numbers; a string, list or struct element is refused.
+hold a = 4
+hold xs = [a, a + 1]
+show xs[1]
+hold ys = [1 + 1, 3]
+show ys[0]
+make f(n: num) -> num {
+  hold zs = [n, n * 2, n - 1]
+  give zs[1] + zs[2]
+}
+show f(5)
+push(ys, a * 2)
+show len(ys)
+show ys[2]

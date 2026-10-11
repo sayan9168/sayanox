@@ -618,6 +618,7 @@ static void emit_when_body(const char**p,int in_fn);
 static void emit_for(const char**p,int in_fn);
 static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const char*what);
 
+static int cur_fn;  /* defined with its value below */
 static int pk_prim(const char**p,int depth){
   sw(p);
   if(depth>32) errx("expression too deep");
@@ -773,6 +774,10 @@ static int pk_prim(const char**p,int depth){
        variable 'not'" (and/or/not are fine inside conditions and logic values) */
     if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not"))
       errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
+    if(cur_fn>=0){
+      for(int i=0;i<F[cur_fn].nparam;i++)
+        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
+    }
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
     int k=G[gi].kind;
@@ -1209,6 +1214,10 @@ static void emit_prim(const char**p,int depth){
        value, e.g. inside parentheses */
     if(!strcmp(n,"and")||!strcmp(n,"or")||!strcmp(n,"not"))
       errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
+    if(cur_fn>=0){
+      for(int i=0;i<F[cur_fn].nparam;i++)
+        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
+    }
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
     if(G[gi].kind==K_UNK) errx("undefined variable '%s' (hold it first)",n,NULL);

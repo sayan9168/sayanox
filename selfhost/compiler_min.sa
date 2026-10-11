@@ -4594,6 +4594,36 @@ while running == 1 {
               // (or anything that is not a number or a name) is a clear error
               // instead of invalid C such as sx_llit(1,(double)(p))
               hold lbad = 0
+              // an element may be an expression (a + 1, 2 * x, (a - 1)): gather
+              // the text up to a top-level , or ] ; [ " { } are not allowed in it
+              hold exd = 0
+              hold exr = 1
+              while exr == 1 {
+                when pos >= n {
+                  hold exr = 0
+                } otherwise {
+                  hold exc = sx_index(source,pos)
+                  when (exc == 44 || exc == 93) && exd == 0 {
+                    hold exr = 0
+                  } otherwise {
+                    when exc == 10 {
+                      hold exr = 0
+                    } otherwise {
+                      when exc == 91 || exc == 34 || exc == 123 || exc == 125 {
+                        hold lbad = 1
+                      }
+                      when exc == 40 {
+                        hold exd = exd + 1
+                      }
+                      when exc == 41 {
+                        hold exd = exd - 1
+                      }
+                      hold el = concat(el, chr(exc))
+                      hold pos = pos + 1
+                    }
+                  }
+                }
+              }
               hold pexpr = concat("|", el)
               hold pexpr = concat(pexpr, "|")
               hold psrc = concat(sdecls, ldecls)

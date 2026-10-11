@@ -1,5 +1,3 @@
-cc -O2 -o selfhost/seed/sxc_seed_min selfhost/seed/sxc_seed_min.c
-[OK] seed-min
 [OK] restore-compiler (checked-in source verified; no base64/gzip used)
 [seed-min] compiler_min.sa -> gen1_min.c
 ./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
@@ -164,7 +162,7 @@ cc -O2 -o selfhost/gen2 selfhost/gen2.c
 cc -O2 -o selfhost/seed_tests/stage2_lexer_sm selfhost/seed_tests/stage2_lexer_sm.c
 ./selfhost/gen2 selfhost/minimal_lexer.sa selfhost/seed_tests/stage2_lexer_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/stage2_lexer_g2 selfhost/seed_tests/stage2_lexer_g2.c
-[stage2] native lexer: skipped (native_aot is not built here)
+[stage2] native lexer: stdout identical to seed-min/gen2
 ./selfhost/seed/sxc_seed_min selfhost/stage2_functions.sa > selfhost/seed_tests/stage2_fn_sm.c
 cc -O2 -o selfhost/seed_tests/stage2_fn_sm selfhost/seed_tests/stage2_fn_sm.c
 ./selfhost/gen2 selfhost/stage2_functions.sa selfhost/seed_tests/stage2_fn_g2.c >/dev/null
@@ -178,7 +176,7 @@ cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
 cc -O2 -o selfhost/seed_tests/s2 selfhost/seed_tests/s2.c
 ./selfhost/gen1_min selfhost/seed_tests/s2.sa selfhost/seed_tests/s2_g1.c >/dev/null
 cc -O2 -o selfhost/seed_tests/s2_g1 selfhost/seed_tests/s2_g1.c
-[stage2] native rejection: skipped (native_aot is not built here)
+  native runs true/false and for; and/not in conditions run (test-native-lang)
 [OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names for/true and runs and/not in conditions
 ./selfhost/gen2 selfhost/seed_tests/fs_vowels.sa selfhost/seed_tests/fs_vowels.c >/dev/null
 cc -O2 -o selfhost/seed_tests/fs_vowels selfhost/seed_tests/fs_vowels.c
@@ -191,7 +189,7 @@ cc -O2 -o selfhost/seed_tests/fs_bytes selfhost/seed_tests/fs_bytes.c
 ./selfhost/gen2 selfhost/seed_tests/fs_num.sa selfhost/seed_tests/fs_num.c >/dev/null 2>&1 || true
 ./selfhost/gen2 selfhost/seed_tests/fs_clash.sa selfhost/seed_tests/fs_clash.c >/dev/null 2>&1 || true
 ./selfhost/gen2 selfhost/seed_tests/fs_listclash.sa selfhost/seed_tests/fs_listclash.c >/dev/null 2>&1 || true
-[stage2] native rejection: skipped (native_aot is not built here)
+[stage2] native runs for over a string
 ./selfhost/gen2 selfhost/seed_tests/fs_pair.sa selfhost/seed_tests/fs_pair.c >/dev/null 2>&1 || true
 [OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min refuses it by name; native runs it
 ./selfhost/gen2 selfhost/seed_tests/gg_len.sa selfhost/seed_tests/gg_len.c >/dev/null
@@ -279,7 +277,6 @@ cc -O2 -o selfhost/seed_tests/sg_g2 selfhost/seed_tests/sg_g2.c
 cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh init >/dev/null
 cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
 [OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once
-cc -O2 -o selfhost/native_aot selfhost/native_aot.c
 ./selfhost/seed/sxc_seed_min selfhost/native_strord_test.sa > selfhost/seed_tests/nso_sm.c
 cc -O2 -o selfhost/seed_tests/nso_sm selfhost/seed_tests/nso_sm.c
 ./selfhost/gen2 selfhost/native_strord_test.sa selfhost/seed_tests/nso_g2.c >/dev/null
@@ -300,6 +297,9 @@ cc -O2 -o selfhost/seed_tests/gix_g2 selfhost/seed_tests/gix_g2.c
 ./selfhost/gen2 selfhost/typed_sig_test.sa selfhost/seed_tests/tsg_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/tsg_g2 selfhost/seed_tests/tsg_g2.c
 [OK] typed signatures: fully typed make runs on gen2 and native (same output); partly typed or return-less signatures are refused; seed-min refuses typed
+./selfhost/gen2 selfhost/list_expr_test.sa selfhost/seed_tests/lex_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/lex_g2 selfhost/seed_tests/lex_g2.c
+[OK] list literal elements are numeric expressions (params, operators, push); string elements refused on gen2 and native
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded

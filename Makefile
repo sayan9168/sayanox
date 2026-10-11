@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-sxpkg-online-local
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1290,6 +1290,29 @@ test-typed-sig: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@echo "[OK] typed signatures: fully typed make runs on gen2 and native (same output); partly typed or return-less signatures are refused; seed-min refuses typed"
 
 # ---------------------------------------------------------------------------
+# test-list-expr: list literal elements are numeric expressions (added
+# 2026-10-11): `[a, a + 1]`, `[n, n * 2]` inside a make.  A string, list or
+# struct element is refused by name on gen2 and native.  Source:
+# selfhost/list_expr_test.sa; expected output hand-computed.
+# ---------------------------------------------------------------------------
+LEX_WANT := 5\n2\n14\n3\n8
+test-list-expr: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/list_expr_test.sa $(TESTS)/lex_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/lex_g2 $(TESTS)/lex_g2.c
+	$(call assert-out,./$(TESTS)/lex_g2,$(LEX_WANT))
+	@printf 'hold xs = [1, "x"]\nshow len(xs)\n' > $(TESTS)/lex_bad.sa
+	@./$(GEN2) $(TESTS)/lex_bad.sa $(TESTS)/lex_bad_g2.c | grep -q 'list elements must be numbers' || { echo "[FAIL] gen2 accepted a string list element"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/list_expr_test.sa $(TESTS)/lex_nat || exit 1; \
+	  ./$(TESTS)/lex_nat > $(TESTS)/lex_nat.out || exit 1; \
+	  ./$(TESTS)/lex_g2 > $(TESTS)/lex_g2.out || exit 1; \
+	  cmp $(TESTS)/lex_g2.out $(TESTS)/lex_nat.out || { echo "[FAIL] native list expressions differ from gen2"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/lex_bad.sa $(TESTS)/lex_bad_nat 2>&1 | grep -q 'list elements must be numbers' || { echo "[FAIL] native accepted a string list element"; exit 1; }; \
+	fi
+	@echo "[OK] list literal elements are numeric expressions (params, operators, push); string elements refused on gen2 and native"
+
+# ---------------------------------------------------------------------------
 # test-native-cond: and / or / not, parentheses, in when and while conditions
 # on native (added 2026-10-11).  Source: selfhost/native_cond_test.sa.  The
 # expected output is hand-computed; gen2 must print it and native must match
@@ -1611,13 +1634,15 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 	  ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat >/dev/null 2>&1 && ./$(TESTS)/gg_ordnat > $(TESTS)/gg_ord_nat.out && cmp $(TESTS)/gg_ord_nat.out $(TESTS)/gg_ord_g2.out || { echo "[FAIL] native string ordering differs from gen2"; exit 1; }; \
 	  if ./$(NATIVE_BIN) $(TESTS)/gg_ordmix.sa $(TESTS)/gg_ordmixnat >/dev/null 2>&1; then echo "[FAIL] native accepted string < number"; exit 1; fi; \
 	fi
-	@# the chain forms are gen2 only: seed-min and native must refuse them
+	@# the chain forms: seed-min refuses them; gen2 and native run them
 	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_chain.sa >/dev/null 2>&1; then \
 	  echo "[FAIL] seed-min accepted an else-when/else-if chain"; exit 1; fi
+	@# native runs the chain forms too (they landed with elif): it must match gen2
 	@if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/gg_chain.sa $(TESTS)/gg_nat >/dev/null 2>&1; then \
-	    echo "[FAIL] native accepted an else-when/else-if chain"; exit 1; fi; \
-	  echo "[gen2-gaps] native rejects the chain forms"; \
+	  ./$(NATIVE_BIN) $(TESTS)/gg_chain.sa $(TESTS)/gg_nat || exit 1; \
+	  ./$(TESTS)/gg_nat > $(TESTS)/gg_nat.out || exit 1; \
+	  ./$(TESTS)/gg_chain > $(TESTS)/gg_chain_g2.out || exit 1; \
+	  cmp $(TESTS)/gg_chain_g2.out $(TESTS)/gg_nat.out || { echo "[FAIL] native else-if chain differs from gen2"; exit 1; }; \
 	fi
 	@echo "[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native refuse the chains"
 
@@ -1740,7 +1765,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
