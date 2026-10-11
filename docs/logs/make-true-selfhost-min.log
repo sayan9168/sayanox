@@ -303,6 +303,9 @@ cc -O2 -o selfhost/seed_tests/lex_g2 selfhost/seed_tests/lex_g2.c
 ./selfhost/gen2 selfhost/logic_value_test.sa selfhost/seed_tests/lv_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/lv_g2 selfhost/seed_tests/lv_g2.c
 [OK] and/or/not as values in hold, show, give, assignment and parentheses: gen2 and native agree
+./selfhost/gen2 selfhost/native_generics_test.sa selfhost/seed_tests/ng_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ng_g2 selfhost/seed_tests/ng_g2.c
+[OK] native generics over numbers: make NAME<T> and NAME<A, B>, generic calling generic, gen2 and native agree; untyped generics and string arguments refused by native
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded

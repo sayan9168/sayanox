@@ -355,7 +355,7 @@ typedef enum { K_NUM=0, K_STR=1, K_LIST=2, K_STRUCT=3 } kind_t;
 typedef struct { char name[64]; int kind; int sid; int off; } Glob;  /* off: BP displacement of a make local, 0 = global */
 typedef struct { char name[64]; int kind; int sid; } Field;
 typedef struct { char name[64]; Field f[MAXFD]; int nf; } SDef;
-typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; } Fn;
+typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; int gen; int ntp; char tps[8][64]; } Fn;
 
 static Glob G[NSLOT]; static int nG;
 static SDef S[MAXS]; static int nS;
@@ -371,12 +371,18 @@ static int g_decl(const char*n){
    A signature is either fully typed (every parameter and the return) or
    fully untyped (the pure-min form every backend accepts).  The helpers
    consume the annotations; sig_check decides. */
+/* type parameters of the make being collected (make NAME<T, U>); native
+   compiles a generic for numbers only, so each T is num */
+static char gtp[8][64]; static int ngtp=0;
+static int is_tp(const char*t){ for(int i=0;i<ngtp;i++) if(!strcmp(gtp[i],t)) return 1; return 0; }
 static int sig_type(const char**p,const char*nm){
   sw(p);
   if(**p!=':') return 0;
   (*p)++; sw(p);
   char t[64];
   if(!pid(p,t,64)) errx("make %s: expected a type after ':'",nm,NULL);
+  if(is_tp(t)) return 1;
+  if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (a parameter type here must be T or another type parameter)",nm,NULL);
   if(strcmp(t,"num")) errx("make %s: parameter type '%s' is not in the native subset (native takes num)",nm,t,NULL);
   return 1;
 }
@@ -386,6 +392,8 @@ static int sig_ret(const char**p,const char*nm){
   (*p)+=2; sw(p);
   char t[64];
   if(!pid(p,t,64)) errx("make %s: expected a return type after '->'",nm,NULL);
+  if(is_tp(t)) return 1;
+  if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (the return type here must be T or another type parameter)",nm,NULL);
   if(strcmp(t,"num")) errx("make %s: return type '%s' is not in the native subset (native returns num)",nm,t,NULL);
   return 1;
 }
@@ -557,10 +565,26 @@ static void collect_defs(const char*src){
       if(!pid(&p,nm,64)){ fprintf(stderr,"native_aot: make needs a name\n"); exit(1); }
       if(f_find(nm)>=0){ fprintf(stderr,"native_aot: function '%s' declared twice\n",nm); exit(1); }
       if(nF>=MAXF){ fprintf(stderr,"native_aot: too many functions (native limit: %d)\n",MAXF); exit(1); }
-      strcpy(F[nF].name,nm); F[nF].nparam=0; F[nF].start=-1;
+      strcpy(F[nF].name,nm); F[nF].nparam=0; F[nF].start=-1; F[nF].gen=0;
       int sig_typed=0;
       sw(&p);
-      if(*p=='<'){ fprintf(stderr,"native_aot: make %s<...>: generics are not in the native subset (gen2 monomorphises make NAME<T> and make NAME<A, B>); native has no generic functions\n",nm); exit(1); }
+      ngtp=0;
+      if(*p=='<'){
+        /* make NAME<T, U>: type parameters; native compiles them as num */
+        F[nF].gen=1;
+        p++;
+        for(;;){
+          sw(&p);
+          if(ngtp>=8){ fprintf(stderr,"native_aot: make %s<...>: at most 8 type parameters\n",nm); exit(1); }
+          if(!pid(&p,gtp[ngtp],64)){ fprintf(stderr,"native_aot: make %s<...>: bad type parameter list\n",nm); exit(1); }
+          ngtp++;
+          sw(&p);
+          if(*p==','){ p++; continue; }
+          if(*p=='>'){ p++; break; }
+          fprintf(stderr,"native_aot: make %s<...>: bad type parameter list\n",nm); exit(1);
+        }
+        sw(&p);
+      }
       if(*p!='('){ fprintf(stderr,"native_aot: make %s: expected (params)\n",nm); exit(1); }
       p++;
       for(;;){
@@ -579,7 +603,12 @@ static void collect_defs(const char*src){
       {
         int sig_ret1=sig_ret(&p,nm);
         sig_check(nm,F[nF].nparam,sig_typed,sig_ret1);
+        if(F[nF].gen&&(sig_typed!=F[nF].nparam||!sig_ret1))
+          errx("make %s<...>: a generic needs a type parameter on every parameter and a return type (-> T)",nm,NULL);
       }
+      F[nF].ntp=ngtp;
+      for(int i=0;i<ngtp;i++) strcpy(F[nF].tps[i],gtp[i]);
+      ngtp=0;
       nF++;
       p=skip_stmt(line);
     }
@@ -775,6 +804,7 @@ static int pk_prim(const char**p,int depth){
           sw(p);
           if(**p==')'){ (*p)++; break; }
           int k=arg_pk(p,depth);
+          if(k!=K_NUM&&F[fi].gen) errx("generics are not in the native subset for strings and lists (arg %d of '%s' is not a number; gen2 monomorphises them)",nargs+1,n,NULL);
           if(k!=K_NUM) errx("function '%s' takes numbers (arg %d is not a number)",n,nargs+1);
           nargs++;
           sw(p);
@@ -1212,6 +1242,7 @@ static void emit_prim(const char**p,int depth){
           sw(p);
           if(**p==')'){ (*p)++; break; }
           arg_emit(p,depth);
+          if(XK!=K_NUM&&F[fi].gen) errx("generics are not in the native subset for strings and lists (arg %d of '%s' is %s; gen2 monomorphises them)",nargs+1,n,kname(XK),NULL);
           if(XK!=K_NUM) errx("function '%s' takes numbers (arg %d is %s)",n,nargs+1,kname(XK));
           /* every evaluated arg goes on the machine stack: a LATER arg may
              itself be a call (user function, or a builtin whose malloc maps
@@ -1647,6 +1678,13 @@ static void emit_fn(int fi,const char**p){
   for(int i=0;i<F[fi].nparam;i++) mv_m64(BP,-1,0,-8*(i+1),argreg[i]);
   /* skip the source: (params) { */
   sw(p);
+  ngtp=F[fi].ntp;
+  for(int i=0;i<ngtp;i++) strcpy(gtp[i],F[fi].tps[i]);
+  if(**p=='<'){                       /* make NAME<T, U>: the names were read in collection */
+    while(**p&&**p!='>') (*p)++;
+    if(**p=='>') (*p)++;
+    sw(p);
+  }
   if(**p!='(') errx("make %s: expected (params)",F[fi].name,NULL);
   (*p)++;
   for(;;){
@@ -1661,6 +1699,7 @@ static void emit_fn(int fi,const char**p){
     errx("make %s: bad param list",F[fi].name,NULL);
   }
   sig_ret(p,F[fi].name);
+  ngtp=0;
   sw(p);
   if(**p!='{') errx("make %s: expected { ... }",F[fi].name,NULL);
   (*p)++;

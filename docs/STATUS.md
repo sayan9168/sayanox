@@ -138,7 +138,7 @@ Four gates on this checkout: `DOCTOR-OK`, `TRUE-SELFHOST-MIN-OK`, `GEN3-OK`,
 | `for NAME in <list or string>` | missing | done | done (2026-10-11) | `make test-for-str`, `make test-native-lang` |
 | `break` / `continue` in `for` and `while` | missing | done | done (2026-10-11) | `make test-native-lang` |
 | `gc()` / `gc_live()` / `gc_runs()` | missing | done | done | `make test-native-mem` |
-| generics `make f<T>(...)` | refused | done (monomorphised) | missing | `make test-generics` |
+| generics `make f<T>(...)` | refused | done (monomorphised) | numbers only: `make f<T>` with T = num (`make test-native-generics`); string and list kinds missing (refused by name) | `make test-generics`, `make test-native-generics` |
 | `and`/`or`/`not` as values (`hold v = a and b`, `show a or b`, `give x or 0`, `c = a and a`, `(a or b)`) | done (value is 1 or 0; quoted text is not an operator; also in groups and user-function arguments) | done (same forms; refused as a builtin argument or a struct field value) | done (2026-10-11, `make test-logic-value`). Known gen2 gap: a string operand is not type-checked there (also true of `when` conditions); native refuses it |
 | `hold` inside a `make` body | done | done | done (2026-10-11: a slot in the call's own frame; `make test-native-locals`) |
 | typed signatures `make f(a: num) -> num` (all or nothing) | refused | done (`str` params also accepted) | done for `num` only; `str`/`list` refused by name (2026-10-11) | `make test-typed-sig` |

@@ -148,8 +148,9 @@ written with type parameters used by every parameter and the return type`)
 instead of being compiled wrongly.
 
 Generics are a full-language (`gen2`) feature: the seed and the pure-min
-dialect do not read `make NAME<...>` at all, and native rejects it with
-`generics are not in the native subset`. See `make test-generics` and
+dialect do not read `make NAME<...>` at all. Native compiles generics over
+numbers (`make twice<T>(a: T) -> T`, each T is num; `make test-native-generics`)
+and refuses a string or list argument by name. See `make test-generics` and
 [`GENERICS.md`](GENERICS.md).
 
 ## Full-language extras (`gen2` only)
