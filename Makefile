@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-logic-value test-native-generics test-native-generics test-sxpkg-online-local
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1311,6 +1311,13 @@ test-list-expr: $(GEN2) $(NATIVE_BIN)
 	  ./$(NATIVE_BIN) $(TESTS)/lex_bad.sa $(TESTS)/lex_bad_nat 2>&1 | grep -q 'list elements must be numbers' || { echo "[FAIL] native accepted a string list element"; exit 1; }; \
 	fi
 	@echo "[OK] list literal elements are numeric expressions (params, operators, push); string elements refused on gen2 and native"
+
+# test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
+# the tests use a local HTTP server on 127.0.0.1.
+test-scrape:
+	@python3 -m unittest sayascrape.test_sayascrape >/tmp/scrape_test.log 2>&1 || { tail -20 /tmp/scrape_test.log; echo "[FAIL] sayascrape tests"; exit 1; }
+	@tail -3 /tmp/scrape_test.log
+	@echo "[OK] sayascrape: scope allowlist, authorization gate, robots.txt (fail closed on 5xx), delay, page and depth caps, parsing"
 
 # test-logic-value: and / or / not as values (hold, show, give, assignment,
 # parenthesized groups). Expected output is hand-checked; gen2 and native must match.

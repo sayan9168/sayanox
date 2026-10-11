@@ -34,3 +34,7 @@ tools/sxpkg
 tools/sxpkg.c
 tools/sayanox_lsp
 tools/sayanox_lsp.c
+
+# python bytecode
+__pycache__/
+*.pyc
