@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-sxpkg-online-local
+        pack-compiler test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-logic-value test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1312,12 +1312,30 @@ test-list-expr: $(GEN2) $(NATIVE_BIN)
 	fi
 	@echo "[OK] list literal elements are numeric expressions (params, operators, push); string elements refused on gen2 and native"
 
+# test-logic-value: and / or / not as values (hold, show, give, assignment,
+# parenthesized groups). Expected output is hand-checked; gen2 and native must match.
+LV_WANT := 0\n1\n0\nx and y\n1\n1\n1\n1\n1\n1\n8\n2\n1\n
+test-logic-value: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/logic_value_test.sa $(TESTS)/lv_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/lv_g2 $(TESTS)/lv_g2.c
+	$(call assert-out,./$(TESTS)/lv_g2,$(LV_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/logic_value_test.sa $(TESTS)/lv_nat || exit 1; \
+	  ./$(TESTS)/lv_nat > $(TESTS)/lv_nat.out || exit 1; \
+	  ./$(TESTS)/lv_g2 > $(TESTS)/lv_g2.out || exit 1; \
+	  cmp $(TESTS)/lv_g2.out $(TESTS)/lv_nat.out || { echo "[FAIL] native logic values differ from gen2"; exit 1; }; \
+	  printf 'hold a = 1\nhold v = a and "x"\nshow v\n' > $(TESTS)/lv_bad.sa; \
+	  if ./$(NATIVE_BIN) $(TESTS)/lv_bad.sa $(TESTS)/lv_bad_nat >/dev/null 2>&1; then echo "[FAIL] native accepted a string logic operand"; exit 1; fi; \
+	fi
+	@echo "[OK] and/or/not as values in hold, show, give, assignment and parentheses: gen2 and native agree"
+
 # ---------------------------------------------------------------------------
 # test-native-cond: and / or / not, parentheses, in when and while conditions
 # on native (added 2026-10-11).  Source: selfhost/native_cond_test.sa.  The
 # expected output is hand-computed; gen2 must print it and native must match
-# gen2 byte for byte.  seed-min refuses the file.  Word operators outside a
-# condition (show a and b) and bare true/false stay rejected by native.
+# gen2 byte for byte.  seed-min refuses the file.  Word operators as values
+# (show a and b) are covered by test-logic-value.
 # ---------------------------------------------------------------------------
 NCO_WANT := 1\n3\n4\n6\n7\n9\n10\n11\n12\n13\n15\n17\n18\n0\n1\n2\n5\n1\n0
 test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
@@ -1334,7 +1352,8 @@ test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	  printf 'hold s = "ab"\nhold a = 1\nwhen s and a {\n  show 1\n}\n' > $(TESTS)/nco_neg1.sa; \
 	  ./$(NATIVE_BIN) $(TESTS)/nco_neg1.sa $(TESTS)/nco_neg1 2>&1 | grep -q 'must be a number' || { echo "[FAIL] native accepted a string operand of and"; exit 1; }; \
 	  printf 'hold a = 1\nshow a and a\n' > $(TESTS)/nco_neg2.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/nco_neg2.sa $(TESTS)/nco_neg2 2>&1 | grep -q "'and' is a full-language word operator" || { echo "[FAIL] native accepted and in a value"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/nco_neg2.sa $(TESTS)/nco_neg2 >/dev/null 2>&1 || { echo "[FAIL] native refused and in a value"; exit 1; }; \
+	  ./$(TESTS)/nco_neg2 | grep -qx 1 || { echo "[FAIL] native value of a and a is not 1"; exit 1; }; \
 	  printf 'hold a = 1\nwhen a and {\n  show 1\n}\n' > $(TESTS)/nco_neg3.sa; \
 	  ./$(NATIVE_BIN) $(TESTS)/nco_neg3.sa $(TESTS)/nco_neg3 2>&1 | grep -q 'missing operand' || { echo "[FAIL] native accepted a dangling and"; exit 1; }; \
 	fi
@@ -1765,7 +1784,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-logic-value test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

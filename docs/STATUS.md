@@ -139,7 +139,7 @@ Four gates on this checkout: `DOCTOR-OK`, `TRUE-SELFHOST-MIN-OK`, `GEN3-OK`,
 | `break` / `continue` in `for` and `while` | missing | done | done (2026-10-11) | `make test-native-lang` |
 | `gc()` / `gc_live()` / `gc_runs()` | missing | done | done | `make test-native-mem` |
 | generics `make f<T>(...)` | refused | done (monomorphised) | missing | `make test-generics` |
-| `and`/`or`/`not` as values (`hold v = a and b`, `show a or b`) | missing | missing | refused by name | not added: gen2 refuses them too, and the language docs define them only in conditions |
+| `and`/`or`/`not` as values (`hold v = a and b`, `show a or b`, `give x or 0`, `c = a and a`, `(a or b)`) | done (value is 1 or 0; quoted text is not an operator; also in groups and user-function arguments) | done (same forms; refused as a builtin argument or a struct field value) | done (2026-10-11, `make test-logic-value`). Known gen2 gap: a string operand is not type-checked there (also true of `when` conditions); native refuses it |
 | `hold` inside a `make` body | done | done | done (2026-10-11: a slot in the call's own frame; `make test-native-locals`) |
 | typed signatures `make f(a: num) -> num` (all or nothing) | refused | done (`str` params also accepted) | done for `num` only; `str`/`list` refused by name (2026-10-11) | `make test-typed-sig` |
 | list literals of numeric expressions `[a, a + 1]` (elements are numbers; string/list/struct elements refused by name) | refused | done (parentheses inside an element not yet: see SYNTAX) | done (2026-10-11) | `make test-list-expr` |

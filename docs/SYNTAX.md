@@ -160,9 +160,15 @@ statement` for them. Native accepts `for` over a range, a list and a string,
 `break`/`continue`, `elif`/`else if`/`else when`, `true`/`false`, and `and`,
 `or`, `not` with parentheses **inside `when` and `while` conditions**
 (short-circuit, the same precedence as gen2; `make test-native-lang`,
-`make test-native-cond`). Still refused by name, on native and gen2 alike:
-`and`/`or`/`not` as values (`hold v = a and b`, `show a or b`). Native also
-refuses `for` and `hold` inside a `make` body (it needs stack frames).
+`make test-native-cond`). `and`/`or`/`not` are also values in `hold`, `show`,
+`give` and assignment (`hold v = a and b`, `show a or b`, `give x or 0`, and a
+whole parenthesized group `(a or b)`): the value is 1 when the logic holds and
+0 when it does not (`make test-logic-value`). A group such as `1 + (a or b)`
+and a user-function argument such as `f(a or 0)` also work on native. Still
+refused by native: a logic value as a builtin argument (`len(...)` and the
+like) or as a struct field value. A string operand is refused on native;
+gen2 does not type-check it yet. Native also refuses `for` and `hold`
+inside a `make` body (it needs stack frames).
 
 ### Loops over values
 

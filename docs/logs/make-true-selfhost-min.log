@@ -300,6 +300,9 @@ cc -O2 -o selfhost/seed_tests/tsg_g2 selfhost/seed_tests/tsg_g2.c
 ./selfhost/gen2 selfhost/list_expr_test.sa selfhost/seed_tests/lex_g2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/lex_g2 selfhost/seed_tests/lex_g2.c
 [OK] list literal elements are numeric expressions (params, operators, push); string elements refused on gen2 and native
+./selfhost/gen2 selfhost/logic_value_test.sa selfhost/seed_tests/lv_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/lv_g2 selfhost/seed_tests/lv_g2.c
+[OK] and/or/not as values in hold, show, give, assignment and parentheses: gen2 and native agree
 ./selfhost/gen2 selfhost/seed_tests/gc_builtins.sa selfhost/seed_tests/gc_builtins.c
 cc -O2 -o selfhost/seed_tests/gc_builtins selfhost/seed_tests/gc_builtins.c
 [OK] gen2 GC: gc()/gc_live()/gc_runs() keep a concat loop bounded

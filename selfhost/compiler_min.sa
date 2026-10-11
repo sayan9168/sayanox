@@ -3842,6 +3842,52 @@ while running == 1 {
             }
           }
         }
+        // a bare and / or / not outside quotes makes this a value-position
+        // logic expression: route it through the shared condition rewrite (act 8)
+        when phas == 0 {
+          hold pwi = 0
+          hold pwl = len(pexpr)
+          hold pwq = 0
+          while pwi < pwl {
+            hold pwc = sx_index(pexpr, pwi)
+            when pwq == 1 {
+              when pwc == 34 {
+                hold pwq = 0
+              }
+              hold pwi = pwi + 1
+            } otherwise {
+              when pwc == 34 {
+                hold pwq = 1
+                hold pwi = pwi + 1
+              } otherwise {
+                when (pwc >= 97 && pwc <= 122) || (pwc >= 65 && pwc <= 90) || pwc == 95 {
+                  hold pww = ""
+                  hold pwj = pwi
+                  hold pwr = 1
+                  while pwr == 1 {
+                    when pwj >= pwl {
+                      hold pwr = 0
+                    } otherwise {
+                      hold pwd = sx_index(pexpr, pwj)
+                      when (pwd >= 97 && pwd <= 122) || (pwd >= 65 && pwd <= 90) || (pwd >= 48 && pwd <= 57) || pwd == 95 {
+                        hold pww = concat(pww, chr(pwd))
+                        hold pwj = pwj + 1
+                      } otherwise {
+                        hold pwr = 0
+                      }
+                    }
+                  }
+                  when sx_eq(pww, "and") || sx_eq(pww, "or") || sx_eq(pww, "not") {
+                    hold phas = 1
+                  }
+                  hold pwi = pwj
+                } otherwise {
+                  hold pwi = pwi + 1
+                }
+              }
+            }
+          }
+        }
         when phas == 1 {
           hold pmode = act
           hold act = 8
@@ -3953,6 +3999,12 @@ while running == 1 {
               when pv3 < cl {
                 hold pc3 = sx_index(ctrim, pv3)
               }
+              hold pkwd = 0
+              when sx_eq(pw, "and") || sx_eq(pw, "or") || sx_eq(pw, "not") {
+                hold pkwd = 1
+              }
+              when pkwd == 1 {
+              } otherwise {
               when pc3 == 40 {
                 hold pok2 = 0
                 when sx_eq(pw, "concat") || sx_eq(pw, "len") || sx_eq(pw, "chr") || sx_eq(pw, "sx_index") || sx_eq(pw, "index") || sx_eq(pw, "push") {
@@ -4107,6 +4159,7 @@ while running == 1 {
                   hold pmsg = concat(pmsg, "' is a string, list or struct; a parenthesized expression must be numeric")
                   hold pbad = 1
                 }
+              }
               }
               hold pc = 97
             }

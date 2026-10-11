@@ -617,6 +617,14 @@ static void cond_trim(const char**s,const char**e);
 static void emit_when_body(const char**p,int in_fn);
 static void emit_for(const char**p,int in_fn);
 static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const char*what);
+static int cond_wrapped(const char*s,const char*e);
+static int pk_rhs(const char**p);
+static int logic_span(const char*s,const char*e);
+static const char*paren_close(const char*o);
+static void emit_logic(const char*s,const char*e);
+static int arg_pk(const char**p,int depth);
+static void arg_emit(const char**p,int depth);
+static void emit_rhs(const char**p);
 
 static int cur_fn;  /* defined with its value below */
 static int pk_prim(const char**p,int depth){
@@ -644,6 +652,15 @@ static int pk_prim(const char**p,int depth){
     return K_STR;
   }
   if(**p=='('){
+    /* a parenthesized and/or/not group is a logic value (1 or 0) */
+    const char*pc=paren_close(*p);
+    if(pc&&logic_span(*p+1,pc)){
+      JL none={0};
+      gen_cond(*p+1,pc,0,&none,1,"value");
+      *p=pc+1;
+      PKX_K=K_NUM; PKX_S=-1;
+      return K_NUM;
+    }
     (*p)++;
     /* the full expression grammar, comparisons included -- emission uses
        emit_expr here, and `(a > 1) + 1` used to fail with "expected )" */
@@ -757,7 +774,7 @@ static int pk_prim(const char**p,int depth){
         for(;;){
           sw(p);
           if(**p==')'){ (*p)++; break; }
-          int k=pk_rel(p,depth+1);
+          int k=arg_pk(p,depth);
           if(k!=K_NUM) errx("function '%s' takes numbers (arg %d is not a number)",n,nargs+1);
           nargs++;
           sw(p);
@@ -921,7 +938,7 @@ static int infer_round(const char*src){
         sw(&rp);
         if(*rp=='='){
           rp++;
-          int k=pk_full(&rp,0);
+          int k=pk_rhs(&rp);
           int gi=g_decl(nm);
           if(k>=0){
             if(G[gi].kind==K_UNK){ G[gi].kind=k; G[gi].sid=(k==K_STRUCT)?PKX_S:-1; changed=1; }
@@ -968,14 +985,14 @@ static void infer(const char*src){
     const char*end=skip_stmt(line);
     const char*rp=line; sw(&rp);
     if(mkw(&rp,"show")){
-      int k=pk_full(&rp,0);
+      int k=pk_rhs(&rp);
       if(k==K_UNK) errx("cannot infer the type of the show value");
     } else if(mkw(&rp,"when")||mkw(&rp,"while")){
       /* every operand of and/or/not is type-checked, not just the first */
       JL none={0};
       gen_cond(rp,cond_end(rp),0,&none,1,"when");
     } else if(mkw(&rp,"give")){
-      int k=pk_full(&rp,0);
+      int k=pk_rhs(&rp);
       if(k==K_UNK) errx("cannot infer the type of the give value");
       if(k!=K_NUM) errx("give must give a number (got %s)",kname(k));
     } else {
@@ -987,8 +1004,8 @@ static void infer(const char*src){
       } else if(wi>0&&*r3=='='){
         int gi=g_find(w);
         if(gi<0) errx("cannot assign to \"%s\" (hold it first)",w,NULL);
-        rp++;
-        int k=pk_full(&rp,0);
+        rp=r3+1;
+        int k=pk_rhs(&rp);
         if(k==K_UNK) errx("cannot infer the type of the assignment value");
         if(G[gi].kind==K_UNK){ G[gi].kind=k; G[gi].sid=(k==K_STRUCT)?-1:-1; }
         else if(G[gi].kind!=k) errx("variable '%s' is used with two different types",w,NULL);
@@ -1097,6 +1114,12 @@ static void emit_prim(const char**p,int depth){
     return;
   }
   if(**p=='('){
+    const char*pc=paren_close(*p);
+    if(pc&&logic_span(*p+1,pc)){
+      emit_logic(*p+1,pc);
+      *p=pc+1;
+      return;
+    }
     (*p)++;
     emit_expr(p,depth+1);
     sw(p);
@@ -1188,7 +1211,7 @@ static void emit_prim(const char**p,int depth){
         for(;;){
           sw(p);
           if(**p==')'){ (*p)++; break; }
-          emit_expr(p,depth+1);
+          arg_emit(p,depth);
           if(XK!=K_NUM) errx("function '%s' takes numbers (arg %d is %s)",n,nargs+1,kname(XK));
           /* every evaluated arg goes on the machine stack: a LATER arg may
              itself be a call (user function, or a builtin whose malloc maps
@@ -1671,6 +1694,118 @@ static void jl_patch(JL*l,size_t to){
   for(int i=0;i<l->n;i++){ if(l->j5) erel32j(l->a[i],to); else erel32(l->a[i],to); }
   free(l->a); l->a=0; l->n=l->cap=0; l->j5=0;
 }
+/* ---- value-position and / or / not (hold, show, give, assignment) ----
+   A right-hand side with a top-level and/or/not (outside quotes and
+   brackets), or a whole parenthesized group holding one, is a logic value:
+   it is compiled as a condition and yields 1.0 when it holds, else 0.0. */
+static const char*rhs_end(const char*s){
+  int inq=0;
+  for(const char*q=s;*q;q++){
+    if(inq){ if(*q=='\\'&&q[1]) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='\n'||*q=='{'||*q=='}') return q;
+    if(*q=='/'&&q[1]=='/') return q;
+  }
+  return s+strlen(s);
+}
+static int logic_span(const char*s,const char*e){
+  cond_trim(&s,&e);
+  while(s<e&&cond_wrapped(s,e)){ s++; e--; cond_trim(&s,&e); }
+  int depth=0, inq=0;
+  for(const char*q=s;q<e;q++){
+    if(inq){ if(*q=='\\'&&q+1<e) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='('||*q=='[') depth++;
+    else if(*q==')'||*q==']') depth--;
+    else if(depth==0&&id0(*q)&&(q==s||!idc(q[-1]))){
+      const char*r=q; while(r<e&&idc(*r)) r++;
+      int wl=(int)(r-q);
+      if((wl==3&&!strncmp(q,"and",3))||(wl==2&&!strncmp(q,"or",2))||(wl==3&&!strncmp(q,"not",3)))
+        return 1;
+      q=r-1;
+    }
+  }
+  return 0;
+}
+/* the ) matching the ( at o, skipping strings; NULL if unbalanced */
+static const char*paren_close(const char*o){
+  int d=0, inq=0;
+  for(const char*q=o;*q;q++){
+    if(inq){ if(*q=='\\'&&q[1]) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='(') d++;
+    else if(*q==')'){ if(--d==0) return q; }
+  }
+  return 0;
+}
+/* the end of a call argument: the top-level , or ) (strings skipped) */
+static const char*arg_end(const char*s){
+  int d=0, inq=0;
+  for(const char*q=s;*q;q++){
+    if(inq){ if(*q=='\\'&&q[1]) q++; else if(*q=='"') inq=0; continue; }
+    if(*q=='"'){ inq=1; continue; }
+    if(*q=='('||*q=='[') d++;
+    else if(*q==')'||*q==']'){ if(d==0) return q; d--; }
+    else if(*q==','&&d==0) return q;
+  }
+  return s+strlen(s);
+}
+/* a user-function argument that is an and/or/not logic value */
+static int arg_pk(const char**p,int depth){
+  sw(p);
+  const char*ae=arg_end(*p);
+  if(logic_span(*p,ae)){
+    JL none={0};
+    gen_cond(*p,ae,0,&none,1,"value");
+    *p=ae;
+    PKX_K=K_NUM; PKX_S=-1;
+    return K_NUM;
+  }
+  return pk_rel(p,depth+1);
+}
+static void arg_emit(const char**p,int depth){
+  sw(p);
+  const char*ae=arg_end(*p);
+  if(logic_span(*p,ae)){
+    emit_logic(*p,ae);
+    *p=ae;
+    return;
+  }
+  emit_expr(p,depth+1);
+}
+static int pk_rhs(const char**p){
+  sw(p);
+  const char*s=*p, *e=rhs_end(s);
+  if(logic_span(s,e)){
+    JL none={0};
+    gen_cond(s,e,0,&none,1,"value");
+    *p=e;
+    PKX_K=K_NUM; PKX_S=-1;
+    return K_NUM;
+  }
+  return pk_full(p,0);
+}
+static void emit_logic(const char*s,const char*e){
+  JL fl={0}, done={0};
+  gen_cond(s,e,0,&fl,0,"value");          /* falls through when the logic holds */
+  mov_imm64(AX,dbits(1.0));
+  size_t at=cn; e1(0xe9); e32(0); jl_add5(&done,at);
+  jl_patch(&fl,cn);
+  mov_imm64(AX,dbits(0.0));
+  jl_patch(&done,cn);
+  XK=K_NUM; XS=-1;
+}
+static void emit_rhs(const char**p){
+  sw(p);
+  const char*s=*p, *e=rhs_end(s);
+  if(logic_span(s,e)){
+    emit_logic(s,e);
+    *p=e;
+    return;
+  }
+  emit_expr(p,0);
+}
+
 /* loop frames: break / continue jump sites, patched when the loop ends */
 typedef struct { JL brk, cont; } LoopF;
 static LoopF loops[64];
@@ -1972,7 +2107,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
           G[gi].off=-8*(F[cur_fn].nparam+1+nloc); nloc++;
         }
       } else gi=g_decl(nm);
-      emit_expr(p,0);
+      emit_rhs(p);
       int k=XK;
       if(k==K_UNK) errx("cannot infer the type of variable '%s'",nm,NULL);
       if(G[gi].kind==K_UNK){ G[gi].kind=k; G[gi].sid=(k==K_STRUCT)?XS:-1; }
@@ -1989,7 +2124,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
     }
     if(mkw(p,"show")){
       sw(p);
-      emit_expr(p,0);
+      emit_rhs(p);
       if(XK==K_NUM) callb(B_SHOWNUM);
       else if(XK==K_STR) callb(B_PUTSTR);
       else if(XK==K_LIST) callb(B_SHOWLIST);
@@ -2045,7 +2180,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
     }
     if(mkw(p,"give")){
       if(!in_fn) errx("give outside a make function");
-      emit_expr(p,0);
+      emit_rhs(p);
       if(XK==K_UNK) errx("cannot infer the type of the give value");
       if(XK!=K_NUM) errx("give must give a number (got %s)",kname(XK));
       e1(0xc9); e1(0xc3);             /* leave; ret */
@@ -2075,7 +2210,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
         }
         if(gi<0&&pi<0) errx("cannot assign to \"%s\" (hold it first)",w,NULL);
         (*p)=q2; (*p)++;
-        emit_expr(p,0);
+        emit_rhs(p);
         if(XK==K_UNK) errx("cannot infer the type of the assignment value");
         if(pi>=0){
           if(XK!=K_NUM) errx("assignment to parameter '%s' must be a number",w,NULL);
