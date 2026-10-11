@@ -1,0 +1,11 @@
+// Conditions with strings that gen2 and native both accept (item 9 guard):
+// a string compared with == inside a condition, and a name inside a call.
+// Expected output: 7 / 8
+hold s = "ab"
+hold a = 1
+when len(s) > 1 and a == 1 {
+  show 7
+}
+when s == "ab" {
+  show 8
+}

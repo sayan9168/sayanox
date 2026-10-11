@@ -10937,6 +10937,206 @@ hold ec = 0
         hold ctrim = concat(ctrim, chr(sx_index(cond,ci)))
         hold ci = ci + 1
       }
+      // item 9: a string or list used as an operand of and/or/not (or as the
+      // whole condition) is refused, as in the value-position check; a
+      // comparison such as `s == "ab"` is still allowed (its neighbour is ==),
+      // and a name inside a call such as len(s) is not an operand
+      hold cwi = 0
+      hold cwq = 0
+      hold cwbad = 0
+      hold cwc = 0
+      hold cwj = 0
+      hold cwrun = 0
+      hold cwtok = ""
+      hold cwd = 0
+      hold cwkw = 0
+      hold cwp = 0
+      hold cwpok = 0
+      hold cwpc = 0
+      hold cwk = 0
+      hold cwe = 0
+      hold cwpw = ""
+      hold cwn = 0
+      hold cwnok = 0
+      hold cwnc = 0
+      hold cwm = 0
+      hold cwnw = ""
+      hold cwkey = ""
+      hold cwhit = 0
+      hold cwlist = 0
+      hold cwsrc = ""
+      hold cwi2 = 0
+      hold cwa2 = 0
+      hold cwb2 = 0
+      hold cwok2 = 0
+      hold cwj2 = 0
+      while cwi < cl && cwbad == 0 {
+        hold cwc = sx_index(ctrim, cwi)
+        when cwq == 1 {
+          when cwc == 34 {
+            hold cwq = 0
+          }
+          hold cwi = cwi + 1
+        } otherwise {
+          when cwc == 34 {
+            hold cwq = 1
+            hold cwi = cwi + 1
+          } otherwise {
+            when (cwc >= 97 && cwc <= 122) || (cwc >= 65 && cwc <= 90) || cwc == 95 {
+              hold cwj = cwi
+              hold cwrun = 1
+              hold cwtok = ""
+              while cwrun == 1 {
+                when cwj >= cl {
+                  hold cwrun = 0
+                } otherwise {
+                  hold cwd = sx_index(ctrim, cwj)
+                  when (cwd >= 97 && cwd <= 122) || (cwd >= 65 && cwd <= 90) || (cwd >= 48 && cwd <= 57) || cwd == 95 {
+                    hold cwtok = concat(cwtok, chr(cwd))
+                    hold cwj = cwj + 1
+                  } otherwise {
+                    hold cwrun = 0
+                  }
+                }
+              }
+              hold cwkw = 0
+              when sx_eq(cwtok, "and") || sx_eq(cwtok, "or") || sx_eq(cwtok, "not") {
+                hold cwkw = 1
+              }
+              // the significant character before the name: none, ( & | or a keyword
+              hold cwp = cwi - 1
+              while cwp >= 0 && sx_index(ctrim, cwp) == 32 {
+                hold cwp = cwp - 1
+              }
+              hold cwpok = 0
+              when cwp < 0 {
+                hold cwpok = 1
+              }
+              when cwp >= 0 {
+                hold cwpc = sx_index(ctrim, cwp)
+                when cwpc == 38 || cwpc == 124 {
+                  hold cwpok = 1
+                }
+                when cwpc == 40 {
+                  // a ( that follows a name is a call's own paren: the name is an argument
+                  hold cwpok = 1
+                  when cwp >= 1 {
+                    hold cwe = sx_index(ctrim, cwp - 1)
+                    when (cwe >= 97 && cwe <= 122) || (cwe >= 65 && cwe <= 90) || (cwe >= 48 && cwe <= 57) || cwe == 95 {
+                      hold cwpok = 0
+                    }
+                  }
+                }
+                when (cwpc >= 97 && cwpc <= 122) || (cwpc >= 65 && cwpc <= 90) || (cwpc >= 48 && cwpc <= 57) || cwpc == 95 {
+                  hold cwk = cwp
+                  hold cwrun = 1
+                  hold cwpw = ""
+                  while cwrun == 1 {
+                    when cwk >= 0 {
+                      hold cwe = sx_index(ctrim, cwk)
+                      when (cwe >= 97 && cwe <= 122) || (cwe >= 65 && cwe <= 90) || (cwe >= 48 && cwe <= 57) || cwe == 95 {
+                        hold cwpw = concat(chr(cwe), cwpw)
+                        hold cwk = cwk - 1
+                      } otherwise {
+                        hold cwrun = 0
+                      }
+                    } otherwise {
+                      hold cwrun = 0
+                    }
+                  }
+                  when sx_eq(cwpw, "and") || sx_eq(cwpw, "or") || sx_eq(cwpw, "not") {
+                    hold cwpok = 1
+                  }
+                }
+              }
+              // the significant character after the name: none, ) & | or a keyword
+              hold cwn = cwj
+              while cwn < cl && sx_index(ctrim, cwn) == 32 {
+                hold cwn = cwn + 1
+              }
+              hold cwnok = 0
+              when cwn >= cl {
+                hold cwnok = 1
+              }
+              when cwn < cl {
+                hold cwnc = sx_index(ctrim, cwn)
+                when cwnc == 41 || cwnc == 38 || cwnc == 124 {
+                  hold cwnok = 1
+                }
+                when (cwnc >= 97 && cwnc <= 122) || (cwnc >= 65 && cwnc <= 90) || cwnc == 95 {
+                  hold cwm = cwn
+                  hold cwrun = 1
+                  hold cwnw = ""
+                  while cwrun == 1 {
+                    when cwm >= cl {
+                      hold cwrun = 0
+                    } otherwise {
+                      hold cwe = sx_index(ctrim, cwm)
+                      when (cwe >= 97 && cwe <= 122) || (cwe >= 65 && cwe <= 90) || (cwe >= 48 && cwe <= 57) || cwe == 95 {
+                        hold cwnw = concat(cwnw, chr(cwe))
+                        hold cwm = cwm + 1
+                      } otherwise {
+                        hold cwrun = 0
+                      }
+                    }
+                  }
+                  when sx_eq(cwnw, "and") || sx_eq(cwnw, "or") || sx_eq(cwnw, "not") {
+                    hold cwnok = 1
+                  }
+                }
+              }
+              // a string or list name in such an operand position is refused
+              when cwkw == 0 && cwpok == 1 && cwnok == 1 {
+                hold cwkey = concat("|", cwtok)
+                hold cwkey = concat(cwkey, "|")
+                hold cwhit = 0
+                hold cwlist = 0
+                while cwlist < 2 {
+                  when cwlist == 0 {
+                    hold cwsrc = sdecls
+                  } otherwise {
+                    hold cwsrc = ldecls
+                  }
+                  hold cwi2 = 0
+                  hold cwa2 = len(cwsrc)
+                  hold cwb2 = len(cwkey)
+                  while cwi2 + cwb2 <= cwa2 {
+                    hold cwok2 = 1
+                    hold cwj2 = 0
+                    while cwj2 < cwb2 {
+                      when sx_index(cwsrc, cwi2 + cwj2) == sx_index(cwkey, cwj2) {
+                        hold cwj2 = cwj2 + 1
+                      } otherwise {
+                        hold cwok2 = 0
+                        hold cwj2 = cwb2
+                      }
+                    }
+                    when cwok2 == 1 {
+                      hold cwhit = 1
+                      hold cwi2 = cwa2
+                    } otherwise {
+                      hold cwi2 = cwi2 + 1
+                    }
+                  }
+                  hold cwlist = cwlist + 1
+                }
+                when cwhit == 1 {
+                  hold cwbad = 1
+                  when perr == 0 {
+                    hold permsg = concat("'", cwtok)
+                    hold permsg = concat(permsg, "' is a string, list or struct; a condition must be numeric")
+                  }
+                  hold perr = 1
+                }
+              }
+              hold cwi = cwj
+            } otherwise {
+              hold cwi = cwi + 1
+            }
+          }
+        }
+      }
+
     }
 
     // ================= give EXPR =================
