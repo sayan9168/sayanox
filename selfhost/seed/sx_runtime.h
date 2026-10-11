@@ -214,6 +214,16 @@ static double sx_b_read_file(double v){ char*p=sx_upack(v);
   fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
   char*b=malloc((size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f);
   char*r=sx_alloc_str(b,rd); free(b); return sx_pack(r); }
+static double sx_b_http_get(double v){ char*u=sx_upack(v);
+  size_t L=strlen(u); if(L>3000) return sx_pack(sx_lit(""));
+  if(strncmp(u,"http://",7)&&strncmp(u,"https://",8)) return sx_pack(sx_lit(""));
+  for(size_t i=0;i<L;i++){ unsigned char c=(unsigned char)u[i];
+    int ok=(c>=97&&c<=122)||(c>=65&&c<=90)||(c>=48&&c<=57)||(c!=0&&strchr("-._~:/?&=%+#@,;",c));
+    if(!ok) return sx_pack(sx_lit("")); }
+  char cmd[4096]; snprintf(cmd,sizeof cmd,"curl -sS -f -m 10 --max-filesize 1000000 -A sayanox-http/0.1 '%s' 2>/dev/null",u);
+  FILE*p=popen(cmd,"r"); if(!p) return sx_pack(sx_lit(""));
+  char*b=malloc(1000001); size_t rd=fread(b,1,1000000,p); b[rd]=0; pclose(p);
+  char*r=sx_alloc_str(b,rd); free(b); return sx_pack(r); }
 static double sx_b_write_file(double path,double content){
   char*p=sx_upack(path); char*s=sx_to_chars(content);
   FILE*f=fopen(p,"wb"); double okv;

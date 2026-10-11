@@ -407,7 +407,7 @@ static int s_field(int sid,const char*n){ for(int i=0;i<S[sid].nf;i++) if(!strcm
 static int f_find(const char*n){ for(int i=0;i<nF;i++) if(!strcmp(F[i].name,n)) return i; return -1; }
 static int is_builtin(const char*n){
   return !strcmp(n,"concat")||!strcmp(n,"len")||!strcmp(n,"chr")||!strcmp(n,"sx_index")||
-         !strcmp(n,"index")||!strcmp(n,"read_file")||!strcmp(n,"write_file")||
+         !strcmp(n,"index")||!strcmp(n,"read_file")||!strcmp(n,"http_get")||!strcmp(n,"write_file")||
          !strcmp(n,"arg")||!strcmp(n,"arg_count")||!strcmp(n,"string_eq")||
          !strcmp(n,"sx_eq")||!strcmp(n,"push")||
          !strcmp(n,"gc")||!strcmp(n,"gc_live")||!strcmp(n,"gc_runs");
@@ -784,14 +784,14 @@ static int pk_prim(const char**p,int depth){
           errx("call needs , or )");
         }
         static const struct { const char*nn; int a; } ar[] = {
-          {"concat",2},{"len",1},{"chr",1},{"sx_index",2},{"index",2},{"read_file",1},
+          {"concat",2},{"len",1},{"chr",1},{"sx_index",2},{"index",2},{"read_file",1},{"http_get",1},
           {"write_file",2},{"arg",1},{"arg_count",0},{"string_eq",2},{"sx_eq",2},{"push",2},
           {"gc",0},{"gc_live",0},{"gc_runs",0}
         };
         for(int i=0;i<(int)(sizeof ar/sizeof ar[0]);i++)
           if(!strcmp(n,ar[i].nn)){
             if(nargs!=ar[i].a) errx("%s takes %d args, got %d",n,ar[i].a,nargs);
-            if(!strcmp(n,"concat")||!strcmp(n,"chr")||!strcmp(n,"read_file")||!strcmp(n,"arg")){ PKX_K=K_STR; PKX_S=-1; return K_STR; }
+            if(!strcmp(n,"concat")||!strcmp(n,"chr")||!strcmp(n,"read_file")||!strcmp(n,"http_get")||!strcmp(n,"arg")){ PKX_K=K_STR; PKX_S=-1; return K_STR; }
             if(!strcmp(n,"push")){ PKX_K=K_LIST; PKX_S=-1; return K_LIST; }
             PKX_K=K_NUM; PKX_S=-1; return K_NUM;
           }
@@ -1345,6 +1345,7 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     XK=K_NUM; XS=-1;
     return;
   }
+  if(!strcmp(n,"http_get")) errx("http_get is not supported by the native backend yet (use gen2 or the seed)");
   if(!strcmp(n,"read_file")){
     emit_expr(p,0);
     if(XK!=K_STR) errx("read_file takes a string (the path)");

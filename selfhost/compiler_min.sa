@@ -3097,7 +3097,7 @@ while running == 1 {
                     }
                     when zwKiscall == 1 {
                       // the builtins' kinds are fixed
-                      when sx_eq(zwKw, "concat") || sx_eq(zwKw, "chr") || sx_eq(zwKw, "read_file") || sx_eq(zwKw, "arg") || sx_eq(zwKw, "read_line") || sx_eq(zwKw, "read_n") || sx_eq(zwKw, "numstr") || sx_eq(zwKw, "sx_cat") || sx_eq(zwKw, "sx_chr") || sx_eq(zwKw, "sx_read") || sx_eq(zwKw, "sx_arg") || sx_eq(zwKw, "sx_read_line") || sx_eq(zwKw, "sx_read_n") || sx_eq(zwKw, "sx_numstr") {
+                      when sx_eq(zwKw, "concat") || sx_eq(zwKw, "chr") || sx_eq(zwKw, "read_file") || sx_eq(zwKw, "http_get") || sx_eq(zwKw, "arg") || sx_eq(zwKw, "read_line") || sx_eq(zwKw, "read_n") || sx_eq(zwKw, "numstr") || sx_eq(zwKw, "sx_cat") || sx_eq(zwKw, "sx_chr") || sx_eq(zwKw, "sx_read") || sx_eq(zwKw, "sx_arg") || sx_eq(zwKw, "sx_read_line") || sx_eq(zwKw, "sx_read_n") || sx_eq(zwKw, "sx_numstr") {
                         hold zwKbk = 115
                       }
                       when sx_eq(zwKw, "push") || sx_eq(zwKw, "sx_lpush") {
@@ -4010,7 +4010,7 @@ while running == 1 {
                 when sx_eq(pw, "concat") || sx_eq(pw, "len") || sx_eq(pw, "chr") || sx_eq(pw, "sx_index") || sx_eq(pw, "index") || sx_eq(pw, "push") {
                   hold pok2 = 1
                 }
-                when sx_eq(pw, "read_file") || sx_eq(pw, "write_file") || sx_eq(pw, "arg") || sx_eq(pw, "arg_count") || sx_eq(pw, "string_eq") {
+                when sx_eq(pw, "read_file") || sx_eq(pw, "http_get") || sx_eq(pw, "write_file") || sx_eq(pw, "arg") || sx_eq(pw, "arg_count") || sx_eq(pw, "string_eq") {
                   hold pok2 = 1
                 }
                 when sx_eq(pw, "sx_cat") || sx_eq(pw, "sx_len") || sx_eq(pw, "sx_chr") || sx_eq(pw, "sx_idx") || sx_eq(pw, "sx_eq") {
@@ -6006,6 +6006,10 @@ while running == 1 {
                     hold argv_c = concat(argv_c, "sx_read")
                     hold amap = 1
                   }
+                  when sx_eq(atok, "http_get") {
+                    hold argv_c = concat(argv_c, "sx_http")
+                    hold amap = 1
+                  }
                   when sx_eq(atok, "write_file") {
                     hold argv_c = concat(argv_c, "sx_write")
                     hold amap = 1
@@ -6087,6 +6091,9 @@ while running == 1 {
           }
           when sx_eq(nm2, "read_file") {
             hold fk = 5
+          }
+          when sx_eq(nm2, "http_get") {
+            hold fk = 20
           }
           when sx_eq(nm2, "write_file") {
             hold fk = 6
@@ -6212,6 +6219,12 @@ while running == 1 {
           }
           when fk == 5 {
             hold rhs = concat("sx_read(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 20 {
+            hold rhs = concat("sx_http(", argv_c)
             hold rhs = concat(rhs, ")")
             hold rk = 1
             hold rt = 1
@@ -7379,6 +7392,10 @@ hold ec = 0
                 hold ocmap = "sx_read"
                 hold ocstr = 1
               }
+              when sx_eq(nm3, "http_get") || sx_eq(nm3, "sx_http") {
+                hold ocmap = "sx_http"
+                hold ocstr = 1
+              }
               when sx_eq(nm3, "arg") || sx_eq(nm3, "sx_arg") {
                 hold ocmap = "sx_arg"
                 hold ocstr = 1
@@ -7616,6 +7633,9 @@ hold ec = 0
                     }
                     when sx_eq(ocaw, "read_file") {
                       hold ocam = "sx_read"
+                    }
+                    when sx_eq(ocaw, "http_get") {
+                      hold ocam = "sx_http"
                     }
                     when sx_eq(ocaw, "write_file") {
                       hold ocam = "sx_write"
@@ -8782,6 +8802,10 @@ hold ec = 0
                     hold argv_c = concat(argv_c, "sx_read")
                     hold amap = 1
                   }
+                  when sx_eq(atok, "http_get") {
+                    hold argv_c = concat(argv_c, "sx_http")
+                    hold amap = 1
+                  }
                   when sx_eq(atok, "write_file") {
                     hold argv_c = concat(argv_c, "sx_write")
                     hold amap = 1
@@ -8862,6 +8886,9 @@ hold ec = 0
           }
           when sx_eq(nm2, "read_file") {
             hold fk = 5
+          }
+          when sx_eq(nm2, "http_get") {
+            hold fk = 20
           }
           when sx_eq(nm2, "write_file") {
             hold fk = 6
@@ -8983,6 +9010,12 @@ hold ec = 0
           }
           when fk == 5 {
             hold rhs = concat("sx_read(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 20 {
+            hold rhs = concat("sx_http(", argv_c)
             hold rhs = concat(rhs, ")")
             hold rk = 1
             hold rt = 1
@@ -9985,6 +10018,10 @@ hold ec = 0
                 hold ocmap = "sx_read"
                 hold ocstr = 1
               }
+              when sx_eq(nm3, "http_get") || sx_eq(nm3, "sx_http") {
+                hold ocmap = "sx_http"
+                hold ocstr = 1
+              }
               when sx_eq(nm3, "arg") || sx_eq(nm3, "sx_arg") {
                 hold ocmap = "sx_arg"
                 hold ocstr = 1
@@ -10222,6 +10259,9 @@ hold ec = 0
                     }
                     when sx_eq(ocaw, "read_file") {
                       hold ocam = "sx_read"
+                    }
+                    when sx_eq(ocaw, "http_get") {
+                      hold ocam = "sx_http"
                     }
                     when sx_eq(ocaw, "write_file") {
                       hold ocam = "sx_write"
@@ -11786,6 +11826,10 @@ hold ec = 0
                 }
                 when sx_eq(cwid, "read_file") {
                   hold cwmap = "sx_read"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "http_get") {
+                  hold cwmap = "sx_http"
                   hold rt = 1
                 }
                 when sx_eq(cwid, "write_file") {
@@ -13804,6 +13848,7 @@ when rt == 1 {
   hold out = concat(out, "static double sx_len(const void *s){ sx_gcb *b = sx_gc_hash_get((char*)s); if (b && b->kind == 1) return (double)((sx_list*)((char*)b + SX_GCH))->n; return (double)strlen((const char*)s); }\n")
   hold out = concat(out, "static double sx_idx(const char *s,double v){ long i=(long)v; long L=(long)strlen(s); if(i<0) i=i+L; if(i<0||i>=L){ fputs(\"sx: string index out of range\",stderr); exit(1); } return (double)(unsigned char)s[i]; }\n")
   hold out = concat(out, "static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return \"\"; fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET); char *b=(char*)sx_gc_alloc(0,(size_t)sz+1); size_t rd=fread(b,1,(size_t)sz,f); b[rd]=0; fclose(f); return b; }\n")
+  hold out = concat(out, "static char *sx_http(const char *u){ size_t L=strlen(u); if(L>3000) return \"\"; if(strncmp(u,\"http://\",7)&&strncmp(u,\"https://\",8)) return \"\"; for(size_t i=0;i<L;i++){ unsigned char c=(unsigned char)u[i]; int ok=(c>=97&&c<=122)||(c>=65&&c<=90)||(c>=48&&c<=57)||(c!=0&&strchr(\"-._~:/?&=%+#@,;\",c)); if(!ok) return \"\"; } char cmd[4096]; snprintf(cmd,sizeof cmd,\"curl -sS -f -m 10 --max-filesize 1000000 -A sayanox-http/0.1 '%s' 2>/dev/null\",u); FILE *p=popen(cmd,\"r\"); if(!p) return \"\"; char *b=(char*)sx_gc_alloc(0,1000001); size_t rd=fread(b,1,1000000,p); b[rd]=0; pclose(p); return b; }\n")
   hold out = concat(out, "static char *sx_read_line(void){ char b[4096]; if(!fgets(b,sizeof b,stdin)) return \"\"; size_t n=strlen(b); if(n&&b[n-1]==10) b[n-1]=0; n=strlen(b); if(n&&b[n-1]==13) b[n-1]=0; char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
   hold out = concat(out, "static char *sx_read_n(double v){ long n=(long)v; if(n<0) return \"\"; char *b=(char*)sx_gc_alloc(0,(size_t)n+1); size_t rd=fread(b,1,(size_t)n,stdin); b[rd]=0; return b; }\n")
   hold out = concat(out, "static double sx_write_out(const char *s){ fputs(s,stdout); return 1.0; }\n")

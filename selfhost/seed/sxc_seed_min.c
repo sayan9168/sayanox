@@ -328,6 +328,8 @@ static char *atom(int *oty){
         snprintf(buf,sizeof buf,"sx_argc()"); *oty=TY_NUM;
       } else if((!strcmp(id,"read_file")||!strcmp(id,"sx_read"))&&na==1){
         snprintf(buf,sizeof buf,"sx_read(%s)",args[0]); *oty=TY_STR;
+      } else if((!strcmp(id,"http_get")||!strcmp(id,"sx_http"))&&na==1){
+        snprintf(buf,sizeof buf,"sx_http(%s)",args[0]); *oty=TY_STR;
       } else if((!strcmp(id,"write_file")||!strcmp(id,"sx_write"))&&na==2){
         snprintf(buf,sizeof buf,"sx_write(%s,%s)",args[0],args[1]); *oty=TY_NUM;
       } else if(!strcmp(id,"push")&&na==2){
@@ -761,6 +763,7 @@ static void preamble(void){
   puts("static double sx_argc(void){ return (double)g_argc; }");
   puts("static char *sx_arg(int i){ return (i>=0&&i<g_argc)?sx_sb_from(g_argv[i]):sx_sb_new(1); }");
   puts("static char *sx_read(const char *p){ FILE *f=fopen(p,\"rb\"); if(!f) return sx_sb_new(1); fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET); char *b=malloc((size_t)n+1); size_t rd=fread(b,1,(size_t)n,f); b[rd]=0; fclose(f); char *r=sx_sb_from(b); free(b); return r; }");
+  puts("static char *sx_http(const char *u){ size_t L=strlen(u); if(L>3000) return sx_sb_new(1); if(strncmp(u,\"http://\",7)&&strncmp(u,\"https://\",8)) return sx_sb_new(1); for(size_t i=0;i<L;i++){ unsigned char c=(unsigned char)u[i]; int ok=(c>=97&&c<=122)||(c>=65&&c<=90)||(c>=48&&c<=57)||(c!=0&&strchr(\"-._~:/?&=%+#@,;\",c)); if(!ok) return sx_sb_new(1); } char cmd[4096]; snprintf(cmd,sizeof cmd,\"curl -sS -f -m 10 --max-filesize 1000000 -A sayanox-http/0.1 '%s' 2>/dev/null\",u); FILE *p=popen(cmd,\"r\"); if(!p) return sx_sb_new(1); char *b=malloc(1000001); size_t rd=fread(b,1,1000000,p); b[rd]=0; pclose(p); char *r=sx_sb_from(b); free(b); return r; }");
   puts("static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0; fputs(s?s:\"\",f); fclose(f); return 1; }");
   emit_typedefs();
 }
@@ -791,7 +794,7 @@ static void collect(void){
         int ty=TY_NUM; int si=-1;
         if(P<N && S[P]=='"') ty=TY_STR;
         else if(P<N && S[P]=='[') ty=TY_LIST;
-        else if(at("concat")||at("chr")||at("read_file")||at("arg")||at("sx_cat")||at("sx_chr")||at("sx_read")||at("sx_arg")) ty=TY_STR;
+        else if(at("concat")||at("chr")||at("read_file")||at("http_get")||at("arg")||at("sx_cat")||at("sx_chr")||at("sx_read")||at("sx_arg")) ty=TY_STR;
         else if(at("push")) ty=TY_LIST;
         else if(P<N && isid0(S[P])){
           char *t=parse_id();
