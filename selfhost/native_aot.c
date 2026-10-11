@@ -355,7 +355,7 @@ typedef enum { K_NUM=0, K_STR=1, K_LIST=2, K_STRUCT=3 } kind_t;
 typedef struct { char name[64]; int kind; int sid; int off; } Glob;  /* off: BP displacement of a make local, 0 = global */
 typedef struct { char name[64]; int kind; int sid; } Field;
 typedef struct { char name[64]; Field f[MAXFD]; int nf; } SDef;
-typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; int gen; int ntp; char tps[8][64]; } Fn;
+typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; int gen; int ntp; char tps[8][64]; int pk[MAXP]; int rk; } Fn;
 
 static Glob G[NSLOT]; static int nG;
 static SDef S[MAXS]; static int nS;
@@ -375,7 +375,9 @@ static int g_decl(const char*n){
    compiles a generic for numbers only, so each T is num */
 static char gtp[8][64]; static int ngtp=0;
 static int is_tp(const char*t){ for(int i=0;i<ngtp;i++) if(!strcmp(gtp[i],t)) return 1; return 0; }
+static int last_sig_kind=K_NUM, last_ret_kind=K_NUM;
 static int sig_type(const char**p,const char*nm){
+  last_sig_kind=K_NUM;
   sw(p);
   if(**p!=':') return 0;
   (*p)++; sw(p);
@@ -383,10 +385,12 @@ static int sig_type(const char**p,const char*nm){
   if(!pid(p,t,64)) errx("make %s: expected a type after ':'",nm,NULL);
   if(is_tp(t)) return 1;
   if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (a parameter type here must be T or another type parameter)",nm,NULL);
+  if(!strcmp(t,"str")){ last_sig_kind=K_STR; return 1; }
   if(strcmp(t,"num")) errx("make %s: parameter type '%s' is not in the native subset (native takes num)",nm,t,NULL);
   return 1;
 }
 static int sig_ret(const char**p,const char*nm){
+  last_ret_kind=K_NUM;
   sw(p);
   if(!((*p)[0]=='-'&&(*p)[1]=='>')) return 0;
   (*p)+=2; sw(p);
@@ -394,6 +398,7 @@ static int sig_ret(const char**p,const char*nm){
   if(!pid(p,t,64)) errx("make %s: expected a return type after '->'",nm,NULL);
   if(is_tp(t)) return 1;
   if(ngtp>0) errx("make %s<...>: must be written with type parameters used by every parameter and the return type (the return type here must be T or another type parameter)",nm,NULL);
+  if(!strcmp(t,"str")){ last_ret_kind=K_STR; return 1; }
   if(strcmp(t,"num")) errx("make %s: return type '%s' is not in the native subset (native returns num)",nm,t,NULL);
   return 1;
 }
@@ -595,6 +600,7 @@ static void collect_defs(const char*src){
         if(F[nF].nparam>=MAXP){ fprintf(stderr,"native_aot: make %s: at most %d params\n",nm,MAXP); exit(1); }
         strcpy(F[nF].params[F[nF].nparam++],pm);
         sig_typed+=sig_type(&p,nm);
+        F[nF].pk[F[nF].nparam-1]=last_sig_kind;
         sw(&p);
         if(*p==','){ p++; continue; }
         if(*p==')'){ p++; break; }
@@ -602,6 +608,7 @@ static void collect_defs(const char*src){
       }
       {
         int sig_ret1=sig_ret(&p,nm);
+        F[nF].rk=last_ret_kind;
         sig_check(nm,F[nF].nparam,sig_typed,sig_ret1);
         if(F[nF].gen&&(sig_typed!=F[nF].nparam||!sig_ret1))
           errx("make %s<...>: a generic needs a type parameter on every parameter and a return type (-> T)",nm,NULL);
@@ -805,7 +812,9 @@ static int pk_prim(const char**p,int depth){
           if(**p==')'){ (*p)++; break; }
           int k=arg_pk(p,depth);
           if(k!=K_NUM&&F[fi].gen) errx("generics are not in the native subset for strings and lists (arg %d of '%s' is not a number; gen2 monomorphises them)",nargs+1,n,NULL);
-          if(k!=K_NUM) errx("function '%s' takes numbers (arg %d is not a number)",n,nargs+1);
+          { int want=(!F[fi].gen&&nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
+            if(k!=want&&want==K_NUM) errx("function '%s' takes numbers (arg %d is not a number)",n,nargs+1);
+            if(k!=want) errx("function '%s' takes a string (arg %d is not a string)",n,nargs+1); }
           nargs++;
           sw(p);
           if(**p==','){ (*p)++; continue; }
@@ -813,8 +822,8 @@ static int pk_prim(const char**p,int depth){
           errx("call needs , or )");
         }
         if(nargs!=F[fi].nparam) errx("function '%s' takes %d args, got %d",n,F[fi].nparam,nargs);
-        PKX_K=K_NUM; PKX_S=-1;
-        return K_NUM;
+        PKX_K=F[fi].rk; PKX_S=-1;
+        return F[fi].rk;
       }
     }
     /* gen2-only word operators: name them instead of dying as "undefined
@@ -823,7 +832,7 @@ static int pk_prim(const char**p,int depth){
       errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
     if(cur_fn>=0){
       for(int i=0;i<F[cur_fn].nparam;i++)
-        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
+        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return F[cur_fn].pk[i]; }
     }
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
@@ -1024,7 +1033,7 @@ static void infer(const char*src){
     } else if(mkw(&rp,"give")){
       int k=pk_rhs(&rp);
       if(k==K_UNK) errx("cannot infer the type of the give value");
-      if(k!=K_NUM) errx("give must give a number (got %s)",kname(k));
+      if(k!=(cur_fn>=0?F[cur_fn].rk:K_NUM)) errx((cur_fn>=0&&F[cur_fn].rk==K_STR)?"give must give a string (got %s)":"give must give a number (got %s)",kname(k),NULL);
     } else {
       char w[64]; const char*r2=rp; int wi=0;
       while(idc(*r2)&&wi+1<64) w[wi++]=*r2++; w[wi]=0;
@@ -1172,7 +1181,7 @@ static void emit_prim(const char**p,int depth){
     if(!strcmp(n,"true")||!strcmp(n,"false")){ mov_imm64(AX,dbits(n[0]=='t'?1.0:0.0)); XK=K_NUM; XS=-1; return; }
     if(cur_fn>=0){
       for(int i=0;i<F[cur_fn].nparam;i++)
-        if(!strcmp(F[cur_fn].params[i],n)){ load_param(i); XK=K_NUM; XS=-1; return; }
+        if(!strcmp(F[cur_fn].params[i],n)){ load_param(i); XK=F[cur_fn].pk[i]; XS=-1; return; }
     }
     const char*q=*p; sw(&q);
     /* `name {` is a struct literal unless name is a variable and not a
@@ -1243,7 +1252,9 @@ static void emit_prim(const char**p,int depth){
           if(**p==')'){ (*p)++; break; }
           arg_emit(p,depth);
           if(XK!=K_NUM&&F[fi].gen) errx("generics are not in the native subset for strings and lists (arg %d of '%s' is %s; gen2 monomorphises them)",nargs+1,n,kname(XK),NULL);
-          if(XK!=K_NUM) errx("function '%s' takes numbers (arg %d is %s)",n,nargs+1,kname(XK));
+          { int want=(!F[fi].gen&&nargs<F[fi].nparam)?F[fi].pk[nargs]:K_NUM;
+            if(XK!=want&&want==K_NUM) errx("function '%s' takes numbers (arg %d is %s)",n,nargs+1,kname(XK));
+            if(XK!=want) errx("function '%s' takes a string (arg %d is %s)",n,nargs+1,kname(XK)); }
           /* every evaluated arg goes on the machine stack: a LATER arg may
              itself be a call (user function, or a builtin whose malloc maps
              a fresh chunk), which clobbers the arg registers -- staging in
@@ -1260,7 +1271,7 @@ static void emit_prim(const char**p,int depth){
            own register, so no staged arg can be clobbered) */
         for(int i=nargs-1;i>=0;i--) pop_r(argreg[i]);
         callf(fi);
-        XK=K_NUM; XS=-1;
+        XK=F[fi].rk; XS=-1;
         return;
       }
     }
@@ -1270,7 +1281,7 @@ static void emit_prim(const char**p,int depth){
       errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
     if(cur_fn>=0){
       for(int i=0;i<F[cur_fn].nparam;i++)
-        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
+        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return F[cur_fn].pk[i]; }
     }
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
@@ -2222,7 +2233,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
       if(!in_fn) errx("give outside a make function");
       emit_rhs(p);
       if(XK==K_UNK) errx("cannot infer the type of the give value");
-      if(XK!=K_NUM) errx("give must give a number (got %s)",kname(XK));
+      if(XK!=F[cur_fn].rk) errx(F[cur_fn].rk==K_NUM?"give must give a number (got %s)":"give must give a string (got %s)",kname(XK),NULL);
       e1(0xc9); e1(0xc3);             /* leave; ret */
       endstmt(p);
       continue;

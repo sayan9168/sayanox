@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
 
 all: true-selfhost-min
 
@@ -1325,6 +1325,24 @@ test-list-paren: $(GEN2) $(NATIVE_BIN)
 	@cmp $(TESTS)/lp_g2.out $(TESTS)/lp_nat.out || { echo "FAILED: native list parens differ from gen2"; exit 1; }
 	@echo "[OK] list literal elements with grouping parens: gen2 and native agree"
 
+# test-native-strfn: native string parameters and string return values (typed `str`).
+# Hand-computed output; gen2 and native must match; type mistakes are refused.
+test-native-strfn: $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/native_str_fn_test.sa $(TESTS)/nsf_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/nsf_g2 $(TESTS)/nsf_g2.c
+	./$(NATIVE_BIN) selfhost/native_str_fn_test.sa $(TESTS)/nsf_nat
+	./$(TESTS)/nsf_nat > $(TESTS)/nsf_nat.out
+	./$(TESTS)/nsf_g2 > $(TESTS)/nsf_g2.out
+	@printf 'hi bob\n6\nh\n1\n4\n' > $(TESTS)/nsf_want.out
+	@cmp $(TESTS)/nsf_nat.out $(TESTS)/nsf_want.out || { echo "FAILED: native string functions differ from the hand-computed output"; exit 1; }
+	@cmp $(TESTS)/nsf_g2.out $(TESTS)/nsf_want.out || { echo "FAILED: gen2 string functions differ from the hand-computed output"; exit 1; }
+	@printf 'make count(s: str) -> num {\n  give len(s)\n}\nshow count(5)\n' > $(TESTS)/nsf_bad1.sa
+	@./$(NATIVE_BIN) $(TESTS)/nsf_bad1.sa $(TESTS)/nsf_bad1 2>&1 | grep -q 'takes a string' || { echo "FAILED: native accepted a number for a str parameter"; exit 1; }
+	@printf 'make f(a: num) -> str {\n  give 1\n}\nhold z = f(1)\nshow z\n' > $(TESTS)/nsf_bad2.sa
+	@./$(NATIVE_BIN) $(TESTS)/nsf_bad2.sa $(TESTS)/nsf_bad2 2>&1 | grep -q 'give must give a string' || { echo "FAILED: native accepted a number return for a str function"; exit 1; }
+	@echo "[OK] native string parameters and string returns: same output as gen2; number/string mistakes refused"
+
 # test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
 # the tests use a local HTTP server on 127.0.0.1.
 # test-http-get: http_get(url) network builtin (GET only, http/https only, 1 MB cap,
@@ -1834,7 +1852,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

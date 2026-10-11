@@ -1,0 +1,21 @@
+// Native string parameters and string return values (typed `str`).
+// Hand-computed expected output (see NSF_WANT in the Makefile):
+//   hi bob / 6 / h / 1 / 4
+make greet(s: str) -> str {
+  give concat("hi ", s)
+}
+make count(s: str) -> num {
+  give len(s)
+}
+make first(s: str) -> str {
+  give chr(sx_index(s, 0))
+}
+make same(a: str, b: str) -> num {
+  give string_eq(a, b)
+}
+hold w = greet("bob")
+show w
+show count(w)
+show first(w)
+show same(w, "hi bob")
+show count(greet(first("xyz")))
