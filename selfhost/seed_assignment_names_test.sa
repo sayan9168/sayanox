@@ -1,0 +1,9 @@
+hold _s = "underscore"
+_s = _s
+hold sx_word = "prefix"
+sx_word = sx_word
+hold _sx_v = "temporary"
+_sx_v = _sx_v
+show _s
+show sx_word
+show _sx_v

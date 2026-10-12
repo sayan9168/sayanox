@@ -1,0 +1,31 @@
+make fill(xs: list, n: num) -> list {
+  hold i = 0
+  while i < n {
+    push(xs, i)
+    i = i + 1
+  }
+  give xs
+}
+hold values = []
+hold alias = values
+hold result = fill(values, 100)
+show len(values)
+show len(alias)
+show len(result)
+show values[99]
+push(alias, 700)
+show len(result)
+show result[100]
+hold rebound = [9]
+values = rebound
+show len(values)
+show len(alias)
+show len(alias)
+// Grow through several aliases, each pointing at a different generation.
+hold original = []
+hold mid = fill(original, 5)
+hold latest = fill(mid, 40)
+push(original, 88)
+show len(mid)
+show len(latest)
+show latest[45]

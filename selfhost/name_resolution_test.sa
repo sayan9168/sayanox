@@ -1,0 +1,48 @@
+struct Pair { left, right }
+hold left = 4
+hold p = Pair { left: left, right: 8 }
+show p.left
+show p.right
+hold index = 1
+hold xs = [7, 9]
+show xs[index]
+hold len = 3
+show len
+show len("abcd")
+show "ghost // { and missing() are only text"
+// ghost and missing() are ignored in comments.
+make forward(n: num) -> num {
+  give later(n)
+}
+make later(n: num) -> num {
+  give n + 1
+}
+make scoped(n: num) -> num {
+  hold result = 0
+  when n > 0 {
+    hold same = 3
+    result = same
+  } otherwise {
+    hold same = 4
+    result = same
+  }
+  give result
+}
+make identity<T>(value: T) -> T {
+  give value
+}
+show forward(4)
+show scoped(1)
+show scoped(0)
+show identity("generic")
+hold total = 0
+hold end = len("ab")
+for i in 0..end {
+  total = total + i
+}
+show total
+hold nested = [left, index + 1]
+show nested[1]
+for ch in identity("ok") {
+  show ch
+}

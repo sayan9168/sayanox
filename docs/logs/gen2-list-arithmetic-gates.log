@@ -1,0 +1,20 @@
+--- make doctor ---
+python          present, but NOT used anywhere on the bootstrap path
+node/ruby       present, but NOT used anywhere on the bootstrap path
+--------------------------------
+DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+--- make true-selfhost ---
+cc -O2 -o selfhost/seed_tests/ts_re_b selfhost/seed_tests/ts_re_b.c
+[OK] boot_from_gen2 reassign
+make[1]: Leaving directory '/home/user/sayanox'
+=== TRUE-SELFHOST-MIN-OK ===
+--- make gen3 ---
+[OK] gen3 modulo + else
+./selfhost/gen3 selfhost/compiler_min.sa selfhost/gen4.c >/dev/null
+[OK] byte-identical gen3 == gen4
+=== GEN3-OK ===
+--- make native-test ---
+./selfhost/native_aot selfhost/native_strord_test.sa selfhost/seed_tests/nso_nat_gate
+./selfhost/native_aot selfhost/stdlib_growth_test.sa selfhost/seed_tests/sg_nat_gate
+[OK] native: stdlib growth helpers (tri, ceil_div, pow_mod, collatz_steps, digit_at, isqrt, ...)
+=== NATIVE-TEST-OK ===

@@ -1,0 +1,26 @@
+make identity<T>(value: T) -> T {
+  give value
+}
+make stamp(n: num) -> num {
+  show n
+  give n
+}
+make size(xs: list) -> num {
+  give len(xs)
+}
+make descend(n: num) -> num {
+  when n == 0 {
+    give 0
+  }
+  hold values = identity([stamp(n), descend(n - 1), stamp(n + 10)])
+  give values[0] + values[1] + values[2]
+}
+make _sx_seed_seq_begin(n: num) -> num {
+  give n
+}
+make collision() -> num {
+  give _sx_seed_seq_begin(42)
+}
+show descend(2)
+show size([stamp(4), size([stamp(5), stamp(6)]), stamp(7)])
+show collision()

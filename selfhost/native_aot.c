@@ -46,6 +46,87 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Structural return proof; kept in sync with sxflow* in compiler_min.sa.
+ * Loops may run zero times. Expressions are skipped, never constant-folded.
+ * Ordinary expression/type validation is still performed by the frontend. */
+static void rf_space(const char **p){
+  for(;;){
+    while(**p && isspace((unsigned char)**p)) ++*p;
+    if((*p)[0]=='/' && (*p)[1]=='/'){
+      while(**p && **p!='\n') ++*p;
+    } else return;
+  }
+}
+static void rf_word(const char **p, char word[64]){
+  unsigned n=0;
+  while(isalnum((unsigned char)**p) || **p=='_'){
+    if(n<63) word[n++]=**p;
+    ++*p;
+  }
+  word[n]=0;
+}
+static void rf_skip(const char **p, int mode){
+  int nesting=0;
+  while(**p){
+    int c=(unsigned char)**p;
+    if(c=='"'){
+      ++*p;
+      while(**p && **p!='"'){
+        if(**p=='\\' && (*p)[1]) ++*p;
+        ++*p;
+      }
+      if(**p) ++*p;
+    } else if(c=='/' && (*p)[1]=='/'){
+      while(**p && **p!='\n') ++*p;
+    } else {
+      if(!nesting && ((mode && c=='{') || (!mode && (c=='\n'||c=='\r'||c=='}')))) return;
+      if(c=='(' || c=='[' || c=='{') nesting++;
+      if(c==')' || c==']' || c=='}') nesting--;
+      ++*p;
+    }
+  }
+}
+static int rf_block(const char **p, unsigned level){
+  if(level>128){ while(**p) ++*p; return 0; }
+  rf_space(p);
+  if(**p!='{'){ while(**p) ++*p; return 0; }
+  ++*p;
+  int proven=0;
+  while(**p){
+    rf_space(p);
+    if(**p=='}'){ ++*p; return proven; }
+    if(!**p) break;
+    char word[64]; rf_word(p,word);
+    if(!strcmp(word,"when")){
+      rf_skip(p,1);
+      int all=rf_block(p,level+1), final_else=0;
+      for(;;){
+        const char *q=*p; rf_space(&q); char tail[64]; rf_word(&q,tail);
+        int is_else=!strcmp(tail,"else") || !strcmp(tail,"otherwise");
+        if(strcmp(tail,"elif") && !is_else) break;
+        *p=q; rf_space(p);
+        if(is_else){
+          q=*p; rf_word(&q,tail);
+          if(!strcmp(tail,"if") || !strcmp(tail,"when")) *p=q;
+          else final_else=1;
+        }
+        rf_skip(p,1);
+        int arm=rf_block(p,level+1);
+        all=all && arm;
+        if(final_else) break;
+      }
+      if(all && final_else) proven=1;
+    } else if(!strcmp(word,"while") || !strcmp(word,"for")){
+      rf_skip(p,1); (void)rf_block(p,level+1);
+    } else {
+      if(!strcmp(word,"give")) proven=1;
+      rf_skip(p,0);
+    }
+  }
+  return 0;
+}
+
 #include <sys/stat.h>
 #include <stdarg.h>
 #include <unistd.h>
@@ -100,7 +181,7 @@ static unsigned char data[DMAX]; static size_t dn;
 #define SX_BLK_MAGIC 0x5A6B7C8D9E0F1A2BULL
 /* block kinds: which payload words the collector has to follow */
 #define BK_OPAQUE 0   /* strings: bytes only, no pointers */
-#define BK_LIST   1   /* doubles only, no pointers        */
+#define BK_LIST   1   /* doubles plus growth-forward link at payload +8 */
 #define BK_STRUCT 2   /* scan every word conservatively   */
 static size_t d_glob; /* globals array      */
 static size_t d_err_div, d_err_list, d_err_str, d_err_malloc;
@@ -342,7 +423,7 @@ static void endstmt(const char**p){
     if(!strcmp(w,"and")||!strcmp(w,"or")||!strcmp(w,"not"))
       errx("'%s' is a full-language word operator and not in the native subset outside when/while conditions (native speaks the pure-min expressions; use selfhost/gen2)",w,NULL);
     sw(&r);
-    if(*r=='='&&(g_find(w)>=0)) return;                /* next line is an assignment */
+    if(*r=='='&&r[1]!='=') return; /* next assignment; emit_prog checks its binding */
     if(*r=='('&&!strcmp(w,"push")) return;             /* next line is a call statement (push only, as in seed-min/gen2) */
   }
   errx("unexpected token after statement (expected end of line or next statement)",*p,NULL);
@@ -355,7 +436,7 @@ typedef enum { K_NUM=0, K_STR=1, K_LIST=2, K_STRUCT=3 } kind_t;
 typedef struct { char name[64]; int kind; int sid; int off; } Glob;  /* off: BP displacement of a make local, 0 = global */
 typedef struct { char name[64]; int kind; int sid; } Field;
 typedef struct { char name[64]; Field f[MAXFD]; int nf; } SDef;
-typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; int gen; int ntp; char tps[8][64]; int pk[MAXP]; int rk; int ptp[MAXP]; int rtp; const char*body_at; int inst_of; } Fn;
+typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; int gen; int ntp; char tps[8][64]; int pk[MAXP]; int rk; int ptp[MAXP]; int rtp; const char*body_at; int inst_of, queued; } Fn;
 
 static Glob G[NSLOT]; static int nG;
 static SDef S[MAXS]; static int nS;
@@ -380,7 +461,10 @@ static int pick_instance(int fi,const int*kinds,int nargs){
       errx("generics are not in the native subset for structs (arg %d of '%s' is %s; gen2 monomorphises them)",i+1,F[fi].name,kname(kinds[i]));
   int allnum=1;
   for(int i=0;i<8;i++) if(bind[i]==K_STR||bind[i]==K_LIST) allnum=0;
-  if(allnum) return fi;
+  if(allnum){
+    if(!F[fi].queued){ F[fi].queued=1; pend[npend++]=fi; }
+    return fi;
+  }
   int rk=(F[fi].rtp>=0&&bind[F[fi].rtp]>=0)?bind[F[fi].rtp]:K_NUM;
   int want[MAXP];
   for(int i=0;i<F[fi].nparam;i++){
@@ -406,6 +490,21 @@ static int g_decl(const char*n){
   int i=g_find(n); if(i>=0) return i;
   if(nG>=NSLOT){ fprintf(stderr,"native_aot: too many globals (native limit: %d)\n",NSLOT); exit(1); }
   snprintf(G[nG].name,64,"%s",n); G[nG].kind=K_UNK; G[nG].sid=-1; G[nG].off=0; return nG++;
+}
+/* Optional hold annotation, shared by collection, inference and emission.
+ * In a concrete generic body, T means that instance's actual bound kind. */
+static int hold_kind(const char**p,const char*nm,int fi){
+  sw(p); if(**p!=':') return K_UNK;
+  (*p)++; char t[64];
+  if(!pid(p,t,64)) errx("hold '%s': expected a type after ':'",nm,NULL);
+  if(!strcmp(t,"num")) return K_NUM;
+  if(!strcmp(t,"str")) return K_STR;
+  if(!strcmp(t,"list")) return K_LIST;
+  if(fi>=0) for(int i=0;i<F[fi].ntp;i++) if(!strcmp(t,F[fi].tps[i])){
+    for(int j=0;j<F[fi].nparam;j++) if(F[fi].ptp[j]==i) return F[fi].pk[j];
+  }
+  errx("hold '%s': unknown or unsupported type '%s'",nm,t,NULL);
+  return K_UNK;
 }
 /* typed signatures: `make f(a: num, b: num) -> num`.  Native takes only num.
    A signature is either fully typed (every parameter and the return) or
@@ -669,7 +768,11 @@ static void collect_defs(const char*src){
     else if(mkw(&p,"hold")){
       char nm[64];
       if(!pid(&p,nm,64)){ fprintf(stderr,"native_aot: hold needs a name\n"); exit(1); }
-      g_decl(nm);
+      int gi=g_decl(nm), annotation=hold_kind(&p,nm,-1);
+      if(annotation>=0){
+        if(G[gi].kind>=0 && G[gi].kind!=annotation) errx("conflicting hold type for '%s'",nm,NULL);
+        G[gi].kind=annotation;
+      }
       p=skip_stmt(line);
     }
     else p=skip_stmt(line); /* show/when/while/give: nothing to collect */
@@ -720,7 +823,7 @@ static int pk_prim(const char**p,int depth){
     for(;;){
       sw(p);
       if(**p==']'){ (*p)++; break; }
-      int k=pk_rel(p,depth+1);
+      int k=pk_full(p,depth+1);
       if(k!=K_NUM) errx("list elements must be numbers");
       sw(p);
       if(**p==','){ (*p)++; continue; }
@@ -1025,6 +1128,7 @@ static int infer_round(const char*src){
     if(mkw(&rp,"hold")){
       char nm[64];
       if(pid(&rp,nm,64)){
+        hold_kind(&rp,nm,-1);
         sw(&rp);
         if(*rp=='='){
           rp++;
@@ -1162,7 +1266,7 @@ static void emit_prim(const char**p,int depth){
     for(;;){
       sw(&q);
       if(*q==']'){ q++; break; }
-      (void)pk_rel(&q,0);
+      (void)pk_full(&q,depth+1);
       n++;
       sw(&q);
       if(*q==','){ q++; continue; }
@@ -1468,13 +1572,8 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     return;
   }
   if(!strcmp(n,"push")){
-    /* if the list argument is a plain global, remember it: push may grow the
-       list, in which case the new list pointer must be stored back into it */
-    const char*q=*p; char w[64]; int wi=0;
-    while(idc(*q)&&wi+1<64) w[wi++]=*q++; w[wi]=0;
-    int gi=(wi>0)?g_find(w):-1;
-    const char*q2=q; sw(&q2);
-    if(gi>=0&&*q2!=',') gi=-1;
+    /* Growth is linked through the old list object. All aliases, including
+     * parameters, remain valid without rebinding a same-named global. */
     arg_emit(p,0);
     if(XK!=K_LIST) errx("push takes (list, number)");
     push_r(AX);                    /* stage the list: the value may be a call */
@@ -1485,7 +1584,6 @@ static void emit_call_builtin(const char**p,const char*n,int depth){
     sw(p); if(**p!=')') errx("push takes 2 args"); (*p)++;
     pop_r(DI);
     callb(B_LPUSH);
-    if(gi>=0) store_global(gi);
     XK=K_LIST; XS=-1;
     return;
   }
@@ -1763,10 +1861,16 @@ static void emit_fn(int fi,const char**p){
     if(**p==')'){ (*p)++; break; }
     errx("make %s: bad param list",F[fi].name,NULL);
   }
+  sw(p);
+  int check_return=(*p)[0]=='-' && (*p)[1]=='>';
   sig_ret(p,F[fi].name);
   ngtp=0;
   sw(p);
   if(**p!='{') errx("make %s: expected { ... }",F[fi].name,NULL);
+  if(check_return){
+    const char *flow_at=*p;
+    if(!rf_block(&flow_at,0)) errx("make %s may fall through without give",F[fi].name,NULL);
+  }
   (*p)++;
   cur_fn=fi; lbase=nG; nloc=0;
   emit_prog(p,1,1);                   /* consumes the closing } */
@@ -2103,19 +2207,40 @@ static void emit_when_body(const char**p,int in_fn){
   } else jl_patch(&fl,cn);
 }
 
-/* for NAME in A..B { }   (numbers; B exclusive)
-   for NAME in XS { }     (XS a list: NAME is each number; a string: each byte)
-   Loop state lives in hidden globals, so for is not allowed inside make
-   (a recursive call would share it), like hold. */
+/* for NAME in A..B / list / string. Function binders and hidden state
+ * use call-frame slots, so recursive invocations never share loop state. */
+static int for_slot(const char*nm){
+  if(cur_fn<0) return g_decl(nm);
+  for(int i=lbase;i<nG;i++) if(!strcmp(G[i].name,nm)) return i;
+  if(nG>=NSLOT) errx("too many variables (native limit reached)");
+  int gi=nG++;
+  snprintf(G[gi].name,64,"%s",nm); G[gi].kind=K_UNK; G[gi].sid=-1;
+  for(int j=0;j<F[cur_fn].nparam;j++){
+    if(!strcmp(F[cur_fn].params[j],nm)){
+      G[gi].off=-8*(j+1); G[gi].kind=F[cur_fn].pk[j];
+      return gi;
+    }
+  }
+  G[gi].off=-8*(F[cur_fn].nparam+1+nloc++);
+  return gi;
+}
 static int for_var(const char*nm,int kind){
-  int gi=g_decl(nm);
+  int gi=for_slot(nm);
   if(G[gi].kind==K_UNK){ G[gi].kind=kind; G[gi].sid=-1; }
   else if(G[gi].kind!=kind) errx("variable '%s' is used with two different types",nm,NULL);
   return gi;
 }
 static int for_hidden(const char*tag,int id,int kind){
-  char hn[64]; snprintf(hn,sizeof hn,"__for%d_%s",id,tag);
-  int gi=g_decl(hn); G[gi].kind=kind; G[gi].sid=-1; return gi;
+  char hn[64];
+  for(;;){
+    snprintf(hn,sizeof hn,"$for%d_%s",id,tag); /* not a source identifier */
+    int exists=g_find(hn)>=0;
+    if(cur_fn>=0) for(int j=0;j<F[cur_fn].nparam;j++)
+      if(!strcmp(F[cur_fn].params[j],hn)) exists=1;
+    if(!exists) break;
+    id=nfor++;
+  }
+  int gi=for_slot(hn); G[gi].kind=kind; G[gi].sid=-1; return gi;
 }
 /* compile [s,e) as an expression of its own; returns its kind */
 static int eval_sub(const char*s,const char*e){
@@ -2139,10 +2264,10 @@ static void emit_for_body(const char**p,int in_fn,int f){
   (void)f;
 }
 static void emit_for(const char**p,int in_fn){
-  if(cur_fn>=0) errx("for inside make is not in the native subset (the loop state would be shared by recursive calls); use while in make");
   sw(p);
   char nm[64];
   if(!pid(p,nm,64)) errx("for needs a name: for NAME in EXPR { ... }",NULL,NULL);
+  if(!strcmp(nm,"true") || !strcmp(nm,"false")) errx("for binder cannot be a boolean literal");
   sw(p);
   if(!mkw(p,"in")) errx("for needs 'in': for NAME in EXPR { ... }",NULL,NULL);
   const char*he=cond_end(*p);
@@ -2155,14 +2280,15 @@ static void emit_for(const char**p,int in_fn){
   int mode;                    /* 0 = range, 1 = list, 2 = string */
   if(dots){
     mode=0;
-    /* start..end, the start is stored in NAME, the end in a hidden global */
+    /* Start once; re-evaluate the upper expression at every condition
+     * check, matching seed/gen2 (including after continue). */
     int k1=eval_sub(hs,dots); if(k1!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
     top_gi=for_var(nm,K_NUM);
     store_global(top_gi);
+    top=cn;
     int k2=eval_sub(dots+2,he2); if(k2!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
     end_gi=for_hidden("end",id,K_NUM);
     store_global(end_gi);
-    top=cn;
     load_global(top_gi); movq_xr(0,AX);
     load_global(end_gi); movq_xr(1,AX);
     ucomisd(0,1);                       /* name < end  <=>  CF set */
@@ -2193,6 +2319,7 @@ static void emit_for(const char**p,int in_fn){
     else { callb(B_SGET); callb(B_CHR); }
     store_global(top_gi);
   }
+  if(nloops>=64) errx("native loop nesting limit is 64");
   nloops++;
   *p=he;                        /* the header is compiled from copies: parse on from its { */
   emit_for_body(p,in_fn,0);
@@ -2229,6 +2356,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
     if(mkw(p,"hold")){
       char nm[64];
       if(!pid(p,nm,64)) errx("hold needs a name");
+      int annotation=hold_kind(p,nm,cur_fn);
       sw(p);
       if(**p!='=') errx("hold needs '='",NULL,NULL);
       (*p)++;
@@ -2248,6 +2376,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
       } else gi=g_decl(nm);
       emit_rhs(p);
       int k=XK;
+      if(annotation>=0 && annotation!=k) errx("hold '%s': initializer disagrees with declared type",nm,NULL);
       if(k==K_UNK) errx("cannot infer the type of variable '%s'",nm,NULL);
       if(G[gi].kind==K_UNK){ G[gi].kind=k; G[gi].sid=(k==K_STRUCT)?XS:-1; }
       else if(G[gi].kind!=k) errx("variable '%s' is used with two different types",nm,NULL);
@@ -2297,6 +2426,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
       sw(p);
       if(**p!='{') errx("while needs { ... }");
       (*p)++;
+      if(nloops>=64) errx("native loop nesting limit is 64");
       nloops++;
       emit_prog(p,in_fn,1);
       nloops--;
@@ -2343,7 +2473,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
         /* plain assignment statement:  a = expr  (global or parameter) */
         int gi=g_find(w);
         int pi=-1;
-        if(gi<0&&cur_fn>=0){
+        if(cur_fn>=0){
           for(int j=0;j<F[cur_fn].nparam;j++)
             if(!strcmp(F[cur_fn].params[j],w)){ pi=j; break; }
         }
@@ -2352,7 +2482,11 @@ static void emit_prog(const char**p,int in_fn,int stop){
         emit_rhs(p);
         if(XK==K_UNK) errx("cannot infer the type of the assignment value");
         if(pi>=0){
-          if(XK!=K_NUM) errx("assignment to parameter '%s' must be a number",w,NULL);
+          /* Match read-side lookup: parameters precede globals. The frame
+             * is scanned by GC; rebinding a pointer needs no ownership/free
+             * operation (concat returns fresh storage, lists are references). */
+          if(XK!=F[cur_fn].pk[pi])
+            errx("assignment to parameter '%s' must be %s",w,kname(F[cur_fn].pk[pi]),NULL);
           mv_m64(BP,-1,0,-8*(pi+1),AX);
         } else {
           if(XK==K_STRUCT) errx("assignment of a struct value to '%s' is not supported (use hold for a fresh copy)",w,NULL);
@@ -2378,6 +2512,19 @@ static void emit_prog(const char**p,int in_fn,int stop){
 }
 
 /* ================= phase 4: runtime builtins ================= */
+/* Follow list growth links. Payload +8 is zero on a current object, or
+ * points to its successor. The collector traces this link, not the doubles.
+ * Chains are logarithmic in capacity; old aliases preserve list identity. */
+static void emit_list_resolve(int ptr,int tmp){
+  size_t again=cn;
+  mv_r64m(tmp,ptr,-1,0,8);
+  test_rr(tmp,tmp);
+  size_t done=cn; jcc_rel32(JC_Z,0);
+  mv_rr(ptr,tmp);
+  jmp_rel32((int32_t)(again-cn-5));
+  erel32(done,cn);
+}
+
 /* while rdx>0: [r10+rcx] = byte [rsi]; rcx++ */
 static void emit_cpybyte_r10(void){
   /* [r10+rcx] = [rsi+r10src], rcx++, r10src++ (r10 = source index, rcx = dest index) */
@@ -2808,6 +2955,7 @@ static void emit_builtins(void){
   {
   builtin_off[B_SHOWLIST]=cn;
   push_r(12);
+  emit_list_resolve(AX,CX);
   mv_rr(13,AX);                    /* r13 = list (write syscalls clobber rcx/r11) */
   lea_rm(AX,12,-1,0,(int)d_list1);
   callb(B_WCSTR);
@@ -2842,6 +2990,7 @@ static void emit_builtins(void){
   callb(B_MALLOC);
   mv_rr(10,AX);                       /* r10 = list */
   mv_m64(10,-1,0,0,11);               /* list->n = n */
+  xor_rr(CX,CX); mv_m64(10,-1,0,8,CX); /* no growth successor */
   mv_rr(DX,11);
   bin_imm8(7,DX,4);
   size_t jb2=cn; jcc_rel32(JC_B,0);
@@ -2861,6 +3010,7 @@ static void emit_builtins(void){
   {
   builtin_off[B_LGET]=cn;
   push_r(12);
+  emit_list_resolve(DI,CX);
   mv_r64m(CX,DI,-1,0,0);
   mv_rr(11,SI);
   bin_rr(0x39,11,CX);
@@ -2879,6 +3029,7 @@ static void emit_builtins(void){
   {
   builtin_off[B_LLEN]=cn;
   push_r(12);
+  emit_list_resolve(AX,CX);
   mv_r64m(AX,AX,-1,0,0);
   pop_r(12); e1(0xc3);
   }
@@ -2887,6 +3038,7 @@ static void emit_builtins(void){
   {
   builtin_off[B_LPUSH]=cn;
   push_r(12);
+  emit_list_resolve(DI,CX);
   mv_rr(11,DI);                       /* r11 = list */
   mv_r64m(CX,11,-1,0,0);              /* cx = n */
   mv_r64m(DX,11,-1,0,16);             /* dx = cap */
@@ -2924,6 +3076,8 @@ static void emit_builtins(void){
   mv_m64(9,-1,0,0,10);                /* new->n = n */
   inc_mem_r(9);                      /* inc [r9] (new->n = n+1) */
   mv_m64(9,-1,0,16,8);                /* new->cap = r8 */
+  xor_rr(CX,CX); mv_m64(9,-1,0,8,CX); /* new is current */
+  mv_m64(11,-1,0,8,9);               /* old aliases forward to new */
   mv_rr(AX,9);                        /* rax = new list */
   size_t jmp_at=cn;
   jmp_rel32(0);                       /* slow path -> ret */
@@ -3305,8 +3459,8 @@ static void emit_builtins(void){
  *     reclamation but can never cause a false one.
  *
  * Marking recurses into struct blocks only (their fields may hold strings and
- * nested structs).  Strings hold bytes and lists hold doubles, so both are
- * leaves.  A candidate is only accepted at an exact payload start behind a
+ * nested structs).  Strings are leaves. Lists hold doubles and one growth-forward pointer
+ * at payload +8, which is traced explicitly.  A candidate is only accepted at an exact payload start behind a
  * matching magic word, so a stray double can never make the collector write a
  * mark into the middle of a live block.
  *
@@ -3372,7 +3526,7 @@ static void emit_gc(void){
 
   /* ---- r_mark: rdi = candidate pointer; recursive ---- */
   {
-  int Lret=L_new(), Lbody=L_new(), Lcond=L_new();
+  int Lret=L_new(), Lbody=L_new(), Lcond=L_new(), Lnotlist=L_new();
   builtin_off[B_MARK]=cn;
   gc_pushall();
   callb(B_FINDBLOCK);
@@ -3384,8 +3538,16 @@ static void emit_gc(void){
   mov_imm64(11,1);
   mv_m64(AX,-1,0,BH_MARK,11);
   mv_r64m(11,AX,-1,0,BH_KIND);
+  bin_imm8(7,11,BK_LIST);
+  J_cc(JC_NZ,Lnotlist);
+  mv_r64m(DI,AX,-1,0,BH_HDR+8);         /* only the growth link is a pointer */
+  test_rr(DI,DI);
+  J_cc(JC_Z,Lret);
+  callb(B_MARK);
+  J_mp(Lret);
+  L_bind(Lnotlist);
   bin_imm8(7,11,BK_STRUCT);
-  J_cc(JC_NZ,Lret);                      /* a string or a list is a leaf */
+  J_cc(JC_NZ,Lret);                      /* strings are leaves */
   mv_r64m(9,AX,-1,0,BH_SIZE);            /* struct: walk every payload word */
   shr_imm(9,3);
   bin_imm8(5,9,BH_HDR/8);
@@ -3793,13 +3955,20 @@ int main(int argc,char**argv){
       char nm[64]; const char*r=q;
       if(mkw(&r,"make")&&pid(&r,nm,64)){
         int fi=f_find(nm);
-        if(fi>=0){ q=r; F[fi].body_at=r; emit_fn(fi,&q); continue; }
+        if(fi>=0){
+          F[fi].body_at=r;
+          if(!F[fi].gen){ q=r; emit_fn(fi,&q); continue; }
+          /* Generic bases, like other instances, are emitted only if used. */
+        }
       }
       q=skip_stmt(line);
     }
   }
 
-  for(int k=0;k<npend;k++){ int j=pend[k]; const char*q=F[F[j].inst_of].body_at; emit_fn(j,&q); }
+  for(int k=0;k<npend;k++){
+    int j=pend[k], base=F[j].inst_of>=0?F[j].inst_of:j;
+    const char*q=F[base].body_at; emit_fn(j,&q);
+  }
   emit_builtins();
   emit_gc();
   /* The precise root table: every data word that can hold a heap pointer.

@@ -1,0 +1,17 @@
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 selfhost/return_paths_test.sa selfhost/seed_tests/return_paths.c
+./selfhost/gen1_min selfhost/return_paths_test.sa selfhost/seed_tests/return_paths_g1.c
+cmp selfhost/seed_tests/return_paths.c selfhost/seed_tests/return_paths_g1.c
+cc -O2 -Werror=return-type -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/return_paths selfhost/seed_tests/return_paths.c
+./selfhost/seed/sxc_seed_min selfhost/return_paths_test.sa > selfhost/seed_tests/return_paths_seed.c
+cc -O2 -Werror=return-type -o selfhost/seed_tests/return_paths_seed selfhost/seed_tests/return_paths_seed.c
+./selfhost/native_aot selfhost/return_paths_test.sa selfhost/seed_tests/return_paths_native
+sh selfhost/test_return_paths.sh ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests
+[OK] return-path diagnostics: missing arms, nested fallthrough, zero-iteration loops, unreachable loop returns, strings/comments and num/str/list/generic functions; all three frontends
+[OK] return paths: exhaustive/nested branches, elif chains, suffix returns, early returns, num/str/list and generic functions; seed/gen2/native parity

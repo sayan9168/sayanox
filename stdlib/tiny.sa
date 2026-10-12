@@ -295,3 +295,22 @@ make isqrt(n) {
   }
   give isqrt_from(n, 0)
 }
+
+// Portable interpolation helpers. All inputs are doubles; no integer casts.
+make lerp(a, b, t) {
+  give a + (b - a) * t
+}
+
+// Saturate to the closed unit interval.
+make saturate(x) {
+  give clamp(x, 0, 1)
+}
+
+make smoothstep01(x) {
+  give saturate(x) * saturate(x) * (3 - 2 * saturate(x))
+}
+
+// Squared distance avoids a square root and accepts fractional coordinates.
+make distance_sq(x1, y1, x2, y2) {
+  give (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)
+}

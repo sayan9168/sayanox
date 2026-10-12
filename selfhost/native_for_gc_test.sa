@@ -1,0 +1,31 @@
+// Native-only explicit GC: hidden iterable pointers live in recursive frames.
+hold i = 99
+make walk(depth: num) -> num {
+  hold total = 0
+  for ch in concat("a", "b") {
+    hold reclaimed = gc()
+    total = total + len(ch)
+    when depth > 0 {
+      total = total + walk(depth - 1)
+      reclaimed = gc()
+    }
+  }
+  give total
+}
+make early() -> num {
+  for i in 0..9 { give i + 1 }
+  give 0
+}
+show walk(3)
+show early()
+show early()
+show i
+make held() -> num {
+  hold total = 0
+  for value in [3, 4] {
+    hold reclaimed = gc()
+    total = total + value
+  }
+  give total
+}
+show held()

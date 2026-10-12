@@ -1,0 +1,17 @@
+// Seed-only regression: gen2 currently lacks a prototype for this forward call.
+make first() -> str {
+  give second()
+}
+make second() -> str {
+  // Braces in comments must not alter signature/body scanning: } { }
+  hold local = "ok"
+  give local
+}
+make list_first() -> list {
+  give list_second()
+}
+make list_second() -> list {
+  give [8, 9]
+}
+for ch in first() { show ch }
+for value in list_first() { show value }

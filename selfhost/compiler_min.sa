@@ -1,3 +1,819 @@
+make sxedigits(value: num) -> str {
+  hold text = ""
+  when value == 0 {
+    give "0"
+  }
+  while value > 0 {
+    hold digit = value % 10
+    text = concat(chr(48 + digit), text)
+    value = (value - digit) / 10
+  }
+  give text
+}
+// Typed inline-expression lowering. Records encode position, kind and C text;
+// only the code suffix may contain arbitrary quoted source characters.
+make sxeslice(text: str, begin: num, end: num) -> str {
+  hold value = ""
+  hold i = begin
+  while i < end && i < len(text) {
+    value = concat(value, chr(sx_index(text, i)))
+    i = i + 1
+  }
+  give value
+}
+make sxesegment(text: str, slot: num) -> str {
+  hold start = 0
+  hold i = 0
+  hold part = 0
+  while i < len(text) {
+    when sx_index(text, i) == 1 {
+      when part == slot {
+        give sxeslice(text, start, i)
+      }
+      part = part + 1
+      start = i + 1
+    }
+    i = i + 1
+  }
+  when part == slot {
+    give sxeslice(text, start, i)
+  }
+  give ""
+}
+make sxerecord(at: num, kind: str, code: str) -> str {
+  hold record = concat(sxedigits(at), chr(1))
+  record = concat(record, kind)
+  record = concat(record, chr(1))
+  give concat(record, code)
+}
+make sxepos(record: str) -> num {
+  hold i = 0
+  hold value = 0
+  while i < len(record) && sx_index(record, i) != 1 {
+    value = value * 10 + sx_index(record, i) - 48
+    i = i + 1
+  }
+  give value
+}
+make sxecode(record: str) -> str {
+  hold i = 0
+  hold separators = 0
+  while i < len(record) && separators < 2 {
+    when sx_index(record, i) == 1 {
+      separators = separators + 1
+    }
+    i = i + 1
+  }
+  give sxeslice(record, i, len(record))
+}
+make sxelookup(table: str, name: str, end: str) -> str {
+  hold key = concat("|", name)
+  key = concat(key, end)
+  hold i = 0
+  while i + len(key) <= len(table) {
+    hold j = 0
+    hold match = 1
+    while j < len(key) && match == 1 {
+      when sx_index(table, i + j) != sx_index(key, j) {
+        match = 0
+      }
+      j = j + 1
+    }
+    when match == 1 {
+      when string_eq(end, "|") {
+        give "yes"
+      }
+      hold start = i + len(key)
+      hold stop = start
+      while stop < len(table) && sx_index(table, stop) != 124 {
+        stop = stop + 1
+      }
+      give sxeslice(table, start, stop)
+    }
+    i = i + 1
+  }
+  give ""
+}
+make sxecontains(text: str, word: str) -> num {
+  hold i = 0
+  while i + len(word) <= len(text) {
+    hold j = 0
+    hold match = 1
+    while j < len(word) && match == 1 {
+      when sx_index(text, i + j) != sx_index(word, j) {
+        match = 0
+      }
+      j = j + 1
+    }
+    when match == 1 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+// Identify calls with list/index syntax, without treating quoted '[' as code.
+make sxehaslist(text: str, open: num) -> num {
+  hold i = open + 1
+  hold depth = 1
+  hold quote = 0
+  hold found = 0
+  while i < len(text) && depth > 0 {
+    hold c = sx_index(text, i)
+    i = i + 1
+    when quote == 1 {
+      when c == 92 && i < len(text) {
+        i = i + 1
+      } otherwise {
+        when c == 34 {
+          quote = 0
+        }
+      }
+    } otherwise {
+      when c == 34 {
+        quote = 1
+      }
+      when c == 40 {
+        depth = depth + 1
+      }
+      when c == 41 {
+        depth = depth - 1
+      }
+      when c == 91 {
+        found = 1
+      }
+    }
+  }
+  i = sxflowspace(text, i)
+  when i < len(text) && sx_index(text, i) == 91 {
+    found = 1
+  }
+  give found
+}
+// Pratt parser: scalar operators, typed calls, numeric lists and indexing.
+// env: numeric/all bindings, strings, lists, struct names, returns, signatures.
+make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: list) -> str {
+  when level > 96 {
+    give sxerecord(at, "e", "expression nesting exceeds 96")
+  }
+  hold i = sxflowspace(text, at)
+  hold c = 0
+  when i < len(text) {
+    c = sx_index(text, i)
+  }
+  hold kind = "e"
+  hold code = "expected an expression"
+  when c == 43 || c == 45 || c == 33 {
+    hold unary = sxeparse(text, i + 1, env, 7, level + 1, state)
+    when string_eq(sxesegment(unary, 1), "n") == 0 {
+      give sxerecord(i, "e", "unary operator requires a number")
+    }
+    i = sxepos(unary)
+    code = concat("(", chr(c))
+    code = concat(code, " ")
+    code = concat(code, sxecode(unary))
+    code = concat(code, ")")
+    kind = "n"
+  } otherwise {
+    when c == 40 {
+      // A double cast may have been inserted by condition division lowering.
+      hold cast = sxeslice(text, i, i + 8)
+      when string_eq(cast, "(double)") {
+        hold casted = sxeparse(text, i + 8, env, 7, level + 1, state)
+        when string_eq(sxesegment(casted, 1), "n") == 0 {
+          give sxerecord(i, "e", "numeric cast requires a number")
+        }
+        i = sxepos(casted)
+        code = sxecode(casted)
+        kind = "n"
+      } otherwise {
+        hold grouped = sxeparse(text, i + 1, env, 0, level + 1, state)
+        kind = sxesegment(grouped, 1)
+        when string_eq(kind, "e") {
+          give grouped
+        }
+        i = sxflowspace(text, sxepos(grouped))
+        when i >= len(text) || sx_index(text, i) != 41 {
+          give sxerecord(i, "e", "unbalanced parentheses")
+        }
+        code = concat("(", sxecode(grouped))
+        code = concat(code, ")")
+        i = i + 1
+      }
+    } otherwise {
+      when c >= 48 && c <= 57 {
+        hold start = i
+        while i < len(text) && sx_index(text, i) >= 48 && sx_index(text, i) <= 57 {
+          i = i + 1
+        }
+        hold decimal = 0
+        when i < len(text) && sx_index(text, i) == 46 {
+          decimal = 1
+          i = i + 1
+          hold digits = i
+          while i < len(text) && sx_index(text, i) >= 48 && sx_index(text, i) <= 57 {
+            i = i + 1
+          }
+          when i == digits {
+            give sxerecord(i, "e", "malformed decimal literal")
+          }
+        }
+        code = sxeslice(text, start, i)
+        when decimal == 0 {
+          code = concat(code, ".0")
+        }
+        kind = "n"
+      } otherwise {
+        when c == 34 {
+          hold start = i
+          i = i + 1
+          hold quoted = 1
+          while i < len(text) && quoted == 1 {
+            hold ch = sx_index(text, i)
+            i = i + 1
+            when ch == 92 && i < len(text) {
+              i = i + 1
+            } otherwise {
+              when ch == 34 {
+                quoted = 0
+              }
+            }
+          }
+          when quoted == 1 {
+            give sxerecord(i, "e", "unterminated string")
+          }
+          code = sxeslice(text, start, i)
+          kind = "s"
+        } otherwise {
+          when c == 91 {
+            i = sxflowspace(text, i + 1)
+            hold elements = ""
+            hold effects = ""
+            hold count = 0
+            hold more = 1
+            when i < len(text) && sx_index(text, i) == 93 {
+              more = 0
+            }
+            while more == 1 {
+              hold element = sxeparse(text, i, env, 0, level + 1, state)
+              when string_eq(sxesegment(element, 1), "n") == 0 {
+                give sxerecord(i, "e", "list elements must have numeric type")
+              }
+              hold serial = len(state)
+              push(state, 0)
+              hold temporary = concat(sxesegment(env, 6), sxedigits(serial))
+              effects = concat(effects, temporary)
+              effects = concat(effects, "=(double)(")
+              effects = concat(effects, sxecode(element))
+              effects = concat(effects, "),")
+              elements = concat(elements, ",")
+              elements = concat(elements, temporary)
+              count = count + 1
+              i = sxflowspace(text, sxepos(element))
+              when i < len(text) && sx_index(text, i) == 44 {
+                i = sxflowspace(text, i + 1)
+              } otherwise {
+                more = 0
+              }
+            }
+            when i >= len(text) || sx_index(text, i) != 93 {
+              give sxerecord(i, "e", "expected comma or closing list bracket")
+            }
+            i = i + 1
+            code = concat(sxesegment(env, 6), "list((")
+            code = concat(code, effects)
+            code = concat(code, "sx_llit(")
+            code = concat(code, sxedigits(count))
+            code = concat(code, elements)
+            code = concat(code, ")))")
+            kind = "l"
+          } otherwise {
+            when (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 {
+              hold name = sxflowword(text, i)
+              i = sxflowspace(text, i + len(name))
+              when i < len(text) && sx_index(text, i) == 40 {
+                hold returns = sxesegment(env, 4)
+                hold signatures = sxesegment(env, 5)
+                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_http=s|")
+                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_http=s|")
+                kind = sxelookup(returns, name, "=")
+                when len(kind) == 0 {
+                  give sxerecord(i, "e", "call has no checked return signature")
+                }
+                hold parameters = sxelookup(signatures, name, "=")
+                hold args = ""
+                hold count = 0
+                i = sxflowspace(text, i + 1)
+                hold more = 1
+                when i < len(text) && sx_index(text, i) == 41 {
+                  more = 0
+                }
+                while more == 1 {
+                  hold argument = sxeparse(text, i, env, 0, level + 1, state)
+                  hold actual = sxesegment(argument, 1)
+                  when string_eq(actual, "e") {
+                    give argument
+                  }
+                  when count >= len(parameters) {
+                    give sxerecord(i, "e", "too many call arguments")
+                  }
+                  hold expected = chr(sx_index(parameters, count))
+                  when string_eq(expected, "a") {
+                    when string_eq(actual, "s") == 0 && string_eq(actual, "l") == 0 {
+                      give sxerecord(i, "e", "length/index requires a string or list")
+                    }
+                    when string_eq(actual, "l") {
+                      when string_eq(name, "sx_len") {
+                        name = "sx_llen"
+                      }
+                      when string_eq(name, "sx_idx") {
+                        name = "sx_lget"
+                      }
+                    }
+                  } otherwise {
+                    when string_eq(expected, actual) == 0 {
+                      give sxerecord(i, "e", "call argument type mismatch")
+                    }
+                  }
+                  when count > 0 {
+                    args = concat(args, ",")
+                  }
+                  args = concat(args, sxecode(argument))
+                  count = count + 1
+                  i = sxflowspace(text, sxepos(argument))
+                  when i < len(text) && sx_index(text, i) == 44 {
+                    i = sxflowspace(text, i + 1)
+                  } otherwise {
+                    more = 0
+                  }
+                }
+                when i >= len(text) || sx_index(text, i) != 41 || count != len(parameters) {
+                  give sxerecord(i, "e", "call argument count mismatch")
+                }
+                i = i + 1
+                code = concat(name, "(")
+                code = concat(code, args)
+                code = concat(code, ")")
+              } otherwise {
+                code = name
+                kind = "n"
+                when string_eq(name, "true") || string_eq(name, "false") {
+                  code = "0.0"
+                  when string_eq(name, "true") {
+                    code = "1.0"
+                  }
+                } otherwise {
+                  hold numeric = sxelookup(sxesegment(env, 0), name, "|")
+                  hold strings = sxelookup(sxesegment(env, 1), name, "|")
+                  hold lists = sxelookup(sxesegment(env, 2), name, "|")
+                  hold structs = sxelookup(sxesegment(env, 3), name, "=")
+                  when len(numeric) == 0 && len(strings) == 0 && len(lists) == 0 {
+                    give sxerecord(i, "e", "unbound expression name")
+                  }
+                  when len(strings) > 0 {
+                    kind = "s"
+                  }
+                  when len(lists) > 0 {
+                    kind = "l"
+                  }
+                  when len(structs) > 0 {
+                    kind = concat("u", structs)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  when string_eq(kind, "e") {
+    give sxerecord(i, kind, code)
+  }
+  hold running = 1
+  while running == 1 {
+    i = sxflowspace(text, i)
+    hold op = ""
+    hold precedence = 0
+    hold width = 1
+    hold c = 0
+    when i < len(text) {
+      c = sx_index(text, i)
+    }
+    when c == 46 {
+      when len(kind) < 2 || sx_index(kind, 0) != 117 {
+        give sxerecord(i, "e", "field selector requires a struct")
+      }
+      i = sxflowspace(text, i + 1)
+      hold field = sxflowword(text, i)
+      hold typename = sxeslice(kind, 1, len(kind))
+      hold fieldkey = concat(typename, ".")
+      fieldkey = concat(fieldkey, field)
+      hold fieldkind = sxelookup(sxesegment(env, 7), fieldkey, "=")
+      when len(fieldkind) == 0 {
+        give sxerecord(i, "e", "unknown or unresolved struct field")
+      }
+      kind = "n"
+      when string_eq(fieldkind, "1") {
+        kind = "s"
+      }
+      when sx_index(fieldkind, 0) == 50 {
+        kind = concat("u", sxeslice(fieldkind, 2, len(fieldkind)))
+      }
+      code = concat("(", code)
+      code = concat(code, ").")
+      code = concat(code, field)
+      i = i + len(field)
+    } otherwise {
+    when c == 91 && (string_eq(kind, "l") || string_eq(kind, "s")) {
+      hold index = sxeparse(text, i + 1, env, 0, level + 1, state)
+      when string_eq(sxesegment(index, 1), "n") == 0 {
+        give sxerecord(i, "e", "index must be numeric")
+      }
+      i = sxflowspace(text, sxepos(index))
+      when i >= len(text) || sx_index(text, i) != 93 {
+        give sxerecord(i, "e", "unbalanced index")
+      }
+      hold indexed = "sx_lget("
+      when string_eq(kind, "s") {
+        indexed = "sx_idx("
+      }
+      indexed = concat(indexed, code)
+      indexed = concat(indexed, ",")
+      indexed = concat(indexed, sxecode(index))
+      code = concat(indexed, ")")
+      kind = "n"
+      i = i + 1
+    } otherwise {
+      hold pair = sxeslice(text, i, i + 2)
+      when string_eq(pair, "||") {
+        precedence = 1
+        width = 2
+      }
+      when string_eq(pair, "&&") {
+        precedence = 2
+        width = 2
+      }
+      when string_eq(pair, "==") || string_eq(pair, "!=") {
+        precedence = 3
+        width = 2
+      }
+      when c == 60 || c == 62 {
+        precedence = 4
+        when string_eq(pair, "<=") || string_eq(pair, ">=") {
+          width = 2
+        }
+      }
+      when c == 43 || c == 45 {
+        precedence = 5
+      }
+      when c == 42 || c == 47 || c == 37 {
+        precedence = 6
+      }
+      when precedence == 0 || precedence < minimum {
+        running = 0
+      } otherwise {
+        op = sxeslice(text, i, i + width)
+        hold right = sxeparse(text, i + width, env, precedence + 1, level + 1, state)
+        hold rightkind = sxesegment(right, 1)
+        when string_eq(kind, "s") && string_eq(rightkind, "s") && (c == 43 || precedence == 3 || precedence == 4) {
+          when c == 43 {
+            code = concat("sx_cat(", code)
+            code = concat(code, ",")
+            code = concat(code, sxecode(right))
+            code = concat(code, ")")
+          } otherwise {
+            code = concat("(sx_cmp(", code)
+            code = concat(code, ",")
+            code = concat(code, sxecode(right))
+            code = concat(code, ") ")
+            code = concat(code, op)
+            code = concat(code, " 0.0)")
+            kind = "n"
+          }
+          i = sxepos(right)
+        } otherwise {
+          when string_eq(kind, "n") == 0 || string_eq(sxesegment(right, 1), "n") == 0 {
+            give sxerecord(i, "e", "numeric operator requires numeric operands")
+          }
+          i = sxepos(right)
+          when c == 37 {
+            code = concat("sx_mod(", code)
+            code = concat(code, ",")
+            code = concat(code, sxecode(right))
+            code = concat(code, ")")
+          } otherwise {
+            code = concat("(", code)
+            code = concat(code, " ")
+            code = concat(code, op)
+            code = concat(code, " ")
+            code = concat(code, sxecode(right))
+            code = concat(code, ")")
+          }
+          kind = "n"
+        }
+      }
+    }
+  }
+  }
+  give sxerecord(i, kind, code)
+}
+
+// Check value references against the current binding table before lowering.
+// Calls use a different namespace; field labels/selectors are not bindings.
+make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
+  hold i = sxflowspace(text, 0)
+  hold word = sxflowword(text, i)
+  when string_eq(word, "hold") {
+    while i < len(text) && sx_index(text, i) != 61 {
+      i = i + 1
+    }
+    i = i + 1
+  } otherwise {
+    when string_eq(word, "show") || string_eq(word, "give") || string_eq(word, "when") || string_eq(word, "while") {
+      i = i + len(word)
+    } otherwise {
+      when string_eq(word, "for") {
+        i = sxflowspace(text, i + 3)
+        hold binder = sxflowword(text, i)
+        i = sxflowspace(text, i + len(binder))
+        hold inword = sxflowword(text, i)
+        i = i + len(inword)
+      }
+    }
+  }
+  hold builtins = "|concat=|len=|sx_index=|index=|chr=|read_file=|write_file=|http_get=|arg=|arg_count=|string_eq=|push=|numstr=|read_line=|read_n=|write_out=|flush_out=|gc=|gc_live=|gc_runs=|sx_cat=|sx_len=|sx_idx=|sx_chr=|sx_read=|sx_write=|sx_http=|sx_arg=|sx_argc=|sx_eq=|sx_numstr=|sx_read_line=|sx_read_n=|sx_write_out=|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_mod=|sx_lget=|sx_llen=|sx_lpush=|"
+  hold callnames = concat(functions, builtins)
+  hold prev = 0
+  hold braces = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      i = i + 1
+      hold quote = 1
+      while i < len(text) && quote == 1 {
+        hold q = sx_index(text, i)
+        i = i + 1
+        when q == 92 && i < len(text) {
+          i = i + 1
+        } otherwise {
+          when q == 34 {
+            quote = 0
+          }
+        }
+      }
+      prev = 34
+    } otherwise {
+      when c == 47 && i + 1 < len(text) && sx_index(text, i + 1) == 47 {
+        while i < len(text) && sx_index(text, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        when (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 {
+          word = sxflowword(text, i)
+          i = i + len(word)
+          hold next = sxflowspace(text, i)
+          hold after = 0
+          when next < len(text) {
+            after = sx_index(text, next)
+          }
+          hold ignore = 0
+          when prev == 46 || (braces > 0 && after == 58) || after == 123 {
+            ignore = 1
+          }
+          when string_eq(word, "true") || string_eq(word, "false") || string_eq(word, "and") || string_eq(word, "or") || string_eq(word, "not") {
+            ignore = 1
+          }
+          when ignore == 0 {
+            hold key = concat("|", word)
+            hold table = bindings
+            when after == 40 {
+              key = concat(key, "=")
+              table = callnames
+            } otherwise {
+              key = concat(key, "|")
+            }
+            hold found = 0
+            hold t = 0
+            while t + len(key) <= len(table) && found == 0 {
+              hold k = 0
+              hold match = 1
+              while k < len(key) && match == 1 {
+                when sx_index(key, k) != sx_index(table, t + k) {
+                  match = 0
+                }
+                k = k + 1
+              }
+              when match == 1 {
+                found = 1
+              }
+              t = t + 1
+            }
+            when found == 0 {
+              hold message = "undefined name: "
+              when after == 40 {
+                message = "unknown function: "
+              }
+              give concat(message, word)
+            }
+          }
+          prev = 65
+        } otherwise {
+          when c == 123 {
+            braces = braces + 1
+          }
+          when c == 125 {
+            braces = braces - 1
+          }
+          when c != 32 && c != 9 && c != 10 && c != 13 {
+            when c == 46 {
+              when prev == 65 || prev == 93 || prev == 41 {
+                prev = 46
+              } otherwise {
+                prev = 0
+              }
+            } otherwise {
+              prev = c
+            }
+          }
+          i = i + 1
+        }
+      }
+    }
+  }
+  give ""
+}
+
+// Conservative structural return proof. Loops may execute zero times;
+// only give, a returning suffix, or exhaustive returning branches prove it.
+// These helpers read source only; expression/type checking remains separate.
+make sxflowspace(text: str, at: num) -> num {
+  hold i = at
+  hold n = len(text)
+  hold run = 1
+  while i < n && run == 1 {
+    hold c = sx_index(text, i)
+    when c == 32 || c == 9 || c == 10 || c == 13 {
+      i = i + 1
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+        while i < n && sx_index(text, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        run = 0
+      }
+    }
+  }
+  give i
+}
+make sxflowword(text: str, at: num) -> str {
+  hold i = at
+  hold word = ""
+  hold run = 1
+  while i < len(text) && run == 1 {
+    hold c = sx_index(text, i)
+    when (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 {
+      word = concat(word, chr(c))
+      i = i + 1
+    } otherwise {
+      run = 0
+    }
+  }
+  give word
+}
+// Skip an expression/ordinary statement, respecting literal braces/quotes.
+// mode 1 locates the opening brace of a control body; mode 0 its line end.
+make sxflowskip(text: str, at: num, mode: num) -> num {
+  hold i = at
+  hold n = len(text)
+  hold quote = 0
+  hold nesting = 0
+  hold run = 1
+  while i < n && run == 1 {
+    hold c = sx_index(text, i)
+    when quote == 1 {
+      i = i + 1
+      when c == 92 && i < n {
+        i = i + 1
+      } otherwise {
+        when c == 34 {
+          quote = 0
+        }
+      }
+    } otherwise {
+      when c == 34 {
+        quote = 1
+        i = i + 1
+      } otherwise {
+        when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+          while i < n && sx_index(text, i) != 10 {
+            i = i + 1
+          }
+        } otherwise {
+          when (mode == 1 && c == 123 && nesting == 0) || (mode == 0 && nesting == 0 && (c == 10 || c == 13 || c == 125)) {
+            run = 0
+          } otherwise {
+            when c == 40 || c == 91 || c == 123 {
+              nesting = nesting + 1
+            }
+            when c == 41 || c == 93 || c == 125 {
+              nesting = nesting - 1
+            }
+            i = i + 1
+          }
+        }
+      }
+    }
+  }
+  give i
+}
+// Result: position after closing brace, proven-return flag.
+make sxflowblock(text: str, at: num, level: num) -> list {
+  hold limit = len(text)
+  when level > 128 {
+    give [limit, 0]
+  }
+  hold i = sxflowspace(text, at)
+  when i >= len(text) || sx_index(text, i) != 123 {
+    give [limit, 0]
+  }
+  i = i + 1
+  hold proven = 0
+  hold run = 1
+  while i < len(text) && run == 1 {
+    i = sxflowspace(text, i)
+    when i >= len(text) {
+      give [i, 0]
+    }
+    when sx_index(text, i) == 125 {
+      i = i + 1
+      run = 0
+    } otherwise {
+      hold word = sxflowword(text, i)
+      i = i + len(word)
+      when string_eq(word, "when") {
+        i = sxflowskip(text, i, 1)
+        hold branch = sxflowblock(text, i, level + 1)
+        i = branch[0]
+        hold all = branch[1]
+        hold finalelse = 0
+        hold tails = 1
+        while tails == 1 {
+          hold next = sxflowspace(text, i)
+          hold tail = sxflowword(text, next)
+          hold iselif = string_eq(tail, "elif")
+          hold iselse = string_eq(tail, "else")
+          when string_eq(tail, "otherwise") {
+            iselse = 1
+          }
+          when iselif == 1 || iselse == 1 {
+            i = sxflowspace(text, next + len(tail))
+            when iselse == 1 {
+              hold after = sxflowword(text, i)
+              when string_eq(after, "if") || string_eq(after, "when") {
+                i = i + len(after)
+              } otherwise {
+                finalelse = 1
+              }
+            }
+            i = sxflowskip(text, i, 1)
+            hold arm = sxflowblock(text, i, level + 1)
+            i = arm[0]
+            hold armreturns = arm[1]
+            when armreturns == 0 {
+              all = 0
+            }
+            when finalelse == 1 {
+              tails = 0
+            }
+          } otherwise {
+            tails = 0
+          }
+        }
+        when all == 1 && finalelse == 1 {
+          proven = 1
+        }
+      } otherwise {
+        when string_eq(word, "while") || string_eq(word, "for") {
+          i = sxflowskip(text, i, 1)
+          hold loop = sxflowblock(text, i, level + 1)
+          i = loop[0]
+        } otherwise {
+          when string_eq(word, "give") {
+            proven = 1
+          }
+          i = sxflowskip(text, i, 0)
+        }
+      }
+    }
+  }
+  when run == 1 {
+    give [i, 0]
+  }
+  give [i, proven]
+}
+
 // compiler_min.sa - pure Sayanox mini-compiler (generation 1 source).
 //
 // The C seed (selfhost/seed/sxc_seed.c) compiles this file into selfhost/gen1.c.
@@ -440,6 +1256,9 @@ hold decls = "|"
 hold sdecls = "|"
 hold depth = 0
 hold running = 1
+hold instate = []
+hold inprivate = "__sx_inline_"
+hold inready = 0
 hold holds = 0
 hold shows = 0
 hold whiles = 0
@@ -453,6 +1272,11 @@ hold fn_name = ""
 hold fn_params = ""
 hold gexpr = ""
 hold ldecls = "|"
+// Immutable scope records: parent, then lengths of the four name tables.
+// Only function bodies use lexical block tracking; legacy top-level compiler
+// programs retain their existing flat declaration contract.
+hold scope_marks = []
+hold scope_head = -1
 hold sdefs = ""
 hold typedefs = ""
 hold stname = ""
@@ -1039,6 +1863,7 @@ hold ok = 0
 hold aa = 0
 hold bb = 0
 hold pdepth = 0
+hold argbracket = 0
 hold argv_c = ""
 hold argv_q = 0
 hold ai = 0
@@ -2624,6 +3449,16 @@ while running == 1 {
     hold gwi = 1
     hold gwlen = len(gwant)
     while gwi < gwlen {
+      // Requests from nested bodies may have both a trailing and a leading
+      // delimiter. Empty separators are not function names or kind strings.
+      hold gwskip = 1
+      while gwi < gwlen && gwskip == 1 {
+        when sx_index(gwant, gwi) == 1 {
+          hold gwi = gwi + 1
+        } otherwise {
+          hold gwskip = 0
+        }
+      }
       hold gwnm = ""
       hold gwrun = 1
       while gwrun == 1 {
@@ -2666,6 +3501,9 @@ while running == 1 {
       hold gti = 0
       hold gtf = 0
       hold gtstop = 0
+      when len(gwnm) == 0 {
+        hold gtstop = 1
+      }
       while gti + gkl <= gtl && gtstop == 0 {
         hold gtok = 1
         hold gtj = 0
@@ -2684,7 +3522,19 @@ while running == 1 {
           hold gtstop = 1
           hold gti = gti + gkl
         } otherwise {
+          // fgtab has six fields per record. Only its first field is a
+          // function name; a parameter/body token must never match a lookup.
+          hold gtfields = 0
           hold gti = gti + 1
+          while gti < gtl && gtfields < 6 {
+            when sx_index(fgtab, gti) == 1 {
+              hold gtfields = gtfields + 1
+            }
+            hold gti = gti + 1
+          }
+          when gtfields == 6 {
+            hold gti = gti - 1
+          }
         }
       }
       when gtf == 1 {
@@ -2764,7 +3614,7 @@ while running == 1 {
           hold gk0 = sx_index(gwks, 0)
         }
         hold gretk = gk0
-        when gret < gklen {
+        when gret >= 0 && gret < gklen {
           hold gretk = sx_index(gwks, gret)
         }
         // concrete type word for the RETURN of this specialisation
@@ -2809,6 +3659,7 @@ while running == 1 {
           }
         }
         when gdone == 0 {
+        hold gpkinds = ""
         hold gpc = ""       // C param list for the prototype
         hold gpc2 = ""      // Sayanox param list for the definition
         hold gp1 = 1
@@ -2839,10 +3690,11 @@ while running == 1 {
             hold gkc = gk0
             when gpni < len(gpid) {
               hold gkj = sx_index(gpid, gpni) - 48
-              when gkj < gklen {
+              when gkj >= 0 && gkj < gklen {
                 hold gkc = sx_index(gwks, gkj)
               }
             }
+            hold gpkinds = concat(gpkinds, chr(gkc))
             hold gpw = "num"
             hold gpC = "double "
             when gkc == 115 {
@@ -3048,6 +3900,10 @@ while running == 1 {
         hold fsret = concat(fsret, "=")
         hold fsret = concat(fsret, chr(gretk))
         hold fsret = concat(fsret, "|")
+        hold fspk = concat(fspk, gspec)
+        hold fspk = concat(fspk, "=")
+        hold fspk = concat(fspk, gpkinds)
+        hold fspk = concat(fspk, "|")
         hold fsptx = concat(fsptx, gspec)
         hold fsptx = concat(fsptx, "=")
         hold fsptx = concat(fsptx, gpc)
@@ -3303,11 +4159,11 @@ while running == 1 {
                         hold zwQ = 1
                         hold zwKk = zwKk + 1
                       } otherwise {
-                        when zwKc == 40 {
+                        when zwKc == 40 || zwKc == 91 || zwKc == 123 {
                           hold zwD = zwD + 1
                           hold zwKk = zwKk + 1
                         } otherwise {
-                          when zwKc == 41 {
+                          when zwKc == 41 || zwKc == 93 || zwKc == 125 {
                             when zwD == 0 {
                               hold zwSrch = 0
                             } otherwise {
@@ -3333,6 +4189,7 @@ while running == 1 {
                 }
                 hold zwSkip = zwSkip - 1
               }
+              hold zwArgstart = zwKk
               hold zwKind = 110
               hold zwKdone = 0
               hold zwKgo = 0
@@ -3559,6 +4416,40 @@ while running == 1 {
                   }
                 }
               }
+              // Refine the coarse first-token classification when the
+              // typed expression parser can resolve the whole argument.
+              // In particular [a,b][i] is numeric, not a list, and fields
+              // and grouped values retain their actual concrete kind.
+              hold zenv = concat(decls, chr(1))
+              hold zenv = concat(zenv, sdecls)
+              hold zenv = concat(zenv, chr(1))
+              hold zenv = concat(zenv, ldecls)
+              hold zenv = concat(zenv, chr(1))
+              hold zenv = concat(zenv, svars)
+              hold zenv = concat(zenv, chr(1))
+              hold zenv = concat(zenv, fsret)
+              hold zenv = concat(zenv, "|len=n|concat=s|sx_index=n|index=n|chr=s|numstr=s|push=l|string_eq=n|")
+              hold zenv = concat(zenv, chr(1))
+              hold zenv = concat(zenv, fspk)
+              hold zenv = concat(zenv, "|len=a|concat=ss|sx_index=an|index=an|chr=n|numstr=n|push=ln|string_eq=ss|")
+              hold zenv = concat(zenv, chr(1))
+              hold zenv = concat(zenv, inprivate)
+              hold zenv = concat(zenv, chr(1))
+              hold zenv = concat(zenv, ftypes)
+              hold zstate = []
+              hold zvalue = sxeparse(zwT, zwArgstart, zenv, 0, 0, zstate)
+              hold zkind = sxesegment(zvalue, 1)
+              hold zend = sxflowspace(zwT, sxepos(zvalue))
+              hold zcomplete = 0
+              when zend < len(zwT) {
+                hold zchar = sx_index(zwT, zend)
+                when zchar == 44 || zchar == 41 {
+                  hold zcomplete = 1
+                }
+              }
+              when zcomplete == 1 && (string_eq(zkind, "n") || string_eq(zkind, "s") || string_eq(zkind, "l")) {
+                hold zwKind = sx_index(zkind, 0)
+              }
               hold zwAKinds = concat(zwAKinds, chr(zwKind))
               hold zwP = zwP + 1
             }
@@ -3605,6 +4496,17 @@ while running == 1 {
             hold fsret = concat(fsret, "=")
             hold fsret = concat(fsret, chr(zwRk))
             hold fsret = concat(fsret, "|")
+            hold fspk = concat(fspk, zwW)
+            hold fspk = concat(fspk, "__")
+            hold fspk = concat(fspk, zwKinds)
+            hold fspk = concat(fspk, "=")
+            hold inp = 0
+            while inp < len(zwTidx) {
+              hold intype = sx_index(zwTidx, inp) - 48
+              hold fspk = concat(fspk, chr(sx_index(zwKinds, intype)))
+              hold inp = inp + 1
+            }
+            hold fspk = concat(fspk, "|")
           }
         } otherwise {
           hold zwOut = concat(zwOut, chr(zwC))
@@ -3635,6 +4537,8 @@ while running == 1 {
     hold c = sx_index(source,pos)
     // per-statement assignment state: `NAME = EXPR`, `NAME.f = EXPR` and
     // `NAME[i] = EXPR` reuse the hold parser (act 1) with asmode = 1
+    hold instart = len(body)
+    hold refstart = pos
     hold asmode = 0
     hold liset = 0
     hold lidx = ""
@@ -4171,6 +5075,8 @@ while running == 1 {
         // its first non-blank character decides (plist), not the parens inside it
         hold pseen = 0
         hold plist = 0
+        hold pbracket = 0
+        hold pcalldepth = 0
         while prun == 1 {
           when pp >= n {
             hold prun = 0
@@ -4204,13 +5110,27 @@ while running == 1 {
                     hold plist = 1
                   }
                 }
+                when pc == 91 {
+                  hold pbracket = pbracket + 1
+                }
+                when pc == 93 {
+                  hold pbracket = pbracket - 1
+                }
                 when pc == 40 {
-                  when (pprev >= 97 && pprev <= 122) || (pprev >= 65 && pprev <= 90) || (pprev >= 48 && pprev <= 57) || pprev == 95 {
+                  when pcalldepth > 0 {
+                    hold pcalldepth = pcalldepth + 1
                   } otherwise {
-                    when plist == 0 {
-                      hold phas = 1
+                    when (pprev >= 97 && pprev <= 122) || (pprev >= 65 && pprev <= 90) || (pprev >= 48 && pprev <= 57) || pprev == 95 {
+                      hold pcalldepth = 1
+                    } otherwise {
+                      when plist == 0 && pbracket == 0 {
+                        hold phas = 1
+                      }
                     }
                   }
+                }
+                when pc == 41 && pcalldepth > 0 {
+                  hold pcalldepth = pcalldepth - 1
                 }
                 when pc == 34 {
                   hold pq = 1
@@ -4657,6 +5577,63 @@ while running == 1 {
       hold perr = 1
     }
 
+
+    // Check references while the active lexical binding tables are available.
+    // Do not hoist expressions or change their evaluation/allocation timing.
+    when act == 1 || act == 2 || act == 3 || act == 6 || act == 8 || act == 10 {
+      hold reftext = ""
+      hold refi = refstart
+      hold refnest = 0
+      hold refquote = 0
+      hold refrun = 1
+      while refi < n && refrun == 1 {
+        hold refc = sx_index(source, refi)
+        when refquote == 1 {
+          hold reftext = concat(reftext, chr(refc))
+          hold refi = refi + 1
+          when refc == 92 && refi < n {
+            hold reftext = concat(reftext, chr(sx_index(source, refi)))
+            hold refi = refi + 1
+          } otherwise {
+            when refc == 34 {
+              hold refquote = 0
+            }
+          }
+        } otherwise {
+          when refc == 34 {
+            hold refquote = 1
+          }
+          when refc == 47 && refi + 1 < n && sx_index(source, refi + 1) == 47 {
+            while refi < n && sx_index(source, refi) != 10 {
+              hold refi = refi + 1
+            }
+            hold refc = 10
+          }
+          when refnest == 0 && (refc == 10 || refc == 13 || refc == 125 || ((act == 3 || act == 10) && refc == 123)) {
+            hold refrun = 0
+          } otherwise {
+            when refquote == 0 {
+              when refc == 40 || refc == 91 || refc == 123 {
+                hold refnest = refnest + 1
+              }
+              when refc == 41 || refc == 93 || refc == 125 {
+                hold refnest = refnest - 1
+              }
+            }
+            hold reftext = concat(reftext, chr(refc))
+            hold refi = refi + 1
+          }
+        }
+      }
+      // String iteration binders live in sdecls, not always in decls.
+      hold refbindings = concat(decls, sdecls)
+      hold refbindings = concat(refbindings, ldecls)
+      hold referror = sxcheckrefs(reftext, refbindings, fsret)
+      when len(referror) > 0 && perr == 0 {
+        hold perr = 1
+        hold permsg = referror
+      }
+    }
 
     // ================= hold NAME = RHS =================
     when act == 1 {
@@ -6138,6 +7115,7 @@ while running == 1 {
           hold argv_txt = ""
           hold inq = 0
           hold pdepth = 0
+hold argbracket = 0
           hold rn = 1
           while rn == 1 {
             when pos >= n {
@@ -6161,6 +7139,12 @@ while running == 1 {
                     }
                   }
                 } otherwise {
+                  when cn == 91 {
+                    hold argbracket = argbracket + 1
+                  }
+                  when cn == 93 {
+                    hold argbracket = argbracket - 1
+                  }
                   when cn == 40 {
                     hold pdepth = pdepth + 1
                   }
@@ -6171,7 +7155,7 @@ while running == 1 {
                     hold inq = 1
                     hold argv_txt = concat(argv_txt, chr(cn))
                   } otherwise {
-                    when cn == 32 || cn == 9 {
+                    when (cn == 32 || cn == 9) && argbracket == 0 {
                     } otherwise {
                       hold argv_txt = concat(argv_txt, chr(cn))
                     }
@@ -6189,6 +7173,7 @@ while running == 1 {
           // outside string literals, so no blank handling is needed here.
           hold axo = ""
           hold axi = 0
+          hold axbracket = 0
           hold axn = len(argv_txt)
           hold axc = 0
           hold axq = 0
@@ -6226,7 +7211,13 @@ while running == 1 {
                 }
               }
             } otherwise {
-              when axc == 37 {
+              when axc == 91 {
+                hold axbracket = axbracket + 1
+              }
+              when axc == 93 {
+                hold axbracket = axbracket - 1
+              }
+              when axc == 37 && axbracket == 0 {
                 // left operand: scan back over the chain already in axo
                 hold axal = len(axo)
                 hold axrun = 1
@@ -8934,6 +9925,7 @@ hold ec = 0
           hold argv_txt = ""
           hold inq = 0
           hold pdepth = 0
+hold argbracket = 0
           hold rn = 1
           while rn == 1 {
             when pos >= n {
@@ -8957,6 +9949,12 @@ hold ec = 0
                     }
                   }
                 } otherwise {
+                  when cn == 91 {
+                    hold argbracket = argbracket + 1
+                  }
+                  when cn == 93 {
+                    hold argbracket = argbracket - 1
+                  }
                   when cn == 40 {
                     hold pdepth = pdepth + 1
                   }
@@ -8967,7 +9965,7 @@ hold ec = 0
                     hold inq = 1
                     hold argv_txt = concat(argv_txt, chr(cn))
                   } otherwise {
-                    when cn == 32 || cn == 9 {
+                    when (cn == 32 || cn == 9) && argbracket == 0 {
                     } otherwise {
                       hold argv_txt = concat(argv_txt, chr(cn))
                     }
@@ -8985,6 +9983,7 @@ hold ec = 0
           // outside string literals, so no blank handling is needed here.
           hold bxo = ""
           hold bxi = 0
+          hold bxbracket = 0
           hold bxn = len(argv_txt)
           hold bxc = 0
           hold bxq = 0
@@ -9022,7 +10021,13 @@ hold ec = 0
                 }
               }
             } otherwise {
-              when bxc == 37 {
+              when bxc == 91 {
+                hold bxbracket = bxbracket + 1
+              }
+              when bxc == 93 {
+                hold bxbracket = bxbracket - 1
+              }
+              when bxc == 37 && bxbracket == 0 {
                 // left operand: scan back over the chain already in bxo
                 hold bxal = len(bxo)
                 hold bxrun = 1
@@ -11534,6 +12539,7 @@ hold ec = 0
 
     // ================= give EXPR =================
     when act == 6 {
+      hold list_return_start = pos
       hold pos = pos + 4
       hold sk = 1
       while sk == 1 {
@@ -11558,6 +12564,24 @@ hold ec = 0
           when cs == 10 || cs == 13 {
             hold gr = 0
           } otherwise {
+            when cs == 34 {
+              hold gexpr = concat(gexpr, chr(cs))
+              hold pos = pos + 1
+              hold gquoted = 1
+              while pos < n && gquoted == 1 {
+                hold gqc = sx_index(source, pos)
+                hold gexpr = concat(gexpr, chr(gqc))
+                hold pos = pos + 1
+                when gqc == 92 && pos < n {
+                  hold gexpr = concat(gexpr, chr(sx_index(source, pos)))
+                  hold pos = pos + 1
+                } otherwise {
+                  when gqc == 34 {
+                    hold gquoted = 0
+                  }
+                }
+              }
+            } otherwise {
             when cs == 47 {
               hold c2 = 0
               when pos + 1 < n {
@@ -11577,6 +12601,7 @@ hold ec = 0
               }
               hold gexpr = concat(gexpr, chr(cs))
               hold pos = pos + 1
+            }
             }
           }
         }
@@ -11600,6 +12625,107 @@ hold ec = 0
       while gi < gl {
         hold gtrim = concat(gtrim, chr(sx_index(gexpr, gi)))
         hold gi = gi + 1
+      }
+      // A complete list literal return reuses the checked hold-expression
+      // parser. Insert the temporary at the return itself, never outside its
+      // branch/loop: element evaluation and early-return timing stay intact.
+      hold list_return_literal = 0
+      when gl > 0 {
+        when sx_index(gtrim, 0) == 91 {
+          hold list_return_literal = 1
+        }
+      }
+      when list_return_literal == 1 {
+        hold lrdepth = 0
+        hold lrquote = 0
+        hold lrescape = 0
+        hold lrend = 0 - 1
+        hold lri = 0
+        while lri < gl && lrend < 0 {
+          hold lrc = sx_index(gtrim, lri)
+          when lrquote == 1 {
+            when lrescape == 1 {
+              hold lrescape = 0
+            } otherwise {
+              when lrc == 92 {
+                hold lrescape = 1
+              } otherwise {
+                when lrc == 34 {
+                  hold lrquote = 0
+                }
+              }
+            }
+          } otherwise {
+            when lrc == 34 {
+              hold lrquote = 1
+            } otherwise {
+              when lrc == 91 {
+                hold lrdepth = lrdepth + 1
+              }
+              when lrc == 93 {
+                hold lrdepth = lrdepth - 1
+                when lrdepth == 0 {
+                  hold lrend = lri
+                }
+              }
+            }
+          }
+          hold lri = lri + 1
+        }
+        when lrend != gl - 1 || in_fn == 0 || fn_retkind != 108 {
+          hold perr = 1
+          hold permsg = "a direct list return needs one complete list literal and a -> list function"
+        } otherwise {
+          // Pick a name absent from the entire source, including existing
+          // generated temporaries. No user namespace needs to be reserved.
+          hold lrname = "__sx_return_list"
+          hold lrunique = 0
+          while lrunique == 0 {
+            hold lrunique = 1
+            hold lrj = 0
+            hold lrnl = len(lrname)
+            while lrj + lrnl <= n && lrunique == 1 {
+              hold lrok = 1
+              hold lrk = 0
+              while lrk < lrnl && lrok == 1 {
+                when sx_index(source, lrj + lrk) != sx_index(lrname, lrk) {
+                  hold lrok = 0
+                }
+                hold lrk = lrk + 1
+              }
+              when lrok == 1 {
+                hold lrunique = 0
+              }
+              hold lrj = lrj + 1
+            }
+            when lrunique == 0 {
+              hold lrname = concat(lrname, "x")
+            }
+          }
+          hold lrsource = ""
+          hold lri = 0
+          while lri < list_return_start {
+            hold lrsource = concat(lrsource, chr(sx_index(source, lri)))
+            hold lri = lri + 1
+          }
+          hold lrsource = concat(lrsource, "hold ")
+          hold lrsource = concat(lrsource, lrname)
+          hold lrsource = concat(lrsource, " = ")
+          hold lrsource = concat(lrsource, gtrim)
+          hold lrsource = concat(lrsource, nl)
+          hold lrsource = concat(lrsource, "give ")
+          hold lrsource = concat(lrsource, lrname)
+          hold lrsource = concat(lrsource, nl)
+          hold lri = pos
+          while lri < n {
+            hold lrsource = concat(lrsource, chr(sx_index(source, lri)))
+            hold lri = lri + 1
+          }
+          hold source = lrsource
+          hold n = len(source)
+          hold pos = list_return_start
+          hold act = 16 // internal retry: do not emit give or consume the inserted hold
+        }
       }
       hold ctrim = gtrim
       hold cl = gl
@@ -12180,6 +13306,7 @@ hold ec = 0
       // L is the maximal * / % chain to the left, R is the next atom.
       hold crepl = ""
       hold cwi = 0
+      hold cwbracket = 0
       while cwi < cl {
         hold ccx = sx_index(ctrim, cwi)
         when ccx == 34 {
@@ -12207,7 +13334,13 @@ hold ec = 0
             }
           }
         } otherwise {
-          when ccx == 37 {
+          when ccx == 91 {
+            hold cwbracket = cwbracket + 1
+          }
+          when ccx == 93 {
+            hold cwbracket = cwbracket - 1
+          }
+          when ccx == 37 && cwbracket == 0 {
             // ---- left operand: scan back over the mul-level chain ----
             hold cwal = len(crepl)
             hold cwrun = 1
@@ -12576,7 +13709,7 @@ hold ec = 0
             } otherwise {
               hold crepl = concat(crepl, chr(ccx))
               // `/` always divides doubles (10 / 4 is 2.5, never C's 2)
-              when ccx == 47 {
+              when ccx == 47 && cwbracket == 0 {
                 hold crepl = concat(crepl, "(double)")
               }
               hold cwi = cwi + 1
@@ -12611,6 +13744,15 @@ hold ec = 0
       hold body = concat(body, crepl)
       hold body = concat(body, ") {")
       hold body = concat(body, nl)
+      // Snapshot after any binder declaration, before parsing this body.
+      when in_fn == 1 {
+        push(scope_marks, scope_head)
+        push(scope_marks, len(decls))
+        push(scope_marks, len(sdecls))
+        push(scope_marks, len(ldecls))
+        push(scope_marks, len(svars))
+        hold scope_head = len(scope_marks) - 5
+      }
       hold depth = depth + 1
       when iswhile == 1 {
         hold blk = concat(blk, "w")
@@ -12803,6 +13945,48 @@ hold ec = 0
         when loopd > 0 {
           hold loopd = loopd - 1
         }
+      }
+      // A source block ends here. Synthetic elif wrapper blocks contain no
+      // declarations and therefore do not add/pop scope records.
+      when in_fn == 1 && bkc != 109 && scope_head >= 0 {
+        hold scpos = scope_head + 1
+        hold scope_length = scope_marks[scpos]
+        hold scope_text = ""
+        hold scope_i = 0
+        while scope_i < scope_length {
+          hold scope_text = concat(scope_text, chr(sx_index(decls, scope_i)))
+          hold scope_i = scope_i + 1
+        }
+        hold decls = scope_text
+        hold scpos = scope_head + 2
+        hold scope_length = scope_marks[scpos]
+        hold scope_text = ""
+        hold scope_i = 0
+        while scope_i < scope_length {
+          hold scope_text = concat(scope_text, chr(sx_index(sdecls, scope_i)))
+          hold scope_i = scope_i + 1
+        }
+        hold sdecls = scope_text
+        hold scpos = scope_head + 3
+        hold scope_length = scope_marks[scpos]
+        hold scope_text = ""
+        hold scope_i = 0
+        while scope_i < scope_length {
+          hold scope_text = concat(scope_text, chr(sx_index(ldecls, scope_i)))
+          hold scope_i = scope_i + 1
+        }
+        hold ldecls = scope_text
+        hold scpos = scope_head + 4
+        hold scope_length = scope_marks[scpos]
+        hold scope_text = ""
+        hold scope_i = 0
+        while scope_i < scope_length {
+          hold scope_text = concat(scope_text, chr(sx_index(svars, scope_i)))
+          hold scope_i = scope_i + 1
+        }
+        hold svars = scope_text
+        hold scpos = scope_head
+        hold scope_head = scope_marks[scpos]
       }
       when bkc == 109 {
         // end of a make body: the enclosing code's variables are visible again
@@ -13042,18 +14226,19 @@ hold ec = 0
         hold body = concat(body, ind)
         hold body = concat(body, "} else {")
         hold body = concat(body, nl)
-        // keep the block kind: inside an `elif` chain this else is the
-        // chain's else ('E'), otherwise a plain one ('e')
-        hold bkt2 = ""
-        hold bkl2 = len(blk)
-        when bkl2 > 0 {
-          hold bkt2 = chr(sx_index(blk, bkl2 - 1))
-        }
-        when bkt2 == "E" {
-          hold blk = concat(blk, "E")
-        } otherwise {
-          hold blk = concat(blk, "e")
-        }
+      // Snapshot after any binder declaration, before parsing this body.
+      when in_fn == 1 {
+        push(scope_marks, scope_head)
+        push(scope_marks, len(decls))
+        push(scope_marks, len(sdecls))
+        push(scope_marks, len(ldecls))
+        push(scope_marks, len(svars))
+        hold scope_head = len(scope_marks) - 5
+      }
+        // Only synthetic else wrappers use E. A real else body must be
+        // an e barrier, even inside a chain, or a nested else closes its
+        // enclosing chain early and leaks a brace into the top-level body.
+        hold blk = concat(blk, "e")
       }
       when enormal == 1 {
         // Does this `}` end an `elif` chain?  Then the chain's extra
@@ -13145,6 +14330,7 @@ hold ec = 0
       hold firstp = 1
       hold fn_params = ""
       hold fn_retkind = 110
+      hold flowtyped = 0
       hold sk = 1
       while sk == 1 {
         when pos >= n {
@@ -13260,6 +14446,7 @@ hold ec = 0
         hold cs2 = sx_index(source,pos + 1)
       }
       when cs == 45 && cs2 == 62 {
+        hold flowtyped = 1
         hold pos = pos + 2
         hold sk = 1
         while sk == 1 {
@@ -13339,6 +14526,14 @@ hold ec = 0
           hold pos = pos + 1
         }
       }
+      when flowtyped == 1 {
+        hold flowresult = sxflowblock(source, pos - 1, 0)
+        hold flowreturns = flowresult[1]
+        when flowreturns == 0 {
+          hold perr = 1
+          hold permsg = concat("typed function may fall through without give: ", fn_name)
+        }
+      }
       hold saved_body = body
       hold body = ""
       when fn_retkind == 115 {
@@ -13400,7 +14595,45 @@ hold ec = 0
       when fkfound == 1 {
         hold fn_params = fpt2
       }
-      hold body = concat(body, fn_params)
+      when len(fn_params) == 0 {
+        hold body = concat(body, "void")
+      } otherwise {
+        hold body = concat(body, fn_params)
+      }
+      // All definitions contribute a prototype before any bodies are emitted.
+      // Generic instances may already have one from specialization; retain
+      // that spelling and avoid duplicate declarations by whole-name lookup.
+      hold fpkey = concat(fn_name, "(")
+      hold fpi = 0
+      hold fpl = len(gproto)
+      hold fpkl = len(fpkey)
+      hold fpfound = 0
+      while fpi + fpkl <= fpl {
+        hold fpok = 1
+        when fpi > 0 {
+          hold fpc = sx_index(gproto, fpi - 1)
+          when (fpc >= 65 && fpc <= 90) || (fpc >= 97 && fpc <= 122) || (fpc >= 48 && fpc <= 57) || fpc == 95 {
+            hold fpok = 0
+          }
+        }
+        hold fpj = 0
+        while fpj < fpkl && fpok == 1 {
+          when sx_index(gproto, fpi + fpj) != sx_index(fpkey, fpj) {
+            hold fpok = 0
+          }
+          hold fpj = fpj + 1
+        }
+        when fpok == 1 {
+          hold fpfound = 1
+          hold fpi = fpl
+        }
+        hold fpi = fpi + 1
+      }
+      when fpfound == 0 {
+        hold gproto = concat(gproto, body)
+        hold gproto = concat(gproto, ");")
+        hold gproto = concat(gproto, nl)
+      }
       hold body = concat(body, ") {")
       hold body = concat(body, nl)
       // Variables are scoped to their function: save the tables of the
@@ -13411,6 +14644,11 @@ hold ec = 0
       hold savsdecls = sdecls
       hold savldecls = ldecls
       hold savsvars = svars
+      hold decls = "|"
+      hold sdecls = "|"
+      hold ldecls = "|"
+      hold svars = ""
+      hold scope_head = -1
       // Remember the parameter kinds.  `show name` and `hold name = ...`
       // inside the body must see a `str`/`list` parameter as the existing
       // variable it is (a numeric parameter stays numeric).
@@ -14170,6 +15408,15 @@ hold ec = 0
             hold body = concat(body, " + 1) {")
             hold body = concat(body, nl)
           }
+      // Snapshot after any binder declaration, before parsing this body.
+      when in_fn == 1 {
+        push(scope_marks, scope_head)
+        push(scope_marks, len(decls))
+        push(scope_marks, len(sdecls))
+        push(scope_marks, len(ldecls))
+        push(scope_marks, len(svars))
+        hold scope_head = len(scope_marks) - 5
+      }
           hold depth = depth + 1
           hold blk = concat(blk, "f")
           hold loopd = loopd + 1
@@ -14412,6 +15659,176 @@ hold ec = 0
       hold pos = pos + 1
     }
 
+    // Lower only the newly emitted statement while lexical kind tables live.
+    // This keeps allocations inside expressions, including loop conditions.
+    when act == 1 || act == 2 || act == 3 || act == 6 || act == 8 {
+      hold inpos = instart
+      hold inquote = 0
+      hold inprev = 0
+      hold intext = ""
+      hold inchanged = 0
+      hold inenv = ""
+      hold instop = len(body)
+      hold inserialstart = len(instate)
+      hold inprobe = instart
+      hold inprobequote = 0
+      hold inhasbracket = 0
+      while inprobe < instop {
+        hold inpc = sx_index(body, inprobe)
+        hold inprobe = inprobe + 1
+        when inprobequote == 1 {
+          when inpc == 92 && inprobe < instop {
+            hold inprobe = inprobe + 1
+          } otherwise {
+            when inpc == 34 {
+              hold inprobequote = 0
+            }
+          }
+        } otherwise {
+          when inpc == 34 {
+            hold inprobequote = 1
+          }
+          when inpc == 91 {
+            hold inhasbracket = 1
+          }
+        }
+      }
+      when inhasbracket == 1 {
+            when len(inenv) == 0 {
+              when inready == 0 {
+                while sxecontains(source, inprivate) == 1 {
+                  hold inprivate = concat(inprivate, "x")
+                }
+                hold inready = 1
+                hold fsret = concat(fsret, inprivate)
+                hold fsret = concat(fsret, "list=l|")
+              }
+              hold inenv = concat(decls, chr(1))
+              hold inenv = concat(inenv, sdecls)
+              hold inenv = concat(inenv, chr(1))
+              hold inenv = concat(inenv, ldecls)
+              hold inenv = concat(inenv, chr(1))
+              hold inenv = concat(inenv, svars)
+              hold inenv = concat(inenv, chr(1))
+              hold inenv = concat(inenv, fsret)
+              hold inenv = concat(inenv, chr(1))
+              hold inenv = concat(inenv, fspk)
+              hold inenv = concat(inenv, chr(1))
+              hold inenv = concat(inenv, inprivate)
+              hold inenv = concat(inenv, chr(1))
+              hold inenv = concat(inenv, ftypes)
+            }
+        hold incallnames = concat(fsret, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_http=s|")
+      while inpos < instop {
+        hold inc = sx_index(body, inpos)
+        when inquote == 1 {
+          hold intext = concat(intext, chr(inc))
+          hold inpos = inpos + 1
+          when inc == 92 && inpos < instop {
+            hold intext = concat(intext, chr(sx_index(body, inpos)))
+            hold inpos = inpos + 1
+          } otherwise {
+            when inc == 34 {
+              hold inquote = 0
+            }
+          }
+        } otherwise {
+          when (inc >= 65 && inc <= 90) || (inc >= 97 && inc <= 122) || inc == 95 {
+            hold inword = sxflowword(body, inpos)
+            hold innext = sxflowspace(body, inpos + len(inword))
+            hold incandidate = 0
+            when innext < instop && sx_index(body, innext) == 40 {
+              hold inreturn = sxelookup(incallnames, inword, "=")
+              when len(inreturn) > 0 && sxehaslist(body, innext) == 1 {
+                hold incandidate = 1
+              }
+            }
+            when incandidate == 1 {
+              hold incall = sxeparse(body, inpos, inenv, 0, 0, instate)
+              when string_eq(sxesegment(incall, 1), "e") {
+                when perr == 0 {
+                  hold permsg = concat("inline list arguments: ", sxecode(incall))
+                }
+                hold perr = 1
+                hold intext = concat(intext, inword)
+                hold inpos = inpos + len(inword)
+              } otherwise {
+                hold intext = concat(intext, sxecode(incall))
+                hold inpos = sxepos(incall)
+                hold inchanged = 1
+              }
+            } otherwise {
+              hold intext = concat(intext, inword)
+              hold inpos = inpos + len(inword)
+            }
+            hold inprev = 65
+          } otherwise {
+          when inc == 91 && (inprev == 40 || inprev == 44) {
+            hold inresult = sxeparse(body, inpos, inenv, 0, 0, instate)
+            hold inkind = sxesegment(inresult, 1)
+            hold inend = sxepos(inresult)
+            hold inafter = sxflowspace(body, inend)
+            hold inbad = 0
+            when string_eq(inkind, "l") == 0 {
+              hold inbad = 1
+            }
+            when inafter >= instop {
+              hold inbad = 1
+            } otherwise {
+              hold inchar = sx_index(body, inafter)
+              when inchar != 44 && inchar != 41 {
+                hold inbad = 1
+              }
+            }
+            when inbad == 1 {
+              when perr == 0 {
+                hold permsg = "inline list arguments: unsupported list expression"
+                when string_eq(inkind, "e") {
+                  hold permsg = concat("inline list arguments: ", sxecode(inresult))
+                }
+              }
+              hold perr = 1
+              hold intext = concat(intext, "[]")
+              hold inpos = inpos + 1
+            } otherwise {
+              hold intext = concat(intext, sxecode(inresult))
+              hold inpos = inend
+              hold inchanged = 1
+            }
+            hold inprev = 41
+          } otherwise {
+            hold intext = concat(intext, chr(inc))
+            hold inpos = inpos + 1
+            when inc == 34 {
+              hold inquote = 1
+            }
+            when inc != 32 && inc != 9 && inc != 10 && inc != 13 {
+              hold inprev = inc
+            }
+          }
+        }
+      }
+        }
+      when inchanged == 1 {
+        // Checked inline elements may introduce string/list builtins even
+        // when there are no ordinary string or list declarations in source.
+        hold rt = 1
+        hold lt = 1
+        hold inprefix = sxeslice(body, 0, instart)
+        hold inserialend = len(instate)
+        while inserialstart < inserialend {
+          hold inprefix = concat(inprefix, "  double ")
+          hold inprefix = concat(inprefix, inprivate)
+          hold inprefix = concat(inprefix, sxedigits(inserialstart))
+          hold inprefix = concat(inprefix, ";")
+          hold inprefix = concat(inprefix, nl)
+          hold inserialstart = inserialstart + 1
+        }
+        hold body = concat(inprefix, intext)
+      }
+      }
+    }
+
     // ---- flush completed output into obody (memory bound) -------------
     // A flat accumulator would copy the whole body on every append, which is
     // O(n^2): compiling this file used to allocate ~2.5 GB and get Killed on
@@ -14488,6 +15905,11 @@ when rt == 1 {
   hold out = concat(out, "static double sx_lset_idx(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return (double)i; }\n")
   hold out = concat(out, "static sx_list *sx_lset(sx_list *L,double v,double x){ L->d[(long)sx_lset_idx(L,v)]=x; return L; }\n")
   hold out = concat(out, "static sx_list *sx_lpush(sx_list *L,double v){ if(!L){L=(sx_list*)sx_gc_alloc(1,sizeof(sx_list)); L->n=0; L->cap=4; L->d=(double*)sx_gc_alloc(2,sizeof(double)*4);} if(L->n>=L->cap){ double *nd=(double*)sx_gc_alloc(2,sizeof(double)*(size_t)(L->cap*2)); memcpy(nd,L->d,sizeof(double)*(size_t)L->n); L->d=nd; L->cap*=2;} L->d[L->n++]=v; return L; }\n\n")
+}
+when inready == 1 {
+  hold out = concat(out, "static sx_list *")
+  hold out = concat(out, inprivate)
+  hold out = concat(out, "list(sx_list *value){return value;}\n")
 }
 hold fixfrom = len(out)
 hold out = concat(out, gproto)
@@ -14614,12 +16036,49 @@ while tdi < tdn {
   hold out = concat(out, ";")
   hold out = concat(out, nl)
 }
+// Keep the stack anchor in a caller frame, above EVERY generated-program
+// local at both O0 and O2. An anchor beside those locals can be laid out
+// below them, causing conservative scanning to miss live roots. The volatile
+// indirect call and post-call store prevent inlining/tail-call removal of
+// the wrapper without compiler-specific attributes.
+hold main_inner = "_sx_gc_program"
+hold main_unique = 0
+while main_unique == 0 {
+  hold main_unique = 1
+  hold main_scan = 0
+  hold main_nlen = len(main_inner)
+  while main_scan + main_nlen <= n && main_unique == 1 {
+    hold main_match = 1
+    hold main_char = 0
+    while main_char < main_nlen && main_match == 1 {
+      when sx_index(source, main_scan + main_char) != sx_index(main_inner, main_char) {
+        hold main_match = 0
+      }
+      hold main_char = main_char + 1
+    }
+    when main_match == 1 {
+      hold main_unique = 0
+    }
+    hold main_scan = main_scan + 1
+  }
+  when main_unique == 0 {
+    hold main_inner = concat(main_inner, "x")
+  }
+}
+hold out = concat(out, "static int ")
+hold out = concat(out, main_inner)
+hold out = concat(out, "(void);\n")
 when rt == 1 {
-  hold out = concat(out, "int main(int argc,char**argv){\n  char sx_gcanchor=0; (void)sx_gcanchor; sx_gc_init(&sx_gcanchor);\n")
+  hold out = concat(out, "int main(int argc,char**argv){\n")
   hold out = concat(out, "  sx_argn=argc; sx_argv_p=argv;\n")
 } otherwise {
-  hold out = concat(out, "int main(void){\n  double sx_gcanchor=0; (void)sx_gcanchor; sx_gc_init(&sx_gcanchor);\n")
+  hold out = concat(out, "int main(void){\n")
 }
+hold out = concat(out, "  volatile unsigned char sx_gcanchor=0;\n  int (*volatile sx_entry)(void)=")
+hold out = concat(out, main_inner)
+hold out = concat(out, ";\n  sx_gc_init((void*)&sx_gcanchor);\n  int sx_status=sx_entry();\n  sx_gcanchor=0;\n  return sx_status;\n}\nstatic int ")
+hold out = concat(out, main_inner)
+hold out = concat(out, "(void){\n")
 hold out = concat(out, obody)
 hold out = concat(out, body)
 hold out = concat(out, "  return 0;\n")
@@ -14723,6 +16182,9 @@ when exbad3 == 1 {
 // (plus any `.0` expansions), bounding the temporary builder and avoiding a
 // full-prefix copy for every character. This keeps C's integer folding from
 // diverging from Sayanox's IEEE-double arithmetic.
+hold llc = 0
+hold llpc = 0
+hold llskip = 0
 hold fixn = len(out)
 hold fixi = 0
 hold fixout = ""
@@ -14740,6 +16202,231 @@ hold fixes = 0
 hold fixprev = 0
 while fixi < fixn {
   hold fixc = sx_index(out,fixi)
+  hold llhandled = 0
+  when fixquote == 0 && fixc == 91 {
+    hold llprevpos = fixi - 1
+    hold llprev = 0
+    hold llseek = 1
+    while llprevpos >= fixfrom && llseek == 1 {
+      hold llprev = sx_index(out, llprevpos)
+      when llprev == 32 || llprev == 9 || llprev == 10 || llprev == 13 {
+        hold llprevpos = llprevpos - 1
+      } otherwise {
+        hold llseek = 0
+      }
+    }
+    when llprev == 40 || llprev == 44 {
+      // Literal call arguments are inline allocations, never hoisted. This
+      // bounded path accepts decimal constant arithmetic and parentheses;
+      // names/calls still use the ordinary checked hold/list parser.
+      hold llhandled = 1
+      hold llpos = fixi + 1
+      hold llend = 0
+      hold llbad = 0
+      hold llneed = 0
+      hold llcount = 0
+      hold llelems = ""
+      while llend == 0 && llpos < fixn {
+        hold llskip = 1
+        while llskip == 1 && llpos < fixn {
+          hold llc = sx_index(out, llpos)
+          when llc == 32 || llc == 9 || llc == 10 || llc == 13 {
+            hold llpos = llpos + 1
+          } otherwise {
+              hold llskip = 0
+            }
+        }
+        hold llc = 0
+        when llpos < fixn {
+              hold llc = sx_index(out, llpos)
+            }
+        when llc == 93 {
+          when llneed == 1 {
+              hold llbad = 1
+            }
+          hold llpos = llpos + 1
+          hold llend = 1
+        } otherwise {
+          hold llvalue = ""
+          hold llparen = 0
+          hold lloperand = 1
+          hold llexrun = 1
+          while llexrun == 1 && llpos < fixn {
+            hold llc = sx_index(out, llpos)
+            when llc == 32 || llc == 9 || llc == 10 || llc == 13 {
+              hold llpos = llpos + 1
+            } otherwise {
+              when lloperand == 1 {
+                when llc == 43 || llc == 45 {
+                  // Separate unary operators: -- must not become C decrement.
+                  hold llvalue = concat(llvalue, chr(llc))
+                  hold llvalue = concat(llvalue, " ")
+                  hold llpos = llpos + 1
+                } otherwise {
+                  when llc == 40 {
+                    hold llvalue = concat(llvalue, "(")
+                    hold llparen = llparen + 1
+                    hold llpos = llpos + 1
+                  } otherwise {
+                    when llc >= 48 && llc <= 57 {
+                      hold lldot = 0
+                      hold lldigits = 0
+                      hold llrun = 1
+                      while llpos < fixn && llrun == 1 {
+                        hold llc = sx_index(out, llpos)
+                        when llc >= 48 && llc <= 57 {
+                          hold llvalue = concat(llvalue, chr(llc))
+                          hold llpos = llpos + 1
+                          hold lldigits = lldigits + 1
+                        } otherwise {
+                          hold llrun = 0
+                        }
+                      }
+                      when lldigits == 0 {
+                          hold llbad = 1
+                        }
+                      hold llc = 0
+                      when llpos < fixn {
+                          hold llc = sx_index(out, llpos)
+                        }
+                      when llc == 46 {
+                        hold lldot = 1
+                        hold llvalue = concat(llvalue, ".")
+                        hold llpos = llpos + 1
+                        hold lldigits = 0
+                        hold llrun = 1
+                        while llpos < fixn && llrun == 1 {
+                          hold llc = sx_index(out, llpos)
+                          when llc >= 48 && llc <= 57 {
+                            hold llvalue = concat(llvalue, chr(llc))
+                            hold llpos = llpos + 1
+                            hold lldigits = lldigits + 1
+                          } otherwise {
+                          hold llrun = 0
+                        }
+                        }
+                        when lldigits == 0 {
+                          hold llbad = 1
+                        }
+                      }
+                      when lldot == 0 {
+                        hold llvalue = concat(llvalue, ".0")
+                      }
+                      hold lloperand = 0
+                    } otherwise {
+                      hold llbad = 1
+                      hold llexrun = 0
+                    }
+                  }
+                }
+              } otherwise {
+                when llc == 43 || llc == 45 || llc == 42 || llc == 47 {
+                  hold llvalue = concat(llvalue, " ")
+                  hold llvalue = concat(llvalue, chr(llc))
+                  hold llvalue = concat(llvalue, " ")
+                  hold llpos = llpos + 1
+                  hold lloperand = 1
+                } otherwise {
+                  when llc == 41 && llparen > 0 {
+                    hold llvalue = concat(llvalue, ")")
+                    hold llparen = llparen - 1
+                    hold llpos = llpos + 1
+                  } otherwise {
+                    hold llexrun = 0
+                  }
+                }
+              }
+            }
+            when llbad == 1 {
+              hold llexrun = 0
+            }
+          }
+          when lloperand == 1 || llparen != 0 {
+            hold llbad = 1
+          }
+          when llcount > 0 {
+              hold llelems = concat(llelems, ",")
+            }
+          hold llelems = concat(llelems, "(double)(")
+          hold llelems = concat(llelems, llvalue)
+          hold llelems = concat(llelems, ")")
+          hold llcount = llcount + 1
+          hold llskip = 1
+          while llpos < fixn && llskip == 1 {
+            hold llc = sx_index(out, llpos)
+            when llc == 32 || llc == 9 || llc == 10 || llc == 13 {
+              hold llpos = llpos + 1
+            } otherwise {
+              hold llskip = 0
+            }
+          }
+          hold llc = 0
+          when llpos < fixn {
+              hold llc = sx_index(out, llpos)
+            }
+          when llc == 44 {
+            hold llpos = llpos + 1
+            hold llneed = 1
+          } otherwise {
+            when llc == 93 {
+              hold llpos = llpos + 1
+              hold llend = 1
+            } otherwise {
+              hold llbad = 1
+            }
+          }
+          when llbad == 1 {
+              hold llend = 1
+            }
+        }
+      }
+      when llend == 0 {
+              hold llbad = 1
+            }
+      hold llafter = llpos
+      hold llskip = 1
+      while llafter < fixn && llskip == 1 {
+        hold llc = sx_index(out, llafter)
+        when llc == 32 || llc == 9 || llc == 10 || llc == 13 {
+          hold llafter = llafter + 1
+        } otherwise {
+              hold llskip = 0
+            }
+      }
+      hold llc = 0
+      when llafter < fixn {
+              hold llc = sx_index(out, llafter)
+            }
+      when llc != 44 && llc != 41 {
+              hold llbad = 1
+            }
+      when llbad == 1 {
+        hold exerr = concat(exerr, "#error sayanox-min: inline list arguments require numeric constant arithmetic; use hold for names or calls")
+        hold exerr = concat(exerr, nl)
+        show "min: inline list arguments require numeric constant arithmetic; use hold for names or calls"
+      }
+      hold lltextcount = ""
+      hold llnum = llcount
+      when llnum == 0 {
+              hold lltextcount = "0"
+            }
+      while llnum > 0 {
+        hold lldigit = llnum % 10
+        hold lltextcount = concat(chr(48 + lldigit), lltextcount)
+        hold llnum = (llnum - lldigit) / 10
+      }
+      hold fixchunk = concat(fixchunk, "sx_llit(")
+      hold fixchunk = concat(fixchunk, lltextcount)
+      when llcount > 0 {
+        hold fixchunk = concat(fixchunk, ",")
+        hold fixchunk = concat(fixchunk, llelems)
+      }
+      hold fixchunk = concat(fixchunk, ")")
+      hold fixi = llpos
+      hold fixprev = 41
+    }
+  }
+  when llhandled == 0 {
   when fixquote == 1 {
     hold fixchunk = concat(fixchunk, chr(fixc))
     hold fixi = fixi + 1
@@ -14762,6 +16449,128 @@ while fixi < fixn {
       hold fixprev = fixc
       hold fixi = fixi + 1
     } otherwise {
+      when (fixc >= 65 && fixc <= 90) || (fixc >= 97 && fixc <= 122) || fixc == 95 {
+        // Some call-argument paths preserve literal words. Normalize whole
+        // tokens in expression positions, never string contents, field names,
+        // declaration names, or a longer identifier such as true_value.
+        hold fixbefore = fixi - 1
+        hold fixbc = 0
+        hold fixseek = 1
+        while fixbefore >= fixfrom && fixseek == 1 {
+          hold fixbc = sx_index(out, fixbefore)
+          when fixbc == 32 || fixbc == 9 || fixbc == 10 || fixbc == 13 {
+            hold fixbefore = fixbefore - 1
+          } otherwise {
+            hold fixseek = 0
+          }
+        }
+        hold fixword = ""
+        hold fixrun = 1
+        while fixi < fixn && fixrun == 1 {
+          hold fixd = sx_index(out, fixi)
+          when (fixd >= 65 && fixd <= 90) || (fixd >= 97 && fixd <= 122) || (fixd >= 48 && fixd <= 57) || fixd == 95 {
+            hold fixword = concat(fixword, chr(fixd))
+            hold fixprev = fixd
+            hold fixi = fixi + 1
+          } otherwise {
+            hold fixrun = 0
+          }
+        }
+        when fixbc == 40 || fixbc == 44 || fixbc == 61 || fixbc == 43 || fixbc == 45 || fixbc == 42 || fixbc == 47 || fixbc == 37 || fixbc == 33 || fixbc == 60 || fixbc == 62 || fixbc == 38 || fixbc == 124 || fixbc == 63 || fixbc == 58 || fixbc == 91 {
+          when sx_eq(fixword, "true") {
+            hold fixword = "1.0"
+            hold fixprev = 48
+          }
+          when sx_eq(fixword, "false") {
+            hold fixword = "0.0"
+            hold fixprev = 48
+          }
+        }
+        when sx_eq(fixword, "sx_len") || sx_eq(fixword, "sx_idx") {
+          hold llpeek = fixi
+          hold llgo = 1
+          while llpeek < fixn && llgo == 1 {
+            hold llpc = sx_index(out, llpeek)
+            when llpc == 32 || llpc == 9 {
+                hold llpeek = llpeek + 1
+              }
+            otherwise {
+                hold llgo = 0
+              }
+          }
+          hold llpc = 0
+          when llpeek < fixn {
+                hold llpc = sx_index(out, llpeek)
+              }
+          when llpc == 40 {
+            hold llpeek = llpeek + 1
+            hold llgo = 1
+            while llpeek < fixn && llgo == 1 {
+              hold llpc = sx_index(out, llpeek)
+              when llpc == 32 || llpc == 9 {
+                hold llpeek = llpeek + 1
+              }
+              otherwise {
+                hold llgo = 0
+              }
+            }
+            hold llislist = 0
+            hold llpc = 0
+            when llpeek < fixn {
+                hold llpc = sx_index(out, llpeek)
+              }
+            when llpc == 91 {
+                hold llislist = 1
+              }
+            hold llcallee = ""
+            hold llgo = 1
+            while llpeek < fixn && llgo == 1 {
+              hold llpc = sx_index(out, llpeek)
+              when (llpc >= 65 && llpc <= 90) || (llpc >= 97 && llpc <= 122) || (llpc >= 48 && llpc <= 57) || llpc == 95 {
+                hold llcallee = concat(llcallee, chr(llpc))
+                hold llpeek = llpeek + 1
+              } otherwise {
+                hold llgo = 0
+              }
+            }
+            when llpeek < fixn {
+              when sx_index(out, llpeek) == 40 {
+                when sx_eq(llcallee, "sx_lpush") || sx_eq(llcallee, "sx_llit") {
+                hold llislist = 1
+              }
+                hold llkey = concat("|", llcallee)
+                hold llkey = concat(llkey, "=l|")
+                hold llki = 0
+                hold llkl = len(llkey)
+                hold llfl = len(fsret)
+                while llki + llkl <= llfl {
+                  hold llok = 1
+                  hold llkj = 0
+                  while llkj < llkl && llok == 1 {
+                    when sx_index(fsret, llki + llkj) != sx_index(llkey, llkj) {
+                hold llok = 0
+              }
+                    hold llkj = llkj + 1
+                  }
+                  when llok == 1 {
+                hold llislist = 1
+              }
+                  hold llki = llki + 1
+                }
+              }
+            }
+            when llislist == 1 {
+              when sx_eq(fixword, "sx_len") {
+                hold fixword = "sx_llen"
+              }
+              otherwise {
+                hold fixword = "sx_lget"
+              }
+            }
+          }
+        }
+        hold fixchunk = concat(fixchunk, fixword)
+      } otherwise {
       when fixc >= 48 && fixc <= 57 {
         hold fixident = 0
         when (fixprev >= 48 && fixprev <= 57) || (fixprev >= 65 && fixprev <= 90) || (fixprev >= 97 && fixprev <= 122) || fixprev == 95 {
@@ -14815,7 +16624,9 @@ while fixi < fixn {
         hold fixprev = fixc
         hold fixi = fixi + 1
       }
+      }
     }
+  }
   }
   when fixi - fixflush >= 512 {
     hold fixout = concat(fixout, fixchunk)

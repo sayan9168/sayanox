@@ -1,8 +1,7 @@
 // stdlib/list_util.sa -- list helpers.
 //
-// gen2 only, for the same reason as `str_util.sa`: a `list` parameter needs
-// the full-language typed parameter (`make l_sum(xs: list) -> num`), which
-// seed-min does not read and native_aot rejects with a clear diagnostic.
+// Supported by seed-min, gen2 and native (make test-stdlib).
+// Signatures use fully typed num/str/list parameters and explicit returns.
 //
 // One statement per line, and helpers defined before use -- see the note at
 // the top of `str_util.sa`.

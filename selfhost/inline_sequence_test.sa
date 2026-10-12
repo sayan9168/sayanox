@@ -1,0 +1,32 @@
+make stamp(n: num) -> num {
+  show n
+  give n
+}
+make size(xs: list) -> num {
+  give len(xs)
+}
+make mutate(xs: list) -> num {
+  push(xs, 8)
+  give len(xs)
+}
+make __sx_inline_list(n: num) -> num {
+  give n
+}
+make collision() -> num {
+  give __sx_inline_list(77)
+}
+hold xs = [1]
+show size([stamp(1), stamp(2), stamp(3)])
+show total([mutate(xs), len(xs)])
+show len(xs)
+show collision()
+hold step = 0
+while size([stamp(step)]) == 1 {
+  step = step + 1
+  when step == 3 {
+    break
+  }
+}
+make total(xs: list) -> num {
+  give xs[0] * 10 + xs[1]
+}

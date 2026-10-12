@@ -1,0 +1,24 @@
+// Native-only: seed/gen2 refuse user function calls in range bounds.
+hold checks = 0
+hold limit = 3
+hold i = 0
+make bound() {
+  checks = checks + 1
+  give limit
+}
+for i in 0..bound() {
+  show i
+  limit = 2
+}
+show checks
+show i
+for i in 5..bound() { show 999 }
+show checks
+for i in 0..bound() { break }
+show checks
+for i in 0..bound() {
+  when i == 0 { continue }
+  show i - 1
+  show i
+}
+show checks

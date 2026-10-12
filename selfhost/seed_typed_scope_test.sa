@@ -1,0 +1,27 @@
+// Seed-specific: gen2 does not reliably isolate sibling-block bindings,
+// emit typed forward prototypes, or lower boolean literal call arguments.
+make scopes(flag: num) -> num {
+  hold result: num = 0
+  when flag {
+    hold temp: str = "a"
+    result = len(temp)
+  } otherwise {
+    hold temp: num = 3
+    result = temp
+  }
+  hold temp: list = [8]
+  give result + temp[0]
+}
+make first(s: str) -> str {
+  give second(s)
+}
+make second(s: str) -> str {
+  give concat(s, "!")
+}
+make identity(n: num) -> num {
+  give n
+}
+show scopes(1)
+show scopes(0)
+show first("forward")
+show identity(true)

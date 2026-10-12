@@ -1,0 +1,34 @@
+// Native-specific: explicit GC and global/parameter name collisions.
+hold xs = "global"
+make grow(xs: list, n: num) -> num {
+  hold i = 0
+  while i < n {
+    push(xs, i)
+    hold reclaimed = gc()
+    i = i + 1
+  }
+  give len(xs)
+}
+make keep() -> list {
+  hold first = []
+  hold amount = grow(first, 100)
+  give first
+}
+hold original = keep()
+hold reclaimed = gc()
+show len(original)
+show original[99]
+show xs
+// Garbage allocation/collection must not reuse the live successor chain.
+hold i = 0
+while i < 1000 {
+  hold garbage = [1, 2, 3, 4]
+  push(garbage, 5)
+  reclaimed = gc()
+  i = i + 1
+}
+show len(original)
+push(original, 123)
+reclaimed = gc()
+show original[100]
+show original

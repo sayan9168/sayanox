@@ -1,0 +1,29 @@
+make number(n: num) -> num {
+  give n
+}
+make label(s: str, n: num) -> str {
+  when n {
+    give concat(s, "!")
+  }
+  give s
+}
+hold true_value = 7
+hold false2 = 9
+show number(true)
+show number(false)
+hold a = number(true)
+show a
+show 2 + number(false)
+show number(number(true))
+show number((true))
+show number(false + false)
+show label("yes", true)
+show label("no", false)
+show number(true_value)
+show number(false2)
+show "true false true_value"
+// Boolean-looking struct field names are identifiers, not literal values.
+struct Flags { true, false }
+hold flags = Flags { true: 4, false: 5 }
+show flags.true
+show flags.false

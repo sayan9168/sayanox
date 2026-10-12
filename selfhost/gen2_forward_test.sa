@@ -1,0 +1,38 @@
+make first(s: str) -> str {
+  give later(s)
+}
+make pass(xs: list) -> list {
+  give last(xs)
+}
+make odd(n: num) -> num {
+  when n <= 0 {
+    give 0
+  }
+  give even(n - 1)
+}
+make even(n: num) -> num {
+  when n <= 0 {
+    give 1
+  }
+  give odd(n - 1)
+}
+make later(s: str) -> str {
+  give concat(s, "!")
+}
+make last(xs: list) -> list {
+  give xs
+}
+make early() -> str {
+  give zero()
+}
+make zero() -> str {
+  give "zero"
+}
+show first("forward")
+hold xs = [2, 4]
+hold ys = pass(xs)
+show len(ys)
+show ys[1]
+show odd(5)
+show even(6)
+show early()

@@ -1,0 +1,20 @@
+make copy<T>(value: T) -> T {
+  hold result: T = value
+  give result
+}
+make label<T>(value: T) -> T {
+  hold result: T = concat(value, "!")
+  give result
+}
+make unused<T>(value: T) -> T {
+  give not_a_function(value)
+}
+hold number: num = 9
+hold word: str = "hello"
+hold values: list = [1, 2]
+show copy(number)
+show label(word)
+hold alias: list = copy(values)
+push(alias, 3)
+show len(values)
+show word

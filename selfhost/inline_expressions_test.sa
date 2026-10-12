@@ -1,0 +1,62 @@
+make identity<T>(value: T) -> T {
+  give value
+}
+make first(xs: list) -> num {
+  give xs[0]
+}
+make plus(n: num) -> num {
+  give n + 1
+}
+make measure(s: str) -> num {
+  give len(s)
+}
+make returning(n: num) -> num {
+  give first([n % 3 + plus(n), n > 0])
+}
+hold n = 8
+hold s = "abcd"
+hold xs = [3, 7]
+hold values = identity([n, n + 1, plus(n), measure(s), xs[1], n % 3, n > 2, n == 3, 8 / 3])
+show values[0]
+show values[1]
+show values[2]
+show values[3]
+show values[4]
+show values[5]
+show values[6]
+show values[7]
+show values[8]
+show first([identity(n) + 2])
+show first([len(s)])
+show first([len([n, plus(n)])])
+show returning(8)
+when first([n % 3]) == 2 {
+  show 12
+}
+hold count = 0
+while first([count < 3]) {
+  count = count + 1
+}
+show count
+show first([s[2]])
+show first([len(s + "!")])
+show first([s == "abcd"])
+show first([s < "z"])
+make choose<A, B>(a: A, b: B) -> A {
+  give a
+}
+show first([choose(n, s)])
+show first([measure(identity(s))])
+make scoped(n: num) -> num {
+  when n > 0 {
+    hold value = 3
+    give first([value + n])
+  } else {
+    hold value = 4
+    give first([value])
+  }
+}
+show scoped(2)
+show scoped(0)
+show first([-8 % 3])
+show first([10 % 3 * 2 + 1])

@@ -1,0 +1,8 @@
+// No ordinary string binding: inline lowering must request the string runtime.
+make first(xs: list) -> num {
+  give xs[0]
+}
+show first(["a" < "b"])
+show first([len("a" + "b")])
+show first(["abc"[1]])
+show first([len([1, 2])])

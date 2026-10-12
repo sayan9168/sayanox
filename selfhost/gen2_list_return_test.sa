@@ -1,0 +1,52 @@
+make empty() -> list {
+  give []
+}
+make forward(n: num) -> list {
+  give values(n)
+}
+make observed(n: num) -> num {
+  show n
+  give n
+}
+make values(n: num) -> list {
+  give [observed(n), n + 1, n * 2]
+}
+make conditional(n: num) -> list {
+  when n > 0 {
+    give [n]
+  }
+  give []
+}
+make from_loop(n: num) -> list {
+  for i in 0..n {
+    give [i, n]
+  }
+  give []
+}
+make collision(n: num) -> list {
+  hold __sx_return_list = n + 1
+  hold __sx_return_listx = n + 2
+  give [__sx_return_list, __sx_return_listx]
+}
+make generic<T>(unused: T) -> T {
+  give [7, 8]
+}
+show len(empty())
+hold xs = forward(3)
+show len(xs)
+show xs[0]
+show xs[1]
+show xs[2]
+show len(conditional(0))
+hold yes = conditional(9)
+show yes[0]
+hold looped = from_loop(4)
+show looped[0]
+show looped[1]
+show len(from_loop(0))
+hold named = collision(10)
+show named[0]
+show named[1]
+hold input = []
+hold output = generic(input)
+show output[1]

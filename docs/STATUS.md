@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-11
+Last updated: 2026-10-12
 
 ## Entry
 
@@ -11,17 +11,11 @@ make gen3               # -> GEN3-OK (gen3 == gen4)   log: docs/logs/make-gen3.l
 make native-test        # -> NATIVE-TEST-OK           log: docs/logs/make-native-test.log
 ```
 
-Everything below was verified by running those commands plus the per-feature
-targets listed at the end of this file, on this host (3939 MB RAM, 2 CPUs,
-x86-64, `/bin/sh` = dash). Nothing in the tables is aspirational. `docs/logs/`
-holds the raw output of the four commands above; each run overwrites them, and
-they were last regenerated 2026-10-11 (after the LSP error-response, stdlib-growth
-and sxpkg-polish additions, and the earlier package, stdlib, native-memory,
-Stage-2-demo and statement-parity test additions described below). The
-`true-selfhost` log was taken with no `selfhost/native_aot` present, i.e. in the
-state a clean checkout is in, and the native half of `test-stage2-demos` prints
-an explicit `skipped` line there; `make native-test` builds that binary and runs
-the check.
+The final four gate logs are in `docs/logs/` (2026-10-12). They were run on
+this x86-64 Linux workspace, with the native compiler already built. Feature
+claims below are bounded by the named tests, not a claim of full language
+parity. Historical measurements are explicitly dated and have not all been
+repeated in this pass. See the [current roadmap](#roadmap-done-vs-still-missing-per-backend-synced-2026-10-11).
 
 GitHub Actions (`.github/workflows/ci.yml`) runs exactly these four targets —
 `doctor`, `true-selfhost`, `gen3`, `native-test` — on a clean `ubuntu-latest`
@@ -34,8 +28,8 @@ Full audit, measurements and method: **[`DEPENDENCY.md`](../DEPENDENCY.md)**.
 
 The bootstrap needs a host C toolchain and `make` — that is not "zero
 dependencies" and is not claimed to be. What it does *not* need is any
-interpreted language: no Python, Node, Ruby, Perl, PHP or shell-script process
-is ever started on any target, and no such file is tracked in the repository.
+Python, Node, Ruby, Perl or PHP on the bootstrap path. POSIX shell recipes
+and tracked shell wrappers/probes are used; they are not Sayanox binaries.
 
 | Tool | Needed for | Status |
 |------|-----------|--------|
@@ -127,26 +121,9 @@ Deferred means it is too large for the current pass; the reason is given.
 Four gates on this checkout: `DOCTOR-OK`, `TRUE-SELFHOST-MIN-OK`, `GEN3-OK`,
 `NATIVE-TEST-OK`.
 
-| Feature | seed-min | gen2 | native | Checked by |
-|---------|----------|------|--------|------------|
-| numbers, strings, `hold`/`show`/`when`/`otherwise`/`while`/`make`/`give`, lists, structs | done | done | done | `make test-stage2`, `make native-test` |
-| string `==` `!=` `<` `<=` `>` `>=` (content compare) | done | done | done (2026-10-10) | `make test-gen2-gaps`, `make test-native-strord` |
-| `and`/`or`/`not` in `when`/`while` conditions | missing | done | done | `make test-stage2`, `make test-native-cond` |
-| `true` / `false` literals | missing | done | done (2026-10-11) | `make test-native-lang`, `make test-stage2` |
-| `elif`, `else if`, `else when` | missing | done | done (2026-10-11) | `make test-native-lang` |
-| `for NAME in A..B` (end exclusive) | missing | done | done (2026-10-11) | `make test-native-lang` |
-| `for NAME in <list or string>` | missing | done | done (2026-10-11) | `make test-for-str`, `make test-native-lang` |
-| `break` / `continue` in `for` and `while` | missing | done | done (2026-10-11) | `make test-native-lang` |
-| `gc()` / `gc_live()` / `gc_runs()` | missing | done | done | `make test-native-mem` |
-| generics `make f<T>(...)` | refused | done (monomorphised) | `make f<T>` with T = num, str or list, one copy per call-site kind (str: `make test-native-strgen`, added 2026-10-11; list: `make test-native-listgen`, added 2026-10-11); struct kind still refused by name | `make test-generics`, `make test-native-generics`, `make test-native-strgen`, `make test-native-listgen` |
-| `and`/`or`/`not` as values (`hold v = a and b`, `show a or b`, `give x or 0`, `c = a and a`, `(a or b)`) | done (value is 1 or 0; quoted text is not an operator; also in groups and user-function arguments) | done (same forms; numeric builtin arguments `len`/`sx_index`/`string_eq` and struct field values now work on gen2 too, `make test-gen2-logic-builtin`, `make test-struct-logic`; `chr` (a string result) is still refused on gen2) | done (2026-10-11, `make test-logic-value`; builtin arguments and struct field values added 2026-10-11, `make test-native-logicarg`). item 8 (gen2, partly done 2026-10-11, `make test-gen2-logic-builtin`): and/or/not as operands of the numeric builtins `len`, `sx_index` and `string_eq` now work on gen2 and native, and `len` may sit in a parenthesized expression. struct field values with and/or/not (`Point { x: a and b }`, `Point { a and b, 2 }`) now work on gen2 too (`make test-struct-logic`: the literal's logic values are hoisted to `hold sxlgN = ...` on the line before; quoted strings may share the line; a string operand is refused). Still open on gen2: `chr` (a string result, `show chr(a and b)`); item 9 (done 2026-10-11, `make test-cond-string`): gen2 and native refuse a string or list operand of `and`/`or`/`not` in a `when`/`while` condition, and a bare string condition, with `a condition must be numeric` / `condition must be a number`; `s == "ab"` and names inside calls such as `len(s)` stay allowed. Value-position `and`/`or`/`not` was already refused on both. |
-| `hold` inside a `make` body | done | done | done (2026-10-11: a slot in the call's own frame; `make test-native-locals`) |
-| typed signatures `make f(a: num) -> num` (all or nothing) | refused | done (`str` params also accepted) | done for `num` and `str` and `list` parameters and return values (2026-10-11; `make test-native-strfn`, `make test-native-listgen`); struct still refused by name | `make test-typed-sig`, `make test-native-strfn`, `make test-native-listgen` |
-| list literals of numeric expressions `[a, a + 1]` (elements are numbers; string/list/struct elements refused by name) | refused | done (parentheses inside an element: `make test-list-paren`, added 2026-10-11) | done (2026-10-11) | `make test-list-expr` |
-
-Still open on native, besides the deferred rows: nothing in the pure-min
-statement set is missing. Generics need a native monomorphiser; `hold` in
-`make` needs stack frames.
+The authoritative backend/gate/missing-work table is the roadmap at the end
+of this document. Seed Stage-2 was extended this pass; native logic values,
+generics and function-local slots already existed and were re-tested.
 
 ## Coverage (pure-min dialect)
 
@@ -203,7 +180,7 @@ What is still different, and honest about it:
 |------|----------|------|--------|
 | `hold` inside a `make` body | accepted | accepted (a local slot) | accepted since 2026-10-11 (a local slot in the call's own frame; the collector scans it) |
 | collector builtins `gc()` / `gc_live()` / `gc_runs()` | error: no collector in the seed runtime | yes (mark & sweep) | yes (native mark & sweep, see `GC.md`; corrected 2026-10-10 — this row used to say `undefined variable 'gc'`) |
-| full-language statements (`for`, `break`, `continue`, `elif`, `for c in <string>`, `and`/`or`/`not`, ...) | error: `unknown statement` | yes: `for` over strings **and lists** (a variable, a list literal, a string literal or a call), nested loops, `break`/`continue` in both, `elif`/`else when` chains, `and`/`or`/`not` with `not` binding looser than a comparison, `true`/`false`, plus the generics/`use` extensions | yes for `for` over a range `0..N`, over lists and strings, `break`/`continue` in `for` and `while`, `elif`/`else if`/`else when` chains, `and`/`or`/`not` in `when`/`while` conditions, `true`/`false` (2026-10-11, `make test-native-lang`, `make test-native-cond`); still refused by name: `and`/`or`/`not` as values, `generics` (see roadmap) |
+| Stage-2 | boolean literals/logic, elif, while break/continue, named/literal string-list for and numeric ranges outside make | broader Stage-2 including literals/calls/ranges and typed functions | broader Stage-2 plus logic values and kind generics |
 | diagnostic wording | own text (`seed_min: ...`) | own text (`min: ...` / `#error` line) | own text (`native_aot: ...`) |
 | host and memory | any C host, malloc-based, no collector | any C host, mark & sweep | x86-64 Linux only; own heap (first-fit + bump) with a mark & sweep collector (corrected 2026-10-10; was "bump-allocated, never freed") |
 
@@ -384,18 +361,14 @@ still use shell/C infrastructure. See
   `write_file(...)` call — is an `unknown statement` error in seed-min,
   gen2 (gen2 used to drop such lines silently or emit invalid C) and, since
   2026-10-08, native (it used to run any bare builtin call).
-  The full-language statements `for`, `break`, `continue` and `elif` are
-  on gen2 and native (native since 2026-10-11, `make test-native-lang`).
-  seed-min reports `unknown statement` for them (`make test-for-str`).
-* **Stage-2 slice (2026-10-08): `for c in <string>` on gen2.** A declared
-  string is walked one byte at a time, each iteration binding `c` to a
-  one-byte string. `break`, `continue`, nesting, the empty string, a counter
-  that rebinds across loops and a string counter reused for a second string
-  all work (`make test-for-str`). Errors are clear: a number or a list as the
-  iterated value, and a counter name that is already a number or a list.
-  Iteration is by byte, so `"é"` is two iterations. seed-min and native refuse
-  the statement. This is one slice of the Stage-2 language, not a claim of
-  it: see the gen2 gaps below and "Out of scope".
+  Seed-min now also supports `elif`, `break`/`continue`, boolean word
+  operators/literals, and `for` over named list/string sources or literals outside make.
+  Unsupported iteration forms receive explicit diagnostics (see roadmap).
+* **String iteration** binds a one-byte string per iteration. Empty strings,
+  nesting, repeated counter names across sequential loops and UTF-8 byte
+  iteration are tested on seed-min and gen2 by `make test-for-str`; native
+  also supports string iteration. `"é"` is two iterations, not one codepoint.
+  The source variable is re-read each iteration, including after rebinding.
 * **Collector builtins** (`gc()`, `gc_live()`, `gc_runs()`) are gen2/gen1_min
   and native (mark & sweep, corrected 2026-10-10): the seed runtime has no
   collector. They are ordinary expression
@@ -410,11 +383,11 @@ still use shell/C infrastructure. See
   all three backends (native function codegen was fixed and enabled
   2026-10-06: up to 6 numeric params, forward references, mutual recursion,
   zero-arg calls, and calls as arguments of other calls). Calling a user
-  function is supported in `hold` RHS, `show` and `give`. Native rejects
-  `hold` inside a `make` body with a clear error — a local would live in the
-  shared data segment and be clobbered by recursion; compute in `give`
-  expressions or assign to a top-level global instead. seed-min and gen2
-  lower a body `hold` to a real C local.
+  function is supported in `hold` RHS, `show` and `give`. Native function
+  locals use per-call stack frames; recursive local holds are covered by
+  `test-native-locals`. Seed-min and gen2 emit C locals. Typed string/list
+  signatures and generics are now supported by seed-min as well as gen2/native,
+  within the documented per-backend subsets.
 * **Statements are newline-terminated**: write one statement per line. In
   particular `give 0 }` on one line swallows the `}` into the returned
   expression; the compiler now reports that as an error instead of letting it
@@ -465,8 +438,7 @@ still use shell/C infrastructure. See
   a 160 KiB round trip). The statement and type subset is the same as seed-min
   and gen2: string + number and bare non-`push` call statements are rejected
   (`make test-native-num`). The remaining differences are the ones in the
-  divergence table (`hold` in a function body, the collector builtins, the
-  full-language statements and bump-only memory). Native output is x86-64 Linux only. The runtime
+  divergence table (the seed Stage-2/type limits and platform differences). Native output is x86-64 Linux only. The runtime
   is a flat BSS data area plus a **real mark & sweep collector** over lazily
   `mmap`ped chunks (malloc/memcpy/copy semantics verified by probe programs).
   Blocks carry a 32-byte header (size|FREE, magic, mark/next, kind);
@@ -532,13 +504,13 @@ still use shell/C infrastructure. See
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make test-native-mem` (part of `native-test`) | native memory with a real collector: a string doubled to 262144 bytes is served whole; 100000 `push`es keep every value; a 200000-iteration churn loop (~8 MB allocated, nothing retained) **finishes inside a 4 MiB `ulimit -v` cap** running 200+ collections; `gc_runs()` > 0, `gc()` reclaims bytes and `gc_live()` reports a positive live count; strings, list elements and struct fields survive 30000 allocating iterations; a program that genuinely retains 8 MiB still exits non-zero with stdout written before the failure kept and `out of memory` on stderr. See [`GC.md`](GC.md). |
 | `make test-stage2-demos` | the three Stage-2 contract demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) compile byte-identically under seed-min and gen2; the string-only one also runs natively when `native_aot` is built (the native half is skipped, loudly, on the portable `true-selfhost` path, and executed in `make native-test`) |
-| `make test-stage2` | the Stage-2 slice beyond the string walk on gen2: `and`/`or`/`not` precedence (asserted on the emitted C: `if (!(a == 2.0) && b == 0.0)`) and short-circuit (two `10 % 0` guards would abort if the right-hand side were evaluated), `true`/`false`, `for` over a list variable / list literal / string literal / call returning a list / call returning a string, nested loops, `break`/`continue` in a list loop, an `elif` chain, `and` inside a `while` condition; gen1_min output byte-identical to gen2, seed-min refuses the program, native names `for`/`and`/`not`/`true` |
-| `make test-stdlib` | `stdlib/tiny.sa` spliced with `use`: 30 numeric helpers (`min2`/`max2`/`absv`/`sum_to`/`pow_int`/`is_even`/`gcd`/`clamp`/`sign`/`is_odd`/`lcm`/`fact`/`fib`/`is_prime`/`sum_range`/`sum_sq`/`count_digits`/`digit_sum`/`trunc10`/`reverse_num`/`is_square`/`between` and their recursion workers) give the same answers on seed-min, gen2 and (when built) native; a second leg runs `str_util.sa` + `list_util.sa` + `file_util.sa` on gen2 (34 assertions over 34 string/list/file helpers) and proves seed-min and native **refuse** those files instead of miscompiling them |
+| `make test-stage2` | gen2/gen1 Stage-2 parity plus seed/gen2 shared Stage-2 outputs and explicit seed limits (`test-seed-stage2`, `test-seed-limits`) |
+| `make test-stdlib` | portable numeric helpers including interpolation on seed/gen2/native when built; string/list/file modules on gen2 and native; seed typed-module rejection |
 | `make test-pkgs` | the offline package path: `sxpkg.sh init`+`seed` write `.sayanox/registry/{hello,math,strings}` with no network, `sxpkg add` records the lock, a program with `use \".sayanox/registry/math/main.sa\"` runs the same on seed-min, gen2 and native, and `sxpkg verify` passes on a clean project, reports the tampered `main.sa` as a `sum` MISMATCH, and passes again after the re-seed. **Plus the dependency path** on `registry/calc` (`deps=math@0.1.0`): `add` locks the closure and prints a line per package, the lock is compared byte for byte, `deps` prints the closure, a bare `install` reports `cannot write .sayanox/registry/<name>/`, `sh tools/sxpkg.sh install-local registry` installs both sum-checked, `verify` reports both, `use \".sayanox/registry/calc/main.sa\"` prints `36`/`25` identically on seed-min and gen2, and the `not in sx.lock` / `but sx.lock has` errors are asserted |
-| `make test-gen2-gaps` | string `<`/`<=`/`>`/`>=`/`==`/`!=` by content on gen2 and seed-min, and native since 2026-10-10 (same output; string vs number is an error on seed-min); the gen2 fixes of 2026-10-08: `len(NAME)` in a range bound (list `sx_llen`, string `sx_len`); string `==`/`!=` between declared strings as strcmp (two equal runtime strings compare equal); `} else when`, `} else if` and `} otherwise when` chains including nested ones, with the same output as `elif`; seed-min and native refuse the chains; `%` inside builtin-call arguments is sx_mod, same as seed-min. |
+| `make test-gen2-gaps` | string `<`/`<=`/`>`/`>=`/`==`/`!=` by content on gen2 and seed-min, and native since 2026-10-10 (same output; string vs number is an error on seed-min); the gen2 fixes of 2026-10-08: `len(NAME)` in a range bound (list `sx_llen`, string `sx_len`); string `==`/`!=` between declared strings as strcmp (two equal runtime strings compare equal); `} else when`, `} else if` and `} otherwise when` chains including nested ones, with the same output as `elif`; seed-min and native match the conditional chain aliases; `%` inside builtin-call arguments is sx_mod, same as seed-min. |
 | `make test-registry-sums` | every `pkg.meta` `sum=` in the repository equals `sxpkg sum` of its `main.sa` (offline integrity; see [`REGISTRY.md`](REGISTRY.md)) |
-| `make test-for-str` | the Stage-2 slice on gen2: `for c in <string>` byte walk, vowel count with `string_eq`, `break`/`continue`, empty string, nested loops, a rebound counter, `\"é\"` as two bytes, the diagnostics for a number, a list and a counter clash; seed-min refuses the statement; native names it; a `make NAME<T>` whose second parameter is not a type parameter is refused with the generic diagnostic. |
-| `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. hold-inside-make, give-outside, make-in-block, wrong arg count/type, non-numeric give) |
+| `make test-for-str` | the Stage-2 slice on gen2: `for c in <string>` byte walk, vowel count with `string_eq`, `break`/`continue`, empty string, nested loops, a rebound counter, `\"é\"` as two bytes, the diagnostics for a number, a list and a counter clash; seed-min matches named-source and literal cases; native runs string iteration; a `make NAME<T>` whose second parameter is not a type parameter is refused with the generic diagnostic. |
+| `make native-test` | native subset, one slot per name, undefined names, list ops + push/grow + bounds, structs, nested structs (2 and 3 levels, typed copy incl. doubly nested, seed-min/gen2 output parity), `use` splice (depth 2, input-dir resolution, missing-file and unquoted-path errors), functions (recursion `fac`/`fib`, 6 params, forward refs, mutual recursion, zero-arg, global assignment, builtin and string args), postfix right of `* / %` + left-assoc, string `s[i]`/`sx_index`, `else`/`otherwise` false branch, unsupported constructs rejected (incl. give-outside, make-in-block, wrong arg count/type, non-numeric give) |
 
 ## Roadmap: done vs still missing, per backend (synced 2026-10-11)
 
@@ -552,59 +524,557 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 
 | Area | seed-min | gen2 | native | Gate(s) | Still missing |
 |---|---|---|---|---|---|
-| Pure-min core: numbers, `when`/`while`, `make`/`give`, recursion, lists, structs, `use` | done | done | done | `true-selfhost`, `native-test` | none in the shared dialect |
-| Numeric stdlib `stdlib/tiny.sa` (36 `make` definitions: 25 before this pass, +9 public numeric helpers and +2 internal ones added 2026-10-10: `tri`, `min3`, `max3`, `ceil_div`, `pow_mod`, `collatz_steps`, `digit_at`, `is_palindrome`, `isqrt`) | done | done | done | `test-stdlib`, `test-stdlib-growth` (hand-computed values; seed-min == gen2 byte for byte), and the native leg in `native-test` | more helpers only when they fit the native subset (no `hold` in a body, at most 6 parameters) |
-| String / list / file stdlib (`str_util`, `list_util`, `file_util`) | refuses (typed parameters) | done | refuses (`bad param list`) | `test-stdlib` | by design gen2-only until typed parameters exist on the other two |
-| Generics `make NAME<T>` / `make NAME<A, B>` | refuses (`make NAME<...>` is not read) | done (one or more parameters, monomorphised) | refuses (`generics are not in the native subset`) | `test-generics`, `test-native-*`, `test-stage2` | seed and native generics are **not** implemented. Parity here means *the same refusal*, which is tested. Adding it to the seed changes the fixed-point root and to native needs a monomorphiser; neither is safe in this pass |
-| Full-language statements: `for` (strings and lists), `break`, `continue`, `elif`, `and`/`or`/`not`, `true`/`false` | refuses (`unknown statement`) | done | `for`, `break`, `continue`, `elif`, `true`/`false` refused by name; `and`/`or`/`not` and parentheses **work in `when`/`while` conditions** (short-circuit jumps, added 2026-10-11) but are still refused by name in value expressions (`show a and b`) | `test-stage2`, `test-for-str`, `test-gen2-gaps`, `test-native-cond` | seed: none of these (the pure-min set). Native: `for`/`break`/`continue`/`elif` and value-position `and`/`or`/`not`/`true`/`false` are still missing (deliberately; the native subset is pure-min plus conditions) |
-| Stage-2 demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) | done | done | done (lexer) | `test-stage2-demos` | these are contract sketches, not a full Stage-2 compiler |
-| String ordering `<` `<=` `>` `>=` (byte order, in `when`/`while` conditions) | done | done | done (`B_STRORD`, added 2026-10-10) | `make test-native-strord` (same output on all three; long shared-prefix case checked against gen2) | Value-form comparisons (`show a < b`, `hold r = a < b`) are rejected by gen2 (`unexpected '<'`), so the test uses conditions only. Not a full collation: byte order only |
-| Collector `gc()` / `gc_live()` / `gc_runs()` | refuses (no collector in the seed runtime) | done (mark & sweep) | done (native mark & sweep, `docs/GC.md`) | `test-gc` (same program, same output on gen2 and native), `test-native-mem` | native is non-compacting and its stack scan is conservative, so it may retain garbage |
-| `hold` inside a `make` body | done | done | **missing** — rejected with a clear error | `test-native-*` (the rejection) | **Deferred (item 7).** A native local lives in the shared data segment and recursion clobbers it. Doing it safely needs stack frames in the native code generator, so it is not done in this pass |
-| Richer types | `double`, `str`, list, literal-struct | same, plus generics; no bounds, no generic structs | same as seed-min | `test-generics`, `test-struct2` | **Deferred (item 6).** Typed list elements, bounds and generic structs need a type-checker that does not exist yet. This pass changed no type rules |
-| Network read `http_get(url)` (GET only, http/https, 1 MB cap, 10 s timeout, no redirects, 1 request/s) | done (`sx_http` in the seed runtime) | done (`sx_http`; `hold`/`show`/`len` forms) | missing: refused with an explicit error (native has no HTTP client; the runtime is hand-assembled) | `make test-http-get` (local server only) | native support would need a socket or fork/exec code path in the x86 emitter |
-| Sayanox crawler `sayascrape/crawl.sa` (authorized-only, allowlist host, robots.txt fail-closed, page and depth caps, HTML links) | n/a (needs typed `str` functions) | done (full-language, one program) | n/a (typed `str` is gen2-only) | `make test-sayacrawl` (exact output, local server) | no `exit` status (gen2 has no `exit`: refusals are printed, no request follows); robots.txt missing counts as a refusal; no cookies, POST, JS |
-| Packages `sxpkg` — offline (`init`, `add`, `list`, `remove`, `seed`, `search`, `info`, `deps`, `install-local`, `verify`, `sum`) | n/a (the tool is a Sayanox program, built by gen2) | done | n/a | `test-sxpkg`, `test-sxpkg-wrapper`, `test-sxpkg-polish`, `test-pkgs`, `test-registry-sums` | the `install-local` / `verify` exit codes come from the shell wrapper (the language has no exit builtin) |
-| Packages — online (`sync`, `install`, `fetch`, `publish` over HTTP) | n/a | n/a | n/a | `test-sxpkg-online-local` (file:// registry; not a bootstrap gate) | **Partly done.** Downloads are atomic (`.part` then rename), and a fetched package that fails `verify` is removed. Still missing: signatures and a cryptographic hash (the sum is a 31-multiplier hash), and `publish` upload. Shell only (`curl`/`wget`). The design is in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md) |
-| LSP (`tools/sayanox_lsp.sa`) | n/a | done (diagnostics, symbols, completion, hover, definition, `didChange`, JSON-RPC errors `-32600`/`-32601`/`-32700`) | n/a | `test-lsp`, `test-lsp-robust` | incremental parsing, multi-file analysis (string ids are echoed as sent since 2026-10-11, `test-lsp-robust`) |
-| Documentation and logs | `STATUS.md` synced | `GC.md`, `GENERICS.md`, `LSP.md`, `REGISTRY.md`, `STDLIB.md` current | `NATIVE.md`, `GC.md` current | `docs/logs/` regenerated by the four gate commands | `selfhost/STAGE2.md` describes the legacy `restore_stage2.sh` path, which no Makefile target builds (see below) |
+| Pure-min bootstrap | root compiler | self-hosted C emitter | x86-64 Linux ELF | `doctor`, `true-selfhost`, `gen3`, `native-test` | no second native target; no full-language self-host claim |
+| Numeric stdlib (`tiny.sa`, 40 definitions) | yes | yes | yes | `test-stdlib`, `test-stdlib-growth`, `test-stdlib-interpolation` | small numeric library, not JSON/HTTP/crypto; new helpers: lerp, saturate, smoothstep01, distance_sq |
+| String/list/file utility modules | yes | yes | yes (already implemented) | `test-stdlib` | limited helpers, not a full portable I/O abstraction |
+| Boolean literals, and/or/not | yes, values and conditions | yes | yes (pre-existing) | `test-seed-stage2`, `test-logic-value`, `test-native-cond`, `test-native-logicarg` | seed numeric/string/list bare assignment now supported (`test-seed-assignment`); gen2 has expression-context limits (e.g. chr logic arguments) |
+| elif, conditional aliases, break/continue | elif, else-if/else-when/otherwise-when; breaks/continues in while and supported for | yes | yes | `test-stage2`, `test-full-lang`, `test-native-lang` | seed unsupported iteration forms remain explicit errors |
+| String/list for | variables, literals and checked calls, also inside fully typed make; literals/calls captured once per entry | variables, literals, calls | yes | `test-for-str`, `test-seed-for-literals`, `test-seed-for-calls`, `test-native-lang` | seed for inside untyped make and general call-source expressions still unsupported; native function-local for now frame-local and recursion/GC tested; `_sx_iter_` is reserved in seed |
+| Numeric range for | numeric literals/variables/arithmetic, indexing and len; also inside fully typed make | yes | yes; upper bound re-evaluated per check | `test-seed-for-range`, `test-full-lang`, `test-native-lang` | all three re-read upper bound each condition. Seed rejects other calls and field access in bounds; hold field values in numeric variables first |
+| Function generics | num/str/list specialization; one or multiple type parameters | num/str/list monomorphisation | num/str/list monomorphisation (pre-existing) | `test-generics`, `test-seed-limits`, `test-native-generics`, `test-native-strgen`, `test-native-listgen` | generic structs and some backend-specific body/lowering gaps |
+| Typed functions | num/str/list parameters and returns, isolated locals, control flow, terminal give | broader typed functions, some lowering gaps | typed functions; kind-preserving parameter reassignment | `test-seed-typed-functions`, `test-typed-sig` | seed global capture and full return-path inference remain absent |
+| Function-local hold | yes | yes | frame-local, recursion tested | `test-native-locals`, `native-test` | no new ABI or second architecture |
+| Explicit hold types | num/str/list outside make and inside fully typed make; initializers, assignments and reannotations checked | num/str/list syntax already accepted | num/str/list, also function-local and bound generic T | `test-seed-hold-types`, `test-full-lang`, `test-native-generic-local` | seed untyped-function annotations and generic structs; see [type design](TYPES_ROADMAP.md) |
+| Struct types | literal-typed | literal-typed | literal-typed | `test-struct2`, `test-nest`, `native-test` | generic structs deferred with layout/GC rationale in [TYPES_ROADMAP.md](TYPES_ROADMAP.md) |
+| GC | no collector | mark/sweep | mark/sweep | `test-gc`, `test-native-mem` | seed allocation remains uncollected; conservative native stack scanning |
+| Packages, offline | tool built by gen2 | registry/lock/deps/install-local/verify | not a native-tool claim | `test-pkgs`, `test-sxpkg-polish`, new `test-pkg-errors` | search no longer implicitly syncs; shell still supplies filesystem/process operations; execution failures now propagate |
+| Packages, online | not bootstrap | explicit sync/install/fetch commands | n/a | existing `test-sxpkg-online-local` (not rerun here) | no cryptographic integrity, signatures or remote publish implementation added |
+| LSP | tool built by gen2 | existing .sa JSON-RPC server | n/a | `test-lsp`, `test-lsp-robust` | one document and one full-text replacement per change; no cross-file analysis; UTF-16/Unicode and empty changes now tested by `test-lsp-unicode` |
+| Platform | host C | host C | x86-64 Linux only | four bootstrap gates | other native platforms unsupported, not emulated |
 
-### What "Stage-2" means in this repository (checked 2026-10-10)
+### Changes and verification in this pass
 
-* The Stage-2 that the gates exercise is the **full-language statement set
-  compiled by gen2** (`test-stage2`, `test-for-str`, `test-gen2-gaps`), plus the
-  Stage-2 demo programs. It is not a separate binary.
-* `selfhost/STAGE2.md` and `selfhost/restore_stage2.sh` describe an older
-  `selfhost/stage2` binary. No Makefile target builds or tests it, so it is
-  legacy documentation, not a verified state. It is marked as such in that file.
-* The bootstrap that is verified end to end is `seed-min → gen1_min → gen2 →
-  gen3 == gen4` (`true-selfhost`, `gen3`). A "full" self-hosting compiler that
-  compiles the full language is still not built; `true-selfhost-full` says so.
+* Added four portable numeric helpers and hand-computed cross-backend tests.
+* Added the bounded seed Stage-2 subset above, including precedence,
+  short-circuit guards that would otherwise divide by zero, nested loops,
+  source rebinding, empty strings and UTF-8 byte iteration. Extended existing
+  stage2/for-str gates; replaced obsolete continue/elif rejection tests with
+  exact-output tests. Unsupported iteration and generic forms fail explicitly.
+* Strengthened the shared `assert-out` helper: correct stdout with a nonzero
+  process exit is now a test failure. The intentional native OOM test instead
+  explicitly checks nonzero status, retained stdout and the OOM diagnostic.
+* Packages: search without a local index is an offline error, not an implicit
+  download; checked wrapper no longer swallows execution/project failures.
+* Re-tested existing native boolean values, numeric/string/list generics,
+  local holds, offline packages and LSP probes. Did not reimplement or claim
+  these as new features. Corrected prior contradictory roadmap rows.
+* Generic structs have a design/deferral document. The first pass did not add
+  hold annotations or LSP protocol changes; the continuation below does. Seed
+  generics, a full inference rewrite and native ABI changes remain unfinished.
+* No Linguist PR, no extension remapping, and no network bootstrap step.
 
-### Corrections made in this pass (were stale)
+`selfhost/STAGE2.md` describes a legacy separate stage2 binary. The maintained
+path is seed-min → gen1_min → gen2 → gen3/gen4, with byte-identical gen3/gen4
+checked by `make gen3`. `true-selfhost-full` remains unimplemented.
 
-* Native collector: the divergence table said native had **no** `gc()`
-  (`undefined variable 'gc'`) and "bump-allocated, never freed". Both were wrong:
-  native has a real mark & sweep collector and `test-gc` checks it against gen2.
-  Probed on 2026-10-10: `gc()` prints `1` on gen2 and on native, and is rejected
-  on seed-min.
-* Stdlib count: `tiny.sa` had 25 definitions, not the 30 the old row claimed.
-  The current count is 36 (see the table).
+### Continuation: remaining-work progress
 
-### Pure-min measured divergences (probed 2026-10-10, one line per feature)
+* Seed-min bare assignment for existing numeric/string/list variables now
+  shares the hold emission path, with explicit type mismatch errors. Added
+  conditional aliases (`else if`, `else when`, `otherwise when/if`) to both
+  scanner and emitter; old rejection tests now compare real output with gen2.
+* Added checked seed `hold name: num/str/list` outside functions. Function-local
+  annotations and parameters shadowing annotated globals fail clearly rather
+  than silently reusing incorrect storage. See `test-seed-hold-types`.
+* Fixed seed string self-assignment for underscore/runtime-prefix variable
+  names and collision with the old generated `_sx_v` temporary. Prefixes no
+  longer imply owned runtime-call results. A separate seed-only regression
+  fixture also ran under AddressSanitizer (leak checking disabled). Gen2 does
+  not currently compile the leading-underscore fixture; no parity is claimed
+  for those names.
+* LSP now handles UTF-16 positions and BMP/surrogate-pair JSON escapes. Added
+  real protocol tests with Latin/Bengali/emoji, empty document changes, empty
+  change arrays, unrelated-URI changes, and close-state cleanup.
+* Each area passed doctor/true-selfhost/gen3/native-test. The final logs were
+  regenerated after the edge-case fixes. No seed generics, broader iteration,
+  generic structs, multi-document LSP or second native target is claimed.
 
-| Program | seed-min | gen2 | native |
-|---|---|---|---|
-| `show gc()` | rejected | `1` | `1` |
-| `for v in xs` (list) | rejected | `1` `2` | rejected by name |
-| `break` / `and` / generic `make id<T>` | rejected | works | `break` and generics rejected by name; `and` in a `when`/`while` condition works (added 2026-10-11, `test-native-cond`) |
-| `hold` inside `make` | `3` | `3` | rejected (item 7, deferred) |
-| `use "stdlib/tiny.sa"`, `isqrt(50)` | `7` | `7` | `7` |
-| `use "stdlib/str_util.sa"`, `s_len("abc")` | rejected (typed params) | `3` | rejected (typed params) |
-| `when s < "c"` on a string | `1` | `1` | `1` (byte order, added 2026-10-10, `test-native-strord`) |
-| `push(xs, 4)` then `len(xs)` | `1` | `1` | `1` |
-| struct `P { 3 }`, `p.x` | `3` | `3` | `3` |
+### Next increment: literal iteration (2026-10-12)
 
-The probe is a shell loop over the three binaries; it is not a gate. The gates
-are the `test-*` targets named in the table.
+Seed-min now accepts `for ch in "abc"` and `for value in [1, 2, 3]`
+outside `make`. Each literal source is evaluated once per loop entry into a
+reserved hidden temporary, including numeric expressions/calls within a list.
+Named sources retain their existing re-read-each-iteration semantics.
 
+`test-seed-for-literals` is included by both `test-stage2` and `test-for-str`.
+It checks hand-computed output on seed/gen2, plus native parity when built:
+side effects occur once per entry, body mutations do not re-evaluate the list,
+empty loops execute no body, nesting works, break/continue progress correctly,
+and UTF-8 strings iterate by byte. Incompatible binders, nonnumeric list
+members, reserved-name collisions and unsupported source expressions fail.
+At the end of that increment, range sources, call-result sources, function-local
+for, and seed generics remained unfinished. Numeric ranges are added below. This change does not introduce a
+collector into the seed runtime.
+
+### Next increment: numeric range iteration (2026-10-12)
+
+Seed-min now accepts `for i in 0..N`, including negative/fractional bounds,
+arithmetic, parentheses and `len` of lists/strings. The start is assigned on
+entry, the upper expression is re-read on every condition test, the comparison
+is strict `<`, and the counter advances by 1. `continue` reaches that step;
+`break` leaves without stepping. Reassigning the counter affects progression.
+An empty/reversed range performs no body. New counters are numeric; an existing
+string/list counter or a language-keyword binder is rejected.
+
+`test-seed-for-range`, part of `test-stage2`, checks exact seed/gen2 output and
+rejection of malformed bounds, wrong types, invalid len arity/operand,
+undefined names, bad indexing, unsupported calls/fields and invalid numeric
+literals. The `..` lexer exception applies only inside range headers: `show
+1..2`, `show 2.` and `show 1.2.3` remain errors. Old range-rejection tests in
+`test-full-lang` and `test-native-lang` are now positive seed output checks.
+
+**Historical divergence (fixed by the native range increment below):** native evaluated its upper bound once, while
+seed/gen2 re-evaluate it. Changing `limit` or replacing the list used by
+`len(xs)` inside the body therefore yields different loop counts. The new
+native regression leg asserts a separate, hand-checked snapshot expectation,
+not false cross-backend parity. Native code was not modified. Predeclare a
+native counter if its post-loop value is needed. This semantic alignment is
+still missing work, not silently fixed by the seed implementation.
+
+The seed range subset deliberately refuses function calls other than `len`
+(and its existing `sx_len` alias), direct field access in bounds, and all for
+loops inside functions. At the end of the range increment, call-result iteration was still unfinished.
+The producer/call increment below adds a subset; seed generics and
+function-local iteration remain unfinished.
+
+### Earlier increment: call-result iteration and typed producers (2026-10-12)
+
+Historical boundary: the following describes that increment alone. The fully
+typed-function increment below supersedes its parameter/body restrictions.
+
+Seed-min now accepts plain string/list-producing calls as `for` sources,
+including checked builtins and zero-argument user producers with explicit
+`-> str` / `-> list` returns. The call runs once per loop entry; its returned
+reference is kept in a hidden temporary. Rebinding an input string during
+the loop does not re-run the call. List references are not deep copies, so
+mutations to the same list remain visible. Numeric call results are refused
+as collection sources. Numeric range-bound restrictions are unchanged.
+
+All parser passes share a function-header reader and a signature registry.
+Generated C has prototypes, and call result kinds drive both expressions and
+global hold collection. New annotated producers have isolated local symbol
+tables; they cannot accidentally reference main's C locals. Argument
+count/kind checks apply in call-source and producer expressions. Return kinds
+are checked; a producer must end in an unconditional give. Supported bodies
+are straight-line hold/show/give/push/assignment statements. Parameters,
+control flow, global capture, structs and local hold annotations are not
+added to this producer subset. Existing unannotated numeric functions remain
+available. Generic monomorphisation is not implemented by this registry.
+
+`test-seed-for-calls` is included by `test-stage2` and `test-for-str`. The shared
+fixture checks one evaluation per entry, returned strings/lists, producer
+locals versus same-named globals, nested/empty loops, break/continue, builtin
+sources (including read_file) and ordinary holds of producer results, with
+hand-computed output on seed/gen2 and native parity when built. Negative
+cases cover mismatched gives/arguments, missing terminal give, unsupported
+bodies/parameters, unknown functions/variables and duplicate definitions.
+The seed's 16-argument and 64 KiB call-lowering limits now fail explicitly.
+
+A separate seed-only fixture checks typed forward calls and literal-list
+returns. At that step gen2 lacked typed forward prototypes (now fixed below)
+and had limits on direct list-literal returns/nested push literals (bounded
+support is added in the later list-expression increment); the shared
+fixture uses declaration order and named list locals. No broader gen2/native
+parity or general typed-parameter support is claimed. Seed allocations remain
+uncollected; this does not add a GC or a leak-free runtime.
+
+
+### Fully typed seed functions (2026-10-12)
+
+Seed-min now accepts all-or-nothing num/str/list parameter annotations with
+explicit num/str/list returns. Calls check argument counts and kinds, even
+in main and nested argument expressions; prototypes carry the same kinds.
+Fully typed functions have isolated parameters/locals, stable kinds, local
+hold annotations, conditional/loop control flow, early returns and supported
+for forms. New nested-block locals expire at block end. Existing outer holds
+reassign rather than shadow. A terminal top-level unconditional give remains
+mandatory. String parameters are copied before local mutation; list parameters
+retain shared-reference semantics. This is not a GC implementation.
+
+`test-seed-typed-functions` covers alias-safe string parameter assignment,
+list mutation, recursive calls, while/when, annotated locals, recursive for,
+nested list/string walks, break/continue, checked call sources, scope errors,
+wrong call arguments and signatures. Extended fixtures compare seed/gen2;
+seed-only cases cover sibling-block names, typed forward calls and boolean
+literal call arguments. Those cases now also pass on gen2, as recorded below. Native
+now passes the typed-parameter fixture via test-native-param-reassign, but
+now supports function-local for, tested with a shared unannotated-local
+fixture. The original annotated-local fixture now also runs on native.
+
+`test-typed-sig` now runs its numeric recursion fixture on all three backends;
+`test-stage2` compares its mixed fixture on seed/gen2/gen1_min. `test-stdlib`
+now runs str/list/file utility modules on seed and compares all output with
+gen2, retaining the existing native expected-output test.
+
+At that increment, still missing: seed generic specialization, generic structs/concrete type
+identity, global captures in typed seed functions, general return-path
+analysis, untyped-function for, arbitrary iterable expressions, native list-alias behavior across capacity
+growth and the gen2 lowering gaps above. See SYNTAX.md and
+TYPES_ROADMAP.md for the exact supported boundary.
+
+Validation after the final nested-call argument guard: `make doctor`,
+`make true-selfhost`, `make gen3` and `make native-test` all exited 0; gen3 and
+gen4 were byte-identical. Logs: `docs/logs/make-doctor.log`,
+`make-true-selfhost-min.log`, `make-gen3.log`, `make-native-test.log`, and
+`seed-typed-functions.log` (paths relative to docs/logs for the latter four).
+
+
+### Native parameter reassignment and live range bounds (2026-10-12)
+
+Two separately gated increments:
+
+* Native assignments to parameters now enforce each parameter's declared
+  num/str/list kind and store into its call-frame slot. Lookup matches reads:
+  a parameter takes precedence over a same-named global. Statement-boundary
+  recognition now permits a following parameter assignment (actual binding
+  validation remains in the statement emitter). No eager free is introduced;
+  native strings returned by concat are fresh, and the collector scans frames.
+* Native numeric range upper expressions now execute at each condition check,
+  rather than before the loop. The start is still evaluated only on entry.
+  Break does not recheck; continue advances the counter then rechecks.
+
+`test-native-param-reassign` covers the previous typed-parameter fixture,
+string recursion/caller preservation, list rebinding/mutation, wrong-kind
+errors, same-named globals and explicit GC across recursive frames. The new
+portable fixture matches seed/gen2/native. GC/name-collision cases are tested
+separately on native. List capacity-growth alias parity is NOT established:
+the native runtime may replace a list object on growth, leaving other aliases
+on its older storage. This remains runtime work.
+
+`test-seed-for-range` now uses ONE expected output for all three backends,
+including shrinking bounds and len of a replaced list. The native-only
+`test-native-range-live` also checks upper-call side effects, empty ranges,
+break and continue; seed/gen2 reject user function calls in range bounds.
+
+After EACH increment all four gates exited 0, with byte-identical gen3/gen4.
+Canonical docs/logs gate logs now contain the final range increment. Focused
+logs: native-param-reassign.log and native-range-live.log. Seed generic
+specialization, generic structs, native function-local for and documented
+gen2 lowering gaps remain unfinished; these changes do not claim them.
+
+
+### Native function-local for, list aliases, seed generics (2026-10-12)
+
+Three further implementation areas were completed and separately gated:
+
+1. **Native function-local for:** range/list/string loop binders and hidden
+   state now occupy the current call frame, not global slots. Parameter
+   binders reuse their parameter slot with kind checks; new locals do not
+   mutate same-named globals. Hidden names cannot be spelled by source code.
+   Recursive loops, nested loops, early return, break/continue, explicit GC,
+   binder mismatches and hidden-name collisions are tested. There is a clear
+   64-level loop-nesting limit. The first shared fixture uses inferred locals; a subsequent native
+   annotation increment below covers the original typed-local fixture too.
+2. **Native list growth aliases:** payload +8 now holds a successor link.
+   Push resolves the latest object and links growth back to the old object;
+   len/index/show resolve the same chain. The collector traces the link,
+   not numeric elements. No same-named global is rewritten when pushing a
+   parameter. Tests cover 100-element growth through a parameter, different
+   generations of aliases, ordinary rebinding, explicit collection and
+   reclaimed-block reuse. Old aliases can retain earlier growth buffers;
+   this is not a compacting collector or a no-overhead identity scheme.
+3. **Seed generic functions:** a demand-driven worklist generates and checks
+   concrete num/str/list bodies, with independent type variables, recursive
+   calls, mutual recursion, local type annotations, deduplicated variants,
+   prototypes and deterministic output. Function/type/source limits fail
+   explicitly. No generic struct syntax or layout is implied. Shared tests
+   cover basic/multi-type calls and numeric recursion on all three backends;
+   extended nested/string-only recursive cases are seed-only because of
+   an observed gen2 limitation. Native now passes the extended fixture after
+   demand-driven generic emission. See GENERICS.md for the exact contract.
+
+Focused targets: test-native-for-functions, test-native-list-alias,
+test-seed-generics (also the existing test-generics multi-parameter fixture).
+Each area passed doctor, true-selfhost, gen3 and native-test before moving
+on. Final canonical logs include the combined changes and final hardening.
+Seed compiler ASan/UBSan checks on the extended/scope generic fixtures also
+passed with leak detection disabled (not a runtime leak-free claim).
+
+**At that increment, still incomplete:** generic structs/concrete type
+identities and cross-backend layout/GC checking; gen2 forward/scope/boolean/
+list-expression and nested-generic lowering gaps (see the later fixes below); broader iterable-expression/seed untyped-function
+support and whole-function return analysis. These are not reported as PASS.
+
+
+### Native local annotations and demand-driven generic bodies (2026-10-12)
+
+A fourth separately gated area adds optional num/str/list hold annotations
+to native collection, inference and emission. Concrete generic bodies can
+use `hold x: T`; wrong types and unknown annotations fail explicitly. Native
+now compiles the original annotated typed-loop fixture and the existing
+multi-parameter generic/local-annotation fixture.
+
+Numeric generic bases join the same demand worklist as string/list variants;
+unused templates no longer force a numeric body. This fixes the string-only
+recursive template in seed_generics_extended_test.sa on native, while that
+fixture still exposes a gen2 nested-specialization failure. A separate shared
+fixture checks annotated locals, list aliases, string-only templates and an
+unused body across all three backends. No gen2 source was changed here.
+
+After this final area all four gates again exited 0, including byte-identical
+gen3/gen4. Canonical logs in docs/logs now correspond to these final changes.
+Generic structs and the documented gen2/scope/expression gaps remain open;
+this is substantial progress, not an all-language-complete claim.
+
+
+### Gen2 forward calls, function scope, booleans and nested generics (2026-10-12)
+
+Four separately tested and gated compiler_min.sa increments:
+
+* **Typed forward prototypes:** ordinary num/str/list functions now contribute
+  C prototypes before bodies; generic prototypes are reused. Zero-argument
+  definitions use void. String/list forward returns and mutual recursion
+  pass strict C prototype/implicit-declaration checks and seed/native parity.
+* **Function declaration scope:** function name tables start empty before
+  parameters are registered. Source blocks preserve outer declarations but
+  expire newly introduced locals; sibling branches can use the same name
+  with different kinds. Nested while/for and elif wrapper bookkeeping are
+  tested. Legacy top-level flat declaration tracking remains unchanged.
+* **Boolean call arguments:** whole true/false tokens in expression positions
+  lower to doubles, preserving strings, longer identifiers and boolean-named
+  struct fields. A shared fixture passes on seed/gen2/native; comparison
+  arguments are separately gen2-tested (native rejects that case).
+* **Nested generic queue:** consecutive request separators no longer turn a
+  kind into a bogus function name. Template lookup only examines record
+  headers, not matching parameter/body fields. The previously crashing
+  extended generic fixture and a name-collision fixture now pass. Extended
+  emitted C is identical between gen1_min and gen2.
+
+Targets: test-gen2-forward, test-gen2-function-scope,
+test-gen2-boolean-args, test-gen2-generic-queue. The original
+seed_typed_scope_test.sa was also manually checked on gen2: output
+9 / 11 / forward! / 1. The scope fixture is seed/gen2, not a claim about
+native sibling-kind scope semantics or complete undefined-name analysis.
+
+After each area doctor, true-selfhost, gen3 and native-test exited 0;
+gen3/gen4 remained byte-identical. The offline compiler bundle was regenerated
+with make pack-compiler after each source increment and its decoded bytes
+compared to the source. Final SHA-256:
+a8c0bbf59df4316fdbdf803bc7121eee1d8a6a7d92bfdb9e92c67a075cae3ccc
+(96 gzip/base64 parts of at most 1100 characters).
+
+At that increment, still open: generic structs/concrete type identity and
+layout/GC work; direct list-literal returns/general list expressions on gen2; complete
+undefined-name/return-path analysis and broader iterable/legacy-function
+support. Further generic inference edge cases are not implied fixed by a
+queue repair. No all-language-complete claim is made.
+
+
+### Gen2 list returns, literal call arguments and GC anchor (2026-10-12)
+
+Three further separately gated areas:
+
+* Direct complete list-literal returns in -> list functions now lower through
+  the existing checked hold/list parser at the return's original location.
+  Empty/arithmetic-element lists, observed element calls, early returns,
+  forward/generic functions and collision-free temporary names are tested.
+  Seed/gen2/native output matches; gen1_min/gen2 generated C is identical.
+* Empty/signed-decimal numeric list literals now work inline in call arguments,
+  including push, len, user/generic calls and nested pushes. Allocations remain
+  inline (a loop-condition regression detects accidental hoisting). Casts to
+  double preserve the variadic list ABI. List-valued literal/call operands
+  select list helpers. Expression elements still require a named hold;
+  unsupported/malformed inline forms produce #error diagnostics. Direct
+  list sx_index is a separate gen2 case, not native parity.
+* An additional -O0 check exposed an existing GC anchor placement problem:
+  the optimizer-dependent layout could put the main anchor below live locals.
+  Generated programs now execute under a caller-frame anchor via a volatile
+  indirect call and post-call store. Both -O0 and -O2 compiler binaries emit
+  identical C for the new fixtures; generated programs preserve string/list
+  and function roots across 2,000 explicit collections. Name collisions are
+  tested. This is a tested-host fix, not a universal conservative-GC proof.
+
+Targets: test-gen2-list-return, test-gen2-list-args, test-gen2-gc-roots.
+The failed -O0 probe was fixed before final validation, not waived. After each
+area all four gates exited 0; the final combined gen3/gen4 are byte-identical.
+The offline compiler bundle was regenerated and round-trip checked. That increment
+source SHA-256: ab08bb4c7d181189d16f97a1817f91a11f68b8a506be83e43c137150ce9e8e14
+(99 parts, at most 1100 base64 characters each).
+
+Still missing: generic structs and concrete type/layout/GC identities;
+fully general inline list expressions (use named holds for numeric expression
+elements), complete undefined-name/return-path analysis, and the other
+backend-specific expression/scope limits documented above. None are marked
+complete by these bounded additions.
+
+
+### Gen2 inline list constant arithmetic (2026-10-12)
+
+Extended the inline literal parser from signed decimal atoms to constant
+arithmetic: unary signs, + - * / and balanced parentheses. Decimal tokens
+are normalized to doubles before C emission, preserving fractional division,
+precedence and left associativity. Parentheses inside a list no longer
+misroute the enclosing call to the numeric-only grouping-expression path;
+return/condition rewrites leave list division to the list parser. Call-text
+collection retains whitespace inside brackets, so `[1 2]` is diagnosed
+instead of silently becoming `[12]`.
+
+`test-gen2-list-arithmetic` verifies generic list results, nested push/len,
+return and when/while call paths, fresh loop-condition allocations, quoted
+text, fractional division and leading-zero decimal constants. Seed/gen2/native
+outputs match; gen1/gen2 C is identical; generated -O0/-O2 programs both pass.
+The expanded negative suite rejects malformed groups/numbers, adjacent
+numbers, names/calls, modulo/comparisons, nested lists and list postfix forms.
+Both targets are part of the standard gates.
+
+The offline bundle was regenerated and round-trip checked (99 parts).
+Current compiler SHA-256:
+f33bf80644ae6ccafd24fd8cbf1023e67170ffcfc85b2dbcaa48e3002321537c
+All four gates exited 0, with gen3/gen4 byte-identical. Actual focused logs
+and gate tails: docs/logs/gen2-list-arithmetic.log and
+docs/logs/gen2-list-arithmetic-gates.log; canonical gate logs are refreshed.
+
+Still open: inline elements containing names/calls (use a named hold),
+modulo/comparisons in inline lists, general list postfix/compound expressions,
+generic structs, and full undefined-name/return-path analysis. This is a
+bounded extension, not completion of the expression/type-system roadmap.
+
+
+### Structural return paths across three frontends (2026-10-12)
+
+Implemented a conservative structural return proof in the seed, gen2 and
+native frontends. Explicitly typed functions and generated generic instances
+must not fall through. Exhaustive/nested branch chains and returning suffixes
+are accepted; seed's old terminal-top-level-give restriction is removed.
+Loops may execute zero times for proof purposes; no constant-condition or
+termination analysis is claimed. The scanner ignores strings/comments and
+balanced expression delimiters, and refuses to prove nesting beyond 128.
+Ordinary expression/type validation remains separate. Untyped behavior is
+unchanged.
+
+`test-return-paths` is wired into test-typed-sig and native-test. It checks
+num/str/list and generic successes against all three backends, byte-identical
+gen1/gen2 C, and missing arms, nested fallthrough, loop-only returns,
+unreachable loop returns, and fake give tokens in comments/strings. C output
+is also built with -Werror=return-type. The fixture exposed and now regresses
+two gen2 bugs: a nested real else could prematurely close an enclosing elif
+wrapper, and give text treated quoted braces/comment markers as syntax.
+
+All four gates exited 0; gen3/gen4 remain byte-identical. Packing crossed 100
+parts and exposed lexicographic misordering of two-digit chunk filenames.
+The packer now writes four-digit filenames; restore also accepts the legacy
+first-chunk filename. The 101-part bundle round-trips, and a missing-source
+restore to a separate test path was compared byte-for-byte with the source.
+Current compiler SHA-256:
+d740da4a6745b5f30aa3b5de278bf3fa33b9b1786e7b556c17ad2d18ddfbdddd
+Logs: docs/logs/return-paths.log, return-path-gates.log, return-path-restore.log,
+and the refreshed canonical gate/pack logs.
+
+Still unfinished: generic structs/concrete type identities and layouts;
+inline-list variables/calls/modulo/comparisons and general list expressions;
+complete undefined-name checking and the other backend limitations recorded
+above. The structural return-path portion is implemented, not the whole
+compiler roadmap.
+
+
+### Gen2 reference resolution (2026-10-12)
+
+Implemented pre-lowering value/call reference checks using the current binding
+and signature tables, across hold/show, assignments/indexed writes, push,
+conditions, for headers and give. Nested call arguments and list/index
+expressions are included. Unknown values/callees now produce explicit #error
+diagnostics; they are not left as unexplained identifiers in generated C.
+Function scope expiry prevents parameters/branch locals leaking to other
+scopes. Forward signatures, generic instances, field labels/selectors,
+builtin-like binding names, and quoted/commented text retain their behavior.
+
+The first true-selfhost run exposed a missing string-iterator binding in the
+lookup: those binders can exist in sdecls without decls. Lookup now covers all
+three value tables; a generic string-iteration regression was added. After
+that fix, the focused target and all four gates exited 0. gen1/gen2 fixture C
+and gen3/gen4 compiler C are byte-identical. Positive output agrees across
+seed/gen2/native; 31 negative programs cover missing references/callees.
+
+`test-name-resolution` is wired into test-typed-sig and native-test. Logs:
+docs/logs/name-resolution.log and name-resolution-gates.log, with the canonical
+gate and pack logs refreshed. Offline bundle round-trip passed (103 parts).
+Current compiler SHA-256:
+1be1bdd3f4b38fe6625472df16f25c993f683431cf7178ee6653fc5c7df888b7
+
+Boundary: name lookup follows the existing binding contract; the legacy
+main-level flat policy is unchanged, and this does not prove definite
+assignment or perform complete expression type inference. Generic structs,
+inline list variables/calls/modulo/comparisons and general list expressions
+are still unfinished. These are not marked complete by the name checks.
+
+
+### Typed inline numeric-list expressions (2026-10-12)
+
+Implemented pre-emission typed lowering for inline list literals in supported
+expression statement paths. Elements now accept numeric names, arithmetic,
+modulo/comparisons, indexing, numeric-returning ordinary/generic calls, and
+nested list consumers. Nested calls check parameter counts/kinds and returns;
+wrong element/operator/index kinds are rejected. Concrete generic parameter
+metadata is registered at request time as well as definition time.
+
+Generated automatic double temporaries plus comma expressions preserve the
+variadic ABI and left-to-right, single evaluation of inline list elements.
+Their declarations are outside the statement, but assignments and allocation
+stay inside each expression (including every loop-condition check). A private
+prefix avoids source-name collisions. This guarantee is for the new inline
+path; existing hold/direct-return list lowering is not rewritten. Seed's
+variadic evaluation order is not claimed to match. Native list kind inference
+and element counting now use its comparison-aware parser.
+
+Tests: test-inline-expressions and test-inline-runtime, wired into the gates.
+The common expression fixture matches seed/gen2/native. Separate sequence
+fixtures match gen2 -O0/-O2 and native, covering side effects, mutable-list
+observations, fresh conditions and helper-name collisions. Negative cases
+cover type/arity errors, malformed expressions and unsupported postfix forms.
+Additional -O0/-O2 compiler binaries emit identical C for the expression fixture.
+
+An extra minimal test after the initial green gates found that inline-only
+string expressions failed to request string runtime helpers. This was fixed,
+a permanent regression was added, and all four gates were rerun successfully.
+Final doctor/true-selfhost/gen3/native-test exit 0; gen3/gen4 are byte-identical.
+The offline bundle round-trip passes (107 parts). Current compiler SHA-256:
+71402d5e701251336eb4658fcda801de9917b26bd7fe5f466cc4dc596b0b8d50
+Logs: docs/logs/inline-expressions.log, inline-expression-gates.log,
+inline-expression-extra.log, plus refreshed canonical gate/pack logs.
+
+Remaining: generic structs/concrete layouts and type identities; arbitrary
+list postfix/compound expressions and inline struct-field expressions (use
+named numeric holds); seed sequencing parity; full type/definite-assignment
+analysis and previously documented backend limits. These are not marked
+complete by this increment.
+
+
+### Seed sequencing and checked field/list postfix calls (2026-10-13)
+
+Two implementation areas were independently four-gated:
+
+1. Seed numeric list constructors now use a source-collision-free linked
+   builder stack and comma expressions. Element evaluation is left-to-right
+   and once only, including nested/recursive constructors. Shared sequencing
+   and builder-collision fixtures pass seed O0/O2, gen2 and native.
+2. Gen2 inline numeric-list elements now resolve named/nested struct fields.
+   Known calls containing list/index syntax are parsed as whole typed
+   expressions, accepting grouped literal indexing and indexed list-returning
+   calls while checking outer argument kinds. Generic argument inference
+   refines first-token guesses with resolved expression kinds; nested list
+   commas no longer split multi-parameter arguments. Seed permits checked
+   named-struct/field-chain access only after validating the field metadata.
+
+`test-list-postfix` checks seed/gen2/native parity and seed/gen2 rejection of
+unknown fields, nonstruct selectors, nonnumeric elements, invalid index kinds
+and list-parameter mismatches. Existing inline expression regressions remain
+green. Both new targets are wired into typed-signature/native-test gates.
+
+Actual results after EACH area: doctor, true-selfhost, gen3 and native-test
+all exited 0; gen3/gen4 were byte-identical. Full logs:
+`docs/logs/seed-sequence-gates.log`, `docs/logs/list-postfix-gates.log`.
+Focused logs: `docs/logs/seed-list-sequence.log`, `docs/logs/list-postfix.log`.
+Canonical gate logs are refreshed to the second area's run.
+
+Offline bundle round-trip passes (109 parts). Current compiler SHA-256:
+7ca320d53672c33c19396d607b18872ec818985f6af38c45047a9e66492ca061
+See `docs/logs/gen2-offline-pack.log`.
+
+**The full requested scope is not complete.** Generic structs/concrete layout
+and type identities remain unimplemented. Arbitrary literal-headed postfix
+and compound expressions outside the checked call paths remain open (for
+example direct `hold n = [1][0]`). Gen2 legacy named-hold/direct-literal-return
+list constructors still lack the new ordering guarantee. Struct-valued field
+initialization retains the documented nested-literal restriction. Full type
+inference/definite assignment and previously documented backend limits are
+not claimed. The older increment sections above are historical snapshots.

@@ -1,0 +1,40 @@
+make size(xs: list) -> num {
+  give len(xs)
+}
+make factory() -> list {
+  give [4, 5]
+}
+make identity<T>(xs: T) -> T {
+  give xs
+}
+make expand(xs: list) -> num {
+  push(xs, 9)
+  give len(xs)
+}
+show size([])
+show size([1, -2, 3.5])
+hold xs = push([], 9)
+show len(xs)
+show xs[0]
+show len([1, 2])
+show len(push([], 7))
+hold indexed = identity([8, 9])
+show indexed[1]
+show len(factory())
+show len(identity([1, 2, 3]))
+// The literal must be allocated each time the condition executes.
+hold count = 0
+while expand([]) == 1 {
+  count = count + 1
+  when count == 3 {
+    break
+  }
+}
+show count
+show len(push(push([], 1), 2))
+hold decimals = identity([08, -09, 0.5])
+show decimals[0]
+show decimals[1]
+show decimals[2]
+show size([0,1,2,3,4,5,6,7,8,9,10,11])
+show "[1,2] is text"

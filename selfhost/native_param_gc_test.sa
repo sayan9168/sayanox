@@ -1,0 +1,31 @@
+// Native-only: explicit collection and parameter/global name collisions.
+hold s = "global"
+hold n = 99
+make update(s: str, n: num) -> str {
+  s = concat(s, "!")
+  n = n - 1
+  hold reclaimed = gc()
+  when n > 0 {
+    hold nested = update(s, n)
+    reclaimed = gc()
+    show s
+    give nested
+  }
+  give s
+}
+show update("local", 2)
+show s
+show n
+make rebind(xs: list, other: list) -> list {
+  xs = other
+  hold reclaimed = gc()
+  push(xs, 7)
+  give xs
+}
+hold first = [1]
+hold second = [2]
+hold answer = rebind(first, second)
+hold reclaimed = gc()
+show len(first)
+show len(second)
+show answer[1]

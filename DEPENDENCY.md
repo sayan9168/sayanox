@@ -298,3 +298,19 @@ under `ulimit -v 400000` (a 400 MB address-space cap).
 To re-measure the external command set yourself, put logging wrappers for your
 `PATH` earlier in `PATH` and diff the resulting invocation log against the
 tables above.
+
+## 2026-10-11 scope note
+
+The historical minimal-PATH measurements above are not a fresh audit of the
+current, expanded test suite. This pass ran the four gates on the normal
+workspace PATH, without Python or network on their execution path; it did
+not repeat the PATH-shim measurement. Python was used as an editing tool,
+not added as a build dependency.
+
+The current Makefile also uses `diff` and `tr` in Stage-2 test recipes, and
+tracked POSIX shell package/LSP wrappers exist. Thus the historical command
+counts and statements that no shell-script process exists must not be read
+as current exhaustive dependency claims. `doctor` checks the core toolchain;
+it is not a proof that every optional feature-test utility is installed.
+The new tests use shell builtins, the C compiler, make, mkdir, grep and cmp.
+No new external bootstrap tool or network operation was introduced.

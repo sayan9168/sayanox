@@ -1,11 +1,7 @@
 // stdlib/str_util.sa -- string helpers.
 //
-// gen2 only.  These functions take and return `str`, and typed parameters
-// (`make s_len(s: str) -> num`) are a full-language feature: seed-min refuses
-// the file by design, and native_aot rejects it with a clear
-// `make s_len: bad param list` diagnostic rather than miscompiling it.  So
-// `use "stdlib/str_util.sa"` is for gen2-compiled programs; the numeric
-// helpers in `stdlib/tiny.sa` are the portable ones.
+// Supported by seed-min, gen2 and native (make test-stdlib).
+// Signatures use fully typed num/str/list parameters and explicit returns.
 //
 // Two rules shape the code below, both forced by the gen2 emitter today:
 //   * one statement per line -- `when x { give y }` on a single line is not

@@ -1,0 +1,48 @@
+cc -O2 -o selfhost/native_aot selfhost/native_aot.c
+selfhost/native_aot.c: In function 'emit_prim':
+selfhost/native_aot.c:1360:97: warning: 'return' with a value, in function returning void
+ 1360 |         if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return F[cur_fn].pk[i]; }
+      |                                                                                     ~~~~~~~~~~~~^~~
+selfhost/native_aot.c:1179:13: note: declared here
+ 1179 | static void emit_prim(const char**p,int depth){
+      |             ^~~~~~~~~
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/native_aot selfhost/seed_typed_loops_test.sa selfhost/seed_tests/ngl_loops
+./selfhost/native_aot selfhost/seed_generics_extended_test.sa selfhost/seed_tests/ngl_extended
+./selfhost/native_aot selfhost/native_generic_local_test.sa selfhost/seed_tests/ngl_native
+./selfhost/seed/sxc_seed_min selfhost/native_generic_local_test.sa > selfhost/seed_tests/ngl_seed.c
+cc -O2 -o selfhost/seed_tests/ngl_seed selfhost/seed_tests/ngl_seed.c
+./selfhost/gen2 selfhost/native_generic_local_test.sa selfhost/seed_tests/ngl_gen2.c
+cc -O2 -o selfhost/seed_tests/ngl_gen2 selfhost/seed_tests/ngl_gen2.c
+[OK] native local annotations and demand-driven generic bodies: num/str/list, local T, string-only recursion, no unused numeric base, kind errors
+[OK] seed limits: invalid generic signatures and unsupported for diagnostics
+./selfhost/seed/sxc_seed_min selfhost/seed_generics_test.sa > selfhost/seed_tests/sgen_seed.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/sgen_seed selfhost/seed_tests/sgen_seed.c
+./selfhost/gen2 selfhost/seed_generics_test.sa selfhost/seed_tests/sgen_gen2.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/sgen_gen2 selfhost/seed_tests/sgen_gen2.c
+./selfhost/native_aot selfhost/seed_generics_test.sa selfhost/seed_tests/sgen_native
+./selfhost/seed/sxc_seed_min selfhost/seed_generics_extended_test.sa > selfhost/seed_tests/sgen_extended.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/sgen_extended selfhost/seed_tests/sgen_extended.c
+./selfhost/seed/sxc_seed_min selfhost/seed_generics_scope_test.sa > selfhost/seed_tests/sgen_scope.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/sgen_scope selfhost/seed_tests/sgen_scope.c
+./selfhost/seed/sxc_seed_min selfhost/seed_generics_test.sa > selfhost/seed_tests/sgen_again.c
+cmp selfhost/seed_tests/sgen_seed.c selfhost/seed_tests/sgen_again.c
+[OK] seed generic specialization: num/str/list, multiple type parameters, nested/recursive/forward calls, annotations, aliasing, deduplication, deterministic output and diagnostics
+./selfhost/gen2 selfhost/seed_tests/tg.sa selfhost/seed_tests/tg.c >/dev/null
+cc -O2 -o selfhost/seed_tests/tg selfhost/seed_tests/tg.c
+./selfhost/gen1_min selfhost/seed_tests/tg.sa selfhost/seed_tests/tg_g1.c >/dev/null
+cc -O2 -o selfhost/seed_tests/tg_g1 selfhost/seed_tests/tg_g1.c
+./selfhost/gen2 selfhost/seed_tests/tg_mp.sa selfhost/seed_tests/tg_mp.c >/dev/null
+cc -O2 -o selfhost/seed_tests/tg_mp selfhost/seed_tests/tg_mp.c
+./selfhost/gen1_min selfhost/seed_tests/tg_mp.sa selfhost/seed_tests/tg_mp_g1.c >/dev/null
+cc -O2 -o selfhost/seed_tests/tg_mp_g1 selfhost/seed_tests/tg_mp_g1.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/tg_mp.sa > selfhost/seed_tests/tg_mp_seed.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/tg_mp_seed selfhost/seed_tests/tg_mp_seed.c
+./selfhost/native_aot selfhost/seed_tests/tg_mp.sa selfhost/seed_tests/tg_mp_nat
+[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, multi-parameter <A, B> and <A, B, C>, gen2 and gen1_min agree

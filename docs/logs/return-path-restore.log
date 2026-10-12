@@ -1,0 +1,2 @@
+[restore-compiler] selfhost/seed_tests/return_flow_restored.sa absent or incomplete -> decoding gzip+base64 parts (offline)
+[OK] restore-compiler (restored offline from gzip+base64 parts; no Python, no network)

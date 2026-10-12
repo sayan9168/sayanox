@@ -1,8 +1,7 @@
 // stdlib/file_util.sa -- file helpers, wrapping the builtins.
 //
-// gen2 only: every signature here needs a typed `str` parameter.  The helpers
-// are thin by design -- the builtins already do the work, these give them
-// readable names and a place to document the contract.
+// Supported by seed-min, gen2 and native (make test-stdlib).
+// Signatures use fully typed num/str/list parameters and explicit returns.
 //
 //   * a missing file reads as "" (that is the builtin's documented result),
 //     so f_exists() is only as good as "the file is readable and non-empty";

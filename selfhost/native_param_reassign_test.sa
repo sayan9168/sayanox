@@ -1,0 +1,22 @@
+make replace(xs: list, other: list) -> list {
+  xs = other
+  push(xs, 9)
+  give xs
+}
+make descend(s: str, n: num) -> str {
+  when n <= 0 {
+    give s
+  }
+  s = concat(s, "x")
+  n = n - 1
+  give descend(s, n)
+}
+hold original = [1]
+hold replacement = [2]
+hold result = replace(original, replacement)
+show len(original)
+show len(replacement)
+show result[1]
+hold word = "a"
+show descend(word, 3)
+show word

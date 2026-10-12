@@ -1,0 +1,23 @@
+cc -O2 -o selfhost/native_aot selfhost/native_aot.c
+selfhost/native_aot.c: In function 'emit_prim':
+selfhost/native_aot.c:1337:97: warning: 'return' with a value, in function returning void
+ 1337 |         if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return F[cur_fn].pk[i]; }
+      |                                                                                     ~~~~~~~~~~~~^~~
+selfhost/native_aot.c:1156:13: note: declared here
+ 1156 | static void emit_prim(const char**p,int depth){
+      |             ^~~~~~~~~
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/native_aot selfhost/seed_typed_params_test.sa selfhost/seed_tests/npr_existing
+./selfhost/seed/sxc_seed_min selfhost/native_param_reassign_test.sa > selfhost/seed_tests/npr_seed.c
+cc -O2 -o selfhost/seed_tests/npr_seed selfhost/seed_tests/npr_seed.c
+./selfhost/gen2 selfhost/native_param_reassign_test.sa selfhost/seed_tests/npr_gen2.c
+cc -O2 -o selfhost/seed_tests/npr_gen2 selfhost/seed_tests/npr_gen2.c
+./selfhost/native_aot selfhost/native_param_reassign_test.sa selfhost/seed_tests/npr_native
+./selfhost/native_aot selfhost/native_param_gc_test.sa selfhost/seed_tests/npr_gc
+[OK] native parameter reassignment: num/str/list, aliases, recursion, GC roots, parameter-before-global lookup and kind errors

@@ -1,0 +1,59 @@
+// Predeclared counters also expose post-loop state on native.
+hold i = 0
+hold p = 0
+hold q = 0
+for i in 0..3 {
+  show i
+}
+show i
+for i in 4..4 { show 900 }
+show i
+for i in 5..2 { show 901 }
+show i
+for i in -1..1.5 {
+  show i
+}
+for i in 0.5..2.5 {
+  show i
+}
+hold limit = 7
+for i in 1..limit {
+  show i
+  limit = 3
+}
+show i
+for i in 0..8 {
+  when i == 1 { continue }
+  when i == 4 { break }
+  show i
+}
+show i
+for p in 0..2 {
+  for q in 0..3 {
+    when q == 1 { continue }
+    show p * 10 + q
+  }
+}
+hold values = [5, 6, 7]
+hold text = "ab"
+for i in 0..len(values) { show values[i] }
+for i in 0..len(text) { show text[i] }
+hold lo = 1
+hold hi = 2
+for i in (lo + 1)..(hi * 2) {
+  show i
+  lo = 20
+}
+// The binder is the counter, so modifying it changes the next iteration.
+for i in 0..5 {
+  show i
+  i = i + 1
+}
+show i
+// The end is re-read each test: shrinking the list changes termination.
+for i in 0..len(values) {
+  show i
+  values = []
+}
+show i
+show "range-done"
