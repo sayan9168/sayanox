@@ -134,87 +134,208 @@ make json_esc(s: str) -> str {
   give r
 }
 
+// Unicode boundary helpers. Internal scanner offsets are UTF-8 bytes;
+// protocol positions are UTF-16 code units (the LSP default).
+make hex4(s: str, at: num) -> num {
+  hold v = 0
+  hold k = 0
+  hold c = 0
+  hold d = 0
+  when at + 4 > len(s) {
+    give -1
+  }
+  while k < 4 {
+    c = sx_index(s, at + k)
+    d = -1
+    when c >= 48 and c <= 57 {
+      d = c - 48
+    }
+    when c >= 65 and c <= 70 {
+      d = c - 55
+    }
+    when c >= 97 and c <= 102 {
+      d = c - 87
+    }
+    when d < 0 {
+      give -1
+    }
+    v = v * 16 + d
+    k = k + 1
+  }
+  give v
+}
+
+make utf8_scalar(v: num) -> str {
+  hold r = ""
+  hold a = 0
+  hold b = 0
+  hold c = 0
+  // The runtime uses NUL-terminated strings; U+0000 is not representable.
+  when v <= 0 or v > 1114111 {
+    v = 65533
+  }
+  when v >= 55296 and v <= 57343 {
+    v = 65533
+  }
+  when v < 128 {
+    give chr(v)
+  }
+  a = (v - v % 64) / 64
+  when v < 2048 {
+    r = concat(chr(192 + a), chr(128 + v % 64))
+    give r
+  }
+  b = (a - a % 64) / 64
+  when v < 65536 {
+    r = concat(chr(224 + b), chr(128 + a % 64))
+    give concat(r, chr(128 + v % 64))
+  }
+  c = (b - b % 64) / 64
+  r = concat(chr(240 + c), chr(128 + b % 64))
+  r = concat(r, chr(128 + a % 64))
+  give concat(r, chr(128 + v % 64))
+}
+
+make utf8_width(s: str, i: num) -> num {
+  hold c = 0
+  hold d = 0
+  hold width = 1
+  hold k = 1
+  when i >= len(s) {
+    give 0
+  }
+  c = sx_index(s, i)
+  when c >= 194 and c <= 223 {
+    width = 2
+  }
+  when c >= 224 and c <= 239 {
+    width = 3
+  }
+  when c >= 240 and c <= 244 {
+    width = 4
+  }
+  when i + width > len(s) {
+    give 1
+  }
+  while k < width {
+    d = sx_index(s, i + k)
+    when d < 128 or d > 191 {
+      give 1
+    }
+    k = k + 1
+  }
+  when width >= 3 {
+    d = sx_index(s, i + 1)
+    when c == 224 and d < 160 {
+      give 1
+    }
+    when c == 237 and d >= 160 {
+      give 1
+    }
+    when c == 240 and d < 144 {
+      give 1
+    }
+    when c == 244 and d >= 144 {
+      give 1
+    }
+  }
+  give width
+}
+
+make utf16_byte(s: str, units: num) -> num {
+  hold i = 0
+  hold u = 0
+  hold width = 0
+  hold step = 0
+  while i < len(s) and u < units {
+    when sx_index(s, i) == 10 or sx_index(s, i) == 13 {
+      break
+    }
+    width = utf8_width(s, i)
+    step = 1
+    when width == 4 {
+      step = 2
+    }
+    when u + step > units {
+      break
+    }
+    u = u + step
+    i = i + width
+  }
+  give i
+}
+
+// Span of the codepoint containing a scanner byte offset. Never split a
+// surrogate pair. At EOF produce a zero-width span rather than overshoot.
+make utf16_span(s: str, offset: num) -> list {
+  hold i = 0
+  hold u = 0
+  hold width = 0
+  hold step = 0
+  hold result = [0, 0]
+  while i < len(s) {
+    width = utf8_width(s, i)
+    step = 1
+    when width == 4 {
+      step = 2
+    }
+    when i + width > offset {
+      result = [u, u + step]
+      give result
+    }
+    i = i + width
+    u = u + step
+  }
+  result = [u, u]
+  give result
+}
+
 make unesc(s: str) -> str {
   hold r = ""
   hold i = 0
-  hold n = 0
   hold c = 0
   hold d = 0
-  hold h = 0
   hold v = 0
-  hold k = 0
-  hold lim = 0
-  n = len(s)
-  while i < n {
+  hold low = 0
+  while i < len(s) {
     c = sx_index(s, i)
-    when c == 92 {
-      d = 0
-      when i + 1 < n {
-        d = sx_index(s, i + 1)
-      }
-      when d == 110 {
-        r = r + "\n"
-        i += 2
-      } otherwise {
-        when d == 116 {
-          r = r + "\t"
-          i += 2
-        } otherwise {
-          when d == 114 {
-            r = r + "\r"
-            i += 2
-          } otherwise {
-            when d == 34 {
-              r = r + "\""
-              i += 2
-            } otherwise {
-              when d == 92 {
-                r = r + "\\"
-                i += 2
-              } otherwise {
-                when d == 47 {
-                  r = r + "/"
-                  i += 2
-                } otherwise {
-                  when d == 117 {
-                    v = 0
-                    k = i + 2
-                    lim = i + 6
-                    when lim > n {
-                      lim = n
-                    }
-                    while k < lim {
-                      h = sx_index(s, k)
-                      v = v * 16
-                      when h >= 48 && h <= 57 {
-                        v += h - 48
-                      }
-                      when h >= 97 && h <= 102 {
-                        v += h - 87
-                      }
-                      when h >= 65 && h <= 70 {
-                        v += h - 55
-                      }
-                      k += 1
-                    }
-                    when v > 255 {
-                      v = 63
-                    }
-                    r = r + chr(v)
-                    i += 6
-                  } otherwise {
-                    r = r + chr(c)
-                    i += 1
-                  }
-                }
-              }
+    when c == 92 and i + 1 < len(s) {
+      d = sx_index(s, i + 1)
+      when d == 117 {
+        v = hex4(s, i + 2)
+        i = i + 6
+        when v >= 55296 and v <= 56319 {
+          when starts(s, i, "\\u") == 1 {
+            low = hex4(s, i + 2)
+            when low >= 56320 and low <= 57343 {
+              v = 65536 + (v - 55296) * 1024 + low - 56320
+              i = i + 6
             }
           }
         }
+        r = concat(r, utf8_scalar(v))
+      } otherwise {
+        when d == 110 {
+          d = 10
+        }
+        elif d == 114 {
+          d = 13
+        }
+        elif d == 116 {
+          d = 9
+        }
+        elif d == 98 {
+          d = 8
+        }
+        elif d == 102 {
+          d = 12
+        }
+        r = concat(r, chr(d))
+        i = i + 2
       }
     } otherwise {
-      r = r + chr(c)
-      i += 1
+      r = concat(r, chr(c))
+      i = i + 1
     }
   }
   give r
@@ -420,8 +541,8 @@ make word_at(text: str, line: num, ch: num) -> str {
   hold c = 0
   hold ok = 0
   a = line_start(text, line)
-  p = a + ch
-  n = len(text)
+  p = a + utf16_byte(line_text(text, line), ch)
+  n = a + len(line_text(text, line))
   when p > n {
     p = n
   }
@@ -607,7 +728,9 @@ make doc_for(w: str) -> str {
 
 // ------------------------------------------------------------- diagnostics
 
-make diag_item(line: num, ch: num, sev: num, code: str, msg: str, first: num) -> str {
+make diag_item(line: num, span: list, sev: num, code: str, msg: str, first: num) -> str {
+  hold ch = span[0]
+  hold endch = span[1]
   hold b = ""
   when first > 0 {
     b = b + ","
@@ -619,7 +742,7 @@ make diag_item(line: num, ch: num, sev: num, code: str, msg: str, first: num) ->
   b = b + "},\"end\":{\"line\":"
   b = b + numstr(line)
   b = b + ",\"character\":"
-  b = b + numstr(ch + 1)
+  b = b + numstr(endch)
   b = b + "}},\"severity\":"
   b = b + numstr(sev)
   b = b + ",\"code\":\""
@@ -738,11 +861,11 @@ make diagnostics(text: str, dir: str) -> str {
         }
       }
       when cmt == 0 && st == 1 {
-        items = items + diag_item(l, n - 1, 1, "SX1002", "unterminated string", count)
+        items = items + diag_item(l, utf16_span(line, n - 1), 1, "SX1002", "unterminated string", count)
         count += 1
       }
       when pd != 0 {
-        items = items + diag_item(l, n - 1, 1, "SX1004", "unbalanced parentheses", count)
+        items = items + diag_item(l, utf16_span(line, n - 1), 1, "SX1004", "unbalanced parentheses", count)
         count += 1
       }
       c = sx_index(line, a)
@@ -786,7 +909,7 @@ make diagnostics(text: str, dir: str) -> str {
           when declared_in(text, w) == 0 {
             msg = concat("unknown statement '", w)
             msg = concat(msg, "'")
-            items = items + diag_item(l, a, 1, "SX1001", msg, count)
+            items = items + diag_item(l, utf16_span(line, a), 1, "SX1001", msg, count)
             count += 1
           }
         }
@@ -795,7 +918,7 @@ make diagnostics(text: str, dir: str) -> str {
           when u >= 0 {
             v = find_from(line, "\"", u + 1)
             when v < 0 {
-              items = items + diag_item(l, n - 1, 1, "SX1005", "unterminated use path", count)
+              items = items + diag_item(l, utf16_span(line, n - 1), 1, "SX1005", "unterminated use path", count)
               count += 1
             } otherwise {
               path = ""
@@ -813,7 +936,7 @@ make diagnostics(text: str, dir: str) -> str {
               when len(body) <= 0 {
                 msg = concat("cannot read module '", path)
                 msg = concat(msg, "' (looked next to the document)")
-                items = items + diag_item(l, u, 2, "SX1005", msg, count)
+                items = items + diag_item(l, utf16_span(line, u), 2, "SX1005", msg, count)
                 count += 1
               }
             }
@@ -835,7 +958,7 @@ make diagnostics(text: str, dir: str) -> str {
     } otherwise {
       msg = concat(msg, "more '}' than '{'")
     }
-    items = items + diag_item(l2, 0, 1, "SX1003", msg, count)
+    items = items + diag_item(l2, utf16_span(line_text(text, l2), 0), 1, "SX1003", msg, count)
     count += 1
   }
   give concat("[", concat(items, "]"))
@@ -1278,7 +1401,7 @@ make notify(method: str, params: str) -> num {
 
 make capabilities() -> str {
   hold c = ""
-  c = "{\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\" \"]},"
+  c = "{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\" \"]},"
   c = concat(c, "\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,")
   c = concat(c, "\"diagnosticProvider\":{\"interFileDependencies\":false,\"workspaceDiagnostics\":false}}")
   give c
@@ -1401,19 +1524,24 @@ while running == 1 {
         d = notify("textDocument/publishDiagnostics", params)
       }
       when string_eq(method, "textDocument/didChange") {
-        when len(uri) > 0 {
-          docuri = uri
+        // One-document server: changes to another URI must not overwrite it.
+        when string_eq(uri, docuri) and len(docuri) > 0 {
+          // Empty text is a replacement; an empty change array is a no-op.
+          when find(body, "\"text\"") >= 0 {
+            doc = text
+          }
+          params = concat("{\"uri\":\"", json_esc(docuri))
+          params = concat(params, "\",\"diagnostics\":")
+          params = concat(params, diagnostics(doc, dir_of(docuri)))
+          params = concat(params, "}")
+          d = notify("textDocument/publishDiagnostics", params)
         }
-        when len(text) > 0 {
-          doc = text
-        }
-        params = concat("{\"uri\":\"", json_esc(docuri))
-        params = concat(params, "\",\"diagnostics\":")
-        params = concat(params, diagnostics(doc, dir_of(docuri)))
-        params = concat(params, "}")
-        d = notify("textDocument/publishDiagnostics", params)
       }
       when string_eq(method, "textDocument/didClose") {
+        when string_eq(uri, docuri) {
+          doc = ""
+          docuri = ""
+        }
         params = concat("{\"uri\":\"", json_esc(uri))
         params = concat(params, "\",\"diagnostics\":[]}")
         d = notify("textDocument/publishDiagnostics", params)

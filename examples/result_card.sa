@@ -1,0 +1,34 @@
+// A small result card, written in Sayanox.
+// Runs on seed-min, gen2 and native.
+use "stdlib/tiny.sa"
+
+hold marks = [82, 91, 76, 88, 93]
+hold total = 0
+hold count = 0
+
+for mark in marks {
+  hold total = total + mark
+  hold count = count + 1
+}
+
+hold average = total / count
+
+show "=== Sayanox Result Card ==="
+show "Student: Sayan"
+show "Total marks:"
+show total
+show "Average:"
+show average
+
+when average >= 90 {
+  show "Grade: A+"
+} elif average >= 80 {
+  show "Grade: A"
+} elif average >= 60 {
+  show "Grade: B"
+} otherwise {
+  show "Keep practising!"
+}
+
+show "Progress (out of 100):"
+show saturate(average / 100) * 100

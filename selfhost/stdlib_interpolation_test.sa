@@ -1,0 +1,13 @@
+use "stdlib/tiny.sa"
+show lerp(2, 10, 0)
+show lerp(2, 10, 1)
+show lerp(2, 10, 0.25)
+show lerp(2, 10, -1)
+show saturate(-2)
+show saturate(0.25)
+show saturate(2)
+show smoothstep01(-1)
+show smoothstep01(0.5)
+show smoothstep01(2)
+show distance_sq(0, 0, 3, 4)
+show distance_sq(1, 2, 1.5, 2.5)

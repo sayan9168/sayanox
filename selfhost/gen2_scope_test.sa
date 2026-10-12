@@ -1,0 +1,50 @@
+hold x: str = "global"
+make branches(flag: num) -> num {
+  hold result = 0
+  when flag == 1 {
+    hold value = "abc"
+    result = len(value)
+  } elif flag == 2 {
+    hold value = 4
+    result = value
+  } otherwise {
+    hold value = [1, 2]
+    result = len(value)
+  }
+  hold value = 9
+  give result + value
+}
+make parameter(x: num) -> num {
+  give x + 1
+}
+make local(n: num) -> num {
+  hold x = n * 2
+  give x
+}
+make nested(n: num) -> num {
+  hold total = 0
+  while n > 0 {
+    when n > 1 {
+      hold scratch = "xx"
+      total = total + len(scratch)
+    } otherwise {
+      hold scratch = 5
+      total = total + scratch
+    }
+    n = n - 1
+  }
+  hold scratch = [7]
+  for i in 0..2 {
+    hold inside = i + 1
+    total = total + inside
+  }
+  hold inside = "z"
+  give total + scratch[0] + len(inside)
+}
+show branches(1)
+show branches(2)
+show branches(0)
+show parameter(6)
+show local(4)
+show nested(2)
+show x

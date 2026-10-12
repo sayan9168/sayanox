@@ -1,0 +1,24 @@
+// Local type substitution must leave ordinary identifiers, strings and
+// comments unchanged. Unused template bodies are checked when instantiated.
+make id<T>(value: T) -> T {
+  give value
+}
+make local<T>(value: T) -> T {
+  hold T = 7
+  hold copied: T = id(value)
+  show T
+  show "T : T }"
+  // hold not_code: T = "ignored }"
+  give copied
+}
+make left<T>(n: T) -> T {
+  when n <= 0 { give 0 }
+  give right(n - 1) + 1
+}
+make right<T>(n: T) -> T {
+  when n <= 0 { give 0 }
+  give left(n - 1) + 1
+}
+show local("kept")
+show local(9)
+show left(5)

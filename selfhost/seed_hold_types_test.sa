@@ -1,0 +1,26 @@
+hold count: num = 2
+hold greeting: str = "hello"
+hold values: list = [3, 4]
+hold copy: list = values
+hold flag: num = not false and true
+show flag
+count = count + len(values)
+greeting = concat(greeting, "!")
+push(copy, 9)
+show count
+show greeting
+show len(values)
+show values[2]
+hold count: num = 7
+hold greeting = "ok"
+hold values = [8, 6]
+show count
+show greeting
+show values[0]
+when true {
+  hold inside: str = "branch"
+  show inside
+}
+for value in values {
+  show value
+}

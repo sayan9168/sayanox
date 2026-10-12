@@ -1,0 +1,81 @@
+// Recursive native loop-state regression, shared with seed/gen2.
+make build(n: num) -> list {
+  hold items = []
+  for i in 0..n {
+    when i == 1 { continue }
+    when i == 4 { break }
+    push(items, i)
+  }
+  give items
+}
+make sum_nested(n: num) -> num {
+  when n <= 0 {
+    give 0
+  }
+  hold total = 0
+  for i in 0..n {
+    total = total + sum_nested(n - 1)
+  }
+  give total + 1
+}
+make count_pairs(s: str, xs: list) -> num {
+  hold total = 0
+  for ch in s {
+    for value in xs {
+      total = total + len(ch) + value
+    }
+  }
+  give total
+}
+make inside(s: str) -> str {
+  hold result = ""
+  for ch in concat(s, "!") {
+    result = concat(result, ch)
+  }
+  give result
+}
+// Parameter names may match annotated globals without sharing their slots.
+hold n = "global"
+hold items = build(6)
+show len(items)
+show items[0]
+show items[1]
+show items[2]
+show sum_nested(3)
+hold numbers = [1, 2]
+show count_pairs("ab", numbers)
+show inside("ok")
+show n
+show "loops-done"
+
+make parameter(i: num) -> num {
+  for i in 0..3 {
+    when i == 1 { continue }
+  }
+  give i
+}
+show parameter(8)
+make letters(s: str, depth: num) -> num {
+  hold count = 0
+  for ch in s {
+    count = count + len(ch)
+    when depth > 0 {
+      count = count + letters("x", depth - 1)
+    }
+  }
+  give count
+}
+show letters("ab", 3)
+make lists(xs: list, depth: num) -> num {
+  hold count = 0
+  for value in xs {
+    count = count + value
+    when depth > 0 {
+      hold nested = [1, 2]
+      count = count + lists(nested, depth - 1)
+    }
+  }
+  give count
+}
+hold input = [1, 2]
+show lists(input, 2)

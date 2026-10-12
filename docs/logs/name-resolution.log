@@ -1,0 +1,17 @@
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 selfhost/name_resolution_test.sa selfhost/seed_tests/name_resolution.c
+./selfhost/gen1_min selfhost/name_resolution_test.sa selfhost/seed_tests/name_resolution_g1.c
+cmp selfhost/seed_tests/name_resolution.c selfhost/seed_tests/name_resolution_g1.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/name_resolution selfhost/seed_tests/name_resolution.c
+./selfhost/seed/sxc_seed_min selfhost/name_resolution_test.sa > selfhost/seed_tests/name_resolution_seed.c
+cc -O2 -o selfhost/seed_tests/name_resolution_seed selfhost/seed_tests/name_resolution_seed.c
+./selfhost/native_aot selfhost/name_resolution_test.sa selfhost/seed_tests/name_resolution_native
+sh selfhost/test_name_resolution.sh ./selfhost/gen2 selfhost/seed_tests
+[OK] gen2 reference diagnostics: initializers, arithmetic, nested calls, lists/indexes, writes, conditions, loops, returns, function/sibling scopes, generic bodies and unknown callees
+[OK] name resolution: field labels/selectors, builtin-like bindings, quotes/comments, typed forward calls, generic calls and function scopes; positive seed/gen2/native parity

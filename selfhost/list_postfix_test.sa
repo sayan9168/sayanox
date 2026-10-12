@@ -1,0 +1,39 @@
+struct Point { x, label }
+struct Wrap { point }
+hold p = Point { x: 4, label: "ab" }
+hold w = Wrap { point: Point { x: 6, label: "abcd" } }
+make first(xs: list) -> num {
+  give xs[0]
+}
+make number(n: num) -> num {
+  give n
+}
+make identity<T>(value: T) -> T {
+  give value
+}
+show first([p.x + w.point.x])
+show first([len(w.point.label)])
+show first([p.label[0]])
+show number([10, 20][1])
+show number(([10, 20])[1])
+show number(identity([5, 6])[1])
+show len(identity([w.point.x, 2]))
+make returned(n: num) -> num {
+  give number([n, n + 1][1])
+}
+show returned(8)
+when number(([2])[0]) == 2 {
+  show 12
+}
+hold i = 0
+while number([i < 3][0]) {
+  i = i + 1
+}
+show i
+show identity([30, 40][1])
+show identity(([50, 60])[0])
+show identity(w.point.label[2])
+make second<A, B>(a: A, b: B) -> B {
+  give b
+}
+show second([1, 2][0], "typed")

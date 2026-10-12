@@ -92,7 +92,13 @@ add() {
 # builtin), so a failure is recognised from its FAILED line. Output is kept.
 checked() {
   [ -x "$SXPKG_BIN" ] || make -C "$SAYANOX_REPO_ROOT" sxpkg >/dev/null
-  checked_out=$(cd "$ROOT" && "$SXPKG_BIN" "$@" 2>&1) || true
+  if checked_out=$(cd "$ROOT" && "$SXPKG_BIN" "$@" 2>&1); then
+    :
+  else
+    printf '%s\n' "$checked_out"
+    echo "sxpkg: could not run $1 in project $ROOT" >&2
+    return 1
+  fi
   [ -n "$checked_out" ] && printf '%s\n' "$checked_out"
   case "$checked_out" in
     *FAILED*|*"sxpkg: DEP "*) return 1 ;;
@@ -166,7 +172,10 @@ install() {
 }
 
 search() {
-  [ -f "$INDEX" ] || sync
+  [ -f "$INDEX" ] || {
+    echo "sxpkg: no local index; run seed (offline) or sync (explicit network)" >&2
+    return 1
+  }
   run_sayanox search "$@"
 }
 

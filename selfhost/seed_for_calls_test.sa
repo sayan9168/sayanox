@@ -1,0 +1,72 @@
+// A call source is evaluated once per loop entry, then its result is walked.
+make labels() -> str {
+  show "labels"
+  hold result = "ab"
+  give result
+}
+make forwarded() -> str {
+  give labels()
+}
+make values() -> list {
+  show "values"
+  hold result = [4, 5]
+  push(result, 6)
+  give result
+}
+make empty_text() -> str {
+  give ""
+}
+make empty_values() -> list {
+  hold empty = []
+  give empty
+}
+hold result = 100
+for ch in forwarded() {
+  show ch
+}
+for value in values() {
+  when value == 5 { continue }
+  show value
+}
+show result
+for ch in empty_text() { show "bad-string" }
+for value in empty_values() { show "bad-list" }
+hold original = "x"
+for ch in concat(original, chr(65)) {
+  show ch
+  original = "changed"
+}
+show original
+hold xs = [1]
+for value in push(xs, 2) {
+  show value
+}
+show len(xs)
+hold repeat = 0
+while repeat < 2 {
+  for ch in labels() {
+    show ch
+    break
+  }
+  repeat = repeat + 1
+}
+hold empty = []
+for ch in chr(65) {
+  for value in push(empty, 9) {
+    show ch
+    show value
+  }
+}
+// Declared return kinds also apply to ordinary holds and nested calls.
+hold text = empty_text()
+hold copy = values()
+show len(text)
+show len(copy)
+// A file-reading builtin also produces one captured string.
+show "file"
+hold saved = write_file("selfhost/seed_tests/for_calls_input.txt", "hi")
+show saved
+for ch in read_file("selfhost/seed_tests/for_calls_input.txt") {
+  show ch
+}
+show "calls-done"

@@ -51,7 +51,7 @@ all: true-selfhost-min
 # replaced: a spurious extra line now fails, where `sed -n 1p` would not notice.
 # Write a literal % in the expected text as % (make does not unescape %% here).
 # ---------------------------------------------------------------------------
-assert-out = @__got=$$($(1)); __want=$$(printf '%b' '$(2)'); \
+assert-out = @__got=$$($(1)) || { echo "[FAIL] $(1): program exited nonzero"; exit 1; }; __want=$$(printf '%b' '$(2)'); \
   if [ "$$__got" = "$$__want" ]; then :; else \
     echo "[FAIL] $(1): stdout does not match"; \
     echo "--- want ---"; printf '%s\n' "$$__want"; \
@@ -113,8 +113,8 @@ pack-compiler:
 #
 # Fallback: if the source is absent or corrupt, decode the checked-in
 # gzip+base64 blob in selfhost/compiler_min_gz/*.b64. That blob was verified
-# byte-identical to the checked-in compiler_min.sa (sha256 aa5ff5ada3b3d91c...,
-# 33 parts of 1100 chars; regenerate with `make pack-compiler`), so both paths
+# byte-identical to the checked-in compiler_min.sa (sha256 7ca320d53672c33c...,
+# 109 parts of at most 1100 chars; regenerate with `make pack-compiler`), so both paths
 # produce the same file. base64, gzip, cat, tr and rm are therefore OPTIONAL
 # dependencies, needed only if the plain source goes missing.
 # ---------------------------------------------------------------------------
@@ -127,8 +127,8 @@ restore-compiler:
 	  exit 0; \
 	fi; \
 	echo "[restore-compiler] $(MIN_SA) absent or incomplete -> decoding gzip+base64 parts (offline)"; \
-	test -f selfhost/compiler_min_gz/00.b64 \
-	  || { echo "FAIL: no $(MIN_SA) and no selfhost/compiler_min_gz/00.b64 to restore from"; exit 1; }; \
+	{ test -f selfhost/compiler_min_gz/0000.b64 || test -f selfhost/compiler_min_gz/00.b64; } \
+	  || { echo "FAIL: no $(MIN_SA) and no compiler_min_gz bundle to restore from"; exit 1; }; \
 	# decode to a TEMP file and verify it BEFORE touching $(MIN_SA): a failed \
 	# or stale restore must never replace a source file that is already there \
 	# (that is how a newer compiler_min.sa gets silently downgraded to an \
@@ -601,8 +601,9 @@ test-full-lang:
 	./$(GEN2) $(TESTS)/fl_for.sa $(TESTS)/fl_for.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/fl_for $(TESTS)/fl_for.c
 	$(call assert-out,./$(TESTS)/fl_for,10\n4\n5)
-	@if ./$(SEED_MIN_BIN) $(TESTS)/fl_for.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted for/break/continue (gen2-only)"; exit 1; fi
+	./$(SEED_MIN_BIN) $(TESTS)/fl_for.sa > $(TESTS)/fl_for_seed.c
+	$(CC) -O2 -o $(TESTS)/fl_for_seed $(TESTS)/fl_for_seed.c
+	$(call assert-out,./$(TESTS)/fl_for_seed,10\n4\n5)
 	@printf 'hold xs = [3, 4, 5]\nhold sum = 0\nfor v in xs {\n  hold sum = sum + v\n}\nshow sum\nfor v in xs {\n  when v == 4 {\n    continue\n  }\n  show v\n}\n' > $(TESTS)/fl_list.sa
 	./$(GEN2) $(TESTS)/fl_list.sa $(TESTS)/fl_list.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/fl_list $(TESTS)/fl_list.c
@@ -611,8 +612,9 @@ test-full-lang:
 	./$(GEN2) $(TESTS)/fl_elif.sa $(TESTS)/fl_elif.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/fl_elif $(TESTS)/fl_elif.c
 	$(call assert-out,./$(TESTS)/fl_elif,3\n9)
-	@if ./$(SEED_MIN_BIN) $(TESTS)/fl_elif.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted elif (gen2-only)"; exit 1; fi
+	./$(SEED_MIN_BIN) $(TESTS)/fl_elif.sa > $(TESTS)/fl_elif_sm.c
+	$(CC) -O2 -o $(TESTS)/fl_elif_sm $(TESTS)/fl_elif_sm.c
+	$(call assert-out,./$(TESTS)/fl_elif_sm,3\n9)
 	@printf 'make greet(name: str) -> str {\n  give concat("hi ", name)\n}\nmake twice(n: num) -> num {\n  give n * 2\n}\nhold m = greet("ada")\nshow m\nshow twice(21)\nshow len(m)\n' > $(TESTS)/fl_fn.sa
 	./$(GEN2) $(TESTS)/fl_fn.sa $(TESTS)/fl_fn.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/fl_fn $(TESTS)/fl_fn.c
@@ -672,9 +674,10 @@ test-generics:
 	./$(GEN1_MIN) $(TESTS)/tg.sa $(TESTS)/tg_g1.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/tg_g1 $(TESTS)/tg_g1.c
 	$(call assert-out,./$(TESTS)/tg_g1,3\n4\nhi\n2\nz\n3\n2\n6\nv=9\na\n12\n3\nhi\n2)
-	@# `make NAME<T>` is a full-language feature: the seed cannot read it
-	@if ./$(SEED_MIN_BIN) $(TESTS)/tg.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted a generic definition"; exit 1; fi
+	@# This fixture also uses numstr, outside the seed builtin subset.
+	@if ./$(SEED_MIN_BIN) $(TESTS)/tg.sa >/dev/null 2>$(TESTS)/tg_seed.err; then \
+	  echo "[FAIL] seed-min accepted unsupported numstr builtin"; exit 1; fi
+	@grep -q 'unknown or unsupported function' $(TESTS)/tg_seed.err
 	@# a generic whose parameters or return type name something other than its
 	@# own type parameters gets a clear diagnostic instead of an unsuffixed call
 	@printf 'make pair<T>(a: T, b: num) -> T {\n  give a\n}\nshow pair(1, 2)\n' > $(TESTS)/tg_bad.sa
@@ -716,10 +719,11 @@ test-generics:
 	@diff $(TESTS)/tg_mp.c $(TESTS)/tg_mp_g1.c >/dev/null || { echo "[FAIL] multi-param generics: gen1_min output differs"; exit 1; }
 	$(CC) -O2 -o $(TESTS)/tg_mp_g1 $(TESTS)/tg_mp_g1.c
 	$(call assert-out,./$(TESTS)/tg_mp_g1,1\nx\n1\nx\n1\n3\n5\n3\n3\nhi)
-	@# native refuses tg_mp.sa (it uses a form native does not take; generics are covered by test-native-*)
-	@if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/tg_mp.sa $(TESTS)/tg_mp_nat >/dev/null 2>&1; then echo "[FAIL] native accepted tg_mp.sa (it uses forms native does not take)"; exit 1; fi; \
-	fi
+	./$(SEED_MIN_BIN) $(TESTS)/tg_mp.sa > $(TESTS)/tg_mp_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/tg_mp_seed $(TESTS)/tg_mp_seed.c
+	$(call assert-out,./$(TESTS)/tg_mp_seed,1\nx\n1\nx\n1\n3\n5\n3\n3\nhi)
+	./$(NATIVE_BIN) $(TESTS)/tg_mp.sa $(TESTS)/tg_mp_nat
+	$(call assert-out,./$(TESTS)/tg_mp_nat,1\nx\n1\nx\n1\n3\n5\n3\n3\nhi)
 	@echo "[OK] generics: one copy per call-site kind, nested and cross-generic calls, T = num/str/list, multi-parameter <A, B> and <A, B, C>, gen2 and gen1_min agree"
 
 
@@ -750,10 +754,11 @@ test-push-stmt:
 	  echo "[FAIL] seed-min accepted an unknown statement"; exit 1; fi
 	@./$(GEN2) $(TESTS)/ts_unkstmt.sa $(TESTS)/ts_unkstmt_g2.c >/dev/null 2>&1 || true
 	@grep -q "unknown statement 'kantho'" $(TESTS)/ts_unkstmt_g2.c
-	@# continue is a full-language (gen2+) statement, still unknown to the seed
+	@# continue in while is shared with seed-min
 	@printf 'hold i = 0\nwhile i < 3 {\n  hold i = i + 1\n  when i == 2 { continue }\n}\nshow i\n' > $(TESTS)/ts_cont.sa
-	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_cont.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted continue (a gen2-only statement)"; exit 1; fi
+	./$(SEED_MIN_BIN) $(TESTS)/ts_cont.sa > $(TESTS)/ts_cont_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_cont_sm $(TESTS)/ts_cont_sm.c
+	$(call assert-out,./$(TESTS)/ts_cont_sm,3)
 	./$(GEN2) $(TESTS)/ts_cont.sa $(TESTS)/ts_cont_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_cont_g2 $(TESTS)/ts_cont_g2.c
 	$(call assert-out,./$(TESTS)/ts_cont_g2,3)
@@ -998,9 +1003,9 @@ test-native-mem: $(NATIVE_BIN)
 	@# output written before an out-of-memory exit is kept, the exit is non-zero
 	@printf 'show "before"\nhold s = "abcdefgh"\nhold i = 0\nwhile i < 20 {\n  hold s = concat(s, s)\n  hold i = i + 1\n}\nshow len(s)\nshow "after"\n' > $(TESTS)/native_oom_out.sa
 	./$(NATIVE_BIN) $(TESTS)/native_oom_out.sa $(TESTS)/native_oom_out
-	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/native_oom_out 2>/dev/null',before)
-	@if sh -c 'ulimit -v 4096; ./$(TESTS)/native_oom_out >/dev/null 2>$(TESTS)/native_oom_out.err'; then \
-	  echo "[FAIL] native survived the 4 MiB cap while retaining 8 MiB"; exit 1; fi
+	@if __got=$$(sh -c 'ulimit -v 4096; ./$(TESTS)/native_oom_out 2>$(TESTS)/native_oom_out.err'); then \
+	  echo "[FAIL] native survived the 4 MiB cap while retaining 8 MiB"; exit 1; fi; \
+	  [ "$$__got" = before ] || { echo '[FAIL] native OOM lost stdout or continued execution'; exit 1; }
 	@grep -q 'out of memory' $(TESTS)/native_oom_out.err
 	@echo "[OK] native memory: a real free path (churn fits in 4 MiB, reachable values survive, an 8 MiB live set still dies loudly)"
 
@@ -1054,8 +1059,8 @@ test-stage2-demos: $(GEN2) $(SEED_MIN_BIN)
 # test-stdlib: the tiny portable library stdlib/tiny.sa is used with a plain
 # `use` splice and must behave identically on every backend: seed-min and
 # gen2 are checked here, and the native leg runs too whenever native_aot has
-# been built (native-test).  Numeric helpers only - string-returning
-# functions and list/string parameters are outside the native subset.
+# been built (native-test). The typed str/list/file utility modules below
+# also run on seed-min, gen2 and the maintained native subset.
 # ---------------------------------------------------------------------------
 test-stdlib: $(GEN2) $(SEED_MIN_BIN)
 	@mkdir -p $(TESTS)
@@ -1074,9 +1079,7 @@ test-stdlib: $(GEN2) $(SEED_MIN_BIN)
 	fi
 	@echo "[OK] tiny stdlib via use: seed-min == gen2 (== native when built) on 30 numeric helpers"
 	@# ---- the string / list / file modules: gen2 only, by design ----
-	@# typed parameters (`make s_len(s: str) -> num`) are a full-language
-	@# feature, so seed-min and native must refuse these files loudly rather
-	@# than emit a program that calls sx_len() on a double.
+	@# Typed utility modules now run on seed-min too; compare all output.
 	@printf 'use "stdlib/str_util.sa"\nuse "stdlib/list_util.sa"\nuse "stdlib/file_util.sa"\nshow s_len("hello")\nshow s_at("hello", 1)\nshow s_join("ab", "cd")\nshow s_prefix("hello", 3)\nshow s_prefix("hi", 9)\nshow s_suffix("hello", 2)\nshow s_suffix("hi", 9)\nshow s_reverse("hello")\nshow s_repeat("xy", 3)\nshow s_count("banana", 97)\nshow s_contains("banana", 97)\nshow s_contains("banana", 122)\nshow s_eq("ab", "ab")\nshow s_eq("ab", "ac")\nshow s_upper("Hi There 42!")\nshow s_lower("Hi There 42!")\nshow s_starts("hello", "he")\nshow s_starts("hello", "lo")\nshow s_ends("hello", "lo")\nshow s_ends("hello", "he")\nhold xs = [3, 1, 4, 1, 5]\nshow l_len(xs)\nshow l_get(xs, 2)\nshow l_sum(xs)\nshow l_max(xs)\nshow l_min(xs)\nshow l_count(xs, 1)\nshow l_contains(xs, 9)\nhold r = l_reverse(xs)\nshow len(r)\nshow r[0]\nshow r[4]\nhold g = l_range(4)\nshow len(g)\nshow g[3]\nhold p = "$(TESTS)/std_f.txt"\nshow f_write(p, "one\\ntwo\\nthree")\nshow f_read(p)\nshow f_size(p)\nshow f_lines(p)\nshow f_exists(p)\nshow f_exists("$(TESTS)/std_no_such_file")\n' > $(TESTS)/std_sl.sa
 	./$(GEN2) $(TESTS)/std_sl.sa $(TESTS)/std_sl.c >/dev/null
 	$(CC) -O2 -Wall -o $(TESTS)/std_sl $(TESTS)/std_sl.c 2>$(TESTS)/std_sl.warn
@@ -1084,14 +1087,17 @@ test-stdlib: $(GEN2) $(SEED_MIN_BIN)
 	  echo "[FAIL] stdlib str/list/file module produced C that does not build"; \
 	  head -20 $(TESTS)/std_sl.warn; exit 1; fi
 	$(call assert-out,./$(TESTS)/std_sl,5\n101\nabcd\nhel\nhi\nlo\nhi\nolleh\nxyxyxy\n3\n1\n0\n1\n0\nHI THERE 42!\nhi there 42!\n1\n0\n1\n0\n5\n4\n14\n5\n1\n2\n0\n5\n5\n3\n4\n3\n1\none\ntwo\nthree\n13\n3\n1\n0)
-	@if ./$(SEED_MIN_BIN) $(TESTS)/std_sl.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted the str/list module (it must refuse typed parameters)"; exit 1; fi
+	./$(SEED_MIN_BIN) $(TESTS)/std_sl.sa > $(TESTS)/std_sl_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/std_sl_seed $(TESTS)/std_sl_seed.c
+	./$(TESTS)/std_sl_seed > $(TESTS)/std_sl_seed.out
+	./$(TESTS)/std_sl > $(TESTS)/std_sl_g2.out
+	cmp $(TESTS)/std_sl_seed.out $(TESTS)/std_sl_g2.out
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  ./$(NATIVE_BIN) $(TESTS)/std_sl.sa $(TESTS)/std_sl_nat >/dev/null 2>&1 || { echo "[FAIL] native refused the str/list module"; exit 1; }; \
 	  ./$(TESTS)/std_sl_nat > $(TESTS)/std_sl_nat.out; ./$(TESTS)/std_sl > $(TESTS)/std_sl_g2.out; \
 	  cmp $(TESTS)/std_sl_nat.out $(TESTS)/std_sl_g2.out || { echo "[FAIL] native str/list module differs from gen2"; exit 1; }; \
 	fi
-	@echo "[OK] stdlib str/list/file modules on gen2 (typed parameters); native runs them with the same output; seed-min refuses them with a clear error"
+	@echo "[OK] stdlib str/list/file modules on gen2 (typed parameters); seed-min and native run them with the same output"
 
 # ---------------------------------------------------------------------------
 # test-sxpkg-polish: the wrapper's offline behaviour, pinned. The Sayanox binary
@@ -1203,20 +1209,25 @@ test-native-lang: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	./$(GEN2) selfhost/native_lang_test.sa $(TESTS)/nla_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/nla_g2 $(TESTS)/nla_g2.c
 	$(call assert-out,./$(TESTS)/nla_g2,$(NLA_WANT))
-	@if ./$(SEED_MIN_BIN) selfhost/native_lang_test.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted the native-lang test"; exit 1; fi
+	./$(SEED_MIN_BIN) selfhost/native_lang_test.sa > $(TESTS)/nla_seed.c
+	$(CC) -O2 -o $(TESTS)/nla_seed $(TESTS)/nla_seed.c
+	$(call assert-out,./$(TESTS)/nla_seed,$(NLA_WANT))
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  ./$(NATIVE_BIN) selfhost/native_lang_test.sa $(TESTS)/nla_nat || exit 1; \
 	  ./$(TESTS)/nla_nat > $(TESTS)/nla_nat.out || exit 1; \
 	  ./$(TESTS)/nla_g2 > $(TESTS)/nla_g2.out || exit 1; \
 	  cmp $(TESTS)/nla_g2.out $(TESTS)/nla_nat.out || { echo "[FAIL] native language test differs from gen2"; exit 1; }; \
 	  printf 'make f(n) {\n  for i in 0..2 {\n    show i\n  }\n  give 0\n}\nshow f(1)\n' > $(TESTS)/nla_neg1.sa; \
-	  ./$(NATIVE_BIN) $(TESTS)/nla_neg1.sa $(TESTS)/nla_neg1 2>&1 | grep -q 'for inside make' || { echo "[FAIL] native accepted for inside make"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/nla_neg1.sa $(TESTS)/nla_neg1 || exit 1; \
+	  printf '0\n1\n0\n' > $(TESTS)/nla_for_fn.want; \
+	  ./$(TESTS)/nla_neg1 > $(TESTS)/nla_for_fn.out || exit 1; \
+	  cmp $(TESTS)/nla_for_fn.want $(TESTS)/nla_for_fn.out || exit 1; \
 	  printf 'hold a = 1\nbreak\n' > $(TESTS)/nla_neg2.sa; \
 	  ./$(NATIVE_BIN) $(TESTS)/nla_neg2.sa $(TESTS)/nla_neg2 2>&1 | grep -q 'break outside a loop' || { echo "[FAIL] native accepted break outside a loop"; exit 1; }; \
 	  printf 'hold s = "ab"\nwhen s and 1 {\n  show 1\n}\n' > $(TESTS)/nla_neg3.sa; \
 	  ./$(NATIVE_BIN) $(TESTS)/nla_neg3.sa $(TESTS)/nla_neg3 2>&1 | grep -q 'must be a number' || { echo "[FAIL] native accepted a string operand of and"; exit 1; }; \
 	fi
-	@echo "[OK] native: true/false, and/or/not in conditions, elif / else if / else when, for over a range, a list and a string, break and continue; native == gen2 byte for byte; seed-min refuses"
+	@echo "[OK] native: true/false, and/or/not in conditions, elif / else if / else when, for over a range, a list and a string, break and continue; native and seed-min == gen2 byte for byte"
 
 # ---------------------------------------------------------------------------
 # test-native-locals: `hold` inside a make body (added 2026-10-11).  A local
@@ -1265,7 +1276,7 @@ test-give-index: $(GEN2) $(NATIVE_BIN)
 # test-typed-sig: typed signatures (added 2026-10-11).  A make is either fully
 # typed (`make f(a: num, b: num) -> num`) or fully untyped (the shared pure-min
 # form); a partly typed parameter list or a missing return type is an error on
-# gen2 and native.  seed-min refuses the typed form.  Source:
+# all three backends. Seed-min requires an explicit final give.  Source:
 # selfhost/typed_sig_test.sa; expected output hand-computed.
 # ---------------------------------------------------------------------------
 TSG_WANT := 5\n120\n7
@@ -1274,7 +1285,9 @@ test-typed-sig: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	./$(GEN2) selfhost/typed_sig_test.sa $(TESTS)/tsg_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/tsg_g2 $(TESTS)/tsg_g2.c
 	$(call assert-out,./$(TESTS)/tsg_g2,$(TSG_WANT))
-	@if ./$(SEED_MIN_BIN) selfhost/typed_sig_test.sa $(TESTS)/tsg_seed.c >/dev/null 2>&1; then echo "[FAIL] seed-min accepted typed signatures"; exit 1; fi
+	./$(SEED_MIN_BIN) selfhost/typed_sig_test.sa > $(TESTS)/tsg_seed.c
+	$(CC) -O2 -Werror=incompatible-pointer-types -o $(TESTS)/tsg_seed $(TESTS)/tsg_seed.c
+	$(call assert-out,./$(TESTS)/tsg_seed,$(TSG_WANT))
 	@printf 'make bad(a: num, b) -> num {\n  give a + b\n}\nshow bad(1, 2)\n' > $(TESTS)/tsg_mixed.sa
 	@printf 'make bad(a: num) {\n  give a\n}\nshow bad(1)\n' > $(TESTS)/tsg_noret.sa
 	@./$(GEN2) $(TESTS)/tsg_mixed.sa $(TESTS)/tsg_m.c | grep -q 'a typed make needs a type on every parameter' || { echo "[FAIL] gen2 accepted a partly typed signature"; exit 1; }
@@ -1287,7 +1300,7 @@ test-typed-sig: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	  ./$(NATIVE_BIN) $(TESTS)/tsg_mixed.sa $(TESTS)/tsg_m2 2>&1 | grep -q 'a typed signature needs a type on every parameter' || { echo "[FAIL] native accepted a partly typed signature"; exit 1; }; \
 	  ./$(NATIVE_BIN) $(TESTS)/tsg_noret.sa $(TESTS)/tsg_n2 2>&1 | grep -q 'a typed signature needs a return type' || { echo "[FAIL] native accepted a typed signature with no return type"; exit 1; }; \
 	fi
-	@echo "[OK] typed signatures: fully typed make runs on gen2 and native (same output); partly typed or return-less signatures are refused; seed-min refuses typed"
+	@echo "[OK] typed signatures: fully typed make runs on gen2 and native (same output); partly typed or return-less signatures are refused; seed-min matches the fixture"
 
 # ---------------------------------------------------------------------------
 # test-list-expr: list literal elements are numeric expressions (added
@@ -1506,7 +1519,9 @@ test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	./$(GEN2) selfhost/native_cond_test.sa $(TESTS)/nco_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/nco_g2 $(TESTS)/nco_g2.c
 	$(call assert-out,./$(TESTS)/nco_g2,$(NCO_WANT))
-	@if ./$(SEED_MIN_BIN) selfhost/native_cond_test.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted and/or/not conditions"; exit 1; fi
+	./$(SEED_MIN_BIN) selfhost/native_cond_test.sa > $(TESTS)/nco_seed.c
+	$(CC) -O2 -o $(TESTS)/nco_seed $(TESTS)/nco_seed.c
+	$(call assert-out,./$(TESTS)/nco_seed,$(NCO_WANT))
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  ./$(NATIVE_BIN) selfhost/native_cond_test.sa $(TESTS)/nco_nat || exit 1; \
 	  ./$(TESTS)/nco_nat > $(TESTS)/nco_nat.out || exit 1; \
@@ -1520,7 +1535,7 @@ test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	  printf 'hold a = 1\nwhen a and {\n  show 1\n}\n' > $(TESTS)/nco_neg3.sa; \
 	  ./$(NATIVE_BIN) $(TESTS)/nco_neg3.sa $(TESTS)/nco_neg3 2>&1 | grep -q 'missing operand' || { echo "[FAIL] native accepted a dangling and"; exit 1; }; \
 	fi
-	@echo "[OK] and/or/not and parentheses in when/while conditions: gen2 prints the hand-computed output, native matches gen2 (seed-min refuses)"
+	@echo "[OK] and/or/not and parentheses in when/while conditions: gen2 prints the hand-computed output, seed-min and native match gen2"
 
 
 # ---------------------------------------------------------------------------
@@ -1662,9 +1677,11 @@ test-stage2: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN)
 	@diff $(TESTS)/s2.c $(TESTS)/s2_g1.c >/dev/null || { echo "[FAIL] stage2: gen1_min output differs"; exit 1; }
 	$(CC) -O2 -o $(TESTS)/s2_g1 $(TESTS)/s2_g1.c
 	$(call assert-out,./$(TESTS)/s2_g1,1\n0\n1\n2\n3\n5\n6\n8\n1\n0\n7\n8\n3\n4\na\nb\np\nq\n4\n5\n7\n1\n7\n2\n8\n1\n8\n2\n8\n7\n2\n3)
-	@# seed-min is the pure-min dialect: it must refuse every Stage-2 form here
-	@if ./$(SEED_MIN_BIN) $(TESTS)/s2.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted the Stage-2 program"; exit 1; fi
+	./$(SEED_MIN_BIN) $(TESTS)/s2.sa > $(TESTS)/s2_seed.c
+	$(CC) -O2 -Werror=incompatible-pointer-types -o $(TESTS)/s2_seed $(TESTS)/s2_seed.c
+	./$(TESTS)/s2_seed > $(TESTS)/s2_seed.out
+	./$(TESTS)/s2 > $(TESTS)/s2_gen2.out
+	cmp $(TESTS)/s2_seed.out $(TESTS)/s2_gen2.out
 	@# native names the forms it does not have instead of miscompiling them
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  printf 'hold xs = [1, 2]\nfor v in xs {\n  show v\n}\n' > $(TESTS)/s2_for.sa; \
@@ -1683,7 +1700,7 @@ test-stage2: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN)
 	else \
 	  echo "[stage2] native rejection: skipped (native_aot is not built here)"; \
 	fi
-	@echo "[OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min, seed-min refuses, native names for/true and runs and/not in conditions"
+	@echo "[OK] Stage-2 language: and/or/not precedence and short-circuit, not binds looser than a comparison, true/false, for over a list variable/literal/call, nested loops, break/continue, elif chains; gen2 == gen1_min; seed subset tested separately; native supports Stage-2"
 
 # ---------------------------------------------------------------------------
 # test-for-str: the one Stage-2 language slice added on gen2 (2026-10-08).
@@ -1731,9 +1748,14 @@ test-for-str: $(GEN2) $(SEED_MIN_BIN)
 	@printf 'hold c = [1, 2]\nhold s = "ab"\nfor c in s {\n  show c\n}\n' > $(TESTS)/fs_listclash.sa
 	./$(GEN2) $(TESTS)/fs_listclash.sa $(TESTS)/fs_listclash.c >/dev/null 2>&1 || true
 	@grep -q "'c' is already a number or a list" $(TESTS)/fs_listclash.c
-	@# seed-min is the pure-min dialect: it must refuse the statement
-	@if ./$(SEED_MIN_BIN) $(TESTS)/fs_vowels.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted for c in s (gen2-only statement)"; exit 1; fi
+	@# Seed-min matches gen2 on named string-source iteration
+	@for case in vowels brk nest bytes; do \
+	  ./$(SEED_MIN_BIN) $(TESTS)/fs_$$case.sa > $(TESTS)/fs_$${case}_seed.c || exit 1; \
+	  $(CC) -O2 -o $(TESTS)/fs_$${case}_seed $(TESTS)/fs_$${case}_seed.c || exit 1; \
+	  ./$(TESTS)/fs_$${case}_seed > $(TESTS)/fs_$${case}_seed.out || exit 1; \
+	  ./$(TESTS)/fs_$$case > $(TESTS)/fs_$${case}_gen2.out || exit 1; \
+	  cmp $(TESTS)/fs_$${case}_seed.out $(TESTS)/fs_$${case}_gen2.out || exit 1; \
+	done
 	@# native (when built) runs for over a string (since 2026-10-11, test-native-lang)
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  printf 'hold word = "abc"\nfor ch in word {\n  show ch\n}\n' > $(TESTS)/fs_nat.sa; \
@@ -1751,7 +1773,7 @@ test-for-str: $(GEN2) $(SEED_MIN_BIN)
 	  if ./$(NATIVE_BIN) $(TESTS)/fs_pair.sa $(TESTS)/fs_pair_nat 2>&1 | grep -q 'type parameters used by every parameter'; then :; \
 	  else echo "[FAIL] native did not reject make NAME<...>"; exit 1; fi; \
 	fi
-	@echo "[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min refuses it by name; native runs it"
+	@echo "[OK] Stage-2 slice: for c in <string> on gen2 (vowels, break/continue, empty, nested, rebinding, bytes); seed-min matches variable-source cases; native runs it"
 
 # ---------------------------------------------------------------------------
 # test-registry-sums: every repository package carries a `sum=` line in its
@@ -1816,9 +1838,12 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 	  ./$(NATIVE_BIN) $(TESTS)/gg_ord.sa $(TESTS)/gg_ordnat >/dev/null 2>&1 && ./$(TESTS)/gg_ordnat > $(TESTS)/gg_ord_nat.out && cmp $(TESTS)/gg_ord_nat.out $(TESTS)/gg_ord_g2.out || { echo "[FAIL] native string ordering differs from gen2"; exit 1; }; \
 	  if ./$(NATIVE_BIN) $(TESTS)/gg_ordmix.sa $(TESTS)/gg_ordmixnat >/dev/null 2>&1; then echo "[FAIL] native accepted string < number"; exit 1; fi; \
 	fi
-	@# the chain forms: seed-min refuses them; gen2 and native run them
-	@if ./$(SEED_MIN_BIN) $(TESTS)/gg_chain.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted an else-when/else-if chain"; exit 1; fi
+	@# the chain forms: seed-min, gen2 and native agree
+	./$(SEED_MIN_BIN) $(TESTS)/gg_chain.sa > $(TESTS)/gg_chain_seed.c
+	$(CC) -O2 -o $(TESTS)/gg_chain_seed $(TESTS)/gg_chain_seed.c
+	./$(TESTS)/gg_chain_seed > $(TESTS)/gg_chain_seed.out
+	./$(TESTS)/gg_chain > $(TESTS)/gg_chain_g2.out
+	cmp $(TESTS)/gg_chain_seed.out $(TESTS)/gg_chain_g2.out
 	@# native runs the chain forms too (they landed with elif): it must match gen2
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  ./$(NATIVE_BIN) $(TESTS)/gg_chain.sa $(TESTS)/gg_nat || exit 1; \
@@ -1826,7 +1851,7 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 	  ./$(TESTS)/gg_chain > $(TESTS)/gg_chain_g2.out || exit 1; \
 	  cmp $(TESTS)/gg_chain_g2.out $(TESTS)/gg_nat.out || { echo "[FAIL] native else-if chain differs from gen2"; exit 1; }; \
 	fi
-	@echo "[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native refuse the chains"
+	@echo "[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native match the chains"
 
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -2255,7 +2280,7 @@ clean:
 # ---------------------------------------------------------------------------
 doctor:
 	@fail=0; \
-	echo "Sayanox minimal toolchain check"; \
+	echo "Sayanox core toolchain check"; \
 	echo "--------------------------------"; \
 	printf 'make            '; \
 	if command -v make >/dev/null 2>&1; then echo "OK   $$(command -v make)"; \
@@ -2293,6 +2318,650 @@ doctor:
 	  && echo "present, but NOT used anywhere on the bootstrap path" \
 	  || echo "absent - fine, nothing needs it"; \
 	echo "--------------------------------"; \
-	if [ $$fail -eq 0 ]; then echo "DOCTOR-OK: minimal tool set is complete"; \
+	if [ $$fail -eq 0 ]; then echo "DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)"; \
 	else echo "DOCTOR-FAIL: a required tool is missing"; exit 1; fi
 
+
+.PHONY: test-stdlib-interpolation
+test-stdlib-interpolation: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/stdlib_interpolation_test.sa > $(TESTS)/interp_seed.c
+	$(CC) -O2 -o $(TESTS)/interp_seed $(TESTS)/interp_seed.c
+	./$(GEN2) selfhost/stdlib_interpolation_test.sa $(TESTS)/interp_gen2.c
+	$(CC) -O2 -o $(TESTS)/interp_gen2 $(TESTS)/interp_gen2.c
+	$(call assert-out,./$(TESTS)/interp_seed,2\n10\n4\n-6\n0\n0.25\n1\n0\n0.5\n1\n25\n0.5)
+	$(call assert-out,./$(TESTS)/interp_gen2,2\n10\n4\n-6\n0\n0.25\n1\n0\n0.5\n1\n25\n0.5)
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/stdlib_interpolation_test.sa $(TESTS)/interp_native || exit 1; \
+	  ./$(TESTS)/interp_native > $(TESTS)/interp_native.out || exit 1; \
+	  ./$(TESTS)/interp_seed > $(TESTS)/interp_seed.out || exit 1; \
+	  cmp $(TESTS)/interp_native.out $(TESTS)/interp_seed.out || exit 1; \
+	  echo '[OK] native interpolation parity'; \
+	else echo '[SKIP] native interpolation: native_aot not built'; fi
+	@echo "[OK] interpolation helpers: seed-min, gen2 (native when built); endpoints, fractions, extrapolation"
+test-stdlib-growth: test-stdlib-interpolation
+
+.PHONY: test-seed-stage2
+test-seed-stage2: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_stage2_test.sa > $(TESTS)/seed_s2.c
+	$(CC) -O2 -o $(TESTS)/seed_s2 $(TESTS)/seed_s2.c
+	./$(GEN2) selfhost/seed_stage2_test.sa $(TESTS)/seed_s2_g2.c
+	$(CC) -O2 -o $(TESTS)/seed_s2_g2 $(TESTS)/seed_s2_g2.c
+	$(call assert-out,./$(TESTS)/seed_s2,1\n0\n0\n1\n1\n0\n0\n1\n8\n8\n3\n11\n21\n2\n4\na\nand or not true false elif break continue)
+	$(call assert-out,./$(TESTS)/seed_s2_g2,1\n0\n0\n1\n1\n0\n0\n1\n8\n8\n3\n11\n21\n2\n4\na\nand or not true false elif break continue)
+	@for text in 'break' 'continue' 'show not "x"' 'show 1 and "x"' 'show [] or 1' 'show 1 and'; do \
+	  printf '%s\n' "$$text" > $(TESTS)/seed_s2_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/seed_s2_bad.sa > $(TESTS)/seed_s2_bad.c 2> $(TESTS)/seed_s2_bad.err; then echo "[FAIL] seed accepted $$text"; exit 1; fi; \
+	done
+	@printf 'for c in concat(1, "b") { show c }\n' > $(TESTS)/seed_for_bad.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/seed_for_bad.sa > /dev/null 2> $(TESTS)/seed_for_bad.err; then echo '[FAIL] seed accepted unsupported for'; exit 1; fi
+	@grep -q 'seed-min for' $(TESTS)/seed_for_bad.err
+	@echo '[OK] seed Stage-2: boolean values/conditions, short circuit, elif, named-source for, break/continue; gen2 parity and clear refusals'
+test-stage2: test-seed-stage2
+test-for-str: test-seed-stage2
+
+test-stdlib: test-stdlib-interpolation
+
+.PHONY: test-seed-limits
+test-seed-limits: $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@for text in 'make id<T>(x: num) -> T { give x }' 'make first<A,B>(x: A) -> B { give x }'; do \
+	  printf '%s\n' "$$text" > $(TESTS)/seed_generic_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/seed_generic_bad.sa >/dev/null 2>$(TESTS)/seed_generic_bad.err; then echo '[FAIL] seed accepted generics'; exit 1; fi; \
+	  grep -q 'seed-min.*\(generic\|type parameter\)' $(TESTS)/seed_generic_bad.err || exit 1; \
+	done
+	@for text in 'hold xs = [1]\nfor x in xs() { show x }' 'hold xs = [1]\nfor xs in xs { show xs }' 'hold n = 1\nfor x in n { show x }' 'hold n = 1\nhold s = "ab"\nfor n in s { show n }' 'make f() { hold xs = [1]\nfor x in xs { show x }\ngive 0 }'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/seed_for_limit.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/seed_for_limit.sa >/dev/null 2>$(TESTS)/seed_for_limit.err; then echo '[FAIL] seed accepted unsafe iteration'; exit 1; fi; \
+	  grep -q 'seed-min for' $(TESTS)/seed_for_limit.err || exit 1; \
+	done
+	@echo '[OK] seed limits: invalid generic signatures and unsupported for diagnostics'
+test-generics: test-seed-limits
+test-stage2: test-seed-limits
+
+.PHONY: test-pkg-errors
+test-pkg-errors: sxpkg
+	@mkdir -p $(TESTS)/pkg-errors-empty
+	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-empty sh tools/sxpkg.sh search math >$(TESTS)/pkg-search.err 2>&1; then echo '[FAIL] search without local index succeeded'; exit 1; fi
+	@grep -q 'no local index' $(TESTS)/pkg-search.err
+	@# A regular file cannot be used as a project directory.
+	@printf 'not a directory\n' > $(TESTS)/pkg-errors-file
+	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-file sh tools/sxpkg.sh verify >$(TESTS)/pkg-verify.err 2>&1; then echo '[FAIL] verify swallowed project failure'; exit 1; fi
+	@grep -q 'could not run verify' $(TESTS)/pkg-verify.err
+	@echo '[OK] package errors: search never implicitly syncs; verify propagates execution/project failure'
+test-pkgs: test-pkg-errors
+
+.PHONY: test-seed-assignment
+test-seed-assignment: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_assignment_test.sa > $(TESTS)/seed_assign.c
+	$(CC) -O2 -o $(TESTS)/seed_assign $(TESTS)/seed_assign.c
+	./$(GEN2) selfhost/seed_assignment_test.sa $(TESTS)/seed_assign_g2.c
+	$(CC) -O2 -o $(TESTS)/seed_assign_g2 $(TESTS)/seed_assign_g2.c
+	$(call assert-out,./$(TESTS)/seed_assign,3\nabbb\n3\n9\n10\n3\n4)
+	$(call assert-out,./$(TESTS)/seed_assign_g2,3\nabbb\n3\n9\n10\n3\n4)
+	@for text in 'missing = 1' 'hold n = 1\nn = "wrong"' 'hold s = "a"\ns = 7' 'hold xs = []\nxs = "wrong"'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/seed_assign_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/seed_assign_bad.sa >/dev/null 2>$(TESTS)/seed_assign_bad.err; then echo '[FAIL] seed accepted invalid assignment'; exit 1; fi; \
+	  grep -q 'assignment' $(TESTS)/seed_assign_bad.err || exit 1; \
+	done
+	./$(SEED_MIN_BIN) selfhost/seed_assignment_names_test.sa > $(TESTS)/seed_assign_names.c
+	$(CC) -O2 -o $(TESTS)/seed_assign_names $(TESTS)/seed_assign_names.c
+	$(call assert-out,./$(TESTS)/seed_assign_names,underscore\nprefix\ntemporary)
+	@echo '[OK] seed assignments: numeric/string/list, function locals, type errors, conditional aliases; gen2 parity'
+test-stage2: test-seed-assignment
+
+.PHONY: test-seed-hold-types
+test-seed-hold-types: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_hold_types_test.sa > $(TESTS)/seed_types.c
+	$(CC) -O2 -Werror=incompatible-pointer-types -o $(TESTS)/seed_types $(TESTS)/seed_types.c
+	./$(GEN2) selfhost/seed_hold_types_test.sa $(TESTS)/seed_types_g2.c
+	$(CC) -O2 -o $(TESTS)/seed_types_g2 $(TESTS)/seed_types_g2.c
+	$(call assert-out,./$(TESTS)/seed_types,1\n4\nhello!\n3\n9\n7\nok\n8\nbranch\n8\n6)
+	$(call assert-out,./$(TESTS)/seed_types_g2,1\n4\nhello!\n3\n9\n7\nok\n8\nbranch\n8\n6)
+	@for text in 'hold n: num = "x"' 'hold s: str = 1' 'hold xs: list = "x"' 'hold n: num = 1\nhold n = "x"' 'hold n: num = 1\nn = "x"' 'hold s: str = "x"\nhold s: num = 1' 'hold x: unknown = 1' 'make f() { hold x: num = 1\ngive x }'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/seed_types_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/seed_types_bad.sa >/dev/null 2>$(TESTS)/seed_types_bad.err; then echo '[FAIL] seed discarded a type annotation'; exit 1; fi; \
+	  grep -q 'hold' $(TESTS)/seed_types_bad.err || exit 1; \
+	done
+	@echo '[OK] seed hold types: num/str/list, checked initializers and reassignments; gen2 parity; unsupported annotations rejected'
+test-stage2: test-seed-hold-types
+
+.PHONY: test-lsp-unicode
+test-lsp-unicode: $(LSP_BIN) tools/sayanox-lsp-unicode.sh
+	$(call assert-out,sh tools/sayanox-lsp-unicode.sh ./$(LSP_BIN),raw UTF-8 and JSON Unicode escapes agree\nUTF-16 advertised\nUTF-16 hover after BMP and supplementary characters\ndiagnostic range does not split surrogate pair\nempty full-text didChange clears document\ndidClose releases document state\nempty change array and unrelated URI preserve document)
+	@echo '[OK] LSP Unicode and lifecycle: accented Latin, Bengali, emoji, UTF-16 positions, empty changes and close'
+test-lsp: test-lsp-unicode
+
+.PHONY: test-seed-for-literals
+SFL_WANT := tick\n2\n3\n7\n99\na\nc\n1\na\n1\na\n2\nb\n1\nb\n2\n2\ntick\n7\ntick\n7\ndone
+test-seed-for-literals: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_for_literals_test.sa > $(TESTS)/for_lit_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/for_lit_seed $(TESTS)/for_lit_seed.c
+	./$(GEN2) selfhost/seed_for_literals_test.sa $(TESTS)/for_lit_gen2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/for_lit_gen2 $(TESTS)/for_lit_gen2.c
+	$(call assert-out,./$(TESTS)/for_lit_seed,$(SFL_WANT))
+	$(call assert-out,./$(TESTS)/for_lit_gen2,$(SFL_WANT))
+	@for text in 'hold c = 1\nfor c in "ab" { show c }' 'hold x = "a"\nfor x in [1] { show x }' 'for x in ["a"] { show x }' 'for x in [[1]] { show x }' 'for c in "a" + "b" { show c }' 'for c in "a" show c' 'hold _sx_iter_src_0 = 1'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/for_lit_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/for_lit_bad.sa >/dev/null 2>$(TESTS)/for_lit_bad.err; then echo '[FAIL] seed accepted invalid literal iteration'; exit 1; fi; \
+	  test -s $(TESTS)/for_lit_bad.err || exit 1; \
+	done
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/seed_for_literals_test.sa $(TESTS)/for_lit_native || exit 1; \
+	  ./$(TESTS)/for_lit_native > $(TESTS)/for_lit_native.out || exit 1; \
+	  ./$(TESTS)/for_lit_seed > $(TESTS)/for_lit_seed.out || exit 1; \
+	  cmp $(TESTS)/for_lit_seed.out $(TESTS)/for_lit_native.out || exit 1; \
+	  echo '[OK] native literal-for parity'; \
+	else echo '[SKIP] native literal-for parity: native_aot not built'; fi
+	@echo '[OK] seed literal for: string/list, one evaluation per entry, nested/empty loops, break/continue, UTF-8 bytes, errors; gen2 parity'
+test-stage2: test-seed-for-literals
+test-for-str: test-seed-for-literals
+
+.PHONY: test-seed-for-range
+SFR_WANT := 0\n1\n2\n3\n4\n5\n-1\n0\n1\n0.5\n1.5\n1\n2\n3\n0\n2\n3\n4\n0\n2\n10\n12\n5\n6\n7\n97\n98\n2\n3\n0\n2\n4\n6\n0\n1\nrange-done
+test-seed-for-range: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_for_range_test.sa > $(TESTS)/for_range_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/for_range_seed $(TESTS)/for_range_seed.c
+	./$(GEN2) selfhost/seed_for_range_test.sa $(TESTS)/for_range_gen2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/for_range_gen2 $(TESTS)/for_range_gen2.c
+	$(call assert-out,./$(TESTS)/for_range_seed,$(SFR_WANT))
+	$(call assert-out,./$(TESTS)/for_range_gen2,$(SFR_WANT))
+	@for text in 'for i in 0.. { show i }' 'for i in ..3 { show i }' 'for i in 1...3 { show i }' 'for i in 1.2.3..4 { show i }' 'for i in 0..2..3 { show i }' 'for i in 0.."x" { show i }' 'hold s = "a"\nfor i in s..3 { show i }' 'for i in 0..missing { show i }' 'for i in 0..len(1) { show i }' 'for i in 0..len() { show i }' 'hold s = "a"\nfor i in 0..len(s,s) { show i }' 'for i in 0..f() { show i }' 'hold i = []\nfor i in 0..3 { show i }' 'for true in 0..3 { show true }' 'for i in -"x"..3 { show i }' 'for i in 0..([] == []) { show i }' 'hold xs = [1]\nfor i in 0..xs["bad"] { show i }' 'hold n = 2\nfor i in 0..n.missing { show i }' 'show 1..2' 'show 2.' 'show 1.2.3'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/for_range_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/for_range_bad.sa >/dev/null 2>$(TESTS)/for_range_bad.err; then echo "[FAIL] seed accepted invalid range: $$text"; exit 1; fi; \
+	  test -s $(TESTS)/for_range_bad.err || exit 1; \
+	done
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/seed_for_range_test.sa $(TESTS)/for_range_native || exit 1; \
+	  __got=$$(./$(TESTS)/for_range_native) || exit 1; \
+	  __want=$$(printf '%b' '$(SFR_WANT)'); \
+	  [ "$$__got" = "$$__want" ] || { echo '[FAIL] native range output changed'; printf '%s\n' "$$__got"; exit 1; }; \
+	  echo '[OK] native range regression: live upper bound matches seed/gen2'; \
+	else echo '[SKIP] native range regression: native_aot not built'; fi
+	@echo '[OK] seed numeric ranges: half-open, fractional/negative bounds, empty/nested loops, live end bound, binder mutation, break/continue, len, errors; gen2 parity'
+test-stage2: test-seed-for-range
+
+.PHONY: test-seed-for-calls
+SFC_WANT := labels\na\nb\nvalues\n4\n6\n100\nx\nA\nchanged\n1\n2\n2\nlabels\na\nlabels\na\nA\n9\nvalues\n0\n3\nfile\n1\nh\ni\ncalls-done
+test-seed-for-calls: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_for_calls_test.sa > $(TESTS)/for_calls_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/for_calls_seed $(TESTS)/for_calls_seed.c
+	./$(GEN2) selfhost/seed_for_calls_test.sa $(TESTS)/for_calls_gen2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/for_calls_gen2 $(TESTS)/for_calls_gen2.c
+	$(call assert-out,./$(TESTS)/for_calls_seed,$(SFC_WANT))
+	$(call assert-out,./$(TESTS)/for_calls_gen2,$(SFC_WANT))
+	./$(SEED_MIN_BIN) selfhost/seed_producer_forward_test.sa > $(TESTS)/producer_forward.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/producer_forward $(TESTS)/producer_forward.c
+	$(call assert-out,./$(TESTS)/producer_forward,o\nk\n8\n9)
+	@for text in 'for x in missing() { show x }' 'for x in chr("x") { show x }' 'for x in concat(1,"a") { show x }' 'for x in concat("a") { show x }' 'for x in chr(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17) { show x }' 'for x in push("x",1) { show x }' 'for x in push([],"x") { show x }' 'for x in read_file(1) { show x }' 'for x in chr(absent) { show x }' 'make f() -> num { give 2 }\nfor x in f() { show x }' 'make f() -> str { give 2 }' 'make f() -> list { give "x" }' 'make f() -> str { show "no give" }' 'make f(n) -> str { give "x" }' 'make f() -> other { give 1 }' 'make f() -> str { give missing() }' 'make f() -> str { hold s = "x"\nhold s = 2\ngive s }' 'hold global = "x"\nmake f() -> str { give global }' 'make f() -> str { when "bad" { give "x" }\ngive "y" }' 'make f() -> str { give "x" }\nfor x in f(1) { show x }' 'make f() -> str { give "x" }\nmake f() -> str { give "y" }' 'make f() { give "wrong" }\nfor x in chr(f()) { show x }'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/for_calls_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/for_calls_bad.sa >/dev/null 2>$(TESTS)/for_calls_bad.err; then echo "[FAIL] seed accepted invalid producer/call: $$text"; exit 1; fi; \
+	  grep -q 'seed_min:' $(TESTS)/for_calls_bad.err || exit 1; \
+	done
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/seed_for_calls_test.sa $(TESTS)/for_calls_native || exit 1; \
+	  ./$(TESTS)/for_calls_native > $(TESTS)/for_calls_native.out || exit 1; \
+	  ./$(TESTS)/for_calls_seed > $(TESTS)/for_calls_seed.out || exit 1; \
+	  cmp $(TESTS)/for_calls_seed.out $(TESTS)/for_calls_native.out || exit 1; \
+	  echo '[OK] native call-source fixture matches seed/gen2'; \
+	else echo '[SKIP] native call-source fixture: native_aot not built'; fi
+	@part=x; i=0; while [ $$i -lt 15 ]; do part=$$part$$part; i=$$((i+1)); done; \
+	  printf 'for ch in concat("%s","%s") { show ch }\n' "$$part" "$$part" > $(TESTS)/for_calls_large.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/for_calls_large.sa >/dev/null 2>$(TESTS)/for_calls_large.err; then echo '[FAIL] seed accepted oversized lowering'; exit 1; fi
+	@grep -q '64 KiB lowering limit' $(TESTS)/for_calls_large.err
+	@echo '[OK] seed call-source for: checked builtins and zero-argument producers, capture once, local isolation, empty/nested loops, errors; gen2 parity'
+test-stage2: test-seed-for-calls
+test-for-str: test-seed-for-calls
+
+.PHONY: test-seed-typed-functions
+STP_WANT := keep\nkeep!\nkeep\nb\na!\nxyxyxy\n3\n10\nkeep+\nkeep\n3\n4\nz\n+\ntyped-done
+STL_WANT := 3\n0\n2\n3\n10\n10\nok!\nglobal\nloops-done
+test-seed-typed-functions: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_typed_params_test.sa > $(TESTS)/typed_params_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/typed_params_seed $(TESTS)/typed_params_seed.c
+	./$(GEN2) selfhost/seed_typed_params_test.sa $(TESTS)/typed_params_gen2.c
+	$(CC) -O2 -Werror=incompatible-pointer-types -o $(TESTS)/typed_params_gen2 $(TESTS)/typed_params_gen2.c
+	$(call assert-out,./$(TESTS)/typed_params_seed,$(STP_WANT))
+	$(call assert-out,./$(TESTS)/typed_params_gen2,$(STP_WANT))
+	./$(SEED_MIN_BIN) selfhost/seed_typed_loops_test.sa > $(TESTS)/typed_loops_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/typed_loops_seed $(TESTS)/typed_loops_seed.c
+	./$(GEN2) selfhost/seed_typed_loops_test.sa $(TESTS)/typed_loops_gen2.c
+	$(CC) -O2 -Werror=incompatible-pointer-types -o $(TESTS)/typed_loops_gen2 $(TESTS)/typed_loops_gen2.c
+	$(call assert-out,./$(TESTS)/typed_loops_seed,$(STL_WANT))
+	$(call assert-out,./$(TESTS)/typed_loops_gen2,$(STL_WANT))
+	./$(SEED_MIN_BIN) selfhost/seed_typed_scope_test.sa > $(TESTS)/typed_scope_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/typed_scope_seed $(TESTS)/typed_scope_seed.c
+	$(call assert-out,./$(TESTS)/typed_scope_seed,9\n11\nforward!\n1)
+	@for text in 'make f(a: str) -> str { give a }\nshow f(1)' 'make f(a: str) -> str { give a }\nshow f(concat(1, 2))' 'make f(a: num) -> num { give a }\nshow f(missing)' 'make f(a: str) -> str { give a }\nshow f(unknown())' 'make f(a: list) -> list { give a }\nhold x = f("bad")' 'make f(a: num) -> num { give a }\nshow f()' 'make f(a: num, b) -> num { give a }' 'make f(a, b: str) -> str { give b }' 'make f(a: str) { give a }' 'make f(a: num, a: num) -> num { give a }' 'make f(a: other) -> num { give 1 }' 'make f(a: str) -> str { a = 1\ngive a }' 'make f(a: str) -> str { hold a: num = 1\ngive a }' 'make f() -> num { when true { hold x = 1 }\ngive x }' 'make f() -> num { when true { give 1 } }' 'make f(s: str) -> num { while s { show 1 }\ngive 0 }' 'make f() -> num { hold n: num = "bad"\ngive n }' 'make f() -> num { hold n: num = 1\nhold n: str = "bad"\ngive 0 }'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/typed_functions_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/typed_functions_bad.sa >/dev/null 2>$(TESTS)/typed_functions_bad.err; then echo "[FAIL] invalid typed function accepted: $$text"; exit 1; fi; \
+	  grep -q 'seed_min:' $(TESTS)/typed_functions_bad.err || exit 1; \
+	done
+	@echo '[OK] seed typed functions: num/str/list parameters, alias-safe strings, control flow, recursion, scoped locals, annotations and function-local for; exact gen2 parity'
+test-typed-sig: test-seed-typed-functions
+
+# Include the new seed regression in both full bootstrap and native gates.
+test-stage2: test-seed-typed-functions
+
+.PHONY: test-native-param-reassign
+test-native-param-reassign: $(NATIVE_BIN) $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(NATIVE_BIN) selfhost/seed_typed_params_test.sa $(TESTS)/npr_existing
+	$(call assert-out,./$(TESTS)/npr_existing,$(STP_WANT))
+	./$(SEED_MIN_BIN) selfhost/native_param_reassign_test.sa > $(TESTS)/npr_seed.c
+	$(CC) -O2 -o $(TESTS)/npr_seed $(TESTS)/npr_seed.c
+	./$(GEN2) selfhost/native_param_reassign_test.sa $(TESTS)/npr_gen2.c
+	$(CC) -O2 -o $(TESTS)/npr_gen2 $(TESTS)/npr_gen2.c
+	./$(NATIVE_BIN) selfhost/native_param_reassign_test.sa $(TESTS)/npr_native
+	$(call assert-out,./$(TESTS)/npr_seed,1\n2\n9\naxxx\na)
+	$(call assert-out,./$(TESTS)/npr_gen2,1\n2\n9\naxxx\na)
+	$(call assert-out,./$(TESTS)/npr_native,1\n2\n9\naxxx\na)
+	./$(NATIVE_BIN) selfhost/native_param_gc_test.sa $(TESTS)/npr_gc
+	$(call assert-out,./$(TESTS)/npr_gc,local!\nlocal!!\nglobal\n99\n1\n2\n7)
+	@for text in 'make f(s: str) -> str { s = 1\ngive s }\nshow f("a")' 'make f(xs: list) -> list { xs = "bad"\ngive xs }\nhold a = [1]\nhold b = f(a)' 'make f(n: num) -> num { n = "bad"\ngive n }\nshow f(1)'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/npr_bad.sa; \
+	  if ./$(NATIVE_BIN) $(TESTS)/npr_bad.sa $(TESTS)/npr_bad 2>$(TESTS)/npr_bad.err; then echo '[FAIL] native accepted a parameter kind change'; exit 1; fi; \
+	  grep -q 'assignment to parameter' $(TESTS)/npr_bad.err || exit 1; \
+	done
+	@echo '[OK] native parameter reassignment: num/str/list, aliases, recursion, GC roots, parameter-before-global lookup and kind errors'
+test-native-locals: test-native-param-reassign
+native-test: test-native-param-reassign
+
+.PHONY: test-native-range-live
+test-native-range-live: $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(NATIVE_BIN) selfhost/native_range_live_test.sa $(TESTS)/nrl_native
+	$(call assert-out,./$(TESTS)/nrl_native,0\n1\n3\n2\n4\n5\n0\n1\n8)
+	@echo '[OK] native-only live range bounds: call side effects, empty range, break and continue'
+test-seed-for-range: test-native-range-live
+
+.PHONY: test-native-for-functions
+NFF_WANT := $(STL_WANT)\n3\n8\n21
+test-native-for-functions: $(NATIVE_BIN) $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/native_for_functions_test.sa > $(TESTS)/nff_seed.c
+	$(CC) -O2 -o $(TESTS)/nff_seed $(TESTS)/nff_seed.c
+	./$(GEN2) selfhost/native_for_functions_test.sa $(TESTS)/nff_gen2.c
+	$(CC) -O2 -o $(TESTS)/nff_gen2 $(TESTS)/nff_gen2.c
+	./$(NATIVE_BIN) selfhost/native_for_functions_test.sa $(TESTS)/nff_native
+	$(call assert-out,./$(TESTS)/nff_seed,$(NFF_WANT))
+	$(call assert-out,./$(TESTS)/nff_gen2,$(NFF_WANT))
+	$(call assert-out,./$(TESTS)/nff_native,$(NFF_WANT))
+	./$(NATIVE_BIN) selfhost/native_for_gc_test.sa $(TESTS)/nff_gc
+	$(call assert-out,./$(TESTS)/nff_gc,30\n1\n1\n99\n7)
+	@printf 'make bad(s: str) -> num {\n for s in 0..2 { show s }\n give 0\n}\nshow bad("x")\n' > $(TESTS)/nff_bad.sa
+	@if ./$(NATIVE_BIN) $(TESTS)/nff_bad.sa $(TESTS)/nff_bad 2>$(TESTS)/nff_bad.err; then echo '[FAIL] native accepted wrong-kind parameter binder'; exit 1; fi
+	@grep -q 'two different types' $(TESTS)/nff_bad.err
+	@printf 'make f() -> num {\n hold total = 0\n for v in [1, 2, 3] {\n hold __for0_idx = 999\n total = total + 1\n }\n give total\n}\nshow f()\n' > $(TESTS)/nff_names.sa
+	./$(NATIVE_BIN) $(TESTS)/nff_names.sa $(TESTS)/nff_names
+	$(call assert-out,./$(TESTS)/nff_names,3)
+	@echo '[OK] native function-local for: recursive ranges/lists/strings, nested loops, parameter binder, break/continue; seed/gen2/native parity'
+test-native-locals: test-native-for-functions
+native-test: test-native-for-functions
+
+.PHONY: test-native-list-alias
+NLA_ALIAS_WANT := 100\n100\n100\n99\n101\n700\n1\n101\n101\n46\n46\n88
+test-native-list-alias: $(NATIVE_BIN) $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/native_list_alias_test.sa > $(TESTS)/alias_seed.c
+	$(CC) -O2 -o $(TESTS)/alias_seed $(TESTS)/alias_seed.c
+	./$(GEN2) selfhost/native_list_alias_test.sa $(TESTS)/alias_gen2.c
+	$(CC) -O2 -o $(TESTS)/alias_gen2 $(TESTS)/alias_gen2.c
+	./$(NATIVE_BIN) selfhost/native_list_alias_test.sa $(TESTS)/alias_native
+	$(call assert-out,./$(TESTS)/alias_seed,$(NLA_ALIAS_WANT))
+	$(call assert-out,./$(TESTS)/alias_gen2,$(NLA_ALIAS_WANT))
+	$(call assert-out,./$(TESTS)/alias_native,$(NLA_ALIAS_WANT))
+	./$(NATIVE_BIN) selfhost/native_list_alias_gc_test.sa $(TESTS)/alias_gc
+	$(call assert-out,./$(TESTS)/alias_gc,100\n99\nglobal\n100\n123\n[list len=101])
+	@echo '[OK] native list growth preserves aliases: parameters, rebinding, multiple growths, length/index/show, explicit GC and reclaimed-block reuse; portable fixture matches seed/gen2'
+test-native-locals: test-native-list-alias
+native-test: test-native-list-alias
+
+.PHONY: test-seed-generics
+SGEN_WANT := 3\nhi\n2\nfirst\nsecond\n2\n8\nnested\n15\n3\n6\no\nk\n4\n5\n6
+test-seed-generics: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_generics_test.sa > $(TESTS)/sgen_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sgen_seed $(TESTS)/sgen_seed.c
+	./$(GEN2) selfhost/seed_generics_test.sa $(TESTS)/sgen_gen2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sgen_gen2 $(TESTS)/sgen_gen2.c
+	./$(NATIVE_BIN) selfhost/seed_generics_test.sa $(TESTS)/sgen_native
+	$(call assert-out,./$(TESTS)/sgen_seed,$(SGEN_WANT))
+	$(call assert-out,./$(TESTS)/sgen_gen2,$(SGEN_WANT))
+	$(call assert-out,./$(TESTS)/sgen_native,$(SGEN_WANT))
+	./$(SEED_MIN_BIN) selfhost/seed_generics_extended_test.sa > $(TESTS)/sgen_extended.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sgen_extended $(TESTS)/sgen_extended.c
+	$(call assert-out,./$(TESTS)/sgen_extended,3\nhi\n2\nfirst\nsecond\n2\n8\nnested\n15\nxyxyxy\n3\n6\no\nk\n4\n5\n6)
+	./$(SEED_MIN_BIN) selfhost/seed_generics_scope_test.sa > $(TESTS)/sgen_scope.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sgen_scope $(TESTS)/sgen_scope.c
+	$(call assert-out,./$(TESTS)/sgen_scope,7\nT : T }\nkept\n7\nT : T }\n9\n5)
+	./$(SEED_MIN_BIN) selfhost/seed_generics_test.sa > $(TESTS)/sgen_again.c
+	cmp $(TESTS)/sgen_seed.c $(TESTS)/sgen_again.c
+	@test "$$(grep -c '^static .*_sx_gen_0_.*){' $(TESTS)/sgen_seed.c)" = 3
+	@! grep -q '^static .*_sx_gen_4_' $(TESTS)/sgen_seed.c
+	@for text in 'make f<T>(a: T, b: T) -> T { give a }\nshow f(1,"bad")' 'make f<T>(a: T) -> T { give a }\nshow f()' 'make f<T>(a: T) -> U { give a }' 'make f<T,T>(a: T) -> T { give a }' 'make f<T,U>(a: T) -> U { give a }' 'make f<T>(a: num) -> T { give a }' 'make f<T>(a: T) -> T { give "bad" }\nshow f(1)' 'make f<T>(a: T) -> T { hold value: T = "bad"\ngive a }\nshow f(1)' 'make f<T>(a: T) -> T { give _sx_gen_0_1(a) }\nshow f(1)' 'make f<T>(a: T) -> T { when true { give a } }\nshow f(1)'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/sgen_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/sgen_bad.sa >/dev/null 2>$(TESTS)/sgen_bad.err; then echo "[FAIL] invalid generic accepted: $$text"; exit 1; fi; \
+	  grep -q 'seed_min:' $(TESTS)/sgen_bad.err || exit 1; \
+	done
+	@awk 'BEGIN { print "make many<A,B,C,D,E,F>(a:A,b:B,c:C,d:D,e:E,f:F)->A { give a }"; for (i=0;i<512;i++) { n=i; printf "show many("; for (j=0;j<6;j++) { k=n%3; n=int(n/3); printf "%s%s",j?",":"",k==0?"1":k==1?"\"s\"":"[]" } print ")" } }' > $(TESTS)/sgen_limit.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/sgen_limit.sa >/dev/null 2>$(TESTS)/sgen_limit.err; then echo '[FAIL] seed exceeded specialization limit'; exit 1; fi
+	@grep -q 'function/specialization limit is 512' $(TESTS)/sgen_limit.err
+	@echo '[OK] seed generic specialization: num/str/list, multiple type parameters, nested/recursive/forward calls, annotations, aliasing, deduplication, deterministic output and diagnostics'
+test-generics: test-seed-generics
+native-test: test-seed-generics
+
+.PHONY: test-native-generic-local
+test-native-generic-local: $(NATIVE_BIN) $(SEED_MIN_BIN) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(NATIVE_BIN) selfhost/seed_typed_loops_test.sa $(TESTS)/ngl_loops
+	$(call assert-out,./$(TESTS)/ngl_loops,$(STL_WANT))
+	./$(NATIVE_BIN) selfhost/seed_generics_extended_test.sa $(TESTS)/ngl_extended
+	$(call assert-out,./$(TESTS)/ngl_extended,3\nhi\n2\nfirst\nsecond\n2\n8\nnested\n15\nxyxyxy\n3\n6\no\nk\n4\n5\n6)
+	./$(NATIVE_BIN) selfhost/native_generic_local_test.sa $(TESTS)/ngl_native
+	./$(SEED_MIN_BIN) selfhost/native_generic_local_test.sa > $(TESTS)/ngl_seed.c
+	$(CC) -O2 -o $(TESTS)/ngl_seed $(TESTS)/ngl_seed.c
+	./$(GEN2) selfhost/native_generic_local_test.sa $(TESTS)/ngl_gen2.c
+	$(CC) -O2 -o $(TESTS)/ngl_gen2 $(TESTS)/ngl_gen2.c
+	$(call assert-out,./$(TESTS)/ngl_native,9\nhello!\n3\nhello)
+	$(call assert-out,./$(TESTS)/ngl_seed,9\nhello!\n3\nhello)
+	$(call assert-out,./$(TESTS)/ngl_gen2,9\nhello!\n3\nhello)
+	@for text in 'hold n: num = "bad"' 'hold xs: list = 3' 'hold s: str = "a"\nhold s: num = 2' 'hold x: other = 1' 'make f() -> num { hold x: num = "bad"\ngive 0 }\nshow f()' 'make f<T>(x:T)->T { hold local:T = "bad"\ngive x }\nshow f(1)' 'make f<T>(x:T)->T { give concat(x,"bad") }\nshow f(1)'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/ngl_bad.sa; \
+	  if ./$(NATIVE_BIN) $(TESTS)/ngl_bad.sa $(TESTS)/ngl_bad 2>$(TESTS)/ngl_bad.err; then echo "[FAIL] native accepted wrong annotation/generic body: $$text"; exit 1; fi; \
+	  grep -q 'native_aot:' $(TESTS)/ngl_bad.err || exit 1; \
+	done
+	@echo '[OK] native local annotations and demand-driven generic bodies: num/str/list, local T, string-only recursion, no unused numeric base, kind errors'
+test-native-locals: test-native-generic-local
+native-test: test-native-generic-local
+
+.PHONY: test-gen2-forward
+G2F_WANT := forward!\n2\n4\n1\n1\nzero
+test-gen2-forward: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/gen2_forward_test.sa $(TESTS)/g2f.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -Werror=strict-prototypes -o $(TESTS)/g2f $(TESTS)/g2f.c
+	./$(GEN1_MIN) selfhost/gen2_forward_test.sa $(TESTS)/g2f_g1.c
+	cmp $(TESTS)/g2f.c $(TESTS)/g2f_g1.c
+	./$(SEED_MIN_BIN) selfhost/gen2_forward_test.sa > $(TESTS)/g2f_seed.c
+	$(CC) -O2 -o $(TESTS)/g2f_seed $(TESTS)/g2f_seed.c
+	./$(NATIVE_BIN) selfhost/gen2_forward_test.sa $(TESTS)/g2f_native
+	$(call assert-out,./$(TESTS)/g2f,$(G2F_WANT))
+	$(call assert-out,./$(TESTS)/g2f_seed,$(G2F_WANT))
+	$(call assert-out,./$(TESTS)/g2f_native,$(G2F_WANT))
+	@echo '[OK] gen2 typed forward calls: string/list/numeric, mutual recursion, zero arguments; gen1/gen2 C identical and seed/native output parity'
+test-typed-sig: test-gen2-forward
+native-test: test-gen2-forward
+
+.PHONY: test-gen2-function-scope
+G2S_WANT := 12\n13\n11\n7\n8\n18\nglobal
+test-gen2-function-scope: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/gen2_scope_test.sa $(TESTS)/g2s.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/g2s $(TESTS)/g2s.c
+	./$(GEN1_MIN) selfhost/gen2_scope_test.sa $(TESTS)/g2s_g1.c
+	cmp $(TESTS)/g2s.c $(TESTS)/g2s_g1.c
+	./$(SEED_MIN_BIN) selfhost/gen2_scope_test.sa > $(TESTS)/g2s_seed.c
+	$(CC) -O2 -o $(TESTS)/g2s_seed $(TESTS)/g2s_seed.c
+	$(call assert-out,./$(TESTS)/g2s,$(G2S_WANT))
+	$(call assert-out,./$(TESTS)/g2s_seed,$(G2S_WANT))
+	@echo '[OK] gen2 function scope: isolated parameters/locals, sibling blocks with different kinds, elif, nested while/for and outer reassignment; seed output parity'
+test-typed-sig: test-gen2-function-scope
+native-test: test-gen2-function-scope
+
+.PHONY: test-gen2-boolean-args
+G2B_WANT := 1\n0\n1\n2\n1\n1\n0\nyes!\nno\n7\n9\ntrue false true_value\n4\n5
+test-gen2-boolean-args: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/gen2_boolean_args_test.sa $(TESTS)/g2b.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/g2b $(TESTS)/g2b.c
+	./$(GEN1_MIN) selfhost/gen2_boolean_args_test.sa $(TESTS)/g2b_g1.c
+	cmp $(TESTS)/g2b.c $(TESTS)/g2b_g1.c
+	./$(SEED_MIN_BIN) selfhost/gen2_boolean_args_test.sa > $(TESTS)/g2b_seed.c
+	$(CC) -O2 -o $(TESTS)/g2b_seed $(TESTS)/g2b_seed.c
+	./$(NATIVE_BIN) selfhost/gen2_boolean_args_test.sa $(TESTS)/g2b_native
+	$(call assert-out,./$(TESTS)/g2b,$(G2B_WANT))
+	$(call assert-out,./$(TESTS)/g2b_seed,$(G2B_WANT))
+	$(call assert-out,./$(TESTS)/g2b_native,$(G2B_WANT))
+	@printf 'make number(n: num) -> num {\n give n\n}\nshow number(true == false)\n' > $(TESTS)/g2b_compare.sa
+	./$(GEN2) $(TESTS)/g2b_compare.sa $(TESTS)/g2b_compare.c
+	$(CC) -O2 -o $(TESTS)/g2b_compare $(TESTS)/g2b_compare.c
+	$(call assert-out,./$(TESTS)/g2b_compare,0)
+	@echo '[OK] gen2 boolean call arguments: hold/show, nested/parenthesized calls, arithmetic, comparisons; strings, longer identifiers and boolean-named fields preserved'
+test-typed-sig: test-gen2-boolean-args
+native-test: test-gen2-boolean-args
+
+.PHONY: test-gen2-generic-queue
+test-gen2-generic-queue: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/seed_generics_extended_test.sa $(TESTS)/g2g_extended.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/g2g_extended $(TESTS)/g2g_extended.c
+	$(call assert-out,./$(TESTS)/g2g_extended,3\nhi\n2\nfirst\nsecond\n2\n8\nnested\n15\nxyxyxy\n3\n6\no\nk\n4\n5\n6)
+	./$(GEN1_MIN) selfhost/seed_generics_extended_test.sa $(TESTS)/g2g_extended_g1.c
+	cmp $(TESTS)/g2g_extended.c $(TESTS)/g2g_extended_g1.c
+	./$(GEN2) selfhost/gen2_generic_queue_test.sa $(TESTS)/g2g.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/g2g $(TESTS)/g2g.c
+	./$(SEED_MIN_BIN) selfhost/gen2_generic_queue_test.sa > $(TESTS)/g2g_seed.c
+	$(CC) -O2 -o $(TESTS)/g2g_seed $(TESTS)/g2g_seed.c
+	./$(NATIVE_BIN) selfhost/gen2_generic_queue_test.sa $(TESTS)/g2g_native
+	$(call assert-out,./$(TESTS)/g2g,3\ns\n2\n8)
+	$(call assert-out,./$(TESTS)/g2g_seed,3\ns\n2\n8)
+	$(call assert-out,./$(TESTS)/g2g_native,3\ns\n2\n8)
+	@echo '[OK] gen2 generic queue: repeated nested requests, numeric/string/list variants, recursive extended fixture and function/parameter name collisions'
+test-generics: test-gen2-generic-queue
+native-test: test-gen2-generic-queue
+
+.PHONY: test-gen2-list-return
+G2LR_WANT := 0\n3\n3\n3\n4\n6\n0\n9\n0\n4\n0\n11\n12\n8
+test-gen2-list-return: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/gen2_list_return_test.sa $(TESTS)/g2lr.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/g2lr $(TESTS)/g2lr.c
+	./$(GEN1_MIN) selfhost/gen2_list_return_test.sa $(TESTS)/g2lr_g1.c
+	cmp $(TESTS)/g2lr.c $(TESTS)/g2lr_g1.c
+	./$(SEED_MIN_BIN) selfhost/gen2_list_return_test.sa > $(TESTS)/g2lr_seed.c
+	$(CC) -O2 -o $(TESTS)/g2lr_seed $(TESTS)/g2lr_seed.c
+	./$(NATIVE_BIN) selfhost/gen2_list_return_test.sa $(TESTS)/g2lr_native
+	$(call assert-out,./$(TESTS)/g2lr,$(G2LR_WANT))
+	$(call assert-out,./$(TESTS)/g2lr_seed,$(G2LR_WANT))
+	$(call assert-out,./$(TESTS)/g2lr_native,$(G2LR_WANT))
+	@for text in 'make f() -> num {\n give []\n}\nshow f()' 'make f() -> list {\n give ["bad"]\n}\nhold xs = f()' 'make f() -> list {\n give [[1]]\n}\nhold xs = f()' 'make f() -> list {\n give [1][0]\n}\nhold xs = f()'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/g2lr_bad.sa; \
+	  ./$(GEN2) $(TESTS)/g2lr_bad.sa $(TESTS)/g2lr_bad.c > $(TESTS)/g2lr_bad.log; \
+	  grep -q '^#error' $(TESTS)/g2lr_bad.c || { echo '[FAIL] gen2 accepted an invalid list return'; exit 1; }; \
+	done
+	@echo '[OK] gen2 list-literal returns: empty/numeric/expression elements, forward/generic functions, branch/loop timing, collision-free temporaries and diagnostics; seed/native parity'
+test-typed-sig: test-gen2-list-return
+native-test: test-gen2-list-return
+
+.PHONY: test-gen2-list-args
+G2LA_WANT := 0\n3\n1\n9\n2\n1\n9\n2\n3\n3\n2\n8\n-9\n0.5\n12\n[1,2] is text
+test-gen2-list-args: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/gen2_list_args_test.sa $(TESTS)/g2la.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/g2la $(TESTS)/g2la.c
+	./$(GEN1_MIN) selfhost/gen2_list_args_test.sa $(TESTS)/g2la_g1.c
+	cmp $(TESTS)/g2la.c $(TESTS)/g2la_g1.c
+	./$(SEED_MIN_BIN) selfhost/gen2_list_args_test.sa > $(TESTS)/g2la_seed.c
+	$(CC) -O2 -o $(TESTS)/g2la_seed $(TESTS)/g2la_seed.c
+	./$(NATIVE_BIN) selfhost/gen2_list_args_test.sa $(TESTS)/g2la_native
+	$(call assert-out,./$(TESTS)/g2la,$(G2LA_WANT))
+	$(call assert-out,./$(TESTS)/g2la_seed,$(G2LA_WANT))
+	$(call assert-out,./$(TESTS)/g2la_native,$(G2LA_WANT))
+	@printf 'show sx_index([8,9],1)\n' > $(TESTS)/g2la_index.sa
+	./$(GEN2) $(TESTS)/g2la_index.sa $(TESTS)/g2la_index.c
+	$(CC) -O2 -Werror=incompatible-pointer-types -o $(TESTS)/g2la_index $(TESTS)/g2la_index.c
+	$(call assert-out,./$(TESTS)/g2la_index,9)
+	@for expr in '["bad"]' '[[1]]' '[1,]' '[1+]' '[1 2]' '[()]' '[(1+2]' '[1)]' '[1.2.3]' '[-]' '[1][0]' '[1]+2'; do \
+	  printf 'make size(xs: list) -> num {\n give len(xs)\n}\nshow size(%s)\n' "$$expr" > $(TESTS)/g2la_bad.sa; \
+	  ./$(GEN2) $(TESTS)/g2la_bad.sa $(TESTS)/g2la_bad.c > $(TESTS)/g2la_bad.log; \
+	  grep -q '^#error.*inline list arguments' $(TESTS)/g2la_bad.c || { echo "[FAIL] invalid/unsupported inline list accepted: $$expr"; exit 1; }; \
+	done
+	@echo '[OK] gen2 inline numeric list arguments: push/len/user/generic calls, multi-digit counts, fresh loop-condition allocation and diagnostics; shared fixture matches seed/native, direct list index builtin checked separately'
+test-typed-sig: test-gen2-list-args
+native-test: test-gen2-list-args
+
+.PHONY: test-gen2-gc-roots
+test-gen2-gc-roots: $(GEN2)
+	@mkdir -p $(TESTS)
+	$(CC) -O0 -o $(TESTS)/gen2_o0 $(GEN2_C)
+	./$(TESTS)/gen2_o0 selfhost/gen2_list_return_test.sa $(TESTS)/gc_root_return_o0.c
+	./$(GEN2) selfhost/gen2_list_return_test.sa $(TESTS)/gc_root_return_o2.c
+	cmp $(TESTS)/gc_root_return_o0.c $(TESTS)/gc_root_return_o2.c
+	./$(TESTS)/gen2_o0 selfhost/gen2_list_args_test.sa $(TESTS)/gc_root_args_o0.c
+	./$(GEN2) selfhost/gen2_list_args_test.sa $(TESTS)/gc_root_args_o2.c
+	cmp $(TESTS)/gc_root_args_o0.c $(TESTS)/gc_root_args_o2.c
+	./$(GEN2) selfhost/gen2_gc_roots_test.sa $(TESTS)/gc_roots.c
+	$(CC) -O0 -o $(TESTS)/gc_roots_o0 $(TESTS)/gc_roots.c
+	$(CC) -O2 -o $(TESTS)/gc_roots_o2 $(TESTS)/gc_roots.c
+	$(call assert-out,./$(TESTS)/gc_roots_o0,main-root\n3\n5\nfunction-root\n7\n_sx_gc_programx)
+	$(call assert-out,./$(TESTS)/gc_roots_o2,main-root\n3\n5\nfunction-root\n7\n_sx_gc_programx)
+	@echo '[OK] gen2 GC roots: caller-frame anchor, O0/O2 compiler output parity, 2000 explicit collections, live string/list/function roots and wrapper-name collisions'
+test-typed-sig: test-gen2-gc-roots
+native-test: test-gen2-gc-roots
+
+.PHONY: test-gen2-list-arithmetic
+G2LX_WANT := 7\n9\n2.66667\n17\n2\n5\n2\n6\n-20\n3\n3\n2\n3\n[1 + 2] stays text\n4.5\n7\n1
+test-gen2-list-arithmetic: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/gen2_list_arithmetic_test.sa $(TESTS)/g2lx.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/g2lx $(TESTS)/g2lx.c
+	./$(GEN1_MIN) selfhost/gen2_list_arithmetic_test.sa $(TESTS)/g2lx_g1.c
+	cmp $(TESTS)/g2lx.c $(TESTS)/g2lx_g1.c
+	./$(SEED_MIN_BIN) selfhost/gen2_list_arithmetic_test.sa > $(TESTS)/g2lx_seed.c
+	$(CC) -O2 -o $(TESTS)/g2lx_seed $(TESTS)/g2lx_seed.c
+	./$(NATIVE_BIN) selfhost/gen2_list_arithmetic_test.sa $(TESTS)/g2lx_native
+	$(call assert-out,./$(TESTS)/g2lx,$(G2LX_WANT))
+	$(call assert-out,./$(TESTS)/g2lx_seed,$(G2LX_WANT))
+	$(call assert-out,./$(TESTS)/g2lx_native,$(G2LX_WANT))
+	$(CC) -O0 -o $(TESTS)/g2lx_o0 $(TESTS)/g2lx.c
+	$(call assert-out,./$(TESTS)/g2lx_o0,$(G2LX_WANT))
+	@echo '[OK] gen2 inline list arithmetic: precedence, grouping, fractional division, signed operands, generic results, return/condition paths, fresh loop allocations; seed/native parity and O0/O2 programs'
+test-typed-sig: test-gen2-list-arithmetic
+native-test: test-gen2-list-arithmetic
+
+.PHONY: test-return-paths
+RETURN_PATHS_WANT := -1\n0\n1\n9\nyes } give //\nno { when\n1\n0\n2\n3\n8\ngeneric
+test-return-paths: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/return_paths_test.sa $(TESTS)/return_paths.c
+	./$(GEN1_MIN) selfhost/return_paths_test.sa $(TESTS)/return_paths_g1.c
+	cmp $(TESTS)/return_paths.c $(TESTS)/return_paths_g1.c
+	$(CC) -O2 -Werror=return-type -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/return_paths $(TESTS)/return_paths.c
+	./$(SEED_MIN_BIN) selfhost/return_paths_test.sa > $(TESTS)/return_paths_seed.c
+	$(CC) -O2 -Werror=return-type -o $(TESTS)/return_paths_seed $(TESTS)/return_paths_seed.c
+	./$(NATIVE_BIN) selfhost/return_paths_test.sa $(TESTS)/return_paths_native
+	$(call assert-out,./$(TESTS)/return_paths,$(RETURN_PATHS_WANT))
+	$(call assert-out,./$(TESTS)/return_paths_seed,$(RETURN_PATHS_WANT))
+	$(call assert-out,./$(TESTS)/return_paths_native,$(RETURN_PATHS_WANT))
+	sh selfhost/test_return_paths.sh ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)
+	@echo '[OK] return paths: exhaustive/nested branches, elif chains, suffix returns, early returns, num/str/list and generic functions; seed/gen2/native parity'
+test-typed-sig: test-return-paths
+native-test: test-return-paths
+
+.PHONY: test-name-resolution
+NAME_RESOLUTION_WANT := 4\n8\n9\n3\n4\nghost // { and missing() are only text\n5\n3\n4\ngeneric\n1\n2\no\nk
+test-name-resolution: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/name_resolution_test.sa $(TESTS)/name_resolution.c
+	./$(GEN1_MIN) selfhost/name_resolution_test.sa $(TESTS)/name_resolution_g1.c
+	cmp $(TESTS)/name_resolution.c $(TESTS)/name_resolution_g1.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/name_resolution $(TESTS)/name_resolution.c
+	./$(SEED_MIN_BIN) selfhost/name_resolution_test.sa > $(TESTS)/name_resolution_seed.c
+	$(CC) -O2 -o $(TESTS)/name_resolution_seed $(TESTS)/name_resolution_seed.c
+	./$(NATIVE_BIN) selfhost/name_resolution_test.sa $(TESTS)/name_resolution_native
+	$(call assert-out,./$(TESTS)/name_resolution,$(NAME_RESOLUTION_WANT))
+	$(call assert-out,./$(TESTS)/name_resolution_seed,$(NAME_RESOLUTION_WANT))
+	$(call assert-out,./$(TESTS)/name_resolution_native,$(NAME_RESOLUTION_WANT))
+	sh selfhost/test_name_resolution.sh ./$(GEN2) $(TESTS)
+	@echo '[OK] name resolution: field labels/selectors, builtin-like bindings, quotes/comments, typed forward calls, generic calls and function scopes; positive seed/gen2/native parity'
+test-typed-sig: test-name-resolution
+native-test: test-name-resolution
+
+.PHONY: test-inline-expressions
+INLINE_EXPRESSIONS_WANT := 8\n9\n9\n4\n7\n2\n1\n0\n2.66667\n10\n4\n2\n11\n12\n3\n99\n5\n1\n1\n8\n4\n5\n4\n-2\n3
+INLINE_SEQUENCE_WANT := 1\n2\n3\n3\n22\n2\n77\n0\n1\n2
+test-inline-expressions: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/inline_expressions_test.sa $(TESTS)/inline_expr.c
+	./$(GEN1_MIN) selfhost/inline_expressions_test.sa $(TESTS)/inline_expr_g1.c
+	cmp $(TESTS)/inline_expr.c $(TESTS)/inline_expr_g1.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/inline_expr $(TESTS)/inline_expr.c
+	./$(SEED_MIN_BIN) selfhost/inline_expressions_test.sa > $(TESTS)/inline_expr_seed.c
+	$(CC) -O2 -o $(TESTS)/inline_expr_seed $(TESTS)/inline_expr_seed.c
+	./$(NATIVE_BIN) selfhost/inline_expressions_test.sa $(TESTS)/inline_expr_native
+	$(call assert-out,./$(TESTS)/inline_expr,$(INLINE_EXPRESSIONS_WANT))
+	$(call assert-out,./$(TESTS)/inline_expr_seed,$(INLINE_EXPRESSIONS_WANT))
+	$(call assert-out,./$(TESTS)/inline_expr_native,$(INLINE_EXPRESSIONS_WANT))
+	./$(GEN2) selfhost/inline_sequence_test.sa $(TESTS)/inline_seq.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/inline_seq $(TESTS)/inline_seq.c
+	$(CC) -O0 -o $(TESTS)/inline_seq_o0 $(TESTS)/inline_seq.c
+	./$(NATIVE_BIN) selfhost/inline_sequence_test.sa $(TESTS)/inline_seq_native
+	$(call assert-out,./$(TESTS)/inline_seq,$(INLINE_SEQUENCE_WANT))
+	$(call assert-out,./$(TESTS)/inline_seq_o0,$(INLINE_SEQUENCE_WANT))
+	$(call assert-out,./$(TESTS)/inline_seq_native,$(INLINE_SEQUENCE_WANT))
+	sh selfhost/test_inline_expression_errors.sh ./$(GEN2) $(TESTS)
+	@echo '[OK] typed inline expressions: variables, checked calls/generics, nested list consumers, indexing, modulo/comparisons and lexical kinds; shared fixture matches seed/native'
+	@echo '[OK] inline sequencing: gen2 O0/O2 and native agree on left-to-right single evaluation, fresh loop conditions and generated-name collisions (seed checked separately by test-seed-list-sequence)'
+test-typed-sig: test-inline-expressions
+native-test: test-inline-expressions
+
+.PHONY: test-inline-runtime
+test-inline-runtime: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	./$(GEN2) selfhost/inline_runtime_test.sa $(TESTS)/inline_runtime.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/inline_runtime $(TESTS)/inline_runtime.c
+	./$(SEED_MIN_BIN) selfhost/inline_runtime_test.sa > $(TESTS)/inline_runtime_seed.c
+	$(CC) -O2 -o $(TESTS)/inline_runtime_seed $(TESTS)/inline_runtime_seed.c
+	./$(NATIVE_BIN) selfhost/inline_runtime_test.sa $(TESTS)/inline_runtime_native
+	$(call assert-out,./$(TESTS)/inline_runtime,1\n2\n98\n2)
+	$(call assert-out,./$(TESTS)/inline_runtime_seed,1\n2\n98\n2)
+	$(call assert-out,./$(TESTS)/inline_runtime_native,1\n2\n98\n2)
+	@echo '[OK] inline-only runtime dependencies: string comparison, concatenation/length, literal indexing and nested numeric-list consumers; seed/gen2/native parity'
+test-inline-expressions: test-inline-runtime
+
+.PHONY: test-seed-list-sequence
+SEED_LIST_SEQUENCE_WANT := 2\n1\n11\n12\n26\n4\n5\n6\n7\n3\n42
+test-seed-list-sequence: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/inline_sequence_test.sa > $(TESTS)/seq_shared_seed.c
+	$(CC) -O0 -o $(TESTS)/seq_shared_seed_o0 $(TESTS)/seq_shared_seed.c
+	$(CC) -O2 -o $(TESTS)/seq_shared_seed $(TESTS)/seq_shared_seed.c
+	$(call assert-out,./$(TESTS)/seq_shared_seed_o0,$(INLINE_SEQUENCE_WANT))
+	$(call assert-out,./$(TESTS)/seq_shared_seed,$(INLINE_SEQUENCE_WANT))
+	./$(SEED_MIN_BIN) selfhost/seed_list_sequence_test.sa > $(TESTS)/seq_recursive_seed.c
+	$(CC) -O0 -o $(TESTS)/seq_recursive_seed_o0 $(TESTS)/seq_recursive_seed.c
+	$(CC) -O2 -o $(TESTS)/seq_recursive_seed $(TESTS)/seq_recursive_seed.c
+	./$(GEN2) selfhost/seed_list_sequence_test.sa $(TESTS)/seq_recursive_gen2.c
+	$(CC) -O2 -o $(TESTS)/seq_recursive_gen2 $(TESTS)/seq_recursive_gen2.c
+	./$(NATIVE_BIN) selfhost/seed_list_sequence_test.sa $(TESTS)/seq_recursive_native
+	$(call assert-out,./$(TESTS)/seq_recursive_seed_o0,$(SEED_LIST_SEQUENCE_WANT))
+	$(call assert-out,./$(TESTS)/seq_recursive_seed,$(SEED_LIST_SEQUENCE_WANT))
+	$(call assert-out,./$(TESTS)/seq_recursive_gen2,$(SEED_LIST_SEQUENCE_WANT))
+	$(call assert-out,./$(TESTS)/seq_recursive_native,$(SEED_LIST_SEQUENCE_WANT))
+	@echo '[OK] seed list sequencing: O0/O2, nested and recursive constructors, mutable-list observations, loop conditions, source-name collisions; shared gen2/native order'
+test-typed-sig: test-seed-list-sequence
+native-test: test-seed-list-sequence
+
+.PHONY: test-list-postfix
+LIST_POSTFIX_WANT := 10\n4\n97\n20\n20\n6\n2\n9\n12\n3\n40\n50\n99\ntyped
+test-list-postfix: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/list_postfix_test.sa > $(TESTS)/postfix_seed.c
+	./$(GEN2) selfhost/list_postfix_test.sa $(TESTS)/postfix_gen2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/postfix_seed $(TESTS)/postfix_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/postfix_gen2 $(TESTS)/postfix_gen2.c
+	./$(NATIVE_BIN) selfhost/list_postfix_test.sa $(TESTS)/postfix_native
+	$(call assert-out,./$(TESTS)/postfix_seed,$(LIST_POSTFIX_WANT))
+	$(call assert-out,./$(TESTS)/postfix_gen2,$(LIST_POSTFIX_WANT))
+	$(call assert-out,./$(TESTS)/postfix_native,$(LIST_POSTFIX_WANT))
+	sh selfhost/test_list_postfix_errors.sh ./$(GEN2) ./$(SEED_MIN_BIN) $(TESTS)
+	@echo '[OK] inline nested numeric/string fields, grouped list postfix call arguments, indexed generic returns, expression-kind generic inference: seed/gen2/native parity'
+test-typed-sig: test-list-postfix
+native-test: test-list-postfix

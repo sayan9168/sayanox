@@ -1,0 +1,33 @@
+make _sx_gc_program() -> num {
+  give 7
+}
+make collision() -> num {
+  give _sx_gc_program()
+}
+make preserve(n: num) -> str {
+  hold held = concat("function", "-root")
+  while n > 0 {
+    hold garbage = concat("temporary", "-data")
+    hold reclaimed = gc()
+    n = n - 1
+  }
+  give held
+}
+hold held = concat("main", "-root")
+hold values = [4, 5, 6]
+hold alias = values
+hold name_collision = "_sx_gc_programx"
+hold i = 0
+while i < 2000 {
+  hold garbage = concat("trash", "-data")
+  hold scratch = [1, 2, 3, 4]
+  push(scratch, 5)
+  hold reclaimed = gc()
+  i = i + 1
+}
+show held
+show len(values)
+show alias[1]
+show preserve(5)
+show collision()
+show name_collision

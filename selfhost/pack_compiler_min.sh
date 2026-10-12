@@ -14,7 +14,7 @@ gzip -9 -n -c selfhost/compiler_min.sa | base64 -w 0 > "$tmp/blob.txt"
 mkdir -p "$tmp/chunks"
 awk '{ L=length($0); i=0; n=0
        while (i<L) { chunk=substr($0,i+1,1100); i+=1100
-         printf "%s", chunk > sprintf("'"$tmp"'/chunks/%02d.b64", n); n++ }
+         printf "%s", chunk > sprintf("'"$tmp"'/chunks/%04d.b64", n); n++ }
      }' "$tmp/blob.txt"
 
 rm -f "$SRC"/*.b64

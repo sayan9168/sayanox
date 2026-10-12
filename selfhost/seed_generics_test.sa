@@ -1,0 +1,38 @@
+make id<T>(a: T) -> T {
+  give a
+}
+make first<A, B>(a: A, b: B) -> A {
+  give a
+}
+make second<A, B>(a: A, b: B) -> B {
+  give b
+}
+make sum_to<T>(n: T) -> T {
+  when n <= 0 {
+    give 0
+  }
+  give n + sum_to(n - 1)
+}
+make unused<T>(a: T) -> T {
+  give a
+}
+hold xs = [4, 5]
+show id(3)
+show id("hi")
+show len(id(xs))
+show first("first", 7)
+show second(7, "second")
+show len(second("ignored", xs))
+show id(8)
+show id("nested")
+show sum_to(5)
+hold aliased = id(xs)
+push(aliased, id(6))
+show len(xs)
+show xs[2]
+for ch in id("ok") {
+  show ch
+}
+for a in id(xs) {
+  show a
+}

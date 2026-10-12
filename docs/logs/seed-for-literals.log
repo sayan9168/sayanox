@@ -1,0 +1,20 @@
+cc -O2 -o selfhost/seed/sxc_seed_min selfhost/seed/sxc_seed_min.c
+[OK] seed-min
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/seed/sxc_seed_min selfhost/seed_for_literals_test.sa > selfhost/seed_tests/for_lit_seed.c
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/for_lit_seed selfhost/seed_tests/for_lit_seed.c
+./selfhost/gen2 selfhost/seed_for_literals_test.sa selfhost/seed_tests/for_lit_gen2.c
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/for_lit_gen2 selfhost/seed_tests/for_lit_gen2.c
+[OK] seed literal for: string/list, one evaluation per entry, nested/empty loops, break/continue, UTF-8 bytes, errors; gen2 parity
+./selfhost/seed/sxc_seed_min selfhost/seed_stage2_test.sa > selfhost/seed_tests/seed_s2.c
+cc -O2 -o selfhost/seed_tests/seed_s2 selfhost/seed_tests/seed_s2.c
+./selfhost/gen2 selfhost/seed_stage2_test.sa selfhost/seed_tests/seed_s2_g2.c
+cc -O2 -o selfhost/seed_tests/seed_s2_g2 selfhost/seed_tests/seed_s2_g2.c
+[OK] seed Stage-2: boolean values/conditions, short circuit, elif, named-source for, break/continue; gen2 parity and clear refusals
+[OK] seed limits: explicit single/multi-generic and unsupported for diagnostics

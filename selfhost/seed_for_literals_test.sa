@@ -1,0 +1,45 @@
+// Literal sources are evaluated once per loop entry, not per iteration.
+make tick() {
+  show "tick"
+  give 7
+}
+hold n = 2
+for value in [n, n + 1, tick()] {
+  show value
+  n = 99
+}
+show n
+for ch in "abc" {
+  when ch == "b" { continue }
+  show ch
+}
+for x in [1, 2, 3] {
+  when x == 2 { break }
+  show x
+}
+for ch in "" {
+  show "bad-empty-string"
+}
+for x in [] {
+  show "bad-empty-list"
+}
+for ch in "ab" {
+  for x in [1, 2] {
+    show ch
+    show x
+  }
+}
+hold bytes = 0
+for ch in "é" {
+  bytes = bytes + 1
+}
+show bytes
+// Literal loop initialization happens each time its enclosing loop enters.
+hold repeat = 0
+while repeat < 2 {
+  for x in [tick()] {
+    show x
+  }
+  repeat = repeat + 1
+}
+show "done"

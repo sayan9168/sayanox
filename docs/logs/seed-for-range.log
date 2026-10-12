@@ -1,0 +1,16 @@
+cc -O2 -o selfhost/seed/sxc_seed_min selfhost/seed/sxc_seed_min.c
+[OK] seed-min
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/seed/sxc_seed_min selfhost/seed_for_range_test.sa > selfhost/seed_tests/for_range_seed.c
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/for_range_seed selfhost/seed_tests/for_range_seed.c
+./selfhost/gen2 selfhost/seed_for_range_test.sa selfhost/seed_tests/for_range_gen2.c
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/for_range_gen2 selfhost/seed_tests/for_range_gen2.c
+[OK] native range regression: upper bound is snapshotted (known difference from seed/gen2)
+[OK] seed numeric ranges: half-open, fractional/negative bounds, empty/nested loops, live end bound, binder mutation, break/continue, len, errors; gen2 parity
+[OK] seed limits: explicit single/multi-generic and unsupported for diagnostics

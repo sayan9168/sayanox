@@ -1,0 +1,2 @@
+$ ASAN_OPTIONS=detect_leaks=0 seed_generic_sanitized <extended/scope fixtures>
+[OK] seed compiler ASan/UBSan: extended and scope generic fixtures; leak detection disabled

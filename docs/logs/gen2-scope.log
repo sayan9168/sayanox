@@ -1,0 +1,14 @@
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 selfhost/gen2_scope_test.sa selfhost/seed_tests/g2s.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/g2s selfhost/seed_tests/g2s.c
+./selfhost/gen1_min selfhost/gen2_scope_test.sa selfhost/seed_tests/g2s_g1.c
+cmp selfhost/seed_tests/g2s.c selfhost/seed_tests/g2s_g1.c
+./selfhost/seed/sxc_seed_min selfhost/gen2_scope_test.sa > selfhost/seed_tests/g2s_seed.c
+cc -O2 -o selfhost/seed_tests/g2s_seed selfhost/seed_tests/g2s_seed.c
+[OK] gen2 function scope: isolated parameters/locals, sibling blocks with different kinds, elif, nested while/for and outer reassignment; seed output parity

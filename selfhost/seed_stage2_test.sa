@@ -1,0 +1,54 @@
+show true
+show false
+show not 2 == 2
+show not not 4
+show 1 or 0 and 0
+show (1 or 0) and 0
+show false and (10 % 0)
+show true or (10 % 0)
+hold n = 0
+hold total = 0
+while n < 8 and not n == 7 {
+  hold n = n + 1
+  when n == 2 { continue }
+  when n == 5 { break }
+  hold total = total + n
+}
+show total
+when total == 1 { show 100 }
+elif total == 8 { show 8 }
+elif true { show 200 }
+otherwise { show 300 }
+make count(n) {
+  hold k = 0
+  while n > 0 {
+    hold n = n - 1
+    when n == 2 { continue }
+    hold k = k + 1
+    when k == 3 { break }
+  }
+  give k
+}
+show count(6)
+hold i = 0
+while i < 2 {
+  hold i = i + 1
+  hold j = 0
+  while true {
+    hold j = j + 1
+    when j == 2 { break }
+    show i * 10 + j
+  }
+}
+hold values = [2, 3, 4, 5]
+for v in values {
+  when v == 3 { continue }
+  when v == 5 { break }
+  show v
+}
+hold text = "ab"
+for ch in text {
+  show ch
+  hold text = "x"
+}
+show "and or not true false elif break continue"

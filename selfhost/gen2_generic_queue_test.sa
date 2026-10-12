@@ -1,0 +1,18 @@
+make earlier<T>(n: T) -> T {
+  give n
+}
+make n<T>(x: T) -> T {
+  give x
+}
+make pair<T>(a: T, b: T) -> T {
+  give b
+}
+make outer<T>(x: T) -> T {
+  give pair(n(x), n(x))
+}
+show outer(3)
+show outer("s")
+hold values = [1, 2]
+hold result = outer(values)
+show len(result)
+show n(8)

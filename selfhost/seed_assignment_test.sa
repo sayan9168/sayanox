@@ -1,0 +1,31 @@
+hold n = 0
+hold s = "a"
+hold xs = [1, 2]
+hold ys = [7, 8]
+while n < 3 {
+  n = n + 1
+  s = concat(s, "b")
+}
+show n
+show s
+xs = ys
+push(xs, 9)
+show len(ys)
+show ys[2]
+make countdown(n) {
+  hold result = 0
+  while n > 0 {
+    result = result + n
+    n = n - 1
+  }
+  give result
+}
+show countdown(4)
+when n == 1 { show 100 }
+else if n == 2 { show 200 }
+otherwise when n == 3 { show 3 }
+else { show 400 }
+when false { show 500 }
+else when false { show 600 }
+otherwise if false { show 700 }
+otherwise { show 4 }

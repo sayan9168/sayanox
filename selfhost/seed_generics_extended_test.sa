@@ -1,0 +1,48 @@
+make identity<T>(value: T) -> T {
+  give value
+}
+make first<A, B>(a: A, b: B) -> A {
+  give a
+}
+make second<A, B>(a: A, b: B) -> B {
+  give b
+}
+make wrap<T>(value: T) -> T {
+  give identity(identity(value))
+}
+make sum_to<T>(n: T) -> T {
+  when n <= 0 {
+    give 0
+  }
+  give n + sum_to(n - 1)
+}
+make repeat<A, B>(s: A, n: B) -> A {
+  when n <= 0 {
+    give ""
+  }
+  give concat(s, repeat(s, n - 1))
+}
+make unused<T>(value: T) -> T {
+  give value
+}
+hold xs = [4, 5]
+show identity(3)
+show identity("hi")
+show len(identity(xs))
+show first("first", 7)
+show second(7, "second")
+show len(second("ignored", xs))
+show wrap(8)
+show wrap("nested")
+show sum_to(5)
+show repeat("xy", 3)
+hold aliased = wrap(xs)
+push(aliased, identity(6))
+show len(xs)
+show xs[2]
+for ch in identity("ok") {
+  show ch
+}
+for value in wrap(xs) {
+  show value
+}

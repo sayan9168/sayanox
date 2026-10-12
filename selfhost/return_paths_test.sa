@@ -1,0 +1,56 @@
+make choose(n: num) -> num {
+  when n < 0 {
+    give -1
+  } elif n == 0 {
+    give 0
+  } otherwise {
+    when n > 9 {
+      give 9
+    } else {
+      give 1
+    }
+  }
+}
+make label(n: num) -> str {
+  when n > 0 {
+    give "yes } give //"
+  } else {
+    give "no { when"
+  }
+}
+make values(n: num) -> list {
+  when n > 0 {
+    give [n]
+  } otherwise {
+    give []
+  }
+}
+make suffix(n: num) -> num {
+  while n > 0 {
+    give 2
+  }
+  give 3
+}
+make early(n: num) -> num {
+  give n
+  show 99
+}
+make pick<U, T>(n: U, value: T) -> T {
+  when n > 0 {
+    give value
+  } else {
+    give value
+  }
+}
+show choose(-1)
+show choose(0)
+show choose(4)
+show choose(12)
+show label(1)
+show label(0)
+show len(values(1))
+show len(values(0))
+show suffix(1)
+show suffix(0)
+show early(8)
+show pick(1, "generic")

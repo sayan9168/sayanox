@@ -1,0 +1,60 @@
+make join(a: str, b: str) -> str {
+  a = concat(a, "!")
+  show b
+  give a
+}
+make repeat_word(s: str, n: num) -> str {
+  when n <= 0 {
+    give ""
+  }
+  give concat(s, repeat_word(s, n - 1))
+}
+make append(xs: list, n: num) -> list {
+  push(xs, n)
+  give xs
+}
+make sum(xs: list) -> num {
+  hold total = 0
+  hold i = 0
+  while i < len(xs) {
+    hold value = xs[i]
+    total = total + value
+    i = i + 1
+  }
+  give total
+}
+make choose(s: str, flag: num) -> str {
+  when flag {
+    hold temp = concat(s, "+")
+    give temp
+  }
+  give s
+}
+make branches(n: num) -> num {
+  hold answer = 0
+  when n > 0 {
+    hold value = 3
+    answer = value
+  } otherwise {
+    hold other = 4
+    answer = other
+  }
+  give answer
+}
+hold shared = "keep"
+show join(shared, shared)
+show shared
+show join("a", "b")
+show repeat_word("xy", 3)
+hold values = [2, 3]
+hold more = append(values, 5)
+show len(values)
+show sum(more)
+show choose(shared, 1)
+show shared
+show branches(1)
+show branches(0)
+for ch in choose("z", 1) {
+  show ch
+}
+show "typed-done"

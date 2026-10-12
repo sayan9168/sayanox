@@ -18,7 +18,7 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 | `initialized` | yes |
 | `textDocument/didOpen` | yes — stores the document and publishes diagnostics |
 | `textDocument/didChange` | yes — full-text sync, re-publishes diagnostics |
-| `textDocument/didClose` | yes — clears the diagnostics for the URI |
+| `textDocument/didClose` | yes — clears diagnostics and releases the matching document state |
 | `textDocument/publishDiagnostics` | on every open/change |
 | `textDocument/diagnostic` | pull model (`kind: full`) |
 | `textDocument/documentSymbol` | `make` (Function), `struct` (Class), `hold` (Variable) |
@@ -89,9 +89,8 @@ vim.api.nvim_create_autocmd("FileType", {
   shutdown, exit) into the binary and prints one line per verified fact.
   `make test-lsp` asserts that list, and the target is part of the
   `true-selfhost-min` gate — i.e. the LSP is exercised by `make test`.
-* The server only keeps one document (full-text sync) and treats positions as
-  byte offsets, which is right for ASCII and close enough for UTF-8 without
-  multi-byte characters.
+* The server keeps one document (full-text sync). It advertises UTF-16
+  positions and converts UTF-8 scanner offsets at the protocol boundary.
 
 ## The old shell server
 
@@ -99,3 +98,46 @@ vim.api.nvim_create_autocmd("FileType", {
 completion, one-line diagnostics). It is kept for environments where no
 compiled binary can be shipped; the Sayanox implementation above is the
 supported one and is what the tests cover.
+
+### Neovim filetype registration and launch checks
+
+Register the language independently of Linguist (do not map `.sa` to C or
+Python). Put this before the autocmd above:
+
+```lua
+vim.filetype.add({ extension = { sa = 'sa' } })
+```
+
+Run `make lsp` once, then launch the absolute `tools/sayanox_lsp` binary from
+the client. Do **not** launch `make lsp` as the server: build output is not
+JSON-RPC and would corrupt the stdio transport. The server needs neither
+Python nor a network connection. `make test-lsp test-lsp-robust` runs actual
+framed request/response sessions, including full-text `didChange`, cleared
+diagnostics, escaped ids and malformed/unknown request errors.
+
+## Unicode and document lifecycle (2026-10-11)
+
+`positionEncoding: "utf-16"` is advertised. Incoming hover/definition positions
+are converted to UTF-8 byte offsets; diagnostic spans are converted back to
+UTF-16, without cutting a supplementary character's surrogate pair. Cursor
+positions inside a surrogate pair clamp to that character's start. End-of-line
+positions clamp rather than spilling into the next line.
+
+JSON `\uXXXX` strings are decoded into UTF-8, including paired surrogate
+escapes. Raw UTF-8 and escaped text are tested for identical protocol output.
+`test-lsp-unicode`, included by `test-lsp`, covers accented Latin, Bengali and
+emoji preceding a hover target, and a diagnostic ending on an emoji.
+
+A full-text change with `"text":""` now actually clears the document. An empty
+change array preserves it; changes for another URI do not overwrite the
+active document. Closing the matching URI releases its text. Tests use real
+`Content-Length` sessions, not calls to mocked helper functions.
+
+Current product limits: one open document (the latest didOpen wins), full-text
+synchronization, one replacement per change notification, no cross-file type
+analysis or incremental edits. The JSON field reader is lightweight, not a
+complete validating JSON parser. Invalid/unpaired Unicode escapes and escaped
+U+0000 are replaced with U+FFFD (the runtime cannot store embedded NUL).
+Identifier recognition remains ASCII; UTF-16 positioning does not add Unicode
+identifiers to the compiler. These probes do not claim complete LSP conformance
+or a full compiler diagnostic pass.

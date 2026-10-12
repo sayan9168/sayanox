@@ -231,3 +231,17 @@ uses them.
   thin-design limits are in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md). That document
   says what is not verified: atomic downloads, signatures and a cryptographic
   hash are all missing.
+
+### Offline search and process failures (2026-10-11)
+
+`search` now only reads the local index. If it is absent, the wrapper exits
+nonzero with `no local index; run seed (offline) or sync (explicit network)`;
+it never silently switches to network access. Network transfers remain
+explicit `sync`, `install` or `fetch` operations; bootstrap uses none of them.
+
+The checked wrapper propagates an inability to enter the project or execute
+the Sayanox tool as failure, instead of treating arbitrary output as success.
+`make test-pkg-errors` (part of `test-pkgs`) checks both cases. Local package
+resolution/checksumming remains in `.sa`; shell still supplies directories,
+process status and transfers. The checksum is not cryptographic, and these
+checks are not a sandbox for untrusted package trees or symlinks.

@@ -1,0 +1,49 @@
+// Annotated function-local loops: seed/gen2 parity, also native via test-native-generic-local.
+make build(n: num) -> list {
+  hold items: list = []
+  for i in 0..n {
+    when i == 1 { continue }
+    when i == 4 { break }
+    push(items, i)
+  }
+  give items
+}
+make sum_nested(n: num) -> num {
+  when n <= 0 {
+    give 0
+  }
+  hold total: num = 0
+  for i in 0..n {
+    total = total + sum_nested(n - 1)
+  }
+  give total + 1
+}
+make count_pairs(s: str, xs: list) -> num {
+  hold total: num = 0
+  for ch in s {
+    for value in xs {
+      total = total + len(ch) + value
+    }
+  }
+  give total
+}
+make inside(s: str) -> str {
+  hold result: str = ""
+  for ch in concat(s, "!") {
+    result = concat(result, ch)
+  }
+  give result
+}
+// Parameter names may match annotated globals without sharing their slots.
+hold n: str = "global"
+hold items = build(6)
+show len(items)
+show items[0]
+show items[1]
+show items[2]
+show sum_nested(3)
+hold numbers = [1, 2]
+show count_pairs("ab", numbers)
+show inside("ok")
+show n
+show "loops-done"

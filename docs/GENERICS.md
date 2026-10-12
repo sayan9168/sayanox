@@ -1,10 +1,11 @@
 # Generics: type parameters, monomorphised
 
-Status (2026-10-09): **generics with one or more type parameters are the
+Status (2026-10-12): **generics with one or more type parameters are the
 supported and documented form.** `make twice<T>(a: T) -> T` and
 `make pair<A, B>(a: A, b: B) -> A` both compile; every type parameter is
 resolved at each call site from the argument that uses it, and the whole
-generic is monomorphised into ordinary C.
+generic is specialized by value kind. Seed-min/gen2 emit ordinary C; native
+emits x86-64 Linux machine code.
 
 ## The supported form
 
@@ -32,8 +33,8 @@ show pair("x", 1)      // x
 * Each type parameter stands for one of the three value kinds: `num`, `str`,
   or a double list.
 * Type-parameter names are single characters or identifiers; a generic may
-  have up to 10 type parameters (the internal tables store indices as one
-  character each).
+  have up to 10 type parameters in gen2 (its tables use single-character
+  indices); seed-min supports up to 8.
 
 ## How a call site picks the kinds
 
@@ -127,11 +128,112 @@ on each: the same program is either compiled or refused, never miscompiled.
 | Backend | `make NAME<T>(...)` | Checked by |
 |---|---|---|
 | gen2 (and gen1_min, which builds it) | compiled (monomorphised) | `make test-generics` |
-| seed-min | refused: the seed does not read generic definitions | `make test-generics` |
-| native (`native_aot`) | numbers only (each type parameter is `num`); a string or list argument is refused by name | `make test-native-generics`, `make test-generics`, `make test-stage2` |
+| seed-min | demand-driven num/str/list specializations; typed bodies | `make test-seed-generics`, `make test-generics` |
+| native (`native_aot`) | numeric, string and double-list specializations | `make test-native-generics`, `make test-native-strgen`, `make test-native-listgen` |
 
-Adding generics to the seed would change the root of the fixed-point chain,
-so the seed still refuses them. Native has no string or list kinds for
-generics yet (its calling convention passes numbers only), so it compiles the
-numeric case and refuses the rest by name. The string and list kinds on native
-are missing in `docs/STATUS.md`.
+## Seed specialization engine (2026-10-12)
+
+Seed-min now registers generic templates and binds type parameters from call
+arguments. Every parameter and return annotation must name a declared type
+parameter; every type parameter must be inferable from at least one argument.
+Two arguments using the same type parameter must have the same kind. Struct
+arguments, unresolved types and mixed concrete/type-variable signatures fail
+explicitly rather than becoming numeric parameters.
+
+Each concrete signature gets one generated, fully typed definition. A finite
+worklist appends those definitions before C emission, discovers nested and
+recursive requests, and reuses already registered specializations (including
+mutual recursion). Prototypes precede definitions. Local `hold x: T` annotations
+are substituted token-wise, never inside strings/comments or ordinary variable
+names. The normal typed-body checks apply to each instantiated body. Unused
+templates do not produce C bodies. This is not annotation erasure.
+
+Limits: 8 type parameters, 16 value parameters, 512 total function-table
+entries including templates and generated variants, and 8 MiB expanded source
+(the individual template-body expansion also has a bounded allocation).
+`_sx_gen_` is reserved. Bodies retain the seed typed-function contract:
+isolated locals, no global capture, structurally complete return paths, supported
+builtins only. Explicit type arguments at calls and generic structs are not
+implemented. Calls that cannot be resolved during pre-emission checking fail
+instead of adding undeclared C functions during emission.
+
+`test-seed-generics` checks ordinary num/str/list and multi-parameter calls,
+numeric recursion, list aliases and call-source loops across all three
+backends. Extended seed/native fixtures cover deeper nested generic calls
+and a string-only recursive template; a seed-only scope fixture covers
+mutual recursion, local annotations, and safe handling
+of comments/strings/type-variable names. The extended fixture now also passes on gen2 after its request-separator
+and template-record lookup fixes. Native passes it after its unused
+numeric-base emission was replaced with demand-driven emission. Scope/token
+edge cases in the separate seed scope fixture still have their own boundary. The existing
+`test-generics` multi-parameter fixture now also runs through seed-min;
+its other fixture still uses unsupported seed builtin `numstr`.
+
+Tests check deterministic emitted C, one definition per concrete kind, no
+unused instantiation, conflicting kinds, malformed signatures, body/return
+mismatches and the specialization limit. Native's existing generic tests
+remain unchanged. Generic structs require the concrete type identities and
+GC/layout work in [TYPES_ROADMAP.md](TYPES_ROADMAP.md).
+
+
+## Native annotated locals and generic body demand
+
+`test-native-generic-local` now verifies num/str/list hold annotations at top
+level and in functions, plus `hold local: T` in concrete generic bodies.
+Collection, inference and emission use the same annotation parser; inferred
+initializers and later assignments must retain the declared kind. Unknown
+and mismatched annotations are errors, not annotation erasure.
+
+Native no longer emits an unconditional numeric version of every template.
+Requested numeric versions and other specializations share the pending-body
+worklist, including calls discovered in emitted bodies. A string-only generic
+body is therefore checked as a string body, without a spurious numeric
+failure. Unused template bodies are not emitted/checked; their headers must
+still parse. Invalid bodies are rejected when instantiated. The old generic
+multi-parameter/local-annotation fixture now passes on native too.
+
+
+## Gen2 nested-request queue repair (2026-10-12)
+
+Nested bodies can enqueue consecutive records with both a trailing and a
+leading separator. Gen2 now skips empty separators before reading the next
+name. It also searches only template record headers, not parameter/body
+fields that might happen to equal a function name. Negative type-table
+indices are guarded before indexing kind strings.
+
+The previous identity(identity(value)) extended fixture now compiles and
+prints the hand-computed output. A second regression exercises repeated
+nested calls across num/str/list specializations and a function name that
+matches an earlier template's parameter name. Seed/native output matches;
+gen1_min and gen2 produce byte-identical C for the extended fixture.
+This closes the recorded queue crash, not every possible generic inference
+edge case. Generic structs and general list-expression lowering remain open; complete
+list-literal returns and typed numeric-expression list arguments are now supported
+within the boundary documented in SYNTAX.md.
+
+
+Instantiated generic functions now use structural return-path checking on all
+three backends. Exhaustive returning when/elif/else chains are accepted without
+an extra terminal give; a missing arm is an error. Only reachable instances
+are checked where specialization is demand-driven. Generic structs and
+concrete struct type identities remain separate, unfinished work.
+
+
+Calls inside inline numeric-list elements now consume concrete return and
+parameter-kind metadata, including newly requested generic instances. Parameter
+kinds are recorded at specialization request time, not only after body emission;
+wrong nested-call arity/kinds are rejected. This does not implement generic
+struct identities or expand the generic declaration grammar.
+
+
+### Postfix argument inference (2026-10-13)
+
+For arguments resolved by the typed expression parser, specialization uses
+the whole expression's kind: `identity([30, 40][1])` selects `num`, not `list`.
+Grouped literal indexing and nested numeric/string-field indexing retain their
+resolved kind. Multi-parameter argument scanning balances list/brace/group
+delimiters, so commas inside `[1, 2]` do not start a new function argument.
+`test-list-postfix` checks seed/gen2/native output parity, including a second
+type parameter after an indexed list literal. Unresolved expressions still
+use the existing classifier; this does not claim universal inference or add
+generic structs/concrete struct specializations.
