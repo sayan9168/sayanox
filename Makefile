@@ -1186,59 +1186,133 @@ test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
 	echo "[OK] seed GC: seed-min = no collector (builder strings + a freeing assignment, clear OOM); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem"
 
 # ---------------------------------------------------------------------------
-# test-generic-structs: generic structs are NOT implemented, and every backend
-# now says so by name.
+# test-generic-structs: generic structs ARE implemented, on all three backends,
+# with one concrete type per instantiation -- and the type argument list is
+# checked, so a mistake is a named refusal rather than wrong code.
 #
-# A struct's field layout is learned from literals and owned by ONE global
-# definition, so `Box<num>` and `Box<str>` would share field slots and confuse
-# field loads and the collector's roots; docs/TYPES_ROADMAP.md lists the five
-# things a safe implementation needs (a concrete type identity, per-
-# instantiation layouts, ordered typedefs plus native field/GC descriptors,
-# kind checking at every boundary, and a finite specialization worklist). None
-# of that exists, and this target does not claim any of it.
+# `struct Box<T> { v }` is a template: parameter names and field names, no
+# layout, and it never becomes a struct of its own. Each instantiation is
+# mangled to a concrete struct name -- Box<num> is Box__n, Box<str> is Box__s,
+# Pair<num,str> is Pair__ns -- using the suffixes generic FUNCTIONS already use,
+# so the mangled name is the type identity: two specializations get their own
+# field kinds, their own typedef and (on native) their own GC block descriptor,
+# and they can never share a slot. That is items 1 and 2 of the five-point list
+# in docs/TYPES_ROADMAP.md ("A safe implementation needs"); the same document
+# records what is still missing -- nested instantiations such as Box<Box<num>>,
+# a struct or a list as a type argument, and gen2's wording for a bad type
+# argument list.
 #
-# What it does pin is the diagnostic. Measured before this target, the three
-# backends all rejected the syntax but for unrelated reasons:
+# selfhost/generic_struct_box.sa is the shared parity fixture: three
+# instantiations in one program, six printed lines, byte-identical on seed-min,
+# gen2 and native. The typedefs are pinned as well, because the layout IS the
+# claim -- `double v` for Box__n and `char *v` for Box__s in one program.
 #
-#   seed-min  `seed_min: { at 10`  -- a brace, at a character offset
-#   gen2      `min: undefined name: Box` for `Box<num> { 1 }` and
-#             `min: struct literal must fill every field` for `Box { 1 }`,
-#             because the `<T>` was swallowed into the field list
-#   native    `native_aot: struct Box needs { fields }`
+# The second half pins the refusals: a wrong type argument count, a struct name
+# as a type argument, a list as a type argument, a bare template name, and one
+# instantiation used with two different kinds. All three backends refuse all
+# five. seed-min and native name the problem, so their wording is pinned; gen2
+# refuses through its general "undefined name" and stray-token errors, so for
+# gen2 only the failure is pinned (plus its wording for the two-kinds case,
+# which it does name). Pinning gen2's weak wording would freeze it, so the gate
+# asserts the honest part: no backend compiles any of these.
 #
-# None of those names the missing feature and gen2's field-count message is
-# actively wrong (the literal does fill every field of the struct the user
-# wrote). All three now report "generic structs are not implemented" and point
-# at the roadmap, and gen2 additionally puts a `#error` in the generated C, so a
-# build script that ignores stdout still cannot miss the refusal.
-#
-# The second half pins the supported workaround -- one concrete struct name per
-# layout, two same-shaped specializations in one program, byte-identical on all
-# three backends -- and one adjacent divergence found while writing it: a dotted
-# field read inside a struct literal (`NumBox { a.v }`) is accepted by seed-min
-# and refused by gen2 (#error) and native. Refused, not miscompiled.
+# The last two sections predate generic structs and are unchanged: the
+# concrete-name workaround (one struct name per layout) still prints the same
+# bytes on all three backends, and a dotted field read inside a struct literal
+# (`NumBox { a.v }`) stays seed-min-only -- refused by gen2 (#error) and native.
+# Refused, not miscompiled.
 # ---------------------------------------------------------------------------
 .PHONY: test-generic-structs
 test-generic-structs: $(GEN2) $(SEED_MIN_BIN)
 	mkdir -p $(TESTS)
-	# ---- the refusal, on the two portable backends ----
-	if ./$(SEED_MIN_BIN) selfhost/generic_struct_refuse.sa > $(TESTS)/gs_refuse_ms.c 2>$(TESTS)/gs_refuse_ms.err; then \
-	  echo "[FAIL] seed-min accepted generic-struct syntax"; exit 1; fi
-	grep -q -F 'generic structs are not implemented' $(TESTS)/gs_refuse_ms.err
-	./$(GEN2) selfhost/generic_struct_refuse.sa $(TESTS)/gs_refuse_g2.c > $(TESTS)/gs_refuse_g2.out 2>&1 || true
-	grep -q -F '#error sayanox-min: generic structs are not implemented' $(TESTS)/gs_refuse_g2.c
-	sed -n 1p $(TESTS)/gs_refuse_g2.out | grep -q -F 'min: generic structs are not implemented: declare a concrete struct name'
-	# ---- native says the same thing, when native_aot is built ----
+	# ---- support: one concrete type per instantiation, three-way parity ----
+	./$(SEED_MIN_BIN) selfhost/generic_struct_box.sa > $(TESTS)/gs_box_ms.c
+	grep -q -F 'typedef struct { double v; } Box__n;' $(TESTS)/gs_box_ms.c
+	grep -q -F 'typedef struct { char *v; } Box__s;' $(TESTS)/gs_box_ms.c
+	grep -q -F 'typedef struct { double a; char *b; } Pair__ns;' $(TESTS)/gs_box_ms.c
+	$(CC) -O2 -o $(TESTS)/gs_box_ms $(TESTS)/gs_box_ms.c
+	$(call assert-out,./$(TESTS)/gs_box_ms,7\nseven\n8\n7\n9\nnine)
+	./$(GEN2) selfhost/generic_struct_box.sa $(TESTS)/gs_box_g2.c >/dev/null
+	grep -q -F 'typedef struct { double v; } Box__n;' $(TESTS)/gs_box_g2.c
+	grep -q -F 'typedef struct { char *v; } Box__s;' $(TESTS)/gs_box_g2.c
+	grep -q -F 'typedef struct { double a; char *b; } Pair__ns;' $(TESTS)/gs_box_g2.c
+	$(CC) -O2 -o $(TESTS)/gs_box_g2 $(TESTS)/gs_box_g2.c
+	$(call assert-out,./$(TESTS)/gs_box_g2,7\nseven\n8\n7\n9\nnine)
+	echo "[OK] generic structs: Box<num>, Box<str> and Pair<num,str> are three types with their own layouts, identical on seed-min and gen2"
 	if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) selfhost/generic_struct_refuse.sa $(TESTS)/gs_refuse_nat 2>$(TESTS)/gs_refuse_nat.err; then \
-	    echo "[FAIL] native accepted generic-struct syntax"; exit 1; fi; \
-	  grep -q -F 'generic structs are not implemented' $(TESTS)/gs_refuse_nat.err \
-	    || { echo "[FAIL] native refusal does not name the missing feature:"; cat $(TESTS)/gs_refuse_nat.err; exit 1; }; \
-	  echo "[generic-structs] native refuses by name"; \
-	else \
-	  echo "[generic-structs] native half skipped (native_aot is not built here)"; \
+	  ./$(NATIVE_BIN) selfhost/generic_struct_box.sa $(TESTS)/gs_box_nat && \
+	  ./$(TESTS)/gs_box_nat > $(TESTS)/gs_box_nat.out && \
+	  ./$(TESTS)/gs_box_ms > $(TESTS)/gs_box_ms.out && \
+	  cmp $(TESTS)/gs_box_ms.out $(TESTS)/gs_box_nat.out && \
+	  echo "[generic-structs] native: the same instantiations print the same bytes as seed-min"; \
 	fi
-	echo "[OK] generic structs: refused by name on seed-min, gen2 (#error plus stdout) and native"
+	# ---- refusal 1: the wrong number of type arguments ----
+	printf 'struct Box<T> {\n  v\n}\nhold b = Box<num, str> { 7 }\nshow b.v\n' > $(TESTS)/gs_arity.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_arity.sa > $(TESTS)/gs_arity_ms.c 2>$(TESTS)/gs_arity_ms.err; then \
+	  echo "[FAIL] seed-min accepted Box<num, str> against a one-parameter template"; exit 1; fi
+	grep -q -F 'Box takes 1 type argument, got 2' $(TESTS)/gs_arity_ms.err
+	./$(GEN2) $(TESTS)/gs_arity.sa $(TESTS)/gs_arity_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min:' $(TESTS)/gs_arity_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_arity.sa $(TESTS)/gs_arity_nat 2>$(TESTS)/gs_arity_nat.err; then \
+	    echo "[FAIL] native accepted Box<num, str> against a one-parameter template"; exit 1; fi; \
+	  grep -q -F 'takes 1 type argument, got 2' $(TESTS)/gs_arity_nat.err; \
+	fi
+	echo "[OK] generic structs: a wrong type argument count is refused by all three backends"
+	# ---- refusal 2: a struct name as a type argument ----
+	printf 'struct NumBox {\n  v\n}\nstruct Box<T> {\n  v\n}\nhold n = NumBox { 3 }\nhold b = Box<NumBox> { n }\nshow b.v\n' > $(TESTS)/gs_argstruct.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_argstruct.sa > $(TESTS)/gs_argstruct_ms.c 2>$(TESTS)/gs_argstruct_ms.err; then \
+	  echo "[FAIL] seed-min accepted a struct name as a type argument"; exit 1; fi
+	grep -q -F "a type argument must be num, str or list (got 'NumBox')" $(TESTS)/gs_argstruct_ms.err
+	./$(GEN2) $(TESTS)/gs_argstruct.sa $(TESTS)/gs_argstruct_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min:' $(TESTS)/gs_argstruct_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_argstruct.sa $(TESTS)/gs_argstruct_nat 2>$(TESTS)/gs_argstruct_nat.err; then \
+	    echo "[FAIL] native accepted a struct name as a type argument"; exit 1; fi; \
+	  grep -q -F "a type argument must be num, str or list (got 'NumBox')" $(TESTS)/gs_argstruct_nat.err; \
+	fi
+	echo "[OK] generic structs: a struct name as a type argument is refused by all three backends"
+	# ---- refusal 3: a list as a type argument ----
+	# No backend has a list-typed struct field, so Box<list> is refused rather
+	# than emitted as C that cannot compile.
+	printf 'struct Box<T> {\n  v\n}\nhold xs = [1, 2]\nhold b = Box<list> { xs }\nshow len(b.v)\n' > $(TESTS)/gs_arglist.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_arglist.sa > $(TESTS)/gs_arglist_ms.c 2>$(TESTS)/gs_arglist_ms.err; then \
+	  echo "[FAIL] seed-min accepted a list as a type argument"; exit 1; fi
+	grep -q -F 'a struct field cannot hold a list' $(TESTS)/gs_arglist_ms.err
+	./$(GEN2) $(TESTS)/gs_arglist.sa $(TESTS)/gs_arglist_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min:' $(TESTS)/gs_arglist_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_arglist.sa $(TESTS)/gs_arglist_nat 2>$(TESTS)/gs_arglist_nat.err; then \
+	    echo "[FAIL] native accepted a list as a type argument"; exit 1; fi; \
+	  grep -q -F 'cannot hold a list' $(TESTS)/gs_arglist_nat.err; \
+	fi
+	echo "[OK] generic structs: a list as a type argument is refused by all three backends"
+	# ---- refusal 4: a bare template name, with no type arguments ----
+	printf 'struct Box<T> {\n  v\n}\nhold b = Box { 7 }\nshow b.v\n' > $(TESTS)/gs_bare.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_bare.sa > $(TESTS)/gs_bare_ms.c 2>$(TESTS)/gs_bare_ms.err; then \
+	  echo "[FAIL] seed-min accepted a bare template name"; exit 1; fi
+	grep -q -F 'Box is a generic struct: write Box<num> { ... }' $(TESTS)/gs_bare_ms.err
+	./$(GEN2) $(TESTS)/gs_bare.sa $(TESTS)/gs_bare_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min:' $(TESTS)/gs_bare_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_bare.sa $(TESTS)/gs_bare_nat 2>$(TESTS)/gs_bare_nat.err; then \
+	    echo "[FAIL] native accepted a bare template name"; exit 1; fi; \
+	  grep -q -F 'is a generic struct: write Box<num> { ... }' $(TESTS)/gs_bare_nat.err; \
+	fi
+	echo "[OK] generic structs: a bare template name is refused by all three backends"
+	# ---- refusal 5: one instantiation used with two different kinds ----
+	printf 'struct Box<T> {\n  v\n}\nhold b = Box<num> { 7 }\nhold s = Box<num> { "seven" }\nshow b.v\nshow s.v\n' > $(TESTS)/gs_twokinds.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_twokinds.sa > $(TESTS)/gs_twokinds_ms.c 2>$(TESTS)/gs_twokinds_ms.err; then \
+	  echo "[FAIL] seed-min accepted two kinds in one instantiation"; exit 1; fi
+	grep -q -F "Box__n field 'v' is num (its type argument says so), the literal gives str" $(TESTS)/gs_twokinds_ms.err
+	./$(GEN2) $(TESTS)/gs_twokinds.sa $(TESTS)/gs_twokinds_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min: struct field is used with two different types' $(TESTS)/gs_twokinds_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_twokinds.sa $(TESTS)/gs_twokinds_nat 2>$(TESTS)/gs_twokinds_nat.err; then \
+	    echo "[FAIL] native accepted two kinds in one instantiation"; exit 1; fi; \
+	  grep -q -F "field 'v' is a number (its type argument says so), the literal gives a string" $(TESTS)/gs_twokinds_nat.err; \
+	fi
+	echo "[OK] generic structs: one instantiation cannot hold two kinds -- the type argument fixes the field kind"
 	# ---- the supported workaround: concrete names, three-way parity ----
 	./$(SEED_MIN_BIN) selfhost/generic_struct_concrete.sa > $(TESTS)/gs_conc_ms.c
 	$(CC) -O2 -o $(TESTS)/gs_conc_ms $(TESTS)/gs_conc_ms.c

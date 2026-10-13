@@ -593,7 +593,7 @@ still use shell/C infrastructure. See
 | `make test-generics` | two legs. (a) single type parameter: `make NAME<T> ... -> T` — 14 lines of a program mixing `pickb`/`twice`/`quad` over num, str and list print identically under gen2 and gen1_min; each `NAME__n/s/l` appears exactly once, every call sees a prototype, an unused generic emits nothing. (b) **multi-parameter**: `pair<A, B> -> A`, `swap<A, B> -> B`, `three<A, B, C> -> C` and `usefirst<A, B>` (which calls `pair` and binds the result with `hold`) over `nn`/`ns`/`sn`/`ls`/`ln`/`sl`/`nsl`, each copy asserted exactly once, per-parameter C types checked, no `#error`, no implicit declaration, and gen1_min output **byte-identical** to gen2; two rejection cases (a parameter that does not use a type parameter, a return type naming an undeclared one) |
 | `make test-gc` | gen2 mark & sweep from the language side: a 2000-iteration `concat` loop stays under 200 KB of live heap after `gc()`, `gc_runs()` counts a collection, `gc()` reclaims bytes, and the surviving string is intact (`len` + first byte) |
 | `make test-seed-gc` | what memory management the two seeds actually have, measured under `ulimit -v` caps: seed-min has no collector (builder-backed strings plus a freeing assignment: 200k churn, 2000-step accumulation and a temp loop inside a 4 MiB cap; an 8388608-byte live set exits 1 with `sx: out of memory`; `gc()` refused at compile time), the full seed has a refcount representation whose counts never release in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations, `gc()` is a no-op returning 0, `gc_live()` is an undefined function, a 4 MiB cap cannot start it) plus the operator-lexer fix that made it compile comparisons at all, and gen2 keeps a 200k churn and an 8 MiB live set correct inside 64 MiB, checks all three of its runtime allocations, and fails at 16 MiB with `sx: out of memory` instead of a segfault |
-| `make test-generic-structs` | generic structs are refused **by name** on all three backends (`generic structs are not implemented`, gen2 also puts a `#error` in the generated C) instead of as a brace/undefined-name/field-count symptom; the concrete-name workaround (`NumBox`, `TextBox`, `PairBox` in one program) prints `7 seven 8 eight 2 8 9` identically on seed-min, gen2 and native; and a dotted field read inside a struct literal is pinned as seed-min-only (gen2 `#error`, native refuses) |
+| `make test-generic-structs` | generic structs are **implemented** on all three backends: `struct Box<T> { v }` is a template and each instantiation is its own concrete struct (`Box<num>` is `Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns`), so the gate pins those three typedefs in the generated C and the parity fixture `selfhost/generic_struct_box.sa` (`7 seven 8 seven 9 nine` — byte-identical on seed-min, gen2 and native). It also pins five refusals that all three backends make (wrong type argument count, a struct name as a type argument, a list as a type argument, a bare template name, one instantiation used with two kinds), the older concrete-name workaround (`NumBox`, `TextBox`, `PairBox` — `7 seven 8 eight 2 8 9`) and a dotted field read inside a struct literal as seed-min-only (gen2 `#error`, native refuses) |
 | `make test-sxpkg-online-optin` | the network is opt-in: `sync`, an `install` that has to fetch, and a remote `fetch` refuse without `SAYANOX_ONLINE=1` or `sxpkg --online <cmd>`, naming the opt-in and the offline commands and leaving no `.part` file; with the opt-in the same commands reach the transfer (a `.invalid` host, so they fail in the resolver and `sync` falls back to the offline seed); an all-local `install` and a `file://` fetch never ask |
 | `make test-native-emit-split` (part of `native-test`) | the x86-64 backend is a region, not a seasoning: the 1332 lines between `EMIT-SEAM-BEGIN` and `EMIT-SEAM-END` contain no `e1(`/`e32(`/`e64(`, no `memcpy` into `code` and no direct read of the code cursor `cn` (labels come from `here()`), the seam primitives are all defined in the encoder region above `phase 1`, and an emitted program still runs. The refactor itself was checked byte for byte against the pre-seam binary on six fixtures |
 | `make test-native-ir-log` (part of `native-test`) | the emit tree's instruction list is inspectable and pinned: with `SX_EMIT_LOG=<path>` every encoder primitive records the code offset, the mnemonic and the operands in assembly order, plus a `;` line per label slot, per fixup, per emitted `make` and per phase — 1122 instructions, 2 slots and 41 rel32 fixups for `selfhost/native_ir_log_test.sa`, with every call target named (`call make twice`, `call builtin gccheck`). The recorder is inert (the ELF built with it `cmp`s clean against the one built without it, and against the pre-recorder compiler on six fixtures), the list is deterministic, every line is an instruction line or a comment line, the offsets never go backwards, every rel32 fixup lands on a jump, no call target or operand falls back to a placeholder name, the six phases come in order, the fixture's top-level mnemonic vocabulary is pinned exactly, and the language emitter provably never touches the recorder state |
@@ -631,11 +631,11 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 | elif, conditional aliases, break/continue | elif, else-if/else-when/otherwise-when; breaks/continues in while and supported for | yes | yes | `test-stage2`, `test-full-lang`, `test-native-lang` | seed unsupported iteration forms remain explicit errors |
 | String/list for | variables, literals, checked calls and dotted field chains, inside fully typed make AND inside untyped make; literals/calls captured once per entry | variables, literals, calls | yes | `test-for-str`, `test-seed-for-literals`, `test-seed-for-calls`, `test-seed-for-untyped`, `test-seed-for-fields`, `test-native-lang` | a `list`-typed struct field as a for source (`for v in p.xs`) and a parenthesised source (`for c in (s)`) are still hard errors in seed-min and gen2; native function-local for is frame-local and recursion/GC tested; `_sx_iter_` is reserved in seed |
 | Numeric range for | numeric literals/variables/arithmetic, indexing and len; also inside fully typed make | yes | yes; upper bound re-evaluated per check | `test-seed-for-range`, `test-full-lang`, `test-native-lang` | all three re-read upper bound each condition. Seed accepts direct field access in a bound (`for i in 0..p.n`), so the older "hold field values in numeric variables first" note is stale; a user call in a range BOUND (`for i in 0..f()`) compiles on gen2 and native but seed-min still refuses it (`seed-min for range bounds support len(...) but not other calls yet`) — verified 2026-10-13 |
-| Function generics | num/str/list specialization; one or multiple type parameters | num/str/list monomorphisation | num/str/list monomorphisation (pre-existing) | `test-generics`, `test-seed-limits`, `test-native-generics`, `test-native-strgen`, `test-native-listgen` | generic structs and some backend-specific body/lowering gaps |
+| Function generics | num/str/list specialization; one or multiple type parameters | num/str/list monomorphisation | num/str/list monomorphisation (pre-existing) | `test-generics`, `test-seed-limits`, `test-native-generics`, `test-native-strgen`, `test-native-listgen` | some backend-specific body/lowering gaps; struct generics are a separate row below |
 | Typed functions | num/str/list parameters and returns, isolated locals, control flow, terminal give | broader typed functions, some lowering gaps | typed functions; kind-preserving parameter reassignment | `test-seed-typed-functions`, `test-typed-sig` | seed global capture and full return-path inference remain absent |
 | Function-local hold | yes | yes | frame-local, recursion tested | `test-native-locals`, `native-test` | no new ABI or second architecture |
-| Explicit hold types | num/str/list outside make and inside fully typed make; initializers, assignments and reannotations checked | num/str/list syntax already accepted | num/str/list, also function-local and bound generic T | `test-seed-hold-types`, `test-full-lang`, `test-native-generic-local` | seed untyped-function annotations and generic structs; see [type design](TYPES_ROADMAP.md) |
-| Struct types | literal-typed | literal-typed | literal-typed | `test-struct2`, `test-nest`, `native-test`, `test-generic-structs` | generic structs still deferred with layout/GC rationale in [TYPES_ROADMAP.md](TYPES_ROADMAP.md); since 2026-10-13 the *refusal* is uniform and names the missing feature on all three backends, and a dotted field read inside a struct literal is pinned as seed-min-only |
+| Explicit hold types | num/str/list outside make and inside fully typed make; initializers, assignments and reannotations checked | num/str/list syntax already accepted | num/str/list, also function-local and bound generic T | `test-seed-hold-types`, `test-full-lang`, `test-native-generic-local` | seed untyped-function annotations; there is still no *struct*-typed annotation on any backend, so an instantiation's mangled name is only ever spelled at a literal — see [type design](TYPES_ROADMAP.md) |
+| Struct types | literal-typed, plus generic templates: `struct Box<T> { v }` instantiated per type argument as `Box__n`/`Box__s` | literal-typed, plus the same templates rewritten to their mangled concrete name before the walker runs | literal-typed, plus templates instantiated at both literal sites with per-instantiation field kinds for the collector | `test-struct2`, `test-nest`, `native-test`, `test-generic-structs` | a type argument is `num` or `str` only (no nested instantiation, no struct or list argument); gen2's wording for a bad type argument list is its general `undefined name`/stray-token error, and gen2 learns a field kind from a single contradicting literal where seed-min and native refuse it — all measured in [TYPES_ROADMAP.md](TYPES_ROADMAP.md). A dotted field read inside a struct literal stays seed-min-only |
 | GC | no collector (builder-backed strings plus a freeing assignment wrapper) | mark/sweep, all three runtime allocations checked | mark/sweep | `test-gc`, `test-native-mem`, `test-seed-gc` | measured 2026-10-13: seed-min is documented no-GC and fails as `sx: out of memory`; the full seed's refcount table never releases in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations) and `gc()` there is a no-op; gen2's first collection fires at 8 MiB of managed heap, so it needs more address space than native; conservative native stack scanning |
 | Packages, offline | tool built by gen2 | registry/lock/deps/install-local/verify | not a native-tool claim | `test-pkgs`, `test-sxpkg-polish`, new `test-pkg-errors` | search no longer implicitly syncs; shell still supplies filesystem/process operations; execution failures now propagate |
 | Packages, online | not bootstrap | explicit sync/install/fetch commands, **opt-in** since 2026-10-13 | n/a | `test-sxpkg-online-local`, `test-sxpkg-online-optin` (both in the aggregates, both socket-free) | no cryptographic integrity, no signatures, no remote publish; `SAYANOX_REGISTRY` says where, `SAYANOX_ONLINE=1`/`--online` says whether |
@@ -1480,11 +1480,15 @@ changes the bootstrap dialect, and all four are gated.
 
 ### 7. Generic structs: the refusal is now the feature
 
-Generic structs are still **not implemented** — no type identity, no
-per-instantiation layout, no specialization worklist
-([`TYPES_ROADMAP.md`](TYPES_ROADMAP.md) lists the five prerequisites). What
-changed is that the three backends now say so, instead of reporting a symptom of
-their own parser:
+(Superseded later the same day: generic structs are **implemented** on all
+three backends — see the last increment in this file. What follows is the
+diagnostic step that came first, kept as the record of it.)
+
+Generic structs were still **not implemented** at this point — no type identity,
+no per-instantiation layout, no specialization worklist
+([`TYPES_ROADMAP.md`](TYPES_ROADMAP.md) listed the five prerequisites). What
+changed here is that the three backends said so, instead of reporting a symptom
+of their own parser:
 
 | Backend | Before | Now |
 |---|---|---|
@@ -1616,7 +1620,9 @@ Not claimed: generic structs, a second native target, a workspace-aware LSP,
 signed or uploaded packages, or any change to the pure-min bootstrap dialect.
 (The LSP row is now narrower: references, workspace symbols and formatting
 landed later the same day — see below. A workspace *scan* is still not claimed,
-because the dialect has no directory-listing builtin.)
+because the dialect has no directory-listing builtin. Generic structs also
+landed later the same day, and the native emit tree got an instruction-list
+recorder — both below.)
 
 
 ---
@@ -1753,7 +1759,9 @@ they cover this increment too — are `docs/logs/ir-log-doctor.log`,
 Not claimed: a call other than `len()` inside an index, `%` inside an index, a
 struct string field or a user-function call as a `+` operand in a `give`,
 generic structs, a second native target, or any change to seed-min, the full
-seed, `native_aot` or the pure-min bootstrap dialect.
+seed, `native_aot` or the pure-min bootstrap dialect. (Generic structs landed in
+the next increment, and with them changes to seed-min, gen2 and `native_aot` —
+see below.)
 
 
 ---
@@ -1902,3 +1910,137 @@ Not claimed: a second target, a portable IR, a register allocator, an
 ARM64/riscv64 emitter, or any change to the emitted bytes. The list is still
 x86-64-shaped — the emit tree chooses the registers and the calling convention —
 and `SX_EMIT_LOG` is a window onto that, not a way out of it.
+
+
+---
+
+## Increment (2026-10-13, latest): generic structs — a template, and one concrete type per instantiation
+
+`struct Box<T> { v }` is now a **template**: parameter names and field names and
+no layout, and it never becomes a struct of its own. Each *instantiation*
+becomes an ordinary concrete struct under a mangled name — `Box<num>` is
+`Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns` — the suffixes
+generic functions already use, so the mangled name *is* the type identity. Two
+specializations get their own field kinds, their own C typedef and, on native,
+their own pointer-kind map for the collector, and they can never share a field
+slot.
+
+That closes the first two of the five prerequisites
+[`TYPES_ROADMAP.md`](TYPES_ROADMAP.md) has carried since 2026-10-12, and closes
+3 and 5 for the supported forms: typedefs and native field/GC descriptors are
+emitted per instantiation in first-use order, and instantiation happens on
+demand at a literal site, idempotently, with no worklist and no cycle check
+needed because nesting is refused. Prerequisite 4 is partly closed — the type
+argument fixes the field kind at the literal, so one instantiation used with two
+kinds is refused — and cannot be finished until a struct-typed `hold` annotation
+exists, which no backend has.
+
+Three implementations, one contract:
+
+* **seed-min** got a `GStruct` template table beside `StructDef`, and
+  `parse_type_params` / `skip_struct_decl` / `instantiate_gstruct` shared by all
+  four places that walk a struct declaration (the scanner, the function emitter,
+  `collect()` and `stmt()`) — miss one and the failure is a bare `{ at
+  <offset>` instead of a diagnostic. Instantiation happens where a struct
+  literal is parsed, and `collect()`'s own hand-rolled right-hand-side scan had
+  to learn the same form, or a `hold` is declared `double` while the assignment
+  emits a struct literal — C type errors with no Sayanox diagnostic at all.
+* **gen2** got a pre-pass instead of walker surgery: `gxscan` collects the
+  templates, `gxpass` rewrites every instantiation to its mangled name and seeds
+  `sdefs` with the instantiations in first-use order, so the existing struct
+  machinery (field kinds, `ftypes`, typedef emission) only ever sees a concrete
+  struct. A template declaration is skipped by the walker and never enters
+  `sdefs`, or `Box` would look concrete with the template's fields.
+* **native** got a `GSDef` table plus `gs_find`/`gs_instantiate`, called at both
+  struct-literal sites (kind packing and emission). The type arguments seed the
+  per-field kind map that the collector's pointer scan reads, so a `Box<str>`
+  field is a root and a `Box<num>` field is not.
+
+### Measured
+
+* **Parity**: `selfhost/generic_struct_box.sa` (new) prints `7`, `seven`, `8`,
+  `7`, `9`, `nine` on seed-min, gen2 and native. The gate `cmp`s seed-min's
+  stdout against native's and greps the three mangled typedefs out of the C that
+  seed-min and gen2 emit, because the layout *is* the claim.
+* **Refusals, all three backends**: a wrong type argument count, a struct name
+  as a type argument, `list` as a type argument, a bare template name, and one
+  instantiation used with two kinds. The per-backend wording is the table in
+  [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md). seed-min and native name the problem;
+  gen2 refuses three of the five through its general `undefined name` /
+  stray-token errors, so the gate pins gen2's *failure* there and its wording
+  only where gen2 names the problem (the two-kinds case). `list` is worth
+  calling out: gen2 used to rewrite `Box<list>` and emit C that cannot compile
+  (`incompatible types when initializing type 'double' using type 'sx_list *'`),
+  and now refuses it like the other two backends, whose list refusal predates
+  this increment.
+* **GC survival on native**: a `Box<str>` and a `Box<num>` held across 3000
+  allocating iterations both survive, `show gc_runs()` reports 2, and the output
+  is byte-identical to the same program written with two concrete struct names
+  on the pre-increment native.
+* **Unchanged and still gated**: the concrete-name workaround
+  (`generic_struct_concrete.sa`, `7 seven 8 eight 2 8 9` on all three) and the
+  dotted-field-read-inside-a-literal divergence (seed-min only, gen2 `#error`,
+  native refuses).
+
+### Self-host memory ceiling
+
+Implementing this in gen2 hit a hard wall, recorded here because it constrains
+every future gen2 feature. A generated function copies each `str` parameter on
+entry — `param = sx_sb_from(param)` in the emitted C, 1078 times in
+`gen1_min.c` — and never frees the copy. Measured on this 4 GB workspace:
+
+| Run | Peak RSS | Result |
+|---|---|---|
+| `read_file` a 624 KB source, scan it with `sx_index` | 0.9 MB | fine |
+| the same scan, calling a 6-char keyword helper per position | 4 GB in 3.7 s | OOM-killed |
+| `gen1_min` compiling `compiler_min.sa` before this increment (616,569 bytes) | 3.20 GB | 178 s, exit 0 |
+| the same, with a first 450-line draft of this feature (+54 KB) | > 3.9 GB | OOM-killed |
+| the same, with 2400 lines of trivial *flat* filler instead (+35 KB) | 3.18 GB | OOM-killed |
+| the same, with the shipped version (+9.2 KB, position-based scans) | 3.68 GB | 186 s, exit 0 |
+
+So the self-compile's peak grows by roughly 27–50 MB per KB of
+`compiler_min.sa`, the ceiling here is about 3.9 GB, and HEAD was already at
+3.20 GB — about 20 KB of headroom. The filler run proves it is *size* and not
+nesting or this feature's content: 2400 lines of `make zzfillN(a: str, b: num)`
+that nothing calls are enough to kill it. Two rules follow, and the comments in
+`compiler_min.sa` say so:
+
+1. A per-position scan must not call a helper that takes the scanned string.
+   `gxscan`/`gxpass` walk positions and build a string only once an occurrence
+   is confirmed.
+2. A gen2 feature has a byte budget, not just a correctness budget. This one
+   shipped at +9.2 KB after a +54 KB draft was killed, and its rewrite pass runs
+   only when the program declares a template, so the self-host path — which
+   declares none — never pays for it.
+
+Fixing the copy itself (release a parameter's builder on every return path, or
+do not copy when the callee cannot mutate) is the highest-value remaining work
+in this repo: it would give the self-host path orders of magnitude of headroom
+and probably most of those three minutes back. It is not attempted here, because
+it changes the calling convention of every generated function and all four gates
+would have to be re-proven against it.
+
+### Gates
+
+`make test-generic-structs` was **flipped**: it pinned three refusals of the
+syntax and now pins the support (parity fixture plus the three mangled
+typedefs), the five refusals above, and the two older sections unchanged.
+`selfhost/generic_struct_refuse.sa` was deleted — the program it held
+(`struct Box<T> { v }` with `Box<num> { 1 }`) now compiles and runs, and its
+refusal cases live in the gate as `printf` fixtures beside the refusals the gate
+already built that way.
+
+The whole chain was re-run for this increment and is green: `DOCTOR-OK`;
+`TRUE-SELFHOST-MIN-OK` (976 lines, 166 `[OK]`); `GEN3-OK` with gen3 ==
+gen4 byte-identical; `NATIVE-TEST-OK` (864 lines, 152 `[OK]`). Logs:
+`docs/logs/gs-doctor.log`, `gs-true-selfhost.log`, `gs-gen3.log`,
+`gs-native-test.log`.
+
+Not claimed: nested instantiations (`Box<Box<num>>`), a struct or a list as a
+type argument, struct-typed annotations or any cross-specialization assignment
+check, gen2 diagnostics that name the template, gen2's positional field-kind
+check for a single contradicting literal (`Box<num> { "seven" }` alone is
+accepted by gen2 and refused by seed-min and native), a specialization worklist
+with recursion (there is nothing to recurse into yet), or any change to the
+pure-min bootstrap *dialect* — seed-min the compiler grew; the dialect it
+accepts did not.

@@ -1,4 +1,4 @@
-# Verification logs — latest run 2026-10-12
+# Verification logs — latest run 2026-10-13 (`gs-*`)
 
 Final commands, in order, each exited 0:
 
@@ -239,6 +239,26 @@ increment removed. That leg is now a value assertion (`6`) plus a grep for
 refused stay pinned by `test-gen2-index-expr` and `test-gen2-expr-lowering`.
 
 The `make-*` files above are the 2026-10-12 run and `four-items-*` the earlier
-2026-10-13 one; both are superseded by `ir-log-*` as the current four-gate
-record. No line in any of these logs was edited: they are the tee'd stdout and
+2026-10-13 one; both were superseded by `ir-log-*`, which `gs-*` now supersedes
+as the current four-gate record.
+
+## Generic structs: the `gs-*` run (2026-10-13, latest)
+
+The four commands, in order, each exited 0, after generic structs were
+implemented on all three backends (a template plus one mangled concrete struct
+per instantiation — `STATUS.md`, last increment):
+
+1. `make doctor` → `gs-doctor.log` (16 lines)
+2. `make true-selfhost` → `gs-true-selfhost.log` (976 lines, 166 `[OK]`)
+3. `make gen3` → `gs-gen3.log` (`[OK] byte-identical gen3 == gen4`)
+4. `make native-test` → `gs-native-test.log` (864 lines, 152 `[OK]`)
+
+`test-generic-structs` is the gate this increment flipped, from pinning three
+refusals of the syntax to pinning the support and five refusals. Its six `[OK]`
+lines are in both aggregate logs (`gs-true-selfhost.log` lines 787-868,
+`gs-native-test.log` lines 590-671), and only the native one carries
+`[generic-structs] native: the same instantiations print the same bytes as
+seed-min`, because `true-selfhost` does not build `native_aot`. The gen3 leg
+matters for this feature specifically: instantiation order has to be stable, or
+gen3 and gen4 would not be byte-identical. No line in any of these logs was edited: they are the tee'd stdout and
 stderr of the commands, including the recipe lines make echoes.

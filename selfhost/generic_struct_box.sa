@@ -1,0 +1,30 @@
+// Generic structs: one template, two type arguments, two layouts.
+//
+// `struct Box<T> { v }` declares a TEMPLATE: parameter names and field names,
+// no layout. Each instantiation becomes an ordinary concrete struct under a
+// mangled name -- Box<num> is Box__n, Box<str> is Box__s, Pair<num,str> is
+// Pair__ns -- the suffixes generic FUNCTIONS already use, so the mangled name
+// is the type identity: Box__n and Box__s have their own field kinds and can
+// never share a slot, and `make test-generic-structs` pins both typedefs.
+//
+// seed-min, gen2 and native all compile this file and print the same six lines.
+// Deliberately NOT here: `Box<list>` (no backend has a list-typed struct
+// field), a struct name as a type argument, and a nested instantiation such as
+// `Box<Box<num>>` -- see the refusal table in docs/TYPES_ROADMAP.md.
+struct Box<T> {
+  v
+}
+struct Pair<A, B> {
+  a
+  b
+}
+hold b = Box<num> { 7 }
+show b.v
+hold s = Box<str> { "seven" }
+show s.v
+hold c = Box<num> { 8 }
+show c.v
+show b.v
+hold p = Pair<num, str> { 9, "nine" }
+show p.a
+show p.b

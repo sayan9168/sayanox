@@ -711,6 +711,82 @@ static const char*kname(int k){
   return "an unknown type";
 }
 
+/* ---- generic struct templates -------------------------------------------
+ * `struct Box<T> { v }` is a TEMPLATE: parameter names and field NAMES, but no
+ * layout, so it never enters S[]. Each instantiation becomes an ordinary SDef
+ * under a mangled name -- `Box<num>` is `Box__n`, `Box<str>` is `Box__s`,
+ * `Pair<num,str>` is `Pair__ns` -- the same suffixes generic FUNCTIONS already
+ * use, so one spelling of "specialisation" covers both features.
+ *
+ * The mangled name is the type identity, which is what docs/TYPES_ROADMAP.md
+ * requires before this syntax may be accepted: Box<num> and Box<str> get their
+ * own field descriptors, their own fkind_seen/fkind_val slots and their own
+ * heap block, so they can never share a field layout or a collector root. The
+ * template itself is never mutated by a literal -- field kinds are learned per
+ * instantiation by the ordinary kind fixpoint, and a conflict inside one
+ * instantiation is the existing "used with two different types" error.
+ *
+ * A type argument is num, str or list. A struct name as a type argument is
+ * refused by name, because seed-min and gen2 refuse it too and native must not
+ * accept a program the other two reject. Struct blocks are allocated BK_STRUCT
+ * ("every word may be a pointer"), so a string field of any instantiation is
+ * traced by the collector with no new descriptor work.
+ * ------------------------------------------------------------------------ */
+typedef struct { char name[64]; char p[8][64]; int np; char f[MAXFD][64]; int nf; } GSDef;
+static GSDef GS[MAXS]; static int nGS;
+/* the type-argument kinds of each instantiated sid (gskn[sid]==0: not one) */
+static int gsk[MAXS][8], gskn[MAXS];
+static int gs_find(const char*n){ for(int i=0;i<nGS;i++) if(!strcmp(GS[i].name,n)) return i; return -1; }
+/* *p points at the '<' of `Box<num>`. Reads the type arguments, registers the
+ * instantiation if this is its first use, and leaves *p just past the list
+ * (whitespace skipped) so the caller's `{` test still works. Returns the sid,
+ * or -1 when the name is not a template. Idempotent: the kind fixpoint and the
+ * emit phase both call it and get the same sid. */
+static int gs_instantiate(const char**p,const char*n){
+  int gi=gs_find(n);
+  if(gi<0) return -1;
+  const char*q=*p;
+  sw(&q);
+  if(*q!='<') return -1;
+  q++;
+  int ks[8], nk=0;
+  for(;;){
+    sw(&q);
+    if(!*q) errx("a type argument list needs a closing >");
+    if(*q=='>'){ q++; break; }
+    if(*q==','){ q++; continue; }
+    char t[64];
+    if(!pid(&q,t,64)) errx("a type argument must be num, str or list");
+    int k=-1;
+    if(!strcmp(t,"num")) k=K_NUM;
+    else if(!strcmp(t,"str")) k=K_STR;
+    else if(!strcmp(t,"list")) k=K_LIST;
+    if(k<0) errx("a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented",t);
+    if(nk>=8) errx("too many type arguments (native limit is 8)");
+    ks[nk++]=k;
+  }
+  if(nk!=GS[gi].np)
+    errx("struct '%s' takes %d type argument%s, got %d",n,GS[gi].np,GS[gi].np==1?"":"s",nk);
+  char mn[80];
+  int o=snprintf(mn,sizeof mn,"%s__",GS[gi].name);
+  for(int i=0;i<nk;i++) mn[o++]=(char)(ks[i]==K_STR?'s':(ks[i]==K_LIST?'l':'n'));
+  if(o>=64) errx("struct '%s' is too long to instantiate (the mangled name must fit 63 characters)",n);
+  mn[o]=0;
+  sw(&q); *p=q;
+  int sid=s_find(mn);
+  if(sid>=0) return sid;
+  if(nS>=MAXS) errx("too many structs (a generic instantiation counts as one; native limit is %d)",MAXS);
+  strcpy(S[nS].name,mn);
+  S[nS].nf=GS[gi].nf;
+  for(int f=0;f<GS[gi].nf;f++){
+    strcpy(S[nS].f[f].name,GS[gi].f[f]);
+    S[nS].f[f].kind=K_UNK; S[nS].f[f].sid=-1;
+  }
+  gskn[nS]=nk;
+  for(int i=0;i<nk;i++) gsk[nS][i]=ks[i];
+  return nS++;
+}
+
 /* ================= use expansion (before any parsing) ================= */
 static char*rf(const char*p,size_t*n){
   FILE*f=fopen(p,"rb");
@@ -825,14 +901,53 @@ static void collect_defs(const char*src){
       if(!pid(&p,nm,64)){ fprintf(stderr,"native_aot: struct needs a name\n"); exit(1); }
       if(s_find(nm)>=0){ fprintf(stderr,"native_aot: struct '%s' declared twice\n",nm); exit(1); }
       if(nS>=MAXS){ fprintf(stderr,"native_aot: too many structs (native limit: %d)\n",MAXS); exit(1); }
-      strcpy(S[nS].name,nm); S[nS].nf=0;
       sw(&p);
-      /* `struct Box<T> { ... }` is generic-struct syntax. Native needs one
-       * concrete field layout plus pointer-kind information per struct for its
-       * collector, and there is no per-instantiation layout: Box<num> and
-       * Box<str> would share field descriptors and GC roots. Name the missing
-       * feature instead of reporting a missing brace (docs/TYPES_ROADMAP.md). */
-      if(*p=='<'){ fprintf(stderr,"native_aot: generic structs are not implemented: struct '%s' cannot take a type parameter list, so declare a concrete struct name (docs/TYPES_ROADMAP.md)\n",nm); exit(1); }
+      /* `struct Box<T> { ... }` is a template: record the parameters and the
+         field names, and leave the layout to each instantiation (see
+         gs_instantiate). The template must NOT take an S[] slot, or Box would
+         look like a concrete struct with no fields. */
+      if(*p=='<'){
+        p++;
+        if(gs_find(nm)>=0||s_find(nm)>=0){
+          fprintf(stderr,"native_aot: struct '%s' declared twice\n",nm); exit(1);
+        }
+        if(nGS>=MAXS){ fprintf(stderr,"native_aot: too many generic structs\n"); exit(1); }
+        GS[nGS].np=0; GS[nGS].nf=0; strcpy(GS[nGS].name,nm);
+        for(;;){
+          sw(&p);
+          if(!*p){ fprintf(stderr,"native_aot: a type parameter list needs a closing >\n"); exit(1); }
+          if(*p=='>'){ p++; break; }
+          if(*p==','){ p++; continue; }
+          char tp[64];
+          if(!pid(&p,tp,64)){ fprintf(stderr,"native_aot: a type parameter must be a name\n"); exit(1); }
+          if(GS[nGS].np>=8){ fprintf(stderr,"native_aot: too many type parameters (native limit is 8)\n"); exit(1); }
+          strcpy(GS[nGS].p[GS[nGS].np++],tp);
+        }
+        sw(&p);
+        if(*p!='{'){ fprintf(stderr,"native_aot: struct %s needs { fields }\n",nm); exit(1); }
+        p++;
+        const char*r=p; int inq2=0;
+        while(*r){
+          if(inq2){ if(*r=='\\') r++; else if(*r=='\"') inq2=0; r++; continue; }
+          if(*r=='\"'){ inq2=1; r++; continue; }
+          if(*r=='/'&&r[1]=='/'){ while(*r&&*r!='\n') r++; continue; }
+          if(*r=='}') break;
+          if(id0(*r)){
+            char fd[64]; int i=0;
+            while(idc(*r)&&i+1<64) fd[i++]=*r++;
+            fd[i]=0;
+            if(GS[nGS].nf>=MAXFD){ fprintf(stderr,"native_aot: struct '%s' has more than %d fields\n",nm,MAXFD); exit(1); }
+            strcpy(GS[nGS].f[GS[nGS].nf++],fd);
+            continue;
+          }
+          r++;
+        }
+        p=r;
+        if(*p=='}') p++;
+        nGS++;
+        continue;
+      }
+      strcpy(S[nS].name,nm); S[nS].nf=0;
       if(*p!='{'){ fprintf(stderr,"native_aot: struct %s needs { fields }\n",nm); exit(1); }
       p++;
       const char*q=p; int inq=0;
@@ -1022,10 +1137,19 @@ static int pk_prim(const char**p,int depth){
   if(pid(p,n,64)){
     if(!strcmp(n,"true")||!strcmp(n,"false")){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
     const char*q=*p; sw(&q);
+    /* A generic instantiation first: `Box<num> {` becomes the concrete struct
+       `Box__n`, so the literal path below is the ordinary one and the value's
+       type identity is the mangled name. */
+    if(*q=='<'&&gs_find(n)>=0){
+      int gsi=gs_instantiate(&q,n);
+      if(gsi>=0){ strcpy(n,S[gsi].name); *p=q; }
+    }
     /* `name {` is a struct literal unless name is a variable and not a
        struct: `while n {` / `when x {` use a bare variable as the condition */
     if(*q=='{'&&(s_find(n)>=0||g_find(n)<0)){
       int sid=s_find(n);
+      if(sid<0&&gs_find(n)>=0)
+        errx("'%s' is a generic struct: write %s<num> { ... } with one type argument per type parameter",n,n);
       if(sid<0) errx("unknown struct '%s'",n,NULL);
       (*p)=q; (*p)++;
       int nf=S[sid].nf, cnt=0;
@@ -1052,6 +1176,14 @@ static int pk_prim(const char**p,int depth){
         }
         int k=fld_pk(p,depth+1);
         if(k==K_STRUCT&&PKX_S<0) k=K_UNK;
+        /* When a template has as many fields as type parameters, field i takes
+           parameter i's kind: `Box<num> { "seven" }` is an error instead of a
+           string field in a box that claimed to hold numbers. With a different
+           count the kinds stay learned from the literals, as for a concrete
+           struct. seed-min and gen2 apply the same rule. */
+        if(gskn[sid]>0&&gskn[sid]==nf&&fi<gskn[sid]&&k>=0&&k!=gsk[sid][fi])
+          errx("struct '%s' field '%s' is %s (its type argument says so), the literal gives %s",
+               S[sid].name,S[sid].f[fi].name,kname(gsk[sid][fi]),kname(k));
         /* the shared dialect (seed-min and gen2) rejects a list inside a
            struct field and a struct nested from a later declaration; native
            must not accept a program the other two reject. */
@@ -1521,10 +1653,19 @@ static void emit_prim(const char**p,int depth){
         if(!strcmp(F[cur_fn].params[i],n)){ load_param(i); XK=F[cur_fn].pk[i]; XS=-1; return; }
     }
     const char*q=*p; sw(&q);
+    /* A generic instantiation first, exactly as in the kind pass: `Box<num> {`
+       becomes the concrete struct `Box__n`, already registered by phase 2, so
+       what follows is the ordinary concrete-struct emit path. */
+    if(*q=='<'&&gs_find(n)>=0){
+      int gsi=gs_instantiate(&q,n);
+      if(gsi>=0){ strcpy(n,S[gsi].name); *p=q; }
+    }
     /* `name {` is a struct literal unless name is a variable and not a
        struct: `while n {` / `when x {` use a bare variable as the condition */
     if(*q=='{'&&(s_find(n)>=0||g_find(n)<0)){
       int sid=s_find(n);
+      if(sid<0&&gs_find(n)>=0)
+        errx("'%s' is a generic struct: write %s<num> { ... } with one type argument per type parameter",n,n);
       if(sid<0) errx("unknown struct '%s'",n,NULL);
       (*p)=q; (*p)++;
       int nf=S[sid].nf;

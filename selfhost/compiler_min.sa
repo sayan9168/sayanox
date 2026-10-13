@@ -112,6 +112,241 @@ make sxecontains(text: str, word: str) -> num {
   }
   give 0
 }
+// ---- generic structs ------------------------------------------------------
+// `struct Box<T> { v }` is a TEMPLATE: parameter names and field names, no
+// layout, so it never enters sdefs. Each instantiation becomes an ordinary
+// concrete struct under a mangled name -- Box<num> is Box__n, Box<str> is
+// Box__s, Pair<num,str> is Pair__ns -- the suffixes generic FUNCTIONS already
+// use. The mangled name is the type identity, so two specialisations get their
+// own sdefs record, ftypes keys and typedef and can never share a field slot
+// (docs/TYPES_ROADMAP.md, "A safe implementation needs" 1 and 2). gxpass
+// rewrites every instantiation before the walker runs, so the existing struct
+// machinery only ever sees a concrete struct. A type argument is num or str:
+// gen2 has no list-typed struct field (a concrete `struct B { v }` cannot hold
+// a list either), so `Box<list>` is left unrewritten and refused by name rather
+// than emitted as C that cannot compile. seed-min and native refuse a list
+// field too, so all three backends refuse it -- with their own words.
+//
+// Both scans walk POSITIONS and build a string only once an occurrence is
+// confirmed. That is survival, not style: a generated function copies every
+// str parameter on entry and never frees the copy, so a helper that takes the
+// source and is called once per character exhausts memory in seconds
+// (docs/STATUS.md, "Self-host memory ceiling").
+make gxisid(c: num) -> num {
+  when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95 {
+    give 1
+  }
+  give 0
+}
+make gxkind(word: str) -> str {
+  when string_eq(word, "num") {
+    give "n"
+  }
+  when string_eq(word, "str") {
+    give "s"
+  }
+  give ""
+}
+// every template in the source, as |Name:np:f1,f2| records
+make gxscan(text: str) -> str {
+  hold out = "|"
+  hold n = len(text)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      i = i + 1
+      while i < n && sx_index(text, i) != 34 {
+        when sx_index(text, i) == 92 && i + 1 < n {
+          i = i + 1
+        }
+        i = i + 1
+      }
+      i = i + 1
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+        while i < n && sx_index(text, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        hold iskw = 0
+        when c == 115 && i + 6 <= n && sx_index(text, i + 1) == 116 && sx_index(text, i + 2) == 114 && sx_index(text, i + 3) == 117 && sx_index(text, i + 4) == 99 && sx_index(text, i + 5) == 116 {
+          iskw = 1
+          when i > 0 {
+            when gxisid(sx_index(text, i - 1)) == 1 {
+              iskw = 0
+            }
+          }
+          when i + 6 < n {
+            when gxisid(sx_index(text, i + 6)) == 1 {
+              iskw = 0
+            }
+          }
+        }
+        when iskw == 1 {
+          hold j = i + 6
+          while j < n && (sx_index(text, j) == 32 || sx_index(text, j) == 9 || sx_index(text, j) == 10 || sx_index(text, j) == 13) {
+            j = j + 1
+          }
+          hold e = j
+          while e < n && gxisid(sx_index(text, e)) == 1 {
+            e = e + 1
+          }
+          hold k = e
+          while k < n && (sx_index(text, k) == 32 || sx_index(text, k) == 9 || sx_index(text, k) == 10 || sx_index(text, k) == 13) {
+            k = k + 1
+          }
+          when e > j && k < n && sx_index(text, k) == 60 {
+            hold np = 1
+            hold p = k + 1
+            while p < n && sx_index(text, p) != 62 {
+              when sx_index(text, p) == 44 {
+                np = np + 1
+              }
+              p = p + 1
+            }
+            hold fields = ""
+            p = p + 1
+            while p < n && sx_index(text, p) != 125 {
+              while p < n && (sx_index(text, p) == 32 || sx_index(text, p) == 9 || sx_index(text, p) == 10 || sx_index(text, p) == 13) {
+                p = p + 1
+              }
+              hold fs = p
+              while p < n && gxisid(sx_index(text, p)) == 1 {
+                p = p + 1
+              }
+              when p > fs {
+                when len(fields) > 0 {
+                  fields = concat(fields, ",")
+                }
+                fields = concat(fields, sxeslice(text, fs, p))
+              } otherwise {
+                when p < n && sx_index(text, p) != 125 {
+                  p = p + 1
+                }
+              }
+            }
+            when len(fields) > 0 && np <= 8 {
+              out = concat(out, concat(sxeslice(text, j, e), concat(":", concat(chr(48 + np), concat(":", concat(fields, "|"))))))
+            }
+          }
+          i = i + 6
+        } otherwise {
+          i = i + 1
+        }
+      }
+    }
+  }
+  give out
+}
+// One pass: each instantiation `Box<num> {` becomes `Box__n {`. Gives the
+// mangled structs as sdefs records in first-use order, chr(1), then the
+// rewritten source. An occurrence is rewritten only when the name is a declared
+// template, every type argument is num/str/list, the count matches the
+// template's and a `{` follows -- so a comparison such as `a < b` is never
+// touched, and anything unusual is left for the walker to refuse.
+make gxpass(text: str, gsdefs: str) -> str {
+  hold defs = ""
+  hold names = "|"
+  hold out = ""
+  hold n = len(text)
+  hold i = 0
+  hold cp = 0
+  while i < n {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      i = i + 1
+      while i < n && sx_index(text, i) != 34 {
+        when sx_index(text, i) == 92 && i + 1 < n {
+          i = i + 1
+        }
+        i = i + 1
+      }
+      i = i + 1
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+        while i < n && sx_index(text, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        hold startok = 0
+        when gxisid(c) == 1 {
+          when i == 0 {
+            startok = 1
+          } otherwise {
+            when gxisid(sx_index(text, i - 1)) == 0 {
+              startok = 1
+            }
+          }
+        }
+        when startok == 1 {
+          hold e = i
+          while e < n && gxisid(sx_index(text, e)) == 1 {
+            e = e + 1
+          }
+          hold j = e
+          while j < n && (sx_index(text, j) == 32 || sx_index(text, j) == 9 || sx_index(text, j) == 10 || sx_index(text, j) == 13) {
+            j = j + 1
+          }
+          hold hit = 0
+          when j < n && sx_index(text, j) == 60 {
+            hold nm = sxeslice(text, i, e)
+            hold rec = sxelookup(gsdefs, nm, ":")
+            when len(rec) > 0 {
+              hold args = ""
+              hold ok = 1
+              hold p = j + 1
+              while p < n && ok == 1 && sx_index(text, p) != 62 {
+                while p < n && (sx_index(text, p) == 32 || sx_index(text, p) == 9 || sx_index(text, p) == 10 || sx_index(text, p) == 13) {
+                  p = p + 1
+                }
+                when p < n && sx_index(text, p) == 44 {
+                  p = p + 1
+                } otherwise {
+                  hold as = p
+                  while p < n && gxisid(sx_index(text, p)) == 1 {
+                    p = p + 1
+                  }
+                  hold letter = gxkind(sxeslice(text, as, p))
+                  when len(letter) == 0 {
+                    ok = 0
+                  } otherwise {
+                    args = concat(args, letter)
+                  }
+                }
+              }
+              when ok == 1 && p < n && len(args) == sx_index(rec, 0) - 48 {
+                hold after = p + 1
+                while after < n && (sx_index(text, after) == 32 || sx_index(text, after) == 9 || sx_index(text, after) == 10 || sx_index(text, after) == 13) {
+                  after = after + 1
+                }
+                when after < n && sx_index(text, after) == 123 {
+                  hold mn = concat(nm, concat("__", args))
+                  out = concat(out, sxeslice(text, cp, i))
+                  out = concat(out, mn)
+                  cp = p + 1
+                  i = p + 1
+                  hit = 1
+                  when tbl_has(names, mn) == 0 {
+                    names = concat(names, concat(mn, "|"))
+                    defs = concat(defs, concat(mn, concat(":", concat(sxeslice(rec, 2, len(rec)), ";"))))
+                  }
+                }
+              }
+            }
+          }
+          when hit == 0 {
+            i = e
+          }
+        } otherwise {
+          i = i + 1
+        }
+      }
+    }
+  }
+  out = concat(out, sxeslice(text, cp, n))
+  give concat(concat(defs, chr(1)), out)
+}
 // Identify calls with list/index syntax, without treating quoted '[' as code.
 make sxehaslist(text: str, open: num) -> num {
   hold i = open + 1
@@ -1708,7 +1943,20 @@ while lgp < lgsn {
     hold lgln = ""
   }
 }
+// Generic struct templates are collected first, then every instantiation is
+// rewritten to its mangled concrete name before the walker runs (gxscan,
+// gxpass). The rewrite copies the source and this dialect has no substring
+// builtin, so it is quadratic in the source size: it runs only for a program
+// that declares a template, which keeps the self-host path (compiler_min.sa
+// declares none) off it entirely.
+hold gsdefs = gxscan(lgout)
+hold gxsdefs = ""
 hold source = lgout
+when len(gsdefs) > 1 {
+  hold gxrec = gxpass(lgout, gsdefs)
+  hold gxsdefs = sxesegment(gxrec, 0)
+  hold source = sxesegment(gxrec, 1)
+}
 hold n = len(source)
 hold pos = 0
 
@@ -1740,7 +1988,9 @@ hold ldecls = "|"
 // programs retain their existing flat declaration contract.
 hold scope_marks = []
 hold scope_head = -1
-hold sdefs = ""
+// the instantiations gxpass found, before any declaration the walker appends
+hold sdefs = gxsdefs
+hold gxtpl = 0
 hold typedefs = ""
 hold stname = ""
 hold sfields = ""
@@ -16637,19 +16887,25 @@ hold ec = 0
           }
         }
       }
-      // `struct Box<T> { ... }` is generic-struct syntax: a struct declaration
-      // with a type parameter list. No backend has a per-instantiation field
-      // layout, so Box<num> and Box<str> would share field slots and confuse
-      // field loads and the collector roots (docs/TYPES_ROADMAP.md, "Why
-      // generic structs are not implemented here"). Refuse it by name: without
-      // this check the `<T>` was swallowed into the field list and the program
-      // failed later with a misleading "undefined name: Box" or "struct literal
-      // must fill every field".
+      // A template declaration: gxscan recorded it and gxpass already
+      // registered one concrete struct per instantiation, so the walker only
+      // skips the parameter list and the body. The template itself must not
+      // enter sdefs, or `Box` would look concrete with the template's fields.
+      gxtpl = 0
       when pos < n {
         when sx_index(source,pos) == 60 {
-          hold exerr = concat(exerr, "#error sayanox-min: generic structs are not implemented: a struct declaration cannot take a type parameter list")
-          hold exerr = concat(exerr, nl)
-          show "min: generic structs are not implemented: declare a concrete struct name (docs/TYPES_ROADMAP.md)"
+          when len(sxelookup(gsdefs, stname, ":")) > 0 {
+            gxtpl = 1
+            hold gxq = pos + 1
+            while gxq < n && sx_index(source,gxq) != 62 {
+              hold gxq = gxq + 1
+            }
+            hold pos = sxflowspace(source, gxq + 1)
+          } otherwise {
+            hold exerr = concat(exerr, "#error sayanox-min: a struct type parameter list is not num, str or list at every use")
+            hold exerr = concat(exerr, nl)
+            show "min: a struct type argument must be num, str or list, and every instantiation must be spelled the same way (docs/TYPES_ROADMAP.md)"
+          }
         }
       }
       when pos < n {
@@ -16712,10 +16968,12 @@ hold ec = 0
           }
         }
       }
-      hold sdefs = concat(sdefs, stname)
-      hold sdefs = concat(sdefs, ":")
-      hold sdefs = concat(sdefs, sfields)
-      hold sdefs = concat(sdefs, ";")
+      when gxtpl == 0 {
+        hold sdefs = concat(sdefs, stname)
+        hold sdefs = concat(sdefs, ":")
+        hold sdefs = concat(sdefs, sfields)
+        hold sdefs = concat(sdefs, ";")
+      }
     }
 
     // not the start of any statement: a stray character left over after a

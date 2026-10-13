@@ -115,13 +115,15 @@ recorded as soon as the nested call is queued.
   three value kinds.
 * No type inference beyond the call site's argument kinds, and no inference
   for a type parameter that no argument pins down (it falls back to `num`).
-* No generic structs and no generic lists of arbitrary element types. Lists
-  remain double-only (see [`SYNTAX.md`](SYNTAX.md)). Since 2026-10-13 the
-  generic-*struct* syntax is refused by name on all three backends instead of
-  failing as a brace/undefined-name/field-count error — `make
-  test-generic-structs` pins the three diagnostics and the concrete-name
-  workaround, and [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md) records what a real
-  implementation would need.
+* No bounds on a *struct* type parameter, and no generic lists of arbitrary
+  element types: lists remain double-only (see [`SYNTAX.md`](SYNTAX.md)).
+  Generic **structs** do exist since 2026-10-13 — `struct Box<T> { v }` is a
+  template and each instantiation is its own concrete struct (`Box<num>` is
+  `Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns`: the
+  function-mangling suffixes), on all three backends, with `num` or `str` as a
+  type argument. `make test-generic-structs` pins the parity fixture and the
+  five refusals; [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md) records the model and
+  what is still missing.
 * Kinds are per *value kind*, not per declared type: `A` and `B` can both be
   `num` without any distinction being made.
 
@@ -158,8 +160,10 @@ entries including templates and generated variants, and 8 MiB expanded source
 (the individual template-body expansion also has a bounded allocation).
 `_sx_gen_` is reserved. Bodies retain the seed typed-function contract:
 isolated locals, no global capture, structurally complete return paths, supported
-builtins only. Explicit type arguments at calls and generic structs are not
-implemented. Calls that cannot be resolved during pre-emission checking fail
+builtins only. Explicit type arguments at calls are not implemented. Generic
+*structs* are, with the same per-kind mangling: `struct Box<T> { v }` gives
+`Box__n` for `Box<num>` and `Box__s` for `Box<str>`
+([`TYPES_ROADMAP.md`](TYPES_ROADMAP.md)). Calls that cannot be resolved during pre-emission checking fail
 instead of adding undeclared C functions during emission.
 
 `test-seed-generics` checks ordinary num/str/list and multi-parameter calls,
@@ -240,5 +244,6 @@ resolved kind. Multi-parameter argument scanning balances list/brace/group
 delimiters, so commas inside `[1, 2]` do not start a new function argument.
 `test-list-postfix` checks seed/gen2/native output parity, including a second
 type parameter after an indexed list literal. Unresolved expressions still
-use the existing classifier; this does not claim universal inference or add
-generic structs/concrete struct specializations.
+use the existing classifier; this does not claim universal inference. Generic
+structs (concrete struct specializations) landed in a later increment — see
+[`TYPES_ROADMAP.md`](TYPES_ROADMAP.md).

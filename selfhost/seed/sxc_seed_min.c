@@ -225,6 +225,32 @@ static char *parse_id(void){
 }
 static int findv(const char *n){ for(int i=0;i<nv;i++) if(!strcmp(vn[i],n)) return i; return -1; }
 static int find_struct(const char *n){ for(int i=0;i<nsd;i++) if(!strcmp(SD[i].name,n)) return i; return -1; }
+
+/* ---- generic struct templates -------------------------------------------
+ * `struct Box<T> { v }` is a TEMPLATE: it owns a parameter list and field
+ * NAMES but no layout, so it never enters SD. Every instantiation becomes an
+ * ordinary concrete StructDef under a mangled name -- `Box<num>` is `Box__n`,
+ * `Box<str>` is `Box__s`, `Pair<num,str>` is `Pair__ns` -- the same suffixes
+ * generic FUNCTIONS already use, so one spelling of "specialisation" covers
+ * both features in the emitted C.
+ *
+ * That mangling is what the design in docs/TYPES_ROADMAP.md asks for:
+ *   * the mangled name is the type identity, so `Box<num>` and `Box<str>` are
+ *     two different structs and can never share a field slot or a GC root;
+ *   * each instantiation has its OWN StructDef, created on first use from the
+ *     template's field names, so processing a literal never mutates the
+ *     template's layout, and the field kinds of one instantiation are learned
+ *     from its own literals exactly as for a concrete struct;
+ *   * creation is idempotent (find_struct first), so the four collect/scan
+ *     rounds agree on every struct index and the emitted C stays stable.
+ * A type argument is num, str or list -- the three kinds function
+ * specialisation uses. A struct name as a type argument is refused by name
+ * rather than silently mangled into something the typedef order cannot carry.
+ * ------------------------------------------------------------------------ */
+typedef struct { char *name; char *p[8]; int np; char *fields[16]; int nf; } GStruct;
+static GStruct GS[32]; static int ngs;
+static int find_gstruct(const char *n){ for(int i=0;i<ngs;i++) if(!strcmp(GS[i].name,n)) return i; return -1; }
+static char kind_letter(int k){ return k==TY_STR?'s':(k==TY_LIST?'l':'n'); }
 /* how a struct field's type is named in a diagnostic */
 static const char *ftyname(int si, int f){
   if(SD[si].fty[f]==1) return "a string";
@@ -492,25 +518,122 @@ static void skip_block(void);   /* defined below; skip_struct_decl needs it */
  * scanner expects '{', and every path below died as `seed_min: { at <char
  * offset>` -- a diagnostic that names a brace and an offset instead of the
  * feature that is missing. */
-static void refuse_type_params(void){
+/* Parse `<T>` / `<A, B>` after a struct name. Returns the parameter count, or
+ * 0 when there is no list at all, which is how a concrete declaration is told
+ * from a template. Names are strdup'd into `out` (caller frees). */
+static int parse_type_params(char **out, int max){
   skip();
-  if(P<N && S[P]=='<')
-    die("generic structs are not implemented: a struct declaration cannot take a "
-        "type parameter list, so declare a concrete struct name "
-        "(docs/TYPES_ROADMAP.md)");
+  if(P>=N || S[P]!='<') return 0;
+  P++;
+  int n=0;
+  for(;;){
+    skip();
+    if(P>=N) die("a generic struct type parameter list needs a closing >");
+    if(S[P]=='>'){ P++; break; }
+    if(S[P]==','){ P++; continue; }
+    if(n>=max) die("too many type parameters (seed-min limit is 8)");
+    out[n++]=parse_id();
+  }
+  return n;
 }
 /* the shape every early scan path uses for a struct declaration it is not
- * collecting: eat the name, refuse a type parameter list, skip the body */
+ * collecting: eat the name, eat a type parameter list if there is one, skip
+ * the body. Templates are registered by scan_structs/parse_struct_def, so a
+ * scan path only has to get past the syntax. */
 static void skip_struct_decl(void){
   free(parse_id());
-  refuse_type_params();
+  char *tp[8]; int ntp=parse_type_params(tp,8);
+  for(int i=0;i<ntp;i++) free(tp[i]);
   skip_block();
+}
+
+/* `Box<num>` at an expression site: read the type arguments, then return the
+ * concrete StructDef index of that instantiation, creating it from the
+ * template on first use. `nk` receives the argument kinds so the literal can
+ * check them (field i takes parameter i's kind when the counts match). */
+static int instantiate_gstruct(int gi, int *nk){
+  skip();
+  if(P>=N || S[P]!='<'){
+    char m[256];
+    snprintf(m,sizeof m,"%s is a generic struct: write %s<num> { ... } with one type argument per type parameter",
+             GS[gi].name, GS[gi].name);
+    die(m);
+  }
+  P++;
+  int ks[8]; int n=0;
+  for(;;){
+    skip();
+    if(P>=N) die("a type argument list needs a closing >");
+    if(S[P]=='>'){ P++; break; }
+    if(S[P]==','){ P++; continue; }
+    if(n>=8) die("too many type arguments (seed-min limit is 8)");
+    char *t=parse_id();
+    int k=-1;
+    if(!strcmp(t,"num")) k=TY_NUM;
+    else if(!strcmp(t,"str")) k=TY_STR;
+    else if(!strcmp(t,"list")) k=TY_LIST;
+    if(k<0){
+      char m[256];
+      snprintf(m,sizeof m,"a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented", t);
+      free(t); die(m);
+    }
+    free(t); ks[n++]=k;
+  }
+  if(n!=GS[gi].np){
+    char m[256];
+    snprintf(m,sizeof m,"%s takes %d type argument%s, got %d",
+             GS[gi].name, GS[gi].np, GS[gi].np==1?"":"s", n);
+    die(m);
+  }
+  char mn[192];
+  int o=snprintf(mn,sizeof mn,"%s__",GS[gi].name);
+  for(int i=0;i<n;i++){ nk[i]=ks[i]; if(o<(int)sizeof mn-1) mn[o++]=(char)kind_letter(ks[i]); }
+  mn[o]=0;
+  int si=find_struct(mn);
+  if(si>=0){ skip(); return si; }        /* already instantiated: reuse it */
+  if(nsd>=32) die("too many structs (a generic instantiation counts as one)");
+  StructDef *D=&SD[nsd];
+  D->name=strdup(mn);
+  D->nf=GS[gi].nf;
+  for(int f=0;f<D->nf;f++) D->fields[f]=strdup(GS[gi].fields[f]);
+  memset(D->fty,0,sizeof D->fty);
+  memset(D->fset,0,sizeof D->fset);
+  for(int i=0;i<16;i++) D->fsi[i]=-1;
+  nsd++;
+  skip();
+  return nsd-1;
 }
 
 static void parse_struct_def(void){
   eat("struct");
   char *name=parse_id();
-  refuse_type_params();
+  char *tp[8]; int ntp=parse_type_params(tp,8);
+  if(ntp>0){
+    /* A template: field names only, and no StructDef. Every instantiation gets
+       its own layout, so nothing here may be mutated by a literal later. */
+    if(find_gstruct(name)>=0 || find_struct(name)>=0){
+      free(name); for(int i=0;i<ntp;i++) free(tp[i]);
+      skip(); eat("{"); int d=1; P++;
+      while(P<N&&d){ if(S[P]=='{')d++; else if(S[P]=='}')d--; P++; }
+      return;
+    }
+    if(ngs>=32) die("too many generic structs");
+    GStruct *G=&GS[ngs];
+    G->name=name; G->np=ntp; G->nf=0;
+    for(int i=0;i<ntp;i++) G->p[i]=tp[i];
+    skip(); eat("{");
+    for(;;){
+      skip();
+      if(P>=N) die("}");
+      if(S[P]=='}'){ P++; break; }
+      if(S[P]==','){ P++; continue; }
+      if(!isid0(S[P])){ P++; continue; }
+      if(G->nf>=16) die("too many fields");
+      G->fields[G->nf++]=parse_id();
+    }
+    ngs++;
+    return;
+  }
   if(find_struct(name)>=0){ free(name); skip(); eat("{"); int d=1; P++;
     while(P<N&&d){ if(S[P]=='{')d++; else if(S[P]=='}')d--; P++; }
     return;
@@ -598,6 +721,24 @@ static char *atom(int *oty){
           die("seed-min for range bounds support len(...) but not other calls yet");
       } else if(findv(id)<0) die("seed-min for range bound names an undefined variable");
     }
+    /* A generic instantiation first: `Box<num> { ... }` becomes the concrete
+       struct `Box__n`, so the literal path below is the ordinary one. */
+    int gk[8]; int ngk=0;
+    if(find_struct(id)<0){
+      int gi=find_gstruct(id);
+      if(gi>=0){
+        if(P<N && S[P]=='<'){
+          int gsi=instantiate_gstruct(gi,gk);
+          ngk=GS[gi].np;
+          char *mn=strdup(SD[gsi].name);
+          free(id); id=mn;
+        } else {
+          char m[256];
+          snprintf(m,sizeof m,"%s is a generic struct: write %s<num> { ... } with one type argument per type parameter", id, id);
+          die(m);
+        }
+      }
+    }
     /* A struct name followed by `{` is a literal, not a variable reference. */
     int struct_literal=find_struct(id)>=0 && P<N && S[P]=='{';
     if((for_call || producer_ret>=0 || in_fn) && !(P<N && S[P]=='(') && !struct_literal && findv(id)<0){
@@ -633,6 +774,18 @@ static char *atom(int *oty){
           if(slot[fi]) die("struct literal gives the same field twice");
           int et; char *v=expr(&et);
           slot[fi]=v; nvv++;
+          /* When a template has as many fields as type parameters, field i
+             takes parameter i's kind: `Box<num> { "seven" }` is an error, not
+             a string field in a box that claimed to hold numbers. With a
+             different count the kinds stay learned from the literals, as for
+             a concrete struct. */
+          if(ngk>0 && ngk==SD[si].nf && fi<ngk && et!=gk[fi]
+             && (et==TY_NUM || et==TY_STR || et==TY_LIST)){
+            char msg[256];
+            snprintf(msg,sizeof msg,"%s field '%s' is %s (its type argument says so), the literal gives %s",
+                     SD[si].name, SD[si].fields[fi], kind_word(gk[fi]), kind_word(et));
+            die(msg);
+          }
           if(et==TY_STR || et==TY_NUM){
             int ft=(et==TY_STR)?1:0;
             if(SD[si].fset[fi] && SD[si].fty[fi]!=ft){
@@ -1116,7 +1269,8 @@ static void stmt(void){
   skip(); if(P>=N||S[P]=='}') return;
   producer_statement();
   if(at("struct")){
-    P+=6; free(parse_id()); skip_block();
+    /* skip_struct_decl also eats a template's type parameter list */
+    P+=6; skip_struct_decl();
     return;
   }
   if(at("make")){
@@ -1515,6 +1669,16 @@ static void collect(void){
           size_t rhs_start=P; char *t=parse_id();
           si=find_struct(t);
           if(si>=0) ty=TY_STRUCT;
+          else if(P<N && S[P]=='<' && find_gstruct(t)>=0){
+            /* A generic instantiation on the right of hold: `hold b =
+               Box<num> { 7 }` declares b as the mangled struct `Box__n`,
+               exactly as a concrete literal declares its name. Creating the
+               instantiation here is idempotent, so the four collect/scan
+               rounds agree on the struct index. */
+            int gk[8];
+            si=instantiate_gstruct(find_gstruct(t),gk);
+            ty=TY_STRUCT;
+          }
           else {
             int i=findv(t); if(i>=0){ ty=vt[i]; si=vs[i]; }
             /* a postfix .field or [index] yields the element's type */
