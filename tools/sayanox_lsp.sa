@@ -985,9 +985,34 @@ make sym_item(name: str, kind: num, line: num, uri: str, first: num) -> str {
   give b
 }
 
-make symbols(text: str, uri: str) -> str {
+// lower: ASCII lowercase, for the case-insensitive workspace/symbol filter.
+make lower(s: str) -> str {
+  hold r = ""
+  hold i = 0
+  hold n = 0
+  hold c = 0
+  n = len(s)
+  while i < n {
+    c = sx_index(s, i)
+    when c >= 65 && c <= 90 {
+      c = c + 32
+    }
+    r = r + chr(c)
+    i += 1
+  }
+  give r
+}
+
+// sym_scan: the symbols of ONE document as a comma-joined list of
+// DocumentSymbol items, each carrying its own leading comma except the very
+// first, so a caller may concatenate the scans of several documents without
+// knowing how many items each produced. `first` is the number of items the
+// caller already has, which is all the comma rule needs. A non-empty `query`
+// keeps only the symbols whose name contains it, case-insensitively: that is
+// the workspace/symbol filter, and documentSymbol passes "" for "no filter".
+make sym_scan(text: str, uri: str, query: str, first: num) -> str {
   hold arr = ""
-  hold count = 0
+  hold count = first
   hold lines = 0
   hold l = 0
   hold line = ""
@@ -1038,13 +1063,329 @@ make symbols(text: str, uri: str) -> str {
         }
       }
       when len(w) > 0 {
-        arr = arr + sym_item(w, kind, l, uri, count)
-        count += 1
+        when len(query) <= 0 {
+          arr = arr + sym_item(w, kind, l, uri, count)
+          count += 1
+        } otherwise {
+          when find(lower(w), lower(query)) >= 0 {
+            arr = arr + sym_item(w, kind, l, uri, count)
+            count += 1
+          }
+        }
       }
     }
     l += 1
   }
-  give concat("[", concat(arr, "]"))
+  give arr
+}
+
+make symbols(text: str, uri: str) -> str {
+  give concat("[", concat(sym_scan(text, uri, "", 0), "]"))
+}
+
+// ------------------------------------------------------------- references
+
+make ref_item(uri: str, line: num, ch: num, endch: num, first: num) -> str {
+  hold b = ""
+  when first > 0 {
+    b = b + ","
+  }
+  b = b + "{\"uri\":\""
+  b = b + json_esc(uri)
+  b = b + "\",\"range\":{\"start\":{\"line\":"
+  b = b + numstr(line)
+  b = b + ",\"character\":"
+  b = b + numstr(ch)
+  b = b + "},\"end\":{\"line\":"
+  b = b + numstr(line)
+  b = b + ",\"character\":"
+  b = b + numstr(endch)
+  b = b + "}}}"
+  give b
+}
+
+// refs_for: every whole-word occurrence of `w` in one document, as Location
+// items with the same comma rule as sym_scan. Positions are UTF-16 code units
+// (utf16_span), so a non-ASCII line still reports the column a client expects.
+// `incl` is the LSP context.includeDeclaration flag: when it is 0 the line that
+// declares the word (`make w`, `hold w`, `struct w`) is skipped, which is what
+// "find references, not the definition" means in an editor.
+make refs_for(w: str, text: str, uri: str, incl: num, first: num) -> str {
+  hold arr = ""
+  hold count = first
+  hold lines = 0
+  hold l = 0
+  hold line = ""
+  hold n = 0
+  hold i = 0
+  hold j = 0
+  hold m = 0
+  hold c = 0
+  hold run = ""
+  hold decl = 0
+  hold span = [0, 0]
+  hold espan = [0, 0]
+  when len(w) > 0 {
+    lines = count_lines(text)
+    while l < lines {
+      line = line_text(text, l)
+      n = len(line)
+      decl = 0
+      when incl == 0 {
+        m = 0
+        while m < n {
+          c = sx_index(line, m)
+          when c == 32 || c == 9 {
+            m += 1
+          } otherwise {
+            break
+          }
+        }
+        when starts(line, m, concat("make ", w)) == 1 {
+          decl = 1
+        }
+        when starts(line, m, concat("hold ", w)) == 1 {
+          decl = 1
+        }
+        when starts(line, m, concat("struct ", w)) == 1 {
+          decl = 1
+        }
+      }
+      when decl == 0 {
+        i = 0
+        while i < n {
+          c = sx_index(line, i)
+          when is_ident(c) == 1 {
+            run = ""
+            j = i
+            while j < n {
+              c = sx_index(line, j)
+              when is_ident(c) == 1 {
+                run = run + chr(c)
+                j += 1
+              } otherwise {
+                break
+              }
+            }
+            when string_eq(run, w) == 1 {
+              // the start of the word and the offset just past its last byte,
+              // each as UTF-16 units, so the range covers the whole word
+              span = utf16_span(line, i)
+              espan = utf16_span(line, i + len(w))
+              arr = arr + ref_item(uri, l, span[0], espan[0], count)
+              count += 1
+            }
+            i = j
+          } otherwise {
+            i += 1
+          }
+        }
+      }
+      l += 1
+    }
+  }
+  give arr
+}
+
+// ---------------------------------------------------------------- formatting
+
+// format_text: the rules of tools/sxfmt.sa, ported so a client can ask for
+// them over the protocol instead of running the formatter as a program.
+// Indentation is rebuilt from brace depth at two spaces per level, leading and
+// trailing whitespace is stripped, blank lines stay blank, a final newline is
+// added, and braces inside a quoted string or a // comment do not change the
+// depth. Tokens and comments are never rewritten: the formatter stays
+// conservative, and running it twice gives the same text.
+make format_text(text: str) -> str {
+  hold src = text
+  hold n = 0
+  hold pos = 0
+  hold c = 0
+  hold depth = 0
+  hold result = ""
+  hold line = ""
+  hold left = 0
+  hold right = 0
+  hold t = 0
+  hold body = ""
+  hold copy_pos = 0
+  hold close_prefix = 0
+  hold lead_pos = 0
+  hold lead_scan = 0
+  hold open_count = 0
+  hold close_count = 0
+  hold in_quote = 0
+  hold escaped = 0
+  hold in_comment = 0
+  hold scan_pos = 0
+  hold sc = 0
+  hold line_depth = 0
+  hold indent = ""
+  hold indent_pos = 0
+  n = len(src)
+  when n > 0 {
+    when sx_index(src, n - 1) != 10 {
+      src = src + "\n"
+      n = len(src)
+    }
+  }
+  while pos < n {
+    c = sx_index(src, pos)
+    when c == 10 {
+      left = 0
+      right = len(line)
+      while left < right {
+        t = sx_index(line, left)
+        when t == 32 || t == 9 || t == 13 {
+          left += 1
+        } otherwise {
+          break
+        }
+      }
+      while right > left {
+        t = sx_index(line, right - 1)
+        when t == 32 || t == 9 || t == 13 {
+          right -= 1
+        } otherwise {
+          break
+        }
+      }
+      body = ""
+      copy_pos = left
+      while copy_pos < right {
+        body = body + chr(sx_index(line, copy_pos))
+        copy_pos += 1
+      }
+      // a line that starts with closing braces is indented at the depth those
+      // braces return to
+      close_prefix = 0
+      lead_pos = 0
+      lead_scan = 1
+      while lead_scan == 1 {
+        when lead_pos < len(body) {
+          t = sx_index(body, lead_pos)
+          when t == 125 {
+            close_prefix += 1
+            lead_pos += 1
+          } otherwise {
+            when t == 32 || t == 9 {
+              lead_pos += 1
+            } otherwise {
+              lead_scan = 0
+            }
+          }
+        } otherwise {
+          lead_scan = 0
+        }
+      }
+      // count braces, ignoring quoted strings and // comments
+      open_count = 0
+      close_count = 0
+      in_quote = 0
+      escaped = 0
+      in_comment = 0
+      scan_pos = 0
+      while scan_pos < len(line) {
+        sc = sx_index(line, scan_pos)
+        when in_comment == 1 {
+          scan_pos += 1
+        } otherwise {
+          when in_quote == 1 {
+            when escaped == 1 {
+              escaped = 0
+            } otherwise {
+              when sc == 92 {
+                escaped = 1
+              } otherwise {
+                when sc == 34 {
+                  in_quote = 0
+                }
+              }
+            }
+          } otherwise {
+            when sc == 34 {
+              in_quote = 1
+            } otherwise {
+              when sc == 47 && scan_pos + 1 < len(line) {
+                when sx_index(line, scan_pos + 1) == 47 {
+                  in_comment = 1
+                }
+              } otherwise {
+                when sc == 123 {
+                  open_count += 1
+                }
+                when sc == 125 {
+                  close_count += 1
+                }
+              }
+            }
+          }
+          scan_pos += 1
+        }
+      }
+      when len(body) > 0 {
+        line_depth = depth - close_prefix
+        when line_depth < 0 {
+          line_depth = 0
+        }
+        indent = ""
+        indent_pos = 0
+        while indent_pos < line_depth {
+          indent = indent + "  "
+          indent_pos += 1
+        }
+        result = result + indent
+        result = result + body
+      }
+      result = result + "\n"
+      depth = depth + open_count - close_count
+      when depth < 0 {
+        depth = 0
+      }
+      line = ""
+    } otherwise {
+      line = line + chr(c)
+    }
+    pos += 1
+  }
+  give result
+}
+
+// format_edit: one TextEdit replacing the whole buffer, or [] when the
+// document is already formatted so the client leaves the buffer alone. The end
+// of the range is the end of the document: one past the last newline when the
+// text ends with one, else the UTF-16 width of the last line.
+make format_edit(text: str) -> str {
+  hold out = ""
+  hold lines = 0
+  hold endline = 0
+  hold endch = 0
+  hold lastline = ""
+  hold span = [0, 0]
+  hold b = ""
+  out = format_text(text)
+  when string_eq(out, text) == 1 {
+    give "[]"
+  }
+  lines = count_lines(text)
+  endline = lines
+  endch = 0
+  when len(text) > 0 {
+    when sx_index(text, len(text) - 1) != 10 {
+      endline = lines - 1
+      lastline = line_text(text, endline)
+      span = utf16_span(lastline, len(lastline))
+      endch = span[0]
+    }
+  }
+  b = "[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":"
+  b = b + numstr(endline)
+  b = b + ",\"character\":"
+  b = b + numstr(endch)
+  b = b + "}},\"newText\":\""
+  b = b + json_esc(out)
+  b = b + "\"}]"
+  give b
 }
 
 // ------------------------------------------------------------- completion
@@ -1369,6 +1710,15 @@ make known_method(m: str) -> num {
   when string_eq(m, "textDocument/definition") {
     give 1
   }
+  when string_eq(m, "textDocument/references") {
+    give 1
+  }
+  when string_eq(m, "textDocument/formatting") {
+    give 1
+  }
+  when string_eq(m, "workspace/symbol") {
+    give 1
+  }
   give 0
 }
 
@@ -1403,6 +1753,7 @@ make capabilities() -> str {
   hold c = ""
   c = "{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\" \"]},"
   c = concat(c, "\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,")
+  c = concat(c, "\"referencesProvider\":true,\"documentFormattingProvider\":true,\"workspaceSymbolProvider\":true,")
   c = concat(c, "\"diagnosticProvider\":{\"interFileDependencies\":false,\"workspaceDiagnostics\":false}}")
   give c
 }
@@ -1484,6 +1835,9 @@ hold i = 0
 hold n = 0
 hold seen = 0
 hold ln = 0
+hold incl = 1
+hold part = ""
+hold q = ""
 
 while running == 1 {
   hdr = read_line()
@@ -1692,6 +2046,41 @@ while running == 1 {
       when string_eq(method, "textDocument/definition") {
         w = word_at(doc, ln, ch)
         d = reply(idraw, definition_for(w, doc, docuri))
+      }
+      // References, workspace symbols and formatting all span the open
+      // documents, and a helper cannot read the four-slot table, so the
+      // cascade lives here: each slot is scanned in turn and the comma rule
+      // inside the helper joins the items. len(res) is the running item count.
+      when string_eq(method, "textDocument/references") {
+        w = word_at(doc, ln, ch)
+        incl = 1
+        when find(body, "\"includeDeclaration\":false") >= 0 || find(body, "\"includeDeclaration\": false") >= 0 {
+          incl = 0
+        }
+        res = refs_for(w, txt0, uri0, incl, 0)
+        part = refs_for(w, txt1, uri1, incl, len(res))
+        res = res + part
+        part = refs_for(w, txt2, uri2, incl, len(res))
+        res = res + part
+        part = refs_for(w, txt3, uri3, incl, len(res))
+        res = res + part
+        res = concat("[", concat(res, "]"))
+        d = reply(idraw, res)
+      }
+      when string_eq(method, "workspace/symbol") {
+        q = str_field(body, "query")
+        res = sym_scan(txt0, uri0, q, 0)
+        part = sym_scan(txt1, uri1, q, len(res))
+        res = res + part
+        part = sym_scan(txt2, uri2, q, len(res))
+        res = res + part
+        part = sym_scan(txt3, uri3, q, len(res))
+        res = res + part
+        res = concat("[", concat(res, "]"))
+        d = reply(idraw, res)
+      }
+      when string_eq(method, "textDocument/formatting") {
+        d = reply(idraw, format_edit(doc))
       }
       when string_eq(method, "exit") {
         running = 0

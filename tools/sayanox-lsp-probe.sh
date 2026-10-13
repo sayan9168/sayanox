@@ -40,6 +40,24 @@ diag='{"jsonrpc":"2.0","id":6,"method":"textDocument/diagnostic","params":{"uri"
 open2='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"uri":"file://'$doc2'","text":"make thrice(v: num) -> num {\n  give v * 3\n}\nshow thrice(2)\n"}}'
 sym2='{"jsonrpc":"2.0","id":8,"method":"textDocument/documentSymbol","params":{"uri":"file://'$doc2'"}}'
 close2='{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"uri":"file://'$doc2'"}}'
+# ---- documents for the references / workspace-symbol / formatting sessions --
+# docA declares `zz` and uses it three times; docB defines `helper` and uses
+# `zz` once, so a reference search from docA has to span both buffers. docC is
+# the same badly indented source that `make test-sxfmt` feeds the formatter
+# program, so the two paths can be compared rule for rule.
+docA="$work/refA.sa"
+docB="$work/refB.sa"
+docC="$work/fmtC.sa"
+openA='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"uri":"file://'$docA'","text":"hold zz = 1\nshow zz\nwhen zz == 1 {\n  show zz\n}\n"}}'
+openB='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"uri":"file://'$docB'","text":"make helper(v: num) -> num {\n  give v + zz\n}\nshow helper(2)\n"}}'
+openC='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"uri":"file://'$docC'","text":"hold x = 1  \nwhen x > 0 {  \nshow \"brace } // not comment\"\n// comment { }\nwhen x == 1 {\n  show 42   \n}\n}\n"}}'
+refA='{"jsonrpc":"2.0","id":21,"method":"textDocument/references","params":{"textDocument":{"uri":"file://'$docA'"},"position":{"line":1,"character":6},"context":{"includeDeclaration":true}}}'
+refB='{"jsonrpc":"2.0","id":22,"method":"textDocument/references","params":{"textDocument":{"uri":"file://'$docA'"},"position":{"line":1,"character":6},"context":{"includeDeclaration":false}}}'
+refNone='{"jsonrpc":"2.0","id":23,"method":"textDocument/references","params":{"textDocument":{"uri":"file://'$docA'"},"position":{"line":4,"character":0},"context":{"includeDeclaration":true}}}'
+wsQ='{"jsonrpc":"2.0","id":31,"method":"workspace/symbol","params":{"query":"help"}}'
+wsAll='{"jsonrpc":"2.0","id":32,"method":"workspace/symbol","params":{"query":""}}'
+fmtC='{"jsonrpc":"2.0","id":33,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file://'$docC'"},"options":{"tabSize":2,"insertSpaces":true}}}'
+fmtB='{"jsonrpc":"2.0","id":34,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file://'$docB'"},"options":{"tabSize":2,"insertSpaces":true}}}'
 shut='{"jsonrpc":"2.0","id":7,"method":"shutdown","params":{}}'
 exitmsg='{"jsonrpc":"2.0","method":"exit"}'
 
@@ -65,6 +83,9 @@ have2() { case "$out2" in *"$1"*) echo "$2" ;; esac; }
 miss2() { case "$out2" in *"$1"*) ;; *) echo "$2" ;; esac; }
 have3() { case "$out3" in *"$1"*) echo "$2" ;; esac; }
 miss3() { case "$out3" in *"$1"*) ;; *) echo "$2" ;; esac; }
+have4() { case "$out4" in *"$1"*) echo "$2" ;; esac; }
+have5() { case "$out5" in *"$1"*) echo "$2" ;; esac; }
+miss5() { case "$out5" in *"$1"*) ;; *) echo "$2" ;; esac; }
 
 have '"capabilities"'            'initialize'
 have '"sayanox-lsp"'             'serverInfo'
@@ -120,3 +141,54 @@ out3=$(
 )
 miss3 '"name":"f1"'           'fifth document evicts the oldest'
 have3 '"name":"f5"'           'newest document still served'
+
+# ------------------------------------------------------------- references
+# A reference search answers from every open document, reports UTF-16 columns
+# that cover the whole word, and honours context.includeDeclaration: with it
+# false the `hold zz = 1` line is not part of the answer. A position that is
+# not on a word answers [].
+out4=$(
+  {
+    send "$init"
+    send "$openA"
+    send "$openB"
+    send "$refA"
+    send "$refB"
+    send "$refNone"
+    send "$shut"
+    send "$exitmsg"
+  } | "$bin"
+)
+have4 '"id":21,"result":[{"uri":"file://'"$docA"'","range":{"start":{"line":0,"character":5},"end":{"line":0,"character":7}}' 'references include the declaration'
+have4 '"id":22,"result":[{"uri":"file://'"$docA"'","range":{"start":{"line":1,"character":5}' 'references honour includeDeclaration:false'
+have4 '"uri":"file://'"$docB"'"'                    'references span the open documents'
+have4 '"id":23,"result":[]'                         'references at a non-word answer empty'
+
+# ------------------------------------------- workspace/symbol + formatting
+# workspace/symbol searches the open documents (there is no directory listing
+# builtin, so a file that was never opened cannot be found - docs/LSP.md) and
+# filters by query, case-insensitively. textDocument/formatting is the sxfmt
+# rule set over the protocol: docC comes back as one whole-buffer TextEdit with
+# the same text `make test-sxfmt` expects from the formatter program, and a
+# document that is already formatted answers [] so the buffer is left alone.
+out5=$(
+  {
+    send "$init"
+    send "$openA"
+    send "$openB"
+    send "$openC"
+    send "$wsQ"
+    send "$wsAll"
+    send "$fmtC"
+    send "$fmtB"
+    send "$shut"
+    send "$exitmsg"
+  } | "$bin"
+)
+have5 '"id":31,"result":[{"name":"helper","kind":3'  'workspace symbol matches a query'
+have5 '"id":32,"result":[{"name":"zz","kind":13'     'workspace symbol with an empty query spans documents'
+have5 '"end":{"line":8,"character":0}},"newText":"hold x = 1' 'formatting answers one whole-buffer edit'
+have5 'n  // comment { }'                            'formatting indents a comment inside a block'
+have5 'n    show 42'                                 'formatting indents a nested block by four spaces'
+miss5 'x = 1  '                                      'formatting strips trailing whitespace'
+have5 '"id":34,"result":[]'                          'formatting leaves a formatted document alone'

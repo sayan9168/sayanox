@@ -14,7 +14,7 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 
 | Method | Support |
 |--------|---------|
-| `initialize` | yes — `textDocumentSync: 1` (full), completion/hover/definition/documentSymbol/diagnostic providers, `serverInfo: sayanox-lsp 2.0` |
+| `initialize` | yes — `textDocumentSync: 1` (full), completion/hover/definition/documentSymbol/references/formatting/workspaceSymbol/diagnostic providers, `positionEncoding: utf-16`, `serverInfo: sayanox-lsp 2.0` |
 | `initialized` | yes |
 | `textDocument/didOpen` | yes — stores the document in the open-document table (four slots) and publishes diagnostics |
 | `textDocument/didChange` | yes — full-text sync, rewrites that document's slot and re-publishes its diagnostics |
@@ -25,6 +25,9 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 | `textDocument/completion` | keywords and the builtin list |
 | `textDocument/hover` | builtin documentation, a `make` signature, or the variable's declaration |
 | `textDocument/definition` | jumps to the `make` / `hold` / `struct` line of the word under the cursor |
+| `textDocument/references` | every whole-word occurrence of the word under the cursor, across **all open documents**, as `Location[]` with UTF-16 columns that cover the whole word; `context.includeDeclaration: false` leaves out the `make` / `hold` / `struct` line; a position that is not on a word answers `[]` |
+| `workspace/symbol` | the symbols of the open documents, filtered by `query` as a case-insensitive substring (empty query = every symbol). A file that was never opened cannot be found: the dialect has no directory-listing builtin, so there is no workspace scan |
+| `textDocument/formatting` | the `tools/sxfmt.sa` rule set over the protocol: one whole-buffer `TextEdit`, or `[]` when the document is already formatted |
 | `shutdown` / `exit` | yes (EOF also ends the session) |
 
 ## Error responses (robustness)
@@ -83,12 +86,16 @@ vim.api.nvim_create_autocmd("FileType", {
 
 * `tools/sayanox_lsp.sa` is the whole server: a JSON reader (string escapes,
   `\uXXXX`), a JSON writer with escaping, the document scanner, the diagnostic
-  pass, symbols, completion, hover and definition, and the framing loop.
-* `tools/sayanox-lsp-probe.sh` pipes a real session (initialize, didOpen,
-  hover, definition, documentSymbol, completion, diagnostic, didChange,
-  shutdown, exit) into the binary and prints one line per verified fact.
-  `make test-lsp` asserts that list, and the target is part of the
-  `true-selfhost-min` gate — i.e. the LSP is exercised by `make test`.
+  pass, symbols, completion, hover, definition, references, the formatter and
+  the framing loop.
+* `tools/sayanox-lsp-probe.sh` pipes five real sessions into the binary —
+  (1) initialize, didOpen, hover, definition, documentSymbol, completion,
+  diagnostic, didChange, shutdown, exit; (2) a closed document; (3) the
+  four-slot cap; (4) references with and without the declaration, plus a
+  non-word position; (5) workspace/symbol and formatting — and prints one line
+  per verified fact, 29 in all. `make test-lsp` asserts that exact list, and
+  the target is part of the `true-selfhost-min` gate — i.e. the LSP is
+  exercised by `make test`.
 * The server keeps up to **four documents** open (full-text sync). It advertises
   UTF-16 positions and converts UTF-8 scanner offsets at the protocol
   boundary.
@@ -177,3 +184,67 @@ U+0000 are replaced with U+FFFD (the runtime cannot store embedded NUL).
 Identifier recognition remains ASCII; UTF-16 positioning does not add Unicode
 identifiers to the compiler. These probes do not claim complete LSP conformance
 or a full compiler diagnostic pass.
+
+## References, workspace symbols and formatting (2026-10-13)
+
+Three more methods, all answered from the buffers the server already keeps, so
+nothing about the four-slot table or the framing loop changed.
+
+### `textDocument/references`
+
+`refs_for(w, text, uri, incl, first)` walks one document line by line, collects
+whole-word occurrences of `w` (an identifier run compared with `string_eq`, so
+`zz` does not match inside `fuzzy`), and turns each into a `Location`. The
+columns go through the existing `utf16_span` helper twice — once for the byte
+offset of the word and once for the offset just past its last byte — so a range
+covers the whole word and stays correct on a line with accented Latin, Bengali
+or emoji in front of it.
+
+`incl` is `context.includeDeclaration`. When it is false, a line whose first
+non-blank text is `make w`, `hold w` or `struct w` is skipped, which is the
+difference between "find references" and "find references including the
+definition" in an editor. Both spellings of the flag are recognised
+(`"includeDeclaration":false` and `"includeDeclaration": false`).
+
+The request spans the open documents: a helper cannot read the four-slot table
+(a function cannot capture globals in this dialect), so the dispatch site calls
+`refs_for` once per slot and concatenates. The comma rule lives in the helper —
+`first` is the number of items the caller already has, and `len(res)` is exactly
+that at each step — so the four scans join into one array without the caller
+counting anything.
+
+### `workspace/symbol`
+
+`symbols(text, uri)` became `sym_scan(text, uri, query, first)` with the same
+comma rule, and `symbols` now delegates to it with an empty query, so
+`documentSymbol` answers byte-for-byte what it always did. `query` filters by
+case-insensitive substring (the new `lower` helper is ASCII-only, which is all
+a symbol name can be). The dispatch site scans the four slots the same way
+references does.
+
+The honest limit: this is a symbol search over the **open** documents. The
+dialect has no directory-listing builtin and the server does not spawn a
+process, so there is no way to enumerate a workspace and no way to answer for a
+file nobody opened. `docs/STATUS.md` keeps that as a not-claimed row.
+
+### `textDocument/formatting`
+
+`format_text(text)` is a port of `tools/sxfmt.sa`, rule for rule: rebuild the
+indentation from brace depth at two spaces per level, strip leading and
+trailing whitespace, keep a blank line blank, add a final newline, and count
+braces only outside a quoted string (with `\` escapes) and outside a `//`
+comment. A line that starts with closing braces is indented at the depth those
+braces return to. Tokens and comments are never rewritten.
+
+`format_edit(text)` answers `[]` when `format_text` gives back the same text —
+so a client leaves an already-formatted buffer alone — and otherwise one
+`TextEdit` whose range is the whole document: `{0,0}` to one past the last
+newline when the text ends with one, else to the UTF-16 width of the last line.
+`newText` goes through the existing `json_esc`, so newlines, quotes and
+backslashes are escaped.
+
+The probe feeds it the same badly indented source that `make test-sxfmt` feeds
+the formatter program (`hold x = 1  ` with trailing spaces, a `}` and a `//`
+inside a string literal, a nested block) and asserts the indentation, the
+stripped trailing whitespace and the whole-buffer range, which is what makes
+"the LSP formats like `sxfmt`" a checked claim rather than a comment.

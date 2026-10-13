@@ -586,7 +586,7 @@ still use shell/C infrastructure. See
 | `make test-push-stmt` | bare `push(xs, v)` in seed-min and gen2; push onto a non-list, unknown statements, string + number, number + string, string `-` and `*`, a string list element, 10+ element list literals, struct-in-list, `hold ys = xs`, list arithmetic — all clear errors or correct output |
 | `make test-builtin-names` | a variable named `index`/`len`/`arg` keeps its value while `len(s)`, `chr(65)` and a nested `sx_index(s, index)` still map to the runtime helpers, on seed-min and gen2 (gen2 used to emit `sx_idx(s, sx_idx)`, which is also what made `tools/sxpkg.sa`'s `search` never match) |
 | `make test-native-num` (part of `native-test`) | native doubles: `test-float`/`test-parens`/`test-push-stmt` programs give the same output as seed-min and gen2; large integer-only arithmetic, `%` truncation and `% 0` diagnostic, `%g` formatting, IEEE `/ 0`, struct-field string chains; string + number, number + string and bare non-`push` call statements are rejected with the shared wording |
-| `make test-lsp` | the Sayanox language server in a live JSON-RPC session (probe written with shell builtins + `mkdir` only): initialize/serverInfo, didOpen + publishDiagnostics, SX1001/SX1002/SX1003/SX1005 diagnostics, documentSymbol (function + variable), completion (builtin names survive in string literals), hover, definition, and a didChange that clears the diagnostics |
+| `make test-lsp` | the Sayanox language server in five live JSON-RPC sessions (probe written with shell builtins + `mkdir` only), 29 asserted facts: initialize/serverInfo, didOpen + publishDiagnostics, SX1001/SX1002/SX1003/SX1005 diagnostics, documentSymbol (function + variable), completion (builtin names survive in string literals), hover, definition, a didChange that clears the diagnostics, a closed document answering empty, the four-slot eviction cap, `references` across the open documents with and without `includeDeclaration` plus a non-word position answering `[]`, `workspace/symbol` with a query and with an empty one, and `textDocument/formatting` on a badly indented buffer (whole-buffer edit, two-space-per-level indent, trailing whitespace stripped) and on an already formatted one (`[]`) |
 | `make test-generics` | two legs. (a) single type parameter: `make NAME<T> ... -> T` — 14 lines of a program mixing `pickb`/`twice`/`quad` over num, str and list print identically under gen2 and gen1_min; each `NAME__n/s/l` appears exactly once, every call sees a prototype, an unused generic emits nothing. (b) **multi-parameter**: `pair<A, B> -> A`, `swap<A, B> -> B`, `three<A, B, C> -> C` and `usefirst<A, B>` (which calls `pair` and binds the result with `hold`) over `nn`/`ns`/`sn`/`ls`/`ln`/`sl`/`nsl`, each copy asserted exactly once, per-parameter C types checked, no `#error`, no implicit declaration, and gen1_min output **byte-identical** to gen2; two rejection cases (a parameter that does not use a type parameter, a return type naming an undeclared one) |
 | `make test-gc` | gen2 mark & sweep from the language side: a 2000-iteration `concat` loop stays under 200 KB of live heap after `gc()`, `gc_runs()` counts a collection, `gc()` reclaims bytes, and the surviving string is intact (`len` + first byte) |
 | `make test-seed-gc` | what memory management the two seeds actually have, measured under `ulimit -v` caps: seed-min has no collector (builder-backed strings plus a freeing assignment: 200k churn, 2000-step accumulation and a temp loop inside a 4 MiB cap; an 8388608-byte live set exits 1 with `sx: out of memory`; `gc()` refused at compile time), the full seed has a refcount representation whose counts never release in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations, `gc()` is a no-op returning 0, `gc_live()` is an undefined function, a 4 MiB cap cannot start it) plus the operator-lexer fix that made it compile comparisons at all, and gen2 keeps a 200k churn and an 8 MiB live set correct inside 64 MiB, checks all three of its runtime allocations, and fails at 16 MiB with `sx: out of memory` instead of a segfault |
@@ -1610,6 +1610,9 @@ only where `native_aot` is built.
 
 Not claimed: generic structs, a second native target, a workspace-aware LSP,
 signed or uploaded packages, or any change to the pure-min bootstrap dialect.
+(The LSP row is now narrower: references, workspace symbols and formatting
+landed later the same day — see below. A workspace *scan* is still not claimed,
+because the dialect has no directory-listing builtin.)
 
 
 ---
@@ -1736,3 +1739,59 @@ Not claimed: a call other than `len()` inside an index, `%` inside an index, a
 struct string field or a user-function call as a `+` operand in a `give`,
 generic structs, a second native target, or any change to seed-min, the full
 seed, `native_aot` or the pure-min bootstrap dialect.
+
+
+---
+
+## The LSP answers references, workspace symbols and formatting (2026-10-13)
+
+`tools/sayanox_lsp.sa` gained three methods — `textDocument/references`,
+`workspace/symbol` and `textDocument/formatting` — all answered from the buffers
+the server already keeps, so the four-slot document table, the framing loop and
+every existing answer are untouched. `make test-lsp` now asserts 29 facts over
+five sessions instead of 18 over three, and the two extra sessions are the new
+methods. [`docs/LSP.md`](LSP.md) documents each one.
+
+* **references** — `refs_for(w, text, uri, incl, first)` collects whole-word
+  occurrences of the word under the cursor (an identifier run compared with
+  `string_eq`, so `zz` does not match inside `fuzzy`) and returns `Location[]`.
+  Columns go through the existing `utf16_span` helper twice — the word's byte
+  offset and the offset just past its last byte — so a range covers the whole
+  word and stays right on a line with accented Latin, Bengali or emoji before
+  it. `context.includeDeclaration: false` skips the line whose first non-blank
+  text is `make w`, `hold w` or `struct w`; both spellings of the flag (with and
+  without the space after the colon) are recognised. A position that is not on a
+  word answers `[]`.
+* **workspace/symbol** — `symbols(text, uri)` became
+  `sym_scan(text, uri, query, first)` and `symbols` delegates to it with an
+  empty query, so `documentSymbol` answers byte-for-byte what it always did
+  (the probe still pins `"name":"twice"` and `"name":"x"`). A non-empty `query`
+  filters by case-insensitive substring through a new ASCII `lower` helper.
+* **formatting** — `format_text(text)` is a rule-for-rule port of
+  `tools/sxfmt.sa`: indentation rebuilt from brace depth at two spaces per
+  level, leading and trailing whitespace stripped, blank lines kept blank, a
+  final newline added, braces counted only outside a quoted string (with `\`
+  escapes) and outside a `//` comment, a line starting with closing braces
+  indented at the depth those braces return to, and tokens and comments never
+  rewritten. `format_edit(text)` answers `[]` when the text comes back
+  unchanged, so a client leaves a formatted buffer alone, and otherwise one
+  whole-buffer `TextEdit` whose end is one past the last newline (or the UTF-16
+  width of the last line when there is none), with `newText` through the
+  existing `json_esc`. The probe feeds it the same badly indented source that
+  `make test-sxfmt` feeds the formatter *program* and asserts the indentation,
+  the stripped trailing whitespace and the range — which is what makes "the LSP
+  formats like `sxfmt`" a checked claim rather than a comment.
+
+Because a function cannot capture globals in this dialect, the four-slot table
+stays unreadable from a helper; both spanning methods therefore cascade in the
+dispatch site, one call per slot, and the comma rule lives inside the helper
+(`first` is the number of items the caller already has, and `len(res)` is
+exactly that at each step). Capabilities advertise `referencesProvider`,
+`documentFormattingProvider` and `workspaceSymbolProvider`; the robustness and
+Unicode probes still pass unchanged (11 and 7 lines).
+
+Not claimed: a workspace *scan*. `workspace/symbol` and `references` only see
+documents a client opened, because the dialect has no directory-listing builtin
+and the server does not spawn a process; a file nobody opened cannot be
+searched. Also not claimed: rename, code actions, signature help, incremental
+sync, or a formatter that rewrites tokens.

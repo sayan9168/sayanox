@@ -217,13 +217,17 @@ $(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa
 lsp: $(LSP_BIN)
 	@echo "=== LSP-OK ==="
 
-# A full JSON-RPC session against the built server: initialize, didOpen,
-# hover, definition, documentSymbol, completion, diagnostic, didChange,
-# shutdown, exit.  The probe prints one line per verified fact.
+# Full JSON-RPC sessions against the built server: initialize, didOpen, hover,
+# definition, documentSymbol, completion, diagnostic, didChange, shutdown,
+# exit; a closed document and the four-slot cap; references across the open
+# documents with and without the declaration; workspace/symbol with a query and
+# without; and textDocument/formatting (the sxfmt rule set) on a badly indented
+# buffer and on one that is already formatted.  The probe prints one line per
+# verified fact: 29 of them, in this order.
 test-lsp: $(LSP_BIN) tools/sayanox-lsp-probe.sh
 	@mkdir -p $(TESTS)
-	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change\nsecond document symbols\nclosed document answers empty\nclosed document not served from another buffer\nfifth document evicts the oldest\nnewest document still served)
-	@echo "[OK] Sayanox LSP: live JSON-RPC session, real diagnostics, symbols, completion, hover, definition"
+	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change\nsecond document symbols\nclosed document answers empty\nclosed document not served from another buffer\nfifth document evicts the oldest\nnewest document still served\nreferences include the declaration\nreferences honour includeDeclaration:false\nreferences span the open documents\nreferences at a non-word answer empty\nworkspace symbol matches a query\nworkspace symbol with an empty query spans documents\nformatting answers one whole-buffer edit\nformatting indents a comment inside a block\nformatting indents a nested block by four spaces\nformatting strips trailing whitespace\nformatting leaves a formatted document alone)
+	@echo "[OK] Sayanox LSP: live JSON-RPC sessions, real diagnostics, symbols, completion, hover, definition, references, workspace symbols, formatting"
 
 # Malformed and unexpected JSON-RPC input: unknown requests get -32601,
 # unknown notifications stay silent, bad bodies get -32700 / -32600, and the
