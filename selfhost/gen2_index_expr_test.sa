@@ -1,0 +1,124 @@
+// Index expressions across all three backends.
+//
+// gen2 used to refuse every index that was not a literal or a plain name
+// (`#error sayanox-min: unsupported index expression (number or name only)`)
+// and to emit invalid C for an index inside a `when`/`while` condition or a
+// `for` bound (`array subscript is not an integer`, because xs is an sx_list
+// struct, not a C array). seed-min and native always accepted the arithmetic
+// forms. This fixture is the pinned parity check for the 2026-10-13 increment:
+//   * a value-position index may be a numeric expression over numbers, names,
+//     dotted struct fields, parentheses and + - * /;
+//   * the same index is lowered inside a condition and inside a for bound, to
+//     sx_lget(NAME, IDX) for a declared list and sx_idx(NAME, IDX) for a
+//     declared string;
+//   * `%`, calls (including len()), nested indexes, commas, quotes and empty
+//     indexes stay clear refusals -- see the error loop in the make target.
+// make test-gen2-index-expr requires seed-min, gen2 and native to print
+// identical bytes.
+
+struct P {
+  k: 2
+  m: 1
+}
+hold p = P { k: 2, m: 1 }
+hold xs = [10, 20, 30, 40, 50]
+hold s = "abcdef"
+hold i = 2
+
+// ---- value position -------------------------------------------------------
+show xs[i]
+show xs[i - 1]
+show xs[1 + 1]
+show xs[i * 2 - 3]
+show xs[(i + 1) / 2]
+show xs[4 / 2]
+show xs[p.k]
+show xs[p.k - 1]
+show xs[p.k + p.m]
+show xs[i - 1 + 1]
+show chr(s[i])
+show chr(s[i - 1])
+show chr(s[i * 2])
+show s[i]
+show xs[i] + xs[i - 1]
+show xs[i] * 2 - xs[i - 1]
+hold t = xs[(i + 1) / 2]
+show t
+
+// ---- inside a condition ---------------------------------------------------
+when xs[i] > 25 {
+  show 1
+} otherwise {
+  show 0
+}
+when xs[i - 1] == 20 {
+  show 2
+}
+when xs[p.k] >= 30 {
+  show 3
+}
+when s[i] == 99 {
+  show 4
+}
+when xs[i] < xs[i + 1] {
+  show 5
+}
+when xs[i - 1] != xs[i] {
+  show 6
+}
+hold j = 0
+while j < 3 {
+  when xs[j] > 15 {
+    show xs[j * 1]
+  }
+  hold j = j + 1
+}
+
+// ---- inside a for bound ---------------------------------------------------
+for k in 0..xs[0] / 5 {
+  show k
+}
+hold lim = 2
+for q in 0..xs[lim - 1] / 15 {
+  show q
+}
+for r in 0..p.k {
+  show r
+}
+for u in 0..xs[i - 1] / 10 {
+  show u
+}
+
+// ---- inside a typed function body ----------------------------------------
+make at_prev(k: num, ys: list) -> num {
+  give ys[k - 1]
+}
+show at_prev(3, xs)
+
+make sorted_flag(ys: list) -> num {
+  hold z = 1
+  while z < len(ys) {
+    when ys[z] < ys[z - 1] {
+      give 0
+    }
+    hold z = z + 1
+  }
+  give 1
+}
+show sorted_flag(xs)
+hold bad = [3, 1, 2]
+show sorted_flag(bad)
+hold one = [7]
+show sorted_flag(one)
+
+// `text[len(text) - 1]` is NOT written here on purpose: a call inside an index
+// is refused by gen2 (see the error loop in the make target), so the length is
+// bound with hold first -- the workaround the diagnostic names.
+make last_char(text: str) -> str {
+  hold last = len(text) - 1
+  give chr(text[last])
+}
+hold word = "sayanox"
+show last_char(word)
+
+show "index-expr-done"

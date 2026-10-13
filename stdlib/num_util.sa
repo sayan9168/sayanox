@@ -1,0 +1,114 @@
+// stdlib/num_util.sa -- numeric conversion, rounding and range helpers that
+// tiny.sa does not cover.
+//
+// Supported by seed-min, gen2 and native (make test-stdlib-modules).
+// Every definition here is an UNTYPED numeric make, exactly like tiny.sa, so
+// the module also runs on the native-AOT subset (which models numbers but not
+// str/list parameters). Names are prefixed `nu_` so this file can be spliced
+// next to tiny.sa without a collision.
+//
+// Sayanox numbers are IEEE doubles. `%` truncates BOTH operands to integers
+// first (documented in docs/STATUS.md), and that truncation is the only
+// double -> integer conversion the dialect offers, so the integer helpers
+// below are built on it and are documented for |x| < 1e15.
+
+// 1e15 is exactly representable both as a double and as a long, so
+// `x % 1e15` is trunc(x) toward zero inside that domain.
+make nu_trunc(x) {
+  give x % 1000000000000000
+}
+
+make nu_floor(x) {
+  hold t = nu_trunc(x)
+  when t > x {
+    give t - 1
+  }
+  give t
+}
+
+make nu_ceil(x) {
+  hold t = nu_trunc(x)
+  when t < x {
+    give t + 1
+  }
+  give t
+}
+
+// round half up: 2.5 -> 3, -2.5 -> -2
+make nu_round(x) {
+  give nu_floor(x + 0.5)
+}
+
+// fractional part, same sign as x: nu_frac(-2.25) = -0.25
+make nu_frac(x) {
+  give x - nu_trunc(x)
+}
+
+make nu_min(a, b) {
+  when a < b {
+    give a
+  }
+  give b
+}
+
+make nu_max(a, b) {
+  when a > b {
+    give a
+  }
+  give b
+}
+
+// Euclidean (always non-negative) modulo for a positive divisor.
+make nu_mod_pos(a, b) {
+  hold r = a % b
+  when r < 0 {
+    give r + b
+  }
+  give r
+}
+
+// Integer division truncated toward zero, matching `%`.
+make nu_int_div(a, b) {
+  hold r = a % b
+  give (a - r) / b
+}
+
+// Wrap x into [0, n): nu_wrap(-1, 3) = 2, nu_wrap(7, 3) = 1
+make nu_wrap(x, n) {
+  give nu_mod_pos(x, n)
+}
+
+// Map x from [a0, a1] onto [b0, b1]; the ends map onto the ends.
+// A degenerate source range maps everything onto b0 instead of dividing by 0.
+make nu_map_range(x, a0, a1, b0, b1) {
+  when a1 == a0 {
+    give b0
+  }
+  give b0 + (x - a0) * (b1 - b0) / (a1 - a0)
+}
+
+make nu_avg(a, b) {
+  give (a + b) / 2
+}
+
+make nu_median3(a, b, c) {
+  give nu_max(nu_min(a, b), nu_min(nu_max(a, b), c))
+}
+
+make nu_pi() {
+  give 3.14159265358979
+}
+
+make nu_deg2rad(d) {
+  give d * nu_pi() / 180
+}
+
+make nu_rad2deg(r) {
+  give r * 180 / nu_pi()
+}
+
+// Normalize an angle to [0, 360), keeping the fractional part:
+// nu_turn(-90.5) = 269.5, nu_turn(361) = 1
+make nu_turn(d) {
+  give nu_wrap(nu_trunc(d), 360) + nu_frac(d)
+}

@@ -1440,6 +1440,27 @@ make dir_of(uri: str) -> str {
 
 // --------------------------------------------------------------- main loop
 
+// ------------------------------------------------------- open documents
+// Four documents can be open at once. The dialect has no array of strings, so
+// the table is four parallel pairs of globals, and exactly three places touch
+// it: the load cascade under the framing loop, didOpen (store) and didClose
+// (clear). `doc`/`docuri` are NOT the table -- they are the document the
+// message being handled refers to, reloaded per message, which is what makes
+// hover/definition/documentSymbol/diagnostic answer from the right buffer.
+// A fifth didOpen evicts the oldest slot (round robin through slotnext) and the
+// evicted document simply stops being served: a request for it gets an empty
+// text, so hover answers null and documentSymbol answers [] instead of
+// answering from another file.
+hold uri0 = ""
+hold txt0 = ""
+hold uri1 = ""
+hold txt1 = ""
+hold uri2 = ""
+hold txt2 = ""
+hold uri3 = ""
+hold txt3 = ""
+hold slotnext = 0
+hold placed = 0
 hold doc = ""
 hold docuri = ""
 hold running = 1
@@ -1503,6 +1524,23 @@ while running == 1 {
       text = str_field(body, "text")
       ln = num_field(body, "line", 0)
       ch = num_field(body, "character", 0)
+      // Load the document this message is about. A message whose uri is not
+      // open leaves doc empty (and every reader below then answers "nothing
+      // here" rather than reading the buffer that happened to be opened last).
+      doc = ""
+      docuri = uri
+      when string_eq(uri, uri0) {
+        doc = txt0
+      }
+      when string_eq(uri, uri1) {
+        doc = txt1
+      }
+      when string_eq(uri, uri2) {
+        doc = txt2
+      }
+      when string_eq(uri, uri3) {
+        doc = txt3
+      }
       when string_eq(method, "initialize") {
         res = concat("{\"capabilities\":", capabilities())
         res = concat(res, ",\"serverInfo\":{\"name\":\"sayanox-lsp\",\"version\":\"2.0\"}}")
@@ -1515,6 +1553,48 @@ while running == 1 {
         d = reply(idraw, "null")
       }
       when string_eq(method, "textDocument/didOpen") {
+        // Reuse this uri's slot when it is already open, else take the next
+        // slot round robin (evicting the document that has been open longest).
+        placed = 0
+        when string_eq(uri, uri0) {
+          txt0 = text
+          placed = 1
+        }
+        when string_eq(uri, uri1) {
+          txt1 = text
+          placed = 1
+        }
+        when string_eq(uri, uri2) {
+          txt2 = text
+          placed = 1
+        }
+        when string_eq(uri, uri3) {
+          txt3 = text
+          placed = 1
+        }
+        when placed == 0 {
+          when slotnext == 0 {
+            uri0 = uri
+            txt0 = text
+          }
+          when slotnext == 1 {
+            uri1 = uri
+            txt1 = text
+          }
+          when slotnext == 2 {
+            uri2 = uri
+            txt2 = text
+          }
+          when slotnext == 3 {
+            uri3 = uri
+            txt3 = text
+          }
+          when slotnext >= 3 {
+            slotnext = 0
+          } otherwise {
+            slotnext = slotnext + 1
+          }
+        }
         docuri = uri
         doc = text
         params = concat("{\"uri\":\"", json_esc(docuri))
@@ -1524,12 +1604,44 @@ while running == 1 {
         d = notify("textDocument/publishDiagnostics", params)
       }
       when string_eq(method, "textDocument/didChange") {
-        // One-document server: changes to another URI must not overwrite it.
-        when string_eq(uri, docuri) and len(docuri) > 0 {
-          // Empty text is a replacement; an empty change array is a no-op.
-          when find(body, "\"text\"") >= 0 {
-            doc = text
+        // Empty text is a replacement; an empty change array is a no-op, so the
+        // buffer is only rewritten when the body really carries "text".
+        when find(body, "\"text\"") >= 0 {
+          when string_eq(uri, uri0) {
+            txt0 = text
           }
+          when string_eq(uri, uri1) {
+            txt1 = text
+          }
+          when string_eq(uri, uri2) {
+            txt2 = text
+          }
+          when string_eq(uri, uri3) {
+            txt3 = text
+          }
+        }
+        // Reload, then publish only for a document that is actually open: a
+        // change to an unknown uri must not be answered from another buffer.
+        placed = 0
+        doc = ""
+        when string_eq(uri, uri0) {
+          doc = txt0
+          placed = 1
+        }
+        when string_eq(uri, uri1) {
+          doc = txt1
+          placed = 1
+        }
+        when string_eq(uri, uri2) {
+          doc = txt2
+          placed = 1
+        }
+        when string_eq(uri, uri3) {
+          doc = txt3
+          placed = 1
+        }
+        docuri = uri
+        when placed == 1 {
           params = concat("{\"uri\":\"", json_esc(docuri))
           params = concat(params, "\",\"diagnostics\":")
           params = concat(params, diagnostics(doc, dir_of(docuri)))
@@ -1538,10 +1650,24 @@ while running == 1 {
         }
       }
       when string_eq(method, "textDocument/didClose") {
-        when string_eq(uri, docuri) {
-          doc = ""
-          docuri = ""
+        when string_eq(uri, uri0) {
+          uri0 = ""
+          txt0 = ""
         }
+        when string_eq(uri, uri1) {
+          uri1 = ""
+          txt1 = ""
+        }
+        when string_eq(uri, uri2) {
+          uri2 = ""
+          txt2 = ""
+        }
+        when string_eq(uri, uri3) {
+          uri3 = ""
+          txt3 = ""
+        }
+        doc = ""
+        docuri = ""
         params = concat("{\"uri\":\"", json_esc(uri))
         params = concat(params, "\",\"diagnostics\":[]}")
         d = notify("textDocument/publishDiagnostics", params)

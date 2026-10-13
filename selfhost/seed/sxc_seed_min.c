@@ -178,6 +178,11 @@ typedef struct {
   int pt[16], np, ret, annotated, ntp, template_id;
 } Fn;
 static Fn functions[512]; static int nfunctions, templates, generic_finalized;
+/* Set once the collect/scan rounds are over. Struct field types are only
+ * complete after the literal scan has run, so checks that depend on them
+ * (a `for` source that names a field) are deferred to the emit passes:
+ * an unresolved chain is not an error, it is simply not decided yet. */
+static int types_final;
 
 /* index of the struct the last atom() built (a struct literal); -1 otherwise.
  * Used to type a nested literal value while a struct literal is parsed. */
@@ -252,6 +257,22 @@ static int hold_annotation(void){
   free(name);
   if(ty<0) die("unknown hold type: seed-min supports num, str, list");
   return ty;
+}
+/* Register a name declared inside a make body. Struct literals carry their
+ * type in the emitted text `((Name){...})`; extracting it here keeps the scan
+ * pass and the emit pass in agreement, so a field chain resolves the same way
+ * in both. */
+static void register_local(const char *name,int ty,const char *text){
+  if(ty!=TY_STRUCT){ setv(name,ty); return; }
+  setv_struct(name,0);
+  const char *p=text;
+  if(p[0]=='('&&p[1]=='('){
+    p+=2; char tname[64]; int ti=0;
+    while(*p && *p!='{' && *p!=')' && ti<63) tname[ti++]=*p++;
+    tname[ti]=0;
+    int si=find_struct(tname);
+    if(si>=0) setv_struct(name,si);
+  }
 }
 static void check_hold_type(const char *name, int annotation, int actual){
   int vi=findv(name);
@@ -406,21 +427,32 @@ static int specialize(int fi,int n,int *types){
 static const char *ctype(int ty){
   return ty==TY_STR?"char *":ty==TY_LIST?"sx_list *":"double ";
 }
-/* Producer locals have an isolated symbol table: no accidental main-local
- * references or global/local name collisions in generated C. */
+/* Every function body -- typed producer OR legacy untyped make -- gets an
+ * isolated symbol table. Two reasons, both about generated C:
+ *   1. top-level `hold` names are emitted as locals of main(), so a function
+ *      body cannot see them. Before isolation an untyped make silently
+ *      emitted a bare global name into the function body, which is not a
+ *      language error but a C "undeclared identifier" failure. Now the name
+ *      is simply not in scope and the compiler reports it (see atom()).
+ *   2. a local that happens to share a global's name must not reuse the
+ *      global's slot or its type.
+ * enter_scope()/leave_scope() do the save/restore; the producer wrappers add
+ * the return-type contract on top. */
 typedef struct { char *names[2048]; int types[2048], structs[2048], declared[2048], count; } Env;
-static Env *enter_producer(int ret){
+static Env *enter_scope(void){
   Env *e=malloc(sizeof *e); if(!e) exit(1);
   memcpy(e->names,vn,sizeof vn); memcpy(e->types,vt,sizeof vt);
   memcpy(e->structs,vs,sizeof vs); memcpy(e->declared,vdecl,sizeof vdecl);
-  e->count=nv; nv=0; producer_ret=ret; return e;
+  e->count=nv; nv=0; return e;
 }
-static void leave_producer(Env *e){
+static void leave_scope(Env *e){
   for(int i=0;i<nv;i++) free(vn[i]);
   memcpy(vn,e->names,sizeof vn); memcpy(vt,e->types,sizeof vt);
   memcpy(vs,e->structs,sizeof vs); memcpy(vdecl,e->declared,sizeof vdecl);
-  nv=e->count; producer_ret=-1; free(e);
+  nv=e->count; free(e);
 }
+static Env *enter_producer(int ret){ Env *e=enter_scope(); producer_ret=ret; return e; }
+static void leave_producer(Env *e){ leave_scope(e); producer_ret=-1; }
 /* Validate builtin calls only in the new checked contexts; legacy pure-min
  * lowering stays unchanged. Kind 4 here means string-or-list. */
 static void check_call(const char *name,int n,int *types){
@@ -449,10 +481,36 @@ static void stmt(void);
 static void block(void);
 static int resolve_base_si(const char *base);
 static int field_type(const char *base, const char *fld, int *osi);
+static void skip_block(void);   /* defined below; skip_struct_decl needs it */
+
+/* `struct Box<T> { ... }` -- a struct declaration with a type parameter list --
+ * is generic-struct syntax, and no backend implements it: a struct's field
+ * layout is learned from literals and owned by ONE global definition, so
+ * Box<num> and Box<str> would share field slots and confuse field loads and
+ * the collector's roots (docs/TYPES_ROADMAP.md, "Why generic structs are not
+ * implemented here"). Refuse it by name. Without this the '<' is left where the
+ * scanner expects '{', and every path below died as `seed_min: { at <char
+ * offset>` -- a diagnostic that names a brace and an offset instead of the
+ * feature that is missing. */
+static void refuse_type_params(void){
+  skip();
+  if(P<N && S[P]=='<')
+    die("generic structs are not implemented: a struct declaration cannot take a "
+        "type parameter list, so declare a concrete struct name "
+        "(docs/TYPES_ROADMAP.md)");
+}
+/* the shape every early scan path uses for a struct declaration it is not
+ * collecting: eat the name, refuse a type parameter list, skip the body */
+static void skip_struct_decl(void){
+  free(parse_id());
+  refuse_type_params();
+  skip_block();
+}
 
 static void parse_struct_def(void){
   eat("struct");
   char *name=parse_id();
+  refuse_type_params();
   if(find_struct(name)>=0){ free(name); skip(); eat("{"); int d=1; P++;
     while(P<N&&d){ if(S[P]=='{')d++; else if(S[P]=='}')d--; P++; }
     return;
@@ -540,8 +598,17 @@ static char *atom(int *oty){
           die("seed-min for range bounds support len(...) but not other calls yet");
       } else if(findv(id)<0) die("seed-min for range bound names an undefined variable");
     }
-    if((for_call || producer_ret>=0) && !(P<N && S[P]=='(') && findv(id)<0)
+    /* A struct name followed by `{` is a literal, not a variable reference. */
+    int struct_literal=find_struct(id)>=0 && P<N && S[P]=='{';
+    if((for_call || producer_ret>=0 || in_fn) && !(P<N && S[P]=='(') && !struct_literal && findv(id)<0){
+      /* A function body has its own scope in the generated C: top-level hold
+       * names live in main() and are not visible there. Reporting the name is
+       * the honest behaviour; emitting it used to produce C that failed with
+       * "undeclared identifier" instead of a Sayanox diagnostic. */
+      if(in_fn && producer_ret<0 && !for_call)
+        die("seed-min make body names an undefined variable: a body cannot capture top-level hold names, pass them as parameters");
       die("seed-min for/producer expression names an undefined variable");
+    }
     int si=find_struct(id);
     if(si>=0 && P<N && S[P]=='{'){
       P++; char *slot[16]; int nvv=0;
@@ -673,10 +740,15 @@ static char *atom(int *oty){
       } else if(!strcmp(id,"push")&&na==2){
         snprintf(buf,sizeof buf,"sx_lpush(%s,(double)(%s))",args[0],args[1]); *oty=TY_LIST;
       } else {
+        int fi=findfn(id);
+        /* Not a builtin and not a declared make: copying the name into the C
+         * output used to leave the C compiler/linker to report it (an unknown
+         * `gc()` became an implicit declaration). Sayanox reports it instead. */
+        if(fi<0) die("seed-min call names an unknown function or builtin");
         size_t o=0; o+=snprintf(buf+o,sizeof buf-o,"%s(",id);
         for(int i=0;i<na;i++) o+=snprintf(buf+o,sizeof buf-o,"%s%s",i?",":"",args[i]);
         snprintf(buf+o,sizeof buf-o,")");
-        int fi=findfn(id); *oty=fi>=0?functions[fi].ret:TY_NUM;
+        *oty=functions[fi].ret;
       }
       for(int i=0;i<na;i++) free(args[i]);
       free(id); return strdup(buf);
@@ -839,11 +911,54 @@ static char *expr(int *oty){
   return l;
 }
 
-/* Named sources are re-read each iteration, as on gen2. Literal and call
- * sources are evaluated once into a hidden reference before the loop. */
+/* `for ch in p.name` / `for v in l.a.items`: a dotted source is walked here
+ * instead of through primary(), because a struct field's type is only fixed
+ * once a literal has been scanned. In an early pass an unresolved chain is
+ * deferred (return -1), never a fatal error; the emit pass decides.
+ *   >=0 : the resolved kind of the whole chain
+ *    -1 : not decidable yet (base or link type still unknown)
+ *    -2 : structurally wrong (base is not a struct, or the field does not exist)
+ * The returned text is the C expression for the chain. */
+static char *field_chain_source(int *okind){
+  *okind=-1;
+  char *base=parse_id();
+  size_t cap=strlen(base)+96; char *text=malloc(cap); if(!text) die("allocation");
+  strcpy(text,base);
+  int vi=findv(base), si=-1, kind=-1, decided=1;
+  if(vi<0) decided=0;                       /* base not seen yet: defer */
+  else if(vt[vi]==TY_STRUCT) si=vs[vi];
+  else { free(base); *okind=-2; return text; }   /* a number/string/list base */
+  free(base);
+  for(;;){
+    skip();
+    /* `..` is the range delimiter, never a field separator: `p.count..3` is a
+     * numeric range whose lower bound is a field, and the range path owns it. */
+    if(P>=N || S[P]!='.' || at("..")) break;
+    P++; char *fld=parse_id(); skip();
+    int ff=-1;
+    if(si>=0) for(int f=0;f<SD[si].nf;f++) if(!strcmp(SD[si].fields[f],fld)){ ff=f; break; }
+    if(si>=0 && ff<0){ free(fld); free(text); *okind=-2; return strdup(""); }
+    size_t need=strlen(text)+strlen(fld)+2;
+    if(need>cap){ cap=need+64; text=realloc(text,cap); if(!text) die("allocation"); }
+    strcat(text,"."); strcat(text,fld);
+    if(si<0 || ff<0){ decided=0; kind=-1; free(fld); continue; }
+    if(SD[si].fty[ff]==2){ int inner=SD[si].fsi[ff]; si=inner; kind=TY_STRUCT; }
+    else if(SD[si].fset[ff]){
+      /* read the field type BEFORE dropping si: `si=-1; kind=SD[si]...` would
+       * index SD[-1], and the garbage there decides the loop's kind. */
+      int ft=SD[si].fty[ff]; si=-1; kind=ft?TY_STR:TY_NUM;
+    }
+    else { decided=0; si=-1; kind=-1; }     /* field type not fixed yet */
+    free(fld);
+  }
+  if(!decided){ *okind=-1; return text; }
+  *okind=kind; return text;
+}
+
+/* Named sources are re-read each iteration, as on gen2. Literal, call and
+ * field sources are evaluated once into a hidden reference before the loop. */
 static char *for_header(char **source, int *kind, int *literal, char **end){
   P+=3;
-  if(in_fn && producer_ret<0) die("seed-min for inside make requires a fully typed signature; use while in an untyped make");
   char *name=parse_id();
   static const char *reserved[]={"true","false","and","or","not","for","in",
     "hold","show","make","give","when","elif","else","otherwise","if",
@@ -862,8 +977,11 @@ static char *for_header(char **source, int *kind, int *literal, char **end){
       char *candidate=parse_id(); skip();
       if(P<N && S[P]=='{'){
         int si=findv(candidate);
-        if(si<0 || (vt[si]!=TY_LIST && vt[si]!=TY_STR))
+        if(si<0 || (vt[si]!=TY_LIST && vt[si]!=TY_STR)){
+          if(in_fn && si<0)
+            die("seed-min for source inside make must be a body local, literal, range or call: a body cannot capture top-level hold names");
           die("seed-min for source must be a list/string variable, literal or numeric range");
+        }
         if(!strcmp(name,candidate)) die("seed-min for binder must differ from its source");
         *source=candidate; *kind=vt[si]; named=1;
       } else if(P<N && S[P]=='(' && strcmp(candidate,"len") && strcmp(candidate,"sx_len")){
@@ -871,6 +989,26 @@ static char *for_header(char **source, int *kind, int *literal, char **end){
         *source=atom(kind); for_call--;
         if(*kind!=TY_STR && *kind!=TY_LIST) die("seed-min for call source must return a string or list");
         *literal=1; named=1; /* capture one result per loop entry */
+      } else if(P<N && S[P]=='.'){
+        /* a struct field (or a chain of them) naming a string/list */
+        free(candidate); P=start;
+        int fk; *source=field_chain_source(&fk);
+        skip();
+        if(at("..")){
+          free(*source); *source=NULL; P=start;   /* a numeric range bound */
+        } else {
+          if(P<N && S[P]=='[')
+            die("seed-min for field source cannot be indexed; hold the field in a variable first");
+          if(fk==-1){
+            if(types_final)
+              die("seed-min for field source could not be resolved to a string or list field");
+            fk=TY_STR;   /* deferred: keeps the binder type stable across passes */
+          } else if(fk==-2)
+            die("seed-min for field source must name a field of a struct variable");
+          else if(fk!=TY_STR && fk!=TY_LIST)
+            die("seed-min for field source must be a string or list field, not a number or struct");
+          *kind=fk; *literal=1; named=1; /* capture one field value per loop entry */
+        }
       } else free(candidate);
     }
     if(!named){
@@ -1007,15 +1145,7 @@ static void stmt(void){
       die("assignment type mismatch (struct assignment is not supported by seed-min)");
     if(i<0){
       if(ty==TY_STRUCT){
-        setv_struct(n, 0);
-        const char *p=e;
-        if(p[0]=='('&&p[1]=='('){
-          p+=2; char tname[64]; int ti=0;
-          while(*p && *p!='{' && *p!=')' && ti<63) tname[ti++]=*p++;
-          tname[ti]=0;
-          int si=find_struct(tname);
-          if(si>=0) setv_struct(n, si);
-        }
+        register_local(n, ty, e);
         int si=getsi(n);
         if(si>=0) printf("  %s %s = %s;\n", SD[si].name, n, e);
         else printf("  /* struct */ %s = %s;\n", n, e);
@@ -1067,7 +1197,10 @@ static void stmt(void){
   if(at("for")){
     int before=nv;
     char *source, *end; int kind, literal; char *name=for_header(&source,&kind,&literal,&end);
-    if(producer_ret>=0 && findv(name)>=before){
+    /* Inside any make body the binder is a C local of that body: declare it
+     * once here (a later loop reusing the name finds it already in scope). At
+     * top level decls() has already emitted it, so nothing is printed. */
+    if(in_fn && findv(name)>=before){
       if(kind==TY_STR) printf("  char *%s = sx_sb_new(1);\n",name);
       else printf("  double %s = 0;\n",name);
     }
@@ -1111,14 +1244,20 @@ static void stmt(void){
 
 static void emit_one_fn(void){
   Fn f=function_header();
+  /* A parameter of a legacy untyped make may not silently take over the slot
+   * of an annotated top-level hold: check against the enclosing table before
+   * the body scope replaces it. Fully typed producers have an isolated scope
+   * by design, so shadowing an annotated global is allowed there. */
+  if(!f.annotated) for(int i=0;i<f.np;i++){
+    int vi=findv(f.params[i]);
+    if(vi>=0 && vdecl[vi]>=0) die("seed-min parameter cannot shadow an annotated global");
+  }
   printf("static %s%s(",ctype(f.ret),f.name);
   if(!f.np) printf("void");
   for(int i=0;i<f.np;i++) printf("%s%s%s",i?", ":"",ctype(f.pt[i]),f.params[i]);
   printf("){\n");
-  int saved_nv=nv; Env *env=f.annotated?enter_producer(f.ret):NULL;
+  Env *env=f.annotated?enter_producer(f.ret):enter_scope();
   for(int i=0;i<f.np;i++){
-    int vi=findv(f.params[i]);
-    if(vi>=0 && vdecl[vi]>=0) die("seed-min parameter cannot shadow an annotated global");
     setv(f.params[i],f.pt[i]);
     if(f.annotated){
       vdecl[findv(f.params[i])]=f.pt[i];
@@ -1141,7 +1280,7 @@ static void emit_one_fn(void){
     leave_producer(env);
   } else {
     printf("  return 0;\n");
-    while(nv>saved_nv){ free(vn[nv-1]); nv--; }
+    leave_scope(env);
   }
   printf("}\n\n"); free_header(&f);
 }
@@ -1187,7 +1326,7 @@ static void emit_all_fns(void){
       if(generic) skip_block(); else { P=start; emit_one_fn(); }
       continue;
     }
-    if(at("struct")){ P+=6; free(parse_id()); skip_block(); continue; }
+    if(at("struct")){ P+=6; skip_struct_decl(); continue; }
     if(S[P]=='"'){ P++; while(P<N&&S[P]!='"'){ if(S[P]=='\\'&&P+1<N)P+=2; else P++; } if(P<N)P++; continue; }
     P++;
   }
@@ -1356,7 +1495,7 @@ static void collect(void){
   for(int i=0;i<2048;i++) vdecl[i]=-1;
   while(P<N){
     skip(); if(P>=N) break;
-    if(at("struct")){ P+=6; free(parse_id()); skip_block(); continue; }
+    if(at("struct")){ P+=6; skip_struct_decl(); continue; }
     if(at("make")){
       Fn f=function_header(); free_header(&f);
       skip_block(); continue;
@@ -1458,16 +1597,17 @@ static void scan_body(void){
 static void scan_stmt(void){
   skip(); if(P>=N||S[P]=='}') return;
   producer_statement();
-  if(at("struct")){ P+=6; free(parse_id()); skip_block(); return; }
+  if(at("struct")){ P+=6; skip_struct_decl(); return; }
   if(at("make")){
     Fn f=function_header();
     if(f.ntp){ free_header(&f); skip_block(); return; }
-    Env *env=f.annotated?enter_producer(f.ret):NULL;
-    if(f.annotated) for(int i=0;i<f.np;i++){
-      setv(f.params[i],f.pt[i]); vdecl[findv(f.params[i])]=f.pt[i];
+    Env *env=f.annotated?enter_producer(f.ret):enter_scope();
+    for(int i=0;i<f.np;i++){
+      setv(f.params[i],f.pt[i]);
+      if(f.annotated) vdecl[findv(f.params[i])]=f.pt[i];
     }
     in_fn=1; scan_body(); in_fn=0;
-    if(env) leave_producer(env);
+    if(f.annotated) leave_producer(env); else leave_scope(env);
     free_header(&f); return;
   }
   if(at("give")){
@@ -1481,12 +1621,20 @@ static void scan_stmt(void){
     char *n=parse_id(); int annotation=is_hold?hold_annotation():-1;
     skip(); eat("="); int ty; char *e=expr(&ty);
     if(!in_fn || producer_ret>=0) check_hold_type(n,annotation,ty);
-    if(producer_ret>=0){
+    if(in_fn){
       int vi=findv(n);
-      if(ty==TY_STRUCT) die("seed-min typed producers cannot hold structs");
-      if(!is_hold && vi<0) die("seed-min producer assignment needs a declared local");
-      if(vi>=0 && vt[vi]!=ty) die("seed-min producer local type cannot change");
-      setv(n,ty);
+      if(producer_ret>=0){
+        if(ty==TY_STRUCT) die("seed-min typed producers cannot hold structs");
+        if(!is_hold && vi<0) die("seed-min producer assignment needs a declared local");
+        if(vi>=0 && vt[vi]!=ty) die("seed-min producer local type cannot change");
+        setv(n,ty);
+      } else {
+        /* legacy untyped body: the name is a C local of that body, so the
+         * scan pass has to know it (a later `for v in xs` or `xs[0]` in the
+         * same body is checked against it) */
+        if(!is_hold && vi<0) die("assignment needs a declared variable (use hold first)");
+        register_local(n,ty,e);
+      }
       if(annotation>=0) vdecl[findv(n)]=annotation;
     }
     free(e); free(n); return;
@@ -1566,7 +1714,7 @@ int main(int argc, char **argv){
    * variables whose type is only known after collect(); alternate both
    * until they are stable (4 rounds, same as the original collect budget) */
   for(int pass=0;pass<4;pass++){ collect(); scan_literals(); }
-  generic_finalized=1;
+  generic_finalized=1; types_final=1;
   P=0; preamble(); function_prototypes(); emit_all_fns();
   puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
   decls(); P=0;

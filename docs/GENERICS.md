@@ -116,7 +116,12 @@ recorded as soon as the nested call is queued.
 * No type inference beyond the call site's argument kinds, and no inference
   for a type parameter that no argument pins down (it falls back to `num`).
 * No generic structs and no generic lists of arbitrary element types. Lists
-  remain double-only (see [`SYNTAX.md`](SYNTAX.md)).
+  remain double-only (see [`SYNTAX.md`](SYNTAX.md)). Since 2026-10-13 the
+  generic-*struct* syntax is refused by name on all three backends instead of
+  failing as a brace/undefined-name/field-count error — `make
+  test-generic-structs` pins the three diagnostics and the concrete-name
+  workaround, and [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md) records what a real
+  implementation would need.
 * Kinds are per *value kind*, not per declared type: `A` and `B` can both be
   `num` without any distinction being made.
 

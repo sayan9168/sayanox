@@ -16,9 +16,9 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 |--------|---------|
 | `initialize` | yes — `textDocumentSync: 1` (full), completion/hover/definition/documentSymbol/diagnostic providers, `serverInfo: sayanox-lsp 2.0` |
 | `initialized` | yes |
-| `textDocument/didOpen` | yes — stores the document and publishes diagnostics |
-| `textDocument/didChange` | yes — full-text sync, re-publishes diagnostics |
-| `textDocument/didClose` | yes — clears diagnostics and releases the matching document state |
+| `textDocument/didOpen` | yes — stores the document in the open-document table (four slots) and publishes diagnostics |
+| `textDocument/didChange` | yes — full-text sync, rewrites that document's slot and re-publishes its diagnostics |
+| `textDocument/didClose` | yes — clears that document's slot, publishes empty diagnostics for its URI and stops serving it |
 | `textDocument/publishDiagnostics` | on every open/change |
 | `textDocument/diagnostic` | pull model (`kind: full`) |
 | `textDocument/documentSymbol` | `make` (Function), `struct` (Class), `hold` (Variable) |
@@ -89,8 +89,44 @@ vim.api.nvim_create_autocmd("FileType", {
   shutdown, exit) into the binary and prints one line per verified fact.
   `make test-lsp` asserts that list, and the target is part of the
   `true-selfhost-min` gate — i.e. the LSP is exercised by `make test`.
-* The server keeps one document (full-text sync). It advertises UTF-16
-  positions and converts UTF-8 scanner offsets at the protocol boundary.
+* The server keeps up to **four documents** open (full-text sync). It advertises
+  UTF-16 positions and converts UTF-8 scanner offsets at the protocol
+  boundary.
+
+## Multiple documents (2026-10-13)
+
+The server used to keep ONE document: a second `didOpen` overwrote it, so with
+two Sayanox files open in an editor every request for the first file was
+answered from the second file's buffer — a wrong answer, not a missing one.
+(`didChange` was guarded against a foreign URI; `didOpen`, `hover`,
+`definition`, `documentSymbol` and `textDocument/diagnostic` were not.)
+
+It now keeps a table of four documents. The dialect has no array of strings, so
+the table is four parallel pairs of globals (`uri0`/`txt0` … `uri3`/`txt3`) and
+exactly three places touch it: the load cascade under the framing loop,
+`didOpen` (store) and `didClose` (clear). Every message reloads `doc`/`docuri`
+from the table by its own `params.textDocument.uri` before the handlers run, so
+each reader answers from the buffer the client asked about.
+
+* A request for a URI that is **not** open gets an empty document, and therefore
+  an empty answer — `documentSymbol` → `[]`, `diagnostic` → no items, `hover` →
+  the generic blurb — never another file's contents.
+* `didChange` for a URI that is not open is ignored: no diagnostics are
+  published for a buffer the server does not have.
+* A **fifth** `didOpen` evicts the slot that has been open longest (round robin
+  through `slotnext`), and the evicted document stops being served until it is
+  opened again. Four is a documented cap, not a claim about editor sessions: a
+  window with more than four Sayanox buffers will see the oldest go quiet, and
+  re-focusing one re-opens it.
+* There is still no workspace index: `workspace/symbol` is not implemented, and
+  `use "x.sa"` resolution reads from the directory of the URI being served
+  (`dir_of`), which is now per document rather than per session.
+
+`tools/sayanox-lsp-probe.sh` drives three sessions and `make test-lsp` asserts
+all eighteen lines: two documents open at once with the first still served after
+the second was opened, a closed document answering `"result":[]` and not being
+served from another buffer, and the five-document eviction (`f1` gone, `f5`
+still served).
 
 ## The old shell server
 

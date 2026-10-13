@@ -1,0 +1,11 @@
+// 2000 iterations that retain nothing, used to count live objects at exit.
+// SX_GC_DEBUG=1 on the full seed reports 6000, three objects per iteration and
+// none of them released: that runtime has an object table and refcount fields
+// but no working release path in a loop. The min seed has no counter to report
+// and needs none: the same loop stays inside a 4 MiB address space.
+hold i = 0
+while i < 2000 {
+  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")
+  hold i = i + 1
+}
+show i

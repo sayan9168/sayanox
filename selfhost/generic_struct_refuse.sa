@@ -1,0 +1,12 @@
+// Generic-struct syntax: a struct declaration with a type parameter list, and a
+// literal that passes a type argument. No backend implements it -- a struct's
+// field layout is learned from literals and owned by one global definition, so
+// Box<num> and Box<str> would share field slots and confuse field loads and the
+// collector's roots. All three backends must refuse it BY NAME
+// (make test-generic-structs) instead of failing later on a brace, an
+// "undefined name" or a field count. See docs/TYPES_ROADMAP.md.
+struct Box<T> {
+  v
+}
+hold b = Box<num> { 1 }
+show b.v

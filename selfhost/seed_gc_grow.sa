@@ -1,0 +1,16 @@
+// Accumulate into one retained string: 2000 concats, then measure it. The min
+// seed grows the builder in place; a backend that copied every step would be
+// O(N^2) here. Same values on every backend.
+// The last index is bound to a name first: gen2 refuses a call such as len()
+// INSIDE an index expression (docs/STATUS.md), so the portable spelling is
+// hold n = len(s) - 1 / show s[n].
+hold s = "abc"
+hold i = 0
+while i < 2000 {
+  hold s = concat(s, "x")
+  hold i = i + 1
+}
+show len(s)
+show s[0]
+hold n = len(s) - 1
+show s[n]

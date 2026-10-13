@@ -1,6 +1,6 @@
 # Incremental types: implementation constraints
 
-Status: seed hold annotations and fully typed num/str/list functions and generic function specialization implemented; generic structs remain design-only (2026-10-12).
+Status: seed hold annotations and fully typed num/str/list functions and generic function specialization implemented; generic structs remain design-only (2026-10-12). Since 2026-10-13 the *refusal* is uniform and gated: all three backends name the missing feature instead of failing on a brace, an undefined name or a field count (`make test-generic-structs`).
 
 The runtime kinds are double, string, double-list, and named literal-typed
 struct. Function generics specialize by kind, not arbitrary structural type.
@@ -37,6 +37,33 @@ nest them, recurse through functions, keep string fields alive across GC,
 and reject cross-specialization assignments. Run all four bootstrap gates
 before considering the syntax supported. Until then use distinct concrete
 struct names; generic structs remain unimplemented on all three backends.
+
+### What the refusal looks like now (measured 2026-10-13)
+
+Before this pass all three backends rejected `struct Box<T> { v }`, but each
+reported a symptom of its own parser instead of the missing feature:
+
+| Backend | Before | Now |
+|---|---|---|
+| seed-min | `seed_min: { at 10` — a brace, at a character offset (the scanner hit `<` where it wanted `{`) | `seed_min: generic structs are not implemented: a struct declaration cannot take a type parameter list, so declare a concrete struct name (docs/TYPES_ROADMAP.md)`, exit 1 |
+| gen2 | `min: undefined name: Box` for `Box<num> { 1 }`, `min: struct literal must fill every field` for `Box { 1 }` — the `<T>` was swallowed into the field list, and the second message is wrong about the program the user wrote | the same sentence as a `min:` line on stdout **and** `#error sayanox-min: generic structs are not implemented: …` in the generated C, so a build script that ignores stdout still cannot miss it |
+| native | `native_aot: struct Box needs { fields }` | `native_aot: generic structs are not implemented: struct 'Box' cannot take a type parameter list, so declare a concrete struct name (docs/TYPES_ROADMAP.md)`, exit 1 |
+
+`make test-generic-structs` pins those three diagnostics, pins the workaround
+(`selfhost/generic_struct_concrete.sa`: `NumBox`, `TextBox` and `PairBox` in one
+program, `7 seven 8 eight 2 8 9` byte-identical on seed-min, gen2 and native),
+and pins one adjacent divergence found while writing it:
+
+* a **dotted field read inside a struct literal** — `hold a2 = NumBox { a.v }` —
+  is accepted by seed-min (prints the field's value) and refused by gen2
+  (`#error sayanox-min: struct/list literal value must be a number, string,
+  name, or nested struct`) and by native (`struct field 'NumBox.v' is used with
+  two different types`). Portable spelling: bind the field first
+  (`hold v = a.v`), then use the name in the literal.
+
+This is a diagnostic increment, not a type-system increment: no layout, no type
+identity and no specialization worklist was added, and the five requirements
+above are all still open.
 
 ## Implemented seed hold-annotation increment
 

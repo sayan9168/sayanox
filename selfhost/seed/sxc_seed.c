@@ -97,7 +97,16 @@ static void tokenize(const char*src){
     if(c=='|'&&i+1<n&&src[i+1]=='|'){i+=2;col+=2;ptok(T_BARBAR,"||",0,sl,sc);continue;}
     if(c=='<'&&i+1<n&&src[i+1]=='='){i+=2;col+=2;ptok(T_LE,"<=",0,sl,sc);continue;}
     if(c=='>'&&i+1<n&&src[i+1]=='='){i+=2;col+=2;ptok(T_GE,">=",0,sl,sc);continue;}
-    #define P1(ch,k) if(c==ch){ i++; col++; ptok(k,(const char*)#ch,0,sl,sc); continue; }
+    /* The token text has to be the operator itself. `#ch` stringifies the
+     * macro argument WITH its character-literal quotes, so every single-char
+     * operator used to be recorded as the three-character text `'<'`, `'*'`,
+     * `','` ... and emit_expr's `strcmp(op,"*")` never matched: the generated
+     * C lost the operator entirely (`sx_show(((double)2LL),((double)3LL)))`
+     * for `show 2 * 3`) and did not compile. Build the one-character text
+     * from the value instead, the same way the "unexpected character"
+     * diagnostic below does. Two-character operators (== != && || <= >=) are
+     * pushed with explicit strings above and were always correct. */
+    #define P1(ch,k) if(c==ch){ char ob[2]={(char)(ch),0}; i++; col++; ptok(k,ob,0,sl,sc); continue; }
     P1('<',T_LT) P1('>',T_GT) P1('+',T_PLUS) P1('-',T_MINUS) P1('*',T_STAR)
     P1('/',T_SLASH) P1('%',T_PERCENT) P1('=',T_ASSIGN) P1(',',T_COMMA) P1('.',T_DOT)
     P1('&',T_AMP) P1('|',T_BAR) P1('?',T_QUEST) P1(':',T_COLON)

@@ -1,5 +1,5 @@
 ./selfhost/pack_compiler_min.sh
-blob parts: 109
+blob parts: 115
 make[1]: Entering directory '/home/user/sayanox'
 [OK] restore-compiler (checked-in source verified; no base64/gzip used)
 make[1]: Leaving directory '/home/user/sayanox'

@@ -205,6 +205,43 @@ static void e64(uint64_t v){ for(int i=0;i<8;i++) e1((unsigned char)(v>>(8*i)));
 static void erel32(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+6)); memcpy(code+at+2,&d,4); }
 static void erel32j(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+5)); memcpy(code+at+1,&d,4); } /* for 5-byte jmp */
 
+/* ------------------------------------------------------------------------
+ * THE EMIT SEAM.
+ *
+ * This region (up to the "phase 1: collect definitions" marker) plus the
+ * runtime stubs of phase 4, the collector and the ELF container are the
+ * x86-64 backend: the only places in this file that write code bytes. The
+ * language-level emitter -- everything between the EMIT-SEAM-BEGIN and
+ * EMIT-SEAM-END markers -- reaches the machine through this API and nothing
+ * else: no e1/e32/e64, no memcpy into `code`, and not even a direct read of
+ * the code cursor `cn` (label positions come from here()).
+ * `make test-native-emit-split` asserts exactly that, so a second backend is a
+ * replacement of the encoder + stubs, not a rewrite of the parser or of the
+ * emit tree.
+ *
+ * A replacement backend has to provide at minimum:
+ *   e1/e32/e64                  raw byte and little-endian word emission
+ *   here()                      current code position, i.e. a label
+ *   erel32/erel32j/patch_imm32  patch a saved position once the target is known
+ *   jmp5_slot/jmp_rel32/jcc_rel32   a jump or conditional jump with a
+ *                               placeholder displacement, plus the jl_* label
+ *                               lists that collect and patch them
+ *   sub_rsp_imm32_slot/leave_ret    function frame plumbing
+ *   the instruction helpers the emit tree calls (mv_m64, mv_r64m, mv_rr,
+ *   lea_rm, mov_imm64, mov_imm8m, push_r, pop_r, sse_rr, call_p, emit_d2i,
+ *   emit_i2d, movq_xr, movq_rx, cvttsd2si, cvtsi2sd, rexb, emit_modrm)
+ *   the phase-4 runtime stubs (number formatting, list and string builtins,
+ *   file and http syscalls), the collector, and the ELF container -- all of
+ *   which are machine code by nature and are listed in docs/NATIVE.md.
+ * ---------------------------------------------------------------------- */
+static size_t here(void){ return cn; }
+static void patch_imm32(size_t at,int32_t v){ memcpy(code+at,&v,4); }
+static void leave_ret(void){ e1(0xc9); e1(0xc3); }   /* leave; ret */
+static size_t sub_rsp_imm32_slot(void){              /* sub rsp, imm32 (placeholder) */
+  e1(0x48); e1(0x81); e1(0xEC); size_t at=cn; e32(0); return at;
+}
+static size_t jmp5_slot(void){ size_t at=cn; e1(0xe9); e32(0); return at; }  /* jmp rel32 (placeholder) */
+
 static void rexb(int W,int R,int X,int B){
   if(W||R||X||B){ uint8_t b=0x40; if(W)b|=8; if(R)b|=4; if(X)b|=2; if(B)b|=1; e1(b); }
 }
@@ -683,6 +720,12 @@ static void collect_defs(const char*src){
       if(nS>=MAXS){ fprintf(stderr,"native_aot: too many structs (native limit: %d)\n",MAXS); exit(1); }
       strcpy(S[nS].name,nm); S[nS].nf=0;
       sw(&p);
+      /* `struct Box<T> { ... }` is generic-struct syntax. Native needs one
+       * concrete field layout plus pointer-kind information per struct for its
+       * collector, and there is no per-instantiation layout: Box<num> and
+       * Box<str> would share field descriptors and GC roots. Name the missing
+       * feature instead of reporting a missing brace (docs/TYPES_ROADMAP.md). */
+      if(*p=='<'){ fprintf(stderr,"native_aot: generic structs are not implemented: struct '%s' cannot take a type parameter list, so declare a concrete struct name (docs/TYPES_ROADMAP.md)\n",nm); exit(1); }
       if(*p!='{'){ fprintf(stderr,"native_aot: struct %s needs { fields }\n",nm); exit(1); }
       p++;
       const char*q=p; int inq=0;
@@ -1212,6 +1255,9 @@ static void infer(const char*src){
       errx("cannot infer the type of variable '%s'",G[i].name,NULL);
 }
 
+/* ===== EMIT-SEAM-BEGIN: the language-level emitter. No code bytes are
+   written here: instructions come from the encoder API above and label
+   positions from here(). Asserted by `make test-native-emit-split`. ===== */
 /* ================= phase 3: emit ================= */
 static int XK=K_NUM, XS=-1;     /* kind / struct id of the value in rax */
 static int cur_fn=-1;           /* -1 = top level */
@@ -1438,7 +1484,7 @@ static void emit_prim(const char**p,int depth){
       errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
     if(cur_fn>=0){
       for(int i=0;i<F[cur_fn].nparam;i++)
-        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return F[cur_fn].pk[i]; }
+        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return; }  /* emit_prim is void: the kind travels in PKX_K/PKX_S */
     }
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
@@ -1709,16 +1755,16 @@ static void emit_term(const char**p,int depth){
       size_t jz;
       movq_xr(1,CX); cvttsd2si(CX,1);    /* rcx = (long)right */
       test_rr(CX,CX);                    /* modulo by zero? */
-      jz=cn; jcc_rel32(JC_Z,0);
+      jz=here(); jcc_rel32(JC_Z,0);
       emit_d2i();                        /* rax = (long)left */
       emit_sdiv();                       /* rdx = left % right */
       mv_rr(AX,DX); emit_i2d();
-      size_t jmp_at=cn;
+      size_t jmp_at=here();
       jmp_rel32(0);             /* skip die code (patched below) */
-      size_t die_code=cn;
+      size_t die_code=here();
       lea_rm(AX,12,-1,0,(int)d_err_div);
       callb(B_DIE);
-      { int32_t dd=(int32_t)(cn-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
+      erel32j(jmp_at,here());
       erel32(jz,die_code);
     }
   }
@@ -1823,7 +1869,7 @@ static void emit_expr(const char**p,int depth){
 /* ---- statements ---- */
 static void emit_fn(int fi,const char**p){
   if(fi<0) errx("unknown function");
-  F[fi].start=(int)cn;
+  F[fi].start=(int)here();
   push_r(BP);
   mv_rr(BP,SP);
   /* The frame must keep EVERY spill slot above rsp: expression codegen
@@ -1832,7 +1878,7 @@ static void emit_fn(int fi,const char**p){
      overwritten by the first push or call in the body.  16-aligned so the
      (push rbp; sub rsp,frame) entry keeps the same alignment everywhere. */
   /* sub rsp, imm32 -- patched below, once the body has declared its locals */
-  e1(0x48); e1(0x81); e1(0xEC); size_t frame_at=cn; e32(0);
+  size_t frame_at=sub_rsp_imm32_slot();
   lea_r12_data();
   /* spill the incoming parameter registers into the frame.  Emitted with
      the same encoder helpers as everything else -- the old hand-written
@@ -1877,11 +1923,11 @@ static void emit_fn(int fi,const char**p){
   {
     /* frame: the params, then one slot per local, then the spill area */
     uint32_t fr=(uint32_t)((8*(F[fi].nparam+nloc)+16+15)&~15);
-    memcpy(&code[frame_at],&fr,4);
+    patch_imm32(frame_at,(int32_t)fr);
   }
   nG=lbase; cur_fn=-1;               /* the locals go out of scope with the make */
   mov_imm64(AX,0);                   /* fall-off returns 0 */
-  e1(0xc9); e1(0xc3);                /* leave; ret */
+  leave_ret();
 }
 
 /* ================= boolean conditions: and / or / not in when and while =================
@@ -2032,10 +2078,10 @@ static void emit_logic(const char*s,const char*e){
   JL fl={0}, done={0};
   gen_cond(s,e,0,&fl,0,"value");          /* falls through when the logic holds */
   mov_imm64(AX,dbits(1.0));
-  size_t at=cn; e1(0xe9); e32(0); jl_add5(&done,at);
-  jl_patch(&fl,cn);
+  size_t at=jmp5_slot(); jl_add5(&done,at);
+  jl_patch(&fl,here());
   mov_imm64(AX,dbits(0.0));
-  jl_patch(&done,cn);
+  jl_patch(&done,here());
   XK=K_NUM; XS=-1;
 }
 static void emit_rhs(const char**p){
@@ -2126,7 +2172,7 @@ static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const 
       JL tl={0};                       /* any true operand: skip the rest */
       for(int i=0;i<k-1;i++) gen_cond(ps[i],pe[i],1,&tl,dry,what);
       gen_cond(ps[k-1],pe[k-1],0,out,dry,what);
-      if(!dry) jl_patch(&tl,cn);
+      if(!dry) jl_patch(&tl,here());
     }
     return;
   }
@@ -2137,7 +2183,7 @@ static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const 
       JL fl={0};                       /* any false operand: skip the rest */
       for(int i=0;i<k-1;i++) gen_cond(ps[i],pe[i],0,&fl,dry,what);
       gen_cond(ps[k-1],pe[k-1],1,out,dry,what);
-      if(!dry) jl_patch(&fl,cn);
+      if(!dry) jl_patch(&fl,here());
     }
     return;
   }
@@ -2167,7 +2213,7 @@ static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const 
   }
   cond_nest--;
   bin_rr(1,AX,AX);                     /* add rax,rax: ZF iff the double is +-0.0 */
-  { size_t at=cn; jcc_rel32(jump_if?JC_NZ:JC_Z,0); jl_add(out,at); }
+  { size_t at=here(); jcc_rel32(jump_if?JC_NZ:JC_Z,0); jl_add(out,at); }
 }
 
 /* when COND { .. } [elif COND { .. }]* [otherwise|else { .. } | else when ..].
@@ -2193,8 +2239,8 @@ static void emit_when_body(const char**p,int in_fn){
     if(mkw(p,"when")||mkw(p,"if")) chain=1;
   }
   if(has_else){
-    size_t jmpend_at=cn; jmp_rel32(0);
-    size_t j2=cn;
+    size_t jmpend_at=here(); jmp_rel32(0);
+    size_t j2=here();
     if(chain) emit_when_body(p,in_fn);
     else {
       sw(p);
@@ -2202,9 +2248,9 @@ static void emit_when_body(const char**p,int in_fn){
       (*p)++;
       emit_prog(p,in_fn,1);
     }
-    erel32j(jmpend_at,cn);
+    erel32j(jmpend_at,here());
     jl_patch(&fl,j2);
-  } else jl_patch(&fl,cn);
+  } else jl_patch(&fl,here());
 }
 
 /* for NAME in A..B / list / string. Function binders and hidden state
@@ -2276,7 +2322,7 @@ static void emit_for(const char**p,int in_fn){
   int id=nfor++;
   const char*dots=top_dots(hs,he2);
   int top_gi, src_gi=-1, idx_gi=-1, end_gi=-1, ttop;
-  size_t top=cn;
+  size_t top=here();
   int mode;                    /* 0 = range, 1 = list, 2 = string */
   if(dots){
     mode=0;
@@ -2285,7 +2331,7 @@ static void emit_for(const char**p,int in_fn){
     int k1=eval_sub(hs,dots); if(k1!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
     top_gi=for_var(nm,K_NUM);
     store_global(top_gi);
-    top=cn;
+    top=here();
     int k2=eval_sub(dots+2,he2); if(k2!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
     end_gi=for_hidden("end",id,K_NUM);
     store_global(end_gi);
@@ -2300,7 +2346,7 @@ static void emit_for(const char**p,int in_fn){
     store_global(src_gi);
     idx_gi=for_hidden("idx",id,K_NUM);
     mov_imm64(AX,dbits(0.0)); store_global(idx_gi);
-    top=cn;
+    top=here();
     /* idx < length */
     load_global(src_gi);
     if(mode==1) callb(B_LLEN); else callb(B_STRLEN);
@@ -2309,7 +2355,7 @@ static void emit_for(const char**p,int in_fn){
     ucomisd(0,1);
   }
   JL exits={0};
-  size_t exit_at=cn; jcc_rel32(JC_NBE,0);      /* not (name < end): leave */
+  size_t exit_at=here(); jcc_rel32(JC_NBE,0);      /* not (name < end): leave */
   jl_add(&exits,exit_at);                      /* a 6-byte jcc: kept apart from break (5-byte jmp) */
   if(mode!=0){
     /* NAME = src[idx] */
@@ -2326,7 +2372,7 @@ static void emit_for(const char**p,int in_fn){
   nloops--;
   /* continue lands on the step */
   LoopF*lf=&loops[nloops];
-  jl_patch(&lf->cont,cn);
+  jl_patch(&lf->cont,here());
   if(mode==0){
     load_global(top_gi); movq_xr(0,AX);
   } else {
@@ -2334,9 +2380,9 @@ static void emit_for(const char**p,int in_fn){
   }
   mov_imm64(CX,dbits(1.0)); movq_xr(1,CX); addsd(0,1); movq_rx(AX,0);
   store_global(mode==0?top_gi:idx_gi);
-  jmp_rel32((int32_t)(top-cn-5));
-  jl_patch(&exits,cn);
-  jl_patch(&lf->brk,cn);
+  jmp_rel32((int32_t)(top-here()-5));
+  jl_patch(&exits,here());
+  jl_patch(&lf->brk,here());
   (void)ttop; (void)end_gi;
 }
 
@@ -2405,20 +2451,20 @@ static void emit_prog(const char**p,int in_fn,int stop){
     if(mkw(p,"for")){ emit_for(p,in_fn); continue; }
     if(mkw(p,"break")){
       if(nloops==0) errx("break outside a loop",NULL,NULL);
-      size_t at=cn; jmp_rel32(0);
+      size_t at=here(); jmp_rel32(0);
       jl_add5(&loops[nloops-1].brk,at);
       endstmt(p);
       continue;
     }
     if(mkw(p,"continue")){
       if(nloops==0) errx("continue outside a loop",NULL,NULL);
-      size_t at=cn; jmp_rel32(0);
+      size_t at=here(); jmp_rel32(0);
       jl_add5(&loops[nloops-1].cont,at);
       endstmt(p);
       continue;
     }
     if(mkw(p,"while")){
-      size_t top=cn;
+      size_t top=here();
       const char*ce=cond_end(*p);
       JL fl={0};
       gen_cond(*p,ce,0,&fl,0,"while");
@@ -2431,9 +2477,9 @@ static void emit_prog(const char**p,int in_fn,int stop){
       emit_prog(p,in_fn,1);
       nloops--;
       jl_patch(&loops[nloops].cont,top);
-      jmp_rel32((int32_t)(top-cn-5));
-      jl_patch(&fl,cn);
-      jl_patch(&loops[nloops].brk,cn);
+      jmp_rel32((int32_t)(top-here()-5));
+      jl_patch(&fl,here());
+      jl_patch(&loops[nloops].brk,here());
       continue;
     }
     if(mkw(p,"make")){
@@ -2452,7 +2498,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
       emit_rhs(p);
       if(XK==K_UNK) errx("cannot infer the type of the give value");
       if(XK!=F[cur_fn].rk) errx("give must give %s (got %s)",kname(F[cur_fn].rk),kname(XK),NULL);
-      e1(0xc9); e1(0xc3);             /* leave; ret */
+      leave_ret();
       endstmt(p);
       continue;
     }
@@ -2511,6 +2557,8 @@ static void emit_prog(const char**p,int in_fn,int stop){
   }
 }
 
+/* ===== EMIT-SEAM-END: below this line the file is x86-64 again -- the
+   runtime stubs, the collector and the ELF container are backend code. ===== */
 /* ================= phase 4: runtime builtins ================= */
 /* Follow list growth links. Payload +8 is zero on a current object, or
  * points to its successor. The collector traces this link, not the doubles.

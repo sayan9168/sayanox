@@ -152,13 +152,67 @@ bytes the last sweep saw alive (plus whatever has been allocated since), and
   [`STATUS.md`](STATUS.md)). Native programs therefore stay in the pure-min
   statement set.
 
-* `selfhost/seed/sxc_seed_min` (the bootstrap seed) has a malloc-only prelude
-  and frees only the previous value of a reassigned string variable. Its point
-  is to be small and auditable, not to manage memory well.
-* `selfhost/seed/sx_runtime.h` is the reference-counted runtime used by the
-  full seed `sxc_seed` (`sx_rc_retain` / `sx_rc_release`, `SxRcStr` headers,
-  reference counts on lists). `release(value)` performs a deterministic RC
-  release there.
+### The two seeds, measured
+
+Both seeds are compilers that emit C with a runtime prelude, and neither has a
+collector in the sense of §1 or §2. `make test-seed-gc` measures what they
+actually do, under `ulimit -v` address-space caps (4 MiB is the floor for a
+dynamically linked binary: below it `libc.so.6` itself cannot be mapped).
+
+**`selfhost/seed/sxc_seed_min` — the bootstrap seed: no collector, by design.**
+Its prelude is malloc-only: no object table, no reference counts, no `gc()`.
+What keeps it from growing without bound is two narrow mechanisms:
+
+* strings produced by `concat` / `chr` / `read_file` carry a hidden `sx_sb`
+  header `{magic,len,cap,data[]}`, so repeated `concat()` onto the *same*
+  left-hand side grows in place (O(1) amortised, not O(N²)). Literals and
+  `argv` strings have no header and are copied into a fresh builder on first
+  use;
+* a string assignment is emitted as
+  `{ char *_v = sx_cat(a,b); sx_sb_free(a); a = _v; }`, so the old left-hand
+  side is freed after the right-hand side is evaluated (`sx_sb_app` never frees
+  either side itself, which would double-free aliased variables).
+
+Measured: a 200k-iteration concat churn that retains nothing, a 2000-step
+accumulation to a 2003-character string, and a 2000-iteration temporary loop
+all run inside a 4 MiB cap and print the same values as gen2 and native. A
+program that genuinely retains 8388608 bytes dies with `sx: out of memory` on
+stderr and exit status 1, keeping the stdout it had already written. Anything
+not covered by those two mechanisms leaks: a `hold` of a fresh string inside a
+loop body that is never reassigned is simply dropped on the floor.
+`gc()`, `gc_live()` and `gc_runs()` are refused at compile time, because there
+is no collector to report on — the same refusal native gives.
+
+**`selfhost/seed/sx_runtime.h` — the full seed: a reference-counted
+representation that does not reclaim.** The runtime has `SxStrHdr` string
+headers, retain/release functions, an object table (`SX_TAB_CAP` 2097152) and
+`gc()` kept as a documented no-op alias that returns `0.0`; `gc_live()` and
+`gc_runs()` do not exist there at all. Measured with `SX_GC_DEBUG=1`, which
+prints a live-object count at exit:
+
+| program | objects alive at exit |
+| --- | --- |
+| `hold s = "x"` / `show len(s)` | 1 |
+| 2000 iterations of `hold t = concat("aaa…", "b")`, nothing retained | **6000** |
+| 2000 concats accumulating into one retained string | **4001** |
+
+Three objects per iteration stay registered, so the release path does not fire
+in a loop: memory grows with *total* allocation, not with the live set. The
+same churn that leaves seed-min flat inside 4 MiB needs 64 MiB here, and a
+1M-iteration version dies with `sx: out of memory` (or
+`sx: runtime object table overflow` once the 2097152-entry table is full).
+Because the object table is a static array, a 4 MiB cap cannot even start a
+full-seed program — it faults in the loader — so `test-seed-gc` measures this
+backend under a 64 MiB cap. Two further measured facts: values it prints use a
+different format (`8388608` where the other three backends print
+`8.38861e+06`), and a program using `%` needs `-lm` *after* the sources on the
+link line, because `sx_modv` calls `fmod`.
+
+* `selfhost/rc_runtime.h` is the standalone reference-counting experiment
+  exercised by `selfhost/rc_runtime_stress.c`. It is the historical slice that
+  `make gc-test` still checks: a managed string header with a reference count,
+  `sx_rc_retain` / `sx_rc_release`, deterministic release at zero, and no
+  background collector.
 * `selfhost/rc_runtime.h` is the standalone reference-counting experiment
   exercised by `selfhost/rc_runtime_stress.c`. It is the historical slice that
   `make gc-test` still checks: a managed string header with a reference count,
@@ -171,7 +225,18 @@ bytes the last sweep saw alive (plus whatever has been allocated since), and
 make gc-test         # reference-counting runtime slice (2000 concats, length + ok)
 make test-gc         # gen2 mark & sweep: bounded heap, collections, gc()/gc_live()
 make test-native-mem # native mark & sweep: churn inside a 4 MiB cap, no UAF
+make test-seed-gc    # both seeds: builder + freeing assignment, no-op gc(),
+                     # live-object counts, and what each one does under a cap
 ```
+
+`test-seed-gc` also pins gen2's behaviour under address-space pressure: its
+first collection only fires at 8 MiB of managed heap (`sx_gc_thresh` starts at
+`8u << 20`, afterwards `live * 1.5 + 4 MiB`), so the 200k churn that native runs
+inside 4 MiB needs 64 MiB there and cannot run in 16 MiB. That used to be a
+segfault, because the collector ignored the results of its own `calloc` (block
+hash table) and `malloc` (sort array, new block); all three sites now exit 1
+with `sx: out of memory`, and the target asserts the three checks are present
+in the generated C.
 
 CI runs these as part of `make test`. No GC feature changes the pure
 `.sa -> gen1` bootstrap path: the seed compiler never sees the collector.
@@ -186,3 +251,11 @@ CI runs these as part of `make test`. No GC feature changes the pure
 * No compacting or generational collector on either backend: blocks never
   move, so a long-running program can fragment.
 * Not every C `malloc` in the compiler tooling is managed.
+* No collector in either seed. `sxc_seed_min` is documented no-GC (builder
+  strings plus a freeing assignment cover the accumulation patterns, everything
+  else leaks) and the full seed's reference counts are measured not to release
+  in loops. Neither is on the bootstrap path's memory story: the bootstrap
+  compiles the compiler, it does not run long-lived programs.
+* No heap-threshold tuning knob: gen2's 8 MiB first-collection threshold is a
+  constant in the emitted runtime, which is why it needs more address space
+  than native for the same churn.
