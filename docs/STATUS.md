@@ -289,21 +289,30 @@ papered over in the library, and each is pinned by a test or documented here.
   verbatim so the C subscripted an `sx_list` struct with a double
   (`array subscript is not an integer`). An index is now a numeric expression
   in all three positions, on all three backends (`make test-gen2-index-expr`,
-  39 values). What gen2 still refuses inside `[ ]`, each with a clear
-  diagnostic and a `#error` rather than invalid C: `%`, any call (`len()`
-  included), a nested index, a comma, a quoted string, an empty index,
-  unbalanced parentheses, and an expression that ends with an operator. The
-  workaround is `hold n = len(xs) - 1` then `xs[n]`; seed-min and native accept
-  the call form, so this row stays open as a narrower divergence.
-* **gen2 `give` with a direct string `+` chain.** Inside a function body,
-  `give "hi " + name` and `give "a" + "b"` emit invalid C
+  39 values). **Fixed again later the same day:** `len(NAME)` and a nested
+  `NAME[IDX]` inside `[ ]` now lower too, in a value, in a chain operand, in a
+  condition, in a `for` bound and inside a typed body (helper `idx_lower`,
+  `make test-gen2-expr-lowering`, 18 values). What gen2 still refuses inside
+  `[ ]`, each with a clear diagnostic and a `#error` rather than invalid C:
+  `%`, a call other than `len()`, a comma, a quoted string, an empty index,
+  unbalanced parentheses or brackets, and an expression that ends with an
+  operator. The workaround is `hold n = <expr>` then `xs[n]`; seed-min and
+  native accept a call other than `len()` inside an index, so that one row
+  stays open as a narrower divergence.
+* **FIXED 2026-10-13: gen2 `give` with a direct string `+` chain.** Inside a
+  function body, `give "hi " + name` and `give "a" + "b"` used to emit invalid C
   (`invalid operands to binary + (have 'char *' and 'char *')`), so the
-  generated file fails to compile. The same chain in a `hold`
-  (`hold q = "hi " + name` then `give q`) works on seed-min, gen2 and native,
-  and top-level `hold` chains work everywhere. Every stdlib string helper
-  accumulates into a `hold` and returns that. The failure is a loud C compile
-  error rather than wrong output, which is the reason it is documented instead
-  of silently worked around.
+  generated file failed to compile, while the same chain in a `hold` worked.
+  The expression rewriter behind `give`, `when`/`while` conditions and
+  parenthesized expressions now joins two strings through `sx_cat` and nests a
+  chain, exactly as the value-position parser already did
+  (`make test-gen2-expr-lowering`, 11 values identical on seed-min, gen2 and
+  native). A `+` with exactly one string side is refused with the value
+  parser's own sentence, and so is `%` with a string operand — a `min:`
+  diagnostic plus a `#error`, never C that only fails at cc time. A struct
+  string field and a user-function call are not classified as strings there
+  yet, so `give "n=" + p.name` is refused rather than mis-compiled; bind it
+  with `hold` first.
 * **A negative index and a unary sign.** `xs[-1]` wraps to the last element on
   seed-min and gen2 (`sx_lget`/`sx_idx` add the length when the index is
   negative). native refuses a unary sign in an index at compile time
@@ -591,7 +600,8 @@ still use shell/C infrastructure. See
 | `make test-stdlib` | portable numeric helpers including interpolation on seed/gen2/native when built; string/list/file modules on gen2 and native; seed typed-module rejection |
 | `make test-pkgs` | the offline package path: `sxpkg.sh init`+`seed` write `.sayanox/registry/{hello,math,strings}` with no network, `sxpkg add` records the lock, a program with `use \".sayanox/registry/math/main.sa\"` runs the same on seed-min, gen2 and native, and `sxpkg verify` passes on a clean project, reports the tampered `main.sa` as a `sum` MISMATCH, and passes again after the re-seed. **Plus the dependency path** on `registry/calc` (`deps=math@0.1.0`): `add` locks the closure and prints a line per package, the lock is compared byte for byte, `deps` prints the closure, a bare `install` reports `cannot write .sayanox/registry/<name>/`, `sh tools/sxpkg.sh install-local registry` installs both sum-checked, `verify` reports both, `use \".sayanox/registry/calc/main.sa\"` prints `36`/`25` identically on seed-min and gen2, and the `not in sx.lock` / `but sx.lock has` errors are asserted |
 | `make test-gen2-gaps` | string `<`/`<=`/`>`/`>=`/`==`/`!=` by content on gen2 and seed-min, and native since 2026-10-10 (same output; string vs number is an error on seed-min); the gen2 fixes of 2026-10-08: `len(NAME)` in a range bound (list `sx_llen`, string `sx_len`); string `==`/`!=` between declared strings as strcmp (two equal runtime strings compare equal); `} else when`, `} else if` and `} otherwise when` chains including nested ones, with the same output as `elif`; seed-min and native match the conditional chain aliases; `%` inside builtin-call arguments is sx_mod, same as seed-min. |
-| `make test-gen2-index-expr` | an index is a numeric expression in a value position, in a `when`/`while` condition, in a `for` bound and inside a typed function body: 39 hand-computed values identical on seed-min, gen2 and native; 13 unsupported index forms (`%`, a call including `len()`, a nested index, a comma, a quote, an empty index, unbalanced parentheses, a trailing operator, in each position) refused with a `min:` diagnostic and a `#error`; a negative index wraps on seed-min and gen2 and is asserted to stay refused by native. |
+| `make test-gen2-index-expr` | an index is a numeric expression in a value position, in a `when`/`while` condition, in a `for` bound and inside a typed function body: 39 hand-computed values identical on seed-min, gen2 and native; 9 unsupported index forms (`%`, a call other than `len()`, a comma, a quote, an empty index, unbalanced parentheses, a trailing operator, in each position) refused with a `min:` diagnostic and a `#error`; a negative index wraps on seed-min and gen2 and is asserted to stay refused by native. |
+| `make test-gen2-expr-lowering` | the two gen2 expression gaps closed 2026-10-13: a string `+` chain in a `give`/condition joins through `sx_cat` (11 hand-computed values, `selfhost/gen2_str_cat_test.sa`), and `len(NAME)`/a nested `NAME[IDX]` inside `[ ]` lower to `sx_llen`/`sx_len` and `sx_lget`/`sx_idx` in a value, a chain operand, a condition, a `for` bound and a typed body (18 values, `selfhost/gen2_index_call_test.sa`) — both byte-identical on seed-min, gen2 and native, with the emitted C greps pinned; 6 unsupported forms (`%` in an index, a call other than `len()` in an index, a quote in an index, unbalanced brackets, a `+` with one string side, `%` with a string operand) refused with a `min:` diagnostic and a `#error`. |
 | `make test-stdlib-modules` | the three stdlib modules added 2026-10-13 (`num_util`, `list_algo`, `str_text`): 99 hand-computed values identical on seed-min, gen2 and native, each module alone, and all seven modules in one program. |
 | `make test-doc-claims` | no document advertises an entry point that is not in the repository: 24 legacy docs carry the "entry points do not exist" banner, `stage2_template.c` is still a placeholder, `restore_stage2.sh` still exits 1, and there is still no `stage2:` target. |
 | `make test-registry-sums` | every `pkg.meta` `sum=` in the repository equals `sxpkg sum` of its `main.sa` (offline integrity; see [`REGISTRY.md`](REGISTRY.md)) |
@@ -1363,7 +1373,10 @@ Not claimed: gen2 is not a full-language compiler. A bare string `+` chain in a
 global read inside an untyped `make` is refused, native still rejects a unary
 sign in an index and does not wrap a negative one, and generic structs with
 concrete layouts and type identities remain unimplemented. The increment is one
-feature plus one honesty correction, both gated.
+feature plus one honesty correction, both gated. (Later the same day the bare
+string `+` chain in a `give` and `len()`/a nested index inside `[ ]` were fixed
+too, and `%` plus a call other than `len()` inside an index remain refused —
+see "Gen2 expression lowering" below.)
 
 
 ---
@@ -1597,3 +1610,129 @@ only where `native_aot` is built.
 
 Not claimed: generic structs, a second native target, a workspace-aware LSP,
 signed or uploaded packages, or any change to the pure-min bootstrap dialect.
+
+
+---
+
+## Gen2 expression lowering: a string chain in a `give`, and `len()` or a nested index inside `[ ]` (2026-10-13)
+
+The two gen2 gaps that were still recorded as open divergences are closed in the
+self-hosted compiler source (`selfhost/compiler_min.sa`), and both are gated by
+one new target, `make test-gen2-expr-lowering`, wired into the
+`true-selfhost-min` and `native-test` aggregates. Nothing changed in the
+pure-min bootstrap dialect, in seed-min, in the full seed or in `native_aot`:
+this increment only removes two places where gen2 was the odd backend out.
+
+### The `give` that could not join two strings
+
+`give "hi " + name` inside a function body was copied into the C as
+`return "hi " + name;`, which cc rejects with `invalid operands to binary +
+(have 'char *' and 'char *')`. The same chain in a `hold` always worked,
+because the value-position parser joins two strings through `sx_cat`. The
+expression rewriter that feeds a `give`, a `when`/`while` condition and a
+parenthesized expression now does the same:
+
+* it already scanned back over the left operand and forward over the right one
+  to lower `%` through `sx_mod`; that handler now covers `+` as well, and the
+  back-scan also walks over a quoted literal (counting the backslashes before a
+  quote, so an escaped `\"` does not end the walk early);
+* `str_operand(text, sdecls)` decides whether an operand is a string: a quoted
+  literal, an `sx_cat(...)` group, a name in the string declaration table
+  (`sdecls`, which holds `str` parameters and `for` variables too), or a call
+  to a builtin that gives a string (`concat`, `chr`, `numstr`, `arg`,
+  `read_line`, `read_n`, `read_file`, `http_get` and their `sx_` names). Spaces
+  left by the scans are trimmed before the table lookup;
+* both strings → `sx_cat(L, R)`, nested for a chain, so `"x" + n + "y"` becomes
+  `sx_cat(sx_cat("x" , n) , "y")` and `concat(p, q) + "/" + p` becomes
+  `sx_cat(sx_cat(sx_cat(p, q) , "/") , p)`;
+* exactly one string → refused with the value parser's own sentence, `+ joins
+  two strings or adds two numbers; the other side of 'v' is not a string (bind
+  it with hold first)`, as a `min:` diagnostic on stdout and a `#error` in the
+  C. seed-min refuses the same program, so the backends agree on the diagnosis;
+* `%` with a string operand is refused too (`'%' truncates two numbers; one of
+  its operands is a string`), which seed-min and native already did.
+
+A struct string field (`give "n=" + p.name`) and a call to a user function that
+gives a string are *not* classified as strings by `str_operand`, so those two
+forms are refused rather than mis-compiled; binding the value with `hold` first
+works everywhere, as before.
+
+`selfhost/gen2_str_cat_test.sa` is 11 hand-computed values — literal + name,
+name + literal, a three-part chain, an escaped quote inside a literal, a call
+operand, a chain in a `hold` inside a typed body, and a string comparison in a
+condition — byte-identical on seed-min, gen2 and native, with the emitted
+`sx_cat` forms pinned by `grep`.
+
+### `len()` and a nested index inside `[ ]`
+
+`xs[len(xs) - 1]` was refused in a value position (`unsupported index
+expression`) and copied verbatim into the C in a condition and in a `for`
+bound, where cc reported `array subscript is not an integer`. Two helpers in
+the leading definition block fix every position at once:
+
+* `tbl_has(table, name)` answers whether a `|name|name|` declaration table
+  holds a name — the tables belong to the main loop and a helper cannot
+  capture them, so they are passed in;
+* `idx_lower(text, ldecls, sdecls)` lowers index text into C: `len(NAME)` to
+  `sx_llen`/`sx_len` and `NAME[IDX]` to `sx_lget`/`sx_idx`, each chosen by the
+  declaration tables, recursing into a nested index, and copying numbers,
+  names, dotted field chains, parentheses and `+ - * /` verbatim (which is
+  already valid C). It gives `""` when it cannot lower — `%`, a call other than
+  `len()`, a quoted string, a comma, a stray bracket, a name declared neither
+  list nor string — and every caller keeps its existing refusal then.
+
+`raw_index` now copies a call and a nested `[...]` verbatim instead of refusing
+them, tracking bracket depth so the closing `]` of the outer index still ends
+the scan. Copying verbatim matters: a caller advances its own cursor by `len()`
+of the result, so the text and the position have to stay in step, and the
+lowering happens where the C is emitted. `idx_lower` is wired at the four
+value-position call sites (the two value parsers and the two postfix-operand
+parsers), in the condition rewriter's index path and in the `for`-bound
+rewriter, so all of these now work in gen2:
+
+```
+xs[len(xs) - 1]        xs[len(xs) - len(ys)]   xs[ys[0]]      xs[ys[1] + 1]
+s[len(s) - 2]          when xs[len(xs) - 1] > 39              for k in 0..ys[len(ys) - 1]
+make pick(v: list) -> num { give v[len(v) - 1] }              show xs[i + 1] + xs[len(xs) - 1]
+```
+
+`selfhost/gen2_index_call_test.sa` is 18 hand-computed values covering exactly
+those forms, byte-identical on seed-min, gen2 and native, with the emitted
+`sx_llen`/`sx_len`/`sx_lget`/`sx_idx` forms pinned by `grep` in a value, a
+condition, a `for` bound and a typed body.
+
+Still refused inside `[ ]`, each with a `min:` diagnostic and a `#error` rather
+than invalid C: `%`, a call other than `len()` (so `xs[pick(xs)]`, which
+seed-min and native do accept — that row stays open as a narrower divergence),
+a quoted string, a comma, an empty index, unbalanced parentheses or brackets,
+and an expression that ends with an operator. `make test-gen2-index-expr` keeps
+its 39 values and now pins 9 refused forms instead of 13; its five
+`len()`/nested-index refusals moved to the new target as positive parity
+checks.
+
+### Two lessons this increment re-learned the hard way
+
+* A `hold` name may be declared only **once per generated C function**, and the
+  whole main compile loop of `compiler_min.sa` is one function. Reusing a scan
+  name that another block already declares (`cwq`, `cwb2`) or naming the same
+  helper result at two sibling call sites (`ixl`, `opxl`) makes gen1_min emit a
+  bare assignment with no declaration, and gen2.c then fails to compile with
+  `'NAME' undeclared`. Every new name in this increment is unique to its site.
+* The back-scan for an operand has to know which end of a literal it starts
+  from: the first version stopped at the *closing* quote, so `"[" + j` emitted
+  `"[sx_cat(" , j)`. The fixture that caught it is a three-part chain, which is
+  why `gen2_str_cat_test.sa` has one.
+
+### Gates
+
+`make test-gen2-expr-lowering` and the updated `make test-gen2-index-expr` both
+pass, including native parity for both fixtures and all 6 + 9 pinned refusals.
+The full chain `make doctor && make true-selfhost && make gen3 &&
+make native-test` was re-run after the source edits and the offline pack was
+regenerated (`make pack-compiler`, 119 parts, round-trip verified against
+`selfhost/compiler_min.sa`); the logs are `docs/logs/expr-lowering-*.log`.
+
+Not claimed: a call other than `len()` inside an index, `%` inside an index, a
+struct string field or a user-function call as a `+` operand in a `give`,
+generic structs, a second native target, or any change to seed-min, the full
+seed, `native_aot` or the pure-min bootstrap dialect.

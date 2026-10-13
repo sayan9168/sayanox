@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split
 
 all: true-selfhost-min
 
@@ -2400,10 +2400,11 @@ test-for-str: test-doc-claims
 # function bodies. seed-min, gen2 and native must print identical bytes.
 #
 # Still refused by gen2 -- loudly, never as invalid C, and each pinned by the
-# error loop below: `%` inside an index, any call inside an index (len()
-# included), a nested index, a comma, a quoted string, an empty index,
-# unbalanced parentheses and an expression ending in an operator. The
-# workaround the diagnostic names is to bind the value with `hold` first.
+# error loop below: `%` inside an index, a call other than len(), a comma, a
+# quoted string, an empty index, unbalanced parentheses or brackets and an
+# expression ending in an operator. The workaround the diagnostic names is to
+# bind the value with `hold` first. `len(NAME)` and a nested `NAME[IDX]` used
+# to be on that list and are lowered now: test-gen2-expr-lowering pins them.
 # A negative index (`xs[-1]`) wraps on seed-min and gen2 but is an out-of-range
 # error on native, so it is checked separately rather than in the parity file.
 # ---------------------------------------------------------------------------
@@ -2434,19 +2435,15 @@ test-gen2-index-expr: $(GEN2) $(SEED_MIN_BIN)
 	else echo '[SKIP] native index-expression parity: native_aot not built'; fi
 	@# ---- refusals: a clear diagnostic plus a #error, never invalid C --------
 	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nshow xs[i %% 2]\n' > $(TESTS)/gixe_bad_mod.sa
-	@printf 'hold xs = [1, 2, 3]\nshow xs[len(xs) - 1]\n' > $(TESTS)/gixe_bad_call.sa
-	@printf 'hold xs = [1, 2, 3]\nhold ys = [0]\nshow xs[ys[0]]\n' > $(TESTS)/gixe_bad_nested.sa
+	@printf 'hold xs = [1, 2, 3]\nmake pick(v: list) -> num {\n  give v[0]\n}\nshow xs[pick(xs)]\n' > $(TESTS)/gixe_bad_call.sa
 	@printf 'hold xs = [1, 2, 3]\nshow xs[1, 2]\n' > $(TESTS)/gixe_bad_comma.sa
 	@printf 'hold xs = [1, 2, 3]\nshow xs["a"]\n' > $(TESTS)/gixe_bad_quote.sa
 	@printf 'hold xs = [1, 2, 3]\nshow xs[]\n' > $(TESTS)/gixe_bad_empty.sa
 	@printf 'hold xs = [1, 2, 3]\nhold i = 1\nshow xs[(i]\n' > $(TESTS)/gixe_bad_unbal.sa
 	@printf 'hold xs = [1, 2, 3]\nhold i = 1\nshow xs[i +]\n' > $(TESTS)/gixe_bad_trailop.sa
 	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nwhen xs[i %% 2] > 0 {\n  show 1\n}\n' > $(TESTS)/gixe_bad_condmod.sa
-	@printf 'hold xs = [1, 2, 3]\nwhen xs[len(xs) - 1] > 0 {\n  show 1\n}\n' > $(TESTS)/gixe_bad_condcall.sa
-	@printf 'hold xs = [1, 2, 3]\nhold ys = [0]\nwhen xs[ys[0]] > 0 {\n  show 1\n}\n' > $(TESTS)/gixe_bad_condnested.sa
 	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nfor k in 0..xs[i %% 2] {\n  show k\n}\n' > $(TESTS)/gixe_bad_boundmod.sa
-	@printf 'hold xs = [1, 2, 3]\nfor k in 0..xs[len(xs) - 1] {\n  show k\n}\n' > $(TESTS)/gixe_bad_boundcall.sa
-	@for t in mod call nested comma quote empty unbal trailop condmod condcall condnested boundmod boundcall; do \
+	@for t in mod call comma quote empty unbal trailop condmod boundmod; do \
 	  ./$(GEN2) $(TESTS)/gixe_bad_$$t.sa $(TESTS)/gixe_bad_$$t.c > $(TESTS)/gixe_bad_$$t.msg 2>&1; \
 	  grep -q '#error sayanox-min:' $(TESTS)/gixe_bad_$$t.c || { echo "[FAIL] gixe_bad_$$t: the generated C has no #error"; exit 1; }; \
 	  grep -q '^min: ' $(TESTS)/gixe_bad_$$t.msg || { echo "[FAIL] gixe_bad_$$t: no 'min:' diagnostic"; cat $(TESTS)/gixe_bad_$$t.msg; exit 1; }; \
@@ -2466,11 +2463,117 @@ test-gen2-index-expr: $(GEN2) $(SEED_MIN_BIN)
 	  fi; \
 	  echo '[OK] native refuses a negative index, as documented'; \
 	fi
-	@echo '[OK] gen2 index expressions: arithmetic/field indexes in values, conditions, for bounds and typed bodies (39 values identical on seed-min, gen2 and native); 13 unsupported index forms refused with a clear diagnostic and a #error'
+	@echo '[OK] gen2 index expressions: arithmetic/field indexes in values, conditions, for bounds and typed bodies (39 values identical on seed-min, gen2 and native); 9 unsupported index forms refused with a clear diagnostic and a #error'
 test-stage2: test-gen2-index-expr
 test-for-str: test-gen2-index-expr
 test-gen2-gaps: test-gen2-index-expr
 native-test: test-gen2-index-expr
+
+# ---------------------------------------------------------------------------
+# test-gen2-expr-lowering: the two gen2 expression gaps that were still
+# recorded as divergences in docs/STATUS.md, now closed in the self-hosted
+# compiler source (selfhost/compiler_min.sa).
+#
+#   * A `give`, a `when`/`while` condition and a parenthesized expression
+#     copied a bare `+` into the C, so `give "hi " + n` became
+#     `return "hi " + n;` and cc reported "invalid operands to binary + (have
+#     'char *' and 'char *')". The expression rewriter now joins two strings
+#     through sx_cat -- nesting for a chain, keeping the escapes of a literal,
+#     and accepting a call such as concat(p, q) as an operand -- exactly as the
+#     value-position parser already did. A `+` with one string side and one
+#     numeric side is refused with the same sentence the value parser uses,
+#     and `%` with a string operand is refused too; neither becomes C that
+#     only fails at cc time.
+#   * `len(NAME)` and a nested `NAME[IDX]` inside `[ ]` were refused in a value
+#     position and copied verbatim into the C in a condition and in a for
+#     bound, where cc reported "array subscript is not an integer". The new
+#     helper idx_lower lowers both -- sx_llen/sx_len and sx_lget/sx_idx, chosen
+#     by the declaration tables -- in a value, in a chain operand, in a
+#     condition, in a for bound and inside a typed function body.
+#
+# Fixtures selfhost/gen2_str_cat_test.sa (11 values) and
+# selfhost/gen2_index_call_test.sa (18 values): seed-min, gen2 and native must
+# print identical bytes, and both must match the hand-computed expectation.
+#
+# Still refused by gen2, each pinned by the error loop below: `%` inside an
+# index, a call other than len() inside an index (`xs[pick(xs)]`, which
+# seed-min and native do accept -- a documented divergence), a quoted string
+# inside an index, unbalanced brackets, a `+` with one string side and `%`
+# with a string operand.
+# ---------------------------------------------------------------------------
+.PHONY: test-gen2-expr-lowering
+GSC_WANT := hi bob\nsay "hi" kim\nLR\nxabcy\nabc!\npq/p\n[L-R]\n1\n2\nhi abc\nstr-cat-done
+GIC_WANT := 40\n30\n20\n40\n102\n101\n40\n70\n100\n101\n0\n1\n2\n1\n40\n2\n102\nindex-call-done
+test-gen2-expr-lowering: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@# ---- a string chain in a give: 11 values, identical on all three ------
+	./$(SEED_MIN_BIN) selfhost/gen2_str_cat_test.sa > $(TESTS)/gsc_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gsc_seed $(TESTS)/gsc_seed.c
+	./$(GEN2) selfhost/gen2_str_cat_test.sa $(TESTS)/gsc_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gsc_gen2 $(TESTS)/gsc_gen2.c
+	$(call assert-out,./$(TESTS)/gsc_seed,$(GSC_WANT))
+	$(call assert-out,./$(TESTS)/gsc_gen2,$(GSC_WANT))
+	@# the lowering itself, in the generated C
+	@grep -q -F 'return sx_cat("hi " , n);' $(TESTS)/gsc_gen2.c || { echo "[FAIL] a give did not join a literal and a name through sx_cat"; exit 1; }
+	@grep -q -F 'return sx_cat(sx_cat("x" , n) , "y");' $(TESTS)/gsc_gen2.c || { echo "[FAIL] a three-part string chain in a give was not nested through sx_cat"; exit 1; }
+	@grep -q -F 'return sx_cat(n , "!");' $(TESTS)/gsc_gen2.c || { echo "[FAIL] a give with the literal on the right was not lowered"; exit 1; }
+	@grep -q -F 'return sx_cat(sx_cat(sx_cat(p, q) , "/") , p);' $(TESTS)/gsc_gen2.c || { echo "[FAIL] a call operand in a give string chain was not lowered"; exit 1; }
+	@grep -q -F 'char *j = sx_cat(sx_cat(a, "-"), b);' $(TESTS)/gsc_gen2.c || { echo "[FAIL] the value-position string chain changed"; exit 1; }
+	@if grep -n '" + n' $(TESTS)/gsc_gen2.c; then echo "[FAIL] a bare + between two strings reached the generated C"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/gen2_str_cat_test.sa $(TESTS)/gsc_native || exit 1; \
+	  ./$(TESTS)/gsc_native > $(TESTS)/gsc_native.out || exit 1; \
+	  ./$(TESTS)/gsc_seed > $(TESTS)/gsc_seed.out || exit 1; \
+	  cmp $(TESTS)/gsc_seed.out $(TESTS)/gsc_native.out || { echo "[FAIL] native string-chain output differs from seed-min"; exit 1; }; \
+	  echo '[OK] native parity for a string chain in a give'; \
+	else echo '[SKIP] native string-chain parity: native_aot not built'; fi
+	@# ---- len() and a nested index inside [ ]: 18 values, all three ---------
+	./$(SEED_MIN_BIN) selfhost/gen2_index_call_test.sa > $(TESTS)/gic_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gic_seed $(TESTS)/gic_seed.c
+	./$(GEN2) selfhost/gen2_index_call_test.sa $(TESTS)/gic_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gic_gen2 $(TESTS)/gic_gen2.c
+	$(call assert-out,./$(TESTS)/gic_seed,$(GIC_WANT))
+	$(call assert-out,./$(TESTS)/gic_gen2,$(GIC_WANT))
+	@# the lowering itself: sx_llen/sx_len for len(), sx_lget/sx_idx for a
+	@# nested index, in a value, in a condition, in a for bound and in a body
+	@grep -q -F 'sx_lget(xs,sx_llen(xs) - 1.0)' $(TESTS)/gic_gen2.c || { echo "[FAIL] len() inside a list index was not lowered"; exit 1; }
+	@grep -q -F 'sx_idx(s,sx_len(s) - 1.0)' $(TESTS)/gic_gen2.c || { echo "[FAIL] len() inside a string index was not lowered"; exit 1; }
+	@grep -q -F 'sx_lget(xs,sx_lget(ys,0.0))' $(TESTS)/gic_gen2.c || { echo "[FAIL] a nested list index was not lowered"; exit 1; }
+	@grep -q -F 'if (sx_lget(xs,sx_llen(xs) - 1.0) > 39.0)' $(TESTS)/gic_gen2.c || { echo "[FAIL] len() inside an index in a condition was not lowered"; exit 1; }
+	@grep -q -F 'for (k = 0.0; k < sx_lget(ys,sx_llen(ys) - 1.0)' $(TESTS)/gic_gen2.c || { echo "[FAIL] a nested index in a for bound was not lowered"; exit 1; }
+	@grep -q -F 'return sx_lget(v,sx_llen(v) - 1.0);' $(TESTS)/gic_gen2.c || { echo "[FAIL] len() inside an index in a typed body was not lowered"; exit 1; }
+	@grep -q -F 'return sx_idx(t,sx_len(t) - 1.0);' $(TESTS)/gic_gen2.c || { echo "[FAIL] a string index in a typed body was not lowered"; exit 1; }
+	@if grep -n 'xs\[' $(TESTS)/gic_gen2.c; then echo "[FAIL] an index was copied into the C verbatim"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/gen2_index_call_test.sa $(TESTS)/gic_native || exit 1; \
+	  ./$(TESTS)/gic_native > $(TESTS)/gic_native.out || exit 1; \
+	  ./$(TESTS)/gic_seed > $(TESTS)/gic_seed.out || exit 1; \
+	  cmp $(TESTS)/gic_seed.out $(TESTS)/gic_native.out || { echo "[FAIL] native index-call output differs from seed-min"; exit 1; }; \
+	  echo '[OK] native parity for len() and a nested index inside [ ]'; \
+	else echo '[SKIP] native index-call parity: native_aot not built'; fi
+	@# ---- refusals: a clear diagnostic plus a #error, never invalid C -------
+	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nshow xs[i %% 2]\n' > $(TESTS)/gel_bad_mod.sa
+	@printf 'hold xs = [1, 2, 3]\nmake pick(v: list) -> num {\n  give v[0]\n}\nshow xs[pick(xs)]\n' > $(TESTS)/gel_bad_call.sa
+	@printf 'hold xs = [1, 2, 3]\nshow xs["a"]\n' > $(TESTS)/gel_bad_quote.sa
+	@printf 'hold xs = [1, 2, 3]\nhold ys = [0]\nshow xs[ys[0]\n' > $(TESTS)/gel_bad_unbal.sa
+	@printf 'make bad(x: str, v: num) -> str {\n  give "v=" + v\n}\nshow bad("q", 3)\n' > $(TESTS)/gel_bad_mix.sa
+	@printf 'make bad2(x: num, s: str) -> num {\n  give x %% s\n}\nshow bad2(4, "ab")\n' > $(TESTS)/gel_bad_pctstr.sa
+	@for t in mod call quote unbal mix pctstr; do \
+	  ./$(GEN2) $(TESTS)/gel_bad_$$t.sa $(TESTS)/gel_bad_$$t.c > $(TESTS)/gel_bad_$$t.msg 2>&1; \
+	  grep -q '#error sayanox-min:' $(TESTS)/gel_bad_$$t.c || { echo "[FAIL] gel_bad_$$t: the generated C has no #error"; exit 1; }; \
+	  grep -q '^min: ' $(TESTS)/gel_bad_$$t.msg || { echo "[FAIL] gel_bad_$$t: no 'min:' diagnostic"; cat $(TESTS)/gel_bad_$$t.msg; exit 1; }; \
+	  echo "  refused $$t: $$(grep -m1 '^min: ' $(TESTS)/gel_bad_$$t.msg | cut -c1-92)"; \
+	done
+	@# seed-min refuses a mixed + and a % on a string; native refuses the %
+	@if ./$(SEED_MIN_BIN) $(TESTS)/gel_bad_mix.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted a string + a number in a give"; exit 1; fi
+	@if ./$(SEED_MIN_BIN) $(TESTS)/gel_bad_pctstr.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted %% with a string operand"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gel_bad_pctstr.sa $(TESTS)/gel_bad_pctstr_nat >/dev/null 2>&1; then echo "[FAIL] native accepted %% with a string operand"; exit 1; fi; \
+	  echo '[OK] seed-min and native refuse the mixed operands too'; \
+	fi
+	@echo '[OK] gen2 expression lowering: a string chain in a give/condition (11 values) and len()/a nested index inside [ ] in every position (18 values), identical on seed-min, gen2 and native; 6 unsupported forms refused with a clear diagnostic and a #error'
+test-stage2: test-gen2-expr-lowering
+native-test: test-gen2-expr-lowering
 
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -2591,7 +2694,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-http-get test-sayacrawl test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-http-get test-sayacrawl test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="

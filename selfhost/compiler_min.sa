@@ -832,18 +832,338 @@ make sxflowblock(text: str, at: num, level: num) -> list {
 // wrap a negative index, which is what seed-min does (native refuses a unary
 // sign in an index and does not wrap -- see docs/STATUS.md).
 //
-// Refused: a nested '[', a comma, a quote, '%', a call such as len() (gen2
-// lowers those only in chains it parses itself, so copying them would emit
-// invalid C; bind the value with `hold` first), an empty index, unbalanced
-// parentheses, two dots in a row, and an expression that ends with an
-// operator. One implementation, four call sites: the two copies of the
+// The text is copied VERBATIM, so a caller may advance its own cursor by
+// len() of the result; idx_lower then turns it into C. Refused here: a comma,
+// a quote, '%', an empty index, unbalanced parentheses or brackets, a leading
+// '[' , two dots in a row, and an expression that ends with an operator or an
+// open bracket. One implementation, four call sites: the two copies of the
 // value-position parser and the two copies of the postfix-operand parser.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// tbl_has: does a `|name|name|` declaration table hold this name? The tables
+// (ldecls for lists, sdecls for strings) belong to the main loop and a helper
+// cannot reach them, so they are passed in.
+// ---------------------------------------------------------------------------
+make tbl_has(table: str, name: str) -> num {
+  hold thkey = concat(concat("|", name), "|")
+  hold thi = 0
+  hold thkl = len(thkey)
+  hold thtl = len(table)
+  hold thfound = 0
+  while thi + thkl <= thtl && thfound == 0 {
+    hold thmt = 1
+    hold thj = 0
+    while thj < thkl {
+      when sx_index(table, thi + thj) == sx_index(thkey, thj) {
+        hold thj = thj + 1
+      } otherwise {
+        hold thmt = 0
+        hold thj = thkl
+      }
+    }
+    when thmt == 1 {
+      hold thfound = 1
+    }
+    hold thi = thi + 1
+  }
+  give thfound
+}
+
+// ---------------------------------------------------------------------------
+// str_operand: is this expression text a string? It answers 1 for a quoted
+// literal, for a sx_cat(...) join, for a name the main loop declared a string
+// and for a call to a builtin that gives a string. Anything else (a number, a
+// list, a struct field, a call to a user function) answers 0, so a `+` with
+// one string side is refused with a clear message instead of being emitted as
+// C that cannot compile.
+// ---------------------------------------------------------------------------
+make str_operand(text: str, sdecls: str) -> num {
+  // the operand scans leave the spacing of the source on either side, and a
+  // table lookup is by exact name: trim spaces and tabs first
+  hold sob = 0
+  hold soe = len(text)
+  hold sorun = 1
+  while sorun == 1 {
+    when sob >= soe {
+      hold sorun = 0
+    } otherwise {
+      hold socd = sx_index(text, sob)
+      when socd == 32 || socd == 9 {
+        hold sob = sob + 1
+      } otherwise {
+        hold sorun = 0
+      }
+    }
+  }
+  hold sorun = 1
+  while sorun == 1 {
+    when soe <= sob {
+      hold sorun = 0
+    } otherwise {
+      hold socd = sx_index(text, soe - 1)
+      when socd == 32 || socd == 9 {
+        hold soe = soe - 1
+      } otherwise {
+        hold sorun = 0
+      }
+    }
+  }
+  hold sot = ""
+  hold soi = sob
+  while soi < soe {
+    hold sot = concat(sot, chr(sx_index(text, soi)))
+    hold soi = soi + 1
+  }
+  hold son = len(sot)
+  when son == 0 {
+    give 0
+  }
+  when sx_index(sot, 0) == 34 {
+    give 1
+  }
+  // the head is the text before the first '(', or the whole text
+  hold sohead = ""
+  hold soi = 0
+  hold sopar = 0 - 1
+  while soi < son {
+    hold socd = sx_index(sot, soi)
+    when sopar < 0 {
+      when socd == 40 {
+        hold sopar = soi
+      } otherwise {
+        hold sohead = concat(sohead, chr(socd))
+      }
+    }
+    hold soi = soi + 1
+  }
+  when sopar < 0 {
+    give tbl_has(sdecls, sohead)
+  }
+  when string_eq(sohead, "concat") || string_eq(sohead, "chr") || string_eq(sohead, "read_file") || string_eq(sohead, "numstr") || string_eq(sohead, "arg") || string_eq(sohead, "read_line") || string_eq(sohead, "read_n") || string_eq(sohead, "http_get") {
+    give 1
+  }
+  when string_eq(sohead, "sx_cat") || string_eq(sohead, "sx_chr") || string_eq(sohead, "sx_read") || string_eq(sohead, "sx_numstr") || string_eq(sohead, "sx_arg") || string_eq(sohead, "sx_read_line") || string_eq(sohead, "sx_read_n") || string_eq(sohead, "sx_http") {
+    give 1
+  }
+  give 0
+}
+
+// ---------------------------------------------------------------------------
+// idx_lower: lower the text inside `[ ]` into C, so an index may be a whole
+// numeric expression instead of only the forms a C compiler happens to accept:
+//
+//   len(NAME)  -> sx_llen(NAME) for a list, sx_len(NAME) for a string
+//   NAME[IDX]  -> sx_lget(NAME, IDX) for a list, sx_idx(NAME, IDX) for a
+//                 string, with IDX lowered by the same rules (so a nested
+//                 index and a len() inside it both work)
+//   numbers, names, dotted field chains, parentheses, a unary sign and
+//   + - * /  -> copied verbatim, which is already valid C
+//
+// It gives "" when the text cannot be lowered: a call other than len(), '%',
+// a quoted string, a comma, a bracket that is not part of NAME[IDX], a name
+// that is declared neither a list nor a string, or unbalanced brackets. The
+// caller keeps its existing refusal then, so an index the compiler does not
+// understand is still a clear diagnostic and never invalid C.
+// ---------------------------------------------------------------------------
+make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
+  hold ixlout = ""
+  hold ixli = 0
+  hold ixln = len(text)
+  hold ixlbad = 0
+  while ixli < ixln && ixlbad == 0 {
+    hold ixlnext = ixli + 1
+    hold ixlcd = sx_index(text, ixli)
+    hold ixlid = 0
+    when ixlcd == 37 || ixlcd == 34 || ixlcd == 44 || ixlcd == 91 || ixlcd == 93 {
+      // '%', a quote, a comma and a stray bracket stay refused
+      hold ixlbad = 1
+    }
+    when (ixlcd >= 97 && ixlcd <= 122) || (ixlcd >= 65 && ixlcd <= 90) || ixlcd == 95 {
+      hold ixlid = 1
+      // ---- the identifier itself ----
+      hold ixlnm = ""
+      hold ixlj = ixli
+      hold ixlrun = 1
+      while ixlrun == 1 {
+        when ixlj >= ixln {
+          hold ixlrun = 0
+        } otherwise {
+          hold ixlc2 = sx_index(text, ixlj)
+          when (ixlc2 >= 97 && ixlc2 <= 122) || (ixlc2 >= 65 && ixlc2 <= 90) || (ixlc2 >= 48 && ixlc2 <= 57) || ixlc2 == 95 {
+            hold ixlnm = concat(ixlnm, chr(ixlc2))
+            hold ixlj = ixlj + 1
+          } otherwise {
+            hold ixlrun = 0
+          }
+        }
+      }
+      // ---- spaces between the name and a '(' or a '[' ----
+      hold ixlk = ixlj
+      hold ixlrun = 1
+      while ixlrun == 1 {
+        when ixlk >= ixln {
+          hold ixlrun = 0
+        } otherwise {
+          hold ixlc2 = sx_index(text, ixlk)
+          when ixlc2 == 32 || ixlc2 == 9 {
+            hold ixlk = ixlk + 1
+          } otherwise {
+            hold ixlrun = 0
+          }
+        }
+      }
+      hold ixlpost = 0
+      when ixlk < ixln {
+        hold ixlpost = sx_index(text, ixlk)
+      }
+      // ---- a call: only len(NAME) is lowered ----
+      when ixlpost == 40 {
+        hold ixlarg = ""
+        hold ixlj = ixlk + 1
+        hold ixlrun = 1
+        while ixlrun == 1 {
+          when ixlj >= ixln {
+            hold ixlrun = 0
+          } otherwise {
+            hold ixlc2 = sx_index(text, ixlj)
+            when ixlc2 == 32 || ixlc2 == 9 {
+              hold ixlj = ixlj + 1
+            } otherwise {
+              hold ixlrun = 0
+            }
+          }
+        }
+        hold ixlrun = 1
+        while ixlrun == 1 {
+          when ixlj >= ixln {
+            hold ixlrun = 0
+          } otherwise {
+            hold ixlc2 = sx_index(text, ixlj)
+            when (ixlc2 >= 97 && ixlc2 <= 122) || (ixlc2 >= 65 && ixlc2 <= 90) || (ixlc2 >= 48 && ixlc2 <= 57) || ixlc2 == 95 {
+              hold ixlarg = concat(ixlarg, chr(ixlc2))
+              hold ixlj = ixlj + 1
+            } otherwise {
+              hold ixlrun = 0
+            }
+          }
+        }
+        hold ixlrun = 1
+        while ixlrun == 1 {
+          when ixlj >= ixln {
+            hold ixlrun = 0
+          } otherwise {
+            hold ixlc2 = sx_index(text, ixlj)
+            when ixlc2 == 32 || ixlc2 == 9 {
+              hold ixlj = ixlj + 1
+            } otherwise {
+              hold ixlrun = 0
+            }
+          }
+        }
+        hold ixlclo = 0
+        when ixlj < ixln {
+          when sx_index(text, ixlj) == 41 {
+            hold ixlclo = 1
+          }
+        }
+        when ixlclo == 0 || len(ixlarg) == 0 || string_eq(ixlnm, "len") == 0 {
+          hold ixlbad = 1
+        } otherwise {
+          when tbl_has(ldecls, ixlarg) == 1 {
+            hold ixlout = concat(ixlout, "sx_llen(")
+            hold ixlout = concat(ixlout, ixlarg)
+            hold ixlout = concat(ixlout, ")")
+          } otherwise {
+            when tbl_has(sdecls, ixlarg) == 1 {
+              hold ixlout = concat(ixlout, "sx_len(")
+              hold ixlout = concat(ixlout, ixlarg)
+              hold ixlout = concat(ixlout, ")")
+            } otherwise {
+              hold ixlbad = 1
+            }
+          }
+          hold ixlnext = ixlj + 1
+        }
+      }
+      // ---- a nested index: NAME[IDX] ----
+      when ixlpost == 91 {
+        hold ixldep = 0
+        hold ixlj = ixlk
+        hold ixlend = 0 - 1
+        while ixlj < ixln && ixlend < 0 {
+          hold ixlc2 = sx_index(text, ixlj)
+          when ixlc2 == 91 {
+            hold ixldep = ixldep + 1
+          }
+          when ixlc2 == 93 {
+            hold ixldep = ixldep - 1
+            when ixldep == 0 {
+              hold ixlend = ixlj
+            }
+          }
+          hold ixlj = ixlj + 1
+        }
+        when ixlend < 0 {
+          hold ixlbad = 1
+        } otherwise {
+          hold ixlsub = ""
+          hold ixlj = ixlk + 1
+          while ixlj < ixlend {
+            hold ixlsub = concat(ixlsub, chr(sx_index(text, ixlj)))
+            hold ixlj = ixlj + 1
+          }
+          hold ixllow = idx_lower(ixlsub, ldecls, sdecls)
+          when len(ixlsub) == 0 || len(ixllow) == 0 {
+            hold ixlbad = 1
+          } otherwise {
+            when tbl_has(ldecls, ixlnm) == 1 {
+              hold ixlout = concat(ixlout, "sx_lget(")
+              hold ixlout = concat(ixlout, ixlnm)
+              hold ixlout = concat(ixlout, ",")
+              hold ixlout = concat(ixlout, ixllow)
+              hold ixlout = concat(ixlout, ")")
+            } otherwise {
+              when tbl_has(sdecls, ixlnm) == 1 {
+                hold ixlout = concat(ixlout, "sx_idx(")
+                hold ixlout = concat(ixlout, ixlnm)
+                hold ixlout = concat(ixlout, ",")
+                hold ixlout = concat(ixlout, ixllow)
+                hold ixlout = concat(ixlout, ")")
+              } otherwise {
+                hold ixlbad = 1
+              }
+            }
+            hold ixlnext = ixlend + 1
+          }
+        }
+      }
+      // ---- a plain name, or the head of a dotted field chain ----
+      when ixlpost != 40 && ixlpost != 91 {
+        hold ixlout = concat(ixlout, ixlnm)
+        hold ixlnext = ixlj
+      }
+    }
+    when ixlid == 0 {
+      when (ixlcd >= 48 && ixlcd <= 57) || ixlcd == 46 || ixlcd == 43 || ixlcd == 45 || ixlcd == 42 || ixlcd == 47 || ixlcd == 40 || ixlcd == 41 || ixlcd == 32 || ixlcd == 9 {
+        hold ixlout = concat(ixlout, chr(ixlcd))
+      } otherwise {
+        hold ixlbad = 1
+      }
+    }
+    hold ixli = ixlnext
+  }
+  when ixlbad == 1 {
+    give ""
+  }
+  give ixlout
+}
+
 make raw_index(source: str, from: num, n: num) -> str {
   hold rixout = ""
   hold rixi = from
   hold rixrun = 1
   hold rixbal = 0
+  hold rixbrk = 0
   hold rixfirst = 0
   hold rixlast = 0
   hold rixdot = 0
@@ -855,7 +1175,16 @@ make raw_index(source: str, from: num, n: num) -> str {
       hold rixok = 0
     } otherwise {
       hold rixcd = sx_index(source, rixi)
+      hold rixend = 0
       when rixcd == 93 {
+        when rixbrk > 0 {
+          // a ']' that closes a nested index is part of the expression
+          hold rixbrk = rixbrk - 1
+        } otherwise {
+          hold rixend = 1
+        }
+      }
+      when rixend == 1 {
         hold rixrun = 0
       } otherwise {
         hold rixallow = 0
@@ -880,12 +1209,12 @@ make raw_index(source: str, from: num, n: num) -> str {
         when rixcd == 40 || rixcd == 41 || rixcd == 46 {
           hold rixallow = 1
         }
-        when rixcd == 40 {
-          // a '(' straight after an identifier is a CALL, and a call inside an
-          // index is not lowered here: refuse it rather than emit an implicit
-          // declaration that only fails at C compile or link time
-          when (rixlast >= 97 && rixlast <= 122) || (rixlast >= 65 && rixlast <= 90) || (rixlast >= 48 && rixlast <= 57) || rixlast == 95 {
-            hold rixallow = 0
+        when rixcd == 91 || rixcd == 93 {
+          // a nested index: raw_index copies it verbatim (so the caller's
+          // position arithmetic stays right) and idx_lower lowers it
+          hold rixallow = 1
+          when rixcd == 91 {
+            hold rixbrk = rixbrk + 1
           }
         }
         when rixallow == 1 {
@@ -924,13 +1253,16 @@ make raw_index(source: str, from: num, n: num) -> str {
   when rixbal != 0 {
     hold rixok = 0
   }
+  when rixbrk != 0 {
+    hold rixok = 0
+  }
   when rixdot >= 2 {
     hold rixok = 0
   }
-  when rixfirst == 42 || rixfirst == 47 || rixfirst == 41 || rixfirst == 46 {
+  when rixfirst == 42 || rixfirst == 47 || rixfirst == 41 || rixfirst == 46 || rixfirst == 91 {
     hold rixok = 0
   }
-  when rixlast == 43 || rixlast == 45 || rixlast == 42 || rixlast == 47 || rixlast == 40 || rixlast == 46 {
+  when rixlast == 43 || rixlast == 45 || rixlast == 42 || rixlast == 47 || rixlast == 40 || rixlast == 46 || rixlast == 91 {
     hold rixok = 0
   }
   when rixok == 0 {
@@ -950,10 +1282,11 @@ make raw_index(source: str, from: num, n: num) -> str {
 //   BASE: NUMBER | NAME | "text" | call(...) | [v, v, ...]
 //         | Struct { f: v, ... } | NAME.field | NAME[EXPR] | (EXPR)
 //         NAME[EXPR] is a numeric expression index (numbers, names, field
-//         chains, parentheses, + - * /): see raw_index. It is lowered in a
-//         value position, inside a when/while condition and inside a for
-//         bound. `%`, a call (len() included), a nested index, a comma and a
-//         quoted string inside `[ ]` are refused with a clear diagnostic.
+//         chains, parentheses, + - * /, len(NAME) and a nested NAME[IDX]):
+//         see raw_index and idx_lower. It is lowered in a value position,
+//         inside a when/while condition and inside a for bound. `%`, a call
+//         other than len(), a comma and a quoted string inside `[ ]` are
+//         refused with a clear diagnostic.
 //   while COND { ... }        when COND { ... } otherwise { ... }
 //         ("else" is an alias of "otherwise"; both emit "} else {")
 //         COND is copied as a C expression (C precedence matches pure-min);
@@ -8416,6 +8749,18 @@ hold argbracket = 0
               when len(ix) > 0 {
                 hold pos = iqstart + len(ix) + 1
                 hold ixok = 1
+                // lower len(NAME) and NAME[IDX] inside the index text; a
+                // refusal here keeps the existing clear diagnostic
+                hold ixl2 = idx_lower(ix, ldecls, sdecls)
+                when len(ixl2) == 0 {
+                  hold ixok = 0
+                  hold exbad3 = 1
+                } otherwise {
+                  when len(ixl2) != len(ix) {
+                    hold rt = 1
+                  }
+                  hold ix = ixl2
+                }
               }
             }
             // an index must be a numeric expression closed by ']'
@@ -9618,6 +9963,16 @@ hold ec = 0
                 hold opix = raw_index(source, opistart, n)
                 when len(opix) > 0 {
                   hold pos = opistart + len(opix) + 1
+                  // the same lowering for the second index of a chain
+                  hold opxl2 = idx_lower(opix, ldecls, sdecls)
+                  when len(opxl2) == 0 {
+                    hold exbad3 = 1
+                  } otherwise {
+                    when len(opxl2) != len(opix) {
+                      hold rt = 1
+                    }
+                    hold opix = opxl2
+                  }
                 } otherwise {
                   hold exbad3 = 1
                 }
@@ -11409,6 +11764,18 @@ hold argbracket = 0
               when len(ix) > 0 {
                 hold pos = iqstart + len(ix) + 1
                 hold ixok = 1
+                // lower len(NAME) and NAME[IDX] inside the index text; a
+                // refusal here keeps the existing clear diagnostic
+                hold ixl = idx_lower(ix, ldecls, sdecls)
+                when len(ixl) == 0 {
+                  hold ixok = 0
+                  hold exbad3 = 1
+                } otherwise {
+                  when len(ixl) != len(ix) {
+                    hold rt = 1
+                  }
+                  hold ix = ixl
+                }
               }
             }
             // an index must be a numeric expression closed by ']'
@@ -12302,6 +12669,16 @@ hold ec = 0
                 hold opix = raw_index(source, opistart, n)
                 when len(opix) > 0 {
                   hold pos = opistart + len(opix) + 1
+                  // the same lowering for the second index of a chain
+                  hold opxl = idx_lower(opix, ldecls, sdecls)
+                  when len(opxl) == 0 {
+                    hold exbad3 = 1
+                  } otherwise {
+                    when len(opxl) != len(opix) {
+                      hold rt = 1
+                    }
+                    hold opix = opxl
+                  }
                 } otherwise {
                   hold exbad3 = 1
                 }
@@ -13617,7 +13994,10 @@ hold ec = 0
           when ccx == 93 {
             hold cwbracket = cwbracket - 1
           }
-          when ccx == 37 && cwbracket == 0 {
+          when (ccx == 37 || ccx == 43) && cwbracket == 0 {
+            // '%' and '+' both need their operands: the scans below clobber
+            // ccx, so the operator is kept here
+            hold cwop = ccx
             // ---- left operand: scan back over the mul-level chain ----
             hold cwal = len(crepl)
             hold cwrun = 1
@@ -13645,9 +14025,53 @@ hold ec = 0
                   }
                   hold cwrun = 1
                 } otherwise {
-                  when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 || ccx == 46 || ccx == 42 || ccx == 47 || ccx == 32 || ccx == 9 {
+                  when ccx == 34 {
+                    // a quoted literal: cwal sits just after its CLOSING
+                    // quote, so step over that one and then walk back to the
+                    // opening quote -- `"hi " + n` needs the whole literal as
+                    // the left operand for str_operand to recognise it
                     hold cwal = cwal - 1
+                    hold cwqb = 1
+                    while cwqb == 1 {
+                      when cwal <= 0 {
+                        hold cwqb = 0
+                      } otherwise {
+                        hold cwqc = sx_index(crepl, cwal - 1)
+                        hold cwal = cwal - 1
+                        when cwqc == 34 {
+                          // an escaped quote does not open the literal: an odd
+                          // run of backslashes before it means it is escaped
+                          hold cwesc = 0
+                          hold cwbk = cwal
+                          hold cwbb = 1
+                          while cwbb == 1 {
+                            when cwbk > 0 {
+                              when sx_index(crepl, cwbk - 1) == 92 {
+                                hold cwbk = cwbk - 1
+                                when cwesc == 0 {
+                                  hold cwesc = 1
+                                } otherwise {
+                                  hold cwesc = 0
+                                }
+                              } otherwise {
+                                hold cwbb = 0
+                              }
+                            } otherwise {
+                              hold cwbb = 0
+                            }
+                          }
+                          when cwesc == 0 {
+                            hold cwqb = 0
+                          }
+                        }
+                      }
+                    }
                     hold cwrun = 1
+                  } otherwise {
+                    when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 || ccx == 46 || ccx == 42 || ccx == 47 || ccx == 32 || ccx == 9 {
+                      hold cwal = cwal - 1
+                      hold cwrun = 1
+                    }
                   }
                 }
               }
@@ -13674,7 +14098,32 @@ hold ec = 0
                 hold cwre = cwre + 1
               }
             }
+            // a quoted literal is a whole operand: `name + "tail"`
+            hold cwq3 = 0
             when cwre < cl {
+              when sx_index(ctrim, cwre) == 34 {
+                hold cwq3 = 1
+                hold cwre = cwre + 1
+                hold cwr2 = 1
+                while cwr2 == 1 {
+                  when cwre >= cl {
+                    hold cwr2 = 0
+                  } otherwise {
+                    hold cwqd = sx_index(ctrim, cwre)
+                    hold cwre = cwre + 1
+                    when cwqd == 92 {
+                      when cwre < cl {
+                        hold cwre = cwre + 1
+                      }
+                    }
+                    when cwqd == 34 {
+                      hold cwr2 = 0
+                    }
+                  }
+                }
+              }
+            }
+            when cwq3 == 0 && cwre < cl {
               hold ccx = sx_index(ctrim, cwre)
               when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 || ccx == 46 {
                 hold cwnb = 1
@@ -13692,8 +14141,11 @@ hold ec = 0
                 }
               }
             }
-            // postfix groups and .field, repeated
+            // postfix groups and .field, repeated (never after a literal)
             hold cwnb = 1
+            when cwq3 == 1 {
+              hold cwnb = 0
+            }
             while cwnb == 1 {
               hold cwnb = 0
               when cwre < cl {
@@ -13760,13 +14212,56 @@ hold ec = 0
               hold cwnew = concat(cwnew, chr(sx_index(crepl, cwj)))
               hold cwj = cwj + 1
             }
-            hold cwnew = concat(cwnew, "sx_mod((double)(")
-            hold cwnew = concat(cwnew, cwl)
-            hold cwnew = concat(cwnew, "),(double)(")
-            hold cwnew = concat(cwnew, cwr)
-            hold cwnew = concat(cwnew, "))")
-            hold crepl = cwnew
-            hold cwi = cwre
+            when cwop == 37 {
+              when str_operand(cwl, sdecls) == 1 || str_operand(cwr, sdecls) == 1 {
+                when perr == 0 {
+                  hold permsg = "'%' truncates two numbers; one of its operands is a string"
+                }
+                hold perr = 1
+              }
+              hold cwnew = concat(cwnew, "sx_mod((double)(")
+              hold cwnew = concat(cwnew, cwl)
+              hold cwnew = concat(cwnew, "),(double)(")
+              hold cwnew = concat(cwnew, cwr)
+              hold cwnew = concat(cwnew, "))")
+              hold crepl = cwnew
+              hold cwi = cwre
+            }
+            when cwop == 43 {
+              // '+' joins two strings through sx_cat and adds two numbers
+              // with C's own '+', which is what the value-position parser
+              // already does; a `give`, a condition or a parenthesized
+              // expression used to copy the '+' straight into the C
+              hold cwls = str_operand(cwl, sdecls)
+              hold cwrs = str_operand(cwr, sdecls)
+              when cwls == 1 && cwrs == 1 {
+                hold cwnew = concat(cwnew, "sx_cat(")
+                hold cwnew = concat(cwnew, cwl)
+                hold cwnew = concat(cwnew, ", ")
+                hold cwnew = concat(cwnew, cwr)
+                hold cwnew = concat(cwnew, ")")
+                hold crepl = cwnew
+                hold rt = 1
+                hold cwi = cwre
+              }
+              when cwls + cwrs == 1 {
+                when perr == 0 {
+                  hold cwmix = cwr
+                  when cwrs == 1 {
+                    hold cwmix = cwl
+                  }
+                  hold permsg = concat("+ joins two strings or adds two numbers; the other side of '", cwmix)
+                  hold permsg = concat(permsg, "' is not a string (bind it with hold first)")
+                }
+                hold perr = 1
+                hold crepl = concat(crepl, chr(cwop))
+                hold cwi = cwi + 1
+              }
+              when cwls == 0 && cwrs == 0 {
+                hold crepl = concat(crepl, chr(cwop))
+                hold cwi = cwi + 1
+              }
+            }
           } otherwise {
             when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || ccx == 95 {
               // ---- an identifier: lower a builtin call to its runtime
@@ -14036,30 +14531,43 @@ hold ec = 0
                   hold cqai = cwnx + 1
                   hold cqq = 1
                   hold cqok = 1
+                  hold cqdep = 0
                   while cqq == 1 {
                     when cqai >= cl {
                       hold cqq = 0
                       hold cqok = 0
                     } otherwise {
                       hold cqcd = sx_index(ctrim, cqai)
-                      when cqcd == 93 {
+                      when cqcd == 93 && cqdep == 0 {
                         hold cqq = 0
                       } otherwise {
-                        when cqcd == 91 || cqcd == 44 || cqcd == 34 || cqcd == 39 || cqcd == 37 || cqcd == 40 {
-                          // a nested index, a comma, a quote, '%' or a call:
-                          // none of them can be copied as C text from here
-                          hold cqok = 0
-                          hold cqq = 0
-                        } otherwise {
-                          hold cqix = concat(cqix, chr(cqcd))
-                          hold cqai = cqai + 1
+                        // a nested index is copied with its brackets, and
+                        // idx_lower below decides what is lowerable
+                        when cqcd == 91 {
+                          hold cqdep = cqdep + 1
                         }
+                        when cqcd == 93 {
+                          hold cqdep = cqdep - 1
+                        }
+                        hold cqix = concat(cqix, chr(cqcd))
+                        hold cqai = cqai + 1
                       }
+                    }
+                  }
+                  when cqok == 1 {
+                    hold cqxl = idx_lower(cqix, ldecls, sdecls)
+                    when len(cqxl) == 0 {
+                      hold cqok = 0
+                    } otherwise {
+                      when len(cqxl) != len(cqix) {
+                        hold rt = 1
+                      }
+                      hold cqix = cqxl
                     }
                   }
                   when cqok == 0 {
                     when perr == 0 {
-                      hold permsg = concat("an index inside a condition must be a numeric expression over numbers, names, fields and + - * /; '", cwid)
+                      hold permsg = concat("an index inside a condition must be a numeric expression over numbers, names, fields, len(), indexes and + - * /; '", cwid)
                       hold permsg = concat(permsg, "' is indexed with something else (bind it with hold first)")
                     }
                     hold perr = 1
@@ -15875,28 +16383,45 @@ hold ec = 0
                       hold fvbij2 = fvbii + 1
                       hold fvbiok = 1
                       hold fvbir2 = 1
+                      hold fvbdep = 0
                       while fvbir2 == 1 {
                         when fvbij2 >= fvbn {
                           hold fvbir2 = 0
                           hold fvbiok = 0
                         } otherwise {
                           hold fvbic2 = sx_index(fvb, fvbij2)
-                          when fvbic2 == 93 {
+                          when fvbic2 == 93 && fvbdep == 0 {
                             hold fvbir2 = 0
                           } otherwise {
-                            when fvbic2 == 91 || fvbic2 == 44 || fvbic2 == 34 || fvbic2 == 39 || fvbic2 == 37 || fvbic2 == 40 {
-                              hold fvbiok = 0
-                              hold fvbir2 = 0
-                            } otherwise {
-                              hold fvbixt = concat(fvbixt, chr(fvbic2))
-                              hold fvbij2 = fvbij2 + 1
+                            // a nested index is copied with its brackets and
+                            // idx_lower below decides what is lowerable
+                            when fvbic2 == 91 {
+                              hold fvbdep = fvbdep + 1
                             }
+                            when fvbic2 == 93 {
+                              hold fvbdep = fvbdep - 1
+                            }
+                            hold fvbixt = concat(fvbixt, chr(fvbic2))
+                            hold fvbij2 = fvbij2 + 1
                           }
+                        }
+                      }
+                      when fvbiok == 1 {
+                        // len(NAME) and NAME[IDX] lower in a for bound exactly
+                        // as they do in a value position
+                        hold fvbxl = idx_lower(fvbixt, ldecls, sdecls)
+                        when len(fvbxl) == 0 {
+                          hold fvbiok = 0
+                        } otherwise {
+                          when len(fvbxl) != len(fvbixt) {
+                            hold rt = 1
+                          }
+                          hold fvbixt = fvbxl
                         }
                       }
                       when fvbiok == 0 {
                         when perr == 0 {
-                          hold permsg = concat("an index in a for bound must be a numeric expression over numbers, names, fields and + - * /; '", fvbinm)
+                          hold permsg = concat("an index in a for bound must be a numeric expression over numbers, names, fields, len(), indexes and + - * /; '", fvbinm)
                           hold permsg = concat(permsg, "' is indexed with something else (bind it with hold first)")
                         }
                         hold perr = 1
@@ -16717,9 +17242,9 @@ when perr == 1 {
   show shmsg
 }
 when exbad3 == 1 {
-  hold exerr = concat(exerr, "#error sayanox-min: unsupported index expression (expected a numeric expression: numbers, names, fields, + - * / and parentheses; %, calls and nested indexes need a hold first)")
+  hold exerr = concat(exerr, "#error sayanox-min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / and parentheses; %, a call other than len() and a quoted string need a hold first)")
   hold exerr = concat(exerr, nl)
-  show "min: unsupported index expression (expected a numeric expression: numbers, names, fields, + - * / and parentheses; %, calls and nested indexes need a hold first)"
+  show "min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / and parentheses; %, a call other than len() and a quoted string need a hold first)"
 }
 // Rewrite every generated C integer token in user code to a double token.
 // `fixfrom` is the end of the runtime preamble; that preamble intentionally

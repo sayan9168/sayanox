@@ -1,0 +1,52 @@
+// A `give`, a condition and a parenthesized expression used to copy a bare `+`
+// straight into the generated C, so `give "hi " + n` became `return "hi " + n;`
+// and cc rejected it: "invalid operands to binary + (have 'char *' and
+// 'char *')". The value-position parser already joined strings through sx_cat;
+// the expression rewriter now does the same, so a string chain works in every
+// statement. A `+` with one string side and one numeric side is still refused
+// with a clear diagnostic instead of being emitted as C that cannot compile.
+// Every line below prints the same bytes on seed-min, gen2 and native.
+make greet(n: str) -> str {
+  give "hi " + n
+}
+make quoted(n: str) -> str {
+  give "say \"hi\" " + n
+}
+make join(a: str, b: str) -> str {
+  give a + b
+}
+make three(n: str) -> str {
+  give "x" + n + "y"
+}
+make tail(n: str) -> str {
+  give n + "!"
+}
+make withcall(p: str, q: str) -> str {
+  give concat(p, q) + "/" + p
+}
+make bracket(a: str, b: str) -> str {
+  hold j = a + "-" + b
+  give "[" + j + "]"
+}
+hold s = "abc"
+show greet("bob")
+show quoted("kim")
+show join("L", "R")
+show three(s)
+show tail(s)
+show withcall("p", "q")
+show bracket("L", "R")
+hold g = greet("bob")
+when g == "hi bob" {
+  show 1
+} otherwise {
+  show 0
+}
+when g != join("a", "c") {
+  show 2
+} otherwise {
+  show 3
+}
+hold h = greet(s)
+show h
+show "str-cat-done"
