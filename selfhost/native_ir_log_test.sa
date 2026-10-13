@@ -1,0 +1,26 @@
+// The instruction-list fixture.  `make test-native-ir-log` compiles this with
+// SX_EMIT_LOG set and pins the instruction stream the emit tree asks the x86-64
+// encoder for, so the seam contract in docs/NATIVE.md is checkable rather than
+// prose.  Each construct here is one a second backend has to reproduce:
+// a number (IEEE double bits in a 64-bit slot), string concat, a list, a
+// comparison branch with a rel32 fixup, a call to a make, and a for loop.
+make twice(v: num) -> num {
+  give v + v
+}
+make join(a: str, b: str) -> str {
+  give a + b
+}
+hold n = twice(20) + 2
+show n
+hold s = join("ir", "-log")
+show s
+show len(s)
+hold xs = []
+for i in 0..3 {
+  push(xs, i * n)
+}
+show len(xs)
+when n > 40 {
+  show xs[1]
+}
+show "ir-log-done"

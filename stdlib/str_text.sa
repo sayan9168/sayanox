@@ -1,0 +1,290 @@
+// stdlib/str_text.sa -- text helpers on top of the string builtins.
+//
+// Supported by seed-min, gen2 and native (make test-stdlib-modules).
+// Fully typed signatures, one statement per line, and every helper defined
+// before the one that calls it (the rules str_util.sa documents). Names are
+// prefixed `t_` so this file can be spliced next to str_util.sa without a
+// collision.
+//
+// Strings are byte strings: `sx_index` yields the byte at a position and
+// `chr` builds a one-byte string from a code, so every helper here works on
+// BYTES. A UTF-8 character wider than one byte is several bytes, which is also
+// the documented behaviour of `for c in s`.
+
+// Byte predicates for the trimming and parsing helpers.
+make t_is_space_byte(c: num) -> num {
+  when c == 32 {
+    give 1
+  }
+  when c == 9 {
+    give 1
+  }
+  when c == 10 {
+    give 1
+  }
+  when c == 13 {
+    give 1
+  }
+  give 0
+}
+
+make t_is_digit_byte(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give 1
+    }
+  }
+  give 0
+}
+
+// Index of the first byte equal to c, or -1.
+make t_index_of(s: str, c: num) -> num {
+  hold i = 0
+  while i < len(s) {
+    hold d = sx_index(s, i)
+    when d == c {
+      give i
+    }
+    hold i = i + 1
+  }
+  give 0 - 1
+}
+
+make t_last_index_of(s: str, c: num) -> num {
+  hold i = len(s) - 1
+  while i >= 0 {
+    hold d = sx_index(s, i)
+    when d == c {
+      give i
+    }
+    hold i = i - 1
+  }
+  give 0 - 1
+}
+
+// n bytes starting at i, clamped to the string, so an out-of-range slice is
+// shorter rather than an error.
+make t_slice(s: str, i: num, n: num) -> str {
+  hold out = ""
+  hold from = i
+  when from < 0 {
+    hold from = 0
+  }
+  hold stop = from + n
+  when stop > len(s) {
+    hold stop = len(s)
+  }
+  hold k = from
+  while k < stop {
+    hold c = sx_index(s, k)
+    hold out = concat(out, chr(c))
+    hold k = k + 1
+  }
+  give out
+}
+
+make t_trim_left(s: str) -> str {
+  hold start = 0
+  hold run = 1
+  while run == 1 {
+    when start >= len(s) {
+      hold run = 0
+    } otherwise {
+      hold c = sx_index(s, start)
+      when t_is_space_byte(c) == 1 {
+        hold start = start + 1
+      } otherwise {
+        hold run = 0
+      }
+    }
+  }
+  give t_slice(s, start, len(s))
+}
+
+make t_trim_right(s: str) -> str {
+  hold stop = len(s)
+  hold run = 1
+  while run == 1 {
+    when stop <= 0 {
+      hold run = 0
+    } otherwise {
+      hold c = sx_index(s, stop - 1)
+      when t_is_space_byte(c) == 1 {
+        hold stop = stop - 1
+      } otherwise {
+        hold run = 0
+      }
+    }
+  }
+  give t_slice(s, 0, stop)
+}
+
+make t_trim(s: str) -> str {
+  give t_trim_right(t_trim_left(s))
+}
+
+// strcmp-like byte ordering: -1, 0 or 1.
+make t_cmp(a: str, b: str) -> num {
+  hold n = len(a)
+  when len(b) < n {
+    hold n = len(b)
+  }
+  hold i = 0
+  while i < n {
+    hold x = sx_index(a, i)
+    hold y = sx_index(b, i)
+    when x < y {
+      give 0 - 1
+    }
+    when x > y {
+      give 1
+    }
+    hold i = i + 1
+  }
+  when len(a) < len(b) {
+    give 0 - 1
+  }
+  when len(a) > len(b) {
+    give 1
+  }
+  give 0
+}
+
+// 1 when the string is non-empty and every byte is an ASCII digit.
+make t_is_digits(s: str) -> num {
+  when len(s) == 0 {
+    give 0
+  }
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when t_is_digit_byte(c) == 0 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// Pad with the byte c up to width n. A string already at least n bytes long is
+// returned unchanged.
+make t_pad_left(s: str, n: num, c: num) -> str {
+  hold out = ""
+  hold k = len(s)
+  while k < n {
+    hold out = concat(out, chr(c))
+    hold k = k + 1
+  }
+  give concat(out, s)
+}
+
+make t_pad_right(s: str, n: num, c: num) -> str {
+  hold out = s
+  hold k = len(s)
+  while k < n {
+    hold out = concat(out, chr(c))
+    hold k = k + 1
+  }
+  give out
+}
+
+// Count runs of non-space bytes: "  a  bb " is 2 words.
+make t_word_count(s: str) -> num {
+  hold k = 0
+  hold inside = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when t_is_space_byte(c) == 1 {
+      hold inside = 0
+    } otherwise {
+      when inside == 0 {
+        hold k = k + 1
+        hold inside = 1
+      }
+    }
+    hold i = i + 1
+  }
+  give k
+}
+
+// Every byte equal to `from` becomes `to`.
+make t_replace(s: str, from: num, to: num) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c == from {
+      hold out = concat(out, chr(to))
+    } otherwise {
+      hold out = concat(out, chr(c))
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// Drop every byte equal to c.
+make t_remove(s: str, c: num) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold d = sx_index(s, i)
+    when d != c {
+      hold out = concat(out, chr(d))
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// A small polynomial hash, kept inside the exact-integer double range so the
+// `%` truncation stays exact: h = (h * 31 + byte) % 1000003.
+make t_hash(s: str) -> num {
+  hold h = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    hold h = (h * 31 + c) % 1000003
+    hold i = i + 1
+  }
+  give h
+}
+
+// Parse a non-negative decimal integer; stops at the first non-digit byte, so
+// t_parse_uint("42px") is 42.
+make t_parse_uint(s: str) -> num {
+  hold v = 0
+  hold i = 0
+  hold run = 1
+  while run == 1 {
+    when i >= len(s) {
+      hold run = 0
+    } otherwise {
+      hold c = sx_index(s, i)
+      when t_is_digit_byte(c) == 1 {
+        hold v = v * 10 + (c - 48)
+        hold i = i + 1
+      } otherwise {
+        hold run = 0
+      }
+    }
+  }
+  give v
+}
+
+// Digits of a non-negative integer, without a number-to-string builtin.
+make t_uint_str(n: num) -> str {
+  when n <= 0 {
+    give "0"
+  }
+  hold digits = ""
+  hold v = n
+  while v >= 1 {
+    hold d = v % 10
+    hold digits = concat(chr(48 + d), digits)
+    hold r = v % 10
+    hold v = (v - r) / 10
+  }
+  give digits
+}

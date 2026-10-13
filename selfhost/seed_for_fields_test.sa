@@ -1,0 +1,75 @@
+// A struct field -- or a chain of nested struct fields -- that holds a string
+// is a `for` source. The field value is read ONCE per loop entry, exactly like
+// a literal or a call source (gen2 lowers it to a hidden `__sx_fv..`
+// temporary, seed-min to `_sx_iter_src_N`). seed-min, gen2 and native must
+// print the same bytes (make test-seed-for-fields).
+struct Label {
+  text
+}
+struct Node {
+  label,
+  id
+}
+struct Outer {
+  node,
+  tail
+}
+struct Count {
+  from
+}
+hold single = Label { text: "ab" }
+for c in single.text {
+  show c
+}
+hold two = Node { label: Label { text: "xy" }, id: 7 }
+for c in two.label.text {
+  show c
+}
+show two.id
+hold three = Outer { node: Node { label: Label { text: "pq" }, id: 1 }, tail: "z" }
+for c in three.node.label.text {
+  show c
+}
+show three.tail
+// an empty field is zero iterations, not one empty byte
+hold blank = Label { text: "" }
+for c in blank.text {
+  show "unreachable"
+}
+show len(blank.text)
+// break/continue and a counter that outlives the loop
+hold skipped = Label { text: "abcd" }
+hold kept = 0
+for c in skipped.text {
+  when string_eq(c, "b") {
+    continue
+  }
+  when string_eq(c, "d") {
+    break
+  }
+  kept = kept + 1
+  show c
+}
+show kept
+// a multi-byte field iterates bytes, like every other string source
+hold wide = Label { text: "é" }
+hold bytes = 0
+for c in wide.text {
+  bytes = bytes + 1
+}
+show bytes
+// the same form inside a legacy untyped make body, over a body-local struct
+make body_field() {
+  hold local = Label { text: "mn" }
+  for c in local.text {
+    show c
+  }
+  give len(local.text)
+}
+show body_field()
+// a numeric field is a legal range bound: half-open, re-read every check
+hold counted = Count { from: 2 }
+for i in counted.from..4 {
+  show i
+}
+show "fields-done"

@@ -33,8 +33,8 @@ LSP_BIN  := tools/sayanox_lsp
         seed-bin doctor tools sxfmt test-sxfmt sxpkg test-sxpkg test-sxpkg-wrapper \
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
-        test-for-str test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local
+        test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log
 
 all: true-selfhost-min
 
@@ -66,9 +66,22 @@ assert-out = @__got=$$($(1)) || { echo "[FAIL] $(1): program exited nonzero"; ex
 #
 #   * The awk guard grepped for `ptok(k,(const char*)#ch`. As a BRE, `r*` means
 #     "zero or more r", so that pattern can never match the literal text
-#     `ptok(k,(const char*)#ch` in sxc_seed.c. The awk body never ran. (The
-#     rewrite was unnecessary anyway: P1 is only instantiated with single-char
-#     punctuation literals, so `#ch` already stringizes correctly.)
+#     `ptok(k,(const char*)#ch` in sxc_seed.c. The awk body never ran.
+#     The parenthetical that used to follow -- "the rewrite was unnecessary
+#     anyway: P1 is only instantiated with single-char punctuation literals, so
+#     `#ch` already stringizes correctly" -- was WRONG, and because the guard
+#     never matched nobody ever found out. `#ch` stringizes its argument WITH
+#     the character-literal quotes, so P1('<',T_LT) recorded the three-character
+#     token text `'<'`. emit_expr compares that against "<" and matched nothing,
+#     so EVERY single-character operator vanished from the generated C
+#     (`show 2 * 3` became `sx_show(((double)2LL),((double)3LL)))`) and no full
+#     seed program with arithmetic, a comparison or a while/when condition
+#     compiled at all. Fixed 2026-10-13: P1 builds the one-character token text
+#     from the value (`char ob[2]={(char)(ch),0}`), the idiom the "unexpected
+#     character" diagnostic in the same loop already used. Two-character
+#     operators (== != && || <= >=) are pushed with explicit strings and were
+#     always correct. test-seed-gc pins it: selfhost/seed_gc_ops.sa prints the
+#     same nine values on the full seed, seed-min and gen2.
 #   * All six `sed -i` guards searched for pre-fix text that is no longer
 #     present in the checked-in sx_runtime.h, so they were all no-ops.
 #
@@ -85,6 +98,14 @@ verify-seed:
 	  || { echo "FAIL: $(SEED_H) is stale: missing offsetof(SxStrHdr,data)"; exit 1; }
 	@grep -q -F '#include <stddef.h>' $(SEED_H) \
 	  || { echo "FAIL: $(SEED_H) is stale: missing #include <stddef.h>"; exit 1; }
+	@grep -q -F '#include <stdarg.h>' $(SEED_H) \
+	  || { echo "FAIL: $(SEED_H) is stale: missing #include <stdarg.h> (the seed-generated sx_lit_list is variadic)"; exit 1; }
+	@grep -q -F 'char ob[2]={(char)(ch),0}' $(SEED_C) \
+	  || { echo "FAIL: $(SEED_C) is stale: P1() does not build the operator token text from the character value"; exit 1; }
+	@if grep -q -F 'ptok(k,(const char*)#ch' $(SEED_C); then \
+	  echo "FAIL: $(SEED_C) is stale: P1() records an operator token as the quoted char literal (#ch), so single-character operators are dropped from the generated C"; exit 1; fi
+	@if grep -q -F 'docs/MEMORY.md for the authoritative' $(SEED_H); then \
+	  echo "FAIL: $(SEED_H) is stale: still points at the nonexistent docs/MEMORY.md"; exit 1; fi
 	@grep -q -F 'SX_TAB_CAP 2097152' $(SEED_H) \
 	  || { echo "FAIL: $(SEED_H) is stale: SX_TAB_CAP is not 2097152"; exit 1; }
 	@grep -q -F 'sx_tab_add(h->data,1);' $(SEED_H) \
@@ -113,8 +134,10 @@ pack-compiler:
 #
 # Fallback: if the source is absent or corrupt, decode the checked-in
 # gzip+base64 blob in selfhost/compiler_min_gz/*.b64. That blob was verified
-# byte-identical to the checked-in compiler_min.sa (sha256 7ca320d53672c33c...,
-# 109 parts of at most 1100 chars; regenerate with `make pack-compiler`), so both paths
+# byte-identical to the checked-in compiler_min.sa (sha256 55f28ede2d461faa...,
+# 115 parts of at most 1100 chars; regenerate with `make pack-compiler` after any
+# edit to compiler_min.sa -- `restore-compiler` only greps markers, so a stale
+# blob does not fail the gates by itself), so both paths
 # produce the same file. base64, gzip, cat, tr and rm are therefore OPTIONAL
 # dependencies, needed only if the plain source goes missing.
 # ---------------------------------------------------------------------------
@@ -194,13 +217,17 @@ $(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa
 lsp: $(LSP_BIN)
 	@echo "=== LSP-OK ==="
 
-# A full JSON-RPC session against the built server: initialize, didOpen,
-# hover, definition, documentSymbol, completion, diagnostic, didChange,
-# shutdown, exit.  The probe prints one line per verified fact.
+# Full JSON-RPC sessions against the built server: initialize, didOpen, hover,
+# definition, documentSymbol, completion, diagnostic, didChange, shutdown,
+# exit; a closed document and the four-slot cap; references across the open
+# documents with and without the declaration; workspace/symbol with a query and
+# without; and textDocument/formatting (the sxfmt rule set) on a badly indented
+# buffer and on one that is already formatted.  The probe prints one line per
+# verified fact: 29 of them, in this order.
 test-lsp: $(LSP_BIN) tools/sayanox-lsp-probe.sh
 	@mkdir -p $(TESTS)
-	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change)
-	@echo "[OK] Sayanox LSP: live JSON-RPC session, real diagnostics, symbols, completion, hover, definition"
+	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change\nsecond document symbols\nclosed document answers empty\nclosed document not served from another buffer\nfifth document evicts the oldest\nnewest document still served\nreferences include the declaration\nreferences honour includeDeclaration:false\nreferences span the open documents\nreferences at a non-word answer empty\nworkspace symbol matches a query\nworkspace symbol with an empty query spans documents\nformatting answers one whole-buffer edit\nformatting indents a comment inside a block\nformatting indents a nested block by four spaces\nformatting strips trailing whitespace\nformatting leaves a formatted document alone)
+	@echo "[OK] Sayanox LSP: live JSON-RPC sessions, real diagnostics, symbols, completion, hover, definition, references, workspace symbols, formatting"
 
 # Malformed and unexpected JSON-RPC input: unknown requests get -32601,
 # unknown notifications stay silent, bad bodies get -32700 / -32600, and the
@@ -393,10 +420,16 @@ test-list2:
 	./$(GEN2) $(TESTS)/ts_li4.sa $(TESTS)/ts_li4.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_li4 $(TESTS)/ts_li4.c
 	$(call assert-out,./$(TESTS)/ts_li4,3\n1\n12)
+	@# `xs[len(xs) - 1]` was a refusal here until 2026-10-13: len() inside an
+	@# index now lowers to sx_llen, so this leg became a value assertion. The
+	@# index forms that ARE still refused are pinned by test-gen2-index-expr and
+	@# test-gen2-expr-lowering, so nothing lost its guard by moving.
 	@printf 'hold xs = [5, 6]\nshow xs[len(xs) - 1]\n' > $(TESTS)/ts_li5.sa
 	./$(GEN2) $(TESTS)/ts_li5.sa $(TESTS)/ts_li5.c >/dev/null
-	@grep -q '#error' $(TESTS)/ts_li5.c
-	@echo "[OK] gen2 lists: literal, index, len, push, guards"
+	$(CC) -O2 -o $(TESTS)/ts_li5 $(TESTS)/ts_li5.c
+	@grep -q -F 'sx_lget(xs,sx_llen(xs) - 1.0)' $(TESTS)/ts_li5.c
+	$(call assert-out,./$(TESTS)/ts_li5,6)
+	@echo "[OK] gen2 lists: literal, index, len, push, and len() inside an index"
 
 test-use:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -1010,6 +1043,307 @@ test-native-mem: $(NATIVE_BIN)
 	@echo "[OK] native memory: a real free path (churn fits in 4 MiB, reachable values survive, an 8 MiB live set still dies loudly)"
 
 # ---------------------------------------------------------------------------
+# test-seed-gc: what memory management the two SEEDS actually have, MEASURED.
+#
+# docs/GC.md documents the collectors this repository really has: the gen2/
+# gen3/gen4 conservative mark & sweep, the native chunked mmap heap, and the
+# refcount runtime in selfhost/seed/sx_runtime.h. Neither seed had ever been
+# measured, so the claims below are pinned here instead of asserted in prose.
+#
+#   sxc_seed_min -- THE BOOTSTRAP SEED (selfhost/seed/sxc_seed_min.c)
+#     No collector at all: no object table, no refcounts, no gc(). What it has
+#     instead is builder-backed strings plus a freeing assignment wrapper:
+#       * sx_cat/sx_chr/sx_sb_from results carry a hidden sx_sb header
+#         {magic,len,cap,data[]} (SX_SB_MAGIC), so repeated concat() onto the
+#         same LHS grows in place -- O(1) amortised, not O(N^2). String
+#         literals, argv strings and read_file() results have no header and are
+#         copied into a fresh builder on first use.
+#       * a string assignment is emitted as
+#           { char *_v = sx_cat(a,b); sx_sb_free(a); a = _v; }
+#         so the RHS is evaluated into a temp first and the OLD LHS is freed
+#         (sx_sb_app itself never frees either side: that would double-free
+#         aliased variables).
+#     Measured: a 200k-iteration concat churn that retains nothing, a 2000-step
+#     accumulation to a 2003-char string and a 2000-iteration temp loop all run
+#     inside a 4 MiB address space (`ulimit -v 4096` -- that is the floor for a
+#     dynamically linked binary, below it libc.so.6 itself cannot be mapped),
+#     while a program that keeps doubling one retained string to 8388608 bytes
+#     dies with `sx: out of memory` on stderr and exit 1, keeping the stdout it
+#     already wrote. gc()/gc_live()/gc_runs() are refused at compile time
+#     because there is no collector to report on -- the same refusal native
+#     gives, and an honest one: a silent no-op would lie about reclamation.
+#
+#   sxc_seed -- the full seed (selfhost/seed/sxc_seed.c + seed/sx_runtime.h)
+#     A refcount REPRESENTATION and an object table (SX_TAB_CAP 2097152), with
+#     gc() kept as a documented no-op alias that returns 0 -- and, measured, no
+#     reclamation in practice: SX_GC_DEBUG=1 reports
+#     `6000 objects still alive at exit` after 2000 loop iterations that retain
+#     nothing (three objects per iteration: two literals and the result), where
+#     the same loop leaves the min seed flat inside 4 MiB. Its static object
+#     table also means a 4 MiB cap cannot even start it, so its measurements
+#     here run under a 64 MiB cap. Programs using `%` need `-lm` AFTER the
+#     sources on the link line (sx_modv calls fmod).
+#     This target also pins the lexer fix that made the full seed usable: P1()
+#     recorded an operator token's text as `#ch`, i.e. WITH the char literal's
+#     quotes ("'*'", "'<'"), so emit_expr matched none of its operator
+#     spellings and dropped the operator from the generated C.
+#
+#   gen2 -- the self-hosted pure-min compiler (selfhost/compiler_min.sa)
+#     A real conservative mark & sweep; test-gc pins gc()/gc_live()/gc_runs().
+#     Its first collection only fires at 8 MiB of managed heap
+#     (sx_gc_thresh = 8u << 20, afterwards live * 1.5 + 4 MiB), so it needs far
+#     more address space than native: the 200k churn that native runs inside
+#     4 MiB (test-native-mem) needs 64 MiB here and cannot run in 16 MiB. That
+#     used to be a SEGFAULT, because the collector ignored its own calloc and
+#     malloc results; all three allocation sites in the emitted runtime are now
+#     checked and fail as `sx: out of memory` with exit 1.
+#
+#   native -- see test-native-mem: chunked mmap heap, collection at every
+#     statement boundary once the allocation debt passes a threshold, 200k
+#     churn inside 4 MiB, and an 8 MiB live set that dies loudly.
+#
+# Known divergence pinned below rather than hidden: for the same program the
+# full seed prints a large integer as `8388608` where seed-min/gen2/native
+# print `8.38861e+06`.
+# ---------------------------------------------------------------------------
+.PHONY: test-seed-gc
+test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
+	mkdir -p $(TESTS)
+	# ---- build all five fixtures with all three seed/gen2 backends ----
+	set -e; for f in churn grow retain ops tmp; do \
+	  ./$(SEED_MIN_BIN) selfhost/seed_gc_$$f.sa > $(TESTS)/sgc_$${f}_ms.c; \
+	  $(CC) -O2 -o $(TESTS)/sgc_$${f}_ms $(TESTS)/sgc_$${f}_ms.c; \
+	  ./$(GEN2) selfhost/seed_gc_$$f.sa $(TESTS)/sgc_$${f}_g2.c >/dev/null; \
+	  $(CC) -O2 -o $(TESTS)/sgc_$${f}_g2 $(TESTS)/sgc_$${f}_g2.c; \
+	  ./$(SEED_BIN) selfhost/seed_gc_$$f.sa > $(TESTS)/sgc_$${f}_fs.c; \
+	  $(CC) -O2 -I selfhost/seed -o $(TESTS)/sgc_$${f}_fs $(TESTS)/sgc_$${f}_fs.c -lm; \
+	done
+	# ---- seed-min: no collector, but a builder and a freeing assignment ----
+	grep -q -F 'SX_SB_MAGIC' $(TESTS)/sgc_grow_ms.c
+	grep -q -F 'sx_sb_free(' $(TESTS)/sgc_grow_ms.c
+	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_churn_ms',200000)
+	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_grow_ms',2003\n97\n120)
+	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_tmp_ms',2000)
+	echo "[OK] seed-min (no collector): 200k churn, a 2000-step accumulation and a temp loop all stay inside a 4 MiB address space"
+	# ---- seed-min: an 8 MiB live set dies loudly, not silently ----
+	if __got=$$(sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_retain_ms 2>$(TESTS)/sgc_retain_ms.err'); then \
+	  echo "[FAIL] seed-min survived a 4 MiB cap while retaining 8388608 bytes"; exit 1; fi; \
+	  [ "$$__got" = before ] || { echo "[FAIL] seed-min OOM lost stdout or continued: $$__got"; exit 1; }
+	grep -q -F 'sx: out of memory' $(TESTS)/sgc_retain_ms.err
+	echo "[OK] seed-min: an 8 MiB live set inside a 4 MiB cap exits 1 with \`sx: out of memory\` and keeps the stdout it already wrote"
+	# ---- seed-min refuses the collector builtins it does not have ----
+	printf 'show gc()\n' > $(TESTS)/sgc_gc_ms.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/sgc_gc_ms.sa > $(TESTS)/sgc_gc_ms.c 2>$(TESTS)/sgc_gc_ms.err; then \
+	  echo "[FAIL] seed-min accepted gc() although it has no collector"; exit 1; fi
+	grep -q -F 'seed_min:' $(TESTS)/sgc_gc_ms.err
+	echo "[OK] seed-min: gc() is refused at compile time (clear diagnostic, not a silent no-op)"
+	# ---- full seed: the operator lexer fix, and parity with the others ----
+	$(call assert-out,./$(TESTS)/sgc_ops_ms,6\n5\n4\n2.5\n2\n9\n0\n1\n2)
+	$(call assert-out,./$(TESTS)/sgc_ops_g2,6\n5\n4\n2.5\n2\n9\n0\n1\n2)
+	$(call assert-out,sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_ops_fs',6\n5\n4\n2.5\n2\n9\n0\n1\n2)
+	$(call assert-out,sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_grow_fs',2003\n97\n120)
+	echo "[OK] full seed: every single-character operator is emitted again (it used to record the token text as a quoted char literal) and ops/grow match seed-min and gen2 exactly"
+	# ---- full seed: refcount representation, gc() no-op, no release path ----
+	printf 'show gc()\n' > $(TESTS)/sgc_noop_fs.sa
+	./$(SEED_BIN) $(TESTS)/sgc_noop_fs.sa > $(TESTS)/sgc_noop_fs.c
+	$(CC) -O2 -I selfhost/seed -o $(TESTS)/sgc_noop_fs $(TESTS)/sgc_noop_fs.c -lm
+	$(call assert-out,./$(TESTS)/sgc_noop_fs,0)
+	printf 'show gc_live()\n' > $(TESTS)/sgc_live_fs.sa
+	if ./$(SEED_BIN) $(TESTS)/sgc_live_fs.sa > /dev/null 2>$(TESTS)/sgc_live_fs.err; then \
+	  echo "[FAIL] the full seed accepted gc_live(), which its runtime does not have"; exit 1; fi
+	grep -q -F "undefined function 'gc_live'" $(TESTS)/sgc_live_fs.err
+	SX_GC_DEBUG=1 ./$(TESTS)/sgc_tmp_fs > $(TESTS)/sgc_tmp_fs.out 2>$(TESTS)/sgc_tmp_fs.err
+	$(call assert-out,cat $(TESTS)/sgc_tmp_fs.out,2000)
+	grep -q -F 'sx-gc-debug: 6000 objects still alive at exit' $(TESTS)/sgc_tmp_fs.err
+	echo "[OK] full seed: gc() is a no-op returning 0, gc_live() does not exist, and SX_GC_DEBUG=1 counts 6000 objects alive after 2000 iterations that retain nothing (no working release path)"
+	# ---- full seed: static object table, and the number-format divergence ----
+	if sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_tmp_fs' >/dev/null 2>&1; then \
+	  echo "[FAIL] the full seed started inside a 4 MiB cap: its SX_TAB_CAP 2097152 object table is static and should not fit"; exit 1; fi
+	$(call assert-out,sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_retain_fs',before\n8388608\nafter)
+	$(call assert-out,./$(TESTS)/sgc_retain_ms,before\n8.38861e+06\nafter)
+	$(call assert-out,./$(TESTS)/sgc_retain_g2,before\n8.38861e+06\nafter)
+	echo "[OK] full seed: needs >= 64 MiB of address space (static object table) and prints 8388608 where seed-min/gen2 print 8.38861e+06 (documented divergence)"
+	# ---- gen2: real mark & sweep, generous threshold, checked allocations ----
+	test $$(grep -c -F 'sx: out of memory' $(TESTS)/sgc_churn_g2.c) -eq 3 \
+	  || { echo "[FAIL] the gen2 runtime does not check all three of its allocations"; exit 1; }
+	$(call assert-out,sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_churn_g2',200000)
+	$(call assert-out,sh -c 'ulimit -v 8192; ./$(TESTS)/sgc_grow_g2',2003\n97\n120)
+	$(call assert-out,sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_retain_g2',before\n8.38861e+06\nafter)
+	if __got=$$(sh -c 'ulimit -v 16384; ./$(TESTS)/sgc_churn_g2 2>$(TESTS)/sgc_churn_g2.err'); then \
+	  echo "[FAIL] gen2 ran a 200k churn inside a 16 MiB cap; its 8 MiB heap threshold should not allow that"; exit 1; fi; \
+	  case "$$__got" in *Segmentation*) echo "[FAIL] gen2 segfaulted under memory pressure"; exit 1;; esac
+	grep -q -F 'sx: out of memory' $(TESTS)/sgc_churn_g2.err
+	echo "[OK] gen2: mark & sweep keeps a 200k churn and an 8 MiB live set correct inside 64 MiB, all three runtime allocations are checked, and 16 MiB fails as \`sx: out of memory\` with exit 1 instead of a segfault"
+	# ---- gen2 really does collect during the churn (test-gc pins the builtins) ----
+	printf 'hold i = 0\nwhile i < 200000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow i\nshow gc_runs()\nshow gc_live()\n' > $(TESTS)/sgc_runs_g2.sa
+	./$(GEN2) $(TESTS)/sgc_runs_g2.sa $(TESTS)/sgc_runs_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/sgc_runs_g2 $(TESTS)/sgc_runs_g2.c
+	__o=$$(sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_runs_g2'); \
+	 __r=$$(printf '%s\n' "$$__o" | sed -n 2p); __l=$$(printf '%s\n' "$$__o" | sed -n 3p); \
+	 if [ "$$__r" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 ran no collection in a 200k churn: $$__o"; exit 1; fi; \
+	 if [ "$$__l" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 gc_live() reported $$__l after a 200k churn"; exit 1; fi
+	echo "[OK] gen2: a 200k churn collects (gc_runs() >= 1) and the live set stays small (gc_live() reported)"
+	echo "[OK] seed GC: seed-min = no collector (builder strings + a freeing assignment, clear OOM); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem"
+
+# ---------------------------------------------------------------------------
+# test-generic-structs: generic structs ARE implemented, on all three backends,
+# with one concrete type per instantiation -- and the type argument list is
+# checked, so a mistake is a named refusal rather than wrong code.
+#
+# `struct Box<T> { v }` is a template: parameter names and field names, no
+# layout, and it never becomes a struct of its own. Each instantiation is
+# mangled to a concrete struct name -- Box<num> is Box__n, Box<str> is Box__s,
+# Pair<num,str> is Pair__ns -- using the suffixes generic FUNCTIONS already use,
+# so the mangled name is the type identity: two specializations get their own
+# field kinds, their own typedef and (on native) their own GC block descriptor,
+# and they can never share a slot. That is items 1 and 2 of the five-point list
+# in docs/TYPES_ROADMAP.md ("A safe implementation needs"); the same document
+# records what is still missing -- nested instantiations such as Box<Box<num>>,
+# a struct or a list as a type argument, and gen2's wording for a bad type
+# argument list.
+#
+# selfhost/generic_struct_box.sa is the shared parity fixture: three
+# instantiations in one program, six printed lines, byte-identical on seed-min,
+# gen2 and native. The typedefs are pinned as well, because the layout IS the
+# claim -- `double v` for Box__n and `char *v` for Box__s in one program.
+#
+# The second half pins the refusals: a wrong type argument count, a struct name
+# as a type argument, a list as a type argument, a bare template name, and one
+# instantiation used with two different kinds. All three backends refuse all
+# five. seed-min and native name the problem, so their wording is pinned; gen2
+# refuses through its general "undefined name" and stray-token errors, so for
+# gen2 only the failure is pinned (plus its wording for the two-kinds case,
+# which it does name). Pinning gen2's weak wording would freeze it, so the gate
+# asserts the honest part: no backend compiles any of these.
+#
+# The last two sections predate generic structs and are unchanged: the
+# concrete-name workaround (one struct name per layout) still prints the same
+# bytes on all three backends, and a dotted field read inside a struct literal
+# (`NumBox { a.v }`) stays seed-min-only -- refused by gen2 (#error) and native.
+# Refused, not miscompiled.
+# ---------------------------------------------------------------------------
+.PHONY: test-generic-structs
+test-generic-structs: $(GEN2) $(SEED_MIN_BIN)
+	mkdir -p $(TESTS)
+	# ---- support: one concrete type per instantiation, three-way parity ----
+	./$(SEED_MIN_BIN) selfhost/generic_struct_box.sa > $(TESTS)/gs_box_ms.c
+	grep -q -F 'typedef struct { double v; } Box__n;' $(TESTS)/gs_box_ms.c
+	grep -q -F 'typedef struct { char *v; } Box__s;' $(TESTS)/gs_box_ms.c
+	grep -q -F 'typedef struct { double a; char *b; } Pair__ns;' $(TESTS)/gs_box_ms.c
+	$(CC) -O2 -o $(TESTS)/gs_box_ms $(TESTS)/gs_box_ms.c
+	$(call assert-out,./$(TESTS)/gs_box_ms,7\nseven\n8\n7\n9\nnine)
+	./$(GEN2) selfhost/generic_struct_box.sa $(TESTS)/gs_box_g2.c >/dev/null
+	grep -q -F 'typedef struct { double v; } Box__n;' $(TESTS)/gs_box_g2.c
+	grep -q -F 'typedef struct { char *v; } Box__s;' $(TESTS)/gs_box_g2.c
+	grep -q -F 'typedef struct { double a; char *b; } Pair__ns;' $(TESTS)/gs_box_g2.c
+	$(CC) -O2 -o $(TESTS)/gs_box_g2 $(TESTS)/gs_box_g2.c
+	$(call assert-out,./$(TESTS)/gs_box_g2,7\nseven\n8\n7\n9\nnine)
+	echo "[OK] generic structs: Box<num>, Box<str> and Pair<num,str> are three types with their own layouts, identical on seed-min and gen2"
+	if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/generic_struct_box.sa $(TESTS)/gs_box_nat && \
+	  ./$(TESTS)/gs_box_nat > $(TESTS)/gs_box_nat.out && \
+	  ./$(TESTS)/gs_box_ms > $(TESTS)/gs_box_ms.out && \
+	  cmp $(TESTS)/gs_box_ms.out $(TESTS)/gs_box_nat.out && \
+	  echo "[generic-structs] native: the same instantiations print the same bytes as seed-min"; \
+	fi
+	# ---- refusal 1: the wrong number of type arguments ----
+	printf 'struct Box<T> {\n  v\n}\nhold b = Box<num, str> { 7 }\nshow b.v\n' > $(TESTS)/gs_arity.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_arity.sa > $(TESTS)/gs_arity_ms.c 2>$(TESTS)/gs_arity_ms.err; then \
+	  echo "[FAIL] seed-min accepted Box<num, str> against a one-parameter template"; exit 1; fi
+	grep -q -F 'Box takes 1 type argument, got 2' $(TESTS)/gs_arity_ms.err
+	./$(GEN2) $(TESTS)/gs_arity.sa $(TESTS)/gs_arity_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min:' $(TESTS)/gs_arity_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_arity.sa $(TESTS)/gs_arity_nat 2>$(TESTS)/gs_arity_nat.err; then \
+	    echo "[FAIL] native accepted Box<num, str> against a one-parameter template"; exit 1; fi; \
+	  grep -q -F 'takes 1 type argument, got 2' $(TESTS)/gs_arity_nat.err; \
+	fi
+	echo "[OK] generic structs: a wrong type argument count is refused by all three backends"
+	# ---- refusal 2: a struct name as a type argument ----
+	printf 'struct NumBox {\n  v\n}\nstruct Box<T> {\n  v\n}\nhold n = NumBox { 3 }\nhold b = Box<NumBox> { n }\nshow b.v\n' > $(TESTS)/gs_argstruct.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_argstruct.sa > $(TESTS)/gs_argstruct_ms.c 2>$(TESTS)/gs_argstruct_ms.err; then \
+	  echo "[FAIL] seed-min accepted a struct name as a type argument"; exit 1; fi
+	grep -q -F "a type argument must be num, str or list (got 'NumBox')" $(TESTS)/gs_argstruct_ms.err
+	./$(GEN2) $(TESTS)/gs_argstruct.sa $(TESTS)/gs_argstruct_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min:' $(TESTS)/gs_argstruct_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_argstruct.sa $(TESTS)/gs_argstruct_nat 2>$(TESTS)/gs_argstruct_nat.err; then \
+	    echo "[FAIL] native accepted a struct name as a type argument"; exit 1; fi; \
+	  grep -q -F "a type argument must be num, str or list (got 'NumBox')" $(TESTS)/gs_argstruct_nat.err; \
+	fi
+	echo "[OK] generic structs: a struct name as a type argument is refused by all three backends"
+	# ---- refusal 3: a list as a type argument ----
+	# No backend has a list-typed struct field, so Box<list> is refused rather
+	# than emitted as C that cannot compile.
+	printf 'struct Box<T> {\n  v\n}\nhold xs = [1, 2]\nhold b = Box<list> { xs }\nshow len(b.v)\n' > $(TESTS)/gs_arglist.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_arglist.sa > $(TESTS)/gs_arglist_ms.c 2>$(TESTS)/gs_arglist_ms.err; then \
+	  echo "[FAIL] seed-min accepted a list as a type argument"; exit 1; fi
+	grep -q -F 'a struct field cannot hold a list' $(TESTS)/gs_arglist_ms.err
+	./$(GEN2) $(TESTS)/gs_arglist.sa $(TESTS)/gs_arglist_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min:' $(TESTS)/gs_arglist_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_arglist.sa $(TESTS)/gs_arglist_nat 2>$(TESTS)/gs_arglist_nat.err; then \
+	    echo "[FAIL] native accepted a list as a type argument"; exit 1; fi; \
+	  grep -q -F 'cannot hold a list' $(TESTS)/gs_arglist_nat.err; \
+	fi
+	echo "[OK] generic structs: a list as a type argument is refused by all three backends"
+	# ---- refusal 4: a bare template name, with no type arguments ----
+	printf 'struct Box<T> {\n  v\n}\nhold b = Box { 7 }\nshow b.v\n' > $(TESTS)/gs_bare.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_bare.sa > $(TESTS)/gs_bare_ms.c 2>$(TESTS)/gs_bare_ms.err; then \
+	  echo "[FAIL] seed-min accepted a bare template name"; exit 1; fi
+	grep -q -F 'Box is a generic struct: write Box<num> { ... }' $(TESTS)/gs_bare_ms.err
+	./$(GEN2) $(TESTS)/gs_bare.sa $(TESTS)/gs_bare_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min:' $(TESTS)/gs_bare_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_bare.sa $(TESTS)/gs_bare_nat 2>$(TESTS)/gs_bare_nat.err; then \
+	    echo "[FAIL] native accepted a bare template name"; exit 1; fi; \
+	  grep -q -F 'is a generic struct: write Box<num> { ... }' $(TESTS)/gs_bare_nat.err; \
+	fi
+	echo "[OK] generic structs: a bare template name is refused by all three backends"
+	# ---- refusal 5: one instantiation used with two different kinds ----
+	printf 'struct Box<T> {\n  v\n}\nhold b = Box<num> { 7 }\nhold s = Box<num> { "seven" }\nshow b.v\nshow s.v\n' > $(TESTS)/gs_twokinds.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/gs_twokinds.sa > $(TESTS)/gs_twokinds_ms.c 2>$(TESTS)/gs_twokinds_ms.err; then \
+	  echo "[FAIL] seed-min accepted two kinds in one instantiation"; exit 1; fi
+	grep -q -F "Box__n field 'v' is num (its type argument says so), the literal gives str" $(TESTS)/gs_twokinds_ms.err
+	./$(GEN2) $(TESTS)/gs_twokinds.sa $(TESTS)/gs_twokinds_g2.c >/dev/null 2>&1 || true
+	grep -q -F '#error sayanox-min: struct field is used with two different types' $(TESTS)/gs_twokinds_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_twokinds.sa $(TESTS)/gs_twokinds_nat 2>$(TESTS)/gs_twokinds_nat.err; then \
+	    echo "[FAIL] native accepted two kinds in one instantiation"; exit 1; fi; \
+	  grep -q -F "field 'v' is a number (its type argument says so), the literal gives a string" $(TESTS)/gs_twokinds_nat.err; \
+	fi
+	echo "[OK] generic structs: one instantiation cannot hold two kinds -- the type argument fixes the field kind"
+	# ---- the supported workaround: concrete names, three-way parity ----
+	./$(SEED_MIN_BIN) selfhost/generic_struct_concrete.sa > $(TESTS)/gs_conc_ms.c
+	$(CC) -O2 -o $(TESTS)/gs_conc_ms $(TESTS)/gs_conc_ms.c
+	./$(GEN2) selfhost/generic_struct_concrete.sa $(TESTS)/gs_conc_g2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gs_conc_g2 $(TESTS)/gs_conc_g2.c
+	$(call assert-out,./$(TESTS)/gs_conc_ms,7\nseven\n8\neight\n2\n8\n9)
+	$(call assert-out,./$(TESTS)/gs_conc_g2,7\nseven\n8\neight\n2\n8\n9)
+	if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/generic_struct_concrete.sa $(TESTS)/gs_conc_nat && \
+	  ./$(TESTS)/gs_conc_nat > $(TESTS)/gs_conc_nat.out && \
+	  ./$(TESTS)/gs_conc_ms > $(TESTS)/gs_conc_ms.out && \
+	  cmp $(TESTS)/gs_conc_ms.out $(TESTS)/gs_conc_nat.out && \
+	  echo "[generic-structs] native: concrete struct names print the same bytes as seed-min"; \
+	fi
+	echo "[OK] generic structs workaround: two same-shaped concrete structs in one program, identical on seed-min, gen2 and native"
+	# ---- the adjacent divergence: a dotted field read inside a struct literal ----
+	printf 'struct NumBox {\n  v\n}\nhold a = NumBox { 7 }\nhold a2 = NumBox { a.v }\nshow a2.v\n' > $(TESTS)/gs_field_lit.sa
+	./$(SEED_MIN_BIN) $(TESTS)/gs_field_lit.sa > $(TESTS)/gs_field_lit_ms.c
+	$(CC) -O2 -o $(TESTS)/gs_field_lit_ms $(TESTS)/gs_field_lit_ms.c
+	$(call assert-out,./$(TESTS)/gs_field_lit_ms,7)
+	./$(GEN2) $(TESTS)/gs_field_lit.sa $(TESTS)/gs_field_lit_g2.c > $(TESTS)/gs_field_lit_g2.out 2>&1 || true
+	grep -q -F '#error sayanox-min: struct/list literal value must be a number, string, name, or nested struct' $(TESTS)/gs_field_lit_g2.c
+	if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gs_field_lit.sa $(TESTS)/gs_field_lit_nat 2>$(TESTS)/gs_field_lit_nat.err; then \
+	    echo "[FAIL] native accepted a dotted field read inside a struct literal"; exit 1; fi; \
+	  grep -q -F 'is used with two different types' $(TESTS)/gs_field_lit_nat.err \
+	    || { echo "[FAIL] native refusal for a field read in a literal changed wording:"; cat $(TESTS)/gs_field_lit_nat.err; exit 1; }; \
+	fi
+	echo "[OK] generic structs: a dotted field read inside a struct literal stays seed-min-only (gen2 #error, native refuses) -- a documented divergence, not silent wrong code"
+
+# ---------------------------------------------------------------------------
 # test-stage2-demos: the three Stage-2 contract demos in selfhost/ are
 # pure-min programs (top-level slots, numeric functions, string loops).  They
 # must stay runnable: seed-min and gen2 compile them and print byte-identical
@@ -1122,6 +1456,243 @@ test-sxpkg-polish: sxpkg tools/sxpkg.sh
 
 
 # ---------------------------------------------------------------------------
+# test-native-emit-split: the x86-64 backend is a REGION of native_aot.c, not a
+# seasoning spread through it.
+#
+# native_aot.c is a single-pass compiler -- it parses Sayanox and emits machine
+# code in the same walk -- so "a second target" cannot mean swapping a file, and
+# this target does not claim one exists. What it does claim, and check, is the
+# seam a second backend would be written against:
+#
+#   * the encoder API (e1/e32/e64, here(), erel32/erel32j, patch_imm32,
+#     jmp5_slot, sub_rsp_imm32_slot, leave_ret and the instruction helpers) is
+#     the only code that writes bytes, and all of it sits above the
+#     "phase 1: collect definitions" marker;
+#   * the language-level emitter is delimited by EMIT-SEAM-BEGIN /
+#     EMIT-SEAM-END and contains no raw byte write (e1(, e32(, e64(, memcpy
+#     into `code`) and no direct read of the code cursor `cn`: label positions
+#     come from here();
+#   * below EMIT-SEAM-END the file is x86-64 again by nature -- the phase-4
+#     runtime stubs, the collector and the ELF container. A second backend
+#     replaces the encoder, those stubs and the container, and reuses the
+#     parser, the four phases and the emit tree unchanged. docs/NATIVE.md lists
+#     the API under "The emit seam".
+#
+# Before this pass the emit tree wrote six byte sequences itself (the function
+# prologue `sub rsp,imm32` and its later patch, `leave; ret` twice, a `jmp
+# rel32` slot, and a hand-rolled rel32 patch that duplicated erel32j) and read
+# `cn` in 28 places. Those are now named primitives. The refactor was verified
+# byte for byte: five fixtures emitted executables that `cmp` clean against the
+# binaries produced by the pre-seam native_aot, and the build lost its last
+# warning (a `return <value>` in the void emit_prim). This target keeps the
+# region clean by construction and then runs one program end to end.
+# ---------------------------------------------------------------------------
+.PHONY: test-native-emit-split
+test-native-emit-split: $(NATIVE_BIN)
+	mkdir -p $(TESTS)
+	test $$(grep -c -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c) -eq 1 \
+	  || { echo "[FAIL] the EMIT-SEAM-BEGIN marker is missing or duplicated"; exit 1; }
+	test $$(grep -c -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c) -eq 1 \
+	  || { echo "[FAIL] the EMIT-SEAM-END marker is missing or duplicated"; exit 1; }
+	b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c | cut -d: -f1); \
+	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c | cut -d: -f1); \
+	 p1=$$(grep -n -F 'phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
+	 enc=$$(grep -n -F 'x86-64 mini encoder' selfhost/native_aot.c | cut -d: -f1); \
+	 if [ "$$b" -ge "$$e" ]; then echo "[FAIL] the emit-seam markers are out of order"; exit 1; fi; \
+	 if [ "$$enc" -ge "$$p1" ] || [ "$$p1" -ge "$$b" ]; then \
+	   echo "[FAIL] the file layout changed: expected encoder < phase 1 < EMIT-SEAM-BEGIN"; exit 1; fi; \
+	 awk -v b=$$b -v e=$$e 'NR>b && NR<e' selfhost/native_aot.c > $(TESTS)/seam_region.c; \
+	 for pat in 'e1(' 'e32(' 'e64(' 'memcpy(code' 'memcpy(&code'; do \
+	   if grep -q -F "$$pat" $(TESTS)/seam_region.c; then \
+	     echo "[FAIL] the language emitter writes code bytes directly: $$pat"; \
+	     grep -n -F "$$pat" $(TESTS)/seam_region.c | head -3; exit 1; fi; \
+	 done; \
+	 if [ -n "$$(grep -n -w 'cn' $(TESTS)/seam_region.c | head -3)" ]; then \
+	   echo "[FAIL] the language emitter reads the code cursor directly (use here()):"; \
+	   grep -n -w 'cn' $(TESTS)/seam_region.c | head -3; exit 1; fi; \
+	 echo "[OK] emit seam: $$((e - b)) lines of language-level emitter, no raw byte write, no direct cursor read"
+	# ---- the seam API is defined in the encoder region, above phase 1 ----
+	p1=$$(grep -n -F 'phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
+	 for fn in 'static size_t here(void)' 'static void patch_imm32' 'static void leave_ret' \
+	           'static size_t sub_rsp_imm32_slot' 'static size_t jmp5_slot' 'static void erel32j'; do \
+	   ln=$$(grep -n -F "$$fn" selfhost/native_aot.c | head -1 | cut -d: -f1); \
+	   if [ -z "$$ln" ] || [ "$$ln" -ge "$$p1" ]; then \
+	     echo "[FAIL] seam helper is not defined in the encoder region: $$fn"; exit 1; fi; \
+	 done
+	echo "[OK] emit seam: here()/patch_imm32/leave_ret/sub_rsp_imm32_slot/jmp5_slot/erel32j are all encoder-region primitives"
+	# ---- and the backend still works end to end ----
+	./$(NATIVE_BIN) selfhost/generic_struct_concrete.sa $(TESTS)/seam_nat
+	$(call assert-out,./$(TESTS)/seam_nat,7\nseven\n8\neight\n2\n8\n9)
+	./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/seam_nat2
+	test -x $(TESTS)/seam_nat2 && ./$(TESTS)/seam_nat2 > $(TESTS)/seam_nat2.out
+	echo "[OK] native emit split: the language emitter is backend-free, the encoder and the phase-4 stubs are the only machine code, and emitted programs still run"
+
+# ---------------------------------------------------------------------------
+# test-native-ir-log: the emit tree's instruction list is inspectable, and
+# pinned -- the specification a second backend is written against.
+#
+# test-native-emit-split proves the language-level emitter reaches the machine
+# only through the encoder API, and docs/NATIVE.md lists that API. What was
+# still prose is the CONTENT of the contract: which instructions, in which
+# order, with which operands, and which slots stay unresolved until a fixup.
+# SX_EMIT_LOG=<path> makes every encoder primitive write one line -- the code
+# offset the instruction starts at, the mnemonic and the operands in assembly
+# order -- plus a "; " line for each label slot, each fixup, each emitted make
+# and each phase. That file is the instruction list: a riscv64 or ARM64 backend
+# is a program that produces the same list with its own mnemonics and its own
+# encodings, and this target pins the list the x86-64 one produces for a
+# fixture using numbers, strings, a list, a branch, a loop and two makes.
+#
+# The recorder only READS the primitives' arguments, so nothing about the bytes
+# changes: the ELF built with the log is cmp'd against the ELF built without
+# it, and two logged runs are cmp'd against each other. The log's own
+# invariants are checked as well -- every line is an instruction line or a
+# comment line, the offsets never go backwards, every rel32 fixup lands on a
+# jump, no call target or operand falls back to a placeholder name, the six
+# phases come in order -- the mnemonic vocabulary of the fixture's top level is
+# pinned exactly, and the language emitter is asserted never to touch the
+# recorder state: only the encoder records instructions.
+#
+# This is a step TOWARDS a second target, not a second target: there is still
+# exactly one emitter of machine code, and docs/NATIVE_IR.md says so.
+# ---------------------------------------------------------------------------
+IRL_FIX := selfhost/native_ir_log_test.sa
+IRL_MN_WANT := add addsd call cvtsi2sd cvttsd2si jae je jmp lea mov movq movzx mulsd pop push seta ucomisd
+IRL_OFF6 := [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+.PHONY: test-native-ir-log
+test-native-ir-log: $(NATIVE_BIN)
+	mkdir -p $(TESTS)
+	# ---- 1. the fixture still runs and prints the hand-computed values ----
+	./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irl_nat
+	$(call assert-out,./$(TESTS)/irl_nat,42\nir-log\n6\n3\n42\nir-log-done)
+	# ---- 2. the recorder is inert: not one emitted byte changes ----
+	SX_EMIT_LOG=$(TESTS)/irl.log ./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irl_logged
+	cmp $(TESTS)/irl_nat $(TESTS)/irl_logged
+	echo "[OK] native ir log: SX_EMIT_LOG changes no emitted byte (the two ELFs cmp clean)"
+	# ---- 3. the instruction list is a function of the source ----
+	SX_EMIT_LOG=$(TESTS)/irl_again.log ./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irl_logged2
+	cmp $(TESTS)/irl.log $(TESTS)/irl_again.log
+	echo "[OK] native ir log: the same source gives the same instruction list ($$(grep -c . $(TESTS)/irl.log) lines)"
+	# ---- 4. every line is an instruction line or a '; ' comment line ----
+	test $$(grep -c -v -E '^([0-9a-f]{6}  |;)' $(TESTS)/irl.log) -eq 0 \
+	  || { echo "[FAIL] the instruction list has a line in neither format:"; grep -n -v -E '^([0-9a-f]{6}  |;)' $(TESTS)/irl.log | head -3; exit 1; }
+	# ---- 5. the log's invariants: monotonic offsets, fixups land on jumps,
+	#         six phases in order, a reported code size ----
+	@awk -v off='$(IRL_OFF6)' 'BEGIN{bad=0;prev="";fx=0;np=0;tot=0} index($$0,"=== phase:")==9{np++} /^;       fixup/{p=index($$0,"[");a=substr($$0,p+1,6);if(!(a in mn)||mn[a]!~/^j/){bad++;print "[FAIL] a rel32 fixup does not land on a jump: " $$0}else fx++;next} $$0~("^"off"  "){o=substr($$0,1,6);if(prev!=""&&(o"")<(prev"")){bad++;print "[FAIL] the instruction offsets go backwards: " $$0}prev=o;mn[o]=$$2;next} /^;       code bytes: /{tot=$$4} END{if(fx==0){bad++;print "[FAIL] the list has no fixup line, so no unresolved slot was resolved"}if(tot+0<=0){bad++;print "[FAIL] the list does not report its code size"}if(np!=6){bad++;print "[FAIL] expected 6 phase markers, got " np}if(bad)exit 1}' $(TESTS)/irl.log
+	@i=$$(grep -c -E '^[0-9a-f]{6}  ' $(TESTS)/irl.log); sl=$$(grep -c -F ';       slot ' $(TESTS)/irl.log); fx=$$(grep -c -F ';       fixup' $(TESTS)/irl.log); \
+	 echo "[OK] native ir log: $$i instructions, $$sl label slots, $$fx rel32 fixups, monotonic offsets, six phases in order"
+	# ---- 6. every call target and every operand has a real name ----
+	test $$(grep -c -E 'call builtin id[0-9]|call make make[0-9]|bin[0-9a-f][0-9a-f] |grp1_[0-9]|jcc[0-9]+ |setcc[0-9]+ |f7\?|xmm\?|r32\?|[^a-z0-9]r\?' $(TESTS)/irl.log) -eq 0 \
+	  || { echo "[FAIL] a call target or an operand fell back to a placeholder name:"; grep -n -E 'call builtin id[0-9]|call make make[0-9]|bin[0-9a-f][0-9a-f] |grp1_[0-9]|jcc[0-9]+ |setcc[0-9]+ |f7\?|xmm\?|r32\?|[^a-z0-9]r\?' $(TESTS)/irl.log | head -3; exit 1; }
+	# ---- 7. the machine model is visible in the list ----
+	@for pat in 'movq xmm0,rcx' 'movq xmm1,rax' 'addsd xmm0,xmm1' 'mulsd xmm0,xmm1' 'movq rax,xmm0' \
+	              'ucomisd xmm0,xmm1' 'seta eax' 'movzx rax,al' 'cvtsi2sd xmm0,rax' 'cvttsd2si rax,xmm0' \
+	              'call make twice' 'call make join' '--- make twice[0] at ' '--- make join[1] at ' \
+	              'call builtin concat' 'call builtin putstr' 'call builtin strlen' 'call builtin shownum' \
+	              'call builtin mlist' 'call builtin lpush' 'call builtin lget' 'call builtin llen' \
+	              'sub rsp,<imm32 slot>' 'lea r12,[rip+<disp32 slot>]' 'leave' 'ret'; do \
+	  grep -q -F -e "$$pat" $(TESTS)/irl.log || { echo "[FAIL] the instruction list is missing: $$pat"; exit 1; }; \
+	done
+	echo "[OK] native ir log: numbers are double bits through xmm, strings and lists are named stub calls, makes are named call targets"
+	# ---- 8. the instruction vocabulary of the fixture's top level, pinned ----
+	@got=$$(awk '/=== phase: top level/{on=1;next} /=== phase: exit syscall/{on=0} on' $(TESTS)/irl.log | grep -E '^[0-9a-f]{6}  ' | awk '{print $$2}' | sort -u | tr '\n' ' ' | sed 's/ $$//'); \
+	 if [ "$$got" = "$(IRL_MN_WANT)" ]; then :; else \
+	   echo "[FAIL] the top level's instruction vocabulary changed"; \
+	   echo "--- want ---"; echo "$(IRL_MN_WANT)"; echo "--- got ---"; echo "$$got"; \
+	   echo "(if that is intentional, update IRL_MN_WANT and say why in docs/NATIVE_IR.md)"; exit 1; fi
+	echo "[OK] native ir log: the fixture's top level emits exactly these mnemonics: $(IRL_MN_WANT)"
+	# ---- 9. only the encoder records; the emitter may announce, not write ----
+	@b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c | cut -d: -f1); \
+	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c | cut -d: -f1); \
+	 awk -v b=$$b -v e=$$e 'NR>b && NR<e' selfhost/native_aot.c > $(TESTS)/irl_seam.c; \
+	 test $$(grep -c -w 'ilogf' $(TESTS)/irl_seam.c) -eq 0 \
+	  || { echo "[FAIL] the language emitter touches the recorder state:"; grep -n -w 'ilogf' $(TESTS)/irl_seam.c | head -3; exit 1; }
+	echo "[OK] native ir log: the instruction list is written by the encoder alone -- a second backend replaces the encoder and keeps the emit tree"
+
+# ---------------------------------------------------------------------------
+# test-sxpkg-online-optin: the network is opt-in, and the offline path is not.
+#
+# `SAYANOX_REGISTRY` decides WHERE a transfer goes; it is no longer permission
+# to transfer. `sync`, `install` (when it actually has to fetch) and `fetch`
+# refuse without `SAYANOX_ONLINE=1` or `sxpkg --online <command>`, and they
+# refuse BEFORE any transfer starts, so a checkout, a CI runner or a bootstrap
+# gate can never reach a host by accident. A `file://` URL or a plain local
+# path is not the network and needs no opt-in -- that is how
+# test-sxpkg-online-local exercises the whole transfer, verify and rollback
+# path without a socket.
+#
+# Every remote URL here is a `.invalid` host (RFC 2606: guaranteed not to
+# resolve), so the opt-in leg fails in the resolver within milliseconds and the
+# target does not depend on connectivity in either direction.
+# ---------------------------------------------------------------------------
+.PHONY: test-sxpkg-online-optin
+test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
+	command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || { echo "[SKIP] test-sxpkg-online-optin: needs curl or wget"; exit 0; }
+	rm -rf $(TESTS)/sxpkg-optin && mkdir -p $(TESTS)/sxpkg-optin/p
+	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 cd $$P/p && sh $$W init >/dev/null && sh $$W add strings 0.1.0 >/dev/null
+	# ---- 1. sync refuses without an opt-in, and names the way to opt in ----
+	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W sync) >$$P/no.out 2>$$P/no.err; then \
+	   echo "[FAIL] sxpkg sync reached for the network without an opt-in"; exit 1; fi; \
+	 grep -q -F 'refusing to use the network without an explicit opt-in' $$P/no.err \
+	   || { echo "[FAIL] the refusal does not say why:"; cat $$P/no.err; exit 1; }; \
+	 grep -q -F 'SAYANOX_ONLINE=1' $$P/no.err \
+	   || { echo "[FAIL] the refusal does not name the opt-in"; exit 1; }; \
+	 grep -q -F 'install-local' $$P/no.err \
+	   || { echo "[FAIL] the refusal does not offer the offline commands"; exit 1; }
+	echo "[OK] sxpkg sync: refused with no opt-in, naming SAYANOX_ONLINE=1, --online and the offline commands"
+	# ---- 2. SAYANOX_ONLINE=1 lifts it: the transfer is attempted, DNS fails, sync falls back to the local seed ----
+	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 (cd $$P/p && SAYANOX_ONLINE=1 SAYANOX_REGISTRY=https://registry.invalid/r sh $$W sync) >$$P/yes.out 2>$$P/yes.err \
+	   || { echo "[FAIL] an opted-in sync exited nonzero:"; cat $$P/yes.err; exit 1; }; \
+	 if grep -q -F 'refusing to use the network' $$P/yes.out $$P/yes.err; then \
+	   echo "[FAIL] SAYANOX_ONLINE=1 did not lift the refusal"; exit 1; fi; \
+	 grep -q -F 'online sync failed; using local seed' $$P/yes.out \
+	   || { echo "[FAIL] the opted-in sync never reached the transfer step:"; cat $$P/yes.out; exit 1; }
+	# ---- 3. the --online flag form is the same permission ----
+	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W --online sync) >$$P/flag.out 2>$$P/flag.err \
+	   || { echo "[FAIL] 'sxpkg --online sync' exited nonzero:"; cat $$P/flag.err; exit 1; }; \
+	 grep -q -F 'online sync failed; using local seed' $$P/flag.out \
+	   || { echo "[FAIL] 'sxpkg --online sync' did not attempt the transfer:"; cat $$P/flag.out; exit 1; }
+	echo "[OK] sxpkg opt-in: SAYANOX_ONLINE=1 and 'sxpkg --online <cmd>' both permit the transfer, which then fails in the resolver and falls back to the offline seed"
+	# ---- 4. install with every locked package already local needs no opt-in ----
+	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 rm -rf $$P/p/.sayanox/registry/strings && cp -r registry/strings $$P/p/.sayanox/registry/strings && \
+	 (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W install) >$$P/off.out 2>$$P/off.err \
+	   || { echo "[FAIL] an all-local install demanded the network:"; cat $$P/off.out $$P/off.err; exit 1; }; \
+	 grep -q -F 'verify ok' $$P/off.out || { echo "[FAIL] the all-local install did not verify:"; cat $$P/off.out; exit 1; }; \
+	 if grep -q -F 'refusing to use the network' $$P/off.out $$P/off.err; then \
+	   echo "[FAIL] an all-local install printed the network refusal"; exit 1; fi
+	echo "[OK] sxpkg install: an all-local lock is copied and verified with no opt-in (offline stays first-class)"
+	# ---- 5. install that must fetch refuses without an opt-in ----
+	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 rm -rf $$P/p/.sayanox/registry/strings; \
+	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W install) >$$P/need.out 2>$$P/need.err; then \
+	   echo "[FAIL] sxpkg install reached for the network without an opt-in"; exit 1; fi; \
+	 grep -q -F 'refusing to use the network without an explicit opt-in' $$P/need.err \
+	   || { echo "[FAIL] the install refusal does not say why:"; cat $$P/need.err; exit 1; }
+	# ---- 6. fetch: a file:// URL is local, a remote URL is not ----
+	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 printf 'show 1\n' > $$P/one.sa; \
+	 (cd $$P/p && sh $$W fetch file://$$P/one.sa onepkg) >$$P/f1.out 2>$$P/f1.err \
+	   || { echo "[FAIL] fetch of a file:// URL asked for an opt-in:"; cat $$P/f1.err; exit 1; }; \
+	 grep -q -F 'fetched onepkg' $$P/f1.out || { echo "[FAIL] the file:// fetch did not complete:"; cat $$P/f1.out; exit 1; }; \
+	 if (cd $$P/p && sh $$W fetch https://registry.invalid/one.sa onepkg2) >$$P/f2.out 2>$$P/f2.err; then \
+	   echo "[FAIL] sxpkg fetch reached for the network without an opt-in"; exit 1; fi; \
+	 grep -q -F 'refusing to use the network without an explicit opt-in' $$P/f2.err \
+	   || { echo "[FAIL] the fetch refusal does not say why:"; cat $$P/f2.err; exit 1; }
+	# ---- 7. a refused transfer leaves nothing behind ----
+	P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 if [ -n "$$(find $$P -name '*.part' 2>/dev/null)" ]; then \
+	   echo "[FAIL] a refused transfer left a .part file:"; find $$P -name '*.part'; exit 1; fi; \
+	 if [ -e $$P/p/.sayanox/registry/onepkg2 ]; then \
+	   echo "[FAIL] a refused fetch created a package directory"; exit 1; fi
+	echo "[OK] sxpkg fetch: a file:// URL needs no opt-in, a remote URL refuses without one, and a refusal leaves no .part file and no package directory"
+	echo "[OK] sxpkg online is opt-in: sync/install/fetch refuse before any transfer, SAYANOX_ONLINE=1 and --online lift it, file:// and all-local paths never ask"
+
+# ---------------------------------------------------------------------------
 # test-sxpkg-online-local: the online install path, tested against a LOCAL
 # registry through file:// URLs (no network). It is NOT part of the four
 # bootstrap gates: it needs curl and the shell wrapper, and it uses cp/rm.
@@ -1172,6 +1743,84 @@ test-stdlib-growth: $(GEN2) $(SEED_MIN_BIN)
 	  ./$(TESTS)/sg_nat > $(TESTS)/sg_nat.out && cmp $(TESTS)/sg_g2.out $(TESTS)/sg_nat.out || exit 1; \
 	fi
 	@echo "[OK] stdlib growth: 9 new public numeric helpers, seed-min == gen2 (== native when built)"
+
+# ---------------------------------------------------------------------------
+# test-stdlib-modules: three new stdlib modules, checked on ALL THREE backends.
+#
+#   stdlib/num_util.sa   untyped numeric helpers: trunc/floor/ceil/round/frac
+#                        (built on `% 1e15`, the dialect's only double->int
+#                        truncation), Euclidean modulo, integer division,
+#                        wrap, range mapping, avg/median3, degrees/radians,
+#                        angle normalisation. Untyped and numeric like tiny.sa,
+#                        so the native-AOT subset runs it too.
+#   stdlib/list_algo.sa  typed list algorithms: insertion sort, sorted check,
+#                        index_of, append, slice/take/drop, cumsum, repeat,
+#                        scale/offset, zip_add, count_gt, remove_at, insert_at,
+#                        distinct. Every transform returns a NEW list; the
+#                        fixture re-checks the input length afterwards.
+#   stdlib/str_text.sa   typed byte-string helpers: index_of/last_index_of,
+#                        slice, trim/trim_left/trim_right, cmp, is_digits,
+#                        pad_left/pad_right, word_count, replace, remove,
+#                        hash, parse_uint, uint_str.
+#
+# 99 hand-computed values in selfhost/stdlib_modules_test.sa; seed-min, gen2
+# and native must print identical bytes. This is growth of a SMALL portable
+# library, not a full stdlib claim: no JSON, no HTTP client, no dates, no
+# unicode, no floating-point transcendental functions (see docs/STDLIB.md).
+# ---------------------------------------------------------------------------
+.PHONY: test-stdlib-modules
+STM_WANT := 2\n-2\n2\n-3\n3\n3\n-2\n3\n3\n2\n-2\n0.25\n-0.25\n3\n7\n2\n1\n3\n-3\n2\n1\n150\n1\n3.5\n2\n3.14159\n180\n269.5\n1\n5\n1\n1\n3\n4\n5\n0\n1\n5\n2\n1\n-1\n3\n3\n3\n1\n1\n2\n1\n1\n1\n3\n6\n3\n7\n6\n11\n2\n22\n3\n4\n4\n6\n9\n6\n9\n4\n5\n1\n5\n-1\nell\nlo\n\nab\nab  \n  ab\n\n-1\n1\n0\n1\n0\n0\n007\n7..\n1234\n2\n0\nazc\nabc\n0\n97\n3105\n42\n0\n1234\n0\n7\nmodules-done
+test-stdlib-modules: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/stdlib_modules_test.sa > $(TESTS)/stm_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/stm_seed $(TESTS)/stm_seed.c
+	./$(GEN2) selfhost/stdlib_modules_test.sa $(TESTS)/stm_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/stm_gen2 $(TESTS)/stm_gen2.c
+	$(call assert-out,./$(TESTS)/stm_seed,$(STM_WANT))
+	$(call assert-out,./$(TESTS)/stm_gen2,$(STM_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/stdlib_modules_test.sa $(TESTS)/stm_native || exit 1; \
+	  ./$(TESTS)/stm_native > $(TESTS)/stm_native.out || exit 1; \
+	  ./$(TESTS)/stm_seed > $(TESTS)/stm_seed.out || exit 1; \
+	  cmp $(TESTS)/stm_seed.out $(TESTS)/stm_native.out || { echo "[FAIL] native stdlib modules differ from seed-min"; exit 1; }; \
+	  echo '[OK] native stdlib module parity (num_util, list_algo, str_text)'; \
+	else echo '[SKIP] native stdlib module parity: native_aot not built'; fi
+	@# each module stands alone, and all seven modules coexist without a name
+	@# collision (the prefixes nu_/la_/t_ keep them apart)
+	@printf 'use "stdlib/num_util.sa"\nshow nu_floor(2.5)\nshow nu_ceil(2.5)\n' > $(TESTS)/stm_alone_num.sa
+	./$(SEED_MIN_BIN) $(TESTS)/stm_alone_num.sa > $(TESTS)/stm_alone_num.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stm_alone_num $(TESTS)/stm_alone_num.c
+	$(call assert-out,./$(TESTS)/stm_alone_num,2\n3)
+	@printf 'use "stdlib/list_algo.sa"\nhold xs = [3, 1, 2]\nhold s = la_sort(xs)\nshow s[0]\nshow s[2]\nshow la_sorted(s)\n' > $(TESTS)/stm_alone_list.sa
+	./$(SEED_MIN_BIN) $(TESTS)/stm_alone_list.sa > $(TESTS)/stm_alone_list.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stm_alone_list $(TESTS)/stm_alone_list.c
+	$(call assert-out,./$(TESTS)/stm_alone_list,1\n3\n1)
+	./$(GEN2) $(TESTS)/stm_alone_list.sa $(TESTS)/stm_alone_list_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stm_alone_list_g2 $(TESTS)/stm_alone_list_g2.c
+	$(call assert-out,./$(TESTS)/stm_alone_list_g2,1\n3\n1)
+	@printf 'use "stdlib/str_text.sa"\nshow t_trim("  hi  ")\nshow t_word_count("a b  c")\nshow t_uint_str(90)\n' > $(TESTS)/stm_alone_str.sa
+	./$(SEED_MIN_BIN) $(TESTS)/stm_alone_str.sa > $(TESTS)/stm_alone_str.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stm_alone_str $(TESTS)/stm_alone_str.c
+	$(call assert-out,./$(TESTS)/stm_alone_str,hi\n3\n90)
+	./$(GEN2) $(TESTS)/stm_alone_str.sa $(TESTS)/stm_alone_str_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stm_alone_str_g2 $(TESTS)/stm_alone_str_g2.c
+	$(call assert-out,./$(TESTS)/stm_alone_str_g2,hi\n3\n90)
+	@printf 'use "stdlib/tiny.sa"\nuse "stdlib/num_util.sa"\nuse "stdlib/str_util.sa"\nuse "stdlib/str_text.sa"\nuse "stdlib/list_util.sa"\nuse "stdlib/list_algo.sa"\nuse "stdlib/file_util.sa"\nshow gcd(12, 18)\nshow nu_round(2.6)\nshow s_len("abc")\nshow t_index_of("abc", 99)\nhold xs = [2, 1]\nshow l_sum(xs)\nhold s = la_sort(xs)\nshow s[0]\nshow f_exists("$(TESTS)/stm_no_such_file")\n' > $(TESTS)/stm_all.sa
+	./$(SEED_MIN_BIN) $(TESTS)/stm_all.sa > $(TESTS)/stm_all_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stm_all_seed $(TESTS)/stm_all_seed.c
+	$(call assert-out,./$(TESTS)/stm_all_seed,6\n3\n3\n2\n3\n1\n0)
+	./$(GEN2) $(TESTS)/stm_all.sa $(TESTS)/stm_all_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stm_all_g2 $(TESTS)/stm_all_g2.c
+	$(call assert-out,./$(TESTS)/stm_all_g2,6\n3\n3\n2\n3\n1\n0)
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) $(TESTS)/stm_all.sa $(TESTS)/stm_all_native || exit 1; \
+	  $(TESTS)/stm_all_native > $(TESTS)/stm_all_native.out || exit 1; \
+	  ./$(TESTS)/stm_all_seed > $(TESTS)/stm_all_seed.out || exit 1; \
+	  cmp $(TESTS)/stm_all_seed.out $(TESTS)/stm_all_native.out || { echo "[FAIL] native all-modules program differs"; exit 1; }; \
+	fi
+	@echo '[OK] stdlib growth: num_util (17 helpers) + list_algo (17) + str_text (18) = 52 helpers, 99 hand-computed values identical on seed-min, gen2 and native; each module stands alone and all seven coexist'
+test-stdlib: test-stdlib-modules
+test-stdlib-growth: test-stdlib-modules
 
 # ---------------------------------------------------------------------------
 # test-native-strord: string ordering < <= > >= on native (added 2026-10-10).
@@ -1853,6 +2502,245 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 	fi
 	@echo "[OK] gen2 gaps: len() in a range bound (list and string), string == / != on runtime strings, else when / else if / otherwise when chains (incl. nested) on gen2, % inside builtin-call arguments (sx_mod, same as seed-min); seed-min and native match the chains"
 
+# ---------------------------------------------------------------------------
+# test-doc-claims: no document may advertise an entry point that is not in the
+# repository. Measured 2026-10-13: there is no `stage2:` target, no
+# selfhost/bootstrap_production.sh, no bootstrap_full_selfhost.sh and no
+# bootstrap_full_language_selfhost.sh; stage2_template.c is a 93-byte
+# PLACEHOLDER, stage2_src/ is a README plus an 11-byte PLACEHOLDER,
+# sxc_full.c is a 30-line toy, and `bash selfhost/restore_stage2.sh` exits 1
+# with "missing Stage-2 seed". 24 legacy documents carry a banner saying so,
+# and docs/FULL_LANGUAGE_SELFHOST.md states it as the current position.
+# If a real Stage-2 host ever lands, this target fails and points at the docs
+# that need updating -- that is the intent.
+#
+# docs/FULL_LANGUAGE_SELFHOST.md and docs/STATUS.md are exempt from the banner
+# check on purpose: those two are where the absence is RECORDED, so they have to
+# name the missing entry points to say they are missing. Every other document
+# that names one must carry the banner.
+# ---------------------------------------------------------------------------
+.PHONY: test-doc-claims
+test-doc-claims:
+	@grep -q 'PLACEHOLDER' selfhost/stage2_template.c \
+	  || { echo "[FAIL] selfhost/stage2_template.c is no longer a placeholder: a Stage-2 host may exist now, update docs/FULL_LANGUAGE_SELFHOST.md and this target"; exit 1; }
+	@if bash selfhost/restore_stage2.sh >/dev/null 2>&1; then \
+	  echo "[FAIL] restore_stage2.sh now succeeds: update docs/FULL_LANGUAGE_SELFHOST.md, docs/FULL_SELFHOST.md and this target"; exit 1; \
+	fi
+	@if grep -q '^stage2:' Makefile; then \
+	  echo "[FAIL] a stage2: target exists now: update the docs and this target"; exit 1; \
+	fi
+	@miss=0; \
+	for f in $$(grep -rl -e 'make stage2' -e 'bootstrap_production.sh' -e 'bootstrap_full_selfhost.sh' -e 'bootstrap_full_language_selfhost.sh' docs selfhost/README.md selfhost/SELFHOST.md --include='*.md' 2>/dev/null); do \
+	  case "$$f" in \
+	    docs/FULL_LANGUAGE_SELFHOST.md|docs/STATUS.md) continue ;; \
+	  esac; \
+	  grep -q 'The entry points named in this file do not exist' "$$f" \
+	    || { echo "[FAIL] $$f advertises a missing entry point without the honest banner"; miss=1; }; \
+	done; \
+	if [ "$$miss" != 0 ]; then exit 1; fi
+	@grep -q 'The Stage-2 host is not in this repository' docs/FULL_LANGUAGE_SELFHOST.md \
+	  || { echo "[FAIL] docs/FULL_LANGUAGE_SELFHOST.md lost its honest Stage-2 section"; exit 1; }
+	@for f in selfhost/seed/sxc_seed_min.c selfhost/compiler_min.sa selfhost/native_aot.c docs/STATUS.md docs/STDLIB.md; do \
+	  test -s "$$f" || { echo "[FAIL] docs/FULL_LANGUAGE_SELFHOST.md references $$f, which is missing or empty"; exit 1; }; \
+	done
+	@echo "[OK] doc claims: $$(grep -rl 'The entry points named in this file do not exist' docs selfhost --include='*.md' | wc -l) legacy documents carry the banner; no Stage-2 host, bootstrap script or make target is advertised that does not exist"
+test-stage2: test-doc-claims
+test-for-str: test-doc-claims
+
+# ---------------------------------------------------------------------------
+# test-gen2-index-expr: an index is a numeric EXPRESSION, in every position.
+#
+# Before this increment gen2 accepted only a literal or a plain name inside
+# `[ ]` (`#error sayanox-min: unsupported index expression (number or name
+# only)`) while seed-min and native accepted arithmetic; worse, an index in a
+# `when`/`while` condition or in a `for` bound was copied verbatim, so the
+# generated C subscripted an sx_list struct with a double and failed to compile
+# ("array subscript is not an integer"). Both are fixed in the self-hosted
+# compiler source (selfhost/compiler_min.sa, helper `raw_index`, four call
+# sites: the two value-position parsers and the two postfix-operand parsers,
+# plus the condition rewriter and the for-bound rewriter).
+#
+# Fixture selfhost/gen2_index_expr_test.sa: 39 hand-computed values covering
+# literal/name/field/parenthesised indexes, unary minus-free arithmetic, string
+# indexes, indexes in conditions and for bounds, and indexes inside typed
+# function bodies. seed-min, gen2 and native must print identical bytes.
+#
+# Still refused by gen2 -- loudly, never as invalid C, and each pinned by the
+# error loop below: `%` inside an index, a call other than len(), a comma, a
+# quoted string, an empty index, unbalanced parentheses or brackets and an
+# expression ending in an operator. The workaround the diagnostic names is to
+# bind the value with `hold` first. `len(NAME)` and a nested `NAME[IDX]` used
+# to be on that list and are lowered now: test-gen2-expr-lowering pins them.
+# A negative index (`xs[-1]`) wraps on seed-min and gen2 but is an out-of-range
+# error on native, so it is checked separately rather than in the parity file.
+# ---------------------------------------------------------------------------
+.PHONY: test-gen2-index-expr
+GIXE_WANT := 30\n20\n30\n20\n20\n30\n30\n20\n40\n30\nc\nb\ne\n99\n50\n40\n20\n1\n2\n3\n4\n5\n6\n20\n30\n0\n1\n0\n1\n0\n1\n0\n1\n30\n1\n0\n1\nx\nindex-expr-done
+test-gen2-index-expr: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/gen2_index_expr_test.sa > $(TESTS)/gixe_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gixe_seed $(TESTS)/gixe_seed.c
+	./$(GEN2) selfhost/gen2_index_expr_test.sa $(TESTS)/gixe_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gixe_gen2 $(TESTS)/gixe_gen2.c
+	$(call assert-out,./$(TESTS)/gixe_seed,$(GIXE_WANT))
+	$(call assert-out,./$(TESTS)/gixe_gen2,$(GIXE_WANT))
+	@# the lowering itself: sx_lget/sx_idx with the expression as the second
+	@# argument, in a value, in a condition, in a for bound and in a typed body
+	@grep -q -F 'sx_lget(xs,i - 1.0)' $(TESTS)/gixe_gen2.c || { echo "[FAIL] no arithmetic list index in a value position"; exit 1; }
+	@grep -q -F 'if (sx_lget(xs,i - 1.0) == 20.0)' $(TESTS)/gixe_gen2.c || { echo "[FAIL] no arithmetic list index in a condition"; exit 1; }
+	@grep -q -F 'for (k = 0.0; k < sx_lget(xs,0.0) / 5.0' $(TESTS)/gixe_gen2.c || { echo "[FAIL] no list index in a for bound"; exit 1; }
+	@grep -q -F 'if (sx_lget(ys,z) < sx_lget(ys,z - 1.0))' $(TESTS)/gixe_gen2.c || { echo "[FAIL] no index pair inside a typed function condition"; exit 1; }
+	@grep -q -F 'sx_idx(s,i)' $(TESTS)/gixe_gen2.c || { echo "[FAIL] no string index lowering"; exit 1; }
+	@if grep -q -F 'xs[i' $(TESTS)/gixe_gen2.c; then echo "[FAIL] an index was copied into the C verbatim"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/gen2_index_expr_test.sa $(TESTS)/gixe_native || exit 1; \
+	  ./$(TESTS)/gixe_native > $(TESTS)/gixe_native.out || exit 1; \
+	  ./$(TESTS)/gixe_seed > $(TESTS)/gixe_seed.out || exit 1; \
+	  cmp $(TESTS)/gixe_seed.out $(TESTS)/gixe_native.out || { echo "[FAIL] native index expressions differ from seed-min"; exit 1; }; \
+	  echo '[OK] native index-expression parity (values, conditions, for bounds, typed bodies)'; \
+	else echo '[SKIP] native index-expression parity: native_aot not built'; fi
+	@# ---- refusals: a clear diagnostic plus a #error, never invalid C --------
+	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nshow xs[i %% 2]\n' > $(TESTS)/gixe_bad_mod.sa
+	@printf 'hold xs = [1, 2, 3]\nmake pick(v: list) -> num {\n  give v[0]\n}\nshow xs[pick(xs)]\n' > $(TESTS)/gixe_bad_call.sa
+	@printf 'hold xs = [1, 2, 3]\nshow xs[1, 2]\n' > $(TESTS)/gixe_bad_comma.sa
+	@printf 'hold xs = [1, 2, 3]\nshow xs["a"]\n' > $(TESTS)/gixe_bad_quote.sa
+	@printf 'hold xs = [1, 2, 3]\nshow xs[]\n' > $(TESTS)/gixe_bad_empty.sa
+	@printf 'hold xs = [1, 2, 3]\nhold i = 1\nshow xs[(i]\n' > $(TESTS)/gixe_bad_unbal.sa
+	@printf 'hold xs = [1, 2, 3]\nhold i = 1\nshow xs[i +]\n' > $(TESTS)/gixe_bad_trailop.sa
+	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nwhen xs[i %% 2] > 0 {\n  show 1\n}\n' > $(TESTS)/gixe_bad_condmod.sa
+	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nfor k in 0..xs[i %% 2] {\n  show k\n}\n' > $(TESTS)/gixe_bad_boundmod.sa
+	@for t in mod call comma quote empty unbal trailop condmod boundmod; do \
+	  ./$(GEN2) $(TESTS)/gixe_bad_$$t.sa $(TESTS)/gixe_bad_$$t.c > $(TESTS)/gixe_bad_$$t.msg 2>&1; \
+	  grep -q '#error sayanox-min:' $(TESTS)/gixe_bad_$$t.c || { echo "[FAIL] gixe_bad_$$t: the generated C has no #error"; exit 1; }; \
+	  grep -q '^min: ' $(TESTS)/gixe_bad_$$t.msg || { echo "[FAIL] gixe_bad_$$t: no 'min:' diagnostic"; cat $(TESTS)/gixe_bad_$$t.msg; exit 1; }; \
+	  echo "  refused $$t: $$(grep -m1 '^min: ' $(TESTS)/gixe_bad_$$t.msg | cut -c1-88)"; \
+	done
+	@# ---- a negative index wraps on seed-min and gen2; native refuses it -----
+	@printf 'hold xs = [10, 20, 30, 40]\nshow xs[-1]\nshow xs[-2]\n' > $(TESTS)/gixe_neg.sa
+	./$(SEED_MIN_BIN) $(TESTS)/gixe_neg.sa > $(TESTS)/gixe_neg_seed.c
+	$(CC) -O2 -o $(TESTS)/gixe_neg_seed $(TESTS)/gixe_neg_seed.c
+	$(call assert-out,./$(TESTS)/gixe_neg_seed,40\n30)
+	./$(GEN2) $(TESTS)/gixe_neg.sa $(TESTS)/gixe_neg_gen2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/gixe_neg_gen2 $(TESTS)/gixe_neg_gen2.c
+	$(call assert-out,./$(TESTS)/gixe_neg_gen2,40\n30)
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gixe_neg.sa $(TESTS)/gixe_neg_nat >/dev/null 2>&1 && ./$(TESTS)/gixe_neg_nat >/dev/null 2>&1; then \
+	    echo "[FAIL] native accepted a negative index (documented as refused)"; exit 1; \
+	  fi; \
+	  echo '[OK] native refuses a negative index, as documented'; \
+	fi
+	@echo '[OK] gen2 index expressions: arithmetic/field indexes in values, conditions, for bounds and typed bodies (39 values identical on seed-min, gen2 and native); 9 unsupported index forms refused with a clear diagnostic and a #error'
+test-stage2: test-gen2-index-expr
+test-for-str: test-gen2-index-expr
+test-gen2-gaps: test-gen2-index-expr
+native-test: test-gen2-index-expr
+
+# ---------------------------------------------------------------------------
+# test-gen2-expr-lowering: the two gen2 expression gaps that were still
+# recorded as divergences in docs/STATUS.md, now closed in the self-hosted
+# compiler source (selfhost/compiler_min.sa).
+#
+#   * A `give`, a `when`/`while` condition and a parenthesized expression
+#     copied a bare `+` into the C, so `give "hi " + n` became
+#     `return "hi " + n;` and cc reported "invalid operands to binary + (have
+#     'char *' and 'char *')". The expression rewriter now joins two strings
+#     through sx_cat -- nesting for a chain, keeping the escapes of a literal,
+#     and accepting a call such as concat(p, q) as an operand -- exactly as the
+#     value-position parser already did. A `+` with one string side and one
+#     numeric side is refused with the same sentence the value parser uses,
+#     and `%` with a string operand is refused too; neither becomes C that
+#     only fails at cc time.
+#   * `len(NAME)` and a nested `NAME[IDX]` inside `[ ]` were refused in a value
+#     position and copied verbatim into the C in a condition and in a for
+#     bound, where cc reported "array subscript is not an integer". The new
+#     helper idx_lower lowers both -- sx_llen/sx_len and sx_lget/sx_idx, chosen
+#     by the declaration tables -- in a value, in a chain operand, in a
+#     condition, in a for bound and inside a typed function body.
+#
+# Fixtures selfhost/gen2_str_cat_test.sa (11 values) and
+# selfhost/gen2_index_call_test.sa (18 values): seed-min, gen2 and native must
+# print identical bytes, and both must match the hand-computed expectation.
+#
+# Still refused by gen2, each pinned by the error loop below: `%` inside an
+# index, a call other than len() inside an index (`xs[pick(xs)]`, which
+# seed-min and native do accept -- a documented divergence), a quoted string
+# inside an index, unbalanced brackets, a `+` with one string side and `%`
+# with a string operand.
+# ---------------------------------------------------------------------------
+.PHONY: test-gen2-expr-lowering
+GSC_WANT := hi bob\nsay "hi" kim\nLR\nxabcy\nabc!\npq/p\n[L-R]\n1\n2\nhi abc\nstr-cat-done
+GIC_WANT := 40\n30\n20\n40\n102\n101\n40\n70\n100\n101\n0\n1\n2\n1\n40\n2\n102\nindex-call-done
+test-gen2-expr-lowering: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@# ---- a string chain in a give: 11 values, identical on all three ------
+	./$(SEED_MIN_BIN) selfhost/gen2_str_cat_test.sa > $(TESTS)/gsc_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gsc_seed $(TESTS)/gsc_seed.c
+	./$(GEN2) selfhost/gen2_str_cat_test.sa $(TESTS)/gsc_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gsc_gen2 $(TESTS)/gsc_gen2.c
+	$(call assert-out,./$(TESTS)/gsc_seed,$(GSC_WANT))
+	$(call assert-out,./$(TESTS)/gsc_gen2,$(GSC_WANT))
+	@# the lowering itself, in the generated C
+	@grep -q -F 'return sx_cat("hi " , n);' $(TESTS)/gsc_gen2.c || { echo "[FAIL] a give did not join a literal and a name through sx_cat"; exit 1; }
+	@grep -q -F 'return sx_cat(sx_cat("x" , n) , "y");' $(TESTS)/gsc_gen2.c || { echo "[FAIL] a three-part string chain in a give was not nested through sx_cat"; exit 1; }
+	@grep -q -F 'return sx_cat(n , "!");' $(TESTS)/gsc_gen2.c || { echo "[FAIL] a give with the literal on the right was not lowered"; exit 1; }
+	@grep -q -F 'return sx_cat(sx_cat(sx_cat(p, q) , "/") , p);' $(TESTS)/gsc_gen2.c || { echo "[FAIL] a call operand in a give string chain was not lowered"; exit 1; }
+	@grep -q -F 'char *j = sx_cat(sx_cat(a, "-"), b);' $(TESTS)/gsc_gen2.c || { echo "[FAIL] the value-position string chain changed"; exit 1; }
+	@if grep -n '" + n' $(TESTS)/gsc_gen2.c; then echo "[FAIL] a bare + between two strings reached the generated C"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/gen2_str_cat_test.sa $(TESTS)/gsc_native || exit 1; \
+	  ./$(TESTS)/gsc_native > $(TESTS)/gsc_native.out || exit 1; \
+	  ./$(TESTS)/gsc_seed > $(TESTS)/gsc_seed.out || exit 1; \
+	  cmp $(TESTS)/gsc_seed.out $(TESTS)/gsc_native.out || { echo "[FAIL] native string-chain output differs from seed-min"; exit 1; }; \
+	  echo '[OK] native parity for a string chain in a give'; \
+	else echo '[SKIP] native string-chain parity: native_aot not built'; fi
+	@# ---- len() and a nested index inside [ ]: 18 values, all three ---------
+	./$(SEED_MIN_BIN) selfhost/gen2_index_call_test.sa > $(TESTS)/gic_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gic_seed $(TESTS)/gic_seed.c
+	./$(GEN2) selfhost/gen2_index_call_test.sa $(TESTS)/gic_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gic_gen2 $(TESTS)/gic_gen2.c
+	$(call assert-out,./$(TESTS)/gic_seed,$(GIC_WANT))
+	$(call assert-out,./$(TESTS)/gic_gen2,$(GIC_WANT))
+	@# the lowering itself: sx_llen/sx_len for len(), sx_lget/sx_idx for a
+	@# nested index, in a value, in a condition, in a for bound and in a body
+	@grep -q -F 'sx_lget(xs,sx_llen(xs) - 1.0)' $(TESTS)/gic_gen2.c || { echo "[FAIL] len() inside a list index was not lowered"; exit 1; }
+	@grep -q -F 'sx_idx(s,sx_len(s) - 1.0)' $(TESTS)/gic_gen2.c || { echo "[FAIL] len() inside a string index was not lowered"; exit 1; }
+	@grep -q -F 'sx_lget(xs,sx_lget(ys,0.0))' $(TESTS)/gic_gen2.c || { echo "[FAIL] a nested list index was not lowered"; exit 1; }
+	@grep -q -F 'if (sx_lget(xs,sx_llen(xs) - 1.0) > 39.0)' $(TESTS)/gic_gen2.c || { echo "[FAIL] len() inside an index in a condition was not lowered"; exit 1; }
+	@grep -q -F 'for (k = 0.0; k < sx_lget(ys,sx_llen(ys) - 1.0)' $(TESTS)/gic_gen2.c || { echo "[FAIL] a nested index in a for bound was not lowered"; exit 1; }
+	@grep -q -F 'return sx_lget(v,sx_llen(v) - 1.0);' $(TESTS)/gic_gen2.c || { echo "[FAIL] len() inside an index in a typed body was not lowered"; exit 1; }
+	@grep -q -F 'return sx_idx(t,sx_len(t) - 1.0);' $(TESTS)/gic_gen2.c || { echo "[FAIL] a string index in a typed body was not lowered"; exit 1; }
+	@if grep -n 'xs\[' $(TESTS)/gic_gen2.c; then echo "[FAIL] an index was copied into the C verbatim"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/gen2_index_call_test.sa $(TESTS)/gic_native || exit 1; \
+	  ./$(TESTS)/gic_native > $(TESTS)/gic_native.out || exit 1; \
+	  ./$(TESTS)/gic_seed > $(TESTS)/gic_seed.out || exit 1; \
+	  cmp $(TESTS)/gic_seed.out $(TESTS)/gic_native.out || { echo "[FAIL] native index-call output differs from seed-min"; exit 1; }; \
+	  echo '[OK] native parity for len() and a nested index inside [ ]'; \
+	else echo '[SKIP] native index-call parity: native_aot not built'; fi
+	@# ---- refusals: a clear diagnostic plus a #error, never invalid C -------
+	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nshow xs[i %% 2]\n' > $(TESTS)/gel_bad_mod.sa
+	@printf 'hold xs = [1, 2, 3]\nmake pick(v: list) -> num {\n  give v[0]\n}\nshow xs[pick(xs)]\n' > $(TESTS)/gel_bad_call.sa
+	@printf 'hold xs = [1, 2, 3]\nshow xs["a"]\n' > $(TESTS)/gel_bad_quote.sa
+	@printf 'hold xs = [1, 2, 3]\nhold ys = [0]\nshow xs[ys[0]\n' > $(TESTS)/gel_bad_unbal.sa
+	@printf 'make bad(x: str, v: num) -> str {\n  give "v=" + v\n}\nshow bad("q", 3)\n' > $(TESTS)/gel_bad_mix.sa
+	@printf 'make bad2(x: num, s: str) -> num {\n  give x %% s\n}\nshow bad2(4, "ab")\n' > $(TESTS)/gel_bad_pctstr.sa
+	@for t in mod call quote unbal mix pctstr; do \
+	  ./$(GEN2) $(TESTS)/gel_bad_$$t.sa $(TESTS)/gel_bad_$$t.c > $(TESTS)/gel_bad_$$t.msg 2>&1; \
+	  grep -q '#error sayanox-min:' $(TESTS)/gel_bad_$$t.c || { echo "[FAIL] gel_bad_$$t: the generated C has no #error"; exit 1; }; \
+	  grep -q '^min: ' $(TESTS)/gel_bad_$$t.msg || { echo "[FAIL] gel_bad_$$t: no 'min:' diagnostic"; cat $(TESTS)/gel_bad_$$t.msg; exit 1; }; \
+	  echo "  refused $$t: $$(grep -m1 '^min: ' $(TESTS)/gel_bad_$$t.msg | cut -c1-92)"; \
+	done
+	@# seed-min refuses a mixed + and a % on a string; native refuses the %
+	@if ./$(SEED_MIN_BIN) $(TESTS)/gel_bad_mix.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted a string + a number in a give"; exit 1; fi
+	@if ./$(SEED_MIN_BIN) $(TESTS)/gel_bad_pctstr.sa >/dev/null 2>&1; then echo "[FAIL] seed-min accepted %% with a string operand"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/gel_bad_pctstr.sa $(TESTS)/gel_bad_pctstr_nat >/dev/null 2>&1; then echo "[FAIL] native accepted %% with a string operand"; exit 1; fi; \
+	  echo '[OK] seed-min and native refuse the mixed operands too'; \
+	fi
+	@echo '[OK] gen2 expression lowering: a string chain in a give/condition (11 values) and len()/a nested index inside [ ] in every position (18 values), identical on seed-min, gen2 and native; 6 unsupported forms refused with a clear diagnostic and a #error'
+test-stage2: test-gen2-expr-lowering
+native-test: test-gen2-expr-lowering
+
 test-parity:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
 	@test -x $(SEED_MIN_BIN) || (echo "need seed-min"; exit 1)
@@ -1972,7 +2860,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-http-get test-sayacrawl test-gc
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-http-get test-sayacrawl test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -2170,7 +3058,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
 	@echo "[OK] native rejects (clearly): give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
-	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str
+	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-native-emit-split test-native-ir-log
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
 	@# string ordering on native (hand-computed; gen2/seed-min leg in test-native-strord)
 	./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/nso_nat_gate
@@ -2371,12 +3259,19 @@ test-seed-limits: $(SEED_MIN_BIN)
 	  if ./$(SEED_MIN_BIN) $(TESTS)/seed_generic_bad.sa >/dev/null 2>$(TESTS)/seed_generic_bad.err; then echo '[FAIL] seed accepted generics'; exit 1; fi; \
 	  grep -q 'seed-min.*\(generic\|type parameter\)' $(TESTS)/seed_generic_bad.err || exit 1; \
 	done
-	@for text in 'hold xs = [1]\nfor x in xs() { show x }' 'hold xs = [1]\nfor xs in xs { show xs }' 'hold n = 1\nfor x in n { show x }' 'hold n = 1\nhold s = "ab"\nfor n in s { show n }' 'make f() { hold xs = [1]\nfor x in xs { show x }\ngive 0 }'; do \
+	@for text in 'hold xs = [1]\nfor x in xs() { show x }' 'hold xs = [1]\nfor xs in xs { show xs }' 'hold n = 1\nfor x in n { show x }' 'hold n = 1\nhold s = "ab"\nfor n in s { show n }'; do \
 	  printf '%b\n' "$$text" > $(TESTS)/seed_for_limit.sa; \
 	  if ./$(SEED_MIN_BIN) $(TESTS)/seed_for_limit.sa >/dev/null 2>$(TESTS)/seed_for_limit.err; then echo '[FAIL] seed accepted unsafe iteration'; exit 1; fi; \
 	  grep -q 'seed-min for' $(TESTS)/seed_for_limit.err || exit 1; \
 	done
-	@echo '[OK] seed limits: invalid generic signatures and unsupported for diagnostics'
+	@# `for` over a body-local list inside a legacy untyped make used to be one of
+	@# the refusals above. It is implemented now (see test-seed-for-untyped), so the
+	@# obsolete refusal is replaced by an exact-output check.
+	@printf 'make f() {\n  hold xs = [1, 2]\n  for x in xs {\n    show x\n  }\n  give 0\n}\nhold r = f()\nshow r\n' > $(TESTS)/seed_for_body.sa
+	./$(SEED_MIN_BIN) $(TESTS)/seed_for_body.sa > $(TESTS)/seed_for_body.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/seed_for_body $(TESTS)/seed_for_body.c
+	$(call assert-out,./$(TESTS)/seed_for_body,1\n2\n0)
+	@echo '[OK] seed limits: invalid generic signatures, unsupported for diagnostics, body-local for accepted'
 test-generics: test-seed-limits
 test-stage2: test-seed-limits
 
@@ -2518,6 +3413,97 @@ test-seed-for-calls: $(GEN2) $(SEED_MIN_BIN)
 	@echo '[OK] seed call-source for: checked builtins and zero-argument producers, capture once, local isolation, empty/nested loops, errors; gen2 parity'
 test-stage2: test-seed-for-calls
 test-for-str: test-seed-for-calls
+
+# ---------------------------------------------------------------------------
+# test-seed-for-untyped: `for` inside a LEGACY UNTYPED make body. Seed-min used
+# to refuse every for inside an untyped make ("requires a fully typed
+# signature"), while gen2 and native already ran body-local lists/strings,
+# literals, ranges and call sources. Seed-min now runs the same forms: every
+# body has an isolated scope, so the binder is a C local of that body and
+# recursion is safe. A body still cannot capture a top-level hold name -- that
+# is a clear diagnostic in seed-min and gen2 instead of the C compiler's
+# "undeclared identifier". Fixture: selfhost/seed_for_untyped_test.sa.
+# ---------------------------------------------------------------------------
+.PHONY: test-seed-for-untyped
+SFU_WANT := 6\na\nb\nc\nx\ny\n7\n8\n9\n0\n1\n2\n3\n12\na\nb\nc\nd\n0\n2\n4\n6\n0\nuntyped-for-done
+test-seed-for-untyped: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_for_untyped_test.sa > $(TESTS)/for_untyped_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/for_untyped_seed $(TESTS)/for_untyped_seed.c
+	./$(GEN2) selfhost/seed_for_untyped_test.sa $(TESTS)/for_untyped_gen2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/for_untyped_gen2 $(TESTS)/for_untyped_gen2.c
+	$(call assert-out,./$(TESTS)/for_untyped_seed,$(SFU_WANT))
+	$(call assert-out,./$(TESTS)/for_untyped_gen2,$(SFU_WANT))
+	@for text in 'hold g = [1]\nmake f() {\n  for v in g {\n    show v\n  }\n  give 0\n}' 'hold g = 5\nmake f() {\n  show g\n  give 0\n}' 'make f(a) {\n  for c in a {\n    show c\n  }\n  give 0\n}' 'make f() {\n  for v in missing {\n    show v\n  }\n  give 0\n}' 'make f() {\n  for i in 0.."x" {\n    show i\n  }\n  give 0\n}' 'make f() {\n  hold xs = [1]\n  for xs in xs {\n    show xs\n  }\n  give 0\n}' 'make f() {\n  for c in chr("x") {\n    show c\n  }\n  give 0\n}' 'make f() {\n  hold x = nosuch(1)\n  give x\n}' 'hold a = nosuch()' 'hold a = gc()'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/for_untyped_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/for_untyped_bad.sa >/dev/null 2>$(TESTS)/for_untyped_bad.err; then echo "[FAIL] seed accepted an invalid untyped-make for: $$text"; exit 1; fi; \
+	  grep -q 'seed_min:' $(TESTS)/for_untyped_bad.err || { echo "[FAIL] no diagnostic for $$text"; exit 1; }; \
+	done
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/seed_for_untyped_test.sa $(TESTS)/for_untyped_native || exit 1; \
+	  ./$(TESTS)/for_untyped_native > $(TESTS)/for_untyped_native.out || exit 1; \
+	  ./$(TESTS)/for_untyped_seed > $(TESTS)/for_untyped_seed.out || exit 1; \
+	  cmp $(TESTS)/for_untyped_seed.out $(TESTS)/for_untyped_native.out || { echo "[FAIL] native untyped-make for differs"; exit 1; }; \
+	  echo '[OK] native untyped-make for parity'; \
+	else echo '[SKIP] native untyped-make for parity: native_aot not built'; fi
+	@echo '[OK] seed for inside untyped make: body-local list/string, literals, ranges, call sources, nesting, break/continue, binder reuse, recursion; global capture refused; gen2 parity'
+test-stage2: test-seed-for-untyped
+test-for-str: test-seed-for-untyped
+native-test: test-seed-for-untyped
+
+# ---------------------------------------------------------------------------
+# test-seed-for-fields: a struct FIELD (or a nested field chain) that holds a
+# string is a for source, captured once per loop entry -- seed-min now matches
+# gen2 and native. Two gen2 defects found while writing this gate are fixed by
+# the same pass and are covered here:
+#   * a string for-source over a field emitted sx_len/sx_idx/sx_chr without
+#     setting the "full runtime preamble" flag, so the generated C did not link
+#     (implicit declaration of sx_len);
+#   * struct typedefs were emitted AFTER the function bodies, so a struct local
+#     inside a make body was an "unknown type name" in the generated C.
+# A numeric field is accepted as a range bound (for i in p.count..4).
+# Fixture: selfhost/seed_for_fields_test.sa.
+# ---------------------------------------------------------------------------
+.PHONY: test-seed-for-fields
+SFF_WANT := a\nb\nx\ny\n7\np\nq\nz\n0\na\nc\n2\n2\nm\nn\n2\n2\n3\nfields-done
+test-seed-for-fields: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_for_fields_test.sa > $(TESTS)/for_fields_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/for_fields_seed $(TESTS)/for_fields_seed.c
+	./$(GEN2) selfhost/seed_for_fields_test.sa $(TESTS)/for_fields_gen2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/for_fields_gen2 $(TESTS)/for_fields_gen2.c
+	$(call assert-out,./$(TESTS)/for_fields_seed,$(SFF_WANT))
+	$(call assert-out,./$(TESTS)/for_fields_gen2,$(SFF_WANT))
+	@# the two gen2 defects above must stay fixed: the generated C has to define
+	@# every helper it calls, and a struct typedef has to precede the bodies
+	@grep -q 'static double sx_len' $(TESTS)/for_fields_gen2.c || { echo "[FAIL] gen2 emitted sx_len() calls without the sx_len definition"; exit 1; }
+	@# a struct local inside a make body: the typedef must come first
+	@printf 'struct P {\n  x,\n  y\n}\nmake f() {\n  hold p = P { x: 3, y: 4 }\n  show p.x + p.y\n  give 0\n}\nhold r = f()\n' > $(TESTS)/for_fields_struct_fn.sa
+	./$(GEN2) $(TESTS)/for_fields_struct_fn.sa $(TESTS)/for_fields_struct_fn.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/for_fields_struct_fn $(TESTS)/for_fields_struct_fn.c
+	$(call assert-out,./$(TESTS)/for_fields_struct_fn,7)
+	./$(SEED_MIN_BIN) $(TESTS)/for_fields_struct_fn.sa > $(TESTS)/for_fields_struct_fn_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/for_fields_struct_fn_seed $(TESTS)/for_fields_struct_fn_seed.c
+	$(call assert-out,./$(TESTS)/for_fields_struct_fn_seed,7)
+	@for text in 'struct P {\n  name\n}\nhold p = P { name: "ab" }\nfor c in p.missing {\n  show c\n}' 'struct P {\n  x\n}\nhold p = P { x: 3 }\nfor c in p.x {\n  show c\n}' 'hold n = 3\nfor c in n.x {\n  show c\n}' 'struct Q {\n  n\n}\nstruct P {\n  q\n}\nhold p = P { q: Q { n: "x" } }\nfor c in p.q {\n  show c\n}' 'struct P {\n  name\n}\nhold p = P { name: "ab" }\nfor c in p.name[0] {\n  show c\n}' 'struct P {\n  name\n}\nhold p = P { name: "ab" }\nfor i in p.name..3 {\n  show i\n}'; do \
+	  printf '%b\n' "$$text" > $(TESTS)/for_fields_bad.sa; \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/for_fields_bad.sa >/dev/null 2>$(TESTS)/for_fields_bad.err; then echo "[FAIL] seed accepted an invalid field source: $$text"; exit 1; fi; \
+	  grep -q 'seed_min:' $(TESTS)/for_fields_bad.err || { echo "[FAIL] no diagnostic for $$text"; exit 1; }; \
+	done
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/seed_for_fields_test.sa $(TESTS)/for_fields_native || exit 1; \
+	  ./$(TESTS)/for_fields_native > $(TESTS)/for_fields_native.out || exit 1; \
+	  ./$(TESTS)/for_fields_seed > $(TESTS)/for_fields_seed.out || exit 1; \
+	  cmp $(TESTS)/for_fields_seed.out $(TESTS)/for_fields_native.out || { echo "[FAIL] native field-source for differs"; exit 1; }; \
+	  ./$(NATIVE_BIN) $(TESTS)/for_fields_struct_fn.sa $(TESTS)/for_fields_struct_fn_native || exit 1; \
+	  __got=$$(./$(TESTS)/for_fields_struct_fn_native) || exit 1; \
+	  [ "$$__got" = "7" ] || { echo "[FAIL] native struct local in a body printed $$__got, want 7"; exit 1; }; \
+	  echo '[OK] native field-source for parity'; \
+	else echo '[SKIP] native field-source for parity: native_aot not built'; fi
+	@echo '[OK] seed for over struct fields: 1/2/3-level chains, empty field, break/continue, UTF-8 bytes, body-local struct, numeric field range bound; gen2 + native parity'
+test-stage2: test-seed-for-fields
+test-for-str: test-seed-for-fields
+native-test: test-seed-for-fields
 
 .PHONY: test-seed-typed-functions
 STP_WANT := keep\nkeep!\nkeep\nb\na!\nxyxyxy\n3\n10\nkeep+\nkeep\n3\n4\nz\n+\ntyped-done

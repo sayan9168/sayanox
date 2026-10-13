@@ -22,14 +22,79 @@ The active native backend emits Linux x86-64 machine code directly. `docs/CRANEL
 
 ## Current IR boundary
 
-`selfhost/native_aot.c` has a lightweight internal representation through `parse_prim`, `parse_term`, `parse_expr`, `estmt`, and `eblk`. It is not a public SSA or Cranelift-style IR.
+There is no IR in the SSA sense, and no intermediate program representation at
+all: `selfhost/native_aot.c` is a single-pass compiler whose recursive-descent
+parser emits machine code as it walks the source. The five functions this
+section used to name — `parse_prim`, `parse_term`, `parse_expr`, `estmt`,
+`eblk` — do not exist in the file (corrected 2026-10-13). The emit tree is
+`emit_prim` → `emit_post` → `emit_term` → `emit_rel` → `emit_expr`, driven by
+`emit_prog` (statements) and `emit_fn` (function bodies). Kind inference is a
+separate earlier pass (`phase 2`, no codegen), so an expression's operand kinds
+are known before any byte is written, but nothing is materialised as a tree or
+an instruction list.
 
 The two compilation paths are:
 
-- **Native:** `.sa -> internal expression/statement representation -> x86-64 ELF`
-- **C fallback:** `.sa -> generated .c -> clang -> executable`
+- **Native:** `.sa -> phases (use expansion, statement skipping, definition
+  collection, kind inference) -> emit tree -> x86-64 machine code -> ELF`
+- **C fallback:** `.sa -> generated .c -> cc -> executable`
 
 No generated `.c` is required by the native backend.
+
+## The emit seam (2026-10-13)
+
+A second target would not be a new file, and none is claimed: `native_aot.c`
+parses and emits in the same walk. What exists now is a **seam** — the
+machine-specific half of the file is delimited and named, and the language half
+provably does not touch it. `make test-native-emit-split` (part of
+`native-test`) asserts every row of this table:
+
+| Region | Where | What it is |
+|---|---|---|
+| `==== x86-64 mini encoder ====` | above `phase 1: collect definitions` | the only code that writes bytes: `e1`/`e32`/`e64`, `here()`, `erel32`/`erel32j`, `patch_imm32`, `jmp5_slot`, `sub_rsp_imm32_slot`, `leave_ret`, the instruction helpers (`mv_m64`, `mv_r64m`, `mv_rr`, `lea_rm`, `mov_imm64`, `mov_imm8m`, `push_r`, `pop_r`, `sse_rr`, `call_p`, `emit_d2i`, `emit_i2d`, `movq_xr`, `movq_rx`, `cvttsd2si`, `cvtsi2sd`, `rexb`, `emit_modrm`) and the `jl_*` label lists |
+| phases 1–2 | | `use` expansion, statement skipping, definition collection, kind inference — no codegen |
+| `EMIT-SEAM-BEGIN` … `EMIT-SEAM-END` | 1332 lines | the language-level emitter: the emit tree, statement/block/function emission, conditions and loops. No `e1(`/`e32(`/`e64(`, no `memcpy` into `code`, and no direct read of the code cursor `cn`; label positions come from `here()` |
+| phase 4, collector, ELF | below `EMIT-SEAM-END` | the runtime stubs (number formatting, list and string builtins, file and http syscalls), the mark & sweep collector and the ELF container — machine code by nature |
+
+A replacement backend supplies the encoder region, the phase-4 stubs, the
+collector and the container, and reuses the parser, the phases and the emit tree
+unchanged. It also inherits two contracts the emit tree assumes, which are the
+honest reason this is a seam and not a portable IR: the System V AMD64 calling
+convention (`rax`/`xmm0` returns, the frame that `sub_rsp_imm32_slot` opens and
+`leave_ret` closes) and the collector's block layout (`BH_HDR`, the `BK_*`
+kinds).
+
+Before the seam, the emit tree wrote six byte sequences itself — the function
+prologue and its later immediate patch, `leave; ret` twice, a `jmp rel32` slot,
+and a hand-rolled rel32 patch that duplicated `erel32j` — and read `cn` in 28
+places. Those are now named primitives. The refactor was verified byte for byte:
+`native_strord_test`, `native_cond_test`, `stdlib_growth_test`,
+`examples/native_hello`, `gen2_index_expr_test` and `generic_struct_concrete`
+all emit executables that `cmp` clean against the binaries produced by the
+pre-seam `native_aot`, and the build lost its last warning (a `return <value>`
+inside the void `emit_prim`; the identical line inside the int-returning
+`pk_prim` was deliberately left alone).
+
+### The instruction list, recorded
+
+The seam says *how* the emitter reaches the machine; `SX_EMIT_LOG` says *what it
+asks for*. With `SX_EMIT_LOG=/tmp/x.log` in the environment every encoder
+primitive writes one line — the code offset, the mnemonic and the operands in
+assembly order — plus a `;` line for each label slot, each fixup, each emitted
+`make` and each phase:
+
+```sh
+SX_EMIT_LOG=/tmp/hello.log ./selfhost/native_aot examples/native_hello.sa /tmp/hello
+```
+
+That file is the instruction list the emit tree produces, and it is the concrete
+thing a second backend is written against. The recorder only reads the
+primitives' arguments, so the emitted ELF is byte-identical with and without it.
+`make test-native-ir-log` (part of `native-test`) pins the list for
+`selfhost/native_ir_log_test.sa` and cmp's both binaries;
+[NATIVE_IR.md](NATIVE_IR.md) documents the format, the value model it exposes
+and what the recorder is *not* — there is still one emitter of machine code here,
+not two.
 
 ## Build and run
 

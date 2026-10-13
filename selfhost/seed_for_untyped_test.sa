@@ -1,0 +1,99 @@
+// `for` inside a legacy UNTYPED make body: every source form the typed
+// producers already accept, plus recursion. seed-min, gen2 and native must
+// print the same bytes (make test-seed-for-untyped).
+//
+// A body still cannot capture a top-level hold name -- that is a clear error
+// in seed-min and gen2 (native keeps its global data area), so every source
+// below is a body local, a literal, a range or a call.
+make walk_locals() {
+  hold xs = [1, 2, 3]
+  hold total = 0
+  for v in xs {
+    total = total + v
+  }
+  show total
+  hold s = "abc"
+  for c in s {
+    show c
+  }
+  give 0
+}
+make walk_literals() {
+  for c in "xy" {
+    show c
+  }
+  for v in [7, 8, 9] {
+    show v
+  }
+  for i in 0..3 {
+    show i
+  }
+  give 0
+}
+// break skips the rest of the body, continue skips to the next entry
+make counted(n) {
+  hold seen = 0
+  for i in 0..n {
+    when i == 2 {
+      continue
+    }
+    when i == 4 {
+      break
+    }
+    seen = seen + 1
+  }
+  give seen
+}
+make nested(n) {
+  hold total = 0
+  for i in 0..n {
+    for c in "ab" {
+      total = total + i + len(c)
+    }
+  }
+  give total
+}
+// two sequential loops may reuse one binder name
+make repeat_name() {
+  for c in "ab" {
+    show c
+  }
+  for c in "cd" {
+    show c
+  }
+  give 0
+}
+make producer() -> list {
+  hold out = []
+  for i in 0..3 {
+    push(out, i * 2)
+  }
+  give out
+}
+// an untyped body iterating a typed producer's list result
+make consumer() {
+  for v in producer() {
+    show v
+  }
+  give 0
+}
+// the binder and the accumulator are per-call: recursion must not share them
+make deep(k) {
+  hold sum = 0
+  for i in 0..k {
+    sum = sum + i
+    when k > 1 {
+      sum = sum + deep(k - 1)
+    }
+  }
+  give sum
+}
+hold r1 = walk_locals()
+hold r2 = walk_literals()
+show counted(6)
+show nested(3)
+hold r3 = repeat_name()
+hold r4 = consumer()
+show deep(3)
+show r1 + r2 + r3 + r4
+show "untyped-for-done"

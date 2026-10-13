@@ -1,5 +1,6 @@
 /* Sayanox C runtime (SXRT) — shared by seed-generated and compiler-generated
- * programs. See docs/MEMORY.md for the authoritative ownership model.
+ * programs. See docs/GC.md for the authoritative ownership model (there is no
+ * docs/MEMORY.md; this header used to point at it).
  *
  * Value representation: every Sayanox value is a C `double`.
  *   num  : IEEE double, printed with %g semantics via sx_num_to_str
@@ -29,6 +30,13 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+/* <stdarg.h> is required by the seed-generated preamble itself: sx_lit_list is
+ * a variadic helper (va_list/va_start/va_arg/va_end) emitted into every file
+ * sxc_seed writes. It used to be missing here, so the generated C only built
+ * with `cc -include stdarg.h` -- a workaround tools/test-http-get.sh carried.
+ * With GCC 14's default -Werror=implicit-function-declaration the generated
+ * file did not build at all without it. */
+#include <stdarg.h>
 #include <math.h>
 #include <time.h>
 

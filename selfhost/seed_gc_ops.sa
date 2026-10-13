@@ -1,0 +1,21 @@
+// Every single-character operator in one program. The full seed lexer used to
+// record an operator token text as the stringified char literal, quotes
+// included, so the emitter matched none of its operator spellings and dropped
+// the operator: show 2 * 3 became sx_show(((double)2LL),((double)3LL))) which
+// does not compile.
+show 2 * 3
+show 2 + 3
+hold a = 5
+show a - 1
+show a / 2
+show a % 3
+when a > 1 {
+  show 9
+} otherwise {
+  show 8
+}
+hold i = 0
+while i < 3 {
+  show i
+  hold i = i + 1
+}

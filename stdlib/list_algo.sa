@@ -1,0 +1,253 @@
+// stdlib/list_algo.sa -- list algorithms on top of list_util.sa's primitives.
+//
+// Supported by seed-min, gen2 and native (make test-stdlib-modules).
+// Signatures are fully typed (`xs: list`, `-> list`), one statement per line,
+// and every helper is defined before the one that calls it -- the same rules
+// str_util.sa documents.
+//
+// Sayanox lists hold numbers only, and the dialect has no in-place element
+// assignment, so every transform below builds and returns a NEW list; the
+// argument is never modified. Names are prefixed `la_` so this file can be
+// spliced next to list_util.sa without a collision.
+
+// Insert v into an already sorted list, keeping it sorted and stable.
+make la_insert_sorted(v: num, xs: list) -> list {
+  hold out = []
+  hold placed = 0
+  hold i = 0
+  while i < len(xs) {
+    hold u = xs[i]
+    when placed == 0 {
+      when v <= u {
+        push(out, v)
+        hold placed = 1
+      }
+    }
+    push(out, u)
+    hold i = i + 1
+  }
+  when placed == 0 {
+    push(out, v)
+  }
+  give out
+}
+
+// Ascending insertion sort. O(n^2) by design: the dialect cannot move an
+// element inside a list, so each step rebuilds the sorted prefix.
+make la_sort(xs: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(xs) {
+    hold v = xs[i]
+    hold out = la_insert_sorted(v, out)
+    hold i = i + 1
+  }
+  give out
+}
+
+// gen2 used to accept only a literal or a plain name inside `[ ]`, so this
+// helper carried the previous element in a variable. Since the 2026-10-13
+// index-expression increment gen2 accepts a numeric expression there
+// (`xs[i - 1]`) and an index inside a `when`/`while` condition, which is what
+// this body now uses -- it is the live stdlib exercise for both features.
+// seed-min, gen2 and native print the same values: `make test-stdlib-modules`
+// and `make test-gen2-index-expr`. See docs/STATUS.md, "Measured divergences".
+make la_sorted(xs: list) -> num {
+  hold i = 1
+  while i < len(xs) {
+    when xs[i] < xs[i - 1] {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// Index of the first element equal to v, or -1.
+make la_index_of(xs: list, v: num) -> num {
+  hold i = 0
+  while i < len(xs) {
+    hold u = xs[i]
+    when u == v {
+      give i
+    }
+    hold i = i + 1
+  }
+  give 0 - 1
+}
+
+make la_append(a: list, b: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(a) {
+    hold v = a[i]
+    push(out, v)
+    hold i = i + 1
+  }
+  hold j = 0
+  while j < len(b) {
+    hold w = b[j]
+    push(out, w)
+    hold j = j + 1
+  }
+  give out
+}
+
+// n elements starting at i; both ends are clamped, so a slice out of range is
+// shorter rather than an error.
+make la_slice(xs: list, i: num, n: num) -> list {
+  hold out = []
+  hold from = i
+  when from < 0 {
+    hold from = 0
+  }
+  hold stop = from + n
+  when stop > len(xs) {
+    hold stop = len(xs)
+  }
+  hold k = from
+  while k < stop {
+    hold v = xs[k]
+    push(out, v)
+    hold k = k + 1
+  }
+  give out
+}
+
+make la_take(xs: list, n: num) -> list {
+  give la_slice(xs, 0, n)
+}
+
+make la_drop(xs: list, n: num) -> list {
+  give la_slice(xs, n, len(xs))
+}
+
+// Running totals: [1, 2, 3] -> [1, 3, 6]
+make la_cumsum(xs: list) -> list {
+  hold out = []
+  hold t = 0
+  hold i = 0
+  while i < len(xs) {
+    hold v = xs[i]
+    hold t = t + v
+    push(out, t)
+    hold i = i + 1
+  }
+  give out
+}
+
+make la_repeat(v: num, n: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < n {
+    push(out, v)
+    hold i = i + 1
+  }
+  give out
+}
+
+make la_scale(xs: list, k: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(xs) {
+    hold v = xs[i]
+    push(out, v * k)
+    hold i = i + 1
+  }
+  give out
+}
+
+make la_offset(xs: list, k: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(xs) {
+    hold v = xs[i]
+    push(out, v + k)
+    hold i = i + 1
+  }
+  give out
+}
+
+// Element-wise sum over the shorter of the two lengths.
+make la_zip_add(a: list, b: list) -> list {
+  hold n = len(a)
+  when len(b) < n {
+    hold n = len(b)
+  }
+  hold out = []
+  hold i = 0
+  while i < n {
+    hold x = a[i]
+    hold y = b[i]
+    push(out, x + y)
+    hold i = i + 1
+  }
+  give out
+}
+
+make la_count_gt(xs: list, v: num) -> num {
+  hold k = 0
+  hold i = 0
+  while i < len(xs) {
+    hold u = xs[i]
+    when u > v {
+      hold k = k + 1
+    }
+    hold i = i + 1
+  }
+  give k
+}
+
+// A copy without index i. An out-of-range i returns a copy of the whole list.
+make la_remove_at(xs: list, i: num) -> list {
+  hold out = []
+  hold k = 0
+  while k < len(xs) {
+    when k != i {
+      hold v = xs[k]
+      push(out, v)
+    }
+    hold k = k + 1
+  }
+  give out
+}
+
+// A copy with v inserted before index i (clamped to the list length).
+make la_insert_at(xs: list, i: num, v: num) -> list {
+  hold out = []
+  hold at = i
+  when at < 0 {
+    hold at = 0
+  }
+  when at > len(xs) {
+    hold at = len(xs)
+  }
+  hold k = 0
+  while k < len(xs) {
+    when k == at {
+      push(out, v)
+    }
+    hold u = xs[k]
+    push(out, u)
+    hold k = k + 1
+  }
+  when at == len(xs) {
+    push(out, v)
+  }
+  give out
+}
+
+// First occurrence of each value, in input order. O(n^2): membership is a
+// linear scan because the dialect has no set type.
+make la_distinct(xs: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(xs) {
+    hold v = xs[i]
+    when la_index_of(out, v) < 0 {
+      push(out, v)
+    }
+    hold i = i + 1
+  }
+  give out
+}

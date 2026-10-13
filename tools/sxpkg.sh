@@ -18,14 +18,49 @@ SXPKG_BIN="$SXPKG_SCRIPT_DIR/sxpkg"
 
 cmd="${1:-help}"; shift 2>/dev/null || true
 
+# ---------------------------------------------------------------------------
+# The network is OPT-IN. The bootstrap is offline by requirement, so a checkout
+# must never reach the network by accident: `sync`, `install` (when it has to
+# fetch) and `fetch` refuse unless the caller says so explicitly, either with
+#
+#   SAYANOX_ONLINE=1 sh tools/sxpkg.sh sync
+#   sh tools/sxpkg.sh --online sync
+#
+# SAYANOX_REGISTRY still decides WHERE a transfer goes; it no longer counts as
+# permission to transfer. A file:// URL or a plain local path is not the
+# network and needs no opt-in -- that is how test-sxpkg-online-local exercises
+# the whole transfer, verify and rollback path without a socket.
+# ---------------------------------------------------------------------------
+ONLINE_OPT_IN="${SAYANOX_ONLINE:-0}"
+if [ "$cmd" = "--online" ]; then
+  ONLINE_OPT_IN=1
+  cmd="${1:-help}"; shift 2>/dev/null || true
+fi
+
+need_online() {
+  no_target="${1:-$ONLINE}"
+  case "$no_target" in
+    file://*|/*|./*) return 0 ;;
+  esac
+  if [ "$ONLINE_OPT_IN" = 1 ]; then return 0; fi
+  echo "sxpkg: refusing to use the network without an explicit opt-in" >&2
+  echo "sxpkg:   target: $no_target" >&2
+  echo "sxpkg: opt in with SAYANOX_ONLINE=1, or 'sxpkg --online <command>'." >&2
+  echo "sxpkg: offline instead: install-local, seed, verify, list, deps, info," >&2
+  echo "sxpkg:   or point SAYANOX_REGISTRY at a local directory (file://...)." >&2
+  return 1
+}
+
 download() {
   url="$1"; dest="$2"; part="$dest.part"
   # Download to a .part file and rename only on success, so an interrupted
   # transfer never leaves a truncated package where a good one should be.
+  # Bounded: a host that accepts the connection and then goes quiet must not
+  # hang a build or a gate. Failures are already non-fatal at every call site.
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$part" || { rm -f "$part"; return 1; }
+    curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$part" || { rm -f "$part"; return 1; }
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$part" "$url" || { rm -f "$part"; return 1; }
+    wget -q --timeout=10 --tries=1 -O "$part" "$url" || { rm -f "$part"; return 1; }
   else
     echo "sxpkg: need curl or wget"; return 1
   fi
@@ -58,6 +93,7 @@ init() {
 }
 
 sync() {
+  need_online || return 1
   mkdir -p "$REG"
   echo "sxpkg: sync from $ONLINE"
   tmp=$(mktemp)
@@ -144,6 +180,9 @@ install() {
     # Fetch only what is absent. A package counts as present only when both
     # files exist: an empty directory left by a failed download is not a copy.
     if [ ! -f "$REG/$n/pkg.meta" ] || [ ! -f "$REG/$n/main.sa" ]; then
+      # Everything locked is already local? Then `install` is an offline copy
+      # and needs no permission. A transfer does.
+      need_online || return 1
       fetched="$fetched $n"
       mkdir -p "$REG/$n"
       download "$ONLINE/$n/pkg.meta" "$REG/$n/pkg.meta" || echo "sxpkg: could not fetch $n/pkg.meta from $ONLINE"
@@ -188,6 +227,9 @@ publish() {
   grep -q "^$name=" "$INDEX" 2>/dev/null || echo "$name=$ver" >> "$INDEX"
   echo "sxpkg: published locally $name $ver"
   echo "sxpkg: to go online, commit registry/$name to the sayanox repo"
+  # `publish` never uploads, with or without an opt-in: going online is a commit
+  # to the repository registry, which is a review step, not a client command.
+  # SAYANOX_ONLINE=1 changes nothing here on purpose.
 }
 
 remove() {
@@ -205,6 +247,7 @@ seed() {
 fetch() {
   url="$1"; name="${2:-remote_pkg}"
   [ -n "$url" ] || { echo "usage: sxpkg fetch <url> [name]"; exit 1; }
+  need_online "$url" || return 1
   mkdir -p "$REG/$name" "$PKGDIR/$name"
   download "$url" "$REG/$name/main.sa"
   printf "name=%s\nversion=0.0.0\nsource=%s\n" "$name" "$url" > "$REG/$name/pkg.meta"
@@ -232,7 +275,9 @@ case "$cmd" in
   help|-h|--help)
      echo "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"
      echo "  ONLINE registry: $ONLINE"
-     echo "  override: SAYANOX_REGISTRY=https://..."
+     echo "  override: SAYANOX_REGISTRY=https://... (or file:///path/to/registry)"
+     echo "  network is opt-in: SAYANOX_ONLINE=1 or 'sxpkg --online <command>'"
+     echo "  offline commands: init add list deps info search seed verify sum install-local publish"
      ;;
   *) echo "sxpkg: unknown command '$cmd'"
      echo "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"

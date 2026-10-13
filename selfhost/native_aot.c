@@ -202,8 +202,145 @@ static size_t d_numbuf; /* 64-byte buffer: `show <number>` formats here, no heap
 static void e1(unsigned char b){ if(cn>=CMAX){fprintf(stderr,"native_aot: code OOM\n");exit(1);} code[cn++]=b; }
 static void e32(uint32_t v){ e1(v); e1(v>>8); e1(v>>16); e1(v>>24); }
 static void e64(uint64_t v){ for(int i=0;i<8;i++) e1((unsigned char)(v>>(8*i))); }
-static void erel32(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+6)); memcpy(code+at+2,&d,4); }
-static void erel32j(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+5)); memcpy(code+at+1,&d,4); } /* for 5-byte jmp */
+/* the instruction-list recorder lives just below; erel32/erel32j already
+   need it, so it is declared here. */
+static void ilog(const char *fmt,...);
+static void ilogc(const char *fmt,...);
+/* names for the two call kinds, defined next to the id tables they name */
+static const char *bname(int i);
+static const char *fname(int i);
+static void erel32(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+6)); ilogc("fixup rel32 [%06zx] -> %06zx (%d)",at,to,d); memcpy(code+at+2,&d,4); }
+static void erel32j(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+5)); ilogc("fixup jmp rel32 [%06zx] -> %06zx (%d)",at,to,d); memcpy(code+at+1,&d,4); } /* for 5-byte jmp */
+
+/* ===== the instruction list (SX_EMIT_LOG=<path>) ==========================
+ * Every encoder primitive below writes one line to that file when the variable
+ * is set: the code offset the instruction starts at, the mnemonic, and its
+ * operands in assembly order.  The recorder only READS the arguments -- it does
+ * not touch `code` or `cn` -- so the emitted binary is byte-identical with and
+ * without it, which `make test-native-ir-log` asserts against the same fixtures
+ * `make test-native-emit-split` uses.
+ *
+ * The log is the instruction list the emit tree produces: it is what a second
+ * backend has to reproduce, and it turns the seam contract in docs/NATIVE.md
+ * from prose into something a test can pin, because the same source always
+ * gives the same instruction list.
+ *
+ * Lines starting with "; " are not instructions.  They are the label slots
+ * (sub_rsp_imm32_slot, jmp5_slot, lea_r12_data, call_p) and the fixups
+ * (erel32, erel32j, patch_imm32) that a replacement backend also has to
+ * provide, and the phase markers emit_tree writes.
+ * ====================================================================== */
+static FILE *ilogf=NULL;
+static const char *rn(int r){
+  static const char *n[16]={"rax","rcx","rdx","rbx","rsp","rbp","rsi","rdi",
+                            "r8","r9","r10","r11","r12","r13","r14","r15"};
+  return (r>=0&&r<16)?n[r]:"r?";
+}
+static const char *r32n(int r){
+  static const char *n[16]={"eax","ecx","edx","ebx","esp","ebp","esi","edi",
+                            "r8d","r9d","r10d","r11d","r12d","r13d","r14d","r15d"};
+  return (r>=0&&r<16)?n[r]:"r32?";
+}
+static const char *xn(int x){
+  static const char *n[8]={"xmm0","xmm1","xmm2","xmm3","xmm4","xmm5","xmm6","xmm7"};
+  return (x>=0&&x<8)?n[x]:"xmm?";
+}
+/* [base+idx*scale+disp] in assembly order; base or idx may be -1, disp -1 = none */
+static void imem(char *b,size_t n,int base,int idx,int scale,int disp){
+  int k=0;
+  b[0]=0;
+  if(base>=0) k+=snprintf(b+k,n-(size_t)k,"%s",rn(base));
+  if(idx>=0)  k+=snprintf(b+k,n-(size_t)k,"%s%s*%d",k?"+":"",rn(idx),1<<scale);
+  if(disp>0)  k+=snprintf(b+k,n-(size_t)k,"%s%d",k?"+":"",disp);
+  if(disp<0)  k+=snprintf(b+k,n-(size_t)k,"%s-%d",k?"+":"",-disp);
+  if(k<=0)    snprintf(b,n,"0");
+}
+#define IMEM(var,b,i,sc,d) char var[96]; var[0]=0; if(ilogf) imem(var,sizeof var,b,i,sc,d)
+static const char *binname(int op){
+  static char unk[16];
+  switch(op){
+    case 0x01: return "add"; case 0x03: return "add";
+    case 0x09: return "or";  case 0x21: return "and";
+    case 0x29: return "sub"; case 0x2b: return "sub";
+    case 0x31: return "xor"; case 0x39: return "cmp";
+    default: snprintf(unk,sizeof unk,"bin%02x",op); return unk;
+  }
+}
+static const char *ccname(int c){
+  static const char *n[16]={"o","no","b","ae","e","ne","be","a",
+                            "s","ns","p","np","l","ge","le","g"};
+  static char unk[16];
+  if(c>=0&&c<16) return n[c];
+  snprintf(unk,sizeof unk,"cc%d",c); return unk;
+}
+/* 83 / 81 are group 1: the argument is the ModRM /digit, not an opcode byte */
+static const char *grp1name(int d){
+  static const char *n[8]={"add","or","adc","sbb","and","sub","xor","cmp"};
+  static char u[16];
+  if(d>=0&&d<8) return n[d];
+  snprintf(u,sizeof u,"grp1_%d",d); return u;
+}
+/* F7 is group 3, also a /digit */
+static const char *fm7name(int sub){
+  static const char *n[8]={"test","test","not","neg","mul","imul","div","idiv"};
+  return (sub>=0&&sub<8)?n[sub]:"f7?";
+}
+/* one instruction line; cn is the offset the instruction is about to start at */
+static void ilog(const char *fmt,...){
+  va_list ap;
+  if(!ilogf) return;
+  fprintf(ilogf,"%06zx  ",cn);
+  va_start(ap,fmt); vfprintf(ilogf,fmt,ap); va_end(ap);
+  fputc('\n',ilogf);
+}
+/* a "; " line: a slot, a fixup or a phase marker -- not an instruction */
+static void ilogc(const char *fmt,...){
+  va_list ap;
+  if(!ilogf) return;
+  fputs(";       ",ilogf);
+  va_start(ap,fmt); vfprintf(ilogf,fmt,ap); va_end(ap);
+  fputc('\n',ilogf);
+}
+
+/* ------------------------------------------------------------------------
+ * THE EMIT SEAM.
+ *
+ * This region (up to the "phase 1: collect definitions" marker) plus the
+ * runtime stubs of phase 4, the collector and the ELF container are the
+ * x86-64 backend: the only places in this file that write code bytes. The
+ * language-level emitter -- everything between the EMIT-SEAM-BEGIN and
+ * EMIT-SEAM-END markers -- reaches the machine through this API and nothing
+ * else: no e1/e32/e64, no memcpy into `code`, and not even a direct read of
+ * the code cursor `cn` (label positions come from here()).
+ * `make test-native-emit-split` asserts exactly that, so a second backend is a
+ * replacement of the encoder + stubs, not a rewrite of the parser or of the
+ * emit tree.
+ *
+ * A replacement backend has to provide at minimum:
+ *   e1/e32/e64                  raw byte and little-endian word emission
+ *   here()                      current code position, i.e. a label
+ *   erel32/erel32j/patch_imm32  patch a saved position once the target is known
+ *   jmp5_slot/jmp_rel32/jcc_rel32   a jump or conditional jump with a
+ *                               placeholder displacement, plus the jl_* label
+ *                               lists that collect and patch them
+ *   sub_rsp_imm32_slot/leave_ret    function frame plumbing
+ *   the instruction helpers the emit tree calls (mv_m64, mv_r64m, mv_rr,
+ *   lea_rm, mov_imm64, mov_imm8m, push_r, pop_r, sse_rr, call_p, emit_d2i,
+ *   emit_i2d, movq_xr, movq_rx, cvttsd2si, cvtsi2sd, rexb, emit_modrm)
+ *   the phase-4 runtime stubs (number formatting, list and string builtins,
+ *   file and http syscalls), the collector, and the ELF container -- all of
+ *   which are machine code by nature and are listed in docs/NATIVE.md.
+ * ---------------------------------------------------------------------- */
+static size_t here(void){ return cn; }
+static void patch_imm32(size_t at,int32_t v){ ilogc("patch imm32 [%06zx] <- %d",at,v); memcpy(code+at,&v,4); }
+static void leave_ret(void){ ilog("leave"); ilog("ret"); e1(0xc9); e1(0xc3); }   /* leave; ret */
+static size_t sub_rsp_imm32_slot(void){              /* sub rsp, imm32 (placeholder) */
+  ilog("sub rsp,<imm32 slot>");
+  e1(0x48); e1(0x81); e1(0xEC); size_t at=cn; e32(0);
+  ilogc("slot sub rsp imm32 at %06zx",at);
+  return at;
+}
+static size_t jmp5_slot(void){ ilog("jmp <rel32 slot>"); size_t at=cn; e1(0xe9); e32(0); ilogc("slot jmp rel32 at %06zx",at); return at; }  /* jmp rel32 (placeholder) */
 
 static void rexb(int W,int R,int X,int B){
   if(W||R||X||B){ uint8_t b=0x40; if(W)b|=8; if(R)b|=4; if(X)b|=2; if(B)b|=1; e1(b); }
@@ -231,40 +368,45 @@ static void emit_modrm(int reg,int rm,int scale,int idx,int disp){
     else e32((uint32_t)(int32_t)disp);
   }
 }
-static void mv_rr(int d,int s){ rexb(1, s>7, 0, d>7); e1(0x89); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
+static void mv_rr(int d,int s){ ilog("mov %s,%s",rn(d),rn(s)); rexb(1, s>7, 0, d>7); e1(0x89); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
 static void mv_m64(int base,int idx,int scale,int disp,int s){
+  IMEM(mb,base,idx,scale,disp); ilog("mov [%s],%s",mb,rn(s));
   rexb(1, s>7, idx>7, base>7); e1(0x89); emit_modrm(s, base, scale, idx, disp);
 }
 static void mv_r64m(int d,int base,int idx,int scale,int disp){
+  IMEM(mb,base,idx,scale,disp); ilog("mov %s,[%s]",rn(d),mb);
   rexb(1, d>7, idx>7, base>7); e1(0x8b); emit_modrm(d, base, scale, idx, disp);
 }
 static void lea_rm(int d,int base,int idx,int scale,int disp){
+  IMEM(mb,base,idx,scale,disp); ilog("lea %s,[%s]",rn(d),mb);
   rexb(1, d>7, idx>7, base>7); e1(0x8d); emit_modrm(d, base, scale, idx, disp);
 }
-static void mov_imm64(int r,uint64_t v){ rexb(1, 0, 0, r>7); e1((uint8_t)(0xb8+(r&7))); e64(v); } /* B8+rd: r8-r15 via REX.B (gas: 49 b8) */
+static void mov_imm64(int r,uint64_t v){ ilog("mov %s,0x%llx",rn(r),(unsigned long long)v); rexb(1, 0, 0, r>7); e1((uint8_t)(0xb8+(r&7))); e64(v); } /* B8+rd: r8-r15 via REX.B (gas: 49 b8) */
 static void mov_imm8m(int base,int idx,int scale,int disp,uint8_t v){
+  IMEM(mb,base,idx,scale,disp); ilog("mov byte [%s],%u",mb,(unsigned)v);
   rexb(0, 0, idx>7, base>7); e1(0xc6); emit_modrm(0, base, scale, idx, disp); e1(v);
 }
 static void mvz_rm(int d,int base,int idx,int scale,int disp){ /* movzx r32, byte [mem] */
+  IMEM(mb,base,idx,scale,disp); ilog("movzx %s,byte [%s]",r32n(d),mb);
   rexb(0, d>7, idx>7, base>7); e1(0x0f); e1(0xb6); emit_modrm(d&7, base, scale, idx, disp);
 }
-static void bin_rr(int op,int d,int s){ rexb(1, s>7, 0, d>7); e1((uint8_t)op); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
-static void bin_imm8(int op,int r,uint8_t v){ rexb(1, 0, 0, r>7); e1(0x83); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e1(v); }
-static void bin_imm32(int op,int r,uint32_t v){ rexb(1, 0, 0, r>7); e1(0x81); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e32(v); }
-static void fm7(int sub,int r){ rexb(1, 0, 0, r>7); e1(0xf7); e1((uint8_t)(0xC0|(sub<<3)|(r&7))); }
-static void test_rr(int a,int b){ rexb(1, b>7, 0, a>7); e1(0x85); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
-static void xor_rr(int a,int b){ rexb(1, b>7, 0, a>7); e1(0x31); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
-static void incdec_r(int inc,int r){ rexb(1, 0, 0, r>7); e1(0xff); e1((uint8_t)(0xC0|((inc?0:1)<<3)|(r&7))); }
-static void inc_mem_r(int r){ rexb(1,0,0,r>7); e1(0xff); e1((uint8_t)(0x40|(r&7))); e1(0x00); } /* inc [r] (disp8=0) */
-static void push_r(int r){ if(r>7) e1(0x49); e1((uint8_t)(0x50+(r&7))); }
-static void pop_r(int r){ if(r>7) e1(0x49); e1((uint8_t)(0x58+(r&7))); }
-static void jcc_rel32(int c,int32_t d){ e1(0x0f); e1((uint8_t)(0x80+c)); e32((uint32_t)d); }
-static void jmp_rel32(int32_t d){ e1(0xe9); e32((uint32_t)d); }
-static void setcc(int c,int r){ rexb(0, 0, 0, r>7); e1(0x0f); e1((uint8_t)(0x90+c)); e1((uint8_t)(0xC0|(r&7))); }
-static void movzx_al_to_rax(void){ rexb(1,0,0,0); e1(0x0f); e1(0xb6); e1(0xc0); }
-static void sar_imm(int r,int v){ rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(7<<3)|(r&7))); e1((uint8_t)v); }
-static void shl_imm(int r,int v){ rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(4<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHL = C1 /4 */
-static void shr_imm(int r,int v){ rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(5<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHR = C1 /5 */
+static void bin_rr(int op,int d,int s){ ilog("%s %s,%s",binname(op),rn(d),rn(s)); rexb(1, s>7, 0, d>7); e1((uint8_t)op); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
+static void bin_imm8(int op,int r,uint8_t v){ ilog("%s %s,%d",grp1name(op),rn(r),(int)(int8_t)v); rexb(1, 0, 0, r>7); e1(0x83); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e1(v); }
+static void bin_imm32(int op,int r,uint32_t v){ ilog("%s %s,%d",grp1name(op),rn(r),(int)(int32_t)v); rexb(1, 0, 0, r>7); e1(0x81); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e32(v); }
+static void fm7(int sub,int r){ ilog("%s %s",fm7name(sub),rn(r)); rexb(1, 0, 0, r>7); e1(0xf7); e1((uint8_t)(0xC0|(sub<<3)|(r&7))); }
+static void test_rr(int a,int b){ ilog("test %s,%s",rn(a),rn(b)); rexb(1, b>7, 0, a>7); e1(0x85); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
+static void xor_rr(int a,int b){ ilog("xor %s,%s",rn(a),rn(b)); rexb(1, b>7, 0, a>7); e1(0x31); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
+static void incdec_r(int inc,int r){ ilog("%s %s",inc?"inc":"dec",rn(r)); rexb(1, 0, 0, r>7); e1(0xff); e1((uint8_t)(0xC0|((inc?0:1)<<3)|(r&7))); }
+static void inc_mem_r(int r){ ilog("inc [%s]",rn(r)); rexb(1,0,0,r>7); e1(0xff); e1((uint8_t)(0x40|(r&7))); e1(0x00); } /* inc [r] (disp8=0) */
+static void push_r(int r){ ilog("push %s",rn(r)); if(r>7) e1(0x49); e1((uint8_t)(0x50+(r&7))); }
+static void pop_r(int r){ ilog("pop %s",rn(r)); if(r>7) e1(0x49); e1((uint8_t)(0x58+(r&7))); }
+static void jcc_rel32(int c,int32_t d){ ilog("j%s rel32(%d)",ccname(c),(int)d); e1(0x0f); e1((uint8_t)(0x80+c)); e32((uint32_t)d); }
+static void jmp_rel32(int32_t d){ ilog("jmp rel32(%d)",(int)d); e1(0xe9); e32((uint32_t)d); }
+static void setcc(int c,int r){ ilog("set%s %s",ccname(c),r32n(r)); rexb(0, 0, 0, r>7); e1(0x0f); e1((uint8_t)(0x90+c)); e1((uint8_t)(0xC0|(r&7))); }
+static void movzx_al_to_rax(void){ ilog("movzx rax,al"); rexb(1,0,0,0); e1(0x0f); e1(0xb6); e1(0xc0); }
+static void sar_imm(int r,int v){ ilog("sar %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(7<<3)|(r&7))); e1((uint8_t)v); }
+static void shl_imm(int r,int v){ ilog("shl %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(4<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHL = C1 /4 */
+static void shr_imm(int r,int v){ ilog("shr %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(5<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHR = C1 /5 */
 
 /* ---- SSE2 scalar double (register-direct forms only; xmm0-xmm7) ----
  * Numbers are IEEE doubles held as raw bits in the same 64-bit slots and
@@ -274,20 +416,20 @@ static void sse_rr(int pfx,int op,int W,int reg,int rm){
   e1((uint8_t)pfx); rexb(W, reg>7, 0, rm>7); e1(0x0f); e1((uint8_t)op);
   e1((uint8_t)(0xC0|((reg&7)<<3)|(rm&7)));
 }
-static void movq_xr(int x,int r){ sse_rr(0x66,0x6e,1,x,r); }   /* movq xmm, r64 */
-static void movq_rx(int r,int x){ sse_rr(0x66,0x7e,1,x,r); }   /* movq r64, xmm */
-static void addsd(int a,int b){ sse_rr(0xf2,0x58,0,a,b); }
-static void mulsd(int a,int b){ sse_rr(0xf2,0x59,0,a,b); }
-static void subsd(int a,int b){ sse_rr(0xf2,0x5c,0,a,b); }
-static void divsd(int a,int b){ sse_rr(0xf2,0x5e,0,a,b); }
-static void ucomisd(int a,int b){ sse_rr(0x66,0x2e,0,a,b); }
-static void cvtsi2sd(int x,int r){ sse_rr(0xf2,0x2a,1,x,r); }  /* xmm = (double)r64 */
-static void cvttsd2si(int r,int x){ sse_rr(0xf2,0x2c,1,r,x); } /* r64 = (long)xmm, truncating */
-static void cvtsd2si(int r,int x){ sse_rr(0xf2,0x2d,1,r,x); }  /* r64 = round-to-nearest-even */
+static void movq_xr(int x,int r){ ilog("movq %s,%s",xn(x),rn(r)); sse_rr(0x66,0x6e,1,x,r); }   /* movq xmm, r64 */
+static void movq_rx(int r,int x){ ilog("movq %s,%s",rn(r),xn(x)); sse_rr(0x66,0x7e,1,x,r); }   /* movq r64, xmm */
+static void addsd(int a,int b){ ilog("addsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x58,0,a,b); }
+static void mulsd(int a,int b){ ilog("mulsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x59,0,a,b); }
+static void subsd(int a,int b){ ilog("subsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x5c,0,a,b); }
+static void divsd(int a,int b){ ilog("divsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x5e,0,a,b); }
+static void ucomisd(int a,int b){ ilog("ucomisd %s,%s",xn(a),xn(b)); sse_rr(0x66,0x2e,0,a,b); }
+static void cvtsi2sd(int x,int r){ ilog("cvtsi2sd %s,%s",xn(x),rn(r)); sse_rr(0xf2,0x2a,1,x,r); }  /* xmm = (double)r64 */
+static void cvttsd2si(int r,int x){ ilog("cvttsd2si %s,%s",rn(r),xn(x)); sse_rr(0xf2,0x2c,1,r,x); } /* r64 = (long)xmm, truncating */
+static void cvtsd2si(int r,int x){ ilog("cvtsd2si %s,%s",rn(r),xn(x)); sse_rr(0xf2,0x2d,1,r,x); }  /* r64 = round-to-nearest-even */
 /* rax (double bits) -> rax (long, truncated toward zero, like C's cast) */
-static void emit_d2i(void){ movq_xr(0,0); cvttsd2si(0,0); }
+static void emit_d2i(void){ ilogc("d2i: double bits in rax -> long"); movq_xr(0,0); cvttsd2si(0,0); }
 /* rax (long) -> rax (double bits) */
-static void emit_i2d(void){ cvtsi2sd(0,0); movq_rx(0,0); }
+static void emit_i2d(void){ ilogc("i2d: long in rax -> double bits"); cvtsi2sd(0,0); movq_rx(0,0); }
 
 /* ---- tiny forward/backward label system for hand-written runtime code ---- */
 #define MAXLBL 96
@@ -332,6 +474,7 @@ enum { PFN=0, PBUILTIN=1 };
 static struct { size_t at; int kind; int idx; } patch_call[8192]; static int npc;
 static struct { size_t at; } patch_r12[4096]; static int npr;
 static void call_p(int kind,int idx){
+  ilog("call %s %s",kind==PFN?"make":"builtin",kind==PFN?fname(idx):bname(idx));
   e1(0xe8);
   if(npc>=8192){ fprintf(stderr,"native_aot: OOM patches\n"); exit(1); }
   patch_call[npc].at=cn; patch_call[npc].kind=kind; patch_call[npc].idx=idx; npc++;
@@ -341,6 +484,7 @@ static void call_p(int kind,int idx){
 #define callb(i) call_p(PBUILTIN,i)
 static void lea_r12_data(void){
   /* lea r12, [rip+disp32]: REX.WR 8D 25 disp32 (mod00 reg100 rm101) */
+  ilog("lea r12,[rip+<disp32 slot>]");
   rexb(1, 1, 0, 0); e1(0x8d); e1(0x25);
   if(npr>=4096){ fprintf(stderr,"native_aot: OOM patches\n"); exit(1); }
   patch_r12[npr].at=cn; npr++; e32(0);
@@ -567,6 +711,82 @@ static const char*kname(int k){
   return "an unknown type";
 }
 
+/* ---- generic struct templates -------------------------------------------
+ * `struct Box<T> { v }` is a TEMPLATE: parameter names and field NAMES, but no
+ * layout, so it never enters S[]. Each instantiation becomes an ordinary SDef
+ * under a mangled name -- `Box<num>` is `Box__n`, `Box<str>` is `Box__s`,
+ * `Pair<num,str>` is `Pair__ns` -- the same suffixes generic FUNCTIONS already
+ * use, so one spelling of "specialisation" covers both features.
+ *
+ * The mangled name is the type identity, which is what docs/TYPES_ROADMAP.md
+ * requires before this syntax may be accepted: Box<num> and Box<str> get their
+ * own field descriptors, their own fkind_seen/fkind_val slots and their own
+ * heap block, so they can never share a field layout or a collector root. The
+ * template itself is never mutated by a literal -- field kinds are learned per
+ * instantiation by the ordinary kind fixpoint, and a conflict inside one
+ * instantiation is the existing "used with two different types" error.
+ *
+ * A type argument is num, str or list. A struct name as a type argument is
+ * refused by name, because seed-min and gen2 refuse it too and native must not
+ * accept a program the other two reject. Struct blocks are allocated BK_STRUCT
+ * ("every word may be a pointer"), so a string field of any instantiation is
+ * traced by the collector with no new descriptor work.
+ * ------------------------------------------------------------------------ */
+typedef struct { char name[64]; char p[8][64]; int np; char f[MAXFD][64]; int nf; } GSDef;
+static GSDef GS[MAXS]; static int nGS;
+/* the type-argument kinds of each instantiated sid (gskn[sid]==0: not one) */
+static int gsk[MAXS][8], gskn[MAXS];
+static int gs_find(const char*n){ for(int i=0;i<nGS;i++) if(!strcmp(GS[i].name,n)) return i; return -1; }
+/* *p points at the '<' of `Box<num>`. Reads the type arguments, registers the
+ * instantiation if this is its first use, and leaves *p just past the list
+ * (whitespace skipped) so the caller's `{` test still works. Returns the sid,
+ * or -1 when the name is not a template. Idempotent: the kind fixpoint and the
+ * emit phase both call it and get the same sid. */
+static int gs_instantiate(const char**p,const char*n){
+  int gi=gs_find(n);
+  if(gi<0) return -1;
+  const char*q=*p;
+  sw(&q);
+  if(*q!='<') return -1;
+  q++;
+  int ks[8], nk=0;
+  for(;;){
+    sw(&q);
+    if(!*q) errx("a type argument list needs a closing >");
+    if(*q=='>'){ q++; break; }
+    if(*q==','){ q++; continue; }
+    char t[64];
+    if(!pid(&q,t,64)) errx("a type argument must be num, str or list");
+    int k=-1;
+    if(!strcmp(t,"num")) k=K_NUM;
+    else if(!strcmp(t,"str")) k=K_STR;
+    else if(!strcmp(t,"list")) k=K_LIST;
+    if(k<0) errx("a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented",t);
+    if(nk>=8) errx("too many type arguments (native limit is 8)");
+    ks[nk++]=k;
+  }
+  if(nk!=GS[gi].np)
+    errx("struct '%s' takes %d type argument%s, got %d",n,GS[gi].np,GS[gi].np==1?"":"s",nk);
+  char mn[80];
+  int o=snprintf(mn,sizeof mn,"%s__",GS[gi].name);
+  for(int i=0;i<nk;i++) mn[o++]=(char)(ks[i]==K_STR?'s':(ks[i]==K_LIST?'l':'n'));
+  if(o>=64) errx("struct '%s' is too long to instantiate (the mangled name must fit 63 characters)",n);
+  mn[o]=0;
+  sw(&q); *p=q;
+  int sid=s_find(mn);
+  if(sid>=0) return sid;
+  if(nS>=MAXS) errx("too many structs (a generic instantiation counts as one; native limit is %d)",MAXS);
+  strcpy(S[nS].name,mn);
+  S[nS].nf=GS[gi].nf;
+  for(int f=0;f<GS[gi].nf;f++){
+    strcpy(S[nS].f[f].name,GS[gi].f[f]);
+    S[nS].f[f].kind=K_UNK; S[nS].f[f].sid=-1;
+  }
+  gskn[nS]=nk;
+  for(int i=0;i<nk;i++) gsk[nS][i]=ks[i];
+  return nS++;
+}
+
 /* ================= use expansion (before any parsing) ================= */
 static char*rf(const char*p,size_t*n){
   FILE*f=fopen(p,"rb");
@@ -681,8 +901,53 @@ static void collect_defs(const char*src){
       if(!pid(&p,nm,64)){ fprintf(stderr,"native_aot: struct needs a name\n"); exit(1); }
       if(s_find(nm)>=0){ fprintf(stderr,"native_aot: struct '%s' declared twice\n",nm); exit(1); }
       if(nS>=MAXS){ fprintf(stderr,"native_aot: too many structs (native limit: %d)\n",MAXS); exit(1); }
-      strcpy(S[nS].name,nm); S[nS].nf=0;
       sw(&p);
+      /* `struct Box<T> { ... }` is a template: record the parameters and the
+         field names, and leave the layout to each instantiation (see
+         gs_instantiate). The template must NOT take an S[] slot, or Box would
+         look like a concrete struct with no fields. */
+      if(*p=='<'){
+        p++;
+        if(gs_find(nm)>=0||s_find(nm)>=0){
+          fprintf(stderr,"native_aot: struct '%s' declared twice\n",nm); exit(1);
+        }
+        if(nGS>=MAXS){ fprintf(stderr,"native_aot: too many generic structs\n"); exit(1); }
+        GS[nGS].np=0; GS[nGS].nf=0; strcpy(GS[nGS].name,nm);
+        for(;;){
+          sw(&p);
+          if(!*p){ fprintf(stderr,"native_aot: a type parameter list needs a closing >\n"); exit(1); }
+          if(*p=='>'){ p++; break; }
+          if(*p==','){ p++; continue; }
+          char tp[64];
+          if(!pid(&p,tp,64)){ fprintf(stderr,"native_aot: a type parameter must be a name\n"); exit(1); }
+          if(GS[nGS].np>=8){ fprintf(stderr,"native_aot: too many type parameters (native limit is 8)\n"); exit(1); }
+          strcpy(GS[nGS].p[GS[nGS].np++],tp);
+        }
+        sw(&p);
+        if(*p!='{'){ fprintf(stderr,"native_aot: struct %s needs { fields }\n",nm); exit(1); }
+        p++;
+        const char*r=p; int inq2=0;
+        while(*r){
+          if(inq2){ if(*r=='\\') r++; else if(*r=='\"') inq2=0; r++; continue; }
+          if(*r=='\"'){ inq2=1; r++; continue; }
+          if(*r=='/'&&r[1]=='/'){ while(*r&&*r!='\n') r++; continue; }
+          if(*r=='}') break;
+          if(id0(*r)){
+            char fd[64]; int i=0;
+            while(idc(*r)&&i+1<64) fd[i++]=*r++;
+            fd[i]=0;
+            if(GS[nGS].nf>=MAXFD){ fprintf(stderr,"native_aot: struct '%s' has more than %d fields\n",nm,MAXFD); exit(1); }
+            strcpy(GS[nGS].f[GS[nGS].nf++],fd);
+            continue;
+          }
+          r++;
+        }
+        p=r;
+        if(*p=='}') p++;
+        nGS++;
+        continue;
+      }
+      strcpy(S[nS].name,nm); S[nS].nf=0;
       if(*p!='{'){ fprintf(stderr,"native_aot: struct %s needs { fields }\n",nm); exit(1); }
       p++;
       const char*q=p; int inq=0;
@@ -872,10 +1137,19 @@ static int pk_prim(const char**p,int depth){
   if(pid(p,n,64)){
     if(!strcmp(n,"true")||!strcmp(n,"false")){ PKX_K=K_NUM; PKX_S=-1; return K_NUM; }
     const char*q=*p; sw(&q);
+    /* A generic instantiation first: `Box<num> {` becomes the concrete struct
+       `Box__n`, so the literal path below is the ordinary one and the value's
+       type identity is the mangled name. */
+    if(*q=='<'&&gs_find(n)>=0){
+      int gsi=gs_instantiate(&q,n);
+      if(gsi>=0){ strcpy(n,S[gsi].name); *p=q; }
+    }
     /* `name {` is a struct literal unless name is a variable and not a
        struct: `while n {` / `when x {` use a bare variable as the condition */
     if(*q=='{'&&(s_find(n)>=0||g_find(n)<0)){
       int sid=s_find(n);
+      if(sid<0&&gs_find(n)>=0)
+        errx("'%s' is a generic struct: write %s<num> { ... } with one type argument per type parameter",n,n);
       if(sid<0) errx("unknown struct '%s'",n,NULL);
       (*p)=q; (*p)++;
       int nf=S[sid].nf, cnt=0;
@@ -902,6 +1176,14 @@ static int pk_prim(const char**p,int depth){
         }
         int k=fld_pk(p,depth+1);
         if(k==K_STRUCT&&PKX_S<0) k=K_UNK;
+        /* When a template has as many fields as type parameters, field i takes
+           parameter i's kind: `Box<num> { "seven" }` is an error instead of a
+           string field in a box that claimed to hold numbers. With a different
+           count the kinds stay learned from the literals, as for a concrete
+           struct. seed-min and gen2 apply the same rule. */
+        if(gskn[sid]>0&&gskn[sid]==nf&&fi<gskn[sid]&&k>=0&&k!=gsk[sid][fi])
+          errx("struct '%s' field '%s' is %s (its type argument says so), the literal gives %s",
+               S[sid].name,S[sid].f[fi].name,kname(gsk[sid][fi]),kname(k));
         /* the shared dialect (seed-min and gen2) rejects a list inside a
            struct field and a struct nested from a later declaration; native
            must not accept a program the other two reject. */
@@ -1212,6 +1494,9 @@ static void infer(const char*src){
       errx("cannot infer the type of variable '%s'",G[i].name,NULL);
 }
 
+/* ===== EMIT-SEAM-BEGIN: the language-level emitter. No code bytes are
+   written here: instructions come from the encoder API above and label
+   positions from here(). Asserted by `make test-native-emit-split`. ===== */
 /* ================= phase 3: emit ================= */
 static int XK=K_NUM, XS=-1;     /* kind / struct id of the value in rax */
 static int cur_fn=-1;           /* -1 = top level */
@@ -1224,6 +1509,35 @@ enum { B_MALLOC,B_STRLEN,B_CMPSTR,B_CONCAT,B_N2STR,B_PUTSTR,B_WCSTR,B_ITONO,B_IT
        B_SHOWLIST,B_MLIST,B_LGET,B_LLEN,B_LPUSH,B_SGET,B_CHR,B_READFILE,B_WRITEFILE,
        B_ARG,B_ARGC,B_DIE,B_NFMT,B_SHOWNUM,B_GC,B_GC_LIVE,B_GC_RUNS,
        B_FINDBLOCK,B_MARK,B_GCCHECK,B_STRORD };
+
+/* What the instruction list (SX_EMIT_LOG) prints for a call target.  The
+   entries are designated by id, so this table cannot drift out of order when a
+   builtin is inserted; the _Static_assert keeps it inside the array bound, and
+   `make test-native-ir-log` fails if any call in a real fixture still prints as
+   a bare id -- a name is part of the contract a second backend reads. */
+static const char *bname_tbl[64]={
+  [B_MALLOC]="malloc",   [B_STRLEN]="strlen",   [B_CMPSTR]="cmpstr",
+  [B_CONCAT]="concat",   [B_N2STR]="n2str",     [B_PUTSTR]="putstr",
+  [B_WCSTR]="wcstr",     [B_ITONO]="itono",     [B_ITOWRITE]="itowrite",
+  [B_SHOWLIST]="showlist",[B_MLIST]="mlist",    [B_LGET]="lget",
+  [B_LLEN]="llen",       [B_LPUSH]="lpush",     [B_SGET]="sget",
+  [B_CHR]="chr",         [B_READFILE]="readfile",[B_WRITEFILE]="writefile",
+  [B_ARG]="arg",         [B_ARGC]="argc",       [B_DIE]="die",
+  [B_NFMT]="nfmt",       [B_SHOWNUM]="shownum", [B_GC]="gc",
+  [B_GC_LIVE]="gc_live", [B_GC_RUNS]="gc_runs", [B_FINDBLOCK]="findblock",
+  [B_MARK]="mark",       [B_GCCHECK]="gccheck", [B_STRORD]="strord",
+};
+_Static_assert(B_STRORD<64,"bname_tbl is too small for the builtin ids");
+static const char *bname(int i){
+  static char u[16];
+  if(i>=0&&i<64&&bname_tbl[i]) return bname_tbl[i];
+  snprintf(u,sizeof u,"id%d",i); return u;
+}
+static const char *fname(int i){
+  static char u[16];
+  if(i>=0&&i<nF&&F[i].name[0]) return F[i].name;
+  snprintf(u,sizeof u,"make%d",i); return u;
+}
 
 static void emit_prim(const char**p,int depth);
 static void emit_post(const char**p,int depth);
@@ -1339,10 +1653,19 @@ static void emit_prim(const char**p,int depth){
         if(!strcmp(F[cur_fn].params[i],n)){ load_param(i); XK=F[cur_fn].pk[i]; XS=-1; return; }
     }
     const char*q=*p; sw(&q);
+    /* A generic instantiation first, exactly as in the kind pass: `Box<num> {`
+       becomes the concrete struct `Box__n`, already registered by phase 2, so
+       what follows is the ordinary concrete-struct emit path. */
+    if(*q=='<'&&gs_find(n)>=0){
+      int gsi=gs_instantiate(&q,n);
+      if(gsi>=0){ strcpy(n,S[gsi].name); *p=q; }
+    }
     /* `name {` is a struct literal unless name is a variable and not a
        struct: `while n {` / `when x {` use a bare variable as the condition */
     if(*q=='{'&&(s_find(n)>=0||g_find(n)<0)){
       int sid=s_find(n);
+      if(sid<0&&gs_find(n)>=0)
+        errx("'%s' is a generic struct: write %s<num> { ... } with one type argument per type parameter",n,n);
       if(sid<0) errx("unknown struct '%s'",n,NULL);
       (*p)=q; (*p)++;
       int nf=S[sid].nf;
@@ -1438,7 +1761,7 @@ static void emit_prim(const char**p,int depth){
       errx("'%s' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)",n,NULL);
     if(cur_fn>=0){
       for(int i=0;i<F[cur_fn].nparam;i++)
-        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return F[cur_fn].pk[i]; }
+        if(!strcmp(F[cur_fn].params[i],n)){ PKX_K=F[cur_fn].pk[i]; PKX_S=-1; return; }  /* emit_prim is void: the kind travels in PKX_K/PKX_S */
     }
     int gi=g_find(n);
     if(gi<0) errx("undefined variable '%s' (hold it first)",n,NULL);
@@ -1709,16 +2032,16 @@ static void emit_term(const char**p,int depth){
       size_t jz;
       movq_xr(1,CX); cvttsd2si(CX,1);    /* rcx = (long)right */
       test_rr(CX,CX);                    /* modulo by zero? */
-      jz=cn; jcc_rel32(JC_Z,0);
+      jz=here(); jcc_rel32(JC_Z,0);
       emit_d2i();                        /* rax = (long)left */
       emit_sdiv();                       /* rdx = left % right */
       mv_rr(AX,DX); emit_i2d();
-      size_t jmp_at=cn;
+      size_t jmp_at=here();
       jmp_rel32(0);             /* skip die code (patched below) */
-      size_t die_code=cn;
+      size_t die_code=here();
       lea_rm(AX,12,-1,0,(int)d_err_div);
       callb(B_DIE);
-      { int32_t dd=(int32_t)(cn-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
+      erel32j(jmp_at,here());
       erel32(jz,die_code);
     }
   }
@@ -1823,7 +2146,8 @@ static void emit_expr(const char**p,int depth){
 /* ---- statements ---- */
 static void emit_fn(int fi,const char**p){
   if(fi<0) errx("unknown function");
-  F[fi].start=(int)cn;
+  F[fi].start=(int)here();
+  ilogc("--- make %s[%d] at %06zx ---",F[fi].name,fi,here());
   push_r(BP);
   mv_rr(BP,SP);
   /* The frame must keep EVERY spill slot above rsp: expression codegen
@@ -1832,7 +2156,7 @@ static void emit_fn(int fi,const char**p){
      overwritten by the first push or call in the body.  16-aligned so the
      (push rbp; sub rsp,frame) entry keeps the same alignment everywhere. */
   /* sub rsp, imm32 -- patched below, once the body has declared its locals */
-  e1(0x48); e1(0x81); e1(0xEC); size_t frame_at=cn; e32(0);
+  size_t frame_at=sub_rsp_imm32_slot();
   lea_r12_data();
   /* spill the incoming parameter registers into the frame.  Emitted with
      the same encoder helpers as everything else -- the old hand-written
@@ -1877,11 +2201,11 @@ static void emit_fn(int fi,const char**p){
   {
     /* frame: the params, then one slot per local, then the spill area */
     uint32_t fr=(uint32_t)((8*(F[fi].nparam+nloc)+16+15)&~15);
-    memcpy(&code[frame_at],&fr,4);
+    patch_imm32(frame_at,(int32_t)fr);
   }
   nG=lbase; cur_fn=-1;               /* the locals go out of scope with the make */
   mov_imm64(AX,0);                   /* fall-off returns 0 */
-  e1(0xc9); e1(0xc3);                /* leave; ret */
+  leave_ret();
 }
 
 /* ================= boolean conditions: and / or / not in when and while =================
@@ -2032,10 +2356,10 @@ static void emit_logic(const char*s,const char*e){
   JL fl={0}, done={0};
   gen_cond(s,e,0,&fl,0,"value");          /* falls through when the logic holds */
   mov_imm64(AX,dbits(1.0));
-  size_t at=cn; e1(0xe9); e32(0); jl_add5(&done,at);
-  jl_patch(&fl,cn);
+  size_t at=jmp5_slot(); jl_add5(&done,at);
+  jl_patch(&fl,here());
   mov_imm64(AX,dbits(0.0));
-  jl_patch(&done,cn);
+  jl_patch(&done,here());
   XK=K_NUM; XS=-1;
 }
 static void emit_rhs(const char**p){
@@ -2126,7 +2450,7 @@ static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const 
       JL tl={0};                       /* any true operand: skip the rest */
       for(int i=0;i<k-1;i++) gen_cond(ps[i],pe[i],1,&tl,dry,what);
       gen_cond(ps[k-1],pe[k-1],0,out,dry,what);
-      if(!dry) jl_patch(&tl,cn);
+      if(!dry) jl_patch(&tl,here());
     }
     return;
   }
@@ -2137,7 +2461,7 @@ static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const 
       JL fl={0};                       /* any false operand: skip the rest */
       for(int i=0;i<k-1;i++) gen_cond(ps[i],pe[i],0,&fl,dry,what);
       gen_cond(ps[k-1],pe[k-1],1,out,dry,what);
-      if(!dry) jl_patch(&fl,cn);
+      if(!dry) jl_patch(&fl,here());
     }
     return;
   }
@@ -2167,7 +2491,7 @@ static void gen_cond(const char*s,const char*e,int jump_if,JL*out,int dry,const 
   }
   cond_nest--;
   bin_rr(1,AX,AX);                     /* add rax,rax: ZF iff the double is +-0.0 */
-  { size_t at=cn; jcc_rel32(jump_if?JC_NZ:JC_Z,0); jl_add(out,at); }
+  { size_t at=here(); jcc_rel32(jump_if?JC_NZ:JC_Z,0); jl_add(out,at); }
 }
 
 /* when COND { .. } [elif COND { .. }]* [otherwise|else { .. } | else when ..].
@@ -2193,8 +2517,8 @@ static void emit_when_body(const char**p,int in_fn){
     if(mkw(p,"when")||mkw(p,"if")) chain=1;
   }
   if(has_else){
-    size_t jmpend_at=cn; jmp_rel32(0);
-    size_t j2=cn;
+    size_t jmpend_at=here(); jmp_rel32(0);
+    size_t j2=here();
     if(chain) emit_when_body(p,in_fn);
     else {
       sw(p);
@@ -2202,9 +2526,9 @@ static void emit_when_body(const char**p,int in_fn){
       (*p)++;
       emit_prog(p,in_fn,1);
     }
-    erel32j(jmpend_at,cn);
+    erel32j(jmpend_at,here());
     jl_patch(&fl,j2);
-  } else jl_patch(&fl,cn);
+  } else jl_patch(&fl,here());
 }
 
 /* for NAME in A..B / list / string. Function binders and hidden state
@@ -2276,7 +2600,7 @@ static void emit_for(const char**p,int in_fn){
   int id=nfor++;
   const char*dots=top_dots(hs,he2);
   int top_gi, src_gi=-1, idx_gi=-1, end_gi=-1, ttop;
-  size_t top=cn;
+  size_t top=here();
   int mode;                    /* 0 = range, 1 = list, 2 = string */
   if(dots){
     mode=0;
@@ -2285,7 +2609,7 @@ static void emit_for(const char**p,int in_fn){
     int k1=eval_sub(hs,dots); if(k1!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
     top_gi=for_var(nm,K_NUM);
     store_global(top_gi);
-    top=cn;
+    top=here();
     int k2=eval_sub(dots+2,he2); if(k2!=K_NUM) errx("for range bounds must be numbers",NULL,NULL);
     end_gi=for_hidden("end",id,K_NUM);
     store_global(end_gi);
@@ -2300,7 +2624,7 @@ static void emit_for(const char**p,int in_fn){
     store_global(src_gi);
     idx_gi=for_hidden("idx",id,K_NUM);
     mov_imm64(AX,dbits(0.0)); store_global(idx_gi);
-    top=cn;
+    top=here();
     /* idx < length */
     load_global(src_gi);
     if(mode==1) callb(B_LLEN); else callb(B_STRLEN);
@@ -2309,7 +2633,7 @@ static void emit_for(const char**p,int in_fn){
     ucomisd(0,1);
   }
   JL exits={0};
-  size_t exit_at=cn; jcc_rel32(JC_NBE,0);      /* not (name < end): leave */
+  size_t exit_at=here(); jcc_rel32(JC_NBE,0);      /* not (name < end): leave */
   jl_add(&exits,exit_at);                      /* a 6-byte jcc: kept apart from break (5-byte jmp) */
   if(mode!=0){
     /* NAME = src[idx] */
@@ -2326,7 +2650,7 @@ static void emit_for(const char**p,int in_fn){
   nloops--;
   /* continue lands on the step */
   LoopF*lf=&loops[nloops];
-  jl_patch(&lf->cont,cn);
+  jl_patch(&lf->cont,here());
   if(mode==0){
     load_global(top_gi); movq_xr(0,AX);
   } else {
@@ -2334,9 +2658,9 @@ static void emit_for(const char**p,int in_fn){
   }
   mov_imm64(CX,dbits(1.0)); movq_xr(1,CX); addsd(0,1); movq_rx(AX,0);
   store_global(mode==0?top_gi:idx_gi);
-  jmp_rel32((int32_t)(top-cn-5));
-  jl_patch(&exits,cn);
-  jl_patch(&lf->brk,cn);
+  jmp_rel32((int32_t)(top-here()-5));
+  jl_patch(&exits,here());
+  jl_patch(&lf->brk,here());
   (void)ttop; (void)end_gi;
 }
 
@@ -2405,20 +2729,20 @@ static void emit_prog(const char**p,int in_fn,int stop){
     if(mkw(p,"for")){ emit_for(p,in_fn); continue; }
     if(mkw(p,"break")){
       if(nloops==0) errx("break outside a loop",NULL,NULL);
-      size_t at=cn; jmp_rel32(0);
+      size_t at=here(); jmp_rel32(0);
       jl_add5(&loops[nloops-1].brk,at);
       endstmt(p);
       continue;
     }
     if(mkw(p,"continue")){
       if(nloops==0) errx("continue outside a loop",NULL,NULL);
-      size_t at=cn; jmp_rel32(0);
+      size_t at=here(); jmp_rel32(0);
       jl_add5(&loops[nloops-1].cont,at);
       endstmt(p);
       continue;
     }
     if(mkw(p,"while")){
-      size_t top=cn;
+      size_t top=here();
       const char*ce=cond_end(*p);
       JL fl={0};
       gen_cond(*p,ce,0,&fl,0,"while");
@@ -2431,9 +2755,9 @@ static void emit_prog(const char**p,int in_fn,int stop){
       emit_prog(p,in_fn,1);
       nloops--;
       jl_patch(&loops[nloops].cont,top);
-      jmp_rel32((int32_t)(top-cn-5));
-      jl_patch(&fl,cn);
-      jl_patch(&loops[nloops].brk,cn);
+      jmp_rel32((int32_t)(top-here()-5));
+      jl_patch(&fl,here());
+      jl_patch(&loops[nloops].brk,here());
       continue;
     }
     if(mkw(p,"make")){
@@ -2452,7 +2776,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
       emit_rhs(p);
       if(XK==K_UNK) errx("cannot infer the type of the give value");
       if(XK!=F[cur_fn].rk) errx("give must give %s (got %s)",kname(F[cur_fn].rk),kname(XK),NULL);
-      e1(0xc9); e1(0xc3);             /* leave; ret */
+      leave_ret();
       endstmt(p);
       continue;
     }
@@ -2511,6 +2835,8 @@ static void emit_prog(const char**p,int in_fn,int stop){
   }
 }
 
+/* ===== EMIT-SEAM-END: below this line the file is x86-64 again -- the
+   runtime stubs, the collector and the ELF container are backend code. ===== */
 /* ================= phase 4: runtime builtins ================= */
 /* Follow list growth links. Payload +8 is zero on a current object, or
  * points to its successor. The collector traces this link, not the doubles.
@@ -3888,6 +4214,17 @@ static void write_elf(const char*path){
 /* ================= main ================= */
 int main(int argc,char**argv){
   if(argc<3){ fprintf(stderr,"usage: native_aot in.sa out\n"); return 2; }
+  /* the instruction list: SX_EMIT_LOG=<path> records every instruction the
+     emit tree asks the encoder for.  Off by default; the bytes do not change
+     when it is on (see test-native-ir-log). */
+  {
+    const char* ilogenv=getenv("SX_EMIT_LOG");
+    if(ilogenv&&*ilogenv){
+      ilogf=fopen(ilogenv,"w");
+      if(!ilogf){ fprintf(stderr,"native_aot: cannot open SX_EMIT_LOG file %s\n",ilogenv); return 1; }
+      fprintf(ilogf,"; native_aot instruction list for %s\n; offset  instruction\n",argv[1]);
+    }
+  }
   size_t sn;
   char*raw=rf(argv[1],&sn);
   char dir[2048]; const char*sl=strrchr(argv[1],'/');
@@ -3917,6 +4254,7 @@ int main(int argc,char**argv){
   }
 
   /* main */
+  ilogc("=== phase: entry (data base, argc/argv, stack top, gc threshold) ===");
   lea_r12_data();
   /* process entry (no libc): [rsp] = argc, rsp+8 = argv[0..argc-1], NULL.
      The old code stored rdi/rsi, which are 0 at _start, so arg_count() was
@@ -3935,8 +4273,10 @@ int main(int argc,char**argv){
   mov_imm64(CX,(uint64_t)NSLOT);
   xor_rr(AX,AX);
   e1(0xf3); e1(0x48); e1(0xab);
+  ilogc("=== phase: top level ===");
   const char*p=src;
   emit_prog(&p,0,0);
+  ilogc("=== phase: exit syscall ===");
   mov_imm64(AX,60);
   xor_rr(DI,DI);
   e1(0x0f); e1(0x05);
@@ -3946,6 +4286,7 @@ int main(int argc,char**argv){
      so every top-level make is emitted exactly once; call sites -- in main,
      in other functions, and recursive ones -- are rel32 patches resolved in
      write_elf against F[].start, so forward references work. */
+  ilogc("=== phase: make bodies (top level walk) ===");
   {
     const char*q=src;
     while(*q){
@@ -3969,7 +4310,9 @@ int main(int argc,char**argv){
     int j=pend[k], base=F[j].inst_of>=0?F[j].inst_of:j;
     const char*q=F[base].body_at; emit_fn(j,&q);
   }
+  ilogc("=== phase: runtime stubs (builtin) ===");
   emit_builtins();
+  ilogc("=== phase: collector ===");
   emit_gc();
   /* The precise root table: every data word that can hold a heap pointer.
      Filled after codegen, when the kind of every global is final.  OFF_SCR
@@ -3985,6 +4328,7 @@ int main(int argc,char**argv){
     tab[n]=0;
   }
   write_elf(argv[2]);
+  if(ilogf){ ilogc("code bytes: %zu",cn); fclose(ilogf); }
   free(src);
   return 0;
 }

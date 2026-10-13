@@ -1,0 +1,12 @@
+// Keep doubling ONE retained string: after 20 doublings it is 8388608 bytes
+// live. Under an address-space cap this must fail with a clear diagnostic and
+// a non-zero exit, not with a crash or silent corruption.
+hold s = "abcdefgh"
+show "before"
+hold i = 0
+while i < 20 {
+  hold s = concat(s, s)
+  hold i = i + 1
+}
+show len(s)
+show "after"

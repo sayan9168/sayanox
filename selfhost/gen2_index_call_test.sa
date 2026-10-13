@@ -1,0 +1,50 @@
+// An index used to accept only numbers, names, dotted fields and + - * / with
+// parentheses: `len(NAME)` and a nested `NAME[IDX]` inside `[ ]` were refused
+// in a value position ("unsupported index expression") and copied verbatim
+// into the C in a condition and in a for bound, where cc then reported "array
+// subscript is not an integer". idx_lower now lowers both - len(NAME) to
+// sx_llen/sx_len and NAME[IDX] to sx_lget/sx_idx - in a value, in a chain
+// operand, in a condition, in a for bound and inside a typed function body.
+// `%`, a call other than len() (so `xs[pick(ys)]` too), a comma, a quoted
+// string, an empty index and unbalanced brackets inside `[ ]` are still
+// refused with a clear diagnostic; the Makefile target pins each refusal.
+// Every line below prints the same bytes on seed-min, gen2 and native.
+hold xs = [10, 20, 30, 40]
+hold ys = [1, 2]
+hold s = "abcdef"
+hold i = 1
+show xs[len(xs) - 1]
+show xs[len(xs) - len(ys)]
+show xs[ys[0]]
+show xs[ys[1] + 1]
+show s[len(s) - 1]
+show s[len(s) - 2]
+hold last = xs[len(xs) - 1]
+show last
+show xs[i + 1] + xs[len(xs) - 1]
+when xs[len(xs) - 1] > 39 {
+  show 100
+} otherwise {
+  show 200
+}
+when s[len(s) - 1] == 102 {
+  show 101
+} otherwise {
+  show 102
+}
+for k in 0..ys[len(ys) - 1] {
+  show k
+}
+for j in 0..len(ys) {
+  show ys[len(ys) - j - 1]
+}
+make pick(v: list) -> num {
+  give v[len(v) - 1]
+}
+make code(t: str) -> num {
+  give t[len(t) - 1]
+}
+show pick(xs)
+show pick(ys)
+show code(s)
+show "index-call-done"

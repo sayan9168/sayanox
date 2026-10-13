@@ -1,0 +1,14 @@
+./selfhost/gen2 selfhost/compiler_min.sa selfhost/gen3.c >/dev/null
+cc -O2 -o selfhost/gen3 selfhost/gen3.c
+./selfhost/gen3 selfhost/seed_tests/g3_re.sa selfhost/seed_tests/g3_re.c >/dev/null
+cc -O2 -o selfhost/seed_tests/g3_re selfhost/seed_tests/g3_re.c
+./selfhost/gen3 selfhost/seed_tests/g3_wh.sa selfhost/seed_tests/g3_wh.c >/dev/null
+cc -O2 -o selfhost/seed_tests/g3_wh selfhost/seed_tests/g3_wh.c
+./selfhost/gen3 selfhost/seed_tests/g3_wn.sa selfhost/seed_tests/g3_wn.c >/dev/null
+cc -O2 -o selfhost/seed_tests/g3_wn selfhost/seed_tests/g3_wn.c
+./selfhost/gen3 selfhost/seed_tests/g3_mod.sa selfhost/seed_tests/g3_mod.c >/dev/null
+cc -O2 -o selfhost/seed_tests/g3_mod selfhost/seed_tests/g3_mod.c
+[OK] gen3 modulo + else
+./selfhost/gen3 selfhost/compiler_min.sa selfhost/gen4.c >/dev/null
+[OK] byte-identical gen3 == gen4
+=== GEN3-OK ===

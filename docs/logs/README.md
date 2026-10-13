@@ -1,4 +1,4 @@
-# Verification logs — latest run 2026-10-12
+# Verification logs — latest run 2026-10-13 (`gs-*`)
 
 Final commands, in order, each exited 0:
 
@@ -209,3 +209,56 @@ fixed and tested before the final four-gate run. inline-expression-gates.log
 contains actual tails from that run, all exit 0. Canonical logs are refreshed;
 gen3/gen4 are byte-identical, and the 107-part archive round-trip passes.
 Seed left-to-right sequencing and generic structs are not claimed implemented.
+
+## 2026-10-13 — native instruction list (`ir-log-*`)
+
+The four newest gate logs are `ir-log-doctor.log`, `ir-log-true-selfhost.log`,
+`ir-log-gen3.log` and `ir-log-native-test.log`: one run of
+`make doctor && make true-selfhost && make gen3 && make native-test` after the
+native `SX_EMIT_LOG` instruction-list recorder, the LSP references /
+workspace-symbol / formatting methods and the two gen2 expression-lowering fixes
+had all landed. Every command exited 0.
+
+```text
+DOCTOR-OK              16 lines
+TRUE-SELFHOST-MIN-OK   902 lines, 156 [OK]
+GEN3-OK                14 lines, gen3 == gen4 byte-identical
+NATIVE-TEST-OK         791 lines, 142 [OK]
+```
+
+`ir-log-native-test.log` contains the new `test-native-ir-log` (six `[OK]`
+lines) and the emit-seam check now reporting 1332 lines of language-level
+emitter. `ir-log-true-selfhost.log` contains the corrected `test-list2` leg
+(`[OK] gen2 lists: literal, index, len, push, and len() inside an index`).
+
+One real failure happened during this run and was fixed rather than worked
+around: the first attempt stopped in `test-list2`, which still asserted a
+`#error` for `show xs[len(xs) - 1]` — the exact refusal the expression-lowering
+increment removed. That leg is now a value assertion (`6`) plus a grep for
+`sx_lget(xs,sx_llen(xs) - 1.0)`; the index forms that are genuinely still
+refused stay pinned by `test-gen2-index-expr` and `test-gen2-expr-lowering`.
+
+The `make-*` files above are the 2026-10-12 run and `four-items-*` the earlier
+2026-10-13 one; both were superseded by `ir-log-*`, which `gs-*` now supersedes
+as the current four-gate record.
+
+## Generic structs: the `gs-*` run (2026-10-13, latest)
+
+The four commands, in order, each exited 0, after generic structs were
+implemented on all three backends (a template plus one mangled concrete struct
+per instantiation — `STATUS.md`, last increment):
+
+1. `make doctor` → `gs-doctor.log` (16 lines)
+2. `make true-selfhost` → `gs-true-selfhost.log` (976 lines, 166 `[OK]`)
+3. `make gen3` → `gs-gen3.log` (`[OK] byte-identical gen3 == gen4`)
+4. `make native-test` → `gs-native-test.log` (864 lines, 152 `[OK]`)
+
+`test-generic-structs` is the gate this increment flipped, from pinning three
+refusals of the syntax to pinning the support and five refusals. Its six `[OK]`
+lines are in both aggregate logs (`gs-true-selfhost.log` lines 787-868,
+`gs-native-test.log` lines 590-671), and only the native one carries
+`[generic-structs] native: the same instantiations print the same bytes as
+seed-min`, because `true-selfhost` does not build `native_aot`. The gen3 leg
+matters for this feature specifically: instantiation order has to be stable, or
+gen3 and gen4 would not be byte-identical. No line in any of these logs was edited: they are the tee'd stdout and
+stderr of the commands, including the recipe lines make echoes.

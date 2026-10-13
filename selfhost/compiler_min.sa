@@ -112,6 +112,241 @@ make sxecontains(text: str, word: str) -> num {
   }
   give 0
 }
+// ---- generic structs ------------------------------------------------------
+// `struct Box<T> { v }` is a TEMPLATE: parameter names and field names, no
+// layout, so it never enters sdefs. Each instantiation becomes an ordinary
+// concrete struct under a mangled name -- Box<num> is Box__n, Box<str> is
+// Box__s, Pair<num,str> is Pair__ns -- the suffixes generic FUNCTIONS already
+// use. The mangled name is the type identity, so two specialisations get their
+// own sdefs record, ftypes keys and typedef and can never share a field slot
+// (docs/TYPES_ROADMAP.md, "A safe implementation needs" 1 and 2). gxpass
+// rewrites every instantiation before the walker runs, so the existing struct
+// machinery only ever sees a concrete struct. A type argument is num or str:
+// gen2 has no list-typed struct field (a concrete `struct B { v }` cannot hold
+// a list either), so `Box<list>` is left unrewritten and refused by name rather
+// than emitted as C that cannot compile. seed-min and native refuse a list
+// field too, so all three backends refuse it -- with their own words.
+//
+// Both scans walk POSITIONS and build a string only once an occurrence is
+// confirmed. That is survival, not style: a generated function copies every
+// str parameter on entry and never frees the copy, so a helper that takes the
+// source and is called once per character exhausts memory in seconds
+// (docs/STATUS.md, "Self-host memory ceiling").
+make gxisid(c: num) -> num {
+  when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95 {
+    give 1
+  }
+  give 0
+}
+make gxkind(word: str) -> str {
+  when string_eq(word, "num") {
+    give "n"
+  }
+  when string_eq(word, "str") {
+    give "s"
+  }
+  give ""
+}
+// every template in the source, as |Name:np:f1,f2| records
+make gxscan(text: str) -> str {
+  hold out = "|"
+  hold n = len(text)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      i = i + 1
+      while i < n && sx_index(text, i) != 34 {
+        when sx_index(text, i) == 92 && i + 1 < n {
+          i = i + 1
+        }
+        i = i + 1
+      }
+      i = i + 1
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+        while i < n && sx_index(text, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        hold iskw = 0
+        when c == 115 && i + 6 <= n && sx_index(text, i + 1) == 116 && sx_index(text, i + 2) == 114 && sx_index(text, i + 3) == 117 && sx_index(text, i + 4) == 99 && sx_index(text, i + 5) == 116 {
+          iskw = 1
+          when i > 0 {
+            when gxisid(sx_index(text, i - 1)) == 1 {
+              iskw = 0
+            }
+          }
+          when i + 6 < n {
+            when gxisid(sx_index(text, i + 6)) == 1 {
+              iskw = 0
+            }
+          }
+        }
+        when iskw == 1 {
+          hold j = i + 6
+          while j < n && (sx_index(text, j) == 32 || sx_index(text, j) == 9 || sx_index(text, j) == 10 || sx_index(text, j) == 13) {
+            j = j + 1
+          }
+          hold e = j
+          while e < n && gxisid(sx_index(text, e)) == 1 {
+            e = e + 1
+          }
+          hold k = e
+          while k < n && (sx_index(text, k) == 32 || sx_index(text, k) == 9 || sx_index(text, k) == 10 || sx_index(text, k) == 13) {
+            k = k + 1
+          }
+          when e > j && k < n && sx_index(text, k) == 60 {
+            hold np = 1
+            hold p = k + 1
+            while p < n && sx_index(text, p) != 62 {
+              when sx_index(text, p) == 44 {
+                np = np + 1
+              }
+              p = p + 1
+            }
+            hold fields = ""
+            p = p + 1
+            while p < n && sx_index(text, p) != 125 {
+              while p < n && (sx_index(text, p) == 32 || sx_index(text, p) == 9 || sx_index(text, p) == 10 || sx_index(text, p) == 13) {
+                p = p + 1
+              }
+              hold fs = p
+              while p < n && gxisid(sx_index(text, p)) == 1 {
+                p = p + 1
+              }
+              when p > fs {
+                when len(fields) > 0 {
+                  fields = concat(fields, ",")
+                }
+                fields = concat(fields, sxeslice(text, fs, p))
+              } otherwise {
+                when p < n && sx_index(text, p) != 125 {
+                  p = p + 1
+                }
+              }
+            }
+            when len(fields) > 0 && np <= 8 {
+              out = concat(out, concat(sxeslice(text, j, e), concat(":", concat(chr(48 + np), concat(":", concat(fields, "|"))))))
+            }
+          }
+          i = i + 6
+        } otherwise {
+          i = i + 1
+        }
+      }
+    }
+  }
+  give out
+}
+// One pass: each instantiation `Box<num> {` becomes `Box__n {`. Gives the
+// mangled structs as sdefs records in first-use order, chr(1), then the
+// rewritten source. An occurrence is rewritten only when the name is a declared
+// template, every type argument is num/str/list, the count matches the
+// template's and a `{` follows -- so a comparison such as `a < b` is never
+// touched, and anything unusual is left for the walker to refuse.
+make gxpass(text: str, gsdefs: str) -> str {
+  hold defs = ""
+  hold names = "|"
+  hold out = ""
+  hold n = len(text)
+  hold i = 0
+  hold cp = 0
+  while i < n {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      i = i + 1
+      while i < n && sx_index(text, i) != 34 {
+        when sx_index(text, i) == 92 && i + 1 < n {
+          i = i + 1
+        }
+        i = i + 1
+      }
+      i = i + 1
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+        while i < n && sx_index(text, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        hold startok = 0
+        when gxisid(c) == 1 {
+          when i == 0 {
+            startok = 1
+          } otherwise {
+            when gxisid(sx_index(text, i - 1)) == 0 {
+              startok = 1
+            }
+          }
+        }
+        when startok == 1 {
+          hold e = i
+          while e < n && gxisid(sx_index(text, e)) == 1 {
+            e = e + 1
+          }
+          hold j = e
+          while j < n && (sx_index(text, j) == 32 || sx_index(text, j) == 9 || sx_index(text, j) == 10 || sx_index(text, j) == 13) {
+            j = j + 1
+          }
+          hold hit = 0
+          when j < n && sx_index(text, j) == 60 {
+            hold nm = sxeslice(text, i, e)
+            hold rec = sxelookup(gsdefs, nm, ":")
+            when len(rec) > 0 {
+              hold args = ""
+              hold ok = 1
+              hold p = j + 1
+              while p < n && ok == 1 && sx_index(text, p) != 62 {
+                while p < n && (sx_index(text, p) == 32 || sx_index(text, p) == 9 || sx_index(text, p) == 10 || sx_index(text, p) == 13) {
+                  p = p + 1
+                }
+                when p < n && sx_index(text, p) == 44 {
+                  p = p + 1
+                } otherwise {
+                  hold as = p
+                  while p < n && gxisid(sx_index(text, p)) == 1 {
+                    p = p + 1
+                  }
+                  hold letter = gxkind(sxeslice(text, as, p))
+                  when len(letter) == 0 {
+                    ok = 0
+                  } otherwise {
+                    args = concat(args, letter)
+                  }
+                }
+              }
+              when ok == 1 && p < n && len(args) == sx_index(rec, 0) - 48 {
+                hold after = p + 1
+                while after < n && (sx_index(text, after) == 32 || sx_index(text, after) == 9 || sx_index(text, after) == 10 || sx_index(text, after) == 13) {
+                  after = after + 1
+                }
+                when after < n && sx_index(text, after) == 123 {
+                  hold mn = concat(nm, concat("__", args))
+                  out = concat(out, sxeslice(text, cp, i))
+                  out = concat(out, mn)
+                  cp = p + 1
+                  i = p + 1
+                  hit = 1
+                  when tbl_has(names, mn) == 0 {
+                    names = concat(names, concat(mn, "|"))
+                    defs = concat(defs, concat(mn, concat(":", concat(sxeslice(rec, 2, len(rec)), ";"))))
+                  }
+                }
+              }
+            }
+          }
+          when hit == 0 {
+            i = e
+          }
+        } otherwise {
+          i = i + 1
+        }
+      }
+    }
+  }
+  out = concat(out, sxeslice(text, cp, n))
+  give concat(concat(defs, chr(1)), out)
+}
 // Identify calls with list/index syntax, without treating quoted '[' as code.
 make sxehaslist(text: str, open: num) -> num {
   hold i = open + 1
@@ -814,6 +1049,463 @@ make sxflowblock(text: str, at: num, level: num) -> list {
   give [i, proven]
 }
 
+// ---------------------------------------------------------------------------
+// raw_index(source, from, n) -> str
+//
+// The text of an index expression, copied VERBATIM out of `source` starting at
+// `from` (the character after '[') up to but not including the closing ']'.
+// "" means "this is not an index I can lower", and every caller turns that
+// into its own clear diagnostic -- a refusal beats emitting C that cannot
+// compile, or worse, C that compiles and reads the wrong storage.
+//
+// An index may be a whole numeric expression: numbers, names, dotted field
+// chains, parentheses, a unary sign and + - * /. The text is copied into
+// sx_lget(NAME, IDX) or sx_idx(NAME, IDX), and both runtime helpers take a
+// double and truncate it, so `xs[i - 1]`, `xs[1 + 1]`, `xs[(a + b) / 2]` and
+// `xs[p.k]` work in a value position, in a condition and in a for bound, on
+// seed-min, gen2 and native alike. A leading '-' or '+' is kept: both helpers
+// wrap a negative index, which is what seed-min does (native refuses a unary
+// sign in an index and does not wrap -- see docs/STATUS.md).
+//
+// The text is copied VERBATIM, so a caller may advance its own cursor by
+// len() of the result; idx_lower then turns it into C. Refused here: a comma,
+// a quote, '%', an empty index, unbalanced parentheses or brackets, a leading
+// '[' , two dots in a row, and an expression that ends with an operator or an
+// open bracket. One implementation, four call sites: the two copies of the
+// value-position parser and the two copies of the postfix-operand parser.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// tbl_has: does a `|name|name|` declaration table hold this name? The tables
+// (ldecls for lists, sdecls for strings) belong to the main loop and a helper
+// cannot reach them, so they are passed in.
+// ---------------------------------------------------------------------------
+make tbl_has(table: str, name: str) -> num {
+  hold thkey = concat(concat("|", name), "|")
+  hold thi = 0
+  hold thkl = len(thkey)
+  hold thtl = len(table)
+  hold thfound = 0
+  while thi + thkl <= thtl && thfound == 0 {
+    hold thmt = 1
+    hold thj = 0
+    while thj < thkl {
+      when sx_index(table, thi + thj) == sx_index(thkey, thj) {
+        hold thj = thj + 1
+      } otherwise {
+        hold thmt = 0
+        hold thj = thkl
+      }
+    }
+    when thmt == 1 {
+      hold thfound = 1
+    }
+    hold thi = thi + 1
+  }
+  give thfound
+}
+
+// ---------------------------------------------------------------------------
+// str_operand: is this expression text a string? It answers 1 for a quoted
+// literal, for a sx_cat(...) join, for a name the main loop declared a string
+// and for a call to a builtin that gives a string. Anything else (a number, a
+// list, a struct field, a call to a user function) answers 0, so a `+` with
+// one string side is refused with a clear message instead of being emitted as
+// C that cannot compile.
+// ---------------------------------------------------------------------------
+make str_operand(text: str, sdecls: str) -> num {
+  // the operand scans leave the spacing of the source on either side, and a
+  // table lookup is by exact name: trim spaces and tabs first
+  hold sob = 0
+  hold soe = len(text)
+  hold sorun = 1
+  while sorun == 1 {
+    when sob >= soe {
+      hold sorun = 0
+    } otherwise {
+      hold socd = sx_index(text, sob)
+      when socd == 32 || socd == 9 {
+        hold sob = sob + 1
+      } otherwise {
+        hold sorun = 0
+      }
+    }
+  }
+  hold sorun = 1
+  while sorun == 1 {
+    when soe <= sob {
+      hold sorun = 0
+    } otherwise {
+      hold socd = sx_index(text, soe - 1)
+      when socd == 32 || socd == 9 {
+        hold soe = soe - 1
+      } otherwise {
+        hold sorun = 0
+      }
+    }
+  }
+  hold sot = ""
+  hold soi = sob
+  while soi < soe {
+    hold sot = concat(sot, chr(sx_index(text, soi)))
+    hold soi = soi + 1
+  }
+  hold son = len(sot)
+  when son == 0 {
+    give 0
+  }
+  when sx_index(sot, 0) == 34 {
+    give 1
+  }
+  // the head is the text before the first '(', or the whole text
+  hold sohead = ""
+  hold soi = 0
+  hold sopar = 0 - 1
+  while soi < son {
+    hold socd = sx_index(sot, soi)
+    when sopar < 0 {
+      when socd == 40 {
+        hold sopar = soi
+      } otherwise {
+        hold sohead = concat(sohead, chr(socd))
+      }
+    }
+    hold soi = soi + 1
+  }
+  when sopar < 0 {
+    give tbl_has(sdecls, sohead)
+  }
+  when string_eq(sohead, "concat") || string_eq(sohead, "chr") || string_eq(sohead, "read_file") || string_eq(sohead, "numstr") || string_eq(sohead, "arg") || string_eq(sohead, "read_line") || string_eq(sohead, "read_n") || string_eq(sohead, "http_get") {
+    give 1
+  }
+  when string_eq(sohead, "sx_cat") || string_eq(sohead, "sx_chr") || string_eq(sohead, "sx_read") || string_eq(sohead, "sx_numstr") || string_eq(sohead, "sx_arg") || string_eq(sohead, "sx_read_line") || string_eq(sohead, "sx_read_n") || string_eq(sohead, "sx_http") {
+    give 1
+  }
+  give 0
+}
+
+// ---------------------------------------------------------------------------
+// idx_lower: lower the text inside `[ ]` into C, so an index may be a whole
+// numeric expression instead of only the forms a C compiler happens to accept:
+//
+//   len(NAME)  -> sx_llen(NAME) for a list, sx_len(NAME) for a string
+//   NAME[IDX]  -> sx_lget(NAME, IDX) for a list, sx_idx(NAME, IDX) for a
+//                 string, with IDX lowered by the same rules (so a nested
+//                 index and a len() inside it both work)
+//   numbers, names, dotted field chains, parentheses, a unary sign and
+//   + - * /  -> copied verbatim, which is already valid C
+//
+// It gives "" when the text cannot be lowered: a call other than len(), '%',
+// a quoted string, a comma, a bracket that is not part of NAME[IDX], a name
+// that is declared neither a list nor a string, or unbalanced brackets. The
+// caller keeps its existing refusal then, so an index the compiler does not
+// understand is still a clear diagnostic and never invalid C.
+// ---------------------------------------------------------------------------
+make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
+  hold ixlout = ""
+  hold ixli = 0
+  hold ixln = len(text)
+  hold ixlbad = 0
+  while ixli < ixln && ixlbad == 0 {
+    hold ixlnext = ixli + 1
+    hold ixlcd = sx_index(text, ixli)
+    hold ixlid = 0
+    when ixlcd == 37 || ixlcd == 34 || ixlcd == 44 || ixlcd == 91 || ixlcd == 93 {
+      // '%', a quote, a comma and a stray bracket stay refused
+      hold ixlbad = 1
+    }
+    when (ixlcd >= 97 && ixlcd <= 122) || (ixlcd >= 65 && ixlcd <= 90) || ixlcd == 95 {
+      hold ixlid = 1
+      // ---- the identifier itself ----
+      hold ixlnm = ""
+      hold ixlj = ixli
+      hold ixlrun = 1
+      while ixlrun == 1 {
+        when ixlj >= ixln {
+          hold ixlrun = 0
+        } otherwise {
+          hold ixlc2 = sx_index(text, ixlj)
+          when (ixlc2 >= 97 && ixlc2 <= 122) || (ixlc2 >= 65 && ixlc2 <= 90) || (ixlc2 >= 48 && ixlc2 <= 57) || ixlc2 == 95 {
+            hold ixlnm = concat(ixlnm, chr(ixlc2))
+            hold ixlj = ixlj + 1
+          } otherwise {
+            hold ixlrun = 0
+          }
+        }
+      }
+      // ---- spaces between the name and a '(' or a '[' ----
+      hold ixlk = ixlj
+      hold ixlrun = 1
+      while ixlrun == 1 {
+        when ixlk >= ixln {
+          hold ixlrun = 0
+        } otherwise {
+          hold ixlc2 = sx_index(text, ixlk)
+          when ixlc2 == 32 || ixlc2 == 9 {
+            hold ixlk = ixlk + 1
+          } otherwise {
+            hold ixlrun = 0
+          }
+        }
+      }
+      hold ixlpost = 0
+      when ixlk < ixln {
+        hold ixlpost = sx_index(text, ixlk)
+      }
+      // ---- a call: only len(NAME) is lowered ----
+      when ixlpost == 40 {
+        hold ixlarg = ""
+        hold ixlj = ixlk + 1
+        hold ixlrun = 1
+        while ixlrun == 1 {
+          when ixlj >= ixln {
+            hold ixlrun = 0
+          } otherwise {
+            hold ixlc2 = sx_index(text, ixlj)
+            when ixlc2 == 32 || ixlc2 == 9 {
+              hold ixlj = ixlj + 1
+            } otherwise {
+              hold ixlrun = 0
+            }
+          }
+        }
+        hold ixlrun = 1
+        while ixlrun == 1 {
+          when ixlj >= ixln {
+            hold ixlrun = 0
+          } otherwise {
+            hold ixlc2 = sx_index(text, ixlj)
+            when (ixlc2 >= 97 && ixlc2 <= 122) || (ixlc2 >= 65 && ixlc2 <= 90) || (ixlc2 >= 48 && ixlc2 <= 57) || ixlc2 == 95 {
+              hold ixlarg = concat(ixlarg, chr(ixlc2))
+              hold ixlj = ixlj + 1
+            } otherwise {
+              hold ixlrun = 0
+            }
+          }
+        }
+        hold ixlrun = 1
+        while ixlrun == 1 {
+          when ixlj >= ixln {
+            hold ixlrun = 0
+          } otherwise {
+            hold ixlc2 = sx_index(text, ixlj)
+            when ixlc2 == 32 || ixlc2 == 9 {
+              hold ixlj = ixlj + 1
+            } otherwise {
+              hold ixlrun = 0
+            }
+          }
+        }
+        hold ixlclo = 0
+        when ixlj < ixln {
+          when sx_index(text, ixlj) == 41 {
+            hold ixlclo = 1
+          }
+        }
+        when ixlclo == 0 || len(ixlarg) == 0 || string_eq(ixlnm, "len") == 0 {
+          hold ixlbad = 1
+        } otherwise {
+          when tbl_has(ldecls, ixlarg) == 1 {
+            hold ixlout = concat(ixlout, "sx_llen(")
+            hold ixlout = concat(ixlout, ixlarg)
+            hold ixlout = concat(ixlout, ")")
+          } otherwise {
+            when tbl_has(sdecls, ixlarg) == 1 {
+              hold ixlout = concat(ixlout, "sx_len(")
+              hold ixlout = concat(ixlout, ixlarg)
+              hold ixlout = concat(ixlout, ")")
+            } otherwise {
+              hold ixlbad = 1
+            }
+          }
+          hold ixlnext = ixlj + 1
+        }
+      }
+      // ---- a nested index: NAME[IDX] ----
+      when ixlpost == 91 {
+        hold ixldep = 0
+        hold ixlj = ixlk
+        hold ixlend = 0 - 1
+        while ixlj < ixln && ixlend < 0 {
+          hold ixlc2 = sx_index(text, ixlj)
+          when ixlc2 == 91 {
+            hold ixldep = ixldep + 1
+          }
+          when ixlc2 == 93 {
+            hold ixldep = ixldep - 1
+            when ixldep == 0 {
+              hold ixlend = ixlj
+            }
+          }
+          hold ixlj = ixlj + 1
+        }
+        when ixlend < 0 {
+          hold ixlbad = 1
+        } otherwise {
+          hold ixlsub = ""
+          hold ixlj = ixlk + 1
+          while ixlj < ixlend {
+            hold ixlsub = concat(ixlsub, chr(sx_index(text, ixlj)))
+            hold ixlj = ixlj + 1
+          }
+          hold ixllow = idx_lower(ixlsub, ldecls, sdecls)
+          when len(ixlsub) == 0 || len(ixllow) == 0 {
+            hold ixlbad = 1
+          } otherwise {
+            when tbl_has(ldecls, ixlnm) == 1 {
+              hold ixlout = concat(ixlout, "sx_lget(")
+              hold ixlout = concat(ixlout, ixlnm)
+              hold ixlout = concat(ixlout, ",")
+              hold ixlout = concat(ixlout, ixllow)
+              hold ixlout = concat(ixlout, ")")
+            } otherwise {
+              when tbl_has(sdecls, ixlnm) == 1 {
+                hold ixlout = concat(ixlout, "sx_idx(")
+                hold ixlout = concat(ixlout, ixlnm)
+                hold ixlout = concat(ixlout, ",")
+                hold ixlout = concat(ixlout, ixllow)
+                hold ixlout = concat(ixlout, ")")
+              } otherwise {
+                hold ixlbad = 1
+              }
+            }
+            hold ixlnext = ixlend + 1
+          }
+        }
+      }
+      // ---- a plain name, or the head of a dotted field chain ----
+      when ixlpost != 40 && ixlpost != 91 {
+        hold ixlout = concat(ixlout, ixlnm)
+        hold ixlnext = ixlj
+      }
+    }
+    when ixlid == 0 {
+      when (ixlcd >= 48 && ixlcd <= 57) || ixlcd == 46 || ixlcd == 43 || ixlcd == 45 || ixlcd == 42 || ixlcd == 47 || ixlcd == 40 || ixlcd == 41 || ixlcd == 32 || ixlcd == 9 {
+        hold ixlout = concat(ixlout, chr(ixlcd))
+      } otherwise {
+        hold ixlbad = 1
+      }
+    }
+    hold ixli = ixlnext
+  }
+  when ixlbad == 1 {
+    give ""
+  }
+  give ixlout
+}
+
+make raw_index(source: str, from: num, n: num) -> str {
+  hold rixout = ""
+  hold rixi = from
+  hold rixrun = 1
+  hold rixbal = 0
+  hold rixbrk = 0
+  hold rixfirst = 0
+  hold rixlast = 0
+  hold rixdot = 0
+  hold rixseen = 0
+  hold rixok = 1
+  while rixrun == 1 {
+    when rixi >= n {
+      hold rixrun = 0
+      hold rixok = 0
+    } otherwise {
+      hold rixcd = sx_index(source, rixi)
+      hold rixend = 0
+      when rixcd == 93 {
+        when rixbrk > 0 {
+          // a ']' that closes a nested index is part of the expression
+          hold rixbrk = rixbrk - 1
+        } otherwise {
+          hold rixend = 1
+        }
+      }
+      when rixend == 1 {
+        hold rixrun = 0
+      } otherwise {
+        hold rixallow = 0
+        when rixcd == 32 || rixcd == 9 {
+          hold rixallow = 1
+        }
+        when rixcd >= 48 && rixcd <= 57 {
+          hold rixallow = 1
+        }
+        when rixcd >= 97 && rixcd <= 122 {
+          hold rixallow = 1
+        }
+        when rixcd >= 65 && rixcd <= 90 {
+          hold rixallow = 1
+        }
+        when rixcd == 95 {
+          hold rixallow = 1
+        }
+        when rixcd == 43 || rixcd == 45 || rixcd == 42 || rixcd == 47 {
+          hold rixallow = 1
+        }
+        when rixcd == 40 || rixcd == 41 || rixcd == 46 {
+          hold rixallow = 1
+        }
+        when rixcd == 91 || rixcd == 93 {
+          // a nested index: raw_index copies it verbatim (so the caller's
+          // position arithmetic stays right) and idx_lower lowers it
+          hold rixallow = 1
+          when rixcd == 91 {
+            hold rixbrk = rixbrk + 1
+          }
+        }
+        when rixallow == 1 {
+          hold rixout = concat(rixout, chr(rixcd))
+          hold rixi = rixi + 1
+          when rixcd == 32 || rixcd == 9 {
+            hold rixdot = 0
+          } otherwise {
+            hold rixseen = 1
+            when rixfirst == 0 {
+              hold rixfirst = rixcd
+            }
+            hold rixlast = rixcd
+            when rixcd == 40 {
+              hold rixbal = rixbal + 1
+            }
+            when rixcd == 41 {
+              hold rixbal = rixbal - 1
+            }
+            when rixcd == 46 {
+              hold rixdot = rixdot + 1
+            } otherwise {
+              hold rixdot = 0
+            }
+          }
+        } otherwise {
+          hold rixrun = 0
+          hold rixok = 0
+        }
+      }
+    }
+  }
+  when rixseen == 0 {
+    hold rixok = 0
+  }
+  when rixbal != 0 {
+    hold rixok = 0
+  }
+  when rixbrk != 0 {
+    hold rixok = 0
+  }
+  when rixdot >= 2 {
+    hold rixok = 0
+  }
+  when rixfirst == 42 || rixfirst == 47 || rixfirst == 41 || rixfirst == 46 || rixfirst == 91 {
+    hold rixok = 0
+  }
+  when rixlast == 43 || rixlast == 45 || rixlast == 42 || rixlast == 47 || rixlast == 40 || rixlast == 46 || rixlast == 91 {
+    hold rixok = 0
+  }
+  when rixok == 0 {
+    give ""
+  }
+  give rixout
+}
+
 // compiler_min.sa - pure Sayanox mini-compiler (generation 1 source).
 //
 // The C seed (selfhost/seed/sxc_seed.c) compiles this file into selfhost/gen1.c.
@@ -823,7 +1515,13 @@ make sxflowblock(text: str, at: num, level: num) -> list {
 //   EXPR: BASE followed by a chain of + - * / %   (* / % bind tighter,
 //         left-associative; `%` lowers through checked `sx_mod(a, b)`).
 //   BASE: NUMBER | NAME | "text" | call(...) | [v, v, ...]
-//         | Struct { f: v, ... } | NAME.field | NAME[i] | (EXPR)
+//         | Struct { f: v, ... } | NAME.field | NAME[EXPR] | (EXPR)
+//         NAME[EXPR] is a numeric expression index (numbers, names, field
+//         chains, parentheses, + - * /, len(NAME) and a nested NAME[IDX]):
+//         see raw_index and idx_lower. It is lowered in a value position,
+//         inside a when/while condition and inside a for bound. `%`, a call
+//         other than len(), a comma and a quoted string inside `[ ]` are
+//         refused with a clear diagnostic.
 //   while COND { ... }        when COND { ... } otherwise { ... }
 //         ("else" is an alias of "otherwise"; both emit "} else {")
 //         COND is copied as a C expression (C precedence matches pure-min);
@@ -1245,7 +1943,20 @@ while lgp < lgsn {
     hold lgln = ""
   }
 }
+// Generic struct templates are collected first, then every instantiation is
+// rewritten to its mangled concrete name before the walker runs (gxscan,
+// gxpass). The rewrite copies the source and this dialect has no substring
+// builtin, so it is quadratic in the source size: it runs only for a program
+// that declares a template, which keeps the self-host path (compiler_min.sa
+// declares none) off it entirely.
+hold gsdefs = gxscan(lgout)
+hold gxsdefs = ""
 hold source = lgout
+when len(gsdefs) > 1 {
+  hold gxrec = gxpass(lgout, gsdefs)
+  hold gxsdefs = sxesegment(gxrec, 0)
+  hold source = sxesegment(gxrec, 1)
+}
 hold n = len(source)
 hold pos = 0
 
@@ -1277,7 +1988,9 @@ hold ldecls = "|"
 // programs retain their existing flat declaration contract.
 hold scope_marks = []
 hold scope_head = -1
-hold sdefs = ""
+// the instantiations gxpass found, before any declaration the walker appends
+hold sdefs = gxsdefs
+hold gxtpl = 0
 hold typedefs = ""
 hold stname = ""
 hold sfields = ""
@@ -1813,6 +2526,11 @@ hold ppq = 0
 hold pprun = 0
 hold ppch = 0
 hold ixok = 0
+// Index-expression scan variables. Both copies of the expression compiler run
+// the numeric-expression retry inside `[...]`, and a first `hold` inside a
+// block becomes a C local of THAT block, so a name shared by the two copies
+// has to be declared up here with every other shared scan variable.
+hold iqstart = 0
 hold savep2 = 0
 hold exmissp = ""
 hold exerr = ""
@@ -1986,6 +2704,60 @@ hold cwl = ""
 hold cwr = ""
 hold cwnew = ""
 hold cwn = 0
+// Condition-path index lowering (`when xs[i] > 0`). There is one rewriter, but
+// these are declared up here with every other shared scan variable so a first
+// `hold` inside the loop body cannot become a C local of that block only.
+hold cqdone = 0
+hold cqbrk = 0
+hold cqlst = 0
+hold cqstr = 0
+hold cqk = 0
+hold cqkl = 0
+hold cqdi = 0
+hold cqdl = 0
+hold cqok2 = 0
+hold cqj = 0
+hold cqai = 0
+hold cqq = 0
+hold cqok = 0
+hold cqcd = 0
+hold cqix = ""
+hold cqkey = ""
+hold cqsrc = ""
+hold cqfn = ""
+hold iqany = 0
+hold iqq = 0
+hold iql2 = 0
+hold iqc = 0
+hold opistart = 0
+hold opibad = 0
+// For-bound index lowering (`for k in 0..xs[1]`). Same reason as above: the
+// scan runs in several sibling blocks, so every name is declared up here.
+hold fvbidone = 0
+hold fvbich = 0
+hold fvbinm = ""
+hold fvbii = 0
+hold fvbir = 0
+hold fvbic = 0
+hold fvbis = 0
+hold fvbibrk = 0
+hold fvbkey2 = ""
+hold fvbkl2 = 0
+hold fvblf2 = 0
+hold fvbli2 = 0
+hold fvbll2 = 0
+hold fvbok2 = 0
+hold fvblj2 = 0
+hold fvbstr2 = 0
+hold fvbsi2 = 0
+hold fvbsl2 = 0
+hold fvbsok = 0
+hold fvbsj = 0
+hold fvbixt = ""
+hold fvbij2 = 0
+hold fvbiok = 0
+hold fvbir2 = 0
+hold fvbic2 = 0
 // nested struct literals: a string stack of outer literal frames,
 //   frame = nm2 SEP lelems SEP nels SEP   (SEP = chr(1), never in the text)
 hold nstack = ""
@@ -8143,6 +8915,9 @@ hold argbracket = 0
                 }
               }
             }
+            // remember where the index starts: if the number-or-name parse
+            // below fails, the numeric-expression retry restarts from here
+            hold iqstart = pos
             hold ix = ""
             hold c1 = 0
             when pos < n {
@@ -8201,7 +8976,44 @@ hold argbracket = 0
                 }
               }
             }
-            // an index must be a number or a name closed by ']'
+            // an empty index is not an index: force the retry below so the
+            // diagnostic is the clear one instead of C's `sx_lget(xs,)`
+            hold iqany = 0
+            hold iqq = 0
+            hold iql2 = len(ix)
+            while iqq < iql2 {
+              hold iqc = sx_index(ix, iqq)
+              when iqc != 32 && iqc != 9 {
+                hold iqany = 1
+              }
+              hold iqq = iqq + 1
+            }
+            when iqany == 0 {
+              hold ixok = 0
+            }
+            // Second chance: the index may be a whole numeric expression
+            // (`xs[i - 1]`, `xs[(a + b) / 2]`, `xs[p.k]`). raw_index copies
+            // the text verbatim and returns "" when it cannot lower it.
+            when ixok == 0 {
+              hold ix = raw_index(source, iqstart, n)
+              when len(ix) > 0 {
+                hold pos = iqstart + len(ix) + 1
+                hold ixok = 1
+                // lower len(NAME) and NAME[IDX] inside the index text; a
+                // refusal here keeps the existing clear diagnostic
+                hold ixl2 = idx_lower(ix, ldecls, sdecls)
+                when len(ixl2) == 0 {
+                  hold ixok = 0
+                  hold exbad3 = 1
+                } otherwise {
+                  when len(ixl2) != len(ix) {
+                    hold rt = 1
+                  }
+                  hold ix = ixl2
+                }
+              }
+            }
+            // an index must be a numeric expression closed by ']'
             when ixok == 0 {
               hold exbad3 = 1
             }
@@ -9368,6 +10180,9 @@ hold ec = 0
             // postfix [index]            // postfix [index]
             when opcq == 91 {
               hold pos = pos + 1
+              // the identifier run below is only the simple case `xs[i]`;
+              // opistart is where a numeric-expression retry restarts
+              hold opistart = pos
               hold opix = ""
               hold rn = 1
               while rn == 1 {
@@ -9383,10 +10198,33 @@ hold ec = 0
                   }
                 }
               }
+              hold opibad = 1
               when pos < n {
                 hold cn = sx_index(source,pos)
                 when cn == 93 {
                   hold pos = pos + 1
+                  hold opibad = 0
+                }
+              }
+              // `xs[i] + xs[i - 1]`: the operand after an operator is parsed
+              // here, so this retry is what makes the SECOND index of a chain
+              // an expression too (raw_index, same rules as a value position)
+              when opibad == 1 {
+                hold opix = raw_index(source, opistart, n)
+                when len(opix) > 0 {
+                  hold pos = opistart + len(opix) + 1
+                  // the same lowering for the second index of a chain
+                  hold opxl2 = idx_lower(opix, ldecls, sdecls)
+                  when len(opxl2) == 0 {
+                    hold exbad3 = 1
+                  } otherwise {
+                    when len(opxl2) != len(opix) {
+                      hold rt = 1
+                    }
+                    hold opix = opxl2
+                  }
+                } otherwise {
+                  hold exbad3 = 1
                 }
               }
               // list or string index (by declaration table)
@@ -11092,6 +11930,9 @@ hold argbracket = 0
                 }
               }
             }
+            // remember where the index starts: if the number-or-name parse
+            // below fails, the numeric-expression retry restarts from here
+            hold iqstart = pos
             hold ix = ""
             hold c1 = 0
             when pos < n {
@@ -11150,7 +11991,44 @@ hold argbracket = 0
                 }
               }
             }
-            // an index must be a number or a name closed by ']'
+            // an empty index is not an index: force the retry below so the
+            // diagnostic is the clear one instead of C's `sx_lget(xs,)`
+            hold iqany = 0
+            hold iqq = 0
+            hold iql2 = len(ix)
+            while iqq < iql2 {
+              hold iqc = sx_index(ix, iqq)
+              when iqc != 32 && iqc != 9 {
+                hold iqany = 1
+              }
+              hold iqq = iqq + 1
+            }
+            when iqany == 0 {
+              hold ixok = 0
+            }
+            // Second chance: the index may be a whole numeric expression
+            // (`xs[i - 1]`, `xs[(a + b) / 2]`, `xs[p.k]`). raw_index copies
+            // the text verbatim and returns "" when it cannot lower it.
+            when ixok == 0 {
+              hold ix = raw_index(source, iqstart, n)
+              when len(ix) > 0 {
+                hold pos = iqstart + len(ix) + 1
+                hold ixok = 1
+                // lower len(NAME) and NAME[IDX] inside the index text; a
+                // refusal here keeps the existing clear diagnostic
+                hold ixl = idx_lower(ix, ldecls, sdecls)
+                when len(ixl) == 0 {
+                  hold ixok = 0
+                  hold exbad3 = 1
+                } otherwise {
+                  when len(ixl) != len(ix) {
+                    hold rt = 1
+                  }
+                  hold ix = ixl
+                }
+              }
+            }
+            // an index must be a numeric expression closed by ']'
             when ixok == 0 {
               hold exbad3 = 1
             }
@@ -12008,6 +12886,9 @@ hold ec = 0
             // postfix [index]            // postfix [index]
             when opcq == 91 {
               hold pos = pos + 1
+              // the identifier run below is only the simple case `xs[i]`;
+              // opistart is where a numeric-expression retry restarts
+              hold opistart = pos
               hold opix = ""
               hold rn = 1
               while rn == 1 {
@@ -12023,10 +12904,33 @@ hold ec = 0
                   }
                 }
               }
+              hold opibad = 1
               when pos < n {
                 hold cn = sx_index(source,pos)
                 when cn == 93 {
                   hold pos = pos + 1
+                  hold opibad = 0
+                }
+              }
+              // `xs[i] + xs[i - 1]`: the operand after an operator is parsed
+              // here, so this retry is what makes the SECOND index of a chain
+              // an expression too (raw_index, same rules as a value position)
+              when opibad == 1 {
+                hold opix = raw_index(source, opistart, n)
+                when len(opix) > 0 {
+                  hold pos = opistart + len(opix) + 1
+                  // the same lowering for the second index of a chain
+                  hold opxl = idx_lower(opix, ldecls, sdecls)
+                  when len(opxl) == 0 {
+                    hold exbad3 = 1
+                  } otherwise {
+                    when len(opxl) != len(opix) {
+                      hold rt = 1
+                    }
+                    hold opix = opxl
+                  }
+                } otherwise {
+                  hold exbad3 = 1
                 }
               }
               // list or string index (by declaration table)
@@ -13340,7 +14244,10 @@ hold ec = 0
           when ccx == 93 {
             hold cwbracket = cwbracket - 1
           }
-          when ccx == 37 && cwbracket == 0 {
+          when (ccx == 37 || ccx == 43) && cwbracket == 0 {
+            // '%' and '+' both need their operands: the scans below clobber
+            // ccx, so the operator is kept here
+            hold cwop = ccx
             // ---- left operand: scan back over the mul-level chain ----
             hold cwal = len(crepl)
             hold cwrun = 1
@@ -13368,9 +14275,53 @@ hold ec = 0
                   }
                   hold cwrun = 1
                 } otherwise {
-                  when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 || ccx == 46 || ccx == 42 || ccx == 47 || ccx == 32 || ccx == 9 {
+                  when ccx == 34 {
+                    // a quoted literal: cwal sits just after its CLOSING
+                    // quote, so step over that one and then walk back to the
+                    // opening quote -- `"hi " + n` needs the whole literal as
+                    // the left operand for str_operand to recognise it
                     hold cwal = cwal - 1
+                    hold cwqb = 1
+                    while cwqb == 1 {
+                      when cwal <= 0 {
+                        hold cwqb = 0
+                      } otherwise {
+                        hold cwqc = sx_index(crepl, cwal - 1)
+                        hold cwal = cwal - 1
+                        when cwqc == 34 {
+                          // an escaped quote does not open the literal: an odd
+                          // run of backslashes before it means it is escaped
+                          hold cwesc = 0
+                          hold cwbk = cwal
+                          hold cwbb = 1
+                          while cwbb == 1 {
+                            when cwbk > 0 {
+                              when sx_index(crepl, cwbk - 1) == 92 {
+                                hold cwbk = cwbk - 1
+                                when cwesc == 0 {
+                                  hold cwesc = 1
+                                } otherwise {
+                                  hold cwesc = 0
+                                }
+                              } otherwise {
+                                hold cwbb = 0
+                              }
+                            } otherwise {
+                              hold cwbb = 0
+                            }
+                          }
+                          when cwesc == 0 {
+                            hold cwqb = 0
+                          }
+                        }
+                      }
+                    }
                     hold cwrun = 1
+                  } otherwise {
+                    when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 || ccx == 46 || ccx == 42 || ccx == 47 || ccx == 32 || ccx == 9 {
+                      hold cwal = cwal - 1
+                      hold cwrun = 1
+                    }
                   }
                 }
               }
@@ -13397,7 +14348,32 @@ hold ec = 0
                 hold cwre = cwre + 1
               }
             }
+            // a quoted literal is a whole operand: `name + "tail"`
+            hold cwq3 = 0
             when cwre < cl {
+              when sx_index(ctrim, cwre) == 34 {
+                hold cwq3 = 1
+                hold cwre = cwre + 1
+                hold cwr2 = 1
+                while cwr2 == 1 {
+                  when cwre >= cl {
+                    hold cwr2 = 0
+                  } otherwise {
+                    hold cwqd = sx_index(ctrim, cwre)
+                    hold cwre = cwre + 1
+                    when cwqd == 92 {
+                      when cwre < cl {
+                        hold cwre = cwre + 1
+                      }
+                    }
+                    when cwqd == 34 {
+                      hold cwr2 = 0
+                    }
+                  }
+                }
+              }
+            }
+            when cwq3 == 0 && cwre < cl {
               hold ccx = sx_index(ctrim, cwre)
               when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || (ccx >= 48 && ccx <= 57) || ccx == 95 || ccx == 46 {
                 hold cwnb = 1
@@ -13415,8 +14391,11 @@ hold ec = 0
                 }
               }
             }
-            // postfix groups and .field, repeated
+            // postfix groups and .field, repeated (never after a literal)
             hold cwnb = 1
+            when cwq3 == 1 {
+              hold cwnb = 0
+            }
             while cwnb == 1 {
               hold cwnb = 0
               when cwre < cl {
@@ -13483,13 +14462,56 @@ hold ec = 0
               hold cwnew = concat(cwnew, chr(sx_index(crepl, cwj)))
               hold cwj = cwj + 1
             }
-            hold cwnew = concat(cwnew, "sx_mod((double)(")
-            hold cwnew = concat(cwnew, cwl)
-            hold cwnew = concat(cwnew, "),(double)(")
-            hold cwnew = concat(cwnew, cwr)
-            hold cwnew = concat(cwnew, "))")
-            hold crepl = cwnew
-            hold cwi = cwre
+            when cwop == 37 {
+              when str_operand(cwl, sdecls) == 1 || str_operand(cwr, sdecls) == 1 {
+                when perr == 0 {
+                  hold permsg = "'%' truncates two numbers; one of its operands is a string"
+                }
+                hold perr = 1
+              }
+              hold cwnew = concat(cwnew, "sx_mod((double)(")
+              hold cwnew = concat(cwnew, cwl)
+              hold cwnew = concat(cwnew, "),(double)(")
+              hold cwnew = concat(cwnew, cwr)
+              hold cwnew = concat(cwnew, "))")
+              hold crepl = cwnew
+              hold cwi = cwre
+            }
+            when cwop == 43 {
+              // '+' joins two strings through sx_cat and adds two numbers
+              // with C's own '+', which is what the value-position parser
+              // already does; a `give`, a condition or a parenthesized
+              // expression used to copy the '+' straight into the C
+              hold cwls = str_operand(cwl, sdecls)
+              hold cwrs = str_operand(cwr, sdecls)
+              when cwls == 1 && cwrs == 1 {
+                hold cwnew = concat(cwnew, "sx_cat(")
+                hold cwnew = concat(cwnew, cwl)
+                hold cwnew = concat(cwnew, ", ")
+                hold cwnew = concat(cwnew, cwr)
+                hold cwnew = concat(cwnew, ")")
+                hold crepl = cwnew
+                hold rt = 1
+                hold cwi = cwre
+              }
+              when cwls + cwrs == 1 {
+                when perr == 0 {
+                  hold cwmix = cwr
+                  when cwrs == 1 {
+                    hold cwmix = cwl
+                  }
+                  hold permsg = concat("+ joins two strings or adds two numbers; the other side of '", cwmix)
+                  hold permsg = concat(permsg, "' is not a string (bind it with hold first)")
+                }
+                hold perr = 1
+                hold crepl = concat(crepl, chr(cwop))
+                hold cwi = cwi + 1
+              }
+              when cwls == 0 && cwrs == 0 {
+                hold crepl = concat(crepl, chr(cwop))
+                hold cwi = cwi + 1
+              }
+            }
           } otherwise {
             when (ccx >= 97 && ccx <= 122) || (ccx >= 65 && ccx <= 90) || ccx == 95 {
               // ---- an identifier: lower a builtin call to its runtime
@@ -13699,13 +14721,134 @@ hold ec = 0
                   }
                 }
               }
-              when sx_eq(cwmap, "") {
-                hold crepl = concat(crepl, cwid)
-              } otherwise {
-                // keep the call's own spacing: only the name is replaced
-                hold crepl = concat(crepl, cwmap)
+              // ---- an indexed list or string inside a condition ----------
+              // `when xs[i] > 0` and `while s[i] != 34` used to be copied
+              // verbatim, so the generated C subscripted an sx_list struct
+              // with a double: "array subscript is not an integer". A declared
+              // list now becomes sx_lget(NAME, IDX) and a declared string
+              // becomes sx_idx(NAME, IDX), exactly as in a value position, and
+              // both helpers take a double, so an arithmetic index works here
+              // too. A name that is neither list nor string is copied
+              // unchanged, so this branch only ever adds working programs.
+              hold cqdone = 0
+              hold cqbrk = 0
+              when cwcall == 0 && sx_eq(cwmap, "") && cwnx < cl {
+                hold ccx = sx_index(ctrim, cwnx)
+                when ccx == 91 {
+                  hold cqbrk = 1
+                }
               }
-              hold cwi = cwj2
+              when cqbrk == 1 {
+                hold cqkey = concat("|", cwid)
+                hold cqkey = concat(cqkey, "|")
+                hold cqkl = len(cqkey)
+                hold cqlst = 0
+                hold cqstr = 0
+                hold cqk = 0
+                while cqk < 2 {
+                  hold cqsrc = ldecls
+                  when cqk == 1 {
+                    hold cqsrc = sdecls
+                  }
+                  hold cqdi = 0
+                  hold cqdl = len(cqsrc)
+                  while cqdi + cqkl <= cqdl {
+                    hold cqok2 = 1
+                    hold cqj = 0
+                    while cqj < cqkl {
+                      when sx_index(cqsrc, cqdi + cqj) == sx_index(cqkey, cqj) {
+                        hold cqj = cqj + 1
+                      } otherwise {
+                        hold cqok2 = 0
+                        hold cqj = cqkl
+                      }
+                    }
+                    when cqok2 == 1 {
+                      when cqk == 0 {
+                        hold cqlst = 1
+                      } otherwise {
+                        hold cqstr = 1
+                      }
+                      hold cqdi = cqdl
+                    } otherwise {
+                      hold cqdi = cqdi + 1
+                    }
+                  }
+                  hold cqk = cqk + 1
+                }
+                when cqlst == 1 || cqstr == 1 {
+                  hold cqix = ""
+                  hold cqai = cwnx + 1
+                  hold cqq = 1
+                  hold cqok = 1
+                  hold cqdep = 0
+                  while cqq == 1 {
+                    when cqai >= cl {
+                      hold cqq = 0
+                      hold cqok = 0
+                    } otherwise {
+                      hold cqcd = sx_index(ctrim, cqai)
+                      when cqcd == 93 && cqdep == 0 {
+                        hold cqq = 0
+                      } otherwise {
+                        // a nested index is copied with its brackets, and
+                        // idx_lower below decides what is lowerable
+                        when cqcd == 91 {
+                          hold cqdep = cqdep + 1
+                        }
+                        when cqcd == 93 {
+                          hold cqdep = cqdep - 1
+                        }
+                        hold cqix = concat(cqix, chr(cqcd))
+                        hold cqai = cqai + 1
+                      }
+                    }
+                  }
+                  when cqok == 1 {
+                    hold cqxl = idx_lower(cqix, ldecls, sdecls)
+                    when len(cqxl) == 0 {
+                      hold cqok = 0
+                    } otherwise {
+                      when len(cqxl) != len(cqix) {
+                        hold rt = 1
+                      }
+                      hold cqix = cqxl
+                    }
+                  }
+                  when cqok == 0 {
+                    when perr == 0 {
+                      hold permsg = concat("an index inside a condition must be a numeric expression over numbers, names, fields, len(), indexes and + - * /; '", cwid)
+                      hold permsg = concat(permsg, "' is indexed with something else (bind it with hold first)")
+                    }
+                    hold perr = 1
+                  } otherwise {
+                    hold cqfn = "sx_idx"
+                    when cqlst == 1 {
+                      hold cqfn = "sx_lget"
+                      hold lt = 1
+                    } otherwise {
+                      hold rt = 1
+                    }
+                    hold crepl = concat(crepl, cqfn)
+                    hold crepl = concat(crepl, "(")
+                    hold crepl = concat(crepl, cwid)
+                    hold crepl = concat(crepl, ",")
+                    hold crepl = concat(crepl, cqix)
+                    hold crepl = concat(crepl, ")")
+                    hold cwi = cqai + 1
+                    hold cqdone = 1
+                  }
+                }
+              }
+              when cqdone == 0 {
+                when sx_eq(cwmap, "") {
+                  hold crepl = concat(crepl, cwid)
+                } otherwise {
+                  // keep the call's own spacing: only the name is replaced
+                  hold crepl = concat(crepl, cwmap)
+                }
+                hold cwi = cwj2
+              }
             } otherwise {
               hold crepl = concat(crepl, chr(ccx))
               // `/` always divides doubles (10 / 4 is 2.5, never C's 2)
@@ -15273,6 +16416,11 @@ hold ec = 0
             when fvstr == 1 {
             // for c in s { ... }  ->  byte walk over the string: c is the one-byte
             // string at index __sx_ix (sx_idx is the byte, sx_chr makes a 1-char string)
+            // The walk needs sx_len/sx_idx/sx_chr, which only the full runtime
+            // preamble defines. A source that is a struct field (for c in p.name)
+            // declares no string variable of its own, so without this the emitted
+            // C called sx_len without a definition and failed to link.
+            hold rt = 1
             hold fvix = "__sx_ix"
             hold body = concat(body, ind)
             hold body = concat(body, "for (double ")
@@ -15388,8 +16536,167 @@ hold ec = 0
                   hold fvbi = fvbn
                 }
               } otherwise {
-                hold fvbc = concat(fvbc, chr(sx_index(fvb, fvbi)))
-                hold fvbi = fvbi + 1
+                // An indexed list or string may also appear in a BOUND:
+                // `for k in 0..xs[1]` used to be copied verbatim, so the
+                // generated C subscripted an sx_list struct with a double
+                // ("array subscript is not an integer"). Same lowering as in a
+                // condition: sx_lget for a declared list, sx_idx for a
+                // declared string, index text copied as-is, and everything
+                // else (a nested index, a comma, a quote, '%' or a call) is a
+                // clear refusal rather than invalid C.
+                hold fvbidone = 0
+                hold fvbich = sx_index(fvb, fvbi)
+                when (fvbich >= 97 && fvbich <= 122) || (fvbich >= 65 && fvbich <= 90) || fvbich == 95 {
+                  hold fvbinm = ""
+                  hold fvbii = fvbi
+                  hold fvbir = 1
+                  while fvbir == 1 {
+                    when fvbii >= fvbn {
+                      hold fvbir = 0
+                    } otherwise {
+                      hold fvbic = sx_index(fvb, fvbii)
+                      when (fvbic >= 97 && fvbic <= 122) || (fvbic >= 65 && fvbic <= 90) || (fvbic >= 48 && fvbic <= 57) || fvbic == 95 {
+                        hold fvbinm = concat(fvbinm, chr(fvbic))
+                        hold fvbii = fvbii + 1
+                      } otherwise {
+                        hold fvbir = 0
+                      }
+                    }
+                  }
+                  hold fvbis = 1
+                  while fvbis == 1 {
+                    when fvbii >= fvbn {
+                      hold fvbis = 0
+                    } otherwise {
+                      hold fvbic = sx_index(fvb, fvbii)
+                      when fvbic == 32 || fvbic == 9 {
+                        hold fvbii = fvbii + 1
+                      } otherwise {
+                        hold fvbis = 0
+                      }
+                    }
+                  }
+                  hold fvbibrk = 0
+                  when fvbii < fvbn {
+                    hold fvbic = sx_index(fvb, fvbii)
+                    when fvbic == 91 {
+                      hold fvbibrk = 1
+                    }
+                  }
+                  when fvbibrk == 1 {
+                    hold fvbkey2 = concat(concat("|", fvbinm), "|")
+                    hold fvbkl2 = len(fvbkey2)
+                    hold fvblf2 = 0
+                    hold fvbli2 = 0
+                    hold fvbll2 = len(ldecls)
+                    while fvbli2 + fvbkl2 <= fvbll2 {
+                      hold fvbok2 = 1
+                      hold fvblj2 = 0
+                      while fvblj2 < fvbkl2 {
+                        when sx_index(ldecls, fvbli2 + fvblj2) == sx_index(fvbkey2, fvblj2) {
+                          hold fvblj2 = fvblj2 + 1
+                        } otherwise {
+                          hold fvbok2 = 0
+                          hold fvblj2 = fvbkl2
+                        }
+                      }
+                      when fvbok2 == 1 {
+                        hold fvblf2 = 1
+                        hold fvbli2 = fvbll2
+                      } otherwise {
+                        hold fvbli2 = fvbli2 + 1
+                      }
+                    }
+                    hold fvbstr2 = 0
+                    hold fvbsi2 = 0
+                    hold fvbsl2 = len(sdecls)
+                    while fvbsi2 + fvbkl2 <= fvbsl2 {
+                      hold fvbsok = 1
+                      hold fvbsj = 0
+                      while fvbsj < fvbkl2 {
+                        when sx_index(sdecls, fvbsi2 + fvbsj) == sx_index(fvbkey2, fvbsj) {
+                          hold fvbsj = fvbsj + 1
+                        } otherwise {
+                          hold fvbsok = 0
+                          hold fvbsj = fvbkl2
+                        }
+                      }
+                      when fvbsok == 1 {
+                        hold fvbstr2 = 1
+                        hold fvbsi2 = fvbsl2
+                      } otherwise {
+                        hold fvbsi2 = fvbsi2 + 1
+                      }
+                    }
+                    when fvblf2 == 1 || fvbstr2 == 1 {
+                      hold fvbixt = ""
+                      hold fvbij2 = fvbii + 1
+                      hold fvbiok = 1
+                      hold fvbir2 = 1
+                      hold fvbdep = 0
+                      while fvbir2 == 1 {
+                        when fvbij2 >= fvbn {
+                          hold fvbir2 = 0
+                          hold fvbiok = 0
+                        } otherwise {
+                          hold fvbic2 = sx_index(fvb, fvbij2)
+                          when fvbic2 == 93 && fvbdep == 0 {
+                            hold fvbir2 = 0
+                          } otherwise {
+                            // a nested index is copied with its brackets and
+                            // idx_lower below decides what is lowerable
+                            when fvbic2 == 91 {
+                              hold fvbdep = fvbdep + 1
+                            }
+                            when fvbic2 == 93 {
+                              hold fvbdep = fvbdep - 1
+                            }
+                            hold fvbixt = concat(fvbixt, chr(fvbic2))
+                            hold fvbij2 = fvbij2 + 1
+                          }
+                        }
+                      }
+                      when fvbiok == 1 {
+                        // len(NAME) and NAME[IDX] lower in a for bound exactly
+                        // as they do in a value position
+                        hold fvbxl = idx_lower(fvbixt, ldecls, sdecls)
+                        when len(fvbxl) == 0 {
+                          hold fvbiok = 0
+                        } otherwise {
+                          when len(fvbxl) != len(fvbixt) {
+                            hold rt = 1
+                          }
+                          hold fvbixt = fvbxl
+                        }
+                      }
+                      when fvbiok == 0 {
+                        when perr == 0 {
+                          hold permsg = concat("an index in a for bound must be a numeric expression over numbers, names, fields, len(), indexes and + - * /; '", fvbinm)
+                          hold permsg = concat(permsg, "' is indexed with something else (bind it with hold first)")
+                        }
+                        hold perr = 1
+                      } otherwise {
+                        when fvblf2 == 1 {
+                          hold fvbc = concat(fvbc, "sx_lget(")
+                          hold lt = 1
+                        } otherwise {
+                          hold fvbc = concat(fvbc, "sx_idx(")
+                          hold rt = 1
+                        }
+                        hold fvbc = concat(fvbc, fvbinm)
+                        hold fvbc = concat(fvbc, ",")
+                        hold fvbc = concat(fvbc, fvbixt)
+                        hold fvbc = concat(fvbc, ")")
+                        hold fvbi = fvbij2 + 1
+                        hold fvbidone = 1
+                      }
+                    }
+                  }
+                }
+                when fvbidone == 0 {
+                  hold fvbc = concat(fvbc, chr(sx_index(fvb, fvbi)))
+                  hold fvbi = fvbi + 1
+                }
               }
             }
             hold body = concat(body, ind)
@@ -15580,6 +16887,27 @@ hold ec = 0
           }
         }
       }
+      // A template declaration: gxscan recorded it and gxpass already
+      // registered one concrete struct per instantiation, so the walker only
+      // skips the parameter list and the body. The template itself must not
+      // enter sdefs, or `Box` would look concrete with the template's fields.
+      gxtpl = 0
+      when pos < n {
+        when sx_index(source,pos) == 60 {
+          when len(sxelookup(gsdefs, stname, ":")) > 0 {
+            gxtpl = 1
+            hold gxq = pos + 1
+            while gxq < n && sx_index(source,gxq) != 62 {
+              hold gxq = gxq + 1
+            }
+            hold pos = sxflowspace(source, gxq + 1)
+          } otherwise {
+            hold exerr = concat(exerr, "#error sayanox-min: a struct type parameter list is not num, str or list at every use")
+            hold exerr = concat(exerr, nl)
+            show "min: a struct type argument must be num, str or list, and every instantiation must be spelled the same way (docs/TYPES_ROADMAP.md)"
+          }
+        }
+      }
       when pos < n {
         hold cs = sx_index(source,pos)
         when cs == 123 {
@@ -15640,10 +16968,12 @@ hold ec = 0
           }
         }
       }
-      hold sdefs = concat(sdefs, stname)
-      hold sdefs = concat(sdefs, ":")
-      hold sdefs = concat(sdefs, sfields)
-      hold sdefs = concat(sdefs, ";")
+      when gxtpl == 0 {
+        hold sdefs = concat(sdefs, stname)
+        hold sdefs = concat(sdefs, ":")
+        hold sdefs = concat(sdefs, sfields)
+        hold sdefs = concat(sdefs, ";")
+      }
     }
 
     // not the start of any statement: a stray character left over after a
@@ -15857,11 +17187,11 @@ when rt == 1 {
   hold out = concat(out, "#include <string.h>\n")
   hold out = concat(out, "#include <stdarg.h>\n#include <setjmp.h>\n")
   hold out = concat(out, "typedef struct sx_list { double *d; long n; long cap; } sx_list;\ntypedef struct sx_gcb {\n  struct sx_gcb *next;      /* every live block, for the sweep */\n  size_t cls;               /* size class: the free list it goes back to */\n  size_t kind;              /* 0 raw bytes, 1 sx_list, 2 double array */\n  size_t mark;\n} sx_gcb;\n#define SX_GCH ((size_t)32)\n#define SX_NCLS 26\nstatic sx_gcb *sx_gcall = 0;\nstatic sx_gcb *sx_gfree[SX_NCLS];\nstatic char **sx_ghash = 0;               /* payload address -> block */\nstatic sx_gcb **sx_gblk = 0;\nstatic sx_gcb **sx_gsort = 0;             /* blocks by address, for interiors */\nstatic size_t sx_ghcap = 0, sx_ghlive = 0, sx_gsort_n = 0;\nstatic char *sx_stack_bot = 0;\nstatic double sx_gc_n = 0, sx_gc_freed = 0, sx_gc_thresh = 0, sx_gc_bytes = 0;\n\nstatic size_t sx_gc_class_size(size_t c){ return (size_t)32 << c; }\nstatic size_t sx_gc_cls(size_t need){\n")
-  hold out = concat(out, "  size_t c = 0, sz = 32;\n  while (sz < need && c + 1 < SX_NCLS){ sz <<= 1; c += 1; }\n  return c;\n}\n\nstatic void sx_gc_rehash(size_t cap){\n  char **nh;\n  sx_gcb **nb;\n  sx_gcb *b;\n  if (cap < 4096) cap = 4096;\n  while (cap < (sx_ghlive + 1) * 4) cap <<= 1;\n  nh = (char**)calloc(cap, sizeof(char*));\n  nb = (sx_gcb**)calloc(cap, sizeof(sx_gcb*));\n  b = sx_gcall;\n  while (b){\n    char *pay = (char*)b + SX_GCH;\n    size_t h = ((size_t)pay >> 4) & (cap - 1);\n    while (nh[h]) h = (h + 1) & (cap - 1);\n    nh[h] = pay; nb[h] = b;\n    b = b->next;\n  }\n  free(sx_ghash); free(sx_gblk);\n  sx_ghash = nh; sx_gblk = nb; sx_ghcap = cap;\n}\n\nstatic void sx_gc_hash_put(char *pay, sx_gcb *b){\n  size_t h;\n  if (!sx_ghcap) sx_gc_rehash(1u << 12);\n  if ((sx_ghlive + 1) * 4 > sx_ghcap){ sx_gc_rehash(sx_ghcap * 2); return; }\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n")
-  hold out = concat(out, "  while (sx_ghash[h]) h = (h + 1) & (sx_ghcap - 1);\n  sx_ghash[h] = pay; sx_gblk[h] = b;\n}\n\nstatic sx_gcb *sx_gc_hash_get(char *pay){\n  size_t h;\n  if (!sx_ghcap) return 0;\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n  while (sx_ghash[h] && sx_ghash[h] != pay) h = (h + 1) & (sx_ghcap - 1);\n  return sx_ghash[h] ? sx_gblk[h] : 0;\n}\n\nstatic int sx_gc_cmp(const void *a, const void *b){\n  char *pa = (char*)(*(sx_gcb* const*)a) + SX_GCH;\n  char *pb = (char*)(*(sx_gcb* const*)b) + SX_GCH;\n  return pa < pb ? -1 : (pa > pb ? 1 : 0);\n}\nstatic void sx_gc_sorted(void){\n  size_t i = 0;\n  sx_gcb *b = sx_gcall;\n  if (sx_gsort_n != sx_ghlive){\n    free(sx_gsort);\n    sx_gsort = (sx_gcb**)malloc((sx_ghlive + 1) * sizeof(sx_gcb*));\n  }\n  while (b && i < sx_ghlive){ sx_gsort[i] = b; i += 1; b = b->next; }\n  sx_gsort_n = i;\n  qsort(sx_gsort, i, sizeof(sx_gcb*), sx_gc_cmp);\n}\n")
+  hold out = concat(out, "  size_t c = 0, sz = 32;\n  while (sz < need && c + 1 < SX_NCLS){ sz <<= 1; c += 1; }\n  return c;\n}\n\nstatic void sx_gc_rehash(size_t cap){\n  char **nh;\n  sx_gcb **nb;\n  sx_gcb *b;\n  if (cap < 4096) cap = 4096;\n  while (cap < (sx_ghlive + 1) * 4) cap <<= 1;\n  nh = (char**)calloc(cap, sizeof(char*));\n  nb = (sx_gcb**)calloc(cap, sizeof(sx_gcb*));\n  if (!nh || !nb) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  b = sx_gcall;\n  while (b){\n    char *pay = (char*)b + SX_GCH;\n    size_t h = ((size_t)pay >> 4) & (cap - 1);\n    while (nh[h]) h = (h + 1) & (cap - 1);\n    nh[h] = pay; nb[h] = b;\n    b = b->next;\n  }\n  free(sx_ghash); free(sx_gblk);\n  sx_ghash = nh; sx_gblk = nb; sx_ghcap = cap;\n}\n\nstatic void sx_gc_hash_put(char *pay, sx_gcb *b){\n  size_t h;\n  if (!sx_ghcap) sx_gc_rehash(1u << 12);\n  if ((sx_ghlive + 1) * 4 > sx_ghcap){ sx_gc_rehash(sx_ghcap * 2); return; }\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n")
+  hold out = concat(out, "  while (sx_ghash[h]) h = (h + 1) & (sx_ghcap - 1);\n  sx_ghash[h] = pay; sx_gblk[h] = b;\n}\n\nstatic sx_gcb *sx_gc_hash_get(char *pay){\n  size_t h;\n  if (!sx_ghcap) return 0;\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n  while (sx_ghash[h] && sx_ghash[h] != pay) h = (h + 1) & (sx_ghcap - 1);\n  return sx_ghash[h] ? sx_gblk[h] : 0;\n}\n\nstatic int sx_gc_cmp(const void *a, const void *b){\n  char *pa = (char*)(*(sx_gcb* const*)a) + SX_GCH;\n  char *pb = (char*)(*(sx_gcb* const*)b) + SX_GCH;\n  return pa < pb ? -1 : (pa > pb ? 1 : 0);\n}\nstatic void sx_gc_sorted(void){\n  size_t i = 0;\n  sx_gcb *b = sx_gcall;\n  if (sx_gsort_n != sx_ghlive){\n    free(sx_gsort);\n    sx_gsort = (sx_gcb**)malloc((sx_ghlive + 1) * sizeof(sx_gcb*));\n    if (!sx_gsort) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  }\n  while (b && i < sx_ghlive){ sx_gsort[i] = b; i += 1; b = b->next; }\n  sx_gsort_n = i;\n  qsort(sx_gsort, i, sizeof(sx_gcb*), sx_gc_cmp);\n}\n")
   hold out = concat(out, "static sx_gcb *sx_gc_containing(char *p){\n  size_t lo = 0, hi = sx_gsort_n;\n  while (lo < hi){\n    size_t mid = (lo + hi) / 2;\n    char *pay = (char*)sx_gsort[mid] + SX_GCH;\n    size_t sz = sx_gc_class_size(sx_gsort[mid]->cls);\n    if (p < pay) hi = mid;\n    else if (p >= pay + sz) lo = mid + 1;\n    else return sx_gsort[mid];\n  }\n  return 0;\n}\n\nstatic void sx_gc_mark(void *p){\n  sx_gcb *b;\n  if (!p) return;\n  b = sx_gc_hash_get((char*)p);\n  if (!b) b = sx_gc_containing((char*)p);\n  if (!b || b->mark) return;\n  b->mark = 1;\n  if (b->kind == 1){\n    sx_list *L = (sx_list*)((char*)b + SX_GCH);\n    if (L->d) sx_gc_mark((char*)L->d);\n  }\n}\n\nstatic void sx_gc_scan(char *lo, char *hi){\n  lo = (char*)(((size_t)lo + 7u) & ~(size_t)7u);\n  while (lo + 8 <= hi){\n    sx_gc_mark(*(char**)lo);\n    lo += 8;\n  }\n}\n\nstatic void sx_gc_init(void *anchor){\n  sx_stack_bot = (char*)anchor;\n")
   hold out = concat(out, "  if (!sx_gc_thresh) sx_gc_thresh = (double)(8u << 20);\n}\n\nstatic void sx_gc_collect(void){\n  double before = sx_gc_bytes;\n  sx_gcb **pp;\n  if (!sx_gcall || !sx_stack_bot) return;\n  sx_gc_sorted();\n  {\n    jmp_buf jb;\n    setjmp(jb);\n    sx_gc_scan((char*)&jb, (char*)&jb + sizeof(jb));\n    sx_gc_scan((char*)&jb, sx_stack_bot);\n  }\n  pp = &sx_gcall;\n  while (*pp){\n    sx_gcb *b = *pp;\n    if (b->mark){\n      b->mark = 0;\n      pp = &b->next;\n    } else {\n      size_t c = b->cls;\n      *pp = b->next;\n      sx_gc_bytes -= (double)sx_gc_class_size(c);\n      sx_ghlive -= 1;\n      b->next = sx_gfree[c];\n      sx_gfree[c] = b;\n    }\n  }\n  sx_gc_n += 1.0;\n  sx_gc_freed = before - sx_gc_bytes;\n  sx_gsort_n = 0;\n  sx_gc_rehash(4096);\n  sx_gc_thresh = sx_gc_bytes * 1.5 + (double)(4u << 20);\n}\n\nstatic void *sx_gc_alloc(int kind, size_t payload){\n  size_t need = payload + SX_GCH;\n")
-  hold out = concat(out, "  size_t c = sx_gc_cls(need);\n  sx_gcb *b;\n  if (sx_gc_bytes >= sx_gc_thresh) sx_gc_collect();\n  b = sx_gfree[c];\n  if (b) sx_gfree[c] = b->next;\n  else b = (sx_gcb*)malloc(sx_gc_class_size(c));\n  b->cls = c;\n  b->kind = (size_t)kind;\n  b->mark = 0;\n  b->next = sx_gcall;\n  sx_gcall = b;\n  sx_ghlive += 1;\n  sx_gc_hash_put((char*)b + SX_GCH, b);\n  sx_gc_bytes += (double)sx_gc_class_size(c);\n  return (char*)b + SX_GCH;\n}\n\nstatic double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\nstatic double sx_gc_live(void){ return sx_gc_bytes; }\nstatic double sx_gc_count(void){ return sx_gc_n; }\n\n\n")
+  hold out = concat(out, "  size_t c = sx_gc_cls(need);\n  sx_gcb *b;\n  if (sx_gc_bytes >= sx_gc_thresh) sx_gc_collect();\n  b = sx_gfree[c];\n  if (b) sx_gfree[c] = b->next;\n  else b = (sx_gcb*)malloc(sx_gc_class_size(c));\n  if (!b) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  b->cls = c;\n  b->kind = (size_t)kind;\n  b->mark = 0;\n  b->next = sx_gcall;\n  sx_gcall = b;\n  sx_ghlive += 1;\n  sx_gc_hash_put((char*)b + SX_GCH, b);\n  sx_gc_bytes += (double)sx_gc_class_size(c);\n  return (char*)b + SX_GCH;\n}\n\nstatic double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\nstatic double sx_gc_live(void){ return sx_gc_bytes; }\nstatic double sx_gc_count(void){ return sx_gc_n; }\n\n\n")
   hold out = concat(out, "static int sx_argn=0; static char **sx_argv_p=0;\n")
   hold out = concat(out, "static double sx_argc(void){ return (double)sx_argn; }\n")
   hold out = concat(out, "static char *sx_arg(double v){ long i=(long)v; if(i<0||i>=sx_argn) return \"\"; return sx_argv_p[i]; }\n")
@@ -15893,11 +17223,11 @@ when rt == 1 {
   hold out = concat(out, "#include <stdlib.h>\n")
   hold out = concat(out, "#include <stdarg.h>\n#include <string.h>\n#include <setjmp.h>\n\n")
   hold out = concat(out, "typedef struct sx_list { double *d; long n; long cap; } sx_list;\ntypedef struct sx_gcb {\n  struct sx_gcb *next;      /* every live block, for the sweep */\n  size_t cls;               /* size class: the free list it goes back to */\n  size_t kind;              /* 0 raw bytes, 1 sx_list, 2 double array */\n  size_t mark;\n} sx_gcb;\n#define SX_GCH ((size_t)32)\n#define SX_NCLS 26\nstatic sx_gcb *sx_gcall = 0;\nstatic sx_gcb *sx_gfree[SX_NCLS];\nstatic char **sx_ghash = 0;               /* payload address -> block */\nstatic sx_gcb **sx_gblk = 0;\nstatic sx_gcb **sx_gsort = 0;             /* blocks by address, for interiors */\nstatic size_t sx_ghcap = 0, sx_ghlive = 0, sx_gsort_n = 0;\nstatic char *sx_stack_bot = 0;\nstatic double sx_gc_n = 0, sx_gc_freed = 0, sx_gc_thresh = 0, sx_gc_bytes = 0;\n\nstatic size_t sx_gc_class_size(size_t c){ return (size_t)32 << c; }\nstatic size_t sx_gc_cls(size_t need){\n")
-  hold out = concat(out, "  size_t c = 0, sz = 32;\n  while (sz < need && c + 1 < SX_NCLS){ sz <<= 1; c += 1; }\n  return c;\n}\n\nstatic void sx_gc_rehash(size_t cap){\n  char **nh;\n  sx_gcb **nb;\n  sx_gcb *b;\n  if (cap < 4096) cap = 4096;\n  while (cap < (sx_ghlive + 1) * 4) cap <<= 1;\n  nh = (char**)calloc(cap, sizeof(char*));\n  nb = (sx_gcb**)calloc(cap, sizeof(sx_gcb*));\n  b = sx_gcall;\n  while (b){\n    char *pay = (char*)b + SX_GCH;\n    size_t h = ((size_t)pay >> 4) & (cap - 1);\n    while (nh[h]) h = (h + 1) & (cap - 1);\n    nh[h] = pay; nb[h] = b;\n    b = b->next;\n  }\n  free(sx_ghash); free(sx_gblk);\n  sx_ghash = nh; sx_gblk = nb; sx_ghcap = cap;\n}\n\nstatic void sx_gc_hash_put(char *pay, sx_gcb *b){\n  size_t h;\n  if (!sx_ghcap) sx_gc_rehash(1u << 12);\n  if ((sx_ghlive + 1) * 4 > sx_ghcap){ sx_gc_rehash(sx_ghcap * 2); return; }\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n")
-  hold out = concat(out, "  while (sx_ghash[h]) h = (h + 1) & (sx_ghcap - 1);\n  sx_ghash[h] = pay; sx_gblk[h] = b;\n}\n\nstatic sx_gcb *sx_gc_hash_get(char *pay){\n  size_t h;\n  if (!sx_ghcap) return 0;\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n  while (sx_ghash[h] && sx_ghash[h] != pay) h = (h + 1) & (sx_ghcap - 1);\n  return sx_ghash[h] ? sx_gblk[h] : 0;\n}\n\nstatic int sx_gc_cmp(const void *a, const void *b){\n  char *pa = (char*)(*(sx_gcb* const*)a) + SX_GCH;\n  char *pb = (char*)(*(sx_gcb* const*)b) + SX_GCH;\n  return pa < pb ? -1 : (pa > pb ? 1 : 0);\n}\nstatic void sx_gc_sorted(void){\n  size_t i = 0;\n  sx_gcb *b = sx_gcall;\n  if (sx_gsort_n != sx_ghlive){\n    free(sx_gsort);\n    sx_gsort = (sx_gcb**)malloc((sx_ghlive + 1) * sizeof(sx_gcb*));\n  }\n  while (b && i < sx_ghlive){ sx_gsort[i] = b; i += 1; b = b->next; }\n  sx_gsort_n = i;\n  qsort(sx_gsort, i, sizeof(sx_gcb*), sx_gc_cmp);\n}\n")
+  hold out = concat(out, "  size_t c = 0, sz = 32;\n  while (sz < need && c + 1 < SX_NCLS){ sz <<= 1; c += 1; }\n  return c;\n}\n\nstatic void sx_gc_rehash(size_t cap){\n  char **nh;\n  sx_gcb **nb;\n  sx_gcb *b;\n  if (cap < 4096) cap = 4096;\n  while (cap < (sx_ghlive + 1) * 4) cap <<= 1;\n  nh = (char**)calloc(cap, sizeof(char*));\n  nb = (sx_gcb**)calloc(cap, sizeof(sx_gcb*));\n  if (!nh || !nb) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  b = sx_gcall;\n  while (b){\n    char *pay = (char*)b + SX_GCH;\n    size_t h = ((size_t)pay >> 4) & (cap - 1);\n    while (nh[h]) h = (h + 1) & (cap - 1);\n    nh[h] = pay; nb[h] = b;\n    b = b->next;\n  }\n  free(sx_ghash); free(sx_gblk);\n  sx_ghash = nh; sx_gblk = nb; sx_ghcap = cap;\n}\n\nstatic void sx_gc_hash_put(char *pay, sx_gcb *b){\n  size_t h;\n  if (!sx_ghcap) sx_gc_rehash(1u << 12);\n  if ((sx_ghlive + 1) * 4 > sx_ghcap){ sx_gc_rehash(sx_ghcap * 2); return; }\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n")
+  hold out = concat(out, "  while (sx_ghash[h]) h = (h + 1) & (sx_ghcap - 1);\n  sx_ghash[h] = pay; sx_gblk[h] = b;\n}\n\nstatic sx_gcb *sx_gc_hash_get(char *pay){\n  size_t h;\n  if (!sx_ghcap) return 0;\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n  while (sx_ghash[h] && sx_ghash[h] != pay) h = (h + 1) & (sx_ghcap - 1);\n  return sx_ghash[h] ? sx_gblk[h] : 0;\n}\n\nstatic int sx_gc_cmp(const void *a, const void *b){\n  char *pa = (char*)(*(sx_gcb* const*)a) + SX_GCH;\n  char *pb = (char*)(*(sx_gcb* const*)b) + SX_GCH;\n  return pa < pb ? -1 : (pa > pb ? 1 : 0);\n}\nstatic void sx_gc_sorted(void){\n  size_t i = 0;\n  sx_gcb *b = sx_gcall;\n  if (sx_gsort_n != sx_ghlive){\n    free(sx_gsort);\n    sx_gsort = (sx_gcb**)malloc((sx_ghlive + 1) * sizeof(sx_gcb*));\n    if (!sx_gsort) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  }\n  while (b && i < sx_ghlive){ sx_gsort[i] = b; i += 1; b = b->next; }\n  sx_gsort_n = i;\n  qsort(sx_gsort, i, sizeof(sx_gcb*), sx_gc_cmp);\n}\n")
   hold out = concat(out, "static sx_gcb *sx_gc_containing(char *p){\n  size_t lo = 0, hi = sx_gsort_n;\n  while (lo < hi){\n    size_t mid = (lo + hi) / 2;\n    char *pay = (char*)sx_gsort[mid] + SX_GCH;\n    size_t sz = sx_gc_class_size(sx_gsort[mid]->cls);\n    if (p < pay) hi = mid;\n    else if (p >= pay + sz) lo = mid + 1;\n    else return sx_gsort[mid];\n  }\n  return 0;\n}\n\nstatic void sx_gc_mark(void *p){\n  sx_gcb *b;\n  if (!p) return;\n  b = sx_gc_hash_get((char*)p);\n  if (!b) b = sx_gc_containing((char*)p);\n  if (!b || b->mark) return;\n  b->mark = 1;\n  if (b->kind == 1){\n    sx_list *L = (sx_list*)((char*)b + SX_GCH);\n    if (L->d) sx_gc_mark((char*)L->d);\n  }\n}\n\nstatic void sx_gc_scan(char *lo, char *hi){\n  lo = (char*)(((size_t)lo + 7u) & ~(size_t)7u);\n  while (lo + 8 <= hi){\n    sx_gc_mark(*(char**)lo);\n    lo += 8;\n  }\n}\n\nstatic void sx_gc_init(void *anchor){\n  sx_stack_bot = (char*)anchor;\n")
   hold out = concat(out, "  if (!sx_gc_thresh) sx_gc_thresh = (double)(8u << 20);\n}\n\nstatic void sx_gc_collect(void){\n  double before = sx_gc_bytes;\n  sx_gcb **pp;\n  if (!sx_gcall || !sx_stack_bot) return;\n  sx_gc_sorted();\n  {\n    jmp_buf jb;\n    setjmp(jb);\n    sx_gc_scan((char*)&jb, (char*)&jb + sizeof(jb));\n    sx_gc_scan((char*)&jb, sx_stack_bot);\n  }\n  pp = &sx_gcall;\n  while (*pp){\n    sx_gcb *b = *pp;\n    if (b->mark){\n      b->mark = 0;\n      pp = &b->next;\n    } else {\n      size_t c = b->cls;\n      *pp = b->next;\n      sx_gc_bytes -= (double)sx_gc_class_size(c);\n      sx_ghlive -= 1;\n      b->next = sx_gfree[c];\n      sx_gfree[c] = b;\n    }\n  }\n  sx_gc_n += 1.0;\n  sx_gc_freed = before - sx_gc_bytes;\n  sx_gsort_n = 0;\n  sx_gc_rehash(4096);\n  sx_gc_thresh = sx_gc_bytes * 1.5 + (double)(4u << 20);\n}\n\nstatic void *sx_gc_alloc(int kind, size_t payload){\n  size_t need = payload + SX_GCH;\n")
-  hold out = concat(out, "  size_t c = sx_gc_cls(need);\n  sx_gcb *b;\n  if (sx_gc_bytes >= sx_gc_thresh) sx_gc_collect();\n  b = sx_gfree[c];\n  if (b) sx_gfree[c] = b->next;\n  else b = (sx_gcb*)malloc(sx_gc_class_size(c));\n  b->cls = c;\n  b->kind = (size_t)kind;\n  b->mark = 0;\n  b->next = sx_gcall;\n  sx_gcall = b;\n  sx_ghlive += 1;\n  sx_gc_hash_put((char*)b + SX_GCH, b);\n  sx_gc_bytes += (double)sx_gc_class_size(c);\n  return (char*)b + SX_GCH;\n}\n\nstatic double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\nstatic double sx_gc_live(void){ return sx_gc_bytes; }\nstatic double sx_gc_count(void){ return sx_gc_n; }\n\n\n")
+  hold out = concat(out, "  size_t c = sx_gc_cls(need);\n  sx_gcb *b;\n  if (sx_gc_bytes >= sx_gc_thresh) sx_gc_collect();\n  b = sx_gfree[c];\n  if (b) sx_gfree[c] = b->next;\n  else b = (sx_gcb*)malloc(sx_gc_class_size(c));\n  if (!b) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  b->cls = c;\n  b->kind = (size_t)kind;\n  b->mark = 0;\n  b->next = sx_gcall;\n  sx_gcall = b;\n  sx_ghlive += 1;\n  sx_gc_hash_put((char*)b + SX_GCH, b);\n  sx_gc_bytes += (double)sx_gc_class_size(c);\n  return (char*)b + SX_GCH;\n}\n\nstatic double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\nstatic double sx_gc_live(void){ return sx_gc_bytes; }\nstatic double sx_gc_count(void){ return sx_gc_n; }\n\n\n")
   hold out = concat(out, "static double sx_mod(double a,double b){ long x=(long)a, y=(long)b; if(!y){fputs(\"division by zero\\n\",stderr);exit(1);} return (double)(x%y); }\n")
   hold out = concat(out, "static sx_list *sx_llit(int n,...){ sx_list *L=(sx_list*)sx_gc_alloc(1,sizeof(sx_list)); L->n=n; L->cap=n<4?4:n; L->d=(double*)sx_gc_alloc(2,sizeof(double)*(size_t)L->cap); va_list ap; va_start(ap,n); for(int i=0;i<n;i++) L->d[i]=va_arg(ap,double); va_end(ap); return L; }\n")
   hold out = concat(out, "static double sx_lget(sx_list *L,double v){ long i=(long)v; if(!L){fputs(\"sx: null list\",stderr);exit(1);} if(i<0)i+=L->n; if(i<0||i>=L->n){fputs(\"sx: list index\",stderr);exit(1);} return L->d[i]; }\n")
@@ -15911,9 +17241,6 @@ when inready == 1 {
   hold out = concat(out, inprivate)
   hold out = concat(out, "list(sx_list *value){return value;}\n")
 }
-hold fixfrom = len(out)
-hold out = concat(out, gproto)
-hold out = concat(out, fns)
 // ---------------- struct typedefs (field types come from literals) ----------------
 hold tdi = 0
 hold tdn = len(sdefs)
@@ -16036,6 +17363,9 @@ while tdi < tdn {
   hold out = concat(out, ";")
   hold out = concat(out, nl)
 }
+hold fixfrom = len(out)
+hold out = concat(out, gproto)
+hold out = concat(out, fns)
 // Keep the stack anchor in a caller frame, above EVERY generated-program
 // local at both O0 and O2. An anchor beside those locals can be laid out
 // below them, causing conservative scanning to miss live roots. The volatile
@@ -16170,9 +17500,9 @@ when perr == 1 {
   show shmsg
 }
 when exbad3 == 1 {
-  hold exerr = concat(exerr, "#error sayanox-min: unsupported index expression (number or name only)")
+  hold exerr = concat(exerr, "#error sayanox-min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / and parentheses; %, a call other than len() and a quoted string need a hold first)")
   hold exerr = concat(exerr, nl)
-  show "min: unsupported index expression (number or name only)"
+  show "min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / and parentheses; %, a call other than len() and a quoted string need a hold first)"
 }
 // Rewrite every generated C integer token in user code to a double token.
 // `fixfrom` is the end of the runtime preamble; that preamble intentionally

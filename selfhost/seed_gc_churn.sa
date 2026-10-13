@@ -1,0 +1,10 @@
+// A concat churn that RETAINS NOTHING: 200k iterations, each building a fresh
+// 37-char string and dropping it on the next assignment. Under an address-space
+// cap this separates a backend that reclaims (min seed builder plus assignment
+// free, gen2/native mark and sweep) from one that only grows.
+hold i = 0
+while i < 200000 {
+  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")
+  hold i = i + 1
+}
+show i

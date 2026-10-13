@@ -1,0 +1,35 @@
+// The supported spelling of what generic structs would express: one concrete
+// struct name per field layout. Two "specializations" of the same shape live in
+// one program, are copied and read back, and print identically on seed-min,
+// gen2 and native. This is the workaround docs/TYPES_ROADMAP.md asks for until
+// per-instantiation layouts exist.
+//
+// Deliberately NOT here: a dotted field read inside a struct literal
+// (`NumBox { a.v }`). seed-min accepts it, gen2 refuses it with an #error
+// ("struct/list literal value must be a number, string, name, or nested
+// struct") and native refuses it ("field is used with two different types").
+// test-generic-structs pins that divergence separately.
+struct NumBox {
+  v
+}
+struct TextBox {
+  s
+}
+struct PairBox {
+  n,
+  s
+}
+hold a = NumBox { 7 }
+hold t = TextBox { "seven" }
+hold p = PairBox { 8, "eight" }
+show a.v
+show t.s
+show p.n
+show p.s
+hold xs = []
+push(xs, a.v)
+push(xs, p.n)
+show len(xs)
+show xs[1]
+hold q = NumBox { 9 }
+show q.v
