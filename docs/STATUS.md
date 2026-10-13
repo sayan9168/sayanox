@@ -1,18 +1,21 @@
 # Status
 
-Last updated: 2026-10-12
+Last updated: 2026-10-13
 
 ## Entry
 
 ```bash
-make doctor             # -> DOCTOR-OK                log: docs/logs/make-doctor.log
-make true-selfhost      # -> TRUE-SELFHOST-MIN-OK     log: docs/logs/make-true-selfhost-min.log
-make gen3               # -> GEN3-OK (gen3 == gen4)   log: docs/logs/make-gen3.log
-make native-test        # -> NATIVE-TEST-OK           log: docs/logs/make-native-test.log
+make doctor             # -> DOCTOR-OK                log: docs/logs/ir-log-doctor.log
+make true-selfhost      # -> TRUE-SELFHOST-MIN-OK     log: docs/logs/ir-log-true-selfhost.log
+make gen3               # -> GEN3-OK (gen3 == gen4)   log: docs/logs/ir-log-gen3.log
+make native-test        # -> NATIVE-TEST-OK           log: docs/logs/ir-log-native-test.log
 ```
 
-The final four gate logs are in `docs/logs/` (2026-10-12). They were run on
-this x86-64 Linux workspace, with the native compiler already built. Feature
+The newest four gate logs are `docs/logs/ir-log-*.log` (2026-10-13, 902 and 791
+lines, 156 and 142 `[OK]` lines, gen3 == gen4 byte-identical); the `make-*`
+files beside them are the 2026-10-12 run and `four-items-*` the earlier
+2026-10-13 one. All were run on this x86-64 Linux workspace, with the native
+compiler already built. Feature
 claims below are bounded by the named tests, not a claim of full language
 parity. Historical measurements are explicitly dated and have not all been
 repeated in this pass. See the [current roadmap](#roadmap-done-vs-still-missing-per-backend-synced-2026-10-11).
@@ -592,7 +595,8 @@ still use shell/C infrastructure. See
 | `make test-seed-gc` | what memory management the two seeds actually have, measured under `ulimit -v` caps: seed-min has no collector (builder-backed strings plus a freeing assignment: 200k churn, 2000-step accumulation and a temp loop inside a 4 MiB cap; an 8388608-byte live set exits 1 with `sx: out of memory`; `gc()` refused at compile time), the full seed has a refcount representation whose counts never release in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations, `gc()` is a no-op returning 0, `gc_live()` is an undefined function, a 4 MiB cap cannot start it) plus the operator-lexer fix that made it compile comparisons at all, and gen2 keeps a 200k churn and an 8 MiB live set correct inside 64 MiB, checks all three of its runtime allocations, and fails at 16 MiB with `sx: out of memory` instead of a segfault |
 | `make test-generic-structs` | generic structs are refused **by name** on all three backends (`generic structs are not implemented`, gen2 also puts a `#error` in the generated C) instead of as a brace/undefined-name/field-count symptom; the concrete-name workaround (`NumBox`, `TextBox`, `PairBox` in one program) prints `7 seven 8 eight 2 8 9` identically on seed-min, gen2 and native; and a dotted field read inside a struct literal is pinned as seed-min-only (gen2 `#error`, native refuses) |
 | `make test-sxpkg-online-optin` | the network is opt-in: `sync`, an `install` that has to fetch, and a remote `fetch` refuse without `SAYANOX_ONLINE=1` or `sxpkg --online <cmd>`, naming the opt-in and the offline commands and leaving no `.part` file; with the opt-in the same commands reach the transfer (a `.invalid` host, so they fail in the resolver and `sync` falls back to the offline seed); an all-local `install` and a `file://` fetch never ask |
-| `make test-native-emit-split` (part of `native-test`) | the x86-64 backend is a region, not a seasoning: the 1302 lines between `EMIT-SEAM-BEGIN` and `EMIT-SEAM-END` contain no `e1(`/`e32(`/`e64(`, no `memcpy` into `code` and no direct read of the code cursor `cn` (labels come from `here()`), the seam primitives are all defined in the encoder region above `phase 1`, and an emitted program still runs. The refactor itself was checked byte for byte against the pre-seam binary on six fixtures |
+| `make test-native-emit-split` (part of `native-test`) | the x86-64 backend is a region, not a seasoning: the 1332 lines between `EMIT-SEAM-BEGIN` and `EMIT-SEAM-END` contain no `e1(`/`e32(`/`e64(`, no `memcpy` into `code` and no direct read of the code cursor `cn` (labels come from `here()`), the seam primitives are all defined in the encoder region above `phase 1`, and an emitted program still runs. The refactor itself was checked byte for byte against the pre-seam binary on six fixtures |
+| `make test-native-ir-log` (part of `native-test`) | the emit tree's instruction list is inspectable and pinned: with `SX_EMIT_LOG=<path>` every encoder primitive records the code offset, the mnemonic and the operands in assembly order, plus a `;` line per label slot, per fixup, per emitted `make` and per phase — 1122 instructions, 2 slots and 41 rel32 fixups for `selfhost/native_ir_log_test.sa`, with every call target named (`call make twice`, `call builtin gccheck`). The recorder is inert (the ELF built with it `cmp`s clean against the one built without it, and against the pre-recorder compiler on six fixtures), the list is deterministic, every line is an instruction line or a comment line, the offsets never go backwards, every rel32 fixup lands on a jump, no call target or operand falls back to a placeholder name, the six phases come in order, the fixture's top-level mnemonic vocabulary is pinned exactly, and the language emitter provably never touches the recorder state |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make test-native-mem` (part of `native-test`) | native memory with a real collector: a string doubled to 262144 bytes is served whole; 100000 `push`es keep every value; a 200000-iteration churn loop (~8 MB allocated, nothing retained) **finishes inside a 4 MiB `ulimit -v` cap** running 200+ collections; `gc_runs()` > 0, `gc()` reclaims bytes and `gc_live()` reports a positive live count; strings, list elements and struct fields survive 30000 allocating iterations; a program that genuinely retains 8 MiB still exits non-zero with stdout written before the failure kept and `out of memory` on stderr. See [`GC.md`](GC.md). |
 | `make test-stage2-demos` | the three Stage-2 contract demos (`minimal_lexer`, `stage2_functions`, `stage2_variables`) compile byte-identically under seed-min and gen2; the string-only one also runs natively when `native_aot` is built (the native half is skipped, loudly, on the portable `true-selfhost` path, and executed in `make native-test`) |
@@ -1733,7 +1737,18 @@ pass, including native parity for both fixtures and all 6 + 9 pinned refusals.
 The full chain `make doctor && make true-selfhost && make gen3 &&
 make native-test` was re-run after the source edits and the offline pack was
 regenerated (`make pack-compiler`, 119 parts, round-trip verified against
-`selfhost/compiler_min.sa`); the logs are `docs/logs/expr-lowering-*.log`.
+`selfhost/compiler_min.sa`). Re-running that chain for a later increment found
+one stale pin this pass had left behind: `test-list2` still asserted a `#error`
+for `show xs[len(xs) - 1]`, which is exactly the refusal this increment removed.
+That leg now compiles the fixture, greps the emitted C for
+`sx_lget(xs,sx_llen(xs) - 1.0)` and asserts the value `6`; the index forms that
+are genuinely still refused stay pinned by `test-gen2-index-expr` and
+`test-gen2-expr-lowering`, so no guard was lost by the move. The four logs of the
+branch-final run of that same
+chain — taken after the LSP and native instruction-list increments below, so
+they cover this increment too — are `docs/logs/ir-log-doctor.log`,
+`docs/logs/ir-log-true-selfhost.log`, `docs/logs/ir-log-gen3.log` and
+`docs/logs/ir-log-native-test.log`.
 
 Not claimed: a call other than `len()` inside an index, `%` inside an index, a
 struct string field or a user-function call as a `+` operand in a `give`,
@@ -1795,3 +1810,95 @@ documents a client opened, because the dialect has no directory-listing builtin
 and the server does not spawn a process; a file nobody opened cannot be
 searched. Also not claimed: rename, code actions, signature help, incremental
 sync, or a formatter that rewrites tokens.
+
+## Native: the emit tree's instruction list is recorded, named and pinned (2026-10-13)
+
+The fourth item of this pass was "native towards a second target". What landed is
+the half of that which a single-pass compiler can land honestly: the instruction
+list the emit tree produces is now a file, with names a human can read and a
+target that pins it. No second emitter exists and none is claimed.
+
+### Why not an ARM64 or riscv64 skeleton
+
+`native_aot.c` parses and emits in the same walk, so "a second target" cannot be
+a new file beside the first. The emit tree itself picks the registers, spills
+through `push`/`pop`, and assumes System V AMD64 returns in `rax`/`xmm0`; a
+skeleton emitter for another ISA would either duplicate those 1332 lines — which
+is a second compiler, not a second target — or hang off an interface that does
+not exist yet. The step that does not fake anything is to make the existing
+contract observable first: exactly what the emit tree asks the encoder for,
+instruction by instruction, so that a second backend is written against a list
+instead of against prose.
+
+### What landed
+
+* **`SX_EMIT_LOG=<path>`.** Every encoder primitive writes one line: the code
+  offset the instruction starts at, the mnemonic, and the operands in assembly
+  order — `mov [r12+672],rax`, `addsd xmm0,xmm1`, `ucomisd xmm0,xmm1`,
+  `sub rsp,<imm32 slot>`, `call make twice`, `call builtin concat`. That covers
+  the integer helpers (`mv_rr`, `mv_m64`, `mv_r64m`, `lea_rm`, `mov_imm64`,
+  `mov_imm8m`, `mvz_rm`, `bin_rr`, `bin_imm8`, `bin_imm32`, `fm7`, `test_rr`,
+  `xor_rr`, `incdec_r`, `inc_mem_r`, `push_r`, `pop_r`, `jcc_rel32`,
+  `jmp_rel32`, `setcc`, `movzx_al_to_rax`, `sar_imm`, `shl_imm`, `shr_imm`), the
+  ten SSE wrappers, and the seam API (`leave_ret`, `sub_rsp_imm32_slot`,
+  `jmp5_slot`, `lea_r12_data`, `call_p`).
+* **`;` lines for the three things a replacement backend also has to provide:**
+  a label slot and the offset of its placeholder, a fixup that resolves it
+  (`fixup rel32 [000177] -> 0001ee (113)`, next to the `jae rel32(0)` that was
+  emitted at `000177` with the target still unknown, and the `jmp rel32(-167)`
+  back edge whose displacement was known immediately), and orientation — one
+  marker per emitted `make` (`--- make twice[0] at 0002a4 ---`) and one per
+  phase (entry, top level, exit syscall, make bodies, runtime stubs, collector).
+* **Names instead of ids.** `call builtin 28` tells a backend author nothing, so
+  the list prints `call builtin gccheck`. The tables sit beside the ids they
+  name: `bname_tbl` next to the `B_*` enum with every entry designated by id, so
+  inserting a builtin cannot silently reorder the names; `fname` reads `F[]`, so
+  a `make` is called by its source name including generic instances. A
+  `_Static_assert` keeps the table inside its bound, and an unnamed id would
+  print as `id28` — which `make test-native-ir-log` forbids, so a missing name
+  fails a gate instead of degrading the log.
+* **A fixture**, `selfhost/native_ir_log_test.sa`: two `make`s (one numeric, one
+  joining two strings through `+`), a `hold` chain, `len()`, a list built in a
+  `for`, an index read inside a `when`, and hand-computed output
+  (`42`, `ir-log`, `6`, `3`, `42`, `ir-log-done`).
+
+The recorder reads arguments and nothing else — no `code`, no `cn` — so the
+bytes cannot change, and that was measured rather than assumed: the emitted ELF
+is `cmp`-identical with and without `SX_EMIT_LOG`, and identical to the output of
+the pre-recorder compiler on `native_ir_log_test`, `native_lang_test`,
+`native_for_functions_test`, `generic_struct_concrete`, `native_strord_test` and
+`stdlib_growth_test`. Two logged runs of the same source `cmp` clean, so the list
+is a function of the source.
+
+The emit seam grew from 1302 to 1332 lines for this: the two name tables live
+inside the seam because the `B_*` enum they name does, and `emit_fn` announces
+itself with one `ilogc` line. The recorder *state* stays in the encoder region,
+and `make test-native-ir-log` asserts the seam never touches it — the language
+emitter may announce a phase, but only the encoder records instructions.
+
+### Gates
+
+`make test-native-ir-log` is new, is part of `native-test`, and prints six `[OK]`
+lines: no emitted byte changes, the list is deterministic (1182 lines), 1122
+instructions with 2 label slots and 41 rel32 fixups on monotonic offsets and six
+phases in order, every call target and operand named, the machine model visible
+(26 pinned strings, from `movq xmm0,rcx` and `call builtin llen` to `leave` and `ret`), the top level's
+mnemonics exactly
+`add addsd call cvtsi2sd cvttsd2si jae je jmp lea mov movq movzx mulsd pop push seta ucomisd`,
+and the recorder confined to the encoder. `make test-native-emit-split` still
+passes unchanged. The fixture's instruction list, the format and what a second
+backend has to reproduce are documented in
+[`docs/NATIVE_IR.md`](NATIVE_IR.md), with a pointer from the emit-seam section of
+[`docs/NATIVE.md`](NATIVE.md).
+
+The whole chain was re-run for this increment and is green: `DOCTOR-OK`;
+`TRUE-SELFHOST-MIN-OK` (902 lines, 156 `[OK]`); `GEN3-OK` with gen3 == gen4
+byte-identical; `NATIVE-TEST-OK` (791 lines, 142 `[OK]`), containing both the
+six lines above and `[OK] emit seam: 1332 lines of language-level emitter`. The
+logs are `docs/logs/ir-log-doctor.log`, `docs/logs/ir-log-true-selfhost.log`,
+`docs/logs/ir-log-gen3.log` and `docs/logs/ir-log-native-test.log`.
+
+Not claimed: a second target, a portable IR, a register allocator, an
+ARM64/riscv64 emitter, or any change to the emitted bytes. The list is still
+x86-64-shaped — the emit tree chooses the registers and the calling convention —
+and `SX_EMIT_LOG` is a window onto that, not a way out of it.

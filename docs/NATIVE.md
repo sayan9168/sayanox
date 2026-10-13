@@ -53,7 +53,7 @@ provably does not touch it. `make test-native-emit-split` (part of
 |---|---|---|
 | `==== x86-64 mini encoder ====` | above `phase 1: collect definitions` | the only code that writes bytes: `e1`/`e32`/`e64`, `here()`, `erel32`/`erel32j`, `patch_imm32`, `jmp5_slot`, `sub_rsp_imm32_slot`, `leave_ret`, the instruction helpers (`mv_m64`, `mv_r64m`, `mv_rr`, `lea_rm`, `mov_imm64`, `mov_imm8m`, `push_r`, `pop_r`, `sse_rr`, `call_p`, `emit_d2i`, `emit_i2d`, `movq_xr`, `movq_rx`, `cvttsd2si`, `cvtsi2sd`, `rexb`, `emit_modrm`) and the `jl_*` label lists |
 | phases 1–2 | | `use` expansion, statement skipping, definition collection, kind inference — no codegen |
-| `EMIT-SEAM-BEGIN` … `EMIT-SEAM-END` | 1302 lines | the language-level emitter: the emit tree, statement/block/function emission, conditions and loops. No `e1(`/`e32(`/`e64(`, no `memcpy` into `code`, and no direct read of the code cursor `cn`; label positions come from `here()` |
+| `EMIT-SEAM-BEGIN` … `EMIT-SEAM-END` | 1332 lines | the language-level emitter: the emit tree, statement/block/function emission, conditions and loops. No `e1(`/`e32(`/`e64(`, no `memcpy` into `code`, and no direct read of the code cursor `cn`; label positions come from `here()` |
 | phase 4, collector, ELF | below `EMIT-SEAM-END` | the runtime stubs (number formatting, list and string builtins, file and http syscalls), the mark & sweep collector and the ELF container — machine code by nature |
 
 A replacement backend supplies the encoder region, the phase-4 stubs, the
@@ -74,6 +74,27 @@ all emit executables that `cmp` clean against the binaries produced by the
 pre-seam `native_aot`, and the build lost its last warning (a `return <value>`
 inside the void `emit_prim`; the identical line inside the int-returning
 `pk_prim` was deliberately left alone).
+
+### The instruction list, recorded
+
+The seam says *how* the emitter reaches the machine; `SX_EMIT_LOG` says *what it
+asks for*. With `SX_EMIT_LOG=/tmp/x.log` in the environment every encoder
+primitive writes one line — the code offset, the mnemonic and the operands in
+assembly order — plus a `;` line for each label slot, each fixup, each emitted
+`make` and each phase:
+
+```sh
+SX_EMIT_LOG=/tmp/hello.log ./selfhost/native_aot examples/native_hello.sa /tmp/hello
+```
+
+That file is the instruction list the emit tree produces, and it is the concrete
+thing a second backend is written against. The recorder only reads the
+primitives' arguments, so the emitted ELF is byte-identical with and without it.
+`make test-native-ir-log` (part of `native-test`) pins the list for
+`selfhost/native_ir_log_test.sa` and cmp's both binaries;
+[NATIVE_IR.md](NATIVE_IR.md) documents the format, the value model it exposes
+and what the recorder is *not* — there is still one emitter of machine code here,
+not two.
 
 ## Build and run
 

@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log
 
 all: true-selfhost-min
 
@@ -420,10 +420,16 @@ test-list2:
 	./$(GEN2) $(TESTS)/ts_li4.sa $(TESTS)/ts_li4.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/ts_li4 $(TESTS)/ts_li4.c
 	$(call assert-out,./$(TESTS)/ts_li4,3\n1\n12)
+	@# `xs[len(xs) - 1]` was a refusal here until 2026-10-13: len() inside an
+	@# index now lowers to sx_llen, so this leg became a value assertion. The
+	@# index forms that ARE still refused are pinned by test-gen2-index-expr and
+	@# test-gen2-expr-lowering, so nothing lost its guard by moving.
 	@printf 'hold xs = [5, 6]\nshow xs[len(xs) - 1]\n' > $(TESTS)/ts_li5.sa
 	./$(GEN2) $(TESTS)/ts_li5.sa $(TESTS)/ts_li5.c >/dev/null
-	@grep -q '#error' $(TESTS)/ts_li5.c
-	@echo "[OK] gen2 lists: literal, index, len, push, guards"
+	$(CC) -O2 -o $(TESTS)/ts_li5 $(TESTS)/ts_li5.c
+	@grep -q -F 'sx_lget(xs,sx_llen(xs) - 1.0)' $(TESTS)/ts_li5.c
+	$(call assert-out,./$(TESTS)/ts_li5,6)
+	@echo "[OK] gen2 lists: literal, index, len, push, and len() inside an index"
 
 test-use:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -1446,6 +1452,88 @@ test-native-emit-split: $(NATIVE_BIN)
 	./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/seam_nat2
 	test -x $(TESTS)/seam_nat2 && ./$(TESTS)/seam_nat2 > $(TESTS)/seam_nat2.out
 	echo "[OK] native emit split: the language emitter is backend-free, the encoder and the phase-4 stubs are the only machine code, and emitted programs still run"
+
+# ---------------------------------------------------------------------------
+# test-native-ir-log: the emit tree's instruction list is inspectable, and
+# pinned -- the specification a second backend is written against.
+#
+# test-native-emit-split proves the language-level emitter reaches the machine
+# only through the encoder API, and docs/NATIVE.md lists that API. What was
+# still prose is the CONTENT of the contract: which instructions, in which
+# order, with which operands, and which slots stay unresolved until a fixup.
+# SX_EMIT_LOG=<path> makes every encoder primitive write one line -- the code
+# offset the instruction starts at, the mnemonic and the operands in assembly
+# order -- plus a "; " line for each label slot, each fixup, each emitted make
+# and each phase. That file is the instruction list: a riscv64 or ARM64 backend
+# is a program that produces the same list with its own mnemonics and its own
+# encodings, and this target pins the list the x86-64 one produces for a
+# fixture using numbers, strings, a list, a branch, a loop and two makes.
+#
+# The recorder only READS the primitives' arguments, so nothing about the bytes
+# changes: the ELF built with the log is cmp'd against the ELF built without
+# it, and two logged runs are cmp'd against each other. The log's own
+# invariants are checked as well -- every line is an instruction line or a
+# comment line, the offsets never go backwards, every rel32 fixup lands on a
+# jump, no call target or operand falls back to a placeholder name, the six
+# phases come in order -- the mnemonic vocabulary of the fixture's top level is
+# pinned exactly, and the language emitter is asserted never to touch the
+# recorder state: only the encoder records instructions.
+#
+# This is a step TOWARDS a second target, not a second target: there is still
+# exactly one emitter of machine code, and docs/NATIVE_IR.md says so.
+# ---------------------------------------------------------------------------
+IRL_FIX := selfhost/native_ir_log_test.sa
+IRL_MN_WANT := add addsd call cvtsi2sd cvttsd2si jae je jmp lea mov movq movzx mulsd pop push seta ucomisd
+IRL_OFF6 := [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+.PHONY: test-native-ir-log
+test-native-ir-log: $(NATIVE_BIN)
+	mkdir -p $(TESTS)
+	# ---- 1. the fixture still runs and prints the hand-computed values ----
+	./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irl_nat
+	$(call assert-out,./$(TESTS)/irl_nat,42\nir-log\n6\n3\n42\nir-log-done)
+	# ---- 2. the recorder is inert: not one emitted byte changes ----
+	SX_EMIT_LOG=$(TESTS)/irl.log ./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irl_logged
+	cmp $(TESTS)/irl_nat $(TESTS)/irl_logged
+	echo "[OK] native ir log: SX_EMIT_LOG changes no emitted byte (the two ELFs cmp clean)"
+	# ---- 3. the instruction list is a function of the source ----
+	SX_EMIT_LOG=$(TESTS)/irl_again.log ./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irl_logged2
+	cmp $(TESTS)/irl.log $(TESTS)/irl_again.log
+	echo "[OK] native ir log: the same source gives the same instruction list ($$(grep -c . $(TESTS)/irl.log) lines)"
+	# ---- 4. every line is an instruction line or a '; ' comment line ----
+	test $$(grep -c -v -E '^([0-9a-f]{6}  |;)' $(TESTS)/irl.log) -eq 0 \
+	  || { echo "[FAIL] the instruction list has a line in neither format:"; grep -n -v -E '^([0-9a-f]{6}  |;)' $(TESTS)/irl.log | head -3; exit 1; }
+	# ---- 5. the log's invariants: monotonic offsets, fixups land on jumps,
+	#         six phases in order, a reported code size ----
+	@awk -v off='$(IRL_OFF6)' 'BEGIN{bad=0;prev="";fx=0;np=0;tot=0} index($$0,"=== phase:")==9{np++} /^;       fixup/{p=index($$0,"[");a=substr($$0,p+1,6);if(!(a in mn)||mn[a]!~/^j/){bad++;print "[FAIL] a rel32 fixup does not land on a jump: " $$0}else fx++;next} $$0~("^"off"  "){o=substr($$0,1,6);if(prev!=""&&(o"")<(prev"")){bad++;print "[FAIL] the instruction offsets go backwards: " $$0}prev=o;mn[o]=$$2;next} /^;       code bytes: /{tot=$$4} END{if(fx==0){bad++;print "[FAIL] the list has no fixup line, so no unresolved slot was resolved"}if(tot+0<=0){bad++;print "[FAIL] the list does not report its code size"}if(np!=6){bad++;print "[FAIL] expected 6 phase markers, got " np}if(bad)exit 1}' $(TESTS)/irl.log
+	@i=$$(grep -c -E '^[0-9a-f]{6}  ' $(TESTS)/irl.log); sl=$$(grep -c -F ';       slot ' $(TESTS)/irl.log); fx=$$(grep -c -F ';       fixup' $(TESTS)/irl.log); \
+	 echo "[OK] native ir log: $$i instructions, $$sl label slots, $$fx rel32 fixups, monotonic offsets, six phases in order"
+	# ---- 6. every call target and every operand has a real name ----
+	test $$(grep -c -E 'call builtin id[0-9]|call make make[0-9]|bin[0-9a-f][0-9a-f] |grp1_[0-9]|jcc[0-9]+ |setcc[0-9]+ |f7\?|xmm\?|r32\?|[^a-z0-9]r\?' $(TESTS)/irl.log) -eq 0 \
+	  || { echo "[FAIL] a call target or an operand fell back to a placeholder name:"; grep -n -E 'call builtin id[0-9]|call make make[0-9]|bin[0-9a-f][0-9a-f] |grp1_[0-9]|jcc[0-9]+ |setcc[0-9]+ |f7\?|xmm\?|r32\?|[^a-z0-9]r\?' $(TESTS)/irl.log | head -3; exit 1; }
+	# ---- 7. the machine model is visible in the list ----
+	@for pat in 'movq xmm0,rcx' 'movq xmm1,rax' 'addsd xmm0,xmm1' 'mulsd xmm0,xmm1' 'movq rax,xmm0' \
+	              'ucomisd xmm0,xmm1' 'seta eax' 'movzx rax,al' 'cvtsi2sd xmm0,rax' 'cvttsd2si rax,xmm0' \
+	              'call make twice' 'call make join' '--- make twice[0] at ' '--- make join[1] at ' \
+	              'call builtin concat' 'call builtin putstr' 'call builtin strlen' 'call builtin shownum' \
+	              'call builtin mlist' 'call builtin lpush' 'call builtin lget' 'call builtin llen' \
+	              'sub rsp,<imm32 slot>' 'lea r12,[rip+<disp32 slot>]' 'leave' 'ret'; do \
+	  grep -q -F -e "$$pat" $(TESTS)/irl.log || { echo "[FAIL] the instruction list is missing: $$pat"; exit 1; }; \
+	done
+	echo "[OK] native ir log: numbers are double bits through xmm, strings and lists are named stub calls, makes are named call targets"
+	# ---- 8. the instruction vocabulary of the fixture's top level, pinned ----
+	@got=$$(awk '/=== phase: top level/{on=1;next} /=== phase: exit syscall/{on=0} on' $(TESTS)/irl.log | grep -E '^[0-9a-f]{6}  ' | awk '{print $$2}' | sort -u | tr '\n' ' ' | sed 's/ $$//'); \
+	 if [ "$$got" = "$(IRL_MN_WANT)" ]; then :; else \
+	   echo "[FAIL] the top level's instruction vocabulary changed"; \
+	   echo "--- want ---"; echo "$(IRL_MN_WANT)"; echo "--- got ---"; echo "$$got"; \
+	   echo "(if that is intentional, update IRL_MN_WANT and say why in docs/NATIVE_IR.md)"; exit 1; fi
+	echo "[OK] native ir log: the fixture's top level emits exactly these mnemonics: $(IRL_MN_WANT)"
+	# ---- 9. only the encoder records; the emitter may announce, not write ----
+	@b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c | cut -d: -f1); \
+	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c | cut -d: -f1); \
+	 awk -v b=$$b -v e=$$e 'NR>b && NR<e' selfhost/native_aot.c > $(TESTS)/irl_seam.c; \
+	 test $$(grep -c -w 'ilogf' $(TESTS)/irl_seam.c) -eq 0 \
+	  || { echo "[FAIL] the language emitter touches the recorder state:"; grep -n -w 'ilogf' $(TESTS)/irl_seam.c | head -3; exit 1; }
+	echo "[OK] native ir log: the instruction list is written by the encoder alone -- a second backend replaces the encoder and keeps the emit tree"
 
 # ---------------------------------------------------------------------------
 # test-sxpkg-online-optin: the network is opt-in, and the offline path is not.
@@ -2896,7 +2984,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
 	@echo "[OK] native rejects (clearly): give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
-	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-native-emit-split
+	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-native-emit-split test-native-ir-log
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
 	@# string ordering on native (hand-computed; gen2/seed-min leg in test-native-strord)
 	./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/nso_nat_gate

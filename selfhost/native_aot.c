@@ -202,8 +202,105 @@ static size_t d_numbuf; /* 64-byte buffer: `show <number>` formats here, no heap
 static void e1(unsigned char b){ if(cn>=CMAX){fprintf(stderr,"native_aot: code OOM\n");exit(1);} code[cn++]=b; }
 static void e32(uint32_t v){ e1(v); e1(v>>8); e1(v>>16); e1(v>>24); }
 static void e64(uint64_t v){ for(int i=0;i<8;i++) e1((unsigned char)(v>>(8*i))); }
-static void erel32(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+6)); memcpy(code+at+2,&d,4); }
-static void erel32j(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+5)); memcpy(code+at+1,&d,4); } /* for 5-byte jmp */
+/* the instruction-list recorder lives just below; erel32/erel32j already
+   need it, so it is declared here. */
+static void ilog(const char *fmt,...);
+static void ilogc(const char *fmt,...);
+/* names for the two call kinds, defined next to the id tables they name */
+static const char *bname(int i);
+static const char *fname(int i);
+static void erel32(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+6)); ilogc("fixup rel32 [%06zx] -> %06zx (%d)",at,to,d); memcpy(code+at+2,&d,4); }
+static void erel32j(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+5)); ilogc("fixup jmp rel32 [%06zx] -> %06zx (%d)",at,to,d); memcpy(code+at+1,&d,4); } /* for 5-byte jmp */
+
+/* ===== the instruction list (SX_EMIT_LOG=<path>) ==========================
+ * Every encoder primitive below writes one line to that file when the variable
+ * is set: the code offset the instruction starts at, the mnemonic, and its
+ * operands in assembly order.  The recorder only READS the arguments -- it does
+ * not touch `code` or `cn` -- so the emitted binary is byte-identical with and
+ * without it, which `make test-native-ir-log` asserts against the same fixtures
+ * `make test-native-emit-split` uses.
+ *
+ * The log is the instruction list the emit tree produces: it is what a second
+ * backend has to reproduce, and it turns the seam contract in docs/NATIVE.md
+ * from prose into something a test can pin, because the same source always
+ * gives the same instruction list.
+ *
+ * Lines starting with "; " are not instructions.  They are the label slots
+ * (sub_rsp_imm32_slot, jmp5_slot, lea_r12_data, call_p) and the fixups
+ * (erel32, erel32j, patch_imm32) that a replacement backend also has to
+ * provide, and the phase markers emit_tree writes.
+ * ====================================================================== */
+static FILE *ilogf=NULL;
+static const char *rn(int r){
+  static const char *n[16]={"rax","rcx","rdx","rbx","rsp","rbp","rsi","rdi",
+                            "r8","r9","r10","r11","r12","r13","r14","r15"};
+  return (r>=0&&r<16)?n[r]:"r?";
+}
+static const char *r32n(int r){
+  static const char *n[16]={"eax","ecx","edx","ebx","esp","ebp","esi","edi",
+                            "r8d","r9d","r10d","r11d","r12d","r13d","r14d","r15d"};
+  return (r>=0&&r<16)?n[r]:"r32?";
+}
+static const char *xn(int x){
+  static const char *n[8]={"xmm0","xmm1","xmm2","xmm3","xmm4","xmm5","xmm6","xmm7"};
+  return (x>=0&&x<8)?n[x]:"xmm?";
+}
+/* [base+idx*scale+disp] in assembly order; base or idx may be -1, disp -1 = none */
+static void imem(char *b,size_t n,int base,int idx,int scale,int disp){
+  int k=0;
+  b[0]=0;
+  if(base>=0) k+=snprintf(b+k,n-(size_t)k,"%s",rn(base));
+  if(idx>=0)  k+=snprintf(b+k,n-(size_t)k,"%s%s*%d",k?"+":"",rn(idx),1<<scale);
+  if(disp>0)  k+=snprintf(b+k,n-(size_t)k,"%s%d",k?"+":"",disp);
+  if(disp<0)  k+=snprintf(b+k,n-(size_t)k,"%s-%d",k?"+":"",-disp);
+  if(k<=0)    snprintf(b,n,"0");
+}
+#define IMEM(var,b,i,sc,d) char var[96]; var[0]=0; if(ilogf) imem(var,sizeof var,b,i,sc,d)
+static const char *binname(int op){
+  static char unk[16];
+  switch(op){
+    case 0x01: return "add"; case 0x03: return "add";
+    case 0x09: return "or";  case 0x21: return "and";
+    case 0x29: return "sub"; case 0x2b: return "sub";
+    case 0x31: return "xor"; case 0x39: return "cmp";
+    default: snprintf(unk,sizeof unk,"bin%02x",op); return unk;
+  }
+}
+static const char *ccname(int c){
+  static const char *n[16]={"o","no","b","ae","e","ne","be","a",
+                            "s","ns","p","np","l","ge","le","g"};
+  static char unk[16];
+  if(c>=0&&c<16) return n[c];
+  snprintf(unk,sizeof unk,"cc%d",c); return unk;
+}
+/* 83 / 81 are group 1: the argument is the ModRM /digit, not an opcode byte */
+static const char *grp1name(int d){
+  static const char *n[8]={"add","or","adc","sbb","and","sub","xor","cmp"};
+  static char u[16];
+  if(d>=0&&d<8) return n[d];
+  snprintf(u,sizeof u,"grp1_%d",d); return u;
+}
+/* F7 is group 3, also a /digit */
+static const char *fm7name(int sub){
+  static const char *n[8]={"test","test","not","neg","mul","imul","div","idiv"};
+  return (sub>=0&&sub<8)?n[sub]:"f7?";
+}
+/* one instruction line; cn is the offset the instruction is about to start at */
+static void ilog(const char *fmt,...){
+  va_list ap;
+  if(!ilogf) return;
+  fprintf(ilogf,"%06zx  ",cn);
+  va_start(ap,fmt); vfprintf(ilogf,fmt,ap); va_end(ap);
+  fputc('\n',ilogf);
+}
+/* a "; " line: a slot, a fixup or a phase marker -- not an instruction */
+static void ilogc(const char *fmt,...){
+  va_list ap;
+  if(!ilogf) return;
+  fputs(";       ",ilogf);
+  va_start(ap,fmt); vfprintf(ilogf,fmt,ap); va_end(ap);
+  fputc('\n',ilogf);
+}
 
 /* ------------------------------------------------------------------------
  * THE EMIT SEAM.
@@ -235,12 +332,15 @@ static void erel32j(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+5)); memcpy
  *   which are machine code by nature and are listed in docs/NATIVE.md.
  * ---------------------------------------------------------------------- */
 static size_t here(void){ return cn; }
-static void patch_imm32(size_t at,int32_t v){ memcpy(code+at,&v,4); }
-static void leave_ret(void){ e1(0xc9); e1(0xc3); }   /* leave; ret */
+static void patch_imm32(size_t at,int32_t v){ ilogc("patch imm32 [%06zx] <- %d",at,v); memcpy(code+at,&v,4); }
+static void leave_ret(void){ ilog("leave"); ilog("ret"); e1(0xc9); e1(0xc3); }   /* leave; ret */
 static size_t sub_rsp_imm32_slot(void){              /* sub rsp, imm32 (placeholder) */
-  e1(0x48); e1(0x81); e1(0xEC); size_t at=cn; e32(0); return at;
+  ilog("sub rsp,<imm32 slot>");
+  e1(0x48); e1(0x81); e1(0xEC); size_t at=cn; e32(0);
+  ilogc("slot sub rsp imm32 at %06zx",at);
+  return at;
 }
-static size_t jmp5_slot(void){ size_t at=cn; e1(0xe9); e32(0); return at; }  /* jmp rel32 (placeholder) */
+static size_t jmp5_slot(void){ ilog("jmp <rel32 slot>"); size_t at=cn; e1(0xe9); e32(0); ilogc("slot jmp rel32 at %06zx",at); return at; }  /* jmp rel32 (placeholder) */
 
 static void rexb(int W,int R,int X,int B){
   if(W||R||X||B){ uint8_t b=0x40; if(W)b|=8; if(R)b|=4; if(X)b|=2; if(B)b|=1; e1(b); }
@@ -268,40 +368,45 @@ static void emit_modrm(int reg,int rm,int scale,int idx,int disp){
     else e32((uint32_t)(int32_t)disp);
   }
 }
-static void mv_rr(int d,int s){ rexb(1, s>7, 0, d>7); e1(0x89); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
+static void mv_rr(int d,int s){ ilog("mov %s,%s",rn(d),rn(s)); rexb(1, s>7, 0, d>7); e1(0x89); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
 static void mv_m64(int base,int idx,int scale,int disp,int s){
+  IMEM(mb,base,idx,scale,disp); ilog("mov [%s],%s",mb,rn(s));
   rexb(1, s>7, idx>7, base>7); e1(0x89); emit_modrm(s, base, scale, idx, disp);
 }
 static void mv_r64m(int d,int base,int idx,int scale,int disp){
+  IMEM(mb,base,idx,scale,disp); ilog("mov %s,[%s]",rn(d),mb);
   rexb(1, d>7, idx>7, base>7); e1(0x8b); emit_modrm(d, base, scale, idx, disp);
 }
 static void lea_rm(int d,int base,int idx,int scale,int disp){
+  IMEM(mb,base,idx,scale,disp); ilog("lea %s,[%s]",rn(d),mb);
   rexb(1, d>7, idx>7, base>7); e1(0x8d); emit_modrm(d, base, scale, idx, disp);
 }
-static void mov_imm64(int r,uint64_t v){ rexb(1, 0, 0, r>7); e1((uint8_t)(0xb8+(r&7))); e64(v); } /* B8+rd: r8-r15 via REX.B (gas: 49 b8) */
+static void mov_imm64(int r,uint64_t v){ ilog("mov %s,0x%llx",rn(r),(unsigned long long)v); rexb(1, 0, 0, r>7); e1((uint8_t)(0xb8+(r&7))); e64(v); } /* B8+rd: r8-r15 via REX.B (gas: 49 b8) */
 static void mov_imm8m(int base,int idx,int scale,int disp,uint8_t v){
+  IMEM(mb,base,idx,scale,disp); ilog("mov byte [%s],%u",mb,(unsigned)v);
   rexb(0, 0, idx>7, base>7); e1(0xc6); emit_modrm(0, base, scale, idx, disp); e1(v);
 }
 static void mvz_rm(int d,int base,int idx,int scale,int disp){ /* movzx r32, byte [mem] */
+  IMEM(mb,base,idx,scale,disp); ilog("movzx %s,byte [%s]",r32n(d),mb);
   rexb(0, d>7, idx>7, base>7); e1(0x0f); e1(0xb6); emit_modrm(d&7, base, scale, idx, disp);
 }
-static void bin_rr(int op,int d,int s){ rexb(1, s>7, 0, d>7); e1((uint8_t)op); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
-static void bin_imm8(int op,int r,uint8_t v){ rexb(1, 0, 0, r>7); e1(0x83); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e1(v); }
-static void bin_imm32(int op,int r,uint32_t v){ rexb(1, 0, 0, r>7); e1(0x81); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e32(v); }
-static void fm7(int sub,int r){ rexb(1, 0, 0, r>7); e1(0xf7); e1((uint8_t)(0xC0|(sub<<3)|(r&7))); }
-static void test_rr(int a,int b){ rexb(1, b>7, 0, a>7); e1(0x85); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
-static void xor_rr(int a,int b){ rexb(1, b>7, 0, a>7); e1(0x31); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
-static void incdec_r(int inc,int r){ rexb(1, 0, 0, r>7); e1(0xff); e1((uint8_t)(0xC0|((inc?0:1)<<3)|(r&7))); }
-static void inc_mem_r(int r){ rexb(1,0,0,r>7); e1(0xff); e1((uint8_t)(0x40|(r&7))); e1(0x00); } /* inc [r] (disp8=0) */
-static void push_r(int r){ if(r>7) e1(0x49); e1((uint8_t)(0x50+(r&7))); }
-static void pop_r(int r){ if(r>7) e1(0x49); e1((uint8_t)(0x58+(r&7))); }
-static void jcc_rel32(int c,int32_t d){ e1(0x0f); e1((uint8_t)(0x80+c)); e32((uint32_t)d); }
-static void jmp_rel32(int32_t d){ e1(0xe9); e32((uint32_t)d); }
-static void setcc(int c,int r){ rexb(0, 0, 0, r>7); e1(0x0f); e1((uint8_t)(0x90+c)); e1((uint8_t)(0xC0|(r&7))); }
-static void movzx_al_to_rax(void){ rexb(1,0,0,0); e1(0x0f); e1(0xb6); e1(0xc0); }
-static void sar_imm(int r,int v){ rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(7<<3)|(r&7))); e1((uint8_t)v); }
-static void shl_imm(int r,int v){ rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(4<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHL = C1 /4 */
-static void shr_imm(int r,int v){ rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(5<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHR = C1 /5 */
+static void bin_rr(int op,int d,int s){ ilog("%s %s,%s",binname(op),rn(d),rn(s)); rexb(1, s>7, 0, d>7); e1((uint8_t)op); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
+static void bin_imm8(int op,int r,uint8_t v){ ilog("%s %s,%d",grp1name(op),rn(r),(int)(int8_t)v); rexb(1, 0, 0, r>7); e1(0x83); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e1(v); }
+static void bin_imm32(int op,int r,uint32_t v){ ilog("%s %s,%d",grp1name(op),rn(r),(int)(int32_t)v); rexb(1, 0, 0, r>7); e1(0x81); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e32(v); }
+static void fm7(int sub,int r){ ilog("%s %s",fm7name(sub),rn(r)); rexb(1, 0, 0, r>7); e1(0xf7); e1((uint8_t)(0xC0|(sub<<3)|(r&7))); }
+static void test_rr(int a,int b){ ilog("test %s,%s",rn(a),rn(b)); rexb(1, b>7, 0, a>7); e1(0x85); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
+static void xor_rr(int a,int b){ ilog("xor %s,%s",rn(a),rn(b)); rexb(1, b>7, 0, a>7); e1(0x31); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
+static void incdec_r(int inc,int r){ ilog("%s %s",inc?"inc":"dec",rn(r)); rexb(1, 0, 0, r>7); e1(0xff); e1((uint8_t)(0xC0|((inc?0:1)<<3)|(r&7))); }
+static void inc_mem_r(int r){ ilog("inc [%s]",rn(r)); rexb(1,0,0,r>7); e1(0xff); e1((uint8_t)(0x40|(r&7))); e1(0x00); } /* inc [r] (disp8=0) */
+static void push_r(int r){ ilog("push %s",rn(r)); if(r>7) e1(0x49); e1((uint8_t)(0x50+(r&7))); }
+static void pop_r(int r){ ilog("pop %s",rn(r)); if(r>7) e1(0x49); e1((uint8_t)(0x58+(r&7))); }
+static void jcc_rel32(int c,int32_t d){ ilog("j%s rel32(%d)",ccname(c),(int)d); e1(0x0f); e1((uint8_t)(0x80+c)); e32((uint32_t)d); }
+static void jmp_rel32(int32_t d){ ilog("jmp rel32(%d)",(int)d); e1(0xe9); e32((uint32_t)d); }
+static void setcc(int c,int r){ ilog("set%s %s",ccname(c),r32n(r)); rexb(0, 0, 0, r>7); e1(0x0f); e1((uint8_t)(0x90+c)); e1((uint8_t)(0xC0|(r&7))); }
+static void movzx_al_to_rax(void){ ilog("movzx rax,al"); rexb(1,0,0,0); e1(0x0f); e1(0xb6); e1(0xc0); }
+static void sar_imm(int r,int v){ ilog("sar %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(7<<3)|(r&7))); e1((uint8_t)v); }
+static void shl_imm(int r,int v){ ilog("shl %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(4<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHL = C1 /4 */
+static void shr_imm(int r,int v){ ilog("shr %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(5<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHR = C1 /5 */
 
 /* ---- SSE2 scalar double (register-direct forms only; xmm0-xmm7) ----
  * Numbers are IEEE doubles held as raw bits in the same 64-bit slots and
@@ -311,20 +416,20 @@ static void sse_rr(int pfx,int op,int W,int reg,int rm){
   e1((uint8_t)pfx); rexb(W, reg>7, 0, rm>7); e1(0x0f); e1((uint8_t)op);
   e1((uint8_t)(0xC0|((reg&7)<<3)|(rm&7)));
 }
-static void movq_xr(int x,int r){ sse_rr(0x66,0x6e,1,x,r); }   /* movq xmm, r64 */
-static void movq_rx(int r,int x){ sse_rr(0x66,0x7e,1,x,r); }   /* movq r64, xmm */
-static void addsd(int a,int b){ sse_rr(0xf2,0x58,0,a,b); }
-static void mulsd(int a,int b){ sse_rr(0xf2,0x59,0,a,b); }
-static void subsd(int a,int b){ sse_rr(0xf2,0x5c,0,a,b); }
-static void divsd(int a,int b){ sse_rr(0xf2,0x5e,0,a,b); }
-static void ucomisd(int a,int b){ sse_rr(0x66,0x2e,0,a,b); }
-static void cvtsi2sd(int x,int r){ sse_rr(0xf2,0x2a,1,x,r); }  /* xmm = (double)r64 */
-static void cvttsd2si(int r,int x){ sse_rr(0xf2,0x2c,1,r,x); } /* r64 = (long)xmm, truncating */
-static void cvtsd2si(int r,int x){ sse_rr(0xf2,0x2d,1,r,x); }  /* r64 = round-to-nearest-even */
+static void movq_xr(int x,int r){ ilog("movq %s,%s",xn(x),rn(r)); sse_rr(0x66,0x6e,1,x,r); }   /* movq xmm, r64 */
+static void movq_rx(int r,int x){ ilog("movq %s,%s",rn(r),xn(x)); sse_rr(0x66,0x7e,1,x,r); }   /* movq r64, xmm */
+static void addsd(int a,int b){ ilog("addsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x58,0,a,b); }
+static void mulsd(int a,int b){ ilog("mulsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x59,0,a,b); }
+static void subsd(int a,int b){ ilog("subsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x5c,0,a,b); }
+static void divsd(int a,int b){ ilog("divsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x5e,0,a,b); }
+static void ucomisd(int a,int b){ ilog("ucomisd %s,%s",xn(a),xn(b)); sse_rr(0x66,0x2e,0,a,b); }
+static void cvtsi2sd(int x,int r){ ilog("cvtsi2sd %s,%s",xn(x),rn(r)); sse_rr(0xf2,0x2a,1,x,r); }  /* xmm = (double)r64 */
+static void cvttsd2si(int r,int x){ ilog("cvttsd2si %s,%s",rn(r),xn(x)); sse_rr(0xf2,0x2c,1,r,x); } /* r64 = (long)xmm, truncating */
+static void cvtsd2si(int r,int x){ ilog("cvtsd2si %s,%s",rn(r),xn(x)); sse_rr(0xf2,0x2d,1,r,x); }  /* r64 = round-to-nearest-even */
 /* rax (double bits) -> rax (long, truncated toward zero, like C's cast) */
-static void emit_d2i(void){ movq_xr(0,0); cvttsd2si(0,0); }
+static void emit_d2i(void){ ilogc("d2i: double bits in rax -> long"); movq_xr(0,0); cvttsd2si(0,0); }
 /* rax (long) -> rax (double bits) */
-static void emit_i2d(void){ cvtsi2sd(0,0); movq_rx(0,0); }
+static void emit_i2d(void){ ilogc("i2d: long in rax -> double bits"); cvtsi2sd(0,0); movq_rx(0,0); }
 
 /* ---- tiny forward/backward label system for hand-written runtime code ---- */
 #define MAXLBL 96
@@ -369,6 +474,7 @@ enum { PFN=0, PBUILTIN=1 };
 static struct { size_t at; int kind; int idx; } patch_call[8192]; static int npc;
 static struct { size_t at; } patch_r12[4096]; static int npr;
 static void call_p(int kind,int idx){
+  ilog("call %s %s",kind==PFN?"make":"builtin",kind==PFN?fname(idx):bname(idx));
   e1(0xe8);
   if(npc>=8192){ fprintf(stderr,"native_aot: OOM patches\n"); exit(1); }
   patch_call[npc].at=cn; patch_call[npc].kind=kind; patch_call[npc].idx=idx; npc++;
@@ -378,6 +484,7 @@ static void call_p(int kind,int idx){
 #define callb(i) call_p(PBUILTIN,i)
 static void lea_r12_data(void){
   /* lea r12, [rip+disp32]: REX.WR 8D 25 disp32 (mod00 reg100 rm101) */
+  ilog("lea r12,[rip+<disp32 slot>]");
   rexb(1, 1, 0, 0); e1(0x8d); e1(0x25);
   if(npr>=4096){ fprintf(stderr,"native_aot: OOM patches\n"); exit(1); }
   patch_r12[npr].at=cn; npr++; e32(0);
@@ -1271,6 +1378,35 @@ enum { B_MALLOC,B_STRLEN,B_CMPSTR,B_CONCAT,B_N2STR,B_PUTSTR,B_WCSTR,B_ITONO,B_IT
        B_ARG,B_ARGC,B_DIE,B_NFMT,B_SHOWNUM,B_GC,B_GC_LIVE,B_GC_RUNS,
        B_FINDBLOCK,B_MARK,B_GCCHECK,B_STRORD };
 
+/* What the instruction list (SX_EMIT_LOG) prints for a call target.  The
+   entries are designated by id, so this table cannot drift out of order when a
+   builtin is inserted; the _Static_assert keeps it inside the array bound, and
+   `make test-native-ir-log` fails if any call in a real fixture still prints as
+   a bare id -- a name is part of the contract a second backend reads. */
+static const char *bname_tbl[64]={
+  [B_MALLOC]="malloc",   [B_STRLEN]="strlen",   [B_CMPSTR]="cmpstr",
+  [B_CONCAT]="concat",   [B_N2STR]="n2str",     [B_PUTSTR]="putstr",
+  [B_WCSTR]="wcstr",     [B_ITONO]="itono",     [B_ITOWRITE]="itowrite",
+  [B_SHOWLIST]="showlist",[B_MLIST]="mlist",    [B_LGET]="lget",
+  [B_LLEN]="llen",       [B_LPUSH]="lpush",     [B_SGET]="sget",
+  [B_CHR]="chr",         [B_READFILE]="readfile",[B_WRITEFILE]="writefile",
+  [B_ARG]="arg",         [B_ARGC]="argc",       [B_DIE]="die",
+  [B_NFMT]="nfmt",       [B_SHOWNUM]="shownum", [B_GC]="gc",
+  [B_GC_LIVE]="gc_live", [B_GC_RUNS]="gc_runs", [B_FINDBLOCK]="findblock",
+  [B_MARK]="mark",       [B_GCCHECK]="gccheck", [B_STRORD]="strord",
+};
+_Static_assert(B_STRORD<64,"bname_tbl is too small for the builtin ids");
+static const char *bname(int i){
+  static char u[16];
+  if(i>=0&&i<64&&bname_tbl[i]) return bname_tbl[i];
+  snprintf(u,sizeof u,"id%d",i); return u;
+}
+static const char *fname(int i){
+  static char u[16];
+  if(i>=0&&i<nF&&F[i].name[0]) return F[i].name;
+  snprintf(u,sizeof u,"make%d",i); return u;
+}
+
 static void emit_prim(const char**p,int depth);
 static void emit_post(const char**p,int depth);
 static void emit_term(const char**p,int depth);
@@ -1870,6 +2006,7 @@ static void emit_expr(const char**p,int depth){
 static void emit_fn(int fi,const char**p){
   if(fi<0) errx("unknown function");
   F[fi].start=(int)here();
+  ilogc("--- make %s[%d] at %06zx ---",F[fi].name,fi,here());
   push_r(BP);
   mv_rr(BP,SP);
   /* The frame must keep EVERY spill slot above rsp: expression codegen
@@ -3936,6 +4073,17 @@ static void write_elf(const char*path){
 /* ================= main ================= */
 int main(int argc,char**argv){
   if(argc<3){ fprintf(stderr,"usage: native_aot in.sa out\n"); return 2; }
+  /* the instruction list: SX_EMIT_LOG=<path> records every instruction the
+     emit tree asks the encoder for.  Off by default; the bytes do not change
+     when it is on (see test-native-ir-log). */
+  {
+    const char* ilogenv=getenv("SX_EMIT_LOG");
+    if(ilogenv&&*ilogenv){
+      ilogf=fopen(ilogenv,"w");
+      if(!ilogf){ fprintf(stderr,"native_aot: cannot open SX_EMIT_LOG file %s\n",ilogenv); return 1; }
+      fprintf(ilogf,"; native_aot instruction list for %s\n; offset  instruction\n",argv[1]);
+    }
+  }
   size_t sn;
   char*raw=rf(argv[1],&sn);
   char dir[2048]; const char*sl=strrchr(argv[1],'/');
@@ -3965,6 +4113,7 @@ int main(int argc,char**argv){
   }
 
   /* main */
+  ilogc("=== phase: entry (data base, argc/argv, stack top, gc threshold) ===");
   lea_r12_data();
   /* process entry (no libc): [rsp] = argc, rsp+8 = argv[0..argc-1], NULL.
      The old code stored rdi/rsi, which are 0 at _start, so arg_count() was
@@ -3983,8 +4132,10 @@ int main(int argc,char**argv){
   mov_imm64(CX,(uint64_t)NSLOT);
   xor_rr(AX,AX);
   e1(0xf3); e1(0x48); e1(0xab);
+  ilogc("=== phase: top level ===");
   const char*p=src;
   emit_prog(&p,0,0);
+  ilogc("=== phase: exit syscall ===");
   mov_imm64(AX,60);
   xor_rr(DI,DI);
   e1(0x0f); e1(0x05);
@@ -3994,6 +4145,7 @@ int main(int argc,char**argv){
      so every top-level make is emitted exactly once; call sites -- in main,
      in other functions, and recursive ones -- are rel32 patches resolved in
      write_elf against F[].start, so forward references work. */
+  ilogc("=== phase: make bodies (top level walk) ===");
   {
     const char*q=src;
     while(*q){
@@ -4017,7 +4169,9 @@ int main(int argc,char**argv){
     int j=pend[k], base=F[j].inst_of>=0?F[j].inst_of:j;
     const char*q=F[base].body_at; emit_fn(j,&q);
   }
+  ilogc("=== phase: runtime stubs (builtin) ===");
   emit_builtins();
+  ilogc("=== phase: collector ===");
   emit_gc();
   /* The precise root table: every data word that can hold a heap pointer.
      Filled after codegen, when the kind of every global is final.  OFF_SCR
@@ -4033,6 +4187,7 @@ int main(int argc,char**argv){
     tab[n]=0;
   }
   write_elf(argv[2]);
+  if(ilogf){ ilogc("code bytes: %zu",cn); fclose(ilogf); }
   free(src);
   return 0;
 }

@@ -209,3 +209,36 @@ fixed and tested before the final four-gate run. inline-expression-gates.log
 contains actual tails from that run, all exit 0. Canonical logs are refreshed;
 gen3/gen4 are byte-identical, and the 107-part archive round-trip passes.
 Seed left-to-right sequencing and generic structs are not claimed implemented.
+
+## 2026-10-13 — native instruction list (`ir-log-*`)
+
+The four newest gate logs are `ir-log-doctor.log`, `ir-log-true-selfhost.log`,
+`ir-log-gen3.log` and `ir-log-native-test.log`: one run of
+`make doctor && make true-selfhost && make gen3 && make native-test` after the
+native `SX_EMIT_LOG` instruction-list recorder, the LSP references /
+workspace-symbol / formatting methods and the two gen2 expression-lowering fixes
+had all landed. Every command exited 0.
+
+```text
+DOCTOR-OK              16 lines
+TRUE-SELFHOST-MIN-OK   902 lines, 156 [OK]
+GEN3-OK                14 lines, gen3 == gen4 byte-identical
+NATIVE-TEST-OK         791 lines, 142 [OK]
+```
+
+`ir-log-native-test.log` contains the new `test-native-ir-log` (six `[OK]`
+lines) and the emit-seam check now reporting 1332 lines of language-level
+emitter. `ir-log-true-selfhost.log` contains the corrected `test-list2` leg
+(`[OK] gen2 lists: literal, index, len, push, and len() inside an index`).
+
+One real failure happened during this run and was fixed rather than worked
+around: the first attempt stopped in `test-list2`, which still asserted a
+`#error` for `show xs[len(xs) - 1]` — the exact refusal the expression-lowering
+increment removed. That leg is now a value assertion (`6`) plus a grep for
+`sx_lget(xs,sx_llen(xs) - 1.0)`; the index forms that are genuinely still
+refused stay pinned by `test-gen2-index-expr` and `test-gen2-expr-lowering`.
+
+The `make-*` files above are the 2026-10-12 run and `four-items-*` the earlier
+2026-10-13 one; both are superseded by `ir-log-*` as the current four-gate
+record. No line in any of these logs was edited: they are the tee'd stdout and
+stderr of the commands, including the recipe lines make echoes.
