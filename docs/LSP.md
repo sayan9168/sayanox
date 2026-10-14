@@ -14,7 +14,7 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 
 | Method | Support |
 |--------|---------|
-| `initialize` | yes — `textDocumentSync: 1` (full), completion/hover/definition/documentSymbol/references/formatting/workspaceSymbol/diagnostic providers, `positionEncoding: utf-16`, `serverInfo: sayanox-lsp 2.0` |
+| `initialize` | yes — `textDocumentSync: 1` (full), completion/hover/definition/documentSymbol/references/formatting/workspaceSymbol/diagnostic/rename/signatureHelp/codeAction providers, `positionEncoding: utf-16`, `serverInfo: sayanox-lsp 2.0` |
 | `initialized` | yes |
 | `textDocument/didOpen` | yes — stores the document in the open-document table (four slots) and publishes diagnostics |
 | `textDocument/didChange` | yes — full-text sync, rewrites that document's slot and re-publishes its diagnostics |
@@ -28,6 +28,9 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 | `textDocument/references` | every whole-word occurrence of the word under the cursor, across **all open documents**, as `Location[]` with UTF-16 columns that cover the whole word; `context.includeDeclaration: false` leaves out the `make` / `hold` / `struct` line; a position that is not on a word answers `[]` |
 | `workspace/symbol` | the symbols of the open documents, filtered by `query` as a case-insensitive substring (empty query = every symbol). A file that was never opened cannot be found: the dialect has no directory-listing builtin, so there is no workspace scan |
 | `textDocument/formatting` | the `tools/sxfmt.sa` rule set over the protocol: one whole-buffer `TextEdit`, or `[]` when the document is already formatted |
+| `textDocument/rename` | a `WorkspaceEdit` renaming the word under the cursor in **every open document** (declaration included); the new name must be an identifier, otherwise `null` |
+| `textDocument/signatureHelp` | the declaration of the innermost call enclosing the cursor **on the same line, in the same document**, with its parameter list and the argument index the cursor is in; `null` when no declaration is found |
+| `textDocument/codeAction` | one action, "Format this Sayanox document", carrying the whole-buffer formatting edit; `[]` when the document is already formatted |
 | `shutdown` / `exit` | yes (EOF also ends the session) |
 
 ## Error responses (robustness)
@@ -88,12 +91,14 @@ vim.api.nvim_create_autocmd("FileType", {
   `\uXXXX`), a JSON writer with escaping, the document scanner, the diagnostic
   pass, symbols, completion, hover, definition, references, the formatter and
   the framing loop.
-* `tools/sayanox-lsp-probe.sh` pipes five real sessions into the binary —
+* `tools/sayanox-lsp-probe.sh` pipes six real sessions into the binary —
   (1) initialize, didOpen, hover, definition, documentSymbol, completion,
   diagnostic, didChange, shutdown, exit; (2) a closed document; (3) the
   four-slot cap; (4) references with and without the declaration, plus a
-  non-word position; (5) workspace/symbol and formatting — and prints one line
-  per verified fact, 29 in all. `make test-lsp` asserts that exact list, and
+  non-word position; (5) workspace/symbol and formatting; (6) rename across
+  the open documents, signature help on a two-parameter call, and the format
+  code action (offered, then empty once formatted) — and prints one line
+  per verified fact, 38 in all. `make test-lsp` asserts that exact list, and
   the target is part of the `true-selfhost-min` gate — i.e. the LSP is
   exercised by `make test`.
 * The server keeps up to **four documents** open (full-text sync). It advertises
@@ -221,6 +226,14 @@ comma rule, and `symbols` now delegates to it with an empty query, so
 case-insensitive substring (the new `lower` helper is ASCII-only, which is all
 a symbol name can be). The dispatch site scans the four slots the same way
 references does.
+
+Rename inherits the references limit exactly: it edits the **open**
+documents only, so an occurrence in a file nobody opened is not renamed.
+Signature help is narrower still: the declaration must be in the **same**
+document and the call must enclose the cursor on the **same line** (a call
+that spans lines, or a declaration in another open document, answers
+`null`). The one code action is formatting; there are no quick-fixes for the
+SX1001–SX1005 diagnostics yet.
 
 The honest limit: this is a symbol search over the **open** documents. The
 dialect has no directory-listing builtin and the server does not spawn a

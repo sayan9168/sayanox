@@ -224,6 +224,13 @@ publish() {
   mkdir -p "$REG/$name"
   printf 'name=%s\nversion=%s\n' "$name" "$ver" > "$REG/$name/pkg.meta"
   [ -f main.sa ] && cp main.sa "$REG/$name/main.sa"
+  # Record the content sum exactly like the Sayanox implementation writes it,
+  # so `verify` can check a shell-published package the same way. pkgsum is a
+  # change detector, not a cryptographic hash (see docs/SXPKG_ONLINE.md).
+  if [ -f "$REG/$name/main.sa" ]; then
+    s=$(run_sayanox sum "$REG/$name/main.sa" 2>/dev/null | awk '{print $3}')
+    [ -n "$s" ] && printf 'sum=%s\n' "$s" >> "$REG/$name/pkg.meta"
+  fi
   grep -q "^$name=" "$INDEX" 2>/dev/null || echo "$name=$ver" >> "$INDEX"
   echo "sxpkg: published locally $name $ver"
   echo "sxpkg: to go online, commit registry/$name to the sayanox repo"

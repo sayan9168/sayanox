@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable
 
 all: true-selfhost-min
 
@@ -226,7 +226,7 @@ lsp: $(LSP_BIN)
 # verified fact: 29 of them, in this order.
 test-lsp: $(LSP_BIN) tools/sayanox-lsp-probe.sh
 	@mkdir -p $(TESTS)
-	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change\nsecond document symbols\nclosed document answers empty\nclosed document not served from another buffer\nfifth document evicts the oldest\nnewest document still served\nreferences include the declaration\nreferences honour includeDeclaration:false\nreferences span the open documents\nreferences at a non-word answer empty\nworkspace symbol matches a query\nworkspace symbol with an empty query spans documents\nformatting answers one whole-buffer edit\nformatting indents a comment inside a block\nformatting indents a nested block by four spaces\nformatting strips trailing whitespace\nformatting leaves a formatted document alone)
+	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\nrename capability\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change\nsecond document symbols\nclosed document answers empty\nclosed document not served from another buffer\nfifth document evicts the oldest\nnewest document still served\nreferences include the declaration\nreferences honour includeDeclaration:false\nreferences span the open documents\nreferences at a non-word answer empty\nworkspace symbol matches a query\nworkspace symbol with an empty query spans documents\nformatting answers one whole-buffer edit\nformatting indents a comment inside a block\nformatting indents a nested block by four spaces\nformatting strips trailing whitespace\nformatting leaves a formatted document alone\nrename edits the declaration\nrename carries the new name\nrename spans the open documents\nsignature help labels the declaration\nsignature help lists the parameters\nsignature help counts the argument\ncode action offers formatting\ncode action is empty when already formatted)
 	@echo "[OK] Sayanox LSP: live JSON-RPC sessions, real diagnostics, symbols, completion, hover, definition, references, workspace symbols, formatting"
 
 # Malformed and unexpected JSON-RPC input: unknown requests get -32601,
@@ -1625,6 +1625,32 @@ test-native-ir-log: $(NATIVE_BIN)
 # resolve), so the opt-in leg fails in the resolver within milliseconds and the
 # target does not depend on connectivity in either direction.
 # ---------------------------------------------------------------------------
+
+# test-native-ir-portable: the SX_EMIT_LOG instruction list translates to the
+# portable IR listing (tools/emit_to_ir.py, docs/NATIVE_IR.md) losslessly and
+# deterministically. The IR is an analysis format -- this target pins the
+# translation, and deliberately does NOT claim a second backend or ISA.
+test-native-ir-portable: $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irp_nat >/dev/null
+	$(call assert-out,./$(TESTS)/irp_nat,42\nir-log\n6\n3\n42\nir-log-done)
+	SX_EMIT_LOG=$(TESTS)/irp.log ./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irp_logged
+	python3 tools/emit_to_ir.py $(TESTS)/irp.log $(TESTS)/irp.ir
+	python3 tools/emit_to_ir.py $(TESTS)/irp.log $(TESTS)/irp_again.ir
+	cmp $(TESTS)/irp.ir $(TESTS)/irp_again.ir
+	@# lossless: one IR instruction per logged instruction, none dropped
+	@test $$(grep -cE '^I[0-9]+ ' $(TESTS)/irp.ir) -eq $$(grep -cE '^[0-9a-f]{6}  ' $(TESTS)/irp.log) \
+	  || { echo "[FAIL] the IR dropped or invented an instruction"; exit 1; }
+	@# portable: no x86 register name survives translation
+	@test $$(grep -E '^I[0-9]+ ' $(TESTS)/irp.ir | grep -cE '\b(rax|rcx|rdx|rbx|rsp|rbp|rsi|rdi|r1[2-5]|xmm[0-9]+)\b') -eq 0 \
+	  || { echo "[FAIL] an x86 register name survived into the IR:"; grep -E '^I[0-9]+ ' $(TESTS)/irp.ir | grep -nE '\b(rax|rcx|rdx|rbx|rsp|rbp|rsi|rdi|r1[2-5]|xmm[0-9]+)\b' | head -3; exit 1; }
+	@# the machine model survives in abstract form
+	@for pat in 'FADD ' 'CALL make twice' 'CALL builtin shownum' '=== phase: make bodies' 'I2F ' 'FCMP '; do \
+	  grep -q -F "$$pat" $(TESTS)/irp.ir || { echo "[FAIL] the IR lost '$$pat'"; exit 1; }; \
+	done
+	@echo '[OK] portable IR: SX_EMIT_LOG translates losslessly and deterministically, x86 registers abstracted, call targets and phases preserved (analysis format only -- no second backend claimed)'
+native-test: test-native-ir-portable
+
 .PHONY: test-sxpkg-online-optin
 test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 	command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || { echo "[SKIP] test-sxpkg-online-optin: needs curl or wget"; exit 0; }
@@ -1818,6 +1844,22 @@ test-stdlib-modules: $(GEN2) $(SEED_MIN_BIN)
 	  ./$(TESTS)/stm_all_seed > $(TESTS)/stm_all_seed.out || exit 1; \
 	  cmp $(TESTS)/stm_all_seed.out $(TESTS)/stm_all_native.out || { echo "[FAIL] native all-modules program differs"; exit 1; }; \
 	fi
+	@# ---- stdlib/json_util.sa: flat-object JSON build/read, three backends --
+	./$(SEED_MIN_BIN) selfhost/stdlib_json_test.sa > $(TESTS)/sjson_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/sjson_seed $(TESTS)/sjson_seed.c
+	./$(GEN2) selfhost/stdlib_json_test.sa $(TESTS)/sjson_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/sjson_gen2 $(TESTS)/sjson_gen2.c
+	./$(TESTS)/sjson_seed > $(TESTS)/sjson_seed.out; ./$(TESTS)/sjson_gen2 > $(TESTS)/sjson_gen2.out; \
+	  cmp $(TESTS)/sjson_seed.out $(TESTS)/sjson_gen2.out
+	@grep -q -F '{"name":"a\"b","n":42,"ok":true,"pi":3.5}' $(TESTS)/sjson_seed.out || { echo "[FAIL] json builder output wrong"; cat $(TESTS)/sjson_seed.out; exit 1; }
+	@grep -q -F 'json-done' $(TESTS)/sjson_seed.out || { echo "[FAIL] json fixture did not run to completion"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/stdlib_json_test.sa $(TESTS)/sjson_native || exit 1; \
+	  ./$(TESTS)/sjson_native > $(TESTS)/sjson_native.out || exit 1; \
+	  cmp $(TESTS)/sjson_seed.out $(TESTS)/sjson_native.out || { echo "[FAIL] native json_util differs from seed-min"; exit 1; }; \
+	  echo '[OK] native json_util parity (flat-object build/read)'; \
+	else echo '[SKIP] native json_util parity: native_aot not built'; fi
+
 	@echo '[OK] stdlib growth: num_util (17 helpers) + list_algo (17) + str_text (18) = 52 helpers, 99 hand-computed values identical on seed-min, gen2 and native; each module stands alone and all seven coexist'
 test-stdlib: test-stdlib-modules
 test-stdlib-growth: test-stdlib-modules
@@ -2600,16 +2642,13 @@ test-gen2-index-expr: $(GEN2) $(SEED_MIN_BIN)
 	  echo '[OK] native index-expression parity (values, conditions, for bounds, typed bodies)'; \
 	else echo '[SKIP] native index-expression parity: native_aot not built'; fi
 	@# ---- refusals: a clear diagnostic plus a #error, never invalid C --------
-	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nshow xs[i %% 2]\n' > $(TESTS)/gixe_bad_mod.sa
 	@printf 'hold xs = [1, 2, 3]\nmake pick(v: list) -> num {\n  give v[0]\n}\nshow xs[pick(xs)]\n' > $(TESTS)/gixe_bad_call.sa
 	@printf 'hold xs = [1, 2, 3]\nshow xs[1, 2]\n' > $(TESTS)/gixe_bad_comma.sa
 	@printf 'hold xs = [1, 2, 3]\nshow xs["a"]\n' > $(TESTS)/gixe_bad_quote.sa
 	@printf 'hold xs = [1, 2, 3]\nshow xs[]\n' > $(TESTS)/gixe_bad_empty.sa
 	@printf 'hold xs = [1, 2, 3]\nhold i = 1\nshow xs[(i]\n' > $(TESTS)/gixe_bad_unbal.sa
 	@printf 'hold xs = [1, 2, 3]\nhold i = 1\nshow xs[i +]\n' > $(TESTS)/gixe_bad_trailop.sa
-	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nwhen xs[i %% 2] > 0 {\n  show 1\n}\n' > $(TESTS)/gixe_bad_condmod.sa
-	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nfor k in 0..xs[i %% 2] {\n  show k\n}\n' > $(TESTS)/gixe_bad_boundmod.sa
-	@for t in mod call comma quote empty unbal trailop condmod boundmod; do \
+	@for t in call comma quote empty unbal trailop; do \
 	  ./$(GEN2) $(TESTS)/gixe_bad_$$t.sa $(TESTS)/gixe_bad_$$t.c > $(TESTS)/gixe_bad_$$t.msg 2>&1; \
 	  grep -q '#error sayanox-min:' $(TESTS)/gixe_bad_$$t.c || { echo "[FAIL] gixe_bad_$$t: the generated C has no #error"; exit 1; }; \
 	  grep -q '^min: ' $(TESTS)/gixe_bad_$$t.msg || { echo "[FAIL] gixe_bad_$$t: no 'min:' diagnostic"; cat $(TESTS)/gixe_bad_$$t.msg; exit 1; }; \
@@ -2629,11 +2668,97 @@ test-gen2-index-expr: $(GEN2) $(SEED_MIN_BIN)
 	  fi; \
 	  echo '[OK] native refuses a negative index, as documented'; \
 	fi
-	@echo '[OK] gen2 index expressions: arithmetic/field indexes in values, conditions, for bounds and typed bodies (39 values identical on seed-min, gen2 and native); 9 unsupported index forms refused with a clear diagnostic and a #error'
+	@echo '[OK] gen2 index expressions: arithmetic/field indexes in values, conditions, for bounds and typed bodies (39 values identical on seed-min, gen2 and native); 6 unsupported index forms refused with a clear diagnostic and a #error (% in an index is supported now: test-gen2-index-mod)'
+
+# test-for-paren: a parenthesised `for` source, `for v in (xs)`, takes the
+# normal collection path on all three backends. (A parenthesised RANGE is a
+# different thing and stays refused/tested in the seed for-field targets.)
+test-for-paren: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/for_paren_test.sa > $(TESTS)/tfp_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/tfp_seed $(TESTS)/tfp_seed.c
+	./$(GEN2) selfhost/for_paren_test.sa $(TESTS)/tfp_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/tfp_gen2 $(TESTS)/tfp_gen2.c
+	$(call assert-out,./$(TESTS)/tfp_seed,a\nb\n7\n8\na\nb\nx\ny\nz\nz\n3\nparen-done)
+	./$(TESTS)/tfp_seed > $(TESTS)/tfp_seed.out; ./$(TESTS)/tfp_gen2 > $(TESTS)/tfp_gen2.out; \
+	  cmp $(TESTS)/tfp_seed.out $(TESTS)/tfp_gen2.out
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/for_paren_test.sa $(TESTS)/tfp_native || exit 1; \
+	  ./$(TESTS)/tfp_native > $(TESTS)/tfp_native.out || exit 1; \
+	  cmp $(TESTS)/tfp_seed.out $(TESTS)/tfp_native.out || { echo "[FAIL] native parenthesised-for differs from seed-min"; exit 1; }; \
+	  echo '[OK] native parenthesised-for parity'; \
+	else echo '[SKIP] native parenthesised-for parity: native_aot not built'; fi
+	@echo '[OK] parenthesised for source: seed-min == gen2 (== native when built)'
+
+# test-gen2-index-mod: `%` inside an index expression, left-associative with
+# `*` and `/`, in values, conditions, for bounds, typed bodies and nested
+# indexes. It used to be refused; the refusal list lives in
+# test-gen2-index-expr and no longer names it.
+test-gen2-index-mod: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/gen2_index_mod_test.sa > $(TESTS)/gim_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/gim_seed $(TESTS)/gim_seed.c
+	./$(GEN2) selfhost/gen2_index_mod_test.sa $(TESTS)/gim_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/gim_gen2 $(TESTS)/gim_gen2.c
+	./$(TESTS)/gim_seed > $(TESTS)/gim_seed.out; ./$(TESTS)/gim_gen2 > $(TESTS)/gim_gen2.out; \
+	  cmp $(TESTS)/gim_seed.out $(TESTS)/gim_gen2.out
+	@grep -q -F 'sx_mod' $(TESTS)/gim_gen2.c || { echo "[FAIL] no sx_mod in the gen2 index lowering"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/gen2_index_mod_test.sa $(TESTS)/gim_native || exit 1; \
+	  ./$(TESTS)/gim_native > $(TESTS)/gim_native.out || exit 1; \
+	  cmp $(TESTS)/gim_seed.out $(TESTS)/gim_native.out || { echo "[FAIL] native %-index differs from seed-min"; exit 1; }; \
+	  echo '[OK] native %-index parity'; \
+	else echo '[SKIP] native %-index parity: native_aot not built'; fi
+	@echo '[OK] % in index expressions: seed-min == gen2 (== native when built)'
+
+# test-type-refusals: the type forms no backend implements must be refused
+# with a clear diagnostic on every backend, and the one form gen2 does
+# implement (a struct-typed `hold` annotation, which gen2 type-checks) must
+# keep working there while seed-min and native refuse it BY NAME. Nothing
+# here may be silently miscompiled: before this target, `p: Pt` in a struct
+# body registered `Pt` as an extra field on all three backends.
+test-type-refusals: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'struct Box<T> {\n  v\n}\nhold b = Box<Box<num>> { 7 }\nshow 1\n' > $(TESTS)/ttr_nested.sa
+	@printf 'struct Pt {\n  x\n  y\n}\nstruct Wrap {\n  p: Pt\n  n\n}\nshow 1\n' > $(TESTS)/ttr_fieldann.sa
+	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = Pt { 1, 2 }\nshow p.x\nshow p.y\n' > $(TESTS)/ttr_holdann.sa
+	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = 5\nshow 1\n' > $(TESTS)/ttr_holdann_bad.sa
+	@# nested generic instantiation: refused on seed-min, gen2 and native
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_nested.sa > $(TESTS)/ttr_nested_seed.c 2> $(TESTS)/ttr_nested_seed.msg; then echo "[FAIL] seed-min accepted Box<Box<num>>"; exit 1; fi
+	@grep -q "not implemented" $(TESTS)/ttr_nested_seed.msg || { echo "[FAIL] seed-min nested-generic refusal is unclear"; cat $(TESTS)/ttr_nested_seed.msg; exit 1; }
+	@./$(GEN2) $(TESTS)/ttr_nested.sa $(TESTS)/ttr_nested_gen2.c > $(TESTS)/ttr_nested_gen2.msg 2>&1; \
+	  grep -q '#error sayanox-min:' $(TESTS)/ttr_nested_gen2.c || { echo "[FAIL] gen2 accepted Box<Box<num>>"; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/ttr_nested.sa $(TESTS)/ttr_nested_native > $(TESTS)/ttr_nested_native.msg 2>&1; then echo "[FAIL] native accepted Box<Box<num>>"; exit 1; fi
+	@grep -q "not implemented" $(TESTS)/ttr_nested_native.msg || { echo "[FAIL] native nested-generic refusal is unclear"; cat $(TESTS)/ttr_nested_native.msg; exit 1; }
+	@echo '[OK] nested generic structs refused on seed-min, gen2 and native'
+	@# struct FIELD annotation: refused on all three (was: extra field)
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_fieldann.sa > $(TESTS)/ttr_fieldann_seed.c 2> $(TESTS)/ttr_fieldann_seed.msg; then echo "[FAIL] seed-min accepted a struct field annotation"; exit 1; fi
+	@grep -q "field annotations are not supported" $(TESTS)/ttr_fieldann_seed.msg || { echo "[FAIL] seed-min field-annotation refusal is unclear"; cat $(TESTS)/ttr_fieldann_seed.msg; exit 1; }
+	@./$(GEN2) $(TESTS)/ttr_fieldann.sa $(TESTS)/ttr_fieldann_gen2.c > $(TESTS)/ttr_fieldann_gen2.msg 2>&1; \
+	  grep -q 'struct field annotations are not supported' $(TESTS)/ttr_fieldann_gen2.c || { echo "[FAIL] gen2 accepted a struct field annotation"; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/ttr_fieldann.sa $(TESTS)/ttr_fieldann_native > $(TESTS)/ttr_fieldann_native.msg 2>&1; then echo "[FAIL] native accepted a struct field annotation"; exit 1; fi
+	@grep -q "field annotations are not supported" $(TESTS)/ttr_fieldann_native.msg || { echo "[FAIL] native field-annotation refusal is unclear"; cat $(TESTS)/ttr_fieldann_native.msg; exit 1; }
+	@echo '[OK] struct field annotations refused on seed-min, gen2 and native'
+	@# struct-typed HOLD annotation: gen2 supports and type-checks it;
+	@# seed-min and native refuse it by name (their hold types are scalar)
+	./$(GEN2) $(TESTS)/ttr_holdann.sa $(TESTS)/ttr_holdann_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/ttr_holdann_gen2 $(TESTS)/ttr_holdann_gen2.c
+	$(call assert-out,./$(TESTS)/ttr_holdann_gen2,1\n2)
+	@./$(GEN2) $(TESTS)/ttr_holdann_bad.sa $(TESTS)/ttr_holdann_bad.c > $(TESTS)/ttr_holdann_bad.msg 2>&1; \
+	  grep -q 'is declared Pt but the value is a number' $(TESTS)/ttr_holdann_bad.c || { echo "[FAIL] gen2 did not type-check a struct-typed hold"; exit 1; }
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_holdann.sa > $(TESTS)/ttr_holdann_seed.c 2> $(TESTS)/ttr_holdann_seed.msg; then echo "[FAIL] seed-min accepted a struct-typed hold annotation"; exit 1; fi
+	@grep -q "unknown hold type" $(TESTS)/ttr_holdann_seed.msg || { echo "[FAIL] seed-min struct-hold refusal is unclear"; cat $(TESTS)/ttr_holdann_seed.msg; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/ttr_holdann.sa $(TESTS)/ttr_holdann_native > $(TESTS)/ttr_holdann_native.msg 2>&1; then echo "[FAIL] native accepted a struct-typed hold annotation"; exit 1; fi
+	@grep -q "unknown or unsupported type 'Pt'" $(TESTS)/ttr_holdann_native.msg || { echo "[FAIL] native struct-hold refusal is unclear"; cat $(TESTS)/ttr_holdann_native.msg; exit 1; }
+	@echo '[OK] struct-typed hold: supported+checked on gen2, refused by name on seed-min and native'
+
 test-stage2: test-gen2-index-expr
 test-for-str: test-gen2-index-expr
 test-gen2-gaps: test-gen2-index-expr
 native-test: test-gen2-index-expr
+native-test: test-for-paren
+native-test: test-gen2-index-mod
+native-test: test-type-refusals
 
 # ---------------------------------------------------------------------------
 # test-gen2-expr-lowering: the two gen2 expression gaps that were still
@@ -2718,13 +2843,12 @@ test-gen2-expr-lowering: $(GEN2) $(SEED_MIN_BIN)
 	  echo '[OK] native parity for len() and a nested index inside [ ]'; \
 	else echo '[SKIP] native index-call parity: native_aot not built'; fi
 	@# ---- refusals: a clear diagnostic plus a #error, never invalid C -------
-	@printf 'hold xs = [1, 2, 3]\nhold i = 3\nshow xs[i %% 2]\n' > $(TESTS)/gel_bad_mod.sa
 	@printf 'hold xs = [1, 2, 3]\nmake pick(v: list) -> num {\n  give v[0]\n}\nshow xs[pick(xs)]\n' > $(TESTS)/gel_bad_call.sa
 	@printf 'hold xs = [1, 2, 3]\nshow xs["a"]\n' > $(TESTS)/gel_bad_quote.sa
 	@printf 'hold xs = [1, 2, 3]\nhold ys = [0]\nshow xs[ys[0]\n' > $(TESTS)/gel_bad_unbal.sa
 	@printf 'make bad(x: str, v: num) -> str {\n  give "v=" + v\n}\nshow bad("q", 3)\n' > $(TESTS)/gel_bad_mix.sa
 	@printf 'make bad2(x: num, s: str) -> num {\n  give x %% s\n}\nshow bad2(4, "ab")\n' > $(TESTS)/gel_bad_pctstr.sa
-	@for t in mod call quote unbal mix pctstr; do \
+	@for t in call quote unbal mix pctstr; do \
 	  ./$(GEN2) $(TESTS)/gel_bad_$$t.sa $(TESTS)/gel_bad_$$t.c > $(TESTS)/gel_bad_$$t.msg 2>&1; \
 	  grep -q '#error sayanox-min:' $(TESTS)/gel_bad_$$t.c || { echo "[FAIL] gel_bad_$$t: the generated C has no #error"; exit 1; }; \
 	  grep -q '^min: ' $(TESTS)/gel_bad_$$t.msg || { echo "[FAIL] gel_bad_$$t: no 'min:' diagnostic"; cat $(TESTS)/gel_bad_$$t.msg; exit 1; }; \
@@ -2737,7 +2861,7 @@ test-gen2-expr-lowering: $(GEN2) $(SEED_MIN_BIN)
 	  if ./$(NATIVE_BIN) $(TESTS)/gel_bad_pctstr.sa $(TESTS)/gel_bad_pctstr_nat >/dev/null 2>&1; then echo "[FAIL] native accepted %% with a string operand"; exit 1; fi; \
 	  echo '[OK] seed-min and native refuse the mixed operands too'; \
 	fi
-	@echo '[OK] gen2 expression lowering: a string chain in a give/condition (11 values) and len()/a nested index inside [ ] in every position (18 values), identical on seed-min, gen2 and native; 6 unsupported forms refused with a clear diagnostic and a #error'
+	@echo '[OK] gen2 expression lowering: a string chain in a give/condition (11 values) and len()/a nested index inside [ ] in every position (18 values), identical on seed-min, gen2 and native; 5 unsupported forms refused with a clear diagnostic and a #error (% in an index is supported now: test-gen2-index-mod)'
 test-stage2: test-gen2-expr-lowering
 native-test: test-gen2-expr-lowering
 
@@ -3058,7 +3182,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	  echo "[FAIL] native accepted a non-numeric give"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_fngive.sa $(TESTS)/native_fngive 2>&1 | grep -q 'give must give a number'
 	@echo "[OK] native rejects (clearly): give outside make, make inside a block, wrong arg count, non-numeric arg, non-numeric give"
-	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-native-emit-split test-native-ir-log
+	@$(MAKE) --no-print-directory test-native-num test-native-io test-native-mem test-stdlib test-stage2-demos test-stage2 test-for-str test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable
 	@echo "[OK] native: modulo, else alias, distinct name slots, undefined names, lists, structs, nested structs, use splice, functions"
 	@# string ordering on native (hand-computed; gen2/seed-min leg in test-native-strord)
 	./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/nso_nat_gate

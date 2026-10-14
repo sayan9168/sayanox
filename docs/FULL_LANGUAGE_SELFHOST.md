@@ -15,7 +15,7 @@ make doctor && make true-selfhost && make gen3 && make native-test
 | Layer | Written in | What it does | Gate |
 |---|---|---|---|
 | `selfhost/seed/sxc_seed_min.c` | C, ~950 lines | compiles the pure-min dialect; it is the only hand-written compiler in the chain | `make true-selfhost` |
-| `selfhost/compiler_min.sa` → `selfhost/gen1_min.c` → `selfhost/gen2.c` | **Sayanox**, ~17,200 lines | the compiler source; seed-min compiles it into gen1_min, gen1_min compiles it into gen2 | `make true-selfhost` |
+| `selfhost/compiler_min.sa` → `selfhost/gen1_min.c` → `selfhost/gen2.c` | **Sayanox**, ~17,800 lines | the compiler source; seed-min compiles it into gen1_min, gen1_min compiles it into gen2 | `make true-selfhost` |
 | `gen2` → `gen3.c` → `gen4.c` | Sayanox (gen2's own output) | gen3 and gen4 must be **byte-identical** | `make gen3` |
 | `selfhost/native_aot.c` | C, ~4,000 lines | x86-64 Linux machine code for the native subset | `make native-test` |
 
@@ -51,8 +51,17 @@ language, not the full language.
   `test-seed-for-literals`, `test-seed-for-range`, `test-seed-for-calls`,
   `test-seed-for-untyped`, `test-seed-for-fields`
 * **index expressions (2026-10-13):** `xs[i - 1]`, `xs[(a + b) / 2]`,
-  `xs[p.k]` in a value position, inside a `when`/`while` condition and inside a
-  `for` bound, lowered to `sx_lget`/`sx_idx` — `test-gen2-index-expr`
+  `xs[p.k]`, `xs[i % 2]`, `xs[len(xs) - 1]` and a nested `xs[ys[0]]` in a value
+  position, inside a `when`/`while` condition and inside a `for` bound,
+  lowered to `sx_lget`/`sx_idx` — `test-gen2-index-expr`,
+  `test-gen2-index-mod`, `test-gen2-expr-lowering`
+* **a parenthesised `for` source (2026-10-13):** `for c in (s)` and
+  `for v in (xs)` strip whole-source parentheses on seed-min, gen2 and native —
+  `test-for-paren`. A parenthesised *range* (`for i in (0..10)`) stays refused.
+* **a struct-typed `hold` annotation (gen2 only):** `hold p: Pt = Pt { 1, 2 }`
+  is accepted and type-checked by gen2 (`hold p: Pt = 5` is a type error);
+  seed-min and native refuse it by name, because their `hold` types are the
+  scalars — `test-type-refusals`
 * generics over numbers (`make NAME<T>`, `NAME<A, B>`), demand-driven generic
   bodies — `test-generics`, `test-native-generics`
 * `use "file.sa"` splicing to depth 8 — `test-use`
@@ -63,18 +72,56 @@ language, not the full language.
 
 ## What it refuses, with a diagnostic instead of wrong code
 
-* `%`, a call (including `len()`), a nested index, a comma, a quoted string, an
-  empty index, unbalanced parentheses or a trailing operator inside `[ ]`
-  (`make test-gen2-index-expr` pins all 13 refusals)
-* a bare string `+` chain in a `give` (`give "hi " + name`): gen2 emits C that
-  does not compile. Accumulate into a `hold` and return that.
+* a call other than `len()`, a comma, a quoted string, an empty index,
+  unbalanced parentheses or a trailing operator inside `[ ]`
+  (`make test-gen2-index-expr` and `test-gen2-expr-lowering` pin the refusals;
+  `%`, `len()` and nested indexes are supported — see above)
 * a global read inside an untyped `make` body
-* `for v in p.xs` (a `list`-typed struct field as the source) and
-  `for c in (s)` (a parenthesised source)
+* `for v in p.xs` (a `list`-typed struct field as the source: no backend has a
+  list-typed struct field, so this needs a field type that does not exist yet)
+* a struct field annotation (`p: Pt` in a struct body): it used to register
+  `Pt` as an extra field on all three backends; since 2026-10-13 all three
+  refuse it (`test-type-refusals`). A literal after the colon (`k: 2`) is the
+  old tolerated spelling and still parses as field `k` only.
+* a nested generic instantiation (`Box<Box<num>>`): refused on all three
+  backends (`test-type-refusals`)
 * a native-only construct on the portable path, and vice versa
 
 The full list, with the backend that differs, is in `docs/STATUS.md` under
 "Measured divergences".
+
+## Inventory: what the compiler source itself uses (2026-10-13)
+
+Item 1 of the 2026-10-13 STATUS asks which full-language ("Stage-2") features
+`compiler_min.sa` still does **not** use, and whether the source grows toward
+the full language or a parallel Stage-2 path appears. Measured with `grep` on
+the 17,825-line / 608,621-byte source as of this writing:
+
+| Feature | Used in `compiler_min.sa`? | gen2 supports it for user programs? |
+|---|---|---|
+| typed `make` signatures (`-> num/str/list`) | yes — every definition | yes (`test-typed-sig`) |
+| `elif` / `else when` chains | yes (22 sites) | yes (`test-when`) |
+| `&&` / `||` / `and` / `or` / `not` conditions | yes (hundreds of sites) | yes (`test-cond-string`, `test-logic-value`) |
+| struct values and field chains | **no** — the compiler keeps its registries in delimited strings (`sdefs`, `gsdefs`) and lists, not struct values | yes (`test-struct2`, `test-nest`) |
+| generic structs / generic functions | **no** — `<T>` appears only inside scanner string literals; the compiler *implements* generics without *using* them | yes (`test-generic-structs`, `test-generics`) |
+| string interpolation `${...}` | **no** — 1,671 `concat(...)` calls instead | yes (`test-stdlib-interpolation`) |
+| struct-typed `hold` annotations | **no** — `hold` in the compiler is untyped or scalar-typed | yes, gen2 only (`test-type-refusals`) |
+| list literals, `push`, `len`, index expressions | yes | yes |
+| `use "..."` modules | yes (1 site: its own input handling is in C; the *generated* programs use it) | yes (`test-use`) |
+| file/process builtins (`read_file`, `write_file`, `run`) | yes | yes (`test-native-io` on native) |
+| `gc()` / mark & sweep | the generated runtime, not the compiler's own code | yes (`test-gc`) |
+
+The growth path actually taken in this increment is the first option the
+STATUS names: **the compiler source grew** (parenthesised `for` sources and
+`%`/`len()`/nested index expressions are implemented *in* `compiler_min.sa`,
+and the source self-compiles through the whole chain). No parallel Stage-2
+compiler path was started, because the measured bottleneck is not a missing
+path but gen2's self-compile memory: the current source peaks at ~3.72 GB
+resident while compiling itself in a 3.9 GB sandbox (HEAD alone peaks at
+~3.60 GB), so each new construct has to pay for its own footprint. Until that
+changes, "full-language self-host" stays **not claimed**: gen2 is a growing
+subset compiler that happens to be written in its own subset, and this page
+plus `docs/STATUS.md` are the honest boundary of that claim.
 
 ## The Stage-2 host is not in this repository
 

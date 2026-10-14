@@ -1,0 +1,491 @@
+// stdlib/json_util.sa -- a small JSON-ish text module (prefix `j_`).
+//
+// Supported by seed-min, gen2 and native (make test-stdlib-modules). Fully
+// typed signatures, one statement per line, every helper defined before the
+// one that calls it (the rules str_util.sa documents).
+//
+// HONEST SCOPE -- this is JSON *text* building plus a FLAT object reader, not
+// a JSON implementation:
+//   * Building: escaped strings, numbers (integers and up to six fraction digits), booleans,
+//     numeric arrays, and "key":value pairs a caller joins with commas and
+//     wraps with j_obj. That output is valid JSON for these value kinds.
+//   * Reading: ONE flat object -- {"k": 1, "s": "x", "b": true}. Nested
+//     objects/arrays as values, exponents in numbers, and \u escapes above
+//     U+007F are NOT parsed; j_get_* on a missing key gives "" / 0, so use
+//     j_has to tell "absent" from a real empty/zero value. A key search is
+//     the first `"key"` followed by `:` -- do not embed that text inside an
+//     earlier string value.
+// There is no JSON value type in the language; an object is a `str`.
+
+make j_is_digit(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give 1
+    }
+  }
+  give 0
+}
+
+// Escape a string for inclusion between JSON quotes (the quotes are j_quote).
+// Bytes below 32 become \u00XX; a UTF-8 byte >= 128 is copied raw, which is
+// byte-preserving but is NOT code-point validation.
+make j_escape(s: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      hold out = concat(out, "\\\"")
+    } otherwise {
+      when c == 92 {
+        hold out = concat(out, "\\\\")
+      } otherwise {
+        when c == 10 {
+          hold out = concat(out, "\\n")
+        } otherwise {
+          when c == 13 {
+            hold out = concat(out, "\\r")
+          } otherwise {
+            when c == 9 {
+              hold out = concat(out, "\\t")
+            } otherwise {
+              when c < 32 {
+                hold hi = (c - (c % 16)) / 16
+                hold lo = c % 16
+                hold hexd = "0123456789abcdef"
+                hold esc = "\\u00"
+                hold esc = concat(esc, chr(sx_index(hexd, hi)))
+                hold esc = concat(esc, chr(sx_index(hexd, lo)))
+                hold out = concat(out, esc)
+              } otherwise {
+                hold out = concat(out, chr(c))
+              }
+            }
+          }
+        }
+      }
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+make j_quote(s: str) -> str {
+  hold out = "\""
+  hold out = concat(out, j_escape(s))
+  hold out = concat(out, "\"")
+  give out
+}
+
+// Digits of a non-negative integer-valued number (no numstr: native has
+// no such builtin, and the same code must run on all three backends).
+make j_int_text(v: num) -> str {
+  when v < 1 {
+    give "0"
+  }
+  hold digits = ""
+  hold x = v
+  while x >= 1 {
+    hold d = x % 10
+    hold digits = concat(chr(48 + d), digits)
+    hold x = (x - d) / 10
+  }
+  give digits
+}
+
+// A JSON number token: optional -, integer part, and up to six fraction
+// digits with trailing zeros dropped (3.5, -12.5, 42). Larger magnitudes
+// and precision beyond six fraction digits are NOT claimed.
+make j_number(n: num) -> str {
+  hold neg = ""
+  hold v = n
+  when v < 0 {
+    hold neg = "-"
+    hold v = 0 - v
+  }
+  hold ip = v % 1000000000000000
+  hold out = concat(neg, j_int_text(ip))
+  hold f = v - ip
+  when f > 0 {
+    hold frac = ""
+    hold count = 0
+    hold runf = 1
+    while runf == 1 {
+      when f <= 0.0000001 {
+        hold runf = 0
+      } otherwise {
+        when count >= 6 {
+          hold runf = 0
+        } otherwise {
+          hold f = f * 10
+          hold d = f % 10
+          hold frac = concat(frac, chr(48 + d))
+          hold f = f - d
+          hold count = count + 1
+        }
+      }
+    }
+    // drop trailing zeros the binary expansion left behind
+    hold run = 1
+    while run == 1 {
+      when len(frac) <= 0 {
+        hold run = 0
+      } otherwise {
+        hold last = sx_index(frac, len(frac) - 1)
+        when last == 48 {
+          hold cut = ""
+          hold i = 0
+          while i < len(frac) - 1 {
+            hold cut = concat(cut, chr(sx_index(frac, i)))
+            hold i = i + 1
+          }
+          hold frac = cut
+        } otherwise {
+          hold run = 0
+        }
+      }
+    }
+    when len(frac) > 0 {
+      hold out = concat(out, ".")
+      hold out = concat(out, frac)
+    }
+  }
+  give out
+}
+
+make j_booltext(b: num) -> str {
+  when b != 0 {
+    give "true"
+  }
+  give "false"
+}
+
+make j_kv_text(k: str, v: str) -> str {
+  hold out = j_quote(k)
+  hold out = concat(out, ":")
+  hold out = concat(out, j_quote(v))
+  give out
+}
+
+make j_kv_number(k: str, v: num) -> str {
+  hold out = j_quote(k)
+  hold out = concat(out, ":")
+  hold out = concat(out, j_number(v))
+  give out
+}
+
+make j_kv_flag(k: str, b: num) -> str {
+  hold out = j_quote(k)
+  hold out = concat(out, ":")
+  hold out = concat(out, j_booltext(b))
+  give out
+}
+
+// Join two already-built fragments with a comma (pair1 = j_pair(a, b)).
+make j_pair(a: str, b: str) -> str {
+  hold out = concat(a, ",")
+  hold out = concat(out, b)
+  give out
+}
+
+// Wrap comma-joined "key":value fragments as an object. j_obj("") is "{}".
+make j_obj(inner: str) -> str {
+  hold out = "{"
+  hold out = concat(out, inner)
+  hold out = concat(out, "}")
+  give out
+}
+
+// A JSON array of numbers: [1,2,3]. Lists hold numbers only, so there is no
+// string-array builder -- build those with j_quote + j_pair by hand.
+make j_arr_numbers(xs: list) -> str {
+  hold out = "["
+  hold i = 0
+  while i < len(xs) {
+    hold v = xs[i]
+    when i > 0 {
+      hold out = concat(out, ",")
+    }
+    hold out = concat(out, j_number(v))
+    hold i = i + 1
+  }
+  hold out = concat(out, "]")
+  give out
+}
+
+// First index of `pat` in `s` at or after `from`, or -1.
+make j_find(s: str, pat: str, from: num) -> num {
+  hold i = from
+  when i < 0 {
+    hold i = 0
+  }
+  hold run = 1
+  while run == 1 {
+    when i + len(pat) > len(s) {
+      hold run = 0
+    } otherwise {
+    hold ok = 1
+    hold k = 0
+    while k < len(pat) {
+      hold a = sx_index(s, i + k)
+      hold b = sx_index(pat, k)
+      when a != b {
+        hold ok = 0
+        hold k = len(pat)
+      } otherwise {
+        hold k = k + 1
+      }
+    }
+    when ok == 1 {
+      give i
+    }
+    hold i = i + 1
+    }
+  }
+  give 0 - 1
+}
+
+make j_is_space(c: num) -> num {
+  when c == 32 {
+    give 1
+  }
+  when c == 9 {
+    give 1
+  }
+  when c == 10 {
+    give 1
+  }
+  when c == 13 {
+    give 1
+  }
+  give 0
+}
+
+// Index just past the colon of a quoted key in a flat object, or -1 absent.
+make j_value_pos(obj: str, key: str) -> num {
+  hold pat = j_quote(key)
+  hold p = j_find(obj, pat, 0)
+  when p < 0 {
+    give 0 - 1
+  }
+  hold i = p + len(pat)
+  hold run = 1
+  while run == 1 {
+    when i >= len(obj) {
+      hold run = 0
+    } otherwise {
+      hold c = sx_index(obj, i)
+      when j_is_space(c) == 1 {
+        hold i = i + 1
+      } otherwise {
+        hold run = 0
+      }
+    }
+  }
+  when i >= len(obj) {
+    give 0 - 1
+  }
+  when sx_index(obj, i) != 58 {
+    give 0 - 1
+  }
+  hold i = i + 1
+  hold run = 1
+  while run == 1 {
+    when i >= len(obj) {
+      hold run = 0
+    } otherwise {
+      hold c = sx_index(obj, i)
+      when j_is_space(c) == 1 {
+        hold i = i + 1
+      } otherwise {
+        hold run = 0
+      }
+    }
+  }
+  give i
+}
+
+make j_has(obj: str, key: str) -> num {
+  hold p = j_value_pos(obj, key)
+  when p >= 0 {
+    give 1
+  }
+  give 0
+}
+
+// A hex digit's value, or -1 (lowercase a-f and digits; uppercase is
+// refused by omission and the caller substitutes a question mark).
+make j_hexval(c: num) -> num {
+  when j_is_digit(c) == 1 {
+    give c - 48
+  }
+  when c >= 97 {
+    when c <= 102 {
+      give c - 87
+    }
+  }
+  give 0 - 1
+}
+
+// The string value of a key in a flat object, with the usual JSON
+// backslash escapes and \u00XX (XX < 128) unescaped. Absent or
+// non-string gives the empty string (check j_has first).
+make j_get_text(obj: str, key: str) -> str {
+  hold out = ""
+  hold i = j_value_pos(obj, key)
+  when i < 0 {
+    give out
+  }
+  when i >= len(obj) {
+    give out
+  }
+  when sx_index(obj, i) != 34 {
+    give out
+  }
+  hold i = i + 1
+  hold run = 1
+  while run == 1 {
+    when i >= len(obj) {
+      hold run = 0
+    } otherwise {
+      hold c = sx_index(obj, i)
+      when c == 34 {
+        hold run = 0
+      } otherwise {
+        hold handled = 0
+        when c == 92 {
+          when i + 1 < len(obj) {
+            hold handled = 1
+            hold e = sx_index(obj, i + 1)
+            when e == 110 {
+              hold out = concat(out, chr(10))
+              hold i = i + 2
+            } otherwise {
+              when e == 114 {
+                hold out = concat(out, chr(13))
+                hold i = i + 2
+              } otherwise {
+                when e == 116 {
+                  hold out = concat(out, chr(9))
+                  hold i = i + 2
+                } otherwise {
+                  hold is_u = 0
+                  when e == 117 {
+                    when i + 5 < len(obj) {
+                      hold is_u = 1
+                    }
+                  }
+                  when is_u == 1 {
+                    // backslash-uXXXX: only the low byte, only ASCII
+                    hold hv1 = j_hexval(sx_index(obj, i + 4))
+                    hold hv2 = j_hexval(sx_index(obj, i + 5))
+                    hold chv = 63
+                    when hv1 >= 0 {
+                      when hv2 >= 0 {
+                        hold vv = hv1 * 16 + hv2
+                        when vv < 128 {
+                          hold chv = vv
+                        }
+                      }
+                    }
+                    hold out = concat(out, chr(chv))
+                    hold i = i + 6
+                  } otherwise {
+                    // any other escape: the escaped byte itself
+                    hold out = concat(out, chr(e))
+                    hold i = i + 2
+                  }
+                }
+              }
+            }
+          }
+        }
+        when handled == 0 {
+          hold out = concat(out, chr(c))
+          hold i = i + 1
+        }
+      }
+    }
+  }
+  give out
+}
+
+// The numeric value of `key`: optional -, digits, optional fraction. No
+// exponent. Absent or non-numeric: 0 (check j_has first).
+make j_get_number(obj: str, key: str) -> num {
+  hold i = j_value_pos(obj, key)
+  when i < 0 {
+    give 0
+  }
+  hold neg = 1
+  when i < len(obj) {
+    when sx_index(obj, i) == 45 {
+      hold neg = 0 - 1
+      hold i = i + 1
+    }
+  }
+  hold v = 0
+  hold run = 1
+  while run == 1 {
+    when i >= len(obj) {
+      hold run = 0
+    } otherwise {
+      hold c = sx_index(obj, i)
+      when j_is_digit(c) == 1 {
+        hold v = v * 10 + (c - 48)
+        hold i = i + 1
+      } otherwise {
+        hold run = 0
+      }
+    }
+  }
+  when i < len(obj) {
+    when sx_index(obj, i) == 46 {
+      hold i = i + 1
+      hold place = 0.1
+      hold run = 1
+      while run == 1 {
+        when i >= len(obj) {
+          hold run = 0
+        } otherwise {
+          hold c = sx_index(obj, i)
+          when j_is_digit(c) == 1 {
+            hold v = v + (c - 48) * place
+            hold place = place / 10
+            hold i = i + 1
+          } otherwise {
+            hold run = 0
+          }
+        }
+      }
+    }
+  }
+  give v * neg
+}
+
+// 1 when `key` maps to true, 0 when false, absent or anything else.
+make j_get_flag(obj: str, key: str) -> num {
+  hold i = j_value_pos(obj, key)
+  when i < 0 {
+    give 0
+  }
+  when i + 4 <= len(obj) {
+    hold t = "true"
+    hold ok = 1
+    hold k = 0
+    while k < 4 {
+      hold a = sx_index(obj, i + k)
+      hold b = sx_index(t, k)
+      when a != b {
+        hold ok = 0
+        hold k = 4
+      } otherwise {
+        hold k = k + 1
+      }
+    }
+    when ok == 1 {
+      give 1
+    }
+  }
+  give 0
+}

@@ -89,6 +89,7 @@ miss5() { case "$out5" in *"$1"*) ;; *) echo "$2" ;; esac; }
 
 have '"capabilities"'            'initialize'
 have '"sayanox-lsp"'             'serverInfo'
+have '"renameProvider":true'     'rename capability'
 have 'SX1001'                    'diag unknown-statement'
 have 'SX1002'                    'diag unterminated-string'
 have 'SX1003'                    'diag unbalanced-braces'
@@ -192,3 +193,40 @@ have5 'n  // comment { }'                            'formatting indents a comme
 have5 'n    show 42'                                 'formatting indents a nested block by four spaces'
 miss5 'x = 1  '                                      'formatting strips trailing whitespace'
 have5 '"id":34,"result":[]'                          'formatting leaves a formatted document alone'
+
+# ------------------------------------------- rename / signatureHelp / codeAction
+# Rename answers a WorkspaceEdit spanning the open documents (declaration
+# included); signature help finds the enclosing call on the line, labels it
+# with the declaration in the same document, and counts the argument the
+# cursor is in; the one code action offers the formatting edit, and only
+# when formatting would change the document.
+docD="$work/sigD.sa"
+openD='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"uri":"file://'$docD'","text":"make add2(a: num, b: num) -> num {\n  give a + b\n}\nshow add2(1, 2)\n"}}'
+renA='{"jsonrpc":"2.0","id":41,"method":"textDocument/rename","params":{"textDocument":{"uri":"file://'$docA'"},"position":{"line":1,"character":6},"newName":"ww"}}'
+sigD='{"jsonrpc":"2.0","id":42,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file://'$docD'"},"position":{"line":3,"character":13}}}'
+actC='{"jsonrpc":"2.0","id":43,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"file://'$docC'"},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}}'
+actB='{"jsonrpc":"2.0","id":44,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"file://'$docB'"},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}}'
+out6=$(
+  {
+    send "$init"
+    send "$openA"
+    send "$openB"
+    send "$openC"
+    send "$openD"
+    send "$renA"
+    send "$sigD"
+    send "$actC"
+    send "$actB"
+    send "$shut"
+    send "$exitmsg"
+  } | "$bin"
+)
+have6() { case "$out6" in *"$1"*) echo "$2" ;; esac; }
+have6 '"id":41,"result":{"changes":{"file://'"$docA"'":[{"range":{"start":{"line":0,"character":5}' 'rename edits the declaration'
+have6 '"newText":"ww"'                              'rename carries the new name'
+have6 '"file://'"$docB"'":['                        'rename spans the open documents'
+have6 '"label":"make add2(a: num, b: num)'          'signature help labels the declaration'
+have6 '"label":"a: num"'                            'signature help lists the parameters'
+have6 '"activeParameter":1'                         'signature help counts the argument'
+have6 'Format this Sayanox document'                'code action offers formatting'
+have6 '"id":44,"result":[]'                         'code action is empty when already formatted'

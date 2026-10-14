@@ -11,10 +11,12 @@ make gen3               # -> GEN3-OK (gen3 == gen4)   log: docs/logs/ir-log-gen3
 make native-test        # -> NATIVE-TEST-OK           log: docs/logs/ir-log-native-test.log
 ```
 
-The newest four gate logs are `docs/logs/ir-log-*.log` (2026-10-13, 902 and 791
-lines, 156 and 142 `[OK]` lines, gen3 == gen4 byte-identical); the `make-*`
-files beside them are the 2026-10-12 run and `four-items-*` the earlier
-2026-10-13 one. All were run on this x86-64 Linux workspace, with the native
+The newest four gate logs are `docs/logs/nine-items-*.log` (2026-10-13:
+`make doctor` -> DOCTOR-OK; `make true-selfhost` -> TRUE-SELFHOST-MIN-OK with
+167 `[OK]` lines; `make gen3` -> GEN3-OK, gen3 == gen4 byte-identical;
+`make native-test` -> NATIVE-TEST-OK with 169 `[OK]` lines); the `ir-log-*`
+files beside them are the earlier 2026-10-13 run, the `make-*` files the
+2026-10-12 run and `four-items-*` the first 2026-10-13 one. All were run on this x86-64 Linux workspace, with the native
 compiler already built. Feature
 claims below are bounded by the named tests, not a claim of full language
 parity. Historical measurements are explicitly dated and have not all been
@@ -24,6 +26,62 @@ GitHub Actions (`.github/workflows/ci.yml`) runs exactly these four targets —
 `doctor`, `true-selfhost`, `gen3`, `native-test` — on a clean `ubuntu-latest`
 checkout with no package install and no network: the runner's stock toolchain
 is the minimal tool set `doctor` verifies.
+
+
+## The nine-item increment (2026-10-13, second pass)
+
+Maximal correct progress on the nine STATUS items, with the pure-min
+bootstrap kept green (the four gate logs above are this pass's own runs):
+
+1. **Full-language self-host** — still **not claimed**. The compiler source
+   itself grew instead: parenthesised `for` sources and `%`/`len()`/nested
+   index expressions are implemented *in* `compiler_min.sa` and self-compile
+   through seed -> gen1 -> gen2 -> gen3 == gen4. A measured inventory of the
+   full-language features the compiler source does and does not use is in
+   [`FULL_LANGUAGE_SELFHOST.md`](FULL_LANGUAGE_SELFHOST.md); the binding
+   constraint is gen2's self-compile memory (~3.72 GB peak for the current
+   source in a 3.9 GB sandbox, ~3.60 GB for HEAD alone).
+2. **`for` gaps** — `for c in (s)` / `for v in (xs)` (parenthesised source)
+   now work on seed-min, gen2 and native (`test-for-paren`); only whole-source
+   parens unwrap, so `(lo + 1)..(hi * 2)` bounds keep the range path.
+   `for v in p.xs` stays a clear error everywhere: no backend has a
+   list-typed struct field, and enabling it needs that field type first.
+3. **Expression/analysis gaps** — `%` in an index (`test-gen2-index-mod`,
+   left-associative with `*`/`/`), `len()` and nested indexes inside `[ ]`
+   (`test-gen2-expr-lowering`), and a string `+` chain in a `give` all lower
+   correctly on gen2 now; calls other than `len()`, commas, quotes, empty and
+   unbalanced indexes stay clear refusals, never wrong C.
+4. **Types** — nested generics (`Box<Box<num>>`) refused on all three
+   backends; a struct field annotation (`p: Pt`) is refused on all three
+   (it silently registered `Pt` as an extra field before this pass); a
+   struct-typed `hold` annotation is gen2-only — accepted *and type-checked*
+   there, refused by name on seed-min and native. All pinned by
+   `test-type-refusals`; see [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md).
+5. **Seed GC** — unchanged by design: seed-min stays the measured
+   no-collector bootstrap root (`test-seed-gc`, [`GC.md`](GC.md)).
+6. **Stdlib** — eighth module `stdlib/json_util.sa`: flat-object JSON
+   build/read, byte-identical on seed-min, gen2 and native
+   (`test-stdlib-modules`), with its non-goals (nesting, exponents, `\u`
+   above U+007F) documented in [`STDLIB.md`](STDLIB.md).
+7. **Online packages** — shell `publish`/`fetch` now write `sum=` exactly
+   like the Sayanox implementation, so shell-handled packages verify the
+   same way; still opt-in only, still no cryptographic claim
+   ([`SXPKG_ONLINE.md`](SXPKG_ONLINE.md)).
+8. **LSP** — rename (open documents only), signature help (same document,
+   same line) and a format-only code action added and probed
+   (`test-lsp`, 38 facts); no workspace scan exists and none is claimed
+   ([`LSP.md`](LSP.md)).
+9. **Native second target** — `tools/emit_to_ir.py` translates the
+   `SX_EMIT_LOG` instruction list into a portable IR *listing*
+   (lossless, deterministic, x86 register names abstracted;
+   `test-native-ir-portable`). Nothing assembles or executes it: **no
+   second ISA is claimed**, and `native-test` remains x86-64-Linux-only
+   ([`NATIVE_IR.md`](NATIVE_IR.md)).
+
+One regression was caught by the gates during this pass and fixed before
+the green run above: the seed's first parenthesised-`for` implementation
+also unwrapped parenthesised range *bounds*; the unwrap now requires the
+first `(` to match the last token before `{`.
 
 ## Minimal tool set (re-measured 2026-10-07)
 
@@ -596,6 +654,7 @@ still use shell/C infrastructure. See
 | `make test-generic-structs` | generic structs are **implemented** on all three backends: `struct Box<T> { v }` is a template and each instantiation is its own concrete struct (`Box<num>` is `Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns`), so the gate pins those three typedefs in the generated C and the parity fixture `selfhost/generic_struct_box.sa` (`7 seven 8 seven 9 nine` — byte-identical on seed-min, gen2 and native). It also pins five refusals that all three backends make (wrong type argument count, a struct name as a type argument, a list as a type argument, a bare template name, one instantiation used with two kinds), the older concrete-name workaround (`NumBox`, `TextBox`, `PairBox` — `7 seven 8 eight 2 8 9`) and a dotted field read inside a struct literal as seed-min-only (gen2 `#error`, native refuses) |
 | `make test-sxpkg-online-optin` | the network is opt-in: `sync`, an `install` that has to fetch, and a remote `fetch` refuse without `SAYANOX_ONLINE=1` or `sxpkg --online <cmd>`, naming the opt-in and the offline commands and leaving no `.part` file; with the opt-in the same commands reach the transfer (a `.invalid` host, so they fail in the resolver and `sync` falls back to the offline seed); an all-local `install` and a `file://` fetch never ask |
 | `make test-native-emit-split` (part of `native-test`) | the x86-64 backend is a region, not a seasoning: the 1332 lines between `EMIT-SEAM-BEGIN` and `EMIT-SEAM-END` contain no `e1(`/`e32(`/`e64(`, no `memcpy` into `code` and no direct read of the code cursor `cn` (labels come from `here()`), the seam primitives are all defined in the encoder region above `phase 1`, and an emitted program still runs. The refactor itself was checked byte for byte against the pre-seam binary on six fixtures |
+| `make test-native-ir-portable` (part of `native-test`) | the `SX_EMIT_LOG` instruction list translates to the portable IR listing (`tools/emit_to_ir.py`, [`NATIVE_IR.md`](NATIVE_IR.md)): deterministic (two runs cmp clean), lossless (one IR instruction per logged instruction), no x86 register names on IR instruction lines, abstract machine model preserved (`FADD`, `FCMP`, `I2F`, named `CALL`s, phase markers). An analysis format only — nothing assembles or executes it, and no second ISA is claimed |
 | `make test-native-ir-log` (part of `native-test`) | the emit tree's instruction list is inspectable and pinned: with `SX_EMIT_LOG=<path>` every encoder primitive records the code offset, the mnemonic and the operands in assembly order, plus a `;` line per label slot, per fixup, per emitted `make` and per phase — 1122 instructions, 2 slots and 41 rel32 fixups for `selfhost/native_ir_log_test.sa`, with every call target named (`call make twice`, `call builtin gccheck`). The recorder is inert (the ELF built with it `cmp`s clean against the one built without it, and against the pre-recorder compiler on six fixtures), the list is deterministic, every line is an instruction line or a comment line, the offsets never go backwards, every rel32 fixup lands on a jump, no call target or operand falls back to a placeholder name, the six phases come in order, the fixture's top-level mnemonic vocabulary is pinned exactly, and the language emitter provably never touches the recorder state |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make test-native-mem` (part of `native-test`) | native memory with a real collector: a string doubled to 262144 bytes is served whole; 100000 `push`es keep every value; a 200000-iteration churn loop (~8 MB allocated, nothing retained) **finishes inside a 4 MiB `ulimit -v` cap** running 200+ collections; `gc_runs()` > 0, `gc()` reclaims bytes and `gc_live()` reports a positive live count; strings, list elements and struct fields survive 30000 allocating iterations; a program that genuinely retains 8 MiB still exits non-zero with stdout written before the failure kept and `out of memory` on stderr. See [`GC.md`](GC.md). |
@@ -604,9 +663,12 @@ still use shell/C infrastructure. See
 | `make test-stdlib` | portable numeric helpers including interpolation on seed/gen2/native when built; string/list/file modules on gen2 and native; seed typed-module rejection |
 | `make test-pkgs` | the offline package path: `sxpkg.sh init`+`seed` write `.sayanox/registry/{hello,math,strings}` with no network, `sxpkg add` records the lock, a program with `use \".sayanox/registry/math/main.sa\"` runs the same on seed-min, gen2 and native, and `sxpkg verify` passes on a clean project, reports the tampered `main.sa` as a `sum` MISMATCH, and passes again after the re-seed. **Plus the dependency path** on `registry/calc` (`deps=math@0.1.0`): `add` locks the closure and prints a line per package, the lock is compared byte for byte, `deps` prints the closure, a bare `install` reports `cannot write .sayanox/registry/<name>/`, `sh tools/sxpkg.sh install-local registry` installs both sum-checked, `verify` reports both, `use \".sayanox/registry/calc/main.sa\"` prints `36`/`25` identically on seed-min and gen2, and the `not in sx.lock` / `but sx.lock has` errors are asserted |
 | `make test-gen2-gaps` | string `<`/`<=`/`>`/`>=`/`==`/`!=` by content on gen2 and seed-min, and native since 2026-10-10 (same output; string vs number is an error on seed-min); the gen2 fixes of 2026-10-08: `len(NAME)` in a range bound (list `sx_llen`, string `sx_len`); string `==`/`!=` between declared strings as strcmp (two equal runtime strings compare equal); `} else when`, `} else if` and `} otherwise when` chains including nested ones, with the same output as `elif`; seed-min and native match the conditional chain aliases; `%` inside builtin-call arguments is sx_mod, same as seed-min. |
-| `make test-gen2-index-expr` | an index is a numeric expression in a value position, in a `when`/`while` condition, in a `for` bound and inside a typed function body: 39 hand-computed values identical on seed-min, gen2 and native; 9 unsupported index forms (`%`, a call other than `len()`, a comma, a quote, an empty index, unbalanced parentheses, a trailing operator, in each position) refused with a `min:` diagnostic and a `#error`; a negative index wraps on seed-min and gen2 and is asserted to stay refused by native. |
-| `make test-gen2-expr-lowering` | the two gen2 expression gaps closed 2026-10-13: a string `+` chain in a `give`/condition joins through `sx_cat` (11 hand-computed values, `selfhost/gen2_str_cat_test.sa`), and `len(NAME)`/a nested `NAME[IDX]` inside `[ ]` lower to `sx_llen`/`sx_len` and `sx_lget`/`sx_idx` in a value, a chain operand, a condition, a `for` bound and a typed body (18 values, `selfhost/gen2_index_call_test.sa`) — both byte-identical on seed-min, gen2 and native, with the emitted C greps pinned; 6 unsupported forms (`%` in an index, a call other than `len()` in an index, a quote in an index, unbalanced brackets, a `+` with one string side, `%` with a string operand) refused with a `min:` diagnostic and a `#error`. |
-| `make test-stdlib-modules` | the three stdlib modules added 2026-10-13 (`num_util`, `list_algo`, `str_text`): 99 hand-computed values identical on seed-min, gen2 and native, each module alone, and all seven modules in one program. |
+| `make test-for-paren` | a parenthesised `for` source (`for v in (xs)`, `for c in (s)`) on seed-min, gen2 and native with identical output |
+| `make test-gen2-index-mod` | `%` inside an index expression (values, conditions, for bounds, typed bodies, nested indexes), identical on seed-min, gen2 and native, `sx_mod` in the emitted C |
+| `make test-type-refusals` | the type forms no backend implements are refused everywhere with a clear diagnostic: nested generics (`Box<Box<num>>`) and struct field annotations (`p: Pt` in a struct body, which used to silently register `Pt` as an extra field); and the gen2-only struct-typed `hold` annotation works and is type-checked there while seed-min and native refuse it by name |
+| `make test-gen2-index-expr` | an index is a numeric expression in a value position, in a `when`/`while` condition, in a `for` bound and inside a typed function body: 39 hand-computed values identical on seed-min, gen2 and native; 6 unsupported index forms (a call other than `len()`, a comma, a quote, an empty index, unbalanced parentheses, a trailing operator) refused with a `min:` diagnostic and a `#error`; a negative index wraps on seed-min and gen2 and is asserted to stay refused by native. `%` in an index moved from this refusal list to supported (`make test-gen2-index-mod`). |
+| `make test-gen2-expr-lowering` | the two gen2 expression gaps closed 2026-10-13: a string `+` chain in a `give`/condition joins through `sx_cat` (11 hand-computed values, `selfhost/gen2_str_cat_test.sa`), and `len(NAME)`/a nested `NAME[IDX]` inside `[ ]` lower to `sx_llen`/`sx_len` and `sx_lget`/`sx_idx` in a value, a chain operand, a condition, a `for` bound and a typed body (18 values, `selfhost/gen2_index_call_test.sa`) — both byte-identical on seed-min, gen2 and native, with the emitted C greps pinned; 5 unsupported forms (a call other than `len()` in an index, a quote in an index, unbalanced brackets, a `+` with one string side, `%` with a string operand) refused with a `min:` diagnostic and a `#error`. |
+| `make test-stdlib-modules` | the stdlib modules added 2026-10-13 (`num_util`, `list_algo`, `str_text`): 99 hand-computed values identical on seed-min, gen2 and native, each module alone, and all modules in one program; plus `json_util` (the eighth module): flat-object JSON build/read, hand-computed values byte-identical on seed-min, gen2 and native. |
 | `make test-doc-claims` | no document advertises an entry point that is not in the repository: 24 legacy docs carry the "entry points do not exist" banner, `stage2_template.c` is still a placeholder, `restore_stage2.sh` still exits 1, and there is still no `stage2:` target. |
 | `make test-registry-sums` | every `pkg.meta` `sum=` in the repository equals `sxpkg sum` of its `main.sa` (offline integrity; see [`REGISTRY.md`](REGISTRY.md)) |
 | `make test-for-str` | the Stage-2 slice on gen2: `for c in <string>` byte walk, vowel count with `string_eq`, `break`/`continue`, empty string, nested loops, a rebound counter, `\"é\"` as two bytes, the diagnostics for a number, a list and a counter clash; seed-min matches named-source and literal cases; native runs string iteration; a `make NAME<T>` whose second parameter is not a type parameter is refused with the generic diagnostic. |
@@ -624,22 +686,22 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 
 | Area | seed-min | gen2 | native | Gate(s) | Still missing |
 |---|---|---|---|---|---|
-| Pure-min bootstrap | root compiler | self-hosted C emitter | x86-64 Linux ELF | `doctor`, `true-selfhost`, `gen3`, `native-test` | no second native target; no full-language self-host claim |
+| Pure-min bootstrap | root compiler | self-hosted C emitter | x86-64 Linux ELF | `doctor`, `true-selfhost`, `gen3`, `native-test` | no second native target (a portable IR *listing* exists: `tools/emit_to_ir.py`, `test-native-ir-portable` — nothing assembles or executes it); no full-language self-host claim |
 | Numeric stdlib (`tiny.sa`, 40 definitions) | yes | yes | yes | `test-stdlib`, `test-stdlib-growth`, `test-stdlib-interpolation` | small numeric library, not JSON/HTTP/crypto; new helpers: lerp, saturate, smoothstep01, distance_sq |
 | String/list/file utility modules | yes | yes | yes (already implemented) | `test-stdlib` | limited helpers, not a full portable I/O abstraction |
 | Boolean literals, and/or/not | yes, values and conditions | yes | yes (pre-existing) | `test-seed-stage2`, `test-logic-value`, `test-native-cond`, `test-native-logicarg` | seed numeric/string/list bare assignment now supported (`test-seed-assignment`); gen2 has expression-context limits (e.g. chr logic arguments) |
 | elif, conditional aliases, break/continue | elif, else-if/else-when/otherwise-when; breaks/continues in while and supported for | yes | yes | `test-stage2`, `test-full-lang`, `test-native-lang` | seed unsupported iteration forms remain explicit errors |
-| String/list for | variables, literals, checked calls and dotted field chains, inside fully typed make AND inside untyped make; literals/calls captured once per entry | variables, literals, calls | yes | `test-for-str`, `test-seed-for-literals`, `test-seed-for-calls`, `test-seed-for-untyped`, `test-seed-for-fields`, `test-native-lang` | a `list`-typed struct field as a for source (`for v in p.xs`) and a parenthesised source (`for c in (s)`) are still hard errors in seed-min and gen2; native function-local for is frame-local and recursion/GC tested; `_sx_iter_` is reserved in seed |
+| String/list for | variables, literals, checked calls and dotted field chains, inside fully typed make AND inside untyped make; literals/calls captured once per entry | variables, literals, calls | yes | `test-for-str`, `test-seed-for-literals`, `test-seed-for-calls`, `test-seed-for-untyped`, `test-seed-for-fields`, `test-native-lang` | a `list`-typed struct field as a for source (`for v in p.xs`) is still a hard error on all three backends (no list-typed struct field exists); a parenthesised source (`for c in (s)`) works on all three since 2026-10-13 (`test-for-paren`), and a parenthesised range stays refused; native function-local for is frame-local and recursion/GC tested; `_sx_iter_` is reserved in seed |
 | Numeric range for | numeric literals/variables/arithmetic, indexing and len; also inside fully typed make | yes | yes; upper bound re-evaluated per check | `test-seed-for-range`, `test-full-lang`, `test-native-lang` | all three re-read upper bound each condition. Seed accepts direct field access in a bound (`for i in 0..p.n`), so the older "hold field values in numeric variables first" note is stale; a user call in a range BOUND (`for i in 0..f()`) compiles on gen2 and native but seed-min still refuses it (`seed-min for range bounds support len(...) but not other calls yet`) — verified 2026-10-13 |
 | Function generics | num/str/list specialization; one or multiple type parameters | num/str/list monomorphisation | num/str/list monomorphisation (pre-existing) | `test-generics`, `test-seed-limits`, `test-native-generics`, `test-native-strgen`, `test-native-listgen` | some backend-specific body/lowering gaps; struct generics are a separate row below |
 | Typed functions | num/str/list parameters and returns, isolated locals, control flow, terminal give | broader typed functions, some lowering gaps | typed functions; kind-preserving parameter reassignment | `test-seed-typed-functions`, `test-typed-sig` | seed global capture and full return-path inference remain absent |
 | Function-local hold | yes | yes | frame-local, recursion tested | `test-native-locals`, `native-test` | no new ABI or second architecture |
-| Explicit hold types | num/str/list outside make and inside fully typed make; initializers, assignments and reannotations checked | num/str/list syntax already accepted | num/str/list, also function-local and bound generic T | `test-seed-hold-types`, `test-full-lang`, `test-native-generic-local` | seed untyped-function annotations; there is still no *struct*-typed annotation on any backend, so an instantiation's mangled name is only ever spelled at a literal — see [type design](TYPES_ROADMAP.md) |
+| Explicit hold types | num/str/list outside make and inside fully typed make; initializers, assignments and reannotations checked | num/str/list syntax already accepted | num/str/list, also function-local and bound generic T | `test-seed-hold-types`, `test-full-lang`, `test-native-generic-local` | seed untyped-function annotations; a *struct*-typed annotation (`hold p: Pt = Pt { 1, 2 }`, even `hold b: Box__n`) is **gen2-only** as measured 2026-10-13 — gen2 accepts and type-checks it, seed-min and native refuse it by name (`test-type-refusals`) — see [type design](TYPES_ROADMAP.md) |
 | Struct types | literal-typed, plus generic templates: `struct Box<T> { v }` instantiated per type argument as `Box__n`/`Box__s` | literal-typed, plus the same templates rewritten to their mangled concrete name before the walker runs | literal-typed, plus templates instantiated at both literal sites with per-instantiation field kinds for the collector | `test-struct2`, `test-nest`, `native-test`, `test-generic-structs` | a type argument is `num` or `str` only (no nested instantiation, no struct or list argument); gen2's wording for a bad type argument list is its general `undefined name`/stray-token error, and gen2 learns a field kind from a single contradicting literal where seed-min and native refuse it — all measured in [TYPES_ROADMAP.md](TYPES_ROADMAP.md). A dotted field read inside a struct literal stays seed-min-only |
 | GC | no collector (builder-backed strings plus a freeing assignment wrapper) | mark/sweep, all three runtime allocations checked | mark/sweep | `test-gc`, `test-native-mem`, `test-seed-gc` | measured 2026-10-13: seed-min is documented no-GC and fails as `sx: out of memory`; the full seed's refcount table never releases in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations) and `gc()` there is a no-op; gen2's first collection fires at 8 MiB of managed heap, so it needs more address space than native; conservative native stack scanning |
 | Packages, offline | tool built by gen2 | registry/lock/deps/install-local/verify | not a native-tool claim | `test-pkgs`, `test-sxpkg-polish`, new `test-pkg-errors` | search no longer implicitly syncs; shell still supplies filesystem/process operations; execution failures now propagate |
-| Packages, online | not bootstrap | explicit sync/install/fetch commands, **opt-in** since 2026-10-13 | n/a | `test-sxpkg-online-local`, `test-sxpkg-online-optin` (both in the aggregates, both socket-free) | no cryptographic integrity, no signatures, no remote publish; `SAYANOX_REGISTRY` says where, `SAYANOX_ONLINE=1`/`--online` says whether |
-| LSP | tool built by gen2 | existing .sa JSON-RPC server | n/a | `test-lsp`, `test-lsp-robust`, `test-lsp-unicode` | **four documents** open at once since 2026-10-13 (a fifth evicts the oldest), each request answered from its own URI's buffer and an unopened URI answered empty; still no workspace index or cross-file analysis; UTF-16/Unicode and empty changes tested by `test-lsp-unicode` |
+| Packages, online | not bootstrap | explicit sync/install/fetch commands, **opt-in** since 2026-10-13 | n/a | `test-sxpkg-online-local`, `test-sxpkg-online-optin` (both in the aggregates, both socket-free) | no cryptographic integrity (`pkgsum` detects edits; it is not a hash anyone should trust for provenance), no signatures, no remote publish; shell `publish`/`fetch` write `sum=` since 2026-10-13, matching the Sayanox implementation, so shell-handled packages verify the same way; `SAYANOX_REGISTRY` says where, `SAYANOX_ONLINE=1`/`--online` says whether |
+| LSP | tool built by gen2 | existing .sa JSON-RPC server | n/a | `test-lsp`, `test-lsp-robust`, `test-lsp-unicode` | **four documents** open at once since 2026-10-13 (a fifth evicts the oldest), each request answered from its own URI's buffer and an unopened URI answered empty; still no workspace index or cross-file analysis: references, workspace/symbol and rename see **open buffers only**, signature help needs the declaration in the same document and the call on the same line, and the only code action is formatting; rename, signature help and the format code action added 2026-10-13 and pinned by the probe's sixth session (`test-lsp`, 38 facts); UTF-16/Unicode and empty changes tested by `test-lsp-unicode` |
 | Platform | host C | host C | x86-64 Linux only | four bootstrap gates | other native platforms unsupported, not emulated |
 
 ### Changes and verification in this pass
