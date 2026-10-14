@@ -114,24 +114,6 @@ make sxecontains(text: str, word: str) -> num {
 }
 // ---- generic structs ------------------------------------------------------
 // `struct Box<T> { v }` is a TEMPLATE: parameter names and field names, no
-// layout, so it never enters sdefs. Each instantiation becomes an ordinary
-// concrete struct under a mangled name -- Box<num> is Box__n, Box<str> is
-// Box__s, Pair<num,str> is Pair__ns -- the suffixes generic FUNCTIONS already
-// use. The mangled name is the type identity, so two specialisations get their
-// own sdefs record, ftypes keys and typedef and can never share a field slot
-// (docs/TYPES_ROADMAP.md, "A safe implementation needs" 1 and 2). gxpass
-// rewrites every instantiation before the walker runs, so the existing struct
-// machinery only ever sees a concrete struct. A type argument is num or str:
-// gen2 has no list-typed struct field (a concrete `struct B { v }` cannot hold
-// a list either), so `Box<list>` is left unrewritten and refused by name rather
-// than emitted as C that cannot compile. seed-min and native refuse a list
-// field too, so all three backends refuse it -- with their own words.
-//
-// Both scans walk POSITIONS and build a string only once an occurrence is
-// confirmed. That is survival, not style: a generated function copies every
-// str parameter on entry and never frees the copy, so a helper that takes the
-// source and is called once per character exhausts memory in seconds
-// (docs/STATUS.md, "Self-host memory ceiling").
 make gxisid(c: num) -> num {
   when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95 {
     give 1
@@ -241,10 +223,6 @@ make gxscan(text: str) -> str {
 }
 // One pass: each instantiation `Box<num> {` becomes `Box__n {`. Gives the
 // mangled structs as sdefs records in first-use order, chr(1), then the
-// rewritten source. An occurrence is rewritten only when the name is a declared
-// template, every type argument is num/str/list, the count matches the
-// template's and a `{` follows -- so a comparison such as `a < b` is never
-// touched, and anything unusual is left for the walker to refuse.
 make gxpass(text: str, gsdefs: str) -> str {
   hold defs = ""
   hold names = "|"
@@ -1049,36 +1027,8 @@ make sxflowblock(text: str, at: num, level: num) -> list {
   give [i, proven]
 }
 
-// ---------------------------------------------------------------------------
-// raw_index(source, from, n) -> str
-//
-// The text of an index expression, copied VERBATIM out of `source` starting at
-// `from` (the character after '[') up to but not including the closing ']'.
-// "" means "this is not an index I can lower", and every caller turns that
-// into its own clear diagnostic -- a refusal beats emitting C that cannot
-// compile, or worse, C that compiles and reads the wrong storage.
-//
-// An index may be a whole numeric expression: numbers, names, dotted field
-// chains, parentheses, a unary sign and + - * /. The text is copied into
-// sx_lget(NAME, IDX) or sx_idx(NAME, IDX), and both runtime helpers take a
-// double and truncate it, so `xs[i - 1]`, `xs[1 + 1]`, `xs[(a + b) / 2]` and
-// `xs[p.k]` work in a value position, in a condition and in a for bound, on
-// seed-min, gen2 and native alike. A leading '-' or '+' is kept: both helpers
-// wrap a negative index, which is what seed-min does (native refuses a unary
-// sign in an index and does not wrap -- see docs/STATUS.md).
-//
-// The text is copied VERBATIM, so a caller may advance its own cursor by
-// len() of the result; idx_lower then turns it into C. Refused here: a comma,
-// a quote, '%', an empty index, unbalanced parentheses or brackets, a leading
-// '[' , two dots in a row, and an expression that ends with an operator or an
-// open bracket. One implementation, four call sites: the two copies of the
-// value-position parser and the two copies of the postfix-operand parser.
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// tbl_has: does a `|name|name|` declaration table hold this name? The tables
-// (ldecls for lists, sdecls for strings) belong to the main loop and a helper
-// cannot reach them, so they are passed in.
-// ---------------------------------------------------------------------------
+// raw_index(source, from, n) -> str: the text inside `[ ]`, copied verbatim
+// from `from` to the closing ']' ("" = cannot lower; callers refuse clearly).
 make tbl_has(table: str, name: str) -> num {
   hold thkey = concat(concat("|", name), "|")
   hold thi = 0
@@ -1106,12 +1056,6 @@ make tbl_has(table: str, name: str) -> num {
 
 // ---------------------------------------------------------------------------
 // str_operand: is this expression text a string? It answers 1 for a quoted
-// literal, for a sx_cat(...) join, for a name the main loop declared a string
-// and for a call to a builtin that gives a string. Anything else (a number, a
-// list, a struct field, a call to a user function) answers 0, so a `+` with
-// one string side is refused with a clear message instead of being emitted as
-// C that cannot compile.
-// ---------------------------------------------------------------------------
 make str_operand(text: str, sdecls: str) -> num {
   // the operand scans leave the spacing of the source on either side, and a
   // table lookup is by exact name: trim spaces and tabs first
@@ -1183,23 +1127,105 @@ make str_operand(text: str, sdecls: str) -> num {
   give 0
 }
 
-// ---------------------------------------------------------------------------
-// idx_lower: lower the text inside `[ ]` into C, so an index may be a whole
-// numeric expression instead of only the forms a C compiler happens to accept:
-//
-//   len(NAME)  -> sx_llen(NAME) for a list, sx_len(NAME) for a string
-//   NAME[IDX]  -> sx_lget(NAME, IDX) for a list, sx_idx(NAME, IDX) for a
-//                 string, with IDX lowered by the same rules (so a nested
-//                 index and a len() inside it both work)
-//   numbers, names, dotted field chains, parentheses, a unary sign and
-//   + - * /  -> copied verbatim, which is already valid C
-//
-// It gives "" when the text cannot be lowered: a call other than len(), '%',
-// a quoted string, a comma, a bracket that is not part of NAME[IDX], a name
-// that is declared neither a list nor a string, or unbalanced brackets. The
-// caller keeps its existing refusal then, so an index the compiler does not
-// understand is still a clear diagnostic and never invalid C.
-// ---------------------------------------------------------------------------
+// idx_lower: lower `[ ]` text into C. len(NAME)->sx_llen/sx_len, NAME[IDX]->
+// sx_lget/sx_idx (IDX lowered recursively), `%`->sx_mod(chain, atom) with the
+make idx_chain_start(out: str) -> num {
+  hold ls = 0
+  hold dep = 0
+  hold i = len(out) - 1
+  hold done = 0
+  while i >= 0 && done == 0 {
+    hold c = sx_index(out, i)
+    when c == 41 {
+      hold dep = dep + 1
+    }
+    when c == 40 && dep == 0 {
+      hold ls = i + 1
+      hold done = 1
+    }
+    when c == 40 && dep > 0 {
+      hold dep = dep - 1
+    }
+    when dep == 0 && c == 44 {
+      hold ls = i + 1
+      hold done = 1
+    }
+    when dep == 0 && (c == 43 || c == 45) {
+      hold q = i - 1
+      while q >= 0 && (sx_index(out, q) == 32 || sx_index(out, q) == 9) {
+        hold q = q - 1
+      }
+      when q >= 0 {
+        hold pc = sx_index(out, q)
+        when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || (pc >= 48 && pc <= 57) || pc == 95 || pc == 41 || pc == 93 {
+          hold ls = i + 1
+          hold done = 1
+        }
+      }
+    }
+    hold i = i - 1
+  }
+  give ls
+}
+
+// idx_atom_end(text, from): the end of the factor starting at or after
+// `from` (spaces and one sign skipped): a number, a name with any
+make idx_atom_end(text: str, from: num) -> num {
+  hold n = len(text)
+  hold j = from
+  while j < n && (sx_index(text, j) == 32 || sx_index(text, j) == 9) {
+    hold j = j + 1
+  }
+  when j < n && (sx_index(text, j) == 43 || sx_index(text, j) == 45) {
+    hold j = j + 1
+  }
+  hold start = j
+  hold dep = 0
+  hold used = 0
+  hold run = 1
+  while j < n && run == 1 {
+    hold c = sx_index(text, j)
+    when c == 40 || c == 91 {
+      hold dep = dep + 1
+      hold used = 1
+      hold j = j + 1
+    } otherwise {
+      when (c == 41 || c == 93) && dep == 0 {
+        hold run = 0
+      } otherwise {
+        when (c == 41 || c == 93) && dep > 0 {
+          hold dep = dep - 1
+          hold j = j + 1
+        } otherwise {
+          when dep == 0 && j > start && (c == 43 || c == 45 || c == 42 || c == 47 || c == 37) {
+            hold run = 0
+          } otherwise {
+            when c != 32 && c != 9 {
+              hold used = 1
+            }
+            hold j = j + 1
+          }
+        }
+      }
+    }
+  }
+  when used == 0 || dep != 0 {
+    give 0 - 1
+  }
+  give j
+}
+
+// idx_sub: bytes [a, z) of s.
+make idx_sub(s: str, a: num, z: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < z && i < len(s) {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
 make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
   hold ixlout = ""
   hold ixli = 0
@@ -1209,9 +1235,28 @@ make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
     hold ixlnext = ixli + 1
     hold ixlcd = sx_index(text, ixli)
     hold ixlid = 0
-    when ixlcd == 37 || ixlcd == 34 || ixlcd == 44 || ixlcd == 91 || ixlcd == 93 {
-      // '%', a quote, a comma and a stray bracket stay refused
+    when ixlcd == 34 || ixlcd == 44 || ixlcd == 91 || ixlcd == 93 {
+      // a quote, a comma and a stray bracket stay refused
       hold ixlbad = 1
+    }
+    when ixlcd == 37 {
+      // `%` -> sx_mod(chain, atom); see idx_chain_start / idx_atom_end.
+      hold ixzls = idx_chain_start(ixlout)
+      hold ixzj = idx_atom_end(text, ixli + 1)
+      hold ixzas = ixli + 1
+      while ixzas < ixln && (sx_index(text, ixzas) == 32 || sx_index(text, ixzas) == 9) {
+        hold ixzas = ixzas + 1
+      }
+      hold ixzlow = ""
+      when ixzj > 0 {
+        hold ixzlow = idx_lower(idx_sub(text, ixzas, ixzj), ldecls, sdecls)
+      }
+      when ixzj <= 0 || len(ixzlow) == 0 || ixzls >= len(ixlout) {
+        hold ixlbad = 1
+      } otherwise {
+        hold ixlout = concat(concat(concat(concat(idx_sub(ixlout, 0, ixzls), "sx_mod("), idx_sub(ixlout, ixzls, len(ixlout))), ","), concat(ixzlow, ")"))
+        hold ixlnext = ixzj
+      }
     }
     when (ixlcd >= 97 && ixlcd <= 122) || (ixlcd >= 65 && ixlcd <= 90) || ixlcd == 95 {
       hold ixlid = 1
@@ -1378,7 +1423,7 @@ make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
         hold ixlnext = ixlj
       }
     }
-    when ixlid == 0 {
+    when ixlid == 0 && ixlcd != 37 {
       when (ixlcd >= 48 && ixlcd <= 57) || ixlcd == 46 || ixlcd == 43 || ixlcd == 45 || ixlcd == 42 || ixlcd == 47 || ixlcd == 40 || ixlcd == 41 || ixlcd == 32 || ixlcd == 9 {
         hold ixlout = concat(ixlout, chr(ixlcd))
       } otherwise {
@@ -1392,6 +1437,8 @@ make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
   }
   give ixlout
 }
+
+
 
 make raw_index(source: str, from: num, n: num) -> str {
   hold rixout = ""
@@ -1438,7 +1485,7 @@ make raw_index(source: str, from: num, n: num) -> str {
         when rixcd == 95 {
           hold rixallow = 1
         }
-        when rixcd == 43 || rixcd == 45 || rixcd == 42 || rixcd == 47 {
+        when rixcd == 43 || rixcd == 45 || rixcd == 42 || rixcd == 47 || rixcd == 37 {
           hold rixallow = 1
         }
         when rixcd == 40 || rixcd == 41 || rixcd == 46 {
@@ -1508,63 +1555,6 @@ make raw_index(source: str, from: num, n: num) -> str {
 
 // compiler_min.sa - pure Sayanox mini-compiler (generation 1 source).
 //
-// The C seed (selfhost/seed/sxc_seed.c) compiles this file into selfhost/gen1.c.
-// gen1 accepts the "pure min" target language and emits standalone C:
-//
-//   hold NAME = EXPR          show EXPR
-//   EXPR: BASE followed by a chain of + - * / %   (* / % bind tighter,
-//         left-associative; `%` lowers through checked `sx_mod(a, b)`).
-//   BASE: NUMBER | NAME | "text" | call(...) | [v, v, ...]
-//         | Struct { f: v, ... } | NAME.field | NAME[EXPR] | (EXPR)
-//         NAME[EXPR] is a numeric expression index (numbers, names, field
-//         chains, parentheses, + - * /, len(NAME) and a nested NAME[IDX]):
-//         see raw_index and idx_lower. It is lowered in a value position,
-//         inside a when/while condition and inside a for bound. `%`, a call
-//         other than len(), a comma and a quoted string inside `[ ]` are
-//         refused with a clear diagnostic.
-//   while COND { ... }        when COND { ... } otherwise { ... }
-//         ("else" is an alias of "otherwise"; both emit "} else {")
-//         COND is copied as a C expression (C precedence matches pure-min);
-//         `%` lowers through checked sx_mod, and integer tokens are emitted
-//         as doubles by the final string-aware C normalization pass.
-//   make f(a, b) { ... give EXPR }        (top level, numeric, recursive OK)
-//   struct S { f, g }         (fields: numbers, strings, or structs
-//                               declared earlier; `Line { a: Point { ... },
-//                               b: Point { ... } }` nests one level or more)
-//   use "file.sa"             (splice before parsing, depth <= 8)
-//   // line comments
-//
-//   OP is one of  ==  !=  <  <=  >  >=  (and, where a single operand
-//   follows, + - * / % ; `%` lowers through the checked sx_mod helper)
-//
-//   String literals keep backslash escapes intact while scanning (a `\"`
-//   does not terminate the literal), in every string / argv / opnd path.
-//
-//   Unsupported forms are reported, never silently mis-compiled: a bad
-//   index expression, a string value in a numeric struct/list literal, a
-//   missing `use` file or `use` nesting deeper than 8 all emit `#error`
-//   into the generated C (and a line on stdout naming the problem).
-//
-// String builtins exposed to target programs (only what target programs need):
-//   concat / len / sx_index / chr / read_file / write_file / arg / arg_count
-// The runtime-name aliases (sx_cat, sx_len, sx_idx, sx_chr, sx_read, sx_write,
-// sx_arg, sx_argc) are accepted too so that a child compiler can copy call
-// text without a name table.
-//
-// Design notes
-//   * The whole compiler is ONE flat top-level program.  The seed has no
-//     closures, so a `make` helper could not see pos/body: there are none.
-//   * Statements are recognised by a single character scanner with a brace
-//     depth counter.  Bodies are NOT skipped by a nested parser, so hold and
-//     show inside while/when bodies are compiled as well.
-//   * Numeric programs get clean standalone C (`double n = 0;`, `n = n + 1;`,
-//     `while (n < 3) {`).  Programs that use string calls get a small static
-//     helper block emitted above main; no external runtime header is needed.
-//   * First `hold name = ...` declares (`double` or `char *`), later ones
-//     assign.  Membership is tracked in the "|name|" strings decls/sdecls.
-//
-// See docs/STATUS.md for the exact scope, and selfhost/compiler_boot.sa for a
-// reduced pure-min compiler written in the subset this compiler accepts.
 
 // ---------------- command line ----------------
 hold in_path = "selfhost/mini_in.sa"
@@ -1582,9 +1572,6 @@ hold source = read_file(in_path)
 hold n = len(source)
 // ---------------- struct field logic values (item 8) ----------------
 // `Name { x: a and b }` on gen2: a field value that is an and/or/not expression
-// is moved to `hold sxlgN = <value>` on the line before the literal, and the
-// field is given the name sxlgN.  Only one-line literals with no quotes and no
-// nested braces are rewritten; every other line is passed through unchanged.
 hold lgsrc = concat(source, "\n")
 hold lgsn = len(lgsrc)
 hold lgout = ""
@@ -1945,10 +1932,6 @@ while lgp < lgsn {
 }
 // Generic struct templates are collected first, then every instantiation is
 // rewritten to its mangled concrete name before the walker runs (gxscan,
-// gxpass). The rewrite copies the source and this dialect has no substring
-// builtin, so it is quadratic in the source size: it runs only for a program
-// that declares a template, which keeps the self-host path (compiler_min.sa
-// declares none) off it entirely.
 hold gsdefs = gxscan(lgout)
 hold gxsdefs = ""
 hold source = lgout
@@ -2023,11 +2006,6 @@ hold trim = 0
 
 // ---------------- full-language state ----------------
 // blk: the kind of every open block, innermost last ('w' while, 'f' for,
-//      'i' when, 'e' else/elif body, 'm' make).  It is what makes
-//      `break`/`continue` outside a loop a compile-time error instead of
-//      invalid C, and it lets act 4 close the right thing.
-// loopd: number of open loops (blk entries that are 'w' or 'f').
-// cmpop: 0 = plain `=`, otherwise the operator char of `+= -= *= /= %=`.
 hold blk = ""
 hold loopd = 0
 hold cmpop = 0
@@ -2528,8 +2506,6 @@ hold ppch = 0
 hold ixok = 0
 // Index-expression scan variables. Both copies of the expression compiler run
 // the numeric-expression retry inside `[...]`, and a first `hold` inside a
-// block becomes a C local of THAT block, so a name shared by the two copies
-// has to be declared up here with every other shared scan variable.
 hold iqstart = 0
 hold savep2 = 0
 hold exmissp = ""
@@ -2854,12 +2830,6 @@ hold tdc2 = 0
 
 // =====================================================================
 // use "file.sa" expansion (max depth 8, real statements only)
-//   * only a `use "..."` that starts a statement is expanded
-//   * strings and // comments are copied verbatim, never scanned for use
-//   * a missing file emits #error into the generated C (clear failure)
-//   * paths resolve against the CWD first, then next to the input file
-//   * output is built in ~300 byte chunks (flat concat would be O(n^2))
-// =====================================================================
 hold exd = 0
 hold exlast = -1
 hold exdl = 0
@@ -2897,8 +2867,6 @@ while exmore == 1 {
   while exi < n {
     // flush the pending chunk (two-level: exch -> exm -> exs).  A single
     // flat accumulator copies everything appended so far on every flush,
-    // which is O(n^2) on the whole input; the mid chunk keeps that to
-    // O(n^(4/3)) while the final text is identical.
     when exchl >= 128 {
       hold exm = concat(exm, exch)
       hold exch = ""
@@ -3103,11 +3071,6 @@ while exmore == 1 {
 
 // ---- malformed number literals (`1.2.3`) are rejected up front ----------
 // Every number reader below accepts `.digits` once more each time it sees
-// one, so a second fractional part would be copied into the C as `1.2.3`
-// (a C compile error).  One scan over the spliced source, skipping strings,
-// `//` comments and identifiers (so `p.x1.y` is not a number), catches it.
-// (all scan variables are declared here: a first `hold` inside a block
-// becomes a C local of that block)
 hold nqp = 0
 hold nqc = 0
 hold nqn = 0
@@ -3211,20 +3174,6 @@ while nqp < n {
 }
 // =====================================================================
 // function signature table (full language)
-//
-//   make NAME(a, b: str) -> num
-//
-// Collected in one pass over the spliced source BEFORE the main scan, so a
-// call can be typed even when the `make` line appears later in the file
-// (forward references are already allowed).  Three flat tables:
-//
-//   fsret  |name=K|          K is n (num), s (str) or l (list)
-//   fsptx  |name=double a, char *b|
-//   fspk   |name=ns|
-//
-// A function with no annotations stays numeric, exactly as before, so the
-// pure-min dialect is unchanged.
-// =====================================================================
 hold fsret = "|"
 hold fsptx = "|"
 hold fspk = "|"
@@ -3618,36 +3567,11 @@ while fsi < n {
 }
 // =====================================================================
 // generic function table (full language)
-//
-//   make NAME<T>(a: T, b: T) -> T { ... }
-//   make pair<A, B>(a: A, b: B) -> A { ... }
-//
-// A generic function is not emitted itself: it is recorded here and
-// monomorphised on demand, one specialised copy per *type parameter* kind
-// (`NAME__n`, `NAME__s`, `NAME__l`, `pair__ns`, ...).  The specialised
-// definition is spliced into the source at the next statement boundary, so
-// it is compiled by the ordinary `make`/`hold`/`give` machinery - including
-// `hold x: T = ...` inside the body, after every type parameter is replaced
-// by its concrete type word.  Entries are delimited by chr(1), which cannot
-// appear in a source file.
-//
-//   fgtab    <1>name<1>TYPES<1>param,param<1>TIDX<1>RETIDX<1>body<1>
-//   fgnames  <1>name<1>NTYPES<1>TIDX<1>RETIDX<1>
-//
-// TYPES is the comma-separated type parameter list ("T", or "A,B"); TIDX is
-// one digit per value parameter saying which type parameter it uses; RETIDX
-// is the digit of the type parameter the function returns.  Indices are
-// stored as '0' + index.
-// =====================================================================
 hold fgtab = chr(1)
 hold fgnames = chr(1)
 hold fgcur = ""
 // Scratch names shared by the generic pre-pass, the phase-0 splat and the
 // phase-1.5 monomorphiser.  They are declared here, at the top of the
-// function, because Sayanox scopes a `hold` to the block it first appears
-// in: a name first bound inside a nested block is not visible to its
-// siblings, and the loops below each need to leave a value behind for the
-// code that follows them.
 hold fgseen = 0
 hold fgts = 0
 hold fgtl = 0
@@ -3760,10 +3684,6 @@ while fgi < n {
             hold fgty2 = ""
             // One type parameter used to be the whole story (`make NAME<T>`);
             // now the list is comma separated, so `make pair<A, B>(a: A, b: B)`
-            // monomorphises on the kind of *every* type parameter.  fgtys is
-            // the comma-joined list, fgnty its length, and every parameter
-            // records which type parameter it uses (its index) so the
-            // specialisation can be keyed per type parameter, not per call.
             hold fgtys = ""
             hold fgnty = 0
             when fgc == 60 {
@@ -4128,10 +4048,6 @@ while fgi < n {
                   }
                   //   fgnames  <1>NAME<1>NTYPES<1>TIDX<1>RETIDX<1>
                   //   fgtab    <1>NAME<1>TYPES<1>PARAMS<1>TIDX<1>RETIDX<1>BODY<1>
-                  // NTYPES / RETIDX and the TIDX digits are stored as
-                  // characters ('0' + index), so the tables stay flat
-                  // chr(1)-delimited strings; a type parameter index above 9
-                  // is not a thing any program needs.
                   hold fgnames = concat(fgnames, chr(1))
                   hold fgnames = concat(fgnames, fgnm)
                   hold fgnames = concat(fgnames, chr(1))
@@ -4211,11 +4127,6 @@ while running == 1 {
   }
   // A `make NAME<T>` call asks for a monomorphised copy; the text is
   // inserted right here, at a statement boundary, so the ordinary
-  // function machinery compiles it (a prototype goes into gproto so a
-  // forward-referenced call still links).
-  // ... and only at function scope: splicing inside a `make` body (a call
-  // made there) would cut the body in half, so those requests wait until the
-  // enclosing definition has been flushed (`in_fn == 0`).
   when len(gwant) > 0 && in_fn == 0 {
     hold gwtxt = ""
     hold gwi = 1
@@ -4378,8 +4289,6 @@ while running == 1 {
         }
         // `gkindof(j)` is spelt out inline: the kind character the j'th type
         // parameter got from this call, defaulting to the first one when the
-        // request is short (a call with too few arguments is diagnosed by the
-        // ordinary call machinery, not here).
         hold gklen = len(gwks)
         hold gk0 = 110
         when gklen > 0 {
@@ -4580,8 +4489,6 @@ while running == 1 {
               when gihit == 1 {
                 // a generic calling a generic: the callee needs its own
                 // kind suffix, one character per *its* type parameters.
-                // Take them from this call's kinds, left to right, padding
-                // with the first kind when the callee wants more.
                 hold gnty2 = 1
                 when giat < len(fgnames) {
                   hold gnty2 = sx_index(fgnames, giat) - 48
@@ -4606,10 +4513,6 @@ while running == 1 {
                 hold gmore = concat(gmore, chr(1))
                 // The callee's copy is not emitted yet, so its result kind
                 // has to be recorded here as well: a `hold v: T = callee(..)`
-                // inside this body needs it while it is being compiled.
-                // fgnames is <1>NAME<1>NTYPES<1>TIDX<1>RETIDX<1> and giat
-                // points at NTYPES, so RETIDX is the character after the
-                // delimiter that closes TIDX.
                 hold gqxi = giat + 2
                 hold gqxrun = 1
                 while gqxrun == 1 {
@@ -4752,14 +4655,6 @@ while running == 1 {
 
   // ---- phase 1.5: monomorphise the generic calls of this statement -------
   // `make NAME<T>` is compiled by generating one specialised copy per call.
-  // Rewriting `NAME(...)` here, in the statement text itself, means every
-  // ordinary call path (hold, show, give, when, ...) only ever sees a plain
-  // function call - nested calls included.  The kind of a call is the kind
-  // of its own first argument, looked up through string/list literals,
-  // declared variables, the builtins and the declared return kinds of the
-  // other functions.  The definition is spliced in at the next statement
-  // boundary (see phase 0), but the call site already needs to know the kind
-  // of the result, so it is registered in fsret right here.
   when running == 1 && len(fgnames) > 1 {
     hold zwEnd = pos
     while zwEnd < n && sx_index(source, zwEnd) != 10 {
@@ -4872,10 +4767,6 @@ while running == 1 {
           } otherwise {
             // The kind of every type parameter, not just the first.
             // TIDX[p] says which type parameter value parameter p uses, so
-            // the kind of argument p is the kind of one type parameter; a
-            // generic with a single type parameter still keys on its first
-            // argument exactly as it always did, which is why the
-            // specialisation names do not change.
             hold zwNl = len(fgnames)
             hold zwNt = 1
             hold zwTidx = ""
@@ -5118,7 +5009,7 @@ while running == 1 {
                           hold zwKind = 110
                           hold zwKdone = 1
                         }
-                      }
+                        }
                     } otherwise {
                       when zwKbk != 0 {
                         hold zwKind = zwKbk
@@ -5190,8 +5081,6 @@ while running == 1 {
               }
               // Refine the coarse first-token classification when the
               // typed expression parser can resolve the whole argument.
-              // In particular [a,b][i] is numeric, not a list, and fields
-              // and grouped values retain their actual concrete kind.
               hold zenv = concat(decls, chr(1))
               hold zenv = concat(zenv, sdecls)
               hold zenv = concat(zenv, chr(1))
@@ -5424,12 +5313,6 @@ while running == 1 {
 
     // ---- statement pre-checks (run before the per-statement blocks) ----
     //  * a statement word must be a WHOLE keyword: `hello = 1` is not `hold`
-    //    and `write_file(p, s)` is not `while`.  An unknown statement is a
-    //    clear error (its line is skipped), never C that fails to compile.
-    //  * bare `push(xs, v)` compiles as `hold xs = push(xs, v)` (act 1 with
-    //    bpush = 1); xs must already be a list.
-    //  * a hold/show expression with a grouping paren, `(a + 3) * 4`, goes
-    //    through the same verbatim-C + `%` rewrite as conditions (act 8).
     hold bpush = 0
     hold pmode = 0
     hold pbad = 0
@@ -7095,8 +6978,6 @@ while running == 1 {
             hold nels = 0
             // Field names are walked in sdefs order (fpos..): each value must
             // be given in declaration order, a label (if present) must name
-            // that field, and every field must be filled -- a short or
-            // reordered literal is reported, never silently reshaped.
             hold fpos = sfpos + kl + 1
             hold fnf = 1
             hold fscan = fpos
@@ -7121,9 +7002,6 @@ while running == 1 {
             while lr == 1 {
               // The walk re-enters itself for nested struct literals: each
               // `Name { ... }` value pushes this level's state on nstack and
-              // restarts the walk for the inner struct; closing the inner
-              // literal pops the frame and hands the text back as the value,
-              // so the outer walk continues exactly where it left off.
               hold lr = 1
               while lr == 1 {
               hold sk = 1
@@ -7344,10 +7222,6 @@ while running == 1 {
                   }
                   // ---- nested struct literal value: Name { ... } ----
                   // When the value is a known struct name followed by '{',
-                  // descend into it: push this level's state on nstack and
-                  // re-run the same walk for the inner struct.  The inner
-                  // level's text is handed back as this value when it closes
-                  // (see the pop after the walk).
                   hold etyname = ""
                   hold pushed = 0
                   hold sk = 1
@@ -7939,10 +7813,6 @@ hold argbracket = 0
           hold pos = pos + 1
           // which builtin?
           // ---- '%' inside builtin-call argument text: sx_mod(L, R) ----
-          // Same rule as the shared condition rewrite: L is the * / %
-          // chain to the left (balanced groups included), R is the next
-          // atom (name, number, .field, [i], (..)). argv_txt has no blanks
-          // outside string literals, so no blank handling is needed here.
           hold axo = ""
           hold axi = 0
           hold axbracket = 0
@@ -8124,10 +7994,6 @@ hold argbracket = 0
                 }
                 // Only rewrite a builtin word when it is really a call: a
                 // variable named `index`, `len`, `arg`, ... inside argument
-                // text must stay a variable.  Without this check
-                // `sx_idx(index, ...)` was rewritten to `sx_idx(sx_idx, ...)`
-                // and the generated C silently did the wrong thing (it made
-                // tools/sxpkg.sa's own `search` never match).
                 hold amap = 0
                 hold acall = 0
                 hold aix = ai
@@ -8844,8 +8710,6 @@ hold argbracket = 0
           }
           // a list variable as a whole value: `hold ys = xs` aliases it, as
           // in seed-min and native (it used to emit `double ys = xs;`, which
-          // is invalid C).  xs[i] (c2 == '[') stays a number below; anything
-          // else after a list name (xs + 1) is a clear error.
           when c2 != 91 {
             hold key = concat("|", nm2)
             hold key = concat(key, "|")
@@ -9378,9 +9242,6 @@ hold ec = 0
       }
       // ---- chained binary operands: + - * / % (* / % bind tighter) ----
       // Two registers keep precedence and left-associativity straight:
-      //   ct     = the mul-level term currently being built
-      //   addacc = the reduced add-level value; addop = the pending + or -
-      // A single operand still emits the same text as before.
       hold ct = rhs
       hold addacc = ""
       hold addop = 0
@@ -9517,11 +9378,6 @@ hold ec = 0
             hold opnd = nm3
             // ---- a call as the right operand of a chain ----
             // `1 + len(xs)`, `2 * len(s)`, `"a" + concat("b", "c")` and
-            // user functions were previously left as un-mapped names (and
-            // the `(` then failed).  Map the builtin here with the same
-            // runtime names the statement-level call path uses; the
-            // argument text is copied verbatim (nested builtin calls in an
-            // argument are still a documented limitation).
             hold ocnx = 0
             hold ocp = pos
             hold ocsk = 1
@@ -9798,11 +9654,6 @@ hold ec = 0
                   hold ocam = ocaw
                   // A word in argument text is a builtin *call* only when a
                   // `(` follows it: a variable named `index`, `len`, `arg`,
-                  // ... must stay a variable.  Without this check
-                  // `sx_idx(s, index)` became `sx_idx(s, sx_idx)` -- the
-                  // variable was renamed to the runtime function and the
-                  // generated C silently did the wrong thing (it was the
-                  // reason tools/sxpkg.sa's own `search` never matched).
                   hold ocacall = 0
                   hold ocakx = ocak
                   hold ocask = 1
@@ -10331,8 +10182,6 @@ hold ec = 0
           }
           // string chains join strings only.  A number or numeric name used
           // to be quoted as text, so `s + n` printed the NAME ("an" for
-          // n = 4): now string + number, number + string and - * / % on a
-          // string are clear errors (seed-min rejects them the same way)
           hold oterm = opnd
           when isstr == 1 {
             when opch != 43 {
@@ -10816,9 +10665,6 @@ hold argbracket = 0
           hold fk = 0
           // ---- '%' inside builtin-call argument text: sx_mod(L, R) ----
           // Same rule as the shared condition rewrite: L is the * / %
-          // chain to the left (balanced groups included), R is the next
-          // atom (name, number, .field, [i], (..)). argv_txt has no blanks
-          // outside string literals, so no blank handling is needed here.
           hold bxo = ""
           hold bxi = 0
           hold bxbracket = 0
@@ -11000,10 +10846,6 @@ hold argbracket = 0
                 }
                 // Only rewrite a builtin word when it is really a call: a
                 // variable named `index`, `len`, `arg`, ... inside argument
-                // text must stay a variable.  Without this check
-                // `sx_idx(index, ...)` was rewritten to `sx_idx(sx_idx, ...)`
-                // and the generated C silently did the wrong thing (it made
-                // tools/sxpkg.sa's own `search` never match).
                 hold amap = 0
                 hold acall = 0
                 hold aix = ai
@@ -12084,9 +11926,6 @@ hold ec = 0
       }
       // ---- chained binary operands: + - * / % (* / % bind tighter) ----
       // Two registers keep precedence and left-associativity straight:
-      //   ct     = the mul-level term currently being built
-      //   addacc = the reduced add-level value; addop = the pending + or -
-      // A single operand still emits the same text as before.
       hold ct = rhs
       hold addacc = ""
       hold addop = 0
@@ -12223,11 +12062,6 @@ hold ec = 0
             hold opnd = nm3
             // ---- a call as the right operand of a chain ----
             // `1 + len(xs)`, `2 * len(s)`, `"a" + concat("b", "c")` and
-            // user functions were previously left as un-mapped names (and
-            // the `(` then failed).  Map the builtin here with the same
-            // runtime names the statement-level call path uses; the
-            // argument text is copied verbatim (nested builtin calls in an
-            // argument are still a documented limitation).
             hold ocnx = 0
             hold ocp = pos
             hold ocsk = 1
@@ -12504,11 +12338,6 @@ hold ec = 0
                   hold ocam = ocaw
                   // A word in argument text is a builtin *call* only when a
                   // `(` follows it: a variable named `index`, `len`, `arg`,
-                  // ... must stay a variable.  Without this check
-                  // `sx_idx(s, index)` became `sx_idx(s, sx_idx)` -- the
-                  // variable was renamed to the runtime function and the
-                  // generated C silently did the wrong thing (it was the
-                  // reason tools/sxpkg.sa's own `search` never matched).
                   hold ocacall = 0
                   hold ocakx = ocak
                   hold ocask = 1
@@ -13037,8 +12866,6 @@ hold ec = 0
           }
           // string chains join strings only.  A number or numeric name used
           // to be quoted as text, so `s + n` printed the NAME ("an" for
-          // n = 4): now string + number, number + string and - * / % on a
-          // string are clear errors (seed-min rejects them the same way)
           hold oterm = opnd
           when isstr == 1 {
             when opch != 43 {
@@ -13241,8 +13068,6 @@ hold ec = 0
       }
       // item 9: a string or list used as an operand of and/or/not (or as the
       // whole condition) is refused, as in the value-position check; a
-      // comparison such as `s == "ab"` is still allowed (its neighbour is ==),
-      // and a name inside a call such as len(s) is not an operand
       hold cwi = 0
       hold cwq = 0
       hold cwbad = 0
@@ -13635,8 +13460,6 @@ hold ec = 0
       hold cl = gl
       // a list index in a give expression (`give xs[i]`): the postfix [index]
       // rewrite lives in the hold/show operand parser and never sees a give
-      // expression, so lower name[idx] to sx_lget(name, idx) here for every
-      // name in ldecls (string literals are copied verbatim)
       hold lxo = ""
       hold lxi = 0
       while lxi < cl {
@@ -13748,16 +13571,9 @@ hold ec = 0
 
     // ---- shared rewrite: conditions (act 3), give (act 6) and
     //      parenthesized hold/show expressions (act 8) are verbatim C in
-    //      ctrim/cl; lower `%` through checked sx_mod and make `/` a double
-    //      division. Result in crepl. ----
     when act == 3 || act == 6 || act == 8 {
       // ---- string == != < <= > >= ----
       // In C, `a == b` and `a < b` on two char* compare addresses, so two
-      // equal strings built at run time compare unequal and ordering is
-      // arbitrary. For `A op B` where A is a declared string (|A| in sdecls)
-      // and B is a declared string or a quoted literal, emit sx_eq (strcmp)
-      // for == and != and sx_cmp (strcmp) for the orderings. Anything else is
-      // copied as it was.
       hold seo = ""
       hold seoi = 0
       hold seoc = 0
@@ -14035,9 +13851,6 @@ hold ec = 0
       hold ctrim = seo
       // ---- parenthesise the operand of `not` ------------------------
       // In Sayanox `not` binds looser than a comparison, so `not a == 2`
-      // is `!(a == 2)`; C's `!` binds tighter than `==`, which would make
-      // it `(!a) == 2`.  Wrap the operand: everything from `not` up to the
-      // next top-level `and` / `or`, or to the end of the condition.
       hold npin = ctrim
       hold npout = ""
       hold npi = 0
@@ -14205,9 +14018,6 @@ hold ec = 0
       hold cl = len(ctrim)
       // ---- rewrite '%' to the checked helper ----
       // C precedence already matches pure-min for + - * / and the
-      // comparisons, so only '%' needs work here:
-      //   L % R   ->   sx_mod(L, R)
-      // L is the maximal * / % chain to the left, R is the next atom.
       hold crepl = ""
       hold cwi = 0
       hold cwbracket = 0
@@ -14278,8 +14088,6 @@ hold ec = 0
                   when ccx == 34 {
                     // a quoted literal: cwal sits just after its CLOSING
                     // quote, so step over that one and then walk back to the
-                    // opening quote -- `"hi " + n` needs the whole literal as
-                    // the left operand for str_operand to recognise it
                     hold cwal = cwal - 1
                     hold cwqb = 1
                     while cwqb == 1 {
@@ -14480,8 +14288,6 @@ hold ec = 0
             when cwop == 43 {
               // '+' joins two strings through sx_cat and adds two numbers
               // with C's own '+', which is what the value-position parser
-              // already does; a `give`, a condition or a parenthesized
-              // expression used to copy the '+' straight into the C
               hold cwls = str_operand(cwl, sdecls)
               hold cwrs = str_operand(cwr, sdecls)
               when cwls == 1 && cwrs == 1 {
@@ -14723,13 +14529,6 @@ hold ec = 0
               }
               // ---- an indexed list or string inside a condition ----------
               // `when xs[i] > 0` and `while s[i] != 34` used to be copied
-              // verbatim, so the generated C subscripted an sx_list struct
-              // with a double: "array subscript is not an integer". A declared
-              // list now becomes sx_lget(NAME, IDX) and a declared string
-              // becomes sx_idx(NAME, IDX), exactly as in a value position, and
-              // both helpers take a double, so an arithmetic index works here
-              // too. A name that is neither list nor string is copied
-              // unchanged, so this branch only ever adds working programs.
               hold cqdone = 0
               hold cqbrk = 0
               when cwcall == 0 && sx_eq(cwmap, "") && cwnx < cl {
@@ -15070,8 +14869,6 @@ hold ec = 0
       hold pos = pos + 1
       // close bookkeeping: what kind of block does this `}` end?
       // ('w' while, 'f' for, 'i' when, 'e' else, 'E' elif-chain else,
-      //  'm' make)  A closed loop lowers loopd, which is what makes
-      // `break`/`continue` outside a loop a compile-time error.
       hold bkc = 0
       hold bkn = len(blk)
       when bkn > 0 {
@@ -15193,12 +14990,6 @@ hold ec = 0
       }
       // ---- `} elif COND {` / `} else if COND {` (full language) ----
       // Both are compiled without a second parser: `} else {` is emitted
-      // here and the keyword itself is rewritten to `when` in the source
-      // (same byte count), so the ordinary `when` statement compiles the
-      // condition - including the checked `%` rewrite - and opens a block
-      // that the chain's closing `}` ends.  The chain's extra `else` level
-      // is remembered as 'E' in blk and closed with the extra `}` when the
-      // chain ends.
       hold iselif = 0
       hold elen = 0
       when wi + 4 <= n {
@@ -15781,8 +15572,6 @@ hold ec = 0
       hold body = concat(body, nl)
       // Variables are scoped to their function: save the tables of the
       // enclosing (top level) code and start the body with an empty set, so
-      // a `hold n = ...` in one function never turns into an assignment
-      // because another function has a parameter or variable named `n`.
       hold savdecls = decls
       hold savsdecls = sdecls
       hold savldecls = ldecls
@@ -15856,13 +15645,6 @@ hold ec = 0
 
     // ================= for NAME in A..B { =================
     // full-language statement (gen2 and later; the C seed never reads it):
-    //   for i in 0..10 { ... }        counts A, A+1, ... while i < B
-    // The counter is declared as a normal numeric variable the first time,
-    // so it keeps the flat pure-min scoping rules; a later `for i in ...`
-    // reuses it.  A and B are copied as C expressions (no `%`, which would
-    // need the checked sx_mod rewrite) and are validated so nothing can
-    // reach the output that is not a number, name, field, index or
-    // + - * / ( ) chain.
     when act == 10 {
       // `pos` already points just past the word `for`
       hold fvstart = pos - 3
@@ -16012,9 +15794,6 @@ hold ec = 0
       }
       // ---- `for V in EXPR {` where EXPR is not a plain name ----------------
       // Bind the value to a hidden variable first and re-read the header as
-      // `for V in __sx_fv.. {`.  The `hold` statement already knows how to
-      // lower a list literal, a string literal, a call, a field or an index,
-      // so `for` inherits all of it instead of growing its own copy.
       when fvmode == 1 && ferr == 0 {
         // the parsed text still carries the blanks before the `{`
         hold fvatr = fva
@@ -16035,6 +15814,42 @@ hold ec = 0
               hold fvatr = fvatr2
             } otherwise {
               hold fvtr2 = 0
+            }
+          }
+        }
+        // `for c in (s)`: strip parens that wrap the WHOLE source (repeatedly),
+        // so the name/literal/call/field inside takes its normal path below
+        hold fvuw = 1
+        while fvuw == 1 {
+          hold fvuw = 0
+          when len(fvatr) > 2 && sx_index(fvatr, 0) == 40 && sx_index(fvatr, len(fvatr) - 1) == 41 {
+            hold fvudep = 0
+            hold fvuwrap = 1
+            hold fvui = 0
+            hold fvun2 = len(fvatr)
+            while fvui < fvun2 - 1 && fvuwrap == 1 {
+              hold fvuc = sx_index(fvatr, fvui)
+              when fvuc == 40 {
+                hold fvudep = fvudep + 1
+              }
+              when fvuc == 41 {
+                hold fvudep = fvudep - 1
+                when fvudep == 0 {
+                  hold fvuwrap = 0
+                }
+              }
+              hold fvui = fvui + 1
+            }
+            when fvuwrap == 1 && fvudep == 1 {
+              hold fvatr3 = ""
+              hold fvi4 = 1
+              while fvi4 < fvun2 - 1 {
+                hold fvatr3 = concat(fvatr3, chr(sx_index(fvatr, fvi4)))
+                hold fvi4 = fvi4 + 1
+              }
+              hold fvatr = fvatr3
+              hold fva = fvatr
+              hold fvuw = 1
             }
           }
         }
@@ -16159,16 +15974,43 @@ hold ec = 0
           hold fmsg = "for loop: the range is empty; write `for i in 0..10 {`"
         }
       }
+      // `(0..3)`: the header scan stopped at the dots INSIDE the parens, so
+      // the start text has an unclosed '('. A balanced parenthesised bound
+      // such as `(lo + 1)..(hi * 2)` is a range and stays supported.
+      when fvmode == 0 && ferr == 0 && len(fva) > 0 && sx_index(fva, 0) == 40 {
+        hold fvubal = 0
+        hold fvui2 = 0
+        while fvui2 < len(fva) {
+          when sx_index(fva, fvui2) == 40 {
+            hold fvubal = fvubal + 1
+          }
+          when sx_index(fva, fvui2) == 41 {
+            hold fvubal = fvubal - 1
+          }
+          hold fvui2 = fvui2 + 1
+        }
+        when fvubal > 0 {
+          hold ferr = 1
+          hold fmsg = "for loop: a parenthesised range is not a collection; write `for i in 0..N {`, or put a list/string inside the parens"
+        }
+      }
       // validate: only characters that are safe C text for a numeric range
       hold fvchk = 0
       hold fvi = 0
       hold fvln = len(fva)
+      hold fvbrk = 0
       while fvi < fvln {
         hold fc = sx_index(fva, fvi)
+        when fc == 91 {
+          hold fvbrk = fvbrk + 1
+        }
+        when fc == 93 {
+          hold fvbrk = fvbrk - 1
+        }
         when (fc >= 48 && fc <= 57) || (fc >= 97 && fc <= 122) || (fc >= 65 && fc <= 90) || fc == 95 || fc == 46 {
           hold fvchk = 1
         } otherwise {
-          when fc == 32 || fc == 9 || fc == 43 || fc == 45 || fc == 42 || fc == 47 || fc == 40 || fc == 41 || fc == 91 || fc == 93 {
+          when fc == 32 || fc == 9 || fc == 43 || fc == 45 || fc == 42 || fc == 47 || fc == 40 || fc == 41 || fc == 91 || fc == 93 || (fc == 37 && fvbrk > 0) {
             hold fvchk = 1
           } otherwise {
             hold fvchk = 0
@@ -16183,17 +16025,24 @@ hold ec = 0
       }
       when fvchk == 0 && ferr == 0 && fvspl == 0 {
         hold ferr = 1
-        hold fmsg = "for loop: the start expression may use numbers, names, fields, indexes and + - * / ( ) only"
+        hold fmsg = "for loop: the start expression may use numbers, names, fields, indexes and + - * / ( ) only (% only inside an index)"
       }
       hold fvchk = 0
       hold fvi = 0
       hold fvln = len(fvb)
+      hold fvbrk = 0
       while fvi < fvln {
         hold fc = sx_index(fvb, fvi)
+        when fc == 91 {
+          hold fvbrk = fvbrk + 1
+        }
+        when fc == 93 {
+          hold fvbrk = fvbrk - 1
+        }
         when (fc >= 48 && fc <= 57) || (fc >= 97 && fc <= 122) || (fc >= 65 && fc <= 90) || fc == 95 || fc == 46 {
           hold fvchk = 1
         } otherwise {
-          when fc == 32 || fc == 9 || fc == 43 || fc == 45 || fc == 42 || fc == 47 || fc == 40 || fc == 41 || fc == 91 || fc == 93 {
+          when fc == 32 || fc == 9 || fc == 43 || fc == 45 || fc == 42 || fc == 47 || fc == 40 || fc == 41 || fc == 91 || fc == 93 || (fc == 37 && fvbrk > 0) {
             hold fvchk = 1
           } otherwise {
             hold fvchk = 0
@@ -16208,7 +16057,7 @@ hold ec = 0
       }
       when fvchk == 0 && ferr == 0 && fvspl == 0 {
         hold ferr = 1
-        hold fmsg = "for loop: the end expression may use numbers, names, fields, indexes and + - * / ( ) only"
+        hold fmsg = "for loop: the end expression may use numbers, names, fields, indexes and + - * / ( ) only (% only inside an index)"
       }
       // list mode: the iterated expression must be a list variable
       when fvmode == 1 && ferr == 0 {
@@ -16416,10 +16265,6 @@ hold ec = 0
             when fvstr == 1 {
             // for c in s { ... }  ->  byte walk over the string: c is the one-byte
             // string at index __sx_ix (sx_idx is the byte, sx_chr makes a 1-char string)
-            // The walk needs sx_len/sx_idx/sx_chr, which only the full runtime
-            // preamble defines. A source that is a struct field (for c in p.name)
-            // declares no string variable of its own, so without this the emitted
-            // C called sx_len without a definition and failed to link.
             hold rt = 1
             hold fvix = "__sx_ix"
             hold body = concat(body, ind)
@@ -16476,8 +16321,6 @@ hold ec = 0
           } otherwise {
             // The bound B may call len(NAME), the same builtin a `when`
             // condition accepts: map it to sx_llen for a declared list and to
-            // sx_len otherwise (same lookup as the condition rewrite). Only the
-            // emitted bound changes; the text is copied unchanged elsewhere.
             hold fvbc = ""
             hold fvbn = len(fvb)
             hold fvbi = 0
@@ -16538,12 +16381,6 @@ hold ec = 0
               } otherwise {
                 // An indexed list or string may also appear in a BOUND:
                 // `for k in 0..xs[1]` used to be copied verbatim, so the
-                // generated C subscripted an sx_list struct with a double
-                // ("array subscript is not an integer"). Same lowering as in a
-                // condition: sx_lget for a declared list, sx_idx for a
-                // declared string, index text copied as-is, and everything
-                // else (a nested index, a comma, a quote, '%' or a call) is a
-                // clear refusal rather than invalid C.
                 hold fvbidone = 0
                 hold fvbich = sx_index(fvb, fvbi)
                 when (fvbich >= 97 && fvbich <= 122) || (fvbich >= 65 && fvbich <= 90) || fvbich == 95 {
@@ -16889,8 +16726,6 @@ hold ec = 0
       }
       // A template declaration: gxscan recorded it and gxpass already
       // registered one concrete struct per instantiation, so the walker only
-      // skips the parameter list and the body. The template itself must not
-      // enter sdefs, or `Box` would look concrete with the template's fields.
       gxtpl = 0
       when pos < n {
         when sx_index(source,pos) == 60 {
@@ -16953,6 +16788,34 @@ hold ec = 0
                     hold pos = pos + 1
                   } otherwise {
                     hold rn2 = 0
+                  }
+                }
+              }
+              // A `name: Type` field is an annotation, and no backend checks
+              // a field's type: refuse it instead of registering the type
+              // name as another field (which silently changed the arity).
+              hold sk2 = pos
+              while sk2 < n && (sx_index(source,sk2) == 32 || sx_index(source,sk2) == 9) {
+                hold sk2 = sk2 + 1
+              }
+              when sk2 < n {
+                when sx_index(source,sk2) == 58 {
+                  // `k: 2` (a literal after the colon) is the tolerated old
+                  // spelling and keeps working; `p: Pt` (a NAME after the
+                  // colon) reads as a type annotation, which no backend
+                  // checks -- it used to register Pt as an extra field.
+                  hold sk3 = sk2 + 1
+                  while sk3 < n && (sx_index(source,sk3) == 32 || sx_index(source,sk3) == 9) {
+                    hold sk3 = sk3 + 1
+                  }
+                  when sk3 < n {
+                    hold cc3 = sx_index(source,sk3)
+                    when (cc3 >= 97 && cc3 <= 122) || (cc3 >= 65 && cc3 <= 90) || cc3 == 95 {
+                      hold exerr = concat(exerr, "#error sayanox-min: struct field annotations are not supported")
+                      hold exerr = concat(exerr, nl)
+                      show "min: struct field annotations are not supported: write just the field name (docs/TYPES_ROADMAP.md)"
+                      hold rn = 0
+                    }
                   }
                 }
               }
@@ -17161,12 +17024,6 @@ hold ec = 0
 
     // ---- flush completed output into obody (memory bound) -------------
     // A flat accumulator would copy the whole body on every append, which is
-    // O(n^2): compiling this file used to allocate ~2.5 GB and get Killed on
-    // low-RAM hosts.  Keep `body` under ~1 KB and append it to `obody` in
-    // that unit instead.  `obody` is only appended at the end, so the emitted
-    // text and its order are byte-for-byte unchanged.  Never flush while a
-    // function body is being collected (`body` belongs to `fns` until the
-    // matching `}` restores it).
     when in_fn == 0 {
       hold blen = len(body)
       when blen > 1024 {
@@ -17368,9 +17225,6 @@ hold out = concat(out, gproto)
 hold out = concat(out, fns)
 // Keep the stack anchor in a caller frame, above EVERY generated-program
 // local at both O0 and O2. An anchor beside those locals can be laid out
-// below them, causing conservative scanning to miss live roots. The volatile
-// indirect call and post-call store prevent inlining/tail-call removal of
-// the wrapper without compiler-specific attributes.
 hold main_inner = "_sx_gc_program"
 hold main_unique = 0
 while main_unique == 0 {
@@ -17500,18 +17354,12 @@ when perr == 1 {
   show shmsg
 }
 when exbad3 == 1 {
-  hold exerr = concat(exerr, "#error sayanox-min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / and parentheses; %, a call other than len() and a quoted string need a hold first)")
+  hold exerr = concat(exerr, "#error sayanox-min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / % and parentheses; a call other than len() and a quoted string need a hold first)")
   hold exerr = concat(exerr, nl)
-  show "min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / and parentheses; %, a call other than len() and a quoted string need a hold first)"
+  show "min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / % and parentheses; a call other than len() and a quoted string need a hold first)"
 }
 // Rewrite every generated C integer token in user code to a double token.
 // `fixfrom` is the end of the runtime preamble; that preamble intentionally
-// keeps its integer constants, while function/main expressions become `N.0`.
-// String literals are copied without inspection, and digits inside C names
-// are left alone. Output is appended after at most 512 input bytes per chunk
-// (plus any `.0` expansions), bounding the temporary builder and avoiding a
-// full-prefix copy for every character. This keeps C's integer folding from
-// diverging from Sayanox's IEEE-double arithmetic.
 hold llc = 0
 hold llpc = 0
 hold llskip = 0
@@ -17974,3 +17822,4 @@ hold out = concat(exerr, out)
 hold w = write_file(out_path, out)
 
 // counters go to stdout (they are the compiler's own output, not the target's)
+

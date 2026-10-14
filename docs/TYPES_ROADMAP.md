@@ -45,9 +45,16 @@ of a safe implementation:
    layout cannot be spelled yet (see below).
 4. **Kind checking at every boundary** — partly done: the type argument fixes
    the field kind at the literal, so one instantiation used with two kinds is
-   refused by all three backends. There are still no struct-typed `hold`
-   annotations, so calls, returns and assignments cannot be checked against a
-   struct type — that boundary does not exist in the language yet.
+   refused by all three backends. Struct-typed `hold` annotations turned out
+   to already exist on **gen2** (measured 2026-10-13, correcting the earlier
+   claim that no backend has them): `hold p: Pt = Pt { 1, 2 }`,
+   `hold q: Pt = p` and even `hold b: Box__n = Box<num> { 7 }` compile and
+   run, and `hold p: Pt = 5` is refused with `'p' is declared Pt but the
+   value is a number`. seed-min (`unknown hold type: seed-min supports num,
+   str, list`) and native (`hold 'p': unknown or unsupported type 'Pt'`)
+   refuse the same syntax by name, because their `hold` types are the
+   scalars. All of this is pinned by `make test-type-refusals`. Calls and
+   returns still cannot be checked against a struct type on any backend.
 5. **A finite specialization worklist** — done by construction: instantiation
    happens on demand at a literal site, is idempotent and needs no recursion
    (nesting is refused), so the order is stable and gen3 is reproducible.
@@ -103,8 +110,10 @@ is good.
 
 * **Nested instantiations** — `Box<Box<num>>` is refused: a struct name is not
   an accepted type argument on any backend, so an instantiation cannot contain
-  another. seed-min additionally requires a nested concrete struct to be
-  declared before the struct that holds it.
+  another (`make test-type-refusals` pins the refusal on seed-min, gen2 and
+  native; seed-min and native name the problem, gen2 refuses via its general
+  `undefined name: Box`). seed-min additionally requires a nested concrete
+  struct to be declared before the struct that holds it.
 * **A struct or a list as a type argument** — refused everywhere. A list-typed
   struct field does not exist in any backend; a struct-typed one exists only as
   a declared concrete name.
@@ -119,9 +128,17 @@ is good.
   gen2 accepts it and gives `Box__n` a string field, where seed-min and native
   refuse. A second literal of the other kind is refused by all three. Closing
   this needs the field's *index* at gen2's two `ftypes` write sites.
-* **No struct-typed annotations** — `hold b: Box__n` is not syntax in any
-  backend, so a cross-specialization assignment cannot be expressed, let alone
-  checked. seed-min refuses all struct reassignment.
+* **Struct-typed annotations are gen2-only** — `hold b: Box__n = Box<num> { 7 }`
+  works on gen2 (above), so a cross-specialization assignment *can* be
+  expressed there, but seed-min and native refuse every struct-typed
+  annotation, so the spelling is not portable. seed-min refuses all struct
+  reassignment.
+* **Struct field annotations** — `p: Pt` inside a struct body is refused on
+  all three backends since 2026-10-13 (`struct field annotations are not
+  supported: write just the field name`, `test-type-refusals`). Before that
+  it silently registered `Pt` as an extra field and changed the literal
+  arity — the worst failure mode in this file. A literal after the colon
+  (`k: 2`) remains the old tolerated spelling and registers field `k` only.
 
 The adjacent divergence below predates this increment and is unchanged —
 `make test-generic-structs` still pins it:

@@ -7,7 +7,10 @@
 //
 // Methods: initialize / initialized / shutdown / exit, textDocument didOpen,
 // didChange, didClose, publishDiagnostics, diagnostic, documentSymbol,
-// completion, hover, definition.
+// completion, hover, definition, references, workspace/symbol, formatting,
+// rename, signatureHelp, codeAction. Rename, references and workspace
+// symbols span the OPEN documents only -- there is no workspace scan (the
+// dialect has no directory-listing builtin), and docs/LSP.md says so.
 //
 // The diagnostics are real checks over the document text: unknown statements,
 // brace and paren balance, unterminated strings, and `use` targets that do not
@@ -1083,6 +1086,290 @@ make symbols(text: str, uri: str) -> str {
   give concat("[", concat(sym_scan(text, uri, "", 0), "]"))
 }
 
+// ------------------------------------------------- rename / signature help
+
+// rename_edits: every whole-word occurrence of `w` in ONE document as
+// TextEdit items (same scan and comma rule as refs_for, declaration
+// included), each replacing the word with `newtext`. "" when none.
+make rename_edits(w: str, newtext: str, text: str, first: num) -> str {
+  hold arr = ""
+  hold count = first
+  hold lines = 0
+  hold l = 0
+  hold line = ""
+  hold n = 0
+  hold i = 0
+  hold j = 0
+  hold c = 0
+  hold run = ""
+  hold span = [0, 0]
+  hold espan = [0, 0]
+  hold b = ""
+  when len(w) > 0 && len(newtext) > 0 {
+    lines = count_lines(text)
+    while l < lines {
+      line = line_text(text, l)
+      n = len(line)
+      i = 0
+      while i < n {
+        c = sx_index(line, i)
+        when is_ident(c) == 1 {
+          run = ""
+          j = i
+          while j < n {
+            c = sx_index(line, j)
+            when is_ident(c) == 1 {
+              run = run + chr(c)
+              j += 1
+            } otherwise {
+              break
+            }
+          }
+          when string_eq(run, w) == 1 {
+            span = utf16_span(line, i)
+            espan = utf16_span(line, i + len(w))
+            b = ""
+            when count > 0 {
+              b = b + ","
+            }
+            b = b + "{\"range\":{\"start\":{\"line\":"
+            b = b + numstr(l)
+            b = b + ",\"character\":"
+            b = b + numstr(span[0])
+            b = b + "},\"end\":{\"line\":"
+            b = b + numstr(l)
+            b = b + ",\"character\":"
+            b = b + numstr(espan[0])
+            b = b + "}},\"newText\":\""
+            b = b + json_esc(newtext)
+            b = b + "\"}"
+            arr = arr + b
+            count += 1
+          }
+          i = j
+        } otherwise {
+          i += 1
+        }
+      }
+      l += 1
+    }
+  }
+  give arr
+}
+
+// trim_str: strip spaces and tabs at both ends.
+make trim_str(s: str) -> str {
+  hold a = 0
+  hold z = len(s)
+  hold run = 1
+  while run == 1 {
+    when a >= z {
+      hold run = 0
+    } otherwise {
+      hold c = sx_index(s, a)
+      when c == 32 || c == 9 {
+        hold a = a + 1
+      } otherwise {
+        hold run = 0
+      }
+    }
+  }
+  hold run = 1
+  while run == 1 {
+    when z <= a {
+      hold run = 0
+    } otherwise {
+      hold c = sx_index(s, z - 1)
+      when c == 32 || c == 9 {
+        hold z = z - 1
+      } otherwise {
+        hold run = 0
+      }
+    }
+  }
+  hold out = ""
+  hold i = a
+  while i < z {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// sub_str: bytes [a, z) of s, clamped.
+make sub_str(s: str, a: num, z: num) -> str {
+  hold out = ""
+  hold i = a
+  when i < 0 {
+    hold i = 0
+  }
+  hold e = z
+  when e > len(s) {
+    hold e = len(s)
+  }
+  while i < e {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// sig_help: signature help for the call at (line, ch) of THIS document.
+// The callee is the word under the cursor, or -- when the cursor sits in an
+// argument list -- the identifier of the innermost enclosing call on that
+// line. The declaration is the `make NAME(...)` line in the same document;
+// there is no cross-file lookup. Parameters are the comma-separated pieces
+// of the declaration's parameter list, and activeParameter counts the
+// top-level commas of the call between its '(' and the cursor. "null" when
+// no declaration is found, which the protocol allows.
+make sig_help(w: str, text: str, line: num, ch: num) -> str {
+  hold lt = line_text(text, line)
+  hold bytepos = utf16_byte(lt, ch)
+  hold callee = w
+  hold callopen = 0 - 1
+  hold depth = 0
+  hold i = 0
+  hold best = ""
+  hold bestopen = 0 - 1
+  hold cur = ""
+  hold c = 0
+  hold active = 0
+  hold d2 = 0
+  hold Decl = ""
+  hold lines = 0
+  hold l = 0
+  hold pat = ""
+  hold dl = ""
+  hold m = 0
+  hold after = 0
+  hold po = 0
+  hold pc = 0
+  hold params = ""
+  hold npar = 0
+  hold inner = ""
+  hold start = 0
+  hold at_end = 0
+  hold piece = ""
+  hold b = ""
+  // the innermost enclosing call on this line, if any
+  while i < bytepos && i < len(lt) {
+    hold c = sx_index(lt, i)
+    when is_ident(c) == 1 {
+      cur = concat(cur, chr(c))
+    } otherwise {
+      when c == 40 {
+        when len(cur) > 0 {
+          best = cur
+          bestopen = i
+        }
+        depth = depth + 1
+        cur = ""
+      } otherwise {
+        when c == 41 {
+          depth = depth - 1
+          cur = ""
+        } otherwise {
+          cur = ""
+        }
+      }
+    }
+    i = i + 1
+  }
+  when depth > 0 && len(best) > 0 {
+    callee = best
+    callopen = bestopen
+  }
+  // activeParameter: top-level commas between the call's '(' and the cursor
+  when callopen >= 0 {
+    d2 = 1
+    i = callopen + 1
+    while i < bytepos && i < len(lt) {
+      hold c = sx_index(lt, i)
+      when c == 40 || c == 91 {
+        d2 = d2 + 1
+      }
+      when c == 41 || c == 93 {
+        d2 = d2 - 1
+      }
+      when c == 44 && d2 == 1 {
+        active = active + 1
+      }
+      i = i + 1
+    }
+  }
+  // find the declaration line in this document
+  lines = count_lines(text)
+  pat = concat("make ", callee)
+  while l < lines {
+    dl = line_text(text, l)
+    m = 0
+    while m < len(dl) {
+      when sx_index(dl, m) == 32 || sx_index(dl, m) == 9 {
+        m = m + 1
+      } otherwise {
+        break
+      }
+    }
+    when len(Decl) <= 0 && starts(dl, m, pat) == 1 {
+      // the name must be followed by '(' so make helper2 is not helper
+      after = m + len(pat)
+      when after < len(dl) {
+        when sx_index(dl, after) == 40 {
+          Decl = trim_str(dl)
+        }
+      }
+    }
+    l = l + 1
+  }
+  when len(Decl) <= 0 {
+    give "null"
+  }
+  // parameter labels: the comma-separated pieces inside the first ( ... )
+  po = find(Decl, "(")
+  pc = find_from(Decl, ")", po)
+  when po >= 0 && pc > po {
+    inner = sub_str(Decl, po + 1, pc)
+    start = 0
+    i = 0
+    while i <= len(inner) {
+      at_end = 0
+      when i == len(inner) {
+        at_end = 1
+      } otherwise {
+        when sx_index(inner, i) == 44 {
+          at_end = 1
+        }
+      }
+      when at_end == 1 {
+        piece = trim_str(sub_str(inner, start, i))
+        when len(piece) > 0 {
+          when npar > 0 {
+            params = concat(params, ",")
+          }
+          params = concat(params, "{\"label\":\"")
+          params = concat(params, json_esc(piece))
+          params = concat(params, "\"}")
+          npar = npar + 1
+        }
+        start = i + 1
+      }
+      i = i + 1
+    }
+  }
+  when active >= npar && npar > 0 {
+    active = npar - 1
+  }
+  b = "{\"signatures\":[{\"label\":\""
+  b = concat(b, json_esc(Decl))
+  b = concat(b, "\",\"parameters\":[")
+  b = concat(b, params)
+  b = concat(b, "]],\"activeSignature\":0,\"activeParameter\":")
+  b = concat(b, numstr(active))
+  b = concat(b, "}")
+  give b
+}
+
+
 // ------------------------------------------------------------- references
 
 make ref_item(uri: str, line: num, ch: num, endch: num, first: num) -> str {
@@ -1385,6 +1672,22 @@ make format_edit(text: str) -> str {
   b = b + "}},\"newText\":\""
   b = b + json_esc(out)
   b = b + "\"}]"
+  give b
+}
+
+// code_actions: the one action this server can truthfully offer -- format
+// the document -- and only when formatting would change it. The edit is the
+// same whole-buffer edit textDocument/formatting answers.
+make code_actions(text: str, uri: str) -> str {
+  hold fe = format_edit(text)
+  hold b = "[]"
+  when string_eq(fe, "[]") == 0 {
+    hold b = "[{\"title\":\"Format this Sayanox document\",\"kind\":\"source.formatDocument\",\"edit\":{\"changes\":{\""
+    hold b = concat(b, json_esc(uri))
+    hold b = concat(b, "\":")
+    hold b = concat(b, fe)
+    hold b = concat(b, "}}}]")
+  }
   give b
 }
 
@@ -1719,6 +2022,15 @@ make known_method(m: str) -> num {
   when string_eq(m, "workspace/symbol") {
     give 1
   }
+  when string_eq(m, "textDocument/rename") {
+    give 1
+  }
+  when string_eq(m, "textDocument/signatureHelp") {
+    give 1
+  }
+  when string_eq(m, "textDocument/codeAction") {
+    give 1
+  }
   give 0
 }
 
@@ -1753,7 +2065,7 @@ make capabilities() -> str {
   hold c = ""
   c = "{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\" \"]},"
   c = concat(c, "\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,")
-  c = concat(c, "\"referencesProvider\":true,\"documentFormattingProvider\":true,\"workspaceSymbolProvider\":true,")
+  c = concat(c, "\"referencesProvider\":true,\"documentFormattingProvider\":true,\"workspaceSymbolProvider\":true,\"renameProvider\":true,\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"codeActionProvider\":true,")
   c = concat(c, "\"diagnosticProvider\":{\"interFileDependencies\":false,\"workspaceDiagnostics\":false}}")
   give c
 }
@@ -1837,6 +2149,7 @@ hold seen = 0
 hold ln = 0
 hold incl = 1
 hold part = ""
+hold part2 = ""
 hold q = ""
 
 while running == 1 {
@@ -2081,6 +2394,72 @@ while running == 1 {
       }
       when string_eq(method, "textDocument/formatting") {
         d = reply(idraw, format_edit(doc))
+      }
+      // Rename spans the open documents, like references: one changes entry
+      // per open document that mentions the word, declaration included. An
+      // empty word or an empty newName answers an empty WorkspaceEdit.
+      when string_eq(method, "textDocument/rename") {
+        w = word_at(doc, ln, ch)
+        part = str_field(body, "newName")
+        res = "{\"changes\":{"
+        q = ""
+        when len(uri0) > 0 {
+          part2 = rename_edits(w, part, txt0, 0)
+          when len(part2) > 0 {
+            res = res + q
+            res = res + "\""
+            res = res + json_esc(uri0)
+            res = res + "\":["
+            res = res + part2
+            res = res + "]"
+            q = ","
+          }
+        }
+        when len(uri1) > 0 {
+          part2 = rename_edits(w, part, txt1, 0)
+          when len(part2) > 0 {
+            res = res + q
+            res = res + "\""
+            res = res + json_esc(uri1)
+            res = res + "\":["
+            res = res + part2
+            res = res + "]"
+            q = ","
+          }
+        }
+        when len(uri2) > 0 {
+          part2 = rename_edits(w, part, txt2, 0)
+          when len(part2) > 0 {
+            res = res + q
+            res = res + "\""
+            res = res + json_esc(uri2)
+            res = res + "\":["
+            res = res + part2
+            res = res + "]"
+            q = ","
+          }
+        }
+        when len(uri3) > 0 {
+          part2 = rename_edits(w, part, txt3, 0)
+          when len(part2) > 0 {
+            res = res + q
+            res = res + "\""
+            res = res + json_esc(uri3)
+            res = res + "\":["
+            res = res + part2
+            res = res + "]"
+            q = ","
+          }
+        }
+        res = res + "}}"
+        d = reply(idraw, res)
+      }
+      when string_eq(method, "textDocument/signatureHelp") {
+        w = word_at(doc, ln, ch)
+        d = reply(idraw, sig_help(w, doc, ln, ch))
+      }
+      when string_eq(method, "textDocument/codeAction") {
+        d = reply(idraw, code_actions(doc, docuri))
       }
       when string_eq(method, "exit") {
         running = 0

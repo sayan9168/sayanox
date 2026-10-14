@@ -1,0 +1,32 @@
+// stdlib_json_test.sa -- hand-computed values for stdlib/json_util.sa.
+// seed-min, gen2 and native must print these exact bytes
+// (make test-stdlib-modules). Covers building (escape/quote/kv/obj/array)
+// and the flat-object reader, including its documented limits.
+use "stdlib/json_util.sa"
+
+hold inner = j_pair(j_kv_text("name", "a\"b"), j_kv_number("n", 42))
+hold inner = j_pair(inner, j_kv_flag("ok", 1))
+hold inner = j_pair(inner, j_kv_number("pi", 3.5))
+hold obj = j_obj(inner)
+show obj
+show j_has(obj, "name")
+show j_has(obj, "missing")
+show j_get_text(obj, "name")
+show j_get_number(obj, "n")
+show j_get_number(obj, "pi")
+show j_get_flag(obj, "ok")
+show j_get_number(obj, "missing")
+hold xs = [1, 2, 3]
+show j_arr_numbers(xs)
+hold ys = []
+show j_arr_numbers(ys)
+show j_obj("")
+show j_escape("a\tb")
+hold lit = "{\"k\": -12.5, \"s\": \"x\\ny\", \"b\": false}"
+show j_get_number(lit, "k")
+show j_get_text(lit, "s")
+show j_get_flag(lit, "b")
+show j_has(lit, "b")
+show j_get_text(lit, "nope")
+show j_quote("back\\slash")
+show "json-done"

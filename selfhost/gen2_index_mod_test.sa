@@ -1,0 +1,32 @@
+// gen2_index_mod_test.sa -- `%` inside an index, in a value, a condition,
+// a for bound and a typed body (make test-gen2-index-mod). `%` binds like
+// * and /, left-associative, through the checked sx_mod: the hand-computed
+// values below must be identical on seed-min, gen2 and native. A call
+// other than len() inside an index stays refused by gen2 (test-gen2-index-expr).
+make at(v: list, j: num) -> num {
+  hold r = v[j % 2]
+  give r
+}
+hold xs = [10, 20, 30, 40]
+hold i = 7
+show xs[i % 3]
+show xs[i % 2 + 1]
+show xs[(i + 5) % 3]
+show xs[i * 2 % 3]
+show xs[10 % 4]
+hold s = "abcd"
+show s[i % 3]
+when xs[i % 3] == 20 {
+  show 99
+}
+hold ys = [2, 9]
+for k in 0..ys[3 % 2] {
+  show k
+}
+show at(xs, 3)
+hold n = 0
+while n < 3 {
+  show xs[n % 2]
+  hold n = n + 1
+}
+show "index-mod-done"

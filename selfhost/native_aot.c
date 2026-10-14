@@ -940,6 +940,7 @@ static void collect_defs(const char*src){
             strcpy(GS[nGS].f[GS[nGS].nf++],fd);
             continue;
           }
+          if(*r==':'){ const char*z=r+1; while(*z==' '||*z=='\t') z++; if(id0(*z)){ fprintf(stderr,"native_aot: struct '%s': field annotations are not supported (write just the field name; docs/TYPES_ROADMAP.md)\n",nm); exit(1); } }
           r++;
         }
         p=r;
@@ -966,6 +967,7 @@ static void collect_defs(const char*src){
           S[nS].nf++;
           continue;
         }
+        if(*q==':'){ const char*z=q+1; while(*z==' '||*z=='\t') z++; if(id0(*z)){ fprintf(stderr,"native_aot: struct '%s': field annotations are not supported (write just the field name; docs/TYPES_ROADMAP.md)\n",nm); exit(1); } }
         q++;
       }
       if(*q!='}'){ fprintf(stderr,"native_aot: struct %s: missing }\n",nm); exit(1); }

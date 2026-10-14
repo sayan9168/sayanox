@@ -117,6 +117,35 @@ immediately.
   `sub_rsp_imm32_slot` opens and `leave_ret` closes) and the collector's block
   layout (`BH_HDR`, the `BK_*` kinds).
 
+### The portable IR listing (`tools/emit_to_ir.py`, 2026-10-13)
+
+`tools/emit_to_ir.py` translates an `SX_EMIT_LOG` instruction list into a
+portable *listing*: x86-64 registers become abstract registers (`rax`->`A`,
+`xmm0`->`F0`, `rsp`->`SP`, `r12`->`BASE`), byte offsets become sequential
+instruction numbers (`I0`, `I1`, ...), integer and floating-point mnemonics
+are distinguished (`add`->`IADD`, `addsd`->`FADD`, `cvtsi2sd`->`I2F`), and
+call targets keep the names the log already gives them (`CALL make twice`,
+`CALL builtin shownum`). Phase markers and label slots stay as comments, and
+an unrecognised mnemonic passes through upper-cased with its operands
+renamed, so the translation never silently drops an instruction.
+
+```sh
+SX_EMIT_LOG=/tmp/hello.log ./selfhost/native_aot examples/native_hello.sa /tmp/hello
+python3 tools/emit_to_ir.py /tmp/hello.log /tmp/hello.ir
+```
+
+`make test-native-ir-portable` pins the contract: the translation is
+deterministic (two runs cmp clean), lossless (one IR instruction per logged
+instruction), free of x86 register names on instruction lines, and preserves
+the abstract machine model (`FADD`, `FCMP`, `I2F`, named calls, phase
+markers).
+
+This is the "portable IR docs + tests" half of the second-target item, and it
+is deliberately only that: **no backend assembles or executes the IR, and no
+second ISA is claimed.** The listing exists so the instruction stream a
+second backend would have to reproduce can be read, diffed and counted
+without x86-64 noise. `native-test` stays an x86-64-Linux-only gate.
+
 ### What the recorder is not
 
 It is not a portable IR, and it is not a second target. The list is still

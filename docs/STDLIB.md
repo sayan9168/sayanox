@@ -1,6 +1,6 @@
 # Standard library (stdlib/)
 
-Seven modules, split by what they need from the compiler. Every helper is
+Eight modules, split by what they need from the compiler. Every helper is
 checked by a `make` target; the backend columns below say what is verified.
 
 | Module | Helpers | Backends | Gate |
@@ -12,6 +12,7 @@ checked by a `make` target; the backend columns below say what is verified.
 | `stdlib/num_util.sa` | 17 untyped numeric helpers (`nu_trunc`, `nu_floor`, `nu_ceil`, `nu_round`, `nu_frac`, `nu_min`, `nu_max`, `nu_mod_pos`, `nu_int_div`, `nu_wrap`, `nu_map_range`, `nu_avg`, `nu_median3`, `nu_pi`, `nu_deg2rad`, `nu_rad2deg`, `nu_turn`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/list_algo.sa` | 17 typed list algorithms (`la_insert_sorted`, `la_sort`, `la_sorted`, `la_index_of`, `la_append`, `la_slice`, `la_take`, `la_drop`, `la_cumsum`, `la_repeat`, `la_scale`, `la_offset`, `la_zip_add`, `la_count_gt`, `la_remove_at`, `la_insert_at`, `la_distinct`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/str_text.sa` | 18 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`) | seed-min, gen2, native | `test-stdlib-modules` |
+| `stdlib/json_util.sa` | flat-object JSON build/read (`j_escape`, `j_kv_text`, `j_kv_number`, `j_kv_flag`, `j_pair`, `j_obj`, `j_arr_numbers`, `j_has`, `j_get_text`, `j_get_number`, `j_get_flag`) | seed-min, gen2, native | `test-stdlib-modules` |
 
 ## Why two kinds of module
 
@@ -19,18 +20,20 @@ checked by a `make` target; the backend columns below say what is verified.
 That is the subset all three backends implement in full, so those two are the
 modules that can be promised on the native-AOT path without typed parameters.
 
-The other five modules take `str` and `list` parameters
+The other six modules take `str` and `list` parameters
 (`make s_len(s: str) -> num`). Typed parameter and return annotations are now
 accepted by seed-min, gen2 and native alike (checked on 2026-10-13 with a
 `greet(name: str) -> str` / `total(xs: list) -> num` probe: seed-min and native
-both print the right answer). What still differs is a gen2 gap in `give`:
-
-* `hold q = "hi " + name` works on gen2, but a bare `give "hi " + name` inside
-  a function body emits `char * + char *` and fails to compile. Library code
-  therefore accumulates into a `hold` and returns that; it never puts a string
-  `+` chain directly in a `give`. The C compile error is loud rather than
-  silent, and the gap is listed under "Measured divergences" in
-  `docs/STATUS.md`.
+both print the right answer). A bare string `+` chain in a `give`
+(`give "hi " + name`) used to emit `char * + char *` on gen2; that lowering
+was fixed on 2026-10-13 (`test-gen2-expr-lowering`), but library code still
+accumulates into a `hold` and returns that, because the pattern works on
+every backend and every older gen2. One gen2 authoring rule remains load
+-bearing for these modules: a comment must not contain an odd number of raw
+`"` characters — gen2's typed-signature scan loses track of quotes there and
+misreads the following `make` signatures (this was the actual root cause of
+the `json_util.sa` gen2 failure, found 2026-10-13; balanced quotes in
+comments are fine).
 
 ## Rules for adding a helper to tiny.sa
 
@@ -52,6 +55,21 @@ show collatz_steps(6) // 8
 ```
 
 `use` is resolved relative to the file that contains it.
+
+## `json_util.sa`: flat-object JSON, deliberately small (2026-10-13)
+
+`j_` builds and reads **flat** JSON objects: string/number/boolean values,
+plus number arrays (`j_arr_numbers`). `j_get_text`, `j_get_number` and
+`j_get_flag` read the *first* `"key":` occurrence, `j_has` tests presence,
+and the builders escape quotes, backslashes and control bytes. Verified
+byte-identically on seed-min, gen2 and native by `test-stdlib-modules`
+(`selfhost/stdlib_json_test.sa`, expected values computed by hand).
+
+Documented non-goals, by design: nested objects/arrays as values, exponent
+notation in numbers, and `\u` escapes above U+007F on the read path. A JSON
+document outside that shape is not silently misread into a wrong answer the
+library claims is right — it is simply outside what these helpers promise,
+and this section is the promise.
 
 ## Portable interpolation helpers (2026-10-11)
 

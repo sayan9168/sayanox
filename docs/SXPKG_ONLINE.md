@@ -46,11 +46,24 @@ resolver.
 | `install-local [dir]` | shell `mkdir` + Sayanox `install` | copies the lock closure out of a local registry dir, sum-checked | no |
 | `sync` | shell | downloads `INDEX` and each locked `pkg.meta`/`main.sa` from `$SAYANOX_REGISTRY` | **yes** — opt-in (curl/wget) |
 | `install` | shell | like `install-local`, but fetches a package that is missing from `.sayanox/registry/` | **yes** |
-| `fetch <url> [name]` | shell | downloads one `main.sa` and locks it as `0.0.0` | **yes** |
-| `publish` | shell | writes `pkg.meta` and `main.sa` into the local registry and `INDEX`; prints "commit registry/<name> to go online" | no (it never uploads) |
+| `fetch <url> [name]` | shell | downloads one `main.sa`, writes `pkg.meta` **with the `sum=` of the fetched bytes**, and locks it as `0.0.0` | **yes** |
+| `publish` | shell | writes `pkg.meta` (**now including `sum=`, computed by `sxpkg sum`, exactly as the Sayanox implementation writes it**) and `main.sa` into the local registry and `INDEX`; prints "commit registry/<name> to go online" | no (it never uploads) |
 
 `SAYANOX_REGISTRY` overrides the default online index, which is the raw
 `registry/` directory of the GitHub repository.
+
+## Shell/Sayanox `pkg.meta` consistency (2026-10-13)
+
+The shell `publish` and `fetch` used to write `pkg.meta` **without** `sum=`,
+while the Sayanox implementation always writes it and `verify` checks it — a
+shell-published package could therefore fail (or silently skip) the very
+check the registry story rests on. Both shell commands now record
+`sum=` (via `sxpkg sum`, the same `pkgsum`: `h = (h*31 + byte) mod
+1000000007`) whenever a `main.sa` is present, so a shell-published or
+shell-fetched package verifies the same way as a Sayanox-seeded one.
+`pkgsum` is a change detector, **not** a cryptographic hash: it proves a
+file changed, never who changed it (see the table of deliberately-not-done
+items below).
 
 ## Contract for the online commands
 

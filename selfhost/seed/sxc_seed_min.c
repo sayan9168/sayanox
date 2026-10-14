@@ -630,6 +630,7 @@ static void parse_struct_def(void){
       if(!isid0(S[P])){ P++; continue; }
       if(G->nf>=16) die("too many fields");
       G->fields[G->nf++]=parse_id();
+      skip(); if(P<N&&S[P]==':'){ size_t z=P+1; while(z<N&&(S[z]==' '||S[z]=='\t')) z++; if(z<N&&isid0(S[z])) die("struct field annotations are not supported: write just the field name (docs/TYPES_ROADMAP.md)"); }
     }
     ngs++;
     return;
@@ -653,6 +654,7 @@ static void parse_struct_def(void){
     if(!isid0(S[P])){ P++; continue; }
     if(D->nf>=16) die("too many fields");
     D->fields[D->nf++]=parse_id();
+    skip(); if(P<N&&S[P]==':'){ size_t z=P+1; while(z<N&&(S[z]==' '||S[z]=='\t')) z++; if(z<N&&isid0(S[z])) die("struct field annotations are not supported: write just the field name (docs/TYPES_ROADMAP.md)"); }
   }
   nsd++;
 }
@@ -816,7 +818,7 @@ static char *atom(int *oty){
             }
             SD[si].fty[fi]=2; SD[si].fsi[fi]=last_si; SD[si].fset[fi]=1;
           } else if(et==TY_LIST){
-            die("a struct field cannot hold a list");
+            die("a struct field cannot hold a list (so `for v in p.xs` has no list field to walk; keep the list in its own hold and write `for v in xs`)");
           }
           skip(); if(P<N&&S[P]==','){P++;continue;} break;
         }
@@ -1119,6 +1121,32 @@ static char *for_header(char **source, int *kind, int *literal, char **end){
   for(int k=0;reserved[k];k++)
     if(!strcmp(name,reserved[k])) die("seed-min for binder cannot be a language keyword");
   skip(); eat("in"); skip();
+  /* A parenthesised source is the source inside the parens: `for c in (s)`,
+   * `for v in (p.items)`. The parens are unwrapped here, in every pass, so a
+   * named/literal/call/field source inside them takes its normal path and is
+   * still captured once per loop entry. A parenthesised RANGE is refused
+   * below: `(0..3)` is not a collection. */
+  int paren=0;
+  if(P<N && S[P]=='('){
+    /* Unwrap '('s that wrap the WHOLE source: the first '('s matching ')'
+     * is the last token before '{' (`for c in ((s))`). A '(' whose match
+     * closes earlier starts a parenthesised range BOUND --
+     * `(lo + 1)..(hi * 2)` -- which is a number, not a collection, and
+     * keeps the range path below. */
+    size_t q=P; int dep=0, wraps=0;
+    while(q<N){
+      char c=S[q];
+      if(c=='"'){ q++; while(q<N && S[q]!='"'){ if(S[q]=='\\' && q+1<N) q+=2; else q++; } if(q<N) q++; continue; }
+      if(c=='/' && q+1<N && S[q+1]=='/'){ while(q<N && S[q]!='\n') q++; continue; }
+      if(c=='(') dep++;
+      else if(c==')'){ dep--; if(dep==0){ size_t z=q+1; while(z<N && (S[z]==' '||S[z]=='\t'||S[z]=='\r'||S[z]=='\n')) z++; wraps = z<N && S[z]=='{'; break; } }
+      else if(c=='{' && dep==0) break;
+      q++;
+    }
+    if(wraps){
+      while(P<N && S[P]=='('){ paren++; P++; skip(); }
+    }
+  }
   *end=NULL;
   *literal=P<N && (S[P]=='"' || S[P]=='[');
   if(*literal){
@@ -1128,7 +1156,7 @@ static char *for_header(char **source, int *kind, int *literal, char **end){
     int named=0;
     if(P<N && isid0(S[P])){
       char *candidate=parse_id(); skip();
-      if(P<N && S[P]=='{'){
+      if(P<N && (S[P]=='{' || (paren && S[P]==')'))){
         int si=findv(candidate);
         if(si<0 || (vt[si]!=TY_LIST && vt[si]!=TY_STR)){
           if(in_fn && si<0)
@@ -1165,6 +1193,7 @@ static char *for_header(char **source, int *kind, int *literal, char **end){
       } else free(candidate);
     }
     if(!named){
+      if(paren) die("seed-min for parenthesised source must be a list/string variable, literal, call or field inside the parens (a parenthesised range is not a collection)");
       P=start; range_bound=1;
       *source=expr(kind); skip();
       if(*kind!=TY_NUM) die("seed-min for range bounds must be numbers");
@@ -1176,6 +1205,10 @@ static char *for_header(char **source, int *kind, int *literal, char **end){
     }
   }
   skip();
+  for(int pi=0;pi<paren;pi++){
+    if(P>=N || S[P]!=')') die("seed-min for parenthesised source needs a closing ) before {");
+    P++; skip();
+  }
   if(P>=N || S[P]!='{')
     die("seed-min for expected { after list/string source or numeric range");
   int ty=*kind==TY_STR?TY_STR:TY_NUM, vi=findv(name);
