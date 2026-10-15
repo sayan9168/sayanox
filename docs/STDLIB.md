@@ -146,3 +146,14 @@ returns the input unchanged), `t_hash` is a small `h * 31 + c` fold, and
   `last_char` in the fixture does instead of `text[len(text) - 1]`.
 * No inline list literal as a call argument and no postfix indexing of a call
   result (`la_take(xs, 2)[1]`) in tests: bind to a `hold` first.
+
+## Scope confirmation (2026-10-15)
+
+No new standard-library module or nested JSON reader was added in this PR.
+`json_util` remains text building plus limited flat-object extraction, not a
+validating JSON parser. It does not promise nested values, exponent parsing,
+Unicode scalar validation or arbitrary escaped-key lookup. Existing module
+parity tests run in the bootstrap gates; no crypto implementation is claimed.
+HTTP/crawler integration tests are explicitly optional (`make test-network`):
+they use a Python local test server and curl and are not bootstrap dependencies.
+The optional HTTP builtin's implementation is not a pure-.sa HTTP/TLS stack.

@@ -1,0 +1,19 @@
+$ ASAN_OPTIONS=detect_leaks=0 borrow-asan (address,undefined)
+6
+keeper
+keeper
+keeper!?
+keeper
+keeper
+keeper
+other
+keeper
+a
+b
+b!
+keeper
+keeper
+keeper+
+7
+$ ASAN_OPTIONS=detect_leaks=0 registry-asan (address,undefined)
+registry-ok

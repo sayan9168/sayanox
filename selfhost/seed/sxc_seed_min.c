@@ -280,8 +280,12 @@ static int hold_annotation(void){
   if(!strcmp(name,"num")) ty=TY_NUM;
   else if(!strcmp(name,"str")) ty=TY_STR;
   else if(!strcmp(name,"list")) ty=TY_LIST;
+  if(ty<0){
+    char msg[512];
+    snprintf(msg,sizeof msg,"unknown hold type '%s': seed-min supports num, str, list; struct-typed hold is not implemented",name);
+    die(msg);
+  }
   free(name);
-  if(ty<0) die("unknown hold type: seed-min supports num, str, list");
   return ty;
 }
 /* Register a name declared inside a make body. Struct literals carry their
@@ -1429,6 +1433,39 @@ static void stmt(void){
   unknown_stmt();
 }
 
+/* Borrow read-only string parameters. A writable parameter still gets its
+ * own entry copy: assignment can free it, so sharing that buffer with either
+ * the caller or another argument would be a use-after-free. This deliberately
+ * conservative lexical check recognizes hold/plain assignment, annotations,
+ * and for binders at any depth. Comments and quoted strings are not code.
+ * It is NOT a collector: locals/returns/temporaries retain the old lifetime.
+ * Keep this in sync with any new string-binding syntax in stmt/for_header. */
+static int parameter_may_write(const char *p, const char *end, const char *name){
+  size_t n=strlen(name);
+  while(p<end && *p){
+    rf_space(&p);
+    if(p>=end || !*p) break;
+    if(*p=='"'){
+      p++;
+      while(p<end && *p && *p!='"'){
+        if(*p=='\\' && p+1<end) p++;
+        p++;
+      }
+      if(p<end && *p) p++;
+    } else if(isid0(*p)){
+      const char *start=p;
+      while(p<end && isid(*p)) p++;
+      if((size_t)(p-start)==n && !memcmp(start,name,n)){
+        const char *q=p; rf_space(&q);
+        if(*q=='=' || *q==':' ||
+           (strchr("+-*/%",*q) && *q && q[1]=='=') ||
+           (!strncmp(q,"in",2) && !isid(q[2]))) return 1;
+      }
+    } else p++;
+  }
+  return 0;
+}
+
 static void emit_one_fn(void){
   Fn f=function_header();
   /* A parameter of a legacy untyped make may not silently take over the slot
@@ -1443,6 +1480,8 @@ static void emit_one_fn(void){
   if(!f.np) printf("void");
   for(int i=0;i<f.np;i++) printf("%s%s%s",i?", ":"",ctype(f.pt[i]),f.params[i]);
   printf("){\n");
+  const char *flow_at=S+P;
+  int returns=rf_block(&flow_at,0);
   Env *env=f.annotated?enter_producer(f.ret):enter_scope();
   for(int i=0;i<f.np;i++){
     setv(f.params[i],f.pt[i]);
@@ -1450,12 +1489,11 @@ static void emit_one_fn(void){
       vdecl[findv(f.params[i])]=f.pt[i];
       /* String arguments are borrowed. Copy before a local reassignment can
        * free them; aliased arguments must not invalidate each other/caller. */
-      if(f.pt[i]==TY_STR) printf("  %s = sx_sb_from(%s);\n",f.params[i],f.params[i]);
+      if(f.pt[i]==TY_STR && parameter_may_write(S+P,flow_at,f.params[i]))
+        printf("  %s = sx_sb_from(%s);\n",f.params[i],f.params[i]);
     }
   }
   in_fn=1; function_ret=f.ret; skip();
-  const char *flow_at=S+P;
-  int returns=rf_block(&flow_at,0);
   eat("{");
   for(;;){
     skip(); if(P>=N) die("}"); if(S[P]=='}'){ P++; break; }
@@ -1605,37 +1643,44 @@ static void preamble(void){
   printf("static void %s_begin(int n){ %s_node *q=malloc(sizeof *q); if(!q) exit(1); q->list=malloc(sizeof *q->list); if(!q->list) exit(1); q->list->n=0; q->list->cap=n<4?4:n; q->list->d=malloc(sizeof(double)*(size_t)q->list->cap); if(!q->list->d) exit(1); q->prev=%s_top; %s_top=q; }\n",list_seq_prefix,list_seq_prefix,list_seq_prefix,list_seq_prefix);
   printf("static void %s_add(double v){ %s_top->list->d[%s_top->list->n++]=v; }\n",list_seq_prefix,list_seq_prefix,list_seq_prefix);
   printf("static sx_list *%s_end(void){ %s_node *q=%s_top; sx_list *v=q->list; %s_top=q->prev; free(q); return v; }\n",list_seq_prefix,list_seq_prefix,list_seq_prefix,list_seq_prefix);
-  puts("/* ----- amortised string builder -------------------------------------\n * Strings returned by sx_cat/sx_chr/sx_sb_from carry a hidden sx_sb header\n * with current length and capacity, so repeated concat() to the same LHS is\n * O(1) amortised instead of O(N^2). String literals, argv[] strings and\n * read_file() results do NOT have a header -- sx_cat detects that and copies\n * them into a fresh builder on first use. ---------------------------- */");
+  puts("/* ----- registered string builder -------------------------------------\n * Strings returned by sx_cat/sx_chr/sx_sb_from carry a hidden sx_sb header\n * with current length and capacity. Each concat() result is\n * backed by fresh allocations, NOT in-place O(1) append. String literals and\n * foreign C strings do NOT have a header -- the registry detects that and copies\n * them into a fresh builder on first use. ---------------------------- */");
   puts("#include <stddef.h>");
-  puts("typedef struct { size_t magic; size_t len; size_t cap; char data[1]; } sx_sb;");
-  puts("#define SX_SB_MAGIC 0x53427566UL");
+  puts("typedef struct sx_sb { size_t len, cap; struct sx_sb *next; char data[1]; } sx_sb;");
+  puts("/* Exact allocation registry: never inspect bytes before a foreign pointer. */");
+  puts("static sx_sb **sx_sb_buckets; static size_t sx_sb_nbucket, sx_sb_count;");
+  puts("static size_t sx_sb_hash(const void *p){ uintptr_t v=(uintptr_t)p; return (size_t)((v>>3)^(v>>17)); }");
   puts("static sx_sb *sx_sb_hdr(const char *p){ return (sx_sb*)((char*)p - offsetof(sx_sb,data)); }");
   puts("static int sx_sb_is(const char *p){");
-  puts("  if(!p) return 0;");
-  puts("  if(((uintptr_t)p) & 7) return 0;");
-  puts("  sx_sb *h=sx_sb_hdr(p);");
-  puts("  if(h->magic!=SX_SB_MAGIC) return 0;");
-  puts("  if(h->len > (1u<<28)) return 0;");
-  puts("  if(h->cap < h->len || h->cap > (1u<<29)) return 0;");
-  puts("  return 1;");
+  puts("  if(!p || !sx_sb_nbucket) return 0;");
+  puts("  for(sx_sb *h=sx_sb_buckets[sx_sb_hash(p)&(sx_sb_nbucket-1)]; h; h=h->next) if(h->data==p) return 1;");
+  puts("  return 0; }");
+  puts("static void sx_sb_register(sx_sb *h){");
+  puts("  if(sx_sb_count>=sx_sb_nbucket){");
+  puts("    size_t n=sx_sb_nbucket?sx_sb_nbucket*2:1024;");
+  puts("    if(n<sx_sb_nbucket || n>SIZE_MAX/sizeof(sx_sb*)){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
+  puts("    sx_sb **b=calloc(n,sizeof *b); if(!b){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
+  puts("    for(size_t i=0;i<sx_sb_nbucket;i++){ sx_sb *p=sx_sb_buckets[i]; while(p){sx_sb *next=p->next; size_t j=sx_sb_hash(p->data)&(n-1); p->next=b[j]; b[j]=p; p=next;} }");
+  puts("    free(sx_sb_buckets); sx_sb_buckets=b; sx_sb_nbucket=n;");
+  puts("  }");
+  puts("  size_t i=sx_sb_hash(h->data)&(sx_sb_nbucket-1); h->next=sx_sb_buckets[i]; sx_sb_buckets[i]=h; sx_sb_count++;");
   puts("}");
   puts("static char *sx_sb_new(size_t cap){");
   puts("  if(cap<32) cap=32;");
+  puts("  if(cap>SIZE_MAX - offsetof(sx_sb,data) - 1){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
   puts("  sx_sb *h=(sx_sb*)malloc(offsetof(sx_sb,data)+cap+1); if(!h){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
-  puts("  h->magic=SX_SB_MAGIC; h->len=0; h->cap=cap; h->data[0]=0; return h->data; }");
+  puts("  h->len=0; h->cap=cap; h->data[0]=0; sx_sb_register(h); return h->data; }");
   puts("static char *sx_sb_from(const char *s){ size_t n=strlen(s?s:\"\");");
   puts("  size_t cap=n<32?32:n; char *r=sx_sb_new(cap); if(n)memcpy(r,s,n); r[n]=0; sx_sb_hdr(r)->len=n; return r; }");
-  puts("static void sx_sb_free(const char *p){ if(sx_sb_is(p)) free(sx_sb_hdr(p)); }");
+  puts("static void sx_sb_free(const char *p){");
+  puts("  if(!p || !sx_sb_nbucket) return;");
+  puts("  sx_sb **link=&sx_sb_buckets[sx_sb_hash(p)&(sx_sb_nbucket-1)];");
+  puts("  while(*link){ sx_sb *h=*link; if(h->data==p){*link=h->next; sx_sb_count--; free(h); return;} link=&h->next; }");
+  puts("}");
   puts("static char *sx_sb_app(const char *a,const char *b){");
   puts("  const char *aa=a?a:\"\"; const char *bb=b?b:\"\";");
   puts("  int ia=sx_sb_is(aa);");
   puts("  size_t la=ia?sx_sb_hdr(aa)->len:strlen(aa);");
   puts("  size_t lb=strlen(bb);");
-  puts("  /* snapshot b when b is a pointer INTO a's buffer (overlapping src/dst),");
-  puts("   * so the memcpy below cannot clobber b before we read it. */");
-  puts("  int overlap = (bb==aa) || (bb && bb>aa && bb<aa+la+1);");
-  puts("  char btmp[512]; char *bdup=0; const char *bs=bb;");
-  puts("  if(overlap){ if(lb+1<=sizeof(btmp)){memcpy(btmp,bb,lb);btmp[lb]=0;bs=btmp;} else{bdup=malloc(lb+1);memcpy(bdup,bb,lb);bdup[lb]=0;bs=bdup;} }");
   puts("  size_t need=la+lb;");
   puts("  /* IMPORTANT: sx_sb_app NEVER frees `a` or `b`. Old `a` is always freed");
   puts("   * by the assignment wrapper:  { char *_v = sx_cat(a,b); sx_sb_free(a); a=_v; }");
@@ -1643,11 +1688,10 @@ static void preamble(void){
   puts("   * eliminates all double-free / use-after-free hazards from aliased vars");
   puts("   * (the LHS may currently point at another variable like `q`, and freeing");
   puts("   * it here would invalidate q for later use). Starting from a's existing");
-  puts("   * cap when a is a builder keeps total allocations O(N log N) overall. */");
+  puts("   * cap preserves spare capacity, but each concat still copies its bytes. */");
   puts("  size_t cap=ia?sx_sb_hdr(aa)->cap:32; while(cap<need+1)cap*=2;");
   puts("  char *r=sx_sb_new(cap); sx_sb *h=sx_sb_hdr(r);");
-  puts("  if(la)memcpy(r,aa,la); memcpy(r+la,bs,lb); r[need]=0; h->len=need;");
-  puts("  free(bdup);");
+  puts("  if(la)memcpy(r,aa,la); memcpy(r+la,bb,lb); r[need]=0; h->len=need;");
   puts("  return r;");
   puts("}");
   puts("static char *sx_cat(const char *a,const char *b){ return sx_sb_app((char*)a,b); }");

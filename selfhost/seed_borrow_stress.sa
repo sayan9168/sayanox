@@ -1,0 +1,25 @@
+// 30,000 reads of a 16 KiB string must not copy it on every function entry.
+// This is a no-GC allocation-pressure regression, not a bounded-heap claim.
+make read_at(source: str, index: num) -> num {
+  give len(source) + sx_index(source, index)
+}
+hold text = "a"
+hold i = 0
+while i < 14 {
+  text = concat(text, text)
+  i = i + 1
+}
+hold live = [3, 7]
+hold total = 0
+hold i = 0
+while i < 30000 {
+  hold index = i % 16384
+  hold value = read_at(text, index)
+  total = total + value
+  i = i + 1
+}
+show total / 30000
+show len(text)
+show text[16383]
+show live[0]
+show live[1]

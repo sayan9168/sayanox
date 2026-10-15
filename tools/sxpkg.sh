@@ -57,6 +57,10 @@ download() {
   # transfer never leaves a truncated package where a good one should be.
   # Bounded: a host that accepts the connection and then goes quiet must not
   # hang a build or a gate. Failures are already non-fatal at every call site.
+  case "$url" in
+    file://*) cp "${url#file://}" "$part" || { rm -f "$part"; return 1; }; mv "$part" "$dest"; return $? ;;
+    /*|./*) cp "$url" "$part" || { rm -f "$part"; return 1; }; mv "$part" "$dest"; return $? ;;
+  esac
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$part" || { rm -f "$part"; return 1; }
   elif command -v wget >/dev/null 2>&1; then

@@ -50,8 +50,8 @@ of a safe implementation:
    claim that no backend has them): `hold p: Pt = Pt { 1, 2 }`,
    `hold q: Pt = p` and even `hold b: Box__n = Box<num> { 7 }` compile and
    run, and `hold p: Pt = 5` is refused with `'p' is declared Pt but the
-   value is a number`. seed-min (`unknown hold type: seed-min supports num,
-   str, list`) and native (`hold 'p': unknown or unsupported type 'Pt'`)
+   value is a number`. seed-min (`unknown hold type 'Pt': seed-min supports num, str, list;
+   struct-typed hold is not implemented`) and native (`hold 'p': unknown or unsupported type 'Pt'`)
    refuse the same syntax by name, because their `hold` types are the
    scalars. All of this is pinned by `make test-type-refusals`. Calls and
    returns still cannot be checked against a struct type on any backend.
@@ -291,3 +291,23 @@ nonstruct selectors and parameter-kind mismatches have seed/gen2 regressions.
 Inline-only string runtime dependencies have their own regression. Arbitrary
 literal-headed/grouped expressions outside these checked call paths, generic
 structs, full expression type inference and definite assignment remain open.
+
+## 2026-10-15 boundary and prerequisites
+
+No list-valued struct field layout or nested generic instantiation was added.
+Before enabling `for v in p.xs`, all frontends need a distinct list field kind
+(not a double), C typedef/literal/access lowering, and consistent list identity
+through growth/rebinding. Native GC descriptors must trace the list pointer
+and forwarding representation. Until then, keep the list in its own hold;
+string-valued fields already work. `test-seed-for-fields` is not a list-field
+support test. gen2 may emit a broader for-source `#error`, not a named field
+error; do not claim uniform diagnostic wording or full struct type safety.
+
+`Box<Box<num>>` remains refused on all three backends. Safe support would need
+recursive specialization identity, dependency-ordered layouts, cycle checking,
+and correct native tracing for each pointer field. Merely accepting nested
+angle brackets or mangling a nested name would not meet those requirements.
+
+`test-type-refusals` explicitly builds native and checks seed's rejected type
+name (`Pt`). It retains gen2's valid struct-hold program and mismatch test.
+Seed/native support was not substituted with untyped acceptance.

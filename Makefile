@@ -1051,13 +1051,12 @@ test-native-mem: $(NATIVE_BIN)
 # measured, so the claims below are pinned here instead of asserted in prose.
 #
 #   sxc_seed_min -- THE BOOTSTRAP SEED (selfhost/seed/sxc_seed_min.c)
-#     No collector at all: no object table, no refcounts, no gc(). What it has
-#     instead is builder-backed strings plus a freeing assignment wrapper:
-#       * sx_cat/sx_chr/sx_sb_from results carry a hidden sx_sb header
-#         {magic,len,cap,data[]} (SX_SB_MAGIC), so repeated concat() onto the
-#         same LHS grows in place -- O(1) amortised, not O(N^2). String
-#         literals, argv strings and read_file() results have no header and are
-#         copied into a fresh builder on first use.
+#     No collector/refcounts/gc(). An exact allocation registry (2026-10-15)
+#     replaces the unsafe magic-header probe. Builder-backed strings carry
+#     {len,cap,next,data[]} and freeing assignments remove old builders from
+#     that registry. Concatenation copies into a fresh allocation; it is not
+#     an in-place or amortised-O(1) append. See test-seed-borrow for safe
+#     borrowed read-only arguments and registry resize/reuse checks.
 #       * a string assignment is emitted as
 #           { char *_v = sx_cat(a,b); sx_sb_free(a); a = _v; }
 #         so the RHS is evaluated into a temp first and the OLD LHS is freed
@@ -1119,7 +1118,7 @@ test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
 	  $(CC) -O2 -I selfhost/seed -o $(TESTS)/sgc_$${f}_fs $(TESTS)/sgc_$${f}_fs.c -lm; \
 	done
 	# ---- seed-min: no collector, but a builder and a freeing assignment ----
-	grep -q -F 'SX_SB_MAGIC' $(TESTS)/sgc_grow_ms.c
+	grep -q -F 'sx_sb_register(h)' $(TESTS)/sgc_grow_ms.c
 	grep -q -F 'sx_sb_free(' $(TESTS)/sgc_grow_ms.c
 	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_churn_ms',200000)
 	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_grow_ms',2003\n97\n120)
@@ -1622,21 +1621,28 @@ test-native-ir-log: $(NATIVE_BIN)
 # path without a socket.
 #
 # Every remote URL here is a `.invalid` host (RFC 2606: guaranteed not to
-# resolve), so the opt-in leg fails in the resolver within milliseconds and the
+# resolve), so the opt-in leg fails in the test stub (no network) within milliseconds and the
 # target does not depend on connectivity in either direction.
 # ---------------------------------------------------------------------------
 
 # test-native-ir-portable: the SX_EMIT_LOG instruction list translates to the
-# portable IR listing (tools/emit_to_ir.py, docs/NATIVE_IR.md) losslessly and
+# portable IR listing (tools/emit_to_ir.c, docs/NATIVE_IR.md) losslessly and
 # deterministically. The IR is an analysis format -- this target pins the
 # translation, and deliberately does NOT claim a second backend or ISA.
-test-native-ir-portable: $(NATIVE_BIN)
+tools/emit_to_ir: tools/emit_to_ir.c
+	$(CC) -std=c99 -O2 -Wall -Wextra -o $@ $<
+
+.PHONY: test-emit-to-ir
+test-emit-to-ir: tools/emit_to_ir
+	sh tools/test-emit-to-ir.sh ./tools/emit_to_ir $(TESTS)/emit-tool
+
+test-native-ir-portable: $(NATIVE_BIN) tools/emit_to_ir test-emit-to-ir
 	@mkdir -p $(TESTS)
 	./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irp_nat >/dev/null
 	$(call assert-out,./$(TESTS)/irp_nat,42\nir-log\n6\n3\n42\nir-log-done)
 	SX_EMIT_LOG=$(TESTS)/irp.log ./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irp_logged
-	python3 tools/emit_to_ir.py $(TESTS)/irp.log $(TESTS)/irp.ir
-	python3 tools/emit_to_ir.py $(TESTS)/irp.log $(TESTS)/irp_again.ir
+	./tools/emit_to_ir $(TESTS)/irp.log $(TESTS)/irp.ir
+	./tools/emit_to_ir $(TESTS)/irp.log $(TESTS)/irp_again.ir
 	cmp $(TESTS)/irp.ir $(TESTS)/irp_again.ir
 	@# lossless: one IR instruction per logged instruction, none dropped
 	@test $$(grep -cE '^I[0-9]+ ' $(TESTS)/irp.ir) -eq $$(grep -cE '^[0-9a-f]{6}  ' $(TESTS)/irp.log) \
@@ -1653,8 +1659,7 @@ native-test: test-native-ir-portable
 
 .PHONY: test-sxpkg-online-optin
 test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
-	command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || { echo "[SKIP] test-sxpkg-online-optin: needs curl or wget"; exit 0; }
-	rm -rf $(TESTS)/sxpkg-optin && mkdir -p $(TESTS)/sxpkg-optin/p
+	rm -rf $(TESTS)/sxpkg-optin && mkdir -p $(TESTS)/sxpkg-optin/p $(TESTS)/sxpkg-optin/mock
 	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
 	 cd $$P/p && sh $$W init >/dev/null && sh $$W add strings 0.1.0 >/dev/null
 	# ---- 1. sync refuses without an opt-in, and names the way to opt in ----
@@ -1668,21 +1673,26 @@ test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 	 grep -q -F 'install-local' $$P/no.err \
 	   || { echo "[FAIL] the refusal does not offer the offline commands"; exit 1; }
 	echo "[OK] sxpkg sync: refused with no opt-in, naming SAYANOX_ONLINE=1, --online and the offline commands"
-	# ---- 2. SAYANOX_ONLINE=1 lifts it: the transfer is attempted, DNS fails, sync falls back to the local seed ----
+	# A deterministic failing transport proves opt-in without DNS/network/curl.
+	@printf '#!/bin/sh\necho "test transfer attempted" >&2\nexit 1\n' > $(TESTS)/sxpkg-optin/mock/curl
+	@chmod +x $(TESTS)/sxpkg-optin/mock/curl
+	# ---- 2. SAYANOX_ONLINE=1 lifts it; failed transport falls back to local seed ----
 	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 (cd $$P/p && SAYANOX_ONLINE=1 SAYANOX_REGISTRY=https://registry.invalid/r sh $$W sync) >$$P/yes.out 2>$$P/yes.err \
+	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_ONLINE=1 SAYANOX_REGISTRY=https://registry.invalid/r sh $$W sync) >$$P/yes.out 2>$$P/yes.err \
 	   || { echo "[FAIL] an opted-in sync exited nonzero:"; cat $$P/yes.err; exit 1; }; \
 	 if grep -q -F 'refusing to use the network' $$P/yes.out $$P/yes.err; then \
 	   echo "[FAIL] SAYANOX_ONLINE=1 did not lift the refusal"; exit 1; fi; \
 	 grep -q -F 'online sync failed; using local seed' $$P/yes.out \
 	   || { echo "[FAIL] the opted-in sync never reached the transfer step:"; cat $$P/yes.out; exit 1; }
+	@grep -q -F "test transfer attempted" $(TESTS)/sxpkg-optin/yes.err
 	# ---- 3. the --online flag form is the same permission ----
 	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W --online sync) >$$P/flag.out 2>$$P/flag.err \
+	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_REGISTRY=https://registry.invalid/r sh $$W --online sync) >$$P/flag.out 2>$$P/flag.err \
 	   || { echo "[FAIL] 'sxpkg --online sync' exited nonzero:"; cat $$P/flag.err; exit 1; }; \
 	 grep -q -F 'online sync failed; using local seed' $$P/flag.out \
 	   || { echo "[FAIL] 'sxpkg --online sync' did not attempt the transfer:"; cat $$P/flag.out; exit 1; }
-	echo "[OK] sxpkg opt-in: SAYANOX_ONLINE=1 and 'sxpkg --online <cmd>' both permit the transfer, which then fails in the resolver and falls back to the offline seed"
+	@grep -q -F "test transfer attempted" $(TESTS)/sxpkg-optin/flag.err
+	echo "[OK] sxpkg opt-in: SAYANOX_ONLINE=1 and 'sxpkg --online <cmd>' both permit the transfer, which then fails in the test stub (no network) and falls back to the offline seed"
 	# ---- 4. install with every locked package already local needs no opt-in ----
 	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
 	 rm -rf $$P/p/.sayanox/registry/strings && cp -r registry/strings $$P/p/.sayanox/registry/strings && \
@@ -1720,14 +1730,13 @@ test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 
 # ---------------------------------------------------------------------------
 # test-sxpkg-online-local: the online install path, tested against a LOCAL
-# registry through file:// URLs (no network). It is NOT part of the four
-# bootstrap gates: it needs curl and the shell wrapper, and it uses cp/rm.
+# registry through file:// URLs (no network or transfer runtime). Part of
+# bootstrap gates; local copies use POSIX cp, not curl/wget.
 #   good remote     -> installed and verified, rc 0
 #   tampered remote -> rejected: verify fails, the download is removed, rc 1
 #   missing remote  -> no partial .part file is left, rc 1
 # ---------------------------------------------------------------------------
 test-sxpkg-online-local: sxpkg tools/sxpkg.sh
-	@command -v curl >/dev/null 2>&1 || { echo "[SKIP] test-sxpkg-online-local: needs curl"; exit 0; }
 	@rm -rf $(TESTS)/sxpkg-online && mkdir -p $(TESTS)/sxpkg-online
 	@cp -r registry $(TESTS)/sxpkg-online/good
 	@cp -r $(TESTS)/sxpkg-online/good $(TESTS)/sxpkg-online/bad
@@ -2139,6 +2148,10 @@ test-struct-logic: $(GEN2) $(NATIVE_BIN)
 	@./$(GEN2) $(TESTS)/sl_bad.sa $(TESTS)/sl_bad_g2.c >/dev/null 2>&1 || true
 	@grep -q '#error' $(TESTS)/sl_bad_g2.c || { echo "FAILED: a string operand in a struct field logic value must be refused by gen2"; exit 1; }
 	@echo "[OK] gen2 and native: and/or/not as struct field values (hand-computed output); a string operand is refused"
+
+# Optional network integration suite; never a bootstrap prerequisite.
+.PHONY: test-network
+test-network: test-http-get test-sayacrawl test-scrape
 
 # test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
 # the tests use a local HTTP server on 127.0.0.1.
@@ -2717,7 +2730,7 @@ test-gen2-index-mod: $(GEN2) $(SEED_MIN_BIN)
 # keep working there while seed-min and native refuse it BY NAME. Nothing
 # here may be silently miscompiled: before this target, `p: Pt` in a struct
 # body registered `Pt` as an extra field on all three backends.
-test-type-refusals: $(GEN2) $(SEED_MIN_BIN)
+test-type-refusals: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@mkdir -p $(TESTS)
 	@printf 'struct Box<T> {\n  v\n}\nhold b = Box<Box<num>> { 7 }\nshow 1\n' > $(TESTS)/ttr_nested.sa
 	@printf 'struct Pt {\n  x\n  y\n}\nstruct Wrap {\n  p: Pt\n  n\n}\nshow 1\n' > $(TESTS)/ttr_fieldann.sa
@@ -2747,7 +2760,7 @@ test-type-refusals: $(GEN2) $(SEED_MIN_BIN)
 	@./$(GEN2) $(TESTS)/ttr_holdann_bad.sa $(TESTS)/ttr_holdann_bad.c > $(TESTS)/ttr_holdann_bad.msg 2>&1; \
 	  grep -q 'is declared Pt but the value is a number' $(TESTS)/ttr_holdann_bad.c || { echo "[FAIL] gen2 did not type-check a struct-typed hold"; exit 1; }
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_holdann.sa > $(TESTS)/ttr_holdann_seed.c 2> $(TESTS)/ttr_holdann_seed.msg; then echo "[FAIL] seed-min accepted a struct-typed hold annotation"; exit 1; fi
-	@grep -q "unknown hold type" $(TESTS)/ttr_holdann_seed.msg || { echo "[FAIL] seed-min struct-hold refusal is unclear"; cat $(TESTS)/ttr_holdann_seed.msg; exit 1; }
+	@grep -q "unknown hold type 'Pt'" $(TESTS)/ttr_holdann_seed.msg || { echo "[FAIL] seed-min struct-hold refusal is unclear"; cat $(TESTS)/ttr_holdann_seed.msg; exit 1; }
 	@if ./$(NATIVE_BIN) $(TESTS)/ttr_holdann.sa $(TESTS)/ttr_holdann_native > $(TESTS)/ttr_holdann_native.msg 2>&1; then echo "[FAIL] native accepted a struct-typed hold annotation"; exit 1; fi
 	@grep -q "unknown or unsupported type 'Pt'" $(TESTS)/ttr_holdann_native.msg || { echo "[FAIL] native struct-hold refusal is unclear"; cat $(TESTS)/ttr_holdann_native.msg; exit 1; }
 	@echo '[OK] struct-typed hold: supported+checked on gen2, refused by name on seed-min and native'
@@ -2984,7 +2997,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-http-get test-sayacrawl test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -3278,17 +3291,17 @@ test: true-selfhost
 # `make seed-bin` (it is a .PHONY target, so it always rebuilds from source).
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
-	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C)
+	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) tools/emit_to_ir
 
 # ---------------------------------------------------------------------------
-# doctor: check that the minimal tool set is present. Nothing else is needed to
-# bootstrap Sayanox from this repository.
+# doctor: check core tools. Expanded feature gates also use POSIX utilities;
+# see DEPENDENCY.md. This is not an exhaustive minimal-PATH execution audit.
 #
 #   required : make, a C99 compiler (cc/clang/gcc), a POSIX shell
 #   optional : base64 + gzip -- only for the offline compiler_min.sa fallback
 #
-# Everything else the Makefile uses is provided by the shell itself (printf,
-# test, command substitution, parameter expansion).
+# Shell builtins provide printf/test/substitutions. Other feature recipes
+# also use awk, sed, cp, rm and other POSIX utilities, never interpreter runtimes.
 # ---------------------------------------------------------------------------
 doctor:
 	@fail=0; \
@@ -3325,10 +3338,10 @@ doctor:
 	echo "--------------------------------"; \
 	printf 'python          '; command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 \
 	  && echo "present, but NOT used anywhere on the bootstrap path" \
-	  || echo "absent - fine, nothing needs it"; \
+	  || echo "absent - fine, not required by bootstrap"; \
 	printf 'node/ruby       '; command -v node >/dev/null 2>&1 || command -v ruby >/dev/null 2>&1 \
 	  && echo "present, but NOT used anywhere on the bootstrap path" \
-	  || echo "absent - fine, nothing needs it"; \
+	  || echo "absent - fine, not required by bootstrap"; \
 	echo "--------------------------------"; \
 	if [ $$fail -eq 0 ]; then echo "DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)"; \
 	else echo "DOCTOR-FAIL: a required tool is missing"; exit 1; fi
@@ -4075,3 +4088,28 @@ test-list-postfix: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@echo '[OK] inline nested numeric/string fields, grouped list postfix call arguments, indexed generic returns, expression-kind generic inference: seed/gen2/native parity'
 test-typed-sig: test-list-postfix
 native-test: test-list-postfix
+
+# Seed-only lexical edge cases plus shared numeric string-read stress.
+.PHONY: test-seed-borrow
+test-seed-borrow: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_borrow_test.sa > $(TESTS)/borrow.c
+	$(CC) -O2 -o $(TESTS)/borrow $(TESTS)/borrow.c
+	$(call assert-out,./$(TESTS)/borrow,6\nkeeper\nkeeper\nkeeper!?\nkeeper\nkeeper\nkeeper\nother\nkeeper\na\nb\nb!\nkeeper\nkeeper\nkeeper+\n7)
+	@# Reads stay borrowed; potentially writable arguments keep their entry copy.
+	@if grep -q -F 'source = sx_sb_from(source)' $(TESTS)/borrow.c; then echo '[FAIL] copied read-only source'; exit 1; fi
+	@grep -q -F 'a = sx_sb_from(a)' $(TESTS)/borrow.c
+	@grep -q -F 's = sx_sb_from(s)' $(TESTS)/borrow.c
+	./$(SEED_MIN_BIN) selfhost/seed_borrow_stress.sa > $(TESTS)/borrow-stress.c
+	$(CC) -O2 -o $(TESTS)/borrow-stress $(TESTS)/borrow-stress.c
+	$(call assert-out,./$(TESTS)/borrow-stress,16481\n16384\n97\n3\n7)
+	./$(GEN2) selfhost/seed_borrow_stress.sa $(TESTS)/borrow-stress-g2.c
+	$(CC) -O2 -o $(TESTS)/borrow-stress-g2 $(TESTS)/borrow-stress-g2.c
+	$(call assert-out,./$(TESTS)/borrow-stress-g2,16481\n16384\n97\n3\n7)
+	./$(NATIVE_BIN) selfhost/seed_borrow_stress.sa $(TESTS)/borrow-stress-native
+	$(call assert-out,./$(TESTS)/borrow-stress-native,16481\n16384\n97\n3\n7)
+	$(CC) -O2 -o $(TESTS)/builder-registry selfhost/seed_builder_registry_test.c
+	$(call assert-out,./$(TESTS)/builder-registry,registry-ok)
+	@echo '[OK] seed borrowing: read-only parameters, writable aliases/branches/binders/returns; 30000 reads of 16 KiB with live list (seed/gen2/native)'
+test-stage2: test-seed-borrow
+native-test: test-seed-borrow

@@ -1,32 +1,75 @@
 # Status
 
-Last updated: 2026-10-13
+Last updated: **2026-10-15**
 
-## Entry
+## Current verification
 
-```bash
-make doctor             # -> DOCTOR-OK                log: docs/logs/ir-log-doctor.log
-make true-selfhost      # -> TRUE-SELFHOST-MIN-OK     log: docs/logs/ir-log-true-selfhost.log
-make gen3               # -> GEN3-OK (gen3 == gen4)   log: docs/logs/ir-log-gen3.log
-make native-test        # -> NATIVE-TEST-OK           log: docs/logs/ir-log-native-test.log
+```sh
+make doctor         # DOCTOR-OK
+make true-selfhost   # TRUE-SELFHOST-MIN-OK
+make gen3           # GEN3-OK; gen3.c == gen4.c byte-identical
+make native-test    # NATIVE-TEST-OK (x86-64 Linux)
 ```
 
-The newest four gate logs are `docs/logs/nine-items-*.log` (2026-10-13:
-`make doctor` -> DOCTOR-OK; `make true-selfhost` -> TRUE-SELFHOST-MIN-OK with
-167 `[OK]` lines; `make gen3` -> GEN3-OK, gen3 == gen4 byte-identical;
-`make native-test` -> NATIVE-TEST-OK with 169 `[OK]` lines); the `ir-log-*`
-files beside them are the earlier 2026-10-13 run, the `make-*` files the
-2026-10-12 run and `four-items-*` the first 2026-10-13 one. All were run on this x86-64 Linux workspace, with the native
-compiler already built. Feature
-claims below are bounded by the named tests, not a claim of full language
-parity. Historical measurements are explicitly dated and have not all been
-repeated in this pass. See the [current roadmap](#roadmap-done-vs-still-missing-per-backend-synced-2026-10-11).
+Final output: `docs/logs/ten-final-*.log`. Dependency and memory increments
+were separately gated (`ten-deps-*`, `ten-memory-*`). See
+[`docs/logs/README.md`](logs/README.md) for scope and development failures.
+The four targets were also run with Python/Node/Ruby/Perl and real curl/wget
+blocked; package opt-in tests use an explicit failing transport stub.
+Bootstrap requires make, a C99-capable toolchain, POSIX shell/utilities and
+no network. See [DEPENDENCY.md](../DEPENDENCY.md): doctor checks core tools,
+not every utility used by the expanded test suite.
 
-GitHub Actions (`.github/workflows/ci.yml`) runs exactly these four targets —
-`doctor`, `true-selfhost`, `gen3`, `native-test` — on a clean `ubuntu-latest`
-checkout with no package install and no network: the runner's stock toolchain
-is the minimal tool set `doctor` verifies.
+## Current roadmap — seed | gen2 | native | still missing
 
+This table supersedes the dated historical roadmaps below. “Seed” means the
+maintained seed-min bootstrap root, not the older full seed. Existing support
+is not presented as new work in this PR.
+
+| Area | seed-min | gen2 | native | Still missing / tested boundary |
+|---|---|---|---|---|
+| 1. Full-language self-host / memory | Read-only string parameters now borrowed; writable ones still copied. Safe builder registry replaces pre-pointer magic probing. | Fixed point unchanged; gen1-min's self-compile emits byte-identical gen2 C before/after optimization. | Not the compiler self-host path. | **No full-language self-host claim.** Compiler stays in its subset. Measured gen1-min → gen2 peak: 3,823,428 → 704,184 KiB (~82% lower); this is not a measurement of every stage's peak. See FULL_LANGUAGE_SELFHOST.md. |
+| 2. List-valued struct fields / `for v in p.xs` | List fields refused; string fields and chains supported. | List-field iteration produces a language `#error`; no list-field layout support claimed. | List fields refused by struct/field name. | No implementation added. Needs a distinct field kind, C layout/type propagation, alias-preserving list storage and native GC tracing before iteration is enabled. `test-seed-for-fields` covers existing string behavior. |
+| 3. Seed GC | **Still no collector.** Exact builder registry + explicit release on reassignment; new borrow/registry stress and sanitizer evidence. | Existing conservative mark/sweep. | Existing mark/sweep. | Registry is ownership bookkeeping, not tracing/RC. Unreleased locals, return values, temporaries and lists can still grow. `test-seed-gc`, `test-seed-borrow`, `test-native-mem`; GC.md. |
+| 4. Struct-typed hold | Explicit refusal now includes the rejected name (`Pt`). | Existing accepted/type-checked `hold p: Pt`; mismatch test retained. | Existing named refusal. | No seed/native struct-annotation implementation claimed. `test-type-refusals` now explicitly builds native and checks seed's type name. |
+| 5. Nested generic structs | `Box<Box<num>>` refused. | Refused through emitted `#error`. | Refused. | No recursive specialization/layout/GC worklist added. Supported simple `Box<num>`/`Box<str>` remain gated by `test-generic-structs`; nested refusal by `test-type-refusals`. |
+| 6. Stdlib | Existing portable helpers and flat JSON text utilities. | Same tested modules. | Same tested portable subset. | No new module or nested JSON parser in this PR. No crypto. HTTP/crawler integration remains optional and outside bootstrap (`test-network`); STDLIB.md. |
+| 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/metadata/checksum logic; thin shell transfers. Local/file copies now need no curl/wget. | No native compilation claim for sxpkg. | Online stays opt-in; tests prove refusal and mocked transfer/fallback without DNS. Existing `sum=` is a non-cryptographic checksum, not signatures/provenance. `test-sxpkg-online-local`, `test-sxpkg-online-optin`. |
+| 8. LSP workspace scan | Not a seed-compiled tool claim. | Existing `.sa` server, four open buffers, tested by `test-lsp`/`test-lsp-robust`. | Not a native-compiled tool claim. | **No folder scan/index added.** workspace/symbol and rename cover open documents only; signatureHelp is same-document/same-line; codeAction offers formatting. Not IDE-complete. |
+| 9. Second target / IR | Host C path unchanged. | Host C path unchanged. | C99 streaming IR-listing tool replaces Python in native-test. | **No executable second backend.** Register renaming preserves x86 ABI/layout assumptions. `test-emit-to-ir`, `test-native-ir-portable`; NATIVE_IR.md. |
+| 10. Namespacing / aliases | Textual `use` splicing only. | Textual `use` splicing only. | Textual `use` splicing only. | No namespacing/aliases implemented; no permanent design commitment implied. Keep explicit name prefixes. Requires module identity and qualified symbol resolution, not just renaming paths. |
+
+### What changed in this PR
+
+* Replaced the Python IR translator with checked streaming C99 and regression
+  tests (unknown lines/instructions, token boundaries, long lines, EOF/errors).
+* Removed Python-backed HTTP/crawler tests from the bootstrap aggregate,
+  retaining them as explicit optional tests. Corrected dependency claims.
+* Made local package transfers truly local and made opt-in tests deterministic
+  with a checked failing transport stub rather than requests to `.invalid`.
+* Reduced seed-generated compiler memory by borrowing read-only parameters.
+  ASan exposed a pre-existing read-before-literal in builder detection; an
+  exact allocation registry fixes it. No collector or general leak fix claimed.
+* Strengthened named struct-hold refusal and its prerequisite/test.
+
+The shared stress fixture performs 30,000 reads of a 16 KiB string while
+retaining a list: seed/gen2/native match exact output. Seed peak RSS in the
+optional Linux measurement fell from 482,992 to 1,468 KiB. The old seed program
+failed a 128 MiB address-space cap; the new one passed. The lexical alias fixture
+is seed-only because it exercises known gen2 parser limitations. ASan/UBSan
+passed the new alias and allocation-registry tests **with leak detection off**.
+Measurements and exact scope: `logs/ten-memory.log`, `logs/ten-borrow-asan.log`.
+
+License remains **Sayanox License v1.1**. No Linguist change, language-statistics
+mapping, second backend, workspace scan, or full-language claim is included.
+
+---
+
+## Historical status and measurements
+
+The remainder records earlier dated increments. Historical dependency counts,
+append-complexity claims and memory ceilings are superseded by the current
+roadmap, DEPENDENCY.md and GC.md above; old log paths identify their own runs.
 
 ## The nine-item increment (2026-10-13, second pass)
 

@@ -38,3 +38,6 @@ tools/sayanox_lsp.c
 # python bytecode
 __pycache__/
 *.pyc
+
+# C99 analysis tool
+tools/emit_to_ir
