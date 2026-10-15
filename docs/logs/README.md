@@ -1,4 +1,45 @@
-# Verification logs — latest run 2026-10-13 (`gs-*`)
+# Verification logs — current run 2026-10-15 (`ten-final-*`)
+
+The four `ten-final-*.log` files are the final command output for this PR:
+`make doctor`, `make true-selfhost`, `make gen3`, `make native-test` (in order).
+Each exited 0; gen3/gen4 are byte-identical. No output was replaced with a
+fabricated PASS. `ten-deps-*` and `ten-memory-*` record successful complete
+four-gate runs after the dependency and memory increments separately.
+
+All three increments used PATH guard scripts for python/python3/node/ruby/
+perl/curl/wget and checked that no blocked invocation was recorded. Package
+opt-in tests intentionally supply a checked failing shell stub named curl;
+no real network client is used. CI now installs the same kind of guards.
+This is not an exhaustive minimal-PATH audit of POSIX utilities.
+
+Focused evidence:
+
+* `ten-memory.log`: Linux wait4/ru_maxrss measurements (KiB) before borrowing,
+  intermediate borrowing, and final borrowing + safe registry; byte-identical
+  gen2 C; old/new read-only stress and 128 MiB address-space cap experiment.
+  This measures **gen1-min compiling the compiler into gen2 C**, not every
+  stage's maximum. Measurement helper was an optional C scratch program.
+* `ten-borrow-asan.log`: actual output of alias and 4096-builder registry
+  probes built with address/undefined sanitizers, leak detection disabled.
+  Neither a collector nor leak freedom is claimed.
+* `ten-borrow-types.log`: targeted borrow/stress/type-refusal run before the
+  registry fix; the final aggregates re-run those tests with the fixed runtime.
+
+Development failures, not counted as passes: the first blocked-runtime run
+found Python in the HTTP tests; they are now explicitly optional. The first
+ASan probe found an old read-before-literal in sx_sb_is, replaced with an exact
+allocation registry. Its old SX_SB_MAGIC source assertion then failed and was
+updated to check the new registry; the memory caps were retained and passed.
+The lexical borrow fixture exposed existing gen2 parsing limitations and is
+therefore explicitly seed-only. The portable stress fixture originally put
+modulo directly in a call argument, exposing another gen2 lowering gap; it now
+uses a named numeric temporary, with exact seed/gen2/native expectations.
+
+No compiler_min.sa edit was made, so no recovery-bundle regeneration was needed.
+
+---
+
+# Historical verification logs — latest run 2026-10-13 (`gs-*`)
 
 Final commands, in order, each exited 0:
 

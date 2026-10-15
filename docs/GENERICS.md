@@ -247,3 +247,12 @@ type parameter after an indexed list literal. Unresolved expressions still
 use the existing classifier; this does not claim universal inference. Generic
 structs (concrete struct specializations) landed in a later increment — see
 [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md).
+
+## Current nested-layout boundary (2026-10-15)
+
+Simple generic structs (`Box<num>`, `Box<str>`) are implemented; nested generic
+structs (`Box<Box<num>>`), struct-valued type arguments and list-valued fields
+remain unsupported. `test-type-refusals` pins nested refusal on seed-min/gen2/
+native. This is distinct from nested generic **function calls**, which have
+existing specialization tests. No recursive struct-layout/GC worklist was
+added in this PR; see TYPES_ROADMAP.md for what safe support requires.

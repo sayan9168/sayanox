@@ -20,15 +20,15 @@ source .sa
 | make / call | yes |
 | lists / push / len | yes |
 | strings + runtime concat | yes |
-| gc() mark-copy | yes (STW to-space) |
+| gc() mark/sweep | yes (non-moving chunked heap; see GC.md) |
 | use modules | yes |
 | write_file / read_file / run | yes |
 
-## Still on Stage-2 C path only
+## Not implemented here
 
-- Full concurrent pthread GC (see docs/GC.md)
-- Broadest struct/generic lowering
-- Compiler self-host of entire compiler.sa
+There is no full Stage-2 C host or concurrent pthread collector in this
+repository. Full-language self-host and a second machine-code target are not
+claimed; see FULL_LANGUAGE_SELFHOST.md and GC.md.
 
 ## The instruction list (`SX_EMIT_LOG`, 2026-10-13)
 
@@ -117,9 +117,9 @@ immediately.
   `sub_rsp_imm32_slot` opens and `leave_ret` closes) and the collector's block
   layout (`BH_HDR`, the `BK_*` kinds).
 
-### The portable IR listing (`tools/emit_to_ir.py`, 2026-10-13)
+### The portable IR listing (`tools/emit_to_ir.c`, 2026-10-15)
 
-`tools/emit_to_ir.py` translates an `SX_EMIT_LOG` instruction list into a
+`tools/emit_to_ir.c` translates an `SX_EMIT_LOG` instruction list into a
 portable *listing*: x86-64 registers become abstract registers (`rax`->`A`,
 `xmm0`->`F0`, `rsp`->`SP`, `r12`->`BASE`), byte offsets become sequential
 instruction numbers (`I0`, `I1`, ...), integer and floating-point mnemonics
@@ -131,7 +131,8 @@ renamed, so the translation never silently drops an instruction.
 
 ```sh
 SX_EMIT_LOG=/tmp/hello.log ./selfhost/native_aot examples/native_hello.sa /tmp/hello
-python3 tools/emit_to_ir.py /tmp/hello.log /tmp/hello.ir
+make tools/emit_to_ir
+./tools/emit_to_ir /tmp/hello.log /tmp/hello.ir
 ```
 
 `make test-native-ir-portable` pins the contract: the translation is
@@ -163,3 +164,11 @@ or a comment line, the offsets never go backwards, every rel32 fixup lands on a
 jump, no call target or operand falls back to a placeholder name, the six phases
 come in order), pins the fixture's output, and asserts that the language emitter
 never touches the recorder state.
+
+The translator is now streaming C99 (one growable line, not a whole-log array).
+`make test-emit-to-ir` checks exact output, token boundaries, named-call
+preservation, unknown instructions/lines, long lines, EOF and I/O errors.
+The Python implementation has been removed; `native-test` builds and runs the
+C tool. The baseline fixture translation matches the former Python output
+byte-for-byte after the three provenance header lines. Register abstraction
+still does not remove x86 layout/ABI assumptions or resolve relocations.

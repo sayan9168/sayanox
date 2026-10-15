@@ -1,0 +1,52 @@
+// Alias/lifetime checks for seed read-only string parameter borrowing.
+make observe(source: str) -> num {
+  // source = "not a write"; for source in "not code" { }
+  hold text = "source = \"not code\" : in"
+  give len(source)
+}
+make rewrite(a: str, b: str, flag: num) -> str {
+  hold saved = a
+  when flag {
+    // Assignment hidden behind whitespace/comment is still a write.
+    a // keep caller and b alive
+      = concat(a, "!")
+    a = concat(a, "?")
+  } otherwise {
+    hold a: str = "other"
+  }
+  show b
+  show saved
+  give a
+}
+make forward(a: str, b: str) -> str {
+  give rewrite(a, b, 1)
+}
+make bind(s: str) -> str {
+  for s in "ab" {
+    show s
+  }
+  s = concat(s, "!")
+  give s
+}
+make identity(a: str) -> str {
+  give a
+}
+make depth(s: str, n: num) -> num {
+  when n == 0 {
+    give len(s)
+  }
+  give depth(s, n - 1)
+}
+hold shared = concat("keep", "er")
+show observe(shared)
+show forward(shared, shared)
+show shared
+show rewrite(shared, shared, 0)
+show shared
+show bind(shared)
+show shared
+hold saved = identity(shared)
+shared = concat(shared, "+")
+show saved
+show shared
+show depth(shared, 10)

@@ -1,0 +1,30 @@
+$ baseline gen1_min compiler_min.sa (wait4 measurement, KiB)
+maxrss_kib=3823428 user_seconds=120.351 system_seconds=2.959 exit=0
+$ borrowed gen1_min, legacy registry (wait4 measurement, KiB)
+maxrss_kib=638512 user_seconds=116.260 system_seconds=0.523 exit=0
+$ borrowed gen1_min, safe registry (wait4 measurement, KiB)
+maxrss_kib=704184 user_seconds=100.635 system_seconds=0.464 exit=0
+$ cmp gen2-before-borrow.c gen2-final-borrow.c
+$ read-only stress, before
+16481
+16384
+97
+3
+7
+maxrss_kib=482992 user_seconds=0.032 system_seconds=0.178 exit=0
+$ read-only stress, after
+16481
+16384
+97
+3
+7
+maxrss_kib=1468 user_seconds=0.001 system_seconds=0.000 exit=0
+$ ulimit -v 131072; old stress (expected allocation failure)
+sx: out of memory
+[OK] baseline failed the cap
+$ ulimit -v 131072; new stress
+16481
+16384
+97
+3
+7

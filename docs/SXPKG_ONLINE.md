@@ -1,16 +1,14 @@
 # sxpkg online: a thin design
 
-Status: **implemented, and the network is opt-in (2026-10-13).** The online
-commands are shell code in `tools/sxpkg.sh`. This document fixes their contract,
-names what is missing, and says what must not be claimed. It does not add a
-network dependency to the bootstrap: two targets now cover this path without a
-socket — `make test-sxpkg-online-local` (a `file://` registry: good accepted,
-tampered rejected and removed, missing leaves no partial file) and `make
-test-sxpkg-online-optin` (the refusal itself). Both are part of the
-`true-selfhost-min` and `native-test` aggregates and both skip cleanly if
-neither `curl` nor `wget` exists. Neither contacts a reachable host: every
-remote URL in them is a `.invalid` name (RFC 2606), which fails in the
-resolver.
+Status: **implemented, network opt-in; audited 2026-10-15.** Lock/metadata and
+checksum logic remain `.sa`; filesystem/network operations remain thin shell.
+`test-sxpkg-online-local` copies from a `file://` registry using POSIX `cp`,
+not curl/wget, and checks good/tampered/missing content plus cleanup.
+`test-sxpkg-online-optin` tests refusal without permission and uses a checked
+failing shell transport stub for the two opted-in legs. No DNS/network access
+occurs in either gate; they no longer skip for missing network clients.
+Real remote transfers still require explicit opt-in and optional curl/wget.
+No stronger integrity mechanism was added: `sum=` is not cryptography.
 
 ## Principles
 

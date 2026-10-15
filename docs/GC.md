@@ -160,28 +160,52 @@ actually do, under `ulimit -v` address-space caps (4 MiB is the floor for a
 dynamically linked binary: below it `libc.so.6` itself cannot be mapped).
 
 **`selfhost/seed/sxc_seed_min` — the bootstrap seed: no collector, by design.**
-Its prelude is malloc-only: no object table, no reference counts, no `gc()`.
-What keeps it from growing without bound is two narrow mechanisms:
+As of 2026-10-15 its prelude uses malloc/free and an exact, resizable builder
+allocation registry. This is **not a collector or reference counting**: the
+registry determines whether a pointer owns a builder without dereferencing
+bytes before a string literal. `sx_sb_free` removes an owning entry; foreign
+and interior pointers are not freed. The old magic-header probe caused an
+ASan global-buffer-overflow and has been removed.
 
-* strings produced by `concat` / `chr` / `read_file` carry a hidden `sx_sb`
-  header `{magic,len,cap,data[]}`, so repeated `concat()` onto the *same*
-  left-hand side grows in place (O(1) amortised, not O(N²)). Literals and
-  `argv` strings have no header and are copied into a fresh builder on first
-  use;
-* a string assignment is emitted as
-  `{ char *_v = sx_cat(a,b); sx_sb_free(a); a = _v; }`, so the old left-hand
-  side is freed after the right-hand side is evaluated (`sx_sb_app` never frees
-  either side itself, which would double-free aliased variables).
+* Strings produced by `concat` / `chr` / `read_file` carry a hidden header
+  `{len,cap,next,data[]}`. Each concat allocates a fresh buffer and copies its
+  arguments. Earlier “in-place, amortised O(1)” documentation was incorrect;
+  repeated append still copies accumulated bytes.
+* Reassignment evaluates the RHS before releasing the old LHS. This keeps
+  tested self-reassignment/alias patterns safe; it is not a complete ownership
+  model for arbitrary programs.
+* Read-only string parameters are now borrowed. A conservative lexical scan
+  keeps entry copies for parameters that might be rebound by assignment,
+  annotation or a for binder, even in nested control flow. String locals and
+  returned strings retain their existing copy behavior. No calling convention
+  change or free-at-every-return transformation was introduced.
 
-Measured: a 200k-iteration concat churn that retains nothing, a 2000-step
-accumulation to a 2003-character string, and a 2000-iteration temporary loop
-all run inside a 4 MiB cap and print the same values as gen2 and native. A
-program that genuinely retains 8388608 bytes dies with `sx: out of memory` on
-stderr and exit status 1, keeping the stdout it had already written. Anything
-not covered by those two mechanisms leaks: a `hold` of a fresh string inside a
-loop body that is never reassigned is simply dropped on the floor.
-`gc()`, `gc_live()` and `gc_runs()` are refused at compile time, because there
-is no collector to report on — the same refusal native gives.
+`test-seed-gc` still proves the existing 200k churn, 2000-step accumulation
+and temporary loop fit a 4 MiB address-space cap, and that an oversized retained
+string fails loudly without losing preceding stdout. It refuses `gc()` rather
+than pretending to collect. (Native does have working collection.)
+
+New `test-seed-borrow` pins seed alias/reassignment/recursive return/binder
+cases and a shared seed/gen2/native stress fixture: 30,000 reads of a 16 KiB
+string with a live list. Optional Linux `wait4`/`ru_maxrss` measurements:
+
+| Seed-generated program | Before (KiB) | Final (KiB) |
+|---|---:|---:|
+| gen1-min compiling compiler_min.sa into gen2 C | 3,823,428 | 704,184 |
+| read-only string stress | 482,992 | 1,468 |
+
+The compiler outputs compared byte-identical. Stress failed at a 128 MiB
+address-space cap before and passed after. This does **not** establish bounded
+memory for arbitrary no-GC programs. Lists, dropped locals, unused function
+results and temporaries still lack general reclamation; the registry itself
+retains unreleased builders and its bucket capacity does not shrink.
+
+`seed_builder_registry_test.c` exercises the actual emitted runtime with 4096
+live builders, table growth, release/reallocation, interior/foreign pointers
+and overlapping concat inputs. The alias and registry probes pass ASan/UBSan
+with **leak detection disabled**. These optional measurements/sanitizers are
+not bootstrap dependencies; logs are `ten-memory.log` and `ten-borrow-asan.log`.
+The legacy full seed below was not changed by this optimization.
 
 **`selfhost/seed/sx_runtime.h` — the full seed: a reference-counted
 representation that does not reclaim.** The runtime has `SxStrHdr` string

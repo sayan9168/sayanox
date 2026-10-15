@@ -1,6 +1,6 @@
 # Full-language self-host
 
-Rewritten 2026-10-13. The previous version of this file described a Stage-2 C
+Updated 2026-10-15. The previous version of this file described a Stage-2 C
 host, a `make stage2` target and a `bootstrap_full_language_selfhost.sh`
 one-command bootstrap. **None of those exist in this repository** — see
 "The Stage-2 host is not in this repository" below. Everything on this page is
@@ -14,7 +14,7 @@ make doctor && make true-selfhost && make gen3 && make native-test
 
 | Layer | Written in | What it does | Gate |
 |---|---|---|---|
-| `selfhost/seed/sxc_seed_min.c` | C, ~950 lines | compiles the pure-min dialect; it is the only hand-written compiler in the chain | `make true-selfhost` |
+| `selfhost/seed/sxc_seed_min.c` | C, ~1,965 lines | compiles the pure-min dialect; it is the only hand-written compiler in the chain | `make true-selfhost` |
 | `selfhost/compiler_min.sa` → `selfhost/gen1_min.c` → `selfhost/gen2.c` | **Sayanox**, ~17,800 lines | the compiler source; seed-min compiles it into gen1_min, gen1_min compiles it into gen2 | `make true-selfhost` |
 | `gen2` → `gen3.c` → `gen4.c` | Sayanox (gen2's own output) | gen3 and gen4 must be **byte-identical** | `make gen3` |
 | `selfhost/native_aot.c` | C, ~4,000 lines | x86-64 Linux machine code for the native subset | `make native-test` |
@@ -107,21 +107,33 @@ the 17,825-line / 608,621-byte source as of this writing:
 | string interpolation `${...}` | **no** — 1,671 `concat(...)` calls instead | yes (`test-stdlib-interpolation`) |
 | struct-typed `hold` annotations | **no** — `hold` in the compiler is untyped or scalar-typed | yes, gen2 only (`test-type-refusals`) |
 | list literals, `push`, `len`, index expressions | yes | yes |
-| `use "..."` modules | yes (1 site: its own input handling is in C; the *generated* programs use it) | yes (`test-use`) |
+| `use "..."` modules | no top-level `use` directive in compiler_min.sa; it implements splicing for input programs | yes (`test-use`) |
 | file/process builtins (`read_file`, `write_file`, `run`) | yes | yes (`test-native-io` on native) |
 | `gc()` / mark & sweep | the generated runtime, not the compiler's own code | yes (`test-gc`) |
 
-The growth path actually taken in this increment is the first option the
-STATUS names: **the compiler source grew** (parenthesised `for` sources and
-`%`/`len()`/nested index expressions are implemented *in* `compiler_min.sa`,
-and the source self-compiles through the whole chain). No parallel Stage-2
-compiler path was started, because the measured bottleneck is not a missing
-path but gen2's self-compile memory: the current source peaks at ~3.72 GB
-resident while compiling itself in a 3.9 GB sandbox (HEAD alone peaks at
-~3.60 GB), so each new construct has to pay for its own footprint. Until that
-changes, "full-language self-host" stays **not claimed**: gen2 is a growing
-subset compiler that happens to be written in its own subset, and this page
-plus `docs/STATUS.md` are the honest boundary of that claim.
+## Self-host memory progress (2026-10-15)
+
+The measured high-memory step is **gen1-min compiling compiler_min.sa into
+gen2 C**, not necessarily gen2 compiling itself. Seed-generated functions used
+to copy all string parameters on entry, even read-only source-text arguments.
+The seed now borrows parameters that its conservative lexical scan finds
+read-only, while retaining copies for potentially writable ones. An exact
+allocation registry also replaces the unsafe builder magic-header probe.
+
+Optional Linux `wait4` measurements, same 608,621-byte compiler source and
+`cc -O2` before/after: **3,823,428 → 704,184 KiB peak RSS** (about 82% lower).
+The intermediate borrow-only prototype was 638,512 KiB; the final safe registry
+has overhead, so that smaller prototype number is not the shipped claim.
+Generated gen2 C is byte-identical before/after. `make gen3` separately checks
+that gen3/gen4 remain byte-identical. Logs: `ten-memory.log`,
+`ten-memory-gen3.log`, final gates `ten-final-*.log`.
+
+`compiler_min.sa` itself did not change in this PR, so its checked-in recovery
+bundle did not need regeneration. No chunked/streaming compiler emission,
+complete seed GC, full-language rewrite, or parallel Stage-2 path was added.
+Full-language self-host remains **not claimed**. The source still does not use
+struct/generic values or struct-typed holds as listed above, and namespaced
+modules, list-valued struct fields and nested generic layouts remain missing.
 
 ## The Stage-2 host is not in this repository
 

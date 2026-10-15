@@ -15,9 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 # The whole bootstrap is Makefile-only and offline: a clean checkout plus the
-# minimal tool set (make, a C99 compiler, POSIX shell, grep, cmp, mkdir) that
-# `make doctor` verifies. No Python/Node/Ruby, no network, no package step --
-# ubuntu-latest ships every required tool, and doctor fails loudly if not.
+# core toolchain plus POSIX utilities documented in DEPENDENCY.md.
+# No Python/Node/Ruby/Perl runtime or real network client may run inside the
+# four gates; guard wrappers also record errors swallowed by a test recipe.
 jobs:
   bootstrap:
     name: "clean-checkout bootstrap (doctor, true-selfhost, gen3, native-test)"
@@ -30,6 +30,19 @@ jobs:
           clean: true
           fetch-depth: 1
 
+      - name: Block non-bootstrap runtimes and real network clients
+        run: |
+          set -e
+          guard="$RUNNER_TEMP/bootstrap-no-runtimes"
+          mkdir -p "$guard"
+          for tool in python python3 node ruby perl curl wget; do
+            printf '%s\n' '#!/bin/sh' \
+              'printf "forbidden bootstrap invocation: %s\n" "$0" >> "$RUNNER_TEMP/bootstrap-forbidden-invocations"' \
+              'exit 99' > "$guard/$tool"
+            chmod +x "$guard/$tool"
+          done
+          printf '%s\n' "$guard" >> "$GITHUB_PATH"
+
       - name: "make doctor (minimal toolchain is complete)"
         run: make doctor
 
@@ -41,6 +54,9 @@ jobs:
 
       - name: "make native-test (x86-64 backend - subset, use, functions, parity)"
         run: make native-test
+
+      - name: Verify no blocked command was invoked
+        run: test ! -e "$RUNNER_TEMP/bootstrap-forbidden-invocations"
 
       - name: Verify generated artifacts are not tracked
         run: |
