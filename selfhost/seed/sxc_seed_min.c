@@ -601,9 +601,9 @@ static int instantiate_gstruct(int gi, int *nk){
     if(!strcmp(t,"num")) k=TY_NUM;
     else if(!strcmp(t,"str")) k=TY_STR;
     else if(!strcmp(t,"list")) k=TY_LIST;
-    /* Concrete fields may now hold a list, but generic Box<list> would be a
-     * cross-backend promise while gen2 still refuses list-field layouts. */
-    if(k==TY_LIST) die("a struct field cannot hold a list in a generic instantiation until gen2 supports list fields");
+    /* Concrete fields may hold a list, but generic Box<list> needs its own
+     * specialization/layout and GC rules before it can be accepted. */
+    if(k==TY_LIST) die("a struct field cannot hold a list in a generic instantiation until generic list-field specialization is implemented");
     if(k<0){
       char m[256];
       snprintf(m,sizeof m,"a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented", t);

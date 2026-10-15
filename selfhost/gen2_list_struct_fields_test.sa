@@ -1,0 +1,39 @@
+// Gen2 concrete list fields: pointer layout, literal/copy aliasing, field
+// indexing (including len() in an index), direct field assignment, iteration,
+// and nested concrete structs.  A list remains numeric-element-only.
+struct Packet {
+  xs,
+  label
+}
+struct Envelope {
+  p
+}
+hold p = Packet { xs: [10, 20], label: "one" }
+hold q = Packet { xs: p.xs, label: "two" }
+show p.xs[0]
+hold middle = q.xs[1]
+show middle
+q.xs[0] = 11
+show p.xs[0]
+hold alias = p.xs
+push(alias, 30)
+show len(q.xs)
+show q.xs[len(q.xs) - 1]
+hold total = 0
+for v in p.xs {
+  total = total + v
+}
+show total
+hold e = Envelope { p: Packet { xs: q.xs, label: "nested" } }
+show e.p.xs[1]
+when e.p.xs[2] == 30 {
+  show 77
+}
+when len(e.p.xs) == 3 {
+  show 88
+}
+hold nested_total = 0
+for w in e.p.xs {
+  nested_total = nested_total + w
+}
+show nested_total

@@ -258,9 +258,11 @@ structs (`Box<Box<num>>`) and struct-valued type arguments remain unsupported.
 This is a deliberate current bootstrap-dialect limit, not a partially accepted
 syntax: a recursive specialization/layout/GC worklist is required before that
 spelling can be made safe.
-Concrete list-valued fields work on seed-min/native, but generic `Box<list>`
-and gen2 list fields remain refused to keep generic specialization parity
-honest. `test-type-refusals` pins nested refusal on seed-min/gen2/native. This
-is distinct from nested generic **function calls**, which have existing
-specialization tests. No recursive struct-layout/GC worklist was added; see
-TYPES_ROADMAP.md for what safe support requires.
+Concrete list-valued fields now work on seed-min, Gen2 and native, but generic
+`Box<list>` remains refused: accepting it requires generic specialization and
+layout/GC rules beyond the concrete-field representation. `test-type-refusals`
+pins nested refusal on seed-min/gen2/native, and `test-generic-structs` pins
+the generic-list refusal. This is distinct from nested generic **function
+calls**, which have existing specialization tests. No recursive
+struct-layout/GC worklist was added; see TYPES_ROADMAP.md for what safe support
+requires.

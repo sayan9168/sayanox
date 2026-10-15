@@ -42,7 +42,7 @@ language, not the full language.
   typed inline list expressions — `test-list2`, `test-list-expr`,
   `test-list-paren`
 * structs: declarations, literals, nested structs, field chains, field types
-  inferred from the literals that fill them — `test-struct2`, `test-struct-logic`; seed-min and native also have concrete list-pointer fields and `for v in p.xs` (`test-list-struct-fields`), while gen2 explicitly refuses that form
+  inferred from the literals that fill them — `test-struct2`, `test-struct-logic`; all three backends support concrete list-pointer fields and `for v in p.xs`. `test-list-struct-fields` runs shared alias/iteration output on all three and native GC; `test-gen2-list-struct-fields` additionally proves Gen2's `sx_list *` layout, literals/copies, indexed read/write, conditions and nested iteration.
 * fully typed functions (`make f(a: num, b: str) -> str`), forward and mutual
   recursion, function-local `hold`, function-local `for`, parameters that are
   reassigned — `test-typed-sig`, `test-fn2`, `test-seed-typed-functions`
@@ -76,9 +76,8 @@ language, not the full language.
   (`make test-gen2-index-expr` and `test-gen2-expr-lowering` pin the refusals;
   `%`, `len()` and nested indexes are supported — see above)
 * a global read inside an untyped `make` body
-* `for v in p.xs` on **gen2**: seed-min and native support concrete list fields,
-  but gen2 emits a deliberate `#error` until its self-hosted struct layout and
-  field-kind lowering are extended (`test-list-struct-fields`)
+* generic `Box<list>`: concrete list fields now work on all three backends, but a generic list-field specialization remains refused pending recursive generic layout/GC support (`test-generic-structs`)
+* direct `push(p.xs, v)`, whole-list `show p.xs`, and a whole list-valued field used as a condition on Gen2: these are explicit source refusals; use an aliased list variable, `len(p.xs)`, or `p.xs[i]` (`test-gen2-list-struct-fields`)
 * a struct field annotation (`p: Pt` in a struct body): it used to register
   `Pt` as an extra field on all three backends; since 2026-10-13 all three
   refuse it (`test-type-refusals`). A literal after the colon (`k: 2`) is the
@@ -128,13 +127,14 @@ Generated gen2 C is byte-identical before/after. `make gen3` separately checks
 that gen3/gen4 remain byte-identical. Logs: `ten-memory.log`,
 `ten-memory-gen3.log`, and the final `ten-remaining-final-*.log` gates.
 
-`compiler_min.sa` itself did not change in this PR, so its checked-in recovery
-bundle did not need regeneration. No chunked/streaming compiler emission,
-complete seed GC, full-language rewrite, or parallel Stage-2 path was added.
-Full-language self-host remains **not claimed**. The source still does not use
-struct/generic values or struct-typed holds as listed above. Namespaced
-modules, gen2 list-field layout/lowering, and nested generic layouts remain
-missing; concrete list-valued fields on seed-min/native are documented above.
+The later concrete-list-field work does change `compiler_min.sa`; `make doctor`
+continues to verify the checked-in recovery/source path before each bootstrap
+gate. No chunked/streaming compiler emission, complete seed GC, full-language
+rewrite, or parallel Stage-2 path was added. Full-language self-host remains
+**not claimed**. The source still does not use struct/generic values or
+struct-typed holds as listed above. Namespaced modules and nested generic
+layouts remain missing; Gen2 concrete list-field layout/lowering is now gated
+by `test-gen2-list-struct-fields`.
 
 ## The Stage-2 host is not in this repository
 

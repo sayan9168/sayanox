@@ -78,7 +78,9 @@ cc -O2 -o selfhost/seed_tests/ts_nestcopy_g2 selfhost/seed_tests/ts_nestcopy_g2.
 [OK] doubly nested field copy (hold p2 = t.q.p): seed-min and gen2 agree; bad chains still hard errors
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_nestlist.sa > selfhost/seed_tests/ts_nestlist_sm.c
 cc -O2 -o selfhost/seed_tests/ts_nestlist_sm selfhost/seed_tests/ts_nestlist_sm.c
-[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies incl. doubly nested); seed-min concrete list field works, gen2 refuses it, and forward decls/bad chains/show-of-struct stay clear errors
+./selfhost/gen2 selfhost/seed_tests/ts_nestlist.sa selfhost/seed_tests/ts_nestlist_g2.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/ts_nestlist_g2 selfhost/seed_tests/ts_nestlist_g2.c
+[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies incl. doubly nested); concrete list fields preserve aliases and gen2 lowers dotted indexes; forward decls/bad chains/show-of-struct stay clear errors
 ./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_prec.sa > selfhost/seed_tests/ts_prec_sm.c
 cc -O2 -o selfhost/seed_tests/ts_prec_sm selfhost/seed_tests/ts_prec_sm.c
 ./selfhost/gen2 selfhost/seed_tests/ts_prec.sa selfhost/seed_tests/ts_prec_g2.c >/dev/null
@@ -319,12 +321,21 @@ cc -O2 -o selfhost/seed_tests/borrow-stress-g2 selfhost/seed_tests/borrow-stress
 ./selfhost/native_aot selfhost/seed_borrow_stress.sa selfhost/seed_tests/borrow-stress-native
 cc -O2 -o selfhost/seed_tests/builder-registry selfhost/seed_builder_registry_test.c
 [OK] seed borrowing: read-only parameters, writable aliases/branches/binders/returns; 30000 reads of 16 KiB with live list (seed/gen2/native)
+./selfhost/gen2 selfhost/gen2_list_struct_fields_test.sa selfhost/seed_tests/gen2_list_struct.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/gen2_list_struct selfhost/seed_tests/gen2_list_struct.c
+./selfhost/gen2 selfhost/seed_tests/gen2_list_struct_conflict.sa selfhost/seed_tests/gen2_list_struct_conflict.c >selfhost/seed_tests/gen2_list_struct_conflict.msg
+./selfhost/gen2 selfhost/seed_tests/gen2_list_struct_push_bad.sa selfhost/seed_tests/gen2_list_struct_push_bad.c >selfhost/seed_tests/gen2_list_struct_push_bad.msg
+./selfhost/gen2 selfhost/seed_tests/gen2_list_struct_show_bad.sa selfhost/seed_tests/gen2_list_struct_show_bad.c >selfhost/seed_tests/gen2_list_struct_show_bad.msg
+./selfhost/gen2 selfhost/seed_tests/gen2_list_direct_show_bad.sa selfhost/seed_tests/gen2_list_direct_show_bad.c >selfhost/seed_tests/gen2_list_direct_show_bad.msg
+./selfhost/gen2 selfhost/seed_tests/gen2_list_struct_cond_bad.sa selfhost/seed_tests/gen2_list_struct_cond_bad.c >selfhost/seed_tests/gen2_list_struct_cond_bad.msg
+[OK] gen2 concrete list fields: sx_list pointer layout, literal/copy aliasing, indexed read/write, len-index/condition lowering, nested layout and for p.xs; conflicts and unsupported direct push/show/whole-condition refuse clearly
 ./selfhost/seed/sxc_seed_min selfhost/list_struct_fields_test.sa > selfhost/seed_tests/list_struct_seed.c
 cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/list_struct_seed selfhost/seed_tests/list_struct_seed.c
+./selfhost/gen2 selfhost/list_struct_fields_test.sa selfhost/seed_tests/list_struct_gen2.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/list_struct_gen2 selfhost/seed_tests/list_struct_gen2.c
 ./selfhost/native_aot selfhost/list_struct_fields_test.sa selfhost/seed_tests/list_struct_native
 ./selfhost/native_aot selfhost/list_struct_fields_gc_test.sa selfhost/seed_tests/list_struct_gc
-./selfhost/gen2 selfhost/list_struct_fields_test.sa selfhost/seed_tests/list_struct_gen2.c >/dev/null
-[OK] list struct fields: seed-min/native alias-preserving storage and for p.xs; native GC tracing; gen2 clear refusal
+[OK] list struct fields: shared seed-min/gen2/native alias+iteration output; native GC tracing; focused gen2 layout/literal/copy/index/write/condition coverage
 ./selfhost/gen2 selfhost/seed_tests/s2.sa selfhost/seed_tests/s2.c >/dev/null
 cc -O2 -o selfhost/seed_tests/s2 selfhost/seed_tests/s2.c
 ./selfhost/gen1_min selfhost/seed_tests/s2.sa selfhost/seed_tests/s2_g1.c >/dev/null
@@ -840,8 +851,8 @@ fi
 echo "[OK] generic structs: a struct name as a type argument is refused by all three backends"
 [OK] generic structs: a struct name as a type argument is refused by all three backends
 # ---- refusal 3: a list as a type argument ----
-# Concrete list fields work on seed-min/native, but generic Box<list> stays
-# refused until gen2 can lower the matching generic list-field layout.
+# Concrete list fields work on all three backends, but generic Box<list>
+# stays refused pending generic specialization/layout and GC support.
 printf 'struct Box<T> {\n  v\n}\nhold xs = [1, 2]\nhold b = Box<list> { xs }\nshow len(b.v)\n' > selfhost/seed_tests/gs_arglist.sa
 if ./selfhost/seed/sxc_seed_min selfhost/seed_tests/gs_arglist.sa > selfhost/seed_tests/gs_arglist_ms.c 2>selfhost/seed_tests/gs_arglist_ms.err; then \
   echo "[FAIL] seed-min accepted a list as a type argument"; exit 1; fi
@@ -875,7 +886,7 @@ if ./selfhost/seed/sxc_seed_min selfhost/seed_tests/gs_twokinds.sa > selfhost/se
   echo "[FAIL] seed-min accepted two kinds in one instantiation"; exit 1; fi
 grep -q -F "Box__n field 'v' is num (its type argument says so), the literal gives str" selfhost/seed_tests/gs_twokinds_ms.err
 ./selfhost/gen2 selfhost/seed_tests/gs_twokinds.sa selfhost/seed_tests/gs_twokinds_g2.c >/dev/null 2>&1 || true
-grep -q -F '#error sayanox-min: struct field is used with two different types' selfhost/seed_tests/gs_twokinds_g2.c
+grep -q -F '#error sayanox-min: struct field is used with two different value kinds' selfhost/seed_tests/gs_twokinds_g2.c
 if [ -x selfhost/native_aot ]; then \
   if ./selfhost/native_aot selfhost/seed_tests/gs_twokinds.sa selfhost/seed_tests/gs_twokinds_nat 2>selfhost/seed_tests/gs_twokinds_nat.err; then \
     echo "[FAIL] native accepted two kinds in one instantiation"; exit 1; fi; \

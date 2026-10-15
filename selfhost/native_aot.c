@@ -732,8 +732,8 @@ static const char*kname(int k){
  * instantiation is the existing "used with two different types" error.
  *
  * The portable generic-struct subset currently accepts num or str. A list type
- * argument is deliberately refused until gen2 has list-field layout/lowering;
- * a struct name is likewise refused by name. Struct blocks are allocated
+ * argument is deliberately refused until generic list-field specialization and
+ * layout/GC rules exist; a struct name is likewise refused by name. Struct blocks are allocated
  * BK_STRUCT ("every word may be a pointer"), so a string field of any
  * instantiation is traced by the collector with no new descriptor work.
  * ------------------------------------------------------------------------ */
@@ -766,8 +766,8 @@ static int gs_instantiate(const char**p,const char*n){
     if(!strcmp(t,"num")) k=K_NUM;
     else if(!strcmp(t,"str")) k=K_STR;
     else if(!strcmp(t,"list")) k=K_LIST;
-    /* Keep generic structs portable while gen2 still refuses list fields. */
-    if(k==K_LIST) errx("a struct field cannot hold a list in a generic instantiation until gen2 supports list fields");
+    /* Concrete list fields exist; generic specialization/layout is separate. */
+    if(k==K_LIST) errx("a struct field cannot hold a list in a generic instantiation until generic list-field specialization is implemented");
     if(k<0) errx("a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented",t);
     if(nk>=8) errx("too many type arguments (native limit is 8)");
     ks[nk++]=k;

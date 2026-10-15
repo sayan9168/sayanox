@@ -33,7 +33,7 @@ is not presented as new work in this PR.
 | Area | seed-min | gen2 | native | Still missing / tested boundary |
 |---|---|---|---|---|
 | 1. Full-language self-host / memory | Read-only string parameters now borrowed; writable ones still copied. Safe builder registry replaces pre-pointer magic probing. | Fixed point unchanged; gen1-min's self-compile emits byte-identical gen2 C before/after optimization. | Not the compiler self-host path. | **No full-language self-host claim.** Compiler stays in its subset. Measured gen1-min → gen2 peak: 3,823,428 → 704,184 KiB (~82% lower); this is not a measurement of every stage's peak. See FULL_LANGUAGE_SELFHOST.md. |
-| 2. List-valued struct fields / `for v in p.xs` | **Supported:** distinct list field kind emits `sx_list *`; field storage preserves aliases (including growth) and `for v in p.xs` works. | **Refused clearly:** its self-hosted struct walker has no list-field layout/lowering and emits `#error`, never a successful executable. | **Supported:** one pointer word per field; `BK_STRUCT` tracing reaches the list pointer and its growth-forward chain across collections. | Gen2 parity remains missing. `test-list-struct-fields` checks seed/native aliasing and growth, direct field iteration, kind conflict rejection, native GC retention, and gen2's explicit refusal. |
+| 2. List-valued struct fields / `for v in p.xs` | **Supported:** distinct list field kind emits `sx_list *`; field storage preserves aliases (including growth) and `for v in p.xs` works. | **Supported for concrete structs:** field tag `3` emits `sx_list *`; literals and pointer copies, nested field chains, `p.xs[i]` reads/writes, `len()` indexes/conditions, and `for v in p.xs` are type-lowered. | **Supported:** one pointer word per field; `BK_STRUCT` tracing reaches the list pointer and its growth-forward chain across collections. | `Box<list>` remains refused. Gen2 direct `push(p.xs, v)` and `show p.xs` remain explicit refusals; use an alias, `len`, or an index. `test-list-struct-fields` runs shared alias/iteration output on all three plus native GC; `test-gen2-list-struct-fields` adds strict-C Gen2 layout/write/condition coverage and pins refusals. |
 | 3. Seed GC | **Still no collector.** Exact builder registry + explicit release on reassignment; new borrow/registry stress and sanitizer evidence. | Existing conservative mark/sweep. | Existing mark/sweep. | Registry is ownership bookkeeping, not tracing/RC. Unreleased locals, return values, temporaries and lists can still grow. `test-seed-gc`, `test-seed-borrow`, `test-native-mem`; GC.md. |
 | 4. Struct-typed hold | **Supported:** `hold p: Pt` retains the declared concrete struct identity and rejects scalar/wrong-struct initializers. | Existing accepted/type-checked support. | **Supported:** same named-identity check during collection and emission. | Struct-typed function parameters/returns and struct reassignment remain outside this slice. `test-type-refusals` runs the valid copy and scalar/wrong-struct refusals on all three. |
 | 5. Nested generic structs | `Box<Box<num>>` refused. | Refused through emitted `#error`. | Refused. | A deliberate current bootstrap-dialect limit: recursive type-argument parsing, specialization worklist, ordered layout and GC descriptors are not implemented. Simple `Box<num>`/`Box<str>` remain gated by `test-generic-structs`; nested refusal by `test-type-refusals`. |
@@ -45,13 +45,14 @@ is not presented as new work in this PR.
 
 ### Done / missing / refused
 
-* **Done:** concrete list-valued struct fields and `for v in p.xs` on
-  seed-min/native; concrete named-struct `hold` identity checks on all three;
-  native list-pointer GC tracing; and a hardened native emit-seam gate.
-* **Missing:** gen2 list-field layout/lowering, a recursive nested-generic
-  layout/GC worklist, a real seed collector, full-language self-host, workspace
-  indexing, and an executable second native target.
-* **Refused by design:** `Box<list>` until gen2 parity exists,
+* **Done:** concrete list-valued struct fields and `for v in p.xs` on all
+  three backends (including Gen2 layout/literal/copy/index/iteration lowering);
+  concrete named-struct `hold` identity checks on all three; native list-pointer
+  GC tracing; and a hardened native emit-seam gate.
+* **Missing:** recursive generic-list/nested-generic layout and GC descriptors,
+  a real seed collector, full-language self-host, workspace indexing, and an
+  executable second native target.
+* **Refused by design:** generic `Box<list>` (despite concrete Gen2 fields),
   `Box<Box<num>>`, unsupported full-language forms, and bootstrap-dialect
   module aliases/namespaces. These fail explicitly rather than silently
   generating incorrect code.
@@ -71,7 +72,7 @@ last markers are `DOCTOR-OK`, `TRUE-SELFHOST-MIN-OK`, `GEN3-OK`, and
 * Reduced seed-generated compiler memory by borrowing read-only parameters.
   ASan exposed a pre-existing read-before-literal in builder detection; an
   exact allocation registry fixes it. No collector or general leak fix claimed.
-* Added alias-preserving list-valued concrete struct fields on seed-min and native, including `for v in p.xs` and a native-GC retention probe; gen2 remains a checked refusal.
+* Added alias-preserving list-valued concrete struct fields on all three backends, including Gen2's `sx_list *` layout, literals/copies, indexed reads/writes, nested chains, list-field conditions and `for v in p.xs`; native retains a GC retention probe. `Box<list>`, direct `push(p.xs, v)`, and whole-list `show p.xs` remain explicit boundaries.
 * Ported named struct-typed `hold` checking to seed-min and native, including exact concrete-struct identity checks; `test-type-refusals` exercises all three backends.
 * Fixed a native seam test that printed shell numeric errors while reporting success: unique marker checks now make malformed marker discovery fail.
 
@@ -111,8 +112,9 @@ bootstrap kept green (the four gate logs above are this pass's own runs):
    now work on seed-min, gen2 and native (`test-for-paren`); only whole-source
    parens unwrap, so `(lo + 1)..(hi * 2)` bounds keep the range path.
    At that dated snapshot, `for v in p.xs` was a clear error everywhere. It is
-   now supported on seed-min/native and remains a gen2 `#error`; see the
-   current roadmap table above.
+   now supported for concrete list fields on seed-min, Gen2 and native; see the
+   current roadmap table above for the remaining generic/direct-operation
+   boundaries.
 3. **Expression/analysis gaps** — `%` in an index (`test-gen2-index-mod`,
    left-associative with `*`/`/`), `len()` and nested indexes inside `[ ]`
    (`test-gen2-expr-lowering`), and a string `+` chain in a `give` all lower
@@ -701,7 +703,7 @@ still use shell/C infrastructure. See
 | `make test-condmod` | checked `%` lowering inside `when`/`while` conditions |
 | `make test-struct2` | named fields, two structs, `p.x + p.y` |
 | `make test-user` | struct string fields (`User name/age`); mismatches are hard errors; a string chain that starts at a struct field links and prints the same in seed-min, gen2 and native (gen2 used to omit `sx_cat`) |
-| `make test-nest` | nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies including the doubly nested `hold p2 = t.q.p`); clear errors for forward decls, list fields, bad chains, show-of-struct |
+| `make test-nest` | nested structs in seed-min and Gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies including the doubly nested `hold p2 = t.q.p`); concrete list-field alias growth and Gen2 dotted-index lowering; clear errors for forward decls, bad chains and show-of-struct |
 | `make test-list2` | literal, index, `len`, `push` |
 | `make test-use` | splice, nested depth 2, missing-file error |
 | `make test-fn2` | params, call in `show`, recursion (`fac 5 = 120`) |
@@ -761,7 +763,7 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 | String/list/file utility modules | yes | yes | yes (already implemented) | `test-stdlib` | limited helpers, not a full portable I/O abstraction |
 | Boolean literals, and/or/not | yes, values and conditions | yes | yes (pre-existing) | `test-seed-stage2`, `test-logic-value`, `test-native-cond`, `test-native-logicarg` | seed numeric/string/list bare assignment now supported (`test-seed-assignment`); gen2 has expression-context limits (e.g. chr logic arguments) |
 | elif, conditional aliases, break/continue | elif, else-if/else-when/otherwise-when; breaks/continues in while and supported for | yes | yes | `test-stage2`, `test-full-lang`, `test-native-lang` | seed unsupported iteration forms remain explicit errors |
-| String/list for | variables, literals, checked calls and dotted field chains, inside fully typed make AND inside untyped make; literals/calls captured once per entry | variables, literals, calls | yes | `test-for-str`, `test-seed-for-literals`, `test-seed-for-calls`, `test-seed-for-untyped`, `test-seed-for-fields`, `test-native-lang` | At this historical snapshot, `for v in p.xs` was a hard error on all three. The current table supersedes that point: it works on seed-min/native and gen2 refuses it explicitly. A parenthesised source (`for c in (s)`) works on all three since 2026-10-13 (`test-for-paren`), and a parenthesised range stays refused; native function-local for is frame-local and recursion/GC tested; `_sx_iter_` is reserved in seed |
+| String/list for | variables, literals, checked calls and dotted field chains, inside fully typed make AND inside untyped make; literals/calls captured once per entry | variables, literals, calls, and concrete list-valued field chains | yes | `test-for-str`, `test-seed-for-literals`, `test-seed-for-calls`, `test-seed-for-untyped`, `test-seed-for-fields`, `test-native-lang`, `test-gen2-list-struct-fields` | At this historical snapshot, `for v in p.xs` was a hard error on all three. The current table supersedes that point: it works for concrete list fields on all three; generic list fields remain refused. A parenthesised source (`for c in (s)`) works on all three since 2026-10-13 (`test-for-paren`), and a parenthesised range stays refused; native function-local for is frame-local and recursion/GC tested; `_sx_iter_` is reserved in seed |
 | Numeric range for | numeric literals/variables/arithmetic, indexing and len; also inside fully typed make | yes | yes; upper bound re-evaluated per check | `test-seed-for-range`, `test-full-lang`, `test-native-lang` | all three re-read upper bound each condition. Seed accepts direct field access in a bound (`for i in 0..p.n`), so the older "hold field values in numeric variables first" note is stale; a user call in a range BOUND (`for i in 0..f()`) compiles on gen2 and native but seed-min still refuses it (`seed-min for range bounds support len(...) but not other calls yet`) — verified 2026-10-13 |
 | Function generics | num/str/list specialization; one or multiple type parameters | num/str/list monomorphisation | num/str/list monomorphisation (pre-existing) | `test-generics`, `test-seed-limits`, `test-native-generics`, `test-native-strgen`, `test-native-listgen` | some backend-specific body/lowering gaps; struct generics are a separate row below |
 | Typed functions | num/str/list parameters and returns, isolated locals, control flow, terminal give | broader typed functions, some lowering gaps | typed functions; kind-preserving parameter reassignment | `test-seed-typed-functions`, `test-typed-sig` | seed global capture and full return-path inference remain absent |
@@ -1364,14 +1366,15 @@ Fixtures and expected stdout (three-way identical, hand-computed):
 Both targets also assert that gen2 emits `static double sx_len`, that a struct
 local inside a `make` body compiles to `7` on all three backends, and that 10
 (seed-for-untyped) plus 6 (seed-for-fields) malformed programs exit non-zero
-with `seed_min:` in stderr — including `for v in p.xs` where `xs` is a
-`list`-typed field, and `for c in (s)`, which stay hard errors by design in
-both compilers.
+with `seed_min:` in stderr. The older malformed list-typed-field iteration
+case is no longer a current boundary: concrete inferred list fields support
+`for v in p.xs` on seed-min, Gen2 and native under the focused list-field
+gates. Parenthesised iteration sources are also supported where documented.
 
 Not claimed: a global read inside an untyped `make` body is still refused by
 seed-min and gen2 (native prints the value — recorded under "Measured
-divergences"), and neither compiler gained parenthesised or list-typed-field
-iteration sources.
+divergences"). Generic list-field specialization and several other full-
+language forms remain outside the bootstrap dialect.
 
 ### Stdlib growth: `num_util.sa`, `list_algo.sa`, `str_text.sa` (2026-10-13)
 
