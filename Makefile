@@ -502,23 +502,25 @@ test-nest:
 	  echo "[FAIL] seed-min accepted a nested struct declared later"; exit 1; fi
 	@./$(GEN2) $(TESTS)/ts_nestfwd.sa $(TESTS)/ts_nestfwd_g2.c >/dev/null 2>&1 || true
 	@grep -q 'declare the nested struct first' $(TESTS)/ts_nestfwd_g2.c
-	@# a list still cannot be a struct field
-	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: [1], b: Point { 2 } }\n' > $(TESTS)/ts_nestlist.sa
-	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestlist.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted a list in a struct field"; exit 1; fi
+	@# A concrete list field is pointer-valued on seed-min; gen2 deliberately
+	@# still refuses this spelling until it has matching list-field lowering.
+	@printf 'struct Line {\n  a\n}\nhold l = Line { a: [1] }\nhold alias = l.a\npush(alias, 2)\nshow len(l.a)\nshow l.a[1]\n' > $(TESTS)/ts_nestlist.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_nestlist.sa > $(TESTS)/ts_nestlist_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_nestlist_sm $(TESTS)/ts_nestlist_sm.c
+	$(call assert-out,./$(TESTS)/ts_nestlist_sm,2\n2)
 	@./$(GEN2) $(TESTS)/ts_nestlist.sa $(TESTS)/ts_nestlist_g2.c >/dev/null 2>&1 || true
 	@grep -q '#error' $(TESTS)/ts_nestlist_g2.c
-	@# chaining through a field with no struct type is a clear error, not bad C
-	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a\n}\nhold p = Point { x: 1 }\nhold l = Line { a: p }\nshow l.a.x\n' > $(TESTS)/ts_nestmiss.sa
+	@# chaining through a numeric field is a clear error, not bad C
+	@printf 'struct Line {\n  a\n}\nhold l = Line { a: 1 }\nshow l.a.x\n' > $(TESTS)/ts_nestmiss.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestmiss.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted a chain through an untyped struct field"; exit 1; fi
+	  echo "[FAIL] seed-min accepted a chain through a numeric struct field"; exit 1; fi
 	@./$(GEN2) $(TESTS)/ts_nestmiss.sa $(TESTS)/ts_nestmiss_g2.c >/dev/null 2>&1 || true
 	@grep -q 'is not a struct' $(TESTS)/ts_nestmiss_g2.c
 	@# a struct value cannot be shown
 	@printf 'struct Point {\n  x\n}\nhold q = Point { x: 1 }\nshow q\n' > $(TESTS)/ts_nestshow.sa
 	@./$(GEN2) $(TESTS)/ts_nestshow.sa $(TESTS)/ts_nestshow_g2.c >/dev/null 2>&1 || true
 	@grep -q 'show value cannot be a struct' $(TESTS)/ts_nestshow_g2.c
-	@echo "[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies incl. doubly nested); clear errors for forward decls, list fields, bad chains, show-of-struct"
+	@echo "[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies incl. doubly nested); seed-min concrete list field works, gen2 refuses it, and forward decls/bad chains/show-of-struct stay clear errors"
 
 test-prec:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -1222,7 +1224,7 @@ test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
 # Refused, not miscompiled.
 # ---------------------------------------------------------------------------
 .PHONY: test-generic-structs
-test-generic-structs: $(GEN2) $(SEED_MIN_BIN)
+test-generic-structs: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	mkdir -p $(TESTS)
 	# ---- support: one concrete type per instantiation, three-way parity ----
 	./$(SEED_MIN_BIN) selfhost/generic_struct_box.sa > $(TESTS)/gs_box_ms.c
@@ -1272,8 +1274,8 @@ test-generic-structs: $(GEN2) $(SEED_MIN_BIN)
 	fi
 	echo "[OK] generic structs: a struct name as a type argument is refused by all three backends"
 	# ---- refusal 3: a list as a type argument ----
-	# No backend has a list-typed struct field, so Box<list> is refused rather
-	# than emitted as C that cannot compile.
+	# Concrete list fields work on seed-min/native, but generic Box<list> stays
+	# refused until gen2 can lower the matching generic list-field layout.
 	printf 'struct Box<T> {\n  v\n}\nhold xs = [1, 2]\nhold b = Box<list> { xs }\nshow len(b.v)\n' > $(TESTS)/gs_arglist.sa
 	if ./$(SEED_MIN_BIN) $(TESTS)/gs_arglist.sa > $(TESTS)/gs_arglist_ms.c 2>$(TESTS)/gs_arglist_ms.err; then \
 	  echo "[FAIL] seed-min accepted a list as a type argument"; exit 1; fi
@@ -1493,9 +1495,13 @@ test-native-emit-split: $(NATIVE_BIN)
 	  || { echo "[FAIL] the EMIT-SEAM-BEGIN marker is missing or duplicated"; exit 1; }
 	test $$(grep -c -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c) -eq 1 \
 	  || { echo "[FAIL] the EMIT-SEAM-END marker is missing or duplicated"; exit 1; }
+	test $$(grep -c -F '/* ================= phase 1: collect definitions' selfhost/native_aot.c) -eq 1 \
+	  || { echo "[FAIL] the phase-1 marker is missing or duplicated"; exit 1; }
+	test $$(grep -c -F 'x86-64 mini encoder' selfhost/native_aot.c) -eq 1 \
+	  || { echo "[FAIL] the encoder marker is missing or duplicated"; exit 1; }
 	b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c | cut -d: -f1); \
 	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c | cut -d: -f1); \
-	 p1=$$(grep -n -F 'phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
+	 p1=$$(grep -n -F '/* ================= phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
 	 enc=$$(grep -n -F 'x86-64 mini encoder' selfhost/native_aot.c | cut -d: -f1); \
 	 if [ "$$b" -ge "$$e" ]; then echo "[FAIL] the emit-seam markers are out of order"; exit 1; fi; \
 	 if [ "$$enc" -ge "$$p1" ] || [ "$$p1" -ge "$$b" ]; then \
@@ -1511,7 +1517,7 @@ test-native-emit-split: $(NATIVE_BIN)
 	   grep -n -w 'cn' $(TESTS)/seam_region.c | head -3; exit 1; fi; \
 	 echo "[OK] emit seam: $$((e - b)) lines of language-level emitter, no raw byte write, no direct cursor read"
 	# ---- the seam API is defined in the encoder region, above phase 1 ----
-	p1=$$(grep -n -F 'phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
+	p1=$$(grep -n -F '/* ================= phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
 	 for fn in 'static size_t here(void)' 'static void patch_imm32' 'static void leave_ret' \
 	           'static size_t sub_rsp_imm32_slot' 'static size_t jmp5_slot' 'static void erel32j'; do \
 	   ln=$$(grep -n -F "$$fn" selfhost/native_aot.c | head -1 | cut -d: -f1); \
@@ -2724,19 +2730,18 @@ test-gen2-index-mod: $(GEN2) $(SEED_MIN_BIN)
 	else echo '[SKIP] native %-index parity: native_aot not built'; fi
 	@echo '[OK] % in index expressions: seed-min == gen2 (== native when built)'
 
-# test-type-refusals: the type forms no backend implements must be refused
-# with a clear diagnostic on every backend, and the one form gen2 does
-# implement (a struct-typed `hold` annotation, which gen2 type-checks) must
-# keep working there while seed-min and native refuse it BY NAME. Nothing
-# here may be silently miscompiled: before this target, `p: Pt` in a struct
-# body registered `Pt` as an extra field on all three backends.
+# test-type-refusals: forms without an implementation must be rejected rather
+# than becoming malformed C.  A named struct annotation on `hold` is now a
+# portable checked form: seed-min, gen2 and native all require the exact
+# declared concrete struct identity.
 test-type-refusals: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@mkdir -p $(TESTS)
 	@printf 'struct Box<T> {\n  v\n}\nhold b = Box<Box<num>> { 7 }\nshow 1\n' > $(TESTS)/ttr_nested.sa
 	@printf 'struct Pt {\n  x\n  y\n}\nstruct Wrap {\n  p: Pt\n  n\n}\nshow 1\n' > $(TESTS)/ttr_fieldann.sa
-	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = Pt { 1, 2 }\nshow p.x\nshow p.y\n' > $(TESTS)/ttr_holdann.sa
+	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = Pt { 1, 2 }\nhold q: Pt = p\nshow q.x\nshow q.y\n' > $(TESTS)/ttr_holdann.sa
 	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = 5\nshow 1\n' > $(TESTS)/ttr_holdann_bad.sa
-	@# nested generic instantiation: refused on seed-min, gen2 and native
+	@printf 'struct Pt {\n  x\n}\nstruct Qt {\n  x\n}\nhold p: Pt = Qt { 5 }\n' > $(TESTS)/ttr_holdann_wrongstruct.sa
+	@# nested generic instantiation: still refused on seed-min, gen2 and native
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_nested.sa > $(TESTS)/ttr_nested_seed.c 2> $(TESTS)/ttr_nested_seed.msg; then echo "[FAIL] seed-min accepted Box<Box<num>>"; exit 1; fi
 	@grep -q "not implemented" $(TESTS)/ttr_nested_seed.msg || { echo "[FAIL] seed-min nested-generic refusal is unclear"; cat $(TESTS)/ttr_nested_seed.msg; exit 1; }
 	@./$(GEN2) $(TESTS)/ttr_nested.sa $(TESTS)/ttr_nested_gen2.c > $(TESTS)/ttr_nested_gen2.msg 2>&1; \
@@ -2752,18 +2757,25 @@ test-type-refusals: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/ttr_fieldann.sa $(TESTS)/ttr_fieldann_native > $(TESTS)/ttr_fieldann_native.msg 2>&1; then echo "[FAIL] native accepted a struct field annotation"; exit 1; fi
 	@grep -q "field annotations are not supported" $(TESTS)/ttr_fieldann_native.msg || { echo "[FAIL] native field-annotation refusal is unclear"; cat $(TESTS)/ttr_fieldann_native.msg; exit 1; }
 	@echo '[OK] struct field annotations refused on seed-min, gen2 and native'
-	@# struct-typed HOLD annotation: gen2 supports and type-checks it;
-	@# seed-min and native refuse it by name (their hold types are scalar)
+	@# Named struct holds: valid identity-preserving copy on every backend.
+	./$(SEED_MIN_BIN) $(TESTS)/ttr_holdann.sa > $(TESTS)/ttr_holdann_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/ttr_holdann_seed $(TESTS)/ttr_holdann_seed.c
 	./$(GEN2) $(TESTS)/ttr_holdann.sa $(TESTS)/ttr_holdann_gen2.c >/dev/null
-	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/ttr_holdann_gen2 $(TESTS)/ttr_holdann_gen2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/ttr_holdann_gen2 $(TESTS)/ttr_holdann_gen2.c
+	./$(NATIVE_BIN) $(TESTS)/ttr_holdann.sa $(TESTS)/ttr_holdann_native
+	$(call assert-out,./$(TESTS)/ttr_holdann_seed,1\n2)
 	$(call assert-out,./$(TESTS)/ttr_holdann_gen2,1\n2)
-	@./$(GEN2) $(TESTS)/ttr_holdann_bad.sa $(TESTS)/ttr_holdann_bad.c > $(TESTS)/ttr_holdann_bad.msg 2>&1; \
-	  grep -q 'is declared Pt but the value is a number' $(TESTS)/ttr_holdann_bad.c || { echo "[FAIL] gen2 did not type-check a struct-typed hold"; exit 1; }
-	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_holdann.sa > $(TESTS)/ttr_holdann_seed.c 2> $(TESTS)/ttr_holdann_seed.msg; then echo "[FAIL] seed-min accepted a struct-typed hold annotation"; exit 1; fi
-	@grep -q "unknown hold type 'Pt'" $(TESTS)/ttr_holdann_seed.msg || { echo "[FAIL] seed-min struct-hold refusal is unclear"; cat $(TESTS)/ttr_holdann_seed.msg; exit 1; }
-	@if ./$(NATIVE_BIN) $(TESTS)/ttr_holdann.sa $(TESTS)/ttr_holdann_native > $(TESTS)/ttr_holdann_native.msg 2>&1; then echo "[FAIL] native accepted a struct-typed hold annotation"; exit 1; fi
-	@grep -q "unknown or unsupported type 'Pt'" $(TESTS)/ttr_holdann_native.msg || { echo "[FAIL] native struct-hold refusal is unclear"; cat $(TESTS)/ttr_holdann_native.msg; exit 1; }
-	@echo '[OK] struct-typed hold: supported+checked on gen2, refused by name on seed-min and native'
+	$(call assert-out,./$(TESTS)/ttr_holdann_native,1\n2)
+	@# A scalar and a same-shaped but differently named struct are both errors.
+	@for f in ttr_holdann_bad ttr_holdann_wrongstruct; do \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/$$f.sa >$(TESTS)/$$f.seed.c 2>$(TESTS)/$$f.seed.msg; then echo "[FAIL] seed-min accepted invalid $$f"; exit 1; fi; \
+	  grep -q 'declared struct\|type mismatch' $(TESTS)/$$f.seed.msg || { echo "[FAIL] seed-min struct-hold error is unclear"; cat $(TESTS)/$$f.seed.msg; exit 1; }; \
+	  if ./$(NATIVE_BIN) $(TESTS)/$$f.sa $(TESTS)/$$f.native >$(TESTS)/$$f.native.out 2>$(TESTS)/$$f.native.msg; then echo "[FAIL] native accepted invalid $$f"; exit 1; fi; \
+	  grep -q 'declared\|two different types' $(TESTS)/$$f.native.msg || { echo "[FAIL] native struct-hold error is unclear"; cat $(TESTS)/$$f.native.msg; exit 1; }; \
+	  ./$(GEN2) $(TESTS)/$$f.sa $(TESTS)/$$f.gen2.c >/dev/null 2>$(TESTS)/$$f.gen2.msg; \
+	  grep -q '#error sayanox-min:' $(TESTS)/$$f.gen2.c || { echo "[FAIL] gen2 accepted invalid $$f"; exit 1; }; \
+	done
+	@echo '[OK] struct-typed hold: seed-min, gen2 and native preserve/check the named concrete struct; scalar and wrong-struct initializers refuse'
 
 test-stage2: test-gen2-index-expr
 test-for-str: test-gen2-index-expr
@@ -3080,15 +3092,16 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/native_nest3_g2 $(TESTS)/native_nest3_g2.c
 	$(call assert-out,./$(TESTS)/native_nest3_g2,1\n2\n3\nmain\n4)
 	@echo "[OK] native nested structs: l.a.x chains (2 and 3 levels), typed copy; seed-min and gen2 agree"
-	@# nested-struct forms native must reject with a clear error, not mis-compile
+	@# Keep the remaining nested-struct refusals clear rather than miscompiled.
 	@printf 'struct Line {\n  a\n}\nstruct Point {\n  x\n}\nhold l = Line { a: Point { 1 } }\n' > $(TESTS)/native_nestfwd.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_nestfwd.sa $(TESTS)/native_nestfwd 2>/dev/null; then \
 	  echo "[FAIL] native accepted a nested struct declared later"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_nestfwd.sa $(TESTS)/native_nestfwd 2>&1 | grep -q 'declare the nested struct first'
-	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: [1], b: Point { 2 } }\n' > $(TESTS)/native_nestlist.sa
-	@if ./$(NATIVE_BIN) $(TESTS)/native_nestlist.sa $(TESTS)/native_nestlist 2>/dev/null; then \
-	  echo "[FAIL] native accepted a list in a struct field"; exit 1; fi
-	@./$(NATIVE_BIN) $(TESTS)/native_nestlist.sa $(TESTS)/native_nestlist 2>&1 | grep -q 'cannot hold a list'
+	@# Concrete list fields are list pointers, not inline doubles: exercise
+	@# mutation and access here as well as in test-list-struct-fields.
+	@printf 'struct Line {\n  a\n}\nhold l = Line { a: [1] }\nhold alias = l.a\npush(alias, 2)\nshow len(l.a)\nshow l.a[1]\n' > $(TESTS)/native_nestlist.sa
+	./$(NATIVE_BIN) $(TESTS)/native_nestlist.sa $(TESTS)/native_nestlist
+	$(call assert-out,./$(TESTS)/native_nestlist,2\n2)
 	@printf 'struct Point {\n  x\n}\nhold q = Point { x: 1 }\nshow q\n' > $(TESTS)/native_showstruct.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_showstruct.sa $(TESTS)/native_showstruct 2>/dev/null; then \
 	  echo "[FAIL] native accepted show of a struct"; exit 1; fi
@@ -3097,7 +3110,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/native_nestchain.sa $(TESTS)/native_nestchain 2>/dev/null; then \
 	  echo "[FAIL] native accepted a chain through a number field"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_nestchain.sa $(TESTS)/native_nestchain 2>&1 | grep -q 'cannot access a field'
-	@echo "[OK] native rejects (clearly): later-declared nesting, list in struct, show of struct, bad chain"
+	@echo "[OK] native nested boundaries: concrete list field works; later-declared nesting, show of struct and bad chain reject clearly"
 	@# doubly nested field copy (same source as test-nest's ts_nestcopy):
 	@# all three backends must print 7
 	@printf 'struct Point {\n  x\n}\nstruct Mid {\n  p\n}\nstruct Top {\n  q\n}\nhold t = Top { q: Mid { p: Point { x: 7 } } }\nhold p2 = t.q.p\nshow p2.x\n' > $(TESTS)/native_nestcopy.sa
@@ -4113,3 +4126,40 @@ test-seed-borrow: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
 	@echo '[OK] seed borrowing: read-only parameters, writable aliases/branches/binders/returns; 30000 reads of 16 KiB with live list (seed/gen2/native)'
 test-stage2: test-seed-borrow
 native-test: test-seed-borrow
+
+# ---------------------------------------------------------------------------
+# List-valued struct fields are a pointer field, not an inline copy.  The seed
+# and native backends can therefore preserve aliases and iterate `for v in
+# p.xs`; native's BK_STRUCT tracer must also retain the pointed-to list across
+# collections.  gen2 deliberately emits a #error for this syntax for now: its
+# self-hosted struct literal walker has no list-field lowering yet, and this
+# target pins that refusal rather than letting malformed C look like support.
+# ---------------------------------------------------------------------------
+.PHONY: test-list-struct-fields
+LSF_WANT := 5\n2\n3\n5\n7\n11\n28\n5
+test-list-struct-fields: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/list_struct_fields_test.sa > $(TESTS)/list_struct_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/list_struct_seed $(TESTS)/list_struct_seed.c
+	$(call assert-out,./$(TESTS)/list_struct_seed,$(LSF_WANT))
+	./$(NATIVE_BIN) selfhost/list_struct_fields_test.sa $(TESTS)/list_struct_native
+	$(call assert-out,./$(TESTS)/list_struct_native,$(LSF_WANT))
+	./$(NATIVE_BIN) selfhost/list_struct_fields_gc_test.sa $(TESTS)/list_struct_gc
+	$(call assert-out,./$(TESTS)/list_struct_gc,gc-ok\n5\n4\n5\n6\n7\n8)
+	@# A field's first kind is a contract: it cannot later switch number/list.
+	@printf 'struct P { xs }\nhold p = P { xs: [1] }\nhold q = P { xs: 2 }\n' > $(TESTS)/list_struct_conflict.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/list_struct_conflict.sa >$(TESTS)/list_struct_conflict_seed.c 2>$(TESTS)/list_struct_conflict_seed.err; then \
+	  echo '[FAIL] seed-min accepted a list/number struct-field conflict'; exit 1; fi
+	@grep -q 'earlier literal' $(TESTS)/list_struct_conflict_seed.err || { echo '[FAIL] seed-min list-field conflict was unclear'; cat $(TESTS)/list_struct_conflict_seed.err; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/list_struct_conflict.sa $(TESTS)/list_struct_conflict_native >$(TESTS)/list_struct_conflict_native.out 2>$(TESTS)/list_struct_conflict_native.err; then \
+	  echo '[FAIL] native accepted a list/number struct-field conflict'; exit 1; fi
+	@grep -q 'two different types' $(TESTS)/list_struct_conflict_native.err || { echo '[FAIL] native list-field conflict was unclear'; cat $(TESTS)/list_struct_conflict_native.err; exit 1; }
+	@# Gen2 refuses rather than emitting a successful executable; preserve the
+	@# diagnostic until its C layout/type lowering is implemented.
+	./$(GEN2) selfhost/list_struct_fields_test.sa $(TESTS)/list_struct_gen2.c >/dev/null
+	@grep -q -F '#error sayanox-min: for loop: the expression after `in` is not a list or a string' $(TESTS)/list_struct_gen2.c \
+	  || { echo '[FAIL] gen2 no longer clearly refuses a list-valued struct field'; exit 1; }
+	@echo '[OK] list struct fields: seed-min/native alias-preserving storage and for p.xs; native GC tracing; gen2 clear refusal'
+
+test-stage2: test-list-struct-fields
+native-test: test-list-struct-fields

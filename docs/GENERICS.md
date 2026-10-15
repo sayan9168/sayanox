@@ -121,9 +121,12 @@ recorded as soon as the nested call is queued.
   template and each instantiation is its own concrete struct (`Box<num>` is
   `Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns`: the
   function-mangling suffixes), on all three backends, with `num` or `str` as a
-  type argument. `make test-generic-structs` pins the parity fixture and the
-  five refusals; [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md) records the model and
-  what is still missing.
+  type argument. `Box<list>` is intentionally still refused even though
+  seed-min/native now support **concrete** list-valued struct fields: gen2 has
+  no corresponding list-field layout, and generic specialization must not
+  promise cross-backend parity it cannot deliver. `make test-generic-structs`
+  pins the parity fixture and the five refusals; [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md)
+  records the model and what is still missing.
 * Kinds are per *value kind*, not per declared type: `A` and `B` can both be
   `num` without any distinction being made.
 
@@ -251,8 +254,13 @@ structs (concrete struct specializations) landed in a later increment — see
 ## Current nested-layout boundary (2026-10-15)
 
 Simple generic structs (`Box<num>`, `Box<str>`) are implemented; nested generic
-structs (`Box<Box<num>>`), struct-valued type arguments and list-valued fields
-remain unsupported. `test-type-refusals` pins nested refusal on seed-min/gen2/
-native. This is distinct from nested generic **function calls**, which have
-existing specialization tests. No recursive struct-layout/GC worklist was
-added in this PR; see TYPES_ROADMAP.md for what safe support requires.
+structs (`Box<Box<num>>`) and struct-valued type arguments remain unsupported.
+This is a deliberate current bootstrap-dialect limit, not a partially accepted
+syntax: a recursive specialization/layout/GC worklist is required before that
+spelling can be made safe.
+Concrete list-valued fields work on seed-min/native, but generic `Box<list>`
+and gen2 list fields remain refused to keep generic specialization parity
+honest. `test-type-refusals` pins nested refusal on seed-min/gen2/native. This
+is distinct from nested generic **function calls**, which have existing
+specialization tests. No recursive struct-layout/GC worklist was added; see
+TYPES_ROADMAP.md for what safe support requires.

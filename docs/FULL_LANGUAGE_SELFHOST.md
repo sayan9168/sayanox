@@ -42,7 +42,7 @@ language, not the full language.
   typed inline list expressions — `test-list2`, `test-list-expr`,
   `test-list-paren`
 * structs: declarations, literals, nested structs, field chains, field types
-  inferred from the literals that fill them — `test-struct2`, `test-struct-logic`
+  inferred from the literals that fill them — `test-struct2`, `test-struct-logic`; seed-min and native also have concrete list-pointer fields and `for v in p.xs` (`test-list-struct-fields`), while gen2 explicitly refuses that form
 * fully typed functions (`make f(a: num, b: str) -> str`), forward and mutual
   recursion, function-local `hold`, function-local `for`, parameters that are
   reassigned — `test-typed-sig`, `test-fn2`, `test-seed-typed-functions`
@@ -58,10 +58,9 @@ language, not the full language.
 * **a parenthesised `for` source (2026-10-13):** `for c in (s)` and
   `for v in (xs)` strip whole-source parentheses on seed-min, gen2 and native —
   `test-for-paren`. A parenthesised *range* (`for i in (0..10)`) stays refused.
-* **a struct-typed `hold` annotation (gen2 only):** `hold p: Pt = Pt { 1, 2 }`
-  is accepted and type-checked by gen2 (`hold p: Pt = 5` is a type error);
-  seed-min and native refuse it by name, because their `hold` types are the
-  scalars — `test-type-refusals`
+* **a concrete struct-typed `hold` annotation:** `hold p: Pt = Pt { 1, 2 }`
+  is accepted and identity-checked by seed-min, gen2 and native; a scalar or a
+  same-shaped but differently named struct is refused — `test-type-refusals`
 * generics over numbers (`make NAME<T>`, `NAME<A, B>`), demand-driven generic
   bodies — `test-generics`, `test-native-generics`
 * `use "file.sa"` splicing to depth 8 — `test-use`
@@ -77,8 +76,9 @@ language, not the full language.
   (`make test-gen2-index-expr` and `test-gen2-expr-lowering` pin the refusals;
   `%`, `len()` and nested indexes are supported — see above)
 * a global read inside an untyped `make` body
-* `for v in p.xs` (a `list`-typed struct field as the source: no backend has a
-  list-typed struct field, so this needs a field type that does not exist yet)
+* `for v in p.xs` on **gen2**: seed-min and native support concrete list fields,
+  but gen2 emits a deliberate `#error` until its self-hosted struct layout and
+  field-kind lowering are extended (`test-list-struct-fields`)
 * a struct field annotation (`p: Pt` in a struct body): it used to register
   `Pt` as an extra field on all three backends; since 2026-10-13 all three
   refuse it (`test-type-refusals`). A literal after the colon (`k: 2`) is the
@@ -105,7 +105,7 @@ the 17,825-line / 608,621-byte source as of this writing:
 | struct values and field chains | **no** — the compiler keeps its registries in delimited strings (`sdefs`, `gsdefs`) and lists, not struct values | yes (`test-struct2`, `test-nest`) |
 | generic structs / generic functions | **no** — `<T>` appears only inside scanner string literals; the compiler *implements* generics without *using* them | yes (`test-generic-structs`, `test-generics`) |
 | string interpolation `${...}` | **no** — 1,671 `concat(...)` calls instead | yes (`test-stdlib-interpolation`) |
-| struct-typed `hold` annotations | **no** — `hold` in the compiler is untyped or scalar-typed | yes, gen2 only (`test-type-refusals`) |
+| struct-typed `hold` annotations | **no** — `hold` in the compiler is untyped or scalar-typed | yes on seed-min/gen2/native for concrete declarations (`test-type-refusals`) |
 | list literals, `push`, `len`, index expressions | yes | yes |
 | `use "..."` modules | no top-level `use` directive in compiler_min.sa; it implements splicing for input programs | yes (`test-use`) |
 | file/process builtins (`read_file`, `write_file`, `run`) | yes | yes (`test-native-io` on native) |
@@ -126,14 +126,15 @@ The intermediate borrow-only prototype was 638,512 KiB; the final safe registry
 has overhead, so that smaller prototype number is not the shipped claim.
 Generated gen2 C is byte-identical before/after. `make gen3` separately checks
 that gen3/gen4 remain byte-identical. Logs: `ten-memory.log`,
-`ten-memory-gen3.log`, final gates `ten-final-*.log`.
+`ten-memory-gen3.log`, and the final `ten-remaining-final-*.log` gates.
 
 `compiler_min.sa` itself did not change in this PR, so its checked-in recovery
 bundle did not need regeneration. No chunked/streaming compiler emission,
 complete seed GC, full-language rewrite, or parallel Stage-2 path was added.
 Full-language self-host remains **not claimed**. The source still does not use
-struct/generic values or struct-typed holds as listed above, and namespaced
-modules, list-valued struct fields and nested generic layouts remain missing.
+struct/generic values or struct-typed holds as listed above. Namespaced
+modules, gen2 list-field layout/lowering, and nested generic layouts remain
+missing; concrete list-valued fields on seed-min/native are documented above.
 
 ## The Stage-2 host is not in this repository
 

@@ -101,8 +101,10 @@ the cursor of the current chunk, and if that is exhausted it maps a new chunk.
   can delay a reclamation and can never cause a false one, because a candidate
   is only accepted at an exact payload start behind a matching magic word.
 
-Marking recurses into struct blocks only: strings hold bytes and lists hold
-doubles, so both are leaves.
+Marking recurses into `BK_STRUCT` blocks word by word. Strings are leaves;
+lists contain doubles plus the runtime growth-forward pointer, which is traced
+explicitly. A list-valued struct field is therefore safe: its word marks the
+list header, and list marking retains its backing/growth chain.
 
 **Sweep.** Three passes over every chunk: free unmarked blocks (reclaiming
 their bytes) and coalesce adjacent free runs; hand the runs back to the free
@@ -134,6 +136,10 @@ bytes the last sweep saw alive (plus whatever has been allocated since), and
   positive live count;
 * strings, list elements and struct fields still read back correctly after
   30000 allocating iterations, so nothing reachable is reclaimed;
+* `test-list-struct-fields` first grows `p.xs` through an alias, then retains
+  the original field pointer through 6000 allocating iterations, requires
+  `gc_runs() > 0`, and iterates the current list; this pins both the
+  `BK_STRUCT` list-pointer root and the list growth-forward tracing path.
 * a program that genuinely *retains* more than 4 MiB (a string doubled 20
   times, 8 MiB live) still dies with the documented `out of memory` message and
   a non-zero exit status, keeping the output it wrote first.
@@ -147,10 +153,10 @@ bytes the last sweep saw alive (plus whatever has been allocated since), and
   word is overwritten. That costs memory, never safety.
 * Chunks are only handed back when a sweep empties one completely; a chunk
   holding one small live block stays mapped.
-* Native still rejects, by name, the full-language statements the backend does
-  not model: `for`, `break`, `continue` and `elif` (see the Stage-2 slice in
-  [`STATUS.md`](STATUS.md)). Native programs therefore stay in the pure-min
-  statement set.
+* Native is still not a full-language backend. Its tested subset includes
+  `for`, `break` and `continue`; unsupported forms must keep producing a
+  backend diagnostic rather than x86 code with guessed semantics. See the
+  Stage-2 slice in [`STATUS.md`](STATUS.md).
 
 ### The two seeds, measured
 
@@ -249,6 +255,7 @@ link line, because `sx_modv` calls `fmod`.
 make gc-test         # reference-counting runtime slice (2000 concats, length + ok)
 make test-gc         # gen2 mark & sweep: bounded heap, collections, gc()/gc_live()
 make test-native-mem # native mark & sweep: churn inside a 4 MiB cap, no UAF
+make test-list-struct-fields # seed/native list-field aliases + native GC root probe
 make test-seed-gc    # both seeds: builder + freeing assignment, no-op gc(),
                      # live-object counts, and what each one does under a cap
 ```
