@@ -1,0 +1,25 @@
+// Native-only GC root probe: p is a live struct and p.xs must survive every
+// collection, even though the loop continually replaces an unrelated string.
+struct Packet {
+  xs
+}
+hold p = Packet { xs: [4, 5] }
+// Force a list growth through an alias. p.xs still holds the old header, so
+// the struct tracer and the list growth-forward tracer must both keep the
+// current list alive through the allocations below.
+hold alias = p.xs
+push(alias, 6)
+push(alias, 7)
+push(alias, 8)
+for i in 0..6000 {
+  hold toss = concat("t", chr(i))
+}
+when gc_runs() > 0 {
+  show "gc-ok"
+} otherwise {
+  show "gc-missing"
+}
+show len(p.xs)
+for v in p.xs {
+  show v
+}

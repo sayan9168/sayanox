@@ -45,16 +45,14 @@ of a safe implementation:
    layout cannot be spelled yet (see below).
 4. **Kind checking at every boundary** — partly done: the type argument fixes
    the field kind at the literal, so one instantiation used with two kinds is
-   refused by all three backends. Struct-typed `hold` annotations turned out
-   to already exist on **gen2** (measured 2026-10-13, correcting the earlier
-   claim that no backend has them): `hold p: Pt = Pt { 1, 2 }`,
-   `hold q: Pt = p` and even `hold b: Box__n = Box<num> { 7 }` compile and
-   run, and `hold p: Pt = 5` is refused with `'p' is declared Pt but the
-   value is a number`. seed-min (`unknown hold type 'Pt': seed-min supports num, str, list;
-   struct-typed hold is not implemented`) and native (`hold 'p': unknown or unsupported type 'Pt'`)
-   refuse the same syntax by name, because their `hold` types are the
-   scalars. All of this is pinned by `make test-type-refusals`. Calls and
-   returns still cannot be checked against a struct type on any backend.
+   refused by all three backends. Concrete named struct holds now work on all
+   three: `hold p: Pt = Pt { 1, 2 }` and `hold q: Pt = p` preserve `Pt`'s
+   identity; `hold p: Pt = 5` and `hold p: Pt = Other { 1, 2 }` are errors.
+   Seed-min records the declared struct index beside the annotation; native
+   records it during collection and rechecks it at emission. `make
+   test-type-refusals` pins the positive copy plus both negative cases. Calls,
+   returns and reassignment still cannot be checked against a struct type on
+   every backend.
 5. **A finite specialization worklist** — done by construction: instantiation
    happens on demand at a literal site, is idempotent and needs no recursion
    (nesting is refused), so the order is stable and gen3 is reproducible.
@@ -95,9 +93,9 @@ concrete-name workaround and the dotted-field-read divergence).
 |---|---|---|---|
 | `Box<num, str> { 7 }` (one parameter) | `Box takes 1 type argument, got 2`, exit 1 | `#error sayanox-min: undefined name: Box` | `struct 'Box' takes 1 type argument, got 2`, exit 1 |
 | `Box<NumBox> { n }` (a struct as a type argument) | `a type argument must be num, str or list (got 'NumBox'); a struct name as a type argument is not implemented`, exit 1 | `#error sayanox-min: undefined name: Box` | the same sentence as seed-min, exit 1 |
-| `Box<list> { xs }` (no backend has a list-typed struct field) | `a struct field cannot hold a list`, exit 1 | `#error sayanox-min: undefined name: Box` | `struct 'Box__l' field 'v' cannot hold a list (seed-min/gen2 reject this)`, exit 1 |
+| `Box<list> { xs }` (generic list field) | refused: generic list specialization/layout is not implemented | `#error sayanox-min: undefined name: Box` | refused: generic list specialization/layout is not implemented |
 | `Box { 7 }` (a bare template name) | `Box is a generic struct: write Box<num> { ... } with one type argument per type parameter`, exit 1 | `#error sayanox-min: unexpected '{' (expected the end of the statement or a new statement)` | `'Box' is a generic struct: write Box<num> { ... } with one type argument per type parameter`, exit 1 |
-| `Box<num> { 7 }` and `Box<num> { "seven" }` | `Box__n field 'v' is num (its type argument says so), the literal gives str`, exit 1 | `#error sayanox-min: struct field is used with two different types (string vs number)` | `struct 'Box__n' field 'v' is a number (its type argument says so), the literal gives a string`, exit 1 |
+| `Box<num> { 7 }` and `Box<num> { "seven" }` | `Box__n field 'v' is num (its type argument says so), the literal gives str`, exit 1 | `#error sayanox-min: struct field is used with two different value kinds (number, string, list, or concrete struct)` | `struct 'Box__n' field 'v' is a number (its type argument says so), the literal gives a string`, exit 1 |
 
 All three backends refuse all five. seed-min and native name the problem; gen2
 refuses three of them through its general undefined-name/stray-token errors, so
@@ -114,9 +112,10 @@ is good.
   native; seed-min and native name the problem, gen2 refuses via its general
   `undefined name: Box`). seed-min additionally requires a nested concrete
   struct to be declared before the struct that holds it.
-* **A struct or a list as a type argument** — refused everywhere. A list-typed
-  struct field does not exist in any backend; a struct-typed one exists only as
-  a declared concrete name.
+* **A struct as a type argument** — refused everywhere. A list type argument
+  is also deliberately refused for **generic** structs until generic
+  specialization/layout and GC rules are implemented. This does not prohibit a
+  concrete list-valued struct field on seed-min, Gen2 or native.
 * **gen2's diagnostics for a bad type argument list** — it refuses, but as
   `undefined name: Box` or `unexpected '{'` rather than naming the template.
   The name is known to the pre-pass and not to the two walker sites that report
@@ -128,11 +127,10 @@ is good.
   gen2 accepts it and gives `Box__n` a string field, where seed-min and native
   refuse. A second literal of the other kind is refused by all three. Closing
   this needs the field's *index* at gen2's two `ftypes` write sites.
-* **Struct-typed annotations are gen2-only** — `hold b: Box__n = Box<num> { 7 }`
-  works on gen2 (above), so a cross-specialization assignment *can* be
-  expressed there, but seed-min and native refuse every struct-typed
-  annotation, so the spelling is not portable. seed-min refuses all struct
-  reassignment.
+* **Struct-typed calls, returns and reassignment** — concrete `hold` annotations
+  are portable now, but parameter/return annotations and reassignment of a
+  struct value remain outside the shared slice. In particular, generic-struct
+  identity in function signatures still needs a richer type representation.
 * **Struct field annotations** — `p: Pt` inside a struct body is refused on
   all three backends since 2026-10-13 (`struct field annotations are not
   supported: write just the field name`, `test-type-refusals`). Before that
@@ -294,20 +292,32 @@ structs, full expression type inference and definite assignment remain open.
 
 ## 2026-10-15 boundary and prerequisites
 
-No list-valued struct field layout or nested generic instantiation was added.
-Before enabling `for v in p.xs`, all frontends need a distinct list field kind
-(not a double), C typedef/literal/access lowering, and consistent list identity
-through growth/rebinding. Native GC descriptors must trace the list pointer
-and forwarding representation. Until then, keep the list in its own hold;
-string-valued fields already work. `test-seed-for-fields` is not a list-field
-support test. gen2 may emit a broader for-source `#error`, not a named field
-error; do not claim uniform diagnostic wording or full struct type safety.
+Concrete list-valued fields now exist on **seed-min, Gen2 and native**. Seed-min
+has an explicit `FT_LIST` field kind, emits `sx_list *`, preserves the list
+pointer instead of copying elements, and fixes an early-pass provisional `for`
+binder once literal scanning discovers the field kind. Gen2 has a distinct
+field tag `3`, emits `sx_list *`, and type-lowers concrete literals/copies,
+nested chains, indexed reads/writes, list-field index conditions and `for v in
+p.xs`. Native already stores each struct field as one word; a list field uses
+that word as the list pointer and its `BK_STRUCT` tracer marks it.
+`test-list-struct-fields` proves shared seed-min/Gen2/native aliasing and
+`for v in p.xs`, list growth through an alias, list/number field-conflict
+refusal, and native collection retention. `test-gen2-list-struct-fields` compiles/runs strict-C
+Gen2 coverage for pointer layout, literals/copies, indexed read/write,
+conditions, nested layout and iteration, and pins clear refusals for generic
+kind conflicts, direct field `push`, whole-list `show`, and whole-list
+conditions.
 
-`Box<Box<num>>` remains refused on all three backends. Safe support would need
-recursive specialization identity, dependency-ordered layouts, cycle checking,
-and correct native tracing for each pointer field. Merely accepting nested
-angle brackets or mangling a nested name would not meet those requirements.
+Generic `Box<list>` remains deliberately refused. The concrete representation
+is not a claim of generic specialization parity: safe support still needs a
+generic layout/GC worklist and explicit type-argument propagation.
 
-`test-type-refusals` explicitly builds native and checks seed's rejected type
-name (`Pt`). It retains gen2's valid struct-hold program and mismatch test.
-Seed/native support was not substituted with untyped acceptance.
+`Box<Box<num>>` remains refused on all three backends. This is the current
+bootstrap-dialect limit: safe support needs recursive specialization identity,
+a bounded worklist, dependency-ordered layouts, cycle rules and correct native
+tracing for each pointer field. Merely accepting nested angle brackets or
+mangling a nested name would not meet those requirements.
+
+`test-type-refusals` now builds and executes the positive `hold p: Pt` copy on
+seed-min/gen2/native and checks scalar and wrong-concrete-struct failures. It
+is real named-layout checking, not untyped acceptance.

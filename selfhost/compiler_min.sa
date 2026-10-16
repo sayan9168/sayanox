@@ -507,8 +507,8 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
               when i < len(text) && sx_index(text, i) == 40 {
                 hold returns = sxesegment(env, 4)
                 hold signatures = sxesegment(env, 5)
-                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_http=s|")
-                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_http=s|")
+                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_http=s|len=n|index=n|")
+                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_http=s|len=a|index=an|")
                 kind = sxelookup(returns, name, "=")
                 when len(kind) == 0 {
                   give sxerecord(i, "e", "call has no checked return signature")
@@ -536,10 +536,10 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                       give sxerecord(i, "e", "length/index requires a string or list")
                     }
                     when string_eq(actual, "l") {
-                      when string_eq(name, "sx_len") {
+                      when string_eq(name, "sx_len") || string_eq(name, "len") {
                         name = "sx_llen"
                       }
-                      when string_eq(name, "sx_idx") {
+                      when string_eq(name, "sx_idx") || string_eq(name, "index") {
                         name = "sx_lget"
                       }
                     }
@@ -564,6 +564,16 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                   give sxerecord(i, "e", "call argument count mismatch")
                 }
                 i = i + 1
+                // Source aliases are accepted by this checked parser too.
+                // Most callers hand us already-normalized sx_* names, but
+                // field-list lowering starts from source text (for example
+                // p.xs[len(p.xs) - 1]) and must not leave a bare C `len`.
+                when string_eq(name, "len") {
+                  name = "sx_len"
+                }
+                when string_eq(name, "index") {
+                  name = "sx_idx"
+                }
                 code = concat(name, "(")
                 code = concat(code, args)
                 code = concat(code, ")")
@@ -629,6 +639,13 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
       kind = "n"
       when string_eq(fieldkind, "1") {
         kind = "s"
+      }
+      // Field tag 3 is an owning alias to a numeric-list object.  It is
+      // distinct from tag 2 (an inline concrete struct), so postfix indexing
+      // and len() choose the list runtime rather than treating the pointer as
+      // a numeric C field.
+      when string_eq(fieldkind, "3") {
+        kind = "l"
       }
       when sx_index(fieldkind, 0) == 50 {
         kind = concat("u", sxeslice(fieldkind, 2, len(fieldkind)))
@@ -2817,6 +2834,21 @@ hold chtok = ""
 hold chtokrun = 0
 hold chlast = 0
 hold chinn = ""
+// Struct-literal list values use the checked expression parser.  These
+// scratch values also let the list parser reserve its evaluation temporaries
+// before the containing C declaration is emitted.
+hold flenv = ""
+hold flstate = []
+hold flvalue = ""
+hold flkind = ""
+hold flend = 0
+hold flserial = 0
+hold flserialend = 0
+hold fllist = 0
+// Start of a struct-field expression.  The legacy value/show walkers parse
+// the base before the dotted suffix, while sxeparse can safely lower a typed
+// list-field postfix index from this original location.
+hold fieldbaseat = 0
 // typedef emitter: struct-typed field (inner struct name)
 hold tdclass = 0
 hold tdinn = ""
@@ -6893,6 +6925,7 @@ while running == 1 {
 
       // RHS: name, name + number, or call(...)
       when (c1 >= 97 && c1 <= 122) || (c1 >= 65 && c1 <= 90) {
+        hold fieldbaseat = pos
         hold nm2 = ""
         hold rn = 1
         while rn == 1 {
@@ -7119,6 +7152,59 @@ while running == 1 {
                   when pos < n {
                     hold ec = sx_index(source,pos)
                   }
+                  // A concrete list field is an sx_list pointer, never an
+                  // inline numeric value.  Reuse the checked expression parser
+                  // for both `[ ... ]` and a list-valued name/field path; that
+                  // gives list literals the same numeric-element checking and
+                  // left-to-right evaluation temporaries as ordinary lists.
+                  hold fllist = 0
+                  when ec == 91 || (ec >= 97 && ec <= 122) || (ec >= 65 && ec <= 90) {
+                    hold flenv = concat(decls, chr(1))
+                    hold flenv = concat(flenv, sdecls)
+                    hold flenv = concat(flenv, chr(1))
+                    hold flenv = concat(flenv, ldecls)
+                    hold flenv = concat(flenv, chr(1))
+                    hold flenv = concat(flenv, svars)
+                    hold flenv = concat(flenv, chr(1))
+                    hold flenv = concat(flenv, fsret)
+                    hold flenv = concat(flenv, chr(1))
+                    hold flenv = concat(flenv, fspk)
+                    hold flenv = concat(flenv, chr(1))
+                    hold flenv = concat(flenv, inprivate)
+                    hold flenv = concat(flenv, chr(1))
+                    hold flenv = concat(flenv, ftypes)
+                    hold flserial = len(instate)
+                    hold flvalue = sxeparse(source, pos, flenv, 0, 0, instate)
+                    hold flkind = sxesegment(flvalue, 1)
+                    when sx_eq(flkind, "l") == 1 {
+                      hold fllist = 1
+                      hold ety = 3
+                      hold el = sxecode(flvalue)
+                      hold pos = sxepos(flvalue)
+                      hold lt = 1
+                      when inready == 0 {
+                        while sxecontains(source, inprivate) == 1 {
+                          hold inprivate = concat(inprivate, "x")
+                        }
+                        hold inready = 1
+                        hold fsret = concat(fsret, inprivate)
+                        hold fsret = concat(fsret, "list=l|")
+                      }
+                      // sxeparse records one temporary per literal element.
+                      // Emit them in this scope before the containing struct
+                      // declaration, then let later inline lowering continue
+                      // from the next serial rather than redeclaring them.
+                      hold flserialend = len(instate)
+                      while flserial < flserialend {
+                        hold body = concat(body, "  double ")
+                        hold body = concat(body, inprivate)
+                        hold body = concat(body, sxedigits(flserial))
+                        hold body = concat(body, ";")
+                        hold body = concat(body, nl)
+                        hold flserial = flserial + 1
+                      }
+                    }
+                  }
                   when (ec >= 48 && ec <= 57) || ec == 45 {
                     when ec == 45 {
                       hold el = "-"
@@ -7177,7 +7263,7 @@ while running == 1 {
                     }
                   }
                   // name value: a name tracked as a string is a string
-                  when (ec >= 97 && ec <= 122) || (ec >= 65 && ec <= 90) {
+                  when ((ec >= 97 && ec <= 122) || (ec >= 65 && ec <= 90)) && fllist == 0 {
                     hold el = ""
                     hold rn = 1
                     while rn == 1 {
@@ -7437,7 +7523,11 @@ while running == 1 {
                             }
                           }
                         } otherwise {
-                          hold fprv = 0
+                          when fpk == 51 {
+                            hold fprv = 3
+                          } otherwise {
+                            hold fprv = 0
+                          }
                         }
                       }
                       hold fsp = fl2
@@ -7454,10 +7544,14 @@ while running == 1 {
                         hold ftypes = concat(ftypes, etyname)
                         hold ftypes = concat(ftypes, "|")
                       } otherwise {
-                        when ety == 1 {
-                          hold ftypes = concat(ftypes, "1|")
+                        when ety == 3 {
+                          hold ftypes = concat(ftypes, "3|")
                         } otherwise {
-                          hold ftypes = concat(ftypes, "0|")
+                          when ety == 1 {
+                            hold ftypes = concat(ftypes, "1|")
+                          } otherwise {
+                            hold ftypes = concat(ftypes, "0|")
+                          }
                         }
                       }
                     } otherwise {
@@ -7717,7 +7811,11 @@ while running == 1 {
                           }
                         }
                       } otherwise {
-                        hold fprv = 0
+                        when fpk == 51 {
+                          hold fprv = 3
+                        } otherwise {
+                          hold fprv = 0
+                        }
                       }
                     }
                     hold fsp = fl2
@@ -9103,7 +9201,11 @@ hold ec = 0
                           }
                         }
                       } otherwise {
-                        hold fprv = 0
+                        when fpk == 51 {
+                          hold fprv = 3
+                        } otherwise {
+                          hold fprv = 0
+                        }
                       }
                     }
                     hold fsp = fl2
@@ -9154,10 +9256,14 @@ hold ec = 0
                   hold rk = 3
                   hold stname = curst
                 } otherwise {
-                  when curty == 1 {
-                    hold rk = 1
+                  when curty == 3 {
+                    hold rk = 2
                   } otherwise {
-                    hold rk = 0
+                    when curty == 1 {
+                      hold rk = 1
+                    } otherwise {
+                      hold rk = 0
+                    }
                   }
                 }
               }
@@ -9205,6 +9311,94 @@ hold ec = 0
             }
           }
           // a struct result cannot enter a + - * / % chain
+          // A field-list postfix is reparsed from its original base.  The
+          // legacy walker consumes the dotted selectors first, so this keeps
+          // `p.xs[i]` in the typed list path instead of leaving '[' behind.
+          when chn >= 1 && rk == 2 {
+            hold sk = 1
+            while sk == 1 {
+              when pos >= n {
+                hold sk = 0
+              } otherwise {
+                hold cs = sx_index(source,pos)
+                when cs == 32 || cs == 9 || cs == 13 {
+                  hold pos = pos + 1
+                } otherwise {
+                  hold sk = 0
+                }
+              }
+            }
+            hold c2 = 0
+            when pos < n {
+              hold c2 = sx_index(source,pos)
+            }
+            when c2 == 91 {
+              hold flenv = concat(decls, chr(1))
+              hold flenv = concat(flenv, sdecls)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, ldecls)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, svars)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, fsret)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, fspk)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, inprivate)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, ftypes)
+              hold flvalue = sxeparse(source, fieldbaseat, flenv, 7, 0, instate)
+              hold flkind = sxesegment(flvalue, 1)
+              when sx_eq(flkind, "n") == 1 {
+                hold rhs = sxecode(flvalue)
+                hold pos = sxepos(flvalue)
+                hold rk = 0
+                hold lt = 1
+              } otherwise {
+                hold perr = 1
+                when sx_eq(flkind, "e") == 1 {
+                  hold permsg = concat("list-field index: ", sxecode(flvalue))
+                } otherwise {
+                  hold permsg = "list-field index must produce a number"
+                }
+              }
+            }
+          }
+          // A whole list field can be copied or iterated, but arithmetic on
+          // its pointer is never source-level numeric arithmetic.
+          when chn >= 1 && rk == 2 {
+            hold sk = 1
+            while sk == 1 {
+              when pos >= n {
+                hold sk = 0
+              } otherwise {
+                hold cs = sx_index(source,pos)
+                when cs == 32 || cs == 9 || cs == 13 {
+                  hold pos = pos + 1
+                } otherwise {
+                  hold sk = 0
+                }
+              }
+            }
+            hold c2 = 0
+            when pos < n {
+              hold c2 = sx_index(source,pos)
+            }
+            when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 {
+              hold nerrscop = 1
+              hold scopmsg = "a list field can only be held whole, indexed, or passed to len()"
+            }
+            when c2 == 47 {
+              hold c3 = 0
+              when pos + 1 < n {
+                hold c3 = sx_index(source,pos + 1)
+              }
+              when c3 != 47 {
+                hold nerrscop = 1
+                hold scopmsg = "a list field can only be held whole, indexed, or passed to len()"
+              }
+            }
+          }
           when rk == 3 {
             hold sk = 1
             while sk == 1 {
@@ -9930,7 +10124,11 @@ hold ec = 0
                             }
                           }
                         } otherwise {
-                          hold fprv = 0
+                          when fpk == 51 {
+                            hold fprv = 3
+                          } otherwise {
+                            hold fprv = 0
+                          }
                         }
                       }
                       hold fsp = fl2
@@ -10584,6 +10782,7 @@ hold ec = 0
 
       // name or call
       when (c1 >= 97 && c1 <= 122) || (c1 >= 65 && c1 <= 90) {
+        hold fieldbaseat = pos
         hold nm2 = ""
         hold rn = 1
         while rn == 1 {
@@ -11527,7 +11726,11 @@ hold argbracket = 0
                           }
                         }
                       } otherwise {
-                        hold fprv = 0
+                        when fpk == 51 {
+                          hold fprv = 3
+                        } otherwise {
+                          hold fprv = 0
+                        }
                       }
                     }
                     hold fsp = fl2
@@ -11576,10 +11779,14 @@ hold argbracket = 0
                   hold rk = 3
                   hold stname = curst
                 } otherwise {
-                  when curty == 1 {
-                    hold rk = 1
+                  when curty == 3 {
+                    hold rk = 2
                   } otherwise {
-                    hold rk = 0
+                    when curty == 1 {
+                      hold rk = 1
+                    } otherwise {
+                      hold rk = 0
+                    }
                   }
                 }
               }
@@ -11627,6 +11834,94 @@ hold argbracket = 0
             }
           }
           // a struct result cannot enter a + - * / % chain
+          // A field-list postfix is reparsed from its original base.  The
+          // legacy walker consumes the dotted selectors first, so this keeps
+          // `p.xs[i]` in the typed list path instead of leaving '[' behind.
+          when chn >= 1 && rk == 2 {
+            hold sk = 1
+            while sk == 1 {
+              when pos >= n {
+                hold sk = 0
+              } otherwise {
+                hold cs = sx_index(source,pos)
+                when cs == 32 || cs == 9 || cs == 13 {
+                  hold pos = pos + 1
+                } otherwise {
+                  hold sk = 0
+                }
+              }
+            }
+            hold c2 = 0
+            when pos < n {
+              hold c2 = sx_index(source,pos)
+            }
+            when c2 == 91 {
+              hold flenv = concat(decls, chr(1))
+              hold flenv = concat(flenv, sdecls)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, ldecls)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, svars)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, fsret)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, fspk)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, inprivate)
+              hold flenv = concat(flenv, chr(1))
+              hold flenv = concat(flenv, ftypes)
+              hold flvalue = sxeparse(source, fieldbaseat, flenv, 7, 0, instate)
+              hold flkind = sxesegment(flvalue, 1)
+              when sx_eq(flkind, "n") == 1 {
+                hold rhs = sxecode(flvalue)
+                hold pos = sxepos(flvalue)
+                hold rk = 0
+                hold lt = 1
+              } otherwise {
+                hold perr = 1
+                when sx_eq(flkind, "e") == 1 {
+                  hold permsg = concat("list-field index: ", sxecode(flvalue))
+                } otherwise {
+                  hold permsg = "list-field index must produce a number"
+                }
+              }
+            }
+          }
+          // A whole list field can be copied or iterated, but arithmetic on
+          // its pointer is never source-level numeric arithmetic.
+          when chn >= 1 && rk == 2 {
+            hold sk = 1
+            while sk == 1 {
+              when pos >= n {
+                hold sk = 0
+              } otherwise {
+                hold cs = sx_index(source,pos)
+                when cs == 32 || cs == 9 || cs == 13 {
+                  hold pos = pos + 1
+                } otherwise {
+                  hold sk = 0
+                }
+              }
+            }
+            hold c2 = 0
+            when pos < n {
+              hold c2 = sx_index(source,pos)
+            }
+            when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 {
+              hold nerrscop = 1
+              hold scopmsg = "a list field can only be held whole, indexed, or passed to len()"
+            }
+            when c2 == 47 {
+              hold c3 = 0
+              when pos + 1 < n {
+                hold c3 = sx_index(source,pos + 1)
+              }
+              when c3 != 47 {
+                hold nerrscop = 1
+                hold scopmsg = "a list field can only be held whole, indexed, or passed to len()"
+              }
+            }
+          }
           when rk == 3 {
             hold sk = 1
             while sk == 1 {
@@ -11756,6 +12051,35 @@ hold argbracket = 0
           hold c2 = 0
           when pos < n {
             hold c2 = sx_index(source,pos)
+          }
+          // The outer statement walker historically remembered direct lists
+          // only while parsing an index.  Preserve the list kind for a whole
+          // direct name too, so `show xs` and `xs + 1` are source refusals
+          // rather than pointer-to-double C.  Dotted fields carry rk == 2
+          // through the field-chain mapper above.
+          when c2 != 91 && chn == 0 && sx_eq(sxelookup(ldecls, nm2, "|"), "yes") == 1 {
+            hold lop = 0
+            when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 || c2 == 46 || c2 == 40 {
+              hold lop = 1
+            }
+            when c2 == 47 {
+              hold lop = 1
+              when pos + 1 < n {
+                hold pc3 = sx_index(source, pos + 1)
+                when pc3 == 47 {
+                  hold lop = 0
+                }
+              }
+            }
+            when lop == 0 {
+              hold rk = 2
+            } otherwise {
+              when perr == 0 {
+                hold permsg = concat("list '", nm2)
+                hold permsg = concat(permsg, "' can only be held whole (hold ys = xs) or indexed (xs[i]); no operators on a list")
+              }
+              hold perr = 1
+            }
           }
           when c2 == 91 {
             hold pos = pos + 1
@@ -12614,7 +12938,11 @@ hold ec = 0
                             }
                           }
                         } otherwise {
-                          hold fprv = 0
+                          when fpk == 51 {
+                            hold fprv = 3
+                          } otherwise {
+                            hold fprv = 0
+                          }
                         }
                       }
                       hold fsp = fl2
@@ -12978,13 +13306,21 @@ hold ec = 0
         hold nerrscop = 1
         hold scopmsg = "show value cannot be a struct"
       }
+      when rk == 2 && nerrscop == 0 {
+        // A list is a pointer-valued runtime object, not a number to cast for
+        // printf.  Require an observable scalar operation such as len(xs) or
+        // xs[i], which also keeps list-valued struct fields from reaching C as
+        // an invalid pointer-to-double conversion.
+        hold nerrscop = 1
+        hold scopmsg = "show value cannot be a list; use len(xs) or xs[i]"
+      }
       when rk == 1 {
         hold body = concat(body, "puts(")
         hold body = concat(body, rhs)
         hold body = concat(body, ");")
         hold body = concat(body, nl)
       }
-      when rk == 0 || rk == 2 {
+      when rk == 0 {
         hold body = concat(body, "printf(\"%g\\n\", (double)")
         hold body = concat(body, rhs)
         hold body = concat(body, ");")
@@ -13065,6 +13401,88 @@ hold ec = 0
       while ci < cl {
         hold ctrim = concat(ctrim, chr(sx_index(cond,ci)))
         hold ci = ci + 1
+      }
+      // Field-list condition values must be proven numeric before reaching C.
+      // In particular, lower a typed field index through sx_lget; a whole
+      // list or any unproven list-field operator is a source-level refusal,
+      // never C's pointer truthiness/arithmetic.  A decimal point is not a
+      // field selector: only a dot followed by an identifier starts this pass.
+      hold fcdot = 0
+      hold fcdi = 0
+      while fcdi + 1 < len(ctrim) && fcdot == 0 {
+        hold fcdc = sx_index(ctrim, fcdi)
+        when fcdc == 46 {
+          hold fcdn = sx_index(ctrim, fcdi + 1)
+          when (fcdn >= 65 && fcdn <= 90) || (fcdn >= 97 && fcdn <= 122) || fcdn == 95 {
+            hold fcdot = 1
+          }
+        }
+        hold fcdi = fcdi + 1
+      }
+      when fcdot == 1 {
+        hold flenv = concat(decls, chr(1))
+        hold flenv = concat(flenv, sdecls)
+        hold flenv = concat(flenv, chr(1))
+        hold flenv = concat(flenv, ldecls)
+        hold flenv = concat(flenv, chr(1))
+        hold flenv = concat(flenv, svars)
+        hold flenv = concat(flenv, chr(1))
+        hold flenv = concat(flenv, fsret)
+        hold flenv = concat(flenv, chr(1))
+        hold flenv = concat(flenv, fspk)
+        hold flenv = concat(flenv, chr(1))
+        hold flenv = concat(flenv, inprivate)
+        hold flenv = concat(flenv, chr(1))
+        hold flenv = concat(flenv, ftypes)
+        // Keep speculative condition parsing out of instate: an unrelated
+        // inline list must never reserve a C temporary that this path does not
+        // declare.  Such a mixed form is refused below instead.
+        hold flstate = []
+        hold flvalue = sxeparse(ctrim, 0, flenv, 0, 0, flstate)
+        hold flkind = sxesegment(flvalue, 1)
+        hold flend = sxflowspace(ctrim, sxepos(flvalue))
+        // This is deliberately a *list-field* pass, not a replacement for
+        // the mature general condition mapper.  Calls such as
+        // string_eq(p.name, "x") are left to that mapper if sxeparse does not
+        // know their source alias.  Identify list participation from the
+        // typed result/lowered code, and use a primary-only retry for `p.xs +
+        // 1`, whose full expression correctly reports a numeric-kind error.
+        hold fcinline = len(flstate)
+        hold fclist = 0
+        when sx_eq(flkind, "l") == 1 {
+          hold fclist = 1
+        }
+        when sxecontains(sxecode(flvalue), "sx_lget(") == 1 || sxecontains(sxecode(flvalue), "sx_llen(") == 1 {
+          hold fclist = 1
+        }
+        when sx_eq(flkind, "e") == 1 {
+          hold flstate = []
+          hold flprimary = sxeparse(ctrim, 0, flenv, 7, 0, flstate)
+          when sx_eq(sxesegment(flprimary, 1), "l") == 1 {
+            hold fclist = 1
+          }
+        }
+        when fclist == 1 {
+          when fcinline > 0 || len(flstate) > 0 {
+            hold perr = 1
+            hold permsg = "field condition: an inline list in a list-field condition is not supported"
+          } otherwise {
+            when sx_eq(flkind, "l") == 1 {
+              hold perr = 1
+              hold permsg = "a list-valued struct field cannot be a condition; use len(p.xs) or p.xs[i]"
+            } otherwise {
+              when sx_eq(flkind, "e") == 1 {
+                hold perr = 1
+                hold permsg = concat("field condition: ", sxecode(flvalue))
+              } otherwise {
+                when flend >= len(ctrim) && sxecontains(ctrim, "[") == 1 {
+                  hold ctrim = sxecode(flvalue)
+                  hold cl = len(ctrim)
+                }
+              }
+            }
+          }
+        }
       }
       // item 9: a string or list used as an operand of and/or/not (or as the
       // whole condition) is refused, as in the value-position check; a
@@ -16185,6 +16603,17 @@ hold ec = 0
           hold fmsg = concat(fmsg, "' is already a string or list; pick another counter name")
         }
       }
+      // A list counter cannot be rebound as either a list or a string loop
+      // binder.  Lists live in ldecls (not necessarily decls), so check their
+      // distinct kind table explicitly instead of letting a later `show c`
+      // fail as a pointer-to-double expression.
+      when ferr == 0 && sx_eq(sxelookup(ldecls, fvname, "|"), "yes") == 1 {
+        hold ferr = 1
+        hold fmsg = concat("for loop: '", fvname)
+        // Keep the long-standing string-loop diagnostic stable: a preexisting
+        // list counter is just as incompatible as a number counter.
+        hold fmsg = concat(fmsg, "' is already a number or a list; a string loop needs a new counter name")
+      }
       // is the counter already declared as a number?
       when ferr == 0 {
         hold fvkey = concat("|", fvname)
@@ -17193,6 +17622,12 @@ while tdi < tdn {
                   }
                 }
               }
+              when tdpk == 51 {
+                // list-typed fields store the list object pointer.  The list
+                // runtime owns the backing array, so copying this field keeps
+                // alias/growth semantics rather than copying numeric cells.
+                hold tdclass = 3
+              }
               hold tdp = tdl
             } otherwise {
               hold tdp = tdp + 1
@@ -17203,10 +17638,14 @@ while tdi < tdn {
             hold out = concat(out, tdinn)
             hold out = concat(out, " ")
           } otherwise {
-            when tdclass == 1 {
-              hold out = concat(out, " char *")
+            when tdclass == 3 {
+              hold out = concat(out, " sx_list *")
             } otherwise {
-              hold out = concat(out, " double ")
+              when tdclass == 1 {
+                hold out = concat(out, " char *")
+              } otherwise {
+                hold out = concat(out, " double ")
+              }
             }
           }
           hold out = concat(out, tdfld)
@@ -17290,9 +17729,9 @@ when exbad5 == 1 {
   show "min: use must be followed by a quoted path, e.g. use \"lib.sa\""
 }
 when exbad6 == 1 {
-  hold exerr = concat(exerr, "#error sayanox-min: struct field is used with two different types (string vs number)")
+  hold exerr = concat(exerr, "#error sayanox-min: struct field is used with two different value kinds (number, string, list, or concrete struct)")
   hold exerr = concat(exerr, nl)
-  show "min: struct field used with two different types (string vs number)"
+  show "min: struct field used with two different value kinds (number, string, list, or concrete struct)"
 }
 when exbad7 == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: struct literal fields must be given in declaration order")

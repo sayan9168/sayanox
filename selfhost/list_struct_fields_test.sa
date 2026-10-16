@@ -1,0 +1,24 @@
+// List-valued struct field: the field stores the list pointer, so aliases and
+// `for v in p.xs` observe exactly the same mutable list.
+struct Packet {
+  xs,
+  label
+}
+hold shared = [2, 3]
+hold p = Packet { xs: shared, label: "packet" }
+hold alias = p.xs
+// Fill the initial capacity, then grow. `p.xs` remains the original pointer
+// on native, so correct list forwarding/identity is required here.
+push(alias, 5)
+push(alias, 7)
+push(alias, 11)
+show len(p.xs)
+for v in p.xs {
+  show v
+}
+hold total = 0
+for v in p.xs {
+  total = total + v
+}
+show total
+show len(alias)

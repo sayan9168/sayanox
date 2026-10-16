@@ -1,4 +1,4 @@
-/* sxc_seed_min.c — pure-min + make/give + lists + structs + use (modules)
+/* sxc_seed_min.c — pure-min + make/give + lists + typed struct fields + use (modules)
  * Usage: sxc_seed_min in.sa > out.c
  *
  * `use "file.sa"` statements are expanded before parsing: the file text is
@@ -163,10 +163,17 @@ static char *expand_use(const char *src, int depth){
 
 static char *S; static size_t N, P, user_source_size;
 enum { TY_NUM=0, TY_STR=1, TY_LIST=2, TY_STRUCT=3 };
+enum { FT_NUM=0, FT_STR=1, FT_STRUCT=2, FT_LIST=3 };
 static char *vn[2048]; static int vt[2048]; static int vs[2048];
 static int nv;
 /* -1 for inferred variables, otherwise an explicit num/str/list contract. */
 static int vdecl[2048];
+/* Struct identity for an explicit `hold p: Pt`; -1 for scalar/no annotation. */
+static int vdecls[2048];
+static int annotation_si=-1;
+/* A for binder seen before the field-literal scan may have only a provisional
+ * string kind. It is allowed one correction when the field kind becomes known. */
+static int vdeferred[2048];
 static int in_fn;
 static int loop_depth;
 static unsigned for_serial;
@@ -188,8 +195,9 @@ static int types_final;
  * Used to type a nested literal value while a struct literal is parsed. */
 static int last_si = -1;
 
-/* fty[f] is the C type of a field: 0 = double, 1 = char * (string).
- * fset[f] is 1 once a struct literal has fixed that field's type: the first
+/* fty[f] is the C type of a field: FT_NUM = double, FT_STR = char *,
+ * FT_STRUCT = a concrete nested struct, FT_LIST = sx_list *. fset[f] is 1
+ * once a struct literal has fixed that field's type: the first
  * literal that mentions a field decides, later literals must agree (a
  * mismatch is a hard error, never a silently wrong typedef). */
 typedef struct { char *name; char *fields[16]; int nf; int fty[16]; int fsi[16]; int fset[16]; } StructDef;
@@ -253,18 +261,19 @@ static int find_gstruct(const char *n){ for(int i=0;i<ngs;i++) if(!strcmp(GS[i].
 static char kind_letter(int k){ return k==TY_STR?'s':(k==TY_LIST?'l':'n'); }
 /* how a struct field's type is named in a diagnostic */
 static const char *ftyname(int si, int f){
-  if(SD[si].fty[f]==1) return "a string";
-  if(SD[si].fty[f]==2) return "a struct";
+  if(SD[si].fty[f]==FT_STR) return "a string";
+  if(SD[si].fty[f]==FT_STRUCT) return "a struct";
+  if(SD[si].fty[f]==FT_LIST) return "a list";
   return "a number";
 }
 static void setv(const char *n, int ty){
   int i=findv(n);
-  if(i<0){ if(nv>=2048) die("too many vars"); vn[nv]=strdup(n); vt[nv]=ty; vs[nv]=-1; vdecl[nv]=-1; nv++; }
+  if(i<0){ if(nv>=2048) die("too many vars"); vn[nv]=strdup(n); vt[nv]=ty; vs[nv]=-1; vdecl[nv]=-1; vdecls[nv]=-1; vdeferred[nv]=0; nv++; }
   else vt[i]=ty;
 }
 static void setv_struct(const char *n, int si){
   int i=findv(n);
-  if(i<0){ if(nv>=2048) die("too many vars"); vn[nv]=strdup(n); vt[nv]=TY_STRUCT; vs[nv]=si; vdecl[nv]=-1; nv++; }
+  if(i<0){ if(nv>=2048) die("too many vars"); vn[nv]=strdup(n); vt[nv]=TY_STRUCT; vs[nv]=si; vdecl[nv]=-1; vdecls[nv]=-1; vdeferred[nv]=0; nv++; }
   else { vt[i]=TY_STRUCT; vs[i]=si; }
 }
 static int getty(const char *n){ int i=findv(n); return i<0?TY_NUM:vt[i]; }
@@ -273,6 +282,7 @@ static int getsi(const char *n){ int i=findv(n); return i<0?-1:vs[i]; }
 /* All three passes read annotations with this parser. Collection fixes the
  * emitted storage type; the real expression passes check the entire RHS. */
 static int hold_annotation(void){
+  annotation_si=-1;
   skip();
   if(P>=N || S[P]!=':') return -1;
   if(in_fn && producer_ret<0) die("seed-min hold annotations require a fully typed make");
@@ -280,9 +290,13 @@ static int hold_annotation(void){
   if(!strcmp(name,"num")) ty=TY_NUM;
   else if(!strcmp(name,"str")) ty=TY_STR;
   else if(!strcmp(name,"list")) ty=TY_LIST;
+  else {
+    int si=find_struct(name);
+    if(si>=0){ ty=TY_STRUCT; annotation_si=si; }
+  }
   if(ty<0){
     char msg[512];
-    snprintf(msg,sizeof msg,"unknown hold type '%s': seed-min supports num, str, list; struct-typed hold is not implemented",name);
+    snprintf(msg,sizeof msg,"unknown hold type '%s': seed-min supports num, str, list, or a declared struct name",name);
     die(msg);
   }
   free(name);
@@ -304,13 +318,22 @@ static void register_local(const char *name,int ty,const char *text){
     if(si>=0) setv_struct(name,si);
   }
 }
-static void check_hold_type(const char *name, int annotation, int actual){
+static void check_hold_type(const char *name, int annotation, int actual, int actual_si){
   int vi=findv(name);
   int declared=vi<0?-1:vdecl[vi];
+  int expected_si=-1;
   if(annotation>=0 && declared>=0 && annotation!=declared)
     die("conflicting hold type annotation");
   if((annotation>=0 && annotation!=actual) || (declared>=0 && declared!=actual))
     die("hold type mismatch: initializer/assignment disagrees with declared type");
+  if(annotation==TY_STRUCT) expected_si=annotation_si;
+  else if(declared==TY_STRUCT && vi>=0) expected_si=vdecls[vi];
+  if(expected_si>=0 && (actual!=TY_STRUCT || actual_si!=expected_si)){
+    char msg[256];
+    snprintf(msg,sizeof msg,"hold '%s': initializer/assignment is not the declared struct %s",
+             name,SD[expected_si].name);
+    die(msg);
+  }
 }
 
 /* Read all-or-nothing typed signatures consistently in every pass. */
@@ -468,17 +491,19 @@ static const char *ctype(int ty){
  *      global's slot or its type.
  * enter_scope()/leave_scope() do the save/restore; the producer wrappers add
  * the return-type contract on top. */
-typedef struct { char *names[2048]; int types[2048], structs[2048], declared[2048], count; } Env;
+typedef struct { char *names[2048]; int types[2048], structs[2048], declared[2048], declared_structs[2048], deferred[2048], count; } Env;
 static Env *enter_scope(void){
   Env *e=malloc(sizeof *e); if(!e) exit(1);
   memcpy(e->names,vn,sizeof vn); memcpy(e->types,vt,sizeof vt);
   memcpy(e->structs,vs,sizeof vs); memcpy(e->declared,vdecl,sizeof vdecl);
+  memcpy(e->declared_structs,vdecls,sizeof vdecls); memcpy(e->deferred,vdeferred,sizeof vdeferred);
   e->count=nv; nv=0; return e;
 }
 static void leave_scope(Env *e){
   for(int i=0;i<nv;i++) free(vn[i]);
   memcpy(vn,e->names,sizeof vn); memcpy(vt,e->types,sizeof vt);
   memcpy(vs,e->structs,sizeof vs); memcpy(vdecl,e->declared,sizeof vdecl);
+  memcpy(vdecls,e->declared_structs,sizeof vdecls); memcpy(vdeferred,e->deferred,sizeof vdeferred);
   nv=e->count; free(e);
 }
 static Env *enter_producer(int ret){ Env *e=enter_scope(); producer_ret=ret; return e; }
@@ -576,6 +601,9 @@ static int instantiate_gstruct(int gi, int *nk){
     if(!strcmp(t,"num")) k=TY_NUM;
     else if(!strcmp(t,"str")) k=TY_STR;
     else if(!strcmp(t,"list")) k=TY_LIST;
+    /* Concrete fields may hold a list, but generic Box<list> needs its own
+     * specialization/layout and GC rules before it can be accepted. */
+    if(k==TY_LIST) die("a struct field cannot hold a list in a generic instantiation until generic list-field specialization is implemented");
     if(k<0){
       char m[256];
       snprintf(m,sizeof m,"a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented", t);
@@ -793,7 +821,7 @@ static char *atom(int *oty){
             die(msg);
           }
           if(et==TY_STR || et==TY_NUM){
-            int ft=(et==TY_STR)?1:0;
+            int ft=(et==TY_STR)?FT_STR:FT_NUM;
             if(SD[si].fset[fi] && SD[si].fty[fi]!=ft){
               char msg[256];
               snprintf(msg,sizeof msg,"struct %s field '%s' is %s here, %s in an earlier literal",
@@ -814,15 +842,22 @@ static char *atom(int *oty){
                        SD[last_si].name, SD[si].name);
               die(msg);
             }
-            if(SD[si].fset[fi] && (SD[si].fty[fi]!=2 || SD[si].fsi[fi]!=last_si)){
+            if(SD[si].fset[fi] && (SD[si].fty[fi]!=FT_STRUCT || SD[si].fsi[fi]!=last_si)){
               char msg[256];
               snprintf(msg,sizeof msg,"struct %s field '%s' is a struct here, %s in an earlier literal",
                        SD[si].name, SD[si].fields[fi], ftyname(si,fi));
               die(msg);
             }
-            SD[si].fty[fi]=2; SD[si].fsi[fi]=last_si; SD[si].fset[fi]=1;
+            SD[si].fty[fi]=FT_STRUCT; SD[si].fsi[fi]=last_si; SD[si].fset[fi]=1;
           } else if(et==TY_LIST){
-            die("a struct field cannot hold a list (so `for v in p.xs` has no list field to walk; keep the list in its own hold and write `for v in xs`)");
+            if(SD[si].fset[fi] && SD[si].fty[fi]!=FT_LIST){
+              char msg[256];
+              snprintf(msg,sizeof msg,"struct %s field '%s' is a list here, %s in an earlier literal",
+                       SD[si].name, SD[si].fields[fi], ftyname(si,fi));
+              die(msg);
+            }
+            /* Store the list pointer, never its elements: aliases are preserved. */
+            SD[si].fty[fi]=FT_LIST; SD[si].fsi[fi]=-1; SD[si].fset[fi]=1;
           }
           skip(); if(P<N&&S[P]==','){P++;continue;} break;
         }
@@ -834,13 +869,17 @@ static char *atom(int *oty){
       size_t o=0; o+=snprintf(buf+o,need,"((%s){", SD[si].name);
       for(int f=0;f<SD[si].nf;f++){
         const char *val=slot[f];
-        if(!val && SD[si].fset[f] && SD[si].fty[f]==2){
+        if(!val && SD[si].fset[f] && SD[si].fty[f]==FT_STRUCT){
           char msg[256];
           snprintf(msg,sizeof msg,"struct %s field '%s' is a struct and must be filled in every literal",
                    SD[si].name, SD[si].fields[f]);
           die(msg);
         }
-        if(!val) val = SD[si].fty[f] ? "\"\"" : "0";
+        if(!val){
+          if(SD[si].fty[f]==FT_STR) val="\"\"";
+          else if(SD[si].fty[f]==FT_LIST) val="NULL";
+          else val="0";
+        }
         o+=snprintf(buf+o,need-o,"%s%s", f?",":"", val);
       }
       snprintf(buf+o,need-o,"})");
@@ -912,7 +951,9 @@ static char *atom(int *oty){
       for(int i=0;i<na;i++) free(args[i]);
       free(id); return strdup(buf);
     }
-    *oty=getty(id); return id;
+    *oty=getty(id);
+    if(*oty==TY_STRUCT) last_si=getsi(id);
+    return id;
   }
   die("primary"); return 0;
 }
@@ -943,6 +984,7 @@ static char *primary(int *oty){
       char *t=malloc(strlen(l)+strlen(fld)+4);
       sprintf(t,"%s.%s",l,fld);
       free(l); free(fld); l=t; *oty=ft;
+      last_si=ft==TY_STRUCT?fsi:-1;
     } else break;
   }
   return l;
@@ -1101,11 +1143,12 @@ static char *field_chain_source(int *okind){
     if(need>cap){ cap=need+64; text=realloc(text,cap); if(!text) die("allocation"); }
     strcat(text,"."); strcat(text,fld);
     if(si<0 || ff<0){ decided=0; kind=-1; free(fld); continue; }
-    if(SD[si].fty[ff]==2){ int inner=SD[si].fsi[ff]; si=inner; kind=TY_STRUCT; }
+    if(SD[si].fty[ff]==FT_STRUCT){ int inner=SD[si].fsi[ff]; si=inner; kind=TY_STRUCT; }
     else if(SD[si].fset[ff]){
       /* read the field type BEFORE dropping si: `si=-1; kind=SD[si]...` would
        * index SD[-1], and the garbage there decides the loop's kind. */
-      int ft=SD[si].fty[ff]; si=-1; kind=ft?TY_STR:TY_NUM;
+      int ft=SD[si].fty[ff]; si=-1;
+      kind=ft==FT_STR?TY_STR:(ft==FT_LIST?TY_LIST:TY_NUM);
     }
     else { decided=0; si=-1; kind=-1; }     /* field type not fixed yet */
     free(fld);
@@ -1152,6 +1195,10 @@ static char *for_header(char **source, int *kind, int *literal, char **end){
     }
   }
   *end=NULL;
+  /* A field type is learned from literals in a later scan.  Do not freeze a
+   * provisional string binder from an early pass when that field later proves
+   * to be a list. */
+  int deferred_field_kind=0;
   *literal=P<N && (S[P]=='"' || S[P]=='[');
   if(*literal){
     *source=atom(kind);
@@ -1187,7 +1234,8 @@ static char *for_header(char **source, int *kind, int *literal, char **end){
           if(fk==-1){
             if(types_final)
               die("seed-min for field source could not be resolved to a string or list field");
-            fk=TY_STR;   /* deferred: keeps the binder type stable across passes */
+            fk=TY_STR;   /* provisional until the literal-type scan finishes */
+            deferred_field_kind=1;
           } else if(fk==-2)
             die("seed-min for field source must name a field of a struct variable");
           else if(fk!=TY_STR && fk!=TY_LIST)
@@ -1216,8 +1264,10 @@ static char *for_header(char **source, int *kind, int *literal, char **end){
   if(P>=N || S[P]!='{')
     die("seed-min for expected { after list/string source or numeric range");
   int ty=*kind==TY_STR?TY_STR:TY_NUM, vi=findv(name);
-  if(vi>=0 && vt[vi]!=ty) die("seed-min for binder has an incompatible type");
+  if(vi>=0 && vt[vi]!=ty && !deferred_field_kind && !vdeferred[vi])
+    die("seed-min for binder has an incompatible type");
   setv(name,ty);
+  vdeferred[findv(name)]=deferred_field_kind;
   return name;
 }
 
@@ -1330,7 +1380,7 @@ static void stmt(void){
     int annotation=is_hold?hold_annotation():-1;
     if(!is_hold && i<0) die("assignment needs a declared variable (use hold first)");
     skip(); eat("="); int ty; char *e=expr(&ty);
-    check_hold_type(n,annotation,ty);
+    check_hold_type(n,annotation,ty,last_si);
     if(producer_ret>=0 && i>=0 && vt[i]!=ty) die("seed-min producer local type cannot change");
     if(!is_hold && (vt[i]!=ty || ty==TY_STRUCT))
       die("assignment type mismatch (struct assignment is not supported by seed-min)");
@@ -1366,7 +1416,10 @@ static void stmt(void){
                need_copy?"sx_sb_from(":"", e, need_copy?")":"", n, n);
       } else printf("  %s = %s;\n", n, e);
     }
-    if(annotation>=0) vdecl[findv(n)]=annotation;
+    if(annotation>=0){
+      int ai=findv(n); vdecl[ai]=annotation;
+      vdecls[ai]=annotation==TY_STRUCT?annotation_si:-1;
+    }
     free(n); free(e); return;
   }
   if(at("show")){
@@ -1562,8 +1615,9 @@ static void emit_typedefs(void){
   for(int i=0;i<nsd;i++){
     printf("typedef struct {");
     for(int f=0;f<SD[i].nf;f++){
-      if(SD[i].fty[f]==2) printf(" %s %s;", SD[SD[i].fsi[f]].name, SD[i].fields[f]);
-      else if(SD[i].fty[f]) printf(" char *%s;", SD[i].fields[f]);
+      if(SD[i].fty[f]==FT_STRUCT) printf(" %s %s;", SD[SD[i].fsi[f]].name, SD[i].fields[f]);
+      else if(SD[i].fty[f]==FT_LIST) printf(" sx_list *%s;", SD[i].fields[f]);
+      else if(SD[i].fty[f]==FT_STR) printf(" char *%s;", SD[i].fields[f]);
       else printf(" double %s;", SD[i].fields[f]);
     }
     printf(" } %s;\n", SD[i].name);
@@ -1576,7 +1630,7 @@ static void emit_typedefs(void){
 static int nested_si(int si, const char *fld){
   for(int f=0;f<SD[si].nf;f++)
     if(!strcmp(SD[si].fields[f],fld)){
-      if(SD[si].fty[f]==2) return SD[si].fsi[f];
+      if(SD[si].fty[f]==FT_STRUCT) return SD[si].fsi[f];
       char msg[256];
       snprintf(msg,sizeof msg,
                "struct %s field '%s' has no struct type; fill it with a nested struct literal",
@@ -1621,8 +1675,9 @@ static int field_type(const char *base, const char *fld, int *osi){
   if(si<0) return TY_NUM;
   for(int f=0;f<SD[si].nf;f++)
     if(!strcmp(SD[si].fields[f],fld)){
-      if(SD[si].fty[f]==2){ if(osi) *osi=SD[si].fsi[f]; return TY_STRUCT; }
-      return SD[si].fty[f] ? TY_STR : TY_NUM;
+      if(SD[si].fty[f]==FT_STRUCT){ if(osi) *osi=SD[si].fsi[f]; return TY_STRUCT; }
+      if(SD[si].fty[f]==FT_LIST) return TY_LIST;
+      return SD[si].fty[f]==FT_STR ? TY_STR : TY_NUM;
     }
   return TY_NUM;
 }
@@ -1723,7 +1778,7 @@ static void scan_structs(void){
 
 static void collect(void){
   size_t save=P; nv=0;
-  for(int i=0;i<2048;i++) vdecl[i]=-1;
+  for(int i=0;i<2048;i++){ vdecl[i]=-1; vdecls[i]=-1; vdeferred[i]=0; }
   while(P<N){
     skip(); if(P>=N) break;
     if(at("struct")){ P+=6; skip_struct_decl(); continue; }
@@ -1770,7 +1825,7 @@ static void collect(void){
                   for(int f=0;f<SD[cur].nf;f++)
                     if(!strcmp(SD[cur].fields[f],fld)){ ff=f; break; }
                 if(ff>=0){
-                  if(SD[cur].fty[ff]==2){ ty=TY_STRUCT; si=SD[cur].fsi[ff]; }
+                  if(SD[cur].fty[ff]==FT_STRUCT){ ty=TY_STRUCT; si=SD[cur].fsi[ff]; }
                   else if(P<N && S[P]=='.'){
                     /* The link's type may simply be unknown YET: field types
                      * are fixed by struct literals, which scan_literals() only
@@ -1782,7 +1837,7 @@ static void collect(void){
                      * struct. */
                     ty=TY_NUM; si=-1;
                   }
-                  else ty=SD[cur].fty[ff]?TY_STR:TY_NUM;
+                  else ty=SD[cur].fty[ff]==FT_STR?TY_STR:(SD[cur].fty[ff]==FT_LIST?TY_LIST:TY_NUM);
                 }
                 free(fld);
                 cur=si;    /* only a nested struct keeps the chain going */
@@ -1809,7 +1864,19 @@ static void collect(void){
           die("conflicting hold type annotation");
         if(annotation>=0) declared=annotation;
         if(declared>=0){
-          setv(id,declared); vdecl[findv(id)]=declared;
+          if(declared==TY_STRUCT){
+            int want=annotation==TY_STRUCT?annotation_si:(vi<0?-1:vdecls[vi]);
+            if(ty!=TY_STRUCT || (si>=0 && want>=0 && si!=want)){
+              char msg[256];
+              snprintf(msg,sizeof msg,"hold '%s': initializer/assignment is not the declared struct %s",id,
+                       want>=0?SD[want].name:"<unknown>");
+              die(msg);
+            }
+            if(want<0) die("seed-min internal: missing struct hold annotation");
+            setv_struct(id,want); vdecl[findv(id)]=TY_STRUCT; vdecls[findv(id)]=want;
+          } else {
+            setv(id,declared); vdecl[findv(id)]=declared; vdecls[findv(id)]=-1;
+          }
         } else if(ty==TY_STRUCT && si>=0) setv_struct(id, si);
         else setv(id,ty);
       }
@@ -1861,7 +1928,7 @@ static void scan_stmt(void){
     if(is_hold) P+=4;
     char *n=parse_id(); int annotation=is_hold?hold_annotation():-1;
     skip(); eat("="); int ty; char *e=expr(&ty);
-    if(!in_fn || producer_ret>=0) check_hold_type(n,annotation,ty);
+    if(!in_fn || producer_ret>=0) check_hold_type(n,annotation,ty,last_si);
     if(in_fn){
       int vi=findv(n);
       if(producer_ret>=0){
@@ -1876,7 +1943,10 @@ static void scan_stmt(void){
         if(!is_hold && vi<0) die("assignment needs a declared variable (use hold first)");
         register_local(n,ty,e);
       }
-      if(annotation>=0) vdecl[findv(n)]=annotation;
+      if(annotation>=0){
+      int ai=findv(n); vdecl[ai]=annotation;
+      vdecls[ai]=annotation==TY_STRUCT?annotation_si:-1;
+    }
     }
     free(e); free(n); return;
   }

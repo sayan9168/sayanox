@@ -585,12 +585,15 @@ typedef struct { char name[64]; char params[MAXP][64]; int nparam; int start; in
 static Glob G[NSLOT]; static int nG;
 static SDef S[MAXS]; static int nS;
 static Fn  F[MAXF]; static int nF;
+static int s_find(const char*n);
 /* Generic instances: a generic called with a str argument gets its own
    copy of the body (kinds bound from the arguments).  Copies are queued and
    emitted after the top-level scan, so call sites patch to them normally. */
 static int pend[MAXF]; static int npend=0;
 static const char*kname(int k);
 static int last_sig_tp=-1, last_ret_tp=-1;
+/* Struct identity parsed by hold_kind(), alongside K_STRUCT. */
+static int hold_sid=-1;
 /* kinds[i] is the kind of argument i of a call to generic fi.  Every type
    parameter binds to one kind; a num-only call keeps the base copy. */
 static int pick_instance(int fi,const int*kinds,int nargs){
@@ -638,12 +641,14 @@ static int g_decl(const char*n){
 /* Optional hold annotation, shared by collection, inference and emission.
  * In a concrete generic body, T means that instance's actual bound kind. */
 static int hold_kind(const char**p,const char*nm,int fi){
+  hold_sid=-1;
   sw(p); if(**p!=':') return K_UNK;
   (*p)++; char t[64];
   if(!pid(p,t,64)) errx("hold '%s': expected a type after ':'",nm,NULL);
   if(!strcmp(t,"num")) return K_NUM;
   if(!strcmp(t,"str")) return K_STR;
   if(!strcmp(t,"list")) return K_LIST;
+  { int sid=s_find(t); if(sid>=0){ hold_sid=sid; return K_STRUCT; } }
   if(fi>=0) for(int i=0;i<F[fi].ntp;i++) if(!strcmp(t,F[fi].tps[i])){
     for(int j=0;j<F[fi].nparam;j++) if(F[fi].ptp[j]==i) return F[fi].pk[j];
   }
@@ -726,11 +731,11 @@ static const char*kname(int k){
  * instantiation by the ordinary kind fixpoint, and a conflict inside one
  * instantiation is the existing "used with two different types" error.
  *
- * A type argument is num, str or list. A struct name as a type argument is
- * refused by name, because seed-min and gen2 refuse it too and native must not
- * accept a program the other two reject. Struct blocks are allocated BK_STRUCT
- * ("every word may be a pointer"), so a string field of any instantiation is
- * traced by the collector with no new descriptor work.
+ * The portable generic-struct subset currently accepts num or str. A list type
+ * argument is deliberately refused until generic list-field specialization and
+ * layout/GC rules exist; a struct name is likewise refused by name. Struct blocks are allocated
+ * BK_STRUCT ("every word may be a pointer"), so a string field of any
+ * instantiation is traced by the collector with no new descriptor work.
  * ------------------------------------------------------------------------ */
 typedef struct { char name[64]; char p[8][64]; int np; char f[MAXFD][64]; int nf; } GSDef;
 static GSDef GS[MAXS]; static int nGS;
@@ -761,6 +766,8 @@ static int gs_instantiate(const char**p,const char*n){
     if(!strcmp(t,"num")) k=K_NUM;
     else if(!strcmp(t,"str")) k=K_STR;
     else if(!strcmp(t,"list")) k=K_LIST;
+    /* Concrete list fields exist; generic specialization/layout is separate. */
+    if(k==K_LIST) errx("a struct field cannot hold a list in a generic instantiation until generic list-field specialization is implemented");
     if(k<0) errx("a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented",t);
     if(nk>=8) errx("too many type arguments (native limit is 8)");
     ks[nk++]=k;
@@ -1038,6 +1045,12 @@ static void collect_defs(const char*src){
       int gi=g_decl(nm), annotation=hold_kind(&p,nm,-1);
       if(annotation>=0){
         if(G[gi].kind>=0 && G[gi].kind!=annotation) errx("conflicting hold type for '%s'",nm,NULL);
+        if(annotation==K_STRUCT){
+          if(hold_sid<0) errx("hold '%s': missing declared struct type",nm,NULL);
+          if(G[gi].sid>=0 && G[gi].sid!=hold_sid)
+            errx("conflicting hold struct type for '%s'",nm,NULL);
+          G[gi].sid=hold_sid;
+        }
         G[gi].kind=annotation;
       }
       p=skip_stmt(line);
@@ -1186,11 +1199,9 @@ static int pk_prim(const char**p,int depth){
         if(gskn[sid]>0&&gskn[sid]==nf&&fi<gskn[sid]&&k>=0&&k!=gsk[sid][fi])
           errx("struct '%s' field '%s' is %s (its type argument says so), the literal gives %s",
                S[sid].name,S[sid].f[fi].name,kname(gsk[sid][fi]),kname(k));
-        /* the shared dialect (seed-min and gen2) rejects a list inside a
-           struct field and a struct nested from a later declaration; native
-           must not accept a program the other two reject. */
-        if(k==K_LIST)
-          errx("struct '%s' field '%s' cannot hold a list (seed-min/gen2 reject this)",S[sid].name,S[sid].f[fi].name);
+        /* A list field is one machine word containing the list pointer.
+           BK_STRUCT tracing already visits every payload word, so the list and
+           its backing array stay live just like a string/nested-struct field. */
         if(k==K_STRUCT&&PKX_S>=sid)
           errx("struct '%s' nests struct '%s' declared later; declare the nested struct first",S[sid].name,S[PKX_S].name);
         if(fkind_seen[sid][fi]){
@@ -1700,8 +1711,8 @@ static void emit_prim(const char**p,int depth){
           fi=cnt;
         }
         fld_emit(p,depth+1);
-        if(XK==K_LIST)
-          errx("struct '%s' field '%s' cannot hold a list (seed-min/gen2 reject this)",S[sid].name,S[sid].f[cnt].name);
+        /* Lists are stored as their pointer.  The collector's BK_STRUCT
+           scan marks every payload word, so aliases through fields are roots. */
         if(XK==K_STRUCT&&XS>=sid)
           errx("struct '%s' nests struct '%s' declared later; declare the nested struct first",S[sid].name,S[XS].name);
         if(S[sid].f[cnt].kind!=XK)
@@ -2683,6 +2694,7 @@ static void emit_prog(const char**p,int in_fn,int stop){
       char nm[64];
       if(!pid(p,nm,64)) errx("hold needs a name");
       int annotation=hold_kind(p,nm,cur_fn);
+      int annotation_sid=hold_sid;
       sw(p);
       if(**p!='=') errx("hold needs '='",NULL,NULL);
       (*p)++;
@@ -2703,10 +2715,15 @@ static void emit_prog(const char**p,int in_fn,int stop){
       emit_rhs(p);
       int k=XK;
       if(annotation>=0 && annotation!=k) errx("hold '%s': initializer disagrees with declared type",nm,NULL);
+      if(annotation==K_STRUCT && (annotation_sid<0 || XS!=annotation_sid))
+        errx("hold '%s': initializer disagrees with declared struct type %s",nm,
+             annotation_sid>=0?S[annotation_sid].name:"<unknown>");
       if(k==K_UNK) errx("cannot infer the type of variable '%s'",nm,NULL);
       if(G[gi].kind==K_UNK){ G[gi].kind=k; G[gi].sid=(k==K_STRUCT)?XS:-1; }
       else if(G[gi].kind!=k) errx("variable '%s' is used with two different types",nm,NULL);
       else if(G[gi].kind==K_STRUCT&&G[gi].sid<0&&XS>=0){ G[gi].sid=XS; }
+      else if(G[gi].kind==K_STRUCT&&G[gi].sid>=0&&XS>=0&&G[gi].sid!=XS)
+        errx("variable '%s' is used with two different struct types",nm,NULL);
       if(k==K_STRUCT){
         if(XS<0) errx("cannot infer the struct type of '%s'",nm,NULL);
       }

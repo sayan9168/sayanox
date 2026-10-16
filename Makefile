@@ -34,7 +34,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields
 
 all: true-selfhost-min
 
@@ -502,23 +502,28 @@ test-nest:
 	  echo "[FAIL] seed-min accepted a nested struct declared later"; exit 1; fi
 	@./$(GEN2) $(TESTS)/ts_nestfwd.sa $(TESTS)/ts_nestfwd_g2.c >/dev/null 2>&1 || true
 	@grep -q 'declare the nested struct first' $(TESTS)/ts_nestfwd_g2.c
-	@# a list still cannot be a struct field
-	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: [1], b: Point { 2 } }\n' > $(TESTS)/ts_nestlist.sa
-	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestlist.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted a list in a struct field"; exit 1; fi
-	@./$(GEN2) $(TESTS)/ts_nestlist.sa $(TESTS)/ts_nestlist_g2.c >/dev/null 2>&1 || true
-	@grep -q '#error' $(TESTS)/ts_nestlist_g2.c
-	@# chaining through a field with no struct type is a clear error, not bad C
-	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a\n}\nhold p = Point { x: 1 }\nhold l = Line { a: p }\nshow l.a.x\n' > $(TESTS)/ts_nestmiss.sa
+	@# Concrete list fields are pointer-valued on both seed-min and gen2.
+	@# The alias must observe growth, and gen2 must lower the dotted index.
+	@printf 'struct Line {\n  a\n}\nhold l = Line { a: [1] }\nhold alias = l.a\npush(alias, 2)\nshow len(l.a)\nshow l.a[1]\n' > $(TESTS)/ts_nestlist.sa
+	./$(SEED_MIN_BIN) $(TESTS)/ts_nestlist.sa > $(TESTS)/ts_nestlist_sm.c
+	$(CC) -O2 -o $(TESTS)/ts_nestlist_sm $(TESTS)/ts_nestlist_sm.c
+	$(call assert-out,./$(TESTS)/ts_nestlist_sm,2\n2)
+	./$(GEN2) $(TESTS)/ts_nestlist.sa $(TESTS)/ts_nestlist_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/ts_nestlist_g2 $(TESTS)/ts_nestlist_g2.c
+	$(call assert-out,./$(TESTS)/ts_nestlist_g2,2\n2)
+	@grep -q -F 'typedef struct { sx_list *a; } Line;' $(TESTS)/ts_nestlist_g2.c
+	@grep -q -F 'sx_lget((l).a,1.0)' $(TESTS)/ts_nestlist_g2.c
+	@# chaining through a numeric field is a clear error, not bad C
+	@printf 'struct Line {\n  a\n}\nhold l = Line { a: 1 }\nshow l.a.x\n' > $(TESTS)/ts_nestmiss.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ts_nestmiss.sa >/dev/null 2>&1; then \
-	  echo "[FAIL] seed-min accepted a chain through an untyped struct field"; exit 1; fi
+	  echo "[FAIL] seed-min accepted a chain through a numeric struct field"; exit 1; fi
 	@./$(GEN2) $(TESTS)/ts_nestmiss.sa $(TESTS)/ts_nestmiss_g2.c >/dev/null 2>&1 || true
 	@grep -q 'is not a struct' $(TESTS)/ts_nestmiss_g2.c
 	@# a struct value cannot be shown
 	@printf 'struct Point {\n  x\n}\nhold q = Point { x: 1 }\nshow q\n' > $(TESTS)/ts_nestshow.sa
 	@./$(GEN2) $(TESTS)/ts_nestshow.sa $(TESTS)/ts_nestshow_g2.c >/dev/null 2>&1 || true
 	@grep -q 'show value cannot be a struct' $(TESTS)/ts_nestshow_g2.c
-	@echo "[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies incl. doubly nested); clear errors for forward decls, list fields, bad chains, show-of-struct"
+	@echo "[OK] nested structs in seed-min and gen2 (output parity, 3-level deep, ordered struct-typed fields, typed copies incl. doubly nested); concrete list fields preserve aliases and gen2 lowers dotted indexes; forward decls/bad chains/show-of-struct stay clear errors"
 
 test-prec:
 	@test -x $(GEN2) || (echo "need gen2"; exit 1)
@@ -1222,7 +1227,7 @@ test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
 # Refused, not miscompiled.
 # ---------------------------------------------------------------------------
 .PHONY: test-generic-structs
-test-generic-structs: $(GEN2) $(SEED_MIN_BIN)
+test-generic-structs: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	mkdir -p $(TESTS)
 	# ---- support: one concrete type per instantiation, three-way parity ----
 	./$(SEED_MIN_BIN) selfhost/generic_struct_box.sa > $(TESTS)/gs_box_ms.c
@@ -1272,8 +1277,8 @@ test-generic-structs: $(GEN2) $(SEED_MIN_BIN)
 	fi
 	echo "[OK] generic structs: a struct name as a type argument is refused by all three backends"
 	# ---- refusal 3: a list as a type argument ----
-	# No backend has a list-typed struct field, so Box<list> is refused rather
-	# than emitted as C that cannot compile.
+	# Concrete list fields work on all three backends, but generic Box<list>
+	# stays refused pending generic specialization/layout and GC support.
 	printf 'struct Box<T> {\n  v\n}\nhold xs = [1, 2]\nhold b = Box<list> { xs }\nshow len(b.v)\n' > $(TESTS)/gs_arglist.sa
 	if ./$(SEED_MIN_BIN) $(TESTS)/gs_arglist.sa > $(TESTS)/gs_arglist_ms.c 2>$(TESTS)/gs_arglist_ms.err; then \
 	  echo "[FAIL] seed-min accepted a list as a type argument"; exit 1; fi
@@ -1305,7 +1310,7 @@ test-generic-structs: $(GEN2) $(SEED_MIN_BIN)
 	  echo "[FAIL] seed-min accepted two kinds in one instantiation"; exit 1; fi
 	grep -q -F "Box__n field 'v' is num (its type argument says so), the literal gives str" $(TESTS)/gs_twokinds_ms.err
 	./$(GEN2) $(TESTS)/gs_twokinds.sa $(TESTS)/gs_twokinds_g2.c >/dev/null 2>&1 || true
-	grep -q -F '#error sayanox-min: struct field is used with two different types' $(TESTS)/gs_twokinds_g2.c
+	grep -q -F '#error sayanox-min: struct field is used with two different value kinds' $(TESTS)/gs_twokinds_g2.c
 	if [ -x $(NATIVE_BIN) ]; then \
 	  if ./$(NATIVE_BIN) $(TESTS)/gs_twokinds.sa $(TESTS)/gs_twokinds_nat 2>$(TESTS)/gs_twokinds_nat.err; then \
 	    echo "[FAIL] native accepted two kinds in one instantiation"; exit 1; fi; \
@@ -1493,9 +1498,13 @@ test-native-emit-split: $(NATIVE_BIN)
 	  || { echo "[FAIL] the EMIT-SEAM-BEGIN marker is missing or duplicated"; exit 1; }
 	test $$(grep -c -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c) -eq 1 \
 	  || { echo "[FAIL] the EMIT-SEAM-END marker is missing or duplicated"; exit 1; }
+	test $$(grep -c -F '/* ================= phase 1: collect definitions' selfhost/native_aot.c) -eq 1 \
+	  || { echo "[FAIL] the phase-1 marker is missing or duplicated"; exit 1; }
+	test $$(grep -c -F 'x86-64 mini encoder' selfhost/native_aot.c) -eq 1 \
+	  || { echo "[FAIL] the encoder marker is missing or duplicated"; exit 1; }
 	b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c | cut -d: -f1); \
 	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c | cut -d: -f1); \
-	 p1=$$(grep -n -F 'phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
+	 p1=$$(grep -n -F '/* ================= phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
 	 enc=$$(grep -n -F 'x86-64 mini encoder' selfhost/native_aot.c | cut -d: -f1); \
 	 if [ "$$b" -ge "$$e" ]; then echo "[FAIL] the emit-seam markers are out of order"; exit 1; fi; \
 	 if [ "$$enc" -ge "$$p1" ] || [ "$$p1" -ge "$$b" ]; then \
@@ -1511,7 +1520,7 @@ test-native-emit-split: $(NATIVE_BIN)
 	   grep -n -w 'cn' $(TESTS)/seam_region.c | head -3; exit 1; fi; \
 	 echo "[OK] emit seam: $$((e - b)) lines of language-level emitter, no raw byte write, no direct cursor read"
 	# ---- the seam API is defined in the encoder region, above phase 1 ----
-	p1=$$(grep -n -F 'phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
+	p1=$$(grep -n -F '/* ================= phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
 	 for fn in 'static size_t here(void)' 'static void patch_imm32' 'static void leave_ret' \
 	           'static size_t sub_rsp_imm32_slot' 'static size_t jmp5_slot' 'static void erel32j'; do \
 	   ln=$$(grep -n -F "$$fn" selfhost/native_aot.c | head -1 | cut -d: -f1); \
@@ -2724,19 +2733,18 @@ test-gen2-index-mod: $(GEN2) $(SEED_MIN_BIN)
 	else echo '[SKIP] native %-index parity: native_aot not built'; fi
 	@echo '[OK] % in index expressions: seed-min == gen2 (== native when built)'
 
-# test-type-refusals: the type forms no backend implements must be refused
-# with a clear diagnostic on every backend, and the one form gen2 does
-# implement (a struct-typed `hold` annotation, which gen2 type-checks) must
-# keep working there while seed-min and native refuse it BY NAME. Nothing
-# here may be silently miscompiled: before this target, `p: Pt` in a struct
-# body registered `Pt` as an extra field on all three backends.
+# test-type-refusals: forms without an implementation must be rejected rather
+# than becoming malformed C.  A named struct annotation on `hold` is now a
+# portable checked form: seed-min, gen2 and native all require the exact
+# declared concrete struct identity.
 test-type-refusals: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@mkdir -p $(TESTS)
 	@printf 'struct Box<T> {\n  v\n}\nhold b = Box<Box<num>> { 7 }\nshow 1\n' > $(TESTS)/ttr_nested.sa
 	@printf 'struct Pt {\n  x\n  y\n}\nstruct Wrap {\n  p: Pt\n  n\n}\nshow 1\n' > $(TESTS)/ttr_fieldann.sa
-	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = Pt { 1, 2 }\nshow p.x\nshow p.y\n' > $(TESTS)/ttr_holdann.sa
+	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = Pt { 1, 2 }\nhold q: Pt = p\nshow q.x\nshow q.y\n' > $(TESTS)/ttr_holdann.sa
 	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = 5\nshow 1\n' > $(TESTS)/ttr_holdann_bad.sa
-	@# nested generic instantiation: refused on seed-min, gen2 and native
+	@printf 'struct Pt {\n  x\n}\nstruct Qt {\n  x\n}\nhold p: Pt = Qt { 5 }\n' > $(TESTS)/ttr_holdann_wrongstruct.sa
+	@# nested generic instantiation: still refused on seed-min, gen2 and native
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_nested.sa > $(TESTS)/ttr_nested_seed.c 2> $(TESTS)/ttr_nested_seed.msg; then echo "[FAIL] seed-min accepted Box<Box<num>>"; exit 1; fi
 	@grep -q "not implemented" $(TESTS)/ttr_nested_seed.msg || { echo "[FAIL] seed-min nested-generic refusal is unclear"; cat $(TESTS)/ttr_nested_seed.msg; exit 1; }
 	@./$(GEN2) $(TESTS)/ttr_nested.sa $(TESTS)/ttr_nested_gen2.c > $(TESTS)/ttr_nested_gen2.msg 2>&1; \
@@ -2752,18 +2760,25 @@ test-type-refusals: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/ttr_fieldann.sa $(TESTS)/ttr_fieldann_native > $(TESTS)/ttr_fieldann_native.msg 2>&1; then echo "[FAIL] native accepted a struct field annotation"; exit 1; fi
 	@grep -q "field annotations are not supported" $(TESTS)/ttr_fieldann_native.msg || { echo "[FAIL] native field-annotation refusal is unclear"; cat $(TESTS)/ttr_fieldann_native.msg; exit 1; }
 	@echo '[OK] struct field annotations refused on seed-min, gen2 and native'
-	@# struct-typed HOLD annotation: gen2 supports and type-checks it;
-	@# seed-min and native refuse it by name (their hold types are scalar)
+	@# Named struct holds: valid identity-preserving copy on every backend.
+	./$(SEED_MIN_BIN) $(TESTS)/ttr_holdann.sa > $(TESTS)/ttr_holdann_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/ttr_holdann_seed $(TESTS)/ttr_holdann_seed.c
 	./$(GEN2) $(TESTS)/ttr_holdann.sa $(TESTS)/ttr_holdann_gen2.c >/dev/null
-	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/ttr_holdann_gen2 $(TESTS)/ttr_holdann_gen2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/ttr_holdann_gen2 $(TESTS)/ttr_holdann_gen2.c
+	./$(NATIVE_BIN) $(TESTS)/ttr_holdann.sa $(TESTS)/ttr_holdann_native
+	$(call assert-out,./$(TESTS)/ttr_holdann_seed,1\n2)
 	$(call assert-out,./$(TESTS)/ttr_holdann_gen2,1\n2)
-	@./$(GEN2) $(TESTS)/ttr_holdann_bad.sa $(TESTS)/ttr_holdann_bad.c > $(TESTS)/ttr_holdann_bad.msg 2>&1; \
-	  grep -q 'is declared Pt but the value is a number' $(TESTS)/ttr_holdann_bad.c || { echo "[FAIL] gen2 did not type-check a struct-typed hold"; exit 1; }
-	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_holdann.sa > $(TESTS)/ttr_holdann_seed.c 2> $(TESTS)/ttr_holdann_seed.msg; then echo "[FAIL] seed-min accepted a struct-typed hold annotation"; exit 1; fi
-	@grep -q "unknown hold type 'Pt'" $(TESTS)/ttr_holdann_seed.msg || { echo "[FAIL] seed-min struct-hold refusal is unclear"; cat $(TESTS)/ttr_holdann_seed.msg; exit 1; }
-	@if ./$(NATIVE_BIN) $(TESTS)/ttr_holdann.sa $(TESTS)/ttr_holdann_native > $(TESTS)/ttr_holdann_native.msg 2>&1; then echo "[FAIL] native accepted a struct-typed hold annotation"; exit 1; fi
-	@grep -q "unknown or unsupported type 'Pt'" $(TESTS)/ttr_holdann_native.msg || { echo "[FAIL] native struct-hold refusal is unclear"; cat $(TESTS)/ttr_holdann_native.msg; exit 1; }
-	@echo '[OK] struct-typed hold: supported+checked on gen2, refused by name on seed-min and native'
+	$(call assert-out,./$(TESTS)/ttr_holdann_native,1\n2)
+	@# A scalar and a same-shaped but differently named struct are both errors.
+	@for f in ttr_holdann_bad ttr_holdann_wrongstruct; do \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/$$f.sa >$(TESTS)/$$f.seed.c 2>$(TESTS)/$$f.seed.msg; then echo "[FAIL] seed-min accepted invalid $$f"; exit 1; fi; \
+	  grep -q 'declared struct\|type mismatch' $(TESTS)/$$f.seed.msg || { echo "[FAIL] seed-min struct-hold error is unclear"; cat $(TESTS)/$$f.seed.msg; exit 1; }; \
+	  if ./$(NATIVE_BIN) $(TESTS)/$$f.sa $(TESTS)/$$f.native >$(TESTS)/$$f.native.out 2>$(TESTS)/$$f.native.msg; then echo "[FAIL] native accepted invalid $$f"; exit 1; fi; \
+	  grep -q 'declared\|two different types' $(TESTS)/$$f.native.msg || { echo "[FAIL] native struct-hold error is unclear"; cat $(TESTS)/$$f.native.msg; exit 1; }; \
+	  ./$(GEN2) $(TESTS)/$$f.sa $(TESTS)/$$f.gen2.c >/dev/null 2>$(TESTS)/$$f.gen2.msg; \
+	  grep -q '#error sayanox-min:' $(TESTS)/$$f.gen2.c || { echo "[FAIL] gen2 accepted invalid $$f"; exit 1; }; \
+	done
+	@echo '[OK] struct-typed hold: seed-min, gen2 and native preserve/check the named concrete struct; scalar and wrong-struct initializers refuse'
 
 test-stage2: test-gen2-index-expr
 test-for-str: test-gen2-index-expr
@@ -3080,15 +3095,16 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	$(CC) -O2 -o $(TESTS)/native_nest3_g2 $(TESTS)/native_nest3_g2.c
 	$(call assert-out,./$(TESTS)/native_nest3_g2,1\n2\n3\nmain\n4)
 	@echo "[OK] native nested structs: l.a.x chains (2 and 3 levels), typed copy; seed-min and gen2 agree"
-	@# nested-struct forms native must reject with a clear error, not mis-compile
+	@# Keep the remaining nested-struct refusals clear rather than miscompiled.
 	@printf 'struct Line {\n  a\n}\nstruct Point {\n  x\n}\nhold l = Line { a: Point { 1 } }\n' > $(TESTS)/native_nestfwd.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_nestfwd.sa $(TESTS)/native_nestfwd 2>/dev/null; then \
 	  echo "[FAIL] native accepted a nested struct declared later"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_nestfwd.sa $(TESTS)/native_nestfwd 2>&1 | grep -q 'declare the nested struct first'
-	@printf 'struct Point {\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: [1], b: Point { 2 } }\n' > $(TESTS)/native_nestlist.sa
-	@if ./$(NATIVE_BIN) $(TESTS)/native_nestlist.sa $(TESTS)/native_nestlist 2>/dev/null; then \
-	  echo "[FAIL] native accepted a list in a struct field"; exit 1; fi
-	@./$(NATIVE_BIN) $(TESTS)/native_nestlist.sa $(TESTS)/native_nestlist 2>&1 | grep -q 'cannot hold a list'
+	@# Concrete list fields are list pointers, not inline doubles: exercise
+	@# mutation and access here as well as in test-list-struct-fields.
+	@printf 'struct Line {\n  a\n}\nhold l = Line { a: [1] }\nhold alias = l.a\npush(alias, 2)\nshow len(l.a)\nshow l.a[1]\n' > $(TESTS)/native_nestlist.sa
+	./$(NATIVE_BIN) $(TESTS)/native_nestlist.sa $(TESTS)/native_nestlist
+	$(call assert-out,./$(TESTS)/native_nestlist,2\n2)
 	@printf 'struct Point {\n  x\n}\nhold q = Point { x: 1 }\nshow q\n' > $(TESTS)/native_showstruct.sa
 	@if ./$(NATIVE_BIN) $(TESTS)/native_showstruct.sa $(TESTS)/native_showstruct 2>/dev/null; then \
 	  echo "[FAIL] native accepted show of a struct"; exit 1; fi
@@ -3097,7 +3113,7 @@ native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
 	@if ./$(NATIVE_BIN) $(TESTS)/native_nestchain.sa $(TESTS)/native_nestchain 2>/dev/null; then \
 	  echo "[FAIL] native accepted a chain through a number field"; exit 1; fi
 	@./$(NATIVE_BIN) $(TESTS)/native_nestchain.sa $(TESTS)/native_nestchain 2>&1 | grep -q 'cannot access a field'
-	@echo "[OK] native rejects (clearly): later-declared nesting, list in struct, show of struct, bad chain"
+	@echo "[OK] native nested boundaries: concrete list field works; later-declared nesting, show of struct and bad chain reject clearly"
 	@# doubly nested field copy (same source as test-nest's ts_nestcopy):
 	@# all three backends must print 7
 	@printf 'struct Point {\n  x\n}\nstruct Mid {\n  p\n}\nstruct Top {\n  q\n}\nhold t = Top { q: Mid { p: Point { x: 7 } } }\nhold p2 = t.q.p\nshow p2.x\n' > $(TESTS)/native_nestcopy.sa
@@ -4113,3 +4129,89 @@ test-seed-borrow: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
 	@echo '[OK] seed borrowing: read-only parameters, writable aliases/branches/binders/returns; 30000 reads of 16 KiB with live list (seed/gen2/native)'
 test-stage2: test-seed-borrow
 native-test: test-seed-borrow
+
+# ---------------------------------------------------------------------------
+# List-valued concrete struct fields are pointer fields, not inline copies.
+# Seed-min/native retain their alias and native-GC coverage below. The shared
+# legacy fixture now runs on all three backends. Gen2 also has a distinct
+# `ftypes` list tag and emits `sx_list *`; its focused fixture separately
+# proves direct literals/copies, typed field indexing/assignment,
+# list-field conditions and `for v in p.xs`.  Generic Box<list> remains a
+# deliberate cross-backend refusal.
+# ---------------------------------------------------------------------------
+.PHONY: test-list-struct-fields
+LSF_WANT := 5\n2\n3\n5\n7\n11\n28\n5
+test-list-struct-fields: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) test-gen2-list-struct-fields
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/list_struct_fields_test.sa > $(TESTS)/list_struct_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/list_struct_seed $(TESTS)/list_struct_seed.c
+	$(call assert-out,./$(TESTS)/list_struct_seed,$(LSF_WANT))
+	./$(GEN2) selfhost/list_struct_fields_test.sa $(TESTS)/list_struct_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/list_struct_gen2 $(TESTS)/list_struct_gen2.c
+	$(call assert-out,./$(TESTS)/list_struct_gen2,$(LSF_WANT))
+	./$(NATIVE_BIN) selfhost/list_struct_fields_test.sa $(TESTS)/list_struct_native
+	$(call assert-out,./$(TESTS)/list_struct_native,$(LSF_WANT))
+	./$(NATIVE_BIN) selfhost/list_struct_fields_gc_test.sa $(TESTS)/list_struct_gc
+	$(call assert-out,./$(TESTS)/list_struct_gc,gc-ok\n5\n4\n5\n6\n7\n8)
+	@# A field's first kind is a contract: it cannot later switch number/list.
+	@printf 'struct P { xs }\nhold p = P { xs: [1] }\nhold q = P { xs: 2 }\n' > $(TESTS)/list_struct_conflict.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/list_struct_conflict.sa >$(TESTS)/list_struct_conflict_seed.c 2>$(TESTS)/list_struct_conflict_seed.err; then \
+	  echo '[FAIL] seed-min accepted a list/number struct-field conflict'; exit 1; fi
+	@grep -q 'earlier literal' $(TESTS)/list_struct_conflict_seed.err || { echo '[FAIL] seed-min list-field conflict was unclear'; cat $(TESTS)/list_struct_conflict_seed.err; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/list_struct_conflict.sa $(TESTS)/list_struct_conflict_native >$(TESTS)/list_struct_conflict_native.out 2>$(TESTS)/list_struct_conflict_native.err; then \
+	  echo '[FAIL] native accepted a list/number struct-field conflict'; exit 1; fi
+	@grep -q 'two different types' $(TESTS)/list_struct_conflict_native.err || { echo '[FAIL] native list-field conflict was unclear'; cat $(TESTS)/list_struct_conflict_native.err; exit 1; }
+	@echo '[OK] list struct fields: shared seed-min/gen2/native alias+iteration output; native GC tracing; focused gen2 layout/literal/copy/index/write/condition coverage'
+
+# Gen2-only detail fixture.  The seed-min parser deliberately does not accept
+# direct dotted assignment (`q.xs[0] = ...`), so this target makes no false
+# three-way parity claim; seed/native parity remains in test-list-struct-fields
+# above.  Every accepted gen2 program is compiled with strict C type warnings.
+.PHONY: test-gen2-list-struct-fields
+GLSF_WANT := 10\n20\n11\n3\n30\n61\n20\n77\n88\n61
+test-gen2-list-struct-fields: $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(GEN2) selfhost/gen2_list_struct_fields_test.sa $(TESTS)/gen2_list_struct.c >/dev/null
+	@if grep -q '#error sayanox-min:' $(TESTS)/gen2_list_struct.c; then \
+	  echo '[FAIL] gen2 rejected its concrete list-field fixture'; head -8 $(TESTS)/gen2_list_struct.c; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gen2_list_struct $(TESTS)/gen2_list_struct.c
+	$(call assert-out,./$(TESTS)/gen2_list_struct,$(GLSF_WANT))
+	@grep -q -F 'typedef struct { sx_list *xs; char *label; } Packet;' $(TESTS)/gen2_list_struct.c \
+	  || { echo '[FAIL] gen2 did not emit sx_list * for Packet.xs'; exit 1; }
+	@grep -q -F 'typedef struct { Packet p; } Envelope;' $(TESTS)/gen2_list_struct.c \
+	  || { echo '[FAIL] gen2 lost the nested concrete Packet layout'; exit 1; }
+	@grep -q -F 'q.xs = sx_lset(q.xs, 0.0, 11.0);' $(TESTS)/gen2_list_struct.c \
+	  || { echo '[FAIL] gen2 did not lower list-field assignment through sx_lset'; exit 1; }
+	@grep -q -F 'sx_lget((q).xs,(sx_llen((q).xs) - 1.0))' $(TESTS)/gen2_list_struct.c \
+	  || { echo '[FAIL] gen2 did not type/lower list-field indexing with len()'; exit 1; }
+	@grep -q -F 'for (double __sx_ix = 0.0; __sx_ix < sx_llen(__sx_fv' $(TESTS)/gen2_list_struct.c \
+	  || { echo '[FAIL] gen2 did not lower for v in p.xs as a list loop'; exit 1; }
+	@# Kind changes must still stop at a language #error, not silently alter C layout.
+	@printf 'struct P { xs }\nhold p = P { xs: [1] }\nhold q = P { xs: 2 }\n' > $(TESTS)/gen2_list_struct_conflict.sa
+	./$(GEN2) $(TESTS)/gen2_list_struct_conflict.sa $(TESTS)/gen2_list_struct_conflict.c >$(TESTS)/gen2_list_struct_conflict.msg
+	@grep -q -F '#error sayanox-min: struct field is used with two different value kinds' $(TESTS)/gen2_list_struct_conflict.c \
+	  || { echo '[FAIL] gen2 accepted a list/number field-kind conflict'; exit 1; }
+	@grep -q -F 'two different value kinds' $(TESTS)/gen2_list_struct_conflict.msg \
+	  || { echo '[FAIL] gen2 list-field conflict diagnostic was unclear'; cat $(TESTS)/gen2_list_struct_conflict.msg; exit 1; }
+	@# Unimplemented direct push and whole-list show stay explicit source errors,
+	@# rather than compiling pointer misuse while aliases remain the supported path.
+	@printf 'struct P { xs }\nhold p = P { xs: [1] }\npush(p.xs, 2)\n' > $(TESTS)/gen2_list_struct_push_bad.sa
+	./$(GEN2) $(TESTS)/gen2_list_struct_push_bad.sa $(TESTS)/gen2_list_struct_push_bad.c >$(TESTS)/gen2_list_struct_push_bad.msg
+	@grep -q -F '#error sayanox-min: push statement:' $(TESTS)/gen2_list_struct_push_bad.c \
+	  || { echo '[FAIL] gen2 direct push on a list field was not a language refusal'; exit 1; }
+	@printf 'struct P { xs }\nhold p = P { xs: [1] }\nshow p.xs\n' > $(TESTS)/gen2_list_struct_show_bad.sa
+	./$(GEN2) $(TESTS)/gen2_list_struct_show_bad.sa $(TESTS)/gen2_list_struct_show_bad.c >$(TESTS)/gen2_list_struct_show_bad.msg
+	@grep -q -F '#error sayanox-min: show value cannot be a list' $(TESTS)/gen2_list_struct_show_bad.c \
+	  || { echo '[FAIL] gen2 whole list-field show was not a language refusal'; exit 1; }
+	@printf 'hold xs = [1]\nshow xs\n' > $(TESTS)/gen2_list_direct_show_bad.sa
+	./$(GEN2) $(TESTS)/gen2_list_direct_show_bad.sa $(TESTS)/gen2_list_direct_show_bad.c >$(TESTS)/gen2_list_direct_show_bad.msg
+	@grep -q -F '#error sayanox-min: show value cannot be a list' $(TESTS)/gen2_list_direct_show_bad.c \
+	  || { echo '[FAIL] gen2 direct whole-list show was not a language refusal'; exit 1; }
+	@printf 'struct P { xs }\nhold p = P { xs: [1] }\nwhen p.xs {\n  show 1\n}\n' > $(TESTS)/gen2_list_struct_cond_bad.sa
+	./$(GEN2) $(TESTS)/gen2_list_struct_cond_bad.sa $(TESTS)/gen2_list_struct_cond_bad.c >$(TESTS)/gen2_list_struct_cond_bad.msg
+	@grep -q -F '#error sayanox-min: a list-valued struct field cannot be a condition' $(TESTS)/gen2_list_struct_cond_bad.c \
+	  || { echo '[FAIL] gen2 whole list-field condition was not a language refusal'; exit 1; }
+	@echo '[OK] gen2 concrete list fields: sx_list pointer layout, literal/copy aliasing, indexed read/write, len-index/condition lowering, nested layout and for p.xs; conflicts and unsupported direct push/show/whole-condition refuse clearly'
+
+test-stage2: test-list-struct-fields
+native-test: test-list-struct-fields

@@ -8,8 +8,9 @@
 // never share a slot, and `make test-generic-structs` pins both typedefs.
 //
 // seed-min, gen2 and native all compile this file and print the same six lines.
-// Deliberately NOT here: `Box<list>` (no backend has a list-typed struct
-// field), a struct name as a type argument, and a nested instantiation such as
+// Deliberately NOT here: `Box<list>` (concrete list fields exist, but generic
+// list-field specialization/layout is intentionally still refused), a struct
+// name as a type argument, and a nested instantiation such as
 // `Box<Box<num>>` -- see the refusal table in docs/TYPES_ROADMAP.md.
 struct Box<T> {
   v
