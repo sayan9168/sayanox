@@ -6,11 +6,7 @@ cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
 ./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
 cc -O2 -o selfhost/gen2 selfhost/gen2.c
 [OK] gen2
-./selfhost/gen2 tools/lsp_workspace_bind.sa tools/lsp_workspace_bind.c >/dev/null
-cc -O2 -o tools/lsp_workspace_bind tools/lsp_workspace_bind.c
-[OK] Sayanox LSP workspace binder built from tools/lsp_workspace_bind.sa
 selfhost/gen2 tools/sayanox_lsp.sa tools/sayanox_lsp.c
-./tools/lsp_workspace_bind tools/sayanox_lsp.c > tools/sayanox_lsp.c.bound || { rm -f tools/sayanox_lsp.c.bound; exit 1; }
 cc -O2 -Werror=implicit-function-declaration -o tools/sayanox_lsp tools/sayanox_lsp.c
 ./selfhost/gen2 tools/sxpkg.sa tools/sxpkg.c >/dev/null
 cc -O2 -o tools/sxpkg tools/sxpkg.c

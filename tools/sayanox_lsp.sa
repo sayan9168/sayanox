@@ -2103,10 +2103,232 @@ make dir_of(uri: str) -> str {
 
 // --------------------------------------------------------------- main loop
 
-// Native directory enumeration is bound only in the LSP build by a checked
-// generated-C transformation. Compiling this file alone gives no disk index.
+// ------------------------------------------------------- workspace index
+// The folder index used to be installed by a C header plus a generated-C
+// binder. It is ordinary Sayanox now: read_dir/path_kind/path_size/path_real
+// (added to the compiler on 2026-10-17) provide the operating-system surface,
+// and the walk, skip rules, percent-encoding and caps live here.
+//
+// The manifest is alternating lines: a percent-encoded file:// URI and the
+// absolute path. It is capped at 128 files (256 lines) and 2 MB. The cap used
+// to be applied while walking; it is applied to the finished listing now, so
+// a huge tree is still bounded, just after the walk instead of during it.
+make ws_prefix(t: str, p: str) -> num {
+  hold r = 1
+  when len(t) < len(p) { r = 0 }
+  hold i = 0
+  while i < len(p) && r == 1 {
+    when sx_index(t, i) != sx_index(p, i) { r = 0 }
+    i = i + 1
+  }
+  give r
+}
+
+make ws_hexval(c: num) -> num {
+  hold r = 0 - 1
+  when c >= 48 && c <= 57 { r = c - 48 }
+  when c >= 97 && c <= 102 { r = c - 87 }
+  when c >= 65 && c <= 70 { r = c - 55 }
+  give r
+}
+
+// A local file URI becomes an absolute path; anything else becomes "".
+// Rejections match the old C bridge: wrong scheme, malformed %XX, NUL,
+// newline, carriage return and a result that is not absolute.
+make ws_decode(uri: str) -> str {
+  hold start = 0
+  hold known = 0
+  when ws_prefix(uri, "file://localhost/") == 1 {
+    start = 16
+    known = 1
+  }
+  when known == 0 && ws_prefix(uri, "file:///") == 1 {
+    start = 7
+    known = 1
+  }
+  when known == 0 {
+    give ""
+  }
+  hold out = ""
+  hold i = start
+  hold n = len(uri)
+  while i < n {
+    hold c = sx_index(uri, i)
+    when c == 37 {
+      when i + 2 >= n {
+        give ""
+      }
+      hold hi = ws_hexval(sx_index(uri, i + 1))
+      hold lo = ws_hexval(sx_index(uri, i + 2))
+      when hi < 0 || lo < 0 {
+        give ""
+      }
+      c = hi * 16 + lo
+      i = i + 2
+    }
+    when c == 0 || c == 10 || c == 13 {
+      give ""
+    }
+    out = concat(out, chr(c))
+    i = i + 1
+  }
+  when len(out) == 0 || sx_index(out, 0) != 47 {
+    give ""
+  }
+  give out
+}
+
+make ws_hexdig(v: num) -> str {
+  hold digits = "0123456789ABCDEF"
+  give chr(sx_index(digits, v))
+}
+
+make ws_safe(c: num) -> num {
+  hold r = 0
+  when c >= 97 && c <= 122 { r = 1 }
+  when c >= 65 && c <= 90 { r = 1 }
+  when c >= 48 && c <= 57 { r = 1 }
+  when c == 47 { r = 1 }
+  when c == 45 { r = 1 }
+  when c == 95 { r = 1 }
+  when c == 46 { r = 1 }
+  when c == 126 { r = 1 }
+  give r
+}
+
+make ws_encode(path: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(path) {
+    hold c = sx_index(path, i)
+    when ws_safe(c) == 1 {
+      out = concat(out, chr(c))
+    } otherwise {
+      out = concat(out, "%")
+      out = concat(out, ws_hexdig(c / 16))
+      out = concat(out, ws_hexdig(c % 16))
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make ws_skip(name: str) -> num {
+  hold r = 0
+  when len(name) > 0 && sx_index(name, 0) == 46 { r = 1 }
+  when string_eq(name, "node_modules") { r = 1 }
+  when string_eq(name, "build") { r = 1 }
+  when string_eq(name, "dist") { r = 1 }
+  when string_eq(name, "target") { r = 1 }
+  when string_eq(name, "vendor") { r = 1 }
+  give r
+}
+
+make ws_ends_sa(name: str) -> num {
+  hold r = 0
+  hold n = len(name)
+  when n >= 3 && sx_index(name, n - 3) == 46 && sx_index(name, n - 2) == 115 && sx_index(name, n - 1) == 97 {
+    r = 1
+  }
+  give r
+}
+
+// Depth 16, regular files only (lstat kind 1, so symlinks are not followed),
+// .sa suffix, at most 256 KiB per file.
+make ws_walk(dir: str, depth: num) -> str {
+  hold out = ""
+  when depth > 16 {
+    give out
+  }
+  hold names = read_dir(dir)
+  hold total = len(names)
+  hold i = 0
+  hold start = 0
+  while i <= total {
+    hold c = 0
+    when i < total { c = sx_index(names, i) }
+    when i == total || c == 10 {
+      hold name = sub_str(names, start, i)
+      when len(name) > 0 && ws_skip(name) == 0 {
+        hold path = concat(concat(dir, "/"), name)
+        hold kind = path_kind(path)
+        when kind == 2 {
+          out = concat(out, ws_walk(path, depth + 1))
+        }
+        when kind == 1 && ws_ends_sa(name) == 1 {
+          hold size = path_size(path)
+          when size <= 262144 {
+            out = concat(out, "file://")
+            out = concat(out, ws_encode(path))
+            out = concat(out, "\n")
+            out = concat(out, path)
+            out = concat(out, "\n")
+          }
+        }
+      }
+      start = i + 1
+    }
+    i = i + 1
+  }
+  give out
+}
+
+// The first `lines` lines, or everything when the text is shorter.
+make ws_first(text: str, lines: num) -> str {
+  hold i = 0
+  hold seen = 0
+  hold stop = len(text)
+  hold done = 0
+  while i < len(text) && done == 0 {
+    when sx_index(text, i) == 10 {
+      seen = seen + 1
+      when seen >= lines {
+        stop = i + 1
+        done = 1
+      }
+    }
+    i = i + 1
+  }
+  give sub_str(text, 0, stop)
+}
+
+// Byte offset just after the last newline, or -1 when there is none.
+make ws_last_nl(text: str) -> num {
+  hold i = len(text) - 1
+  hold found = 0 - 1
+  hold done = 0
+  while i >= 0 && done == 0 {
+    when sx_index(text, i) == 10 {
+      found = i + 1
+      done = 1
+    }
+    i = i - 1
+  }
+  give found
+}
+
 make workspace_manifest(root: str) -> str {
-  give ""
+  hold decoded = ws_decode(root)
+  when len(decoded) == 0 {
+    give ""
+  }
+  hold canonical = path_real(decoded)
+  when len(canonical) == 0 {
+    give ""
+  }
+  when path_kind(canonical) != 2 {
+    give ""
+  }
+  hold raw = ws_walk(canonical, 0)
+  hold capped = ws_first(raw, 256)
+  when len(capped) > 2097152 {
+    hold cut = ws_last_nl(sub_str(capped, 0, 2097152))
+    when cut < 0 {
+      cut = 0
+    }
+    capped = sub_str(capped, 0, cut)
+  }
+  give capped
 }
 
 make workspace_text(manifest: str, uri: str) -> str {

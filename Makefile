@@ -29,8 +29,6 @@ SXPKG_C  := tools/sxpkg.c
 SXPKG_BIN := tools/sxpkg
 LSP_C    := tools/sayanox_lsp.c
 LSP_BIN  := tools/sayanox_lsp
-LSP_BIND_C := tools/lsp_workspace_bind.c
-LSP_BIND   := tools/lsp_workspace_bind
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
@@ -228,22 +226,10 @@ sxpkg: $(SXPKG_BIN)
 tools: sxfmt sxpkg
 
 # The language server is a normal Sayanox program: gen2 compiles it, cc builds
-# it. The only non-Sayanox part of the build is the tool-local directory bridge
-# header; the text binding that installs it is itself a Sayanox tool, so this
-# path needs no awk, sed or shell text processing.
-$(LSP_BIND): $(GEN2) tools/lsp_workspace_bind.sa
-	./$(GEN2) tools/lsp_workspace_bind.sa $(LSP_BIND_C) >/dev/null
-	$(CC) -O2 -o $(LSP_BIND) $(LSP_BIND_C)
-	@echo "[OK] Sayanox LSP workspace binder built from tools/lsp_workspace_bind.sa"
-
-$(LSP_BIN): $(GEN2) $(LSP_BIND) tools/sayanox_lsp.sa tools/lsp_workspace.h
+# it. Since 2026-10-17 the folder index is Sayanox too (read_dir/path_kind/
+# path_size/path_real), so there is no C header and no generated-C binder.
+$(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa
 	$(GEN2) tools/sayanox_lsp.sa $(LSP_C)
-	./$(LSP_BIND) $(LSP_C) > $(LSP_C).bound || { rm -f $(LSP_C).bound; exit 1; }
-	@test $$(grep -c -F 'return sx_lsp_workspace_manifest(root);' $(LSP_C).bound) -eq 1 \
-	  || { rm -f $(LSP_C).bound; echo "FAIL: LSP workspace binding did not apply exactly once"; exit 1; }
-	@test $$(grep -c -F '#include "lsp_workspace.h"' $(LSP_C).bound) -eq 1 \
-	  || { rm -f $(LSP_C).bound; echo "FAIL: LSP workspace header include missing"; exit 1; }
-	@mv $(LSP_C).bound $(LSP_C)
 	$(CC) -O2 -Werror=implicit-function-declaration -o $(LSP_BIN) $(LSP_C)
 
 lsp: $(LSP_BIN)
@@ -2458,15 +2444,15 @@ test-path-builtins: $(GEN2) $(SEED_MIN_BIN)
 	./$(GEN2) $(TESTS)/pathb_gen.sa $(TESTS)/pathb_gen.c >/dev/null
 	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/pathb_gen $(TESTS)/pathb_gen.c
 	@./$(TESTS)/pathb_gen > $(TESTS)/pathb_gen.out
-	@test "$$(sed -n 1p $(TESTS)/pathb_gen.out)" = 9 \
+	@test "$$(head -n 1 $(TESTS)/pathb_gen.out)" = 9 \
 	  || { echo "[FAIL] read_dir did not return 'sub\\na.sa\\n' (9 bytes)"; cat $(TESTS)/pathb_gen.out; exit 1; }
 	@printf '2\n1\n1\n3\n0\n1\n2\n' > $(TESTS)/pathb_gen.want
-	@sed -n '2,8p' $(TESTS)/pathb_gen.out > $(TESTS)/pathb_gen.kinds
+	@tail -n +2 $(TESTS)/pathb_gen.out | head -n 7 > $(TESTS)/pathb_gen.kinds
 	@cmp $(TESTS)/pathb_gen.kinds $(TESTS)/pathb_gen.want \
 	  || { echo "[FAIL] path_kind/path_size disagree with the filesystem"; cat $(TESTS)/pathb_gen.out; exit 1; }
-	@test "$$(sed -n 9p $(TESTS)/pathb_gen.out)" = "$(CURDIR)/$(TESTS)/pathb_dir" \
-	  || { echo "[FAIL] path_real did not canonicalize"; sed -n 9p $(TESTS)/pathb_gen.out; exit 1; }
-	@test "$$(sed -n 10p $(TESTS)/pathb_gen.out)" = 0 \
+	@test "$$(head -n 9 $(TESTS)/pathb_gen.out | tail -n 1)" = "$(CURDIR)/$(TESTS)/pathb_dir" \
+	  || { echo "[FAIL] path_real did not canonicalize"; head -n 9 $(TESTS)/pathb_gen.out | tail -n 1; exit 1; }
+	@test "$$(head -n 10 $(TESTS)/pathb_gen.out | tail -n 1)" = 0 \
 	  || { echo "[FAIL] path_real did not return an empty string for a missing path"; exit 1; }
 	@if ./$(SEED_MIN_BIN) $(TESTS)/pathb_gen.sa > $(TESTS)/pathb_gen_seed.c 2>$(TESTS)/pathb_gen_seed.err; then \
 	   echo "[FAIL] seed-min accepted the path builtins without implementing them"; exit 1; fi
@@ -2777,7 +2763,10 @@ test-language-deps: $(GEN2) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN
 	@if grep -nE '^	[@-]*[[:space:]]*(awk|sed)([[:space:]]|$$)' Makefile; then \
 	  echo "[FAIL] a Makefile recipe invokes awk or sed"; exit 1; fi
 	@test ! -e tools/lsp_workspace_bind.awk || { echo "[FAIL] the old awk LSP binder still exists"; exit 1; }
-	@grep -q 'tools/lsp_workspace_bind.sa' Makefile || { echo "[FAIL] the Sayanox LSP binder is not in the build"; exit 1; }
+	@test ! -e tools/lsp_workspace_bind.sa || { echo "[FAIL] the LSP binder is back: the server walks folders itself now"; exit 1; }
+	@test ! -e tools/lsp_workspace.h || { echo "[FAIL] the C LSP directory bridge is back"; exit 1; }
+	@grep -q 'make workspace_manifest' tools/sayanox_lsp.sa && grep -q 'read_dir(' tools/sayanox_lsp.sa \
+	  || { echo "[FAIL] the LSP no longer builds its folder index in Sayanox"; exit 1; }
 	@grep -q 'split -b 1100' selfhost/pack_compiler_min.sh || { echo "[FAIL] the packer no longer chunks with split"; exit 1; }
 	@if grep -nE '^[[:space:]]*[^#]*awk' selfhost/pack_compiler_min.sh selfhost/restore_compiler_min.sh; then \
 	  echo "[FAIL] a restore/pack script invokes awk"; exit 1; fi
@@ -2790,8 +2779,9 @@ test-language-deps: $(GEN2) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN
 	  chmod +x "$(DEP_SHIM_DIR)/$$t"; \
 	done
 	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" sh -c \
-	  './$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim.c && ./$(LSP_BIND) $(TESTS)/lsp_shim.c > $(TESTS)/lsp_shim_bound.c'
-	@cmp $(TESTS)/lsp_shim_bound.c $(LSP_C)
+	  './$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim.c && ./$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim_again.c'
+	@cmp $(TESTS)/lsp_shim.c $(TESTS)/lsp_shim_again.c
+	@cmp $(TESTS)/lsp_shim.c $(LSP_C)
 	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" $(MAKE) --no-print-directory \
 	  -o $(GEN2_C) -o $(GEN2) -o $(GEN1_MIN_C) -o $(GEN1_MIN) -o $(SEED_MIN_BIN) \
 	  test-lsp test-lsp-robust test-native-ir-log test-native-mem test-seed-gc test-seed-generics test-sxpkg-online-local
@@ -3236,13 +3226,12 @@ all-sayanox:
 	@echo "=== ALL-SAYANOX: next phase, not implemented ==="
 	@printf '  %-28s %6s lines  %s\n' seed "$$(wc -l < selfhost/seed/sxc_seed_min.c)" selfhost/seed/sxc_seed_min.c
 	@printf '  %-28s %6s lines  %s\n' native-backend "$$(wc -l < selfhost/native_aot.c)" selfhost/native_aot.c
-	@printf '  %-28s %6s lines  %s\n' lsp-directory-bridge "$$(wc -l < tools/lsp_workspace.h)" tools/lsp_workspace.h
-	@printf '  %-28s %6s lines  %s\n' lsp-bridge-test "$$(wc -l < tools/lsp_workspace_test.c)" tools/lsp_workspace_test.c
+	@printf '  %-28s %6s lines  %s\n' lsp-test-client "$$(wc -l < tools/lsp_workspace_test.c)" tools/lsp_workspace_test.c
 	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
 	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' selfhost/sx | wc -l)" 'POSIX sh'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
-	@echo "  done: compiler, formatter, package tool, language server, LSP binder,"
-	@echo "        IR translator (all .sa; tools/emit_to_ir.sa replaced the C tool)"
+	@echo "  done: compiler, formatter, package tool, language server,"
+	@echo "        IR translator, LSP folder index (all .sa)"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
 	@exit 1

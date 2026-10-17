@@ -1,1 +1,2 @@
-[OK] doc claims: 24 legacy documents carry the banner; no Stage-2 host, bootstrap script or make target is advertised that does not exist
+[FAIL] docs/gate-logs/2026-10-17-sayanox-c-removal/README.md advertises a missing entry point without the honest banner
+make: *** [Makefile:2702: test-doc-claims] Error 1

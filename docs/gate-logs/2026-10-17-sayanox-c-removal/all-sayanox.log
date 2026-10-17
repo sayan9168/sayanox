@@ -1,13 +1,12 @@
 === ALL-SAYANOX: next phase, not implemented ===
   seed                           2035 lines  selfhost/seed/sxc_seed_min.c
   native-backend                 4353 lines  selfhost/native_aot.c
-  lsp-directory-bridge            119 lines  tools/lsp_workspace.h
-  lsp-bridge-test                 127 lines  tools/lsp_workspace_test.c
-  build-driver                   4514 lines  Makefile
+  lsp-test-client                 127 lines  tools/lsp_workspace_test.c
+  build-driver                   4539 lines  Makefile
   build-scripts                    25 files  POSIX sh
   sayanox-source                  275 files  .sa
-  done: compiler, formatter, package tool, language server, LSP binder,
-        IR translator (all .sa; tools/emit_to_ir.sa replaced the C tool)
+  done: compiler, formatter, package tool, language server,
+        IR translator, LSP folder index (all .sa)
   plan: docs/ALL_SAYANOX_PHASE.md
 [FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim
-make: *** [Makefile:3212: all-sayanox] Error 1
+make: *** [Makefile:3237: all-sayanox] Error 1

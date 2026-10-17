@@ -216,6 +216,9 @@ cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
 ./selfhost/gen2 selfhost/seed_tests/exit_builtin.sa selfhost/seed_tests/exit_builtin.c >/dev/null
 cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/exit_builtin selfhost/seed_tests/exit_builtin.c
 [OK] exit builtin: status propagates, stdout flushes first, seed-min refuses it with a clear diagnostic
+./selfhost/gen2 selfhost/seed_tests/pathb_gen.sa selfhost/seed_tests/pathb_gen.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/pathb_gen selfhost/seed_tests/pathb_gen.c
+[OK] path builtins: read_dir listing, lstat kinds (file/dir/symlink/missing), sizes, realpath; seed-min refuses them
 [OK] doc claims: 24 legacy documents carry the banner; no Stage-2 host, bootstrap script or make target is advertised that does not exist
 ./selfhost/seed/sxc_seed_min selfhost/gen2_index_expr_test.sa > selfhost/seed_tests/gixe_seed.c
 cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/gixe_seed selfhost/seed_tests/gixe_seed.c
@@ -490,11 +493,7 @@ cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
 cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init >/dev/null
 cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
 [OK] Sayanox package tool: init/add/update/list/remove
-./selfhost/gen2 tools/lsp_workspace_bind.sa tools/lsp_workspace_bind.c >/dev/null
-cc -O2 -o tools/lsp_workspace_bind tools/lsp_workspace_bind.c
-[OK] Sayanox LSP workspace binder built from tools/lsp_workspace_bind.sa
 selfhost/gen2 tools/sayanox_lsp.sa tools/sayanox_lsp.c
-./tools/lsp_workspace_bind tools/sayanox_lsp.c > tools/sayanox_lsp.c.bound || { rm -f tools/sayanox_lsp.c.bound; exit 1; }
 cc -O2 -Werror=implicit-function-declaration -o tools/sayanox_lsp tools/sayanox_lsp.c
 [OK] LSP Unicode and lifecycle: accented Latin, Bengali, emoji, UTF-16 positions, empty changes and close
 cc -O2 -Wall -Wextra -o selfhost/seed_tests/lsp-workspace-test tools/lsp_workspace_test.c

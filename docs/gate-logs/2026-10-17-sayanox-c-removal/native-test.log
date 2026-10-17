@@ -468,6 +468,9 @@ cc -O2 -o selfhost/seed_tests/stage2_var_g2 selfhost/seed_tests/stage2_var_g2.c
 ./selfhost/gen2 selfhost/seed_tests/exit_builtin.sa selfhost/seed_tests/exit_builtin.c >/dev/null
 cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/exit_builtin selfhost/seed_tests/exit_builtin.c
 [OK] exit builtin: status propagates, stdout flushes first, seed-min refuses it with a clear diagnostic
+./selfhost/gen2 selfhost/seed_tests/pathb_gen.sa selfhost/seed_tests/pathb_gen.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/pathb_gen selfhost/seed_tests/pathb_gen.c
+[OK] path builtins: read_dir listing, lstat kinds (file/dir/symlink/missing), sizes, realpath; seed-min refuses them
 [OK] doc claims: 24 legacy documents carry the banner; no Stage-2 host, bootstrap script or make target is advertised that does not exist
 ./selfhost/seed/sxc_seed_min selfhost/gen2_index_expr_test.sa > selfhost/seed_tests/gixe_seed.c
 cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/gixe_seed selfhost/seed_tests/gixe_seed.c

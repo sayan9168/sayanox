@@ -13,7 +13,7 @@ two ways (a static scan and a failing PATH shim) and is part of
 | seed-min → gen1-min → gen2 | make, C compiler (including its assembler/linker), POSIX shell and utilities |
 | gen2 → gen3 → gen4 | same; `cmp` checks the C fixed point |
 | native-test | same, on **x86-64 Linux** (generated ELF uses Linux syscalls) |
-| LSP build (`make lsp`) | gen2 + cc + the Sayanox binder `tools/lsp_workspace_bind.sa`; no awk |
+| LSP build (`make lsp`) | gen2 + cc only; the folder index is Sayanox (no C header, no binder) |
 | portable analysis listing | `tools/emit_to_ir.sa`, compiled by gen2 then cc; not a second backend |
 | offline packer (`make pack-compiler`) | POSIX sh, `gzip`, `base64`, `tr`, `split`, `cmp` |
 | source-present restore | local marker checks with `grep`; no decoding/network |
@@ -38,7 +38,8 @@ tools that are never on the bootstrap path.
   `selfhost/restore_sxc_full.sh`, `selfhost/restore_compiler_min.sh`,
   `selfhost/pack_compiler_min.sh` and `selfhost/lang_quality.sh`.
 * **awk removed from the build.** `tools/lsp_workspace_bind.awk` was replaced
-  by `tools/lsp_workspace_bind.sa`, a Sayanox program built by gen2. Its output
+  by a Sayanox binder, and that binder has since been removed as well (the
+  server walks folders itself with the directory builtins). The old binder's output
   on the real `tools/sayanox_lsp.sa` translation is byte-identical to the old
   awk output (75,678 bytes), and it fails closed with a C `#error` if the
   generated fallback shape changes. The Makefile also checks that the bridge
@@ -64,9 +65,10 @@ tools that are never on the bootstrap path.
 This pass removed *interpreters*, not C. The next phase — writing the remaining
 pieces in Sayanox — is recorded in
 [`docs/ALL_SAYANOX_PHASE.md`](docs/ALL_SAYANOX_PHASE.md): a C seed (2,035
-lines), a C native backend (4,353), a C LSP directory bridge (119), a C IR tool
-(150), and the make/POSIX-sh build driver. `make all-sayanox` prints that
-inventory and fails closed.
+lines), a C native backend (4,353), a C LSP test harness (127), and the
+make/POSIX-sh build driver. The IR tool and the LSP directory bridge have
+already left that list. `make all-sayanox` prints the remaining inventory and
+fails closed.
 
 ## How this is checked
 

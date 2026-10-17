@@ -299,15 +299,23 @@ indexing service runs.
 
 ### Actual scan limits
 
-`tools/lsp_workspace.h` enumerates POSIX directories, sorted bytewise per
-folder, with these hard eligibility/traversal caps:
+`workspace_manifest` in `tools/sayanox_lsp.sa` walks the folder with the
+Sayanox directory builtins (`read_dir`, `path_kind`, `path_size`,
+`path_real`). The limits are:
 
-* 128 regular `.sa` files; 256 KiB per file; 4 MiB aggregate file sizes;
-* depth 16 below the selected root and at most 4,096 processed entries;
-* at most 4,096 collected names per directory, a 2 MiB manifest and platform
-  `PATH_MAX` paths;
-* no symlink traversal; hidden entries and `node_modules`, `build`, `dist`,
-  `target`, `vendor` are skipped; filenames containing CR/LF are skipped.
+* 128 regular `.sa` files; 256 KiB per file; a 2 MiB manifest;
+* depth 16 below the selected root and at most 4,096 names per directory
+  (the `read_dir` cap);
+* no symlink traversal (`lstat`, so kind 3 is skipped); hidden entries and
+  `node_modules`, `build`, `dist`, `target`, `vendor` are skipped; filenames
+  containing CR/LF are skipped by `read_dir`.
+
+The listing is no longer sorted: entries come in filesystem order, which also
+decides which 128 files win when a folder is larger than the cap. The old C
+bridge sorted each directory bytewise, and applied its 4 MiB aggregate-size
+budget during the walk; the Sayanox walk applies the file cap and the 2 MiB
+manifest cap to the finished listing. Both differences are bounds-preserving,
+not behavior-preserving, and the 128-file cap test still pins the bound.
 
 Unreadable/oversized/skipped files and files beyond a cap simply do not
 contribute. There is **no truncation/progress notification** yet. Within the
@@ -318,15 +326,13 @@ or stable cross-query snapshot: files can change while a query runs.
 
 ### Build and test boundary
 
-The directory bridge is tool-local C, not a new language builtin or general
-FFI. `make lsp` compiles the `.sa` program, then
-`tools/lsp_workspace_bind.sa` (a Sayanox program built by gen2) replaces
-exactly one known generated fallback with the bridge call. The old awk binder
-was deleted; the Sayanox binder's output is byte-identical and it fails with a
-C `#error` if the generated function shape changes. Manifest strings use the emitted runtime's managed allocator. A raw
-standalone compilation of `tools/sayanox_lsp.sa` without this build binding has
-only the empty fallback; use the Makefile-built server for folder support.
-The compiler bootstrap/self-host source is unchanged by this integration.
+There is no C header and no generated-C binder any more. `make lsp` compiles
+`tools/sayanox_lsp.sa` with gen2 and links it; the folder index is ordinary
+Sayanox. This removed `tools/lsp_workspace.h` (119 lines) and
+`tools/lsp_workspace_bind.sa` on 2026-10-17. A standalone compilation of the
+`.sa` file therefore has the same folder support as the Makefile build.
+`tools/lsp_workspace_test.c` remains as the test client (fork/pipe framed
+sessions): it is a harness, not part of the server.
 
 Both `test-lsp` and `test-lsp-robust` now require `test-lsp-workspace`.
 An in-tree C client sends and reads actual `Content-Length` frames with

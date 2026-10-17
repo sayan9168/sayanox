@@ -11,11 +11,10 @@ that every tool is already a `.sa` program.
   `restore_compiler_min.sh`, `pack_compiler_min.sh` and `lang_quality.sh` —
   were ported; `pipefail`, `[[ ]]`, arrays, `local` and process substitution
   are gone.
-* The LSP build binder is Sayanox: `tools/lsp_workspace_bind.sa` is compiled by
-  gen2 and rewrites exactly one generated fallback to call the tool-local C
-  directory bridge. It replaced `tools/lsp_workspace_bind.awk` and produces
-  byte-identical output on the real translation; a shape change is a C
-  `#error`, not a silent pass.
+* The LSP build needs no binder at all since 2026-10-17: the folder index is
+  Sayanox (`read_dir`/`path_kind`/`path_size`/`path_real`), so both
+  `tools/lsp_workspace_bind.sa` (itself a Sayanox replacement for the old awk
+  binder) and the C header it injected were deleted.
 * The offline packer chunks with `split -b 1100`; test recipes extract lines
   with POSIX `read`; the native IR-log checks use `grep`/`cut`/`sort`/`paste`;
   the emit-seam region uses `head`/`tail`; `tools/sxpkg.sh` uses `cut`/`tr`.
@@ -42,12 +41,16 @@ that every tool is already a `.sa` program.
 - `tools/sayanox_lsp.sa` is the language server (diagnostics, symbols,
   completion, hover, definition, references, workspace symbols, formatting,
   rename, signature help, code actions). `make lsp` builds it.
-- `tools/lsp_workspace_bind.sa` is the build-time binder described above.
+- `tools/lsp_workspace_test.c` is the LSP test client (C, fork/pipe); it is
+  the only maintained C test harness and is recorded as an exception in
+  `docs/ALL_SAYANOX_PHASE.md`.
 
 ## Still to port
 
 - Online sync/install/publish/fetch and package-directory management remain in
-  `tools/sxpkg.sh`; Sayanox still needs filesystem-directory and network APIs.
+  `tools/sxpkg.sh`. The directory API now exists (`read_dir` and friends), and
+  `http_get` covers network reads, so this is no longer blocked on the
+  language; it is Phase C work.
 - `selfhost/seed/sxc_seed_min.c` is the small trusted bootstrap compiler, and
   `selfhost/native_aot.c` is the current x86-64 Linux native backend.
 - `Makefile` and its POSIX-shell recipes orchestrate the initial build and

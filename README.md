@@ -95,8 +95,8 @@ make tools
 
 The formatter currently handles whitespace. The package tool supports local `init` / `add` / `list` / `remove` / `search` / `info` / `seed`. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 
-The language server (`tools/sayanox_lsp.sa`) and the build-time LSP binder
-(`tools/lsp_workspace_bind.sa`) are Sayanox programs too, and no maintained
+The language server (`tools/sayanox_lsp.sa`), its folder index and the IR
+translator (`tools/emit_to_ir.sa`) are Sayanox programs too, and no maintained
 build or test path needs bash, awk, sed or Python (`make test-language-deps`).
 
 ---
@@ -149,8 +149,8 @@ has the short version.
 - [x] Language server in Sayanox (bounded local workspace index)
 - [x] Toolchain free of bash, awk, sed and Python (`make test-language-deps`)
 - [ ] **Next phase — all-in-Sayanox toolchain** ([plan](docs/ALL_SAYANOX_PHASE.md)):
-      port the remaining C pieces (LSP directory bridge, native backend, seed)
-      and the build driver into Sayanox. The IR translator already moved
+      port the remaining C pieces (native backend, seed) and the build driver
+      into Sayanox. The IR translator and the LSP folder index already moved
       (2026-10-17); `make all-sayanox` fails closed until the rest does
 - [ ] Full Stage-2 language self-hosting
 - [ ] Broader platform support
@@ -165,13 +165,14 @@ needs bash, awk, sed or Python either.
 
 What is still not Sayanox is small, measurable, and listed in
 [docs/ALL_SAYANOX_PHASE.md](docs/ALL_SAYANOX_PHASE.md): the 2,035-line C seed,
-the 4,353-line C native backend, a 119-line C directory bridge, a 127-line C
-bridge test, and the make/POSIX-sh build driver. The 150-line C IR translator
-became `tools/emit_to_ir.sa` on 2026-10-17 with byte-identical output, and nine
-unreferenced C helpers were deleted. `make all-sayanox` prints the remaining
+the 4,353-line C native backend, a 127-line C framed-session test client, and
+the make/POSIX-sh build driver. On 2026-10-17 the 150-line C IR translator
+became `tools/emit_to_ir.sa` with byte-identical output, the LSP folder index
+moved into Sayanox (the C directory header and its binder were deleted), and
+ten unreferenced C files were removed. `make all-sayanox` prints the remaining
 inventory and **fails closed** — the same way `true-selfhost-full` refuses to
 claim a full-language self-host — so the remaining work cannot silently drift
-or be forgotten. The plan orders it: ~~IR tool~~, then directory bridge, then
+or be forgotten. The plan orders it: ~~IR tool~~, ~~directory bridge~~, then
 the package wrapper, then the native backend, and the seed last.
 
 ---

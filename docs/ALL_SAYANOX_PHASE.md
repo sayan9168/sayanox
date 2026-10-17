@@ -18,8 +18,7 @@ smallest possible bootstrap seam and the build driver.
 | All tests and fixtures | Sayanox + `sh` drivers | 275 `.sa` files, 1,068,383 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,353 lines | no |
-| LSP directory bridge (`tools/lsp_workspace.h`) | C | 119 lines | no |
-| LSP bridge test (`tools/lsp_workspace_test.c`) | C | 127 lines | no |
+| LSP framed-session test client (`tools/lsp_workspace_test.c`) | C | 127 lines | no (a harness, not server logic) |
 | Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | ~4,510 lines | no |
 
 Nine tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
@@ -55,15 +54,20 @@ are `.sa`. All tracked scripts are POSIX `sh`. Gate: `test-language-deps`.
    Limitations, documented rather than hidden: input is read through a C string,
    so a NUL byte truncates the log (the C tool rejected it); the script now
    asserts the truncation is visible as `; UNTRANSLATED: bad`.
-2. **LSP directory bridge in Sayanox.** Replace `tools/lsp_workspace.h` with a
-   language-level directory API (`read_dir(path)` returning names, plus a stat
-   or size-and-kind helper) so `workspace_manifest` stops being a stub and
-   `tools/lsp_workspace_bind.sa` stops being needed at all.
-   *Prerequisite (done 2026-10-17):* `read_dir(path)` (newline-separated
-   names), `path_kind(path)` (lstat: file/dir/other), `path_size(path)` and
-   `path_real(path)` are implemented on gen2, gated by
-   `make test-path-builtins`, and refused with a clear diagnostic by seed-min
-   and native. The C header can now be replaced by a Sayanox `workspace_manifest`.
+2. **LSP directory bridge in Sayanox (done, 2026-10-17).** The language now
+   has `read_dir(path)` (newline-separated names), `path_kind(path)`
+   (lstat: missing/file/dir/other), `path_size(path)` and `path_real(path)`;
+   gen2 implements them, seed-min and native refuse them, and
+   `make test-path-builtins` pins both. `workspace_manifest` in
+   `tools/sayanox_lsp.sa` is a real walk: skip rules, depth 16, 256 KiB per
+   file, 128 files, 2 MiB manifest, percent-encoded URIs. With it came the
+   deletion of `tools/lsp_workspace.h` and `tools/lsp_workspace_bind.sa`, so
+   the LSP build is now gen2 + cc with no binding step.
+   Gates: `test-lsp`, `test-lsp-robust`, `test-lsp-workspace`,
+   `test-path-builtins`.
+   Honest difference: the listing is in filesystem order instead of sorted
+   bytewise, and the file cap is applied to the finished walk rather than
+   during it. Both bounds still hold; the order does not.
 
 ### Phase C — package and process behavior in Sayanox
 
@@ -110,6 +114,9 @@ and `make all-sayanox` keeps failing.
 
 ## Progress log
 
+* **2026-10-17 — Phase B.2 done.** Directory builtins + Sayanox folder index;
+  `tools/lsp_workspace.h` and `tools/lsp_workspace_bind.sa` deleted. The tree
+  has 11 tracked C/header/inc files, down from 23 at the start of the day.
 * **2026-10-17 — Phase B.1 done.** `tools/emit_to_ir.c` deleted;
   `tools/emit_to_ir.sa` (328 lines) built by gen2 and cc through the Makefile,
   identical output on the real 1,182-line `SX_EMIT_LOG`, the audit mode, the

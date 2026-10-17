@@ -26,6 +26,27 @@ Expected non-success, kept as evidence rather than hidden:
   reports status 2 for the recipe's `exit 1`). The inventory it prints now has
   one row fewer.
 
+## Second pass — the LSP folder index moves into the language
+
+`tools/lsp_workspace.h` (119 C lines) and `tools/lsp_workspace_bind.sa` are
+deleted. The compiler gained four directory builtins, and
+`workspace_manifest` in `tools/sayanox_lsp.sa` is a real walk now.
+
+* Builtins: `read_dir`, `path_kind` (lstat), `path_size`, `path_real`
+  (realpath, with an explicit prototype so `-std=c99` builds see it).
+  `make test-path-builtins` pins listing, kinds, sizes, realpath and
+  seed-min's refusal.
+* `workspace_manifest`: skip rules, depth 16, 256 KiB per file, 128 files,
+  2 MiB manifest, percent-encoded URIs.
+* `make lsp` is now exactly `gen2` + `cc`, with no binding step.
+* `test-lsp`, `test-lsp-robust`, `test-lsp-workspace` and `test-lsp-unicode`
+  are green — including symlink/hidden/oversized skipping, encoded paths,
+  overlays, refresh after edit/delete and the enforced 128-file cap.
+
+Honest differences, recorded in `docs/LSP.md`: the listing is in filesystem
+order instead of sorted bytewise, and the file cap is applied to the finished
+walk instead of during it.
+
 ## What changed
 
 1. **`tools/emit_to_ir.sa` replaces `tools/emit_to_ir.c`.** 328 lines of
@@ -48,7 +69,7 @@ Expected non-success, kept as evidence rather than hidden:
    `prove_recompile.c`, `fixup_emit.c`, `sx_launcher.c`, `sx_driver.c`,
    `build_stage2.c`, plus `stage2_expand.inc` (ten files, nine of them C).
    Documentation that pointed at them was corrected (`docs/TOOLCHAIN.md` no
-   longer advertises a non-existent `make stage2`, `docs/NATIVE.md` documents
+   longer advertises a stage-2 make target that never existed, `docs/NATIVE.md` documents
    the two real backend entry points).
 
 The tree now has **12** tracked `.c`/`.h`/`.inc` files, down from 22.

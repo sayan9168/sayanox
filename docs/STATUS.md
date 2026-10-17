@@ -43,10 +43,10 @@ generated C: `gen3 == gen4` is unchanged.
 * **bash → POSIX sh:** all six bash scripts were ported; every tracked shebang
   script is `#!/bin/sh`.
 * **awk removed from the build:** `tools/lsp_workspace_bind.awk` was replaced
-  by `tools/lsp_workspace_bind.sa`, compiled by gen2. On the real
-  `tools/sayanox_lsp.sa` translation the output is byte-identical (75,678
-  bytes); a changed fallback shape is a C `#error`. The Makefile checks the
-  bridge applied exactly once.
+  by `tools/lsp_workspace_bind.sa`, compiled by gen2, with byte-identical
+  output (75,678 bytes). That binder was itself deleted on 2026-10-17 when the
+  folder index moved into the language (`read_dir`/`path_kind`/`path_size`/
+  `path_real`); `tools/lsp_workspace.h` went with it.
 * **awk removed from tests/tooling:** the offline packer uses `split -b 1100`;
   IR-log invariant and vocabulary checks use `grep`/`cut`/`sort`/`paste`;
   emit-seam extraction uses `head`/`tail`; the 512-entry generic-limit fixture
@@ -80,17 +80,16 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
 | `selfhost/native_aot.c` | C | 4,353 lines | Phase D — needs byte buffers, bitwise operations and shifts, and a syscall/memory surface in the language |
-| `tools/lsp_workspace.h` | C | 119 lines | Phase B — needs a directory-enumeration builtin; then the Sayanox LSP reads folders itself |
-| `tools/lsp_workspace_test.c` | C | 127 lines | Phase B — the bridge test, deleted with the bridge |
+| `tools/lsp_workspace_test.c` | C | 127 lines | Phase B — the framed-session test client; a harness, not server logic |
 | `Makefile` + 25 `sh` scripts | make / POSIX sh | ~4,510 lines | Later — a Sayanox build driver still needs a built compiler first |
 
-Already Sayanox and gated: the compiler (`compiler_min.sa`, 18,721 lines), the
-formatter, the local package tool, the language server, the build-time LSP
-binder (`tools/lsp_workspace_bind.sa`) and, since 2026-10-17, the IR translator
-(`tools/emit_to_ir.sa`, byte-identical output). 275 `.sa` files, 1,068,383
-bytes. Nine unreferenced C helpers were deleted the same day.
+Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
+local package tool, the language server (including its folder index since
+2026-10-17), the IR translator (`tools/emit_to_ir.sa`, byte-identical output)
+and the directory builtins (`test-path-builtins`). Ten unreferenced C files
+were deleted the same day.
 
-Phase order: **B** ~~IR tool~~ (done) → directory builtin + LSP bridge, **C** online
+Phase order: **B** ~~IR tool~~, ~~directory builtin + LSP bridge~~ (both done) → **C** online
 package behavior, **D** native backend, **E** seed. Each phase must keep
 `gen3 == gen4` and the four hard gates green, and each must delete its row from
 the table above rather than add a new claim. No target may report success for
