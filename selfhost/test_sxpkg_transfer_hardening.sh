@@ -36,7 +36,7 @@ EOF
 chmod +x "$base/mock/curl" "$base/wget-only/wget"
 # Wget branch without relying on host-installed curl/wget. Only shell tools
 # used by the wrapper are exposed; no real transport executable is reachable.
-for tool in sh cp mv rm mkdir mktemp awk grep cat; do
+for tool in sh cp mv rm mkdir mktemp grep cat cut; do
     ln -s "$(command -v "$tool")" "$base/wget-only/$tool"
 done
 export SAYANOX_ROOT=$p

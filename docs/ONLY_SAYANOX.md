@@ -15,6 +15,11 @@ is written in Sayanox.
 - `tools/sxpkg.sa` — local project/registry commands (`init`, `add`, `list`,
   `remove`, `seed`, `search`, `info`), built by gen2 and covered by
   `make test-sxpkg`; the shell entrypoint delegates these commands to it.
+- `tools/sayanox_lsp.sa` — the language server, built by gen2 and covered by
+  `make test-lsp` / `test-lsp-robust` / `test-lsp-workspace`.
+- `tools/lsp_workspace_bind.sa` — the build-time binder that installs the
+  tool-local directory bridge into the generated LSP C. It replaced an awk
+  script and produces byte-identical output.
 - `examples/*.sa` and `registry/*/main.sa` — sample programs and packages.
 - Many files in `selfhost/*.sa` are compiler-stage experiments; most are not
   yet wired into the maintained build.
@@ -23,10 +28,11 @@ is written in Sayanox.
 
 - `selfhost/seed/sxc_seed_min.c` — the trusted C bootstrap seed.
 - `selfhost/native_aot.c` — the x86-64 Linux native-AOT implementation.
-- `tools/sxpkg.sh` — online/package-directory behavior remains in shell;
+- `tools/sxpkg.sh` — online/package-directory behavior remains in POSIX shell;
   Sayanox currently owns only the local lock commands.
-- `tools/sayanox-lsp.sh` — LSP logic is still implemented in shell.
-- `Makefile` and POSIX-shell recipes — build/test orchestration.
+- `Makefile` and POSIX-shell recipes — build/test orchestration. All tracked
+  scripts are `#!/bin/sh`; bash, awk and sed are not part of the maintained
+  toolchain (`make test-language-deps`).
 - Generated C and native binaries — build outputs, not Sayanox source.
 
 The verified portable program path is `.sa -> generated C -> host C compiler ->
@@ -34,6 +40,19 @@ executable`. The native-AOT path can skip the per-program C compiler for its
 supported subset, but building its bootstrap still requires the host C toolchain.
 
 ## Target end state
+
+Writing every remaining piece in Sayanox is the **next phase**; the plan, the
+measured inventory and the phase order are in
+[`ALL_SAYANOX_PHASE.md`](ALL_SAYANOX_PHASE.md). `make all-sayanox` prints what
+is left and fails closed.
+
+| Phase | Work | Gate |
+|---|---|---|
+| A (done 2026-10-17) | Compiler, formatter, package tool, language server, LSP binder in `.sa`; no bash/awk/sed/Python on maintained paths | `test-language-deps` |
+| B (next) | `tools/emit_to_ir` in Sayanox; directory builtin + LSP bridge in Sayanox | `test-emit-to-ir`, `test-lsp`, `test-lsp-workspace` (byte-identical output first) |
+| C | Online package behavior moves from `tools/sxpkg.sh` to `tools/sxpkg.sa` | `test-sxpkg*` unchanged |
+| D | `selfhost/native_aot.c` reimplemented in Sayanox against the pinned IR listing | `test-native-test`, `test-native-ir-log` |
+| E | Seed decision: prebuilt trust anchor or a documented C exception | `make all-sayanox` |
 
 1. Expand the Sayanox-written compiler to cover the full documented language.
 2. Replace bootstrap/backend responsibilities incrementally, retaining tests

@@ -17,6 +17,14 @@ source of truth for compiler behavior.
   build the bootstrap binary, but not to compile or run a program after that.
 - **Regression and environment checks:** `make doctor`, `make true-selfhost`,
   `make gen3`, and `make native-test` are run by CI on a clean checkout.
+- **Interpreter-free maintained toolchain:** no maintained path needs bash,
+  awk, sed, Python, Perl, Node or Ruby (`make test-language-deps`, part of
+  `true-selfhost`). The formatter, package tool, language server and the
+  build-time LSP binder are `.sa` programs.
+- **Next phase recorded:** writing the remaining C pieces (LSP directory
+  bridge, IR tool, native backend, seed) and the build driver in Sayanox is
+  the next phase; `make all-sayanox` prints the inventory and fails closed.
+  See [`ALL_SAYANOX_PHASE.md`](ALL_SAYANOX_PHASE.md).
 - **Numeric consistency fixes:** integer-only arithmetic is evaluated as
   double across all three backends, and `%` by zero reports the same
   non-zero-exit `division by zero` diagnostic everywhere.

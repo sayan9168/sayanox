@@ -1,5 +1,9 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# Restore the legacy selfhost/sxc_full.c from the checked-in minimal seed or the
+# plain base64 bundle. POSIX sh only: the former Python installer path and the
+# Python branch were dead (selfhost/install_sxc_full.py is not in the tree) and
+# are removed rather than kept as an interpreter dependency.
+set -eu
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 ok() {
   [ -f selfhost/sxc_full.c ] && grep -qE 'sx_chr|hold' selfhost/sxc_full.c && \
@@ -7,21 +11,6 @@ ok() {
 }
 if ok; then
   echo "sxc_full.c OK ($(wc -c < selfhost/sxc_full.c) bytes)"
-  exit 0
-fi
-# Assemble full installer from parts if present
-if [ ! -f selfhost/install_sxc_full.py ]; then
-  if ls selfhost/install_sxc_full.py.p* >/dev/null 2>&1; then
-    cat selfhost/install_sxc_full.py.p* > selfhost/install_sxc_full.py
-  elif [ -f selfhost/install_sxc_full.py.a ]; then
-    cat selfhost/install_sxc_full.py.a selfhost/install_sxc_full.py.b > selfhost/install_sxc_full.py
-  fi
-fi
-if [ -f selfhost/install_sxc_full.py ]; then
-  python3 selfhost/install_sxc_full.py || true
-fi
-if ok; then
-  echo "restored via install ($(wc -c < selfhost/sxc_full.c) bytes)"
   exit 0
 fi
 # Guaranteed minimal seed (always in repo)

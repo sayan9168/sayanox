@@ -29,6 +29,8 @@ SXPKG_C  := tools/sxpkg.c
 SXPKG_BIN := tools/sxpkg
 LSP_C    := tools/sayanox_lsp.c
 LSP_BIN  := tools/sayanox_lsp
+LSP_BIND_C := tools/lsp_workspace_bind.c
+LSP_BIND   := tools/lsp_workspace_bind
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
@@ -36,7 +38,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps
 
 all: true-selfhost-min
 
@@ -137,7 +139,7 @@ pack-compiler:
 # Fallback: if the source is absent or corrupt, decode the checked-in
 # gzip+base64 blob in selfhost/compiler_min_gz/*.b64. That blob was verified
 # byte-identical to the checked-in compiler_min.sa (sha256 55f28ede2d461faa...,
-# 115 parts of at most 1100 chars; regenerate with `make pack-compiler` after any
+# parts of at most 1100 chars (the count changes with the source); regenerate with `make pack-compiler` after any
 # edit to compiler_min.sa -- `restore-compiler` only greps markers, so a stale
 # blob does not fail the gates by itself), so both paths
 # produce the same file. base64, gzip, cat, tr and rm are therefore OPTIONAL
@@ -225,10 +227,22 @@ $(SXPKG_BIN): $(GEN2) tools/sxpkg.sa
 sxpkg: $(SXPKG_BIN)
 tools: sxfmt sxpkg
 
-# The language server is a normal Sayanox program: gen2 compiles it, cc builds it.
-$(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa tools/lsp_workspace.h tools/lsp_workspace_bind.awk
+# The language server is a normal Sayanox program: gen2 compiles it, cc builds
+# it. The only non-Sayanox part of the build is the tool-local directory bridge
+# header; the text binding that installs it is itself a Sayanox tool, so this
+# path needs no awk, sed or shell text processing.
+$(LSP_BIND): $(GEN2) tools/lsp_workspace_bind.sa
+	./$(GEN2) tools/lsp_workspace_bind.sa $(LSP_BIND_C) >/dev/null
+	$(CC) -O2 -o $(LSP_BIND) $(LSP_BIND_C)
+	@echo "[OK] Sayanox LSP workspace binder built from tools/lsp_workspace_bind.sa"
+
+$(LSP_BIN): $(GEN2) $(LSP_BIND) tools/sayanox_lsp.sa tools/lsp_workspace.h
 	$(GEN2) tools/sayanox_lsp.sa $(LSP_C)
-	@awk -f tools/lsp_workspace_bind.awk $(LSP_C) > $(LSP_C).bound || { rm -f $(LSP_C).bound; exit 1; }
+	./$(LSP_BIND) $(LSP_C) > $(LSP_C).bound || { rm -f $(LSP_C).bound; exit 1; }
+	@test $$(grep -c -F 'return sx_lsp_workspace_manifest(root);' $(LSP_C).bound) -eq 1 \
+	  || { rm -f $(LSP_C).bound; echo "FAIL: LSP workspace binding did not apply exactly once"; exit 1; }
+	@test $$(grep -c -F '#include "lsp_workspace.h"' $(LSP_C).bound) -eq 1 \
+	  || { rm -f $(LSP_C).bound; echo "FAIL: LSP workspace header include missing"; exit 1; }
 	@mv $(LSP_C).bound $(LSP_C)
 	$(CC) -O2 -Werror=implicit-function-declaration -o $(LSP_BIN) $(LSP_C)
 
@@ -1016,26 +1030,25 @@ test-native-mem: $(NATIVE_BIN)
 	./$(NATIVE_BIN) $(TESTS)/native_mem_oom.sa $(TESTS)/native_mem_oom
 	@__o=$$(sh -c 'ulimit -v 4096; ./$(TESTS)/native_mem_oom') || { \
 	  echo "[FAIL] native churn loop died inside a 4 MiB cap (the collector must reclaim)"; exit 1; }; \
-	  __i=$$(printf '%s\n' "$$__o" | sed -n 1p); \
-	  __r=$$(printf '%s\n' "$$__o" | sed -n 2p); \
-	  if [ "$$__i" != "200000" ]; then \
-	    echo "[FAIL] native churn loop under a 4 MiB cap printed $$__o"; exit 1; fi; \
-	  if [ "$$__r" -lt 1 ] 2>/dev/null; then \
-	    echo "[FAIL] native churn loop under a 4 MiB cap ran no collection"; exit 1; fi
+	  printf '%s\n' "$$__o" | { \
+	    IFS= read -r __i; IFS= read -r __r; \
+	    if [ "$$__i" != "200000" ]; then \
+	      echo "[FAIL] native churn loop under a 4 MiB cap printed $$__i"; exit 1; fi; \
+	    if [ "$$__r" -lt 1 ] 2>/dev/null; then \
+	      echo "[FAIL] native churn loop under a 4 MiB cap ran no collection"; exit 1; fi; }
 	@echo "[OK] native collector: 200k allocating iterations (~8 MB) stay inside a 4 MiB cap"
 	@# ---- gc() / gc_live() / gc_runs() are real, not no-ops ----
 	@printf 'hold i = 0\nwhile i < 5000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow gc_runs()\nshow gc()\nshow gc_live()\n' > $(TESTS)/native_mem_gc.sa
 	./$(NATIVE_BIN) $(TESTS)/native_mem_gc.sa $(TESTS)/native_mem_gc
 	@__o=$$(./$(TESTS)/native_mem_gc); \
-	  __r=$$(printf '%s\n' "$$__o" | sed -n 1p); \
-	  __c=$$(printf '%s\n' "$$__o" | sed -n 2p); \
-	  __l=$$(printf '%s\n' "$$__o" | sed -n 3p); \
-	  if [ "$$__r" -lt 1 ] 2>/dev/null; then \
-	    echo "[FAIL] native gc_runs() reported $$__r after 5000 allocating iterations"; exit 1; fi; \
-	  if [ "$$__c" -lt 1 ] 2>/dev/null; then \
-	    echo "[FAIL] native gc() reclaimed $$__c bytes"; exit 1; fi; \
-	  if [ "$$__l" -lt 1 ] 2>/dev/null; then \
-	    echo "[FAIL] native gc_live() reported $$__l"; exit 1; fi
+	  printf '%s\n' "$$__o" | { \
+	    IFS= read -r __r; IFS= read -r __c; IFS= read -r __l; \
+	    if [ "$$__r" -lt 1 ] 2>/dev/null; then \
+	      echo "[FAIL] native gc_runs() reported $$__r after 5000 allocating iterations"; exit 1; fi; \
+	    if [ "$$__c" -lt 1 ] 2>/dev/null; then \
+	      echo "[FAIL] native gc() reclaimed $$__c bytes"; exit 1; fi; \
+	    if [ "$$__l" -lt 1 ] 2>/dev/null; then \
+	      echo "[FAIL] native gc_live() reported $$__l"; exit 1; fi; }
 	@echo "[OK] native gc()/gc_live()/gc_runs() are real (collections run, bytes are reclaimed, live bytes reported)"
 	@# ---- nothing reachable is reclaimed: strings, lists and structs ----
 	@printf 'struct Box {\n  n,\n  s\n}\nhold b = Box { 1, "hello-world" }\nhold a0 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\nhold a3 = "dddddddddddddddddddddddddddd"\nhold xs = []\nhold i = 0\nwhile i < 30000 {\n  hold junk = concat("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "yyyyyyyyyyyyyyyyyyyyyyyyyy")\n  push(xs, i)\n  hold i = i + 1\n}\nshow len(a0)\nshow a0[0]\nshow a0[47]\nshow a3[27]\nshow b.n\nshow b.s\nshow len(xs)\nshow xs[0]\nshow xs[29999]\n' > $(TESTS)/native_mem_keep.sa
@@ -1201,9 +1214,10 @@ test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
 	./$(GEN2) $(TESTS)/sgc_runs_g2.sa $(TESTS)/sgc_runs_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/sgc_runs_g2 $(TESTS)/sgc_runs_g2.c
 	__o=$$(sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_runs_g2'); \
-	 __r=$$(printf '%s\n' "$$__o" | sed -n 2p); __l=$$(printf '%s\n' "$$__o" | sed -n 3p); \
-	 if [ "$$__r" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 ran no collection in a 200k churn: $$__o"; exit 1; fi; \
-	 if [ "$$__l" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 gc_live() reported $$__l after a 200k churn"; exit 1; fi
+	 printf '%s\n' "$$__o" | { \
+	   IFS= read -r __first; IFS= read -r __r; IFS= read -r __l; \
+	   if [ "$$__r" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 ran no collection in a 200k churn: $$__o"; exit 1; fi; \
+	   if [ "$$__l" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 gc_live() reported $$__l after a 200k churn"; exit 1; fi; }
 	echo "[OK] gen2: a 200k churn collects (gc_runs() >= 1) and the live set stays small (gc_live() reported)"
 	echo "[OK] seed GC: seed-min = no collector (builder strings + a freeing assignment, clear OOM); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem"
 
@@ -1527,7 +1541,7 @@ test-native-emit-split: $(NATIVE_BIN)
 	 if [ "$$b" -ge "$$e" ]; then echo "[FAIL] the emit-seam markers are out of order"; exit 1; fi; \
 	 if [ "$$enc" -ge "$$p1" ] || [ "$$p1" -ge "$$b" ]; then \
 	   echo "[FAIL] the file layout changed: expected encoder < phase 1 < EMIT-SEAM-BEGIN"; exit 1; fi; \
-	 awk -v b=$$b -v e=$$e 'NR>b && NR<e' selfhost/native_aot.c > $(TESTS)/seam_region.c; \
+	 tail -n +$$((b + 1)) selfhost/native_aot.c | head -n $$((e - b - 1)) > $(TESTS)/seam_region.c; \
 	 for pat in 'e1(' 'e32(' 'e64(' 'memcpy(code' 'memcpy(&code'; do \
 	   if grep -q -F "$$pat" $(TESTS)/seam_region.c; then \
 	     echo "[FAIL] the language emitter writes code bytes directly: $$pat"; \
@@ -1604,7 +1618,26 @@ test-native-ir-log: $(NATIVE_BIN)
 	  || { echo "[FAIL] the instruction list has a line in neither format:"; grep -n -v -E '^([0-9a-f]{6}  |;)' $(TESTS)/irl.log | head -3; exit 1; }
 	# ---- 5. the log's invariants: monotonic offsets, fixups land on jumps,
 	#         six phases in order, a reported code size ----
-	@awk -v off='$(IRL_OFF6)' 'BEGIN{bad=0;prev="";fx=0;np=0;tot=0} index($$0,"=== phase:")==9{np++} /^;       fixup/{p=index($$0,"[");a=substr($$0,p+1,6);if(!(a in mn)||mn[a]!~/^j/){bad++;print "[FAIL] a rel32 fixup does not land on a jump: " $$0}else fx++;next} $$0~("^"off"  "){o=substr($$0,1,6);if(prev!=""&&(o"")<(prev"")){bad++;print "[FAIL] the instruction offsets go backwards: " $$0}prev=o;mn[o]=$$2;next} /^;       code bytes: /{tot=$$4} END{if(fx==0){bad++;print "[FAIL] the list has no fixup line, so no unresolved slot was resolved"}if(tot+0<=0){bad++;print "[FAIL] the list does not report its code size"}if(np!=6){bad++;print "[FAIL] expected 6 phase markers, got " np}if(bad)exit 1}' $(TESTS)/irl.log
+	@# POSIX shell + grep/cut/sort/paste: no awk. Each check appends to `bad`.
+	@log=$(TESTS)/irl.log; bad=0; \
+	 np=$$(grep -c -F '=== phase:' $$log); \
+	 if [ "$$np" -ne 6 ]; then echo "[FAIL] expected 6 phase markers, got $$np"; bad=1; fi; \
+	 fx=$$(grep -c -E '^;       fixup' $$log); \
+	 if [ "$$fx" -lt 1 ]; then echo "[FAIL] the list has no fixup line, so no unresolved slot was resolved"; bad=1; fi; \
+	 tot=$$(grep -E '^;       code bytes: ' $$log | tr -s ' ' | cut -d' ' -f4); \
+	 if [ "$${tot:-0}" -le 0 ] 2>/dev/null; then echo "[FAIL] the list does not report its code size"; bad=1; fi; \
+	 grep -E '^[0-9a-f]{6}  ' $$log | cut -c1-6 > $(TESTS)/irl_offsets.txt; \
+	 if ! LC_ALL=C sort -c $(TESTS)/irl_offsets.txt 2>/dev/null; then \
+	   echo "[FAIL] the instruction offsets go backwards"; bad=1; fi; \
+	 grep -E '^[0-9a-f]{6}  ' $$log | cut -c9- | cut -d' ' -f1 > $(TESTS)/irl_mnem.txt; \
+	 paste -d' ' $(TESTS)/irl_offsets.txt $(TESTS)/irl_mnem.txt | \
+	   while IFS=' ' read -r __off __mn; do case "$$__mn" in j*) echo "$$__off" ;; esac; done > $(TESTS)/irl_jumps.txt; \
+	 grep -E '^;       fixup' $$log | cut -d'[' -f2 | cut -c1-6 > $(TESTS)/irl_fixups.txt; \
+	 while IFS= read -r __target; do \
+	   if ! grep -q -x "$$__target" $(TESTS)/irl_jumps.txt; then \
+	     echo "[FAIL] a rel32 fixup does not land on a jump: [$$__target]"; bad=1; fi; \
+	 done < $(TESTS)/irl_fixups.txt; \
+	 if [ "$$bad" -ne 0 ]; then exit 1; fi
 	@i=$$(grep -c -E '^[0-9a-f]{6}  ' $(TESTS)/irl.log); sl=$$(grep -c -F ';       slot ' $(TESTS)/irl.log); fx=$$(grep -c -F ';       fixup' $(TESTS)/irl.log); \
 	 echo "[OK] native ir log: $$i instructions, $$sl label slots, $$fx rel32 fixups, monotonic offsets, six phases in order"
 	# ---- 6. every call target and every operand has a real name ----
@@ -1621,7 +1654,10 @@ test-native-ir-log: $(NATIVE_BIN)
 	done
 	echo "[OK] native ir log: numbers are double bits through xmm, strings and lists are named stub calls, makes are named call targets"
 	# ---- 8. the instruction vocabulary of the fixture's top level, pinned ----
-	@got=$$(awk '/=== phase: top level/{on=1;next} /=== phase: exit syscall/{on=0} on' $(TESTS)/irl.log | grep -E '^[0-9a-f]{6}  ' | awk '{print $$2}' | sort -u | tr '\n' ' ' | sed 's/ $$//'); \
+	@b=$$(grep -n -F '=== phase: top level' $(TESTS)/irl.log | cut -d: -f1); \
+	 e=$$(grep -n -F '=== phase: exit syscall' $(TESTS)/irl.log | cut -d: -f1); \
+	 got=$$(tail -n +$$((b + 1)) $(TESTS)/irl.log | head -n $$((e - b - 1)) | grep -E '^[0-9a-f]{6}  ' | cut -c9- | cut -d' ' -f1 | sort -u | tr '\n' ' '); \
+	 got=$${got% }; \
 	 if [ "$$got" = "$(IRL_MN_WANT)" ]; then :; else \
 	   echo "[FAIL] the top level's instruction vocabulary changed"; \
 	   echo "--- want ---"; echo "$(IRL_MN_WANT)"; echo "--- got ---"; echo "$$got"; \
@@ -1630,7 +1666,7 @@ test-native-ir-log: $(NATIVE_BIN)
 	# ---- 9. only the encoder records; the emitter may announce, not write ----
 	@b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c | cut -d: -f1); \
 	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c | cut -d: -f1); \
-	 awk -v b=$$b -v e=$$e 'NR>b && NR<e' selfhost/native_aot.c > $(TESTS)/irl_seam.c; \
+	 tail -n +$$((b + 1)) selfhost/native_aot.c | head -n $$((e - b - 1)) > $(TESTS)/irl_seam.c; \
 	 test $$(grep -c -w 'ilogf' $(TESTS)/irl_seam.c) -eq 0 \
 	  || { echo "[FAIL] the language emitter touches the recorder state:"; grep -n -w 'ilogf' $(TESTS)/irl_seam.c | head -3; exit 1; }
 	echo "[OK] native ir log: the instruction list is written by the encoder alone -- a second backend replaces the encoder and keeps the emit tree"
@@ -2596,7 +2632,7 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 # selfhost/bootstrap_production.sh, no bootstrap_full_selfhost.sh and no
 # bootstrap_full_language_selfhost.sh; stage2_template.c is a 93-byte
 # PLACEHOLDER, stage2_src/ is a README plus an 11-byte PLACEHOLDER,
-# sxc_full.c is a 30-line toy, and `bash selfhost/restore_stage2.sh` exits 1
+# sxc_full.c is a 30-line toy, and `sh selfhost/restore_stage2.sh` exits 1
 # with "missing Stage-2 seed". 24 legacy documents carry a banner saying so,
 # and docs/FULL_LANGUAGE_SELFHOST.md states it as the current position.
 # If a real Stage-2 host ever lands, this target fails and points at the docs
@@ -2611,7 +2647,7 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 test-doc-claims:
 	@grep -q 'PLACEHOLDER' selfhost/stage2_template.c \
 	  || { echo "[FAIL] selfhost/stage2_template.c is no longer a placeholder: a Stage-2 host may exist now, update docs/FULL_LANGUAGE_SELFHOST.md and this target"; exit 1; }
-	@if bash selfhost/restore_stage2.sh >/dev/null 2>&1; then \
+	@if sh selfhost/restore_stage2.sh >/dev/null 2>&1; then \
 	  echo "[FAIL] restore_stage2.sh now succeeds: update docs/FULL_LANGUAGE_SELFHOST.md, docs/FULL_SELFHOST.md and this target"; exit 1; \
 	fi
 	@if grep -q '^stage2:' Makefile; then \
@@ -2631,9 +2667,67 @@ test-doc-claims:
 	@for f in selfhost/seed/sxc_seed_min.c selfhost/compiler_min.sa selfhost/native_aot.c docs/STATUS.md docs/STDLIB.md; do \
 	  test -s "$$f" || { echo "[FAIL] docs/FULL_LANGUAGE_SELFHOST.md references $$f, which is missing or empty"; exit 1; }; \
 	done
+	@# the next phase is recorded and still honestly open
+	@grep -q 'ALL_SAYANOX_PHASE.md' README.md \
+	  || { echo "[FAIL] README.md no longer links the all-in-Sayanox next phase"; exit 1; }
+	@test -s docs/ALL_SAYANOX_PHASE.md \
+	  || { echo "[FAIL] docs/ALL_SAYANOX_PHASE.md is missing"; exit 1; }
+	@grep -q 'next phase' docs/ALL_SAYANOX_PHASE.md && grep -q 'not started' docs/ALL_SAYANOX_PHASE.md \
+	  || { echo "[FAIL] docs/ALL_SAYANOX_PHASE.md lost its honest next-phase status"; exit 1; }
+	@if $(MAKE) --no-print-directory all-sayanox >/dev/null 2>&1; then \
+	  echo "[FAIL] all-sayanox now reports success: update docs/ALL_SAYANOX_PHASE.md, README.md and this target instead of keeping a stale claim"; exit 1; fi
 	@echo "[OK] doc claims: $$(grep -rl 'The entry points named in this file do not exist' docs selfhost --include='*.md' | wc -l) legacy documents carry the banner; no Stage-2 host, bootstrap script or make target is advertised that does not exist"
 test-stage2: test-doc-claims
 test-for-str: test-doc-claims
+
+# ---------------------------------------------------------------------------
+# test-language-deps: the maintained toolchain must not need bash, awk, sed,
+# Python, Perl, Node or Ruby. Two checks:
+#
+#   1. static -- every tracked shebang script is POSIX sh, no recipe line in
+#      this Makefile invokes awk or sed, the LSP build does not use the old awk
+#      binder, and the offline packer chunks with `split`, not awk.
+#   2. dynamic -- a PATH shim makes those interpreters fail loudly and logs any
+#      invocation. Tools that are already built are kept (`-o`, so the four-
+#      minute compiler rebuild is not repeated), and the paths that used to
+#      need an interpreter are re-run: LSP binding + sessions, the IR log
+#      checks, the native/seed GC checks, the generic-limit fixture and the
+#      package wrapper. Any logged invocation fails the gate.
+#
+# This is a boundary test of the exercised paths, not a proof that no optional
+# target (for example the opt-in Python HTTP tests) uses an interpreter.
+# ---------------------------------------------------------------------------
+DEP_SHIM_DIR := $(TESTS)/depshim
+DEP_SHIM_LOG := $(TESTS)/depshim.log
+.PHONY: test-language-deps
+test-language-deps: $(GEN2) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN)
+	@# ---- static ----
+	@if grep -rl '^#!.*bash' --include='*.sh' --include='sx' . 2>/dev/null | grep -q .; then \
+	  echo "[FAIL] a tracked script still has a bash shebang:"; \
+	  grep -rl '^#!.*bash' --include='*.sh' --include='sx' . 2>/dev/null; exit 1; fi
+	@if grep -nE '^	[@-]*[[:space:]]*(awk|sed)([[:space:]]|$$)' Makefile; then \
+	  echo "[FAIL] a Makefile recipe invokes awk or sed"; exit 1; fi
+	@test ! -e tools/lsp_workspace_bind.awk || { echo "[FAIL] the old awk LSP binder still exists"; exit 1; }
+	@grep -q 'tools/lsp_workspace_bind.sa' Makefile || { echo "[FAIL] the Sayanox LSP binder is not in the build"; exit 1; }
+	@grep -q 'split -b 1100' selfhost/pack_compiler_min.sh || { echo "[FAIL] the packer no longer chunks with split"; exit 1; }
+	@if grep -nE '^[[:space:]]*[^#]*awk' selfhost/pack_compiler_min.sh selfhost/restore_compiler_min.sh; then \
+	  echo "[FAIL] a restore/pack script invokes awk"; exit 1; fi
+	@echo "[OK] language deps (static): POSIX sh scripts only; no awk/sed in build or test recipes"
+	@# ---- dynamic ----
+	@mkdir -p $(DEP_SHIM_DIR)
+	@rm -f $(DEP_SHIM_LOG)
+	@for t in bash awk sed python3 python perl node ruby; do \
+	  printf '#!/bin/sh\necho "%s invoked: $*" >> "%s"\nexit 127\n' "$$t" "$(CURDIR)/$(DEP_SHIM_LOG)" > "$(DEP_SHIM_DIR)/$$t"; \
+	  chmod +x "$(DEP_SHIM_DIR)/$$t"; \
+	done
+	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" sh -c \
+	  './$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim.c && ./$(LSP_BIND) $(TESTS)/lsp_shim.c > $(TESTS)/lsp_shim_bound.c'
+	@cmp $(TESTS)/lsp_shim_bound.c $(LSP_C)
+	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" $(MAKE) --no-print-directory \
+	  -o $(GEN2_C) -o $(GEN2) -o $(GEN1_MIN_C) -o $(GEN1_MIN) -o $(SEED_MIN_BIN) \
+	  test-lsp test-lsp-robust test-native-ir-log test-native-mem test-seed-gc test-seed-generics test-sxpkg-online-local
+	@if [ -s $(DEP_SHIM_LOG) ]; then echo "[FAIL] a removed interpreter was invoked:"; cat $(DEP_SHIM_LOG); exit 1; fi
+	@echo "[OK] language deps: no bash/awk/sed/python/perl/node/ruby invoked by the exercised build, test and LSP paths"
 
 # ---------------------------------------------------------------------------
 # test-gen2-index-expr: an index is a numeric EXPRESSION, in every position.
@@ -3036,7 +3130,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-language-deps
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -3051,6 +3145,37 @@ true-selfhost-full: true-selfhost-min
 
 true-selfhost: true-selfhost-min
 selfhost: true-selfhost
+
+# ---------------------------------------------------------------------------
+# all-sayanox: the NEXT PHASE (docs/ALL_SAYANOX_PHASE.md).
+#
+# Deliberately FAIL-CLOSED. Compiler logic, the formatter, the package tool,
+# the language server and the LSP binder are Sayanox programs, and since
+# 2026-10-17 no maintained path needs bash, awk, sed or Python
+# (`make test-language-deps`). What is still not Sayanox is the small trusted C
+# seed, the C native backend, the C LSP directory bridge, the C IR tool and the
+# make/POSIX-sh build driver. This target prints that measured inventory on
+# every run, so the claim cannot silently drift and the remaining work cannot
+# be forgotten, and then refuses to report success.
+#
+# Removing a row here (and from docs/ALL_SAYANOX_PHASE.md) is how the phase
+# advances. Flip this target only when the inventory is empty or every
+# remaining entry is a documented exception in that document.
+# ---------------------------------------------------------------------------
+.PHONY: all-sayanox
+all-sayanox:
+	@echo "=== ALL-SAYANOX: next phase, not implemented ==="
+	@printf '  %-28s %6s lines  %s\n' seed "$$(wc -l < selfhost/seed/sxc_seed_min.c)" selfhost/seed/sxc_seed_min.c
+	@printf '  %-28s %6s lines  %s\n' native-backend "$$(wc -l < selfhost/native_aot.c)" selfhost/native_aot.c
+	@printf '  %-28s %6s lines  %s\n' lsp-directory-bridge "$$(wc -l < tools/lsp_workspace.h)" tools/lsp_workspace.h
+	@printf '  %-28s %6s lines  %s\n' ir-analysis-tool "$$(wc -l < tools/emit_to_ir.c)" tools/emit_to_ir.c
+	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
+	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' selfhost/sx | wc -l)" 'POSIX sh'
+	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
+	@echo "  done: compiler, formatter, package tool, language server, LSP binder (all .sa)"
+	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
+	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
+	@exit 1
 
 $(NATIVE_BIN): $(NATIVE_SRC)
 	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
@@ -3382,6 +3507,10 @@ doctor:
 	if command -v cat >/dev/null 2>&1 && command -v tr >/dev/null 2>&1 && command -v rm >/dev/null 2>&1; then \
 	  echo "OK   $$(command -v cat), $$(command -v tr), $$(command -v rm) (optional)"; \
 	else echo "SKIP (optional: only when compiler_min.sa is missing and must be decoded)"; fi; \
+	printf 'split/paste     '; \
+	if command -v split >/dev/null 2>&1 && command -v paste >/dev/null 2>&1; then \
+	  echo "OK   $$(command -v split), $$(command -v paste) (optional)"; \
+	else echo "SKIP (optional: pack-compiler chunking and the IR-log checks)"; fi; \
 	echo "--------------------------------"; \
 	printf 'python          '; command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 \
 	  && echo "present, but NOT used anywhere on the bootstrap path" \
@@ -3821,7 +3950,22 @@ test-seed-generics: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
 	  if ./$(SEED_MIN_BIN) $(TESTS)/sgen_bad.sa >/dev/null 2>$(TESTS)/sgen_bad.err; then echo "[FAIL] invalid generic accepted: $$text"; exit 1; fi; \
 	  grep -q 'seed_min:' $(TESTS)/sgen_bad.err || exit 1; \
 	done
-	@awk 'BEGIN { print "make many<A,B,C,D,E,F>(a:A,b:B,c:C,d:D,e:E,f:F)->A { give a }"; for (i=0;i<512;i++) { n=i; printf "show many("; for (j=0;j<6;j++) { k=n%3; n=int(n/3); printf "%s%s",j?",":"",k==0?"1":k==1?"\"s\"":"[]" } print ")" } }' > $(TESTS)/sgen_limit.sa
+	@# 512 base-3 argument tuples, generated with shell builtins (no awk).
+	@{ \
+	  echo "make many<A,B,C,D,E,F>(a:A,b:B,c:C,d:D,e:E,f:F)->A { give a }"; \
+	  i=0; \
+	  while [ $$i -lt 512 ]; do \
+	    n=$$i; line="show many("; j=0; \
+	    while [ $$j -lt 6 ]; do \
+	      k=$$((n % 3)); n=$$((n / 3)); \
+	      case $$k in 0) v=1 ;; 1) v='"s"' ;; 2) v='[]' ;; esac; \
+	      if [ $$j -eq 0 ]; then line="$$line$$v"; else line="$$line,$$v"; fi; \
+	      j=$$((j + 1)); \
+	    done; \
+	    echo "$$line)"; \
+	    i=$$((i + 1)); \
+	  done; \
+	} > $(TESTS)/sgen_limit.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/sgen_limit.sa >/dev/null 2>$(TESTS)/sgen_limit.err; then echo '[FAIL] seed exceeded specialization limit'; exit 1; fi
 	@grep -q 'function/specialization limit is 512' $(TESTS)/sgen_limit.err
 	@echo '[OK] seed generic specialization: num/str/list, multiple type parameters, nested/recursive/forward calls, annotations, aliasing, deduplication, deterministic output and diagnostics'

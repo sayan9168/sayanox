@@ -4,6 +4,30 @@ The project goal is to move compiler and developer-tool **logic** into
 Sayanox. That migration is not complete; do not read the repository as claiming
 that every tool is already a `.sa` program.
 
+## No bash, awk or sed on the maintained paths (2026-10-17)
+
+* All tracked shebang scripts are `#!/bin/sh`. The six former bash scripts —
+  `selfhost/sx`, `restore_stage2.sh`, `restore_sxc_full.sh`,
+  `restore_compiler_min.sh`, `pack_compiler_min.sh` and `lang_quality.sh` —
+  were ported; `pipefail`, `[[ ]]`, arrays, `local` and process substitution
+  are gone.
+* The LSP build binder is Sayanox: `tools/lsp_workspace_bind.sa` is compiled by
+  gen2 and rewrites exactly one generated fallback to call the tool-local C
+  directory bridge. It replaced `tools/lsp_workspace_bind.awk` and produces
+  byte-identical output on the real translation; a shape change is a C
+  `#error`, not a silent pass.
+* The offline packer chunks with `split -b 1100`; test recipes extract lines
+  with POSIX `read`; the native IR-log checks use `grep`/`cut`/`sort`/`paste`;
+  the emit-seam region uses `head`/`tail`; `tools/sxpkg.sh` uses `cut`/`tr`.
+* The legacy sed-based `tools/sayanox-lsp.sh` shell server was deleted. The
+  supported server is `tools/sayanox_lsp.sa`.
+* Python was removed from the restore scripts (a dead installer branch and a
+  base64 heredoc). It remains only in the optional HTTP/crawler test servers,
+  which are not bootstrap prerequisites.
+* `make test-language-deps` checks the boundary: a static scan plus a PATH shim
+  that makes bash/awk/sed/python/perl/node/ruby fail and logs any invocation
+  while the affected paths are re-run.
+
 ## Sayanox tools built and tested
 
 - `tools/sxfmt.sa` is a conservative formatter written in Sayanox. The
@@ -15,21 +39,26 @@ that every tool is already a `.sa` program.
   `search` and `info` for project locks and the local registry. The shell
   entrypoint delegates these commands to the Sayanox binary. `make sxpkg`
   builds it and `make test-sxpkg` covers the command path.
+- `tools/sayanox_lsp.sa` is the language server (diagnostics, symbols,
+  completion, hover, definition, references, workspace symbols, formatting,
+  rename, signature help, code actions). `make lsp` builds it.
+- `tools/lsp_workspace_bind.sa` is the build-time binder described above.
 
 ## Still to port
 
 - Online sync/install/publish/fetch and package-directory management remain in
   `tools/sxpkg.sh`; Sayanox still needs filesystem-directory and network APIs.
-- `tools/sayanox-lsp.sh` is still a shell implementation; the language/runtime
-  does not yet provide the stdin and JSON facilities needed for an equivalent
-  `.sa` server.
 - `selfhost/seed/sxc_seed_min.c` is the small trusted bootstrap compiler, and
   `selfhost/native_aot.c` is the current x86-64 Linux native backend.
 - `Makefile` and its POSIX-shell recipes orchestrate the initial build and
   regression tests.
 
+Pulling the remaining C and shell pieces into Sayanox is the next phase,
+recorded in [`ALL_SAYANOX_PHASE.md`](ALL_SAYANOX_PHASE.md); `make all-sayanox`
+lists what is left and fails closed.
+
 A fresh source checkout needs an initial executable compiler somewhere in its
 bootstrap chain. The practical end state is therefore a small, auditable C
-seed plus Sayanox-owned compiler and tool logic—not a claim that source text
+seed plus Sayanox-owned compiler and tool logic — not a claim that source text
 runs without any host tools. Replacing the seed/backend is a later milestone,
 not a prerequisite for moving ordinary compiler and tool logic into Sayanox.

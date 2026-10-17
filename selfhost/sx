@@ -1,11 +1,13 @@
-#!/usr/bin/env bash
-# Sayanox CLI - compile any .sa file (Stage-2 self-host)
-set -euo pipefail
+#!/bin/sh
+# Sayanox CLI - compile any .sa file (Stage-2 self-host).
+# POSIX sh; the wrapper itself does no language processing, it only drives the
+# Stage-2 host (which does not exist in this tree, so it exits 1 today).
+set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-if [[ $# -lt 1 ]]; then
+if [ $# -lt 1 ]; then
   echo "Sayanox CLI (self-host Stage-2)"
   echo "Usage: sx <file.sa> [-o outname] [--run]"
   exit 1
@@ -15,21 +17,23 @@ IN="$1"
 shift
 OUT=""
 RUN=0
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
   case "$1" in
-    -o) OUT="$2"; shift 2 ;;
+    -o)
+      [ $# -ge 2 ] || { echo "sx: -o needs an output name" >&2; exit 1; }
+      OUT="$2"; shift 2 ;;
     --run) RUN=1; shift ;;
     *) echo "sx: unknown arg: $1" >&2; exit 1 ;;
   esac
 done
 
-if [[ ! -f "$IN" ]]; then
+if [ ! -f "$IN" ]; then
   echo "sx: error: input not found: $IN" >&2
   exit 1
 fi
 
 ensure_stage2() {
-  if [[ ! -x selfhost/stage2 ]] || ! grep -q 'compile_generic\|TokKind' selfhost/stage2_template.c 2>/dev/null; then
+  if [ ! -x selfhost/stage2 ] || ! grep -qE 'compile_generic|TokKind' selfhost/stage2_template.c 2>/dev/null; then
     echo "sx: preparing Stage-2 (one-time)..."
     chmod +x selfhost/restore_stage2.sh
     ./selfhost/restore_stage2.sh
@@ -37,7 +41,7 @@ ensure_stage2() {
 }
 ensure_stage2
 
-if [[ -z "$OUT" ]]; then
+if [ -z "$OUT" ]; then
   OUT="${IN%.sa}"
 fi
 C_OUT="${OUT}.c"
@@ -50,10 +54,10 @@ CC=clang
 command -v clang >/dev/null 2>&1 || CC=gcc
 echo "sx: link $C_OUT -> $BIN_OUT"
 # -pthread for concurrent GC runtime
-$CC -O2 -pthread -o "$BIN_OUT" "$C_OUT"
+"$CC" -O2 -pthread -o "$BIN_OUT" "$C_OUT"
 echo "sx: OK binary: $BIN_OUT"
 
-if [[ "$RUN" -eq 1 ]]; then
+if [ "$RUN" -eq 1 ]; then
   echo "sx: run $BIN_OUT"
   echo "-----"
   "./$BIN_OUT"

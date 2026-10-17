@@ -1,7 +1,9 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# Restore selfhost/compiler_min.sa from the checked-in source, the legacy
+# line parts, or the legacy base64 parts. POSIX sh only: no bash, no Python.
+set -eu
 cd "$(cd "$(dirname "$0")/.." && pwd)"
-# Prefer a complete checked-in compiler_min.sa (reassign version is ~15KB / 390+ lines)
+# Prefer a complete checked-in compiler_min.sa (the maintained case).
 if [ -f selfhost/compiler_min.sa ] && [ "$(wc -c < selfhost/compiler_min.sa)" -gt 10000 ]; then
   echo "keeping compiler_min.sa ($(wc -l < selfhost/compiler_min.sa) lines)"
   exit 0
@@ -14,17 +16,13 @@ if [ -d selfhost/compiler_min_lines ]; then
     exit 0
   fi
 fi
-if [ -d selfhost/compiler_min_b64 ] && ls selfhost/compiler_min_b64/b*.txt >/dev/null 2>&1; then
-  python3 - <<'PY'
-import base64
-from pathlib import Path
-parts = sorted(Path("selfhost/compiler_min_b64").glob("b*.txt"))
-b64 = "".join(p.read_text().strip() for p in parts)
-raw = base64.b64decode(b64)
-Path("selfhost/compiler_min.sa").write_bytes(raw)
-print("restored compiler_min.sa", len(raw), "bytes")
-PY
-  exit 0
+if [ -d selfhost/compiler_min_b64 ]; then
+  cat selfhost/compiler_min_b64/b*.txt 2>/dev/null | tr -d '\n' | base64 -d > selfhost/compiler_min.sa || true
+  if [ -s selfhost/compiler_min.sa ]; then
+    echo "restored compiler_min.sa $(wc -c < selfhost/compiler_min.sa) bytes"
+    exit 0
+  fi
+  rm -f selfhost/compiler_min.sa
 fi
 if [ -f selfhost/compiler_min.sa ]; then
   echo "keeping existing compiler_min.sa ($(wc -l < selfhost/compiler_min.sa) lines)"

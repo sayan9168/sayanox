@@ -95,6 +95,10 @@ make tools
 
 The formatter currently handles whitespace. The package tool supports local `init` / `add` / `list` / `remove` / `search` / `info` / `seed`. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 
+The language server (`tools/sayanox_lsp.sa`) and the build-time LSP binder
+(`tools/lsp_workspace_bind.sa`) are Sayanox programs too, and no maintained
+build or test path needs bash, awk, sed or Python (`make test-language-deps`).
+
 ---
 
 ## Project Layout
@@ -142,10 +146,31 @@ has the short version.
 - [x] Self-hosting pure-min dialect
 - [x] Native AOT subset (x86-64 Linux)
 - [x] Formatter + local package tool in Sayanox
+- [x] Language server in Sayanox (bounded local workspace index)
+- [x] Toolchain free of bash, awk, sed and Python (`make test-language-deps`)
+- [ ] **Next phase — all-in-Sayanox toolchain** ([plan](docs/ALL_SAYANOX_PHASE.md)):
+      port the four remaining C pieces (LSP directory bridge, IR tool, native
+      backend, seed) and the build driver into Sayanox.
+      `make all-sayanox` fails closed until then
 - [ ] Full Stage-2 language self-hosting
 - [ ] Broader platform support
 - [ ] Standard library growth
-- [ ] LSP support
+
+### Next phase: everything in Sayanox
+
+The maintained *logic* is already Sayanox: the compiler
+(`selfhost/compiler_min.sa`), the formatter, the package tool, the language
+server and the build-time LSP binder. Since 2026-10-17 no maintained path
+needs bash, awk, sed or Python either.
+
+What is still not Sayanox is small, measurable, and listed in
+[docs/ALL_SAYANOX_PHASE.md](docs/ALL_SAYANOX_PHASE.md): the 2,035-line C seed,
+the 4,353-line C native backend, a 119-line C directory bridge, a 150-line C
+IR tool, and the make/POSIX-sh build driver. `make all-sayanox` prints that
+inventory and **fails closed** — the same way `true-selfhost-full` refuses to
+claim a full-language self-host — so the remaining work cannot silently drift
+or be forgotten. The plan orders it: IR tool, then directory bridge, then the
+package wrapper, then the native backend, and the seed last.
 
 ---
 

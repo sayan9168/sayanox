@@ -248,8 +248,8 @@ search() {
 }
 
 publish() {
-  name=$(grep '^name' "$MANIFEST" 2>/dev/null | sed 's/.*= *"\?\([^"]*\)"\?.*/\1/' || echo local)
-  ver=$(grep '^version' "$MANIFEST" 2>/dev/null | sed 's/.*= *"\?\([^"]*\)"\?.*/\1/' || echo 0.1.0)
+  name=$(grep '^name' "$MANIFEST" 2>/dev/null | cut -d= -f2- | tr -d '" ' || echo local)
+  ver=$(grep '^version' "$MANIFEST" 2>/dev/null | cut -d= -f2- | tr -d '" ' || echo 0.1.0)
   mkdir -p "$REG/$name"
   printf 'name=%s\nversion=%s\n' "$name" "$ver" > "$REG/$name/pkg.meta"
   [ -f main.sa ] && cp main.sa "$REG/$name/main.sa"
@@ -257,7 +257,7 @@ publish() {
   # so `verify` can check a shell-published package the same way. pkgsum is a
   # change detector, not a cryptographic hash (see docs/SXPKG_ONLINE.md).
   if [ -f "$REG/$name/main.sa" ]; then
-    s=$(run_sayanox sum "$REG/$name/main.sa" 2>/dev/null | awk '{print $3}')
+    s=$(run_sayanox sum "$REG/$name/main.sa" 2>/dev/null | cut -d' ' -f3)
     [ -n "$s" ] && printf 'sum=%s\n' "$s" >> "$REG/$name/pkg.meta"
   fi
   grep -q "^$name=" "$INDEX" 2>/dev/null || echo "$name=$ver" >> "$INDEX"
@@ -300,7 +300,7 @@ fetch() (
   trap 'exit 1' 1 2 3 15
   mkdir "$stage/registry" "$stage/package"
   download "$url" "$stage/registry/main.sa" || exit 1
-  s=$(run_sayanox sum "$stage/registry/main.sa" | awk '{print $3}')
+  s=$(run_sayanox sum "$stage/registry/main.sa" | cut -d' ' -f3)
   case "$s" in ''|*[!0-9]*) echo 'sxpkg: failed to compute fetched checksum' >&2; exit 1 ;; esac
   printf 'name=%s\nversion=0.0.0\nsum=%s\n' "$name" "$s" > "$stage/registry/pkg.meta"
   cp -r "$stage/registry/." "$stage/package/"

@@ -1,15 +1,18 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# Language-quality probe for the (currently absent) Stage-2 CLI.
+# POSIX sh: no bash arrays, `local`, or `[[ ]]`. The wrapper exits 1 today
+# because selfhost/stage2 is not in this tree; test-doc-claims depends on that.
+set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 command -v clang >/dev/null 2>&1 || { echo "error: clang is required" >&2; exit 1; }
 chmod +x selfhost/sx
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'rm -rf "$tmp"' 0 1 2 3 15
 
 run_ok() {
-  local src="$1" needle="$2"
+  src="$1"; needle="$2"
   ./selfhost/sx "$src" -o "$tmp/out" >/dev/null
   "$tmp/out" > "$tmp/stdout"
   grep -Fq "$needle" "$tmp/stdout"

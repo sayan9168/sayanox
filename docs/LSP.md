@@ -141,12 +141,12 @@ the second was opened, a closed document answering `"result":[]` and not being
 served from another buffer, and the five-document eviction (`f1` gone, `f5`
 still served).
 
-## The old shell server
+## The old shell server (removed 2026-10-17)
 
-`tools/sayanox-lsp.sh` is the original dependency-free shell stub (keyword
-completion, one-line diagnostics). It is kept for environments where no
-compiled binary can be shipped; the Sayanox implementation above is the
-supported one and is what the tests cover.
+`tools/sayanox-lsp.sh` was the original dependency-free shell stub (keyword
+completion, one-line diagnostics). It has been removed: the maintained server
+is `tools/sayanox_lsp.sa`, built by gen2. Keeping a sed-based second server
+would have kept sed on the toolchain boundary for no maintained behaviour.
 
 ### Neovim filetype registration and launch checks
 
@@ -320,9 +320,10 @@ or stable cross-query snapshot: files can change while a query runs.
 
 The directory bridge is tool-local C, not a new language builtin or general
 FFI. `make lsp` compiles the `.sa` program, then
-`tools/lsp_workspace_bind.awk` replaces exactly one known generated fallback
-with the bridge call. The binding fails if the generated function shape
-changes. Manifest strings use the emitted runtime's managed allocator. A raw
+`tools/lsp_workspace_bind.sa` (a Sayanox program built by gen2) replaces
+exactly one known generated fallback with the bridge call. The old awk binder
+was deleted; the Sayanox binder's output is byte-identical and it fails with a
+C `#error` if the generated function shape changes. Manifest strings use the emitted runtime's managed allocator. A raw
 standalone compilation of `tools/sayanox_lsp.sa` without this build binding has
 only the empty fallback; use the Makefile-built server for folder support.
 The compiler bootstrap/self-host source is unchanged by this integration.

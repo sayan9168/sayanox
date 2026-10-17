@@ -67,7 +67,9 @@ are not part of the verified current bootstrap.
   entrypoint delegates these commands to it and `make test-sxpkg` covers them.
   Port the remaining package-directory and sync/install/publish/fetch behavior
   from `tools/sxpkg.sh`; this needs Sayanox filesystem, process and network APIs.
-- Port `tools/sayanox-lsp.sh` only after the language/runtime can read and write
+- The sed-based `tools/sayanox-lsp.sh` was deleted on 2026-10-17; the Sayanox
+  server and its Sayanox binder are the maintained path. Port the remaining
+  online package behavior only after the language/runtime can read and write
   JSON-RPC over stdin/stdout and parse JSON safely.
 - Add reproducible package locks, dependency validation and remote publishing
   only after the registry protocol and trust model are defined.

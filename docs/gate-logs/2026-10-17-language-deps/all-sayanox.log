@@ -1,0 +1,12 @@
+=== ALL-SAYANOX: next phase, not implemented ===
+  seed                           2035 lines  selfhost/seed/sxc_seed_min.c
+  native-backend                 4353 lines  selfhost/native_aot.c
+  lsp-directory-bridge            119 lines  tools/lsp_workspace.h
+  ir-analysis-tool                150 lines  tools/emit_to_ir.c
+  build-driver                   4480 lines  Makefile
+  build-scripts                    26 files  POSIX sh
+  sayanox-source                  274 files  .sa
+  done: compiler, formatter, package tool, language server, LSP binder (all .sa)
+  plan: docs/ALL_SAYANOX_PHASE.md
+[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim
+make: *** [Makefile:3178: all-sayanox] Error 1
