@@ -1,0 +1,10 @@
+[OK] broader-language readiness: gen2 string_interpolation
+[OK] broader-language readiness: gen2 struct_function
+[BLOCKED] gen2 field_expression: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen2-field_expression.cc.log)
+[BLOCKED] gen2 index_call: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen2-index_call.cc.log)
+[OK] broader-language readiness: gen3 string_interpolation
+[OK] broader-language readiness: gen3 struct_function
+[BLOCKED] gen3 field_expression: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen3-field_expression.cc.log)
+[BLOCKED] gen3 index_call: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen3-index_call.cc.log)
+[FAIL] full-language readiness: 4 unmet compiler/behavior checks; full-language self-host NOT proved
+make: *** [Makefile:4328: test-full-language-readiness] Error 1

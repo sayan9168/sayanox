@@ -1,0 +1,13 @@
+struct Packet { text }
+hold witness = Packet { text: "witness" }
+make copy_packet(p: Packet) -> Packet {
+  give p
+}
+make describe(p: Packet, n: num) -> str {
+  hold text = p.text
+  give "${text}:${n}"
+}
+hold text = concat("struct", "-root")
+hold packet = Packet { text: text }
+hold copied = copy_packet(packet)
+show describe(copied, 7)

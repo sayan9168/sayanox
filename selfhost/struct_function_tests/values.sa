@@ -1,0 +1,21 @@
+struct Point_2 { x, y }
+hold witness = Point_2 { x: 0, y: 0 }
+make copy_point(p: Point_2) -> Point_2 {
+  give p
+}
+make choose_point(a: Point_2, n: num, b: Point_2) -> Point_2 {
+  when n > 0 {
+    give copy_point(a)
+  } otherwise {
+    give b
+  }
+}
+make coordinate(p: Point_2) -> num {
+  give p.x + p.y
+}
+hold p = Point_2 { x: 7, y: 8 }
+hold q: Point_2 = choose_point(copy_point(p), 1, witness)
+show q.x
+show coordinate(q)
+hold r = choose_point(witness, 0, q)
+show r.y

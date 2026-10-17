@@ -1,0 +1,3 @@
+selfhost/seed_tests/full-language-readiness/gen2-index_call.c:1:2: error: #error sayanox-min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / % and parentheses; a call other than len() and a quoted string need a hold first)
+    1 | #error sayanox-min: unsupported index expression (expected a numeric expression: numbers, names, fields, len(), indexes, + - * / % and parentheses; a call other than len() and a quoted string need a hold first)
+      |  ^~~~~

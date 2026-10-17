@@ -1,0 +1,9 @@
+// Exercise the live compiler source module, not a parallel implementation.
+use "selfhost/modules/compiler_text.sa"
+show sxminimum(9, 3)
+show sxminimum(0 - 5, 2)
+show sxeslice("abcdef", 1, 4)
+show sxeslice("abcdef", 2, 100)
+show len(sxeslice("abcdef", 4, 2))
+show sxedigits(0)
+show sxedigits(1024)

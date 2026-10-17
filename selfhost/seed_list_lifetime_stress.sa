@@ -1,0 +1,21 @@
+// Finite no-GC workload: alias one growing list through borrowed parameters.
+// This does NOT test reclamation of discarded lists.
+make append(xs: list, n: num) -> list {
+  push(xs, n)
+  give xs
+}
+make read(xs: list, at: num) -> num {
+  give xs[at]
+}
+hold values = [7]
+hold alias = values
+hold i = 0
+while i < 20000 {
+  values = append(values, i)
+  i = i + 1
+}
+show len(alias)
+show alias[0]
+show read(alias, 1)
+show read(values, 20000)
+show len(values)

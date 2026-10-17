@@ -1,0 +1,12 @@
+hello Sayanox
+Sayanox:-12.5:!
+n=-12.5
+literal ${name} / quote="Sayanox"
+slash=\Sayanox
+plain $ sign and {brace}
+user#3
+i=0
+i=1
+i=2
+condition-ok
+collision

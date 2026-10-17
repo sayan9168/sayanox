@@ -1,6 +1,13 @@
 # Status
 
-Last updated: **2026-10-15**
+Last updated: **2026-10-17**
+
+Seed-memory evidence update: runtime/ownership unchanged; bounded finite
+bootstrap and repeatable ASan/UBSan probes added (leak checking disabled).
+All four required gates passed; gen3/gen4 remain byte-identical. Current logs:
+[`2026-10-16 seed budget`](gate-logs/2026-10-16-seed-budget/). See roadmap row 3
+and the new finite-budget section in [GC.md](GC.md). Older measurements below
+remain historical, not new peak-RSS claims.
 
 ## Current verification
 
@@ -32,16 +39,16 @@ is not presented as new work in this PR.
 
 | Area | seed-min | gen2 | native | Still missing / tested boundary |
 |---|---|---|---|---|
-| 1. Full-language self-host / memory | Read-only string parameters now borrowed; writable ones still copied. Safe builder registry replaces pre-pointer magic probing. | Fixed point unchanged; gen1-min's self-compile emits byte-identical gen2 C before/after optimization. | Not the compiler self-host path. | **No full-language self-host claim.** Compiler stays in its subset. Measured gen1-min → gen2 peak: 3,823,428 → 704,184 KiB (~82% lower); this is not a measurement of every stage's peak. See FULL_LANGUAGE_SELFHOST.md. |
+| 1. Full-language self-host / memory | Read-only string borrowing and safe builder registry retained. Compiler now uses a live `.sa` module, generic minimum and generic source-size struct; module recovery round-trip tested. | gen1-min/gen2/gen3 compile the live module fixture; gen3/gen4 remain identical. | Not the compiler self-host path. | **Not complete / no full-language claim.** Concrete struct function arguments/returns now pass on gen2/gen3 (bounded, `test-struct-functions`); identifier interpolation now also passes on gen2/gen3 (`test-string-interpolation`); readiness still fails on expression fields and call indexes (four checks). Seed/native interpolation and struct function signatures remain open. `true-selfhost-full` fails closed; no exhaustive language specification exists. Historical ~82% RSS reduction is unchanged, not remeasured. [Evidence](FULL_LANGUAGE_SELFHOST.md#full-language-completion-attempt-and-measured-blockers-2026-10-17). |
 | 2. List-valued struct fields / `for v in p.xs` | **Supported:** distinct list field kind emits `sx_list *`; field storage preserves aliases (including growth) and `for v in p.xs` works. | **Supported for concrete structs:** field tag `3` emits `sx_list *`; literals and pointer copies, nested field chains, `p.xs[i]` reads/writes, `len()` indexes/conditions, and `for v in p.xs` are type-lowered. | **Supported:** one pointer word per field; `BK_STRUCT` tracing reaches the list pointer and its growth-forward chain across collections. | `Box<list>` remains refused. Gen2 direct `push(p.xs, v)` and `show p.xs` remain explicit refusals; use an alias, `len`, or an index. `test-list-struct-fields` runs shared alias/iteration output on all three plus native GC; `test-gen2-list-struct-fields` adds strict-C Gen2 layout/write/condition coverage and pins refusals. |
-| 3. Seed GC | **Still no collector.** Exact builder registry + explicit release on reassignment; new borrow/registry stress and sanitizer evidence. | Existing conservative mark/sweep. | Existing mark/sweep. | Registry is ownership bookkeeping, not tracing/RC. Unreleased locals, return values, temporaries and lists can still grow. `test-seed-gc`, `test-seed-borrow`, `test-native-mem`; GC.md. |
-| 4. Struct-typed hold | **Supported:** `hold p: Pt` retains the declared concrete struct identity and rejects scalar/wrong-struct initializers. | Existing accepted/type-checked support. | **Supported:** same named-identity check during collection and emission. | Struct-typed function parameters/returns and struct reassignment remain outside this slice. `test-type-refusals` runs the valid copy and scalar/wrong-struct refusals on all three. |
+| 3. Seed GC | **Still no collector/RC/freelist; runtime unchanged.** Exact builder registry + release on reassignment. 128 MiB borrowed-read stress, 32 MiB list-alias/realloc stress, 32 registry reuse cycles; optional ASan/UBSan pass (leaks OFF). | Existing conservative mark/sweep. | Existing mark/sweep. | Finite no-GC gen1 bootstrap passes a 1536 MiB address-space cap with identical gen2 C; not a general bounded heap or RSS claim. Dropped locals/results/temporaries/lists still grow. `test-seed-gc`, `test-seed-borrow`, optional `test-seed-sanitize` / `test-seed-bootstrap-budget`; [GC.md](GC.md#finite-no-gc-bootstrap-budget-and-repeatable-sanitizers-2026-10-16). |
+| 4. Struct-typed hold | **Supported:** `hold p: Pt` retains the declared concrete struct identity and rejects scalar/wrong-struct initializers. | Existing accepted/type-checked support. | **Supported:** same named-identity check during collection and emission. | Struct reassignment remains outside this slice. Concrete function parameters/returns now have separate bounded gen2/gen3 support (`test-struct-functions`), not seed/native support. `test-type-refusals` runs the valid copy and scalar/wrong-struct refusals on all three. |
 | 5. Nested generic structs | `Box<Box<num>>` refused. | Refused through emitted `#error`. | Refused. | A deliberate current bootstrap-dialect limit: recursive type-argument parsing, specialization worklist, ordered layout and GC descriptors are not implemented. Simple `Box<num>`/`Box<str>` remain gated by `test-generic-structs`; nested refusal by `test-type-refusals`. |
 | 6. Stdlib | Existing portable helpers and flat JSON text utilities. | Same tested modules. | Same tested portable subset. | No new module or nested JSON parser in this PR. No crypto. HTTP/crawler integration remains optional and outside bootstrap (`test-network`); STDLIB.md. |
-| 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/metadata/checksum logic; thin shell transfers. Local/file copies now need no curl/wget. | No native compilation claim for sxpkg. | Online stays opt-in; tests prove refusal and mocked transfer/fallback without DNS. Existing `sum=` is a non-cryptographic checksum, not signatures/provenance. `test-sxpkg-online-local`, `test-sxpkg-online-optin`. |
-| 8. LSP workspace scan | Not a seed-compiled tool claim. | Existing `.sa` server, four open buffers, tested by `test-lsp`/`test-lsp-robust`. | Not a native-compiled tool claim. | **No folder scan/index added.** workspace/symbol and rename cover open documents only; signatureHelp is same-document/same-line; codeAction offers formatting. Not IDE-complete. |
-| 9. Second target / IR | Host C path unchanged. | Host C path unchanged. | C99 streaming IR-listing tool replaces Python in native-test; seam gate now verifies unique phase markers before numeric comparisons. | **No executable second backend.** Register renaming preserves x86 ABI/layout assumptions. `test-emit-to-ir`, `test-native-ir-portable`, `test-native-emit-split`; NATIVE_IR.md. |
-| 10. Namespacing / aliases | Textual `use` splicing only. | Textual `use` splicing only. | Textual `use` splicing only. | **Not planned for the bootstrap dialect.** Keep explicit public-name prefixes. A sound alias/qualified-name feature needs module identity, import scopes and qualified symbol resolution; textual path renaming would be unsound and is intentionally not claimed. |
+| 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/checksum/name validation; thin shell transfer/staging. Fetch now actually records `sum=`; failed fetch cleans staging/preserves lock, existing pins refuse replacement. Cached install needs no INDEX; local/bare-relative/file copies need no curl/wget. | No native compilation claim for sxpkg. | Online remains opt-in. Local fixtures plus successful curl/wget-only and interrupted-transfer stubs test verification/tamper, name/index/lock preflight and cleanup without DNS. `sum=` is non-cryptographic; no signatures/provenance or concurrent/crash-proof transaction claim. `test-sxpkg-transfer-hardening`, `test-sxpkg-online-local`, `test-sxpkg-online-optin`; [scope/logs](SXPKG_ONLINE.md#transfer-hardening-and-deterministic-success-paths-2026-10-16). |
+| 8. LSP workspace scan | Not a seed-compiled tool claim. | `.sa` protocol/scanning + tool-local C directory bridge. workspace/symbol and lexical references search a bounded initialized local folder, with four open-buffer overlays; query-time refresh. | Not a native-AOT compiler claim; host C links the tool. | One root, 128 disk files/256 KiB each/4 MiB aggregate, depth/entry caps; no symlink traversal, watchers, semantic resolution or truncation notices. Rename remains open-only; signatureHelp same-document/same-line; codeAction formatting only. `test-lsp`/`test-lsp-robust` require framed C workspace probe. [LSP scope/logs](LSP.md#bounded-local-workspace-folder-index-2026-10-16). **Not IDE-complete.** |
+| 9. Second target / IR | Host C path unchanged. | Host C path unchanged. | x86-64 Linux ELF only. C99 listing adds optional strict record/nondecreasing-offset audit and source-offset correlation; native gate compares both modes deterministically. | **No executable second ISA.** Instruction-count preservation is not semantic losslessness: register widths collapse, x86 ABI/layout/fixups remain. No IR executor, aarch64 runtime/collector or cross-execution smoke test. `test-emit-to-ir`, `test-native-ir-portable`, `test-native-emit-split`; [NATIVE_IR.md](NATIVE_IR.md#strict-log-audit-and-source-offset-correlation-2026-10-16). |
+| 10. Namespacing / aliases | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | **Not planned for the bootstrap dialect. Documentation-only clarification.** Shared declaration tables, explicit public prefixes; no module identity/import scopes/qualified resolution or path-renaming aliases. Incidental ignored suffixes do not establish alias support; no new uniform diagnostic claim. Existing `test-use` and stdlib splice gates retained. [MODULES.md](MODULES.md). |
 
 ### Done / missing / refused
 
@@ -49,13 +56,14 @@ is not presented as new work in this PR.
   three backends (including Gen2 layout/literal/copy/index/iteration lowering);
   concrete named-struct `hold` identity checks on all three; native list-pointer
   GC tracing; and a hardened native emit-seam gate.
-* **Missing:** recursive generic-list/nested-generic layout and GC descriptors,
-  a real seed collector, full-language self-host, workspace indexing, and an
-  executable second native target.
+* **Missing/outside the tested subset:** recursive generic-list/nested-generic
+  layout and GC descriptors, a real seed collector, full-language self-host,
+  semantic/incremental workspace indexing, and an executable second native ISA.
 * **Refused by design:** generic `Box<list>` (despite concrete Gen2 fields),
-  `Box<Box<num>>`, unsupported full-language forms, and bootstrap-dialect
-  module aliases/namespaces. These fail explicitly rather than silently
-  generating incorrect code.
+  `Box<Box<num>>` and the tested unsupported full-language forms. These gates
+  require errors rather than wrong layout/code generation.
+* **Not planned:** bootstrap module aliases/namespaces. No implementation or
+  uniform new syntax-refusal diagnostic is claimed; see MODULES.md.
 
 The final four gate logs are the links in **Current verification** above; the
 last markers are `DOCTOR-OK`, `TRUE-SELFHOST-MIN-OK`, `GEN3-OK`, and

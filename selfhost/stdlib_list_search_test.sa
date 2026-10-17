@@ -1,0 +1,98 @@
+use "stdlib/list_algo.sa"
+make check_num(actual: num, expected: num) -> num {
+  when actual == expected {
+    give 1
+  }
+  show actual
+  show expected
+  give 0
+}
+make check_list(actual: list, expected: list) -> num {
+  when len(actual) != len(expected) {
+    give 0
+  }
+  hold i = 0
+  while i < len(actual) {
+    when actual[i] != expected[i] {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+hold empty = []
+hold one = [4]
+hold xs = [0 - 3, 1, 1, 1, 4, 8]
+hold ok = 1
+ok = ok * check_num(la_lower_bound(empty, 2), 0)
+ok = ok * check_num(la_upper_bound(empty, 2), 0)
+ok = ok * check_num(la_lower_bound(one, 4), 0)
+ok = ok * check_num(la_upper_bound(one, 4), 1)
+ok = ok * check_num(la_lower_bound(one, 5), 1)
+ok = ok * check_num(la_upper_bound(one, 3), 0)
+ok = ok * check_num(la_lower_bound(xs, 0 - 4), 0)
+ok = ok * check_num(la_lower_bound(xs, 1), 1)
+ok = ok * check_num(la_upper_bound(xs, 1), 4)
+ok = ok * check_num(la_lower_bound(xs, 2), 4)
+ok = ok * check_num(la_upper_bound(xs, 8), 6)
+ok = ok * check_num(la_lower_bound(xs, 9), 6)
+// Exhaustive small-domain cross-check against an independent linear oracle.
+hold query = 0 - 5
+while query < 11 {
+  hold below = 0
+  hold through = 0
+  for v in xs {
+    when v < query {
+      below = below + 1
+    }
+    when v <= query {
+      through = through + 1
+    }
+  }
+  ok = ok * check_num(la_lower_bound(xs, query), below)
+  ok = ok * check_num(la_upper_bound(xs, query), through)
+  query = query + 1
+}
+hold a = [0 - 2, 1, 1, 7]
+hold b = [0 - 3, 1, 4, 8]
+hold merged = la_merge_sorted(a, b)
+hold want = [0 - 3, 0 - 2, 1, 1, 1, 4, 7, 8]
+ok = ok * check_list(merged, want)
+hold copied = la_merge_sorted(a, empty)
+ok = ok * check_list(copied, a)
+hold copied_b = la_merge_sorted(empty, b)
+ok = ok * check_list(copied_b, b)
+hold nothing = la_merge_sorted(empty, empty)
+ok = ok * check_num(len(nothing), 0)
+hold self = la_merge_sorted(one, one)
+hold twice = [4, 4]
+ok = ok * check_list(self, twice)
+// Appending to results must not change input lists, even for empty merges.
+push(copied, 99)
+push(copied_b, 99)
+push(merged, 99)
+ok = ok * check_num(len(a), 4)
+ok = ok * check_num(len(b), 4)
+hold original = [1, 2, 3, 4]
+hold left = la_rotate(original, 1)
+hold right = la_rotate(original, 0 - 1)
+hold zero = la_rotate(original, 0)
+hold wrap = la_rotate(original, 9)
+hold negwrap = la_rotate(original, 0 - 9)
+hold left_want = [2, 3, 4, 1]
+hold right_want = [4, 1, 2, 3]
+ok = ok * check_list(left, left_want)
+ok = ok * check_list(wrap, left_want)
+ok = ok * check_list(right, right_want)
+ok = ok * check_list(negwrap, right_want)
+ok = ok * check_list(zero, original)
+hold rotated_empty = la_rotate(empty, 10)
+ok = ok * check_num(len(rotated_empty), 0)
+hold rotated_one = la_rotate(one, 0 - 3)
+ok = ok * check_list(rotated_one, one)
+push(zero, 9)
+push(left, 9)
+ok = ok * check_num(len(original), 4)
+ok = ok * check_num(original[0], 1)
+show ok
+show "list-search-done"

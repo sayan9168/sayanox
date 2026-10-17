@@ -1,0 +1,3 @@
+struct Size { bytes }
+hold size = Size { bytes: len("abc") + 1 }
+show size.bytes

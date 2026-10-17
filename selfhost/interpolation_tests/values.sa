@@ -1,0 +1,25 @@
+hold name = "Sayanox"
+hold number = -12.5
+hold empty = ""
+show "hello ${name}"
+show "${name}:${number}:${empty}!"
+hold rendered = "n=${number}"
+show rendered
+show "literal \${name} / quote=\"${name}\""
+show "slash=\\${name}"
+// "${missing}" is a comment, not an interpolation.
+show "plain $ sign and {brace}"
+make greet(name: str, n: num) -> str {
+  give "${name}#${n}"
+}
+show greet("user", 3)
+hold n = 0
+while n < 3 {
+  show "i=${n}"
+  hold n = n + 1
+}
+when "${name}" == "Sayanox" {
+  show "condition-ok"
+}
+hold _sx_interp = "collision"
+show "${_sx_interp}"

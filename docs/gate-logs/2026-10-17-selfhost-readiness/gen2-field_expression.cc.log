@@ -1,0 +1,17 @@
+selfhost/seed_tests/full-language-readiness/gen2-field_expression.c:1:2: error: #error sayanox-min: struct/list literal value must be a number, string, name, or nested struct
+    1 | #error sayanox-min: struct/list literal value must be a number, string, name, or nested struct
+      |  ^~~~~
+selfhost/seed_tests/full-language-readiness/gen2-field_expression.c:2:2: error: #error sayanox-min: struct literal must fill every field
+    2 | #error sayanox-min: struct literal must fill every field
+      |  ^~~~~
+selfhost/seed_tests/full-language-readiness/gen2-field_expression.c: In function '_sx_gc_program':
+selfhost/seed_tests/full-language-readiness/gen2-field_expression.c:205:23: error: 'len' undeclared (first use in this function); did you mean 'mblen'?
+  205 |   Size size = ((Size){len,,"abc",,,1.0});
+      |                       ^~~
+      |                       mblen
+selfhost/seed_tests/full-language-readiness/gen2-field_expression.c:205:23: note: each undeclared identifier is reported only once for each function it appears in
+selfhost/seed_tests/full-language-readiness/gen2-field_expression.c:205:27: error: expected expression before ',' token
+  205 |   Size size = ((Size){len,,"abc",,,1.0});
+      |                           ^
+selfhost/seed_tests/full-language-readiness/gen2-field_expression.c:205:27: warning: excess elements in struct initializer
+selfhost/seed_tests/full-language-readiness/gen2-field_expression.c:205:27: note: (near initialization for '(anonymous)')

@@ -1,0 +1,32 @@
+// Live compiler text utilities, not a feature-only demo.
+// The generic bound is used on every compiler substring scan.
+make sxminimum<T>(a: T, b: T) -> T {
+  when a < b {
+    give a
+  }
+  give b
+}
+make sxedigits(value: num) -> str {
+  hold text = ""
+  when value == 0 {
+    give "0"
+  }
+  while value > 0 {
+    hold digit = value % 10
+    text = concat(chr(48 + digit), text)
+    value = (value - digit) / 10
+  }
+  give text
+}
+// Typed inline-expression lowering. Records encode position, kind and C text;
+// only the code suffix may contain arbitrary quoted source characters.
+make sxeslice(text: str, begin: num, end: num) -> str {
+  hold value = ""
+  hold i = begin
+  hold stop = sxminimum(end, len(text))
+  while i < stop {
+    value = concat(value, chr(sx_index(text, i)))
+    i = i + 1
+  }
+  give value
+}

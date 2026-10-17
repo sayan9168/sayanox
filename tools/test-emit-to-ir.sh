@@ -23,3 +23,24 @@ if "$tool" "$dir/in" "$dir/in" > "$dir/msg" 2>&1; then echo '[FAIL] accepted ide
 printf 'bad\000input' > "$dir/nul"
 if "$tool" "$dir/nul" "$dir/out" > "$dir/msg" 2>&1; then echo '[FAIL] accepted binary log'; exit 1; fi
 printf '[OK] C99 IR translator: exact output, unknown lines/instructions, token boundaries, named calls, long lines, EOF and errors\n'
+
+# Optional audit mode adds byte-offset correlation but remains non-executable.
+printf '; audit\n000010  mov eax,rax\n000010  mystery r8b\n000020  call make rax' > "$dir/audit"
+printf '; portable IR listing (docs/NATIVE_IR.md) -- translated from an\n; SX_EMIT_LOG instruction list by tools/emit_to_ir.c. This is an\n; analysis format: no backend assembles or executes it.\n; audit\n; source-offset 000010 -> I0\nI0     COPY A,A\n; source-offset 000010 -> I1\nI1     MYSTERY R8\n; source-offset 000020 -> I2\nI2     CALL make rax\n' > "$dir/audit.want"
+"$tool" --strict --source-offsets "$dir/audit" "$dir/audit.ir"
+cmp "$dir/audit.want" "$dir/audit.ir"
+"$tool" --strict --source-offsets "$dir/audit" "$dir/audit-again.ir"
+cmp "$dir/audit.ir" "$dir/audit-again.ir"
+"$tool" --strict "$dir/long" "$dir/long-strict.ir"
+printf '000010  ret\n000009  ret\n' > "$dir/backwards"
+if "$tool" --strict "$dir/backwards" "$dir/backwards.ir" > "$dir/msg" 2>&1; then echo '[FAIL] strict accepted backwards offsets'; exit 1; fi
+grep -q 'line 2: instruction offsets go backwards' "$dir/msg"
+for record in 'changed log format' '000000  ' '00000g  ret'; do
+  printf '%s\n' "$record" > "$dir/bad-record"
+  if "$tool" --strict "$dir/bad-record" "$dir/bad-record.ir" > "$dir/msg" 2>&1; then echo '[FAIL] strict accepted malformed record'; exit 1; fi
+  grep -q 'line 1: malformed instruction record' "$dir/msg"
+done
+"$tool" "$dir/backwards" "$dir/backwards-default.ir"
+"$tool" -- "$dir/audit" "$dir/explicit-positional.ir"
+if "$tool" --strict "$dir/nul" "$dir/nul-strict.ir" > "$dir/msg" 2>&1; then echo '[FAIL] strict accepted binary log'; exit 1; fi
+printf '[OK] C99 IR audit: strict syntax/offset validation, source-offset correlation, duplicate offsets, unknown mnemonics, deterministic output; no executable backend\n'

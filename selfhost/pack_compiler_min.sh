@@ -21,6 +21,13 @@ rm -f "$SRC"/*.b64
 cp "$tmp"/chunks/*.b64 "$SRC"/
 ls "$SRC" | wc -l | xargs echo "blob parts:"
 
+# The live compiler now includes a source module; preserve its offline recovery
+# independently so the main bundle's concatenated parts remain one gzip stream.
+gzip -9 -n -c selfhost/modules/compiler_text.sa | base64 -w 0 > selfhost/modules/compiler_text.sa.gz.b64
+if ! cmp -s selfhost/modules/compiler_text.sa <(base64 -d selfhost/modules/compiler_text.sa.gz.b64 | gzip -d); then
+  echo '[FAIL] compiler module recovery round-trip'; exit 1
+fi
+echo '[OK] compiler module recovery round-trip'
 make restore-compiler
 if cmp -s selfhost/compiler_min.sa <(cat "$SRC"/*.b64 | tr -d '\n' | base64 -d | gzip -d); then
   echo "[OK] pack-compiler-min: round-trip matches selfhost/compiler_min.sa"

@@ -1,6 +1,11 @@
 # Generics: type parameters, monomorphised
 
-Status (2026-10-12): **generics with one or more type parameters are the
+Status (2026-10-16): function generics support num/str/list kinds; generic
+structs support **only scalar num/str type arguments**. Nested/struct/list
+struct arguments are a permanent limit of the current bootstrap dialect
+([contract below](#permanent-bootstrap-boundary-generic-structs-2026-10-16)).
+
+**Function generics with one or more type parameters are the
 supported and documented form.** `make twice<T>(a: T) -> T` and
 `make pair<A, B>(a: A, b: B) -> A` both compile; every type parameter is
 resolved at each call site from the argument that uses it, and the whole
@@ -86,13 +91,11 @@ recorded as soon as the nested call is queued.
 
 * gen2 and gen1_min implement this; both produce byte-identical C
   (`make test-generics` diffs the two outputs).
-* It is a full-language feature: seed-min and the pure-min dialect do not read
-  `make NAME<...>` at all and reject the program.
-* native compiles a generic over **numbers**: each type parameter is `num`, so
-  `make twice<T>(a: T) -> T` is one numeric function (`make test-native-generics`).
-  A call that passes a string or a list is refused with `generics are not in the
-  native subset for strings and lists`; a generic must be fully typed (every
-  parameter and `-> T`) and every parameter must be a type parameter, as on gen2.
+* Seed-min supports demand-driven num/str/list generic functions; see the
+  seed specialization engine below.
+* Native supports numeric, string and double-list function specializations,
+  checked by `test-native-generics`, `test-native-strgen` and
+  `test-native-listgen`. This does not extend generic struct arguments.
 
 ## Verified by
 
@@ -122,17 +125,18 @@ recorded as soon as the nested call is queued.
   `Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns`: the
   function-mangling suffixes), on all three backends, with `num` or `str` as a
   type argument. `Box<list>` is intentionally still refused even though
-  seed-min/native now support **concrete** list-valued struct fields: gen2 has
-  no corresponding list-field layout, and generic specialization must not
-  promise cross-backend parity it cannot deliver. `make test-generic-structs`
+  all three backends support **concrete** list-valued struct fields. Concrete
+  list pointers do not establish generic specialization/layout/tracing safety.
+  The bootstrap dialect permanently restricts generic struct arguments to
+  `num` and `str`; recursive and list arguments are outside its contract. `make test-generic-structs`
   pins the parity fixture and the five refusals; [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md)
   records the model and what is still missing.
 * Kinds are per *value kind*, not per declared type: `A` and `B` can both be
   `num` without any distinction being made.
 
-## Backend parity (decision, 2026-10-10)
+## Backend parity (updated 2026-10-16)
 
-Generics are a **gen2 feature**. Parity across backends means the same answer
+Function generics are supported on all three maintained backends. Parity across backends means the same answer
 on each: the same program is either compiled or refused, never miscompiled.
 
 | Backend | `make NAME<T>(...)` | Checked by |
@@ -266,3 +270,32 @@ the generic-list refusal. This is distinct from nested generic **function
 calls**, which have existing specialization tests. No recursive
 struct-layout/GC worklist was added; see TYPES_ROADMAP.md for what safe support
 requires.
+
+## Permanent bootstrap boundary: generic structs (2026-10-16)
+
+This is a language-subset contract, not a pending parser convenience. Generic
+struct type arguments are **only `num` or `str`**, on seed-min, Gen2 and native.
+`Box<Box<num>>`, `Box<Box<str>>`, `Box<list>` and a nested/list argument in
+any position of `Pair<A, B>` must fail, even after valid specializations have
+already been registered. Ordinary concrete nested structs and concrete list
+fields do not relax this boundary. Function generics have a different
+num/str/list kind contract; do not apply that table to struct arguments.
+
+No recursive type identity, dependency-ordered generic layout, cycle policy,
+recursive GC descriptor or generic list-field tracing support is added here.
+Changing this boundary would require a separately reviewed language expansion
+with those properties and positive runtime/GC tests, not merely accepting `<`.
+For current bootstrap code use separately named concrete structs/layouts.
+
+`test-generic-structs` retains positive layout/output parity and native GC
+coverage. Both it and `test-type-refusals` now require
+`test-generic-struct-limits`: seven negative cases including whitespace,
+line-comment separation and an invalid second argument, after valid numeric
+and string specializations. Seed/native must return nonzero with a diagnostic;
+Gen2 must emit a language `#error`, and a C compile of that output must fail.
+Gen2's diagnostic may still be the general `undefined name: Box`, not a precise
+recursive-layout error. Native's comment-separated case may report invalid
+type-argument syntax. Neither is claimed as targeted nested-type diagnostics.
+The test never accepts successful code generation as a refusal.
+
+Full gate logs: [2026-10-16 generic limits](gate-logs/2026-10-16-generic-limits/).

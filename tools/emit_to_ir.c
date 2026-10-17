@@ -58,20 +58,39 @@ static char *trim(char *s){
   while(n && isspace((unsigned char)s[n-1])) s[--n]=0;
   return s;
 }
-static void translate(FILE *out, char *line, size_t *number){
-  if(line[0]==';'){ fprintf(out,"; %s\n",trim(line+1)); return; }
+typedef struct {
+  size_t number, line;
+  unsigned long offset;
+  int seen, strict, source_offsets;
+} Translation;
+static int translate(FILE *out, char *line, Translation *state){
+  if(line[0]==';'){ fprintf(out,"; %s\n",trim(line+1)); return 1; }
   size_t len=strlen(line);
   int instruction=len>=8 && line[6]==' ' && line[7]==' ';
   for(size_t i=0;instruction && i<6;i++)
     if(!strchr("0123456789abcdef",line[i])) instruction=0;
   /* Empty instructions are malformed, not silently dropped (or a crash). */
   char *s=instruction?trim(line+8):line;
-  if(!instruction || !*s){ fprintf(out,"; UNTRANSLATED: %s\n",line); return; }
+  if(!instruction || !*s){
+    if(state->strict){
+      fprintf(stderr,"emit_to_ir: line %zu: malformed instruction record\n",state->line);
+      return 0;
+    }
+    fprintf(out,"; UNTRANSLATED: %s\n",line); return 1;
+  }
+  unsigned long offset=strtoul(line,NULL,16);
+  if(state->strict && state->seen && offset<state->offset){
+    fprintf(stderr,"emit_to_ir: line %zu: instruction offsets go backwards\n",state->line);
+    return 0;
+  }
+  state->offset=offset; state->seen=1;
+  if(state->source_offsets)
+    fprintf(out,"; source-offset %06lx -> I%zu\n",offset,state->number);
   char *end=s;
   while(*end && !isspace((unsigned char)*end)) end++;
   size_t n=(size_t)(end-s);
   char *ops=trim(end);
-  fprintf(out,"I%-5zu ",(*number)++);
+  fprintf(out,"I%-5zu ",state->number++);
   const char *m=LOOKUP(mnems,s,n);
   if(m) fputs(m,out);
   else for(size_t i=0;i<n;i++) fputc(toupper((unsigned char)s[i]),out);
@@ -82,23 +101,37 @@ static void translate(FILE *out, char *line, size_t *number){
     else operands(out,ops);
   }
   fputc('\n',out);
+  return 1;
 }
 int main(int argc, char **argv){
-  if(argc!=3){ fputs("usage: emit_to_ir <emit.log> <out.ir>\n",stderr); return 2; }
-  if(!strcmp(argv[1],argv[2])){ fputs("emit_to_ir: input and output must differ\n",stderr); return 2; }
-  FILE *in=fopen(argv[1],"rb");
-  if(!in){ perror(argv[1]); return 1; }
-  FILE *out=fopen(argv[2],"wb");
-  if(!out){ perror(argv[2]); fclose(in); return 1; }
+  Translation state={0};
+  int arg=1;
+  while(arg<argc){
+    if(!strcmp(argv[arg],"--strict")) state.strict=1;
+    else if(!strcmp(argv[arg],"--source-offsets")) state.source_offsets=1;
+    else if(!strcmp(argv[arg],"--")){ arg++; break; }
+    else break;
+    arg++;
+  }
+  if(argc-arg!=2){ fputs("usage: emit_to_ir [--strict] [--source-offsets] <emit.log> <out.ir>\n",stderr); return 2; }
+  if(!strcmp(argv[arg],argv[arg+1])){ fputs("emit_to_ir: input and output must differ\n",stderr); return 2; }
+  FILE *in=fopen(argv[arg],"rb");
+  if(!in){ perror(argv[arg]); return 1; }
+  FILE *out=fopen(argv[arg+1],"wb");
+  if(!out){ perror(argv[arg+1]); fclose(in); return 1; }
   fputs("; portable IR listing (docs/NATIVE_IR.md) -- translated from an\n"
         "; SX_EMIT_LOG instruction list by tools/emit_to_ir.c. This is an\n"
         "; analysis format: no backend assembles or executes it.\n",out);
-  size_t cap=256, len=0, number=0;
+  size_t cap=256, len=0;
   char *line=malloc(cap);
   int c, failed=!line;
   while(!failed && (c=fgetc(in))!=EOF){
     if(c==0){ fputs("emit_to_ir: NUL byte in text log\n",stderr); failed=1; break; }
-    if(c=='\n'){ line[len]=0; translate(out,line,&number); len=0; continue; }
+    if(c=='\n'){
+      line[len]=0; state.line++;
+      if(!translate(out,line,&state)) failed=1;
+      len=0; continue;
+    }
     if(len+1>=cap){
       if(cap>SIZE_MAX/2){ failed=1; break; }
       char *next=realloc(line,cap*2);
@@ -107,7 +140,7 @@ int main(int argc, char **argv){
     }
     line[len++]=(char)c;
   }
-  if(!failed && len){ line[len]=0; translate(out,line,&number); }
+  if(!failed && len){ line[len]=0; state.line++; if(!translate(out,line,&state)) failed=1; }
   failed=failed || ferror(in) || ferror(out);
   free(line);
   if(fclose(in)) failed=1;

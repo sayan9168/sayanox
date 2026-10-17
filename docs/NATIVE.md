@@ -7,12 +7,12 @@ Sayanox currently has a self-contained Linux x86-64 native AOT seed in `selfhost
 The path is:
 
 ```text
-.sa -> native parser / expression IR -> x86-64 machine-code emission -> ELF executable
+.sa -> native collection/kind passes -> recursive emit walk -> x86-64 Linux ELF
 ```
 
 The emitted program does not require a generated C file or a second compiler.
 
-The maintained native source (`selfhost/native_aot.c`, canonical and self-contained) covers the pure-min subset: `hold`, `show`, integer expressions (`+ - * / %`, comparisons, parentheses), `when` / `else` / `otherwise`, `while`, lists, strings with the `concat`/`len`/`chr`/`string_eq`/`sx_index` builtins, structs including nested ones and typed copies, `use "file.sa"` module splice (depth <= 8), and top-level `make`/`give` functions with recursion (up to 6 numeric params; `hold` inside a body is rejected with a clear error). Anything else is a hard error with a clear message — see [`docs/STATUS.md`](STATUS.md) for the exact boundaries. The files under `selfhost/native_src/` are historical fragments, not a split of the current source.
+The maintained native source (`selfhost/native_aot.c`, canonical and self-contained) covers the pure-min subset: `hold`, `show`, IEEE-double numeric expressions (`+ - * / %`, comparisons, parentheses), `when` / `else` / `otherwise`, `while`, lists, strings with the `concat`/`len`/`chr`/`string_eq`/`sx_index` builtins, structs including nested ones and typed copies, `use "file.sa"` module splice (depth <= 8), and top-level `make`/`give` functions with recursion (typed scalar/list functions and checked function-local holds; see the current tests). Anything else is a hard error with a clear message — see [`docs/STATUS.md`](STATUS.md) for the exact boundaries. The files under `selfhost/native_src/` are historical fragments, not a split of the current source.
 
 ## Cranelift status
 
@@ -56,9 +56,9 @@ provably does not touch it. `make test-native-emit-split` (part of
 | `EMIT-SEAM-BEGIN` … `EMIT-SEAM-END` | 1332 lines | the language-level emitter: the emit tree, statement/block/function emission, conditions and loops. No `e1(`/`e32(`/`e64(`, no `memcpy` into `code`, and no direct read of the code cursor `cn`; label positions come from `here()` |
 | phase 4, collector, ELF | below `EMIT-SEAM-END` | the runtime stubs (number formatting, list and string builtins, file and http syscalls), the mark & sweep collector and the ELF container — machine code by nature |
 
-A replacement backend supplies the encoder region, the phase-4 stubs, the
-collector and the container, and reuses the parser, the phases and the emit tree
-unchanged. It also inherits two contracts the emit tree assumes, which are the
+A replacement backend would need its own encoder, phase-4 stubs, collector
+and container, plus an ABI-aware adaptation of the emit walk; merely replacing
+byte encodings is insufficient. It inherits two contracts the emit tree assumes, which are the
 honest reason this is a seam and not a portable IR: the System V AMD64 calling
 convention (`rax`/`xmm0` returns, the frame that `sub_rsp_imm32_slot` opens and
 `leave_ret` closes) and the collector's block layout (`BH_HDR`, the `BK_*`
@@ -117,7 +117,7 @@ Expected output:
 42
 ```
 
-`make bootstrap-native` remains available as a convenience target.
+There is no `bootstrap-native` Makefile target; use `make native`.
 
 ## Unified driver
 
@@ -135,7 +135,8 @@ Expected output:
 
 ## Limitations
 
-The native backend is a subset compiler, not a replacement for the complete Stage-2 compiler. Native support must not be assumed for every `.sa` construct.
+The native backend is a subset compiler; there is no complete Stage-2 host
+in this repository to replace. Native support must not be assumed for every `.sa` construct.
 
 When native lowering cannot safely support a program, use:
 
@@ -156,3 +157,21 @@ clang -> native_aot -> .sa -> ELF
 ```
 
 User programs compiled by `native_aot` do not pass through clang.
+
+## Second-ISA decision and IR audit (2026-10-16)
+
+**No executable second ISA is implemented or claimed.** Native compilation and
+`native-test` remain x86-64 Linux only. The C fallback's host portability does
+not establish a second direct-to-ELF backend. There is no aarch64 execution
+smoke gate in this repository.
+
+The bounded improvement here is analysis tooling: the existing C99 streaming
+`emit_to_ir` translator now has strict record/offset auditing and optional
+source-byte-offset correlation comments. Its default output stays compatible.
+The native gate compares both audit runs, checks their correlation counts and
+compares the default listing with the audit listing minus added comments.
+This does not modify code emission or define executable IR. In particular,
+abstract registers collapse x86 widths and preserve ABI/layout assumptions.
+See [NATIVE_IR.md](NATIVE_IR.md#strict-log-audit-and-source-offset-correlation-2026-10-16)
+for precise acceptance rules, tests and non-claims. No interpreter or network
+dependency was added.

@@ -30,8 +30,10 @@ compiler for each program.
    diagnostics and seed-min/gen2/native behavioral tests.
 2. Broaden native AOT or document unsupported language constructs precisely;
    native output remains x86-64 Linux only.
-3. Add namespaced modules, a fuller standard library and improved ownership /
-   memory management when the language has the necessary abstractions.
+3. Grow the tested utility library and improve ownership/memory management
+   within the existing dialect. Namespaces/import aliases are **not planned**
+   for bootstrap; textual use and public-name prefixes remain the contract
+   ([MODULES.md](MODULES.md)).
 4. Extend package tooling beyond the current local registry and URL index.
 
 ## Not claimed

@@ -1,0 +1,2 @@
+use "selfhost/interpolation_tests/module.sa"
+show imported_greeting("loaded")

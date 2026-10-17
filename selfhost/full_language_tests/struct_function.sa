@@ -1,0 +1,7 @@
+struct Point { x }
+make copy_point(p: Point) -> Point {
+  give p
+}
+hold p = Point { x: 7 }
+hold q = copy_point(p)
+show q.x

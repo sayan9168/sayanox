@@ -8,14 +8,14 @@
 // Methods: initialize / initialized / shutdown / exit, textDocument didOpen,
 // didChange, didClose, publishDiagnostics, diagnostic, documentSymbol,
 // completion, hover, definition, references, workspace/symbol, formatting,
-// rename, signatureHelp, codeAction. Rename, references and workspace
-// symbols span the OPEN documents only -- there is no workspace scan (the
-// dialect has no directory-listing builtin), and docs/LSP.md says so.
+// rename, signatureHelp, codeAction. Workspace symbols/references also scan
+// a bounded local folder via the tool-only C directory bridge. Rename stays
+// open-buffer-only; see docs/LSP.md for the separate limits.
 //
 // The diagnostics are real checks over the document text: unknown statements,
 // brace and paren balance, unterminated strings, and `use` targets that do not
-// resolve next to the document.  Nothing here shells out; it is all Sayanox,
-// compiled by gen2 (the same binary that compiles user programs).
+// resolve next to the document. Nothing here shells out. Protocol/scanning
+// are Sayanox compiled by gen2; only filesystem enumeration uses C.
 
 // ---------------------------------------------------------------- scanning
 
@@ -2103,6 +2103,49 @@ make dir_of(uri: str) -> str {
 
 // --------------------------------------------------------------- main loop
 
+// Native directory enumeration is bound only in the LSP build by a checked
+// generated-C transformation. Compiling this file alone gives no disk index.
+make workspace_manifest(root: str) -> str {
+  give ""
+}
+
+make workspace_text(manifest: str, uri: str) -> str {
+  hold row = 0
+  hold total = count_lines(manifest)
+  while row + 1 < total {
+    hold candidate = line_text(manifest, row)
+    when string_eq(candidate, uri) {
+      hold path = line_text(manifest, row + 1)
+      give read_file(path)
+    }
+    row = row + 2
+  }
+  give ""
+}
+
+// Open buffers are scanned separately and override their on-disk copies.
+make workspace_scan(manifest: str, word: str, query: str, mode: num, incl: num, first: num, open0: str, open1: str, open2: str, open3: str) -> str {
+  hold out = ""
+  hold row = 0
+  hold total = count_lines(manifest)
+  while row + 1 < total {
+    hold candidate = line_text(manifest, row)
+    hold path = line_text(manifest, row + 1)
+    when string_eq(candidate, open0) == 0 && string_eq(candidate, open1) == 0 && string_eq(candidate, open2) == 0 && string_eq(candidate, open3) == 0 {
+      hold source = read_file(path)
+      hold part = ""
+      when mode == 0 {
+        part = sym_scan(source, candidate, query, first + len(out))
+      } otherwise {
+        part = refs_for(word, source, candidate, incl, first + len(out))
+      }
+      out = concat(out, part)
+    }
+    row = row + 2
+  }
+  give out
+}
+
 // ------------------------------------------------------- open documents
 // Four documents can be open at once. The dialect has no array of strings, so
 // the table is four parallel pairs of globals, and exactly three places touch
@@ -2122,6 +2165,8 @@ hold uri2 = ""
 hold txt2 = ""
 hold uri3 = ""
 hold txt3 = ""
+hold workspace_root = ""
+hold workspace_index = ""
 hold slotnext = 0
 hold placed = 0
 hold doc = ""
@@ -2209,6 +2254,10 @@ while running == 1 {
         doc = txt3
       }
       when string_eq(method, "initialize") {
+        workspace_root = str_field(body, "rootUri")
+        when len(workspace_root) == 0 {
+          workspace_root = str_field(body, "uri")
+        }
         res = concat("{\"capabilities\":", capabilities())
         res = concat(res, ",\"serverInfo\":{\"name\":\"sayanox-lsp\",\"version\":\"2.0\"}}")
         d = reply(idraw, res)
@@ -2360,11 +2409,15 @@ while running == 1 {
         w = word_at(doc, ln, ch)
         d = reply(idraw, definition_for(w, doc, docuri))
       }
-      // References, workspace symbols and formatting all span the open
-      // documents, and a helper cannot read the four-slot table, so the
+      // Open buffers overlay the bounded disk index. Helpers cannot capture
+      // the four-slot table, so the
       // cascade lives here: each slot is scanned in turn and the comma rule
       // inside the helper joins the items. len(res) is the running item count.
       when string_eq(method, "textDocument/references") {
+        workspace_index = workspace_manifest(workspace_root)
+        when string_eq(uri, uri0) == 0 && string_eq(uri, uri1) == 0 && string_eq(uri, uri2) == 0 && string_eq(uri, uri3) == 0 {
+          doc = workspace_text(workspace_index, uri)
+        }
         w = word_at(doc, ln, ch)
         incl = 1
         when find(body, "\"includeDeclaration\":false") >= 0 || find(body, "\"includeDeclaration\": false") >= 0 {
@@ -2377,10 +2430,13 @@ while running == 1 {
         res = res + part
         part = refs_for(w, txt3, uri3, incl, len(res))
         res = res + part
+        part = workspace_scan(workspace_index, w, "", 1, incl, len(res), uri0, uri1, uri2, uri3)
+        res = res + part
         res = concat("[", concat(res, "]"))
         d = reply(idraw, res)
       }
       when string_eq(method, "workspace/symbol") {
+        workspace_index = workspace_manifest(workspace_root)
         q = str_field(body, "query")
         res = sym_scan(txt0, uri0, q, 0)
         part = sym_scan(txt1, uri1, q, len(res))
@@ -2388,6 +2444,8 @@ while running == 1 {
         part = sym_scan(txt2, uri2, q, len(res))
         res = res + part
         part = sym_scan(txt3, uri3, q, len(res))
+        res = res + part
+        part = workspace_scan(workspace_index, "", q, 0, 1, len(res), uri0, uri1, uri2, uri3)
         res = res + part
         res = concat("[", concat(res, "]"))
         d = reply(idraw, res)

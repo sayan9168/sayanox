@@ -1,0 +1,17 @@
+make render(name: str, n: num) -> str {
+  hold value = "${name}:${n}"
+  hold i = 0
+  while i < 100 {
+    hold junk = "trash ${i}"
+    hold freed = gc()
+    hold i = i + 1
+  }
+  give value
+}
+hold name = concat("managed", "-name")
+hold value = render(name, 42)
+hold freed = gc()
+show value
+when gc_runs() > 100 {
+  show "gc-ok"
+}

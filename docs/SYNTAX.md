@@ -151,8 +151,9 @@ instead of being compiled wrongly.
 Seed-min, gen2 and native now specialize generic functions over num, str
 and double lists, including multiple type parameters. The `NAME__k` naming
 above is gen2's lowering; seed uses reserved `_sx_gen_` names and native
-emits machine-code instances. The compiler's pure-min source still does not
-need generic syntax to bootstrap. See `make test-generics`,
+emits machine-code instances. The compiler source now uses a live generic
+minimum helper and generic source-size struct during bootstrap, gated by
+`make gen3`; this is not exhaustive full-language support. See `make test-generics`,
 `make test-seed-generics` and [GENERICS.md](GENERICS.md) for limits and tests.
 
 ## Stage-2 forms and backend boundaries
@@ -232,12 +233,17 @@ hold status = write_file("data.txt", data)
 ```
 
 `use` is a textual source splice, not a namespaced or versioned import.
+Namespaces and import aliases are **not planned for the bootstrap dialect**;
+use explicit public-name prefixes. A path rename is not a symbol alias, and
+a dotted expression denotes a struct field, not a module member. See
+[MODULES.md](MODULES.md) for the contract and diagnostic limitations.
 
 ## Unsupported forms
 
 The maintained pure-min path does not claim support for every historical
-example. Namespaced exports, a full standard library and portable native AOT
-remain future work. Consult [`FEATURES.md`](FEATURES.md) and
+example. A full standard library and portable native AOT are not claimed. Namespaced
+exports/import aliases are outside the bootstrap plan, not promised future
+work. Consult [`FEATURES.md`](FEATURES.md) and
 [`BOOTSTRAP_ROADMAP.md`](BOOTSTRAP_ROADMAP.md).
 
 ### Typed signatures
@@ -573,3 +579,58 @@ or definite-assignment analysis: it does not prove that every binding is
 initialized on every control-flow path or change unsupported expression syntax.
 Targets: `test-name-resolution` (positive seed/gen2/native parity and gen2
 negative-reference regressions).
+
+
+### Concrete named struct function signatures (gen2/gen3 only)
+
+```sayanox
+struct Point { x }
+hold witness = Point { x: 0 }
+make copy_point(p: Point) -> Point {
+  give p
+}
+make coordinate(p: Point) -> num {
+  give p.x
+}
+hold p = Point { x: 7 }
+hold q: Point = copy_point(p)
+show coordinate(q)
+```
+
+These are real by-value signatures; argument and return identities must match,
+including through nested calls. Struct names may contain digits/underscores.
+String/list fields and nested literal layouts retain their existing types.
+The field-reading function needs a preceding layout witness literal because
+field inference remains source-ordered; a pure copy does not. Bind struct
+results directly before using their fields. Grouped struct-valued holds and
+unknown function types have explicit source refusals. Generic struct signature
+annotations and general struct reassignment/field-expression constructors are
+not added. Seed-min/native struct function signatures remain unsupported.
+`test-struct-functions` tests gen2/gen3 output, nominal mismatch diagnostics and
+GC retention at O0/O2; this is not full-language self-host support.
+
+
+### Identifier string interpolation (gen2/gen3 only)
+
+```sayanox
+hold name = "Sayanox"
+hold n = 3
+show "hello ${name}, count=${n}"
+show "literal \${name}"
+```
+
+Output is `hello Sayanox, count=3`, then the literal `literal ${name}`.
+A hole is one identifier, not a general expression, field selector or call.
+It must resolve to a string or number; numeric formatting is the existing
+`numstr` (`%g`) behavior. Bind an expression/field to a name first. Unknown
+names, list/struct values, malformed holes and more than 16 holes per literal
+have source diagnostics. Adjacent holes and escaped quotes/backslashes work;
+`\\${name}` means a literal backslash followed by the substituted value.
+The compiler skips interpolation in `//` comments and processes imported code
+after textual splicing. This does not add interpolation to `use` paths or
+otherwise broaden the expression grammar of struct field initializers.
+
+Generated C requires C11 (`_Generic` scalar dispatch); each hole identifier is
+evaluated once. `make test-string-interpolation` pins gen2/gen3 values, scope,
+escaping, imports, GC retention and refusals at O0/O2. Seed/native interpolation
+and arbitrary expression/format-specifier holes remain unsupported.

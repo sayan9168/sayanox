@@ -1,0 +1,5 @@
+make offset() -> num {
+  give 1
+}
+hold values = [7, 9]
+show values[offset()]

@@ -109,6 +109,35 @@ make line_val(line: str) -> str {
   give out
 }
 
+// Portable package path component, shared by wrapper preflight.
+make package_name_ok(value: str) -> num {
+  when len(value) == 0 || string_eq(value, "name") || string_eq(value, "version") {
+    give 0
+  }
+  hold i = 0
+  while i < len(value) {
+    hold c = sx_index(value, i)
+    hold good = 0
+    when c >= 48 && c <= 57 {
+      good = 1
+    }
+    when c >= 65 && c <= 90 {
+      good = 1
+    }
+    when c >= 97 && c <= 122 {
+      good = 1
+    }
+    when c == 45 || c == 95 {
+      good = 1
+    }
+    when good == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
 // check_pkg: "" when the registry copy of NAME matches the lock VERSION and its
 // pkg.meta sum; otherwise the reason it does not.
 make check_pkg(name: str, version: str) -> str {
@@ -546,26 +575,23 @@ when is_init == 1 {
   }
 }
 
+when string_eq(command, "check-name") {
+  hold handled = 1
+  when package_name_ok(name) {
+    show "sxpkg: package name ok"
+  } otherwise {
+    show "sxpkg: FAILED invalid or reserved package name (use letters, digits, hyphen, underscore)"
+  }
+}
+
 when is_add == 1 {
   hold handled = 1
   when argn < 3 {
     show "usage: sxpkg add <name> [version]"
   } otherwise {
-    hold name_len = len(name)
-    hold invalid = 0
-    when name_len == 0 {
-      hold invalid = 1
-    }
-    hold reserved = string_eq(name, "name")
-    when reserved == 1 {
-      hold invalid = 1
-    }
-    hold reserved = string_eq(name, "version")
-    when reserved == 1 {
-      hold invalid = 1
-    }
+    hold invalid = 1 - package_name_ok(name)
     when invalid == 1 {
-      show "sxpkg: invalid or reserved package name"
+      show "sxpkg: FAILED invalid or reserved package name"
     } otherwise {
       hold lock = read_file(lock_path)
       hold lock_len = len(lock)

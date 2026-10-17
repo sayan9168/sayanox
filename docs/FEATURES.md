@@ -28,13 +28,14 @@ the C-generating compilers.
 These are roadmap items or older experimental syntax, not promises of the
 current seed-min/gen2/native toolchain:
 
-- namespaced exports/imports and versioned module resolution;
-- namespaced exports/imports and versioned module resolution;
+- namespaced exports/import aliases: **not planned for the bootstrap dialect**
+  (textual use only; see [MODULES.md](MODULES.md));
+- versioned module identity/resolution beyond package exact pins;
 - additional string helpers such as `contains`, `starts_with`, `ends_with`,
   `repeat`, and `substr`;
 - a complete standard library and richer static types;
 - automatic heap ownership/collection across all backends (gen2-compiled
-  programs have a mark & sweep collector; native AOT still bump-allocates);
+  programs and native AOT have mark & sweep; neither seed has a collector);
 - portable native code generation and remote package publishing/hosting.
 
 Some of these appear in old examples or compiler-stage experiments. Their
