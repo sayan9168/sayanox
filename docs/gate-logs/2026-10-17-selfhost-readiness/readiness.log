@@ -1,0 +1,10 @@
+[BLOCKED] gen2 string_interpolation: output differs from required behavior (selfhost/seed_tests/full-language-readiness/gen2-string_interpolation.out)
+[BLOCKED] gen2 struct_function: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen2-struct_function.cc.log)
+[BLOCKED] gen2 field_expression: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen2-field_expression.cc.log)
+[BLOCKED] gen2 index_call: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen2-index_call.cc.log)
+[BLOCKED] gen3 string_interpolation: output differs from required behavior (selfhost/seed_tests/full-language-readiness/gen3-string_interpolation.out)
+[BLOCKED] gen3 struct_function: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen3-struct_function.cc.log)
+[BLOCKED] gen3 field_expression: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen3-field_expression.cc.log)
+[BLOCKED] gen3 index_call: generated C does not compile (selfhost/seed_tests/full-language-readiness/gen3-index_call.cc.log)
+[FAIL] full-language readiness: 8 unmet compiler/behavior checks; full-language self-host NOT proved
+make: *** [Makefile:4326: test-full-language-readiness] Error 1

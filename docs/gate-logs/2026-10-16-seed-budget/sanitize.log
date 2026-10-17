@@ -1,0 +1,22 @@
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/seed/sxc_seed_min selfhost/seed_borrow_test.sa > selfhost/seed_tests/borrow.c
+cc -O2 -o selfhost/seed_tests/borrow selfhost/seed_tests/borrow.c
+./selfhost/seed/sxc_seed_min selfhost/seed_borrow_stress.sa > selfhost/seed_tests/borrow-stress.c
+cc -O2 -o selfhost/seed_tests/borrow-stress selfhost/seed_tests/borrow-stress.c
+[OK] seed read-only borrowing stress fits a 128 MiB address-space cap
+./selfhost/gen2 selfhost/seed_borrow_stress.sa selfhost/seed_tests/borrow-stress-g2.c
+cc -O2 -o selfhost/seed_tests/borrow-stress-g2 selfhost/seed_tests/borrow-stress-g2.c
+./selfhost/native_aot selfhost/seed_borrow_stress.sa selfhost/seed_tests/borrow-stress-native
+cc -O2 -o selfhost/seed_tests/builder-registry selfhost/seed_builder_registry_test.c
+[OK] seed borrowing: read-only parameters, writable aliases/branches/binders/returns; 30000 reads of 16 KiB with live list (seed/gen2/native)
+./selfhost/seed/sxc_seed_min selfhost/seed_list_lifetime_stress.sa > selfhost/seed_tests/seed-list-budget.c
+cc -O2 -o selfhost/seed_tests/seed-list-budget selfhost/seed_tests/seed-list-budget.c
+[OK] seed list aliases survive 20000 pushes/returns and reallocations inside 32 MiB (finite workload, no list reclamation claim)
+cc -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie -o selfhost/seed_tests/builder-registry-asan selfhost/seed_builder_registry_test.c
+[OK] seed ASan/UBSan: aliases/returns/recursion, borrowed reads, list realloc/aliases, 32 registry reuse cycles; leak detection explicitly OFF

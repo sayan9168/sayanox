@@ -1,0 +1,25 @@
+// Two pointer fields fit the register-passed/returned aggregate ABI on x86-64.
+struct Packet { text, xs }
+hold empty = []
+hold witness = Packet { text: "witness", xs: empty }
+make build_packet() -> Packet {
+  hold text = concat("register", "-root")
+  hold xs = [31, 42]
+  hold packet = Packet { text: text, xs: xs }
+  give packet
+}
+make retain_packet(p: Packet, n: num) -> Packet {
+  while n > 0 {
+    hold trash = concat("temporary", "-allocation")
+    hold scratch = [0, 1, 2]
+    hold freed = gc()
+    n = n - 1
+  }
+  show p.text
+  show p.xs[1]
+  give p
+}
+hold packet = retain_packet(build_packet(), 40)
+hold freed = gc()
+show packet.text
+show packet.xs[0]

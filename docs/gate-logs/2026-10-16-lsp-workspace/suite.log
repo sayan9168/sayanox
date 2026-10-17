@@ -1,0 +1,19 @@
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+selfhost/gen2 tools/sayanox_lsp.sa tools/sayanox_lsp.c
+cc -O2 -Werror=implicit-function-declaration -o tools/sayanox_lsp tools/sayanox_lsp.c
+[OK] LSP Unicode and lifecycle: accented Latin, Bengali, emoji, UTF-16 positions, empty changes and close
+cc -O2 -Wall -Wextra -o selfhost/seed_tests/lsp-workspace-test tools/lsp_workspace_test.c
+./selfhost/seed_tests/lsp-workspace-test '/home/user/sayanox/tools/sayanox_lsp' '/home/user/sayanox/selfhost/seed_tests/lsp workspace'
+workspace unopened symbols and references; encoded paths; more than four disk files
+workspace open overlay deduplicates; close restores disk; disk edits/deletes refresh
+workspace first folder; symlinks/hidden/oversized skipped; invalid/nonlocal roots stay responsive
+workspace 128-file cap enforced
+[OK] LSP folder index: framed C client, unopened files, overlays, refresh, URI/path boundaries and file cap; no interpreter
+[OK] Sayanox LSP: live JSON-RPC sessions, real diagnostics, symbols, completion, hover, definition, references, workspace symbols, formatting
+[OK] Sayanox LSP robustness: JSON-RPC error responses for bad input

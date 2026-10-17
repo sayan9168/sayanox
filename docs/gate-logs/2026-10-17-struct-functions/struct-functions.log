@@ -1,0 +1,8 @@
+[OK] gen2 named struct functions: values (O0/O2)
+[OK] gen2 named struct functions: gc (O0/O2)
+[OK] gen2 named struct functions: gc_register (O0/O2)
+[OK] gen2 struct signature mismatches and bounded-form refusals (14 cases)
+[OK] gen3 named struct functions: values (O0/O2)
+[OK] gen3 named struct functions: gc (O0/O2)
+[OK] gen3 named struct functions: gc_register (O0/O2)
+[OK] gen3 struct signature mismatches and bounded-form refusals (14 cases)

@@ -11,6 +11,8 @@ SEED_MIN_BIN := selfhost/seed/sxc_seed_min
 NATIVE_SRC := selfhost/native_aot.c
 NATIVE_BIN := selfhost/native_aot
 MIN_SA   := selfhost/compiler_min.sa
+MIN_MODULE := selfhost/modules/compiler_text.sa
+MIN_MODULE_BLOB := selfhost/modules/compiler_text.sa.gz.b64
 GEN1_C   := selfhost/gen1.c
 GEN1     := selfhost/gen1
 GEN1_MIN_C := selfhost/gen1_min.c
@@ -141,7 +143,21 @@ pack-compiler:
 # produce the same file. base64, gzip, cat, tr and rm are therefore OPTIONAL
 # dependencies, needed only if the plain source goes missing.
 # ---------------------------------------------------------------------------
-restore-compiler:
+.PHONY: restore-compiler-module
+restore-compiler-module:
+	@if test -s $(MIN_MODULE) && grep -q -F 'make sxminimum<T>' $(MIN_MODULE) && grep -q -F 'make sxeslice(' $(MIN_MODULE); then \
+	  echo '[OK] compiler module (checked-in source verified; no decoder used)'; \
+	else \
+	  test -s $(MIN_MODULE_BLOB) || { echo 'FAIL: compiler text module and recovery blob missing'; exit 1; }; \
+	  base64 -d < $(MIN_MODULE_BLOB) > $(MIN_MODULE).gz.tmp && \
+	  gzip -d -c $(MIN_MODULE).gz.tmp > $(MIN_MODULE).tmp && \
+	  grep -q -F 'make sxminimum<T>' $(MIN_MODULE).tmp && \
+	  grep -q -F 'make sxeslice(' $(MIN_MODULE).tmp && \
+	  mv $(MIN_MODULE).tmp $(MIN_MODULE) || { rm -f $(MIN_MODULE).tmp $(MIN_MODULE).gz.tmp; echo 'FAIL: compiler module recovery'; exit 1; }; \
+	  rm -f $(MIN_MODULE).gz.tmp; echo '[OK] compiler module restored offline'; \
+	fi
+
+restore-compiler: restore-compiler-module
 	@if test -s $(MIN_SA) \
 	   && grep -q 'read_file' $(MIN_SA) \
 	   && grep -q 'arg_count' $(MIN_SA) \
@@ -210,9 +226,11 @@ sxpkg: $(SXPKG_BIN)
 tools: sxfmt sxpkg
 
 # The language server is a normal Sayanox program: gen2 compiles it, cc builds it.
-$(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa
+$(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa tools/lsp_workspace.h tools/lsp_workspace_bind.awk
 	$(GEN2) tools/sayanox_lsp.sa $(LSP_C)
-	$(CC) -O2 -o $(LSP_BIN) $(LSP_C)
+	@awk -f tools/lsp_workspace_bind.awk $(LSP_C) > $(LSP_C).bound || { rm -f $(LSP_C).bound; exit 1; }
+	@mv $(LSP_C).bound $(LSP_C)
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(LSP_BIN) $(LSP_C)
 
 lsp: $(LSP_BIN)
 	@echo "=== LSP-OK ==="
@@ -1635,8 +1653,8 @@ test-native-ir-log: $(NATIVE_BIN)
 # ---------------------------------------------------------------------------
 
 # test-native-ir-portable: the SX_EMIT_LOG instruction list translates to the
-# portable IR listing (tools/emit_to_ir.c, docs/NATIVE_IR.md) losslessly and
-# deterministically. The IR is an analysis format -- this target pins the
+# IR analysis listing (tools/emit_to_ir.c, docs/NATIVE_IR.md) with instruction
+# counts and deterministic source-offset correlation preserved. The IR is an analysis format -- this target pins the
 # translation, and deliberately does NOT claim a second backend or ISA.
 tools/emit_to_ir: tools/emit_to_ir.c
 	$(CC) -std=c99 -O2 -Wall -Wextra -o $@ $<
@@ -1653,7 +1671,13 @@ test-native-ir-portable: $(NATIVE_BIN) tools/emit_to_ir test-emit-to-ir
 	./tools/emit_to_ir $(TESTS)/irp.log $(TESTS)/irp.ir
 	./tools/emit_to_ir $(TESTS)/irp.log $(TESTS)/irp_again.ir
 	cmp $(TESTS)/irp.ir $(TESTS)/irp_again.ir
-	@# lossless: one IR instruction per logged instruction, none dropped
+	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log $(TESTS)/irp_audit.ir
+	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log $(TESTS)/irp_audit_again.ir
+	cmp $(TESTS)/irp_audit.ir $(TESTS)/irp_audit_again.ir
+	@grep -v '^; source-offset ' $(TESTS)/irp_audit.ir > $(TESTS)/irp_audit_base.ir
+	cmp $(TESTS)/irp.ir $(TESTS)/irp_audit_base.ir
+	@test $$(grep -c '^; source-offset ' $(TESTS)/irp_audit.ir) -eq $$(grep -cE '^I[0-9]+ ' $(TESTS)/irp.ir)
+	@# instruction-preserving: register widths/ISA semantics are NOT lossless
 	@test $$(grep -cE '^I[0-9]+ ' $(TESTS)/irp.ir) -eq $$(grep -cE '^[0-9a-f]{6}  ' $(TESTS)/irp.log) \
 	  || { echo "[FAIL] the IR dropped or invented an instruction"; exit 1; }
 	@# portable: no x86 register name survives translation
@@ -1663,7 +1687,7 @@ test-native-ir-portable: $(NATIVE_BIN) tools/emit_to_ir test-emit-to-ir
 	@for pat in 'FADD ' 'CALL make twice' 'CALL builtin shownum' '=== phase: make bodies' 'I2F ' 'FCMP '; do \
 	  grep -q -F "$$pat" $(TESTS)/irp.ir || { echo "[FAIL] the IR lost '$$pat'"; exit 1; }; \
 	done
-	@echo '[OK] portable IR: SX_EMIT_LOG translates losslessly and deterministically, x86 registers abstracted, call targets and phases preserved (analysis format only -- no second backend claimed)'
+	@echo '[OK] IR analysis listing: instruction counts/calls/phases preserved; strict record/offset audit and source correlation deterministic; register widths abstracted (no executable second ISA)'
 native-test: test-native-ir-portable
 
 .PHONY: test-sxpkg-online-optin
@@ -3017,9 +3041,13 @@ true-selfhost-min: seed-min-gen1
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
 
-# Retain the historical target name without claiming full Stage-2 support.
+# This name must never report success merely because the subset bootstraps.
+# Passing the readiness probes alone would still not be exhaustive coverage.
 true-selfhost-full: true-selfhost-min
-	@echo "[INFO] full Stage-2 remains unfinished; only the pure-min path is verified"
+	@$(MAKE) gen3
+	@$(MAKE) test-full-language-readiness
+	@echo '[FAIL] no reviewed exhaustive full-language acceptance specification; refusing a full-language claim'
+	@exit 1
 
 true-selfhost: true-selfhost-min
 selfhost: true-selfhost
@@ -3285,6 +3313,9 @@ gen3:
 	./$(GEN3) $(MIN_SA) selfhost/gen4.c >/dev/null
 	@if cmp -s $(GEN3_C) selfhost/gen4.c; then echo "[OK] byte-identical gen3 == gen4"; \
 	else echo "[FAIL] gen3/gen4 differ"; exit 1; fi
+	@CC='$(CC)' sh selfhost/test_compiler_source_features.sh
+	@CC='$(CC)' sh selfhost/test_struct_functions.sh
+	@CC='$(CC)' sh selfhost/test_string_interpolation.sh
 	@echo "=== GEN3-OK ==="
 
 subset: seed-bin
@@ -4118,7 +4149,8 @@ test-seed-borrow: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
 	@grep -q -F 's = sx_sb_from(s)' $(TESTS)/borrow.c
 	./$(SEED_MIN_BIN) selfhost/seed_borrow_stress.sa > $(TESTS)/borrow-stress.c
 	$(CC) -O2 -o $(TESTS)/borrow-stress $(TESTS)/borrow-stress.c
-	$(call assert-out,./$(TESTS)/borrow-stress,16481\n16384\n97\n3\n7)
+	$(call assert-out,sh -c 'ulimit -v 131072; ./$(TESTS)/borrow-stress',16481\n16384\n97\n3\n7)
+	@echo '[OK] seed read-only borrowing stress fits a 128 MiB address-space cap'
 	./$(GEN2) selfhost/seed_borrow_stress.sa $(TESTS)/borrow-stress-g2.c
 	$(CC) -O2 -o $(TESTS)/borrow-stress-g2 $(TESTS)/borrow-stress-g2.c
 	$(call assert-out,./$(TESTS)/borrow-stress-g2,16481\n16384\n97\n3\n7)
@@ -4215,3 +4247,90 @@ test-gen2-list-struct-fields: $(GEN2)
 
 test-stage2: test-list-struct-fields
 native-test: test-list-struct-fields
+
+# Finite list-alias budget, not a claim that dropped seed lists are reclaimed.
+.PHONY: test-seed-list-budget test-seed-sanitize test-seed-bootstrap-budget
+test-seed-list-budget: $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_list_lifetime_stress.sa > $(TESTS)/seed-list-budget.c
+	$(CC) -O2 -o $(TESTS)/seed-list-budget $(TESTS)/seed-list-budget.c
+	$(call assert-out,sh -c 'ulimit -v 32768; ./$(TESTS)/seed-list-budget',20001\n7\n0\n19999\n20001)
+	@echo '[OK] seed list aliases survive 20000 pushes/returns and reallocations inside 32 MiB (finite workload, no list reclamation claim)'
+
+test-seed-gc: test-seed-list-budget
+
+# Explicit opt-in: sanitizer runtime/compiler support is NOT a bootstrap dep.
+# LeakSanitizer is disabled because seed locals/temporaries/lists leak by design.
+# No address-space limit here: ASan reserves a large virtual shadow mapping.
+SANITIZER_FLAGS ?= -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie
+test-seed-sanitize: test-seed-borrow test-seed-list-budget
+	@set -e; for name in borrow borrow-stress seed-list-budget; do \
+	  $(CC) $(SANITIZER_FLAGS) -o $(TESTS)/$$name-asan $(TESTS)/$$name.c; \
+	  ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(TESTS)/$$name-asan > $(TESTS)/$$name-asan.out; \
+	  ./$(TESTS)/$$name > $(TESTS)/$$name-plain.out; \
+	  cmp $(TESTS)/$$name-plain.out $(TESTS)/$$name-asan.out; \
+	done
+	$(CC) $(SANITIZER_FLAGS) -o $(TESTS)/builder-registry-asan selfhost/seed_builder_registry_test.c
+	$(call assert-out,env ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(TESTS)/builder-registry-asan,registry-ok)
+	@echo '[OK] seed ASan/UBSan: aliases/returns/recursion, borrowed reads, list realloc/aliases, 32 registry reuse cycles; leak detection explicitly OFF'
+
+# Run AFTER true-selfhost. Recompile the real compiler under a finite process
+# address-space cap and compare with its uncapped gen2 C artifact.
+test-seed-bootstrap-budget:
+	@test -x $(GEN1_MIN) && test -s $(GEN2_C) || { echo 'run make true-selfhost first'; exit 1; }
+	@mkdir -p $(TESTS)
+	sh -c 'ulimit -v 1572864; exec ./$(GEN1_MIN) $(MIN_SA) $(TESTS)/budget-gen2.c' > $(TESTS)/budget-gen2.out
+	cmp $(GEN2_C) $(TESTS)/budget-gen2.c
+	@echo '[OK] no-GC gen1-min compiled the current compiler inside 1536 MiB address space; output identical to uncapped gen2 C (finite input budget only)'
+
+# Permanent contract of this bootstrap dialect, not a promise of recursive GC
+# layouts. Both public type gates must exercise the same negative matrix.
+.PHONY: test-generic-struct-limits
+test-generic-struct-limits: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
+	CC='$(CC)' sh selfhost/test_generic_struct_limits.sh
+
+test-generic-structs test-type-refusals: test-generic-struct-limits
+
+.PHONY: test-stdlib-list-search
+test-stdlib-list-search: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/stdlib_list_search_test.sa > $(TESTS)/stdlib_search_seed.c
+	./$(GEN2) selfhost/stdlib_list_search_test.sa $(TESTS)/stdlib_search_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/stdlib_search_seed $(TESTS)/stdlib_search_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/stdlib_search_gen2 $(TESTS)/stdlib_search_gen2.c
+	./$(NATIVE_BIN) selfhost/stdlib_list_search_test.sa $(TESTS)/stdlib_search_native
+	$(call assert-out,./$(TESTS)/stdlib_search_seed,1\nlist-search-done)
+	$(call assert-out,./$(TESTS)/stdlib_search_gen2,1\nlist-search-done)
+	$(call assert-out,./$(TESTS)/stdlib_search_native,1\nlist-search-done)
+	@echo '[OK] offline list search/merge/rotation: seed-min/gen2/native; empty/singleton/duplicates, linear bound oracle, negative/wrapped shifts, fresh result aliases'
+
+test-stdlib-modules: test-stdlib-list-search
+native-test: test-stdlib-list-search
+
+.PHONY: test-sxpkg-transfer-hardening
+test-sxpkg-transfer-hardening: sxpkg tools/sxpkg.sh
+	sh selfhost/test_sxpkg_transfer_hardening.sh
+
+test-sxpkg-online-optin: test-sxpkg-transfer-hardening
+
+.PHONY: test-lsp-workspace
+test-lsp-workspace: $(LSP_BIN) tools/lsp_workspace_test.c
+	@mkdir -p $(TESTS)
+	$(CC) -O2 -Wall -Wextra -o $(TESTS)/lsp-workspace-test tools/lsp_workspace_test.c
+	@rm -rf '$(TESTS)/lsp workspace' && mkdir -p '$(TESTS)/lsp workspace'
+	./$(TESTS)/lsp-workspace-test '$(CURDIR)/$(LSP_BIN)' '$(CURDIR)/$(TESTS)/lsp workspace'
+	@echo '[OK] LSP folder index: framed C client, unopened files, overlays, refresh, URI/path boundaries and file cap; no interpreter'
+
+test-lsp test-lsp-robust: test-lsp-workspace
+
+.PHONY: test-full-language-readiness
+test-full-language-readiness:
+	@CC='$(CC)' sh selfhost/test_full_language_readiness.sh
+
+.PHONY: test-struct-functions
+test-struct-functions:
+	@CC='$(CC)' sh selfhost/test_struct_functions.sh
+
+.PHONY: test-string-interpolation
+test-string-interpolation:
+	@CC='$(CC)' sh selfhost/test_string_interpolation.sh

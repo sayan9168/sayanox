@@ -1,0 +1,112 @@
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 tools/sxpkg.sa tools/sxpkg.c >/dev/null
+cc -O2 -o tools/sxpkg tools/sxpkg.c
+[OK] Sayanox local package-lock tool built from tools/sxpkg.sa
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init
+sxpkg: init ok
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cmp selfhost/seed_tests/sxpkg/sx.toml-want selfhost/seed_tests/sxpkg/sx.toml
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.1.0
+sxpkg: locked math 0.1.0
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.2.0
+sxpkg: locked math 0.2.0
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add strings
+sxpkg: locked strings 0.1.0
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg remove math
+sxpkg: removed math
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init >/dev/null
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+[OK] Sayanox package tool: init/add/update/list/remove
+cd selfhost/seed_tests/sxpkg-wrapper && sh ../../../tools/sxpkg.sh init >/dev/null
+cd selfhost/seed_tests/sxpkg-wrapper && sh ../../../tools/sxpkg.sh add local-pkg >/dev/null
+cd selfhost/seed_tests/sxpkg-wrapper && sh ../../../tools/sxpkg.sh remove local-pkg >/dev/null
+cd selfhost/seed_tests/sxpkg-wrapper && sh ../../../tools/sxpkg.sh seed >/dev/null
+cmp selfhost/seed_tests/sxpkg-wrapper/index-want selfhost/seed_tests/sxpkg-wrapper/.sayanox/registry/INDEX
+cd selfhost/seed_tests/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh init >/dev/null
+cmp selfhost/seed_tests/sxpkg-wrapper/project/lock-want selfhost/seed_tests/sxpkg-wrapper/project/sx.lock
+cd selfhost/seed_tests/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh add rooted 0.1.0 >/dev/null
+cmp selfhost/seed_tests/sxpkg-wrapper/project/lock-want selfhost/seed_tests/sxpkg-wrapper/project/sx.lock
+[OK] sxpkg.sh delegates local commands to Sayanox
+cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh init >/dev/null
+cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
+[OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once
+[OK] sxpkg online install (file:// registry): good accepted, tampered rejected and removed, missing leaves no partial file
+sh selfhost/test_sxpkg_transfer_hardening.sh
+[OK] sxpkg hardening: no-opt-in/name refusal before transport; interrupted fetch rollback; curl/wget mocked success; checksum verification/tamper; overwrite refusal; rooted relative local fetch; cached install without INDEX; no DNS
+rm -rf selfhost/seed_tests/sxpkg-optin && mkdir -p selfhost/seed_tests/sxpkg-optin/p selfhost/seed_tests/sxpkg-optin/mock
+W=/home/user/sayanox/tools/sxpkg.sh; P=/home/user/sayanox/selfhost/seed_tests/sxpkg-optin; \
+ cd $P/p && sh $W init >/dev/null && sh $W add strings 0.1.0 >/dev/null
+# ---- 1. sync refuses without an opt-in, and names the way to opt in ----
+W=/home/user/sayanox/tools/sxpkg.sh; P=/home/user/sayanox/selfhost/seed_tests/sxpkg-optin; \
+ if (cd $P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $W sync) >$P/no.out 2>$P/no.err; then \
+   echo "[FAIL] sxpkg sync reached for the network without an opt-in"; exit 1; fi; \
+ grep -q -F 'refusing to use the network without an explicit opt-in' $P/no.err \
+   || { echo "[FAIL] the refusal does not say why:"; cat $P/no.err; exit 1; }; \
+ grep -q -F 'SAYANOX_ONLINE=1' $P/no.err \
+   || { echo "[FAIL] the refusal does not name the opt-in"; exit 1; }; \
+ grep -q -F 'install-local' $P/no.err \
+   || { echo "[FAIL] the refusal does not offer the offline commands"; exit 1; }
+echo "[OK] sxpkg sync: refused with no opt-in, naming SAYANOX_ONLINE=1, --online and the offline commands"
+[OK] sxpkg sync: refused with no opt-in, naming SAYANOX_ONLINE=1, --online and the offline commands
+# A deterministic failing transport proves opt-in without DNS/network/curl.
+# ---- 2. SAYANOX_ONLINE=1 lifts it; failed transport falls back to local seed ----
+W=/home/user/sayanox/tools/sxpkg.sh; P=/home/user/sayanox/selfhost/seed_tests/sxpkg-optin; \
+ (cd $P/p && PATH="$P/mock:$PATH" SAYANOX_ONLINE=1 SAYANOX_REGISTRY=https://registry.invalid/r sh $W sync) >$P/yes.out 2>$P/yes.err \
+   || { echo "[FAIL] an opted-in sync exited nonzero:"; cat $P/yes.err; exit 1; }; \
+ if grep -q -F 'refusing to use the network' $P/yes.out $P/yes.err; then \
+   echo "[FAIL] SAYANOX_ONLINE=1 did not lift the refusal"; exit 1; fi; \
+ grep -q -F 'online sync failed; using local seed' $P/yes.out \
+   || { echo "[FAIL] the opted-in sync never reached the transfer step:"; cat $P/yes.out; exit 1; }
+# ---- 3. the --online flag form is the same permission ----
+W=/home/user/sayanox/tools/sxpkg.sh; P=/home/user/sayanox/selfhost/seed_tests/sxpkg-optin; \
+ (cd $P/p && PATH="$P/mock:$PATH" SAYANOX_REGISTRY=https://registry.invalid/r sh $W --online sync) >$P/flag.out 2>$P/flag.err \
+   || { echo "[FAIL] 'sxpkg --online sync' exited nonzero:"; cat $P/flag.err; exit 1; }; \
+ grep -q -F 'online sync failed; using local seed' $P/flag.out \
+   || { echo "[FAIL] 'sxpkg --online sync' did not attempt the transfer:"; cat $P/flag.out; exit 1; }
+echo "[OK] sxpkg opt-in: SAYANOX_ONLINE=1 and 'sxpkg --online <cmd>' both permit the transfer, which then fails in the test stub (no network) and falls back to the offline seed"
+[OK] sxpkg opt-in: SAYANOX_ONLINE=1 and 'sxpkg --online <cmd>' both permit the transfer, which then fails in the test stub (no network) and falls back to the offline seed
+# ---- 4. install with every locked package already local needs no opt-in ----
+W=/home/user/sayanox/tools/sxpkg.sh; P=/home/user/sayanox/selfhost/seed_tests/sxpkg-optin; \
+ rm -rf $P/p/.sayanox/registry/strings && cp -r registry/strings $P/p/.sayanox/registry/strings && \
+ (cd $P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $W install) >$P/off.out 2>$P/off.err \
+   || { echo "[FAIL] an all-local install demanded the network:"; cat $P/off.out $P/off.err; exit 1; }; \
+ grep -q -F 'verify ok' $P/off.out || { echo "[FAIL] the all-local install did not verify:"; cat $P/off.out; exit 1; }; \
+ if grep -q -F 'refusing to use the network' $P/off.out $P/off.err; then \
+   echo "[FAIL] an all-local install printed the network refusal"; exit 1; fi
+echo "[OK] sxpkg install: an all-local lock is copied and verified with no opt-in (offline stays first-class)"
+[OK] sxpkg install: an all-local lock is copied and verified with no opt-in (offline stays first-class)
+# ---- 5. install that must fetch refuses without an opt-in ----
+W=/home/user/sayanox/tools/sxpkg.sh; P=/home/user/sayanox/selfhost/seed_tests/sxpkg-optin; \
+ rm -rf $P/p/.sayanox/registry/strings; \
+ if (cd $P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $W install) >$P/need.out 2>$P/need.err; then \
+   echo "[FAIL] sxpkg install reached for the network without an opt-in"; exit 1; fi; \
+ grep -q -F 'refusing to use the network without an explicit opt-in' $P/need.err \
+   || { echo "[FAIL] the install refusal does not say why:"; cat $P/need.err; exit 1; }
+# ---- 6. fetch: a file:// URL is local, a remote URL is not ----
+W=/home/user/sayanox/tools/sxpkg.sh; P=/home/user/sayanox/selfhost/seed_tests/sxpkg-optin; \
+ printf 'show 1\n' > $P/one.sa; \
+ (cd $P/p && sh $W fetch file://$P/one.sa onepkg) >$P/f1.out 2>$P/f1.err \
+   || { echo "[FAIL] fetch of a file:// URL asked for an opt-in:"; cat $P/f1.err; exit 1; }; \
+ grep -q -F 'fetched onepkg' $P/f1.out || { echo "[FAIL] the file:// fetch did not complete:"; cat $P/f1.out; exit 1; }; \
+ if (cd $P/p && sh $W fetch https://registry.invalid/one.sa onepkg2) >$P/f2.out 2>$P/f2.err; then \
+   echo "[FAIL] sxpkg fetch reached for the network without an opt-in"; exit 1; fi; \
+ grep -q -F 'refusing to use the network without an explicit opt-in' $P/f2.err \
+   || { echo "[FAIL] the fetch refusal does not say why:"; cat $P/f2.err; exit 1; }
+# ---- 7. a refused transfer leaves nothing behind ----
+P=/home/user/sayanox/selfhost/seed_tests/sxpkg-optin; \
+ if [ -n "$(find $P -name '*.part' 2>/dev/null)" ]; then \
+   echo "[FAIL] a refused transfer left a .part file:"; find $P -name '*.part'; exit 1; fi; \
+ if [ -e $P/p/.sayanox/registry/onepkg2 ]; then \
+   echo "[FAIL] a refused fetch created a package directory"; exit 1; fi
+echo "[OK] sxpkg fetch: a file:// URL needs no opt-in, a remote URL refuses without one, and a refusal leaves no .part file and no package directory"
+[OK] sxpkg fetch: a file:// URL needs no opt-in, a remote URL refuses without one, and a refusal leaves no .part file and no package directory
+echo "[OK] sxpkg online is opt-in: sync/install/fetch refuse before any transfer, SAYANOX_ONLINE=1 and --online lift it, file:// and all-local paths never ask"
+[OK] sxpkg online is opt-in: sync/install/fetch refuse before any transfer, SAYANOX_ONLINE=1 and --online lift it, file:// and all-local paths never ask

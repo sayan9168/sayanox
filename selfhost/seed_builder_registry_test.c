@@ -31,6 +31,17 @@ int main(void){
     sx_sb_free(live[i]);
   }
   assert(sx_sb_count==0);
+  /* Repeated grow/release cycles must reuse the table, not grow its capacity
+   * with cumulative allocation count. No generated-program cleanup is faked. */
+  size_t buckets=sx_sb_nbucket;
+  for(int round=0;round<32;round++){
+    for(int i=0;i<4096;i++) live[i]=sx_sb_from("cycle");
+    assert(sx_sb_count==4096);
+    assert(sx_sb_nbucket==buckets);
+    for(int i=4095;i>=0;i--) sx_sb_free(live[i]);
+    assert(sx_sb_count==0);
+    assert(sx_sb_nbucket==buckets);
+  }
   assert(!sx_sb_is(NULL));
   sx_sb_free(NULL);
   puts("registry-ok");

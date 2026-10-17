@@ -1,6 +1,6 @@
 # Full-language self-host
 
-Updated 2026-10-15. The previous version of this file described a Stage-2 C
+Updated 2026-10-17. The previous version of this file described a Stage-2 C
 host, a `make stage2` target and a `bootstrap_full_language_selfhost.sh`
 one-command bootstrap. **None of those exist in this repository** — see
 "The Stage-2 host is not in this repository" below. Everything on this page is
@@ -15,13 +15,13 @@ make doctor && make true-selfhost && make gen3 && make native-test
 | Layer | Written in | What it does | Gate |
 |---|---|---|---|
 | `selfhost/seed/sxc_seed_min.c` | C, ~1,965 lines | compiles the pure-min dialect; it is the only hand-written compiler in the chain | `make true-selfhost` |
-| `selfhost/compiler_min.sa` → `selfhost/gen1_min.c` → `selfhost/gen2.c` | **Sayanox**, ~17,800 lines | the compiler source; seed-min compiles it into gen1_min, gen1_min compiles it into gen2 | `make true-selfhost` |
+| `selfhost/compiler_min.sa` → `selfhost/gen1_min.c` → `selfhost/gen2.c` | **Sayanox**, 18,713 lines including the live text module | the compiler source; seed-min compiles it into gen1_min, gen1_min compiles it into gen2 | `make true-selfhost` |
 | `gen2` → `gen3.c` → `gen4.c` | Sayanox (gen2's own output) | gen3 and gen4 must be **byte-identical** | `make gen3` |
 | `selfhost/native_aot.c` | C, ~4,000 lines | x86-64 Linux machine code for the native subset | `make native-test` |
 
 Every compiler above the C seed is written in Sayanox and compiled by the layer
 below it. That is the whole self-hosting claim, and `gen3 == gen4` checks it on
-every run. `make true-selfhost-min` runs ~55 feature gates against gen2 before
+every run. `make true-selfhost-min` runs feature gates against gen2 before
 that comparison.
 
 ## What the Sayanox-written compiler supports
@@ -89,24 +89,24 @@ language, not the full language.
 The full list, with the backend that differs, is in `docs/STATUS.md` under
 "Measured divergences".
 
-## Inventory: what the compiler source itself uses (2026-10-13)
+## Inventory: what the compiler source itself uses (2026-10-17)
 
-Item 1 of the 2026-10-13 STATUS asks which full-language ("Stage-2") features
-`compiler_min.sa` still does **not** use, and whether the source grows toward
-the full language or a parallel Stage-2 path appears. Measured with `grep` on
-the 17,825-line / 608,621-byte source as of this writing:
+Audited 2026-10-17: main source plus `selfhost/modules/compiler_text.sa`
+contain 18,713 lines, 644,798 bytes and 33 function definitions (one generic). Source non-use is not the
+same as backend inability: the table distinguishes features not yet adopted
+from features whose general forms remain unsupported.
 
 | Feature | Used in `compiler_min.sa`? | gen2 supports it for user programs? |
 |---|---|---|
 | typed `make` signatures (`-> num/str/list`) | yes — every definition | yes (`test-typed-sig`) |
 | `elif` / `else when` chains | yes (22 sites) | yes (`test-when`) |
 | `&&` / `||` / `and` / `or` / `not` conditions | yes (hundreds of sites) | yes (`test-cond-string`, `test-logic-value`) |
-| struct values and field chains | **no** — the compiler keeps its registries in delimited strings (`sdefs`, `gsdefs`) and lists, not struct values | yes (`test-struct2`, `test-nest`) |
-| generic structs / generic functions | **no** — `<T>` appears only inside scanner string literals; the compiler *implements* generics without *using* them | yes (`test-generic-structs`, `test-generics`) |
-| string interpolation `${...}` | **no** — 1,671 `concat(...)` calls instead | yes (`test-stdlib-interpolation`) |
-| struct-typed `hold` annotations | **no** — `hold` in the compiler is untyped or scalar-typed | yes on seed-min/gen2/native for concrete declarations (`test-type-refusals`) |
+| struct values and field chains | **yes, bounded adoption** — `CompilerPaths` stores input/output strings; fields drive reads, writes and include-directory scanning. Registry state remains delimited strings/lists; nested struct state is not adopted | yes (`test-struct2`, `test-nest`); actual compiler use pinned by `make gen3` |
+| generic structs / generic functions | **yes, bounded real use** — generic `sxminimum<T>` bounds substring scanning; `CompilerSourceSize<num>` supplies the scan length | source-artifact and live-module tests run by `make gen3`; general user forms retain `test-generic-structs` / `test-generics` |
+| string interpolation `${name}` | no; compiler implementation still uses explicit concat | **bounded gen2/gen3 support**, `test-string-interpolation`: string/number identifiers, escaping, imports and GC. The separate `test-stdlib-interpolation` remains a numeric lerp/smoothstep test, not string interpolation |
+| struct-typed `hold` annotations | **yes** — `hold compiler_paths: CompilerPaths = ...` | yes on seed-min/gen2/native for concrete declarations (`test-type-refusals`) |
 | list literals, `push`, `len`, index expressions | yes | yes |
-| `use "..."` modules | no top-level `use` directive in compiler_min.sa; it implements splicing for input programs | yes (`test-use`) |
+| `use "..."` modules | **yes** — the live compiler imports compiler_text.sa (digits, slicing and generic bound helper) | actual bootstrap plus `make gen3` module fixture; still textual splice, not namespaces |
 | file/process builtins (`read_file`, `write_file`, `run`) | yes | yes (`test-native-io` on native) |
 | `gc()` / mark & sweep | the generated runtime, not the compiler's own code | yes (`test-gc`) |
 
@@ -131,9 +131,10 @@ The later concrete-list-field work does change `compiler_min.sa`; `make doctor`
 continues to verify the checked-in recovery/source path before each bootstrap
 gate. No chunked/streaming compiler emission, complete seed GC, full-language
 rewrite, or parallel Stage-2 path was added. Full-language self-host remains
-**not claimed**. The source still does not use struct/generic values or
-struct-typed holds as listed above. Namespaced modules and nested generic
-layouts remain missing; Gen2 concrete list-field layout/lowering is now gated
+**not claimed**. The source now uses a concrete struct and a struct-typed hold,
+as well as a generic source-size struct and generic function from a live module.
+This is still source adoption, not exhaustive language coverage. Namespaced modules are outside the bootstrap plan; nested generic
+layouts remain refused; Gen2 concrete list-field layout/lowering is now gated
 by `test-gen2-list-struct-fields`.
 
 ## The Stage-2 host is not in this repository
@@ -160,7 +161,7 @@ does and does not claim.
 
 ## Editing the compiler source: two constraints found the hard way
 
-1. **All `make` definitions belong in the leading block** (lines 1-841 of
+1. **All `make` definitions belong in the leading block** (the leading function block of
    `compiler_min.sa`, before any top-level statement). A definition placed
    after ~2,400 lines of top-level code was not parsed as one: gen1_min emitted
    `raw_index(double source, double str, double from, double num, double n,
@@ -171,4 +172,162 @@ does and does not claim.
    source contains two copies of the expression parser; a first `hold` inside a
    block becomes a C local of *that* block, so the second copy then references
    an undeclared name. Shared scan variables live in the declaration block
-   around lines 1250-2000.
+   after the leading functions.
+
+## Gated source expansion after PR #28 (2026-10-16)
+
+`CompilerPaths` is a concrete two-string struct, initialized after command-line
+argument resolution. Its fields now supply `read_file`, `write_file`, and the
+input-directory scan used for relative includes. This replaces scalar reads in
+real compiler work, rather than adding a dead feature demonstration. The seed,
+gen2, gen3 and gen4 emit the concrete layout and field accesses.
+`selfhost/test_compiler_source_features.sh`, invoked by `make gen3`, asserts
+those properties in all four generated C artifacts and rechecks the fixed point.
+The packed recovery source was regenerated and round-trip checked.
+
+At this dated increment, remaining source-adoption work included generic
+structs/functions, module directives, nested struct state and list-valued
+struct state. The 2026-10-17 section supersedes that inventory and corrects
+the unsupported string-interpolation claim. Existing
+list/scalar/string code remains dominant. Remaining capability gaps include
+nested generic layouts, generic list-field specialization, namespaced modules,
+and the explicit refusals above. There is no exhaustive full-language compiler
+source or full-language acceptance gate; **full-language self-host is not
+claimed**. This increment does not change those limits or add a Stage-2 host.
+
+No new peak-RSS reduction is claimed: no comparative memory measurement was
+made for this change. The historical ~82% result above concerns the earlier
+seed allocation work, not this source expansion.
+
+Actual stdout/stderr logs are checked in under
+[`gate-logs/2026-10-16-source-structs/`](gate-logs/2026-10-16-source-structs/):
+
+* `doctor.log`: `DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)`
+* `true-selfhost.log`: `=== TRUE-SELFHOST-MIN-OK ===`
+* `gen3.log`: `[OK] byte-identical gen3 == gen4`, compiler-source struct assertion, `=== GEN3-OK ===`
+* `native-test.log`: `=== NATIVE-TEST-OK ===`
+* `pack.log`: `[OK] pack-compiler-min: round-trip matches selfhost/compiler_min.sa`
+
+The four requested gates ran in order with `&&`, all exiting zero. `make gen3`
+was then rerun successfully after adding the artifact assertion. No Python was
+used to edit, pack, build, or test this increment.
+
+## Full-language completion attempt and measured blockers (2026-10-17)
+
+**Not completed; no full-language claim.** The compiler now actually uses a
+source module, generic function and generic struct, not just a separate feature
+demo. `compiler_text.sa` owns the existing digit/slice functions and a generic
+minimum used to bound every substring scan. `CompilerSourceSize<num>` supplies
+the byte count used by compiler scans. Concrete typed path state is retained.
+Main/module recovery blobs are regenerated separately, and deleting/restoring
+the module was tested byte for byte without a network or interpreter.
+
+`make gen3` now checks generic code/layout/field uses in actual bootstrap C and
+has gen1-min/gen2/gen3 compile and run the **live source module** fixture with
+strict C pointer/prototype checks and exact output. Gen3/gen4 remain identical.
+This proves expanded source adoption, not full-language coverage.
+
+The earlier `true-selfhost-full` target returned success for a subset build and
+merely printed that full support was unfinished. It now **fails closed**:
+subset tests and fixed point are necessary but insufficient; readiness checks
+must pass, and a reviewed exhaustive acceptance specification is still missing.
+The four established required gates do not invoke this intentionally failing
+claim gate.
+
+`make test-full-language-readiness` independently runs concrete closure probes
+on gen2 **and gen3**. Actual results for this source:
+
+| Proposed broader-language behavior | gen2 | gen3 |
+|---|---|---|
+| `show "hello ${name}"` substitutes a string variable | **passes**, identifier-only string/number holes; see below | same |
+| named struct function argument and return | **passes**, bounded concrete named types; see below | same |
+| `Size { bytes: len("abc") + 1 }` | source refusal / generated C fails compilation | same |
+| `values[offset()]` with a numeric function | source refusal / generated C fails compilation | same |
+
+These are **proposed closure requirements**, not retroactive promises of the
+current bootstrap dialect. They are not an exhaustive language specification.
+Permanently excluded module aliases/namespaces and nested/list generic
+arguments are not silently declared supported. Even all four probes passing
+would require a complete reviewed language contract before any full claim.
+Readiness failures are expected and are not counted as successful coverage.
+
+Initial logs: [2026-10-17 self-host readiness](gate-logs/2026-10-17-selfhost-readiness/)
+record eight unmet checks before the struct-function implementation. The
+[struct-function pass](gate-logs/2026-10-17-struct-functions/) reduced that to six.
+Current logs: [string interpolation](gate-logs/2026-10-17-string-interpolation/).
+The four hard gates passed again in order; current `readiness.log` still fails
+with **four** unmet checks (two behaviors on two compilers). It is not a green
+full-language gate.
+No new peak-memory or complete-language claim is made.
+
+
+## Concrete struct function types (bounded, 2026-10-17)
+
+The Sayanox-written C emitter (gen2/gen3) now uses real by-value C struct
+parameters, prototypes and returns. Its signature codec preserves the complete
+concrete name (`uName;` per struct parameter, rather than one scalar character).
+Function-local binding tables retain that same identity. Same-shaped structs
+with different names are not interchangeable. Calls, nested calls, arity and
+`give` are checked; unknown signature types no longer silently become `double`.
+This is **not** an identity-function inlining workaround.
+
+`make test-struct-functions` runs on both gen2 and gen3 and is also invoked by
+`make gen3`. It checks multi-parameter selection, numeric field returns and
+nested calls; scalar/wrong-name arguments and returns; arity; arithmetic on
+struct results; unknown types; and explicit refusals of bounded unsupported
+forms. GC fixtures exercise both a two-pointer register aggregate and a larger
+nested aggregate across parameter passing, function return and repeated forced
+collections, with string and numeric-list data used afterwards at `-O0` and
+`-O2`. These are retention checks, not a new memory-improvement measurement.
+
+Bounds remain important:
+
+* Concrete named types only, not generic struct function annotations.
+* Bind a struct literal or function result to a name before further use.
+  Grouped struct-valued holds are explicitly refused; general expression-valued
+  struct construction/fields have not been added.
+* Field kinds are still inferred from literals in source order. A field-reading
+  function needs a layout witness literal **before** its definition. The simple
+  identity-copy readiness probe does not need a witness before the function.
+  Unresolved field reads in this new checked path are source errors.
+* Existing nested-literal initialization rules still apply; this change does
+  not promise arbitrary struct reassignment or constructors.
+* Seed-min and native struct **function signatures are not implemented by this
+  pass**. Their scalar/list signatures and existing struct-variable support are
+  unchanged. The compiler source itself does not adopt struct-typed functions,
+  so the seed bootstrap contract is not widened.
+
+Expression-valued struct fields, numeric calls in indexes and a reviewed
+exhaustive language specification remain open. Interpolation is now supported
+within the bounds below. Full-language
+self-host is still **not complete**.
+
+
+## Identifier string interpolation (bounded, 2026-10-17)
+
+The Sayanox-written C backend (gen2/gen3) expands `"hello ${name}"` and
+`"count=${n}"`. A hole must be a single identifier resolving to a string or
+number in the current scope. Numbers use the existing `numstr`/`%g` formatting.
+There are at most **16 holes per string literal**. Multiple/adjacent holes,
+empty strings, quotes/backslashes, numeric loop updates and typed string
+returns are tested. A single escaped dollar (`\${name}` in source) leaves the
+literal `${name}` text; `\\${name}` emits a backslash then substitutes `name`.
+`//` comments are not interpolated. Textual imports are spliced before expansion.
+
+Expansion is implemented in `.sa`, using a collision-free private helper name,
+existing concat lowering and checked scalar signatures. Generated C uses C11
+`_Generic` for string/number dispatch and evaluates each identifier once.
+Holes cannot contain calls or arbitrary expressions, so this does not introduce
+an unspecified side-effect ordering contract. Unknown/out-of-scope names,
+list/struct values, malformed holes, expression/call/field holes and a 17th
+hole are refused with generated source diagnostics, not merely C type errors.
+Bind a field or expression to a string/number name before interpolating it.
+
+`make test-string-interpolation` runs both compilers at O0/O2 with C11 type
+checks, output comparisons, import and struct-function integration, escaped-only
+strings, forced-GC retention, the 16-hole boundary and ten refusal cases. It is
+also run by `make gen3`. This does not add general expression-valued struct
+fields, string lists, interpolated `use` paths or a format-specifier language.
+Seed-min/native interpolation is **not implemented** in this pass. The compiler
+source itself still uses concat rather than interpolation, preserving the seed
+bootstrap dialect. No full-language or new memory-efficiency claim is made.

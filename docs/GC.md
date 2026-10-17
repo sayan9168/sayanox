@@ -290,3 +290,50 @@ CI runs these as part of `make test`. No GC feature changes the pure
 * No heap-threshold tuning knob: gen2's 8 MiB first-collection threshold is a
   constant in the emitted runtime, which is why it needs more address space
   than native for the same churn.
+
+### Finite no-GC bootstrap budget and repeatable sanitizers (2026-10-16)
+
+This increment deliberately keeps the seed runtime unchanged: no RC, freelist,
+collector, implicit list release, or new ownership convention. The bootstrap
+root remains seed-min. Gen2 and native retain their existing mark/sweep.
+Stronger executable evidence is available instead:
+
+* `make test-seed-borrow` now runs the 30,000-read / 16 KiB source fixture
+  under a **128 MiB address-space cap**, checking all output and the retained
+  list. The shared gen2/native output checks remain.
+* `make test-seed-gc` now includes `test-seed-list-budget`: **20,000 pushes**
+  through a list parameter/return, with a second live alias, under **32 MiB**.
+  It verifies length, first value, appended endpoints and alias identity through
+  multiple reallocations. It allocates one growing list, **not** 20,000 dropped
+  lists; this is not evidence of list reclamation.
+* The emitted-runtime registry probe now repeats **32 cycles of 4,096 live
+  builders**. Each cycle asserts zero remaining registered builders after
+  explicit releases and unchanged bucket capacity. This tests explicit release
+  and table reuse; it does not add generated cleanup of locals or temporaries.
+* Optional `make test-seed-sanitize` compiles the actual seed-emitted borrow,
+  read-stress and list-budget C plus the emitted-runtime registry harness with
+  ASan/UBSan. It fails on sanitizer errors and compares program stdout to the
+  ordinary builds. **Leak detection is explicitly disabled**; it is not a
+  leak-free claim or an audit of the seed compiler's own C implementation.
+  Sanitizer support is not required by the four bootstrap gates. The default
+  flags use non-PIE executables; `SANITIZER_FLAGS` is overridable. No virtual
+  address-space cap is applied to ASan's shadow mappings.
+* After `make true-selfhost`, optional `make test-seed-bootstrap-budget`
+  reruns the **real no-GC gen1-min compiling the current compiler source**
+  under **1,536 MiB virtual address space**, then compares its output byte for
+  byte with the uncapped gen2 C. It passed on this Linux sandbox. This is a
+  fixed-input process budget, not a measured peak RSS or a bound for arbitrary
+  source sizes/programs. Cap recipes use the existing Linux `ulimit -v` model.
+
+The intentional operating model is a finite, short-lived bootstrap process;
+process exit returns unreleased allocations to the OS. Dropped lists, unused
+results, temporaries and some locals still accumulate. The legacy full seed
+still has no effective collection path. Do not use either as a long-running
+bounded-heap runtime on the strength of these tests.
+
+All four required gates passed in order (`doctor`, `true-selfhost`, `gen3`,
+`native-test`), including byte-identical gen3/gen4. Actual combined stdout/stderr:
+[`2026-10-16 seed budget logs`](gate-logs/2026-10-16-seed-budget/).
+`sanitize.log` and `bootstrap-budget.log` record the optional evidence. The new
+recipes use C, make and shell/utilities only; no interpreter was added to the
+bootstrap path. Full-language self-host is still not claimed.

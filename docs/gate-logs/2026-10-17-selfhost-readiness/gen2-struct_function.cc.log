@@ -1,0 +1,12 @@
+selfhost/seed_tests/full-language-readiness/gen2-struct_function.c: In function '_sx_gc_program':
+selfhost/seed_tests/full-language-readiness/gen2-struct_function.c:209:25: error: incompatible type for argument 1 of 'copy_point'
+  209 |   double q = copy_point(p);
+      |                         ^
+      |                         |
+      |                         Point
+selfhost/seed_tests/full-language-readiness/gen2-struct_function.c:194:33: note: expected 'double' but argument is of type 'Point'
+  194 | static double copy_point(double p) {
+      |                          ~~~~~~~^
+selfhost/seed_tests/full-language-readiness/gen2-struct_function.c:210:27: error: request for member 'x' in something not a structure or union
+  210 |   printf("%g\n", (double)q.x);
+      |                           ^

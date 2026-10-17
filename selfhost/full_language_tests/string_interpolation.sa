@@ -1,0 +1,2 @@
+hold name = "Sayanox"
+show "hello ${name}"

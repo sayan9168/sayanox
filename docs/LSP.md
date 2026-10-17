@@ -1,6 +1,7 @@
 # Sayanox LSP
 
-A language server for `.sa` files, written in Sayanox and compiled by `gen2`.
+A language server for `.sa` files: protocol/scanning in Sayanox compiled by
+`gen2`, with a small in-tree POSIX C filesystem bridge for folder enumeration.
 There is no Node or Python runtime in the path: the server is a native binary
 that speaks JSON-RPC 2.0 with `Content-Length` framing on stdin/stdout.
 
@@ -25,8 +26,8 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 | `textDocument/completion` | keywords and the builtin list |
 | `textDocument/hover` | builtin documentation, a `make` signature, or the variable's declaration |
 | `textDocument/definition` | jumps to the `make` / `hold` / `struct` line of the word under the cursor |
-| `textDocument/references` | every whole-word occurrence of the word under the cursor, across **all open documents**, as `Location[]` with UTF-16 columns that cover the whole word; `context.includeDeclaration: false` leaves out the `make` / `hold` / `struct` line; a position that is not on a word answers `[]` |
-| `workspace/symbol` | the symbols of the open documents, filtered by `query` as a case-insensitive substring (empty query = every symbol). A file that was never opened cannot be found: the dialect has no directory-listing builtin, so there is no workspace scan |
+| `textDocument/references` | every whole-word occurrence of the word under the cursor, across **open documents plus eligible workspace disk files**, as `Location[]` with UTF-16 columns that cover the whole word; `context.includeDeclaration: false` leaves out the `make` / `hold` / `struct` line; a position that is not on a word answers `[]` |
+| `workspace/symbol` | symbols from open buffers plus a bounded scan of the initialized local folder; case-insensitive substring query. Open buffers override disk copies; queries refresh the disk snapshot. See limits below |
 | `textDocument/formatting` | the `tools/sxfmt.sa` rule set over the protocol: one whole-buffer `TextEdit`, or `[]` when the document is already formatted |
 | `textDocument/rename` | a `WorkspaceEdit` renaming the word under the cursor in **every open document** (declaration included); the new name must be an identifier, otherwise `null` |
 | `textDocument/signatureHelp` | the declaration of the innermost call enclosing the cursor **on the same line, in the same document**, with its parameter list and the argument index the cursor is in; `null` when no declaration is found |
@@ -87,7 +88,7 @@ vim.api.nvim_create_autocmd("FileType", {
 
 ## How it is built and tested
 
-* `tools/sayanox_lsp.sa` is the whole server: a JSON reader (string escapes,
+* `tools/sayanox_lsp.sa` implements the protocol/scanning: a JSON reader (string escapes,
   `\uXXXX`), a JSON writer with escaping, the document scanner, the diagnostic
   pass, symbols, completion, hover, definition, references, the formatter and
   the framing loop.
@@ -130,9 +131,9 @@ each reader answers from the buffer the client asked about.
   opened again. Four is a documented cap, not a claim about editor sessions: a
   window with more than four Sayanox buffers will see the oldest go quiet, and
   re-focusing one re-opens it.
-* There is still no workspace index: `workspace/symbol` is not implemented, and
-  `use "x.sa"` resolution reads from the directory of the URI being served
-  (`dir_of`), which is now per document rather than per session.
+* Historical boundary: this originally had no disk index. The 2026-10-16
+  folder increment below supersedes that limitation for workspace symbols
+  and references only. `use` resolution still uses the served URI directory.
 
 `tools/sayanox-lsp-probe.sh` drives three sessions and `make test-lsp` asserts
 all eighteen lines: two documents open at once with the first still served after
@@ -211,7 +212,7 @@ difference between "find references" and "find references including the
 definition" in an editor. Both spellings of the flag are recognised
 (`"includeDeclaration":false` and `"includeDeclaration": false`).
 
-The request spans the open documents: a helper cannot read the four-slot table
+The open-buffer part of the request scans all four slots: a helper cannot read the four-slot table
 (a function cannot capture globals in this dialect), so the dispatch site calls
 `refs_for` once per slot and concatenates. The comma rule lives in the helper —
 `first` is the number of items the caller already has, and `len(res)` is exactly
@@ -227,7 +228,7 @@ case-insensitive substring (the new `lower` helper is ASCII-only, which is all
 a symbol name can be). The dispatch site scans the four slots the same way
 references does.
 
-Rename inherits the references limit exactly: it edits the **open**
+Rename retains the old open-buffer limit: it edits the **open**
 documents only, so an occurrence in a file nobody opened is not renamed.
 Signature help is narrower still: the declaration must be in the **same**
 document and the call must enclose the cursor on the **same line** (a call
@@ -235,10 +236,9 @@ that spans lines, or a declaration in another open document, answers
 `null`). The one code action is formatting; there are no quick-fixes for the
 SX1001–SX1005 diagnostics yet.
 
-The honest limit: this is a symbol search over the **open** documents. The
-dialect has no directory-listing builtin and the server does not spawn a
-process, so there is no way to enumerate a workspace and no way to answer for a
-file nobody opened. `docs/STATUS.md` keeps that as a not-claimed row.
+Historical boundary, superseded for symbols/references by the 2026-10-16
+folder snapshot below: the original implementation searched open documents
+only. Rename still has that limit; no semantic workspace resolution is claimed.
 
 ### `textDocument/formatting`
 
@@ -261,3 +261,93 @@ the formatter program (`hold x = 1  ` with trailing spaces, a `}` and a `//`
 inside a string literal, a nested block) and asserts the indentation, the
 stripped trailing whitespace and the whole-buffer range, which is what makes
 "the LSP formats like `sxfmt`" a checked claim rather than a comment.
+
+## Bounded local workspace folder index (2026-10-16)
+
+The built server now finds declarations and references in `.sa` files that
+were **never opened**, including subdirectories and more than four disk files.
+This is an on-demand filesystem snapshot index, not a persistent/incremental
+symbol database. Each `workspace/symbol` or `textDocument/references` refreshes
+the manifest and reads eligible disk files. No shell command or external
+indexing service runs.
+
+### Root, overlay and refresh behavior
+
+* `initialize.params.rootUri` selects one local folder. If absent/null/empty,
+  the first `workspaceFolders` URI is used. Only `file:///...` and
+  `file://localhost/...` are accepted; percent escapes are decoded and the
+  root is canonicalized with `realpath`. Invalid escapes, encoded NUL,
+  nonexistent roots and nonlocal/HTTP roots give an empty disk index, without
+  breaking later requests. No root means the prior open-buffer behavior.
+* `workspace/symbol` merges the four open buffers with eligible disk symbols.
+  An exactly matching open URI suppresses its disk copy, so unsaved text wins
+  and a declaration is not duplicated. Matching uses canonical percent-encoded
+  file URIs; alternate URI aliases/symlink spellings are not unified.
+* `references` can take its cursor word from an unopened eligible disk file
+  and search all open buffers plus eligible disk files. Existing UTF-16 range
+  generation and `includeDeclaration` filtering are reused. Closed files are
+  read only—no workspace file edits are made.
+* Closing a buffer restores its disk view for these two methods. A fifth open
+  buffer still evicts one of the four unsaved overlays; its eligible disk copy
+  can then be searched, but unsaved evicted text is not retained.
+* Edits, new files and deletion on disk are observed on the next query.
+  There is no file watcher, background worker, cancellation or change-notice
+  subscription. Queries are synchronous and a large folder can be slow.
+* Folder changes after initialization, multiple workspace roots, `rootPath`,
+  remote/virtual filesystems and scanning dependencies outside the selected
+  root are not implemented.
+
+### Actual scan limits
+
+`tools/lsp_workspace.h` enumerates POSIX directories, sorted bytewise per
+folder, with these hard eligibility/traversal caps:
+
+* 128 regular `.sa` files; 256 KiB per file; 4 MiB aggregate file sizes;
+* depth 16 below the selected root and at most 4,096 processed entries;
+* at most 4,096 collected names per directory, a 2 MiB manifest and platform
+  `PATH_MAX` paths;
+* no symlink traversal; hidden entries and `node_modules`, `build`, `dist`,
+  `target`, `vendor` are skipped; filenames containing CR/LF are skipped.
+
+Unreadable/oversized/skipped files and files beyond a cap simply do not
+contribute. There is **no truncation/progress notification** yet. Within the
+caps traversal is sorted; beyond a directory's collected-name limit the subset
+can depend on filesystem enumeration order. These filters are not a total
+process-memory bound, hostile-filesystem sandbox, race-proof symlink defense
+or stable cross-query snapshot: files can change while a query runs.
+
+### Build and test boundary
+
+The directory bridge is tool-local C, not a new language builtin or general
+FFI. `make lsp` compiles the `.sa` program, then
+`tools/lsp_workspace_bind.awk` replaces exactly one known generated fallback
+with the bridge call. The binding fails if the generated function shape
+changes. Manifest strings use the emitted runtime's managed allocator. A raw
+standalone compilation of `tools/sayanox_lsp.sa` without this build binding has
+only the empty fallback; use the Makefile-built server for folder support.
+The compiler bootstrap/self-host source is unchanged by this integration.
+
+Both `test-lsp` and `test-lsp-robust` now require `test-lsp-workspace`.
+An in-tree C client sends and reads actual `Content-Length` frames with
+handshakes (no timing sleeps or interpreter), checks unopened/nested file
+symbols, case-insensitive query, references with/without declarations, URI
+encoding for spaces, more than four disk files, open overlay precedence and
+no duplicates, close fallback, disk edit/delete refresh, first workspace
+folder, invalid/nonlocal roots, symlink/hidden/oversized filtering and the
+128-file cap. Existing protocol, Unicode and four-buffer probes remain.
+Logs: [2026-10-16 workspace LSP](gate-logs/2026-10-16-lsp-workspace/).
+
+### Remaining IDE gaps — not IDE-complete
+
+References remain **lexical whole-word occurrences**, not resolved symbol
+identity: unrelated same-spelled locals, comments and strings may be included;
+imports/scopes/type identities are not followed. Declaration filtering is a
+line heuristic. Symbol results retain the existing declaration scanner and
+coarse ranges. This is not compiler-backed semantic analysis.
+
+Rename still edits **open buffers only** (not indexed disk files). Signature
+help still requires a same-document declaration and a same-line call; code
+actions still offer formatting only, not diagnostic fixes. Hover, definition,
+documentSymbol and diagnostics retain their open-document behavior; there is
+no workspace diagnostic pass. Four open-buffer slots remain a practical editor
+limitation. These improvements do not establish IDE completeness.

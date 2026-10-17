@@ -1,0 +1,147 @@
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+CC='cc' sh selfhost/test_generic_struct_limits.sh
+[OK] generic struct bootstrap limit: nested-num refused by seed/gen2/native; gen2 C cannot compile
+[OK] generic struct bootstrap limit: nested-str refused by seed/gen2/native; gen2 C cannot compile
+[OK] generic struct bootstrap limit: nested-spaced refused by seed/gen2/native; gen2 C cannot compile
+[OK] generic struct bootstrap limit: nested-comment refused by seed/gen2/native; gen2 C cannot compile
+[OK] generic struct bootstrap limit: nested-second refused by seed/gen2/native; gen2 C cannot compile
+[OK] generic struct bootstrap limit: list refused by seed/gen2/native; gen2 C cannot compile
+[OK] generic struct bootstrap limit: list-second refused by seed/gen2/native; gen2 C cannot compile
+[OK] permanent bootstrap generic-struct boundary: scalar type arguments only; no recursive/list layout claimed
+mkdir -p selfhost/seed_tests
+# ---- support: one concrete type per instantiation, three-way parity ----
+./selfhost/seed/sxc_seed_min selfhost/generic_struct_box.sa > selfhost/seed_tests/gs_box_ms.c
+grep -q -F 'typedef struct { double v; } Box__n;' selfhost/seed_tests/gs_box_ms.c
+grep -q -F 'typedef struct { char *v; } Box__s;' selfhost/seed_tests/gs_box_ms.c
+grep -q -F 'typedef struct { double a; char *b; } Pair__ns;' selfhost/seed_tests/gs_box_ms.c
+cc -O2 -o selfhost/seed_tests/gs_box_ms selfhost/seed_tests/gs_box_ms.c
+./selfhost/gen2 selfhost/generic_struct_box.sa selfhost/seed_tests/gs_box_g2.c >/dev/null
+grep -q -F 'typedef struct { double v; } Box__n;' selfhost/seed_tests/gs_box_g2.c
+grep -q -F 'typedef struct { char *v; } Box__s;' selfhost/seed_tests/gs_box_g2.c
+grep -q -F 'typedef struct { double a; char *b; } Pair__ns;' selfhost/seed_tests/gs_box_g2.c
+cc -O2 -o selfhost/seed_tests/gs_box_g2 selfhost/seed_tests/gs_box_g2.c
+echo "[OK] generic structs: Box<num>, Box<str> and Pair<num,str> are three types with their own layouts, identical on seed-min and gen2"
+[OK] generic structs: Box<num>, Box<str> and Pair<num,str> are three types with their own layouts, identical on seed-min and gen2
+if [ -x selfhost/native_aot ]; then \
+  ./selfhost/native_aot selfhost/generic_struct_box.sa selfhost/seed_tests/gs_box_nat && \
+  ./selfhost/seed_tests/gs_box_nat > selfhost/seed_tests/gs_box_nat.out && \
+  ./selfhost/seed_tests/gs_box_ms > selfhost/seed_tests/gs_box_ms.out && \
+  cmp selfhost/seed_tests/gs_box_ms.out selfhost/seed_tests/gs_box_nat.out && \
+  echo "[generic-structs] native: the same instantiations print the same bytes as seed-min"; \
+fi
+[generic-structs] native: the same instantiations print the same bytes as seed-min
+# ---- refusal 1: the wrong number of type arguments ----
+printf 'struct Box<T> {\n  v\n}\nhold b = Box<num, str> { 7 }\nshow b.v\n' > selfhost/seed_tests/gs_arity.sa
+if ./selfhost/seed/sxc_seed_min selfhost/seed_tests/gs_arity.sa > selfhost/seed_tests/gs_arity_ms.c 2>selfhost/seed_tests/gs_arity_ms.err; then \
+  echo "[FAIL] seed-min accepted Box<num, str> against a one-parameter template"; exit 1; fi
+grep -q -F 'Box takes 1 type argument, got 2' selfhost/seed_tests/gs_arity_ms.err
+./selfhost/gen2 selfhost/seed_tests/gs_arity.sa selfhost/seed_tests/gs_arity_g2.c >/dev/null 2>&1 || true
+grep -q -F '#error sayanox-min:' selfhost/seed_tests/gs_arity_g2.c
+if [ -x selfhost/native_aot ]; then \
+  if ./selfhost/native_aot selfhost/seed_tests/gs_arity.sa selfhost/seed_tests/gs_arity_nat 2>selfhost/seed_tests/gs_arity_nat.err; then \
+    echo "[FAIL] native accepted Box<num, str> against a one-parameter template"; exit 1; fi; \
+  grep -q -F 'takes 1 type argument, got 2' selfhost/seed_tests/gs_arity_nat.err; \
+fi
+echo "[OK] generic structs: a wrong type argument count is refused by all three backends"
+[OK] generic structs: a wrong type argument count is refused by all three backends
+# ---- refusal 2: a struct name as a type argument ----
+printf 'struct NumBox {\n  v\n}\nstruct Box<T> {\n  v\n}\nhold n = NumBox { 3 }\nhold b = Box<NumBox> { n }\nshow b.v\n' > selfhost/seed_tests/gs_argstruct.sa
+if ./selfhost/seed/sxc_seed_min selfhost/seed_tests/gs_argstruct.sa > selfhost/seed_tests/gs_argstruct_ms.c 2>selfhost/seed_tests/gs_argstruct_ms.err; then \
+  echo "[FAIL] seed-min accepted a struct name as a type argument"; exit 1; fi
+grep -q -F "a type argument must be num, str or list (got 'NumBox')" selfhost/seed_tests/gs_argstruct_ms.err
+./selfhost/gen2 selfhost/seed_tests/gs_argstruct.sa selfhost/seed_tests/gs_argstruct_g2.c >/dev/null 2>&1 || true
+grep -q -F '#error sayanox-min:' selfhost/seed_tests/gs_argstruct_g2.c
+if [ -x selfhost/native_aot ]; then \
+  if ./selfhost/native_aot selfhost/seed_tests/gs_argstruct.sa selfhost/seed_tests/gs_argstruct_nat 2>selfhost/seed_tests/gs_argstruct_nat.err; then \
+    echo "[FAIL] native accepted a struct name as a type argument"; exit 1; fi; \
+  grep -q -F "a type argument must be num, str or list (got 'NumBox')" selfhost/seed_tests/gs_argstruct_nat.err; \
+fi
+echo "[OK] generic structs: a struct name as a type argument is refused by all three backends"
+[OK] generic structs: a struct name as a type argument is refused by all three backends
+# ---- refusal 3: a list as a type argument ----
+# Concrete list fields work on all three backends, but generic Box<list>
+# stays refused pending generic specialization/layout and GC support.
+printf 'struct Box<T> {\n  v\n}\nhold xs = [1, 2]\nhold b = Box<list> { xs }\nshow len(b.v)\n' > selfhost/seed_tests/gs_arglist.sa
+if ./selfhost/seed/sxc_seed_min selfhost/seed_tests/gs_arglist.sa > selfhost/seed_tests/gs_arglist_ms.c 2>selfhost/seed_tests/gs_arglist_ms.err; then \
+  echo "[FAIL] seed-min accepted a list as a type argument"; exit 1; fi
+grep -q -F 'a struct field cannot hold a list' selfhost/seed_tests/gs_arglist_ms.err
+./selfhost/gen2 selfhost/seed_tests/gs_arglist.sa selfhost/seed_tests/gs_arglist_g2.c >/dev/null 2>&1 || true
+grep -q -F '#error sayanox-min:' selfhost/seed_tests/gs_arglist_g2.c
+if [ -x selfhost/native_aot ]; then \
+  if ./selfhost/native_aot selfhost/seed_tests/gs_arglist.sa selfhost/seed_tests/gs_arglist_nat 2>selfhost/seed_tests/gs_arglist_nat.err; then \
+    echo "[FAIL] native accepted a list as a type argument"; exit 1; fi; \
+  grep -q -F 'cannot hold a list' selfhost/seed_tests/gs_arglist_nat.err; \
+fi
+echo "[OK] generic structs: a list as a type argument is refused by all three backends"
+[OK] generic structs: a list as a type argument is refused by all three backends
+# ---- refusal 4: a bare template name, with no type arguments ----
+printf 'struct Box<T> {\n  v\n}\nhold b = Box { 7 }\nshow b.v\n' > selfhost/seed_tests/gs_bare.sa
+if ./selfhost/seed/sxc_seed_min selfhost/seed_tests/gs_bare.sa > selfhost/seed_tests/gs_bare_ms.c 2>selfhost/seed_tests/gs_bare_ms.err; then \
+  echo "[FAIL] seed-min accepted a bare template name"; exit 1; fi
+grep -q -F 'Box is a generic struct: write Box<num> { ... }' selfhost/seed_tests/gs_bare_ms.err
+./selfhost/gen2 selfhost/seed_tests/gs_bare.sa selfhost/seed_tests/gs_bare_g2.c >/dev/null 2>&1 || true
+grep -q -F '#error sayanox-min:' selfhost/seed_tests/gs_bare_g2.c
+if [ -x selfhost/native_aot ]; then \
+  if ./selfhost/native_aot selfhost/seed_tests/gs_bare.sa selfhost/seed_tests/gs_bare_nat 2>selfhost/seed_tests/gs_bare_nat.err; then \
+    echo "[FAIL] native accepted a bare template name"; exit 1; fi; \
+  grep -q -F 'is a generic struct: write Box<num> { ... }' selfhost/seed_tests/gs_bare_nat.err; \
+fi
+echo "[OK] generic structs: a bare template name is refused by all three backends"
+[OK] generic structs: a bare template name is refused by all three backends
+# ---- refusal 5: one instantiation used with two different kinds ----
+printf 'struct Box<T> {\n  v\n}\nhold b = Box<num> { 7 }\nhold s = Box<num> { "seven" }\nshow b.v\nshow s.v\n' > selfhost/seed_tests/gs_twokinds.sa
+if ./selfhost/seed/sxc_seed_min selfhost/seed_tests/gs_twokinds.sa > selfhost/seed_tests/gs_twokinds_ms.c 2>selfhost/seed_tests/gs_twokinds_ms.err; then \
+  echo "[FAIL] seed-min accepted two kinds in one instantiation"; exit 1; fi
+grep -q -F "Box__n field 'v' is num (its type argument says so), the literal gives str" selfhost/seed_tests/gs_twokinds_ms.err
+./selfhost/gen2 selfhost/seed_tests/gs_twokinds.sa selfhost/seed_tests/gs_twokinds_g2.c >/dev/null 2>&1 || true
+grep -q -F '#error sayanox-min: struct field is used with two different value kinds' selfhost/seed_tests/gs_twokinds_g2.c
+if [ -x selfhost/native_aot ]; then \
+  if ./selfhost/native_aot selfhost/seed_tests/gs_twokinds.sa selfhost/seed_tests/gs_twokinds_nat 2>selfhost/seed_tests/gs_twokinds_nat.err; then \
+    echo "[FAIL] native accepted two kinds in one instantiation"; exit 1; fi; \
+  grep -q -F "field 'v' is a number (its type argument says so), the literal gives a string" selfhost/seed_tests/gs_twokinds_nat.err; \
+fi
+echo "[OK] generic structs: one instantiation cannot hold two kinds -- the type argument fixes the field kind"
+[OK] generic structs: one instantiation cannot hold two kinds -- the type argument fixes the field kind
+# ---- the supported workaround: concrete names, three-way parity ----
+./selfhost/seed/sxc_seed_min selfhost/generic_struct_concrete.sa > selfhost/seed_tests/gs_conc_ms.c
+cc -O2 -o selfhost/seed_tests/gs_conc_ms selfhost/seed_tests/gs_conc_ms.c
+./selfhost/gen2 selfhost/generic_struct_concrete.sa selfhost/seed_tests/gs_conc_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/gs_conc_g2 selfhost/seed_tests/gs_conc_g2.c
+if [ -x selfhost/native_aot ]; then \
+  ./selfhost/native_aot selfhost/generic_struct_concrete.sa selfhost/seed_tests/gs_conc_nat && \
+  ./selfhost/seed_tests/gs_conc_nat > selfhost/seed_tests/gs_conc_nat.out && \
+  ./selfhost/seed_tests/gs_conc_ms > selfhost/seed_tests/gs_conc_ms.out && \
+  cmp selfhost/seed_tests/gs_conc_ms.out selfhost/seed_tests/gs_conc_nat.out && \
+  echo "[generic-structs] native: concrete struct names print the same bytes as seed-min"; \
+fi
+[generic-structs] native: concrete struct names print the same bytes as seed-min
+echo "[OK] generic structs workaround: two same-shaped concrete structs in one program, identical on seed-min, gen2 and native"
+[OK] generic structs workaround: two same-shaped concrete structs in one program, identical on seed-min, gen2 and native
+# ---- the adjacent divergence: a dotted field read inside a struct literal ----
+printf 'struct NumBox {\n  v\n}\nhold a = NumBox { 7 }\nhold a2 = NumBox { a.v }\nshow a2.v\n' > selfhost/seed_tests/gs_field_lit.sa
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/gs_field_lit.sa > selfhost/seed_tests/gs_field_lit_ms.c
+cc -O2 -o selfhost/seed_tests/gs_field_lit_ms selfhost/seed_tests/gs_field_lit_ms.c
+./selfhost/gen2 selfhost/seed_tests/gs_field_lit.sa selfhost/seed_tests/gs_field_lit_g2.c > selfhost/seed_tests/gs_field_lit_g2.out 2>&1 || true
+grep -q -F '#error sayanox-min: struct/list literal value must be a number, string, name, or nested struct' selfhost/seed_tests/gs_field_lit_g2.c
+if [ -x selfhost/native_aot ]; then \
+  if ./selfhost/native_aot selfhost/seed_tests/gs_field_lit.sa selfhost/seed_tests/gs_field_lit_nat 2>selfhost/seed_tests/gs_field_lit_nat.err; then \
+    echo "[FAIL] native accepted a dotted field read inside a struct literal"; exit 1; fi; \
+  grep -q -F 'is used with two different types' selfhost/seed_tests/gs_field_lit_nat.err \
+    || { echo "[FAIL] native refusal for a field read in a literal changed wording:"; cat selfhost/seed_tests/gs_field_lit_nat.err; exit 1; }; \
+fi
+echo "[OK] generic structs: a dotted field read inside a struct literal stays seed-min-only (gen2 #error, native refuses) -- a documented divergence, not silent wrong code"
+[OK] generic structs: a dotted field read inside a struct literal stays seed-min-only (gen2 #error, native refuses) -- a documented divergence, not silent wrong code
+[OK] nested generic structs refused on seed-min, gen2 and native
+[OK] struct field annotations refused on seed-min, gen2 and native
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/ttr_holdann.sa > selfhost/seed_tests/ttr_holdann_seed.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/ttr_holdann_seed selfhost/seed_tests/ttr_holdann_seed.c
+./selfhost/gen2 selfhost/seed_tests/ttr_holdann.sa selfhost/seed_tests/ttr_holdann_gen2.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/ttr_holdann_gen2 selfhost/seed_tests/ttr_holdann_gen2.c
+./selfhost/native_aot selfhost/seed_tests/ttr_holdann.sa selfhost/seed_tests/ttr_holdann_native
+[OK] struct-typed hold: seed-min, gen2 and native preserve/check the named concrete struct; scalar and wrong-struct initializers refuse

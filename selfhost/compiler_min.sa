@@ -1,26 +1,5 @@
-make sxedigits(value: num) -> str {
-  hold text = ""
-  when value == 0 {
-    give "0"
-  }
-  while value > 0 {
-    hold digit = value % 10
-    text = concat(chr(48 + digit), text)
-    value = (value - digit) / 10
-  }
-  give text
-}
-// Typed inline-expression lowering. Records encode position, kind and C text;
-// only the code suffix may contain arbitrary quoted source characters.
-make sxeslice(text: str, begin: num, end: num) -> str {
-  hold value = ""
-  hold i = begin
-  while i < end && i < len(text) {
-    value = concat(value, chr(sx_index(text, i)))
-    i = i + 1
-  }
-  give value
-}
+use "selfhost/modules/compiler_text.sa"
+
 make sxesegment(text: str, slot: num) -> str {
   hold start = 0
   hold i = 0
@@ -527,10 +506,15 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                   when string_eq(actual, "e") {
                     give argument
                   }
-                  when count >= len(parameters) {
+                  when count >= sxfpkcount(parameters) {
                     give sxerecord(i, "e", "too many call arguments")
                   }
-                  hold expected = chr(sx_index(parameters, count))
+                  hold expected = sxfpkget(parameters, count)
+                  when string_eq(expected, "v") {
+                    when string_eq(actual, "s") == 0 && string_eq(actual, "n") == 0 {
+                      give sxerecord(i, "e", "interpolation requires a string or number")
+                    }
+                  } otherwise {
                   when string_eq(expected, "a") {
                     when string_eq(actual, "s") == 0 && string_eq(actual, "l") == 0 {
                       give sxerecord(i, "e", "length/index requires a string or list")
@@ -548,6 +532,7 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                       give sxerecord(i, "e", "call argument type mismatch")
                     }
                   }
+                  }
                   when count > 0 {
                     args = concat(args, ",")
                   }
@@ -560,7 +545,7 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                     more = 0
                   }
                 }
-                when i >= len(text) || sx_index(text, i) != 41 || count != len(parameters) {
+                when i >= len(text) || sx_index(text, i) != 41 || count != sxfpkcount(parameters) {
                   give sxerecord(i, "e", "call argument count mismatch")
                 }
                 i = i + 1
@@ -877,6 +862,257 @@ make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
 // Conservative structural return proof. Loops may execute zero times;
 // only give, a returning suffix, or exhaustive returning branches prove it.
 // These helpers read source only; expression/type checking remains separate.
+// Lower bounded identifier interpolation before the ordinary expression walk.
+// state appends event 1 for a hole, event 2 for a malformed hole.
+// Programs without a marker use the byte-preserving fast path.
+make sxinterpolate(text: str, private: str, state: list) -> str {
+  hold marker = concat(chr(36), chr(123))
+  when sxecontains(text, marker) == 0 {
+    give text
+  }
+  hold out = ""
+  hold at = 0
+  while at < len(text) {
+    hold c = sx_index(text, at)
+    when c == 47 && at + 1 < len(text) && sx_index(text, at + 1) == 47 {
+      while at < len(text) && sx_index(text, at) != 10 {
+        out = concat(out, chr(sx_index(text, at)))
+        at = at + 1
+      }
+    } otherwise {
+      when c == 34 {
+        at = at + 1
+        hold fragment = chr(34)
+        hold expression = ""
+        hold holes = 0
+        hold quoted = 1
+        while at < len(text) && quoted == 1 {
+          c = sx_index(text, at)
+          when c == 92 && at + 1 < len(text) {
+            hold escaped = sx_index(text, at + 1)
+            when escaped == 36 && at + 2 < len(text) && sx_index(text, at + 2) == 123 {
+              // A single escaped dollar protects a literal marker.
+              fragment = concat(fragment, marker)
+              at = at + 3
+            } otherwise {
+              fragment = concat(fragment, chr(c))
+              fragment = concat(fragment, chr(escaped))
+              at = at + 2
+            }
+          } otherwise {
+            when c == 34 {
+              fragment = concat(fragment, chr(34))
+              when holes > 0 {
+                expression = concat("concat(", expression)
+                expression = concat(expression, ",")
+                expression = concat(expression, fragment)
+                expression = concat(expression, ")")
+              } otherwise {
+                expression = fragment
+              }
+              out = concat(out, expression)
+              at = at + 1
+              quoted = 0
+            } otherwise {
+              when c == 36 && at + 1 < len(text) && sx_index(text, at + 1) == 123 && holes < 16 {
+                hold start = at + 2
+                hold name = sxflowword(text, start)
+                hold stop = start + len(name)
+                hold valid = 0
+                when len(name) > 0 {
+                  hold first = sx_index(name, 0)
+                  when (first >= 65 && first <= 90) || (first >= 97 && first <= 122) || first == 95 {
+                    when stop < len(text) && sx_index(text, stop) == 125 {
+                      valid = 1
+                    }
+                  }
+                }
+                when valid == 1 {
+                  fragment = concat(fragment, chr(34))
+                  when holes == 0 {
+                    expression = fragment
+                  } otherwise {
+                    expression = concat("concat(", expression)
+                    expression = concat(expression, ",")
+                    expression = concat(expression, fragment)
+                    expression = concat(expression, ")")
+                  }
+                  expression = concat("concat(", expression)
+                  expression = concat(expression, ",")
+                  expression = concat(expression, private)
+                  expression = concat(expression, "(")
+                  expression = concat(expression, name)
+                  expression = concat(expression, "))")
+                  fragment = chr(34)
+                  holes = holes + 1
+                  push(state, 1)
+                  at = stop + 1
+                } otherwise {
+                  push(state, 2)
+                  fragment = concat(fragment, chr(c))
+                  at = at + 1
+                }
+              } otherwise {
+                when c == 36 && at + 1 < len(text) && sx_index(text, at + 1) == 123 {
+                  push(state, 2)
+                }
+                fragment = concat(fragment, chr(c))
+                at = at + 1
+              }
+            }
+          }
+        }
+        when quoted == 1 {
+          push(state, 2)
+          out = concat(out, fragment)
+        }
+      } otherwise {
+        out = concat(out, chr(c))
+        at = at + 1
+      }
+    }
+  }
+  give out
+}
+// Struct function signature codec: scalar kinds stay one byte; a named
+// struct parameter is uName; so identity and argument boundaries survive.
+make sxfpkget(kinds: str, wanted: num) -> str {
+  hold at = 0
+  hold count = 0
+  while at < len(kinds) {
+    hold kind = chr(sx_index(kinds, at))
+    at = at + 1
+    when string_eq(kind, "u") {
+      while at < len(kinds) && sx_index(kinds, at) != 59 {
+        kind = concat(kind, chr(sx_index(kinds, at)))
+        at = at + 1
+      }
+      at = at + 1
+    }
+    when count == wanted {
+      give kind
+    }
+    count = count + 1
+  }
+  give ""
+}
+make sxfpkcount(kinds: str) -> num {
+  hold at = 0
+  hold count = 0
+  while at < len(kinds) {
+    hold c = sx_index(kinds, at)
+    at = at + 1
+    when c == 117 {
+      while at < len(kinds) && sx_index(kinds, at) != 59 {
+        at = at + 1
+      }
+      at = at + 1
+    }
+    count = count + 1
+  }
+  give count
+}
+// Discover concrete declaration identities, not layouts or path aliases.
+make sxfstructnames(text: str) -> str {
+  hold names = "|"
+  hold at = 0
+  while at < len(text) {
+    at = sxflowspace(text, at)
+    when at < len(text) {
+      when sx_index(text, at) == 34 {
+        at = at + 1
+        hold quoted = 1
+        while at < len(text) && quoted == 1 {
+          hold c = sx_index(text, at)
+          at = at + 1
+          when c == 92 {
+            at = at + 1
+          }
+          when c == 34 {
+            quoted = 0
+          }
+        }
+      } otherwise {
+        hold word = sxflowword(text, at)
+        at = at + len(word)
+        when string_eq(word, "struct") {
+          at = sxflowspace(text, at)
+          hold name = sxflowword(text, at)
+          at = sxflowspace(text, at + len(name))
+          when at < len(text) && sx_index(text, at) == 123 {
+            names = concat(names, name)
+            names = concat(names, "|")
+          }
+        }
+        when len(word) == 0 {
+          at = at + 1
+        }
+      }
+    }
+  }
+  give names
+}
+// Check expressions involving a struct binding or struct signature. Avoid
+// routing unrelated historical emitter syntax through the checked parser.
+make sxfneedscheck(text: str, returns: str, params: str, structs: str) -> num {
+  hold at = 0
+  hold quoted = 0
+  while at < len(text) {
+    hold c = sx_index(text, at)
+    when quoted == 1 {
+      at = at + 1
+      when c == 92 {
+        at = at + 1
+      }
+      when c == 34 {
+        quoted = 0
+      }
+    } otherwise {
+      when c == 34 {
+        quoted = 1
+        at = at + 1
+      } otherwise {
+        hold word = sxflowword(text, at)
+        when len(word) > 0 {
+          when len(sxelookup(structs, word, "=")) > 0 {
+            give 1
+          }
+          hold next = sxflowspace(text, at + len(word))
+          when next < len(text) && sx_index(text, next) == 40 {
+            hold result = sxelookup(returns, word, "=")
+            when len(result) > 1 && sx_index(result, 0) == 117 {
+              give 1
+            }
+            when sxecontains(sxelookup(params, word, "="), "u") == 1 {
+              give 1
+            }
+          }
+          at = at + len(word)
+        } otherwise {
+          at = at + 1
+        }
+      }
+    }
+  }
+  give 0
+}
+make sxfenv(decls: str, strings: str, lists: str, structs: str, returns: str, params: str, fields: str, private: str) -> str {
+  hold env = concat(decls, chr(1))
+  env = concat(env, strings)
+  env = concat(env, chr(1))
+  env = concat(env, lists)
+  env = concat(env, chr(1))
+  env = concat(env, structs)
+  env = concat(env, chr(1))
+  env = concat(env, returns)
+  env = concat(env, chr(1))
+  env = concat(env, params)
+  env = concat(env, chr(1))
+  env = concat(env, private)
+  env = concat(env, chr(1))
+  env = concat(env, fields)
+  give env
+}
 make sxflowspace(text: str, at: num) -> num {
   hold i = at
   hold n = len(text)
@@ -1573,6 +1809,9 @@ make raw_index(source: str, from: num, n: num) -> str {
 // compiler_min.sa - pure Sayanox mini-compiler (generation 1 source).
 //
 
+struct CompilerPaths { input, output }
+struct CompilerSourceSize<T> { bytes }
+
 // ---------------- command line ----------------
 hold in_path = "selfhost/mini_in.sa"
 hold out_path = "selfhost/mini_out.c"
@@ -1584,9 +1823,14 @@ when na >= 3 {
   hold out_path = arg(2)
 }
 
+// Concrete typed compiler state: exercised by every bootstrap generation.
+hold compiler_paths: CompilerPaths = CompilerPaths { input: in_path, output: out_path }
+
 // ---------------- compiler state ----------------
-hold source = read_file(in_path)
-hold n = len(source)
+hold source = read_file(compiler_paths.input)
+hold source_bytes = len(source)
+hold compiler_source_size = CompilerSourceSize<num> { bytes: source_bytes }
+hold n = compiler_source_size.bytes
 // ---------------- struct field logic values (item 8) ----------------
 // `Name { x: a and b }` on gen2: a field value that is an and/or/not expression
 hold lgsrc = concat(source, "\n")
@@ -2865,10 +3109,10 @@ hold tdc2 = 0
 hold exd = 0
 hold exlast = -1
 hold exdl = 0
-hold exdl = len(in_path)
+hold exdl = len(compiler_paths.input)
 while exd < exdl {
   hold excd = 0
-  hold excd = sx_index(in_path, exd)
+  hold excd = sx_index(compiler_paths.input, exd)
   when excd == 47 {
     hold exlast = exd
   }
@@ -2877,7 +3121,7 @@ while exd < exdl {
 when exlast >= 0 {
   hold exd = 0
   while exd <= exlast {
-    hold exdir = concat(exdir, chr(sx_index(in_path, exd)))
+    hold exdir = concat(exdir, chr(sx_index(compiler_paths.input, exd)))
     hold exd = exd + 1
   }
 }
@@ -3101,6 +3345,30 @@ while exmore == 1 {
   }
 }
 
+// Expand after textual use splicing, so imported strings see the same rules.
+hold interpprivate = "_sx_interp"
+while sxecontains(source, interpprivate) == 1 {
+  hold interpprivate = concat(interpprivate, "x")
+}
+hold interpstate = []
+hold source = sxinterpolate(source, interpprivate, interpstate)
+hold n = len(source)
+hold interpactive = 0
+hold interpbad = 0
+hold interpi = 0
+while interpi < len(interpstate) {
+  hold interpevent = interpstate[interpi]
+  when interpevent == 1 {
+    hold interpactive = 1
+  } otherwise {
+    hold interpbad = 1
+  }
+  hold interpi = interpi + 1
+}
+when interpbad == 1 {
+  hold exerr = concat(exerr, "#error sayanox-min: interpolation requires a closed identifier hole; maximum 16 holes per string\n")
+}
+
 // ---- malformed number literals (`1.2.3`) are rejected up front ----------
 // Every number reader below accepts `.digits` once more each time it sees
 hold nqp = 0
@@ -3206,9 +3474,28 @@ while nqp < n {
 }
 // =====================================================================
 // function signature table (full language)
+hold fnstructkind = ""
+hold ppsignature = ""
+hold ppstructkind = ""
+hold ppstructname = ""
+hold structresultkind = ""
+hold sfreturn = ""
+hold sfenv = ""
+hold sfkind = ""
+hold sfexpected = ""
+hold sfvalue = ""
+hold ppordinal = 0
+hold fsstructnames = sxfstructnames(source)
+hold fsstructactive = 0
 hold fsret = "|"
 hold fsptx = "|"
 hold fspk = "|"
+when interpactive == 1 {
+  hold fsret = concat(fsret, interpprivate)
+  hold fsret = concat(fsret, "=s|")
+  hold fspk = concat(fspk, interpprivate)
+  hold fspk = concat(fspk, "=v|")
+}
 hold fsi = 0
 hold fsstart = 1
 hold fsstr = 0
@@ -3226,6 +3513,8 @@ hold fspfirst = 0
 hold fsprun = 0
 hold fspn = ""
 hold fspk2 = 0
+hold fsstructparam = ""
+hold fsstructreturn = ""
 hold fstype = ""
 hold fsret2 = 0
 hold fsc4 = 0
@@ -3380,6 +3669,7 @@ while fsi < n {
                             }
                           }
                         }
+                        hold fsstructparam = ""
                         hold fspk2 = 110
                         hold fsc3 = 0
                         when fsp < n {
@@ -3401,6 +3691,7 @@ while fsi < n {
                               }
                             }
                           }
+                          hold fsstructparam = ""
                           hold fstype = ""
                           hold fsrun = 1
                           while fsrun == 1 {
@@ -3408,13 +3699,20 @@ while fsi < n {
                               hold fsrun = 0
                             } otherwise {
                               hold fsc3 = sx_index(source, fsp)
-                              when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) {
+                              when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) || (fsc3 >= 48 && fsc3 <= 57) || fsc3 == 95 {
                                 hold fstype = concat(fstype, chr(fsc3))
                                 hold fsp = fsp + 1
                               } otherwise {
                                 hold fsrun = 0
                               }
                             }
+                          }
+                          when sxecontains(fsstructnames, concat(concat("|", fstype), "|")) == 1 {
+                            hold fsstructparam = fstype
+                            hold fsstructactive = 1
+                          }
+                          when len(fsstructparam) == 0 && string_eq(fstype, "str") == 0 && string_eq(fstype, "string") == 0 && string_eq(fstype, "list") == 0 && string_eq(fstype, "num") == 0 && string_eq(fstype, "number") == 0 && string_eq(fstype, "bool") == 0 && string_eq(fstype, "double") == 0 {
+                            hold exerr = concat(exerr, "#error sayanox-min: unknown function parameter type\n")
                           }
                           when sx_eq(fstype, "str") {
                             hold fspk2 = 115
@@ -3438,11 +3736,22 @@ while fsi < n {
                           when fspk2 == 108 {
                             hold fstx = concat(fstx, "sx_list *")
                           } otherwise {
-                            hold fstx = concat(fstx, "double ")
+                            when len(fsstructparam) > 0 {
+                              hold fstx = concat(fstx, fsstructparam)
+                              hold fstx = concat(fstx, " ")
+                            } otherwise {
+                              hold fstx = concat(fstx, "double ")
+                            }
                           }
                         }
                         hold fstx = concat(fstx, fspn)
-                        hold fspks = concat(fspks, chr(fspk2))
+                        when len(fsstructparam) > 0 {
+                          hold fspks = concat(fspks, "u")
+                          hold fspks = concat(fspks, fsstructparam)
+                          hold fspks = concat(fspks, ";")
+                        } otherwise {
+                          hold fspks = concat(fspks, chr(fspk2))
+                        }
                         hold fspfirst = 0
                       } otherwise {
                         hold fsp = fsp + 1
@@ -3465,6 +3774,7 @@ while fsi < n {
                   }
                 }
               }
+              hold fsstructreturn = ""
               hold fsret2 = 110
               hold fsc3 = 0
               hold fsc4 = 0
@@ -3497,13 +3807,20 @@ while fsi < n {
                     hold fsrun = 0
                   } otherwise {
                     hold fsc3 = sx_index(source, fsp)
-                    when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) {
+                    when (fsc3 >= 97 && fsc3 <= 122) || (fsc3 >= 65 && fsc3 <= 90) || (fsc3 >= 48 && fsc3 <= 57) || fsc3 == 95 {
                       hold fstype = concat(fstype, chr(fsc3))
                       hold fsp = fsp + 1
                     } otherwise {
                       hold fsrun = 0
                     }
                   }
+                }
+                when sxecontains(fsstructnames, concat(concat("|", fstype), "|")) == 1 {
+                  hold fsstructreturn = fstype
+                  hold fsstructactive = 1
+                }
+                when len(fsstructreturn) == 0 && string_eq(fstype, "str") == 0 && string_eq(fstype, "string") == 0 && string_eq(fstype, "list") == 0 && string_eq(fstype, "num") == 0 && string_eq(fstype, "number") == 0 && string_eq(fstype, "bool") == 0 && string_eq(fstype, "double") == 0 {
+                  hold exerr = concat(exerr, "#error sayanox-min: unknown function return type\n")
                 }
                 when sx_eq(fstype, "str") || sx_eq(fstype, "string") {
                   hold fsret2 = 115
@@ -3554,7 +3871,12 @@ while fsi < n {
               when fshave == 0 {
                 hold fsret = concat(fsret, fsname)
                 hold fsret = concat(fsret, "=")
-                hold fsret = concat(fsret, chr(fsret2))
+                when len(fsstructreturn) > 0 {
+                  hold fsret = concat(fsret, "u")
+                  hold fsret = concat(fsret, fsstructreturn)
+                } otherwise {
+                  hold fsret = concat(fsret, chr(fsret2))
+                }
                 hold fsret = concat(fsret, "|")
                 hold fsptx = concat(fsptx, fsname)
                 hold fsptx = concat(fsptx, "=")
@@ -8688,6 +9010,11 @@ hold argbracket = 0
                 hold frki = frki + 1
               }
             }
+            when frk2 == 117 {
+              hold structresultkind = sxelookup(fsret, nm2, "=")
+              hold stname = sxeslice(structresultkind, 1, len(structresultkind))
+              hold rk = 3
+            }
             when frk2 == 115 {
               hold rk = 1
               hold rt = 1
@@ -10479,6 +10806,21 @@ hold ec = 0
         }
       }
       hold rk = isstr
+
+      when fsstructactive == 1 && sxfneedscheck(rhs, fsret, fspk, svars) == 1 && sxecontains(rhs, chr(123)) == 0 {
+        hold sfenv = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+        hold sfvalue = sxeparse(rhs, 0, sfenv, 0, 0, instate)
+        hold sfkind = sxesegment(sfvalue, 1)
+        when string_eq(sfkind, "e") || sxflowspace(rhs, sxepos(sfvalue)) != len(rhs) {
+          hold perr = 1
+          hold permsg = concat("struct expression: ", sxecode(sfvalue))
+        } otherwise {
+          when len(sfkind) > 1 && sx_index(sfkind, 0) == 117 {
+            hold rk = 3
+            hold stname = sxeslice(sfkind, 1, len(sfkind))
+          }
+        }
+      }
 
       // ---- declared type check (full language) ----
       when declk >= 0 {
@@ -13294,6 +13636,21 @@ hold ec = 0
       }
       hold rk = isstr
 
+      when fsstructactive == 1 && sxfneedscheck(rhs, fsret, fspk, svars) == 1 && sxecontains(rhs, chr(123)) == 0 {
+        hold sfenv = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+        hold sfvalue = sxeparse(rhs, 0, sfenv, 0, 0, instate)
+        hold sfkind = sxesegment(sfvalue, 1)
+        when string_eq(sfkind, "e") || sxflowspace(rhs, sxepos(sfvalue)) != len(rhs) {
+          hold perr = 1
+          hold permsg = concat("struct expression: ", sxecode(sfvalue))
+        } otherwise {
+          when len(sfkind) > 1 && sx_index(sfkind, 0) == 117 {
+            hold rk = 3
+            hold stname = sxeslice(sfkind, 1, len(sfkind))
+          }
+        }
+      }
+
       // emit
       hold ind = "  "
       hold wk = 0
@@ -15124,6 +15481,16 @@ hold ec = 0
 
     // ---- give: emit ----
     when act == 6 {
+      when fsstructactive == 1 && in_fn == 1 {
+        hold sfenv = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+        hold sfreturn = sxeparse(crepl, 0, sfenv, 0, 0, instate)
+        hold sfkind = sxesegment(sfreturn, 1)
+        hold sfexpected = sxelookup(fsret, fn_name, "=")
+        when string_eq(sfkind, sfexpected) == 0 || sxflowspace(crepl, sxepos(sfreturn)) != len(crepl) {
+          hold perr = 1
+          hold permsg = "function give type mismatch (named struct identity must match)"
+        }
+      }
       hold body = concat(body, "  return ")
       hold body = concat(body, crepl)
       hold body = concat(body, ";")
@@ -15133,6 +15500,19 @@ hold ec = 0
     // ================= hold/show with a parenthesized expression =================
     // ctrim was validated in the pre-checks and rewritten into crepl
     when act == 8 {
+      when fsstructactive == 1 && sxfneedscheck(crepl, fsret, fspk, svars) == 1 {
+        hold sfenv = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+        hold sfvalue = sxeparse(crepl, 0, sfenv, 0, 0, instate)
+        hold sfkind = sxesegment(sfvalue, 1)
+        when string_eq(sfkind, "e") || sxflowspace(crepl, sxepos(sfvalue)) != len(crepl) {
+          hold perr = 1
+          hold permsg = "unsupported grouped struct expression"
+        }
+        when len(sfkind) > 1 && sx_index(sfkind, 0) == 117 {
+          hold perr = 1
+          hold permsg = "grouped struct value unsupported; bind a direct call first"
+        }
+      }
       hold ind = "  "
       hold wk = 0
       while wk < depth {
@@ -15820,7 +16200,7 @@ hold ec = 0
             hold sk = 0
           } otherwise {
             hold cs = sx_index(source,pos)
-            when (cs >= 97 && cs <= 122) || (cs >= 65 && cs <= 90) {
+            when (cs >= 97 && cs <= 122) || (cs >= 65 && cs <= 90) || (cs >= 48 && cs <= 57) || cs == 95 {
               hold rtword = concat(rtword, chr(cs))
               hold pos = pos + 1
             } otherwise {
@@ -15886,6 +16266,10 @@ hold ec = 0
           hold permsg = concat("typed function may fall through without give: ", fn_name)
         }
       }
+      hold fnstructkind = sxelookup(fsret, fn_name, "=")
+      when len(fnstructkind) > 1 && sx_index(fnstructkind, 0) == 117 {
+        hold fn_retkind = 117
+      }
       hold saved_body = body
       hold body = ""
       when fn_retkind == 115 {
@@ -15894,7 +16278,13 @@ hold ec = 0
         when fn_retkind == 108 {
           hold body = concat(body, "static sx_list *")
         } otherwise {
-          hold body = concat(body, "static double ")
+          when fn_retkind == 117 {
+            hold body = concat(body, "static ")
+            hold body = concat(body, sxeslice(fnstructkind, 1, len(fnstructkind)))
+            hold body = concat(body, " ")
+          } otherwise {
+            hold body = concat(body, "static double ")
+          }
         }
       }
       hold body = concat(body, fn_name)
@@ -16004,6 +16394,8 @@ hold ec = 0
       // variable it is (a numeric parameter stays numeric).
       hold ppi = 0
       hold ppl = len(fn_params)
+      hold ppordinal = 0
+      hold ppsignature = sxelookup(fspk, fn_name, "=")
       hold ppstart = 0
       hold ppname = ""
       hold ppkind = 0
@@ -16040,7 +16432,18 @@ hold ec = 0
             }
             hold ppj = ppj + 1
           }
+          hold ppstructkind = sxfpkget(ppsignature, ppordinal)
+          hold ppordinal = ppordinal + 1
           when len(ppname) > 0 {
+            when len(ppstructkind) > 1 && sx_index(ppstructkind, 0) == 117 {
+              hold ppkind = 0
+              hold ppstructname = sxeslice(ppstructkind, 1, len(ppstructkind))
+              hold svars = concat(svars, "|")
+              hold svars = concat(svars, ppname)
+              hold svars = concat(svars, "=")
+              hold svars = concat(svars, ppstructname)
+              hold svars = concat(svars, "|")
+            }
             hold decls = concat(decls, ppname)
             hold decls = concat(decls, "|")
             when ppkind == 1 {
@@ -17315,7 +17718,7 @@ hold ec = 0
           }
         }
       }
-      when inhasbracket == 1 {
+      when inhasbracket == 1 || fsstructactive == 1 || interpactive == 1 {
             when len(inenv) == 0 {
               when inready == 0 {
                 while sxecontains(source, inprivate) == 1 {
@@ -17361,9 +17764,12 @@ hold ec = 0
             hold incandidate = 0
             when innext < instop && sx_index(body, innext) == 40 {
               hold inreturn = sxelookup(incallnames, inword, "=")
-              when len(inreturn) > 0 && sxehaslist(body, innext) == 1 {
+              when len(inreturn) > 0 && (sxehaslist(body, innext) == 1 || fsstructactive == 1 || interpactive == 1) {
                 hold incandidate = 1
               }
+            }
+            when len(sxelookup(svars, inword, "=")) > 0 && innext < instop && sx_index(body, innext) == 46 {
+              hold incandidate = 1
             }
             when incandidate == 1 {
               hold incall = sxeparse(body, inpos, inenv, 0, 0, instate)
@@ -17492,6 +17898,17 @@ when rt == 1 {
   hold out = concat(out, "static double sx_write_out(const char *s){ fputs(s,stdout); return 1.0; }\n")
   hold out = concat(out, "static double sx_flush_out(void){ fflush(stdout); return 1.0; }\n")
   hold out = concat(out, "static char *sx_numstr(double v){ char b[64]; snprintf(b,sizeof b,\"%g\",v); size_t n=strlen(b); char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
+  when interpactive == 1 {
+    hold out = concat(out, "static char *")
+    hold out = concat(out, interpprivate)
+    hold out = concat(out, "_str(const char *v){ return (char*)v; }\n#define ")
+    hold out = concat(out, interpprivate)
+    hold out = concat(out, "(v) _Generic((v), char*: ")
+    hold out = concat(out, interpprivate)
+    hold out = concat(out, "_str, const char*: ")
+    hold out = concat(out, interpprivate)
+    hold out = concat(out, "_str, default: sx_numstr)(v)\n")
+  }
   hold out = concat(out, "static double sx_write(const char *p,const char *s){ FILE *f=fopen(p,\"wb\"); if(!f) return 0.0; fputs(s,f); return fclose(f)==0?1.0:0.0; }\n")
   hold out = concat(out, "static double sx_eq(const char *a,const char *b){ return strcmp(a,b)==0 ? 1.0 : 0.0; }\n")
   hold out = concat(out, "static double sx_cmp(const char *a,const char *b){ return (double)strcmp(a,b); }\n")
@@ -18258,7 +18675,7 @@ when fixi > fixflush {
 }
 hold out = fixout
 hold out = concat(exerr, out)
-hold w = write_file(out_path, out)
+hold w = write_file(compiler_paths.output, out)
 
 // counters go to stdout (they are the compiler's own output, not the target's)
 

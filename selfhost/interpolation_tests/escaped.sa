@@ -1,0 +1,3 @@
+// "${comment_only}" must not introduce a binding requirement.
+show "\${unbound}"
+show "ordinary string"

@@ -1,5 +1,11 @@
 # Incremental types: implementation constraints
 
+**Current contract (2026-10-16):** generic structs accept scalar `num`/`str`
+arguments only. Nested/struct/list arguments are permanently outside the
+current bootstrap dialect; see [Permanent bootstrap contract](#permanent-bootstrap-contract-2026-10-16-decision).
+Dated implementation notes below are historical where they describe generic
+structs as entirely absent or describe expansion work as still pending.
+
 Status: seed hold annotations and fully typed num/str/list functions and generic function specialization implemented; **generic structs are implemented on all three backends** (2026-10-13) as one mangled concrete struct per instantiation, gated by `make test-generic-structs` with a shared parity fixture and five named refusals. What is still missing is listed under "What is still missing" below.
 
 The runtime kinds are double, string, double-list, and named literal-typed
@@ -321,3 +327,31 @@ mangling a nested name would not meet those requirements.
 `test-type-refusals` now builds and executes the positive `hold p: Pt` copy on
 seed-min/gen2/native and checks scalar and wrong-concrete-struct failures. It
 is real named-layout checking, not untyped acceptance.
+
+## Permanent bootstrap contract (2026-10-16 decision)
+
+The current bootstrap dialect permanently limits generic struct type arguments
+to `num` and `str`. Nested generic/struct arguments and `list` arguments remain
+explicitly refused on seed-min, Gen2 and native. Earlier “still missing” and
+“prerequisite” discussions above describe the cost of a possible *different*,
+expanded dialect; they are not a promise to add these forms to this bootstrap
+contract. This decision supersedes earlier broad statements that generic
+structs are wholly unimplemented: scalar instantiations work; recursive/list
+instantiations do not.
+
+No new layout or GC descriptor is introduced. In particular, concrete
+`sx_list *` fields on all three backends do not prove generic list-field
+specialization, and native concrete pointer tracing is not recursive generic
+layout support. A future proposal must establish recursive canonical identity,
+a bounded dependency worklist, cycle/size rules, ordered layouts and matching
+per-field tracing before lifting any refusal. String-bearing and list-bearing
+recursive layouts would need collection-pressure retention tests, not just
+matching `sizeof` or mangled names.
+
+Both public gates (`test-generic-structs`, `test-type-refusals`) depend on the
+seven-case cross-backend refusal matrix in `test-generic-struct-limits`. Valid
+scalar specializations precede each bad request to detect accidental reuse of
+a wrong layout. Gen2 must emit `#error` and fail downstream C compilation;
+seed/native must exit nonzero with diagnostics. This is refusal coverage, not
+positive support for those forms. See [GENERICS.md](GENERICS.md#permanent-bootstrap-boundary-generic-structs-2026-10-16)
+for the exact scope and known diagnostic limitations.

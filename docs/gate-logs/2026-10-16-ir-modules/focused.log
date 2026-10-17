@@ -1,0 +1,19 @@
+sh tools/test-emit-to-ir.sh ./tools/emit_to_ir selfhost/seed_tests/emit-tool
+[OK] C99 IR translator: exact output, unknown lines/instructions, token boundaries, named calls, long lines, EOF and errors
+[OK] C99 IR audit: strict syntax/offset validation, source-offset correlation, duplicate offsets, unknown mnemonics, deterministic output; no executable backend
+./selfhost/native_aot selfhost/native_ir_log_test.sa selfhost/seed_tests/irp_nat >/dev/null
+SX_EMIT_LOG=selfhost/seed_tests/irp.log ./selfhost/native_aot selfhost/native_ir_log_test.sa selfhost/seed_tests/irp_logged
+./tools/emit_to_ir selfhost/seed_tests/irp.log selfhost/seed_tests/irp.ir
+./tools/emit_to_ir selfhost/seed_tests/irp.log selfhost/seed_tests/irp_again.ir
+cmp selfhost/seed_tests/irp.ir selfhost/seed_tests/irp_again.ir
+./tools/emit_to_ir --strict --source-offsets selfhost/seed_tests/irp.log selfhost/seed_tests/irp_audit.ir
+./tools/emit_to_ir --strict --source-offsets selfhost/seed_tests/irp.log selfhost/seed_tests/irp_audit_again.ir
+cmp selfhost/seed_tests/irp_audit.ir selfhost/seed_tests/irp_audit_again.ir
+cmp selfhost/seed_tests/irp.ir selfhost/seed_tests/irp_audit_base.ir
+[OK] IR analysis listing: instruction counts/calls/phases preserved; strict record/offset audit and source correlation deterministic; register widths abstracted (no executable second ISA)
+./selfhost/gen2 selfhost/seed_tests/ts_use.sa selfhost/seed_tests/ts_use.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_use selfhost/seed_tests/ts_use.c
+./selfhost/gen2 selfhost/seed_tests/ts_top.sa selfhost/seed_tests/ts_top.c >/dev/null
+cc -O2 -o selfhost/seed_tests/ts_top selfhost/seed_tests/ts_top.c
+./selfhost/gen2 selfhost/seed_tests/ts_uq.sa selfhost/seed_tests/ts_uq.c >/dev/null
+[OK] gen2 use: splice, nested depth 2, missing file and unquoted path are hard errors

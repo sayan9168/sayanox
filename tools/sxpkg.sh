@@ -41,6 +41,9 @@ need_online() {
   no_target="${1:-$ONLINE}"
   case "$no_target" in
     file://*|/*|./*) return 0 ;;
+    http://*|https://*) ;;
+    *://*) echo 'sxpkg: unsupported transfer scheme (use http, https, file or a path)' >&2; return 1 ;;
+    *) return 0 ;;
   esac
   if [ "$ONLINE_OPT_IN" = 1 ]; then return 0; fi
   echo "sxpkg: refusing to use the network without an explicit opt-in" >&2
@@ -60,6 +63,9 @@ download() {
   case "$url" in
     file://*) cp "${url#file://}" "$part" || { rm -f "$part"; return 1; }; mv "$part" "$dest"; return $? ;;
     /*|./*) cp "$url" "$part" || { rm -f "$part"; return 1; }; mv "$part" "$dest"; return $? ;;
+    http://*|https://*) ;;
+    *://*) echo 'sxpkg: unsupported transfer scheme' >&2; return 1 ;;
+    *) cp "./$url" "$part" || { rm -f "$part"; return 1; }; mv "$part" "$dest"; return $? ;;
   esac
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$part" || { rm -f "$part"; return 1; }
@@ -102,6 +108,11 @@ sync() {
   echo "sxpkg: sync from $ONLINE"
   tmp=$(mktemp)
   if download "$ONLINE/INDEX" "$tmp"; then
+    if ! preflight_names "$tmp"; then
+      rm -f "$tmp"
+      echo 'sxpkg: rejected index with unsafe package name' >&2
+      return 1
+    fi
     cp "$tmp" "$INDEX"
     echo "sxpkg: index updated"
     while IFS='=' read -r n v; do
@@ -119,6 +130,7 @@ sync() {
 }
 
 add() {
+  checked check-name "${1:-}" >/dev/null || return 1
   run_sayanox add "$@"
   # The Sayanox binary locks any name it is given. Say so when the name has no
   # local registry copy, so an offline user is not surprised by `verify` later.
@@ -146,6 +158,16 @@ checked() {
   return 0
 }
 
+# Validation is .sa logic; shell only prevents untrusted path construction.
+preflight_names() {
+  while IFS='=' read -r pn pv || [ -n "$pn" ]; do
+    case "$pn" in \#*|""|name|version) continue ;; esac
+    checked check-name "$pn" >/dev/null || {
+      echo "sxpkg: refusing unsafe package name '$pn'" >&2; return 1;
+    }
+  done < "$1"
+}
+
 list() {
   run_sayanox list "$@"
 }
@@ -163,6 +185,7 @@ install_local() {
   src="${1:-registry}"
   mkdir -p "$PKGDIR"
   [ -f "$LOCK" ] || { echo "sxpkg: no sx.lock - run init/add"; exit 1; }
+  preflight_names "$LOCK" || return 1
   case "$src" in /*) ;; *) src=$(CDPATH= cd "$ROOT" && pwd)/"$src" ;; esac
   while IFS='=' read -r n v; do
     case "$n" in \#*|"") continue ;; version|name) continue ;; esac
@@ -174,7 +197,9 @@ install_local() {
 install() {
   mkdir -p "$PKGDIR"
   [ -f "$LOCK" ] || { echo "sxpkg: no sx.lock — run init/add"; exit 1; }
-  [ -f "$INDEX" ] || sync
+  # The lock plus complete cached packages are sufficient; a missing INDEX is
+  # not a reason to transfer. Preflight names before constructing any paths.
+  preflight_names "$LOCK" || return 1
   fetched=""
   while IFS='=' read -r n v; do
     case "$n" in \#*|"") continue ;; version|name) continue ;; esac
@@ -255,17 +280,39 @@ seed() {
   run_sayanox seed
 }
 
-fetch() {
-  url="$1"; name="${2:-remote_pkg}"
+fetch() (
+  url="${1:-}"; name="${2:-remote_pkg}"
   [ -n "$url" ] || { echo "usage: sxpkg fetch <url> [name]"; exit 1; }
-  need_online "$url" || return 1
-  mkdir -p "$REG/$name" "$PKGDIR/$name"
-  download "$url" "$REG/$name/main.sa"
-  printf "name=%s\nversion=0.0.0\nsource=%s\n" "$name" "$url" > "$REG/$name/pkg.meta"
-  grep -q "^$name=" "$LOCK" 2>/dev/null || echo "$name=0.0.0" >> "$LOCK"
-  cp -r "$REG/$name/." "$PKGDIR/$name/"
-  echo "sxpkg: fetched $name from $url"
-}
+  checked check-name "$name" >/dev/null || { echo 'sxpkg: invalid fetch name' >&2; exit 1; }
+  # Never silently replace a cache, project copy, or a differently pinned lock.
+  if [ -e "$REG/$name" ] || [ -e "$PKGDIR/$name" ] || grep -q "^$name=" "$LOCK" 2>/dev/null; then
+    echo "sxpkg: fetch refuses existing package/lock '$name'" >&2; exit 1
+  fi
+  need_online "$url" || exit 1
+  mkdir -p "$REG" "$PKGDIR"
+  stage=$(mktemp -d "$REG/.fetch.XXXXXX")
+  stage=$(CDPATH= cd "$stage" && pwd)
+  committed=0; reg_owned=0; pkg_owned=0
+  trap 'if [ "$committed" != 1 ]; then
+    [ "$reg_owned" = 0 ] || rm -rf "$REG/$name"
+    [ "$pkg_owned" = 0 ] || rm -rf "$PKGDIR/$name"
+  fi; rm -rf "$stage"' 0
+  trap 'exit 1' 1 2 3 15
+  mkdir "$stage/registry" "$stage/package"
+  download "$url" "$stage/registry/main.sa" || exit 1
+  s=$(run_sayanox sum "$stage/registry/main.sa" | awk '{print $3}')
+  case "$s" in ''|*[!0-9]*) echo 'sxpkg: failed to compute fetched checksum' >&2; exit 1 ;; esac
+  printf 'name=%s\nversion=0.0.0\nsum=%s\n' "$name" "$s" > "$stage/registry/pkg.meta"
+  cp -r "$stage/registry/." "$stage/package/"
+  if [ -f "$LOCK" ]; then cat "$LOCK" > "$stage/lock"; else : > "$stage/lock"; fi
+  # An extra newline also handles a pre-existing lock without a final newline.
+  printf '\n%s=0.0.0\n' "$name" >> "$stage/lock"
+  reg_owned=1; mv "$stage/registry" "$REG/$name"
+  pkg_owned=1; mv "$stage/package" "$PKGDIR/$name"
+  mv "$stage/lock" "$LOCK"
+  committed=1
+  echo "sxpkg: fetched $name from $url (checksum recorded; not authenticated)"
+)
 
 case "$cmd" in
   init) init ;;

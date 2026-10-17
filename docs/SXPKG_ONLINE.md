@@ -1,6 +1,6 @@
 # sxpkg online: a thin design
 
-Status: **implemented, network opt-in; audited 2026-10-15.** Lock/metadata and
+Status: **implemented, network opt-in; audited 2026-10-16.** Lock/metadata and
 checksum logic remain `.sa`; filesystem/network operations remain thin shell.
 `test-sxpkg-online-local` copies from a `file://` registry using POSIX `cp`,
 not curl/wget, and checks good/tampered/missing content plus cleanup.
@@ -42,8 +42,8 @@ No stronger integrity mechanism was added: `sum=` is not cryptography.
 | `init`, `add`, `list`, `remove`, `deps`, `search`, `info`, `verify`, `sum` | Sayanox binary (`tools/sxpkg.sa`) | local lock file and local registry | no |
 | `seed` | Sayanox binary | writes the sample registry (`hello` and `math`, the two packages the binary knows) | no |
 | `install-local [dir]` | shell `mkdir` + Sayanox `install` | copies the lock closure out of a local registry dir, sum-checked | no |
-| `sync` | shell | downloads `INDEX` and each locked `pkg.meta`/`main.sa` from `$SAYANOX_REGISTRY` | **yes** — opt-in (curl/wget) |
-| `install` | shell | like `install-local`, but fetches a package that is missing from `.sayanox/registry/` | **yes** |
+| `sync` | shell | downloads `INDEX` and each indexed package's `pkg.meta`/`main.sa` from `$SAYANOX_REGISTRY` | **yes** — opt-in (curl/wget) |
+| `install` | shell | uses cached locked packages without requiring INDEX; fetches missing entries | only when missing, opt-in |
 | `fetch <url> [name]` | shell | downloads one `main.sa`, writes `pkg.meta` **with the `sum=` of the fetched bytes**, and locks it as `0.0.0` | **yes** |
 | `publish` | shell | writes `pkg.meta` (**now including `sum=`, computed by `sxpkg sum`, exactly as the Sayanox implementation writes it**) and `main.sa` into the local registry and `INDEX`; prints "commit registry/<name> to go online" | no (it never uploads) |
 
@@ -59,8 +59,8 @@ check the registry story rests on. Both shell commands now record
 `sum=` (via `sxpkg sum`, the same `pkgsum`: `h = (h*31 + byte) mod
 1000000007`) whenever a `main.sa` is present, so a shell-published or
 shell-fetched package verifies the same way as a Sayanox-seeded one.
-`pkgsum` is a change detector, **not** a cryptographic hash: it proves a
-file changed, never who changed it (see the table of deliberately-not-done
+`pkgsum` is a change detector, **not** a cryptographic hash: a mismatch proves the bytes changed, but a matching value does not
+prove equality or authorship (see the table of deliberately-not-done
 items below).
 
 ## Contract for the online commands
@@ -98,7 +98,9 @@ items below).
   Package names containing `/` or `..` are refused before any file is touched.
 * A transfer is accepted only when the Sayanox binary's `verify` passes on the
   result. The sum check, not the transport, is the acceptance test.
-* No credentials are read or stored. No authentication is part of the design.
+* The wrapper has no credential store or publisher-authentication protocol.
+  Optional transport clients retain their own environment/configuration
+  behavior; this is not an isolated or authenticated transport sandbox.
 
 ### Verification
 
@@ -107,7 +109,7 @@ version must match `sx.lock`, and `pkgsum(main.sa)` must equal `sum=` in
 `pkg.meta`. Dependency-only packages are checked the same way. A mismatch is
 reported as `MISMATCH` and the wrapper exits 1 (see `test-sxpkg-polish`).
 The online path is tested against a local `file://` registry by
-`make test-sxpkg-online-local` (not a bootstrap gate; skips without curl).
+`make test-sxpkg-online-local` (offline, required by true-selfhost; no curl dependency).
 
 ## Missing (and why it is not in this pass)
 
@@ -129,3 +131,61 @@ The online path is tested against a local `file://` registry by
 * That a command "works offline" only when it never mentions a URL. `install`
   with a remote `SAYANOX_REGISTRY` and a complete local registry is an offline
   command; the same command with a missing package is not, and says so.
+
+## Transfer hardening and deterministic success paths (2026-10-16)
+
+The previous documentation said `fetch` wrote `sum=`; the audited code did
+**not**. This increment implements that behavior rather than repeating the
+claim. A fetch downloads into a private staging directory, obtains the checksum
+from the `.sa` binary's `sum` command, writes metadata and prepares the project
+copy/lock before committing. Download failure removes staging and leaves no
+package or lock entry. Existing cache directories, installed copies or lock
+pins are refused rather than overwritten. A normal commit error attempts to
+roll back newly owned package directories. This is not a crash-proof,
+concurrent multi-file transaction: no locking, fsync or SIGKILL/power-loss
+recovery is claimed.
+
+Fetch records the checksum of the bytes it just received. There is no trusted
+expected digest and no publisher identity; this detects later accidental edits,
+**not a malicious first download**, substitution or deliberate collisions.
+`source=` is not required or used as an integrity/provenance assertion.
+
+Package-name validation is implemented in `tools/sxpkg.sa` and exposed by the
+`check-name` subcommand. The wrapper uses it before fetch/add path construction
+and when preflighting install lock entries and downloaded INDEX entries. Names
+are nonempty ASCII letters/digits/hyphen/underscore, excluding reserved `name`
+and `version`. Dots, slashes, whitespace and traversal components are refused.
+An unsafe downloaded index is rejected before replacing the current INDEX.
+This preflight is not a comprehensive hostile-registry parser, symlink defense,
+dependency graph security audit or all-command filesystem sandbox.
+
+An all-local `install` no longer calls `sync` merely because INDEX is absent:
+its lock and complete cached packages suffice. Absolute, `./` and bare-relative
+local paths plus `file://` use `cp` without permission or curl/wget. Only
+HTTP/HTTPS transfers use the optional clients; unsupported URI schemes are
+refused. The wrapper's opt-in and existing timeout behavior are unchanged.
+
+`make test-sxpkg-transfer-hardening`, required by `test-sxpkg-online-optin`,
+adds deterministic **successful** curl and wget-only stubs, not just failure
+fallbacks. Neither stub has any socket/DNS code. Coverage includes:
+
+* refusal before transport without opt-in and for unsafe fetch names;
+* a stub writing partial bytes then failing: lock preserved, staging removed;
+* successful opt-in via curl and a PATH with only mocked wget (no real curl);
+* fetched metadata sum, copied bytes, verify success and tamper rejection;
+* refusing existing package/lock replacement before transport;
+* rooted bare-relative local fetch without opt-in;
+* unsafe downloaded index preserving the previous INDEX;
+* unsafe hand-edited lock rejected by both install paths before transport;
+* cached install with no INDEX and a remote registry URL making no transfer;
+* no leftover `.part` or fetch staging directories on the tested paths.
+
+The full package suite and four bootstrap gates are recorded in
+[2026-10-16 package logs](gate-logs/2026-10-16-packages/). Bootstrap remains
+network-free and interpreter-free; stronger integrity, signatures and
+provenance are **not** implemented or claimed.
+
+Current empty-source boundary: the `.sa` `sum` command cannot distinguish an
+empty file from an unreadable one. Staged fetch therefore refuses an empty
+source when it cannot obtain a numeric sum, rather than silently installing
+metadata without a checksum. This increment does not redesign that file API.

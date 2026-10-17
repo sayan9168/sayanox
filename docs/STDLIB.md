@@ -10,7 +10,7 @@ checked by a `make` target; the backend columns below say what is verified.
 | `stdlib/list_util.sa` | 9 list helpers (`l_len`, `l_get`, `l_sum`, `l_max`, `l_min`, `l_count`, `l_contains`, `l_reverse`, `l_range`) | seed-min, gen2, native | `test-stdlib` |
 | `stdlib/file_util.sa` | 5 file helpers (`f_read`, `f_write`, `f_size`, `f_exists`, `f_lines`) | seed-min, gen2, native | `test-stdlib` |
 | `stdlib/num_util.sa` | 17 untyped numeric helpers (`nu_trunc`, `nu_floor`, `nu_ceil`, `nu_round`, `nu_frac`, `nu_min`, `nu_max`, `nu_mod_pos`, `nu_int_div`, `nu_wrap`, `nu_map_range`, `nu_avg`, `nu_median3`, `nu_pi`, `nu_deg2rad`, `nu_rad2deg`, `nu_turn`) | seed-min, gen2, native | `test-stdlib-modules` |
-| `stdlib/list_algo.sa` | 17 typed list algorithms (`la_insert_sorted`, `la_sort`, `la_sorted`, `la_index_of`, `la_append`, `la_slice`, `la_take`, `la_drop`, `la_cumsum`, `la_repeat`, `la_scale`, `la_offset`, `la_zip_add`, `la_count_gt`, `la_remove_at`, `la_insert_at`, `la_distinct`) | seed-min, gen2, native | `test-stdlib-modules` |
+| `stdlib/list_algo.sa` | 21 typed list algorithms (`la_insert_sorted`, `la_sort`, `la_sorted`, `la_index_of`, `la_append`, `la_slice`, `la_take`, `la_drop`, `la_cumsum`, `la_repeat`, `la_scale`, `la_offset`, `la_zip_add`, `la_count_gt`, `la_remove_at`, `la_insert_at`, `la_distinct`, `la_lower_bound`, `la_upper_bound`, `la_merge_sorted`, `la_rotate`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/str_text.sa` | 18 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/json_util.sa` | flat-object JSON build/read (`j_escape`, `j_kv_text`, `j_kv_number`, `j_kv_flag`, `j_pair`, `j_obj`, `j_arr_numbers`, `j_has`, `j_get_text`, `j_get_number`, `j_get_flag`) | seed-min, gen2, native | `test-stdlib-modules` |
 
@@ -124,9 +124,7 @@ list.
 will split a multi-byte UTF-8 sequence (the same limitation `str_util.sa`
 documents). `t_index_of`/`t_last_index_of` return `-1` when absent, `t_slice`
 clamps, `t_trim*` strip ASCII space/tab/newline/CR, `t_cmp` gives
-`<0 / 0 / >0`, `t_word_count` counts whitespace-separated runs, `t_replace`
-replaces every non-overlapping occurrence left to right (an empty `find`
-returns the input unchanged), `t_hash` is a small `h * 31 + c` fold, and
+`<0 / 0 / >0`, `t_word_count` counts whitespace-separated runs, `t_replace(s, from, to)` replaces each matching byte, not substrings, `t_hash` is a small `h * 31 + c` fold, and
 `t_parse_uint` stops at the first non-digit.
 
 ### Rules these modules follow
@@ -134,22 +132,22 @@ returns the input unchanged), `t_hash` is a small `h * 31 + c` fold, and
 * One statement per line; `give xs }` on one line is rejected.
 * A helper is defined before every helper that calls it — a user function gets
   no forward prototype in the generated C.
-* `give xs[i]` does not compile; bind with `hold v = xs[i]` first.
+* Bind intermediate indexed values with `hold` in portable library code;
+  direct indexed returns now have their own `test-give-index` coverage.
 * **An index may be a numeric expression** (`xs[i - 1]`, `xs[(a + b) / 2]`,
   `xs[p.k]`) in a value position, inside a `when`/`while` condition and inside
   a `for` bound, on all three backends since the 2026-10-13 increment
   (`make test-gen2-index-expr`). `la_sorted` uses `xs[i] < xs[i - 1]` and is
-  the live stdlib exercise for it. Still refused by gen2 inside `[ ]`, with a
-  clear diagnostic: `%`, any call including `len()`, a nested index, a comma, a
-  quoted string, an empty index, unbalanced parentheses and an expression that
-  ends with an operator. Bind the value with `hold` first -- that is what
-  `last_char` in the fixture does instead of `text[len(text) - 1]`.
+  the live stdlib exercise for it. Gen2 also supports modulo, len() and
+  nested indexes; arbitrary calls, comma/string/empty indexes, unbalanced
+  parentheses and trailing operators remain refused. See
+  `test-gen2-index-expr` and `test-gen2-expr-lowering` for the exact boundary.
 * No inline list literal as a call argument and no postfix indexing of a call
   result (`la_take(xs, 2)[1]`) in tests: bind to a `hold` first.
 
 ## Scope confirmation (2026-10-15)
 
-No new standard-library module or nested JSON reader was added in this PR.
+No nested JSON reader is provided.
 `json_util` remains text building plus limited flat-object extraction, not a
 validating JSON parser. It does not promise nested values, exponent parsing,
 Unicode scalar validation or arbitrary escaped-key lookup. Existing module
@@ -157,3 +155,43 @@ parity tests run in the bootstrap gates; no crypto implementation is claimed.
 HTTP/crawler integration tests are explicitly optional (`make test-network`):
 they use a Python local test server and curl and are not bootstrap dependencies.
 The optional HTTP builtin's implementation is not a pure-.sa HTTP/TLS stack.
+
+## Offline list algorithms (2026-10-16)
+
+Four real `.sa` helpers extend the existing standalone `list_algo` module:
+
+| Helper | Contract | Cost |
+|---|---|---|
+| `la_lower_bound(xs, v)` | First index with value >= v, or `len(xs)` | O(log n) comparisons |
+| `la_upper_bound(xs, v)` | First index with value > v, or `len(xs)` | O(log n) comparisons |
+| `la_merge_sorted(a, b)` | Fresh sorted merge, retains duplicates; equal values taken from a first | O(n + m) elements |
+| `la_rotate(xs, shift)` | Fresh left rotation; negative shifts rotate right; reduced modulo length | O(n) elements |
+
+Bounds and merge require ascending sorted input with finite numeric values;
+there is no sortedness validation or NaN/Infinity total-order promise. Bound
+indices are insertion positions in `[0, len(xs)]`, not -1 sentinels. Merge
+accepts empty lists and aliased inputs. Rotation requires integer shifts within
+the runtime's signed-integer modulo range; empty input avoids modulo zero.
+Fresh results never alias an input, including zero rotations and empty-side
+merges. No helper changes input elements or list length.
+
+`make test-stdlib-list-search` requires **all three** seed-min/Gen2/native
+backends (no native skip), compiles C with strict pointer/prototype diagnostics,
+and checks exact output against an independent expected success marker. The
+fixture checks explicit bound positions plus a small-domain linear oracle,
+duplicates, missing endpoints, negative values, empty/singleton inputs, merge
+contents, negative/wrapped shifts, and input preservation after result pushes.
+The gate is included by `test-stdlib-modules` (therefore `test-stdlib` and
+`test-stdlib-growth`) and `native-test`. Existing module/JSON fixtures remain.
+Logs: [2026-10-16 offline stdlib](gate-logs/2026-10-16-stdlib/).
+
+### Explicit non-goals
+
+This remains a **small utility library, not a full standard library**. No
+nested JSON parser/printer, general JSON validation, Unicode text model,
+heterogeneous lists, filesystem metadata API, pure-.sa HTTP/TLS stack or
+cryptography is added. `json_util` remains flat and non-validating; `f_exists`
+means readable **and nonempty**, not filesystem existence (empty/missing files
+are indistinguishable there). `t_hash` is non-cryptographic. HTTP/network
+examples and their optional dependencies stay outside required bootstrap gates.
+The new module code and tests use no network or interpreter dependency.

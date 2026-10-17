@@ -1,0 +1,66 @@
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/seed/sxc_seed_min selfhost/stdlib_list_search_test.sa > selfhost/seed_tests/stdlib_search_seed.c
+./selfhost/gen2 selfhost/stdlib_list_search_test.sa selfhost/seed_tests/stdlib_search_gen2.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/stdlib_search_seed selfhost/seed_tests/stdlib_search_seed.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/stdlib_search_gen2 selfhost/seed_tests/stdlib_search_gen2.c
+./selfhost/native_aot selfhost/stdlib_list_search_test.sa selfhost/seed_tests/stdlib_search_native
+[OK] offline list search/merge/rotation: seed-min/gen2/native; empty/singleton/duplicates, linear bound oracle, negative/wrapped shifts, fresh result aliases
+./selfhost/seed/sxc_seed_min selfhost/stdlib_modules_test.sa > selfhost/seed_tests/stm_seed.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/stm_seed selfhost/seed_tests/stm_seed.c
+./selfhost/gen2 selfhost/stdlib_modules_test.sa selfhost/seed_tests/stm_gen2.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/stm_gen2 selfhost/seed_tests/stm_gen2.c
+[OK] native stdlib module parity (num_util, list_algo, str_text)
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/stm_alone_num.sa > selfhost/seed_tests/stm_alone_num.c
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/stm_alone_num selfhost/seed_tests/stm_alone_num.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/stm_alone_list.sa > selfhost/seed_tests/stm_alone_list.c
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/stm_alone_list selfhost/seed_tests/stm_alone_list.c
+./selfhost/gen2 selfhost/seed_tests/stm_alone_list.sa selfhost/seed_tests/stm_alone_list_g2.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/stm_alone_list_g2 selfhost/seed_tests/stm_alone_list_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/stm_alone_str.sa > selfhost/seed_tests/stm_alone_str.c
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/stm_alone_str selfhost/seed_tests/stm_alone_str.c
+./selfhost/gen2 selfhost/seed_tests/stm_alone_str.sa selfhost/seed_tests/stm_alone_str_g2.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/stm_alone_str_g2 selfhost/seed_tests/stm_alone_str_g2.c
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/stm_all.sa > selfhost/seed_tests/stm_all_seed.c
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/stm_all_seed selfhost/seed_tests/stm_all_seed.c
+./selfhost/gen2 selfhost/seed_tests/stm_all.sa selfhost/seed_tests/stm_all_g2.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/stm_all_g2 selfhost/seed_tests/stm_all_g2.c
+./selfhost/seed/sxc_seed_min selfhost/stdlib_json_test.sa > selfhost/seed_tests/sjson_seed.c
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/sjson_seed selfhost/seed_tests/sjson_seed.c
+./selfhost/gen2 selfhost/stdlib_json_test.sa selfhost/seed_tests/sjson_gen2.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/sjson_gen2 selfhost/seed_tests/sjson_gen2.c
+./selfhost/seed_tests/sjson_seed > selfhost/seed_tests/sjson_seed.out; ./selfhost/seed_tests/sjson_gen2 > selfhost/seed_tests/sjson_gen2.out; \
+  cmp selfhost/seed_tests/sjson_seed.out selfhost/seed_tests/sjson_gen2.out
+[OK] native json_util parity (flat-object build/read)
+[OK] stdlib growth: num_util (17 helpers) + list_algo (17) + str_text (18) = 52 helpers, 99 hand-computed values identical on seed-min, gen2 and native; each module stands alone and all seven coexist
+./selfhost/seed/sxc_seed_min selfhost/stdlib_interpolation_test.sa > selfhost/seed_tests/interp_seed.c
+cc -O2 -o selfhost/seed_tests/interp_seed selfhost/seed_tests/interp_seed.c
+./selfhost/gen2 selfhost/stdlib_interpolation_test.sa selfhost/seed_tests/interp_gen2.c
+cc -O2 -o selfhost/seed_tests/interp_gen2 selfhost/seed_tests/interp_gen2.c
+[OK] native interpolation parity
+[OK] interpolation helpers: seed-min, gen2 (native when built); endpoints, fractions, extrapolation
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/std_t.sa > selfhost/seed_tests/std_sm.c
+cc -O2 -o selfhost/seed_tests/std_sm selfhost/seed_tests/std_sm.c
+./selfhost/gen2 selfhost/seed_tests/std_t.sa selfhost/seed_tests/std_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/std_g2 selfhost/seed_tests/std_g2.c
+[OK] tiny stdlib via use: seed-min == gen2 (== native when built) on 30 numeric helpers
+./selfhost/gen2 selfhost/seed_tests/std_sl.sa selfhost/seed_tests/std_sl.c >/dev/null
+cc -O2 -Wall -o selfhost/seed_tests/std_sl selfhost/seed_tests/std_sl.c 2>selfhost/seed_tests/std_sl.warn
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/std_sl.sa > selfhost/seed_tests/std_sl_seed.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/std_sl_seed selfhost/seed_tests/std_sl_seed.c
+./selfhost/seed_tests/std_sl_seed > selfhost/seed_tests/std_sl_seed.out
+./selfhost/seed_tests/std_sl > selfhost/seed_tests/std_sl_g2.out
+cmp selfhost/seed_tests/std_sl_seed.out selfhost/seed_tests/std_sl_g2.out
+[OK] stdlib str/list/file modules on gen2 (typed parameters); seed-min and native run them with the same output
+./selfhost/seed/sxc_seed_min selfhost/stdlib_growth_test.sa > selfhost/seed_tests/sg_sm.c
+cc -O2 -o selfhost/seed_tests/sg_sm selfhost/seed_tests/sg_sm.c
+./selfhost/gen2 selfhost/stdlib_growth_test.sa selfhost/seed_tests/sg_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/sg_g2 selfhost/seed_tests/sg_g2.c
+[OK] stdlib growth: 9 new public numeric helpers, seed-min == gen2 (== native when built)
+make: Nothing to be done for 'test-stdlib-modules'.
+make: Nothing to be done for 'test-stdlib-interpolation'.

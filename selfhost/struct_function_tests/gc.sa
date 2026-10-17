@@ -1,0 +1,46 @@
+struct Inner { text, xs }
+struct Box { inner, tag }
+// Layout witnesses establish field kinds before field-reading functions.
+// They hold NONE of the managed objects subsequently returned by build().
+hold empty = []
+hold inner_witness = Inner { text: "witness", xs: empty }
+hold box_witness = Box { inner: Inner { text: "witness", xs: empty }, tag: 0 }
+make build() -> Box {
+  hold text = concat("ret", "ained")
+  hold xs = [4, 5]
+  hold inner = Inner { text: text, xs: xs }
+  hold box = Box { inner: Inner { text: text, xs: xs }, tag: 9 }
+  give box
+}
+make preserve(p: Box, n: num) -> Box {
+  while n > 0 {
+    hold trash = concat("discard", "-this")
+    hold scratch = [10, 20, 30]
+    hold freed = gc()
+    n = n - 1
+  }
+  show p.inner.text
+  show p.inner.xs[1]
+  give p
+}
+make packet_text(p: Box) -> str {
+  give p.inner.text
+}
+make packet_values(p: Box) -> list {
+  give p.inner.xs
+}
+hold packet = preserve(build(), 40)
+hold alias = packet.inner.xs
+push(alias, 6)
+hold freed = gc()
+show packet.inner.text
+show packet.inner.xs[0]
+show len(packet.inner.xs)
+when gc_runs() > 40 {
+  show "gc-ok"
+} otherwise {
+  show "gc-missing"
+}
+show packet_text(packet)
+hold returned_list = packet_values(packet)
+show returned_list[1]

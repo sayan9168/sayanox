@@ -1,0 +1,12 @@
+[OK] gen2 identifier interpolation: values (O0/O2)
+[OK] gen2 identifier interpolation: import (O0/O2)
+[OK] gen2 identifier interpolation: gc (O0/O2)
+[OK] gen2 identifier interpolation: escaped (O0/O2)
+[OK] gen2 identifier interpolation: struct_integration (O0/O2)
+[OK] gen2 interpolation: 16-hole boundary and 10 source-diagnostic refusals
+[OK] gen3 identifier interpolation: values (O0/O2)
+[OK] gen3 identifier interpolation: import (O0/O2)
+[OK] gen3 identifier interpolation: gc (O0/O2)
+[OK] gen3 identifier interpolation: escaped (O0/O2)
+[OK] gen3 identifier interpolation: struct_integration (O0/O2)
+[OK] gen3 interpolation: 16-hole boundary and 10 source-diagnostic refusals

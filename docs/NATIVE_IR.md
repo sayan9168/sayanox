@@ -1,16 +1,17 @@
-# Native path ≈ Stage-2 IR
+# Native instruction log and IR analysis listing
 
-The native AOT compiler uses an internal pipeline similar to Stage-2:
+The native AOT compiler does not materialize a portable program IR. Its
+maintained pipeline is:
 
 ```
 source .sa
   → preprocess (use "mod.sa")
-  → statements (estmt)
-  → expression trees (parse_expr)
-  → machine-code emission (x86_64)
+  → definition collection and kind inference
+  → recursive emit walk (emit_prog / emit_fn / emit_expr)
+  → machine-code emission (x86-64 Linux ELF)
 ```
 
-## Covered Stage-2 surface on native
+## Selected native subset surface
 
 | Feature | Native |
 |---------|--------|
@@ -97,9 +98,9 @@ immediately.
   fixture's top level uses —
   `add addsd call cvtsi2sd cvttsd2si jae je jmp lea mov movq movzx mulsd pop push seta ucomisd` —
   and the named call targets (`call make twice`, `call builtin concat`,
-  `call builtin gccheck`). A riscv64 or ARM64 encoder answers the same primitive
-  calls with its own instructions and its own encodings; the emit tree does not
-  change.
+  `call builtin gccheck`). A future riscv64/ARM64 backend would need an ABI-aware lowering adapter,
+  not just a different byte encoder: these primitive calls still assume
+  x86 registers, stack behavior and instruction semantics.
 * **The value model.** Numbers are IEEE double bits in 64-bit slots and
   registers; arithmetic moves them through `xmm0`/`xmm1` (`emit_d2i` and
   `emit_i2d` are the two conversions); a list length or a `len()` result is an
@@ -136,16 +137,16 @@ make tools/emit_to_ir
 ```
 
 `make test-native-ir-portable` pins the contract: the translation is
-deterministic (two runs cmp clean), lossless (one IR instruction per logged
-instruction), free of x86 register names on instruction lines, and preserves
+deterministic (two runs cmp clean), instruction-count preserving (one listing
+instruction per logged instruction), free of x86 register names on instruction lines, and preserves
 the abstract machine model (`FADD`, `FCMP`, `I2F`, named calls, phase
 markers).
 
 This is the "portable IR docs + tests" half of the second-target item, and it
 is deliberately only that: **no backend assembles or executes the IR, and no
-second ISA is claimed.** The listing exists so the instruction stream a
-second backend would have to reproduce can be read, diffed and counted
-without x86-64 noise. `native-test` stays an x86-64-Linux-only gate.
+second ISA is claimed.** The listing exists so the stream can be read, diffed and counted with
+abstract register names. Width distinctions and x86-64 semantics are not
+removed by renaming; this is not a lossless executable representation. `native-test` stays an x86-64-Linux-only gate.
 
 ### What the recorder is not
 
@@ -172,3 +173,51 @@ The Python implementation has been removed; `native-test` builds and runs the
 C tool. The baseline fixture translation matches the former Python output
 byte-for-byte after the three provenance header lines. Register abstraction
 still does not remove x86 layout/ABI assumptions or resolve relocations.
+
+## Strict log audit and source-offset correlation (2026-10-16)
+
+The streaming C99 translator now offers opt-in analysis modes:
+
+```sh
+./tools/emit_to_ir --strict --source-offsets input.log output.ir
+```
+
+* `--strict` accepts semicolon comment lines or nonempty instruction records
+  with exactly six lowercase hexadecimal offset digits and two spaces before
+  the mnemonic. It rejects malformed/empty records and decreasing instruction
+  offsets, with a line-numbered diagnostic and nonzero status. Equal offsets
+  are allowed; comments are not interpreted as control-flow assertions.
+* `--source-offsets` adds a comment before each instruction, e.g.
+  `; source-offset 000059 -> I7`, so a listing instruction can be correlated
+  with the recorded machine-byte offset and original fixup comments.
+* Existing two-positional-argument usage is unchanged. Default mode retains
+  malformed/unknown lines as `UNTRANSLATED` comments. Unknown **mnemonics** are
+  retained uppercased even in strict mode: this validates the log record shape,
+  not the instruction set or operand semantics. NUL bytes and I/O errors fail
+  in both modes. A failed run can leave a partial output; callers must check
+  its exit status. `--` ends option parsing.
+
+`test-emit-to-ir` checks exact audit output, repeated-offset acceptance,
+backward/malformed/NUL refusal, unterminated final lines, long operands and
+unchanged default output. `test-native-ir-portable` runs both modes on a real
+native compilation, compares repeat audit runs, checks one correlation comment
+per instruction, and proves that stripping only those added comments gives
+back the default listing. This is part of `native-test`, using C and shell
+utilities only—no Python.
+
+### Explicit non-claims
+
+The default mapping collapses, for example, `rax`, `eax` and `al` to `A`.
+That loses width information. It also retains x86-relative displacements,
+System V AMD64 register roles, stack operations, condition-code assumptions,
+SSE operations and syscall/runtime choices. “One instruction per record” is
+not a semantic-losslessness claim. Source offsets are byte offsets in the
+recorded x86 program, **not** portable branch labels; neither mode resolves
+fixups, builds a CFG/SSA, checks operands, assembles, interprets or executes the
+listing. Strict success does not prove that a log describes valid machine code.
+
+There is still exactly **one executable ISA backend: x86-64 Linux ELF**.
+No aarch64/riscv64 emitter, loader, ABI/runtime/collector port, cross-execution
+smoke test or second-backend acceptance gate has been added. Host-C compilation
+of generated C and abstract register names are not a second native ISA.
+Actual gates: [2026-10-16 IR/modules logs](gate-logs/2026-10-16-ir-modules/).
