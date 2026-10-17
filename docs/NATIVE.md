@@ -119,29 +119,34 @@ Expected output:
 
 There is no `bootstrap-native` Makefile target; use `make native`.
 
-## Unified driver
+## Entry points
 
-`selfhost/sx_driver.c` supports explicit backend selection:
+There is no unified `sx_driver.c` anymore (deleted 2026-10-17: no target built
+it). The two backends are reached directly:
 
 ```sh
-./selfhost/sx --backend=native -o out examples/native_hello.sa
+make native
+./selfhost/native_aot examples/native_hello.sa out
 ./out
 
-./selfhost/sx --backend=c -o out examples/native_hello.sa
+./selfhost/gen2 examples/native_hello.sa out.c
+cc -O2 -o out out.c
 ./out
 ```
 
-`--backend=c` remains the compatibility fallback for programs outside the native subset. `--backend=auto` prefers the native compiler when available and otherwise uses the C route.
+The `selfhost/sx` wrapper is a Sayanox-side stub that exits 1 because there is
+no Stage-2 host in this tree.
 
 ## Limitations
 
 The native backend is a subset compiler; there is no complete Stage-2 host
 in this repository to replace. Native support must not be assumed for every `.sa` construct.
 
-When native lowering cannot safely support a program, use:
+When native lowering cannot safely support a program, compile through gen2 and
+cc instead:
 
 ```sh
-./selfhost/sx --backend=c -o out program.sa
+./selfhost/gen2 program.sa out.c && cc -O2 -o out out.c
 ```
 
 The native backend is currently Linux x86-64 specific.

@@ -47,10 +47,19 @@ the same source); the checked-in `seed-min` predates them and rejects them.
 | `gc()` | run a collection now; returns the bytes reclaimed |
 | `gc_live()` | bytes currently held by the managed heap |
 | `gc_runs()` | number of collections so far |
+| `exit(n)` | flush stdout, terminate the process with status `n` |
 
 All of them are ordinary expressions, so they nest inside other calls
 (`concat(a, numstr(n))`) and can be stored (`hold n = numstr(v)`). Native AOT
 does not implement them. See [`GC.md`](GC.md).
+
+`exit(n)` was added on 2026-10-17 so Sayanox CLI tools can report failure
+without a C helper. It flushes stdout before terminating, returns a number
+type, and follows the ordinary-expression rule above (`hold code = exit(2)`,
+`show exit(2)`); bare `exit(2)` on its own line is an `unknown statement` like
+every other bare call. seed-min, native AOT and the checked-in Stage-2 seed do
+not implement it (`make test-exit-builtin` pins both the behaviour and the
+refusal).
 
 The maintained C backends accept the builtins in expressions (for example,
 `hold status = write_file(path, text)`). A *statement* is `hold show when

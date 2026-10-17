@@ -69,7 +69,7 @@ free. The small hand-written C seed and the C native backend remain, as does
 the Makefile/POSIX-sh orchestration; see [NO_BASH.md](NO_BASH.md) and
 [ONLY_SAYANOX.md](ONLY_SAYANOX.md).
 
-## Next phase — all-in-Sayanox (recorded, not started)
+## Next phase — all-in-Sayanox (in progress)
 
 **Writing the remaining pieces in Sayanox is the next phase.** It is recorded
 here so it is not lost, and it is machine-checked: `make all-sayanox` prints the
@@ -81,14 +81,16 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
 | `selfhost/native_aot.c` | C | 4,353 lines | Phase D — needs byte buffers, bitwise operations and shifts, and a syscall/memory surface in the language |
 | `tools/lsp_workspace.h` | C | 119 lines | Phase B — needs a directory-enumeration builtin; then the Sayanox LSP reads folders itself |
-| `tools/emit_to_ir.c` | C | 150 lines | Phase B — expressible with today's `read_file`/`write_file`/string builtins |
-| `Makefile` + 26 `sh` scripts | make / POSIX sh | ~4,470 + ~1,730 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `tools/lsp_workspace_test.c` | C | 127 lines | Phase B — the bridge test, deleted with the bridge |
+| `Makefile` + 25 `sh` scripts | make / POSIX sh | ~4,510 lines | Later — a Sayanox build driver still needs a built compiler first |
 
-Already Sayanox and gated: the compiler (`compiler_min.sa`, 18,713 lines), the
-formatter, the local package tool, the language server and the build-time LSP
-binder (`tools/lsp_workspace_bind.sa`). 274 `.sa` files, 1,063,740 bytes.
+Already Sayanox and gated: the compiler (`compiler_min.sa`, 18,721 lines), the
+formatter, the local package tool, the language server, the build-time LSP
+binder (`tools/lsp_workspace_bind.sa`) and, since 2026-10-17, the IR translator
+(`tools/emit_to_ir.sa`, byte-identical output). 275 `.sa` files, 1,068,383
+bytes. Nine unreferenced C helpers were deleted the same day.
 
-Phase order: **B** IR tool → directory builtin + LSP bridge, **C** online
+Phase order: **B** ~~IR tool~~ (done) → directory builtin + LSP bridge, **C** online
 package behavior, **D** native backend, **E** seed. Each phase must keep
 `gen3 == gen4` and the four hard gates green, and each must delete its row from
 the table above rather than add a new claim. No target may report success for
@@ -212,7 +214,7 @@ bootstrap kept green (the four gate logs above are this pass's own runs):
    same line) and a format-only code action added and probed
    (`test-lsp`, 38 facts); no workspace scan exists and none is claimed
    ([`LSP.md`](LSP.md)).
-9. **Native second target** — `tools/emit_to_ir.py` translates the
+9. **Native second target** — `tools/emit_to_ir.sa` translates the
    `SX_EMIT_LOG` instruction list into a portable IR *listing*
    (lossless, deterministic, x86 register names abstracted;
    `test-native-ir-portable`). Nothing assembles or executes it: **no
@@ -796,7 +798,7 @@ still use shell/C infrastructure. See
 | `make test-generic-structs` | generic structs are **implemented** on all three backends: `struct Box<T> { v }` is a template and each instantiation is its own concrete struct (`Box<num>` is `Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns`), so the gate pins those three typedefs in the generated C and the parity fixture `selfhost/generic_struct_box.sa` (`7 seven 8 seven 9 nine` — byte-identical on seed-min, gen2 and native). It also pins five refusals that all three backends make (wrong type argument count, a struct name as a type argument, a list as a type argument, a bare template name, one instantiation used with two kinds), the older concrete-name workaround (`NumBox`, `TextBox`, `PairBox` — `7 seven 8 eight 2 8 9`) and a dotted field read inside a struct literal as seed-min-only (gen2 `#error`, native refuses) |
 | `make test-sxpkg-online-optin` | the network is opt-in: `sync`, an `install` that has to fetch, and a remote `fetch` refuse without `SAYANOX_ONLINE=1` or `sxpkg --online <cmd>`, naming the opt-in and the offline commands and leaving no `.part` file; with the opt-in the same commands reach the transfer (a `.invalid` host, so they fail in the resolver and `sync` falls back to the offline seed); an all-local `install` and a `file://` fetch never ask |
 | `make test-native-emit-split` (part of `native-test`) | the x86-64 backend is a region, not a seasoning: the 1332 lines between `EMIT-SEAM-BEGIN` and `EMIT-SEAM-END` contain no `e1(`/`e32(`/`e64(`, no `memcpy` into `code` and no direct read of the code cursor `cn` (labels come from `here()`), the seam primitives are all defined in the encoder region above `phase 1`, and an emitted program still runs. The refactor itself was checked byte for byte against the pre-seam binary on six fixtures |
-| `make test-native-ir-portable` (part of `native-test`) | the `SX_EMIT_LOG` instruction list translates to the portable IR listing (`tools/emit_to_ir.py`, [`NATIVE_IR.md`](NATIVE_IR.md)): deterministic (two runs cmp clean), lossless (one IR instruction per logged instruction), no x86 register names on IR instruction lines, abstract machine model preserved (`FADD`, `FCMP`, `I2F`, named `CALL`s, phase markers). An analysis format only — nothing assembles or executes it, and no second ISA is claimed |
+| `make test-native-ir-portable` (part of `native-test`) | the `SX_EMIT_LOG` instruction list translates to the portable IR listing (`tools/emit_to_ir.sa`, [`NATIVE_IR.md`](NATIVE_IR.md)): deterministic (two runs cmp clean), lossless (one IR instruction per logged instruction), no x86 register names on IR instruction lines, abstract machine model preserved (`FADD`, `FCMP`, `I2F`, named `CALL`s, phase markers). An analysis format only — nothing assembles or executes it, and no second ISA is claimed |
 | `make test-native-ir-log` (part of `native-test`) | the emit tree's instruction list is inspectable and pinned: with `SX_EMIT_LOG=<path>` every encoder primitive records the code offset, the mnemonic and the operands in assembly order, plus a `;` line per label slot, per fixup, per emitted `make` and per phase — 1122 instructions, 2 slots and 41 rel32 fixups for `selfhost/native_ir_log_test.sa`, with every call target named (`call make twice`, `call builtin gccheck`). The recorder is inert (the ELF built with it `cmp`s clean against the one built without it, and against the pre-recorder compiler on six fixtures), the list is deterministic, every line is an instruction line or a comment line, the offsets never go backwards, every rel32 fixup lands on a jump, no call target or operand falls back to a placeholder name, the six phases come in order, the fixture's top-level mnemonic vocabulary is pinned exactly, and the language emitter provably never touches the recorder state |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make test-native-mem` (part of `native-test`) | native memory with a real collector: a string doubled to 262144 bytes is served whole; 100000 `push`es keep every value; a 200000-iteration churn loop (~8 MB allocated, nothing retained) **finishes inside a 4 MiB `ulimit -v` cap** running 200+ collections; `gc_runs()` > 0, `gc()` reclaims bytes and `gc_live()` reports a positive live count; strings, list elements and struct fields survive 30000 allocating iterations; a program that genuinely retains 8 MiB still exits non-zero with stdout written before the failure kept and `out of memory` on stderr. See [`GC.md`](GC.md). |
@@ -831,7 +833,7 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 
 | Area | seed-min | gen2 | native | Gate(s) | Still missing |
 |---|---|---|---|---|---|
-| Pure-min bootstrap | root compiler | self-hosted C emitter | x86-64 Linux ELF | `doctor`, `true-selfhost`, `gen3`, `native-test` | no second native target (a portable IR *listing* exists: `tools/emit_to_ir.py`, `test-native-ir-portable` — nothing assembles or executes it); no full-language self-host claim |
+| Pure-min bootstrap | root compiler | self-hosted C emitter | x86-64 Linux ELF | `doctor`, `true-selfhost`, `gen3`, `native-test` | no second native target (a portable IR *listing* exists: `tools/emit_to_ir.sa`, `test-native-ir-portable` — nothing assembles or executes it); no full-language self-host claim |
 | Numeric stdlib (`tiny.sa`, 40 definitions) | yes | yes | yes | `test-stdlib`, `test-stdlib-growth`, `test-stdlib-interpolation` | small numeric library, not JSON/HTTP/crypto; new helpers: lerp, saturate, smoothstep01, distance_sq |
 | String/list/file utility modules | yes | yes | yes (already implemented) | `test-stdlib` | limited helpers, not a full portable I/O abstraction |
 | Boolean literals, and/or/not | yes, values and conditions | yes | yes (pre-existing) | `test-seed-stage2`, `test-logic-value`, `test-native-cond`, `test-native-logicarg` | seed numeric/string/list bare assignment now supported (`test-seed-assignment`); gen2 has expression-context limits (e.g. chr logic arguments) |

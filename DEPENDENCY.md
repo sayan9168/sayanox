@@ -14,7 +14,7 @@ two ways (a static scan and a failing PATH shim) and is part of
 | gen2 → gen3 → gen4 | same; `cmp` checks the C fixed point |
 | native-test | same, on **x86-64 Linux** (generated ELF uses Linux syscalls) |
 | LSP build (`make lsp`) | gen2 + cc + the Sayanox binder `tools/lsp_workspace_bind.sa`; no awk |
-| portable analysis listing | `tools/emit_to_ir.c`, built with C99; not a second backend |
+| portable analysis listing | `tools/emit_to_ir.sa`, compiled by gen2 then cc; not a second backend |
 | offline packer (`make pack-compiler`) | POSIX sh, `gzip`, `base64`, `tr`, `split`, `cmp` |
 | source-present restore | local marker checks with `grep`; no decoding/network |
 | missing-source restore | additionally `base64`, `gzip`, `cat`, `tr`, `rm`; checked-in offline bundle |

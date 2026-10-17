@@ -486,8 +486,8 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
               when i < len(text) && sx_index(text, i) == 40 {
                 hold returns = sxesegment(env, 4)
                 hold signatures = sxesegment(env, 5)
-                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_http=s|len=n|index=n|")
-                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_http=s|len=a|index=an|")
+                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|len=n|index=n|")
+                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_http=s|len=a|index=an|")
                 kind = sxelookup(returns, name, "=")
                 when len(kind) == 0 {
                   give sxerecord(i, "e", "call has no checked return signature")
@@ -757,7 +757,7 @@ make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
       }
     }
   }
-  hold builtins = "|concat=|len=|sx_index=|index=|chr=|read_file=|write_file=|http_get=|arg=|arg_count=|string_eq=|push=|numstr=|read_line=|read_n=|write_out=|flush_out=|gc=|gc_live=|gc_runs=|sx_cat=|sx_len=|sx_idx=|sx_chr=|sx_read=|sx_write=|sx_http=|sx_arg=|sx_argc=|sx_eq=|sx_numstr=|sx_read_line=|sx_read_n=|sx_write_out=|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_mod=|sx_lget=|sx_llen=|sx_lpush=|"
+  hold builtins = "|concat=|len=|sx_index=|index=|chr=|read_file=|write_file=|http_get=|arg=|arg_count=|string_eq=|push=|numstr=|read_line=|read_n=|write_out=|flush_out=|gc=|exit=|gc_live=|gc_runs=|sx_cat=|sx_len=|sx_idx=|sx_chr=|sx_read=|sx_write=|sx_http=|sx_arg=|sx_argc=|sx_eq=|sx_numstr=|sx_read_line=|sx_read_n=|sx_write_out=|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=|sx_mod=|sx_lget=|sx_llen=|sx_lpush=|"
   hold callnames = concat(functions, builtins)
   hold prev = 0
   hold braces = 0
@@ -5347,7 +5347,7 @@ while running == 1 {
                       when sx_eq(zwKw, "push") || sx_eq(zwKw, "sx_lpush") {
                         hold zwKbk = 108
                       }
-                      when sx_eq(zwKw, "len") || sx_eq(zwKw, "index") || sx_eq(zwKw, "sx_index") || sx_eq(zwKw, "arg_count") || sx_eq(zwKw, "string_eq") || sx_eq(zwKw, "write_file") || sx_eq(zwKw, "write_out") || sx_eq(zwKw, "flush_out") || sx_eq(zwKw, "gc") || sx_eq(zwKw, "gc_live") || sx_eq(zwKw, "gc_runs") || sx_eq(zwKw, "sx_len") || sx_eq(zwKw, "sx_idx") || sx_eq(zwKw, "sx_argc") || sx_eq(zwKw, "sx_eq") || sx_eq(zwKw, "sx_write") || sx_eq(zwKw, "sx_write_out") || sx_eq(zwKw, "sx_flush_out") || sx_eq(zwKw, "sx_gc_run") || sx_eq(zwKw, "sx_gc_live") || sx_eq(zwKw, "sx_gc_count") {
+                      when sx_eq(zwKw, "len") || sx_eq(zwKw, "index") || sx_eq(zwKw, "sx_index") || sx_eq(zwKw, "arg_count") || sx_eq(zwKw, "string_eq") || sx_eq(zwKw, "write_file") || sx_eq(zwKw, "write_out") || sx_eq(zwKw, "flush_out") || sx_eq(zwKw, "gc") || sx_eq(zwKw, "gc_live") || sx_eq(zwKw, "gc_runs") || sx_eq(zwKw, "sx_len") || sx_eq(zwKw, "sx_idx") || sx_eq(zwKw, "sx_argc") || sx_eq(zwKw, "sx_eq") || sx_eq(zwKw, "sx_write") || sx_eq(zwKw, "sx_write_out") || sx_eq(zwKw, "sx_flush_out") || sx_eq(zwKw, "sx_gc_run") || sx_eq(zwKw, "sx_gc_live") || sx_eq(zwKw, "sx_gc_count") || sx_eq(zwKw, "exit") || sx_eq(zwKw, "sx_exit") {
                         hold zwKbk = 110
                       }
                       when zwKbk != 0 {
@@ -8496,6 +8496,10 @@ hold argbracket = 0
                     hold argv_c = concat(argv_c, "sx_read_n")
                     hold amap = 1
                   }
+                  when sx_eq(atok, "exit") {
+                    hold argv_c = concat(argv_c, "sx_exit")
+                    hold amap = 1
+                  }
                   when sx_eq(atok, "write_out") {
                     hold argv_c = concat(argv_c, "sx_write_out")
                     hold amap = 1
@@ -8578,6 +8582,9 @@ hold argbracket = 0
           }
           when sx_eq(nm2, "read_n") || sx_eq(nm2, "sx_read_n") {
             hold fk = 16
+          }
+          when sx_eq(nm2, "exit") || sx_eq(nm2, "sx_exit") {
+            hold fk = 21
           }
           when sx_eq(nm2, "write_out") || sx_eq(nm2, "sx_write_out") {
             hold fk = 17
@@ -8730,6 +8737,11 @@ hold argbracket = 0
           }
           when fk == 18 {
             hold rhs = "sx_flush_out()"
+            hold rt = 1
+          }
+          when fk == 21 {
+            hold rhs = concat("sx_exit(", argv_c)
+            hold rhs = concat(rhs, ")")
             hold rt = 1
           }
           when fk == 19 {
@@ -10011,6 +10023,9 @@ hold ec = 0
                 hold ocmap = "sx_read_n"
                 hold ocstr = 1
               }
+              when sx_eq(nm3, "exit") || sx_eq(nm3, "sx_exit") {
+                hold ocmap = "sx_exit"
+              }
               when sx_eq(nm3, "write_out") || sx_eq(nm3, "sx_write_out") {
                 hold ocmap = "sx_write_out"
               }
@@ -10240,6 +10255,9 @@ hold ec = 0
                     }
                     when sx_eq(ocaw, "read_n") {
                       hold ocam = "sx_read_n"
+                    }
+                    when sx_eq(ocaw, "exit") {
+                      hold ocam = "sx_exit"
                     }
                     when sx_eq(ocaw, "write_out") {
                       hold ocam = "sx_write_out"
@@ -11469,6 +11487,10 @@ hold argbracket = 0
                     hold argv_c = concat(argv_c, "sx_read_n")
                     hold amap = 1
                   }
+                  when sx_eq(atok, "exit") {
+                    hold argv_c = concat(argv_c, "sx_exit")
+                    hold amap = 1
+                  }
                   when sx_eq(atok, "write_out") {
                     hold argv_c = concat(argv_c, "sx_write_out")
                     hold amap = 1
@@ -11550,6 +11572,9 @@ hold argbracket = 0
           }
           when sx_eq(nm2, "read_n") || sx_eq(nm2, "sx_read_n") {
             hold fk = 16
+          }
+          when sx_eq(nm2, "exit") || sx_eq(nm2, "sx_exit") {
+            hold fk = 21
           }
           when sx_eq(nm2, "write_out") || sx_eq(nm2, "sx_write_out") {
             hold fk = 17
@@ -11698,6 +11723,11 @@ hold argbracket = 0
           }
           when fk == 18 {
             hold rhs = "sx_flush_out()"
+            hold rt = 1
+          }
+          when fk == 21 {
+            hold rhs = concat("sx_exit(", argv_c)
+            hold rhs = concat(rhs, ")")
             hold rt = 1
           }
           when fk == 19 {
@@ -12840,6 +12870,9 @@ hold ec = 0
                 hold ocmap = "sx_read_n"
                 hold ocstr = 1
               }
+              when sx_eq(nm3, "exit") || sx_eq(nm3, "sx_exit") {
+                hold ocmap = "sx_exit"
+              }
               when sx_eq(nm3, "write_out") || sx_eq(nm3, "sx_write_out") {
                 hold ocmap = "sx_write_out"
               }
@@ -13069,6 +13102,9 @@ hold ec = 0
                     }
                     when sx_eq(ocaw, "read_n") {
                       hold ocam = "sx_read_n"
+                    }
+                    when sx_eq(ocaw, "exit") {
+                      hold ocam = "sx_exit"
                     }
                     when sx_eq(ocaw, "write_out") {
                       hold ocam = "sx_write_out"
@@ -15200,6 +15236,10 @@ hold ec = 0
                 }
                 when sx_eq(cwid, "read_n") {
                   hold cwmap = "sx_read_n"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "exit") {
+                  hold cwmap = "sx_exit"
                   hold rt = 1
                 }
                 when sx_eq(cwid, "write_out") {
@@ -17743,7 +17783,7 @@ hold ec = 0
               hold inenv = concat(inenv, chr(1))
               hold inenv = concat(inenv, ftypes)
             }
-        hold incallnames = concat(fsret, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_http=s|")
+        hold incallnames = concat(fsret, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|")
       while inpos < instop {
         hold inc = sx_index(body, inpos)
         when inquote == 1 {
@@ -17896,7 +17936,7 @@ when rt == 1 {
   hold out = concat(out, "static char *sx_read_line(void){ char b[4096]; if(!fgets(b,sizeof b,stdin)) return \"\"; size_t n=strlen(b); if(n&&b[n-1]==10) b[n-1]=0; n=strlen(b); if(n&&b[n-1]==13) b[n-1]=0; char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
   hold out = concat(out, "static char *sx_read_n(double v){ long n=(long)v; if(n<0) return \"\"; char *b=(char*)sx_gc_alloc(0,(size_t)n+1); size_t rd=fread(b,1,(size_t)n,stdin); b[rd]=0; return b; }\n")
   hold out = concat(out, "static double sx_write_out(const char *s){ fputs(s,stdout); return 1.0; }\n")
-  hold out = concat(out, "static double sx_flush_out(void){ fflush(stdout); return 1.0; }\n")
+  hold out = concat(out, "static double sx_flush_out(void){ fflush(stdout); return 1.0; }\nstatic double sx_exit(double v){ fflush(stdout); exit((int)(long)v); return 0.0; }\n")
   hold out = concat(out, "static char *sx_numstr(double v){ char b[64]; snprintf(b,sizeof b,\"%g\",v); size_t n=strlen(b); char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
   when interpactive == 1 {
     hold out = concat(out, "static char *")

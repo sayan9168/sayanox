@@ -49,7 +49,7 @@ is left and fails closed.
 | Phase | Work | Gate |
 |---|---|---|
 | A (done 2026-10-17) | Compiler, formatter, package tool, language server, LSP binder in `.sa`; no bash/awk/sed/Python on maintained paths | `test-language-deps` |
-| B (next) | `tools/emit_to_ir` in Sayanox; directory builtin + LSP bridge in Sayanox | `test-emit-to-ir`, `test-lsp`, `test-lsp-workspace` (byte-identical output first) |
+| B (started 2026-10-17) | `tools/emit_to_ir` in Sayanox (**done**); directory builtin + LSP bridge next | `test-emit-to-ir`, `test-native-ir-portable`, `test-lsp`, `test-lsp-workspace` (byte-identical output first) |
 | C | Online package behavior moves from `tools/sxpkg.sh` to `tools/sxpkg.sa` | `test-sxpkg*` unchanged |
 | D | `selfhost/native_aot.c` reimplemented in Sayanox against the pinned IR listing | `test-native-test`, `test-native-ir-log` |
 | E | Seed decision: prebuilt trust anchor or a documented C exception | `make all-sayanox` |

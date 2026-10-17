@@ -102,11 +102,11 @@ Hand-written C is explicitly **left visible** and is *not* marked generated:
 `selfhost/seed/sxc_seed.c`, `selfhost/seed/sxc_seed_min.c` (the C bootstrap
 seed), `selfhost/native_aot.c` (the x86-64 native AOT backend),
 `selfhost/sxc_full.c`, `selfhost/sxc_full_minimal.c`,
-`selfhost/stage2_template.c`, `selfhost/stage2_expand.inc`,
-`selfhost/build_stage2.c`, `selfhost/sx_driver.c`, `selfhost/sx_launcher.c`,
-`selfhost/inject_*.c`, `selfhost/fixup_emit.c`, `selfhost/prove_*.c`,
-`selfhost/rc_runtime_stress.c` and the two headers. A verified `git check-attr`
-run reports zero of the 19 tracked `.c`/`.h`/`.inc` files as generated. The
+`selfhost/stage2_template.c`, `selfhost/rc_runtime_stress.c`,
+`selfhost/seed_builder_registry_test.c` and the three headers. A verified
+`git check-attr` run reports zero of the 12 tracked `.c`/`.h`/`.inc` files as
+generated. The IR translator moved to `tools/emit_to_ir.sa`, and nine
+unreferenced legacy helpers were deleted, on 2026-10-17. The
 hand-written `README.md` files that live inside three of the chunk directories
 are un-marked again by a final `**/README.md -linguist-generated` rule, so all
 5 tracked READMEs stay visible as documentation.

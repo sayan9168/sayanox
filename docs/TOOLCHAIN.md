@@ -12,9 +12,12 @@
 > `make test-doc-claims` keeps this banner honest.
 
 ```
-make stage2   # C: build_stage2.c → stage2
-make sx       # Sayanox: sx.sa → sx_bin
-./selfhost/sx_bin file.sa out 1
+make gen2     # Sayanox: selfhost/compiler_min.sa → gen2
+./selfhost/gen2 file.sa out.c && cc -O2 -o out out.c
+make native   # C bootstrap: selfhost/native_aot.c → native_aot
 ```
+
+There is no `make stage2`: the Stage-2 host does not exist in this tree and
+`sh selfhost/restore_stage2.sh` exits 1.
 
 Builtins in Stage-2 for tooling: `run`, `arg`, `arg_count`.

@@ -149,9 +149,9 @@ has the short version.
 - [x] Language server in Sayanox (bounded local workspace index)
 - [x] Toolchain free of bash, awk, sed and Python (`make test-language-deps`)
 - [ ] **Next phase — all-in-Sayanox toolchain** ([plan](docs/ALL_SAYANOX_PHASE.md)):
-      port the four remaining C pieces (LSP directory bridge, IR tool, native
-      backend, seed) and the build driver into Sayanox.
-      `make all-sayanox` fails closed until then
+      port the remaining C pieces (LSP directory bridge, native backend, seed)
+      and the build driver into Sayanox. The IR translator already moved
+      (2026-10-17); `make all-sayanox` fails closed until the rest does
 - [ ] Full Stage-2 language self-hosting
 - [ ] Broader platform support
 - [ ] Standard library growth
@@ -165,12 +165,14 @@ needs bash, awk, sed or Python either.
 
 What is still not Sayanox is small, measurable, and listed in
 [docs/ALL_SAYANOX_PHASE.md](docs/ALL_SAYANOX_PHASE.md): the 2,035-line C seed,
-the 4,353-line C native backend, a 119-line C directory bridge, a 150-line C
-IR tool, and the make/POSIX-sh build driver. `make all-sayanox` prints that
+the 4,353-line C native backend, a 119-line C directory bridge, a 127-line C
+bridge test, and the make/POSIX-sh build driver. The 150-line C IR translator
+became `tools/emit_to_ir.sa` on 2026-10-17 with byte-identical output, and nine
+unreferenced C helpers were deleted. `make all-sayanox` prints the remaining
 inventory and **fails closed** — the same way `true-selfhost-full` refuses to
 claim a full-language self-host — so the remaining work cannot silently drift
-or be forgotten. The plan orders it: IR tool, then directory bridge, then the
-package wrapper, then the native backend, and the seed last.
+or be forgotten. The plan orders it: ~~IR tool~~, then directory bridge, then
+the package wrapper, then the native backend, and the seed last.
 
 ---
 

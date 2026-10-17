@@ -118,9 +118,9 @@ immediately.
   `sub_rsp_imm32_slot` opens and `leave_ret` closes) and the collector's block
   layout (`BH_HDR`, the `BK_*` kinds).
 
-### The portable IR listing (`tools/emit_to_ir.c`, 2026-10-15)
+### The portable IR listing (`tools/emit_to_ir.sa`, 2026-10-15; Sayanox since 2026-10-17)
 
-`tools/emit_to_ir.c` translates an `SX_EMIT_LOG` instruction list into a
+`tools/emit_to_ir.sa` translates an `SX_EMIT_LOG` instruction list into a
 portable *listing*: x86-64 registers become abstract registers (`rax`->`A`,
 `xmm0`->`F0`, `rsp`->`SP`, `r12`->`BASE`), byte offsets become sequential
 instruction numbers (`I0`, `I1`, ...), integer and floating-point mnemonics
@@ -133,8 +133,14 @@ renamed, so the translation never silently drops an instruction.
 ```sh
 SX_EMIT_LOG=/tmp/hello.log ./selfhost/native_aot examples/native_hello.sa /tmp/hello
 make tools/emit_to_ir
-./tools/emit_to_ir /tmp/hello.log /tmp/hello.ir
+./tools/emit_to_ir /tmp/hello.log > /tmp/hello.ir
 ```
+
+The tool is a Sayanox program compiled by `gen2` and then `cc`; it writes the
+listing to stdout (Sayanox has no file mode argument), so call sites redirect.
+Its input is read as a C string, so a NUL byte truncates the log; the script
+`tools/test-emit-to-ir.sh` pins that this truncation shows up as an explicit
+`; UNTRANSLATED:` comment rather than silence.
 
 `make test-native-ir-portable` pins the contract: the translation is
 deterministic (two runs cmp clean), instruction-count preserving (one listing
@@ -176,10 +182,10 @@ still does not remove x86 layout/ABI assumptions or resolve relocations.
 
 ## Strict log audit and source-offset correlation (2026-10-16)
 
-The streaming C99 translator now offers opt-in analysis modes:
+The translator now offers opt-in analysis modes:
 
 ```sh
-./tools/emit_to_ir --strict --source-offsets input.log output.ir
+./tools/emit_to_ir --strict --source-offsets input.log > output.ir
 ```
 
 * `--strict` accepts semicolon comment lines or nonempty instruction records

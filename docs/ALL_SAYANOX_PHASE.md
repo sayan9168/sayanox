@@ -1,8 +1,9 @@
 # All-in-Sayanox: the next phase
 
-Status: **next phase — not started.** Recorded 2026-10-17, immediately after the
-language-dependency pass. Nothing in this document is implemented yet, and no
-target reports success for it: `make all-sayanox` fails closed on purpose.
+Status: **next phase — in progress.** Recorded 2026-10-17, immediately after
+the language-dependency pass. Phase A is done and Phase B has started (the IR
+translator is Sayanox; see the table). No target reports success for the whole
+phase: `make all-sayanox` still fails closed on purpose.
 
 The goal is simple to state: every maintained piece of *logic* in this
 repository is a Sayanox program, and the only non-Sayanox pieces left are the
@@ -12,14 +13,19 @@ smallest possible bootstrap seam and the build driver.
 
 | Layer | Language | Size | Sayanox? |
 |---|---|---:|---|
-| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 18,713 lines | **yes** |
-| Formatter, package tool, language server, LSP binder | Sayanox | 4 programs | **yes** |
-| All tests and fixtures | Sayanox + `sh` drivers | 274 `.sa` files, 1,063,740 bytes | **yes** (logic) |
+| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 18,721 lines | **yes** |
+| Formatter, package tool, language server, LSP binder, IR tool | Sayanox | 5 programs | **yes** |
+| All tests and fixtures | Sayanox + `sh` drivers | 275 `.sa` files, 1,068,383 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,353 lines | no |
 | LSP directory bridge (`tools/lsp_workspace.h`) | C | 119 lines | no |
-| IR analysis tool (`tools/emit_to_ir.c`) | C | 150 lines | no |
-| Build driver (`Makefile` + 26 `sh` scripts) | make / POSIX sh | ~4,470 + ~1,730 lines | no |
+| LSP bridge test (`tools/lsp_workspace_test.c`) | C | 127 lines | no |
+| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | ~4,510 lines | no |
+
+Nine tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
+`inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
+`sx_launcher.c`, `sx_driver.c`, `build_stage2.c`, plus `stage2_expand.inc`)
+were deleted on 2026-10-17. The tree now has 12 tracked C/header/inc files.
 
 The 2026-10-17 language-dependency pass already removed bash, awk, sed,
 Python, Perl, Node and Ruby from the maintained paths
@@ -37,14 +43,18 @@ phase may weaken an existing test to pass.
 Compiler, formatter, local package commands, language server and the LSP binder
 are `.sa`. All tracked scripts are POSIX `sh`. Gate: `test-language-deps`.
 
-### Phase B — small tools in Sayanox (next)
+### Phase B — small tools in Sayanox (in progress)
 
-1. **`tools/emit_to_ir` in Sayanox.** The C tool is a streaming line
-   transformer using `read_file`/`write_file`/string builtins that gen2 already
-   has. Port it, then keep the existing `test-emit-to-ir` and
-   `test-native-ir-portable` gates and require byte-identical IR output against
-   the C tool before deleting the C.
-   *Prerequisite:* none beyond gen2's current builtins.
+1. **`tools/emit_to_ir` in Sayanox (done, 2026-10-17).** `tools/emit_to_ir.sa`
+   replaces the 150-line C tool. Output is byte-identical for every instruction
+   record, register/mnemonic rename, unknown line, named `call` operand list,
+   8 KB operand line and source-offset audit; the only difference is the header
+   line that names the tool. The tool writes to stdout instead of taking an
+   output path (Sayanox has no mode-taking file API), so call sites redirect.
+   Gates: `test-emit-to-ir` and `test-native-ir-portable`.
+   Limitations, documented rather than hidden: input is read through a C string,
+   so a NUL byte truncates the log (the C tool rejected it); the script now
+   asserts the truncation is visible as `; UNTRANSLATED: bad`.
 2. **LSP directory bridge in Sayanox.** Replace `tools/lsp_workspace.h` with a
    language-level directory API (`read_dir(path)` returning names, plus a stat
    or size-and-kind helper) so `workspace_manifest` stops being a stub and
@@ -95,16 +105,28 @@ recorded before this phase starts:
 Neither option is implemented. Until one is, the seed row above stays honest
 and `make all-sayanox` keeps failing.
 
+## Progress log
+
+* **2026-10-17 — Phase B.1 done.** `tools/emit_to_ir.c` deleted;
+  `tools/emit_to_ir.sa` (328 lines) built by gen2 and cc through the Makefile,
+  identical output on the real 1,182-line `SX_EMIT_LOG`, the audit mode, the
+  long-line case and all five exit-status cases.
+* **2026-10-17 — `exit(n)` builtin added** to the Sayanox compiler for CLI
+  tools (`gen1_min`/`gen2`/`gen3`), with `make test-exit-builtin`; seed-min and
+  native refuse it.
+* **2026-10-17 — dead C removed.** Nine tracked helpers with no reference.
+
 ## Definition of done
 
 `make all-sayanox` exits 0. It currently prints the inventory above and exits 1
 with a pointer to this file, the same way `true-selfhost-full` refuses to claim
 a full-language self-host.
 
-A second check will be added when Phase B lands: the target must fail if any
-tracked `.c` file on the maintained path is not either (a) marked as a
-documented exception in this file or (b) generated. The list of exceptions
-starts at four and can only shrink.
+A second check lands with Phase B: the target must fail if any tracked `.c`
+file on the maintained path is not either (a) marked as a documented exception
+in this file or (b) generated. The exception list starts at four
+(seed, native backend, LSP bridge header, LSP bridge test) and can only shrink.
+The IR tool has already left it.
 
 ## What does not change
 

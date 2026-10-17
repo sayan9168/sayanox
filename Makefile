@@ -38,7 +38,7 @@ LSP_BIND   := tools/lsp_workspace_bind
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin
 
 all: true-selfhost-min
 
@@ -1689,11 +1689,15 @@ test-native-ir-log: $(NATIVE_BIN)
 # ---------------------------------------------------------------------------
 
 # test-native-ir-portable: the SX_EMIT_LOG instruction list translates to the
-# IR analysis listing (tools/emit_to_ir.c, docs/NATIVE_IR.md) with instruction
+# IR analysis listing (tools/emit_to_ir.sa, docs/NATIVE_IR.md) with instruction
 # counts and deterministic source-offset correlation preserved. The IR is an analysis format -- this target pins the
 # translation, and deliberately does NOT claim a second backend or ISA.
-tools/emit_to_ir: tools/emit_to_ir.c
-	$(CC) -std=c99 -O2 -Wall -Wextra -o $@ $<
+# tools/emit_to_ir is now a Sayanox program: gen2 compiles it, cc builds it.
+# It writes the listing to stdout, so call sites redirect.
+tools/emit_to_ir: tools/emit_to_ir.sa $(GEN2)
+	./$(GEN2) tools/emit_to_ir.sa $(TESTS)/emit_to_ir.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/emit_to_ir.c
+	@echo "[OK] Sayanox IR translator built from tools/emit_to_ir.sa"
 
 .PHONY: test-emit-to-ir
 test-emit-to-ir: tools/emit_to_ir
@@ -1704,11 +1708,11 @@ test-native-ir-portable: $(NATIVE_BIN) tools/emit_to_ir test-emit-to-ir
 	./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irp_nat >/dev/null
 	$(call assert-out,./$(TESTS)/irp_nat,42\nir-log\n6\n3\n42\nir-log-done)
 	SX_EMIT_LOG=$(TESTS)/irp.log ./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irp_logged
-	./tools/emit_to_ir $(TESTS)/irp.log $(TESTS)/irp.ir
-	./tools/emit_to_ir $(TESTS)/irp.log $(TESTS)/irp_again.ir
+	./tools/emit_to_ir $(TESTS)/irp.log > $(TESTS)/irp.ir
+	./tools/emit_to_ir $(TESTS)/irp.log > $(TESTS)/irp_again.ir
 	cmp $(TESTS)/irp.ir $(TESTS)/irp_again.ir
-	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log $(TESTS)/irp_audit.ir
-	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log $(TESTS)/irp_audit_again.ir
+	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log > $(TESTS)/irp_audit.ir
+	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log > $(TESTS)/irp_audit_again.ir
 	cmp $(TESTS)/irp_audit.ir $(TESTS)/irp_audit_again.ir
 	@grep -v '^; source-offset ' $(TESTS)/irp_audit.ir > $(TESTS)/irp_audit_base.ir
 	cmp $(TESTS)/irp.ir $(TESTS)/irp_audit_base.ir
@@ -2411,6 +2415,31 @@ test-builtin-names: $(GEN2) $(SEED_MIN_BIN)
 	@echo "[OK] builtin-word names: variables called index/len/arg stay variables, real builtin calls still map (seed-min == gen2)"
 
 # ---------------------------------------------------------------------------
+# test-exit-builtin: exit(n) is a real builtin on the Sayanox-written compiler
+# (gen1_min/gen2/gen3), added on 2026-10-17 so Sayanox CLI tools can report a
+# failure status instead of relying on the C tool that used to do their work.
+# It flushes stdout first, does not swallow the status, and stays an ordinary
+# expression (`hold code = exit(2)`), matching how bare call statements are
+# restricted in this dialect. seed-min and native still reject it.
+# ---------------------------------------------------------------------------
+.PHONY: test-exit-builtin
+test-exit-builtin: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'hold a = arg(1)\nwhen string_eq(a, "stop") {\n  hold msg = write_out("before-exit\\n")\n  hold code = exit(7)\n}\nshow 42\n' > $(TESTS)/exit_builtin.sa
+	./$(GEN2) $(TESTS)/exit_builtin.sa $(TESTS)/exit_builtin.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/exit_builtin $(TESTS)/exit_builtin.c
+	$(call assert-out,./$(TESTS)/exit_builtin keep,42)
+	@__o=$$(./$(TESTS)/exit_builtin stop); __rc=$$?; \
+	 if [ "$$__rc" != 7 ]; then echo "[FAIL] exit(7) produced status $$__rc"; exit 1; fi; \
+	 if [ "$$__o" != "before-exit" ]; then echo "[FAIL] stdout was not flushed before exit: $$__o"; exit 1; fi
+	@if ./$(SEED_MIN_BIN) $(TESTS)/exit_builtin.sa > $(TESTS)/exit_seed.c 2>$(TESTS)/exit_seed.err; then \
+	   echo "[FAIL] seed-min accepted exit() without implementing it"; exit 1; fi
+	@grep -q 'call names an unknown function or builtin' $(TESTS)/exit_seed.err \
+	  || { echo "[FAIL] seed-min refused exit() without a clear diagnostic"; cat $(TESTS)/exit_seed.err; exit 1; }
+	@echo "[OK] exit builtin: status propagates, stdout flushes first, seed-min refuses it with a clear diagnostic"
+test-stage2: test-exit-builtin
+
+# ---------------------------------------------------------------------------
 # test-stage2: the Stage-2 slice on gen2 beyond the string walk — the word
 # operators `and` / `or` / `not` with `not` binding looser than a comparison,
 # the boolean literals `true` / `false`, `for` over a list (a variable, a list
@@ -2672,8 +2701,12 @@ test-doc-claims:
 	  || { echo "[FAIL] README.md no longer links the all-in-Sayanox next phase"; exit 1; }
 	@test -s docs/ALL_SAYANOX_PHASE.md \
 	  || { echo "[FAIL] docs/ALL_SAYANOX_PHASE.md is missing"; exit 1; }
-	@grep -q 'next phase' docs/ALL_SAYANOX_PHASE.md && grep -q 'not started' docs/ALL_SAYANOX_PHASE.md \
+	@grep -q 'next phase' docs/ALL_SAYANOX_PHASE.md && grep -q 'in progress' docs/ALL_SAYANOX_PHASE.md \
 	  || { echo "[FAIL] docs/ALL_SAYANOX_PHASE.md lost its honest next-phase status"; exit 1; }
+	@grep -q 'tools/emit_to_ir.sa' docs/ALL_SAYANOX_PHASE.md \
+	  || { echo "[FAIL] ALL_SAYANOX_PHASE.md does not record the Sayanox IR translator"; exit 1; }
+	@test ! -e tools/emit_to_ir.c \
+	  || { echo "[FAIL] the C IR translator is back: the Sayanox one superseded it"; exit 1; }
 	@if $(MAKE) --no-print-directory all-sayanox >/dev/null 2>&1; then \
 	  echo "[FAIL] all-sayanox now reports success: update docs/ALL_SAYANOX_PHASE.md, README.md and this target instead of keeping a stale claim"; exit 1; fi
 	@echo "[OK] doc claims: $$(grep -rl 'The entry points named in this file do not exist' docs selfhost --include='*.md' | wc -l) legacy documents carry the banner; no Stage-2 host, bootstrap script or make target is advertised that does not exist"
@@ -3168,11 +3201,12 @@ all-sayanox:
 	@printf '  %-28s %6s lines  %s\n' seed "$$(wc -l < selfhost/seed/sxc_seed_min.c)" selfhost/seed/sxc_seed_min.c
 	@printf '  %-28s %6s lines  %s\n' native-backend "$$(wc -l < selfhost/native_aot.c)" selfhost/native_aot.c
 	@printf '  %-28s %6s lines  %s\n' lsp-directory-bridge "$$(wc -l < tools/lsp_workspace.h)" tools/lsp_workspace.h
-	@printf '  %-28s %6s lines  %s\n' ir-analysis-tool "$$(wc -l < tools/emit_to_ir.c)" tools/emit_to_ir.c
+	@printf '  %-28s %6s lines  %s\n' lsp-bridge-test "$$(wc -l < tools/lsp_workspace_test.c)" tools/lsp_workspace_test.c
 	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
 	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' selfhost/sx | wc -l)" 'POSIX sh'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
-	@echo "  done: compiler, formatter, package tool, language server, LSP binder (all .sa)"
+	@echo "  done: compiler, formatter, package tool, language server, LSP binder,"
+	@echo "        IR translator (all .sa; tools/emit_to_ir.sa replaced the C tool)"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
 	@exit 1
@@ -3463,7 +3497,7 @@ test: true-selfhost
 # `make seed-bin` (it is a .PHONY target, so it always rebuilds from source).
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
-	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) tools/emit_to_ir
+	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) tools/emit_to_ir tools/emit_to_ir.c
 
 # ---------------------------------------------------------------------------
 # doctor: check core tools. Expanded feature gates also use POSIX utilities;

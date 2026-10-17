@@ -1,0 +1,328 @@
+// tools/emit_to_ir.sa -- the portable IR analysis listing, in Sayanox.
+//
+// Reads one SX_EMIT_LOG instruction list and writes the analysis listing to
+// stdout. Not an executable IR and not a second backend: nothing assembles or
+// runs this format. Unknown instructions are uppercased, unknown lines are kept
+// as comments. Errors go to /dev/stderr and exit non-zero.
+//
+// Replaced tools/emit_to_ir.c on 2026-10-17; output is byte-identical to the C
+// tool apart from the header line that names this file.
+//
+//   ./tools/emit_to_ir <emit.log> > <out.ir>
+//   ./tools/emit_to_ir --strict --source-offsets <emit.log> > <out.ir>
+
+make slice(text: str, begin: num, end: num) -> str {
+  hold value = ""
+  hold i = begin
+  while i < end {
+    value = concat(value, chr(sx_index(text, i)))
+    i = i + 1
+  }
+  give value
+}
+
+make emit(line: str) -> num {
+  hold w = write_out(line)
+  hold n = write_out("\n")
+  give n
+}
+
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", msg)
+  hold stop = exit(code)
+  give 0
+}
+
+make is_word(c: num) -> num {
+  hold r = 0
+  when c >= 97 && c <= 122 { r = 1 }
+  when c >= 65 && c <= 90 { r = 1 }
+  when c >= 48 && c <= 57 { r = 1 }
+  when c == 95 { r = 1 }
+  give r
+}
+
+make is_blank(c: num) -> num {
+  hold r = 0
+  when c == 32 { r = 1 }
+  when c == 9 { r = 1 }
+  when c == 13 { r = 1 }
+  when c == 11 { r = 1 }
+  when c == 12 { r = 1 }
+  give r
+}
+
+make is_lower_hex(c: num) -> num {
+  hold r = 0
+  when c >= 48 && c <= 57 { r = 1 }
+  when c >= 97 && c <= 102 { r = 1 }
+  give r
+}
+
+make trim(text: str) -> str {
+  hold n = len(text)
+  hold b = 0
+  hold e = n
+  while b < e && is_blank(sx_index(text, b)) == 1 {
+    b = b + 1
+  }
+  while e > b && is_blank(sx_index(text, e - 1)) == 1 {
+    e = e - 1
+  }
+  give slice(text, b, e)
+}
+
+// A |key=value|...| table lookup. Empty result means "not in the table".
+make lookup(table: str, key: str) -> str {
+  hold needle = concat(concat("|", key), "=")
+  hold nl = len(needle)
+  hold total = len(table)
+  hold i = 0
+  hold out = ""
+  hold go = 1
+  while go == 1 && i + nl <= total {
+    hold j = 0
+    hold ok = 1
+    while j < nl && ok == 1 {
+      when sx_index(table, i + j) != sx_index(needle, j) { ok = 0 }
+      j = j + 1
+    }
+    when ok == 1 {
+      hold k = i + nl
+      while k < total && sx_index(table, k) != 124 {
+        out = concat(out, chr(sx_index(table, k)))
+        k = k + 1
+      }
+      go = 0
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make upper(text: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when c >= 97 && c <= 122 {
+      out = concat(out, chr(c - 32))
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give out
+}
+
+// Register and register-width renaming: the machine model survives, the x86
+// register names do not. A `call` operand list is opaque (a function named
+// rax must stay named rax), so the caller skips this for call instructions.
+make operands(text: str) -> str {
+  hold out = ""
+  hold i = 0
+  hold n = len(text)
+  while i < n {
+    hold c = sx_index(text, i)
+    when is_word(c) == 0 {
+      out = concat(out, chr(c))
+      i = i + 1
+    } otherwise {
+      hold w = ""
+      while i < n && is_word(sx_index(text, i)) == 1 {
+        w = concat(w, chr(sx_index(text, i)))
+        i = i + 1
+      }
+      hold mapped = lookup("|rax=A|eax=A|al=A|rcx=C|ecx=C|cl=C|rdx=D|edx=D|dl=D|rbx=B|ebx=B|bl=B|rsi=SI|esi=SI|sil=SI|rdi=DI|edi=DI|dil=DI|rsp=SP|esp=SP|rbp=BP|ebp=BP|rip=PC|r12=BASE|r12d=BASE|r13=R13|r13d=R13|r14=R14|r14d=R14|r15=R15|r15d=R15|r8=R8|r8d=R8|r8b=R8|r9=R9|r9d=R9|r9b=R9|r10=R10|r10d=R10|r10b=R10|r11=R11|r11d=R11|r11b=R11|", w)
+      when len(mapped) > 0 {
+        out = concat(out, mapped)
+      } otherwise {
+        hold isxmm = 0
+        when len(w) > 3 && sx_index(w, 0) == 120 && sx_index(w, 1) == 109 && sx_index(w, 2) == 109 {
+          hold digits = 1
+          hold k = 3
+          while k < len(w) {
+            when sx_index(w, k) < 48 || sx_index(w, k) > 57 { digits = 0 }
+            k = k + 1
+          }
+          isxmm = digits
+        }
+        when isxmm == 1 {
+          out = concat(out, "F")
+          out = concat(out, slice(w, 3, len(w)))
+        } otherwise {
+          out = concat(out, w)
+        }
+      }
+    }
+  }
+  give out
+}
+
+make is_instruction(line: str) -> num {
+  hold r = 0
+  when len(line) >= 8 {
+    when sx_index(line, 6) == 32 && sx_index(line, 7) == 32 {
+      hold text = slice(line, 0, 6)
+      hold i = 0
+      hold ok = 1
+      while i < 6 && ok == 1 {
+        when is_lower_hex(sx_index(line, i)) == 0 { ok = 0 }
+        i = i + 1
+      }
+      r = ok
+    }
+  }
+  give r
+}
+
+make translated_mnemonic(word: str) -> str {
+  hold mapped = lookup("|mov=COPY|movq=COPY|lea=ADDR|addsd=FADD|subsd=FSUB|mulsd=FMUL|divsd=FDIV|add=IADD|sub=ISUB|imul=IMUL|idiv=IDIV|cmp=ICMP|ucomisd=FCMP|comisd=FCMP|cvtsi2sd=I2F|cvttsd2si=F2I|movzx=ZEXT|movsx=SEXT|", word)
+  when len(mapped) == 0 {
+    mapped = upper(word)
+  }
+  give mapped
+}
+
+// ---------------------------------------------------------------- main loop
+
+hold strict = 0
+hold source_offsets = 0
+hold path = ""
+hold i = 1
+hold scanning = 1
+hold a = ""
+while scanning == 1 {
+  a = arg(i)
+  when len(a) == 0 {
+    scanning = 0
+  }
+  when scanning == 1 {
+    hold handled = 0
+    when handled == 0 && string_eq(a, "--strict") {
+      strict = 1
+      i = i + 1
+      handled = 1
+    }
+    when handled == 0 && string_eq(a, "--source-offsets") {
+      source_offsets = 1
+      i = i + 1
+      handled = 1
+    }
+    when handled == 0 && string_eq(a, "--") {
+      i = i + 1
+      path = arg(i)
+      scanning = 0
+      handled = 1
+    }
+    when handled == 0 {
+      path = a
+      scanning = 0
+      handled = 1
+    }
+  }
+}
+
+when len(path) == 0 {
+  hold stop1 = fail(2, "usage: emit_to_ir [--strict] [--source-offsets] <emit.log>\n")
+}
+
+hold text = read_file(path)
+when len(text) == 0 {
+  hold stop2 = fail(1, "emit_to_ir: cannot read the input log\n")
+}
+when len(text) > 0 {
+  hold h1 = emit("; portable IR listing (docs/NATIVE_IR.md) -- translated from an")
+  hold h2 = emit("; SX_EMIT_LOG instruction list by tools/emit_to_ir.sa. This is an")
+  hold h3 = emit("; analysis format: no backend assembles or executes it.")
+
+  hold pos = 0
+  hold start = 0
+  hold lineno = 0
+  hold previous = ""
+  hold seen = 0
+  hold number = 0
+  hold total = len(text)
+  hold finished = 0
+  while pos <= total && finished == 0 {
+    hold at_end = 0
+    when pos == total { at_end = 1 }
+    hold c = 0
+    when at_end == 0 { c = sx_index(text, pos) }
+    hold boundary = 0
+    when at_end == 1 && start < pos { boundary = 1 }
+    when at_end == 0 && c == 10 { boundary = 1 }
+    when boundary == 1 {
+      lineno = lineno + 1
+      hold line = slice(text, start, pos)
+      hold is_comment = 0
+      when len(line) > 0 && sx_index(line, 0) == 59 { is_comment = 1 }
+      when is_comment == 1 {
+        hold cmsg = concat("; ", trim(slice(line, 1, len(line))))
+        hold cw = emit(cmsg)
+      }
+      when is_comment == 0 {
+        hold instr = is_instruction(line)
+        hold body = ""
+        when instr == 1 { body = trim(slice(line, 8, len(line))) }
+        when instr == 0 || len(body) == 0 {
+          when strict == 1 {
+            hold where1 = concat("emit_to_ir: line ", numstr(lineno))
+            hold what1 = concat(where1, ": malformed instruction record\n")
+            hold stop3 = fail(1, what1)
+          }
+          when strict == 0 {
+            hold umsg = concat("; UNTRANSLATED: ", line)
+            hold uw = emit(umsg)
+          }
+        }
+        when instr == 1 && len(body) > 0 {
+          hold off = slice(line, 0, 6)
+          when strict == 1 && seen == 1 && off < previous {
+            hold where2 = concat("emit_to_ir: line ", numstr(lineno))
+            hold what2 = concat(where2, ": instruction offsets go backwards\n")
+            hold stop4 = fail(1, what2)
+          }
+          when source_offsets == 1 {
+            hold note = concat("; source-offset ", off)
+            note = concat(note, " -> I")
+            note = concat(note, numstr(number))
+            hold nw = emit(note)
+          }
+          hold word = ""
+          hold k = 0
+          while k < len(body) && is_word(sx_index(body, k)) == 0 {
+            k = k + 1
+          }
+          hold ms = k
+          while k < len(body) && is_word(sx_index(body, k)) == 1 {
+            k = k + 1
+          }
+          word = slice(body, ms, k)
+          hold rest = trim(slice(body, k, len(body)))
+          hold label = concat("I", numstr(number))
+          while len(label) < 6 {
+            label = concat(label, " ")
+          }
+          hold out = concat(label, " ")
+          out = concat(out, translated_mnemonic(word))
+          when len(rest) > 0 {
+            out = concat(out, " ")
+            when string_eq(word, "call") {
+              out = concat(out, rest)
+            } otherwise {
+              out = concat(out, operands(rest))
+            }
+          }
+          hold ow = emit(out)
+          previous = off
+          seen = 1
+          number = number + 1
+        }
+      }
+      start = pos + 1
+    }
+    when at_end == 1 { finished = 1 }
+    pos = pos + 1
+  }
+}

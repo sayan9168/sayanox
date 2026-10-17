@@ -48,7 +48,7 @@ After Stage-2 is available, normal `.sa` compilation uses:
 
 | Layer | Role |
 |-------|------|
-| `build_stage2.c` / `restore_stage2.sh` | Builds the Stage-2 compiler |
+| `restore_stage2.sh` | Attempts the (absent) Stage-2 host; exits 1 today |
 | `sx` | CLI over Stage-2 for normal `.sa` compilation |
 | `codegen.sa` | Sayanox-written code generation path |
 | `bootstrap_production.sh` | Supported production smoke/bootstrap path |
