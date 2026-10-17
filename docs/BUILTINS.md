@@ -48,10 +48,22 @@ the same source); the checked-in `seed-min` predates them and rejects them.
 | `gc_live()` | bytes currently held by the managed heap |
 | `gc_runs()` | number of collections so far |
 | `exit(n)` | flush stdout, terminate the process with status `n` |
+| `read_dir(path)` | newline-separated entry names, without `.`/`..`; `""` on failure |
+| `path_kind(path)` | `0` missing, `1` regular file, `2` directory, `3` other (`lstat`) |
+| `path_size(path)` | size in bytes for a regular file, otherwise `0` |
+| `path_real(path)` | canonical absolute path, `""` when it does not resolve |
 
 All of them are ordinary expressions, so they nest inside other calls
 (`concat(a, numstr(n))`) and can be stored (`hold n = numstr(v)`). Native AOT
 does not implement them. See [`GC.md`](GC.md).
+
+`read_dir`, `path_kind`, `path_size` and `path_real` are the directory
+surface added on 2026-10-17 (the prerequisite for moving the LSP's folder
+index out of C). `read_dir` skips `.`/`..` and names containing a newline or
+carriage return, and caps one directory at 4096 names and 4 MB; `path_kind`
+and `path_size` use `lstat`, so a symlink reports `3` and is never followed;
+`path_real` is `realpath(3)`. seed-min and the native backend refuse all four
+(`make test-path-builtins` pins both the behaviour and the refusal).
 
 `exit(n)` was added on 2026-10-17 so Sayanox CLI tools can report failure
 without a C helper. It flushes stdout before terminating, returns a number

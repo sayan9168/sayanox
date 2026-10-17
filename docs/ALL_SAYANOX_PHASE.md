@@ -59,8 +59,11 @@ are `.sa`. All tracked scripts are POSIX `sh`. Gate: `test-language-deps`.
    language-level directory API (`read_dir(path)` returning names, plus a stat
    or size-and-kind helper) so `workspace_manifest` stops being a stub and
    `tools/lsp_workspace_bind.sa` stops being needed at all.
-   *Prerequisite:* the new builtin must be specified, implemented on gen2, and
-   refused with a clear diagnostic on seed-min and native until ported there.
+   *Prerequisite (done 2026-10-17):* `read_dir(path)` (newline-separated
+   names), `path_kind(path)` (lstat: file/dir/other), `path_size(path)` and
+   `path_real(path)` are implemented on gen2, gated by
+   `make test-path-builtins`, and refused with a clear diagnostic by seed-min
+   and native. The C header can now be replaced by a Sayanox `workspace_manifest`.
 
 ### Phase C — package and process behavior in Sayanox
 

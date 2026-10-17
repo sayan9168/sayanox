@@ -38,7 +38,7 @@ LSP_BIND   := tools/lsp_workspace_bind
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins
 
 all: true-selfhost-min
 
@@ -2438,6 +2438,42 @@ test-exit-builtin: $(GEN2) $(SEED_MIN_BIN)
 	  || { echo "[FAIL] seed-min refused exit() without a clear diagnostic"; cat $(TESTS)/exit_seed.err; exit 1; }
 	@echo "[OK] exit builtin: status propagates, stdout flushes first, seed-min refuses it with a clear diagnostic"
 test-stage2: test-exit-builtin
+
+# ---------------------------------------------------------------------------
+# test-path-builtins: read_dir/path_kind/path_size/path_real are the language
+# surface that replaced the C LSP directory bridge. gen2 implements them on
+# opendir/lstat/realpath; seed-min and native refuse them (the native backend
+# has no directory model). read_dir returns newline-separated names, skips "."
+# and "..", and caps a directory at 4096 names and 4 MB.
+# ---------------------------------------------------------------------------
+.PHONY: test-path-builtins
+test-path-builtins: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/pathb_dir $(TESTS)/pathb_dir_link
+	@mkdir -p $(TESTS)/pathb_dir/sub
+	@printf 'x' > $(TESTS)/pathb_dir/a.sa
+	@printf 'yy' > $(TESTS)/pathb_dir/sub/b.sa
+	@ln -sfn pathb_dir $(TESTS)/pathb_dir_link
+	@printf 'hold d = read_dir("$(TESTS)/pathb_dir")\nshow len(d)\nshow path_kind("$(TESTS)/pathb_dir")\nshow path_kind("$(TESTS)/pathb_dir/a.sa")\nshow path_kind("$(TESTS)/pathb_dir/sub/b.sa")\nshow path_kind("$(TESTS)/pathb_dir_link")\nshow path_kind("$(TESTS)/pathb_dir/missing")\nshow path_size("$(TESTS)/pathb_dir/a.sa")\nshow path_size("$(TESTS)/pathb_dir/sub/b.sa")\nshow path_real("$(TESTS)/pathb_dir/../pathb_dir")\nshow len(path_real("$(TESTS)/pathb_dir/missing"))\n' > $(TESTS)/pathb_gen.sa
+	./$(GEN2) $(TESTS)/pathb_gen.sa $(TESTS)/pathb_gen.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/pathb_gen $(TESTS)/pathb_gen.c
+	@./$(TESTS)/pathb_gen > $(TESTS)/pathb_gen.out
+	@test "$$(sed -n 1p $(TESTS)/pathb_gen.out)" = 9 \
+	  || { echo "[FAIL] read_dir did not return 'sub\\na.sa\\n' (9 bytes)"; cat $(TESTS)/pathb_gen.out; exit 1; }
+	@printf '2\n1\n1\n3\n0\n1\n2\n' > $(TESTS)/pathb_gen.want
+	@sed -n '2,8p' $(TESTS)/pathb_gen.out > $(TESTS)/pathb_gen.kinds
+	@cmp $(TESTS)/pathb_gen.kinds $(TESTS)/pathb_gen.want \
+	  || { echo "[FAIL] path_kind/path_size disagree with the filesystem"; cat $(TESTS)/pathb_gen.out; exit 1; }
+	@test "$$(sed -n 9p $(TESTS)/pathb_gen.out)" = "$(CURDIR)/$(TESTS)/pathb_dir" \
+	  || { echo "[FAIL] path_real did not canonicalize"; sed -n 9p $(TESTS)/pathb_gen.out; exit 1; }
+	@test "$$(sed -n 10p $(TESTS)/pathb_gen.out)" = 0 \
+	  || { echo "[FAIL] path_real did not return an empty string for a missing path"; exit 1; }
+	@if ./$(SEED_MIN_BIN) $(TESTS)/pathb_gen.sa > $(TESTS)/pathb_gen_seed.c 2>$(TESTS)/pathb_gen_seed.err; then \
+	   echo "[FAIL] seed-min accepted the path builtins without implementing them"; exit 1; fi
+	@grep -q 'call names an unknown function or builtin' $(TESTS)/pathb_gen_seed.err \
+	  || { echo "[FAIL] seed-min refused the path builtins without a clear diagnostic"; cat $(TESTS)/pathb_gen_seed.err; exit 1; }
+	@echo "[OK] path builtins: read_dir listing, lstat kinds (file/dir/symlink/missing), sizes, realpath; seed-min refuses them"
+test-stage2: test-exit-builtin test-path-builtins
 
 # ---------------------------------------------------------------------------
 # test-stage2: the Stage-2 slice on gen2 beyond the string walk — the word
