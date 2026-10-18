@@ -17,10 +17,13 @@ make native-test        # optional x86-64 Linux backend tests
 `make tools` builds the Sayanox formatter and local package-lock utility; it
 does not yet build a complete Sayanox CLI or online package manager.
 `tools/sxfmt.sa` is a conservative brace-aware whitespace formatter.
-`tools/sxpkg.sa` handles local `init`, `add`, `list`, `remove`, `seed`,
-`search` and `info`, and the shell entrypoint delegates those commands to it.
-Sync/install/publish/fetch and the LSP remain shell programs. Their remaining
-porting work is tracked in [`NO_BASH.md`](NO_BASH.md) and
+`tools/sxpkg.sa` handles `init`, `add`, `list`, `remove`, `seed`, `search`,
+`info`, `deps`, `verify`, `install`, `install-local`, `publish`, and — since
+2026-10-18 — the local-registry branches of `sync` and `fetch` plus the
+`ensure-dir`/`rm-tree`/`copy-tree` primitives; the shell entrypoint delegates
+those commands to it. The http(s) transport of sync/install/fetch and the LSP
+remain shell programs. Their remaining porting work is tracked in
+[`NO_BASH.md`](NO_BASH.md) and
 [`SELF_HOSTING_ROADMAP.md`](SELF_HOSTING_ROADMAP.md).
 
 The small C seed, native-AOT implementation, Makefile, POSIX shell and C99

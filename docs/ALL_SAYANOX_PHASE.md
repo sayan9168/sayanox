@@ -15,10 +15,10 @@ smallest possible bootstrap seam and the build driver.
 |---|---|---:|---|
 | Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,527 lines | **yes** |
 | Formatter, package tool, language server, IR tool, LSP test client | Sayanox | 5 programs | **yes** |
-| All tests and fixtures | Sayanox + `sh` drivers | 279 `.sa` files, 1,131,991 bytes | **yes** (logic) |
+| All tests and fixtures | Sayanox + `sh` drivers | 274 `.sa` files, 1,129,198 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,353 lines | no |
-| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,604 lines | no |
+| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,790 lines | no |
 
 Ten tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
 `inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
@@ -82,13 +82,55 @@ are `.sa`. All tracked scripts are POSIX `sh`. Gate: `test-language-deps`.
    (the C client used `fread`, which loops); a silent child blocks the caller
    exactly as the C client's blocking read did.
 
-### Phase C — package and process behavior in Sayanox
+4. **The package tool's file logic in Sayanox (done, 2026-10-18).**
+   `tools/sxpkg.sa` grew from 1,149 to 1,786 lines and now owns `publish`,
+   `install-local`, the local-registry branches of `sync` and `fetch`, and the
+   `seed` folder creation. `tools/sxpkg.sh` dropped from 345 to 362 lines while
+   losing every `grep`, `cut`, `tr`, `cp`, `mkdir` and `rm -rf` in those paths:
+   it keeps `need_online`/`SAYANOX_ONLINE` (Sayanox has no `getenv`), the
+   http(s) transport (`spawn` takes a path with no argv, so it cannot pass a
+   URL to curl or wget), and the dispatch.
+   New in the language's toolbox rather than in the compiler: `ensure_dir`
+   (`mkdir -p`), `rm_tree` (`rm -rf`, via `read_dir` + `remove_path` recursion)
+   and `copy_tree` (`cp -r src/. dst/`) are ordinary `make` functions built on
+   the cut-#7 builtins; `toml_field` reads a `key = "value"` line the way
+   `grep '^key' | cut -d= -f2- | tr -d '" '` did.
+   Gates: the five sxpkg gates above **pass unchanged** (that is the
+   acceptance test for a behavioural port) plus the new
+   `test-sxpkg-sayanox-logic`, which pins publish's files and single report,
+   install-local's folders and three exit codes, sync's index preflight and
+   seed fallback, fetch's lock/pin and full rollback, and the three folder
+   primitives.
+   Honest differences, none of them load-bearing:
+   * `install-local` now also creates `.sayanox/pkgs/<name>/` (the shell only
+     made `.sayanox/pkgs` itself); it still copies into the registry only,
+     exactly as before.
+   * `install-local` exits 1 when the lock cannot be resolved, while a bare
+     `./tools/sxpkg install` still prints its FAILED report and exits 0 —
+     `test-pkgs` pins that, and the wrapper's `checked` has always mapped the
+     report to a status. The status was added for the delegation, not to change
+     the bare command.
+   * a local `sync` that finds no INDEX reports `sxpkg: sync failed; using
+     local seed` instead of `online sync failed`, and the fallback is the same
+     `seed` command.
+   * `sync` from a local registry refuses an unsafe index without writing it,
+     where the shell needed a `mktemp` file to do the same.
+   * the http(s) halves of `sync`, `install` and `fetch` are unchanged shell,
+     including the `.fetch.XXXXXX` staging directory and its `trap` rollback.
 
-Move the remaining `tools/sxpkg.sh` logic (sync/install/publish/fetch,
-staging, checksums, rollback) into `tools/sxpkg.sa`, leaving the shell file as
-an `exec` shim at most. The process and directory blockers are gone: `spawn`,
-`child_*`, `make_dir`, `make_link`, `remove_path` and the directory builtins
-all exist and are gated. What remains is the port itself.
+### Phase C — package and process behavior in Sayanox (in progress)
+
+Phase C started with the process and directory builtins (`spawn`, `child_*`,
+`make_dir`, `make_link`, `remove_path` and the directory builtins), which is
+what unblocked everything below. What is left of Phase C is the network
+transport itself, and it is blocked by the language rather than by effort:
+`spawn(path)` takes no arguments, so Sayanox cannot run
+`curl -fsSL --connect-timeout 10 --max-time 60 <url> -o <part>`, and
+`selfhost/test_sxpkg_transfer_hardening.sh` mocks `curl`/`wget` through `PATH`
+and asserts `$MOCK_CALLS` contains them, so switching to `http_get` would
+break a gate that must stay unchanged. `docs/SXPKG_ONLINE.md` records the same
+boundary. The portable slice is done; the transport is a documented exception,
+not a missing step.
 Tests: `test-sxpkg`, `test-sxpkg-polish`, `test-sxpkg-online-local`,
 `test-sxpkg-transfer-hardening`, `test-sxpkg-online-optin` must pass unchanged.
 

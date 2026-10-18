@@ -122,6 +122,23 @@ correctly to `sx_eq`. Use `string_eq(call, "text") == 1` for the call form
 until the condition rewriter learns to classify a call; the gates use that
 form and no gate depends on the broken one.
 
+A second known limitation, found on 2026-10-18 while porting `tools/sxpkg.sa`
+and worth writing down because it fails silently: **the compiler's signature
+pre-pass does not understand `//` comments.** It scans the whole file for
+`make` at the start of a line while tracking string literals, and the
+comment-tracking branch in that loop is dead code (`fscm` is never set to 1),
+so a double quote inside a comment toggles string mode. A comment with an
+*odd* number of double quotes therefore makes the pre-pass treat the rest of
+the file as one string literal, every later `make` is missed, and each of those
+functions falls back to the raw parameter parse — which reads `a: str` as two
+untyped parameters. The result is C that does not compile
+(`static double f(double a, double str)`, plus a `#error sayanox-min: unknown
+function:` for the recursive ones), so it is loud at build time, but the cause
+is invisible in the `.sa` source. Keep double quotes in comments balanced;
+`make test-sxpkg-sayanox-logic` pins both halves of this — a fixture whose
+comment carries two quotes must still compile to `double a, char *b`, and
+`tools/sxpkg.c` must not contain the mangled `, double str,` signature.
+
 `exit(n)` was added on 2026-10-17 so Sayanox CLI tools can report failure
 without a C helper. It flushes stdout before terminating, returns a number
 type, and follows the ordinary-expression rule above (`hold code = exit(2)`,

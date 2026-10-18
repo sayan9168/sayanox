@@ -79,10 +79,9 @@ download() {
 
 run_sayanox() {
   sx_cmd="$1"; shift
-  [ -x "$SXPKG_BIN" ] || make -C "$SAYANOX_REPO_ROOT" sxpkg
   case "$sx_cmd" in
-    init|add) mkdir -p "$PKGDIR" "$REG" ;;
-    seed) mkdir -p "$REG/hello" "$REG/math" ;;
+    init|add) sx ensure-dir "$PKGDIR" >/dev/null && sx ensure-dir "$REG" >/dev/null ;;
+    seed) : ;;
   esac
   if (cd "$ROOT" && "$SXPKG_BIN" "$sx_cmd" "$@"); then
     sx_status=0
@@ -93,9 +92,18 @@ run_sayanox() {
     run_sayanox seed
   fi
   if [ "$sx_cmd" = remove ] && [ "$sx_status" -eq 0 ] && [ -n "${1:-}" ] && [ -d "$PKGDIR/$1" ]; then
-    rm -rf "$PKGDIR/$1"
+    sx rm-tree "$PKGDIR/$1"
   fi
   return "$sx_status"
+}
+
+# sx: run the Sayanox package tool, building it first if it is missing.  Every
+# folder and copy operation the wrapper used to do with mkdir/cp/rm now goes
+# through it (ensure-dir, rm-tree, copy-tree), so the shell only has to know how
+# to reach the network.
+sx() {
+  [ -x "$SXPKG_BIN" ] || make -C "$SAYANOX_REPO_ROOT" sxpkg >/dev/null
+  "$SXPKG_BIN" "$@"
 }
 
 init() {
@@ -104,7 +112,16 @@ init() {
 
 sync() {
   need_online || return 1
-  mkdir -p "$REG"
+  # A file:// URL or a plain path is not the network, so the whole refresh is
+  # Sayanox: it writes the INDEX only after every name in it has been checked,
+  # and it falls back to the local seed when there is nothing to read.
+  case "$ONLINE" in
+    file://*|/*|./*)
+      (cd "$ROOT" && sx sync-local "$ONLINE")
+      return $?
+      ;;
+  esac
+  sx ensure-dir "$REG" >/dev/null
   echo "sxpkg: sync from $ONLINE"
   tmp=$(mktemp)
   if download "$ONLINE/INDEX" "$tmp"; then
@@ -117,7 +134,7 @@ sync() {
     echo "sxpkg: index updated"
     while IFS='=' read -r n v; do
       case "$n" in \#*|"") continue ;; esac
-      mkdir -p "$REG/$n"
+      sx ensure-dir "$REG/$n" >/dev/null
       download "$ONLINE/$n/pkg.meta" "$REG/$n/pkg.meta" 2>/dev/null || true
       download "$ONLINE/$n/main.sa" "$REG/$n/main.sa" 2>/dev/null || true
       echo "  synced $n=$v"
@@ -140,11 +157,11 @@ add() {
 }
 
 # checked: run a Sayanox subcommand and turn its report into an exit status.
-# The Sayanox binary cannot set its own exit code (the language has no exit
-# builtin), so a failure is recognised from its FAILED line. Output is kept.
+# The Sayanox binary also sets its own exit status now, but the FAILED and DEP
+# report lines stay the contract the wrapper keys on, so a command that only
+# reports (verify, deps) still maps to a status here. Output is kept.
 checked() {
-  [ -x "$SXPKG_BIN" ] || make -C "$SAYANOX_REPO_ROOT" sxpkg >/dev/null
-  if checked_out=$(cd "$ROOT" && "$SXPKG_BIN" "$@" 2>&1); then
+  if checked_out=$(cd "$ROOT" && sx "$@" 2>&1); then
     :
   else
     printf '%s\n' "$checked_out"
@@ -176,26 +193,20 @@ deps() {
   run_sayanox deps "$@"
 }
 
-# install-local: the offline install.  It creates .sayanox/registry/<name>/
-# for every locked package (Sayanox has no mkdir) and then lets the Sayanox
-# tool copy each package, and its `deps=` closure, out of a local registry
-# directory (default ./registry), checking the version and the pkg.meta sum
-# on the way.  No network: `install` is the online command.
+# install-local: the offline install.  Sayanox owns all of it now: it preflights
+# every locked name, creates .sayanox/registry/<name>/ and .sayanox/pkgs/<name>/,
+# copies each package (and its `deps=` closure) out of a local registry directory
+# (default ./registry) while checking the version and the pkg.meta sum, and
+# exits non-zero when the lock cannot be resolved.  No network.
 install_local() {
   src="${1:-registry}"
-  mkdir -p "$PKGDIR"
   [ -f "$LOCK" ] || { echo "sxpkg: no sx.lock - run init/add"; exit 1; }
-  preflight_names "$LOCK" || return 1
   case "$src" in /*) ;; *) src=$(CDPATH= cd "$ROOT" && pwd)/"$src" ;; esac
-  while IFS='=' read -r n v; do
-    case "$n" in \#*|"") continue ;; version|name) continue ;; esac
-    mkdir -p "$REG/$n"
-  done < "$LOCK"
-  checked install "$src"
+  (cd "$ROOT" && sx install-local "$src")
 }
 
 install() {
-  mkdir -p "$PKGDIR"
+  sx ensure-dir "$PKGDIR" >/dev/null
   [ -f "$LOCK" ] || { echo "sxpkg: no sx.lock — run init/add"; exit 1; }
   # The lock plus complete cached packages are sufficient; a missing INDEX is
   # not a reason to transfer. Preflight names before constructing any paths.
@@ -213,13 +224,13 @@ install() {
       # and needs no permission. A transfer does.
       need_online || return 1
       fetched="$fetched $n"
-      mkdir -p "$REG/$n"
+      sx ensure-dir "$REG/$n" >/dev/null
       download "$ONLINE/$n/pkg.meta" "$REG/$n/pkg.meta" || echo "sxpkg: could not fetch $n/pkg.meta from $ONLINE"
       download "$ONLINE/$n/main.sa" "$REG/$n/main.sa" || echo "sxpkg: could not fetch $n/main.sa from $ONLINE"
     fi
     if [ -f "$REG/$n/pkg.meta" ] && [ -f "$REG/$n/main.sa" ]; then
-      mkdir -p "$PKGDIR/$n"
-      cp -r "$REG/$n/." "$PKGDIR/$n/" 2>/dev/null || true
+      sx ensure-dir "$PKGDIR/$n" >/dev/null
+      sx copy-tree "$REG/$n" "$PKGDIR/$n" 2>/dev/null || true
       echo "sxpkg: installed $n -> $PKGDIR/$n"
     else
       echo "sxpkg: missing $n in registry"
@@ -232,7 +243,8 @@ install() {
   # download never stays behind in the registry or the project.
   if ! checked verify; then
     for f in $fetched; do
-      rm -rf "$REG/$f" "$PKGDIR/$f"
+      sx rm-tree "$REG/$f"
+      sx rm-tree "$PKGDIR/$f"
     done
     [ -n "$fetched" ] && echo "sxpkg: rejected and removed downloaded:$fetched"
     return 1
@@ -247,22 +259,12 @@ search() {
   run_sayanox search "$@"
 }
 
+# publish: Sayanox owns it.  name/version come from sx.toml, the content sum is
+# recorded in pkg.meta exactly like the registry seed writes it, and the INDEX
+# gains `name=version` unless it is already there.  The shell version of this
+# needed grep, cut, tr and cp; it is now one delegation.
 publish() {
-  name=$(grep '^name' "$MANIFEST" 2>/dev/null | cut -d= -f2- | tr -d '" ' || echo local)
-  ver=$(grep '^version' "$MANIFEST" 2>/dev/null | cut -d= -f2- | tr -d '" ' || echo 0.1.0)
-  mkdir -p "$REG/$name"
-  printf 'name=%s\nversion=%s\n' "$name" "$ver" > "$REG/$name/pkg.meta"
-  [ -f main.sa ] && cp main.sa "$REG/$name/main.sa"
-  # Record the content sum exactly like the Sayanox implementation writes it,
-  # so `verify` can check a shell-published package the same way. pkgsum is a
-  # change detector, not a cryptographic hash (see docs/SXPKG_ONLINE.md).
-  if [ -f "$REG/$name/main.sa" ]; then
-    s=$(run_sayanox sum "$REG/$name/main.sa" 2>/dev/null | cut -d' ' -f3)
-    [ -n "$s" ] && printf 'sum=%s\n' "$s" >> "$REG/$name/pkg.meta"
-  fi
-  grep -q "^$name=" "$INDEX" 2>/dev/null || echo "$name=$ver" >> "$INDEX"
-  echo "sxpkg: published locally $name $ver"
-  echo "sxpkg: to go online, commit registry/$name to the sayanox repo"
+  (cd "$ROOT" && sx publish)
   # `publish` never uploads, with or without an opt-in: going online is a commit
   # to the repository registry, which is a review step, not a client command.
   # SAYANOX_ONLINE=1 changes nothing here on purpose.
@@ -289,21 +291,37 @@ fetch() (
     echo "sxpkg: fetch refuses existing package/lock '$name'" >&2; exit 1
   fi
   need_online "$url" || exit 1
-  mkdir -p "$REG" "$PKGDIR"
+  # A file:// URL or a plain path is not the network: Sayanox reads it, records
+  # the sum in pkg.meta and sx.lock, and rolls the whole thing back if any write
+  # fails.  Resolve the source against the caller's directory first, because
+  # fetch-local runs with the project root as its working directory.
+  case "$url" in
+    file://*|/*|./*)
+      case "$url" in
+        file://*) fsrc="${url#file://}" ;;
+        /*) fsrc="$url" ;;
+        ./*) fsrc="$PWD/${url#./}" ;;
+        *) fsrc="$PWD/$url" ;;
+      esac
+      [ -x "$SXPKG_BIN" ] || make -C "$SAYANOX_REPO_ROOT" sxpkg >/dev/null
+      cd "$ROOT" && exec "$SXPKG_BIN" fetch-local "$fsrc" "$name" "$url"
+      ;;
+  esac
+  sx ensure-dir "$REG" >/dev/null && sx ensure-dir "$PKGDIR" >/dev/null
   stage=$(mktemp -d "$REG/.fetch.XXXXXX")
   stage=$(CDPATH= cd "$stage" && pwd)
   committed=0; reg_owned=0; pkg_owned=0
   trap 'if [ "$committed" != 1 ]; then
-    [ "$reg_owned" = 0 ] || rm -rf "$REG/$name"
-    [ "$pkg_owned" = 0 ] || rm -rf "$PKGDIR/$name"
-  fi; rm -rf "$stage"' 0
+    [ "$reg_owned" = 0 ] || sx rm-tree "$REG/$name"
+    [ "$pkg_owned" = 0 ] || sx rm-tree "$PKGDIR/$name"
+  fi; sx rm-tree "$stage"' 0
   trap 'exit 1' 1 2 3 15
-  mkdir "$stage/registry" "$stage/package"
+  sx ensure-dir "$stage/registry" >/dev/null && sx ensure-dir "$stage/package" >/dev/null
   download "$url" "$stage/registry/main.sa" || exit 1
   s=$(run_sayanox sum "$stage/registry/main.sa" | cut -d' ' -f3)
   case "$s" in ''|*[!0-9]*) echo 'sxpkg: failed to compute fetched checksum' >&2; exit 1 ;; esac
   printf 'name=%s\nversion=0.0.0\nsum=%s\n' "$name" "$s" > "$stage/registry/pkg.meta"
-  cp -r "$stage/registry/." "$stage/package/"
+  sx copy-tree "$stage/registry" "$stage/package"
   if [ -f "$LOCK" ]; then cat "$LOCK" > "$stage/lock"; else : > "$stage/lock"; fi
   # An extra newline also handles a pre-existing lock without a final newline.
   printf '\n%s=0.0.0\n' "$name" >> "$stage/lock"

@@ -76,19 +76,21 @@ here so it is not lost, and it is machine-checked: `make all-sayanox` prints the
 measured inventory below and **exits 1**, the same way `true-selfhost-full`
 refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md).
 
-| Still not Sayanox | Language | Size (2026-10-17) | Unblocks |
+| Still not Sayanox | Language | Size (2026-10-18) | Unblocks |
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
 | `selfhost/native_aot.c` | C | 4,353 lines | Phase D — needs byte buffers, bitwise operations and shifts, and a syscall/memory surface in the language |
-| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,604 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,790 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
-local package tool, the language server (including its folder index since
-2026-10-17), the IR translator (`tools/emit_to_ir.sa`, byte-identical output),
-the directory builtins (`test-path-builtins`), the process builtins
-(`test-proc-builtins`), the LSP framed-session test client
-(`tools/lsp_workspace_test.sa`) and, since 2026-10-18, the byte-buffer and
-bitwise surface the native backend needs (`test-native-primitives`).
+package tool — now including `publish`, `install-local` and the
+local-registry halves of `sync` and `fetch` — the language server (including
+its folder index since 2026-10-17), the IR translator
+(`tools/emit_to_ir.sa`, byte-identical output), the directory builtins
+(`test-path-builtins`), the process builtins (`test-proc-builtins`), the LSP
+framed-session test client (`tools/lsp_workspace_test.sa`) and, since
+2026-10-18, the byte-buffer and bitwise surface the native backend needs
+(`test-native-primitives`).
 Ten unreferenced legacy C files were deleted the same day, alongside the three
 that gained Sayanox replacements.
 
@@ -101,8 +103,17 @@ x86-64 ELF executable that a Sayanox program emitted with nothing but those
 builtins. The port of `selfhost/native_aot.c` itself is **not** done: it is
 still 4,353 lines of C and this row stays in the table until it is.
 
+Phase C moved a long way on 2026-10-18: the package tool's whole file side —
+publish, install-local, local sync, local fetch, the `seed` folders and the
+folder primitives — is Sayanox, and the five sxpkg gates still pass unchanged
+(`make test-sxpkg-sayanox-logic` pins the new surface). What is left of C is
+the http(s) transport, and it is a language blocker rather than a missing
+step: `spawn(path)` takes no argv, so Sayanox cannot launch curl or wget, and
+the hardening gate pins curl/wget as the transport it must keep using.
+
 Phase order: **B** ~~IR tool~~, ~~directory builtin + LSP bridge~~ (both done) → **C** online
-package behavior, **D** native backend, **E** seed. Each phase must keep
+package transport (the file side is done; the http(s) transport is a documented
+exception), **D** native backend, **E** seed. Each phase must keep
 `gen3 == gen4` and the four hard gates green, and each must delete its row from
 the table above rather than add a new claim. No target may report success for
 this phase before the table is empty or every remaining row is a documented
@@ -122,7 +133,7 @@ is not presented as new work in this PR.
 | 4. Struct-typed hold | **Supported:** `hold p: Pt` retains the declared concrete struct identity and rejects scalar/wrong-struct initializers. | Existing accepted/type-checked support. | **Supported:** same named-identity check during collection and emission. | Struct reassignment remains outside this slice. Concrete function parameters/returns now have separate bounded gen2/gen3 support (`test-struct-functions`), not seed/native support. `test-type-refusals` runs the valid copy and scalar/wrong-struct refusals on all three. |
 | 5. Nested generic structs | `Box<Box<num>>` refused. | Refused through emitted `#error`. | Refused. | A deliberate current bootstrap-dialect limit: recursive type-argument parsing, specialization worklist, ordered layout and GC descriptors are not implemented. Simple `Box<num>`/`Box<str>` remain gated by `test-generic-structs`; nested refusal by `test-type-refusals`. |
 | 6. Stdlib | Existing portable helpers and flat JSON text utilities. | Same tested modules. | Same tested portable subset. | No new module or nested JSON parser in this PR. No crypto. HTTP/crawler integration remains optional and outside bootstrap (`test-network`); STDLIB.md. |
-| 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/checksum/name validation; thin shell transfer/staging. Fetch now actually records `sum=`; failed fetch cleans staging/preserves lock, existing pins refuse replacement. Cached install needs no INDEX; local/bare-relative/file copies need no curl/wget. | No native compilation claim for sxpkg. | Online remains opt-in. Local fixtures plus successful curl/wget-only and interrupted-transfer stubs test verification/tamper, name/index/lock preflight and cleanup without DNS. `sum=` is non-cryptographic; no signatures/provenance or concurrent/crash-proof transaction claim. `test-sxpkg-transfer-hardening`, `test-sxpkg-online-local`, `test-sxpkg-online-optin`; [scope/logs](SXPKG_ONLINE.md#transfer-hardening-and-deterministic-success-paths-2026-10-16). |
+| 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/checksum/name validation plus publish, install-local and the local-registry sync/fetch (staging, checksums, rollback); shell keeps only the http(s) transport and the online opt-in. Fetch now actually records `sum=`; failed fetch cleans staging/preserves lock, existing pins refuse replacement. Cached install needs no INDEX; local/bare-relative/file copies need no curl/wget. | No native compilation claim for sxpkg. | Online remains opt-in. Local fixtures plus successful curl/wget-only and interrupted-transfer stubs test verification/tamper, name/index/lock preflight and cleanup without DNS. `sum=` is non-cryptographic; no signatures/provenance or concurrent/crash-proof transaction claim. `test-sxpkg-transfer-hardening`, `test-sxpkg-online-local`, `test-sxpkg-online-optin`; [scope/logs](SXPKG_ONLINE.md#transfer-hardening-and-deterministic-success-paths-2026-10-16). |
 | 8. LSP workspace scan | Not a seed-compiled tool claim. | `.sa` protocol/scanning + tool-local C directory bridge. workspace/symbol and lexical references search a bounded initialized local folder, with four open-buffer overlays; query-time refresh. | Not a native-AOT compiler claim; host C links the tool. | One root, 128 disk files/256 KiB each/4 MiB aggregate, depth/entry caps; no symlink traversal, watchers, semantic resolution or truncation notices. Rename remains open-only; signatureHelp same-document/same-line; codeAction formatting only. `test-lsp`/`test-lsp-robust` require framed C workspace probe. [LSP scope/logs](LSP.md#bounded-local-workspace-folder-index-2026-10-16). **Not IDE-complete.** |
 | 9. Second target / IR | Host C path unchanged. | Host C path unchanged. | x86-64 Linux ELF only. C99 listing adds optional strict record/nondecreasing-offset audit and source-offset correlation; native gate compares both modes deterministically. | **No executable second ISA.** Instruction-count preservation is not semantic losslessness: register widths collapse, x86 ABI/layout/fixups remain. No IR executor, aarch64 runtime/collector or cross-execution smoke test. `test-emit-to-ir`, `test-native-ir-portable`, `test-native-emit-split`; [NATIVE_IR.md](NATIVE_IR.md#strict-log-audit-and-source-offset-correlation-2026-10-16). |
 | 10. Namespacing / aliases | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | **Not planned for the bootstrap dialect. Documentation-only clarification.** Shared declaration tables, explicit public prefixes; no module identity/import scopes/qualified resolution or path-renaming aliases. Incidental ignored suffixes do not establish alias support; no new uniform diagnostic claim. Existing `test-use` and stdlib splice gates retained. [MODULES.md](MODULES.md). |

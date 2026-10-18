@@ -36,7 +36,8 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-native-primitives
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-native-primitives \
+        test-sxpkg-sayanox-logic
 
 all: true-selfhost-min
 
@@ -1478,6 +1479,190 @@ test-sxpkg-polish: sxpkg tools/sxpkg.sh
 
 
 # ---------------------------------------------------------------------------
+# test-sxpkg-sayanox-logic: the part of sxpkg that moved out of the shell.
+#
+# tools/sxpkg.sh used to carry publish, install-local's folder loop and the
+# local-registry halves of sync and fetch in grep/cut/tr/cp/mkdir/rm.  All of
+# that is Sayanox now, in tools/sxpkg.sa, and the shell keeps only what Sayanox
+# cannot do: reading SAYANOX_ONLINE from the environment, and launching curl or
+# wget for an http(s) transfer (`spawn` takes a path with no argv, so it cannot
+# pass a URL at all).
+#
+# Pinned here:
+#   * publish writes pkg.meta (name/version/sum) and main.sa, adds exactly one
+#     INDEX entry, reports exactly once, and never creates a project copy.
+#   * install-local creates .sayanox/registry/<n>/ and .sayanox/pkgs/<n>/ for
+#     every locked name, copies, and exits 1 for an unresolvable lock, an
+#     unsafe name, or a missing sx.lock.
+#   * sync against a local registry writes the INDEX only after every name in
+#     it has passed the check, so a hostile index can neither escape the
+#     registry nor destroy the one already installed, and it falls back to the
+#     local seed when there is no INDEX to read.
+#   * fetch from a local source records the sum in pkg.meta and sx.lock, copies
+#     to both places, refuses an existing package, and leaves nothing behind --
+#     no package copy and an unchanged lock -- when it cannot write.
+#   * ensure-dir / rm-tree / copy-tree are mkdir -p, rm -rf and cp -r.
+#   * the compiler's signature pre-pass reads every line as code, so a comment
+#     with an odd number of double quotes silently strips the types from every
+#     later `make`.  The generated C and a fixture both pin that it did not.
+# ---------------------------------------------------------------------------
+.PHONY: test-sxpkg-sayanox-logic
+test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
+	@mkdir -p $(TESTS)/sxpkg-sayanox
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox sx.lock sx.toml main.sa srcreg syncreg badreg deep csrc cdst fetchsrc.sa
+	@# ---- a comment with balanced quotes must not break a typed signature ----
+	@printf '// a comment with two "quotes" in it, balanced\nmake f(a: num, b: str) -> num {\n  give len(b)\n}\nshow f(1, "x")\n' > $(TESTS)/sxpkg-sayanox/quotes.sa
+	@./$(GEN2) $(TESTS)/sxpkg-sayanox/quotes.sa $(TESTS)/sxpkg-sayanox/quotes.c >/dev/null
+	@grep -q -F 'static double f(double a, char *b)' $(TESTS)/sxpkg-sayanox/quotes.c \
+	  || { echo "[FAIL] a comment with balanced quotes broke a typed make signature"; exit 1; }
+	@$(CC) -O2 -o $(TESTS)/sxpkg-sayanox/quotes $(TESTS)/sxpkg-sayanox/quotes.c
+	@q=$$($(TESTS)/sxpkg-sayanox/quotes); test "$$q" = 1 \
+	  || { echo "[FAIL] the quotes fixture printed '$$q', want 1"; exit 1; }
+	@if grep -q -F ', double str,' tools/sxpkg.c; then \
+	  echo "[FAIL] a typed make in tools/sxpkg.sa lost its parameter types"; \
+	  echo "       (a comment with an odd number of double quotes does that)"; exit 1; fi
+	@# ---- publish ----
+	@printf 'name = "pub-pkg"\nversion = "2.3.4"\n' > $(TESTS)/sxpkg-sayanox/sx.toml
+	@printf 'show "pub"\n' > $(TESTS)/sxpkg-sayanox/main.sa
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh publish > pub.out
+	@grep -q -F 'sxpkg: published locally pub-pkg 2.3.4' $(TESTS)/sxpkg-sayanox/pub.out \
+	  || { echo "[FAIL] publish did not report the package"; exit 1; }
+	@test $$(grep -c -F 'sxpkg: published locally' $(TESTS)/sxpkg-sayanox/pub.out) -eq 1 \
+	  || { echo "[FAIL] publish reported more than once"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/pub-pkg/main.sa \
+	  || { echo "[FAIL] publish wrote no main.sa"; exit 1; }
+	@grep -q -F 'name=pub-pkg' $(TESTS)/sxpkg-sayanox/.sayanox/registry/pub-pkg/pkg.meta \
+	  || { echo "[FAIL] publish wrote no pkg.meta name"; exit 1; }
+	@grep -q -F 'version=2.3.4' $(TESTS)/sxpkg-sayanox/.sayanox/registry/pub-pkg/pkg.meta \
+	  || { echo "[FAIL] publish wrote no pkg.meta version"; exit 1; }
+	@grep -q -E '^sum=[0-9]+$$' $(TESTS)/sxpkg-sayanox/.sayanox/registry/pub-pkg/pkg.meta \
+	  || { echo "[FAIL] publish recorded no content sum"; exit 1; }
+	@printf 'pub-pkg=2.3.4\n' > $(TESTS)/sxpkg-sayanox/index-want
+	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
+	  || { echo "[FAIL] publish wrote the wrong INDEX"; exit 1; }
+	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/pkgs \
+	  || { echo "[FAIL] publish created a project copy; it never installs"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh publish >/dev/null
+	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
+	  || { echo "[FAIL] a second publish duplicated the INDEX entry"; exit 1; }
+	@printf '# sx.lock\nversion=1\npub-pkg=2.3.4\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	  || { echo "[FAIL] a Sayanox-published package does not verify"; exit 1; }
+	@# ---- install-local ----
+	@mkdir -p $(TESTS)/sxpkg-sayanox/srcreg
+	@cp -r registry/math registry/strings $(TESTS)/sxpkg-sayanox/srcreg/
+	@printf '# sx.lock\nversion=1\nmath=0.1.0\nstrings=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg > il.out
+	@grep -q -F 'sxpkg: install ok' $(TESTS)/sxpkg-sayanox/il.out \
+	  || { echo "[FAIL] install-local did not report ok"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/math/pkg.meta \
+	  || { echo "[FAIL] install-local wrote no registry copy"; exit 1; }
+	@test -d $(TESTS)/sxpkg-sayanox/.sayanox/pkgs/math \
+	  || { echo "[FAIL] install-local created no project folder"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	  || { echo "[FAIL] an install-local package does not verify"; exit 1; }
+	@printf '# sx.lock\nversion=1\nnosuch=9.9\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	  echo "[FAIL] install-local exited 0 with an unresolvable lock entry"; exit 1; fi
+	@printf '# sx.lock\nversion=1\n../escape=1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	  echo "[FAIL] install-local accepted an unsafe package name"; exit 1; fi
+	@test ! -e $(TESTS)/escape || { echo "[FAIL] install-local escaped the tests directory"; exit 1; }
+	@rm -f $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	  echo "[FAIL] install-local exited 0 with no sx.lock"; exit 1; fi
+	@# ---- sync against a local registry ----
+	@mkdir -p $(TESTS)/sxpkg-sayanox/syncreg/hello $(TESTS)/sxpkg-sayanox/syncreg/math
+	@cp registry/hello/main.sa registry/hello/pkg.meta $(TESTS)/sxpkg-sayanox/syncreg/hello/
+	@cp registry/math/main.sa registry/math/pkg.meta $(TESTS)/sxpkg-sayanox/syncreg/math/
+	@printf 'hello=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-sayanox/syncreg/INDEX
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
+	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/syncreg \
+	    sh ../../../tools/sxpkg.sh sync > sync.out
+	@grep -q -F 'sxpkg: index updated' $(TESTS)/sxpkg-sayanox/sync.out \
+	  || { echo "[FAIL] sync did not report the index"; exit 1; }
+	@grep -q -F '  synced math=0.1.0' $(TESTS)/sxpkg-sayanox/sync.out \
+	  || { echo "[FAIL] sync did not report the package"; exit 1; }
+	@printf 'hello=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-sayanox/index-want
+	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
+	  || { echo "[FAIL] sync wrote the wrong INDEX"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/math/main.sa \
+	  || { echo "[FAIL] sync copied no package"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/syncreg \
+	    sh ../../../tools/sxpkg.sh sync > sync2.out
+	@test $$(grep -c -F '  synced math=0.1.0' $(TESTS)/sxpkg-sayanox/sync2.out) -eq 1 \
+	  || { echo "[FAIL] a second sync duplicated the report"; exit 1; }
+	@mkdir -p $(TESTS)/sxpkg-sayanox/badreg
+	@printf '../escape=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-sayanox/badreg/INDEX
+	@if (cd $(TESTS)/sxpkg-sayanox && \
+	      SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/badreg \
+	      sh ../../../tools/sxpkg.sh sync >/dev/null 2>&1); then \
+	  echo "[FAIL] sync accepted an index with an unsafe package name"; exit 1; fi
+	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
+	  || { echo "[FAIL] a rejected index destroyed the installed one"; exit 1; }
+	@test ! -e $(TESTS)/escape || { echo "[FAIL] sync escaped the tests directory"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
+	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file:///nonexistent-registry \
+	    sh ../../../tools/sxpkg.sh sync > sync3.out
+	@grep -q -F 'sxpkg: local registry seeded' $(TESTS)/sxpkg-sayanox/sync3.out \
+	  || { echo "[FAIL] sync did not fall back to the local seed"; exit 1; }
+	@# ---- fetch from a local source ----
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@printf 'show "fetched"\n' > $(TESTS)/sxpkg-sayanox/fetchsrc.sa
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa fetched > fetch.out
+	@grep -q -F 'sxpkg: fetched fetched from fetchsrc.sa (checksum recorded; not authenticated)' \
+	    $(TESTS)/sxpkg-sayanox/fetch.out || { echo "[FAIL] fetch did not report the package"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/fetched/main.sa \
+	  || { echo "[FAIL] fetch wrote no registry copy"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/pkgs/fetched/main.sa \
+	  || { echo "[FAIL] fetch wrote no project copy"; exit 1; }
+	@grep -q -E '^sum=[0-9]+$$' $(TESTS)/sxpkg-sayanox/.sayanox/registry/fetched/pkg.meta \
+	  || { echo "[FAIL] fetch recorded no content sum"; exit 1; }
+	@grep -q -F 'fetched=0.0.0' $(TESTS)/sxpkg-sayanox/sx.lock \
+	  || { echo "[FAIL] fetch did not pin the package in sx.lock"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	  || { echo "[FAIL] a fetched package does not verify"; exit 1; }
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa fetched >/dev/null 2>&1); then \
+	  echo "[FAIL] fetch overwrote an existing package"; exit 1; fi
+	@grep -q -F 'fetched=0.0.0' $(TESTS)/sxpkg-sayanox/sx.lock \
+	  || { echo "[FAIL] a refused fetch changed sx.lock"; exit 1; }
+	@if (cd $(TESTS)/sxpkg-sayanox && find . -name '*.part' | grep -q .); then \
+	  echo "[FAIL] a .part file was left behind"; exit 1; fi
+	@if (cd $(TESTS)/sxpkg-sayanox && find . -name '.fetch.*' | grep -q .); then \
+	  echo "[FAIL] a staging directory was left behind"; exit 1; fi
+	@# ---- rollback: an unusable registry must leave nothing behind ----
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@printf 'not a directory' > $(TESTS)/sxpkg-sayanox/.sayanox
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa rolled >/dev/null 2>&1); then \
+	  echo "[FAIL] fetch succeeded with an unusable registry"; exit 1; fi
+	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/registry/rolled \
+	  || { echo "[FAIL] a failed fetch left a registry copy"; exit 1; }
+	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/pkgs/rolled \
+	  || { echo "[FAIL] a failed fetch left a project copy"; exit 1; }
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/lock-want
+	@cmp $(TESTS)/sxpkg-sayanox/lock-want $(TESTS)/sxpkg-sayanox/sx.lock \
+	  || { echo "[FAIL] a failed fetch changed sx.lock"; exit 1; }
+	@# ---- the folder and copy primitives the wrapper now delegates ----
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox deep csrc cdst
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) ensure-dir deep/a/b
+	@test -d $(TESTS)/sxpkg-sayanox/deep/a/b || { echo "[FAIL] ensure-dir made no nested folder"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) ensure-dir deep/a/b
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) rm-tree deep
+	@test ! -e $(TESTS)/sxpkg-sayanox/deep || { echo "[FAIL] rm-tree left the folder"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) rm-tree deep
+	@mkdir -p $(TESTS)/sxpkg-sayanox/csrc/sub
+	@printf 'one' > $(TESTS)/sxpkg-sayanox/csrc/a
+	@printf 'two' > $(TESTS)/sxpkg-sayanox/csrc/sub/b
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) copy-tree csrc cdst
+	@test "$$(cat $(TESTS)/sxpkg-sayanox/cdst/a)" = one || { echo "[FAIL] copy-tree lost a file"; exit 1; }
+	@test "$$(cat $(TESTS)/sxpkg-sayanox/cdst/sub/b)" = two || { echo "[FAIL] copy-tree did not recurse"; exit 1; }
+	@echo "[OK] sxpkg in Sayanox: publish, install-local, local sync/fetch, rollback, and the folder primitives"
+
+# ---------------------------------------------------------------------------
 # test-native-emit-split: the x86-64 backend is a REGION of native_aot.c, not a
 # seasoning spread through it.
 #
@@ -2849,7 +3034,7 @@ test-language-deps: $(GEN2) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN
 	@cmp $(TESTS)/lsp_shim.c $(LSP_C)
 	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" $(MAKE) --no-print-directory \
 	  -o $(GEN2_C) -o $(GEN2) -o $(GEN1_MIN_C) -o $(GEN1_MIN) -o $(SEED_MIN_BIN) \
-	  test-lsp test-lsp-robust test-native-ir-log test-native-mem test-seed-gc test-seed-generics test-sxpkg-online-local
+	  test-lsp test-lsp-robust test-native-ir-log test-native-mem test-seed-gc test-seed-generics test-sxpkg-online-local test-sxpkg-sayanox-logic
 	@if [ -s $(DEP_SHIM_LOG) ]; then echo "[FAIL] a removed interpreter was invoked:"; cat $(DEP_SHIM_LOG); exit 1; fi
 	@echo "[OK] language deps: no bash/awk/sed/python/perl/node/ruby invoked by the exercised build, test and LSP paths"
 
@@ -3254,7 +3439,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-language-deps
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-sxpkg-sayanox-logic test-language-deps
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -3293,8 +3478,9 @@ all-sayanox:
 	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
 	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' selfhost/sx | wc -l)" 'POSIX sh'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
-	@echo "  done: compiler, formatter, package tool, language server,"
-	@echo "        IR translator, LSP folder index, LSP test client,"
+	@echo "  done: compiler, formatter, package tool (local commands plus"
+	@echo "        publish, install-local and the local sync/fetch), language"
+	@echo "        server, IR translator, LSP folder index, LSP test client,"
 	@echo "        byte-buffer + bitwise builtins (all .sa)"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'

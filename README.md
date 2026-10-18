@@ -93,7 +93,7 @@ make tools
 ./tools/sxpkg list
 ```
 
-The formatter currently handles whitespace. The package tool supports local `init` / `add` / `list` / `remove` / `search` / `info` / `seed`. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
+The formatter currently handles whitespace. The package tool supports `init` / `add` / `list` / `remove` / `search` / `info` / `seed` / `deps` / `verify` / `install` / `install-local` / `publish`, and since 2026-10-18 the local-registry halves of `sync` and `fetch` as well; only the http(s) transport and the online opt-in policy stay in the shell wrapper. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 
 The language server (`tools/sayanox_lsp.sa`), its folder index and the IR
 translator (`tools/emit_to_ir.sa`) are Sayanox programs too, and no maintained

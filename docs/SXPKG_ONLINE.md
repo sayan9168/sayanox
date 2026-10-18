@@ -41,11 +41,11 @@ No stronger integrity mechanism was added: `sum=` is not cryptography.
 |---|---|---|---|
 | `init`, `add`, `list`, `remove`, `deps`, `search`, `info`, `verify`, `sum` | Sayanox binary (`tools/sxpkg.sa`) | local lock file and local registry | no |
 | `seed` | Sayanox binary | writes the sample registry (`hello` and `math`, the two packages the binary knows) | no |
-| `install-local [dir]` | shell `mkdir` + Sayanox `install` | copies the lock closure out of a local registry dir, sum-checked | no |
-| `sync` | shell | downloads `INDEX` and each indexed package's `pkg.meta`/`main.sa` from `$SAYANOX_REGISTRY` | **yes** — opt-in (curl/wget) |
+| `install-local [dir]` | Sayanox binary | preflights the lock, creates `.sayanox/registry/<n>/` and `.sayanox/pkgs/<n>/`, copies the lock closure out of a local registry dir, sum-checked; exits 1 on an unresolvable lock, an unsafe name or a missing `sx.lock` | no |
+| `sync` | shell for http(s), Sayanox for a local registry | http(s): downloads `INDEX` and each indexed package's `pkg.meta`/`main.sa` from `$SAYANOX_REGISTRY`. A `file://` URL or a plain path goes to the Sayanox `sync-local`, which writes `INDEX` only after every name in it has passed `check-name` and falls back to `seed` when there is no index to read | **yes** for http(s) — opt-in (curl/wget); a local registry needs no opt-in |
 | `install` | shell | uses cached locked packages without requiring INDEX; fetches missing entries | only when missing, opt-in |
-| `fetch <url> [name]` | shell | downloads one `main.sa`, writes `pkg.meta` **with the `sum=` of the fetched bytes**, and locks it as `0.0.0` | **yes** |
-| `publish` | shell | writes `pkg.meta` (**now including `sum=`, computed by `sxpkg sum`, exactly as the Sayanox implementation writes it**) and `main.sa` into the local registry and `INDEX`; prints "commit registry/<name> to go online" | no (it never uploads) |
+| `fetch <url> [name]` | shell for http(s), Sayanox for a local source | http(s): downloads one `main.sa` into a `.fetch.XXXXXX` staging directory and commits it with a `trap` rollback. A `file://` URL or a plain path goes to the Sayanox `fetch-local`, which reads the source, records the `sum=`, copies to both `.sayanox/registry/<n>/` and `.sayanox/pkgs/<n>/`, appends `<n>=0.0.0` to `sx.lock`, and removes both copies and restores the lock if any write fails. Both write `pkg.meta` **with the `sum=` of the fetched bytes** and lock it as `0.0.0` | **yes** for http(s); a local source needs no opt-in |
+| `publish` | Sayanox binary | reads `name`/`version` out of `sx.toml`, writes `pkg.meta` (with the `sum=` of the copied `main.sa`, exactly as the seed writes it) and `main.sa` into `.sayanox/registry/<name>/`, adds one `<name>=<version>` line to `INDEX` unless it is there, and prints "commit registry/<name> to go online" | no (it never uploads) |
 
 `SAYANOX_REGISTRY` overrides the default online index, which is the raw
 `registry/` directory of the GitHub repository.
@@ -79,6 +79,19 @@ items below).
 * `<registry>/<name>/main.sa`: the package source. `use` splices it.
 
 ### Transfer rules (the shell's job)
+
+Since 2026-10-18 the shell's job is exactly the http(s) transport and the
+opt-in policy. Everything else — publish, install-local, the local-registry
+branches of `sync` and `fetch`, folder creation and deletion — is
+`tools/sxpkg.sa`. The boundary is a language limit, not a preference:
+`spawn(path)` takes no arguments, so Sayanox cannot launch
+`curl -fsSL --connect-timeout 10 --max-time 60 <url> -o <part>`, and
+`selfhost/test_sxpkg_transfer_hardening.sh` mocks `curl`/`wget` through `PATH`
+and asserts `$MOCK_CALLS` contains them, so the transport has to stay in the
+shell. `ensure_dir`, `rm_tree` and `copy_tree` in `tools/sxpkg.sa` are ordinary
+functions over `make_dir`/`read_dir`/`remove_path`, which is why the wrapper no
+longer calls `mkdir`, `rm`, `cp`, `grep`, `cut` or `tr` in these paths.
+Gate: `make test-sxpkg-sayanox-logic`.
 
 * A download that fails leaves no partial file behind. `download()` writes to
   `<dest>.part` and renames it only on success, so a failed transfer leaves no
