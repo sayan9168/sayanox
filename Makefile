@@ -36,7 +36,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-native-primitives
 
 all: true-selfhost-min
 
@@ -2459,7 +2459,7 @@ test-path-builtins: $(GEN2) $(SEED_MIN_BIN)
 	@grep -q 'call names an unknown function or builtin' $(TESTS)/pathb_gen_seed.err \
 	  || { echo "[FAIL] seed-min refused the path builtins without a clear diagnostic"; cat $(TESTS)/pathb_gen_seed.err; exit 1; }
 	@echo "[OK] path builtins: read_dir listing, lstat kinds (file/dir/symlink/missing), sizes, realpath; seed-min refuses them"
-test-stage2: test-exit-builtin test-path-builtins test-proc-builtins
+test-stage2: test-exit-builtin test-path-builtins test-proc-builtins test-native-primitives
 
 # ---------------------------------------------------------------------------
 # test-proc-builtins: spawn / child_send / child_recv / child_line /
@@ -2486,6 +2486,45 @@ test-proc-builtins: $(GEN2) $(SEED_MIN_BIN)
 	@grep -q 'call names an unknown function or builtin' $(TESTS)/proc_frame_seed.err \
 	  || { echo "[FAIL] seed-min refused the process builtins without a clear diagnostic"; cat $(TESTS)/proc_frame_seed.err; exit 1; }
 	@echo "[OK] process builtins: spawn and a framed child session, make_dir/make_link/remove_path, dead handles; seed-min refuses them"
+
+# ---------------------------------------------------------------------------
+# test-native-primitives: bit_and / bit_or / bit_xor / bit_not / shl / shr,
+# write_bytes and bytes_f64 are the primitive surface that
+# selfhost/native_aot.c needs before it can be rewritten in Sayanox. gen2
+# implements them; seed-min refuses them, like every other late builtin.
+#
+# The gate does not stop at arithmetic: selfhost/native_primitives.sa writes a
+# complete static x86-64 ELF executable out of a byte buffer plus the bitwise
+# helpers, and the gate then RUNS that file.  A byte buffer that the kernel
+# loads and that exits 42 is the real proof, not a printout.
+# ---------------------------------------------------------------------------
+.PHONY: test-native-primitives
+test-native-primitives: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@rm -f $(TESTS)/native_primitives.elf $(TESTS)/native_primitives.bin
+	./$(GEN2) selfhost/native_primitives.sa $(TESTS)/native_primitives.c >/dev/null
+	@if grep -q '#error' $(TESTS)/native_primitives.c; then echo "[FAIL] native primitives: #error in the output"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/native_primitives $(TESTS)/native_primitives.c
+	@./$(TESTS)/native_primitives '$(CURDIR)/$(TESTS)/native_primitives.elf' '$(CURDIR)/$(TESTS)/native_primitives.bin' > $(TESTS)/native_primitives.out
+	@printf 'bit_and bit_or bit_xor bit_not shl shr bytes_f64 write_bytes: checked, and the emitted ELF exits 42\n' > $(TESTS)/native_primitives.want
+	@cmp $(TESTS)/native_primitives.want $(TESTS)/native_primitives.out \
+	  || { echo "[FAIL] native primitives: unexpected program output"; cat $(TESTS)/native_primitives.out; exit 1; }
+	@# the byte buffer is a real ELF: magic, x86-64 machine id, exact size
+	@test "$$(od -An -tx1 -N4 $(TESTS)/native_primitives.elf | tr -d ' \n')" = 7f454c46 \
+	  || { echo "[FAIL] native primitives: the emitted file is not an ELF"; exit 1; }
+	@test "$$(od -An -tx1 -j18 -N2 $(TESTS)/native_primitives.elf | tr -d ' \n')" = 3e00 \
+	  || { echo "[FAIL] native primitives: the emitted ELF is not x86-64"; exit 1; }
+	@test "$$(wc -c < $(TESTS)/native_primitives.elf)" = 132 \
+	  || { echo "[FAIL] native primitives: the emitted ELF has the wrong size"; exit 1; }
+	@chmod +x $(TESTS)/native_primitives.elf
+	@./$(TESTS)/native_primitives.elf; __rc=$$?; \
+	 if [ "$$__rc" != 42 ]; then echo "[FAIL] native primitives: the emitted ELF exited $$__rc, want 42"; exit 1; fi
+	@printf 'hold a = bit_and(12, 10)\nshow a\nhold b = write_bytes("x", [])\nshow b\nhold c = bytes_f64([], 1.5)\nshow len(c)\nhold d = shl(1, 3)\nshow d\nhold e = shr(8, 1)\nshow e\n' > $(TESTS)/native_primitives_seed.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/native_primitives_seed.sa > /dev/null 2>$(TESTS)/native_primitives_seed.err; then \
+	   echo "[FAIL] seed-min accepted the native primitives without implementing them"; exit 1; fi
+	@grep -q 'call names an unknown function or builtin' $(TESTS)/native_primitives_seed.err \
+	  || { echo "[FAIL] seed-min refused the native primitives without a clear diagnostic"; cat $(TESTS)/native_primitives_seed.err; exit 1; }
+	@echo "[OK] native primitives: bitwise ops, write_bytes and bytes_f64; a Sayanox byte buffer emits a static x86-64 ELF that exits 42; seed-min refuses them"
 
 # ---------------------------------------------------------------------------
 # test-stage2: the Stage-2 slice on gen2 beyond the string walk — the word
@@ -3255,7 +3294,8 @@ all-sayanox:
 	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' selfhost/sx | wc -l)" 'POSIX sh'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
 	@echo "  done: compiler, formatter, package tool, language server,"
-	@echo "        IR translator, LSP folder index, LSP test client (all .sa)"
+	@echo "        IR translator, LSP folder index, LSP test client,"
+	@echo "        byte-buffer + bitwise builtins (all .sa)"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
 	@exit 1

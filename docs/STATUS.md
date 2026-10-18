@@ -80,15 +80,26 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
 | `selfhost/native_aot.c` | C | 4,353 lines | Phase D — needs byte buffers, bitwise operations and shifts, and a syscall/memory surface in the language |
-| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,564 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,604 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
 local package tool, the language server (including its folder index since
 2026-10-17), the IR translator (`tools/emit_to_ir.sa`, byte-identical output),
 the directory builtins (`test-path-builtins`), the process builtins
-(`test-proc-builtins`) and the LSP framed-session test client
-(`tools/lsp_workspace_test.sa`). Ten unreferenced legacy C files were deleted
-the same day, alongside the three that gained Sayanox replacements.
+(`test-proc-builtins`), the LSP framed-session test client
+(`tools/lsp_workspace_test.sa`) and, since 2026-10-18, the byte-buffer and
+bitwise surface the native backend needs (`test-native-primitives`).
+Ten unreferenced legacy C files were deleted the same day, alongside the three
+that gained Sayanox replacements.
+
+Phase D started on 2026-10-18 with `write_bytes`, `bytes_f64`, `bit_and`,
+`bit_or`, `bit_xor`, `bit_not`, `shl` and `shr`: a byte buffer is an ordinary
+list of numbers, `push` grows it, `xs[i] = v` patches it and `write_bytes`
+puts it on disk without stopping at a NUL byte. `make test-native-primitives`
+checks every operator against a value computed in C and then runs a static
+x86-64 ELF executable that a Sayanox program emitted with nothing but those
+builtins. The port of `selfhost/native_aot.c` itself is **not** done: it is
+still 4,353 lines of C and this row stays in the table until it is.
 
 Phase order: **B** ~~IR tool~~, ~~directory builtin + LSP bridge~~ (both done) → **C** online
 package behavior, **D** native backend, **E** seed. Each phase must keep

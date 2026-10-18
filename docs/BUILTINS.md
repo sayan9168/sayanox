@@ -60,6 +60,11 @@ the same source); the checked-in `seed-min` predates them and rejects them.
 | `make_dir(path)` | create a directory (`0700`); `1` on success, `0` on failure |
 | `make_link(target, path)` | create a symlink; `1` on success, `0` on failure |
 | `remove_path(path)` | remove a file or an empty directory; `1` on success, `0` on failure |
+| `write_bytes(path, xs)` | write a list of numbers as raw bytes; `1` on success, `0` on failure |
+| `bytes_f64(xs, v)` | append the 8 little-endian IEEE-754 bytes of `v` to a list |
+| `bit_and(a, b)` / `bit_or(a, b)` / `bit_xor(a, b)` | 64-bit bitwise and/or/xor as a number |
+| `bit_not(a)` | 64-bit complement as a number |
+| `shl(a, n)` / `shr(a, n)` | unsigned 64-bit shift left/right by `n` bits |
 
 All of them are ordinary expressions, so they nest inside other calls
 (`concat(a, numstr(n))`) and can be stored (`hold n = numstr(v)`). Native AOT
@@ -85,6 +90,37 @@ embedded NUL byte ends the string early; use `child_line` for line protocols.
 same client needs; `remove_path` falls back to `rmdir` for a directory.
 `make test-proc-builtins` pins all of it, and seed-min refuses every one of
 these builtins the same way it refuses the directory ones.
+
+`write_bytes`, `bytes_f64` and the six bitwise calls are the byte-buffer
+surface added on 2026-10-18 as the first step toward rewriting
+`selfhost/native_aot.c` in Sayanox: a byte buffer is an ordinary list of
+numbers, `push` grows it, `xs[i] = v` patches it, `len` bounds it and
+`write_bytes` is what finally puts it on disk. `write_file` cannot do that
+job because it takes a C string and therefore stops at the first NUL byte;
+`write_bytes` refuses any value outside `0`-`255` and returns `0` rather than
+writing a truncated file. `bytes_f64` returns the exact eight bytes of a
+double instead of a list-returning builtin, because the codegen has no
+list-typed return for builtins yet.
+
+The bitwise calls are honest about their one real limit: a Sayanox number is a
+C `double`, so a result at or above 2^53 is rounded when it becomes a number.
+`bit_and`, `bit_or`, `bit_xor`, `shl` and `shr` are exact below 2^53, which
+covers every register, prefix, ModRM and displacement a code emitter needs;
+`bit_not(x)` for a small `x` is the one call whose result is never exact, so
+the idiom is `bit_and(bit_not(x), mask)`. An operand outside `0`-`2^64`, a
+shift count outside `0`-`63` or a byte outside `0`-`255` is a hard error, not
+a silent zero. `make test-native-primitives` pins all of it: it checks every
+operator against a value computed in C and then runs a static x86-64 ELF
+executable that a Sayanox program wrote with nothing but `push`, the bitwise
+helpers and `write_bytes`.
+
+One known limitation of the comparison lowering, unchanged by this addition:
+`call == "text"` (and `!=`, `<`, `>`, `<=`, `>=`) still lowers to a C pointer
+comparison, so it compares addresses instead of contents and is silently
+wrong. `name == "text"`, where the left side is a plain variable, is lowered
+correctly to `sx_eq`. Use `string_eq(call, "text") == 1` for the call form
+until the condition rewriter learns to classify a call; the gates use that
+form and no gate depends on the broken one.
 
 `exit(n)` was added on 2026-10-17 so Sayanox CLI tools can report failure
 without a C helper. It flushes stdout before terminating, returns a number

@@ -13,12 +13,12 @@ smallest possible bootstrap seam and the build driver.
 
 | Layer | Language | Size | Sayanox? |
 |---|---|---:|---|
-| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,224 lines | **yes** |
+| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,527 lines | **yes** |
 | Formatter, package tool, language server, IR tool, LSP test client | Sayanox | 5 programs | **yes** |
-| All tests and fixtures | Sayanox + `sh` drivers | 278 `.sa` files, 1,127,959 bytes | **yes** (logic) |
+| All tests and fixtures | Sayanox + `sh` drivers | 279 `.sa` files, 1,131,991 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,353 lines | no |
-| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,564 lines | no |
+| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,604 lines | no |
 
 Ten tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
 `inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
@@ -102,6 +102,31 @@ This is the largest piece and needs language features that do not exist yet:
 * integer bit operations for encodings (shifts, masks, `&`, `|`, `^`);
 * a syscall/memory surface, or a way to emit an ELF section layout without raw
   pointers.
+
+**Step 1 of Phase D (done, 2026-10-18): the language surface.** Two of the
+three bullets are now in the language and gated. A byte buffer is an ordinary
+list of numbers: `push` grows it, `xs[i] = v` patches it at an arbitrary
+offset (it lowers to `sx_lset`), `len` bounds it, and `write_bytes(path, xs)`
+writes the raw bytes — `write_file` cannot, because it takes a C string and
+stops at the first NUL. `bytes_f64(xs, v)` appends the exact eight
+little-endian IEEE-754 bytes of a double. `bit_and`, `bit_or`, `bit_xor`,
+`bit_not`, `shl` and `shr` supply the encodings. seed-min and native refuse
+all eight, exactly as they refuse every other late builtin.
+Gate: `test-native-primitives` — it checks each operator against a value
+computed in C and then *runs* a static x86-64 ELF executable that a Sayanox
+program emitted with nothing but `push`, those operators and `write_bytes`.
+
+Honest limits of step 1, recorded rather than hidden: a Sayanox number is a C
+`double`, so a bitwise result at or above 2^53 is rounded when it becomes a
+number (exact below 2^53, which covers every register, prefix, ModRM and
+displacement an emitter needs; `bit_not(x)` for a small `x` is the one call
+whose result is never exact, so the idiom is `bit_and(bit_not(x), mask)`);
+`write_bytes` refuses a byte outside `0`-`255`; and there is still no
+list-typed builtin return, which is why the double splitter is `bytes_f64`
+instead of a `f64_bytes` that returns a list.
+
+**Step 2 (not started): the port itself.** `selfhost/native_aot.c` is still
+4,353 lines of C and its row stays in the table above.
 
 Interim honest target: `native_aot` stays C, but the **encoder seam** already
 exists (`SX_EMIT_LOG`, `test-native-emit-split`, `test-native-ir-log`), so a

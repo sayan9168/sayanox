@@ -150,8 +150,9 @@ has the short version.
 - [x] Toolchain free of bash, awk, sed and Python (`make test-language-deps`)
 - [ ] **Next phase — all-in-Sayanox toolchain** ([plan](docs/ALL_SAYANOX_PHASE.md)):
       port the remaining C pieces (native backend, seed) and the build driver
-      into Sayanox. The IR translator and the LSP folder index already moved
-      (2026-10-17); `make all-sayanox` fails closed until the rest does
+      into Sayanox. The IR translator, the LSP folder index and the byte-buffer
+      + bitwise builtins already moved (2026-10-17 / 2026-10-18);
+      `make all-sayanox` fails closed until the rest does
 - [ ] Full Stage-2 language self-hosting
 - [ ] Broader platform support
 - [ ] Standard library growth
@@ -170,7 +171,11 @@ the 4,353-line C native backend, and the make/POSIX-sh build driver. On
 byte-identical output, the LSP folder index moved into Sayanox (the C
 directory header and its binder were deleted), the 127-line C framed-session
 test client became `tools/lsp_workspace_test.sa` on the new process builtins,
-and ten unreferenced legacy C files were removed. `make all-sayanox` prints the remaining
+and ten unreferenced legacy C files were removed. On 2026-10-18 the language
+gained the byte-buffer and bitwise surface the native backend needs
+(`write_bytes`, `bytes_f64`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`,
+`shl`, `shr`); `make test-native-primitives` proves it by running a static
+x86-64 ELF that a Sayanox program emitted with those calls alone. `make all-sayanox` prints the remaining
 inventory and **fails closed** — the same way `true-selfhost-full` refuses to
 claim a full-language self-host — so the remaining work cannot silently drift
 or be forgotten. The plan orders it: ~~IR tool~~, ~~directory bridge~~, then

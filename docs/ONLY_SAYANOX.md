@@ -48,7 +48,7 @@ is left and fails closed.
 | A (done 2026-10-17) | Compiler, formatter, package tool, language server, LSP binder in `.sa`; no bash/awk/sed/Python on maintained paths | `test-language-deps` |
 | B (done 2026-10-17) | `tools/emit_to_ir` in Sayanox; directory builtins + Sayanox folder index (C header and binder deleted); process builtins + Sayanox LSP test client (the last C file in `tools/` deleted) | `test-emit-to-ir`, `test-native-ir-portable`, `test-path-builtins`, `test-proc-builtins`, `test-lsp`, `test-lsp-workspace` |
 | C | Online package behavior moves from `tools/sxpkg.sh` to `tools/sxpkg.sa` | `test-sxpkg*` unchanged |
-| D | `selfhost/native_aot.c` reimplemented in Sayanox against the pinned IR listing | `test-native-test`, `test-native-ir-log` |
+| D (started 2026-10-18) | Step 1: the byte-buffer + bitwise surface (`write_bytes`, `bytes_f64`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shl`, `shr`). Step 2, not started: `selfhost/native_aot.c` itself, reimplemented in Sayanox against the pinned IR listing | `test-native-primitives` (step 1), `test-native-test`, `test-native-ir-log` |
 | E | Seed decision: prebuilt trust anchor or a documented C exception | `make all-sayanox` |
 
 1. Expand the Sayanox-written compiler to cover the full documented language.
