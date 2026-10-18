@@ -15,7 +15,7 @@ smallest possible bootstrap seam and the build driver.
 |---|---|---:|---|
 | Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,527 lines | **yes** |
 | Formatter, package tool, language server, IR tool, LSP test client | Sayanox | 5 programs | **yes** |
-| All tests and fixtures | Sayanox + `sh` drivers | 274 `.sa` files, 1,129,198 bytes | **yes** (logic) |
+| All tests and fixtures | Sayanox + `sh` drivers | 279 `.sa` files, 1,165,577 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,353 lines | no |
 | Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,790 lines | no |

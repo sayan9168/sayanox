@@ -78,7 +78,7 @@ every gate ran against the same binaries; `full-suite.log` is that run in full
 Expected non-success, kept as evidence rather than hidden:
 
 - `make all-sayanox` — still **fails on purpose** (`all-sayanox.log`). The
-  inventory it prints now reads 274 `.sa` files and still lists the seed, the
+  inventory it prints now reads 279 `.sa` files and still lists the seed, the
   native backend and the build driver.
 
 ## Honest limits
