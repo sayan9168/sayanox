@@ -330,13 +330,13 @@ There is no C header and no generated-C binder any more. `make lsp` compiles
 `tools/sayanox_lsp.sa` with gen2 and links it; the folder index is ordinary
 Sayanox. This removed `tools/lsp_workspace.h` (119 lines) and
 `tools/lsp_workspace_bind.sa` on 2026-10-17. A standalone compilation of the
-`.sa` file therefore has the same folder support as the Makefile build.
-`tools/lsp_workspace_test.c` remains as the test client (fork/pipe framed
-sessions): it is a harness, not part of the server.
+.sa` file therefore has the same folder support as the Makefile build.
 
 Both `test-lsp` and `test-lsp-robust` now require `test-lsp-workspace`.
-An in-tree C client sends and reads actual `Content-Length` frames with
-handshakes (no timing sleeps or interpreter), checks unopened/nested file
+The test client `tools/lsp_workspace_test.sa` is Sayanox too: it spawns the
+server with the language's own `spawn`/`child_send`/`child_line`/`child_recv`/
+`child_close` builtins and reads actual `Content-Length` frames with
+handshakes (no timing sleeps or interpreter). It checks unopened/nested file
 symbols, case-insensitive query, references with/without declarations, URI
 encoding for spaces, more than four disk files, open overlay precedence and
 no duplicates, close fallback, disk edit/delete refresh, first workspace

@@ -86,13 +86,14 @@ tools/sayanox_lsp.c linguist-generated=true
 # selfhost/seed/sxc_seed.c, selfhost/seed/sxc_seed_min.c (the C bootstrap seed),
 # selfhost/native_aot.c (the x86-64 native AOT backend), selfhost/sxc_full.c,
 # selfhost/sxc_full_minimal.c, selfhost/stage2_template.c,
-# selfhost/rc_runtime_stress.c, selfhost/seed_builder_registry_test.c,
-# tools/lsp_workspace_test.c and the two headers are all written by hand and are
-# intentionally left visible as C. The nine unreferenced legacy C helpers
+# selfhost/rc_runtime_stress.c, selfhost/seed_builder_registry_test.c and the
+# two headers are all written by hand and are intentionally left visible as C.
+# The ten unreferenced legacy C helpers
 # (inject_*.c, prove_*.c, fixup_emit.c, sx_launcher.c, sx_driver.c,
 # build_stage2.c, stage2_expand.inc) were deleted on 2026-10-17;
-# tools/emit_to_ir.c followed the IR tool to Sayanox, and tools/lsp_workspace.h
-# went when the language server started walking folders itself.
+# tools/emit_to_ir.c followed the IR tool to Sayanox, tools/lsp_workspace.h went
+# when the language server started walking folders itself, and
+# tools/lsp_workspace_test.c when the framed test client became Sayanox.
 selfhost/seed/sxc_seed.c -linguist-generated
 selfhost/seed/sxc_seed_min.c -linguist-generated
 selfhost/native_aot.c -linguist-generated

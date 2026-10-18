@@ -36,7 +36,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins
 
 all: true-selfhost-min
 
@@ -2459,7 +2459,33 @@ test-path-builtins: $(GEN2) $(SEED_MIN_BIN)
 	@grep -q 'call names an unknown function or builtin' $(TESTS)/pathb_gen_seed.err \
 	  || { echo "[FAIL] seed-min refused the path builtins without a clear diagnostic"; cat $(TESTS)/pathb_gen_seed.err; exit 1; }
 	@echo "[OK] path builtins: read_dir listing, lstat kinds (file/dir/symlink/missing), sizes, realpath; seed-min refuses them"
-test-stage2: test-exit-builtin test-path-builtins
+test-stage2: test-exit-builtin test-path-builtins test-proc-builtins
+
+# ---------------------------------------------------------------------------
+# test-proc-builtins: spawn / child_send / child_recv / child_line /
+# child_close and make_dir / make_link / remove_path are the language surface
+# that replaced the C LSP test client. gen2 implements them on fork/exec and
+# pipes; seed-min refuses them, exactly like the directory builtins. A child is
+# a real framed session: two requests, two answers, one clean exit.
+# ---------------------------------------------------------------------------
+.PHONY: test-proc-builtins
+test-proc-builtins: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/proc_frame_dir
+	./$(GEN2) selfhost/proc_frame_server.sa $(TESTS)/proc_frame_server.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/proc_frame_server $(TESTS)/proc_frame_server.c
+	./$(GEN2) selfhost/proc_frame_client.sa $(TESTS)/proc_frame_client.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/proc_frame_client $(TESTS)/proc_frame_client.c
+	@./$(TESTS)/proc_frame_client '$(CURDIR)/$(TESTS)/proc_frame_server' '$(CURDIR)/$(TESTS)/proc_frame_dir' > $(TESTS)/proc_frame.out
+	@printf 'spawn, child_send, child_line, child_recv, child_close: one framed session, two answers, clean exit\nmake_dir, make_link, remove_path and dead handles behave as documented\n' > $(TESTS)/proc_frame.want
+	@cmp $(TESTS)/proc_frame.want $(TESTS)/proc_frame.out \
+	  || { echo "[FAIL] process builtins: unexpected client output"; cat $(TESTS)/proc_frame.out; exit 1; }
+	@printf 'hold h = spawn("x")\nshow h\nhold n = make_dir("x")\nshow n\n' > $(TESTS)/proc_frame_seed.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/proc_frame_seed.sa > /dev/null 2>$(TESTS)/proc_frame_seed.err; then \
+	   echo "[FAIL] seed-min accepted the process builtins without implementing them"; exit 1; fi
+	@grep -q 'call names an unknown function or builtin' $(TESTS)/proc_frame_seed.err \
+	  || { echo "[FAIL] seed-min refused the process builtins without a clear diagnostic"; cat $(TESTS)/proc_frame_seed.err; exit 1; }
+	@echo "[OK] process builtins: spawn and a framed child session, make_dir/make_link/remove_path, dead handles; seed-min refuses them"
 
 # ---------------------------------------------------------------------------
 # test-stage2: the Stage-2 slice on gen2 beyond the string walk — the word
@@ -3212,8 +3238,7 @@ selfhost: true-selfhost
 # the language server and the LSP binder are Sayanox programs, and since
 # 2026-10-17 no maintained path needs bash, awk, sed or Python
 # (`make test-language-deps`). What is still not Sayanox is the small trusted C
-# seed, the C native backend, the C LSP directory bridge, the C IR tool and the
-# make/POSIX-sh build driver. This target prints that measured inventory on
+# seed, the C native backend and the make/POSIX-sh build driver. This target prints that measured inventory on
 # every run, so the claim cannot silently drift and the remaining work cannot
 # be forgotten, and then refuses to report success.
 #
@@ -3226,12 +3251,11 @@ all-sayanox:
 	@echo "=== ALL-SAYANOX: next phase, not implemented ==="
 	@printf '  %-28s %6s lines  %s\n' seed "$$(wc -l < selfhost/seed/sxc_seed_min.c)" selfhost/seed/sxc_seed_min.c
 	@printf '  %-28s %6s lines  %s\n' native-backend "$$(wc -l < selfhost/native_aot.c)" selfhost/native_aot.c
-	@printf '  %-28s %6s lines  %s\n' lsp-test-client "$$(wc -l < tools/lsp_workspace_test.c)" tools/lsp_workspace_test.c
 	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
 	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' selfhost/sx | wc -l)" 'POSIX sh'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
 	@echo "  done: compiler, formatter, package tool, language server,"
-	@echo "        IR translator, LSP folder index (all .sa)"
+	@echo "        IR translator, LSP folder index, LSP test client (all .sa)"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
 	@exit 1
@@ -4517,12 +4541,13 @@ test-sxpkg-transfer-hardening: sxpkg tools/sxpkg.sh
 test-sxpkg-online-optin: test-sxpkg-transfer-hardening
 
 .PHONY: test-lsp-workspace
-test-lsp-workspace: $(LSP_BIN) tools/lsp_workspace_test.c
+test-lsp-workspace: $(LSP_BIN) $(GEN2) tools/lsp_workspace_test.sa
 	@mkdir -p $(TESTS)
-	$(CC) -O2 -Wall -Wextra -o $(TESTS)/lsp-workspace-test tools/lsp_workspace_test.c
+	./$(GEN2) tools/lsp_workspace_test.sa $(TESTS)/lsp_workspace_test.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/lsp-workspace-test $(TESTS)/lsp_workspace_test.c
 	@rm -rf '$(TESTS)/lsp workspace' && mkdir -p '$(TESTS)/lsp workspace'
 	./$(TESTS)/lsp-workspace-test '$(CURDIR)/$(LSP_BIN)' '$(CURDIR)/$(TESTS)/lsp workspace'
-	@echo '[OK] LSP folder index: framed C client, unopened files, overlays, refresh, URI/path boundaries and file cap; no interpreter'
+	@echo '[OK] LSP folder index: framed Sayanox client, unopened files, overlays, refresh, URI/path boundaries and file cap; no interpreter'
 
 test-lsp test-lsp-robust: test-lsp-workspace
 

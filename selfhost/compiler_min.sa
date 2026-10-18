@@ -486,8 +486,8 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
               when i < len(text) && sx_index(text, i) == 40 {
                 hold returns = sxesegment(env, 4)
                 hold signatures = sxesegment(env, 5)
-                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|len=n|index=n|")
-                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|len=a|index=an|")
+                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|spawn=n|child_send=n|child_recv=s|child_line=s|child_close=n|make_dir=n|make_link=n|remove_path=n|len=n|index=n|")
+                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|spawn=s|child_send=ns|child_recv=nn|child_line=n|child_close=n|make_dir=s|make_link=ss|remove_path=s|len=a|index=an|")
                 kind = sxelookup(returns, name, "=")
                 when len(kind) == 0 {
                   give sxerecord(i, "e", "call has no checked return signature")
@@ -757,7 +757,7 @@ make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
       }
     }
   }
-  hold builtins = "|concat=|len=|sx_index=|index=|chr=|read_file=|write_file=|http_get=|arg=|arg_count=|string_eq=|push=|numstr=|read_line=|read_n=|write_out=|flush_out=|gc=|exit=|gc_live=|gc_runs=|read_dir=|path_kind=|path_size=|path_real=|sx_read_dir=|sx_path_kind=|sx_path_size=|sx_path_real=|sx_cat=|sx_len=|sx_idx=|sx_chr=|sx_read=|sx_write=|sx_http=|sx_arg=|sx_argc=|sx_eq=|sx_numstr=|sx_read_line=|sx_read_n=|sx_write_out=|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=|sx_mod=|sx_lget=|sx_llen=|sx_lpush=|"
+  hold builtins = "|concat=|len=|sx_index=|index=|chr=|read_file=|write_file=|http_get=|arg=|arg_count=|string_eq=|push=|numstr=|read_line=|read_n=|write_out=|flush_out=|gc=|exit=|gc_live=|gc_runs=|read_dir=|path_kind=|path_size=|path_real=|spawn=|child_send=|child_recv=|child_line=|child_close=|make_dir=|make_link=|remove_path=|sx_read_dir=|sx_path_kind=|sx_path_size=|sx_path_real=|sx_spawn=|sx_child_send=|sx_child_recv=|sx_child_line=|sx_child_close=|sx_make_dir=|sx_make_link=|sx_remove_path=|sx_cat=|sx_len=|sx_idx=|sx_chr=|sx_read=|sx_write=|sx_http=|sx_arg=|sx_argc=|sx_eq=|sx_numstr=|sx_read_line=|sx_read_n=|sx_write_out=|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=|sx_mod=|sx_lget=|sx_llen=|sx_lpush=|"
   hold callnames = concat(functions, builtins)
   hold prev = 0
   hold braces = 0
@@ -5341,7 +5341,7 @@ while running == 1 {
                     }
                     when zwKiscall == 1 {
                       // the builtins' kinds are fixed
-                      when sx_eq(zwKw, "concat") || sx_eq(zwKw, "chr") || sx_eq(zwKw, "read_file") || sx_eq(zwKw, "http_get") || sx_eq(zwKw, "arg") || sx_eq(zwKw, "read_line") || sx_eq(zwKw, "read_n") || sx_eq(zwKw, "numstr") || sx_eq(zwKw, "sx_cat") || sx_eq(zwKw, "sx_chr") || sx_eq(zwKw, "sx_read") || sx_eq(zwKw, "sx_arg") || sx_eq(zwKw, "sx_read_line") || sx_eq(zwKw, "sx_read_n") || sx_eq(zwKw, "sx_numstr") || sx_eq(zwKw, "read_dir") || sx_eq(zwKw, "path_real") || sx_eq(zwKw, "sx_read_dir") || sx_eq(zwKw, "sx_path_real") {
+                      when sx_eq(zwKw, "concat") || sx_eq(zwKw, "chr") || sx_eq(zwKw, "read_file") || sx_eq(zwKw, "http_get") || sx_eq(zwKw, "arg") || sx_eq(zwKw, "read_line") || sx_eq(zwKw, "read_n") || sx_eq(zwKw, "numstr") || sx_eq(zwKw, "sx_cat") || sx_eq(zwKw, "sx_chr") || sx_eq(zwKw, "sx_read") || sx_eq(zwKw, "sx_arg") || sx_eq(zwKw, "sx_read_line") || sx_eq(zwKw, "sx_read_n") || sx_eq(zwKw, "sx_numstr") || sx_eq(zwKw, "read_dir") || sx_eq(zwKw, "path_real") || sx_eq(zwKw, "sx_read_dir") || sx_eq(zwKw, "sx_path_real") || sx_eq(zwKw, "child_recv") || sx_eq(zwKw, "child_line") || sx_eq(zwKw, "sx_child_recv") || sx_eq(zwKw, "sx_child_line") {
                         hold zwKbk = 115
                       }
                       when sx_eq(zwKw, "push") || sx_eq(zwKw, "sx_lpush") {
@@ -8512,6 +8512,38 @@ hold argbracket = 0
                     hold argv_c = concat(argv_c, "sx_path_real")
                     hold amap = 1
                   }
+                  when sx_eq(atok, "spawn") {
+                    hold argv_c = concat(argv_c, "sx_spawn")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "child_send") {
+                    hold argv_c = concat(argv_c, "sx_child_send")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "child_recv") {
+                    hold argv_c = concat(argv_c, "sx_child_recv")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "child_line") {
+                    hold argv_c = concat(argv_c, "sx_child_line")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "child_close") {
+                    hold argv_c = concat(argv_c, "sx_child_close")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "make_dir") {
+                    hold argv_c = concat(argv_c, "sx_make_dir")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "make_link") {
+                    hold argv_c = concat(argv_c, "sx_make_link")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "remove_path") {
+                    hold argv_c = concat(argv_c, "sx_remove_path")
+                    hold amap = 1
+                  }
                   when sx_eq(atok, "exit") {
                     hold argv_c = concat(argv_c, "sx_exit")
                     hold amap = 1
@@ -8610,6 +8642,30 @@ hold argbracket = 0
           }
           when sx_eq(nm2, "path_real") || sx_eq(nm2, "sx_path_real") {
             hold fk = 25
+          }
+          when sx_eq(nm2, "spawn") || sx_eq(nm2, "sx_spawn") {
+            hold fk = 26
+          }
+          when sx_eq(nm2, "child_send") || sx_eq(nm2, "sx_child_send") {
+            hold fk = 27
+          }
+          when sx_eq(nm2, "child_recv") || sx_eq(nm2, "sx_child_recv") {
+            hold fk = 28
+          }
+          when sx_eq(nm2, "child_line") || sx_eq(nm2, "sx_child_line") {
+            hold fk = 29
+          }
+          when sx_eq(nm2, "child_close") || sx_eq(nm2, "sx_child_close") {
+            hold fk = 30
+          }
+          when sx_eq(nm2, "make_dir") || sx_eq(nm2, "sx_make_dir") {
+            hold fk = 31
+          }
+          when sx_eq(nm2, "make_link") || sx_eq(nm2, "sx_make_link") {
+            hold fk = 32
+          }
+          when sx_eq(nm2, "remove_path") || sx_eq(nm2, "sx_remove_path") {
+            hold fk = 33
           }
           when sx_eq(nm2, "exit") || sx_eq(nm2, "sx_exit") {
             hold fk = 21
@@ -8792,6 +8848,48 @@ hold argbracket = 0
             hold rhs = concat("sx_path_real(", argv_c)
             hold rhs = concat(rhs, ")")
             hold rk = 1
+            hold rt = 1
+          }
+          when fk == 26 {
+            hold rhs = concat("sx_spawn(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 27 {
+            hold rhs = concat("sx_child_send(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 28 {
+            hold rhs = concat("sx_child_recv(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 29 {
+            hold rhs = concat("sx_child_line(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 30 {
+            hold rhs = concat("sx_child_close(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 31 {
+            hold rhs = concat("sx_make_dir(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 32 {
+            hold rhs = concat("sx_make_link(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 33 {
+            hold rhs = concat("sx_remove_path(", argv_c)
+            hold rhs = concat(rhs, ")")
             hold rt = 1
           }
           when fk == 19 {
@@ -10087,6 +10185,32 @@ hold ec = 0
                 hold ocmap = "sx_path_real"
                 hold ocstr = 1
               }
+              when sx_eq(nm3, "spawn") || sx_eq(nm3, "sx_spawn") {
+                hold ocmap = "sx_spawn"
+              }
+              when sx_eq(nm3, "child_send") || sx_eq(nm3, "sx_child_send") {
+                hold ocmap = "sx_child_send"
+              }
+              when sx_eq(nm3, "child_recv") || sx_eq(nm3, "sx_child_recv") {
+                hold ocmap = "sx_child_recv"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "child_line") || sx_eq(nm3, "sx_child_line") {
+                hold ocmap = "sx_child_line"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "child_close") || sx_eq(nm3, "sx_child_close") {
+                hold ocmap = "sx_child_close"
+              }
+              when sx_eq(nm3, "make_dir") || sx_eq(nm3, "sx_make_dir") {
+                hold ocmap = "sx_make_dir"
+              }
+              when sx_eq(nm3, "make_link") || sx_eq(nm3, "sx_make_link") {
+                hold ocmap = "sx_make_link"
+              }
+              when sx_eq(nm3, "remove_path") || sx_eq(nm3, "sx_remove_path") {
+                hold ocmap = "sx_remove_path"
+              }
               when sx_eq(nm3, "exit") || sx_eq(nm3, "sx_exit") {
                 hold ocmap = "sx_exit"
               }
@@ -10331,6 +10455,30 @@ hold ec = 0
                     }
                     when sx_eq(ocaw, "path_real") {
                       hold ocam = "sx_path_real"
+                    }
+                    when sx_eq(ocaw, "spawn") {
+                      hold ocam = "sx_spawn"
+                    }
+                    when sx_eq(ocaw, "child_send") {
+                      hold ocam = "sx_child_send"
+                    }
+                    when sx_eq(ocaw, "child_recv") {
+                      hold ocam = "sx_child_recv"
+                    }
+                    when sx_eq(ocaw, "child_line") {
+                      hold ocam = "sx_child_line"
+                    }
+                    when sx_eq(ocaw, "child_close") {
+                      hold ocam = "sx_child_close"
+                    }
+                    when sx_eq(ocaw, "make_dir") {
+                      hold ocam = "sx_make_dir"
+                    }
+                    when sx_eq(ocaw, "make_link") {
+                      hold ocam = "sx_make_link"
+                    }
+                    when sx_eq(ocaw, "remove_path") {
+                      hold ocam = "sx_remove_path"
                     }
                     when sx_eq(ocaw, "exit") {
                       hold ocam = "sx_exit"
@@ -11579,6 +11727,38 @@ hold argbracket = 0
                     hold argv_c = concat(argv_c, "sx_path_real")
                     hold amap = 1
                   }
+                  when sx_eq(atok, "spawn") {
+                    hold argv_c = concat(argv_c, "sx_spawn")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "child_send") {
+                    hold argv_c = concat(argv_c, "sx_child_send")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "child_recv") {
+                    hold argv_c = concat(argv_c, "sx_child_recv")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "child_line") {
+                    hold argv_c = concat(argv_c, "sx_child_line")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "child_close") {
+                    hold argv_c = concat(argv_c, "sx_child_close")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "make_dir") {
+                    hold argv_c = concat(argv_c, "sx_make_dir")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "make_link") {
+                    hold argv_c = concat(argv_c, "sx_make_link")
+                    hold amap = 1
+                  }
+                  when sx_eq(atok, "remove_path") {
+                    hold argv_c = concat(argv_c, "sx_remove_path")
+                    hold amap = 1
+                  }
                   when sx_eq(atok, "exit") {
                     hold argv_c = concat(argv_c, "sx_exit")
                     hold amap = 1
@@ -11676,6 +11856,30 @@ hold argbracket = 0
           }
           when sx_eq(nm2, "path_real") || sx_eq(nm2, "sx_path_real") {
             hold fk = 25
+          }
+          when sx_eq(nm2, "spawn") || sx_eq(nm2, "sx_spawn") {
+            hold fk = 26
+          }
+          when sx_eq(nm2, "child_send") || sx_eq(nm2, "sx_child_send") {
+            hold fk = 27
+          }
+          when sx_eq(nm2, "child_recv") || sx_eq(nm2, "sx_child_recv") {
+            hold fk = 28
+          }
+          when sx_eq(nm2, "child_line") || sx_eq(nm2, "sx_child_line") {
+            hold fk = 29
+          }
+          when sx_eq(nm2, "child_close") || sx_eq(nm2, "sx_child_close") {
+            hold fk = 30
+          }
+          when sx_eq(nm2, "make_dir") || sx_eq(nm2, "sx_make_dir") {
+            hold fk = 31
+          }
+          when sx_eq(nm2, "make_link") || sx_eq(nm2, "sx_make_link") {
+            hold fk = 32
+          }
+          when sx_eq(nm2, "remove_path") || sx_eq(nm2, "sx_remove_path") {
+            hold fk = 33
           }
           when sx_eq(nm2, "exit") || sx_eq(nm2, "sx_exit") {
             hold fk = 21
@@ -11854,6 +12058,48 @@ hold argbracket = 0
             hold rhs = concat("sx_path_real(", argv_c)
             hold rhs = concat(rhs, ")")
             hold rk = 1
+            hold rt = 1
+          }
+          when fk == 26 {
+            hold rhs = concat("sx_spawn(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 27 {
+            hold rhs = concat("sx_child_send(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 28 {
+            hold rhs = concat("sx_child_recv(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 29 {
+            hold rhs = concat("sx_child_line(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rk = 1
+            hold rt = 1
+          }
+          when fk == 30 {
+            hold rhs = concat("sx_child_close(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 31 {
+            hold rhs = concat("sx_make_dir(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 32 {
+            hold rhs = concat("sx_make_link(", argv_c)
+            hold rhs = concat(rhs, ")")
+            hold rt = 1
+          }
+          when fk == 33 {
+            hold rhs = concat("sx_remove_path(", argv_c)
+            hold rhs = concat(rhs, ")")
             hold rt = 1
           }
           when fk == 19 {
@@ -13010,6 +13256,32 @@ hold ec = 0
                 hold ocmap = "sx_path_real"
                 hold ocstr = 1
               }
+              when sx_eq(nm3, "spawn") || sx_eq(nm3, "sx_spawn") {
+                hold ocmap = "sx_spawn"
+              }
+              when sx_eq(nm3, "child_send") || sx_eq(nm3, "sx_child_send") {
+                hold ocmap = "sx_child_send"
+              }
+              when sx_eq(nm3, "child_recv") || sx_eq(nm3, "sx_child_recv") {
+                hold ocmap = "sx_child_recv"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "child_line") || sx_eq(nm3, "sx_child_line") {
+                hold ocmap = "sx_child_line"
+                hold ocstr = 1
+              }
+              when sx_eq(nm3, "child_close") || sx_eq(nm3, "sx_child_close") {
+                hold ocmap = "sx_child_close"
+              }
+              when sx_eq(nm3, "make_dir") || sx_eq(nm3, "sx_make_dir") {
+                hold ocmap = "sx_make_dir"
+              }
+              when sx_eq(nm3, "make_link") || sx_eq(nm3, "sx_make_link") {
+                hold ocmap = "sx_make_link"
+              }
+              when sx_eq(nm3, "remove_path") || sx_eq(nm3, "sx_remove_path") {
+                hold ocmap = "sx_remove_path"
+              }
               when sx_eq(nm3, "exit") || sx_eq(nm3, "sx_exit") {
                 hold ocmap = "sx_exit"
               }
@@ -13254,6 +13526,30 @@ hold ec = 0
                     }
                     when sx_eq(ocaw, "path_real") {
                       hold ocam = "sx_path_real"
+                    }
+                    when sx_eq(ocaw, "spawn") {
+                      hold ocam = "sx_spawn"
+                    }
+                    when sx_eq(ocaw, "child_send") {
+                      hold ocam = "sx_child_send"
+                    }
+                    when sx_eq(ocaw, "child_recv") {
+                      hold ocam = "sx_child_recv"
+                    }
+                    when sx_eq(ocaw, "child_line") {
+                      hold ocam = "sx_child_line"
+                    }
+                    when sx_eq(ocaw, "child_close") {
+                      hold ocam = "sx_child_close"
+                    }
+                    when sx_eq(ocaw, "make_dir") {
+                      hold ocam = "sx_make_dir"
+                    }
+                    when sx_eq(ocaw, "make_link") {
+                      hold ocam = "sx_make_link"
+                    }
+                    when sx_eq(ocaw, "remove_path") {
+                      hold ocam = "sx_remove_path"
                     }
                     when sx_eq(ocaw, "exit") {
                       hold ocam = "sx_exit"
@@ -15404,6 +15700,38 @@ hold ec = 0
                 }
                 when sx_eq(cwid, "path_real") {
                   hold cwmap = "sx_path_real"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "spawn") {
+                  hold cwmap = "sx_spawn"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "child_send") {
+                  hold cwmap = "sx_child_send"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "child_recv") {
+                  hold cwmap = "sx_child_recv"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "child_line") {
+                  hold cwmap = "sx_child_line"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "child_close") {
+                  hold cwmap = "sx_child_close"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "make_dir") {
+                  hold cwmap = "sx_make_dir"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "make_link") {
+                  hold cwmap = "sx_make_link"
+                  hold rt = 1
+                }
+                when sx_eq(cwid, "remove_path") {
+                  hold cwmap = "sx_remove_path"
                   hold rt = 1
                 }
                 when sx_eq(cwid, "exit") {
@@ -17951,7 +18279,7 @@ hold ec = 0
               hold inenv = concat(inenv, chr(1))
               hold inenv = concat(inenv, ftypes)
             }
-        hold incallnames = concat(fsret, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|")
+        hold incallnames = concat(fsret, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|sx_spawn=n|sx_child_send=n|sx_child_recv=s|sx_child_line=s|sx_child_close=n|sx_make_dir=n|sx_make_link=n|sx_remove_path=n|")
       while inpos < instop {
         hold inc = sx_index(body, inpos)
         when inquote == 1 {
@@ -18106,6 +18434,7 @@ when rt == 1 {
   hold out = concat(out, "static double sx_path_size(const char *p){ struct stat st; if(lstat(p,&st)||!S_ISREG(st.st_mode)) return 0.0; return (double)st.st_size; }\n")
   hold out = concat(out, "extern char *realpath(const char *path, char *resolved_path);\n")
   hold out = concat(out, "static char *sx_path_real(const char *p){ char b[PATH_MAX]; if(!realpath(p,b)) return \"\"; size_t n=strlen(b); char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
+  hold out = concat(out, "#include <unistd.h>\n#include <sys/wait.h>\n#include <signal.h>\ntypedef struct sx_proc { pid_t pid; int in; int out; int live; } sx_proc;\nstatic sx_proc sx_procs[8];\nstatic int sx_proc_slot(double h){ long i=(long)h-1; if(i<0||i>=8||!sx_procs[i].live) return -1; return (int)i; }\nstatic double sx_spawn(const char *path){ int i,pin[2],pout[2]; pid_t pid; signal(SIGPIPE,SIG_IGN); for(i=0;i<8;i++){ if(!sx_procs[i].live) break; } if(i>=8) return 0.0; if(pipe(pin)||pipe(pout)) return 0.0; pid=fork(); if(pid<0){ close(pin[0]);close(pin[1]);close(pout[0]);close(pout[1]); return 0.0; } if(pid==0){ dup2(pin[0],0); dup2(pout[1],1); close(pin[0]);close(pin[1]);close(pout[0]);close(pout[1]); execl(path,path,(char*)0); _exit(127); } close(pin[0]); close(pout[1]); sx_procs[i].pid=pid; sx_procs[i].in=pin[1]; sx_procs[i].out=pout[0]; sx_procs[i].live=1; return (double)(i+1); }\nstatic double sx_child_send(double h,const char *s){ int i=sx_proc_slot(h); size_t n=strlen(s),off=0; if(i<0) return 0.0; while(off<n){ ssize_t w=write(sx_procs[i].in,s+off,n-off); if(w<=0) return 0.0; off+=(size_t)w; } return 1.0; }\nstatic char *sx_child_recv(double h,double v){ int i=sx_proc_slot(h); long n=(long)v; char *b; size_t got=0; if(i<0||n<0) return \"\"; b=(char*)sx_gc_alloc(0,(size_t)n+1); while(got<(size_t)n){ ssize_t rd=read(sx_procs[i].out,b+got,(size_t)n-got); if(rd<=0) break; got+=(size_t)rd; } b[got]=0; return b; }\nstatic char *sx_child_line(double h){ int i=sx_proc_slot(h); char buf[4096]; size_t n=0; char *r; if(i<0) return \"\"; for(;;){ ssize_t rd=read(sx_procs[i].out,buf+n,1); if(rd<=0) break; if(buf[n]==10) break; n+=1; if(n+2>sizeof buf) break; } buf[n]=0; if(n&&buf[n-1]==13) buf[n-1]=0; r=(char*)sx_gc_alloc(0,n+1); memcpy(r,buf,n+1); return r; }\nstatic double sx_child_close(double h){ int i=sx_proc_slot(h); int status=0; pid_t r; if(i<0) return -1.0; close(sx_procs[i].in); do { r=waitpid(sx_procs[i].pid,&status,0); } while(r<0); close(sx_procs[i].out); sx_procs[i].live=0; if(WIFEXITED(status)) return (double)WEXITSTATUS(status); return -1.0; }\nstatic double sx_make_dir(const char *p){ return mkdir(p,0700)==0?1.0:0.0; }\nstatic double sx_make_link(const char *target,const char *path){ return symlink(target,path)==0?1.0:0.0; }\nstatic double sx_remove_path(const char *p){ if(!unlink(p)) return 1.0; return rmdir(p)==0?1.0:0.0; }\n")
   hold out = concat(out, "#include <time.h>\nstatic struct timespec sx_http_last; static int sx_http_seen=0;\nstatic char *sx_http(const char *u){ size_t L=strlen(u); if(L>3000) return \"\"; if(strncmp(u,\"http://\",7)&&strncmp(u,\"https://\",8)) return \"\"; for(size_t i=0;i<L;i++){ unsigned char c=(unsigned char)u[i]; int ok=(c>=97&&c<=122)||(c>=65&&c<=90)||(c>=48&&c<=57)||(c!=0&&strchr(\"-._~:/?&=%+#@,;\",c)); if(!ok) return \"\"; } if(sx_http_seen){ struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now); double el=(double)(now.tv_sec-sx_http_last.tv_sec)+(double)(now.tv_nsec-sx_http_last.tv_nsec)/1e9; if(el<1.0){ struct timespec w; w.tv_sec=0; w.tv_nsec=(long)((1.0-el)*1e9); nanosleep(&w,NULL); } } sx_http_seen=1; clock_gettime(CLOCK_MONOTONIC,&sx_http_last); char cmd[4096]; snprintf(cmd,sizeof cmd,\"curl -sS -f -m 10 --max-filesize 1000000 -A sayanox-http/0.1 '%s' 2>/dev/null\",u); FILE *p=popen(cmd,\"r\"); if(!p) return \"\"; char *b=(char*)sx_gc_alloc(0,1000001); size_t rd=fread(b,1,1000000,p); b[rd]=0; pclose(p); return b; }\n")
   hold out = concat(out, "static char *sx_read_line(void){ char b[4096]; if(!fgets(b,sizeof b,stdin)) return \"\"; size_t n=strlen(b); if(n&&b[n-1]==10) b[n-1]=0; n=strlen(b); if(n&&b[n-1]==13) b[n-1]=0; char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
   hold out = concat(out, "static char *sx_read_n(double v){ long n=(long)v; if(n<0) return \"\"; char *b=(char*)sx_gc_alloc(0,(size_t)n+1); size_t rd=fread(b,1,(size_t)n,stdin); b[rd]=0; return b; }\n")

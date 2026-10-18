@@ -160,16 +160,17 @@ has the short version.
 
 The maintained *logic* is already Sayanox: the compiler
 (`selfhost/compiler_min.sa`), the formatter, the package tool, the language
-server and the build-time LSP binder. Since 2026-10-17 no maintained path
+server and its framed-session test client. Since 2026-10-17 no maintained path
 needs bash, awk, sed or Python either.
 
 What is still not Sayanox is small, measurable, and listed in
 [docs/ALL_SAYANOX_PHASE.md](docs/ALL_SAYANOX_PHASE.md): the 2,035-line C seed,
-the 4,353-line C native backend, a 127-line C framed-session test client, and
-the make/POSIX-sh build driver. On 2026-10-17 the 150-line C IR translator
-became `tools/emit_to_ir.sa` with byte-identical output, the LSP folder index
-moved into Sayanox (the C directory header and its binder were deleted), and
-ten unreferenced C files were removed. `make all-sayanox` prints the remaining
+the 4,353-line C native backend, and the make/POSIX-sh build driver. On
+2026-10-17 the 150-line C IR translator became `tools/emit_to_ir.sa` with
+byte-identical output, the LSP folder index moved into Sayanox (the C
+directory header and its binder were deleted), the 127-line C framed-session
+test client became `tools/lsp_workspace_test.sa` on the new process builtins,
+and ten unreferenced legacy C files were removed. `make all-sayanox` prints the remaining
 inventory and **fails closed** — the same way `true-selfhost-full` refuses to
 claim a full-language self-host — so the remaining work cannot silently drift
 or be forgotten. The plan orders it: ~~IR tool~~, ~~directory bridge~~, then

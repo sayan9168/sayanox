@@ -1,0 +1,11 @@
+[OK] compiler module (checked-in source verified; no decoder used)
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 selfhost/seed_tests/exit_builtin.sa selfhost/seed_tests/exit_builtin.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/exit_builtin selfhost/seed_tests/exit_builtin.c
+[OK] exit builtin: status propagates, stdout flushes first, seed-min refuses it with a clear diagnostic

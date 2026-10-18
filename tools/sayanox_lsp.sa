@@ -9,13 +9,13 @@
 // didChange, didClose, publishDiagnostics, diagnostic, documentSymbol,
 // completion, hover, definition, references, workspace/symbol, formatting,
 // rename, signatureHelp, codeAction. Workspace symbols/references also scan
-// a bounded local folder via the tool-only C directory bridge. Rename stays
-// open-buffer-only; see docs/LSP.md for the separate limits.
+// a bounded local folder with read_dir/path_kind/path_size/path_real. Rename
+// stays open-buffer-only; see docs/LSP.md for the separate limits.
 //
 // The diagnostics are real checks over the document text: unknown statements,
 // brace and paren balance, unterminated strings, and `use` targets that do not
-// resolve next to the document. Nothing here shells out. Protocol/scanning
-// are Sayanox compiled by gen2; only filesystem enumeration uses C.
+// resolve next to the document. Nothing here shells out: protocol, scanning
+// and the folder index are Sayanox compiled by gen2.
 
 // ---------------------------------------------------------------- scanning
 
@@ -621,6 +621,15 @@ make known_word(w: str) -> num {
   when string_eq(w, "gc") || string_eq(w, "gc_live") || string_eq(w, "gc_runs") {
     ok = 1
   }
+  when string_eq(w, "spawn") || string_eq(w, "child_send") {
+    ok = 1
+  }
+  when string_eq(w, "child_recv") || string_eq(w, "child_line") || string_eq(w, "child_close") {
+    ok = 1
+  }
+  when string_eq(w, "make_dir") || string_eq(w, "make_link") || string_eq(w, "remove_path") {
+    ok = 1
+  }
   give ok
 }
 
@@ -725,6 +734,30 @@ make doc_for(w: str) -> str {
   }
   when string_eq(w, "arg_count") {
     d = "`arg_count()` is the number of command-line arguments."
+  }
+  when string_eq(w, "spawn") {
+    d = "`spawn(path)` starts a child with piped stdin/stdout and returns a handle."
+  }
+  when string_eq(w, "child_send") {
+    d = "`child_send(h, s)` writes s to the child's stdin."
+  }
+  when string_eq(w, "child_recv") {
+    d = "`child_recv(h, n)` reads up to n bytes from the child's stdout."
+  }
+  when string_eq(w, "child_line") {
+    d = "`child_line(h)` reads one line from the child's stdout."
+  }
+  when string_eq(w, "child_close") {
+    d = "`child_close(h)` closes the child's stdin and returns its exit status."
+  }
+  when string_eq(w, "make_dir") {
+    d = "`make_dir(path)` creates a directory and returns a status."
+  }
+  when string_eq(w, "make_link") {
+    d = "`make_link(target, path)` creates a symlink and returns a status."
+  }
+  when string_eq(w, "remove_path") {
+    d = "`remove_path(path)` removes a file or an empty directory."
   }
   give d
 }
@@ -2104,8 +2137,7 @@ make dir_of(uri: str) -> str {
 // --------------------------------------------------------------- main loop
 
 // ------------------------------------------------------- workspace index
-// The folder index used to be installed by a C header plus a generated-C
-// binder. It is ordinary Sayanox now: read_dir/path_kind/path_size/path_real
+// The folder index is ordinary Sayanox: read_dir/path_kind/path_size/path_real
 // (added to the compiler on 2026-10-17) provide the operating-system surface,
 // and the walk, skip rules, percent-encoding and caps live here.
 //

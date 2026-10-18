@@ -80,14 +80,15 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
 | `selfhost/native_aot.c` | C | 4,353 lines | Phase D — needs byte buffers, bitwise operations and shifts, and a syscall/memory surface in the language |
-| `tools/lsp_workspace_test.c` | C | 127 lines | Phase B — the framed-session test client; a harness, not server logic |
-| `Makefile` + 25 `sh` scripts | make / POSIX sh | ~4,510 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,564 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
 local package tool, the language server (including its folder index since
-2026-10-17), the IR translator (`tools/emit_to_ir.sa`, byte-identical output)
-and the directory builtins (`test-path-builtins`). Ten unreferenced C files
-were deleted the same day.
+2026-10-17), the IR translator (`tools/emit_to_ir.sa`, byte-identical output),
+the directory builtins (`test-path-builtins`), the process builtins
+(`test-proc-builtins`) and the LSP framed-session test client
+(`tools/lsp_workspace_test.sa`). Ten unreferenced legacy C files were deleted
+the same day, alongside the three that gained Sayanox replacements.
 
 Phase order: **B** ~~IR tool~~, ~~directory builtin + LSP bridge~~ (both done) → **C** online
 package behavior, **D** native backend, **E** seed. Each phase must keep

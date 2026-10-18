@@ -34,8 +34,6 @@ tools/sxpkg
 tools/sxpkg.c
 tools/sayanox_lsp
 tools/sayanox_lsp.c
-tools/lsp_workspace_bind
-tools/lsp_workspace_bind.c
 
 # python bytecode
 __pycache__/

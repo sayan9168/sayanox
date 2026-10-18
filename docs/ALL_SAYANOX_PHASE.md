@@ -9,22 +9,22 @@ The goal is simple to state: every maintained piece of *logic* in this
 repository is a Sayanox program, and the only non-Sayanox pieces left are the
 smallest possible bootstrap seam and the build driver.
 
-## Where the tree is today (measured 2026-10-17)
+## Where the tree is today (measured 2026-10-18)
 
 | Layer | Language | Size | Sayanox? |
 |---|---|---:|---|
-| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 18,721 lines | **yes** |
-| Formatter, package tool, language server, LSP binder, IR tool | Sayanox | 5 programs | **yes** |
-| All tests and fixtures | Sayanox + `sh` drivers | 275 `.sa` files, 1,068,383 bytes | **yes** (logic) |
+| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,224 lines | **yes** |
+| Formatter, package tool, language server, IR tool, LSP test client | Sayanox | 5 programs | **yes** |
+| All tests and fixtures | Sayanox + `sh` drivers | 278 `.sa` files, 1,127,959 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,353 lines | no |
-| LSP framed-session test client (`tools/lsp_workspace_test.c`) | C | 127 lines | no (a harness, not server logic) |
-| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | ~4,510 lines | no |
+| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,564 lines | no |
 
-Nine tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
+Ten tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
 `inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
 `sx_launcher.c`, `sx_driver.c`, `build_stage2.c`, plus `stage2_expand.inc`)
-were deleted on 2026-10-17. The tree now has 12 tracked C/header/inc files.
+were deleted on 2026-10-17. The tree now has 10 tracked C/header/inc files:
+the seed, the native backend and their test/stress harnesses.
 
 The 2026-10-17 language-dependency pass already removed bash, awk, sed,
 Python, Perl, Node and Ruby from the maintained paths
@@ -68,14 +68,27 @@ are `.sa`. All tracked scripts are POSIX `sh`. Gate: `test-language-deps`.
    Honest difference: the listing is in filesystem order instead of sorted
    bytewise, and the file cap is applied to the finished walk rather than
    during it. Both bounds still hold; the order does not.
+3. **LSP test client and process builtins in Sayanox (done, 2026-10-17).**
+   The language gained `spawn(path)`, `child_send(h, s)`, `child_recv(h, n)`,
+   `child_line(h)`, `child_close(h)`, `make_dir(path)`, `make_link(target,
+   path)` and `remove_path(path)`. `tools/lsp_workspace_test.sa` is the framed
+   test client that used to be 127 lines of C: it spawns the server, holds
+   initialize / symbol / reference / overlay / refresh / bad-root / cap
+   sessions and asserts on the answers. Its stdout is byte-identical to the
+   C client it replaced, which is how the port was accepted before the C file
+   was deleted. `tools/` now contains no C at all.
+   Gates: `test-proc-builtins`, `test-lsp-workspace`.
+   Honest difference: `child_recv` reads up to `n` bytes and stops at EOF
+   (the C client used `fread`, which loops); a silent child blocks the caller
+   exactly as the C client's blocking read did.
 
 ### Phase C — package and process behavior in Sayanox
 
 Move the remaining `tools/sxpkg.sh` logic (sync/install/publish/fetch,
 staging, checksums, rollback) into `tools/sxpkg.sa`, leaving the shell file as
-an `exec` shim at most. Remaining blockers: directory enumeration (Phase B),
-a process-spawn or HTTP builtin that the runtime already exposes (`http_get`
-exists on gen2 and is refused on native), and safe temp-directory creation.
+an `exec` shim at most. The process and directory blockers are gone: `spawn`,
+`child_*`, `make_dir`, `make_link`, `remove_path` and the directory builtins
+all exist and are gated. What remains is the port itself.
 Tests: `test-sxpkg`, `test-sxpkg-polish`, `test-sxpkg-online-local`,
 `test-sxpkg-transfer-hardening`, `test-sxpkg-online-optin` must pass unchanged.
 
@@ -117,6 +130,11 @@ and `make all-sayanox` keeps failing.
 * **2026-10-17 — Phase B.2 done.** Directory builtins + Sayanox folder index;
   `tools/lsp_workspace.h` and `tools/lsp_workspace_bind.sa` deleted. The tree
   has 11 tracked C/header/inc files, down from 23 at the start of the day.
+* **2026-10-18 — Phase B.3 done.** Process builtins (`spawn`, `child_send`,
+  `child_recv`, `child_line`, `child_close`, `make_dir`, `make_link`,
+  `remove_path`) and a Sayanox LSP framed-session test client;
+  `tools/lsp_workspace_test.c` deleted, so `tools/` holds no C. The tree has
+  10 tracked C/header/inc files, down from 23 at the start of the phase.
 * **2026-10-17 — Phase B.1 done.** `tools/emit_to_ir.c` deleted;
   `tools/emit_to_ir.sa` (328 lines) built by gen2 and cc through the Makefile,
   identical output on the real 1,182-line `SX_EMIT_LOG`, the audit mode, the
@@ -124,7 +142,7 @@ and `make all-sayanox` keeps failing.
 * **2026-10-17 — `exit(n)` builtin added** to the Sayanox compiler for CLI
   tools (`gen1_min`/`gen2`/`gen3`), with `make test-exit-builtin`; seed-min and
   native refuse it.
-* **2026-10-17 — dead C removed.** Nine tracked helpers with no reference.
+* **2026-10-17 — dead C removed.** Ten tracked helpers with no reference.
 
 ## Definition of done
 

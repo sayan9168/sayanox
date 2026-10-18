@@ -17,9 +17,6 @@ is written in Sayanox.
   `make test-sxpkg`; the shell entrypoint delegates these commands to it.
 - `tools/sayanox_lsp.sa` — the language server, built by gen2 and covered by
   `make test-lsp` / `test-lsp-robust` / `test-lsp-workspace`.
-- `tools/lsp_workspace_bind.sa` — the build-time binder that installs the
-  tool-local directory bridge into the generated LSP C. It replaced an awk
-  script and produces byte-identical output.
 - `examples/*.sa` and `registry/*/main.sa` — sample programs and packages.
 - Many files in `selfhost/*.sa` are compiler-stage experiments; most are not
   yet wired into the maintained build.
@@ -49,7 +46,7 @@ is left and fails closed.
 | Phase | Work | Gate |
 |---|---|---|
 | A (done 2026-10-17) | Compiler, formatter, package tool, language server, LSP binder in `.sa`; no bash/awk/sed/Python on maintained paths | `test-language-deps` |
-| B (done 2026-10-17) | `tools/emit_to_ir` in Sayanox; directory builtins + Sayanox folder index (C header and binder deleted) | `test-emit-to-ir`, `test-native-ir-portable`, `test-path-builtins`, `test-lsp`, `test-lsp-workspace` |
+| B (done 2026-10-17) | `tools/emit_to_ir` in Sayanox; directory builtins + Sayanox folder index (C header and binder deleted); process builtins + Sayanox LSP test client (the last C file in `tools/` deleted) | `test-emit-to-ir`, `test-native-ir-portable`, `test-path-builtins`, `test-proc-builtins`, `test-lsp`, `test-lsp-workspace` |
 | C | Online package behavior moves from `tools/sxpkg.sh` to `tools/sxpkg.sa` | `test-sxpkg*` unchanged |
 | D | `selfhost/native_aot.c` reimplemented in Sayanox against the pinned IR listing | `test-native-test`, `test-native-ir-log` |
 | E | Seed decision: prebuilt trust anchor or a documented C exception | `make all-sayanox` |

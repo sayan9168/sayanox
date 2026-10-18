@@ -1,0 +1,507 @@
+// Sayanox LSP workspace test client.
+//
+// Drives tools/sayanox_lsp over real framed sessions and checks the folder
+// index end to end: unopened files, the open-buffer overlay, disk edits and
+// deletes, encoded paths, symlink/hidden/oversized skipping, invalid and
+// nonlocal roots, and the enforced file cap. It replaces the C client that
+// used to do this, so the whole LSP surface is Sayanox now.
+//
+//   make lsp && ./tools/sayanox_lsp_test <server> <scratch dir>
+//
+// Three notes on the dialect, all deliberate:
+//   * `+` joins strings on the right-hand side of an assignment only, so every
+//     value that goes into a call is built into a variable first;
+//   * JSON quotes are built with chr(34): a string literal that mixes braces
+//     with escaped quotes is not accepted inside a `when` condition, and this
+//     program is nothing but conditions;
+//   * a typed function may not hold exit(), so check() reports through exit()
+//     and every caller keeps the result in a variable.
+
+make starts(t: str, i: num, p: str) -> num {
+  hold n = 0
+  hold k = 0
+  hold ok = 1
+  hold c1 = 0
+  hold c2 = 0
+  n = len(p)
+  when i + n > len(t) {
+    give 0
+  }
+  while k < n {
+    c1 = sx_index(t, i + k)
+    c2 = sx_index(p, k)
+    when c1 != c2 {
+      ok = 0
+      k = n
+    }
+    k += 1
+  }
+  give ok
+}
+
+make find_from(t: str, p: str, from: num) -> num {
+  hold n = 0
+  hold m = 0
+  hold i = 0
+  hold hit = 0
+  n = len(t)
+  m = len(p)
+  when m <= 0 {
+    give -1
+  }
+  when from > 0 {
+    i = from
+  }
+  while i + m <= n {
+    hit = starts(t, i, p)
+    when hit == 1 {
+      give i
+    }
+    i += 1
+  }
+  give -1
+}
+
+make has(t: str, p: str) -> num {
+  when find_from(t, p, 0) >= 0 {
+    give 1
+  }
+  give 0
+}
+
+make count(t: str, p: str) -> num {
+  hold n = 0
+  hold at = 0
+  hold m = len(p)
+  while find_from(t, p, at) >= 0 {
+    n += 1
+    at = find_from(t, p, at) + m
+  }
+  give n
+}
+
+make check(ok: num, msg: str) -> num {
+  when ok == 0 {
+    show msg
+    hold code = exit(1)
+  }
+  give ok
+}
+
+// Percent-encode a local path into a file:// URI. Unreserved characters stay
+// literal, everything else becomes %XX with upper-case hex digits, which is
+// what the language server decodes on the way back in.
+make uri(path: str) -> str {
+  hold hex = "0123456789ABCDEF"
+  hold out = "file://"
+  hold i = 0
+  hold n = len(path)
+  hold c = 0
+  hold hi = 0
+  hold lo = 0
+  while i < n {
+    c = sx_index(path, i)
+    when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) {
+      out = out + chr(c)
+    } otherwise {
+      when c == 47 || c == 45 || c == 46 || c == 95 || c == 126 {
+        out = out + chr(c)
+      } otherwise {
+        hi = 0
+        lo = c
+        while lo >= 16 {
+          lo = lo - 16
+          hi += 1
+        }
+        out = out + "%"
+        out = out + chr(sx_index(hex, hi))
+        out = out + chr(sx_index(hex, lo))
+      }
+    }
+    i += 1
+  }
+  give out
+}
+
+make pad3(v: num) -> str {
+  hold out = ""
+  when v < 10 {
+    out = "00"
+  } otherwise {
+    when v < 100 {
+      out = "0"
+    }
+  }
+  out = out + numstr(v)
+  give out
+}
+
+make id_key(id: num, q: str) -> str {
+  hold out = q + "id" + q + ":"
+  out = out + numstr(id)
+  out = out + ","
+  give out
+}
+
+// Read exactly one framed message from the child: the Content-Length header,
+// the blank line, then that many bytes.
+make read_frame(h: num) -> str {
+  hold head = ""
+  hold n = 0
+  hold i = 0
+  hold v = 0
+  hold seen = 0
+  hold c = 0
+  hold blank = ""
+  head = child_line(h)
+  when len(head) == 0 {
+    give ""
+  }
+  i = 15
+  n = len(head)
+  while i < n {
+    c = sx_index(head, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      seen = 1
+    }
+    i += 1
+  }
+  when seen == 0 {
+    give ""
+  }
+  blank = child_line(h)
+  give child_recv(h, v)
+}
+
+// The answer whose id matches: notifications in between are skipped, exactly
+// like the framed C client did.
+make answer(h: num, key: str) -> str {
+  hold body = ""
+  body = read_frame(h)
+  when len(body) == 0 {
+    give ""
+  }
+  while has(body, key) == 0 {
+    body = read_frame(h)
+    when len(body) == 0 {
+      give ""
+    }
+  }
+  give body
+}
+
+make send_frame(h: num, body: str) -> num {
+  hold out = "Content-Length: "
+  out = out + numstr(len(body))
+  out = out + "\r\n\r\n"
+  out = out + body
+  give child_send(h, out)
+}
+
+make request_body(id: num, method: str, params: str, q: str) -> str {
+  hold out = "{"
+  out = out + q + "jsonrpc" + q + ":" + q + "2.0" + q + ","
+  out = out + q + "id" + q + ":" + numstr(id) + ","
+  out = out + q + "method" + q + ":" + q + method + q + ","
+  out = out + q + "params" + q + ":" + params + "}"
+  give out
+}
+
+make notify_body(method: str, params: str, q: str) -> str {
+  hold out = "{"
+  out = out + q + "jsonrpc" + q + ":" + q + "2.0" + q + ","
+  out = out + q + "method" + q + ":" + q + method + q + ","
+  out = out + q + "params" + q + ":" + params + "}"
+  give out
+}
+
+make start(server: str) -> num {
+  hold h = spawn(server)
+  hold bad = check(h > 0, "spawn did not start the language server")
+  give h
+}
+
+make stop(h: num, q: str) -> num {
+  hold w = send_frame(h, notify_body("exit", "{}", q))
+  hold status = child_close(h)
+  hold bad = check(status == 0, "the language server did not exit cleanly")
+  give status
+}
+
+hold server = arg(1)
+hold root = arg(2)
+hold q = chr(34)
+hold k_name = q + "name" + q + ":"
+hold k_uri = q + "uri" + q + ":"
+hold k_empty = q + "result" + q + ":[]"
+hold k_error = q + "error" + q + ":"
+hold k_caps = q + "capabilities" + q
+hold k_char5 = q + "character" + q + ":5"
+hold k_char16 = q + "character" + q + ":16"
+hold rooturi = uri(root)
+hold auri = ""
+hold buri = ""
+hold capuri = ""
+hold h = 0
+hold i = 0
+hold n = 0
+hold path = ""
+hold text = ""
+hold params = ""
+hold response = ""
+hold body = ""
+hold w = 0
+hold block = ""
+hold big = ""
+hold pad = ""
+hold more = 0
+hold key = ""
+hold roots = ""
+hold badroot = ""
+
+// ------------------------------------------------------------- the fixtures
+path = root + "/a.sa"
+text = "make folder_func(x: num) -> num {\n  give x\n}\nshow folder_func(1)\n"
+w = check(write_file(path, text) == 1, "could not write a.sa")
+auri = uri(path)
+path = root + "/sub dir"
+w = check(make_dir(path) == 1, "could not create the sub directory")
+path = root + "/sub dir/b.sa"
+text = "show folder_func(2)\n"
+w = check(write_file(path, text) == 1, "could not write sub dir/b.sa")
+buri = uri(path)
+i = 0
+while i < 6 {
+  path = root + "/unopened"
+  path = path + numstr(i)
+  path = path + ".sa"
+  text = "hold unopened"
+  text = text + numstr(i)
+  text = text + " = "
+  text = text + numstr(i)
+  text = text + "\n"
+  w = check(write_file(path, text) == 1, "could not write an unopened file")
+  i += 1
+}
+path = root + "/.git"
+w = check(make_dir(path) == 1, "could not create the hidden directory")
+path = root + "/.git/ignored.sa"
+w = check(write_file(path, "hold hidden_symbol = 1\n") == 1, "could not write the hidden file")
+path = root + "/loop"
+w = check(make_link(root, path) == 1, "could not create the loop symlink")
+path = root + "/linked.sa"
+w = check(make_link("a.sa", path) == 1, "could not create the file symlink")
+path = root + "/large.sa"
+block = "          "
+i = 0
+while i < 100 {
+  block = block + "          "
+  i += 1
+}
+big = block
+while len(big) < 270000 {
+  big = big + block
+}
+text = big
+text = text + "\nhold oversized_symbol = 1\n"
+w = check(write_file(path, text) == 1, "could not write the oversized file")
+
+// ------------------------------------- unopened symbols and references
+h = start(server)
+params = "{"
+params = params + q + "rootUri" + q + ":" + q + rooturi + q + "}"
+body = request_body(1, "initialize", params, q)
+w = check(send_frame(h, body) == 1, "could not send initialize")
+key = id_key(1, q)
+response = answer(h, key)
+w = check(has(response, k_error) == 0, "initialize answered with an error")
+w = check(has(response, k_caps) == 1, "initialize did not answer capabilities")
+params = "{" + q + "query" + q + ":" + q + "FOLDER" + q + "}"
+body = request_body(2, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the FOLDER query")
+key = id_key(2, q)
+response = answer(h, key)
+w = check(has(response, k_error) == 0, "workspace/symbol answered with an error")
+w = check(has(response, "folder_func") == 1, "the folder index did not report folder_func")
+w = check(has(response, auri) == 1, "the folder index did not report the a.sa URI")
+params = "{" + q + "query" + q + ":" + q + "unopened" + q + "}"
+body = request_body(3, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the unopened query")
+key = id_key(3, q)
+response = answer(h, key)
+w = check(count(response, k_name) == 6, "the six unopened files were not all indexed")
+params = "{" + q + "query" + q + ":" + q + "symbol" + q + "}"
+body = request_body(4, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the symbol query")
+key = id_key(4, q)
+response = answer(h, key)
+w = check(has(response, k_empty) == 1, "hidden and oversized symbols were indexed")
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + buri + q + "},"
+params = params + q + "position" + q + ":{" + q + "line" + q + ":0," + q + "character" + q + ":6},"
+params = params + q + "context" + q + ":{" + q + "includeDeclaration" + q + ":false}}"
+body = request_body(5, "textDocument/references", params, q)
+w = check(send_frame(h, body) == 1, "could not send references")
+key = id_key(5, q)
+response = answer(h, key)
+w = check(has(response, k_error) == 0, "references answered with an error")
+w = check(count(response, k_uri) == 2, "references did not span the declaration and the use")
+w = check(has(response, auri) == 1, "references did not include a.sa")
+w = check(has(response, buri) == 1, "references did not include sub dir/b.sa")
+w = check(has(response, k_char5) == 1, "references did not report character 5")
+w = check(has(response, k_char16) == 1, "references did not report character 16")
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + buri + q + "},"
+params = params + q + "position" + q + ":{" + q + "line" + q + ":0," + q + "character" + q + ":6},"
+params = params + q + "context" + q + ":{" + q + "includeDeclaration" + q + ":true}}"
+body = request_body(50, "textDocument/references", params, q)
+w = check(send_frame(h, body) == 1, "could not send references with the declaration")
+key = id_key(50, q)
+response = answer(h, key)
+w = check(count(response, k_uri) == 3, "includeDeclaration did not add the declaration")
+show "workspace unopened symbols and references; encoded paths; more than four disk files"
+
+// ------------------------- open overlay, close, and disk edits
+text = "hold overlay_only = 1\nshow folder_func(9)\n"
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + ","
+params = params + q + "text" + q + ":" + q + text + q + "}}"
+body = notify_body("textDocument/didOpen", params, q)
+w = check(send_frame(h, body) == 1, "could not send didOpen")
+params = "{" + q + "query" + q + ":" + q + "folder_func" + q + "}"
+body = request_body(6, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the overlay query")
+key = id_key(6, q)
+response = answer(h, key)
+w = check(has(response, k_empty) == 1, "the open buffer did not override the disk file")
+params = "{" + q + "query" + q + ":" + q + "overlay" + q + "}"
+body = request_body(7, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the overlay_only query")
+key = id_key(7, q)
+response = answer(h, key)
+w = check(count(response, "overlay_only") == 1, "the overlay text was not indexed once")
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + buri + q + "},"
+params = params + q + "position" + q + ":{" + q + "line" + q + ":0," + q + "character" + q + ":6},"
+params = params + q + "context" + q + ":{" + q + "includeDeclaration" + q + ":false}}"
+body = request_body(8, "textDocument/references", params, q)
+w = check(send_frame(h, body) == 1, "could not send references during the overlay")
+key = id_key(8, q)
+response = answer(h, key)
+w = check(count(response, k_uri) == 2, "the overlay changed the reference answer")
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + "}}"
+body = notify_body("textDocument/didClose", params, q)
+w = check(send_frame(h, body) == 1, "could not send didClose")
+params = "{" + q + "query" + q + ":" + q + "folder_func" + q + "}"
+body = request_body(9, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the post-close query")
+key = id_key(9, q)
+response = answer(h, key)
+w = check(count(response, "folder_func") == 1, "didClose did not restore the disk file")
+path = root + "/sub dir/b.sa"
+w = check(write_file(path, "hold disk_changed = 3\n") == 1, "could not rewrite sub dir/b.sa")
+params = "{" + q + "query" + q + ":" + q + "disk_changed" + q + "}"
+body = request_body(10, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the disk edit query")
+key = id_key(10, q)
+response = answer(h, key)
+w = check(has(response, buri) == 1, "a disk edit was not picked up")
+w = check(remove_path(path) == 1, "could not delete sub dir/b.sa")
+body = request_body(11, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the disk delete query")
+key = id_key(11, q)
+response = answer(h, key)
+w = check(has(response, k_empty) == 1, "a deleted file was still indexed")
+w = stop(h, q)
+show "workspace open overlay deduplicates; close restores disk; disk edits/deletes refresh"
+
+// ------------------------- root selection, bad roots, and the file cap
+h = start(server)
+params = "{"
+params = params + q + "workspaceFolders" + q + ":[{"
+params = params + q + "uri" + q + ":" + q + rooturi + q + ","
+params = params + q + "name" + q + ":" + q + "root" + q + "}]}"
+body = request_body(1, "initialize", params, q)
+w = check(send_frame(h, body) == 1, "could not send the workspaceFolders initialize")
+key = id_key(1, q)
+response = answer(h, key)
+params = "{" + q + "query" + q + ":" + q + "folder_func" + q + "}"
+body = request_body(2, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the first-folder query")
+key = id_key(2, q)
+response = answer(h, key)
+w = check(has(response, auri) == 1, "the first workspace folder was not indexed")
+w = stop(h, q)
+roots = "https://registry.invalid/root"
+roots = roots + "\n"
+roots = roots + "file:///bad%00root"
+roots = roots + "\n"
+roots = roots + "file:///bad%QZroot"
+roots = roots + "\n"
+roots = roots + "file://remote.invalid/root"
+roots = roots + "\n"
+roots = roots + "file:///does-not-exist-sayanox"
+i = 0
+n = len(roots)
+while i < n {
+  badroot = ""
+  more = 1
+  while more == 1 && i < n {
+    when sx_index(roots, i) == 10 {
+      more = 0
+      i += 1
+    }
+    otherwise {
+      badroot = badroot + chr(sx_index(roots, i))
+      i += 1
+    }
+  }
+  h = start(server)
+  params = "{" + q + "rootUri" + q + ":" + q + badroot + q + "}"
+  body = request_body(1, "initialize", params, q)
+  w = check(send_frame(h, body) == 1, "could not send the bad-root initialize")
+  key = id_key(1, q)
+  response = answer(h, key)
+  params = "{" + q + "query" + q + ":" + q + "" + q + "}"
+  body = request_body(2, "workspace/symbol", params, q)
+  w = check(send_frame(h, body) == 1, "could not send the empty query")
+  key = id_key(2, q)
+  response = answer(h, key)
+  w = check(has(response, k_empty) == 1, "an invalid or nonlocal root was indexed")
+  params = "{}"
+  body = request_body(3, "shutdown", params, q)
+  w = check(send_frame(h, body) == 1, "could not send shutdown")
+  key = id_key(3, q)
+  response = answer(h, key)
+  w = stop(h, q)
+}
+show "workspace first folder; symlinks/hidden/oversized skipped; invalid/nonlocal roots stay responsive"
+path = root + "/cap"
+w = check(make_dir(path) == 1, "could not create the cap directory")
+i = 0
+while i < 140 {
+  pad = pad3(i)
+  path = root + "/cap/f"
+  path = path + pad
+  path = path + ".sa"
+  w = check(write_file(path, "hold capped = 1\n") == 1, "could not write a cap file")
+  i += 1
+}
+path = root + "/cap"
+capuri = uri(path)
+h = start(server)
+params = "{" + q + "rootUri" + q + ":" + q + capuri + q + "}"
+body = request_body(1, "initialize", params, q)
+w = check(send_frame(h, body) == 1, "could not send the cap initialize")
+key = id_key(1, q)
+response = answer(h, key)
+params = "{" + q + "query" + q + ":" + q + "capped" + q + "}"
+body = request_body(2, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the cap query")
+key = id_key(2, q)
+response = answer(h, key)
+w = check(count(response, k_name) == 128, "the 128-file cap was not enforced")
+w = stop(h, q)
+show "workspace 128-file cap enforced"

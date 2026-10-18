@@ -103,12 +103,12 @@ Hand-written C is explicitly **left visible** and is *not* marked generated:
 seed), `selfhost/native_aot.c` (the x86-64 native AOT backend),
 `selfhost/sxc_full.c`, `selfhost/sxc_full_minimal.c`,
 `selfhost/stage2_template.c`, `selfhost/rc_runtime_stress.c`,
-`selfhost/seed_builder_registry_test.c`, `tools/lsp_workspace_test.c` (the LSP
-test client) and the two headers. A verified `git check-attr` run reports zero
-of the 11 tracked `.c`/`.h`/`.inc` files as generated. On 2026-10-17 the IR
-translator moved to `tools/emit_to_ir.sa`, the LSP directory bridge
-(`tools/lsp_workspace.h`) and its binder were deleted, and nine unreferenced
-legacy helpers were removed. The
+`selfhost/seed_builder_registry_test.c` and the two headers. A verified
+`git check-attr` run reports zero of the 10 tracked `.c`/`.h`/`.inc` files as
+generated. On 2026-10-17 the IR translator moved to `tools/emit_to_ir.sa`, the
+LSP directory bridge (`tools/lsp_workspace.h`) and its binder were deleted, the
+framed LSP test client moved to `tools/lsp_workspace_test.sa`, and ten
+unreferenced legacy helpers were removed. The
 hand-written `README.md` files that live inside three of the chunk directories
 are un-marked again by a final `**/README.md -linguist-generated` rule, so all
 5 tracked READMEs stay visible as documentation.

@@ -65,9 +65,9 @@ tools that are never on the bootstrap path.
 This pass removed *interpreters*, not C. The next phase — writing the remaining
 pieces in Sayanox — is recorded in
 [`docs/ALL_SAYANOX_PHASE.md`](docs/ALL_SAYANOX_PHASE.md): a C seed (2,035
-lines), a C native backend (4,353), a C LSP test harness (127), and the
-make/POSIX-sh build driver. The IR tool and the LSP directory bridge have
-already left that list. `make all-sayanox` prints the remaining inventory and
+lines), a C native backend (4,353), and the make/POSIX-sh build driver. The IR
+tool, the LSP directory bridge and the LSP test client have already left that
+list. `make all-sayanox` prints the remaining inventory and
 fails closed.
 
 ## How this is checked

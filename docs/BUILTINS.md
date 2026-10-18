@@ -52,6 +52,14 @@ the same source); the checked-in `seed-min` predates them and rejects them.
 | `path_kind(path)` | `0` missing, `1` regular file, `2` directory, `3` other (`lstat`) |
 | `path_size(path)` | size in bytes for a regular file, otherwise `0` |
 | `path_real(path)` | canonical absolute path, `""` when it does not resolve |
+| `spawn(path)` | start a child with piped stdin/stdout; handle 1-8, `0` on failure |
+| `child_send(h, s)` | write `s` to the child's stdin; `1` on success, `0` on failure |
+| `child_recv(h, n)` | read up to `n` bytes from the child's stdout as text |
+| `child_line(h)` | read one line from the child's stdout, without the newline |
+| `child_close(h)` | close the child's stdin, wait for it, return its exit status |
+| `make_dir(path)` | create a directory (`0700`); `1` on success, `0` on failure |
+| `make_link(target, path)` | create a symlink; `1` on success, `0` on failure |
+| `remove_path(path)` | remove a file or an empty directory; `1` on success, `0` on failure |
 
 All of them are ordinary expressions, so they nest inside other calls
 (`concat(a, numstr(n))`) and can be stored (`hold n = numstr(v)`). Native AOT
@@ -64,6 +72,19 @@ carriage return, and caps one directory at 4096 names and 4 MB; `path_kind`
 and `path_size` use `lstat`, so a symlink reports `3` and is never followed;
 `path_real` is `realpath(3)`. seed-min and the native backend refuse all four
 (`make test-path-builtins` pins both the behaviour and the refusal).
+
+`spawn`, `child_send`, `child_recv`, `child_line` and `child_close` are the
+process surface added on 2026-10-17 so Sayanox tools can drive another Sayanox
+binary: the LSP framed-session test client uses them and no C harness is left
+in `tools/`. At most eight children are alive at once; a handle that was never
+spawned is answered with `0` / `""` / `""` / `-1` instead of crashing, and a
+write to a child that already exited fails (`SIGPIPE` is ignored by the
+runtime) instead of killing the caller. `child_recv` returns text, so an
+embedded NUL byte ends the string early; use `child_line` for line protocols.
+`make_dir`, `make_link` and `remove_path` complete the filesystem surface the
+same client needs; `remove_path` falls back to `rmdir` for a directory.
+`make test-proc-builtins` pins all of it, and seed-min refuses every one of
+these builtins the same way it refuses the directory ones.
 
 `exit(n)` was added on 2026-10-17 so Sayanox CLI tools can report failure
 without a C helper. It flushes stdout before terminating, returns a number

@@ -41,9 +41,9 @@ that every tool is already a `.sa` program.
 - `tools/sayanox_lsp.sa` is the language server (diagnostics, symbols,
   completion, hover, definition, references, workspace symbols, formatting,
   rename, signature help, code actions). `make lsp` builds it.
-- `tools/lsp_workspace_test.c` is the LSP test client (C, fork/pipe); it is
-  the only maintained C test harness and is recorded as an exception in
-  `docs/ALL_SAYANOX_PHASE.md`.
+- `tools/lsp_workspace_test.sa` is the LSP test client. It forks the server
+  through the language's own process builtins, so no C harness is left in
+  `tools/`.
 
 ## Still to port
 
