@@ -1,3 +1,7 @@
+<div align="center">
+
+<img src="assets/sayanox-logo-256.png" alt="Sayanox" width="120" height="120" />
+
 # Sayanox
 
 ### A completely original systems programming language with its own self-hosting compiler
@@ -7,6 +11,8 @@
 [![License: Sayanox](https://img.shields.io/badge/License-Sayanox%20v1.1-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/Language-Sayanox-blue)](https://github.com/sayan9168/sayanox)
 [![Status](https://img.shields.io/badge/Status-Active%20Development-orange)](docs/STATUS.md)
+
+</div>
 
 > Sayanox is designed to be **easy to read**, **easy to write**, and **powerful enough** for real systems work.  
 > The compiler, tools, and most examples are written in Sayanox.
@@ -180,6 +186,35 @@ inventory and **fails closed** — the same way `true-selfhost-full` refuses to
 claim a full-language self-host — so the remaining work cannot silently drift
 or be forgotten. The plan orders it: ~~IR tool~~, ~~directory bridge~~, then
 the package wrapper, then the native backend, and the seed last.
+
+---
+
+## Logo
+
+<p align="center">
+  <img src="assets/sayanox-logo-256.png" alt="Sayanox mark" width="96" height="96" />
+</p>
+
+The mark is a rounded-square badge on an indigo&nbsp;→&nbsp;cyan gradient,
+carrying a geometric <strong>S</strong> built from two 270-degree circular arcs.
+It is the boot chain made visible: a self-hosting compiler has to be folded out
+of itself, and two arcs whose tangents meet eastward at the waist are the
+smallest shape that says so without drawing a compiler.
+
+The full set — vector masters, rasters, the wordmark lockup and a 1280×640
+social card — lives in [`assets/`](assets/), with the palette, the exact
+geometry and the usage notes in [`assets/README.md`](assets/README.md).
+
+```html
+<!-- the mark, at any size -->
+<img src="assets/sayanox-logo.svg" alt="Sayanox" width="64" />
+
+<!-- wordmark lockup, for a dark or coloured ground -->
+<img src="assets/sayanox-lockup.svg" alt="Sayanox" height="48" />
+
+<!-- browser tab icon -->
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+```
 
 ---
 

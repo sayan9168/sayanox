@@ -42,6 +42,21 @@ that.
   validated with a real TextMate tokenizer against the samples and against
   14,000 lines of the self-hosted compiler.
 
+## Repository presentation
+
+Separately from the language bar, the repository's own presentation is in the
+tree and needs no upstream change:
+
+- [`assets/sayanox-banner.png`](../assets/sayanox-banner.png) (1280x640) is the
+  social-preview card: mark, wordmark and tagline on the navy ground. Set it in
+  the repository's *Settings → General → Social preview*; GitHub does not read
+  it from the working tree, so uploading it is a manual step.
+- [`assets/sayanox-logo-256.png`](../assets/sayanox-logo-256.png) is the mark the
+  README header embeds, and [`assets/favicon.svg`](../assets/favicon.svg) is the
+  same geometry for a browser tab.
+- [`assets/README.md`](../assets/README.md) has the palette, the exact geometry
+  and the usage notes for every file in the set.
+
 ## What is still required for a real fix
 
 1. Add Sayanox to [`github-linguist/linguist`'s language registry](https://github.com/github-linguist/linguist/blob/main/lib/linguist/languages.yml),
