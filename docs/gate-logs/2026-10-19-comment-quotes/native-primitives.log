@@ -1,0 +1,3 @@
+./selfhost/gen2 selfhost/native_primitives.sa selfhost/seed_tests/native_primitives.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/native_primitives selfhost/seed_tests/native_primitives.c
+[OK] native primitives: bitwise ops, write_bytes and bytes_f64; a Sayanox byte buffer emits a static x86-64 ELF that exits 42; seed-min refuses them

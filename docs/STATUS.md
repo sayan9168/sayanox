@@ -80,7 +80,7 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
 | `selfhost/native_aot.c` | C | 4,353 lines | Phase D — needs byte buffers, bitwise operations and shifts, and a syscall/memory surface in the language |
-| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,790 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,828 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
 package tool — now including `publish`, `install-local` and the
@@ -102,6 +102,14 @@ checks every operator against a value computed in C and then runs a static
 x86-64 ELF executable that a Sayanox program emitted with nothing but those
 builtins. The port of `selfhost/native_aot.c` itself is **not** done: it is
 still 4,353 lines of C and this row stays in the table until it is.
+
+On 2026-10-19 the compiler itself was fixed, not extended: its `make` signature
+pre-pass did not understand `//` comments, so a double quote inside a comment
+toggled string mode and every later `make` lost its typed parameter list. The
+generated C then read `a: num, b: num` as four untyped parameters. Found while
+porting `tools/sxpkg.sa`; `make test-comment-quotes` pins it from both ends and
+the whole suite was re-run because the compiler is the one file a small change
+can move widely. Logs: [2026-10-19-comment-quotes](gate-logs/2026-10-19-comment-quotes/).
 
 Phase C moved a long way on 2026-10-18: the package tool's whole file side —
 publish, install-local, local sync, local fetch, the `seed` folders and the

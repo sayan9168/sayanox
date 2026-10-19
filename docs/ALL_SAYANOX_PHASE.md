@@ -13,12 +13,12 @@ smallest possible bootstrap seam and the build driver.
 
 | Layer | Language | Size | Sayanox? |
 |---|---|---:|---|
-| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,527 lines | **yes** |
+| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,540 lines | **yes** |
 | Formatter, package tool, language server, IR tool, LSP test client | Sayanox | 5 programs | **yes** |
 | All tests and fixtures | Sayanox + `sh` drivers | 279 `.sa` files, 1,165,577 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,353 lines | no |
-| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,790 lines | no |
+| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,828 lines | no |
 
 Ten tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
 `inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
@@ -83,9 +83,9 @@ are `.sa`. All tracked scripts are POSIX `sh`. Gate: `test-language-deps`.
    exactly as the C client's blocking read did.
 
 4. **The package tool's file logic in Sayanox (done, 2026-10-18).**
-   `tools/sxpkg.sa` grew from 1,149 to 1,786 lines and now owns `publish`,
+   `tools/sxpkg.sa` grew from 1,149 to 1,788 lines and now owns `publish`,
    `install-local`, the local-registry branches of `sync` and `fetch`, and the
-   `seed` folder creation. `tools/sxpkg.sh` dropped from 345 to 362 lines while
+   `seed` folder creation. `tools/sxpkg.sh` dropped from 345 to 363 lines while
    losing every `grep`, `cut`, `tr`, `cp`, `mkdir` and `rm -rf` in those paths:
    it keeps `need_online`/`SAYANOX_ONLINE` (Sayanox has no `getenv`), the
    http(s) transport (`spawn` takes a path with no argv, so it cannot pass a
@@ -194,6 +194,18 @@ and `make all-sayanox` keeps failing.
 
 ## Progress log
 
+* **2026-10-19 — a compiler bug fixed, not a language change.** The `make`
+  signature pre-pass did not understand `//` comments (its comment flag is
+  declared but never set), so a double quote inside a comment toggled string
+  mode and every later `make` lost its typed parameter list; the raw parameter
+  parse then read `a: num, b: num` as four untyped parameters and the generated
+  C stopped compiling. It surfaced while porting `tools/sxpkg.sa`. The pre-pass
+  now recognises `//` and runs to the end of the line, the way the real lexer
+  already did, and `make test-comment-quotes` pins it from both ends — the same
+  fixture is compiled with the fix reverted to prove the gate distinguishes.
+  The whole suite was re-run because the compiler is the one file where a small
+  change moves a long list of generated C files.
+  Logs: `docs/gate-logs/2026-10-19-comment-quotes/`.
 * **2026-10-17 — Phase B.2 done.** Directory builtins + Sayanox folder index;
   `tools/lsp_workspace.h` and `tools/lsp_workspace_bind.sa` deleted. The tree
   has 11 tracked C/header/inc files, down from 23 at the start of the day.

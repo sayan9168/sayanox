@@ -1,0 +1,10 @@
+cd selfhost/seed_tests/sxpkg-wrapper && sh ../../../tools/sxpkg.sh init >/dev/null
+cd selfhost/seed_tests/sxpkg-wrapper && sh ../../../tools/sxpkg.sh add local-pkg >/dev/null
+cd selfhost/seed_tests/sxpkg-wrapper && sh ../../../tools/sxpkg.sh remove local-pkg >/dev/null
+cd selfhost/seed_tests/sxpkg-wrapper && sh ../../../tools/sxpkg.sh seed >/dev/null
+cmp selfhost/seed_tests/sxpkg-wrapper/index-want selfhost/seed_tests/sxpkg-wrapper/.sayanox/registry/INDEX
+cd selfhost/seed_tests/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh init >/dev/null
+cmp selfhost/seed_tests/sxpkg-wrapper/project/lock-want selfhost/seed_tests/sxpkg-wrapper/project/sx.lock
+cd selfhost/seed_tests/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh add rooted 0.1.0 >/dev/null
+cmp selfhost/seed_tests/sxpkg-wrapper/project/lock-want selfhost/seed_tests/sxpkg-wrapper/project/sx.lock
+[OK] sxpkg.sh delegates local commands to Sayanox

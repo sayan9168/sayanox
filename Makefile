@@ -36,7 +36,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-native-primitives \
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
         test-sxpkg-sayanox-logic
 
 all: true-selfhost-min
@@ -2644,7 +2644,7 @@ test-path-builtins: $(GEN2) $(SEED_MIN_BIN)
 	@grep -q 'call names an unknown function or builtin' $(TESTS)/pathb_gen_seed.err \
 	  || { echo "[FAIL] seed-min refused the path builtins without a clear diagnostic"; cat $(TESTS)/pathb_gen_seed.err; exit 1; }
 	@echo "[OK] path builtins: read_dir listing, lstat kinds (file/dir/symlink/missing), sizes, realpath; seed-min refuses them"
-test-stage2: test-exit-builtin test-path-builtins test-proc-builtins test-native-primitives
+test-stage2: test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives
 
 # ---------------------------------------------------------------------------
 # test-proc-builtins: spawn / child_send / child_recv / child_line /
@@ -2671,6 +2671,44 @@ test-proc-builtins: $(GEN2) $(SEED_MIN_BIN)
 	@grep -q 'call names an unknown function or builtin' $(TESTS)/proc_frame_seed.err \
 	  || { echo "[FAIL] seed-min refused the process builtins without a clear diagnostic"; cat $(TESTS)/proc_frame_seed.err; exit 1; }
 	@echo "[OK] process builtins: spawn and a framed child session, make_dir/make_link/remove_path, dead handles; seed-min refuses them"
+
+# ---------------------------------------------------------------------------
+# test-comment-quotes: the `make` signature pre-pass did not know about //
+# comments -- the comment-tracking branch in that loop is dead code (its flag
+# is never set to 1) -- so a double quote inside a comment toggled string
+# mode. One odd quote made every later `make` lose its typed parameter list,
+# and the naive scanner that takes over emitted `double a, double num, ...`
+# from the text of `a: num, b: num`. The generated C then stopped compiling
+# far from the cause. Found while porting tools/sxpkg.sa; pinned here.
+# ---------------------------------------------------------------------------
+test-comment-quotes: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/cq
+	@mkdir -p $(TESTS)/cq
+	@printf '// a comment with one " quote inside it\nmake add2(a: num, b: num) -> num {\n  give a + b\n}\nhold r = add2(1, 2)\nshow r\n' > $(TESTS)/cq/odd.sa
+	@./$(GEN2) $(TESTS)/cq/odd.sa $(TESTS)/cq/odd.c >/dev/null
+	@grep -q 'static double add2(double a, double b);' $(TESTS)/cq/odd.c \
+	  || { echo "[FAIL] a double quote inside a // comment broke the signature pre-pass"; \
+	       head -3 $(TESTS)/cq/odd.c; exit 1; }
+	@if grep -qE 'double str[,)]' $(TESTS)/cq/odd.c; then \
+	   echo "[FAIL] a double quote inside a // comment mangled the parameter list"; exit 1; fi
+	@if grep -q 'double num' $(TESTS)/cq/odd.c; then \
+	   echo "[FAIL] the naive parameter scanner took over for add2"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/cq/odd $(TESTS)/cq/odd.c
+	$(call assert-out,./$(TESTS)/cq/odd,3)
+	@# the file that exposed it: tools/sxpkg.sa carries such a comment
+	@./$(GEN2) tools/sxpkg.sa $(TESTS)/cq/sxpkg.c >/dev/null
+	@if grep -qE 'double str[,)]' $(TESTS)/cq/sxpkg.c; then \
+	   echo "[FAIL] tools/sxpkg.c was generated with mangled signatures"; exit 1; fi
+	@grep -q 'static char \*toml_field(char \*text, char \*key);' $(TESTS)/cq/sxpkg.c \
+	  || { echo "[FAIL] tools/sxpkg.c lost its typed signatures"; exit 1; }
+	@# seed-min runs its own pre-pass; both compilers must agree
+	@./$(SEED_MIN_BIN) $(TESTS)/cq/odd.sa > $(TESTS)/cq/odd_seed.c
+	@grep -q 'static double add2(double a, double b){' $(TESTS)/cq/odd_seed.c \
+	  || { echo "[FAIL] seed-min and gen2 disagree on a quote inside a // comment"; exit 1; }
+	@grep 'static double add2' $(TESTS)/cq/odd.c | head -1
+	@grep 'static char \*toml_field' $(TESTS)/cq/sxpkg.c | head -1
+	@echo "[OK] a double quote inside a // comment no longer breaks the signature pre-pass; gen2 and seed-min agree"
 
 # ---------------------------------------------------------------------------
 # test-native-primitives: bit_and / bit_or / bit_xor / bit_not / shl / shr,

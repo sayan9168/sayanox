@@ -1,0 +1,3 @@
+cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh init >/dev/null
+cd selfhost/seed_tests/sxpkg-polish && sh ../../../tools/sxpkg.sh add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
+[OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once

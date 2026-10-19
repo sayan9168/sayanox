@@ -3529,6 +3529,7 @@ hold fsra = 0
 hold fsrb = 0
 hold fsc2 = 0
 hold fsc = 0
+hold fsnc = 0
 while fsi < n {
   hold fsc = sx_index(source, fsi)
   when fsstr == 1 {
@@ -3550,7 +3551,18 @@ while fsi < n {
       }
       hold fsi = fsi + 1
     } otherwise {
-      when fsc == 34 {
+      // a // comment: a quote inside one is not a string delimiter, so the
+      // scanner has to know about comments the way the real lexer does
+      hold fsnc = 0
+      when fsi + 1 < n {
+        hold fsnc = sx_index(source, fsi + 1)
+      }
+      when fsc == 47 && fsnc == 47 {
+        hold fscm = 1
+        hold fsstart = 0
+        hold fsi = fsi + 2
+      } otherwise {
+        when fsc == 34 {
         hold fsstr = 1
         hold fsstart = 0
         hold fsi = fsi + 1
@@ -3915,6 +3927,7 @@ while fsi < n {
           }
           hold fsi = fsi + 1
         }
+      }
       }
     }
   }
