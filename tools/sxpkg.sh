@@ -125,7 +125,7 @@ sync() {
   echo "sxpkg: sync from $ONLINE"
   tmp=$(mktemp)
   if download "$ONLINE/INDEX" "$tmp"; then
-    if ! preflight_names "$tmp"; then
+    if ! (cd "$ROOT" && sx check-lock "$tmp"); then
       rm -f "$tmp"
       echo 'sxpkg: rejected index with unsafe package name' >&2
       return 1
@@ -175,16 +175,6 @@ checked() {
   return 0
 }
 
-# Validation is .sa logic; shell only prevents untrusted path construction.
-preflight_names() {
-  while IFS='=' read -r pn pv || [ -n "$pn" ]; do
-    case "$pn" in \#*|""|name|version) continue ;; esac
-    checked check-name "$pn" >/dev/null || {
-      echo "sxpkg: refusing unsafe package name '$pn'" >&2; return 1;
-    }
-  done < "$1"
-}
-
 list() {
   run_sayanox list "$@"
 }
@@ -210,32 +200,26 @@ install() {
   [ -f "$LOCK" ] || { echo "sxpkg: no sx.lock — run init/add"; exit 1; }
   # The lock plus complete cached packages are sufficient; a missing INDEX is
   # not a reason to transfer. Preflight names before constructing any paths.
-  preflight_names "$LOCK" || return 1
+  (cd "$ROOT" && sx check-lock) || return 1
+  # Sayanox says which locked packages have no complete registry copy, so the
+  # shell only has to fetch those and never walks the lock itself. A package
+  # counts as present only when both files exist: an empty directory left by a
+  # failed download is not a copy.
   fetched=""
-  while IFS='=' read -r n v; do
-    case "$n" in \#*|"") continue ;; version|name) continue ;; esac
-    case "$n" in
-      */*|*..*) echo "sxpkg: refusing unsafe package name '$n'"; continue ;;
-    esac
-    # Fetch only what is absent. A package counts as present only when both
-    # files exist: an empty directory left by a failed download is not a copy.
-    if [ ! -f "$REG/$n/pkg.meta" ] || [ ! -f "$REG/$n/main.sa" ]; then
-      # Everything locked is already local? Then `install` is an offline copy
-      # and needs no permission. A transfer does.
-      need_online || return 1
-      fetched="$fetched $n"
-      sx ensure-dir "$REG/$n" >/dev/null
-      download "$ONLINE/$n/pkg.meta" "$REG/$n/pkg.meta" || echo "sxpkg: could not fetch $n/pkg.meta from $ONLINE"
-      download "$ONLINE/$n/main.sa" "$REG/$n/main.sa" || echo "sxpkg: could not fetch $n/main.sa from $ONLINE"
-    fi
-    if [ -f "$REG/$n/pkg.meta" ] && [ -f "$REG/$n/main.sa" ]; then
-      sx ensure-dir "$PKGDIR/$n" >/dev/null
-      sx copy-tree "$REG/$n" "$PKGDIR/$n" 2>/dev/null || true
-      echo "sxpkg: installed $n -> $PKGDIR/$n"
-    else
-      echo "sxpkg: missing $n in registry"
-    fi
-  done < "$LOCK"
+  for n in $(cd "$ROOT" && sx need-fetch); do
+    # Everything locked is already local? Then `install` is an offline copy and
+    # needs no permission. A transfer does.
+    need_online || return 1
+    fetched="$fetched $n"
+    sx ensure-dir "$REG/$n" >/dev/null
+    download "$ONLINE/$n/pkg.meta" "$REG/$n/pkg.meta" || echo "sxpkg: could not fetch $n/pkg.meta from $ONLINE"
+    download "$ONLINE/$n/main.sa" "$REG/$n/main.sa" || echo "sxpkg: could not fetch $n/main.sa from $ONLINE"
+  done
+  # Copy and report whatever is now complete. The pkgdir is made absolute for
+  # the same reason install-local absolutises its source: the binary runs with
+  # the project root as its working directory.
+  pkg=$(CDPATH= cd "$ROOT" && pwd)/.sayanox/pkgs
+  (cd "$ROOT" && sx install-cached "$pkg") || return 1
   echo "sxpkg: install done"
   # A transfer is accepted only if the locked packages now verify (version and
   # sum). The transport is not trusted; the checksum is the acceptance test.

@@ -80,7 +80,7 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
 | `selfhost/native_aot.c` | C | 4,353 lines | Phase D — needs byte buffers, bitwise operations and shifts, and a syscall/memory surface in the language |
-| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,828 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,860 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
 package tool — now including `publish`, `install-local` and the

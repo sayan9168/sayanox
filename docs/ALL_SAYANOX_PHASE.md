@@ -18,7 +18,7 @@ smallest possible bootstrap seam and the build driver.
 | All tests and fixtures | Sayanox + `sh` drivers | 279 `.sa` files, 1,165,577 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,353 lines | no |
-| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,828 lines | no |
+| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,860 lines | no |
 
 Ten tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
 `inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
@@ -82,12 +82,17 @@ are `.sa`. All tracked scripts are POSIX `sh`. Gate: `test-language-deps`.
    (the C client used `fread`, which loops); a silent child blocks the caller
    exactly as the C client's blocking read did.
 
-4. **The package tool's file logic in Sayanox (done, 2026-10-18).**
-   `tools/sxpkg.sa` grew from 1,149 to 1,788 lines and now owns `publish`,
-   `install-local`, the local-registry branches of `sync` and `fetch`, and the
-   `seed` folder creation. `tools/sxpkg.sh` dropped from 345 to 363 lines while
-   losing every `grep`, `cut`, `tr`, `cp`, `mkdir` and `rm -rf` in those paths:
-   it keeps `need_online`/`SAYANOX_ONLINE` (Sayanox has no `getenv`), the
+4. **The package tool's file logic in Sayanox (done, 2026-10-18; the install
+   loop followed on 2026-10-19).**
+   `tools/sxpkg.sa` grew from 1,149 to 1,898 lines and now owns `publish`,
+   `install-local`, the local-registry branches of `sync` and `fetch`, the
+   `seed` folder creation, and — since 2026-10-19 — the whole offline half of
+   `install`: `check-lock` preflights the names, `need-fetch` says which locked
+   packages have no complete registry copy, and `install-cached` copies and
+   reports them. `tools/sxpkg.sh` dropped from 345 to 347 lines while losing
+   every `grep`, `cut`, `tr`, `cp`, `mkdir` and `rm -rf` in those paths, and
+   with them the `while IFS='=' read` loop that walked `sx.lock` itself: it
+   keeps `need_online`/`SAYANOX_ONLINE` (Sayanox has no `getenv`), the
    http(s) transport (`spawn` takes a path with no argv, so it cannot pass a
    URL to curl or wget), and the dispatch.
    New in the language's toolbox rather than in the compiler: `ensure_dir`

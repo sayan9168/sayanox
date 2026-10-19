@@ -1,0 +1,16 @@
+[OK] package errors: search never implicitly syncs; verify propagates execution/project failure
+cd selfhost/seed_tests/pkgs-proj && sh ../../../tools/sxpkg.sh init >/dev/null
+cd selfhost/seed_tests/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+cd selfhost/seed_tests/pkgs-proj && test -s .sayanox/registry/math/main.sa
+cd selfhost/seed_tests/pkgs-proj && ../../../tools/sxpkg add math 0.1.0 >/dev/null
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/pkgs-proj/use_math.sa > selfhost/seed_tests/pkgs-proj/use_sm.c
+cc -O2 -o selfhost/seed_tests/pkgs-proj/use_sm selfhost/seed_tests/pkgs-proj/use_sm.c
+./selfhost/gen2 selfhost/seed_tests/pkgs-proj/use_math.sa selfhost/seed_tests/pkgs-proj/use_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/pkgs-proj/use_g2 selfhost/seed_tests/pkgs-proj/use_g2.c
+cmp selfhost/seed_tests/pkgs-deps/lock-want selfhost/seed_tests/pkgs-deps/sx.lock
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/pkgs-deps/use_calc.sa > selfhost/seed_tests/pkgs-deps/use_calc_sm.c
+cc -O2 -o selfhost/seed_tests/pkgs-deps/use_calc_sm selfhost/seed_tests/pkgs-deps/use_calc_sm.c
+./selfhost/gen2 selfhost/seed_tests/pkgs-deps/use_calc.sa selfhost/seed_tests/pkgs-deps/use_calc_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/pkgs-deps/use_calc_g2 selfhost/seed_tests/pkgs-deps/use_calc_g2.c
+cd selfhost/seed_tests/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+[OK] offline packages: sxpkg seed writes .sayanox/registry (no network), deps= resolution pulls a package's dependencies into the lock, install-local copies them out of a local registry directory with their sums checked, and use ".sayanox/registry/<pkg>/main.sa" runs the same on seed-min, gen2 (and native when built)

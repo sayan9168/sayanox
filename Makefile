@@ -1660,7 +1660,39 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) copy-tree csrc cdst
 	@test "$$(cat $(TESTS)/sxpkg-sayanox/cdst/a)" = one || { echo "[FAIL] copy-tree lost a file"; exit 1; }
 	@test "$$(cat $(TESTS)/sxpkg-sayanox/cdst/sub/b)" = two || { echo "[FAIL] copy-tree did not recurse"; exit 1; }
-	@echo "[OK] sxpkg in Sayanox: publish, install-local, local sync/fetch, rollback, and the folder primitives"
+	@# ---- check-lock / need-fetch / install-cached: the install loop ----
+	@# the wrapper used to walk itself. A file with no final newline too.
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox icdir
+	@printf '# sx.lock\nversion=1\n../escape=0.1.0' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) check-lock >/dev/null 2>&1); then \
+	   echo "[FAIL] check-lock ignored a final line with no newline"; exit 1; fi
+	@printf '# sx.lock\nversion=1\nstrings=0.1.0\n../escape=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) check-lock >/dev/null 2>&1); then \
+	   echo "[FAIL] check-lock accepted an unsafe name"; exit 1; fi
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) check-lock > cl.out 2>&1 || true
+	@grep -q -F "sxpkg: refusing unsafe package name '../escape'" $(TESTS)/sxpkg-sayanox/cl.out \
+	  || { echo "[FAIL] check-lock did not name the unsafe package"; cat $(TESTS)/sxpkg-sayanox/cl.out; exit 1; }
+	@# need-fetch names exactly the locked packages with no complete copy
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) seed >/dev/null
+	@printf 'hello=0.1.0\nstrings=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) need-fetch > nf.want
+	@printf 'strings\n' > $(TESTS)/sxpkg-sayanox/nf.have
+	@cmp $(TESTS)/sxpkg-sayanox/nf.have $(TESTS)/sxpkg-sayanox/nf.want \
+	  || { echo "[FAIL] need-fetch named the wrong packages"; cat $(TESTS)/sxpkg-sayanox/nf.want; exit 1; }
+	@# install-cached copies the complete ones and reports the rest, and it
+	@# refuses to build a path from an unsafe name even when called directly
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) install-cached icdir > ic.out
+	@printf 'sxpkg: installed hello -> icdir/hello\nsxpkg: missing strings in registry\n' > $(TESTS)/sxpkg-sayanox/ic.want
+	@cmp $(TESTS)/sxpkg-sayanox/ic.want $(TESTS)/sxpkg-sayanox/ic.out \
+	  || { echo "[FAIL] install-cached printed the wrong report"; cat $(TESTS)/sxpkg-sayanox/ic.out; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/icdir/hello/main.sa \
+	  || { echo "[FAIL] install-cached did not copy a complete package"; exit 1; }
+	@printf 'hello=0.1.0\n../escape=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) install-cached icdir2 >/dev/null 2>&1); then \
+	   echo "[FAIL] install-cached accepted an unsafe name"; exit 1; fi
+	@test ! -e $(TESTS)/escape \
+	  || { echo "[FAIL] install-cached built a path outside the project"; exit 1; }
+	@echo "[OK] sxpkg in Sayanox: publish, install-local, local sync/fetch, rollback, the folder primitives, and check-lock/need-fetch/install-cached"
 
 # ---------------------------------------------------------------------------
 # test-native-emit-split: the x86-64 backend is a REGION of native_aot.c, not a

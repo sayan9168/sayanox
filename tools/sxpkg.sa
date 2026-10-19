@@ -1782,6 +1782,116 @@ when is_fetch_local == 1 {
   }
 }
 
+
+// check-lock [file]: preflight every name in a lock or an index before any
+// path is built from it.  This is the loop `tools/sxpkg.sh preflight_names`
+// used to run in the shell, spawning one `check-name` child per line.  A file
+// with no final newline is handled the same way the wrapper's `read` loop was.
+when string_eq(command, "check-lock") {
+  hold handled = 1
+  hold clpath = lock_path
+  when len(arg(2)) > 0 {
+    hold clpath = arg(2)
+  }
+  hold cltext = read_file(clpath)
+  when len(cltext) > 0 {
+    when sx_idx(cltext, len(cltext) - 1) != 10 {
+      hold cltext = concat(cltext, "\n")
+    }
+  }
+  hold clrest = lock_specs(cltext, len(cltext))
+  hold clbad = 0
+  while len(clrest) > 0 {
+    hold clone = take_field(clrest)
+    hold clrest = drop_field(clrest)
+    hold clnm = dep_name(clone)
+    when package_name_ok(clnm) == 0 {
+      show concat("sxpkg: refusing unsafe package name '", concat(clnm, "'"))
+      hold clbad = 1
+    }
+  }
+  when clbad == 1 {
+    hold clcode = exit(1)
+  }
+}
+
+// need-fetch: the locked packages whose registry copy is incomplete, one name
+// per line.  A package counts as present only when both pkg.meta and main.sa
+// are there: an empty directory left by a failed download is not a copy.
+when string_eq(command, "need-fetch") {
+  hold handled = 1
+  hold nftext = read_file(lock_path)
+  when len(nftext) > 0 {
+    when sx_idx(nftext, len(nftext) - 1) != 10 {
+      hold nftext = concat(nftext, "\n")
+    }
+  }
+  hold nfrest = lock_specs(nftext, len(nftext))
+  while len(nfrest) > 0 {
+    hold nfone = take_field(nfrest)
+    hold nfrest = drop_field(nfrest)
+    hold nfnm = dep_name(nfone)
+    // An unsafe name is never reported, so a caller cannot fetch or mkdir from
+    // one.  `check-lock` is the command that refuses; this one stays silent.
+    when package_name_ok(nfnm) == 1 {
+      hold nfm = path_kind(concat(concat(concat(registry_path, "/"), nfnm), "/pkg.meta"))
+      hold nfs = path_kind(concat(concat(concat(registry_path, "/"), nfnm), "/main.sa"))
+      when nfm != 1 || nfs != 1 {
+        show nfnm
+      }
+    }
+  }
+}
+
+// install-cached [pkgdir]: copy every locked package that already has a
+// complete registry copy into pkgdir, and report the ones that do not.  This
+// is the offline half of `tools/sxpkg.sh install`, which used to walk the lock
+// itself; the shell now only fetches what `need-fetch` named.
+when string_eq(command, "install-cached") {
+  hold handled = 1
+  hold icdir = pkg_path
+  when len(arg(2)) > 0 {
+    hold icdir = arg(2)
+  }
+  hold ictext = read_file(lock_path)
+  when len(ictext) > 0 {
+    when sx_idx(ictext, len(ictext) - 1) != 10 {
+      hold ictext = concat(ictext, "\n")
+    }
+  }
+  hold icrest = lock_specs(ictext, len(ictext))
+  hold icbad = 0
+  while len(icrest) > 0 {
+    hold icone = take_field(icrest)
+    hold icrest = drop_field(icrest)
+    hold icnm = dep_name(icone)
+    when package_name_ok(icnm) == 0 {
+      show concat("sxpkg: refusing unsafe package name '", concat(icnm, "'"))
+      hold icbad = 1
+    } otherwise {
+      hold icm = path_kind(concat(concat(concat(registry_path, "/"), icnm), "/pkg.meta"))
+      hold ics = path_kind(concat(concat(concat(registry_path, "/"), icnm), "/main.sa"))
+      when icm != 1 || ics != 1 {
+        show concat("sxpkg: missing ", concat(icnm, " in registry"))
+      } otherwise {
+        hold icreg = concat(concat(registry_path, "/"), icnm)
+        hold icdst = concat(concat(icdir, "/"), icnm)
+        hold icd = ensure_dir(icdst)
+        hold icc = copy_tree(icreg, icdst)
+        when icd == 0 || icc == 0 {
+          show concat("sxpkg: FAILED installing ", icnm)
+          hold icbad = 1
+        } otherwise {
+          show concat("sxpkg: installed ", concat(icnm, concat(" -> ", icdst)))
+        }
+      }
+    }
+  }
+  when icbad == 1 {
+    hold iccode = exit(1)
+  }
+}
+
 when handled == 0 {
   show "sxpkg: local commands: init | add <name> [version] | list | remove <name> | seed | search | info | deps | install [registry] | install-local [registry] | verify | sum <file> | publish"
   show "sxpkg: the wrapper keeps http(s) transfers (curl or wget) and the online opt-in policy"

@@ -1,0 +1,2 @@
+sh selfhost/test_sxpkg_transfer_hardening.sh
+[OK] sxpkg hardening: no-opt-in/name refusal before transport; interrupted fetch rollback; curl/wget mocked success; checksum verification/tamper; overwrite refusal; rooted relative local fetch; cached install without INDEX; no DNS

@@ -1,0 +1,4 @@
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/cq/odd selfhost/seed_tests/cq/odd.c
+static double add2(double a, double b);
+static char *toml_field(char *text, char *key);
+[OK] a double quote inside a // comment no longer breaks the signature pre-pass; gen2 and seed-min agree
