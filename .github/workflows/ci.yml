@@ -18,14 +18,36 @@ concurrency:
 # core toolchain plus POSIX utilities documented in DEPENDENCY.md.
 # No Python/Node/Ruby/Perl runtime or real network client may run inside the
 # four gates; guard wrappers also record errors swallowed by a test recipe.
+#
+# Shape (2026-10-20). The four gates used to run sequentially inside ONE job
+# with `timeout-minutes: 25`. They needed ~25m15s, so the job was killed by the
+# runner in the middle of `make native-test` and CI reported "The job has
+# exceeded the maximum execution time" instead of a real result. The gates are
+# independent once gen2 exists, so they now run as separate jobs:
+#
+#   bootstrap   make doctor + make true-selfhost   builds seed-min, gen1_min, gen2
+#   fixed-point make gen3                          needs bootstrap's gen2      } in
+#   native      make native-test                   needs bootstrap's seed-min  } parallel
+#   audit       tracked-artifact + all-sayanox inventory checks (builds nothing)
+#
+# Every job still runs `make` itself against a clean checkout, still blocks the
+# forbidden runtimes, and still fails if any of them is invoked. The only thing
+# passed between jobs is a binary that the previous job built with `make` from
+# tracked sources, so no gate is skipped and nothing is fetched from outside the
+# repository. `.github/workflows/full-bootstrap.yml` re-runs the whole chain in
+# one job, in order, with no hand-off, so the sequential claim stays verified.
+env:
+  # One place to change the runner's C compiler choice; `make` picks it up.
+  CC: cc
+
 jobs:
   bootstrap:
-    name: "clean-checkout bootstrap (doctor, true-selfhost, gen3, native-test)"
+    name: "gate 1+2: doctor, true-selfhost (seed-min -> gen1_min -> gen2)"
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - name: Clean checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           clean: true
           fetch-depth: 1
@@ -49,14 +71,117 @@ jobs:
       - name: "make true-selfhost (seed-min -> gen1_min -> gen2 + feature tests)"
         run: make true-selfhost
 
+      # gen3 and native-test need a compiler that THIS job built. Handing the
+      # binaries over is what makes the three gates parallel; the alternative
+      # was rebuilding the whole chain in each job (3x 25 minutes of runner).
+      - name: Upload gate binaries (gen2, gen2.c, seed-min)
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-binaries
+          path: |
+            selfhost/gen2
+            selfhost/gen2.c
+            selfhost/gen1_min
+            selfhost/gen1_min.c
+            selfhost/seed/sxc_seed_min
+          if-no-files-found: error
+          retention-days: 2
+
+      - name: Verify no blocked command was invoked
+        run: test ! -e "$RUNNER_TEMP/bootstrap-forbidden-invocations"
+
+  fixed-point:
+    name: "gate 3: gen3 (gen3 == gen4 byte-identical fixed point)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: bootstrap
+    steps:
+      - name: Clean checkout
+        uses: actions/checkout@v7
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Block non-bootstrap runtimes and real network clients
+        run: |
+          set -e
+          guard="$RUNNER_TEMP/bootstrap-no-runtimes"
+          mkdir -p "$guard"
+          for tool in python python3 node ruby perl curl wget; do
+            printf '%s\n' '#!/bin/sh' \
+              'printf "forbidden bootstrap invocation: %s\n" "$0" >> "$RUNNER_TEMP/bootstrap-forbidden-invocations"' \
+              'exit 99' > "$guard/$tool"
+            chmod +x "$guard/$tool"
+          done
+          printf '%s\n' "$guard" >> "$GITHUB_PATH"
+
+      - name: Download gate binaries built by the bootstrap job
+        uses: actions/download-artifact@v8
+        with:
+          name: gate-binaries
+
+      - name: Keep the handed-over binaries executable
+        run: |
+          set -e
+          chmod +x selfhost/gen2 selfhost/gen1_min selfhost/seed/sxc_seed_min
+
       - name: "make gen3 (gen3 == gen4 byte-identical fixed point)"
         run: make gen3
+
+      - name: Verify no blocked command was invoked
+        run: test ! -e "$RUNNER_TEMP/bootstrap-forbidden-invocations"
+
+  native:
+    name: "gate 4: native-test (x86-64 backend - subset, use, functions, parity)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: bootstrap
+    steps:
+      - name: Clean checkout
+        uses: actions/checkout@v7
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Block non-bootstrap runtimes and real network clients
+        run: |
+          set -e
+          guard="$RUNNER_TEMP/bootstrap-no-runtimes"
+          mkdir -p "$guard"
+          for tool in python python3 node ruby perl curl wget; do
+            printf '%s\n' '#!/bin/sh' \
+              'printf "forbidden bootstrap invocation: %s\n" "$0" >> "$RUNNER_TEMP/bootstrap-forbidden-invocations"' \
+              'exit 99' > "$guard/$tool"
+            chmod +x "$guard/$tool"
+          done
+          printf '%s\n' "$guard" >> "$GITHUB_PATH"
+
+      - name: Download gate binaries built by the bootstrap job
+        uses: actions/download-artifact@v8
+        with:
+          name: gate-binaries
+
+      - name: Keep the handed-over binaries executable
+        run: |
+          set -e
+          chmod +x selfhost/gen2 selfhost/gen1_min selfhost/seed/sxc_seed_min
 
       - name: "make native-test (x86-64 backend - subset, use, functions, parity)"
         run: make native-test
 
       - name: Verify no blocked command was invoked
         run: test ! -e "$RUNNER_TEMP/bootstrap-forbidden-invocations"
+
+  audit:
+    name: "audit: generated artifacts untracked, all-sayanox inventory honest"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Clean checkout
+        uses: actions/checkout@v7
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Verify generated artifacts are not tracked
         run: |
@@ -70,3 +195,24 @@ jobs:
               exit 1
             fi
           done
+          echo "[OK] no generated bootstrap artifact is tracked in git"
+
+      # `make all-sayanox` is deliberately fail-closed: it prints the measured
+      # inventory of what is still not Sayanox (the C seed, the C native
+      # backend, the make/sh build driver) and exits 1, and
+      # `make test-doc-claims` fails if it ever starts returning 0 without the
+      # documents being updated. So the check here is that it STILL refuses, and
+      # the inventory is published in the job log where the remaining rows can
+      # be read. When a phase removes a row, this step's expectation flips with
+      # it (docs/ALL_SAYANOX_PHASE.md records the plan).
+      - name: Publish the all-sayanox inventory (must still refuse a claim)
+        run: |
+          set -e
+          if make all-sayanox > "$RUNNER_TEMP/all-sayanox.log" 2>&1; then
+            cat "$RUNNER_TEMP/all-sayanox.log"
+            echo "::error::all-sayanox now reports success; update docs/ALL_SAYANOX_PHASE.md, docs/STATUS.md, README.md and make test-doc-claims in the same change"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/all-sayanox.log"
+          grep -q 'refusing an all-in-Sayanox claim' "$RUNNER_TEMP/all-sayanox.log"
+          echo "[OK] all-sayanox still fails closed and printed its inventory above"

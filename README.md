@@ -101,9 +101,11 @@ make tools
 
 The formatter currently handles whitespace. The package tool supports `init` / `add` / `list` / `remove` / `search` / `info` / `seed` / `deps` / `verify` / `install` / `install-local` / `publish`, since 2026-10-18 the local-registry halves of `sync` and `fetch` as well, and since 2026-10-19 the whole offline half of `install` (name preflight, deciding what is missing, copying and reporting it); only the http(s) transport and the online opt-in policy stay in the shell wrapper. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 
-The language server (`tools/sayanox_lsp.sa`), its folder index and the IR
-translator (`tools/emit_to_ir.sa`) are Sayanox programs too, and no maintained
-build or test path needs bash, awk, sed or Python (`make test-language-deps`).
+The language server (`tools/sayanox_lsp.sa`), its folder index, the IR
+translator (`tools/emit_to_ir.sa`) and the native backend's ELF image writer
+and rel32 linker (`tools/sxlink.sa`) are Sayanox programs too, and no
+maintained build or test path needs bash, awk, sed or Python
+(`make test-language-deps`).
 
 ---
 
@@ -115,6 +117,7 @@ build or test path needs bash, awk, sed or Python (`make test-language-deps`).
 | `selfhost/compiler_min.sa` | Maintained pure-min compiler written in Sayanox |
 | `selfhost/seed/*.c` | C bootstrap seed |
 | `selfhost/native_aot.c` | x86-64 Linux native-AOT backend |
+| `tools/sxlink.sa` | Sayanox ELF image writer + rel32 linker for that backend |
 | `Makefile` | Bootstrap, tests, verification |
 | `docs/` | Status, design notes, language docs |
 
@@ -172,7 +175,7 @@ needs bash, awk, sed or Python either.
 
 What is still not Sayanox is small, measurable, and listed in
 [docs/ALL_SAYANOX_PHASE.md](docs/ALL_SAYANOX_PHASE.md): the 2,035-line C seed,
-the 4,353-line C native backend, and the make/POSIX-sh build driver. On
+the 4,415-line C native backend, and the make/POSIX-sh build driver. On
 2026-10-17 the 150-line C IR translator became `tools/emit_to_ir.sa` with
 byte-identical output, the LSP folder index moved into Sayanox (the C
 directory header and its binder were deleted), the 127-line C framed-session
@@ -181,7 +184,13 @@ and ten unreferenced legacy C files were removed. On 2026-10-18 the language
 gained the byte-buffer and bitwise surface the native backend needs
 (`write_bytes`, `bytes_f64`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`,
 `shl`, `shr`); `make test-native-primitives` proves it by running a static
-x86-64 ELF that a Sayanox program emitted with those calls alone. `make all-sayanox` prints the remaining
+x86-64 ELF that a Sayanox program emitted with those calls alone. On 2026-10-20
+that surface gained its reader (`read_bytes`, because `read_file` stops at the
+first NUL and an ELF image is mostly NULs) and the native backend's ELF image
+writer and rel32 linker became Sayanox: `tools/sxlink.sa` links five fixtures
+byte-identically to the C `write_elf()` and its output runs, gated by
+`make test-native-sxlink` against a `SX_LINK_DUMP` seam that changes no emitted
+byte. `make all-sayanox` prints the remaining
 inventory and **fails closed** — the same way `true-selfhost-full` refuses to
 claim a full-language self-host — so the remaining work cannot silently drift
 or be forgotten. The plan orders it: ~~IR tool~~, ~~directory bridge~~, then

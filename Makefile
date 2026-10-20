@@ -37,7 +37,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
         pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
-        test-sxpkg-sayanox-logic
+        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink
 
 all: true-selfhost-min
 
@@ -1933,6 +1933,131 @@ test-native-ir-portable: $(NATIVE_BIN) tools/emit_to_ir test-emit-to-ir
 	@echo '[OK] IR analysis listing: instruction counts/calls/phases preserved; strict record/offset audit and source correlation deterministic; register widths abstracted (no executable second ISA)'
 native-test: test-native-ir-portable
 
+# ---------------------------------------------------------------------------
+# tools/sxlink: the Sayanox ELF image writer and linker (Phase D step 3).
+#
+# selfhost/native_aot.c compiles a program into a code blob, a data blob and a
+# list of rel32 sites; write_elf() in that file is what turns those into a
+# runnable static ELF. SX_LINK_DUMP=<dir> dumps exactly those three inputs --
+# code.bin, data.bin, patch.bin and a meta.txt with the call-patch count -- and
+# tools/sxlink.sa rebuilds the image from them: ELF header, three program
+# headers, page rounding, padding, the collector's heap cursor and every rel32
+# fixup, using nothing but push / xs[i] / len / % / shr / bit_and / write_bytes
+# and read_bytes.
+#
+# The gate is byte identity plus execution: the Sayanox-linked file must be the
+# same bytes as the C-linked one and must run and print the same thing. It also
+# pins that the dump changes no emitted byte, the way test-native-ir-log pins
+# SX_EMIT_LOG.
+#
+# What is still C, stated plainly: native_aot resolves a `make` or builtin name
+# to a code offset, so the patch records arrive with their targets resolved.
+# This is the image writer and the linker, not the whole backend.
+SXLINK_BIN := tools/sxlink
+SXLINK_SA  := tools/sxlink.sa
+
+tools/sxlink: $(SXLINK_SA) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(GEN2) $(SXLINK_SA) $(TESTS)/sxlink.c >/dev/null
+	@if grep -q '#error' $(TESTS)/sxlink.c; then echo "[FAIL] sxlink: #error in the generated C"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/sxlink.c
+	@echo "[OK] Sayanox ELF linker built from $(SXLINK_SA)"
+
+.PHONY: test-native-sxlink
+test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/sxlink
+	@# One fixture per shape that moves the image: a bare program, recursion
+	@# (call rel32s), a data segment full of strings plus a collection, a
+	@# string-ordering program and a multi-page code segment. Each is a shape
+	@# the native backend already compiles elsewhere in this suite, so the
+	@# gate adds a comparison rather than inventing coverage.
+	@printf 'hold x = 40\nhold x = x + 2\nshow x\n' > $(TESTS)/sxlink_hello.sa
+	@printf 'make fac(n) {\n  when n <= 1 {\n    give 1\n  }\n  give n * fac(n - 1)\n}\nmake fib(n) {\n  when n <= 1 {\n    give n\n  } else {\n    give fib(n - 1) + fib(n - 2)\n  }\n}\nshow fac(6)\nshow fib(20)\n' > $(TESTS)/sxlink_fn.sa
+	@# strings in the data segment, a struct that holds them, and a loop that
+	@# grows one: the data blob and the collector's root table both move
+	@printf 'struct Item {\n  name,\n  count\n}\nhold it = Item { name: "first", count: 3 }\nshow it.name\nshow it.count\nhold s = ""\nhold i = 0\nwhile i < 40 {\n  s = concat(s, "sayanox")\n  i = i + 1\n}\nshow len(s)\nshow sx_index(s, 250)\nhold items = [1, 2, 3]\npush(items, 4)\nshow len(items)\nshow gc()\n' > $(TESTS)/sxlink_data.sa
+	@for fix in $(TESTS)/sxlink_hello.sa $(TESTS)/sxlink_fn.sa $(TESTS)/sxlink_data.sa selfhost/native_strord_test.sa selfhost/stdlib_growth_test.sa; do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  mkdir -p $(TESTS)/sxlink/$$name; \
+	  ./$(NATIVE_BIN) $$fix $(TESTS)/sxlink/$$name/off.elf; \
+	  SX_LINK_DUMP=$(TESTS)/sxlink/$$name ./$(NATIVE_BIN) $$fix $(TESTS)/sxlink/$$name/c.elf; \
+	  cmp $(TESTS)/sxlink/$$name/off.elf $(TESTS)/sxlink/$$name/c.elf \
+	    || { echo "[FAIL] sxlink: SX_LINK_DUMP changed the emitted bytes for $$name"; exit 1; }; \
+	  ./tools/sxlink $(TESTS)/sxlink/$$name/c.elf $(TESTS)/sxlink/$$name $(TESTS)/sxlink/$$name/sx.elf > $(TESTS)/sxlink/$$name/report; \
+	  cmp $(TESTS)/sxlink/$$name/c.elf $(TESTS)/sxlink/$$name/sx.elf \
+	    || { echo "[FAIL] sxlink: the Sayanox-linked image is not byte-identical for $$name"; exit 1; }; \
+	  chmod +x $(TESTS)/sxlink/$$name/c.elf $(TESTS)/sxlink/$$name/sx.elf; \
+	  $(TESTS)/sxlink/$$name/c.elf > $(TESTS)/sxlink/$$name/c.out 2>&1 || true; \
+	  $(TESTS)/sxlink/$$name/sx.elf > $(TESTS)/sxlink/$$name/sx.out 2>&1 || true; \
+	  cmp $(TESTS)/sxlink/$$name/c.out $(TESTS)/sxlink/$$name/sx.out \
+	    || { echo "[FAIL] sxlink: the Sayanox-linked executable behaves differently for $$name"; exit 1; }; \
+	  echo "  [ok] $$name: $$(wc -c < $(TESTS)/sxlink/$$name/c.elf) bytes, $$(cut -d' ' -f1-2 $(TESTS)/sxlink/$$name/meta.txt 2>/dev/null || head -c 20 $(TESTS)/sxlink/$$name/meta.txt) patches"; \
+	done
+	@# the C-linked hello must still print 42, so the comparison above is not
+	@# two identical failures
+	$(call assert-out,$(TESTS)/sxlink/sxlink_hello/sx.elf,42)
+	@# a missing dump is a clear error, not a silently short file
+	@if ./tools/sxlink $(TESTS)/sxlink/sxlink_hello/c.elf $(TESTS)/sxlink/nope $(TESTS)/sxlink/bad.elf >/dev/null 2>&1; then \
+	  echo "[FAIL] sxlink accepted a dump directory that does not exist"; exit 1; fi
+	@./tools/sxlink $(TESTS)/sxlink/sxlink_hello/c.elf $(TESTS)/sxlink/nope $(TESTS)/sxlink/bad.elf 2>&1 >/dev/null | grep -q 'cannot read code.bin'
+	@# and a file that is not an ELF is refused before anything is written
+	@if ./tools/sxlink Makefile $(TESTS)/sxlink/sxlink_hello $(TESTS)/sxlink/bad2.elf >/dev/null 2>&1; then \
+	  echo "[FAIL] sxlink accepted a non-ELF linked file"; exit 1; fi
+	@./tools/sxlink Makefile $(TESTS)/sxlink/sxlink_hello $(TESTS)/sxlink/bad2.elf 2>&1 >/dev/null | grep -q 'not an ELF'
+	@echo "[OK] sxlink: five fixtures link byte-identically to write_elf and run identically; the dump changes no emitted byte; missing dump and non-ELF input are clear errors"
+
+native-test: test-native-sxlink
+
+# ---------------------------------------------------------------------------
+# test-read-bytes: read_bytes(path, xs) appends the WHOLE file to a byte buffer
+# and gives the count, or -1 when the file cannot be read. It is the reader
+# that tools/sxlink.sa needs, because read_file goes through a C string and
+# stops at the first NUL -- an ELF image is mostly NUL. A byte buffer is an
+# ordinary list of numbers, so `xs[i]` reads it back and `len` bounds it.
+#
+# The round trip below goes through a NUL byte and a 0xFF byte on purpose, and
+# the failure leg pins that a missing file appends nothing rather than
+# half-filling the buffer. seed-min refuses read_bytes, like every other late
+# builtin, and the native backend has no file surface at all.
+# ---------------------------------------------------------------------------
+.PHONY: test-read-bytes
+test-read-bytes: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@# the program takes its scratch directory as arg(1), because assert-out
+	@# owns the whole recipe line and a `cd` in front of it would be swallowed
+	@printf 'hold dir = arg(1)\nhold p1 = concat(dir, "/WRITEBIN")\nhold p2 = concat(dir, "/WRITEBIN2")\nhold xs = []\nxs = push(xs, 72)\nxs = push(xs, 0)\nxs = push(xs, 255)\nxs = push(xs, 10)\nhold wrote = write_bytes(p1, xs)\nshow wrote\nhold ys = []\nhold got = read_bytes(p1, ys)\nshow got\nshow len(ys)\nshow ys[0]\nshow ys[1]\nshow ys[2]\nshow ys[3]\nhold twice = read_bytes(p1, ys)\nshow twice\nshow len(ys)\nshow ys[4]\nhold miss = read_bytes(concat(dir, "/READBIN-MISSING"), ys)\nshow miss\nshow len(ys)\nhold round = write_bytes(p2, ys)\nshow round\nshow len(ys)\n' > $(TESTS)/read_bytes.sa
+	@rm -rf $(TESTS)/read_bytes_run && mkdir -p $(TESTS)/read_bytes_run
+	./$(GEN2) $(TESTS)/read_bytes.sa $(TESTS)/read_bytes.c >/dev/null
+	@if grep -q '#error' $(TESTS)/read_bytes.c; then echo "[FAIL] read_bytes: #error in the generated C"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/read_bytes $(TESTS)/read_bytes.c
+	$(call assert-out,./$(TESTS)/read_bytes '$(CURDIR)/$(TESTS)/read_bytes_run',1\n4\n4\n72\n0\n255\n10\n4\n8\n72\n-1\n8\n1\n8)
+	@# The bytes on disk are checked by the program itself -- it reads them back
+	@# and prints every one, including the NUL and the 0xFF, and the assert-out
+	@# above compares the whole stdout. Only the file sizes are checked here,
+	@# because a C string would have stopped at the NUL and a `wc -c` of 4 is
+	@# what says it did not. (No od/hexdump: DEPENDENCY.md lists the utilities
+	@# the recipes may use, and that list is kept short on purpose.)
+	@test "$$(wc -c < $(TESTS)/read_bytes_run/WRITEBIN)" = 4 \
+	  || { echo "[FAIL] read_bytes: write_bytes did not write the NUL byte"; exit 1; }
+	@# a second read of the same file APPENDS rather than replaces: that is the
+	@# documented contract (a byte buffer is an ordinary list and `push` grows
+	@# it), so writing the buffer back out gives the four bytes twice
+	@test "$$(wc -c < $(TESTS)/read_bytes_run/WRITEBIN2)" = 8 \
+	  || { echo "[FAIL] read_bytes: the appended buffer did not round-trip"; exit 1; }
+	@# seed-min refuses read_bytes with the same diagnostic every other late
+	@# builtin gets, and so does the native backend, which has no file surface
+	@printf 'hold xs = []\nhold n = read_bytes("x", xs)\nshow n\n' > $(TESTS)/read_bytes_seed.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/read_bytes_seed.sa > /dev/null 2>$(TESTS)/read_bytes_seed.err; then \
+	  echo "[FAIL] seed-min accepted read_bytes without implementing it"; exit 1; fi
+	@grep -q 'call names an unknown function or builtin' $(TESTS)/read_bytes_seed.err \
+	  || { echo "[FAIL] seed-min refused read_bytes without a clear diagnostic"; cat $(TESTS)/read_bytes_seed.err; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/read_bytes_seed.sa $(TESTS)/read_bytes_seed.elf 2>/dev/null; then \
+	  echo "[FAIL] native accepted read_bytes without implementing it"; exit 1; fi
+	@echo "[OK] read_bytes: whole-file binary read into a byte buffer (NUL and 0xFF survive), a second read appends, -1 on a missing file with the buffer untouched; seed-min and native refuse it"
+
+test-read-bytes: $(NATIVE_BIN)
+
 .PHONY: test-sxpkg-online-optin
 test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 	rm -rf $(TESTS)/sxpkg-optin && mkdir -p $(TESTS)/sxpkg-optin/p $(TESTS)/sxpkg-optin/mock
@@ -3509,7 +3634,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-sxpkg-sayanox-logic test-language-deps
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-sxpkg-sayanox-logic test-read-bytes test-language-deps
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -3551,7 +3676,9 @@ all-sayanox:
 	@echo "  done: compiler, formatter, package tool (local commands plus"
 	@echo "        publish, install-local and the local sync/fetch), language"
 	@echo "        server, IR translator, LSP folder index, LSP test client,"
-	@echo "        byte-buffer + bitwise builtins (all .sa)"
+	@echo "        byte-buffer + bitwise builtins, the read_bytes binary"
+	@echo "        reader, and the native backend's ELF image writer +"
+	@echo "        rel32 linker (tools/sxlink.sa, byte-identical to C)"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
 	@exit 1
@@ -3842,7 +3969,7 @@ test: true-selfhost
 # `make seed-bin` (it is a .PHONY target, so it always rebuilds from source).
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
-	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) tools/emit_to_ir tools/emit_to_ir.c
+	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) tools/emit_to_ir tools/emit_to_ir.c tools/sxlink
 
 # ---------------------------------------------------------------------------
 # doctor: check core tools. Expanded feature gates also use POSIX utilities;

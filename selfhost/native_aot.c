@@ -4163,6 +4163,67 @@ static void emit_gc(void){
   }
 }
 
+/* ================= the linker seam =================
+ * SX_LINK_DUMP=<dir> dumps exactly the three inputs of the image writer -- the
+ * code bytes, the data bytes and the resolved rel32 records -- so
+ * tools/sxlink.sa can rebuild the linked ELF on its own and be held to the
+ * same bytes (make test-native-sxlink). It is the same convention as
+ * SX_EMIT_LOG: off by default, and it changes no emitted byte. The dump is the
+ * honest seam, not a copy of the result: no ELF header, no program header, no
+ * page rounding and no displacement reaches the file, because those are the
+ * part the Sayanox linker has to compute itself.
+ */
+static void link_seam(void){
+  const char *dir=getenv("SX_LINK_DUMP");
+  if(!dir||!*dir) return;
+  char p[4096];
+  FILE *f;
+  snprintf(p,sizeof p,"%s/code.bin",dir);
+  f=fopen(p,"wb");
+  if(!f){ fprintf(stderr,"native_aot: cannot write %s\n",p); exit(1); }
+  if(cn&&fwrite(code,1,cn,f)!=cn){ fprintf(stderr,"native_aot: write error on %s\n",p); exit(1); }
+  fclose(f);
+  snprintf(p,sizeof p,"%s/data.bin",dir);
+  f=fopen(p,"wb");
+  if(!f){ fprintf(stderr,"native_aot: cannot write %s\n",p); exit(1); }
+  if(dn&&fwrite(data,1,dn,f)!=dn){ fprintf(stderr,"native_aot: write error on %s\n",p); exit(1); }
+  fclose(f);
+  snprintf(p,sizeof p,"%s/patch.bin",dir);
+  f=fopen(p,"wb");
+  if(!f){ fprintf(stderr,"native_aot: cannot write %s\n",p); exit(1); }
+  /* One 16-byte record per rel32 site: the site, then its resolved target,
+     both as offsets inside the image. The call records come first and meta.txt
+     says how many of them there are, which is the only thing a reader cannot
+     recover from patch.bin itself. */
+  for(int i=0;i<npc;i++){
+    size_t to;
+    if(patch_call[i].kind==PFN){
+      if(F[patch_call[i].idx].start<0){
+        fprintf(stderr,"native_aot: function '%s' was called but never emitted\n",F[patch_call[i].idx].name);
+        exit(1);
+      }
+      to=(size_t)F[patch_call[i].idx].start;
+    } else to=builtin_off[patch_call[i].idx];
+    uint64_t rec[2]; rec[0]=(uint64_t)patch_call[i].at; rec[1]=(uint64_t)to;
+    if(fwrite(rec,sizeof rec,1,f)!=1){ fprintf(stderr,"native_aot: write error on %s\n",p); exit(1); }
+  }
+  for(int i=0;i<npr;i++){
+    /* The r12 target is the data segment's image offset, which is the code
+       segment rounded up to whole pages. Sayanox recomputes that rounding from
+       cn (round_page in tools/sxlink.sa); this line is the same expression
+       write_elf uses, written down so the record is self-contained. */
+    size_t r12_to=((cn+4095)&~(size_t)4095);
+    uint64_t rec[2]; rec[0]=(uint64_t)patch_r12[i].at; rec[1]=(uint64_t)r12_to;
+    if(fwrite(rec,sizeof rec,1,f)!=1){ fprintf(stderr,"native_aot: write error on %s\n",p); exit(1); }
+  }
+  fclose(f);
+  snprintf(p,sizeof p,"%s/meta.txt",dir);
+  f=fopen(p,"wb");
+  if(!f){ fprintf(stderr,"native_aot: cannot write %s\n",p); exit(1); }
+  fprintf(f,"%d %d %zu %zu\n",npc,npr,cn,dn);
+  fclose(f);
+}
+
 /* ================= ELF ================= */
 #pragma pack(push,1)
 typedef struct{unsigned char i[16];uint16_t t,m;uint32_t v;uint64_t e,ph,sh;uint32_t f;uint16_t eh,ps,pn,ss,sn,si;}EH;
@@ -4346,6 +4407,7 @@ int main(int argc,char**argv){
     tab[n++]=(uint64_t)OFF_SCR;
     tab[n]=0;
   }
+  link_seam();
   write_elf(argv[2]);
   if(ilogf){ ilogc("code bytes: %zu",cn); fclose(ilogf); }
   free(src);

@@ -25,11 +25,44 @@ The C seed exists only to build gen1; preferred path is `make true-selfhost` (se
 ## Local workflow
 
 ```sh
+make doctor
 make true-selfhost
+make gen3
 make native-test
 ```
 
 For changes to compiler stages, also inspect the generated output and run the repository CI checks.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the four gates above on every push to `main`
+and every pull request, on a clean checkout, with `python`, `node`, `ruby`,
+`perl`, `curl` and `wget` replaced by shims that log and fail — a gate that
+reaches for an interpreter or the network fails instead of quietly passing.
+
+They run as four jobs, because sequentially they do not fit in one:
+
+| job | runs | needs |
+|---|---|---|
+| `bootstrap` | `make doctor`, `make true-selfhost` | — |
+| `fixed-point` | `make gen3` | `bootstrap`'s `gen2` |
+| `native` | `make native-test` | `bootstrap`'s `seed-min` and `gen2` |
+| `audit` | tracked-artifact check, `make all-sayanox` inventory | — |
+
+The only thing crossing a job boundary is a binary the `bootstrap` job built
+with `make` from tracked sources. `.github/workflows/full-bootstrap.yml`
+re-runs the whole chain in one job, in order, with no artifacts and no cache,
+nightly and on demand; if that goes red while CI is green, the parallel shape
+hid something and `ci.yml` is what needs fixing.
+
+`make all-sayanox` is **supposed to fail**: it prints the measured inventory of
+what is still not Sayanox and exits 1, and `make test-doc-claims` fails if it
+ever starts returning 0 without `docs/ALL_SAYANOX_PHASE.md`, `docs/STATUS.md`
+and `README.md` being updated in the same change. The `audit` job asserts that
+it still refuses.
+
+Before opening a pull request, run the four targets locally. A gate that only
+passes in CI is not a gate.
 
 ## Adding a language feature
 
