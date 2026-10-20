@@ -142,13 +142,18 @@ Tests: `test-sxpkg`, `test-sxpkg-polish`, `test-sxpkg-online-local`,
 ### Phase D — native backend in Sayanox
 
 Port `selfhost/native_aot.c` (4,415 lines of x86-64 ELF emission) to Sayanox.
-This is the largest piece and needs language features that do not exist yet:
+This is the largest piece. It started out needing three language features that
+did not exist; all three are now answered (the third by a different route than
+expected), and what is left is the port itself:
 
 * a byte buffer with indexed writes at arbitrary offsets (`write_out` is
   append-only);
 * integer bit operations for encodings (shifts, masks, `&`, `|`, `^`);
 * a syscall/memory surface, or a way to emit an ELF section layout without raw
-  pointers.
+  pointers — **resolved the other way on 2026-10-20**: `tools/sxlink.sa` emits
+  a complete ELF image layout with no pointers and no syscall surface, out of
+  an ordinary list of numbers, so this bullet is closed by step 3 below rather
+  than by a new language feature.
 
 **Step 1 of Phase D (done, 2026-10-18): the language surface.** Two of the
 three bullets are now in the language and gated. A byte buffer is an ordinary
