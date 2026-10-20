@@ -25,8 +25,8 @@ Two unrelated things were wrong and both are addressed here:
 | `.github/workflows/full-bootstrap.yml` | — | new | nightly sequential run, no hand-off, 90 min |
 | `selfhost/compiler_min.sa` | 19,540 lines | 19,577 lines | the `read_bytes` builtin, wired in 16 places |
 | `selfhost/native_aot.c` | 4,353 lines | 4,415 lines | `link_seam()`: the `SX_LINK_DUMP` dump |
-| `tools/sxlink.sa` | — | 334 lines | the ELF image writer and rel32 linker, in Sayanox |
-| `Makefile` | 4,860 lines | 4,987 lines | `test-read-bytes`, `test-native-sxlink`, `tools/sxlink`, `clean` |
+| `tools/sxlink.sa` | — | 337 lines | the ELF image writer and rel32 linker, in Sayanox |
+| `Makefile` | 4,860 lines | 5,002 lines | `test-read-bytes`, `test-native-sxlink` (incl. the five ELF layout pins), `tools/sxlink`, `clean` |
 
 ### `read_bytes(path, xs)`
 
@@ -134,6 +134,58 @@ both are `chmod +x`'d, run, and their stdout+stderr must match. Plus a
 `show 42` assertion on the hello fixture so the comparison cannot be two
 identical failures, and two refusal legs (a missing dump directory, and
 `Makefile` passed where an ELF belongs).
+
+Byte identity is only evidence while the two implementations agree, so the gate
+also pins the layout `sxlink` hard-codes: the ELF ident bytes, `e_phnum == 3`,
+the entry point at `BASE + 0x1000` (4198400), and `p_offset` of the code
+segment (4096) and the data segment (12288). A change on the C side of
+`write_elf()` now fails with the reason instead of appearing as an unexplained
+`cmp` diff. A change on *both* sides still fails, because what is pinned is the
+documented contract, not whatever the two happen to share today.
+
+## Getting CI to the new shape took three runs
+
+The scheduling change is the easy half of a workflow edit; the hand-off between
+jobs is the half that has to be proved. All three failures were in the hand-off,
+none in a gate:
+
+| run | what failed | cause |
+|---|---|---|
+| [`39466336851`](https://github.com/sayan9168/sayanox/actions/runs/39466336851) | gates 3 and 4, at `chmod +x selfhost/gen2 ...` before `make` ran | the restore assumed where the artifact would be extracted, and assumed wrong; the download step reported success with nothing at those paths |
+| [`39468807496`](https://github.com/sayan9168/sayanox/actions/runs/39468807496) | the same two, now naming all three files | same assumption — but the step was made to report each missing file by name, which is what turned an exit code into a diagnosis |
+| [`39471474117`](https://github.com/sayan9168/sayanox/actions/runs/39471474117) | gate 3 only, at 12m22s, **inside** `make gen3` | `selfhost/test_compiler_source_features.sh` greps four files — `gen1_min.c`, `gen2.c`, `gen3.c`, `gen4.c` — and only the three binaries had been handed over. Under `set -eu` a missing file is a silent exit 1 |
+
+What the shape is now: the bootstrap job stages the binaries **and the two
+generated C files** flat in `gate-binaries/`, the consumers download into
+`gate-binaries/` and *search* it for each name, copy each to the path the
+Makefile wants, `touch` the `.c` files and then the binaries (an artifact does
+not preserve mtimes, and make rebuilds a target whose prerequisite is the same
+age as it — without the touch, gate 3 would rebuild gen2 for four minutes and
+stop being the gate it is), and finally *run* gen2 — and seed-min, in gate 4 —
+on `selfhost/mini_in.sa`, because the point of a hand-off is a compiler that
+works, not three files that exist.
+
+Gate 4 passed on the third run, before the gen3 cause was known: `native-test`
+needs the binaries but not the generated C.
+
+The fourth run, [`39477167629`](https://github.com/sayan9168/sayanox/actions/runs/39477167629)
+on `e6b6632`, was green end to end — the first time these four gates reported a
+result on GitHub instead of a runner timeout:
+
+| job | window | wall |
+|---|---|---|
+| `audit` | 18:43:00 → 18:43:06Z | 6s |
+| `bootstrap` (gates 1+2) | 18:43:01 → 18:57:30Z | 14m29s |
+| `fixed-point` (gate 3) | 18:57:32 → 19:07:16Z | 9m44s |
+| `native` (gate 4) | 18:57:33 → 19:09:14Z | 11m41s |
+
+Worth stating plainly, because it is the part that is easy to over-claim: the
+parallel shape did **not** make CI faster. The run took 26m17s wall — *longer*
+than the 25m0s ceiling that was killing it — since gates 3 and 4 still wait for
+`bootstrap`, and the critical path is 14m29s + 11m41s. What changed is that the
+ceiling now applies per job, where the longest job is 14m29s against a
+45m0s limit, so a gate that gets slow fails as that gate, with its own log,
+instead of the whole run being cancelled at a round number.
 
 ## What this does not claim
 

@@ -1,7 +1,7 @@
 === ALL-SAYANOX: next phase, not implemented ===
   seed                           2035 lines  selfhost/seed/sxc_seed_min.c
   native-backend                 4415 lines  selfhost/native_aot.c
-  build-driver                   4987 lines  Makefile
+  build-driver                   5002 lines  Makefile
   build-scripts                    25 files  POSIX sh
   sayanox-source                  280 files  .sa
   done: compiler, formatter, package tool (local commands plus
@@ -12,5 +12,5 @@
         rel32 linker (tools/sxlink.sa, byte-identical to C)
   plan: docs/ALL_SAYANOX_PHASE.md
 [FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim
-make: *** [Makefile:3684: all-sayanox] Error 1
+make: *** [Makefile:3699: all-sayanox] Error 1
 all-sayanox exit=2

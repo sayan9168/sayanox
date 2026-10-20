@@ -18,7 +18,7 @@ smallest possible bootstrap seam and the build driver.
 | All tests and fixtures | Sayanox + `sh` drivers | 280 `.sa` files, 1,183,149 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,415 lines | no — its ELF image writer and rel32 linker are now also Sayanox (`tools/sxlink.sa`, byte-identical); the C one still produces the executables the gates run |
-| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,987 lines | no |
+| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 5,002 lines | no |
 
 Ten tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
 `inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
@@ -206,7 +206,11 @@ string-ordering program and a multi-page code segment — each compiled twice,
 with and without the dump, and the two images must be identical; then the
 Sayanox-linked image must be **byte-identical** to the C-linked one and must
 **run** and print the same thing. Missing dump directory and a non-ELF input
-are clear errors.
+are clear errors. Because byte identity is only evidence while the two
+implementations agree, the gate also pins the layout `sxlink` hard-codes — the
+ELF ident, `e_phnum == 3`, the entry point at `BASE + 0x1000`, and `p_offset`
+of the code and data segments — so a change on the C side fails with the reason
+instead of as an unexplained `cmp` diff.
 
 What step 3 does *not* claim, stated plainly:
 

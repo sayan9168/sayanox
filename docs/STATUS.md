@@ -11,7 +11,10 @@ byte-identically to C's `write_elf()` and its output runs
 emitted byte). `selfhost/native_aot.c` is still C and its row below stays.
 CI now runs the four gates as parallel jobs — one sequential job under
 `timeout-minutes: 25` was being killed by the runner at 25m15s, so `main`
-reported a timeout instead of a result — and `.github/workflows/full-bootstrap.yml`
+reported a timeout instead of a result; the first green run of the new shape is
+[`39477167629`](https://github.com/sayan9168/sayanox/actions/runs/39477167629),
+26m17s wall with a longest job of 14m29s against a per-job 45m0s limit — and
+`.github/workflows/full-bootstrap.yml`
 re-runs the whole chain in one job nightly so the no-hand-off claim stays
 verified. Logs: [`2026-10-20 read_bytes + sxlink`](gate-logs/2026-10-20-read-bytes-sxlink/).
 
@@ -93,7 +96,7 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
 | `selfhost/native_aot.c` | C | 4,415 lines | Phase D — the language surface and the ELF image writer/linker are done; what is left is the scanner, parser, inference, encoder tree, runtime and collector |
-| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,987 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `Makefile` + 25 `sh` scripts | make / POSIX sh | 5,002 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
 package tool — now including `publish`, `install-local` and the
