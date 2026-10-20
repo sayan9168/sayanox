@@ -74,6 +74,11 @@ jobs:
       # gen3 and native-test need a compiler that THIS job built. Handing the
       # binaries over is what makes the three gates parallel; the alternative
       # was rebuilding the whole chain in each job (3x 25 minutes of runner).
+      - name: Show exactly what is about to be handed over
+        run: |
+          set -eux
+          ls -l selfhost/gen2 selfhost/gen2.c selfhost/gen1_min selfhost/gen1_min.c selfhost/seed/sxc_seed_min
+
       - name: Upload gate binaries (gen2, gen2.c, seed-min)
         uses: actions/upload-artifact@v7
         with:
@@ -120,10 +125,32 @@ jobs:
         with:
           name: gate-binaries
 
-      - name: Keep the handed-over binaries executable
+      # The artifact is extracted into $GITHUB_WORKSPACE with the paths it was
+      # uploaded under, so the three binaries land back where make expects them.
+      # This step says out loud what actually arrived before it relies on it:
+      # a hand-off between jobs is the one part of this workflow that is not a
+      # make target, so it is the part that has to show its working.
+      - name: Put the handed-over binaries back where make expects them
         run: |
-          set -e
-          chmod +x selfhost/gen2 selfhost/gen1_min selfhost/seed/sxc_seed_min
+          set -eux
+          pwd
+          ls -l
+          ls -l selfhost || true
+          ls -l selfhost/seed || true
+          find . -maxdepth 3 \( -name 'gen2' -o -name 'gen1_min' -o -name 'sxc_seed_min' \) -print
+          missing=0
+          for b in selfhost/gen2 selfhost/gen1_min selfhost/seed/sxc_seed_min; do
+            if [ -f "$b" ]; then
+              chmod 0755 "$b"
+            else
+              echo "::error::$b did not arrive from the bootstrap job"
+              missing=1
+            fi
+          done
+          test "$missing" = 0
+          test -x selfhost/gen2
+          test -x selfhost/gen1_min
+          test -x selfhost/seed/sxc_seed_min
 
       - name: "make gen3 (gen3 == gen4 byte-identical fixed point)"
         run: make gen3
@@ -161,10 +188,32 @@ jobs:
         with:
           name: gate-binaries
 
-      - name: Keep the handed-over binaries executable
+      # The artifact is extracted into $GITHUB_WORKSPACE with the paths it was
+      # uploaded under, so the three binaries land back where make expects them.
+      # This step says out loud what actually arrived before it relies on it:
+      # a hand-off between jobs is the one part of this workflow that is not a
+      # make target, so it is the part that has to show its working.
+      - name: Put the handed-over binaries back where make expects them
         run: |
-          set -e
-          chmod +x selfhost/gen2 selfhost/gen1_min selfhost/seed/sxc_seed_min
+          set -eux
+          pwd
+          ls -l
+          ls -l selfhost || true
+          ls -l selfhost/seed || true
+          find . -maxdepth 3 \( -name 'gen2' -o -name 'gen1_min' -o -name 'sxc_seed_min' \) -print
+          missing=0
+          for b in selfhost/gen2 selfhost/gen1_min selfhost/seed/sxc_seed_min; do
+            if [ -f "$b" ]; then
+              chmod 0755 "$b"
+            else
+              echo "::error::$b did not arrive from the bootstrap job"
+              missing=1
+            fi
+          done
+          test "$missing" = 0
+          test -x selfhost/gen2
+          test -x selfhost/gen1_min
+          test -x selfhost/seed/sxc_seed_min
 
       - name: "make native-test (x86-64 backend - subset, use, functions, parity)"
         run: make native-test

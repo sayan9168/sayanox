@@ -102,10 +102,17 @@ collides with POSIX `link(2)` from `<unistd.h>`. It is `link_image` here.
 | `make test-read-bytes` (new) | `[OK] read_bytes: ...` | [`read-bytes.log`](read-bytes.log) |
 | `make test-native-sxlink` (new) | `[OK] sxlink: five fixtures ...` | [`native-sxlink.log`](native-sxlink.log) |
 | `make gen3` | `GEN3-OK`, `gen3.c == gen4.c` byte-identical | [`gen3.log`](gen3.log) |
-| `make true-selfhost` | see log | [`true-selfhost.log`](true-selfhost.log) |
-| `make native-test` | see log | [`native-test.log`](native-test.log) |
-| `make test-language-deps` | see log | [`language-deps.log`](language-deps.log) |
-| `make all-sayanox` | **still exits 1**, on purpose | [`all-sayanox.log`](all-sayanox.log) |
+| `make true-selfhost` | `TRUE-SELFHOST-MIN-OK`, 197 `[OK]` lines | [`true-selfhost.log`](true-selfhost.log) |
+| `make native-test` | `NATIVE-TEST-OK`, 184 `[OK]` lines | [`native-test.log`](native-test.log) |
+| `make test-language-deps` | `[OK] language deps: no bash/awk/sed/python/perl/node/ruby invoked` | [`language-deps.log`](language-deps.log) |
+| `make all-sayanox` | **still refuses** (`exit 1`), on purpose, printing the updated inventory | [`all-sayanox.log`](all-sayanox.log) |
+
+All four were re-run after the compiler change, on this checkout, on a 2-core
+box: `true-selfhost` 17m, `gen3` 11m, `native-test` 8m. `test-doc-claims` is
+inside `true-selfhost` and is the gate that forbids this directory from
+claiming a phase is finished: it fails if `make all-sayanox` ever returns 0
+without `docs/ALL_SAYANOX_PHASE.md`, `docs/STATUS.md` and `README.md` moving in
+the same change.
 
 `test-read-bytes` is on the `true-selfhost` list, `test-native-sxlink` on the
 `native-test` list, so both run in CI on every PR.
