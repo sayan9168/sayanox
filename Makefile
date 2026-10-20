@@ -1997,6 +1997,21 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 	@# the C-linked hello must still print 42, so the comparison above is not
 	@# two identical failures
 	$(call assert-out,$(TESTS)/sxlink/sxlink_hello/sx.elf,42)
+	@# Byte identity to write_elf() is only evidence while the two agree. These
+	@# pin the layout sxlink hard-codes, so a change on the C side fails here
+	@# with the reason instead of appearing as an unexplained cmp diff -- and a
+	@# change on BOTH sides still fails, because the contract below is the
+	@# documented one, not whatever the two implementations happen to share.
+	@test "$$(od -An -tx1 -v -N 8 $(TESTS)/sxlink/sxlink_hello/c.elf | tr -d ' \n')" = 7f454c4602010100 \
+	  || { echo "[FAIL] sxlink: the ELF ident bytes moved"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 56 -N 2 $(TESTS)/sxlink/sxlink_hello/c.elf | tr -d ' \n')" = 3 \
+	  || { echo "[FAIL] sxlink: write_elf no longer emits exactly three program headers"; exit 1; }
+	@test "$$(od -An -tu8 -v -j 24 -N 8 $(TESTS)/sxlink/sxlink_hello/c.elf | tr -d ' \n')" = 4198400 \
+	  || { echo "[FAIL] sxlink: the entry point is no longer BASE 0x400000 + the 0x1000 code offset"; exit 1; }
+	@test "$$(od -An -tu8 -v -j 128 -N 8 $(TESTS)/sxlink/sxlink_hello/c.elf | tr -d ' \n')" = 4096 \
+	  || { echo "[FAIL] sxlink: the code segment (phdr 1, p_offset at 128) no longer starts on page 1"; exit 1; }
+	@test "$$(od -An -tu8 -v -j 184 -N 8 $(TESTS)/sxlink/sxlink_hello/c.elf | tr -d ' \n')" = 12288 \
+	  || { echo "[FAIL] sxlink: the data segment (phdr 2, p_offset at 184) no longer follows the page-rounded code segment"; exit 1; }
 	@# a missing dump is a clear error, not a silently short file
 	@if ./tools/sxlink $(TESTS)/sxlink/sxlink_hello/c.elf $(TESTS)/sxlink/nope $(TESTS)/sxlink/bad.elf >/dev/null 2>&1; then \
 	  echo "[FAIL] sxlink accepted a dump directory that does not exist"; exit 1; fi
@@ -2005,7 +2020,7 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 	@if ./tools/sxlink Makefile $(TESTS)/sxlink/sxlink_hello $(TESTS)/sxlink/bad2.elf >/dev/null 2>&1; then \
 	  echo "[FAIL] sxlink accepted a non-ELF linked file"; exit 1; fi
 	@./tools/sxlink Makefile $(TESTS)/sxlink/sxlink_hello $(TESTS)/sxlink/bad2.elf 2>&1 >/dev/null | grep -q 'not an ELF'
-	@echo "[OK] sxlink: five fixtures link byte-identically to write_elf and run identically; the dump changes no emitted byte; missing dump and non-ELF input are clear errors"
+	@echo "[OK] sxlink: five fixtures link byte-identically to write_elf and run identically; the dump changes no emitted byte; the ELF ident, the three program headers, the entry point and the page-1 code offset are pinned; missing dump and non-ELF input are clear errors"
 
 native-test: test-native-sxlink
 

@@ -77,12 +77,20 @@ jobs:
       # runner). They are staged flat, because the first two runs of this shape
       # showed that the directory layout inside an artifact is not something a
       # later job should have to guess.
+      # The two generated C files travel with the binaries because
+      # selfhost/test_compiler_source_features.sh -- which `make gen3` runs --
+      # greps gen1_min.c, gen2.c, gen3.c and gen4.c for the shape of the
+      # compiler's own output. Without them the gate fails on a missing file
+      # rather than on a wrong one, which is exactly what happened in run
+      # 39471474117.
       - name: Stage the gate binaries flat
         run: |
           set -eux
           mkdir -p gate-binaries
           cp selfhost/gen2 gate-binaries/gen2
+          cp selfhost/gen2.c gate-binaries/gen2.c
           cp selfhost/gen1_min gate-binaries/gen1_min
+          cp selfhost/gen1_min.c gate-binaries/gen1_min.c
           cp selfhost/seed/sxc_seed_min gate-binaries/sxc_seed_min
           chmod 0755 gate-binaries/gen2 gate-binaries/gen1_min gate-binaries/sxc_seed_min
           ls -l gate-binaries
@@ -136,9 +144,14 @@ jobs:
           find gate-binaries -type f -print
           mkdir -p selfhost/seed selfhost/seed_tests
           missing=0
-          for pair in "gen2:selfhost/gen2" "gen1_min:selfhost/gen1_min" "sxc_seed_min:selfhost/seed/sxc_seed_min"; do
+          for pair in \
+            "gen2:selfhost/gen2" \
+            "gen2.c:selfhost/gen2.c" \
+            "gen1_min:selfhost/gen1_min" \
+            "gen1_min.c:selfhost/gen1_min.c" \
+            "sxc_seed_min:selfhost/seed/sxc_seed_min"; do
             name=${pair%%:*}
-            dest=${pair#*:}
+            dest=${pair##*:}
             src=$(find gate-binaries -type f -name "$name" -print | head -n 1)
             if [ -z "$src" ]; then
               echo "::error::$name did not arrive from the bootstrap job"
@@ -149,7 +162,14 @@ jobs:
             chmod 0755 "$dest"
           done
           test "$missing" = 0
-          ls -l selfhost/gen2 selfhost/gen1_min selfhost/seed/sxc_seed_min
+          # make rebuilds a target whose prerequisite is the same age as it, and
+          # an artifact does not preserve mtimes, so every restored file lands
+          # with the extraction time. Without this the job that just received a
+          # built gen2 would spend four minutes building it again from the
+          # restored gen2.c -- and `make gen3` would stop being the gate it is.
+          touch selfhost/gen2.c selfhost/gen1_min.c
+          touch selfhost/gen1_min selfhost/gen2 selfhost/seed/sxc_seed_min
+          ls -l selfhost/gen2 selfhost/gen2.c selfhost/gen1_min selfhost/gen1_min.c selfhost/seed/sxc_seed_min
           # the point of the hand-off: gen2 is the compiler make gen3 will use,
           # so it has to actually run here, not just exist
           ./selfhost/gen2 selfhost/mini_in.sa selfhost/seed_tests/_handoff.c
@@ -200,9 +220,14 @@ jobs:
           find gate-binaries -type f -print
           mkdir -p selfhost/seed selfhost/seed_tests
           missing=0
-          for pair in "gen2:selfhost/gen2" "gen1_min:selfhost/gen1_min" "sxc_seed_min:selfhost/seed/sxc_seed_min"; do
+          for pair in \
+            "gen2:selfhost/gen2" \
+            "gen2.c:selfhost/gen2.c" \
+            "gen1_min:selfhost/gen1_min" \
+            "gen1_min.c:selfhost/gen1_min.c" \
+            "sxc_seed_min:selfhost/seed/sxc_seed_min"; do
             name=${pair%%:*}
-            dest=${pair#*:}
+            dest=${pair##*:}
             src=$(find gate-binaries -type f -name "$name" -print | head -n 1)
             if [ -z "$src" ]; then
               echo "::error::$name did not arrive from the bootstrap job"
@@ -213,7 +238,14 @@ jobs:
             chmod 0755 "$dest"
           done
           test "$missing" = 0
-          ls -l selfhost/gen2 selfhost/gen1_min selfhost/seed/sxc_seed_min
+          # make rebuilds a target whose prerequisite is the same age as it, and
+          # an artifact does not preserve mtimes, so every restored file lands
+          # with the extraction time. Without this the job that just received a
+          # built gen2 would spend four minutes building it again from the
+          # restored gen2.c -- and `make gen3` would stop being the gate it is.
+          touch selfhost/gen2.c selfhost/gen1_min.c
+          touch selfhost/gen1_min selfhost/gen2 selfhost/seed/sxc_seed_min
+          ls -l selfhost/gen2 selfhost/gen2.c selfhost/gen1_min selfhost/gen1_min.c selfhost/seed/sxc_seed_min
           # native-test compares three backends on the same sources, so both the
           # seed-min compiler and gen2 have to run, not just exist
           ./selfhost/seed/sxc_seed_min selfhost/mini_in.sa > selfhost/seed_tests/_handoff.c
