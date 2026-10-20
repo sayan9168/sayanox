@@ -11,12 +11,13 @@ byte-identically to C's `write_elf()` and its output runs
 emitted byte). `selfhost/native_aot.c` is still C and its row below stays.
 CI now runs the four gates as parallel jobs — one sequential job under
 `timeout-minutes: 25` was being killed by the runner at 25m15s, so `main`
-reported a timeout instead of a result; the first green run of the new shape is
-[`39477167629`](https://github.com/sayan9168/sayanox/actions/runs/39477167629),
-26m17s wall with a longest job of 14m29s against a per-job 45m0s limit — and
-`.github/workflows/full-bootstrap.yml`
-re-runs the whole chain in one job nightly so the no-hand-off claim stays
-verified. Logs: [`2026-10-20 read_bytes + sxlink`](gate-logs/2026-10-20-read-bytes-sxlink/).
+reported a timeout instead of a result. The new shape has been green twice,
+[`39477167629`](https://github.com/sayan9168/sayanox/actions/runs/39477167629)
+and [`39490134812`](https://github.com/sayan9168/sayanox/actions/runs/39490134812),
+at 26m17s and 21m57s wall with longest jobs of 14m29s and 12m20s against a
+per-job 45m0s limit: the headroom is per gate, and the total still moves with
+the runner. `.github/workflows/full-bootstrap.yml` re-runs the whole chain in
+one job nightly so the no-hand-off claim stays verified. Logs: [`2026-10-20 read_bytes + sxlink`](gate-logs/2026-10-20-read-bytes-sxlink/).
 
 Language-dependency update: the maintained toolchain is now C, make, POSIX sh
 and Sayanox — bash, awk, sed, Python, Perl, Node and Ruby are gone from the

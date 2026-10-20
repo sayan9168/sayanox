@@ -65,11 +65,14 @@ a hand-off is a compiler that works, not files that exist.
 
 Each job has its own `timeout-minutes: 45`. The first green run of this shape,
 [`39477167629`](https://github.com/sayan9168/sayanox/actions/runs/39477167629),
-took 26m17s wall with a longest job of 14m29s — the whole run is *not* faster
-than the single sequential job it replaced, which the runner killed at 25m0s,
-because gates 3 and 4 still wait for `bootstrap`. What the split buys is that
-the ceiling applies per job, so a gate that gets slow fails as that gate, with
-its own log, instead of the run being cancelled at a round number.
+took 26m17s wall with a longest job of 14m29s; a second,
+[`39490134812`](https://github.com/sayan9168/sayanox/actions/runs/39490134812),
+took 21m57s with a longest job of 12m20s. The whole run is therefore *not*
+reliably faster than the single sequential job it replaced, which the runner
+killed at 25m0s, because gates 3 and 4 still wait for `bootstrap` and the total
+moves with the runner. What the split buys is that the ceiling applies per job,
+so a gate that gets slow fails as that gate, with its own log, instead of the
+run being cancelled at a round number.
 
 Beside it, `.github/workflows/full-bootstrap.yml` re-runs the whole chain in one
 job, in order, with no artifacts and no cache, nightly and on demand; if that

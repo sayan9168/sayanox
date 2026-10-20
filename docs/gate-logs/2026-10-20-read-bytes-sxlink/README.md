@@ -180,12 +180,19 @@ result on GitHub instead of a runner timeout:
 | `native` (gate 4) | 18:57:33 → 19:09:14Z | 11m41s |
 
 Worth stating plainly, because it is the part that is easy to over-claim: the
-parallel shape did **not** make CI faster. The run took 26m17s wall — *longer*
+parallel shape is **not** a speed-up. This run took 26m17s wall — *longer*
 than the 25m0s ceiling that was killing it — since gates 3 and 4 still wait for
 `bootstrap`, and the critical path is 14m29s + 11m41s. What changed is that the
 ceiling now applies per job, where the longest job is 14m29s against a
 45m0s limit, so a gate that gets slow fails as that gate, with its own log,
 instead of the whole run being cancelled at a round number.
+
+The docs-only follow-up `ae6d8e3` re-ran the same shape green
+([`39490134812`](https://github.com/sayan9168/sayanox/actions/runs/39490134812)):
+21m57s wall, `bootstrap` 12m20s, gate 3 5m49s, gate 4 9m31s, `audit` 6s. Two
+green runs at 26m17s and 21m57s — the total moves with the runner, and the same
+gate measured 9m44s and 5m49s on the two. So the total is not the number to
+watch and is not the number this change improves; the per-job headroom is.
 
 ## What this does not claim
 
