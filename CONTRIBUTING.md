@@ -63,16 +63,16 @@ built `gen2` would spend four minutes building it again from the restored
 *run* the compilers on `selfhost/mini_in.sa` before `make`, because the point of
 a hand-off is a compiler that works, not files that exist.
 
-Each job has its own `timeout-minutes: 45`. The first green run of this shape,
-[`39477167629`](https://github.com/sayan9168/sayanox/actions/runs/39477167629),
-took 26m17s wall with a longest job of 14m29s; a second,
-[`39490134812`](https://github.com/sayan9168/sayanox/actions/runs/39490134812),
-took 21m57s with a longest job of 12m20s. The whole run is therefore *not*
-reliably faster than the single sequential job it replaced, which the runner
-killed at 25m0s, because gates 3 and 4 still wait for `bootstrap` and the total
-moves with the runner. What the split buys is that the ceiling applies per job,
-so a gate that gets slow fails as that gate, with its own log, instead of the
-run being cancelled at a round number.
+Each job has its own `timeout-minutes: 45`. The first three green runs took
+26m17s, 21m57s and 29m31s wall, with longest jobs of 14m29s, 12m20s and 15m49s,
+and the spread *inside* one gate is wider than the spread between runs: `make
+gen3` measured 5m49s, 9m44s and 15m49s for the same bytes on three runners. So
+the whole run is *not* reliably faster than the single sequential job it
+replaced, which the runner killed at 25m0s, and its total is not a number worth
+quoting. What the split buys is that the ceiling applies per job: a slow runner
+costs minutes, and a genuinely slow gate fails as that gate, with its own log,
+instead of the run being cancelled at a round number that does not say which
+gate grew.
 
 Beside it, `.github/workflows/full-bootstrap.yml` re-runs the whole chain in one
 job, in order, with no artifacts and no cache, nightly and on demand; if that

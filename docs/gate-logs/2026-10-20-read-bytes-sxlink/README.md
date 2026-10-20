@@ -143,11 +143,11 @@ segment (4096) and the data segment (12288). A change on the C side of
 `cmp` diff. A change on *both* sides still fails, because what is pinned is the
 documented contract, not whatever the two happen to share today.
 
-## Getting CI to the new shape took three runs
+## Getting the hand-off right took three failures
 
 The scheduling change is the easy half of a workflow edit; the hand-off between
-jobs is the half that has to be proved. All three failures were in the hand-off,
-none in a gate:
+jobs is the half that has to be proved. Three runs failed before one reported a
+result, and all three failures were in the hand-off, none in a gate:
 
 | run | what failed | cause |
 |---|---|---|
@@ -180,19 +180,33 @@ result on GitHub instead of a runner timeout:
 | `native` (gate 4) | 18:57:33 → 19:09:14Z | 11m41s |
 
 Worth stating plainly, because it is the part that is easy to over-claim: the
-parallel shape is **not** a speed-up. This run took 26m17s wall — *longer*
-than the 25m0s ceiling that was killing it — since gates 3 and 4 still wait for
-`bootstrap`, and the critical path is 14m29s + 11m41s. What changed is that the
-ceiling now applies per job, where the longest job is 14m29s against a
-45m0s limit, so a gate that gets slow fails as that gate, with its own log,
-instead of the whole run being cancelled at a round number.
+parallel shape is **not** a speed-up. Gates 3 and 4 still wait for `bootstrap`,
+so the critical path is `bootstrap` plus whichever of the two is slower, and the
+run total lands near the 25m0s ceiling that was killing it — under it twice,
+over it once. Three green runs, with the gates themselves unchanged after the
+first (the later commits are docs and workflow comments):
 
-The docs-only follow-up `ae6d8e3` re-ran the same shape green
-([`39490134812`](https://github.com/sayan9168/sayanox/actions/runs/39490134812)):
-21m57s wall, `bootstrap` 12m20s, gate 3 5m49s, gate 4 9m31s, `audit` 6s. Two
-green runs at 26m17s and 21m57s — the total moves with the runner, and the same
-gate measured 9m44s and 5m49s on the two. So the total is not the number to
-watch and is not the number this change improves; the per-job headroom is.
+| job | [`39477167629`](https://github.com/sayan9168/sayanox/actions/runs/39477167629) | [`39490134812`](https://github.com/sayan9168/sayanox/actions/runs/39490134812) | [`39494506063`](https://github.com/sayan9168/sayanox/actions/runs/39494506063) |
+|---|---:|---:|---:|
+| `audit` | 6s | 6s | 7s |
+| `bootstrap` (gates 1+2) | 14m29s | 12m20s | 12m36s |
+| `fixed-point` (gate 3) | 9m44s | 5m49s | **15m49s** |
+| `native` (gate 4) | 11m41s | 9m31s | 12m04s |
+| run wall | 26m17s | 21m57s | 29m31s |
+
+The spread is the finding. Gate 3 took 5m49s on one runner and 15m49s on another
+— 2.7x, same bytes, same targets — and gate 4 moved 9m31s to 12m04s. Under the
+old `timeout-minutes: 25` on the whole run, a spread like that is the difference
+between a result and a cancellation, and it lands on whichever gate happens to
+come last. Under `timeout-minutes: 45` per job, the longest job measured is
+15m49s against a 45m0s ceiling, so a slow runner costs minutes and a genuinely
+slow gate fails as itself, named, with its own log, instead of the run being
+cancelled at a round number that says nothing about which gate grew.
+
+A fourth run, [`39493705685`](https://github.com/sayan9168/sayanox/actions/runs/39493705685), was cancelled by the workflow's
+own `concurrency` group when a later push superseded it mid-flight. That is the
+setting working, not a gate failing, and it is why the nightly
+`full-bootstrap.yml` has `cancel-in-progress: false`.
 
 ## What this does not claim
 
