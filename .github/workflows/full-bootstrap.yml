@@ -11,6 +11,21 @@ name: full-bootstrap
 #
 # It runs every night and on demand. If it goes red while CI is green, the
 # parallel shape hid something and ci.yml must be fixed, not this file.
+#
+# Note on its first run. GitHub registers a workflow for workflow_dispatch only
+# once it exists on the default branch, so this file cannot be dispatched from a
+# pull-request branch: its first execution is the first night after it lands.
+# What ci.yml has proven on a runner, twice green, is every piece separately --
+# the same shims, the same four make targets, the same clean checkout, but gates
+# 1+2 in one job and gates 3 and 4 each in their own, on a checkout with five
+# restored files. What no runner has yet seen for this tree is the four in one
+# directory in order. That is exactly the gap this workflow exists to close: a
+# gate that passes only because a parallel job left something behind, or only
+# because a restored file arrived with a fresh mtime, fails here and not there.
+# The old single-job CI did run doctor -> true-selfhost -> gen3 in order, on the
+# tree before read_bytes and sxlink, and reached native-test before the 25m0s
+# ceiling killed it. Expect this to take the sum of the separately measured jobs,
+# about 29-37 minutes; 90 is headroom for a slow runner, not an expectation.
 on:
   schedule:
     - cron: "30 3 * * *"
@@ -30,8 +45,9 @@ jobs:
   full-bootstrap:
     name: "sequential clean-checkout bootstrap (no artifacts, no cache)"
     runs-on: ubuntu-latest
-    # Measured 2026-10-20: doctor+true-selfhost ~9m, gen3 ~10m, native-test
-    # ~6m+. 90 minutes is headroom for a slow runner, not an expectation.
+    # Measured separately on runners 2026-10-20: gates 1+2 at 12m20s and 14m29s,
+    # gate 3 at 5m49s and 9m44s, gate 4 at 9m31s and 11m41s -- 28-36m summed,
+    # before checkout and setup. 90 is headroom, not an expectation.
     timeout-minutes: 90
     steps:
       - name: Clean checkout
@@ -80,6 +96,7 @@ jobs:
               exit 1
             fi
           done
+          echo "[OK] no generated bootstrap artifact is tracked in git"
 
       # The fixed point is the result worth keeping, and it fits in a log line:
       # gen3.c and gen4.c are the same bytes, so their digests must match.
