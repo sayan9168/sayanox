@@ -183,15 +183,18 @@ checks, before writing anything:
 * the destination copy (if any) already agrees — reported as `ok`, not
   re-copied.
 
-Because Sayanox cannot create directories, a missing
-`.sayanox/registry/<name>/` is reported rather than ignored:
+A missing `.sayanox/registry/<name>/` is reported rather than ignored — the
+Sayanox binary used to be unable to create one, so the message told the user to
+run the wrapper first:
 
 ```
 sxpkg: MISSING calc: cannot write .sayanox/registry/calc/; run sh tools/sxpkg.sh install-local to create the folders
 ```
 
-`sh tools/sxpkg.sh install-local [registry]` creates those folders and then
-runs the install, so the usual flow is:
+Since 2026-10-18 the binary creates the folders itself (`ensure_dir` is
+`mkdir -p` over `make_dir`), and `sh tools/sxpkg.sh install-local [registry]`
+delegates the whole offline install to it, so the message above is the one a
+direct `./tools/sxpkg install` still prints. The usual flow is:
 
 ```sh
 sh tools/sxpkg.sh init                     # sx.lock / sx.toml / .sayanox/registry
@@ -216,9 +219,9 @@ errors and the "cannot write" message.
 
 **Not provided:** signatures, version ranges, a real solver, or any fetch
 during resolve/install/verify — everything above reads local directories
-only. `sync`, `install` (the shell one), `publish` and `fetch` in
-`tools/sxpkg.sh` are still the only online commands, and no bootstrap target
-uses them.
+only. `publish` and `install-local` are Sayanox since 2026-10-18; the http(s)
+halves of `sync`, `install` and `fetch` in `tools/sxpkg.sh` are still the only
+online commands, and no bootstrap target uses them.
 
 ## Exit codes and the online design (2026-10-10)
 

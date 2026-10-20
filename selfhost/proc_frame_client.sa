@@ -1,0 +1,194 @@
+// Framed-session client for the process-builtin gate.
+//
+// Spawns selfhost/proc_frame_server.sa (compiled by gen2) over a pipe and
+// holds one real session: two framed requests, two framed answers, then a
+// clean exit. The same program pins make_dir / make_link / remove_path and
+// the behaviour of every child_* builtin with a handle that was never
+// spawned. Sayanox only, no interpreter and no timing sleeps.
+//
+// Two notes on the dialect, both deliberate:
+//   * quotes inside the JSON bodies are built with chr(34), because a string
+//     literal that mixes braces with escaped quotes is not accepted inside a
+//     `when` condition;
+//   * the checks live in one typed function, because a typed function may not
+//     hold exit() -- the exit stays at the top level.
+
+make to_num(s: str) -> num {
+  hold i = 0
+  hold n = 0
+  hold v = 0
+  hold c = 0
+  hold seen = 0
+  n = len(s)
+  while i < n {
+    c = sx_index(s, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      seen = 1
+    }
+    otherwise {
+      when seen == 1 {
+        i = n
+      }
+    }
+    i += 1
+  }
+  give v
+}
+
+make has_prefix(t: str, p: str) -> num {
+  hold i = 0
+  hold n = 0
+  hold ok = 1
+  n = len(p)
+  when len(t) < n {
+    give 0
+  }
+  while i < n {
+    when sx_index(t, i) != sx_index(p, i) {
+      ok = 0
+      i = n
+    }
+    i += 1
+  }
+  give ok
+}
+
+make frame(body: str) -> str {
+  hold out = "Content-Length: "
+  out = out + numstr(len(body))
+  out = out + "\r\n\r\n"
+  out = out + body
+  give out
+}
+
+make run(server: str, dir: str) -> num {
+  hold q = chr(34)
+  hold link = ""
+  hold h = 0
+  hold n = 0
+  hold head = ""
+  hold blank = ""
+  hold got = ""
+  hold body = ""
+  hold want = ""
+
+  // ----------------------------------------------------- filesystem mutation
+  when make_dir(dir) != 1 {
+    show "make_dir did not create a fresh directory"
+    give 1
+  }
+  when path_kind(dir) != 2 {
+    show "make_dir left something that is not a directory"
+    give 1
+  }
+  when make_dir(dir) != 0 {
+    show "make_dir accepted an existing directory"
+    give 1
+  }
+  link = dir + "/dangling"
+  when make_link("nowhere-at-all", link) != 1 {
+    show "make_link did not create a symlink"
+    give 1
+  }
+  when path_kind(link) != 3 {
+    show "make_link left something that is not a symlink"
+    give 1
+  }
+  when remove_path(link) != 1 {
+    show "remove_path did not remove a symlink"
+    give 1
+  }
+  when path_kind(link) != 0 {
+    show "remove_path left the symlink behind"
+    give 1
+  }
+  when remove_path(link) != 0 {
+    show "remove_path accepted a missing path"
+    give 1
+  }
+
+  // ----------------------------------------------------------- dead handles
+  when child_send(99, "x") != 0 {
+    show "child_send accepted a handle that was never spawned"
+    give 1
+  }
+  when child_recv(99, 4) != "" {
+    show "child_recv accepted a handle that was never spawned"
+    give 1
+  }
+  when child_line(99) != "" {
+    show "child_line accepted a handle that was never spawned"
+    give 1
+  }
+  when child_close(99) != -1 {
+    show "child_close accepted a handle that was never spawned"
+    give 1
+  }
+
+  // ---------------------------------------------------------- framed session
+  h = spawn(server)
+  when h <= 0 {
+    show "spawn did not start the framed server"
+    give 1
+  }
+  body = "{"
+  body = body + q + "jsonrpc" + q + ":" + q + "2.0" + q
+  body = body + "," + q + "id" + q + ":1}"
+  want = "reply:"
+  want = want + body
+  when child_send(h, frame(body)) != 1 {
+    show "child_send did not write the first frame"
+    give 1
+  }
+  head = child_line(h)
+  when has_prefix(head, "Content-Length:") != 1 {
+    show "first answer did not start with a Content-Length header"
+    give 1
+  }
+  n = to_num(head)
+  when n != len(want) {
+    show "first answer advertised the wrong length"
+    give 1
+  }
+  blank = child_line(h)
+  when blank != "" {
+    show "first answer header was not terminated by a blank line"
+    give 1
+  }
+  got = child_recv(h, n)
+  when got != want {
+    show "first answer body was not echoed"
+    give 1
+  }
+  body = "second"
+  want = "reply:second"
+  when child_send(h, frame(body)) != 1 {
+    show "child_send did not write the second frame"
+    give 1
+  }
+  head = child_line(h)
+  n = to_num(head)
+  when n != len(want) {
+    show "second answer advertised the wrong length"
+    give 1
+  }
+  blank = child_line(h)
+  got = child_recv(h, n)
+  when got != want {
+    show "second answer body was not echoed"
+    give 1
+  }
+  when child_close(h) != 0 {
+    show "the server did not exit cleanly"
+    give 1
+  }
+  give 0
+}
+
+hold bad = run(arg(1), arg(2))
+when bad == 1 {
+  hold code = exit(1)
+}
+show "spawn, child_send, child_line, child_recv, child_close: one framed session, two answers, clean exit"
+show "make_dir, make_link, remove_path and dead handles behave as documented"

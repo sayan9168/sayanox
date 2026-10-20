@@ -1,0 +1,17 @@
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init
+sxpkg: init ok
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cmp selfhost/seed_tests/sxpkg/sx.toml-want selfhost/seed_tests/sxpkg/sx.toml
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.1.0
+sxpkg: locked math 0.1.0
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add math 0.2.0
+sxpkg: locked math 0.2.0
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg add strings
+sxpkg: locked strings 0.1.0
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg remove math
+sxpkg: removed math
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+cd selfhost/seed_tests/sxpkg && ../../../tools/sxpkg init >/dev/null
+cmp selfhost/seed_tests/sxpkg/sx.lock-want selfhost/seed_tests/sxpkg/sx.lock
+[OK] Sayanox package tool: init/add/update/list/remove

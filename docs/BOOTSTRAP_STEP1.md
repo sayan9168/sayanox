@@ -33,9 +33,10 @@ Sayanox source (.sa)
 ```
 
 The repository keeps the compiler stages as Sayanox source under `selfhost/`. The
-current bootstrap seed is deliberately small and temporary: `build_stage2.c` and
-the generated Stage-2 binary provide the initial host needed to execute the
-Sayanox-written compiler.
+current bootstrap seed is deliberately small and temporary:
+`selfhost/seed/sxc_seed_min.c` provides the initial host needed to execute the
+Sayanox-written compiler. (The old `build_stage2.c` helper had no Makefile
+target and was deleted on 2026-10-17.)
 
 ## Canonical command
 

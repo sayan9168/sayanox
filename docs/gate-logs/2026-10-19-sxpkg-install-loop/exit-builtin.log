@@ -1,0 +1,3 @@
+./selfhost/gen2 selfhost/seed_tests/exit_builtin.sa selfhost/seed_tests/exit_builtin.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/exit_builtin selfhost/seed_tests/exit_builtin.c
+[OK] exit builtin: status propagates, stdout flushes first, seed-min refuses it with a clear diagnostic

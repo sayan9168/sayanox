@@ -1,0 +1,1 @@
+[OK] language deps (static): POSIX sh scripts only; no awk/sed in build or test recipes

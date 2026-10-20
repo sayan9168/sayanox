@@ -36,7 +36,8 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields
+        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
+        test-sxpkg-sayanox-logic
 
 all: true-selfhost-min
 
@@ -137,7 +138,7 @@ pack-compiler:
 # Fallback: if the source is absent or corrupt, decode the checked-in
 # gzip+base64 blob in selfhost/compiler_min_gz/*.b64. That blob was verified
 # byte-identical to the checked-in compiler_min.sa (sha256 55f28ede2d461faa...,
-# 115 parts of at most 1100 chars; regenerate with `make pack-compiler` after any
+# parts of at most 1100 chars (the count changes with the source); regenerate with `make pack-compiler` after any
 # edit to compiler_min.sa -- `restore-compiler` only greps markers, so a stale
 # blob does not fail the gates by itself), so both paths
 # produce the same file. base64, gzip, cat, tr and rm are therefore OPTIONAL
@@ -225,11 +226,11 @@ $(SXPKG_BIN): $(GEN2) tools/sxpkg.sa
 sxpkg: $(SXPKG_BIN)
 tools: sxfmt sxpkg
 
-# The language server is a normal Sayanox program: gen2 compiles it, cc builds it.
-$(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa tools/lsp_workspace.h tools/lsp_workspace_bind.awk
+# The language server is a normal Sayanox program: gen2 compiles it, cc builds
+# it. Since 2026-10-17 the folder index is Sayanox too (read_dir/path_kind/
+# path_size/path_real), so there is no C header and no generated-C binder.
+$(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa
 	$(GEN2) tools/sayanox_lsp.sa $(LSP_C)
-	@awk -f tools/lsp_workspace_bind.awk $(LSP_C) > $(LSP_C).bound || { rm -f $(LSP_C).bound; exit 1; }
-	@mv $(LSP_C).bound $(LSP_C)
 	$(CC) -O2 -Werror=implicit-function-declaration -o $(LSP_BIN) $(LSP_C)
 
 lsp: $(LSP_BIN)
@@ -1016,26 +1017,25 @@ test-native-mem: $(NATIVE_BIN)
 	./$(NATIVE_BIN) $(TESTS)/native_mem_oom.sa $(TESTS)/native_mem_oom
 	@__o=$$(sh -c 'ulimit -v 4096; ./$(TESTS)/native_mem_oom') || { \
 	  echo "[FAIL] native churn loop died inside a 4 MiB cap (the collector must reclaim)"; exit 1; }; \
-	  __i=$$(printf '%s\n' "$$__o" | sed -n 1p); \
-	  __r=$$(printf '%s\n' "$$__o" | sed -n 2p); \
-	  if [ "$$__i" != "200000" ]; then \
-	    echo "[FAIL] native churn loop under a 4 MiB cap printed $$__o"; exit 1; fi; \
-	  if [ "$$__r" -lt 1 ] 2>/dev/null; then \
-	    echo "[FAIL] native churn loop under a 4 MiB cap ran no collection"; exit 1; fi
+	  printf '%s\n' "$$__o" | { \
+	    IFS= read -r __i; IFS= read -r __r; \
+	    if [ "$$__i" != "200000" ]; then \
+	      echo "[FAIL] native churn loop under a 4 MiB cap printed $$__i"; exit 1; fi; \
+	    if [ "$$__r" -lt 1 ] 2>/dev/null; then \
+	      echo "[FAIL] native churn loop under a 4 MiB cap ran no collection"; exit 1; fi; }
 	@echo "[OK] native collector: 200k allocating iterations (~8 MB) stay inside a 4 MiB cap"
 	@# ---- gc() / gc_live() / gc_runs() are real, not no-ops ----
 	@printf 'hold i = 0\nwhile i < 5000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow gc_runs()\nshow gc()\nshow gc_live()\n' > $(TESTS)/native_mem_gc.sa
 	./$(NATIVE_BIN) $(TESTS)/native_mem_gc.sa $(TESTS)/native_mem_gc
 	@__o=$$(./$(TESTS)/native_mem_gc); \
-	  __r=$$(printf '%s\n' "$$__o" | sed -n 1p); \
-	  __c=$$(printf '%s\n' "$$__o" | sed -n 2p); \
-	  __l=$$(printf '%s\n' "$$__o" | sed -n 3p); \
-	  if [ "$$__r" -lt 1 ] 2>/dev/null; then \
-	    echo "[FAIL] native gc_runs() reported $$__r after 5000 allocating iterations"; exit 1; fi; \
-	  if [ "$$__c" -lt 1 ] 2>/dev/null; then \
-	    echo "[FAIL] native gc() reclaimed $$__c bytes"; exit 1; fi; \
-	  if [ "$$__l" -lt 1 ] 2>/dev/null; then \
-	    echo "[FAIL] native gc_live() reported $$__l"; exit 1; fi
+	  printf '%s\n' "$$__o" | { \
+	    IFS= read -r __r; IFS= read -r __c; IFS= read -r __l; \
+	    if [ "$$__r" -lt 1 ] 2>/dev/null; then \
+	      echo "[FAIL] native gc_runs() reported $$__r after 5000 allocating iterations"; exit 1; fi; \
+	    if [ "$$__c" -lt 1 ] 2>/dev/null; then \
+	      echo "[FAIL] native gc() reclaimed $$__c bytes"; exit 1; fi; \
+	    if [ "$$__l" -lt 1 ] 2>/dev/null; then \
+	      echo "[FAIL] native gc_live() reported $$__l"; exit 1; fi; }
 	@echo "[OK] native gc()/gc_live()/gc_runs() are real (collections run, bytes are reclaimed, live bytes reported)"
 	@# ---- nothing reachable is reclaimed: strings, lists and structs ----
 	@printf 'struct Box {\n  n,\n  s\n}\nhold b = Box { 1, "hello-world" }\nhold a0 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\nhold a3 = "dddddddddddddddddddddddddddd"\nhold xs = []\nhold i = 0\nwhile i < 30000 {\n  hold junk = concat("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "yyyyyyyyyyyyyyyyyyyyyyyyyy")\n  push(xs, i)\n  hold i = i + 1\n}\nshow len(a0)\nshow a0[0]\nshow a0[47]\nshow a3[27]\nshow b.n\nshow b.s\nshow len(xs)\nshow xs[0]\nshow xs[29999]\n' > $(TESTS)/native_mem_keep.sa
@@ -1201,9 +1201,10 @@ test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
 	./$(GEN2) $(TESTS)/sgc_runs_g2.sa $(TESTS)/sgc_runs_g2.c >/dev/null
 	$(CC) -O2 -o $(TESTS)/sgc_runs_g2 $(TESTS)/sgc_runs_g2.c
 	__o=$$(sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_runs_g2'); \
-	 __r=$$(printf '%s\n' "$$__o" | sed -n 2p); __l=$$(printf '%s\n' "$$__o" | sed -n 3p); \
-	 if [ "$$__r" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 ran no collection in a 200k churn: $$__o"; exit 1; fi; \
-	 if [ "$$__l" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 gc_live() reported $$__l after a 200k churn"; exit 1; fi
+	 printf '%s\n' "$$__o" | { \
+	   IFS= read -r __first; IFS= read -r __r; IFS= read -r __l; \
+	   if [ "$$__r" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 ran no collection in a 200k churn: $$__o"; exit 1; fi; \
+	   if [ "$$__l" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 gc_live() reported $$__l after a 200k churn"; exit 1; fi; }
 	echo "[OK] gen2: a 200k churn collects (gc_runs() >= 1) and the live set stays small (gc_live() reported)"
 	echo "[OK] seed GC: seed-min = no collector (builder strings + a freeing assignment, clear OOM); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem"
 
@@ -1478,6 +1479,222 @@ test-sxpkg-polish: sxpkg tools/sxpkg.sh
 
 
 # ---------------------------------------------------------------------------
+# test-sxpkg-sayanox-logic: the part of sxpkg that moved out of the shell.
+#
+# tools/sxpkg.sh used to carry publish, install-local's folder loop and the
+# local-registry halves of sync and fetch in grep/cut/tr/cp/mkdir/rm.  All of
+# that is Sayanox now, in tools/sxpkg.sa, and the shell keeps only what Sayanox
+# cannot do: reading SAYANOX_ONLINE from the environment, and launching curl or
+# wget for an http(s) transfer (`spawn` takes a path with no argv, so it cannot
+# pass a URL at all).
+#
+# Pinned here:
+#   * publish writes pkg.meta (name/version/sum) and main.sa, adds exactly one
+#     INDEX entry, reports exactly once, and never creates a project copy.
+#   * install-local creates .sayanox/registry/<n>/ and .sayanox/pkgs/<n>/ for
+#     every locked name, copies, and exits 1 for an unresolvable lock, an
+#     unsafe name, or a missing sx.lock.
+#   * sync against a local registry writes the INDEX only after every name in
+#     it has passed the check, so a hostile index can neither escape the
+#     registry nor destroy the one already installed, and it falls back to the
+#     local seed when there is no INDEX to read.
+#   * fetch from a local source records the sum in pkg.meta and sx.lock, copies
+#     to both places, refuses an existing package, and leaves nothing behind --
+#     no package copy and an unchanged lock -- when it cannot write.
+#   * ensure-dir / rm-tree / copy-tree are mkdir -p, rm -rf and cp -r.
+#   * the compiler's signature pre-pass reads every line as code, so a comment
+#     with an odd number of double quotes silently strips the types from every
+#     later `make`.  The generated C and a fixture both pin that it did not.
+# ---------------------------------------------------------------------------
+.PHONY: test-sxpkg-sayanox-logic
+test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
+	@mkdir -p $(TESTS)/sxpkg-sayanox
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox sx.lock sx.toml main.sa srcreg syncreg badreg deep csrc cdst fetchsrc.sa
+	@# ---- a comment with balanced quotes must not break a typed signature ----
+	@printf '// a comment with two "quotes" in it, balanced\nmake f(a: num, b: str) -> num {\n  give len(b)\n}\nshow f(1, "x")\n' > $(TESTS)/sxpkg-sayanox/quotes.sa
+	@./$(GEN2) $(TESTS)/sxpkg-sayanox/quotes.sa $(TESTS)/sxpkg-sayanox/quotes.c >/dev/null
+	@grep -q -F 'static double f(double a, char *b)' $(TESTS)/sxpkg-sayanox/quotes.c \
+	  || { echo "[FAIL] a comment with balanced quotes broke a typed make signature"; exit 1; }
+	@$(CC) -O2 -o $(TESTS)/sxpkg-sayanox/quotes $(TESTS)/sxpkg-sayanox/quotes.c
+	@q=$$($(TESTS)/sxpkg-sayanox/quotes); test "$$q" = 1 \
+	  || { echo "[FAIL] the quotes fixture printed '$$q', want 1"; exit 1; }
+	@if grep -q -F ', double str,' tools/sxpkg.c; then \
+	  echo "[FAIL] a typed make in tools/sxpkg.sa lost its parameter types"; \
+	  echo "       (a comment with an odd number of double quotes does that)"; exit 1; fi
+	@# ---- publish ----
+	@printf 'name = "pub-pkg"\nversion = "2.3.4"\n' > $(TESTS)/sxpkg-sayanox/sx.toml
+	@printf 'show "pub"\n' > $(TESTS)/sxpkg-sayanox/main.sa
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh publish > pub.out
+	@grep -q -F 'sxpkg: published locally pub-pkg 2.3.4' $(TESTS)/sxpkg-sayanox/pub.out \
+	  || { echo "[FAIL] publish did not report the package"; exit 1; }
+	@test $$(grep -c -F 'sxpkg: published locally' $(TESTS)/sxpkg-sayanox/pub.out) -eq 1 \
+	  || { echo "[FAIL] publish reported more than once"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/pub-pkg/main.sa \
+	  || { echo "[FAIL] publish wrote no main.sa"; exit 1; }
+	@grep -q -F 'name=pub-pkg' $(TESTS)/sxpkg-sayanox/.sayanox/registry/pub-pkg/pkg.meta \
+	  || { echo "[FAIL] publish wrote no pkg.meta name"; exit 1; }
+	@grep -q -F 'version=2.3.4' $(TESTS)/sxpkg-sayanox/.sayanox/registry/pub-pkg/pkg.meta \
+	  || { echo "[FAIL] publish wrote no pkg.meta version"; exit 1; }
+	@grep -q -E '^sum=[0-9]+$$' $(TESTS)/sxpkg-sayanox/.sayanox/registry/pub-pkg/pkg.meta \
+	  || { echo "[FAIL] publish recorded no content sum"; exit 1; }
+	@printf 'pub-pkg=2.3.4\n' > $(TESTS)/sxpkg-sayanox/index-want
+	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
+	  || { echo "[FAIL] publish wrote the wrong INDEX"; exit 1; }
+	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/pkgs \
+	  || { echo "[FAIL] publish created a project copy; it never installs"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh publish >/dev/null
+	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
+	  || { echo "[FAIL] a second publish duplicated the INDEX entry"; exit 1; }
+	@printf '# sx.lock\nversion=1\npub-pkg=2.3.4\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	  || { echo "[FAIL] a Sayanox-published package does not verify"; exit 1; }
+	@# ---- install-local ----
+	@mkdir -p $(TESTS)/sxpkg-sayanox/srcreg
+	@cp -r registry/math registry/strings $(TESTS)/sxpkg-sayanox/srcreg/
+	@printf '# sx.lock\nversion=1\nmath=0.1.0\nstrings=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg > il.out
+	@grep -q -F 'sxpkg: install ok' $(TESTS)/sxpkg-sayanox/il.out \
+	  || { echo "[FAIL] install-local did not report ok"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/math/pkg.meta \
+	  || { echo "[FAIL] install-local wrote no registry copy"; exit 1; }
+	@test -d $(TESTS)/sxpkg-sayanox/.sayanox/pkgs/math \
+	  || { echo "[FAIL] install-local created no project folder"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	  || { echo "[FAIL] an install-local package does not verify"; exit 1; }
+	@printf '# sx.lock\nversion=1\nnosuch=9.9\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	  echo "[FAIL] install-local exited 0 with an unresolvable lock entry"; exit 1; fi
+	@printf '# sx.lock\nversion=1\n../escape=1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	  echo "[FAIL] install-local accepted an unsafe package name"; exit 1; fi
+	@test ! -e $(TESTS)/escape || { echo "[FAIL] install-local escaped the tests directory"; exit 1; }
+	@rm -f $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	  echo "[FAIL] install-local exited 0 with no sx.lock"; exit 1; fi
+	@# ---- sync against a local registry ----
+	@mkdir -p $(TESTS)/sxpkg-sayanox/syncreg/hello $(TESTS)/sxpkg-sayanox/syncreg/math
+	@cp registry/hello/main.sa registry/hello/pkg.meta $(TESTS)/sxpkg-sayanox/syncreg/hello/
+	@cp registry/math/main.sa registry/math/pkg.meta $(TESTS)/sxpkg-sayanox/syncreg/math/
+	@printf 'hello=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-sayanox/syncreg/INDEX
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
+	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/syncreg \
+	    sh ../../../tools/sxpkg.sh sync > sync.out
+	@grep -q -F 'sxpkg: index updated' $(TESTS)/sxpkg-sayanox/sync.out \
+	  || { echo "[FAIL] sync did not report the index"; exit 1; }
+	@grep -q -F '  synced math=0.1.0' $(TESTS)/sxpkg-sayanox/sync.out \
+	  || { echo "[FAIL] sync did not report the package"; exit 1; }
+	@printf 'hello=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-sayanox/index-want
+	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
+	  || { echo "[FAIL] sync wrote the wrong INDEX"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/math/main.sa \
+	  || { echo "[FAIL] sync copied no package"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/syncreg \
+	    sh ../../../tools/sxpkg.sh sync > sync2.out
+	@test $$(grep -c -F '  synced math=0.1.0' $(TESTS)/sxpkg-sayanox/sync2.out) -eq 1 \
+	  || { echo "[FAIL] a second sync duplicated the report"; exit 1; }
+	@mkdir -p $(TESTS)/sxpkg-sayanox/badreg
+	@printf '../escape=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-sayanox/badreg/INDEX
+	@if (cd $(TESTS)/sxpkg-sayanox && \
+	      SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/badreg \
+	      sh ../../../tools/sxpkg.sh sync >/dev/null 2>&1); then \
+	  echo "[FAIL] sync accepted an index with an unsafe package name"; exit 1; fi
+	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
+	  || { echo "[FAIL] a rejected index destroyed the installed one"; exit 1; }
+	@test ! -e $(TESTS)/escape || { echo "[FAIL] sync escaped the tests directory"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
+	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file:///nonexistent-registry \
+	    sh ../../../tools/sxpkg.sh sync > sync3.out
+	@grep -q -F 'sxpkg: local registry seeded' $(TESTS)/sxpkg-sayanox/sync3.out \
+	  || { echo "[FAIL] sync did not fall back to the local seed"; exit 1; }
+	@# ---- fetch from a local source ----
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@printf 'show "fetched"\n' > $(TESTS)/sxpkg-sayanox/fetchsrc.sa
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa fetched > fetch.out
+	@grep -q -F 'sxpkg: fetched fetched from fetchsrc.sa (checksum recorded; not authenticated)' \
+	    $(TESTS)/sxpkg-sayanox/fetch.out || { echo "[FAIL] fetch did not report the package"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/fetched/main.sa \
+	  || { echo "[FAIL] fetch wrote no registry copy"; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/pkgs/fetched/main.sa \
+	  || { echo "[FAIL] fetch wrote no project copy"; exit 1; }
+	@grep -q -E '^sum=[0-9]+$$' $(TESTS)/sxpkg-sayanox/.sayanox/registry/fetched/pkg.meta \
+	  || { echo "[FAIL] fetch recorded no content sum"; exit 1; }
+	@grep -q -F 'fetched=0.0.0' $(TESTS)/sxpkg-sayanox/sx.lock \
+	  || { echo "[FAIL] fetch did not pin the package in sx.lock"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	  || { echo "[FAIL] a fetched package does not verify"; exit 1; }
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa fetched >/dev/null 2>&1); then \
+	  echo "[FAIL] fetch overwrote an existing package"; exit 1; fi
+	@grep -q -F 'fetched=0.0.0' $(TESTS)/sxpkg-sayanox/sx.lock \
+	  || { echo "[FAIL] a refused fetch changed sx.lock"; exit 1; }
+	@if (cd $(TESTS)/sxpkg-sayanox && find . -name '*.part' | grep -q .); then \
+	  echo "[FAIL] a .part file was left behind"; exit 1; fi
+	@if (cd $(TESTS)/sxpkg-sayanox && find . -name '.fetch.*' | grep -q .); then \
+	  echo "[FAIL] a staging directory was left behind"; exit 1; fi
+	@# ---- rollback: an unusable registry must leave nothing behind ----
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@printf 'not a directory' > $(TESTS)/sxpkg-sayanox/.sayanox
+	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa rolled >/dev/null 2>&1); then \
+	  echo "[FAIL] fetch succeeded with an unusable registry"; exit 1; fi
+	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/registry/rolled \
+	  || { echo "[FAIL] a failed fetch left a registry copy"; exit 1; }
+	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/pkgs/rolled \
+	  || { echo "[FAIL] a failed fetch left a project copy"; exit 1; }
+	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/lock-want
+	@cmp $(TESTS)/sxpkg-sayanox/lock-want $(TESTS)/sxpkg-sayanox/sx.lock \
+	  || { echo "[FAIL] a failed fetch changed sx.lock"; exit 1; }
+	@# ---- the folder and copy primitives the wrapper now delegates ----
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox deep csrc cdst
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) ensure-dir deep/a/b
+	@test -d $(TESTS)/sxpkg-sayanox/deep/a/b || { echo "[FAIL] ensure-dir made no nested folder"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) ensure-dir deep/a/b
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) rm-tree deep
+	@test ! -e $(TESTS)/sxpkg-sayanox/deep || { echo "[FAIL] rm-tree left the folder"; exit 1; }
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) rm-tree deep
+	@mkdir -p $(TESTS)/sxpkg-sayanox/csrc/sub
+	@printf 'one' > $(TESTS)/sxpkg-sayanox/csrc/a
+	@printf 'two' > $(TESTS)/sxpkg-sayanox/csrc/sub/b
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) copy-tree csrc cdst
+	@test "$$(cat $(TESTS)/sxpkg-sayanox/cdst/a)" = one || { echo "[FAIL] copy-tree lost a file"; exit 1; }
+	@test "$$(cat $(TESTS)/sxpkg-sayanox/cdst/sub/b)" = two || { echo "[FAIL] copy-tree did not recurse"; exit 1; }
+	@# ---- check-lock / need-fetch / install-cached: the install loop ----
+	@# the wrapper used to walk itself. A file with no final newline too.
+	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox icdir
+	@printf '# sx.lock\nversion=1\n../escape=0.1.0' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) check-lock >/dev/null 2>&1); then \
+	   echo "[FAIL] check-lock ignored a final line with no newline"; exit 1; fi
+	@printf '# sx.lock\nversion=1\nstrings=0.1.0\n../escape=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) check-lock >/dev/null 2>&1); then \
+	   echo "[FAIL] check-lock accepted an unsafe name"; exit 1; fi
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) check-lock > cl.out 2>&1 || true
+	@grep -q -F "sxpkg: refusing unsafe package name '../escape'" $(TESTS)/sxpkg-sayanox/cl.out \
+	  || { echo "[FAIL] check-lock did not name the unsafe package"; cat $(TESTS)/sxpkg-sayanox/cl.out; exit 1; }
+	@# need-fetch names exactly the locked packages with no complete copy
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) seed >/dev/null
+	@printf 'hello=0.1.0\nstrings=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) need-fetch > nf.want
+	@printf 'strings\n' > $(TESTS)/sxpkg-sayanox/nf.have
+	@cmp $(TESTS)/sxpkg-sayanox/nf.have $(TESTS)/sxpkg-sayanox/nf.want \
+	  || { echo "[FAIL] need-fetch named the wrong packages"; cat $(TESTS)/sxpkg-sayanox/nf.want; exit 1; }
+	@# install-cached copies the complete ones and reports the rest, and it
+	@# refuses to build a path from an unsafe name even when called directly
+	@cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) install-cached icdir > ic.out
+	@printf 'sxpkg: installed hello -> icdir/hello\nsxpkg: missing strings in registry\n' > $(TESTS)/sxpkg-sayanox/ic.want
+	@cmp $(TESTS)/sxpkg-sayanox/ic.want $(TESTS)/sxpkg-sayanox/ic.out \
+	  || { echo "[FAIL] install-cached printed the wrong report"; cat $(TESTS)/sxpkg-sayanox/ic.out; exit 1; }
+	@test -f $(TESTS)/sxpkg-sayanox/icdir/hello/main.sa \
+	  || { echo "[FAIL] install-cached did not copy a complete package"; exit 1; }
+	@printf 'hello=0.1.0\n../escape=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
+	@if (cd $(TESTS)/sxpkg-sayanox && $(CURDIR)/$(SXPKG_BIN) install-cached icdir2 >/dev/null 2>&1); then \
+	   echo "[FAIL] install-cached accepted an unsafe name"; exit 1; fi
+	@test ! -e $(TESTS)/escape \
+	  || { echo "[FAIL] install-cached built a path outside the project"; exit 1; }
+	@echo "[OK] sxpkg in Sayanox: publish, install-local, local sync/fetch, rollback, the folder primitives, and check-lock/need-fetch/install-cached"
+
+# ---------------------------------------------------------------------------
 # test-native-emit-split: the x86-64 backend is a REGION of native_aot.c, not a
 # seasoning spread through it.
 #
@@ -1527,7 +1744,7 @@ test-native-emit-split: $(NATIVE_BIN)
 	 if [ "$$b" -ge "$$e" ]; then echo "[FAIL] the emit-seam markers are out of order"; exit 1; fi; \
 	 if [ "$$enc" -ge "$$p1" ] || [ "$$p1" -ge "$$b" ]; then \
 	   echo "[FAIL] the file layout changed: expected encoder < phase 1 < EMIT-SEAM-BEGIN"; exit 1; fi; \
-	 awk -v b=$$b -v e=$$e 'NR>b && NR<e' selfhost/native_aot.c > $(TESTS)/seam_region.c; \
+	 tail -n +$$((b + 1)) selfhost/native_aot.c | head -n $$((e - b - 1)) > $(TESTS)/seam_region.c; \
 	 for pat in 'e1(' 'e32(' 'e64(' 'memcpy(code' 'memcpy(&code'; do \
 	   if grep -q -F "$$pat" $(TESTS)/seam_region.c; then \
 	     echo "[FAIL] the language emitter writes code bytes directly: $$pat"; \
@@ -1604,7 +1821,26 @@ test-native-ir-log: $(NATIVE_BIN)
 	  || { echo "[FAIL] the instruction list has a line in neither format:"; grep -n -v -E '^([0-9a-f]{6}  |;)' $(TESTS)/irl.log | head -3; exit 1; }
 	# ---- 5. the log's invariants: monotonic offsets, fixups land on jumps,
 	#         six phases in order, a reported code size ----
-	@awk -v off='$(IRL_OFF6)' 'BEGIN{bad=0;prev="";fx=0;np=0;tot=0} index($$0,"=== phase:")==9{np++} /^;       fixup/{p=index($$0,"[");a=substr($$0,p+1,6);if(!(a in mn)||mn[a]!~/^j/){bad++;print "[FAIL] a rel32 fixup does not land on a jump: " $$0}else fx++;next} $$0~("^"off"  "){o=substr($$0,1,6);if(prev!=""&&(o"")<(prev"")){bad++;print "[FAIL] the instruction offsets go backwards: " $$0}prev=o;mn[o]=$$2;next} /^;       code bytes: /{tot=$$4} END{if(fx==0){bad++;print "[FAIL] the list has no fixup line, so no unresolved slot was resolved"}if(tot+0<=0){bad++;print "[FAIL] the list does not report its code size"}if(np!=6){bad++;print "[FAIL] expected 6 phase markers, got " np}if(bad)exit 1}' $(TESTS)/irl.log
+	@# POSIX shell + grep/cut/sort/paste: no awk. Each check appends to `bad`.
+	@log=$(TESTS)/irl.log; bad=0; \
+	 np=$$(grep -c -F '=== phase:' $$log); \
+	 if [ "$$np" -ne 6 ]; then echo "[FAIL] expected 6 phase markers, got $$np"; bad=1; fi; \
+	 fx=$$(grep -c -E '^;       fixup' $$log); \
+	 if [ "$$fx" -lt 1 ]; then echo "[FAIL] the list has no fixup line, so no unresolved slot was resolved"; bad=1; fi; \
+	 tot=$$(grep -E '^;       code bytes: ' $$log | tr -s ' ' | cut -d' ' -f4); \
+	 if [ "$${tot:-0}" -le 0 ] 2>/dev/null; then echo "[FAIL] the list does not report its code size"; bad=1; fi; \
+	 grep -E '^[0-9a-f]{6}  ' $$log | cut -c1-6 > $(TESTS)/irl_offsets.txt; \
+	 if ! LC_ALL=C sort -c $(TESTS)/irl_offsets.txt 2>/dev/null; then \
+	   echo "[FAIL] the instruction offsets go backwards"; bad=1; fi; \
+	 grep -E '^[0-9a-f]{6}  ' $$log | cut -c9- | cut -d' ' -f1 > $(TESTS)/irl_mnem.txt; \
+	 paste -d' ' $(TESTS)/irl_offsets.txt $(TESTS)/irl_mnem.txt | \
+	   while IFS=' ' read -r __off __mn; do case "$$__mn" in j*) echo "$$__off" ;; esac; done > $(TESTS)/irl_jumps.txt; \
+	 grep -E '^;       fixup' $$log | cut -d'[' -f2 | cut -c1-6 > $(TESTS)/irl_fixups.txt; \
+	 while IFS= read -r __target; do \
+	   if ! grep -q -x "$$__target" $(TESTS)/irl_jumps.txt; then \
+	     echo "[FAIL] a rel32 fixup does not land on a jump: [$$__target]"; bad=1; fi; \
+	 done < $(TESTS)/irl_fixups.txt; \
+	 if [ "$$bad" -ne 0 ]; then exit 1; fi
 	@i=$$(grep -c -E '^[0-9a-f]{6}  ' $(TESTS)/irl.log); sl=$$(grep -c -F ';       slot ' $(TESTS)/irl.log); fx=$$(grep -c -F ';       fixup' $(TESTS)/irl.log); \
 	 echo "[OK] native ir log: $$i instructions, $$sl label slots, $$fx rel32 fixups, monotonic offsets, six phases in order"
 	# ---- 6. every call target and every operand has a real name ----
@@ -1621,7 +1857,10 @@ test-native-ir-log: $(NATIVE_BIN)
 	done
 	echo "[OK] native ir log: numbers are double bits through xmm, strings and lists are named stub calls, makes are named call targets"
 	# ---- 8. the instruction vocabulary of the fixture's top level, pinned ----
-	@got=$$(awk '/=== phase: top level/{on=1;next} /=== phase: exit syscall/{on=0} on' $(TESTS)/irl.log | grep -E '^[0-9a-f]{6}  ' | awk '{print $$2}' | sort -u | tr '\n' ' ' | sed 's/ $$//'); \
+	@b=$$(grep -n -F '=== phase: top level' $(TESTS)/irl.log | cut -d: -f1); \
+	 e=$$(grep -n -F '=== phase: exit syscall' $(TESTS)/irl.log | cut -d: -f1); \
+	 got=$$(tail -n +$$((b + 1)) $(TESTS)/irl.log | head -n $$((e - b - 1)) | grep -E '^[0-9a-f]{6}  ' | cut -c9- | cut -d' ' -f1 | sort -u | tr '\n' ' '); \
+	 got=$${got% }; \
 	 if [ "$$got" = "$(IRL_MN_WANT)" ]; then :; else \
 	   echo "[FAIL] the top level's instruction vocabulary changed"; \
 	   echo "--- want ---"; echo "$(IRL_MN_WANT)"; echo "--- got ---"; echo "$$got"; \
@@ -1630,7 +1869,7 @@ test-native-ir-log: $(NATIVE_BIN)
 	# ---- 9. only the encoder records; the emitter may announce, not write ----
 	@b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c | cut -d: -f1); \
 	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c | cut -d: -f1); \
-	 awk -v b=$$b -v e=$$e 'NR>b && NR<e' selfhost/native_aot.c > $(TESTS)/irl_seam.c; \
+	 tail -n +$$((b + 1)) selfhost/native_aot.c | head -n $$((e - b - 1)) > $(TESTS)/irl_seam.c; \
 	 test $$(grep -c -w 'ilogf' $(TESTS)/irl_seam.c) -eq 0 \
 	  || { echo "[FAIL] the language emitter touches the recorder state:"; grep -n -w 'ilogf' $(TESTS)/irl_seam.c | head -3; exit 1; }
 	echo "[OK] native ir log: the instruction list is written by the encoder alone -- a second backend replaces the encoder and keeps the emit tree"
@@ -1653,11 +1892,15 @@ test-native-ir-log: $(NATIVE_BIN)
 # ---------------------------------------------------------------------------
 
 # test-native-ir-portable: the SX_EMIT_LOG instruction list translates to the
-# IR analysis listing (tools/emit_to_ir.c, docs/NATIVE_IR.md) with instruction
+# IR analysis listing (tools/emit_to_ir.sa, docs/NATIVE_IR.md) with instruction
 # counts and deterministic source-offset correlation preserved. The IR is an analysis format -- this target pins the
 # translation, and deliberately does NOT claim a second backend or ISA.
-tools/emit_to_ir: tools/emit_to_ir.c
-	$(CC) -std=c99 -O2 -Wall -Wextra -o $@ $<
+# tools/emit_to_ir is now a Sayanox program: gen2 compiles it, cc builds it.
+# It writes the listing to stdout, so call sites redirect.
+tools/emit_to_ir: tools/emit_to_ir.sa $(GEN2)
+	./$(GEN2) tools/emit_to_ir.sa $(TESTS)/emit_to_ir.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/emit_to_ir.c
+	@echo "[OK] Sayanox IR translator built from tools/emit_to_ir.sa"
 
 .PHONY: test-emit-to-ir
 test-emit-to-ir: tools/emit_to_ir
@@ -1668,11 +1911,11 @@ test-native-ir-portable: $(NATIVE_BIN) tools/emit_to_ir test-emit-to-ir
 	./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irp_nat >/dev/null
 	$(call assert-out,./$(TESTS)/irp_nat,42\nir-log\n6\n3\n42\nir-log-done)
 	SX_EMIT_LOG=$(TESTS)/irp.log ./$(NATIVE_BIN) $(IRL_FIX) $(TESTS)/irp_logged
-	./tools/emit_to_ir $(TESTS)/irp.log $(TESTS)/irp.ir
-	./tools/emit_to_ir $(TESTS)/irp.log $(TESTS)/irp_again.ir
+	./tools/emit_to_ir $(TESTS)/irp.log > $(TESTS)/irp.ir
+	./tools/emit_to_ir $(TESTS)/irp.log > $(TESTS)/irp_again.ir
 	cmp $(TESTS)/irp.ir $(TESTS)/irp_again.ir
-	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log $(TESTS)/irp_audit.ir
-	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log $(TESTS)/irp_audit_again.ir
+	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log > $(TESTS)/irp_audit.ir
+	./tools/emit_to_ir --strict --source-offsets $(TESTS)/irp.log > $(TESTS)/irp_audit_again.ir
 	cmp $(TESTS)/irp_audit.ir $(TESTS)/irp_audit_again.ir
 	@grep -v '^; source-offset ' $(TESTS)/irp_audit.ir > $(TESTS)/irp_audit_base.ir
 	cmp $(TESTS)/irp.ir $(TESTS)/irp_audit_base.ir
@@ -2375,6 +2618,170 @@ test-builtin-names: $(GEN2) $(SEED_MIN_BIN)
 	@echo "[OK] builtin-word names: variables called index/len/arg stay variables, real builtin calls still map (seed-min == gen2)"
 
 # ---------------------------------------------------------------------------
+# test-exit-builtin: exit(n) is a real builtin on the Sayanox-written compiler
+# (gen1_min/gen2/gen3), added on 2026-10-17 so Sayanox CLI tools can report a
+# failure status instead of relying on the C tool that used to do their work.
+# It flushes stdout first, does not swallow the status, and stays an ordinary
+# expression (`hold code = exit(2)`), matching how bare call statements are
+# restricted in this dialect. seed-min and native still reject it.
+# ---------------------------------------------------------------------------
+.PHONY: test-exit-builtin
+test-exit-builtin: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@printf 'hold a = arg(1)\nwhen string_eq(a, "stop") {\n  hold msg = write_out("before-exit\\n")\n  hold code = exit(7)\n}\nshow 42\n' > $(TESTS)/exit_builtin.sa
+	./$(GEN2) $(TESTS)/exit_builtin.sa $(TESTS)/exit_builtin.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/exit_builtin $(TESTS)/exit_builtin.c
+	$(call assert-out,./$(TESTS)/exit_builtin keep,42)
+	@__o=$$(./$(TESTS)/exit_builtin stop); __rc=$$?; \
+	 if [ "$$__rc" != 7 ]; then echo "[FAIL] exit(7) produced status $$__rc"; exit 1; fi; \
+	 if [ "$$__o" != "before-exit" ]; then echo "[FAIL] stdout was not flushed before exit: $$__o"; exit 1; fi
+	@if ./$(SEED_MIN_BIN) $(TESTS)/exit_builtin.sa > $(TESTS)/exit_seed.c 2>$(TESTS)/exit_seed.err; then \
+	   echo "[FAIL] seed-min accepted exit() without implementing it"; exit 1; fi
+	@grep -q 'call names an unknown function or builtin' $(TESTS)/exit_seed.err \
+	  || { echo "[FAIL] seed-min refused exit() without a clear diagnostic"; cat $(TESTS)/exit_seed.err; exit 1; }
+	@echo "[OK] exit builtin: status propagates, stdout flushes first, seed-min refuses it with a clear diagnostic"
+test-stage2: test-exit-builtin
+
+# ---------------------------------------------------------------------------
+# test-path-builtins: read_dir/path_kind/path_size/path_real are the language
+# surface that replaced the C LSP directory bridge. gen2 implements them on
+# opendir/lstat/realpath; seed-min and native refuse them (the native backend
+# has no directory model). read_dir returns newline-separated names, skips "."
+# and "..", and caps a directory at 4096 names and 4 MB.
+# ---------------------------------------------------------------------------
+.PHONY: test-path-builtins
+test-path-builtins: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/pathb_dir $(TESTS)/pathb_dir_link
+	@mkdir -p $(TESTS)/pathb_dir/sub
+	@printf 'x' > $(TESTS)/pathb_dir/a.sa
+	@printf 'yy' > $(TESTS)/pathb_dir/sub/b.sa
+	@ln -sfn pathb_dir $(TESTS)/pathb_dir_link
+	@printf 'hold d = read_dir("$(TESTS)/pathb_dir")\nshow len(d)\nshow path_kind("$(TESTS)/pathb_dir")\nshow path_kind("$(TESTS)/pathb_dir/a.sa")\nshow path_kind("$(TESTS)/pathb_dir/sub/b.sa")\nshow path_kind("$(TESTS)/pathb_dir_link")\nshow path_kind("$(TESTS)/pathb_dir/missing")\nshow path_size("$(TESTS)/pathb_dir/a.sa")\nshow path_size("$(TESTS)/pathb_dir/sub/b.sa")\nshow path_real("$(TESTS)/pathb_dir/../pathb_dir")\nshow len(path_real("$(TESTS)/pathb_dir/missing"))\n' > $(TESTS)/pathb_gen.sa
+	./$(GEN2) $(TESTS)/pathb_gen.sa $(TESTS)/pathb_gen.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/pathb_gen $(TESTS)/pathb_gen.c
+	@./$(TESTS)/pathb_gen > $(TESTS)/pathb_gen.out
+	@test "$$(head -n 1 $(TESTS)/pathb_gen.out)" = 9 \
+	  || { echo "[FAIL] read_dir did not return 'sub\\na.sa\\n' (9 bytes)"; cat $(TESTS)/pathb_gen.out; exit 1; }
+	@printf '2\n1\n1\n3\n0\n1\n2\n' > $(TESTS)/pathb_gen.want
+	@tail -n +2 $(TESTS)/pathb_gen.out | head -n 7 > $(TESTS)/pathb_gen.kinds
+	@cmp $(TESTS)/pathb_gen.kinds $(TESTS)/pathb_gen.want \
+	  || { echo "[FAIL] path_kind/path_size disagree with the filesystem"; cat $(TESTS)/pathb_gen.out; exit 1; }
+	@test "$$(head -n 9 $(TESTS)/pathb_gen.out | tail -n 1)" = "$(CURDIR)/$(TESTS)/pathb_dir" \
+	  || { echo "[FAIL] path_real did not canonicalize"; head -n 9 $(TESTS)/pathb_gen.out | tail -n 1; exit 1; }
+	@test "$$(head -n 10 $(TESTS)/pathb_gen.out | tail -n 1)" = 0 \
+	  || { echo "[FAIL] path_real did not return an empty string for a missing path"; exit 1; }
+	@if ./$(SEED_MIN_BIN) $(TESTS)/pathb_gen.sa > $(TESTS)/pathb_gen_seed.c 2>$(TESTS)/pathb_gen_seed.err; then \
+	   echo "[FAIL] seed-min accepted the path builtins without implementing them"; exit 1; fi
+	@grep -q 'call names an unknown function or builtin' $(TESTS)/pathb_gen_seed.err \
+	  || { echo "[FAIL] seed-min refused the path builtins without a clear diagnostic"; cat $(TESTS)/pathb_gen_seed.err; exit 1; }
+	@echo "[OK] path builtins: read_dir listing, lstat kinds (file/dir/symlink/missing), sizes, realpath; seed-min refuses them"
+test-stage2: test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives
+
+# ---------------------------------------------------------------------------
+# test-proc-builtins: spawn / child_send / child_recv / child_line /
+# child_close and make_dir / make_link / remove_path are the language surface
+# that replaced the C LSP test client. gen2 implements them on fork/exec and
+# pipes; seed-min refuses them, exactly like the directory builtins. A child is
+# a real framed session: two requests, two answers, one clean exit.
+# ---------------------------------------------------------------------------
+.PHONY: test-proc-builtins
+test-proc-builtins: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/proc_frame_dir
+	./$(GEN2) selfhost/proc_frame_server.sa $(TESTS)/proc_frame_server.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/proc_frame_server $(TESTS)/proc_frame_server.c
+	./$(GEN2) selfhost/proc_frame_client.sa $(TESTS)/proc_frame_client.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/proc_frame_client $(TESTS)/proc_frame_client.c
+	@./$(TESTS)/proc_frame_client '$(CURDIR)/$(TESTS)/proc_frame_server' '$(CURDIR)/$(TESTS)/proc_frame_dir' > $(TESTS)/proc_frame.out
+	@printf 'spawn, child_send, child_line, child_recv, child_close: one framed session, two answers, clean exit\nmake_dir, make_link, remove_path and dead handles behave as documented\n' > $(TESTS)/proc_frame.want
+	@cmp $(TESTS)/proc_frame.want $(TESTS)/proc_frame.out \
+	  || { echo "[FAIL] process builtins: unexpected client output"; cat $(TESTS)/proc_frame.out; exit 1; }
+	@printf 'hold h = spawn("x")\nshow h\nhold n = make_dir("x")\nshow n\n' > $(TESTS)/proc_frame_seed.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/proc_frame_seed.sa > /dev/null 2>$(TESTS)/proc_frame_seed.err; then \
+	   echo "[FAIL] seed-min accepted the process builtins without implementing them"; exit 1; fi
+	@grep -q 'call names an unknown function or builtin' $(TESTS)/proc_frame_seed.err \
+	  || { echo "[FAIL] seed-min refused the process builtins without a clear diagnostic"; cat $(TESTS)/proc_frame_seed.err; exit 1; }
+	@echo "[OK] process builtins: spawn and a framed child session, make_dir/make_link/remove_path, dead handles; seed-min refuses them"
+
+# ---------------------------------------------------------------------------
+# test-comment-quotes: the `make` signature pre-pass did not know about //
+# comments -- the comment-tracking branch in that loop is dead code (its flag
+# is never set to 1) -- so a double quote inside a comment toggled string
+# mode. One odd quote made every later `make` lose its typed parameter list,
+# and the naive scanner that takes over emitted `double a, double num, ...`
+# from the text of `a: num, b: num`. The generated C then stopped compiling
+# far from the cause. Found while porting tools/sxpkg.sa; pinned here.
+# ---------------------------------------------------------------------------
+test-comment-quotes: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/cq
+	@mkdir -p $(TESTS)/cq
+	@printf '// a comment with one " quote inside it\nmake add2(a: num, b: num) -> num {\n  give a + b\n}\nhold r = add2(1, 2)\nshow r\n' > $(TESTS)/cq/odd.sa
+	@./$(GEN2) $(TESTS)/cq/odd.sa $(TESTS)/cq/odd.c >/dev/null
+	@grep -q 'static double add2(double a, double b);' $(TESTS)/cq/odd.c \
+	  || { echo "[FAIL] a double quote inside a // comment broke the signature pre-pass"; \
+	       head -3 $(TESTS)/cq/odd.c; exit 1; }
+	@if grep -qE 'double str[,)]' $(TESTS)/cq/odd.c; then \
+	   echo "[FAIL] a double quote inside a // comment mangled the parameter list"; exit 1; fi
+	@if grep -q 'double num' $(TESTS)/cq/odd.c; then \
+	   echo "[FAIL] the naive parameter scanner took over for add2"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/cq/odd $(TESTS)/cq/odd.c
+	$(call assert-out,./$(TESTS)/cq/odd,3)
+	@# the file that exposed it: tools/sxpkg.sa carries such a comment
+	@./$(GEN2) tools/sxpkg.sa $(TESTS)/cq/sxpkg.c >/dev/null
+	@if grep -qE 'double str[,)]' $(TESTS)/cq/sxpkg.c; then \
+	   echo "[FAIL] tools/sxpkg.c was generated with mangled signatures"; exit 1; fi
+	@grep -q 'static char \*toml_field(char \*text, char \*key);' $(TESTS)/cq/sxpkg.c \
+	  || { echo "[FAIL] tools/sxpkg.c lost its typed signatures"; exit 1; }
+	@# seed-min runs its own pre-pass; both compilers must agree
+	@./$(SEED_MIN_BIN) $(TESTS)/cq/odd.sa > $(TESTS)/cq/odd_seed.c
+	@grep -q 'static double add2(double a, double b){' $(TESTS)/cq/odd_seed.c \
+	  || { echo "[FAIL] seed-min and gen2 disagree on a quote inside a // comment"; exit 1; }
+	@grep 'static double add2' $(TESTS)/cq/odd.c | head -1
+	@grep 'static char \*toml_field' $(TESTS)/cq/sxpkg.c | head -1
+	@echo "[OK] a double quote inside a // comment no longer breaks the signature pre-pass; gen2 and seed-min agree"
+
+# ---------------------------------------------------------------------------
+# test-native-primitives: bit_and / bit_or / bit_xor / bit_not / shl / shr,
+# write_bytes and bytes_f64 are the primitive surface that
+# selfhost/native_aot.c needs before it can be rewritten in Sayanox. gen2
+# implements them; seed-min refuses them, like every other late builtin.
+#
+# The gate does not stop at arithmetic: selfhost/native_primitives.sa writes a
+# complete static x86-64 ELF executable out of a byte buffer plus the bitwise
+# helpers, and the gate then RUNS that file.  A byte buffer that the kernel
+# loads and that exits 42 is the real proof, not a printout.
+# ---------------------------------------------------------------------------
+.PHONY: test-native-primitives
+test-native-primitives: $(GEN2) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)
+	@rm -f $(TESTS)/native_primitives.elf $(TESTS)/native_primitives.bin
+	./$(GEN2) selfhost/native_primitives.sa $(TESTS)/native_primitives.c >/dev/null
+	@if grep -q '#error' $(TESTS)/native_primitives.c; then echo "[FAIL] native primitives: #error in the output"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/native_primitives $(TESTS)/native_primitives.c
+	@./$(TESTS)/native_primitives '$(CURDIR)/$(TESTS)/native_primitives.elf' '$(CURDIR)/$(TESTS)/native_primitives.bin' > $(TESTS)/native_primitives.out
+	@printf 'bit_and bit_or bit_xor bit_not shl shr bytes_f64 write_bytes: checked, and the emitted ELF exits 42\n' > $(TESTS)/native_primitives.want
+	@cmp $(TESTS)/native_primitives.want $(TESTS)/native_primitives.out \
+	  || { echo "[FAIL] native primitives: unexpected program output"; cat $(TESTS)/native_primitives.out; exit 1; }
+	@# the byte buffer is a real ELF: magic, x86-64 machine id, exact size
+	@test "$$(od -An -tx1 -N4 $(TESTS)/native_primitives.elf | tr -d ' \n')" = 7f454c46 \
+	  || { echo "[FAIL] native primitives: the emitted file is not an ELF"; exit 1; }
+	@test "$$(od -An -tx1 -j18 -N2 $(TESTS)/native_primitives.elf | tr -d ' \n')" = 3e00 \
+	  || { echo "[FAIL] native primitives: the emitted ELF is not x86-64"; exit 1; }
+	@test "$$(wc -c < $(TESTS)/native_primitives.elf)" = 132 \
+	  || { echo "[FAIL] native primitives: the emitted ELF has the wrong size"; exit 1; }
+	@chmod +x $(TESTS)/native_primitives.elf
+	@./$(TESTS)/native_primitives.elf; __rc=$$?; \
+	 if [ "$$__rc" != 42 ]; then echo "[FAIL] native primitives: the emitted ELF exited $$__rc, want 42"; exit 1; fi
+	@printf 'hold a = bit_and(12, 10)\nshow a\nhold b = write_bytes("x", [])\nshow b\nhold c = bytes_f64([], 1.5)\nshow len(c)\nhold d = shl(1, 3)\nshow d\nhold e = shr(8, 1)\nshow e\n' > $(TESTS)/native_primitives_seed.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/native_primitives_seed.sa > /dev/null 2>$(TESTS)/native_primitives_seed.err; then \
+	   echo "[FAIL] seed-min accepted the native primitives without implementing them"; exit 1; fi
+	@grep -q 'call names an unknown function or builtin' $(TESTS)/native_primitives_seed.err \
+	  || { echo "[FAIL] seed-min refused the native primitives without a clear diagnostic"; cat $(TESTS)/native_primitives_seed.err; exit 1; }
+	@echo "[OK] native primitives: bitwise ops, write_bytes and bytes_f64; a Sayanox byte buffer emits a static x86-64 ELF that exits 42; seed-min refuses them"
+
+# ---------------------------------------------------------------------------
 # test-stage2: the Stage-2 slice on gen2 beyond the string walk — the word
 # operators `and` / `or` / `not` with `not` binding looser than a comparison,
 # the boolean literals `true` / `false`, `for` over a list (a variable, a list
@@ -2596,7 +3003,7 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 # selfhost/bootstrap_production.sh, no bootstrap_full_selfhost.sh and no
 # bootstrap_full_language_selfhost.sh; stage2_template.c is a 93-byte
 # PLACEHOLDER, stage2_src/ is a README plus an 11-byte PLACEHOLDER,
-# sxc_full.c is a 30-line toy, and `bash selfhost/restore_stage2.sh` exits 1
+# sxc_full.c is a 30-line toy, and `sh selfhost/restore_stage2.sh` exits 1
 # with "missing Stage-2 seed". 24 legacy documents carry a banner saying so,
 # and docs/FULL_LANGUAGE_SELFHOST.md states it as the current position.
 # If a real Stage-2 host ever lands, this target fails and points at the docs
@@ -2611,7 +3018,7 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 test-doc-claims:
 	@grep -q 'PLACEHOLDER' selfhost/stage2_template.c \
 	  || { echo "[FAIL] selfhost/stage2_template.c is no longer a placeholder: a Stage-2 host may exist now, update docs/FULL_LANGUAGE_SELFHOST.md and this target"; exit 1; }
-	@if bash selfhost/restore_stage2.sh >/dev/null 2>&1; then \
+	@if sh selfhost/restore_stage2.sh >/dev/null 2>&1; then \
 	  echo "[FAIL] restore_stage2.sh now succeeds: update docs/FULL_LANGUAGE_SELFHOST.md, docs/FULL_SELFHOST.md and this target"; exit 1; \
 	fi
 	@if grep -q '^stage2:' Makefile; then \
@@ -2631,9 +3038,75 @@ test-doc-claims:
 	@for f in selfhost/seed/sxc_seed_min.c selfhost/compiler_min.sa selfhost/native_aot.c docs/STATUS.md docs/STDLIB.md; do \
 	  test -s "$$f" || { echo "[FAIL] docs/FULL_LANGUAGE_SELFHOST.md references $$f, which is missing or empty"; exit 1; }; \
 	done
+	@# the next phase is recorded and still honestly open
+	@grep -q 'ALL_SAYANOX_PHASE.md' README.md \
+	  || { echo "[FAIL] README.md no longer links the all-in-Sayanox next phase"; exit 1; }
+	@test -s docs/ALL_SAYANOX_PHASE.md \
+	  || { echo "[FAIL] docs/ALL_SAYANOX_PHASE.md is missing"; exit 1; }
+	@grep -q 'next phase' docs/ALL_SAYANOX_PHASE.md && grep -q 'in progress' docs/ALL_SAYANOX_PHASE.md \
+	  || { echo "[FAIL] docs/ALL_SAYANOX_PHASE.md lost its honest next-phase status"; exit 1; }
+	@grep -q 'tools/emit_to_ir.sa' docs/ALL_SAYANOX_PHASE.md \
+	  || { echo "[FAIL] ALL_SAYANOX_PHASE.md does not record the Sayanox IR translator"; exit 1; }
+	@test ! -e tools/emit_to_ir.c \
+	  || { echo "[FAIL] the C IR translator is back: the Sayanox one superseded it"; exit 1; }
+	@if $(MAKE) --no-print-directory all-sayanox >/dev/null 2>&1; then \
+	  echo "[FAIL] all-sayanox now reports success: update docs/ALL_SAYANOX_PHASE.md, README.md and this target instead of keeping a stale claim"; exit 1; fi
 	@echo "[OK] doc claims: $$(grep -rl 'The entry points named in this file do not exist' docs selfhost --include='*.md' | wc -l) legacy documents carry the banner; no Stage-2 host, bootstrap script or make target is advertised that does not exist"
 test-stage2: test-doc-claims
 test-for-str: test-doc-claims
+
+# ---------------------------------------------------------------------------
+# test-language-deps: the maintained toolchain must not need bash, awk, sed,
+# Python, Perl, Node or Ruby. Two checks:
+#
+#   1. static -- every tracked shebang script is POSIX sh, no recipe line in
+#      this Makefile invokes awk or sed, the LSP build does not use the old awk
+#      binder, and the offline packer chunks with `split`, not awk.
+#   2. dynamic -- a PATH shim makes those interpreters fail loudly and logs any
+#      invocation. Tools that are already built are kept (`-o`, so the four-
+#      minute compiler rebuild is not repeated), and the paths that used to
+#      need an interpreter are re-run: LSP binding + sessions, the IR log
+#      checks, the native/seed GC checks, the generic-limit fixture and the
+#      package wrapper. Any logged invocation fails the gate.
+#
+# This is a boundary test of the exercised paths, not a proof that no optional
+# target (for example the opt-in Python HTTP tests) uses an interpreter.
+# ---------------------------------------------------------------------------
+DEP_SHIM_DIR := $(TESTS)/depshim
+DEP_SHIM_LOG := $(TESTS)/depshim.log
+.PHONY: test-language-deps
+test-language-deps: $(GEN2) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN)
+	@# ---- static ----
+	@if grep -rl '^#!.*bash' --include='*.sh' --include='sx' . 2>/dev/null | grep -q .; then \
+	  echo "[FAIL] a tracked script still has a bash shebang:"; \
+	  grep -rl '^#!.*bash' --include='*.sh' --include='sx' . 2>/dev/null; exit 1; fi
+	@if grep -nE '^	[@-]*[[:space:]]*(awk|sed)([[:space:]]|$$)' Makefile; then \
+	  echo "[FAIL] a Makefile recipe invokes awk or sed"; exit 1; fi
+	@test ! -e tools/lsp_workspace_bind.awk || { echo "[FAIL] the old awk LSP binder still exists"; exit 1; }
+	@test ! -e tools/lsp_workspace_bind.sa || { echo "[FAIL] the LSP binder is back: the server walks folders itself now"; exit 1; }
+	@test ! -e tools/lsp_workspace.h || { echo "[FAIL] the C LSP directory bridge is back"; exit 1; }
+	@grep -q 'make workspace_manifest' tools/sayanox_lsp.sa && grep -q 'read_dir(' tools/sayanox_lsp.sa \
+	  || { echo "[FAIL] the LSP no longer builds its folder index in Sayanox"; exit 1; }
+	@grep -q 'split -b 1100' selfhost/pack_compiler_min.sh || { echo "[FAIL] the packer no longer chunks with split"; exit 1; }
+	@if grep -nE '^[[:space:]]*[^#]*awk' selfhost/pack_compiler_min.sh selfhost/restore_compiler_min.sh; then \
+	  echo "[FAIL] a restore/pack script invokes awk"; exit 1; fi
+	@echo "[OK] language deps (static): POSIX sh scripts only; no awk/sed in build or test recipes"
+	@# ---- dynamic ----
+	@mkdir -p $(DEP_SHIM_DIR)
+	@rm -f $(DEP_SHIM_LOG)
+	@for t in bash awk sed python3 python perl node ruby; do \
+	  printf '#!/bin/sh\necho "%s invoked: $*" >> "%s"\nexit 127\n' "$$t" "$(CURDIR)/$(DEP_SHIM_LOG)" > "$(DEP_SHIM_DIR)/$$t"; \
+	  chmod +x "$(DEP_SHIM_DIR)/$$t"; \
+	done
+	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" sh -c \
+	  './$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim.c && ./$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim_again.c'
+	@cmp $(TESTS)/lsp_shim.c $(TESTS)/lsp_shim_again.c
+	@cmp $(TESTS)/lsp_shim.c $(LSP_C)
+	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" $(MAKE) --no-print-directory \
+	  -o $(GEN2_C) -o $(GEN2) -o $(GEN1_MIN_C) -o $(GEN1_MIN) -o $(SEED_MIN_BIN) \
+	  test-lsp test-lsp-robust test-native-ir-log test-native-mem test-seed-gc test-seed-generics test-sxpkg-online-local test-sxpkg-sayanox-logic
+	@if [ -s $(DEP_SHIM_LOG) ]; then echo "[FAIL] a removed interpreter was invoked:"; cat $(DEP_SHIM_LOG); exit 1; fi
+	@echo "[OK] language deps: no bash/awk/sed/python/perl/node/ruby invoked by the exercised build, test and LSP paths"
 
 # ---------------------------------------------------------------------------
 # test-gen2-index-expr: an index is a numeric EXPRESSION, in every position.
@@ -3036,7 +3509,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-sxpkg-sayanox-logic test-language-deps
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -3051,6 +3524,37 @@ true-selfhost-full: true-selfhost-min
 
 true-selfhost: true-selfhost-min
 selfhost: true-selfhost
+
+# ---------------------------------------------------------------------------
+# all-sayanox: the NEXT PHASE (docs/ALL_SAYANOX_PHASE.md).
+#
+# Deliberately FAIL-CLOSED. Compiler logic, the formatter, the package tool,
+# the language server and the LSP binder are Sayanox programs, and since
+# 2026-10-17 no maintained path needs bash, awk, sed or Python
+# (`make test-language-deps`). What is still not Sayanox is the small trusted C
+# seed, the C native backend and the make/POSIX-sh build driver. This target prints that measured inventory on
+# every run, so the claim cannot silently drift and the remaining work cannot
+# be forgotten, and then refuses to report success.
+#
+# Removing a row here (and from docs/ALL_SAYANOX_PHASE.md) is how the phase
+# advances. Flip this target only when the inventory is empty or every
+# remaining entry is a documented exception in that document.
+# ---------------------------------------------------------------------------
+.PHONY: all-sayanox
+all-sayanox:
+	@echo "=== ALL-SAYANOX: next phase, not implemented ==="
+	@printf '  %-28s %6s lines  %s\n' seed "$$(wc -l < selfhost/seed/sxc_seed_min.c)" selfhost/seed/sxc_seed_min.c
+	@printf '  %-28s %6s lines  %s\n' native-backend "$$(wc -l < selfhost/native_aot.c)" selfhost/native_aot.c
+	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
+	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' selfhost/sx | wc -l)" 'POSIX sh'
+	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
+	@echo "  done: compiler, formatter, package tool (local commands plus"
+	@echo "        publish, install-local and the local sync/fetch), language"
+	@echo "        server, IR translator, LSP folder index, LSP test client,"
+	@echo "        byte-buffer + bitwise builtins (all .sa)"
+	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
+	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
+	@exit 1
 
 $(NATIVE_BIN): $(NATIVE_SRC)
 	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
@@ -3338,7 +3842,7 @@ test: true-selfhost
 # `make seed-bin` (it is a .PHONY target, so it always rebuilds from source).
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
-	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) tools/emit_to_ir
+	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) tools/emit_to_ir tools/emit_to_ir.c
 
 # ---------------------------------------------------------------------------
 # doctor: check core tools. Expanded feature gates also use POSIX utilities;
@@ -3382,6 +3886,10 @@ doctor:
 	if command -v cat >/dev/null 2>&1 && command -v tr >/dev/null 2>&1 && command -v rm >/dev/null 2>&1; then \
 	  echo "OK   $$(command -v cat), $$(command -v tr), $$(command -v rm) (optional)"; \
 	else echo "SKIP (optional: only when compiler_min.sa is missing and must be decoded)"; fi; \
+	printf 'split/paste     '; \
+	if command -v split >/dev/null 2>&1 && command -v paste >/dev/null 2>&1; then \
+	  echo "OK   $$(command -v split), $$(command -v paste) (optional)"; \
+	else echo "SKIP (optional: pack-compiler chunking and the IR-log checks)"; fi; \
 	echo "--------------------------------"; \
 	printf 'python          '; command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 \
 	  && echo "present, but NOT used anywhere on the bootstrap path" \
@@ -3821,7 +4329,22 @@ test-seed-generics: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
 	  if ./$(SEED_MIN_BIN) $(TESTS)/sgen_bad.sa >/dev/null 2>$(TESTS)/sgen_bad.err; then echo "[FAIL] invalid generic accepted: $$text"; exit 1; fi; \
 	  grep -q 'seed_min:' $(TESTS)/sgen_bad.err || exit 1; \
 	done
-	@awk 'BEGIN { print "make many<A,B,C,D,E,F>(a:A,b:B,c:C,d:D,e:E,f:F)->A { give a }"; for (i=0;i<512;i++) { n=i; printf "show many("; for (j=0;j<6;j++) { k=n%3; n=int(n/3); printf "%s%s",j?",":"",k==0?"1":k==1?"\"s\"":"[]" } print ")" } }' > $(TESTS)/sgen_limit.sa
+	@# 512 base-3 argument tuples, generated with shell builtins (no awk).
+	@{ \
+	  echo "make many<A,B,C,D,E,F>(a:A,b:B,c:C,d:D,e:E,f:F)->A { give a }"; \
+	  i=0; \
+	  while [ $$i -lt 512 ]; do \
+	    n=$$i; line="show many("; j=0; \
+	    while [ $$j -lt 6 ]; do \
+	      k=$$((n % 3)); n=$$((n / 3)); \
+	      case $$k in 0) v=1 ;; 1) v='"s"' ;; 2) v='[]' ;; esac; \
+	      if [ $$j -eq 0 ]; then line="$$line$$v"; else line="$$line,$$v"; fi; \
+	      j=$$((j + 1)); \
+	    done; \
+	    echo "$$line)"; \
+	    i=$$((i + 1)); \
+	  done; \
+	} > $(TESTS)/sgen_limit.sa
 	@if ./$(SEED_MIN_BIN) $(TESTS)/sgen_limit.sa >/dev/null 2>$(TESTS)/sgen_limit.err; then echo '[FAIL] seed exceeded specialization limit'; exit 1; fi
 	@grep -q 'function/specialization limit is 512' $(TESTS)/sgen_limit.err
 	@echo '[OK] seed generic specialization: num/str/list, multiple type parameters, nested/recursive/forward calls, annotations, aliasing, deduplication, deterministic output and diagnostics'
@@ -4314,12 +4837,13 @@ test-sxpkg-transfer-hardening: sxpkg tools/sxpkg.sh
 test-sxpkg-online-optin: test-sxpkg-transfer-hardening
 
 .PHONY: test-lsp-workspace
-test-lsp-workspace: $(LSP_BIN) tools/lsp_workspace_test.c
+test-lsp-workspace: $(LSP_BIN) $(GEN2) tools/lsp_workspace_test.sa
 	@mkdir -p $(TESTS)
-	$(CC) -O2 -Wall -Wextra -o $(TESTS)/lsp-workspace-test tools/lsp_workspace_test.c
+	./$(GEN2) tools/lsp_workspace_test.sa $(TESTS)/lsp_workspace_test.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/lsp-workspace-test $(TESTS)/lsp_workspace_test.c
 	@rm -rf '$(TESTS)/lsp workspace' && mkdir -p '$(TESTS)/lsp workspace'
 	./$(TESTS)/lsp-workspace-test '$(CURDIR)/$(LSP_BIN)' '$(CURDIR)/$(TESTS)/lsp workspace'
-	@echo '[OK] LSP folder index: framed C client, unopened files, overlays, refresh, URI/path boundaries and file cap; no interpreter'
+	@echo '[OK] LSP folder index: framed Sayanox client, unopened files, overlays, refresh, URI/path boundaries and file cap; no interpreter'
 
 test-lsp test-lsp-robust: test-lsp-workspace
 

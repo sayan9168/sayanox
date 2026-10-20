@@ -1,0 +1,3 @@
+./selfhost/gen2 selfhost/seed_tests/pathb_gen.sa selfhost/seed_tests/pathb_gen.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/pathb_gen selfhost/seed_tests/pathb_gen.c
+[OK] path builtins: read_dir listing, lstat kinds (file/dir/symlink/missing), sizes, realpath; seed-min refuses them

@@ -1,0 +1,5 @@
+./selfhost/gen2 selfhost/proc_frame_server.sa selfhost/seed_tests/proc_frame_server.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/proc_frame_server selfhost/seed_tests/proc_frame_server.c
+./selfhost/gen2 selfhost/proc_frame_client.sa selfhost/seed_tests/proc_frame_client.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/proc_frame_client selfhost/seed_tests/proc_frame_client.c
+[OK] process builtins: spawn and a framed child session, make_dir/make_link/remove_path, dead handles; seed-min refuses them

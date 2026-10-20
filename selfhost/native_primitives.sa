@@ -1,0 +1,168 @@
+// Gate for the native-AOT primitive surface: bit_and / bit_or / bit_xor /
+// bit_not / shl / shr, the write_bytes byte-buffer writer and the bytes_f64
+// IEEE-754 splitter.
+//
+// Every expected value below is written down as a literal that was computed
+// independently in C, so a wrong lowering fails the gate instead of quietly
+// producing a different number.
+//
+// The program also writes a complete, static, x86-64 ELF executable that exits
+// 42 -- the exact byte-buffer shape selfhost/native_aot.c needs -- using only
+// push, the bitwise helpers and write_bytes.  The gate runs the emitted file,
+// so "the kernel loads it and it exits 42" is proved rather than assumed.
+//
+// Two dialect notes, both deliberate:
+//   * string comparisons go through string_eq(), because `call == "text"`
+//     still lowers to a C pointer comparison -- a known limitation, see
+//     docs/BUILTINS.md;
+//   * the checks live in one typed function, because a typed function may not
+//     hold exit() -- the exit stays at the top level.
+
+make u16(xs: list, v: num) -> list {
+  xs = push(xs, bit_and(v, 255))
+  xs = push(xs, bit_and(shr(v, 8), 255))
+  give xs
+}
+
+make u32(xs: list, v: num) -> list {
+  xs = u16(xs, v)
+  xs = u16(xs, shr(v, 16))
+  give xs
+}
+
+make u64(xs: list, v: num) -> list {
+  xs = u32(xs, v)
+  xs = u32(xs, shr(v, 32))
+  give xs
+}
+
+make run() -> num {
+  hold bad = 0
+  hold xs = []
+  hold fb = []
+  // mov eax,60 ; mov edi,42 ; syscall
+  hold code = [184, 60, 0, 0, 0, 191, 42, 0, 0, 0, 15, 5]
+  hold e_ident = [127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  hold total = 120 + len(code)
+  hold entry = 1073741824 + 120
+  hold b = 0
+  hold p = arg(1)
+  hold q = arg(2)
+  when len(p) == 0 || len(q) == 0 {
+    give 1
+  }
+  // ---- bitwise operators, against hand-computed C values ----
+  when bit_and(12, 10) != 8 {
+    hold bad = 1
+  }
+  when bit_or(12, 10) != 14 {
+    hold bad = 1
+  }
+  when bit_xor(12, 10) != 6 {
+    hold bad = 1
+  }
+  when bit_and(bit_not(0), 255) != 255 {
+    hold bad = 1
+  }
+  when bit_and(bit_not(15), 240) != 240 {
+    hold bad = 1
+  }
+  when shl(1, 40) != 1099511627776 {
+    hold bad = 1
+  }
+  when shr(1024, 4) != 64 {
+    hold bad = 1
+  }
+  when shl(1, 63) == 0 {
+    hold bad = 1
+  }
+  when shr(4294901760, 16) != 65535 {
+    hold bad = 1
+  }
+  when bit_xor(bit_or(12, 10), bit_and(12, 10)) != 6 {
+    hold bad = 1
+  }
+  // ---- bytes_f64: the exact little-endian IEEE-754 pattern ----
+  fb = bytes_f64(fb, 1.5)
+  when len(fb) != 8 {
+    hold bad = 1
+  }
+  when fb[0] != 0 {
+    hold bad = 1
+  }
+  when fb[6] != 248 {
+    hold bad = 1
+  }
+  when fb[7] != 63 {
+    hold bad = 1
+  }
+  fb = bytes_f64(fb, 0.0)
+  when len(fb) != 16 {
+    hold bad = 1
+  }
+  when fb[8] != 0 {
+    hold bad = 1
+  }
+  when fb[15] != 0 {
+    hold bad = 1
+  }
+  fb = bytes_f64(fb, -2.0)
+  when len(fb) != 24 {
+    hold bad = 1
+  }
+  when fb[23] != 192 {
+    hold bad = 1
+  }
+  // ---- write_bytes: 24 bytes with embedded NULs survive a round trip ----
+  when write_bytes(q, fb) != 1 {
+    hold bad = 1
+  }
+  when path_size(q) != 24 {
+    hold bad = 1
+  }
+  // ---- the byte buffer becomes a static x86-64 ELF that exits 42 ----
+  for b in e_ident {
+    xs = push(xs, b)
+  }
+  xs = u16(xs, 2)
+  xs = u16(xs, 62)
+  xs = u32(xs, 1)
+  xs = u64(xs, entry)
+  xs = u64(xs, 64)
+  xs = u64(xs, 0)
+  xs = u32(xs, 0)
+  xs = u16(xs, 64)
+  xs = u16(xs, 56)
+  xs = u16(xs, 1)
+  xs = u16(xs, 0)
+  xs = u16(xs, 0)
+  xs = u16(xs, 0)
+  xs = u32(xs, 1)
+  xs = u32(xs, bit_or(4, 1))
+  xs = u64(xs, 0)
+  xs = u64(xs, 1073741824)
+  xs = u64(xs, 1073741824)
+  xs = u64(xs, total)
+  xs = u64(xs, total)
+  xs = u64(xs, 4096)
+  for b in code {
+    xs = push(xs, b)
+  }
+  when len(xs) != total {
+    hold bad = 1
+  }
+  when write_bytes(p, xs) != 1 {
+    hold bad = 1
+  }
+  when path_size(p) != total {
+    hold bad = 1
+  }
+  give bad
+}
+
+hold rc = run()
+when rc == 1 {
+  show "native primitives FAILED"
+  hold code = exit(1)
+}
+show "bit_and bit_or bit_xor bit_not shl shr bytes_f64 write_bytes: checked, and the emitted ELF exits 42"

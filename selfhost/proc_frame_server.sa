@@ -1,0 +1,68 @@
+// Framed echo server for the process-builtin gate.
+//
+// Reads one JSON-RPC style frame at a time from stdin
+// ("Content-Length: N\r\n\r\n" then N bytes) and answers with a frame whose
+// body is the request body with a "reply:" prefix. It stays in one session
+// until stdin closes and then exits 0, which is what the client checks with
+// child_close. Sayanox only: read_line/read_n for the request, write_out plus
+// flush_out for the answer.
+
+make to_num(s: str) -> num {
+  hold i = 0
+  hold n = 0
+  hold v = 0
+  hold c = 0
+  hold seen = 0
+  n = len(s)
+  while i < n {
+    c = sx_index(s, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      seen = 1
+    }
+    otherwise {
+      when seen == 1 {
+        i = n
+      }
+    }
+    i += 1
+  }
+  give v
+}
+
+make serve() -> num {
+  hold head = ""
+  hold n = 0
+  hold blank = ""
+  hold body = ""
+  hold reply = ""
+  hold out = ""
+  hold w = 0
+  head = read_line()
+  when len(head) == 0 {
+    give 0
+  }
+  n = to_num(head)
+  blank = read_line()
+  when len(blank) != 0 {
+    give 0
+  }
+  body = read_n(n)
+  reply = "reply:"
+  reply = reply + body
+  out = "Content-Length: "
+  out = out + numstr(len(reply))
+  out = out + "\r\n\r\n"
+  out = out + reply
+  w = write_out(out)
+  w = flush_out()
+  give 1
+}
+
+hold go = 1
+while go == 1 {
+  hold more = serve()
+  when more == 0 {
+    hold go = 0
+  }
+}

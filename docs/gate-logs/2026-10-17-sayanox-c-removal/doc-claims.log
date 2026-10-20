@@ -1,0 +1,2 @@
+[FAIL] docs/gate-logs/2026-10-17-sayanox-c-removal/README.md advertises a missing entry point without the honest banner
+make: *** [Makefile:2702: test-doc-claims] Error 1

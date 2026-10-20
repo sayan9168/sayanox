@@ -1,3 +1,7 @@
+<div align="center">
+
+<img src="assets/sayanox-logo-256.png" alt="Sayanox" width="120" height="120" />
+
 # Sayanox
 
 ### A completely original systems programming language with its own self-hosting compiler
@@ -7,6 +11,8 @@
 [![License: Sayanox](https://img.shields.io/badge/License-Sayanox%20v1.1-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/Language-Sayanox-blue)](https://github.com/sayan9168/sayanox)
 [![Status](https://img.shields.io/badge/Status-Active%20Development-orange)](docs/STATUS.md)
+
+</div>
 
 > Sayanox is designed to be **easy to read**, **easy to write**, and **powerful enough** for real systems work.  
 > The compiler, tools, and most examples are written in Sayanox.
@@ -93,7 +99,11 @@ make tools
 ./tools/sxpkg list
 ```
 
-The formatter currently handles whitespace. The package tool supports local `init` / `add` / `list` / `remove` / `search` / `info` / `seed`. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
+The formatter currently handles whitespace. The package tool supports `init` / `add` / `list` / `remove` / `search` / `info` / `seed` / `deps` / `verify` / `install` / `install-local` / `publish`, since 2026-10-18 the local-registry halves of `sync` and `fetch` as well, and since 2026-10-19 the whole offline half of `install` (name preflight, deciding what is missing, copying and reporting it); only the http(s) transport and the online opt-in policy stay in the shell wrapper. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
+
+The language server (`tools/sayanox_lsp.sa`), its folder index and the IR
+translator (`tools/emit_to_ir.sa`) are Sayanox programs too, and no maintained
+build or test path needs bash, awk, sed or Python (`make test-language-deps`).
 
 ---
 
@@ -142,10 +152,69 @@ has the short version.
 - [x] Self-hosting pure-min dialect
 - [x] Native AOT subset (x86-64 Linux)
 - [x] Formatter + local package tool in Sayanox
+- [x] Language server in Sayanox (bounded local workspace index)
+- [x] Toolchain free of bash, awk, sed and Python (`make test-language-deps`)
+- [ ] **Next phase — all-in-Sayanox toolchain** ([plan](docs/ALL_SAYANOX_PHASE.md)):
+      port the remaining C pieces (native backend, seed) and the build driver
+      into Sayanox. The IR translator, the LSP folder index and the byte-buffer
+      + bitwise builtins already moved (2026-10-17 / 2026-10-18);
+      `make all-sayanox` fails closed until the rest does
 - [ ] Full Stage-2 language self-hosting
 - [ ] Broader platform support
 - [ ] Standard library growth
-- [ ] LSP support
+
+### Next phase: everything in Sayanox
+
+The maintained *logic* is already Sayanox: the compiler
+(`selfhost/compiler_min.sa`), the formatter, the package tool, the language
+server and its framed-session test client. Since 2026-10-17 no maintained path
+needs bash, awk, sed or Python either.
+
+What is still not Sayanox is small, measurable, and listed in
+[docs/ALL_SAYANOX_PHASE.md](docs/ALL_SAYANOX_PHASE.md): the 2,035-line C seed,
+the 4,353-line C native backend, and the make/POSIX-sh build driver. On
+2026-10-17 the 150-line C IR translator became `tools/emit_to_ir.sa` with
+byte-identical output, the LSP folder index moved into Sayanox (the C
+directory header and its binder were deleted), the 127-line C framed-session
+test client became `tools/lsp_workspace_test.sa` on the new process builtins,
+and ten unreferenced legacy C files were removed. On 2026-10-18 the language
+gained the byte-buffer and bitwise surface the native backend needs
+(`write_bytes`, `bytes_f64`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`,
+`shl`, `shr`); `make test-native-primitives` proves it by running a static
+x86-64 ELF that a Sayanox program emitted with those calls alone. `make all-sayanox` prints the remaining
+inventory and **fails closed** — the same way `true-selfhost-full` refuses to
+claim a full-language self-host — so the remaining work cannot silently drift
+or be forgotten. The plan orders it: ~~IR tool~~, ~~directory bridge~~, then
+the package wrapper, then the native backend, and the seed last.
+
+---
+
+## Logo
+
+<p align="center">
+  <img src="assets/sayanox-logo-256.png" alt="Sayanox mark" width="96" height="96" />
+</p>
+
+The mark is a rounded-square badge on an indigo&nbsp;→&nbsp;cyan gradient,
+carrying a geometric <strong>S</strong> built from two 270-degree circular arcs.
+It is the boot chain made visible: a self-hosting compiler has to be folded out
+of itself, and two arcs whose tangents meet eastward at the waist are the
+smallest shape that says so without drawing a compiler.
+
+The full set — vector masters, rasters, the wordmark lockup and a 1280×640
+social card — lives in [`assets/`](assets/), with the palette, the exact
+geometry and the usage notes in [`assets/README.md`](assets/README.md).
+
+```html
+<!-- the mark, at any size -->
+<img src="assets/sayanox-logo.svg" alt="Sayanox" width="64" />
+
+<!-- wordmark lockup, for a dark or coloured ground -->
+<img src="assets/sayanox-lockup.svg" alt="Sayanox" height="48" />
+
+<!-- browser tab icon -->
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+```
 
 ---
 
