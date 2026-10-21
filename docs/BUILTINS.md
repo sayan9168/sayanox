@@ -62,6 +62,7 @@ the same source); the checked-in `seed-min` predates them and rejects them.
 | `remove_path(path)` | remove a file or an empty directory; `1` on success, `0` on failure |
 | `write_bytes(path, xs)` | write a list of numbers as raw bytes; `1` on success, `0` on failure |
 | `bytes_f64(xs, v)` | append the 8 little-endian IEEE-754 bytes of `v` to a list |
+| `read_bytes(path, xs)` | append every byte of a file to a list, NUL bytes included; gives the count, or `-1` if it cannot be read |
 | `bit_and(a, b)` / `bit_or(a, b)` / `bit_xor(a, b)` | 64-bit bitwise and/or/xor as a number |
 | `bit_not(a)` | 64-bit complement as a number |
 | `shl(a, n)` / `shr(a, n)` | unsigned 64-bit shift left/right by `n` bits |
@@ -113,6 +114,19 @@ a silent zero. `make test-native-primitives` pins all of it: it checks every
 operator against a value computed in C and then runs a static x86-64 ELF
 executable that a Sayanox program wrote with nothing but `push`, the bitwise
 helpers and `write_bytes`.
+
+`read_bytes` is the reader that surface was missing, added on 2026-10-20 with
+`tools/sxlink.sa`. `write_bytes` could put a byte buffer on disk, but nothing
+could read one back: `read_file` returns a C string, so an ELF image -- which
+is mostly NUL bytes and page padding -- arrived truncated. `read_bytes(path,
+xs)` appends every byte of the file to `xs` and gives the count, so a buffer
+that round-trips a binary file is `hold n = read_bytes(p, xs)` followed by
+`xs[i]`. It appends rather than returning a fresh list for the same reason
+`bytes_f64` appends: the codegen still has no list-typed return for a builtin.
+`-1` means it could not be read, and then nothing was appended, so a caller can
+retry into the same buffer. `make test-read-bytes` pins the round trip through
+a NUL byte and a `0xFF` byte, the append-on-second-read contract, the `-1`,
+and the refusal by seed-min and by the native backend.
 
 One known limitation of the comparison lowering, unchanged by this addition:
 `call == "text"` (and `!=`, `<`, `>`, `<=`, `>=`) still lowers to a C pointer

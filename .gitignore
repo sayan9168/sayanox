@@ -41,3 +41,4 @@ __pycache__/
 
 # C99 analysis tool
 tools/emit_to_ir
+tools/sxlink

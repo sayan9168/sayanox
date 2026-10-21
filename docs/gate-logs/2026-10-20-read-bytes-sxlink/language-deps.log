@@ -1,0 +1,158 @@
+[OK] compiler module (checked-in source verified; no decoder used)
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+selfhost/gen2 tools/sayanox_lsp.sa tools/sayanox_lsp.c
+cc -O2 -Werror=implicit-function-declaration -o tools/sayanox_lsp tools/sayanox_lsp.c
+./selfhost/gen2 tools/sxpkg.sa tools/sxpkg.c >/dev/null
+cc -O2 -o tools/sxpkg tools/sxpkg.c
+[OK] Sayanox local package-lock tool built from tools/sxpkg.sa
+[OK] language deps (static): POSIX sh scripts only; no awk/sed in build or test recipes
+[OK] LSP Unicode and lifecycle: accented Latin, Bengali, emoji, UTF-16 positions, empty changes and close
+./selfhost/gen2 tools/lsp_workspace_test.sa selfhost/seed_tests/lsp_workspace_test.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o selfhost/seed_tests/lsp-workspace-test selfhost/seed_tests/lsp_workspace_test.c
+./selfhost/seed_tests/lsp-workspace-test '/home/user/sayanox/tools/sayanox_lsp' '/home/user/sayanox/selfhost/seed_tests/lsp workspace'
+workspace unopened symbols and references; encoded paths; more than four disk files
+workspace open overlay deduplicates; close restores disk; disk edits/deletes refresh
+workspace first folder; symlinks/hidden/oversized skipped; invalid/nonlocal roots stay responsive
+workspace 128-file cap enforced
+[OK] LSP folder index: framed Sayanox client, unopened files, overlays, refresh, URI/path boundaries and file cap; no interpreter
+[OK] Sayanox LSP: live JSON-RPC sessions, real diagnostics, symbols, completion, hover, definition, references, workspace symbols, formatting
+[OK] Sayanox LSP robustness: JSON-RPC error responses for bad input
+mkdir -p selfhost/seed_tests
+# ---- 1. the fixture still runs and prints the hand-computed values ----
+./selfhost/native_aot selfhost/native_ir_log_test.sa selfhost/seed_tests/irl_nat
+# ---- 2. the recorder is inert: not one emitted byte changes ----
+SX_EMIT_LOG=selfhost/seed_tests/irl.log ./selfhost/native_aot selfhost/native_ir_log_test.sa selfhost/seed_tests/irl_logged
+cmp selfhost/seed_tests/irl_nat selfhost/seed_tests/irl_logged
+echo "[OK] native ir log: SX_EMIT_LOG changes no emitted byte (the two ELFs cmp clean)"
+[OK] native ir log: SX_EMIT_LOG changes no emitted byte (the two ELFs cmp clean)
+# ---- 3. the instruction list is a function of the source ----
+SX_EMIT_LOG=selfhost/seed_tests/irl_again.log ./selfhost/native_aot selfhost/native_ir_log_test.sa selfhost/seed_tests/irl_logged2
+cmp selfhost/seed_tests/irl.log selfhost/seed_tests/irl_again.log
+echo "[OK] native ir log: the same source gives the same instruction list ($(grep -c . selfhost/seed_tests/irl.log) lines)"
+[OK] native ir log: the same source gives the same instruction list (1182 lines)
+# ---- 4. every line is an instruction line or a '; ' comment line ----
+test $(grep -c -v -E '^([0-9a-f]{6}  |;)' selfhost/seed_tests/irl.log) -eq 0 \
+  || { echo "[FAIL] the instruction list has a line in neither format:"; grep -n -v -E '^([0-9a-f]{6}  |;)' selfhost/seed_tests/irl.log | head -3; exit 1; }
+# ---- 5. the log's invariants: monotonic offsets, fixups land on jumps,
+#         six phases in order, a reported code size ----
+[OK] native ir log: 1122 instructions, 2 label slots, 41 rel32 fixups, monotonic offsets, six phases in order
+# ---- 6. every call target and every operand has a real name ----
+test $(grep -c -E 'call builtin id[0-9]|call make make[0-9]|bin[0-9a-f][0-9a-f] |grp1_[0-9]|jcc[0-9]+ |setcc[0-9]+ |f7\?|xmm\?|r32\?|[^a-z0-9]r\?' selfhost/seed_tests/irl.log) -eq 0 \
+  || { echo "[FAIL] a call target or an operand fell back to a placeholder name:"; grep -n -E 'call builtin id[0-9]|call make make[0-9]|bin[0-9a-f][0-9a-f] |grp1_[0-9]|jcc[0-9]+ |setcc[0-9]+ |f7\?|xmm\?|r32\?|[^a-z0-9]r\?' selfhost/seed_tests/irl.log | head -3; exit 1; }
+# ---- 7. the machine model is visible in the list ----
+echo "[OK] native ir log: numbers are double bits through xmm, strings and lists are named stub calls, makes are named call targets"
+[OK] native ir log: numbers are double bits through xmm, strings and lists are named stub calls, makes are named call targets
+# ---- 8. the instruction vocabulary of the fixture's top level, pinned ----
+echo "[OK] native ir log: the fixture's top level emits exactly these mnemonics: add addsd call cvtsi2sd cvttsd2si jae je jmp lea mov movq movzx mulsd pop push seta ucomisd"
+[OK] native ir log: the fixture's top level emits exactly these mnemonics: add addsd call cvtsi2sd cvttsd2si jae je jmp lea mov movq movzx mulsd pop push seta ucomisd
+# ---- 9. only the encoder records; the emitter may announce, not write ----
+echo "[OK] native ir log: the instruction list is written by the encoder alone -- a second backend replaces the encoder and keeps the emit tree"
+[OK] native ir log: the instruction list is written by the encoder alone -- a second backend replaces the encoder and keeps the emit tree
+./selfhost/native_aot selfhost/seed_tests/native_mem.sa selfhost/seed_tests/native_mem
+./selfhost/native_aot selfhost/seed_tests/native_mem_oom.sa selfhost/seed_tests/native_mem_oom
+[OK] native collector: 200k allocating iterations (~8 MB) stay inside a 4 MiB cap
+./selfhost/native_aot selfhost/seed_tests/native_mem_gc.sa selfhost/seed_tests/native_mem_gc
+[OK] native gc()/gc_live()/gc_runs() are real (collections run, bytes are reclaimed, live bytes reported)
+./selfhost/native_aot selfhost/seed_tests/native_mem_keep.sa selfhost/seed_tests/native_mem_keep
+[OK] native collector keeps reachable strings, list elements and struct fields (30k allocating iterations)
+./selfhost/native_aot selfhost/seed_tests/native_bigalloc.sa selfhost/seed_tests/native_bigalloc
+./selfhost/native_aot selfhost/seed_tests/native_biglist.sa selfhost/seed_tests/native_biglist
+./selfhost/native_aot selfhost/seed_tests/native_mem_fit.sa selfhost/seed_tests/native_mem_fit
+./selfhost/native_aot selfhost/seed_tests/native_oom_out.sa selfhost/seed_tests/native_oom_out
+[OK] native memory: a real free path (churn fits in 4 MiB, reachable values survive, an 8 MiB live set still dies loudly)
+./selfhost/seed/sxc_seed_min selfhost/seed_list_lifetime_stress.sa > selfhost/seed_tests/seed-list-budget.c
+cc -O2 -o selfhost/seed_tests/seed-list-budget selfhost/seed_tests/seed-list-budget.c
+[OK] seed list aliases survive 20000 pushes/returns and reallocations inside 32 MiB (finite workload, no list reclamation claim)
+mkdir -p selfhost/seed_tests
+# ---- build all five fixtures with all three seed/gen2 backends ----
+set -e; for f in churn grow retain ops tmp; do \
+  ./selfhost/seed/sxc_seed_min selfhost/seed_gc_$f.sa > selfhost/seed_tests/sgc_${f}_ms.c; \
+  cc -O2 -o selfhost/seed_tests/sgc_${f}_ms selfhost/seed_tests/sgc_${f}_ms.c; \
+  ./selfhost/gen2 selfhost/seed_gc_$f.sa selfhost/seed_tests/sgc_${f}_g2.c >/dev/null; \
+  cc -O2 -o selfhost/seed_tests/sgc_${f}_g2 selfhost/seed_tests/sgc_${f}_g2.c; \
+  ./selfhost/seed/sxc_seed selfhost/seed_gc_$f.sa > selfhost/seed_tests/sgc_${f}_fs.c; \
+  cc -O2 -I selfhost/seed -o selfhost/seed_tests/sgc_${f}_fs selfhost/seed_tests/sgc_${f}_fs.c -lm; \
+done
+# ---- seed-min: no collector, but a builder and a freeing assignment ----
+grep -q -F 'sx_sb_register(h)' selfhost/seed_tests/sgc_grow_ms.c
+grep -q -F 'sx_sb_free(' selfhost/seed_tests/sgc_grow_ms.c
+echo "[OK] seed-min (no collector): 200k churn, a 2000-step accumulation and a temp loop all stay inside a 4 MiB address space"
+[OK] seed-min (no collector): 200k churn, a 2000-step accumulation and a temp loop all stay inside a 4 MiB address space
+# ---- seed-min: an 8 MiB live set dies loudly, not silently ----
+if __got=$(sh -c 'ulimit -v 4096; ./selfhost/seed_tests/sgc_retain_ms 2>selfhost/seed_tests/sgc_retain_ms.err'); then \
+  echo "[FAIL] seed-min survived a 4 MiB cap while retaining 8388608 bytes"; exit 1; fi; \
+  [ "$__got" = before ] || { echo "[FAIL] seed-min OOM lost stdout or continued: $__got"; exit 1; }
+grep -q -F 'sx: out of memory' selfhost/seed_tests/sgc_retain_ms.err
+echo "[OK] seed-min: an 8 MiB live set inside a 4 MiB cap exits 1 with \`sx: out of memory\` and keeps the stdout it already wrote"
+[OK] seed-min: an 8 MiB live set inside a 4 MiB cap exits 1 with `sx: out of memory` and keeps the stdout it already wrote
+# ---- seed-min refuses the collector builtins it does not have ----
+printf 'show gc()\n' > selfhost/seed_tests/sgc_gc_ms.sa
+if ./selfhost/seed/sxc_seed_min selfhost/seed_tests/sgc_gc_ms.sa > selfhost/seed_tests/sgc_gc_ms.c 2>selfhost/seed_tests/sgc_gc_ms.err; then \
+  echo "[FAIL] seed-min accepted gc() although it has no collector"; exit 1; fi
+grep -q -F 'seed_min:' selfhost/seed_tests/sgc_gc_ms.err
+echo "[OK] seed-min: gc() is refused at compile time (clear diagnostic, not a silent no-op)"
+[OK] seed-min: gc() is refused at compile time (clear diagnostic, not a silent no-op)
+# ---- full seed: the operator lexer fix, and parity with the others ----
+echo "[OK] full seed: every single-character operator is emitted again (it used to record the token text as a quoted char literal) and ops/grow match seed-min and gen2 exactly"
+[OK] full seed: every single-character operator is emitted again (it used to record the token text as a quoted char literal) and ops/grow match seed-min and gen2 exactly
+# ---- full seed: refcount representation, gc() no-op, no release path ----
+printf 'show gc()\n' > selfhost/seed_tests/sgc_noop_fs.sa
+./selfhost/seed/sxc_seed selfhost/seed_tests/sgc_noop_fs.sa > selfhost/seed_tests/sgc_noop_fs.c
+cc -O2 -I selfhost/seed -o selfhost/seed_tests/sgc_noop_fs selfhost/seed_tests/sgc_noop_fs.c -lm
+printf 'show gc_live()\n' > selfhost/seed_tests/sgc_live_fs.sa
+if ./selfhost/seed/sxc_seed selfhost/seed_tests/sgc_live_fs.sa > /dev/null 2>selfhost/seed_tests/sgc_live_fs.err; then \
+  echo "[FAIL] the full seed accepted gc_live(), which its runtime does not have"; exit 1; fi
+grep -q -F "undefined function 'gc_live'" selfhost/seed_tests/sgc_live_fs.err
+SX_GC_DEBUG=1 ./selfhost/seed_tests/sgc_tmp_fs > selfhost/seed_tests/sgc_tmp_fs.out 2>selfhost/seed_tests/sgc_tmp_fs.err
+grep -q -F 'sx-gc-debug: 6000 objects still alive at exit' selfhost/seed_tests/sgc_tmp_fs.err
+echo "[OK] full seed: gc() is a no-op returning 0, gc_live() does not exist, and SX_GC_DEBUG=1 counts 6000 objects alive after 2000 iterations that retain nothing (no working release path)"
+[OK] full seed: gc() is a no-op returning 0, gc_live() does not exist, and SX_GC_DEBUG=1 counts 6000 objects alive after 2000 iterations that retain nothing (no working release path)
+# ---- full seed: static object table, and the number-format divergence ----
+if sh -c 'ulimit -v 4096; ./selfhost/seed_tests/sgc_tmp_fs' >/dev/null 2>&1; then \
+  echo "[FAIL] the full seed started inside a 4 MiB cap: its SX_TAB_CAP 2097152 object table is static and should not fit"; exit 1; fi
+echo "[OK] full seed: needs >= 64 MiB of address space (static object table) and prints 8388608 where seed-min/gen2 print 8.38861e+06 (documented divergence)"
+[OK] full seed: needs >= 64 MiB of address space (static object table) and prints 8388608 where seed-min/gen2 print 8.38861e+06 (documented divergence)
+# ---- gen2: real mark & sweep, generous threshold, checked allocations ----
+test $(grep -c -F 'sx: out of memory' selfhost/seed_tests/sgc_churn_g2.c) -eq 3 \
+  || { echo "[FAIL] the gen2 runtime does not check all three of its allocations"; exit 1; }
+if __got=$(sh -c 'ulimit -v 16384; ./selfhost/seed_tests/sgc_churn_g2 2>selfhost/seed_tests/sgc_churn_g2.err'); then \
+  echo "[FAIL] gen2 ran a 200k churn inside a 16 MiB cap; its 8 MiB heap threshold should not allow that"; exit 1; fi; \
+  case "$__got" in *Segmentation*) echo "[FAIL] gen2 segfaulted under memory pressure"; exit 1;; esac
+grep -q -F 'sx: out of memory' selfhost/seed_tests/sgc_churn_g2.err
+echo "[OK] gen2: mark & sweep keeps a 200k churn and an 8 MiB live set correct inside 64 MiB, all three runtime allocations are checked, and 16 MiB fails as \`sx: out of memory\` with exit 1 instead of a segfault"
+[OK] gen2: mark & sweep keeps a 200k churn and an 8 MiB live set correct inside 64 MiB, all three runtime allocations are checked, and 16 MiB fails as `sx: out of memory` with exit 1 instead of a segfault
+# ---- gen2 really does collect during the churn (test-gc pins the builtins) ----
+printf 'hold i = 0\nwhile i < 200000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow i\nshow gc_runs()\nshow gc_live()\n' > selfhost/seed_tests/sgc_runs_g2.sa
+./selfhost/gen2 selfhost/seed_tests/sgc_runs_g2.sa selfhost/seed_tests/sgc_runs_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/sgc_runs_g2 selfhost/seed_tests/sgc_runs_g2.c
+__o=$(sh -c 'ulimit -v 65536; ./selfhost/seed_tests/sgc_runs_g2'); \
+ printf '%s\n' "$__o" | { \
+   IFS= read -r __first; IFS= read -r __r; IFS= read -r __l; \
+   if [ "$__r" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 ran no collection in a 200k churn: $__o"; exit 1; fi; \
+   if [ "$__l" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 gc_live() reported $__l after a 200k churn"; exit 1; fi; }
+echo "[OK] gen2: a 200k churn collects (gc_runs() >= 1) and the live set stays small (gc_live() reported)"
+[OK] gen2: a 200k churn collects (gc_runs() >= 1) and the live set stays small (gc_live() reported)
+echo "[OK] seed GC: seed-min = no collector (builder strings + a freeing assignment, clear OOM); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem"
+[OK] seed GC: seed-min = no collector (builder strings + a freeing assignment, clear OOM); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem
+./selfhost/seed/sxc_seed_min selfhost/seed_generics_test.sa > selfhost/seed_tests/sgen_seed.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/sgen_seed selfhost/seed_tests/sgen_seed.c
+./selfhost/gen2 selfhost/seed_generics_test.sa selfhost/seed_tests/sgen_gen2.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/sgen_gen2 selfhost/seed_tests/sgen_gen2.c
+./selfhost/native_aot selfhost/seed_generics_test.sa selfhost/seed_tests/sgen_native
+./selfhost/seed/sxc_seed_min selfhost/seed_generics_extended_test.sa > selfhost/seed_tests/sgen_extended.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/sgen_extended selfhost/seed_tests/sgen_extended.c
+./selfhost/seed/sxc_seed_min selfhost/seed_generics_scope_test.sa > selfhost/seed_tests/sgen_scope.c
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o selfhost/seed_tests/sgen_scope selfhost/seed_tests/sgen_scope.c
+./selfhost/seed/sxc_seed_min selfhost/seed_generics_test.sa > selfhost/seed_tests/sgen_again.c
+cmp selfhost/seed_tests/sgen_seed.c selfhost/seed_tests/sgen_again.c
+[OK] seed generic specialization: num/str/list, multiple type parameters, nested/recursive/forward calls, annotations, aliasing, deduplication, deterministic output and diagnostics
+[OK] sxpkg online install (file:// registry): good accepted, tampered rejected and removed, missing leaves no partial file
+[OK] sxpkg in Sayanox: publish, install-local, local sync/fetch, rollback, the folder primitives, and check-lock/need-fetch/install-cached
+[OK] language deps: no bash/awk/sed/python/perl/node/ruby invoked by the exercised build, test and LSP paths
+language-deps exit=0

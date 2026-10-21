@@ -486,8 +486,8 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
               when i < len(text) && sx_index(text, i) == 40 {
                 hold returns = sxesegment(env, 4)
                 hold signatures = sxesegment(env, 5)
-                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|spawn=n|child_send=n|child_recv=s|child_line=s|child_close=n|make_dir=n|make_link=n|remove_path=n|write_bytes=n|bytes_f64=l|bit_and=n|bit_or=n|bit_xor=n|bit_not=n|shl=n|shr=n|len=n|index=n|")
-                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|spawn=s|child_send=ns|child_recv=nn|child_line=n|child_close=n|make_dir=s|make_link=ss|remove_path=s|write_bytes=sl|bytes_f64=ln|bit_and=nn|bit_or=nn|bit_xor=nn|bit_not=n|shl=nn|shr=nn|len=a|index=an|")
+                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|spawn=n|child_send=n|child_recv=s|child_line=s|child_close=n|make_dir=n|make_link=n|remove_path=n|write_bytes=n|bytes_f64=l|read_bytes=n|bit_and=n|bit_or=n|bit_xor=n|bit_not=n|shl=n|shr=n|len=n|index=n|")
+                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|spawn=s|child_send=ns|child_recv=nn|child_line=n|child_close=n|make_dir=s|make_link=ss|remove_path=s|write_bytes=sl|bytes_f64=ln|read_bytes=sl|bit_and=nn|bit_or=nn|bit_xor=nn|bit_not=n|shl=nn|shr=nn|len=a|index=an|")
                 kind = sxelookup(returns, name, "=")
                 when len(kind) == 0 {
                   give sxerecord(i, "e", "call has no checked return signature")
@@ -757,7 +757,7 @@ make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
       }
     }
   }
-  hold builtins = "|concat=|len=|sx_index=|index=|chr=|read_file=|write_file=|http_get=|arg=|arg_count=|string_eq=|push=|numstr=|read_line=|read_n=|write_out=|flush_out=|gc=|exit=|gc_live=|gc_runs=|read_dir=|path_kind=|path_size=|path_real=|spawn=|child_send=|child_recv=|child_line=|child_close=|make_dir=|make_link=|remove_path=|sx_read_dir=|sx_path_kind=|sx_path_size=|sx_path_real=|sx_spawn=|sx_child_send=|sx_child_recv=|sx_child_line=|sx_child_close=|sx_make_dir=|sx_make_link=|sx_remove_path=|write_bytes=|bytes_f64=|bit_and=|bit_or=|bit_xor=|bit_not=|shl=|shr=|sx_write_bytes=|sx_bytes_f64=|sx_bit_and=|sx_bit_or=|sx_bit_xor=|sx_bit_not=|sx_shl=|sx_shr=|sx_cat=|sx_len=|sx_idx=|sx_chr=|sx_read=|sx_write=|sx_http=|sx_arg=|sx_argc=|sx_eq=|sx_numstr=|sx_read_line=|sx_read_n=|sx_write_out=|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=|sx_mod=|sx_lget=|sx_llen=|sx_lpush=|"
+  hold builtins = "|concat=|len=|sx_index=|index=|chr=|read_file=|write_file=|http_get=|arg=|arg_count=|string_eq=|push=|numstr=|read_line=|read_n=|write_out=|flush_out=|gc=|exit=|gc_live=|gc_runs=|read_dir=|path_kind=|path_size=|path_real=|spawn=|child_send=|child_recv=|child_line=|child_close=|make_dir=|make_link=|remove_path=|sx_read_dir=|sx_path_kind=|sx_path_size=|sx_path_real=|sx_spawn=|sx_child_send=|sx_child_recv=|sx_child_line=|sx_child_close=|sx_make_dir=|sx_make_link=|sx_remove_path=|write_bytes=|bytes_f64=|read_bytes=|bit_and=|bit_or=|bit_xor=|bit_not=|shl=|shr=|sx_write_bytes=|sx_bytes_f64=|sx_read_bytes=|sx_bit_and=|sx_bit_or=|sx_bit_xor=|sx_bit_not=|sx_shl=|sx_shr=|sx_cat=|sx_len=|sx_idx=|sx_chr=|sx_read=|sx_write=|sx_http=|sx_arg=|sx_argc=|sx_eq=|sx_numstr=|sx_read_line=|sx_read_n=|sx_write_out=|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=|sx_mod=|sx_lget=|sx_llen=|sx_lpush=|"
   hold callnames = concat(functions, builtins)
   hold prev = 0
   hold braces = 0
@@ -8565,6 +8565,10 @@ hold argbracket = 0
                     hold argv_c = concat(argv_c, "sx_bytes_f64")
                     hold amap = 1
                   }
+                  when sx_eq(atok, "read_bytes") {
+                    hold argv_c = concat(argv_c, "sx_read_bytes")
+                    hold amap = 1
+                  }
                   when sx_eq(atok, "bit_and") {
                     hold argv_c = concat(argv_c, "sx_bit_and")
                     hold amap = 1
@@ -8717,6 +8721,9 @@ hold argbracket = 0
           }
           when sx_eq(nm2, "bytes_f64") || sx_eq(nm2, "sx_bytes_f64") {
             hold fk = 35
+          }
+          when sx_eq(nm2, "read_bytes") || sx_eq(nm2, "sx_read_bytes") {
+            hold fk = 42
           }
           when sx_eq(nm2, "bit_and") || sx_eq(nm2, "sx_bit_and") {
             hold fk = 36
@@ -8970,6 +8977,10 @@ hold argbracket = 0
             hold rhs = concat(rhs, ")")
             hold rk = 2
             hold lt = 1
+          }
+          when fk == 42 {
+            hold rhs = concat("sx_read_bytes(", argv_c)
+            hold rhs = concat(rhs, ")")
           }
           when fk == 36 {
             hold rhs = concat("sx_bit_and(", argv_c)
@@ -10320,6 +10331,9 @@ hold ec = 0
               when sx_eq(nm3, "bytes_f64") || sx_eq(nm3, "sx_bytes_f64") {
                 hold ocmap = "sx_bytes_f64"
               }
+              when sx_eq(nm3, "read_bytes") || sx_eq(nm3, "sx_read_bytes") {
+                hold ocmap = "sx_read_bytes"
+              }
               when sx_eq(nm3, "bit_and") || sx_eq(nm3, "sx_bit_and") {
                 hold ocmap = "sx_bit_and"
               }
@@ -10612,6 +10626,9 @@ hold ec = 0
                     }
                     when sx_eq(ocaw, "bytes_f64") {
                       hold ocam = "sx_bytes_f64"
+                    }
+                    when sx_eq(ocaw, "read_bytes") {
+                      hold ocam = "sx_read_bytes"
                     }
                     when sx_eq(ocaw, "bit_and") {
                       hold ocam = "sx_bit_and"
@@ -11918,6 +11935,10 @@ hold argbracket = 0
                     hold argv_c = concat(argv_c, "sx_bytes_f64")
                     hold amap = 1
                   }
+                  when sx_eq(atok, "read_bytes") {
+                    hold argv_c = concat(argv_c, "sx_read_bytes")
+                    hold amap = 1
+                  }
                   when sx_eq(atok, "bit_and") {
                     hold argv_c = concat(argv_c, "sx_bit_and")
                     hold amap = 1
@@ -12069,6 +12090,9 @@ hold argbracket = 0
           }
           when sx_eq(nm2, "bytes_f64") || sx_eq(nm2, "sx_bytes_f64") {
             hold fk = 35
+          }
+          when sx_eq(nm2, "read_bytes") || sx_eq(nm2, "sx_read_bytes") {
+            hold fk = 42
           }
           when sx_eq(nm2, "bit_and") || sx_eq(nm2, "sx_bit_and") {
             hold fk = 36
@@ -12318,6 +12342,10 @@ hold argbracket = 0
             hold rhs = concat(rhs, ")")
             hold rk = 2
             hold lt = 1
+          }
+          when fk == 42 {
+            hold rhs = concat("sx_read_bytes(", argv_c)
+            hold rhs = concat(rhs, ")")
           }
           when fk == 36 {
             hold rhs = concat("sx_bit_and(", argv_c)
@@ -13529,6 +13557,9 @@ hold ec = 0
               when sx_eq(nm3, "bytes_f64") || sx_eq(nm3, "sx_bytes_f64") {
                 hold ocmap = "sx_bytes_f64"
               }
+              when sx_eq(nm3, "read_bytes") || sx_eq(nm3, "sx_read_bytes") {
+                hold ocmap = "sx_read_bytes"
+              }
               when sx_eq(nm3, "bit_and") || sx_eq(nm3, "sx_bit_and") {
                 hold ocmap = "sx_bit_and"
               }
@@ -13821,6 +13852,9 @@ hold ec = 0
                     }
                     when sx_eq(ocaw, "bytes_f64") {
                       hold ocam = "sx_bytes_f64"
+                    }
+                    when sx_eq(ocaw, "read_bytes") {
+                      hold ocam = "sx_read_bytes"
                     }
                     when sx_eq(ocaw, "bit_and") {
                       hold ocam = "sx_bit_and"
@@ -16028,6 +16062,9 @@ hold ec = 0
                 }
                 when sx_eq(cwid, "bytes_f64") {
                   hold cwmap = "sx_bytes_f64"
+                }
+                when sx_eq(cwid, "read_bytes") {
+                  hold cwmap = "sx_read_bytes"
                 }
                 when sx_eq(cwid, "bit_and") {
                   hold cwmap = "sx_bit_and"
@@ -18592,7 +18629,7 @@ hold ec = 0
               hold inenv = concat(inenv, chr(1))
               hold inenv = concat(inenv, ftypes)
             }
-        hold incallnames = concat(fsret, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|sx_spawn=n|sx_child_send=n|sx_child_recv=s|sx_child_line=s|sx_child_close=n|sx_make_dir=n|sx_make_link=n|sx_remove_path=n|sx_write_bytes=n|sx_bytes_f64=l|sx_bit_and=n|sx_bit_or=n|sx_bit_xor=n|sx_bit_not=n|sx_shl=n|sx_shr=n|")
+        hold incallnames = concat(fsret, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|sx_spawn=n|sx_child_send=n|sx_child_recv=s|sx_child_line=s|sx_child_close=n|sx_make_dir=n|sx_make_link=n|sx_remove_path=n|sx_write_bytes=n|sx_bytes_f64=l|sx_read_bytes=n|sx_bit_and=n|sx_bit_or=n|sx_bit_xor=n|sx_bit_not=n|sx_shl=n|sx_shr=n|")
       while inpos < instop {
         hold inc = sx_index(body, inpos)
         when inquote == 1 {
@@ -18797,7 +18834,7 @@ when rt == 1 {
 }
 // Byte-buffer and bitwise surface for the native-AOT port. It is emitted after
 // both runtime variants because sx_bytes_f64 needs sx_lpush from either one.
-hold out = concat(out, "static unsigned long long sx_u64(double v){ if(!(v>=0.0)){ fputs(\"sx: bitwise operand out of range\\n\",stderr); exit(1); } if(v>=18446744073709551616.0) return 18446744073709551615ULL; return (unsigned long long)v; }\nstatic double sx_bit_and(double a,double b){ return (double)(sx_u64(a) & sx_u64(b)); }\nstatic double sx_bit_or(double a,double b){ return (double)(sx_u64(a) | sx_u64(b)); }\nstatic double sx_bit_xor(double a,double b){ return (double)(sx_u64(a) ^ sx_u64(b)); }\nstatic double sx_bit_not(double a){ return (double)(~sx_u64(a)); }\nstatic double sx_shl(double a,double b){ long n=(long)b; if(n<0||n>63){ fputs(\"sx: shift count out of range\\n\",stderr); exit(1); } return (double)(sx_u64(a) << n); }\nstatic double sx_shr(double a,double b){ long n=(long)b; if(n<0||n>63){ fputs(\"sx: shift count out of range\\n\",stderr); exit(1); } return (double)(sx_u64(a) >> n); }\nstatic double sx_write_bytes(const char *p,sx_list *L){ FILE *f=fopen(p,\"wb\"); unsigned char buf[4096]; size_t n=0; long i; if(!f) return 0.0; if(L){ for(i=0;i<L->n;i++){ double d=L->d[i]; if(!(d>=0.0 && d<=255.0)){ fclose(f); return 0.0; } buf[n++]=(unsigned char)(long)d; if(n==sizeof buf){ if(fwrite(buf,1,n,f)!=n){ fclose(f); return 0.0; } n=0; } } } if(n && fwrite(buf,1,n,f)!=n){ fclose(f); return 0.0; } return fclose(f)==0?1.0:0.0; }\nstatic sx_list *sx_bytes_f64(sx_list *L,double v){ unsigned long long b; int i; memcpy(&b,&v,8); for(i=0;i<8;i++) L=sx_lpush(L,(double)(unsigned char)(b>>(8*i))); return L; }\n")
+hold out = concat(out, "static unsigned long long sx_u64(double v){ if(!(v>=0.0)){ fputs(\"sx: bitwise operand out of range\\n\",stderr); exit(1); } if(v>=18446744073709551616.0) return 18446744073709551615ULL; return (unsigned long long)v; }\nstatic double sx_bit_and(double a,double b){ return (double)(sx_u64(a) & sx_u64(b)); }\nstatic double sx_bit_or(double a,double b){ return (double)(sx_u64(a) | sx_u64(b)); }\nstatic double sx_bit_xor(double a,double b){ return (double)(sx_u64(a) ^ sx_u64(b)); }\nstatic double sx_bit_not(double a){ return (double)(~sx_u64(a)); }\nstatic double sx_shl(double a,double b){ long n=(long)b; if(n<0||n>63){ fputs(\"sx: shift count out of range\\n\",stderr); exit(1); } return (double)(sx_u64(a) << n); }\nstatic double sx_shr(double a,double b){ long n=(long)b; if(n<0||n>63){ fputs(\"sx: shift count out of range\\n\",stderr); exit(1); } return (double)(sx_u64(a) >> n); }\nstatic double sx_write_bytes(const char *p,sx_list *L){ FILE *f=fopen(p,\"wb\"); unsigned char buf[4096]; size_t n=0; long i; if(!f) return 0.0; if(L){ for(i=0;i<L->n;i++){ double d=L->d[i]; if(!(d>=0.0 && d<=255.0)){ fclose(f); return 0.0; } buf[n++]=(unsigned char)(long)d; if(n==sizeof buf){ if(fwrite(buf,1,n,f)!=n){ fclose(f); return 0.0; } n=0; } } } if(n && fwrite(buf,1,n,f)!=n){ fclose(f); return 0.0; } return fclose(f)==0?1.0:0.0; }\nstatic sx_list *sx_bytes_f64(sx_list *L,double v){ unsigned long long b; int i; memcpy(&b,&v,8); for(i=0;i<8;i++) L=sx_lpush(L,(double)(unsigned char)(b>>(8*i))); return L; }\nstatic double sx_read_bytes(const char *p,sx_list *L){ FILE *f=fopen(p,\"rb\"); unsigned char buf[8192]; double n=0.0; long i; if(!f) return -1.0; if(!L){ fclose(f); return -1.0; } for(;;){ size_t r=fread(buf,1,sizeof buf,f); if(r==0) break; for(i=0;i<(long)r;i++) L=sx_lpush(L,(double)buf[i]); n+=(double)r; } if(ferror(f)){ fclose(f); return -1.0; } if(fclose(f)!=0) return -1.0; return n; }\n")
 when inready == 1 {
   hold out = concat(out, "static sx_list *")
   hold out = concat(out, inprivate)

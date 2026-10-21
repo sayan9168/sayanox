@@ -9,16 +9,16 @@ The goal is simple to state: every maintained piece of *logic* in this
 repository is a Sayanox program, and the only non-Sayanox pieces left are the
 smallest possible bootstrap seam and the build driver.
 
-## Where the tree is today (measured 2026-10-18)
+## Where the tree is today (measured 2026-10-20)
 
 | Layer | Language | Size | Sayanox? |
 |---|---|---:|---|
-| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,540 lines | **yes** |
-| Formatter, package tool, language server, IR tool, LSP test client | Sayanox | 5 programs | **yes** |
-| All tests and fixtures | Sayanox + `sh` drivers | 279 `.sa` files, 1,165,577 bytes | **yes** (logic) |
+| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,577 lines | **yes** |
+| Formatter, package tool, language server, IR tool, LSP test client, ELF linker | Sayanox | 6 programs | **yes** |
+| All tests and fixtures | Sayanox + `sh` drivers | 280 `.sa` files, 1,183,149 bytes | **yes** (logic) |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
-| Native AOT backend (`selfhost/native_aot.c`) | C | 4,353 lines | no |
-| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 4,860 lines | no |
+| Native AOT backend (`selfhost/native_aot.c`) | C | 4,415 lines | no — its ELF image writer and rel32 linker are now also Sayanox (`tools/sxlink.sa`, byte-identical); the C one still produces the executables the gates run |
+| Build driver (`Makefile` + 25 `sh` scripts) | make / POSIX sh | 5,002 lines | no |
 
 Ten tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
 `inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
@@ -141,14 +141,19 @@ Tests: `test-sxpkg`, `test-sxpkg-polish`, `test-sxpkg-online-local`,
 
 ### Phase D — native backend in Sayanox
 
-Port `selfhost/native_aot.c` (4,353 lines of x86-64 ELF emission) to Sayanox.
-This is the largest piece and needs language features that do not exist yet:
+Port `selfhost/native_aot.c` (4,415 lines of x86-64 ELF emission) to Sayanox.
+This is the largest piece. It started out needing three language features that
+did not exist; all three are now answered (the third by a different route than
+expected), and what is left is the port itself:
 
 * a byte buffer with indexed writes at arbitrary offsets (`write_out` is
   append-only);
 * integer bit operations for encodings (shifts, masks, `&`, `|`, `^`);
 * a syscall/memory surface, or a way to emit an ELF section layout without raw
-  pointers.
+  pointers — **resolved the other way on 2026-10-20**: `tools/sxlink.sa` emits
+  a complete ELF image layout with no pointers and no syscall surface, out of
+  an ordinary list of numbers, so this bullet is closed by step 3 below rather
+  than by a new language feature.
 
 **Step 1 of Phase D (done, 2026-10-18): the language surface.** Two of the
 three bullets are now in the language and gated. A byte buffer is an ordinary
@@ -172,13 +177,60 @@ whose result is never exact, so the idiom is `bit_and(bit_not(x), mask)`);
 list-typed builtin return, which is why the double splitter is `bytes_f64`
 instead of a `f64_bytes` that returns a list.
 
-**Step 2 (not started): the port itself.** `selfhost/native_aot.c` is still
-4,353 lines of C and its row stays in the table above.
+**Step 2 (2026-10-20): `read_bytes`, the reader the byte-buffer surface was
+missing.** `write_bytes` could put a byte buffer on disk but nothing could read
+one back, because `read_file` returns a C string and an ELF image is mostly NUL
+bytes and page padding. `read_bytes(path, xs)` appends every byte of a file to
+`xs` and gives the count, or `-1` when it cannot be read (and then appends
+nothing). It appends rather than returning a fresh list for the same reason
+`bytes_f64` does: the codegen still has no list-typed return for a builtin.
+Gate: `make test-read-bytes` — a round trip through a NUL byte and a `0xFF`
+byte, the append-on-second-read contract, the `-1`, and the refusal by seed-min
+and by the native backend.
 
-Interim honest target: `native_aot` stays C, but the **encoder seam** already
-exists (`SX_EMIT_LOG`, `test-native-emit-split`, `test-native-ir-log`), so a
-Sayanox backend is written against a pinned instruction list rather than
-against the C source. That is why those gates were built first.
+**Step 3 (2026-10-20): the ELF image writer and linker are Sayanox.**
+`tools/sxlink.sa` (about 330 lines, built by gen2 and cc like every other tool)
+is `write_elf()` rewritten in the language: the ELF header, the three program
+headers, the page rounding, the padding, the collector's heap cursor
+(`OFF_CUR`/`OFF_END`) and every rel32 fixup — call sites and the
+`lea r12,[rip+disp32]` that reaches the data segment. It is written against a
+seam, not against the C source: `SX_LINK_DUMP=<dir>` makes `native_aot` dump
+exactly the three inputs of the image writer (`code.bin`, `data.bin`, and
+`patch.bin` — one 16-byte record per rel32 site, site then resolved target —
+plus `meta.txt` with the call-patch count), the same convention as
+`SX_EMIT_LOG`, changing no emitted byte.
+
+Gate: `make test-native-sxlink`, part of `native-test`. Five fixtures — a bare
+program, recursion, a data segment full of strings plus a collection, a
+string-ordering program and a multi-page code segment — each compiled twice,
+with and without the dump, and the two images must be identical; then the
+Sayanox-linked image must be **byte-identical** to the C-linked one and must
+**run** and print the same thing. Missing dump directory and a non-ELF input
+are clear errors. Because byte identity is only evidence while the two
+implementations agree, the gate also pins the layout `sxlink` hard-codes — the
+ELF ident, `e_phnum == 3`, the entry point at `BASE + 0x1000`, and `p_offset`
+of the code and data segments — so a change on the C side fails with the reason
+instead of as an unexplained `cmp` diff.
+
+What step 3 does *not* claim, stated plainly:
+
+* `native_aot` still resolves a `make` name or a builtin name to a code offset,
+  so the patch records arrive with their targets already resolved. The Sayanox
+  linker turns offsets into bytes; it does not turn names into offsets.
+* The C `write_elf()` is still what `make native` and `make native-test` use to
+  produce the executables those gates run. `sxlink` is proved equivalent to it
+  on the fixtures and is not yet wired in as the producer, because wiring it in
+  means the native backend's output path depends on gen2 — a real ordering
+  change to the bootstrap, and the next step, not this one.
+* The rest of `selfhost/native_aot.c` — the scanner, the parser, the type
+  inference, the encoder tree, the 856-line runtime and the 339-line collector
+  — is still C. Its row stays in the table above with its line count.
+
+The **encoder seam** built earlier (`SX_EMIT_LOG`, `test-native-emit-split`,
+`test-native-ir-log`) is what makes the remaining port incremental: a Sayanox
+backend is written against a pinned instruction list rather than against the C
+source. `SX_LINK_DUMP` is the same idea one stage later, at the image instead
+of at the instruction.
 
 ### Phase E — the seed
 
@@ -199,6 +251,15 @@ and `make all-sayanox` keeps failing.
 
 ## Progress log
 
+* **2026-10-20 — Phase D steps 2 and 3.** `read_bytes` joined the byte-buffer
+  surface (`test-read-bytes`), and `tools/sxlink.sa` rewrote the native
+  backend's ELF image writer and rel32 linker in Sayanox against a new
+  `SX_LINK_DUMP` seam (`test-native-sxlink`): five fixtures link
+  byte-identically to C's `write_elf()` and run identically, and the dump
+  changes no emitted byte. `selfhost/native_aot.c` grew by the seam and is
+  still C; its row above is unchanged. CI moved to parallel gate jobs the same
+  day (`.github/workflows/ci.yml`, plus a nightly sequential
+  `full-bootstrap.yml` that keeps the no-hand-off claim verified).
 * **2026-10-19 — a compiler bug fixed, not a language change.** The `make`
   signature pre-pass did not understand `//` comments (its comment flag is
   declared but never set), so a double quote inside a comment toggled string

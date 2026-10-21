@@ -1,0 +1,123 @@
+name: full-bootstrap
+
+# The per-PR CI (`.github/workflows/ci.yml`) runs the four gates as parallel
+# jobs and hands gen2/seed-min from the bootstrap job to the other two. That is
+# a scheduling change, not a weaker claim, but a hand-off is still a hand-off.
+# This workflow is the honesty check on it: ONE job, ONE clean checkout, the
+# whole chain in order, no artifacts and no cache, exactly the way
+# docs/STATUS.md describes it.
+#
+#   make doctor -> make true-selfhost -> make gen3 -> make native-test
+#
+# It runs every night and on demand. If it goes red while CI is green, the
+# parallel shape hid something and ci.yml must be fixed, not this file.
+#
+# Note on its first run. GitHub registers a workflow for workflow_dispatch only
+# once it exists on the default branch, so this file cannot be dispatched from a
+# pull-request branch: its first execution is the first night after it lands.
+# What ci.yml has proven on a runner, twice green, is every piece separately --
+# the same shims, the same four make targets, the same clean checkout, but gates
+# 1+2 in one job and gates 3 and 4 each in their own, on a checkout with five
+# restored files. What no runner has yet seen for this tree is the four in one
+# directory in order. That is exactly the gap this workflow exists to close: a
+# gate that passes only because a parallel job left something behind, or only
+# because a restored file arrived with a fresh mtime, fails here and not there.
+# The old single-job CI did run doctor -> true-selfhost -> gen3 in order, on the
+# tree before read_bytes and sxlink, and reached native-test before the 25m0s
+# ceiling killed it. Expect this to take the sum of the separately measured jobs,
+# about 29-37 minutes; 90 is headroom for a slow runner, not an expectation.
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sayanox-full-bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CC: cc
+
+jobs:
+  full-bootstrap:
+    name: "sequential clean-checkout bootstrap (no artifacts, no cache)"
+    runs-on: ubuntu-latest
+    # Measured separately on runners 2026-10-20: gates 1+2 at 12m20s and 14m29s,
+    # gate 3 at 5m49s and 9m44s, gate 4 at 9m31s and 11m41s -- 28-36m summed,
+    # before checkout and setup. 90 is headroom, not an expectation.
+    timeout-minutes: 90
+    steps:
+      - name: Clean checkout
+        uses: actions/checkout@v7
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Block non-bootstrap runtimes and real network clients
+        run: |
+          set -e
+          guard="$RUNNER_TEMP/bootstrap-no-runtimes"
+          mkdir -p "$guard"
+          for tool in python python3 node ruby perl curl wget; do
+            printf '%s\n' '#!/bin/sh' \
+              'printf "forbidden bootstrap invocation: %s\n" "$0" >> "$RUNNER_TEMP/bootstrap-forbidden-invocations"' \
+              'exit 99' > "$guard/$tool"
+            chmod +x "$guard/$tool"
+          done
+          printf '%s\n' "$guard" >> "$GITHUB_PATH"
+
+      - name: "make doctor (minimal toolchain is complete)"
+        run: make doctor
+
+      - name: "make true-selfhost (seed-min -> gen1_min -> gen2 + feature tests)"
+        run: make true-selfhost
+
+      - name: "make gen3 (gen3 == gen4 byte-identical fixed point)"
+        run: make gen3
+
+      - name: "make native-test (x86-64 backend - subset, use, functions, parity)"
+        run: make native-test
+
+      - name: Verify no blocked command was invoked
+        run: test ! -e "$RUNNER_TEMP/bootstrap-forbidden-invocations"
+
+      - name: Verify generated artifacts are not tracked
+        run: |
+          set -e
+          for f in selfhost/gen1.c selfhost/gen1 selfhost/gen1_min.c selfhost/gen1_min \
+                   selfhost/gen2.c selfhost/gen2 selfhost/gen3.c selfhost/gen3 \
+                   selfhost/gen4.c selfhost/boot_from_gen2 selfhost/boot_from_gen2.c \
+                   selfhost/native_aot selfhost/seed/sxc_seed_min; do
+            if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              echo "::error::$f is tracked but must be generated"
+              exit 1
+            fi
+          done
+          echo "[OK] no generated bootstrap artifact is tracked in git"
+
+      # The fixed point is the result worth keeping, and it fits in a log line:
+      # gen3.c and gen4.c are the same bytes, so their digests must match.
+      # Nothing is uploaded; this workflow only ever proves things in place.
+      - name: Record the fixed-point digests
+        run: |
+          set -e
+          cmp selfhost/gen3.c selfhost/gen4.c
+          sha256sum selfhost/gen2.c selfhost/gen3.c selfhost/gen4.c
+
+      # Same expectation as CI's audit job: all-sayanox is fail-closed until
+      # docs/ALL_SAYANOX_PHASE.md's inventory is empty, and test-doc-claims
+      # fails if it ever returns 0 without the documents moving with it.
+      - name: Publish the all-sayanox inventory (must still refuse a claim)
+        run: |
+          set -e
+          if make all-sayanox > "$RUNNER_TEMP/all-sayanox.log" 2>&1; then
+            cat "$RUNNER_TEMP/all-sayanox.log"
+            echo "::error::all-sayanox now reports success; update docs/ALL_SAYANOX_PHASE.md, docs/STATUS.md, README.md and make test-doc-claims in the same change"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/all-sayanox.log"
+          grep -q 'refusing an all-in-Sayanox claim' "$RUNNER_TEMP/all-sayanox.log"
+          echo "[OK] all-sayanox still fails closed and printed its inventory above"

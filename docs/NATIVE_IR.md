@@ -227,3 +227,56 @@ No aarch64/riscv64 emitter, loader, ABI/runtime/collector port, cross-execution
 smoke test or second-backend acceptance gate has been added. Host-C compilation
 of generated C and abstract register names are not a second native ISA.
 Actual gates: [2026-10-16 IR/modules logs](gate-logs/2026-10-16-ir-modules/).
+
+## The image seam and the Sayanox linker (`SX_LINK_DUMP`, 2026-10-20)
+
+`SX_EMIT_LOG` records the instructions the emit tree asks the encoder for.
+`SX_LINK_DUMP=<dir>` is the same idea one stage later, at the finished image:
+it dumps exactly the inputs of `write_elf()`, so the ELF image writer and the
+rel32 linker can be rewritten in Sayanox against a pinned contract instead of
+against the C source.
+
+| file | contents |
+|---|---|
+| `code.bin` | the emitted machine code, `cn` bytes |
+| `data.bin` | the data segment, `dn` bytes |
+| `patch.bin` | `npc+npr` 16-byte records: rel32 site, then its resolved target, both little-endian u64 offsets inside the image |
+| `meta.txt` | `npc npr cn dn` — the call records come first, and their count is the one thing a reader cannot recover from `patch.bin` |
+
+Like the instruction log, it is off by default and changes no emitted byte;
+`make test-native-sxlink` compiles every fixture twice, with and without the
+variable, and `cmp`s the two executables.
+
+`tools/sxlink.sa` is the consumer:
+
+```sh
+make tools/sxlink
+./selfhost/native_aot in.sa out.elf                       # the C-linked image
+SX_LINK_DUMP=/tmp/d ./selfhost/native_aot in.sa out.elf   # plus the dump
+./tools/sxlink out.elf /tmp/d sx.elf                      # the Sayanox-linked image
+cmp out.elf sx.elf                                        # identical
+```
+
+It writes the ELF header, the three program headers, the page rounding, the
+padding, the collector's heap cursor (`OFF_CUR`/`OFF_END`) and every rel32
+fixup, using nothing but `push`, `xs[i] = v`, `len`, `%`, `shr`, `bit_and`,
+`write_bytes` and `read_bytes`. It needs `read_bytes` — added the same day —
+because `read_file` returns a C string and an ELF image is mostly NUL bytes and
+page padding.
+
+### What the linker is not
+
+* It does not resolve names. `native_aot` still turns a `make` name or a
+  builtin name into a code offset, so `patch.bin` arrives with its targets
+  resolved; `sxlink` turns offsets into bytes.
+* It does not choose the layout from nothing either — the segment sizes are
+  `len(code.bin)` and `len(data.bin)`, and the page arithmetic is recomputed
+  from them, but the fixture layout it is compared against is the one
+  `write_elf()` uses.
+* It is not wired in as the producer. The executables that `make native` and
+  `make native-test` run are still written by C's `write_elf()`; making the
+  Sayanox linker the producer means the native backend's output path depends on
+  gen2, which is a real ordering change to the bootstrap and belongs to a later
+  cut.
+* It is not a second backend and not a second ISA. There is still exactly one
+  executable target: x86-64 Linux ELF.

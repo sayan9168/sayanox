@@ -1,6 +1,23 @@
 # Status
 
-Last updated: **2026-10-17**
+Last updated: **2026-10-20**
+
+Phase D moved and CI was fixed. `read_bytes(path, xs)` joined the byte-buffer
+surface (it appends a whole file, NUL bytes included, and gives the count or
+`-1`; `make test-read-bytes`), and the native backend's ELF image writer and
+rel32 linker are now Sayanox: `tools/sxlink.sa` links five fixtures
+byte-identically to C's `write_elf()` and its output runs
+(`make test-native-sxlink`, against a new `SX_LINK_DUMP` seam that changes no
+emitted byte). `selfhost/native_aot.c` is still C and its row below stays.
+CI now runs the four gates as parallel jobs — one sequential job under
+`timeout-minutes: 25` was being killed by the runner at 25m15s, so `main`
+reported a timeout instead of a result. The new shape has been green three times
+([1](https://github.com/sayan9168/sayanox/actions/runs/39477167629), [2](https://github.com/sayan9168/sayanox/actions/runs/39490134812), [3](https://github.com/sayan9168/sayanox/actions/runs/39494506063)) at 26m17s, 21m57s
+and 29m31s wall, the longest single job 15m49s against a per-job 45m0s limit:
+the headroom is per gate, and the run total moves with the runner, since gate 3
+alone measured 5m49s to 15m49s for the same bytes. Alongside it,
+`.github/workflows/full-bootstrap.yml` re-runs the whole chain in one job
+nightly so the no-hand-off claim stays verified. Logs: [`2026-10-20 read_bytes + sxlink`](gate-logs/2026-10-20-read-bytes-sxlink/).
 
 Language-dependency update: the maintained toolchain is now C, make, POSIX sh
 and Sayanox — bash, awk, sed, Python, Perl, Node and Ruby are gone from the
@@ -76,11 +93,11 @@ here so it is not lost, and it is machine-checked: `make all-sayanox` prints the
 measured inventory below and **exits 1**, the same way `true-selfhost-full`
 refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md).
 
-| Still not Sayanox | Language | Size (2026-10-18) | Unblocks |
+| Still not Sayanox | Language | Size (2026-10-20) | Unblocks |
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
-| `selfhost/native_aot.c` | C | 4,353 lines | Phase D — needs byte buffers, bitwise operations and shifts, and a syscall/memory surface in the language |
-| `Makefile` + 25 `sh` scripts | make / POSIX sh | 4,860 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `selfhost/native_aot.c` | C | 4,415 lines | Phase D — the language surface and the ELF image writer/linker are done; what is left is the scanner, parser, inference, encoder tree, runtime and collector |
+| `Makefile` + 25 `sh` scripts | make / POSIX sh | 5,002 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
 package tool — now including `publish`, `install-local` and the
@@ -88,9 +105,11 @@ local-registry halves of `sync` and `fetch` — the language server (including
 its folder index since 2026-10-17), the IR translator
 (`tools/emit_to_ir.sa`, byte-identical output), the directory builtins
 (`test-path-builtins`), the process builtins (`test-proc-builtins`), the LSP
-framed-session test client (`tools/lsp_workspace_test.sa`) and, since
-2026-10-18, the byte-buffer and bitwise surface the native backend needs
-(`test-native-primitives`).
+framed-session test client (`tools/lsp_workspace_test.sa`), the byte-buffer and
+bitwise surface the native backend needs (`test-native-primitives`), its binary
+reader (`read_bytes`, `test-read-bytes`) and, since 2026-10-20, the native
+backend's ELF image writer and rel32 linker (`tools/sxlink.sa`,
+`test-native-sxlink`).
 Ten unreferenced legacy C files were deleted the same day, alongside the three
 that gained Sayanox replacements.
 
@@ -100,8 +119,27 @@ list of numbers, `push` grows it, `xs[i] = v` patches it and `write_bytes`
 puts it on disk without stopping at a NUL byte. `make test-native-primitives`
 checks every operator against a value computed in C and then runs a static
 x86-64 ELF executable that a Sayanox program emitted with nothing but those
-builtins. The port of `selfhost/native_aot.c` itself is **not** done: it is
-still 4,353 lines of C and this row stays in the table until it is.
+builtins.
+
+Phase D continued on 2026-10-20 with the reader that surface was missing and
+with the first piece of the backend itself. `read_bytes(path, xs)` appends
+every byte of a file to a byte buffer and gives the count, or `-1` when it
+cannot be read — `read_file` cannot do that job because it returns a C string,
+so an ELF image (mostly NUL bytes and page padding) arrives truncated. Then
+`tools/sxlink.sa` rewrote `write_elf()` in the language: ELF header, three
+program headers, page rounding, padding, the collector's heap cursor and every
+rel32 fixup, using nothing but `push`, `xs[i] = v`, `len`, `%`, `shr`,
+`bit_and`, `write_bytes` and `read_bytes`. It is written against a seam rather
+than against the C source: `SX_LINK_DUMP=<dir>` dumps `code.bin`, `data.bin`,
+`patch.bin` (one 16-byte record per rel32 site, site then resolved target) and
+`meta.txt`, changing no emitted byte. Five fixtures — including a multi-page
+code segment — link byte-identically and run identically.
+
+What that does **not** mean: `native_aot` still resolves a `make` or builtin
+name to a code offset, so the records arrive with their targets resolved; and
+the C `write_elf()` is still what produces the executables the gates run.
+The port of `selfhost/native_aot.c` itself is **not** done: it is still 4,415
+lines of C and this row stays in the table until it is.
 
 On 2026-10-19 the compiler itself was fixed, not extended: its `make` signature
 pre-pass did not understand `//` comments, so a double quote inside a comment
