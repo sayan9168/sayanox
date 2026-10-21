@@ -280,3 +280,78 @@ page padding.
   cut.
 * It is not a second backend and not a second ISA. There is still exactly one
   executable target: x86-64 Linux ELF.
+
+## The encoder seam and the Sayanox encoder (`SX_ENCODE_LOG`, 2026-10-21)
+
+`SX_EMIT_LOG` records what the emit tree *asks for*; `SX_LINK_DUMP` records the
+finished image. Neither one is enough to rewrite the encoder itself: the
+instruction list is written for a reader, and it loses exactly the choices an
+encoder makes. `add %rax,%rbx` does not say whether the opcode byte is `0x01` or
+`0x03`; `mov [r12+rcx*8-16],%rax` does not say whether the displacement cost one
+byte or four, nor where the SIB byte went. The jump helpers `J_cc`/`J_mp`, which
+the phase-4 runtime uses, do not appear in the instruction list at all.
+
+`SX_ENCODE_LOG=<path>` records the encoder's **own calls** instead — one line per
+primitive, the primitive's name and the integer arguments it was handed — and,
+because `e1()` is the only function that appends a byte to `code`, one `b
+<byte>` line for every byte emitted:
+
+```
+; native_aot encode log for examples/native_hello.sa
+lea_r12_data
+mv_r64m 0 4 -1 0 0
+mv_m64 12 -1 0 16 0
+...
+b 73
+b 137
+b 69
+```
+
+| rule | why |
+|---|---|
+| one line per record, single spaces, decimal integers | it is read by `tools/sxencode.sa`, which has no number parser beyond `sx_index` |
+| `b <byte>` after each primitive's record | the *encoder's* bytes for that same call, so the replay can check itself |
+| `;` lines are headers, not records | the log is also read by people |
+| 64-bit immediates as two 32-bit halves, hi then lo | a Sayanox number is a C double: exact below 2^53, and `0x3ff0000000000000` is not |
+| `L_new <id>` carries the id | the runtime helpers reset `nlbl` to 0 before each one, so ids are handed out again |
+| `raw_patch32 <at> <value>` | a rel32 the runtime stubs patch by hand over their own byte sequence; the value is stored, because those bytes are copied rather than encoded |
+
+Like the other two seams it is off by default and changes no emitted byte;
+`make test-native-sxencode` compiles every fixture twice, with and without the
+variable, and `cmp`s the two executables.
+
+`tools/sxencode.sa` is the consumer:
+
+```sh
+make tools/sxencode
+SX_ENCODE_LOG=/tmp/e.log SX_LINK_DUMP=/tmp/d ./selfhost/native_aot in.sa out.elf
+./tools/sxencode /tmp/e.log /tmp/d/code.bin /tmp/sx/rebuilt.bin
+cmp /tmp/d/code.bin /tmp/sx/rebuilt.bin      # identical
+```
+
+It implements the same primitives — `rexb`, `emit_modrm`, the `mov`/`lea`/arith/
+shift/SSE2 helpers, the label table and the four patch forms — out of `push`,
+`xs[i] = v`, `len`, `bit_and`, `bit_or`, `shl`, `shr`, `write_bytes` and
+`read_bytes`, and it rebuilds `code.bin` byte for byte. It carries the label
+table's own caps (`MAXLBL` 96, 24 references each) and refuses a stream that
+exceeds them, and it refuses a record it does not implement instead of half
+applying it.
+
+### What the replay checks, and what it does not
+
+* Every named record is followed by the bytes C wrote for that same call. The
+  replay encodes the record, then compares its own output with those bytes and
+  stops on the first disagreement — a wrong ModRM or a displacement that should
+  have been `disp8` fails at the instruction, not in a later `cmp`.
+* The final file is compared with `code.bin`, so bytes the runtime writes by
+  hand are covered too. Those come through as `b` records that no named record
+  claimed; they are copied, not encoded, because the C source writes them as
+  literals. That is the honest boundary: the *encoder* is Sayanox, the
+  hand-written runtime stubs are transported.
+* `native_aot` still drives its own encoder to produce the executables the gates
+  run. Making `sxencode` the producer would make the native backend's output
+  path depend on gen2 — the same bootstrap ordering change `sxlink` has not made
+  either.
+* It is not a second backend. There is still one executable target: x86-64
+  Linux ELF, with one encoder and one linker, now both proved equal to the C
+  bytes by fixtures.

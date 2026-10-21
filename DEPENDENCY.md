@@ -15,6 +15,8 @@ two ways (a static scan and a failing PATH shim) and is part of
 | native-test | same, on **x86-64 Linux** (generated ELF uses Linux syscalls) |
 | LSP build (`make lsp`) | gen2 + cc only; the folder index is Sayanox (no C header, no binder) |
 | portable analysis listing | `tools/emit_to_ir.sa`, compiled by gen2 then cc; not a second backend |
+| native image link (`test-native-sxlink`) | `tools/sxlink.sa`, compiled by gen2 then cc; proved against the C `write_elf()` by `SX_LINK_DUMP`, does not produce the shipped executables |
+| native instruction encode (`test-native-sxencode`) | `tools/sxencode.sa`, compiled by gen2 then cc; proved against the C encoder by `SX_ENCODE_LOG`, does not produce the shipped executables |
 | offline packer (`make pack-compiler`) | POSIX sh, `gzip`, `base64`, `tr`, `split`, `cmp` |
 | source-present restore | local marker checks with `grep`; no decoding/network |
 | missing-source restore | additionally `base64`, `gzip`, `cat`, `tr`, `rm`; checked-in offline bundle |
@@ -65,9 +67,11 @@ tools that are never on the bootstrap path.
 This pass removed *interpreters*, not C. The next phase — writing the remaining
 pieces in Sayanox — is recorded in
 [`docs/ALL_SAYANOX_PHASE.md`](docs/ALL_SAYANOX_PHASE.md): a C seed (2,035
-lines), a C native backend (4,353), and the make/POSIX-sh build driver. The IR
-tool, the LSP directory bridge and the LSP test client have already left that
-list. `make all-sayanox` prints the remaining inventory and
+lines), a C native backend (4,498 lines, of which the image writer, rel32
+linker and instruction encoder now exist in Sayanox and are proved
+byte-identical), and the make/POSIX-sh build driver. The IR tool, the LSP
+directory bridge, the LSP test client, the linker and the encoder have already
+left that list. `make all-sayanox` prints the remaining inventory and
 fails closed.
 
 ## How this is checked

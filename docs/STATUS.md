@@ -1,8 +1,22 @@
 # Status
 
-Last updated: **2026-10-20**
+Last updated: **2026-10-21**
 
-Phase D moved and CI was fixed. `read_bytes(path, xs)` joined the byte-buffer
+Phase D step 4 landed on 2026-10-21: the native backend's x86-64 instruction
+encoder is Sayanox. `SX_ENCODE_LOG` records the encoder's own calls — one
+record per primitive, plus one `b` line per byte `e1()` appends — and
+`tools/sxencode.sa` (1,159 lines) replays them to a **byte-identical** code
+segment on five fixtures (4,912 to 15,380 bytes each), checking every named
+record against the bytes C wrote for that same call. The recorder is inert
+(the ELF is identical with and without it), the fixture set exercises all 50
+records, and a missing log, a wrong-length `code.bin` and an unknown record
+are clear errors (`make test-native-sxencode`, part of `native-test`).
+`selfhost/native_aot.c` is still C — 4,498 lines, up from 4,415 by the seam,
+not down — and its row below stays until the frontend, emit tree, runtime and
+collector are ported. Logs:
+[`2026-10-21 encode seam`](gate-logs/2026-10-21-encode-seam/).
+
+Phase D moved before that and CI was fixed. `read_bytes(path, xs)` joined the byte-buffer
 surface (it appends a whole file, NUL bytes included, and gives the count or
 `-1`; `make test-read-bytes`), and the native backend's ELF image writer and
 rel32 linker are now Sayanox: `tools/sxlink.sa` links five fixtures
@@ -96,8 +110,8 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 | Still not Sayanox | Language | Size (2026-10-20) | Unblocks |
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
-| `selfhost/native_aot.c` | C | 4,415 lines | Phase D — the language surface and the ELF image writer/linker are done; what is left is the scanner, parser, inference, encoder tree, runtime and collector |
-| `Makefile` + 25 `sh` scripts | make / POSIX sh | 5,002 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `selfhost/native_aot.c` | C | 4,498 lines | Phase D — the language surface, the ELF image writer/linker and the x86-64 instruction encoder are done; what is left is the scanner, parser, inference, emit tree, runtime stubs and collector |
+| `Makefile` + 25 sh scripts | make / POSIX sh | 5,112 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
 package tool — now including `publish`, `install-local` and the
@@ -109,7 +123,8 @@ framed-session test client (`tools/lsp_workspace_test.sa`), the byte-buffer and
 bitwise surface the native backend needs (`test-native-primitives`), its binary
 reader (`read_bytes`, `test-read-bytes`) and, since 2026-10-20, the native
 backend's ELF image writer and rel32 linker (`tools/sxlink.sa`,
-`test-native-sxlink`).
+`test-native-sxlink`) and, since 2026-10-21, its x86-64 instruction encoder
+(`tools/sxencode.sa`, `test-native-sxencode`).
 Ten unreferenced legacy C files were deleted the same day, alongside the three
 that gained Sayanox replacements.
 
@@ -135,10 +150,30 @@ than against the C source: `SX_LINK_DUMP=<dir>` dumps `code.bin`, `data.bin`,
 `meta.txt`, changing no emitted byte. Five fixtures — including a multi-page
 code segment — link byte-identically and run identically.
 
+Phase D step 4 (2026-10-21) ported the **encoder**. Everything that writes a
+byte into the code segment does it through about fifty primitives, and
+`tools/sxencode.sa` is those primitives in Sayanox: `SX_ENCODE_LOG=<path>`
+records each call — name, integer arguments — plus one `b <byte>` line per byte
+`e1()` appends, and the replay rebuilds `code.bin` and must match it byte for
+byte. Five fixtures (4,912 to 15,380 code bytes) do, the recorder changes no
+emitted byte, all fifty records are exercised, and each named record is checked
+against the bytes C wrote for that same call, so a wrong ModRM or a disp8/ disp32
+mistake fails at the instruction. Why a separate seam: `SX_EMIT_LOG` is written
+for a reader and cannot say `0x01` vs `0x03`, or whether a displacement cost one
+byte or four, and the runtime's own `J_cc`/`J_mp` jumps are not in it at all.
+64-bit immediates travel as two 32-bit halves because a Sayanox number is a C
+double. Two byte-identical C changes came with it: an already-bound jump now
+emits its displacement instead of patching zeros in place, and `L_new` logs the
+id it hands out because the runtime resets the label counter before each helper.
+Honest limits: the phase-4 runtime's hand-written machine code arrives as raw
+bytes and is copied, not ported; `native_aot` still drives its own encoder to
+produce the executables the gates run; and the frontend, emit tree, runtime and
+collector are still C.
+
 What that does **not** mean: `native_aot` still resolves a `make` or builtin
 name to a code offset, so the records arrive with their targets resolved; and
 the C `write_elf()` is still what produces the executables the gates run.
-The port of `selfhost/native_aot.c` itself is **not** done: it is still 4,415
+The port of `selfhost/native_aot.c` itself is **not** done: it is still 4,498
 lines of C and this row stays in the table until it is.
 
 On 2026-10-19 the compiler itself was fixed, not extended: its `make` signature

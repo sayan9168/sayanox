@@ -1,0 +1,33 @@
+[OK] compiler module (checked-in source verified; no decoder used)
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 tools/sxencode.sa selfhost/seed_tests/sxencode.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o tools/sxencode selfhost/seed_tests/sxencode.c
+[OK] Sayanox instruction encoder built from tools/sxencode.sa
+  [ok] 50 records: the name list and the encoding list are the same length
+  [ok] sxencode_hello: 4912 code bytes, 38 85
+  [ok] native_ir_log_test: 5549 code bytes, 38 85
+  [ok] native_logic_arg_test: 5750 code bytes, 38 85
+  [ok] native_strord_test: 6641 code bytes, 38 85
+  [ok] stdlib_growth_test: 15380 code bytes, 38 85
+  [ok] the fixture set exercises all 50 records
+[OK] sxencode: the encoder is Sayanox -- five fixtures replay to byte-identical code, every named record is checked against the bytes C wrote for the same call, the recorder changes no emitted byte, all record names are exercised, and a missing log, a wrong-length code.bin and an unknown record are clear errors
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 tools/sxencode.sa selfhost/seed_tests/sxencode.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -o tools/sxencode selfhost/seed_tests/sxencode.c
+[OK] Sayanox instruction encoder built from tools/sxencode.sa
+  [ok] 50 records: the name list and the encoding list are the same length
+  [ok] sxencode_hello: 4912 code bytes, 38 85
+  [ok] native_ir_log_test: 5549 code bytes, 38 85
+  [ok] native_logic_arg_test: 5750 code bytes, 38 85
+  [ok] native_strord_test: 6641 code bytes, 38 85
+  [ok] stdlib_growth_test: 15380 code bytes, 38 85
+  [ok] the fixture set exercises all 50 records
+[OK] sxencode: the encoder is Sayanox -- five fixtures replay to byte-identical code, every named record is checked against the bytes C wrote for the same call, the recorder changes no emitted byte, all record names are exercised, and a missing log, a wrong-length code.bin and an unknown record are clear errors
+rc=0

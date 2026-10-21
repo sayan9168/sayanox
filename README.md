@@ -102,8 +102,9 @@ make tools
 The formatter currently handles whitespace. The package tool supports `init` / `add` / `list` / `remove` / `search` / `info` / `seed` / `deps` / `verify` / `install` / `install-local` / `publish`, since 2026-10-18 the local-registry halves of `sync` and `fetch` as well, and since 2026-10-19 the whole offline half of `install` (name preflight, deciding what is missing, copying and reporting it); only the http(s) transport and the online opt-in policy stay in the shell wrapper. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 
 The language server (`tools/sayanox_lsp.sa`), its folder index, the IR
-translator (`tools/emit_to_ir.sa`) and the native backend's ELF image writer
-and rel32 linker (`tools/sxlink.sa`) are Sayanox programs too, and no
+translator (`tools/emit_to_ir.sa`) and two pieces of the native backend - its
+ELF image writer with its rel32 linker (`tools/sxlink.sa`) and its x86-64
+instruction encoder (`tools/sxencode.sa`) - are Sayanox programs too, and no
 maintained build or test path needs bash, awk, sed or Python
 (`make test-language-deps`).
 
@@ -118,6 +119,7 @@ maintained build or test path needs bash, awk, sed or Python
 | `selfhost/seed/*.c` | C bootstrap seed |
 | `selfhost/native_aot.c` | x86-64 Linux native-AOT backend |
 | `tools/sxlink.sa` | Sayanox ELF image writer + rel32 linker for that backend |
+| `tools/sxencode.sa` | Sayanox x86-64 instruction encoder for that backend |
 | `Makefile` | Bootstrap, tests, verification |
 | `docs/` | Status, design notes, language docs |
 
@@ -190,7 +192,10 @@ first NUL and an ELF image is mostly NULs) and the native backend's ELF image
 writer and rel32 linker became Sayanox: `tools/sxlink.sa` links five fixtures
 byte-identically to the C `write_elf()` and its output runs, gated by
 `make test-native-sxlink` against a `SX_LINK_DUMP` seam that changes no emitted
-byte. `make all-sayanox` prints the remaining
+byte. On 2026-10-21 the encoder followed: `tools/sxencode.sa` replays the
+`SX_ENCODE_LOG` seam and reproduces the code segment of five fixtures
+byte-for-byte with the same fifty-record vocabulary, gated by
+`make test-native-sxencode`. `make all-sayanox` prints the remaining
 inventory and **fails closed** — the same way `true-selfhost-full` refuses to
 claim a full-language self-host — so the remaining work cannot silently drift
 or be forgotten. The plan orders it: ~~IR tool~~, ~~directory bridge~~, then

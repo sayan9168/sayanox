@@ -37,7 +37,7 @@ LSP_BIN  := tools/sayanox_lsp
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
         pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
-        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink
+        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode
 
 all: true-selfhost-min
 
@@ -2022,7 +2022,116 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 	@./tools/sxlink Makefile $(TESTS)/sxlink/sxlink_hello $(TESTS)/sxlink/bad2.elf 2>&1 >/dev/null | grep -q 'not an ELF'
 	@echo "[OK] sxlink: five fixtures link byte-identically to write_elf and run identically; the dump changes no emitted byte; the ELF ident, the three program headers, the entry point and the page-1 code offset are pinned; missing dump and non-ELF input are clear errors"
 
-native-test: test-native-sxlink
+# ---------------------------------------------------------------------------
+# test-native-sxencode: the instruction encoder is Sayanox.
+#
+# selfhost/native_aot.c writes every byte of the code segment through about
+# fifty primitives: the mov/lea/arith/SSE2 helpers, emit_modrm and rexb, the
+# label-and-fixup machinery, and the two raw stores the phase-4 runtime uses.
+# `SX_ENCODE_LOG=<path>` records one line per call -- the primitive's name and
+# the integer arguments it was handed -- and `e1`, the one function that appends
+# a byte, records the byte as well. tools/sxencode.sa replays that stream and
+# rebuilds code.bin, which is the same file SX_LINK_DUMP writes for
+# tools/sxlink.sa: the container and the contents, each held to the C bytes by
+# fixtures instead of by inspection.
+#
+# Three things make the comparison worth more than a diff:
+#
+#   1. It is exact. Every fixture's code.bin must be byte-identical, not
+#      "equivalent" and not a prefix, including the runtime's hand-written
+#      machine code, which arrives as raw byte records and is copied because
+#      there is no encoding to reproduce.
+#   2. It is checked twice. Each named record is followed by the bytes the C
+#      encoder wrote for that same call, and the replay refuses to continue if
+#      its own encoding disagrees with them. A wrong ModRM or a displacement
+#      that should have been one byte therefore fails at the instruction, not
+#      in a later cmp.
+#   3. The recorder is inert. Each fixture is compiled twice, with and without
+#      the log, and the two ELFs are cmp'd, so no byte can change when the seam
+#      is on.
+#
+# The record vocabulary is pinned from both ends: the name list (`op_id`) and
+# the encoding list (`apply`) must have the same length, and the fixture set
+# must exercise every record, so a primitive cannot be added on one side only
+# and a dropped one cannot pass unnoticed. 64-bit immediates travel as two
+# 32-bit halves because a Sayanox number is a C double and is exact only below
+# 2^53 -- the gate would see a rounded constant immediately.
+#
+# This is a step TOWARDS the native backend being Sayanox, not the backend:
+# native_aot still drives its own encoder to produce the executables the gates
+# run, and docs/ALL_SAYANOX_PHASE.md says so.
+# ---------------------------------------------------------------------------
+SXENCODE_BIN := tools/sxencode
+SXENCODE_SA  := tools/sxencode.sa
+SXENCODE_FIX := $(TESTS)/sxencode_hello.sa selfhost/native_ir_log_test.sa \
+                selfhost/native_logic_arg_test.sa selfhost/native_strord_test.sa \
+                selfhost/stdlib_growth_test.sa
+SXENCODE_OPS := J_cc J_mp L_bind L_new addsd b bin_imm32 bin_imm8 bin_rr call_p \
+                cvtsd2si cvtsi2sd cvttsd2si divsd erel32 erel32j fm7 inc_mem_r \
+                incdec_r jcc_rel32 jmp5_slot jmp_rel32 lea_r12_data lea_rm \
+                leave_ret mov_imm64 mov_imm8m movq_rx movq_xr movzx_al_to_rax \
+                mulsd mv_m64 mv_r64m mv_rr mvz_rm patch_imm32 pop_r push_r \
+                raw_patch32 sar_imm setcc shl_imm shr_imm stal_rdi stb_rdi \
+                sub_rsp_slot subsd test_rr ucomisd xor_rr
+
+tools/sxencode: $(SXENCODE_SA) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(GEN2) $(SXENCODE_SA) $(TESTS)/sxencode.c >/dev/null
+	@if grep -q '#error' $(TESTS)/sxencode.c; then echo "[FAIL] sxencode: #error in the generated C"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/sxencode.c
+	@echo "[OK] Sayanox instruction encoder built from $(SXENCODE_SA)"
+
+.PHONY: test-native-sxencode
+test-native-sxencode: $(NATIVE_BIN) $(SXENCODE_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/sxencode
+	@# ---- the two record tables are the same length ----
+	@n=$$(grep -c 'when string_eq(name, "' $(SXENCODE_SA)); \
+	 m=$$(grep -c '^  when id == [0-9]* { st = ' $(SXENCODE_SA)); \
+	 if [ "$$n" != "$$m" ]; then \
+	   echo "[FAIL] sxencode: $$n record names but $$m encodings -- op_id and apply disagree"; exit 1; fi; \
+	 echo "  [ok] $$n records: the name list and the encoding list are the same length"
+	@# ---- one fixture per shape that moves the encoder ----
+	@# a bare program, the instruction-list fixture, a boolean-argument function
+	@# (which is what emits jmp5_slot), a string-ordering loop and the stdlib
+	@# growth fixture (which is the one that emits sar_imm and patch_imm32)
+	@printf 'hold x = 40\nhold x = x + 2\nshow x\n' > $(TESTS)/sxencode_hello.sa
+	@for fix in $(SXENCODE_FIX); do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  d=$(TESTS)/sxencode/$$name; \
+	  mkdir -p $$d; \
+	  ./$(NATIVE_BIN) $$fix $$d/off.elf; \
+	  SX_ENCODE_LOG=$$d/enc.log SX_LINK_DUMP=$$d ./$(NATIVE_BIN) $$fix $$d/c.elf; \
+	  cmp $$d/off.elf $$d/c.elf \
+	    || { echo "[FAIL] sxencode: SX_ENCODE_LOG changed the emitted bytes for $$name"; exit 1; }; \
+	  ./$(SXENCODE_BIN) $$d/enc.log $$d/code.bin $$d/sx.bin > $$d/report \
+	    || { echo "[FAIL] sxencode: the replay refused $$name"; head -20 $$d/report; exit 1; }; \
+	  cmp $$d/code.bin $$d/sx.bin \
+	    || { echo "[FAIL] sxencode: the Sayanox-encoded code is not byte-identical for $$name"; exit 1; }; \
+	  echo "  [ok] $$name: $$(wc -c < $$d/code.bin) code bytes, $$(tr '\n' ' ' < $$d/report | cut -d' ' -f2-3)"; \
+	done
+	@# ---- the fixture set exercises every record ----
+	@got=$$(grep -h -v '^;' $(TESTS)/sxencode/*/enc.log | cut -d' ' -f1 | sort -u | tr '\n' ' '); \
+	 want='$(SXENCODE_OPS) '; \
+	 if [ "$$got" != "$$want" ]; then \
+	   echo "[FAIL] sxencode: the fixtures do not exercise the pinned record set"; \
+	   echo "--- want ---"; echo "$$want"; echo "--- got ---"; echo "$$got"; exit 1; fi; \
+	 echo "  [ok] the fixture set exercises all $$(echo $$want | wc -w) records"
+	@# ---- the failures are clear, not silently short ----
+	@if ./$(SXENCODE_BIN) $(TESTS)/sxencode/nope.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin >/dev/null 2>&1; then \
+	  echo "[FAIL] sxencode accepted a log path that does not exist"; exit 1; fi
+	@./$(SXENCODE_BIN) $(TESTS)/sxencode/nope.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin 2>&1 >/dev/null | grep -q 'cannot read the encode log'
+	@printf '1\n' > $(TESTS)/sxencode/short.bin
+	@if ./$(SXENCODE_BIN) $(TESTS)/sxencode/sxencode_hello/enc.log $(TESTS)/sxencode/short.bin $(TESTS)/sxencode/bad.bin >/dev/null 2>&1; then \
+	  echo "[FAIL] sxencode accepted a code.bin of the wrong length"; exit 1; fi
+	@./$(SXENCODE_BIN) $(TESTS)/sxencode/sxencode_hello/enc.log $(TESTS)/sxencode/short.bin $(TESTS)/sxencode/bad.bin 2>&1 >/dev/null | grep -q 'different length'
+	@printf 'bogus_record 1 2\n' > $(TESTS)/sxencode/bogus.log
+	@if ./$(SXENCODE_BIN) $(TESTS)/sxencode/bogus.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin >/dev/null 2>&1; then \
+	  echo "[FAIL] sxencode accepted a record it does not implement"; exit 1; fi
+	@./$(SXENCODE_BIN) $(TESTS)/sxencode/bogus.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin 2>&1 >/dev/null | grep -q 'unknown record'
+	@echo "[OK] sxencode: the encoder is Sayanox -- five fixtures replay to byte-identical code, every named record is checked against the bytes C wrote for the same call, the recorder changes no emitted byte, all record names are exercised, and a missing log, a wrong-length code.bin and an unknown record are clear errors"
+
+native-test: test-native-sxlink test-native-sxencode
 
 # ---------------------------------------------------------------------------
 # test-read-bytes: read_bytes(path, xs) appends the WHOLE file to a byte buffer
@@ -3692,8 +3801,9 @@ all-sayanox:
 	@echo "        publish, install-local and the local sync/fetch), language"
 	@echo "        server, IR translator, LSP folder index, LSP test client,"
 	@echo "        byte-buffer + bitwise builtins, the read_bytes binary"
-	@echo "        reader, and the native backend's ELF image writer +"
-	@echo "        rel32 linker (tools/sxlink.sa, byte-identical to C)"
+	@echo "        reader, the native backend's ELF image writer + rel32"
+	@echo "        linker (tools/sxlink.sa) and its x86-64 instruction"
+	@echo "        encoder (tools/sxencode.sa), both byte-identical to C"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
 	@exit 1
