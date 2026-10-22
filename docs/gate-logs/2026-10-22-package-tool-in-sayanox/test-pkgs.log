@@ -1,0 +1,27 @@
+[OK] compiler module (checked-in source verified; no decoder used)
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 tools/sxpkg.sa tools/sxpkg.c >/dev/null
+cc -O2 -o tools/sxpkg tools/sxpkg.c
+[OK] Sayanox local package-lock tool built from tools/sxpkg.sa
+[OK] package errors: search never implicitly syncs; verify propagates execution/project failure
+cd selfhost/seed_tests/pkgs-proj && ../../../tools/sxpkg init >/dev/null
+cd selfhost/seed_tests/pkgs-proj && ../../../tools/sxpkg seed >/dev/null
+cd selfhost/seed_tests/pkgs-proj && test -s .sayanox/registry/math/main.sa
+cd selfhost/seed_tests/pkgs-proj && ../../../tools/sxpkg add math 0.1.0 >/dev/null
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/pkgs-proj/use_math.sa > selfhost/seed_tests/pkgs-proj/use_sm.c
+cc -O2 -o selfhost/seed_tests/pkgs-proj/use_sm selfhost/seed_tests/pkgs-proj/use_sm.c
+./selfhost/gen2 selfhost/seed_tests/pkgs-proj/use_math.sa selfhost/seed_tests/pkgs-proj/use_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/pkgs-proj/use_g2 selfhost/seed_tests/pkgs-proj/use_g2.c
+cmp selfhost/seed_tests/pkgs-deps/lock-want selfhost/seed_tests/pkgs-deps/sx.lock
+./selfhost/seed/sxc_seed_min selfhost/seed_tests/pkgs-deps/use_calc.sa > selfhost/seed_tests/pkgs-deps/use_calc_sm.c
+cc -O2 -o selfhost/seed_tests/pkgs-deps/use_calc_sm selfhost/seed_tests/pkgs-deps/use_calc_sm.c
+./selfhost/gen2 selfhost/seed_tests/pkgs-deps/use_calc.sa selfhost/seed_tests/pkgs-deps/use_calc_g2.c >/dev/null
+cc -O2 -o selfhost/seed_tests/pkgs-deps/use_calc_g2 selfhost/seed_tests/pkgs-deps/use_calc_g2.c
+cd selfhost/seed_tests/pkgs-proj && ../../../tools/sxpkg seed >/dev/null
+[OK] offline packages: sxpkg seed writes .sayanox/registry (no network), deps= resolution pulls a package's dependencies into the lock, install-local copies them out of a local registry directory with their sums checked, and use ".sayanox/registry/<pkg>/main.sa" runs the same on seed-min, gen2 (and native when built)

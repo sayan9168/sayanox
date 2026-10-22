@@ -79,3 +79,43 @@ we have not got to":
 The package tool used to be on that list. It is not any more, and the reason it
 is not is a builtin pair (`getenv` + `run_command`) plus the decision to keep
 the transport as an external program.
+
+## Gate results
+
+One run, in this order, each log kept beside this file. Every gate below was
+run against the tree this branch actually contains; none of them was skipped
+or narrowed.
+
+| gate | result |
+|---|---|
+| `make gen2` | ok — seed → gen1_min → gen2 |
+| `make doctor` | ok |
+| `make test-doc-claims` | ok |
+| `make test-sxdiag` | ok — 23 / 7 / 14 / 31 refusals, the unknown-suite refusal, the two accept-everything controls, and `run_command` + `getenv` refused by seed-min and native |
+| `make test-pkgs` | ok — seed, `deps=` closure, `install-local`, `use` on seed-min and gen2 |
+| `make test-sxpkg-polish` | ok — the add note, verify/install exit codes, unknown command rc 2, publish once |
+| `make test-sxpkg-online-local` | ok — a `file://` registry: good accepted, tampered rejected and removed, missing leaves no `.part` |
+| `make test-sxpkg-online-optin` | ok — refusals on stderr before any transfer, opt-in lifts them |
+| `make test-sxpkg-transfer-hardening` | ok — mocked curl/wget through PATH, rollback, overwrite refusal, cached install without INDEX |
+| `make test-language-deps` | ok |
+| `make gen3` | ok — `=== GEN3-OK ===`, `gen3 == gen4` byte-identical with `getenv` in the compiler |
+| `make native-test` | ok — includes `test-native-sxlink`, `test-native-sxencode` and `test-sxdiag` |
+| `make all-sayanox` | exit 1, by design: seed 2,035 lines, native backend 4,498, driver + 14 `sh`, 161 `.sa` |
+
+## What the tests had to learn
+
+Three assertions were written for a shell that no longer exists, and each was
+changed only after deciding that the *behaviour* stays and the *mechanism*
+moved:
+
+* `test-pkgs` expected `add calc` to say nothing about a missing registry copy.
+  The wrapper printed that note; it now comes from the binary itself, so the
+  expected output gained the line instead of the note being dropped.
+* `test-pkgs` used an empty project registry to make a bare `install` report
+  what it could not write. `init` seeds the registry now, so the case empties
+  it first — the assertion is unchanged, the setup is explicit.
+* `test-pkgs` compared the exact stdout of a *failed* `verify`. That command
+  sets exit 1 itself now, and `assert-out` reads a nonzero status as a failure
+  of the harness, so the case runs `{ verify; :; }`: the stdout comparison is
+  still in charge, and the exit status is pinned separately by
+  `test-sxpkg-polish`.
