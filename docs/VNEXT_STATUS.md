@@ -1,12 +1,14 @@
 # Sayanox vNext — Repository Audit & Status (Phase 1)
 
-> **The entry points named in this file do not exist (verified 2026-10-13).**
-> There is no `make stage2` target, and no `selfhost/bootstrap_production.sh`,
-> `bootstrap_full_selfhost.sh` or `bootstrap_full_language_selfhost.sh`.
-> `selfhost/stage2_template.c` is a 93-byte placeholder, `selfhost/stage2_src/`
-> holds a README and an 11-byte placeholder, `selfhost/sxc_full.c` is a 30-line
-> toy, and `bash selfhost/restore_stage2.sh` exits 1 with
-> `error: missing Stage-2 seed`. The supported path is
+> **The entry points named in this file do not exist.** There is no `make stage2`
+> target, and no `selfhost/bootstrap_production.sh`,
+> `bootstrap_full_selfhost.sh` or `bootstrap_full_language_selfhost.sh`. The
+> placeholder scaffolding those documents leaned on — `selfhost/stage2_template.c`,
+> `selfhost/stage2_src/`, `selfhost/sxc_full.c`, `selfhost/sxc_full_minimal.c`,
+> `selfhost/restore_stage2.sh`, `selfhost/restore_stage2_template.sh`,
+> `selfhost/restore_sxc.sh`, `selfhost/restore_sxc_full.sh` and the `selfhost/sx`
+> CLI wrapper — was **deleted on 2026-10-21**, so it cannot pretend to be one.
+> The supported path is
 > `make doctor && make true-selfhost && make gen3 && make native-test`;
 > `docs/FULL_LANGUAGE_SELFHOST.md` says what actually runs and
 > `make test-doc-claims` keeps this banner honest.
@@ -27,7 +29,7 @@ kept only as a record of the earlier vNext plan.
 | Larger .sa compiler sources | `selfhost/compiler.sa lexer.sa parser.sa codegen.sa ...` | Written against a **richer builtin set that no binary in this repo implements** (`list_get push string_len make`). They are not wired into any build/test path. |
 | Native AOT | `selfhost/native_aot.c` (90 lines) | Linux x86-64 ELF emitter, but it **interprets** `.sa` at compile time and emits the output bytes as a static `write()` blob. Supports `hold/show/when/while` on integers only. No functions, lists, strings-as-values, calls. |
 | Runtime | `selfhost/rc_runtime.h` | Tiny refcounted-string header (`sx_rc_new/retain/release/concat`). Not linked from any working pipeline; most generated C uses plain doubles/puts. |
-| CLI | `selfhost/sx` (bash), `tools/sxpkg.sh`, `tools/sayanox-lsp.sh` | Bash wrappers around nonexistent binaries in most paths. |
+| CLI | `selfhost/sx` (bash, deleted 2026-10-21), `tools/sxpkg.sh` (deleted 2026-10-22), `tools/sayanox-lsp.sh` | Bash wrappers around nonexistent binaries in most paths. The package tool is one Sayanox binary now (`tools/sxpkg`). |
 | CI | `.github/workflows/ci.yml` | Contains `|| echo "skip"` soft-failures everywhere; pure-gen2 step is optional and its script fakes Gen2 (see below). |
 
 ## Working features (verified)

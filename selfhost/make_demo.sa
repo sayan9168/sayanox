@@ -1,4 +1,0 @@
-make get42() {
-  give 42
-}
-show get42()

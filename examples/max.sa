@@ -1,9 +1,0 @@
-make max(a, b) {
-  when a > b {
-    give a
-  } otherwise {
-    give b
-  }
-}
-show max(3, 9)
-show max(12, 4)

@@ -10,47 +10,37 @@ Packages under `registry/<name>/` (`pkg.meta`, `main.sa`).
 
 ## Commands
 
-The current shell implementation provides the full, local/online command set:
-
-```sh
-./tools/sxpkg.sh init
-./tools/sxpkg.sh sync
-./tools/sxpkg.sh search math
-./tools/sxpkg.sh add math 0.1.0
-./tools/sxpkg.sh install            # online: downloads from $ONLINE
-./tools/sxpkg.sh install-local registry  # offline: local directory only
-./tools/sxpkg.sh deps
-./tools/sxpkg.sh list
-./tools/sxpkg.sh info math
-./tools/sxpkg.sh fetch https://example.com/x.sa mypkg
-```
-
-A Sayanox implementation of the local lock-file core is also available:
+There is one program, `./tools/sxpkg`, built from `tools/sxpkg.sa` by gen2
+(`make sxpkg`). It answers every command; `tools/sxpkg.sh` was deleted on
+2026-10-22 and nothing replaces it.
 
 ```sh
 make sxpkg
 ./tools/sxpkg init
-./tools/sxpkg add math 0.1.0      # also locks math's `deps=` closure
-./tools/sxpkg list
-./tools/sxpkg deps                # the resolved closure
+./tools/sxpkg sync                    # http(s): needs an opt-in, see below
 ./tools/sxpkg search math
+./tools/sxpkg add math 0.1.0          # also locks math's `deps=` closure
+./tools/sxpkg install                 # copy the lock closure in, sum-checked
+./tools/sxpkg install registry        # the same, from an explicit source dir
+./tools/sxpkg install-local registry  # offline: local directory only
+./tools/sxpkg deps                    # the resolved closure
+./tools/sxpkg list
 ./tools/sxpkg info math
-./tools/sxpkg install [registry]  # offline: copies the closure in, sum-checked
-./tools/sxpkg remove math
-make test-sxpkg
+./tools/sxpkg fetch https://example.com/x.sa mypkg
+./tools/sxpkg verify
+./tools/sxpkg publish
 ```
 
-`install` needs the destination folders to exist (Sayanox has no `mkdir`), so
-the wrapper creates them first:
+`SAYANOX_ROOT` moves the project (every path is built through it), so
+`SAYANOX_ROOT=project tools/sxpkg init` needs no `cd`. The network is opt-in:
+`SAYANOX_ONLINE=1 tools/sxpkg sync`, or `tools/sxpkg --online sync`. A
+`file://` URL or a plain path is not the network and needs no permission.
 
-```sh
-sh tools/sxpkg.sh install-local registry   # mkdir + the offline install above
-sh tools/sxpkg.sh deps
-```
-
-The Sayanox binary supports local project/registry commands (`init`, `add`,
-`deps`, `install`, `verify`, `sum`, `list`, `remove`, `seed`, `search`,
-`info`). It never downloads, installs from, or publishes to the network.
+The only program the tool starts is the transfer itself: `curl`, or `wget`
+when there is no curl, found by scanning `PATH`. Everything else -- the
+opt-in policy, the `.part` staging, the checksum acceptance, the rollback, the
+exit statuses -- is Sayanox code in `tools/sxpkg.sa`. It reads no manifest
+with `grep`/`cut`/`tr` and copies no tree with `cp`.
 
 ## Offline use path (no network)
 
@@ -59,8 +49,8 @@ the math package defining `dbl`/`sqr`) into the project, and `use` reads it
 back with a plain relative splice:
 
 ```sh
-sh tools/sxpkg.sh init      # creates sx.lock / sx.toml / .sayanox/registry
-sh tools/sxpkg.sh seed      # writes the sample packages (mkdir + write_file)
+./tools/sxpkg init          # creates sx.lock / sx.toml / .sayanox/registry and seeds
+./tools/sxpkg seed          # writes the sample packages
 ./tools/sxpkg add math 0.1.0
 ```
 
@@ -73,9 +63,9 @@ show sqr(6)
 `make test-pkgs` pins this path: it asserts the seeded `INDEX`, `list`,
 `search` and `info` output, then compiles the `use` program above with
 seed-min and gen2 (and native when `selfhost/native_aot` is built) and
-compares stdout. No bootstrap target touches the network — `sync`, `publish`
-and `fetch` in `tools/sxpkg.sh` are the only online commands and are unused by
-the bootstrap.
+compares stdout. No bootstrap target touches the network — `sync` and a remote `fetch` are the
+only commands that can open a socket, both need an explicit opt-in, and the
+bootstrap never runs them.
 
 Override mirror:
 
@@ -125,8 +115,8 @@ or `sxpkg: verify FAILED (N problem(s))` and exits non-zero otherwise. With no
 `sx.lock` it says `sxpkg: no sx.lock; run init first`.
 
 ```sh
-sh tools/sxpkg.sh verify
-sh tools/sxpkg.sh sum registry/math/main.sa
+./tools/sxpkg verify
+./tools/sxpkg sum registry/math/main.sa
 make test-registry-sums   # every pkg.meta sum= matches its main.sa
 ```
 
@@ -183,23 +173,14 @@ checks, before writing anything:
 * the destination copy (if any) already agrees — reported as `ok`, not
   re-copied.
 
-A missing `.sayanox/registry/<name>/` is reported rather than ignored — the
-Sayanox binary used to be unable to create one, so the message told the user to
-run the wrapper first:
-
-```
-sxpkg: MISSING calc: cannot write .sayanox/registry/calc/; run sh tools/sxpkg.sh install-local to create the folders
-```
-
-Since 2026-10-18 the binary creates the folders itself (`ensure_dir` is
-`mkdir -p` over `make_dir`), and `sh tools/sxpkg.sh install-local [registry]`
-delegates the whole offline install to it, so the message above is the one a
-direct `./tools/sxpkg install` still prints. The usual flow is:
+The plain `install [registry]` form does not create destinations: it reports
+what it could not write. `install-local` and the no-argument `install` do
+create them (`ensure_dir` is `mkdir -p` over `make_dir`). The usual flow is:
 
 ```sh
-sh tools/sxpkg.sh init                     # sx.lock / sx.toml / .sayanox/registry
+./tools/sxpkg init                         # sx.lock / sx.toml / .sayanox/registry
 ./tools/sxpkg add calc 0.1.0               # locks calc + its dep math
-sh tools/sxpkg.sh install-local registry   # copies both in, sum-checked
+./tools/sxpkg install-local registry       # copies both in, sum-checked
 ./tools/sxpkg verify                       #   sxpkg: verified calc 0.1.0
                                            #   sxpkg: verified math 0.1.0
                                            #   sxpkg: verify ok (2 locked packages)
@@ -218,17 +199,17 @@ gen2 and native all agree on the result.
 errors and the "cannot write" message.
 
 **Not provided:** signatures, version ranges, a real solver, or any fetch
-during resolve/install/verify — everything above reads local directories
-only. `publish` and `install-local` are Sayanox since 2026-10-18; the http(s)
-halves of `sync`, `install` and `fetch` in `tools/sxpkg.sh` are still the only
-online commands, and no bootstrap target uses them.
+during resolve/verify — everything above reads local directories only. The
+http(s) halves of `sync`, `install` and `fetch` are the only commands that can
+open a socket, they need an explicit opt-in, and no bootstrap target uses
+them.
 
 ## Exit codes and the online design (2026-10-10)
 
-* `tools/sxpkg.sh verify` and `install-local` exit **1** when the Sayanox
-  binary reports a `FAILED` or `DEP` problem. The binary itself cannot set an
-  exit status, so the wrapper reads its report. An unknown command exits **2**.
-  Both are pinned by `make test-sxpkg-polish`.
+* `verify`, `install`, `install-local` and `search` exit **1** when they report
+  a `FAILED`/`DEP` problem or have no index to read. An unknown command exits
+  **2**. The program sets these itself; the shell that used to read its report
+  is gone. All pinned by `make test-sxpkg-polish`.
 * `add` warns when the package has no local registry copy yet.
 * The online commands (`sync`, `install`, `fetch`, `publish`) and their
   thin-design limits are in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md). That document
@@ -237,14 +218,13 @@ online commands, and no bootstrap target uses them.
 
 ### Offline search and process failures (2026-10-11)
 
-`search` now only reads the local index. If it is absent, the wrapper exits
-nonzero with `no local index; run seed (offline) or sync (explicit network)`;
-it never silently switches to network access. Network transfers remain
+`search` now only reads the local index. If it is absent, it exits nonzero
+with `no local index; run seed (offline) or sync (explicit network)`; it never
+silently switches to network access. Network transfers remain
 explicit `sync`, `install` or `fetch` operations; bootstrap uses none of them.
 
-The checked wrapper propagates an inability to enter the project or execute
-the Sayanox tool as failure, instead of treating arbitrary output as success.
-`make test-pkg-errors` (part of `test-pkgs`) checks both cases. Local package
-resolution/checksumming remains in `.sa`; shell still supplies directories,
-process status and transfers. The checksum is not cryptographic, and these
+A project root that is not a directory fails the same way it did when the
+wrapper's `cd` failed: `sxpkg: could not run verify in project <path>`, exit 1.
+`make test-pkg-errors` (part of `test-pkgs`) checks both that and the absent
+index. The checksum is not cryptographic, and these
 checks are not a sandbox for untrusted package trees or symlinks.

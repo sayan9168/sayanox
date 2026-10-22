@@ -12,7 +12,7 @@ The path is:
 
 The emitted program does not require a generated C file or a second compiler.
 
-The maintained native source (`selfhost/native_aot.c`, canonical and self-contained) covers the pure-min subset: `hold`, `show`, IEEE-double numeric expressions (`+ - * / %`, comparisons, parentheses), `when` / `else` / `otherwise`, `while`, lists, strings with the `concat`/`len`/`chr`/`string_eq`/`sx_index` builtins, structs including nested ones and typed copies, `use "file.sa"` module splice (depth <= 8), and top-level `make`/`give` functions with recursion (typed scalar/list functions and checked function-local holds; see the current tests). Anything else is a hard error with a clear message — see [`docs/STATUS.md`](STATUS.md) for the exact boundaries. The files under `selfhost/native_src/` are historical fragments, not a split of the current source.
+The maintained native source (`selfhost/native_aot.c`, canonical and self-contained) covers the pure-min subset: `hold`, `show`, IEEE-double numeric expressions (`+ - * / %`, comparisons, parentheses), `when` / `else` / `otherwise`, `while`, lists, strings with the `concat`/`len`/`chr`/`string_eq`/`sx_index` builtins, structs including nested ones and typed copies, `use "file.sa"` module splice (depth <= 8), and top-level `make`/`give` functions with recursion (typed scalar/list functions and checked function-local holds; see the current tests). Anything else is a hard error with a clear message — see [`docs/STATUS.md`](STATUS.md) for the exact boundaries. `selfhost/native_src/` (59 historical base64 fragments of this file) was deleted on 2026-10-21: it was a copy of a copy, never read by any target.
 
 ## Cranelift status
 
@@ -134,8 +134,9 @@ cc -O2 -o out out.c
 ./out
 ```
 
-The `selfhost/sx` wrapper is a Sayanox-side stub that exits 1 because there is
-no Stage-2 host in this tree.
+(`selfhost/sx`, the CLI wrapper that used to sit here, was a stub that could
+only exit 1 because there is no Stage-2 host in this tree; it was deleted on
+2026-10-21 with the rest of that scaffolding.)
 
 ## Limitations
 

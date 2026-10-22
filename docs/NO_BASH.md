@@ -10,18 +10,20 @@ that every tool is already a `.sa` program.
   `selfhost/sx`, `restore_stage2.sh`, `restore_sxc_full.sh`,
   `restore_compiler_min.sh`, `pack_compiler_min.sh` and `lang_quality.sh` —
   were ported; `pipefail`, `[[ ]]`, arrays, `local` and process substitution
-  are gone.
+  are gone. Four of the six were then deleted on 2026-10-21 (`selfhost/sx`,
+  `restore_stage2.sh`, `restore_sxc_full.sh`, `lang_quality.sh`) because they
+  drove a Stage-2 host that does not exist.
 * The LSP build needs no binder at all since 2026-10-17: the folder index is
   Sayanox (`read_dir`/`path_kind`/`path_size`/`path_real`), so both
   `tools/lsp_workspace_bind.sa` (itself a Sayanox replacement for the old awk
   binder) and the C header it injected were deleted.
 * The offline packer chunks with `split -b 1100`; test recipes extract lines
   with POSIX `read`; the native IR-log checks use `grep`/`cut`/`sort`/`paste`;
-  the emit-seam region uses `head`/`tail`; `tools/sxpkg.sh` uses `cut`/`tr`
-  only to parse the Sayanox binary's own `sum` output inside its http(s)
-  transport, and `cp`/`mv`/`mktemp` only to move a downloaded file — the
-  package commands themselves (`publish`, `install-local`, the local branches
-  of `sync` and `fetch`) no longer call `grep`, `cut`, `tr`, `cp`, `mkdir` or
+  the emit-seam region uses `head`/`tail`; the package tool (`tools/sxpkg.sa`
+  since 2026-10-22) needs none of them -- it parses `sx.lock`, `pkg.meta` and
+  `sx.toml` itself, copies with `read_file`/`write_file`, makes folders with
+  `ensure_dir` and moves a staged download with `read_file` + `remove_path`,
+  and it no longer calls `grep`, `cut`, `tr`, `cp`, `mkdir` or
   `rm` at all.
 * The legacy sed-based `tools/sayanox-lsp.sh` shell server was deleted. The
   supported server is `tools/sayanox_lsp.sa`.
@@ -52,17 +54,15 @@ that every tool is already a `.sa` program.
 
 ## Still to port
 
-- The http(s) transport of `sync`/`install`/`fetch` remains in
-  `tools/sxpkg.sh`. The file side of those commands, `publish`,
-  `install-local`, the seed folders and every folder/copy operation moved to
-  `tools/sxpkg.sa` on 2026-10-18 (`make test-sxpkg-sayanox-logic`). The
-  transport is blocked on the language rather than on willingness:
-  `spawn(path)` takes no arguments, so Sayanox cannot launch
-  `curl -fsSL --connect-timeout 10 --max-time 60 <url> -o <part>`, and
+- The transfer *program* of `sync`/`install`/`fetch`: `curl`, or `wget` when
+  there is no curl. Everything around it moved into `tools/sxpkg.sa`, which
+  became the whole package tool on 2026-10-22 -- the wrapper, its opt-in
+  policy, `SAYANOX_ROOT`, its `cut`/`tr` manifest parsing and its `cp`/`mv`
+  staging are gone. The transport stays because
   `selfhost/test_sxpkg_transfer_hardening.sh` mocks `curl`/`wget` through
-  `PATH` and asserts `$MOCK_CALLS` contains them, so switching to `http_get`
-  would break a gate that must stay unchanged. This is a documented
-  exception, not an unfinished step.
+  `PATH` and asserts `$MOCK_CALLS` contains them: switching to the `http_get`
+  builtin would delete the test's subject. This is a documented exception, not
+  an unfinished step.
 - `selfhost/seed/sxc_seed_min.c` is the small trusted bootstrap compiler, and
   `selfhost/native_aot.c` is the current x86-64 Linux native backend.
 - `Makefile` and its POSIX-shell recipes orchestrate the initial build and

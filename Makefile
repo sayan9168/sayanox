@@ -29,6 +29,9 @@ SXPKG_C  := tools/sxpkg.c
 SXPKG_BIN := tools/sxpkg
 LSP_C    := tools/sayanox_lsp.c
 LSP_BIN  := tools/sayanox_lsp
+SXDIAG_SA  := tools/sxdiag.sa
+SXDIAG_C   := tools/sxdiag.c
+SXDIAG_BIN := tools/sxdiag
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
@@ -36,8 +39,8 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
-        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink
+        pack-compiler test-http-get test-sayacrawl test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
+        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-sxdiag
 
 all: true-selfhost-min
 
@@ -291,30 +294,30 @@ test-sxpkg: sxpkg
 	cmp $(TESTS)/sxpkg/sx.lock-want $(TESTS)/sxpkg/sx.lock
 	@echo "[OK] Sayanox package tool: init/add/update/list/remove"
 
-test-sxpkg-wrapper: sxpkg tools/sxpkg.sh
+test-sxpkg-wrapper: sxpkg
 	@mkdir -p $(TESTS)/sxpkg-wrapper
 	@printf '' > $(TESTS)/sxpkg-wrapper/sx.lock
 	@printf '' > $(TESTS)/sxpkg-wrapper/sx.toml
-	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh init >/dev/null
-	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh add local-pkg >/dev/null
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh list,sxpkg: locked packages\nlocal-pkg=0.1.0)
-	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh remove local-pkg >/dev/null
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh list,sxpkg: locked packages\n(none))
-	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh seed >/dev/null
+	cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) init >/dev/null
+	cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) add local-pkg >/dev/null
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) list,sxpkg: locked packages\nlocal-pkg=0.1.0)
+	cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) remove local-pkg >/dev/null
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) list,sxpkg: locked packages\n(none))
+	cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) seed >/dev/null
 	@printf 'hello=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-wrapper/index-want
 	cmp $(TESTS)/sxpkg-wrapper/index-want $(TESTS)/sxpkg-wrapper/.sayanox/registry/INDEX
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh search math,sxpkg: search math\n  math 0.1.0)
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh info math,name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\nsum=718013937)
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) search math,sxpkg: search math\n  math 0.1.0)
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) info math,name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\nsum=718013937)
 	@mkdir -p $(TESTS)/sxpkg-wrapper/project
 	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.lock
 	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.toml
-	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh init >/dev/null
+	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project ../../../$(SXPKG_BIN) init >/dev/null
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-wrapper/project/lock-want
 	cmp $(TESTS)/sxpkg-wrapper/project/lock-want $(TESTS)/sxpkg-wrapper/project/sx.lock
-	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh add rooted 0.1.0 >/dev/null
+	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project ../../../$(SXPKG_BIN) add rooted 0.1.0 >/dev/null
 	@printf '# sx.lock\nversion=1\nrooted=0.1.0\n' > $(TESTS)/sxpkg-wrapper/project/lock-want
 	cmp $(TESTS)/sxpkg-wrapper/project/lock-want $(TESTS)/sxpkg-wrapper/project/sx.lock
-	@echo "[OK] sxpkg.sh delegates local commands to Sayanox"
+	@echo "[OK] sxpkg: one Sayanox binary for the whole package tool, no shell wrapper"
 
 
 test-reassign:
@@ -1461,19 +1464,19 @@ test-stdlib: $(GEN2) $(SEED_MIN_BIN)
 # cannot set an exit status, so the shell wrapper turns a FAILED/DEP report
 # into rc 1 (verify, install-local), an unknown command is rc 2, and `publish`
 # prints its report once (it used to run twice through a duplicated dispatch).
-test-sxpkg-polish: sxpkg tools/sxpkg.sh
+test-sxpkg-polish: sxpkg
 	@mkdir -p $(TESTS)/sxpkg-polish
 	@printf '' > $(TESTS)/sxpkg-polish/sx.lock
 	@printf 'name = "pol-pkg"\nversion = "0.1.0"\n' > $(TESTS)/sxpkg-polish/sx.toml
-	cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh init >/dev/null
-	cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
-	@if (cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh verify >/dev/null 2>&1); then \
+	cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) init >/dev/null
+	cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
+	@if (cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) verify >/dev/null 2>&1); then \
 	  echo "[FAIL] sxpkg verify exited 0 with a missing package"; exit 1; fi
-	@if (cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh install-local $(CURDIR)/registry >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) install-local $(CURDIR)/registry >/dev/null 2>&1); then \
 	  echo "[FAIL] sxpkg install-local exited 0 with an unresolvable lock entry"; exit 1; fi
-	@cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh bogus >/dev/null 2>&1; \
+	@cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) bogus >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then echo "[FAIL] unknown sxpkg command exited $$rc, want 2"; exit 1; fi
-	@n=$$(cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh publish | grep -c 'sxpkg: published locally pol-pkg 0.1.0'); \
+	@n=$$(cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) publish | grep -c 'sxpkg: published locally pol-pkg 0.1.0'); \
 	  if [ "$$n" != 1 ]; then echo "[FAIL] sxpkg publish reported $$n times, want 1"; exit 1; fi
 	@echo "[OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once"
 
@@ -1481,12 +1484,11 @@ test-sxpkg-polish: sxpkg tools/sxpkg.sh
 # ---------------------------------------------------------------------------
 # test-sxpkg-sayanox-logic: the part of sxpkg that moved out of the shell.
 #
-# tools/sxpkg.sh used to carry publish, install-local's folder loop and the
-# local-registry halves of sync and fetch in grep/cut/tr/cp/mkdir/rm.  All of
-# that is Sayanox now, in tools/sxpkg.sa, and the shell keeps only what Sayanox
-# cannot do: reading SAYANOX_ONLINE from the environment, and launching curl or
-# wget for an http(s) transfer (`spawn` takes a path with no argv, so it cannot
-# pass a URL at all).
+# tools/sxpkg.sa is the whole package tool since 2026-10-22: the shell wrapper
+# that carried publish, install-local's folder loop, the local-registry halves
+# of sync and fetch, the online opt-in policy, SAYANOX_ROOT and the exit
+# statuses is gone.  The `getenv` and `run_command` builtins replaced it, and
+# the one program it still starts is the http(s) transport itself.
 #
 # Pinned here:
 #   * publish writes pkg.meta (name/version/sum) and main.sa, adds exactly one
@@ -1507,7 +1509,7 @@ test-sxpkg-polish: sxpkg tools/sxpkg.sh
 #     later `make`.  The generated C and a fixture both pin that it did not.
 # ---------------------------------------------------------------------------
 .PHONY: test-sxpkg-sayanox-logic
-test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
+test-sxpkg-sayanox-logic: sxpkg
 	@mkdir -p $(TESTS)/sxpkg-sayanox
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox sx.lock sx.toml main.sa srcreg syncreg badreg deep csrc cdst fetchsrc.sa
 	@# ---- a comment with balanced quotes must not break a typed signature ----
@@ -1525,7 +1527,7 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	@printf 'name = "pub-pkg"\nversion = "2.3.4"\n' > $(TESTS)/sxpkg-sayanox/sx.toml
 	@printf 'show "pub"\n' > $(TESTS)/sxpkg-sayanox/main.sa
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh publish > pub.out
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) publish > pub.out
 	@grep -q -F 'sxpkg: published locally pub-pkg 2.3.4' $(TESTS)/sxpkg-sayanox/pub.out \
 	  || { echo "[FAIL] publish did not report the package"; exit 1; }
 	@test $$(grep -c -F 'sxpkg: published locally' $(TESTS)/sxpkg-sayanox/pub.out) -eq 1 \
@@ -1543,34 +1545,34 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	  || { echo "[FAIL] publish wrote the wrong INDEX"; exit 1; }
 	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/pkgs \
 	  || { echo "[FAIL] publish created a project copy; it never installs"; exit 1; }
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh publish >/dev/null
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) publish >/dev/null
 	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
 	  || { echo "[FAIL] a second publish duplicated the INDEX entry"; exit 1; }
 	@printf '# sx.lock\nversion=1\npub-pkg=2.3.4\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) verify | grep -q 'verify ok' \
 	  || { echo "[FAIL] a Sayanox-published package does not verify"; exit 1; }
 	@# ---- install-local ----
 	@mkdir -p $(TESTS)/sxpkg-sayanox/srcreg
 	@cp -r registry/math registry/strings $(TESTS)/sxpkg-sayanox/srcreg/
 	@printf '# sx.lock\nversion=1\nmath=0.1.0\nstrings=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg > il.out
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) install-local srcreg > il.out
 	@grep -q -F 'sxpkg: install ok' $(TESTS)/sxpkg-sayanox/il.out \
 	  || { echo "[FAIL] install-local did not report ok"; exit 1; }
 	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/math/pkg.meta \
 	  || { echo "[FAIL] install-local wrote no registry copy"; exit 1; }
 	@test -d $(TESTS)/sxpkg-sayanox/.sayanox/pkgs/math \
 	  || { echo "[FAIL] install-local created no project folder"; exit 1; }
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) verify | grep -q 'verify ok' \
 	  || { echo "[FAIL] an install-local package does not verify"; exit 1; }
 	@printf '# sx.lock\nversion=1\nnosuch=9.9\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) install-local srcreg >/dev/null 2>&1); then \
 	  echo "[FAIL] install-local exited 0 with an unresolvable lock entry"; exit 1; fi
 	@printf '# sx.lock\nversion=1\n../escape=1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) install-local srcreg >/dev/null 2>&1); then \
 	  echo "[FAIL] install-local accepted an unsafe package name"; exit 1; fi
 	@test ! -e $(TESTS)/escape || { echo "[FAIL] install-local escaped the tests directory"; exit 1; }
 	@rm -f $(TESTS)/sxpkg-sayanox/sx.lock
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) install-local srcreg >/dev/null 2>&1); then \
 	  echo "[FAIL] install-local exited 0 with no sx.lock"; exit 1; fi
 	@# ---- sync against a local registry ----
 	@mkdir -p $(TESTS)/sxpkg-sayanox/syncreg/hello $(TESTS)/sxpkg-sayanox/syncreg/math
@@ -1580,7 +1582,7 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
 	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/syncreg \
-	    sh ../../../tools/sxpkg.sh sync > sync.out
+	    ../../../$(SXPKG_BIN) sync > sync.out
 	@grep -q -F 'sxpkg: index updated' $(TESTS)/sxpkg-sayanox/sync.out \
 	  || { echo "[FAIL] sync did not report the index"; exit 1; }
 	@grep -q -F '  synced math=0.1.0' $(TESTS)/sxpkg-sayanox/sync.out \
@@ -1591,28 +1593,28 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/math/main.sa \
 	  || { echo "[FAIL] sync copied no package"; exit 1; }
 	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/syncreg \
-	    sh ../../../tools/sxpkg.sh sync > sync2.out
+	    ../../../$(SXPKG_BIN) sync > sync2.out
 	@test $$(grep -c -F '  synced math=0.1.0' $(TESTS)/sxpkg-sayanox/sync2.out) -eq 1 \
 	  || { echo "[FAIL] a second sync duplicated the report"; exit 1; }
 	@mkdir -p $(TESTS)/sxpkg-sayanox/badreg
 	@printf '../escape=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-sayanox/badreg/INDEX
 	@if (cd $(TESTS)/sxpkg-sayanox && \
 	      SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/badreg \
-	      sh ../../../tools/sxpkg.sh sync >/dev/null 2>&1); then \
+	      ../../../$(SXPKG_BIN) sync >/dev/null 2>&1); then \
 	  echo "[FAIL] sync accepted an index with an unsafe package name"; exit 1; fi
 	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
 	  || { echo "[FAIL] a rejected index destroyed the installed one"; exit 1; }
 	@test ! -e $(TESTS)/escape || { echo "[FAIL] sync escaped the tests directory"; exit 1; }
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
 	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file:///nonexistent-registry \
-	    sh ../../../tools/sxpkg.sh sync > sync3.out
+	    ../../../$(SXPKG_BIN) sync > sync3.out
 	@grep -q -F 'sxpkg: local registry seeded' $(TESTS)/sxpkg-sayanox/sync3.out \
 	  || { echo "[FAIL] sync did not fall back to the local seed"; exit 1; }
 	@# ---- fetch from a local source ----
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
 	@printf 'show "fetched"\n' > $(TESTS)/sxpkg-sayanox/fetchsrc.sa
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa fetched > fetch.out
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) fetch fetchsrc.sa fetched > fetch.out
 	@grep -q -F 'sxpkg: fetched fetched from fetchsrc.sa (checksum recorded; not authenticated)' \
 	    $(TESTS)/sxpkg-sayanox/fetch.out || { echo "[FAIL] fetch did not report the package"; exit 1; }
 	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/fetched/main.sa \
@@ -1623,9 +1625,9 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	  || { echo "[FAIL] fetch recorded no content sum"; exit 1; }
 	@grep -q -F 'fetched=0.0.0' $(TESTS)/sxpkg-sayanox/sx.lock \
 	  || { echo "[FAIL] fetch did not pin the package in sx.lock"; exit 1; }
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) verify | grep -q 'verify ok' \
 	  || { echo "[FAIL] a fetched package does not verify"; exit 1; }
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa fetched >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) fetch fetchsrc.sa fetched >/dev/null 2>&1); then \
 	  echo "[FAIL] fetch overwrote an existing package"; exit 1; fi
 	@grep -q -F 'fetched=0.0.0' $(TESTS)/sxpkg-sayanox/sx.lock \
 	  || { echo "[FAIL] a refused fetch changed sx.lock"; exit 1; }
@@ -1637,7 +1639,7 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
 	@printf 'not a directory' > $(TESTS)/sxpkg-sayanox/.sayanox
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa rolled >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) fetch fetchsrc.sa rolled >/dev/null 2>&1); then \
 	  echo "[FAIL] fetch succeeded with an unusable registry"; exit 1; fi
 	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/registry/rolled \
 	  || { echo "[FAIL] a failed fetch left a registry copy"; exit 1; }
@@ -2022,7 +2024,116 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 	@./tools/sxlink Makefile $(TESTS)/sxlink/sxlink_hello $(TESTS)/sxlink/bad2.elf 2>&1 >/dev/null | grep -q 'not an ELF'
 	@echo "[OK] sxlink: five fixtures link byte-identically to write_elf and run identically; the dump changes no emitted byte; the ELF ident, the three program headers, the entry point and the page-1 code offset are pinned; missing dump and non-ELF input are clear errors"
 
-native-test: test-native-sxlink
+# ---------------------------------------------------------------------------
+# test-native-sxencode: the instruction encoder is Sayanox.
+#
+# selfhost/native_aot.c writes every byte of the code segment through about
+# fifty primitives: the mov/lea/arith/SSE2 helpers, emit_modrm and rexb, the
+# label-and-fixup machinery, and the two raw stores the phase-4 runtime uses.
+# `SX_ENCODE_LOG=<path>` records one line per call -- the primitive's name and
+# the integer arguments it was handed -- and `e1`, the one function that appends
+# a byte, records the byte as well. tools/sxencode.sa replays that stream and
+# rebuilds code.bin, which is the same file SX_LINK_DUMP writes for
+# tools/sxlink.sa: the container and the contents, each held to the C bytes by
+# fixtures instead of by inspection.
+#
+# Three things make the comparison worth more than a diff:
+#
+#   1. It is exact. Every fixture's code.bin must be byte-identical, not
+#      "equivalent" and not a prefix, including the runtime's hand-written
+#      machine code, which arrives as raw byte records and is copied because
+#      there is no encoding to reproduce.
+#   2. It is checked twice. Each named record is followed by the bytes the C
+#      encoder wrote for that same call, and the replay refuses to continue if
+#      its own encoding disagrees with them. A wrong ModRM or a displacement
+#      that should have been one byte therefore fails at the instruction, not
+#      in a later cmp.
+#   3. The recorder is inert. Each fixture is compiled twice, with and without
+#      the log, and the two ELFs are cmp'd, so no byte can change when the seam
+#      is on.
+#
+# The record vocabulary is pinned from both ends: the name list (`op_id`) and
+# the encoding list (`apply`) must have the same length, and the fixture set
+# must exercise every record, so a primitive cannot be added on one side only
+# and a dropped one cannot pass unnoticed. 64-bit immediates travel as two
+# 32-bit halves because a Sayanox number is a C double and is exact only below
+# 2^53 -- the gate would see a rounded constant immediately.
+#
+# This is a step TOWARDS the native backend being Sayanox, not the backend:
+# native_aot still drives its own encoder to produce the executables the gates
+# run, and docs/ALL_SAYANOX_PHASE.md says so.
+# ---------------------------------------------------------------------------
+SXENCODE_BIN := tools/sxencode
+SXENCODE_SA  := tools/sxencode.sa
+SXENCODE_FIX := $(TESTS)/sxencode_hello.sa selfhost/native_ir_log_test.sa \
+                selfhost/native_logic_arg_test.sa selfhost/native_strord_test.sa \
+                selfhost/stdlib_growth_test.sa
+SXENCODE_OPS := J_cc J_mp L_bind L_new addsd b bin_imm32 bin_imm8 bin_rr call_p \
+                cvtsd2si cvtsi2sd cvttsd2si divsd erel32 erel32j fm7 inc_mem_r \
+                incdec_r jcc_rel32 jmp5_slot jmp_rel32 lea_r12_data lea_rm \
+                leave_ret mov_imm64 mov_imm8m movq_rx movq_xr movzx_al_to_rax \
+                mulsd mv_m64 mv_r64m mv_rr mvz_rm patch_imm32 pop_r push_r \
+                raw_patch32 sar_imm setcc shl_imm shr_imm stal_rdi stb_rdi \
+                sub_rsp_slot subsd test_rr ucomisd xor_rr
+
+tools/sxencode: $(SXENCODE_SA) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(GEN2) $(SXENCODE_SA) $(TESTS)/sxencode.c >/dev/null
+	@if grep -q '#error' $(TESTS)/sxencode.c; then echo "[FAIL] sxencode: #error in the generated C"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/sxencode.c
+	@echo "[OK] Sayanox instruction encoder built from $(SXENCODE_SA)"
+
+.PHONY: test-native-sxencode
+test-native-sxencode: $(NATIVE_BIN) $(SXENCODE_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/sxencode
+	@# ---- the two record tables are the same length ----
+	@n=$$(grep -c 'when string_eq(name, "' $(SXENCODE_SA)); \
+	 m=$$(grep -c '^  when id == [0-9]* { st = ' $(SXENCODE_SA)); \
+	 if [ "$$n" != "$$m" ]; then \
+	   echo "[FAIL] sxencode: $$n record names but $$m encodings -- op_id and apply disagree"; exit 1; fi; \
+	 echo "  [ok] $$n records: the name list and the encoding list are the same length"
+	@# ---- one fixture per shape that moves the encoder ----
+	@# a bare program, the instruction-list fixture, a boolean-argument function
+	@# (which is what emits jmp5_slot), a string-ordering loop and the stdlib
+	@# growth fixture (which is the one that emits sar_imm and patch_imm32)
+	@printf 'hold x = 40\nhold x = x + 2\nshow x\n' > $(TESTS)/sxencode_hello.sa
+	@for fix in $(SXENCODE_FIX); do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  d=$(TESTS)/sxencode/$$name; \
+	  mkdir -p $$d; \
+	  ./$(NATIVE_BIN) $$fix $$d/off.elf; \
+	  SX_ENCODE_LOG=$$d/enc.log SX_LINK_DUMP=$$d ./$(NATIVE_BIN) $$fix $$d/c.elf; \
+	  cmp $$d/off.elf $$d/c.elf \
+	    || { echo "[FAIL] sxencode: SX_ENCODE_LOG changed the emitted bytes for $$name"; exit 1; }; \
+	  ./$(SXENCODE_BIN) $$d/enc.log $$d/code.bin $$d/sx.bin > $$d/report \
+	    || { echo "[FAIL] sxencode: the replay refused $$name"; head -20 $$d/report; exit 1; }; \
+	  cmp $$d/code.bin $$d/sx.bin \
+	    || { echo "[FAIL] sxencode: the Sayanox-encoded code is not byte-identical for $$name"; exit 1; }; \
+	  echo "  [ok] $$name: $$(wc -c < $$d/code.bin) code bytes, $$(tr '\n' ' ' < $$d/report | cut -d' ' -f2-3)"; \
+	done
+	@# ---- the fixture set exercises every record ----
+	@got=$$(grep -h -v '^;' $(TESTS)/sxencode/*/enc.log | cut -d' ' -f1 | sort -u | tr '\n' ' '); \
+	 want='$(SXENCODE_OPS) '; \
+	 if [ "$$got" != "$$want" ]; then \
+	   echo "[FAIL] sxencode: the fixtures do not exercise the pinned record set"; \
+	   echo "--- want ---"; echo "$$want"; echo "--- got ---"; echo "$$got"; exit 1; fi; \
+	 echo "  [ok] the fixture set exercises all $$(echo $$want | wc -w) records"
+	@# ---- the failures are clear, not silently short ----
+	@if ./$(SXENCODE_BIN) $(TESTS)/sxencode/nope.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin >/dev/null 2>&1; then \
+	  echo "[FAIL] sxencode accepted a log path that does not exist"; exit 1; fi
+	@./$(SXENCODE_BIN) $(TESTS)/sxencode/nope.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin 2>&1 >/dev/null | grep -q 'cannot read the encode log'
+	@printf '1\n' > $(TESTS)/sxencode/short.bin
+	@if ./$(SXENCODE_BIN) $(TESTS)/sxencode/sxencode_hello/enc.log $(TESTS)/sxencode/short.bin $(TESTS)/sxencode/bad.bin >/dev/null 2>&1; then \
+	  echo "[FAIL] sxencode accepted a code.bin of the wrong length"; exit 1; fi
+	@./$(SXENCODE_BIN) $(TESTS)/sxencode/sxencode_hello/enc.log $(TESTS)/sxencode/short.bin $(TESTS)/sxencode/bad.bin 2>&1 >/dev/null | grep -q 'different length'
+	@printf 'bogus_record 1 2\n' > $(TESTS)/sxencode/bogus.log
+	@if ./$(SXENCODE_BIN) $(TESTS)/sxencode/bogus.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin >/dev/null 2>&1; then \
+	  echo "[FAIL] sxencode accepted a record it does not implement"; exit 1; fi
+	@./$(SXENCODE_BIN) $(TESTS)/sxencode/bogus.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin 2>&1 >/dev/null | grep -q 'unknown record'
+	@echo "[OK] sxencode: the encoder is Sayanox -- five fixtures replay to byte-identical code, every named record is checked against the bytes C wrote for the same call, the recorder changes no emitted byte, all record names are exercised, and a missing log, a wrong-length code.bin and an unknown record are clear errors"
+
+native-test: test-native-sxlink test-native-sxencode test-sxdiag
 
 # ---------------------------------------------------------------------------
 # test-read-bytes: read_bytes(path, xs) appends the WHOLE file to a byte buffer
@@ -2074,13 +2185,13 @@ test-read-bytes: $(GEN2) $(SEED_MIN_BIN)
 test-read-bytes: $(NATIVE_BIN)
 
 .PHONY: test-sxpkg-online-optin
-test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
+test-sxpkg-online-optin: sxpkg
 	rm -rf $(TESTS)/sxpkg-optin && mkdir -p $(TESTS)/sxpkg-optin/p $(TESTS)/sxpkg-optin/mock
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 cd $$P/p && sh $$W init >/dev/null && sh $$W add strings 0.1.0 >/dev/null
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 cd $$P/p && $$W init >/dev/null && $$W add strings 0.1.0 >/dev/null
 	# ---- 1. sync refuses without an opt-in, and names the way to opt in ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W sync) >$$P/no.out 2>$$P/no.err; then \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r $$W sync) >$$P/no.out 2>$$P/no.err; then \
 	   echo "[FAIL] sxpkg sync reached for the network without an opt-in"; exit 1; fi; \
 	 grep -q -F 'refusing to use the network without an explicit opt-in' $$P/no.err \
 	   || { echo "[FAIL] the refusal does not say why:"; cat $$P/no.err; exit 1; }; \
@@ -2093,8 +2204,8 @@ test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 	@printf '#!/bin/sh\necho "test transfer attempted" >&2\nexit 1\n' > $(TESTS)/sxpkg-optin/mock/curl
 	@chmod +x $(TESTS)/sxpkg-optin/mock/curl
 	# ---- 2. SAYANOX_ONLINE=1 lifts it; failed transport falls back to local seed ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_ONLINE=1 SAYANOX_REGISTRY=https://registry.invalid/r sh $$W sync) >$$P/yes.out 2>$$P/yes.err \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_ONLINE=1 SAYANOX_REGISTRY=https://registry.invalid/r $$W sync) >$$P/yes.out 2>$$P/yes.err \
 	   || { echo "[FAIL] an opted-in sync exited nonzero:"; cat $$P/yes.err; exit 1; }; \
 	 if grep -q -F 'refusing to use the network' $$P/yes.out $$P/yes.err; then \
 	   echo "[FAIL] SAYANOX_ONLINE=1 did not lift the refusal"; exit 1; fi; \
@@ -2102,36 +2213,36 @@ test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 	   || { echo "[FAIL] the opted-in sync never reached the transfer step:"; cat $$P/yes.out; exit 1; }
 	@grep -q -F "test transfer attempted" $(TESTS)/sxpkg-optin/yes.err
 	# ---- 3. the --online flag form is the same permission ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_REGISTRY=https://registry.invalid/r sh $$W --online sync) >$$P/flag.out 2>$$P/flag.err \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_REGISTRY=https://registry.invalid/r $$W --online sync) >$$P/flag.out 2>$$P/flag.err \
 	   || { echo "[FAIL] 'sxpkg --online sync' exited nonzero:"; cat $$P/flag.err; exit 1; }; \
 	 grep -q -F 'online sync failed; using local seed' $$P/flag.out \
 	   || { echo "[FAIL] 'sxpkg --online sync' did not attempt the transfer:"; cat $$P/flag.out; exit 1; }
 	@grep -q -F "test transfer attempted" $(TESTS)/sxpkg-optin/flag.err
 	echo "[OK] sxpkg opt-in: SAYANOX_ONLINE=1 and 'sxpkg --online <cmd>' both permit the transfer, which then fails in the test stub (no network) and falls back to the offline seed"
 	# ---- 4. install with every locked package already local needs no opt-in ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
 	 rm -rf $$P/p/.sayanox/registry/strings && cp -r registry/strings $$P/p/.sayanox/registry/strings && \
-	 (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W install) >$$P/off.out 2>$$P/off.err \
+	 (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r $$W install) >$$P/off.out 2>$$P/off.err \
 	   || { echo "[FAIL] an all-local install demanded the network:"; cat $$P/off.out $$P/off.err; exit 1; }; \
 	 grep -q -F 'verify ok' $$P/off.out || { echo "[FAIL] the all-local install did not verify:"; cat $$P/off.out; exit 1; }; \
 	 if grep -q -F 'refusing to use the network' $$P/off.out $$P/off.err; then \
 	   echo "[FAIL] an all-local install printed the network refusal"; exit 1; fi
 	echo "[OK] sxpkg install: an all-local lock is copied and verified with no opt-in (offline stays first-class)"
 	# ---- 5. install that must fetch refuses without an opt-in ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
 	 rm -rf $$P/p/.sayanox/registry/strings; \
-	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W install) >$$P/need.out 2>$$P/need.err; then \
+	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r $$W install) >$$P/need.out 2>$$P/need.err; then \
 	   echo "[FAIL] sxpkg install reached for the network without an opt-in"; exit 1; fi; \
 	 grep -q -F 'refusing to use the network without an explicit opt-in' $$P/need.err \
 	   || { echo "[FAIL] the install refusal does not say why:"; cat $$P/need.err; exit 1; }
 	# ---- 6. fetch: a file:// URL is local, a remote URL is not ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
 	 printf 'show 1\n' > $$P/one.sa; \
-	 (cd $$P/p && sh $$W fetch file://$$P/one.sa onepkg) >$$P/f1.out 2>$$P/f1.err \
+	 (cd $$P/p && $$W fetch file://$$P/one.sa onepkg) >$$P/f1.out 2>$$P/f1.err \
 	   || { echo "[FAIL] fetch of a file:// URL asked for an opt-in:"; cat $$P/f1.err; exit 1; }; \
 	 grep -q -F 'fetched onepkg' $$P/f1.out || { echo "[FAIL] the file:// fetch did not complete:"; cat $$P/f1.out; exit 1; }; \
-	 if (cd $$P/p && sh $$W fetch https://registry.invalid/one.sa onepkg2) >$$P/f2.out 2>$$P/f2.err; then \
+	 if (cd $$P/p && $$W fetch https://registry.invalid/one.sa onepkg2) >$$P/f2.out 2>$$P/f2.err; then \
 	   echo "[FAIL] sxpkg fetch reached for the network without an opt-in"; exit 1; fi; \
 	 grep -q -F 'refusing to use the network without an explicit opt-in' $$P/f2.err \
 	   || { echo "[FAIL] the fetch refusal does not say why:"; cat $$P/f2.err; exit 1; }
@@ -2152,17 +2263,17 @@ test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 #   tampered remote -> rejected: verify fails, the download is removed, rc 1
 #   missing remote  -> no partial .part file is left, rc 1
 # ---------------------------------------------------------------------------
-test-sxpkg-online-local: sxpkg tools/sxpkg.sh
+test-sxpkg-online-local: sxpkg
 	@rm -rf $(TESTS)/sxpkg-online && mkdir -p $(TESTS)/sxpkg-online
 	@cp -r registry $(TESTS)/sxpkg-online/good
 	@cp -r $(TESTS)/sxpkg-online/good $(TESTS)/sxpkg-online/bad
 	@printf 'show 999\n' >> $(TESTS)/sxpkg-online/bad/strings/main.sa
 	@cp -r $(TESTS)/sxpkg-online/good $(TESTS)/sxpkg-online/miss && rm -rf $(TESTS)/sxpkg-online/miss/strings
-	@W=$(CURDIR)/tools/sxpkg.sh; \
+	@W=$(CURDIR)/$(SXPKG_BIN); \
 	for c in good bad miss; do \
 	  mkdir -p $(TESTS)/sxpkg-online/p_$$c && cd $(TESTS)/sxpkg-online/p_$$c && \
-	  sh $$W init >/dev/null && sh $$W add strings 0.1.0 >/dev/null || exit 1; \
-	  SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-online/$$c sh $$W install >$(CURDIR)/$(TESTS)/sxpkg-online/$$c.out 2>&1; rc=$$?; \
+	  $$W init >/dev/null && $$W add strings 0.1.0 >/dev/null || exit 1; \
+	  SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-online/$$c $$W install >$(CURDIR)/$(TESTS)/sxpkg-online/$$c.out 2>&1; rc=$$?; \
 	  cd $(CURDIR); \
 	  case $$c in \
 	    good) [ $$rc -eq 0 ] || { echo "[FAIL] good remote: rc=$$rc"; exit 1; }; \
@@ -2566,11 +2677,13 @@ test-struct-logic: $(GEN2) $(NATIVE_BIN)
 	@echo "[OK] gen2 and native: and/or/not as struct field values (hand-computed output); a string operand is refused"
 
 # Optional network integration suite; never a bootstrap prerequisite.
+# It is Sayanox only: the Python sayascrape package it used to test was deleted
+# on 2026-10-21 together with its `test-scrape` target. sayascrape/crawl.sa is
+# the crawler and tools/test-sayacrawl.sh drives it, so the suite lost a
+# dependency instead of a feature.
 .PHONY: test-network
-test-network: test-http-get test-sayacrawl test-scrape
+test-network: test-http-get test-sayacrawl
 
-# test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
-# the tests use a local HTTP server on 127.0.0.1.
 # test-http-get: http_get(url) network builtin (GET only, http/https only, 1 MB cap,
 # 10 s timeout, no redirects). Local server only; native refuses it explicitly.
 test-http-get: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN) $(NATIVE_BIN)
@@ -2580,11 +2693,6 @@ test-http-get: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN) $(NATIVE_BIN)
 # str helpers). Local server only; exact-output checks for crawl, caps and refusals.
 test-sayacrawl: $(GEN2)
 	@sh tools/test-sayacrawl.sh $(GEN2) sayascrape/crawl.sa || { echo "[FAIL] test-sayacrawl"; exit 1; }
-
-test-scrape:
-	@python3 -m unittest sayascrape.test_sayascrape >/tmp/scrape_test.log 2>&1 || { tail -20 /tmp/scrape_test.log; echo "[FAIL] sayascrape tests"; exit 1; }
-	@tail -3 /tmp/scrape_test.log
-	@echo "[OK] sayascrape: scope allowlist, authorization gate, robots.txt (fail closed on 5xx), delay, page and depth caps, parsing"
 
 # test-logic-value: and / or / not as values (hold, show, give, assignment,
 # parenthesized groups). Expected output is hand-checked; gen2 and native must match.
@@ -2661,7 +2769,7 @@ test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 # ---------------------------------------------------------------------------
 # test-pkgs: the offline package use-path, with no network at all.
 #
-#   * `tools/sxpkg.sh init` (mkdir only) plus the Sayanox `sxpkg seed` writes a
+#   * `sxpkg init` (which makes the folders) plus the Sayanox `sxpkg seed` writes a
 #     local registry under .sayanox/registry/ - hello and math samples with
 #     mkdir + write_file, no curl/wget, no download;
 #   * `sxpkg add math 0.1.0` records the lock, `list`/`search` read it back;
@@ -2680,12 +2788,12 @@ test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 # ---------------------------------------------------------------------------
 test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
 	@mkdir -p $(TESTS)/pkgs-proj
-	cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh init >/dev/null
-	cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+	cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) init >/dev/null
+	cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) seed >/dev/null
 	cd $(TESTS)/pkgs-proj && test -s .sayanox/registry/math/main.sa
 	cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) add math 0.1.0 >/dev/null
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) list,sxpkg: locked packages\nmath=0.1.0)
-	$(call assert-out,cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh search math,sxpkg: search math\n  math 0.1.0)
+	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) search math,sxpkg: search math\n  math 0.1.0)
 	@printf 'use ".sayanox/registry/math/main.sa"\nshow dbl(21)\nshow sqr(6)\n' > $(TESTS)/pkgs-proj/use_math.sa
 	./$(SEED_MIN_BIN) $(TESTS)/pkgs-proj/use_math.sa > $(TESTS)/pkgs-proj/use_sm.c
 	$(CC) -O2 -o $(TESTS)/pkgs-proj/use_sm $(TESTS)/pkgs-proj/use_sm.c
@@ -2702,13 +2810,16 @@ test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
 	@cp -r registry $(TESTS)/pkgs-deps/registry
 	@mkdir -p $(TESTS)/pkgs-deps/.sayanox/registry
 	@cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) init >/dev/null
-	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) add calc 0.1.0,sxpkg: locked math 0.1.0 (dependency of calc)\nsxpkg: locked calc 0.1.0)
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) add calc 0.1.0,sxpkg: locked math 0.1.0 (dependency of calc)\nsxpkg: locked calc 0.1.0\nsxpkg: note: calc has no local registry copy yet (run: sxpkg seed; or sxpkg sync when online))
 	@printf '# sx.lock\nversion=1\ncalc=0.1.0\nmath=0.1.0\n' > $(TESTS)/pkgs-deps/lock-want
 	cmp $(TESTS)/pkgs-deps/lock-want $(TESTS)/pkgs-deps/sx.lock
 	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) deps,sxpkg: dependency closure\n  calc 0.1.0\n  math 0.1.0)
-	@# Sayanox has no mkdir, so a bare `install` says so instead of failing silently
-	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) install registry,sxpkg: MISSING calc: cannot write .sayanox/registry/calc/; run sh tools/sxpkg.sh install-local to create the folders\nsxpkg: MISSING math: cannot write .sayanox/registry/math/; run sh tools/sxpkg.sh install-local to create the folders\nsxpkg: install FAILED (2 problem(s)))
-	$(call assert-out,cd $(TESTS)/pkgs-deps && sh ../../../tools/sxpkg.sh install-local registry,sxpkg: installed calc 0.1.0\nsxpkg: installed math 0.1.0\nsxpkg: install ok)
+	@# A bare `install` does not create destinations: it reports what it could not
+	@# write. Empty the project registry first, so the report is about a missing
+	@# destination and not about whatever the seed happened to leave there.
+	@rm -rf $(TESTS)/pkgs-deps/.sayanox/registry
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) install registry,sxpkg: MISSING calc: cannot write .sayanox/registry/calc/; run sxpkg install-local to create the folders\nsxpkg: MISSING math: cannot write .sayanox/registry/math/; run sxpkg install-local to create the folders\nsxpkg: install FAILED (2 problem(s)))
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) install-local registry,sxpkg: installed calc 0.1.0\nsxpkg: installed math 0.1.0\nsxpkg: install ok)
 	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) verify,sxpkg: verified calc 0.1.0\nsxpkg: verified math 0.1.0\nsxpkg: verify ok (2 locked packages))
 	@# an installed package may `use` its dependency: calc uses math's dbl/sqr
 	@printf 'use ".sayanox/registry/calc/main.sa"\nshow dblsqr(3)\nshow sqr(5)\n' > $(TESTS)/pkgs-deps/use_calc.sa
@@ -2726,8 +2837,10 @@ test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
 	@# offline integrity: the lock is checked against the registry copy (version + pkg.meta sum)
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages))
 	@printf 'make dbl(n) {\n  give n + n + 0\n}\n' > $(TESTS)/pkgs-proj/.sayanox/registry/math/main.sa
-	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: MISMATCH math: main.sa sums to 115762249 but pkg.meta says 718013937\nsxpkg: verify FAILED (1 problem(s)))
-	cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+	@# a failed verify is still an exact-output assertion here, and now also an
+	@# exit status: the `:` keeps assert-out's stdout comparison in charge
+	$(call assert-out,cd $(TESTS)/pkgs-proj && { ../../../$(SXPKG_BIN) verify; :; },sxpkg: MISMATCH math: main.sa sums to 115762249 but pkg.meta says 718013937\nsxpkg: verify FAILED (1 problem(s)))
+	cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) seed >/dev/null
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages))
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) sum .sayanox/registry/math/main.sa,sxpkg: sum 718013937 .sayanox/registry/math/main.sa)
 	@if [ -x $(NATIVE_BIN) ]; then \
@@ -3139,13 +3252,20 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 
 # ---------------------------------------------------------------------------
 # test-doc-claims: no document may advertise an entry point that is not in the
-# repository. Measured 2026-10-13: there is no `stage2:` target, no
-# selfhost/bootstrap_production.sh, no bootstrap_full_selfhost.sh and no
-# bootstrap_full_language_selfhost.sh; stage2_template.c is a 93-byte
-# PLACEHOLDER, stage2_src/ is a README plus an 11-byte PLACEHOLDER,
-# sxc_full.c is a 30-line toy, and `sh selfhost/restore_stage2.sh` exits 1
-# with "missing Stage-2 seed". 24 legacy documents carry a banner saying so,
-# and docs/FULL_LANGUAGE_SELFHOST.md states it as the current position.
+# repository. There is no `stage2:` target, no selfhost/bootstrap_production.sh,
+# no bootstrap_full_selfhost.sh and no bootstrap_full_language_selfhost.sh.
+#
+# On 2026-10-21 the placeholder scaffolding was deleted rather than kept: the
+# 93-byte stage2_template.c PLACEHOLDER, its 11-byte selfhost/stage2_src/,
+# the 30-line sxc_full.c and sxc_full_minimal.c toy, the restore_stage2.sh
+# wrapper that could only exit 1 because its inputs were gone, the
+# restore_stage2_template.sh / restore_sxc.sh / restore_sxc_full.sh restorers
+# whose bundles were dead, and selfhost/sx, a CLI for the absent host. Those
+# files were not evidence of anything; they were files that had to stay
+# identical to keep a claim true. This target now asserts they stay gone, so a
+# Stage-2 host cannot reappear as a placeholder, and the documents that name
+# the missing entry points still carry their banner.
+#
 # If a real Stage-2 host ever lands, this target fails and points at the docs
 # that need updating -- that is the intent.
 #
@@ -3156,16 +3276,17 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 # ---------------------------------------------------------------------------
 .PHONY: test-doc-claims
 test-doc-claims:
-	@grep -q 'PLACEHOLDER' selfhost/stage2_template.c \
-	  || { echo "[FAIL] selfhost/stage2_template.c is no longer a placeholder: a Stage-2 host may exist now, update docs/FULL_LANGUAGE_SELFHOST.md and this target"; exit 1; }
-	@if sh selfhost/restore_stage2.sh >/dev/null 2>&1; then \
-	  echo "[FAIL] restore_stage2.sh now succeeds: update docs/FULL_LANGUAGE_SELFHOST.md, docs/FULL_SELFHOST.md and this target"; exit 1; \
-	fi
+	@for f in selfhost/stage2_template.c selfhost/sxc_full.c selfhost/sxc_full_minimal.c \
+	          selfhost/restore_stage2.sh selfhost/restore_sxc.sh selfhost/restore_sxc_full.sh \
+	          selfhost/restore_stage2_template.sh selfhost/sx selfhost/stage2_src selfhost/stage2; do \
+	  test ! -e "$$f" \
+	    || { echo "[FAIL] the deleted Stage-2 placeholder $$f is back: there is no Stage-2 host, so nothing may pretend to be one -- see docs/FULL_LANGUAGE_SELFHOST.md"; exit 1; }; \
+	done
 	@if grep -q '^stage2:' Makefile; then \
 	  echo "[FAIL] a stage2: target exists now: update the docs and this target"; exit 1; \
 	fi
 	@miss=0; \
-	for f in $$(grep -rl -e 'make stage2' -e 'bootstrap_production.sh' -e 'bootstrap_full_selfhost.sh' -e 'bootstrap_full_language_selfhost.sh' docs selfhost/README.md selfhost/SELFHOST.md --include='*.md' 2>/dev/null); do \
+	for f in $$(grep -rl -e 'make stage2' -e 'bootstrap_production.sh' -e 'bootstrap_full_selfhost.sh' -e 'bootstrap_full_language_selfhost.sh' docs --include='*.md' 2>/dev/null); do \
 	  case "$$f" in \
 	    docs/FULL_LANGUAGE_SELFHOST.md|docs/STATUS.md) continue ;; \
 	  esac; \
@@ -3686,17 +3807,82 @@ all-sayanox:
 	@printf '  %-28s %6s lines  %s\n' seed "$$(wc -l < selfhost/seed/sxc_seed_min.c)" selfhost/seed/sxc_seed_min.c
 	@printf '  %-28s %6s lines  %s\n' native-backend "$$(wc -l < selfhost/native_aot.c)" selfhost/native_aot.c
 	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
-	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' selfhost/sx | wc -l)" 'POSIX sh'
+	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' | wc -l)" 'POSIX sh'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
-	@echo "  done: compiler, formatter, package tool (local commands plus"
-	@echo "        publish, install-local and the local sync/fetch), language"
-	@echo "        server, IR translator, LSP folder index, LSP test client,"
-	@echo "        byte-buffer + bitwise builtins, the read_bytes binary"
-	@echo "        reader, and the native backend's ELF image writer +"
-	@echo "        rel32 linker (tools/sxlink.sa, byte-identical to C)"
+	@echo "  done: compiler, formatter, the whole package tool (one Sayanox"
+	@echo "        binary since 2026-10-22: every command, the online opt-in"
+	@echo "        policy, SAYANOX_ROOT and its exit statuses; only curl/wget"
+	@echo "        is still an external program), language server, IR"
+	@echo "        translator, LSP folder index, LSP test client, byte-buffer"
+	@echo "        + bitwise builtins, the read_bytes binary reader, the native"
+	@echo "        backend's ELF image writer + rel32 linker (tools/sxlink.sa)"
+	@echo "        and its x86-64 instruction encoder (tools/sxencode.sa),"
+	@echo "        both byte-identical to C, the run_command(cmd) and"
+	@echo "        getenv(name) driver builtins, and the diagnostic suites"
+	@echo "        (tools/sxdiag.sa) that replaced four sh drivers"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
 	@exit 1
+
+# tools/sxdiag: the negative-diagnostic suites, in Sayanox (2026-10-21).
+# It replaced four shell drivers (test_return_paths.sh, test_name_resolution.sh,
+# test_inline_expression_errors.sh, test_list_postfix_errors.sh) that wrote a
+# bad fixture, ran a frontend and grepped for the diagnostic. `run_command(cmd)` is the
+# builtin that made the move possible: a Sayanox program can now start a
+# program with arguments and read its exit status.
+$(SXDIAG_BIN): $(SXDIAG_SA) $(GEN2)
+	./$(GEN2) $(SXDIAG_SA) $(SXDIAG_C) >/dev/null
+	@# '^#error': the tool QUOTES the marker in its own assertions, so only a
+	@# directive at the start of a line is a real refusal
+	@if grep -q '^#error' $(SXDIAG_C); then echo "[FAIL] sxdiag: #error in the generated C"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(SXDIAG_BIN) $(SXDIAG_C)
+
+.PHONY: test-sxdiag
+test-sxdiag: $(SXDIAG_BIN) $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	@echo "[ok] sxdiag built from $(SXDIAG_SA) by gen2 and $(CC)"
+	@./$(SXDIAG_BIN) inline ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-inline
+	@./$(SXDIAG_BIN) postfix ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-postfix
+	@./$(SXDIAG_BIN) return ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-return
+	@./$(SXDIAG_BIN) name ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-name
+	@# ---- the failures are real, not a suite that always prints OK ----
+	@if ./$(SXDIAG_BIN) bogus ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-bad >/dev/null 2>&1; then \
+	  echo "[FAIL] sxdiag accepted an unknown suite name"; exit 1; fi
+	@./$(SXDIAG_BIN) bogus ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-bad 2>&1 >/dev/null | grep -q 'unknown suite'
+	@if ./$(SXDIAG_BIN) 2>/dev/null; then echo "[FAIL] sxdiag ran without a suite"; exit 1; fi
+	@# a frontend that succeeds on everything must FAIL the suite: this is the
+	@# control that keeps the assertions above from being decoration
+	@if ./$(SXDIAG_BIN) return /bin/true /bin/true /bin/true $(TESTS)/sxdiag-dead >/dev/null 2>&1; then \
+	  echo "[FAIL] sxdiag passed a suite with a frontend that accepts everything"; exit 1; fi
+	@if ./$(SXDIAG_BIN) inline /bin/true /bin/true /bin/true $(TESTS)/sxdiag-dead >/dev/null 2>&1; then \
+	  echo "[FAIL] sxdiag passed the inline suite with a frontend that accepts everything"; exit 1; fi
+	@# ---- the run_command(cmd) builtin itself: status in, stdout inherited ----
+	@printf 'show run_command("exit 3")\nhold r = run_command("echo builtin-run-ok > $(TESTS)/sxdiag-run.txt")\nshow r\n' > $(TESTS)/sxdiag_run.sa
+	./$(GEN2) $(TESTS)/sxdiag_run.sa $(TESTS)/sxdiag_run.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/sxdiag_run $(TESTS)/sxdiag_run.c
+	$(call assert-out,./$(TESTS)/sxdiag_run,3\n0)
+	@grep -q 'builtin-run-ok' $(TESTS)/sxdiag-run.txt \
+	  || { echo "[FAIL] run_command(): the child's stdout and redirection did not happen"; exit 1; }
+	@printf 'hold n = run_command("true")\nshow n\n' > $(TESTS)/sxdiag_run_seed.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/sxdiag_run_seed.sa >/dev/null 2>$(TESTS)/sxdiag_run_seed.err; then \
+	  echo "[FAIL] seed-min accepted run_command() without implementing it"; exit 1; fi
+	@grep -q 'unknown function or builtin' $(TESTS)/sxdiag_run_seed.err \
+	  || { echo "[FAIL] seed-min refused run_command() without a clear diagnostic"; cat $(TESTS)/sxdiag_run_seed.err; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/sxdiag_run_seed.sa $(TESTS)/sxdiag_run_native 2>/dev/null; then \
+	  echo "[FAIL] native accepted run_command() without implementing it"; exit 1; fi
+	@# ---- the getenv(name) builtin: a value in, "" for a name that is unset ----
+	@printf 'show getenv("SXDIAG_MARK")\nhold unset = getenv("SXDIAG_NOT_SET")\nshow concat("[", concat(unset, "]"))\nwhen string_eq(getenv("SXDIAG_MODE"), "on") { show "mode-on" }\n' > $(TESTS)/sxdiag_env.sa
+	./$(GEN2) $(TESTS)/sxdiag_env.sa $(TESTS)/sxdiag_env.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/sxdiag_env $(TESTS)/sxdiag_env.c
+	$(call assert-out,SXDIAG_MARK=marked SXDIAG_MODE=on ./$(TESTS)/sxdiag_env,marked\n[]\nmode-on)
+	$(call assert-out,./$(TESTS)/sxdiag_env,\n[])
+	@if ./$(SEED_MIN_BIN) $(TESTS)/sxdiag_env.sa >/dev/null 2>$(TESTS)/sxdiag_env_seed.err; then \
+	  echo "[FAIL] seed-min accepted getenv() without implementing it"; exit 1; fi
+	@grep -q 'unknown function or builtin' $(TESTS)/sxdiag_env_seed.err \
+	  || { echo "[FAIL] seed-min refused getenv() without a clear diagnostic"; cat $(TESTS)/sxdiag_env_seed.err; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/sxdiag_env.sa $(TESTS)/sxdiag_env_native 2>/dev/null; then \
+	  echo "[FAIL] native accepted getenv() without implementing it"; exit 1; fi
+	@echo "[OK] sxdiag: 23 inline, 7 postfix, 14 return-path and 31 name-resolution refusals checked in Sayanox, with an unknown-suite refusal and two accept-everything controls; run_command and getenv refused by seed-min and native"
 
 $(NATIVE_BIN): $(NATIVE_SRC)
 	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
@@ -4112,11 +4298,11 @@ test-stage2: test-seed-limits
 .PHONY: test-pkg-errors
 test-pkg-errors: sxpkg
 	@mkdir -p $(TESTS)/pkg-errors-empty
-	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-empty sh tools/sxpkg.sh search math >$(TESTS)/pkg-search.err 2>&1; then echo '[FAIL] search without local index succeeded'; exit 1; fi
+	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-empty $(SXPKG_BIN) search math >$(TESTS)/pkg-search.err 2>&1; then echo '[FAIL] search without local index succeeded'; exit 1; fi
 	@grep -q 'no local index' $(TESTS)/pkg-search.err
 	@# A regular file cannot be used as a project directory.
 	@printf 'not a directory\n' > $(TESTS)/pkg-errors-file
-	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-file sh tools/sxpkg.sh verify >$(TESTS)/pkg-verify.err 2>&1; then echo '[FAIL] verify swallowed project failure'; exit 1; fi
+	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-file $(SXPKG_BIN) verify >$(TESTS)/pkg-verify.err 2>&1; then echo '[FAIL] verify swallowed project failure'; exit 1; fi
 	@grep -q 'could not run verify' $(TESTS)/pkg-verify.err
 	@echo '[OK] package errors: search never implicitly syncs; verify propagates execution/project failure'
 test-pkgs: test-pkg-errors
@@ -4684,7 +4870,7 @@ native-test: test-gen2-list-arithmetic
 
 .PHONY: test-return-paths
 RETURN_PATHS_WANT := -1\n0\n1\n9\nyes } give //\nno { when\n1\n0\n2\n3\n8\ngeneric
-test-return-paths: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+test-return-paths: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN) $(SXDIAG_BIN)
 	@mkdir -p $(TESTS)
 	./$(GEN2) selfhost/return_paths_test.sa $(TESTS)/return_paths.c
 	./$(GEN1_MIN) selfhost/return_paths_test.sa $(TESTS)/return_paths_g1.c
@@ -4696,14 +4882,14 @@ test-return-paths: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/return_paths,$(RETURN_PATHS_WANT))
 	$(call assert-out,./$(TESTS)/return_paths_seed,$(RETURN_PATHS_WANT))
 	$(call assert-out,./$(TESTS)/return_paths_native,$(RETURN_PATHS_WANT))
-	sh selfhost/test_return_paths.sh ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)
+	./$(SXDIAG_BIN) return ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-return
 	@echo '[OK] return paths: exhaustive/nested branches, elif chains, suffix returns, early returns, num/str/list and generic functions; seed/gen2/native parity'
 test-typed-sig: test-return-paths
 native-test: test-return-paths
 
 .PHONY: test-name-resolution
 NAME_RESOLUTION_WANT := 4\n8\n9\n3\n4\nghost // { and missing() are only text\n5\n3\n4\ngeneric\n1\n2\no\nk
-test-name-resolution: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+test-name-resolution: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN) $(SXDIAG_BIN)
 	@mkdir -p $(TESTS)
 	./$(GEN2) selfhost/name_resolution_test.sa $(TESTS)/name_resolution.c
 	./$(GEN1_MIN) selfhost/name_resolution_test.sa $(TESTS)/name_resolution_g1.c
@@ -4715,7 +4901,7 @@ test-name-resolution: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/name_resolution,$(NAME_RESOLUTION_WANT))
 	$(call assert-out,./$(TESTS)/name_resolution_seed,$(NAME_RESOLUTION_WANT))
 	$(call assert-out,./$(TESTS)/name_resolution_native,$(NAME_RESOLUTION_WANT))
-	sh selfhost/test_name_resolution.sh ./$(GEN2) $(TESTS)
+	./$(SXDIAG_BIN) name ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-name
 	@echo '[OK] name resolution: field labels/selectors, builtin-like bindings, quotes/comments, typed forward calls, generic calls and function scopes; positive seed/gen2/native parity'
 test-typed-sig: test-name-resolution
 native-test: test-name-resolution
@@ -4723,7 +4909,7 @@ native-test: test-name-resolution
 .PHONY: test-inline-expressions
 INLINE_EXPRESSIONS_WANT := 8\n9\n9\n4\n7\n2\n1\n0\n2.66667\n10\n4\n2\n11\n12\n3\n99\n5\n1\n1\n8\n4\n5\n4\n-2\n3
 INLINE_SEQUENCE_WANT := 1\n2\n3\n3\n22\n2\n77\n0\n1\n2
-test-inline-expressions: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+test-inline-expressions: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN) $(SXDIAG_BIN)
 	@mkdir -p $(TESTS)
 	./$(GEN2) selfhost/inline_expressions_test.sa $(TESTS)/inline_expr.c
 	./$(GEN1_MIN) selfhost/inline_expressions_test.sa $(TESTS)/inline_expr_g1.c
@@ -4742,7 +4928,7 @@ test-inline-expressions: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/inline_seq,$(INLINE_SEQUENCE_WANT))
 	$(call assert-out,./$(TESTS)/inline_seq_o0,$(INLINE_SEQUENCE_WANT))
 	$(call assert-out,./$(TESTS)/inline_seq_native,$(INLINE_SEQUENCE_WANT))
-	sh selfhost/test_inline_expression_errors.sh ./$(GEN2) $(TESTS)
+	./$(SXDIAG_BIN) inline ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-inline
 	@echo '[OK] typed inline expressions: variables, checked calls/generics, nested list consumers, indexing, modulo/comparisons and lexical kinds; shared fixture matches seed/native'
 	@echo '[OK] inline sequencing: gen2 O0/O2 and native agree on left-to-right single evaluation, fresh loop conditions and generated-name collisions (seed checked separately by test-seed-list-sequence)'
 test-typed-sig: test-inline-expressions
@@ -4786,7 +4972,7 @@ native-test: test-seed-list-sequence
 
 .PHONY: test-list-postfix
 LIST_POSTFIX_WANT := 10\n4\n97\n20\n20\n6\n2\n9\n12\n3\n40\n50\n99\ntyped
-test-list-postfix: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+test-list-postfix: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN) $(SXDIAG_BIN)
 	@mkdir -p $(TESTS)
 	./$(SEED_MIN_BIN) selfhost/list_postfix_test.sa > $(TESTS)/postfix_seed.c
 	./$(GEN2) selfhost/list_postfix_test.sa $(TESTS)/postfix_gen2.c
@@ -4796,7 +4982,7 @@ test-list-postfix: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/postfix_seed,$(LIST_POSTFIX_WANT))
 	$(call assert-out,./$(TESTS)/postfix_gen2,$(LIST_POSTFIX_WANT))
 	$(call assert-out,./$(TESTS)/postfix_native,$(LIST_POSTFIX_WANT))
-	sh selfhost/test_list_postfix_errors.sh ./$(GEN2) ./$(SEED_MIN_BIN) $(TESTS)
+	./$(SXDIAG_BIN) postfix ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-postfix
 	@echo '[OK] inline nested numeric/string fields, grouped list postfix call arguments, indexed generic returns, expression-kind generic inference: seed/gen2/native parity'
 test-typed-sig: test-list-postfix
 native-test: test-list-postfix
@@ -4973,7 +5159,7 @@ test-stdlib-modules: test-stdlib-list-search
 native-test: test-stdlib-list-search
 
 .PHONY: test-sxpkg-transfer-hardening
-test-sxpkg-transfer-hardening: sxpkg tools/sxpkg.sh
+test-sxpkg-transfer-hardening: sxpkg
 	sh selfhost/test_sxpkg_transfer_hardening.sh
 
 test-sxpkg-online-optin: test-sxpkg-transfer-hardening

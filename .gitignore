@@ -39,6 +39,9 @@ tools/sayanox_lsp.c
 __pycache__/
 *.pyc
 
-# C99 analysis tool
+# analysis tool, linker, encoder, diagnostic suites
 tools/emit_to_ir
 tools/sxlink
+tools/sxencode
+tools/sxdiag
+tools/sxdiag.c

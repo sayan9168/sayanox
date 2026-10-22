@@ -199,9 +199,55 @@ static size_t d_numbuf; /* 64-byte buffer: `show <number>` formats here, no heap
 #define SI 6
 #define DI 7
 
-static void e1(unsigned char b){ if(cn>=CMAX){fprintf(stderr,"native_aot: code OOM\n");exit(1);} code[cn++]=b; }
+/* the encode log's file; the recorder itself is documented below the byte
+   writers, but e1 is the first thing that needs it. */
+static FILE *elogf=NULL;
+static void e1(unsigned char b){
+  if(cn>=CMAX){fprintf(stderr,"native_aot: code OOM\n");exit(1);}
+  code[cn++]=b;
+  if(elogf) fprintf(elogf,"b %u\n",(unsigned)b);
+}
 static void e32(uint32_t v){ e1(v); e1(v>>8); e1(v>>16); e1(v>>24); }
 static void e64(uint64_t v){ for(int i=0;i<8;i++) e1((unsigned char)(v>>(8*i))); }
+
+/* ===== the encode log (SX_ENCODE_LOG=<path>) ==============================
+ * SX_EMIT_LOG records the instruction list in assembly form, which is what a
+ * human reads and what tools/emit_to_ir.sa translates. That form is lossy for
+ * an encoder: `add %rax,%rbx` does not say whether the bytes are 01 /r or 03
+ * /r, and `mov [r12+rcx*8-16],%rax` does not say whether the displacement is
+ * one byte or four. This recorder writes the ENCODER'S OWN CALLS instead --
+ * one line per primitive, the primitive's name and the integer arguments it
+ * was handed -- so a second implementation of these primitives can be replayed
+ * against the same stream and held to the same bytes.
+ *
+ *   ./tools/sxencode <encode.log> <code.bin> <out.bin>
+ *
+ * A byte reaches `code` one of two ways: through one of these primitives, or
+ * through a raw e1/e32/e64 sequence in the phase-4 runtime stubs and the
+ * collector, which are hand-written machine code rather than encoder output
+ * (the emit tree itself cannot touch code bytes -- make test-native-emit-split
+ * asserts that). Because e1 logs every byte it appends, both paths are in the
+ * stream: a primitive's bytes follow its record, and a raw sequence arrives as
+ * `b` records that no record claims. That makes the stream the whole of
+ * code.bin, which is what tools/sxencode.sa is held to.
+ *
+ * Rules, so a reader can check them:
+ *   * one record per line, fields separated by one space, decimal integers;
+ *   * a ';' line is a header, not a record;
+ *   * 64-bit values are logged as two 32-bit halves (hi then lo), because a
+ *     Sayanox number is a C double and is only exact below 2^53;
+ *   * a record appears BEFORE the bytes it describes, exactly where the
+ *     function is called, so the stream order is the code order;
+ *   * the recorder only reads its arguments. It does not touch `code` or `cn`,
+ *     so the emitted ELF is byte-identical with and without it
+ *     (make test-native-sxencode asserts that).
+ * ======================================================================== */
+static void elog(const char *fmt,...){
+  va_list ap;
+  if(!elogf) return;
+  va_start(ap,fmt); vfprintf(elogf,fmt,ap); va_end(ap);
+  fputc('\n',elogf);
+}
 /* the instruction-list recorder lives just below; erel32/erel32j already
    need it, so it is declared here. */
 static void ilog(const char *fmt,...);
@@ -209,8 +255,8 @@ static void ilogc(const char *fmt,...);
 /* names for the two call kinds, defined next to the id tables they name */
 static const char *bname(int i);
 static const char *fname(int i);
-static void erel32(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+6)); ilogc("fixup rel32 [%06zx] -> %06zx (%d)",at,to,d); memcpy(code+at+2,&d,4); }
-static void erel32j(size_t at,size_t to){ int32_t d=(int32_t)(to-(at+5)); ilogc("fixup jmp rel32 [%06zx] -> %06zx (%d)",at,to,d); memcpy(code+at+1,&d,4); } /* for 5-byte jmp */
+static void erel32(size_t at,size_t to){ elog("erel32 %zu %zu",at,to); int32_t d=(int32_t)(to-(at+6)); ilogc("fixup rel32 [%06zx] -> %06zx (%d)",at,to,d); memcpy(code+at+2,&d,4); }
+static void erel32j(size_t at,size_t to){ elog("erel32j %zu %zu",at,to); int32_t d=(int32_t)(to-(at+5)); ilogc("fixup jmp rel32 [%06zx] -> %06zx (%d)",at,to,d); memcpy(code+at+1,&d,4); } /* for 5-byte jmp */
 
 /* ===== the instruction list (SX_EMIT_LOG=<path>) ==========================
  * Every encoder primitive below writes one line to that file when the variable
@@ -332,15 +378,16 @@ static void ilogc(const char *fmt,...){
  *   which are machine code by nature and are listed in docs/NATIVE.md.
  * ---------------------------------------------------------------------- */
 static size_t here(void){ return cn; }
-static void patch_imm32(size_t at,int32_t v){ ilogc("patch imm32 [%06zx] <- %d",at,v); memcpy(code+at,&v,4); }
-static void leave_ret(void){ ilog("leave"); ilog("ret"); e1(0xc9); e1(0xc3); }   /* leave; ret */
+static void patch_imm32(size_t at,int32_t v){ elog("patch_imm32 %zu %d",at,(int)v); ilogc("patch imm32 [%06zx] <- %d",at,v); memcpy(code+at,&v,4); }
+static void leave_ret(void){ elog("leave_ret"); ilog("leave"); ilog("ret"); e1(0xc9); e1(0xc3); }   /* leave; ret */
 static size_t sub_rsp_imm32_slot(void){              /* sub rsp, imm32 (placeholder) */
+  elog("sub_rsp_slot");
   ilog("sub rsp,<imm32 slot>");
   e1(0x48); e1(0x81); e1(0xEC); size_t at=cn; e32(0);
   ilogc("slot sub rsp imm32 at %06zx",at);
   return at;
 }
-static size_t jmp5_slot(void){ ilog("jmp <rel32 slot>"); size_t at=cn; e1(0xe9); e32(0); ilogc("slot jmp rel32 at %06zx",at); return at; }  /* jmp rel32 (placeholder) */
+static size_t jmp5_slot(void){ elog("jmp5_slot"); ilog("jmp <rel32 slot>"); size_t at=cn; e1(0xe9); e32(0); ilogc("slot jmp rel32 at %06zx",at); return at; }  /* jmp rel32 (placeholder) */
 
 static void rexb(int W,int R,int X,int B){
   if(W||R||X||B){ uint8_t b=0x40; if(W)b|=8; if(R)b|=4; if(X)b|=2; if(B)b|=1; e1(b); }
@@ -368,45 +415,45 @@ static void emit_modrm(int reg,int rm,int scale,int idx,int disp){
     else e32((uint32_t)(int32_t)disp);
   }
 }
-static void mv_rr(int d,int s){ ilog("mov %s,%s",rn(d),rn(s)); rexb(1, s>7, 0, d>7); e1(0x89); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
+static void mv_rr(int d,int s){ elog("mv_rr %d %d",d,s); ilog("mov %s,%s",rn(d),rn(s)); rexb(1, s>7, 0, d>7); e1(0x89); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
 static void mv_m64(int base,int idx,int scale,int disp,int s){
-  IMEM(mb,base,idx,scale,disp); ilog("mov [%s],%s",mb,rn(s));
+  IMEM(mb,base,idx,scale,disp); elog("mv_m64 %d %d %d %d %d",base,idx,scale,disp,s); ilog("mov [%s],%s",mb,rn(s));
   rexb(1, s>7, idx>7, base>7); e1(0x89); emit_modrm(s, base, scale, idx, disp);
 }
 static void mv_r64m(int d,int base,int idx,int scale,int disp){
-  IMEM(mb,base,idx,scale,disp); ilog("mov %s,[%s]",rn(d),mb);
+  IMEM(mb,base,idx,scale,disp); elog("mv_r64m %d %d %d %d %d",d,base,idx,scale,disp); ilog("mov %s,[%s]",rn(d),mb);
   rexb(1, d>7, idx>7, base>7); e1(0x8b); emit_modrm(d, base, scale, idx, disp);
 }
 static void lea_rm(int d,int base,int idx,int scale,int disp){
-  IMEM(mb,base,idx,scale,disp); ilog("lea %s,[%s]",rn(d),mb);
+  IMEM(mb,base,idx,scale,disp); elog("lea_rm %d %d %d %d %d",d,base,idx,scale,disp); ilog("lea %s,[%s]",rn(d),mb);
   rexb(1, d>7, idx>7, base>7); e1(0x8d); emit_modrm(d, base, scale, idx, disp);
 }
-static void mov_imm64(int r,uint64_t v){ ilog("mov %s,0x%llx",rn(r),(unsigned long long)v); rexb(1, 0, 0, r>7); e1((uint8_t)(0xb8+(r&7))); e64(v); } /* B8+rd: r8-r15 via REX.B (gas: 49 b8) */
+static void mov_imm64(int r,uint64_t v){ elog("mov_imm64 %d %u %u",r,(unsigned)(v>>32),(unsigned)(v&0xffffffffu)); ilog("mov %s,0x%llx",rn(r),(unsigned long long)v); rexb(1, 0, 0, r>7); e1((uint8_t)(0xb8+(r&7))); e64(v); } /* B8+rd: r8-r15 via REX.B (gas: 49 b8) */
 static void mov_imm8m(int base,int idx,int scale,int disp,uint8_t v){
-  IMEM(mb,base,idx,scale,disp); ilog("mov byte [%s],%u",mb,(unsigned)v);
+  IMEM(mb,base,idx,scale,disp); elog("mov_imm8m %d %d %d %d %u",base,idx,scale,disp,(unsigned)v); ilog("mov byte [%s],%u",mb,(unsigned)v);
   rexb(0, 0, idx>7, base>7); e1(0xc6); emit_modrm(0, base, scale, idx, disp); e1(v);
 }
 static void mvz_rm(int d,int base,int idx,int scale,int disp){ /* movzx r32, byte [mem] */
-  IMEM(mb,base,idx,scale,disp); ilog("movzx %s,byte [%s]",r32n(d),mb);
+  IMEM(mb,base,idx,scale,disp); elog("mvz_rm %d %d %d %d %d",d,base,idx,scale,disp); ilog("movzx %s,byte [%s]",r32n(d),mb);
   rexb(0, d>7, idx>7, base>7); e1(0x0f); e1(0xb6); emit_modrm(d&7, base, scale, idx, disp);
 }
-static void bin_rr(int op,int d,int s){ ilog("%s %s,%s",binname(op),rn(d),rn(s)); rexb(1, s>7, 0, d>7); e1((uint8_t)op); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
-static void bin_imm8(int op,int r,uint8_t v){ ilog("%s %s,%d",grp1name(op),rn(r),(int)(int8_t)v); rexb(1, 0, 0, r>7); e1(0x83); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e1(v); }
-static void bin_imm32(int op,int r,uint32_t v){ ilog("%s %s,%d",grp1name(op),rn(r),(int)(int32_t)v); rexb(1, 0, 0, r>7); e1(0x81); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e32(v); }
-static void fm7(int sub,int r){ ilog("%s %s",fm7name(sub),rn(r)); rexb(1, 0, 0, r>7); e1(0xf7); e1((uint8_t)(0xC0|(sub<<3)|(r&7))); }
-static void test_rr(int a,int b){ ilog("test %s,%s",rn(a),rn(b)); rexb(1, b>7, 0, a>7); e1(0x85); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
-static void xor_rr(int a,int b){ ilog("xor %s,%s",rn(a),rn(b)); rexb(1, b>7, 0, a>7); e1(0x31); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
-static void incdec_r(int inc,int r){ ilog("%s %s",inc?"inc":"dec",rn(r)); rexb(1, 0, 0, r>7); e1(0xff); e1((uint8_t)(0xC0|((inc?0:1)<<3)|(r&7))); }
-static void inc_mem_r(int r){ ilog("inc [%s]",rn(r)); rexb(1,0,0,r>7); e1(0xff); e1((uint8_t)(0x40|(r&7))); e1(0x00); } /* inc [r] (disp8=0) */
-static void push_r(int r){ ilog("push %s",rn(r)); if(r>7) e1(0x49); e1((uint8_t)(0x50+(r&7))); }
-static void pop_r(int r){ ilog("pop %s",rn(r)); if(r>7) e1(0x49); e1((uint8_t)(0x58+(r&7))); }
-static void jcc_rel32(int c,int32_t d){ ilog("j%s rel32(%d)",ccname(c),(int)d); e1(0x0f); e1((uint8_t)(0x80+c)); e32((uint32_t)d); }
-static void jmp_rel32(int32_t d){ ilog("jmp rel32(%d)",(int)d); e1(0xe9); e32((uint32_t)d); }
-static void setcc(int c,int r){ ilog("set%s %s",ccname(c),r32n(r)); rexb(0, 0, 0, r>7); e1(0x0f); e1((uint8_t)(0x90+c)); e1((uint8_t)(0xC0|(r&7))); }
-static void movzx_al_to_rax(void){ ilog("movzx rax,al"); rexb(1,0,0,0); e1(0x0f); e1(0xb6); e1(0xc0); }
-static void sar_imm(int r,int v){ ilog("sar %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(7<<3)|(r&7))); e1((uint8_t)v); }
-static void shl_imm(int r,int v){ ilog("shl %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(4<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHL = C1 /4 */
-static void shr_imm(int r,int v){ ilog("shr %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(5<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHR = C1 /5 */
+static void bin_rr(int op,int d,int s){ elog("bin_rr %d %d %d",op,d,s); ilog("%s %s,%s",binname(op),rn(d),rn(s)); rexb(1, s>7, 0, d>7); e1((uint8_t)op); e1((uint8_t)(0xC0|(s<<3)|(d&7))); }
+static void bin_imm8(int op,int r,uint8_t v){ elog("bin_imm8 %d %d %u",op,r,(unsigned)v); ilog("%s %s,%d",grp1name(op),rn(r),(int)(int8_t)v); rexb(1, 0, 0, r>7); e1(0x83); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e1(v); }
+static void bin_imm32(int op,int r,uint32_t v){ elog("bin_imm32 %d %d %u",op,r,v); ilog("%s %s,%d",grp1name(op),rn(r),(int)(int32_t)v); rexb(1, 0, 0, r>7); e1(0x81); e1((uint8_t)(0xC0|(op<<3)|(r&7))); e32(v); }
+static void fm7(int sub,int r){ elog("fm7 %d %d",sub,r); ilog("%s %s",fm7name(sub),rn(r)); rexb(1, 0, 0, r>7); e1(0xf7); e1((uint8_t)(0xC0|(sub<<3)|(r&7))); }
+static void test_rr(int a,int b){ elog("test_rr %d %d",a,b); ilog("test %s,%s",rn(a),rn(b)); rexb(1, b>7, 0, a>7); e1(0x85); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
+static void xor_rr(int a,int b){ elog("xor_rr %d %d",a,b); ilog("xor %s,%s",rn(a),rn(b)); rexb(1, b>7, 0, a>7); e1(0x31); e1((uint8_t)(0xC0|(b<<3)|(a&7))); }
+static void incdec_r(int inc,int r){ elog("incdec_r %d %d",inc,r); ilog("%s %s",inc?"inc":"dec",rn(r)); rexb(1, 0, 0, r>7); e1(0xff); e1((uint8_t)(0xC0|((inc?0:1)<<3)|(r&7))); }
+static void inc_mem_r(int r){ elog("inc_mem_r %d",r); ilog("inc [%s]",rn(r)); rexb(1,0,0,r>7); e1(0xff); e1((uint8_t)(0x40|(r&7))); e1(0x00); } /* inc [r] (disp8=0) */
+static void push_r(int r){ elog("push_r %d",r); ilog("push %s",rn(r)); if(r>7) e1(0x49); e1((uint8_t)(0x50+(r&7))); }
+static void pop_r(int r){ elog("pop_r %d",r); ilog("pop %s",rn(r)); if(r>7) e1(0x49); e1((uint8_t)(0x58+(r&7))); }
+static void jcc_rel32(int c,int32_t d){ elog("jcc_rel32 %d %d",c,(int)d); ilog("j%s rel32(%d)",ccname(c),(int)d); e1(0x0f); e1((uint8_t)(0x80+c)); e32((uint32_t)d); }
+static void jmp_rel32(int32_t d){ elog("jmp_rel32 %d",(int)d); ilog("jmp rel32(%d)",(int)d); e1(0xe9); e32((uint32_t)d); }
+static void setcc(int c,int r){ elog("setcc %d %d",c,r); ilog("set%s %s",ccname(c),r32n(r)); rexb(0, 0, 0, r>7); e1(0x0f); e1((uint8_t)(0x90+c)); e1((uint8_t)(0xC0|(r&7))); }
+static void movzx_al_to_rax(void){ elog("movzx_al_to_rax"); ilog("movzx rax,al"); rexb(1,0,0,0); e1(0x0f); e1(0xb6); e1(0xc0); }
+static void sar_imm(int r,int v){ elog("sar_imm %d %d",r,v); ilog("sar %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(7<<3)|(r&7))); e1((uint8_t)v); }
+static void shl_imm(int r,int v){ elog("shl_imm %d %d",r,v); ilog("shl %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(4<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHL = C1 /4 */
+static void shr_imm(int r,int v){ elog("shr_imm %d %d",r,v); ilog("shr %s,%d",rn(r),v); rexb(1, 0, 0, r>7); e1(0xc1); e1((uint8_t)(0xC0|(5<<3)|(r&7))); e1((uint8_t)v); }  /* env gas: SHR = C1 /5 */
 
 /* ---- SSE2 scalar double (register-direct forms only; xmm0-xmm7) ----
  * Numbers are IEEE doubles held as raw bits in the same 64-bit slots and
@@ -416,16 +463,16 @@ static void sse_rr(int pfx,int op,int W,int reg,int rm){
   e1((uint8_t)pfx); rexb(W, reg>7, 0, rm>7); e1(0x0f); e1((uint8_t)op);
   e1((uint8_t)(0xC0|((reg&7)<<3)|(rm&7)));
 }
-static void movq_xr(int x,int r){ ilog("movq %s,%s",xn(x),rn(r)); sse_rr(0x66,0x6e,1,x,r); }   /* movq xmm, r64 */
-static void movq_rx(int r,int x){ ilog("movq %s,%s",rn(r),xn(x)); sse_rr(0x66,0x7e,1,x,r); }   /* movq r64, xmm */
-static void addsd(int a,int b){ ilog("addsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x58,0,a,b); }
-static void mulsd(int a,int b){ ilog("mulsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x59,0,a,b); }
-static void subsd(int a,int b){ ilog("subsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x5c,0,a,b); }
-static void divsd(int a,int b){ ilog("divsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x5e,0,a,b); }
-static void ucomisd(int a,int b){ ilog("ucomisd %s,%s",xn(a),xn(b)); sse_rr(0x66,0x2e,0,a,b); }
-static void cvtsi2sd(int x,int r){ ilog("cvtsi2sd %s,%s",xn(x),rn(r)); sse_rr(0xf2,0x2a,1,x,r); }  /* xmm = (double)r64 */
-static void cvttsd2si(int r,int x){ ilog("cvttsd2si %s,%s",rn(r),xn(x)); sse_rr(0xf2,0x2c,1,r,x); } /* r64 = (long)xmm, truncating */
-static void cvtsd2si(int r,int x){ ilog("cvtsd2si %s,%s",rn(r),xn(x)); sse_rr(0xf2,0x2d,1,r,x); }  /* r64 = round-to-nearest-even */
+static void movq_xr(int x,int r){ elog("movq_xr %d %d",x,r); ilog("movq %s,%s",xn(x),rn(r)); sse_rr(0x66,0x6e,1,x,r); }   /* movq xmm, r64 */
+static void movq_rx(int r,int x){ elog("movq_rx %d %d",r,x); ilog("movq %s,%s",rn(r),xn(x)); sse_rr(0x66,0x7e,1,x,r); }   /* movq r64, xmm */
+static void addsd(int a,int b){ elog("addsd %d %d",a,b); ilog("addsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x58,0,a,b); }
+static void mulsd(int a,int b){ elog("mulsd %d %d",a,b); ilog("mulsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x59,0,a,b); }
+static void subsd(int a,int b){ elog("subsd %d %d",a,b); ilog("subsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x5c,0,a,b); }
+static void divsd(int a,int b){ elog("divsd %d %d",a,b); ilog("divsd %s,%s",xn(a),xn(b)); sse_rr(0xf2,0x5e,0,a,b); }
+static void ucomisd(int a,int b){ elog("ucomisd %d %d",a,b); ilog("ucomisd %s,%s",xn(a),xn(b)); sse_rr(0x66,0x2e,0,a,b); }
+static void cvtsi2sd(int x,int r){ elog("cvtsi2sd %d %d",x,r); ilog("cvtsi2sd %s,%s",xn(x),rn(r)); sse_rr(0xf2,0x2a,1,x,r); }  /* xmm = (double)r64 */
+static void cvttsd2si(int r,int x){ elog("cvttsd2si %d %d",r,x); ilog("cvttsd2si %s,%s",rn(r),xn(x)); sse_rr(0xf2,0x2c,1,r,x); } /* r64 = (long)xmm, truncating */
+static void cvtsd2si(int r,int x){ elog("cvtsd2si %d %d",r,x); ilog("cvtsd2si %s,%s",rn(r),xn(x)); sse_rr(0xf2,0x2d,1,r,x); }  /* r64 = round-to-nearest-even */
 /* rax (double bits) -> rax (long, truncated toward zero, like C's cast) */
 static void emit_d2i(void){ ilogc("d2i: double bits in rax -> long"); movq_xr(0,0); cvttsd2si(0,0); }
 /* rax (long) -> rax (double bits) */
@@ -435,7 +482,12 @@ static void emit_i2d(void){ ilogc("i2d: long in rax -> double bits"); cvtsi2sd(0
 #define MAXLBL 96
 static long lbl_pos[MAXLBL]; static int nlbl;
 static size_t lbl_fix[MAXLBL][24]; static int lbl_fixw[MAXLBL][24]; static int lbl_nfix[MAXLBL];
+/* The id is logged because it is NOT implicit: the runtime helpers reset nlbl
+   to 0 before each of them, so ids are handed out again from 0.  A replay that
+   counted L_new records instead of reading the id would bind label 0 of the
+   second helper to the position of label 0 of the first. */
 static int L_new(void){
+  elog("L_new %d",nlbl);
   if(nlbl>=MAXLBL){ fprintf(stderr,"native_aot: too many labels\n"); exit(1); }
   lbl_pos[nlbl]=-1; lbl_nfix[nlbl]=0; return nlbl++;
 }
@@ -443,6 +495,7 @@ static void L_patch(size_t at,int w,size_t to){
   int32_t d=(int32_t)((long)to-(long)(at+(size_t)w)); memcpy(code+at+(size_t)w-4,&d,4);
 }
 static void L_bind(int l){
+  elog("L_bind %d",l);
   lbl_pos[l]=(long)cn;
   for(int i=0;i<lbl_nfix[l];i++) L_patch(lbl_fix[l][i],lbl_fixw[l][i],cn);
   lbl_nfix[l]=0;
@@ -452,10 +505,28 @@ static void L_ref(int l,size_t at,int w){
   if(lbl_nfix[l]>=24){ fprintf(stderr,"native_aot: too many label refs\n"); exit(1); }
   lbl_fix[l][lbl_nfix[l]]=at; lbl_fixw[l][lbl_nfix[l]]=w; lbl_nfix[l]++;
 }
-static void J_cc(int c,int l){ size_t at=cn; e1(0x0f); e1((uint8_t)(0x80+c)); e32(0); L_ref(l,at,6); }
-static void J_mp(int l){ size_t at=cn; e1(0xe9); e32(0); L_ref(l,at,5); }
-static void stb_rdi(uint8_t v){ e1(0xc6); e1(0x07); e1(v); }  /* mov byte [rdi], imm8 */
-static void stal_rdi(void){ e1(0x88); e1(0x07); }              /* mov [rdi], al */
+/* A label that is ALREADY bound has a final position, so its displacement is
+   known at emission time and is written straight into the instruction.  Before
+   this, the four bytes were written as zero and then patched by L_ref -- the
+   same bytes, but a patch that lands inside the instruction it belongs to,
+   which the encode log cannot represent as "these bytes came from this call"
+   (make test-native-sxencode compares the log's byte trace with the encoder's
+   own output, and a self-patch would make the two disagree).  The unbound case
+   is unchanged: zeros now, patched by L_bind later. */
+static void J_cc(int c,int l){
+  elog("J_cc %d %d",c,l);
+  size_t at=cn; e1(0x0f); e1((uint8_t)(0x80+c));
+  if(lbl_pos[l]>=0){ int32_t d=(int32_t)(lbl_pos[l]-(long)(at+6)); e32((uint32_t)d); }
+  else { e32(0); L_ref(l,at,6); }
+}
+static void J_mp(int l){
+  elog("J_mp %d",l);
+  size_t at=cn; e1(0xe9);
+  if(lbl_pos[l]>=0){ int32_t d=(int32_t)(lbl_pos[l]-(long)(at+5)); e32((uint32_t)d); }
+  else { e32(0); L_ref(l,at,5); }
+}
+static void stb_rdi(uint8_t v){ elog("stb_rdi %u",(unsigned)v); e1(0xc6); e1(0x07); e1(v); }  /* mov byte [rdi], imm8 */
+static void stal_rdi(void){ elog("stal_rdi"); e1(0x88); e1(0x07); }              /* mov [rdi], al */
 /* condition codes for 0F 80+c (jcc) and 0F 90+c (setcc) — same numbering */
 #define JC_B 2      /* <  / setb */
 #define JC_NBE 3    /* >= / setae */
@@ -474,6 +545,7 @@ enum { PFN=0, PBUILTIN=1 };
 static struct { size_t at; int kind; int idx; } patch_call[8192]; static int npc;
 static struct { size_t at; } patch_r12[4096]; static int npr;
 static void call_p(int kind,int idx){
+  elog("call_p %d %d",kind,idx);
   ilog("call %s %s",kind==PFN?"make":"builtin",kind==PFN?fname(idx):bname(idx));
   e1(0xe8);
   if(npc>=8192){ fprintf(stderr,"native_aot: OOM patches\n"); exit(1); }
@@ -484,6 +556,7 @@ static void call_p(int kind,int idx){
 #define callb(i) call_p(PBUILTIN,i)
 static void lea_r12_data(void){
   /* lea r12, [rip+disp32]: REX.WR 8D 25 disp32 (mod00 reg100 rm101) */
+  elog("lea_r12_data");
   ilog("lea r12,[rip+<disp32 slot>]");
   rexb(1, 1, 0, 0); e1(0x8d); e1(0x25);
   if(npr>=4096){ fprintf(stderr,"native_aot: OOM patches\n"); exit(1); }
@@ -2923,7 +2996,7 @@ static void emit_digs(int topdisp){
   size_t jnz2=cn; jcc_rel32(JC_NZ,0); erel32(jnz2,dig);
   size_t sign=cn;
   erel32(jnz,dig);
-  { int32_t jd=(int32_t)(sign-(jmpsign+5)); memcpy(code+jmpsign+1,&jd,4); }
+  { int32_t jd=(int32_t)(sign-(jmpsign+5)); elog("raw_patch32 %zu %d",(size_t)(jmpsign+1),(int)jd); memcpy(code+jmpsign+1,&jd,4); }
   test_rr(8,8);
   size_t jz=cn; jcc_rel32(JC_Z,0);
   bin_imm8(5,SI,1);
@@ -3130,7 +3203,7 @@ static void emit_builtins(void){
     size_t zc=cn;
     xor_rr(AX,AX);
     size_t ret_at=cn;
-    { int32_t dd=(int32_t)(ret_at-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
+    { int32_t dd=(int32_t)(ret_at-(jmp_at+5)); elog("raw_patch32 %zu %d",(size_t)(jmp_at+1),(int)dd); memcpy(code+jmp_at+1,&dd,4); }
     pop_r(12); e1(0xc3);
     erel32(jne,zc); erel32(jz,eq);
   }
@@ -3162,7 +3235,7 @@ static void emit_builtins(void){
     size_t eqc=cn;
     xor_rr(AX,AX);
     size_t end=cn;
-    { int32_t dd=(int32_t)(end-(done_at+5)); memcpy(code+done_at+1,&dd,4); }
+    { int32_t dd=(int32_t)(end-(done_at+5)); elog("raw_patch32 %zu %d",(size_t)(done_at+1),(int)dd); memcpy(code+done_at+1,&dd,4); }
     pop_r(12); e1(0xc3);
     erel32(jne,diff); erel32(jz,eqc);
   }
@@ -3324,7 +3397,7 @@ static void emit_builtins(void){
   size_t set4=cn;
   mov_imm64(DX,4);
   size_t skip=cn;
-  { int32_t dd=(int32_t)(skip-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
+  { int32_t dd=(int32_t)(skip-(jmp_at+5)); elog("raw_patch32 %zu %d",(size_t)(jmp_at+1),(int)dd); memcpy(code+jmp_at+1,&dd,4); }
   erel32(jb,set4);
   lea_rm(DX,DX,-1,0,3);               /* dx = n+3 */
   bin_imm8(4,DX,0xFC);                /* slots = (n+3)&~3, >= 4 */
@@ -3344,7 +3417,7 @@ static void emit_builtins(void){
   size_t set4b=cn;
   mov_imm64(DX,4);
   size_t storecap=cn;
-  { int32_t dd=(int32_t)(storecap-(jmp_at2+5)); memcpy(code+jmp_at2+1,&dd,4); }
+  { int32_t dd=(int32_t)(storecap-(jmp_at2+5)); elog("raw_patch32 %zu %d",(size_t)(jmp_at2+1),(int)dd); memcpy(code+jmp_at2+1,&dd,4); }
   erel32(jb2,set4b);
   mv_m64(10,-1,0,16,DX);              /* list->cap = max(4,n) */
   mv_rr(AX,10);
@@ -3431,7 +3504,7 @@ static void emit_builtins(void){
   inc_mem_r(11);                     /* inc [r11] (list->n++) */
   mv_rr(AX,11);
   size_t ret_at=cn;
-  { int32_t dd=(int32_t)(ret_at-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
+  { int32_t dd=(int32_t)(ret_at-(jmp_at+5)); elog("raw_patch32 %zu %d",(size_t)(jmp_at+1),(int)dd); memcpy(code+jmp_at+1,&dd,4); }
   pop_r(12); e1(0xc3);
   erel32(jb,fast);
   }
@@ -3577,7 +3650,7 @@ static void emit_builtins(void){
   jmp_rel32(0);                        /* valid -> ret */
   size_t empty=cn;
   lea_rm(AX,12,-1,0,(int)d_empty);
-  { int32_t dd=(int32_t)(cn-(jmp_at+5)); memcpy(code+jmp_at+1,&dd,4); }
+  { int32_t dd=(int32_t)(cn-(jmp_at+5)); elog("raw_patch32 %zu %d",(size_t)(jmp_at+1),(int)dd); memcpy(code+jmp_at+1,&dd,4); }
   erel32(js,empty); erel32(jg,empty); erel32(jz,empty);
   pop_r(12); e1(0xc3);
   }
@@ -4303,6 +4376,16 @@ int main(int argc,char**argv){
       ilogf=fopen(ilogenv,"w");
       if(!ilogf){ fprintf(stderr,"native_aot: cannot open SX_EMIT_LOG file %s\n",ilogenv); return 1; }
       fprintf(ilogf,"; native_aot instruction list for %s\n; offset  instruction\n",argv[1]);
+    }
+  }
+  /* the encode log: SX_ENCODE_LOG=<path> records every encoder call, which is
+     what tools/sxencode.sa replays. Off by default; no byte changes when on. */
+  {
+    const char* encenv=getenv("SX_ENCODE_LOG");
+    if(encenv&&*encenv){
+      elogf=fopen(encenv,"w");
+      if(!elogf){ fprintf(stderr,"native_aot: cannot open SX_ENCODE_LOG file %s\n",encenv); return 1; }
+      fprintf(elogf,"; native_aot encode log for %s\n",argv[1]);
     }
   }
   size_t sn;

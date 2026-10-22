@@ -1,6 +1,0 @@
-// Arena GC: string temps live until process exit
-hold s = "hello"
-hold s = concat(s, "!")
-hold s = concat(s, "!")
-show s
-show "arena-ok"

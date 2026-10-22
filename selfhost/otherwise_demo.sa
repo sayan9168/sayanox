@@ -1,6 +1,0 @@
-hold x = 0
-when x {
-  show 1
-} otherwise {
-  show 42
-}

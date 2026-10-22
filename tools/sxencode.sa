@@ -1,0 +1,1159 @@
+// tools/sxencode.sa -- the x86-64 instruction encoder of the native backend,
+// in Sayanox (Phase D, step 4; docs/ALL_SAYANOX_PHASE.md).
+//
+// selfhost/native_aot.c emits the code segment through about fifty small
+// primitives: the `mov`/`lea`/`bin`/`sse` instruction helpers, `emit_modrm`,
+// the label-and-fixup machinery and the two raw stores the phase-4 runtime
+// writes with. Everything a user program compiles to reaches the machine
+// through them; the emit tree itself cannot touch code bytes at all, which
+// `make test-native-emit-split` asserts. The only other writers are the
+// runtime stubs and the collector, which emit hand-written machine code as
+// literals, and those bytes arrive here as the raw records described below.
+//
+// This program is those primitives, in Sayanox, replayed against a recording
+// of their own calls:
+//
+//   ./tools/sxencode <encode.log> <code.bin> <out.bin>
+//
+// `SX_ENCODE_LOG=<path>` makes native_aot write one line per primitive call --
+// the primitive's name and the integer arguments it was handed -- and one line
+// for every byte e1() appends, which is the recorder's own copy of what those
+// calls produced. The replay reads that stream, builds the bytes, must
+// reproduce `code.bin` exactly, and checks its own encoding against those
+// per-call bytes as it goes.
+// `code.bin` is the same file `SX_LINK_DUMP` writes for tools/sxlink.sa, so
+// both halves of the machine-code path are held to the C bytes by fixtures
+// rather than by inspection. `out.bin` is written for the same reason sxlink
+// writes its image: the gate compares bytes, not a report.
+//
+// Why the encoder's CALLS and not the instruction list (SX_EMIT_LOG): the
+// instruction list is written for a reader, and it drops exactly what an
+// encoder must decide. `add %rax,%rbx` does not say whether the opcode is
+// 0x01 or 0x03; `mov [r12+rcx*8-16],%rax` does not say whether the
+// displacement cost one byte or four, nor where the SIB byte went. The encode
+// log has no such gap: it records the arguments, so the same bytes are the
+// only possible answer.
+//
+// Honest limits, recorded rather than hidden:
+//   * native_aot still uses its own C encoder to produce the executables the
+//     gates run. This program is proved equal to it on the fixtures; wiring it
+//     in as the producer would make the native backend's output path depend on
+//     gen2, which is a bootstrap ordering change, not part of this step.
+//   * the stream carries label ids and absolute patch offsets. Turning a `make`
+//     name into an offset stays in C; this program turns offsets into bytes,
+//     exactly as sxlink does one stage later.
+//   * 64-bit immediates arrive as two 32-bit halves, because a Sayanox number
+//     is a C double and is only exact below 2^53. `enc_mov_imm64` puts the
+//     halves back in little-endian order, so no constant in the code segment is
+//     rounded.
+//   * a rel32 site is patched exactly where native_aot patches it: at once when
+//     the label is already bound, and when the label is bound otherwise. A final
+//     pass over the stream would be wrong, because the phase-4 runtime re-binds
+//     its helper labels and C resolves each site against the position that was
+//     current when it bound. A label that is never bound keeps its four zero
+//     bytes, which is what C leaves too.
+//   * the `b` records carry the runtime stubs' hand-written machine code. Those
+//     bytes are copied, not encoded, because the C file writes them as literals;
+//     the comparison still covers them, and every byte an encoding produced is
+//     checked twice (the Sayanox encoding, then the recorder's own byte).
+//   * the label table has native_aot's own caps (MAXLBL 96, 24 references each,
+//     so 2304 queued sites). A stream that exceeds them is refused here with a
+//     message; native_aot exits with its own.
+//
+// The record vocabulary is pinned from both ends: `op_id` below is the list of
+// names, `apply` is the list of encodings in the same order, and
+// `make test-native-sxencode` checks that the two lists have the same length
+// and that the fixture set exercises every record in them.
+
+// One write, not two: /dev/stderr can be a regular file when a gate redirects
+// it, and a second open truncates the first message away.
+make fail(code: num, msg: str) -> num {
+  hold wrote = write_file("/dev/stderr", concat(concat("sxencode: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+make is_digit(c: num) -> num {
+  hold r = 0
+  when c >= 48 && c <= 57 {
+    r = 1
+  }
+  give r
+}
+
+make slice(text: str, begin: num, end: num) -> str {
+  hold value = ""
+  hold i = begin
+  while i < end {
+    value = concat(value, chr(sx_index(text, i)))
+    i = i + 1
+  }
+  give value
+}
+
+// ---- replay state ---------------------------------------------------------
+// One flat list holds everything, so a record handler can update any part of
+// it with an indexed write and hand the same list back:
+//
+//   [96]                the highest label id L_new has handed out, plus one --
+//                       a bound for check_label, not a count, because ids are
+//                       reused after the runtime resets the label table
+//   [97 .. 192]         where each label was bound, -1 while unbound
+//   [193]               how many rel32 sites have been queued
+//   [194 .. 7105]       three numbers per queued site: label, offset, width.
+//                       A site whose label slot is -2 is done: either it was
+//                       patched or its label was dropped by a later L_new.
+//   [7106 ..]           the code bytes, one number each
+//
+// The caps are native_aot's: MAXLBL is 96 and a label may be referenced 24
+// times, so 96 * 24 = 2304 sites fit and the code always starts at 7106.
+// These functions are the only place the numbers are written down; a function
+// that indexes the state has to copy the base into a `hold` first, because an
+// index expression cannot contain a call.
+
+make maxlbl() -> num {
+  give 96
+}
+
+make lbln() -> num {
+  give 96
+}
+
+make lpos() -> num {
+  give 97
+}
+
+make fxbc() -> num {
+  give 193
+}
+
+make fxb() -> num {
+  give 194
+}
+
+make meta() -> num {
+  give 7106
+}
+
+make maxfix() -> num {
+  give 2304
+}
+
+make cur(st: list) -> num {
+  hold base = meta()
+  give len(st) - base
+}
+
+// ---- byte writers ---------------------------------------------------------
+
+// A number here is a double, and the bitwise builtins reject a negative
+// operand, so a signed value is reduced to its two's-complement 32-bit form
+// first. That is the same reduction C does when it casts an int32_t to a
+// uint32_t or writes one byte of it.
+make low32(v: num) -> num {
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  give u
+}
+
+make put_u8(st: list, v: num) -> list {
+  hold u = low32(v)
+  st = push(st, bit_and(u, 255))
+  give st
+}
+
+make put_u16(st: list, v: num) -> list {
+  hold u = low32(v)
+  st = put_u8(st, bit_and(u, 255))
+  st = put_u8(st, shr(u, 8))
+  give st
+}
+
+make put_u32(st: list, v: num) -> list {
+  hold u = low32(v)
+  st = put_u16(st, bit_and(u, 65535))
+  st = put_u16(st, shr(u, 16))
+  give st
+}
+
+make put_i32(st: list, v: num) -> list {
+  st = put_u32(st, v)
+  give st
+}
+
+// An indexed write over already-emitted code: the patch primitives, and the
+// one place a patch site can be outside the code, which is an error rather
+// than a byte written past the buffer.
+make write_i32_at(st: list, at: num, v: num) -> list {
+  hold base = meta()
+  hold end = cur(st)
+  when at < 0 || at + 4 > end {
+    hold stop = fail(1, "a patch site is outside the code the stream has built")
+  }
+  hold u = low32(v)
+  st[base + at] = bit_and(u, 255)
+  st[base + at + 1] = bit_and(shr(u, 8), 255)
+  st[base + at + 2] = bit_and(shr(u, 16), 255)
+  st[base + at + 3] = bit_and(shr(u, 24), 255)
+  give st
+}
+
+// ---- the encoder helpers --------------------------------------------------
+
+// REX is emitted only when one of its four bits is set, which is why the same
+// helper has to know all four.
+make rexb(st: list, W: num, R: num, X: num, B: num) -> list {
+  hold any = 0
+  when W != 0 || R != 0 || X != 0 || B != 0 {
+    any = 1
+  }
+  when any == 1 {
+    hold b = 64
+    when W != 0 {
+      b = bit_or(b, 8)
+    }
+    when R != 0 {
+      b = bit_or(b, 4)
+    }
+    when X != 0 {
+      b = bit_or(b, 2)
+    }
+    when B != 0 {
+      b = bit_or(b, 1)
+    }
+    st = put_u8(st, b)
+  }
+  give st
+}
+
+// SIB is required when the base is rsp/r12 (bits 100) or when an index is
+// present. mod = 00 no displacement, 01 disp8, 10 disp32; -1 means "none",
+// which is also how "no displacement" is spelled in the stream.
+make modrm(st: list, reg: num, rm: num, scale: num, idx: num, disp: num) -> list {
+  hold need_sib = 0
+  when bit_and(rm, 7) == 4 {
+    need_sib = 1
+  }
+  when idx >= 0 {
+    need_sib = 1
+  }
+  hold m = 0
+  when disp != -1 {
+    when disp >= -128 && disp <= 127 {
+      m = 1
+    } otherwise {
+      m = 2
+    }
+  }
+  hold rmv = bit_and(rm, 7)
+  when need_sib == 1 {
+    rmv = 4
+  }
+  hold byte = bit_or(shl(m, 6), bit_or(shl(bit_and(reg, 7), 3), rmv))
+  st = put_u8(st, byte)
+  when need_sib == 1 {
+    hold ii = 4
+    when idx >= 0 {
+      ii = idx
+    }
+    hold sib = bit_or(shl(scale, 6), bit_or(shl(bit_and(ii, 7), 3), bit_and(rm, 7)))
+    st = put_u8(st, sib)
+  }
+  when disp != -1 {
+    when m == 1 {
+      st = put_u8(st, disp)
+    } otherwise {
+      st = put_i32(st, disp)
+    }
+  }
+  give st
+}
+
+// [prefix] [REX] 0F op ModRM(11 reg rm) -- the register-direct SSE2 form.
+make sse_rr(st: list, pfx: num, op: num, W: num, reg: num, rm: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(reg, 7), 3), bit_and(rm, 7)))
+  st = put_u8(st, pfx)
+  st = rexb(st, W, reg > 7, 0, rm > 7)
+  st = put_u8(st, 15)
+  st = put_u8(st, op)
+  st = put_u8(st, mod)
+  give st
+}
+
+// ---- mov ------------------------------------------------------------------
+
+make enc_mv_rr(st: list, d: num, s: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(s, 7), 3), bit_and(d, 7)))
+  st = rexb(st, 1, s > 7, 0, d > 7)
+  st = put_u8(st, 137)
+  st = put_u8(st, mod)
+  give st
+}
+
+make enc_mv_m64(st: list, base: num, idx: num, scale: num, disp: num, s: num) -> list {
+  st = rexb(st, 1, s > 7, idx > 7, base > 7)
+  st = put_u8(st, 137)
+  st = modrm(st, s, base, scale, idx, disp)
+  give st
+}
+
+make enc_mv_r64m(st: list, d: num, base: num, idx: num, scale: num, disp: num) -> list {
+  st = rexb(st, 1, d > 7, idx > 7, base > 7)
+  st = put_u8(st, 139)
+  st = modrm(st, d, base, scale, idx, disp)
+  give st
+}
+
+make enc_lea_rm(st: list, d: num, base: num, idx: num, scale: num, disp: num) -> list {
+  st = rexb(st, 1, d > 7, idx > 7, base > 7)
+  st = put_u8(st, 141)
+  st = modrm(st, d, base, scale, idx, disp)
+  give st
+}
+
+// B8+rd with the 64-bit immediate written as its low half then its high half:
+// the stream carries the two halves in that order because a number here is a
+// double and 0x3ff0000000000000 does not survive the trip as one.
+make enc_mov_imm64(st: list, r: num, hi: num, lo: num) -> list {
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = put_u8(st, 184 + bit_and(r, 7))
+  st = put_u32(st, lo)
+  st = put_u32(st, hi)
+  give st
+}
+
+make enc_mov_imm8m(st: list, base: num, idx: num, scale: num, disp: num, v: num) -> list {
+  st = rexb(st, 0, 0, idx > 7, base > 7)
+  st = put_u8(st, 198)
+  st = modrm(st, 0, base, scale, idx, disp)
+  st = put_u8(st, v)
+  give st
+}
+
+// movzx r32, byte [mem]
+make enc_mvz_rm(st: list, d: num, base: num, idx: num, scale: num, disp: num) -> list {
+  st = rexb(st, 0, d > 7, idx > 7, base > 7)
+  st = put_u8(st, 15)
+  st = put_u8(st, 182)
+  st = modrm(st, d, base, scale, idx, disp)
+  give st
+}
+
+// ---- arithmetic, logic, stack ---------------------------------------------
+
+make enc_bin_rr(st: list, op: num, d: num, s: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(s, 7), 3), bit_and(d, 7)))
+  st = rexb(st, 1, s > 7, 0, d > 7)
+  st = put_u8(st, op)
+  st = put_u8(st, mod)
+  give st
+}
+
+// 83 /digit: a group-1 opcode with an 8-bit immediate
+make enc_bin_imm8(st: list, op: num, r: num, v: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(op, 7), 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = put_u8(st, 131)
+  st = put_u8(st, mod)
+  st = put_u8(st, v)
+  give st
+}
+
+// 81 /digit: the same opcode with a 32-bit immediate
+make enc_bin_imm32(st: list, op: num, r: num, v: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(op, 7), 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = put_u8(st, 129)
+  st = put_u8(st, mod)
+  st = put_i32(st, v)
+  give st
+}
+
+// F7 /digit: group 3
+make enc_fm7(st: list, sub: num, r: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(sub, 7), 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = put_u8(st, 247)
+  st = put_u8(st, mod)
+  give st
+}
+
+make enc_test_rr(st: list, a: num, b: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(b, 7), 3), bit_and(a, 7)))
+  st = rexb(st, 1, b > 7, 0, a > 7)
+  st = put_u8(st, 133)
+  st = put_u8(st, mod)
+  give st
+}
+
+make enc_xor_rr(st: list, a: num, b: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(b, 7), 3), bit_and(a, 7)))
+  st = rexb(st, 1, b > 7, 0, a > 7)
+  st = put_u8(st, 49)
+  st = put_u8(st, mod)
+  give st
+}
+
+// FF /0 inc, FF /1 dec
+make enc_incdec_r(st: list, inc: num, r: num) -> list {
+  hold sub = 1
+  when inc != 0 {
+    sub = 0
+  }
+  hold mod = bit_or(192, bit_or(shl(sub, 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = put_u8(st, 255)
+  st = put_u8(st, mod)
+  give st
+}
+
+// inc [r] with a disp8 of zero: the ModRM byte is 00 000 r/m, not a REX prefix
+make enc_inc_mem_r(st: list, r: num) -> list {
+  hold mod = bit_or(64, bit_and(r, 7))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = put_u8(st, 255)
+  st = put_u8(st, mod)
+  st = put_u8(st, 0)
+  give st
+}
+
+make enc_push_r(st: list, r: num) -> list {
+  hold op = 80 + bit_and(r, 7)
+  when r > 7 {
+    st = put_u8(st, 73)
+  }
+  st = put_u8(st, op)
+  give st
+}
+
+make enc_pop_r(st: list, r: num) -> list {
+  hold op = 88 + bit_and(r, 7)
+  when r > 7 {
+    st = put_u8(st, 73)
+  }
+  st = put_u8(st, op)
+  give st
+}
+
+// ---- jumps and comparisons ------------------------------------------------
+
+// A jump with an already-known displacement. The emit tree uses the label
+// forms below; these two exist because the encoder region provides them.
+make enc_jcc_rel32(st: list, c: num, d: num) -> list {
+  st = put_u8(st, 15)
+  st = put_u8(st, 128 + c)
+  st = put_i32(st, d)
+  give st
+}
+
+make enc_jmp_rel32(st: list, d: num) -> list {
+  st = put_u8(st, 233)
+  st = put_i32(st, d)
+  give st
+}
+
+// 0F 90+c: setcc r8
+make enc_setcc(st: list, c: num, r: num) -> list {
+  hold mod = bit_or(192, bit_and(r, 7))
+  st = rexb(st, 0, 0, 0, r > 7)
+  st = put_u8(st, 15)
+  st = put_u8(st, 144 + c)
+  st = put_u8(st, mod)
+  give st
+}
+
+make enc_movzx_al_to_rax(st: list) -> list {
+  st = rexb(st, 1, 0, 0, 0)
+  st = put_u8(st, 15)
+  st = put_u8(st, 182)
+  st = put_u8(st, 192)
+  give st
+}
+
+// C1 /digit: a shift by an 8-bit count
+make enc_shift_imm(st: list, digit: num, r: num, v: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(digit, 7), 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = put_u8(st, 193)
+  st = put_u8(st, mod)
+  st = put_u8(st, v)
+  give st
+}
+
+make enc_sar_imm(st: list, r: num, v: num) -> list {
+  st = enc_shift_imm(st, 7, r, v)
+  give st
+}
+
+make enc_shl_imm(st: list, r: num, v: num) -> list {
+  st = enc_shift_imm(st, 4, r, v)
+  give st
+}
+
+make enc_shr_imm(st: list, r: num, v: num) -> list {
+  st = enc_shift_imm(st, 5, r, v)
+  give st
+}
+
+// ---- SSE2 scalar double ---------------------------------------------------
+
+make enc_movq_xr(st: list, x: num, r: num) -> list {
+  st = sse_rr(st, 102, 110, 1, x, r)
+  give st
+}
+
+make enc_movq_rx(st: list, r: num, x: num) -> list {
+  st = sse_rr(st, 102, 126, 1, x, r)
+  give st
+}
+
+make enc_addsd(st: list, a: num, b: num) -> list {
+  st = sse_rr(st, 242, 88, 0, a, b)
+  give st
+}
+
+make enc_mulsd(st: list, a: num, b: num) -> list {
+  st = sse_rr(st, 242, 89, 0, a, b)
+  give st
+}
+
+make enc_subsd(st: list, a: num, b: num) -> list {
+  st = sse_rr(st, 242, 92, 0, a, b)
+  give st
+}
+
+make enc_divsd(st: list, a: num, b: num) -> list {
+  st = sse_rr(st, 242, 94, 0, a, b)
+  give st
+}
+
+make enc_ucomisd(st: list, a: num, b: num) -> list {
+  st = sse_rr(st, 102, 46, 0, a, b)
+  give st
+}
+
+make enc_cvtsi2sd(st: list, x: num, r: num) -> list {
+  st = sse_rr(st, 242, 42, 1, x, r)
+  give st
+}
+
+make enc_cvttsd2si(st: list, r: num, x: num) -> list {
+  st = sse_rr(st, 242, 44, 1, r, x)
+  give st
+}
+
+make enc_cvtsd2si(st: list, r: num, x: num) -> list {
+  st = sse_rr(st, 242, 45, 1, r, x)
+  give st
+}
+
+// ---- slots, raw stores and the r12 lea ------------------------------------
+// Each of these leaves zero bytes where a displacement will go, exactly as the
+// C encoder does; whatever resolves that slot writes over them later.
+
+make enc_leave_ret(st: list) -> list {
+  st = put_u8(st, 201)
+  st = put_u8(st, 195)
+  give st
+}
+
+make enc_sub_rsp_slot(st: list) -> list {
+  st = put_u8(st, 72)
+  st = put_u8(st, 129)
+  st = put_u8(st, 236)
+  st = put_u32(st, 0)
+  give st
+}
+
+make enc_jmp5_slot(st: list) -> list {
+  st = put_u8(st, 233)
+  st = put_u32(st, 0)
+  give st
+}
+
+make enc_call_p(st: list, kind: num, idx: num) -> list {
+  // The target is not part of the bytes: native_aot resolves the name to an
+  // offset and write_elf patches these four bytes. The two arguments are read
+  // only so a stream that lost them is visible.
+  when kind < 0 || idx < 0 {
+    hold stop = fail(1, "a call record has a negative target")
+  }
+  st = put_u8(st, 232)
+  st = put_u32(st, 0)
+  give st
+}
+
+make enc_lea_r12_data(st: list) -> list {
+  st = rexb(st, 1, 1, 0, 0)
+  st = put_u8(st, 141)
+  st = put_u8(st, 37)
+  st = put_u32(st, 0)
+  give st
+}
+
+make enc_stb_rdi(st: list, v: num) -> list {
+  st = put_u8(st, 198)
+  st = put_u8(st, 7)
+  st = put_u8(st, v)
+  give st
+}
+
+make enc_stal_rdi(st: list) -> list {
+  st = put_u8(st, 136)
+  st = put_u8(st, 7)
+  give st
+}
+
+// ---- labels ---------------------------------------------------------------
+
+make queue_fix(st: list, l: num, at: num, w: num) -> list {
+  hold count_base = fxbc()
+  hold slot_base = fxb()
+  hold k = st[count_base]
+  when k >= maxfix() {
+    hold stop = fail(1, "the stream queues more rel32 sites than native_aot allows")
+  }
+  st[slot_base + 3 * k] = l
+  st[slot_base + 3 * k + 1] = at
+  st[slot_base + 3 * k + 2] = w
+  st[count_base] = k + 1
+  give st
+}
+
+make check_label(st: list, l: num) -> list {
+  hold count_base = lbln()
+  hold made = st[count_base]
+  when l < 0 || l >= made || l >= maxlbl() {
+    hold stop = fail(1, "a jump names a label that L_new has not created")
+  }
+  give st
+}
+
+// L_new clears the slot and drops the sites still queued for that id, because
+// native_aot's L_new does exactly that (lbl_pos[id] = -1, lbl_nfix[id] = 0).
+// The id is read from the record: the runtime helpers reset nlbl to 0 before
+// each of them, so the same ids are handed out again and a counter would bind
+// this helper's label 0 to the previous helper's position.
+make enc_L_new(st: list, l: num) -> list {
+  hold count_base = lbln()
+  hold slot_base = lpos()
+  hold fix_count_base = fxbc()
+  hold fix_base = fxb()
+  when l < 0 || l >= maxlbl() {
+    hold stop = fail(1, "the stream creates more labels than native_aot allows")
+  }
+  st[slot_base + l] = 0 - 1
+  hold n = st[fix_count_base]
+  hold i = 0
+  while i < n {
+    when st[fix_base + 3 * i] == l {
+      st[fix_base + 3 * i] = 0 - 2
+    }
+    i = i + 1
+  }
+  hold made = st[count_base]
+  when l + 1 > made {
+    st[count_base] = l + 1
+  }
+  give st
+}
+
+// Binding a label resolves every site queued for it and then moves the label.
+// This has to happen HERE rather than at the end of the stream: the phase-4
+// runtime re-binds its helper labels (the fixture below binds label 0 seven
+// times), so a site queued before a later bind was resolved by C against the
+// position at bind time, and a final pass would resolve it against the last one.
+make enc_L_bind(st: list, l: num) -> list {
+  hold slot_base = lpos()
+  hold count_base = fxbc()
+  hold fix_base = fxb()
+  hold here = cur(st)
+  st = check_label(st, l)
+  st[slot_base + l] = here
+  hold n = st[count_base]
+  hold i = 0
+  while i < n {
+    when st[fix_base + 3 * i] == l {
+      hold at = st[fix_base + 3 * i + 1]
+      hold w = st[fix_base + 3 * i + 2]
+      st = write_i32_at(st, at + w - 4, here - (at + w))
+      st[fix_base + 3 * i] = 0 - 2
+    }
+    i = i + 1
+  }
+  give st
+}
+
+// 0F 8x rel32. A bound label is resolved here; an unbound one leaves four zero
+// bytes and is resolved by enc_L_bind, which is exactly C's L_ref/L_patch split.
+make enc_J_cc(st: list, c: num, l: num) -> list {
+  hold slot_base = lpos()
+  st = check_label(st, l)
+  hold at = cur(st)
+  st = put_u8(st, 15)
+  st = put_u8(st, 128 + c)
+  st = put_u32(st, 0)
+  hold bound = st[slot_base + l]
+  when bound >= 0 {
+    st = write_i32_at(st, at + 2, bound - (at + 6))
+  } otherwise {
+    st = queue_fix(st, l, at, 6)
+  }
+  give st
+}
+
+make enc_J_mp(st: list, l: num) -> list {
+  hold slot_base = lpos()
+  st = check_label(st, l)
+  hold at = cur(st)
+  st = put_u8(st, 233)
+  st = put_u32(st, 0)
+  hold bound = st[slot_base + l]
+  when bound >= 0 {
+    st = write_i32_at(st, at + 1, bound - (at + 5))
+  } otherwise {
+    st = queue_fix(st, l, at, 5)
+  }
+  give st
+}
+
+// ---- patches --------------------------------------------------------------
+
+make enc_patch_imm32(st: list, at: num, v: num) -> list {
+  st = write_i32_at(st, at, v)
+  give st
+}
+
+make enc_erel32(st: list, at: num, to: num) -> list {
+  hold d = to - (at + 6)
+  st = write_i32_at(st, at + 2, d)
+  give st
+}
+
+make enc_erel32j(st: list, at: num, to: num) -> list {
+  hold d = to - (at + 5)
+  st = write_i32_at(st, at + 1, d)
+  give st
+}
+
+// ---- the record vocabulary ------------------------------------------------
+// One id per primitive, in the order `apply` encodes them. A name that is not
+// in this list comes from a newer recorder than this program, and is refused
+// rather than half-applied.
+
+make op_id(name: str) -> num {
+  when string_eq(name, "mv_rr") == 1 {
+    give 1
+  }
+  when string_eq(name, "mv_m64") == 1 {
+    give 2
+  }
+  when string_eq(name, "mv_r64m") == 1 {
+    give 3
+  }
+  when string_eq(name, "lea_rm") == 1 {
+    give 4
+  }
+  when string_eq(name, "mov_imm64") == 1 {
+    give 5
+  }
+  when string_eq(name, "mov_imm8m") == 1 {
+    give 6
+  }
+  when string_eq(name, "mvz_rm") == 1 {
+    give 7
+  }
+  when string_eq(name, "bin_rr") == 1 {
+    give 8
+  }
+  when string_eq(name, "bin_imm8") == 1 {
+    give 9
+  }
+  when string_eq(name, "bin_imm32") == 1 {
+    give 10
+  }
+  when string_eq(name, "fm7") == 1 {
+    give 11
+  }
+  when string_eq(name, "test_rr") == 1 {
+    give 12
+  }
+  when string_eq(name, "xor_rr") == 1 {
+    give 13
+  }
+  when string_eq(name, "incdec_r") == 1 {
+    give 14
+  }
+  when string_eq(name, "inc_mem_r") == 1 {
+    give 15
+  }
+  when string_eq(name, "push_r") == 1 {
+    give 16
+  }
+  when string_eq(name, "pop_r") == 1 {
+    give 17
+  }
+  when string_eq(name, "jcc_rel32") == 1 {
+    give 18
+  }
+  when string_eq(name, "jmp_rel32") == 1 {
+    give 19
+  }
+  when string_eq(name, "setcc") == 1 {
+    give 20
+  }
+  when string_eq(name, "movzx_al_to_rax") == 1 {
+    give 21
+  }
+  when string_eq(name, "sar_imm") == 1 {
+    give 22
+  }
+  when string_eq(name, "shl_imm") == 1 {
+    give 23
+  }
+  when string_eq(name, "shr_imm") == 1 {
+    give 24
+  }
+  when string_eq(name, "movq_xr") == 1 {
+    give 25
+  }
+  when string_eq(name, "movq_rx") == 1 {
+    give 26
+  }
+  when string_eq(name, "addsd") == 1 {
+    give 27
+  }
+  when string_eq(name, "mulsd") == 1 {
+    give 28
+  }
+  when string_eq(name, "subsd") == 1 {
+    give 29
+  }
+  when string_eq(name, "divsd") == 1 {
+    give 30
+  }
+  when string_eq(name, "ucomisd") == 1 {
+    give 31
+  }
+  when string_eq(name, "cvtsi2sd") == 1 {
+    give 32
+  }
+  when string_eq(name, "cvttsd2si") == 1 {
+    give 33
+  }
+  when string_eq(name, "cvtsd2si") == 1 {
+    give 34
+  }
+  when string_eq(name, "leave_ret") == 1 {
+    give 35
+  }
+  when string_eq(name, "sub_rsp_slot") == 1 {
+    give 36
+  }
+  when string_eq(name, "jmp5_slot") == 1 {
+    give 37
+  }
+  when string_eq(name, "patch_imm32") == 1 {
+    give 38
+  }
+  when string_eq(name, "erel32") == 1 {
+    give 39
+  }
+  when string_eq(name, "erel32j") == 1 {
+    give 40
+  }
+  when string_eq(name, "stb_rdi") == 1 {
+    give 41
+  }
+  when string_eq(name, "stal_rdi") == 1 {
+    give 42
+  }
+  when string_eq(name, "call_p") == 1 {
+    give 43
+  }
+  when string_eq(name, "lea_r12_data") == 1 {
+    give 44
+  }
+  when string_eq(name, "L_new") == 1 {
+    give 45
+  }
+  when string_eq(name, "L_bind") == 1 {
+    give 46
+  }
+  when string_eq(name, "J_cc") == 1 {
+    give 47
+  }
+  when string_eq(name, "J_mp") == 1 {
+    give 48
+  }
+  when string_eq(name, "raw_patch32") == 1 {
+    give 49
+  }
+  when string_eq(name, "b") == 1 {
+    give 50
+  }
+  give 0
+}
+
+make apply(st: list, id: num, a: list) -> list {
+  when id == 1 { st = enc_mv_rr(st, a[0], a[1]) }
+  when id == 2 { st = enc_mv_m64(st, a[0], a[1], a[2], a[3], a[4]) }
+  when id == 3 { st = enc_mv_r64m(st, a[0], a[1], a[2], a[3], a[4]) }
+  when id == 4 { st = enc_lea_rm(st, a[0], a[1], a[2], a[3], a[4]) }
+  when id == 5 { st = enc_mov_imm64(st, a[0], a[1], a[2]) }
+  when id == 6 { st = enc_mov_imm8m(st, a[0], a[1], a[2], a[3], a[4]) }
+  when id == 7 { st = enc_mvz_rm(st, a[0], a[1], a[2], a[3], a[4]) }
+  when id == 8 { st = enc_bin_rr(st, a[0], a[1], a[2]) }
+  when id == 9 { st = enc_bin_imm8(st, a[0], a[1], a[2]) }
+  when id == 10 { st = enc_bin_imm32(st, a[0], a[1], a[2]) }
+  when id == 11 { st = enc_fm7(st, a[0], a[1]) }
+  when id == 12 { st = enc_test_rr(st, a[0], a[1]) }
+  when id == 13 { st = enc_xor_rr(st, a[0], a[1]) }
+  when id == 14 { st = enc_incdec_r(st, a[0], a[1]) }
+  when id == 15 { st = enc_inc_mem_r(st, a[0]) }
+  when id == 16 { st = enc_push_r(st, a[0]) }
+  when id == 17 { st = enc_pop_r(st, a[0]) }
+  when id == 18 { st = enc_jcc_rel32(st, a[0], a[1]) }
+  when id == 19 { st = enc_jmp_rel32(st, a[0]) }
+  when id == 20 { st = enc_setcc(st, a[0], a[1]) }
+  when id == 21 { st = enc_movzx_al_to_rax(st) }
+  when id == 22 { st = enc_sar_imm(st, a[0], a[1]) }
+  when id == 23 { st = enc_shl_imm(st, a[0], a[1]) }
+  when id == 24 { st = enc_shr_imm(st, a[0], a[1]) }
+  when id == 25 { st = enc_movq_xr(st, a[0], a[1]) }
+  when id == 26 { st = enc_movq_rx(st, a[0], a[1]) }
+  when id == 27 { st = enc_addsd(st, a[0], a[1]) }
+  when id == 28 { st = enc_mulsd(st, a[0], a[1]) }
+  when id == 29 { st = enc_subsd(st, a[0], a[1]) }
+  when id == 30 { st = enc_divsd(st, a[0], a[1]) }
+  when id == 31 { st = enc_ucomisd(st, a[0], a[1]) }
+  when id == 32 { st = enc_cvtsi2sd(st, a[0], a[1]) }
+  when id == 33 { st = enc_cvttsd2si(st, a[0], a[1]) }
+  when id == 34 { st = enc_cvtsd2si(st, a[0], a[1]) }
+  when id == 35 { st = enc_leave_ret(st) }
+  when id == 36 { st = enc_sub_rsp_slot(st) }
+  when id == 37 { st = enc_jmp5_slot(st) }
+  when id == 38 { st = enc_patch_imm32(st, a[0], a[1]) }
+  when id == 39 { st = enc_erel32(st, a[0], a[1]) }
+  when id == 40 { st = enc_erel32j(st, a[0], a[1]) }
+  when id == 41 { st = enc_stb_rdi(st, a[0]) }
+  when id == 42 { st = enc_stal_rdi(st) }
+  when id == 43 { st = enc_call_p(st, a[0], a[1]) }
+  when id == 44 { st = enc_lea_r12_data(st) }
+  when id == 45 { st = enc_L_new(st, a[0]) }
+  when id == 46 { st = enc_L_bind(st, a[0]) }
+  when id == 47 { st = enc_J_cc(st, a[0], a[1]) }
+  when id == 48 { st = enc_J_mp(st, a[0]) }
+  when id == 49 { st = write_i32_at(st, a[0], a[1]) }
+  when id == 50 { st = put_u8(st, a[0]) }
+  give st
+}
+
+// ---- the stream -----------------------------------------------------------
+
+// One line is one record: a name, then the integers the primitive was handed.
+// ';' starts a header line and is skipped; so is a blank line, so a hand-edited
+// log still reads. The records are packed into one flat list -- id, argument
+// count, arguments, id, ... -- because the drive below has to look ahead: a
+// named instruction record is followed by one `b <byte>` record per byte it
+// emits, and those bytes are what the encoding is checked against.
+
+make pack(text: str) -> list {
+  hold log = []
+  hold n = len(text)
+  hold pos = 0
+  while pos < n {
+    hold e = pos
+    while e < n && sx_index(text, e) != 10 {
+      e = e + 1
+    }
+    hold line_end = e
+    hold line_start = pos
+    pos = e + 1
+    hold go = 1
+    when line_end <= line_start {
+      go = 0
+    }
+    when go == 1 {
+      hold c0 = sx_index(text, line_start)
+      when c0 == 59 || c0 == 13 {
+        go = 0
+      }
+    }
+    when go == 1 {
+      hold sp = line_start
+      while sp < line_end && sx_index(text, sp) != 32 {
+        sp = sp + 1
+      }
+      hold name = slice(text, line_start, sp)
+      hold a = []
+      hold k = sp
+      while k < line_end {
+        while k < line_end && sx_index(text, k) == 32 {
+          k = k + 1
+        }
+        when k < line_end {
+          hold neg = 0
+          when sx_index(text, k) == 45 {
+            neg = 1
+            k = k + 1
+          }
+          hold v = 0
+          hold on = 0
+          while k < line_end && is_digit(sx_index(text, k)) == 1 {
+            v = v * 10 + (sx_index(text, k) - 48)
+            k = k + 1
+            on = 1
+          }
+          when neg == 1 {
+            v = 0 - v
+          }
+          when on == 1 {
+            a = push(a, v)
+          }
+        }
+      }
+      hold id = op_id(name)
+      when id == 0 {
+        hold stop = fail(1, concat(concat("unknown record in the encode log: ", name), " (this program is older than the recorder)"))
+      }
+      hold an = len(a)
+      log = push(log, id)
+      log = push(log, an)
+      k = 0
+      while k < an {
+        log = push(log, a[k])
+        k = k + 1
+      }
+    }
+  }
+  give log
+}
+
+// Drive the encoder from the packed stream. A named record is encoded here;
+// the `b` records that follow it are the bytes native_aot's own e1() wrote for
+// that same call, so they are compared byte for byte against what this program
+// encoded. A `b` record that no named record claimed is a byte the C file
+// emits by hand -- the phase-4 runtime's machine code -- and is copied into the
+// code exactly as it arrived, because there is no encoding to reproduce.
+
+make drive(st: list, log: list) -> list {
+  hold base = meta()
+  hold total = len(log)
+  hold p = 0
+  while p < total {
+    hold id = log[p]
+    hold nargs = log[p + 1]
+    p = p + 2
+    hold a = []
+    hold k = 0
+    while k < nargs {
+      a = push(a, log[p + k])
+      k = k + 1
+    }
+    p = p + nargs
+    when id == 50 {
+      st = apply(st, 50, a)
+    } otherwise {
+      hold before = cur(st)
+      st = apply(st, id, a)
+      hold made = cur(st) - before
+      k = 0
+      while k < made {
+        when p + 2 >= total {
+          hold stop = fail(1, "the byte trace ends in the middle of an instruction")
+        }
+        when log[p] != 50 {
+          hold stop = fail(1, "the byte trace has no byte for an instruction the encoder emitted")
+        }
+        when log[p + 2] != st[base + before + k] {
+          show before + k
+          show log[p + 2]
+          show st[base + before + k]
+          hold stop = fail(1, "the encoder and the byte trace disagree")
+        }
+        p = p + 3
+        k = k + 1
+      }
+    }
+  }
+  give st
+}
+
+make run() -> num {
+  when arg_count() < 4 {
+    hold stop = fail(2, "usage: sxencode <encode.log> <code.bin> <out.bin>")
+  }
+  hold log_path = arg(1)
+  hold code_path = arg(2)
+  hold out_path = arg(3)
+  hold text = read_file(log_path)
+  hold text_len = len(text)
+  when text_len == 0 {
+    hold stop = fail(1, concat("cannot read the encode log ", log_path))
+  }
+  // The expected bytes are an input for the same reason sxlink takes the linked
+  // ELF: they are what this program is compared against. No part of the
+  // encoding is taken from them.
+  hold want = []
+  hold got_want = read_bytes(code_path, want)
+  when got_want < 0 {
+    hold stop = fail(1, concat("cannot read ", code_path))
+  }
+  hold base = meta()
+  hold label_base = lpos()
+  hold st = []
+  hold i = 0
+  while i < base {
+    st = push(st, 0)
+    i = i + 1
+  }
+  i = 0
+  while i < maxlbl() {
+    st[label_base + i] = 0 - 1
+    i = i + 1
+  }
+  hold log = pack(text)
+  st = drive(st, log)
+  hold got = cur(st)
+  when got != len(want) {
+    show got
+    show len(want)
+    hold stop = fail(1, "the Sayanox-encoded code has a different length than code.bin")
+  }
+  hold k = 0
+  hold bad = 0 - 1
+  while k < got {
+    when bad < 0 && st[base + k] != want[k] {
+      bad = k
+    }
+    k = k + 1
+  }
+  when bad >= 0 {
+    show bad
+    show st[base + bad]
+    show want[bad]
+    hold stop = fail(1, "the Sayanox-encoded code differs from code.bin")
+  }
+  hold out = []
+  i = 0
+  while i < got {
+    out = push(out, st[base + i])
+    i = i + 1
+  }
+  hold wrote = write_bytes(out_path, out)
+  when wrote != 1 {
+    hold stop = fail(1, concat("cannot write ", out_path))
+  }
+  // Same report shape as sxlink: sizes first, so a gate can echo them.
+  hold label_base2 = lbln()
+  hold fix_base2 = fxbc()
+  show got
+  show st[label_base2]
+  show st[fix_base2]
+  give 0
+}
+
+hold rc = run()

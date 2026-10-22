@@ -62,11 +62,11 @@ are not part of the verified current bootstrap.
   `make test-sxfmt` verifies brace-aware two-space indentation, whitespace
   trimming, strings/comments, final newline and idempotence. It is deliberately
   whitespace-only, not yet parser-backed.
-- **Local package-tool slice delivered:** `tools/sxpkg.sa` implements
-  `init`, `add`, `list`, `remove`, `seed`, `search` and `info`; the shell
-  entrypoint delegates these commands to it and `make test-sxpkg` covers them.
-  Port the remaining package-directory and sync/install/publish/fetch behavior
-  from `tools/sxpkg.sh`; this needs Sayanox filesystem, process and network APIs.
+- **Package tool done (2026-10-22):** `tools/sxpkg.sa` is the whole tool --
+  `init`, `add`, `list`, `remove`, `seed`, `search`, `info`, `deps`, `verify`,
+  `sum`, `publish`, `install`, `install-local`, `sync`, `fetch`, the online
+  opt-in policy and the exit statuses. `tools/sxpkg.sh` is deleted. It was the
+  `getenv` and `run_command` builtins that unblocked it, not new willingness.
 - The sed-based `tools/sayanox-lsp.sh` was deleted on 2026-10-17; the Sayanox
   server and its Sayanox binder are the maintained path. Port the remaining
   online package behavior only after the language/runtime can read and write

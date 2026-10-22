@@ -1,0 +1,9 @@
+doctor                   ok
+test-doc-claims           ok
+test-language-deps        ok
+gen3 (gen3 == gen4)       ok
+native-test               ok   (includes test-native-sxlink and test-native-sxencode)
+test-native-sxencode      ok   (run on its own: native-sxencode.log)
+all-sayanox               exit 1 from the target (make reports 2)
+                         -- expected: it fails closed while the seed, the C
+                            backend and the build driver remain
