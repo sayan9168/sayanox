@@ -1,9 +1,14 @@
 # Generics: type parameters, monomorphised
 
-Status (2026-10-16): function generics support num/str/list kinds; generic
-structs support **only scalar num/str type arguments**. Nested/struct/list
-struct arguments are a permanent limit of the current bootstrap dialect
-([contract below](#permanent-bootstrap-boundary-generic-structs-2026-10-16)).
+Status (2026-10-22): function generics support num/str/list kinds; a generic
+**struct** type argument is `num`, `str`, `list`, or an instantiation of
+another generic struct — `Box<Box<num>>` and `Box<list>` are implemented on
+all three backends and gated by `make test-generic-structs-nested`. A
+*concrete* struct name, an unknown name, an escaped type parameter and a wrong
+argument count stay refused everywhere. This replaces the 2026-10-16
+"permanent" scalar-only boundary; see
+[`TYPES_ROADMAP.md`](TYPES_ROADMAP.md#nested-and-list-type-arguments-2026-10-22)
+for what the reversal measured.
 
 **Function generics with one or more type parameters are the
 supported and documented form.** `make twice<T>(a: T) -> T` and
@@ -123,14 +128,15 @@ recorded as soon as the nested call is queued.
   Generic **structs** do exist since 2026-10-13 — `struct Box<T> { v }` is a
   template and each instantiation is its own concrete struct (`Box<num>` is
   `Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns`: the
-  function-mangling suffixes), on all three backends, with `num` or `str` as a
-  type argument. `Box<list>` is intentionally still refused even though
-  all three backends support **concrete** list-valued struct fields. Concrete
-  list pointers do not establish generic specialization/layout/tracing safety.
-  The bootstrap dialect permanently restricts generic struct arguments to
-  `num` and `str`; recursive and list arguments are outside its contract. `make test-generic-structs`
-  pins the parity fixture and the five refusals; [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md)
-  records the model and what is still missing.
+  function-mangling suffixes), on all three backends. Since 2026-10-22 a type
+  argument may also be `list` (`Box<list>` is `Box__l`, holding the list
+  pointer) or another instantiation (`Box<Box<num>>` is `Box__Box__n`,
+  `Pair<Box<num>, str>` is `Pair__Box__n_s`). A *concrete* struct name is
+  still not a type argument: a concrete struct has no parameter list to
+  substitute. `make test-generic-structs` pins the scalar parity fixture and
+  the remaining refusals, `make test-generic-structs-nested` pins the nested
+  one; [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md) records the model and what is
+  still missing.
 * Kinds are per *value kind*, not per declared type: `A` and `B` can both be
   `num` without any distinction being made.
 
@@ -257,6 +263,11 @@ structs (concrete struct specializations) landed in a later increment — see
 
 ## Current nested-layout boundary (2026-10-15)
 
+> **Superseded on 2026-10-22.** Nested instantiations and `list` arguments are
+> implemented on all three backends. The paragraph below is kept as the record
+> of what was believed to be required; what it actually took is measured in
+> [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md#nested-and-list-type-arguments-2026-10-22).
+
 Simple generic structs (`Box<num>`, `Box<str>`) are implemented; nested generic
 structs (`Box<Box<num>>`) and struct-valued type arguments remain unsupported.
 This is a deliberate current bootstrap-dialect limit, not a partially accepted
@@ -271,7 +282,17 @@ calls**, which have existing specialization tests. No recursive
 struct-layout/GC worklist was added; see TYPES_ROADMAP.md for what safe support
 requires.
 
-## Permanent bootstrap boundary: generic structs (2026-10-16)
+## Permanent bootstrap boundary: generic structs (2026-10-16) — reversed 2026-10-22
+
+> **Reversed on 2026-10-22.** `Box<Box<num>>`, `Box<Box<str>>`, `Box<list>`
+> and a nested or list argument in either position of `Pair<A, B>` all compile
+> now, on seed-min, gen2 and native, and print byte-identical output
+> (`selfhost/generic_struct_nested.sa`). The section is kept because the
+> properties it demanded — recursive type identity, ordered layout, a cycle
+> policy, per-field tracing — are the checklist the implementation answers in
+> [`TYPES_ROADMAP.md`](TYPES_ROADMAP.md#nested-and-list-type-arguments-2026-10-22).
+> What remains refused everywhere: a concrete struct name as a type argument,
+> an unknown name, an escaped type parameter, and a wrong argument count.
 
 This is a language-subset contract, not a pending parser convenience. Generic
 struct type arguments are **only `num` or `str`**, on seed-min, Gen2 and native.
@@ -288,10 +309,14 @@ with those properties and positive runtime/GC tests, not merely accepting `<`.
 For current bootstrap code use separately named concrete structs/layouts.
 
 `test-generic-structs` retains positive layout/output parity and native GC
-coverage. Both it and `test-type-refusals` now require
-`test-generic-struct-limits`: seven negative cases including whitespace,
-line-comment separation and an invalid second argument, after valid numeric
-and string specializations. Seed/native must return nonzero with a diagnostic;
+coverage. Both it and `test-type-refusals` require `test-generic-struct-limits`
+and `test-generic-structs-nested`. The limits matrix now holds seven bad type
+arguments (a concrete struct name in first and in second position, an unknown
+name, an escaped type parameter, too many, too few, a bare template) and three
+bad literals, each after valid numeric, string **and nested** specializations.
+Whitespace- and line-comment-separated type argument lists moved to the
+positive side: all three backends accept `Box< // note` on one line and
+`Box<num> >` on the next. Seed/native must return nonzero with a diagnostic;
 Gen2 must emit a language `#error`, and a C compile of that output must fail.
 Gen2's diagnostic may still be the general `undefined name: Box`, not a precise
 recursive-layout error. Native's comment-separated case may report invalid

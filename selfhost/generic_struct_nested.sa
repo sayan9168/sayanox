@@ -1,0 +1,48 @@
+// Nested generic structs: a type argument may itself be an instantiation.
+//
+// `Box<num>` has always been `Box__n`. A type argument is now allowed to be
+// another instantiation, so `Box<Box<num>>` is `Box__Box__n` and its single
+// field holds a `Box__n` -- a struct-typed field, which is why this had to
+// wait for gen2 to accept one. The inner instantiation is always built first,
+// so the mangled names come out in an order a C compiler accepts with no
+// second sort. `list` is a type argument too: `Box<list>` is `Box__l` and
+// stores the list POINTER, so growth through the original name is visible
+// through the field.
+//
+// Arguments run together while each is a single letter -- `Pair<num, str>` is
+// still `Pair__ns` -- and are separated by `_` as soon as one is nested, so
+// `Pair<Box<num>, str>` is `Pair__Box__n_s`.
+//
+// seed-min, gen2 and native all compile this file and print the same eleven
+// lines. Still refused everywhere: a concrete struct name as a type argument
+// (`Box<Pt>`), a bare template name, the wrong argument count, and a literal
+// that contradicts its own type argument -- see the refusal table in
+// docs/TYPES_ROADMAP.md.
+struct Box<T> {
+  v
+}
+struct Pair<A, B> {
+  a
+  b
+}
+hold one = Box<num> { 7 }
+hold two = Box<Box<num>> { one }
+show two.v.v
+hold lit = Box<Box<num>> { Box<num> { 41 } }
+show lit.v.v
+hold three = Box<Box<Box<num>>> { two }
+show three.v.v.v
+hold xs = [4, 5, 6]
+hold lb = Box<list> { xs }
+show len(lb.v)
+push(xs, 7)
+show len(lb.v)
+show lb.v[3]
+hold txt = Box<str> { "inner" }
+hold mix = Pair<Box<num>, str> { one, "outer" }
+show mix.a.v
+show mix.b
+hold plain = Pair<num, str> { 9, "nine" }
+show plain.a
+show plain.b
+show txt.v

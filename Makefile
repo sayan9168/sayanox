@@ -1247,19 +1247,21 @@ test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
 # field kinds, their own typedef and (on native) their own GC block descriptor,
 # and they can never share a slot. That is items 1 and 2 of the five-point list
 # in docs/TYPES_ROADMAP.md ("A safe implementation needs"); the same document
-# records what is still missing -- nested instantiations such as Box<Box<num>>,
-# a struct or a list as a type argument, and gen2's wording for a bad type
-# argument list.
+# records what is still missing -- a CONCRETE struct name as a type argument
+# and gen2's wording for a bad type argument list. (Nested instantiations such
+# as Box<Box<num>> and a list type argument were on that list until
+# 2026-10-22; they are gated by test-generic-structs-nested now.)
 #
 # selfhost/generic_struct_box.sa is the shared parity fixture: three
 # instantiations in one program, six printed lines, byte-identical on seed-min,
 # gen2 and native. The typedefs are pinned as well, because the layout IS the
 # claim -- `double v` for Box__n and `char *v` for Box__s in one program.
 #
-# The second half pins the refusals: a wrong type argument count, a struct name
-# as a type argument, a list as a type argument, a bare template name, and one
-# instantiation used with two different kinds. All three backends refuse all
-# five. seed-min and native name the problem, so their wording is pinned; gen2
+# The second half pins the refusals: a wrong type argument count, a CONCRETE
+# struct name as a type argument, a bare template name, and one instantiation
+# used with two different kinds -- plus, where the list refusal used to be, a
+# support block for Box<list>. All three backends refuse all four.
+# seed-min and native name the problem, so their wording is pinned; gen2
 # refuses through its general "undefined name" and stray-token errors, so for
 # gen2 only the failure is pinned (plus its wording for the two-kinds case,
 # which it does name). Pinning gen2's weak wording would freeze it, so the gate
@@ -1312,30 +1314,34 @@ test-generic-structs: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	printf 'struct NumBox {\n  v\n}\nstruct Box<T> {\n  v\n}\nhold n = NumBox { 3 }\nhold b = Box<NumBox> { n }\nshow b.v\n' > $(TESTS)/gs_argstruct.sa
 	if ./$(SEED_MIN_BIN) $(TESTS)/gs_argstruct.sa > $(TESTS)/gs_argstruct_ms.c 2>$(TESTS)/gs_argstruct_ms.err; then \
 	  echo "[FAIL] seed-min accepted a struct name as a type argument"; exit 1; fi
-	grep -q -F "a type argument must be num, str or list (got 'NumBox')" $(TESTS)/gs_argstruct_ms.err
+	grep -q -F "a type argument must be num, str, list or an instantiation of a generic struct (got 'NumBox')" $(TESTS)/gs_argstruct_ms.err
 	./$(GEN2) $(TESTS)/gs_argstruct.sa $(TESTS)/gs_argstruct_g2.c >/dev/null 2>&1 || true
 	grep -q -F '#error sayanox-min:' $(TESTS)/gs_argstruct_g2.c
 	if [ -x $(NATIVE_BIN) ]; then \
 	  if ./$(NATIVE_BIN) $(TESTS)/gs_argstruct.sa $(TESTS)/gs_argstruct_nat 2>$(TESTS)/gs_argstruct_nat.err; then \
 	    echo "[FAIL] native accepted a struct name as a type argument"; exit 1; fi; \
-	  grep -q -F "a type argument must be num, str or list (got 'NumBox')" $(TESTS)/gs_argstruct_nat.err; \
+	  grep -q -F "a type argument must be num, str, list or an instantiation of a generic struct (got 'NumBox')" $(TESTS)/gs_argstruct_nat.err; \
 	fi
-	echo "[OK] generic structs: a struct name as a type argument is refused by all three backends"
-	# ---- refusal 3: a list as a type argument ----
-	# Concrete list fields work on all three backends, but generic Box<list>
-	# stays refused pending generic specialization/layout and GC support.
-	printf 'struct Box<T> {\n  v\n}\nhold xs = [1, 2]\nhold b = Box<list> { xs }\nshow len(b.v)\n' > $(TESTS)/gs_arglist.sa
-	if ./$(SEED_MIN_BIN) $(TESTS)/gs_arglist.sa > $(TESTS)/gs_arglist_ms.c 2>$(TESTS)/gs_arglist_ms.err; then \
-	  echo "[FAIL] seed-min accepted a list as a type argument"; exit 1; fi
-	grep -q -F 'a struct field cannot hold a list' $(TESTS)/gs_arglist_ms.err
-	./$(GEN2) $(TESTS)/gs_arglist.sa $(TESTS)/gs_arglist_g2.c >/dev/null 2>&1 || true
-	grep -q -F '#error sayanox-min:' $(TESTS)/gs_arglist_g2.c
+	echo "[OK] generic structs: a CONCRETE struct name as a type argument is refused by all three backends (an instantiation of a generic one is not: test-generic-structs-nested)"
+	# ---- support 2: a list type argument stores the list POINTER ----
+	# This was refusal 3 until 2026-10-22. Box<list> is Box__l; the field holds
+	# the pointer, so growth through the original name is visible through it.
+	printf 'struct Box<T> {\n  v\n}\nhold xs = [1, 2]\nhold b = Box<list> { xs }\nshow len(b.v)\npush(xs, 3)\nshow len(b.v)\n' > $(TESTS)/gs_arglist.sa
+	./$(SEED_MIN_BIN) $(TESTS)/gs_arglist.sa > $(TESTS)/gs_arglist_ms.c
+	grep -q -F 'typedef struct { sx_list *v; } Box__l;' $(TESTS)/gs_arglist_ms.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gs_arglist_ms $(TESTS)/gs_arglist_ms.c
+	./$(GEN2) $(TESTS)/gs_arglist.sa $(TESTS)/gs_arglist_g2.c >/dev/null
+	grep -q -F 'typedef struct { sx_list *v; } Box__l;' $(TESTS)/gs_arglist_g2.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gs_arglist_g2 $(TESTS)/gs_arglist_g2.c
+	$(call assert-out,./$(TESTS)/gs_arglist_ms,2\n3)
+	$(call assert-out,./$(TESTS)/gs_arglist_g2,2\n3)
 	if [ -x $(NATIVE_BIN) ]; then \
-	  if ./$(NATIVE_BIN) $(TESTS)/gs_arglist.sa $(TESTS)/gs_arglist_nat 2>$(TESTS)/gs_arglist_nat.err; then \
-	    echo "[FAIL] native accepted a list as a type argument"; exit 1; fi; \
-	  grep -q -F 'cannot hold a list' $(TESTS)/gs_arglist_nat.err; \
+	  ./$(NATIVE_BIN) $(TESTS)/gs_arglist.sa $(TESTS)/gs_arglist_nat && \
+	  ./$(TESTS)/gs_arglist_nat > $(TESTS)/gs_arglist_nat.out && \
+	  ./$(TESTS)/gs_arglist_ms > $(TESTS)/gs_arglist_ms.out && \
+	  cmp $(TESTS)/gs_arglist_ms.out $(TESTS)/gs_arglist_nat.out; \
 	fi
-	echo "[OK] generic structs: a list as a type argument is refused by all three backends"
+	echo "[OK] generic structs: a list type argument gives Box__l an sx_list * field on all three backends, and the alias survives growth"
 	# ---- refusal 4: a bare template name, with no type arguments ----
 	printf 'struct Box<T> {\n  v\n}\nhold b = Box { 7 }\nshow b.v\n' > $(TESTS)/gs_bare.sa
 	if ./$(SEED_MIN_BIN) $(TESTS)/gs_bare.sa > $(TESTS)/gs_bare_ms.c 2>$(TESTS)/gs_bare_ms.err; then \
@@ -3520,19 +3526,22 @@ test-gen2-index-mod: $(GEN2) $(SEED_MIN_BIN)
 # declared concrete struct identity.
 test-type-refusals: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	@mkdir -p $(TESTS)
-	@printf 'struct Box<T> {\n  v\n}\nhold b = Box<Box<num>> { 7 }\nshow 1\n' > $(TESTS)/ttr_nested.sa
+	@printf 'struct Pt {\n  x\n}\nstruct Box<T> {\n  v\n}\nhold b = Box<Pt> { 7 }\nshow 1\n' > $(TESTS)/ttr_nested.sa
 	@printf 'struct Pt {\n  x\n  y\n}\nstruct Wrap {\n  p: Pt\n  n\n}\nshow 1\n' > $(TESTS)/ttr_fieldann.sa
 	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = Pt { 1, 2 }\nhold q: Pt = p\nshow q.x\nshow q.y\n' > $(TESTS)/ttr_holdann.sa
 	@printf 'struct Pt {\n  x\n  y\n}\nhold p: Pt = 5\nshow 1\n' > $(TESTS)/ttr_holdann_bad.sa
 	@printf 'struct Pt {\n  x\n}\nstruct Qt {\n  x\n}\nhold p: Pt = Qt { 5 }\n' > $(TESTS)/ttr_holdann_wrongstruct.sa
-	@# nested generic instantiation: still refused on seed-min, gen2 and native
-	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_nested.sa > $(TESTS)/ttr_nested_seed.c 2> $(TESTS)/ttr_nested_seed.msg; then echo "[FAIL] seed-min accepted Box<Box<num>>"; exit 1; fi
-	@grep -q "not implemented" $(TESTS)/ttr_nested_seed.msg || { echo "[FAIL] seed-min nested-generic refusal is unclear"; cat $(TESTS)/ttr_nested_seed.msg; exit 1; }
+	@# A type argument that is a CONCRETE struct name stays refused on all
+	@# three. `Box<Box<num>>` is no longer in this table: a type argument may be
+	@# an instantiation of a generic struct since 2026-10-22, which
+	@# test-generic-structs-nested gates positively.
+	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_nested.sa > $(TESTS)/ttr_nested_seed.c 2> $(TESTS)/ttr_nested_seed.msg; then echo "[FAIL] seed-min accepted Box<Pt>"; exit 1; fi
+	@grep -q "a type argument must be" $(TESTS)/ttr_nested_seed.msg || { echo "[FAIL] seed-min type-argument refusal is unclear"; cat $(TESTS)/ttr_nested_seed.msg; exit 1; }
 	@./$(GEN2) $(TESTS)/ttr_nested.sa $(TESTS)/ttr_nested_gen2.c > $(TESTS)/ttr_nested_gen2.msg 2>&1; \
-	  grep -q '#error sayanox-min:' $(TESTS)/ttr_nested_gen2.c || { echo "[FAIL] gen2 accepted Box<Box<num>>"; exit 1; }
-	@if ./$(NATIVE_BIN) $(TESTS)/ttr_nested.sa $(TESTS)/ttr_nested_native > $(TESTS)/ttr_nested_native.msg 2>&1; then echo "[FAIL] native accepted Box<Box<num>>"; exit 1; fi
-	@grep -q "not implemented" $(TESTS)/ttr_nested_native.msg || { echo "[FAIL] native nested-generic refusal is unclear"; cat $(TESTS)/ttr_nested_native.msg; exit 1; }
-	@echo '[OK] nested generic structs refused on seed-min, gen2 and native'
+	  grep -q '#error sayanox-min:' $(TESTS)/ttr_nested_gen2.c || { echo "[FAIL] gen2 accepted Box<Pt>"; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/ttr_nested.sa $(TESTS)/ttr_nested_native > $(TESTS)/ttr_nested_native.msg 2>&1; then echo "[FAIL] native accepted Box<Pt>"; exit 1; fi
+	@grep -q "a type argument must be" $(TESTS)/ttr_nested_native.msg || { echo "[FAIL] native type-argument refusal is unclear"; cat $(TESTS)/ttr_nested_native.msg; exit 1; }
+	@echo '[OK] a concrete struct name as a type argument refused on seed-min, gen2 and native (a generic instantiation is accepted: test-generic-structs-nested)'
 	@# struct FIELD annotation: refused on all three (was: extra field)
 	@if ./$(SEED_MIN_BIN) $(TESTS)/ttr_fieldann.sa > $(TESTS)/ttr_fieldann_seed.c 2> $(TESTS)/ttr_fieldann_seed.msg; then echo "[FAIL] seed-min accepted a struct field annotation"; exit 1; fi
 	@grep -q "field annotations are not supported" $(TESTS)/ttr_fieldann_seed.msg || { echo "[FAIL] seed-min field-annotation refusal is unclear"; cat $(TESTS)/ttr_fieldann_seed.msg; exit 1; }
@@ -5211,6 +5220,54 @@ test-generic-struct-limits: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
 
 test-generic-structs test-type-refusals: test-generic-struct-limits
 
+# ---------------------------------------------------------------------------
+# test-generic-structs-nested: a type argument may be `list` or another
+# instantiation (2026-10-22). `Box<Box<num>>` is `Box__Box__n` and its field
+# holds a `Box__n`, so this gate also depends on gen2 accepting a struct-typed
+# struct field (test-struct-field-struct). The inner instantiation is always
+# created first, which is what puts the mangled typedefs in an order C
+# accepts; the gate pins all seven of them in both emitted C files, in that
+# order, on top of three-way byte-identical output.
+#
+# Mangling: single letters run together while every argument is primitive
+# (`Pair<num, str>` stays `Pair__ns`), '_' separates them as soon as one is
+# nested (`Pair<Box<num>, str>` is `Pair__Box__n_s`).
+# ---------------------------------------------------------------------------
+.PHONY: test-generic-structs-nested
+test-generic-structs-nested: $(SEED_MIN_BIN) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/generic_struct_nested.sa > $(TESTS)/gsn_ms.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gsn_ms $(TESTS)/gsn_ms.c
+	./$(GEN2) selfhost/generic_struct_nested.sa $(TESTS)/gsn_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/gsn_g2 $(TESTS)/gsn_g2.c
+	$(call assert-out,./$(TESTS)/gsn_ms,7\n41\n7\n3\n4\n7\n7\nouter\n9\nnine\ninner)
+	$(call assert-out,./$(TESTS)/gsn_g2,7\n41\n7\n3\n4\n7\n7\nouter\n9\nnine\ninner)
+	@# the mangled layouts, and the order a C compiler needs them in
+	@for f in $(TESTS)/gsn_ms.c $(TESTS)/gsn_g2.c; do \
+	  grep -q -F 'typedef struct { double v; } Box__n;' $$f || { echo "[FAIL] $$f has no Box__n"; exit 1; }; \
+	  grep -q -F 'typedef struct { Box__n v; } Box__Box__n;' $$f || { echo "[FAIL] $$f has no Box__Box__n"; exit 1; }; \
+	  grep -q -F 'typedef struct { Box__Box__n v; } Box__Box__Box__n;' $$f || { echo "[FAIL] $$f has no Box__Box__Box__n"; exit 1; }; \
+	  grep -q -F 'typedef struct { sx_list *v; } Box__l;' $$f || { echo "[FAIL] $$f has no Box__l (list type argument)"; exit 1; }; \
+	  grep -q -F 'typedef struct { char *v; } Box__s;' $$f || { echo "[FAIL] $$f has no Box__s"; exit 1; }; \
+	  grep -q -F 'typedef struct { Box__n a; char *b; } Pair__Box__n_s;' $$f || { echo "[FAIL] $$f has no Pair__Box__n_s"; exit 1; }; \
+	  grep -q -F 'typedef struct { double a; char *b; } Pair__ns;' $$f || { echo "[FAIL] $$f still has to spell Pair<num, str> as Pair__ns"; exit 1; }; \
+	  inner=`grep -n -F '} Box__n;' $$f | cut -d: -f1`; \
+	  outer=`grep -n -F '} Box__Box__n;' $$f | cut -d: -f1`; \
+	  [ $$inner -lt $$outer ] || { echo "[FAIL] $$f declares Box__Box__n before Box__n"; exit 1; }; \
+	done
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/generic_struct_nested.sa $(TESTS)/gsn_nat >/dev/null \
+	    || { echo "[FAIL] native refused a nested generic instantiation"; exit 1; }; \
+	  ./$(TESTS)/gsn_nat > $(TESTS)/gsn_nat.out; \
+	  ./$(TESTS)/gsn_ms > $(TESTS)/gsn_ms.out; \
+	  cmp $(TESTS)/gsn_ms.out $(TESTS)/gsn_nat.out \
+	    || { echo "[FAIL] native output differs from seed-min"; exit 1; }; \
+	  echo "[OK] native: the same nested instantiations print the same bytes as seed-min"; \
+	else echo "[SKIP] native_aot not built"; fi
+	@echo '[OK] nested generic structs: Box<Box<num>>, Box<Box<Box<num>>>, Box<list> and Pair<Box<num>, str> are concrete types on seed-min, gen2 and native, with the inner instantiation declared first'
+
+test-generic-structs test-type-refusals: test-generic-structs-nested
+
 .PHONY: test-stdlib-list-search
 test-stdlib-list-search: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
 	@mkdir -p $(TESTS)
@@ -5529,12 +5586,23 @@ test-struct-field-struct: $(SEED_MIN_BIN) $(GEN2)
 	./$(SEED_MIN_BIN) $(TESTS)/sfs.sa > $(TESTS)/sfs_seed.c
 	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sfs_seed $(TESTS)/sfs_seed.c
 	$(call assert-out,./$(TESTS)/sfs_seed,7)
-	@# gen2 refuses: the emitted C carries the diagnostic and will not compile
-	@./$(GEN2) $(TESTS)/sfs.sa $(TESTS)/sfs_gen2.c > $(TESTS)/sfs_gen2.out 2>&1 || true
-	@grep -q "is not a struct; the chain must end there" $(TESTS)/sfs_gen2.c \
-	  || { echo "[FAIL] gen2 no longer refuses a struct-typed struct field: update this gate, docs/STATUS.md row 5 and docs/TYPES_ROADMAP.md -- nested generics are unblocked on gen2"; exit 1; }
-	@if $(CC) -O2 -o $(TESTS)/sfs_gen2 $(TESTS)/sfs_gen2.c 2>/dev/null; then \
-	  echo "[FAIL] the refused gen2 output compiled anyway"; exit 1; fi
+	@# gen2 used to refuse this ("field 'b' of struct 'Outer' is not a struct"),
+	@# which is what blocked nested generics there: Box__Box__n needs a field
+	@# holding a Box__n. Since 2026-10-22 a struct-typed field may also be
+	@# filled from a NAME, not only from a nested literal, and the emitted C is
+	@# the ordinary struct copy `((Outer){i})`.
+	./$(GEN2) $(TESTS)/sfs.sa $(TESTS)/sfs_gen2.c > $(TESTS)/sfs_gen2.out 2>&1
+	@grep -q '#error' $(TESTS)/sfs_gen2.c \
+	  && { echo "[FAIL] gen2 refuses a struct-typed struct field again:"; grep '#error' $(TESTS)/sfs_gen2.c; exit 1; } || true
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sfs_gen2 $(TESTS)/sfs_gen2.c
+	$(call assert-out,./$(TESTS)/sfs_gen2,7)
+	@grep -q -F 'typedef struct { Inner b; } Outer;' $(TESTS)/sfs_gen2.c \
+	  || { echo "[FAIL] gen2 no longer lays Outer out with an Inner field"; exit 1; }
+	@# the nested LITERAL form has always worked on gen2 and must keep working
+	@printf 'struct Inner {\n  v\n}\nstruct Outer {\n  b\n}\nhold o = Outer { Inner { 8 } }\nshow o.b.v\n' > $(TESTS)/sfs_lit.sa
+	./$(GEN2) $(TESTS)/sfs_lit.sa $(TESTS)/sfs_lit_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sfs_lit_gen2 $(TESTS)/sfs_lit_gen2.c
+	$(call assert-out,./$(TESTS)/sfs_lit_gen2,8)
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  ./$(NATIVE_BIN) $(TESTS)/sfs.sa $(TESTS)/sfs_nat >/dev/null \
 	    || { echo "[FAIL] native refused a struct-typed struct field"; exit 1; }; \
@@ -5542,6 +5610,6 @@ test-struct-field-struct: $(SEED_MIN_BIN) $(GEN2)
 	  [ "$$got" = "7" ] || { echo "[FAIL] native printed $$got, want 7"; exit 1; }; \
 	  echo "[OK] native: a struct field holding a struct reads through the chain"; \
 	else echo "[SKIP] native_aot not built"; fi
-	@echo '[OK] struct-typed struct fields: seed-min and native read o.b.v; gen2 refuses it at compile time (the measured blocker under nested generics)'
+	@echo '[OK] struct-typed struct fields: seed-min, gen2 and native all read o.b.v, from a name and from a nested literal (this is what unblocked nested generics on gen2)'
 
 test-type-refusals: test-struct-field-struct

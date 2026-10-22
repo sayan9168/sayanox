@@ -106,7 +106,183 @@ make gxkind(word: str) -> str {
   when string_eq(word, "str") {
     give "s"
   }
+  when string_eq(word, "list") {
+    give "l"
+  }
   give ""
+}
+// Whitespace and `// ...` comments inside a type-argument list: seed-min's
+// skip() has always allowed a list to be written across lines with a note
+// between the arguments, so the pre-pass has to allow it too.
+make gxskip(text: str, at: num) -> num {
+  hold i = at
+  hold n = len(text)
+  hold run = 1
+  while run == 1 {
+    while i < n && (sx_index(text, i) == 32 || sx_index(text, i) == 9 || sx_index(text, i) == 10 || sx_index(text, i) == 13) {
+      i = i + 1
+    }
+    when i + 1 < n && sx_index(text, i) == 47 && sx_index(text, i + 1) == 47 {
+      while i < n && sx_index(text, i) != 10 {
+        i = i + 1
+      }
+    } otherwise {
+      run = 0
+    }
+  }
+  give i
+}
+// Add `Name:f1,f2;` records to the running instantiation list, skipping the
+// names already there. Returns NAMES chr(1) DEFS.
+make gxmerge(names: str, defs: str, add: str) -> str {
+  hold outn = names
+  hold outd = defs
+  hold cur = ""
+  hold i = 0
+  while i < len(add) {
+    hold c = sx_index(add, i)
+    when c == 59 {
+      hold cn = ""
+      hold k = 0
+      while k < len(cur) && sx_index(cur, k) != 58 {
+        cn = concat(cn, chr(sx_index(cur, k)))
+        k = k + 1
+      }
+      when len(cn) > 0 {
+        when tbl_has(outn, cn) == 0 {
+          outn = concat(outn, concat(cn, "|"))
+          outd = concat(outd, concat(cur, ";"))
+        }
+      }
+      cur = ""
+    } otherwise {
+      cur = concat(cur, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(outn, concat(chr(1), outd))
+}
+// One type-argument list: `<num>`, `<num, str>`, `<list>`, or a nested
+// instantiation such as `<Box<num>>`. `at` is the index of the opening '<'.
+// The record is ENDPOS chr(1) CODE chr(1) COUNT chr(1) DEFS.
+//   CODE  is the mangled suffix: one letter for a primitive argument
+//         (num->n, str->s, list->l) and the inner mangled name for a nested
+//         instantiation. Arguments are concatenated while every one of them
+//         is a single letter -- so `Pair<num, str>` stays `Pair__ns` -- and
+//         separated by '_' as soon as one is nested, which is what makes
+//         `Pair<Box<num>, str>` (`Pair__Box__n_s`) readable and unambiguous.
+//   COUNT is the argument count as one digit, for the arity check.
+//   DEFS  carries `Name:f1,f2;` for every nested instantiation, innermost
+//         first, so the C typedef order a struct-typed field needs falls out
+//         of the walk instead of a second sort.
+// CODE is empty when this is not a type-argument list this compiler accepts;
+// the caller then leaves the text alone and the ordinary diagnostics run.
+make gxargs(text: str, at: num, gsdefs: str, level: num) -> str {
+  hold n = len(text)
+  hold p = at + 1
+  hold flat = ""
+  hold joined = ""
+  hold defs = ""
+  hold nested = 0
+  hold count = 0
+  hold ok = 1
+  hold run = 1
+  when level > 8 {
+    ok = 0
+    run = 0
+  }
+  while run == 1 {
+    when p >= n {
+      ok = 0
+      run = 0
+    } otherwise {
+      hold c = sx_index(text, p)
+      when c == 32 || c == 9 || c == 10 || c == 13 || (c == 47 && p + 1 < n && sx_index(text, p + 1) == 47) {
+        p = gxskip(text, p)
+      } otherwise {
+        when c == 62 {
+          p = p + 1
+          run = 0
+        } otherwise {
+          when c == 44 {
+            p = p + 1
+          } otherwise {
+            hold as = p
+            while p < n && gxisid(sx_index(text, p)) == 1 {
+              p = p + 1
+            }
+            when p == as {
+              ok = 0
+              run = 0
+            } otherwise {
+              hold word = sxeslice(text, as, p)
+              hold q = gxskip(text, p)
+              hold code = ""
+              hold isnested = 0
+              when q < n && sx_index(text, q) == 60 {
+                isnested = 1
+                hold rec = sxelookup(gsdefs, word, ":")
+                when len(rec) == 0 {
+                  ok = 0
+                  run = 0
+                } otherwise {
+                  hold sub = gxargs(text, q, gsdefs, level + 1)
+                  hold subcode = sxesegment(sub, 1)
+                  hold subcnt = sxesegment(sub, 2)
+                  hold subnp = 0
+                  when len(subcnt) > 0 {
+                    subnp = sx_index(subcnt, 0) - 48
+                  }
+                  when len(subcode) == 0 || subnp != sx_index(rec, 0) - 48 {
+                    ok = 0
+                    run = 0
+                  } otherwise {
+                    code = concat(word, concat("__", subcode))
+                    defs = concat(defs, sxesegment(sub, 3))
+                    defs = concat(defs, concat(code, concat(":", concat(sxeslice(rec, 2, len(rec)), ";"))))
+                    p = sxepos(sub)
+                  }
+                }
+              } otherwise {
+                code = gxkind(word)
+                when len(code) == 0 {
+                  ok = 0
+                  run = 0
+                }
+              }
+              when ok == 1 {
+                when isnested == 1 {
+                  nested = 1
+                }
+                when count > 0 {
+                  joined = concat(joined, "_")
+                }
+                flat = concat(flat, code)
+                joined = concat(joined, code)
+                count = count + 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  hold outcode = flat
+  when nested == 1 {
+    outcode = joined
+  }
+  when ok == 0 || count == 0 || count > 8 {
+    outcode = ""
+    count = 0
+    defs = ""
+  }
+  hold out = sxedigits(p)
+  out = concat(out, chr(1))
+  out = concat(out, outcode)
+  out = concat(out, chr(1))
+  out = concat(out, chr(48 + count))
+  out = concat(out, chr(1))
+  give concat(out, defs)
 }
 // every template in the source, as |Name:np:f1,f2| records
 make gxscan(text: str) -> str {
@@ -250,44 +426,28 @@ make gxpass(text: str, gsdefs: str) -> str {
             hold nm = sxeslice(text, i, e)
             hold rec = sxelookup(gsdefs, nm, ":")
             when len(rec) > 0 {
-              hold args = ""
-              hold ok = 1
-              hold p = j + 1
-              while p < n && ok == 1 && sx_index(text, p) != 62 {
-                while p < n && (sx_index(text, p) == 32 || sx_index(text, p) == 9 || sx_index(text, p) == 10 || sx_index(text, p) == 13) {
-                  p = p + 1
-                }
-                when p < n && sx_index(text, p) == 44 {
-                  p = p + 1
-                } otherwise {
-                  hold as = p
-                  while p < n && gxisid(sx_index(text, p)) == 1 {
-                    p = p + 1
-                  }
-                  hold letter = gxkind(sxeslice(text, as, p))
-                  when len(letter) == 0 {
-                    ok = 0
-                  } otherwise {
-                    args = concat(args, letter)
-                  }
-                }
+              hold ar = gxargs(text, j, gsdefs, 0)
+              hold args = sxesegment(ar, 1)
+              hold acs = sxesegment(ar, 2)
+              hold acount = 0
+              when len(acs) > 0 {
+                acount = sx_index(acs, 0) - 48
               }
-              when ok == 1 && p < n && len(args) == sx_index(rec, 0) - 48 {
-                hold after = p + 1
-                while after < n && (sx_index(text, after) == 32 || sx_index(text, after) == 9 || sx_index(text, after) == 10 || sx_index(text, after) == 13) {
-                  after = after + 1
-                }
+              hold p = sxepos(ar)
+              when len(args) > 0 && acount == sx_index(rec, 0) - 48 {
+                hold after = gxskip(text, p)
                 when after < n && sx_index(text, after) == 123 {
                   hold mn = concat(nm, concat("__", args))
                   out = concat(out, sxeslice(text, cp, i))
                   out = concat(out, mn)
-                  cp = p + 1
-                  i = p + 1
+                  cp = p
+                  i = p
                   hit = 1
-                  when tbl_has(names, mn) == 0 {
-                    names = concat(names, concat(mn, "|"))
-                    defs = concat(defs, concat(mn, concat(":", concat(sxeslice(rec, 2, len(rec)), ";"))))
-                  }
+                  hold add = sxesegment(ar, 3)
+                  add = concat(add, concat(mn, concat(":", concat(sxeslice(rec, 2, len(rec)), ";"))))
+                  hold merged = gxmerge(names, defs, add)
+                  names = sxesegment(merged, 0)
+                  defs = sxesegment(merged, 1)
                 }
               }
             }
@@ -7469,6 +7629,7 @@ while running == 1 {
                   // ---- value: number, string literal or a name ----
                   hold el = ""
                   hold ety = 0
+                  hold nmsvty = ""
                   hold isnest = 0
                   hold sk = 1
                   while sk == 1 {
@@ -7640,10 +7801,57 @@ while running == 1 {
                         hold ndi = ndi + 1
                       }
                     }
+                    // a name tracked as a struct makes this field a struct
+                    // field of that struct's type: `hold o = Outer { i }` is
+                    // the same field kind a nested literal would record, and
+                    // the C it emits is the ordinary struct copy `(Outer){i}`
+                    hold nsvkey = concat("|", el)
+                    hold nsvkey = concat(nsvkey, "=")
+                    hold nsvkl = len(nsvkey)
+                    hold nsvl = len(svars)
+                    hold nsvi = 0
+                    while nsvi + nsvkl <= nsvl {
+                      hold nsvok = 1
+                      hold nsvj = 0
+                      while nsvj < nsvkl {
+                        hold nsvaa = sx_index(svars, nsvi + nsvj)
+                        hold nsvbb = sx_index(nsvkey, nsvj)
+                        when nsvaa == nsvbb {
+                          hold nsvj = nsvj + 1
+                        } otherwise {
+                          hold nsvok = 0
+                          hold nsvj = nsvkl
+                        }
+                      }
+                      when nsvok == 1 {
+                        hold nsvq = nsvi + nsvkl
+                        hold nsvrun = 1
+                        while nsvrun == 1 {
+                          when nsvq >= nsvl {
+                            hold nsvrun = 0
+                          } otherwise {
+                            hold nsvc = sx_index(svars, nsvq)
+                            when nsvc == 124 {
+                              hold nsvrun = 0
+                            } otherwise {
+                              hold nmsvty = concat(nmsvty, chr(nsvc))
+                              hold nsvq = nsvq + 1
+                            }
+                          }
+                        }
+                        hold nsvi = nsvl
+                      } otherwise {
+                        hold nsvi = nsvi + 1
+                      }
+                    }
                   }
                   // ---- nested struct literal value: Name { ... } ----
                   // When the value is a known struct name followed by '{',
                   hold etyname = ""
+                  when len(nmsvty) > 0 {
+                    hold ety = 2
+                    hold etyname = nmsvty
+                  }
                   hold pushed = 0
                   hold sk = 1
                   while sk == 1 {

@@ -804,55 +804,91 @@ static const char*kname(int k){
  * instantiation by the ordinary kind fixpoint, and a conflict inside one
  * instantiation is the existing "used with two different types" error.
  *
- * The portable generic-struct subset currently accepts num or str. A list type
- * argument is deliberately refused until generic list-field specialization and
- * layout/GC rules exist; a struct name is likewise refused by name. Struct blocks are allocated
- * BK_STRUCT ("every word may be a pointer"), so a string field of any
- * instantiation is traced by the collector with no new descriptor work.
+ * Since 2026-10-22 a type argument may also be `list` (Box<list> is Box__l and
+ * holds the sx_list pointer) or another instantiation: gs_instantiate below
+ * recurses, builds the inner specialization first and records its identity in
+ * gss[][]. A CONCRETE struct name is still refused by name. Struct blocks are
+ * allocated BK_STRUCT ("every word may be a pointer"), so a string field, a
+ * list field or a nested struct field of any instantiation is traced by the
+ * collector with no new descriptor work.
  * ------------------------------------------------------------------------ */
 typedef struct { char name[64]; char p[8][64]; int np; char f[MAXFD][64]; int nf; } GSDef;
 static GSDef GS[MAXS]; static int nGS;
 /* the type-argument kinds of each instantiated sid (gskn[sid]==0: not one) */
 static int gsk[MAXS][8], gskn[MAXS];
+/* for a K_STRUCT type argument, which instantiation it names (else -1) */
+static int gss[MAXS][8];
 static int gs_find(const char*n){ for(int i=0;i<nGS;i++) if(!strcmp(GS[i].name,n)) return i; return -1; }
 /* *p points at the '<' of `Box<num>`. Reads the type arguments, registers the
  * instantiation if this is its first use, and leaves *p just past the list
  * (whitespace skipped) so the caller's `{` test still works. Returns the sid,
  * or -1 when the name is not a template. Idempotent: the kind fixpoint and the
  * emit phase both call it and get the same sid. */
+/* whitespace AND line comments: a type argument list is allowed to be written
+   across lines with a `// ...` note between the arguments, which seed-min's
+   skip() has always allowed */
+static void gsw(const char**p){
+  for(;;){
+    while(**p&&isspace((unsigned char)**p)) (*p)++;
+    if((*p)[0]=='/'&&(*p)[1]=='/'){ while(**p&&**p!='\n') (*p)++; continue; }
+    return;
+  }
+}
 static int gs_instantiate(const char**p,const char*n){
   int gi=gs_find(n);
   if(gi<0) return -1;
   const char*q=*p;
-  sw(&q);
+  gsw(&q);
   if(*q!='<') return -1;
   q++;
-  int ks[8], nk=0;
+  int ks[8], kss[8], nk=0, nested=0;
+  char code[8][72];
   for(;;){
-    sw(&q);
+    gsw(&q);
     if(!*q) errx("a type argument list needs a closing >");
     if(*q=='>'){ q++; break; }
     if(*q==','){ q++; continue; }
     char t[64];
-    if(!pid(&q,t,64)) errx("a type argument must be num, str or list");
+    if(!pid(&q,t,64)) errx("a type argument must be num, str, list or an instantiation of a generic struct");
+    if(nk>=8) errx("too many type arguments (native limit is 8)");
+    /* A nested instantiation -- `Box<Box<num>>`. Build the INNER one first so
+       its sid is lower than the outer one: that is the order the nested-field
+       check (XS < sid) and the emitted block layout already require. */
+    { const char*r=q; gsw(&r);
+      if(*r=='<'&&gs_find(t)>=0){
+        int inner=gs_instantiate(&r,t);
+        if(inner<0) errx("a type argument must be num, str, list or an instantiation of a generic struct (got '%s')",t);
+        q=r;
+        ks[nk]=K_STRUCT; kss[nk]=inner; nested=1;
+        snprintf(code[nk],sizeof code[nk],"%s",S[inner].name);
+        nk++;
+        continue;
+      }
+    }
     int k=-1;
     if(!strcmp(t,"num")) k=K_NUM;
     else if(!strcmp(t,"str")) k=K_STR;
     else if(!strcmp(t,"list")) k=K_LIST;
-    /* Concrete list fields exist; generic specialization/layout is separate. */
-    if(k==K_LIST) errx("a struct field cannot hold a list in a generic instantiation until generic list-field specialization is implemented");
-    if(k<0) errx("a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented",t);
-    if(nk>=8) errx("too many type arguments (native limit is 8)");
-    ks[nk++]=k;
+    if(k<0) errx("a type argument must be num, str, list or an instantiation of a generic struct (got '%s')",t);
+    ks[nk]=k; kss[nk]=-1;
+    code[nk][0]=(char)(k==K_STR?'s':(k==K_LIST?'l':'n')); code[nk][1]=0;
+    nk++;
   }
   if(nk!=GS[gi].np)
     errx("struct '%s' takes %d type argument%s, got %d",n,GS[gi].np,GS[gi].np==1?"":"s",nk);
+  /* One letter per primitive argument, the inner mangled name for a nested
+     one; '_' separates the arguments as soon as one of them is nested, so
+     `Pair<num, str>` stays `Pair__ns` and `Pair<Box<num>, str>` reads as
+     `Pair__Box__n_s`. seed-min and gen2 mangle identically. */
   char mn[80];
   int o=snprintf(mn,sizeof mn,"%s__",GS[gi].name);
-  for(int i=0;i<nk;i++) mn[o++]=(char)(ks[i]==K_STR?'s':(ks[i]==K_LIST?'l':'n'));
+  for(int i=0;i<nk;i++){
+    if(nested&&i&&o<(int)sizeof mn-1) mn[o++]='_';
+    for(const char*cc=code[i]; *cc&&o<(int)sizeof mn-1; cc++) mn[o++]=*cc;
+  }
   if(o>=64) errx("struct '%s' is too long to instantiate (the mangled name must fit 63 characters)",n);
   mn[o]=0;
-  sw(&q); *p=q;
+  gsw(&q); *p=q;
   int sid=s_find(mn);
   if(sid>=0) return sid;
   if(nS>=MAXS) errx("too many structs (a generic instantiation counts as one; native limit is %d)",MAXS);
@@ -863,7 +899,7 @@ static int gs_instantiate(const char**p,const char*n){
     S[nS].f[f].kind=K_UNK; S[nS].f[f].sid=-1;
   }
   gskn[nS]=nk;
-  for(int i=0;i<nk;i++) gsk[nS][i]=ks[i];
+  for(int i=0;i<nk;i++){ gsk[nS][i]=ks[i]; gss[nS][i]=kss[i]; }
   return nS++;
 }
 
@@ -1271,7 +1307,16 @@ static int pk_prim(const char**p,int depth){
            struct. seed-min and gen2 apply the same rule. */
         if(gskn[sid]>0&&gskn[sid]==nf&&fi<gskn[sid]&&k>=0&&k!=gsk[sid][fi])
           errx("struct '%s' field '%s' is %s (its type argument says so), the literal gives %s",
-               S[sid].name,S[sid].f[fi].name,kname(gsk[sid][fi]),kname(k));
+               S[sid].name,S[sid].f[fi].name,
+               gsk[sid][fi]==K_STRUCT&&gss[sid][fi]>=0?S[gss[sid][fi]].name:kname(gsk[sid][fi]),
+               kname(k));
+        /* A nested type argument fixes WHICH struct the field holds, so
+           `Box<Box<num>> { Box<str> { "x" } }` is the same class of error as
+           `Box<num> { "seven" }`. Naming both mangled types keeps it readable. */
+        if(gskn[sid]>0&&gskn[sid]==nf&&fi<gskn[sid]&&k==K_STRUCT&&gsk[sid][fi]==K_STRUCT
+           &&gss[sid][fi]>=0&&PKX_S>=0&&PKX_S!=gss[sid][fi])
+          errx("struct '%s' field '%s' is a %s (its type argument says so), the literal gives a %s",
+               S[sid].name,S[sid].f[fi].name,S[gss[sid][fi]].name,S[PKX_S].name);
         /* A list field is one machine word containing the list pointer.
            BK_STRUCT tracing already visits every payload word, so the list and
            its backing array stay live just like a string/nested-struct field. */

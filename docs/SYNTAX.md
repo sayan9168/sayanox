@@ -354,7 +354,9 @@ nested block expire at its end; repeated `hold` of an existing outer local
 reassigns it rather than shadowing it. Local kinds cannot change. String
 parameters are copied on entry so local reassignment cannot free a caller's
 string or another aliased parameter; lists remain shared references. Seed
-allocations remain uncollected. Global captures, struct-valued locals and
+*string* allocations are collected since 2026-10-22 (a conservative mark &
+sweep over the builder registry, [`GC.md`](GC.md)); seed *lists* are still
+never freed. Global captures, struct-valued locals and
 struct-valued specialization is not part of this typed subset; generic
 function signatures are supported as described below. Numeric return values
 are useful in expressions, not directly as collection sources.

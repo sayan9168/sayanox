@@ -582,7 +582,7 @@ static void skip_struct_decl(void){
  * concrete StructDef index of that instantiation, creating it from the
  * template on first use. `nk` receives the argument kinds so the literal can
  * check them (field i takes parameter i's kind when the counts match). */
-static int instantiate_gstruct(int gi, int *nk){
+static int instantiate_gstruct(int gi, int *nk, int *nks){
   skip();
   if(P>=N || S[P]!='<'){
     char m[256];
@@ -591,7 +591,8 @@ static int instantiate_gstruct(int gi, int *nk){
     die(m);
   }
   P++;
-  int ks[8]; int n=0;
+  int ks[8]; int kstruct[8]; int n=0; int nested=0;
+  char code[8][96];
   for(;;){
     skip();
     if(P>=N) die("a type argument list needs a closing >");
@@ -599,19 +600,34 @@ static int instantiate_gstruct(int gi, int *nk){
     if(S[P]==','){ P++; continue; }
     if(n>=8) die("too many type arguments (seed-min limit is 8)");
     char *t=parse_id();
+    /* A nested instantiation -- `Box<Box<num>>` -- is the type argument that
+     * makes this feature recursive. Build the INNER instantiation first: its
+     * StructDef then has a lower index than the outer one, which is exactly
+     * the order the emitted C typedefs need, and the nested-literal check
+     * below (last_si < si) is satisfied without a second sort. */
+    skip();
+    if(P<N && S[P]=='<' && find_gstruct(t)>=0){
+      int subk[8], subs[8];
+      int inner=instantiate_gstruct(find_gstruct(t),subk,subs);
+      free(t);
+      ks[n]=TY_STRUCT; kstruct[n]=inner; nested=1;
+      snprintf(code[n],sizeof code[n],"%s",SD[inner].name);
+      n++;
+      continue;
+    }
     int k=-1;
     if(!strcmp(t,"num")) k=TY_NUM;
     else if(!strcmp(t,"str")) k=TY_STR;
     else if(!strcmp(t,"list")) k=TY_LIST;
-    /* Concrete fields may hold a list, but generic Box<list> needs its own
-     * specialization/layout and GC rules before it can be accepted. */
-    if(k==TY_LIST) die("a struct field cannot hold a list in a generic instantiation until generic list-field specialization is implemented");
     if(k<0){
       char m[256];
-      snprintf(m,sizeof m,"a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented", t);
+      snprintf(m,sizeof m,"a type argument must be num, str, list or an instantiation of a generic struct (got '%s')", t);
       free(t); die(m);
     }
-    free(t); ks[n++]=k;
+    free(t);
+    ks[n]=k; kstruct[n]=-1;
+    code[n][0]=(char)kind_letter(k); code[n][1]=0;
+    n++;
   }
   if(n!=GS[gi].np){
     char m[256];
@@ -619,9 +635,18 @@ static int instantiate_gstruct(int gi, int *nk){
              GS[gi].name, GS[gi].np, GS[gi].np==1?"":"s", n);
     die(m);
   }
+  /* The suffix is one letter per primitive argument, or the inner mangled
+   * name for a nested one. Arguments run together while they are all single
+   * letters, so `Pair<num, str>` is still `Pair__ns`; as soon as one is
+   * nested they are separated by '_', which keeps `Pair<Box<num>, str>`
+   * (`Pair__Box__n_s`) readable and free of collisions. */
   char mn[192];
   int o=snprintf(mn,sizeof mn,"%s__",GS[gi].name);
-  for(int i=0;i<n;i++){ nk[i]=ks[i]; if(o<(int)sizeof mn-1) mn[o++]=(char)kind_letter(ks[i]); }
+  for(int i=0;i<n;i++){
+    nk[i]=ks[i]; if(nks) nks[i]=kstruct[i];
+    if(nested && i && o<(int)sizeof mn-1) mn[o++]='_';
+    for(const char *cc=code[i]; *cc && o<(int)sizeof mn-1; cc++) mn[o++]=*cc;
+  }
   mn[o]=0;
   int si=find_struct(mn);
   if(si>=0){ skip(); return si; }        /* already instantiated: reuse it */
@@ -759,12 +784,13 @@ static char *atom(int *oty){
     }
     /* A generic instantiation first: `Box<num> { ... }` becomes the concrete
        struct `Box__n`, so the literal path below is the ordinary one. */
-    int gk[8]; int ngk=0;
+    int gk[8]; int gks[8]; int ngk=0;
+    for(int gz=0;gz<8;gz++) gks[gz]=-1;
     if(find_struct(id)<0){
       int gi=find_gstruct(id);
       if(gi>=0){
         if(P<N && S[P]=='<'){
-          int gsi=instantiate_gstruct(gi,gk);
+          int gsi=instantiate_gstruct(gi,gk,gks);
           ngk=GS[gi].np;
           char *mn=strdup(SD[gsi].name);
           free(id); id=mn;
@@ -819,7 +845,21 @@ static char *atom(int *oty){
              && (et==TY_NUM || et==TY_STR || et==TY_LIST)){
             char msg[256];
             snprintf(msg,sizeof msg,"%s field '%s' is %s (its type argument says so), the literal gives %s",
-                     SD[si].name, SD[si].fields[fi], kind_word(gk[fi]), kind_word(et));
+                     SD[si].name, SD[si].fields[fi],
+                     gk[fi]==TY_STRUCT ? (gks[fi]>=0 ? SD[gks[fi]].name : "a struct")
+                                       : kind_word(gk[fi]),
+                     kind_word(et));
+            die(msg);
+          }
+          /* A nested type argument also fixes WHICH struct the field holds:
+             `Box<Box<num>> { Box<str> { "x" } }` is the same class of error as
+             `Box<num> { "seven" }`, and naming both mangled types is the only
+             way the message stays readable. */
+          if(ngk>0 && ngk==SD[si].nf && fi<ngk && gk[fi]==TY_STRUCT && et==TY_STRUCT
+             && gks[fi]>=0 && last_si>=0 && last_si!=gks[fi]){
+            char msg[256];
+            snprintf(msg,sizeof msg,"%s field '%s' is a %s (its type argument says so), the literal gives a %s",
+                     SD[si].name, SD[si].fields[fi], SD[gks[fi]].name, SD[last_si].name);
             die(msg);
           }
           if(et==TY_STR || et==TY_NUM){
@@ -1898,8 +1938,8 @@ static void collect(void){
                exactly as a concrete literal declares its name. Creating the
                instantiation here is idempotent, so the four collect/scan
                rounds agree on the struct index. */
-            int gk[8];
-            si=instantiate_gstruct(find_gstruct(t),gk);
+            int gk[8], gks[8];
+            si=instantiate_gstruct(find_gstruct(t),gk,gks);
             ty=TY_STRUCT;
           }
           else {

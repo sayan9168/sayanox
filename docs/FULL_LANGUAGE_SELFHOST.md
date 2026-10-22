@@ -76,14 +76,16 @@ language, not the full language.
   (`make test-gen2-index-expr` and `test-gen2-expr-lowering` pin the refusals;
   `%`, `len()` and nested indexes are supported — see above)
 * a global read inside an untyped `make` body
-* generic `Box<list>`: concrete list fields now work on all three backends, but a generic list-field specialization remains refused pending recursive generic layout/GC support (`test-generic-structs`)
 * direct `push(p.xs, v)`, whole-list `show p.xs`, and a whole list-valued field used as a condition on Gen2: these are explicit source refusals; use an aliased list variable, `len(p.xs)`, or `p.xs[i]` (`test-gen2-list-struct-fields`)
 * a struct field annotation (`p: Pt` in a struct body): it used to register
   `Pt` as an extra field on all three backends; since 2026-10-13 all three
   refuse it (`test-type-refusals`). A literal after the colon (`k: 2`) is the
   old tolerated spelling and still parses as field `k` only.
-* a nested generic instantiation (`Box<Box<num>>`): refused on all three
-  backends (`test-type-refusals`)
+* a *concrete* struct name as a generic type argument (`Box<Pt>`), an unknown
+  name, an escaped type parameter, or the wrong argument count: refused on all
+  three backends (`test-type-refusals`, `test-generic-struct-limits`). A
+  nested instantiation (`Box<Box<num>>`) and `Box<list>` are **supported**
+  since 2026-10-22 — `test-generic-structs-nested`
 * a native-only construct on the portable path, and vice versa
 
 The full list, with the backend that differs, is in `docs/STATUS.md` under
@@ -134,8 +136,9 @@ rewrite, or parallel Stage-2 path was added. Full-language self-host remains
 **not claimed**. The source now uses a concrete struct and a struct-typed hold,
 as well as a generic source-size struct and generic function from a live module.
 This is still source adoption, not exhaustive language coverage. Namespaced modules are outside the bootstrap plan; nested generic
-layouts remain refused; Gen2 concrete list-field layout/lowering is now gated
-by `test-gen2-list-struct-fields`.
+layouts remain refused *at this dated increment* (they landed 2026-10-22,
+`test-generic-structs-nested`); Gen2 concrete list-field layout/lowering is
+now gated by `test-gen2-list-struct-fields`.
 
 ## The Stage-2 host is not in this repository
 
@@ -191,9 +194,10 @@ At this dated increment, remaining source-adoption work included generic
 structs/functions, module directives, nested struct state and list-valued
 struct state. The 2026-10-17 section supersedes that inventory and corrects
 the unsupported string-interpolation claim. Existing
-list/scalar/string code remains dominant. Remaining capability gaps include
-nested generic layouts, generic list-field specialization, namespaced modules,
-and the explicit refusals above. There is no exhaustive full-language compiler
+list/scalar/string code remains dominant. Remaining capability gaps at that
+date included nested generic layouts, generic list-field specialization,
+namespaced modules, and the explicit refusals above. Nested and list generic
+arguments were implemented on 2026-10-22; the rest of the list stands. There is no exhaustive full-language compiler
 source or full-language acceptance gate; **full-language self-host is not
 claimed**. This increment does not change those limits or add a Stage-2 host.
 
@@ -248,8 +252,10 @@ on gen2 **and gen3**. Actual results for this source:
 
 These are **proposed closure requirements**, not retroactive promises of the
 current bootstrap dialect. They are not an exhaustive language specification.
-Permanently excluded module aliases/namespaces and nested/list generic
-arguments are not silently declared supported. Even all four probes passing
+Excluded module aliases/namespaces are not silently declared supported.
+(Nested/list generic arguments were on this list until 2026-10-22, when they
+were implemented and gated instead — see
+[`TYPES_ROADMAP.md`](TYPES_ROADMAP.md#nested-and-list-type-arguments-2026-10-22).) Even all four probes passing
 would require a complete reviewed language contract before any full claim.
 Readiness failures are expected and are not counted as successful coverage.
 
