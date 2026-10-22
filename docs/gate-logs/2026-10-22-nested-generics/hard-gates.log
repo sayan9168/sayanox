@@ -78,5 +78,17 @@ Thu Oct 22 14:40:12 UTC 2026
 #       test-generic-struct-limits test-struct-field-struct \
 #       test-language-deps               -> 61 [OK], exit 0
 #
-# and the four hard gates were started again on exactly the committed bytes;
-# their markers are appended below.
+# and the four hard gates were run again on exactly the committed bytes:
+#
+#   Thu Oct 22 14:43:05 UTC 2026
+#   Thu Oct 22 15:20:15 UTC 2026        (37 min 10 s)
+#   19:DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+#   1306:=== TRUE-SELFHOST-MIN-OK ===
+#   1321:[OK] byte-identical gen3 == gen4
+#   1343:=== GEN3-OK ===
+#   2501:=== NATIVE-TEST-OK ===
+#   2504:HARDGATES2-EXIT=0
+#
+# (line numbers in that second run's own log; each target's exit status was
+#  captured separately as DOCTOR-RC=0, TRUE-SELFHOST-RC=0, GEN3-RC=0,
+#  NATIVE-TEST-RC=0.)

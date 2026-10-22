@@ -9,9 +9,12 @@ The probes are proposed closure requirements for the broad full-language goal:
 string interpolation (formerly falsely claimed by a numeric interpolation
 test), named-struct function parameter/return, expression-valued struct fields
 and a checked numeric call as an index. They are NOT existing bootstrap-dialect
-support promises. Failures are expected until implemented. Permanent bootstrap
-exclusions (module namespaces/aliases and nested/list generic arguments) are
-not silently reclassified as implemented by this suite.
+support promises. Failures are expected until implemented. Bootstrap
+exclusions (module namespaces/aliases) are not silently reclassified as
+implemented by this suite. Nested/list generic arguments were on that
+exclusion list until 2026-10-22, when they were implemented and gated by
+`make test-generic-structs-nested` instead; nothing in this suite probes
+them.
 
 Even all four passing would not prove exhaustive language coverage. A reviewed,
 versioned complete language acceptance specification is still required before
