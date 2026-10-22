@@ -1,11 +1,17 @@
-// Local Sayanox package-lock utility.
+// The Sayanox package tool: one program, no shell wrapper.
 //
-// Sayanox owns local init/add/list/remove, registry seed/search/info, and the
-// file side of sync/install/publish/fetch: publish, install-local, the
-// local-registry branches of sync and fetch, and ensure-dir/rm-tree/copy-tree
-// so the wrapper never calls mkdir, cp, grep, cut, tr or rm itself.  What stays
-// in the shell entrypoint is only what Sayanox cannot do yet: reading the
-// environment, and launching curl/wget for an http(s) transfer.
+// Everything the old tools/sxpkg.sh did is here -- init/add/list/remove,
+// registry seed/search/info/publish, the offline install and install-local,
+// the local and http(s) branches of sync and fetch, the online opt-in policy,
+// the project-root handling, the help text and the exit statuses.  The only
+// thing this file still hands to another program is the http(s) transfer
+// itself: `curl`, or `wget` when there is no curl, found on PATH by scanning
+// it here and started through the run_command builtin.
+//
+// SAYANOX_ROOT moves the project, SAYANOX_REGISTRY names the registry and
+// SAYANOX_ONLINE=1 (or `sxpkg --online <command>`) permits the network; all
+// three are read with the getenv builtin.  A file:// URL or a plain path is
+// not the network and needs no permission.
 //
 // Offline package convention (docs/REGISTRY.md): a package is a directory
 // .sayanox/registry/<name>/ with main.sa and pkg.meta; pkg.meta carries
@@ -143,8 +149,8 @@ make package_name_ok(value: str) -> num {
 
 // check_pkg: "" when the registry copy of NAME matches the lock VERSION and its
 // pkg.meta sum; otherwise the reason it does not.
-make check_pkg(name: str, version: str) -> str {
-  hold meta = read_file(concat(".sayanox/registry/", concat(name, "/pkg.meta")))
+make check_pkg(name: str, version: str, reg: str) -> str {
+  hold meta = read_file(concat(concat(reg, "/"), concat(name, "/pkg.meta")))
   when len(meta) == 0 {
     give "no registry copy (.sayanox/registry/<name>/pkg.meta is missing)"
   }
@@ -152,7 +158,7 @@ make check_pkg(name: str, version: str) -> str {
   when string_eq(mver, version) == 0 {
     give concat("locked at ", concat(version, concat(" but the registry has ", mver)))
   }
-  hold src = read_file(concat(".sayanox/registry/", concat(name, "/main.sa")))
+  hold src = read_file(concat(concat(reg, "/"), concat(name, "/main.sa")))
   hold want = pkgfield(meta, "sum")
   hold got = decstr(pkgsum(src))
   when string_eq(want, got) == 0 {
@@ -607,8 +613,8 @@ make tail1(s: str) -> str {
 // read_meta: a package's pkg.meta from the project's registry copy, falling
 // back to the source registry directory.  A separate function because an
 // inner `hold` would shadow the outer one instead of replacing it.
-make read_meta(nm: str, src: str) -> str {
-  hold meta = read_file(concat(".sayanox/registry/", concat(nm, "/pkg.meta")))
+make read_meta(nm: str, src: str, reg: str) -> str {
+  hold meta = read_file(concat(concat(reg, "/"), concat(nm, "/pkg.meta")))
   when len(meta) == 0 && len(src) > 0 {
     give read_file(concat(concat(src, "/"), concat(nm, "/pkg.meta")))
   }
@@ -619,9 +625,9 @@ make read_meta(nm: str, src: str) -> str {
 // declare, read from the project's registry copy or the source registry.
 // A package whose pkg.meta is nowhere to be found is returned on its own:
 // it has not been installed yet, so its dependencies are still unknown.
-make discover(spec: str, src: str) -> str {
+make discover(spec: str, src: str, reg: str) -> str {
   hold nm = dep_name(spec)
-  hold meta = read_meta(nm, src)
+  hold meta = read_meta(nm, src, reg)
   hold out = concat(spec, "|")
   when len(meta) > 0 {
     hold dl = meta_deps(meta)
@@ -629,7 +635,7 @@ make discover(spec: str, src: str) -> str {
       hold d = take_field(dl)
       hold dl = drop_field(dl)
       when has_field(out, d) == 0 {
-        hold sub = discover(d, src)
+        hold sub = discover(d, src, reg)
         hold sl = sub
         while len(sl) > 0 {
           hold one = take_field(sl)
@@ -647,7 +653,7 @@ make discover(spec: str, src: str) -> str {
 // resolve: the transitive dependency closure of the locked packages.
 // Gives a spec list "name@version|..." on success, or "!" + the reason it
 // could not be resolved.  Every step reads the local registry copy only.
-make resolve(lock: str, src: str, lock_len: num) -> str {
+make resolve(lock: str, src: str, lock_len: num, reg: str) -> str {
   hold out = ""
   hold queue = lock_specs(lock, lock_len)
   hold guard = 0
@@ -659,7 +665,7 @@ make resolve(lock: str, src: str, lock_len: num) -> str {
       hold out = concat(out, concat(spec, "|"))
       hold nm = dep_name(spec)
       hold vr = dep_ver(spec)
-      hold meta = read_meta(nm, src)
+      hold meta = read_meta(nm, src, reg)
       when len(meta) == 0 {
         give concat("!", concat(nm, " has no registry copy; run: sxpkg install"))
       }
@@ -687,19 +693,284 @@ make resolve(lock: str, src: str, lock_len: num) -> str {
   give out
 }
 
-hold argn = arg_count()
+
+// ---- entrypoint helpers ---------------------------------------------------
+// Each of these replaces one shell construct the wrapper used: a case glob, a
+// `command -v`, a cp, a `cd`.
+
+// is_abs: 1 when a path starts at the filesystem root
+make is_abs(p: str) -> num {
+  when len(p) == 0 {
+    give 0
+  }
+  when sx_index(p, 0) == 47 {
+    give 1
+  }
+  give 0
+}
+
+// joined: A/B with a single separator, so "" and "/" tails do not double it
+make joined(a: str, b: str) -> str {
+  when len(a) == 0 {
+    give b
+  }
+  when sx_index(a, len(a) - 1) == 47 {
+    give concat(a, b)
+  }
+  give concat(a, concat("/", b))
+}
+
+// rooted: the path of P inside the project root ROOTDIR.  The wrapper used to
+// `cd` into SAYANOX_ROOT; there is no chdir builtin, so every path is built.
+make rooted(rootdir: str, p: str) -> str {
+  when is_abs(p) == 1 {
+    give p
+  }
+  when string_eq(rootdir, ".") == 1 {
+    give p
+  }
+  when string_eq(rootdir, "") == 1 {
+    give p
+  }
+  give joined(rootdir, p)
+}
+
+// starts_with: 1 when TEXT begins with PRE
+make starts_with(text: str, pre: str) -> num {
+  when len(pre) > len(text) {
+    give 0
+  }
+  hold i = 0
+  while i < len(pre) {
+    when sx_index(text, i) != sx_index(pre, i) {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// url_net: 1 for an http(s) target -- the only kind that needs permission
+make url_net(u: str) -> num {
+  when starts_with(u, "http://") == 1 {
+    give 1
+  }
+  when starts_with(u, "https://") == 1 {
+    give 1
+  }
+  give 0
+}
+
+// url_known: 1 when the target is http(s), file://, or a plain path; a target
+// with some other scheme is refused rather than silently treated as a path.
+make url_known(u: str) -> num {
+  when url_net(u) == 1 {
+    give 1
+  }
+  when starts_with(u, "file://") == 1 {
+    give 1
+  }
+  when len(u) >= 3 {
+    hold i = 0
+    while i < len(u) - 2 {
+      when sx_index(u, i) == 58 && sx_index(u, i + 1) == 47 && sx_index(u, i + 2) == 47 {
+        give 0
+      }
+      hold i = i + 1
+    }
+  }
+  give 1
+}
+
+// path_find: the full path of the executable NAME on PATH, "" when no
+// directory there carries it.  This is what `command -v` did for the wrapper;
+// doing it here keeps the choice of transport inside Sayanox.
+make path_find(nm: str) -> str {
+  hold pth = getenv("PATH")
+  hold n = len(pth)
+  hold cur = ""
+  hold i = 0
+  while i <= n {
+    hold hit = 0
+    when i == n {
+      hold hit = 1
+    } otherwise {
+      when sx_index(pth, i) == 58 {
+        hold hit = 1
+      } otherwise {
+        hold cur = concat(cur, chr(sx_index(pth, i)))
+      }
+    }
+    when hit == 1 {
+      hold dir = cur
+      when len(dir) == 0 {
+        hold dir = "."
+      }
+      when path_kind(joined(dir, nm)) == 1 {
+        give joined(dir, nm)
+      }
+      hold cur = ""
+    }
+    hold i = i + 1
+  }
+  give ""
+}
+
+// move_file: the write-then-unlink an `mv` did for the wrapper's staging.
+// Copying through a string is safe here because packages are text.
+make move_file(srcp: str, dstp: str) -> num {
+  when path_kind(srcp) != 1 {
+    give 0
+  }
+  hold body = read_file(srcp)
+  hold wrote = write_file(dstp, body)
+  hold gone = remove_path(srcp)
+  when wrote == 1 {
+    give 1
+  }
+  give 0
+}
+
+// download: URL to DESTP through a .part file, so an interrupted transfer can
+// never leave a truncated package where a good one belongs.  A local path is a
+// read and a write; http(s) is one run_command of curl, or of wget when curl is
+// not on PATH.  The status of the transport is the answer -- nothing here
+// trusts a partial file.
+make download(url: str, destp: str) -> num {
+  hold part = concat(destp, ".part")
+  hold ok = 0
+  when url_net(url) == 1 {
+    hold curl = path_find("curl")
+    when len(curl) > 0 {
+      hold cline = concat(curl, " -fsSL --connect-timeout 10 --max-time 60 \"")
+      hold cline = concat(cline, url)
+      hold cline = concat(cline, "\" -o \"")
+      hold cline = concat(cline, part)
+      hold cline = concat(cline, "\"")
+      when run_command(cline) == 0 {
+        hold ok = 1
+      }
+    } otherwise {
+      hold wget = path_find("wget")
+      when len(wget) > 0 {
+        hold wline = concat(wget, " -q --timeout=10 --tries=1 -O \"")
+        hold wline = concat(wline, part)
+        hold wline = concat(wline, "\" \"")
+        hold wline = concat(wline, url)
+        hold wline = concat(wline, "\"")
+        when run_command(wline) == 0 {
+          hold ok = 1
+        }
+      } otherwise {
+        show "sxpkg: need curl or wget"
+        give 0
+      }
+    }
+  } otherwise {
+    hold localp = strip_file_scheme(url)
+    when path_kind(localp) != 1 {
+      give 0
+    }
+    hold body = read_file(localp)
+    when write_file(part, body) == 1 {
+      hold ok = 1
+    }
+  }
+  when ok == 0 {
+    hold dropped = remove_path(part)
+    give 0
+  }
+  hold moved = move_file(part, destp)
+  give moved
+}
+
+// say_err: a diagnostic on stderr, then 1.  The wrapper wrote its refusals
+// with `>&2` and the gates read them there; `show` is stdout, so this writes
+// /dev/stderr directly, the same way tools/sxdiag.sa reports a failed case.
+make say_err(msg: str) -> num {
+  hold wrote = write_file("/dev/stderr", concat(msg, "\n"))
+  give 1
+}
+
+// need_online: the opt-in policy, unchanged from the wrapper.  A file:// URL
+// or a plain path is not the network, so it always passes.  Says why, in the
+// same words, when it refuses.
+make need_online(target: str, optin: num) -> num {
+  when url_net(target) == 1 {
+    when optin == 1 {
+      give 1
+    }
+    // one write: /dev/stderr is a regular file when the caller redirects it,
+    // and a second write would truncate the first
+    hold rmsg = "sxpkg: refusing to use the network without an explicit opt-in\n"
+    hold rmsg = concat(rmsg, concat("sxpkg:   target: ", concat(target, "\n")))
+    hold rmsg = concat(rmsg, "sxpkg: opt in with SAYANOX_ONLINE=1, or 'sxpkg --online <command>'.\n")
+    hold rmsg = concat(rmsg, "sxpkg: offline instead: install-local, seed, verify, list, deps, info,\n")
+    hold rmsg = concat(rmsg, "sxpkg:   or point SAYANOX_REGISTRY at a local directory (file://...).")
+    hold refused = say_err(rmsg)
+    give 0
+  }
+  give 1
+}
+
+// ---- the command line -----------------------------------------------------
+// `sxpkg --online <command>` used to be read by the shell; the flag is
+// consumed here by shifting every argument one place.
+hold raw_argn = arg_count()
+hold first_arg = ""
+when raw_argn >= 2 {
+  hold first_arg = arg(1)
+}
+hold online_shift = 0
+when string_eq(first_arg, "--online") {
+  hold online_shift = 1
+}
+hold argn = raw_argn - online_shift
 hold command = "help"
 hold name = ""
 hold version = "0.1.0"
 when argn >= 2 {
-  hold command = arg(1)
+  hold command = arg(1 + online_shift)
 }
 when argn >= 3 {
-  hold name = arg(2)
+  hold name = arg(2 + online_shift)
 }
 when argn >= 4 {
-  hold version = arg(3)
+  hold version = arg(3 + online_shift)
 }
+
+// The project root.  SAYANOX_ROOT used to be a `cd` in the wrapper.
+hold root = getenv("SAYANOX_ROOT")
+when len(root) == 0 {
+  hold root = "."
+}
+// The network is opt-in: SAYANOX_ONLINE=1 or the --online flag.
+hold optin = online_shift
+when string_eq(getenv("SAYANOX_ONLINE"), "1") {
+  hold optin = 1
+}
+hold registry_url = getenv("SAYANOX_REGISTRY")
+when len(registry_url) == 0 {
+  hold registry_url = "https://raw.githubusercontent.com/sayan9168/sayanox/main/registry"
+}
+// The wrapper ran `cd "$ROOT" && sxpkg ...`, so a root that is not a directory
+// failed before anything happened.  There is no chdir here, but the refusal is
+// the same one, with the same words: test-pkg-errors pins it.
+when string_eq(root, ".") == 0 {
+  when path_kind(root) != 2 {
+    hold rootmsg = say_err(concat("sxpkg: could not run ", concat(command, concat(" in project ", root))))
+    hold root_code = exit(1)
+  }
+}
+
+// `sync` and `fetch` hand their target to the local-registry blocks instead of
+// a flag, because those blocks used to be separate commands.
+hold sync_target = ""
+hold fetch_src = ""
+hold fetch_name = ""
+hold fetch_disp = ""
+hold fetch_temp = ""
+
 
 // Shared state is declared at the top level because the maintained compiler
 // emits C blocks for when/while scopes.
@@ -718,12 +989,12 @@ hold is_install = string_eq(command, "install")
 hold src = "registry"
 hold query = ""
 when argn >= 3 {
-  hold query = arg(2)
+  hold query = arg(2 + online_shift)
 }
-hold lock_path = "sx.lock"
-hold manifest_path = "sx.toml"
-hold registry_path = ".sayanox/registry"
-hold index_path = ".sayanox/registry/INDEX"
+hold lock_path = rooted(root, "sx.lock")
+hold manifest_path = rooted(root, "sx.toml")
+hold registry_path = rooted(root, ".sayanox/registry")
+hold index_path = joined(registry_path, "INDEX")
 hold meta_path = ""
 hold index = ""
 hold lock = ""
@@ -794,7 +1065,7 @@ hold diswant = ""
 hold disgot = ""
 hold diw1 = 0
 hold diw2 = 0
-hold pkg_path = ".sayanox/pkgs"
+hold pkg_path = rooted(root, ".sayanox/pkgs")
 hold is_publish = string_eq(command, "publish")
 hold is_install_local = string_eq(command, "install-local")
 hold is_sync_local = string_eq(command, "sync-local")
@@ -802,9 +1073,361 @@ hold is_fetch_local = string_eq(command, "fetch-local")
 hold is_ensure_dir = string_eq(command, "ensure-dir")
 hold is_rm_tree = string_eq(command, "rm-tree")
 hold is_copy_tree = string_eq(command, "copy-tree")
+hold is_sync = string_eq(command, "sync")
+hold is_fetch = string_eq(command, "fetch")
+
+// Wrapper state, declared at the top level for the same reason as the state
+// above: the maintained compiler emits C blocks for when/while scopes, so a
+// first declaration inside one of them would not be visible outside it.
+hold incode = 0
+hold inlock = ""
+hold inmk = 0
+hold inlast = 0
+hold inspecs = ""
+hold inrest = ""
+hold inbad = 0
+hold inone = ""
+hold innm = ""
+hold inrest2 = ""
+hold inone2 = ""
+hold innm2 = ""
+hold inhall = 0
+hold inmk2 = 0
+hold ingot1 = 0
+hold ingot2 = 0
+hold infetched = ""
+hold inrest3 = ""
+hold inone3 = ""
+hold innm3 = ""
+hold invr3 = ""
+hold inwhy3 = ""
+hold insrc3 = ""
+hold indst3 = ""
+hold inmk3 = 0
+hold incp3 = 0
+hold inproblems = 0
+hold inrest4 = ""
+hold inone4 = ""
+hold innm4 = ""
+hold invr4 = ""
+hold inwhy4 = ""
+hold inrest5 = ""
+hold inone5 = ""
+hold innm5 = ""
+hold inr51 = 0
+hold inr52 = 0
+hold incount = 0
+hold inrest6 = ""
+hold inone6 = ""
+hold sy2target = ""
+hold sy2code = 0
+hold sy2mk = 0
+hold sy2tmp = ""
+hold sy2got = 0
+hold sy2rm0 = 0
+hold sy2idx = ""
+hold sy2specs = ""
+hold sy2scan = ""
+hold sy2bad = 0
+hold sy2one = ""
+hold sy2nm = ""
+hold sy2rm1 = 0
+hold sy2w = 0
+hold sy2rm2 = 0
+hold sy2rest = ""
+hold sy2one2 = ""
+hold sy2nm2 = ""
+hold sy2vr2 = ""
+hold sy2mk2 = 0
+hold sy2d1 = 0
+hold sy2d2 = 0
+hold sy2rm3 = 0
+hold ft2url = ""
+hold ft2name = ""
+hold ft2code = 0
+hold ft2has = 0
+hold ft2lk = ""
+hold ft2mk = 0
+hold ft2mk2 = 0
+hold ft2stage = ""
+hold ft2got = 0
+hold ft2rm = 0
+
+// ---- the wrapper's own commands -------------------------------------------
+// `install` with no argument is the one the shell wrapper answered: preflight
+// the lock, fetch only what the registry copy is missing, copy the rest out of
+// the cache, and accept the result only when every locked package verifies.
+// `install <registry>` above stays the direct-source install, which is the
+// behaviour test-pkgs pins.
+when is_install == 1 && argn < 3 {
+  hold handled = 1
+  hold inlock = read_file(lock_path)
+  when len(inlock) == 0 {
+    show "sxpkg: no sx.lock; run init/add"
+    hold incode = exit(1)
+  }
+  hold inmk = ensure_dir(pkg_path)
+  hold inlast = sx_idx(inlock, len(inlock) - 1)
+  when inlast != 10 {
+    hold inlock = concat(inlock, "\n")
+  }
+  hold inspecs = lock_specs(inlock, len(inlock))
+  // a lock line with an unsafe name refuses before any path is built from it
+  hold inrest = inspecs
+  hold inbad = 0
+  while len(inrest) > 0 {
+    hold inone = take_field(inrest)
+    hold inrest = drop_field(inrest)
+    hold innm = dep_name(inone)
+    when package_name_ok(innm) == 0 {
+      show concat("sxpkg: refusing unsafe package name '", concat(innm, "'"))
+      hold inbad = 1
+    }
+  }
+  when inbad == 1 {
+    hold incode = exit(1)
+  }
+  // Fetch only what is missing: a complete cache transfers nothing, which is
+  // why an offline `install` needs no permission.
+  hold infetched = ""
+  hold inrest2 = inspecs
+  while len(inrest2) > 0 {
+    hold inone2 = take_field(inrest2)
+    hold inrest2 = drop_field(inrest2)
+    hold innm2 = dep_name(inone2)
+    hold inhall = 0
+    when package_name_ok(innm2) == 1 {
+      when path_kind(concat(concat(registry_path, "/"), concat(innm2, "/pkg.meta"))) == 1 {
+        when path_kind(concat(concat(registry_path, "/"), concat(innm2, "/main.sa"))) == 1 {
+          hold inhall = 1
+        }
+      }
+    }
+    when inhall == 0 && package_name_ok(innm2) == 1 {
+      when need_online(registry_url, optin) == 0 {
+        hold incode = exit(1)
+      }
+      hold inmk2 = ensure_dir(concat(concat(registry_path, "/"), innm2))
+      hold ingot1 = download(concat(concat(concat(registry_url, "/"), innm2), "/pkg.meta"), concat(concat(concat(registry_path, "/"), innm2), "/pkg.meta"))
+      when ingot1 == 0 {
+        show concat("sxpkg: could not fetch ", concat(innm2, concat("/pkg.meta from ", registry_url)))
+      }
+      hold ingot2 = download(concat(concat(concat(registry_url, "/"), innm2), "/main.sa"), concat(concat(concat(registry_path, "/"), innm2), "/main.sa"))
+      when ingot2 == 0 {
+        show concat("sxpkg: could not fetch ", concat(innm2, concat("/main.sa from ", registry_url)))
+      }
+      hold infetched = concat(infetched, concat(" ", innm2))
+    }
+  }
+  // copy and report whatever is complete now
+  hold inrest3 = inspecs
+  hold inproblems = 0
+  while len(inrest3) > 0 {
+    hold inone3 = take_field(inrest3)
+    hold inrest3 = drop_field(inrest3)
+    hold innm3 = dep_name(inone3)
+    hold invr3 = dep_ver(inone3)
+    hold inwhy3 = check_pkg(innm3, invr3, registry_path)
+    when len(inwhy3) == 0 {
+      hold insrc3 = concat(concat(registry_path, "/"), innm3)
+      hold indst3 = concat(concat(pkg_path, "/"), innm3)
+      hold inmk3 = ensure_dir(indst3)
+      hold incp3 = copy_tree(insrc3, indst3)
+      when incp3 == 1 {
+        show concat("sxpkg: installed ", concat(innm3, concat(" -> ", indst3)))
+      } otherwise {
+        show concat("sxpkg: FAILED installing ", innm3)
+        hold inproblems = inproblems + 1
+      }
+    } otherwise {
+      show concat("sxpkg: missing ", concat(innm3, " in registry"))
+      hold inproblems = inproblems + 1
+    }
+  }
+  // the transport is not trusted; the checksum is the acceptance test
+  hold inrest4 = inspecs
+  while len(inrest4) > 0 {
+    hold inone4 = take_field(inrest4)
+    hold inrest4 = drop_field(inrest4)
+    hold innm4 = dep_name(inone4)
+    hold invr4 = dep_ver(inone4)
+    hold inwhy4 = check_pkg(innm4, invr4, registry_path)
+    when len(inwhy4) > 0 {
+      show concat("sxpkg: verify FAILED ", concat(innm4, concat(": ", inwhy4)))
+      hold inproblems = inproblems + 1
+    }
+  }
+  when inproblems == 0 {
+    // the wrapper ran `verify` after installing and printed its report; the
+    // acceptance line is that every locked package matches its checksum
+    hold incount = 0
+    hold inrest6 = inspecs
+    while len(inrest6) > 0 {
+      hold inone6 = take_field(inrest6)
+      hold inrest6 = drop_field(inrest6)
+      hold incount = incount + 1
+    }
+    show concat("sxpkg: verify ok (", concat(numstr(incount), " locked packages)"))
+    show "sxpkg: install done"
+  } otherwise {
+    // a rejected download never stays behind in the registry or the project
+    hold inrest5 = inspecs
+    while len(inrest5) > 0 {
+      hold inone5 = take_field(inrest5)
+      hold inrest5 = drop_field(inrest5)
+      hold innm5 = dep_name(inone5)
+      hold inr51 = rm_tree(concat(concat(registry_path, "/"), innm5))
+      hold inr52 = rm_tree(concat(concat(pkg_path, "/"), innm5))
+    }
+    when len(infetched) > 0 {
+      show concat("sxpkg: rejected and removed downloaded:", infetched)
+    }
+    hold incode = exit(1)
+  }
+}
+
+// sync: a local registry is the sync-local code path below; an http(s) one
+// downloads INDEX first and one pkg.meta and main.sa per name after it, and
+// replaces the INDEX only once every name in the new one has passed the
+// package-name check, so a hostile index can neither escape the registry nor
+// destroy the one already installed.
+when is_sync == 1 {
+  hold handled = 1
+  hold sy2target = arg(2 + online_shift)
+  when len(sy2target) == 0 {
+    hold sy2target = registry_url
+  }
+  when url_known(sy2target) == 0 {
+    hold syscheme = say_err("sxpkg: unsupported transfer scheme (use http, https, file or a path)")
+    hold sy2code = exit(1)
+  }
+  when url_net(sy2target) == 0 {
+    hold sync_target = sy2target
+    hold is_sync_local = 1
+  } otherwise {
+    when need_online(sy2target, optin) == 0 {
+      hold sy2code = exit(1)
+    }
+    hold sy2mk = ensure_dir(registry_path)
+    show concat("sxpkg: sync from ", sy2target)
+    hold sy2tmp = concat(registry_path, "/.sync.index")
+    hold sy2got = download(concat(sy2target, "/INDEX"), sy2tmp)
+    when sy2got == 0 {
+      hold sy2rm0 = remove_path(sy2tmp)
+      show "sxpkg: online sync failed; using local seed"
+      hold is_seed = 1
+    } otherwise {
+      hold sy2idx = read_file(sy2tmp)
+      hold sy2specs = lock_specs(sy2idx, len(sy2idx))
+      hold sy2scan = sy2specs
+      hold sy2bad = 0
+      while len(sy2scan) > 0 {
+        hold sy2one = take_field(sy2scan)
+        hold sy2scan = drop_field(sy2scan)
+        hold sy2nm = dep_name(sy2one)
+        when package_name_ok(sy2nm) == 0 {
+          show concat("sxpkg: refusing unsafe package name '", concat(sy2nm, "'"))
+          hold sy2bad = 1
+        }
+      }
+      when sy2bad == 1 {
+        hold sy2rm1 = remove_path(sy2tmp)
+        hold sybad2 = say_err("sxpkg: rejected index with unsafe package name")
+        hold sy2code = exit(1)
+      }
+      hold sy2w = write_file(index_path, sy2idx)
+      when sy2w == 0 {
+        hold sy2rm2 = remove_path(sy2tmp)
+        show "sxpkg: FAILED writing the registry index"
+        hold sy2code = exit(1)
+      }
+      show "sxpkg: index updated"
+      hold sy2rest = sy2specs
+      while len(sy2rest) > 0 {
+        hold sy2one2 = take_field(sy2rest)
+        hold sy2rest = drop_field(sy2rest)
+        hold sy2nm2 = dep_name(sy2one2)
+        hold sy2vr2 = dep_ver(sy2one2)
+        hold sy2mk2 = ensure_dir(concat(concat(registry_path, "/"), sy2nm2))
+        hold sy2d1 = download(concat(concat(concat(sy2target, "/"), sy2nm2), "/pkg.meta"), concat(concat(concat(registry_path, "/"), sy2nm2), "/pkg.meta"))
+        hold sy2d2 = download(concat(concat(concat(sy2target, "/"), sy2nm2), "/main.sa"), concat(concat(concat(registry_path, "/"), sy2nm2), "/main.sa"))
+        show concat("  synced ", concat(sy2nm2, concat("=", sy2vr2)))
+      }
+      hold sy2rm3 = remove_path(sy2tmp)
+    }
+  }
+}
+
+// fetch: every check the wrapper made happens before a single byte moves, and
+// a local source is the fetch-local code path below.  A remote one is
+// downloaded into a staging file inside the registry and handed to the same
+// code, so the checksum, the rollback and the refusal of an existing package
+// are shared rather than duplicated.
+when is_fetch == 1 {
+  hold handled = 1
+  hold ft2url = arg(2 + online_shift)
+  hold ft2name = arg(3 + online_shift)
+  when len(ft2name) == 0 {
+    hold ft2name = "remote_pkg"
+  }
+  when len(ft2url) == 0 {
+    show "usage: sxpkg fetch <url> [name]"
+    hold ft2code = exit(1)
+  }
+  when package_name_ok(ft2name) == 0 {
+    hold ftbad = say_err("sxpkg: invalid fetch name")
+    hold ft2code = exit(1)
+  }
+  // never silently replace a cache, a project copy or a differently pinned lock
+  hold ft2has = 0
+  when path_kind(concat(concat(registry_path, "/"), ft2name)) != 0 {
+    hold ft2has = 1
+  }
+  when path_kind(concat(concat(pkg_path, "/"), ft2name)) != 0 {
+    hold ft2has = 1
+  }
+  hold ft2lk = read_file(lock_path)
+  when len(lock_ver(ft2lk, len(ft2lk), ft2name)) > 0 {
+    hold ft2has = 1
+  }
+  when ft2has == 1 {
+    hold ftdup = say_err(concat("sxpkg: fetch refuses existing package/lock '", concat(ft2name, "'")))
+    hold ft2code = exit(1)
+  }
+  when url_known(ft2url) == 0 {
+    hold ftscheme = say_err("sxpkg: unsupported transfer scheme (use http, https, file or a path)")
+    hold ft2code = exit(1)
+  }
+  when url_net(ft2url) == 0 {
+    hold fetch_src = strip_file_scheme(ft2url)
+    hold fetch_name = ft2name
+    hold fetch_disp = ft2url
+    hold is_fetch_local = 1
+  } otherwise {
+    when need_online(ft2url, optin) == 0 {
+      hold ft2code = exit(1)
+    }
+    hold ft2mk = ensure_dir(registry_path)
+    hold ft2mk2 = ensure_dir(pkg_path)
+    hold ft2stage = concat(registry_path, "/.fetch.stage")
+    hold ft2got = download(ft2url, ft2stage)
+    when ft2got == 0 {
+      hold ft2rm = remove_path(ft2stage)
+      show concat("sxpkg: FAILED fetching ", ft2name)
+      hold ft2code = exit(1)
+    }
+    hold fetch_src = ft2stage
+    hold fetch_name = ft2name
+    hold fetch_disp = ft2url
+    hold fetch_temp = ft2stage
+    hold is_fetch_local = 1
+  }
+}
 
 when is_init == 1 {
   hold handled = 1
+  hold init_mk1 = ensure_dir(registry_path)
+  hold init_mk2 = ensure_dir(pkg_path)
   hold lock = read_file(lock_path)
   hold lock_len = len(lock)
   when lock_len == 0 {
@@ -826,6 +1449,10 @@ when is_init == 1 {
   } otherwise {
     show "sxpkg: init failed to write project files"
   }
+  // an empty registry gets the offline seed, exactly as the wrapper did
+  when path_kind(index_path) != 1 {
+    hold is_seed = 1
+  }
 }
 
 when string_eq(command, "check-name") {
@@ -839,6 +1466,8 @@ when string_eq(command, "check-name") {
 
 when is_add == 1 {
   hold handled = 1
+  hold add_mk1 = ensure_dir(registry_path)
+  hold add_mk2 = ensure_dir(pkg_path)
   when argn < 3 {
     show "usage: sxpkg add <name> [version]"
   } otherwise {
@@ -904,7 +1533,7 @@ when is_add == 1 {
       // pull in what the package declares in `deps=`, transitively, so
       // `deps` and `install` see a complete set.  Packages that are not
       // installed or present anywhere yet contribute nothing here.
-      hold dlist = discover(concat(name, concat("@", version)), src)
+      hold dlist = discover(concat(name, concat("@", version)), src, registry_path)
       hold drest = dlist
       while len(drest) > 0 {
         hold done = take_field(drest)
@@ -920,6 +1549,11 @@ when is_add == 1 {
       hold write_status = write_file(lock_path, result)
       when write_status == 1 {
         show concat("sxpkg: locked ", concat(name, concat(" ", version)))
+        // Sayanox locks any name it is given; say so when the registry has no
+        // copy, so an offline user is not surprised by `verify` later
+        when path_kind(concat(concat(registry_path, "/"), concat(name, "/pkg.meta"))) != 1 {
+          show concat("sxpkg: note: ", concat(name, " has no local registry copy yet (run: sxpkg seed; or sxpkg sync when online)"))
+        }
       } otherwise {
         show "sxpkg: failed to write sx.lock"
       }
@@ -996,7 +1630,8 @@ when is_search == 1 {
   hold index = read_file(index_path)
   hold index_len = len(index)
   when index_len == 0 {
-    show "sxpkg: no registry index; run sync or seed"
+    hold noidx = say_err("sxpkg: no local index; run seed (offline) or sync (explicit network)")
+    hold search_code = exit(1)
   } otherwise {
     hold last_byte = sx_idx(index, index_len - 1)
     when last_byte != 10 {
@@ -1111,7 +1746,10 @@ when is_info == 1 {
 // wrapper keeps the http(s) branch, which needs curl or wget.
 when is_sync_local == 1 {
   hold handled = 1
-  hold syurl = arg(2)
+  hold syurl = arg(2 + online_shift)
+  when len(syurl) == 0 {
+    hold syurl = sync_target
+  }
   hold sydir = strip_file_scheme(syurl)
   hold sycode = 0
   hold syok = ensure_dir(registry_path)
@@ -1258,6 +1896,9 @@ when is_remove == 1 {
         hold write_status = write_file(lock_path, result)
         when write_status == 1 {
           show concat("sxpkg: removed ", name)
+          when path_kind(concat(concat(pkg_path, "/"), name)) != 0 {
+            hold rm_pkg = rm_tree(concat(concat(pkg_path, "/"), name))
+          }
         } otherwise {
           show "sxpkg: failed to write sx.lock"
         }
@@ -1312,7 +1953,7 @@ when is_verify == 1 {
             show concat("sxpkg: MISMATCH malformed lock line: ", line)
           } otherwise {
             hold checked = checked + 1
-            hold why = check_pkg(vkey, vval)
+            hold why = check_pkg(vkey, vval, registry_path)
             when len(why) == 0 {
               show concat("sxpkg: verified ", concat(vkey, concat(" ", vval)))
             } otherwise {
@@ -1330,7 +1971,7 @@ when is_verify == 1 {
     // the dependency closure: every package a locked package declares in
     // `deps=` must itself be present, and only the ones pulled in
     // transitively (not already counted above) are reported here.
-    hold vres = resolve(lock, "", lock_len)
+    hold vres = resolve(lock, "", lock_len, registry_path)
     when len(vres) > 0 {
       when sx_index(vres, 0) == 33 {
         hold problems = problems + 1
@@ -1345,7 +1986,7 @@ when is_verify == 1 {
           hold vdlv = lock_ver(lock, lock_len, vdn)
           when len(vdlv) == 0 {
             hold checked = checked + 1
-            hold vwhy = check_pkg(vdn, vdv)
+            hold vwhy = check_pkg(vdn, vdv, registry_path)
             when len(vwhy) == 0 {
               show concat("sxpkg: verified ", concat(vdn, concat(" ", vdv)))
             } otherwise {
@@ -1360,6 +2001,7 @@ when is_verify == 1 {
       show concat("sxpkg: verify ok (", concat(numstr(checked), " locked packages)"))
     } otherwise {
       show concat("sxpkg: verify FAILED (", concat(numstr(problems), " problem(s))"))
+      hold verify_code = exit(1)
     }
   }
 }
@@ -1368,6 +2010,7 @@ when is_verify == 1 {
 // offline from the local registry copies.
 when is_deps == 1 {
   hold handled = 1
+  hold src = rooted(root, src)
   hold lock = read_file(lock_path)
   hold lock_len = len(lock)
   when lock_len == 0 {
@@ -1378,7 +2021,7 @@ when is_deps == 1 {
       hold lock = concat(lock, "\n")
     }
     hold lock_len = len(lock)
-    hold ddres = resolve(lock, src, lock_len)
+    hold ddres = resolve(lock, src, lock_len, registry_path)
     when sx_index(ddres, 0) == 33 {
       show concat("sxpkg: DEP ", tail1(ddres))
     } otherwise {
@@ -1432,11 +2075,12 @@ when is_install_local == 1 {
       hold ilcode = exit(1)
     } otherwise {
       // the default source registry is ./registry, exactly as the wrapper
-      // documented; arg(2) is empty when none was given
+      // documented; arg(2 + online_shift) is empty when none was given
       hold ilsrc = "registry"
-      when len(arg(2)) > 0 {
-        hold ilsrc = arg(2)
+      when len(arg(2 + online_shift)) > 0 {
+        hold ilsrc = arg(2 + online_shift)
       }
+      hold ilsrc = rooted(root, ilsrc)
       hold ilrest2 = ilspecs
       while len(ilrest2) > 0 {
         hold ilone2 = take_field(ilrest2)
@@ -1460,10 +2104,10 @@ when is_install_local == 1 {
 // the content sum on both sides.  Offline: it reads files, never the network.
 // The default source registry is ./registry; the wrapper `sxpkg.sh install`
 // creates the destination folders first and then runs this.
-when is_install == 1 {
+when is_install == 1 && argn >= 3 {
   hold handled = 1
   when argn >= 3 {
-    hold src = arg(2)
+    hold src = rooted(root, arg(2 + online_shift))
   }
   hold lock = read_file(lock_path)
   hold lock_len = len(lock)
@@ -1476,7 +2120,7 @@ when is_install == 1 {
       hold lock = concat(lock, "\n")
     }
     hold lock_len = len(lock)
-    hold dires = resolve(lock, src, lock_len)
+    hold dires = resolve(lock, src, lock_len, registry_path)
     when sx_index(dires, 0) == 33 {
       show concat("sxpkg: DEP ", tail1(dires))
       hold diproblems = 1
@@ -1488,7 +2132,7 @@ when is_install == 1 {
         hold direst = drop_field(direst)
         hold dinm = dep_name(dispec)
         hold divr = dep_ver(dispec)
-        hold diwhy = check_pkg(dinm, divr)
+        hold diwhy = check_pkg(dinm, divr, registry_path)
         when len(diwhy) == 0 {
           show concat("sxpkg: ok ", concat(dinm, concat(" ", divr)))
         } otherwise {
@@ -1509,12 +2153,12 @@ when is_install == 1 {
                 show concat("sxpkg: MISMATCH ", concat(dinm, concat(": the source main.sa sums to ", concat(disgot, concat(" but its pkg.meta says ", diswant)))))
                 hold diproblems = diproblems + 1
               } otherwise {
-                hold diw1 = write_file(concat(".sayanox/registry/", concat(dinm, "/pkg.meta")), dismeta)
-                hold diw2 = write_file(concat(".sayanox/registry/", concat(dinm, "/main.sa")), dissa)
+                hold diw1 = write_file(concat(concat(registry_path, "/"), concat(dinm, "/pkg.meta")), dismeta)
+                hold diw2 = write_file(concat(concat(registry_path, "/"), concat(dinm, "/main.sa")), dissa)
                 when diw1 == 1 && diw2 == 1 {
                   show concat("sxpkg: installed ", concat(dinm, concat(" ", divr)))
                 } otherwise {
-                  show concat("sxpkg: MISSING ", concat(dinm, concat(": cannot write .sayanox/registry/", concat(dinm, "/; run sh tools/sxpkg.sh install-local to create the folders"))))
+                  show concat("sxpkg: MISSING ", concat(dinm, concat(": cannot write ", concat(concat(registry_path, "/"), concat(dinm, "/; run sxpkg install-local to create the folders")))))
                   hold diproblems = diproblems + 1
                 }
               }
@@ -1547,7 +2191,7 @@ when is_install_local == 1 {
 // one line and exits non-zero.
 when is_ensure_dir == 1 {
   hold handled = 1
-  hold edpath = arg(2)
+  hold edpath = arg(2 + online_shift)
   hold edcode = 0
   when ensure_dir(edpath) == 1 {
     hold edcode = exit(0)
@@ -1559,7 +2203,7 @@ when is_ensure_dir == 1 {
 
 when is_rm_tree == 1 {
   hold handled = 1
-  hold rtpath = arg(2)
+  hold rtpath = arg(2 + online_shift)
   hold rtcode = 0
   when rm_tree(rtpath) == 1 {
     hold rtcode = exit(0)
@@ -1571,8 +2215,8 @@ when is_rm_tree == 1 {
 
 when is_copy_tree == 1 {
   hold handled = 1
-  hold ctsrc = arg(2)
-  hold ctdst = arg(3)
+  hold ctsrc = arg(2 + online_shift)
+  hold ctdst = arg(3 + online_shift)
   hold ctcode = 0
   when copy_tree(ctsrc, ctdst) == 1 {
     hold ctcode = exit(0)
@@ -1672,12 +2316,21 @@ when is_publish == 1 {
 // The wrapper's http(s) branch keeps curl or wget plus its mktemp staging.
 when is_fetch_local == 1 {
   hold handled = 1
-  hold flsrc = arg(2)
-  hold flname = arg(3)
+  hold flsrc = arg(2 + online_shift)
+  when len(fetch_src) > 0 {
+    hold flsrc = fetch_src
+  }
+  hold flname = arg(3 + online_shift)
+  when len(fetch_name) > 0 {
+    hold flname = fetch_name
+  }
   when len(flname) == 0 {
     hold flname = "remote_pkg"
   }
-  hold fldisp = arg(4)
+  hold fldisp = arg(4 + online_shift)
+  when len(fetch_disp) > 0 {
+    hold fldisp = fetch_disp
+  }
   when len(fldisp) == 0 {
     hold fldisp = flsrc
   }
@@ -1780,6 +2433,10 @@ when is_fetch_local == 1 {
       }
     }
   }
+  // the staging file a remote fetch came through is not left behind
+  when len(fetch_temp) > 0 {
+    hold ft2_rm = remove_path(fetch_temp)
+  }
 }
 
 
@@ -1790,8 +2447,8 @@ when is_fetch_local == 1 {
 when string_eq(command, "check-lock") {
   hold handled = 1
   hold clpath = lock_path
-  when len(arg(2)) > 0 {
-    hold clpath = arg(2)
+  when len(arg(2 + online_shift)) > 0 {
+    hold clpath = arg(2 + online_shift)
   }
   hold cltext = read_file(clpath)
   when len(cltext) > 0 {
@@ -1850,8 +2507,8 @@ when string_eq(command, "need-fetch") {
 when string_eq(command, "install-cached") {
   hold handled = 1
   hold icdir = pkg_path
-  when len(arg(2)) > 0 {
-    hold icdir = arg(2)
+  when len(arg(2 + online_shift)) > 0 {
+    hold icdir = arg(2 + online_shift)
   }
   hold ictext = read_file(lock_path)
   when len(ictext) > 0 {
@@ -1892,7 +2549,28 @@ when string_eq(command, "install-cached") {
   }
 }
 
+// help and an unknown command: the two answers the wrapper's case statement
+// gave, including the exit status 2 that test-sxpkg-polish pins.
 when handled == 0 {
-  show "sxpkg: local commands: init | add <name> [version] | list | remove <name> | seed | search | info | deps | install [registry] | install-local [registry] | verify | sum <file> | publish"
-  show "sxpkg: the wrapper keeps http(s) transfers (curl or wget) and the online opt-in policy"
+  hold ask_help = 0
+  when string_eq(command, "help") {
+    hold ask_help = 1
+  }
+  when string_eq(command, "-h") {
+    hold ask_help = 1
+  }
+  when string_eq(command, "--help") {
+    hold ask_help = 1
+  }
+  when ask_help == 1 {
+    show "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"
+    show concat("  ONLINE registry: ", registry_url)
+    show "  override: SAYANOX_REGISTRY=https://... (or file:///path/to/registry)"
+    show "  network is opt-in: SAYANOX_ONLINE=1 or 'sxpkg --online <command>'"
+    show "  offline commands: init add list deps info search seed verify sum install-local publish"
+  } otherwise {
+    show concat("sxpkg: unknown command '", concat(command, "'"))
+    show "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"
+    hold help_code = exit(2)
+  }
 }

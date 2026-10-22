@@ -67,6 +67,7 @@ the same source); the checked-in `seed-min` predates them and rejects them.
 | `bit_not(a)` | 64-bit complement as a number |
 | `shl(a, n)` / `shr(a, n)` | unsigned 64-bit shift left/right by `n` bits |
 | `run_command(cmd)` | run `cmd` with `/bin/sh -c`, give its exit status (`-1` if it could not be started); stdout/stderr are inherited |
+| `getenv(name)` | the value of an environment variable, `""` when it is not set |
 
 All of them are ordinary expressions, so they nest inside other calls
 (`concat(a, numstr(n))`) and can be stored (`hold n = numstr(v)`). Native AOT
@@ -105,6 +106,15 @@ is the first consumer -- the four negative-diagnostic suites that used to be
 four `.sh` files -- and `make test-sxdiag` pins its status mapping
 (`show run_command("exit 3")` prints `3`). seed-min and the native backend
 refuse it like every other late builtin.
+
+`getenv(name)` was added on 2026-10-22 for the same reason, one step further:
+it is what let `tools/sxpkg.sh` disappear. The wrapper existed to read
+`SAYANOX_ROOT`, `SAYANOX_REGISTRY` and `SAYANOX_ONLINE` and to `cd` into the
+project; `tools/sxpkg.sa` now reads all three itself and builds every path
+through the root, and the only thing it still starts is the transfer program
+it found on `PATH`. An unset variable is `""`, never an error -- the wrappers
+all treated unset as "not given", and a builtin that refused would only make
+every call site guard it.
 
 It is called `run_command` and not `run` on purpose: `make run()` is a common
 helper name in these tools (`sxlink`, `sxencode` and `sxdiag` all define one)

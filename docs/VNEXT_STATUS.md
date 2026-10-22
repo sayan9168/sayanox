@@ -29,7 +29,7 @@ kept only as a record of the earlier vNext plan.
 | Larger .sa compiler sources | `selfhost/compiler.sa lexer.sa parser.sa codegen.sa ...` | Written against a **richer builtin set that no binary in this repo implements** (`list_get push string_len make`). They are not wired into any build/test path. |
 | Native AOT | `selfhost/native_aot.c` (90 lines) | Linux x86-64 ELF emitter, but it **interprets** `.sa` at compile time and emits the output bytes as a static `write()` blob. Supports `hold/show/when/while` on integers only. No functions, lists, strings-as-values, calls. |
 | Runtime | `selfhost/rc_runtime.h` | Tiny refcounted-string header (`sx_rc_new/retain/release/concat`). Not linked from any working pipeline; most generated C uses plain doubles/puts. |
-| CLI | `selfhost/sx` (bash, deleted 2026-10-21), `tools/sxpkg.sh`, `tools/sayanox-lsp.sh` | Bash wrappers around nonexistent binaries in most paths. |
+| CLI | `selfhost/sx` (bash, deleted 2026-10-21), `tools/sxpkg.sh` (deleted 2026-10-22), `tools/sayanox-lsp.sh` | Bash wrappers around nonexistent binaries in most paths. The package tool is one Sayanox binary now (`tools/sxpkg`). |
 | CI | `.github/workflows/ci.yml` | Contains `|| echo "skip"` soft-failures everywhere; pure-gen2 step is optional and its script fakes Gen2 (see below). |
 
 ## Working features (verified)

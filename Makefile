@@ -294,30 +294,30 @@ test-sxpkg: sxpkg
 	cmp $(TESTS)/sxpkg/sx.lock-want $(TESTS)/sxpkg/sx.lock
 	@echo "[OK] Sayanox package tool: init/add/update/list/remove"
 
-test-sxpkg-wrapper: sxpkg tools/sxpkg.sh
+test-sxpkg-wrapper: sxpkg
 	@mkdir -p $(TESTS)/sxpkg-wrapper
 	@printf '' > $(TESTS)/sxpkg-wrapper/sx.lock
 	@printf '' > $(TESTS)/sxpkg-wrapper/sx.toml
-	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh init >/dev/null
-	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh add local-pkg >/dev/null
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh list,sxpkg: locked packages\nlocal-pkg=0.1.0)
-	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh remove local-pkg >/dev/null
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh list,sxpkg: locked packages\n(none))
-	cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh seed >/dev/null
+	cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) init >/dev/null
+	cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) add local-pkg >/dev/null
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) list,sxpkg: locked packages\nlocal-pkg=0.1.0)
+	cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) remove local-pkg >/dev/null
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) list,sxpkg: locked packages\n(none))
+	cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) seed >/dev/null
 	@printf 'hello=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-wrapper/index-want
 	cmp $(TESTS)/sxpkg-wrapper/index-want $(TESTS)/sxpkg-wrapper/.sayanox/registry/INDEX
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh search math,sxpkg: search math\n  math 0.1.0)
-	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && sh ../../../tools/sxpkg.sh info math,name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\nsum=718013937)
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) search math,sxpkg: search math\n  math 0.1.0)
+	$(call assert-out,cd $(TESTS)/sxpkg-wrapper && ../../../$(SXPKG_BIN) info math,name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\nsum=718013937)
 	@mkdir -p $(TESTS)/sxpkg-wrapper/project
 	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.lock
 	@printf '' > $(TESTS)/sxpkg-wrapper/project/sx.toml
-	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh init >/dev/null
+	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project ../../../$(SXPKG_BIN) init >/dev/null
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-wrapper/project/lock-want
 	cmp $(TESTS)/sxpkg-wrapper/project/lock-want $(TESTS)/sxpkg-wrapper/project/sx.lock
-	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project sh ../../../tools/sxpkg.sh add rooted 0.1.0 >/dev/null
+	cd $(TESTS)/sxpkg-wrapper && SAYANOX_ROOT=project ../../../$(SXPKG_BIN) add rooted 0.1.0 >/dev/null
 	@printf '# sx.lock\nversion=1\nrooted=0.1.0\n' > $(TESTS)/sxpkg-wrapper/project/lock-want
 	cmp $(TESTS)/sxpkg-wrapper/project/lock-want $(TESTS)/sxpkg-wrapper/project/sx.lock
-	@echo "[OK] sxpkg.sh delegates local commands to Sayanox"
+	@echo "[OK] sxpkg: one Sayanox binary for the whole package tool, no shell wrapper"
 
 
 test-reassign:
@@ -1464,19 +1464,19 @@ test-stdlib: $(GEN2) $(SEED_MIN_BIN)
 # cannot set an exit status, so the shell wrapper turns a FAILED/DEP report
 # into rc 1 (verify, install-local), an unknown command is rc 2, and `publish`
 # prints its report once (it used to run twice through a duplicated dispatch).
-test-sxpkg-polish: sxpkg tools/sxpkg.sh
+test-sxpkg-polish: sxpkg
 	@mkdir -p $(TESTS)/sxpkg-polish
 	@printf '' > $(TESTS)/sxpkg-polish/sx.lock
 	@printf 'name = "pol-pkg"\nversion = "0.1.0"\n' > $(TESTS)/sxpkg-polish/sx.toml
-	cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh init >/dev/null
-	cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
-	@if (cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh verify >/dev/null 2>&1); then \
+	cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) init >/dev/null
+	cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
+	@if (cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) verify >/dev/null 2>&1); then \
 	  echo "[FAIL] sxpkg verify exited 0 with a missing package"; exit 1; fi
-	@if (cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh install-local $(CURDIR)/registry >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) install-local $(CURDIR)/registry >/dev/null 2>&1); then \
 	  echo "[FAIL] sxpkg install-local exited 0 with an unresolvable lock entry"; exit 1; fi
-	@cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh bogus >/dev/null 2>&1; \
+	@cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) bogus >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then echo "[FAIL] unknown sxpkg command exited $$rc, want 2"; exit 1; fi
-	@n=$$(cd $(TESTS)/sxpkg-polish && sh ../../../tools/sxpkg.sh publish | grep -c 'sxpkg: published locally pol-pkg 0.1.0'); \
+	@n=$$(cd $(TESTS)/sxpkg-polish && ../../../$(SXPKG_BIN) publish | grep -c 'sxpkg: published locally pol-pkg 0.1.0'); \
 	  if [ "$$n" != 1 ]; then echo "[FAIL] sxpkg publish reported $$n times, want 1"; exit 1; fi
 	@echo "[OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once"
 
@@ -1484,12 +1484,11 @@ test-sxpkg-polish: sxpkg tools/sxpkg.sh
 # ---------------------------------------------------------------------------
 # test-sxpkg-sayanox-logic: the part of sxpkg that moved out of the shell.
 #
-# tools/sxpkg.sh used to carry publish, install-local's folder loop and the
-# local-registry halves of sync and fetch in grep/cut/tr/cp/mkdir/rm.  All of
-# that is Sayanox now, in tools/sxpkg.sa, and the shell keeps only what Sayanox
-# cannot do: reading SAYANOX_ONLINE from the environment, and launching curl or
-# wget for an http(s) transfer (`spawn` takes a path with no argv, so it cannot
-# pass a URL at all).
+# tools/sxpkg.sa is the whole package tool since 2026-10-22: the shell wrapper
+# that carried publish, install-local's folder loop, the local-registry halves
+# of sync and fetch, the online opt-in policy, SAYANOX_ROOT and the exit
+# statuses is gone.  The `getenv` and `run_command` builtins replaced it, and
+# the one program it still starts is the http(s) transport itself.
 #
 # Pinned here:
 #   * publish writes pkg.meta (name/version/sum) and main.sa, adds exactly one
@@ -1510,7 +1509,7 @@ test-sxpkg-polish: sxpkg tools/sxpkg.sh
 #     later `make`.  The generated C and a fixture both pin that it did not.
 # ---------------------------------------------------------------------------
 .PHONY: test-sxpkg-sayanox-logic
-test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
+test-sxpkg-sayanox-logic: sxpkg
 	@mkdir -p $(TESTS)/sxpkg-sayanox
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox sx.lock sx.toml main.sa srcreg syncreg badreg deep csrc cdst fetchsrc.sa
 	@# ---- a comment with balanced quotes must not break a typed signature ----
@@ -1528,7 +1527,7 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	@printf 'name = "pub-pkg"\nversion = "2.3.4"\n' > $(TESTS)/sxpkg-sayanox/sx.toml
 	@printf 'show "pub"\n' > $(TESTS)/sxpkg-sayanox/main.sa
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh publish > pub.out
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) publish > pub.out
 	@grep -q -F 'sxpkg: published locally pub-pkg 2.3.4' $(TESTS)/sxpkg-sayanox/pub.out \
 	  || { echo "[FAIL] publish did not report the package"; exit 1; }
 	@test $$(grep -c -F 'sxpkg: published locally' $(TESTS)/sxpkg-sayanox/pub.out) -eq 1 \
@@ -1546,34 +1545,34 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	  || { echo "[FAIL] publish wrote the wrong INDEX"; exit 1; }
 	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/pkgs \
 	  || { echo "[FAIL] publish created a project copy; it never installs"; exit 1; }
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh publish >/dev/null
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) publish >/dev/null
 	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
 	  || { echo "[FAIL] a second publish duplicated the INDEX entry"; exit 1; }
 	@printf '# sx.lock\nversion=1\npub-pkg=2.3.4\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) verify | grep -q 'verify ok' \
 	  || { echo "[FAIL] a Sayanox-published package does not verify"; exit 1; }
 	@# ---- install-local ----
 	@mkdir -p $(TESTS)/sxpkg-sayanox/srcreg
 	@cp -r registry/math registry/strings $(TESTS)/sxpkg-sayanox/srcreg/
 	@printf '# sx.lock\nversion=1\nmath=0.1.0\nstrings=0.1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg > il.out
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) install-local srcreg > il.out
 	@grep -q -F 'sxpkg: install ok' $(TESTS)/sxpkg-sayanox/il.out \
 	  || { echo "[FAIL] install-local did not report ok"; exit 1; }
 	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/math/pkg.meta \
 	  || { echo "[FAIL] install-local wrote no registry copy"; exit 1; }
 	@test -d $(TESTS)/sxpkg-sayanox/.sayanox/pkgs/math \
 	  || { echo "[FAIL] install-local created no project folder"; exit 1; }
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) verify | grep -q 'verify ok' \
 	  || { echo "[FAIL] an install-local package does not verify"; exit 1; }
 	@printf '# sx.lock\nversion=1\nnosuch=9.9\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) install-local srcreg >/dev/null 2>&1); then \
 	  echo "[FAIL] install-local exited 0 with an unresolvable lock entry"; exit 1; fi
 	@printf '# sx.lock\nversion=1\n../escape=1.0\n' > $(TESTS)/sxpkg-sayanox/sx.lock
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) install-local srcreg >/dev/null 2>&1); then \
 	  echo "[FAIL] install-local accepted an unsafe package name"; exit 1; fi
 	@test ! -e $(TESTS)/escape || { echo "[FAIL] install-local escaped the tests directory"; exit 1; }
 	@rm -f $(TESTS)/sxpkg-sayanox/sx.lock
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh install-local srcreg >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) install-local srcreg >/dev/null 2>&1); then \
 	  echo "[FAIL] install-local exited 0 with no sx.lock"; exit 1; fi
 	@# ---- sync against a local registry ----
 	@mkdir -p $(TESTS)/sxpkg-sayanox/syncreg/hello $(TESTS)/sxpkg-sayanox/syncreg/math
@@ -1583,7 +1582,7 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
 	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/syncreg \
-	    sh ../../../tools/sxpkg.sh sync > sync.out
+	    ../../../$(SXPKG_BIN) sync > sync.out
 	@grep -q -F 'sxpkg: index updated' $(TESTS)/sxpkg-sayanox/sync.out \
 	  || { echo "[FAIL] sync did not report the index"; exit 1; }
 	@grep -q -F '  synced math=0.1.0' $(TESTS)/sxpkg-sayanox/sync.out \
@@ -1594,28 +1593,28 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/math/main.sa \
 	  || { echo "[FAIL] sync copied no package"; exit 1; }
 	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/syncreg \
-	    sh ../../../tools/sxpkg.sh sync > sync2.out
+	    ../../../$(SXPKG_BIN) sync > sync2.out
 	@test $$(grep -c -F '  synced math=0.1.0' $(TESTS)/sxpkg-sayanox/sync2.out) -eq 1 \
 	  || { echo "[FAIL] a second sync duplicated the report"; exit 1; }
 	@mkdir -p $(TESTS)/sxpkg-sayanox/badreg
 	@printf '../escape=0.1.0\nmath=0.1.0\n' > $(TESTS)/sxpkg-sayanox/badreg/INDEX
 	@if (cd $(TESTS)/sxpkg-sayanox && \
 	      SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-sayanox/badreg \
-	      sh ../../../tools/sxpkg.sh sync >/dev/null 2>&1); then \
+	      ../../../$(SXPKG_BIN) sync >/dev/null 2>&1); then \
 	  echo "[FAIL] sync accepted an index with an unsafe package name"; exit 1; fi
 	@cmp $(TESTS)/sxpkg-sayanox/index-want $(TESTS)/sxpkg-sayanox/.sayanox/registry/INDEX \
 	  || { echo "[FAIL] a rejected index destroyed the installed one"; exit 1; }
 	@test ! -e $(TESTS)/escape || { echo "[FAIL] sync escaped the tests directory"; exit 1; }
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
 	@cd $(TESTS)/sxpkg-sayanox && SAYANOX_REGISTRY=file:///nonexistent-registry \
-	    sh ../../../tools/sxpkg.sh sync > sync3.out
+	    ../../../$(SXPKG_BIN) sync > sync3.out
 	@grep -q -F 'sxpkg: local registry seeded' $(TESTS)/sxpkg-sayanox/sync3.out \
 	  || { echo "[FAIL] sync did not fall back to the local seed"; exit 1; }
 	@# ---- fetch from a local source ----
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
 	@printf 'show "fetched"\n' > $(TESTS)/sxpkg-sayanox/fetchsrc.sa
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa fetched > fetch.out
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) fetch fetchsrc.sa fetched > fetch.out
 	@grep -q -F 'sxpkg: fetched fetched from fetchsrc.sa (checksum recorded; not authenticated)' \
 	    $(TESTS)/sxpkg-sayanox/fetch.out || { echo "[FAIL] fetch did not report the package"; exit 1; }
 	@test -f $(TESTS)/sxpkg-sayanox/.sayanox/registry/fetched/main.sa \
@@ -1626,9 +1625,9 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	  || { echo "[FAIL] fetch recorded no content sum"; exit 1; }
 	@grep -q -F 'fetched=0.0.0' $(TESTS)/sxpkg-sayanox/sx.lock \
 	  || { echo "[FAIL] fetch did not pin the package in sx.lock"; exit 1; }
-	@cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh verify | grep -q 'verify ok' \
+	@cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) verify | grep -q 'verify ok' \
 	  || { echo "[FAIL] a fetched package does not verify"; exit 1; }
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa fetched >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) fetch fetchsrc.sa fetched >/dev/null 2>&1); then \
 	  echo "[FAIL] fetch overwrote an existing package"; exit 1; fi
 	@grep -q -F 'fetched=0.0.0' $(TESTS)/sxpkg-sayanox/sx.lock \
 	  || { echo "[FAIL] a refused fetch changed sx.lock"; exit 1; }
@@ -1640,7 +1639,7 @@ test-sxpkg-sayanox-logic: sxpkg tools/sxpkg.sh
 	@cd $(TESTS)/sxpkg-sayanox && rm -rf .sayanox
 	@printf '# sx.lock\nversion=1\n' > $(TESTS)/sxpkg-sayanox/sx.lock
 	@printf 'not a directory' > $(TESTS)/sxpkg-sayanox/.sayanox
-	@if (cd $(TESTS)/sxpkg-sayanox && sh ../../../tools/sxpkg.sh fetch fetchsrc.sa rolled >/dev/null 2>&1); then \
+	@if (cd $(TESTS)/sxpkg-sayanox && ../../../$(SXPKG_BIN) fetch fetchsrc.sa rolled >/dev/null 2>&1); then \
 	  echo "[FAIL] fetch succeeded with an unusable registry"; exit 1; fi
 	@test ! -e $(TESTS)/sxpkg-sayanox/.sayanox/registry/rolled \
 	  || { echo "[FAIL] a failed fetch left a registry copy"; exit 1; }
@@ -2186,13 +2185,13 @@ test-read-bytes: $(GEN2) $(SEED_MIN_BIN)
 test-read-bytes: $(NATIVE_BIN)
 
 .PHONY: test-sxpkg-online-optin
-test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
+test-sxpkg-online-optin: sxpkg
 	rm -rf $(TESTS)/sxpkg-optin && mkdir -p $(TESTS)/sxpkg-optin/p $(TESTS)/sxpkg-optin/mock
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 cd $$P/p && sh $$W init >/dev/null && sh $$W add strings 0.1.0 >/dev/null
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 cd $$P/p && $$W init >/dev/null && $$W add strings 0.1.0 >/dev/null
 	# ---- 1. sync refuses without an opt-in, and names the way to opt in ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W sync) >$$P/no.out 2>$$P/no.err; then \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r $$W sync) >$$P/no.out 2>$$P/no.err; then \
 	   echo "[FAIL] sxpkg sync reached for the network without an opt-in"; exit 1; fi; \
 	 grep -q -F 'refusing to use the network without an explicit opt-in' $$P/no.err \
 	   || { echo "[FAIL] the refusal does not say why:"; cat $$P/no.err; exit 1; }; \
@@ -2205,8 +2204,8 @@ test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 	@printf '#!/bin/sh\necho "test transfer attempted" >&2\nexit 1\n' > $(TESTS)/sxpkg-optin/mock/curl
 	@chmod +x $(TESTS)/sxpkg-optin/mock/curl
 	# ---- 2. SAYANOX_ONLINE=1 lifts it; failed transport falls back to local seed ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_ONLINE=1 SAYANOX_REGISTRY=https://registry.invalid/r sh $$W sync) >$$P/yes.out 2>$$P/yes.err \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_ONLINE=1 SAYANOX_REGISTRY=https://registry.invalid/r $$W sync) >$$P/yes.out 2>$$P/yes.err \
 	   || { echo "[FAIL] an opted-in sync exited nonzero:"; cat $$P/yes.err; exit 1; }; \
 	 if grep -q -F 'refusing to use the network' $$P/yes.out $$P/yes.err; then \
 	   echo "[FAIL] SAYANOX_ONLINE=1 did not lift the refusal"; exit 1; fi; \
@@ -2214,36 +2213,36 @@ test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 	   || { echo "[FAIL] the opted-in sync never reached the transfer step:"; cat $$P/yes.out; exit 1; }
 	@grep -q -F "test transfer attempted" $(TESTS)/sxpkg-optin/yes.err
 	# ---- 3. the --online flag form is the same permission ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
-	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_REGISTRY=https://registry.invalid/r sh $$W --online sync) >$$P/flag.out 2>$$P/flag.err \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	 (cd $$P/p && PATH="$$P/mock:$$PATH" SAYANOX_REGISTRY=https://registry.invalid/r $$W --online sync) >$$P/flag.out 2>$$P/flag.err \
 	   || { echo "[FAIL] 'sxpkg --online sync' exited nonzero:"; cat $$P/flag.err; exit 1; }; \
 	 grep -q -F 'online sync failed; using local seed' $$P/flag.out \
 	   || { echo "[FAIL] 'sxpkg --online sync' did not attempt the transfer:"; cat $$P/flag.out; exit 1; }
 	@grep -q -F "test transfer attempted" $(TESTS)/sxpkg-optin/flag.err
 	echo "[OK] sxpkg opt-in: SAYANOX_ONLINE=1 and 'sxpkg --online <cmd>' both permit the transfer, which then fails in the test stub (no network) and falls back to the offline seed"
 	# ---- 4. install with every locked package already local needs no opt-in ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
 	 rm -rf $$P/p/.sayanox/registry/strings && cp -r registry/strings $$P/p/.sayanox/registry/strings && \
-	 (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W install) >$$P/off.out 2>$$P/off.err \
+	 (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r $$W install) >$$P/off.out 2>$$P/off.err \
 	   || { echo "[FAIL] an all-local install demanded the network:"; cat $$P/off.out $$P/off.err; exit 1; }; \
 	 grep -q -F 'verify ok' $$P/off.out || { echo "[FAIL] the all-local install did not verify:"; cat $$P/off.out; exit 1; }; \
 	 if grep -q -F 'refusing to use the network' $$P/off.out $$P/off.err; then \
 	   echo "[FAIL] an all-local install printed the network refusal"; exit 1; fi
 	echo "[OK] sxpkg install: an all-local lock is copied and verified with no opt-in (offline stays first-class)"
 	# ---- 5. install that must fetch refuses without an opt-in ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
 	 rm -rf $$P/p/.sayanox/registry/strings; \
-	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r sh $$W install) >$$P/need.out 2>$$P/need.err; then \
+	 if (cd $$P/p && SAYANOX_REGISTRY=https://registry.invalid/r $$W install) >$$P/need.out 2>$$P/need.err; then \
 	   echo "[FAIL] sxpkg install reached for the network without an opt-in"; exit 1; fi; \
 	 grep -q -F 'refusing to use the network without an explicit opt-in' $$P/need.err \
 	   || { echo "[FAIL] the install refusal does not say why:"; cat $$P/need.err; exit 1; }
 	# ---- 6. fetch: a file:// URL is local, a remote URL is not ----
-	W=$(CURDIR)/tools/sxpkg.sh; P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
+	W=$(CURDIR)/$(SXPKG_BIN); P=$(CURDIR)/$(TESTS)/sxpkg-optin; \
 	 printf 'show 1\n' > $$P/one.sa; \
-	 (cd $$P/p && sh $$W fetch file://$$P/one.sa onepkg) >$$P/f1.out 2>$$P/f1.err \
+	 (cd $$P/p && $$W fetch file://$$P/one.sa onepkg) >$$P/f1.out 2>$$P/f1.err \
 	   || { echo "[FAIL] fetch of a file:// URL asked for an opt-in:"; cat $$P/f1.err; exit 1; }; \
 	 grep -q -F 'fetched onepkg' $$P/f1.out || { echo "[FAIL] the file:// fetch did not complete:"; cat $$P/f1.out; exit 1; }; \
-	 if (cd $$P/p && sh $$W fetch https://registry.invalid/one.sa onepkg2) >$$P/f2.out 2>$$P/f2.err; then \
+	 if (cd $$P/p && $$W fetch https://registry.invalid/one.sa onepkg2) >$$P/f2.out 2>$$P/f2.err; then \
 	   echo "[FAIL] sxpkg fetch reached for the network without an opt-in"; exit 1; fi; \
 	 grep -q -F 'refusing to use the network without an explicit opt-in' $$P/f2.err \
 	   || { echo "[FAIL] the fetch refusal does not say why:"; cat $$P/f2.err; exit 1; }
@@ -2264,17 +2263,17 @@ test-sxpkg-online-optin: sxpkg tools/sxpkg.sh
 #   tampered remote -> rejected: verify fails, the download is removed, rc 1
 #   missing remote  -> no partial .part file is left, rc 1
 # ---------------------------------------------------------------------------
-test-sxpkg-online-local: sxpkg tools/sxpkg.sh
+test-sxpkg-online-local: sxpkg
 	@rm -rf $(TESTS)/sxpkg-online && mkdir -p $(TESTS)/sxpkg-online
 	@cp -r registry $(TESTS)/sxpkg-online/good
 	@cp -r $(TESTS)/sxpkg-online/good $(TESTS)/sxpkg-online/bad
 	@printf 'show 999\n' >> $(TESTS)/sxpkg-online/bad/strings/main.sa
 	@cp -r $(TESTS)/sxpkg-online/good $(TESTS)/sxpkg-online/miss && rm -rf $(TESTS)/sxpkg-online/miss/strings
-	@W=$(CURDIR)/tools/sxpkg.sh; \
+	@W=$(CURDIR)/$(SXPKG_BIN); \
 	for c in good bad miss; do \
 	  mkdir -p $(TESTS)/sxpkg-online/p_$$c && cd $(TESTS)/sxpkg-online/p_$$c && \
-	  sh $$W init >/dev/null && sh $$W add strings 0.1.0 >/dev/null || exit 1; \
-	  SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-online/$$c sh $$W install >$(CURDIR)/$(TESTS)/sxpkg-online/$$c.out 2>&1; rc=$$?; \
+	  $$W init >/dev/null && $$W add strings 0.1.0 >/dev/null || exit 1; \
+	  SAYANOX_REGISTRY=file://$(CURDIR)/$(TESTS)/sxpkg-online/$$c $$W install >$(CURDIR)/$(TESTS)/sxpkg-online/$$c.out 2>&1; rc=$$?; \
 	  cd $(CURDIR); \
 	  case $$c in \
 	    good) [ $$rc -eq 0 ] || { echo "[FAIL] good remote: rc=$$rc"; exit 1; }; \
@@ -2770,7 +2769,7 @@ test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 # ---------------------------------------------------------------------------
 # test-pkgs: the offline package use-path, with no network at all.
 #
-#   * `tools/sxpkg.sh init` (mkdir only) plus the Sayanox `sxpkg seed` writes a
+#   * `sxpkg init` (which makes the folders) plus the Sayanox `sxpkg seed` writes a
 #     local registry under .sayanox/registry/ - hello and math samples with
 #     mkdir + write_file, no curl/wget, no download;
 #   * `sxpkg add math 0.1.0` records the lock, `list`/`search` read it back;
@@ -2789,12 +2788,12 @@ test-native-cond: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 # ---------------------------------------------------------------------------
 test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
 	@mkdir -p $(TESTS)/pkgs-proj
-	cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh init >/dev/null
-	cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+	cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) init >/dev/null
+	cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) seed >/dev/null
 	cd $(TESTS)/pkgs-proj && test -s .sayanox/registry/math/main.sa
 	cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) add math 0.1.0 >/dev/null
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) list,sxpkg: locked packages\nmath=0.1.0)
-	$(call assert-out,cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh search math,sxpkg: search math\n  math 0.1.0)
+	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) search math,sxpkg: search math\n  math 0.1.0)
 	@printf 'use ".sayanox/registry/math/main.sa"\nshow dbl(21)\nshow sqr(6)\n' > $(TESTS)/pkgs-proj/use_math.sa
 	./$(SEED_MIN_BIN) $(TESTS)/pkgs-proj/use_math.sa > $(TESTS)/pkgs-proj/use_sm.c
 	$(CC) -O2 -o $(TESTS)/pkgs-proj/use_sm $(TESTS)/pkgs-proj/use_sm.c
@@ -2811,13 +2810,16 @@ test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
 	@cp -r registry $(TESTS)/pkgs-deps/registry
 	@mkdir -p $(TESTS)/pkgs-deps/.sayanox/registry
 	@cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) init >/dev/null
-	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) add calc 0.1.0,sxpkg: locked math 0.1.0 (dependency of calc)\nsxpkg: locked calc 0.1.0)
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) add calc 0.1.0,sxpkg: locked math 0.1.0 (dependency of calc)\nsxpkg: locked calc 0.1.0\nsxpkg: note: calc has no local registry copy yet (run: sxpkg seed; or sxpkg sync when online))
 	@printf '# sx.lock\nversion=1\ncalc=0.1.0\nmath=0.1.0\n' > $(TESTS)/pkgs-deps/lock-want
 	cmp $(TESTS)/pkgs-deps/lock-want $(TESTS)/pkgs-deps/sx.lock
 	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) deps,sxpkg: dependency closure\n  calc 0.1.0\n  math 0.1.0)
-	@# Sayanox has no mkdir, so a bare `install` says so instead of failing silently
-	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) install registry,sxpkg: MISSING calc: cannot write .sayanox/registry/calc/; run sh tools/sxpkg.sh install-local to create the folders\nsxpkg: MISSING math: cannot write .sayanox/registry/math/; run sh tools/sxpkg.sh install-local to create the folders\nsxpkg: install FAILED (2 problem(s)))
-	$(call assert-out,cd $(TESTS)/pkgs-deps && sh ../../../tools/sxpkg.sh install-local registry,sxpkg: installed calc 0.1.0\nsxpkg: installed math 0.1.0\nsxpkg: install ok)
+	@# A bare `install` does not create destinations: it reports what it could not
+	@# write. Empty the project registry first, so the report is about a missing
+	@# destination and not about whatever the seed happened to leave there.
+	@rm -rf $(TESTS)/pkgs-deps/.sayanox/registry
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) install registry,sxpkg: MISSING calc: cannot write .sayanox/registry/calc/; run sxpkg install-local to create the folders\nsxpkg: MISSING math: cannot write .sayanox/registry/math/; run sxpkg install-local to create the folders\nsxpkg: install FAILED (2 problem(s)))
+	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) install-local registry,sxpkg: installed calc 0.1.0\nsxpkg: installed math 0.1.0\nsxpkg: install ok)
 	$(call assert-out,cd $(TESTS)/pkgs-deps && ../../../$(SXPKG_BIN) verify,sxpkg: verified calc 0.1.0\nsxpkg: verified math 0.1.0\nsxpkg: verify ok (2 locked packages))
 	@# an installed package may `use` its dependency: calc uses math's dbl/sqr
 	@printf 'use ".sayanox/registry/calc/main.sa"\nshow dblsqr(3)\nshow sqr(5)\n' > $(TESTS)/pkgs-deps/use_calc.sa
@@ -2835,8 +2837,10 @@ test-pkgs: sxpkg $(GEN2) $(SEED_MIN_BIN)
 	@# offline integrity: the lock is checked against the registry copy (version + pkg.meta sum)
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages))
 	@printf 'make dbl(n) {\n  give n + n + 0\n}\n' > $(TESTS)/pkgs-proj/.sayanox/registry/math/main.sa
-	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: MISMATCH math: main.sa sums to 115762249 but pkg.meta says 718013937\nsxpkg: verify FAILED (1 problem(s)))
-	cd $(TESTS)/pkgs-proj && sh ../../../tools/sxpkg.sh seed >/dev/null
+	@# a failed verify is still an exact-output assertion here, and now also an
+	@# exit status: the `:` keeps assert-out's stdout comparison in charge
+	$(call assert-out,cd $(TESTS)/pkgs-proj && { ../../../$(SXPKG_BIN) verify; :; },sxpkg: MISMATCH math: main.sa sums to 115762249 but pkg.meta says 718013937\nsxpkg: verify FAILED (1 problem(s)))
+	cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) seed >/dev/null
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) verify,sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages))
 	$(call assert-out,cd $(TESTS)/pkgs-proj && ../../../$(SXPKG_BIN) sum .sayanox/registry/math/main.sa,sxpkg: sum 718013937 .sayanox/registry/math/main.sa)
 	@if [ -x $(NATIVE_BIN) ]; then \
@@ -3805,14 +3809,16 @@ all-sayanox:
 	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
 	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' | wc -l)" 'POSIX sh'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
-	@echo "  done: compiler, formatter, package tool (local commands plus"
-	@echo "        publish, install-local and the local sync/fetch), language"
-	@echo "        server, IR translator, LSP folder index, LSP test client,"
-	@echo "        byte-buffer + bitwise builtins, the read_bytes binary"
-	@echo "        reader, the native backend's ELF image writer + rel32"
-	@echo "        linker (tools/sxlink.sa) and its x86-64 instruction"
-	@echo "        encoder (tools/sxencode.sa), both byte-identical to C,"
-	@echo "        the run_command(cmd) driver builtin and the diagnostic suites"
+	@echo "  done: compiler, formatter, the whole package tool (one Sayanox"
+	@echo "        binary since 2026-10-22: every command, the online opt-in"
+	@echo "        policy, SAYANOX_ROOT and its exit statuses; only curl/wget"
+	@echo "        is still an external program), language server, IR"
+	@echo "        translator, LSP folder index, LSP test client, byte-buffer"
+	@echo "        + bitwise builtins, the read_bytes binary reader, the native"
+	@echo "        backend's ELF image writer + rel32 linker (tools/sxlink.sa)"
+	@echo "        and its x86-64 instruction encoder (tools/sxencode.sa),"
+	@echo "        both byte-identical to C, the run_command(cmd) and"
+	@echo "        getenv(name) driver builtins, and the diagnostic suites"
 	@echo "        (tools/sxdiag.sa) that replaced four sh drivers"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
@@ -3864,7 +3870,19 @@ test-sxdiag: $(SXDIAG_BIN) $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	  || { echo "[FAIL] seed-min refused run_command() without a clear diagnostic"; cat $(TESTS)/sxdiag_run_seed.err; exit 1; }
 	@if ./$(NATIVE_BIN) $(TESTS)/sxdiag_run_seed.sa $(TESTS)/sxdiag_run_native 2>/dev/null; then \
 	  echo "[FAIL] native accepted run_command() without implementing it"; exit 1; fi
-	@echo "[OK] sxdiag: 23 inline, 7 postfix, 14 return-path and 31 name-resolution refusals checked in Sayanox, with an unknown-suite refusal and two accept-everything controls"
+	@# ---- the getenv(name) builtin: a value in, "" for a name that is unset ----
+	@printf 'show getenv("SXDIAG_MARK")\nhold unset = getenv("SXDIAG_NOT_SET")\nshow concat("[", concat(unset, "]"))\nwhen string_eq(getenv("SXDIAG_MODE"), "on") { show "mode-on" }\n' > $(TESTS)/sxdiag_env.sa
+	./$(GEN2) $(TESTS)/sxdiag_env.sa $(TESTS)/sxdiag_env.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/sxdiag_env $(TESTS)/sxdiag_env.c
+	$(call assert-out,SXDIAG_MARK=marked SXDIAG_MODE=on ./$(TESTS)/sxdiag_env,marked\n[]\nmode-on)
+	$(call assert-out,./$(TESTS)/sxdiag_env,\n[])
+	@if ./$(SEED_MIN_BIN) $(TESTS)/sxdiag_env.sa >/dev/null 2>$(TESTS)/sxdiag_env_seed.err; then \
+	  echo "[FAIL] seed-min accepted getenv() without implementing it"; exit 1; fi
+	@grep -q 'unknown function or builtin' $(TESTS)/sxdiag_env_seed.err \
+	  || { echo "[FAIL] seed-min refused getenv() without a clear diagnostic"; cat $(TESTS)/sxdiag_env_seed.err; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/sxdiag_env.sa $(TESTS)/sxdiag_env_native 2>/dev/null; then \
+	  echo "[FAIL] native accepted getenv() without implementing it"; exit 1; fi
+	@echo "[OK] sxdiag: 23 inline, 7 postfix, 14 return-path and 31 name-resolution refusals checked in Sayanox, with an unknown-suite refusal and two accept-everything controls; run_command and getenv refused by seed-min and native"
 
 $(NATIVE_BIN): $(NATIVE_SRC)
 	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
@@ -4280,11 +4298,11 @@ test-stage2: test-seed-limits
 .PHONY: test-pkg-errors
 test-pkg-errors: sxpkg
 	@mkdir -p $(TESTS)/pkg-errors-empty
-	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-empty sh tools/sxpkg.sh search math >$(TESTS)/pkg-search.err 2>&1; then echo '[FAIL] search without local index succeeded'; exit 1; fi
+	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-empty $(SXPKG_BIN) search math >$(TESTS)/pkg-search.err 2>&1; then echo '[FAIL] search without local index succeeded'; exit 1; fi
 	@grep -q 'no local index' $(TESTS)/pkg-search.err
 	@# A regular file cannot be used as a project directory.
 	@printf 'not a directory\n' > $(TESTS)/pkg-errors-file
-	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-file sh tools/sxpkg.sh verify >$(TESTS)/pkg-verify.err 2>&1; then echo '[FAIL] verify swallowed project failure'; exit 1; fi
+	@if SAYANOX_ROOT=$(TESTS)/pkg-errors-file $(SXPKG_BIN) verify >$(TESTS)/pkg-verify.err 2>&1; then echo '[FAIL] verify swallowed project failure'; exit 1; fi
 	@grep -q 'could not run verify' $(TESTS)/pkg-verify.err
 	@echo '[OK] package errors: search never implicitly syncs; verify propagates execution/project failure'
 test-pkgs: test-pkg-errors
@@ -5141,7 +5159,7 @@ test-stdlib-modules: test-stdlib-list-search
 native-test: test-stdlib-list-search
 
 .PHONY: test-sxpkg-transfer-hardening
-test-sxpkg-transfer-hardening: sxpkg tools/sxpkg.sh
+test-sxpkg-transfer-hardening: sxpkg
 	sh selfhost/test_sxpkg_transfer_hardening.sh
 
 test-sxpkg-online-optin: test-sxpkg-transfer-hardening

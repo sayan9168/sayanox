@@ -2,9 +2,10 @@
 
 Status: **next phase — in progress.** Recorded 2026-10-17, immediately after
 the language-dependency pass. Phases A and B are done, Phase C's portable half
-is done, and Phase D has reached step 4 (the ELF linker and then the
-instruction encoder are Sayanox; see the table). No target reports success for
-the whole phase: `make all-sayanox` still fails closed on purpose.
+is done, and Phase D has reached step 5 (the ELF linker, the instruction
+encoder and the package tool's last shell wrapper are Sayanox; see the table).
+No target reports success for the whole phase: `make all-sayanox` still fails
+closed on purpose.
 
 The goal is simple to state: every maintained piece of *logic* in this
 repository is a Sayanox program, and the only non-Sayanox pieces left are the
@@ -16,10 +17,10 @@ smallest possible bootstrap seam and the build driver.
 |---|---|---:|---|
 | Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,577 lines | **yes** |
 | Formatter, package tool, language server, IR tool, LSP test client, ELF linker, instruction encoder, diagnostic suites | Sayanox | 8 programs | **yes** |
-| All tests and fixtures | Sayanox + `sh` drivers | 159 `.sa` files | **yes** (logic); four `sh` drivers became `tools/sxdiag.sa` on 2026-10-21 |
+| All tests and fixtures | Sayanox + `sh` drivers | 161 `.sa` files | **yes** (logic); four `sh` drivers became `tools/sxdiag.sa` on 2026-10-21, and `tools/sxpkg.sh` became `tools/sxpkg` on 2026-10-22 |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,498 lines | no — its ELF image writer and rel32 linker are Sayanox (`tools/sxlink.sa`) and so is its x86-64 instruction encoder (`tools/sxencode.sa`), both byte-identical to C; the C file still produces the executables the gates run |
-| Build driver (`Makefile` + 15 sh scripts) | make / POSIX sh | 5,170 lines | no |
+| Build driver (`Makefile` + 14 sh scripts) | make / POSIX sh | 5,188 lines | no |
 
 The tree also stopped carrying a second copy of itself on 2026-10-21: about
 380 KB of base64 chunk directories (`native_src/`, `stage2_blob/`,

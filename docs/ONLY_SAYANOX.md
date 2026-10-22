@@ -51,12 +51,13 @@ is written in Sayanox.
   (`tools/sxlink.sa`, `tools/sxencode.sa`) and are proved byte-identical, but
   the C file still produces the executables: the scanner, parser, type
   inference, emit tree, runtime stubs and collector are unported.
-- `tools/sxpkg.sh` — the http(s) transport (curl/wget) and the online opt-in
-  policy remain in POSIX shell. `run_command(cmd)` (2026-10-21) removes the
-  *mechanical* obstacle — a Sayanox program can now pass a URL to a transfer
-  tool — but not the policy one: `test-sxpkg-transfer-hardening` pins
-  curl/wget as the transport it must keep using, so the wrapper stays until
-  that decision is revisited.
+- The http(s) transport itself — `curl`, or `wget` when there is no curl.
+  Everything *around* it is Sayanox since 2026-10-22: `tools/sxpkg.sa` is the
+  whole package tool, with `getenv` for SAYANOX_ROOT/SAYANOX_REGISTRY/
+  SAYANOX_ONLINE and `run_command` to start the transport it found on PATH.
+  `tools/sxpkg.sh` is deleted. `test-sxpkg-transfer-hardening` still pins
+  curl/wget as the transport, which is a decision about which program is
+  allowed to open a socket, not about who writes the policy.
 - `Makefile` and POSIX-shell recipes — build/test orchestration. All tracked
   scripts are `#!/bin/sh`; bash, awk and sed are not part of the maintained
   toolchain (`make test-language-deps`).

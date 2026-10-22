@@ -99,7 +99,14 @@ make tools
 ./tools/sxpkg list
 ```
 
-The formatter currently handles whitespace. The package tool supports `init` / `add` / `list` / `remove` / `search` / `info` / `seed` / `deps` / `verify` / `install` / `install-local` / `publish`, since 2026-10-18 the local-registry halves of `sync` and `fetch` as well, and since 2026-10-19 the whole offline half of `install` (name preflight, deciding what is missing, copying and reporting it); only the http(s) transport and the online opt-in policy stay in the shell wrapper. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
+The formatter currently handles whitespace. The package tool is one Sayanox
+program, `tools/sxpkg.sa` (built to `./tools/sxpkg` by `make sxpkg`): `init`,
+`add`, `list`, `remove`, `seed`, `search`, `info`, `deps`, `verify`, `sum`,
+`publish`, `install`, `install-local`, `sync`, `fetch`, the online opt-in
+policy, `SAYANOX_ROOT`/`SAYANOX_REGISTRY`/`SAYANOX_ONLINE`, and its own exit
+statuses. Its shell wrapper was deleted on 2026-10-22; the only program it
+still starts is the transport itself, `curl` or `wget`. Full registry support
+is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 
 The language server (`tools/sayanox_lsp.sa`), its folder index, the IR
 translator (`tools/emit_to_ir.sa`), two pieces of the native backend - its
@@ -108,8 +115,10 @@ instruction encoder (`tools/sxencode.sa`) - and the negative-diagnostic test
 suites (`tools/sxdiag.sa`) are Sayanox programs too, and no maintained build or
 test path needs bash, awk, sed or Python (`make test-language-deps`). Driving
 another program used to require the shell, because `spawn(path)` takes no
-arguments; since 2026-10-21 `run_command(cmd)` gives a Sayanox program the exit status
-of a command line, which is what let four `sh` test drivers move over.
+arguments; since 2026-10-21 `run_command(cmd)` gives a Sayanox program the exit
+status of a command line, which is what let four `sh` test drivers and then the
+whole package tool move over, and since 2026-10-22 `getenv(name)` lets it read
+the environment the wrappers used to read.
 
 ---
 
