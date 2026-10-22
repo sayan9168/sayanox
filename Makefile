@@ -1077,26 +1077,44 @@ test-native-mem: $(NATIVE_BIN)
 # measured, so the claims below are pinned here instead of asserted in prose.
 #
 #   sxc_seed_min -- THE BOOTSTRAP SEED (selfhost/seed/sxc_seed_min.c)
-#     No collector/refcounts/gc(). An exact allocation registry (2026-10-15)
-#     replaces the unsafe magic-header probe. Builder-backed strings carry
-#     {len,cap,next,data[]} and freeing assignments remove old builders from
-#     that registry. Concatenation copies into a fresh allocation; it is not
-#     an in-place or amortised-O(1) append. See test-seed-borrow for safe
-#     borrowed read-only arguments and registry resize/reuse checks.
+#     A conservative mark & sweep over the allocation registry (2026-10-22),
+#     on top of the exact registry (2026-10-15) that replaced the unsafe
+#     magic-header probe. Builder-backed strings carry {len,cap,next,data[]}
+#     and freeing assignments remove old builders from that registry.
+#     Concatenation copies into a fresh allocation; it is not an in-place or
+#     amortised-O(1) append. See test-seed-borrow for safe borrowed read-only
+#     arguments and registry resize/reuse checks.
 #       * a string assignment is emitted as
 #           { char *_v = sx_cat(a,b); sx_sb_free(a); a = _v; }
 #         so the RHS is evaluated into a temp first and the OLD LHS is freed
 #         (sx_sb_app itself never frees either side: that would double-free
-#         aliased variables).
+#         aliased variables). That wrapper still reclaims the common case
+#         immediately; the collector exists for what it cannot see -- dropped
+#         temporaries, discarded call results, locals never reassigned.
+#       * roots are the C stack and nothing else. The program body is emitted
+#         as `static int sx_prog(void)` reached through a volatile function
+#         pointer, and main plants `sx_gcanchor` above it, so the scan from
+#         that anchor down to the collector's own frame covers every Sayanox
+#         variable; no heap object in this runtime holds a string pointer
+#         (lists hold doubles). Interior pointers are honoured by binary
+#         search over the sorted block list, nothing ever moves, and the scan
+#         function carries no_sanitize_address -- reading other frames is the
+#         point, and test-seed-sanitize runs a collecting fixture under ASan.
+#       * first collection at 8 MiB of live builder bytes, then
+#         live * 1.5 + 8 MiB; gc() collects on demand and a failing malloc
+#         retries once after a collection.
 #     Measured: a 200k-iteration concat churn that retains nothing, a 2000-step
 #     accumulation to a 2003-char string and a 2000-iteration temp loop all run
 #     inside a 4 MiB address space (`ulimit -v 4096` -- that is the floor for a
-#     dynamically linked binary, below it libc.so.6 itself cannot be mapped),
+#     dynamically linked binary, below it libc.so.6 itself cannot be mapped) on
+#     the freeing assignment alone, never reaching the collector threshold,
 #     while a program that keeps doubling one retained string to 8388608 bytes
-#     dies with `sx: out of memory` on stderr and exit 1, keeping the stdout it
-#     already wrote. gc()/gc_live()/gc_runs() are refused at compile time
-#     because there is no collector to report on -- the same refusal native
-#     gives, and an honest one: a silent no-op would lie about reclamation.
+#     still dies with `sx: out of memory` on stderr and exit 1, keeping the
+#     stdout it already wrote: collecting cannot reclaim a live set.
+#     gc()/gc_live()/gc_runs() now exist here too and report real numbers, so
+#     all three backends answer the same way; test-seed-collector pins what
+#     actually changed, and test-seed-bootstrap-budget pins the consequence
+#     for the bootstrap itself (1,278,704 KiB peak RSS -> 29,768 KiB).
 #
 #   sxc_seed -- the full seed (selfhost/seed/sxc_seed.c + seed/sx_runtime.h)
 #     A refcount REPRESENTATION and an object table (SX_TAB_CAP 2097152), with
@@ -1143,25 +1161,30 @@ test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
 	  ./$(SEED_BIN) selfhost/seed_gc_$$f.sa > $(TESTS)/sgc_$${f}_fs.c; \
 	  $(CC) -O2 -I selfhost/seed -o $(TESTS)/sgc_$${f}_fs $(TESTS)/sgc_$${f}_fs.c -lm; \
 	done
-	# ---- seed-min: no collector, but a builder and a freeing assignment ----
+	# ---- seed-min: builder, freeing assignment, collector behind both ----
 	grep -q -F 'sx_sb_register(h)' $(TESTS)/sgc_grow_ms.c
 	grep -q -F 'sx_sb_free(' $(TESTS)/sgc_grow_ms.c
+	grep -q -F 'sx_gc_collect();' $(TESTS)/sgc_grow_ms.c
 	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_churn_ms',200000)
 	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_grow_ms',2003\n97\n120)
 	$(call assert-out,sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_tmp_ms',2000)
-	echo "[OK] seed-min (no collector): 200k churn, a 2000-step accumulation and a temp loop all stay inside a 4 MiB address space"
+	echo "[OK] seed-min: 200k churn, a 2000-step accumulation and a temp loop all stay inside a 4 MiB address space on the freeing assignment alone (the 8 MiB collector threshold is never reached there)"
 	# ---- seed-min: an 8 MiB live set dies loudly, not silently ----
 	if __got=$$(sh -c 'ulimit -v 4096; ./$(TESTS)/sgc_retain_ms 2>$(TESTS)/sgc_retain_ms.err'); then \
 	  echo "[FAIL] seed-min survived a 4 MiB cap while retaining 8388608 bytes"; exit 1; fi; \
 	  [ "$$__got" = before ] || { echo "[FAIL] seed-min OOM lost stdout or continued: $$__got"; exit 1; }
 	grep -q -F 'sx: out of memory' $(TESTS)/sgc_retain_ms.err
 	echo "[OK] seed-min: an 8 MiB live set inside a 4 MiB cap exits 1 with \`sx: out of memory\` and keeps the stdout it already wrote"
-	# ---- seed-min refuses the collector builtins it does not have ----
-	printf 'show gc()\n' > $(TESTS)/sgc_gc_ms.sa
-	if ./$(SEED_MIN_BIN) $(TESTS)/sgc_gc_ms.sa > $(TESTS)/sgc_gc_ms.c 2>$(TESTS)/sgc_gc_ms.err; then \
-	  echo "[FAIL] seed-min accepted gc() although it has no collector"; exit 1; fi
-	grep -q -F 'seed_min:' $(TESTS)/sgc_gc_ms.err
-	echo "[OK] seed-min: gc() is refused at compile time (clear diagnostic, not a silent no-op)"
+	# ---- seed-min has the collector builtins now, and they are not no-ops ----
+	printf 'show gc()\nshow gc_runs()\nshow gc_live()\n' > $(TESTS)/sgc_gc_ms.sa
+	./$(SEED_MIN_BIN) $(TESTS)/sgc_gc_ms.sa > $(TESTS)/sgc_gc_ms.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/sgc_gc_ms $(TESTS)/sgc_gc_ms.c
+	$(call assert-out,./$(TESTS)/sgc_gc_ms,0\n1\n0)
+	printf 'show gc(1)\n' > $(TESTS)/sgc_gc_bad.sa
+	if ./$(SEED_MIN_BIN) $(TESTS)/sgc_gc_bad.sa > /dev/null 2>$(TESTS)/sgc_gc_bad.err; then \
+	  echo "[FAIL] seed-min accepted gc(1), which takes no arguments"; exit 1; fi
+	grep -q -F 'seed_min:' $(TESTS)/sgc_gc_bad.err
+	echo "[OK] seed-min: gc()/gc_live()/gc_runs() exist and report real numbers (nothing to free in an empty program, one collection counted); a wrong arity still gets a seed_min: diagnostic"
 	# ---- full seed: the operator lexer fix, and parity with the others ----
 	$(call assert-out,./$(TESTS)/sgc_ops_ms,6\n5\n4\n2.5\n2\n9\n0\n1\n2)
 	$(call assert-out,./$(TESTS)/sgc_ops_g2,6\n5\n4\n2.5\n2\n9\n0\n1\n2)
@@ -1209,7 +1232,7 @@ test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
 	   if [ "$$__r" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 ran no collection in a 200k churn: $$__o"; exit 1; fi; \
 	   if [ "$$__l" -lt 1 ] 2>/dev/null; then echo "[FAIL] gen2 gc_live() reported $$__l after a 200k churn"; exit 1; fi; }
 	echo "[OK] gen2: a 200k churn collects (gc_runs() >= 1) and the live set stays small (gc_live() reported)"
-	echo "[OK] seed GC: seed-min = no collector (builder strings + a freeing assignment, clear OOM); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem"
+	echo "[OK] seed GC: seed-min = freeing assignment plus a conservative mark & sweep over the builder registry (a live set still OOMs loudly); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem"
 
 # ---------------------------------------------------------------------------
 # test-generic-structs: generic structs ARE implemented, on all three backends,
@@ -4454,7 +4477,7 @@ test-seed-for-untyped: $(GEN2) $(SEED_MIN_BIN)
 	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/for_untyped_gen2 $(TESTS)/for_untyped_gen2.c
 	$(call assert-out,./$(TESTS)/for_untyped_seed,$(SFU_WANT))
 	$(call assert-out,./$(TESTS)/for_untyped_gen2,$(SFU_WANT))
-	@for text in 'hold g = [1]\nmake f() {\n  for v in g {\n    show v\n  }\n  give 0\n}' 'hold g = 5\nmake f() {\n  show g\n  give 0\n}' 'make f(a) {\n  for c in a {\n    show c\n  }\n  give 0\n}' 'make f() {\n  for v in missing {\n    show v\n  }\n  give 0\n}' 'make f() {\n  for i in 0.."x" {\n    show i\n  }\n  give 0\n}' 'make f() {\n  hold xs = [1]\n  for xs in xs {\n    show xs\n  }\n  give 0\n}' 'make f() {\n  for c in chr("x") {\n    show c\n  }\n  give 0\n}' 'make f() {\n  hold x = nosuch(1)\n  give x\n}' 'hold a = nosuch()' 'hold a = gc()'; do \
+	@for text in 'hold g = [1]\nmake f() {\n  for v in g {\n    show v\n  }\n  give 0\n}' 'hold g = 5\nmake f() {\n  show g\n  give 0\n}' 'make f(a) {\n  for c in a {\n    show c\n  }\n  give 0\n}' 'make f() {\n  for v in missing {\n    show v\n  }\n  give 0\n}' 'make f() {\n  for i in 0.."x" {\n    show i\n  }\n  give 0\n}' 'make f() {\n  hold xs = [1]\n  for xs in xs {\n    show xs\n  }\n  give 0\n}' 'make f() {\n  for c in chr("x") {\n    show c\n  }\n  give 0\n}' 'make f() {\n  hold x = nosuch(1)\n  give x\n}' 'hold a = nosuch()'; do \
 	  printf '%b\n' "$$text" > $(TESTS)/for_untyped_bad.sa; \
 	  if ./$(SEED_MIN_BIN) $(TESTS)/for_untyped_bad.sa >/dev/null 2>$(TESTS)/for_untyped_bad.err; then echo "[FAIL] seed accepted an invalid untyped-make for: $$text"; exit 1; fi; \
 	  grep -q 'seed_min:' $(TESTS)/for_untyped_bad.err || { echo "[FAIL] no diagnostic for $$text"; exit 1; }; \
@@ -5110,12 +5133,54 @@ test-seed-list-budget: $(SEED_MIN_BIN)
 
 test-seed-gc: test-seed-list-budget
 
+# ---------------------------------------------------------------------------
+# test-seed-collector: the seed collector itself, measured on three backends.
+#
+# selfhost/seed_gc_drop.sa drops 4,000,000 temporaries that no assignment can
+# ever free (the freeing wrapper only sees the variable being reassigned, and
+# nothing here is), reads a borrowed read-only parameter in the same loop, and
+# holds a 512 KiB string the loop never touches -- reachable only from the
+# frame below, so it survives only if the root scan really walks the stack.
+# Seed-min, gen2 and native print the same seven lines inside a 64 MiB address
+# space. Without a collector that fixture needs ~256 MiB of garbage: the same
+# program built by the pre-collector seed died with `sx: out of memory`.
+#
+# `auto` on line four is the load-bearing one: gc_runs() is already non-zero
+# BEFORE the explicit gc(), i.e. all three runtimes collected on their own.
+# ---------------------------------------------------------------------------
+SGC_DROP_WANT := 524288\n4.88e+08\n1\nauto\n524288\n97\n112
+.PHONY: test-seed-collector
+test-seed-collector: $(SEED_MIN_BIN) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/seed_gc_drop.sa > $(TESTS)/sgc_drop_ms.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sgc_drop_ms $(TESTS)/sgc_drop_ms.c
+	./$(GEN2) selfhost/seed_gc_drop.sa $(TESTS)/sgc_drop_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sgc_drop_g2 $(TESTS)/sgc_drop_g2.c
+	@# the anchor, the entry function it sits above, the trigger, the ASan opt-out
+	grep -q -F 'sx_gc_init((void*)&sx_gcanchor);' $(TESTS)/sgc_drop_ms.c
+	grep -q -F 'static int sx_prog(void){' $(TESTS)/sgc_drop_ms.c
+	grep -q -F 'if(sx_gc_bytes+need>sx_gc_thresh) sx_gc_collect();' $(TESTS)/sgc_drop_ms.c
+	grep -q -F 'no_sanitize_address' $(TESTS)/sgc_drop_ms.c
+	$(call assert-out,sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_drop_ms',$(SGC_DROP_WANT))
+	$(call assert-out,sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_drop_g2',$(SGC_DROP_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/seed_gc_drop.sa $(TESTS)/sgc_drop_native || exit 1; \
+	  sh -c 'ulimit -v 65536; ./$(TESTS)/sgc_drop_native' > $(TESTS)/sgc_drop_native.out || exit 1; \
+	  ./$(TESTS)/sgc_drop_ms > $(TESTS)/sgc_drop_ms.out || exit 1; \
+	  cmp $(TESTS)/sgc_drop_ms.out $(TESTS)/sgc_drop_native.out \
+	    || { echo '[FAIL] native collector output differs from seed-min'; exit 1; }; \
+	  echo '[OK] native runs the same fixture with the same output'; \
+	else echo '[SKIP] native collector parity: native_aot not built'; fi
+	@echo '[OK] seed collector: 4,000,000 dropped temporaries, a borrowed read and an untouched 512 KiB live string inside 64 MiB -- seed-min, gen2 and native print the same seven lines'
+
+test-seed-gc: test-seed-collector
+
 # Explicit opt-in: sanitizer runtime/compiler support is NOT a bootstrap dep.
 # LeakSanitizer is disabled because seed locals/temporaries/lists leak by design.
 # No address-space limit here: ASan reserves a large virtual shadow mapping.
 SANITIZER_FLAGS ?= -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie
-test-seed-sanitize: test-seed-borrow test-seed-list-budget
-	@set -e; for name in borrow borrow-stress seed-list-budget; do \
+test-seed-sanitize: test-seed-borrow test-seed-list-budget test-seed-collector
+	@set -e; for name in borrow borrow-stress seed-list-budget sgc_drop_ms; do \
 	  $(CC) $(SANITIZER_FLAGS) -o $(TESTS)/$$name-asan $(TESTS)/$$name.c; \
 	  ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(TESTS)/$$name-asan > $(TESTS)/$$name-asan.out; \
 	  ./$(TESTS)/$$name > $(TESTS)/$$name-plain.out; \
@@ -5123,16 +5188,20 @@ test-seed-sanitize: test-seed-borrow test-seed-list-budget
 	done
 	$(CC) $(SANITIZER_FLAGS) -o $(TESTS)/builder-registry-asan selfhost/seed_builder_registry_test.c
 	$(call assert-out,env ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(TESTS)/builder-registry-asan,registry-ok)
-	@echo '[OK] seed ASan/UBSan: aliases/returns/recursion, borrowed reads, list realloc/aliases, 32 registry reuse cycles; leak detection explicitly OFF'
+	@echo '[OK] seed ASan/UBSan: aliases/returns/recursion, borrowed reads, list realloc/aliases, a collecting 4M-drop churn, 32 registry reuse cycles; leak detection explicitly OFF'
 
 # Run AFTER true-selfhost. Recompile the real compiler under a finite process
-# address-space cap and compare with its uncapped gen2 C artifact.
+# address-space cap and compare with its uncapped gen2 C artifact. The cap was
+# 1536 MiB while the seed had no collector. Measured 2026-10-22, the same
+# compile peaks at 29,768 KiB RSS and 26 MB of address space with the seed
+# collector (1,278,704 KiB before it), so the cap is now 64 MiB -- still a
+# budget for THIS input, not a bounded-heap claim for arbitrary programs.
 test-seed-bootstrap-budget:
 	@test -x $(GEN1_MIN) && test -s $(GEN2_C) || { echo 'run make true-selfhost first'; exit 1; }
 	@mkdir -p $(TESTS)
-	sh -c 'ulimit -v 1572864; exec ./$(GEN1_MIN) $(MIN_SA) $(TESTS)/budget-gen2.c' > $(TESTS)/budget-gen2.out
+	sh -c 'ulimit -v 65536; exec ./$(GEN1_MIN) $(MIN_SA) $(TESTS)/budget-gen2.c' > $(TESTS)/budget-gen2.out
 	cmp $(GEN2_C) $(TESTS)/budget-gen2.c
-	@echo '[OK] no-GC gen1-min compiled the current compiler inside 1536 MiB address space; output identical to uncapped gen2 C (finite input budget only)'
+	@echo '[OK] gen1-min compiled the current compiler inside a 64 MiB address space (1536 MiB before the seed collector); output identical to uncapped gen2 C (finite input budget only)'
 
 # Permanent contract of this bootstrap dialect, not a promise of recursive GC
 # layouts. Both public type gates must exercise the same negative matrix.

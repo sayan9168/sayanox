@@ -35,7 +35,10 @@ needed. The exact edge cases and parity tests are listed in
 ## Runtime builtins added with the collector (gen1_min / gen2)
 
 These are compiled and run by `selfhost/gen2` (and by the `gen1_min` built from
-the same source); the checked-in `seed-min` predates them and rejects them.
+the same source); the checked-in `seed-min` predates them and rejects them —
+**except `gc()`, `gc_live()` and `gc_runs()`, which seed-min has answered
+since 2026-10-22**, when it got a collector of its own
+([GC.md](GC.md#a-collector-in-the-bootstrap-seed-2026-10-22)).
 
 | Sayanox call | Purpose |
 |--------------|---------|
@@ -44,9 +47,9 @@ the same source); the checked-in `seed-min` predates them and rejects them.
 | `write_out(s)` | write `s` to stdout without a newline |
 | `flush_out()` | flush stdout |
 | `numstr(n)` | format a number as a string (the `%g` form `show` uses) |
-| `gc()` | run a collection now; returns the bytes reclaimed |
-| `gc_live()` | bytes currently held by the managed heap |
-| `gc_runs()` | number of collections so far |
+| `gc()` | run a collection now; returns the bytes reclaimed (also seed-min) |
+| `gc_live()` | bytes currently held by the managed heap (also seed-min, where it counts builder strings) |
+| `gc_runs()` | number of collections so far (also seed-min) |
 | `exit(n)` | flush stdout, terminate the process with status `n` |
 | `read_dir(path)` | newline-separated entry names, without `.`/`..`; `""` on failure |
 | `path_kind(path)` | `0` missing, `1` regular file, `2` directory, `3` other (`lstat`) |

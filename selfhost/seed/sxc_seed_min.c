@@ -520,6 +520,8 @@ static void check_call(const char *name,int n,int *types){
   else if(!strcmp(name,"sx_index")||!strcmp(name,"sx_idx")||!strcmp(name,"index")){ arity=2; a=4; b=TY_NUM; }
   else if(!strcmp(name,"string_eq")||!strcmp(name,"sx_eq")||!strcmp(name,"write_file")||!strcmp(name,"sx_write")){ arity=2; a=b=TY_STR; }
   else if(!strcmp(name,"arg_count")||!strcmp(name,"sx_argc")){ arity=0; }
+  else if(!strcmp(name,"gc")||!strcmp(name,"sx_gc_run")||!strcmp(name,"gc_live")
+       ||!strcmp(name,"sx_gc_live")||!strcmp(name,"gc_runs")||!strcmp(name,"sx_gc_count")){ arity=0; }
   else if(fi>=0){
     if(n!=functions[fi].np) die("seed-min call argument count does not match function signature");
     for(int i=0;i<n;i++) if(types[i]!=functions[fi].pt[i]) die("seed-min function argument type does not match signature");
@@ -929,6 +931,12 @@ static char *atom(int *oty){
         snprintf(buf,sizeof buf,"sx_arg((int)(%s))",args[0]); *oty=TY_STR;
       } else if((!strcmp(id,"arg_count")||!strcmp(id,"sx_argc"))&&na==0){
         snprintf(buf,sizeof buf,"sx_argc()"); *oty=TY_NUM;
+      } else if((!strcmp(id,"gc")||!strcmp(id,"sx_gc_run"))&&na==0){
+        snprintf(buf,sizeof buf,"sx_gc_run()"); *oty=TY_NUM;
+      } else if((!strcmp(id,"gc_live")||!strcmp(id,"sx_gc_live"))&&na==0){
+        snprintf(buf,sizeof buf,"sx_gc_live()"); *oty=TY_NUM;
+      } else if((!strcmp(id,"gc_runs")||!strcmp(id,"sx_gc_count"))&&na==0){
+        snprintf(buf,sizeof buf,"sx_gc_count()"); *oty=TY_NUM;
       } else if((!strcmp(id,"read_file")||!strcmp(id,"sx_read"))&&na==1){
         snprintf(buf,sizeof buf,"sx_read(%s)",args[0]); *oty=TY_STR;
       } else if((!strcmp(id,"http_get")||!strcmp(id,"sx_http"))&&na==1){
@@ -1719,17 +1727,100 @@ static void preamble(void){
   puts("  }");
   puts("  size_t i=sx_sb_hash(h->data)&(sx_sb_nbucket-1); h->next=sx_sb_buckets[i]; sx_sb_buckets[i]=h; sx_sb_count++;");
   puts("}");
+  puts("/* ----- conservative mark & sweep over the builder registry -------------");
+  puts(" * Roots are the C stack, nothing else. Every Sayanox variable this compiler");
+  puts(" * emits is a local of sx_prog, parameters and temporaries are C locals, and");
+  puts(" * no heap object in this runtime stores a string pointer (lists hold");
+  puts(" * doubles), so scanning from the anchor planted in main down to the");
+  puts(" * collector's own frame reaches every builder a running program can still");
+  puts(" * name. Interior pointers count: a candidate word is matched against the");
+  puts(" * whole block by binary search, so a cursor into the middle of a string");
+  puts(" * keeps it alive. The explicit sx_sb_free on reassignment stays -- it");
+  puts(" * reclaims the common case immediately, and the collector only has to find");
+  puts(" * what the assignment wrapper cannot see: dropped temporaries and results.");
+  puts(" * Nothing here moves an object, so a borrowed pointer stays valid. */");
+  puts("#include <setjmp.h>");
+  puts("#if defined(__SANITIZE_ADDRESS__)");
+  puts("#define SX_GC_SCAN __attribute__((no_sanitize_address))");
+  puts("#elif defined(__has_feature)");
+  puts("#if __has_feature(address_sanitizer)");
+  puts("#define SX_GC_SCAN __attribute__((no_sanitize_address))");
+  puts("#endif");
+  puts("#endif");
+  puts("#ifndef SX_GC_SCAN");
+  puts("#define SX_GC_SCAN   /* reading other frames is not an error, it is the point */");
+  puts("#endif");
+  puts("static char *sx_gc_bot;                 /* stack anchor, planted by main */");
+  puts("static size_t sx_gc_bytes;              /* bytes held by registered builders */");
+  puts("static size_t sx_gc_thresh = 8388608;   /* collect once live bytes pass this */");
+  puts("static double sx_gc_n, sx_gc_freed;     /* collections run, bytes last freed */");
+  puts("static sx_sb **sx_gc_arr; static unsigned char *sx_gc_bits; static size_t sx_gc_cap;");
+  puts("static void sx_gc_init(void *bot){ sx_gc_bot=(char*)bot; }");
+  puts("static size_t sx_gc_block(sx_sb *h){ return offsetof(sx_sb,data)+h->cap+1; }");
+  puts("static int sx_gc_cmp(const void *a,const void *b){");
+  puts("  sx_sb *x=*(sx_sb *const *)a, *y=*(sx_sb *const *)b;");
+  puts("  return x<y ? -1 : (x>y ? 1 : 0); }");
+  puts("static void sx_gc_grow(void){ sx_gc_thresh=sx_gc_bytes+sx_gc_bytes/2+8388608; }");
+  puts("static SX_GC_SCAN void sx_gc_roots(char *lo,char *hi,size_t k){");
+  puts("  while((uintptr_t)lo % sizeof(char*)) lo++;");
+  puts("  for(; lo+sizeof(char*)<=hi; lo+=sizeof(char*)){");
+  puts("    char *c=*(char**)lo; size_t a=0, b=k;");
+  puts("    if(!c) continue;");
+  puts("    while(a<b){ size_t m=a+(b-a)/2; if((char*)sx_gc_arr[m]<=c) a=m+1; else b=m; }");
+  puts("    if(a && c<=sx_gc_arr[a-1]->data+sx_gc_arr[a-1]->cap) sx_gc_bits[a-1]=1;");
+  puts("  }");
+  puts("}");
+  puts("static void sx_gc_collect(void){");
+  puts("  size_t n=sx_sb_count, k=0, i, live=0, freed=0;");
+  puts("  if(!sx_gc_bot) return;                /* no anchor yet: nothing is rooted */");
+  puts("  if(n>sx_gc_cap){");
+  puts("    sx_sb **a; unsigned char *b;");
+  puts("    a=(sx_sb**)realloc(sx_gc_arr,n*sizeof *a);");
+  puts("    if(!a){ sx_gc_grow(); return; }     /* no room to collect: carry on */");
+  puts("    sx_gc_arr=a;");
+  puts("    b=(unsigned char*)realloc(sx_gc_bits,n);");
+  puts("    if(!b){ sx_gc_grow(); return; }");
+  puts("    sx_gc_bits=b; sx_gc_cap=n;");
+  puts("  }");
+  puts("  for(i=0;i<sx_sb_nbucket;i++){ sx_sb *h=sx_sb_buckets[i]; while(h){ if(k<n) sx_gc_arr[k++]=h; h=h->next; } }");
+  puts("  qsort(sx_gc_arr,k,sizeof *sx_gc_arr,sx_gc_cmp);");
+  puts("  memset(sx_gc_bits,0,k);");
+  puts("  { jmp_buf jb; char *lo, *hi;");
+  puts("    setjmp(jb);                         /* spill the registers onto the stack */");
+  puts("    lo=(char*)&jb; hi=sx_gc_bot;");
+  puts("    if(lo>hi){ char *t=lo; lo=hi; hi=t; }");
+  puts("    sx_gc_roots(lo,hi,k);");
+  puts("  }");
+  puts("  for(i=0;i<sx_sb_nbucket;i++) sx_sb_buckets[i]=0;");
+  puts("  for(i=0;i<k;i++){");
+  puts("    sx_sb *h=sx_gc_arr[i];");
+  puts("    if(sx_gc_bits[i]){ size_t j=sx_sb_hash(h->data)&(sx_sb_nbucket-1); h->next=sx_sb_buckets[j]; sx_sb_buckets[j]=h; live++; }");
+  puts("    else { freed+=sx_gc_block(h); free(h); }");
+  puts("  }");
+  puts("  sx_sb_count=live;");
+  puts("  sx_gc_bytes = freed<sx_gc_bytes ? sx_gc_bytes-freed : 0;");
+  puts("  sx_gc_freed=(double)freed; sx_gc_n+=1;");
+  puts("  sx_gc_grow();");
+  puts("}");
+  puts("static double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }");
+  puts("static double sx_gc_live(void){ return (double)sx_gc_bytes; }");
+  puts("static double sx_gc_count(void){ return sx_gc_n; }");
   puts("static char *sx_sb_new(size_t cap){");
   puts("  if(cap<32) cap=32;");
   puts("  if(cap>SIZE_MAX - offsetof(sx_sb,data) - 1){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
-  puts("  sx_sb *h=(sx_sb*)malloc(offsetof(sx_sb,data)+cap+1); if(!h){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
-  puts("  h->len=0; h->cap=cap; h->data[0]=0; sx_sb_register(h); return h->data; }");
+  puts("  size_t need=offsetof(sx_sb,data)+cap+1;");
+  puts("  if(sx_gc_bytes+need>sx_gc_thresh) sx_gc_collect();");
+  puts("  sx_sb *h=(sx_sb*)malloc(need);");
+  puts("  if(!h){ sx_gc_collect(); h=(sx_sb*)malloc(need); }   /* collect before giving up */");
+  puts("  if(!h){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
+  puts("  h->len=0; h->cap=cap; h->data[0]=0; sx_sb_register(h); sx_gc_bytes+=need; return h->data; }");
   puts("static char *sx_sb_from(const char *s){ size_t n=strlen(s?s:\"\");");
   puts("  size_t cap=n<32?32:n; char *r=sx_sb_new(cap); if(n)memcpy(r,s,n); r[n]=0; sx_sb_hdr(r)->len=n; return r; }");
   puts("static void sx_sb_free(const char *p){");
   puts("  if(!p || !sx_sb_nbucket) return;");
   puts("  sx_sb **link=&sx_sb_buckets[sx_sb_hash(p)&(sx_sb_nbucket-1)];");
-  puts("  while(*link){ sx_sb *h=*link; if(h->data==p){*link=h->next; sx_sb_count--; free(h); return;} link=&h->next; }");
+  puts("  while(*link){ sx_sb *h=*link; if(h->data==p){ size_t z=sx_gc_block(h); *link=h->next; sx_sb_count--;");
+  puts("    sx_gc_bytes = z<sx_gc_bytes ? sx_gc_bytes-z : 0; free(h); return;} link=&h->next; }");
   puts("}");
   puts("static char *sx_sb_app(const char *a,const char *b){");
   puts("  const char *aa=a?a:\"\"; const char *bb=b?b:\"\";");
@@ -2027,9 +2118,19 @@ int main(int argc, char **argv){
   for(int pass=0;pass<4;pass++){ collect(); scan_literals(); }
   generic_finalized=1; types_final=1;
   P=0; preamble(); function_prototypes(); emit_all_fns();
-  puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
+  /* The program body is its own function so that main's frame -- which holds
+   * the collector's stack anchor -- always sits above every Sayanox variable;
+   * the volatile function pointer keeps the call indirect, so the body cannot
+   * be inlined back into main and lose that ordering. */
+  puts("static int sx_prog(void){");
   decls(); P=0;
   while(P<N){ skip(); if(P>=N) break; stmt(); }
   puts("  return 0;\n}");
+  puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
+  puts("  volatile unsigned char sx_gcanchor=0;");
+  puts("  int (*volatile sx_entry)(void)=sx_prog;");
+  puts("  sx_gc_init((void*)&sx_gcanchor);");
+  puts("  return sx_entry();");
+  puts("}");
   return 0;
 }

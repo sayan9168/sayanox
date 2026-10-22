@@ -177,6 +177,13 @@ measured cost of source added to that file is 27–50 MB of peak RSS per KB; a
 done without editing the compiler needs that headroom problem solved first,
 and solving it is its own increment.
 
+> **Corrected later the same day.** That 3.68 GB figure did not hold on this
+> machine: measured directly, gen1-min compiling `compiler_min.sa` peaked at
+> 1,278,704 KiB, and with the seed collector landed in
+> [`2026-10-22-seed-collector`](../2026-10-22-seed-collector/) it peaks at
+> 29,768 KiB. The headroom problem described in this paragraph is the one that
+> increment solved.
+
 ## Gates
 
 ```
