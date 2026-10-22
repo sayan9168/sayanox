@@ -1,6 +1,6 @@
 # Standard library (stdlib/)
 
-Eight modules, split by what they need from the compiler. Every helper is
+Ten modules, split by what they need from the compiler. Every helper is
 checked by a `make` target; the backend columns below say what is verified.
 
 | Module | Helpers | Backends | Gate |
@@ -13,6 +13,8 @@ checked by a `make` target; the backend columns below say what is verified.
 | `stdlib/list_algo.sa` | 21 typed list algorithms (`la_insert_sorted`, `la_sort`, `la_sorted`, `la_index_of`, `la_append`, `la_slice`, `la_take`, `la_drop`, `la_cumsum`, `la_repeat`, `la_scale`, `la_offset`, `la_zip_add`, `la_count_gt`, `la_remove_at`, `la_insert_at`, `la_distinct`, `la_lower_bound`, `la_upper_bound`, `la_merge_sorted`, `la_rotate`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/str_text.sa` | 18 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/json_util.sa` | flat-object JSON build/read (`j_escape`, `j_kv_text`, `j_kv_number`, `j_kv_flag`, `j_pair`, `j_obj`, `j_arr_numbers`, `j_has`, `j_get_text`, `j_get_number`, `j_get_flag`) | seed-min, gen2, native | `test-stdlib-modules` |
+| `stdlib/json_deep.sa` | nested JSON reader, any depth (`jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with `[i]` indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep` |
+| `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
 
 ## Why two kinds of module
 
@@ -20,7 +22,7 @@ checked by a `make` target; the backend columns below say what is verified.
 That is the subset all three backends implement in full, so those two are the
 modules that can be promised on the native-AOT path without typed parameters.
 
-The other six modules take `str` and `list` parameters
+The other eight modules take `str` and `list` parameters
 (`make s_len(s: str) -> num`). Typed parameter and return annotations are now
 accepted by seed-min, gen2 and native alike (checked on 2026-10-13 with a
 `greet(name: str) -> str` / `total(xs: list) -> num` probe: seed-min and native
@@ -145,13 +147,19 @@ clamps, `t_trim*` strip ASCII space/tab/newline/CR, `t_cmp` gives
 * No inline list literal as a call argument and no postfix indexing of a call
   result (`la_take(xs, 2)[1]`) in tests: bind to a `hold` first.
 
-## Scope confirmation (2026-10-15)
+## Scope confirmation (2026-10-15, superseded 2026-10-22 for two items)
 
 No nested JSON reader is provided.
 `json_util` remains text building plus limited flat-object extraction, not a
 validating JSON parser. It does not promise nested values, exponent parsing,
 Unicode scalar validation or arbitrary escaped-key lookup. Existing module
 parity tests run in the bootstrap gates; no crypto implementation is claimed.
+
+> Superseded on 2026-10-22 by `stdlib/json_deep.sa` and `stdlib/crypto.sa`
+> (see "Nested JSON and cryptography" below). The sentences above still
+> describe `json_util.sa` itself, which was not changed: it is still the flat,
+> non-validating module. What changed is that two *new* modules now cover the
+> nested-JSON and hashing cases, each with its own gate.
 HTTP/crawler integration tests are explicitly optional (`make test-network`):
 they use a Python local test server and curl and are not bootstrap dependencies.
 The optional HTTP builtin's implementation is not a pure-.sa HTTP/TLS stack.
@@ -188,10 +196,72 @@ Logs: [2026-10-16 offline stdlib](gate-logs/2026-10-16-stdlib/).
 ### Explicit non-goals
 
 This remains a **small utility library, not a full standard library**. No
-nested JSON parser/printer, general JSON validation, Unicode text model,
-heterogeneous lists, filesystem metadata API, pure-.sa HTTP/TLS stack or
-cryptography is added. `json_util` remains flat and non-validating; `f_exists`
+JSON printer for nested values, Unicode text model,
+heterogeneous lists, filesystem metadata API or pure-.sa HTTP/TLS stack is
+added. `json_util` remains flat and non-validating; `f_exists`
 means readable **and nonempty**, not filesystem existence (empty/missing files
 are indistinguishable there). `t_hash` is non-cryptographic. HTTP/network
 examples and their optional dependencies stay outside required bootstrap gates.
 The new module code and tests use no network or interpreter dependency.
+
+Two items left this list on 2026-10-22: nested JSON *reading*
+(`stdlib/json_deep.sa`) and cryptographic hashing (`stdlib/crypto.sa`). Writing
+nested JSON is still not provided, and the non-goals above are otherwise
+unchanged.
+
+## Nested JSON and cryptography (2026-10-22)
+
+Two modules, both written in the dialect all three backends accept, both
+checked on all three backends by their own gate.
+
+### `stdlib/json_deep.sa` -- reading nested JSON
+
+`jd_*` reads a value at a **path**: `"user.name"`, `"items[2].id"`,
+`"a.b[0][1].c"`. Nine helpers: `jd_valid` (whole-document check), `jd_type`
+(`object`/`array`/`string`/`number`/`bool`/`null`/`none`), `jd_has`, `jd_raw`
+(the exact source slice of the value), `jd_text` (a string value, escapes
+decoded, `\uXXXX` folded to UTF-8), `jd_num`, `jd_flag`, `jd_len` (members of
+an object, elements of an array, bytes of a string) and `jd_key` (the i-th key
+of an object, for walking a document whose keys are not known in advance).
+
+What it refuses is as pinned as what it accepts: `test-stdlib-json-deep`
+checks 8 accepted documents (including `null`, `-0.5e+10`, `[]`, `{}` and
+`[[[[1]]]]`) and **15 refusals** -- empty input, a trailing comma in an object
+and in an array, an unterminated array, a missing colon, an unquoted key,
+trailing text after a complete value, the numbers `01`, `1.` and `1e`, a
+missing value after a colon, the truncated literal `tru`, an unknown `\x`
+escape, and the mismatched closers `[1}` and `{"a":1}}`. The same gate feeds flat objects
+through both `json_util.sa` and `json_deep.sa` and requires the two to agree,
+so the new module cannot drift away from the old one on the cases both cover.
+
+Not provided: writing nested JSON (`json_util.sa` still builds flat objects
+only), mutation, pretty-printing, duplicate-key policy beyond "first wins", or
+numbers outside what the runtime's double can hold.
+
+### `stdlib/crypto.sa` -- SHA-256 and HMAC-SHA256
+
+`cx_sha256(text)` and `cx_hmac(key, text)` answer lower-case hex; the `_list`
+forms take byte lists, so data that is not valid text (or that contains a zero
+byte, which a Sayanox string cannot carry) still hashes; the `_raw` forms
+answer a byte list. `cx_hex`, `cx_hex_byte`, `cx_unhex` and `cx_bytes` convert
+between the three representations, and `cx_eq_hex` compares two digests
+without caring about letter case.
+
+The implementation is pure arithmetic: the dialect the seed accepts has no
+bitwise operators, so the 32-bit words are carried as numbers and the
+rotations, shifts, `and`, `or`, `xor` and `not` of the algorithm are done with
+division and remainder. That is slower than a `uint32_t` implementation and it
+is the price of running on all three backends.
+
+`test-stdlib-crypto` checks the FIPS 180-4 vectors (empty string, `abc`, the
+two-block message), the padding boundaries at 55, 56, 63, 64 and 65 bytes, RFC
+4231 HMAC cases 1, 2 and 3, hex round-trips, the nine bit primitives, and a
+tamper fixture where one flipped byte must change the digest. When `sha256sum`
+is installed the gate also compares against it; when it is not, that one check
+prints `[SKIP]` and the rest still runs, because no bootstrap gate may depend
+on a tool outside the minimal set.
+
+This is a hashing module, not a cryptography library: no public-key
+signatures, no cipher, no key derivation beyond HMAC, no constant-time
+promise. `tools/sxpkg` uses it for package digests and keyed signatures --
+see [REGISTRY.md](REGISTRY.md).

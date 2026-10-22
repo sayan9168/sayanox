@@ -1,0 +1,497 @@
+// Sayanox LSP semantic-resolution test client.
+//
+// The folder client (tools/lsp_workspace_test.sa) checks WHICH files the
+// server reads. This one checks WHAT it understands about the names in them:
+//
+//   * scope: a parameter or a `hold` inside a function body binds there and
+//     nowhere else, so definition, references and rename must stay inside that
+//     body -- and must not answer about a same-named name in another function,
+//     at the top level, or in another file;
+//   * strings and comments are not code, so a word inside them is not an
+//     occurrence of a name;
+//   * rename spans the whole folder for a top-level name, including files the
+//     editor never opened;
+//   * file watching: the server asks for workspace/didChangeWatchedFiles when
+//     the client offers it, re-reads a file the notification names and
+//     publishes its diagnostics, clears them on a delete, and leaves files the
+//     client has open to didChange.
+//
+//   make lsp && ./tools/sayanox_lsp_semantic_test <server> <scratch dir>
+//
+// The dialect notes of the folder client apply here too: `+` joins strings on
+// the right-hand side of an assignment only, JSON quotes come from chr(34),
+// and check() reports through exit().
+
+make starts(t: str, i: num, p: str) -> num {
+  hold n = 0
+  hold k = 0
+  hold ok = 1
+  hold c1 = 0
+  hold c2 = 0
+  n = len(p)
+  when i + n > len(t) {
+    give 0
+  }
+  while k < n {
+    c1 = sx_index(t, i + k)
+    c2 = sx_index(p, k)
+    when c1 != c2 {
+      ok = 0
+      k = n
+    }
+    k += 1
+  }
+  give ok
+}
+
+make find_from(t: str, p: str, from: num) -> num {
+  hold n = 0
+  hold m = 0
+  hold i = 0
+  hold hit = 0
+  n = len(t)
+  m = len(p)
+  when m <= 0 {
+    give -1
+  }
+  when from > 0 {
+    i = from
+  }
+  while i + m <= n {
+    hit = starts(t, i, p)
+    when hit == 1 {
+      give i
+    }
+    i += 1
+  }
+  give -1
+}
+
+make has(t: str, p: str) -> num {
+  when find_from(t, p, 0) >= 0 {
+    give 1
+  }
+  give 0
+}
+
+make count(t: str, p: str) -> num {
+  hold n = 0
+  hold at = 0
+  hold m = len(p)
+  while find_from(t, p, at) >= 0 {
+    n += 1
+    at = find_from(t, p, at) + m
+  }
+  give n
+}
+
+make check(ok: num, msg: str) -> num {
+  when ok == 0 {
+    show msg
+    hold code = exit(1)
+  }
+  give ok
+}
+
+// Percent-encode a local path into a file:// URI. Unreserved characters stay
+// literal, everything else becomes %XX with upper-case hex digits, which is
+// what the language server decodes on the way back in.
+make uri(path: str) -> str {
+  hold hex = "0123456789ABCDEF"
+  hold out = "file://"
+  hold i = 0
+  hold n = len(path)
+  hold c = 0
+  hold hi = 0
+  hold lo = 0
+  while i < n {
+    c = sx_index(path, i)
+    when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) {
+      out = out + chr(c)
+    } otherwise {
+      when c == 47 || c == 45 || c == 46 || c == 95 || c == 126 {
+        out = out + chr(c)
+      } otherwise {
+        hi = 0
+        lo = c
+        while lo >= 16 {
+          lo = lo - 16
+          hi += 1
+        }
+        out = out + "%"
+        out = out + chr(sx_index(hex, hi))
+        out = out + chr(sx_index(hex, lo))
+      }
+    }
+    i += 1
+  }
+  give out
+}
+
+make pad3(v: num) -> str {
+  hold out = ""
+  when v < 10 {
+    out = "00"
+  } otherwise {
+    when v < 100 {
+      out = "0"
+    }
+  }
+  out = out + numstr(v)
+  give out
+}
+
+make id_key(id: num, q: str) -> str {
+  hold out = q + "id" + q + ":"
+  out = out + numstr(id)
+  out = out + ","
+  give out
+}
+
+// Read exactly one framed message from the child: the Content-Length header,
+// the blank line, then that many bytes.
+make read_frame(h: num) -> str {
+  hold head = ""
+  hold n = 0
+  hold i = 0
+  hold v = 0
+  hold seen = 0
+  hold c = 0
+  hold blank = ""
+  head = child_line(h)
+  when len(head) == 0 {
+    give ""
+  }
+  i = 15
+  n = len(head)
+  while i < n {
+    c = sx_index(head, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      seen = 1
+    }
+    i += 1
+  }
+  when seen == 0 {
+    give ""
+  }
+  blank = child_line(h)
+  give child_recv(h, v)
+}
+
+// The answer whose id matches: notifications in between are skipped, exactly
+// like the framed C client did.
+make answer(h: num, key: str) -> str {
+  hold body = ""
+  body = read_frame(h)
+  when len(body) == 0 {
+    give ""
+  }
+  while has(body, key) == 0 {
+    body = read_frame(h)
+    when len(body) == 0 {
+      give ""
+    }
+  }
+  give body
+}
+
+make send_frame(h: num, body: str) -> num {
+  hold out = "Content-Length: "
+  out = out + numstr(len(body))
+  out = out + "\r\n\r\n"
+  out = out + body
+  give child_send(h, out)
+}
+
+make request_body(id: num, method: str, params: str, q: str) -> str {
+  hold out = "{"
+  out = out + q + "jsonrpc" + q + ":" + q + "2.0" + q + ","
+  out = out + q + "id" + q + ":" + numstr(id) + ","
+  out = out + q + "method" + q + ":" + q + method + q + ","
+  out = out + q + "params" + q + ":" + params + "}"
+  give out
+}
+
+make notify_body(method: str, params: str, q: str) -> str {
+  hold out = "{"
+  out = out + q + "jsonrpc" + q + ":" + q + "2.0" + q + ","
+  out = out + q + "method" + q + ":" + q + method + q + ","
+  out = out + q + "params" + q + ":" + params + "}"
+  give out
+}
+
+make start(server: str) -> num {
+  hold h = spawn(server)
+  hold bad = check(h > 0, "spawn did not start the language server")
+  give h
+}
+
+make stop(h: num, q: str) -> num {
+  hold w = send_frame(h, notify_body("exit", "{}", q))
+  hold status = child_close(h)
+  hold bad = check(status == 0, "the language server did not exit cleanly")
+  give status
+}
+
+hold server = arg(1)
+hold root = arg(2)
+hold q = chr(34)
+hold k_uri = q + "uri" + q + ":"
+hold k_new = q + "newText" + q + ":"
+hold k_error = q + "error" + q + ":"
+hold k_diag = q + "diagnostics" + q + ":[{"
+hold k_nodiag = q + "diagnostics" + q + ":[]"
+hold rooturi = uri(root)
+hold auri = ""
+hold buri = ""
+hold curi = ""
+hold h = 0
+hold path = ""
+hold text = ""
+hold params = ""
+hold response = ""
+hold body = ""
+hold w = 0
+hold key = ""
+hold caps = ""
+hold changes = ""
+hold adoc = ""
+hold ajson = ""
+
+// ------------------------------------------------------------- the fixtures
+// sem_a.sa binds the name `total` three times -- once in each function body
+// and once at the top level -- and the name `count` twice, once per body. A
+// text search cannot tell those apart; a resolver must. Line 7 puts both names
+// inside a string and line 8 inside a comment, where they are not names at
+// all.
+//
+//   0  make beta(count: num) -> num {
+//   1    hold total = 9
+//   2    give total - count
+//   3  }
+//   4  make alpha(count: num) -> num {
+//   5    hold total = 0
+//   6    total = total + count
+//   7    show "total count"
+//   8    // total count
+//   9    give total
+//  10  }
+//  11  hold total = 1
+//  12  show total
+//  13  show alpha(total)
+//  14  show beta(total)
+// Line 7 is the only line with a quote in it. The document is built twice:
+// once as the bytes that go in the file, and once with the quotes escaped,
+// because the second copy is pasted into a JSON body by hand.
+hold bs = chr(92)
+hold esc = bs + q
+hold head = "make beta(count: num) -> num {\n  hold total = 9\n  give total - count\n}\n"
+head = head + "make alpha(count: num) -> num {\n  hold total = 0\n  total = total + count\n"
+hold tail = "\n  // total count\n  give total\n}\n"
+tail = tail + "hold total = 1\nshow total\nshow alpha(total)\nshow beta(total)\n"
+adoc = head + "  show " + q + "total count" + q
+adoc = adoc + tail
+ajson = head + "  show " + esc + "total count" + esc
+ajson = ajson + tail
+path = root + "/sem_a.sa"
+w = check(write_file(path, adoc) == 1, "could not write sem_a.sa")
+auri = uri(path)
+path = root + "/sem_b.sa"
+text = "show alpha(2)\nshow alpha(3)\n"
+w = check(write_file(path, text) == 1, "could not write sem_b.sa")
+buri = uri(path)
+path = root + "/sem_c.sa"
+curi = uri(path)
+
+// --------------------------------------------- definition resolves the binder
+h = start(server)
+params = "{"
+params = params + q + "rootUri" + q + ":" + q + rooturi + q + "}"
+body = request_body(1, "initialize", params, q)
+w = check(send_frame(h, body) == 1, "could not send initialize")
+key = id_key(1, q)
+response = answer(h, key)
+w = check(has(response, k_error) == 0, "initialize answered with an error")
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + ","
+params = params + q + "text" + q + ":" + q + ajson + q + "}}"
+body = notify_body("textDocument/didOpen", params, q)
+w = check(send_frame(h, body) == 1, "could not open sem_a.sa")
+
+// the `total` of line 6 is alpha's local on line 5, not beta's on line 1
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + "},"
+params = params + q + "position" + q + ":{" + q + "line" + q + ":6," + q + "character" + q + ":3}}"
+body = request_body(2, "textDocument/definition", params, q)
+w = check(send_frame(h, body) == 1, "could not send the local definition")
+key = id_key(2, q)
+response = answer(h, key)
+text = q + "line" + q + ":5"
+w = check(has(response, text) == 1, "definition did not resolve the local to its own body")
+text = q + "line" + q + ":1"
+w = check(has(response, text) == 0, "definition answered another function's local")
+
+// the `total` of line 12 is the top-level binding on line 11
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + "},"
+params = params + q + "position" + q + ":{" + q + "line" + q + ":12," + q + "character" + q + ":6}}"
+body = request_body(3, "textDocument/definition", params, q)
+w = check(send_frame(h, body) == 1, "could not send the global definition")
+key = id_key(3, q)
+response = answer(h, key)
+text = q + "line" + q + ":11"
+w = check(has(response, text) == 1, "definition did not resolve the global to the top level")
+text = q + "line" + q + ":1,"
+w = check(has(response, text) == 0, "definition answered a local for a global name")
+show "semantic definition: a body binds its own names, the top level binds the rest"
+
+// ------------------------------------- references stay inside the binding body
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + "},"
+params = params + q + "position" + q + ":{" + q + "line" + q + ":6," + q + "character" + q + ":19},"
+params = params + q + "context" + q + ":{" + q + "includeDeclaration" + q + ":true}}"
+body = request_body(4, "textDocument/references", params, q)
+w = check(send_frame(h, body) == 1, "could not send the parameter references")
+key = id_key(4, q)
+response = answer(h, key)
+w = check(count(response, k_uri) == 2, "a parameter was not reported exactly where it binds")
+text = q + "line" + q + ":4"
+w = check(has(response, text) == 1, "the parameter declaration was not reported")
+text = q + "line" + q + ":0"
+w = check(has(response, text) == 0, "references crossed into another function")
+text = q + "line" + q + ":2"
+w = check(has(response, text) == 0, "references crossed into another function body")
+
+// `total` inside alpha: lines 5, 6 twice and 9 -- never the string, the
+// comment, the other body or the top level
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + "},"
+params = params + q + "position" + q + ":{" + q + "line" + q + ":6," + q + "character" + q + ":3},"
+params = params + q + "context" + q + ":{" + q + "includeDeclaration" + q + ":true}}"
+body = request_body(5, "textDocument/references", params, q)
+w = check(send_frame(h, body) == 1, "could not send the local references")
+key = id_key(5, q)
+response = answer(h, key)
+w = check(count(response, k_uri) == 4, "the local was not reported on its four code lines")
+text = q + "line" + q + ":7"
+w = check(has(response, text) == 0, "a word inside a string literal was reported")
+text = q + "line" + q + ":8"
+w = check(has(response, text) == 0, "a word inside a comment was reported")
+text = q + "line" + q + ":11"
+w = check(has(response, text) == 0, "a local reference escaped to the top level")
+show "semantic references: one body only; strings and comments are not code"
+
+// ----------------------------------------------------- rename follows the same
+// renaming a local touches one file and four places
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + "},"
+params = params + q + "position" + q + ":{" + q + "line" + q + ":6," + q + "character" + q + ":3},"
+params = params + q + "newName" + q + ":" + q + "sum_total" + q + "}"
+body = request_body(6, "textDocument/rename", params, q)
+w = check(send_frame(h, body) == 1, "could not send the local rename")
+key = id_key(6, q)
+response = answer(h, key)
+w = check(count(response, k_new) == 4, "the local rename did not edit exactly its four places")
+w = check(count(response, auri) == 1, "the local rename touched more than its own file")
+w = check(has(response, buri) == 0, "the local rename reached another file")
+text = q + "line" + q + ":11"
+w = check(has(response, text) == 0, "the local rename rewrote the top-level binding")
+
+// renaming a top-level function reaches a file the editor never opened
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + "},"
+params = params + q + "position" + q + ":{" + q + "line" + q + ":4," + q + "character" + q + ":7},"
+params = params + q + "newName" + q + ":" + q + "first" + q + "}"
+body = request_body(7, "textDocument/rename", params, q)
+w = check(send_frame(h, body) == 1, "could not send the workspace rename")
+key = id_key(7, q)
+response = answer(h, key)
+w = check(has(response, auri) == 1, "the workspace rename skipped the open buffer")
+w = check(has(response, buri) == 1, "the workspace rename skipped the unopened file")
+w = check(count(response, k_new) == 4, "the workspace rename did not edit both uses on disk")
+w = check(has(response, "first") == 1, "the workspace rename lost the new name")
+w = stop(h, q)
+show "semantic rename: a local stays home, a top-level name reaches unopened files"
+
+// ------------------------------------------------------------- file watching
+h = start(server)
+caps = "{" + q + "workspace" + q + ":{" + q + "didChangeWatchedFiles" + q + ":{"
+caps = caps + q + "dynamicRegistration" + q + ":true}}}"
+params = "{"
+params = params + q + "rootUri" + q + ":" + q + rooturi + q + ","
+params = params + q + "capabilities" + q + ":" + caps + "}"
+body = request_body(1, "initialize", params, q)
+w = check(send_frame(h, body) == 1, "could not send the watching initialize")
+key = id_key(1, q)
+response = answer(h, key)
+w = check(has(response, k_error) == 0, "initialize answered with an error")
+body = notify_body("initialized", "{}", q)
+w = check(send_frame(h, body) == 1, "could not send initialized")
+response = read_frame(h)
+w = check(has(response, "client/registerCapability") == 1, "the server did not register a file watcher")
+w = check(has(response, "workspace/didChangeWatchedFiles") == 1, "the registration named no watcher method")
+w = check(has(response, "**/*.sa") == 1, "the registration did not watch .sa files")
+
+// a file that appeared on disk is read and checked, without being opened
+path = root + "/sem_c.sa"
+text = "hold ok = 1\nfrobnicate ok\n"
+w = check(write_file(path, text) == 1, "could not write sem_c.sa")
+changes = "{" + q + "changes" + q + ":[{" + q + "uri" + q + ":" + q + curi + q + ","
+changes = changes + q + "type" + q + ":1}]}"
+body = notify_body("workspace/didChangeWatchedFiles", changes, q)
+w = check(send_frame(h, body) == 1, "could not send the created notification")
+response = read_frame(h)
+w = check(has(response, "publishDiagnostics") == 1, "a watched file did not publish diagnostics")
+w = check(has(response, curi) == 1, "the diagnostics were published for the wrong file")
+w = check(has(response, k_diag) == 1, "the watched file was not actually checked")
+
+// a change to a file the client is editing is left to didChange: the only
+// answer to this notification is the one for the file that is not open
+text = "hold ok = 1\n"
+params = "{"
+params = params + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + auri + q + ","
+params = params + q + "text" + q + ":" + q + text + q + "}}"
+body = notify_body("textDocument/didOpen", params, q)
+w = check(send_frame(h, body) == 1, "could not open sem_a.sa")
+response = read_frame(h)
+w = check(has(response, auri) == 1, "didOpen did not publish diagnostics")
+changes = "{" + q + "changes" + q + ":[{" + q + "uri" + q + ":" + q + auri + q + ","
+changes = changes + q + "type" + q + ":2},{" + q + "uri" + q + ":" + q + curi + q + ","
+changes = changes + q + "type" + q + ":2}]}"
+body = notify_body("workspace/didChangeWatchedFiles", changes, q)
+w = check(send_frame(h, body) == 1, "could not send the changed notification")
+response = read_frame(h)
+w = check(has(response, curi) == 1, "the open buffer was overwritten from disk")
+
+// a deleted file clears its diagnostics
+path = root + "/sem_c.sa"
+w = check(remove_path(path) == 1, "could not delete sem_c.sa")
+changes = "{" + q + "changes" + q + ":[{" + q + "uri" + q + ":" + q + curi + q + ","
+changes = changes + q + "type" + q + ":3}]}"
+body = notify_body("workspace/didChangeWatchedFiles", changes, q)
+w = check(send_frame(h, body) == 1, "could not send the deleted notification")
+response = read_frame(h)
+w = check(has(response, curi) == 1, "the delete cleared the wrong file")
+w = check(has(response, k_nodiag) == 1, "a deleted file kept its diagnostics")
+w = stop(h, q)
+
+// a client that does not offer the registration is not sent one
+h = start(server)
+params = "{"
+params = params + q + "rootUri" + q + ":" + q + rooturi + q + ","
+params = params + q + "capabilities" + q + ":{}}"
+body = request_body(1, "initialize", params, q)
+w = check(send_frame(h, body) == 1, "could not send the plain initialize")
+key = id_key(1, q)
+response = answer(h, key)
+body = notify_body("initialized", "{}", q)
+w = check(send_frame(h, body) == 1, "could not send initialized")
+params = "{" + q + "query" + q + ":" + q + "alpha" + q + "}"
+body = request_body(2, "workspace/symbol", params, q)
+w = check(send_frame(h, body) == 1, "could not send the symbol query")
+response = read_frame(h)
+key = id_key(2, q)
+w = check(has(response, key) == 1, "a client that offered no watcher was sent a registration")
+w = stop(h, q)
+show "file watching: registered when offered, disk changes checked, deletes cleared, open buffers left alone"

@@ -1,0 +1,1272 @@
+// stdlib/json_deep.sa -- a NESTED JSON reader and validator (prefix `jd_`).
+//
+// Supported by seed-min, gen2 and native (make test-stdlib-json-deep). Fully
+// typed signatures, one statement per line, every helper defined before the
+// one that calls it, and NO mutual recursion -- a user function gets no
+// forward prototype, so every walk here is iterative with an explicit depth
+// counter or an explicit stack kept in a string.
+//
+// This is the module `json_util.sa` deliberately is not: json_util builds and
+// reads ONE FLAT object, json_deep reads a whole nested document by path.
+//
+//   hold doc = read_file("conf.json")
+//   show jd_text(doc, "server.hosts.0.name")
+//   show jd_num(doc, "server.ports.1")
+//   show jd_len(doc, "server.hosts")
+//
+// PATHS: segments separated by a dot. Inside an object a segment is a key,
+// inside an array it is a zero-based index. The empty path is the whole
+// document. A key that contains a dot cannot be addressed -- that is the one
+// documented limit of this path syntax, and jd_key lets a caller enumerate
+// such keys instead.
+//
+// HONEST SCOPE:
+//   * Reading and validating. There is no nested BUILDER here; json_util.sa
+//     builds flat objects and this module reads any depth.
+//   * jd_valid is a full grammar check of one complete value: strings and
+//     their escapes, RFC 8259 numbers including exponents, true/false/null,
+//     commas, colons and the brace/bracket pairing, with only whitespace
+//     allowed after the value. The reading helpers below are deliberately
+//     permissive, so validate first when the input is untrusted.
+//   * A Sayanox string cannot hold a zero byte, so a \u0000 escape is dropped
+//     by jd_text rather than truncating the result. Escapes are decoded to
+//     UTF-8, surrogate pairs included.
+//   * jd_num reads a JSON number into an IEEE double, the only numeric type
+//     the language has; an integer beyond 2^53 loses precision, and jd_raw
+//     gives the exact text when that matters.
+//   * Duplicate keys: the first one wins, which is what json_util does too.
+
+// ---------------------------------------------------------------------------
+// Bytes and whitespace
+// ---------------------------------------------------------------------------
+
+make jd_is_ws(c: num) -> num {
+  when c == 32 {
+    give 1
+  }
+  when c == 9 {
+    give 1
+  }
+  when c == 10 {
+    give 1
+  }
+  when c == 13 {
+    give 1
+  }
+  give 0
+}
+
+make jd_is_digit(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give 1
+    }
+  }
+  give 0
+}
+
+make jd_skip_ws(doc: str, i0: num) -> num {
+  hold i = i0
+  hold n = len(doc)
+  hold go = 1
+  while go == 1 {
+    hold go = 0
+    when i < n {
+      hold c = sx_index(doc, i)
+      when jd_is_ws(c) == 1 {
+        hold i = i + 1
+        hold go = 1
+      }
+    }
+  }
+  give i
+}
+
+// n bytes of doc starting at i, clamped.
+make jd_slice(doc: str, i: num, n: num) -> str {
+  hold out = ""
+  hold from = i
+  when from < 0 {
+    hold from = 0
+  }
+  hold stop = from + n
+  when stop > len(doc) {
+    hold stop = len(doc)
+  }
+  hold k = from
+  while k < stop {
+    hold out = concat(out, chr(sx_index(doc, k)))
+    hold k = k + 1
+  }
+  give out
+}
+
+// ---------------------------------------------------------------------------
+// Lexical skipping
+// ---------------------------------------------------------------------------
+
+// i is at the opening quote. Gives the index just after the closing quote,
+// or -1 when the string never closes. A backslash escapes the next byte.
+make jd_skip_string(doc: str, i0: num) -> num {
+  hold n = len(doc)
+  hold i = i0 + 1
+  hold out = 0 - 1
+  hold done = 0
+  while done == 0 {
+    when i >= n {
+      hold done = 1
+    } otherwise {
+      hold c = sx_index(doc, i)
+      when c == 92 {
+        hold i = i + 2
+      } otherwise {
+        when c == 34 {
+          hold out = i + 1
+          hold done = 1
+        } otherwise {
+          hold i = i + 1
+        }
+      }
+    }
+  }
+  give out
+}
+
+// i is at a brace or a bracket. Gives the index just after the matching
+// closer, or -1. Strings inside are skipped whole, so a brace in a string
+// cannot confuse the depth count. No recursion: one depth counter.
+make jd_skip_container(doc: str, i0: num) -> num {
+  hold n = len(doc)
+  hold i = i0
+  hold depth = 0
+  hold out = 0 - 1
+  hold done = 0
+  while done == 0 {
+    when i >= n {
+      hold done = 1
+    } otherwise {
+      hold c = sx_index(doc, i)
+      hold handled = 0
+      when c == 34 {
+        hold j = jd_skip_string(doc, i)
+        hold handled = 1
+        when j < 0 {
+          hold done = 1
+        } otherwise {
+          hold i = j
+        }
+      }
+      when handled == 0 {
+        when c == 123 {
+          hold depth = depth + 1
+        }
+        when c == 91 {
+          hold depth = depth + 1
+        }
+        when c == 125 {
+          hold depth = depth - 1
+        }
+        when c == 93 {
+          hold depth = depth - 1
+        }
+        hold i = i + 1
+        when depth == 0 {
+          hold out = i
+          hold done = 1
+        }
+      }
+    }
+  }
+  give out
+}
+
+// End of a bare token (number, true, false, null) starting at i. Permissive:
+// it stops at whitespace, a comma or a closer. Grammar checking is jd_valid.
+make jd_skip_bare(doc: str, i0: num) -> num {
+  hold n = len(doc)
+  hold i = i0
+  hold done = 0
+  while done == 0 {
+    when i >= n {
+      hold done = 1
+    } otherwise {
+      hold c = sx_index(doc, i)
+      hold stop = 0
+      when jd_is_ws(c) == 1 {
+        hold stop = 1
+      }
+      when c == 44 {
+        hold stop = 1
+      }
+      when c == 125 {
+        hold stop = 1
+      }
+      when c == 93 {
+        hold stop = 1
+      }
+      when stop == 1 {
+        hold done = 1
+      } otherwise {
+        hold i = i + 1
+      }
+    }
+  }
+  when i == i0 {
+    give 0 - 1
+  }
+  give i
+}
+
+// The index just after the value that starts at or after i, or -1.
+make jd_skip_value(doc: str, i0: num) -> num {
+  hold i = jd_skip_ws(doc, i0)
+  when i >= len(doc) {
+    give 0 - 1
+  }
+  hold c = sx_index(doc, i)
+  when c == 34 {
+    give jd_skip_string(doc, i)
+  }
+  when c == 123 {
+    give jd_skip_container(doc, i)
+  }
+  when c == 91 {
+    give jd_skip_container(doc, i)
+  }
+  give jd_skip_bare(doc, i)
+}
+
+// ---------------------------------------------------------------------------
+// Containers
+// ---------------------------------------------------------------------------
+
+// The raw key text (without quotes, escapes left as written) of the member
+// whose quoted key starts at i.
+make jd_key_text(doc: str, i: num) -> str {
+  hold e = jd_skip_string(doc, i)
+  when e < 0 {
+    give ""
+  }
+  give jd_slice(doc, i + 1, e - i - 2)
+}
+
+// Index of the value of member `key` in the object at i, or -1. i must be at
+// the opening brace.
+make jd_member(doc: str, i0: num, key: str) -> num {
+  hold n = len(doc)
+  hold i = jd_skip_ws(doc, i0 + 1)
+  hold out = 0 - 1
+  hold done = 0
+  while done == 0 {
+    when i >= n {
+      hold done = 1
+    } otherwise {
+      hold c = sx_index(doc, i)
+      when c == 125 {
+        hold done = 1
+      } otherwise {
+        when c != 34 {
+          hold done = 1
+        } otherwise {
+          hold kend = jd_skip_string(doc, i)
+          when kend < 0 {
+            hold done = 1
+          } otherwise {
+            hold k = jd_slice(doc, i + 1, kend - i - 2)
+            hold vstart = jd_skip_ws(doc, kend)
+            when sx_index(doc, vstart) != 58 {
+              hold done = 1
+            } otherwise {
+              hold vstart = jd_skip_ws(doc, vstart + 1)
+              when string_eq(k, key) == 1 {
+                hold out = vstart
+                hold done = 1
+              } otherwise {
+                hold after = jd_skip_value(doc, vstart)
+                when after < 0 {
+                  hold done = 1
+                } otherwise {
+                  hold after = jd_skip_ws(doc, after)
+                  when sx_index(doc, after) == 44 {
+                    hold i = jd_skip_ws(doc, after + 1)
+                  } otherwise {
+                    hold done = 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  give out
+}
+
+// The k-th key of the object at i, or the empty string.
+make jd_key_at(doc: str, i0: num, k: num) -> str {
+  hold n = len(doc)
+  hold i = jd_skip_ws(doc, i0 + 1)
+  hold out = ""
+  hold seen = 0
+  hold done = 0
+  while done == 0 {
+    when i >= n {
+      hold done = 1
+    } otherwise {
+      hold c = sx_index(doc, i)
+      when c != 34 {
+        hold done = 1
+      } otherwise {
+        hold kend = jd_skip_string(doc, i)
+        when kend < 0 {
+          hold done = 1
+        } otherwise {
+          when seen == k {
+            hold out = jd_slice(doc, i + 1, kend - i - 2)
+            hold done = 1
+          } otherwise {
+            hold seen = seen + 1
+            hold vstart = jd_skip_ws(doc, kend)
+            hold vstart = jd_skip_ws(doc, vstart + 1)
+            hold after = jd_skip_value(doc, vstart)
+            when after < 0 {
+              hold done = 1
+            } otherwise {
+              hold after = jd_skip_ws(doc, after)
+              when sx_index(doc, after) == 44 {
+                hold i = jd_skip_ws(doc, after + 1)
+              } otherwise {
+                hold done = 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  give out
+}
+
+// Index of element number `want` of the array at i, or -1.
+make jd_element(doc: str, i0: num, want: num) -> num {
+  hold n = len(doc)
+  hold i = jd_skip_ws(doc, i0 + 1)
+  hold at = 0
+  hold out = 0 - 1
+  hold done = 0
+  while done == 0 {
+    when i >= n {
+      hold done = 1
+    } otherwise {
+      hold c = sx_index(doc, i)
+      when c == 93 {
+        hold done = 1
+      } otherwise {
+        when at == want {
+          hold out = i
+          hold done = 1
+        } otherwise {
+          hold after = jd_skip_value(doc, i)
+          when after < 0 {
+            hold done = 1
+          } otherwise {
+            hold after = jd_skip_ws(doc, after)
+            when sx_index(doc, after) == 44 {
+              hold i = jd_skip_ws(doc, after + 1)
+              hold at = at + 1
+            } otherwise {
+              hold done = 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give out
+}
+
+// Number of members of the object, or of elements of the array, at i.
+make jd_count(doc: str, i0: num) -> num {
+  hold n = len(doc)
+  hold open = sx_index(doc, i0)
+  hold closer = 93
+  when open == 123 {
+    hold closer = 125
+  }
+  hold i = jd_skip_ws(doc, i0 + 1)
+  hold cnt = 0
+  hold done = 0
+  while done == 0 {
+    when i >= n {
+      hold done = 1
+    } otherwise {
+      hold c = sx_index(doc, i)
+      when c == closer {
+        hold done = 1
+      } otherwise {
+        when open == 123 {
+          hold kend = jd_skip_string(doc, i)
+          when kend < 0 {
+            hold done = 1
+          } otherwise {
+            hold i = jd_skip_ws(doc, kend)
+            hold i = jd_skip_ws(doc, i + 1)
+          }
+        }
+        when done == 0 {
+          hold after = jd_skip_value(doc, i)
+          when after < 0 {
+            hold done = 1
+          } otherwise {
+            hold cnt = cnt + 1
+            hold after = jd_skip_ws(doc, after)
+            when sx_index(doc, after) == 44 {
+              hold i = jd_skip_ws(doc, after + 1)
+            } otherwise {
+              hold done = 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give cnt
+}
+
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
+
+make jd_seg_count(path: str) -> num {
+  when len(path) == 0 {
+    give 0
+  }
+  hold cnt = 1
+  hold i = 0
+  while i < len(path) {
+    when sx_index(path, i) == 46 {
+      hold cnt = cnt + 1
+    }
+    hold i = i + 1
+  }
+  give cnt
+}
+
+make jd_seg(path: str, k: num) -> str {
+  hold out = ""
+  hold at = 0
+  hold i = 0
+  while i < len(path) {
+    hold c = sx_index(path, i)
+    when c == 46 {
+      hold at = at + 1
+    } otherwise {
+      when at == k {
+        hold out = concat(out, chr(c))
+      }
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+make jd_seg_index(seg: str) -> num {
+  when len(seg) == 0 {
+    give 0 - 1
+  }
+  hold v = 0
+  hold i = 0
+  while i < len(seg) {
+    hold c = sx_index(seg, i)
+    when jd_is_digit(c) == 0 {
+      give 0 - 1
+    }
+    hold v = v * 10 + (c - 48)
+    hold i = i + 1
+  }
+  give v
+}
+
+// Index of the value a path points at, or -1 when any step is missing.
+make jd_find(doc: str, path: str) -> num {
+  hold i = jd_skip_ws(doc, 0)
+  when i >= len(doc) {
+    give 0 - 1
+  }
+  hold segs = jd_seg_count(path)
+  hold k = 0
+  hold bad = 0
+  while k < segs {
+    when bad == 0 {
+      hold seg = jd_seg(path, k)
+      hold c = sx_index(doc, i)
+      when c == 123 {
+        hold i = jd_member(doc, i, seg)
+      } otherwise {
+        when c == 91 {
+          hold idx = jd_seg_index(seg)
+          when idx < 0 {
+            hold bad = 1
+          } otherwise {
+            hold i = jd_element(doc, i, idx)
+          }
+        } otherwise {
+          hold bad = 1
+        }
+      }
+      when i < 0 {
+        hold bad = 1
+      }
+    }
+    hold k = k + 1
+  }
+  when bad == 1 {
+    give 0 - 1
+  }
+  give i
+}
+
+// ---------------------------------------------------------------------------
+// Public readers
+// ---------------------------------------------------------------------------
+
+// One of object array string number true false null, or the empty string
+// when the path is absent.
+make jd_type(doc: str, path: str) -> str {
+  hold i = jd_find(doc, path)
+  when i < 0 {
+    give ""
+  }
+  hold c = sx_index(doc, i)
+  when c == 123 {
+    give "object"
+  }
+  when c == 91 {
+    give "array"
+  }
+  when c == 34 {
+    give "string"
+  }
+  when c == 116 {
+    give "true"
+  }
+  when c == 102 {
+    give "false"
+  }
+  when c == 110 {
+    give "null"
+  }
+  when c == 45 {
+    give "number"
+  }
+  when jd_is_digit(c) == 1 {
+    give "number"
+  }
+  give ""
+}
+
+make jd_has(doc: str, path: str) -> num {
+  when jd_find(doc, path) < 0 {
+    give 0
+  }
+  give 1
+}
+
+// The exact JSON text of the value at the path, quotes and all.
+make jd_raw(doc: str, path: str) -> str {
+  hold i = jd_find(doc, path)
+  when i < 0 {
+    give ""
+  }
+  hold e = jd_skip_value(doc, i)
+  when e < 0 {
+    give ""
+  }
+  give jd_slice(doc, i, e - i)
+}
+
+// Append one code point to out as UTF-8. U+0000 is dropped: a Sayanox string
+// is NUL-terminated, so a zero byte cannot be represented.
+make jd_utf8(out: str, cp: num) -> str {
+  when cp == 0 {
+    give out
+  }
+  when cp < 128 {
+    give concat(out, chr(cp))
+  }
+  when cp < 2048 {
+    hold b0 = 192 + (cp - (cp % 64)) / 64
+    hold b1 = 128 + (cp % 64)
+    hold s = concat(chr(b0), chr(b1))
+    give concat(out, s)
+  }
+  when cp < 65536 {
+    hold hi = (cp - (cp % 4096)) / 4096
+    hold mid = ((cp % 4096) - (cp % 64)) / 64
+    hold b0 = 224 + hi
+    hold b1 = 128 + mid
+    hold b2 = 128 + (cp % 64)
+    hold s = concat(chr(b0), chr(b1))
+    hold s = concat(s, chr(b2))
+    give concat(out, s)
+  }
+  hold p0 = (cp - (cp % 262144)) / 262144
+  hold p1 = ((cp % 262144) - (cp % 4096)) / 4096
+  hold p2 = ((cp % 4096) - (cp % 64)) / 64
+  hold b0 = 240 + p0
+  hold b1 = 128 + p1
+  hold b2 = 128 + p2
+  hold b3 = 128 + (cp % 64)
+  hold s = concat(chr(b0), chr(b1))
+  hold s = concat(s, chr(b2))
+  hold s = concat(s, chr(b3))
+  give concat(out, s)
+}
+
+make jd_hex4(doc: str, i: num) -> num {
+  hold v = 0
+  hold k = 0
+  while k < 4 {
+    hold c = sx_index(doc, i + k)
+    hold d = 0 - 1
+    when c >= 48 {
+      when c <= 57 {
+        hold d = c - 48
+      }
+    }
+    when c >= 97 {
+      when c <= 102 {
+        hold d = c - 87
+      }
+    }
+    when c >= 65 {
+      when c <= 70 {
+        hold d = c - 55
+      }
+    }
+    when d < 0 {
+      give 0 - 1
+    }
+    hold v = v * 16 + d
+    hold k = k + 1
+  }
+  give v
+}
+
+// The decoded text of the string value at the path. A non-string value gives
+// the empty string; use jd_type to tell that from an empty string value.
+make jd_text(doc: str, path: str) -> str {
+  hold i = jd_find(doc, path)
+  when i < 0 {
+    give ""
+  }
+  when sx_index(doc, i) != 34 {
+    give ""
+  }
+  hold e = jd_skip_string(doc, i)
+  when e < 0 {
+    give ""
+  }
+  hold out = ""
+  hold p = i + 1
+  hold stop = e - 1
+  while p < stop {
+    hold c = sx_index(doc, p)
+    when c != 92 {
+      hold out = concat(out, chr(c))
+      hold p = p + 1
+    } otherwise {
+      hold d = sx_index(doc, p + 1)
+      hold step = 2
+      when d == 110 {
+        hold out = concat(out, chr(10))
+      }
+      when d == 116 {
+        hold out = concat(out, chr(9))
+      }
+      when d == 114 {
+        hold out = concat(out, chr(13))
+      }
+      when d == 98 {
+        hold out = concat(out, chr(8))
+      }
+      when d == 102 {
+        hold out = concat(out, chr(12))
+      }
+      when d == 34 {
+        hold out = concat(out, chr(34))
+      }
+      when d == 92 {
+        hold out = concat(out, chr(92))
+      }
+      when d == 47 {
+        hold out = concat(out, chr(47))
+      }
+      when d == 117 {
+        hold cp = jd_hex4(doc, p + 2)
+        hold step = 6
+        when cp < 0 {
+          hold cp = 0
+        }
+        when cp >= 55296 {
+          when cp < 56320 {
+            hold lo = 0 - 1
+            when p + 7 < stop {
+              when sx_index(doc, p + 6) == 92 {
+                when sx_index(doc, p + 7) == 117 {
+                  hold lo = jd_hex4(doc, p + 8)
+                }
+              }
+            }
+            when lo >= 56320 {
+              when lo < 57344 {
+                hold cp = 65536 + (cp - 55296) * 1024 + (lo - 56320)
+                hold step = 12
+              }
+            }
+          }
+        }
+        hold out = jd_utf8(out, cp)
+      }
+      hold p = p + step
+    }
+  }
+  give out
+}
+
+// The number at the path, or 0. Exponents are supported; jd_raw gives the
+// exact text when the double rounds.
+make jd_num(doc: str, path: str) -> num {
+  hold i = jd_find(doc, path)
+  when i < 0 {
+    give 0
+  }
+  hold e = jd_skip_value(doc, i)
+  when e < 0 {
+    give 0
+  }
+  hold sign = 1
+  hold p = i
+  when sx_index(doc, p) == 45 {
+    hold sign = 0 - 1
+    hold p = p + 1
+  }
+  hold whole = 0
+  hold go = 1
+  while go == 1 {
+    hold go = 0
+    when p < e {
+      hold c = sx_index(doc, p)
+      when jd_is_digit(c) == 1 {
+        hold whole = whole * 10 + (c - 48)
+        hold p = p + 1
+        hold go = 1
+      }
+    }
+  }
+  hold val = whole
+  when p < e {
+    when sx_index(doc, p) == 46 {
+      hold p = p + 1
+      hold scale = 1
+      hold frac = 0
+      hold go = 1
+      while go == 1 {
+        hold go = 0
+        when p < e {
+          hold c = sx_index(doc, p)
+          when jd_is_digit(c) == 1 {
+            hold frac = frac * 10 + (c - 48)
+            hold scale = scale * 10
+            hold p = p + 1
+            hold go = 1
+          }
+        }
+      }
+      hold val = val + frac / scale
+    }
+  }
+  when p < e {
+    hold c = sx_index(doc, p)
+    hold isexp = 0
+    when c == 101 {
+      hold isexp = 1
+    }
+    when c == 69 {
+      hold isexp = 1
+    }
+    when isexp == 1 {
+      hold p = p + 1
+      hold esign = 1
+      when p < e {
+        hold c2 = sx_index(doc, p)
+        when c2 == 43 {
+          hold p = p + 1
+        }
+        when c2 == 45 {
+          hold esign = 0 - 1
+          hold p = p + 1
+        }
+      }
+      hold ev = 0
+      hold go = 1
+      while go == 1 {
+        hold go = 0
+        when p < e {
+          hold c3 = sx_index(doc, p)
+          when jd_is_digit(c3) == 1 {
+            hold ev = ev * 10 + (c3 - 48)
+            hold p = p + 1
+            hold go = 1
+          }
+        }
+      }
+      hold m = 1
+      hold k = 0
+      while k < ev {
+        hold m = m * 10
+        hold k = k + 1
+      }
+      when esign < 0 {
+        hold val = val / m
+      } otherwise {
+        hold val = val * m
+      }
+    }
+  }
+  give sign * val
+}
+
+// 1 for true, 0 for false or anything else.
+make jd_flag(doc: str, path: str) -> num {
+  hold t = jd_type(doc, path)
+  when string_eq(t, "true") == 1 {
+    give 1
+  }
+  give 0
+}
+
+// Members of an object, elements of an array, decoded bytes of a string;
+// -1 for a scalar or a missing path.
+make jd_len(doc: str, path: str) -> num {
+  hold i = jd_find(doc, path)
+  when i < 0 {
+    give 0 - 1
+  }
+  hold c = sx_index(doc, i)
+  when c == 123 {
+    give jd_count(doc, i)
+  }
+  when c == 91 {
+    give jd_count(doc, i)
+  }
+  when c == 34 {
+    hold t = jd_text(doc, path)
+    give len(t)
+  }
+  give 0 - 1
+}
+
+// The k-th key of the object at the path.
+make jd_key(doc: str, path: str, k: num) -> str {
+  hold i = jd_find(doc, path)
+  when i < 0 {
+    give ""
+  }
+  when sx_index(doc, i) != 123 {
+    give ""
+  }
+  give jd_key_at(doc, i, k)
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+// End of a strictly valid JSON number starting at i, or -1.
+make jd_num_end(doc: str, i0: num) -> num {
+  hold n = len(doc)
+  hold i = i0
+  when i < n {
+    when sx_index(doc, i) == 45 {
+      hold i = i + 1
+    }
+  }
+  when i >= n {
+    give 0 - 1
+  }
+  hold c = sx_index(doc, i)
+  when jd_is_digit(c) == 0 {
+    give 0 - 1
+  }
+  when c == 48 {
+    hold i = i + 1
+  } otherwise {
+    hold go = 1
+    while go == 1 {
+      hold go = 0
+      when i < n {
+        when jd_is_digit(sx_index(doc, i)) == 1 {
+          hold i = i + 1
+          hold go = 1
+        }
+      }
+    }
+  }
+  when i < n {
+    when sx_index(doc, i) == 46 {
+      hold i = i + 1
+      hold seen = 0
+      hold go = 1
+      while go == 1 {
+        hold go = 0
+        when i < n {
+          when jd_is_digit(sx_index(doc, i)) == 1 {
+            hold i = i + 1
+            hold seen = seen + 1
+            hold go = 1
+          }
+        }
+      }
+      when seen == 0 {
+        give 0 - 1
+      }
+    }
+  }
+  when i < n {
+    hold c2 = sx_index(doc, i)
+    hold isexp = 0
+    when c2 == 101 {
+      hold isexp = 1
+    }
+    when c2 == 69 {
+      hold isexp = 1
+    }
+    when isexp == 1 {
+      hold i = i + 1
+      when i < n {
+        hold c3 = sx_index(doc, i)
+        when c3 == 43 {
+          hold i = i + 1
+        }
+        when c3 == 45 {
+          hold i = i + 1
+        }
+      }
+      hold seen = 0
+      hold go = 1
+      while go == 1 {
+        hold go = 0
+        when i < n {
+          when jd_is_digit(sx_index(doc, i)) == 1 {
+            hold i = i + 1
+            hold seen = seen + 1
+            hold go = 1
+          }
+        }
+      }
+      when seen == 0 {
+        give 0 - 1
+      }
+    }
+  }
+  give i
+}
+
+// End of a strictly valid JSON string starting at i, or -1: every escape is
+// one of the eight the grammar allows or a four-hex-digit \u, and a raw
+// control byte below 0x20 is rejected.
+make jd_str_end(doc: str, i0: num) -> num {
+  hold n = len(doc)
+  hold i = i0 + 1
+  hold out = 0 - 1
+  hold done = 0
+  while done == 0 {
+    when i >= n {
+      hold done = 1
+    } otherwise {
+      hold c = sx_index(doc, i)
+      when c == 34 {
+        hold out = i + 1
+        hold done = 1
+      } otherwise {
+        when c < 32 {
+          hold done = 1
+        } otherwise {
+          when c == 92 {
+            when i + 1 >= n {
+              hold done = 1
+            } otherwise {
+              hold d = sx_index(doc, i + 1)
+              hold ok = 0
+              when d == 34 {
+                hold ok = 1
+              }
+              when d == 92 {
+                hold ok = 1
+              }
+              when d == 47 {
+                hold ok = 1
+              }
+              when d == 98 {
+                hold ok = 1
+              }
+              when d == 102 {
+                hold ok = 1
+              }
+              when d == 110 {
+                hold ok = 1
+              }
+              when d == 114 {
+                hold ok = 1
+              }
+              when d == 116 {
+                hold ok = 1
+              }
+              when d == 117 {
+                hold ok = 2
+              }
+              when ok == 0 {
+                hold done = 1
+              }
+              when ok == 1 {
+                hold i = i + 2
+              }
+              when ok == 2 {
+                when i + 5 >= n {
+                  hold done = 1
+                } otherwise {
+                  when jd_hex4(doc, i + 2) < 0 {
+                    hold done = 1
+                  } otherwise {
+                    hold i = i + 6
+                  }
+                }
+              }
+            }
+          } otherwise {
+            hold i = i + 1
+          }
+        }
+      }
+    }
+  }
+  give out
+}
+
+// Does the text that starts at i spell `word`?
+make jd_word_at(doc: str, i: num, word: str) -> num {
+  when i + len(word) > len(doc) {
+    give 0
+  }
+  hold k = 0
+  while k < len(word) {
+    when sx_index(doc, i + k) != sx_index(word, k) {
+      give 0
+    }
+    hold k = k + 1
+  }
+  give 1
+}
+
+// 1 when doc is exactly one well-formed JSON value, possibly surrounded by
+// whitespace. One iterative pass with the open containers kept in a string:
+// `o` for an object, `a` for an array. The states are
+//   0 a value is expected        1 a value has just ended
+//   2 a key or the end of an object is expected
+//   3 a key is expected          4 a value or the end of an array is expected
+make jd_valid(doc: str) -> num {
+  hold n = len(doc)
+  hold stack = ""
+  hold st = 0
+  hold ok = 1
+  hold done = 0
+  hold i = jd_skip_ws(doc, 0)
+  when i >= n {
+    give 0
+  }
+  while done == 0 {
+    hold i = jd_skip_ws(doc, i)
+    when i >= n {
+      hold done = 1
+      when st != 1 {
+        hold ok = 0
+      }
+      when len(stack) != 0 {
+        hold ok = 0
+      }
+    } otherwise {
+      hold c = sx_index(doc, i)
+      hold depth = len(stack)
+      hold top = 0
+      when depth > 0 {
+        hold top = sx_index(stack, depth - 1)
+      }
+      hold want_value = 0
+      when st == 0 {
+        hold want_value = 1
+      }
+      when st == 4 {
+        hold want_value = 1
+        when c == 93 {
+          hold want_value = 0
+        }
+      }
+      when want_value == 1 {
+        when c == 123 {
+          hold stack = concat(stack, "o")
+          hold st = 2
+          hold i = i + 1
+        } otherwise {
+          when c == 91 {
+            hold stack = concat(stack, "a")
+            hold st = 4
+            hold i = i + 1
+          } otherwise {
+            when c == 34 {
+              hold e = jd_str_end(doc, i)
+              when e < 0 {
+                hold ok = 0
+                hold done = 1
+              } otherwise {
+                hold i = e
+                hold st = 1
+              }
+            } otherwise {
+              hold e = 0 - 1
+              when jd_word_at(doc, i, "true") == 1 {
+                hold e = i + 4
+              }
+              when jd_word_at(doc, i, "false") == 1 {
+                hold e = i + 5
+              }
+              when jd_word_at(doc, i, "null") == 1 {
+                hold e = i + 4
+              }
+              when e < 0 {
+                hold e = jd_num_end(doc, i)
+              }
+              when e < 0 {
+                hold ok = 0
+                hold done = 1
+              } otherwise {
+                hold i = e
+                hold st = 1
+              }
+            }
+          }
+        }
+      } otherwise {
+        hold handled = 0
+        when st == 1 {
+          hold handled = 1
+          when c == 44 {
+            when depth == 0 {
+              hold ok = 0
+              hold done = 1
+            } otherwise {
+              hold i = i + 1
+              when top == 111 {
+                hold st = 3
+              } otherwise {
+                hold st = 0
+              }
+            }
+          } otherwise {
+            when c == 125 {
+              when top != 111 {
+                hold ok = 0
+                hold done = 1
+              } otherwise {
+                hold stack = jd_slice(stack, 0, depth - 1)
+                hold i = i + 1
+                hold st = 1
+              }
+            } otherwise {
+              when c == 93 {
+                when top != 97 {
+                  hold ok = 0
+                  hold done = 1
+                } otherwise {
+                  hold stack = jd_slice(stack, 0, depth - 1)
+                  hold i = i + 1
+                  hold st = 1
+                }
+              } otherwise {
+                hold ok = 0
+                hold done = 1
+              }
+            }
+          }
+        }
+        when handled == 0 {
+          hold iskey = 0
+          when st == 2 {
+            hold iskey = 1
+          }
+          when st == 3 {
+            hold iskey = 1
+          }
+          when iskey == 1 {
+            when c == 125 {
+              when st == 3 {
+                hold ok = 0
+                hold done = 1
+              } otherwise {
+                hold stack = jd_slice(stack, 0, depth - 1)
+                hold i = i + 1
+                hold st = 1
+              }
+            } otherwise {
+              when c != 34 {
+                hold ok = 0
+                hold done = 1
+              } otherwise {
+                hold e = jd_str_end(doc, i)
+                when e < 0 {
+                  hold ok = 0
+                  hold done = 1
+                } otherwise {
+                  hold e = jd_skip_ws(doc, e)
+                  when e >= n {
+                    hold ok = 0
+                    hold done = 1
+                  } otherwise {
+                    when sx_index(doc, e) != 58 {
+                      hold ok = 0
+                      hold done = 1
+                    } otherwise {
+                      hold i = e + 1
+                      hold st = 0
+                    }
+                  }
+                }
+              }
+            }
+          } otherwise {
+            when st == 4 {
+              hold stack = jd_slice(stack, 0, depth - 1)
+              hold i = i + 1
+              hold st = 1
+            } otherwise {
+              hold ok = 0
+              hold done = 1
+            }
+          }
+        }
+      }
+      when done == 0 {
+        when st == 1 {
+          when len(stack) == 0 {
+            hold rest = jd_skip_ws(doc, i)
+            when rest >= n {
+              hold done = 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give ok
+}

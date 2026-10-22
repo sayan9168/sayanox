@@ -5186,3 +5186,293 @@ test-struct-functions:
 .PHONY: test-string-interpolation
 test-string-interpolation:
 	@CC='$(CC)' sh selfhost/test_string_interpolation.sh
+
+# ---------------------------------------------------------------------------
+# test-stdlib-crypto: stdlib/crypto.sa -- SHA-256 and HMAC-SHA256 written in
+# Sayanox, on seed-min, gen2 and native.
+#
+# Every expected digest below is a PUBLISHED vector: FIPS 180-4 for the three
+# SHA-256 messages, RFC 4231 cases 1-3 for HMAC. The five padding-boundary
+# lengths (55, 56, 63, 64, 65) and the byte-list message are cross-checked
+# against the host `sha256sum` when one exists, so this gate is not just the
+# implementation agreeing with itself. The module uses NO bit_* builtin -- the
+# 32-bit operations are arithmetic on doubles -- which is why seed-min and
+# native can run it at all.
+# ---------------------------------------------------------------------------
+CRY_WANT := e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1\n9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318\nb35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a\n7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34\nffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb\n635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0\n26a66b061e8f48f39927c312f25293959729eee95978e2892d49d3512a5cc092\n32\nb0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7\n5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843\n60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54\n00\nff\nab\n3\n255\n0\n0\n1\n0\n0\n00000000\nffffffff\nf0f00000\nffffffff\n80000000\n0000000f\nfffffff0\n00000001\n0000003d\ncrypto-done
+
+.PHONY: test-stdlib-crypto
+test-stdlib-crypto: $(SEED_MIN_BIN) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/stdlib_crypto_test.sa > $(TESTS)/crypto_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/crypto_seed $(TESTS)/crypto_seed.c
+	./$(GEN2) selfhost/stdlib_crypto_test.sa $(TESTS)/crypto_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/crypto_gen2 $(TESTS)/crypto_gen2.c
+	$(call assert-out,./$(TESTS)/crypto_seed,$(CRY_WANT))
+	$(call assert-out,./$(TESTS)/crypto_gen2,$(CRY_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/stdlib_crypto_test.sa $(TESTS)/crypto_native || exit 1; \
+	  ./$(TESTS)/crypto_native > $(TESTS)/crypto_native.out || exit 1; \
+	  ./$(TESTS)/crypto_seed > $(TESTS)/crypto_seed.out || exit 1; \
+	  cmp $(TESTS)/crypto_seed.out $(TESTS)/crypto_native.out || { echo '[FAIL] native crypto differs from seed-min'; exit 1; }; \
+	  echo '[OK] native crypto parity (SHA-256 + HMAC-SHA256)'; \
+	else echo '[SKIP] native crypto parity: native_aot not built'; fi
+	@# ---- independent oracle: the host sha256sum, when there is one --------
+	@if command -v sha256sum >/dev/null 2>&1; then \
+	  printf 'abc' > $(TESTS)/crypto_abc.bin; \
+	  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > $(TESTS)/crypto_55.bin; \
+	  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > $(TESTS)/crypto_56.bin; \
+	  __a=$$(sha256sum $(TESTS)/crypto_abc.bin | cut -d' ' -f1); \
+	  __b=$$(sha256sum $(TESTS)/crypto_55.bin | cut -d' ' -f1); \
+	  __c=$$(sha256sum $(TESTS)/crypto_56.bin | cut -d' ' -f1); \
+	  printf 'use "stdlib/crypto.sa"\nshow cx_sha256(read_file("$(TESTS)/crypto_abc.bin"))\nshow cx_sha256(read_file("$(TESTS)/crypto_55.bin"))\nshow cx_sha256(read_file("$(TESTS)/crypto_56.bin"))\n' > $(TESTS)/crypto_oracle.sa; \
+	  ./$(GEN2) $(TESTS)/crypto_oracle.sa $(TESTS)/crypto_oracle.c >/dev/null; \
+	  $(CC) -O2 -o $(TESTS)/crypto_oracle $(TESTS)/crypto_oracle.c; \
+	  printf '%s\n%s\n%s\n' "$$__a" "$$__b" "$$__c" > $(TESTS)/crypto_oracle.want; \
+	  ./$(TESTS)/crypto_oracle > $(TESTS)/crypto_oracle.got; \
+	  cmp $(TESTS)/crypto_oracle.want $(TESTS)/crypto_oracle.got || { echo '[FAIL] Sayanox SHA-256 disagrees with the host sha256sum'; exit 1; }; \
+	  echo '[OK] independent oracle: host sha256sum agrees on 3 messages read from disk'; \
+	else echo '[SKIP] independent oracle: no sha256sum on this host'; fi
+	@# ---- a changed byte must change the digest (the fixture pins 0/1) -----
+	@printf 'use "stdlib/crypto.sa"\nshow cx_eq_hex(cx_sha256("the quick brown fox"), cx_sha256("the quick brown fox"))\nshow cx_eq_hex(cx_sha256("the quick brown fox"), cx_sha256("the quick brown fox."))\nshow cx_eq_hex(cx_hmac("k1", "m"), cx_hmac("k2", "m"))\nshow cx_eq_hex(cx_hmac("k1", "m"), cx_hmac("k1", "m"))\n' > $(TESTS)/crypto_tamper.sa
+	./$(SEED_MIN_BIN) $(TESTS)/crypto_tamper.sa > $(TESTS)/crypto_tamper.c
+	$(CC) -O2 -o $(TESTS)/crypto_tamper $(TESTS)/crypto_tamper.c
+	$(call assert-out,./$(TESTS)/crypto_tamper,1\n0\n0\n1)
+	@echo '[OK] stdlib/crypto.sa: SHA-256 (FIPS 180-4 vectors + 5 padding boundaries) and HMAC-SHA256 (RFC 4231 cases 1-3) identical on seed-min, gen2 and native; no bit_* builtin used'
+
+test-stdlib-modules: test-stdlib-crypto
+native-test: test-stdlib-crypto
+
+# ---------------------------------------------------------------------------
+# test-stdlib-json-deep: stdlib/json_deep.sa -- the NESTED JSON reader and
+# validator json_util.sa deliberately is not, on all three backends.
+#
+# The fixture walks objects inside arrays inside objects by path, decodes
+# escapes (including a surrogate pair and a dropped \u0000, printed as hex so
+# the gate pins bytes), counts members and elements, and then runs the
+# validator over 9 documents it must accept and 15 it must refuse.
+# ---------------------------------------------------------------------------
+JD_WANT := ada\nalpha\nbeta\n80\n8080\nb\nbottom\nobject\nobject\narray\nobject\nstring\nnumber\ntrue\nfalse\nnull\n\n\n\n1\n2.5\n-3\n1000\n0.125\n1\n0\n0\n1\n0\n2\n4\n5\n0\n0\n0\n3\n-1\nname\ntags\n\nserver\n{"name":"beta","port":8080,"tags":[]}\n["a","b"]\n1e3\n6122625c632f640a650966\n41c3a9e282acf09f9880\nxy\n10\narray\n}\n1\n1\n1\n1\n1\n1\n1\n1\n1\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\njson-deep-done
+
+JD_MIX_WANT := {"k":"v","n":42}\n1\nv\n42\nv\n2
+
+.PHONY: test-stdlib-json-deep
+test-stdlib-json-deep: $(SEED_MIN_BIN) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/stdlib_json_deep_test.sa > $(TESTS)/jsond_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/jsond_seed $(TESTS)/jsond_seed.c
+	./$(GEN2) selfhost/stdlib_json_deep_test.sa $(TESTS)/jsond_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/jsond_gen2 $(TESTS)/jsond_gen2.c
+	$(call assert-out,./$(TESTS)/jsond_seed,$(JD_WANT))
+	$(call assert-out,./$(TESTS)/jsond_gen2,$(JD_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/stdlib_json_deep_test.sa $(TESTS)/jsond_native || exit 1; \
+	  ./$(TESTS)/jsond_native > $(TESTS)/jsond_native.out || exit 1; \
+	  ./$(TESTS)/jsond_seed > $(TESTS)/jsond_seed.out || exit 1; \
+	  cmp $(TESTS)/jsond_seed.out $(TESTS)/jsond_native.out || { echo '[FAIL] native json_deep differs from seed-min'; exit 1; }; \
+	  echo '[OK] native json_deep parity (nested paths, escapes, validator)'; \
+	else echo '[SKIP] native json_deep parity: native_aot not built'; fi
+	@# ---- json_util and json_deep agree on the flat subset ----------------
+	@printf 'use "stdlib/json_util.sa"\nuse "stdlib/json_deep.sa"\nhold doc = j_obj(concat(concat(j_kv_text("k", "v"), ","), j_kv_number("n", 42)))\nshow doc\nshow jd_valid(doc)\nshow jd_text(doc, "k")\nshow jd_num(doc, "n")\nshow j_get_text(doc, "k")\nshow jd_len(doc, "")\n' > $(TESTS)/jsond_mix.sa
+	./$(SEED_MIN_BIN) $(TESTS)/jsond_mix.sa > $(TESTS)/jsond_mix.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/jsond_mix $(TESTS)/jsond_mix.c
+	$(call assert-out,./$(TESTS)/jsond_mix,$(JD_MIX_WANT))
+	@echo '[OK] stdlib/json_deep.sa: nested paths, escapes/surrogates, member and element counts, and a 23-document validator (8 accepted, 15 refused), identical on seed-min, gen2 and native'
+
+test-stdlib-modules: test-stdlib-json-deep
+native-test: test-stdlib-json-deep
+
+# ---------------------------------------------------------------------------
+# test-sxpkg-crypto: the package tool's cryptographic acceptance test.
+#
+# Before this gate, a locked package was accepted on `sum=`, a 31-base
+# polynomial mod 1000000007. The first block below BREAKS that checksum on
+# purpose -- changing one byte by +1 and the next by -31 leaves the sum
+# bit-identical -- and shows `sha256=` refusing the same swap. The rest pins
+# signing (HMAC-SHA256 over name/version/sha256), the signer id, provenance
+# (origin=), and every way a signature can fail: tampered bytes, a tampered
+# digest, another key, no key, and SAYANOX_REQUIRE_SIGNED.
+#
+# The signature is symmetric. `authenticate` says so by needing the same
+# secret the signer used; no public-key signature is implemented or claimed.
+# ---------------------------------------------------------------------------
+.PHONY: test-sxpkg-crypto
+test-sxpkg-crypto: sxpkg
+	@rm -rf $(TESTS)/sxpkg-crypto && mkdir -p $(TESTS)/sxpkg-crypto
+	@# ---- 1. the old checksum collides; the digest does not ---------------
+	@printf 'make az(n) {\n  give n\n}\n' > $(TESTS)/sxpkg-crypto/c1.sa
+	@printf 'make b[(n) {\n  give n\n}\n' > $(TESTS)/sxpkg-crypto/c2.sa
+	@if cmp -s $(TESTS)/sxpkg-crypto/c1.sa $(TESTS)/sxpkg-crypto/c2.sa; then echo '[FAIL] collision fixture is not two different files'; exit 1; fi
+	@__s1=$$(./$(SXPKG_BIN) sum $(TESTS)/sxpkg-crypto/c1.sa | cut -d' ' -f3); __s2=$$(./$(SXPKG_BIN) sum $(TESTS)/sxpkg-crypto/c2.sa | cut -d' ' -f3); \
+	  __h1=$$(./$(SXPKG_BIN) sha256 $(TESTS)/sxpkg-crypto/c1.sa | cut -d' ' -f3); __h2=$$(./$(SXPKG_BIN) sha256 $(TESTS)/sxpkg-crypto/c2.sa | cut -d' ' -f3); \
+	  if [ "$$__s1" != "$$__s2" ]; then echo "[FAIL] the two files were supposed to collide under sum=: $$__s1 vs $$__s2"; exit 1; fi; \
+	  if [ "$$__h1" = "$$__h2" ]; then echo '[FAIL] sha256 collided too'; exit 1; fi; \
+	  echo '[OK] weak sum= collides on a 2-byte swap; sha256= separates the same two files'
+	@# ---- 2. a seeded registry carries sha256= and origin= ----------------
+	@mkdir -p $(TESTS)/sxpkg-crypto/proj
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj ./$(SXPKG_BIN) init > $(TESTS)/sxpkg-crypto/init.out
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj ./$(SXPKG_BIN) seed > $(TESTS)/sxpkg-crypto/seed.out
+	@grep -q '^sha256=[0-9a-f]\{64\}$$' $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta || { echo '[FAIL] seed wrote no sha256='; cat $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta; exit 1; }
+	@grep -q '^origin=seed:builtin$$' $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta || { echo '[FAIL] seed wrote no provenance'; exit 1; }
+	@grep -q '^sum=' $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta || { echo '[FAIL] the old sum= line was dropped; old registries would stop verifying'; exit 1; }
+	@if command -v sha256sum >/dev/null 2>&1; then \
+	  __w=$$(sha256sum $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/main.sa | cut -d' ' -f1); \
+	  __g=$$(grep '^sha256=' $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta | cut -d= -f2); \
+	  [ "$$__w" = "$$__g" ] || { echo "[FAIL] pkg.meta sha256 $$__g is not the file's digest $$__w"; exit 1; }; \
+	  echo '[OK] pkg.meta sha256= equals the host sha256sum of main.sa'; \
+	else echo '[SKIP] host sha256sum cross-check'; fi
+	@# ---- 3. a sum-preserving swap of main.sa is refused ------------------
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj ./$(SXPKG_BIN) add math 0.1.0 > /dev/null
+	@cp $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/main.sa $(TESTS)/sxpkg-crypto/math.orig
+	@cp $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta $(TESTS)/sxpkg-crypto/meta.orig
+	@# swap_b is the seeded math main.sa with `give` -> `hJve` on one line:
+	@# +1 on one byte and -31 on the next, which the 31-base sum cannot see.
+	@printf 'make dbl(n) {\n  give n + n\n}\nmake sqr(n) {\n  give n * n\n}\n' > $(TESTS)/sxpkg-crypto/swap_a.sa
+	@printf 'make dbl(n) {\n  hJve n + n\n}\nmake sqr(n) {\n  give n * n\n}\n' > $(TESTS)/sxpkg-crypto/swap_b.sa
+	@cmp $(TESTS)/sxpkg-crypto/swap_a.sa $(TESTS)/sxpkg-crypto/math.orig || { echo '[FAIL] the swap fixture is not the seeded math main.sa'; exit 1; }
+	@__sa=$$(./$(SXPKG_BIN) sum $(TESTS)/sxpkg-crypto/swap_a.sa | cut -d' ' -f3); \
+	  __sb=$$(./$(SXPKG_BIN) sum $(TESTS)/sxpkg-crypto/swap_b.sa | cut -d' ' -f3); \
+	  [ "$$__sa" = "$$__sb" ] || { echo "[FAIL] the swap fixture does not preserve sum= ($$__sa vs $$__sb)"; exit 1; }
+	@cp $(TESTS)/sxpkg-crypto/swap_b.sa $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/main.sa
+	@if SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj ./$(SXPKG_BIN) verify > $(TESTS)/sxpkg-crypto/verify_swap.out 2>&1; then \
+	  echo '[FAIL] verify accepted a main.sa swapped under the same sum='; cat $(TESTS)/sxpkg-crypto/verify_swap.out; exit 1; fi
+	@grep -q 'hashes to' $(TESTS)/sxpkg-crypto/verify_swap.out || { echo '[FAIL] the refusal did not name the digest'; cat $(TESTS)/sxpkg-crypto/verify_swap.out; exit 1; }
+	@echo '[OK] verify refuses a sum-preserving swap of main.sa, naming the sha256 that did not match'
+	@cp $(TESTS)/sxpkg-crypto/math.orig $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/main.sa
+	@# ---- 4. an unsigned registry verifies exactly as it did before -------
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj ./$(SXPKG_BIN) verify > $(TESTS)/sxpkg-crypto/verify_plain.out
+	@printf 'sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages)\n' > $(TESTS)/sxpkg-crypto/verify_plain.want
+	@cmp $(TESTS)/sxpkg-crypto/verify_plain.want $(TESTS)/sxpkg-crypto/verify_plain.out || { echo '[FAIL] an unsigned registry gained or lost output'; cat $(TESTS)/sxpkg-crypto/verify_plain.out; exit 1; }
+	@echo '[OK] unsigned registry: verify output byte-identical to the pre-signature tool'
+	@# ---- 5. sign, then authenticate --------------------------------------
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj SAYANOX_SIGN_KEY='test-key-1' ./$(SXPKG_BIN) sign math > $(TESTS)/sxpkg-crypto/sign.out
+	@grep -q '^sxpkg: signed math 0.1.0$$' $(TESTS)/sxpkg-crypto/sign.out || { echo '[FAIL] sign did not report'; cat $(TESTS)/sxpkg-crypto/sign.out; exit 1; }
+	@grep -q '^sig=[0-9a-f]\{64\}$$' $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta || { echo '[FAIL] no sig= in pkg.meta'; exit 1; }
+	@grep -q '^signer=[0-9a-f]\{16\}$$' $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta || { echo '[FAIL] no signer= in pkg.meta'; exit 1; }
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj SAYANOX_SIGN_KEY='test-key-1' ./$(SXPKG_BIN) authenticate math > $(TESTS)/sxpkg-crypto/auth_ok.out
+	@grep -q '^sxpkg: authentic math signer=' $(TESTS)/sxpkg-crypto/auth_ok.out || { echo '[FAIL] a correctly signed package did not authenticate'; cat $(TESTS)/sxpkg-crypto/auth_ok.out; exit 1; }
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj SAYANOX_SIGN_KEY='test-key-1' ./$(SXPKG_BIN) verify > $(TESTS)/sxpkg-crypto/verify_signed.out
+	@grep -q '^sxpkg: signature ok math$$' $(TESTS)/sxpkg-crypto/verify_signed.out || { echo '[FAIL] verify did not report the good signature'; exit 1; }
+	@# the same key file, discovered on disk instead of in the environment
+	@mkdir -p $(TESTS)/sxpkg-crypto/proj/.sayanox/keys
+	@printf 'test-key-1\n' > $(TESTS)/sxpkg-crypto/proj/.sayanox/keys/default.key
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj ./$(SXPKG_BIN) authenticate math > $(TESTS)/sxpkg-crypto/auth_file.out
+	@grep -q '^sxpkg: authentic math' $(TESTS)/sxpkg-crypto/auth_file.out || { echo '[FAIL] the key file was not used (a trailing newline must not change the key)'; cat $(TESTS)/sxpkg-crypto/auth_file.out; exit 1; }
+	@echo '[OK] sign/authenticate: HMAC-SHA256 over name+version+sha256, key from the environment or from .sayanox/keys/default.key'
+	@# ---- 6. every way a signature must fail ------------------------------
+	@if SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj SAYANOX_SIGN_KEY='another-key' ./$(SXPKG_BIN) authenticate math > $(TESTS)/sxpkg-crypto/auth_badkey.out 2>&1; then \
+	  echo '[FAIL] another key authenticated the package'; cat $(TESTS)/sxpkg-crypto/auth_badkey.out; exit 1; fi
+	@grep -q 'BAD' $(TESTS)/sxpkg-crypto/auth_badkey.out || { echo '[FAIL] the wrong-key refusal is not named BAD'; exit 1; }
+	@cp $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta $(TESTS)/sxpkg-crypto/meta.signed
+	@cp $(TESTS)/sxpkg-crypto/swap_b.sa $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/main.sa
+	@if SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj SAYANOX_SIGN_KEY='test-key-1' ./$(SXPKG_BIN) authenticate math > $(TESTS)/sxpkg-crypto/auth_tampered.out 2>&1; then \
+	  echo '[FAIL] authenticate accepted tampered bytes'; exit 1; fi
+	@grep -q 'BAD main.sa does not match the signed sha256' $(TESTS)/sxpkg-crypto/auth_tampered.out || { echo '[FAIL] tampered bytes were not named'; cat $(TESTS)/sxpkg-crypto/auth_tampered.out; exit 1; }
+	@cp $(TESTS)/sxpkg-crypto/math.orig $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/main.sa
+	@# rewrite sha256= to all zeros with grep + printf: no sed, because
+	@# test-language-deps forbids an interpreter in a recipe
+	@grep -v '^sha256=' $(TESTS)/sxpkg-crypto/meta.signed > $(TESTS)/sxpkg-crypto/meta.nodigest
+	@cp $(TESTS)/sxpkg-crypto/meta.nodigest $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta
+	@printf 'sha256=0000000000000000000000000000000000000000000000000000000000000000\n' >> $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta
+	@if SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj SAYANOX_SIGN_KEY='test-key-1' ./$(SXPKG_BIN) authenticate math > $(TESTS)/sxpkg-crypto/auth_baddigest.out 2>&1; then \
+	  echo '[FAIL] authenticate accepted a rewritten sha256='; exit 1; fi
+	@cp $(TESTS)/sxpkg-crypto/meta.signed $(TESTS)/sxpkg-crypto/proj/.sayanox/registry/math/pkg.meta
+	@rm -f $(TESTS)/sxpkg-crypto/proj/.sayanox/keys/default.key
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj ./$(SXPKG_BIN) authenticate math > $(TESTS)/sxpkg-crypto/auth_nokey.out
+	@grep -q '^sxpkg: NOKEY math' $(TESTS)/sxpkg-crypto/auth_nokey.out || { echo '[FAIL] a signed package with no key here must be reported, not accepted silently'; cat $(TESTS)/sxpkg-crypto/auth_nokey.out; exit 1; }
+	@if SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj SAYANOX_REQUIRE_SIGNED=1 ./$(SXPKG_BIN) authenticate math > $(TESTS)/sxpkg-crypto/auth_require.out 2>&1; then \
+	  echo '[FAIL] SAYANOX_REQUIRE_SIGNED accepted an uncheckable package'; exit 1; fi
+	@SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj ./$(SXPKG_BIN) add hello 0.1.0 > /dev/null
+	@if SAYANOX_ROOT=$(TESTS)/sxpkg-crypto/proj SAYANOX_SIGN_KEY='test-key-1' SAYANOX_REQUIRE_SIGNED=1 ./$(SXPKG_BIN) verify > $(TESTS)/sxpkg-crypto/verify_require.out 2>&1; then \
+	  echo '[FAIL] SAYANOX_REQUIRE_SIGNED accepted an unsigned package'; cat $(TESTS)/sxpkg-crypto/verify_require.out; exit 1; fi
+	@grep -q '^sxpkg: UNSIGNED hello$$' $(TESTS)/sxpkg-crypto/verify_require.out || { echo '[FAIL] the unsigned package was not named'; exit 1; }
+	@echo '[OK] refusals: another key, tampered main.sa, rewritten sha256=, no key, SAYANOX_REQUIRE_SIGNED over an unsigned package (all exit 1)'
+	@# ---- 7. provenance survives a publish --------------------------------
+	@rm -rf $(TESTS)/sxpkg-crypto/pub && mkdir -p $(TESTS)/sxpkg-crypto/pub
+	@printf 'show "published"\n' > $(TESTS)/sxpkg-crypto/pub/main.sa
+	@printf 'name = "provpkg"\nversion = "2.0.0"\n' > $(TESTS)/sxpkg-crypto/pub/sx.toml
+	@cd $(TESTS)/sxpkg-crypto/pub && SAYANOX_ROOT=. $(CURDIR)/$(SXPKG_BIN) publish > publish.out
+	@grep -q '^sha256=[0-9a-f]\{64\}$$' $(TESTS)/sxpkg-crypto/pub/.sayanox/registry/provpkg/pkg.meta || { echo '[FAIL] publish wrote no digest'; cat $(TESTS)/sxpkg-crypto/pub/.sayanox/registry/provpkg/pkg.meta; exit 1; }
+	@grep -q '^origin=publish:' $(TESTS)/sxpkg-crypto/pub/.sayanox/registry/provpkg/pkg.meta || { echo '[FAIL] publish recorded no provenance'; exit 1; }
+	@echo '[OK] publish records sha256= and origin=; seed records origin=seed:builtin'
+	@echo '[OK] sxpkg crypto: SHA-256 acceptance + HMAC-SHA256 keyed signatures + origin provenance (symmetric: no public-key signature is claimed)'
+
+test-sxpkg: test-sxpkg-crypto
+
+# ---------------------------------------------------------------------------
+# LSP semantic resolution, folder-wide rename and file watching.
+#
+# test-lsp-workspace checks WHICH files the server reads; this one checks what
+# it understands about the names inside them. The client is Sayanox
+# (tools/lsp_semantic_test.sa) and drives real framed sessions:
+#
+#   * definition resolves the binder -- a parameter or a `hold` in the
+#     enclosing body wins over a same-named declaration in another function,
+#     and a name no body binds resolves to the top-level declaration, not to
+#     the first line in the file that looks like one;
+#   * references and rename stay inside the body that binds a local, and never
+#     count a word that sits inside a string literal or a comment;
+#   * renaming a top-level name edits every indexed file, including files the
+#     editor never opened;
+#   * workspace/didChangeWatchedFiles is registered with the client when the
+#     client offers dynamic registration, re-checks a file the notification
+#     names, clears diagnostics on a delete, and leaves open buffers to
+#     didChange.
+#
+# The scratch folder has a space in its name on purpose: every URI in the
+# session is percent-encoded, like the folder-index gate.
+.PHONY: test-lsp-semantic
+test-lsp-semantic: $(LSP_BIN) $(GEN2) tools/lsp_semantic_test.sa
+	@mkdir -p $(TESTS)
+	./$(GEN2) tools/lsp_semantic_test.sa $(TESTS)/lsp_semantic_test.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/lsp-semantic-test $(TESTS)/lsp_semantic_test.c
+	@rm -rf '$(TESTS)/lsp semantic' && mkdir -p '$(TESTS)/lsp semantic'
+	./$(TESTS)/lsp-semantic-test '$(CURDIR)/$(LSP_BIN)' '$(CURDIR)/$(TESTS)/lsp semantic'
+	@echo '[OK] LSP semantic resolution: scope-aware definition/references/rename, folder-wide rename, file watching'
+
+test-lsp test-lsp-robust: test-lsp-semantic
+
+# ---------------------------------------------------------------------------
+# test-struct-field-struct: the measured blocker under nested generics.
+#
+# Roadmap row 5 (`Box<Box<num>>`) is refused on all three backends. Mangling a
+# nested instantiation is the easy half; the hard half is what the mangled
+# struct would have to contain. This gate pins where that stands TODAY with
+# ordinary concrete structs -- no generics in sight:
+#
+#   struct Inner { v }   struct Outer { b }
+#   hold i = Inner { 7 }   hold o = Outer { i }   show o.b.v
+#
+# seed-min and native accept it and print 7. gen2 refuses it: the field kind
+# it infers for `b` is not a struct, so the chain `o.b.v` is rejected at
+# compile time with a clear message baked into the emitted C. Until gen2 can
+# hold a struct in a struct field, a nested generic instantiation has nothing
+# to lower to on that backend, so this gate is the honest statement of why
+# row 5 is still open -- and the place to start when it is picked up.
+#
+# When gen2 learns struct-typed fields: this gate must be rewritten (the
+# refusal branch becomes a third `7`), not deleted.
+# ---------------------------------------------------------------------------
+.PHONY: test-struct-field-struct
+test-struct-field-struct: $(SEED_MIN_BIN) $(GEN2)
+	@mkdir -p $(TESTS)
+	@printf 'struct Inner {\n  v\n}\nstruct Outer {\n  b\n}\nhold i = Inner { 7 }\nhold o = Outer { i }\nshow o.b.v\n' > $(TESTS)/sfs.sa
+	./$(SEED_MIN_BIN) $(TESTS)/sfs.sa > $(TESTS)/sfs_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/sfs_seed $(TESTS)/sfs_seed.c
+	$(call assert-out,./$(TESTS)/sfs_seed,7)
+	@# gen2 refuses: the emitted C carries the diagnostic and will not compile
+	@./$(GEN2) $(TESTS)/sfs.sa $(TESTS)/sfs_gen2.c > $(TESTS)/sfs_gen2.out 2>&1 || true
+	@grep -q "is not a struct; the chain must end there" $(TESTS)/sfs_gen2.c \
+	  || { echo "[FAIL] gen2 no longer refuses a struct-typed struct field: update this gate, docs/STATUS.md row 5 and docs/TYPES_ROADMAP.md -- nested generics are unblocked on gen2"; exit 1; }
+	@if $(CC) -O2 -o $(TESTS)/sfs_gen2 $(TESTS)/sfs_gen2.c 2>/dev/null; then \
+	  echo "[FAIL] the refused gen2 output compiled anyway"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) $(TESTS)/sfs.sa $(TESTS)/sfs_nat >/dev/null \
+	    || { echo "[FAIL] native refused a struct-typed struct field"; exit 1; }; \
+	  got=`./$(TESTS)/sfs_nat`; \
+	  [ "$$got" = "7" ] || { echo "[FAIL] native printed $$got, want 7"; exit 1; }; \
+	  echo "[OK] native: a struct field holding a struct reads through the chain"; \
+	else echo "[SKIP] native_aot not built"; fi
+	@echo '[OK] struct-typed struct fields: seed-min and native read o.b.v; gen2 refuses it at compile time (the measured blocker under nested generics)'
+
+test-type-refusals: test-struct-field-struct

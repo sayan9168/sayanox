@@ -1,0 +1,587 @@
+// stdlib/crypto.sa -- SHA-256 and HMAC-SHA256, written in Sayanox (prefix `cx_`).
+//
+// Supported by seed-min, gen2 and native (make test-stdlib-crypto). Fully
+// typed signatures, one statement per line, every helper defined before the
+// one that calls it (the rules str_util.sa documents), and no mutual
+// recursion, because a user function gets no forward prototype.
+//
+// WHY ARITHMETIC AND NOT bit_and/shl: those builtins exist only on the
+// gen1-min/gen2 runtime; seed-min and native refuse them (docs/BUILTINS.md).
+// A number is an IEEE double, and every value here stays below 2^53, so the
+// 32-bit operations below are computed with /, % and * and are exact on all
+// three backends. The cost is a 32-iteration loop per and/or/xor.
+//
+// WHY LISTS OF BYTES AND NOT STRINGS: a Sayanox string is a C string, so a
+// zero byte would truncate it. A message is therefore a list of byte values
+// (0..255), and a digest is returned either as a list of 32 bytes or as 64
+// lowercase hex characters, which are always safe to print, compare and store.
+//
+// HONEST SCOPE:
+//   * SHA-256 (FIPS 180-4) and HMAC-SHA256 (RFC 2104) only. No other hash,
+//     no block cipher, no public-key signature, no random number source.
+//   * This is a portable reference implementation, NOT a hardened one: it is
+//     not constant time, so it must not be used to compare secrets under an
+//     adversary that can measure time. `cx_eq_hex` is the one helper written
+//     to compare two digests without an early exit.
+//   * Messages are bounded by what a list can hold; length is encoded in the
+//     64-bit big-endian field the standard requires, as an exact double.
+
+// ---------------------------------------------------------------------------
+// 32-bit integer helpers, all exact in a double
+// ---------------------------------------------------------------------------
+
+// 2^n for 0 <= n <= 56. Powers of two are exact doubles well past 2^53.
+make cx_pow2(n: num) -> num {
+  hold p = 1
+  hold i = 0
+  while i < n {
+    hold p = p * 2
+    hold i = i + 1
+  }
+  give p
+}
+
+// Bitwise AND of two 32-bit words.
+make cx_and32(a: num, b: num) -> num {
+  hold r = 0
+  hold p = 1
+  hold x = a
+  hold y = b
+  hold i = 0
+  while i < 32 {
+    hold xb = x % 2
+    hold yb = y % 2
+    when xb == 1 {
+      when yb == 1 {
+        hold r = r + p
+      }
+    }
+    hold x = (x - xb) / 2
+    hold y = (y - yb) / 2
+    hold p = p * 2
+    hold i = i + 1
+  }
+  give r
+}
+
+// Bitwise OR of two 32-bit words.
+make cx_or32(a: num, b: num) -> num {
+  hold r = 0
+  hold p = 1
+  hold x = a
+  hold y = b
+  hold i = 0
+  while i < 32 {
+    hold xb = x % 2
+    hold yb = y % 2
+    hold s = xb + yb
+    when s > 0 {
+      hold r = r + p
+    }
+    hold x = (x - xb) / 2
+    hold y = (y - yb) / 2
+    hold p = p * 2
+    hold i = i + 1
+  }
+  give r
+}
+
+// Bitwise XOR of two 32-bit words.
+make cx_xor32(a: num, b: num) -> num {
+  hold r = 0
+  hold p = 1
+  hold x = a
+  hold y = b
+  hold i = 0
+  while i < 32 {
+    hold xb = x % 2
+    hold yb = y % 2
+    when xb != yb {
+      hold r = r + p
+    }
+    hold x = (x - xb) / 2
+    hold y = (y - yb) / 2
+    hold p = p * 2
+    hold i = i + 1
+  }
+  give r
+}
+
+// Bitwise XOR of two bytes (HMAC pads it).
+make cx_xor8(a: num, b: num) -> num {
+  hold r = 0
+  hold p = 1
+  hold x = a
+  hold y = b
+  hold i = 0
+  while i < 8 {
+    hold xb = x % 2
+    hold yb = y % 2
+    when xb != yb {
+      hold r = r + p
+    }
+    hold x = (x - xb) / 2
+    hold y = (y - yb) / 2
+    hold p = p * 2
+    hold i = i + 1
+  }
+  give r
+}
+
+// One's complement inside 32 bits.
+make cx_not32(a: num) -> num {
+  give 4294967295 - a
+}
+
+// Logical right shift inside 32 bits.
+make cx_shr32(x: num, n: num) -> num {
+  hold d = cx_pow2(n)
+  hold v = x - (x % d)
+  give v / d
+}
+
+// Left shift inside 32 bits (the high bits fall off).
+make cx_shl32(x: num, n: num) -> num {
+  hold m = cx_pow2(n)
+  give (x * m) % 4294967296
+}
+
+// Rotate right inside 32 bits.
+make cx_rotr32(x: num, n: num) -> num {
+  hold d = cx_pow2(n)
+  hold lo = x % d
+  hold hi = (x - lo) / d
+  hold back = cx_pow2(32 - n)
+  give hi + lo * back
+}
+
+// Addition modulo 2^32.
+make cx_add32(a: num, b: num) -> num {
+  give (a + b) % 4294967296
+}
+
+// ---------------------------------------------------------------------------
+// Hex helpers
+// ---------------------------------------------------------------------------
+
+make cx_hex_digit(n: num) -> str {
+  hold d = "0123456789abcdef"
+  give chr(sx_index(d, n))
+}
+
+// Two lowercase hex characters for one byte.
+make cx_hex_byte(b: num) -> str {
+  hold v = b % 256
+  hold lo = v % 16
+  hold hi = (v - lo) / 16
+  hold out = cx_hex_digit(hi)
+  hold out = concat(out, cx_hex_digit(lo))
+  give out
+}
+
+// Lowercase hex for a whole list of bytes.
+make cx_hex(bytes: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(bytes) {
+    hold b = bytes[i]
+    hold out = concat(out, cx_hex_byte(b))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Value of one hex character, or -1 when it is not a hex digit.
+make cx_hex_value(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give c - 48
+    }
+  }
+  when c >= 97 {
+    when c <= 102 {
+      give c - 87
+    }
+  }
+  when c >= 65 {
+    when c <= 70 {
+      give c - 55
+    }
+  }
+  give 0 - 1
+}
+
+// Bytes of a hex string. An odd length or a non-hex character gives an empty
+// list, so a caller can tell a bad digest from a real one.
+make cx_unhex(hexs: str) -> list {
+  hold out = []
+  hold n = len(hexs)
+  hold bad = 0
+  when n % 2 != 0 {
+    hold bad = 1
+  }
+  hold i = 0
+  while i < n {
+    when bad == 0 {
+      hold hi = cx_hex_value(sx_index(hexs, i))
+      hold lo = 0 - 1
+      when i + 1 < n {
+        hold lo = cx_hex_value(sx_index(hexs, i + 1))
+      }
+      when hi < 0 {
+        hold bad = 1
+      }
+      when lo < 0 {
+        hold bad = 1
+      }
+      when bad == 0 {
+        hold out = push(out, hi * 16 + lo)
+      }
+    }
+    hold i = i + 2
+  }
+  when bad == 1 {
+    hold empty = []
+    give empty
+  }
+  give out
+}
+
+// The bytes of a string, as a list. A Sayanox string cannot contain a zero
+// byte, so this is exactly the text.
+make cx_bytes(s: str) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(s) {
+    hold out = push(out, sx_index(s, i))
+    hold i = i + 1
+  }
+  give out
+}
+
+// ---------------------------------------------------------------------------
+// SHA-256
+// ---------------------------------------------------------------------------
+
+// The 64 round constants: the first 32 bits of the fractional parts of the
+// cube roots of the first 64 primes (FIPS 180-4 section 4.2.2).
+make cx_k_table() -> list {
+  hold k = []
+  hold k = push(k, 1116352408)
+  hold k = push(k, 1899447441)
+  hold k = push(k, 3049323471)
+  hold k = push(k, 3921009573)
+  hold k = push(k, 961987163)
+  hold k = push(k, 1508970993)
+  hold k = push(k, 2453635748)
+  hold k = push(k, 2870763221)
+  hold k = push(k, 3624381080)
+  hold k = push(k, 310598401)
+  hold k = push(k, 607225278)
+  hold k = push(k, 1426881987)
+  hold k = push(k, 1925078388)
+  hold k = push(k, 2162078206)
+  hold k = push(k, 2614888103)
+  hold k = push(k, 3248222580)
+  hold k = push(k, 3835390401)
+  hold k = push(k, 4022224774)
+  hold k = push(k, 264347078)
+  hold k = push(k, 604807628)
+  hold k = push(k, 770255983)
+  hold k = push(k, 1249150122)
+  hold k = push(k, 1555081692)
+  hold k = push(k, 1996064986)
+  hold k = push(k, 2554220882)
+  hold k = push(k, 2821834349)
+  hold k = push(k, 2952996808)
+  hold k = push(k, 3210313671)
+  hold k = push(k, 3336571891)
+  hold k = push(k, 3584528711)
+  hold k = push(k, 113926993)
+  hold k = push(k, 338241895)
+  hold k = push(k, 666307205)
+  hold k = push(k, 773529912)
+  hold k = push(k, 1294757372)
+  hold k = push(k, 1396182291)
+  hold k = push(k, 1695183700)
+  hold k = push(k, 1986661051)
+  hold k = push(k, 2177026350)
+  hold k = push(k, 2456956037)
+  hold k = push(k, 2730485921)
+  hold k = push(k, 2820302411)
+  hold k = push(k, 3259730800)
+  hold k = push(k, 3345764771)
+  hold k = push(k, 3516065817)
+  hold k = push(k, 3600352804)
+  hold k = push(k, 4094571909)
+  hold k = push(k, 275423344)
+  hold k = push(k, 430227734)
+  hold k = push(k, 506948616)
+  hold k = push(k, 659060556)
+  hold k = push(k, 883997877)
+  hold k = push(k, 958139571)
+  hold k = push(k, 1322822218)
+  hold k = push(k, 1537002063)
+  hold k = push(k, 1747873779)
+  hold k = push(k, 1955562222)
+  hold k = push(k, 2024104815)
+  hold k = push(k, 2227730452)
+  hold k = push(k, 2361852424)
+  hold k = push(k, 2428436474)
+  hold k = push(k, 2756734187)
+  hold k = push(k, 3204031479)
+  hold k = push(k, 3329325298)
+  give k
+}
+
+// The padded message byte at absolute position i: the message itself, then
+// the 0x80 marker, then zeros, then the 64-bit big-endian bit length. The
+// padding is computed instead of materialised, so no copy of the message is
+// made and no zero byte ever enters a string.
+make cx_pad_byte(msg: list, i: num, n: num, total: num) -> num {
+  when i < n {
+    give msg[i]
+  }
+  when i == n {
+    give 128
+  }
+  hold tail = total - 8
+  when i < tail {
+    give 0
+  }
+  hold k = i - tail
+  hold sh = 8 * (7 - k)
+  hold d = cx_pow2(sh)
+  hold bits = n * 8
+  hold v = bits - (bits % d)
+  hold v = v / d
+  give v % 256
+}
+
+// SHA-256 of a list of bytes, as a list of 32 bytes.
+make cx_sha256_raw(msg: list) -> list {
+  hold n = len(msg)
+  hold total = n + 1
+  hold rem = total % 64
+  while rem != 56 {
+    hold total = total + 1
+    hold rem = total % 64
+  }
+  hold total = total + 8
+  hold h0 = 1779033703
+  hold h1 = 3144134277
+  hold h2 = 1013904242
+  hold h3 = 2773480762
+  hold h4 = 1359893119
+  hold h5 = 2600822924
+  hold h6 = 528734635
+  hold h7 = 1541459225
+  hold kt = cx_k_table()
+  hold pos = 0
+  while pos < total {
+    hold w = []
+    hold t = 0
+    while t < 16 {
+      hold base = pos + t * 4
+      hold b0 = cx_pad_byte(msg, base, n, total)
+      hold b1 = cx_pad_byte(msg, base + 1, n, total)
+      hold b2 = cx_pad_byte(msg, base + 2, n, total)
+      hold b3 = cx_pad_byte(msg, base + 3, n, total)
+      hold word = b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
+      hold w = push(w, word)
+      hold t = t + 1
+    }
+    hold t = 16
+    while t < 64 {
+      hold wm15 = w[t - 15]
+      hold s0a = cx_rotr32(wm15, 7)
+      hold s0b = cx_rotr32(wm15, 18)
+      hold s0c = cx_shr32(wm15, 3)
+      hold s0 = cx_xor32(cx_xor32(s0a, s0b), s0c)
+      hold wm2 = w[t - 2]
+      hold s1a = cx_rotr32(wm2, 17)
+      hold s1b = cx_rotr32(wm2, 19)
+      hold s1c = cx_shr32(wm2, 10)
+      hold s1 = cx_xor32(cx_xor32(s1a, s1b), s1c)
+      hold acc = cx_add32(w[t - 16], s0)
+      hold acc = cx_add32(acc, w[t - 7])
+      hold acc = cx_add32(acc, s1)
+      hold w = push(w, acc)
+      hold t = t + 1
+    }
+    hold a = h0
+    hold b = h1
+    hold c = h2
+    hold d = h3
+    hold e = h4
+    hold f = h5
+    hold g = h6
+    hold hh = h7
+    hold t = 0
+    while t < 64 {
+      hold e1a = cx_rotr32(e, 6)
+      hold e1b = cx_rotr32(e, 11)
+      hold e1c = cx_rotr32(e, 25)
+      hold big1 = cx_xor32(cx_xor32(e1a, e1b), e1c)
+      hold ch = cx_xor32(cx_and32(e, f), cx_and32(cx_not32(e), g))
+      hold t1 = cx_add32(hh, big1)
+      hold t1 = cx_add32(t1, ch)
+      hold t1 = cx_add32(t1, kt[t])
+      hold t1 = cx_add32(t1, w[t])
+      hold a0a = cx_rotr32(a, 2)
+      hold a0b = cx_rotr32(a, 13)
+      hold a0c = cx_rotr32(a, 22)
+      hold big0 = cx_xor32(cx_xor32(a0a, a0b), a0c)
+      hold mj = cx_xor32(cx_xor32(cx_and32(a, b), cx_and32(a, c)), cx_and32(b, c))
+      hold t2 = cx_add32(big0, mj)
+      hold hh = g
+      hold g = f
+      hold f = e
+      hold e = cx_add32(d, t1)
+      hold d = c
+      hold c = b
+      hold b = a
+      hold a = cx_add32(t1, t2)
+      hold t = t + 1
+    }
+    hold h0 = cx_add32(h0, a)
+    hold h1 = cx_add32(h1, b)
+    hold h2 = cx_add32(h2, c)
+    hold h3 = cx_add32(h3, d)
+    hold h4 = cx_add32(h4, e)
+    hold h5 = cx_add32(h5, f)
+    hold h6 = cx_add32(h6, g)
+    hold h7 = cx_add32(h7, hh)
+    hold pos = pos + 64
+  }
+  hold words = []
+  hold words = push(words, h0)
+  hold words = push(words, h1)
+  hold words = push(words, h2)
+  hold words = push(words, h3)
+  hold words = push(words, h4)
+  hold words = push(words, h5)
+  hold words = push(words, h6)
+  hold words = push(words, h7)
+  hold out = []
+  hold i = 0
+  while i < 8 {
+    hold v = words[i]
+    hold b0 = cx_shr32(v, 24)
+    hold b1 = cx_shr32(v, 16) % 256
+    hold b2 = cx_shr32(v, 8) % 256
+    hold b3 = v % 256
+    hold out = push(out, b0)
+    hold out = push(out, b1)
+    hold out = push(out, b2)
+    hold out = push(out, b3)
+    hold i = i + 1
+  }
+  give out
+}
+
+// SHA-256 of a list of bytes, as 64 lowercase hex characters.
+make cx_sha256_list(msg: list) -> str {
+  hold raw = cx_sha256_raw(msg)
+  give cx_hex(raw)
+}
+
+// SHA-256 of a text string, as 64 lowercase hex characters.
+make cx_sha256(s: str) -> str {
+  hold msg = cx_bytes(s)
+  give cx_sha256_list(msg)
+}
+
+// ---------------------------------------------------------------------------
+// HMAC-SHA256 (RFC 2104), block size 64
+// ---------------------------------------------------------------------------
+
+// The 64-byte HMAC key block: a long key is hashed first, a short key is
+// zero-padded.
+make cx_hmac_block(key: list) -> list {
+  hold k = key
+  when len(k) > 64 {
+    hold k = cx_sha256_raw(key)
+  }
+  hold out = []
+  hold i = 0
+  while i < 64 {
+    when i < len(k) {
+      hold out = push(out, k[i])
+    } otherwise {
+      hold out = push(out, 0)
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// HMAC-SHA256 over byte lists, as a list of 32 bytes.
+make cx_hmac_raw(key: list, msg: list) -> list {
+  hold kb = cx_hmac_block(key)
+  hold inner = []
+  hold i = 0
+  while i < 64 {
+    hold inner = push(inner, cx_xor8(kb[i], 54))
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < len(msg) {
+    hold inner = push(inner, msg[i])
+    hold i = i + 1
+  }
+  hold id = cx_sha256_raw(inner)
+  hold outer = []
+  hold i = 0
+  while i < 64 {
+    hold outer = push(outer, cx_xor8(kb[i], 92))
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < len(id) {
+    hold outer = push(outer, id[i])
+    hold i = i + 1
+  }
+  give cx_sha256_raw(outer)
+}
+
+// HMAC-SHA256 over byte lists, as 64 lowercase hex characters.
+make cx_hmac_list(key: list, msg: list) -> str {
+  hold raw = cx_hmac_raw(key, msg)
+  give cx_hex(raw)
+}
+
+// HMAC-SHA256 over text, as 64 lowercase hex characters.
+make cx_hmac(key: str, msg: str) -> str {
+  hold kb = cx_bytes(key)
+  hold mb = cx_bytes(msg)
+  give cx_hmac_list(kb, mb)
+}
+
+// ---------------------------------------------------------------------------
+// Comparison
+// ---------------------------------------------------------------------------
+
+// Compare two digests without an early exit: every byte is always looked at,
+// so the time does not depend on where the first difference is. Lengths are
+// still compared directly, because the length of a digest is not a secret.
+make cx_eq_hex(a: str, b: str) -> num {
+  when len(a) != len(b) {
+    give 0
+  }
+  hold diff = 0
+  hold i = 0
+  while i < len(a) {
+    hold ca = sx_index(a, i)
+    hold cb = sx_index(b, i)
+    hold d = ca - cb
+    when d != 0 {
+      hold diff = diff + 1
+    }
+    hold i = i + 1
+  }
+  when diff == 0 {
+    give 1
+  }
+  give 0
+}

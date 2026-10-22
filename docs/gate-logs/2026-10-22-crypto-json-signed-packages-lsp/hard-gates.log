@@ -1,0 +1,53 @@
+# Hard gates, 2026-10-22 (excerpt)
+#
+#   make doctor && make true-selfhost && make gen3 && make native-test
+#
+# on the tree that adds stdlib/crypto.sa, stdlib/json_deep.sa, the sxpkg
+# digest/signature commands and the LSP semantic resolver.
+Thu Oct 22 09:24:49 UTC 2026
+Thu Oct 22 09:51:22 UTC 2026
+
+## The four markers
+19:DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+20:doctor rc=0
+1267:=== TRUE-SELFHOST-MIN-OK ===
+1268:true-selfhost rc=0
+1304:=== GEN3-OK ===
+1305:gen3 rc=0
+2420:=== NATIVE-TEST-OK ===
+2421:native-test rc=0
+
+## The five gates added in this increment, as they ran inside the aggregates
+432:[OK] native crypto parity (SHA-256 + HMAC-SHA256)
+433:[OK] independent oracle: host sha256sum agrees on 3 messages read from disk
+436:[OK] stdlib/crypto.sa: SHA-256 (FIPS 180-4 vectors + 5 padding boundaries) and HMAC-SHA256 (RFC 4231 cases 1-3) identical on seed-min, gen2 and native; no bit_* builtin used
+441:[OK] native json_deep parity (nested paths, escapes, validator)
+444:[OK] stdlib/json_deep.sa: nested paths, escapes/surrogates, member and element counts, and a 24-document validator, identical on seed-min, gen2 and native
+531:[OK] verify refuses a sum-preserving swap of main.sa, naming the sha256 that did not match
+532:[OK] unsigned registry: verify output byte-identical to the pre-signature tool
+533:[OK] sign/authenticate: HMAC-SHA256 over name+version+sha256, key from the environment or from .sayanox/keys/default.key
+534:[OK] refusals: another key, tampered main.sa, rewritten sha256=, no key, SAYANOX_REQUIRE_SIGNED over an unsigned package (all exit 1)
+535:[OK] publish records sha256= and origin=; seed records origin=seed:builtin
+536:[OK] sxpkg crypto: SHA-256 acceptance + HMAC-SHA256 keyed signatures + origin provenance (symmetric: no public-key signature is claimed)
+569:semantic definition: a body binds its own names, the top level binds the rest
+570:semantic references: one body only; strings and comments are not code
+571:semantic rename: a local stays home, a top-level name reaches unopened files
+572:file watching: registered when offered, disk changes checked, deletes cleared, open buffers left alone
+573:[OK] LSP semantic resolution: scope-aware definition/references/rename, folder-wide rename, file watching
+1120:semantic definition: a body binds its own names, the top level binds the rest
+1121:semantic references: one body only; strings and comments are not code
+1122:semantic rename: a local stays home, a top-level name reaches unopened files
+1123:file watching: registered when offered, disk changes checked, deletes cleared, open buffers left alone
+1124:[OK] LSP semantic resolution: scope-aware definition/references/rename, folder-wide rename, file watching
+1409:[OK] struct-typed struct fields: seed-min and native read o.b.v; gen2 refuses it at compile time (the measured blocker under nested generics)
+1661:[OK] native crypto parity (SHA-256 + HMAC-SHA256)
+1662:[OK] independent oracle: host sha256sum agrees on 3 messages read from disk
+1665:[OK] stdlib/crypto.sa: SHA-256 (FIPS 180-4 vectors + 5 padding boundaries) and HMAC-SHA256 (RFC 4231 cases 1-3) identical on seed-min, gen2 and native; no bit_* builtin used
+1670:[OK] native json_deep parity (nested paths, escapes, validator)
+1673:[OK] stdlib/json_deep.sa: nested paths, escapes/surrogates, member and element counts, and a 24-document validator, identical on seed-min, gen2 and native
+1771:[OK] native crypto parity (SHA-256 + HMAC-SHA256)
+1772:[OK] independent oracle: host sha256sum agrees on 3 messages read from disk
+1775:[OK] stdlib/crypto.sa: SHA-256 (FIPS 180-4 vectors + 5 padding boundaries) and HMAC-SHA256 (RFC 4231 cases 1-3) identical on seed-min, gen2 and native; no bit_* builtin used
+1780:[OK] native json_deep parity (nested paths, escapes, validator)
+1783:[OK] stdlib/json_deep.sa: nested paths, escapes/surrogates, member and element counts, and a 24-document validator, identical on seed-min, gen2 and native
+2390:[OK] struct-typed struct fields: seed-min and native read o.b.v; gen2 refuses it at compile time (the measured blocker under nested generics)

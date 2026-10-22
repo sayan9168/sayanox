@@ -1124,7 +1124,10 @@ make symbols(text: str, uri: str) -> str {
 // rename_edits: every whole-word occurrence of `w` in ONE document as
 // TextEdit items (same scan and comma rule as refs_for, declaration
 // included), each replacing the word with `newtext`. "" when none.
-make rename_edits(w: str, newtext: str, text: str, first: num) -> str {
+// Lines outside [lo, hi] are left alone, and a word inside a string literal or
+// after // is not an occurrence -- the same two rules refs_for applies, so a
+// rename and a reference search always agree (hi < 0 = the whole document).
+make rename_edits(w: str, newtext: str, text: str, first: num, lo: num, hi: num) -> str {
   hold arr = ""
   hold count = first
   hold lines = 0
@@ -1135,6 +1138,8 @@ make rename_edits(w: str, newtext: str, text: str, first: num) -> str {
   hold j = 0
   hold c = 0
   hold run = ""
+  hold quote = 0
+  hold skip = 0
   hold span = [0, 0]
   hold espan = [0, 0]
   hold b = ""
@@ -1143,45 +1148,73 @@ make rename_edits(w: str, newtext: str, text: str, first: num) -> str {
     while l < lines {
       line = line_text(text, l)
       n = len(line)
+      skip = 0
+      when l < lo {
+        skip = 1
+      }
+      when hi >= 0 && l > hi {
+        skip = 1
+      }
       i = 0
-      while i < n {
+      quote = 0
+      while i < n && skip == 0 {
         c = sx_index(line, i)
-        when is_ident(c) == 1 {
-          run = ""
-          j = i
-          while j < n {
-            c = sx_index(line, j)
-            when is_ident(c) == 1 {
-              run = run + chr(c)
-              j += 1
-            } otherwise {
-              break
+        when quote == 1 {
+          when c == 92 && i + 1 < n {
+            i += 1
+          } otherwise {
+            when c == 34 {
+              quote = 0
             }
           }
-          when string_eq(run, w) == 1 {
-            span = utf16_span(line, i)
-            espan = utf16_span(line, i + len(w))
-            b = ""
-            when count > 0 {
-              b = b + ","
-            }
-            b = b + "{\"range\":{\"start\":{\"line\":"
-            b = b + numstr(l)
-            b = b + ",\"character\":"
-            b = b + numstr(span[0])
-            b = b + "},\"end\":{\"line\":"
-            b = b + numstr(l)
-            b = b + ",\"character\":"
-            b = b + numstr(espan[0])
-            b = b + "}},\"newText\":\""
-            b = b + json_esc(newtext)
-            b = b + "\"}"
-            arr = arr + b
-            count += 1
-          }
-          i = j
-        } otherwise {
           i += 1
+        } otherwise {
+          when c == 34 {
+            quote = 1
+            i += 1
+          } otherwise {
+            when c == 47 && i + 1 < n && sx_index(line, i + 1) == 47 {
+              i = n
+            } otherwise {
+              when is_ident(c) == 1 {
+                run = ""
+                j = i
+                while j < n {
+                  c = sx_index(line, j)
+                  when is_ident(c) == 1 {
+                    run = run + chr(c)
+                    j += 1
+                  } otherwise {
+                    break
+                  }
+                }
+                when string_eq(run, w) == 1 {
+                  span = utf16_span(line, i)
+                  espan = utf16_span(line, i + len(w))
+                  b = ""
+                  when count > 0 {
+                    b = b + ","
+                  }
+                  b = b + "{\"range\":{\"start\":{\"line\":"
+                  b = b + numstr(l)
+                  b = b + ",\"character\":"
+                  b = b + numstr(span[0])
+                  b = b + "},\"end\":{\"line\":"
+                  b = b + numstr(l)
+                  b = b + ",\"character\":"
+                  b = b + numstr(espan[0])
+                  b = b + "}},\"newText\":\""
+                  b = b + json_esc(newtext)
+                  b = b + "\"}"
+                  arr = arr + b
+                  count += 1
+                }
+                i = j
+              } otherwise {
+                i += 1
+              }
+            }
+          }
         }
       }
       l += 1
@@ -1430,7 +1463,13 @@ make ref_item(uri: str, line: num, ch: num, endch: num, first: num) -> str {
 // `incl` is the LSP context.includeDeclaration flag: when it is 0 the line that
 // declares the word (`make w`, `hold w`, `struct w`) is skipped, which is what
 // "find references, not the definition" means in an editor.
-make refs_for(w: str, text: str, uri: str, incl: num, first: num) -> str {
+//
+// Two restrictions make the answer a resolution rather than a text search:
+//   * lines outside [lo, hi] are skipped, so a name that binds inside one
+//     function body can be reported inside that body only (hi < 0 = no limit);
+//   * a word inside a string literal or after // is not an occurrence, because
+//     the compiler does not read it as the name either.
+make refs_for(w: str, text: str, uri: str, incl: num, first: num, lo: num, hi: num) -> str {
   hold arr = ""
   hold count = first
   hold lines = 0
@@ -1443,6 +1482,7 @@ make refs_for(w: str, text: str, uri: str, incl: num, first: num) -> str {
   hold c = 0
   hold run = ""
   hold decl = 0
+  hold quote = 0
   hold span = [0, 0]
   hold espan = [0, 0]
   when len(w) > 0 {
@@ -1451,6 +1491,12 @@ make refs_for(w: str, text: str, uri: str, incl: num, first: num) -> str {
       line = line_text(text, l)
       n = len(line)
       decl = 0
+      when l < lo {
+        decl = 1
+      }
+      when hi >= 0 && l > hi {
+        decl = 1
+      }
       when incl == 0 {
         m = 0
         while m < n {
@@ -1473,31 +1519,52 @@ make refs_for(w: str, text: str, uri: str, incl: num, first: num) -> str {
       }
       when decl == 0 {
         i = 0
+        quote = 0
         while i < n {
           c = sx_index(line, i)
-          when is_ident(c) == 1 {
-            run = ""
-            j = i
-            while j < n {
-              c = sx_index(line, j)
-              when is_ident(c) == 1 {
-                run = run + chr(c)
-                j += 1
-              } otherwise {
-                break
+          when quote == 1 {
+            when c == 92 && i + 1 < n {
+              i += 1
+            } otherwise {
+              when c == 34 {
+                quote = 0
               }
             }
-            when string_eq(run, w) == 1 {
-              // the start of the word and the offset just past its last byte,
-              // each as UTF-16 units, so the range covers the whole word
-              span = utf16_span(line, i)
-              espan = utf16_span(line, i + len(w))
-              arr = arr + ref_item(uri, l, span[0], espan[0], count)
-              count += 1
-            }
-            i = j
-          } otherwise {
             i += 1
+          } otherwise {
+            when c == 34 {
+              quote = 1
+              i += 1
+            } otherwise {
+              when c == 47 && i + 1 < n && sx_index(line, i + 1) == 47 {
+                i = n
+              } otherwise {
+                when is_ident(c) == 1 {
+                  run = ""
+                  j = i
+                  while j < n {
+                    c = sx_index(line, j)
+                    when is_ident(c) == 1 {
+                      run = run + chr(c)
+                      j += 1
+                    } otherwise {
+                      break
+                    }
+                  }
+                  when string_eq(run, w) == 1 {
+                    // the start of the word and the offset just past its last
+                    // byte, each as UTF-16 units, so the range covers the word
+                    span = utf16_span(line, i)
+                    espan = utf16_span(line, i + len(w))
+                    arr = arr + ref_item(uri, l, span[0], espan[0], count)
+                    count += 1
+                  }
+                  i = j
+                } otherwise {
+                  i += 1
+                }
+              }
+            }
           }
         }
       }
@@ -1870,6 +1937,265 @@ make definition_for(w: str, text: str, uri: str) -> str {
   give res
 }
 
+// --------------------------------------------------- semantic resolution
+// Everything above answers by text: "the identifier that looks like this one".
+// A name in this language binds in one of two places. `make`, `struct` and a
+// `hold` written outside every body bind at the top level and are visible in
+// every file of the folder. A parameter, or a `hold` inside a function body,
+// binds in that body only -- a second function may use the same name for
+// something else, and the compiler never confuses the two.
+//
+// These helpers find the binder of the word under the cursor, so definition,
+// references and rename can answer about the declaration the cursor really
+// means. Without them, renaming the `i` of one loop rewrites every `i` in the
+// workspace, which is the difference between a text editor and an IDE.
+
+// brace_delta: '{' minus '}' on one line, not counting braces inside a string
+// literal or after //. The same reading of a line the formatter uses.
+make brace_delta(line: str) -> num {
+  hold n = len(line)
+  hold i = 0
+  hold d = 0
+  hold quote = 0
+  hold c = 0
+  while i < n {
+    c = sx_index(line, i)
+    when quote == 1 {
+      when c == 92 && i + 1 < n {
+        i += 1
+      } otherwise {
+        when c == 34 {
+          quote = 0
+        }
+      }
+    } otherwise {
+      when c == 34 {
+        quote = 1
+      } otherwise {
+        when c == 47 && i + 1 < n && sx_index(line, i + 1) == 47 {
+          i = n
+        } otherwise {
+          when c == 123 {
+            d += 1
+          }
+          when c == 125 {
+            d -= 1
+          }
+        }
+      }
+    }
+    i += 1
+  }
+  give d
+}
+
+// fn_open_line: the line of the `make` whose body contains line `at`, or -1
+// when `at` is at the top level of the document (including inside a top-level
+// `when`/`while` block, where names are still global).
+make fn_open_line(text: str, at: num) -> num {
+  hold lines = count_lines(text)
+  hold l = 0
+  hold depth = 0
+  hold cur = 0 - 1
+  hold line = ""
+  hold t = ""
+  while l < lines && l <= at {
+    line = line_text(text, l)
+    when depth <= 0 {
+      t = trim_str(line)
+      cur = 0 - 1
+      when starts(t, 0, "make ") == 1 {
+        cur = l
+      }
+    }
+    depth = depth + brace_delta(line)
+    when depth < 0 {
+      depth = 0
+    }
+    l += 1
+  }
+  when depth <= 0 {
+    give 0 - 1
+  }
+  give cur
+}
+
+// fn_close_line: the line that closes the body opened on line `start`.
+make fn_close_line(text: str, start: num) -> num {
+  hold lines = count_lines(text)
+  hold l = start
+  hold depth = 0
+  hold seen = 0
+  while l < lines {
+    depth = depth + brace_delta(line_text(text, l))
+    when depth > 0 {
+      seen = 1
+    }
+    when seen == 1 && depth <= 0 {
+      give l
+    }
+    l += 1
+  }
+  give lines - 1
+}
+
+// sig_param: 1 when a `make` line declares a parameter named `w`. A parameter
+// name is the identifier that opens a parameter, so the `num` of `v: num` and
+// the `str` of a return type are not names.
+make sig_param(line: str, w: str) -> num {
+  hold n = len(line)
+  hold i = find(line, "(")
+  hold c = 0
+  hold run = ""
+  hold j = 0
+  hold hit = 0
+  when i < 0 {
+    give 0
+  }
+  i += 1
+  while i < n && hit == 0 {
+    c = sx_index(line, i)
+    when c == 41 {
+      i = n
+    } otherwise {
+      when c == 32 || c == 9 {
+        i += 1
+      } otherwise {
+        run = ""
+        j = i
+        while j < n {
+          c = sx_index(line, j)
+          when is_ident(c) == 1 {
+            run = run + chr(c)
+            j += 1
+          } otherwise {
+            break
+          }
+        }
+        when string_eq(run, w) == 1 {
+          hit = 1
+        }
+        while j < n && sx_index(line, j) != 44 && sx_index(line, j) != 41 {
+          j += 1
+        }
+        when j < n && sx_index(line, j) == 44 {
+          j += 1
+        }
+        when j > i {
+          i = j
+        } otherwise {
+          i += 1
+        }
+      }
+    }
+  }
+  give hit
+}
+
+// word_bound: 1 when the byte that follows a declaration keyword plus `w`
+// inside `t` is not another identifier byte, so `hold xs` does not answer for
+// the word `x`.
+make word_bound(t: str, at: num) -> num {
+  when at >= len(t) {
+    give 1
+  }
+  when is_ident(sx_index(t, at)) == 1 {
+    give 0
+  }
+  give 1
+}
+
+// local_decl_line: the line inside [start, stop] that binds `w` as a local --
+// the `make` line itself when `w` is one of its parameters, else the first
+// `hold w` or `for w in` in the body. -1 when the body does not bind the name,
+// which means the name comes from the top level and is global.
+make local_decl_line(text: str, start: num, stop: num, w: str) -> num {
+  hold l = 0
+  hold t = ""
+  hold hd = ""
+  hold fr = ""
+  when len(w) <= 0 {
+    give 0 - 1
+  }
+  when start < 0 {
+    give 0 - 1
+  }
+  when sig_param(line_text(text, start), w) == 1 {
+    give start
+  }
+  hd = concat("hold ", w)
+  fr = concat("for ", w)
+  l = start + 1
+  while l <= stop {
+    t = trim_str(line_text(text, l))
+    when starts(t, 0, hd) == 1 && word_bound(t, len(hd)) == 1 {
+      give l
+    }
+    when starts(t, 0, fr) == 1 && word_bound(t, len(fr)) == 1 {
+      give l
+    }
+    l += 1
+  }
+  give 0 - 1
+}
+
+// top_decl_line: the first line that declares `w` at the top level of the
+// document -- `make w`, `struct w` or a `hold w` written outside every body.
+// -1 when the document has no top-level declaration of the name. This is the
+// second half of the resolution: a global is the binder for every use that no
+// function body binds, and a `hold` that happens to sit inside an earlier
+// function is NOT that binder, which is the mistake a plain text search makes.
+make top_decl_line(text: str, w: str) -> num {
+  hold lines = count_lines(text)
+  hold l = 0
+  hold depth = 0
+  hold line = ""
+  hold t = ""
+  hold mk = ""
+  hold hd = ""
+  hold sd = ""
+  when len(w) <= 0 {
+    give 0 - 1
+  }
+  mk = concat("make ", w)
+  hd = concat("hold ", w)
+  sd = concat("struct ", w)
+  while l < lines {
+    line = line_text(text, l)
+    when depth <= 0 {
+      t = trim_str(line)
+      when starts(t, 0, mk) == 1 && word_bound(t, len(mk)) == 1 {
+        give l
+      }
+      when starts(t, 0, hd) == 1 && word_bound(t, len(hd)) == 1 {
+        give l
+      }
+      when starts(t, 0, sd) == 1 && word_bound(t, len(sd)) == 1 {
+        give l
+      }
+    }
+    depth = depth + brace_delta(line)
+    when depth < 0 {
+      depth = 0
+    }
+    l += 1
+  }
+  give 0 - 1
+}
+
+// loc_line: a Location covering the first character of one line, the shape
+// definition_for answers with.
+make loc_line(uri: str, line: num) -> str {
+  hold b = "{\"uri\":\""
+  b = b + json_esc(uri)
+  b = b + "\",\"range\":{\"start\":{\"line\":"
+  b = b + numstr(line)
+  b = b + ",\"character\":0},\"end\":{\"line\":"
+  b = b + numstr(line)
+  b = b + ",\"character\":1}}"
+  give b
+}
+
 // ------------------------------------------------------------- transport
 
 make emit(s: str) -> num {
@@ -2052,6 +2378,9 @@ make known_method(m: str) -> num {
   when string_eq(m, "textDocument/formatting") {
     give 1
   }
+  when string_eq(m, "workspace/didChangeWatchedFiles") {
+    give 1
+  }
   when string_eq(m, "workspace/symbol") {
     give 1
   }
@@ -2092,6 +2421,34 @@ make notify(method: str, params: str) -> num {
   b = concat(b, "}")
   r = send(b)
   give r
+}
+
+// request_out: a request from the server to the client. Only one is ever
+// sent -- client/registerCapability for the file watcher -- and its id is a
+// string the client echoes back; the answer is a response (no method) and is
+// ignored by the dispatch below, which is what the spec asks of a server that
+// does not care whether the registration succeeded.
+make request_out(id: str, method: str, params: str) -> num {
+  hold b = ""
+  hold r = 0
+  b = concat("{\"jsonrpc\":\"2.0\",\"id\":\"", id)
+  b = concat(b, "\",\"method\":\"")
+  b = concat(b, method)
+  b = concat(b, "\",\"params\":")
+  b = concat(b, params)
+  b = concat(b, "}")
+  r = send(b)
+  give r
+}
+
+// watch_registration: the params of client/registerCapability that ask the
+// client to tell this server when a .sa file is created, changed or deleted
+// anywhere in the folder. Registration is dynamic because that is the only
+// way the protocol offers: there is no static watcher capability.
+make watch_registration() -> str {
+  hold p = "{\"registrations\":[{\"id\":\"sayanox-watch-sa\",\"method\":\"workspace/didChangeWatchedFiles\","
+  p = p + "\"registerOptions\":{\"watchers\":[{\"globPattern\":\"**/*.sa\",\"kind\":7}]}}]}"
+  give p
 }
 
 make capabilities() -> str {
@@ -2391,13 +2748,100 @@ make workspace_scan(manifest: str, word: str, query: str, mode: num, incl: num, 
       when mode == 0 {
         part = sym_scan(source, candidate, query, first + len(out))
       } otherwise {
-        part = refs_for(word, source, candidate, incl, first + len(out))
+        part = refs_for(word, source, candidate, incl, first + len(out), 0, 0 - 1)
       }
       out = concat(out, part)
     }
     row = row + 2
   }
   give out
+}
+
+// workspace_rename: the `"uri":[edits]` entries of a WorkspaceEdit for every
+// indexed file the client does not have open. `pre` is "," when an open
+// document already contributed an entry, so the changes object stays valid
+// JSON however the two halves combine. A file with no occurrence contributes
+// nothing: clients show one entry per touched file, not per scanned file.
+make workspace_rename(manifest: str, w: str, newtext: str, pre: str, open0: str, open1: str, open2: str, open3: str) -> str {
+  hold out = ""
+  hold sep = pre
+  hold row = 0
+  hold total = count_lines(manifest)
+  hold candidate = ""
+  hold path = ""
+  hold source = ""
+  hold part = ""
+  while row + 1 < total {
+    candidate = line_text(manifest, row)
+    path = line_text(manifest, row + 1)
+    when string_eq(candidate, open0) == 0 && string_eq(candidate, open1) == 0 && string_eq(candidate, open2) == 0 && string_eq(candidate, open3) == 0 {
+      source = read_file(path)
+      part = rename_edits(w, newtext, source, 0, 0, 0 - 1)
+      when len(part) > 0 {
+        out = out + sep
+        out = out + "\""
+        out = out + json_esc(candidate)
+        out = out + "\":["
+        out = out + part
+        out = out + "]"
+        sep = ","
+      }
+    }
+    row = row + 2
+  }
+  give out
+}
+
+// watched_refresh: answer workspace/didChangeWatchedFiles. For every changed
+// file the client is NOT editing, publish the diagnostics of the file as it
+// now is on disk; a file that was deleted (type 3) or can no longer be read
+// gets an empty list, which is how the protocol says to clear diagnostics.
+// Files the client has open are skipped: the buffer, not the disk, is the
+// truth for those, and didChange already republishes them.
+// At most 32 changes are answered per notification, so a mass checkout cannot
+// make the server write an unbounded burst of frames.
+make watched_refresh(body: str, open0: str, open1: str, open2: str, open3: str) -> num {
+  hold rest = body
+  hold sent = 0
+  hold at = 0
+  hold u = ""
+  hold kind = 0
+  hold path = ""
+  hold src = ""
+  hold params = ""
+  hold d = 0
+  hold guard = 0
+  while guard < 32 {
+    at = find(rest, "\"uri\"")
+    when at < 0 {
+      guard = 32
+    } otherwise {
+      u = str_field(rest, "uri")
+      kind = num_field(rest, "type", 2)
+      rest = sub_str(rest, at + 5, len(rest))
+      guard += 1
+      when len(u) > 0 && string_eq(u, open0) == 0 && string_eq(u, open1) == 0 && string_eq(u, open2) == 0 && string_eq(u, open3) == 0 {
+        src = ""
+        when kind != 3 {
+          path = ws_decode(u)
+          when len(path) > 0 {
+            src = read_file(path)
+          }
+        }
+        params = concat("{\"uri\":\"", json_esc(u))
+        params = concat(params, "\",\"diagnostics\":")
+        when len(src) > 0 {
+          params = concat(params, diagnostics(src, dir_of(u)))
+        } otherwise {
+          params = concat(params, "[]")
+        }
+        params = concat(params, "}")
+        d = notify("textDocument/publishDiagnostics", params)
+        sent += 1
+      }
+    }
+  }
+  give sent
 }
 
 // ------------------------------------------------------- open documents
@@ -2450,6 +2894,16 @@ hold incl = 1
 hold part = ""
 hold part2 = ""
 hold q = ""
+// Semantic scope of the word a position request is about: fnl/fnend are the
+// first and last line of the enclosing function body (-1 when the cursor is
+// at the top level) and decl is the line that binds the word inside it, so
+// decl >= 0 means "this name is local to that body".
+hold fnl = 0
+hold fnend = 0
+hold decl = 0
+hold rlo = 0
+// 1 when the client said it supports dynamic registration for file watching.
+hold watch_dyn = 0
 
 while running == 1 {
   hdr = read_line()
@@ -2512,12 +2966,31 @@ while running == 1 {
         when len(workspace_root) == 0 {
           workspace_root = str_field(body, "uri")
         }
+        // A watcher can only be asked for when the client offers dynamic
+        // registration for it; a client that does not mention
+        // didChangeWatchedFiles is never sent a registration request.
+        watch_dyn = 0
+        when find(body, "didChangeWatchedFiles") >= 0 {
+          watch_dyn = 1
+        }
         res = concat("{\"capabilities\":", capabilities())
         res = concat(res, ",\"serverInfo\":{\"name\":\"sayanox-lsp\",\"version\":\"2.0\"}}")
         d = reply(idraw, res)
       }
       when string_eq(method, "initialized") {
         d = 1
+        when watch_dyn == 1 {
+          d = request_out("sayanox-watch-sa", "client/registerCapability", watch_registration())
+          watch_dyn = 2
+        }
+      }
+      // The client's answer to that registration comes back as a response:
+      // an id, no method, and a result or an error. It is not a request, so
+      // it is acknowledged by doing nothing (the error paths at the end skip
+      // it too, which is why this branch records nothing).
+      when string_eq(method, "workspace/didChangeWatchedFiles") {
+        workspace_index = workspace_manifest(workspace_root)
+        d = watched_refresh(body, uri0, uri1, uri2, uri3)
       }
       when string_eq(method, "shutdown") {
         d = reply(idraw, "null")
@@ -2659,9 +3132,31 @@ while running == 1 {
         w = word_at(doc, ln, ch)
         d = reply(idraw, hover_for(w, doc))
       }
+      // Definition resolves the binder, not the first line that looks like
+      // one: a parameter or a `hold` inside the enclosing body wins over a
+      // top-level declaration of the same name further up the file.
       when string_eq(method, "textDocument/definition") {
         w = word_at(doc, ln, ch)
-        d = reply(idraw, definition_for(w, doc, docuri))
+        fnl = fn_open_line(doc, ln)
+        decl = 0 - 1
+        when fnl >= 0 {
+          fnend = fn_close_line(doc, fnl)
+          decl = local_decl_line(doc, fnl, fnend, w)
+        }
+        when decl >= 0 {
+          d = reply(idraw, loc_line(docuri, decl))
+        } otherwise {
+          // Not bound by the enclosing body: the binder is the top-level
+          // declaration. definition_for -- the first line at any depth that
+          // looks like a declaration -- is the last resort, so a name this
+          // document only uses still gets the old best-effort answer.
+          decl = top_decl_line(doc, w)
+          when decl >= 0 {
+            d = reply(idraw, loc_line(docuri, decl))
+          } otherwise {
+            d = reply(idraw, definition_for(w, doc, docuri))
+          }
+        }
       }
       // Open buffers overlay the bounded disk index. Helpers cannot capture
       // the four-slot table, so the
@@ -2677,15 +3172,37 @@ while running == 1 {
         when find(body, "\"includeDeclaration\":false") >= 0 || find(body, "\"includeDeclaration\": false") >= 0 {
           incl = 0
         }
-        res = refs_for(w, txt0, uri0, incl, 0)
-        part = refs_for(w, txt1, uri1, incl, len(res))
-        res = res + part
-        part = refs_for(w, txt2, uri2, incl, len(res))
-        res = res + part
-        part = refs_for(w, txt3, uri3, incl, len(res))
-        res = res + part
-        part = workspace_scan(workspace_index, w, "", 1, incl, len(res), uri0, uri1, uri2, uri3)
-        res = res + part
+        // A name bound inside a function body cannot be referred to from
+        // anywhere else, so the answer is that body and nothing else. Only a
+        // top-level name is searched for across the open buffers and the
+        // folder index.
+        fnl = fn_open_line(doc, ln)
+        decl = 0 - 1
+        fnend = 0
+        when fnl >= 0 {
+          fnend = fn_close_line(doc, fnl)
+          decl = local_decl_line(doc, fnl, fnend, w)
+        }
+        when decl >= 0 {
+          // includeDeclaration:false drops the binder. refs_for already skips
+          // a `hold w` line; a parameter is dropped here, by starting the
+          // search on the line after the signature.
+          rlo = fnl
+          when incl == 0 && decl == fnl {
+            rlo = fnl + 1
+          }
+          res = refs_for(w, doc, docuri, incl, 0, rlo, fnend)
+        } otherwise {
+          res = refs_for(w, txt0, uri0, incl, 0, 0, 0 - 1)
+          part = refs_for(w, txt1, uri1, incl, len(res), 0, 0 - 1)
+          res = res + part
+          part = refs_for(w, txt2, uri2, incl, len(res), 0, 0 - 1)
+          res = res + part
+          part = refs_for(w, txt3, uri3, incl, len(res), 0, 0 - 1)
+          res = res + part
+          part = workspace_scan(workspace_index, w, "", 1, incl, len(res), uri0, uri1, uri2, uri3)
+          res = res + part
+        }
         res = concat("[", concat(res, "]"))
         d = reply(idraw, res)
       }
@@ -2711,12 +3228,38 @@ while running == 1 {
       // per open document that mentions the word, declaration included. An
       // empty word or an empty newName answers an empty WorkspaceEdit.
       when string_eq(method, "textDocument/rename") {
+        workspace_index = workspace_manifest(workspace_root)
+        when string_eq(uri, uri0) == 0 && string_eq(uri, uri1) == 0 && string_eq(uri, uri2) == 0 && string_eq(uri, uri3) == 0 {
+          doc = workspace_text(workspace_index, uri)
+        }
         w = word_at(doc, ln, ch)
         part = str_field(body, "newName")
         res = "{\"changes\":{"
         q = ""
+        // Same resolution as references: a name bound inside a function body
+        // is renamed inside that body only, and a top-level name is renamed
+        // in every open buffer and every indexed file of the folder.
+        fnl = fn_open_line(doc, ln)
+        decl = 0 - 1
+        fnend = 0
+        when fnl >= 0 {
+          fnend = fn_close_line(doc, fnl)
+          decl = local_decl_line(doc, fnl, fnend, w)
+        }
+        when decl >= 0 {
+          part2 = rename_edits(w, part, doc, 0, fnl, fnend)
+          when len(part2) > 0 {
+            res = res + "\""
+            res = res + json_esc(docuri)
+            res = res + "\":["
+            res = res + part2
+            res = res + "]"
+          }
+          res = res + "}}"
+          d = reply(idraw, res)
+        } otherwise {
         when len(uri0) > 0 {
-          part2 = rename_edits(w, part, txt0, 0)
+          part2 = rename_edits(w, part, txt0, 0, 0, 0 - 1)
           when len(part2) > 0 {
             res = res + q
             res = res + "\""
@@ -2728,7 +3271,7 @@ while running == 1 {
           }
         }
         when len(uri1) > 0 {
-          part2 = rename_edits(w, part, txt1, 0)
+          part2 = rename_edits(w, part, txt1, 0, 0, 0 - 1)
           when len(part2) > 0 {
             res = res + q
             res = res + "\""
@@ -2740,7 +3283,7 @@ while running == 1 {
           }
         }
         when len(uri2) > 0 {
-          part2 = rename_edits(w, part, txt2, 0)
+          part2 = rename_edits(w, part, txt2, 0, 0, 0 - 1)
           when len(part2) > 0 {
             res = res + q
             res = res + "\""
@@ -2752,7 +3295,7 @@ while running == 1 {
           }
         }
         when len(uri3) > 0 {
-          part2 = rename_edits(w, part, txt3, 0)
+          part2 = rename_edits(w, part, txt3, 0, 0, 0 - 1)
           when len(part2) > 0 {
             res = res + q
             res = res + "\""
@@ -2763,8 +3306,12 @@ while running == 1 {
             q = ","
           }
         }
+        // ... and every file of the folder the client is not editing.
+        part2 = workspace_rename(workspace_index, w, part, q, uri0, uri1, uri2, uri3)
+        res = res + part2
         res = res + "}}"
         d = reply(idraw, res)
+        }
       }
       when string_eq(method, "textDocument/signatureHelp") {
         w = word_at(doc, ln, ch)
@@ -2784,7 +3331,15 @@ while running == 1 {
         d = reply_error("", -32700, "parse error: body is not a JSON object")
       } otherwise {
         when len(method) <= 0 {
-          d = reply_error(idraw, -32600, "invalid request: no method")
+          // A body with no method is an invalid request -- unless it is the
+          // client's answer to the one request this server sends
+          // (client/registerCapability), which carries a result or an error
+          // instead of a method and must be passed over in silence.
+          when find(body, "\"result\"") >= 0 || find(body, "\"error\"") >= 0 {
+            d = 0
+          } otherwise {
+            d = reply_error(idraw, -32600, "invalid request: no method")
+          }
         } otherwise {
           when known_method(method) == 0 {
             when len(idraw) > 0 {

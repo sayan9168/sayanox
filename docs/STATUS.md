@@ -1,6 +1,51 @@
 # Status
 
-Last updated: **2026-10-22** (package tool)
+Last updated: **2026-10-22** (stdlib cryptography and nested JSON, package
+digests and signatures, LSP semantic resolution)
+
+Three of the open roadmap rows moved, each with a gate that fails without the
+new code:
+
+* **Stdlib (row 6).** `stdlib/crypto.sa` is SHA-256 and HMAC-SHA256 in the
+  dialect all three backends accept — no bitwise operators, so the 32-bit
+  words are carried in doubles and the rotations are division and remainder.
+  `stdlib/json_deep.sa` reads nested JSON by path (`items[2].user.name`), with
+  15 pinned refusals. `make test-stdlib-crypto` checks the FIPS 180-4 and RFC
+  4231 vectors (and `sha256sum` when it is installed); `make
+  test-stdlib-json-deep` checks 8 accepted documents, the 15 refusals, and
+  that the new reader agrees with `json_util.sa` on flat objects. Both run on
+  seed-min, gen2 and native.
+* **Packages (row 7).** `pkg.meta` now records `sha256=` (the real digest of
+  `main.sa`) and `origin=`, and `sxpkg sign` adds `signer=`/`sig=`, an
+  HMAC-SHA256 over `name`, `version` and the digest. `sxpkg authenticate`
+  reports `authentic` / `UNSIGNED` / `NOKEY` / `BAD <reason>`, and
+  `SAYANOX_REQUIRE_SIGNED=1` turns "cannot check" into exit 1. This is a
+  **keyed, symmetric** signature: the checker needs the same secret, so it is
+  not a public-key signature and the documents say so everywhere.
+  `make test-sxpkg-crypto` builds an actual `sum=` collision (`give` →
+  `hJve` keeps `sum=718013937`) and requires `verify` to refuse it, which only
+  the digest can do. A registry with no signatures gets byte-identical
+  `verify` output to the pre-signature tool (`cmp`-checked).
+* **LSP (row 8).** Definition, references and rename resolve the **binder** of
+  a name instead of matching its spelling: a parameter or a `hold` inside a
+  function body is answered inside that body only, a top-level name across the
+  folder; words inside string literals and comments are not occurrences.
+  Rename now reaches indexed files the editor never opened, and
+  `workspace/didChangeWatchedFiles` is registered with the client and
+  re-publishes diagnostics for files that change on disk. `make
+  test-lsp-semantic` pins all of it, and fails on its first check against the
+  previous server binary.
+* **Log:** `docs/gate-logs/2026-10-22-crypto-json-signed-packages-lsp/`.
+* **Still open:** rows 1, 3, 5, 9 and 10 (full-language self-host, seed GC,
+  nested generics, a second ISA, namespacing) are unchanged. Row 5 gained one
+  measured finding: nested generics are blocked behind a *concrete* gap —
+  gen2 refuses a struct-typed struct field (`Outer { b }` holding an `Inner`),
+  which seed-min and native both accept, so `Box<Box<num>>` cannot be lowered
+  on gen2 even with recursive type-argument parsing.
+
+---
+
+# 2026-10-22 — the package tool is one Sayanox program
 
 The package tool is one Sayanox program. `tools/sxpkg.sh` is deleted;
 `tools/sxpkg.sa` (2,565 lines, built to `./tools/sxpkg` by `make sxpkg`) now
@@ -261,10 +306,10 @@ is not presented as new work in this PR.
 | 2. List-valued struct fields / `for v in p.xs` | **Supported:** distinct list field kind emits `sx_list *`; field storage preserves aliases (including growth) and `for v in p.xs` works. | **Supported for concrete structs:** field tag `3` emits `sx_list *`; literals and pointer copies, nested field chains, `p.xs[i]` reads/writes, `len()` indexes/conditions, and `for v in p.xs` are type-lowered. | **Supported:** one pointer word per field; `BK_STRUCT` tracing reaches the list pointer and its growth-forward chain across collections. | `Box<list>` remains refused. Gen2 direct `push(p.xs, v)` and `show p.xs` remain explicit refusals; use an alias, `len`, or an index. `test-list-struct-fields` runs shared alias/iteration output on all three plus native GC; `test-gen2-list-struct-fields` adds strict-C Gen2 layout/write/condition coverage and pins refusals. |
 | 3. Seed GC | **Still no collector/RC/freelist; runtime unchanged.** Exact builder registry + release on reassignment. 128 MiB borrowed-read stress, 32 MiB list-alias/realloc stress, 32 registry reuse cycles; optional ASan/UBSan pass (leaks OFF). | Existing conservative mark/sweep. | Existing mark/sweep. | Finite no-GC gen1 bootstrap passes a 1536 MiB address-space cap with identical gen2 C; not a general bounded heap or RSS claim. Dropped locals/results/temporaries/lists still grow. `test-seed-gc`, `test-seed-borrow`, optional `test-seed-sanitize` / `test-seed-bootstrap-budget`; [GC.md](GC.md#finite-no-gc-bootstrap-budget-and-repeatable-sanitizers-2026-10-16). |
 | 4. Struct-typed hold | **Supported:** `hold p: Pt` retains the declared concrete struct identity and rejects scalar/wrong-struct initializers. | Existing accepted/type-checked support. | **Supported:** same named-identity check during collection and emission. | Struct reassignment remains outside this slice. Concrete function parameters/returns now have separate bounded gen2/gen3 support (`test-struct-functions`), not seed/native support. `test-type-refusals` runs the valid copy and scalar/wrong-struct refusals on all three. |
-| 5. Nested generic structs | `Box<Box<num>>` refused. | Refused through emitted `#error`. | Refused. | A deliberate current bootstrap-dialect limit: recursive type-argument parsing, specialization worklist, ordered layout and GC descriptors are not implemented. Simple `Box<num>`/`Box<str>` remain gated by `test-generic-structs`; nested refusal by `test-type-refusals`. |
-| 6. Stdlib | Existing portable helpers and flat JSON text utilities. | Same tested modules. | Same tested portable subset. | No new module or nested JSON parser in this PR. No crypto. HTTP/crawler integration remains optional and outside bootstrap (`test-network`); STDLIB.md. |
-| 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/checksum/name validation plus publish, install-local and the local-registry sync/fetch (staging, checksums, rollback); shell keeps only the http(s) transport and the online opt-in. Fetch now actually records `sum=`; failed fetch cleans staging/preserves lock, existing pins refuse replacement. Cached install needs no INDEX; local/bare-relative/file copies need no curl/wget. | No native compilation claim for sxpkg. | Online remains opt-in. Local fixtures plus successful curl/wget-only and interrupted-transfer stubs test verification/tamper, name/index/lock preflight and cleanup without DNS. `sum=` is non-cryptographic; no signatures/provenance or concurrent/crash-proof transaction claim. `test-sxpkg-transfer-hardening`, `test-sxpkg-online-local`, `test-sxpkg-online-optin`; [scope/logs](SXPKG_ONLINE.md#transfer-hardening-and-deterministic-success-paths-2026-10-16). |
-| 8. LSP workspace scan | Not a seed-compiled tool claim. | `.sa` protocol/scanning + tool-local C directory bridge. workspace/symbol and lexical references search a bounded initialized local folder, with four open-buffer overlays; query-time refresh. | Not a native-AOT compiler claim; host C links the tool. | One root, 128 disk files/256 KiB each/4 MiB aggregate, depth/entry caps; no symlink traversal, watchers, semantic resolution or truncation notices. Rename remains open-only; signatureHelp same-document/same-line; codeAction formatting only. `test-lsp`/`test-lsp-robust` require framed C workspace probe. [LSP scope/logs](LSP.md#bounded-local-workspace-folder-index-2026-10-16). **Not IDE-complete.** |
+| 5. Nested generic structs | `Box<Box<num>>` refused. | Refused through emitted `#error`. | Refused. | A deliberate current bootstrap-dialect limit: recursive type-argument parsing, specialization worklist, ordered layout and GC descriptors are not implemented. **Measured 2026-10-22:** the blocker underneath is not the generics pass but the struct model on gen2 — a *concrete* struct field holding a struct (`Outer { b }` with an `Inner` in `b`, read as `o.b.v`) is accepted by seed-min and native and refused by gen2 ("field 'b' of struct 'Outer' is not a struct"), so a mangled `Box__Box__n` would have nothing to lower to there. Pinned by `test-struct-field-struct`. Simple `Box<num>`/`Box<str>` remain gated by `test-generic-structs`; nested refusal by `test-type-refusals`. |
+| 6. Stdlib | Ten modules: the portable helpers, flat JSON text utilities, **nested JSON reading (`json_deep.sa`) and SHA-256/HMAC-SHA256 (`crypto.sa`)**, all byte-identical with gen2 and native. | Same tested modules. | Same tested portable subset, including the two new modules. | Nested JSON is **read-only**: no nested writer, no mutation, no pretty-printer; first key wins on duplicates. `crypto.sa` is hashing only — no public-key signature, cipher, KDF beyond HMAC, or constant-time promise, and it is slow by construction (no bitwise operators in the dialect: 32-bit words are carried in doubles). HTTP/crawler integration remains optional and outside bootstrap (`test-network`). `test-stdlib-crypto`, `test-stdlib-json-deep`; [STDLIB.md](STDLIB.md#nested-json-and-cryptography-2026-10-22). |
+| 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/checksum/name validation plus publish, install-local and the local-registry sync/fetch (staging, checksums, rollback); shell keeps only the http(s) transport and the online opt-in. **`pkg.meta` now carries `sha256=` and `origin=`, and `sxpkg sign`/`authenticate` add and check an HMAC-SHA256 `sig=`/`signer=`** (`stdlib/crypto.sa`, no new dependency). Cached install needs no INDEX; local/bare-relative/file copies need no curl/wget. | No native compilation claim for sxpkg. | Online remains opt-in. The signature is **symmetric**: `authenticate` needs the same secret that signed, so there is no public-key signature, no signed index, no key distribution and no first-download trust. `origin=` is a provenance note, not proof. `sum=` stays (non-cryptographic) so older registries keep verifying; `sha256=` is the acceptance test, and `test-sxpkg-crypto` proves it by refusing a real `sum=` collision. No concurrent/crash-proof transaction claim. `test-sxpkg-crypto`, `test-sxpkg-transfer-hardening`, `test-sxpkg-online-local`, `test-sxpkg-online-optin`; [REGISTRY.md](REGISTRY.md#commands). |
+| 8. LSP workspace scan | Not a seed-compiled tool claim. | `.sa` protocol, scanning **and folder walk** (no C bridge since 2026-10-17). workspace/symbol and references search a bounded initialized local folder with four open-buffer overlays; query-time refresh. **Definition/references/rename resolve the binder (parameter, body `hold`, or top-level declaration) instead of matching spelling, skip strings and comments, rename across indexed files, and `workspace/didChangeWatchedFiles` is registered and answered.** | Not a native-AOT compiler claim; host C links the tool. | Scope resolution is **not type resolution**: no symbol table, no following `use` to another file's declaration, no shadowing inside nested blocks, struct fields and variables share a namespace. One root, 128 disk files/256 KiB each, depth/entry caps; no symlink traversal, no truncation notices, no workspace diagnostic pass (a watched-file notification answers at most 32 changes). signatureHelp same-document/same-line; codeAction formatting only. `test-lsp-semantic`, `test-lsp-workspace`, `test-lsp`, `test-lsp-robust`, `test-lsp-unicode`. [LSP scope/logs](LSP.md#semantic-resolution-folder-rename-and-file-watching-2026-10-22). **Still not IDE-complete.** |
 | 9. Second target / IR | Host C path unchanged. | Host C path unchanged. | x86-64 Linux ELF only. C99 listing adds optional strict record/nondecreasing-offset audit and source-offset correlation; native gate compares both modes deterministically. | **No executable second ISA.** Instruction-count preservation is not semantic losslessness: register widths collapse, x86 ABI/layout/fixups remain. No IR executor, aarch64 runtime/collector or cross-execution smoke test. `test-emit-to-ir`, `test-native-ir-portable`, `test-native-emit-split`; [NATIVE_IR.md](NATIVE_IR.md#strict-log-audit-and-source-offset-correlation-2026-10-16). |
 | 10. Namespacing / aliases | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | **Not planned for the bootstrap dialect. Documentation-only clarification.** Shared declaration tables, explicit public prefixes; no module identity/import scopes/qualified resolution or path-renaming aliases. Incidental ignored suffixes do not establish alias support; no new uniform diagnostic claim. Existing `test-use` and stdlib splice gates retained. [MODULES.md](MODULES.md). |
 
@@ -273,13 +318,19 @@ is not presented as new work in this PR.
 * **Done:** concrete list-valued struct fields and `for v in p.xs` on all
   three backends (including Gen2 layout/literal/copy/index/iteration lowering);
   concrete named-struct `hold` identity checks on all three; native list-pointer
-  GC tracing; and a hardened native emit-seam gate.
+  GC tracing; a hardened native emit-seam gate; SHA-256/HMAC-SHA256 and a
+  nested JSON reader in the stdlib on all three backends; package digests,
+  provenance and keyed signatures; and LSP scope resolution, folder-wide
+  rename and file watching.
 * **Missing/outside the tested subset:** recursive generic-list/nested-generic
   layout and GC descriptors, a real seed collector, full-language self-host,
-  semantic/incremental workspace indexing, and an executable second native ISA.
+  *type*-level and incremental workspace indexing, public-key package
+  signatures, and an executable second native ISA.
 * **Refused by design:** generic `Box<list>` (despite concrete Gen2 fields),
-  `Box<Box<num>>` and the tested unsupported full-language forms. These gates
-  require errors rather than wrong layout/code generation.
+  `Box<Box<num>>`, a struct-typed struct field on gen2
+  (`test-struct-field-struct`, the measured blocker under nested generics) and
+  the tested unsupported full-language forms. These gates require errors
+  rather than wrong layout/code generation.
 * **Not planned:** bootstrap module aliases/namespaces. No implementation or
   uniform new syntax-refusal diagnostic is claimed; see MODULES.md.
 

@@ -1,0 +1,121 @@
+// selfhost/stdlib_json_deep_test.sa -- stdlib/json_deep.sa on seed-min, gen2
+// and native. The document below nests objects inside arrays inside objects,
+// which is exactly what stdlib/json_util.sa refuses to read; make
+// test-stdlib-json-deep pins every value.
+
+use "stdlib/json_deep.sa"
+
+// Lowercase hex of every byte of s. The decoded escapes below contain a tab,
+// a newline, a backslash and multi-byte UTF-8, and a gate that pins bytes
+// must be able to read them back exactly.
+make hexs(s: str) -> str {
+  hold d = "0123456789abcdef"
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    hold lo = c % 16
+    hold hi = (c - lo) / 16
+    hold out = concat(out, chr(sx_index(d, hi)))
+    hold out = concat(out, chr(sx_index(d, lo)))
+    hold i = i + 1
+  }
+  give out
+}
+
+hold doc = "{\"name\":\"ada\",\"server\":{\"hosts\":[{\"name\":\"alpha\",\"port\":80,\"tags\":[\"a\",\"b\"]},{\"name\":\"beta\",\"port\":8080,\"tags\":[]}],\"on\":true,\"off\":false,\"nil\":null},\"vals\":[1,2.5,-3,1e3,0.125],\"deep\":{\"a\":{\"b\":{\"c\":{\"d\":\"bottom\"}}}},\"empty\":{},\"elist\":[]}"
+
+// --- paths into nested objects and arrays ---
+show jd_text(doc, "name")
+show jd_text(doc, "server.hosts.0.name")
+show jd_text(doc, "server.hosts.1.name")
+show jd_num(doc, "server.hosts.0.port")
+show jd_num(doc, "server.hosts.1.port")
+show jd_text(doc, "server.hosts.0.tags.1")
+show jd_text(doc, "deep.a.b.c.d")
+
+// --- types ---
+show jd_type(doc, "")
+show jd_type(doc, "server")
+show jd_type(doc, "server.hosts")
+show jd_type(doc, "server.hosts.0")
+show jd_type(doc, "server.hosts.0.name")
+show jd_type(doc, "server.hosts.0.port")
+show jd_type(doc, "server.on")
+show jd_type(doc, "server.off")
+show jd_type(doc, "server.nil")
+show jd_type(doc, "server.missing")
+show jd_type(doc, "server.hosts.9")
+show jd_type(doc, "name.0")
+
+// --- numbers, including a fraction and an exponent ---
+show jd_num(doc, "vals.0")
+show jd_num(doc, "vals.1")
+show jd_num(doc, "vals.2")
+show jd_num(doc, "vals.3")
+show jd_num(doc, "vals.4")
+
+// --- flags, presence, counting ---
+show jd_flag(doc, "server.on")
+show jd_flag(doc, "server.off")
+show jd_flag(doc, "server.nil")
+show jd_has(doc, "server.on")
+show jd_has(doc, "server.nope")
+show jd_len(doc, "server.hosts")
+show jd_len(doc, "server")
+show jd_len(doc, "vals")
+show jd_len(doc, "server.hosts.1.tags")
+show jd_len(doc, "empty")
+show jd_len(doc, "elist")
+show jd_len(doc, "name")
+show jd_len(doc, "server.hosts.0.port")
+
+// --- keys and raw text ---
+show jd_key(doc, "server.hosts.0", 0)
+show jd_key(doc, "server.hosts.0", 2)
+show jd_key(doc, "server.hosts.0", 3)
+show jd_key(doc, "", 1)
+show jd_raw(doc, "server.hosts.1")
+show jd_raw(doc, "server.hosts.0.tags")
+show jd_raw(doc, "vals.3")
+
+// --- escapes, including a surrogate pair and a dropped NUL ---
+hold esc = "{\"s\":\"a\\\"b\\\\c\\/d\\ne\\tf\",\"u\":\"\\u0041\\u00e9\\u20ac\\ud83d\\ude00\",\"z\":\"x\\u0000y\"}"
+show hexs(jd_text(esc, "s"))
+show hexs(jd_text(esc, "u"))
+show jd_text(esc, "z")
+show jd_len(esc, "u")
+
+// --- whitespace everywhere, and a key that holds a brace ---
+hold ws = "  {  \"a\" : [ 1 , { \"b{\" : \"}\" } ]  }  "
+show jd_type(ws, "a")
+show jd_text(ws, "a.1.b{")
+show jd_num(ws, "a.0")
+
+// --- validation: what the grammar accepts ---
+show jd_valid(doc)
+show jd_valid(esc)
+show jd_valid(ws)
+show jd_valid("null")
+show jd_valid("  -0.5e+10  ")
+show jd_valid("[]")
+show jd_valid("{}")
+show jd_valid("[[[[1]]]]")
+
+// --- validation: what it refuses ---
+show jd_valid("")
+show jd_valid("{\"a\":1,}")
+show jd_valid("[1,2,")
+show jd_valid("{\"a\" 1}")
+show jd_valid("{a:1}")
+show jd_valid("\"x\" extra")
+show jd_valid("01")
+show jd_valid("1.")
+show jd_valid("1e")
+show jd_valid("[1,]")
+show jd_valid("{\"a\":}")
+show jd_valid("tru")
+show jd_valid("{\"a\":\"\\x\"}")
+show jd_valid("[1}")
+show jd_valid("{\"a\":1}}")
+show "json-deep-done"
