@@ -10,7 +10,9 @@ that every tool is already a `.sa` program.
   `selfhost/sx`, `restore_stage2.sh`, `restore_sxc_full.sh`,
   `restore_compiler_min.sh`, `pack_compiler_min.sh` and `lang_quality.sh` —
   were ported; `pipefail`, `[[ ]]`, arrays, `local` and process substitution
-  are gone.
+  are gone. Four of the six were then deleted on 2026-10-21 (`selfhost/sx`,
+  `restore_stage2.sh`, `restore_sxc_full.sh`, `lang_quality.sh`) because they
+  drove a Stage-2 host that does not exist.
 * The LSP build needs no binder at all since 2026-10-17: the folder index is
   Sayanox (`read_dir`/`path_kind`/`path_size`/`path_real`), so both
   `tools/lsp_workspace_bind.sa` (itself a Sayanox replacement for the old awk

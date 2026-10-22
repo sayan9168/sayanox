@@ -1,3 +1,8 @@
+> **Historical logs only.** Everything in this directory predates the gate-log
+> directories (`docs/gate-logs/<date>-<topic>/`), which are the current
+> evidence. Several runs here are for increments that no longer exist; they are
+> kept as a record of what was measured, not as a claim about the tree today.
+
 # Verification logs — current run 2026-10-15 (`ten-final-*`)
 
 The four `ten-final-*.log` files are the final command output for this PR:

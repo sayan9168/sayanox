@@ -1,3 +1,0 @@
-hold count = 42
-hold name = "Sayan"
-hold broken = count + name

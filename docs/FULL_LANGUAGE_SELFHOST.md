@@ -139,19 +139,21 @@ by `test-gen2-list-struct-fields`.
 
 ## The Stage-2 host is not in this repository
 
-Measured on 2026-10-13:
+Measured on 2026-10-21:
 
 | Referenced by the old docs | Actual state |
 |---|---|
 | `make stage2` | no such target in the Makefile |
 | `selfhost/bootstrap_full_language_selfhost.sh`, `selfhost/bootstrap_full_selfhost.sh` | no such files |
-| `selfhost/stage2_template.c` | 93 bytes: a `PLACEHOLDER` comment |
-| `selfhost/stage2_src/` | a README and an 11-byte `b64_0.txt` reading `PLACEHOLDER` |
-| `selfhost/sxc_full.c` | 30 lines; lowers only `hold NAME = <digits>` and `show` |
-| `./selfhost/restore_stage2.sh` | exits 1: `error: missing Stage-2 seed; expected plain selfhost/sxc_full.c or selfhost/stage2_src/*.c` |
+| `selfhost/stage2_template.c` | **deleted 2026-10-21** — it was a 93-byte `PLACEHOLDER` comment |
+| `selfhost/stage2_src/` | **deleted 2026-10-21** — it was a README and an 11-byte `b64_0.txt` reading `PLACEHOLDER` |
+| `selfhost/sxc_full.c`, `selfhost/sxc_full_minimal.c` | **deleted 2026-10-21** — 30-line toys that lowered only `hold NAME = <digits>` and `show` |
+| `./selfhost/restore_stage2.sh` (and its `restore_sxc*.sh` siblings) | **deleted 2026-10-21** — a wrapper whose inputs were already gone, so it could only exit 1 |
+| `./selfhost/sx` | **deleted 2026-10-21** — a CLI wrapper for the absent host |
 
-`make test-doc-claims` fails if those references reappear in `docs/`, so this
-page cannot drift back into claiming a host that is not there.
+Those files were scaffolding, not evidence. Keeping a placeholder byte-identical
+to make a test true is a cost with no benefit, so `make test-doc-claims` now
+asserts they stay gone as well as that no document advertises them.
 
 There is therefore no C host that lowers "the full grammar". The way the
 language grows is one increment at a time inside

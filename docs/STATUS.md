@@ -1,6 +1,30 @@
 # Status
 
-Last updated: **2026-10-21**
+Last updated: **2026-10-21** (second pass)
+
+The tree stopped carrying a second copy of itself on 2026-10-21. 288 tracked
+files that no build, test or document read are gone: the base64 chunk
+directories and loose bundles that restored files already present as plaintext
+(`native_src/`, `stage2_blob/`, `sxc_full_b64*`, `sxc_full_lines/`,
+`sxc_sa_parts/`, `sxc_out_c/`, `stage2_template_parts/`, `codegen_*.b64`,
+`sxc*.sa.b64`, `compiler_min.sa.gz.b64{,.p0...p3}` — about 380 KB), the Stage-2
+scaffolding that could only ever exit 1 (`stage2_template.c`, `sxc_full.c`,
+`sxc_full_minimal.c`, `restore_stage2.sh`, `restore_sxc.sh`,
+`restore_sxc_full.sh`, `restore_stage2_template.sh`, `selfhost/sx`,
+`stage2_src/`), the last Python (`sayascrape/*.py`, 738 lines) with its
+`test-scrape` target, 33 abandoned documents, and ~70 `.sa` demos, stage
+sketches and examples that no target referenced. Nothing was removed to make a
+gate pass: every surviving gate is unchanged or stricter, and
+`test-doc-claims` now *asserts* the placeholders stay gone instead of asserting
+that a 93-byte `PLACEHOLDER` file is still there.
+
+Losing dependencies came with one language increment. `spawn(path)` starts a
+program with no arguments, so every driver that ran `gen2 in.sa out.c` had to be
+shell; `run_command(cmd)` (2026-10-21) gives a Sayanox program the exit status of a
+command line. Four `sh` drivers became `tools/sxdiag.sa`: the 23 inline, 7
+postfix, 14 return-path and 31 name-resolution refusals are now cases in a
+Sayanox program, checked by `make test-sxdiag` with an unknown-suite refusal and
+two accept-everything controls so the assertions cannot become decoration.
 
 Phase D step 4 landed on 2026-10-21: the native backend's x86-64 instruction
 encoder is Sayanox. `SX_ENCODE_LOG` records the encoder's own calls — one
@@ -111,7 +135,7 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
 | `selfhost/native_aot.c` | C | 4,498 lines | Phase D — the language surface, the ELF image writer/linker and the x86-64 instruction encoder are done; what is left is the scanner, parser, inference, emit tree, runtime stubs and collector |
-| `Makefile` + 25 sh scripts | make / POSIX sh | 5,112 lines | Later — a Sayanox build driver still needs a built compiler first |
+| `Makefile` + 15 sh scripts | make / POSIX sh | 5,170 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
 package tool — now including `publish`, `install-local` and the
@@ -1666,14 +1690,21 @@ full grammar**, and no claim of one survives:
   the Stage-2 host.
 * `docs/FULL_SELFHOST.md` keeps its history but its two command blocks were
   replaced with the commands that exist.
-* 24 legacy documents (`docs/STAGE1..STAGE19`, `docs/FULL_SELFHOST.md`,
-  `selfhost/README.md`, `selfhost/SELFHOST.md` and others that advertised the
-  same missing entry points) carry a banner stating exactly which entry points
-  do not exist and what the supported path is.
+* 3 remaining legacy documents (`docs/FULL_SELFHOST.md`,
+  `docs/TOOLCHAIN.md`, `docs/VNEXT_STATUS.md`) carry a banner stating exactly
+  which entry points do not exist and what the supported path is. On 2026-10-21
+  the other 21 — the `docs/STAGE5..STAGE28` sequence, `docs/ABC_COMPLETE.md`,
+  `docs/UNIFIED.md`, `docs/GIVE.md`, `docs/ERRORS.md`, `docs/SXC_*`,
+  `docs/SELFHOST_*`, `docs/PURE_SA.md`, `docs/SHELL.md`, `docs/SAYANOXC.md`,
+  `docs/RUST_OPTIONAL.md` and the five `selfhost/*.md` pages — were **deleted**.
+  They described architectures that no longer exist, and a banner is a weaker
+  claim than not shipping the page at all.
 * `make test-doc-claims` (wired into `test-stage2`, `test-for-str` and the
   `true-selfhost-min` aggregate) fails if a document advertises a missing entry
-  point without the banner, if `stage2_template.c` stops being a placeholder, if
-  `restore_stage2.sh` starts succeeding, or if a `stage2:` target appears — in
+  point without the banner, if any deleted Stage-2 placeholder comes back
+  (`stage2_template.c`, `sxc_full.c`, `sxc_full_minimal.c`, `restore_stage2.sh`,
+  `restore_sxc.sh`, `restore_sxc_full.sh`, `restore_stage2_template.sh`,
+  `selfhost/sx`, `stage2_src/`, `stage2`), or if a `stage2:` target appears — in
   which case the docs are the thing that must be updated.
 
 Two constraints on editing the compiler source were found the hard way and are

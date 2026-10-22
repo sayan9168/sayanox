@@ -1,0 +1,7 @@
+gen2 ok
+test-sxdiag ok
+language-deps ok
+gen3 ok
+native-test ok
+doc-claims ok
+all-sayanox-fails-closed FAILED (2)

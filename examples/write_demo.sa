@@ -1,2 +1,0 @@
-write_file("/tmp/sayanox_write_demo.txt", "ok\n")
-show 1

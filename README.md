@@ -102,11 +102,14 @@ make tools
 The formatter currently handles whitespace. The package tool supports `init` / `add` / `list` / `remove` / `search` / `info` / `seed` / `deps` / `verify` / `install` / `install-local` / `publish`, since 2026-10-18 the local-registry halves of `sync` and `fetch` as well, and since 2026-10-19 the whole offline half of `install` (name preflight, deciding what is missing, copying and reporting it); only the http(s) transport and the online opt-in policy stay in the shell wrapper. Full registry support is still evolving — see [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 
 The language server (`tools/sayanox_lsp.sa`), its folder index, the IR
-translator (`tools/emit_to_ir.sa`) and two pieces of the native backend - its
+translator (`tools/emit_to_ir.sa`), two pieces of the native backend - its
 ELF image writer with its rel32 linker (`tools/sxlink.sa`) and its x86-64
-instruction encoder (`tools/sxencode.sa`) - are Sayanox programs too, and no
-maintained build or test path needs bash, awk, sed or Python
-(`make test-language-deps`).
+instruction encoder (`tools/sxencode.sa`) - and the negative-diagnostic test
+suites (`tools/sxdiag.sa`) are Sayanox programs too, and no maintained build or
+test path needs bash, awk, sed or Python (`make test-language-deps`). Driving
+another program used to require the shell, because `spawn(path)` takes no
+arguments; since 2026-10-21 `run_command(cmd)` gives a Sayanox program the exit status
+of a command line, which is what let four `sh` test drivers move over.
 
 ---
 
@@ -120,6 +123,7 @@ maintained build or test path needs bash, awk, sed or Python
 | `selfhost/native_aot.c` | x86-64 Linux native-AOT backend |
 | `tools/sxlink.sa` | Sayanox ELF image writer + rel32 linker for that backend |
 | `tools/sxencode.sa` | Sayanox x86-64 instruction encoder for that backend |
+| `tools/sxdiag.sa` | Sayanox negative-diagnostic suites (replaced four `sh` drivers) |
 | `Makefile` | Bootstrap, tests, verification |
 | `docs/` | Status, design notes, language docs |
 

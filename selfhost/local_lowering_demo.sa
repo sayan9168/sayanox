@@ -1,3 +1,0 @@
-// Local variable LOAD/STORE lowering smoke source.
-hold answer = 42
-show answer

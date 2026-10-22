@@ -35,6 +35,10 @@ is written in Sayanox.
   reverts the `SX_ENCODE_LOG` seam to the same fifty records and reproduces
   the whole code segment byte-for-byte; covered by
   `make test-native-sxencode`.
+- `tools/sxdiag.sa` — the four negative-diagnostic suites (inline list
+  arguments, list postfix arguments, unproved return paths, unbound names and
+  unknown callees), which were four `.sh` drivers until 2026-10-21; covered by
+  `make test-sxdiag`.
 - `examples/*.sa` and `registry/*/main.sa` — sample programs and packages.
 - Many files in `selfhost/*.sa` are compiler-stage experiments; most are not
   yet wired into the maintained build.
@@ -48,9 +52,11 @@ is written in Sayanox.
   the C file still produces the executables: the scanner, parser, type
   inference, emit tree, runtime stubs and collector are unported.
 - `tools/sxpkg.sh` — the http(s) transport (curl/wget) and the online opt-in
-  policy remain in POSIX shell. Sayanox cannot replace them yet: `spawn(path)`
-  takes no arguments, so it cannot pass a URL to curl or wget, and the
-  hardening gate pins curl/wget as the transport it must keep using.
+  policy remain in POSIX shell. `run_command(cmd)` (2026-10-21) removes the
+  *mechanical* obstacle — a Sayanox program can now pass a URL to a transfer
+  tool — but not the policy one: `test-sxpkg-transfer-hardening` pins
+  curl/wget as the transport it must keep using, so the wrapper stays until
+  that decision is revisited.
 - `Makefile` and POSIX-shell recipes — build/test orchestration. All tracked
   scripts are `#!/bin/sh`; bash, awk and sed are not part of the maintained
   toolchain (`make test-language-deps`).
@@ -70,8 +76,8 @@ is left and fails closed.
 | Phase | Work | Gate |
 |---|---|---|
 | A (done 2026-10-17) | Compiler, formatter, package tool, language server, LSP binder in `.sa`; no bash/awk/sed/Python on maintained paths | `test-language-deps` |
-| B (done 2026-10-17) | `tools/emit_to_ir` in Sayanox; directory builtins + Sayanox folder index (C header and binder deleted); process builtins + Sayanox LSP test client (the last C file in `tools/` deleted) | `test-emit-to-ir`, `test-native-ir-portable`, `test-path-builtins`, `test-proc-builtins`, `test-lsp`, `test-lsp-workspace` |
-| C (file side done 2026-10-18) | publish, install-local, local sync/fetch, seed folders and the folder primitives moved to `tools/sxpkg.sa`. The http(s) transport stays in the shell: `spawn` takes no argv, and `test-sxpkg-transfer-hardening` pins curl/wget | `test-sxpkg*` unchanged, plus `test-sxpkg-sayanox-logic` |
+| B (done 2026-10-17; +B.5 2026-10-21) | `tools/emit_to_ir` in Sayanox; directory builtins + Sayanox folder index (C header and binder deleted); process builtins + Sayanox LSP test client (the last C file in `tools/` deleted); `run_command(cmd)` + `tools/sxdiag` replacing four `sh` diagnostic drivers | `test-emit-to-ir`, `test-native-ir-portable`, `test-path-builtins`, `test-proc-builtins`, `test-lsp`, `test-lsp-workspace`, `test-sxdiag` |
+| C (file side done 2026-10-18) | publish, install-local, local sync/fetch, seed folders and the folder primitives moved to `tools/sxpkg.sa`. The http(s) transport stays in the shell: `test-sxpkg-transfer-hardening` pins curl/wget as the transport (the argv obstacle went away with `run_command(cmd)` on 2026-10-21; the policy did not) | `test-sxpkg*` unchanged, plus `test-sxpkg-sayanox-logic` |
 | D (started 2026-10-18) | Step 1: the byte-buffer + bitwise surface (`write_bytes`, `bytes_f64`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shl`, `shr`) and its reader `read_bytes`. Step 2–4 (2026-10-20/21): the backend's ELF image writer + rel32 linker (`tools/sxlink.sa`, `SX_LINK_DUMP` where `SX_EMIT_LOG` leaves off) and its x86-64 instruction encoder (`tools/sxencode.sa`, `SX_ENCODE_LOG`). Not yet ported: the scanner, parser, type inference, emit tree, runtime stubs and collector of `selfhost/native_aot.c` | `test-native-primitives`, `test-read-bytes`, `test-native-emit-split`, `test-native-ir-log`, `test-native-sxlink`, `test-native-sxencode`, `test-native-test` |
 | E | Seed decision: prebuilt trust anchor or a documented C exception | `make all-sayanox` |
 

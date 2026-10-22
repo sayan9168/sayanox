@@ -29,6 +29,9 @@ SXPKG_C  := tools/sxpkg.c
 SXPKG_BIN := tools/sxpkg
 LSP_C    := tools/sayanox_lsp.c
 LSP_BIN  := tools/sayanox_lsp
+SXDIAG_SA  := tools/sxdiag.sa
+SXDIAG_C   := tools/sxdiag.c
+SXDIAG_BIN := tools/sxdiag
 
 .PHONY: all subset seed gen1 gen2 test true-selfhost true-selfhost-min true-selfhost-full selfhost \
         native native-test seed-min seed-min-gen1 gen3 clean restore-compiler fix-seed verify-seed \
@@ -36,8 +39,8 @@ LSP_BIN  := tools/sayanox_lsp
         test-reassign test-while test-when test-mod test-struct2 test-list2 test-use \
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
-        pack-compiler test-http-get test-sayacrawl test-scrape test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-scrape test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
-        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode
+        pack-compiler test-http-get test-sayacrawl test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
+        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-sxdiag
 
 all: true-selfhost-min
 
@@ -2131,7 +2134,7 @@ test-native-sxencode: $(NATIVE_BIN) $(SXENCODE_BIN)
 	@./$(SXENCODE_BIN) $(TESTS)/sxencode/bogus.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin 2>&1 >/dev/null | grep -q 'unknown record'
 	@echo "[OK] sxencode: the encoder is Sayanox -- five fixtures replay to byte-identical code, every named record is checked against the bytes C wrote for the same call, the recorder changes no emitted byte, all record names are exercised, and a missing log, a wrong-length code.bin and an unknown record are clear errors"
 
-native-test: test-native-sxlink test-native-sxencode
+native-test: test-native-sxlink test-native-sxencode test-sxdiag
 
 # ---------------------------------------------------------------------------
 # test-read-bytes: read_bytes(path, xs) appends the WHOLE file to a byte buffer
@@ -2675,11 +2678,13 @@ test-struct-logic: $(GEN2) $(NATIVE_BIN)
 	@echo "[OK] gen2 and native: and/or/not as struct field values (hand-computed output); a string operand is refused"
 
 # Optional network integration suite; never a bootstrap prerequisite.
+# It is Sayanox only: the Python sayascrape package it used to test was deleted
+# on 2026-10-21 together with its `test-scrape` target. sayascrape/crawl.sa is
+# the crawler and tools/test-sayacrawl.sh drives it, so the suite lost a
+# dependency instead of a feature.
 .PHONY: test-network
-test-network: test-http-get test-sayacrawl test-scrape
+test-network: test-http-get test-sayacrawl
 
-# test-scrape: sayascrape (Scrapy-style crawler for authorized targets). Standard library only;
-# the tests use a local HTTP server on 127.0.0.1.
 # test-http-get: http_get(url) network builtin (GET only, http/https only, 1 MB cap,
 # 10 s timeout, no redirects). Local server only; native refuses it explicitly.
 test-http-get: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN) $(NATIVE_BIN)
@@ -2689,11 +2694,6 @@ test-http-get: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN) $(NATIVE_BIN)
 # str helpers). Local server only; exact-output checks for crawl, caps and refusals.
 test-sayacrawl: $(GEN2)
 	@sh tools/test-sayacrawl.sh $(GEN2) sayascrape/crawl.sa || { echo "[FAIL] test-sayacrawl"; exit 1; }
-
-test-scrape:
-	@python3 -m unittest sayascrape.test_sayascrape >/tmp/scrape_test.log 2>&1 || { tail -20 /tmp/scrape_test.log; echo "[FAIL] sayascrape tests"; exit 1; }
-	@tail -3 /tmp/scrape_test.log
-	@echo "[OK] sayascrape: scope allowlist, authorization gate, robots.txt (fail closed on 5xx), delay, page and depth caps, parsing"
 
 # test-logic-value: and / or / not as values (hold, show, give, assignment,
 # parenthesized groups). Expected output is hand-checked; gen2 and native must match.
@@ -3248,13 +3248,20 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 
 # ---------------------------------------------------------------------------
 # test-doc-claims: no document may advertise an entry point that is not in the
-# repository. Measured 2026-10-13: there is no `stage2:` target, no
-# selfhost/bootstrap_production.sh, no bootstrap_full_selfhost.sh and no
-# bootstrap_full_language_selfhost.sh; stage2_template.c is a 93-byte
-# PLACEHOLDER, stage2_src/ is a README plus an 11-byte PLACEHOLDER,
-# sxc_full.c is a 30-line toy, and `sh selfhost/restore_stage2.sh` exits 1
-# with "missing Stage-2 seed". 24 legacy documents carry a banner saying so,
-# and docs/FULL_LANGUAGE_SELFHOST.md states it as the current position.
+# repository. There is no `stage2:` target, no selfhost/bootstrap_production.sh,
+# no bootstrap_full_selfhost.sh and no bootstrap_full_language_selfhost.sh.
+#
+# On 2026-10-21 the placeholder scaffolding was deleted rather than kept: the
+# 93-byte stage2_template.c PLACEHOLDER, its 11-byte selfhost/stage2_src/,
+# the 30-line sxc_full.c and sxc_full_minimal.c toy, the restore_stage2.sh
+# wrapper that could only exit 1 because its inputs were gone, the
+# restore_stage2_template.sh / restore_sxc.sh / restore_sxc_full.sh restorers
+# whose bundles were dead, and selfhost/sx, a CLI for the absent host. Those
+# files were not evidence of anything; they were files that had to stay
+# identical to keep a claim true. This target now asserts they stay gone, so a
+# Stage-2 host cannot reappear as a placeholder, and the documents that name
+# the missing entry points still carry their banner.
+#
 # If a real Stage-2 host ever lands, this target fails and points at the docs
 # that need updating -- that is the intent.
 #
@@ -3265,16 +3272,17 @@ test-gen2-gaps: $(GEN2) $(SEED_MIN_BIN)
 # ---------------------------------------------------------------------------
 .PHONY: test-doc-claims
 test-doc-claims:
-	@grep -q 'PLACEHOLDER' selfhost/stage2_template.c \
-	  || { echo "[FAIL] selfhost/stage2_template.c is no longer a placeholder: a Stage-2 host may exist now, update docs/FULL_LANGUAGE_SELFHOST.md and this target"; exit 1; }
-	@if sh selfhost/restore_stage2.sh >/dev/null 2>&1; then \
-	  echo "[FAIL] restore_stage2.sh now succeeds: update docs/FULL_LANGUAGE_SELFHOST.md, docs/FULL_SELFHOST.md and this target"; exit 1; \
-	fi
+	@for f in selfhost/stage2_template.c selfhost/sxc_full.c selfhost/sxc_full_minimal.c \
+	          selfhost/restore_stage2.sh selfhost/restore_sxc.sh selfhost/restore_sxc_full.sh \
+	          selfhost/restore_stage2_template.sh selfhost/sx selfhost/stage2_src selfhost/stage2; do \
+	  test ! -e "$$f" \
+	    || { echo "[FAIL] the deleted Stage-2 placeholder $$f is back: there is no Stage-2 host, so nothing may pretend to be one -- see docs/FULL_LANGUAGE_SELFHOST.md"; exit 1; }; \
+	done
 	@if grep -q '^stage2:' Makefile; then \
 	  echo "[FAIL] a stage2: target exists now: update the docs and this target"; exit 1; \
 	fi
 	@miss=0; \
-	for f in $$(grep -rl -e 'make stage2' -e 'bootstrap_production.sh' -e 'bootstrap_full_selfhost.sh' -e 'bootstrap_full_language_selfhost.sh' docs selfhost/README.md selfhost/SELFHOST.md --include='*.md' 2>/dev/null); do \
+	for f in $$(grep -rl -e 'make stage2' -e 'bootstrap_production.sh' -e 'bootstrap_full_selfhost.sh' -e 'bootstrap_full_language_selfhost.sh' docs --include='*.md' 2>/dev/null); do \
 	  case "$$f" in \
 	    docs/FULL_LANGUAGE_SELFHOST.md|docs/STATUS.md) continue ;; \
 	  esac; \
@@ -3795,7 +3803,7 @@ all-sayanox:
 	@printf '  %-28s %6s lines  %s\n' seed "$$(wc -l < selfhost/seed/sxc_seed_min.c)" selfhost/seed/sxc_seed_min.c
 	@printf '  %-28s %6s lines  %s\n' native-backend "$$(wc -l < selfhost/native_aot.c)" selfhost/native_aot.c
 	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
-	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' selfhost/sx | wc -l)" 'POSIX sh'
+	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' | wc -l)" 'POSIX sh'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
 	@echo "  done: compiler, formatter, package tool (local commands plus"
 	@echo "        publish, install-local and the local sync/fetch), language"
@@ -3803,10 +3811,60 @@ all-sayanox:
 	@echo "        byte-buffer + bitwise builtins, the read_bytes binary"
 	@echo "        reader, the native backend's ELF image writer + rel32"
 	@echo "        linker (tools/sxlink.sa) and its x86-64 instruction"
-	@echo "        encoder (tools/sxencode.sa), both byte-identical to C"
+	@echo "        encoder (tools/sxencode.sa), both byte-identical to C,"
+	@echo "        the run_command(cmd) driver builtin and the diagnostic suites"
+	@echo "        (tools/sxdiag.sa) that replaced four sh drivers"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
 	@exit 1
+
+# tools/sxdiag: the negative-diagnostic suites, in Sayanox (2026-10-21).
+# It replaced four shell drivers (test_return_paths.sh, test_name_resolution.sh,
+# test_inline_expression_errors.sh, test_list_postfix_errors.sh) that wrote a
+# bad fixture, ran a frontend and grepped for the diagnostic. `run_command(cmd)` is the
+# builtin that made the move possible: a Sayanox program can now start a
+# program with arguments and read its exit status.
+$(SXDIAG_BIN): $(SXDIAG_SA) $(GEN2)
+	./$(GEN2) $(SXDIAG_SA) $(SXDIAG_C) >/dev/null
+	@# '^#error': the tool QUOTES the marker in its own assertions, so only a
+	@# directive at the start of a line is a real refusal
+	@if grep -q '^#error' $(SXDIAG_C); then echo "[FAIL] sxdiag: #error in the generated C"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(SXDIAG_BIN) $(SXDIAG_C)
+
+.PHONY: test-sxdiag
+test-sxdiag: $(SXDIAG_BIN) $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)
+	@echo "[ok] sxdiag built from $(SXDIAG_SA) by gen2 and $(CC)"
+	@./$(SXDIAG_BIN) inline ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-inline
+	@./$(SXDIAG_BIN) postfix ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-postfix
+	@./$(SXDIAG_BIN) return ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-return
+	@./$(SXDIAG_BIN) name ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-name
+	@# ---- the failures are real, not a suite that always prints OK ----
+	@if ./$(SXDIAG_BIN) bogus ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-bad >/dev/null 2>&1; then \
+	  echo "[FAIL] sxdiag accepted an unknown suite name"; exit 1; fi
+	@./$(SXDIAG_BIN) bogus ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-bad 2>&1 >/dev/null | grep -q 'unknown suite'
+	@if ./$(SXDIAG_BIN) 2>/dev/null; then echo "[FAIL] sxdiag ran without a suite"; exit 1; fi
+	@# a frontend that succeeds on everything must FAIL the suite: this is the
+	@# control that keeps the assertions above from being decoration
+	@if ./$(SXDIAG_BIN) return /bin/true /bin/true /bin/true $(TESTS)/sxdiag-dead >/dev/null 2>&1; then \
+	  echo "[FAIL] sxdiag passed a suite with a frontend that accepts everything"; exit 1; fi
+	@if ./$(SXDIAG_BIN) inline /bin/true /bin/true /bin/true $(TESTS)/sxdiag-dead >/dev/null 2>&1; then \
+	  echo "[FAIL] sxdiag passed the inline suite with a frontend that accepts everything"; exit 1; fi
+	@# ---- the run_command(cmd) builtin itself: status in, stdout inherited ----
+	@printf 'show run_command("exit 3")\nhold r = run_command("echo builtin-run-ok > $(TESTS)/sxdiag-run.txt")\nshow r\n' > $(TESTS)/sxdiag_run.sa
+	./$(GEN2) $(TESTS)/sxdiag_run.sa $(TESTS)/sxdiag_run.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/sxdiag_run $(TESTS)/sxdiag_run.c
+	$(call assert-out,./$(TESTS)/sxdiag_run,3\n0)
+	@grep -q 'builtin-run-ok' $(TESTS)/sxdiag-run.txt \
+	  || { echo "[FAIL] run_command(): the child's stdout and redirection did not happen"; exit 1; }
+	@printf 'hold n = run_command("true")\nshow n\n' > $(TESTS)/sxdiag_run_seed.sa
+	@if ./$(SEED_MIN_BIN) $(TESTS)/sxdiag_run_seed.sa >/dev/null 2>$(TESTS)/sxdiag_run_seed.err; then \
+	  echo "[FAIL] seed-min accepted run_command() without implementing it"; exit 1; fi
+	@grep -q 'unknown function or builtin' $(TESTS)/sxdiag_run_seed.err \
+	  || { echo "[FAIL] seed-min refused run_command() without a clear diagnostic"; cat $(TESTS)/sxdiag_run_seed.err; exit 1; }
+	@if ./$(NATIVE_BIN) $(TESTS)/sxdiag_run_seed.sa $(TESTS)/sxdiag_run_native 2>/dev/null; then \
+	  echo "[FAIL] native accepted run_command() without implementing it"; exit 1; fi
+	@echo "[OK] sxdiag: 23 inline, 7 postfix, 14 return-path and 31 name-resolution refusals checked in Sayanox, with an unknown-suite refusal and two accept-everything controls"
 
 $(NATIVE_BIN): $(NATIVE_SRC)
 	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
@@ -4794,7 +4852,7 @@ native-test: test-gen2-list-arithmetic
 
 .PHONY: test-return-paths
 RETURN_PATHS_WANT := -1\n0\n1\n9\nyes } give //\nno { when\n1\n0\n2\n3\n8\ngeneric
-test-return-paths: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+test-return-paths: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN) $(SXDIAG_BIN)
 	@mkdir -p $(TESTS)
 	./$(GEN2) selfhost/return_paths_test.sa $(TESTS)/return_paths.c
 	./$(GEN1_MIN) selfhost/return_paths_test.sa $(TESTS)/return_paths_g1.c
@@ -4806,14 +4864,14 @@ test-return-paths: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/return_paths,$(RETURN_PATHS_WANT))
 	$(call assert-out,./$(TESTS)/return_paths_seed,$(RETURN_PATHS_WANT))
 	$(call assert-out,./$(TESTS)/return_paths_native,$(RETURN_PATHS_WANT))
-	sh selfhost/test_return_paths.sh ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)
+	./$(SXDIAG_BIN) return ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-return
 	@echo '[OK] return paths: exhaustive/nested branches, elif chains, suffix returns, early returns, num/str/list and generic functions; seed/gen2/native parity'
 test-typed-sig: test-return-paths
 native-test: test-return-paths
 
 .PHONY: test-name-resolution
 NAME_RESOLUTION_WANT := 4\n8\n9\n3\n4\nghost // { and missing() are only text\n5\n3\n4\ngeneric\n1\n2\no\nk
-test-name-resolution: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+test-name-resolution: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN) $(SXDIAG_BIN)
 	@mkdir -p $(TESTS)
 	./$(GEN2) selfhost/name_resolution_test.sa $(TESTS)/name_resolution.c
 	./$(GEN1_MIN) selfhost/name_resolution_test.sa $(TESTS)/name_resolution_g1.c
@@ -4825,7 +4883,7 @@ test-name-resolution: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/name_resolution,$(NAME_RESOLUTION_WANT))
 	$(call assert-out,./$(TESTS)/name_resolution_seed,$(NAME_RESOLUTION_WANT))
 	$(call assert-out,./$(TESTS)/name_resolution_native,$(NAME_RESOLUTION_WANT))
-	sh selfhost/test_name_resolution.sh ./$(GEN2) $(TESTS)
+	./$(SXDIAG_BIN) name ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-name
 	@echo '[OK] name resolution: field labels/selectors, builtin-like bindings, quotes/comments, typed forward calls, generic calls and function scopes; positive seed/gen2/native parity'
 test-typed-sig: test-name-resolution
 native-test: test-name-resolution
@@ -4833,7 +4891,7 @@ native-test: test-name-resolution
 .PHONY: test-inline-expressions
 INLINE_EXPRESSIONS_WANT := 8\n9\n9\n4\n7\n2\n1\n0\n2.66667\n10\n4\n2\n11\n12\n3\n99\n5\n1\n1\n8\n4\n5\n4\n-2\n3
 INLINE_SEQUENCE_WANT := 1\n2\n3\n3\n22\n2\n77\n0\n1\n2
-test-inline-expressions: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
+test-inline-expressions: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN) $(SXDIAG_BIN)
 	@mkdir -p $(TESTS)
 	./$(GEN2) selfhost/inline_expressions_test.sa $(TESTS)/inline_expr.c
 	./$(GEN1_MIN) selfhost/inline_expressions_test.sa $(TESTS)/inline_expr_g1.c
@@ -4852,7 +4910,7 @@ test-inline-expressions: $(GEN2) $(GEN1_MIN) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/inline_seq,$(INLINE_SEQUENCE_WANT))
 	$(call assert-out,./$(TESTS)/inline_seq_o0,$(INLINE_SEQUENCE_WANT))
 	$(call assert-out,./$(TESTS)/inline_seq_native,$(INLINE_SEQUENCE_WANT))
-	sh selfhost/test_inline_expression_errors.sh ./$(GEN2) $(TESTS)
+	./$(SXDIAG_BIN) inline ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-inline
 	@echo '[OK] typed inline expressions: variables, checked calls/generics, nested list consumers, indexing, modulo/comparisons and lexical kinds; shared fixture matches seed/native'
 	@echo '[OK] inline sequencing: gen2 O0/O2 and native agree on left-to-right single evaluation, fresh loop conditions and generated-name collisions (seed checked separately by test-seed-list-sequence)'
 test-typed-sig: test-inline-expressions
@@ -4896,7 +4954,7 @@ native-test: test-seed-list-sequence
 
 .PHONY: test-list-postfix
 LIST_POSTFIX_WANT := 10\n4\n97\n20\n20\n6\n2\n9\n12\n3\n40\n50\n99\ntyped
-test-list-postfix: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
+test-list-postfix: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN) $(SXDIAG_BIN)
 	@mkdir -p $(TESTS)
 	./$(SEED_MIN_BIN) selfhost/list_postfix_test.sa > $(TESTS)/postfix_seed.c
 	./$(GEN2) selfhost/list_postfix_test.sa $(TESTS)/postfix_gen2.c
@@ -4906,7 +4964,7 @@ test-list-postfix: $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/postfix_seed,$(LIST_POSTFIX_WANT))
 	$(call assert-out,./$(TESTS)/postfix_gen2,$(LIST_POSTFIX_WANT))
 	$(call assert-out,./$(TESTS)/postfix_native,$(LIST_POSTFIX_WANT))
-	sh selfhost/test_list_postfix_errors.sh ./$(GEN2) ./$(SEED_MIN_BIN) $(TESTS)
+	./$(SXDIAG_BIN) postfix ./$(SEED_MIN_BIN) ./$(GEN2) ./$(NATIVE_BIN) $(TESTS)/sxdiag-postfix
 	@echo '[OK] inline nested numeric/string fields, grouped list postfix call arguments, indexed generic returns, expression-kind generic inference: seed/gen2/native parity'
 test-typed-sig: test-list-postfix
 native-test: test-list-postfix

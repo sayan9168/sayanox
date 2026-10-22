@@ -66,6 +66,7 @@ the same source); the checked-in `seed-min` predates them and rejects them.
 | `bit_and(a, b)` / `bit_or(a, b)` / `bit_xor(a, b)` | 64-bit bitwise and/or/xor as a number |
 | `bit_not(a)` | 64-bit complement as a number |
 | `shl(a, n)` / `shr(a, n)` | unsigned 64-bit shift left/right by `n` bits |
+| `run_command(cmd)` | run `cmd` with `/bin/sh -c`, give its exit status (`-1` if it could not be started); stdout/stderr are inherited |
 
 All of them are ordinary expressions, so they nest inside other calls
 (`concat(a, numstr(n))`) and can be stored (`hold n = numstr(v)`). Native AOT
@@ -91,6 +92,25 @@ embedded NUL byte ends the string early; use `child_line` for line protocols.
 same client needs; `remove_path` falls back to `rmdir` for a directory.
 `make test-proc-builtins` pins all of it, and seed-min refuses every one of
 these builtins the same way it refuses the directory ones.
+
+`run_command(cmd)` was added on 2026-10-21 to answer the one question `spawn`
+could not: `spawn(path)` starts a program with **no arguments**, so every
+driver that had to run `gen2 in.sa out.c` (or `cc -o x x.c`) stayed in POSIX
+sh. `run_command` takes one command line, hands it to `/bin/sh -c`, and gives
+back the exit status, with the child's stdout and stderr left as the caller's,
+so a recipe redirects around the Sayanox program, not inside it. It is a *driver* primitive, not a
+build system: the quoting rules are the shell's, which is why the command lines
+it is given are built from paths this repository controls. `tools/sxdiag.sa`
+is the first consumer -- the four negative-diagnostic suites that used to be
+four `.sh` files -- and `make test-sxdiag` pins its status mapping
+(`show run_command("exit 3")` prints `3`). seed-min and the native backend
+refuse it like every other late builtin.
+
+It is called `run_command` and not `run` on purpose: `make run()` is a common
+helper name in these tools (`sxlink`, `sxencode` and `sxdiag` all define one)
+and a builtin shadows a user definition. The first build of this change proved
+it — `tools/sxlink.sa` stopped compiling because its own zero-argument `run()`
+had been rewritten to the builtin.
 
 `write_bytes`, `bytes_f64` and the six bitwise calls are the byte-buffer
 surface added on 2026-10-18 as the first step toward rewriting

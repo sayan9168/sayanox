@@ -1,0 +1,416 @@
+// tools/sxdiag.sa -- the negative-diagnostic suites of the test gates, in
+// Sayanox (2026-10-21).
+//
+// Four `make` targets used to drive these cases from POSIX sh:
+//
+//   test-return-paths        sh selfhost/test_return_paths.sh
+//   test-name-resolution     sh selfhost/test_name_resolution.sh
+//   test-inline-expressions  sh selfhost/test_inline_expression_errors.sh
+//   test-list-postfix        sh selfhost/test_list_postfix_errors.sh
+//
+// Each script wrote a bad fixture, ran one or three frontends on it, and
+// grepped the generated C (or the captured stderr) for the diagnostic that
+// must appear. That is compiler knowledge written in a shell, spread over a
+// heredoc, a `grep -q` and a `for` loop, so it could only be changed by
+// editing quoted C snippets inside a .sh file. This program does the same work
+// in Sayanox: `write_file` writes the fixture, `run_command(cmd)` runs the frontend and
+// gives back its exit status, `read_file` reads what it produced, and
+// `contains` asserts on the text.
+//
+//   ./tools/sxdiag <inline|postfix|return|name> <seed> <gen2> <native> <workdir>
+//
+// It prints one `[OK] <suite>: ...` line on success and a precise
+// `[FAIL]`-shaped `sxdiag: <case> ...` line on the first disagreement, then
+// exits 1. The case text lives in this file, so a new refusal is one line here
+// instead of another round of shell quoting -- that is the point of the port.
+//
+// `run_command` is the builtin added on 2026-10-21 for exactly this: a Sayanox program
+// driving an external program, with the exit status as a number. Before it,
+// `spawn(path)` could only start a program with no arguments, so every driver
+// that ran `gen2 in.sa out.c` had to stay in the shell. The shell files above
+// were the first consumers moved over.
+//
+// The builtin is named `run_command`, not `run`, on purpose: `make run()` is a
+// common helper name in these tools (`sxlink`, `sxencode` and this program all
+// have one), and a builtin shadows a user definition. The first build of this
+// file proved it -- `tools/sxlink.sa` stopped compiling because its own `run()`
+// was rewritten to a zero-argument `sx_run()`.
+
+make slice(text: str, begin: num, end: num) -> str {
+  hold value = ""
+  hold i = begin
+  while i < end {
+    value = concat(value, chr(sx_index(text, i)))
+    i = i + 1
+  }
+  give value
+}
+
+make find_from(t: str, p: str, from: num) -> num {
+  hold n = len(t)
+  hold m = len(p)
+  hold at = 0 - 1
+  when m == 0 {
+    give from
+  }
+  hold i = from
+  while i + m <= n {
+    hold same = 1
+    hold k = 0
+    while k < m {
+      when sx_index(t, i + k) != sx_index(p, k) {
+        same = 0
+      }
+      k = k + 1
+    }
+    when same == 1 && at < 0 {
+      at = i
+    }
+    i = i + 1
+  }
+  give at
+}
+
+make contains(t: str, p: str) -> num {
+  hold at = find_from(t, p, 0)
+  hold r = 0
+  when at >= 0 {
+    r = 1
+  }
+  give r
+}
+
+// One failure stops the whole program, the way `set -e` did in the scripts: a
+// later case passing must never hide an earlier one that was accepted when it
+// should have been refused.
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxdiag: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+make need(cond: num, msg: str) -> num {
+  when cond == 0 {
+    hold stop = fail(1, msg)
+  }
+  give 0
+}
+
+// Every frontend run goes through this. The command line is one string, the
+// exit status comes back as a number, and stdout+stderr land in `log`, so a
+// failure message can quote the case instead of pointing at a file.
+make shell(cmd: str, log: str) -> num {
+  hold rc = run_command(concat(cmd, concat(" > ", concat(log, " 2>&1"))))
+  give rc
+}
+
+make say_ok(suite: str, cases: num, what: str) -> num {
+  hold line = concat(concat(concat(concat("[OK] ", suite), ": "), numstr(cases)), what)
+  hold w = write_out(concat(line, "\n"))
+  give 0
+}
+
+// ---- inline: a non-numeric expression reaching a `list` parameter ---------
+//
+// 23 expressions that must be refused with `inline list arguments`: a
+// non-numeric element, a wrong arity or wrong kind, a nested numeric-list
+// violation, malformed syntax, and a numeric postfix value.
+
+make suite_inline(dir: str, gen2: str) -> num {
+  hold base = "make size(xs: list) -> num {\n  give len(xs)\n}\nmake plus(n: num) -> num {\n  give n + 1\n}\nmake word() -> str {\n  give \"bad\"\n}\nhold s = \"bad\"\nhold xs = [1]\n"
+  hold cases = "[s]~~[s+1]~~[xs]~~[xs+1]~~[word()]~~[plus(s)]~~[plus()]~~[plus(1,2)]~~[len(3)]~~[sx_index(3,0)]~~[[1]]~~[len([s])]~~[sx_index(\"a\",\"b\")]~~[s<3]~~[1==s]~~[1+]~~[1,]~~[1 2]~~[1.2.3]~~[()]~~[(1]~~[1][0]~~[1]+2"
+  hold src = concat(dir, "/inline_bad.sa")
+  hold out = concat(dir, "/inline_bad.c")
+  hold log = concat(dir, "/inline_bad.log")
+  hold n = len(cases)
+  hold pos = 0
+  hold count = 0
+  while pos <= n {
+    hold end = find_from(cases, "~~", pos)
+    when end < 0 {
+      end = n
+    }
+    hold expr = slice(cases, pos, end)
+    hold line = concat("show size(", concat(expr, ")\n"))
+    hold w = write_file(src, concat(base, line))
+    hold rc = shell(concat(concat(concat(gen2, " "), src), concat(" ", out)), log)
+    hold c = read_file(out)
+    when contains(c, "inline list arguments") == 0 {
+      hold stop = fail(1, concat("invalid inline expression not refused: ", expr))
+    }
+    count = count + 1
+    pos = end + 2
+  }
+  when count != 23 {
+    hold stop = fail(1, "inline suite ran the wrong number of cases")
+  }
+  give count
+}
+
+// ---- postfix: a field or postfix expression reaching `list` ---------------
+//
+// The same refusal from gen2, and a non-empty diagnostic from the seed, so one
+// frontend cannot drift into accepting what the other refuses.
+
+make suite_postfix(dir: str, gen2: str, seed: str) -> num {
+  hold base = "struct Point {\n  x, label\n}\nmake size(xs: list) -> num {\n  give len(xs)\n}\nhold p = Point { x: 3, label: \"bad\" }\n"
+  hold cases = "[p.missing]~~[p.x.missing]~~[p.label]~~[len(p.x)]~~[p.x][0]~~([p.x])[0]~~[p.x][\"bad\"]"
+  hold src = concat(dir, "/postfix_bad.sa")
+  hold out = concat(dir, "/postfix_bad.c")
+  hold log = concat(dir, "/postfix_bad.log")
+  hold slog = concat(dir, "/postfix_bad_seed.log")
+  hold n = len(cases)
+  hold pos = 0
+  hold count = 0
+  while pos <= n {
+    hold end = find_from(cases, "~~", pos)
+    when end < 0 {
+      end = n
+    }
+    hold expr = slice(cases, pos, end)
+    hold line = concat("show size(", concat(expr, ")\n"))
+    hold w = write_file(src, concat(base, line))
+    hold rc = shell(concat(concat(concat(gen2, " "), src), concat(" ", out)), log)
+    hold c = read_file(out)
+    when contains(c, "inline list arguments") == 0 {
+      hold stop = fail(1, concat("gen2 accepted an invalid postfix argument: ", expr))
+    }
+    hold rc2 = shell(concat(concat(seed, " "), src), slog)
+    when rc2 == 0 {
+      hold stop = fail(1, concat("seed accepted an invalid postfix argument: ", expr))
+    }
+    when len(read_file(slog)) == 0 {
+      hold stop = fail(1, concat("seed refused without a diagnostic: ", expr))
+    }
+    count = count + 1
+    pos = end + 2
+  }
+  when count != 7 {
+    hold stop = fail(1, "postfix suite ran the wrong number of cases")
+  }
+  give count
+}
+
+// ---- return paths ---------------------------------------------------------
+//
+// A `make ... -> T` body that can reach its end without a `give` must be
+// refused by all three frontends: seed and native on stderr, gen2 as `#error`
+// in the emitted C.
+
+make check_fallthrough(dir: str, seed: str, gen2: str, native: str, label: str) -> num {
+  hold src = concat(dir, "/return_bad.sa")
+  hold out = concat(dir, "/return_bad.c")
+  hold log = concat(dir, "/return_bad.log")
+  hold slog = concat(dir, "/return_bad_seed.log")
+  hold nlog = concat(dir, "/return_bad_native.log")
+  hold elf = concat(dir, "/return_bad_native")
+  hold rc = shell(concat(concat(seed, " "), src), slog)
+  when rc == 0 {
+    hold stop = fail(1, concat("seed accepted an unproved return path: ", label))
+  }
+  when contains(read_file(slog), "may fall through without give") == 0 {
+    hold stop = fail(1, concat("seed diagnostic for an unproved return path is wrong: ", label))
+  }
+  hold rc2 = shell(concat(concat(concat(gen2, " "), src), concat(" ", out)), log)
+  hold c = read_file(out)
+  when contains(c, "#error") == 0 {
+    hold stop = fail(1, concat("gen2 emitted no #error for an unproved return path: ", label))
+  }
+  when contains(c, "may fall through without give") == 0 {
+    hold stop = fail(1, concat("gen2 diagnostic for an unproved return path is wrong: ", label))
+  }
+  hold rc3 = shell(concat(concat(concat(native, " "), src), concat(" ", elf)), nlog)
+  when rc3 == 0 {
+    hold stop = fail(1, concat("native accepted an unproved return path: ", label))
+  }
+  when contains(read_file(nlog), "may fall through without give") == 0 {
+    hold stop = fail(1, concat("native diagnostic for an unproved return path is wrong: ", label))
+  }
+  give 1
+}
+
+make suite_return(dir: str, seed: str, gen2: str, native: str) -> num {
+  hold cases = "show 1~~when n > 0 {\n give 1\n}~~when n > 0 {\n give 1\n} elif n == 0 {\n give 0\n}~~when n > 0 {\n give 1\n} else {\n show 2\n}~~when n > 0 {\n when n > 1 {\n give 1\n}\n} else {\n give 0\n}~~while n > 0 {\n give 1\n}~~for i in 0..n {\n give i\n}~~while true {\n break\n give 1\n}~~show \"give 1 } otherwise { give 2\"\n// give 3~~// give 1\nshow 0"
+  hold src = concat(dir, "/return_bad.sa")
+  hold n = len(cases)
+  hold pos = 0
+  hold count = 0
+  while pos <= n {
+    hold end = find_from(cases, "~~", pos)
+    when end < 0 {
+      end = n
+    }
+    hold body = slice(cases, pos, end)
+    hold text = concat(concat("make f(n: num) -> num {\n", body), "\n}\nshow f(1)\n")
+    hold w = write_file(src, text)
+    hold seen = check_fallthrough(dir, seed, gen2, native, body)
+    count = count + seen
+    pos = end + 2
+  }
+  when count != 10 {
+    hold stop = fail(1, "return suite ran the wrong number of body cases")
+  }
+  // the three return kinds, then a generic body: same proof, different shape
+  hold kinds = "num~~str~~list"
+  hold kpos = 0
+  hold kn = len(kinds)
+  while kpos <= kn {
+    hold kend = find_from(kinds, "~~", kpos)
+    when kend < 0 {
+      kend = kn
+    }
+    hold kind = slice(kinds, kpos, kend)
+    hold text = concat(concat(concat("make f() -> ", kind), " {\n show 0\n}\n"), "")
+    hold w = write_file(src, text)
+    hold seen = check_fallthrough(dir, seed, gen2, native, kind)
+    count = count + seen
+    kpos = kend + 2
+  }
+  hold generic = "make f<T>(n: T) -> T {\n when n > 0 {\n give n\n }\n}\nshow f(1)\n"
+  hold w = write_file(src, generic)
+  hold seen = check_fallthrough(dir, seed, gen2, native, "generic")
+  give count + seen
+}
+
+// ---- name resolution ------------------------------------------------------
+//
+// A name that was never bound must be refused with `undefined name`,
+// `unknown expression` or `undeclared`; a call to a function that does not
+// exist with `unknown function`. The positions cover initialisers,
+// arithmetic, nested calls, lists and indexes, writes, conditions, loops,
+// returns, function and sibling scopes, generic bodies and struct fields.
+
+make name_reference(dir: str, gen2: str) -> num {
+  hold src = concat(dir, "/name_bad.sa")
+  hold out = concat(dir, "/name_bad.c")
+  hold log = concat(dir, "/name_bad.log")
+  hold cases = "show ghost~~hold x = ghost~~hold x = x + 1~~hold x = 1 + ghost~~show 1 + ghost~~show len(ghost)~~show len(concat(\"a\", ghost))~~hold xs = [1, ghost + 2]~~hold xs = [ghost]\nshow len(xs)~~hold xs = [\n ghost\n]~~hold xs = [1]\nshow xs[ghost]~~hold xs = [1]\npush(xs, ghost)~~hold xs = [1]\nxs[ghost] = 2~~when ghost > 0 {\n show 1\n}~~when 1 == ghost {\n show 1\n}~~while len(ghost) > 0 {\n break\n}~~for i in 0..ghost {\n show i\n}~~for i in ghost {\n show i\n}~~make f(n: num) -> num {\n give ghost + n\n}\nshow f(1)~~make f(n: num) -> num {\n give n\n}\nshow n~~make f(n: num) -> num {\n when n {\n hold ghost = 1\n }\n give ghost\n}\nshow f(1)~~make f(n: num) -> num {\n when n {\n hold ghost = 1\n } else {\n show ghost\n }\n give 0\n}\nshow f(1)~~make f<T>(n: T) -> T {\n give ghost\n}\nshow f(1)~~struct Pair { x, y }\nhold p = Pair { x: 1, y: ghost }~~show ghost.x~~show future\nhold future = 1"
+  hold n = len(cases)
+  hold pos = 0
+  hold count = 0
+  while pos <= n {
+    hold end = find_from(cases, "~~", pos)
+    when end < 0 {
+      end = n
+    }
+    hold text = concat(slice(cases, pos, end), "\n")
+    hold w = write_file(src, text)
+    hold rc = shell(concat(concat(concat(gen2, " "), src), concat(" ", out)), log)
+    hold c = read_file(out)
+    when contains(c, "#error") == 0 {
+      hold stop = fail(1, concat("missing reference diagnostic: ", text))
+    }
+    hold ok = 0
+    when contains(c, "undefined name") == 1 {
+      ok = 1
+    }
+    when contains(c, "unknown expression") == 1 {
+      ok = 1
+    }
+    when contains(c, "undeclared") == 1 {
+      ok = 1
+    }
+    when ok == 0 {
+      hold stop = fail(1, concat("wrong reference diagnostic: ", text))
+    }
+    count = count + 1
+    pos = end + 2
+  }
+  when count != 26 {
+    hold stop = fail(1, "name suite ran the wrong number of reference cases")
+  }
+  give count
+}
+
+make name_callee(dir: str, gen2: str) -> num {
+  hold src = concat(dir, "/name_bad.sa")
+  hold out = concat(dir, "/name_bad.c")
+  hold log = concat(dir, "/name_bad.log")
+  hold calls = "show absent(1)~~hold x = absent(1)~~show len(absent(1))~~make f(n: num) -> num {\n give absent(n)\n}\nshow f(1)~~when absent(1) {\n show 1\n}"
+  hold n = len(calls)
+  hold pos = 0
+  hold count = 0
+  while pos <= n {
+    hold end = find_from(calls, "~~", pos)
+    when end < 0 {
+      end = n
+    }
+    hold text = concat(slice(calls, pos, end), "\n")
+    hold w = write_file(src, text)
+    hold rc = shell(concat(concat(concat(gen2, " "), src), concat(" ", out)), log)
+    hold c = read_file(out)
+    when contains(c, "#error") == 0 {
+      hold stop = fail(1, concat("missing function diagnostic: ", text))
+    }
+    when contains(c, "unknown function") == 0 {
+      hold stop = fail(1, concat("wrong function diagnostic: ", text))
+    }
+    count = count + 1
+    pos = end + 2
+  }
+  when count != 5 {
+    hold stop = fail(1, "name suite ran the wrong number of callee cases")
+  }
+  give count
+}
+
+// ---- entry point ----------------------------------------------------------
+
+make known(suite: str) -> num {
+  hold r = 0
+  when string_eq(suite, "inline") == 1 {
+    r = 1
+  }
+  when string_eq(suite, "postfix") == 1 {
+    r = 1
+  }
+  when string_eq(suite, "return") == 1 {
+    r = 1
+  }
+  when string_eq(suite, "name") == 1 {
+    r = 1
+  }
+  give r
+}
+
+make drive_all() -> num {
+  when arg_count() < 6 {
+    hold stop = fail(2, "usage: sxdiag <inline|postfix|return|name> <seed> <gen2> <native> <workdir>")
+  }
+  hold suite = arg(1)
+  hold seed = arg(2)
+  hold gen2 = arg(3)
+  hold native = arg(4)
+  hold dir = arg(5)
+  when known(suite) == 0 {
+    hold stop = fail(2, concat("unknown suite: ", suite))
+  }
+  hold made = 0
+  when path_kind(dir) != 2 {
+    made = make_dir(dir)
+  }
+  when path_kind(dir) != 2 {
+    hold stop = fail(2, concat("cannot create the work directory ", dir))
+  }
+  hold cases = 0
+  when string_eq(suite, "inline") == 1 {
+    cases = suite_inline(dir, gen2)
+    hold said = say_ok("inline", cases, " invalid inline expressions refused, each with the `inline list arguments` diagnostic")
+  }
+  when string_eq(suite, "postfix") == 1 {
+    cases = suite_postfix(dir, gen2, seed)
+    hold said = say_ok("postfix", cases, " field/postfix arguments refused by gen2 and by the seed, both with a diagnostic")
+  }
+  when string_eq(suite, "return") == 1 {
+    cases = suite_return(dir, seed, gen2, native)
+    hold said = say_ok("return", cases, " functions with an unproved return path refused by seed, gen2 and native")
+  }
+  when string_eq(suite, "name") == 1 {
+    hold refs = name_reference(dir, gen2)
+    hold callees = name_callee(dir, gen2)
+    hold said = say_ok("name", refs + callees, " unbound names and unknown callees refused with the right diagnostic")
+  }
+  give 0
+}
+
+hold rc = drive_all()

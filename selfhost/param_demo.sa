@@ -1,4 +1,0 @@
-make id(n) {
-  give n
-}
-show id(42)

@@ -29,21 +29,16 @@
 # ---------------------------------------------------------------------------
 # Generated artifacts: base64 chunks of the gzipped bootstrap compiler
 # ---------------------------------------------------------------------------
-# 155 fixed-width .b64 chunk files, plus the split-part variants of
-# selfhost/compiler_min.sa.gz.b64 (.p0 ... .p3).
+# The only remaining bundle is selfhost/compiler_min_gz/*.b64 (121 chunks),
+# the offline copy of selfhost/compiler_min.sa that the restore path falls back
+# to. Everything else in this family was deleted on 2026-10-21 because it
+# restored files that are already in the tree as plaintext: native_src/,
+# stage2_src/, stage2_blob/, sxc_full_b64/, sxc_full_b64_plain/,
+# sxc_full_lines/, sxc_sa_parts/, sxc_out_c/, stage2_template_parts/,
+# codegen_*.b64, sxc.sa.b64, sxc_fn.sa.b64, stage2_tpl_a.b64,
+# stage2_template.c{,.gz}.b64, native_aot.c.gz.b64 and
+# compiler_min.sa.gz.b64{.p0 ... .p3}.
 *.b64 linguist-generated=true
-*.b64.p[0-9] linguist-generated=true
-
-# Whole directories that hold nothing but chunked base64 / text fragments of
-# selfhost sources. The hand-written README.md files inside some of them are
-# un-marked again by the rule at the bottom of this file.
-selfhost/compiler_min_gz/** linguist-generated=true
-selfhost/native_src/** linguist-generated=true
-selfhost/stage2_src/** linguist-generated=true
-selfhost/sxc_full_b64/** linguist-generated=true
-selfhost/sxc_full_b64_plain/** linguist-generated=true
-selfhost/sxc_full_lines/** linguist-generated=true
-selfhost/sxc_sa_parts/** linguist-generated=true
 
 # Other split-fragment suffixes produced by the bootstrap packing scripts.
 *.part linguist-generated=true
@@ -79,15 +74,18 @@ selfhost/compiler_min.sa.tmp linguist-generated=true
 tools/sxfmt.c linguist-generated=true
 tools/sxpkg.c linguist-generated=true
 tools/sayanox_lsp.c linguist-generated=true
+tools/sxdiag.c linguist-generated=true
 
 # ---------------------------------------------------------------------------
 # Explicitly NOT generated: hand-written C that stays in the statistics
 # ---------------------------------------------------------------------------
 # selfhost/seed/sxc_seed.c, selfhost/seed/sxc_seed_min.c (the C bootstrap seed),
-# selfhost/native_aot.c (the x86-64 native AOT backend), selfhost/sxc_full.c,
-# selfhost/sxc_full_minimal.c, selfhost/stage2_template.c,
+# selfhost/native_aot.c (the x86-64 native AOT backend),
 # selfhost/rc_runtime_stress.c, selfhost/seed_builder_registry_test.c and the
 # two headers are all written by hand and are intentionally left visible as C.
+# The three 30-line Stage-2 placeholders (sxc_full.c, sxc_full_minimal.c,
+# stage2_template.c) were deleted on 2026-10-21 with the rest of that
+# scaffolding -- see the comment on test-doc-claims in the Makefile.
 # The ten unreferenced legacy C helpers
 # (inject_*.c, prove_*.c, fixup_emit.c, sx_launcher.c, sx_driver.c,
 # build_stage2.c, stage2_expand.inc) were deleted on 2026-10-17;
@@ -101,6 +99,6 @@ selfhost/native_aot.c -linguist-generated
 # ---------------------------------------------------------------------------
 # Hand-written documentation is never an artifact, wherever it lives
 # ---------------------------------------------------------------------------
-# native_src, stage2_src and sxc_full_b64_plain each ship a hand-written
-# README.md next to their chunk files; those stay visible as documentation.
+# A hand-written README.md next to generated chunks stays visible as
+# documentation, whichever directory it is in.
 **/README.md -linguist-generated

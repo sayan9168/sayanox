@@ -1,5 +1,0 @@
-make double(x) {
-  give x + x
-}
-hold a = 21
-show double(a)

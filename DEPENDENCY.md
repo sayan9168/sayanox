@@ -15,6 +15,7 @@ two ways (a static scan and a failing PATH shim) and is part of
 | native-test | same, on **x86-64 Linux** (generated ELF uses Linux syscalls) |
 | LSP build (`make lsp`) | gen2 + cc only; the folder index is Sayanox (no C header, no binder) |
 | portable analysis listing | `tools/emit_to_ir.sa`, compiled by gen2 then cc; not a second backend |
+| negative-diagnostic suites (`test-sxdiag`) | `tools/sxdiag.sa`, compiled by gen2 then cc; drives the frontends through `run_command(cmd)` instead of `sh` |
 | native image link (`test-native-sxlink`) | `tools/sxlink.sa`, compiled by gen2 then cc; proved against the C `write_elf()` by `SX_LINK_DUMP`, does not produce the shipped executables |
 | native instruction encode (`test-native-sxencode`) | `tools/sxencode.sa`, compiled by gen2 then cc; proved against the C encoder by `SX_ENCODE_LOG`, does not produce the shipped executables |
 | offline packer (`make pack-compiler`) | POSIX sh, `gzip`, `base64`, `tr`, `split`, `cmp` |
@@ -36,9 +37,11 @@ The language boundary is now C, make, POSIX sh and Sayanox — plus optional
 tools that are never on the bootstrap path.
 
 * **bash → POSIX sh.** All six bash scripts were ported and every tracked
-  script is now `#!/bin/sh`: `selfhost/sx`, `selfhost/restore_stage2.sh`,
-  `selfhost/restore_sxc_full.sh`, `selfhost/restore_compiler_min.sh`,
-  `selfhost/pack_compiler_min.sh` and `selfhost/lang_quality.sh`.
+  script is now `#!/bin/sh`: `selfhost/restore_compiler_min.sh`,
+  `selfhost/pack_compiler_min.sh` and four others. Three of those six were
+  deleted on 2026-10-21 (`selfhost/sx`, `selfhost/restore_stage2.sh`,
+  `selfhost/restore_sxc_full.sh`), together with `selfhost/lang_quality.sh`;
+  see "Deleted scaffolding" below.
 * **awk removed from the build.** `tools/lsp_workspace_bind.awk` was replaced
   by a Sayanox binder, and that binder has since been removed as well (the
   server walks folders itself with the directory builtins). The old binder's output
@@ -57,10 +60,67 @@ tools that are never on the bootstrap path.
   server is `tools/sayanox_lsp.sa` (built by gen2, bound by the Sayanox binder).
 * **Python removed from the restore scripts.** `restore_sxc_full.sh` loses its
   dead `install_sxc_full.py` installer branch and `restore_compiler_min.sh`
-  replaces its Python heredoc with `base64`+`tr`. Python is now used only by
-  the optional HTTP/crawler test servers.
+  replaces its Python heredoc with `base64`+`tr`. Since 2026-10-21 Python is
+  used in exactly one place, and only in optional targets: `tools/test-http-get.sh`
+  and `tools/test-sayacrawl.sh` start `python3 -m http.server` as the local test
+  server. Nothing on the bootstrap or maintained gate path needs it
+  (`make test-language-deps` proves that by shimming `python3` to fail).
 * **Portable base64.** `base64 -w 0` (a GNU extension) is gone; the packer
   uses `base64 | tr -d '\n'`, and process substitution is a temp file.
+
+## Deleted scaffolding (2026-10-21)
+
+The repository had grown a second copy of itself. These were removed because
+nothing on a maintained path read them:
+
+* **Chunk and bundle copies** that restored files already present as
+  plaintext: `selfhost/native_src/` (59 fragments of `native_aot.c`),
+  `stage2_src/`, `stage2_blob/`, `sxc_full_b64/`, `sxc_full_b64_plain/`,
+  `sxc_full_lines/`, `sxc_sa_parts/`, `sxc_out_c/`, `stage2_template_parts/`,
+  `codegen_{a,b,c,d}.b64`, `codegen.sa.gz.b64`, `sxc.sa.b64`, `sxc_fn.sa.b64`,
+  `stage2_tpl_a.b64`, `stage2_template.c{,.gz}.b64`, `native_aot.c.gz.b64` and
+  `compiler_min.sa.gz.b64{,.p0 ... .p3}` — about 380 KB of base64. The one
+  bundle that is still read (`selfhost/compiler_min_gz/`, the offline copy of
+  `compiler_min.sa`) stays.
+* **The Stage-2 placeholders**: `selfhost/stage2_template.c` (93 bytes,
+  `PLACEHOLDER`), `selfhost/sxc_full.c` and `sxc_full_minimal.c` (30-line toys),
+  `selfhost/restore_stage2.sh`, `restore_stage2_template.sh`, `restore_sxc.sh`,
+  `restore_sxc_full.sh` (restorers whose inputs were gone, so they could only
+  exit 1), and `selfhost/sx` (a CLI wrapper for the absent host). Keeping them
+  byte-identical to keep a test true was a cost with no benefit;
+  `make test-doc-claims` now asserts they stay gone.
+* **`selfhost/lang_quality.sh`** and its fixtures: it drove the same absent
+  host, and `make test-language-deps` did not run it.
+* **`sayascrape/*.py`** (738 lines, the last Python in the tree) and its
+  `make test-scrape` target. `sayascrape/crawl.sa` is the crawler and
+  `make test-sayacrawl` still tests it.
+* **Four `sh` diagnostic drivers and ~70 dead `.sa` demos/fixtures**:
+  `test_return_paths.sh`, `test_name_resolution.sh`,
+  `test_inline_expression_errors.sh`, `test_list_postfix_errors.sh` became
+  `tools/sxdiag.sa` (their cases now live in Sayanox and are run by
+  `make test-sxdiag`), and the `.sa` files that no target referenced — the
+  `stage*` sketches, the `*_demo.sa` experiments, `typecheck`/`typeenv`/
+  `ast`/`semantic` stage experiments — were deleted. `examples/` keeps only the
+  programs a target or the README names.
+* **33 abandoned documents**: the `docs/STAGE5..STAGE28` sequence,
+  `docs/ABC_COMPLETE.md`, `docs/UNIFIED.md`, `docs/SXC_*.md`,
+  `docs/SELFHOST_*.md`, `docs/PURE_SA.md`, `docs/SHELL.md`,
+  `docs/SAYANOXC.md`, `docs/RUST_OPTIONAL.md`, `docs/CRANELIFT.md` and the five
+  `selfhost/*.md` pages that documented the deleted CLI.
+
+## The `run_command(cmd)` builtin (2026-10-21)
+
+`spawn(path)` starts a program with no arguments, which is why so much build
+and test logic had to stay in the shell: a driver that cannot say
+`gen2 in.sa out.c` cannot be written in Sayanox. `run_command(cmd)` closes that:
+one command line, `/bin/sh -c`, the exit status as a number, and the child's
+stdout/stderr inherited. It is wired through the same sixteen sites as every
+other builtin, seed-min refuses it like every other late builtin, and the
+native backend refuses it too (`make test-sxdiag` pins all three). The first
+consumer is `tools/sxdiag.sa`; the next ones are the remaining `sh` drivers.
+
+It is a driver primitive, not a build system: the quoting rules are the
+shell's, and the command lines are built from paths this repository controls.
 
 ## What is left for the next phase
 

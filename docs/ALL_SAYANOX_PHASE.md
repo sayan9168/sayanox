@@ -10,22 +10,31 @@ The goal is simple to state: every maintained piece of *logic* in this
 repository is a Sayanox program, and the only non-Sayanox pieces left are the
 smallest possible bootstrap seam and the build driver.
 
-## Where the tree is today (measured 2026-10-20)
+## Where the tree is today (measured 2026-10-21)
 
 | Layer | Language | Size | Sayanox? |
 |---|---|---:|---|
 | Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,577 lines | **yes** |
-| Formatter, package tool, language server, IR tool, LSP test client, ELF linker, instruction encoder | Sayanox | 7 programs | **yes** |
-| All tests and fixtures | Sayanox + `sh` drivers | 280 `.sa` files, 1,183,149 bytes | **yes** (logic) |
+| Formatter, package tool, language server, IR tool, LSP test client, ELF linker, instruction encoder, diagnostic suites | Sayanox | 8 programs | **yes** |
+| All tests and fixtures | Sayanox + `sh` drivers | 159 `.sa` files | **yes** (logic); four `sh` drivers became `tools/sxdiag.sa` on 2026-10-21 |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,498 lines | no — its ELF image writer and rel32 linker are Sayanox (`tools/sxlink.sa`) and so is its x86-64 instruction encoder (`tools/sxencode.sa`), both byte-identical to C; the C file still produces the executables the gates run |
-| Build driver (`Makefile` + 25 sh scripts) | make / POSIX sh | 5,112 lines | no |
+| Build driver (`Makefile` + 15 sh scripts) | make / POSIX sh | 5,170 lines | no |
+
+The tree also stopped carrying a second copy of itself on 2026-10-21: about
+380 KB of base64 chunk directories (`native_src/`, `stage2_blob/`,
+`sxc_full_b64*`, `sxc_full_lines/`, `sxc_sa_parts/`, `sxc_out_c/`,
+`stage2_template_parts/`, `codegen_*.b64`, `sxc*.sa.b64`,
+`compiler_min.sa.gz.b64{,.p0...p3}`) restored files that already existed as
+plaintext, and 33 abandoned documents described architectures that no longer
+exist. `DEPENDENCY.md` lists every deletion with the reason.
 
 Ten tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
 `inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
 `sx_launcher.c`, `sx_driver.c`, `build_stage2.c`, plus `stage2_expand.inc`)
-were deleted on 2026-10-17. The tree now has 10 tracked C/header/inc files:
-the seed, the native backend and their test/stress harnesses.
+were deleted on 2026-10-17, and the three 30-line Stage-2 toys on 2026-10-21.
+The tree now has **7** tracked C/header/inc files: the two seeds, the native
+backend and their test/stress harnesses.
 
 The 2026-10-17 language-dependency pass already removed bash, awk, sed,
 Python, Perl, Node and Ruby from the maintained paths
@@ -302,6 +311,22 @@ and `make all-sayanox` keeps failing.
 
 ## Progress log
 
+* **2026-10-21 — Phase B.5: `run_command(cmd)` and four drivers leave the shell.**
+  `spawn(path)` starts a program with no arguments, which is why every driver
+  that ran `gen2 in.sa out.c` had to stay in POSIX sh. `run_command(cmd)` closes that
+  gap: one command line, `/bin/sh -c`, exit status as a number, stdout and
+  stderr inherited. It is wired through the same 16 sites as every other
+  builtin, seed-min and the native backend refuse it, and the language docs
+  describe it as a driver primitive rather than a build system.
+  `tools/sxdiag.sa` is the first consumer, and it replaced four shell files:
+  `selfhost/test_return_paths.sh`, `test_name_resolution.sh`,
+  `test_inline_expression_errors.sh` and `test_list_postfix_errors.sh`. The
+  cases they checked (23 inline, 7 postfix, 14 return-path, 31
+  name-resolution refusals) now live in Sayanox, with an unknown-suite refusal
+  and two accept-everything controls so the assertions cannot become
+  decoration (`make test-sxdiag`, part of `native-test`). The same day the tree
+  lost 224 dead files and the compiler gained no other change, so the whole
+  suite was re-run: `gen3 == gen4` still holds.
 * **2026-10-21 — Phase D step 4.** `tools/sxencode.sa` is the x86-64
   instruction encoder in Sayanox, replayed against a new `SX_ENCODE_LOG` seam
   (`test-native-sxencode`): five fixtures rebuild `code.bin` byte-identically,

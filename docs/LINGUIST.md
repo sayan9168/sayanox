@@ -82,12 +82,19 @@ tracked file with `git check-attr`: all 173 `.sa` files (167 existing plus the
 6 new samples) resolve to `linguist-detectable: true` and
 `linguist-language: Sayanox`, and none are marked generated.
 
-The generated-artifact rules mark 184 tracked files and cover:
+The generated-artifact rules mark the remaining tracked chunk files and cover:
 
-- `*.b64` and `*.b64.p[0-9]` — 159 base64 chunk files, including the 82 in
-  `selfhost/compiler_min_gz/`
-- the chunk directories `selfhost/{compiler_min_gz,native_src,stage2_src,sxc_full_b64,sxc_full_b64_plain,sxc_full_lines,sxc_sa_parts}/**`
-- `*.part`, `*.cpart`, `*.hex` — other split fragments
+- `*.b64` — the 121 chunks in `selfhost/compiler_min_gz/`, the offline copy of
+  `selfhost/compiler_min.sa` that the restore path falls back to
+- `*.part`, `*.cpart` — other split fragments
+
+Every other chunk directory (`native_src/`, `stage2_src/`, `stage2_blob/`,
+`sxc_full_b64/`, `sxc_full_b64_plain/`, `sxc_full_lines/`, `sxc_sa_parts/`,
+`sxc_out_c/`, `stage2_template_parts/`), the loose bundles (`codegen_*.b64`,
+`sxc.sa.b64`, `sxc_fn.sa.b64`, `stage2_tpl_a.b64`, `stage2_template.c.b64`,
+`native_aot.c.gz.b64`, `compiler_min.sa.gz.b64{,.p0...p3}`) and `*.hex` were
+deleted on 2026-10-21: they restored files that already existed in plaintext,
+so they were copies of copies that no target read.
 - `docs/logs/**` and `*.log` — 7 captured build and test logs
 - C emitted by the self-hosting compilers: `selfhost/gen*.c`, `selfhost/boot*.c`,
   `selfhost/_smoke.c`, `selfhost/_out.c`, `selfhost/mini_out.c`,
