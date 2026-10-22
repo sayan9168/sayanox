@@ -3802,7 +3802,7 @@ true-selfhost-min: seed-min-gen1
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C) >/dev/null
 	@test -s $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
-	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-sxpkg-sayanox-logic test-read-bytes test-language-deps
+	@$(MAKE) test-reassign test-while test-when test-mod test-struct2 test-list2 test-use test-fn2 test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-generics test-parity test-stage2-demos test-stage2 test-for-str test-gen2-gaps test-stdlib test-pkgs test-registry-sums test-builtin-names test-sxfmt test-sxpkg test-lsp test-lsp-robust test-stdlib-growth test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-sxpkg-polish test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-gc test-seed-gc test-generic-structs test-sxpkg-online-local test-sxpkg-online-optin test-sxpkg-sayanox-logic test-read-bytes test-full-language-expr test-language-deps
 	@if cmp -s $(GEN1_MIN_C) $(GEN2_C); then echo "[FAIL] frozen copy"; exit 1; fi
 	@$(MAKE) test-boot
 	@echo "=== TRUE-SELFHOST-MIN-OK ==="
@@ -4180,6 +4180,10 @@ gen3:
 	@CC='$(CC)' sh selfhost/test_compiler_source_features.sh
 	@CC='$(CC)' sh selfhost/test_struct_functions.sh
 	@CC='$(CC)' sh selfhost/test_string_interpolation.sh
+	@# gen3 exists here, so the broader-language readiness probes can finally
+	@# run inside a hard gate instead of only under the fail-closed
+	@# true-selfhost-full. They are closure probes, not a language contract.
+	@$(MAKE) test-full-language-readiness
 	@echo "=== GEN3-OK ==="
 
 subset: seed-bin
@@ -5267,6 +5271,94 @@ test-generic-structs-nested: $(SEED_MIN_BIN) $(GEN2)
 	@echo '[OK] nested generic structs: Box<Box<num>>, Box<Box<Box<num>>>, Box<list> and Pair<Box<num>, str> are concrete types on seed-min, gen2 and native, with the inner instantiation declared first'
 
 test-generic-structs test-type-refusals: test-generic-structs-nested
+
+# ---------------------------------------------------------------------------
+# test-full-language-expr: the last two broader-language readiness probes
+# (docs/FULL_LANGUAGE_SELFHOST.md, selfhost/full_language_tests/README.md).
+#
+#   * a struct literal field may be a whole checked expression
+#     (`Size { bytes: len(text) + 1 }`, `(2 + 3) * 4`, `head + "anox"`)
+#   * an index may call a function the program declared with `-> num`
+#     (`values[offset()]`, `values[twice(offset()) + 1]`)
+#
+# seed-min and native already accepted both; gen2 refused them until
+# 2026-10-22, which is why `make test-full-language-readiness` counted four
+# unmet checks across gen2 and gen3. The fixture is the parity proof -- the
+# same eleven lines from all three backends -- and the greps pin the lowered
+# gen2 C, because the layout and the call ARE the claim.
+#
+# Passing these probes is NOT a full-language self-host claim:
+# `true-selfhost-full` still fails closed for want of a reviewed language
+# specification, and this gate asserts that too.
+# ---------------------------------------------------------------------------
+FLE_WANT := 4\n20\n2\n4\n7\nsayanox\n9\n11\n13\n11\n11
+.PHONY: test-full-language-expr
+test-full-language-expr: $(SEED_MIN_BIN) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/full_language_expr.sa > $(TESTS)/fle_ms.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/fle_ms $(TESTS)/fle_ms.c
+	./$(GEN2) selfhost/full_language_expr.sa $(TESTS)/fle_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/fle_g2 $(TESTS)/fle_g2.c
+	$(call assert-out,./$(TESTS)/fle_ms,$(FLE_WANT))
+	$(call assert-out,./$(TESTS)/fle_g2,$(FLE_WANT))
+	@# the lowered gen2 C: the field holds the expression, the index holds the call
+	@grep -q -F 'Size one = ((Size){(sx_len(text) + 1.0)});' $(TESTS)/fle_g2.c \
+	  || { echo "[FAIL] gen2 no longer lowers a len() field expression"; exit 1; }
+	@grep -q -F 'Size two = ((Size){(((2.0 + 3.0)) * 4.0)});' $(TESTS)/fle_g2.c \
+	  || { echo "[FAIL] gen2 no longer lowers a parenthesised field expression"; exit 1; }
+	@grep -q -F 'Size five = ((Size){(offset() + twice(3.0))});' $(TESTS)/fle_g2.c \
+	  || { echo "[FAIL] gen2 no longer lowers declared calls in a field expression"; exit 1; }
+	@grep -q -F 'Label tag = ((Label){sx_cat(head,"anox")});' $(TESTS)/fle_g2.c \
+	  || { echo "[FAIL] gen2 no longer gives a string expression a string field"; exit 1; }
+	@grep -q -F 'sx_lget(values,twice(offset()))' $(TESTS)/fle_g2.c \
+	  || { echo "[FAIL] gen2 no longer lowers a call inside an index"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/full_language_expr.sa $(TESTS)/fle_nat >/dev/null \
+	    || { echo "[FAIL] native refused the expression fixture"; exit 1; }; \
+	  ./$(TESTS)/fle_nat > $(TESTS)/fle_nat.out; \
+	  ./$(TESTS)/fle_ms > $(TESTS)/fle_ms.out; \
+	  cmp $(TESTS)/fle_ms.out $(TESTS)/fle_nat.out \
+	    || { echo "[FAIL] native output differs from seed-min"; exit 1; }; \
+	  echo "[OK] native: the same expressions and index calls print the same bytes as seed-min"; \
+	else echo "[SKIP] native_aot not built"; fi
+	@# refusals that must survive: an unknown function and a wrong argument
+	@# count in an index are refused by every backend
+	@printf 'hold values = [7, 9]\nshow values[nope()]\n' > $(TESTS)/fle_unknown.sa
+	@printf 'make two(a: num, b: num) -> num {\n  give a + b\n}\nhold values = [7, 9]\nshow values[two(1)]\n' > $(TESTS)/fle_arity.sa
+	@printf 'make tag() -> str {\n  give "a"\n}\nhold values = [7, 9]\nshow values[tag()]\n' > $(TESTS)/fle_strcall.sa
+	@for f in fle_unknown fle_arity; do \
+	  if ./$(SEED_MIN_BIN) $(TESTS)/$$f.sa > $(TESTS)/$$f.ms.c 2> $(TESTS)/$$f.ms.err; then \
+	    echo "[FAIL] seed-min accepted $$f"; exit 1; fi; \
+	  ./$(GEN2) $(TESTS)/$$f.sa $(TESTS)/$$f.g2.c > /dev/null 2>&1 || true; \
+	  grep -q -F '#error sayanox-min:' $(TESTS)/$$f.g2.c \
+	    || { echo "[FAIL] gen2 accepted $$f"; exit 1; }; \
+	  if [ -x $(NATIVE_BIN) ]; then \
+	    if ./$(NATIVE_BIN) $(TESTS)/$$f.sa $(TESTS)/$$f.nat > $(TESTS)/$$f.nat.err 2>&1; then \
+	      echo "[FAIL] native accepted $$f"; exit 1; fi; \
+	  fi; \
+	done
+	@echo '[OK] an index call is checked: an unknown function and a wrong argument count are refused by seed-min, gen2 and native'
+	@# a string-returning call as an index: gen2 and native name it; seed-min
+	@# does not check it and emits C that will not compile (documented)
+	@./$(GEN2) $(TESTS)/fle_strcall.sa $(TESTS)/fle_strcall.g2.c > /dev/null 2>&1 || true
+	@grep -q -F '#error sayanox-min:' $(TESTS)/fle_strcall.g2.c \
+	  || { echo "[FAIL] gen2 accepted a string-returning call as an index"; exit 1; }
+	@./$(SEED_MIN_BIN) $(TESTS)/fle_strcall.sa > $(TESTS)/fle_strcall.ms.c 2>/dev/null || true
+	@if $(CC) -O2 -o $(TESTS)/fle_strcall_ms $(TESTS)/fle_strcall.ms.c 2>/dev/null; then \
+	  echo "[FAIL] seed-min's string-index C compiled; this divergence is documented as not compiling"; exit 1; fi
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(TESTS)/fle_strcall.sa $(TESTS)/fle_strcall.nat > $(TESTS)/fle_strcall.nat.err 2>&1; then \
+	    echo "[FAIL] native accepted a string-returning call as an index"; exit 1; fi; \
+	fi
+	@echo '[OK] a string-returning call as an index: refused by gen2 and native; seed-min emits C that cannot compile (documented divergence)'
+	@# the claim this does NOT make: true-selfhost-full still ends in a
+	@# refusal and a non-zero exit, checked statically here because running it
+	@# would re-enter the whole bootstrap
+	@grep -q -F "refusing a full-language claim" Makefile \
+	  || { echo "[FAIL] true-selfhost-full no longer refuses the full-language claim"; exit 1; }
+	@grep -A 4 '^true-selfhost-full:' Makefile | grep -q -F 'exit 1' \
+	  || { echo "[FAIL] true-selfhost-full no longer fails closed"; exit 1; }
+	@echo '[OK] expression fields and index calls: seed-min, gen2 and native agree on eleven lines; full-language self-host is still NOT claimed (true-selfhost-full fails closed)'
 
 .PHONY: test-stdlib-list-search
 test-stdlib-list-search: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)

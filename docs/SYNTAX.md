@@ -104,6 +104,28 @@ show p.name
 show p.x
 ```
 
+A field value may be a whole checked expression since 2026-10-22 -- arithmetic,
+a parenthesised group, `len(...)`, a call to a function this program declared,
+or a string `+` chain -- and the field takes that expression's kind
+(`make test-full-language-expr`):
+
+```sayanox
+struct Size {
+  bytes
+}
+make twice(v: num) -> num {
+  give v * 2
+}
+hold text = "abc"
+hold a = Size { bytes: len(text) + 1 }   // 4
+hold b = Size { bytes: (2 + 3) * 4 }     // 20
+hold c = Size { bytes: twice(3) + 1 }    // 7
+```
+
+Two field values are still refused on gen2 (seed-min accepts the first): a
+dotted field read (`Size { bytes: p.x }`) and a source-level builtin call
+(`Label { text: concat(a, b) }`). Bind either to a name first.
+
 ## Generics
 
 A function whose parameters and return type all name one of its type
@@ -503,6 +525,13 @@ parameter is valid. Generic argument inference refines the first-token guess
 using the resolved whole expression kind, and argument scanning respects
 commas inside lists/groups. Seed checked field access requires a known named
 struct or field chain and rejects unknown fields or nonstruct selectors.
+
+An index may also call a function declared `-> num` (`values[offset()]`,
+`values[twice(offset()) + 1]`), with numeric arguments that are themselves
+index expressions; the arity and every declared parameter kind are checked.
+A quoted string, a call returning a string or taking a list, an unknown
+function and a wrong argument count stay refused inside `[ ]` on gen2
+(`make test-full-language-expr`, `make test-gen2-index-expr`).
 
 Still unsupported: struct values as numeric-list elements, arithmetic on list
 values, and arbitrary literal-headed postfix/compound expressions outside

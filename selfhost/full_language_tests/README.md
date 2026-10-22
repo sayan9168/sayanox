@@ -26,7 +26,10 @@ gen3. `make test-struct-functions` separately pins its nominal type checks,
 bounded refusals and GC retention; seed/native signatures are not included.
 After that pass three readiness behaviors still failed (six checks).
 
-Current update: identifier string interpolation also passes on gen2/gen3.
-`make test-string-interpolation` pins its string/number, escaping, import, GC
-and diagnostic bounds. Expression-valued fields and numeric index calls still
-fail: **four checks across two compilers**. Seed/native interpolation is not added.
+2026-10-22 update: expression-valued struct fields and numeric index calls
+pass too, so **all eight checks (four behaviours on gen2 and gen3) pass** and
+`make gen3` runs this suite. `make test-full-language-expr` pins both forms as
+a three-backend parity fixture and pins what stays refused. Seed/native
+interpolation is still not added, and passing four probes is still not a
+full-language claim: `true-selfhost-full` fails closed for want of a
+reviewed acceptance specification.

@@ -1,0 +1,54 @@
+// Expression-valued struct fields, and a checked call inside an index.
+//
+// Both forms are closure probes of the broader-language goal (see
+// selfhost/full_language_tests/README.md). seed-min and native accepted them
+// already; gen2 refused them until 2026-10-22, so this fixture is the shared
+// parity proof: the same eleven lines on seed-min, gen2 and native.
+//
+//   * A struct literal field may be a whole checked expression -- arithmetic,
+//     a parenthesised group, a len() call, a call to a function this program
+//     declared -- not only a number, a string, a name or a nested literal.
+//     The field keeps the kind the expression has, so a string expression
+//     (`head + "anox"`) makes a string field.
+//   * An index may call a function declared with `-> num`, with numeric
+//     arguments that are themselves index expressions.
+//
+// Still refused on gen2, on purpose, and not written here: a quoted string
+// inside an index, a source-level builtin call such as `concat(a, b)` as a
+// field value (give it a `hold` first), a call that returns a string or a
+// list inside an index, an unknown function, the wrong argument count, and a
+// dotted field read inside a struct literal. See docs/TYPES_ROADMAP.md.
+struct Size {
+  bytes
+}
+struct Label {
+  text
+}
+make offset() -> num {
+  give 1
+}
+make twice(v: num) -> num {
+  give v * 2
+}
+hold text = "abc"
+hold one = Size { bytes: len(text) + 1 }
+show one.bytes
+hold two = Size { bytes: (2 + 3) * 4 }
+show two.bytes
+hold three = Size { bytes: len("hello") % 3 }
+show three.bytes
+hold span = 10
+hold four = Size { bytes: span / 2 - 1 }
+show four.bytes
+hold five = Size { bytes: offset() + twice(3) }
+show five.bytes
+hold head = "say"
+hold tag = Label { text: head + "anox" }
+show tag.text
+hold pair = "ab"
+hold values = [7, 9, 11, 13]
+show values[offset()]
+show values[twice(offset())]
+show values[twice(offset()) + 1]
+show values[len(pair)]
+show values[twice(offset()) % 3]
