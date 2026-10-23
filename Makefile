@@ -40,7 +40,7 @@ SXDIAG_BIN := tools/sxdiag
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
         pack-compiler test-http-get test-sayacrawl test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
-        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-sxdiag
+        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-sxdiag test-native32
 
 all: true-selfhost-min
 
@@ -1961,7 +1961,7 @@ test-native-ir-portable: $(NATIVE_BIN) tools/emit_to_ir test-emit-to-ir
 	@for pat in 'FADD ' 'CALL make twice' 'CALL builtin shownum' '=== phase: make bodies' 'I2F ' 'FCMP '; do \
 	  grep -q -F "$$pat" $(TESTS)/irp.ir || { echo "[FAIL] the IR lost '$$pat'"; exit 1; }; \
 	done
-	@echo '[OK] IR analysis listing: instruction counts/calls/phases preserved; strict record/offset audit and source correlation deterministic; register widths abstracted (no executable second ISA)'
+	@echo '[OK] IR analysis listing: instruction counts/calls/phases preserved; strict record/offset audit and source correlation deterministic; register widths abstracted (this listing is still not an executable second ISA; the executable one is tools/native32.sa, make test-native32)'
 native-test: test-native-ir-portable
 
 # ---------------------------------------------------------------------------
@@ -2052,6 +2052,131 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 	  echo "[FAIL] sxlink accepted a non-ELF linked file"; exit 1; fi
 	@./tools/sxlink Makefile $(TESTS)/sxlink/sxlink_hello $(TESTS)/sxlink/bad2.elf 2>&1 >/dev/null | grep -q 'not an ELF'
 	@echo "[OK] sxlink: five fixtures link byte-identically to write_elf and run identically; the dump changes no emitted byte; the ELF ident, the three program headers, the entry point and the page-1 code offset are pinned; missing dump and non-ELF input are clear errors"
+
+# ---------------------------------------------------------------------------
+# tools/native32 + test-native32: a SECOND machine-code target (2026-10-23).
+#
+# docs/STATUS.md carried "a second native ISA: none -- x86-64 Linux only" as
+# an open row. tools/native32.sa closes the narrow, provable version of it: a
+# Sayanox program becomes a 32-bit x86 (i386) Linux ELF, emitted by a backend
+# that is itself written in Sayanox and compiled by gen2. It is an
+# independent front end and an independent encoder; it reproduces none of
+# native_aot's instruction list.
+#
+# What this gate proves:
+#   * three fixtures print the same bytes on FOUR backends -- seed-min (C),
+#     gen2 (C), native_aot (x86-64 machine code) and native32 (i386 machine
+#     code). Two of those are machine-code backends for different ISAs.
+#   * the container really is i386: ELFCLASS32 + EM_386, against native_aot's
+#     ELFCLASS64 + EM_X86_64 for the same source file.
+#   * emission is deterministic, and the entry point, the program-header
+#     count and the image sizes are pinned.
+#   * nine out-of-subset programs are refused with a diagnostic and exit 1,
+#     and the ones that are legal Sayanox still run on seed-min -- so the
+#     refusals are a subset boundary, not a broken front end.
+#
+# What it does NOT claim: this is not the native subset. There is no heap, no
+# string values, no lists, no structs, no functions, no collector and no file
+# IO, and `/` is refused on purpose because a Sayanox number is a double.
+# docs/NATIVE32.md states the bounds; native_aot remains the backend.
+#
+# Running the i386 binaries needs a kernel with IA32 emulation. Without it
+# the byte assertions still run and the execution ones say [SKIP].
+# ---------------------------------------------------------------------------
+N32_BIN := tools/native32
+N32_SA  := tools/native32.sa
+N32_T   := selfhost/native32_tests
+
+tools/native32: $(N32_SA) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(GEN2) $(N32_SA) $(TESTS)/native32.c >/dev/null
+	@if grep -q '#error' $(TESTS)/native32.c; then echo "[FAIL] native32: #error in the generated C"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/native32.c
+	@echo "[OK] the i386 backend built from $(N32_SA) by gen2"
+
+.PHONY: test-native32
+test-native32: $(SEED_MIN_BIN) $(GEN2) $(N32_BIN)
+	@mkdir -p $(TESTS)/n32
+	@printf 'show 1\n' > $(TESTS)/n32/canary.sa
+	@./$(N32_BIN) $(TESTS)/n32/canary.sa $(TESTS)/n32/canary
+	@chmod +x $(TESTS)/n32/canary
+	@run=1; ./$(TESTS)/n32/canary > $(TESTS)/n32/canary.out 2>/dev/null || run=0; \
+	 if [ "$$run" = 1 ] && [ "$$(cat $(TESTS)/n32/canary.out)" != "1" ]; then run=0; fi; \
+	 echo $$run > $(TESTS)/n32/runnable
+	@if [ "$$(cat $(TESTS)/n32/runnable)" = 0 ]; then \
+	  echo "[SKIP] this kernel cannot execute i386 binaries; the byte assertions below still run"; fi
+	@for f in expr flow text; do \
+	  ./$(SEED_MIN_BIN) $(N32_T)/$$f.sa > $(TESTS)/n32/$$f.ms.c; \
+	  $(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/n32/$$f.ms $(TESTS)/n32/$$f.ms.c; \
+	  ./$(TESTS)/n32/$$f.ms > $(TESTS)/n32/$$f.want; \
+	  ./$(GEN2) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.g2.c >/dev/null; \
+	  $(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/n32/$$f.g2 $(TESTS)/n32/$$f.g2.c; \
+	  ./$(TESTS)/n32/$$f.g2 > $(TESTS)/n32/$$f.g2.out; \
+	  cmp $(TESTS)/n32/$$f.want $(TESTS)/n32/$$f.g2.out \
+	    || { echo "[FAIL] gen2 disagrees with seed-min on $$f.sa"; exit 1; }; \
+	  ./$(N32_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.elf \
+	    || { echo "[FAIL] native32 refused $$f.sa, which is inside its documented subset"; exit 1; }; \
+	  ./$(N32_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.elf2; \
+	  cmp $(TESTS)/n32/$$f.elf $(TESTS)/n32/$$f.elf2 \
+	    || { echo "[FAIL] native32 emitted different bytes for $$f.sa on a second run"; exit 1; }; \
+	  chmod +x $(TESTS)/n32/$$f.elf; \
+	  if [ -x $(NATIVE_BIN) ]; then \
+	    ./$(NATIVE_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.nat >/dev/null; \
+	    ./$(TESTS)/n32/$$f.nat > $(TESTS)/n32/$$f.nat.out; \
+	    cmp $(TESTS)/n32/$$f.want $(TESTS)/n32/$$f.nat.out \
+	      || { echo "[FAIL] native_aot disagrees with seed-min on $$f.sa"; exit 1; }; \
+	  fi; \
+	  if [ "$$(cat $(TESTS)/n32/runnable)" = 1 ]; then \
+	    ./$(TESTS)/n32/$$f.elf > $(TESTS)/n32/$$f.got; \
+	    cmp $(TESTS)/n32/$$f.want $(TESTS)/n32/$$f.got \
+	      || { echo "[FAIL] the i386 binary for $$f.sa printed something else"; exit 1; }; \
+	  fi; \
+	done
+	@if [ "$$(cat $(TESTS)/n32/runnable)" = 1 ]; then \
+	  echo '[OK] i386: expr, flow and text print the same bytes under seed-min, gen2, native_aot and native32 -- four backends, two instruction sets'; \
+	else echo '[SKIP] the i386 binaries were emitted and compared byte-for-byte, but not executed'; fi
+	@# the container is really i386, and really different from native_aot's
+	@test "$$(od -An -tx1 -v -N 8 $(TESTS)/n32/expr.elf | tr -d ' \n')" = 7f454c4601010100 \
+	  || { echo "[FAIL] native32: the image is no longer ELFCLASS32"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 16 -N 2 $(TESTS)/n32/expr.elf | tr -d ' \n')" = 2 \
+	  || { echo "[FAIL] native32: the image is no longer ET_EXEC"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 18 -N 2 $(TESTS)/n32/expr.elf | tr -d ' \n')" = 3 \
+	  || { echo "[FAIL] native32: e_machine is no longer EM_386"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 44 -N 2 $(TESTS)/n32/expr.elf | tr -d ' \n')" = 2 \
+	  || { echo "[FAIL] native32: the image no longer has exactly two program headers"; exit 1; }
+	@test "$$(od -An -tu4 -v -j 24 -N 4 $(TESTS)/n32/expr.elf | tr -d ' \n')" = 134512842 \
+	  || { echo "[FAIL] native32: the entry point moved (0x08048000 + 116 header bytes + the 86-byte print-decimal routine)"; exit 1; }
+	@test "$$(wc -c < $(TESTS)/n32/expr.elf)" = 4140 || { echo "[FAIL] native32: expr.sa no longer emits a 4140-byte image"; exit 1; }
+	@test "$$(wc -c < $(TESTS)/n32/flow.elf)" = 4172 || { echo "[FAIL] native32: flow.sa no longer emits a 4172-byte image"; exit 1; }
+	@test "$$(wc -c < $(TESTS)/n32/text.elf)" = 4185 || { echo "[FAIL] native32: text.sa no longer emits a 4185-byte image"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  test "$$(od -An -tx1 -v -N 8 $(TESTS)/n32/expr.nat | tr -d ' \n')" = 7f454c4602010100 \
+	    || { echo "[FAIL] native_aot's image is no longer ELFCLASS64"; exit 1; }; \
+	  test "$$(od -An -tu2 -v -j 18 -N 2 $(TESTS)/n32/expr.nat | tr -d ' \n')" = 62 \
+	    || { echo "[FAIL] native_aot's image is no longer EM_X86_64"; exit 1; }; \
+	fi
+	@echo '[OK] i386 container: ELFCLASS32 / ET_EXEC / EM_386, two program headers, entry 0x080480ca, three pinned image sizes, byte-deterministic -- native_aot on the same source is ELFCLASS64 / EM_X86_64'
+	@# out-of-subset programs are refused by name, never miscompiled
+	@for f in $(N32_T)/refuse/*.sa; do \
+	  if ./$(N32_BIN) $$f $(TESTS)/n32/bad.elf > $(TESTS)/n32/bad.err 2>&1; then \
+	    echo "[FAIL] native32 accepted $$f, which is outside its subset"; exit 1; fi; \
+	  grep -q 'native32: ' $(TESTS)/n32/bad.err \
+	    || { echo "[FAIL] $$f was refused without a native32 diagnostic"; exit 1; }; \
+	done
+	@echo '[OK] i386 refusals: division, a fraction, a string value, a function, a list, an unknown name, &&, 2^31 and an unclosed block are each refused with a diagnostic and a non-zero exit'
+	@# and the refused programs that are legal Sayanox still run elsewhere,
+	@# so this is a subset boundary rather than a broken front end
+	@for f in division strvalue function list; do \
+	  ./$(SEED_MIN_BIN) $(N32_T)/refuse/$$f.sa > $(TESTS)/n32/ok_$$f.c; \
+	  $(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/n32/ok_$$f $(TESTS)/n32/ok_$$f.c; \
+	  ./$(TESTS)/n32/ok_$$f > /dev/null \
+	    || { echo "[FAIL] refuse/$$f.sa does not even run on seed-min, so it is a broken program and proves nothing"; exit 1; }; \
+	done
+	@$(call assert-out,./$(TESTS)/n32/ok_division,3.5)
+	@echo '[OK] i386 subset boundary: every refused program that is legal Sayanox still compiles and runs on seed-min (7 / 2 is 3.5 there, which is exactly why this integer backend refuses it)'
+
+native-test: test-native32
+
 
 # ---------------------------------------------------------------------------
 # test-native-sxencode: the instruction encoder is Sayanox.

@@ -166,10 +166,19 @@ User programs compiled by `native_aot` do not pass through clang.
 
 ## Second-ISA decision and IR audit (2026-10-16)
 
-**No executable second ISA is implemented or claimed.** Native compilation and
-`native-test` remain x86-64 Linux only. The C fallback's host portability does
-not establish a second direct-to-ELF backend. There is no aarch64 execution
-smoke gate in this repository.
+**Superseded in part on 2026-10-23 — see [NATIVE32.md](NATIVE32.md).** There
+is now an executable second target, `tools/native32.sa`: a Sayanox-written
+i386 backend for a documented integer subset, gated by `make test-native32`
+(four backends, two instruction sets, identical bytes). What the paragraph
+below still says correctly is that **`native_aot` and `native-test` are
+x86-64 Linux only** — the second target compiles a subset, not the native
+subset, and there is still no aarch64 emitter and no aarch64 execution gate.
+
+**No executable second ISA is implemented or claimed** *for the native
+subset*. Native compilation and `native-test` remain x86-64 Linux only. The
+C fallback's host portability does not establish a second direct-to-ELF
+backend for that subset. There is no aarch64 execution smoke gate in this
+repository.
 
 The bounded improvement here is analysis tooling: the existing C99 streaming
 `emit_to_ir` translator now has strict record/offset auditing and optional

@@ -1,0 +1,90 @@
+# Hard gates, 2026-10-23 (excerpt)
+#
+#   make doctor; make true-selfhost; make gen3; make native-test
+#
+# on the tree that adds tools/native32.sa -- a second machine-code target,
+# written in Sayanox and compiled by gen2, emitting 32-bit x86 (i386) Linux
+# ELF for a documented integer subset -- plus its fixtures, its gate and the
+# documentation changes that stop saying "no executable second ISA".
+# Plain make, no -o. 28 min 55 s, green on the first attempt.
+Fri Oct 23 05:15:35 UTC 2026
+Fri Oct 23 05:44:30 UTC 2026
+
+## The four markers
+# (each target was run separately and its own log captured, so the line
+#  numbers below are within that target's log)
+doctor.log:17:DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+true-selfhost.log:1294:=== TRUE-SELFHOST-MIN-OK ===
+gen3.log:46:=== GEN3-OK ===
+native-test.log:1163:=== NATIVE-TEST-OK ===
+HARDGATES-EXIT=0
+#
+#   doctor RC=0          05:15:35
+#   true-selfhost RC=0   05:25:03
+#   gen3 RC=0            05:35:07
+#   native-test RC=0     05:44:30
+#
+# [OK] counts: doctor 1, true-selfhost 225, gen3 32, native-test 222.
+
+## gen3 == gen4
+gen3.log:13:[OK] byte-identical gen3 == gen4
+
+## This increment's gate, as it ran inside native-test
+native-test.log:26:./selfhost/gen2 tools/native32.sa selfhost/seed_tests/native32.c >/dev/null
+native-test.log:27:cc -O2 -Werror=implicit-function-declaration -o tools/native32 selfhost/seed_tests/native32.c
+native-test.log:28:[OK] the i386 backend built from tools/native32.sa by gen2
+native-test.log:29:[OK] i386: expr, flow and text print the same bytes under seed-min, gen2, native_aot and native32 -- four backends, two instruction sets
+native-test.log:30:[OK] i386 container: ELFCLASS32 / ET_EXEC / EM_386, two program headers, entry 0x080480ca, three pinned image sizes, byte-deterministic -- native_aot on the same source is ELFCLASS64 / EM_X86_64
+native-test.log:31:[OK] i386 refusals: division, a fraction, a string value, a function, a list, an unknown name, &&, 2^31 and an unclosed block are each refused with a diagnostic and a non-zero exit
+native-test.log:32:[OK] i386 subset boundary: every refused program that is legal Sayanox still compiles and runs on seed-min (7 / 2 is 3.5 there, which is exactly why this integer backend refuses it)
+#
+# The neighbouring claim that had to be corrected, in the same run:
+native-test.log:25:[OK] IR analysis listing: ... register widths abstracted (this listing is still not an executable second ISA; the executable one is tools/native32.sa, make test-native32)
+
+## The ELF pins, verbatim from the gate
+#
+#   od -An -tx1 -v -N 8  expr.elf  -> 7f454c4601010100   (ELFCLASS32)
+#   od -An -tu2 -v -j 16 expr.elf  -> 2                  (ET_EXEC)
+#   od -An -tu2 -v -j 18 expr.elf  -> 3                  (EM_386)
+#   od -An -tu2 -v -j 44 expr.elf  -> 2                  (two program headers)
+#   od -An -tu4 -v -j 24 expr.elf  -> 134512842          (0x080480ca)
+#   wc -c expr.elf / flow.elf / text.elf -> 4140 / 4172 / 4185
+#
+#   od -An -tx1 -v -N 8  expr.nat  -> 7f454c4602010100   (ELFCLASS64)
+#   od -An -tu2 -v -j 18 expr.nat  -> 62                 (EM_X86_64)
+#
+# Same source file, two containers, two instruction sets, identical stdout.
+
+## Run on the same tree, outside the four aggregates
+#
+#   make -o restore-compiler -o selfhost/gen2 -o selfhost/gen3 \
+#       test-native32 test-native-ir-portable test-native-emit-split \
+#       test-doc-claims test-language-deps test-full-language-expr \
+#       test-native-sxlink              -> exit 0
+#
+#   ./tools/native32 selfhost/native32_tests/flow.sa /tmp/flow && chmod +x /tmp/flow
+#   /tmp/flow                           -> 45 1 0 5040 21 10
+#
+# test-language-deps is in that list because the new recipe must stay free of
+# awk/sed/bash/python; it uses only grep, cmp, printf, od, tr, wc, chmod and
+# cc, the same tool set test-native-sxlink already depends on.
+
+## The first attempt at the BACKEND (not the gates) failed, twice, usefully
+#
+#   1. gen2 refused tools/native32.sa itself: "unexpected '\"'". Cause: a '{'
+#      inside a string literal inside a `when` CONDITION is read by gen2 as
+#      the block opener. Worked around with chr(123)/chr(125); recorded in
+#      docs/FULL_LANGUAGE_SELFHOST.md and docs/NATIVE32.md.
+#   2. The first expr.sa fixture used bare `show a == 2`, which gen2 refuses
+#      (a parenthesised `show (a == 2)` is accepted). The fixture now uses
+#      the parenthesised form so that all four backends can run it, and the
+#      divergence is noted in the fixture header.
+#
+# Neither was a code-generation bug: once the file compiled, the emitted i386
+# matched seed-min on every fixture at the first run.
+
+## After the run above
+#
+# Only this folder and .gitignore (one line, tools/native32) changed after
+# 05:44. Every other file in the commit was on disk when the run started at
+# 05:15:35.

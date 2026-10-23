@@ -1,0 +1,1029 @@
+// tools/native32.sa -- a SECOND machine-code target for Sayanox: 32-bit x86
+// (i386) Linux ELF, written in Sayanox and compiled by selfhost/gen2.
+//
+// Why this file exists. Until 2026-10-23 the only machine-code backend was
+// selfhost/native_aot.c: x86-64 Linux, written in C. docs/STATUS.md carried
+// "a second native ISA: none" as an open row, and docs/NATIVE_IR.md said the
+// thing a second backend has to reproduce is the instruction list the emit
+// tree asks the encoder for. This program is a second backend that does not
+// reproduce that list at all -- it is an independent front end and an
+// independent i386 encoder -- so what it proves is narrow and concrete:
+// a Sayanox program can be turned into machine code for an instruction set
+// that is not x86-64, and the result runs and prints the same bytes as the
+// seed compiler's C output.
+//
+// What it is NOT. This is not the native subset. It handles the documented
+// integer subset below and refuses everything else by name, with a
+// diagnostic and a non-zero exit. It has no heap, no strings as values, no
+// lists, no structs, no functions, no collector and no file IO.
+//
+// The subset, exactly:
+//
+//     hold NAME = <integer expression>     a name is a 4-byte global slot
+//     NAME = <integer expression>          re-`hold` assigns the same slot
+//     show <integer expression>            decimal, then a newline
+//     show "literal"                       the literal, then a newline
+//     when <expression> { ... }            zero is false, anything else true
+//     } otherwise { ... }
+//     while <expression> { ... }
+//     // comments, blank lines
+//
+//   expressions: + - * % , the six comparisons, parentheses, unary minus,
+//   decimal integer literals and names. `/` is refused on purpose: a Sayanox
+//   number is a double, `7 / 2` is 3.5, and this backend has no doubles, so
+//   accepting it would mean printing a different answer than every other
+//   backend. A literal with a `.` is refused for the same reason.
+//
+// Machine model: values are 32-bit two's complement; the evaluation stack is
+// the machine stack; eax holds the running value, ecx the right operand. A
+// name is an absolute address in the data segment (no base register, no
+// relocations beyond the absolute fixups this file applies itself).
+//
+// Bounds that are real: |value| must stay below 2^31, `%` by zero raises
+// SIGFPE where the other backends give NaN, and the code must fit in the
+// first page (4096 - 116 bytes). Each is checked or documented, never
+// silently wrong.
+//
+// Usage:   ./tools/native32 program.sa out
+//          ./out
+
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("native32: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+// ---- byte buffers ---------------------------------------------------------
+
+make e1(xs: list, b: num) -> list {
+  give push(xs, bit_and(b, 255))
+}
+
+make e32(xs: list, v: num) -> list {
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  xs = push(xs, bit_and(u, 255))
+  xs = push(xs, bit_and(shr(u, 8), 255))
+  xs = push(xs, bit_and(shr(u, 16), 255))
+  xs = push(xs, bit_and(shr(u, 24), 255))
+  give xs
+}
+
+make put_u16(xs: list, v: num) -> list {
+  xs = push(xs, bit_and(v, 255))
+  xs = push(xs, bit_and(shr(v, 8), 255))
+  give xs
+}
+
+make put_u32(xs: list, v: num) -> list {
+  xs = put_u16(xs, bit_and(v, 65535))
+  xs = put_u16(xs, bit_and(shr(v, 16), 65535))
+  give xs
+}
+
+make put_zeros(xs: list, n: num) -> list {
+  hold i = 0
+  while i < n {
+    xs = push(xs, 0)
+    i = i + 1
+  }
+  give xs
+}
+
+// A rel32 or an absolute address written into code that already exists.
+make patch32(xs: list, at: num, v: num) -> list {
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  xs[at] = bit_and(u, 255)
+  xs[at + 1] = bit_and(shr(u, 8), 255)
+  xs[at + 2] = bit_and(shr(u, 16), 255)
+  xs[at + 3] = bit_and(shr(u, 24), 255)
+  give xs
+}
+
+// ---- small text helpers ---------------------------------------------------
+
+make sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  while a < n && (sx_index(s, a) == 32 || sx_index(s, a) == 9) {
+    a = a + 1
+  }
+  hold b = n
+  while b > a && (sx_index(s, b - 1) == 32 || sx_index(s, b - 1) == 9 || sx_index(s, b - 1) == 13) {
+    b = b - 1
+  }
+  give sub(s, a, b)
+}
+
+make starts(s: str, p: str) -> num {
+  hold pn = len(p)
+  when len(s) < pn {
+    give 0
+  }
+  hold i = 0
+  hold r = 1
+  while i < pn {
+    when sx_index(s, i) != sx_index(p, i) {
+      r = 0
+      i = pn
+    } otherwise {
+      i = i + 1
+    }
+  }
+  give r
+}
+
+make is_name_char(c: num) -> num {
+  hold r = 0
+  when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95 {
+    r = 1
+  }
+  give r
+}
+
+make first_word(s: str) -> str {
+  hold n = len(s)
+  hold i = 0
+  hold out = ""
+  while i < n && is_name_char(sx_index(s, i)) == 1 {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// ---- the name table -------------------------------------------------------
+// "|name=slot|name=slot|": a slot is a byte offset into the data segment.
+
+make slot_of(tbl: str, nm: str) -> num {
+  hold key = concat(concat("|", nm), "=")
+  hold tn = len(tbl)
+  hold kn = len(key)
+  hold i = 0
+  hold r = 0 - 1
+  while i + kn <= tn && r < 0 {
+    hold same = 1
+    hold j = 0
+    while j < kn {
+      when sx_index(tbl, i + j) != sx_index(key, j) {
+        same = 0
+        j = kn
+      } otherwise {
+        j = j + 1
+      }
+    }
+    when same == 1 {
+      hold v = 0
+      hold k = i + kn
+      while k < tn && sx_index(tbl, k) >= 48 && sx_index(tbl, k) <= 57 {
+        v = v * 10 + (sx_index(tbl, k) - 48)
+        k = k + 1
+      }
+      r = v
+    }
+    i = i + 1
+  }
+  give r
+}
+
+// ---- the expression tokenizer --------------------------------------------
+// Tokens are separated by byte 1. A token is "n<digits>", "v<name>", "o<op>",
+// "(" or ")". A refusal comes back as "!<reason>" so the caller can name it.
+
+make add_tok(out: str, t: str) -> str {
+  give concat(concat(out, t), chr(1))
+}
+
+make tokenize(ex: str) -> str {
+  hold n = len(ex)
+  hold i = 0
+  hold out = ""
+  hold bad = ""
+  while i < n && len(bad) == 0 {
+    hold c = sx_index(ex, i)
+    hold done = 0
+    when c == 32 || c == 9 {
+      i = i + 1
+      done = 1
+    }
+    when done == 0 && c >= 48 && c <= 57 {
+      hold numtext = ""
+      while i < n && sx_index(ex, i) >= 48 && sx_index(ex, i) <= 57 {
+        numtext = concat(numtext, chr(sx_index(ex, i)))
+        i = i + 1
+      }
+      when i < n && sx_index(ex, i) == 46 {
+        bad = "a fractional number (this backend has no doubles)"
+      }
+      out = add_tok(out, concat("n", numtext))
+      done = 1
+    }
+    when done == 0 && ((c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95) {
+      hold nmtext = ""
+      while i < n && is_name_char(sx_index(ex, i)) == 1 {
+        nmtext = concat(nmtext, chr(sx_index(ex, i)))
+        i = i + 1
+      }
+      when i < n && sx_index(ex, i) == 40 {
+        bad = concat(concat("a call to '", nmtext), "' (this backend has no functions)")
+      }
+      when i < n && sx_index(ex, i) == 91 {
+        bad = concat(concat("an index into '", nmtext), "' (this backend has no lists)")
+      }
+      when i < n && sx_index(ex, i) == 46 {
+        bad = concat(concat("a field of '", nmtext), "' (this backend has no structs)")
+      }
+      out = add_tok(out, concat("v", nmtext))
+      done = 1
+    }
+    when done == 0 {
+      hold two = ""
+      when i + 1 < n {
+        two = concat(chr(c), chr(sx_index(ex, i + 1)))
+      }
+      when string_eq(two, "==") == 1 {
+        out = add_tok(out, "o==")
+        i = i + 2
+        done = 1
+      }
+      when done == 0 && string_eq(two, "!=") == 1 {
+        out = add_tok(out, "o!=")
+        i = i + 2
+        done = 1
+      }
+      when done == 0 && string_eq(two, "<=") == 1 {
+        out = add_tok(out, "o<=")
+        i = i + 2
+        done = 1
+      }
+      when done == 0 && string_eq(two, ">=") == 1 {
+        out = add_tok(out, "o>=")
+        i = i + 2
+        done = 1
+      }
+      when done == 0 && string_eq(two, "&&") == 1 {
+        bad = "and (&&): conditions take one comparison in this backend"
+      }
+      when done == 0 && string_eq(two, "||") == 1 {
+        bad = "or (||): conditions take one comparison in this backend"
+      }
+      when done == 0 && len(bad) == 0 && c == 43 {
+        out = add_tok(out, "o+")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 45 {
+        out = add_tok(out, "o-")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 42 {
+        out = add_tok(out, "o*")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 37 {
+        out = add_tok(out, "o%")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 60 {
+        out = add_tok(out, "o<")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 62 {
+        out = add_tok(out, "o>")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 40 {
+        out = add_tok(out, "(")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 41 {
+        out = add_tok(out, ")")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 47 {
+        bad = "division (/): a Sayanox number is a double and 7 / 2 is 3.5, which this integer backend cannot print"
+      }
+      when done == 0 && len(bad) == 0 {
+        bad = concat(concat("the character '", chr(c)), "' in an expression")
+      }
+    }
+  }
+  when len(bad) > 0 {
+    give concat("!", bad)
+  }
+  give out
+}
+
+make tok_count(toks: str) -> num {
+  hold n = len(toks)
+  hold i = 0
+  hold c = 0
+  while i < n {
+    when sx_index(toks, i) == 1 {
+      c = c + 1
+    }
+    i = i + 1
+  }
+  give c
+}
+
+make tok_at(toks: str, k: num) -> str {
+  hold n = len(toks)
+  hold i = 0
+  hold cur = 0
+  hold out = ""
+  while i < n {
+    hold ch = sx_index(toks, i)
+    when ch == 1 {
+      cur = cur + 1
+      when cur > k {
+        i = n
+      }
+    } otherwise {
+      when cur == k {
+        out = concat(out, chr(ch))
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make tok_num(t: str) -> num {
+  hold n = len(t)
+  hold i = 1
+  hold v = 0
+  while i < n {
+    v = v * 10 + (sx_index(t, i) - 48)
+    i = i + 1
+  }
+  give v
+}
+
+// ---- operator codes -------------------------------------------------------
+// 1 +   2 -   3 *   4 %   5 ==   6 !=   7 <   8 <=   9 >   10 >=   0 is '('
+
+make op_code(t: str) -> num {
+  hold body = sub(t, 1, len(t))
+  hold r = 0
+  when string_eq(body, "+") == 1 {
+    r = 1
+  }
+  when string_eq(body, "-") == 1 {
+    r = 2
+  }
+  when string_eq(body, "*") == 1 {
+    r = 3
+  }
+  when string_eq(body, "%") == 1 {
+    r = 4
+  }
+  when string_eq(body, "==") == 1 {
+    r = 5
+  }
+  when string_eq(body, "!=") == 1 {
+    r = 6
+  }
+  when string_eq(body, "<") == 1 {
+    r = 7
+  }
+  when string_eq(body, "<=") == 1 {
+    r = 8
+  }
+  when string_eq(body, ">") == 1 {
+    r = 9
+  }
+  when string_eq(body, ">=") == 1 {
+    r = 10
+  }
+  give r
+}
+
+make op_prec(op: num) -> num {
+  hold r = 1
+  when op == 1 || op == 2 {
+    r = 2
+  }
+  when op == 3 || op == 4 {
+    r = 3
+  }
+  give r
+}
+
+// ---- instruction emitters -------------------------------------------------
+// Only the operand-free ones live here; anything that needs an absolute data
+// address is emitted in run(), where the fixup lists are in scope.
+
+make emit_push_imm(xs: list, v: num) -> list {
+  xs = e1(xs, 184)
+  xs = e32(xs, v)
+  xs = e1(xs, 80)
+  give xs
+}
+
+make emit_op(xs: list, op: num) -> list {
+  xs = e1(xs, 89)
+  xs = e1(xs, 88)
+  when op == 1 {
+    xs = e1(xs, 1)
+    xs = e1(xs, 200)
+  }
+  when op == 2 {
+    xs = e1(xs, 41)
+    xs = e1(xs, 200)
+  }
+  when op == 3 {
+    xs = e1(xs, 15)
+    xs = e1(xs, 175)
+    xs = e1(xs, 193)
+  }
+  when op == 4 {
+    xs = e1(xs, 153)
+    xs = e1(xs, 247)
+    xs = e1(xs, 249)
+    xs = e1(xs, 137)
+    xs = e1(xs, 208)
+  }
+  when op >= 5 && op <= 10 {
+    hold cc = 148
+    when op == 6 {
+      cc = 149
+    }
+    when op == 7 {
+      cc = 156
+    }
+    when op == 8 {
+      cc = 158
+    }
+    when op == 9 {
+      cc = 159
+    }
+    when op == 10 {
+      cc = 157
+    }
+    xs = e1(xs, 57)
+    xs = e1(xs, 200)
+    xs = e1(xs, 15)
+    xs = e1(xs, cc)
+    xs = e1(xs, 192)
+    xs = e1(xs, 15)
+    xs = e1(xs, 182)
+    xs = e1(xs, 192)
+  }
+  xs = e1(xs, 80)
+  give xs
+}
+
+// ---- the ELF32 container --------------------------------------------------
+// One read+execute segment holding the headers and the code, one read+write
+// segment holding the data, each on its own page. 0x08048000 is the classic
+// i386 load address; nothing here is position independent.
+
+make elf32(code: list, data: list, entry_off: num) -> list {
+  hold base = 134512640
+  hold hdr = 116
+  hold cn = len(code)
+  hold dn = len(data)
+  hold img = []
+  img = push(img, 127)
+  img = push(img, 69)
+  img = push(img, 76)
+  img = push(img, 70)
+  img = push(img, 1)
+  img = push(img, 1)
+  img = push(img, 1)
+  img = push(img, 0)
+  img = put_zeros(img, 8)
+  img = put_u16(img, 2)
+  img = put_u16(img, 3)
+  img = put_u32(img, 1)
+  img = put_u32(img, base + hdr + entry_off)
+  img = put_u32(img, 52)
+  img = put_u32(img, 0)
+  img = put_u32(img, 0)
+  img = put_u16(img, 52)
+  img = put_u16(img, 32)
+  img = put_u16(img, 2)
+  img = put_u16(img, 40)
+  img = put_u16(img, 0)
+  img = put_u16(img, 0)
+  img = put_u32(img, 1)
+  img = put_u32(img, 0)
+  img = put_u32(img, base)
+  img = put_u32(img, base)
+  img = put_u32(img, hdr + cn)
+  img = put_u32(img, hdr + cn)
+  img = put_u32(img, 5)
+  img = put_u32(img, 4096)
+  img = put_u32(img, 1)
+  img = put_u32(img, 4096)
+  img = put_u32(img, base + 4096)
+  img = put_u32(img, base + 4096)
+  img = put_u32(img, dn)
+  img = put_u32(img, dn)
+  img = put_u32(img, 6)
+  img = put_u32(img, 4096)
+  hold i = 0
+  while i < cn {
+    img = push(img, code[i])
+    i = i + 1
+  }
+  img = put_zeros(img, 4096 - (hdr + cn))
+  hold j = 0
+  while j < dn {
+    img = push(img, data[j])
+    j = j + 1
+  }
+  give img
+}
+
+make run() -> num {
+  when arg_count() < 3 {
+    hold usage = fail(2, "usage: native32 <program.sa> <out>")
+  }
+  hold srcpath = arg(1)
+  hold outpath = arg(2)
+  hold src = read_file(srcpath)
+  when len(src) == 0 {
+    hold nosrc = fail(1, concat(concat("cannot read ", srcpath), " (or it is empty)"))
+  }
+
+  // A '{' inside a string literal that sits in a `when` CONDITION is read by
+  // gen2 as the block opener, so `} otherwise {` has to be built out of
+  // chr(123)/chr(125) rather than written as a literal. (A literal brace in a
+  // statement, or a bare "}", is fine; it is the condition scanner.)
+  hold tag_other = concat(chr(125), concat(" otherwise ", chr(123)))
+  hold tag_other2 = concat(chr(125), concat("otherwise", chr(123)))
+
+  hold code = []
+  hold data = []
+  hold fixsite = []
+  hold fixoff = []
+  hold names = ""
+
+  // data 0..31 is the decimal buffer; byte 31 is the newline the routine
+  // writes, so digits grow downwards from 30.
+  data = put_zeros(data, 32)
+  hold bufnl = 31
+  hold bufend = 32
+
+  // ---- the print-decimal routine, emitted once at code offset 0 ----
+  // eax = value. Prints it in decimal with a trailing newline, then returns.
+  code = e1(code, 49)
+  code = e1(code, 219)
+  code = e1(code, 133)
+  code = e1(code, 192)
+  code = e1(code, 15)
+  code = e1(code, 141)
+  hold jge_site = len(code)
+  code = e32(code, 0)
+  code = e1(code, 247)
+  code = e1(code, 216)
+  code = e1(code, 187)
+  code = e32(code, 1)
+  code = patch32(code, jge_site, len(code) - (jge_site + 4))
+  code = e1(code, 191)
+  fixsite = push(fixsite, len(code))
+  fixoff = push(fixoff, bufnl)
+  code = e32(code, 0)
+  hold loop_at = len(code)
+  code = e1(code, 49)
+  code = e1(code, 210)
+  code = e1(code, 185)
+  code = e32(code, 10)
+  code = e1(code, 247)
+  code = e1(code, 241)
+  code = e1(code, 131)
+  code = e1(code, 194)
+  code = e1(code, 48)
+  code = e1(code, 79)
+  code = e1(code, 136)
+  code = e1(code, 23)
+  code = e1(code, 133)
+  code = e1(code, 192)
+  code = e1(code, 15)
+  code = e1(code, 133)
+  hold jnz_site = len(code)
+  code = e32(code, 0)
+  code = patch32(code, jnz_site, loop_at - (jnz_site + 4))
+  code = e1(code, 133)
+  code = e1(code, 219)
+  code = e1(code, 15)
+  code = e1(code, 132)
+  hold jz_site = len(code)
+  code = e32(code, 0)
+  code = e1(code, 79)
+  code = e1(code, 198)
+  code = e1(code, 7)
+  code = e1(code, 45)
+  code = patch32(code, jz_site, len(code) - (jz_site + 4))
+  code = e1(code, 198)
+  code = e1(code, 5)
+  fixsite = push(fixsite, len(code))
+  fixoff = push(fixoff, bufnl)
+  code = e32(code, 0)
+  code = e1(code, 10)
+  code = e1(code, 137)
+  code = e1(code, 249)
+  code = e1(code, 186)
+  fixsite = push(fixsite, len(code))
+  fixoff = push(fixoff, bufend)
+  code = e32(code, 0)
+  code = e1(code, 41)
+  code = e1(code, 202)
+  code = e1(code, 187)
+  code = e32(code, 1)
+  code = e1(code, 184)
+  code = e32(code, 4)
+  code = e1(code, 205)
+  code = e1(code, 128)
+  code = e1(code, 195)
+  hold entry_off = len(code)
+
+  // ---- the statement walk ----
+  hold n = len(src)
+  hold pos = 0
+  hold lineno = 0
+  hold bkind = []
+  hold bsite = []
+  hold bstart = []
+  hold bdepth = 0
+  hold ops = []
+  hold stmts = 0
+
+  while pos <= n {
+    // one line, without its newline
+    hold raw = ""
+    while pos < n && sx_index(src, pos) != 10 {
+      raw = concat(raw, chr(sx_index(src, pos)))
+      pos = pos + 1
+    }
+    pos = pos + 1
+    lineno = lineno + 1
+    hold line = trim(raw)
+    hold act = 0
+    hold extext = ""
+    hold slot = 0
+    hold lit = ""
+    hold word = first_word(line)
+
+    // ---- classify ----
+    when len(line) == 0 || starts(line, "//") == 1 {
+      act = 0
+    } otherwise {
+      stmts = stmts + 1
+      when string_eq(line, "}") == 1 {
+        act = 5
+      }
+      when act == 0 && (string_eq(line, tag_other) == 1 || string_eq(line, tag_other2) == 1) {
+        act = 6
+      }
+      when act == 0 && starts(line, "hold ") == 1 {
+        hold rest = trim(sub(line, 5, len(line)))
+        hold nm = first_word(rest)
+        hold after = trim(sub(rest, len(nm), len(rest)))
+        when len(nm) == 0 || starts(after, "=") == 0 || starts(after, "==") == 1 {
+          hold badhold = fail(1, concat(concat("line ", numstr(lineno)), ": a `hold` needs a name and a single `=`"))
+        }
+        slot = slot_of(names, nm)
+        when slot < 0 {
+          // a slot is wherever the data segment currently ends: string
+          // literals are appended to the same buffer, so a fixed stride
+          // would overlap one as soon as a `show "..."` came first
+          slot = len(data)
+          data = put_zeros(data, 4)
+          names = concat(names, concat(concat(concat("|", nm), "="), numstr(slot)))
+          names = concat(names, "|")
+        }
+        extext = trim(sub(after, 1, len(after)))
+        act = 1
+      }
+      when act == 0 && starts(line, "show ") == 1 {
+        hold shown = trim(sub(line, 5, len(line)))
+        when len(shown) == 0 {
+          hold badshow = fail(1, concat(concat("line ", numstr(lineno)), ": `show` with nothing to show"))
+        }
+        when sx_index(shown, 0) == 34 {
+          when sx_index(shown, len(shown) - 1) != 34 || len(shown) < 2 {
+            hold badstr = fail(1, concat(concat("line ", numstr(lineno)), ": an unterminated string literal"))
+          }
+          lit = sub(shown, 1, len(shown) - 1)
+          act = 3
+        } otherwise {
+          extext = shown
+          act = 2
+        }
+      }
+      when act == 0 && starts(line, "when ") == 1 {
+        when sx_index(line, len(line) - 1) != 123 {
+          hold badwhen = fail(1, concat(concat("line ", numstr(lineno)), ": a `when` must end with `{` on the same line"))
+        }
+        extext = trim(sub(line, 5, len(line) - 1))
+        act = 7
+      }
+      when act == 0 && starts(line, "while ") == 1 {
+        when sx_index(line, len(line) - 1) != 123 {
+          hold badwhile = fail(1, concat(concat("line ", numstr(lineno)), ": a `while` must end with `{` on the same line"))
+        }
+        extext = trim(sub(line, 6, len(line) - 1))
+        act = 8
+      }
+      when act == 0 && len(word) > 0 {
+        hold tail = trim(sub(line, len(word), len(line)))
+        when starts(tail, "=") == 1 && starts(tail, "==") == 0 {
+          slot = slot_of(names, word)
+          when slot < 0 {
+            hold badname = fail(1, concat(concat(concat("line ", numstr(lineno)), ": assignment to an unknown name '"), concat(word, "' (declare it with `hold` first)")))
+          }
+          extext = trim(sub(tail, 1, len(tail)))
+          act = 1
+        }
+      }
+      when act == 0 {
+        hold badstmt = fail(1, concat(concat(concat("line ", numstr(lineno)), ": '"), concat(word, "' is not in the i386 subset (hold, show, when, otherwise, while only -- see the header of tools/native32.sa)")))
+      }
+    }
+
+    // ---- while: the condition is re-evaluated, so the back edge is here ----
+    hold loopstart = len(code)
+
+    // ---- compile the expression, if this statement has one ----
+    when len(extext) > 0 {
+      hold toks = tokenize(extext)
+      when len(toks) > 0 && sx_index(toks, 0) == 33 {
+        hold badex = fail(1, concat(concat(concat("line ", numstr(lineno)), ": the i386 subset does not accept "), sub(toks, 1, len(toks))))
+      }
+      hold tn = tok_count(toks)
+      when tn == 0 {
+        hold emptyex = fail(1, concat(concat("line ", numstr(lineno)), ": an empty expression"))
+      }
+      hold want = 1
+      hold depth = 0
+      hold k = 0
+      while k < tn {
+        hold t = tok_at(toks, k)
+        hold t0 = sx_index(t, 0)
+        when t0 == 110 {
+          when want == 0 {
+            hold twonum = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
+          }
+          hold v = tok_num(t)
+          when v > 2147483647 {
+            hold toobig = fail(1, concat(concat("line ", numstr(lineno)), ": an integer literal of 2^31 or more"))
+          }
+          code = emit_push_imm(code, v)
+          want = 0
+        }
+        when t0 == 118 {
+          when want == 0 {
+            hold twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
+          }
+          hold vslot = slot_of(names, sub(t, 1, len(t)))
+          when vslot < 0 {
+            hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(sub(t, 1, len(t)), "'")))
+          }
+          code = e1(code, 161)
+          fixsite = push(fixsite, len(code))
+          fixoff = push(fixoff, vslot)
+          code = e32(code, 0)
+          code = e1(code, 80)
+          want = 0
+        }
+        when t0 == 40 {
+          when want == 0 {
+            hold badparen = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' where an operator was expected"))
+          }
+          when depth < len(ops) {
+            ops[depth] = 0
+          } otherwise {
+            ops = push(ops, 0)
+          }
+          depth = depth + 1
+        }
+        when t0 == 41 {
+          when want == 1 {
+            hold badclose = fail(1, concat(concat("line ", numstr(lineno)), ": a ')' where a value was expected"))
+          }
+          hold open = 0
+          while depth > 0 && open == 0 {
+            depth = depth - 1
+            when ops[depth] == 0 {
+              open = 1
+            } otherwise {
+              code = emit_op(code, ops[depth])
+            }
+          }
+          when open == 0 {
+            hold unbal = fail(1, concat(concat("line ", numstr(lineno)), ": a ')' with no '('"))
+          }
+        }
+        when t0 == 111 {
+          hold oc = op_code(t)
+          when want == 1 {
+            when oc == 2 {
+              code = emit_push_imm(code, 0)
+            } otherwise {
+              hold badop = fail(1, concat(concat(concat("line ", numstr(lineno)), ": the operator '"), concat(sub(t, 1, len(t)), "' where a value was expected")))
+            }
+          }
+          hold pr = op_prec(oc)
+          hold more = 1
+          while more == 1 {
+            when depth == 0 {
+              more = 0
+            } otherwise {
+              when ops[depth - 1] == 0 {
+                more = 0
+              } otherwise {
+                when op_prec(ops[depth - 1]) >= pr {
+                  depth = depth - 1
+                  code = emit_op(code, ops[depth])
+                } otherwise {
+                  more = 0
+                }
+              }
+            }
+          }
+          when depth < len(ops) {
+            ops[depth] = oc
+          } otherwise {
+            ops = push(ops, oc)
+          }
+          depth = depth + 1
+          want = 1
+        }
+        k = k + 1
+      }
+      when want == 1 {
+        hold trailing = fail(1, concat(concat("line ", numstr(lineno)), ": an expression that ends with an operator"))
+      }
+      while depth > 0 {
+        depth = depth - 1
+        when ops[depth] == 0 {
+          hold openleft = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' with no ')'"))
+        }
+        code = emit_op(code, ops[depth])
+      }
+      code = e1(code, 88)
+    }
+
+    // ---- the action ----
+    when act == 1 {
+      code = e1(code, 163)
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, slot)
+      code = e32(code, 0)
+    }
+    when act == 2 {
+      code = e1(code, 232)
+      hold callsite = len(code)
+      code = e32(code, 0)
+      code = patch32(code, callsite, 0 - (callsite + 4))
+    }
+    when act == 3 {
+      hold litoff = len(data)
+      hold li = 0
+      hold ln = len(lit)
+      hold lbytes = 0
+      while li < ln {
+        hold lc = sx_index(lit, li)
+        when lc == 92 && li + 1 < ln {
+          hold esc = sx_index(lit, li + 1)
+          hold ec2 = esc
+          when esc == 110 {
+            ec2 = 10
+          }
+          when esc == 116 {
+            ec2 = 9
+          }
+          when esc == 48 {
+            ec2 = 0
+          }
+          data = push(data, ec2)
+          lbytes = lbytes + 1
+          li = li + 2
+        } otherwise {
+          data = push(data, lc)
+          lbytes = lbytes + 1
+          li = li + 1
+        }
+      }
+      data = push(data, 10)
+      lbytes = lbytes + 1
+      code = e1(code, 184)
+      code = e32(code, 4)
+      code = e1(code, 187)
+      code = e32(code, 1)
+      code = e1(code, 185)
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, litoff)
+      code = e32(code, 0)
+      code = e1(code, 186)
+      code = e32(code, lbytes)
+      code = e1(code, 205)
+      code = e1(code, 128)
+    }
+    when act == 7 || act == 8 {
+      code = e1(code, 133)
+      code = e1(code, 192)
+      code = e1(code, 15)
+      code = e1(code, 132)
+      hold site = len(code)
+      code = e32(code, 0)
+      when bdepth < len(bkind) {
+        bkind[bdepth] = act
+        bsite[bdepth] = site
+        bstart[bdepth] = loopstart
+      } otherwise {
+        bkind = push(bkind, act)
+        bsite = push(bsite, site)
+        bstart = push(bstart, loopstart)
+      }
+      bdepth = bdepth + 1
+    }
+    when act == 6 {
+      when bdepth == 0 || bkind[bdepth - 1] != 7 {
+        hold badother = fail(1, concat(concat("line ", numstr(lineno)), ": `} otherwise {` without an open `when`"))
+      }
+      code = e1(code, 233)
+      hold jsite = len(code)
+      code = e32(code, 0)
+      code = patch32(code, bsite[bdepth - 1], len(code) - (bsite[bdepth - 1] + 4))
+      bkind[bdepth - 1] = 9
+      bsite[bdepth - 1] = jsite
+    }
+    when act == 5 {
+      when bdepth == 0 {
+        hold badclose2 = fail(1, concat(concat("line ", numstr(lineno)), ": a `}` with no open block"))
+      }
+      bdepth = bdepth - 1
+      when bkind[bdepth] == 8 {
+        code = e1(code, 233)
+        hold backsite = len(code)
+        code = e32(code, 0)
+        code = patch32(code, backsite, bstart[bdepth] - (backsite + 4))
+      }
+      code = patch32(code, bsite[bdepth], len(code) - (bsite[bdepth] + 4))
+    }
+  }
+
+  when bdepth > 0 {
+    hold unclosed = fail(1, "a block is still open at the end of the program")
+  }
+  when stmts == 0 {
+    hold nostmt = fail(1, "the program has no statements this backend can emit")
+  }
+
+  // exit(0)
+  code = e1(code, 184)
+  code = e32(code, 1)
+  code = e1(code, 49)
+  code = e1(code, 219)
+  code = e1(code, 205)
+  code = e1(code, 128)
+
+  hold cn = len(code)
+  when cn + 116 > 4096 {
+    hold toolarge = fail(1, concat(concat("the emitted code is ", numstr(cn)), " bytes; the v1 i386 image keeps code in the first page (3980 bytes)"))
+  }
+
+  // absolute data addresses, now that the code length is known
+  hold dva = 134512640 + 4096
+  hold f = 0
+  hold nf = len(fixsite)
+  while f < nf {
+    code = patch32(code, fixsite[f], dva + fixoff[f])
+    f = f + 1
+  }
+
+  hold img = elf32(code, data, entry_off)
+  hold wrote = write_bytes(outpath, img)
+  when wrote != 1 {
+    hold nowrite = fail(1, concat("cannot write ", outpath))
+  }
+  give 0
+}
+
+hold rc = run()

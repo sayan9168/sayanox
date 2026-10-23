@@ -1,0 +1,51 @@
+// native32: blocks and loops. A sum, a factorial, a gcd and a prime count,
+// so the gate exercises back edges, forward branches and nested blocks.
+hold i = 0
+hold sum = 0
+while i < 10 {
+  sum = sum + i
+  i = i + 1
+}
+show sum
+when sum > 40 {
+  show 1
+} otherwise {
+  show 0
+}
+when sum < 40 {
+  show 1
+} otherwise {
+  show 0
+}
+hold n = 7
+hold f = 1
+while n > 1 {
+  f = f * n
+  n = n - 1
+}
+show f
+hold x = 1071
+hold y = 462
+while y != 0 {
+  hold t = y
+  y = x % y
+  x = t
+}
+show x
+hold k = 2
+hold primes = 0
+while k < 30 {
+  hold d = 2
+  hold isp = 1
+  while d * d <= k {
+    when k % d == 0 {
+      isp = 0
+    }
+    d = d + 1
+  }
+  when isp == 1 {
+    primes = primes + 1
+  }
+  k = k + 1
+}
+show primes

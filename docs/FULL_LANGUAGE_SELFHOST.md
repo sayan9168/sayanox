@@ -418,3 +418,23 @@ workaround everywhere is `hold n = <expr>` and then `values[n]`.
 A source-level builtin call as a *field value* (`Label { text: concat(a, b) }`)
 is still refused on gen2: the checked parser knows the C runtime names, not
 the source aliases, for everything except `len` and `index`. Bind it first.
+
+### A brace inside a string literal in a condition (2026-10-23)
+
+Found while writing `tools/native32.sa`:
+
+```
+when string_eq(line, "} otherwise {") == 1 {     // gen2: unexpected '"'
+```
+
+gen2 scans a `when`/`while` condition for the `{` that opens the block
+without skipping string literals, so the `{` *inside* the literal ends the
+condition and the rest of the line is read as a new statement. A brace in a
+literal in **statement** position is fine (`hold tag = "} otherwise {"`), and
+so is a bare `"}"` in a condition — it is only an opening brace inside a
+literal inside a condition. seed-min accepts both.
+
+The workaround in the tree is `chr(123)` / `chr(125)`, with a comment at the
+site. This is a gen2 divergence, not a language rule; it is recorded here and
+in [NATIVE32.md](NATIVE32.md) rather than fixed, because the condition
+scanner is shared with the act-8 rewrite and the blast radius is wide.

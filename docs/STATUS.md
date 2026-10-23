@@ -1,12 +1,25 @@
 # Status
 
-Last updated: **2026-10-22** (expression-valued struct fields and checked
-index calls; nested generic structs; a collector in the bootstrap seed;
-stdlib cryptography and nested JSON, package digests and signatures, LSP
-semantic resolution)
+Last updated: **2026-10-23** (an i386 machine-code backend written in
+Sayanox; expression-valued struct fields and checked index calls; nested
+generic structs; a collector in the bootstrap seed; stdlib cryptography and
+nested JSON, package digests and signatures, LSP semantic resolution)
 
-Six of the open roadmap rows moved, each with a gate that fails without the
+Seven of the open roadmap rows moved, each with a gate that fails without the
 new code:
+
+* **A second machine-code target (row 9).** `tools/native32.sa` compiles a
+  Sayanox program to a 32-bit x86 (i386) Linux ELF: its own front end, its
+  own encoder, its own container writer, written in Sayanox and compiled by
+  gen2. `make test-native32` runs three fixtures through **four backends** —
+  seed-min (C), gen2 (C), native_aot (x86-64) and native32 (i386) — and they
+  print the same bytes; the image is pinned as ELFCLASS32/EM_386 against
+  native_aot's ELFCLASS64/EM_X86_64, emission is deterministic, and nine
+  out-of-subset programs are refused with a diagnostic and exit 1. **It is a
+  documented integer subset, not the native subset**: no heap, strings as
+  values, lists, structs, functions, collector or file IO, and `/` is refused
+  because a Sayanox number is a double. `native_aot` remains the backend, and
+  there is still no aarch64 target ([NATIVE32.md](NATIVE32.md)).
 
 * **The last two readiness probes (row 1 — the claim itself stays open).**
   A struct literal field may now be a whole checked expression
@@ -86,8 +99,10 @@ new code:
 * **Logs:** `docs/gate-logs/2026-10-22-crypto-json-signed-packages-lsp/`,
   `docs/gate-logs/2026-10-22-seed-collector/` and
   `docs/gate-logs/2026-10-22-nested-generics/`.
-* **Still open:** rows 1, 9 and 10 (full-language self-host, a second ISA,
-  namespacing). Row 1 moved but is **not** closed: its four readiness probes
+* **Still open:** rows 1 and 10 (full-language self-host, namespacing).
+  Row 9 moved: an executable second ISA exists for a documented integer
+  subset (`make test-native32`), while the *native subset* is still x86-64
+  only and there is no aarch64 emitter. Row 1 moved but is **not** closed: its four readiness probes
   pass on gen2 and gen3, while the claim still needs a reviewed acceptance
   specification, seed/native interpolation and struct function signatures.
   Row 5 is closed for the forms it named; a
@@ -362,7 +377,7 @@ is not presented as new work in this PR.
 | 6. Stdlib | Ten modules: the portable helpers, flat JSON text utilities, **nested JSON reading (`json_deep.sa`) and SHA-256/HMAC-SHA256 (`crypto.sa`)**, all byte-identical with gen2 and native. | Same tested modules. | Same tested portable subset, including the two new modules. | Nested JSON is **read-only**: no nested writer, no mutation, no pretty-printer; first key wins on duplicates. `crypto.sa` is hashing only — no public-key signature, cipher, KDF beyond HMAC, or constant-time promise, and it is slow by construction (no bitwise operators in the dialect: 32-bit words are carried in doubles). HTTP/crawler integration remains optional and outside bootstrap (`test-network`). `test-stdlib-crypto`, `test-stdlib-json-deep`; [STDLIB.md](STDLIB.md#nested-json-and-cryptography-2026-10-22). |
 | 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/checksum/name validation plus publish, install-local and the local-registry sync/fetch (staging, checksums, rollback); shell keeps only the http(s) transport and the online opt-in. **`pkg.meta` now carries `sha256=` and `origin=`, and `sxpkg sign`/`authenticate` add and check an HMAC-SHA256 `sig=`/`signer=`** (`stdlib/crypto.sa`, no new dependency). Cached install needs no INDEX; local/bare-relative/file copies need no curl/wget. | No native compilation claim for sxpkg. | Online remains opt-in. The signature is **symmetric**: `authenticate` needs the same secret that signed, so there is no public-key signature, no signed index, no key distribution and no first-download trust. `origin=` is a provenance note, not proof. `sum=` stays (non-cryptographic) so older registries keep verifying; `sha256=` is the acceptance test, and `test-sxpkg-crypto` proves it by refusing a real `sum=` collision. No concurrent/crash-proof transaction claim. `test-sxpkg-crypto`, `test-sxpkg-transfer-hardening`, `test-sxpkg-online-local`, `test-sxpkg-online-optin`; [REGISTRY.md](REGISTRY.md#commands). |
 | 8. LSP workspace scan | Not a seed-compiled tool claim. | `.sa` protocol, scanning **and folder walk** (no C bridge since 2026-10-17). workspace/symbol and references search a bounded initialized local folder with four open-buffer overlays; query-time refresh. **Definition/references/rename resolve the binder (parameter, body `hold`, or top-level declaration) instead of matching spelling, skip strings and comments, rename across indexed files, and `workspace/didChangeWatchedFiles` is registered and answered.** | Not a native-AOT compiler claim; host C links the tool. | Scope resolution is **not type resolution**: no symbol table, no following `use` to another file's declaration, no shadowing inside nested blocks, struct fields and variables share a namespace. One root, 128 disk files/256 KiB each, depth/entry caps; no symlink traversal, no truncation notices, no workspace diagnostic pass (a watched-file notification answers at most 32 changes). signatureHelp same-document/same-line; codeAction formatting only. `test-lsp-semantic`, `test-lsp-workspace`, `test-lsp`, `test-lsp-robust`, `test-lsp-unicode`. [LSP scope/logs](LSP.md#semantic-resolution-folder-rename-and-file-watching-2026-10-22). **Still not IDE-complete.** |
-| 9. Second target / IR | Host C path unchanged. | Host C path unchanged. | x86-64 Linux ELF only. C99 listing adds optional strict record/nondecreasing-offset audit and source-offset correlation; native gate compares both modes deterministically. | **No executable second ISA.** Instruction-count preservation is not semantic losslessness: register widths collapse, x86 ABI/layout/fixups remain. No IR executor, aarch64 runtime/collector or cross-execution smoke test. `test-emit-to-ir`, `test-native-ir-portable`, `test-native-emit-split`; [NATIVE_IR.md](NATIVE_IR.md#strict-log-audit-and-source-offset-correlation-2026-10-16). |
+| 9. Second target / IR | Host C path unchanged. | Host C path unchanged. | x86-64 Linux ELF only. C99 listing adds optional strict record/nondecreasing-offset audit and source-offset correlation; native gate compares both modes deterministically. | **An executable second ISA exists for a documented integer subset** (2026-10-23): `tools/native32.sa`, written in Sayanox, emits i386 Linux ELF; `test-native32` proves four backends print identical bytes and pins ELFCLASS32/EM_386, determinism and nine refusals ([NATIVE32.md](NATIVE32.md)). Still missing: the native subset on a second ISA (no heap/strings/lists/structs/functions/collector there), any aarch64 or riscv64 emitter, and an IR executor — instruction-count preservation is still not semantic losslessness. `test-native32`, `test-emit-to-ir`, `test-native-ir-portable`, `test-native-emit-split`; [NATIVE_IR.md](NATIVE_IR.md#strict-log-audit-and-source-offset-correlation-2026-10-16). |
 | 10. Namespacing / aliases | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | **Not planned for the bootstrap dialect. Documentation-only clarification.** Shared declaration tables, explicit public prefixes; no module identity/import scopes/qualified resolution or path-renaming aliases. Incidental ignored suffixes do not establish alias support; no new uniform diagnostic claim. Existing `test-use` and stdlib splice gates retained. [MODULES.md](MODULES.md). |
 
 ### Done / missing / refused
@@ -376,7 +391,8 @@ is not presented as new work in this PR.
   rename and file watching.
 * **Missing/outside the tested subset:** full-language self-host,
   *type*-level and incremental workspace indexing, public-key package
-  signatures, and an executable second native ISA.
+  signatures, and the *native subset* on a second ISA (the i386 backend added
+  on 2026-10-23 covers a documented integer subset only).
 * **Refused by design:** a *concrete* struct name as a generic type argument,
   an unknown name, an escaped type parameter, a wrong type-argument count, and
   the tested unsupported full-language forms. These gates require errors
@@ -473,8 +489,12 @@ bootstrap kept green (the four gate logs above are this pass's own runs):
 9. **Native second target** — `tools/emit_to_ir.sa` translates the
    `SX_EMIT_LOG` instruction list into a portable IR *listing*
    (lossless, deterministic, x86 register names abstracted;
-   `test-native-ir-portable`). Nothing assembles or executes it: **no
-   second ISA is claimed**, and `native-test` remains x86-64-Linux-only
+   `test-native-ir-portable`). Nothing assembles or executes that listing.
+   *(Later, 2026-10-23: a second ISA **is** now executable, by a different
+   route — `tools/native32.sa` emits i386 ELF directly for a documented
+   integer subset, `make test-native32`,
+   [`NATIVE32.md`](NATIVE32.md). `native_aot` and `native-test` are still
+   x86-64 only for the native subset.)*
    ([`NATIVE_IR.md`](NATIVE_IR.md)).
 
 One regression was caught by the gates during this pass and fixed before
@@ -1060,7 +1080,8 @@ still use shell/C infrastructure. See
 | `make test-generic-structs-nested` | a generic type argument may be `list` or another instantiation (2026-10-22): `selfhost/generic_struct_nested.sa` prints the same eleven lines on seed-min, gen2 and native, and both emitted C files carry all seven mangled typedefs — `Box__n`, `Box__Box__n`, `Box__Box__Box__n`, `Box__l` (`sx_list *`), `Box__s`, `Pair__Box__n_s` and the unchanged `Pair__ns` — with `Box__n` declared before `Box__Box__n`, which is the ordering property the implementation relies on instead of a sort. The list field holds the pointer, so a `push` through the original name is visible through `b.v` |
 | `make test-sxpkg-online-optin` | the network is opt-in: `sync`, an `install` that has to fetch, and a remote `fetch` refuse without `SAYANOX_ONLINE=1` or `sxpkg --online <cmd>`, naming the opt-in and the offline commands and leaving no `.part` file; with the opt-in the same commands reach the transfer (a `.invalid` host, so they fail in the resolver and `sync` falls back to the offline seed); an all-local `install` and a `file://` fetch never ask |
 | `make test-native-emit-split` (part of `native-test`) | the x86-64 backend is a region, not a seasoning: the 1332 lines between `EMIT-SEAM-BEGIN` and `EMIT-SEAM-END` contain no `e1(`/`e32(`/`e64(`, no `memcpy` into `code` and no direct read of the code cursor `cn` (labels come from `here()`), the seam primitives are all defined in the encoder region above `phase 1`, and an emitted program still runs. The refactor itself was checked byte for byte against the pre-seam binary on six fixtures |
-| `make test-native-ir-portable` (part of `native-test`) | the `SX_EMIT_LOG` instruction list translates to the portable IR listing (`tools/emit_to_ir.sa`, [`NATIVE_IR.md`](NATIVE_IR.md)): deterministic (two runs cmp clean), lossless (one IR instruction per logged instruction), no x86 register names on IR instruction lines, abstract machine model preserved (`FADD`, `FCMP`, `I2F`, named `CALL`s, phase markers). An analysis format only — nothing assembles or executes it, and no second ISA is claimed |
+| `make test-native32` (part of `native-test`) | the second machine-code target: `tools/native32.sa`, written in Sayanox and compiled by gen2, emits a 32-bit x86 (i386) Linux ELF. Three fixtures (`expr`, `flow`, `text`) print identical bytes under **four** backends — seed-min, gen2, native_aot (x86-64) and native32 (i386); the image is ELFCLASS32/ET_EXEC/EM_386 with two program headers, a pinned entry point `0x080480ca` and three pinned sizes, while native_aot on the same source is ELFCLASS64/EM_X86_64; emission is byte-deterministic; nine out-of-subset programs (`/`, a fraction, a string value, a function, a list, an unknown name, `&&`, 2^31, an unclosed block) are refused with a diagnostic and exit 1, and the legal ones among them still run on seed-min. A documented integer subset, not the native subset ([`NATIVE32.md`](NATIVE32.md)) |
+| `make test-native-ir-portable` (part of `native-test`) | the `SX_EMIT_LOG` instruction list translates to the portable IR listing (`tools/emit_to_ir.sa`, [`NATIVE_IR.md`](NATIVE_IR.md)): deterministic (two runs cmp clean), lossless (one IR instruction per logged instruction), no x86 register names on IR instruction lines, abstract machine model preserved (`FADD`, `FCMP`, `I2F`, named `CALL`s, phase markers). An analysis format only — nothing assembles or executes it. The executable second ISA is a separate program, `tools/native32.sa` (`make test-native32`), which does not read this listing |
 | `make test-native-ir-log` (part of `native-test`) | the emit tree's instruction list is inspectable and pinned: with `SX_EMIT_LOG=<path>` every encoder primitive records the code offset, the mnemonic and the operands in assembly order, plus a `;` line per label slot, per fixup, per emitted `make` and per phase — 1122 instructions, 2 slots and 41 rel32 fixups for `selfhost/native_ir_log_test.sa`, with every call target named (`call make twice`, `call builtin gccheck`). The recorder is inert (the ELF built with it `cmp`s clean against the one built without it, and against the pre-recorder compiler on six fixtures), the list is deterministic, every line is an instruction line or a comment line, the offsets never go backwards, every rel32 fixup lands on a jump, no call target or operand falls back to a placeholder name, the six phases come in order, the fixture's top-level mnemonic vocabulary is pinned exactly, and the language emitter provably never touches the recorder state |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make test-native-mem` (part of `native-test`) | native memory with a real collector: a string doubled to 262144 bytes is served whole; 100000 `push`es keep every value; a 200000-iteration churn loop (~8 MB allocated, nothing retained) **finishes inside a 4 MiB `ulimit -v` cap** running 200+ collections; `gc_runs()` > 0, `gc()` reclaims bytes and `gc_live()` reports a positive live count; strings, list elements and struct fields survive 30000 allocating iterations; a program that genuinely retains 8 MiB still exits non-zero with stdout written before the failure kept and `out of memory` on stderr. See [`GC.md`](GC.md). |
