@@ -1168,6 +1168,56 @@ static void collect_defs(const char*src){
   }
 }
 
+/* ===== the phase-1 dump (SX_DEFS_DUMP=<dir>) ==============================
+ * Phase 1 is `use` expansion plus collect_defs(): the two passes that turn a
+ * path on the command line into the struct, generic-struct, function and
+ * global tables every later pass reads.  SX_DEFS_DUMP=<dir> writes exactly
+ * those two results -- expand.sa (the expanded source, byte for byte) and
+ * defs.txt (the four tables, in declaration order) -- and changes nothing
+ * else, the same convention as SX_EMIT_LOG, SX_ENCODE_LOG and SX_LINK_DUMP.
+ * tools/sxdefs.sa reproduces both from the same input file, which is what
+ * `make test-native-sxdefs` compares.  The dump happens between collect_defs
+ * and infer(), because infer() fills the field kinds, the global kinds and
+ * the generic-struct instantiations that phase 1 deliberately leaves unset:
+ * every `kind=-1` below is part of the contract.
+ */
+static void defs_dump(const char*dir,const char*src){
+  char path[2048]; FILE*f;
+  snprintf(path,sizeof path,"%s/defs.txt",dir);
+  f=fopen(path,"w");
+  if(!f){ fprintf(stderr,"native_aot: cannot open SX_DEFS_DUMP file %s\n",path); exit(1); }
+  fprintf(f,"; native_aot phase 1\n");
+  fprintf(f,"structs %d\n",nS);
+  for(int i=0;i<nS;i++){
+    fprintf(f,"struct %d %s nf=%d\n",i,S[i].name,S[i].nf);
+    for(int j=0;j<S[i].nf;j++)
+      fprintf(f,"  field %d %s kind=%d sid=%d\n",j,S[i].f[j].name,S[i].f[j].kind,S[i].f[j].sid);
+  }
+  fprintf(f,"gstructs %d\n",nGS);
+  for(int i=0;i<nGS;i++){
+    fprintf(f,"gstruct %d %s np=%d nf=%d\n",i,GS[i].name,GS[i].np,GS[i].nf);
+    for(int j=0;j<GS[i].np;j++) fprintf(f,"  tparam %d %s\n",j,GS[i].p[j]);
+    for(int j=0;j<GS[i].nf;j++) fprintf(f,"  gfield %d %s\n",j,GS[i].f[j]);
+  }
+  fprintf(f,"fns %d\n",nF);
+  for(int i=0;i<nF;i++){
+    fprintf(f,"fn %d %s nparam=%d gen=%d ntp=%d rk=%d rtp=%d\n",
+            i,F[i].name,F[i].nparam,F[i].gen,F[i].ntp,F[i].rk,F[i].rtp);
+    for(int j=0;j<F[i].nparam;j++)
+      fprintf(f,"  param %d %s k=%d tp=%d\n",j,F[i].params[j],F[i].pk[j],F[i].ptp[j]);
+    for(int j=0;j<F[i].ntp;j++) fprintf(f,"  ftparam %d %s\n",j,F[i].tps[j]);
+  }
+  fprintf(f,"globals %d\n",nG);
+  for(int i=0;i<nG;i++)
+    fprintf(f,"glob %d %s kind=%d sid=%d\n",i,G[i].name,G[i].kind,G[i].sid);
+  fclose(f);
+  snprintf(path,sizeof path,"%s/expand.sa",dir);
+  f=fopen(path,"w");
+  if(!f){ fprintf(stderr,"native_aot: cannot open SX_DEFS_DUMP file %s\n",path); exit(1); }
+  fputs(src,f);
+  fclose(f);
+}
+
 /* ================= phase 2: kind inference (no codegen) =================
  * pk_* walks the same grammar as the emit phase and returns a kind.
  * K_UNK propagates until the fixpoint; PKX_K/PKX_S carry the kind and
@@ -4442,6 +4492,10 @@ int main(int argc,char**argv){
   free(raw);
 
   collect_defs(src);
+  {
+    const char* defsenv=getenv("SX_DEFS_DUMP");
+    if(defsenv&&*defsenv) defs_dump(defsenv,src);
+  }
   infer(src);
 
   dn=DNA_START;         /* 0..143 = runtime + collector state, 144+ = root table */

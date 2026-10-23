@@ -1,0 +1,1118 @@
+// tools/sxdefs.sa -- PHASE 1 OF THE NATIVE BACKEND, IN SAYANOX.
+//
+// Phase D of docs/ALL_SAYANOX_PHASE.md ports selfhost/native_aot.c to
+// Sayanox one seam at a time. The ELF image writer and rel32 linker left C
+// on 2026-10-20 (tools/sxlink.sa) and the x86-64 instruction encoder left on
+// 2026-10-21 (tools/sxencode.sa). Both of those are driven by a recorded
+// stream: they replay what the C front end decided. This file is the first
+// piece that reads the PROGRAM TEXT -- the front end itself, starting at the
+// front.
+//
+// What it is. `native_aot in.sa out` begins with two passes before any kind
+// inference and any code byte:
+//
+//   1. expand_use(): splice every `use "path"` line, depth at most 8, each
+//      path tried against the including file's directory first and then as
+//      written;
+//   2. collect_defs(): walk the expanded text at the top level and build the
+//      four tables the later passes read -- concrete structs with their field
+//      names, generic struct TEMPLATES (`struct Box<T> { v }`, which take no
+//      S[] slot), functions with their parameter names, typed-signature
+//      kinds, type parameters and return kind, and the globals a top-level
+//      `hold` declares, with the kind and struct identity of an annotation.
+//
+// This file does both, in Sayanox, from the same input path, and must agree
+// with C byte for byte. The seam it is checked against is SX_DEFS_DUMP=<dir>,
+// which makes native_aot write expand.sa (the expanded source) and defs.txt
+// (the four tables) between collect_defs() and infer(), and changes nothing
+// else. `make test-native-sxdefs` runs both over a fixture set and `cmp`s the
+// two outputs, and it also compares the DIAGNOSTICS: a program phase 1
+// refuses must be refused here with the same message text.
+//
+// Why the dump sits before infer(). Phase 1 deliberately leaves things unset:
+// every field kind is -1, an unannotated global's kind is -1, and a generic
+// struct has no instantiation yet. infer() is what fills them, so dumping
+// after it would make the comparison test two passes at once and hide which
+// one disagreed. The `kind=-1` lines in the dump are part of the contract.
+//
+// What this file does NOT claim.
+//
+//   * It is phase 1 only. Kind inference (pk_*), the emit tree, the runtime
+//     stubs and the collector are still C, and the row in
+//     docs/ALL_SAYANOX_PHASE.md stays with its line count.
+//   * It is not wired in as the producer. native_aot still runs its own
+//     phase 1 to compile anything; this program is proved equal to it on
+//     fixtures, exactly as sxlink and sxencode are.
+//   * It reads the file with read_file(), which stops at a NUL byte. A
+//     source file with an embedded NUL is not in the subset either way, and
+//     the gate does not claim one.
+//   * A `use` path that names a directory is reported here as "cannot open
+//     use file" while C's access(R_OK) lets it through to a read error. That
+//     is the one wording difference, and it is written down rather than
+//     hidden.
+//
+// Usage:  ./tools/sxdefs <program.sa> defs   <out>
+//         ./tools/sxdefs <program.sa> expand <out>
+
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxdefs: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+// ---- bytes and characters -------------------------------------------------
+
+// the byte at i, or 0 past the end: C reads the NUL terminator in exactly
+// the places this program reads a 0
+make at(s: str, n: num, i: num) -> num {
+  when i < 0 || i >= n {
+    give 0
+  }
+  give sx_index(s, i)
+}
+
+make is_space(c: num) -> num {
+  hold r = 0
+  when c == 32 || c == 9 || c == 10 || c == 11 || c == 12 || c == 13 {
+    r = 1
+  }
+  give r
+}
+
+make id0c(c: num) -> num {
+  hold r = 0
+  when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 {
+    r = 1
+  }
+  give r
+}
+
+make idcc(c: num) -> num {
+  hold r = 0
+  when id0c(c) == 1 || (c >= 48 && c <= 57) {
+    r = 1
+  }
+  give r
+}
+
+make sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make strnum(s: str) -> num {
+  hold n = len(s)
+  hold i = 0
+  hold neg = 0
+  hold v = 0
+  when n > 0 && sx_index(s, 0) == 45 {
+    neg = 1
+    i = 1
+  }
+  while i < n {
+    v = v * 10 + (sx_index(s, i) - 48)
+    i = i + 1
+  }
+  when neg == 1 {
+    v = 0 - v
+  }
+  give v
+}
+
+// `index` in this dialect is "the byte at position n", not a substring
+// search, so the search is written out.
+make find_sub(hay: str, needle: str) -> num {
+  hold hn = len(hay)
+  hold nn = len(needle)
+  when nn == 0 {
+    give 0
+  }
+  hold i = 0
+  hold found = 0 - 1
+  while i + nn <= hn && found < 0 {
+    hold same = 1
+    hold j = 0
+    while j < nn && same == 1 {
+      when sx_index(hay, i + j) != sx_index(needle, j) {
+        same = 0
+      }
+      j = j + 1
+    }
+    when same == 1 {
+      found = i
+    }
+    i = i + 1
+  }
+  give found
+}
+
+// ---- "|key=value|" tables -------------------------------------------------
+
+make tbl_has(tbl: str, k: str) -> num {
+  hold key = concat(concat("|", k), "=")
+  hold at2 = find_sub(tbl, key)
+  hold r = 0
+  when at2 >= 0 {
+    r = 1
+  }
+  give r
+}
+
+make tbl_get(tbl: str, k: str) -> str {
+  hold key = concat(concat("|", k), "=")
+  hold at2 = find_sub(tbl, key)
+  when at2 < 0 {
+    give ""
+  }
+  hold i = at2 + len(key)
+  hold n = len(tbl)
+  hold out = ""
+  while i < n && sx_index(tbl, i) != 124 {
+    out = concat(out, chr(sx_index(tbl, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// a table is "|k=v|k=v|": it starts as "|" and every entry adds "k=v|"
+make tbl_put(tbl: str, k: str, v: str) -> str {
+  give concat(tbl, concat(concat(k, "="), concat(v, "|")))
+}
+
+make tbl_set(tbl: str, k: str, v: str) -> str {
+  hold key = concat(concat("|", k), "=")
+  hold at2 = find_sub(tbl, key)
+  when at2 < 0 {
+    give tbl_put(tbl, k, v)
+  }
+  hold n = len(tbl)
+  hold i = at2 + len(key)
+  while i < n && sx_index(tbl, i) != 124 {
+    i = i + 1
+  }
+  hold out = sub(tbl, 0, at2 + 1)
+  out = concat(out, k)
+  out = concat(out, "=")
+  out = concat(out, v)
+  out = concat(out, sub(tbl, i, n))
+  give out
+}
+
+// ---- the cursor: p is a one-cell list, p[0] is the position ---------------
+
+make sw(s: str, n: num, p: list) -> num {
+  while is_space(at(s, n, p[0])) == 1 {
+    p[0] = p[0] + 1
+  }
+  give 0
+}
+
+make eol(s: str, n: num, p: list) -> num {
+  while at(s, n, p[0]) != 0 && at(s, n, p[0]) != 10 {
+    p[0] = p[0] + 1
+  }
+  give 0
+}
+
+// C's mkw(): the keyword, and the byte after it must not continue an
+// identifier. Only advances on a match.
+make mkw(s: str, n: num, p: list, k: str) -> num {
+  hold kn = len(k)
+  hold i = 0
+  hold same = 1
+  while i < kn && same == 1 {
+    when at(s, n, p[0] + i) != sx_index(k, i) {
+      same = 0
+    }
+    i = i + 1
+  }
+  hold r = 0
+  when same == 1 && idcc(at(s, n, p[0] + kn)) == 0 {
+    p[0] = p[0] + kn
+    r = 1
+  }
+  give r
+}
+
+// C's pid() truncates at 63 characters AND stops consuming there, so the
+// tail of an over-long name is left for the caller to trip over. Same here.
+make pid_raw(s: str, n: num, p: list) -> str {
+  when id0c(at(s, n, p[0])) == 0 {
+    give ""
+  }
+  hold out = ""
+  hold i = 0
+  while idcc(at(s, n, p[0])) == 1 && i < 63 {
+    out = concat(out, chr(at(s, n, p[0])))
+    p[0] = p[0] + 1
+    i = i + 1
+  }
+  give out
+}
+
+make pid(s: str, n: num, p: list) -> str {
+  hold z = sw(s, n, p)
+  give pid_raw(s, n, p)
+}
+
+// ---- use expansion --------------------------------------------------------
+// The string value of C's expand_use(): every line is copied verbatim, a
+// `use "path"` line is replaced by the expanded text of that file, and the
+// newline that ended the line is kept in both cases (the last line of a file
+// that does not end in a newline does not grow one).
+
+make dir_of(path: str) -> str {
+  hold n = len(path)
+  hold cut = 0 - 1
+  hold i = 0
+  while i < n {
+    when sx_index(path, i) == 47 {
+      cut = i
+    }
+    i = i + 1
+  }
+  when cut < 0 {
+    give ""
+  }
+  give sub(path, 0, cut)
+}
+
+make read_use(cand1: str, cand2: str, rel: str) -> str {
+  when path_kind(cand1) == 1 {
+    give read_file(cand1)
+  }
+  when path_kind(cand2) == 1 {
+    give read_file(cand2)
+  }
+  hold e = fail(1, concat("cannot open use file: ", rel))
+  give ""
+}
+
+make expand_use(src: str, dir: str, depth: num) -> str {
+  when depth > 8 {
+    hold e = fail(1, "use nesting deeper than 8")
+  }
+  hold sn = len(src)
+  hold out = ""
+  hold i = 0
+  hold r = [0]
+  hold w = [0]
+  while i <= sn {
+    hold ls = i
+    while i <= sn && at(src, sn, i) != 10 {
+      i = i + 1
+    }
+    hold le = i
+    when i <= sn {
+      i = i + 1
+    }
+    hold te = le
+    when te > sn {
+      te = sn
+    }
+    hold q = ls
+    while q < te && is_space(at(src, sn, q)) == 1 {
+      q = q + 1
+    }
+    hold handled = 0
+    when q < te && at(src, sn, q) == 47 && at(src, sn, q + 1) == 47 {
+      handled = 2
+    }
+    r[0] = q
+    when handled == 0 && mkw(src, sn, r, "use") == 1 {
+      w[0] = r[0]
+      hold sk = sw(src, sn, w)
+      when at(src, sn, w[0]) != 34 {
+        hold e2 = fail(1, "use needs a quoted path: use \"file.sa\"")
+      }
+      hold pe = w[0] + 1
+      while at(src, sn, pe) != 0 && at(src, sn, pe) != 34 {
+        pe = pe + 1
+      }
+      when at(src, sn, pe) != 34 {
+        hold e3 = fail(1, "unterminated use path")
+      }
+      hold rel = sub(src, w[0] + 1, pe)
+      hold cand1 = rel
+      when len(dir) > 0 {
+        cand1 = concat(dir, concat("/", rel))
+      }
+      hold body = read_use(cand1, rel, rel)
+      out = concat(out, expand_use(body, dir, depth + 1))
+      handled = 1
+    }
+    when handled != 1 {
+      out = concat(out, sub(src, ls, te))
+    }
+    when le < sn {
+      out = concat(out, "\n")
+    }
+  }
+  give out
+}
+
+// ---- statement skipping (string/comment/brace aware) ----------------------
+// C's skip_stmt(): a line statement runs to the end of its line; only a
+// block statement owns a { ... }, and a call statement must not scan ahead
+// to the next block in the file.
+
+make skip_stmt(s: str, n: num, from: num) -> num {
+  hold p = [0]
+  p[0] = from
+  hold z = sw(s, n, p)
+  hold hit = 0
+  when mkw(s, n, p, "hold") == 1 {
+    hit = 1
+  }
+  when hit == 0 && mkw(s, n, p, "show") == 1 {
+    hit = 1
+  }
+  when hit == 0 && mkw(s, n, p, "give") == 1 {
+    hit = 1
+  }
+  when hit == 0 && mkw(s, n, p, "use") == 1 {
+    hit = 1
+  }
+  when hit == 1 {
+    hold e = eol(s, n, p)
+    give p[0]
+  }
+  hold r = [0]
+  r[0] = p[0]
+  hold blk = 0
+  when mkw(s, n, r, "when") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw(s, n, r, "while") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw(s, n, r, "make") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw(s, n, r, "struct") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw(s, n, r, "otherwise") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw(s, n, r, "else") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw(s, n, r, "for") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw(s, n, r, "elif") == 1 {
+    blk = 1
+  }
+  when blk == 0 {
+    hold e2 = eol(s, n, p)
+    give p[0]
+  }
+  hold i = p[0]
+  hold inq = 0
+  hold out = 0 - 1
+  while i < n && out < 0 {
+    hold c = sx_index(s, i)
+    hold hand = 0
+    when inq == 1 {
+      when c == 92 {
+        i = i + 1
+      }
+      when c == 34 {
+        inq = 0
+      }
+      i = i + 1
+      hand = 1
+    }
+    when hand == 0 && c == 34 {
+      inq = 1
+      i = i + 1
+      hand = 1
+    }
+    when hand == 0 && c == 123 {
+      hold d = 1
+      i = i + 1
+      while i < n && d > 0 {
+        hold c2 = sx_index(s, i)
+        hold h2 = 0
+        when inq == 1 {
+          when c2 == 92 {
+            i = i + 1
+          }
+          when c2 == 34 {
+            inq = 0
+          }
+          i = i + 1
+          h2 = 1
+        }
+        when h2 == 0 && c2 == 34 {
+          inq = 1
+          i = i + 1
+          h2 = 1
+        }
+        when h2 == 0 {
+          when c2 == 123 {
+            d = d + 1
+          }
+          when c2 == 125 {
+            d = d - 1
+          }
+          i = i + 1
+        }
+      }
+      out = i
+      hand = 1
+    }
+    when hand == 0 {
+      i = i + 1
+    }
+  }
+  when out >= 0 {
+    give out
+  }
+  hold e3 = eol(s, n, p)
+  give p[0]
+}
+
+// ---- small emitters -------------------------------------------------------
+// A name list is "a\nb\n"; these turn one into the dump's indented lines.
+
+make count_names(names: str) -> num {
+  hold n = len(names)
+  hold i = 0
+  hold c = 0
+  while i < n {
+    when sx_index(names, i) == 10 {
+      c = c + 1
+    }
+    i = i + 1
+  }
+  give c
+}
+
+make emit_names(names: str, label: str, fields: num) -> str {
+  hold n = len(names)
+  hold i = 0
+  hold idx = 0
+  hold cur = ""
+  hold out = ""
+  while i < n {
+    hold c = sx_index(names, i)
+    when c == 10 {
+      out = concat(out, "  ")
+      out = concat(out, label)
+      out = concat(out, " ")
+      out = concat(out, numstr(idx))
+      out = concat(out, " ")
+      out = concat(out, cur)
+      when fields == 1 {
+        out = concat(out, " kind=-1 sid=-1")
+      }
+      out = concat(out, "\n")
+      idx = idx + 1
+      cur = ""
+    }
+    when c != 10 {
+      cur = concat(cur, chr(c))
+    }
+    i = i + 1
+  }
+  give out
+}
+
+// ---- struct field blocks --------------------------------------------------
+// C scans from just past the `{` to the matching `}` for identifiers,
+// ignoring strings and line comments, and refuses `name: type`.
+
+make scan_fields(s: str, n: num, p: list, nm: str) -> str {
+  hold out = ""
+  hold nf = 0
+  hold inq = 0
+  hold go = 1
+  while go == 1 {
+    hold c = at(s, n, p[0])
+    hold hand = 0
+    when c == 0 {
+      go = 0
+      hand = 1
+    }
+    when hand == 0 && inq == 1 {
+      when c == 92 {
+        p[0] = p[0] + 1
+      }
+      when c == 34 {
+        inq = 0
+      }
+      p[0] = p[0] + 1
+      hand = 1
+    }
+    when hand == 0 && c == 34 {
+      inq = 1
+      p[0] = p[0] + 1
+      hand = 1
+    }
+    when hand == 0 && c == 47 && at(s, n, p[0] + 1) == 47 {
+      hold e = eol(s, n, p)
+      hand = 1
+    }
+    when hand == 0 && c == 125 {
+      go = 0
+      hand = 1
+    }
+    when hand == 0 && id0c(c) == 1 {
+      hold fd = pid_raw(s, n, p)
+      when nf >= 16 {
+        hold e2 = fail(1, concat(concat("struct '", nm), "' has more than 16 fields"))
+      }
+      out = concat(out, fd)
+      out = concat(out, "\n")
+      nf = nf + 1
+      hand = 1
+    }
+    when hand == 0 && c == 58 {
+      hold z = p[0] + 1
+      while at(s, n, z) == 32 || at(s, n, z) == 9 {
+        z = z + 1
+      }
+      when id0c(at(s, n, z)) == 1 {
+        hold e3 = fail(1, concat(concat("struct '", nm), "': field annotations are not supported (write just the field name; docs/TYPES_ROADMAP.md)"))
+      }
+    }
+    when hand == 0 {
+      p[0] = p[0] + 1
+    }
+  }
+  give out
+}
+
+// ---- typed signatures -----------------------------------------------------
+// `make f(a: num, b: str) -> num`. Native takes num, str and list; a generic
+// takes its own type parameters and nothing else. res[0] is the kind, res[1]
+// the type-parameter index (-1 when it is not one).
+
+make sig_type(s: str, n: num, p: list, nm: str, gtp: str, res: list) -> num {
+  res[0] = 0
+  res[1] = 0 - 1
+  hold z = sw(s, n, p)
+  when at(s, n, p[0]) != 58 {
+    give 0
+  }
+  p[0] = p[0] + 1
+  hold z2 = sw(s, n, p)
+  hold t = pid(s, n, p)
+  when len(t) == 0 {
+    hold e = fail(1, concat(concat("make ", nm), ": expected a type after ':'"))
+  }
+  when tbl_has(gtp, t) == 1 {
+    res[1] = strnum(tbl_get(gtp, t))
+    give 1
+  }
+  when len(gtp) > 1 {
+    hold e2 = fail(1, concat(concat("make ", nm), "<...>: must be written with type parameters used by every parameter and the return type (a parameter type here must be T or another type parameter)"))
+  }
+  when string_eq(t, "str") == 1 {
+    res[0] = 1
+    give 1
+  }
+  when string_eq(t, "list") == 1 {
+    res[0] = 2
+    give 1
+  }
+  when string_eq(t, "num") == 0 {
+    hold e3 = fail(1, concat(concat(concat("make ", nm), concat(": parameter type '", t)), "' is not in the native subset (native takes num)"))
+  }
+  give 1
+}
+
+make sig_ret(s: str, n: num, p: list, nm: str, gtp: str, res: list) -> num {
+  res[0] = 0
+  res[1] = 0 - 1
+  hold z = sw(s, n, p)
+  when at(s, n, p[0]) != 45 || at(s, n, p[0] + 1) != 62 {
+    give 0
+  }
+  p[0] = p[0] + 2
+  hold z2 = sw(s, n, p)
+  hold t = pid(s, n, p)
+  when len(t) == 0 {
+    hold e = fail(1, concat(concat("make ", nm), ": expected a return type after '->'"))
+  }
+  when tbl_has(gtp, t) == 1 {
+    res[1] = strnum(tbl_get(gtp, t))
+    give 1
+  }
+  when len(gtp) > 1 {
+    hold e2 = fail(1, concat(concat("make ", nm), "<...>: must be written with type parameters used by every parameter and the return type (the return type here must be T or another type parameter)"))
+  }
+  when string_eq(t, "str") == 1 {
+    res[0] = 1
+    give 1
+  }
+  when string_eq(t, "list") == 1 {
+    res[0] = 2
+    give 1
+  }
+  when string_eq(t, "num") == 0 {
+    hold e3 = fail(1, concat(concat(concat("make ", nm), concat(": return type '", t)), "' is not in the native subset (native returns num)"))
+  }
+  give 1
+}
+
+make sig_check(nm: str, nparam: num, ntyped: num, ret: num) -> num {
+  when ntyped == 0 && ret == 0 {
+    give 0
+  }
+  when ntyped != nparam {
+    hold e = fail(1, concat(concat("make ", nm), ": a typed signature needs a type on every parameter (a: num)"))
+  }
+  when ret == 0 {
+    hold e2 = fail(1, concat(concat("make ", nm), ": a typed signature needs a return type (-> num)"))
+  }
+  give 0
+}
+
+// optional `hold x: T` annotation. res[0] is the struct id when the kind is
+// K_STRUCT (3), -1 otherwise.
+make hold_kind(s: str, n: num, p: list, nm: str, snames: str, res: list) -> num {
+  res[0] = 0 - 1
+  hold z = sw(s, n, p)
+  when at(s, n, p[0]) != 58 {
+    give 0 - 1
+  }
+  p[0] = p[0] + 1
+  hold t = pid(s, n, p)
+  when len(t) == 0 {
+    hold e = fail(1, concat(concat("hold '", nm), "': expected a type after ':'"))
+  }
+  when string_eq(t, "num") == 1 {
+    give 0
+  }
+  when string_eq(t, "str") == 1 {
+    give 1
+  }
+  when string_eq(t, "list") == 1 {
+    give 2
+  }
+  when tbl_has(snames, t) == 1 {
+    res[0] = strnum(tbl_get(snames, t))
+    give 3
+  }
+  hold e2 = fail(1, concat(concat(concat("hold '", nm), "': unknown or unsupported type '"), concat(t, "'")))
+  give 0 - 1
+}
+
+// ---- phase 1: collect definitions ----------------------------------------
+
+make collect(src: str) -> str {
+  hold n = len(src)
+  hold p = [0]
+  hold res = [0, 0]
+
+  hold sout = ""
+  hold ns = 0
+  hold snames = "|"
+
+  hold gsout = ""
+  hold ngs = 0
+  hold gsnames = "|"
+
+  hold fout = ""
+  hold nf = 0
+  hold fnames = "|"
+
+  hold ng = 0
+  hold gnames = "|"
+  hold gorder = "|"
+  hold gkinds = "|"
+  hold gsids = "|"
+
+  hold go = 1
+  hold line = 0
+  hold tag = ""
+  hold nm = ""
+  hold names = ""
+  hold tps = ""
+  hold gtp = "|"
+  hold ptxt = ""
+  hold np = 0
+  hold typed = 0
+  hold gen = 0
+  hold rk = 0
+  hold rtp = 0 - 1
+  hold loop = 0
+  hold c = 0
+  hold adv = 0
+  hold ann = 0
+  hold gi = 0
+  hold key = ""
+
+  while go == 1 {
+    when p[0] >= n {
+      go = 0
+    }
+    line = p[0]
+    when go == 1 {
+      hold sk = sw(src, n, p)
+      when p[0] >= n {
+        go = 0
+      }
+    }
+    tag = ""
+    when go == 1 && at(src, n, p[0]) == 47 && at(src, n, p[0] + 1) == 47 {
+      hold e = eol(src, n, p)
+      tag = "comment"
+    }
+    when go == 1 && len(tag) == 0 && mkw(src, n, p, "struct") == 1 {
+      tag = "struct"
+    }
+    when go == 1 && len(tag) == 0 && mkw(src, n, p, "make") == 1 {
+      tag = "make"
+    }
+    when go == 1 && len(tag) == 0 && mkw(src, n, p, "hold") == 1 {
+      tag = "hold"
+    }
+    when go == 1 && len(tag) == 0 {
+      p[0] = skip_stmt(src, n, line)
+      tag = "other"
+    }
+
+    // ---------------- struct ----------------
+    when string_eq(tag, "struct") == 1 {
+      nm = pid(src, n, p)
+      when len(nm) == 0 {
+        hold e2 = fail(1, "struct needs a name")
+      }
+      when tbl_has(snames, nm) == 1 {
+        hold e3 = fail(1, concat(concat("struct '", nm), "' declared twice"))
+      }
+      when ns >= 32 {
+        hold e4 = fail(1, "too many structs (native limit: 32)")
+      }
+      hold sk2 = sw(src, n, p)
+      adv = 0
+      when at(src, n, p[0]) == 60 {
+        adv = 1
+        p[0] = p[0] + 1
+        when tbl_has(gsnames, nm) == 1 || tbl_has(snames, nm) == 1 {
+          hold e5 = fail(1, concat(concat("struct '", nm), "' declared twice"))
+        }
+        when ngs >= 32 {
+          hold e6 = fail(1, "too many generic structs")
+        }
+        tps = ""
+        np = 0
+        loop = 1
+        while loop == 1 {
+          hold sk3 = sw(src, n, p)
+          c = at(src, n, p[0])
+          hold hand = 0
+          when c == 0 {
+            hold e7 = fail(1, "a type parameter list needs a closing >")
+          }
+          when c == 62 {
+            p[0] = p[0] + 1
+            loop = 0
+            hand = 1
+          }
+          when hand == 0 && c == 44 {
+            p[0] = p[0] + 1
+            hand = 1
+          }
+          when hand == 0 {
+            hold tp = pid(src, n, p)
+            when len(tp) == 0 {
+              hold e8 = fail(1, "a type parameter must be a name")
+            }
+            when np >= 8 {
+              hold e9 = fail(1, "too many type parameters (native limit is 8)")
+            }
+            tps = concat(tps, tp)
+            tps = concat(tps, "\n")
+            np = np + 1
+          }
+        }
+        hold sk4 = sw(src, n, p)
+        when at(src, n, p[0]) != 123 {
+          hold e10 = fail(1, concat(concat("struct ", nm), " needs { fields }"))
+        }
+        p[0] = p[0] + 1
+        names = scan_fields(src, n, p, nm)
+        when at(src, n, p[0]) == 125 {
+          p[0] = p[0] + 1
+        }
+        gsout = concat(gsout, "gstruct ")
+        gsout = concat(gsout, numstr(ngs))
+        gsout = concat(gsout, " ")
+        gsout = concat(gsout, nm)
+        gsout = concat(gsout, " np=")
+        gsout = concat(gsout, numstr(np))
+        gsout = concat(gsout, " nf=")
+        gsout = concat(gsout, numstr(count_names(names)))
+        gsout = concat(gsout, "\n")
+        gsout = concat(gsout, emit_names(tps, "tparam", 0))
+        gsout = concat(gsout, emit_names(names, "gfield", 0))
+        gsnames = tbl_put(gsnames, nm, numstr(ngs))
+        ngs = ngs + 1
+      }
+      when adv == 0 {
+        when at(src, n, p[0]) != 123 {
+          hold e11 = fail(1, concat(concat("struct ", nm), " needs { fields }"))
+        }
+        p[0] = p[0] + 1
+        names = scan_fields(src, n, p, nm)
+        when at(src, n, p[0]) != 125 {
+          hold e12 = fail(1, concat(concat("struct ", nm), ": missing }"))
+        }
+        sout = concat(sout, "struct ")
+        sout = concat(sout, numstr(ns))
+        sout = concat(sout, " ")
+        sout = concat(sout, nm)
+        sout = concat(sout, " nf=")
+        sout = concat(sout, numstr(count_names(names)))
+        sout = concat(sout, "\n")
+        sout = concat(sout, emit_names(names, "field", 1))
+        snames = tbl_put(snames, nm, numstr(ns))
+        ns = ns + 1
+        p[0] = skip_stmt(src, n, line)
+      }
+    }
+
+    // ---------------- make ----------------
+    when string_eq(tag, "make") == 1 {
+      nm = pid(src, n, p)
+      when len(nm) == 0 {
+        hold e13 = fail(1, "make needs a name")
+      }
+      when tbl_has(fnames, nm) == 1 {
+        hold e14 = fail(1, concat(concat("function '", nm), "' declared twice"))
+      }
+      when nf >= 256 {
+        hold e15 = fail(1, "too many functions (native limit: 256)")
+      }
+      typed = 0
+      gen = 0
+      np = 0
+      ptxt = ""
+      tps = ""
+      gtp = "|"
+      hold sk5 = sw(src, n, p)
+      when at(src, n, p[0]) == 60 {
+        gen = 1
+        p[0] = p[0] + 1
+        loop = 1
+        while loop == 1 {
+          hold sk6 = sw(src, n, p)
+          when np >= 8 {
+            hold e16 = fail(1, concat(concat("make ", nm), "<...>: at most 8 type parameters"))
+          }
+          hold tp2 = pid(src, n, p)
+          when len(tp2) == 0 {
+            hold e17 = fail(1, concat(concat("make ", nm), "<...>: bad type parameter list"))
+          }
+          tps = concat(tps, tp2)
+          tps = concat(tps, "\n")
+          gtp = tbl_put(gtp, tp2, numstr(np))
+          np = np + 1
+          hold sk7 = sw(src, n, p)
+          adv = 0
+          when at(src, n, p[0]) == 44 {
+            p[0] = p[0] + 1
+            adv = 1
+          }
+          when adv == 0 && at(src, n, p[0]) == 62 {
+            p[0] = p[0] + 1
+            loop = 0
+            adv = 1
+          }
+          when adv == 0 {
+            hold e18 = fail(1, concat(concat("make ", nm), "<...>: bad type parameter list"))
+          }
+        }
+        hold sk8 = sw(src, n, p)
+      }
+      np = 0
+      when at(src, n, p[0]) != 40 {
+        hold e19 = fail(1, concat(concat("make ", nm), ": expected (params)"))
+      }
+      p[0] = p[0] + 1
+      loop = 1
+      while loop == 1 {
+        hold sk9 = sw(src, n, p)
+        adv = 0
+        when at(src, n, p[0]) == 41 {
+          p[0] = p[0] + 1
+          loop = 0
+          adv = 1
+        }
+        when adv == 0 {
+          hold pm = pid(src, n, p)
+          when len(pm) == 0 {
+            hold e20 = fail(1, concat(concat("make ", nm), ": bad param list"))
+          }
+          when np >= 6 {
+            hold e21 = fail(1, concat(concat("make ", nm), ": at most 6 params"))
+          }
+          typed = typed + sig_type(src, n, p, nm, gtp, res)
+          ptxt = concat(ptxt, "  param ")
+          ptxt = concat(ptxt, numstr(np))
+          ptxt = concat(ptxt, " ")
+          ptxt = concat(ptxt, pm)
+          ptxt = concat(ptxt, " k=")
+          ptxt = concat(ptxt, numstr(res[0]))
+          ptxt = concat(ptxt, " tp=")
+          ptxt = concat(ptxt, numstr(res[1]))
+          ptxt = concat(ptxt, "\n")
+          np = np + 1
+          hold sk10 = sw(src, n, p)
+          adv = 0
+          when at(src, n, p[0]) == 44 {
+            p[0] = p[0] + 1
+            adv = 1
+          }
+          when adv == 0 && at(src, n, p[0]) == 41 {
+            p[0] = p[0] + 1
+            loop = 0
+            adv = 1
+          }
+          when adv == 0 {
+            hold e22 = fail(1, concat(concat("make ", nm), ": bad param list"))
+          }
+        }
+      }
+      hold r1 = sig_ret(src, n, p, nm, gtp, res)
+      rk = res[0]
+      rtp = res[1]
+      hold ck = sig_check(nm, np, typed, r1)
+      when gen == 1 && (typed != np || r1 == 0) {
+        hold e23 = fail(1, concat(concat("make ", nm), "<...>: a generic needs a type parameter on every parameter and a return type (-> T)"))
+      }
+      fout = concat(fout, "fn ")
+      fout = concat(fout, numstr(nf))
+      fout = concat(fout, " ")
+      fout = concat(fout, nm)
+      fout = concat(fout, " nparam=")
+      fout = concat(fout, numstr(np))
+      fout = concat(fout, " gen=")
+      fout = concat(fout, numstr(gen))
+      fout = concat(fout, " ntp=")
+      fout = concat(fout, numstr(count_names(tps)))
+      fout = concat(fout, " rk=")
+      fout = concat(fout, numstr(rk))
+      fout = concat(fout, " rtp=")
+      fout = concat(fout, numstr(rtp))
+      fout = concat(fout, "\n")
+      fout = concat(fout, ptxt)
+      fout = concat(fout, emit_names(tps, "ftparam", 0))
+      fnames = tbl_put(fnames, nm, numstr(nf))
+      nf = nf + 1
+      p[0] = skip_stmt(src, n, line)
+    }
+
+    // ---------------- hold ----------------
+    when string_eq(tag, "hold") == 1 {
+      nm = pid(src, n, p)
+      when len(nm) == 0 {
+        hold e24 = fail(1, "hold needs a name")
+      }
+      when tbl_has(gnames, nm) == 0 {
+        when ng >= 64 {
+          hold e25 = fail(1, "too many globals (native limit: 64)")
+        }
+        gnames = tbl_put(gnames, nm, numstr(ng))
+        gorder = tbl_put(gorder, numstr(ng), nm)
+        gkinds = tbl_put(gkinds, numstr(ng), "-1")
+        gsids = tbl_put(gsids, numstr(ng), "-1")
+        ng = ng + 1
+      }
+      gi = strnum(tbl_get(gnames, nm))
+      key = numstr(gi)
+      ann = hold_kind(src, n, p, nm, snames, res)
+      when ann >= 0 {
+        when strnum(tbl_get(gkinds, key)) >= 0 && strnum(tbl_get(gkinds, key)) != ann {
+          hold e26 = fail(1, concat(concat("conflicting hold type for '", nm), "'"))
+        }
+        when ann == 3 {
+          when res[0] < 0 {
+            hold e27 = fail(1, concat(concat("hold '", nm), "': missing declared struct type"))
+          }
+          when strnum(tbl_get(gsids, key)) >= 0 && strnum(tbl_get(gsids, key)) != res[0] {
+            hold e28 = fail(1, concat(concat("conflicting hold struct type for '", nm), "'"))
+          }
+          gsids = tbl_set(gsids, key, numstr(res[0]))
+        }
+        gkinds = tbl_set(gkinds, key, numstr(ann))
+      }
+      p[0] = skip_stmt(src, n, line)
+    }
+  }
+
+  hold out = "; native_aot phase 1\n"
+  out = concat(out, "structs ")
+  out = concat(out, numstr(ns))
+  out = concat(out, "\n")
+  out = concat(out, sout)
+  out = concat(out, "gstructs ")
+  out = concat(out, numstr(ngs))
+  out = concat(out, "\n")
+  out = concat(out, gsout)
+  out = concat(out, "fns ")
+  out = concat(out, numstr(nf))
+  out = concat(out, "\n")
+  out = concat(out, fout)
+  out = concat(out, "globals ")
+  out = concat(out, numstr(ng))
+  out = concat(out, "\n")
+  gi = 0
+  while gi < ng {
+    key = numstr(gi)
+    out = concat(out, "glob ")
+    out = concat(out, key)
+    out = concat(out, " ")
+    out = concat(out, tbl_get(gorder, key))
+    out = concat(out, " kind=")
+    out = concat(out, tbl_get(gkinds, key))
+    out = concat(out, " sid=")
+    out = concat(out, tbl_get(gsids, key))
+    out = concat(out, "\n")
+    gi = gi + 1
+  }
+  give out
+}
+
+// ---- driver ---------------------------------------------------------------
+
+hold argn = arg_count()
+when argn < 4 {
+  hold u = fail(2, "usage: sxdefs <program.sa> <defs|expand> <out>")
+}
+hold path = arg(1)
+hold mode = arg(2)
+hold outp = arg(3)
+when path_kind(path) != 1 {
+  hold nf2 = fail(1, concat("cannot open use file: ", path))
+}
+hold raw = read_file(path)
+hold dir = dir_of(path)
+hold src = expand_use(raw, dir, 0)
+hold text = ""
+hold known = 0
+when string_eq(mode, "expand") == 1 {
+  text = src
+  known = 1
+}
+when string_eq(mode, "defs") == 1 {
+  text = collect(src)
+  known = 1
+}
+when known == 0 {
+  hold bad = fail(2, concat(concat("unknown mode '", mode), "' (expected defs or expand)"))
+}
+hold w = write_file(outp, text)
+when w != 1 {
+  hold bad2 = fail(1, concat("cannot write ", outp))
+}

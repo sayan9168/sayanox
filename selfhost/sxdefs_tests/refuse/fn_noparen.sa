@@ -1,0 +1,4 @@
+make f {
+  give 1
+}
+show 1

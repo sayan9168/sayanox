@@ -1,13 +1,35 @@
 # Status
 
-Last updated: **2026-10-23** (i386 and aarch64 machine-code backends, a
-module-namespacing pass and a pinned trust-anchor audit, all written in
-Sayanox; expression-valued struct fields and checked index calls; nested
-generic structs; a collector in the bootstrap seed; stdlib cryptography and
-nested JSON, package digests and signatures, LSP semantic resolution)
+Last updated: **2026-10-23** (the native backend's front-end phase 1 in
+Sayanox; i386 and aarch64 machine-code backends, a module-namespacing pass
+and a pinned trust-anchor audit, all written in Sayanox; expression-valued
+struct fields and checked index calls; nested generic structs; a collector in
+the bootstrap seed; stdlib cryptography and nested JSON, package digests and
+signatures, LSP semantic resolution)
 
 Seven of the open roadmap rows moved, each with a gate that fails without the
 new code:
+
+* **Phase D step 5: the native backend's phase 1 is Sayanox.**
+  `tools/sxdefs.sa` (1,118 lines) is `expand_use()` and `collect_defs()` —
+  the `use` splice and the struct / generic-struct / function / global tables
+  `selfhost/native_aot.c` builds before anything else. It is the first ported
+  piece that reads the **program text** instead of replaying a recorded
+  stream (`tools/sxlink.sa` is handed a code blob, `tools/sxencode.sa` a list
+  of encoder calls). The seam is `SX_DEFS_DUMP=<dir>`, which writes
+  `expand.sa` and `defs.txt` *between* `collect_defs()` and `infer()` and
+  changes nothing else — so every `kind=-1` in the dump is phase 1 saying
+  "not my job", and the comparison tests one pass instead of two.
+  `make test-native-sxdefs` (part of `native-test`) requires byte identity of
+  both files on nine fixtures — including a two-level `use` splice that
+  expands to 34,114 bytes and the 1,159-line `tools/sxencode.sa` — **and**
+  identical diagnostics: 34 out-of-subset programs (33 distinct messages) and
+  the real 19,577-line compiler are refused by both with the same text after
+  the tool name and the same exit status. The table shape is pinned by
+  content as well, so a change on both sides still fails with a reason.
+  **Kind inference, the emit tree, the 856-line runtime and the collector are
+  still C**, and `native_aot` still runs its own phase 1 to compile anything:
+  `sxdefs` is proved equal to it, not wired in as the producer.
 
 * **A second and a third machine-code target (row 9).** `tools/native32.sa`
   compiles a Sayanox program to a 32-bit x86 (i386) Linux ELF — and, with
@@ -110,7 +132,8 @@ new code:
   re-publishes diagnostics for files that change on disk. `make
   test-lsp-semantic` pins all of it, and fails on its first check against the
   previous server binary.
-* **Logs:** `docs/gate-logs/2026-10-22-crypto-json-signed-packages-lsp/`,
+* **Logs:** `docs/gate-logs/2026-10-23-native-frontend-phase1/`,
+  `docs/gate-logs/2026-10-22-crypto-json-signed-packages-lsp/`,
   `docs/gate-logs/2026-10-22-seed-collector/` and
   `docs/gate-logs/2026-10-22-nested-generics/`.
 * **Still open:** row 1 (full-language self-host). Row 10 moved: module
@@ -188,9 +211,9 @@ record against the bytes C wrote for that same call. The recorder is inert
 (the ELF is identical with and without it), the fixture set exercises all 50
 records, and a missing log, a wrong-length `code.bin` and an unknown record
 are clear errors (`make test-native-sxencode`, part of `native-test`).
-`selfhost/native_aot.c` is still C — 4,498 lines, up from 4,415 by the seam,
-not down — and its row below stays until the frontend, emit tree, runtime and
-collector are ported. Logs:
+`selfhost/native_aot.c` is still C — 4,597 lines after the 2026-10-23 phase-1
+seam, up from 4,415, not down — and its row below stays until the rest of the
+front end, the emit tree, the runtime and the collector are ported. Logs:
 [`2026-10-21 encode seam`](gate-logs/2026-10-21-encode-seam/).
 
 Phase D moved before that and CI was fixed. `read_bytes(path, xs)` joined the byte-buffer
@@ -288,7 +311,7 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 | Still not Sayanox | Language | Size (2026-10-20) | Unblocks |
 |---|---|---:|---|
 | `selfhost/seed/sxc_seed_min.c` | C | 2,176 lines (measured 2026-10-23) | Phase E — **decided 2026-10-23: option 2**, the minimal C seed stays as a documented, auditable, pinned exception (`make test-trust-anchor`: size + SHA-256 recomputed by Sayanox, four headers, no process/network call, deterministic output, the one emitted `popen` counted). Option 1, a prebuilt binary rebuilt from `.sa`, still needs Phase D |
-| `selfhost/native_aot.c` | C | 4,498 lines | Phase D — the language surface, the ELF image writer/linker and the x86-64 instruction encoder are done; what is left is the scanner, parser, inference, emit tree, runtime stubs and collector |
+| `selfhost/native_aot.c` | C | 4,597 lines | Phase D — the language surface, the ELF image writer/linker, the x86-64 instruction encoder and front-end phase 1 (`use` expansion + `collect_defs`) are done; what is left is kind inference, the emit tree, the runtime stubs and the collector |
 | `Makefile` + 14 sh scripts | make / POSIX sh | 5,188 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
@@ -302,8 +325,10 @@ framed-session test client (`tools/lsp_workspace_test.sa`), the byte-buffer and
 bitwise surface the native backend needs (`test-native-primitives`), its binary
 reader (`read_bytes`, `test-read-bytes`) and, since 2026-10-20, the native
 backend's ELF image writer and rel32 linker (`tools/sxlink.sa`,
-`test-native-sxlink`) and, since 2026-10-21, its x86-64 instruction encoder
-(`tools/sxencode.sa`, `test-native-sxencode`).
+`test-native-sxlink`), since 2026-10-21, its x86-64 instruction encoder
+(`tools/sxencode.sa`, `test-native-sxencode`) and, since 2026-10-23, its
+front-end phase 1 — the `use` splice and the definition tables
+(`tools/sxdefs.sa`, `test-native-sxdefs`).
 Ten unreferenced legacy C files were deleted the same day, alongside the three
 that gained Sayanox replacements.
 
@@ -352,7 +377,7 @@ collector are still C.
 What that does **not** mean: `native_aot` still resolves a `make` or builtin
 name to a code offset, so the records arrive with their targets resolved; and
 the C `write_elf()` is still what produces the executables the gates run.
-The port of `selfhost/native_aot.c` itself is **not** done: it is still 4,498
+The port of `selfhost/native_aot.c` itself is **not** done: it is still 4,597
 lines of C and this row stays in the table until it is.
 
 On 2026-10-19 the compiler itself was fixed, not extended: its `make` signature

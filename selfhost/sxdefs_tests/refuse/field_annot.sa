@@ -1,0 +1,5 @@
+struct P {
+  x: num,
+  y
+}
+show 1

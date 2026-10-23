@@ -40,7 +40,7 @@ SXDIAG_BIN := tools/sxdiag
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
         pack-compiler test-http-get test-sayacrawl test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
-        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-sxdiag test-native32 test-native-arm64 test-sxmod test-trust-anchor
+        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-native-sxdefs test-sxdiag test-native32 test-native-arm64 test-sxmod test-trust-anchor
 
 all: true-selfhost-min
 
@@ -2565,6 +2565,169 @@ test-native-sxencode: $(NATIVE_BIN) $(SXENCODE_BIN)
 	@./$(SXENCODE_BIN) $(TESTS)/sxencode/bogus.log $(TESTS)/sxencode/sxencode_hello/code.bin $(TESTS)/sxencode/bad.bin 2>&1 >/dev/null | grep -q 'unknown record'
 	@echo "[OK] sxencode: the encoder is Sayanox -- five fixtures replay to byte-identical code, every named record is checked against the bytes C wrote for the same call, the recorder changes no emitted byte, all record names are exercised, and a missing log, a wrong-length code.bin and an unknown record are clear errors"
 
+# ---------------------------------------------------------------------------
+# tools/sxdefs + test-native-sxdefs: PHASE 1 OF THE NATIVE FRONT END, IN
+# SAYANOX (2026-10-23, Phase D step 5).
+#
+# tools/sxlink.sa took the ELF image writer out of C and tools/sxencode.sa
+# took the instruction encoder; both are driven by a recorded stream, so they
+# replay what the C FRONT END decided. tools/sxdefs.sa is the first piece
+# that reads the program text instead: it is `expand_use()` and
+# `collect_defs()` -- the `use` splice and the definition tables -- written in
+# Sayanox and compared with C's.
+#
+# The seam is SX_DEFS_DUMP=<dir>: native_aot writes expand.sa (the expanded
+# source) and defs.txt (the struct, generic-struct, function and global
+# tables) between collect_defs() and infer(), and changes nothing else. The
+# dump sits before infer() on purpose, so that the comparison tests ONE pass:
+# every `kind=-1` in defs.txt is phase 1 saying "not my job".
+#
+# Three things are checked, because byte identity alone would only say the
+# two implementations agree:
+#   * both outputs are byte-identical on nine fixtures, including two with a
+#     two-level `use` splice and the 1,159-line tools/sxencode.sa;
+#   * the DIAGNOSTICS are identical for 34 refusals plus the real 19,577-line
+#     compiler -- same text after the tool name, same exit status;
+#   * the shape of the table is pinned by content, so a change on BOTH sides
+#     still fails here with a reason.
+#
+# What is still C: kind inference, the emit tree, the runtime stubs and the
+# collector. native_aot also still runs its own phase 1 to compile anything;
+# sxdefs is proved equal to it, not wired in as the producer, exactly as
+# sxlink and sxencode are.
+SXDEFS_BIN := tools/sxdefs
+SXDEFS_SA  := tools/sxdefs.sa
+SXDEFS_FIX := selfhost/sxdefs_tests/program.sa selfhost/sxdefs_tests/quirks.sa \
+              selfhost/native_strord_test.sa selfhost/stdlib_growth_test.sa \
+              selfhost/stdlib_json_deep_test.sa selfhost/generic_struct_nested.sa \
+              selfhost/full_language_expr.sa tools/sxencode.sa tools/native32.sa
+
+tools/sxdefs: $(SXDEFS_SA) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(GEN2) $(SXDEFS_SA) $(TESTS)/sxdefs.c >/dev/null
+	@if grep -q '#error' $(TESTS)/sxdefs.c; then echo "[FAIL] sxdefs: #error in the generated C"; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $@ $(TESTS)/sxdefs.c
+	@echo "[OK] Sayanox phase-1 front end built from $(SXDEFS_SA)"
+
+.PHONY: test-native-sxdefs
+test-native-sxdefs: $(NATIVE_BIN) $(SXDEFS_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/sxdefs
+	@# ---- the expansion and the tables agree, byte for byte ----
+	@# Some fixtures are phase-1 clean but use builtins the native backend
+	@# refuses later (tools/sxencode.sa calls exit()): the dump is written
+	@# between collect_defs and infer, so phase 1 is still comparable. The
+	@# inertness check then compares the whole run -- same stdout, same
+	@# stderr, and the same image whenever one was produced.
+	@for fix in $(SXDEFS_FIX); do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  d=$(TESTS)/sxdefs/$$name; \
+	  mkdir -p $$d; \
+	  ./$(NATIVE_BIN) $$fix $$d/off.elf > $$d/off.log 2>&1 || true; \
+	  SX_DEFS_DUMP=$$d ./$(NATIVE_BIN) $$fix $$d/c.elf > $$d/c.log 2>&1 || true; \
+	  test -f $$d/defs.txt \
+	    || { echo "[FAIL] sxdefs: no SX_DEFS_DUMP was written for $$name"; exit 1; }; \
+	  cmp $$d/off.log $$d/c.log \
+	    || { echo "[FAIL] sxdefs: SX_DEFS_DUMP changed what native_aot reported for $$name"; exit 1; }; \
+	  if [ -f $$d/off.elf ]; then cmp $$d/off.elf $$d/c.elf \
+	    || { echo "[FAIL] sxdefs: SX_DEFS_DUMP changed the emitted bytes for $$name"; exit 1; }; fi; \
+	  ./$(SXDEFS_BIN) $$fix expand $$d/sx.expand \
+	    || { echo "[FAIL] sxdefs: the Sayanox expansion refused $$name"; exit 1; }; \
+	  ./$(SXDEFS_BIN) $$fix defs $$d/sx.defs \
+	    || { echo "[FAIL] sxdefs: the Sayanox collection refused $$name"; exit 1; }; \
+	  cmp $$d/expand.sa $$d/sx.expand \
+	    || { echo "[FAIL] sxdefs: the Sayanox use-expansion is not byte-identical for $$name"; exit 1; }; \
+	  cmp $$d/defs.txt $$d/sx.defs \
+	    || { echo "[FAIL] sxdefs: the Sayanox definition tables are not byte-identical for $$name"; exit 1; }; \
+	  echo "  [ok] $$name: $$(wc -c < $$d/expand.sa) expanded bytes, $$(grep -c '' $$d/defs.txt) table lines"; \
+	done
+	@echo "[OK] sxdefs: nine fixtures expand and collect byte-identically to native_aot's phase 1, and the dump changes no emitted byte"
+	@# ---- the fixture is a real program, not a parse exercise ----
+	@chmod +x $(TESTS)/sxdefs/program/c.elf
+	@$(TESTS)/sxdefs/program/c.elf > $(TESTS)/sxdefs/program.out
+	@cmp selfhost/sxdefs_tests/program.want $(TESTS)/sxdefs/program.out \
+	  || { echo "[FAIL] sxdefs: the fixture no longer prints what it printed"; exit 1; }
+	@# ---- the contract, pinned by content ----
+	@# the splice fed the collection: shout() comes from the second level
+	@# (mods/text.sa, spliced into mods/geom.sa, spliced into program.sa)
+	@grep -q -F 'fn 0 shout nparam=1 gen=0 ntp=0 rk=1 rtp=-1' $(TESTS)/sxdefs/program/defs.txt \
+	  || { echo "[FAIL] sxdefs: the two-level use splice no longer reaches the function table"; exit 1; }
+	@grep -q -F 'struct 0 Point nf=2' $(TESTS)/sxdefs/program/defs.txt
+	@grep -q -F 'gstruct 0 Box np=1 nf=1' $(TESTS)/sxdefs/program/defs.txt
+	@grep -q -F 'gstruct 1 Pair np=2 nf=2' $(TESTS)/sxdefs/program/defs.txt
+	@# a generic function: every parameter carries a type-parameter index
+	@grep -q -F 'fn 5 pick nparam=2 gen=1 ntp=2 rk=0 rtp=0' $(TESTS)/sxdefs/program/defs.txt
+	@grep -q -F '  param 1 b k=0 tp=1' $(TESTS)/sxdefs/program/defs.txt
+	@# annotations: str, list and two different struct identities
+	@grep -q -F 'glob 1 title kind=1 sid=-1' $(TESTS)/sxdefs/program/defs.txt
+	@grep -q -F 'glob 2 here kind=3 sid=0' $(TESTS)/sxdefs/program/defs.txt
+	@grep -q -F 'glob 3 sizes kind=2 sid=-1' $(TESTS)/sxdefs/program/defs.txt
+	@grep -q -F 'glob 4 s kind=3 sid=1' $(TESTS)/sxdefs/program/defs.txt
+	@# phase 1 leaves the field kinds to infer(): every field is kind=-1
+	@if grep '^  field ' $(TESTS)/sxdefs/program/defs.txt | grep -v -q 'kind=-1 sid=-1'; then \
+	  echo "[FAIL] sxdefs: a field kind is set before infer() ran -- the dump point moved"; exit 1; fi
+	@# a hold inside a top-level block is NOT a global: collect_defs skips the
+	@# whole block, and `hold count = ...` twice is still one global
+	@test "$$(grep -c '^glob ' $(TESTS)/sxdefs/program/defs.txt)" = 6 \
+	  || { echo "[FAIL] sxdefs: the global table is no longer the six top-level holds"; exit 1; }
+	@if grep -q 'inner' $(TESTS)/sxdefs/program/defs.txt; then \
+	  echo "[FAIL] sxdefs: a hold inside a top-level block reached the global table"; exit 1; fi
+	@# the expansion: the use line is gone, the module text is in, and the
+	@# word `use` inside a comment is still a comment
+	@if grep -q '^use "mods/geom.sa"' $(TESTS)/sxdefs/program/expand.sa; then \
+	  echo "[FAIL] sxdefs: the use line survived the expansion"; exit 1; fi
+	@grep -q -F 'make shout(s: str) -> str' $(TESTS)/sxdefs/program/expand.sa \
+	  || { echo "[FAIL] sxdefs: the second-level module text is missing from the expansion"; exit 1; }
+	@grep -q -F 'use "not-a-real-file.sa"' $(TESTS)/sxdefs/program/expand.sa \
+	  || { echo "[FAIL] sxdefs: a use inside a comment was treated as a use"; exit 1; }
+	@echo "[OK] sxdefs: the table is pinned by content -- two-level splice, generic templates, a generic signature, str/list/struct annotations, every field kind still -1, six globals and no block-local name, and a use inside a comment stays a comment"
+	@# ---- refusals: same text, same status ----
+	@test "$$(ls selfhost/sxdefs_tests/refuse/*.sa | wc -l)" = 34 \
+	  || { echo "[FAIL] sxdefs: the refusal set is no longer 34 programs"; exit 1; }
+	@mkdir -p $(TESTS)/sxdefs/refuse
+	@for fix in selfhost/sxdefs_tests/refuse/*.sa; do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  d=$(TESTS)/sxdefs/refuse; \
+	  ./$(NATIVE_BIN) $$fix $$d/$$name.elf 2> $$d/$$name.c.err; crc=$$?; \
+	  ./$(SXDEFS_BIN) $$fix defs $$d/$$name.defs 2> $$d/$$name.s.err; src=$$?; \
+	  [ $$crc = 1 ] || { echo "[FAIL] sxdefs: native_aot did not refuse $$name (exit $$crc)"; exit 1; }; \
+	  [ $$src = 1 ] || { echo "[FAIL] sxdefs: the Sayanox phase 1 did not refuse $$name (exit $$src)"; exit 1; }; \
+	  test -s $$d/$$name.c.err || { echo "[FAIL] sxdefs: native_aot refused $$name with no message"; exit 1; }; \
+	  cut -d' ' -f2- < $$d/$$name.c.err > $$d/$$name.c.msg; \
+	  cut -d' ' -f2- < $$d/$$name.s.err > $$d/$$name.s.msg; \
+	  cmp -s $$d/$$name.c.msg $$d/$$name.s.msg || { \
+	    echo "[FAIL] sxdefs: different diagnostic for $$name"; \
+	    echo "  native_aot: $$(cat $$d/$$name.c.msg)"; \
+	    echo "  sxdefs    : $$(cat $$d/$$name.s.msg)"; exit 1; }; \
+	done
+	@# the 34 are 34 DIFFERENT messages' worth of coverage, not one repeated
+	@test "$$(cat $(TESTS)/sxdefs/refuse/*.c.msg | sort -u | wc -l)" -ge 24 \
+	  || { echo "[FAIL] sxdefs: the refusal set collapsed onto a handful of messages"; exit 1; }
+	@echo "[OK] sxdefs: 34 out-of-subset programs are refused by both phase 1 implementations with the same text and the same exit status ($$(cat $(TESTS)/sxdefs/refuse/*.c.msg | sort -u | wc -l) distinct messages)"
+	@# ---- the real compiler: 19,577 lines, refused identically ----
+	@./$(NATIVE_BIN) $(MIN_SA) $(TESTS)/sxdefs/min.elf 2> $(TESTS)/sxdefs/min.c.err; crc=$$?; \
+	 ./$(SXDEFS_BIN) $(MIN_SA) defs $(TESTS)/sxdefs/min.defs 2> $(TESTS)/sxdefs/min.s.err; src=$$?; \
+	 [ $$crc = 1 ] && [ $$src = 1 ] \
+	   || { echo "[FAIL] sxdefs: the compiler is not refused by both (exit $$crc / $$src)"; exit 1; }
+	@cut -d' ' -f2- < $(TESTS)/sxdefs/min.c.err > $(TESTS)/sxdefs/min.c.msg
+	@cut -d' ' -f2- < $(TESTS)/sxdefs/min.s.err > $(TESTS)/sxdefs/min.s.msg
+	@cmp $(TESTS)/sxdefs/min.c.msg $(TESTS)/sxdefs/min.s.msg \
+	  || { echo "[FAIL] sxdefs: the compiler is refused with different words"; exit 1; }
+	@grep -q 'at most 6 params' $(TESTS)/sxdefs/min.c.msg \
+	  || { echo "[FAIL] sxdefs: the compiler now fails phase 1 for a different reason -- re-read the claim"; exit 1; }
+	@echo "[OK] sxdefs: the 19,577-line compiler itself walks both phase 1 implementations to the same refusal ($$(cat $(TESTS)/sxdefs/min.c.msg))"
+	@# ---- the tool's own failures are clear ----
+	@if ./$(SXDEFS_BIN) selfhost/sxdefs_tests/program.sa tables $(TESTS)/sxdefs/bad.out >/dev/null 2>&1; then \
+	  echo "[FAIL] sxdefs accepted a mode it does not implement"; exit 1; fi
+	@./$(SXDEFS_BIN) selfhost/sxdefs_tests/program.sa tables $(TESTS)/sxdefs/bad.out 2>&1 >/dev/null | grep -q "unknown mode 'tables'"
+	@if ./$(SXDEFS_BIN) selfhost/sxdefs_tests/nope.sa defs $(TESTS)/sxdefs/bad.out >/dev/null 2>&1; then \
+	  echo "[FAIL] sxdefs accepted an input file that does not exist"; exit 1; fi
+	@if ./$(SXDEFS_BIN) selfhost/sxdefs_tests/program.sa defs >/dev/null 2>&1; then \
+	  echo "[FAIL] sxdefs accepted a command line with no output path"; exit 1; fi
+	@echo "[OK] sxdefs: an unknown mode, a missing input and a missing output path are clear errors"
+
+native-test: test-native-sxdefs
+
 native-test: test-native-sxlink test-native-sxencode test-sxdiag
 
 # ---------------------------------------------------------------------------
@@ -4250,9 +4413,11 @@ all-sayanox:
 	@echo "        is still an external program), language server, IR"
 	@echo "        translator, LSP folder index, LSP test client, byte-buffer"
 	@echo "        + bitwise builtins, the read_bytes binary reader, the native"
-	@echo "        backend's ELF image writer + rel32 linker (tools/sxlink.sa)"
-	@echo "        and its x86-64 instruction encoder (tools/sxencode.sa),"
-	@echo "        both byte-identical to C, the run_command(cmd) and"
+	@echo "        backend's ELF image writer + rel32 linker (tools/sxlink.sa),"
+	@echo "        its x86-64 instruction encoder (tools/sxencode.sa) and its"
+	@echo "        front-end phase 1 -- the use splice and the definition"
+	@echo "        tables (tools/sxdefs.sa), all three byte-identical to C,"
+	@echo "        the run_command(cmd) and"
 	@echo "        getenv(name) driver builtins, and the diagnostic suites"
 	@echo "        (tools/sxdiag.sa) that replaced four sh drivers"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"

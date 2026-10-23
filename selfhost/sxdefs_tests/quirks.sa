@@ -1,0 +1,36 @@
+// sxdefs_tests/quirks.sa -- phase-1 behaviour that is odd but REAL.
+//
+// This file is never run: it is compared, because a port must reproduce the
+// quirks of the thing it ports or it is a different program. native_aot's
+// skip_stmt() is string-aware but NOT comment-aware, so the brace in the
+// comment below is counted and the struct's block is left late; collect_defs
+// still records the template correctly, which is what the two phase-1
+// implementations must agree on. (The program itself does not survive type
+// inference -- `make test-native-sxdefs` compares the dumps, not an
+// executable.)
+struct Pair<A, B> {
+  // a comment, a brace { and "a string" inside a template's field block
+  first,
+  second
+}
+
+// A `use` inside a comment is not a use: "mods/nothing.sa"
+// use "mods/nothing.sa"
+
+struct Keeps {
+  one,   // trailing comments
+  two    // between fields
+}
+
+make sig(a: str, b: list) -> str {
+  give a
+}
+
+make untyped(a, b) {
+  give a
+}
+
+hold here = 1
+hold here: num = 2
+hold text: str = "a string with a } brace and a \" quote"
+show here

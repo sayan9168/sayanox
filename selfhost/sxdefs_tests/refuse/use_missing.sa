@@ -1,0 +1,2 @@
+use "nope_does_not_exist.sa"
+show 1

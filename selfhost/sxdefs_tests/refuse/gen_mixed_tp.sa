@@ -1,0 +1,4 @@
+make pick<T>(a: T, b: num) -> T {
+  give a
+}
+show 1

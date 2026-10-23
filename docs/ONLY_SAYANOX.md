@@ -35,6 +35,10 @@ is written in Sayanox.
   reverts the `SX_ENCODE_LOG` seam to the same fifty records and reproduces
   the whole code segment byte-for-byte; covered by
   `make test-native-sxencode`.
+- `tools/sxdefs.sa` — the native backend's phase 1: the `use` splice and the
+  struct/generic-struct/function/global tables, byte-identical to C's and
+  refusing the same programs with the same words; covered by
+  `make test-native-sxdefs`.
 - `tools/sxdiag.sa` — the four negative-diagnostic suites (inline list
   arguments, list postfix arguments, unproved return paths, unbound names and
   unknown callees), which were four `.sh` drivers until 2026-10-21; covered by
@@ -86,7 +90,7 @@ is left and fails closed.
 | A (done 2026-10-17) | Compiler, formatter, package tool, language server, LSP binder in `.sa`; no bash/awk/sed/Python on maintained paths | `test-language-deps` |
 | B (done 2026-10-17; +B.5 2026-10-21) | `tools/emit_to_ir` in Sayanox; directory builtins + Sayanox folder index (C header and binder deleted); process builtins + Sayanox LSP test client (the last C file in `tools/` deleted); `run_command(cmd)` + `tools/sxdiag` replacing four `sh` diagnostic drivers | `test-emit-to-ir`, `test-native-ir-portable`, `test-path-builtins`, `test-proc-builtins`, `test-lsp`, `test-lsp-workspace`, `test-sxdiag` |
 | C (file side done 2026-10-18) | publish, install-local, local sync/fetch, seed folders and the folder primitives moved to `tools/sxpkg.sa`. The http(s) transport stays in the shell: `test-sxpkg-transfer-hardening` pins curl/wget as the transport (the argv obstacle went away with `run_command(cmd)` on 2026-10-21; the policy did not) | `test-sxpkg*` unchanged, plus `test-sxpkg-sayanox-logic` |
-| D (started 2026-10-18) | Step 1: the byte-buffer + bitwise surface (`write_bytes`, `bytes_f64`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shl`, `shr`) and its reader `read_bytes`. Step 2–4 (2026-10-20/21): the backend's ELF image writer + rel32 linker (`tools/sxlink.sa`, `SX_LINK_DUMP` where `SX_EMIT_LOG` leaves off) and its x86-64 instruction encoder (`tools/sxencode.sa`, `SX_ENCODE_LOG`). Not yet ported: the scanner, parser, type inference, emit tree, runtime stubs and collector of `selfhost/native_aot.c` | `test-native-primitives`, `test-read-bytes`, `test-native-emit-split`, `test-native-ir-log`, `test-native-sxlink`, `test-native-sxencode`, `test-native-test` |
+| D (started 2026-10-18) | Step 1: the byte-buffer + bitwise surface (`write_bytes`, `bytes_f64`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shl`, `shr`) and its reader `read_bytes`. Step 2–4 (2026-10-20/21): the backend's ELF image writer + rel32 linker (`tools/sxlink.sa`, `SX_LINK_DUMP` where `SX_EMIT_LOG` leaves off) and its x86-64 instruction encoder (`tools/sxencode.sa`, `SX_ENCODE_LOG`). Step 5 (2026-10-23): the backend's **phase 1** — `use` expansion and `collect_defs()` — reads the program text itself (`tools/sxdefs.sa`, `SX_DEFS_DUMP`), byte-identical tables and identical diagnostics. Not yet ported: kind inference, the emit tree, the runtime stubs and the collector of `selfhost/native_aot.c` | `test-native-primitives`, `test-read-bytes`, `test-native-emit-split`, `test-native-ir-log`, `test-native-sxlink`, `test-native-sxencode`, `test-native-sxdefs`, `test-native-test` |
 | E (decided 2026-10-23, option 2) | The minimal C seed stays as a **documented, auditable, pinned** exception: one file, 2176 lines, SHA-256 pinned and recomputed by Sayanox, four headers, no process/network call, deterministic output, and the one emitted `popen` site counted. Option 1 (a prebuilt binary rebuilt from `.sa`) still needs Phase D. C is still the trust anchor — now a measured one | `make test-trust-anchor`, `make all-sayanox` (still exits 1) |
 
 1. Expand the Sayanox-written compiler to cover the full documented language.

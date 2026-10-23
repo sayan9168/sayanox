@@ -1,0 +1,7 @@
+struct Box {
+  v
+}
+struct Box<T> {
+  v
+}
+show 1

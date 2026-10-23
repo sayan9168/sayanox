@@ -1,0 +1,61 @@
+# Four hard gates, 2026-10-23 (native front end, phase 1 in Sayanox)
+
+One run, one tree: tools/sxdefs.sa + test-native-sxdefs, and the
+SX_DEFS_DUMP seam added to selfhost/native_aot.c (inert: it only writes
+two files when the variable is set). selfhost/compiler_min.sa is
+untouched; the language and the bootstrap chain do not change.
+
+```
+start  11:44:08 UTC
+end    12:16:39 UTC   (32 min 31 s)
+
+doctor         RC=0   [OK] lines: 0
+true-selfhost  RC=0   [OK] lines: 225
+gen3           RC=0   [OK] lines: 32
+native-test    RC=0   [OK] lines: 245
+```
+
+## The four markers
+
+```
+DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+=== TRUE-SELFHOST-MIN-OK ===
+=== GEN3-OK ===
+=== NATIVE-TEST-OK ===
+HARDGATES-EXIT=0
+```
+
+## gen3 == gen4
+
+```
+[OK] byte-identical gen3 == gen4
+```
+
+## test-native-sxdefs, inside native-test
+
+```
+./selfhost/gen2 tools/sxdefs.sa selfhost/seed_tests/sxdefs.c >/dev/null
+cc -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o tools/sxdefs selfhost/seed_tests/sxdefs.c
+[OK] Sayanox phase-1 front end built from tools/sxdefs.sa
+  [ok] program: 2023 expanded bytes, 41 table lines
+  [ok] quirks: 1064 expanded bytes, 21 table lines
+  [ok] native_strord_test: 1131 expanded bytes, 15 table lines
+  [ok] stdlib_growth_test: 6405 expanded bytes, 113 table lines
+  [ok] stdlib_json_deep_test: 34114 expanded bytes, 104 table lines
+  [ok] generic_struct_nested: 1694 expanded bytes, 22 table lines
+  [ok] full_language_expr: 1946 expanded bytes, 23 table lines
+  [ok] sxencode: 33212 expanded bytes, 278 table lines
+  [ok] native32: 40416 expanded bytes, 152 table lines
+[OK] sxdefs: nine fixtures expand and collect byte-identically to native_aot's phase 1, and the dump changes no emitted byte
+[OK] sxdefs: the table is pinned by content -- two-level splice, generic templates, a generic signature, str/list/struct annotations, every field kind still -1, six globals and no block-local name, and a use inside a comment stays a comment
+[OK] sxdefs: 34 out-of-subset programs are refused by both phase 1 implementations with the same text and the same exit status (33 distinct messages)
+[OK] sxdefs: the 19,577-line compiler itself walks both phase 1 implementations to the same refusal (make sxfenv: at most 6 params)
+[OK] sxdefs: an unknown mode, a missing input and a missing output path are clear errors
+```
+
+## The seams that were already Sayanox, still green on this tree
+
+```
+[OK] sxlink: five fixtures link byte-identically to write_elf and run identically; the dump changes no emitted byte; the ELF ident, the three program headers, the entry point and the page-1 code offset are pinned; missing dump and non-ELF input are clear errors
+[OK] sxencode: the encoder is Sayanox -- five fixtures replay to byte-identical code, every named record is checked against the bytes C wrote for the same call, the recorder changes no emitted byte, all record names are exercised, and a missing log, a wrong-length code.bin and an unknown record are clear errors
+```

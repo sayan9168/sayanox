@@ -47,4 +47,5 @@ tools/sxdiag
 tools/native32
 tools/sxmod
 tools/sxaudit
+tools/sxdefs
 tools/sxdiag.c

@@ -1,0 +1,3 @@
+hold x: num = 5
+hold x: str = "hi"
+show 1

@@ -1,0 +1,4 @@
+struct Box<T> {
+  v: T
+}
+show 1

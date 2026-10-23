@@ -2,10 +2,11 @@
 
 Status: **next phase — in progress.** Recorded 2026-10-17, immediately after
 the language-dependency pass. Phases A and B are done, Phase C's portable half
-is done, and Phase D has reached step 5 (the ELF linker, the instruction
-encoder and the package tool's last shell wrapper are Sayanox; see the table).
-No target reports success for the whole phase: `make all-sayanox` still fails
-closed on purpose.
+is done, and Phase D has reached step 5: the ELF linker, the instruction
+encoder, the package tool's last shell wrapper and — since 2026-10-23 — the
+native backend's *phase 1* (the `use` splice and the definition tables) are
+Sayanox; see the table. No target reports success for the whole phase:
+`make all-sayanox` still fails closed on purpose.
 
 The goal is simple to state: every maintained piece of *logic* in this
 repository is a Sayanox program, and the only non-Sayanox pieces left are the
@@ -16,10 +17,10 @@ smallest possible bootstrap seam and the build driver.
 | Layer | Language | Size | Sayanox? |
 |---|---|---:|---|
 | Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,577 lines | **yes** |
-| Formatter, package tool, language server, IR tool, LSP test client, ELF linker, instruction encoder, diagnostic suites | Sayanox | 8 programs | **yes** |
+| Formatter, package tool, language server, IR tool, LSP test client, ELF linker, instruction encoder, front-end phase 1, module pass, trust-anchor audit, two more machine-code targets, diagnostic suites | Sayanox | 12 programs | **yes** |
 | All tests and fixtures | Sayanox + `sh` drivers | 161 `.sa` files | **yes** (logic); four `sh` drivers became `tools/sxdiag.sa` on 2026-10-21, and `tools/sxpkg.sh` became `tools/sxpkg` on 2026-10-22 |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
-| Native AOT backend (`selfhost/native_aot.c`) | C | 4,498 lines | no — its ELF image writer and rel32 linker are Sayanox (`tools/sxlink.sa`) and so is its x86-64 instruction encoder (`tools/sxencode.sa`), both byte-identical to C; the C file still produces the executables the gates run |
+| Native AOT backend (`selfhost/native_aot.c`) | C | 4,597 lines | no — its ELF image writer and rel32 linker are Sayanox (`tools/sxlink.sa`), so is its x86-64 instruction encoder (`tools/sxencode.sa`), and since 2026-10-23 so is its **phase 1**: `use` expansion and `collect_defs()` (`tools/sxdefs.sa`), all three byte-identical to C; the C file still produces the executables the gates run |
 | Build driver (`Makefile` + 14 sh scripts) | make / POSIX sh | 5,188 lines | no |
 
 The tree also stopped carrying a second copy of itself on 2026-10-21: about
@@ -287,6 +288,67 @@ What step 4 does *not* claim, stated plainly:
   and the collector are still C. The row above stays in the table with its line
   count, and `native_aot.c` grew by the seam rather than shrinking.
 
+**Step 5 (2026-10-23): phase 1 of the front end is Sayanox.** Steps 3 and 4
+are *replays*: `sxlink` is handed a code blob and resolved patch records, and
+`sxencode` is handed a list of encoder calls, so both are checked against
+decisions the C front end already made. `tools/sxdefs.sa` (1,118 lines,
+built by gen2 and cc like the other tools) is the first piece that reads the
+**program text**. It is the two passes `native_aot` runs before anything
+else:
+
+* `expand_use()` — splice every `use "path"` line, depth at most 8, each path
+  tried against the *top* file's directory first and then as written (a
+  nested `use` resolves against the file named on the command line, not
+  against the file it is written in), comments left alone, and the newline
+  that ended the `use` line preserved;
+* `collect_defs()` — walk the expanded text at the top level, with the same
+  string-aware statement skipping, and build the four tables every later pass
+  reads: concrete structs with their field names, generic struct **templates**
+  (`struct Box<T> { v }`, which deliberately take no `S[]` slot), functions
+  with their parameter names, typed-signature kinds, type parameters and
+  return kind, and the globals a top-level `hold` declares with the kind and
+  struct identity of its annotation.
+
+The seam is `SX_DEFS_DUMP=<dir>`: `native_aot` writes `expand.sa` (the
+expanded source, byte for byte) and `defs.txt` (the four tables in
+declaration order) **between `collect_defs()` and `infer()`**, and changes
+nothing else. Dumping before `infer()` is the point: phase 1 deliberately
+leaves the field kinds, the unannotated global kinds and every generic
+instantiation unset, so each `kind=-1` in the dump is part of the contract
+and the comparison tests one pass instead of two.
+
+Gate: `make test-native-sxdefs`, part of `native-test`.
+
+* **Byte identity** of both outputs on nine fixtures, including two with a
+  two-level `use` splice (34,114 expanded bytes for
+  `stdlib_json_deep_test.sa`) and the 1,159-line `tools/sxencode.sa`. A
+  fixture that phase 1 accepts but a later pass refuses is still compared —
+  the dump exists either way — and the inertness check then compares the
+  whole run: same stdout, same stderr, same image when one was produced.
+* **Identical diagnostics** for 34 out-of-subset programs (33 distinct
+  messages) and for the real 19,577-line compiler, which fails phase 1 at
+  `make sxfenv: at most 6 params`. Same text after the tool name, same exit
+  status. A port that parses the same programs but explains itself
+  differently is not the same pass.
+* **The contract pinned by content**, so a change on *both* sides still fails
+  with a reason: the two-level splice reaching the function table, the
+  generic templates, a generic signature's per-parameter type indices,
+  `str`/`list`/struct annotations, every field kind still `-1`, exactly six
+  globals, and no block-local name in the global table.
+
+What step 5 does *not* claim, stated plainly:
+
+* `native_aot` still runs its own phase 1 to compile anything. `sxdefs` is
+  proved equal to it on fixtures and is not wired in as the producer, for the
+  same reason `sxlink` and `sxencode` are not.
+* Kind inference (`pk_*`, the fixpoint and the generic instantiation it
+  drives), the emit tree, the 856-line runtime and the collector are still C.
+  `native_aot.c` grew from 4,498 to 4,597 lines by the seam.
+* `tools/sxdefs.sa` reads its input with `read_file()`, which stops at a NUL
+  byte, and reports a `use` path that names a directory as "cannot open use
+  file" where C's `access(R_OK)` lets it through to a read error. Both are
+  written down in the file's header rather than hidden.
+
 The **encoder seam** built earlier (`SX_EMIT_LOG`, `test-native-emit-split`,
 `test-native-ir-log`) is what makes the remaining port incremental: a Sayanox
 backend is written against a pinned instruction list rather than against the C
@@ -349,6 +411,15 @@ honest as it was.
 
 ## Progress log
 
+* **2026-10-23 — Phase D step 5.** `tools/sxdefs.sa` is the native backend's
+  phase 1 — `use` expansion and `collect_defs()` — in Sayanox, checked against
+  a new `SX_DEFS_DUMP` seam (`test-native-sxdefs`, part of `native-test`):
+  nine fixtures produce byte-identical expanded source and byte-identical
+  definition tables, 34 refusals and the 19,577-line compiler produce
+  identical diagnostics and exit statuses, and the dump changes no emitted
+  byte. It is the first ported piece that reads program text rather than
+  replaying a recorded stream. `native_aot.c` grew from 4,498 to 4,597 lines
+  by the seam and is still C.
 * **2026-10-21 — Phase B.5: `run_command(cmd)` and four drivers leave the shell.**
   `spawn(path)` starts a program with no arguments, which is why every driver
   that ran `gen2 in.sa out.c` had to stay in POSIX sh. `run_command(cmd)` closes that
