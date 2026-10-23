@@ -27,7 +27,7 @@ and `cc` like every other tool) is `selfhost/native_aot.c`'s phase 1:
 | The four tables are byte-identical to C's | the same gate — `cmp` of `defs.txt` against `tools/sxdefs <file> defs` |
 | The seam changes nothing | each fixture is compiled with and without `SX_DEFS_DUMP`; stdout, stderr and the image must match |
 | A program phase 1 refuses is refused **with the same words** | 34 fixtures in `selfhost/sxdefs_tests/refuse/` (33 distinct messages): same text after the tool name, same exit status |
-| …including the real compiler | `selfhost/compiler_min.sa`, 19,577 lines, refused by both at `make sxfenv: at most 6 params` |
+| …including the real compiler | `selfhost/compiler_min.sa`, 20,106 lines, refused by both at `make sxfenv: at most 6 params` |
 | The table's shape, so a change on **both** sides still fails | content pins: the two-level splice reaching the function table, both generic templates, a generic signature's per-parameter type indices, `str`/`list`/struct annotations, every field kind still `-1`, exactly six globals, no block-local name |
 | The fixture is a real program, not a parse exercise | `program.sa` is compiled by `native_aot` and its 13 lines of output are compared with the tracked `program.want` |
 
@@ -117,5 +117,12 @@ again.
   reports a `use` path that names a directory as "cannot open use file"
   where C's `access(R_OK)` lets it through to a read error. Both differences
   are in the tool's header comment.
+
+One number in `hard-gates.log` is stale and was corrected afterwards: the
+gate's own `[OK]` line said *"the 19,577-line compiler"*, a count from
+2026-10-20 that this week's compiler changes moved to 20,106. The log is kept
+verbatim — it is what the run printed — and the Makefile text was corrected in
+the same commit. The number is cosmetic; what the check compares is the two
+implementations' diagnostics.
 
 Full run: [`hard-gates.log`](hard-gates.log).

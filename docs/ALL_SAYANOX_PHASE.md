@@ -16,10 +16,10 @@ smallest possible bootstrap seam and the build driver.
 
 | Layer | Language | Size | Sayanox? |
 |---|---|---:|---|
-| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 19,577 lines | **yes** |
+| Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 20,138 lines | **yes** |
 | Formatter, package tool, language server, IR tool, LSP test client, ELF linker, instruction encoder, front-end phase 1, module pass, trust-anchor audit, two more machine-code targets, diagnostic suites | Sayanox | 12 programs | **yes** |
 | All tests and fixtures | Sayanox + `sh` drivers | 161 `.sa` files | **yes** (logic); four `sh` drivers became `tools/sxdiag.sa` on 2026-10-21, and `tools/sxpkg.sh` became `tools/sxpkg` on 2026-10-22 |
-| Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,035 lines | no |
+| Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,176 lines | no — **documented, auditable and pinned** since 2026-10-23 (Phase E option 2, `make test-trust-anchor`) |
 | Native AOT backend (`selfhost/native_aot.c`) | C | 4,597 lines | no — its ELF image writer and rel32 linker are Sayanox (`tools/sxlink.sa`), so is its x86-64 instruction encoder (`tools/sxencode.sa`), and since 2026-10-23 so is its **phase 1**: `use` expansion and `collect_defs()` (`tools/sxdefs.sa`), all three byte-identical to C; the C file still produces the executables the gates run |
 | Build driver (`Makefile` + 14 sh scripts) | make / POSIX sh | 5,188 lines | no |
 
@@ -153,7 +153,7 @@ Tests: `test-sxpkg`, `test-sxpkg-polish`, `test-sxpkg-online-local`,
 
 ### Phase D — native backend in Sayanox
 
-Port `selfhost/native_aot.c` (4,415 lines of x86-64 ELF emission) to Sayanox.
+Port `selfhost/native_aot.c` (4,597 lines of x86-64 ELF emission) to Sayanox.
 This is the largest piece. It started out needing three language features that
 did not exist; all three are now answered (the third by a different route than
 expected), and what is left is the port itself:
@@ -326,7 +326,7 @@ Gate: `make test-native-sxdefs`, part of `native-test`.
   the dump exists either way — and the inertness check then compares the
   whole run: same stdout, same stderr, same image when one was produced.
 * **Identical diagnostics** for 34 out-of-subset programs (33 distinct
-  messages) and for the real 19,577-line compiler, which fails phase 1 at
+  messages) and for the real 20,106-line compiler, which fails phase 1 at
   `make sxfenv: at most 6 params`. Same text after the tool name, same exit
   status. A port that parses the same programs but explains itself
   differently is not the same pass.
@@ -415,7 +415,7 @@ honest as it was.
   phase 1 — `use` expansion and `collect_defs()` — in Sayanox, checked against
   a new `SX_DEFS_DUMP` seam (`test-native-sxdefs`, part of `native-test`):
   nine fixtures produce byte-identical expanded source and byte-identical
-  definition tables, 34 refusals and the 19,577-line compiler produce
+  definition tables, 34 refusals and the 20,106-line compiler produce
   identical diagnostics and exit statuses, and the dump changes no emitted
   byte. It is the first ported piece that reads program text rather than
   replaying a recorded stream. `native_aot.c` grew from 4,498 to 4,597 lines

@@ -2445,7 +2445,7 @@ test-trust-anchor: $(GEN2) $(SXA_BIN) $(SEED_MIN_BIN)
 	  || { echo "[FAIL] the seed is not deterministic on selfhost/compiler_min.sa"; exit 1; }
 	@test "$$(wc -c < $(TESTS)/anchor/c1.c)" -gt 100000 \
 	  || { echo "[FAIL] the seed produced an implausibly small compiler"; exit 1; }
-	@echo '[OK] anchor behaviour: compiling the 19.6k-line compiler twice gives byte-identical C, so what the anchor is trusted for is reproducible'
+	@echo '[OK] anchor behaviour: compiling the 20.1k-line compiler twice gives byte-identical C, so what the anchor is trusted for is reproducible'
 	@# 5. the claim still fails closed
 	@grep -q 'not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim' Makefile \
 	  || { echo "[FAIL] the all-sayanox target no longer refuses the claim"; exit 1; }
@@ -2586,7 +2586,7 @@ test-native-sxencode: $(NATIVE_BIN) $(SXENCODE_BIN)
 # two implementations agree:
 #   * both outputs are byte-identical on nine fixtures, including two with a
 #     two-level `use` splice and the 1,159-line tools/sxencode.sa;
-#   * the DIAGNOSTICS are identical for 34 refusals plus the real 19,577-line
+#   * the DIAGNOSTICS are identical for 34 refusals plus the real 20,106-line
 #     compiler -- same text after the tool name, same exit status;
 #   * the shape of the table is pinned by content, so a change on BOTH sides
 #     still fails here with a reason.
@@ -2704,7 +2704,7 @@ test-native-sxdefs: $(NATIVE_BIN) $(SXDEFS_BIN)
 	@test "$$(cat $(TESTS)/sxdefs/refuse/*.c.msg | sort -u | wc -l)" -ge 24 \
 	  || { echo "[FAIL] sxdefs: the refusal set collapsed onto a handful of messages"; exit 1; }
 	@echo "[OK] sxdefs: 34 out-of-subset programs are refused by both phase 1 implementations with the same text and the same exit status ($$(cat $(TESTS)/sxdefs/refuse/*.c.msg | sort -u | wc -l) distinct messages)"
-	@# ---- the real compiler: 19,577 lines, refused identically ----
+	@# ---- the real compiler: 20,106 lines, refused identically ----
 	@./$(NATIVE_BIN) $(MIN_SA) $(TESTS)/sxdefs/min.elf 2> $(TESTS)/sxdefs/min.c.err; crc=$$?; \
 	 ./$(SXDEFS_BIN) $(MIN_SA) defs $(TESTS)/sxdefs/min.defs 2> $(TESTS)/sxdefs/min.s.err; src=$$?; \
 	 [ $$crc = 1 ] && [ $$src = 1 ] \
@@ -2715,7 +2715,7 @@ test-native-sxdefs: $(NATIVE_BIN) $(SXDEFS_BIN)
 	  || { echo "[FAIL] sxdefs: the compiler is refused with different words"; exit 1; }
 	@grep -q 'at most 6 params' $(TESTS)/sxdefs/min.c.msg \
 	  || { echo "[FAIL] sxdefs: the compiler now fails phase 1 for a different reason -- re-read the claim"; exit 1; }
-	@echo "[OK] sxdefs: the 19,577-line compiler itself walks both phase 1 implementations to the same refusal ($$(cat $(TESTS)/sxdefs/min.c.msg))"
+	@echo "[OK] sxdefs: the 20,106-line compiler itself walks both phase 1 implementations to the same refusal ($$(cat $(TESTS)/sxdefs/min.c.msg))"
 	@# ---- the tool's own failures are clear ----
 	@if ./$(SXDEFS_BIN) selfhost/sxdefs_tests/program.sa tables $(TESTS)/sxdefs/bad.out >/dev/null 2>&1; then \
 	  echo "[FAIL] sxdefs accepted a mode it does not implement"; exit 1; fi
