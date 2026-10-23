@@ -1,0 +1,4 @@
+hold total = 5
+make bump(total: num) -> num {
+  give total + 1
+}

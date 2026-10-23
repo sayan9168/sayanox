@@ -45,7 +45,14 @@ is written in Sayanox.
 
 ## What still is not Sayanox-owned
 
-- `selfhost/seed/sxc_seed_min.c` — the trusted C bootstrap seed.
+- `selfhost/seed/sxc_seed_min.c` — the trusted C bootstrap seed. Since
+  2026-10-23 it is a *pinned* exception rather than an open question:
+  `make test-trust-anchor` fixes its size and SHA-256 (recomputed by
+  Sayanox, `tools/sxaudit.sa` + `stdlib/crypto.sa`), its four standard
+  headers, the absence of any process/network/dynamic-loading call, and the
+  single `popen` site — which lives in the *runtime text the seed emits*
+  (`sx_http`, behind `http_get`), not in the compiler
+  ([ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md#phase-e-decision-2026-10-23-option-2-and-it-is-now-measured)).
 - `selfhost/native_aot.c` — the x86-64 Linux native-AOT implementation. Its
   ELF writer, rel32 linker and instruction encoder now exist in Sayanox
   (`tools/sxlink.sa`, `tools/sxencode.sa`) and are proved byte-identical, but
@@ -80,13 +87,14 @@ is left and fails closed.
 | B (done 2026-10-17; +B.5 2026-10-21) | `tools/emit_to_ir` in Sayanox; directory builtins + Sayanox folder index (C header and binder deleted); process builtins + Sayanox LSP test client (the last C file in `tools/` deleted); `run_command(cmd)` + `tools/sxdiag` replacing four `sh` diagnostic drivers | `test-emit-to-ir`, `test-native-ir-portable`, `test-path-builtins`, `test-proc-builtins`, `test-lsp`, `test-lsp-workspace`, `test-sxdiag` |
 | C (file side done 2026-10-18) | publish, install-local, local sync/fetch, seed folders and the folder primitives moved to `tools/sxpkg.sa`. The http(s) transport stays in the shell: `test-sxpkg-transfer-hardening` pins curl/wget as the transport (the argv obstacle went away with `run_command(cmd)` on 2026-10-21; the policy did not) | `test-sxpkg*` unchanged, plus `test-sxpkg-sayanox-logic` |
 | D (started 2026-10-18) | Step 1: the byte-buffer + bitwise surface (`write_bytes`, `bytes_f64`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shl`, `shr`) and its reader `read_bytes`. Step 2–4 (2026-10-20/21): the backend's ELF image writer + rel32 linker (`tools/sxlink.sa`, `SX_LINK_DUMP` where `SX_EMIT_LOG` leaves off) and its x86-64 instruction encoder (`tools/sxencode.sa`, `SX_ENCODE_LOG`). Not yet ported: the scanner, parser, type inference, emit tree, runtime stubs and collector of `selfhost/native_aot.c` | `test-native-primitives`, `test-read-bytes`, `test-native-emit-split`, `test-native-ir-log`, `test-native-sxlink`, `test-native-sxencode`, `test-native-test` |
-| E | Seed decision: prebuilt trust anchor or a documented C exception | `make all-sayanox` |
+| E (decided 2026-10-23, option 2) | The minimal C seed stays as a **documented, auditable, pinned** exception: one file, 2176 lines, SHA-256 pinned and recomputed by Sayanox, four headers, no process/network call, deterministic output, and the one emitted `popen` site counted. Option 1 (a prebuilt binary rebuilt from `.sa`) still needs Phase D. C is still the trust anchor — now a measured one | `make test-trust-anchor`, `make all-sayanox` (still exits 1) |
 
 1. Expand the Sayanox-written compiler to cover the full documented language.
 2. Replace bootstrap/backend responsibilities incrementally, retaining tests
    and reproducible compiler rebuilds at every stage.
 3. Keep the small trusted seed only as long as another validated bootstrap
-   path needs it.
+   path needs it — and, while it is kept, keep it pinned
+   (`make test-trust-anchor`).
 
 A language compiler always needs an initial executable somewhere in its
 history. The practical goal is a small, auditable bootstrap and a Sayanox-built

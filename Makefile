@@ -40,7 +40,7 @@ SXDIAG_BIN := tools/sxdiag
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
         pack-compiler test-http-get test-sayacrawl test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
-        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-sxdiag test-native32 test-native-arm64
+        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-sxdiag test-native32 test-native-arm64 test-sxmod test-trust-anchor
 
 all: true-selfhost-min
 
@@ -2083,6 +2083,27 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 # Running the i386 binaries needs a kernel with IA32 emulation. Without it
 # the byte assertions still run and the execution ones say [SKIP].
 # ---------------------------------------------------------------------------
+SXA_BIN := tools/sxaudit
+SXA_SA  := tools/sxaudit.sa
+
+tools/sxaudit: $(SXA_SA) stdlib/crypto.sa $(GEN2)
+	./$(GEN2) $(SXA_SA) $(TESTS)/sxaudit.c >/dev/null
+	@if grep -q '#error' $(TESTS)/sxaudit.c; then \
+	  echo "[FAIL] sxaudit: #error in the generated C"; head -1 $(TESTS)/sxaudit.c; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/sxaudit.c
+	@echo '[OK] the trust-anchor auditor built from tools/sxaudit.sa by gen2'
+
+SXM_BIN := tools/sxmod
+SXM_SA  := tools/sxmod.sa
+SXM_T   := selfhost/sxmod_tests
+
+tools/sxmod: $(SXM_SA) $(GEN2)
+	./$(GEN2) $(SXM_SA) $(TESTS)/sxmod.c >/dev/null
+	@if grep -q '#error' $(TESTS)/sxmod.c; then \
+	  echo "[FAIL] sxmod: #error in the generated C"; head -1 $(TESTS)/sxmod.c; exit 1; fi
+	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/sxmod.c
+	@echo '[OK] the namespacing pass built from tools/sxmod.sa by gen2'
+
 N32_BIN := tools/native32
 N32_SA  := tools/native32.sa
 N32_T   := selfhost/native32_tests
@@ -2257,6 +2278,182 @@ test-native-arm64: $(SEED_MIN_BIN) $(N32_BIN)
 	@echo '[OK] arm64 refusals: the nine out-of-subset programs are refused on this target too, and an unknown target name is refused rather than silently defaulted'
 
 native-test: test-native-arm64
+
+
+# ---------------------------------------------------------------------------
+# test-sxmod: module namespacing, as a source-to-source pass in Sayanox.
+#
+# docs/MODULES.md says the bootstrap dialect has textual `use` splicing and
+# no module identity -- one flat name table, no aliases, no qualified names.
+# That is still true of the compiler. tools/sxmod.sa adds the capability at
+# the layer where it can be built honestly: it rewrites a program written
+# with `module NAME from "path"` into plain bootstrap Sayanox with every
+# module declaration prefixed.
+#
+# The gate starts from the negative control, because without it the feature
+# is only a renaming exercise: two modules that both declare `add` cannot be
+# spliced into one program by ANY backend. Then it shows the same two modules
+# composing cleanly through the pass, with identical stdout on seed-min,
+# gen2 and native_aot.
+.PHONY: test-sxmod
+test-sxmod: $(SEED_MIN_BIN) $(GEN2) $(SXM_BIN)
+	@mkdir -p $(TESTS)/sxm
+	@# 1. the flat dialect cannot compose these two modules at all
+	@if ./$(SEED_MIN_BIN) $(SXM_T)/collide_flat.sa > $(TESTS)/sxm/collide.c 2>$(TESTS)/sxm/collide.err; then \
+	  echo "[FAIL] seed-min accepted two spliced modules that both declare add"; exit 1; fi
+	@grep -q 'duplicate function name' $(TESTS)/sxm/collide.err \
+	  || { echo "[FAIL] seed-min refused the flat splice for the wrong reason"; cat $(TESTS)/sxm/collide.err; exit 1; }
+	@./$(GEN2) $(SXM_T)/collide_flat.sa $(TESTS)/sxm/collide_g2.c >/dev/null 2>&1 || true
+	@if $(CC) -O2 -o $(TESTS)/sxm/collide_g2 $(TESTS)/sxm/collide_g2.c 2>$(TESTS)/sxm/collide_g2.err; then \
+	  echo "[FAIL] the C gen2 emitted for the flat splice compiled, so there was no collision"; exit 1; fi
+	@grep -q "'add'" $(TESTS)/sxm/collide_g2.err \
+	  || { echo "[FAIL] cc rejected gen2's flat splice for an unrelated reason"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  if ./$(NATIVE_BIN) $(SXM_T)/collide_flat.sa $(TESTS)/sxm/collide_nat >/dev/null 2>$(TESTS)/sxm/collide_nat.err; then \
+	    echo "[FAIL] native_aot accepted two spliced modules that both declare add"; exit 1; fi; \
+	  grep -q 'declared twice' $(TESTS)/sxm/collide_nat.err \
+	    || { echo "[FAIL] native_aot refused the flat splice for the wrong reason"; exit 1; }; \
+	fi
+	@echo '[OK] the flat dialect cannot compose two modules that both declare `add`: seed-min says duplicate function name, cc rejects gen2 C, native_aot says declared twice'
+	@# 2. the same two modules through the pass, on three backends
+	@./$(SXM_BIN) $(SXM_T)/app.sa $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] sxmod refused selfhost/sxmod_tests/app.sa"; exit 1; }
+	@./$(SXM_BIN) $(SXM_T)/app.sa $(TESTS)/sxm/app2.sa
+	@cmp $(TESTS)/sxm/app.sa $(TESTS)/sxm/app2.sa \
+	  || { echo "[FAIL] the namespacing pass is not deterministic"; exit 1; }
+	@./$(SEED_MIN_BIN) $(TESTS)/sxm/app.sa > $(TESTS)/sxm/app_ms.c
+	@$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/sxm/app_ms $(TESTS)/sxm/app_ms.c
+	@./$(TESTS)/sxm/app_ms > $(TESTS)/sxm/app.want
+	@cmp $(SXM_T)/app.want $(TESTS)/sxm/app.want \
+	  || { echo "[FAIL] the namespaced program no longer prints the nine pinned lines"; exit 1; }
+	@./$(GEN2) $(TESTS)/sxm/app.sa $(TESTS)/sxm/app_g2.c >/dev/null
+	@$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/sxm/app_g2 $(TESTS)/sxm/app_g2.c
+	@./$(TESTS)/sxm/app_g2 > $(TESTS)/sxm/app.g2
+	@cmp $(TESTS)/sxm/app.want $(TESTS)/sxm/app.g2 \
+	  || { echo "[FAIL] gen2 disagrees with seed-min on the namespaced program"; exit 1; }
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) $(TESTS)/sxm/app.sa $(TESTS)/sxm/app_nat >/dev/null; \
+	  ./$(TESTS)/sxm/app_nat > $(TESTS)/sxm/app.nat; \
+	  cmp $(TESTS)/sxm/app.want $(TESTS)/sxm/app.nat \
+	    || { echo "[FAIL] native_aot disagrees with seed-min on the namespaced program"; exit 1; }; \
+	else echo "[SKIP] native_aot is not built; the seed-min/gen2 comparison still ran"; fi
+	@echo '[OK] two modules that each declare `add` compose through sxmod and print the same nine lines under seed-min, gen2 and native_aot'
+	@# 3. what the rewrite did and did not touch
+	@grep -q 'make math__add(' $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] the math module was not prefixed"; exit 1; }
+	@grep -q 'make text__add(' $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] the text module was not prefixed"; exit 1; }
+	@grep -q 'show math__scaled(4, math__scale)' $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] a qualified read of a module-level `hold` was not prefixed"; exit 1; }
+	@grep -q 'hold math__base = math__add(40, 2)' $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] a top-level initialiser calling the same module was not prefixed"; exit 1; }
+	@grep -q 'hold once = math__scaled(v, k)' $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] a module-internal call was not prefixed"; exit 1; }
+	@grep -q '"add is a word in this string"' $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] the rewrite changed the inside of a string literal"; exit 1; }
+	@grep -q 'the word add appears in this comment' $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] the rewrite changed the inside of a comment"; exit 1; }
+	@grep -q '^show p.x$$' $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] a struct field access was rewritten as if it were a module reference"; exit 1; }
+	@grep -q 'hold mark = "!"' $(TESTS)/sxm/app.sa \
+	  || { echo "[FAIL] a local hold was prefixed"; exit 1; }
+	@if grep -q 'text__mark\|math__once\|math__v\|p__x' $(TESTS)/sxm/app.sa; then \
+	  echo "[FAIL] a local, a parameter or a field was given a module prefix"; exit 1; fi
+	@echo '[OK] the rewrite prefixes exactly the module-level names: internal references and initialisers follow, while locals, parameters, struct fields, comments and string literals are left byte for byte'
+	@# 4. a member is not reachable without its module name
+	@./$(SXM_BIN) $(SXM_T)/unqualified.sa $(TESTS)/sxm/unq.sa \
+	  || { echo "[FAIL] sxmod refused the unqualified fixture; it should pass it through untouched"; exit 1; }
+	@if ./$(SEED_MIN_BIN) $(TESTS)/sxm/unq.sa > $(TESTS)/sxm/unq.c 2>$(TESTS)/sxm/unq.err; then \
+	  echo "[FAIL] a module member was reachable without its module name"; exit 1; fi
+	@grep -q 'unknown function' $(TESTS)/sxm/unq.err \
+	  || { echo "[FAIL] the unqualified call failed for an unrelated reason"; cat $(TESTS)/sxm/unq.err; exit 1; }
+	@echo '[OK] a module member is not visible unqualified: `add(2, 3)` after the pass names nothing and the compiler says so'
+	@# 5. every refusal, by name
+	@for f in $(SXM_T)/refuse/*.sa; do \
+	  if ./$(SXM_BIN) $$f $(TESTS)/sxm/bad.sa > $(TESTS)/sxm/bad.err 2>&1; then \
+	    echo "[FAIL] sxmod accepted $$f"; exit 1; fi; \
+	  grep -q 'sxmod: ' $(TESTS)/sxm/bad.err \
+	    || { echo "[FAIL] $$f was refused without an sxmod diagnostic"; exit 1; }; \
+	done
+	@test "$$(ls $(SXM_T)/refuse/*.sa | wc -l)" = 16 \
+	  || { echo "[FAIL] the refusal set changed size; update the gate and docs/MODULES.md"; exit 1; }
+	@echo '[OK] sxmod refusals: unknown member, bare alias, duplicate alias, duplicate member, missing/unquoted path, no `from`, a late `module` line, an uppercase module name, an empty module, no module at all, `use` in a program or a module, a `module` inside a module, and a parameter or local that shadows a module name -- 16 refusals, each with a diagnostic and a non-zero exit'
+
+native-test: test-sxmod
+
+
+# ---------------------------------------------------------------------------
+# test-trust-anchor: the C seed is ONE pinned, auditable file.
+#
+# docs/ALL_SAYANOX_PHASE.md "Phase E -- the seed" says the C seed has two
+# honest end states -- a prebuilt checksummed binary, or a minimal C seed
+# kept forever as a documented auditable exception -- and that neither was
+# implemented. This gate implements the second one as a machine check.
+#
+# It does NOT claim the trust problem is solved. The seed compiled the
+# compiler that compiled the auditor, so a hash pin is tamper evidence
+# against drift, not immunity from a malicious seed (Thompson). Breaking that
+# circle needs a second independent implementation to diverse-double-compile
+# against, and this repository has none. What is claimed is bounded and
+# checkable: the anchor is one named file of a pinned size and SHA-256, its
+# external surface is four standard headers and no process, network or
+# dynamic-loading call, its output on the real workload is deterministic, and
+# the all-Sayanox claim still fails closed.
+.PHONY: test-trust-anchor
+test-trust-anchor: $(GEN2) $(SXA_BIN) $(SEED_MIN_BIN)
+	@mkdir -p $(TESTS)/anchor
+	@# 1. size and digest, computed by Sayanox (stdlib/crypto.sa), pinned
+	@./$(SXA_BIN) $(SEED_MIN_C) > $(TESTS)/anchor/seed.audit \
+	  || { echo "[FAIL] the auditor could not read the seed"; exit 1; }
+	@cmp selfhost/seed/sxc_seed_min.audit $(TESTS)/anchor/seed.audit \
+	  || { echo "[FAIL] the trust anchor changed: selfhost/seed/sxc_seed_min.c no longer matches its pinned size and SHA-256 in selfhost/seed/sxc_seed_min.audit. If the change is intended, review the C by hand, regenerate the pin with ./$(SXA_BIN) $(SEED_MIN_C), and say why in the commit"; exit 1; }
+	@echo '[OK] trust anchor pinned: selfhost/seed/sxc_seed_min.c is 2176 lines / 100919 bytes, SHA-256 e4cc34b4...1cb9, recomputed here by Sayanox itself (stdlib/crypto.sa) and compared with the tracked pin'
+	@# 2. the bootstrap compiles exactly this one tracked C file
+	@grep -q '^	$$(CC) -O2 -o $$(SEED_MIN_BIN) $$(SEED_MIN_C)$$' Makefile \
+	  || { echo "[FAIL] the seed build rule changed shape; re-audit what C the bootstrap compiles"; exit 1; }
+	@test "$$(grep -c '\.c' $(TESTS)/anchor/seed.audit)" = 1 \
+	  || { echo "[FAIL] the audit record names more than one C file"; exit 1; }
+	@echo '[OK] one anchor: the seed-min rule compiles selfhost/seed/sxc_seed_min.c and nothing else; every later .c in the chain (gen1_min.c, gen2.c, gen3.c, gen4.c) is generated by the toolchain and gitignored'
+	@# 3. the external surface of the anchor
+	@test "$$(grep -c '^#include' $(SEED_MIN_C))" = 4 \
+	  || { echo "[FAIL] the seed's #include set changed size"; grep '^#include' $(SEED_MIN_C); exit 1; }
+	@for h in ctype.h stdio.h stdlib.h string.h; do \
+	  grep -q "^#include <$$h>" $(SEED_MIN_C) \
+	    || { echo "[FAIL] the seed no longer includes $$h, or includes it differently"; exit 1; }; \
+	done
+	@for bad in system fork execl execv execve dlopen dlsym socket connect setuid unlink rename chmod remove tmpnam getenv; do \
+	  if grep -qw "$$bad" $(SEED_MIN_C); then \
+	    echo "[FAIL] the trust anchor now references $$bad; its surface must stay: read a file, write a file, print"; exit 1; fi; \
+	done
+	@echo '[OK] anchor surface: four standard headers (ctype, stdio, stdlib, string), and not one reference to system, fork, exec*, dlopen, socket, setuid, unlink, rename, chmod, remove, tmpnam or getenv -- 2176 lines a reviewer can actually read'
+	@# 3b. the one shell-out is in the RUNTIME TEXT the anchor emits, not in
+	@# the anchor itself, and it is the documented http_get builtin. Pinning
+	@# the count is what stops a second one appearing quietly.
+	@test "$$(grep -cw popen $(SEED_MIN_C))" = 1 \
+	  || { echo "[FAIL] the number of popen sites in the seed changed; there must be exactly one, inside the emitted sx_http runtime"; exit 1; }
+	@test "$$(grep -cw curl $(SEED_MIN_C))" = 1 \
+	  || { echo "[FAIL] the number of curl sites in the seed changed"; exit 1; }
+	@grep -nw popen $(SEED_MIN_C) | grep -q 'sx_http' \
+	  || { echo "[FAIL] the seed's popen is no longer the emitted sx_http runtime function"; exit 1; }
+	@grep -nw popen $(SEED_MIN_C) | grep -q 'puts(' \
+	  || { echo "[FAIL] the seed's popen is no longer inside emitted runtime text -- the compiler itself now shells out"; exit 1; }
+	@echo '[OK] the anchor itself never shells out: the single popen/pclose/curl site is one line of RUNTIME text it emits (sx_http, behind the http_get builtin), so every compiled program carries exactly one shell-out and the compiler carries none'
+	@# 4. the anchor is deterministic on the real workload
+	@./$(SEED_MIN_BIN) selfhost/compiler_min.sa > $(TESTS)/anchor/c1.c
+	@./$(SEED_MIN_BIN) selfhost/compiler_min.sa > $(TESTS)/anchor/c2.c
+	@cmp $(TESTS)/anchor/c1.c $(TESTS)/anchor/c2.c \
+	  || { echo "[FAIL] the seed is not deterministic on selfhost/compiler_min.sa"; exit 1; }
+	@test "$$(wc -c < $(TESTS)/anchor/c1.c)" -gt 100000 \
+	  || { echo "[FAIL] the seed produced an implausibly small compiler"; exit 1; }
+	@echo '[OK] anchor behaviour: compiling the 19.6k-line compiler twice gives byte-identical C, so what the anchor is trusted for is reproducible'
+	@# 5. the claim still fails closed
+	@grep -q 'not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim' Makefile \
+	  || { echo "[FAIL] the all-sayanox target no longer refuses the claim"; exit 1; }
+	@grep -q 'Phase E decision (2026-10-23): option 2' docs/ALL_SAYANOX_PHASE.md \
+	  || { echo "[FAIL] the recorded Phase E decision is gone from docs/ALL_SAYANOX_PHASE.md"; exit 1; }
+	@echo '[OK] still failing closed: `make all-sayanox` refuses the all-in-Sayanox claim, and this gate pins the exception rather than removing it -- C is still the trust anchor, now a measured one'
+
+native-test: test-trust-anchor
 
 
 # ---------------------------------------------------------------------------

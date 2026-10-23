@@ -1,0 +1,2 @@
+module nothing from "selfhost/sxmod_tests/refuse/mods/empty.sa"
+show 1

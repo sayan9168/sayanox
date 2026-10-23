@@ -1,0 +1,76 @@
+// tools/sxaudit.sa -- the TRUST-ANCHOR AUDIT, written in Sayanox and
+// compiled by selfhost/gen2.
+//
+// Why this file exists. docs/ALL_SAYANOX_PHASE.md "Phase E -- the seed" says
+// the C seed has two honest end states and that **neither is implemented**:
+//
+//   1. a prebuilt, checksummed bootstrap binary (the binary is then the
+//      trust anchor), or
+//   2. a minimal C seed kept forever as a documented, auditable exception.
+//
+// This program implements the measurement half of option 2. It reports the
+// exact size and SHA-256 of a file, so that `make test-trust-anchor` can pin
+// the trust anchor against a tracked value and fail the moment it changes
+// without review. The digest is computed by stdlib/crypto.sa -- Sayanox
+// code, the same SHA-256 the package tool uses.
+//
+// WHAT THIS DOES NOT PROVE. A hash pin is tamper *evidence against drift*,
+// not immunity from a malicious seed: the seed compiled the compiler that
+// compiled this auditor, and no amount of hashing inside that circle breaks
+// it (Thompson, "Reflections on Trusting Trust"). Breaking it needs a second
+// independent implementation to diverse-double-compile against, which this
+// repository does not have. What the pin does buy is concrete: the anchor is
+// one named file of a known size and digest, it cannot change by accident or
+// in an unreviewed commit, and its external surface is small enough to read.
+//
+// Usage:   ./tools/sxaudit <file>
+//
+//   file selfhost/seed/sxc_seed_min.c
+//   bytes 71234
+//   lines 2176
+//   sha256 <64 hex digits>
+
+use "../stdlib/crypto.sa"
+
+make audit_fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxaudit: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+make count_nl(xs: list) -> num {
+  hold n = len(xs)
+  hold i = 0
+  hold c = 0
+  while i < n {
+    when xs[i] == 10 {
+      c = c + 1
+    }
+    i = i + 1
+  }
+  give c
+}
+
+make run() -> num {
+  when arg_count() < 2 {
+    hold usage = audit_fail(2, "usage: sxaudit <file>")
+  }
+  hold path = arg(1)
+  hold xs = []
+  hold n = read_bytes(path, xs)
+  when n < 0 {
+    hold noread = audit_fail(1, concat("cannot read ", path))
+  }
+  when n == 0 {
+    hold empty = audit_fail(1, concat("refusing to audit an empty file: ", path))
+  }
+  hold lines = count_nl(xs)
+  hold digest = cx_sha256_list(xs)
+  show concat("file ", path)
+  show concat("bytes ", numstr(n))
+  show concat("lines ", numstr(lines))
+  show concat("sha256 ", digest)
+  give 0
+}
+
+hold rc = run()

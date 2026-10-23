@@ -307,8 +307,45 @@ recorded before this phase starts:
    auditable exception (a few thousand lines) and state that the compiler
    itself is fully Sayanox.
 
-Neither option is implemented. Until one is, the seed row above stays honest
-and `make all-sayanox` keeps failing.
+### Phase E decision (2026-10-23): option 2, and it is now measured
+
+**Option 2 is chosen: the minimal C seed stays, as a documented, auditable,
+pinned exception.** Option 1 is not ruled out for ever, but it needs
+something this repository does not have — a reproducible way to rebuild the
+prebuilt binary from `.sa` with the Sayanox native backend, which means
+`native_aot` itself in Sayanox (Phase D) first.
+
+Choosing is not enough on its own, so the exception is now machine-checked by
+`make test-trust-anchor`:
+
+| Pinned | Value on 2026-10-23 |
+|---|---|
+| the anchor is one file | `selfhost/seed/sxc_seed_min.c` — the `seed-min` rule compiles it and nothing else; `gen1_min.c`, `gen2.c`, `gen3.c`, `gen4.c` are all generated and gitignored |
+| size | 2176 lines, 100 919 bytes |
+| SHA-256 | `e4cc34b41041044579ee34ab05c32997f3ad45adbe88973d8403ae43a2a01cb9` |
+| who computes it | `tools/sxaudit.sa` — **Sayanox**, using `stdlib/crypto.sa`, compiled by gen2 |
+| headers | exactly four: `ctype.h`, `stdio.h`, `stdlib.h`, `string.h` |
+| forbidden, count 0 | `system`, `fork`, `exec*`, `dlopen`, `dlsym`, `socket`, `connect`, `setuid`, `unlink`, `rename`, `chmod`, `remove`, `tmpnam`, `getenv` |
+| the one shell-out | exactly one `popen`/`pclose`/`curl`, and it is **emitted runtime text**, not compiler code: the `sx_http` function behind the `http_get` builtin. The compiler itself never shells out; every program it compiles carries that one site |
+| behaviour | compiling the 19 600-line compiler twice gives byte-identical C |
+
+That last-but-one row is the kind of thing an audit is *for*. "The seed does
+not shell out" and "programs the seed compiles cannot shell out" are
+different statements, and only the first one is true. The gate pins the
+count at one so a second site cannot appear quietly.
+
+**What this does not fix.** The seed compiled the compiler that compiled the
+auditor. A hash pin is tamper evidence against drift and unreviewed edits; it
+is not immunity from a seed that was already malicious, which is Thompson's
+"Reflections on Trusting Trust" and needs a second independent implementation
+to diverse-double-compile against. There is no second implementation here, so
+that remains open and is written down rather than hashed over. C is still the
+trust anchor — it is now a *measured* one, with a size, a digest, a surface
+and a behaviour that cannot change without a reviewer saying so.
+
+`make all-sayanox` still exits 1, and `test-trust-anchor` asserts that it
+still refuses the claim. The seed row in the inventory stays exactly as
+honest as it was.
 
 ## Progress log
 

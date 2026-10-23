@@ -1,0 +1,21 @@
+// A module for tools/sxmod. Plain bootstrap Sayanox: no `module` line, no
+// `use`, and every top-level name is exported. `add` here has nothing to do
+// with `add` in text.sa -- that is the whole point of the exercise.
+hold scale = 10
+
+make add(a: num, b: num) -> num {
+  give a + b
+}
+
+make scaled(v: num, k: num) -> num {
+  give v * k
+}
+
+// a top-level name whose value calls another top-level name of the same
+// module: the rewrite has to prefix both
+hold base = add(40, 2)
+
+make twice_scaled(v: num, k: num) -> num {
+  hold once = scaled(v, k)
+  give once + scaled(v, k)
+}

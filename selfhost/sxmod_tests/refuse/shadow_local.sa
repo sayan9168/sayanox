@@ -1,0 +1,2 @@
+module acc from "selfhost/sxmod_tests/refuse/mods/shadow_l.sa"
+show acc.bump(1)

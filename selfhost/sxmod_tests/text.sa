@@ -1,0 +1,16 @@
+// A second module that declares `add` as well. In the flat dialect these two
+// files cannot be spliced into one program at all.
+make add(a: str, b: str) -> str {
+  give concat(a, b)
+}
+
+make shout(s: str) -> str {
+  hold mark = "!"
+  give concat(s, mark)
+}
+
+// the word add appears in this comment and in the string below; neither may
+// be rewritten
+make label() -> str {
+  give "add is a word in this string"
+}

@@ -1,0 +1,2 @@
+module math from selfhost/sxmod_tests/math.sa
+show math.add(1, 2)

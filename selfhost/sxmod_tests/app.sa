@@ -1,0 +1,20 @@
+module math from "selfhost/sxmod_tests/math.sa"
+module text as t from "selfhost/sxmod_tests/text.sa"
+
+struct Point {
+  x
+  y
+}
+
+show math.add(2, 3)
+show t.add("a", "b")
+show math.scaled(4, math.scale)
+show math.twice_scaled(3, math.scale)
+show math.base
+show t.shout("hi")
+show t.label()
+
+// a dotted expression that is NOT a module reference stays exactly as it is
+hold p = Point { x: 7, y: 8 }
+show p.x
+show p.y

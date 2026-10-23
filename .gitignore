@@ -45,4 +45,6 @@ tools/sxlink
 tools/sxencode
 tools/sxdiag
 tools/native32
+tools/sxmod
+tools/sxaudit
 tools/sxdiag.c

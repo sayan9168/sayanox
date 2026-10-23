@@ -1,0 +1,2 @@
+module spliced from "selfhost/sxmod_tests/refuse/mods/uses.sa"
+show spliced.g()

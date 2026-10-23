@@ -1,0 +1,2 @@
+module nope from "selfhost/sxmod_tests/does_not_exist.sa"
+show nope.add(1, 2)
