@@ -101,9 +101,12 @@ immediately.
   fixture's top level uses —
   `add addsd call cvtsi2sd cvttsd2si jae je jmp lea mov movq movzx mulsd pop push seta ucomisd` —
   and the named call targets (`call make twice`, `call builtin concat`,
-  `call builtin gccheck`). A future riscv64/ARM64 backend would need an ABI-aware lowering adapter,
-  not just a different byte encoder: these primitive calls still assume
-  x86 registers, stack behavior and instruction semantics.
+  `call builtin gccheck`). A future riscv64/ARM64 backend *for the native
+  subset* would need an ABI-aware lowering adapter, not just a different byte
+  encoder: these primitive calls still assume x86 registers, stack behavior
+  and instruction semantics. (`tools/native32.sa` sidesteps that by compiling
+  a far smaller integer subset with no calls into the runtime at all, which is
+  exactly why its two targets could share one front end.)
 * **The value model.** Numbers are IEEE double bits in 64-bit slots and
   registers; arithmetic moves them through `xmm0`/`xmm1` (`emit_d2i` and
   `emit_i2d` are the two conversions); a list length or a `len()` result is an
@@ -233,8 +236,10 @@ port, cross-execution smoke test or second-backend acceptance gate had been
 added, and host-C compilation of generated C and abstract register names are
 not a second native ISA. (Later: 2026-10-23 added `tools/native32.sa`, an
 i386 backend for a documented integer subset with its own acceptance gate,
-`make test-native32`. Still no aarch64 or riscv64 emitter, and `native_aot`
-is still x86-64 only.)
+`make test-native32`, and an aarch64 encoder in the same program,
+`make test-native-arm64`, whose images are emitted and byte-pinned but
+never executed here. Still no riscv64 emitter, no cross-execution smoke
+test for aarch64, and `native_aot` is still x86-64 only.)
 Actual gates: [2026-10-16 IR/modules logs](gate-logs/2026-10-16-ir-modules/).
 
 ## The image seam and the Sayanox linker (`SX_LINK_DUMP`, 2026-10-20)

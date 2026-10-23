@@ -1,0 +1,51 @@
+# Four hard gates, 2026-10-23 (arm64 third ISA)
+
+Tree: tools/native32.sa with the arm64 encoder, test-native-arm64, the three
+goldens, and the doc updates. Nothing else changed; selfhost/compiler_min.sa
+was not touched by this increment.
+
+```
+start  06:00:27 UTC
+end    06:31:53 UTC   (31 min 26 s)
+
+doctor         RC=0   [OK] lines: 0
+true-selfhost  RC=0   [OK] lines: 225
+gen3           RC=0   [OK] lines: 32
+native-test    RC=0   [OK] lines: 226
+```
+
+## The four markers
+
+```
+DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+=== TRUE-SELFHOST-MIN-OK ===
+=== GEN3-OK ===
+=== NATIVE-TEST-OK ===
+HARDGATES-EXIT=0
+```
+
+## gen3 == gen4
+
+```
+./selfhost/gen3 selfhost/compiler_min.sa selfhost/gen4.c >/dev/null
+[OK] byte-identical gen3 == gen4
+[OK] compiler source uses live module, generic function, generic struct size state and concrete path fields; gen1-min/gen2/gen3 compile the module fixture; gen3==gen4 (not full-language self-host)
+```
+
+## The new gate, inside native-test
+
+```
+[OK] arm64: expr, flow and text are emitted, byte-deterministic, and byte-identical to the disassembly-reviewed goldens -- emitted and pinned here, never executed in this repository
+[OK] arm64 container: ELFCLASS64 / ET_EXEC / EM_AARCH64, two program headers, entry 0x400134, text at 0x400000 and data at 0x401000, exit via svc #0 with x8=93
+[OK] one front end, two encoders: i386 and arm64 lay out byte-identical data segments for the same source while their text segments differ
+[OK] arm64 refusals: the nine out-of-subset programs are refused on this target too, and an unknown target name is refused rather than silently defaulted
+```
+
+## The i386 gate on the same run, unchanged
+
+```
+[OK] i386: expr, flow and text print the same bytes under seed-min, gen2, native_aot and native32 -- four backends, two instruction sets
+[OK] i386 container: ELFCLASS32 / ET_EXEC / EM_386, two program headers, entry 0x080480ca, three pinned image sizes, byte-deterministic -- native_aot on the same source is ELFCLASS64 / EM_X86_64
+[OK] i386 refusals: division, a fraction, a string value, a function, a list, an unknown name, &&, 2^31 and an unclosed block are each refused with a diagnostic and a non-zero exit
+[OK] i386 subset boundary: every refused program that is legal Sayanox still compiles and runs on seed-min (7 / 2 is 3.5 there, which is exactly why this integer backend refuses it)
+```

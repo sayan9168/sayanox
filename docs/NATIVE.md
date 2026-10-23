@@ -172,13 +172,18 @@ i386 backend for a documented integer subset, gated by `make test-native32`
 (four backends, two instruction sets, identical bytes). What the paragraph
 below still says correctly is that **`native_aot` and `native-test` are
 x86-64 Linux only** — the second target compiles a subset, not the native
-subset, and there is still no aarch64 emitter and no aarch64 execution gate.
+subset. The same program also emits **aarch64** ELF for that subset
+(`make test-native-arm64`, added the same day), but those images are only
+emitted, byte-pinned and disassembly-reviewed: there is still no aarch64
+*execution* gate anywhere in this repository, because there is nothing here
+that can run one.
 
 **No executable second ISA is implemented or claimed** *for the native
 subset*. Native compilation and `native-test` remain x86-64 Linux only. The
 C fallback's host portability does not establish a second direct-to-ELF
 backend for that subset. There is no aarch64 execution smoke gate in this
-repository.
+repository — `test-native-arm64` emits and pins aarch64 images for the
+integer subset without running any of them.
 
 The bounded improvement here is analysis tooling: the existing C99 streaming
 `emit_to_ir` translator now has strict record/offset auditing and optional

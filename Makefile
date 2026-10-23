@@ -40,7 +40,7 @@ SXDIAG_BIN := tools/sxdiag
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
         pack-compiler test-http-get test-sayacrawl test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
-        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-sxdiag test-native32
+        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-sxdiag test-native32 test-native-arm64
 
 all: true-selfhost-min
 
@@ -2176,6 +2176,87 @@ test-native32: $(SEED_MIN_BIN) $(GEN2) $(N32_BIN)
 	@echo '[OK] i386 subset boundary: every refused program that is legal Sayanox still compiles and runs on seed-min (7 / 2 is 3.5 there, which is exactly why this integer backend refuses it)'
 
 native-test: test-native32
+
+
+# ---------------------------------------------------------------------------
+# test-native-arm64: the SAME front end, a second encoder, a third ISA.
+#
+# tools/native32.sa takes `arm64` as its third argument and emits an
+# AArch64 ELF64 instead of an i386 ELF32. This machine is x86-64 and this
+# repository ships no emulator, cross-assembler or aarch64 objdump, so these
+# images are NEVER EXECUTED here and nothing below pretends otherwise. What
+# this gate can honestly assert is: they are emitted, they are deterministic,
+# they are byte-identical to goldens that were read back instruction by
+# instruction with a disassembler (see docs/gate-logs/2026-10-23-arm64-third-isa),
+# the ELF64 container really says AArch64, the two encoders agree on the data
+# segment they lay out for the same source, and the subset boundary is the
+# same on both targets.
+.PHONY: test-native-arm64
+test-native-arm64: $(SEED_MIN_BIN) $(N32_BIN)
+	@mkdir -p $(TESTS)/n32
+	@for f in expr flow text; do \
+	  ./$(N32_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.a64 arm64 \
+	    || { echo "[FAIL] native32 arm64 refused $$f.sa, which is inside its documented subset"; exit 1; }; \
+	  ./$(N32_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.a64b arm64; \
+	  cmp $(TESTS)/n32/$$f.a64 $(TESTS)/n32/$$f.a64b \
+	    || { echo "[FAIL] the arm64 encoder emitted different bytes for $$f.sa on a second run"; exit 1; }; \
+	  cmp $(TESTS)/n32/$$f.a64 $(N32_T)/golden/$$f.arm64.elf \
+	    || { echo "[FAIL] the arm64 image for $$f.sa differs from the reviewed golden $(N32_T)/golden/$$f.arm64.elf"; exit 1; }; \
+	done
+	@echo '[OK] arm64: expr, flow and text are emitted, byte-deterministic, and byte-identical to the disassembly-reviewed goldens -- emitted and pinned here, never executed in this repository'
+	@# the container is really AArch64, and really not the i386 one
+	@test "$$(od -An -tx1 -v -N 8 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 7f454c4602010100 \
+	  || { echo "[FAIL] the arm64 image is no longer ELFCLASS64"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 16 -N 2 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 2 \
+	  || { echo "[FAIL] the arm64 image is no longer ET_EXEC"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 18 -N 2 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 183 \
+	  || { echo "[FAIL] e_machine is no longer EM_AARCH64 (183)"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 54 -N 2 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 56 \
+	  || { echo "[FAIL] e_phentsize is no longer the ELF64 value 56"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 56 -N 2 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 2 \
+	  || { echo "[FAIL] the arm64 image no longer has exactly two program headers"; exit 1; }
+	@test "$$(od -An -tu8 -v -j 24 -N 8 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 4194612 \
+	  || { echo "[FAIL] the arm64 entry point moved (0x400000 + 176 header bytes + the 132-byte print-decimal routine)"; exit 1; }
+	@test "$$(od -An -tu8 -v -j 80 -N 8 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 4194304 \
+	  || { echo "[FAIL] the arm64 text segment no longer loads at 0x400000"; exit 1; }
+	@test "$$(od -An -tu8 -v -j 136 -N 8 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 4198400 \
+	  || { echo "[FAIL] the arm64 data segment no longer loads at 0x401000"; exit 1; }
+	@# the first instruction of the print routine, and the exit sequence at the
+	@# end of the text segment, spelled out as bytes: mov w4,w0 ... mov x0,#0 /
+	@# mov x8,#93 / svc #0. A careless regeneration of the goldens would have
+	@# to reproduce these too.
+	@test "$$(od -An -tx1 -v -j 176 -N 4 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = e403002a \
+	  || { echo "[FAIL] the arm64 print routine no longer starts with mov w4, w0"; exit 1; }
+	@sz=$$(od -An -tu8 -v -j 96 -N 8 $(TESTS)/n32/expr.a64 | tr -d ' \n'); \
+	 test "$$(od -An -tx1 -v -j $$((sz - 12)) -N 12 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 000080d2a80b80d2010000d4 \
+	   || { echo "[FAIL] the arm64 text segment no longer ends in mov x0,#0 / mov x8,#93 / svc #0"; exit 1; }
+	@echo '[OK] arm64 container: ELFCLASS64 / ET_EXEC / EM_AARCH64, two program headers, entry 0x400134, text at 0x400000 and data at 0x401000, exit via svc #0 with x8=93'
+	@# one front end, two encoders: the data segment either encoder lays out
+	@# for the same source has to be the same bytes
+	@for f in expr flow text; do \
+	  ./$(N32_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.i32 i386; \
+	  tail -c +4097 $(TESTS)/n32/$$f.i32 > $(TESTS)/n32/$$f.d32; \
+	  tail -c +4097 $(TESTS)/n32/$$f.a64 > $(TESTS)/n32/$$f.d64; \
+	  cmp $(TESTS)/n32/$$f.d32 $(TESTS)/n32/$$f.d64 \
+	    || { echo "[FAIL] the i386 and arm64 images for $$f.sa disagree about the data segment"; exit 1; }; \
+	  if cmp -s $(TESTS)/n32/$$f.i32 $(TESTS)/n32/$$f.a64; then \
+	    echo "[FAIL] the i386 and arm64 images for $$f.sa are identical, so one of the encoders did not run"; exit 1; fi; \
+	done
+	@echo '[OK] one front end, two encoders: i386 and arm64 lay out byte-identical data segments for the same source while their text segments differ'
+	@# the subset boundary does not move when the target changes
+	@for f in $(N32_T)/refuse/*.sa; do \
+	  if ./$(N32_BIN) $$f $(TESTS)/n32/bad.a64 arm64 > $(TESTS)/n32/bada.err 2>&1; then \
+	    echo "[FAIL] the arm64 target accepted $$f, which is outside the subset"; exit 1; fi; \
+	  grep -q 'native32: ' $(TESTS)/n32/bada.err \
+	    || { echo "[FAIL] $$f was refused for arm64 without a native32 diagnostic"; exit 1; }; \
+	done
+	@if ./$(N32_BIN) $(N32_T)/expr.sa $(TESTS)/n32/bad.a64 sparc > $(TESTS)/n32/badt.err 2>&1; then \
+	  echo "[FAIL] an unknown target was accepted"; exit 1; fi
+	@grep -q 'native32: unknown target' $(TESTS)/n32/badt.err \
+	  || { echo "[FAIL] an unknown target was refused without naming the problem"; exit 1; }
+	@echo '[OK] arm64 refusals: the nine out-of-subset programs are refused on this target too, and an unknown target name is refused rather than silently defaulted'
+
+native-test: test-native-arm64
 
 
 # ---------------------------------------------------------------------------

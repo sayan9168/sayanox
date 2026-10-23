@@ -1,5 +1,7 @@
-// tools/native32.sa -- a SECOND machine-code target for Sayanox: 32-bit x86
-// (i386) Linux ELF, written in Sayanox and compiled by selfhost/gen2.
+// tools/native32.sa -- SECOND and THIRD machine-code targets for Sayanox:
+// 32-bit x86 (i386) and 64-bit ARM (AArch64) Linux ELF, written in Sayanox
+// and compiled by selfhost/gen2. One front end, two encoders, picked by the
+// third argument.
 //
 // Why this file exists. Until 2026-10-23 the only machine-code backend was
 // selfhost/native_aot.c: x86-64 Linux, written in C. docs/STATUS.md carried
@@ -7,10 +9,14 @@
 // thing a second backend has to reproduce is the instruction list the emit
 // tree asks the encoder for. This program is a second backend that does not
 // reproduce that list at all -- it is an independent front end and an
-// independent i386 encoder -- so what it proves is narrow and concrete:
-// a Sayanox program can be turned into machine code for an instruction set
-// that is not x86-64, and the result runs and prints the same bytes as the
-// seed compiler's C output.
+// independent encoder per target -- so what it proves is narrow and concrete:
+// a Sayanox program can be turned into machine code for instruction sets that
+// are not x86-64. The i386 image runs here and prints the same bytes as the
+// seed compiler's C output. The arm64 image CANNOT run here -- this machine
+// is x86-64 and the repository has no emulator -- so that one is only ever
+// emitted, pinned byte for byte against a tracked golden image, and read back
+// instruction by instruction by a human with a disassembler. No gate in this
+// repository claims the arm64 image executes, because nothing executes it.
 //
 // What it is NOT. This is not the native subset. It handles the documented
 // integer subset below and refuses everything else by name, with a
@@ -35,17 +41,20 @@
 //   backend. A literal with a `.` is refused for the same reason.
 //
 // Machine model: values are 32-bit two's complement; the evaluation stack is
-// the machine stack; eax holds the running value, ecx the right operand. A
-// name is an absolute address in the data segment (no base register, no
-// relocations beyond the absolute fixups this file applies itself).
+// the machine stack. On i386 eax holds the running value and ecx the right
+// operand; on arm64 those are w0 and w1, the stack moves in 16-byte steps,
+// and an absolute address is built with movz+movk. A name is an absolute
+// address in the data segment on both (no base register, no relocations
+// beyond the absolute fixups this file applies itself).
 //
-// Bounds that are real: |value| must stay below 2^31, `%` by zero raises
-// SIGFPE where the other backends give NaN, and the code must fit in the
-// first page (4096 - 116 bytes). Each is checked or documented, never
-// silently wrong.
+// Bounds that are real: |value| must stay below 2^31, `%` by zero traps on
+// i386 (SIGFPE) where the other backends give NaN -- on arm64 sdiv by zero
+// yields 0 instead, which is a documented difference, not a fix -- and the
+// code must fit in the first page (4096 - 116 bytes on i386, - 176 on
+// arm64). Each is checked or documented, never silently wrong.
 //
-// Usage:   ./tools/native32 program.sa out
-//          ./out
+// Usage:   ./tools/native32 program.sa out [i386|arm64]      (default i386)
+//          ./out                                             (i386 only)
 
 make fail(code: num, msg: str) -> num {
   hold w = write_file("/dev/stderr", concat(concat("native32: ", msg), "\n"))
@@ -559,12 +568,338 @@ make elf32(code: list, data: list, entry_off: num) -> list {
   give img
 }
 
+// ---- AArch64 (arm64) ------------------------------------------------------
+// The same front end drives a second encoder. Every instruction is one
+// little-endian 32-bit word, so emission and patching are word operations.
+// Registers: w0 the accumulator, w1 the right operand, x9/x10 scratch
+// addresses, w3-w7 the print routine's temporaries, x8 the syscall number.
+// Nothing here has been executed in this repository -- see docs/NATIVE32.md.
+
+make e_w(xs: list, w: num) -> list {
+  xs = push(xs, bit_and(w, 255))
+  xs = push(xs, bit_and(shr(w, 8), 255))
+  xs = push(xs, bit_and(shr(w, 16), 255))
+  xs = push(xs, bit_and(shr(w, 24), 255))
+  give xs
+}
+
+make w_at(xs: list, at: num) -> num {
+  give xs[at] + xs[at + 1] * 256 + xs[at + 2] * 65536 + xs[at + 3] * 16777216
+}
+
+make set_w(xs: list, at: num, w: num) -> list {
+  xs[at] = bit_and(w, 255)
+  xs[at + 1] = bit_and(shr(w, 8), 255)
+  xs[at + 2] = bit_and(shr(w, 16), 255)
+  xs[at + 3] = bit_and(shr(w, 24), 255)
+  give xs
+}
+
+// movz Rd, #imm16 / movk Rd, #imm16, lsl 16 -- 32-bit (sf=0) or 64-bit (sf=1)
+make a_movz(xs: list, sf: num, rd: num, imm: num) -> list {
+  hold w = 1384120320 + bit_and(imm, 65535) * 32 + rd
+  when sf == 1 {
+    w = w + 2147483648
+  }
+  give e_w(xs, w)
+}
+
+make a_movk16(xs: list, sf: num, rd: num, imm: num) -> list {
+  hold w = 1923088384 + bit_and(imm, 65535) * 32 + rd
+  when sf == 1 {
+    w = w + 2147483648
+  }
+  give e_w(xs, w)
+}
+
+// a 32-bit absolute address in two words, patched later by set_abs
+make a_addr(xs: list, rd: num) -> list {
+  xs = a_movz(xs, 1, rd, 0)
+  xs = a_movk16(xs, 1, rd, 0)
+  give xs
+}
+
+make set_abs(xs: list, at: num, v: num) -> list {
+  hold lo = bit_and(v, 65535)
+  hold hi = bit_and(shr(v, 16), 65535)
+  hold w0 = w_at(xs, at)
+  hold w1 = w_at(xs, at + 4)
+  w0 = w0 - bit_and(shr(w0, 5), 65535) * 32 + lo * 32
+  w1 = w1 - bit_and(shr(w1, 5), 65535) * 32 + hi * 32
+  xs = set_w(xs, at, w0)
+  xs = set_w(xs, at + 4, w1)
+  give xs
+}
+
+make a_imm19(xs: list, at: num, delta: num) -> list {
+  hold off = delta / 4
+  when off < 0 {
+    off = off + 524288
+  }
+  hold w = w_at(xs, at)
+  w = w - bit_and(shr(w, 5), 524287) * 32 + bit_and(off, 524287) * 32
+  give set_w(xs, at, w)
+}
+
+make a_imm26(xs: list, at: num, delta: num) -> list {
+  hold off = delta / 4
+  when off < 0 {
+    off = off + 67108864
+  }
+  hold w = w_at(xs, at)
+  w = w - bit_and(w, 67108863) + bit_and(off, 67108863)
+  give set_w(xs, at, w)
+}
+
+// ---- the shared emitter surface -------------------------------------------
+// arch 0 is i386, arch 1 is arm64. Every helper below emits the same meaning
+// for both, and the fixed sizes let the caller work out a patch site.
+
+make emit_push_imm2(xs: list, arch: num, v: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 184)
+    xs = e32(xs, v)
+    xs = e1(xs, 80)
+    give xs
+  }
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  xs = a_movz(xs, 0, 0, bit_and(u, 65535))
+  xs = a_movk16(xs, 0, 0, bit_and(shr(u, 16), 65535))
+  xs = e_w(xs, 4162785248)
+  give xs
+}
+
+// value at the absolute address -> accumulator, then push. The caller records
+// the fixup site: len(code) + 1 on i386, len(code) on arm64.
+make emit_load_global(xs: list, arch: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 161)
+    xs = e32(xs, 0)
+    xs = e1(xs, 80)
+    give xs
+  }
+  xs = a_addr(xs, 9)
+  xs = e_w(xs, 3107979552)
+  xs = e_w(xs, 4162785248)
+  give xs
+}
+
+make emit_store_global(xs: list, arch: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 163)
+    xs = e32(xs, 0)
+    give xs
+  }
+  xs = a_addr(xs, 9)
+  xs = e_w(xs, 3103785248)
+  give xs
+}
+
+make emit_pop_acc(xs: list, arch: num) -> list {
+  when arch == 0 {
+    give e1(xs, 88)
+  }
+  give e_w(xs, 4165011424)
+}
+
+make emit_op2(xs: list, arch: num, op: num) -> list {
+  when arch == 0 {
+    give emit_op(xs, op)
+  }
+  xs = e_w(xs, 4165011425)
+  xs = e_w(xs, 4165011424)
+  when op == 1 {
+    xs = e_w(xs, 184614912)
+  }
+  when op == 2 {
+    xs = e_w(xs, 1258356736)
+  }
+  when op == 3 {
+    xs = e_w(xs, 453082112)
+  }
+  when op == 4 {
+    xs = e_w(xs, 448859138)
+    xs = e_w(xs, 453083200)
+  }
+  when op >= 5 && op <= 10 {
+    hold inv = 1
+    when op == 6 {
+      inv = 0
+    }
+    when op == 7 {
+      inv = 10
+    }
+    when op == 8 {
+      inv = 12
+    }
+    when op == 9 {
+      inv = 13
+    }
+    when op == 10 {
+      inv = 11
+    }
+    xs = e_w(xs, 1795227679)
+    xs = e_w(xs, 446629856 + inv * 4096)
+  }
+  xs = e_w(xs, 4162785248)
+  give xs
+}
+
+// `cmp acc, 0` then a conditional jump over the block. Both encodings put the
+// patch site at +4, so the caller needs no arch test.
+make emit_test_jz(xs: list, arch: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 133)
+    xs = e1(xs, 192)
+    xs = e1(xs, 15)
+    xs = e1(xs, 132)
+    xs = e32(xs, 0)
+    give xs
+  }
+  xs = e_w(xs, 1895825439)
+  xs = e_w(xs, 1409286144)
+  give xs
+}
+
+make emit_jmp(xs: list, arch: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 233)
+    xs = e32(xs, 0)
+    give xs
+  }
+  give e_w(xs, 335544320)
+}
+
+make patch_jz(xs: list, arch: num, at: num, target: num) -> list {
+  when arch == 0 {
+    give patch32(xs, at, target - (at + 4))
+  }
+  give a_imm19(xs, at, target - at)
+}
+
+make patch_jmp(xs: list, arch: num, at: num, target: num) -> list {
+  when arch == 0 {
+    give patch32(xs, at, target - (at + 4))
+  }
+  give a_imm26(xs, at, target - at)
+}
+
+make emit_call(xs: list, arch: num, target: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 232)
+    hold at = len(xs)
+    xs = e32(xs, 0)
+    give patch32(xs, at, target - (at + 4))
+  }
+  hold aat = len(xs)
+  xs = e_w(xs, 2483027968)
+  give a_imm26(xs, aat, target - aat)
+}
+
+make emit_exit0(xs: list, arch: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 184)
+    xs = e32(xs, 1)
+    xs = e1(xs, 49)
+    xs = e1(xs, 219)
+    xs = e1(xs, 205)
+    xs = e1(xs, 128)
+    give xs
+  }
+  xs = a_movz(xs, 1, 0, 0)
+  xs = a_movz(xs, 1, 8, 93)
+  xs = e_w(xs, 3556769793)
+  give xs
+}
+
+make put_u64(xs: list, v: num) -> list {
+  xs = put_u32(xs, bit_and(v, 4294967295))
+  xs = put_u32(xs, shr(v, 32))
+  give xs
+}
+
+// The arm64 container: ELFCLASS64, EM_AARCH64 (183), two PT_LOADs, the
+// classic 0x400000 load address. Nothing in this repository executes it.
+make elf64_arm(code: list, data: list, entry_off: num) -> list {
+  hold base = 4194304
+  hold hdr = 176
+  hold cn = len(code)
+  hold dn = len(data)
+  hold img = []
+  img = push(img, 127)
+  img = push(img, 69)
+  img = push(img, 76)
+  img = push(img, 70)
+  img = push(img, 2)
+  img = push(img, 1)
+  img = push(img, 1)
+  img = push(img, 0)
+  img = put_zeros(img, 8)
+  img = put_u16(img, 2)
+  img = put_u16(img, 183)
+  img = put_u32(img, 1)
+  img = put_u64(img, base + hdr + entry_off)
+  img = put_u64(img, 64)
+  img = put_u64(img, 0)
+  img = put_u32(img, 0)
+  img = put_u16(img, 64)
+  img = put_u16(img, 56)
+  img = put_u16(img, 2)
+  img = put_u16(img, 64)
+  img = put_u16(img, 0)
+  img = put_u16(img, 0)
+  img = put_u32(img, 1)
+  img = put_u32(img, 5)
+  img = put_u64(img, 0)
+  img = put_u64(img, base)
+  img = put_u64(img, base)
+  img = put_u64(img, hdr + cn)
+  img = put_u64(img, hdr + cn)
+  img = put_u64(img, 4096)
+  img = put_u32(img, 1)
+  img = put_u32(img, 6)
+  img = put_u64(img, 4096)
+  img = put_u64(img, base + 4096)
+  img = put_u64(img, base + 4096)
+  img = put_u64(img, dn)
+  img = put_u64(img, dn)
+  img = put_u64(img, 4096)
+  hold i = 0
+  while i < cn {
+    img = push(img, code[i])
+    i = i + 1
+  }
+  img = put_zeros(img, 4096 - (hdr + cn))
+  hold j = 0
+  while j < dn {
+    img = push(img, data[j])
+    j = j + 1
+  }
+  give img
+}
+
 make run() -> num {
   when arg_count() < 3 {
-    hold usage = fail(2, "usage: native32 <program.sa> <out>")
+    hold usage = fail(2, "usage: native32 <program.sa> <out> [i386|arm64]")
   }
   hold srcpath = arg(1)
   hold outpath = arg(2)
+
+  // arch 0 is i386 (the default, and the one this repository can run);
+  // arch 1 is arm64, emitted and byte-checked but never executed here.
+  hold arch = 0
+  when arg_count() >= 4 {
+    hold want_arch = arg(3)
+    when string_eq(want_arch, "arm64") == 1 {
+      arch = 1
+    }
+    when string_eq(want_arch, "arm64") == 0 && string_eq(want_arch, "i386") == 0 {
+      hold badarch = fail(2, concat(concat("unknown target '", want_arch), "' (i386 or arm64)"))
+    }
+  }
   hold src = read_file(srcpath)
   when len(src) == 0 {
     hold nosrc = fail(1, concat(concat("cannot read ", srcpath), " (or it is empty)"))
@@ -591,75 +926,123 @@ make run() -> num {
 
   // ---- the print-decimal routine, emitted once at code offset 0 ----
   // eax = value. Prints it in decimal with a trailing newline, then returns.
-  code = e1(code, 49)
-  code = e1(code, 219)
-  code = e1(code, 133)
-  code = e1(code, 192)
-  code = e1(code, 15)
-  code = e1(code, 141)
-  hold jge_site = len(code)
-  code = e32(code, 0)
-  code = e1(code, 247)
-  code = e1(code, 216)
-  code = e1(code, 187)
-  code = e32(code, 1)
-  code = patch32(code, jge_site, len(code) - (jge_site + 4))
-  code = e1(code, 191)
-  fixsite = push(fixsite, len(code))
-  fixoff = push(fixoff, bufnl)
-  code = e32(code, 0)
-  hold loop_at = len(code)
-  code = e1(code, 49)
-  code = e1(code, 210)
-  code = e1(code, 185)
-  code = e32(code, 10)
-  code = e1(code, 247)
-  code = e1(code, 241)
-  code = e1(code, 131)
-  code = e1(code, 194)
-  code = e1(code, 48)
-  code = e1(code, 79)
-  code = e1(code, 136)
-  code = e1(code, 23)
-  code = e1(code, 133)
-  code = e1(code, 192)
-  code = e1(code, 15)
-  code = e1(code, 133)
-  hold jnz_site = len(code)
-  code = e32(code, 0)
-  code = patch32(code, jnz_site, loop_at - (jnz_site + 4))
-  code = e1(code, 133)
-  code = e1(code, 219)
-  code = e1(code, 15)
-  code = e1(code, 132)
-  hold jz_site = len(code)
-  code = e32(code, 0)
-  code = e1(code, 79)
-  code = e1(code, 198)
-  code = e1(code, 7)
-  code = e1(code, 45)
-  code = patch32(code, jz_site, len(code) - (jz_site + 4))
-  code = e1(code, 198)
-  code = e1(code, 5)
-  fixsite = push(fixsite, len(code))
-  fixoff = push(fixoff, bufnl)
-  code = e32(code, 0)
-  code = e1(code, 10)
-  code = e1(code, 137)
-  code = e1(code, 249)
-  code = e1(code, 186)
-  fixsite = push(fixsite, len(code))
-  fixoff = push(fixoff, bufend)
-  code = e32(code, 0)
-  code = e1(code, 41)
-  code = e1(code, 202)
-  code = e1(code, 187)
-  code = e32(code, 1)
-  code = e1(code, 184)
-  code = e32(code, 4)
-  code = e1(code, 205)
-  code = e1(code, 128)
-  code = e1(code, 195)
+  when arch == 0 {
+    code = e1(code, 49)
+    code = e1(code, 219)
+    code = e1(code, 133)
+    code = e1(code, 192)
+    code = e1(code, 15)
+    code = e1(code, 141)
+    hold jge_site = len(code)
+    code = e32(code, 0)
+    code = e1(code, 247)
+    code = e1(code, 216)
+    code = e1(code, 187)
+    code = e32(code, 1)
+    code = patch32(code, jge_site, len(code) - (jge_site + 4))
+    code = e1(code, 191)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = e32(code, 0)
+    hold loop_at = len(code)
+    code = e1(code, 49)
+    code = e1(code, 210)
+    code = e1(code, 185)
+    code = e32(code, 10)
+    code = e1(code, 247)
+    code = e1(code, 241)
+    code = e1(code, 131)
+    code = e1(code, 194)
+    code = e1(code, 48)
+    code = e1(code, 79)
+    code = e1(code, 136)
+    code = e1(code, 23)
+    code = e1(code, 133)
+    code = e1(code, 192)
+    code = e1(code, 15)
+    code = e1(code, 133)
+    hold jnz_site = len(code)
+    code = e32(code, 0)
+    code = patch32(code, jnz_site, loop_at - (jnz_site + 4))
+    code = e1(code, 133)
+    code = e1(code, 219)
+    code = e1(code, 15)
+    code = e1(code, 132)
+    hold jz_site = len(code)
+    code = e32(code, 0)
+    code = e1(code, 79)
+    code = e1(code, 198)
+    code = e1(code, 7)
+    code = e1(code, 45)
+    code = patch32(code, jz_site, len(code) - (jz_site + 4))
+    code = e1(code, 198)
+    code = e1(code, 5)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = e32(code, 0)
+    code = e1(code, 10)
+    code = e1(code, 137)
+    code = e1(code, 249)
+    code = e1(code, 186)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufend)
+    code = e32(code, 0)
+    code = e1(code, 41)
+    code = e1(code, 202)
+    code = e1(code, 187)
+    code = e32(code, 1)
+    code = e1(code, 184)
+    code = e32(code, 4)
+    code = e1(code, 205)
+    code = e1(code, 128)
+    code = e1(code, 195)
+  } otherwise {
+    // 33 words; the i386 twin above is 86 bytes. w0 in, decimal out with a
+    // trailing newline, x9 walking down the buffer from the newline slot.
+    code = e_w(code, 704644068)
+    code = a_movz(code, 0, 5, 0)
+    code = e_w(code, 1895825439)
+    hold a_jge = len(code)
+    code = e_w(code, 1409286154)
+    code = e_w(code, 1258292196)
+    code = a_movz(code, 0, 5, 1)
+    code = a_imm19(code, a_jge, len(code) - a_jge)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = a_addr(code, 9)
+    code = a_movz(code, 0, 6, 10)
+    hold a_loop = len(code)
+    code = e_w(code, 449185927)
+    code = e_w(code, 453415139)
+    code = e_w(code, 285261923)
+    code = e_w(code, 3506439465)
+    code = e_w(code, 956301603)
+    code = e_w(code, 705102820)
+    code = e_w(code, 1895825567)
+    hold a_jne = len(code)
+    code = e_w(code, 1409286145)
+    code = a_imm19(code, a_jne, a_loop - a_jne)
+    code = e_w(code, 1895825599)
+    hold a_jz = len(code)
+    code = e_w(code, 1409286144)
+    code = e_w(code, 3506439465)
+    code = a_movz(code, 0, 3, 45)
+    code = e_w(code, 956301603)
+    code = a_imm19(code, a_jz, len(code) - a_jz)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = a_addr(code, 10)
+    code = a_movz(code, 0, 3, 10)
+    code = e_w(code, 956301635)
+    code = e_w(code, 2432697674)
+    code = e_w(code, 3406364994)
+    code = e_w(code, 2852717537)
+    code = a_movz(code, 1, 0, 1)
+    code = a_movz(code, 1, 8, 64)
+    code = e_w(code, 3556769793)
+    code = e_w(code, 3596551104)
+  }
+
   hold entry_off = len(code)
 
   // ---- the statement walk ----
@@ -762,7 +1145,7 @@ make run() -> num {
         }
       }
       when act == 0 {
-        hold badstmt = fail(1, concat(concat(concat("line ", numstr(lineno)), ": '"), concat(word, "' is not in the i386 subset (hold, show, when, otherwise, while only -- see the header of tools/native32.sa)")))
+        hold badstmt = fail(1, concat(concat(concat("line ", numstr(lineno)), ": '"), concat(word, "' is not in the native32 subset (hold, show, when, otherwise, while only -- see the header of tools/native32.sa)")))
       }
     }
 
@@ -773,7 +1156,7 @@ make run() -> num {
     when len(extext) > 0 {
       hold toks = tokenize(extext)
       when len(toks) > 0 && sx_index(toks, 0) == 33 {
-        hold badex = fail(1, concat(concat(concat("line ", numstr(lineno)), ": the i386 subset does not accept "), sub(toks, 1, len(toks))))
+        hold badex = fail(1, concat(concat(concat("line ", numstr(lineno)), ": the native32 subset does not accept "), sub(toks, 1, len(toks))))
       }
       hold tn = tok_count(toks)
       when tn == 0 {
@@ -793,7 +1176,7 @@ make run() -> num {
           when v > 2147483647 {
             hold toobig = fail(1, concat(concat("line ", numstr(lineno)), ": an integer literal of 2^31 or more"))
           }
-          code = emit_push_imm(code, v)
+          code = emit_push_imm2(code, arch, v)
           want = 0
         }
         when t0 == 118 {
@@ -804,11 +1187,14 @@ make run() -> num {
           when vslot < 0 {
             hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(sub(t, 1, len(t)), "'")))
           }
-          code = e1(code, 161)
-          fixsite = push(fixsite, len(code))
+          hold vat = len(code)
+          when arch == 0 {
+            fixsite = push(fixsite, vat + 1)
+          } otherwise {
+            fixsite = push(fixsite, vat)
+          }
           fixoff = push(fixoff, vslot)
-          code = e32(code, 0)
-          code = e1(code, 80)
+          code = emit_load_global(code, arch)
           want = 0
         }
         when t0 == 40 {
@@ -832,7 +1218,7 @@ make run() -> num {
             when ops[depth] == 0 {
               open = 1
             } otherwise {
-              code = emit_op(code, ops[depth])
+              code = emit_op2(code, arch, ops[depth])
             }
           }
           when open == 0 {
@@ -843,7 +1229,7 @@ make run() -> num {
           hold oc = op_code(t)
           when want == 1 {
             when oc == 2 {
-              code = emit_push_imm(code, 0)
+              code = emit_push_imm2(code, arch, 0)
             } otherwise {
               hold badop = fail(1, concat(concat(concat("line ", numstr(lineno)), ": the operator '"), concat(sub(t, 1, len(t)), "' where a value was expected")))
             }
@@ -859,7 +1245,7 @@ make run() -> num {
               } otherwise {
                 when op_prec(ops[depth - 1]) >= pr {
                   depth = depth - 1
-                  code = emit_op(code, ops[depth])
+                  code = emit_op2(code, arch, ops[depth])
                 } otherwise {
                   more = 0
                 }
@@ -884,23 +1270,24 @@ make run() -> num {
         when ops[depth] == 0 {
           hold openleft = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' with no ')'"))
         }
-        code = emit_op(code, ops[depth])
+        code = emit_op2(code, arch, ops[depth])
       }
-      code = e1(code, 88)
+      code = emit_pop_acc(code, arch)
     }
 
     // ---- the action ----
     when act == 1 {
-      code = e1(code, 163)
-      fixsite = push(fixsite, len(code))
+      hold sat = len(code)
+      when arch == 0 {
+        fixsite = push(fixsite, sat + 1)
+      } otherwise {
+        fixsite = push(fixsite, sat)
+      }
       fixoff = push(fixoff, slot)
-      code = e32(code, 0)
+      code = emit_store_global(code, arch)
     }
     when act == 2 {
-      code = e1(code, 232)
-      hold callsite = len(code)
-      code = e32(code, 0)
-      code = patch32(code, callsite, 0 - (callsite + 4))
+      code = emit_call(code, arch, 0)
     }
     when act == 3 {
       hold litoff = len(data)
@@ -932,26 +1319,35 @@ make run() -> num {
       }
       data = push(data, 10)
       lbytes = lbytes + 1
-      code = e1(code, 184)
-      code = e32(code, 4)
-      code = e1(code, 187)
-      code = e32(code, 1)
-      code = e1(code, 185)
-      fixsite = push(fixsite, len(code))
-      fixoff = push(fixoff, litoff)
-      code = e32(code, 0)
-      code = e1(code, 186)
-      code = e32(code, lbytes)
-      code = e1(code, 205)
-      code = e1(code, 128)
+      when arch == 0 {
+        code = e1(code, 184)
+        code = e32(code, 4)
+        code = e1(code, 187)
+        code = e32(code, 1)
+        code = e1(code, 185)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, litoff)
+        code = e32(code, 0)
+        code = e1(code, 186)
+        code = e32(code, lbytes)
+        code = e1(code, 205)
+        code = e1(code, 128)
+      } otherwise {
+        when lbytes > 65535 {
+          hold biglit = fail(1, concat(concat("line ", numstr(lineno)), ": a string literal of 64 KiB or more"))
+        }
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, litoff)
+        code = a_addr(code, 1)
+        code = a_movz(code, 0, 2, lbytes)
+        code = a_movz(code, 1, 0, 1)
+        code = a_movz(code, 1, 8, 64)
+        code = e_w(code, 3556769793)
+      }
     }
     when act == 7 || act == 8 {
-      code = e1(code, 133)
-      code = e1(code, 192)
-      code = e1(code, 15)
-      code = e1(code, 132)
-      hold site = len(code)
-      code = e32(code, 0)
+      code = emit_test_jz(code, arch)
+      hold site = len(code) - 4
       when bdepth < len(bkind) {
         bkind[bdepth] = act
         bsite[bdepth] = site
@@ -967,10 +1363,9 @@ make run() -> num {
       when bdepth == 0 || bkind[bdepth - 1] != 7 {
         hold badother = fail(1, concat(concat("line ", numstr(lineno)), ": `} otherwise {` without an open `when`"))
       }
-      code = e1(code, 233)
-      hold jsite = len(code)
-      code = e32(code, 0)
-      code = patch32(code, bsite[bdepth - 1], len(code) - (bsite[bdepth - 1] + 4))
+      code = emit_jmp(code, arch)
+      hold jsite = len(code) - 4
+      code = patch_jz(code, arch, bsite[bdepth - 1], len(code))
       bkind[bdepth - 1] = 9
       bsite[bdepth - 1] = jsite
     }
@@ -980,12 +1375,15 @@ make run() -> num {
       }
       bdepth = bdepth - 1
       when bkind[bdepth] == 8 {
-        code = e1(code, 233)
-        hold backsite = len(code)
-        code = e32(code, 0)
-        code = patch32(code, backsite, bstart[bdepth] - (backsite + 4))
+        code = emit_jmp(code, arch)
+        hold backsite = len(code) - 4
+        code = patch_jmp(code, arch, backsite, bstart[bdepth])
       }
-      code = patch32(code, bsite[bdepth], len(code) - (bsite[bdepth] + 4))
+      when bkind[bdepth] == 9 {
+        code = patch_jmp(code, arch, bsite[bdepth], len(code))
+      } otherwise {
+        code = patch_jz(code, arch, bsite[bdepth], len(code))
+      }
     }
   }
 
@@ -997,28 +1395,37 @@ make run() -> num {
   }
 
   // exit(0)
-  code = e1(code, 184)
-  code = e32(code, 1)
-  code = e1(code, 49)
-  code = e1(code, 219)
-  code = e1(code, 205)
-  code = e1(code, 128)
+  code = emit_exit0(code, arch)
 
   hold cn = len(code)
-  when cn + 116 > 4096 {
-    hold toolarge = fail(1, concat(concat("the emitted code is ", numstr(cn)), " bytes; the v1 i386 image keeps code in the first page (3980 bytes)"))
+  hold hdrsz = 116
+  hold dva = 134512640 + 4096
+  when arch == 1 {
+    hdrsz = 176
+    dva = 4194304 + 4096
+  }
+  when cn + hdrsz > 4096 {
+    hold toolarge = fail(1, concat(concat("the emitted code is ", numstr(cn)), " bytes; a v1 image keeps code in the first page"))
   }
 
   // absolute data addresses, now that the code length is known
-  hold dva = 134512640 + 4096
   hold f = 0
   hold nf = len(fixsite)
   while f < nf {
-    code = patch32(code, fixsite[f], dva + fixoff[f])
+    when arch == 0 {
+      code = patch32(code, fixsite[f], dva + fixoff[f])
+    } otherwise {
+      code = set_abs(code, fixsite[f], dva + fixoff[f])
+    }
     f = f + 1
   }
 
-  hold img = elf32(code, data, entry_off)
+  hold img = []
+  when arch == 0 {
+    img = elf32(code, data, entry_off)
+  } otherwise {
+    img = elf64_arm(code, data, entry_off)
+  }
   hold wrote = write_bytes(outpath, img)
   when wrote != 1 {
     hold nowrite = fail(1, concat("cannot write ", outpath))
