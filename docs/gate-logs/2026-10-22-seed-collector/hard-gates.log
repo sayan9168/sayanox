@@ -1,0 +1,52 @@
+# Hard gates, 2026-10-22 (excerpt)
+#
+#   make doctor && make true-selfhost && make gen3 && make native-test
+#
+# on the tree that puts a conservative mark & sweep collector into the
+# bootstrap seed (selfhost/seed/sxc_seed_min.c). Plain make, no -o.
+Thu Oct 22 12:36:45 UTC 2026
+Thu Oct 22 13:12:57 UTC 2026
+
+## The four markers
+18:DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+1294:=== TRUE-SELFHOST-MIN-OK ===
+1330:=== GEN3-OK ===
+2459:=== NATIVE-TEST-OK ===
+2460:HARDGATES-EXIT=0
+
+## gen3 == gen4
+1308:[OK] byte-identical gen3 == gen4
+
+## This increment's gates, as they ran inside the aggregates
+# (test-seed-collector is new; the three seed GC assertions and the
+#  untyped-for gate were rewritten for a seed that now collects.)
+332:[OK] seed for inside untyped make: body-local list/string, literals, ranges, call sources, nesting, break/continue, binder reuse, recursion; global capture refused; gen2 parity
+836:[OK] seed collector: 4,000,000 dropped temporaries, a borrowed read and an untouched 512 KiB live string inside 64 MiB -- seed-min, gen2 and native print the same seven lines
+852:[OK] seed-min: 200k churn, a 2000-step accumulation and a temp loop all stay inside a 4 MiB address space on the freeing assignment alone (the 8 MiB collector threshold is never reached there)
+869:[OK] seed-min: gc()/gc_live()/gc_runs() exist and report real numbers (nothing to free in an empty program, one collection counted); a wrong arity still gets a seed_min: diagnostic
+884:[OK] full seed: gc() is a no-op returning 0, gc_live() does not exist, and SX_GC_DEBUG=1 counts 6000 objects alive after 2000 iterations that retain nothing (no working release path)
+889:[OK] full seed: needs >= 64 MiB of address space (static object table) and prints 8388608 where seed-min/gen2 print 8.38861e+06 (documented divergence)
+911:[OK] seed GC: seed-min = freeing assignment plus a conservative mark & sweep over the builder registry (a live set still OOMs loudly); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem
+1195:[OK] seed collector: 4,000,000 dropped temporaries, a borrowed read and an untouched 512 KiB live string inside 64 MiB -- seed-min, gen2 and native print the same seven lines
+1211:[OK] seed-min: 200k churn, a 2000-step accumulation and a temp loop all stay inside a 4 MiB address space on the freeing assignment alone (the 8 MiB collector threshold is never reached there)
+1228:[OK] seed-min: gc()/gc_live()/gc_runs() exist and report real numbers (nothing to free in an empty program, one collection counted); a wrong arity still gets a seed_min: diagnostic
+1243:[OK] full seed: gc() is a no-op returning 0, gc_live() does not exist, and SX_GC_DEBUG=1 counts 6000 objects alive after 2000 iterations that retain nothing (no working release path)
+1248:[OK] full seed: needs >= 64 MiB of address space (static object table) and prints 8388608 where seed-min/gen2 print 8.38861e+06 (documented divergence)
+1270:[OK] seed GC: seed-min = freeing assignment plus a conservative mark & sweep over the builder registry (a live set still OOMs loudly); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem
+1465:[OK] seed for inside untyped make: body-local list/string, literals, ranges, call sources, nesting, break/continue, binder reuse, recursion; global capture refused; gen2 parity
+1969:[OK] seed for inside untyped make: body-local list/string, literals, ranges, call sources, nesting, break/continue, binder reuse, recursion; global capture refused; gen2 parity
+2053:[OK] seed collector: 4,000,000 dropped temporaries, a borrowed read and an untouched 512 KiB live string inside 64 MiB -- seed-min, gen2 and native print the same seven lines
+2069:[OK] seed-min: 200k churn, a 2000-step accumulation and a temp loop all stay inside a 4 MiB address space on the freeing assignment alone (the 8 MiB collector threshold is never reached there)
+2086:[OK] seed-min: gc()/gc_live()/gc_runs() exist and report real numbers (nothing to free in an empty program, one collection counted); a wrong arity still gets a seed_min: diagnostic
+2101:[OK] full seed: gc() is a no-op returning 0, gc_live() does not exist, and SX_GC_DEBUG=1 counts 6000 objects alive after 2000 iterations that retain nothing (no working release path)
+2106:[OK] full seed: needs >= 64 MiB of address space (static object table) and prints 8388608 where seed-min/gen2 print 8.38861e+06 (documented divergence)
+2128:[OK] seed GC: seed-min = freeing assignment plus a conservative mark & sweep over the builder registry (a live set still OOMs loudly); full seed = refcount table with gc() as a no-op and no release; gen2 = checked mark & sweep; native = test-native-mem
+
+## Run on the same tree, outside the four aggregates
+#
+#   make -o restore-compiler test-seed-collector test-seed-gc \
+#       test-seed-for-untyped test-language-deps test-seed-sanitize \
+#       test-seed-bootstrap-budget        -> 74 [OK], exit 0
+#
+[OK] seed ASan/UBSan: aliases/returns/recursion, borrowed reads, list realloc/aliases, a collecting 4M-drop churn, 32 registry reuse cycles; leak detection explicitly OFF
+[OK] gen1-min compiled the current compiler inside a 64 MiB address space (1536 MiB before the seed collector); output identical to uncapped gen2 C (finite input budget only)

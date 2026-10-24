@@ -28,8 +28,11 @@ source .sa
 ## Not implemented here
 
 There is no full Stage-2 C host or concurrent pthread collector in this
-repository. Full-language self-host and a second machine-code target are not
-claimed; see FULL_LANGUAGE_SELFHOST.md and GC.md.
+repository. Full-language self-host is not claimed; see
+FULL_LANGUAGE_SELFHOST.md and GC.md. A second machine-code target exists
+since 2026-10-23 for a documented integer subset only —
+[NATIVE32.md](NATIVE32.md), `make test-native32` — and it is a separate
+program, not this pipeline: nothing below assembles or executes this IR.
 
 ## The instruction list (`SX_EMIT_LOG`, 2026-10-13)
 
@@ -98,9 +101,12 @@ immediately.
   fixture's top level uses —
   `add addsd call cvtsi2sd cvttsd2si jae je jmp lea mov movq movzx mulsd pop push seta ucomisd` —
   and the named call targets (`call make twice`, `call builtin concat`,
-  `call builtin gccheck`). A future riscv64/ARM64 backend would need an ABI-aware lowering adapter,
-  not just a different byte encoder: these primitive calls still assume
-  x86 registers, stack behavior and instruction semantics.
+  `call builtin gccheck`). A future riscv64/ARM64 backend *for the native
+  subset* would need an ABI-aware lowering adapter, not just a different byte
+  encoder: these primitive calls still assume x86 registers, stack behavior
+  and instruction semantics. (`tools/native32.sa` sidesteps that by compiling
+  a far smaller integer subset with no calls into the runtime at all, which is
+  exactly why its two targets could share one front end.)
 * **The value model.** Numbers are IEEE double bits in 64-bit slots and
   registers; arithmetic moves them through `xmm0`/`xmm1` (`emit_d2i` and
   `emit_i2d` are the two conversions); a list length or a `len()` result is an
@@ -149,8 +155,10 @@ the abstract machine model (`FADD`, `FCMP`, `I2F`, named calls, phase
 markers).
 
 This is the "portable IR docs + tests" half of the second-target item, and it
-is deliberately only that: **no backend assembles or executes the IR, and no
-second ISA is claimed.** The listing exists so the stream can be read, diffed and counted with
+is deliberately only that: **no backend assembles or executes the IR.** (The
+executable second target added on 2026-10-23, `tools/native32.sa`, does not
+read this listing either; it is an independent front end and encoder for a
+documented integer subset — [NATIVE32.md](NATIVE32.md).) The listing exists so the stream can be read, diffed and counted with
 abstract register names. Width distinctions and x86-64 semantics are not
 removed by renaming; this is not a lossless executable representation. `native-test` stays an x86-64-Linux-only gate.
 
@@ -222,11 +230,70 @@ recorded x86 program, **not** portable branch labels; neither mode resolves
 fixups, builds a CFG/SSA, checks operands, assembles, interprets or executes the
 listing. Strict success does not prove that a log describes valid machine code.
 
-There is still exactly **one executable ISA backend: x86-64 Linux ELF**.
-No aarch64/riscv64 emitter, loader, ABI/runtime/collector port, cross-execution
-smoke test or second-backend acceptance gate has been added. Host-C compilation
-of generated C and abstract register names are not a second native ISA.
+As of this section's date there was exactly **one executable ISA backend:
+x86-64 Linux ELF**. No aarch64/riscv64 emitter, loader, ABI/runtime/collector
+port, cross-execution smoke test or second-backend acceptance gate had been
+added, and host-C compilation of generated C and abstract register names are
+not a second native ISA. (Later: 2026-10-23 added `tools/native32.sa`, an
+i386 backend for a documented integer subset with its own acceptance gate,
+`make test-native32`, and an aarch64 encoder in the same program,
+`make test-native-arm64`, whose images are emitted and byte-pinned but
+never executed here. Still no riscv64 emitter, no cross-execution smoke
+test for aarch64, and `native_aot` is still x86-64 only.)
 Actual gates: [2026-10-16 IR/modules logs](gate-logs/2026-10-16-ir-modules/).
+
+## The phase-1 seam and the Sayanox front end (`SX_DEFS_DUMP`, 2026-10-23)
+
+`SX_EMIT_LOG`, `SX_ENCODE_LOG` and `SX_LINK_DUMP` all record the *back* half
+of the backend. `SX_DEFS_DUMP=<dir>` records the front: it writes
+
+```
+<dir>/expand.sa   the source after every `use` splice, byte for byte
+<dir>/defs.txt    the struct, generic-struct, function and global tables
+```
+
+between `collect_defs()` and `infer()`, and changes nothing else — the image
+and every diagnostic are identical with and without it, which
+`make test-native-sxdefs` checks before it compares anything.
+
+```
+; native_aot phase 1
+structs 1
+struct 0 Point nf=2
+  field 0 x kind=-1 sid=-1
+  field 1 y kind=-1 sid=-1
+gstructs 1
+gstruct 0 Box np=1 nf=1
+  tparam 0 T
+  gfield 0 v
+fns 1
+fn 0 pick nparam=2 gen=1 ntp=2 rk=0 rtp=0
+  param 0 a k=0 tp=0
+  param 1 b k=0 tp=1
+  ftparam 0 T
+  ftparam 1 U
+globals 2
+glob 0 count kind=-1 sid=-1
+glob 1 here kind=3 sid=0
+```
+
+The kinds are `0` num, `1` str, `2` list, `3` struct and `-1` unknown. The
+dump is taken *before* inference on purpose: every field kind is `-1` there,
+and an unannotated global is `-1` too, because filling them is phase 2's job.
+`tp=` is the index of the type parameter a signature named, `sid=` the struct
+identity an annotation resolved to.
+
+`tools/sxdefs.sa` reproduces both files from the same input path — it is the
+Sayanox port of `expand_use()` and `collect_defs()` — and the gate also
+requires it to refuse what C refuses with the same words
+([ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md), Phase D step 5).
+
+```sh
+SX_DEFS_DUMP=/tmp/d ./selfhost/native_aot in.sa out.elf   # C's phase 1
+./tools/sxdefs in.sa expand /tmp/d/sx.expand              # Sayanox's
+./tools/sxdefs in.sa defs   /tmp/d/sx.defs
+cmp /tmp/d/expand.sa /tmp/d/sx.expand && cmp /tmp/d/defs.txt /tmp/d/sx.defs
+```
 
 ## The image seam and the Sayanox linker (`SX_LINK_DUMP`, 2026-10-20)
 
@@ -278,8 +345,10 @@ page padding.
   Sayanox linker the producer means the native backend's output path depends on
   gen2, which is a real ordering change to the bootstrap and belongs to a later
   cut.
-* It is not a second backend and not a second ISA. There is still exactly one
-  executable target: x86-64 Linux ELF.
+* It is not a second backend and not a second ISA. For the native subset
+  there is still exactly one executable target: x86-64 Linux ELF. (The
+  separate i386 backend added on 2026-10-23 compiles a documented integer
+  subset and shares no code with this seam — [NATIVE32.md](NATIVE32.md).)
 
 ## The encoder seam and the Sayanox encoder (`SX_ENCODE_LOG`, 2026-10-21)
 

@@ -1,0 +1,6 @@
+make f(a: num) -> num {
+  give a
+}
+make f(a: num) -> num {
+  give a + 1
+}

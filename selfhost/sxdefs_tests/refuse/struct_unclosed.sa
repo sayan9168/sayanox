@@ -1,0 +1,4 @@
+struct P {
+  x,
+  y
+show 1

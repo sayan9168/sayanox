@@ -8,10 +8,13 @@
 // never share a slot, and `make test-generic-structs` pins both typedefs.
 //
 // seed-min, gen2 and native all compile this file and print the same six lines.
-// Deliberately NOT here: `Box<list>` (concrete list fields exist, but generic
-// list-field specialization/layout is intentionally still refused), a struct
-// name as a type argument, and a nested instantiation such as
-// `Box<Box<num>>` -- see the refusal table in docs/TYPES_ROADMAP.md.
+// Deliberately NOT here: `Box<list>` and nested instantiations such as
+// `Box<Box<num>>`, which were refused when this fixture was written and are
+// supported since 2026-10-22 -- they have their own fixture,
+// selfhost/generic_struct_nested.sa, gated by
+// `make test-generic-structs-nested`. Still refused everywhere, and still
+// not here: a CONCRETE struct name as a type argument. See the refusal table
+// in docs/TYPES_ROADMAP.md.
 struct Box<T> {
   v
 }

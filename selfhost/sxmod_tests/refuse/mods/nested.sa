@@ -1,0 +1,4 @@
+module inner from "selfhost/sxmod_tests/math.sa"
+make f() -> num {
+  give 1
+}

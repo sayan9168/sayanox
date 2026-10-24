@@ -1,0 +1,2 @@
+module twice from "selfhost/sxmod_tests/refuse/mods/dup.sa"
+show twice.f(1)

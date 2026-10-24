@@ -1,0 +1,5 @@
+// `add` is a member of module math, and sxmod does not rewrite a bare name:
+// after the pass this program refers to a function that does not exist, and
+// the compiler says so. That is the namespacing working.
+module math from "selfhost/sxmod_tests/math.sa"
+show add(2, 3)

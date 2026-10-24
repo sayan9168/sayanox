@@ -1,0 +1,9 @@
+struct A {
+  v
+}
+struct B {
+  v
+}
+hold x: A = A { v: 1 }
+hold x: B = B { v: 2 }
+show 1

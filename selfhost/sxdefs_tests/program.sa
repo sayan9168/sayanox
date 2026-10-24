@@ -1,0 +1,78 @@
+// sxdefs_tests/program.sa -- the positive fixture for `make test-native-sxdefs`.
+//
+// Everything in this file is phase-1 surface: a nested `use` splice, concrete
+// structs, generic struct templates, typed and untyped signatures, a generic
+// function, annotated globals, a global declared twice, and top-level blocks
+// whose bodies must NOT reach the tables. This comment also contains
+// use "not-a-real-file.sa" and a brace { and a quote " so the line scanner
+// has something it must ignore.
+use "mods/geom.sa"
+
+struct Size {
+  bytes,
+  label   // a comment inside a field block
+}
+
+struct Box<T> {
+  v
+}
+
+struct Pair<A, B> {
+  // a comment and "a string" inside a template's field block
+  first,
+  second
+}
+
+make twice(n) {
+  give n * 2
+}
+
+make label_of(s: str) -> str {
+  give concat("<", concat(s, ">"))
+}
+
+make total(xs: list) -> num {
+  hold i = 0
+  hold t = 0
+  while i < len(xs) {
+    t = t + xs[i]
+    i = i + 1
+  }
+  give t
+}
+
+make pick<T, U>(a: T, b: U) -> T {
+  give a
+}
+
+hold count = 0
+hold title: str = "sayanox"
+hold here: Point = Point { x: 3, y: 4 }
+hold sizes: list = [1, 2, 3, 4]
+hold s: Size = Size { bytes: 12, label: "b" }
+hold boxed = Box<num> { v: 7 }
+hold count = count + 1
+
+push(sizes, 5)
+
+when count > 0 {
+  hold inner = 5
+  show inner
+}
+
+while count < 3 {
+  count = count + 1
+}
+
+show count
+show twice(21)
+show label_of(title)
+show total(sizes)
+show here.x + here.y
+show dist2(3, 4)
+show shout("hi")
+show s.bytes
+show s.label
+show boxed.v
+show pick(11, 12)
+show "make notafunction( { hold notaglobal = 1 } // not a comment"

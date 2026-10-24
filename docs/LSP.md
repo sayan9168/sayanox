@@ -25,13 +25,14 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 | `textDocument/documentSymbol` | `make` (Function), `struct` (Class), `hold` (Variable) |
 | `textDocument/completion` | keywords and the builtin list |
 | `textDocument/hover` | builtin documentation, a `make` signature, or the variable's declaration |
-| `textDocument/definition` | jumps to the `make` / `hold` / `struct` line of the word under the cursor |
-| `textDocument/references` | every whole-word occurrence of the word under the cursor, across **open documents plus eligible workspace disk files**, as `Location[]` with UTF-16 columns that cover the whole word; `context.includeDeclaration: false` leaves out the `make` / `hold` / `struct` line; a position that is not on a word answers `[]` |
+| `textDocument/definition` | jumps to the **binder** of the word under the cursor: a parameter or a `hold` in the enclosing function body, else the top-level `make` / `hold` / `struct` line (2026-10-22) |
+| `textDocument/references` | every occurrence of the word under the cursor **in the scope that binds it**: a local or parameter is reported inside its own function body only, a top-level name across **open documents plus eligible workspace disk files**, as `Location[]` with UTF-16 columns that cover the whole word. Words inside string literals and `//` comments are not occurrences. `context.includeDeclaration: false` leaves out the binder; a position that is not on a word answers `[]` |
 | `workspace/symbol` | symbols from open buffers plus a bounded scan of the initialized local folder; case-insensitive substring query. Open buffers override disk copies; queries refresh the disk snapshot. See limits below |
 | `textDocument/formatting` | the `tools/sxfmt.sa` rule set over the protocol: one whole-buffer `TextEdit`, or `[]` when the document is already formatted |
-| `textDocument/rename` | a `WorkspaceEdit` renaming the word under the cursor in **every open document** (declaration included); the new name must be an identifier, otherwise `null` |
+| `textDocument/rename` | a `WorkspaceEdit` with the same resolution as references: a local is renamed **inside its own body**, a top-level name in **every open document and every indexed folder file** (declaration included, strings and comments left alone); the new name must be an identifier, otherwise `null` |
 | `textDocument/signatureHelp` | the declaration of the innermost call enclosing the cursor **on the same line, in the same document**, with its parameter list and the argument index the cursor is in; `null` when no declaration is found |
 | `textDocument/codeAction` | one action, "Format this Sayanox document", carrying the whole-buffer formatting edit; `[]` when the document is already formatted |
+| `workspace/didChangeWatchedFiles` | yes (2026-10-22) — registered with `client/registerCapability` for `**/*.sa` when the client offers dynamic registration; each change re-reads the file and publishes its diagnostics, a delete clears them, and files the client has open are left to `didChange` |
 | `shutdown` / `exit` | yes (EOF also ends the session) |
 
 ## Error responses (robustness)
@@ -228,8 +229,8 @@ case-insensitive substring (the new `lower` helper is ASCII-only, which is all
 a symbol name can be). The dispatch site scans the four slots the same way
 references does.
 
-Rename retains the old open-buffer limit: it edits the **open**
-documents only, so an occurrence in a file nobody opened is not renamed.
+Rename used to retain the old open-buffer limit (open documents only); it
+spans the folder index since 2026-10-22, see below.
 Signature help is narrower still: the declaration must be in the **same**
 document and the call must enclose the cursor on the **same line** (a call
 that spans lines, or a declaration in another open document, answers
@@ -237,8 +238,8 @@ that spans lines, or a declaration in another open document, answers
 SX1001–SX1005 diagnostics yet.
 
 Historical boundary, superseded for symbols/references by the 2026-10-16
-folder snapshot below: the original implementation searched open documents
-only. Rename still has that limit; no semantic workspace resolution is claimed.
+folder snapshot below, and for rename and scope by the 2026-10-22 section at
+the end: the original implementation searched open documents only, lexically.
 
 ### `textDocument/formatting`
 
@@ -290,9 +291,11 @@ indexing service runs.
 * Closing a buffer restores its disk view for these two methods. A fifth open
   buffer still evicts one of the four unsaved overlays; its eligible disk copy
   can then be searched, but unsaved evicted text is not retained.
-* Edits, new files and deletion on disk are observed on the next query.
-  There is no file watcher, background worker, cancellation or change-notice
-  subscription. Queries are synchronous and a large folder can be slow.
+* Edits, new files and deletion on disk are observed on the next query, and
+  since 2026-10-22 a client that supports `workspace/didChangeWatchedFiles`
+  also gets diagnostics for a changed file without querying. There is still no
+  background worker and no cancellation. Queries are synchronous and a large
+  folder can be slow.
 * Folder changes after initialization, multiple workspace roots, `rootPath`,
   remote/virtual filesystems and scanning dependencies outside the selected
   root are not implemented.
@@ -346,15 +349,72 @@ Logs: [2026-10-16 workspace LSP](gate-logs/2026-10-16-lsp-workspace/).
 
 ### Remaining IDE gaps — not IDE-complete
 
-References remain **lexical whole-word occurrences**, not resolved symbol
-identity: unrelated same-spelled locals, comments and strings may be included;
-imports/scopes/type identities are not followed. Declaration filtering is a
-line heuristic. Symbol results retain the existing declaration scanner and
-coarse ranges. This is not compiler-backed semantic analysis.
+*Rewritten 2026-10-22: the three items this section used to lead with
+(semantic resolution, rename beyond open buffers, file watching) are
+implemented and gated; what is left is listed below.*
 
-Rename still edits **open buffers only** (not indexed disk files). Signature
-help still requires a same-document declaration and a same-line call; code
-actions still offer formatting only, not diagnostic fixes. Hover, definition,
-documentSymbol and diagnostics retain their open-document behavior; there is
-no workspace diagnostic pass. Four open-buffer slots remain a practical editor
-limitation. These improvements do not establish IDE completeness.
+Resolution is **scope resolution, not type resolution**. The server knows
+which declaration binds a name — a parameter, a `hold` in the enclosing body,
+or a top-level `make`/`hold`/`struct` — and it ignores words inside strings
+and comments. It does **not** know types: a struct field and a variable with
+the same name are the same name to it, `use`d files are not followed to their
+declarations (a top-level name is searched for across the folder index by
+spelling), and shadowing inside nested `when`/`while` blocks of the same
+function body is not distinguished from the body's own binding. There is no
+compiler-backed symbol table: the resolver is a brace-depth scan of the
+document, not the front end that gen2 uses.
+
+Signature help still requires a same-document declaration and a same-line
+call; code actions still offer formatting only, not diagnostic fixes. Hover,
+documentSymbol and diagnostics retain their open-document behavior, and there
+is no workspace diagnostic pass (a watched-file notification publishes
+diagnostics for the named files only, up to 32 per notification). Four
+open-buffer slots and the 128-file folder cap remain. These improvements do
+not establish IDE completeness.
+
+## Semantic resolution, folder rename and file watching (2026-10-22)
+
+Three gaps closed in one increment, all in `tools/sayanox_lsp.sa`, all checked
+by `make test-lsp-semantic` (required by `test-lsp` and `test-lsp-robust`).
+
+**Scope.** Five helpers do the work: `brace_delta` reads one line's brace
+balance the way the formatter does (quotes and `//` excluded), `fn_open_line`
+finds the `make` whose body contains a line, `fn_close_line` finds where that
+body ends, `sig_param` tells whether a signature declares a given parameter,
+and `local_decl_line` finds the `hold`/`for`/parameter that binds a name
+inside a body. `top_decl_line` is the other half: the first `make`, `struct`
+or `hold` written at depth 0. Definition answers the local binder when there
+is one and the top-level binder otherwise; references and rename pass the
+body's line range to the scanner, which now also skips words inside string
+literals and comments.
+
+The fixture that pins it declares `total` three times (two function bodies and
+the top level) and `count` twice, and puts both names inside a string and a
+comment. The checks are exact: definition from inside the second body answers
+*its* `hold`, not the first body's; a reference search on a parameter answers
+exactly two locations; a reference search on the local `total` answers exactly
+four, skipping the string, the comment, the other body and the global.
+
+**Folder-wide rename.** `workspace_rename` walks the same bounded folder index
+`workspace/symbol` and `references` use, and adds one `"uri":[edits]` entry per
+indexed file the client does not have open. The gate renames a function
+declared in an open buffer and used twice in a file that was never opened, and
+requires both URIs and all four edits in the one `WorkspaceEdit`.
+
+**File watching.** On `initialized`, when the client's capabilities mention
+`didChangeWatchedFiles`, the server sends `client/registerCapability` for
+`**/*.sa` (kind 7: create, change, delete). A client that does not offer
+dynamic registration is sent nothing, and its session is byte-for-byte what it
+was before. Each `workspace/didChangeWatchedFiles` notification refreshes the
+folder index and publishes diagnostics per changed file: the file is re-read
+from disk, a `type: 3` (deleted) or unreadable file publishes `[]` to clear
+its diagnostics, and a file the client has open is skipped because `didChange`
+already owns it. At most 32 changes are answered per notification, so a branch
+checkout cannot make the server write an unbounded burst of frames. The
+client's reply to the registration request — a body with an `id`, a `result`
+and no `method` — is now ignored instead of answered with `-32600`.
+
+The test client is `tools/lsp_semantic_test.sa`, Sayanox like the folder one,
+driving real framed sessions through `spawn`/`child_send`/`child_recv`. Run
+against the previous server binary it fails on its first check, which is how
+the gate was confirmed to be discriminating rather than decorative.

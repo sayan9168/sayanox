@@ -44,4 +44,8 @@ tools/emit_to_ir
 tools/sxlink
 tools/sxencode
 tools/sxdiag
+tools/native32
+tools/sxmod
+tools/sxaudit
+tools/sxdefs
 tools/sxdiag.c

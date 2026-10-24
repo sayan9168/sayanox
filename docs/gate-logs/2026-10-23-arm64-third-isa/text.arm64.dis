@@ -1,0 +1,96 @@
+# text.arm64.elf -- full disassembly of the tracked golden
+#
+# Evidence for docs/gate-logs/2026-10-23-arm64-third-isa. Produced at
+# authoring time with a disassembler that is NOT part of this repository
+# and is NOT referenced by any make target. The gate asserts the bytes of
+# the golden, not this listing; this file is here so a reader can check the
+# bytes meant what the author says they meant.
+#
+# source     selfhost/native32_tests/text.sa
+# image      4185 bytes, text 316 bytes (79 instructions)
+# entry      0x400134   (0x400000 + 176 header bytes + the 132-byte print routine)
+# data       0x401000, 89 bytes
+# NOT EXECUTED: this machine is x86-64 and has no emulator.
+
+        print_num: the decimal print routine, 33 words, called by every `show <expr>`
+  0x004000b0  e403002a  mov    w4, w0
+  0x004000b4  05008052  mov    w5, #0
+  0x004000b8  1f000071  cmp    w0, #0
+  0x004000bc  6a000054  b.ge   #0x4000c8
+  0x004000c0  e403004b  neg    w4, w0
+  0x004000c4  25008052  mov    w5, #1
+  0x004000c8  e90382d2  mov    x9, #0x101f
+  0x004000cc  0908a0f2  movk   x9, #0x40, lsl #16
+  0x004000d0  46018052  mov    w6, #0xa
+  0x004000d4  8708c61a  udiv   w7, w4, w6
+  0x004000d8  e390061b  msub   w3, w7, w6, w4
+  0x004000dc  63c00011  add    w3, w3, #0x30
+  0x004000e0  290500d1  sub    x9, x9, #1
+  0x004000e4  23010039  strb   w3, [x9]
+  0x004000e8  e403072a  mov    w4, w7
+  0x004000ec  9f000071  cmp    w4, #0
+  0x004000f0  21ffff54  b.ne   #0x4000d4
+  0x004000f4  bf000071  cmp    w5, #0
+  0x004000f8  80000054  b.eq   #0x400108
+  0x004000fc  290500d1  sub    x9, x9, #1
+  0x00400100  a3058052  mov    w3, #0x2d
+  0x00400104  23010039  strb   w3, [x9]
+  0x00400108  ea0382d2  mov    x10, #0x101f
+  0x0040010c  0a08a0f2  movk   x10, #0x40, lsl #16
+  0x00400110  43018052  mov    w3, #0xa
+  0x00400114  43010039  strb   w3, [x10]
+  0x00400118  4a050091  add    x10, x10, #1
+  0x0040011c  420109cb  sub    x2, x10, x9
+  0x00400120  e10309aa  mov    x1, x9
+  0x00400124  200080d2  mov    x0, #1
+  0x00400128  080880d2  mov    x8, #0x40
+  0x0040012c  010000d4  svc    #0
+  0x00400130  c0035fd6  ret    
+
+        _start:
+  0x00400134  010482d2  mov    x1, #0x1020
+  0x00400138  0108a0f2  movk   x1, #0x40, lsl #16
+  0x0040013c  02028052  mov    w2, #0x10
+  0x00400140  200080d2  mov    x0, #1
+  0x00400144  080880d2  mov    x8, #0x40
+  0x00400148  010000d4  svc    #0
+  0x0040014c  010682d2  mov    x1, #0x1030
+  0x00400150  0108a0f2  movk   x1, #0x40, lsl #16
+  0x00400154  42018052  mov    w2, #0xa
+  0x00400158  200080d2  mov    x0, #1
+  0x0040015c  080880d2  mov    x8, #0x40
+  0x00400160  010000d4  svc    #0
+  0x00400164  410782d2  mov    x1, #0x103a
+  0x00400168  0108a0f2  movk   x1, #0x40, lsl #16
+  0x0040016c  42018052  mov    w2, #0xa
+  0x00400170  200080d2  mov    x0, #1
+  0x00400174  080880d2  mov    x8, #0x40
+  0x00400178  010000d4  svc    #0
+  0x0040017c  810882d2  mov    x1, #0x1044
+  0x00400180  0108a0f2  movk   x1, #0x40, lsl #16
+  0x00400184  82018052  mov    w2, #0xc
+  0x00400188  200080d2  mov    x0, #1
+  0x0040018c  080880d2  mov    x8, #0x40
+  0x00400190  010000d4  svc    #0
+  0x00400194  60008052  mov    w0, #3
+  0x00400198  0000a072  movk   w0, #0, lsl #16
+  0x0040019c  e00f1ff8  str    x0, [sp, #-0x10]!
+  0x004001a0  e00741f8  ldr    x0, [sp], #0x10
+  0x004001a4  090a82d2  mov    x9, #0x1050
+  0x004001a8  0908a0f2  movk   x9, #0x40, lsl #16
+  0x004001ac  200100b9  str    w0, [x9]
+  0x004001b0  090a82d2  mov    x9, #0x1050
+  0x004001b4  0908a0f2  movk   x9, #0x40, lsl #16
+  0x004001b8  200140b9  ldr    w0, [x9]
+  0x004001bc  e00f1ff8  str    x0, [sp, #-0x10]!
+  0x004001c0  e00741f8  ldr    x0, [sp], #0x10
+  0x004001c4  bbffff97  bl     #0x4000b0
+  0x004001c8  810a82d2  mov    x1, #0x1054
+  0x004001cc  0108a0f2  movk   x1, #0x40, lsl #16
+  0x004001d0  a2008052  mov    w2, #5
+  0x004001d4  200080d2  mov    x0, #1
+  0x004001d8  080880d2  mov    x8, #0x40
+  0x004001dc  010000d4  svc    #0
+  0x004001e0  000080d2  mov    x0, #0
+  0x004001e4  a80b80d2  mov    x8, #0x5d
+  0x004001e8  010000d4  svc    #0

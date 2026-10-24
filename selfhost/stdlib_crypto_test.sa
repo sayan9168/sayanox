@@ -1,0 +1,88 @@
+// selfhost/stdlib_crypto_test.sa -- stdlib/crypto.sa on seed-min, gen2 and
+// native. Every expected value below is a published test vector (FIPS 180-4
+// for SHA-256, RFC 4231 for HMAC-SHA256) or a padding-boundary length checked
+// against an independent implementation; make test-stdlib-crypto pins them.
+
+use "stdlib/crypto.sa"
+
+make rep(c: str, n: num) -> str {
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold out = concat(out, c)
+    hold i = i + 1
+  }
+  give out
+}
+
+make fill(b: num, n: num) -> list {
+  hold xs = []
+  hold i = 0
+  while i < n {
+    hold xs = push(xs, b)
+    hold i = i + 1
+  }
+  give xs
+}
+
+// A 32-bit word as 8 hex characters: show prints a number in the %g form, and
+// 4.29497e+09 would hide exactly the bits these checks are about.
+make hex32(v: num) -> str {
+  hold out = cx_hex_byte(cx_shr32(v, 24))
+  hold out = concat(out, cx_hex_byte(cx_shr32(v, 16) % 256))
+  hold out = concat(out, cx_hex_byte(cx_shr32(v, 8) % 256))
+  hold out = concat(out, cx_hex_byte(v % 256))
+  give out
+}
+
+// --- SHA-256: the three classic vectors ---
+show cx_sha256("")
+show cx_sha256("abc")
+show cx_sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+
+// --- SHA-256: the padding boundaries (55, 56, 63, 64, 65 bytes) ---
+show cx_sha256(rep("a", 55))
+show cx_sha256(rep("a", 56))
+show cx_sha256(rep("a", 63))
+show cx_sha256(rep("a", 64))
+show cx_sha256(rep("a", 65))
+
+// --- SHA-256 over a byte list, including bytes no string can carry ---
+hold raw = []
+hold raw = push(raw, 0)
+hold raw = push(raw, 1)
+hold raw = push(raw, 255)
+show cx_sha256_list(raw)
+show len(cx_sha256_raw(raw))
+
+// --- HMAC-SHA256: RFC 4231 cases 1, 2 and 3 ---
+hold k1 = fill(11, 20)
+show cx_hmac_list(k1, cx_bytes("Hi There"))
+show cx_hmac("Jefe", "what do ya want for nothing?")
+hold k3 = fill(170, 131)
+show cx_hmac_list(k3, cx_bytes("Test Using Larger Than Block-Size Key - Hash Key First"))
+
+// --- hex helpers and the no-early-exit comparison ---
+show cx_hex_byte(0)
+show cx_hex_byte(255)
+show cx_hex_byte(171)
+hold back = cx_unhex("00ff10")
+show len(back)
+show back[1]
+show len(cx_unhex("abc"))
+show len(cx_unhex("zz"))
+show cx_eq_hex(cx_sha256("abc"), cx_sha256("abc"))
+show cx_eq_hex(cx_sha256("abc"), cx_sha256("abd"))
+show cx_eq_hex("ab", "abc")
+
+// --- the 32-bit primitives, so a backend difference is named, not hidden ---
+show hex32(cx_and32(4042322160, 252645135))
+show hex32(cx_or32(4042322160, 252645135))
+show hex32(cx_xor32(4042322160, 61680))
+show hex32(cx_not32(0))
+show hex32(cx_rotr32(1, 1))
+show hex32(cx_shr32(4294967295, 28))
+show hex32(cx_shl32(4294967295, 4))
+show hex32(cx_add32(4294967295, 2))
+show hex32(cx_xor8(54, 11) * 1)
+show "crypto-done"

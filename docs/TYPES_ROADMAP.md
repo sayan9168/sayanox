@@ -1,8 +1,13 @@
 # Incremental types: implementation constraints
 
-**Current contract (2026-10-16):** generic structs accept scalar `num`/`str`
-arguments only. Nested/struct/list arguments are permanently outside the
-current bootstrap dialect; see [Permanent bootstrap contract](#permanent-bootstrap-contract-2026-10-16-decision).
+**Current contract (2026-10-22):** a generic struct type argument is `num`,
+`str`, `list`, or an instantiation of another generic struct. `Box<Box<num>>`
+and `Box<list>` are implemented on seed-min, gen2 and native and gated by
+`make test-generic-structs-nested`; a *concrete* struct name, an unknown name,
+an escaped type parameter and the wrong argument count stay refused on all
+three. This replaces the 2026-10-16 "scalar arguments only" decision — see
+[Nested and list type arguments](#nested-and-list-type-arguments-2026-10-22),
+which records what changed and why the earlier decision was reversed.
 Dated implementation notes below are historical where they describe generic
 structs as entirely absent or describe expansion work as still pending.
 
@@ -28,6 +33,9 @@ under a mangled name:
 | `Box<num>` | `Box__n` | `typedef struct { double v; } Box__n;` |
 | `Box<str>` | `Box__s` | `typedef struct { char *v; } Box__s;` |
 | `Pair<num, str>` | `Pair__ns` | `typedef struct { double a; char *b; } Pair__ns;` |
+| `Box<list>` (2026-10-22) | `Box__l` | `typedef struct { sx_list *v; } Box__l;` |
+| `Box<Box<num>>` (2026-10-22) | `Box__Box__n` | `typedef struct { Box__n v; } Box__Box__n;` |
+| `Pair<Box<num>, str>` (2026-10-22) | `Pair__Box__n_s` | `typedef struct { Box__n a; char *b; } Pair__Box__n_s;` |
 
 Those are the suffixes generic **functions** already use, so the mangled name
 *is* the type identity: `Box__n` and `Box__s` have their own field kinds, their
@@ -98,12 +106,14 @@ concrete-name workaround and the dotted-field-read divergence).
 | Program | seed-min | gen2 | native |
 |---|---|---|---|
 | `Box<num, str> { 7 }` (one parameter) | `Box takes 1 type argument, got 2`, exit 1 | `#error sayanox-min: undefined name: Box` | `struct 'Box' takes 1 type argument, got 2`, exit 1 |
-| `Box<NumBox> { n }` (a struct as a type argument) | `a type argument must be num, str or list (got 'NumBox'); a struct name as a type argument is not implemented`, exit 1 | `#error sayanox-min: undefined name: Box` | the same sentence as seed-min, exit 1 |
-| `Box<list> { xs }` (generic list field) | refused: generic list specialization/layout is not implemented | `#error sayanox-min: undefined name: Box` | refused: generic list specialization/layout is not implemented |
+| `Box<NumBox> { n }` (a *concrete* struct as a type argument) | `a type argument must be num, str, list or an instantiation of a generic struct (got 'NumBox')`, exit 1 | `#error sayanox-min: undefined name: Box` | the same sentence as seed-min, exit 1 |
 | `Box { 7 }` (a bare template name) | `Box is a generic struct: write Box<num> { ... } with one type argument per type parameter`, exit 1 | `#error sayanox-min: unexpected '{' (expected the end of the statement or a new statement)` | `'Box' is a generic struct: write Box<num> { ... } with one type argument per type parameter`, exit 1 |
 | `Box<num> { 7 }` and `Box<num> { "seven" }` | `Box__n field 'v' is num (its type argument says so), the literal gives str`, exit 1 | `#error sayanox-min: struct field is used with two different value kinds (number, string, list, or concrete struct)` | `struct 'Box__n' field 'v' is a number (its type argument says so), the literal gives a string`, exit 1 |
 
-All three backends refuse all five. seed-min and native name the problem; gen2
+(The `Box<list>` row was removed on 2026-10-22: a list type argument is now
+implemented. The four rows above are still refused by all three backends.)
+
+All three backends refuse all four. seed-min and native name the problem; gen2
 refuses three of them through its general undefined-name/stray-token errors, so
 `make test-generic-structs` pins gen2's *failure* for those and pins its
 wording only where gen2 names the problem (the two-kinds case). Freezing gen2's
@@ -112,16 +122,15 @@ is good.
 
 ### What is still missing (measured 2026-10-13)
 
-* **Nested instantiations** — `Box<Box<num>>` is refused: a struct name is not
-  an accepted type argument on any backend, so an instantiation cannot contain
-  another (`make test-type-refusals` pins the refusal on seed-min, gen2 and
-  native; seed-min and native name the problem, gen2 refuses via its general
-  `undefined name: Box`). seed-min additionally requires a nested concrete
-  struct to be declared before the struct that holds it.
-* **A struct as a type argument** — refused everywhere. A list type argument
-  is also deliberately refused for **generic** structs until generic
-  specialization/layout and GC rules are implemented. This does not prohibit a
-  concrete list-valued struct field on seed-min, Gen2 or native.
+* ~~**Nested instantiations**~~ — **implemented 2026-10-22** on all three
+  backends; see [Nested and list type arguments](#nested-and-list-type-arguments-2026-10-22).
+* ~~**A list type argument**~~ — **implemented 2026-10-22**: `Box<list>` is
+  `Box__l` and its field holds the list pointer.
+* **A *concrete* struct as a type argument** — still refused everywhere
+  (`Box<Pt>`). The template table is the only source of a type argument's
+  identity; a concrete struct has no parameter list to substitute, so there is
+  nothing a `Box<Pt>` instantiation would specialize. Pinned by
+  `test-generic-struct-limits` and `test-type-refusals`.
 * **gen2's diagnostics for a bad type argument list** — it refuses, but as
   `undefined name: Box` or `unexpected '{'` rather than naming the template.
   The name is known to the pre-pass and not to the two walker sites that report
@@ -314,6 +323,13 @@ conditions, nested layout and iteration, and pins clear refusals for generic
 kind conflicts, direct field `push`, whole-list `show`, and whole-list
 conditions.
 
+> **Superseded on 2026-10-22.** Both paragraphs below were accurate when
+> written; `Box<list>` and `Box<Box<num>>` are now implemented on all three
+> backends. The conditions this section set out are what the implementation
+> had to meet, and
+> [Nested and list type arguments](#nested-and-list-type-arguments-2026-10-22)
+> answers them one by one.
+
 Generic `Box<list>` remains deliberately refused. The concrete representation
 is not a claim of generic specialization parity: safe support still needs a
 generic layout/GC worklist and explicit type-argument propagation.
@@ -328,7 +344,17 @@ mangling a nested name would not meet those requirements.
 seed-min/gen2/native and checks scalar and wrong-concrete-struct failures. It
 is real named-layout checking, not untyped acceptance.
 
-## Permanent bootstrap contract (2026-10-16 decision)
+## Permanent bootstrap contract (2026-10-16 decision) — reversed 2026-10-22
+
+> **Reversed on 2026-10-22.** This section called the scalar-only boundary
+> *permanent*. It is not any more: `list` and nested instantiations are
+> implemented on all three backends. The word "permanent" was the wrong word
+> to use — the cost list below was a real engineering estimate, but calling an
+> estimate a contract turned a to-do into a promise never to do it. The text
+> is kept verbatim because the requirements it set are exactly what
+> [Nested and list type arguments](#nested-and-list-type-arguments-2026-10-22)
+> has to answer. What is *still* refused is a concrete struct name, an unknown
+> name, an escaped type parameter and a wrong argument count.
 
 The current bootstrap dialect permanently limits generic struct type arguments
 to `num` and `str`. Nested generic/struct arguments and `list` arguments remain
@@ -349,9 +375,109 @@ recursive layouts would need collection-pressure retention tests, not just
 matching `sizeof` or mangled names.
 
 Both public gates (`test-generic-structs`, `test-type-refusals`) depend on the
-seven-case cross-backend refusal matrix in `test-generic-struct-limits`. Valid
-scalar specializations precede each bad request to detect accidental reuse of
-a wrong layout. Gen2 must emit `#error` and fail downstream C compilation;
-seed/native must exit nonzero with diagnostics. This is refusal coverage, not
-positive support for those forms. See [GENERICS.md](GENERICS.md#permanent-bootstrap-boundary-generic-structs-2026-10-16)
+cross-backend refusal matrix in `test-generic-struct-limits`. As of 2026-10-22
+that matrix holds seven bad *type arguments* (a concrete struct name in first
+and in second position, an unknown name, an escaped type parameter, too many
+arguments, too few, a bare template name) and three bad *literals* (a nested
+or list instantiation filled with the wrong kind). Valid specializations —
+including a nested one — precede each bad request to detect accidental reuse
+of a wrong layout. Gen2 must emit `#error` and fail downstream C compilation;
+seed/native must exit nonzero with diagnostics. This is refusal coverage; the
+positive support is gated separately by `test-generic-structs-nested`. See [GENERICS.md](GENERICS.md#permanent-bootstrap-boundary-generic-structs-2026-10-16)
 for the exact scope and known diagnostic limitations.
+
+## Nested and list type arguments (2026-10-22)
+
+A generic struct type argument may now be `list`, or an instantiation of
+another generic struct. `Box<Box<num>>` is `Box__Box__n` and its field holds a
+`Box__n`; `Box<list>` is `Box__l` and its field holds the list pointer. Three
+backends, one spelling, one fixture
+(`selfhost/generic_struct_nested.sa`, eleven byte-identical lines).
+
+### What actually blocked it
+
+Not the generics pass. The 2026-10-13 note guessed that nested instantiation
+needed "recursive specialization identity, a bounded worklist,
+dependency-ordered layouts, cycle rules and correct native tracing". The
+measurement on 2026-10-22 found one concrete blocker and three non-problems:
+
+* **gen2 could not represent a struct-typed struct field at all** when the
+  value came from a *name*: `struct Outer { b }` with `hold o = Outer { i }`
+  gave `field 'b' of struct 'Outer' is not a struct`, while the same program
+  written with a nested *literal* (`Outer { Inner { 7 } }`) already emitted
+  `typedef struct { Inner b; } Outer;` and worked. So the layout existed and
+  only the literal's *name* case was missing: the struct-literal walker looked
+  a name up in the string table (`sdecls`) but not in the struct-variable
+  table (`svars`). That is the whole fix, and it is what
+  `test-struct-field-struct` now gates positively on all three backends.
+* **Identity** needed no new machinery: the mangled name already *is* the
+  identity, and a nested argument just contributes a longer code.
+* **Ordering** needed no worklist or sort: build the inner instantiation
+  *first*, and the outer one necessarily has a higher struct index, which is
+  the order the typedefs are emitted in. `test-generic-structs-nested` pins
+  `Box__n`'s typedef line number as lower than `Box__Box__n`'s.
+* **Cycles** cannot be spelled. A type argument is written out in full at the
+  literal site, so the nesting depth is bounded by the source text; there is
+  no name a template could use to refer to itself. gen2 additionally caps the
+  recursion at depth 8.
+
+### Mangling
+
+The suffix after `__` is one code per argument: `n`, `s`, `l` for `num`,
+`str`, `list`, and the inner mangled name for a nested instantiation. Codes
+run together while every one of them is a single letter, so `Pair<num, str>`
+is still `Pair__ns` and nothing that existed before changed name. As soon as
+one argument is nested the codes are separated by `_`:
+
+| Written | Mangled |
+|---|---|
+| `Box<num>` | `Box__n` |
+| `Box<list>` | `Box__l` |
+| `Box<Box<num>>` | `Box__Box__n` |
+| `Box<Box<Box<num>>>` | `Box__Box__Box__n` |
+| `Pair<num, str>` | `Pair__ns` |
+| `Pair<Box<num>, str>` | `Pair__Box__n_s` |
+| `Pair<num, Box<str>>` | `Pair__n_Box__s` |
+
+### Per backend
+
+* **seed-min** (`selfhost/seed/sxc_seed_min.c`): `instantiate_gstruct` now
+  recurses. A type argument that is a name followed by `<` and known to the
+  template table is instantiated first, contributes `SD[inner].name` as its
+  code, and is recorded in a parallel `nks[]` array so the literal can check
+  *which* struct the field must hold. The `TY_LIST` refusal is deleted; the
+  existing `FT_LIST` field kind does the rest.
+* **gen2** (`selfhost/compiler_min.sa`): the pre-pass grew three functions.
+  `gxargs` parses one type-argument list recursively and returns a record of
+  `ENDPOS / CODE / COUNT / DEFS`, where `DEFS` carries the `Name:fields;`
+  record of every nested instantiation innermost-first; `gxmerge` folds those
+  into the running instantiation list without duplicating a typedef. `gxskip`
+  lets a type-argument list span lines and contain `// ...` notes, which
+  seed-min's `skip()` always allowed. Everything downstream still sees only
+  concrete struct names.
+* **native** (`selfhost/native_aot.c`): `gs_instantiate` recurses the same
+  way, with `gss[sid][i]` recording the struct identity of a nested argument
+  so the kind pass can refuse `Box<Box<num>> { Box<str> { "x" } }` by naming
+  both mangled types. A struct field is one machine word and `BK_STRUCT`
+  tracing already visits every word, so a nested field is a collector root
+  with no new descriptor.
+
+### What is still refused, and by whom
+
+| Program | seed-min | gen2 | native |
+|---|---|---|---|
+| `Box<Pt>` (a *concrete* struct) | names it, exit 1 | `#error`, C will not compile | names it, exit 1 |
+| `Box<Nope>` (unknown name) | names it, exit 1 | `#error` | names it, exit 1 |
+| `Box<T>` (escaped parameter) | names it, exit 1 | `#error` | names it, exit 1 |
+| `Box<num, str>` / `Pair<num>` (arity) | names it, exit 1 | `#error` | names it, exit 1 |
+| `Box` (bare template) | names it, exit 1 | `#error` | names it, exit 1 |
+| `Box<Box<num>> { 7 }` | `field 'v' is Box__n (its type argument says so), the literal gives num` | **accepted** (see below) | the same sentence |
+| `Box<Box<num>> { aBoxStr }` | `the literal gives a Box__s` | **accepted** (see below) | the same sentence |
+| `Box<list> { 7 }` | names it, exit 1 | **accepted** (see below) | names it, exit 1 |
+
+The three gen2 acceptances are the **long-standing divergence** recorded under
+"gen2 learns field kinds from literals" above, not a new one: a single literal
+that contradicts its own type argument gives gen2's `ftypes` the literal's
+kind. Nested arguments inherit it unchanged. A *second* literal of the other
+kind is still refused by all three. `test-generic-struct-limits` asserts the
+two checking backends by name and says in its own output that gen2 diverges.

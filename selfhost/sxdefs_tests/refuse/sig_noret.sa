@@ -1,0 +1,4 @@
+make f(a: num, b: num) {
+  give a + b
+}
+show 1

@@ -1,0 +1,94 @@
+# Hard gates, 2026-10-22 (excerpt)
+#
+#   make doctor && make true-selfhost && make gen3 && make native-test
+#
+# on the tree that makes a generic struct type argument allowed to be `list`
+# or another instantiation (Box<Box<num>>, Box<list>, Pair<Box<num>, str>),
+# across selfhost/seed/sxc_seed_min.c, selfhost/compiler_min.sa and
+# selfhost/native_aot.c. Plain make, no -o. 36 min 34 s.
+Thu Oct 22 14:03:38 UTC 2026
+Thu Oct 22 14:40:12 UTC 2026
+
+## The four markers
+19:DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+1305:=== TRUE-SELFHOST-MIN-OK ===
+1341:=== GEN3-OK ===
+2498:=== NATIVE-TEST-OK ===
+2499:HARDGATES-EXIT=0
+
+## gen3 == gen4
+1319:[OK] byte-identical gen3 == gen4
+
+## This increment's gates, as they ran inside the aggregates
+# (test-generic-structs-nested is new; test-generic-structs lost its
+#  "a list is refused" block and gained a support block; test-type-refusals
+#  now uses Box<Pt>; test-struct-field-struct now asserts that gen2 ACCEPTS
+#  a struct-typed field, which is what unblocked nesting there;
+#  test-generic-struct-limits was rewritten as a 7+3 refusal matrix.)
+913:[OK] generic struct type-argument limit: concrete-struct refused by seed/gen2/native; gen2 C cannot compile
+914:[OK] generic struct type-argument limit: concrete-struct-second refused by seed/gen2/native; gen2 C cannot compile
+915:[OK] generic struct type-argument limit: unknown-name refused by seed/gen2/native; gen2 C cannot compile
+916:[OK] generic struct type-argument limit: escaped-parameter refused by seed/gen2/native; gen2 C cannot compile
+917:[OK] generic struct type-argument limit: too-many refused by seed/gen2/native; gen2 C cannot compile
+918:[OK] generic struct type-argument limit: too-few refused by seed/gen2/native; gen2 C cannot compile
+919:[OK] generic struct type-argument limit: bare-template refused by seed/gen2/native; gen2 C cannot compile
+920:[OK] generic struct literal limit: nested-gets-number refused by seed-min and native (gen2 diverges: documented)
+921:[OK] generic struct literal limit: nested-wrong-struct refused by seed-min and native (gen2 diverges: documented)
+922:[OK] generic struct literal limit: list-gets-number refused by seed-min and native (gen2 diverges: documented)
+929:[OK] nested generic structs: Box<Box<num>>, Box<Box<Box<num>>>, Box<list> and Pair<Box<num>, str> are concrete types on seed-min, gen2 and native, with the inner instantiation declared first
+943:[OK] generic structs: Box<num>, Box<str> and Pair<num,str> are three types with their own layouts, identical on seed-min and gen2
+979:[OK] generic structs: a CONCRETE struct name as a type argument is refused by all three backends (an instantiation of a generic one is not: test-generic-structs-nested)
+997:[OK] generic structs: a list type argument gives Box__l an sx_list * field on all three backends, and the alias survives growth
+1025:[OK] generic structs: one instantiation cannot hold two kinds -- the type argument fixes the field kind
+1450:[OK] nested generic structs: Box<Box<num>>, Box<Box<Box<num>>>, Box<list> and Pair<Box<num>, str> are concrete types on seed-min, gen2 and native, with the inner instantiation declared first
+1458:[OK] struct-typed struct fields: seed-min, gen2 and native all read o.b.v, from a name and from a nested literal (this is what unblocked nested generics on gen2)
+1459:[OK] a concrete struct name as a type argument refused on seed-min, gen2 and native (a generic instantiation is accepted: test-generic-structs-nested)
+2161:[OK] generic struct literal limit: nested-gets-number refused by seed-min and native (gen2 diverges: documented)
+2162:[OK] generic struct literal limit: nested-wrong-struct refused by seed-min and native (gen2 diverges: documented)
+2163:[OK] generic struct literal limit: list-gets-number refused by seed-min and native (gen2 diverges: documented)
+2170:[OK] nested generic structs: Box<Box<num>>, Box<Box<Box<num>>>, Box<list> and Pair<Box<num>, str> are concrete types on seed-min, gen2 and native, with the inner instantiation declared first
+2220:[OK] generic structs: a CONCRETE struct name as a type argument is refused by all three backends (an instantiation of a generic one is not: test-generic-structs-nested)
+2238:[OK] generic structs: a list type argument gives Box__l an sx_list * field on all three backends, and the alias survives growth
+2468:[OK] struct-typed struct fields: seed-min, gen2 and native all read o.b.v, from a name and from a nested literal (this is what unblocked nested generics on gen2)
+2469:[OK] a concrete struct name as a type argument refused on seed-min, gen2 and native (a generic instantiation is accepted: test-generic-structs-nested)
+
+## Run on the same tree, outside the four aggregates
+#
+#   make -o restore-compiler test-generic-structs-nested test-generic-structs \
+#       test-type-refusals test-generic-struct-limits test-struct2 test-nest \
+#       test-list-struct-fields test-gen2-list-struct-fields \
+#       test-language-deps               -> 63 [OK], exit 0
+#
+#   sh selfhost/test_generic_struct_limits.sh   -> 11 [OK] (7 bad type
+#       arguments on three backends, 3 bad literals on the two that check)
+#
+# test-language-deps is in that list because every new recipe has to stay
+# free of awk/sed/bash/python; the refusal matrix lives in a tracked POSIX
+# shell script invoked as `sh selfhost/test_generic_struct_limits.sh`.
+
+## After the run above
+#
+# Only comments and prose changed after 14:40: the stale "a list type argument
+# is refused" notes in selfhost/native_aot.c and in the Makefile's
+# test-generic-structs header, the header of selfhost/generic_struct_box.sa,
+# and the documents. Re-checked on the committed tree:
+#
+#   make -o restore-compiler native test-native-emit-split \
+#       test-generic-structs test-generic-structs-nested test-type-refusals \
+#       test-generic-struct-limits test-struct-field-struct \
+#       test-language-deps               -> 61 [OK], exit 0
+#
+# and the four hard gates were run again on exactly the committed bytes:
+#
+#   Thu Oct 22 14:43:05 UTC 2026
+#   Thu Oct 22 15:20:15 UTC 2026        (37 min 10 s)
+#   19:DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+#   1306:=== TRUE-SELFHOST-MIN-OK ===
+#   1321:[OK] byte-identical gen3 == gen4
+#   1343:=== GEN3-OK ===
+#   2501:=== NATIVE-TEST-OK ===
+#   2504:HARDGATES2-EXIT=0
+#
+# (line numbers in that second run's own log; each target's exit status was
+#  captured separately as DOCTOR-RC=0, TRUE-SELFHOST-RC=0, GEN3-RC=0,
+#  NATIVE-TEST-RC=0.)

@@ -1,6 +1,164 @@
 # Status
 
-Last updated: **2026-10-22** (package tool)
+Last updated: **2026-10-23** (the native backend's front-end phase 1 in
+Sayanox; i386 and aarch64 machine-code backends, a module-namespacing pass
+and a pinned trust-anchor audit, all written in Sayanox; expression-valued
+struct fields and checked index calls; nested generic structs; a collector in
+the bootstrap seed; stdlib cryptography and nested JSON, package digests and
+signatures, LSP semantic resolution)
+
+The short version — every finished item next to the `make` gate that proves
+it, and every unfinished item next to the place the build refuses to claim it
+— is the two status tables at the top of
+[`../README.md`](../README.md#status). This file is the long version.
+
+Seven of the open roadmap rows moved, each with a gate that fails without the
+new code:
+
+* **Phase D step 5: the native backend's phase 1 is Sayanox.**
+  `tools/sxdefs.sa` (1,118 lines) is `expand_use()` and `collect_defs()` —
+  the `use` splice and the struct / generic-struct / function / global tables
+  `selfhost/native_aot.c` builds before anything else. It is the first ported
+  piece that reads the **program text** instead of replaying a recorded
+  stream (`tools/sxlink.sa` is handed a code blob, `tools/sxencode.sa` a list
+  of encoder calls). The seam is `SX_DEFS_DUMP=<dir>`, which writes
+  `expand.sa` and `defs.txt` *between* `collect_defs()` and `infer()` and
+  changes nothing else — so every `kind=-1` in the dump is phase 1 saying
+  "not my job", and the comparison tests one pass instead of two.
+  `make test-native-sxdefs` (part of `native-test`) requires byte identity of
+  both files on nine fixtures — including a two-level `use` splice that
+  expands to 34,114 bytes and the 1,159-line `tools/sxencode.sa` — **and**
+  identical diagnostics: 34 out-of-subset programs (33 distinct messages) and
+  the real 20,106-line compiler are refused by both with the same text after
+  the tool name and the same exit status. The table shape is pinned by
+  content as well, so a change on both sides still fails with a reason.
+  **Kind inference, the emit tree, the 856-line runtime and the collector are
+  still C**, and `native_aot` still runs its own phase 1 to compile anything:
+  `sxdefs` is proved equal to it, not wired in as the producer.
+
+* **A second and a third machine-code target (row 9).** `tools/native32.sa`
+  compiles a Sayanox program to a 32-bit x86 (i386) Linux ELF — and, with
+  `arm64` as its third argument, to an AArch64 Linux ELF: its own front end,
+  two encoders, its own container writers, written in Sayanox and compiled by
+  gen2. `make test-native32` runs three fixtures through **four backends** —
+  seed-min (C), gen2 (C), native_aot (x86-64) and native32 (i386) — and they
+  print the same bytes; the image is pinned as ELFCLASS32/EM_386 against
+  native_aot's ELFCLASS64/EM_X86_64, emission is deterministic, and nine
+  out-of-subset programs are refused with a diagnostic and exit 1. **It is a
+  documented integer subset, not the native subset**: no heap, strings as
+  values, lists, structs, functions, collector or file IO, and `/` is refused
+  because a Sayanox number is a double. `native_aot` remains the backend for
+  the native subset.
+
+  The **aarch64** target is held to a deliberately weaker claim, because this
+  is an x86-64 machine with no emulator, cross-assembler or aarch64
+  `objdump`: `make test-native-arm64` emits the same three fixtures, checks
+  they are byte-deterministic and byte-identical to goldens that were read
+  back instruction by instruction with a disassembler, pins
+  ELFCLASS64/ET_EXEC/EM_AARCH64, the entry point, both segment addresses and
+  the exact bytes of the print-routine prologue and the `svc #0` exit, and
+  requires the i386 and arm64 images of each fixture to lay out *identical
+  data segments* — one front end, two encoders. **No arm64 image is ever
+  executed in this repository**, and every `[OK]` line on that gate says so
+  ([NATIVE32.md](NATIVE32.md)).
+
+* **The last two readiness probes (row 1 — the claim itself stays open).**
+  A struct literal field may now be a whole checked expression
+  (`Size { bytes: len(text) + 1 }`, `(2 + 3) * 4`, `offset() + twice(3)`,
+  `head + "anox"`), and an index may call a function the program declared
+  with `-> num` (`values[twice(offset()) + 1]`). Both were gen2-only gaps:
+  seed-min and native accepted them already, so
+  `selfhost/full_language_expr.sa` prints the same eleven lines on all three
+  (`make test-full-language-expr`). `make test-full-language-readiness` goes
+  from four unmet checks to **8/8 passing**, and `make gen3` now runs it, so
+  a regression breaks a hard gate. **This does not make the full-language
+  claim**: four closure probes are not an acceptance specification,
+  `true-selfhost-full` still fails closed, and the new gate asserts that
+  refusal so the probes passing cannot quietly become a claim. Seed/native
+  interpolation and struct function signatures are still open.
+
+* **Nested generics (row 5).** A generic struct type argument may now be
+  `list` or another instantiation: `Box<Box<num>>` is `Box__Box__n` holding a
+  `Box__n`, `Box<list>` is `Box__l` holding the list pointer, and
+  `Pair<Box<num>, str>` is `Pair__Box__n_s`. The blocker measured earlier the
+  same day turned out to be one missing case, not a worklist: gen2 could not
+  fill a struct-typed field from a *name* (`Outer { i }`), only from a nested
+  literal, because the struct-literal walker looked names up in the string
+  table and not in the struct-variable table. Inner instantiations are built
+  first, so the mangled typedefs come out in an order C accepts with no sort,
+  and the depth is bounded by the source text because a type argument is
+  written out in full. `make test-generic-structs-nested` runs
+  `selfhost/generic_struct_nested.sa` on seed-min, gen2 and native (eleven
+  byte-identical lines) and pins all seven mangled typedefs plus their order;
+  `make test-struct-field-struct` flipped from pinning gen2's refusal to
+  pinning all three backends reading `o.b.v`. The 2026-10-16 decision that
+  called the scalar-only boundary *permanent* is marked reversed in
+  `docs/TYPES_ROADMAP.md` and `docs/GENERICS.md` rather than deleted.
+* **Seed GC (row 3).** `selfhost/seed/sxc_seed_min` emits a non-moving
+  conservative mark & sweep for builder strings, reusing the allocation
+  registry it already kept as the block list. The program body moved into
+  `static int sx_prog(void)` so that `main` can plant a stack anchor above
+  every Sayanox variable; roots are the C stack only, interior pointers keep
+  their block, nothing moves, and the scan opts out of ASan on purpose.
+  `gc()` / `gc_live()` / `gc_runs()` now answer on all three backends.
+  Measured here: gen1-min compiling the compiler peaks at **29,768 KiB
+  instead of 1,278,704 KiB** (255 s → 272 s) and emits byte-identical gen2 C,
+  so `make test-seed-bootstrap-budget` drops from a 1,536 MiB cap to 64 MiB.
+  `make test-seed-collector` runs 4,000,000 dropped temporaries, a borrowed
+  read and an untouched 512 KiB live string on seed-min, gen2 and native
+  inside 64 MiB — the same fixture built by the previous seed dies with
+  `sx: out of memory`. Strings only: seed lists are still never freed.
+* **Stdlib (row 6).** `stdlib/crypto.sa` is SHA-256 and HMAC-SHA256 in the
+  dialect all three backends accept — no bitwise operators, so the 32-bit
+  words are carried in doubles and the rotations are division and remainder.
+  `stdlib/json_deep.sa` reads nested JSON by path (`items[2].user.name`), with
+  15 pinned refusals. `make test-stdlib-crypto` checks the FIPS 180-4 and RFC
+  4231 vectors (and `sha256sum` when it is installed); `make
+  test-stdlib-json-deep` checks 8 accepted documents, the 15 refusals, and
+  that the new reader agrees with `json_util.sa` on flat objects. Both run on
+  seed-min, gen2 and native.
+* **Packages (row 7).** `pkg.meta` now records `sha256=` (the real digest of
+  `main.sa`) and `origin=`, and `sxpkg sign` adds `signer=`/`sig=`, an
+  HMAC-SHA256 over `name`, `version` and the digest. `sxpkg authenticate`
+  reports `authentic` / `UNSIGNED` / `NOKEY` / `BAD <reason>`, and
+  `SAYANOX_REQUIRE_SIGNED=1` turns "cannot check" into exit 1. This is a
+  **keyed, symmetric** signature: the checker needs the same secret, so it is
+  not a public-key signature and the documents say so everywhere.
+  `make test-sxpkg-crypto` builds an actual `sum=` collision (`give` →
+  `hJve` keeps `sum=718013937`) and requires `verify` to refuse it, which only
+  the digest can do. A registry with no signatures gets byte-identical
+  `verify` output to the pre-signature tool (`cmp`-checked).
+* **LSP (row 8).** Definition, references and rename resolve the **binder** of
+  a name instead of matching its spelling: a parameter or a `hold` inside a
+  function body is answered inside that body only, a top-level name across the
+  folder; words inside string literals and comments are not occurrences.
+  Rename now reaches indexed files the editor never opened, and
+  `workspace/didChangeWatchedFiles` is registered with the client and
+  re-publishes diagnostics for files that change on disk. `make
+  test-lsp-semantic` pins all of it, and fails on its first check against the
+  previous server binary.
+* **Logs:** `docs/gate-logs/2026-10-23-native-frontend-phase1/`,
+  `docs/gate-logs/2026-10-22-crypto-json-signed-packages-lsp/`,
+  `docs/gate-logs/2026-10-22-seed-collector/` and
+  `docs/gate-logs/2026-10-22-nested-generics/`.
+* **Still open:** row 1 (full-language self-host). Row 10 moved: module
+  namespacing exists as a Sayanox source-to-source pass with its own gate
+  (`make test-sxmod`), while the *compiler* still has textual `use` splicing
+  and one flat name table.
+  Row 9 moved: an executable second ISA exists for a documented integer
+  subset (`make test-native32`), and a third — aarch64 — is emitted and
+  byte-pinned but never executed here (`make test-native-arm64`), while the
+  *native subset* is still x86-64 only. Row 1 moved but is **not** closed: its four readiness probes
+  pass on gen2 and gen3, while the claim still needs a reviewed acceptance
+  specification, seed/native interpolation and struct function signatures.
+  Row 5 is closed for the forms it named; a
+  *concrete* struct name as a type argument stays refused on all three
+  backends, and gen2 keeps its long-standing divergence of learning a field
+  kind from a single contradicting literal.
+
+---
+
+# 2026-10-22 — the package tool is one Sayanox program
 
 The package tool is one Sayanox program. `tools/sxpkg.sh` is deleted;
 `tools/sxpkg.sa` (2,565 lines, built to `./tools/sxpkg` by `make sxpkg`) now
@@ -58,9 +216,9 @@ record against the bytes C wrote for that same call. The recorder is inert
 (the ELF is identical with and without it), the fixture set exercises all 50
 records, and a missing log, a wrong-length `code.bin` and an unknown record
 are clear errors (`make test-native-sxencode`, part of `native-test`).
-`selfhost/native_aot.c` is still C — 4,498 lines, up from 4,415 by the seam,
-not down — and its row below stays until the frontend, emit tree, runtime and
-collector are ported. Logs:
+`selfhost/native_aot.c` is still C — 4,597 lines after the 2026-10-23 phase-1
+seam, up from 4,415, not down — and its row below stays until the rest of the
+front end, the emit tree, the runtime and the collector are ported. Logs:
 [`2026-10-21 encode seam`](gate-logs/2026-10-21-encode-seam/).
 
 Phase D moved before that and CI was fixed. `read_bytes(path, xs)` joined the byte-buffer
@@ -157,8 +315,8 @@ refuses a full-language claim. Plan: [ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md
 
 | Still not Sayanox | Language | Size (2026-10-20) | Unblocks |
 |---|---|---:|---|
-| `selfhost/seed/sxc_seed_min.c` | C | 2,035 lines | Phase E — needs a decided bootstrap trust anchor (prebuilt binary or documented C exception) |
-| `selfhost/native_aot.c` | C | 4,498 lines | Phase D — the language surface, the ELF image writer/linker and the x86-64 instruction encoder are done; what is left is the scanner, parser, inference, emit tree, runtime stubs and collector |
+| `selfhost/seed/sxc_seed_min.c` | C | 2,176 lines (measured 2026-10-23) | Phase E — **decided 2026-10-23: option 2**, the minimal C seed stays as a documented, auditable, pinned exception (`make test-trust-anchor`: size + SHA-256 recomputed by Sayanox, four headers, no process/network call, deterministic output, the one emitted `popen` counted). Option 1, a prebuilt binary rebuilt from `.sa`, still needs Phase D |
+| `selfhost/native_aot.c` | C | 4,597 lines | Phase D — the language surface, the ELF image writer/linker, the x86-64 instruction encoder and front-end phase 1 (`use` expansion + `collect_defs`) are done; what is left is kind inference, the emit tree, the runtime stubs and the collector |
 | `Makefile` + 14 sh scripts | make / POSIX sh | 5,188 lines | Later — a Sayanox build driver still needs a built compiler first |
 
 Already Sayanox and gated: the compiler (`compiler_min.sa`), the formatter, the
@@ -172,8 +330,10 @@ framed-session test client (`tools/lsp_workspace_test.sa`), the byte-buffer and
 bitwise surface the native backend needs (`test-native-primitives`), its binary
 reader (`read_bytes`, `test-read-bytes`) and, since 2026-10-20, the native
 backend's ELF image writer and rel32 linker (`tools/sxlink.sa`,
-`test-native-sxlink`) and, since 2026-10-21, its x86-64 instruction encoder
-(`tools/sxencode.sa`, `test-native-sxencode`).
+`test-native-sxlink`), since 2026-10-21, its x86-64 instruction encoder
+(`tools/sxencode.sa`, `test-native-sxencode`) and, since 2026-10-23, its
+front-end phase 1 — the `use` splice and the definition tables
+(`tools/sxdefs.sa`, `test-native-sxdefs`).
 Ten unreferenced legacy C files were deleted the same day, alongside the three
 that gained Sayanox replacements.
 
@@ -222,7 +382,7 @@ collector are still C.
 What that does **not** mean: `native_aot` still resolves a `make` or builtin
 name to a code offset, so the records arrive with their targets resolved; and
 the C `write_elf()` is still what produces the executables the gates run.
-The port of `selfhost/native_aot.c` itself is **not** done: it is still 4,498
+The port of `selfhost/native_aot.c` itself is **not** done: it is still 4,597
 lines of C and this row stays in the table until it is.
 
 On 2026-10-19 the compiler itself was fixed, not extended: its `make` signature
@@ -257,31 +417,60 @@ is not presented as new work in this PR.
 
 | Area | seed-min | gen2 | native | Still missing / tested boundary |
 |---|---|---|---|---|
-| 1. Full-language self-host / memory | Read-only string borrowing and safe builder registry retained. Compiler now uses a live `.sa` module, generic minimum and generic source-size struct; module recovery round-trip tested. | gen1-min/gen2/gen3 compile the live module fixture; gen3/gen4 remain identical. | Not the compiler self-host path. | **Not complete / no full-language claim.** Concrete struct function arguments/returns now pass on gen2/gen3 (bounded, `test-struct-functions`); identifier interpolation now also passes on gen2/gen3 (`test-string-interpolation`); readiness still fails on expression fields and call indexes (four checks). Seed/native interpolation and struct function signatures remain open. `true-selfhost-full` fails closed; no exhaustive language specification exists. Historical ~82% RSS reduction is unchanged, not remeasured. [Evidence](FULL_LANGUAGE_SELFHOST.md#full-language-completion-attempt-and-measured-blockers-2026-10-17). |
-| 2. List-valued struct fields / `for v in p.xs` | **Supported:** distinct list field kind emits `sx_list *`; field storage preserves aliases (including growth) and `for v in p.xs` works. | **Supported for concrete structs:** field tag `3` emits `sx_list *`; literals and pointer copies, nested field chains, `p.xs[i]` reads/writes, `len()` indexes/conditions, and `for v in p.xs` are type-lowered. | **Supported:** one pointer word per field; `BK_STRUCT` tracing reaches the list pointer and its growth-forward chain across collections. | `Box<list>` remains refused. Gen2 direct `push(p.xs, v)` and `show p.xs` remain explicit refusals; use an alias, `len`, or an index. `test-list-struct-fields` runs shared alias/iteration output on all three plus native GC; `test-gen2-list-struct-fields` adds strict-C Gen2 layout/write/condition coverage and pins refusals. |
-| 3. Seed GC | **Still no collector/RC/freelist; runtime unchanged.** Exact builder registry + release on reassignment. 128 MiB borrowed-read stress, 32 MiB list-alias/realloc stress, 32 registry reuse cycles; optional ASan/UBSan pass (leaks OFF). | Existing conservative mark/sweep. | Existing mark/sweep. | Finite no-GC gen1 bootstrap passes a 1536 MiB address-space cap with identical gen2 C; not a general bounded heap or RSS claim. Dropped locals/results/temporaries/lists still grow. `test-seed-gc`, `test-seed-borrow`, optional `test-seed-sanitize` / `test-seed-bootstrap-budget`; [GC.md](GC.md#finite-no-gc-bootstrap-budget-and-repeatable-sanitizers-2026-10-16). |
+| 1. Full-language self-host / memory | Read-only string borrowing and safe builder registry retained. Compiler now uses a live `.sa` module, generic minimum and generic source-size struct; module recovery round-trip tested. | gen1-min/gen2/gen3 compile the live module fixture; gen3/gen4 remain identical. | Not the compiler self-host path. | **Not complete / no full-language claim.** Concrete struct function arguments/returns now pass on gen2/gen3 (bounded, `test-struct-functions`); identifier interpolation now also passes on gen2/gen3 (`test-string-interpolation`); expression-valued struct fields and checked index calls now pass too (`test-full-language-expr`), so `make test-full-language-readiness` is 8/8 and runs inside `make gen3`. Seed/native interpolation and struct function signatures remain open, and four closure probes are not an acceptance specification. `true-selfhost-full` fails closed; no exhaustive language specification exists. Historical ~82% RSS reduction is unchanged, not remeasured. [Evidence](FULL_LANGUAGE_SELFHOST.md#full-language-completion-attempt-and-measured-blockers-2026-10-17). |
+| 2. List-valued struct fields / `for v in p.xs` | **Supported:** distinct list field kind emits `sx_list *`; field storage preserves aliases (including growth) and `for v in p.xs` works. | **Supported for concrete structs:** field tag `3` emits `sx_list *`; literals and pointer copies, nested field chains, `p.xs[i]` reads/writes, `len()` indexes/conditions, and `for v in p.xs` are type-lowered. | **Supported:** one pointer word per field; `BK_STRUCT` tracing reaches the list pointer and its growth-forward chain across collections. | `Box<list>` is supported since 2026-10-22 (`Box__l`, `test-generic-structs-nested`). Gen2 direct `push(p.xs, v)` and `show p.xs` remain explicit refusals; use an alias, `len`, or an index. `test-list-struct-fields` runs shared alias/iteration output on all three plus native GC; `test-gen2-list-struct-fields` adds strict-C Gen2 layout/write/condition coverage and pins refusals. |
+| 3. Seed GC | **Conservative mark & sweep over the builder registry (new 2026-10-22).** Roots are the C stack only: the body is emitted as `sx_prog` and `main` plants the anchor above it; interior pointers keep their block, nothing moves, the root scan opts out of ASan. First collection at 8 MiB of live builder bytes, then `live * 1.5 + 8 MiB`; `gc()`/`gc_live()`/`gc_runs()` now answer here too. Exact registry and freeing assignment unchanged. | Existing conservative mark/sweep. | Existing mark/sweep. | **Strings only — seed lists are still never freed**, the registry's buckets still never shrink, conservative roots can retain garbage, and a genuinely live 8 MiB set still exits 1 with `sx: out of memory`. Measured here: gen1-min compiling the compiler peaks at 29,768 KiB instead of 1,278,704 KiB (255 s → 272 s) with byte-identical gen2 C, so the bootstrap budget cap drops 1536 MiB → 64 MiB. Not a bounded-heap claim for arbitrary programs. `test-seed-collector`, `test-seed-gc`, `test-seed-borrow`, optional `test-seed-sanitize` / `test-seed-bootstrap-budget`; [GC.md](GC.md#a-collector-in-the-bootstrap-seed-2026-10-22). |
 | 4. Struct-typed hold | **Supported:** `hold p: Pt` retains the declared concrete struct identity and rejects scalar/wrong-struct initializers. | Existing accepted/type-checked support. | **Supported:** same named-identity check during collection and emission. | Struct reassignment remains outside this slice. Concrete function parameters/returns now have separate bounded gen2/gen3 support (`test-struct-functions`), not seed/native support. `test-type-refusals` runs the valid copy and scalar/wrong-struct refusals on all three. |
-| 5. Nested generic structs | `Box<Box<num>>` refused. | Refused through emitted `#error`. | Refused. | A deliberate current bootstrap-dialect limit: recursive type-argument parsing, specialization worklist, ordered layout and GC descriptors are not implemented. Simple `Box<num>`/`Box<str>` remain gated by `test-generic-structs`; nested refusal by `test-type-refusals`. |
-| 6. Stdlib | Existing portable helpers and flat JSON text utilities. | Same tested modules. | Same tested portable subset. | No new module or nested JSON parser in this PR. No crypto. HTTP/crawler integration remains optional and outside bootstrap (`test-network`); STDLIB.md. |
-| 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/checksum/name validation plus publish, install-local and the local-registry sync/fetch (staging, checksums, rollback); shell keeps only the http(s) transport and the online opt-in. Fetch now actually records `sum=`; failed fetch cleans staging/preserves lock, existing pins refuse replacement. Cached install needs no INDEX; local/bare-relative/file copies need no curl/wget. | No native compilation claim for sxpkg. | Online remains opt-in. Local fixtures plus successful curl/wget-only and interrupted-transfer stubs test verification/tamper, name/index/lock preflight and cleanup without DNS. `sum=` is non-cryptographic; no signatures/provenance or concurrent/crash-proof transaction claim. `test-sxpkg-transfer-hardening`, `test-sxpkg-online-local`, `test-sxpkg-online-optin`; [scope/logs](SXPKG_ONLINE.md#transfer-hardening-and-deterministic-success-paths-2026-10-16). |
-| 8. LSP workspace scan | Not a seed-compiled tool claim. | `.sa` protocol/scanning + tool-local C directory bridge. workspace/symbol and lexical references search a bounded initialized local folder, with four open-buffer overlays; query-time refresh. | Not a native-AOT compiler claim; host C links the tool. | One root, 128 disk files/256 KiB each/4 MiB aggregate, depth/entry caps; no symlink traversal, watchers, semantic resolution or truncation notices. Rename remains open-only; signatureHelp same-document/same-line; codeAction formatting only. `test-lsp`/`test-lsp-robust` require framed C workspace probe. [LSP scope/logs](LSP.md#bounded-local-workspace-folder-index-2026-10-16). **Not IDE-complete.** |
-| 9. Second target / IR | Host C path unchanged. | Host C path unchanged. | x86-64 Linux ELF only. C99 listing adds optional strict record/nondecreasing-offset audit and source-offset correlation; native gate compares both modes deterministically. | **No executable second ISA.** Instruction-count preservation is not semantic losslessness: register widths collapse, x86 ABI/layout/fixups remain. No IR executor, aarch64 runtime/collector or cross-execution smoke test. `test-emit-to-ir`, `test-native-ir-portable`, `test-native-emit-split`; [NATIVE_IR.md](NATIVE_IR.md#strict-log-audit-and-source-offset-correlation-2026-10-16). |
-| 10. Namespacing / aliases | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | **Not planned for the bootstrap dialect. Documentation-only clarification.** Shared declaration tables, explicit public prefixes; no module identity/import scopes/qualified resolution or path-renaming aliases. Incidental ignored suffixes do not establish alias support; no new uniform diagnostic claim. Existing `test-use` and stdlib splice gates retained. [MODULES.md](MODULES.md). |
+| 5. Nested generic structs | **Supported (2026-10-22):** `instantiate_gstruct` recurses; the inner instantiation is built first, so `Box__n` gets a lower `StructDef` index than `Box__Box__n` and the typedefs emit in an order C accepts. | **Supported (2026-10-22):** `gxargs` parses a type-argument list recursively and returns the nested instantiations innermost-first; `gxmerge` folds them in without a duplicate typedef. Unblocked by teaching the struct-literal walker that a *name* can be struct-typed. | **Supported (2026-10-22):** `gs_instantiate` recurses and records the nested argument's struct identity; a field is one word and `BK_STRUCT` tracing already visits it, so no new GC descriptor. | `Box<Box<num>>` → `Box__Box__n`, `Box<Box<Box<num>>>`, `Box<list>` → `Box__l` (holds the pointer; growth through the original name is visible), `Pair<Box<num>, str>` → `Pair__Box__n_s`. Scalar-only spellings are unchanged (`Pair<num, str>` is still `Pair__ns`). Still refused everywhere: a *concrete* struct name, an unknown name, an escaped type parameter, a wrong argument count. gen2 keeps its documented divergence of learning a field kind from a single contradicting literal. `test-generic-structs-nested` gates the parity fixture and the typedef order; `test-generic-struct-limits` the ten refusals. |
+| 6. Stdlib | Ten modules: the portable helpers, flat JSON text utilities, **nested JSON reading (`json_deep.sa`) and SHA-256/HMAC-SHA256 (`crypto.sa`)**, all byte-identical with gen2 and native. | Same tested modules. | Same tested portable subset, including the two new modules. | Nested JSON is **read-only**: no nested writer, no mutation, no pretty-printer; first key wins on duplicates. `crypto.sa` is hashing only — no public-key signature, cipher, KDF beyond HMAC, or constant-time promise, and it is slow by construction (no bitwise operators in the dialect: 32-bit words are carried in doubles). HTTP/crawler integration remains optional and outside bootstrap (`test-network`). `test-stdlib-crypto`, `test-stdlib-json-deep`; [STDLIB.md](STDLIB.md#nested-json-and-cryptography-2026-10-22). |
+| 7. Packages | Tool built through gen2, not a seed runtime API. | `.sa` lock/checksum/name validation plus publish, install-local and the local-registry sync/fetch (staging, checksums, rollback); shell keeps only the http(s) transport and the online opt-in. **`pkg.meta` now carries `sha256=` and `origin=`, and `sxpkg sign`/`authenticate` add and check an HMAC-SHA256 `sig=`/`signer=`** (`stdlib/crypto.sa`, no new dependency). Cached install needs no INDEX; local/bare-relative/file copies need no curl/wget. | No native compilation claim for sxpkg. | Online remains opt-in. The signature is **symmetric**: `authenticate` needs the same secret that signed, so there is no public-key signature, no signed index, no key distribution and no first-download trust. `origin=` is a provenance note, not proof. `sum=` stays (non-cryptographic) so older registries keep verifying; `sha256=` is the acceptance test, and `test-sxpkg-crypto` proves it by refusing a real `sum=` collision. No concurrent/crash-proof transaction claim. `test-sxpkg-crypto`, `test-sxpkg-transfer-hardening`, `test-sxpkg-online-local`, `test-sxpkg-online-optin`; [REGISTRY.md](REGISTRY.md#commands). |
+| 8. LSP workspace scan | Not a seed-compiled tool claim. | `.sa` protocol, scanning **and folder walk** (no C bridge since 2026-10-17). workspace/symbol and references search a bounded initialized local folder with four open-buffer overlays; query-time refresh. **Definition/references/rename resolve the binder (parameter, body `hold`, or top-level declaration) instead of matching spelling, skip strings and comments, rename across indexed files, and `workspace/didChangeWatchedFiles` is registered and answered.** | Not a native-AOT compiler claim; host C links the tool. | Scope resolution is **not type resolution**: no symbol table, no following `use` to another file's declaration, no shadowing inside nested blocks, struct fields and variables share a namespace. One root, 128 disk files/256 KiB each, depth/entry caps; no symlink traversal, no truncation notices, no workspace diagnostic pass (a watched-file notification answers at most 32 changes). signatureHelp same-document/same-line; codeAction formatting only. `test-lsp-semantic`, `test-lsp-workspace`, `test-lsp`, `test-lsp-robust`, `test-lsp-unicode`. [LSP scope/logs](LSP.md#semantic-resolution-folder-rename-and-file-watching-2026-10-22). **Still not IDE-complete.** |
+| 9. Second target / IR | Host C path unchanged. | Host C path unchanged. | x86-64 Linux ELF only. C99 listing adds optional strict record/nondecreasing-offset audit and source-offset correlation; native gate compares both modes deterministically. | **An executable second ISA exists for a documented integer subset** (2026-10-23): `tools/native32.sa`, written in Sayanox, emits i386 Linux ELF; `test-native32` proves four backends print identical bytes and pins ELFCLASS32/EM_386, determinism and nine refusals ([NATIVE32.md](NATIVE32.md)). **An aarch64 emitter for the same subset** (2026-10-23): the same program with `arm64` as its third argument emits ELF64/EM_AARCH64; `test-native-arm64` pins the container, the goldens, the data-segment agreement between the two encoders and the refusals, but **executes nothing** — there is no emulator or ARM hardware here. Still missing: the native subset on a second ISA (no heap/strings/lists/structs/functions/collector there), any riscv64 emitter, execution evidence for aarch64, and an IR executor — instruction-count preservation is still not semantic losslessness. `test-native32`, `test-native-arm64`, `test-emit-to-ir`, `test-native-ir-portable`, `test-native-emit-split`; [NATIVE_IR.md](NATIVE_IR.md#strict-log-audit-and-source-offset-correlation-2026-10-16). |
+| 10. Namespacing / aliases | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | Textual `use` splicing only; unchanged. | **Not planned in the compiler; implemented one layer out** (2026-10-23): the dialect still has shared declaration tables, explicit public prefixes and no module identity/import scopes/qualified resolution. `tools/sxmod.sa` (Sayanox, built by gen2) rewrites `module NAME from "path"` + `alias.member` into prefixed flat declarations before compilation. `test-sxmod` first proves the flat dialect **cannot** compose two modules that both declare `add` (seed-min: duplicate function name; cc rejects gen2's C; native_aot: declared twice), then compiles the namespaced version on all three backends to identical stdout, pins what the rewrite must not touch (strings, comments, locals, parameters, struct fields), proves a member is not visible unqualified, and pins 16 refusals. Still missing: module identity in the language, private visibility, nesting, search paths, an import cache. `test-sxmod`, `test-use`; [MODULES.md](MODULES.md). |
 
 ### Done / missing / refused
 
 * **Done:** concrete list-valued struct fields and `for v in p.xs` on all
   three backends (including Gen2 layout/literal/copy/index/iteration lowering);
   concrete named-struct `hold` identity checks on all three; native list-pointer
-  GC tracing; and a hardened native emit-seam gate.
-* **Missing/outside the tested subset:** recursive generic-list/nested-generic
-  layout and GC descriptors, a real seed collector, full-language self-host,
-  semantic/incremental workspace indexing, and an executable second native ISA.
-* **Refused by design:** generic `Box<list>` (despite concrete Gen2 fields),
-  `Box<Box<num>>` and the tested unsupported full-language forms. These gates
-  require errors rather than wrong layout/code generation.
-* **Not planned:** bootstrap module aliases/namespaces. No implementation or
-  uniform new syntax-refusal diagnostic is claimed; see MODULES.md.
+  GC tracing; a hardened native emit-seam gate; SHA-256/HMAC-SHA256 and a
+  nested JSON reader in the stdlib on all three backends; package digests,
+  provenance and keyed signatures; LSP scope resolution, folder-wide
+  rename and file watching; a conservative mark & sweep **collector in the
+  bootstrap seed** (`test-seed-collector`); **nested generic structs** on all
+  three backends (`test-generic-structs-nested`); an **i386 emitter written in
+  Sayanox** whose images run here and an **aarch64 emitter** whose images are
+  pinned but not executed (`test-native32`, `test-native-arm64`); **module
+  namespacing one layer out** (`tools/sxmod.sa`, `test-sxmod`); the **C seed
+  pinned and audited by a Sayanox tool** (`tools/sxaudit.sa`,
+  `test-trust-anchor`); and Phase D steps 3-5 of the native backend in Sayanox
+  — the ELF writer/linker, the x86-64 encoder and **front-end phase 1**
+  (`tools/sxlink.sa`, `tools/sxencode.sa`, `tools/sxdefs.sa`), each proved
+  byte-equal through a dump seam that changes no emitted byte.
+* **Missing/outside the tested subset:** full-language self-host,
+  *type*-level and incremental workspace indexing, public-key package
+  signatures, the *native subset* on a second ISA (the i386 and aarch64
+  backends added on 2026-10-23 cover a documented integer subset only), and
+  any execution of an aarch64 image (no emulator or ARM hardware here).
+  Also still open, and listed with the rest in the **Remaining** table of
+  [`../README.md`](../README.md#remaining--and-where-the-build-refuses-to-claim-it):
+  the four Sayanox ports of the native backend are **not wired in** (the C
+  file still compiles everything, and kind inference, the emit tree, the
+  856-line runtime and the 339-line collector are unported); the 2,176-line C
+  seed and the `Makefile` + 14 POSIX `sh` scripts are still the bootstrap and
+  the build driver; seed **lists** are still never freed; nested JSON is
+  read-only; the package signature is symmetric; and module identity is not in
+  the language.
+* **Refused by design:** a *concrete* struct name as a generic type argument,
+  an unknown name, an escaped type parameter, a wrong type-argument count, and
+  the tested unsupported full-language forms. These gates require errors
+  rather than wrong layout/code generation. (Generic `Box<list>`,
+  `Box<Box<num>>` and a struct-typed struct field on gen2 left this list on
+  2026-10-22; they are gated positively now.)
+* **Not planned in the compiler:** bootstrap module aliases/namespaces. No
+  compiler implementation and no uniform new syntax-refusal diagnostic is
+  claimed. Namespacing is available one layer out, as the `tools/sxmod` pass
+  (`make test-sxmod`); see MODULES.md.
 
 The final four gate logs are the links in **Current verification** above; the
 last markers are `DOCTOR-OK`, `TRUE-SELFHOST-MIN-OK`, `GEN3-OK`, and
@@ -347,7 +536,8 @@ bootstrap kept green (the four gate logs above are this pass's own runs):
    correctly on gen2 now; calls other than `len()`, commas, quotes, empty and
    unbalanced indexes stay clear refusals, never wrong C.
 4. **Types** — nested generics (`Box<Box<num>>`) refused on all three
-   backends; a struct field annotation (`p: Pt`) is refused on all three
+   backends *at that dated snapshot*; they are supported since 2026-10-22
+   (`test-generic-structs-nested`). A struct field annotation (`p: Pt`) is refused on all three
    (it silently registered `Pt` as an extra field before this pass); a
    At that dated snapshot, a struct-typed `hold` annotation was gen2-only.
    It is now supported for named concrete structs on seed-min/gen2/native; see
@@ -369,8 +559,13 @@ bootstrap kept green (the four gate logs above are this pass's own runs):
 9. **Native second target** — `tools/emit_to_ir.sa` translates the
    `SX_EMIT_LOG` instruction list into a portable IR *listing*
    (lossless, deterministic, x86 register names abstracted;
-   `test-native-ir-portable`). Nothing assembles or executes it: **no
-   second ISA is claimed**, and `native-test` remains x86-64-Linux-only
+   `test-native-ir-portable`). Nothing assembles or executes that listing.
+   *(Later, 2026-10-23: a second ISA **is** now executable, by a different
+   route — `tools/native32.sa` emits i386 ELF directly for a documented
+   integer subset, `make test-native32`, and the same program emits AArch64
+   ELF for that subset, byte-pinned but never executed here,
+   `make test-native-arm64`, [`NATIVE32.md`](NATIVE32.md). `native_aot` and
+   `native-test` are still x86-64 only for the native subset.)*
    ([`NATIVE_IR.md`](NATIVE_IR.md)).
 
 One regression was caught by the gates during this pass and fixed before
@@ -536,11 +731,11 @@ What is still different, and honest about it:
 | Area | seed-min | gen2 | native |
 |------|----------|------|--------|
 | `hold` inside a `make` body | accepted | accepted (a local slot) | accepted since 2026-10-11 (a local slot in the call's own frame; the collector scans it) |
-| collector builtins `gc()` / `gc_live()` / `gc_runs()` | error: no collector in the seed runtime | yes (mark & sweep) | yes (native mark & sweep, see `GC.md`; corrected 2026-10-10 — this row used to say `undefined variable 'gc'`) |
-| memory under an address-space cap (measured 2026-10-13, `make test-seed-gc`) | no collector: a 200k churn that retains nothing and a 2000-step accumulation both run inside a 4 MiB cap; an 8388608-byte live set exits 1 with `sx: out of memory` | mark & sweep, first collection at 8 MiB of managed heap: the same churn needs a 64 MiB cap and fails at 16 MiB with `sx: out of memory` (was a segfault) | mark & sweep at every statement boundary past a debt threshold: the same churn runs inside a 4 MiB cap (`test-native-mem`) |
+| collector builtins `gc()` / `gc_live()` / `gc_runs()` | yes since 2026-10-22 (conservative mark & sweep over the builder registry; this row used to read "error: no collector in the seed runtime") | yes (mark & sweep) | yes (native mark & sweep, see `GC.md`; corrected 2026-10-10 — this row used to say `undefined variable 'gc'`) |
+| memory under an address-space cap (measured 2026-10-13, re-measured 2026-10-22, `make test-seed-gc` / `make test-seed-collector`) | the freeing assignment alone keeps a 200k churn and a 2000-step accumulation inside a 4 MiB cap, below the collector's 8 MiB threshold; an 8388608-byte live set still exits 1 with `sx: out of memory`; with the collector, 4,000,000 dropped temporaries run inside 64 MiB (17,556 KiB peak) where the pre-collector seed needed 346,872 KiB | mark & sweep, first collection at 8 MiB of managed heap: the same churn needs a 64 MiB cap and fails at 16 MiB with `sx: out of memory` (was a segfault) | mark & sweep at every statement boundary past a debt threshold: the same churn runs inside a 4 MiB cap (`test-native-mem`) |
 | Stage-2 | boolean literals/logic, elif, while break/continue, named/literal string-list for and numeric ranges outside make | broader Stage-2 including literals/calls/ranges and typed functions | broader Stage-2 plus logic values and kind generics |
 | diagnostic wording | own text (`seed_min: ...`) | own text (`min: ...` / `#error` line) | own text (`native_aot: ...`) |
-| host and memory | any C host, malloc-based, no collector (builder-backed strings plus a freeing assignment wrapper — see `GC.md` §2) | any C host, mark & sweep | x86-64 Linux only; own heap (first-fit + bump) with a mark & sweep collector (corrected 2026-10-10; was "bump-allocated, never freed") |
+| host and memory | any C host, malloc-based, builder-backed strings with a freeing assignment wrapper and (2026-10-22) a conservative mark & sweep for those strings — lists are still never freed; see `GC.md` §2 | any C host, mark & sweep | x86-64 Linux only; own heap (first-fit + bump) with a mark & sweep collector (corrected 2026-10-10; was "bump-allocated, never freed") |
 
 The full seed `sxc_seed` is deliberately not a column in that table: it is not
 on the bootstrap path (`seed-min -> gen1_min -> gen2` is), and until 2026-10-13
@@ -656,6 +851,10 @@ papered over in the library, and each is pinned by a test or documented here.
   operator. The workaround is `hold n = <expr>` then `xs[n]`; seed-min and
   native accept a call other than `len()` inside an index, so that one row
   stays open as a narrower divergence.
+  *(Later: `%` landed on 2026-10-14 (`test-gen2-index-mod`), and on 2026-10-22
+  a call to a function declared `-> num` landed too — `test-full-language-expr`.
+  A quoted string, a non-numeric call and a `list` parameter are still the
+  gen2-only refusals.)*
 * **FIXED 2026-10-13: gen2 `give` with a direct string `+` chain.** Inside a
   function body, `give "hi " + name` and `give "a" + "b"` used to emit invalid C
   (`invalid operands to binary + (have 'char *' and 'char *')`), so the
@@ -914,8 +1113,11 @@ still use shell/C infrastructure. See
   and gen2 with byte-identical stdout (`make test-stage2-demos`). They
   illustrate the Stage-2 *contract* (explicit slots, function contracts) —
   they are not the full Stage-2 language.
-* Still not part of pure-min: modules with namespacing/aliases — not claimed
-  anywhere (see "Out of scope" below). The GC is no longer on that list:
+* Still not part of pure-min: modules with namespacing/aliases *in the
+  compiler* — the dialect still has one flat name table. Namespacing is
+  available as the `tools/sxmod` pass, which rewrites `module`/`alias.member`
+  into prefixed flat names before compilation ([`MODULES.md`](MODULES.md),
+  `make test-sxmod`). The GC is no longer on that list:
   gen2-compiled programs link the collector in [`GC.md`](GC.md). Generics are
   no longer on it either: `make NAME<T>(a: T, b: T) -> T` monomorphises one
   copy per call-site kind (`make test-generics`, [`SYNTAX.md`](SYNTAX.md)).
@@ -946,11 +1148,17 @@ still use shell/C infrastructure. See
 | `make test-lsp` | the Sayanox language server in five live JSON-RPC sessions (probe written with shell builtins + `mkdir` only), 29 asserted facts: initialize/serverInfo, didOpen + publishDiagnostics, SX1001/SX1002/SX1003/SX1005 diagnostics, documentSymbol (function + variable), completion (builtin names survive in string literals), hover, definition, a didChange that clears the diagnostics, a closed document answering empty, the four-slot eviction cap, `references` across the open documents with and without `includeDeclaration` plus a non-word position answering `[]`, `workspace/symbol` with a query and with an empty one, and `textDocument/formatting` on a badly indented buffer (whole-buffer edit, two-space-per-level indent, trailing whitespace stripped) and on an already formatted one (`[]`) |
 | `make test-generics` | two legs. (a) single type parameter: `make NAME<T> ... -> T` — 14 lines of a program mixing `pickb`/`twice`/`quad` over num, str and list print identically under gen2 and gen1_min; each `NAME__n/s/l` appears exactly once, every call sees a prototype, an unused generic emits nothing. (b) **multi-parameter**: `pair<A, B> -> A`, `swap<A, B> -> B`, `three<A, B, C> -> C` and `usefirst<A, B>` (which calls `pair` and binds the result with `hold`) over `nn`/`ns`/`sn`/`ls`/`ln`/`sl`/`nsl`, each copy asserted exactly once, per-parameter C types checked, no `#error`, no implicit declaration, and gen1_min output **byte-identical** to gen2; two rejection cases (a parameter that does not use a type parameter, a return type naming an undeclared one) |
 | `make test-gc` | gen2 mark & sweep from the language side: a 2000-iteration `concat` loop stays under 200 KB of live heap after `gc()`, `gc_runs()` counts a collection, `gc()` reclaims bytes, and the surviving string is intact (`len` + first byte) |
-| `make test-seed-gc` | what memory management the two seeds actually have, measured under `ulimit -v` caps: seed-min has no collector (builder-backed strings plus a freeing assignment: 200k churn, 2000-step accumulation and a temp loop inside a 4 MiB cap; an 8388608-byte live set exits 1 with `sx: out of memory`; `gc()` refused at compile time), the full seed has a refcount representation whose counts never release in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations, `gc()` is a no-op returning 0, `gc_live()` is an undefined function, a 4 MiB cap cannot start it) plus the operator-lexer fix that made it compile comparisons at all, and gen2 keeps a 200k churn and an 8 MiB live set correct inside 64 MiB, checks all three of its runtime allocations, and fails at 16 MiB with `sx: out of memory` instead of a segfault |
-| `make test-generic-structs` | generic structs are **implemented** on all three backends: `struct Box<T> { v }` is a template and each instantiation is its own concrete struct (`Box<num>` is `Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns`), so the gate pins those three typedefs in the generated C and the parity fixture `selfhost/generic_struct_box.sa` (`7 seven 8 seven 9 nine` — byte-identical on seed-min, gen2 and native). It also pins five refusals that all three backends make (wrong type argument count, a struct name as a type argument, a list as a type argument, a bare template name, one instantiation used with two kinds), the older concrete-name workaround (`NumBox`, `TextBox`, `PairBox` — `7 seven 8 eight 2 8 9`) and a dotted field read inside a struct literal as seed-min-only (gen2 `#error`, native refuses) |
+| `make test-seed-gc` | what memory management the two seeds actually have, measured under `ulimit -v` caps: seed-min has a builder registry, a freeing assignment and (2026-10-22) a conservative mark & sweep over that registry: the 200k churn, 2000-step accumulation and temp loop stay inside a 4 MiB cap without the collector ever reaching its 8 MiB threshold, an 8388608-byte live set still exits 1 with `sx: out of memory`, and `gc()`/`gc_live()`/`gc_runs()` now report real numbers (`gc(1)` is still refused), the full seed has a refcount representation whose counts never release in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations, `gc()` is a no-op returning 0, `gc_live()` is an undefined function, a 4 MiB cap cannot start it) plus the operator-lexer fix that made it compile comparisons at all, and gen2 keeps a 200k churn and an 8 MiB live set correct inside 64 MiB, checks all three of its runtime allocations, and fails at 16 MiB with `sx: out of memory` instead of a segfault |
+| `make test-generic-structs` | generic structs are **implemented** on all three backends: `struct Box<T> { v }` is a template and each instantiation is its own concrete struct (`Box<num>` is `Box__n`, `Box<str>` is `Box__s`, `Pair<num, str>` is `Pair__ns`), so the gate pins those three typedefs in the generated C and the parity fixture `selfhost/generic_struct_box.sa` (`7 seven 8 7 9 nine` — byte-identical on seed-min, gen2 and native). It also pins four refusals that all three backends make (wrong type argument count, a *concrete* struct name as a type argument, a bare template name, one instantiation used with two kinds), the `Box<list>` support block that replaced the old list refusal on 2026-10-22 (`Box__l` with an `sx_list *` field, and a `push` through the original name visible through the field), the older concrete-name workaround (`NumBox`, `TextBox`, `PairBox` — `7 seven 8 eight 2 8 9`) and a dotted field read inside a struct literal as seed-min-only (gen2 `#error`, native refuses) |
+| `make test-full-language-expr` | the last two broader-language readiness probes, as a three-backend parity fixture (`selfhost/full_language_expr.sa`, eleven lines): a struct literal field may be a whole checked expression (`len(text) + 1`, `(2 + 3) * 4`, `len("hello") % 3`, `span / 2 - 1`, `offset() + twice(3)`, `head + "anox"` for a string field) and an index may call a function declared `-> num` (`values[offset()]`, `values[twice(offset()) + 1]`, `values[twice(offset()) % 3]`). seed-min, gen2 and native print the same bytes; five greps pin gen2's lowered C (`((Size){(sx_len(text) + 1.0)})`, `sx_lget(values,twice(offset()))`, `sx_cat(head,"anox")`, ...). It also pins what stays refused — an unknown function and a wrong argument count on all three, a `-> str` call on gen2/native (seed-min emits C that will not compile) — and asserts statically that `true-selfhost-full` still fails closed, so passing the probes cannot turn into a full-language claim |
+| `make test-generic-structs-nested` | a generic type argument may be `list` or another instantiation (2026-10-22): `selfhost/generic_struct_nested.sa` prints the same eleven lines on seed-min, gen2 and native, and both emitted C files carry all seven mangled typedefs — `Box__n`, `Box__Box__n`, `Box__Box__Box__n`, `Box__l` (`sx_list *`), `Box__s`, `Pair__Box__n_s` and the unchanged `Pair__ns` — with `Box__n` declared before `Box__Box__n`, which is the ordering property the implementation relies on instead of a sort. The list field holds the pointer, so a `push` through the original name is visible through `b.v` |
 | `make test-sxpkg-online-optin` | the network is opt-in: `sync`, an `install` that has to fetch, and a remote `fetch` refuse without `SAYANOX_ONLINE=1` or `sxpkg --online <cmd>`, naming the opt-in and the offline commands and leaving no `.part` file; with the opt-in the same commands reach the transfer (a `.invalid` host, so they fail in the resolver and `sync` falls back to the offline seed); an all-local `install` and a `file://` fetch never ask |
 | `make test-native-emit-split` (part of `native-test`) | the x86-64 backend is a region, not a seasoning: the 1332 lines between `EMIT-SEAM-BEGIN` and `EMIT-SEAM-END` contain no `e1(`/`e32(`/`e64(`, no `memcpy` into `code` and no direct read of the code cursor `cn` (labels come from `here()`), the seam primitives are all defined in the encoder region above `phase 1`, and an emitted program still runs. The refactor itself was checked byte for byte against the pre-seam binary on six fixtures |
-| `make test-native-ir-portable` (part of `native-test`) | the `SX_EMIT_LOG` instruction list translates to the portable IR listing (`tools/emit_to_ir.sa`, [`NATIVE_IR.md`](NATIVE_IR.md)): deterministic (two runs cmp clean), lossless (one IR instruction per logged instruction), no x86 register names on IR instruction lines, abstract machine model preserved (`FADD`, `FCMP`, `I2F`, named `CALL`s, phase markers). An analysis format only — nothing assembles or executes it, and no second ISA is claimed |
+| `make test-native32` (part of `native-test`) | the second machine-code target: `tools/native32.sa`, written in Sayanox and compiled by gen2, emits a 32-bit x86 (i386) Linux ELF. Three fixtures (`expr`, `flow`, `text`) print identical bytes under **four** backends — seed-min, gen2, native_aot (x86-64) and native32 (i386); the image is ELFCLASS32/ET_EXEC/EM_386 with two program headers, a pinned entry point `0x080480ca` and three pinned sizes, while native_aot on the same source is ELFCLASS64/EM_X86_64; emission is byte-deterministic; nine out-of-subset programs (`/`, a fraction, a string value, a function, a list, an unknown name, `&&`, 2^31, an unclosed block) are refused with a diagnostic and exit 1, and the legal ones among them still run on seed-min. A documented integer subset, not the native subset ([`NATIVE32.md`](NATIVE32.md)) |
+| `make test-trust-anchor` (part of `native-test`) | the C trust anchor is one pinned, auditable file. `tools/sxaudit.sa` (Sayanox, `stdlib/crypto.sa`, compiled by gen2) recomputes the size and SHA-256 of `selfhost/seed/sxc_seed_min.c` and the gate compares them with the tracked pin `selfhost/seed/sxc_seed_min.audit` (2176 lines, 100919 bytes, `e4cc34b4…1cb9`); the seed-min rule compiles that file and nothing else (every later `.c` is generated and gitignored); the surface is exactly four standard headers with zero references to `system`, `fork`, `exec*`, `dlopen`, `dlsym`, `socket`, `connect`, `setuid`, `unlink`, `rename`, `chmod`, `remove`, `tmpnam` or `getenv`; the single `popen`/`pclose`/`curl` site is pinned at one and asserted to be inside the **emitted runtime text** (`sx_http`, behind `http_get`) rather than in the compiler; compiling the 20.1k-line compiler twice gives byte-identical C; and `all-sayanox` still refuses the all-in-Sayanox claim. **Not a solution to trusting-trust** — the seed compiled the compiler that compiled the auditor, so this is tamper evidence against drift, not immunity ([ALL_SAYANOX_PHASE.md](ALL_SAYANOX_PHASE.md#phase-e-decision-2026-10-23-option-2-and-it-is-now-measured)) |
+| `make test-sxmod` (part of `native-test`) | module namespacing as a source-to-source pass: `tools/sxmod.sa`, written in Sayanox and compiled by gen2, rewrites `module NAME from "path"` and `alias.member` into prefixed flat declarations. The gate opens with the negative control — two modules that both declare `add` cannot be composed by the flat dialect at all (seed-min *duplicate function name*, `cc` rejects the C gen2 emits, native_aot *declared twice*) — then compiles the namespaced version and gets the same nine pinned lines from seed-min, gen2 and native_aot; the rewrite is deterministic; module-level names and their internal references are prefixed while locals, parameters, struct fields, comments and string literals are left byte for byte; a member is **not** reachable unqualified (`add(2, 3)` after the pass names nothing and the compiler says so); and 16 refusals each exit non-zero with a diagnostic. Not a language change: the compiler still has textual `use` and one flat name table ([`MODULES.md`](MODULES.md#namespaced-modules-as-a-pass-toolssxmod-2026-10-23)) |
+| `make test-native-arm64` (part of `native-test`) | the third machine-code target: the **same** `tools/native32.sa`, given `arm64` as its third argument, emits an AArch64 Linux ELF. The three fixtures are emitted, byte-deterministic on a second run and byte-identical to goldens in `selfhost/native32_tests/golden/` that were disassembled and read instruction by instruction; the container is pinned as ELFCLASS64/ET_EXEC/**EM_AARCH64**, `e_phentsize` 56, two program headers, entry `0x400134`, text at `0x400000`, data at `0x401000`, with the print-routine prologue (`mov w4, w0`) and the exit sequence (`mov x0,#0` / `mov x8,#93` / `svc #0`) pinned as raw bytes; for each fixture the i386 and arm64 images must lay out a **byte-identical data segment** while their text segments differ (one front end, two encoders); the nine out-of-subset programs are refused on this target too and an unknown target name is an error. **Nothing here executes an arm64 image** — this is an x86-64 machine with no emulator — and the `[OK]` lines say so ([`NATIVE32.md`](NATIVE32.md#the-arm64-encoder)) |
+| `make test-native-ir-portable` (part of `native-test`) | the `SX_EMIT_LOG` instruction list translates to the portable IR listing (`tools/emit_to_ir.sa`, [`NATIVE_IR.md`](NATIVE_IR.md)): deterministic (two runs cmp clean), lossless (one IR instruction per logged instruction), no x86 register names on IR instruction lines, abstract machine model preserved (`FADD`, `FCMP`, `I2F`, named `CALL`s, phase markers). An analysis format only — nothing assembles or executes it. The executable second ISA is a separate program, `tools/native32.sa` (`make test-native32`), which does not read this listing |
 | `make test-native-ir-log` (part of `native-test`) | the emit tree's instruction list is inspectable and pinned: with `SX_EMIT_LOG=<path>` every encoder primitive records the code offset, the mnemonic and the operands in assembly order, plus a `;` line per label slot, per fixup, per emitted `make` and per phase — 1122 instructions, 2 slots and 41 rel32 fixups for `selfhost/native_ir_log_test.sa`, with every call target named (`call make twice`, `call builtin gccheck`). The recorder is inert (the ELF built with it `cmp`s clean against the one built without it, and against the pre-recorder compiler on six fixtures), the list is deterministic, every line is an instruction line or a comment line, the offsets never go backwards, every rel32 fixup lands on a jump, no call target or operand falls back to a placeholder name, the six phases come in order, the fixture's top-level mnemonic vocabulary is pinned exactly, and the language emitter provably never touches the recorder state |
 | `make test-native-io` (part of `native-test`) | native `read_file`/`write_file`/`arg`/`arg_count` give the same results as seed-min and gen2 (argv[0] counted, truncating write returns 1, missing file reads as `""`, 160 KiB round trip) |
 | `make test-native-mem` (part of `native-test`) | native memory with a real collector: a string doubled to 262144 bytes is served whole; 100000 `push`es keep every value; a 200000-iteration churn loop (~8 MB allocated, nothing retained) **finishes inside a 4 MiB `ulimit -v` cap** running 200+ collections; `gc_runs()` > 0, `gc()` reclaims bytes and `gc_live()` reports a positive live count; strings, list elements and struct fields survive 30000 allocating iterations; a program that genuinely retains 8 MiB still exits non-zero with stdout written before the failure kept and `out of memory` on stderr. See [`GC.md`](GC.md). |
@@ -961,9 +1169,9 @@ still use shell/C infrastructure. See
 | `make test-gen2-gaps` | string `<`/`<=`/`>`/`>=`/`==`/`!=` by content on gen2 and seed-min, and native since 2026-10-10 (same output; string vs number is an error on seed-min); the gen2 fixes of 2026-10-08: `len(NAME)` in a range bound (list `sx_llen`, string `sx_len`); string `==`/`!=` between declared strings as strcmp (two equal runtime strings compare equal); `} else when`, `} else if` and `} otherwise when` chains including nested ones, with the same output as `elif`; seed-min and native match the conditional chain aliases; `%` inside builtin-call arguments is sx_mod, same as seed-min. |
 | `make test-for-paren` | a parenthesised `for` source (`for v in (xs)`, `for c in (s)`) on seed-min, gen2 and native with identical output |
 | `make test-gen2-index-mod` | `%` inside an index expression (values, conditions, for bounds, typed bodies, nested indexes), identical on seed-min, gen2 and native, `sx_mod` in the emitted C |
-| `make test-type-refusals` | the type forms no backend implements are refused everywhere with a clear diagnostic: nested generics (`Box<Box<num>>`) and struct field annotations (`p: Pt` in a struct body, which used to silently register `Pt` as an extra field); and the gen2-only struct-typed `hold` annotation works and is type-checked there while seed-min and native refuse it by name |
-| `make test-gen2-index-expr` | an index is a numeric expression in a value position, in a `when`/`while` condition, in a `for` bound and inside a typed function body: 39 hand-computed values identical on seed-min, gen2 and native; 6 unsupported index forms (a call other than `len()`, a comma, a quote, an empty index, unbalanced parentheses, a trailing operator) refused with a `min:` diagnostic and a `#error`; a negative index wraps on seed-min and gen2 and is asserted to stay refused by native. `%` in an index moved from this refusal list to supported (`make test-gen2-index-mod`). |
-| `make test-gen2-expr-lowering` | the two gen2 expression gaps closed 2026-10-13: a string `+` chain in a `give`/condition joins through `sx_cat` (11 hand-computed values, `selfhost/gen2_str_cat_test.sa`), and `len(NAME)`/a nested `NAME[IDX]` inside `[ ]` lower to `sx_llen`/`sx_len` and `sx_lget`/`sx_idx` in a value, a chain operand, a condition, a `for` bound and a typed body (18 values, `selfhost/gen2_index_call_test.sa`) — both byte-identical on seed-min, gen2 and native, with the emitted C greps pinned; 5 unsupported forms (a call other than `len()` in an index, a quote in an index, unbalanced brackets, a `+` with one string side, `%` with a string operand) refused with a `min:` diagnostic and a `#error`. |
+| `make test-type-refusals` | the type forms no backend implements are refused everywhere with a clear diagnostic: a *concrete* struct name as a generic type argument (`Box<Pt>` — this row used to be nested generics, which are implemented since 2026-10-22) and struct field annotations (`p: Pt` in a struct body, which used to silently register `Pt` as an extra field); and the gen2-only struct-typed `hold` annotation works and is type-checked there while seed-min and native refuse it by name |
+| `make test-gen2-index-expr` | an index is a numeric expression in a value position, in a `when`/`while` condition, in a `for` bound and inside a typed function body: 39 hand-computed values identical on seed-min, gen2 and native; 6 unsupported index forms (a call that is not `len()` and not a declared `-> num` function — here `pick(xs)`, which takes a list — a comma, a quote, an empty index, unbalanced parentheses, a trailing operator) refused with a `min:` diagnostic and a `#error`; a negative index wraps on seed-min and gen2 and is asserted to stay refused by native. `%` in an index moved from this refusal list to supported (`make test-gen2-index-mod`). |
+| `make test-gen2-expr-lowering` | the two gen2 expression gaps closed 2026-10-13: a string `+` chain in a `give`/condition joins through `sx_cat` (11 hand-computed values, `selfhost/gen2_str_cat_test.sa`), and `len(NAME)`/a nested `NAME[IDX]` inside `[ ]` lower to `sx_llen`/`sx_len` and `sx_lget`/`sx_idx` in a value, a chain operand, a condition, a `for` bound and a typed body (18 values, `selfhost/gen2_index_call_test.sa`) — both byte-identical on seed-min, gen2 and native, with the emitted C greps pinned; 5 unsupported forms (a call in an index that is neither `len()` nor a declared `-> num` function, a quote in an index, unbalanced brackets, a `+` with one string side, `%` with a string operand) refused with a `min:` diagnostic and a `#error`. |
 | `make test-stdlib-modules` | the stdlib modules added 2026-10-13 (`num_util`, `list_algo`, `str_text`): 99 hand-computed values identical on seed-min, gen2 and native, each module alone, and all modules in one program; plus `json_util` (the eighth module): flat-object JSON build/read, hand-computed values byte-identical on seed-min, gen2 and native. |
 | `make test-doc-claims` | no document advertises an entry point that is not in the repository: 24 legacy docs carry the "entry points do not exist" banner, `stage2_template.c` is still a placeholder, `restore_stage2.sh` still exits 1, and there is still no `stage2:` target. |
 | `make test-registry-sums` | every `pkg.meta` `sum=` in the repository equals `sxpkg sum` of its `main.sa` (offline integrity; see [`REGISTRY.md`](REGISTRY.md)) |
@@ -997,7 +1205,7 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 | Function-local hold | yes | yes | frame-local, recursion tested | `test-native-locals`, `native-test` | no new ABI or second architecture |
 | Explicit hold types | num/str/list outside make and inside fully typed make; initializers, assignments and reannotations checked | num/str/list syntax already accepted | num/str/list, also function-local and bound generic T | `test-seed-hold-types`, `test-full-lang`, `test-native-generic-local` | seed untyped-function annotations; a *struct*-typed annotation (`hold p: Pt = Pt { 1, 2 }`, even `hold b: Box__n`) is **gen2-only** as measured 2026-10-13 — gen2 accepts and type-checks it, seed-min and native refuse it by name (`test-type-refusals`) — see [type design](TYPES_ROADMAP.md) |
 | Struct types | literal-typed, plus generic templates: `struct Box<T> { v }` instantiated per type argument as `Box__n`/`Box__s` | literal-typed, plus the same templates rewritten to their mangled concrete name before the walker runs | literal-typed, plus templates instantiated at both literal sites with per-instantiation field kinds for the collector | `test-struct2`, `test-nest`, `native-test`, `test-generic-structs` | a type argument is `num` or `str` only (no nested instantiation, no struct or list argument); gen2's wording for a bad type argument list is its general `undefined name`/stray-token error, and gen2 learns a field kind from a single contradicting literal where seed-min and native refuse it — all measured in [TYPES_ROADMAP.md](TYPES_ROADMAP.md). A dotted field read inside a struct literal stays seed-min-only |
-| GC | no collector (builder-backed strings plus a freeing assignment wrapper) | mark/sweep, all three runtime allocations checked | mark/sweep | `test-gc`, `test-native-mem`, `test-seed-gc` | measured 2026-10-13: seed-min is documented no-GC and fails as `sx: out of memory`; the full seed's refcount table never releases in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations) and `gc()` there is a no-op; gen2's first collection fires at 8 MiB of managed heap, so it needs more address space than native; conservative native stack scanning |
+| GC | mark/sweep over the builder registry since 2026-10-22 (strings only; lists never freed) plus the freeing assignment wrapper | mark/sweep, all three runtime allocations checked | mark/sweep | `test-gc`, `test-native-mem`, `test-seed-gc`, `test-seed-collector` | measured 2026-10-22: seed-min collects dropped temporaries (gen1-min peak 1,278,704 → 29,768 KiB, identical gen2 C) and a live set still fails as `sx: out of memory`; the full seed's refcount table never releases in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations) and `gc()` there is a no-op; gen2's first collection fires at 8 MiB of managed heap, so it needs more address space than native; conservative native stack scanning |
 | Packages, offline | tool built by gen2 | registry/lock/deps/install-local/verify | not a native-tool claim | `test-pkgs`, `test-sxpkg-polish`, new `test-pkg-errors` | search no longer implicitly syncs; shell still supplies filesystem/process operations; execution failures now propagate |
 | Packages, online | not bootstrap | explicit sync/install/fetch commands, **opt-in** since 2026-10-13 | n/a | `test-sxpkg-online-local`, `test-sxpkg-online-optin` (both in the aggregates, both socket-free) | no cryptographic integrity (`pkgsum` detects edits; it is not a hash anyone should trust for provenance), no signatures, no remote publish; shell `publish`/`fetch` write `sum=` since 2026-10-13, matching the Sayanox implementation, so shell-handled packages verify the same way; `SAYANOX_REGISTRY` says where, `SAYANOX_ONLINE=1`/`--online` says whether |
 | LSP | tool built by gen2 | existing .sa JSON-RPC server | n/a | `test-lsp`, `test-lsp-robust`, `test-lsp-unicode` | **four documents** open at once since 2026-10-13 (a fifth evicts the oldest), each request answered from its own URI's buffer and an unopened URI answered empty; still no workspace index or cross-file analysis: references, workspace/symbol and rename see **open buffers only**, signature help needs the declaration in the same document and the call on the same line, and the only code action is formatting; rename, signature help and the format code action added 2026-10-13 and pinned by the probe's sixth session (`test-lsp`, 38 facts); UTF-16/Unicode and empty changes tested by `test-lsp-unicode` |
@@ -1755,6 +1963,11 @@ see "Gen2 expression lowering" below.)
 ---
 
 ## Seed memory management measured, and the full seed can compile an operator again (2026-10-13)
+
+> Superseded on 2026-10-22 for seed-min: it now has a conservative mark & sweep
+> and real `gc()`/`gc_live()`/`gc_runs()`. The measurements below are kept as
+> the record of what the no-GC seed did; see
+> [GC.md](GC.md#a-collector-in-the-bootstrap-seed-2026-10-22).
 
 Item 3 of the roadmap asked for a real collector subset in the seed **or** a
 documented no-GC seed plus a stress test. Measuring first produced the second

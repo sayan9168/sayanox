@@ -71,19 +71,23 @@ language, not the full language.
 
 ## What it refuses, with a diagnostic instead of wrong code
 
-* a call other than `len()`, a comma, a quoted string, an empty index,
-  unbalanced parentheses or a trailing operator inside `[ ]`
-  (`make test-gen2-index-expr` and `test-gen2-expr-lowering` pin the refusals;
-  `%`, `len()` and nested indexes are supported — see above)
+* a comma, a quoted string, an empty index, unbalanced parentheses, a
+  trailing operator, and a call whose return or parameters are not numbers,
+  inside `[ ]` (`make test-gen2-index-expr` and `test-gen2-expr-lowering` pin
+  the refusals; `%`, `len(NAME)`, nested indexes and — since 2026-10-22 — a
+  call to a function this program declared with `-> num` are supported, see
+  `make test-full-language-expr`)
 * a global read inside an untyped `make` body
-* generic `Box<list>`: concrete list fields now work on all three backends, but a generic list-field specialization remains refused pending recursive generic layout/GC support (`test-generic-structs`)
 * direct `push(p.xs, v)`, whole-list `show p.xs`, and a whole list-valued field used as a condition on Gen2: these are explicit source refusals; use an aliased list variable, `len(p.xs)`, or `p.xs[i]` (`test-gen2-list-struct-fields`)
 * a struct field annotation (`p: Pt` in a struct body): it used to register
   `Pt` as an extra field on all three backends; since 2026-10-13 all three
   refuse it (`test-type-refusals`). A literal after the colon (`k: 2`) is the
   old tolerated spelling and still parses as field `k` only.
-* a nested generic instantiation (`Box<Box<num>>`): refused on all three
-  backends (`test-type-refusals`)
+* a *concrete* struct name as a generic type argument (`Box<Pt>`), an unknown
+  name, an escaped type parameter, or the wrong argument count: refused on all
+  three backends (`test-type-refusals`, `test-generic-struct-limits`). A
+  nested instantiation (`Box<Box<num>>`) and `Box<list>` are **supported**
+  since 2026-10-22 — `test-generic-structs-nested`
 * a native-only construct on the portable path, and vice versa
 
 The full list, with the backend that differs, is in `docs/STATUS.md` under
@@ -134,8 +138,9 @@ rewrite, or parallel Stage-2 path was added. Full-language self-host remains
 **not claimed**. The source now uses a concrete struct and a struct-typed hold,
 as well as a generic source-size struct and generic function from a live module.
 This is still source adoption, not exhaustive language coverage. Namespaced modules are outside the bootstrap plan; nested generic
-layouts remain refused; Gen2 concrete list-field layout/lowering is now gated
-by `test-gen2-list-struct-fields`.
+layouts remain refused *at this dated increment* (they landed 2026-10-22,
+`test-generic-structs-nested`); Gen2 concrete list-field layout/lowering is
+now gated by `test-gen2-list-struct-fields`.
 
 ## The Stage-2 host is not in this repository
 
@@ -191,9 +196,10 @@ At this dated increment, remaining source-adoption work included generic
 structs/functions, module directives, nested struct state and list-valued
 struct state. The 2026-10-17 section supersedes that inventory and corrects
 the unsupported string-interpolation claim. Existing
-list/scalar/string code remains dominant. Remaining capability gaps include
-nested generic layouts, generic list-field specialization, namespaced modules,
-and the explicit refusals above. There is no exhaustive full-language compiler
+list/scalar/string code remains dominant. Remaining capability gaps at that
+date included nested generic layouts, generic list-field specialization,
+namespaced modules, and the explicit refusals above. Nested and list generic
+arguments were implemented on 2026-10-22; the rest of the list stands. There is no exhaustive full-language compiler
 source or full-language acceptance gate; **full-language self-host is not
 claimed**. This increment does not change those limits or add a Stage-2 host.
 
@@ -243,23 +249,31 @@ on gen2 **and gen3**. Actual results for this source:
 |---|---|---|
 | `show "hello ${name}"` substitutes a string variable | **passes**, identifier-only string/number holes; see below | same |
 | named struct function argument and return | **passes**, bounded concrete named types; see below | same |
-| `Size { bytes: len("abc") + 1 }` | source refusal / generated C fails compilation | same |
-| `values[offset()]` with a numeric function | source refusal / generated C fails compilation | same |
+| `Size { bytes: len("abc") + 1 }` | **passes** since 2026-10-22; expression-valued fields, see below | same |
+| `values[offset()]` with a numeric function | **passes** since 2026-10-22; checked index calls, see below | same |
 
 These are **proposed closure requirements**, not retroactive promises of the
 current bootstrap dialect. They are not an exhaustive language specification.
-Permanently excluded module aliases/namespaces and nested/list generic
-arguments are not silently declared supported. Even all four probes passing
+Excluded module aliases/namespaces are not silently declared supported.
+(Nested/list generic arguments were on this list until 2026-10-22, when they
+were implemented and gated instead — see
+[`TYPES_ROADMAP.md`](TYPES_ROADMAP.md#nested-and-list-type-arguments-2026-10-22).) Even all four probes passing
 would require a complete reviewed language contract before any full claim.
 Readiness failures are expected and are not counted as successful coverage.
 
 Initial logs: [2026-10-17 self-host readiness](gate-logs/2026-10-17-selfhost-readiness/)
 record eight unmet checks before the struct-function implementation. The
-[struct-function pass](gate-logs/2026-10-17-struct-functions/) reduced that to six.
-Current logs: [string interpolation](gate-logs/2026-10-17-string-interpolation/).
-The four hard gates passed again in order; current `readiness.log` still fails
-with **four** unmet checks (two behaviors on two compilers). It is not a green
-full-language gate.
+[struct-function pass](gate-logs/2026-10-17-struct-functions/) reduced that to six,
+[string interpolation](gate-logs/2026-10-17-string-interpolation/) to four, and
+[expression fields and index calls](gate-logs/2026-10-22-expression-fields/) to
+**zero on 2026-10-22**: all eight checks (four behaviours × gen2 and gen3) now
+pass, and `make gen3` runs them, so a regression breaks a hard gate.
+
+**This is still not a full-language claim.** Four closure probes are four
+probes; there is no reviewed, versioned acceptance specification, the probes
+say nothing about the forms nobody has written down, and `true-selfhost-full`
+still fails closed on purpose. `make test-full-language-expr` asserts that
+refusal statically so the probes passing cannot quietly turn into a claim.
 No new peak-memory or complete-language claim is made.
 
 
@@ -286,8 +300,10 @@ Bounds remain important:
 
 * Concrete named types only, not generic struct function annotations.
 * Bind a struct literal or function result to a name before further use.
-  Grouped struct-valued holds are explicitly refused; general expression-valued
-  struct construction/fields have not been added.
+  Grouped struct-valued holds are explicitly refused. Expression-valued
+  *fields* were added on 2026-10-22 (see below); expression-valued struct
+  *construction* — a struct-returning expression in place of a literal — was
+  not.
 * Field kinds are still inferred from literals in source order. A field-reading
   function needs a layout witness literal **before** its definition. The simple
   identity-copy readiness probe does not need a witness before the function.
@@ -328,8 +344,97 @@ Bind a field or expression to a string/number name before interpolating it.
 `make test-string-interpolation` runs both compilers at O0/O2 with C11 type
 checks, output comparisons, import and struct-function integration, escaped-only
 strings, forced-GC retention, the 16-hole boundary and ten refusal cases. It is
-also run by `make gen3`. This does not add general expression-valued struct
-fields, string lists, interpolated `use` paths or a format-specifier language.
+also run by `make gen3`. That pass did not add expression-valued struct
+fields (2026-10-22 did, see below), and still adds no string lists,
+interpolated `use` paths or format-specifier language.
 Seed-min/native interpolation is **not implemented** in this pass. The compiler
 source itself still uses concat rather than interpolation, preserving the seed
 bootstrap dialect. No full-language or new memory-efficiency claim is made.
+
+## Expression fields and checked index calls (2026-10-22)
+
+The last two readiness probes. Both are gen2 work only: `seed-min` and
+`native` accepted these forms already, so the fixture
+`selfhost/full_language_expr.sa` is a three-way parity proof rather than a
+new language feature, and `make test-full-language-expr` pins it.
+
+### A struct literal field may be an expression
+
+```
+hold one = Size { bytes: len(text) + 1 }      // (sx_len(text) + 1.0)
+hold two = Size { bytes: (2 + 3) * 4 }        // (((2.0 + 3.0)) * 4.0)
+hold five = Size { bytes: offset() + twice(3) }
+hold tag = Label { text: head + "anox" }      // sx_cat(head,"anox")
+```
+
+gen2's struct-literal walker read a value as *one* of: a number, a quoted
+string, a name, or a nested literal. Anything else hit the progress guard and
+became `struct/list literal value must be a number, string, name, or nested
+struct`. It already called the checked expression parser `sxeparse` at that
+position — but only used the result when the value was a **list**.
+
+The fix keeps every simple form on its old path and takes the parser's result
+only when it consumed *more* than the simple form **and** the extra text
+starts with an operator or a call's `(`. That rule is what keeps the existing
+refusals intact: `NumBox { a.v }` (a dotted field read in a literal) and
+`Size { bytes: xs[0] }` (an index in a literal) continue to be refused on
+gen2, because `.` and `[` are not in that set. The field keeps the
+expression's kind, so a string expression makes a string field.
+
+One more fix was needed: `hold a = Size { bytes: (2 + 3) * 4 }` was routed to
+the parenthesised-expression rewrite, which has never accepted a `{`. The
+statement scanner now tracks brace depth and only treats a grouping `(` as
+statement-level when it is outside any struct literal.
+
+### An index may call a declared numeric function
+
+```
+show values[offset()]
+show values[twice(offset()) + 1]
+show values[twice(offset()) % 3]
+```
+
+`idx_lower` lowered exactly one call — `len(NAME)` — and refused every other
+`(`. It now also accepts a call to a function the program declared with
+`-> num`, with arguments that are themselves index expressions, after
+checking the arity and that every declared parameter is a number. The
+function tables travel with the recursion, so nested calls work.
+
+### What stays refused inside `[ ]`
+
+| Form | seed-min | gen2 | native |
+|---|---|---|---|
+| `values[nope()]` (unknown function) | refuses | `#error` | refuses |
+| `values[two(1)]` (wrong arity) | refuses | `#error` | refuses |
+| `values[tag()]` (`-> str`) | accepts, emitted C does not compile | `#error` | refuses |
+| `values[pick(xs)]` (a `list` parameter) | accepts | `#error` | accepts |
+| `values[len("ab")]` (a quote) | accepts | `#error` | accepts |
+| `values[1, 2]`, `values[]`, `values[(i]`, `values[i +]` | refuse | `#error` | refuse |
+
+The last three rows are **older divergences, unchanged by this pass**: gen2
+is the strict one and `test-gen2-index-expr` has always pinned them. The
+workaround everywhere is `hold n = <expr>` and then `values[n]`.
+
+A source-level builtin call as a *field value* (`Label { text: concat(a, b) }`)
+is still refused on gen2: the checked parser knows the C runtime names, not
+the source aliases, for everything except `len` and `index`. Bind it first.
+
+### A brace inside a string literal in a condition (2026-10-23)
+
+Found while writing `tools/native32.sa`:
+
+```
+when string_eq(line, "} otherwise {") == 1 {     // gen2: unexpected '"'
+```
+
+gen2 scans a `when`/`while` condition for the `{` that opens the block
+without skipping string literals, so the `{` *inside* the literal ends the
+condition and the rest of the line is read as a new statement. A brace in a
+literal in **statement** position is fine (`hold tag = "} otherwise {"`), and
+so is a bare `"}"` in a condition — it is only an opening brace inside a
+literal inside a condition. seed-min accepts both.
+
+The workaround in the tree is `chr(123)` / `chr(125)`, with a comment at the
+site. This is a gen2 divergence, not a language rule; it is recorded here and
+in [NATIVE32.md](NATIVE32.md) rather than fixed, because the condition
+scanner is shared with the act-8 rewrite and the blast radius is wide.

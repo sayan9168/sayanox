@@ -520,6 +520,8 @@ static void check_call(const char *name,int n,int *types){
   else if(!strcmp(name,"sx_index")||!strcmp(name,"sx_idx")||!strcmp(name,"index")){ arity=2; a=4; b=TY_NUM; }
   else if(!strcmp(name,"string_eq")||!strcmp(name,"sx_eq")||!strcmp(name,"write_file")||!strcmp(name,"sx_write")){ arity=2; a=b=TY_STR; }
   else if(!strcmp(name,"arg_count")||!strcmp(name,"sx_argc")){ arity=0; }
+  else if(!strcmp(name,"gc")||!strcmp(name,"sx_gc_run")||!strcmp(name,"gc_live")
+       ||!strcmp(name,"sx_gc_live")||!strcmp(name,"gc_runs")||!strcmp(name,"sx_gc_count")){ arity=0; }
   else if(fi>=0){
     if(n!=functions[fi].np) die("seed-min call argument count does not match function signature");
     for(int i=0;i<n;i++) if(types[i]!=functions[fi].pt[i]) die("seed-min function argument type does not match signature");
@@ -580,7 +582,7 @@ static void skip_struct_decl(void){
  * concrete StructDef index of that instantiation, creating it from the
  * template on first use. `nk` receives the argument kinds so the literal can
  * check them (field i takes parameter i's kind when the counts match). */
-static int instantiate_gstruct(int gi, int *nk){
+static int instantiate_gstruct(int gi, int *nk, int *nks){
   skip();
   if(P>=N || S[P]!='<'){
     char m[256];
@@ -589,7 +591,8 @@ static int instantiate_gstruct(int gi, int *nk){
     die(m);
   }
   P++;
-  int ks[8]; int n=0;
+  int ks[8]; int kstruct[8]; int n=0; int nested=0;
+  char code[8][96];
   for(;;){
     skip();
     if(P>=N) die("a type argument list needs a closing >");
@@ -597,19 +600,34 @@ static int instantiate_gstruct(int gi, int *nk){
     if(S[P]==','){ P++; continue; }
     if(n>=8) die("too many type arguments (seed-min limit is 8)");
     char *t=parse_id();
+    /* A nested instantiation -- `Box<Box<num>>` -- is the type argument that
+     * makes this feature recursive. Build the INNER instantiation first: its
+     * StructDef then has a lower index than the outer one, which is exactly
+     * the order the emitted C typedefs need, and the nested-literal check
+     * below (last_si < si) is satisfied without a second sort. */
+    skip();
+    if(P<N && S[P]=='<' && find_gstruct(t)>=0){
+      int subk[8], subs[8];
+      int inner=instantiate_gstruct(find_gstruct(t),subk,subs);
+      free(t);
+      ks[n]=TY_STRUCT; kstruct[n]=inner; nested=1;
+      snprintf(code[n],sizeof code[n],"%s",SD[inner].name);
+      n++;
+      continue;
+    }
     int k=-1;
     if(!strcmp(t,"num")) k=TY_NUM;
     else if(!strcmp(t,"str")) k=TY_STR;
     else if(!strcmp(t,"list")) k=TY_LIST;
-    /* Concrete fields may hold a list, but generic Box<list> needs its own
-     * specialization/layout and GC rules before it can be accepted. */
-    if(k==TY_LIST) die("a struct field cannot hold a list in a generic instantiation until generic list-field specialization is implemented");
     if(k<0){
       char m[256];
-      snprintf(m,sizeof m,"a type argument must be num, str or list (got '%s'); a struct name as a type argument is not implemented", t);
+      snprintf(m,sizeof m,"a type argument must be num, str, list or an instantiation of a generic struct (got '%s')", t);
       free(t); die(m);
     }
-    free(t); ks[n++]=k;
+    free(t);
+    ks[n]=k; kstruct[n]=-1;
+    code[n][0]=(char)kind_letter(k); code[n][1]=0;
+    n++;
   }
   if(n!=GS[gi].np){
     char m[256];
@@ -617,9 +635,18 @@ static int instantiate_gstruct(int gi, int *nk){
              GS[gi].name, GS[gi].np, GS[gi].np==1?"":"s", n);
     die(m);
   }
+  /* The suffix is one letter per primitive argument, or the inner mangled
+   * name for a nested one. Arguments run together while they are all single
+   * letters, so `Pair<num, str>` is still `Pair__ns`; as soon as one is
+   * nested they are separated by '_', which keeps `Pair<Box<num>, str>`
+   * (`Pair__Box__n_s`) readable and free of collisions. */
   char mn[192];
   int o=snprintf(mn,sizeof mn,"%s__",GS[gi].name);
-  for(int i=0;i<n;i++){ nk[i]=ks[i]; if(o<(int)sizeof mn-1) mn[o++]=(char)kind_letter(ks[i]); }
+  for(int i=0;i<n;i++){
+    nk[i]=ks[i]; if(nks) nks[i]=kstruct[i];
+    if(nested && i && o<(int)sizeof mn-1) mn[o++]='_';
+    for(const char *cc=code[i]; *cc && o<(int)sizeof mn-1; cc++) mn[o++]=*cc;
+  }
   mn[o]=0;
   int si=find_struct(mn);
   if(si>=0){ skip(); return si; }        /* already instantiated: reuse it */
@@ -757,12 +784,13 @@ static char *atom(int *oty){
     }
     /* A generic instantiation first: `Box<num> { ... }` becomes the concrete
        struct `Box__n`, so the literal path below is the ordinary one. */
-    int gk[8]; int ngk=0;
+    int gk[8]; int gks[8]; int ngk=0;
+    for(int gz=0;gz<8;gz++) gks[gz]=-1;
     if(find_struct(id)<0){
       int gi=find_gstruct(id);
       if(gi>=0){
         if(P<N && S[P]=='<'){
-          int gsi=instantiate_gstruct(gi,gk);
+          int gsi=instantiate_gstruct(gi,gk,gks);
           ngk=GS[gi].np;
           char *mn=strdup(SD[gsi].name);
           free(id); id=mn;
@@ -817,7 +845,21 @@ static char *atom(int *oty){
              && (et==TY_NUM || et==TY_STR || et==TY_LIST)){
             char msg[256];
             snprintf(msg,sizeof msg,"%s field '%s' is %s (its type argument says so), the literal gives %s",
-                     SD[si].name, SD[si].fields[fi], kind_word(gk[fi]), kind_word(et));
+                     SD[si].name, SD[si].fields[fi],
+                     gk[fi]==TY_STRUCT ? (gks[fi]>=0 ? SD[gks[fi]].name : "a struct")
+                                       : kind_word(gk[fi]),
+                     kind_word(et));
+            die(msg);
+          }
+          /* A nested type argument also fixes WHICH struct the field holds:
+             `Box<Box<num>> { Box<str> { "x" } }` is the same class of error as
+             `Box<num> { "seven" }`, and naming both mangled types is the only
+             way the message stays readable. */
+          if(ngk>0 && ngk==SD[si].nf && fi<ngk && gk[fi]==TY_STRUCT && et==TY_STRUCT
+             && gks[fi]>=0 && last_si>=0 && last_si!=gks[fi]){
+            char msg[256];
+            snprintf(msg,sizeof msg,"%s field '%s' is a %s (its type argument says so), the literal gives a %s",
+                     SD[si].name, SD[si].fields[fi], SD[gks[fi]].name, SD[last_si].name);
             die(msg);
           }
           if(et==TY_STR || et==TY_NUM){
@@ -929,6 +971,12 @@ static char *atom(int *oty){
         snprintf(buf,sizeof buf,"sx_arg((int)(%s))",args[0]); *oty=TY_STR;
       } else if((!strcmp(id,"arg_count")||!strcmp(id,"sx_argc"))&&na==0){
         snprintf(buf,sizeof buf,"sx_argc()"); *oty=TY_NUM;
+      } else if((!strcmp(id,"gc")||!strcmp(id,"sx_gc_run"))&&na==0){
+        snprintf(buf,sizeof buf,"sx_gc_run()"); *oty=TY_NUM;
+      } else if((!strcmp(id,"gc_live")||!strcmp(id,"sx_gc_live"))&&na==0){
+        snprintf(buf,sizeof buf,"sx_gc_live()"); *oty=TY_NUM;
+      } else if((!strcmp(id,"gc_runs")||!strcmp(id,"sx_gc_count"))&&na==0){
+        snprintf(buf,sizeof buf,"sx_gc_count()"); *oty=TY_NUM;
       } else if((!strcmp(id,"read_file")||!strcmp(id,"sx_read"))&&na==1){
         snprintf(buf,sizeof buf,"sx_read(%s)",args[0]); *oty=TY_STR;
       } else if((!strcmp(id,"http_get")||!strcmp(id,"sx_http"))&&na==1){
@@ -1719,17 +1767,100 @@ static void preamble(void){
   puts("  }");
   puts("  size_t i=sx_sb_hash(h->data)&(sx_sb_nbucket-1); h->next=sx_sb_buckets[i]; sx_sb_buckets[i]=h; sx_sb_count++;");
   puts("}");
+  puts("/* ----- conservative mark & sweep over the builder registry -------------");
+  puts(" * Roots are the C stack, nothing else. Every Sayanox variable this compiler");
+  puts(" * emits is a local of sx_prog, parameters and temporaries are C locals, and");
+  puts(" * no heap object in this runtime stores a string pointer (lists hold");
+  puts(" * doubles), so scanning from the anchor planted in main down to the");
+  puts(" * collector's own frame reaches every builder a running program can still");
+  puts(" * name. Interior pointers count: a candidate word is matched against the");
+  puts(" * whole block by binary search, so a cursor into the middle of a string");
+  puts(" * keeps it alive. The explicit sx_sb_free on reassignment stays -- it");
+  puts(" * reclaims the common case immediately, and the collector only has to find");
+  puts(" * what the assignment wrapper cannot see: dropped temporaries and results.");
+  puts(" * Nothing here moves an object, so a borrowed pointer stays valid. */");
+  puts("#include <setjmp.h>");
+  puts("#if defined(__SANITIZE_ADDRESS__)");
+  puts("#define SX_GC_SCAN __attribute__((no_sanitize_address))");
+  puts("#elif defined(__has_feature)");
+  puts("#if __has_feature(address_sanitizer)");
+  puts("#define SX_GC_SCAN __attribute__((no_sanitize_address))");
+  puts("#endif");
+  puts("#endif");
+  puts("#ifndef SX_GC_SCAN");
+  puts("#define SX_GC_SCAN   /* reading other frames is not an error, it is the point */");
+  puts("#endif");
+  puts("static char *sx_gc_bot;                 /* stack anchor, planted by main */");
+  puts("static size_t sx_gc_bytes;              /* bytes held by registered builders */");
+  puts("static size_t sx_gc_thresh = 8388608;   /* collect once live bytes pass this */");
+  puts("static double sx_gc_n, sx_gc_freed;     /* collections run, bytes last freed */");
+  puts("static sx_sb **sx_gc_arr; static unsigned char *sx_gc_bits; static size_t sx_gc_cap;");
+  puts("static void sx_gc_init(void *bot){ sx_gc_bot=(char*)bot; }");
+  puts("static size_t sx_gc_block(sx_sb *h){ return offsetof(sx_sb,data)+h->cap+1; }");
+  puts("static int sx_gc_cmp(const void *a,const void *b){");
+  puts("  sx_sb *x=*(sx_sb *const *)a, *y=*(sx_sb *const *)b;");
+  puts("  return x<y ? -1 : (x>y ? 1 : 0); }");
+  puts("static void sx_gc_grow(void){ sx_gc_thresh=sx_gc_bytes+sx_gc_bytes/2+8388608; }");
+  puts("static SX_GC_SCAN void sx_gc_roots(char *lo,char *hi,size_t k){");
+  puts("  while((uintptr_t)lo % sizeof(char*)) lo++;");
+  puts("  for(; lo+sizeof(char*)<=hi; lo+=sizeof(char*)){");
+  puts("    char *c=*(char**)lo; size_t a=0, b=k;");
+  puts("    if(!c) continue;");
+  puts("    while(a<b){ size_t m=a+(b-a)/2; if((char*)sx_gc_arr[m]<=c) a=m+1; else b=m; }");
+  puts("    if(a && c<=sx_gc_arr[a-1]->data+sx_gc_arr[a-1]->cap) sx_gc_bits[a-1]=1;");
+  puts("  }");
+  puts("}");
+  puts("static void sx_gc_collect(void){");
+  puts("  size_t n=sx_sb_count, k=0, i, live=0, freed=0;");
+  puts("  if(!sx_gc_bot) return;                /* no anchor yet: nothing is rooted */");
+  puts("  if(n>sx_gc_cap){");
+  puts("    sx_sb **a; unsigned char *b;");
+  puts("    a=(sx_sb**)realloc(sx_gc_arr,n*sizeof *a);");
+  puts("    if(!a){ sx_gc_grow(); return; }     /* no room to collect: carry on */");
+  puts("    sx_gc_arr=a;");
+  puts("    b=(unsigned char*)realloc(sx_gc_bits,n);");
+  puts("    if(!b){ sx_gc_grow(); return; }");
+  puts("    sx_gc_bits=b; sx_gc_cap=n;");
+  puts("  }");
+  puts("  for(i=0;i<sx_sb_nbucket;i++){ sx_sb *h=sx_sb_buckets[i]; while(h){ if(k<n) sx_gc_arr[k++]=h; h=h->next; } }");
+  puts("  qsort(sx_gc_arr,k,sizeof *sx_gc_arr,sx_gc_cmp);");
+  puts("  memset(sx_gc_bits,0,k);");
+  puts("  { jmp_buf jb; char *lo, *hi;");
+  puts("    setjmp(jb);                         /* spill the registers onto the stack */");
+  puts("    lo=(char*)&jb; hi=sx_gc_bot;");
+  puts("    if(lo>hi){ char *t=lo; lo=hi; hi=t; }");
+  puts("    sx_gc_roots(lo,hi,k);");
+  puts("  }");
+  puts("  for(i=0;i<sx_sb_nbucket;i++) sx_sb_buckets[i]=0;");
+  puts("  for(i=0;i<k;i++){");
+  puts("    sx_sb *h=sx_gc_arr[i];");
+  puts("    if(sx_gc_bits[i]){ size_t j=sx_sb_hash(h->data)&(sx_sb_nbucket-1); h->next=sx_sb_buckets[j]; sx_sb_buckets[j]=h; live++; }");
+  puts("    else { freed+=sx_gc_block(h); free(h); }");
+  puts("  }");
+  puts("  sx_sb_count=live;");
+  puts("  sx_gc_bytes = freed<sx_gc_bytes ? sx_gc_bytes-freed : 0;");
+  puts("  sx_gc_freed=(double)freed; sx_gc_n+=1;");
+  puts("  sx_gc_grow();");
+  puts("}");
+  puts("static double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }");
+  puts("static double sx_gc_live(void){ return (double)sx_gc_bytes; }");
+  puts("static double sx_gc_count(void){ return sx_gc_n; }");
   puts("static char *sx_sb_new(size_t cap){");
   puts("  if(cap<32) cap=32;");
   puts("  if(cap>SIZE_MAX - offsetof(sx_sb,data) - 1){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
-  puts("  sx_sb *h=(sx_sb*)malloc(offsetof(sx_sb,data)+cap+1); if(!h){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
-  puts("  h->len=0; h->cap=cap; h->data[0]=0; sx_sb_register(h); return h->data; }");
+  puts("  size_t need=offsetof(sx_sb,data)+cap+1;");
+  puts("  if(sx_gc_bytes+need>sx_gc_thresh) sx_gc_collect();");
+  puts("  sx_sb *h=(sx_sb*)malloc(need);");
+  puts("  if(!h){ sx_gc_collect(); h=(sx_sb*)malloc(need); }   /* collect before giving up */");
+  puts("  if(!h){fputs(\"sx: out of memory\\n\",stderr);exit(1);}");
+  puts("  h->len=0; h->cap=cap; h->data[0]=0; sx_sb_register(h); sx_gc_bytes+=need; return h->data; }");
   puts("static char *sx_sb_from(const char *s){ size_t n=strlen(s?s:\"\");");
   puts("  size_t cap=n<32?32:n; char *r=sx_sb_new(cap); if(n)memcpy(r,s,n); r[n]=0; sx_sb_hdr(r)->len=n; return r; }");
   puts("static void sx_sb_free(const char *p){");
   puts("  if(!p || !sx_sb_nbucket) return;");
   puts("  sx_sb **link=&sx_sb_buckets[sx_sb_hash(p)&(sx_sb_nbucket-1)];");
-  puts("  while(*link){ sx_sb *h=*link; if(h->data==p){*link=h->next; sx_sb_count--; free(h); return;} link=&h->next; }");
+  puts("  while(*link){ sx_sb *h=*link; if(h->data==p){ size_t z=sx_gc_block(h); *link=h->next; sx_sb_count--;");
+  puts("    sx_gc_bytes = z<sx_gc_bytes ? sx_gc_bytes-z : 0; free(h); return;} link=&h->next; }");
   puts("}");
   puts("static char *sx_sb_app(const char *a,const char *b){");
   puts("  const char *aa=a?a:\"\"; const char *bb=b?b:\"\";");
@@ -1807,8 +1938,8 @@ static void collect(void){
                exactly as a concrete literal declares its name. Creating the
                instantiation here is idempotent, so the four collect/scan
                rounds agree on the struct index. */
-            int gk[8];
-            si=instantiate_gstruct(find_gstruct(t),gk);
+            int gk[8], gks[8];
+            si=instantiate_gstruct(find_gstruct(t),gk,gks);
             ty=TY_STRUCT;
           }
           else {
@@ -2027,9 +2158,19 @@ int main(int argc, char **argv){
   for(int pass=0;pass<4;pass++){ collect(); scan_literals(); }
   generic_finalized=1; types_final=1;
   P=0; preamble(); function_prototypes(); emit_all_fns();
-  puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
+  /* The program body is its own function so that main's frame -- which holds
+   * the collector's stack anchor -- always sits above every Sayanox variable;
+   * the volatile function pointer keeps the call indirect, so the body cannot
+   * be inlined back into main and lose that ordering. */
+  puts("static int sx_prog(void){");
   decls(); P=0;
   while(P<N){ skip(); if(P>=N) break; stmt(); }
   puts("  return 0;\n}");
+  puts("int main(int argc,char **argv){ g_argc=argc; g_argv=argv;");
+  puts("  volatile unsigned char sx_gcanchor=0;");
+  puts("  int (*volatile sx_entry)(void)=sx_prog;");
+  puts("  sx_gc_init((void*)&sx_gcanchor);");
+  puts("  return sx_entry();");
+  puts("}");
   return 0;
 }

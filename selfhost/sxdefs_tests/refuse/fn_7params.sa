@@ -1,0 +1,4 @@
+make f(a, b, c, d, e, g, h) {
+  give a
+}
+show 1

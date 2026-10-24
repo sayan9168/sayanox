@@ -1,0 +1,4 @@
+use "selfhost/sxmod_tests/math.sa"
+make g() -> num {
+  give 2
+}

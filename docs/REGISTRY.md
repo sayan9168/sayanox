@@ -29,6 +29,9 @@ make sxpkg
 ./tools/sxpkg fetch https://example.com/x.sa mypkg
 ./tools/sxpkg verify
 ./tools/sxpkg publish
+./tools/sxpkg sha256 registry/math/main.sa   # the SHA-256 of one file
+./tools/sxpkg sign math                      # keyed signature into pkg.meta
+./tools/sxpkg authenticate [math]            # check the signature(s)
 ```
 
 `SAYANOX_ROOT` moves the project (every path is built through it), so
@@ -82,13 +85,23 @@ Everything in this section works with no network. It is what
 has added (`sxpkg add`). It records *which* version a project uses, nothing
 more. Malformed lines are reported by `verify`, not silently skipped.
 
-**`pkg.meta`.** Each package in `registry/<name>/pkg.meta` has four lines:
+**`pkg.meta`.** Each package in `registry/<name>/pkg.meta` has four lines,
+plus the two the tool records itself since 2026-10-22:
 
 ```
 name=math
 version=0.1.0
 desc=tiny math helpers (dbl, sqr)
 sum=718013937
+sha256=20c269795b03f933a723721400d7f5eef29aa8df6dd43a058b437f0e5edfce4e
+origin=seed:builtin
+```
+
+and, once the package has been signed, two more:
+
+```
+signer=c48a01f49fd0f2cc
+sig=f208da529095dde17fb59dea682aff26d27d8e39a515756dd3630369cbc3d24b
 ```
 
 **The sum.** `sum=` is a *content check*, not a security hash: starting from
@@ -97,9 +110,61 @@ sum=718013937
 prints `sxpkg: sum <N> <file>`; the tool is built by gen2). An independent
 `od` + `awk` computation over the same bytes gives the same numbers for all
 three sample packages. It catches an edited or truncated `main.sa` against its recorded
-`pkg.meta`. It does not stop a deliberate forgery, and nothing here signs
-anything. The current sums are hello `522968026`, math `718013937` and
-strings `120085778`.
+`pkg.meta`, but it does not stop a deliberate forgery: two files that differ by
+`+1` in one byte and `-31` in the next have the *same* `sum=`.
+`make test-sxpkg-crypto` builds exactly that collision -- `give` changed to
+`hJve` in the seeded `math/main.sa` keeps `sum=718013937` -- and requires
+`verify` to refuse it, which it can only do through `sha256=`. The current
+sums are hello `522968026`, math `718013937` and strings `120085778`.
+
+**The digest.** `sha256=` is the SHA-256 of `main.sa`, in lower-case hex,
+computed by `stdlib/crypto.sa` (pure Sayanox, see
+[STDLIB.md](STDLIB.md#stdlibcryptosa----sha-256-and-hmac-sha256)).
+`sxpkg sha256 <file>` prints it for any file and agrees with `sha256sum`.
+`seed`, `publish` and `fetch` record it; `verify` and `install` check it.
+`sum=` is still written and still checked, so a registry written by an older
+tool keeps verifying.
+
+**The origin.** `origin=` records where the package entered the project:
+`seed:builtin` for the sample packages, `publish:<path>` for a local publish,
+`fetch:<url-or-path>` for a fetch. It is provenance, not proof -- whoever can
+write `pkg.meta` can write `origin=` -- so it answers "where did this come
+from" for a tree you control, not "who vouches for this".
+
+**Signing.** `sxpkg sign <name>` adds `signer=` and `sig=` to a package's
+`pkg.meta`:
+
+```
+sig    = HMAC-SHA256(secret, "sayanox-pkg-v1\nname=<n>\nversion=<v>\nsha256=<d>\n")
+signer = the first 16 hex digits of SHA-256(secret)
+```
+
+The secret comes from `SAYANOX_SIGN_KEY`, else the file named by
+`SAYANOX_SIGN_KEYFILE`, else `.sayanox/keys/default.key` (one trailing newline
+is trimmed, so a key file written by `echo` works).
+
+This is a **symmetric, keyed digest, not a public-key signature**: the
+checker needs the same secret the signer used. It proves that whoever holds
+that secret signed these exact bytes under this exact name and version; it
+does not let a stranger verify a package from a publisher they have never
+shared a key with. The tool says so in its own header comment, and nothing in
+this repository claims otherwise.
+
+`sxpkg authenticate [name]` checks one package or the whole lock closure and
+prints one line per package:
+
+| Line | Meaning | Exit |
+|---|---|---|
+| `sxpkg: authentic <name> signer=<id>` | `sig=` matches the key in hand | 0 |
+| `sxpkg: UNSIGNED <name>` | no `sig=` recorded | 0 (1 under `SAYANOX_REQUIRE_SIGNED=1`) |
+| `sxpkg: NOKEY <name>` | signed, but no key is available here | 0 (1 under `SAYANOX_REQUIRE_SIGNED=1`) |
+| `sxpkg: BAD <reason>` | wrong key, edited `main.sa`, or a rewritten `sha256=` | 1 |
+
+`SAYANOX_REQUIRE_SIGNED=1` turns "cannot check" into a failure, for a project
+that wants every package authenticated or none installed. Over a registry
+with no signatures at all, `verify`'s output is byte-identical to the
+pre-signature tool's (`make test-sxpkg-crypto` pins that with `cmp`); a signed
+one adds `sxpkg: signature ok <name>`.
 
 **`sxpkg verify`.** For every `name=version` in `sx.lock` it checks, offline:
 
@@ -108,7 +173,13 @@ strings `120085778`.
 * the registry `pkg.meta` `version=` equals the locked version (else
   `MISMATCH <name>: locked at X but the registry has Y`);
 * the `sum` of the copy's `main.sa` equals `pkg.meta`'s `sum=` (else
-  `MISMATCH <name>: main.sa sums to A but pkg.meta says B`).
+  `MISMATCH <name>: main.sa sums to A but pkg.meta says B`);
+* when `pkg.meta` records one, the SHA-256 of the copy's `main.sa` equals
+  `sha256=` (else `MISMATCH <name>: main.sa hashes to A but pkg.meta says B`);
+  a package written by an older tool has no `sha256=` and is checked on `sum=`
+  alone, so nothing that verified before stops verifying;
+* when `pkg.meta` records a signature and a key is available, the signature
+  matches (`sxpkg: signature ok <name>`, else a `BAD` line and exit 1).
 
 It prints `sxpkg: verify ok (N locked packages)` and exits 0 when all pass,
 or `sxpkg: verify FAILED (N problem(s))` and exits non-zero otherwise. With no
@@ -198,8 +269,10 @@ gen2 and native all agree on the result.
 `make test-pkgs` pins all of the above, including the two `sxpkg: DEP ...`
 errors and the "cannot write" message.
 
-**Not provided:** signatures, version ranges, a real solver, or any fetch
-during resolve/verify — everything above reads local directories only. The
+**Not provided:** public-key signatures, version ranges, a real solver, or any
+fetch during resolve/verify — everything above reads local directories only.
+Signing is the symmetric kind described above: a shared secret, not a
+publisher's private key. The
 http(s) halves of `sync`, `install` and `fetch` are the only commands that can
 open a socket, they need an explicit opt-in, and no bootstrap target uses
 them.
@@ -212,9 +285,11 @@ them.
   is gone. All pinned by `make test-sxpkg-polish`.
 * `add` warns when the package has no local registry copy yet.
 * The online commands (`sync`, `install`, `fetch`, `publish`) and their
-  thin-design limits are in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md). That document
-  says what is not verified: atomic downloads, signatures and a cryptographic
-  hash are all missing.
+  thin-design limits are in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md). Two of the
+  three gaps that document listed are closed since 2026-10-22: a cryptographic
+  hash (`sha256=`) and a keyed signature (`sig=`/`signer=`) are recorded and
+  checked. Public-key signatures are still missing, and a transfer is still
+  not atomic beyond the `.part` staging.
 
 ### Offline search and process failures (2026-10-11)
 
@@ -226,5 +301,6 @@ explicit `sync`, `install` or `fetch` operations; bootstrap uses none of them.
 A project root that is not a directory fails the same way it did when the
 wrapper's `cd` failed: `sxpkg: could not run verify in project <path>`, exit 1.
 `make test-pkg-errors` (part of `test-pkgs`) checks both that and the absent
-index. The checksum is not cryptographic, and these
-checks are not a sandbox for untrusted package trees or symlinks.
+index. `sum=` is still not cryptographic (`sha256=` is, and is checked
+alongside it), and none of these checks are a sandbox for untrusted package
+trees or symlinks: they say what the bytes are, not that running them is safe.

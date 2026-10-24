@@ -1,0 +1,4 @@
+make pick<A, B, C, D, E, F, G, H, I>(a: A) -> A {
+  give a
+}
+show 1

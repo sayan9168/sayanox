@@ -1,0 +1,15 @@
+// geom.sa -- spliced by `use`, and it splices one more file itself.
+//
+// The path below is written relative to the TOP file's directory, not to
+// this file's: native_aot's expand_use() passes the directory of the file
+// named on the command line all the way down. tools/sxdefs.sa does the same.
+use "mods/text.sa"
+
+struct Point {
+  x,
+  y
+}
+
+make dist2(a: num, b: num) -> num {
+  give a * a + b * b
+}

@@ -106,7 +106,183 @@ make gxkind(word: str) -> str {
   when string_eq(word, "str") {
     give "s"
   }
+  when string_eq(word, "list") {
+    give "l"
+  }
   give ""
+}
+// Whitespace and `// ...` comments inside a type-argument list: seed-min's
+// skip() has always allowed a list to be written across lines with a note
+// between the arguments, so the pre-pass has to allow it too.
+make gxskip(text: str, at: num) -> num {
+  hold i = at
+  hold n = len(text)
+  hold run = 1
+  while run == 1 {
+    while i < n && (sx_index(text, i) == 32 || sx_index(text, i) == 9 || sx_index(text, i) == 10 || sx_index(text, i) == 13) {
+      i = i + 1
+    }
+    when i + 1 < n && sx_index(text, i) == 47 && sx_index(text, i + 1) == 47 {
+      while i < n && sx_index(text, i) != 10 {
+        i = i + 1
+      }
+    } otherwise {
+      run = 0
+    }
+  }
+  give i
+}
+// Add `Name:f1,f2;` records to the running instantiation list, skipping the
+// names already there. Returns NAMES chr(1) DEFS.
+make gxmerge(names: str, defs: str, add: str) -> str {
+  hold outn = names
+  hold outd = defs
+  hold cur = ""
+  hold i = 0
+  while i < len(add) {
+    hold c = sx_index(add, i)
+    when c == 59 {
+      hold cn = ""
+      hold k = 0
+      while k < len(cur) && sx_index(cur, k) != 58 {
+        cn = concat(cn, chr(sx_index(cur, k)))
+        k = k + 1
+      }
+      when len(cn) > 0 {
+        when tbl_has(outn, cn) == 0 {
+          outn = concat(outn, concat(cn, "|"))
+          outd = concat(outd, concat(cur, ";"))
+        }
+      }
+      cur = ""
+    } otherwise {
+      cur = concat(cur, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(outn, concat(chr(1), outd))
+}
+// One type-argument list: `<num>`, `<num, str>`, `<list>`, or a nested
+// instantiation such as `<Box<num>>`. `at` is the index of the opening '<'.
+// The record is ENDPOS chr(1) CODE chr(1) COUNT chr(1) DEFS.
+//   CODE  is the mangled suffix: one letter for a primitive argument
+//         (num->n, str->s, list->l) and the inner mangled name for a nested
+//         instantiation. Arguments are concatenated while every one of them
+//         is a single letter -- so `Pair<num, str>` stays `Pair__ns` -- and
+//         separated by '_' as soon as one is nested, which is what makes
+//         `Pair<Box<num>, str>` (`Pair__Box__n_s`) readable and unambiguous.
+//   COUNT is the argument count as one digit, for the arity check.
+//   DEFS  carries `Name:f1,f2;` for every nested instantiation, innermost
+//         first, so the C typedef order a struct-typed field needs falls out
+//         of the walk instead of a second sort.
+// CODE is empty when this is not a type-argument list this compiler accepts;
+// the caller then leaves the text alone and the ordinary diagnostics run.
+make gxargs(text: str, at: num, gsdefs: str, level: num) -> str {
+  hold n = len(text)
+  hold p = at + 1
+  hold flat = ""
+  hold joined = ""
+  hold defs = ""
+  hold nested = 0
+  hold count = 0
+  hold ok = 1
+  hold run = 1
+  when level > 8 {
+    ok = 0
+    run = 0
+  }
+  while run == 1 {
+    when p >= n {
+      ok = 0
+      run = 0
+    } otherwise {
+      hold c = sx_index(text, p)
+      when c == 32 || c == 9 || c == 10 || c == 13 || (c == 47 && p + 1 < n && sx_index(text, p + 1) == 47) {
+        p = gxskip(text, p)
+      } otherwise {
+        when c == 62 {
+          p = p + 1
+          run = 0
+        } otherwise {
+          when c == 44 {
+            p = p + 1
+          } otherwise {
+            hold as = p
+            while p < n && gxisid(sx_index(text, p)) == 1 {
+              p = p + 1
+            }
+            when p == as {
+              ok = 0
+              run = 0
+            } otherwise {
+              hold word = sxeslice(text, as, p)
+              hold q = gxskip(text, p)
+              hold code = ""
+              hold isnested = 0
+              when q < n && sx_index(text, q) == 60 {
+                isnested = 1
+                hold rec = sxelookup(gsdefs, word, ":")
+                when len(rec) == 0 {
+                  ok = 0
+                  run = 0
+                } otherwise {
+                  hold sub = gxargs(text, q, gsdefs, level + 1)
+                  hold subcode = sxesegment(sub, 1)
+                  hold subcnt = sxesegment(sub, 2)
+                  hold subnp = 0
+                  when len(subcnt) > 0 {
+                    subnp = sx_index(subcnt, 0) - 48
+                  }
+                  when len(subcode) == 0 || subnp != sx_index(rec, 0) - 48 {
+                    ok = 0
+                    run = 0
+                  } otherwise {
+                    code = concat(word, concat("__", subcode))
+                    defs = concat(defs, sxesegment(sub, 3))
+                    defs = concat(defs, concat(code, concat(":", concat(sxeslice(rec, 2, len(rec)), ";"))))
+                    p = sxepos(sub)
+                  }
+                }
+              } otherwise {
+                code = gxkind(word)
+                when len(code) == 0 {
+                  ok = 0
+                  run = 0
+                }
+              }
+              when ok == 1 {
+                when isnested == 1 {
+                  nested = 1
+                }
+                when count > 0 {
+                  joined = concat(joined, "_")
+                }
+                flat = concat(flat, code)
+                joined = concat(joined, code)
+                count = count + 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  hold outcode = flat
+  when nested == 1 {
+    outcode = joined
+  }
+  when ok == 0 || count == 0 || count > 8 {
+    outcode = ""
+    count = 0
+    defs = ""
+  }
+  hold out = sxedigits(p)
+  out = concat(out, chr(1))
+  out = concat(out, outcode)
+  out = concat(out, chr(1))
+  out = concat(out, chr(48 + count))
+  out = concat(out, chr(1))
+  give concat(out, defs)
 }
 // every template in the source, as |Name:np:f1,f2| records
 make gxscan(text: str) -> str {
@@ -250,44 +426,28 @@ make gxpass(text: str, gsdefs: str) -> str {
             hold nm = sxeslice(text, i, e)
             hold rec = sxelookup(gsdefs, nm, ":")
             when len(rec) > 0 {
-              hold args = ""
-              hold ok = 1
-              hold p = j + 1
-              while p < n && ok == 1 && sx_index(text, p) != 62 {
-                while p < n && (sx_index(text, p) == 32 || sx_index(text, p) == 9 || sx_index(text, p) == 10 || sx_index(text, p) == 13) {
-                  p = p + 1
-                }
-                when p < n && sx_index(text, p) == 44 {
-                  p = p + 1
-                } otherwise {
-                  hold as = p
-                  while p < n && gxisid(sx_index(text, p)) == 1 {
-                    p = p + 1
-                  }
-                  hold letter = gxkind(sxeslice(text, as, p))
-                  when len(letter) == 0 {
-                    ok = 0
-                  } otherwise {
-                    args = concat(args, letter)
-                  }
-                }
+              hold ar = gxargs(text, j, gsdefs, 0)
+              hold args = sxesegment(ar, 1)
+              hold acs = sxesegment(ar, 2)
+              hold acount = 0
+              when len(acs) > 0 {
+                acount = sx_index(acs, 0) - 48
               }
-              when ok == 1 && p < n && len(args) == sx_index(rec, 0) - 48 {
-                hold after = p + 1
-                while after < n && (sx_index(text, after) == 32 || sx_index(text, after) == 9 || sx_index(text, after) == 10 || sx_index(text, after) == 13) {
-                  after = after + 1
-                }
+              hold p = sxepos(ar)
+              when len(args) > 0 && acount == sx_index(rec, 0) - 48 {
+                hold after = gxskip(text, p)
                 when after < n && sx_index(text, after) == 123 {
                   hold mn = concat(nm, concat("__", args))
                   out = concat(out, sxeslice(text, cp, i))
                   out = concat(out, mn)
-                  cp = p + 1
-                  i = p + 1
+                  cp = p
+                  i = p
                   hit = 1
-                  when tbl_has(names, mn) == 0 {
-                    names = concat(names, concat(mn, "|"))
-                    defs = concat(defs, concat(mn, concat(":", concat(sxeslice(rec, 2, len(rec)), ";"))))
-                  }
+                  hold add = sxesegment(ar, 3)
+                  add = concat(add, concat(mn, concat(":", concat(sxeslice(rec, 2, len(rec)), ";"))))
+                  hold merged = gxmerge(names, defs, add)
+                  names = sxesegment(merged, 0)
+                  defs = sxesegment(merged, 1)
                 }
               }
             }
@@ -1479,7 +1639,10 @@ make idx_sub(s: str, a: num, z: num) -> str {
   give out
 }
 
-make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
+// `fnret`/`fnpk` are the checked function tables (|name=kind| and
+// |name=paramkinds|): an index may call a typed function that returns a
+// number, so they have to travel with every recursive descent.
+make idx_lower(text: str, ldecls: str, sdecls: str, fnret: str, fnpk: str) -> str {
   hold ixlout = ""
   hold ixli = 0
   hold ixln = len(text)
@@ -1502,7 +1665,7 @@ make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
       }
       hold ixzlow = ""
       when ixzj > 0 {
-        hold ixzlow = idx_lower(idx_sub(text, ixzas, ixzj), ldecls, sdecls)
+        hold ixzlow = idx_lower(idx_sub(text, ixzas, ixzj), ldecls, sdecls, fnret, fnpk)
       }
       when ixzj <= 0 || len(ixzlow) == 0 || ixzls >= len(ixlout) {
         hold ixlbad = 1
@@ -1549,7 +1712,8 @@ make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
       when ixlk < ixln {
         hold ixlpost = sx_index(text, ixlk)
       }
-      // ---- a call: only len(NAME) is lowered ----
+      // ---- a call: len(NAME), or a checked call to a typed function
+      // that returns a number (`xs[offset()]`, `xs[pick(i, 1)]`) ----
       when ixlpost == 40 {
         hold ixlarg = ""
         hold ixlj = ixlk + 1
@@ -1599,9 +1763,13 @@ make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
             hold ixlclo = 1
           }
         }
-        when ixlclo == 0 || len(ixlarg) == 0 || string_eq(ixlnm, "len") == 0 {
-          hold ixlbad = 1
-        } otherwise {
+        hold ixlislen = 0
+        when string_eq(ixlnm, "len") == 1 {
+          when ixlclo == 1 && len(ixlarg) > 0 {
+            hold ixlislen = 1
+          }
+        }
+        when ixlislen == 1 {
           when tbl_has(ldecls, ixlarg) == 1 {
             hold ixlout = concat(ixlout, "sx_llen(")
             hold ixlout = concat(ixlout, ixlarg)
@@ -1616,6 +1784,105 @@ make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
             }
           }
           hold ixlnext = ixlj + 1
+        } otherwise {
+          // Not len(): the name must be a function this program declared with
+          // a `-> num` return. Everything else -- a string-returning call, a
+          // list-returning call, an unknown name -- keeps the old refusal, so
+          // an index is still a checked numeric expression.
+          hold ixlrk = sxelookup(fnret, ixlnm, "=")
+          when string_eq(ixlrk, "n") == 0 {
+            hold ixlbad = 1
+          } otherwise {
+            // the ')' that closes THIS call, counting nested ( ) and [ ]
+            hold ixlcdep = 0
+            hold ixlce = 0 - 1
+            hold ixlcj = ixlk
+            while ixlcj < ixln && ixlce < 0 {
+              hold ixlc3 = sx_index(text, ixlcj)
+              when ixlc3 == 40 {
+                hold ixlcdep = ixlcdep + 1
+              }
+              when ixlc3 == 41 {
+                hold ixlcdep = ixlcdep - 1
+                when ixlcdep == 0 {
+                  hold ixlce = ixlcj
+                }
+              }
+              hold ixlcj = ixlcj + 1
+            }
+            when ixlce < 0 {
+              hold ixlbad = 1
+            } otherwise {
+              // split the argument text at top-level commas and lower each
+              // piece as its own index expression
+              hold ixlargs = ""
+              hold ixlac = 0
+              hold ixlcur = ""
+              hold ixlany = 0
+              hold ixladep = 0
+              hold ixlai = ixlk + 1
+              while ixlai < ixlce && ixlbad == 0 {
+                hold ixlc4 = sx_index(text, ixlai)
+                when ixlc4 == 40 || ixlc4 == 91 {
+                  hold ixladep = ixladep + 1
+                }
+                when ixlc4 == 41 || ixlc4 == 93 {
+                  hold ixladep = ixladep - 1
+                }
+                when ixlc4 == 44 && ixladep == 0 {
+                  hold ixllw = idx_lower(ixlcur, ldecls, sdecls, fnret, fnpk)
+                  when len(ixllw) == 0 {
+                    hold ixlbad = 1
+                  } otherwise {
+                    when ixlac > 0 {
+                      hold ixlargs = concat(ixlargs, ",")
+                    }
+                    hold ixlargs = concat(ixlargs, ixllw)
+                    hold ixlac = ixlac + 1
+                    hold ixlcur = ""
+                  }
+                } otherwise {
+                  hold ixlcur = concat(ixlcur, chr(ixlc4))
+                  when ixlc4 != 32 && ixlc4 != 9 {
+                    hold ixlany = 1
+                  }
+                }
+                hold ixlai = ixlai + 1
+              }
+              when ixlbad == 0 && ixlany == 1 {
+                hold ixllw2 = idx_lower(ixlcur, ldecls, sdecls, fnret, fnpk)
+                when len(ixllw2) == 0 {
+                  hold ixlbad = 1
+                } otherwise {
+                  when ixlac > 0 {
+                    hold ixlargs = concat(ixlargs, ",")
+                  }
+                  hold ixlargs = concat(ixlargs, ixllw2)
+                  hold ixlac = ixlac + 1
+                }
+              }
+              // arity and parameter kinds: every lowered index piece is a
+              // number, so every declared parameter has to be one too
+              hold ixlps = sxelookup(fnpk, ixlnm, "=")
+              when ixlac != sxfpkcount(ixlps) {
+                hold ixlbad = 1
+              }
+              hold ixlpi = 0
+              while ixlpi < ixlac {
+                when string_eq(sxfpkget(ixlps, ixlpi), "n") == 0 {
+                  hold ixlbad = 1
+                }
+                hold ixlpi = ixlpi + 1
+              }
+              when ixlbad == 0 {
+                hold ixlout = concat(ixlout, ixlnm)
+                hold ixlout = concat(ixlout, "(")
+                hold ixlout = concat(ixlout, ixlargs)
+                hold ixlout = concat(ixlout, ")")
+                hold ixlnext = ixlce + 1
+              }
+            }
+          }
         }
       }
       // ---- a nested index: NAME[IDX] ----
@@ -1645,7 +1912,7 @@ make idx_lower(text: str, ldecls: str, sdecls: str) -> str {
             hold ixlsub = concat(ixlsub, chr(sx_index(text, ixlj)))
             hold ixlj = ixlj + 1
           }
-          hold ixllow = idx_lower(ixlsub, ldecls, sdecls)
+          hold ixllow = idx_lower(ixlsub, ldecls, sdecls, fnret, fnpk)
           when len(ixlsub) == 0 || len(ixllow) == 0 {
             hold ixlbad = 1
           } otherwise {
@@ -6098,6 +6365,11 @@ while running == 1 {
         hold pseen = 0
         hold plist = 0
         hold pbracket = 0
+        // Braces opened by a struct literal in this value: a '(' inside
+        // `Size { bytes: (2 + 3) * 4 }` groups a FIELD value, so it must not
+        // route the whole statement through the parenthesized-expression
+        // rewrite (which has never accepted a '{').
+        hold pbrace = 0
         hold pcalldepth = 0
         while prun == 1 {
           when pp >= n {
@@ -6138,6 +6410,12 @@ while running == 1 {
                 when pc == 93 {
                   hold pbracket = pbracket - 1
                 }
+                when pc == 123 {
+                  hold pbrace = pbrace + 1
+                }
+                when pc == 125 {
+                  hold pbrace = pbrace - 1
+                }
                 when pc == 40 {
                   when pcalldepth > 0 {
                     hold pcalldepth = pcalldepth + 1
@@ -6145,7 +6423,7 @@ while running == 1 {
                     when (pprev >= 97 && pprev <= 122) || (pprev >= 65 && pprev <= 90) || (pprev >= 48 && pprev <= 57) || pprev == 95 {
                       hold pcalldepth = 1
                     } otherwise {
-                      when plist == 0 && pbracket == 0 {
+                      when plist == 0 && pbracket == 0 && pbrace == 0 {
                         hold phas = 1
                       }
                     }
@@ -7469,6 +7747,7 @@ while running == 1 {
                   // ---- value: number, string literal or a name ----
                   hold el = ""
                   hold ety = 0
+                  hold nmsvty = ""
                   hold isnest = 0
                   hold sk = 1
                   while sk == 1 {
@@ -7493,7 +7772,8 @@ while running == 1 {
                   // gives list literals the same numeric-element checking and
                   // left-to-right evaluation temporaries as ordinary lists.
                   hold fllist = 0
-                  when ec == 91 || (ec >= 97 && ec <= 122) || (ec >= 65 && ec <= 90) {
+                  hold flexpr = 0
+                  when ec == 91 || (ec >= 97 && ec <= 122) || (ec >= 65 && ec <= 90) || (ec >= 48 && ec <= 57) || ec == 40 || ec == 45 || ec == 34 {
                     hold flenv = concat(decls, chr(1))
                     hold flenv = concat(flenv, sdecls)
                     hold flenv = concat(flenv, chr(1))
@@ -7539,8 +7819,128 @@ while running == 1 {
                         hold flserial = flserial + 1
                       }
                     }
+                    // ---- an EXPRESSION-valued field: `Size { bytes: len(s) + 1 }`
+                    // The simple forms above (a number, a quoted string, a
+                    // name, a nested literal) are left exactly as they were:
+                    // the checked parser is only taken when it consumed more
+                    // than the simple form AND the extra text starts with an
+                    // operator or a call's '(' -- so `a.v` and `xs[0]` keep
+                    // their existing refusals rather than changing meaning.
+                    when fllist == 0 {
+                      // NOTE: every sibling block below needs its OWN loop
+                      // and character names. Reusing one name across two
+                      // sibling blocks makes gen2 emit an assignment without
+                      // a declaration, and gen2.c then fails to compile.
+                      hold flse = pos
+                      when ec >= 97 && ec <= 122 || ec >= 65 && ec <= 90 {
+                        hold flruna = 1
+                        while flruna == 1 {
+                          when flse >= n {
+                            hold flruna = 0
+                          } otherwise {
+                            hold flca = sx_index(source, flse)
+                            when (flca >= 97 && flca <= 122) || (flca >= 65 && flca <= 90) || (flca >= 48 && flca <= 57) || flca == 95 {
+                              hold flse = flse + 1
+                            } otherwise {
+                              hold flruna = 0
+                            }
+                          }
+                        }
+                      }
+                      when (ec >= 48 && ec <= 57) || ec == 45 {
+                        when ec == 45 {
+                          hold flse = flse + 1
+                        }
+                        hold flrunb = 1
+                        while flrunb == 1 {
+                          when flse >= n {
+                            hold flrunb = 0
+                          } otherwise {
+                            hold flcb = sx_index(source, flse)
+                            hold flcb2 = 0
+                            when flse + 1 < n {
+                              hold flcb2 = sx_index(source, flse + 1)
+                            }
+                            when (flcb >= 48 && flcb <= 57) || (flcb == 46 && flcb2 >= 48 && flcb2 <= 57) {
+                              hold flse = flse + 1
+                            } otherwise {
+                              hold flrunb = 0
+                            }
+                          }
+                        }
+                      }
+                      when ec == 34 {
+                        hold flse = flse + 1
+                        hold flrunc = 1
+                        while flrunc == 1 {
+                          when flse >= n {
+                            hold flrunc = 0
+                          } otherwise {
+                            hold flcc = sx_index(source, flse)
+                            when flcc == 92 {
+                              hold flse = flse + 2
+                            } otherwise {
+                              hold flse = flse + 1
+                              when flcc == 34 {
+                                hold flrunc = 0
+                              }
+                            }
+                          }
+                        }
+                      }
+                      hold flsp = flse
+                      hold flrund = 1
+                      while flrund == 1 {
+                        when flsp >= n {
+                          hold flrund = 0
+                        } otherwise {
+                          hold flcd = sx_index(source, flsp)
+                          when flcd == 32 || flcd == 9 {
+                            hold flsp = flsp + 1
+                          } otherwise {
+                            hold flrund = 0
+                          }
+                        }
+                      }
+                      hold flnc = 0
+                      when flsp < n {
+                        hold flnc = sx_index(source, flsp)
+                      }
+                      hold flmore = 0
+                      when flnc == 43 || flnc == 45 || flnc == 42 || flnc == 47 || flnc == 37 || flnc == 40 {
+                        hold flmore = 1
+                      }
+                      when ec == 40 {
+                        hold flmore = 1
+                      }
+                      when flmore == 1 {
+                        when sx_eq(flkind, "n") == 1 || sx_eq(flkind, "s") == 1 {
+                          hold flexpr = 1
+                          // the lowered code may call sx_len/sx_cat/...; the
+                          // full runtime preamble has to be emitted for it
+                          hold rt = 1
+                          hold ety = 0
+                          when sx_eq(flkind, "s") == 1 {
+                            hold ety = 1
+                          }
+                          hold el = sxecode(flvalue)
+                          hold pos = sxepos(flvalue)
+                          // a list literal inside the expression records
+                          // temporaries; declare them before this statement
+                          hold flserialend2 = len(instate)
+                          while flserial < flserialend2 {
+                            hold body = concat(body, "  double ")
+                            hold body = concat(body, inprivate)
+                            hold body = concat(body, sxedigits(flserial))
+                            hold body = concat(body, ";")
+                            hold body = concat(body, nl)
+                            hold flserial = flserial + 1
+                          }
+                        }
+                      }
+                    }
                   }
-                  when (ec >= 48 && ec <= 57) || ec == 45 {
+                  when ((ec >= 48 && ec <= 57) || ec == 45) && flexpr == 0 {
                     when ec == 45 {
                       hold el = "-"
                       hold pos = pos + 1
@@ -7566,7 +7966,7 @@ while running == 1 {
                     }
                   }
                   // string literal value (escapes kept)
-                  when ec == 34 {
+                  when ec == 34 && flexpr == 0 {
                     hold ety = 1
                     hold pos = pos + 1
                     hold el = q
@@ -7598,7 +7998,7 @@ while running == 1 {
                     }
                   }
                   // name value: a name tracked as a string is a string
-                  when ((ec >= 97 && ec <= 122) || (ec >= 65 && ec <= 90)) && fllist == 0 {
+                  when ((ec >= 97 && ec <= 122) || (ec >= 65 && ec <= 90)) && fllist == 0 && flexpr == 0 {
                     hold el = ""
                     hold rn = 1
                     while rn == 1 {
@@ -7640,10 +8040,57 @@ while running == 1 {
                         hold ndi = ndi + 1
                       }
                     }
+                    // a name tracked as a struct makes this field a struct
+                    // field of that struct's type: `hold o = Outer { i }` is
+                    // the same field kind a nested literal would record, and
+                    // the C it emits is the ordinary struct copy `(Outer){i}`
+                    hold nsvkey = concat("|", el)
+                    hold nsvkey = concat(nsvkey, "=")
+                    hold nsvkl = len(nsvkey)
+                    hold nsvl = len(svars)
+                    hold nsvi = 0
+                    while nsvi + nsvkl <= nsvl {
+                      hold nsvok = 1
+                      hold nsvj = 0
+                      while nsvj < nsvkl {
+                        hold nsvaa = sx_index(svars, nsvi + nsvj)
+                        hold nsvbb = sx_index(nsvkey, nsvj)
+                        when nsvaa == nsvbb {
+                          hold nsvj = nsvj + 1
+                        } otherwise {
+                          hold nsvok = 0
+                          hold nsvj = nsvkl
+                        }
+                      }
+                      when nsvok == 1 {
+                        hold nsvq = nsvi + nsvkl
+                        hold nsvrun = 1
+                        while nsvrun == 1 {
+                          when nsvq >= nsvl {
+                            hold nsvrun = 0
+                          } otherwise {
+                            hold nsvc = sx_index(svars, nsvq)
+                            when nsvc == 124 {
+                              hold nsvrun = 0
+                            } otherwise {
+                              hold nmsvty = concat(nmsvty, chr(nsvc))
+                              hold nsvq = nsvq + 1
+                            }
+                          }
+                        }
+                        hold nsvi = nsvl
+                      } otherwise {
+                        hold nsvi = nsvi + 1
+                      }
+                    }
                   }
                   // ---- nested struct literal value: Name { ... } ----
                   // When the value is a known struct name followed by '{',
                   hold etyname = ""
+                  when len(nmsvty) > 0 {
+                    hold ety = 2
+                    hold etyname = nmsvty
+                  }
                   hold pushed = 0
                   hold sk = 1
                   while sk == 1 {
@@ -9589,7 +10036,7 @@ hold argbracket = 0
                 hold ixok = 1
                 // lower len(NAME) and NAME[IDX] inside the index text; a
                 // refusal here keeps the existing clear diagnostic
-                hold ixl2 = idx_lower(ix, ldecls, sdecls)
+                hold ixl2 = idx_lower(ix, ldecls, sdecls, fsret, fspk)
                 when len(ixl2) == 0 {
                   hold ixok = 0
                   hold exbad3 = 1
@@ -11037,7 +11484,7 @@ hold ec = 0
                 when len(opix) > 0 {
                   hold pos = opistart + len(opix) + 1
                   // the same lowering for the second index of a chain
-                  hold opxl2 = idx_lower(opix, ldecls, sdecls)
+                  hold opxl2 = idx_lower(opix, ldecls, sdecls, fsret, fspk)
                   when len(opxl2) == 0 {
                     hold exbad3 = 1
                   } otherwise {
@@ -13257,7 +13704,7 @@ hold argbracket = 0
                 hold ixok = 1
                 // lower len(NAME) and NAME[IDX] inside the index text; a
                 // refusal here keeps the existing clear diagnostic
-                hold ixl = idx_lower(ix, ldecls, sdecls)
+                hold ixl = idx_lower(ix, ldecls, sdecls, fsret, fspk)
                 when len(ixl) == 0 {
                   hold ixok = 0
                   hold exbad3 = 1
@@ -14300,7 +14747,7 @@ hold ec = 0
                 when len(opix) > 0 {
                   hold pos = opistart + len(opix) + 1
                   // the same lowering for the second index of a chain
-                  hold opxl = idx_lower(opix, ldecls, sdecls)
+                  hold opxl = idx_lower(opix, ldecls, sdecls, fsret, fspk)
                   when len(opxl) == 0 {
                     hold exbad3 = 1
                   } otherwise {
@@ -16347,7 +16794,7 @@ hold ec = 0
                     }
                   }
                   when cqok == 1 {
-                    hold cqxl = idx_lower(cqix, ldecls, sdecls)
+                    hold cqxl = idx_lower(cqix, ldecls, sdecls, fsret, fspk)
                     when len(cqxl) == 0 {
                       hold cqok = 0
                     } otherwise {
@@ -18296,7 +18743,7 @@ hold ec = 0
                       when fvbiok == 1 {
                         // len(NAME) and NAME[IDX] lower in a for bound exactly
                         // as they do in a value position
-                        hold fvbxl = idx_lower(fvbixt, ldecls, sdecls)
+                        hold fvbxl = idx_lower(fvbixt, ldecls, sdecls, fsret, fspk)
                         when len(fvbxl) == 0 {
                           hold fvbiok = 0
                         } otherwise {

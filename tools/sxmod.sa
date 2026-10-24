@@ -1,0 +1,654 @@
+// tools/sxmod.sa -- MODULE NAMESPACING for Sayanox, written in Sayanox and
+// compiled by selfhost/gen2.
+//
+// Why this file exists. docs/MODULES.md has said since 2026-10-16 that the
+// bootstrap dialect has textual `use` splicing and *no* module identity:
+// one flat name table, no aliases, no qualified names, and the explicit
+// warning "do not emulate with path rewriting". That is still true of the
+// compiler, and this file does not change it.
+//
+// What this file adds is the missing capability at the layer where it can be
+// built honestly: a source-to-source pass that takes a program written with
+// namespaced modules and produces a plain bootstrap program in which every
+// module's declarations carry a module-derived prefix. Two modules may then
+// each declare `add` and both be used in one program -- which the flat
+// dialect cannot do at all: seed-min refuses with "duplicate function name",
+// gen2 emits C that will not compile, and native_aot refuses with
+// "declared twice".
+//
+//     module math from "path/math.sa"
+//     module text as t from "path/text.sa"
+//
+//     show math.add(2, 3)
+//     show t.join("a", "b")
+//
+// becomes
+//
+//     make math__add(a: num, b: num) -> num { ... }
+//     make text__join(a: str, b: str) -> str { ... }
+//     show math__add(2, 3)
+//     show text__join("a", "b")
+//
+// and that output is ordinary bootstrap Sayanox: seed-min, gen2 and
+// native_aot all compile it, with identical stdout. That is the whole claim.
+//
+// What this is NOT. It is not a change to the language, the compiler or the
+// `use` splice; it is a separate program you run first. There is no separate
+// module scope at compile time, no export list, no private visibility, no
+// module cache, no version resolution and no cyclic-module linker. The
+// prefix is textual, and the rules below exist so that the rewrite is sound
+// rather than approximately right:
+//
+//   * A module file is plain bootstrap Sayanox. `module` and `use` lines
+//     inside a module file are refused -- nesting is not claimed.
+//   * A module's exported names are exactly its top-level `make`, `hold` and
+//     `struct` declarations. Everything top-level is exported.
+//   * If a parameter, a local `hold` or a `for` name inside a module shadows
+//     one of that module's own top-level names, the file is REFUSED. The
+//     rewrite would otherwise have to decide which `total` a bare `total`
+//     means, and a guess there is a miscompile.
+//   * `alias.member` is rewritten only when `alias` was declared by a
+//     `module` line. Every other dotted expression is a struct field chain
+//     and is left exactly as written.
+//   * A member that the module does not declare is refused by name, and so
+//     is an alias used as a value (`show m`).
+//   * Strings and comments are never rewritten.
+//   * A module name must start with a lowercase letter, so a prefix can
+//     never collide with the compiler's own `Struct__tag` generic
+//     specialisations.
+//   * A module member is NOT visible unqualified in the program: after the
+//     rewrite `add(1, 2)` refers to nothing, and the compiler says so. That
+//     is the namespacing working, not a bug.
+//
+// Usage:   ./tools/sxmod program.sa out.sa
+//          ./selfhost/gen2 out.sa out.c
+
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxmod: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+// ---- small text helpers ---------------------------------------------------
+
+make sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  while a < n && (sx_index(s, a) == 32 || sx_index(s, a) == 9) {
+    a = a + 1
+  }
+  hold b = n
+  while b > a && (sx_index(s, b - 1) == 32 || sx_index(s, b - 1) == 9 || sx_index(s, b - 1) == 13) {
+    b = b - 1
+  }
+  give sub(s, a, b)
+}
+
+make starts(s: str, p: str) -> num {
+  hold pn = len(p)
+  when len(s) < pn {
+    give 0
+  }
+  hold i = 0
+  hold r = 1
+  while i < pn {
+    when sx_index(s, i) != sx_index(p, i) {
+      r = 0
+      i = pn
+    } otherwise {
+      i = i + 1
+    }
+  }
+  give r
+}
+
+make is_name_char(c: num) -> num {
+  hold r = 0
+  when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95 {
+    r = 1
+  }
+  give r
+}
+
+// the identifier that starts at i, or "" if there is none
+make name_at(s: str, i: num) -> str {
+  hold n = len(s)
+  hold j = i
+  hold out = ""
+  while j < n && is_name_char(sx_index(s, j)) == 1 {
+    out = concat(out, chr(sx_index(s, j)))
+    j = j + 1
+  }
+  give out
+}
+
+make first_word(s: str) -> str {
+  give name_at(s, 0)
+}
+
+// ---- "|key=value|" tables -------------------------------------------------
+
+// `index` in this dialect is "the byte at position n", not a substring
+// search, so the search is written out here.
+make find_sub(hay: str, needle: str) -> num {
+  hold hn = len(hay)
+  hold nn = len(needle)
+  when nn == 0 {
+    give 0
+  }
+  hold i = 0
+  hold found = 0 - 1
+  while i + nn <= hn && found < 0 {
+    hold same = 1
+    hold j = 0
+    while j < nn {
+      when sx_index(hay, i + j) != sx_index(needle, j) {
+        same = 0
+        j = nn
+      } otherwise {
+        j = j + 1
+      }
+    }
+    when same == 1 {
+      found = i
+    }
+    i = i + 1
+  }
+  give found
+}
+
+make tbl_has(tbl: str, k: str) -> num {
+  hold key = concat(concat("|", k), "=")
+  hold at = find_sub(tbl, key)
+  hold r = 0
+  when at >= 0 {
+    r = 1
+  }
+  give r
+}
+
+make tbl_get(tbl: str, k: str) -> str {
+  hold key = concat(concat("|", k), "=")
+  hold at = find_sub(tbl, key)
+  when at < 0 {
+    give ""
+  }
+  hold i = at + len(key)
+  hold n = len(tbl)
+  hold out = ""
+  while i < n && sx_index(tbl, i) != 124 {
+    out = concat(out, chr(sx_index(tbl, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// a table is "|k=v|k=v|": it starts as "|" and every entry adds "k=v|",
+// so there is exactly one separator between neighbours
+make tbl_put(tbl: str, k: str, v: str) -> str {
+  give concat(tbl, concat(concat(k, "="), concat(v, "|")))
+}
+
+// ---- line and brace bookkeeping -------------------------------------------
+
+// how much this line opens or closes, ignoring braces inside strings and
+// comments. Also used to skip a line's text when scanning.
+make depth_delta(line: str) -> num {
+  hold n = len(line)
+  hold i = 0
+  hold d = 0
+  hold instr = 0
+  while i < n {
+    hold c = sx_index(line, i)
+    when instr == 1 {
+      when c == 92 {
+        i = i + 1
+      } otherwise {
+        when c == 34 {
+          instr = 0
+        }
+      }
+    } otherwise {
+      when c == 34 {
+        instr = 1
+      } otherwise {
+        when c == 47 && i + 1 < n && sx_index(line, i + 1) == 47 {
+          i = n
+        } otherwise {
+          when c == 123 {
+            d = d + 1
+          }
+          when c == 125 {
+            d = d - 1
+          }
+        }
+      }
+    }
+    i = i + 1
+  }
+  give d
+}
+
+// ---- reading a module's exported names ------------------------------------
+// A declaration is a top-level (depth 0) `make NAME(`, `hold NAME =` or
+// `struct NAME {`. The result is "|NAME=f|NAME=h|NAME=s|".
+
+make members_of(text: str, path: str) -> str {
+  hold n = len(text)
+  hold pos = 0
+  hold depth = 0
+  hold lineno = 0
+  hold out = "|"
+  while pos <= n {
+    hold raw = ""
+    while pos < n && sx_index(text, pos) != 10 {
+      raw = concat(raw, chr(sx_index(text, pos)))
+      pos = pos + 1
+    }
+    pos = pos + 1
+    lineno = lineno + 1
+    hold line = trim(raw)
+    when depth == 0 {
+      when starts(line, "module ") == 1 {
+        hold badmod = fail(1, concat(concat(concat(path, " line "), numstr(lineno)), ": a `module` line inside a module file (nested namespacing is not claimed)"))
+      }
+      when starts(line, "use ") == 1 {
+        hold baduse = fail(1, concat(concat(concat(path, " line "), numstr(lineno)), ": a `use` splice inside a namespaced module (its names would stay unprefixed); compose with `module` instead"))
+      }
+      hold nm = ""
+      hold kind = ""
+      when starts(line, "make ") == 1 {
+        nm = first_word(trim(sub(line, 5, len(line))))
+        kind = "f"
+      }
+      when starts(line, "hold ") == 1 {
+        nm = first_word(trim(sub(line, 5, len(line))))
+        kind = "h"
+      }
+      when starts(line, "struct ") == 1 {
+        nm = first_word(trim(sub(line, 7, len(line))))
+        kind = "s"
+      }
+      when len(nm) > 0 {
+        when tbl_has(out, nm) == 1 {
+          hold dupm = fail(1, concat(concat(concat(path, " line "), numstr(lineno)), concat(concat(": '", nm), "' is declared twice at the top level of this module")))
+        }
+        out = tbl_put(out, nm, kind)
+      }
+    }
+    depth = depth + depth_delta(raw)
+  }
+  when depth != 0 {
+    hold unbal = fail(1, concat(path, ": the braces in this module do not balance"))
+  }
+  give out
+}
+
+// ---- the shadowing refusal ------------------------------------------------
+// A parameter, a nested `hold` or a `for` name that collides with one of the
+// module's own exported names is refused, because the rewrite could not then
+// tell a local `total` from the module's `total`.
+
+make shadow_check(text: str, members: str, path: str) -> num {
+  hold n = len(text)
+  hold pos = 0
+  hold depth = 0
+  hold lineno = 0
+  while pos <= n {
+    hold raw = ""
+    while pos < n && sx_index(text, pos) != 10 {
+      raw = concat(raw, chr(sx_index(text, pos)))
+      pos = pos + 1
+    }
+    pos = pos + 1
+    lineno = lineno + 1
+    hold line = trim(raw)
+
+    // parameters of a top-level function
+    when depth == 0 && starts(line, "make ") == 1 {
+      hold op = find_sub(line, "(")
+      when op >= 0 {
+        hold i = op + 1
+        hold ln = len(line)
+        hold prm = ""
+        while i < ln && sx_index(line, i) != 41 {
+          hold c = sx_index(line, i)
+          when is_name_char(c) == 1 {
+            prm = concat(prm, chr(c))
+          } otherwise {
+            when c == 58 {
+              when tbl_has(members, prm) == 1 {
+                hold shp = fail(1, concat(concat(concat(path, " line "), numstr(lineno)), concat(concat(": the parameter '", prm), "' shadows a top-level name of the same module; rename the parameter")))
+              }
+            }
+            prm = ""
+          }
+          i = i + 1
+        }
+      }
+    }
+
+    // a local `hold`, or a `for` name, inside a block
+    when depth > 0 {
+      hold lnm = ""
+      when starts(line, "hold ") == 1 {
+        lnm = first_word(trim(sub(line, 5, len(line))))
+      }
+      when starts(line, "for ") == 1 {
+        lnm = first_word(trim(sub(line, 4, len(line))))
+      }
+      when len(lnm) > 0 && tbl_has(members, lnm) == 1 {
+        hold shl = fail(1, concat(concat(concat(path, " line "), numstr(lineno)), concat(concat(": the local '", lnm), "' shadows a top-level name of the same module; rename the local")))
+      }
+    }
+    depth = depth + depth_delta(raw)
+  }
+  give 0
+}
+
+// ---- the rewriter ---------------------------------------------------------
+// One character walk. Strings and comments are copied verbatim. An
+// identifier is prefixed when it is an exported name, is not preceded by a
+// '.', and is not immediately followed by ':' (a struct field or a
+// parameter annotation).
+
+make rewrite_mod(text: str, members: str, prefix: str) -> str {
+  hold n = len(text)
+  hold i = 0
+  hold out = ""
+  while i < n {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      // a string literal, copied byte for byte
+      out = concat(out, chr(c))
+      i = i + 1
+      hold done = 0
+      while i < n && done == 0 {
+        hold sc = sx_index(text, i)
+        out = concat(out, chr(sc))
+        when sc == 92 && i + 1 < n {
+          out = concat(out, chr(sx_index(text, i + 1)))
+          i = i + 1
+        } otherwise {
+          when sc == 34 {
+            done = 1
+          }
+        }
+        i = i + 1
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+        // a comment, copied to the end of the line
+        while i < n && sx_index(text, i) != 10 {
+          out = concat(out, chr(sx_index(text, i)))
+          i = i + 1
+        }
+      } otherwise {
+        when is_name_char(c) == 1 {
+          hold nm = name_at(text, i)
+          hold after = i + len(nm)
+          hold prevc = 0
+          when i > 0 {
+            prevc = sx_index(text, i - 1)
+          }
+          hold nextc = 0
+          when after < n {
+            nextc = sx_index(text, after)
+          }
+          hold rename = 0
+          when tbl_has(members, nm) == 1 && prevc != 46 && nextc != 58 && is_name_char(prevc) == 0 {
+            rename = 1
+          }
+          when rename == 1 {
+            out = concat(out, concat(prefix, nm))
+          } otherwise {
+            out = concat(out, nm)
+          }
+          i = after
+        } otherwise {
+          out = concat(out, chr(c))
+          i = i + 1
+        }
+      }
+    }
+  }
+  give out
+}
+
+// The program body: `alias.member` becomes the prefixed name. Nothing else
+// is touched, so `point.x` on a struct stays `point.x`.
+make rewrite_main(text: str, aliases: str, allm: str, base: num, srcpath: str) -> str {
+  hold n = len(text)
+  hold i = 0
+  hold out = ""
+  hold lineno = base
+  while i < n {
+    hold c = sx_index(text, i)
+    when c == 10 {
+      lineno = lineno + 1
+      out = concat(out, chr(c))
+      i = i + 1
+    } otherwise {
+      when c == 34 {
+        out = concat(out, chr(c))
+        i = i + 1
+        hold done = 0
+        while i < n && done == 0 {
+          hold sc = sx_index(text, i)
+          out = concat(out, chr(sc))
+          when sc == 92 && i + 1 < n {
+            out = concat(out, chr(sx_index(text, i + 1)))
+            i = i + 1
+          } otherwise {
+            when sc == 34 {
+              done = 1
+            }
+          }
+          i = i + 1
+        }
+      } otherwise {
+        when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+          while i < n && sx_index(text, i) != 10 {
+            out = concat(out, chr(sx_index(text, i)))
+            i = i + 1
+          }
+        } otherwise {
+          when is_name_char(c) == 1 {
+            hold nm = name_at(text, i)
+            hold after = i + len(nm)
+            hold prevc = 0
+            when i > 0 {
+              prevc = sx_index(text, i - 1)
+            }
+            hold isalias = 0
+            when tbl_has(aliases, nm) == 1 && prevc != 46 && is_name_char(prevc) == 0 {
+              isalias = 1
+            }
+            when isalias == 1 {
+              when after >= n || sx_index(text, after) != 46 {
+                hold bareal = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), concat(concat(": '", nm), "' is a module alias, not a value; write alias.member")))
+              }
+              hold mem = name_at(text, after + 1)
+              when len(mem) == 0 {
+                hold nomem = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), concat(concat(": '", nm), ".' with no member name")))
+              }
+              hold modname = tbl_get(aliases, nm)
+              hold full = tbl_get(allm, concat(concat(modname, "."), mem))
+              when len(full) == 0 {
+                hold unkmem = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), concat(concat(concat(": module '", modname), concat("' has no member '", mem)), "'")))
+              }
+              out = concat(out, full)
+              i = after + 1 + len(mem)
+            } otherwise {
+              out = concat(out, nm)
+              i = after
+            }
+          } otherwise {
+            out = concat(out, chr(c))
+            i = i + 1
+          }
+        }
+      }
+    }
+  }
+  give out
+}
+
+// ---- the driver -----------------------------------------------------------
+
+make run() -> num {
+  when arg_count() < 3 {
+    hold usage = fail(2, "usage: sxmod <program.sa> <out.sa>")
+  }
+  hold srcpath = arg(1)
+  hold outpath = arg(2)
+  hold src = read_file(srcpath)
+  when len(src) == 0 {
+    hold nosrc = fail(1, concat(concat("cannot read ", srcpath), " (or it is empty)"))
+  }
+
+  hold n = len(src)
+  hold pos = 0
+  hold lineno = 0
+  hold aliases = "|"
+  hold allm = "|"
+  hold modnames = "|"
+  hold modtext = ""
+  hold body = ""
+  hold inbody = 0
+  hold bodyline = 1
+  hold nmods = 0
+
+  while pos <= n {
+    hold raw = ""
+    while pos < n && sx_index(src, pos) != 10 {
+      raw = concat(raw, chr(sx_index(src, pos)))
+      pos = pos + 1
+    }
+    pos = pos + 1
+    lineno = lineno + 1
+    hold line = trim(raw)
+
+    hold ismod = starts(line, "module ")
+    when ismod == 1 && inbody == 1 {
+      hold late = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), ": a `module` line after the first statement; all module lines come first"))
+    }
+    when ismod == 1 {
+      // module NAME [as ALIAS] from "PATH"
+      hold rest = trim(sub(line, 7, len(line)))
+      hold mname = first_word(rest)
+      when len(mname) == 0 {
+        hold noname = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), ": a `module` line with no module name"))
+      }
+      hold c0 = sx_index(mname, 0)
+      when c0 < 97 || c0 > 122 {
+        hold badcase = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), concat(concat(": the module name '", mname), "' must start with a lowercase letter (an uppercase prefix could collide with a generic specialisation)")))
+      }
+      rest = trim(sub(rest, len(mname), len(rest)))
+      hold alias = mname
+      when starts(rest, "as ") == 1 {
+        rest = trim(sub(rest, 3, len(rest)))
+        alias = first_word(rest)
+        when len(alias) == 0 {
+          hold noalias = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), ": an `as` with no alias"))
+        }
+        rest = trim(sub(rest, len(alias), len(rest)))
+      }
+      when starts(rest, "from ") == 0 {
+        hold nofrom = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), ": a `module` line needs `from \"path\"`"))
+      }
+      rest = trim(sub(rest, 5, len(rest)))
+      when len(rest) < 2 || sx_index(rest, 0) != 34 || sx_index(rest, len(rest) - 1) != 34 {
+        hold noquote = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), ": the module path must be in double quotes"))
+      }
+      hold mpath = sub(rest, 1, len(rest) - 1)
+      when tbl_has(aliases, alias) == 1 {
+        hold dupal = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), concat(concat(": the alias '", alias), "' is already in use")))
+      }
+      when tbl_has(modnames, mname) == 1 {
+        hold dupnm = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), concat(concat(": the module name '", mname), "' is already in use")))
+      }
+      hold mtext = read_file(mpath)
+      when len(mtext) == 0 {
+        hold noread = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), concat(concat(": cannot read the module file '", mpath), "' (or it is empty)")))
+      }
+      hold members = members_of(mtext, mpath)
+      when len(members) < 2 {
+        hold nomembers = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), concat(concat(": the module file '", mpath), "' declares nothing at its top level")))
+      }
+      hold shadowed = shadow_check(mtext, members, mpath)
+      hold prefix = concat(mname, "__")
+
+      // record every member under "modname.member"
+      hold mi = 0
+      hold mn = len(members)
+      while mi < mn {
+        when sx_index(members, mi) == 124 {
+          hold memname = ""
+          hold mj = mi + 1
+          while mj < mn && sx_index(members, mj) != 61 {
+            memname = concat(memname, chr(sx_index(members, mj)))
+            mj = mj + 1
+          }
+          when len(memname) > 0 {
+            allm = tbl_put(allm, concat(concat(mname, "."), memname), concat(prefix, memname))
+          }
+          mi = mj
+        } otherwise {
+          mi = mi + 1
+        }
+      }
+
+      aliases = tbl_put(aliases, alias, mname)
+      modnames = tbl_put(modnames, mname, mpath)
+      modtext = concat(modtext, concat(concat("// ---- module ", mname), concat(concat(" <- ", mpath), "\n")))
+      modtext = concat(modtext, rewrite_mod(mtext, members, prefix))
+      when sx_index(modtext, len(modtext) - 1) != 10 {
+        modtext = concat(modtext, "\n")
+      }
+      nmods = nmods + 1
+      body = concat(body, "\n")
+    } otherwise {
+      when starts(line, "use ") == 1 {
+        hold mainuse = fail(1, concat(concat(concat(srcpath, " line "), numstr(lineno)), ": a `use` splice in a namespaced program; compose with `module` instead"))
+      }
+      when inbody == 0 && len(line) > 0 && starts(line, "//") == 0 {
+        inbody = 1
+        bodyline = lineno
+      }
+      when pos <= n {
+        body = concat(body, concat(raw, "\n"))
+      }
+    }
+  }
+
+  when nmods == 0 {
+    hold nomod = fail(1, concat(srcpath, ": no `module` line, so there is nothing to namespace"))
+  }
+
+  hold rbody = rewrite_main(body, aliases, allm, 1, srcpath)
+  hold out = concat(concat("// generated by tools/sxmod from ", srcpath), "\n")
+  out = concat(out, "// Namespaced modules rewritten into the flat bootstrap dialect.\n")
+  out = concat(out, "// Edit the sources, not this file.\n\n")
+  out = concat(out, modtext)
+  out = concat(out, "\n// ---- program ----\n")
+  out = concat(out, rbody)
+
+  hold wrote = write_file(outpath, out)
+  when wrote != 1 {
+    hold nowrite = fail(1, concat("cannot write ", outpath))
+  }
+  give 0
+}
+
+hold rc = run()

@@ -9,9 +9,12 @@ The probes are proposed closure requirements for the broad full-language goal:
 string interpolation (formerly falsely claimed by a numeric interpolation
 test), named-struct function parameter/return, expression-valued struct fields
 and a checked numeric call as an index. They are NOT existing bootstrap-dialect
-support promises. Failures are expected until implemented. Permanent bootstrap
-exclusions (module namespaces/aliases and nested/list generic arguments) are
-not silently reclassified as implemented by this suite.
+support promises. Failures are expected until implemented. Bootstrap
+exclusions (module namespaces/aliases) are not silently reclassified as
+implemented by this suite. Nested/list generic arguments were on that
+exclusion list until 2026-10-22, when they were implemented and gated by
+`make test-generic-structs-nested` instead; nothing in this suite probes
+them.
 
 Even all four passing would not prove exhaustive language coverage. A reviewed,
 versioned complete language acceptance specification is still required before
@@ -23,7 +26,10 @@ gen3. `make test-struct-functions` separately pins its nominal type checks,
 bounded refusals and GC retention; seed/native signatures are not included.
 After that pass three readiness behaviors still failed (six checks).
 
-Current update: identifier string interpolation also passes on gen2/gen3.
-`make test-string-interpolation` pins its string/number, escaping, import, GC
-and diagnostic bounds. Expression-valued fields and numeric index calls still
-fail: **four checks across two compilers**. Seed/native interpolation is not added.
+2026-10-22 update: expression-valued struct fields and numeric index calls
+pass too, so **all eight checks (four behaviours on gen2 and gen3) pass** and
+`make gen3` runs this suite. `make test-full-language-expr` pins both forms as
+a three-backend parity fixture and pins what stays refused. Seed/native
+interpolation is still not added, and passing four probes is still not a
+full-language claim: `true-selfhost-full` fails closed for want of a
+reviewed acceptance specification.

@@ -1,0 +1,8 @@
+// The negative control for `make test-sxmod`: the SAME two modules, spliced
+// with the flat `use`. Both declare `add`, so this program cannot be
+// compiled by any backend -- seed-min refuses with "duplicate function
+// name", gen2 emits C that cc rejects, native_aot refuses with "declared
+// twice". tools/sxmod exists because of exactly this.
+use "selfhost/sxmod_tests/math.sa"
+use "selfhost/sxmod_tests/text.sa"
+show add(2, 3)

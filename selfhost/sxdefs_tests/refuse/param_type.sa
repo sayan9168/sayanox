@@ -1,0 +1,7 @@
+struct Point {
+  x
+}
+make f(a: Point) -> num {
+  give 1
+}
+show 1

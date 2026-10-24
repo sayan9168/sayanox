@@ -1,0 +1,2 @@
+module outer from "selfhost/sxmod_tests/refuse/mods/nested.sa"
+show outer.f()

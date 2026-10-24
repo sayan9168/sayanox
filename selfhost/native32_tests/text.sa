@@ -1,0 +1,9 @@
+// native32: string literals are data, not values. `show "..."` writes the
+// bytes and a newline; escapes are resolved at compile time.
+show "hello from i386"
+show "tab:\there"
+show "quote:\"q\""
+show "backslash:\\"
+hold n = 3
+show n
+show "done"

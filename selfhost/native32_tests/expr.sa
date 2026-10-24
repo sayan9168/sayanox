@@ -1,0 +1,22 @@
+// native32: the integer expression surface, every form the i386 backend takes.
+// seed-min, gen2 and native_aot run this too; the gate compares all four.
+// A comparison is parenthesised because gen2 refuses a bare `show a == 2`
+// (`test-native32` pins that divergence).
+hold a = 2
+hold b = 3
+show a + b * 4
+show (a + b) * 4
+show a - b
+show 0 - 7
+show 17 % 5
+show 2 * (3 + 4) % 5
+show (a == 2)
+show (a != 2)
+show (a < b)
+show (b <= 3)
+show (a > b)
+show (b >= 9)
+hold c = 0 - 5
+show c
+show c * c
+show c % 3

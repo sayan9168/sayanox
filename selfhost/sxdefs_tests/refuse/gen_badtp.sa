@@ -1,0 +1,4 @@
+make pick<T 9>(a: T) -> T {
+  give a
+}
+show 1

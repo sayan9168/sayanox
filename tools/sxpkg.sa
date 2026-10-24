@@ -15,11 +15,25 @@
 //
 // Offline package convention (docs/REGISTRY.md): a package is a directory
 // .sayanox/registry/<name>/ with main.sa and pkg.meta; pkg.meta carries
-// name=, version=, desc= and sum= (pkgsum of main.sa). `verify` checks every
-// sx.lock entry against its registry copy. Nothing here touches the network.
+// name=, version=, desc=, sum= (pkgsum of main.sa), sha256= (the real digest
+// of main.sa), origin= (provenance: where those bytes came from) and, once
+// `sxpkg sign` has run, signer= and sig= (HMAC-SHA256 over the canonical
+// record). `verify` checks every sx.lock entry against its registry copy.
+// Nothing here touches the network.
+//
+// WHAT THE SIGNATURE IS AND IS NOT: sig= is a KEYED digest, HMAC-SHA256 with
+// a shared secret. It proves the bytes were signed by someone who holds that
+// key and that nothing changed afterwards. It is NOT a public-key signature:
+// a verifier needs the same secret the signer used, so it authenticates a
+// private or self-hosted registry, not an anonymous public download. There is
+// no Ed25519/RSA here and none is claimed.
+
+use "../stdlib/crypto.sa"
 
 // pkgsum: checksum of a file's bytes, h = (h * 31 + byte) mod 1000000007.
 // It detects accidental edits to a locked package; it is not a security hash.
+// sha256= below is the security hash; sum= stays for the older packages and
+// is still written, so an old registry keeps verifying.
 make pkgsum(s: str) -> num {
   hold h = 0
   hold i = 0
@@ -29,6 +43,87 @@ make pkgsum(s: str) -> num {
     hold i = i + 1
   }
   give h
+}
+
+// pkgsha: the SHA-256 of a package's bytes, 64 lowercase hex characters.
+// stdlib/crypto.sa computes it in Sayanox on every backend; nothing shells
+// out to sha256sum.
+make pkgsha(s: str) -> str {
+  give cx_sha256(s)
+}
+
+// sign_record: the exact text a signature covers. Tying the name and the
+// version to the digest is what stops a signed package being replayed under
+// another name or another version.
+make sign_record(nm: str, ver: str, digest: str) -> str {
+  hold rec = "sayanox-pkg-v1\n"
+  hold rec = concat(rec, concat("name=", concat(nm, "\n")))
+  hold rec = concat(rec, concat("version=", concat(ver, "\n")))
+  hold rec = concat(rec, concat("sha256=", concat(digest, "\n")))
+  give rec
+}
+
+// trim_ws: a key file ends with a newline the key itself does not include.
+make trim_ws(s: str) -> str {
+  hold stop = len(s)
+  hold go = 1
+  while go == 1 {
+    hold go = 0
+    when stop > 0 {
+      hold c = sx_index(s, stop - 1)
+      when c == 10 {
+        hold stop = stop - 1
+        hold go = 1
+      }
+      when c == 13 {
+        hold stop = stop - 1
+        hold go = 1
+      }
+      when c == 32 {
+        hold stop = stop - 1
+        hold go = 1
+      }
+      when c == 9 {
+        hold stop = stop - 1
+        hold go = 1
+      }
+    }
+  }
+  hold out = ""
+  hold i = 0
+  while i < stop {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// load_key: the signing secret, from SAYANOX_SIGN_KEY or from the key file
+// (default .sayanox/keys/default.key). An empty answer means there is no key,
+// and every caller reports that instead of pretending the check passed.
+make load_key(keyfile: str) -> str {
+  hold k = getenv("SAYANOX_SIGN_KEY")
+  when len(k) > 0 {
+    give trim_ws(k)
+  }
+  hold f = read_file(keyfile)
+  when len(f) == 0 {
+    give ""
+  }
+  give trim_ws(f)
+}
+
+// key_id: the public name of a key -- the first 16 hex characters of the
+// SHA-256 of the secret. It identifies which key signed without revealing it.
+make key_id(secret: str) -> str {
+  hold d = cx_sha256(secret)
+  hold out = ""
+  hold i = 0
+  while i < 16 {
+    hold out = concat(out, chr(sx_index(d, i)))
+    hold i = i + 1
+  }
+  give out
 }
 
 // decstr: decimal text of a whole number. numstr would round to 6 digits.
@@ -88,6 +183,57 @@ make pkgfield(text: str, key: str) -> str {
     hold p = p + 1
   }
   give ""
+}
+
+// line_is_key: 1 when LINE starts with `key=`
+make line_is_key(line: str, key: str) -> num {
+  hold kl = len(key)
+  when len(line) < kl + 1 {
+    give 0
+  }
+  hold i = 0
+  while i < kl {
+    when sx_index(line, i) != sx_index(key, i) {
+      give 0
+    }
+    hold i = i + 1
+  }
+  when sx_index(line, kl) != 61 {
+    give 0
+  }
+  give 1
+}
+
+// meta_drop: a pkg.meta text without any `key=` line (and without blank ones)
+make meta_drop(text: str, key: str) -> str {
+  hold out = ""
+  hold line = ""
+  hold n = len(text)
+  hold i = 0
+  while i <= n {
+    hold c = 10
+    when i < n {
+      hold c = sx_index(text, i)
+    }
+    when c == 10 {
+      when len(line) > 0 {
+        when line_is_key(line, key) == 0 {
+          hold out = concat(out, concat(line, "\n"))
+        }
+      }
+      hold line = ""
+    } otherwise {
+      hold line = concat(line, chr(c))
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// meta_set: the same text with exactly one `key=value` line, appended last
+make meta_set(text: str, key: str, value: str) -> str {
+  hold out = meta_drop(text, key)
+  give concat(out, concat(key, concat("=", concat(value, "\n"))))
 }
 
 // line_key / line_val: split one `key=value` lock line at its first `=`
@@ -164,7 +310,61 @@ make check_pkg(name: str, version: str, reg: str) -> str {
   when string_eq(want, got) == 0 {
     give concat("main.sa sums to ", concat(got, concat(" but pkg.meta says ", want)))
   }
+  // sha256= is the cryptographic acceptance test. It is only checked when the
+  // package carries one, so a registry written by an older sxpkg still
+  // verifies; a package that HAS a digest must match it exactly.
+  hold wantsha = pkgfield(meta, "sha256")
+  when len(wantsha) > 0 {
+    hold gotsha = pkgsha(src)
+    when cx_eq_hex(wantsha, gotsha) == 0 {
+      give concat("main.sa hashes to ", concat(gotsha, concat(" but pkg.meta says ", wantsha)))
+    }
+  }
   give ""
+}
+
+// check_sig: the signature status of a package, as one word plus a reason.
+//   signed    the sig= matches the key over name/version/sha256
+//   unsigned  the package carries no sig=
+//   nokey     it is signed, but this machine has no key to check it with
+//   nodigest  it is signed but carries no sha256= to sign over
+//   BAD       there is a signature and it does not match
+make check_sig(name: str, reg: str, secret: str) -> str {
+  hold meta = read_file(concat(concat(reg, "/"), concat(name, "/pkg.meta")))
+  when len(meta) == 0 {
+    give "unsigned"
+  }
+  hold sig = pkgfield(meta, "sig")
+  when len(sig) == 0 {
+    give "unsigned"
+  }
+  when len(secret) == 0 {
+    give "nokey"
+  }
+  hold digest = pkgfield(meta, "sha256")
+  when len(digest) == 0 {
+    give "nodigest"
+  }
+  // The digest in pkg.meta is only a claim until main.sa is hashed again.
+  hold src = read_file(concat(concat(reg, "/"), concat(name, "/main.sa")))
+  hold real = pkgsha(src)
+  when cx_eq_hex(digest, real) == 0 {
+    give "BAD main.sa does not match the signed sha256"
+  }
+  hold mver = pkgfield(meta, "version")
+  hold rec = sign_record(name, mver, digest)
+  hold want = cx_hmac(secret, rec)
+  when cx_eq_hex(want, sig) == 1 {
+    hold signer = pkgfield(meta, "signer")
+    when len(signer) == 0 {
+      give "signed"
+    }
+    when string_eq(signer, key_id(secret)) == 0 {
+      give concat("BAD signed by ", concat(signer, concat(" but this key is ", key_id(secret))))
+    }
+    give "signed"
+  }
+  give "BAD signature does not match this key"
 }
 
 // ---- dependency resolution ----------------------------------------------
@@ -984,6 +1184,9 @@ hold is_info = string_eq(command, "info")
 hold is_seed = string_eq(command, "seed")
 hold is_verify = string_eq(command, "verify")
 hold is_sum = string_eq(command, "sum")
+hold is_sha = string_eq(command, "sha256")
+hold is_sign = string_eq(command, "sign")
+hold is_authn = string_eq(command, "authenticate")
 hold is_deps = string_eq(command, "deps")
 hold is_install = string_eq(command, "install")
 hold src = "registry"
@@ -995,6 +1198,17 @@ hold lock_path = rooted(root, "sx.lock")
 hold manifest_path = rooted(root, "sx.toml")
 hold registry_path = rooted(root, ".sayanox/registry")
 hold index_path = joined(registry_path, "INDEX")
+// Signing: the secret comes from SAYANOX_SIGN_KEY, or from a key file --
+// SAYANOX_SIGN_KEYFILE, else .sayanox/keys/default.key. No key is not an
+// error by itself; it only means signatures cannot be checked here.
+hold keys_path = rooted(root, ".sayanox/keys")
+hold key_file = getenv("SAYANOX_SIGN_KEYFILE")
+when len(key_file) == 0 {
+  hold key_file = joined(keys_path, "default.key")
+}
+hold secret = load_key(key_file)
+// SAYANOX_REQUIRE_SIGNED=1 turns `unsigned` and `nokey` into verify failures.
+hold require_signed = string_eq(getenv("SAYANOX_REQUIRE_SIGNED"), "1")
 hold meta_path = ""
 hold index = ""
 hold lock = ""
@@ -1826,11 +2040,17 @@ when is_seed == 1 {
   hold math_src = "make dbl(n) {\n  give n + n\n}\nmake sqr(n) {\n  give n * n\n}\n"
   hold write_status = write_file(concat(concat(registry_path, "/hello"), "/main.sa"), hello_src)
   when write_status == 0 { hold all_ok = 0 }
-  hold write_status = write_file(concat(concat(registry_path, "/hello"), "/pkg.meta"), concat("name=hello\nversion=0.1.0\ndesc=hello world sample\nsum=", concat(decstr(pkgsum(hello_src)), "\n")))
+  hold hello_meta = concat("name=hello\nversion=0.1.0\ndesc=hello world sample\nsum=", concat(decstr(pkgsum(hello_src)), "\n"))
+  hold hello_meta = concat(hello_meta, concat("sha256=", concat(pkgsha(hello_src), "\n")))
+  hold hello_meta = concat(hello_meta, "origin=seed:builtin\n")
+  hold write_status = write_file(concat(concat(registry_path, "/hello"), "/pkg.meta"), hello_meta)
   when write_status == 0 { hold all_ok = 0 }
   hold write_status = write_file(concat(concat(registry_path, "/math"), "/main.sa"), math_src)
   when write_status == 0 { hold all_ok = 0 }
-  hold write_status = write_file(concat(concat(registry_path, "/math"), "/pkg.meta"), concat("name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\nsum=", concat(decstr(pkgsum(math_src)), "\n")))
+  hold math_meta = concat("name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\nsum=", concat(decstr(pkgsum(math_src)), "\n"))
+  hold math_meta = concat(math_meta, concat("sha256=", concat(pkgsha(math_src), "\n")))
+  hold math_meta = concat(math_meta, "origin=seed:builtin\n")
+  hold write_status = write_file(concat(concat(registry_path, "/math"), "/pkg.meta"), math_meta)
   when write_status == 0 { hold all_ok = 0 }
   hold write_status = write_file(index_path, "hello=0.1.0\nmath=0.1.0\n")
   when write_status == 0 { hold all_ok = 0 }
@@ -1924,6 +2144,136 @@ when is_sum == 1 {
   }
 }
 
+// sha256 <file>: the cryptographic digest of a file's bytes, computed by
+// stdlib/crypto.sa. This is the number `publish`, `seed` and `fetch` write
+// into pkg.meta as sha256= and `verify` checks.
+when is_sha == 1 {
+  hold handled = 1
+  when argn < 3 {
+    show "usage: sxpkg sha256 <file>"
+  } otherwise {
+    hold shsrc = read_file(name)
+    when len(shsrc) == 0 {
+      show concat("sxpkg: cannot read ", name)
+    } otherwise {
+      show concat("sxpkg: sha256 ", concat(pkgsha(shsrc), concat(" ", name)))
+    }
+  }
+}
+
+// sign <name>: hash the registry copy of NAME, write sha256=, signer= and
+// sig= into its pkg.meta. The signature is HMAC-SHA256 over
+// `sayanox-pkg-v1 / name / version / sha256`, so it cannot be replayed under
+// a different name or version.
+when is_sign == 1 {
+  hold handled = 1
+  when argn < 3 {
+    show "usage: sxpkg sign <name>"
+  } otherwise {
+    when len(secret) == 0 {
+      show "sxpkg: no signing key; set SAYANOX_SIGN_KEY or write .sayanox/keys/default.key"
+      hold sign_code1 = exit(1)
+    } otherwise {
+      hold sgdir = concat(concat(registry_path, "/"), name)
+      hold sgmain = concat(sgdir, "/main.sa")
+      hold sgmetap = concat(sgdir, "/pkg.meta")
+      when path_kind(sgmain) != 1 {
+        show concat("sxpkg: no registry copy of ", name)
+        hold sign_code2 = exit(1)
+      } otherwise {
+        hold sgsrc = read_file(sgmain)
+        hold sgmeta = read_file(sgmetap)
+        hold sgver = pkgfield(sgmeta, "version")
+        when len(sgver) == 0 {
+          hold sgver = "0.0.0"
+        }
+        hold sgdigest = pkgsha(sgsrc)
+        hold sgmeta = meta_set(sgmeta, "sha256", sgdigest)
+        hold sgmeta = meta_set(sgmeta, "signer", key_id(secret))
+        hold sgsig = cx_hmac(secret, sign_record(name, sgver, sgdigest))
+        hold sgmeta = meta_set(sgmeta, "sig", sgsig)
+        when write_file(sgmetap, sgmeta) == 0 {
+          show concat("sxpkg: cannot write ", sgmetap)
+          hold sign_code3 = exit(1)
+        } otherwise {
+          show concat("sxpkg: signed ", concat(name, concat(" ", sgver)))
+          show concat("  sha256=", sgdigest)
+          show concat("  signer=", key_id(secret))
+          show concat("  sig=", sgsig)
+        }
+      }
+    }
+  }
+}
+
+// authenticate [name]: check the signature of one package, or of every
+// package in the registry. A tampered main.sa, a tampered sha256=, a
+// signature made with another key and a package signed under another name
+// all end here as FAILED.
+when is_authn == 1 {
+  hold handled = 1
+  hold auproblems = 0
+  hold auchecked = 0
+  hold aulist = ""
+  when len(name) > 0 {
+    hold aulist = concat(name, "\n")
+  } otherwise {
+    hold aulist = read_dir(registry_path)
+    when len(aulist) > 0 {
+      when sx_index(aulist, len(aulist) - 1) != 10 {
+        hold aulist = concat(aulist, "\n")
+      }
+    }
+  }
+  hold aupos = 0
+  hold auline = ""
+  while aupos < len(aulist) {
+    hold auc = sx_index(aulist, aupos)
+    when auc == 10 {
+      when len(auline) > 0 {
+        hold audir = concat(concat(registry_path, "/"), auline)
+        when path_kind(audir) == 2 {
+          hold auchecked = auchecked + 1
+          hold austat = check_sig(auline, registry_path, secret)
+          when string_eq(austat, "signed") == 1 {
+            show concat("sxpkg: authentic ", concat(auline, concat(" signer=", pkgfield(read_file(concat(audir, "/pkg.meta")), "signer"))))
+          } otherwise {
+            when string_eq(austat, "unsigned") == 1 {
+              show concat("sxpkg: UNSIGNED ", auline)
+              when require_signed == 1 {
+                hold auproblems = auproblems + 1
+              }
+            } otherwise {
+              when string_eq(austat, "nokey") == 1 {
+                show concat("sxpkg: NOKEY ", concat(auline, " (signed; no key here to check it)"))
+                when require_signed == 1 {
+                  hold auproblems = auproblems + 1
+                }
+              } otherwise {
+                show concat("sxpkg: FAILED ", concat(auline, concat(": ", austat)))
+                hold auproblems = auproblems + 1
+              }
+            }
+          }
+        }
+      }
+      hold auline = ""
+    } otherwise {
+      hold auline = concat(auline, chr(auc))
+    }
+    hold aupos = aupos + 1
+  }
+  when auchecked == 0 {
+    show "sxpkg: nothing to authenticate"
+  }
+  when auproblems == 0 {
+    show concat("sxpkg: authenticate ok (", concat(numstr(auchecked), " packages)"))
+  } otherwise {
+    show concat("sxpkg: authenticate FAILED (", concat(numstr(auproblems), " problem(s))"))
+    hold authn_code = exit(1)
+  }
+}
+
 // verify: every sx.lock entry must match its registry copy (version and sum)
 when is_verify == 1 {
   hold handled = 1
@@ -1956,6 +2306,30 @@ when is_verify == 1 {
             hold why = check_pkg(vkey, vval, registry_path)
             when len(why) == 0 {
               show concat("sxpkg: verified ", concat(vkey, concat(" ", vval)))
+              // The signature is reported only when there is something to
+              // report: a signed package, or a run that demanded signatures.
+              // An unsigned registry prints exactly what it printed before.
+              hold vstat = check_sig(vkey, registry_path, secret)
+              when string_eq(vstat, "signed") == 1 {
+                show concat("sxpkg: signature ok ", vkey)
+              } otherwise {
+                when string_eq(vstat, "unsigned") == 1 {
+                  when require_signed == 1 {
+                    hold problems = problems + 1
+                    show concat("sxpkg: UNSIGNED ", vkey)
+                  }
+                } otherwise {
+                  when string_eq(vstat, "nokey") == 1 {
+                    show concat("sxpkg: NOKEY ", concat(vkey, " (signed; no key here to check it)"))
+                    when require_signed == 1 {
+                      hold problems = problems + 1
+                    }
+                  } otherwise {
+                    hold problems = problems + 1
+                    show concat("sxpkg: SIGNATURE ", concat(vkey, concat(": ", vstat)))
+                  }
+                }
+              }
             } otherwise {
               hold problems = problems + 1
               show concat("sxpkg: MISMATCH ", concat(vkey, concat(": ", why)))
@@ -2255,7 +2629,11 @@ when is_publish == 1 {
   }
   hold pubcopied = concat(concat(pubdir, "/"), "main.sa")
   when path_kind(pubcopied) == 1 {
-    hold pubmeta = concat(pubmeta, concat("sum=", concat(decstr(pkgsum(read_file(pubcopied))), "\n")))
+    hold pubsrc = read_file(pubcopied)
+    hold pubmeta = concat(pubmeta, concat("sum=", concat(decstr(pkgsum(pubsrc)), "\n")))
+    // the cryptographic digest and where these bytes came from
+    hold pubmeta = concat(pubmeta, concat("sha256=", concat(pkgsha(pubsrc), "\n")))
+    hold pubmeta = concat(pubmeta, concat("origin=publish:", concat(path_real("main.sa"), "\n")))
   }
   hold pubw2 = write_file(concat(concat(pubdir, "/"), "pkg.meta"), pubmeta)
   when pubw2 == 0 {
@@ -2391,6 +2769,10 @@ when is_fetch_local == 1 {
       } otherwise {
         hold flsum = decstr(pkgsum(fltext))
         hold flmeta = concat(concat(concat(concat("name=", flname), "\nversion=0.0.0\n"), "sum="), concat(flsum, "\n"))
+        // provenance of a download: the digest of exactly these bytes and the
+        // place they were read from. Neither authenticates the source.
+        hold flmeta = concat(flmeta, concat("sha256=", concat(pkgsha(fltext), "\n")))
+        hold flmeta = concat(flmeta, concat("origin=fetch:", concat(fldisp, "\n")))
         hold flok = ensure_dir(registry_path)
         when ensure_dir(pkg_path) == 0 {
           hold flok = 0
@@ -2563,14 +2945,16 @@ when handled == 0 {
     hold ask_help = 1
   }
   when ask_help == 1 {
-    show "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"
+    show "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|sha256|sign|authenticate|fetch"
     show concat("  ONLINE registry: ", registry_url)
     show "  override: SAYANOX_REGISTRY=https://... (or file:///path/to/registry)"
     show "  network is opt-in: SAYANOX_ONLINE=1 or 'sxpkg --online <command>'"
-    show "  offline commands: init add list deps info search seed verify sum install-local publish"
+    show "  offline commands: init add list deps info search seed verify sum sha256 sign authenticate install-local publish"
+    show "  signing key: SAYANOX_SIGN_KEY, or SAYANOX_SIGN_KEYFILE, or .sayanox/keys/default.key"
+    show "  SAYANOX_REQUIRE_SIGNED=1 makes verify refuse an unsigned or uncheckable package"
   } otherwise {
     show concat("sxpkg: unknown command '", concat(command, "'"))
-    show "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|fetch"
+    show "sxpkg: init|sync|add|list|deps|install|install-local|search|publish|remove|info|seed|verify|sum|sha256|sign|authenticate|fetch"
     hold help_code = exit(2)
   }
 }

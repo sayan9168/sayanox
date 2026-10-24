@@ -1,0 +1,5 @@
+struct Box<T> {
+  v
+}
+hold b: Box<num> = Box<num> { v: 1 }
+show b.v

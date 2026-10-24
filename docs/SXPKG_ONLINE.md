@@ -35,6 +35,15 @@ No stronger integrity mechanism was added: `sum=` is not cryptography.
    detects accidental edits. It is **not** a cryptographic hash and does not
    prove who published a package. The design does not claim otherwise.
 
+   *Updated 2026-10-22.* `pkg.meta` now also carries `sha256=` (a real
+   cryptographic digest of `main.sa`, from `stdlib/crypto.sa`) and, after
+   `sxpkg sign`, `signer=`/`sig=` (HMAC-SHA256 over name, version and digest).
+   `sum=` is unchanged and still checked, so old registries keep verifying.
+   The signature is **symmetric**: checking it needs the same secret that
+   signed it, so it protects a tree you share a key with, not a download from
+   a stranger. See [REGISTRY.md](REGISTRY.md) for the exact fields, commands
+   and statuses.
+
 ## Current surface (what the code does)
 
 | Command | Where it runs | What it does | Network |
@@ -128,8 +137,8 @@ The online path is tested against a local `file://` registry by
 
 | Gap | Why it matters | Why not now |
 |---|---|---|
-| Signed index or signed `pkg.meta` | Without a signature a compromised host could publish a matching `sum=` | needs a key and a trust policy, which is a product decision |
-| A cryptographic hash | `pkgsum` is a 31-multiplier hash; collisions are easy to make on purpose | changing the sum changes every `sum=` in the repository and the test fixtures |
+| ~~A cryptographic hash~~ **done 2026-10-22** | `pkgsum` is a 31-multiplier hash; collisions are easy to make on purpose (`make test-sxpkg-crypto` builds one) | `sha256=` was added *beside* `sum=` instead of replacing it, so no existing `sum=` or fixture changed |
+| ~~Signed `pkg.meta`~~ **partly done 2026-10-22** | Without a signature a compromised host could publish a matching `sum=` | `sxpkg sign`/`authenticate` add a keyed (HMAC) signature, which needs a shared secret; a **public-key** signature and a signed *index* still need a key distribution and trust policy, which is a product decision |
 | Version ranges | `deps=` uses exact pins only, so resolution is trivial and reproducible | ranges need a solver; exact pins are the honest first step |
 | `publish` upload | Publishing is a commit to this repository today; `publish` writes `pkg.meta`/`main.sa` into the local registry and `INDEX` and says so. `SAYANOX_ONLINE=1` deliberately changes nothing here | an upload API is a server design, not a client one, and an unreviewed upload path would defeat the registry's only trust mechanism (a commit others can read) |
 | Exit codes from the Sayanox binary | The shell wrapper derives them from `FAILED`/`DEP` lines | the language has no exit builtin; adding one changes the compiler bootstrap |
@@ -137,8 +146,11 @@ The online path is tested against a local `file://` registry by
 ## What must not be claimed
 
 * That sxpkg is a secure package manager. It is a checksummed local lock file
-  with an optional shell transfer.
-* That online packages are verified by a signature.
+  with an optional shell transfer -- now with a cryptographic digest and an
+  optional keyed signature, which is not the same thing as a trust model.
+* That online packages are verified by a *public-key* signature. They are not:
+  `sxpkg authenticate` checks an HMAC with a secret both sides already share,
+  and a package nobody signed reports `UNSIGNED`.
 * That the bootstrap needs, or tests, the network. It does not: the two targets
   that cover this path use a `file://` registry and `.invalid` host names.
 * That a command "works offline" only when it never mentions a URL. `install`
@@ -158,10 +170,13 @@ roll back newly owned package directories. This is not a crash-proof,
 concurrent multi-file transaction: no locking, fsync or SIGKILL/power-loss
 recovery is claimed.
 
-Fetch records the checksum of the bytes it just received. There is no trusted
-expected digest and no publisher identity; this detects later accidental edits,
-**not a malicious first download**, substitution or deliberate collisions.
-`source=` is not required or used as an integrity/provenance assertion.
+Fetch records the checksum of the bytes it just received -- since 2026-10-22
+that is `sum=` *and* `sha256=`, plus `origin=fetch:<url>`. There is still no
+trusted expected digest and no publisher identity: this detects later edits,
+**not a malicious first download** or substitution. A deliberate collision is
+now ruled out for the recorded bytes (SHA-256), but the bytes are still
+whatever the host sent. `source=`/`origin=` are provenance notes, not
+integrity assertions.
 
 Package-name validation is implemented in `tools/sxpkg.sa` and exposed by the
 `check-name` subcommand. The wrapper uses it before fetch/add path construction

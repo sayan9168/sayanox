@@ -1,0 +1,101 @@
+# Hard gates, 2026-10-22 (excerpt)
+#
+#   make doctor; make true-selfhost; make gen3; make native-test
+#
+# on the tree that lets a struct-literal field be a whole checked expression
+# (`Size { bytes: len(text) + 1 }`, `(2 + 3) * 4`, `offset() + twice(3)`,
+# `head + "anox"`) and lets an index call a program function declared
+# `-> num` (`values[twice(offset()) + 1]`). Only selfhost/compiler_min.sa
+# changed; seed-min and native already accepted both forms, so this is a
+# gen2 parity fix. Plain make, no -o. 38 min 11 s.
+Thu Oct 22 17:07:28 UTC 2026
+Thu Oct 22 17:45:39 UTC 2026
+
+## The four markers
+# (each target was run separately and its own log captured, so the line
+#  numbers below are within that target's log, not one combined file)
+doctor.log:17:DOCTOR-OK: core tool set is complete (not an audit of optional test utilities)
+true-selfhost.log:1294:=== TRUE-SELFHOST-MIN-OK ===
+gen3.log:46:=== GEN3-OK ===
+native-test.log:1156:=== NATIVE-TEST-OK ===
+HARDGATES-EXIT=0
+#
+#   doctor RC=0          17:07:28
+#   true-selfhost RC=0   17:20:00
+#   gen3 RC=0            17:33:23
+#   native-test RC=0     17:45:39
+#
+# [OK] counts: doctor 1, true-selfhost 225, gen3 32, native-test 217.
+
+## gen3 == gen4
+gen3.log:13:[OK] byte-identical gen3 == gen4
+
+## This increment's gates, as they ran inside the aggregates
+# (test-full-language-expr is new and was added to the true-selfhost-min
+#  list; test-full-language-readiness is not new, but until today it was
+#  reachable only through true-selfhost-full, which fails closed on purpose,
+#  so no hard gate had ever run it. It is now a step of the gen3 target.)
+true-selfhost.log:1116:[OK] native: the same expressions and index calls print the same bytes as seed-min
+true-selfhost.log:1117:[OK] an index call is checked: an unknown function and a wrong argument count are refused by seed-min, gen2 and native
+true-selfhost.log:1118:[OK] a string-returning call as an index: refused by gen2 and native; seed-min emits C that cannot compile (documented divergence)
+true-selfhost.log:1119:[OK] expression fields and index calls: seed-min, gen2 and native agree on eleven lines; full-language self-host is still NOT claimed (true-selfhost-full fails closed)
+gen3.log:36:[OK] broader-language readiness: gen2 string_interpolation
+gen3.log:37:[OK] broader-language readiness: gen2 struct_function
+gen3.log:38:[OK] broader-language readiness: gen2 field_expression
+gen3.log:39:[OK] broader-language readiness: gen2 index_call
+gen3.log:40:[OK] broader-language readiness: gen3 string_interpolation
+gen3.log:41:[OK] broader-language readiness: gen3 struct_function
+gen3.log:42:[OK] broader-language readiness: gen3 field_expression
+gen3.log:43:[OK] broader-language readiness: gen3 index_call
+gen3.log:44:[OK] closure probes pass; this is not an exhaustive full-language acceptance specification
+#
+# The older index/expression gates that pin what must stay refused also ran
+# unchanged inside native-test:
+native-test.log:74:[OK] gen2 index expressions: arithmetic/field indexes in values, conditions, for bounds and typed bodies (39 values identical on seed-min, gen2 and native); 6 unsupported index forms refused with a clear diagnostic and a #error
+native-test.log:141:[OK] gen2 expression lowering: a string chain in a give/condition (11 values) and len()/a nested index inside [ ] in every position (18 values), identical on seed-min, gen2 and native; 5 unsupported forms refused with a clear diagnostic and a #error
+
+## The first attempt failed, and that is the point of the hard gates
+#
+#   Thu Oct 22 16:47 UTC   attempt 1
+#   selfhost/gen2.c:7826:29: error: 'flrun' undeclared (first use in this function)
+#   selfhost/gen2.c:7831:33: error: 'flc' undeclared (first use in this function)
+#   make: *** [Makefile:3804: true-selfhost-min] Error 1
+#
+# The new value scanner declared `hold flrun` / `hold flc` in three sibling
+# `when` blocks. seed-min hoists a function's locals, so gen1_min.c compiled
+# and every fixture passed in the dev loop; gen1_min scopes a `hold` to its
+# block, so the second sibling emitted an assignment with no declaration and
+# gen2.c would not compile. Fixed by giving each sibling block its own names
+# (flruna/flca, flrunb/flcb/flcb2, flrunc/flcc, flrund/flcd) with a comment
+# saying why. The run recorded above is the re-run after that fix.
+
+## Run on the same tree, outside the four aggregates
+#
+#   make -o restore-compiler -o selfhost/gen2 -o selfhost/gen3 \
+#       test-full-language-expr test-full-language-readiness \
+#       test-gen2-index-expr test-gen2-expr-lowering test-gen2-index-mod \
+#       test-generic-structs test-generic-structs-nested test-struct2 \
+#       test-nest test-struct-functions test-list-struct-fields \
+#       test-gen2-list-struct-fields test-type-refusals test-doc-claims \
+#       test-language-deps               -> 101 [OK], exit 0
+#
+#   sh selfhost/test_full_language_readiness.sh   -> 8 [OK] (four probes on
+#       gen2 and on gen3, each with cmp against its .want)
+#
+# test-language-deps is in that list because the new recipe must stay free of
+# awk/sed/bash/python; test-doc-claims because this increment rewrites the
+# readiness table in docs/FULL_LANGUAGE_SELFHOST.md.
+
+## After the run above
+#
+# Nothing changed after 17:45 except this folder. Every other file in the
+# commit was already on disk when the run started at 17:07:28 --
+# selfhost/compiler_min.sa 17:06, Makefile 16:49, the fixture 16:47 and the
+# four documents 16:51-16:52 -- so the markers above describe the committed
+# bytes exactly.
+#
+# The claim itself is unchanged: `make true-selfhost-full` still refuses.
+#
+#   $ make true-selfhost-full
+#   ...
+#   refusing a full-language claim: ... exit 1

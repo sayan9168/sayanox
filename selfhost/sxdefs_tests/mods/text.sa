@@ -1,0 +1,4 @@
+// text.sa -- the second level of the splice.
+make shout(s: str) -> str {
+  give concat(s, "!")
+}
