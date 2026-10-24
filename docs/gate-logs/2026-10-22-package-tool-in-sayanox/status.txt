@@ -1,0 +1,13 @@
+gen2 ok
+doctor ok
+doc-claims ok
+sxdiag ok
+test-pkgs ok
+sxpkg-polish ok
+sxpkg-online-local ok
+sxpkg-online-optin ok
+sxpkg-hardening ok
+language-deps ok
+gen3 ok
+native-test ok
+all-sayanox-fails-closed FAILED (2)

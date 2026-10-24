@@ -1,0 +1,14 @@
+[OK] compiler module (checked-in source verified; no decoder used)
+[OK] restore-compiler (checked-in source verified; no base64/gzip used)
+./selfhost/seed/sxc_seed_min selfhost/compiler_min.sa > selfhost/gen1_min.c
+cc -O2 -o selfhost/gen1_min selfhost/gen1_min.c
+[OK] gen1_min
+./selfhost/gen1_min selfhost/compiler_min.sa selfhost/gen2.c
+cc -O2 -o selfhost/gen2 selfhost/gen2.c
+[OK] gen2
+./selfhost/gen2 tools/sxpkg.sa tools/sxpkg.c >/dev/null
+cc -O2 -o tools/sxpkg tools/sxpkg.c
+[OK] Sayanox local package-lock tool built from tools/sxpkg.sa
+cd selfhost/seed_tests/sxpkg-polish && ../../../tools/sxpkg init >/dev/null
+cd selfhost/seed_tests/sxpkg-polish && ../../../tools/sxpkg add nosuch 1.0 | grep -q 'nosuch has no local registry copy'
+[OK] sxpkg offline polish: add note, verify/install-local exit codes, unknown command rc 2, publish once

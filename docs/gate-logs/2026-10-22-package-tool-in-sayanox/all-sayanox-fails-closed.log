@@ -1,0 +1,20 @@
+=== ALL-SAYANOX: next phase, not implemented ===
+  seed                           2035 lines  selfhost/seed/sxc_seed_min.c
+  native-backend                 4498 lines  selfhost/native_aot.c
+  build-driver                   5188 lines  Makefile
+  build-scripts                    14 files  POSIX sh
+  sayanox-source                  161 files  .sa
+  done: compiler, formatter, the whole package tool (one Sayanox
+        binary since 2026-10-22: every command, the online opt-in
+        policy, SAYANOX_ROOT and its exit statuses; only curl/wget
+        is still an external program), language server, IR
+        translator, LSP folder index, LSP test client, byte-buffer
+        + bitwise builtins, the read_bytes binary reader, the native
+        backend's ELF image writer + rel32 linker (tools/sxlink.sa)
+        and its x86-64 instruction encoder (tools/sxencode.sa),
+        both byte-identical to C, the run_command(cmd) and
+        getenv(name) driver builtins, and the diagnostic suites
+        (tools/sxdiag.sa) that replaced four sh drivers
+  plan: docs/ALL_SAYANOX_PHASE.md
+[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim
+make: *** [Makefile:3825: all-sayanox] Error 1

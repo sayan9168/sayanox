@@ -1,0 +1,35 @@
+./selfhost/gen2 selfhost/compiler_min.sa selfhost/gen3.c >/dev/null
+cc -O2 -o selfhost/gen3 selfhost/gen3.c
+./selfhost/gen3 selfhost/seed_tests/g3_re.sa selfhost/seed_tests/g3_re.c >/dev/null
+cc -O2 -o selfhost/seed_tests/g3_re selfhost/seed_tests/g3_re.c
+./selfhost/gen3 selfhost/seed_tests/g3_wh.sa selfhost/seed_tests/g3_wh.c >/dev/null
+cc -O2 -o selfhost/seed_tests/g3_wh selfhost/seed_tests/g3_wh.c
+./selfhost/gen3 selfhost/seed_tests/g3_wn.sa selfhost/seed_tests/g3_wn.c >/dev/null
+cc -O2 -o selfhost/seed_tests/g3_wn selfhost/seed_tests/g3_wn.c
+./selfhost/gen3 selfhost/seed_tests/g3_mod.sa selfhost/seed_tests/g3_mod.c >/dev/null
+cc -O2 -o selfhost/seed_tests/g3_mod selfhost/seed_tests/g3_mod.c
+[OK] gen3 modulo + else
+./selfhost/gen3 selfhost/compiler_min.sa selfhost/gen4.c >/dev/null
+[OK] byte-identical gen3 == gen4
+[OK] compiler source uses live module, generic function, generic struct size state and concrete path fields; gen1-min/gen2/gen3 compile the module fixture; gen3==gen4 (not full-language self-host)
+[OK] gen2 named struct functions: values (O0/O2)
+[OK] gen2 named struct functions: gc (O0/O2)
+[OK] gen2 named struct functions: gc_register (O0/O2)
+[OK] gen2 struct signature mismatches and bounded-form refusals (14 cases)
+[OK] gen3 named struct functions: values (O0/O2)
+[OK] gen3 named struct functions: gc (O0/O2)
+[OK] gen3 named struct functions: gc_register (O0/O2)
+[OK] gen3 struct signature mismatches and bounded-form refusals (14 cases)
+[OK] gen2 identifier interpolation: values (O0/O2)
+[OK] gen2 identifier interpolation: import (O0/O2)
+[OK] gen2 identifier interpolation: gc (O0/O2)
+[OK] gen2 identifier interpolation: escaped (O0/O2)
+[OK] gen2 identifier interpolation: struct_integration (O0/O2)
+[OK] gen2 interpolation: 16-hole boundary and 10 source-diagnostic refusals
+[OK] gen3 identifier interpolation: values (O0/O2)
+[OK] gen3 identifier interpolation: import (O0/O2)
+[OK] gen3 identifier interpolation: gc (O0/O2)
+[OK] gen3 identifier interpolation: escaped (O0/O2)
+[OK] gen3 identifier interpolation: struct_integration (O0/O2)
+[OK] gen3 interpolation: 16-hole boundary and 10 source-diagnostic refusals
+=== GEN3-OK ===
