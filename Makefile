@@ -1158,7 +1158,7 @@ test-native-mem: $(NATIVE_BIN)
 # print `8.38861e+06`.
 # ---------------------------------------------------------------------------
 .PHONY: test-seed-gc
-test-seed-gc: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN)
+test-seed-gc: $(GEN2) $(SEED_MIN_BIN) seed-bin
 	mkdir -p $(TESTS)
 	# ---- build all five fixtures with all three seed/gen2 backends ----
 	set -e; for f in churn grow retain ops tmp; do \
@@ -2076,7 +2076,7 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 #
 # What it does NOT claim: this is not the full native runtime. The current
 # subset has integers, static string spans, len(), byte indexing, and bounded
-# variable-to-variable concat, but no general string operations, lists, structs, functions,
+#     variable/literal concat, but no general string operations, lists, structs, functions,
 # FP code generation, GC or general file API; `/` remains refused because
 # Sayanox numbers are doubles. `sxisaexec` runs the tested AArch64/RV64 subset.
 # See docs/NATIVE32.md; native_aot remains the x86-64 backend.
@@ -2179,14 +2179,14 @@ test-native32: $(SEED_MIN_BIN) $(GEN2) $(N32_BIN)
 	@echo '[OK] i386 refusals: division, fractions, string concatenation/NUL, string type misuse, len(number), functions, lists, unknown names, &&, 2^31 and unclosed blocks are each refused with a diagnostic and a non-zero exit'
 	@# and the refused programs that are legal Sayanox still run elsewhere,
 	@# so this is a subset boundary rather than a broken front end
-	@for f in division strvalue nulstring function list concat_literal concat_expression; do \
+	@for f in division strvalue nulstring function list concat_call concat_expression; do \
 	  ./$(SEED_MIN_BIN) $(N32_T)/refuse/$$f.sa > $(TESTS)/n32/ok_$$f.c; \
 	  $(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/n32/ok_$$f $(TESTS)/n32/ok_$$f.c; \
 	  ./$(TESTS)/n32/ok_$$f > /dev/null \
 	    || { echo "[FAIL] refuse/$$f.sa does not even run on seed-min, so it is a broken program and proves nothing"; exit 1; }; \
 	done
 	@$(call assert-out,./$(TESTS)/n32/ok_division,3.5)
-	@echo '[OK] i386 subset boundary: all seven refused programs that are legal Sayanox still run on seed-min (7 / 2 is 3.5; concat with a literal or expression operand remains outside this backend subset)'
+	@echo '[OK] i386 subset boundary: all seven refused programs that are legal Sayanox still run on seed-min (7 / 2 is 3.5; concat with a nested string expression remains outside this backend subset)'
 	@./$(N32_BIN) $(N32_T)/heap_exhaust.sa $(TESTS)/n32/heap_exhaust.i386
 	@chmod +x $(TESTS)/n32/heap_exhaust.i386
 	@if [ "$$(cat $(TESTS)/n32/runnable)" = 1 ]; then \
@@ -2487,9 +2487,9 @@ test-trust-anchor: $(GEN2) $(SXA_BIN) $(SEED_MIN_BIN)
 	  || { echo "[FAIL] the audit record names more than one C file"; exit 1; }
 	@test "$$(git ls-files '*.c' '*.h')" = "selfhost/seed/sxc_seed_min.c" \
 	  || { echo "[FAIL] tracked .c/.h files exist outside selfhost/seed/sxc_seed_min.c:"; git ls-files '*.c' '*.h'; exit 1; }
-	@test -z "$$(git ls-files '*.sh')" \
-	  || { echo "[FAIL] tracked .sh files remain in the repository:"; git ls-files '*.sh'; exit 1; }
-	@echo '[OK] one anchor: selfhost/seed/sxc_seed_min.c is the ONLY tracked .c/.h file in the entire repository, and 0 tracked .sh scripts remain'
+	@test -z "$$(find . -path './.git' -prune -o -type f -name '*.sh' -print)" \
+	  || { echo "[FAIL] .sh files remain in the working tree:"; find . -path './.git' -prune -o -type f -name '*.sh' -print; exit 1; }
+	@echo '[OK] one anchor: selfhost/seed/sxc_seed_min.c is the ONLY tracked .c/.h file in the entire repository, and no .sh scripts remain in the working tree'
 	@# 3. the external surface of the anchor
 	@test "$$(grep -c '^#include' $(SEED_MIN_C))" = 4 \
 	  || { echo "[FAIL] the seed's #include set changed size"; grep '^#include' $(SEED_MIN_C); exit 1; }
@@ -4262,9 +4262,9 @@ DEP_SHIM_LOG := $(TESTS)/depshim.log
 .PHONY: test-language-deps
 test-language-deps: $(GEN2) $(SXC_NATIVE_BIN) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN) tools/sxlsp_probe tools/sxpkg_transfer_test tools/sxpack
 	@# ---- static ----
-	@if [ -n "$$(git ls-files '*.sh')" ]; then \
-	  echo "[FAIL] tracked .sh scripts remain in the repository:"; \
-	  git ls-files '*.sh'; exit 1; fi
+	@if [ -n "$$(find . -path './.git' -prune -o -type f -name '*.sh' -print)" ]; then \
+	  echo "[FAIL] .sh scripts remain in the working tree:"; \
+	  find . -path './.git' -prune -o -type f -name '*.sh' -print; exit 1; fi
 	@if grep -nE '^	[@-]*[[:space:]]*(awk|sed)([[:space:]]|$$)' Makefile; then \
 	  echo "[FAIL] a Makefile recipe invokes awk or sed"; exit 1; fi
 	@test ! -e tools/lsp_workspace_bind.awk || { echo "[FAIL] the old awk LSP binder still exists"; exit 1; }

@@ -1,3 +1,0 @@
-hold text = "x"
-hold invalid = concat(text, "y")
-show invalid

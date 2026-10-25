@@ -46,7 +46,7 @@ new code:
   bounded Sayanox subset to i386, AArch64 and RV64IM Linux ELF with its own
   front end, encoders and container writers. Integer expression parity and
   ELF layouts are pinned; `make test-sxisaexec` also checks static-string
-  values and bounded variable-to-variable concat end-to-end across six
+  values and bounded variable/literal concat end-to-end across six
   execution paths. Fifteen unsupported programs are refused on each target.
   **This is not the full compiler/runtime**: general string operations, lists,
   structs, user functions, FP code generation, file I/O and GC remain open.

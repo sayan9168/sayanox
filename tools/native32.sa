@@ -30,7 +30,7 @@
 //     show "literal"                       the literal, then a newline
 //     show STRING_NAME                     writes the string's current span
 //     STRING_NAME[INDEX_EXPR]              byte value; negative index from end
-//     concat(STRING_NAME, STRING_NAME)     bounded heap-backed concatenation
+//     concat(STRING_ARG, STRING_ARG)       bounded heap-backed concatenation; each arg is a variable or literal
 //     when <expression> { ... }            zero is false, anything else true
 //     } otherwise { ... }
 //     while <expression> { ... }
@@ -92,6 +92,18 @@ make put_u16(xs: list, v: num) -> list {
 make put_u32(xs: list, v: num) -> list {
   xs = put_u16(xs, bit_and(v, 65535))
   xs = put_u16(xs, bit_and(shr(v, 16), 65535))
+  give xs
+}
+
+make set_u32(xs: list, at: num, v: num) -> list {
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  xs[at] = bit_and(u, 255)
+  xs[at + 1] = bit_and(shr(u, 8), 255)
+  xs[at + 2] = bit_and(shr(u, 16), 255)
+  xs[at + 3] = bit_and(shr(u, 24), 255)
   give xs
 }
 
@@ -236,9 +248,8 @@ make is_text_literal(s: str) -> num {
   give 1
 }
 
-// A deliberately small dynamic-string operation: concat(NAME, NAME).
-// Arguments are names rather than nested expressions so the backend can keep
-// each runtime value's pointer/length representation explicit.
+// A deliberately bounded dynamic-string operation: concat(NAME_OR_LITERAL,
+// NAME_OR_LITERAL). Arguments are not arbitrary string expressions.
 make split_concat(s: str) -> str {
   hold n = len(s)
   when starts(s, "concat(") == 0 || n < 9 || sx_index(s, n - 1) != 41 {
@@ -247,23 +258,44 @@ make split_concat(s: str) -> str {
   hold body = sub(s, 7, n - 1)
   hold bn = len(body)
   hold comma = 0 - 1
+  hold quoted = 0
+  hold escaped = 0
   hold i = 0
   while i < bn {
-    when sx_index(body, i) == 44 {
-      when comma >= 0 {
-        give "!concat accepts exactly two string variables"
+    hold c = sx_index(body, i)
+    when quoted == 1 {
+      when escaped == 1 {
+        escaped = 0
+      } otherwise {
+        when c == 92 {
+          escaped = 1
+        } otherwise {
+          when c == 34 {
+            quoted = 0
+          }
+        }
       }
-      comma = i
+    } otherwise {
+      when c == 34 {
+        quoted = 1
+      } otherwise {
+        when c == 44 {
+          when comma >= 0 {
+            give "!concat accepts exactly two string arguments"
+          }
+          comma = i
+        }
+      }
     }
     i = i + 1
   }
   when comma < 0 {
-    give "!concat requires two string variables"
+    give "!concat requires two string arguments"
   }
   hold left = trim(sub(body, 0, comma))
   hold right = trim(sub(body, comma + 1, bn))
-  when len(left) == 0 || len(right) == 0 || string_eq(first_word(left), left) == 0 || string_eq(first_word(right), right) == 0 {
-    give "!concat arguments must be variable names"
+  when len(left) == 0 || len(right) == 0 || (is_text_literal(left) == 0 && string_eq(first_word(left), left) == 0) || (is_text_literal(right) == 0 && string_eq(first_word(right), right) == 0) {
+    give "!concat arguments must be string variable names or string literals"
   }
   give concat(concat(left, chr(1)), right)
 }
@@ -2021,11 +2053,37 @@ make run() -> num {
     when act == 10 {
       hold leftslot = slot_of(names, callleft)
       hold rightslot = slot_of(names, callright)
-      when leftslot < 0 || rightslot < 0 {
-        hold missing_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat inputs must be previously declared string variables"))
+      when leftslot < 0 && is_text_literal(callleft) == 1 {
+        leftslot = len(data)
+        data = put_zeros(data, 8)
+        hold leftlitoff = len(data)
+        data = append_text(data, sub(callleft, 1, len(callleft) - 1))
+        hold leftlitlen = len(data) - leftlitoff
+        hold literal_base = 4198400
+        when arch == 0 {
+          literal_base = 134516736
+        }
+        data = set_u32(data, leftslot, literal_base + leftlitoff)
+        data = set_u32(data, leftslot + 4, leftlitlen)
       }
-      when slot_of(strnames, callleft) < 0 || slot_of(strnames, callright) < 0 {
-        hold nonstring_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat requires two string variables"))
+      when rightslot < 0 && is_text_literal(callright) == 1 {
+        rightslot = len(data)
+        data = put_zeros(data, 8)
+        hold rightlitoff = len(data)
+        data = append_text(data, sub(callright, 1, len(callright) - 1))
+        hold rightlitlen = len(data) - rightlitoff
+        hold literal_base2 = 4198400
+        when arch == 0 {
+          literal_base2 = 134516736
+        }
+        data = set_u32(data, rightslot, literal_base2 + rightlitoff)
+        data = set_u32(data, rightslot + 4, rightlitlen)
+      }
+      when leftslot < 0 || rightslot < 0 {
+        hold missing_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat inputs must be declared string variables or string literals"))
+      }
+      when (slot_of(names, callleft) >= 0 && slot_of(strnames, callleft) < 0) || (slot_of(names, callright) >= 0 && slot_of(strnames, callright) < 0) {
+        hold nonstring_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat variable arguments must be strings"))
       }
       when heap_on == 0 {
         heap_cursor_slot = len(data)

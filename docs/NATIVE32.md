@@ -34,16 +34,18 @@ make tools/native32
   zero-based; negative indices count back from the end, matching the language
   runtime. An out-of-range index exits with status 1. The index expression can
   use the numeric operators supported by this subset.
-- `concat(STRING_NAME, STRING_NAME)` in a string declaration or assignment.
-  Both operands must be previously declared string variables. Each execution
-  copies the current byte spans into a bounded 60 KiB bump heap, writes a
-  newline and NUL terminator after the bytes, then updates the destination's
-  pointer and raw length. `len()` excludes the display newline. The heap is
-  private to each generated image and is not reclaimed; exhaustion exits the
-  generated program with status 1. This is deliberately narrower than general
-  dynamic string support: literals and arbitrary expressions are not concat
-  operands, and embedded-NUL literals remain refused because the existing
-  backends disagree on their output semantics.
+- `concat(STRING_ARG, STRING_ARG)` in a string declaration or assignment, where
+  each argument is either a previously declared string variable or a quoted
+  string literal. Variables contribute their current runtime byte spans;
+  literals are decoded into the image's static data segment. Each execution
+  copies both spans into a bounded 60 KiB bump heap, writes a newline and NUL
+  terminator after the bytes, then updates the destination's pointer and raw
+  length. `len()` excludes the display newline. The heap is private to each
+  generated image and is not reclaimed; exhaustion exits the generated program
+  with status 1. This remains narrower than general dynamic string support:
+  nested/arbitrary string expressions are not concat operands, and
+  embedded-NUL literals remain refused because the existing backends disagree
+  on their output semantics.
 - `when`, `otherwise`, `while`, comments, and blank lines.
 
 Lists, structs, user functions, floating-point expressions, general file APIs,
