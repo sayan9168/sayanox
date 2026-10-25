@@ -1815,6 +1815,9 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list) -> nu
         // sget(DI=str, SI=idx) -> A
         hold sg_s = vm_read_cstr(regs_lo[7], data, stack, heap)
         hold sg_i = i64_to_signed_num(regs_hi[6], regs_lo[6])
+        when sg_i < 0 {
+          sg_i = sg_i + len(sg_s)
+        }
         when sg_i < 0 || sg_i >= len(sg_s) {
           hold err_s = vm_read_cstr(268435456 + 1256, data, stack, heap)
           hold wds = write_file("/dev/stderr", err_s)

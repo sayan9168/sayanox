@@ -2075,8 +2075,8 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 #     refusals are a subset boundary, not a broken front end.
 #
 # What it does NOT claim: this is not the full native runtime. The current
-# subset has integers, static string spans, len(), and bounded variable-to-
-# variable concat, but no general string operations, lists, structs, functions,
+# subset has integers, static string spans, len(), byte indexing, and bounded
+# variable-to-variable concat, but no general string operations, lists, structs, functions,
 # FP code generation, GC or general file API; `/` remains refused because
 # Sayanox numbers are doubles. `sxisaexec` runs the tested AArch64/RV64 subset.
 # See docs/NATIVE32.md; native_aot remains the x86-64 backend.
@@ -2195,6 +2195,14 @@ test-native32: $(SEED_MIN_BIN) $(GEN2) $(N32_BIN)
 	  test ! -s $(TESTS)/n32/heap_exhaust.i386.out || { echo "[FAIL] i386 heap-limit fixture reached unreachable output"; exit 1; }; \
 	  echo '[OK] i386 concat heap exhaustion is bounded and exits 1'; \
 	else echo '[SKIP] i386 concat heap exhaustion runtime: kernel lacks IA32 execution'; fi
+	@./$(N32_BIN) $(N32_T)/string_index_oob.sa $(TESTS)/n32/string_index_oob.i386
+	@chmod +x $(TESTS)/n32/string_index_oob.i386
+	@if [ "$$(cat $(TESTS)/n32/runnable)" = 1 ]; then \
+	  ./$(TESTS)/n32/string_index_oob.i386 > $(TESTS)/n32/string_index_oob.i386.out; rc=$$?; \
+	  test "$$rc" = 1 || { echo "[FAIL] i386 out-of-range string index returned $$rc instead of 1"; exit 1; }; \
+	  test ! -s $(TESTS)/n32/string_index_oob.i386.out || { echo "[FAIL] i386 out-of-range string index wrote output"; exit 1; }; \
+	  echo '[OK] i386 string indexing rejects out-of-range reads'; \
+	else echo '[SKIP] i386 string-index bounds runtime: kernel lacks IA32 execution'; fi
 
 native-test: test-native32
 
@@ -6753,8 +6761,8 @@ native-test: test-sxsuite
 
 # ---------------------------------------------------------------------------
 # test-sxisaexec: User-mode AArch64 & RV64IM ELF64 emulator parity for integers,
-# strings and bounded concat, concat heap limits, FP/syscall emulator probes,
-# and negative fault controls. FP and syscall probes are not compiler features.
+# strings, byte indexing and bounded concat, heap/bounds controls, FP/syscall
+# emulator probes, and negative fault controls (FP/syscalls are not compiler features).
 # ---------------------------------------------------------------------------
 tools/sxisaexec: tools/sxisaexec.sa $(SXC_NATIVE_BIN)
 	./$(SXC_NATIVE_BIN) tools/sxisaexec.sa $@

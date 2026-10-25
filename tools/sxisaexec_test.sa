@@ -340,6 +340,46 @@ make test_concat_heap_limit(dir: str) -> num {
   give 0
 }
 
+make test_string_index_bounds(dir: str) -> num {
+  hold stem = concat(dir, "/string_index_oob")
+  hold arm_elf = concat(stem, ".arm64.elf")
+  hold rv_elf = concat(stem, ".riscv64.elf")
+  hold arm_stats = concat(stem, ".arm64.stats")
+  hold rv_stats = concat(stem, ".riscv64.stats")
+  hold arm_out = concat(stem, ".arm64.out")
+  hold rv_out = concat(stem, ".riscv64.out")
+  when run_command(concat("./tools/native32 selfhost/native32_tests/string_index_oob.sa ", concat(sh_q(arm_elf), " arm64"))) != 0 {
+    hold f1 = fail_t("native32 could not emit AArch64 string index bounds fixture")
+  }
+  when run_command(concat("./tools/native32 selfhost/native32_tests/string_index_oob.sa ", concat(sh_q(rv_elf), " riscv64"))) != 0 {
+    hold f2 = fail_t("native32 could not emit RV64 string index bounds fixture")
+  }
+  hold arm_cmd = concat("./tools/sxisaexec --arch arm64 --out ", sh_q(arm_out))
+  arm_cmd = concat(arm_cmd, concat(" --stats ", sh_q(arm_stats)))
+  arm_cmd = concat(arm_cmd, concat(" ", sh_q(arm_elf)))
+  hold arm_rc = run_command(arm_cmd)
+  when arm_rc != 1 {
+    hold f3 = fail_t(concat("AArch64 out-of-range string index returned ", istr(arm_rc)))
+  }
+  hold arm_s = read_file(arm_stats)
+  when text_has(arm_s, "arch=arm64 ") == 0 || text_has(arm_s, "exit=1") == 0 || len(read_file(arm_out)) != 0 {
+    hold f4 = fail_t("AArch64 out-of-range string index did not fail closed")
+  }
+  hold rv_cmd = concat("./tools/sxisaexec --arch riscv64 --out ", sh_q(rv_out))
+  rv_cmd = concat(rv_cmd, concat(" --stats ", sh_q(rv_stats)))
+  rv_cmd = concat(rv_cmd, concat(" ", sh_q(rv_elf)))
+  hold rv_rc = run_command(rv_cmd)
+  when rv_rc != 1 {
+    hold f5 = fail_t(concat("RV64 out-of-range string index returned ", istr(rv_rc)))
+  }
+  hold rv_s = read_file(rv_stats)
+  when text_has(rv_s, "arch=riscv64 ") == 0 || text_has(rv_s, "exit=1") == 0 || len(read_file(rv_out)) != 0 {
+    hold f6 = fail_t("RV64 out-of-range string index did not fail closed")
+  }
+  show "[ok] string byte indexing checks bounds on AArch64 and RV64"
+  give 0
+}
+
 make t_put_u16(bs: list, v: num) -> list {
   bs = push(bs, bit_and(v, 255))
   bs = push(bs, bit_and(shr(v, 8), 255))
@@ -895,6 +935,7 @@ hold v2 = verify_six_way(dir, "flow", "selfhost/native32_tests/flow.sa", "selfho
 hold v3 = verify_six_way(dir, "text", "selfhost/native32_tests/text.sa", "selfhost/native32_tests/golden/text.arm64.elf", "selfhost/native32_tests/golden/text.riscv64.elf")
 hold vstr = verify_six_way(dir, "strings", "selfhost/native32_tests/strings.sa", "", "")
 hold vh = test_concat_heap_limit(dir)
+hold vix = test_string_index_bounds(dir)
 
 hold deep_sa = concat(dir, "/isa_deep.sa")
 hold wd = write_deep_fixture(deep_sa)

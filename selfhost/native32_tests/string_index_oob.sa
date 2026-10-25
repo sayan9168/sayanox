@@ -1,0 +1,2 @@
+hold text = "x"
+show text[1]

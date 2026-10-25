@@ -30,6 +30,10 @@ make tools/native32
   newline. `len(STRING_NAME)` returns the raw byte length without the
   display newline. This permits different string lengths on distinct
   control-flow paths without a compile-time length assumption.
+- `STRING_NAME[INDEX_EXPR]` reads one raw byte as an integer. Indices are
+  zero-based; negative indices count back from the end, matching the language
+  runtime. An out-of-range index exits with status 1. The index expression can
+  use the numeric operators supported by this subset.
 - `concat(STRING_NAME, STRING_NAME)` in a string declaration or assignment.
   Both operands must be previously declared string variables. Each execution
   copies the current byte spans into a bounded 60 KiB bump heap, writes a
@@ -42,8 +46,9 @@ make tools/native32
   backends disagree on their output semantics.
 - `when`, `otherwise`, `while`, comments, and blank lines.
 
-String indexing, lists, structs, user functions, floating-point expressions,
-general file APIs, and garbage collection remain unsupported by this compiler.
+Lists, structs, user functions, floating-point expressions, general file APIs,
+and garbage collection remain unsupported by this compiler. Other general
+string operations such as `chr` and `string_eq` are also not in this subset.
 Cross-type assignment and using a string as a numeric value are rejected. `/`
 and fractional literals are rejected because Sayanox numbers are doubles and
 this compiler does not yet implement floating-point expression semantics.
@@ -54,11 +59,13 @@ this compiler does not yet implement floating-point expression semantics.
 `make test-native-riscv64` check image formats, deterministic output, data
 layout and the documented refusal boundary. `make test-sxisaexec` runs the
 AArch64 and RV64 output, and includes a six-way parity fixture for static string declaration,
-reassignment, `concat` allocation and reassignment, branch- and loop-dependent
-lengths, `len()` results, integer output, and literal output. The gate also
-checks bounded-heap exhaustion on all runnable targets, retains integer parity,
-and exercises emulator safety negatives plus scalar FP and Linux syscall
-probes. The latter are emulator tests, not native compiler features.
+reassignment, positive and negative string indexing (including arithmetic
+indices and indexed concatenation results), `concat` allocation and
+reassignment, branch- and loop-dependent lengths, `len()` results, integer
+output, and literal output. The gate also checks out-of-range indexing and
+bounded-heap exhaustion on all runnable targets, retains integer parity, and
+exercises emulator safety negatives plus scalar FP and Linux syscall probes.
+The latter are emulator tests, not native compiler features.
 
 The string fixture compares seed-min, gen2, x86-64 native AOT, the Portable IR
 VM when available, i386 when the host kernel supports it, AArch64 under
@@ -86,9 +93,9 @@ compiler slice, not a claim of complete language or ABI coverage.
 ## Roadmap status
 
 This work is an incremental step toward full AArch64 and RV64GC native compiler
-and runtime support. It now adds a narrow bounded-heap `concat` operation to
-the integer/static-string backend, but does not complete that roadmap item.
-General strings, indexing, lists, structs and functions, IEEE-754 code
-generation, native file I/O, and a mark-and-sweep collector remain open, along
-with broader ISA support and end-to-end parity for each feature. Do not count
+and runtime support. Bounded `concat` and byte indexing extend the original
+integer/static-string backend, but do not complete that roadmap item. General
+string operations beyond the documented subset, lists, structs and functions,
+IEEE-754 code generation, native file I/O, and a mark-and-sweep collector
+remain open, along with broader ISA support and end-to-end parity for each. Do not count
 emulator-only FP/syscall probes as compiler support.

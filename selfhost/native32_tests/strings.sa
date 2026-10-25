@@ -4,6 +4,11 @@ hold msg = "short"
 show msg
 show len(msg)
 show len(msg) + 1
+hold ix = 1
+show msg[ix]
+show msg[2 + 1]
+show msg[-1]
+show msg[len(msg) - 1]
 hold suffix = "!"
 hold empty = ""
 hold blank = concat(empty, empty)
@@ -12,6 +17,7 @@ show len(blank)
 hold joined = concat(msg, suffix)
 show joined
 show len(joined)
+show joined[5]
 joined = concat(joined, suffix)
 show joined
 msg = "a longer string"

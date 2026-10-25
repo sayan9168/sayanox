@@ -1,6 +1,6 @@
 // tools/native32.sa -- SECOND and THIRD machine-code targets for Sayanox:
-// 32-bit x86 (i386) and 64-bit ARM (AArch64) Linux ELF, written in Sayanox
-// and compiled by selfhost/gen2. One front end, two encoders, picked by the
+// 32-bit x86 (i386), AArch64 and RV64IM Linux ELF, written in Sayanox
+// and compiled by selfhost/gen2. One front end, three encoders, picked by the
 // third argument.
 //
 // Why this file exists. Until 2026-10-23 the only machine-code backend was
@@ -12,14 +12,14 @@
 // independent encoder per target -- so what it proves is narrow and concrete:
 // a Sayanox program can be turned into machine code for instruction sets that
 // are not x86-64. The i386 image runs here. A Sayanox user-mode emulator
-// executes generated AArch64 and RV64 images on x86-64 too, so their integer
-// and static-string output is checked end-to-end rather than only pinned.
+// executes generated AArch64 and RV64 images on x86-64 too, so integer and
+// bounded string operations are checked end-to-end rather than only pinned.
 //
 // What it is NOT. This is still a bounded AOT subset, not the complete
-// Sayanox runtime. It supports integer values and static string spans; it has
-// no heap-backed/dynamic strings, lists, structs, user functions, collector,
-// general file API, or floating-point expression code. Unsupported forms are
-// refused with a diagnostic and non-zero exit.
+// Sayanox runtime. It supports static strings, len, byte indexing, and a
+// bounded bump-heap concat; it has no lists, structs, user functions,
+// collector, general file API, or floating-point expression code. Unsupported
+// forms are refused with a diagnostic and non-zero exit.
 //
 // The subset, exactly:
 //
@@ -29,6 +29,8 @@
 //     show <integer expression>            decimal, then a newline
 //     show "literal"                       the literal, then a newline
 //     show STRING_NAME                     writes the string's current span
+//     STRING_NAME[INDEX_EXPR]              byte value; negative index from end
+//     concat(STRING_NAME, STRING_NAME)     bounded heap-backed concatenation
 //     when <expression> { ... }            zero is false, anything else true
 //     } otherwise { ... }
 //     while <expression> { ... }
@@ -329,7 +331,7 @@ make append_text(data: list, lit: str) -> list {
 
 // ---- the expression tokenizer --------------------------------------------
 // Tokens are separated by byte 1. A token is "n<digits>", "v<name>", "o<op>",
-// "(" or ")". A refusal comes back as "!<reason>" so the caller can name it.
+// "(" / ")" / "[" / "]". A refusal comes back as "!<reason>" so the caller can name it.
 
 make add_tok(out: str, t: str) -> str {
   give concat(concat(out, t), chr(1))
@@ -367,9 +369,6 @@ make tokenize(ex: str) -> str {
       }
       when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 {
         bad = concat(concat("a call to '", nmtext), "' (this backend has no functions)")
-      }
-      when i < n && sx_index(ex, i) == 91 {
-        bad = concat(concat("an index into '", nmtext), "' (this backend has no lists)")
       }
       when i < n && sx_index(ex, i) == 46 {
         bad = concat(concat("a field of '", nmtext), "' (this backend has no structs)")
@@ -445,6 +444,16 @@ make tokenize(ex: str) -> str {
       }
       when done == 0 && len(bad) == 0 && c == 41 {
         out = add_tok(out, ")")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 91 {
+        out = add_tok(out, "[")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 93 {
+        out = add_tok(out, "]")
         i = i + 1
         done = 1
       }
@@ -1574,6 +1583,7 @@ make run() -> num {
       }
       hold want = 1
       hold depth = 0
+      hold pending_string_index = 0
       hold k = 0
       while k < tn {
         hold t = tok_at(toks, k)
@@ -1629,17 +1639,38 @@ make run() -> num {
               hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(vname, "'")))
             }
             when slot_of(strnames, vname) >= 0 {
-              hold stringnum = fail(1, concat(concat(concat("line ", numstr(lineno)), ": string variable '"), concat(vname, "' used as a number")))
-            }
-            hold vat2 = len(code)
-            when arch == 0 {
-              fixsite = push(fixsite, vat2 + 1)
+              when k + 1 >= tn || string_eq(tok_at(toks, k + 1), "[") == 0 {
+                hold stringnum = fail(1, concat(concat(concat("line ", numstr(lineno)), ": string variable '"), concat(vname, "' used as a number (index it with [i])")))
+              }
+              hold svat = len(code)
+              when arch == 0 {
+                fixsite = push(fixsite, svat + 1)
+              } otherwise {
+                fixsite = push(fixsite, svat)
+              }
+              fixoff = push(fixoff, vslot)
+              code = emit_load_global(code, arch)
+              hold slat = len(code)
+              when arch == 0 {
+                fixsite = push(fixsite, slat + 1)
+              } otherwise {
+                fixsite = push(fixsite, slat)
+              }
+              fixoff = push(fixoff, vslot + 4)
+              code = emit_load_global(code, arch)
+              want = 0
+              pending_string_index = 1
             } otherwise {
-              fixsite = push(fixsite, vat2)
+              hold vat2 = len(code)
+              when arch == 0 {
+                fixsite = push(fixsite, vat2 + 1)
+              } otherwise {
+                fixsite = push(fixsite, vat2)
+              }
+              fixoff = push(fixoff, vslot)
+              code = emit_load_global(code, arch)
+              want = 0
             }
-            fixoff = push(fixoff, vslot)
-            code = emit_load_global(code, arch)
-            want = 0
           }
         }
         when t0 == 40 {
@@ -1669,6 +1700,132 @@ make run() -> num {
           when open == 0 {
             hold unbal = fail(1, concat(concat("line ", numstr(lineno)), ": a ')' with no '('"))
           }
+        }
+        when t0 == 91 {
+          when want == 1 || pending_string_index == 0 {
+            hold badindexopen = fail(1, concat(concat("line ", numstr(lineno)), ": `[` must index a string variable"))
+          }
+          pending_string_index = 0
+          when depth < len(ops) {
+            ops[depth] = 0 - 1
+          } otherwise {
+            ops = push(ops, 0 - 1)
+          }
+          depth = depth + 1
+          want = 1
+        }
+        when t0 == 93 {
+          when want == 1 {
+            hold emptyindex = fail(1, concat(concat("line ", numstr(lineno)), ": an empty string index"))
+          }
+          hold close_index = 0
+          while depth > 0 && close_index == 0 {
+            depth = depth - 1
+            when ops[depth] == 0 - 1 {
+              close_index = 1
+            } otherwise {
+              when ops[depth] == 0 {
+                hold unclosed_paren_index = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' with no ')' inside a string index"))
+              }
+              code = emit_op2(code, arch, ops[depth])
+            }
+          }
+          when close_index == 0 {
+            hold unclosed_index = fail(1, concat(concat("line ", numstr(lineno)), ": a ']' with no '['"))
+          }
+          when arch == 0 {
+            code = e1(code, 90)
+            code = e1(code, 89)
+            code = e1(code, 88)
+            code = e1(code, 133)
+            code = e1(code, 210)
+            code = e1(code, 15)
+            code = e1(code, 137)
+            hold neg_index_site = len(code)
+            code = e32(code, 0)
+            code = e1(code, 1)
+            code = e1(code, 202)
+            hold neg_index_done = len(code)
+            code = patch32(code, neg_index_site, neg_index_done - (neg_index_site + 4))
+            code = e1(code, 59)
+            code = e1(code, 209)
+            hold bad_index_site = len(code)
+            code = e1(code, 15)
+            code = e1(code, 131)
+            code = e32(code, 0)
+            code = e1(code, 15)
+            code = e1(code, 182)
+            code = e1(code, 4)
+            code = e1(code, 16)
+            code = e1(code, 80)
+            hold done_index_site = len(code)
+            code = e1(code, 233)
+            code = e32(code, 0)
+            hold bad_index = len(code)
+            code = e1(code, 184)
+            code = e32(code, 1)
+            code = e1(code, 187)
+            code = e32(code, 1)
+            code = e1(code, 205)
+            code = e1(code, 128)
+            hold done_index = len(code)
+            code = patch32(code, bad_index_site + 2, bad_index - (bad_index_site + 6))
+            code = patch32(code, done_index_site + 1, done_index - (done_index_site + 5))
+          } otherwise {
+            when arch == 1 {
+              code = emit_pop_acc(code, arch)
+              code = e_w(code, 2852127724)
+              code = emit_pop_acc(code, arch)
+              code = e_w(code, 2852127723)
+              code = emit_pop_acc(code, arch)
+              code = e_w(code, 2852127722)
+              code = e_w(code, 1895825823)
+              hold neg_a64_site = len(code)
+              code = e_w(code, 1409286154)
+              code = e_w(code, 185270668)
+              hold neg_a64_done = len(code)
+              code = a_imm19(code, neg_a64_site, neg_a64_done - neg_a64_site)
+              code = e_w(code, 1795883423)
+              hold bad_a64_site = len(code)
+              code = e_w(code, 1409286146)
+              code = e_w(code, 2332819786)
+              code = e_w(code, 960495936)
+              code = e_w(code, 4162785248)
+              hold done_a64_site = len(code)
+              code = e_w(code, 335544320)
+              hold bad_a64 = len(code)
+              code = a_movz(code, 1, 0, 1)
+              code = a_movz(code, 1, 8, 93)
+              code = e_w(code, 3556769793)
+              hold done_a64 = len(code)
+              code = a_imm19(code, bad_a64_site, bad_a64 - bad_a64_site)
+              code = a_imm26(code, done_a64_site, done_a64 - done_a64_site)
+            } otherwise {
+              code = rv_pop_reg(code, 12)
+              code = rv_pop_reg(code, 11)
+              code = rv_pop_reg(code, 10)
+              hold neg_rv_site = len(code)
+              code = e_w(code, rv_b_word(0, 0, 12, 5))
+              code = e_w(code, rv_r(0, 11, 12, 0, 12, 59))
+              hold neg_rv_done = len(code)
+              code = set_w(code, neg_rv_site, rv_b_word(neg_rv_done - neg_rv_site, 0, 12, 5))
+              hold bad_rv_site = len(code)
+              code = e_w(code, rv_b_word(0, 11, 12, 7))
+              code = e_w(code, rv_r(0, 12, 10, 0, 10, 51))
+              code = e_w(code, rv_i(0, 10, 4, 10, 3))
+              code = rv_push_a0(code)
+              hold done_rv_site = len(code)
+              code = e_w(code, rv_j_word(0, 0))
+              hold bad_rv = len(code)
+              code = e_w(code, rv_i(1, 0, 0, 10, 19))
+              code = e_w(code, rv_i(93, 0, 0, 17, 19))
+              code = e_w(code, 115)
+              hold done_rv = len(code)
+              code = set_w(code, bad_rv_site, rv_b_word(bad_rv - bad_rv_site, 11, 12, 7))
+              code = set_w(code, done_rv_site, rv_j_word(done_rv - done_rv_site, 0))
+            }
+          }
+          want = 0
         }
         when t0 == 111 {
           hold oc = op_code(t)

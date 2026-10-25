@@ -75,8 +75,9 @@ bootstrap source itself remains written in the original pure-min dialect.
 
 String literals use double quotes. Shared builtins include `concat`, `len`,
 `chr`, `string_eq`, `sx_index`, `read_file`, `write_file`, `arg` and
-`arg_count`. String indexing uses `s[i]` (zero-based); `sx_index(s, i)` is
-also available. Exact backend coverage is in [`STATUS.md`](STATUS.md).
+`arg_count`. String indexing uses `s[i]` (zero-based; negative indices count
+back from the end); `sx_index(s, i)` is also available. Exact backend coverage
+is in [`STATUS.md`](STATUS.md).
 
 ## Lists
 

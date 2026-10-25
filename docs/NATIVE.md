@@ -167,7 +167,7 @@ User programs compiled by `native_aot` do not pass through clang.
 ## Second-ISA decision and IR audit (2026-10-16)
 
 **Superseded in part on 2026-10-23 and extended 2026-10-25 — see
-[NATIVE32.md](NATIVE32.md).** `tools/native32.sa` emits i386, AArch64 and RV64IM ELF for a bounded integer and string subset: static spans, `len`, and variable-to-variable `concat` using a fixed bump heap. The Sayanox `tools/sxisaexec.sa` user-mode emulator executes the AArch64/RV64 images; `make test-sxisaexec` pins six-way parity for integers, string declaration/reassignment, and bounded concatenation as well as fault behavior.
+[NATIVE32.md](NATIVE32.md).** `tools/native32.sa` emits i386, AArch64 and RV64IM ELF for a bounded integer and string subset: static spans, `len`, byte indexing, and variable-to-variable `concat` using a fixed bump heap. The Sayanox `tools/sxisaexec.sa` user-mode emulator executes the AArch64/RV64 images; `make test-sxisaexec` pins six-way parity for integers, string declaration/reassignment, byte indexing, and bounded concatenation as well as fault behavior.
 Scalar IEEE-754 S/D arithmetic and basic Linux file syscalls have separate
 emulator-only probes.
 

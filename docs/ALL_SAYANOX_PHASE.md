@@ -554,11 +554,12 @@ recent static-string slice is useful but does not close the compiler/runtime
 milestone; a capable ELF emulator is necessary for proof but does not itself
 mean the backend is complete.
 
-**Verified compiler slice:** static-string values now use image-backed
-pointer+length globals and support literal assignment/reassignment and `show`
-on i386, AArch64, and RV64IM. `make test-sxisaexec` includes six-way parity
-for branch- and loop-dependent string lengths, as well as the earlier integer
-fixtures.
+**Verified compiler slice:** string values use image-backed pointer+length
+globals and support literal assignment/reassignment, `show`, `len`, zero-based
+byte indexing (negative-from-end included), and bounded variable-to-variable
+`concat` on i386, AArch64, and RV64IM. `make test-sxisaexec` includes six-way
+parity for empty and dynamic strings, indexed reads and lengths, as well as the
+earlier integer fixtures; bounds and heap exhaustion are checked.
 
 **Verified emulator-only probes:** `tools/sxisaexec.sa` executes scalar
 IEEE-754 S/D arithmetic and Linux `openat`/`read`/`write`/`close`/`exit` on
