@@ -1,11 +1,12 @@
 // tools/sxisaexec.sa -- Pure-Sayanox user-mode ELF64 machine-code emulator for
-// AArch64 (EM_AARCH64 = 183) and RISC-V RV64IM (EM_RISCV = 243).
+// AArch64 (EM_AARCH64 = 183) and the exercised RV64IM + scalar F/D subset
+// (EM_RISCV = 243; this is not a claim of complete RV64GC/C-extension support).
 //
-// Loads real static ELF64 PT_LOAD segments into a permission-checked virtual
-// address space with a 64 KiB user stack, decodes and executes 32-bit little-
-// endian AArch64 and RV64IM instructions from e_entry, services Linux user
-// syscalls write (64) and exit (93), and enforces memory, alignment, opcode,
-// and step-budget invariants.
+// Loads static ELF64 PT_LOAD segments into a permission-checked virtual address
+// space with a 64 KiB user stack. In addition to the exercised integer opcodes,
+// it runs scalar IEEE-754 S/D arithmetic and Linux user syscalls openat/read/
+// write/close/exit using a bounded single-file virtual descriptor. It enforces
+// memory, alignment, opcode, and step-budget invariants.
 //
 // Usage:
 //   ./tools/sxisaexec [--arch auto|arm64|riscv64] [--max-steps N] [--out FILE] <elf64>
@@ -188,6 +189,140 @@ make sltu64(alo: num, ahi: num, blo: num, bhi: num) -> num {
   give 0
 }
 
+// Scalar IEEE-754 helpers shared by the RV64D and AArch64 scalar-FP decoders.
+make fp64_to_num(hi: num, lo: num) -> num {
+  hold uhi = u32(hi)
+  hold ulo = u32(lo)
+  hold sign = bit_and(shr(uhi, 31), 1)
+  hold exp = bit_and(shr(uhi, 20), 2047)
+  hold mhi = bit_and(uhi, 1048575)
+  when exp == 0 && mhi == 0 && ulo == 0 {
+    give 0.0
+  }
+  hold mant = mhi * 4294967296.0 + ulo
+  hold val = 0.0
+  hold p = 0
+  when exp == 0 {
+    val = mant / 4503599627370496.0
+    p = 0 - 1022
+  } otherwise {
+    val = 1.0 + mant / 4503599627370496.0
+    p = exp - 1023
+  }
+  while p > 0 {
+    val = val * 2.0
+    p = p - 1
+  }
+  while p < 0 {
+    val = val / 2.0
+    p = p + 1
+  }
+  when sign == 1 {
+    val = 0.0 - val
+  }
+  give val
+}
+
+make num_to_fp64(v: num, out_hl: list) -> num {
+  when v == 0.0 {
+    out_hl[0] = 0
+    out_hl[1] = 0
+    give 0
+  }
+  hold sign = 0
+  hold x = v
+  when x < 0.0 {
+    sign = 1
+    x = 0.0 - x
+  }
+  hold exp = 1023
+  while x >= 2.0 && exp < 2047 {
+    x = x / 2.0
+    exp = exp + 1
+  }
+  while x < 1.0 && exp > 1 {
+    x = x * 2.0
+    exp = exp - 1
+  }
+  hold mant = 0.0
+  when x < 1.0 {
+    exp = 0
+    mant = x * 4503599627370496.0
+  } otherwise {
+    mant = (x - 1.0) * 4503599627370496.0
+  }
+  hold lo = mant % 4294967296.0
+  hold hi = (mant - lo) / 4294967296.0
+  out_hl[0] = u32(shl(sign, 31) + shl(exp, 20) + hi)
+  out_hl[1] = u32(lo)
+  give 0
+}
+
+make fp32_to_num(bits: num) -> num {
+  hold u = u32(bits)
+  hold sign = bit_and(shr(u, 31), 1)
+  hold exp = bit_and(shr(u, 23), 255)
+  hold mant = bit_and(u, 8388607)
+  hold val = 0.0
+  when exp == 0 {
+    val = mant / 8388608.0
+    hold p = 0 - 126
+    while p < 0 {
+      val = val / 2.0
+      p = p + 1
+    }
+  } otherwise {
+    val = 1.0 + mant / 8388608.0
+    hold p = exp - 127
+    while p > 0 {
+      val = val * 2.0
+      p = p - 1
+    }
+    while p < 0 {
+      val = val / 2.0
+      p = p + 1
+    }
+  }
+  when sign == 1 {
+    val = 0.0 - val
+  }
+  give val
+}
+
+make num_to_fp32(v: num) -> num {
+  when v == 0.0 {
+    give 0
+  }
+  hold sign = 0
+  hold x = v
+  when x < 0.0 {
+    sign = 1
+    x = 0.0 - x
+  }
+  hold exp = 127
+  while x >= 2.0 && exp < 255 {
+    x = x / 2.0
+    exp = exp + 1
+  }
+  while x < 1.0 && exp > 1 {
+    x = x * 2.0
+    exp = exp - 1
+  }
+  hold mant = 0.0
+  when x < 1.0 {
+    exp = 0
+    mant = x * 8388608.0
+  } otherwise {
+    mant = (x - 1.0) * 8388608.0
+  }
+  hold frac = mant % 1.0
+  mant = mant - frac
+  when frac > 0.5 || (frac == 0.5 && bit_and(mant, 1) == 1) {
+    mant = mant + 1
+  }
+  give u32(shl(sign, 31) + shl(exp, 23) + mant)
+}
+
 // ---- ELF64 header helpers -------------------------------------------------
 
 make rd_u16(bs: list, off: num) -> num {
@@ -292,7 +427,190 @@ make vmem_st32(img_mem: list, stk_mem: list, page_perm: list, addr: num, v: num)
   give 0
 }
 
+make vmem_ld64(img_mem: list, stk_mem: list, page_perm: list, addr: num, req_pf: num, out_hl: list) -> num {
+  hold seg = mem_check(page_perm, addr, 8, req_pf)
+  hold base = addr - 4194304
+  when seg == 2 {
+    base = addr - 2147418112
+  }
+  hold mem = img_mem
+  when seg == 2 {
+    mem = stk_mem
+  }
+  hold lo = mem[base] + mem[base + 1] * 256 + mem[base + 2] * 65536 + mem[base + 3] * 16777216
+  hold hi = mem[base + 4] + mem[base + 5] * 256 + mem[base + 6] * 65536 + mem[base + 7] * 16777216
+  out_hl[0] = hi
+  out_hl[1] = lo
+  give 0
+}
+
+make vmem_st64(img_mem: list, stk_mem: list, page_perm: list, addr: num, hi: num, lo: num) -> num {
+  hold seg = mem_check(page_perm, addr, 8, 2)
+  hold base = addr - 4194304
+  when seg == 2 {
+    base = addr - 2147418112
+  }
+  hold uhi = u32(hi)
+  hold ulo = u32(lo)
+  when seg == 1 {
+    img_mem[base] = bit_and(ulo, 255)
+    img_mem[base + 1] = bit_and(shr(ulo, 8), 255)
+    img_mem[base + 2] = bit_and(shr(ulo, 16), 255)
+    img_mem[base + 3] = bit_and(shr(ulo, 24), 255)
+    img_mem[base + 4] = bit_and(uhi, 255)
+    img_mem[base + 5] = bit_and(shr(uhi, 8), 255)
+    img_mem[base + 6] = bit_and(shr(uhi, 16), 255)
+    img_mem[base + 7] = bit_and(shr(uhi, 24), 255)
+    give 0
+  }
+  stk_mem[base] = bit_and(ulo, 255)
+  stk_mem[base + 1] = bit_and(shr(ulo, 8), 255)
+  stk_mem[base + 2] = bit_and(shr(ulo, 16), 255)
+  stk_mem[base + 3] = bit_and(shr(ulo, 24), 255)
+  stk_mem[base + 4] = bit_and(uhi, 255)
+  stk_mem[base + 5] = bit_and(shr(uhi, 8), 255)
+  stk_mem[base + 6] = bit_and(shr(uhi, 16), 255)
+  stk_mem[base + 7] = bit_and(shr(uhi, 24), 255)
+  give 0
+}
+
 // ---- Register File Helpers ------------------------------------------------
+
+make vmem_read_cstr(img_mem: list, stk_mem: list, page_perm: list, addr: num) -> str {
+  hold out = ""
+  hold p = addr
+  hold keep = 1
+  while keep == 1 {
+    hold b = vmem_ld8(img_mem, stk_mem, page_perm, p)
+    when b == 0 {
+      keep = 0
+    } otherwise {
+      out = concat(out, chr(b))
+      p = p + 1
+    }
+  }
+  give out
+}
+
+// Minimal Linux-like descriptor table for the user-mode ABI. Standard output
+// descriptors 1 and 2 are collected by the emulator; files opened with openat
+// use host file primitives, with their bytes buffered until close.
+make vm_fd_open(path: str, flags: num, path_buf: list, path_len: list, mode_box: list, off_box: list, len_box: list, data_buf: list) -> num {
+  when mode_box[0] >= 0 {
+    give 0 - 24
+  }
+  hold rw = bit_and(flags, 3)
+  hold mode = 0
+  when rw != 0 {
+    mode = 1
+  }
+  hold exists = path_kind(path)
+  hold create = bit_and(flags, 64)
+  hold trunc = bit_and(flags, 512)
+  when mode == 0 && exists != 1 {
+    give 0 - 2
+  }
+  when mode == 1 && exists != 1 && create == 0 {
+    give 0 - 2
+  }
+  when len(path) >= len(path_buf) {
+    give 0 - 36
+  }
+  hold i = 0
+  while i < len(path) {
+    path_buf[i] = sx_index(path, i)
+    i = i + 1
+  }
+  path_len[0] = len(path)
+  mode_box[0] = mode
+  len_box[0] = 0
+  off_box[0] = 0
+  when mode == 0 || trunc == 0 {
+    when exists == 1 {
+      hold file_bytes = []
+      hold nr = read_bytes(path, file_bytes)
+      when nr < 0 || nr > len(data_buf) {
+        mode_box[0] = -1
+        give 0 - 27
+      }
+      hold bi = 0
+      while bi < nr {
+        data_buf[bi] = file_bytes[bi]
+        bi = bi + 1
+      }
+      len_box[0] = nr
+    }
+  }
+  when bit_and(flags, 1024) != 0 {
+    off_box[0] = len_box[0]
+  }
+  give 3
+}
+
+make vm_fd_close(fd: num, path_buf: list, path_len: list, mode_box: list, len_box: list, data_buf: list) -> num {
+  when fd != 3 || mode_box[0] < 0 {
+    give 0 - 9
+  }
+  when mode_box[0] == 1 {
+    hold path = ""
+    hold pi = 0
+    while pi < path_len[0] {
+      path = concat(path, chr(path_buf[pi]))
+      pi = pi + 1
+    }
+    hold bytes = []
+    hold bi = 0
+    while bi < len_box[0] {
+      bytes = push(bytes, data_buf[bi])
+      bi = bi + 1
+    }
+    when write_bytes(path, bytes) != 1 {
+      mode_box[0] = -1
+      give 0 - 5
+    }
+  }
+  mode_box[0] = -1
+  give 0
+}
+
+make vm_fd_write(fd: num, addr: num, count: num, img_mem: list, stk_mem: list, page_perm: list, mode_box: list, off_box: list, len_box: list, data_buf: list) -> num {
+  when fd != 3 || mode_box[0] != 1 {
+    give 0 - 9
+  }
+  when count < 0 || count > len(data_buf) || off_box[0] + count > len(data_buf) {
+    give 0 - 27
+  }
+  hold off = off_box[0]
+  hold i = 0
+  while i < count {
+    data_buf[off] = vmem_ld8(img_mem, stk_mem, page_perm, addr + i)
+    off = off + 1
+    i = i + 1
+  }
+  off_box[0] = off
+  when off > len_box[0] {
+    len_box[0] = off
+  }
+  give count
+}
+
+make vm_fd_read(fd: num, addr: num, count: num, img_mem: list, stk_mem: list, page_perm: list, mode_box: list, off_box: list, len_box: list, data_buf: list) -> num {
+  when fd != 3 || mode_box[0] != 0 {
+    give 0 - 9
+  }
+  when count < 0 {
+    give 0 - 22
+  }
+  hold off = off_box[0]
+  hold nr = 0
+  while nr < count && off < len_box[0] {
+    hold ws = vmem_st8(img_mem, stk_mem, page_perm, addr + nr, data_buf[off])
+    nr = nr + 1
+    off = off + 1
+  }
+  off_box[0] = off
+  give nr
+}
 
 make set_rv_s32(rlo: list, rhi: list, rd: num, v: num) -> num {
   when rd == 0 {
@@ -401,13 +719,17 @@ make arm_cond_ok(cond: num, nf: num, zf: num, cf: num, vf: num) -> num {
 
 // ---- RV64IM Execution Loop ------------------------------------------------
 
-make exec_rv64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_steps: num, out_bytes: list, meta: list) -> list {
+make exec_rv64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_steps: num, out_bytes: list, meta: list, fd_path_buf: list, fd_path_len: list, fd_mode: list, fd_offset: list, fd_len: list, fd_data: list) -> list {
   hold rlo = []
   hold rhi = []
+  hold f_lo = []
+  hold f_hi = []
   hold ri = 0
   while ri < 32 {
     rlo = push(rlo, 0)
     rhi = push(rhi, 0)
+    f_lo = push(f_lo, 0)
+    f_hi = push(f_hi, 0)
     ri = ri + 1
   }
   // x2 = sp = 0x80000000 - 16
@@ -550,6 +872,163 @@ make exec_rv64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_st
         handled = 1
       }
     }
+    // FLW / FLD (floating load opcode 7)
+    when op == 7 {
+      hold imm_fp = signext(shr(w, 20), 12)
+      hold adr_fp = u32(rlo[rs1] + imm_fp)
+      when f3 == 2 {
+        hold sw = vmem_ld32(img_mem, stk_mem, page_perm, adr_fp, 4)
+        f_lo[rd] = sw
+        f_hi[rd] = 4294967295
+        handled = 1
+      }
+      when f3 == 3 {
+        hold pair = [0, 0]
+        hold sq = vmem_ld64(img_mem, stk_mem, page_perm, adr_fp, 4, pair)
+        f_hi[rd] = pair[0]
+        f_lo[rd] = pair[1]
+        handled = 1
+      }
+    }
+    // FSW / FSD (floating store opcode 39)
+    when op == 39 {
+      hold raw_fpst = shl(f7, 5) + rd
+      hold imm_fpst = signext(raw_fpst, 12)
+      hold adr_fpst = u32(rlo[rs1] + imm_fpst)
+      when f3 == 2 {
+        hold fsw = vmem_st32(img_mem, stk_mem, page_perm, adr_fpst, f_lo[rs2])
+        handled = 1
+      }
+      when f3 == 3 {
+        hold fsd = vmem_st64(img_mem, stk_mem, page_perm, adr_fpst, f_hi[rs2], f_lo[rs2])
+        handled = 1
+      }
+    }
+    // OP-FP: exercised RV64GC scalar F/D subset (arithmetic, sign, min/max, compares, conversions)
+    when op == 83 {
+      hold fp_rm = bit_and(shr(w, 20), 31)
+      when f7 == 1 || f7 == 5 || f7 == 9 || f7 == 13 {
+        hold x = fp64_to_num(f_hi[rs1], f_lo[rs1])
+        hold y = fp64_to_num(f_hi[fp_rm], f_lo[fp_rm])
+        hold z = 0.0
+        when f7 == 1 {
+          z = x + y
+        }
+        when f7 == 5 {
+          z = x - y
+        }
+        when f7 == 9 {
+          z = x * y
+        }
+        when f7 == 13 {
+          z = x / y
+        }
+        hold enc = [0, 0]
+        hold fe = num_to_fp64(z, enc)
+        f_hi[rd] = enc[0]
+        f_lo[rd] = enc[1]
+        handled = 1
+      }
+      when f7 == 0 || f7 == 4 || f7 == 8 || f7 == 12 {
+        hold x32 = fp32_to_num(f_lo[rs1])
+        hold y32 = fp32_to_num(f_lo[fp_rm])
+        hold z32 = 0.0
+        when f7 == 0 {
+          z32 = x32 + y32
+        }
+        when f7 == 4 {
+          z32 = x32 - y32
+        }
+        when f7 == 8 {
+          z32 = x32 * y32
+        }
+        when f7 == 12 {
+          z32 = x32 / y32
+        }
+        f_lo[rd] = num_to_fp32(z32)
+        f_hi[rd] = 4294967295
+        handled = 1
+      }
+      when f7 == 17 && f3 <= 2 {
+        hold sign_a = bit_and(f_hi[rs1], 2147483648)
+        hold sign_b = bit_and(f_hi[fp_rm], 2147483648)
+        hold sign_out = sign_b
+        when f3 == 1 && sign_b == 0 {
+          sign_out = 2147483648
+        } otherwise {
+          when f3 == 1 && sign_b != 0 {
+            sign_out = 0
+          }
+        }
+        when f3 == 2 {
+          sign_out = 0
+          when sign_a != sign_b {
+            sign_out = 2147483648
+          }
+        }
+        f_hi[rd] = bit_and(f_hi[rs1], 2147483647) + sign_out
+        f_lo[rd] = f_lo[rs1]
+        handled = 1
+      }
+      when f7 == 21 && (f3 == 0 || f3 == 1) {
+        hold min_a = fp64_to_num(f_hi[rs1], f_lo[rs1])
+        hold min_b = fp64_to_num(f_hi[fp_rm], f_lo[fp_rm])
+        hold min_v = min_a
+        when f3 == 0 && min_b < min_a {
+          min_v = min_b
+        }
+        when f3 == 1 && min_b > min_a {
+          min_v = min_b
+        }
+        hold min_enc = [0, 0]
+        hold min_z = num_to_fp64(min_v, min_enc)
+        f_hi[rd] = min_enc[0]
+        f_lo[rd] = min_enc[1]
+        handled = 1
+      }
+      when f7 == 81 && f3 <= 2 {
+        hold cmp_a = fp64_to_num(f_hi[rs1], f_lo[rs1])
+        hold cmp_b = fp64_to_num(f_hi[fp_rm], f_lo[fp_rm])
+        hold cmp_v = 0
+        when f3 == 2 && cmp_a == cmp_b {
+          cmp_v = 1
+        }
+        when f3 == 1 && cmp_a < cmp_b {
+          cmp_v = 1
+        }
+        when f3 == 0 && cmp_a <= cmp_b {
+          cmp_v = 1
+        }
+        hold zfc = set_rv_64(rlo, rhi, rd, cmp_v, 0)
+        handled = 1
+      }
+      // FCVT.W.D / FCVT.WU.D (round-toward-zero for the tested ABI subset)
+      when (f7 == 96 || f7 == 97) && (fp_rm == 0 || fp_rm == 1) {
+        hold cv = fp32_to_num(f_lo[rs1])
+        when f7 == 97 {
+          cv = fp64_to_num(f_hi[rs1], f_lo[rs1])
+        }
+        hold frac = cv % 1.0
+        hold iv = cv - frac
+        when fp_rm == 1 && iv < 0.0 {
+          iv = iv + 4294967296.0
+        }
+        hold zcv = set_rv_s32(rlo, rhi, rd, iv)
+        handled = 1
+      }
+      // FCVT.D.W and FCVT.D.WU
+      when f7 == 105 && (fp_rm == 0 || fp_rm == 1) {
+        hold intv = s32(rlo[rs1])
+        when fp_rm == 1 {
+          intv = rlo[rs1]
+        }
+        hold cvenc = [0, 0]
+        hold cvz = num_to_fp64(intv, cvenc)
+        f_hi[rd] = cvenc[0]
+        f_lo[rd] = cvenc[1]
+        handled = 1
+      }
+    }
     // OP-IMM 64 (19)
     when op == 19 {
       hold simm = signext(shr(w, 20), 12)
@@ -684,20 +1163,37 @@ make exec_rv64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_st
     // ECALL (115)
     when w == 115 {
       hold sysno = rlo[17]
+      when sysno == 56 {
+        hold path = vmem_read_cstr(img_mem, stk_mem, page_perm, rlo[11])
+        hold fd = vm_fd_open(path, rlo[12], fd_path_buf, fd_path_len, fd_mode, fd_offset, fd_len, fd_data)
+        hold z_open = set_rv_s32(rlo, rhi, 10, fd)
+        handled = 1
+      }
+      when sysno == 57 {
+        hold rc_close = vm_fd_close(rlo[10], fd_path_buf, fd_path_len, fd_mode, fd_len, fd_data)
+        hold z_close = set_rv_s32(rlo, rhi, 10, rc_close)
+        handled = 1
+      }
+      when sysno == 63 {
+        hold nread = vm_fd_read(rlo[10], rlo[11], rlo[12], img_mem, stk_mem, page_perm, fd_mode, fd_offset, fd_len, fd_data)
+        hold z_read = set_rv_s32(rlo, rhi, 10, nread)
+        handled = 1
+      }
       when sysno == 64 {
         hold fd = rlo[10]
         hold buf = rlo[11]
         hold cnt = rlo[12]
-        when fd != 1 && fd != 2 {
-          hold ffd = fail_isa(1, concat("RV64 unsupported write fd ", istr(fd)))
+        hold nw = 0
+        when fd == 1 || fd == 2 {
+          while nw < cnt {
+            hold wb = vmem_ld8(img_mem, stk_mem, page_perm, buf + nw)
+            out_bytes = push(out_bytes, wb)
+            nw = nw + 1
+          }
+        } otherwise {
+          nw = vm_fd_write(fd, buf, cnt, img_mem, stk_mem, page_perm, fd_mode, fd_offset, fd_len, fd_data)
         }
-        hold wi = 0
-        while wi < cnt {
-          hold wb = vmem_ld8(img_mem, stk_mem, page_perm, buf + wi)
-          out_bytes = push(out_bytes, wb)
-          wi = wi + 1
-        }
-        hold z_wr = set_rv_64(rlo, rhi, 10, cnt, 0)
+        hold z_wr = set_rv_s32(rlo, rhi, 10, nw)
         handled = 1
       }
       when sysno == 93 {
@@ -724,13 +1220,17 @@ make exec_rv64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_st
 
 // ---- AArch64 Execution Loop -----------------------------------------------
 
-make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_steps: num, out_bytes: list, meta: list) -> list {
+make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_steps: num, out_bytes: list, meta: list, fd_path_buf: list, fd_path_len: list, fd_mode: list, fd_offset: list, fd_len: list, fd_data: list) -> list {
   hold rlo = []
   hold rhi = []
+  hold f_lo = []
+  hold f_hi = []
   hold ri = 0
-  while ri < 31 {
+  while ri < 32 {
     rlo = push(rlo, 0)
     rhi = push(rhi, 0)
+    f_lo = push(f_lo, 0)
+    f_hi = push(f_hi, 0)
     ri = ri + 1
   }
   hold sp_lo = 2147483632
@@ -1140,6 +1640,101 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
       handled = 1
     }
 
+    // Scalar FP two-source arithmetic: FADD/FSUB/FMUL/FDIV S/D.
+    when handled == 0 && shr(w, 24) == 30 && bit_and(shr(w, 21), 1) == 1 && bit_and(shr(w, 10), 3) == 2 {
+      hold f_rm = bit_and(shr(w, 16), 31)
+      hold f_op = bit_and(shr(w, 12), 15)
+      hold is_double = bit_and(shr(w, 22), 1)
+      when is_double == 1 && f_op <= 3 {
+        hold x = fp64_to_num(f_hi[rn], f_lo[rn])
+        hold y = fp64_to_num(f_hi[f_rm], f_lo[f_rm])
+        hold z = 0.0
+        when f_op == 0 {
+          z = x * y
+        }
+        when f_op == 1 {
+          z = x / y
+        }
+        when f_op == 2 {
+          z = x + y
+        }
+        when f_op == 3 {
+          z = x - y
+        }
+        hold enc = [0, 0]
+        hold fe = num_to_fp64(z, enc)
+        f_hi[rd] = enc[0]
+        f_lo[rd] = enc[1]
+        handled = 1
+      }
+      when is_double == 0 && f_op <= 3 {
+        hold x32 = fp32_to_num(f_lo[rn])
+        hold y32 = fp32_to_num(f_lo[f_rm])
+        hold z32 = 0.0
+        when f_op == 0 {
+          z32 = x32 * y32
+        }
+        when f_op == 1 {
+          z32 = x32 / y32
+        }
+        when f_op == 2 {
+          z32 = x32 + y32
+        }
+        when f_op == 3 {
+          z32 = x32 - y32
+        }
+        f_lo[rd] = num_to_fp32(z32)
+        f_hi[rd] = 4294967295
+        handled = 1
+      }
+    }
+    // FCVTZS Wd,Dn and FCVTZS Wd,Sn, round toward zero.
+    when handled == 0 && shr(w, 24) == 30 && (bit_and(shr(w, 16), 127) == 120 || bit_and(shr(w, 16), 127) == 56) {
+      hold cv_is_d = 0
+      hold cvnum = fp32_to_num(f_lo[rn])
+      when bit_and(shr(w, 16), 127) == 120 {
+        cv_is_d = 1
+        cvnum = fp64_to_num(f_hi[rn], f_lo[rn])
+      }
+      hold frac = cvnum % 1.0
+      hold cvint = cvnum - frac
+      hold zcv = set_arm_w(rlo, rhi, rd, cvint)
+      handled = 1
+    }
+    // Scalar FP unsigned-immediate LDR/STR (S and D registers).
+    when handled == 0 && bit_and(shr(w, 24), 59) == 57 && bit_and(shr(w, 26), 1) == 1 {
+      hold fsz = shr(w, 30)
+      hold fopc = bit_and(shr(w, 22), 3)
+      hold fuimm = bit_and(shr(w, 10), 4095)
+      hold foff = shl(fuimm, fsz)
+      hold fbase = sp_lo
+      when rn < 31 {
+        fbase = rlo[rn]
+      }
+      hold faddr = u32(fbase + foff)
+      when fsz == 2 && fopc == 0 {
+        hold fst = vmem_st32(img_mem, stk_mem, page_perm, faddr, f_lo[rd])
+        handled = 1
+      }
+      when fsz == 2 && fopc == 1 {
+        hold fld = vmem_ld32(img_mem, stk_mem, page_perm, faddr, 4)
+        f_lo[rd] = fld
+        f_hi[rd] = 4294967295
+        handled = 1
+      }
+      when fsz == 3 && fopc == 0 {
+        hold fsd = vmem_st64(img_mem, stk_mem, page_perm, faddr, f_hi[rd], f_lo[rd])
+        handled = 1
+      }
+      when fsz == 3 && fopc == 1 {
+        hold pair = [0, 0]
+        hold fld64 = vmem_ld64(img_mem, stk_mem, page_perm, faddr, 4, pair)
+        f_hi[rd] = pair[0]
+        f_lo[rd] = pair[1]
+        handled = 1
+      }
+    }
+
     // 8. Unsigned Immediate Load/Store: (w >> 24) & 0x3B == 0x39
     when handled == 0 && bit_and(shr(w, 24), 59) == 57 {
       hold sz_ls = shr(w, 30)
@@ -1228,20 +1823,37 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
     // 12. SVC #0 (0xD4000001 = 3556769793)
     when handled == 0 && w == 3556769793 {
       hold asys = rlo[8]
+      when asys == 56 {
+        hold apath = vmem_read_cstr(img_mem, stk_mem, page_perm, rlo[1])
+        hold afd_open = vm_fd_open(apath, rlo[2], fd_path_buf, fd_path_len, fd_mode, fd_offset, fd_len, fd_data)
+        hold zao = set_arm_w(rlo, rhi, 0, afd_open)
+        handled = 1
+      }
+      when asys == 57 {
+        hold afd_close = vm_fd_close(rlo[0], fd_path_buf, fd_path_len, fd_mode, fd_len, fd_data)
+        hold zac = set_arm_w(rlo, rhi, 0, afd_close)
+        handled = 1
+      }
+      when asys == 63 {
+        hold anread = vm_fd_read(rlo[0], rlo[1], rlo[2], img_mem, stk_mem, page_perm, fd_mode, fd_offset, fd_len, fd_data)
+        hold zar = set_arm_w(rlo, rhi, 0, anread)
+        handled = 1
+      }
       when asys == 64 {
         hold afd = rlo[0]
         hold abuf = rlo[1]
         hold acnt = rlo[2]
-        when afd != 1 && afd != 2 {
-          hold fafd = fail_isa(1, concat("AArch64 unsupported write fd ", istr(afd)))
-        }
         hold awi = 0
-        while awi < acnt {
-          hold awb = vmem_ld8(img_mem, stk_mem, page_perm, abuf + awi)
-          out_bytes = push(out_bytes, awb)
-          awi = awi + 1
+        when afd == 1 || afd == 2 {
+          while awi < acnt {
+            hold awb = vmem_ld8(img_mem, stk_mem, page_perm, abuf + awi)
+            out_bytes = push(out_bytes, awb)
+            awi = awi + 1
+          }
+        } otherwise {
+          awi = vm_fd_write(afd, abuf, acnt, img_mem, stk_mem, page_perm, fd_mode, fd_offset, fd_len, fd_data)
         }
-        hold zwr = set_arm_x(rlo, rhi, 0, acnt, 0)
+        hold zwr = set_arm_x(rlo, rhi, 0, awi, 0)
         handled = 1
       }
       when asys == 93 {
@@ -1428,10 +2040,26 @@ make main_isa() -> num {
 
   hold out_bytes = []
   hold meta = [0, 0, 0]
+  hold fd_path_buf = []
+  hold fi = 0
+  while fi < 256 {
+    fd_path_buf = push(fd_path_buf, 0)
+    fi = fi + 1
+  }
+  hold fd_path_len = [0]
+  hold fd_mode = [-1]
+  hold fd_offset = [0]
+  hold fd_len = [0]
+  hold fd_data = []
+  fi = 0
+  while fi < 65536 {
+    fd_data = push(fd_data, 0)
+    fi = fi + 1
+  }
   when emach == 183 {
-    out_bytes = exec_arm64(img_mem, stk_mem, page_perm, entry, max_steps, out_bytes, meta)
+    out_bytes = exec_arm64(img_mem, stk_mem, page_perm, entry, max_steps, out_bytes, meta, fd_path_buf, fd_path_len, fd_mode, fd_offset, fd_len, fd_data)
   } otherwise {
-    out_bytes = exec_rv64(img_mem, stk_mem, page_perm, entry, max_steps, out_bytes, meta)
+    out_bytes = exec_rv64(img_mem, stk_mem, page_perm, entry, max_steps, out_bytes, meta, fd_path_buf, fd_path_len, fd_mode, fd_offset, fd_len, fd_data)
   }
 
   hold total_out = meta[2]

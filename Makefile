@@ -117,26 +117,33 @@ verify-seed:
 
 fix-seed: verify-seed
 
-pack-compiler:
-	@# Regenerate selfhost/compiler_min_gz/*.b64 from selfhost/compiler_min.sa
-	./selfhost/pack_compiler_min.sh
+tools/sxpack: tools/sxpack.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/sxpack.sa $@
+
+tools/sxlsp_probe: tools/sxlsp_probe.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/sxlsp_probe.sa $@
+
+tools/sxpkg_transfer_test: tools/sxpkg_transfer_test.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/sxpkg_transfer_test.sa $@
+
+tools/sxnet_test: tools/sxnet_test.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/sxnet_test.sa $@
+
+pack-compiler: tools/sxpack
+	@# Regenerate selfhost/compiler_min_gz/*.b64 from selfhost/compiler_min.sa in pure Sayanox
+	./tools/sxpack pack
 
 # ---------------------------------------------------------------------------
 # restore-compiler: guarantee selfhost/compiler_min.sa is present and sane.
 #
 # Fully offline -- this target never touches the network.
 #
-# Fast path (the normal case): compiler_min.sa is a checked-in source file, so
-# we only verify its markers. This path needs no base64, no gzip, no cat/tr.
-#
-# Fallback: if the source is absent or corrupt, decode the checked-in
-# gzip+base64 blob in selfhost/compiler_min_gz/*.b64. That blob was verified
-# byte-identical to the checked-in compiler_min.sa (sha256 55f28ede2d461faa...,
-# parts of at most 1100 chars (the count changes with the source); regenerate with `make pack-compiler` after any
-# edit to compiler_min.sa -- `restore-compiler` only greps markers, so a stale
-# blob does not fail the gates by itself), so both paths
-# produce the same file. base64, gzip, cat, tr and rm are therefore OPTIONAL
-# dependencies, needed only if the plain source goes missing.
+# Fast path (normal): compiler_min.sa is checked-in plaintext and the Makefile
+# verifies its markers. Fallback: decode the checked-in gzip+base64 blob with
+# POSIX utilities when the plaintext source is missing. After the compiler is
+# bootstrapped, `tools/sxpack.sa` can regenerate and byte-verify both archives
+# entirely under Sayanox control (`make pack-compiler`). The bootstrap fallback
+# remains a deliberately tiny Makefile recipe: sxpack itself needs gen2.
 # ---------------------------------------------------------------------------
 .PHONY: restore-compiler-module
 restore-compiler-module:
@@ -163,10 +170,6 @@ restore-compiler: restore-compiler-module
 	echo "[restore-compiler] $(MIN_SA) absent or incomplete -> decoding gzip+base64 parts (offline)"; \
 	{ test -f selfhost/compiler_min_gz/0000.b64 || test -f selfhost/compiler_min_gz/00.b64; } \
 	  || { echo "FAIL: no $(MIN_SA) and no compiler_min_gz bundle to restore from"; exit 1; }; \
-	# decode to a TEMP file and verify it BEFORE touching $(MIN_SA): a failed \
-	# or stale restore must never replace a source file that is already there \
-	# (that is how a newer compiler_min.sa gets silently downgraded to an \
-	# older blob if `grep` happens to be missing from PATH). \
 	cat selfhost/compiler_min_gz/*.b64 | tr -d '\n' | base64 -d | gzip -d > $(MIN_SA).tmp \
 	  || { echo "FAIL: could not decode selfhost/compiler_min_gz/*.b64 (need base64 and gzip)"; rm -f $(MIN_SA).tmp; exit 1; }; \
 	test -s $(MIN_SA).tmp || { echo "FAIL: decoded $(MIN_SA) is empty"; rm -f $(MIN_SA).tmp; exit 1; }; \
@@ -251,16 +254,16 @@ lsp: $(LSP_BIN)
 # without; and textDocument/formatting (the sxfmt rule set) on a badly indented
 # buffer and on one that is already formatted.  The probe prints one line per
 # verified fact: 29 of them, in this order.
-test-lsp: $(LSP_BIN) tools/sayanox-lsp-probe.sh
+test-lsp: $(LSP_BIN) tools/sxlsp_probe
 	@mkdir -p $(TESTS)
-	$(call assert-out,sh tools/sayanox-lsp-probe.sh ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\nrename capability\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change\nsecond document symbols\nclosed document answers empty\nclosed document not served from another buffer\nfifth document evicts the oldest\nnewest document still served\nreferences include the declaration\nreferences honour includeDeclaration:false\nreferences span the open documents\nreferences at a non-word answer empty\nworkspace symbol matches a query\nworkspace symbol with an empty query spans documents\nformatting answers one whole-buffer edit\nformatting indents a comment inside a block\nformatting indents a nested block by four spaces\nformatting strips trailing whitespace\nformatting leaves a formatted document alone\nrename edits the declaration\nrename carries the new name\nrename spans the open documents\nsignature help labels the declaration\nsignature help lists the parameters\nsignature help counts the argument\ncode action offers formatting\ncode action is empty when already formatted)
+	$(call assert-out,./tools/sxlsp_probe probe ./$(LSP_BIN) $(TESTS)/lsp-probe,initialize\nserverInfo\nrename capability\ndiag unknown-statement\ndiag unterminated-string\ndiag unbalanced-braces\ndiag unresolved-use\nsymbol function\nsymbol variable\ncompletion builtin\ncompletion literal preserved\nhover builtin\ndefinition\ndiagnostics cleared on change\nsecond document symbols\nclosed document answers empty\nclosed document not served from another buffer\nfifth document evicts the oldest\nnewest document still served\nreferences include the declaration\nreferences honour includeDeclaration:false\nreferences span the open documents\nreferences at a non-word answer empty\nworkspace symbol matches a query\nworkspace symbol with an empty query spans documents\nformatting answers one whole-buffer edit\nformatting indents a comment inside a block\nformatting indents a nested block by four spaces\nformatting strips trailing whitespace\nformatting leaves a formatted document alone\nrename edits the declaration\nrename carries the new name\nrename spans the open documents\nsignature help labels the declaration\nsignature help lists the parameters\nsignature help counts the argument\ncode action offers formatting\ncode action is empty when already formatted)
 	@echo "[OK] Sayanox LSP: live JSON-RPC sessions, real diagnostics, symbols, completion, hover, definition, references, workspace symbols, formatting"
 
 # Malformed and unexpected JSON-RPC input: unknown requests get -32601,
 # unknown notifications stay silent, bad bodies get -32700 / -32600, and the
-# server keeps serving afterwards. Probe: tools/sayanox-lsp-robust.sh.
-test-lsp-robust: $(LSP_BIN) tools/sayanox-lsp-robust.sh
-	@$(call assert-out,sh tools/sayanox-lsp-robust.sh ./$(LSP_BIN),unknown request -32601\nserver keeps serving after error\nunknown notification ignored\ngarbage body -32700\nno method -32600\njunk header skipped\ntruncated frame ends cleanly\nstring id echoed on a result\nstring id with an escaped quote echoed on an error\nnegative id echoed\nnull id echoed)
+# server keeps serving afterwards. Probe: tools/sxlsp_probe.sa.
+test-lsp-robust: $(LSP_BIN) tools/sxlsp_probe
+	@$(call assert-out,./tools/sxlsp_probe robust ./$(LSP_BIN),unknown request -32601\nserver keeps serving after error\nunknown notification ignored\ngarbage body -32700\nno method -32600\njunk header skipped\ntruncated frame ends cleanly\nstring id echoed on a result\nstring id with an escaped quote echoed on an error\nnegative id echoed\nnull id echoed)
 	@echo "[OK] Sayanox LSP robustness: JSON-RPC error responses for bad input"
 
 test-sxfmt: sxfmt
@@ -1933,8 +1936,8 @@ tools/emit_to_ir: tools/emit_to_ir.sa $(SXC_NATIVE_BIN)
 	@echo "[OK] Sayanox IR translator built C-free from tools/emit_to_ir.sa"
 
 .PHONY: test-emit-to-ir
-test-emit-to-ir: tools/emit_to_ir
-	sh tools/test-emit-to-ir.sh ./tools/emit_to_ir $(TESTS)/emit-tool
+test-emit-to-ir: tools/emit_to_ir tools/sxsuite
+	./tools/sxsuite ir_audit $(TESTS)/emit-tool
 
 test-native-ir-portable: $(NATIVE_BIN) tools/emit_to_ir test-emit-to-ir
 	@mkdir -p $(TESTS)
@@ -2067,14 +2070,16 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 #     ELFCLASS64 + EM_X86_64 for the same source file.
 #   * emission is deterministic, and the entry point, the program-header
 #     count and the image sizes are pinned.
-#   * nine out-of-subset programs are refused with a diagnostic and exit 1,
+#   * fifteen out-of-subset programs are refused with a diagnostic and exit 1,
 #     and the ones that are legal Sayanox still run on seed-min -- so the
 #     refusals are a subset boundary, not a broken front end.
 #
-# What it does NOT claim: this is not the native subset. There is no heap, no
-# string values, no lists, no structs, no functions, no collector and no file
-# IO, and `/` is refused on purpose because a Sayanox number is a double.
-# docs/NATIVE32.md states the bounds; native_aot remains the backend.
+# What it does NOT claim: this is not the full native runtime. The current
+# subset has integers, static string spans, len(), and bounded variable-to-
+# variable concat, but no general string operations, lists, structs, functions,
+# FP code generation, GC or general file API; `/` remains refused because
+# Sayanox numbers are doubles. `sxisaexec` runs the tested AArch64/RV64 subset.
+# See docs/NATIVE32.md; native_aot remains the x86-64 backend.
 #
 # Running the i386 binaries needs a kernel with IA32 emulation. Without it
 # the byte assertions still run and the execution ones say [SKIP].
@@ -2171,17 +2176,25 @@ test-native32: $(SEED_MIN_BIN) $(GEN2) $(N32_BIN)
 	  grep -q 'native32: ' $(TESTS)/n32/bad.err \
 	    || { echo "[FAIL] $$f was refused without a native32 diagnostic"; exit 1; }; \
 	done
-	@echo '[OK] i386 refusals: division, a fraction, a string value, a function, a list, an unknown name, &&, 2^31 and an unclosed block are each refused with a diagnostic and a non-zero exit'
+	@echo '[OK] i386 refusals: division, fractions, string concatenation/NUL, string type misuse, len(number), functions, lists, unknown names, &&, 2^31 and unclosed blocks are each refused with a diagnostic and a non-zero exit'
 	@# and the refused programs that are legal Sayanox still run elsewhere,
 	@# so this is a subset boundary rather than a broken front end
-	@for f in division strvalue function list; do \
+	@for f in division strvalue nulstring function list concat_literal concat_expression; do \
 	  ./$(SEED_MIN_BIN) $(N32_T)/refuse/$$f.sa > $(TESTS)/n32/ok_$$f.c; \
 	  $(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/n32/ok_$$f $(TESTS)/n32/ok_$$f.c; \
 	  ./$(TESTS)/n32/ok_$$f > /dev/null \
 	    || { echo "[FAIL] refuse/$$f.sa does not even run on seed-min, so it is a broken program and proves nothing"; exit 1; }; \
 	done
 	@$(call assert-out,./$(TESTS)/n32/ok_division,3.5)
-	@echo '[OK] i386 subset boundary: every refused program that is legal Sayanox still compiles and runs on seed-min (7 / 2 is 3.5 there, which is exactly why this integer backend refuses it)'
+	@echo '[OK] i386 subset boundary: all seven refused programs that are legal Sayanox still run on seed-min (7 / 2 is 3.5; concat with a literal or expression operand remains outside this backend subset)'
+	@./$(N32_BIN) $(N32_T)/heap_exhaust.sa $(TESTS)/n32/heap_exhaust.i386
+	@chmod +x $(TESTS)/n32/heap_exhaust.i386
+	@if [ "$$(cat $(TESTS)/n32/runnable)" = 1 ]; then \
+	  ./$(TESTS)/n32/heap_exhaust.i386 > $(TESTS)/n32/heap_exhaust.i386.out; rc=$$?; \
+	  test "$$rc" = 1 || { echo "[FAIL] i386 concat heap exhaustion returned $$rc instead of 1"; exit 1; }; \
+	  test ! -s $(TESTS)/n32/heap_exhaust.i386.out || { echo "[FAIL] i386 heap-limit fixture reached unreachable output"; exit 1; }; \
+	  echo '[OK] i386 concat heap exhaustion is bounded and exits 1'; \
+	else echo '[SKIP] i386 concat heap exhaustion runtime: kernel lacks IA32 execution'; fi
 
 native-test: test-native32
 
@@ -2190,15 +2203,11 @@ native-test: test-native32
 # test-native-arm64: the SAME front end, a second encoder, a third ISA.
 #
 # tools/native32.sa takes `arm64` as its third argument and emits an
-# AArch64 ELF64 instead of an i386 ELF32. This machine is x86-64 and this
-# repository ships no emulator, cross-assembler or aarch64 objdump, so these
-# images are NEVER EXECUTED here and nothing below pretends otherwise. What
-# this gate can honestly assert is: they are emitted, they are deterministic,
-# they are byte-identical to goldens that were read back instruction by
-# instruction with a disassembler (see docs/gate-logs/2026-10-23-arm64-third-isa),
-# the ELF64 container really says AArch64, the two encoders agree on the data
-# segment they lay out for the same source, and the subset boundary is the
-# same on both targets.
+# AArch64 ELF64 instead of an i386 ELF32. This gate pins historical integer
+# goldens, container details, deterministic emission and cross-target data
+# layout. The separate pure-Sayanox `test-sxisaexec` gate executes compiler
+# output on AArch64 and RV64, including the current static-string and bounded concat slice.
+# Neither gate claims the backend implements the full architecture or language.
 .PHONY: test-native-arm64
 test-native-arm64: $(SEED_MIN_BIN) $(N32_BIN)
 	@mkdir -p $(TESTS)/n32
@@ -2211,7 +2220,7 @@ test-native-arm64: $(SEED_MIN_BIN) $(N32_BIN)
 	  cmp $(TESTS)/n32/$$f.a64 $(N32_T)/golden/$$f.arm64.elf \
 	    || { echo "[FAIL] the arm64 image for $$f.sa differs from the reviewed golden $(N32_T)/golden/$$f.arm64.elf"; exit 1; }; \
 	done
-	@echo '[OK] arm64: expr, flow and text are emitted, byte-deterministic, and byte-identical to the disassembly-reviewed goldens -- emitted and pinned here, never executed in this repository'
+	@echo '[OK] arm64: expr, flow and text are emitted deterministically and match reviewed goldens; test-sxisaexec executes the AArch64 ELF subset'
 	@# the container is really AArch64, and really not the i386 one
 	@test "$$(od -An -tx1 -v -N 8 $(TESTS)/n32/expr.a64 | tr -d ' \n')" = 7f454c4602010100 \
 	  || { echo "[FAIL] the arm64 image is no longer ELFCLASS64"; exit 1; }
@@ -2262,7 +2271,7 @@ test-native-arm64: $(SEED_MIN_BIN) $(N32_BIN)
 	  echo "[FAIL] an unknown target was accepted"; exit 1; fi
 	@grep -q 'native32: unknown target' $(TESTS)/n32/badt.err \
 	  || { echo "[FAIL] an unknown target was refused without naming the problem"; exit 1; }
-	@echo '[OK] arm64 refusals: the nine out-of-subset programs are refused on this target too, and an unknown target name is refused rather than silently defaulted'
+	@echo '[OK] arm64 refusals: all fifteen out-of-subset programs are refused on this target too, and an unknown target name is refused rather than silently defaulted'
 
 native-test: test-native-arm64
 
@@ -2270,12 +2279,10 @@ native-test: test-native-arm64
 # test-native-riscv64: FOURTH machine-code target -- RV64IM Linux ELF64
 # (ELFCLASS64 / EM_RISCV = 243), emitted by tools/native32.sa in Sayanox.
 #
-# Like arm64, these RV64IM images are NOT executed on an x86-64 host without an
-# emulator: the gate pins byte-determinism, reviewed golden agreement, the
-# ELF64/EM_RISCV container, the print-decimal prologue (`addiw t0,a0,0`) and
-# exit epilogue (`addi a0,zero,0` / `addi a7,zero,93` / `ecall`), three-way
-# data-segment identity across i386, arm64 and riscv64, and all nine subset
-# refusals.
+# This emission gate pins RV64IM bytes, reviewed goldens, the ELF64/EM_RISCV
+# container, the print-decimal prologue and exit epilogue, three-way
+# data-segment identity and the refusal boundary. `test-sxisaexec` separately
+# runs the exercised RV64 image subset; neither is a full RV64GC claim.
 # ---------------------------------------------------------------------------
 .PHONY: test-native-riscv64
 test-native-riscv64: $(SEED_MIN_BIN) $(N32_BIN)
@@ -2289,7 +2296,7 @@ test-native-riscv64: $(SEED_MIN_BIN) $(N32_BIN)
 	  cmp $(TESTS)/n32/$$f.rv64 $(N32_T)/golden/$$f.riscv64.elf \
 	    || { echo "[FAIL] the riscv64 image for $$f.sa differs from the reviewed golden $(N32_T)/golden/$$f.riscv64.elf"; exit 1; }; \
 	done
-	@echo '[OK] riscv64: expr, flow and text are emitted, byte-deterministic, and byte-identical to the reviewed goldens -- emitted and pinned here, never executed on x86-64'
+	@echo '[OK] riscv64: expr, flow and text are emitted deterministically and match reviewed goldens; test-sxisaexec executes the RV64IM ELF subset'
 	@test "$$(od -An -tx1 -v -N 8 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 7f454c4602010100 \
 	  || { echo "[FAIL] the riscv64 image is no longer ELFCLASS64"; exit 1; }
 	@test "$$(od -An -tu2 -v -j 16 -N 2 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 2 \
@@ -2332,7 +2339,7 @@ test-native-riscv64: $(SEED_MIN_BIN) $(N32_BIN)
 	  grep -q 'native32: ' $(TESTS)/n32/badrv.err \
 	    || { echo "[FAIL] $$f was refused for riscv64 without a native32 diagnostic"; exit 1; }; \
 	done
-	@echo '[OK] riscv64 refusals: all nine out-of-subset programs are refused cleanly on this target too'
+	@echo '[OK] riscv64 refusals: all fifteen out-of-subset programs are refused cleanly on this target too'
 
 native-test: test-native-riscv64
 
@@ -2472,7 +2479,9 @@ test-trust-anchor: $(GEN2) $(SXA_BIN) $(SEED_MIN_BIN)
 	  || { echo "[FAIL] the audit record names more than one C file"; exit 1; }
 	@test "$$(git ls-files '*.c' '*.h')" = "selfhost/seed/sxc_seed_min.c" \
 	  || { echo "[FAIL] tracked .c/.h files exist outside selfhost/seed/sxc_seed_min.c:"; git ls-files '*.c' '*.h'; exit 1; }
-	@echo '[OK] one anchor: selfhost/seed/sxc_seed_min.c is the ONLY tracked .c/.h file in the entire repository; every later .c in the bootstrap chain is generated and gitignored'
+	@test -z "$$(git ls-files '*.sh')" \
+	  || { echo "[FAIL] tracked .sh files remain in the repository:"; git ls-files '*.sh'; exit 1; }
+	@echo '[OK] one anchor: selfhost/seed/sxc_seed_min.c is the ONLY tracked .c/.h file in the entire repository, and 0 tracked .sh scripts remain'
 	@# 3. the external surface of the anchor
 	@test "$$(grep -c '^#include' $(SEED_MIN_C))" = 4 \
 	  || { echo "[FAIL] the seed's #include set changed size"; grep '^#include' $(SEED_MIN_C); exit 1; }
@@ -3591,13 +3600,13 @@ test-network: test-http-get test-sayacrawl
 
 # test-http-get: http_get(url) network builtin (GET only, http/https only, 1 MB cap,
 # 10 s timeout, no redirects). Local server only; native refuses it explicitly.
-test-http-get: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN) $(NATIVE_BIN)
-	@sh tools/test-http-get.sh $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN) $(NATIVE_BIN) || { echo "[FAIL] test-http-get"; exit 1; }
+test-http-get: $(GEN2) $(SEED_MIN_BIN) $(SEED_BIN) $(NATIVE_BIN) tools/sxnet_test
+	@CC='$(CC)' ./tools/sxnet_test http-get ./$(GEN2) ./$(SEED_MIN_BIN) ./$(SEED_BIN) ./$(NATIVE_BIN) || { echo "[FAIL] test-http-get"; exit 1; }
 
 # test-sayacrawl: sayascrape/crawl.sa, the Sayanox crawler (gen2 full language, typed
 # str helpers). Local server only; exact-output checks for crawl, caps and refusals.
-test-sayacrawl: $(GEN2)
-	@sh tools/test-sayacrawl.sh $(GEN2) sayascrape/crawl.sa || { echo "[FAIL] test-sayacrawl"; exit 1; }
+test-sayacrawl: $(GEN2) tools/sxnet_test
+	@CC='$(CC)' ./tools/sxnet_test sayacrawl ./$(GEN2) sayascrape/crawl.sa || { echo "[FAIL] test-sayacrawl"; exit 1; }
 
 # test-logic-value: and / or / not as values (hold, show, give, assignment,
 # parenthesized groups). Expected output is hand-checked; gen2 and native must match.
@@ -4243,11 +4252,11 @@ test-for-str: test-doc-claims
 DEP_SHIM_DIR := $(TESTS)/depshim
 DEP_SHIM_LOG := $(TESTS)/depshim.log
 .PHONY: test-language-deps
-test-language-deps: $(GEN2) $(SXC_NATIVE_BIN) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN)
+test-language-deps: $(GEN2) $(SXC_NATIVE_BIN) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN) tools/sxlsp_probe tools/sxpkg_transfer_test tools/sxpack
 	@# ---- static ----
-	@if grep -rl '^#!.*bash' --include='*.sh' --include='sx' . 2>/dev/null | grep -q .; then \
-	  echo "[FAIL] a tracked script still has a bash shebang:"; \
-	  grep -rl '^#!.*bash' --include='*.sh' --include='sx' . 2>/dev/null; exit 1; fi
+	@if [ -n "$$(git ls-files '*.sh')" ]; then \
+	  echo "[FAIL] tracked .sh scripts remain in the repository:"; \
+	  git ls-files '*.sh'; exit 1; fi
 	@if grep -nE '^	[@-]*[[:space:]]*(awk|sed)([[:space:]]|$$)' Makefile; then \
 	  echo "[FAIL] a Makefile recipe invokes awk or sed"; exit 1; fi
 	@test ! -e tools/lsp_workspace_bind.awk || { echo "[FAIL] the old awk LSP binder still exists"; exit 1; }
@@ -4255,10 +4264,9 @@ test-language-deps: $(GEN2) $(SXC_NATIVE_BIN) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MI
 	@test ! -e tools/lsp_workspace.h || { echo "[FAIL] the C LSP directory bridge is back"; exit 1; }
 	@grep -q 'make workspace_manifest' tools/sayanox_lsp.sa && grep -q 'read_dir(' tools/sayanox_lsp.sa \
 	  || { echo "[FAIL] the LSP no longer builds its folder index in Sayanox"; exit 1; }
-	@grep -q 'split -b 1100' selfhost/pack_compiler_min.sh || { echo "[FAIL] the packer no longer chunks with split"; exit 1; }
-	@if grep -nE '^[[:space:]]*[^#]*awk' selfhost/pack_compiler_min.sh selfhost/restore_compiler_min.sh; then \
-	  echo "[FAIL] a restore/pack script invokes awk"; exit 1; fi
-	@echo "[OK] language deps (static): POSIX sh scripts only; no awk/sed in build or test recipes"
+	@grep -q 'pos + 1100' tools/sxpack.sa || { echo "[FAIL] tools/sxpack.sa no longer chunks at 1100 bytes"; exit 1; }
+	@./tools/sxpack verify >/dev/null || { echo "[FAIL] tools/sxpack verify failed"; exit 1; }
+	@echo "[OK] language deps (static): 0 tracked .sh scripts; pure-Sayanox sxpack/sxlsp_probe; no awk/sed in build or test recipes"
 	@# ---- dynamic ----
 	@mkdir -p $(DEP_SHIM_DIR)
 	@rm -f $(DEP_SHIM_LOG)
@@ -4272,6 +4280,7 @@ test-language-deps: $(GEN2) $(SXC_NATIVE_BIN) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MI
 	@cmp $(TESTS)/lsp_shim.elf $(LSP_BIN)
 	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" $(MAKE) --no-print-directory \
 	  -o $(GEN2_C) -o $(GEN2) -o $(GEN1_MIN_C) -o $(GEN1_MIN) -o $(SEED_MIN_BIN) -o $(SXC_NATIVE_BIN) \
+	  -o tools/sxlsp_probe -o tools/sxpkg_transfer_test -o tools/sxpack \
 	  test-lsp test-lsp-robust test-native-ir-log test-native-mem test-seed-gc test-seed-generics test-sxpkg-online-local test-sxpkg-sayanox-logic
 	@if [ -s $(DEP_SHIM_LOG) ]; then echo "[FAIL] a removed interpreter was invoked:"; cat $(DEP_SHIM_LOG); exit 1; fi
 	@echo "[OK] language deps: no bash/awk/sed/python/perl/node/ruby invoked by the exercised build, test and LSP paths"
@@ -4717,7 +4726,7 @@ all-sayanox:
 	@printf '  %-28s %6s lines  %s\n' seed "$$(wc -l < selfhost/seed/sxc_seed_min.c)" selfhost/seed/sxc_seed_min.c
 	@printf '  %-28s %6s files  %s\n' non-anchor-c-or-h "$$(git ls-files '*.c' '*.h' | grep -vc '^selfhost/seed/sxc_seed_min\.c$$' || true)" '.c/.h'
 	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
-	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' | wc -l)" 'POSIX sh'
+	@printf '  %-28s %6s files  %s\n' tracked-shell-scripts "$$(git ls-files '*.sh' | wc -l)" 'must remain zero'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
 	@echo "  done: compiler, C-free self-compiling x86-64 ELF64 compiler (tools/sxc_native.sa),"
 	@echo "        native x86-64 ELF64 AOT backend (selfhost/native_aot.sa), pure-Sayanox"
@@ -5044,13 +5053,14 @@ gen3:
 	./$(GEN3) $(MIN_SA) selfhost/gen4.c >/dev/null
 	@if cmp -s $(GEN3_C) selfhost/gen4.c; then echo "[OK] byte-identical gen3 == gen4"; \
 	else echo "[FAIL] gen3/gen4 differ"; exit 1; fi
-	@CC='$(CC)' sh selfhost/test_compiler_source_features.sh
-	@CC='$(CC)' sh selfhost/test_struct_functions.sh
-	@CC='$(CC)' sh selfhost/test_string_interpolation.sh
+	@$(MAKE) --no-print-directory tools/sxsuite
+	@CC='$(CC)' SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite compiler_features
+	@CC='$(CC)' SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite struct_fn
+	@CC='$(CC)' SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite stage2_interp
 	@# gen3 exists here, so the broader-language readiness probes can finally
 	@# run inside a hard gate instead of only under the fail-closed
 	@# true-selfhost-full. They are closure probes, not a language contract.
-	@$(MAKE) test-full-language-readiness
+	@SXSUITE_REQUIRE_GEN3=1 $(MAKE) --no-print-directory test-full-language-readiness
 	@echo "=== GEN3-OK ==="
 
 subset: seed-bin
@@ -5069,7 +5079,7 @@ test: true-selfhost
 
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
-	rm -f $(SEED_MIN_BIN) $(SEED_BIN) $(SXC_NATIVE_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) $(SXDIAG_BIN) $(SXDIAG_C) tools/emit_to_ir tools/emit_to_ir.c tools/sxlink tools/sxencode tools/sxdefs tools/native32 tools/sxmod tools/sxaudit tools/sxinfer tools/sxruntime tools/sxgc tools/sxemit tools/sxbuild tools/sxstage2_parity tools/sxirexec tools/sxpkg_pubkey_test tools/sxsuite tools/sxisaexec tools/sxc_native_test tools/sxisaexec_test tools/sxmod_deep_test tools/lsp_ide_test
+	rm -f $(SEED_MIN_BIN) $(SEED_BIN) $(SXC_NATIVE_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) $(SXDIAG_BIN) $(SXDIAG_C) tools/emit_to_ir tools/emit_to_ir.c tools/sxlink tools/sxencode tools/sxdefs tools/native32 tools/sxmod tools/sxaudit tools/sxinfer tools/sxruntime tools/sxgc tools/sxemit tools/sxbuild tools/sxstage2_parity tools/sxirexec tools/sxpkg_pubkey_test tools/sxsuite tools/sxisaexec tools/sxc_native_test tools/sxisaexec_test tools/sxmod_deep_test tools/lsp_ide_test tools/sxpack tools/sxlsp_probe tools/sxpkg_transfer_test tools/sxnet_test tools/sxarch_aot tools/sxarch_aot_test
 
 # ---------------------------------------------------------------------------
 # doctor: check core tools. Expanded feature gates also use POSIX utilities;
@@ -5244,8 +5254,8 @@ test-seed-hold-types: $(GEN2) $(SEED_MIN_BIN)
 test-stage2: test-seed-hold-types
 
 .PHONY: test-lsp-unicode
-test-lsp-unicode: $(LSP_BIN) tools/sayanox-lsp-unicode.sh
-	$(call assert-out,sh tools/sayanox-lsp-unicode.sh ./$(LSP_BIN),raw UTF-8 and JSON Unicode escapes agree\nUTF-16 advertised\nUTF-16 hover after BMP and supplementary characters\ndiagnostic range does not split surrogate pair\nempty full-text didChange clears document\ndidClose releases document state\nempty change array and unrelated URI preserve document)
+test-lsp-unicode: $(LSP_BIN) tools/sxlsp_probe
+	$(call assert-out,./tools/sxlsp_probe unicode ./$(LSP_BIN),raw UTF-8 and JSON Unicode escapes agree\nUTF-16 advertised\nUTF-16 hover after BMP and supplementary characters\ndiagnostic range does not split surrogate pair\nempty full-text didChange clears document\ndidClose releases document state\nempty change array and unrelated URI preserve document)
 	@echo '[OK] LSP Unicode and lifecycle: accented Latin, Bengali, emoji, UTF-16 positions, empty changes and close'
 test-lsp: test-lsp-unicode
 
@@ -6083,8 +6093,8 @@ test-seed-bootstrap-budget:
 # Permanent contract of this bootstrap dialect, not a promise of recursive GC
 # layouts. Both public type gates must exercise the same negative matrix.
 .PHONY: test-generic-struct-limits
-test-generic-struct-limits: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
-	CC='$(CC)' sh selfhost/test_generic_struct_limits.sh
+test-generic-struct-limits: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) tools/sxsuite
+	CC='$(CC)' ./tools/sxsuite generic_struct_limits
 
 test-generic-structs test-type-refusals: test-generic-struct-limits
 
@@ -6241,8 +6251,8 @@ test-stdlib-modules: test-stdlib-list-search
 native-test: test-stdlib-list-search
 
 .PHONY: test-sxpkg-transfer-hardening
-test-sxpkg-transfer-hardening: sxpkg
-	sh selfhost/test_sxpkg_transfer_hardening.sh
+test-sxpkg-transfer-hardening: sxpkg tools/sxpkg_transfer_test
+	./tools/sxpkg_transfer_test
 
 test-sxpkg-online-optin: test-sxpkg-transfer-hardening
 
@@ -6257,16 +6267,16 @@ test-lsp-workspace: $(LSP_BIN) $(SXC_NATIVE_BIN) tools/lsp_workspace_test.sa
 test-lsp test-lsp-robust: test-lsp-workspace
 
 .PHONY: test-full-language-readiness
-test-full-language-readiness:
-	@CC='$(CC)' sh selfhost/test_full_language_readiness.sh
+test-full-language-readiness: $(GEN2) tools/sxsuite
+	@CC='$(CC)' ./tools/sxsuite full_lang_ready
 
 .PHONY: test-struct-functions
-test-struct-functions:
-	@CC='$(CC)' sh selfhost/test_struct_functions.sh
+test-struct-functions: $(GEN2) tools/sxsuite
+	@CC='$(CC)' ./tools/sxsuite struct_fn
 
 .PHONY: test-string-interpolation
-test-string-interpolation:
-	@CC='$(CC)' sh selfhost/test_string_interpolation.sh
+test-string-interpolation: $(GEN2) tools/sxsuite
+	@CC='$(CC)' ./tools/sxsuite stage2_interp
 
 # ---------------------------------------------------------------------------
 # test-stdlib-crypto: stdlib/crypto.sa -- SHA-256 and HMAC-SHA256 written in
@@ -6742,8 +6752,9 @@ test-sxsuite: tools/sxsuite $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) tools/emit_to_
 native-test: test-sxsuite
 
 # ---------------------------------------------------------------------------
-# test-sxisaexec: User-mode ARM64 (AArch64) & RISC-V 64 (RV64GC) ELF64 Linux
-# instruction emulator with 6-way execution parity + negative fault controls.
+# test-sxisaexec: User-mode AArch64 & RV64IM ELF64 emulator parity for integers,
+# strings and bounded concat, concat heap limits, FP/syscall emulator probes,
+# and negative fault controls. FP and syscall probes are not compiler features.
 # ---------------------------------------------------------------------------
 tools/sxisaexec: tools/sxisaexec.sa $(SXC_NATIVE_BIN)
 	./$(SXC_NATIVE_BIN) tools/sxisaexec.sa $@

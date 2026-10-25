@@ -1,0 +1,2 @@
+hold value = "text"
+show value + 1

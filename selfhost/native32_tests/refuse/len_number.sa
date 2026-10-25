@@ -1,0 +1,2 @@
+hold value = 17
+show len(value)

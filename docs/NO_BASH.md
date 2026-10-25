@@ -1,38 +1,36 @@
 # Sayanox-owned tooling: migration status
 
 The project goal is to move compiler and developer-tool **logic** into
-Sayanox. That migration is not complete; do not read the repository as claiming
-that every tool is already a `.sa` program.
+Sayanox. All tracked shell scripts have now been retired (2026-10-25), but the
+Makefile still contains inline POSIX-shell recipes and the bootstrap retains a
+base64/gzip compiler-source recovery fallback. Do not read this as a claim that
+the host build driver is itself a Sayanox program.
 
-## No bash, awk or sed on the maintained paths (2026-10-17)
+## No tracked `.sh` scripts; no bash, awk or sed on maintained paths
 
-* All tracked shebang scripts are `#!/bin/sh`. The six former bash scripts —
-  `selfhost/sx`, `restore_stage2.sh`, `restore_sxc_full.sh`,
-  `restore_compiler_min.sh`, `pack_compiler_min.sh` and `lang_quality.sh` —
-  were ported; `pipefail`, `[[ ]]`, arrays, `local` and process substitution
-  are gone. Four of the six were then deleted on 2026-10-21 (`selfhost/sx`,
-  `restore_stage2.sh`, `restore_sxc_full.sh`, `lang_quality.sh`) because they
-  drove a Stage-2 host that does not exist.
+* `git ls-files '*.sh'` is empty. The last 14 tracked drivers have Sayanox
+  replacements: `tools/sxsuite.sa`, `tools/sxlsp_probe.sa`,
+  `tools/sxpkg_transfer_test.sa`, `tools/sxnet_test.sa`, and `tools/sxpack.sa`.
+  `make test-trust-anchor` and `make test-language-deps` pin this invariant.
+  The bootstrap-source fallback remains an inline Makefile recipe because the
+  Sayanox packer cannot be built before a compiler exists.
 * The LSP build needs no binder at all since 2026-10-17: the folder index is
   Sayanox (`read_dir`/`path_kind`/`path_size`/`path_real`), so both
   `tools/lsp_workspace_bind.sa` (itself a Sayanox replacement for the old awk
   binder) and the C header it injected were deleted.
-* The offline packer chunks with `split -b 1100`; test recipes extract lines
-  with POSIX `read`; the native IR-log checks use `grep`/`cut`/`sort`/`paste`;
-  the emit-seam region uses `head`/`tail`; the package tool (`tools/sxpkg.sa`
-  since 2026-10-22) needs none of them -- it parses `sx.lock`, `pkg.meta` and
-  `sx.toml` itself, copies with `read_file`/`write_file`, makes folders with
-  `ensure_dir` and moves a staged download with `read_file` + `remove_path`,
-  and it no longer calls `grep`, `cut`, `tr`, `cp`, `mkdir` or
-  `rm` at all.
+* The offline packer and restorer are `tools/sxpack.sa` (Base64 encode/decode,
+  1100-character parts, gzip stream recovery and byte-for-byte archive checks).
+  The regression probes and local HTTP/crawler tests are also Sayanox programs.
+  Makefile recipes still use POSIX tools as build plumbing; Sayanox feature
+  logic, fixtures, protocol checks and assertions live in `.sa`.
 * The legacy sed-based `tools/sayanox-lsp.sh` shell server was deleted. The
   supported server is `tools/sayanox_lsp.sa`.
-* Python was removed from the restore scripts (a dead installer branch and a
-  base64 heredoc). It remains only in the optional HTTP/crawler test servers,
-  which are not bootstrap prerequisites.
-* `make test-language-deps` checks the boundary: a static scan plus a PATH shim
-  that makes bash/awk/sed/python/perl/node/ruby fail and logs any invocation
-  while the affected paths are re-run.
+* Python remains an optional dependency only for the local HTTP fixture
+  server used by the Sayanox network/crawler test program; this is not a
+  language runtime or a tracked script.
+* `make test-language-deps` checks the boundary: zero tracked `.sh` files,
+  static Makefile checks, and a PATH shim that makes bash/awk/sed/python/perl/
+  node/ruby fail while the selected language-dependency tests are re-run.
 
 ## Sayanox tools built and tested
 
@@ -59,16 +57,16 @@ that every tool is already a `.sa` program.
   became the whole package tool on 2026-10-22 -- the wrapper, its opt-in
   policy, `SAYANOX_ROOT`, its `cut`/`tr` manifest parsing and its `cp`/`mv`
   staging are gone. The transport stays because
-  `selfhost/test_sxpkg_transfer_hardening.sh` mocks `curl`/`wget` through
-  `PATH` and asserts `$MOCK_CALLS` contains them: switching to the `http_get`
-  builtin would delete the test's subject. This is a documented exception, not
-  an unfinished step.
+  `tools/sxpkg_transfer_test.sa` installs mock `curl`/`wget` executables on a
+  controlled `PATH` and asserts their calls: switching to the `http_get`
+  builtin would change the transport subject. This is a documented dependency,
+  not an unfinished shell-porting step.
 - `selfhost/seed/sxc_seed_min.c` is the small trusted bootstrap compiler, and
   `selfhost/native_aot.c` is the current x86-64 Linux native backend.
-- `Makefile` and its POSIX-shell recipes orchestrate the initial build and
-  regression tests.
+- `Makefile` and its inline POSIX-shell recipes orchestrate the initial build
+  and regression tests; no tracked `.sh` file remains.
 
-Pulling the remaining C and shell pieces into Sayanox is the next phase,
+Pulling the remaining C and build-driver logic into Sayanox is the next phase,
 recorded in [`ALL_SAYANOX_PHASE.md`](ALL_SAYANOX_PHASE.md); `make all-sayanox`
 lists what is left and fails closed.
 

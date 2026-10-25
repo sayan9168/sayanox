@@ -166,24 +166,17 @@ User programs compiled by `native_aot` do not pass through clang.
 
 ## Second-ISA decision and IR audit (2026-10-16)
 
-**Superseded in part on 2026-10-23 — see [NATIVE32.md](NATIVE32.md).** There
-is now an executable second target, `tools/native32.sa`: a Sayanox-written
-i386 backend for a documented integer subset, gated by `make test-native32`
-(four backends, two instruction sets, identical bytes). What the paragraph
-below still says correctly is that **`native_aot` and `native-test` are
-x86-64 Linux only** — the second target compiles a subset, not the native
-subset. The same program also emits **aarch64** ELF for that subset
-(`make test-native-arm64`, added the same day), but those images are only
-emitted, byte-pinned and disassembly-reviewed: there is still no aarch64
-*execution* gate anywhere in this repository, because there is nothing here
-that can run one.
+**Superseded in part on 2026-10-23 and extended 2026-10-25 — see
+[NATIVE32.md](NATIVE32.md).** `tools/native32.sa` emits i386, AArch64 and RV64IM ELF for a bounded integer and string subset: static spans, `len`, and variable-to-variable `concat` using a fixed bump heap. The Sayanox `tools/sxisaexec.sa` user-mode emulator executes the AArch64/RV64 images; `make test-sxisaexec` pins six-way parity for integers, string declaration/reassignment, and bounded concatenation as well as fault behavior.
+Scalar IEEE-754 S/D arithmetic and basic Linux file syscalls have separate
+emulator-only probes.
 
-**No executable second ISA is implemented or claimed** *for the native
-subset*. Native compilation and `native-test` remain x86-64 Linux only. The
-C fallback's host portability does not establish a second direct-to-ELF
-backend for that subset. There is no aarch64 execution smoke gate in this
-repository — `test-native-arm64` emits and pins aarch64 images for the
-integer subset without running any of them.
+**Full-language native support is not implemented or claimed** for ARM64 or
+RISC-V. `native_aot` and `native-test` remain x86-64 Linux; `native32` only
+has bounded bump-heap concatenation, and still lacks general string operations,
+lists, structs, user functions, floating-point code generation, general file
+I/O, and GC. Emulator instruction execution and syscall probes are not
+compiler features by themselves.
 
 The bounded improvement here is analysis tooling: the existing C99 streaming
 `emit_to_ir` translator now has strict record/offset auditing and optional

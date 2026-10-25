@@ -1,10 +1,11 @@
 // tools/sxisaexec_test.sa -- Pure-Sayanox multi-ISA execution proof harness
-// verifying 6-way byte-for-byte execution parity across:
+// verifying 6-way byte-for-byte execution parity across integer and static-string fixtures:
 //   (1) seed_min + C, (2) gen2 + C, (3) native_aot (x86-64 ELF64),
 //   (4) sxc_native / sxirexec (Portable IR VM) / i386 ELF32,
 //   (5) AArch64 ELF64 (including reviewed tracked goldens) via sxisaexec, and
 //   (6) RISC-V RV64IM ELF64 via sxisaexec,
-// plus negative fault/container/permission/step-budget safety checks.
+// plus scalar IEEE-754 AArch64/RV64F/D arithmetic, Linux openat/read/write/
+// close file syscalls, and negative fault/container/permission/step-budget checks.
 
 make fail_t(msg: str) -> num {
   show concat("[FAIL] sxisaexec_test: ", msg)
@@ -265,6 +266,564 @@ make verify_six_way(dir: str, name: str, sa_path: str, golden_arm64: str, golden
   give 0
 }
 
+// Small ELF64 builder used by the syscall integration test below.
+make text_has(hay: str, needle: str) -> num {
+  hold nh = len(hay)
+  hold nn = len(needle)
+  when nn == 0 {
+    give 1
+  }
+  when nn > nh {
+    give 0
+  }
+  hold i = 0
+  while i + nn <= nh {
+    hold j = 0
+    hold same = 1
+    while j < nn && same == 1 {
+      when sx_index(hay, i + j) != sx_index(needle, j) {
+        same = 0
+      }
+      j = j + 1
+    }
+    when same == 1 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make test_concat_heap_limit(dir: str) -> num {
+  hold stem = concat(dir, "/concat_heap")
+  hold arm_elf = concat(stem, ".arm64.elf")
+  hold rv_elf = concat(stem, ".riscv64.elf")
+  hold arm_stats = concat(stem, ".arm64.stats")
+  hold rv_stats = concat(stem, ".riscv64.stats")
+  hold arm_out = concat(stem, ".arm64.out")
+  hold rv_out = concat(stem, ".riscv64.out")
+  when run_command(concat("./tools/native32 selfhost/native32_tests/heap_exhaust.sa ", concat(sh_q(arm_elf), " arm64"))) != 0 {
+    hold f1 = fail_t("native32 could not emit the AArch64 concat heap-limit fixture")
+  }
+  when run_command(concat("./tools/native32 selfhost/native32_tests/heap_exhaust.sa ", concat(sh_q(rv_elf), " riscv64"))) != 0 {
+    hold f2 = fail_t("native32 could not emit the RV64 concat heap-limit fixture")
+  }
+  hold arm_cmd = concat("./tools/sxisaexec --arch arm64 --out ", sh_q(arm_out))
+  arm_cmd = concat(arm_cmd, concat(" --stats ", sh_q(arm_stats)))
+  arm_cmd = concat(arm_cmd, concat(" ", sh_q(arm_elf)))
+  hold arm_rc = run_command(arm_cmd)
+  when arm_rc != 1 {
+    hold f3 = fail_t(concat("AArch64 concat heap exhaustion returned ", istr(arm_rc)))
+  }
+  hold arm_s = read_file(arm_stats)
+  when text_has(arm_s, "arch=arm64 ") == 0 || text_has(arm_s, "exit=1") == 0 {
+    hold f4 = fail_t("AArch64 concat heap exhaustion did not record exit=1")
+  }
+  when len(read_file(arm_out)) != 0 {
+    hold f5 = fail_t("AArch64 concat heap-limit fixture reached its unreachable output")
+  }
+  hold rv_cmd = concat("./tools/sxisaexec --arch riscv64 --out ", sh_q(rv_out))
+  rv_cmd = concat(rv_cmd, concat(" --stats ", sh_q(rv_stats)))
+  rv_cmd = concat(rv_cmd, concat(" ", sh_q(rv_elf)))
+  hold rv_rc = run_command(rv_cmd)
+  when rv_rc != 1 {
+    hold f6 = fail_t(concat("RV64 concat heap exhaustion returned ", istr(rv_rc)))
+  }
+  hold rv_s = read_file(rv_stats)
+  when text_has(rv_s, "arch=riscv64 ") == 0 || text_has(rv_s, "exit=1") == 0 {
+    hold f7 = fail_t("RV64 concat heap exhaustion did not record exit=1")
+  }
+  when len(read_file(rv_out)) != 0 {
+    hold f8 = fail_t("RV64 concat heap-limit fixture reached its unreachable output")
+  }
+  show "[ok] concat heap exhaustion is bounded and exits 1 on AArch64 and RV64"
+  give 0
+}
+
+make t_put_u16(bs: list, v: num) -> list {
+  bs = push(bs, bit_and(v, 255))
+  bs = push(bs, bit_and(shr(v, 8), 255))
+  give bs
+}
+
+make t_put_u32(bs: list, v: num) -> list {
+  bs = t_put_u16(bs, bit_and(v, 65535))
+  bs = t_put_u16(bs, bit_and(shr(v, 16), 65535))
+  give bs
+}
+
+make t_put_u64(bs: list, v: num) -> list {
+  bs = t_put_u32(bs, bit_and(v, 4294967295))
+  bs = t_put_u32(bs, shr(v, 32))
+  give bs
+}
+
+make t_zeros(bs: list, n: num) -> list {
+  hold i = 0
+  while i < n {
+    bs = push(bs, 0)
+    i = i + 1
+  }
+  give bs
+}
+
+make t_word(bs: list, w: num) -> list {
+  bs = t_put_u32(bs, w)
+  give bs
+}
+
+make t_arm_mov32(bs: list, rd: num, v: num) -> list {
+  hold lo = bit_and(v, 65535)
+  hold hi = bit_and(shr(v, 16), 65535)
+  bs = t_word(bs, 3531603968 + lo * 32 + rd) // MOVZ Xd,#lo
+  when hi != 0 {
+    bs = t_word(bs, 4070572032 + hi * 32 + rd) // MOVK Xd,#hi,LSL#16
+  }
+  give bs
+}
+
+make t_arm_sysfile(path1: str, path2: str, count: num) -> list {
+  hold code = []
+  hold path1_addr = 4198400
+  hold path2_addr = 4198528
+  hold buf_addr = 4198656
+  // openat(AT_FDCWD, input, O_RDONLY, 0)
+  code = t_arm_mov32(code, 0, 65436)
+  code = t_arm_mov32(code, 1, path1_addr)
+  code = t_arm_mov32(code, 2, 0)
+  code = t_arm_mov32(code, 8, 56)
+  code = t_word(code, 3556769793)
+  // read(fd=3, buffer, count)
+  code = t_arm_mov32(code, 1, buf_addr)
+  code = t_arm_mov32(code, 2, count)
+  code = t_arm_mov32(code, 8, 63)
+  code = t_word(code, 3556769793)
+  // close(3)
+  code = t_arm_mov32(code, 0, 3)
+  code = t_arm_mov32(code, 8, 57)
+  code = t_word(code, 3556769793)
+  // openat(AT_FDCWD, output, O_WRONLY|O_CREAT|O_TRUNC, 0644)
+  code = t_arm_mov32(code, 0, 65436)
+  code = t_arm_mov32(code, 1, path2_addr)
+  code = t_arm_mov32(code, 2, 577)
+  code = t_arm_mov32(code, 3, 420)
+  code = t_arm_mov32(code, 8, 56)
+  code = t_word(code, 3556769793)
+  // write(3, buffer, count), close(3), exit(0)
+  code = t_arm_mov32(code, 0, 3)
+  code = t_arm_mov32(code, 1, buf_addr)
+  code = t_arm_mov32(code, 2, count)
+  code = t_arm_mov32(code, 8, 64)
+  code = t_word(code, 3556769793)
+  code = t_arm_mov32(code, 0, 3)
+  code = t_arm_mov32(code, 8, 57)
+  code = t_word(code, 3556769793)
+  code = t_arm_mov32(code, 0, 0)
+  code = t_arm_mov32(code, 8, 93)
+  code = t_word(code, 3556769793)
+
+  hold data = []
+  hold i = 0
+  while i < len(path1) {
+    data = push(data, sx_index(path1, i))
+    i = i + 1
+  }
+  data = push(data, 0)
+  data = t_zeros(data, path2_addr - path1_addr - len(path1) - 1)
+  i = 0
+  while i < len(path2) {
+    data = push(data, sx_index(path2, i))
+    i = i + 1
+  }
+  data = push(data, 0)
+  data = t_zeros(data, buf_addr - path2_addr - len(path2) - 1)
+  data = t_zeros(data, count + 16)
+
+  hold img = []
+  img = push(img, 127)
+  img = push(img, 69)
+  img = push(img, 76)
+  img = push(img, 70)
+  img = push(img, 2)
+  img = push(img, 1)
+  img = push(img, 1)
+  img = push(img, 0)
+  img = t_zeros(img, 8)
+  img = t_put_u16(img, 2)
+  img = t_put_u16(img, 183)
+  img = t_put_u32(img, 1)
+  img = t_put_u64(img, 4194304 + 176)
+  img = t_put_u64(img, 64)
+  img = t_put_u64(img, 0)
+  img = t_put_u32(img, 0)
+  img = t_put_u16(img, 64)
+  img = t_put_u16(img, 56)
+  img = t_put_u16(img, 2)
+  img = t_put_u16(img, 64)
+  img = t_put_u16(img, 0)
+  img = t_put_u16(img, 0)
+  img = t_put_u32(img, 1)
+  img = t_put_u32(img, 5)
+  img = t_put_u64(img, 0)
+  img = t_put_u64(img, 4194304)
+  img = t_put_u64(img, 4194304)
+  img = t_put_u64(img, 176 + len(code))
+  img = t_put_u64(img, 176 + len(code))
+  img = t_put_u64(img, 4096)
+  img = t_put_u32(img, 1)
+  img = t_put_u32(img, 6)
+  img = t_put_u64(img, 4096)
+  img = t_put_u64(img, 4198400)
+  img = t_put_u64(img, 4198400)
+  img = t_put_u64(img, len(data))
+  img = t_put_u64(img, len(data))
+  img = t_put_u64(img, 4096)
+  hold j = 0
+  while j < len(code) {
+    img = push(img, code[j])
+    j = j + 1
+  }
+  img = t_zeros(img, 4096 - (176 + len(code)))
+  j = 0
+  while j < len(data) {
+    img = push(img, data[j])
+    j = j + 1
+  }
+  give img
+}
+
+make rv_li32_test(code: list, rd: num, v: num) -> list {
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  hold b11 = bit_and(shr(u, 11), 1)
+  hold hi20 = bit_and(shr(u + b11 * 4096, 12), 1048575)
+  hold lo12 = bit_and(u, 4095)
+  hold w0 = shl(hi20, 12) + shl(rd, 7) + 55
+  hold w1 = shl(lo12, 20) + shl(rd, 15) + shl(rd, 7) + 27
+  when bit_and(hi20, 524288) != 0 {
+    w0 = 2147483648 + shl(bit_and(hi20, 524287), 12) + shl(rd, 7) + 55
+  }
+  when bit_and(lo12, 2048) != 0 {
+    w1 = 2147483648 + shl(bit_and(lo12, 2047), 20) + shl(rd, 15) + shl(rd, 7) + 27
+  }
+  code = t_word(code, w0)
+  code = t_word(code, w1)
+  give code
+}
+
+make rv_i_test(imm: num, rs1: num, f3: num, rd: num, op: num) -> num {
+  hold v = imm
+  when v < 0 {
+    v = v + 4096
+  }
+  give shl(bit_and(v, 4095), 20) + shl(rs1, 15) + shl(f3, 12) + shl(rd, 7) + op
+}
+
+make t_elf64(code: list, data: list, em: num) -> list {
+  hold img = []
+  img = push(img, 127)
+  img = push(img, 69)
+  img = push(img, 76)
+  img = push(img, 70)
+  img = push(img, 2)
+  img = push(img, 1)
+  img = push(img, 1)
+  img = push(img, 0)
+  img = t_zeros(img, 8)
+  img = t_put_u16(img, 2)
+  img = t_put_u16(img, em)
+  img = t_put_u32(img, 1)
+  img = t_put_u64(img, 4194304 + 176)
+  img = t_put_u64(img, 64)
+  img = t_put_u64(img, 0)
+  img = t_put_u32(img, 0)
+  img = t_put_u16(img, 64)
+  img = t_put_u16(img, 56)
+  img = t_put_u16(img, 2)
+  img = t_put_u16(img, 64)
+  img = t_put_u16(img, 0)
+  img = t_put_u16(img, 0)
+  img = t_put_u32(img, 1)
+  img = t_put_u32(img, 5)
+  img = t_put_u64(img, 0)
+  img = t_put_u64(img, 4194304)
+  img = t_put_u64(img, 4194304)
+  img = t_put_u64(img, 176 + len(code))
+  img = t_put_u64(img, 176 + len(code))
+  img = t_put_u64(img, 4096)
+  img = t_put_u32(img, 1)
+  img = t_put_u32(img, 6)
+  img = t_put_u64(img, 4096)
+  img = t_put_u64(img, 4198400)
+  img = t_put_u64(img, 4198400)
+  img = t_put_u64(img, len(data))
+  img = t_put_u64(img, len(data))
+  img = t_put_u64(img, 4096)
+  hold i = 0
+  while i < len(code) {
+    img = push(img, code[i])
+    i = i + 1
+  }
+  img = t_zeros(img, 4096 - (176 + len(code)))
+  i = 0
+  while i < len(data) {
+    img = push(img, data[i])
+    i = i + 1
+  }
+  give img
+}
+
+make t_arm_fp_elf() -> list {
+  hold code = []
+  code = t_arm_mov32(code, 5, 4198400)
+  code = t_word(code, 4248830113) // LDR D1,[X5]
+  code = t_word(code, 4248831138) // LDR D2,[X5,#8]
+  code = t_word(code, 509749283) // FADD D3,D1,D2
+  code = t_word(code, 511180896) // FCVTZS W0,D3
+  code = t_arm_mov32(code, 8, 93)
+  code = t_word(code, 3556769793)
+  hold data = []
+  data = t_put_u64(data, 4609434218613702656)
+  data = t_put_u64(data, 4612248968380809216)
+  give t_elf64(code, data, 183)
+}
+
+make t_arm_f_elf() -> list {
+  hold code = []
+  code = t_arm_mov32(code, 5, 4198400)
+  code = t_word(code, 3175088289) // LDR S1,[X5]
+  code = t_word(code, 3175089314) // LDR S2,[X5,#4]
+  code = t_word(code, 505554979) // FADD S3,S1,S2
+  code = t_word(code, 506986592) // FCVTZS W0,S3
+  code = t_arm_mov32(code, 8, 93)
+  code = t_word(code, 3556769793)
+  hold data = []
+  data = t_put_u32(data, 1069547520)
+  data = t_put_u32(data, 1074790400)
+  give t_elf64(code, data, 183)
+}
+
+make t_rv_fp_elf() -> list {
+  hold code = []
+  code = rv_li32_test(code, 5, 4198400)
+  code = t_word(code, rv_i_test(0, 5, 3, 1, 7))
+  code = t_word(code, rv_i_test(8, 5, 3, 2, 7))
+  code = t_word(code, shl(1, 25) + shl(2, 20) + shl(1, 15) + shl(3, 7) + 83)
+  code = t_word(code, shl(97, 25) + shl(3, 15) + shl(1, 12) + shl(10, 7) + 83)
+  code = rv_li32_test(code, 17, 93)
+  code = t_word(code, 115)
+  hold data = []
+  data = t_put_u64(data, 4609434218613702656)
+  data = t_put_u64(data, 4612248968380809216)
+  give t_elf64(code, data, 243)
+}
+
+make t_rv_f_elf() -> list {
+  hold code = []
+  code = rv_li32_test(code, 5, 4198400)
+  code = t_word(code, rv_i_test(16, 5, 2, 4, 7))
+  code = t_word(code, rv_i_test(20, 5, 2, 5, 7))
+  code = t_word(code, shl(5, 20) + shl(4, 15) + shl(6, 7) + 83) // FADD.S
+  code = t_word(code, shl(96, 25) + shl(6, 15) + shl(1, 12) + shl(10, 7) + 83) // FCVT.W.S
+  code = rv_li32_test(code, 17, 93)
+  code = t_word(code, 115)
+  hold data = []
+  data = t_put_u64(data, 4609434218613702656)
+  data = t_put_u64(data, 4612248968380809216)
+  data = t_put_u32(data, 1069547520)
+  data = t_put_u32(data, 1074790400)
+  give t_elf64(code, data, 243)
+}
+
+make test_fp_arithmetic(dir: str) -> num {
+  hold aelf = concat(dir, "/fp.arm64.elf")
+  hold aself = concat(dir, "/fp32.arm64.elf")
+  hold relf = concat(dir, "/fp.riscv64.elf")
+  hold rfelf = concat(dir, "/fp32.riscv64.elf")
+  hold astat = concat(dir, "/fp.arm64.stats")
+  hold asstat = concat(dir, "/fp32.arm64.stats")
+  hold rstat = concat(dir, "/fp.riscv64.stats")
+  hold rfstat = concat(dir, "/fp32.riscv64.stats")
+  hold a = t_arm_fp_elf()
+  hold as = t_arm_f_elf()
+  hold r = t_rv_fp_elf()
+  hold rf = t_rv_f_elf()
+  when write_bytes(aelf, a) != 1 || write_bytes(aself, as) != 1 || write_bytes(relf, r) != 1 || write_bytes(rfelf, rf) != 1 {
+    hold f0 = fail_t("cannot write IEEE-754 ELF fixtures")
+  }
+  when run_command(concat("./tools/sxisaexec --arch arm64 --stats ", concat(sh_q(astat), concat(" ", sh_q(aelf))))) != 3 {
+    hold f1 = fail_t("AArch64 double add + float-to-int returned unexpected exit status")
+  }
+  when text_has(read_file(astat), "exit=3") != 1 {
+    hold f2 = fail_t("AArch64 double arithmetic result was not 3")
+  }
+  when run_command(concat("./tools/sxisaexec --arch arm64 --stats ", concat(sh_q(asstat), concat(" ", sh_q(aself))))) != 3 {
+    hold f2a = fail_t("AArch64 single add + float-to-int returned unexpected exit status")
+  }
+  when text_has(read_file(asstat), "exit=3") != 1 {
+    hold f2b = fail_t("AArch64 single arithmetic result was not 3")
+  }
+  when run_command(concat("./tools/sxisaexec --arch riscv64 --stats ", concat(sh_q(rstat), concat(" ", sh_q(relf))))) != 3 {
+    hold f3 = fail_t("RV64D double add + float-to-int returned unexpected exit status")
+  }
+  when text_has(read_file(rstat), "exit=3") != 1 {
+    hold f4 = fail_t("RV64D double arithmetic result was not 3")
+  }
+  when run_command(concat("./tools/sxisaexec --arch riscv64 --stats ", concat(sh_q(rfstat), concat(" ", sh_q(rfelf))))) != 3 {
+    hold f5 = fail_t("RV64F single add + float-to-int returned unexpected exit status")
+  }
+  when text_has(read_file(rfstat), "exit=3") != 1 {
+    hold f6 = fail_t("RV64F single arithmetic result was not 3")
+  }
+  show "[ok] IEEE-754 S/D arithmetic + integer conversion executed on AArch64 and RV64 F/D subset"
+  give 0
+}
+
+make t_rv_sysfile(path1: str, path2: str, count: num) -> list {
+  hold code = []
+  hold path1_addr = 4198400
+  hold path2_addr = 4198528
+  hold buf_addr = 4198656
+  code = rv_li32_test(code, 10, 0 - 100)
+  code = rv_li32_test(code, 11, path1_addr)
+  code = rv_li32_test(code, 12, 0)
+  code = rv_li32_test(code, 17, 56)
+  code = t_word(code, 115)
+  code = rv_li32_test(code, 11, buf_addr)
+  code = rv_li32_test(code, 12, count)
+  code = rv_li32_test(code, 17, 63)
+  code = t_word(code, 115)
+  code = rv_li32_test(code, 10, 3)
+  code = rv_li32_test(code, 17, 57)
+  code = t_word(code, 115)
+  code = rv_li32_test(code, 10, 0 - 100)
+  code = rv_li32_test(code, 11, path2_addr)
+  code = rv_li32_test(code, 12, 577)
+  code = rv_li32_test(code, 13, 420)
+  code = rv_li32_test(code, 17, 56)
+  code = t_word(code, 115)
+  code = rv_li32_test(code, 10, 3)
+  code = rv_li32_test(code, 11, buf_addr)
+  code = rv_li32_test(code, 12, count)
+  code = rv_li32_test(code, 17, 64)
+  code = t_word(code, 115)
+  code = rv_li32_test(code, 10, 3)
+  code = rv_li32_test(code, 17, 57)
+  code = t_word(code, 115)
+  code = rv_li32_test(code, 10, 0)
+  code = rv_li32_test(code, 17, 93)
+  code = t_word(code, 115)
+
+  hold data = []
+  hold i = 0
+  while i < len(path1) {
+    data = push(data, sx_index(path1, i))
+    i = i + 1
+  }
+  data = push(data, 0)
+  data = t_zeros(data, path2_addr - path1_addr - len(path1) - 1)
+  i = 0
+  while i < len(path2) {
+    data = push(data, sx_index(path2, i))
+    i = i + 1
+  }
+  data = push(data, 0)
+  data = t_zeros(data, buf_addr - path2_addr - len(path2) - 1)
+  data = t_zeros(data, count + 16)
+
+  hold img = []
+  img = push(img, 127)
+  img = push(img, 69)
+  img = push(img, 76)
+  img = push(img, 70)
+  img = push(img, 2)
+  img = push(img, 1)
+  img = push(img, 1)
+  img = push(img, 0)
+  img = t_zeros(img, 8)
+  img = t_put_u16(img, 2)
+  img = t_put_u16(img, 243)
+  img = t_put_u32(img, 1)
+  img = t_put_u64(img, 4194304 + 176)
+  img = t_put_u64(img, 64)
+  img = t_put_u64(img, 0)
+  img = t_put_u32(img, 0)
+  img = t_put_u16(img, 64)
+  img = t_put_u16(img, 56)
+  img = t_put_u16(img, 2)
+  img = t_put_u16(img, 64)
+  img = t_put_u16(img, 0)
+  img = t_put_u16(img, 0)
+  img = t_put_u32(img, 1)
+  img = t_put_u32(img, 5)
+  img = t_put_u64(img, 0)
+  img = t_put_u64(img, 4194304)
+  img = t_put_u64(img, 4194304)
+  img = t_put_u64(img, 176 + len(code))
+  img = t_put_u64(img, 176 + len(code))
+  img = t_put_u64(img, 4096)
+  img = t_put_u32(img, 1)
+  img = t_put_u32(img, 6)
+  img = t_put_u64(img, 4096)
+  img = t_put_u64(img, 4198400)
+  img = t_put_u64(img, 4198400)
+  img = t_put_u64(img, len(data))
+  img = t_put_u64(img, len(data))
+  img = t_put_u64(img, 4096)
+  hold j = 0
+  while j < len(code) {
+    img = push(img, code[j])
+    j = j + 1
+  }
+  img = t_zeros(img, 4096 - (176 + len(code)))
+  j = 0
+  while j < len(data) {
+    img = push(img, data[j])
+    j = j + 1
+  }
+  give img
+}
+
+make test_file_syscalls(dir: str) -> num {
+  hold nl = chr(10)
+  hold root = path_real(dir)
+  hold source = concat(root, "/sxisaexec-file-input.txt")
+  hold target = concat(root, "/sxisaexec-file-output.txt")
+  hold payload = concat("cross-ISA-file-io", nl)
+  hold want = concat(dir, "/sxisaexec-file-want.txt")
+  hold want_stdout = concat(dir, "/sxisaexec-file-stdout-want.txt")
+  when write_file(source, payload) != 1 || write_file(want, payload) != 1 || write_bytes(want_stdout, []) != 1 {
+    hold f0 = fail_t("cannot prepare file syscall input/expected output")
+  }
+  hold rm_old = remove_path(target)
+  hold a_path = concat(dir, "/fileio.arm64.elf")
+  hold r_path = concat(dir, "/fileio.riscv64.elf")
+  hold a_bytes = t_arm_sysfile(source, target, len(payload))
+  hold r_bytes = t_rv_sysfile(source, target, len(payload))
+  when write_bytes(a_path, a_bytes) != 1 || write_bytes(r_path, r_bytes) != 1 {
+    hold f1 = fail_t("cannot write ELF64 file-syscall fixtures")
+  }
+  when run_command(concat("./tools/sxisaexec --arch arm64 --out ", concat(sh_q(concat(dir, "/fileio.arm64.stdout")), concat(" ", sh_q(a_path))))) != 0 {
+    hold f2 = fail_t("AArch64 openat/read/close/write fixture failed")
+  }
+  hold ca = assert_files_eq(want_stdout, concat(dir, "/fileio.arm64.stdout"), "AArch64 stdout stays empty for redirected file I/O")
+  when string_eq(read_file(target), payload) != 1 {
+    hold f3 = fail_t("AArch64 openat/write/close did not update the host output file")
+  }
+  hold rm1 = remove_path(target)
+  when run_command(concat("./tools/sxisaexec --arch riscv64 --out ", concat(sh_q(concat(dir, "/fileio.riscv64.stdout")), concat(" ", sh_q(r_path))))) != 0 {
+    hold f4 = fail_t("RV64 openat/read/close/write fixture failed")
+  }
+  hold cr = assert_files_eq(want_stdout, concat(dir, "/fileio.riscv64.stdout"), "RV64 stdout stays empty for redirected file I/O")
+  when string_eq(read_file(target), payload) != 1 {
+    hold f5 = fail_t("RV64 openat/write/close did not update the host output file")
+  }
+  show "[ok] AArch64 + RV64 syscalls: openat/read/write/close and file bytes match"
+  give 0
+}
+
 make test_negative_faults(dir: str) -> num {
   // Usage / flag errors -> exit 2
   hold r_noarg = run_command("./tools/sxisaexec >/dev/null 2>&1")
@@ -334,10 +893,14 @@ when run_command(concat("rm -rf ", concat(sh_q(dir), concat(" && mkdir -p ", sh_
 hold v1 = verify_six_way(dir, "expr", "selfhost/native32_tests/expr.sa", "selfhost/native32_tests/golden/expr.arm64.elf", "selfhost/native32_tests/golden/expr.riscv64.elf")
 hold v2 = verify_six_way(dir, "flow", "selfhost/native32_tests/flow.sa", "selfhost/native32_tests/golden/flow.arm64.elf", "selfhost/native32_tests/golden/flow.riscv64.elf")
 hold v3 = verify_six_way(dir, "text", "selfhost/native32_tests/text.sa", "selfhost/native32_tests/golden/text.arm64.elf", "selfhost/native32_tests/golden/text.riscv64.elf")
+hold vstr = verify_six_way(dir, "strings", "selfhost/native32_tests/strings.sa", "", "")
+hold vh = test_concat_heap_limit(dir)
 
 hold deep_sa = concat(dir, "/isa_deep.sa")
 hold wd = write_deep_fixture(deep_sa)
 hold v4 = verify_six_way(dir, "isa_deep", deep_sa, "", "")
 
 hold vn = test_negative_faults(dir)
+hold vf = test_file_syscalls(dir)
+hold vfp = test_fp_arithmetic(dir)
 show "SXISAEXEC-PARITY-OK"

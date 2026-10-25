@@ -1,2 +1,2 @@
-hold s = "x"
+hold s = "x" + "y"
 show s
