@@ -1,0 +1,47 @@
+// Phase-2 inference fixture: three-level concrete struct chains, nested generic
+// struct specialisations, generic function monomorphisation over num/str/list,
+// boolean logic values, and inferred globals.
+struct Point {
+  x
+  y
+}
+struct Rect {
+  o
+  sz
+}
+struct Scene {
+  r
+  label
+}
+struct Box<T> {
+  v
+}
+struct Pair<A, B> {
+  a
+  b
+}
+make id<T>(x: T) -> T {
+  give x
+}
+make first<A, B>(a: A, b: B) -> A {
+  give a
+}
+hold sc = Scene { r: Rect { o: Point { 3, 4 }, sz: Point { 5, 6 } }, label: "main" }
+hold inner_x = sc.r.o.x
+hold nested = Box<Box<num>> { Box<num> { 42 } }
+hold paired = Pair<Box<str>, list> { Box<str> { "tag" }, [10, 20, 30] }
+hold g_num = id(7)
+hold g_str = id("ok")
+hold g_lst = id([1, 2])
+hold g_mix = first("left", 99)
+hold flag = (inner_x == 3 and g_num == 7) or false
+show inner_x
+show sc.label
+show nested.v.v
+show paired.a.v
+show len(paired.b)
+show g_num
+show g_str
+show len(g_lst)
+show g_mix
+show flag

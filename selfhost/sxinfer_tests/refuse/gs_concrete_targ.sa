@@ -1,0 +1,7 @@
+struct P {
+  x
+}
+struct Box<T> {
+  v
+}
+hold b = Box<P> { 1 }

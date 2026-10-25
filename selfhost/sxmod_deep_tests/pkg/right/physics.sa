@@ -1,0 +1,10 @@
+module vec as core from "../core/vec.sa"
+module geom as gm from "../left/geom.sa"
+
+make impulse(k: num) -> num {
+  hold v = gm.unit_step(k)
+  hold a = gm.norm_sq(v)
+  hold b = core.scale_sum(v)
+  hold total = a + b
+  give total
+}

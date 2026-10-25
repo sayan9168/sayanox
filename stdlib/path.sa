@@ -1,0 +1,205 @@
+// stdlib/path.sa -- Pure-Sayanox POSIX path normalization, joining, and
+// component extraction (prefix `spath_`).
+//
+// Portable across seed-min, gen2, native_aot, sxc_native, and sxirexec.
+
+make spath_sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+make spath_is_abs(p: str) -> num {
+  when len(p) > 0 {
+    when sx_index(p, 0) == 47 {
+      give 1
+    }
+  }
+  give 0
+}
+
+make spath_norm(p: str) -> str {
+  hold n = len(p)
+  when n == 0 {
+    give "."
+  }
+  hold abs = spath_is_abs(p)
+  hold acc = ""
+  hold i = 0
+  while i < n {
+    hold sk1 = 1
+    while sk1 == 1 {
+      when i >= n {
+        hold sk1 = 0
+      } otherwise {
+        when sx_index(p, i) == 47 {
+          hold i = i + 1
+        } otherwise {
+          hold sk1 = 0
+        }
+      }
+    }
+    hold j = i
+    hold sk2 = 1
+    while sk2 == 1 {
+      when j >= n {
+        hold sk2 = 0
+      } otherwise {
+        when sx_index(p, j) != 47 {
+          hold j = j + 1
+        } otherwise {
+          hold sk2 = 0
+        }
+      }
+    }
+    when j > i {
+      hold seg = spath_sub(p, i, j)
+      when string_eq(seg, ".") == 1 {
+        hold i = j
+      } otherwise {
+        when string_eq(seg, "..") == 1 {
+          hold an = len(acc)
+          when an > 0 {
+            hold cut = 0 - 1
+            hold k = 0
+            while k < an {
+              when sx_index(acc, k) == 47 {
+                hold cut = k
+              }
+              hold k = k + 1
+            }
+            hold tail = acc
+            when cut >= 0 {
+              hold tail = spath_sub(acc, cut + 1, an)
+            }
+            when string_eq(tail, "..") == 1 {
+              hold acc = concat(acc, "/..")
+            } otherwise {
+              when cut < 0 {
+                hold acc = ""
+              } otherwise {
+                hold acc = spath_sub(acc, 0, cut)
+              }
+            }
+          } otherwise {
+            when abs == 0 {
+              hold acc = ".."
+            }
+          }
+        } otherwise {
+          when len(acc) == 0 {
+            hold acc = seg
+          } otherwise {
+            hold acc = concat(acc, concat("/", seg))
+          }
+        }
+      }
+    }
+    hold i = j
+  }
+  when abs == 1 {
+    give concat("/", acc)
+  }
+  when len(acc) == 0 {
+    give "."
+  }
+  give acc
+}
+
+make spath_join(a: str, b: str) -> str {
+  when len(b) == 0 {
+    give spath_norm(a)
+  }
+  when spath_is_abs(b) == 1 {
+    give spath_norm(b)
+  }
+  when len(a) == 0 {
+    give spath_norm(b)
+  }
+  when string_eq(a, ".") == 1 {
+    give spath_norm(b)
+  }
+  give spath_norm(concat(a, concat("/", b)))
+}
+
+make spath_dirname(p: str) -> str {
+  hold np = spath_norm(p)
+  when string_eq(np, "/") == 1 {
+    give "/"
+  }
+  hold n = len(np)
+  hold last = 0 - 1
+  hold i = 0
+  while i < n {
+    when sx_index(np, i) == 47 {
+      hold last = i
+    }
+    hold i = i + 1
+  }
+  when last < 0 {
+    give "."
+  }
+  when last == 0 {
+    give "/"
+  }
+  give spath_sub(np, 0, last)
+}
+
+make spath_basename(p: str) -> str {
+  hold np = spath_norm(p)
+  when string_eq(np, "/") == 1 {
+    give "/"
+  }
+  hold n = len(np)
+  hold last = 0 - 1
+  hold i = 0
+  while i < n {
+    when sx_index(np, i) == 47 {
+      hold last = i
+    }
+    hold i = i + 1
+  }
+  when last < 0 {
+    give np
+  }
+  give spath_sub(np, last + 1, n)
+}
+
+make spath_ext(p: str) -> str {
+  hold base = spath_basename(p)
+  when string_eq(base, ".") == 1 {
+    give ""
+  }
+  when string_eq(base, "..") == 1 {
+    give ""
+  }
+  when string_eq(base, "/") == 1 {
+    give ""
+  }
+  hold n = len(base)
+  hold dot = 0 - 1
+  hold i = 1
+  while i < n {
+    when sx_index(base, i) == 46 {
+      hold dot = i
+    }
+    hold i = i + 1
+  }
+  when dot <= 0 {
+    give ""
+  }
+  give spath_sub(base, dot, n)
+}
+
+make spath_stem(p: str) -> str {
+  hold base = spath_basename(p)
+  hold ext = spath_ext(p)
+  when len(ext) == 0 {
+    give base
+  }
+  give spath_sub(base, 0, len(base) - len(ext))
+}

@@ -1,0 +1,5 @@
+struct Point {
+  x
+  y
+}
+hold p = Point { 1 }

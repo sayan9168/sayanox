@@ -1,0 +1,43 @@
+// tools/sxc_native.sa -- Full-capacity self-hosting Sayanox x86-64 Linux ELF64
+// native AOT compiler, written entirely in Sayanox.
+//
+// Compiles itself (tools/sxc_native.sa -> sxc_native_gen1 -> sxc_native_gen2
+// -> sxc_native_gen3), selfhost/native_aot.sa, toolchain programs, and
+// multi-module transitive `module NAME from "path"` DAG programs directly to
+// standalone static Linux x86-64 ELF64 executables with zero C compiler and
+// zero libc in the loop, reaching a byte-for-byte identical ELF64 fixed point.
+
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxc_native: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+use "tools/sxenc_lib.sa"
+use "tools/sxinfer_lib.sa"
+use "tools/sxdata_lib.sa"
+use "tools/sxemit_lib.sa"
+use "tools/sxruntime_lib.sa"
+use "tools/sxgc_lib.sa"
+use "tools/sxlink_lib.sa"
+use "tools/sxpipeline_lib.sa"
+use "tools/sxmod_lib.sa"
+
+make main_sxc_native() -> num {
+  when arg_count() < 3 {
+    hold u = write_file("/dev/stderr", "usage: sxc_native in.sa out\n")
+    hold stop = exit(2)
+  }
+  hold in_path = arg(1)
+  hold out_path = arg(2)
+  when path_kind(in_path) != 1 {
+    hold enf = fail(1, concat("cannot open use file: ", in_path))
+  }
+  hold raw = read_file(in_path)
+  when mxl_has_module_header(raw) == 1 {
+    raw = mxl_lower_transitive(raw, in_path)
+  }
+  give compile_native_aot_full_raw(in_path, raw, out_path)
+}
+
+hold ok = main_sxc_native()

@@ -1,0 +1,109 @@
+// selfhost/stdlib_extended_test.sa -- 5-backend parity fixture for the extended
+// pure-Sayanox standard library:
+//   stdlib/map.sa, stdlib/sort.sa, stdlib/path.sa, stdlib/cli.sa, stdlib/bytes.sa
+
+use "stdlib/map.sa"
+use "stdlib/sort.sa"
+use "stdlib/path.sa"
+use "stdlib/cli.sa"
+use "stdlib/bytes.sa"
+
+// 1. Open-addressed numeric hash map (resize + negative keys + tombstones)
+hold nm = nmap_new()
+hold ki = 0
+while ki < 24 {
+  hold key = ki * 13 - 50
+  hold nm = nmap_put(nm, key, ki * 100 + 7)
+  hold ki = ki + 1
+}
+hold nm = nmap_put(nm, -50, 999)
+hold nm = nmap_del(nm, 2)
+hold nm = nmap_del(nm, 145)
+hold nm = nmap_put(nm, 2, 777)
+show nmap_len(nm)
+show nmap_get(nm, -50, -1)
+show nmap_get(nm, 2, -1)
+show nmap_has(nm, 145)
+show nmap_get(nm, 249, -1)
+
+// 2. Binary-safe string map (special chars `:`, `=`, `|` inside keys/values)
+hold sm = smap_empty()
+hold sm = smap_put(sm, "host:port", "127.0.0.1:8080")
+hold sm = smap_put(sm, "a=b|c", "val|with:colons=1")
+hold sm = smap_put(sm, "drop", "gone")
+hold sm = smap_put(sm, "host:port", "0.0.0.0:9090")
+hold sm = smap_del(sm, "drop")
+show smap_len(sm)
+show smap_get(sm, "host:port", "missing")
+show smap_get(sm, "a=b|c", "missing")
+show smap_has(sm, "drop")
+
+// 3. MergeSort, bounds, binary search, unique, kth
+hold raw = []
+hold raw = push(raw, 42)
+hold raw = push(raw, -7)
+hold raw = push(raw, 19)
+hold raw = push(raw, 0)
+hold raw = push(raw, 19)
+hold raw = push(raw, 5)
+hold raw = push(raw, -7)
+hold raw = push(raw, 100)
+hold asc = sort_nums(raw)
+show sort_is_sorted(asc)
+show asc[0]
+show asc[7]
+show sort_lower_bound(asc, 19)
+show sort_upper_bound(asc, 19)
+show sort_bsearch(asc, 5)
+show sort_bsearch(asc, 99)
+hold uniq = sort_unique(raw)
+show len(uniq)
+show sort_kth(raw, 4)
+
+// 4. POSIX path normalization & components
+show spath_norm("a/./b/../c//d/")
+show spath_norm("/usr/local/../bin/./sxc")
+show spath_join("tools/sub", "../sxbuild.sa")
+show spath_dirname("/etc/sayanox/config.toml")
+show spath_basename("/etc/sayanox/archive.tar.gz")
+show spath_stem("/etc/sayanox/archive.tar.gz")
+show spath_ext("/etc/sayanox/archive.tar.gz")
+show spath_stem("/home/user/.gitignore")
+show len(spath_ext("/home/user/.gitignore"))
+
+// 5. CLI flag/option/positional parser with `--` sentinel
+hold argv = scli_empty()
+hold argv = scli_push(argv, "--verbose")
+hold argv = scli_push(argv, "--out")
+hold argv = scli_push(argv, "dist/app.elf")
+hold argv = scli_push(argv, "--jobs=4")
+hold argv = scli_push(argv, "src/main.sa")
+hold argv = scli_push(argv, "--")
+hold argv = scli_push(argv, "-dash-file.sa")
+hold spec = "--out -o --jobs"
+show scli_has_flag(argv, "--verbose", spec)
+show scli_has_flag(argv, "-dash-file.sa", spec)
+show scli_opt_val(argv, "--out", "none")
+show scli_opt_val(argv, "--jobs", "1")
+show scli_pos_count(argv, spec)
+show scli_pos_at(argv, spec, 0)
+show scli_pos_at(argv, spec, 1)
+
+// 6. Byte buffer codecs (hex, RFC 4648 Base64, u16le/u32be, CRC-16/CCITT-FALSE)
+hold msg = sbytes_from_str("Sayanox!")
+hold hx = sbytes_hex_encode(msg)
+show hx
+show sbytes_to_str(sbytes_hex_decode(hx))
+show sbytes_b64_encode(sbytes_from_str("f"))
+show sbytes_b64_encode(sbytes_from_str("fo"))
+show sbytes_b64_encode(sbytes_from_str("foo"))
+show sbytes_b64_encode(sbytes_from_str("foobar"))
+show sbytes_to_str(sbytes_b64_decode("Zm9vYmFy"))
+
+hold pkt = []
+hold pkt = sbytes_put_u16le(pkt, 513)
+hold pkt = sbytes_put_u32be(pkt, 987654)
+show sbytes_get_u16le(pkt, 0)
+show sbytes_get_u32be(pkt, 2)
+show sbytes_crc16_ccitt(sbytes_from_str("123456789"))
+show "stdlib-extended-ok"

@@ -1,4 +1,4 @@
-struct Point {
+struct Point<T> {
   x
 }
 make f(a: Point) -> num {

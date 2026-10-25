@@ -1,0 +1,3561 @@
+// tools/sxinfer_lib.sa -- shared Sayanox phase-1 (expand_use, collect_defs)
+// and phase-2 (infer, gs_instantiate, pick_instance) front end.
+// Used by tools/sxinfer.sa, tools/sxemit.sa, and selfhost/native_aot.sa.
+
+make at(s: str, n: num, i: num) -> num {
+  when i < 0 || i >= n {
+    give 0
+  }
+  give sx_index(s, i)
+}
+
+make is_space(c: num) -> num {
+  hold r = 0
+  when c == 32 || c == 9 || c == 10 || c == 11 || c == 12 || c == 13 {
+    r = 1
+  }
+  give r
+}
+
+make is_digit(c: num) -> num {
+  hold r = 0
+  when c >= 48 && c <= 57 {
+    r = 1
+  }
+  give r
+}
+
+make id0c(c: num) -> num {
+  hold r = 0
+  when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 {
+    r = 1
+  }
+  give r
+}
+
+make idcc(c: num) -> num {
+  hold r = 0
+  when id0c(c) == 1 || (c >= 48 && c <= 57) {
+    r = 1
+  }
+  give r
+}
+
+make sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make kname(k: num) -> str {
+  when k == 0 {
+    give "a number"
+  }
+  when k == 1 {
+    give "a string"
+  }
+  when k == 2 {
+    give "a list"
+  }
+  when k == 3 {
+    give "a struct"
+  }
+  give "an unknown type"
+}
+
+// ---- byte-pool string interning -------------------------------------------
+// Every identifier is stored in `pool` as [len, b0, b1, ...] so `st` is a pure
+// numeric list with O(1) slot reads and writes across every pass.
+
+make intern(pool: list, s: str) -> num {
+  hold off = len(pool)
+  hold n = len(s)
+  pool = push(pool, n)
+  hold i = 0
+  while i < n {
+    pool = push(pool, sx_index(s, i))
+    i = i + 1
+  }
+  give off
+}
+
+make unintern(pool: list, off: num) -> str {
+  when off < 0 {
+    give ""
+  }
+  hold n = pool[off]
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold idx = off + 1 + i
+    out = concat(out, chr(pool[idx]))
+    i = i + 1
+  }
+  give out
+}
+
+make pool_eq(pool: list, off: num, s: str) -> num {
+  when off < 0 {
+    give 0
+  }
+  hold n = pool[off]
+  when n != len(s) {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    hold idx = off + 1 + i
+    when pool[idx] != sx_index(s, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// ---- state table layout ---------------------------------------------------
+// st[0]=p, st[1]=sn, st[2]=pk_soft, st[3]=PKX_K, st[4]=PKX_S, st[5]=cur_fn,
+// st[6]=cond_nest, st[7]=hold_sid, st[8]=nS, st[9]=nGS, st[10]=nF, st[11]=nG,
+// st[12]=npend, st[13]=ngtp, st[14]=last_sig_k, st[15]=last_sig_tp
+// st[16..23] = gtp[0..7]
+// S[0..31]   at 100 + sid*120
+// GS[0..31]  at 4000 + gi*30
+// F[0..255]  at 5000 + fi*40
+// pend       at 15300 + k
+// G[0..63]   at 15600 + gi*4
+
+make make_state(sn: num) -> list {
+  hold st = []
+  hold i = 0
+  while i < 128000 {
+    st = push(st, 0)
+    i = i + 1
+  }
+  st[0] = 0
+  st[1] = sn
+  st[2] = 0
+  st[3] = 0
+  st[4] = 0 - 1
+  st[5] = 0 - 1
+  st[6] = 0
+  st[7] = 0 - 1
+  st[39] = 0
+  give st
+}
+
+make new_full_state(sn: num) -> list {
+  hold st = make_state(sn)
+  st[39] = 1
+  give st
+}
+
+make s_base(sid: num) -> num {
+  give 100 + sid * 120
+}
+
+make gs_base(gi: num) -> num {
+  give 4000 + gi * 30
+}
+
+make f_base(fi: num) -> num {
+  give 5000 + fi * 100
+}
+
+make pend_slot(k: num) -> num {
+  give 108000 + k
+}
+
+make g_base(gi: num) -> num {
+  give 110000 + gi * 4
+}
+
+make fn_pn_slot(fb: num, p: num) -> num {
+  when p < 6 {
+    give fb + 8 + p
+  }
+  give fb + 36 + (p - 6)
+}
+
+make fn_pk_slot(fb: num, p: num) -> num {
+  when p < 6 {
+    give fb + 14 + p
+  }
+  give fb + 50 + (p - 6)
+}
+
+make fn_ptp_slot(fb: num, p: num) -> num {
+  when p < 6 {
+    give fb + 20 + p
+  }
+  give fb + 64 + (p - 6)
+}
+
+make fn_ps_slot(fb: num, p: num) -> num {
+  when p < 6 {
+    give fb + 26 + p
+  }
+  give fb + 78 + (p - 6)
+}
+
+make s_find(st: list, pool: list, nm: str) -> num {
+  hold ns = st[8]
+  hold i = 0
+  while i < ns {
+    hold b = s_base(i)
+    when pool_eq(pool, st[b], nm) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make s_field(st: list, pool: list, sid: num, nm: str) -> num {
+  hold b = s_base(sid)
+  hold nf = st[b + 1]
+  hold i = 0
+  while i < nf {
+    hold fi = b + 4 + i
+    when pool_eq(pool, st[fi], nm) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make gs_find(st: list, pool: list, nm: str) -> num {
+  hold ngs = st[9]
+  hold i = 0
+  while i < ngs {
+    hold b = gs_base(i)
+    when pool_eq(pool, st[b], nm) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make f_find(st: list, pool: list, nm: str) -> num {
+  hold nf = st[10]
+  hold i = 0
+  while i < nf {
+    hold b = f_base(i)
+    when pool_eq(pool, st[b], nm) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make g_find(st: list, pool: list, nm: str) -> num {
+  hold i = st[11] - 1
+  while i >= 0 {
+    hold b = g_base(i)
+    when pool_eq(pool, st[b], nm) == 1 {
+      give i
+    }
+    i = i - 1
+  }
+  give 0 - 1
+}
+
+make g_decl(st: list, pool: list, nm: str) -> num {
+  hold ex = g_find(st, pool, nm)
+  when ex >= 0 {
+    give ex
+  }
+  hold ng = st[11]
+  when st[39] == 0 && ng >= 64 {
+    hold e = fail(1, "too many globals (native limit: 64)")
+  }
+  when st[39] == 1 && ng >= 2048 {
+    hold eb_g = fail(1, "too many globals (sxc_native limit: 2048)")
+  }
+  hold b = g_base(ng)
+  st[b] = intern(pool, nm)
+  st[b + 1] = 0 - 1
+  st[b + 2] = 0 - 1
+  st[11] = ng + 1
+  give ng
+}
+
+// ---- cursor & lexical primitives ------------------------------------------
+
+make sw_st(src: str, st: list) -> num {
+  hold sn = st[1]
+  while is_space(at(src, sn, st[0])) == 1 {
+    st[0] = st[0] + 1
+  }
+  give 0
+}
+
+make gsw_st(src: str, st: list) -> num {
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    while is_space(at(src, sn, st[0])) == 1 {
+      st[0] = st[0] + 1
+    }
+    when at(src, sn, st[0]) == 47 && at(src, sn, st[0] + 1) == 47 {
+      while at(src, sn, st[0]) != 0 && at(src, sn, st[0]) != 10 {
+        st[0] = st[0] + 1
+      }
+    } otherwise {
+      go = 0
+    }
+  }
+  give 0
+}
+
+make eol_st(src: str, st: list) -> num {
+  hold sn = st[1]
+  while at(src, sn, st[0]) != 0 && at(src, sn, st[0]) != 10 {
+    st[0] = st[0] + 1
+  }
+  give 0
+}
+
+make mkw_st(src: str, st: list, k: str) -> num {
+  hold sn = st[1]
+  hold kn = len(k)
+  hold p0 = st[0]
+  hold i = 0
+  hold same = 1
+  while i < kn && same == 1 {
+    when at(src, sn, p0 + i) != sx_index(k, i) {
+      same = 0
+    }
+    i = i + 1
+  }
+  when same == 1 && idcc(at(src, sn, p0 + kn)) == 0 {
+    st[0] = p0 + kn
+    give 1
+  }
+  give 0
+}
+
+make pid_raw_st(src: str, st: list) -> str {
+  hold sn = st[1]
+  when id0c(at(src, sn, st[0])) == 0 {
+    give ""
+  }
+  hold out = ""
+  hold i = 0
+  while idcc(at(src, sn, st[0])) == 1 && i < 63 {
+    out = concat(out, chr(at(src, sn, st[0])))
+    st[0] = st[0] + 1
+    i = i + 1
+  }
+  give out
+}
+
+make pid_st(src: str, st: list) -> str {
+  hold z = sw_st(src, st)
+  give pid_raw_st(src, st)
+}
+
+make pnum_st(src: str, st: list) -> num {
+  hold z = sw_st(src, st)
+  hold sn = st[1]
+  when is_digit(at(src, sn, st[0])) == 0 {
+    give 0
+  }
+  while is_digit(at(src, sn, st[0])) == 1 {
+    st[0] = st[0] + 1
+  }
+  when at(src, sn, st[0]) == 46 {
+    when is_digit(at(src, sn, st[0] + 1)) == 0 {
+      hold e1 = fail(1, "malformed number literal (a '.' must be followed by digits)")
+    }
+    st[0] = st[0] + 1
+    while is_digit(at(src, sn, st[0])) == 1 {
+      st[0] = st[0] + 1
+    }
+  }
+  hold nxt = at(src, sn, st[0])
+  when nxt == 46 || id0c(nxt) == 1 {
+    hold e2 = fail(1, "malformed number literal")
+  }
+  give 1
+}
+
+make pstr_st(src: str, st: list) -> num {
+  hold z = sw_st(src, st)
+  hold sn = st[1]
+  when at(src, sn, st[0]) != 34 {
+    give 0
+  }
+  st[0] = st[0] + 1
+  while at(src, sn, st[0]) != 0 && at(src, sn, st[0]) != 34 {
+    hold c = at(src, sn, st[0])
+    st[0] = st[0] + 1
+    when c == 92 && at(src, sn, st[0]) != 0 {
+      st[0] = st[0] + 1
+    }
+  }
+  when at(src, sn, st[0]) == 34 {
+    st[0] = st[0] + 1
+  }
+  give 1
+}
+
+// ---- use expansion & skip_stmt --------------------------------------------
+
+make dir_of(path: str) -> str {
+  hold n = len(path)
+  hold cut = 0 - 1
+  hold i = 0
+  while i < n {
+    when sx_index(path, i) == 47 {
+      cut = i
+    }
+    i = i + 1
+  }
+  when cut < 0 {
+    give ""
+  }
+  give sub(path, 0, cut)
+}
+
+make read_use(cand1: str, cand2: str, rel: str) -> str {
+  when path_kind(cand1) == 1 {
+    give read_file(cand1)
+  }
+  when path_kind(cand2) == 1 {
+    give read_file(cand2)
+  }
+  hold e = fail(1, concat("cannot open use file: ", rel))
+  give ""
+}
+
+make expand_use(src: str, dir: str, depth: num) -> str {
+  when depth > 8 {
+    hold e = fail(1, "use nesting deeper than 8")
+  }
+  hold sn = len(src)
+  hold out = ""
+  hold i = 0
+  hold tmp = make_state(sn)
+  while i <= sn {
+    hold ls = i
+    while i <= sn && at(src, sn, i) != 10 {
+      i = i + 1
+    }
+    hold le = i
+    when i <= sn {
+      i = i + 1
+    }
+    hold te = le
+    when te > sn {
+      te = sn
+    }
+    hold q = ls
+    while q < te && is_space(at(src, sn, q)) == 1 {
+      q = q + 1
+    }
+    hold handled = 0
+    when q < te && at(src, sn, q) == 47 && at(src, sn, q + 1) == 47 {
+      handled = 2
+    }
+    tmp[0] = q
+    when handled == 0 && mkw_st(src, tmp, "use") == 1 {
+      hold sk = sw_st(src, tmp)
+      when at(src, sn, tmp[0]) != 34 {
+        hold e2 = fail(1, "use needs a quoted path: use \"file.sa\"")
+      }
+      hold pe = tmp[0] + 1
+      while at(src, sn, pe) != 0 && at(src, sn, pe) != 34 {
+        pe = pe + 1
+      }
+      when at(src, sn, pe) != 34 {
+        hold e3 = fail(1, "unterminated use path")
+      }
+      hold rel = sub(src, tmp[0] + 1, pe)
+      hold cand1 = rel
+      when len(dir) > 0 {
+        cand1 = concat(dir, concat("/", rel))
+      }
+      hold body = read_use(cand1, rel, rel)
+      out = concat(out, expand_use(body, dir, depth + 1))
+      handled = 1
+    }
+    when handled != 1 {
+      out = concat(out, sub(src, ls, te))
+    }
+    when le < sn {
+      out = concat(out, "\n")
+    }
+  }
+  give out
+}
+
+make skip_stmt(src: str, sn: num, from: num) -> num {
+  hold p = [0, 0]
+  p[0] = from
+  p[1] = sn
+  while is_space(at(src, sn, p[0])) == 1 {
+    p[0] = p[0] + 1
+  }
+  hold hit = 0
+  when mkw_st(src, p, "hold") == 1 {
+    hit = 1
+  }
+  when hit == 0 && mkw_st(src, p, "show") == 1 {
+    hit = 1
+  }
+  when hit == 0 && mkw_st(src, p, "give") == 1 {
+    hit = 1
+  }
+  when hit == 0 && mkw_st(src, p, "use") == 1 {
+    hit = 1
+  }
+  when hit == 1 {
+    hold e = eol_st(src, p)
+    give p[0]
+  }
+  hold r = [0, 0]
+  r[0] = p[0]
+  r[1] = sn
+  hold blk = 0
+  when mkw_st(src, r, "when") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw_st(src, r, "while") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw_st(src, r, "make") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw_st(src, r, "struct") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw_st(src, r, "otherwise") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw_st(src, r, "else") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw_st(src, r, "for") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw_st(src, r, "elif") == 1 {
+    blk = 1
+  }
+  when blk == 0 {
+    hold e2 = eol_st(src, p)
+    give p[0]
+  }
+  hold i = p[0]
+  hold inq = 0
+  hold out = 0 - 1
+  while i < sn && out < 0 {
+    hold c = sx_index(src, i)
+    hold hand = 0
+    when inq == 1 {
+      when c == 92 {
+        i = i + 1
+      }
+      when c == 34 {
+        inq = 0
+      }
+      i = i + 1
+      hand = 1
+    }
+    when hand == 0 && c == 47 && i + 1 < sn && sx_index(src, i + 1) == 47 {
+      while i < sn && sx_index(src, i) != 10 {
+        i = i + 1
+      }
+      hand = 1
+    }
+    when hand == 0 && c == 34 {
+      inq = 1
+      i = i + 1
+      hand = 1
+    }
+    when hand == 0 && c == 123 {
+      hold d = 1
+      i = i + 1
+      while i < sn && d > 0 {
+        hold c2 = sx_index(src, i)
+        hold h2 = 0
+        when inq == 1 {
+          when c2 == 92 {
+            i = i + 1
+          }
+          when c2 == 34 {
+            inq = 0
+          }
+          i = i + 1
+          h2 = 1
+        }
+        when h2 == 0 && c2 == 47 && i + 1 < sn && sx_index(src, i + 1) == 47 {
+          while i < sn && sx_index(src, i) != 10 {
+            i = i + 1
+          }
+          h2 = 1
+        }
+        when h2 == 0 && c2 == 34 {
+          inq = 1
+          i = i + 1
+          h2 = 1
+        }
+        when h2 == 0 {
+          when c2 == 123 {
+            d = d + 1
+          }
+          when c2 == 125 {
+            d = d - 1
+          }
+          i = i + 1
+        }
+      }
+      out = i
+      hand = 1
+    }
+    when hand == 0 {
+      i = i + 1
+    }
+  }
+  when out >= 0 {
+    give out
+  }
+  hold e3 = eol_st(src, p)
+  give p[0]
+}
+
+// ---- phase 1: collect_defs into `st` + `pool` -----------------------------
+
+make tp_index_st(st: list, pool: list, t: str) -> num {
+  hold ngtp = st[13]
+  hold i = 0
+  while i < ngtp {
+    hold off = st[16 + i]
+    when pool_eq(pool, off, t) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make sig_type_st(src: str, st: list, pool: list, nm: str) -> num {
+  st[7] = 0 - 1
+  st[14] = 0
+  st[15] = 0 - 1
+  hold z = sw_st(src, st)
+  when at(src, st[1], st[0]) != 58 {
+    give 0
+  }
+  st[0] = st[0] + 1
+  hold t = pid_st(src, st)
+  when len(t) == 0 {
+    hold e = fail(1, concat(concat("make ", nm), ": expected a type after ':'"))
+  }
+  hold tpi = tp_index_st(st, pool, t)
+  when tpi >= 0 {
+    st[15] = tpi
+    give 1
+  }
+  when st[13] > 0 {
+    hold e2 = fail(1, concat(concat("make ", nm), "<...>: must be written with type parameters used by every parameter and the return type (a parameter type here must be T or another type parameter)"))
+  }
+  when string_eq(t, "str") == 1 {
+    st[14] = 1
+    give 1
+  }
+  when string_eq(t, "list") == 1 {
+    st[14] = 2
+    give 1
+  }
+  hold sid = s_find(st, pool, t)
+  when sid >= 0 {
+    st[14] = 3
+    st[7] = sid
+    give 1
+  }
+  when string_eq(t, "num") == 0 {
+    hold e3 = fail(1, concat(concat(concat("make ", nm), concat(": parameter type '", t)), "' is not in the native subset (native takes num)"))
+  }
+  give 1
+}
+
+make sig_ret_st(src: str, st: list, pool: list, nm: str) -> num {
+  st[7] = 0 - 1
+  st[14] = 0
+  st[15] = 0 - 1
+  hold z = sw_st(src, st)
+  hold sn = st[1]
+  when at(src, sn, st[0]) != 45 || at(src, sn, st[0] + 1) != 62 {
+    give 0
+  }
+  st[0] = st[0] + 2
+  hold t = pid_st(src, st)
+  when len(t) == 0 {
+    hold e = fail(1, concat(concat("make ", nm), ": expected a return type after '->'"))
+  }
+  hold tpi = tp_index_st(st, pool, t)
+  when tpi >= 0 {
+    st[15] = tpi
+    give 1
+  }
+  when st[13] > 0 {
+    hold e2 = fail(1, concat(concat("make ", nm), "<...>: must be written with type parameters used by every parameter and the return type (the return type here must be T or another type parameter)"))
+  }
+  when string_eq(t, "str") == 1 {
+    st[14] = 1
+    give 1
+  }
+  when string_eq(t, "list") == 1 {
+    st[14] = 2
+    give 1
+  }
+  hold rsid = s_find(st, pool, t)
+  when rsid >= 0 {
+    st[14] = 3
+    st[7] = rsid
+    give 1
+  }
+  when string_eq(t, "num") == 0 {
+    hold e3 = fail(1, concat(concat(concat("make ", nm), concat(": return type '", t)), "' is not in the native subset (native returns num)"))
+  }
+  give 1
+}
+
+make hold_kind_st(src: str, st: list, pool: list, nm: str, fi: num) -> num {
+  st[7] = 0 - 1
+  hold z = sw_st(src, st)
+  when at(src, st[1], st[0]) != 58 {
+    give 0 - 1
+  }
+  st[0] = st[0] + 1
+  hold t = pid_st(src, st)
+  when len(t) == 0 {
+    hold e = fail(1, concat(concat("hold '", nm), "': expected a type after ':'"))
+  }
+  when string_eq(t, "num") == 1 {
+    give 0
+  }
+  when string_eq(t, "str") == 1 {
+    give 1
+  }
+  when string_eq(t, "list") == 1 {
+    give 2
+  }
+  hold sid = s_find(st, pool, t)
+  when sid >= 0 {
+    st[7] = sid
+    give 3
+  }
+  when fi >= 0 {
+    hold fb = f_base(fi)
+    hold ntp = st[fb + 3]
+    hold nparam = st[fb + 1]
+    hold i = 0
+    while i < ntp {
+      hold tpoff = st[fb + 26 + i]
+      when pool_eq(pool, tpoff, t) == 1 {
+        hold j = 0
+        while j < nparam {
+          hold ptps = fn_ptp_slot(fb, j)
+          hold ptp = st[ptps]
+          when ptp == i {
+            hold pks = fn_pk_slot(fb, j)
+            hold pk = st[pks]
+            give pk
+          }
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  hold e2 = fail(1, concat(concat(concat("hold '", nm), "': unknown or unsupported type '"), concat(t, "'")))
+  give 0 - 1
+}
+
+make scan_fields_into(src: str, st: list, pool: list, nm: str, base_f: num, is_concrete: num) -> num {
+  hold sn = st[1]
+  hold nf = 0
+  hold inq = 0
+  hold go = 1
+  while go == 1 {
+    hold c = at(src, sn, st[0])
+    hold hand = 0
+    when c == 0 {
+      go = 0
+      hand = 1
+    }
+    when hand == 0 && inq == 1 {
+      when c == 92 {
+        st[0] = st[0] + 1
+      }
+      when c == 34 {
+        inq = 0
+      }
+      st[0] = st[0] + 1
+      hand = 1
+    }
+    when hand == 0 && c == 34 {
+      inq = 1
+      st[0] = st[0] + 1
+      hand = 1
+    }
+    when hand == 0 && c == 47 && at(src, sn, st[0] + 1) == 47 {
+      hold e = eol_st(src, st)
+      hand = 1
+    }
+    when hand == 0 && c == 125 {
+      go = 0
+      hand = 1
+    }
+    when hand == 0 && id0c(c) == 1 {
+      hold fd = pid_raw_st(src, st)
+      when nf >= 16 {
+        hold e2 = fail(1, concat(concat("struct '", nm), "' has more than 16 fields"))
+      }
+      hold fslot = base_f + nf
+      st[fslot] = intern(pool, fd)
+      when is_concrete == 1 {
+        hold kslot = base_f + 16 + nf
+        hold sslot = base_f + 32 + nf
+        hold fsidslot = base_f + 80 + nf
+        st[kslot] = 0 - 1
+        st[sslot] = 0 - 1
+        st[fsidslot] = 0 - 1
+      }
+      nf = nf + 1
+      hand = 1
+    }
+    when hand == 0 && c == 58 {
+      hold z = st[0] + 1
+      while at(src, sn, z) == 32 || at(src, sn, z) == 9 {
+        z = z + 1
+      }
+      when id0c(at(src, sn, z)) == 1 {
+        hold e3 = fail(1, concat(concat("struct '", nm), "': field annotations are not supported (write just the field name; docs/TYPES_ROADMAP.md)"))
+      }
+    }
+    when hand == 0 {
+      st[0] = st[0] + 1
+    }
+  }
+  give nf
+}
+
+make collect_defs(src: str, st: list, pool: list) -> num {
+  hold sn = st[1]
+  st[0] = 0
+  hold go = 1
+  while go == 1 {
+    when st[0] >= sn {
+      go = 0
+    }
+    hold line = st[0]
+    when go == 1 {
+      hold sk = sw_st(src, st)
+      when st[0] >= sn {
+        go = 0
+      }
+    }
+    hold tag = 0
+    when go == 1 && at(src, sn, st[0]) == 47 && at(src, sn, st[0] + 1) == 47 {
+      hold ec = eol_st(src, st)
+      tag = 1
+    }
+    when go == 1 && tag == 0 && mkw_st(src, st, "struct") == 1 {
+      tag = 2
+    }
+    when go == 1 && tag == 0 && mkw_st(src, st, "make") == 1 {
+      tag = 3
+    }
+    when go == 1 && tag == 0 && mkw_st(src, st, "hold") == 1 {
+      tag = 4
+    }
+    when go == 1 && tag == 0 {
+      st[0] = skip_stmt(src, sn, line)
+      tag = 5
+    }
+
+    when tag == 2 {
+      hold nm = pid_st(src, st)
+      when len(nm) == 0 {
+        hold es1 = fail(1, "struct needs a name")
+      }
+      when s_find(st, pool, nm) >= 0 {
+        hold es2 = fail(1, concat(concat("struct '", nm), "' declared twice"))
+      }
+      when st[8] >= 32 {
+        hold es3 = fail(1, "too many structs (native limit: 32)")
+      }
+      hold sk2 = sw_st(src, st)
+      when at(src, sn, st[0]) == 60 {
+        st[0] = st[0] + 1
+        when gs_find(st, pool, nm) >= 0 || s_find(st, pool, nm) >= 0 {
+          hold es4 = fail(1, concat(concat("struct '", nm), "' declared twice"))
+        }
+        hold ngs = st[9]
+        when ngs >= 32 {
+          hold es5 = fail(1, "too many generic structs")
+        }
+        hold gb = gs_base(ngs)
+        st[gb] = intern(pool, nm)
+        hold np = 0
+        hold loop = 1
+        while loop == 1 {
+          hold sk3 = sw_st(src, st)
+          hold c = at(src, sn, st[0])
+          when c == 0 {
+            hold es6 = fail(1, "a type parameter list needs a closing >")
+          }
+          when c == 62 {
+            st[0] = st[0] + 1
+            loop = 0
+          } otherwise {
+            when c == 44 {
+              st[0] = st[0] + 1
+            } otherwise {
+              hold tp = pid_st(src, st)
+              when len(tp) == 0 {
+                hold es7 = fail(1, "a type parameter must be a name")
+              }
+              when np >= 8 {
+                hold es8 = fail(1, "too many type parameters (native limit is 8)")
+              }
+              hold tpslot = gb + 4 + np
+              st[tpslot] = intern(pool, tp)
+              np = np + 1
+            }
+          }
+        }
+        st[gb + 1] = np
+        hold sk4 = sw_st(src, st)
+        when at(src, sn, st[0]) != 123 {
+          hold es9 = fail(1, concat(concat("struct ", nm), " needs { fields }"))
+        }
+        st[0] = st[0] + 1
+        hold gnf = scan_fields_into(src, st, pool, nm, gb + 12, 0)
+        st[gb + 2] = gnf
+        when at(src, sn, st[0]) == 125 {
+          st[0] = st[0] + 1
+        }
+        st[9] = ngs + 1
+      } otherwise {
+        when at(src, sn, st[0]) != 123 {
+          hold es10 = fail(1, concat(concat("struct ", nm), " needs { fields }"))
+        }
+        st[0] = st[0] + 1
+        hold sid = st[8]
+        hold sb = s_base(sid)
+        st[sb] = intern(pool, nm)
+        st[sb + 2] = 0
+        hold cnf = scan_fields_into(src, st, pool, nm, sb + 4, 1)
+        st[sb + 1] = cnf
+        when at(src, sn, st[0]) != 125 {
+          hold es11 = fail(1, concat(concat("struct ", nm), ": missing }"))
+        }
+        st[8] = sid + 1
+        st[0] = skip_stmt(src, sn, line)
+      }
+    }
+
+    when tag == 3 {
+      hold fnm = pid_st(src, st)
+      when len(fnm) == 0 {
+        hold ef1 = fail(1, "make needs a name")
+      }
+      when f_find(st, pool, fnm) >= 0 {
+        hold ef2 = fail(1, concat(concat("function '", fnm), "' declared twice"))
+      }
+      hold nf = st[10]
+      hold max_fn = 256
+      when st[39] == 1 {
+        max_fn = 1024
+      }
+      when nf >= max_fn {
+        hold ef3 = fail(1, "too many functions (native limit: 256)")
+      }
+      hold fb = f_base(nf)
+      st[fb] = intern(pool, fnm)
+      st[fb + 2] = 0
+      st[fb + 3] = 0
+      st[fb + 5] = 0 - 1
+      st[fb + 6] = 0 - 1
+      st[fb + 7] = 0
+      st[fb + 32] = 0 - 1
+      st[fb + 34] = 0 - 1
+      st[fb + 35] = 0 - 1
+      st[13] = 0
+      hold sk5 = sw_st(src, st)
+      when at(src, sn, st[0]) == 60 {
+        st[fb + 2] = 1
+        st[0] = st[0] + 1
+        hold ntp = 0
+        hold tloop = 1
+        while tloop == 1 {
+          hold sk6 = sw_st(src, st)
+          when ntp >= 8 {
+            hold ef4 = fail(1, concat(concat("make ", fnm), "<...>: at most 8 type parameters"))
+          }
+          hold tp2 = pid_st(src, st)
+          when len(tp2) == 0 {
+            hold ef5 = fail(1, concat(concat("make ", fnm), "<...>: bad type parameter list"))
+          }
+          hold tpo = intern(pool, tp2)
+          hold gslot = 16 + ntp
+          hold ftslot = fb + 26 + ntp
+          st[gslot] = tpo
+          st[ftslot] = tpo
+          ntp = ntp + 1
+          st[13] = ntp
+          hold sk7 = sw_st(src, st)
+          when at(src, sn, st[0]) == 44 {
+            st[0] = st[0] + 1
+          } otherwise {
+            when at(src, sn, st[0]) == 62 {
+              st[0] = st[0] + 1
+              tloop = 0
+            } otherwise {
+              hold ef6 = fail(1, concat(concat("make ", fnm), "<...>: bad type parameter list"))
+            }
+          }
+        }
+        st[fb + 3] = ntp
+        hold sk8 = sw_st(src, st)
+      }
+      when at(src, sn, st[0]) != 40 {
+        hold ef7 = fail(1, concat(concat("make ", fnm), ": expected (params)"))
+      }
+      st[0] = st[0] + 1
+      hold nparam = 0
+      hold typed = 0
+      hold ploop = 1
+      while ploop == 1 {
+        hold sk9 = sw_st(src, st)
+        when at(src, sn, st[0]) == 41 {
+          st[0] = st[0] + 1
+          ploop = 0
+        } otherwise {
+          hold pm = pid_st(src, st)
+          when len(pm) == 0 {
+            hold ef8 = fail(1, concat(concat("make ", fnm), ": bad param list"))
+          }
+          when st[39] == 0 && nparam >= 6 {
+            hold ef9 = fail(1, concat(concat("make ", fnm), ": at most 6 params"))
+          }
+          when st[39] == 1 && nparam >= 20 {
+            hold ef9b = fail(1, concat(concat("make ", fnm), ": at most 20 params"))
+          }
+          typed = typed + sig_type_st(src, st, pool, fnm)
+          hold pnslot = fn_pn_slot(fb, nparam)
+          hold pkslot = fn_pk_slot(fb, nparam)
+          hold ptpslot = fn_ptp_slot(fb, nparam)
+          st[pnslot] = intern(pool, pm)
+          st[pkslot] = st[14]
+          st[ptpslot] = st[15]
+          when st[fb + 2] == 0 {
+            hold psslot = fn_ps_slot(fb, nparam)
+            st[psslot] = st[7]
+          }
+          nparam = nparam + 1
+          hold sk10 = sw_st(src, st)
+          when at(src, sn, st[0]) == 44 {
+            st[0] = st[0] + 1
+          } otherwise {
+            when at(src, sn, st[0]) == 41 {
+              st[0] = st[0] + 1
+              ploop = 0
+            } otherwise {
+              hold ef10 = fail(1, concat(concat("make ", fnm), ": bad param list"))
+            }
+          }
+        }
+      }
+      st[fb + 1] = nparam
+      hold r1 = sig_ret_st(src, st, pool, fnm)
+      st[fb + 4] = st[14]
+      st[fb + 5] = st[15]
+      when st[fb + 2] == 0 {
+        st[fb + 32] = st[7]
+      }
+      when (typed != 0 || r1 != 0) && typed != nparam {
+        hold ef11 = fail(1, concat(concat("make ", fnm), ": a typed signature needs a type on every parameter (a: num)"))
+      }
+      when (typed != 0 || r1 != 0) && r1 == 0 {
+        hold ef12 = fail(1, concat(concat("make ", fnm), ": a typed signature needs a return type (-> num)"))
+      }
+      when st[fb + 2] == 1 && (typed != nparam || r1 == 0) {
+        hold ef13 = fail(1, concat(concat("make ", fnm), "<...>: a generic needs a type parameter on every parameter and a return type (-> T)"))
+      }
+      st[13] = 0
+      st[10] = nf + 1
+      st[0] = skip_stmt(src, sn, line)
+    }
+
+    when tag == 4 {
+      hold gnm = pid_st(src, st)
+      when len(gnm) == 0 {
+        hold eg1 = fail(1, "hold needs a name")
+      }
+      hold gi = g_decl(st, pool, gnm)
+      hold gbb = g_base(gi)
+      hold ann = hold_kind_st(src, st, pool, gnm, 0 - 1)
+      when ann >= 0 {
+        when st[gbb + 1] >= 0 && st[gbb + 1] != ann {
+          hold eg2 = fail(1, concat(concat("conflicting hold type for '", gnm), "'"))
+        }
+        when ann == 3 {
+          when st[7] < 0 {
+            hold eg3 = fail(1, concat(concat("hold '", gnm), "': missing declared struct type"))
+          }
+          when st[gbb + 2] >= 0 && st[gbb + 2] != st[7] {
+            hold eg4 = fail(1, concat(concat("conflicting hold struct type for '", gnm), "'"))
+          }
+          st[gbb + 2] = st[7]
+        }
+        st[gbb + 1] = ann
+      }
+      st[0] = skip_stmt(src, sn, line)
+    }
+  }
+  give 0
+}
+
+// ---- generic struct & generic function instantiation ----------------------
+
+make gs_instantiate(src: str, st: list, pool: list, n: str) -> num {
+  hold gi = gs_find(st, pool, n)
+  when gi < 0 {
+    give 0 - 1
+  }
+  hold saved_p = st[0]
+  hold z = gsw_st(src, st)
+  hold sn = st[1]
+  when at(src, sn, st[0]) != 60 {
+    st[0] = saved_p
+    give 0 - 1
+  }
+  st[0] = st[0] + 1
+  hold neg1 = 0 - 1
+  hold ks = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold kss = [neg1, neg1, neg1, neg1, neg1, neg1, neg1, neg1]
+  hold codes = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold nk = 0
+  hold nested = 0
+  hold loop = 1
+  while loop == 1 {
+    hold z2 = gsw_st(src, st)
+    hold c = at(src, sn, st[0])
+    when c == 0 {
+      hold e1 = fail(1, "a type argument list needs a closing >")
+    }
+    when c == 62 {
+      st[0] = st[0] + 1
+      loop = 0
+    } otherwise {
+      when c == 44 {
+        st[0] = st[0] + 1
+      } otherwise {
+        hold t = pid_st(src, st)
+        when len(t) == 0 {
+          hold e2 = fail(1, "a type argument must be num, str, list or an instantiation of a generic struct")
+        }
+        when nk >= 8 {
+          hold e3 = fail(1, "too many type arguments (native limit is 8)")
+        }
+        hold after_t = st[0]
+        hold z3 = gsw_st(src, st)
+        hold did_inner = 0
+        when at(src, sn, st[0]) == 60 && gs_find(st, pool, t) >= 0 {
+          st[0] = after_t
+          hold inner = gs_instantiate(src, st, pool, t)
+          when inner < 0 {
+            hold e4 = fail(1, concat(concat("a type argument must be num, str, list or an instantiation of a generic struct (got '", t), "')"))
+          }
+          ks[nk] = 3
+          kss[nk] = inner
+          nested = 1
+          hold isb = s_base(inner)
+          codes[nk] = st[isb]
+          nk = nk + 1
+          did_inner = 1
+        }
+        when did_inner == 0 {
+          st[0] = after_t
+          hold k = 0 - 1
+          when string_eq(t, "num") == 1 {
+            k = 0
+          }
+          when string_eq(t, "str") == 1 {
+            k = 1
+          }
+          when string_eq(t, "list") == 1 {
+            k = 2
+          }
+          when k < 0 {
+            hold e5 = fail(1, concat(concat("a type argument must be num, str, list or an instantiation of a generic struct (got '", t), "')"))
+          }
+          ks[nk] = k
+          kss[nk] = 0 - 1
+          hold ch = "n"
+          when k == 1 {
+            ch = "s"
+          }
+          when k == 2 {
+            ch = "l"
+          }
+          codes[nk] = intern(pool, ch)
+          nk = nk + 1
+        }
+      }
+    }
+  }
+  hold gb = gs_base(gi)
+  hold want_np = st[gb + 1]
+  when nk != want_np {
+    hold sfx = "s"
+    when want_np == 1 {
+      sfx = ""
+    }
+    hold msg = concat("struct '", n)
+    msg = concat(msg, "' takes ")
+    msg = concat(msg, numstr(want_np))
+    msg = concat(msg, " type argument")
+    msg = concat(msg, sfx)
+    msg = concat(msg, ", got ")
+    msg = concat(msg, numstr(nk))
+    hold e6 = fail(1, msg)
+  }
+  hold mn = concat(unintern(pool, st[gb]), "__")
+  hold i = 0
+  while i < nk {
+    when nested == 1 && i > 0 {
+      mn = concat(mn, "_")
+    }
+    mn = concat(mn, unintern(pool, codes[i]))
+    i = i + 1
+  }
+  when len(mn) >= 64 {
+    hold e7 = fail(1, concat(concat("struct '", n), "' is too long to instantiate (the mangled name must fit 63 characters)"))
+  }
+  hold z4 = gsw_st(src, st)
+  hold ex = s_find(st, pool, mn)
+  when ex >= 0 {
+    give ex
+  }
+  hold ns = st[8]
+  when ns >= 32 {
+    hold e8 = fail(1, "too many structs (a generic instantiation counts as one; native limit is 32)")
+  }
+  hold sb = s_base(ns)
+  hold nf = st[gb + 2]
+  st[sb] = intern(pool, mn)
+  st[sb + 1] = nf
+  st[sb + 2] = nk
+  hold f = 0
+  while f < nf {
+    hold gfoff = gb + 12 + f
+    hold sfoff = sb + 4 + f
+    hold skoff = sb + 20 + f
+    hold ssoff = sb + 36 + f
+    hold fsoff = sb + 84 + f
+    st[sfoff] = st[gfoff]
+    st[skoff] = 0 - 1
+    st[ssoff] = 0 - 1
+    st[fsoff] = 0 - 1
+    f = f + 1
+  }
+  i = 0
+  while i < nk {
+    hold ko = sb + 100 + i
+    hold so = sb + 108 + i
+    st[ko] = ks[i]
+    st[so] = kss[i]
+    i = i + 1
+  }
+  st[8] = ns + 1
+  give ns
+}
+
+make pick_instance(st: list, pool: list, fi: num, kinds: list, nargs: num) -> num {
+  hold fb = f_base(fi)
+  hold fnm = unintern(pool, st[fb])
+  hold nparam = st[fb + 1]
+  hold neg1 = 0 - 1
+  hold bind = [neg1, neg1, neg1, neg1, neg1, neg1, neg1, neg1]
+  hold i = 0
+  while i < nargs && i < nparam {
+    hold ptpslot = fn_ptp_slot(fb, i)
+    hold t = st[ptpslot]
+    when t >= 0 {
+      when bind[t] < 0 {
+        bind[t] = kinds[i]
+      } otherwise {
+        when bind[t] != kinds[i] {
+          hold e1 = fail(1, concat(concat("make ", fnm), ": one type parameter is given two different kinds"))
+        }
+      }
+    }
+    i = i + 1
+  }
+  i = 0
+  while i < nargs {
+    hold ki = kinds[i]
+    when ki != 0 && ki != 1 && ki != 2 {
+      hold m = "generics are not in the native subset for structs (arg "
+      m = concat(m, numstr(i + 1))
+      m = concat(m, " of '")
+      m = concat(m, fnm)
+      m = concat(m, "' is ")
+      m = concat(m, kname(ki))
+      m = concat(m, "; gen2 monomorphises them)")
+      hold e2 = fail(1, m)
+    }
+    i = i + 1
+  }
+  hold allnum = 1
+  i = 0
+  while i < 8 {
+    when bind[i] == 1 || bind[i] == 2 {
+      allnum = 0
+    }
+    i = i + 1
+  }
+  when allnum == 1 {
+    when st[fb + 7] == 0 {
+      st[fb + 7] = 1
+      hold pq = pend_slot(st[12])
+      st[pq] = fi
+      st[12] = st[12] + 1
+    }
+    give fi
+  }
+  hold rtp = st[fb + 5]
+  hold rk = 0
+  when rtp >= 0 && bind[rtp] >= 0 {
+    rk = bind[rtp]
+  }
+  hold want = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  i = 0
+  while i < nparam {
+    hold ps = fn_ptp_slot(fb, i)
+    hold tp = st[ps]
+    when tp >= 0 && bind[tp] >= 0 {
+      want[i] = bind[tp]
+    }
+    i = i + 1
+  }
+  hold nf = st[10]
+  hold j = 0
+  while j < nf {
+    hold jb = f_base(j)
+    when st[jb + 6] == fi && st[jb + 4] == rk {
+      hold same = 1
+      hold pi = 0
+      while pi < nparam {
+        hold jp = fn_pk_slot(jb, pi)
+        when st[jp] != want[pi] {
+          same = 0
+        }
+        pi = pi + 1
+      }
+      when same == 1 {
+        give j
+      }
+    }
+    j = j + 1
+  }
+  hold max_fn = 256
+  when st[39] == 1 {
+    max_fn = 1024
+  }
+  when nf >= max_fn {
+    hold e3 = fail(1, "too many functions and generic instances")
+  }
+  hold nb = f_base(nf)
+  i = 0
+  while i < 100 {
+    hold src_slot = fb + i
+    hold dst_slot = nb + i
+    st[dst_slot] = st[src_slot]
+    i = i + 1
+  }
+  st[nb + 2] = 0
+  st[nb + 4] = rk
+  st[nb + 6] = fi
+  st[nb + 7] = 0
+  st[nb + 34] = 0 - 1
+  i = 0
+  while i < nparam {
+    hold dpk = fn_pk_slot(nb, i)
+    st[dpk] = want[i]
+    i = i + 1
+  }
+  hold pq2 = pend_slot(st[12])
+  st[pq2] = nf
+  st[12] = st[12] + 1
+  st[10] = nf + 1
+  give nf
+}
+
+// ---- boolean spans & condition boundaries ---------------------------------
+
+make paren_close(src: str, sn: num, o: num) -> num {
+  hold d = 0
+  hold inq = 0
+  hold q = o
+  while q < sn {
+    hold c = sx_index(src, q)
+    when inq == 1 {
+      when c == 92 && q + 1 < sn {
+        q = q + 2
+      } otherwise {
+        when c == 34 {
+          inq = 0
+        }
+        q = q + 1
+      }
+    } otherwise {
+      when c == 34 {
+        inq = 1
+      } otherwise {
+        when c == 40 {
+          d = d + 1
+        }
+        when c == 41 {
+          d = d - 1
+          when d == 0 {
+            give q
+          }
+        }
+      }
+      q = q + 1
+    }
+  }
+  give 0 - 1
+}
+
+make rhs_end(src: str, sn: num, s: num) -> num {
+  hold inq = 0
+  hold q = s
+  while q < sn {
+    hold c = sx_index(src, q)
+    when inq == 1 {
+      when c == 92 && q + 1 < sn {
+        q = q + 2
+      } otherwise {
+        when c == 34 {
+          inq = 0
+        }
+        q = q + 1
+      }
+    } otherwise {
+      when c == 34 {
+        inq = 1
+        q = q + 1
+      } otherwise {
+        when c == 10 || c == 123 || c == 125 {
+          give q
+        }
+        when c == 47 && at(src, sn, q + 1) == 47 {
+          give q
+        }
+        q = q + 1
+      }
+    }
+  }
+  give sn
+}
+
+make arg_end(src: str, sn: num, s: num) -> num {
+  hold d = 0
+  hold inq = 0
+  hold q = s
+  while q < sn {
+    hold c = sx_index(src, q)
+    when inq == 1 {
+      when c == 92 && q + 1 < sn {
+        q = q + 2
+      } otherwise {
+        when c == 34 {
+          inq = 0
+        }
+        q = q + 1
+      }
+    } otherwise {
+      when c == 34 {
+        inq = 1
+        q = q + 1
+      } otherwise {
+        when c == 40 || c == 91 {
+          d = d + 1
+          q = q + 1
+        } otherwise {
+          when c == 41 || c == 93 {
+            when d == 0 {
+              give q
+            }
+            d = d - 1
+            q = q + 1
+          } otherwise {
+            when c == 44 && d == 0 {
+              give q
+            }
+            q = q + 1
+          }
+        }
+      }
+    }
+  }
+  give sn
+}
+
+make fld_end(src: str, sn: num, s: num) -> num {
+  hold d = 0
+  hold inq = 0
+  hold q = s
+  while q < sn {
+    hold c = sx_index(src, q)
+    when inq == 1 {
+      when c == 92 && q + 1 < sn {
+        q = q + 2
+      } otherwise {
+        when c == 34 {
+          inq = 0
+        }
+        q = q + 1
+      }
+    } otherwise {
+      when c == 34 {
+        inq = 1
+        q = q + 1
+      } otherwise {
+        when c == 40 || c == 91 {
+          d = d + 1
+          q = q + 1
+        } otherwise {
+          when c == 41 || c == 93 {
+            when d == 0 {
+              give q
+            }
+            d = d - 1
+            q = q + 1
+          } otherwise {
+            when c == 125 && d == 0 {
+              give q
+            }
+            when c == 44 && d == 0 {
+              give q
+            }
+            q = q + 1
+          }
+        }
+      }
+    }
+  }
+  give sn
+}
+
+make cond_end(src: str, sn: num, p0: num) -> num {
+  hold d = 0
+  hold p = p0
+  while p < sn {
+    hold c = sx_index(src, p)
+    when c == 34 {
+      p = p + 1
+      while p < sn && sx_index(src, p) != 34 {
+        when sx_index(src, p) == 92 && p + 1 < sn {
+          p = p + 1
+        }
+        p = p + 1
+      }
+      when p < sn {
+        p = p + 1
+      }
+    } otherwise {
+      when c == 40 || c == 91 {
+        d = d + 1
+      } otherwise {
+        when c == 41 || c == 93 {
+          d = d - 1
+        } otherwise {
+          when c == 123 && d <= 0 {
+            give p
+          }
+        }
+      }
+      p = p + 1
+    }
+  }
+  give p
+}
+
+make cond_wrapped(src: str, s: num, e: num) -> num {
+  when s >= e || sx_index(src, s) != 40 {
+    give 0
+  }
+  hold d = 0
+  hold q = s
+  while q < e {
+    hold c = sx_index(src, q)
+    when c == 34 {
+      q = q + 1
+      while q < e && sx_index(src, q) != 34 {
+        when sx_index(src, q) == 92 && q + 1 < e {
+          q = q + 1
+        }
+        q = q + 1
+      }
+      q = q + 1
+    } otherwise {
+      when c == 40 {
+        d = d + 1
+      }
+      when c == 41 {
+        d = d - 1
+        when d == 0 {
+          when q == e - 1 {
+            give 1
+          }
+          give 0
+        }
+      }
+      q = q + 1
+    }
+  }
+  give 0
+}
+
+make logic_span(src: str, s0: num, e0: num) -> num {
+  hold s = s0
+  hold e = e0
+  while s < e && is_space(sx_index(src, s)) == 1 {
+    s = s + 1
+  }
+  while e > s && is_space(sx_index(src, e - 1)) == 1 {
+    e = e - 1
+  }
+  while s < e && cond_wrapped(src, s, e) == 1 {
+    s = s + 1
+    e = e - 1
+    while s < e && is_space(sx_index(src, s)) == 1 {
+      s = s + 1
+    }
+    while e > s && is_space(sx_index(src, e - 1)) == 1 {
+      e = e - 1
+    }
+  }
+  hold depth = 0
+  hold inq = 0
+  hold q = s
+  while q < e {
+    hold c = sx_index(src, q)
+    when inq == 1 {
+      when c == 92 && q + 1 < e {
+        q = q + 2
+      } otherwise {
+        when c == 34 {
+          inq = 0
+        }
+        q = q + 1
+      }
+    } otherwise {
+      when c == 34 {
+        inq = 1
+        q = q + 1
+      } otherwise {
+        when c == 40 || c == 91 {
+          depth = depth + 1
+          q = q + 1
+        } otherwise {
+          when c == 41 || c == 93 {
+            depth = depth - 1
+            q = q + 1
+          } otherwise {
+            hold prev_ok = 0
+            when q == s {
+              prev_ok = 1
+            } otherwise {
+              when idcc(sx_index(src, q - 1)) == 0 {
+                prev_ok = 1
+              }
+            }
+            when depth == 0 && id0c(c) == 1 && prev_ok == 1 {
+              hold r = q
+              while r < e && idcc(sx_index(src, r)) == 1 {
+                r = r + 1
+              }
+              hold w = sub(src, q, r)
+              when string_eq(w, "and") == 1 || string_eq(w, "or") == 1 || string_eq(w, "not") == 1 {
+                give 1
+              }
+              q = r
+            } otherwise {
+              q = q + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make cond_word(src: str, s: num, e: num, w: str) -> num {
+  hold wn = len(w)
+  hold d = 0
+  hold q = s
+  while q < e {
+    hold c = sx_index(src, q)
+    when c == 34 {
+      q = q + 1
+      while q < e && sx_index(src, q) != 34 {
+        when sx_index(src, q) == 92 && q + 1 < e {
+          q = q + 1
+        }
+        q = q + 1
+      }
+      q = q + 1
+    } otherwise {
+      when c == 40 || c == 91 {
+        d = d + 1
+      } otherwise {
+        when c == 41 || c == 93 {
+          when d > 0 {
+            d = d - 1
+          }
+        } otherwise {
+          hold prev_ok = 0
+          when q == s {
+            prev_ok = 1
+          } otherwise {
+            when idcc(sx_index(src, q - 1)) == 0 {
+              prev_ok = 1
+            }
+          }
+          when d == 0 && prev_ok == 1 && q + wn <= e {
+            hold after_ok = 1
+            when q + wn < e && idcc(sx_index(src, q + wn)) == 1 {
+              after_ok = 0
+            }
+            when after_ok == 1 && string_eq(sub(src, q, q + wn), w) == 1 {
+              give q
+            }
+          }
+        }
+      }
+      q = q + 1
+    }
+  }
+  give 0 - 1
+}
+
+make logic_span_st(src: str, st: list, s0: num, e0: num) -> num {
+  when logic_span(src, s0, e0) == 1 {
+    give 1
+  }
+  when st[39] == 0 {
+    give 0
+  }
+  hold s = s0
+  hold e = e0
+  while s < e && is_space(sx_index(src, s)) == 1 {
+    s = s + 1
+  }
+  while e > s && is_space(sx_index(src, e - 1)) == 1 {
+    e = e - 1
+  }
+  while s < e && cond_wrapped(src, s, e) == 1 {
+    s = s + 1
+    e = e - 1
+    while s < e && is_space(sx_index(src, s)) == 1 {
+      s = s + 1
+    }
+    while e > s && is_space(sx_index(src, e - 1)) == 1 {
+      e = e - 1
+    }
+  }
+  hold depth = 0
+  hold inq = 0
+  hold q = s
+  while q < e {
+    hold c = sx_index(src, q)
+    when inq == 1 {
+      when c == 92 && q + 1 < e {
+        q = q + 2
+      } otherwise {
+        when c == 34 {
+          inq = 0
+        }
+        q = q + 1
+      }
+    } otherwise {
+      when c == 34 {
+        inq = 1
+        q = q + 1
+      } otherwise {
+        when c == 40 || c == 91 {
+          depth = depth + 1
+          q = q + 1
+        } otherwise {
+          when c == 41 || c == 93 {
+            depth = depth - 1
+            q = q + 1
+          } otherwise {
+            when depth == 0 && q + 1 < e && ((c == 124 && sx_index(src, q + 1) == 124) || (c == 38 && sx_index(src, q + 1) == 38)) {
+              give 1
+            }
+            q = q + 1
+          }
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make cond_op(src: str, st: list, s: num, e: num, w: str) -> num {
+  when st[39] == 0 {
+    give cond_word(src, s, e, w)
+  }
+  hold wn = len(w)
+  hold sym = 124
+  when string_eq(w, "and") == 1 {
+    sym = 38
+  }
+  hold d = 0
+  hold q = s
+  while q < e {
+    hold c = sx_index(src, q)
+    when c == 34 {
+      q = q + 1
+      while q < e && sx_index(src, q) != 34 {
+        when sx_index(src, q) == 92 && q + 1 < e {
+          q = q + 1
+        }
+        q = q + 1
+      }
+      q = q + 1
+    } otherwise {
+      when c == 40 || c == 91 {
+        d = d + 1
+      } otherwise {
+        when c == 41 || c == 93 {
+          when d > 0 {
+            d = d - 1
+          }
+        } otherwise {
+          when d == 0 && q + 1 < e && c == sym && sx_index(src, q + 1) == sym {
+            give q
+          }
+          hold prev_ok = 0
+          when q == s {
+            prev_ok = 1
+          } otherwise {
+            when idcc(sx_index(src, q - 1)) == 0 {
+              prev_ok = 1
+            }
+          }
+          when d == 0 && prev_ok == 1 && q + wn <= e {
+            hold after_ok = 1
+            when q + wn < e && idcc(sx_index(src, q + wn)) == 1 {
+              after_ok = 0
+            }
+            when after_ok == 1 && string_eq(sub(src, q, q + wn), w) == 1 {
+              give q
+            }
+          }
+        }
+      }
+      q = q + 1
+    }
+  }
+  give 0 - 1
+}
+
+make cond_op_len(src: str, pos: num, w: str) -> num {
+  hold c = sx_index(src, pos)
+  when c == 124 || c == 38 {
+    give 2
+  }
+  give len(w)
+}
+
+// ---- phase 2: pk_* grammar & dry condition checker ------------------------
+
+make builtin_arity(nm: str) -> num {
+  when string_eq(nm, "arg_count") == 1 || string_eq(nm, "gc") == 1 || string_eq(nm, "gc_live") == 1 || string_eq(nm, "gc_runs") == 1 {
+    give 0
+  }
+  when string_eq(nm, "len") == 1 || string_eq(nm, "chr") == 1 || string_eq(nm, "read_file") == 1 || string_eq(nm, "http_get") == 1 || string_eq(nm, "arg") == 1 {
+    give 1
+  }
+  when string_eq(nm, "concat") == 1 || string_eq(nm, "sx_index") == 1 || string_eq(nm, "index") == 1 || string_eq(nm, "write_file") == 1 || string_eq(nm, "string_eq") == 1 || string_eq(nm, "sx_eq") == 1 || string_eq(nm, "push") == 1 {
+    give 2
+  }
+  give 0 - 1
+}
+
+make builtin_arity_st(st: list, nm: str) -> num {
+  hold a = builtin_arity(nm)
+  when a >= 0 || st[39] == 0 {
+    give a
+  }
+  when string_eq(nm, "flush_out") == 1 || string_eq(nm, "read_line") == 1 {
+    give 0
+  }
+  when string_eq(nm, "numstr") == 1 || string_eq(nm, "bit_not") == 1 || string_eq(nm, "exit") == 1 || string_eq(nm, "path_kind") == 1 || string_eq(nm, "path_size") == 1 || string_eq(nm, "path_real") == 1 || string_eq(nm, "make_dir") == 1 || string_eq(nm, "remove_path") == 1 || string_eq(nm, "read_dir") == 1 || string_eq(nm, "getenv") == 1 || string_eq(nm, "run_command") == 1 || string_eq(nm, "write_out") == 1 || string_eq(nm, "read_n") == 1 || string_eq(nm, "spawn") == 1 || string_eq(nm, "child_line") == 1 || string_eq(nm, "child_close") == 1 {
+    give 1
+  }
+  when string_eq(nm, "sx_idx") == 1 || string_eq(nm, "make_link") == 1 || string_eq(nm, "bit_and") == 1 || string_eq(nm, "bit_or") == 1 || string_eq(nm, "bit_xor") == 1 || string_eq(nm, "shl") == 1 || string_eq(nm, "shr") == 1 || string_eq(nm, "write_bytes") == 1 || string_eq(nm, "read_bytes") == 1 || string_eq(nm, "bytes_f64") == 1 || string_eq(nm, "child_send") == 1 || string_eq(nm, "child_recv") == 1 {
+    give 2
+  }
+  give 0 - 1
+}
+
+make builtin_ret(nm: str) -> num {
+  when string_eq(nm, "concat") == 1 || string_eq(nm, "chr") == 1 || string_eq(nm, "read_file") == 1 || string_eq(nm, "http_get") == 1 || string_eq(nm, "arg") == 1 {
+    give 1
+  }
+  when string_eq(nm, "push") == 1 {
+    give 2
+  }
+  give 0
+}
+
+make builtin_ret_st(st: list, nm: str) -> num {
+  when st[39] == 1 {
+    when string_eq(nm, "numstr") == 1 || string_eq(nm, "getenv") == 1 || string_eq(nm, "read_dir") == 1 || string_eq(nm, "path_real") == 1 || string_eq(nm, "read_line") == 1 || string_eq(nm, "read_n") == 1 || string_eq(nm, "child_recv") == 1 || string_eq(nm, "child_line") == 1 {
+      give 1
+    }
+    when string_eq(nm, "bytes_f64") == 1 {
+      give 2
+    }
+  }
+  give builtin_ret(nm)
+}
+
+make gen_cond_dry(src: str, st: list, pool: list, s0: num, e0: num, what: str) -> num {
+  hold s = s0
+  hold e = e0
+  while s < e && is_space(sx_index(src, s)) == 1 {
+    s = s + 1
+  }
+  while e > s && is_space(sx_index(src, e - 1)) == 1 {
+    e = e - 1
+  }
+  when s >= e {
+    hold e1 = fail(1, concat(concat("missing operand in ", what), " condition"))
+  }
+  hold or_at = cond_op(src, st, s, e, "or")
+  when or_at >= 0 {
+    hold r = s
+    hold cnt = 0
+    hold go = 1
+    while go == 1 {
+      hold x = cond_op(src, st, r, e, "or")
+      when cnt >= 256 {
+        hold e2 = fail(1, "condition is too long for the native compiler")
+      }
+      cnt = cnt + 1
+      when x >= 0 {
+        hold z1 = gen_cond_dry(src, st, pool, r, x, what)
+        r = x + cond_op_len(src, x, "or")
+      } otherwise {
+        hold z2 = gen_cond_dry(src, st, pool, r, e, what)
+        go = 0
+      }
+    }
+    give 0
+  }
+  hold and_at = cond_op(src, st, s, e, "and")
+  when and_at >= 0 {
+    hold r2 = s
+    hold cnt2 = 0
+    hold go2 = 1
+    while go2 == 1 {
+      hold x2 = cond_op(src, st, r2, e, "and")
+      when cnt2 >= 256 {
+        hold e3 = fail(1, "condition is too long for the native compiler")
+      }
+      cnt2 = cnt2 + 1
+      when x2 >= 0 {
+        hold z3 = gen_cond_dry(src, st, pool, r2, x2, what)
+        r2 = x2 + cond_op_len(src, x2, "and")
+      } otherwise {
+        hold z4 = gen_cond_dry(src, st, pool, r2, e, what)
+        go2 = 0
+      }
+    }
+    give 0
+  }
+  when e - s >= 3 && string_eq(sub(src, s, s + 3), "not") == 1 {
+    hold next_ok = 1
+    when s + 3 < e && idcc(sx_index(src, s + 3)) == 1 {
+      next_ok = 0
+    }
+    when next_ok == 1 {
+      give gen_cond_dry(src, st, pool, s + 3, e, what)
+    }
+  }
+  when cond_wrapped(src, s, e) == 1 {
+    give gen_cond_dry(src, st, pool, s + 1, e - 1, what)
+  }
+  hold saved_p = st[0]
+  st[6] = st[6] + 1
+  st[0] = s
+  hold t = pk_full(src, st, pool, 0)
+  st[6] = st[6] - 1
+  st[0] = saved_p
+  when t == 0 - 1 {
+    hold e4 = fail(1, "cannot infer the type of the condition (it must be a number)")
+  }
+  when t != 0 {
+    hold e5 = fail(1, concat(concat("condition must be a number (got ", kname(t)), ")"))
+  }
+  give 0
+}
+
+make fld_pk(src: str, st: list, pool: list, depth: num) -> num {
+  hold z = sw_st(src, st)
+  hold fe = fld_end(src, st[1], st[0])
+  when logic_span_st(src, st, st[0], fe) == 1 {
+    hold d = gen_cond_dry(src, st, pool, st[0], fe, "value")
+    st[0] = fe
+    st[3] = 0
+    st[4] = 0 - 1
+    give 0
+  }
+  give pk_rel(src, st, pool, depth)
+}
+
+make arg_pk(src: str, st: list, pool: list, depth: num) -> num {
+  hold z = sw_st(src, st)
+  hold ae = arg_end(src, st[1], st[0])
+  when logic_span_st(src, st, st[0], ae) == 1 {
+    hold d = gen_cond_dry(src, st, pool, st[0], ae, "value")
+    st[0] = ae
+    st[3] = 0
+    st[4] = 0 - 1
+    give 0
+  }
+  when st[39] == 1 {
+    give pk_full(src, st, pool, depth + 1)
+  }
+  give pk_rel(src, st, pool, depth + 1)
+}
+
+make pk_rhs(src: str, st: list, pool: list) -> num {
+  hold z = sw_st(src, st)
+  hold re = rhs_end(src, st[1], st[0])
+  when logic_span_st(src, st, st[0], re) == 1 {
+    hold d = gen_cond_dry(src, st, pool, st[0], re, "value")
+    st[0] = re
+    st[3] = 0
+    st[4] = 0 - 1
+    give 0
+  }
+  give pk_full(src, st, pool, 0)
+}
+
+make str_has_interp(src: str, sn: num, p0: num) -> num {
+  hold q = p0 + 1
+  while q < sn && at(src, sn, q) != 34 {
+    hold c = at(src, sn, q)
+    when c == 92 {
+      q = q + 2
+    } otherwise {
+      when c == 36 && at(src, sn, q + 1) == 123 {
+        give 1
+      }
+      q = q + 1
+    }
+  }
+  give 0
+}
+
+make pk_interp_str(src: str, st: list, pool: list) -> num {
+  hold sn = st[1]
+  hold q = st[0] + 1
+  hold holes = 0
+  while q < sn && at(src, sn, q) != 34 {
+    hold c = at(src, sn, q)
+    when c == 92 {
+      when q + 1 >= sn {
+        hold eu1 = fail(1, "unterminated string")
+      }
+      q = q + 2
+    } otherwise {
+      when c == 36 && at(src, sn, q + 1) == 123 {
+        holes = holes + 1
+        when holes > 16 {
+          hold eh1 = fail(1, "interpolation requires a closed identifier hole; maximum 16 holes per string")
+        }
+        q = q + 2
+        hold r = q
+        hold hscan = 1
+        while hscan == 1 {
+          when r >= sn {
+            hscan = 0
+          } otherwise {
+            hold rc = at(src, sn, r)
+            when rc == 125 || rc == 34 || rc == 10 || rc == 13 {
+              hscan = 0
+            } otherwise {
+              r = r + 1
+            }
+          }
+        }
+        when r >= sn || at(src, sn, r) != 125 {
+          hold eh2 = fail(1, "interpolation requires a closed identifier hole; maximum 16 holes per string")
+        }
+        when r == q {
+          hold eh3 = fail(1, "interpolation requires a closed identifier hole; maximum 16 holes per string")
+        }
+        when id0c(at(src, sn, q)) == 0 {
+          hold eh4 = fail(1, "interpolation requires a plain identifier hole")
+        }
+        hold k = q + 1
+        while k < r {
+          when idcc(at(src, sn, k)) == 0 {
+            hold eh5 = fail(1, "interpolation requires a plain identifier hole")
+          }
+          k = k + 1
+        }
+        hold hname = sub(src, q, r)
+        hold found = 0
+        hold hk = 0 - 1
+        when st[5] >= 0 {
+          hold cfb = f_base(st[5])
+          hold cnp = st[cfb + 1]
+          hold pi = 0
+          while pi < cnp {
+            hold pns = fn_pn_slot(cfb, pi)
+            hold pno = st[pns]
+            when pool_eq(pool, pno, hname) == 1 {
+              hold pks = fn_pk_slot(cfb, pi)
+              hk = st[pks]
+              found = 1
+              pi = cnp
+            }
+            pi = pi + 1
+          }
+        }
+        when found == 0 {
+          hold gi = g_find(st, pool, hname)
+          when gi >= 0 {
+            hold gb = g_base(gi)
+            hk = st[gb + 1]
+            found = 1
+          }
+        }
+        when found == 0 {
+          when st[2] == 0 {
+            hold eh6 = fail(1, concat(concat("undefined variable '", hname), "' in string interpolation"))
+          }
+        } otherwise {
+          when hk >= 2 {
+            hold mhk = concat("cannot interpolate '", hname)
+            mhk = concat(mhk, "' (expected number or string, got ")
+            mhk = concat(mhk, kname(hk))
+            mhk = concat(mhk, ")")
+            hold eh7 = fail(1, mhk)
+          }
+        }
+        q = r + 1
+      } otherwise {
+        q = q + 1
+      }
+    }
+  }
+  when q >= sn || at(src, sn, q) != 34 {
+    hold eu2 = fail(1, "unterminated string")
+  }
+  st[0] = q + 1
+  st[3] = 1
+  st[4] = 0 - 1
+  give 1
+}
+
+make pk_prim(src: str, st: list, pool: list, depth: num) -> num {
+  hold z = sw_st(src, st)
+  hold sn = st[1]
+  when depth > 32 {
+    hold e0 = fail(1, "expression too deep")
+  }
+  hold c0 = at(src, sn, st[0])
+  when c0 == 91 {
+    st[0] = st[0] + 1
+    hold lgo = 1
+    while lgo == 1 {
+      hold zl = sw_st(src, st)
+      when at(src, sn, st[0]) == 93 {
+        st[0] = st[0] + 1
+        lgo = 0
+      } otherwise {
+        hold ek = pk_full(src, st, pool, depth + 1)
+        when ek != 0 {
+          hold e1 = fail(1, "list elements must be numbers")
+        }
+        hold zl2 = sw_st(src, st)
+        when at(src, sn, st[0]) == 44 {
+          st[0] = st[0] + 1
+        } otherwise {
+          when at(src, sn, st[0]) == 93 {
+            st[0] = st[0] + 1
+            lgo = 0
+          } otherwise {
+            hold e2 = fail(1, "list literal needs , or ]")
+          }
+        }
+      }
+    }
+    st[3] = 2
+    st[4] = 0 - 1
+    give 2
+  }
+  when c0 == 34 {
+    when str_has_interp(src, sn, st[0]) == 1 {
+      give pk_interp_str(src, st, pool)
+    }
+    hold ok = pstr_st(src, st)
+    when ok == 0 {
+      hold e3 = fail(1, "unterminated string")
+    }
+    st[3] = 1
+    st[4] = 0 - 1
+    give 1
+  }
+  when c0 == 40 {
+    hold pc = paren_close(src, sn, st[0])
+    when pc >= 0 && logic_span(src, st[0] + 1, pc) == 1 {
+      hold dc = gen_cond_dry(src, st, pool, st[0] + 1, pc, "value")
+      st[0] = pc + 1
+      st[3] = 0
+      st[4] = 0 - 1
+      give 0
+    }
+    st[0] = st[0] + 1
+    hold pk = pk_full(src, st, pool, depth + 1)
+    hold zp = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold e4 = fail(1, "expected )")
+    }
+    st[0] = st[0] + 1
+    st[3] = pk
+    when pk != 3 {
+      st[4] = 0 - 1
+    }
+    give pk
+  }
+  when c0 == 45 {
+    st[0] = st[0] + 1
+    hold uk = pk_prim(src, st, pool, depth + 1)
+    when uk != 0 {
+      hold e5 = fail(1, "unary - on a non-number")
+    }
+    st[3] = 0
+    st[4] = 0 - 1
+    give 0
+  }
+  when pnum_st(src, st) == 1 {
+    st[3] = 0
+    st[4] = 0 - 1
+    give 0
+  }
+  hold n = pid_st(src, st)
+  when len(n) > 0 {
+    when string_eq(n, "true") == 1 || string_eq(n, "false") == 1 {
+      st[3] = 0
+      st[4] = 0 - 1
+      give 0
+    }
+    hold after_id = st[0]
+    hold zq = sw_st(src, st)
+    hold qpos = st[0]
+    when at(src, sn, qpos) == 60 && gs_find(st, pool, n) >= 0 {
+      st[0] = qpos
+      hold gsi = gs_instantiate(src, st, pool, n)
+      when gsi >= 0 {
+        hold gsb = s_base(gsi)
+        n = unintern(pool, st[gsb])
+        after_id = st[0]
+        hold zq2 = sw_st(src, st)
+        qpos = st[0]
+      }
+    }
+    st[0] = after_id
+    when at(src, sn, qpos) == 123 && (s_find(st, pool, n) >= 0 || g_find(st, pool, n) < 0) {
+      hold sid = s_find(st, pool, n)
+      when sid < 0 && gs_find(st, pool, n) >= 0 {
+        hold gm = concat("'", n)
+        gm = concat(gm, "' is a generic struct: write ")
+        gm = concat(gm, n)
+        gm = concat(gm, "<num> { ... } with one type argument per type parameter")
+        hold e6 = fail(1, gm)
+      }
+      when sid < 0 {
+        hold e7 = fail(1, concat(concat("unknown struct '", n), "'"))
+      }
+      st[0] = qpos + 1
+      hold sb = s_base(sid)
+      hold nf = st[sb + 1]
+      hold gskn = st[sb + 2]
+      hold sname = unintern(pool, st[sb])
+      hold cnt = 0
+      hold sgo = 1
+      while sgo == 1 {
+        hold zs = sw_st(src, st)
+        when at(src, sn, st[0]) == 125 {
+          st[0] = st[0] + 1
+          sgo = 0
+        } otherwise {
+          hold lb = ""
+          hold lbl = 0
+          hold q2 = st[0]
+          when id0c(at(src, sn, q2)) == 1 {
+            hold tmp = pid_raw_st(src, st)
+            hold zs2 = sw_st(src, st)
+            when at(src, sn, st[0]) == 58 {
+              lbl = 1
+              lb = tmp
+              st[0] = st[0] + 1
+            } otherwise {
+              st[0] = q2
+            }
+          }
+          hold fi = cnt
+          when cnt >= nf {
+            hold e8 = fail(1, concat(concat("too many fields in struct '", n), "' literal"))
+          }
+          when lbl == 1 {
+            fi = s_field(st, pool, sid, lb)
+            when fi < 0 {
+              hold e9 = fail(1, concat(concat(concat("no field '", lb), concat("' in struct '", n)), "'"))
+            }
+            when fi != cnt {
+              hold e10 = fail(1, concat(concat("struct '", n), "' literal fields must be given in declaration order"))
+            }
+          }
+          hold fk = fld_pk(src, st, pool, depth + 1)
+          hold f_pkx_s = st[4]
+          when fk == 3 && f_pkx_s < 0 {
+            fk = 0 - 1
+          }
+          hold fnslot = sb + 4 + fi
+          hold fname = unintern(pool, st[fnslot])
+          when gskn > 0 && gskn == nf && fi < gskn && fk >= 0 {
+            hold gsk_slot = sb + 100 + fi
+            hold gss_slot = sb + 108 + fi
+            hold want_gk = st[gsk_slot]
+            hold want_gs = st[gss_slot]
+            when fk != want_gk {
+              hold wname = kname(want_gk)
+              when want_gk == 3 && want_gs >= 0 {
+                hold wsb = s_base(want_gs)
+                wname = unintern(pool, st[wsb])
+              }
+              hold m1 = concat("struct '", sname)
+              m1 = concat(m1, "' field '")
+              m1 = concat(m1, fname)
+              m1 = concat(m1, "' is ")
+              m1 = concat(m1, wname)
+              m1 = concat(m1, " (its type argument says so), the literal gives ")
+              m1 = concat(m1, kname(fk))
+              hold e11 = fail(1, m1)
+            }
+            when fk == 3 && want_gk == 3 && want_gs >= 0 && f_pkx_s >= 0 && f_pkx_s != want_gs {
+              hold wsb2 = s_base(want_gs)
+              hold gsb2 = s_base(f_pkx_s)
+              hold m2 = concat("struct '", sname)
+              m2 = concat(m2, "' field '")
+              m2 = concat(m2, fname)
+              m2 = concat(m2, "' is a ")
+              m2 = concat(m2, unintern(pool, st[wsb2]))
+              m2 = concat(m2, " (its type argument says so), the literal gives a ")
+              m2 = concat(m2, unintern(pool, st[gsb2]))
+              hold e12 = fail(1, m2)
+            }
+          }
+          when fk == 3 && f_pkx_s >= sid {
+            hold lsb = s_base(f_pkx_s)
+            hold m3 = concat("struct '", sname)
+            m3 = concat(m3, "' nests struct '")
+            m3 = concat(m3, unintern(pool, st[lsb]))
+            m3 = concat(m3, "' declared later; declare the nested struct first")
+            hold e13 = fail(1, m3)
+          }
+          hold seen_slot = sb + 52 + fi
+          hold val_slot = sb + 68 + fi
+          hold fsid_slot = sb + 84 + fi
+          when st[seen_slot] == 1 {
+            when st[val_slot] != fk {
+              hold m4 = concat("struct field '", sname)
+              m4 = concat(m4, ".")
+              m4 = concat(m4, fname)
+              m4 = concat(m4, "' is used with two different types")
+              hold e14 = fail(1, m4)
+            }
+            when fk == 3 && st[fsid_slot] >= 0 && f_pkx_s >= 0 && st[fsid_slot] != f_pkx_s {
+              hold m5 = concat("struct field '", sname)
+              m5 = concat(m5, ".")
+              m5 = concat(m5, fname)
+              m5 = concat(m5, "' is used with two different struct types")
+              hold e15 = fail(1, m5)
+            }
+          } otherwise {
+            when fk >= 0 {
+              st[seen_slot] = 1
+              st[val_slot] = fk
+              when fk == 3 {
+                st[fsid_slot] = f_pkx_s
+              } otherwise {
+                st[fsid_slot] = 0 - 1
+              }
+            }
+          }
+          cnt = cnt + 1
+          hold zs3 = sw_st(src, st)
+          when at(src, sn, st[0]) == 44 {
+            st[0] = st[0] + 1
+          } otherwise {
+            when at(src, sn, st[0]) == 125 {
+              st[0] = st[0] + 1
+              sgo = 0
+            } otherwise {
+              hold e16 = fail(1, "struct literal needs , or }")
+            }
+          }
+        }
+      }
+      when cnt != nf {
+        hold m6 = concat("struct '", n)
+        m6 = concat(m6, "' literal must fill every field (")
+        m6 = concat(m6, numstr(nf))
+        m6 = concat(m6, " expected, ")
+        m6 = concat(m6, numstr(cnt))
+        m6 = concat(m6, " given)")
+        hold e17 = fail(1, m6)
+      }
+      st[3] = 3
+      st[4] = sid
+      give 3
+    }
+    when at(src, sn, qpos) == 40 {
+      hold bar = builtin_arity_st(st, n)
+      when bar >= 0 {
+        st[0] = qpos + 1
+        hold nargs = 0
+        hold bgo = 1
+        while bgo == 1 {
+          hold zb = sw_st(src, st)
+          when at(src, sn, st[0]) == 41 {
+            st[0] = st[0] + 1
+            bgo = 0
+          } otherwise {
+            hold ak = arg_pk(src, st, pool, depth)
+            nargs = nargs + 1
+            hold zb2 = sw_st(src, st)
+            when at(src, sn, st[0]) == 44 {
+              st[0] = st[0] + 1
+            } otherwise {
+              when at(src, sn, st[0]) == 41 {
+                st[0] = st[0] + 1
+                bgo = 0
+              } otherwise {
+                hold e18 = fail(1, "call needs , or )")
+              }
+            }
+          }
+        }
+        when nargs != bar {
+          hold mb = concat(n, " takes ")
+          mb = concat(mb, numstr(bar))
+          mb = concat(mb, " args, got ")
+          mb = concat(mb, numstr(nargs))
+          hold e19 = fail(1, mb)
+        }
+        hold bret = builtin_ret_st(st, n)
+        st[3] = bret
+        st[4] = 0 - 1
+        give bret
+      }
+      hold ufi = f_find(st, pool, n)
+      when ufi >= 0 {
+        st[0] = qpos + 1
+        hold fb = f_base(ufi)
+        hold is_gen = st[fb + 2]
+        hold fn_np = st[fb + 1]
+        hold unargs = 0
+        hold ukinds = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        hold max_ca = 6
+        when st[39] == 1 {
+          max_ca = 20
+        }
+        hold ugo = 1
+        while ugo == 1 {
+          hold zu = sw_st(src, st)
+          when at(src, sn, st[0]) == 41 {
+            st[0] = st[0] + 1
+            ugo = 0
+          } otherwise {
+            hold uak = arg_pk(src, st, pool, depth)
+            hold uas = st[4]
+            when unargs >= max_ca {
+              hold e20 = fail(1, concat(concat("too many arguments to '", n), "'"))
+            }
+            ukinds[unargs] = uak
+            when is_gen == 0 {
+              hold want = 0
+              when unargs < fn_np {
+                hold wslot = fn_pk_slot(fb, unargs)
+                want = st[wslot]
+              }
+              when uak != want && want == 0 {
+                hold mf1 = concat("function '", n)
+                mf1 = concat(mf1, "' takes numbers (arg ")
+                mf1 = concat(mf1, numstr(unargs + 1))
+                mf1 = concat(mf1, " is not a number)")
+                hold e21 = fail(1, mf1)
+              }
+              when uak != want {
+                hold mf2 = concat("function '", n)
+                mf2 = concat(mf2, "' takes ")
+                mf2 = concat(mf2, kname(want))
+                mf2 = concat(mf2, " (arg ")
+                mf2 = concat(mf2, numstr(unargs + 1))
+                mf2 = concat(mf2, " is ")
+                mf2 = concat(mf2, kname(uak))
+                mf2 = concat(mf2, ")")
+                hold e22 = fail(1, mf2)
+              }
+              when want == 3 && uak == 3 && unargs < fn_np {
+                hold wps_s = fn_ps_slot(fb, unargs)
+                hold wps = st[wps_s]
+                when wps >= 0 && uas >= 0 && uas != wps {
+                  hold wsb_c = s_base(wps)
+                  hold gsb_c = s_base(uas)
+                  hold wno = st[wsb_c]
+                  hold gno = st[gsb_c]
+                  hold mf_st = concat("function '", n)
+                  mf_st = concat(mf_st, "' takes struct '")
+                  mf_st = concat(mf_st, unintern(pool, wno))
+                  mf_st = concat(mf_st, "' (arg ")
+                  mf_st = concat(mf_st, numstr(unargs + 1))
+                  mf_st = concat(mf_st, " is struct '")
+                  mf_st = concat(mf_st, unintern(pool, gno))
+                  mf_st = concat(mf_st, "')")
+                  hold e22b = fail(1, mf_st)
+                }
+              }
+            }
+            unargs = unargs + 1
+            hold zu2 = sw_st(src, st)
+            when at(src, sn, st[0]) == 44 {
+              st[0] = st[0] + 1
+            } otherwise {
+              when at(src, sn, st[0]) == 41 {
+                st[0] = st[0] + 1
+                ugo = 0
+              } otherwise {
+                hold e23 = fail(1, "call needs , or )")
+              }
+            }
+          }
+        }
+        when is_gen == 1 {
+          ufi = pick_instance(st, pool, ufi, ukinds, unargs)
+          fb = f_base(ufi)
+        }
+        when unargs != st[fb + 1] {
+          hold mf3 = concat("function '", n)
+          mf3 = concat(mf3, "' takes ")
+          mf3 = concat(mf3, numstr(st[fb + 1]))
+          mf3 = concat(mf3, " args, got ")
+          mf3 = concat(mf3, numstr(unargs))
+          hold e24 = fail(1, mf3)
+        }
+        hold urk = st[fb + 4]
+        st[3] = urk
+        when urk == 3 && st[fb + 2] == 0 {
+          st[4] = st[fb + 32]
+        } otherwise {
+          st[4] = 0 - 1
+        }
+        give urk
+      }
+    }
+    when string_eq(n, "and") == 1 || string_eq(n, "or") == 1 || string_eq(n, "not") == 1 {
+      hold mw = concat("'", n)
+      mw = concat(mw, "' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)")
+      hold e25 = fail(1, mw)
+    }
+    when st[5] >= 0 {
+      hold cfb = f_base(st[5])
+      hold cnp = st[cfb + 1]
+      hold pi = 0
+      while pi < cnp {
+        hold pns = fn_pn_slot(cfb, pi)
+        when pool_eq(pool, st[pns], n) == 1 {
+          hold pks = fn_pk_slot(cfb, pi)
+          hold rpk = st[pks]
+          st[3] = rpk
+          when rpk == 3 && st[cfb + 2] == 0 {
+            hold pss = fn_ps_slot(cfb, pi)
+            st[4] = st[pss]
+          } otherwise {
+            st[4] = 0 - 1
+          }
+          give rpk
+        }
+        pi = pi + 1
+      }
+    }
+    hold gidx = g_find(st, pool, n)
+    when gidx < 0 {
+      hold e26 = fail(1, concat(concat("undefined variable '", n), "' (hold it first)"))
+    }
+    hold gbb = g_base(gidx)
+    hold gk = st[gbb + 1]
+    hold gsid = st[gbb + 2]
+    when gk == 3 && gsid < 0 {
+      gk = 0 - 1
+    }
+    st[3] = gk
+    when gk == 3 {
+      st[4] = gsid
+    } otherwise {
+      st[4] = 0 - 1
+    }
+    give gk
+  }
+  hold e27 = fail(1, "bad expression (expected a number, string, list, name)")
+  give 0 - 1
+}
+
+make pk_post(src: str, st: list, pool: list, depth: num) -> num {
+  hold k = pk_prim(src, st, pool, depth)
+  hold cur_sid = st[4]
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    hold saved = st[0]
+    hold z = sw_st(src, st)
+    hold q = st[0]
+    st[0] = saved
+    hold qc = at(src, sn, q)
+    when qc == 91 {
+      when k != 2 && k != 1 {
+        when st[2] == 0 || k != 0 - 1 {
+          hold e1 = fail(1, concat("cannot index a ", kname(k)))
+        }
+      }
+      st[0] = q + 1
+      hold ik = pk_rel(src, st, pool, depth + 1)
+      when ik != 0 {
+        hold e2 = fail(1, "index must be a number")
+      }
+      hold z2 = sw_st(src, st)
+      when at(src, sn, st[0]) != 93 {
+        hold e3 = fail(1, "expected ]")
+      }
+      st[0] = st[0] + 1
+      k = 0
+      cur_sid = 0 - 1
+    } otherwise {
+      when qc == 46 {
+        when k != 3 {
+          when st[2] == 0 {
+            hold e4 = fail(1, concat("cannot access a field of a ", kname(k)))
+          }
+          cur_sid = 0 - 1
+        }
+        st[0] = q + 1
+        hold fn = pid_st(src, st)
+        when len(fn) == 0 {
+          hold e5 = fail(1, "expected a field name after .")
+        }
+        when k != 3 || cur_sid < 0 {
+          when st[2] == 0 {
+            hold e6 = fail(1, "cannot resolve the struct type here")
+          }
+          k = 0 - 1
+          cur_sid = 0 - 1
+        } otherwise {
+          hold fi = s_field(st, pool, cur_sid, fn)
+          when fi < 0 {
+            when st[2] == 0 {
+              hold sb = s_base(cur_sid)
+              hold e7 = fail(1, concat(concat(concat("no field '", fn), concat("' in struct '", unintern(pool, st[sb]))), "'"))
+            }
+            k = 0 - 1
+            cur_sid = 0 - 1
+          } otherwise {
+            hold sb2 = s_base(cur_sid)
+            hold kslot = sb2 + 20 + fi
+            hold sslot = sb2 + 36 + fi
+            hold fk = st[kslot]
+            hold fsid = st[sslot]
+            when fk == 3 && fsid < 0 {
+              fk = 0 - 1
+            }
+            k = fk
+            when fk == 3 {
+              cur_sid = fsid
+            } otherwise {
+              cur_sid = 0 - 1
+            }
+          }
+        }
+      } otherwise {
+        go = 0
+      }
+    }
+  }
+  st[3] = k
+  when k == 3 {
+    st[4] = cur_sid
+  } otherwise {
+    st[4] = 0 - 1
+  }
+  give k
+}
+
+make pk_term(src: str, st: list, pool: list, depth: num) -> num {
+  hold k = pk_post(src, st, pool, depth)
+  hold cur_sid = st[4]
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    hold z = sw_st(src, st)
+    hold op = at(src, sn, st[0])
+    when op != 42 && op != 47 && op != 37 {
+      go = 0
+    } otherwise {
+      when op == 47 && at(src, sn, st[0] + 1) == 47 {
+        go = 0
+      } otherwise {
+        st[0] = st[0] + 1
+        hold k2 = pk_post(src, st, pool, depth)
+        when k != 0 || k2 != 0 {
+          hold e1 = fail(1, concat(chr(op), " is numeric-only"))
+        }
+        k = 0
+        cur_sid = 0 - 1
+      }
+    }
+  }
+  st[3] = k
+  when k == 3 {
+    st[4] = cur_sid
+  } otherwise {
+    st[4] = 0 - 1
+  }
+  give k
+}
+
+make pk_rel(src: str, st: list, pool: list, depth: num) -> num {
+  hold k = pk_term(src, st, pool, depth)
+  hold cur_sid = st[4]
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    hold z = sw_st(src, st)
+    hold op = at(src, sn, st[0])
+    when op != 43 && op != 45 {
+      go = 0
+    } otherwise {
+      st[0] = st[0] + 1
+      hold k2 = pk_term(src, st, pool, depth)
+      when op == 45 {
+        when k == 0 - 1 || k2 == 0 - 1 {
+          when st[2] == 0 {
+            hold e1a = fail(1, "- is numeric-only")
+          }
+          k = 0 - 1
+        } otherwise {
+          when k != 0 || k2 != 0 {
+            hold e1 = fail(1, "- is numeric-only")
+          }
+          k = 0
+        }
+        cur_sid = 0 - 1
+      } otherwise {
+        when k == 1 || k2 == 1 {
+          when k == 0 - 1 || k2 == 0 - 1 {
+            k = 0 - 1
+          } otherwise {
+            when k == 1 && k2 == 1 {
+              k = 1
+            } otherwise {
+              hold e2 = fail(1, "+ joins two strings or adds two numbers (a string + a number is not in the pure-min subset)")
+            }
+          }
+          cur_sid = 0 - 1
+        } otherwise {
+          when k == 0 - 1 || k2 == 0 - 1 {
+            when st[2] == 0 {
+              hold e3a = fail(1, "+ is for numbers or strings")
+            }
+            k = 0 - 1
+          } otherwise {
+            when k != 0 || k2 != 0 {
+              hold e3 = fail(1, "+ is for numbers or strings")
+            }
+            k = 0
+          }
+          cur_sid = 0 - 1
+        }
+      }
+    }
+  }
+  st[3] = k
+  when k == 3 {
+    st[4] = cur_sid
+  } otherwise {
+    st[4] = 0 - 1
+  }
+  give k
+}
+
+make pk_full(src: str, st: list, pool: list, depth: num) -> num {
+  hold k = pk_rel(src, st, pool, depth)
+  hold saved_sid = st[4]
+  hold z = sw_st(src, st)
+  hold sn = st[1]
+  hold c0 = at(src, sn, st[0])
+  hold c1 = at(src, sn, st[0] + 1)
+  hold oplen = 0
+  when (c0 == 61 && c1 == 61) || (c0 == 33 && c1 == 61) || (c0 == 60 && c1 == 61) || (c0 == 62 && c1 == 61) {
+    oplen = 2
+  } otherwise {
+    when c0 == 60 || c0 == 62 {
+      oplen = 1
+    }
+  }
+  when oplen > 0 {
+    st[0] = st[0] + oplen
+    hold k2 = pk_rel(src, st, pool, depth)
+    when k == 1 && k2 != 1 {
+      hold e1 = fail(1, "string compared with a non-string")
+    }
+    when k == 2 || k == 3 || k2 == 2 || k2 == 3 {
+      hold e2 = fail(1, concat(concat("cannot compare ", kname(k)), concat(" with ", kname(k2))))
+    }
+    st[3] = 0
+    st[4] = 0 - 1
+    give 0
+  }
+  st[3] = k
+  when k == 3 {
+    st[4] = saved_sid
+  } otherwise {
+    st[4] = 0 - 1
+  }
+  give k
+}
+
+// ---- fixpoint rounds + final validation pass ------------------------------
+
+make has_unseen_concrete_field(st: list) -> num {
+  hold ns = st[8]
+  hold si = 0
+  while si < ns {
+    hold sb = s_base(si)
+    when st[sb + 2] == 0 {
+      hold nf = st[sb + 1]
+      hold fi = 0
+      while fi < nf {
+        hold seen_slot = sb + 52 + fi
+        when st[seen_slot] == 0 {
+          give 1
+        }
+        fi = fi + 1
+      }
+    }
+    si = si + 1
+  }
+  give 0
+}
+
+make fn_uses_struct(st: list, fb: num) -> num {
+  when st[fb + 2] != 0 {
+    give 0
+  }
+  when st[fb + 4] == 3 {
+    give 1
+  }
+  hold np = st[fb + 1]
+  hold i = 0
+  while i < np {
+    hold pks = fn_pk_slot(fb, i)
+    when st[pks] == 3 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make infer_fn_block(src: str, st: list, pool: list, b0: num, bend: num, base_ng: num) -> num {
+  hold sn = st[1]
+  hold q = b0
+  while q < bend {
+    st[0] = q
+    hold zs = sw_st(src, st)
+    q = st[0]
+    when q >= bend {
+      q = bend
+    } otherwise {
+      hold qc = at(src, sn, q)
+      when qc == 47 && at(src, sn, q + 1) == 47 {
+        hold ec = eol_st(src, st)
+        q = st[0]
+      } otherwise {
+        when qc == 123 || qc == 125 {
+          q = q + 1
+        } otherwise {
+          st[0] = q
+          when mkw_st(src, st, "when") == 1 || mkw_st(src, st, "while") == 1 || mkw_st(src, st, "otherwise") == 1 || mkw_st(src, st, "else") == 1 {
+            hold bscan = st[0]
+            while bscan < bend && at(src, sn, bscan) != 123 {
+              bscan = bscan + 1
+            }
+            q = bscan + 1
+          } otherwise {
+            hold send = skip_stmt(src, sn, q)
+            st[0] = q
+            hold zr = sw_st(src, st)
+            when mkw_st(src, st, "hold") == 1 {
+              hold lnm = pid_st(src, st)
+              when len(lnm) > 0 {
+                hold lhk = hold_kind_st(src, st, pool, lnm, st[5])
+                hold ze = sw_st(src, st)
+                when at(src, sn, st[0]) == 61 {
+                  st[0] = st[0] + 1
+                  hold lk = pk_rhs(src, st, pool)
+                  hold lsid = st[4]
+                  hold lgi = 0 - 1
+                  hold lj = base_ng
+                  while lj < st[11] {
+                    hold lgb0 = g_base(lj)
+                    when pool_eq(pool, st[lgb0], lnm) == 1 {
+                      lgi = lj
+                      lj = st[11]
+                    }
+                    lj = lj + 1
+                  }
+                  hold max_lv = 64
+                  when st[39] == 1 {
+                    max_lv = 4096
+                  }
+                  when lgi < 0 && st[11] < max_lv {
+                    lgi = st[11]
+                    st[11] = lgi + 1
+                    hold lgbn = g_base(lgi)
+                    st[lgbn] = intern(pool, lnm)
+                    st[lgbn + 1] = 0 - 1
+                    st[lgbn + 2] = 0 - 1
+                  }
+                  when lgi >= 0 && lk >= 0 {
+                    hold lgb = g_base(lgi)
+                    st[lgb + 1] = lk
+                    when lk == 3 {
+                      st[lgb + 2] = lsid
+                    } otherwise {
+                      st[lgb + 2] = 0 - 1
+                    }
+                  }
+                }
+              }
+            } otherwise {
+              st[0] = q
+              hold zr2 = sw_st(src, st)
+              when mkw_st(src, st, "give") == 1 || mkw_st(src, st, "show") == 1 {
+                hold gk = pk_rhs(src, st, pool)
+              }
+            }
+            q = send
+          }
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make infer_round(src: str, st: list, pool: list) -> num {
+  hold changed = 0
+  hold sn = st[1]
+  hold p = 0
+  while p < sn {
+    hold line = p
+    st[0] = p
+    hold z = sw_st(src, st)
+    p = st[0]
+    when p >= sn {
+      give changed
+    }
+    when at(src, sn, p) == 47 && at(src, sn, p + 1) == 47 {
+      hold ec = eol_st(src, st)
+      p = st[0]
+    } otherwise {
+      hold end = skip_stmt(src, sn, line)
+      st[0] = line
+      hold zr = sw_st(src, st)
+      when mkw_st(src, st, "hold") == 1 {
+        hold nm = pid_st(src, st)
+        when len(nm) > 0 {
+          hold hk = hold_kind_st(src, st, pool, nm, 0 - 1)
+          hold ze = sw_st(src, st)
+          when at(src, sn, st[0]) == 61 {
+            st[0] = st[0] + 1
+            hold k = pk_rhs(src, st, pool)
+            hold rhs_sid = st[4]
+            hold gi = g_decl(st, pool, nm)
+            hold gb = g_base(gi)
+            when k >= 0 {
+              when st[gb + 1] == 0 - 1 {
+                st[gb + 1] = k
+                when k == 3 {
+                  st[gb + 2] = rhs_sid
+                } otherwise {
+                  st[gb + 2] = 0 - 1
+                }
+                changed = 1
+              } otherwise {
+                when st[gb + 1] != k {
+                  hold m = concat("variable '", nm)
+                  m = concat(m, "' is used with two different types (")
+                  m = concat(m, kname(k))
+                  m = concat(m, " and ")
+                  m = concat(m, kname(st[gb + 1]))
+                  m = concat(m, ")")
+                  hold e1 = fail(1, m)
+                }
+                when st[gb + 1] == 3 && st[gb + 2] < 0 && rhs_sid >= 0 {
+                  st[gb + 2] = rhs_sid
+                  changed = 1
+                }
+              }
+            }
+          }
+        }
+      } otherwise {
+        st[0] = line
+        hold zrm = sw_st(src, st)
+        when st[8] > 0 && mkw_st(src, st, "make") == 1 {
+          hold fnm_r = pid_st(src, st)
+          when len(fnm_r) > 0 {
+            hold fi_r = f_find(st, pool, fnm_r)
+            when fi_r >= 0 {
+              hold fb_r = f_base(fi_r)
+              hold scan_body = fn_uses_struct(st, fb_r)
+              when scan_body == 0 && st[fb_r + 2] == 0 && st[2] == 1 {
+                when has_unseen_concrete_field(st) == 1 {
+                  scan_body = 1
+                }
+              }
+              when scan_body == 1 {
+                hold b0 = st[0]
+                while b0 < end && at(src, sn, b0) != 123 {
+                  b0 = b0 + 1
+                }
+                when b0 < end {
+                  hold saved_ng = st[11]
+                  hold saved_fn = st[5]
+                  st[5] = fi_r
+                  hold irf = infer_fn_block(src, st, pool, b0 + 1, end - 1, saved_ng)
+                  st[11] = saved_ng
+                  st[5] = saved_fn
+                  changed = changed + infer_publish(st)
+                }
+              }
+            }
+          }
+        }
+      }
+      p = end
+    }
+  }
+  give changed
+}
+
+make infer_publish(st: list) -> num {
+  hold changed = 0
+  hold ns = st[8]
+  hold s = 0
+  while s < ns {
+    hold sb = s_base(s)
+    hold nf = st[sb + 1]
+    hold f = 0
+    while f < nf {
+      hold k = 0
+      hold sid = 0 - 1
+      hold seen_slot = sb + 52 + f
+      hold val_slot = sb + 68 + f
+      hold fsid_slot = sb + 84 + f
+      when st[seen_slot] == 1 {
+        k = st[val_slot]
+        when k == 3 {
+          sid = st[fsid_slot]
+        }
+      }
+      hold fk_slot = sb + 20 + f
+      hold fs_slot = sb + 36 + f
+      when st[fk_slot] != k {
+        st[fk_slot] = k
+        changed = 1
+      }
+      when st[fs_slot] != sid {
+        st[fs_slot] = sid
+        changed = 1
+      }
+      f = f + 1
+    }
+    s = s + 1
+  }
+  give changed
+}
+
+make infer(src: str, st: list, pool: list) -> num {
+  st[2] = 1
+  hold round = 0
+  while round < 16 {
+    hold ch1 = infer_round(src, st, pool)
+    hold ch2 = infer_publish(st)
+    when ch1 == 0 && ch2 == 0 {
+      round = 16
+    } otherwise {
+      round = round + 1
+    }
+  }
+  st[2] = 0
+  hold sn = st[1]
+  hold p = 0
+  while p < sn {
+    hold line = p
+    st[0] = p
+    hold z = sw_st(src, st)
+    p = st[0]
+    when p >= sn {
+      p = sn
+    } otherwise {
+      when at(src, sn, p) == 47 && at(src, sn, p + 1) == 47 {
+        hold ec = eol_st(src, st)
+        p = st[0]
+      } otherwise {
+        hold end = skip_stmt(src, sn, line)
+        st[0] = line
+        hold zr = sw_st(src, st)
+        hold done = 0
+        when mkw_st(src, st, "show") == 1 {
+          hold sk = pk_rhs(src, st, pool)
+          when sk == 0 - 1 {
+            hold e1 = fail(1, "cannot infer the type of the show value")
+          }
+          done = 1
+        }
+        when done == 0 && (mkw_st(src, st, "when") == 1 || mkw_st(src, st, "while") == 1) {
+          hold ce = cond_end(src, sn, st[0])
+          hold dc = gen_cond_dry(src, st, pool, st[0], ce, "when")
+          done = 1
+        }
+        when done == 0 && mkw_st(src, st, "give") == 1 {
+          hold gk = pk_rhs(src, st, pool)
+          when gk == 0 - 1 {
+            hold e2 = fail(1, "cannot infer the type of the give value")
+          }
+          hold want_rk = 0
+          when st[5] >= 0 {
+            hold cfb = f_base(st[5])
+            want_rk = st[cfb + 4]
+          }
+          when gk != want_rk {
+            hold e3 = fail(1, concat(concat("give must give ", kname(want_rk)), concat(concat(" (got ", kname(gk)), ")")))
+          }
+          done = 1
+        }
+        when done == 0 {
+          hold rp0 = st[0]
+          hold w = ""
+          hold wi = 0
+          hold r2 = rp0
+          while idcc(at(src, sn, r2)) == 1 && wi < 63 {
+            w = concat(w, chr(at(src, sn, r2)))
+            r2 = r2 + 1
+            wi = wi + 1
+          }
+          st[0] = r2
+          hold zw = sw_st(src, st)
+          hold r3 = st[0]
+          when wi > 0 && at(src, sn, r3) == 40 && (string_eq(w, "push") == 1 || (st[39] == 1 && string_eq(w, "exit") == 1)) {
+            st[0] = rp0
+            hold pk = pk_full(src, st, pool, 0)
+          } otherwise {
+            when st[39] == 1 && wi > 0 && at(src, sn, r3) == 91 {
+              st[0] = r3 + 1
+              hold ik = pk_full(src, st, pool, 0)
+              hold zrb = sw_st(src, st)
+              when at(src, sn, st[0]) == 93 {
+                st[0] = st[0] + 1
+                hold zeq = sw_st(src, st)
+                when at(src, sn, st[0]) == 61 && at(src, sn, st[0] + 1) != 61 {
+                  st[0] = st[0] + 1
+                  hold vak = pk_rhs(src, st, pool)
+                }
+              }
+            } otherwise {
+              when wi > 0 && at(src, sn, r3) == 61 && at(src, sn, r3 + 1) != 61 {
+                hold gi = g_find(st, pool, w)
+                when gi < 0 {
+                  hold e4 = fail(1, concat(concat("cannot assign to \"", w), "\" (hold it first)"))
+                }
+                st[0] = r3 + 1
+                hold ak = pk_rhs(src, st, pool)
+                when ak == 0 - 1 {
+                  hold e5 = fail(1, "cannot infer the type of the assignment value")
+                }
+                hold gb = g_base(gi)
+                when st[gb + 1] == 0 - 1 {
+                  st[gb + 1] = ak
+                  st[gb + 2] = 0 - 1
+                } otherwise {
+                  when st[gb + 1] != ak {
+                    hold e6 = fail(1, concat(concat("variable '", w), "' is used with two different types"))
+                  }
+                }
+              } otherwise {
+                when st[39] == 1 && wi > 0 && (at(src, sn, r3) == 43 || at(src, sn, r3) == 45) && at(src, sn, r3 + 1) == 61 {
+                  hold gi_ca = g_find(st, pool, w)
+                  when gi_ca < 0 {
+                    hold e4b = fail(1, concat(concat("cannot assign to \"", w), "\" (hold it first)"))
+                  }
+                  st[0] = r3 + 2
+                  hold ak_ca = pk_rhs(src, st, pool)
+                  when ak_ca == 0 - 1 {
+                    hold e5b = fail(1, "cannot infer the type of the assignment value")
+                  }
+                  hold gb_ca = g_base(gi_ca)
+                  when st[gb_ca + 1] == 0 - 1 {
+                    st[gb_ca + 1] = ak_ca
+                    st[gb_ca + 2] = 0 - 1
+                  }
+                }
+              }
+            }
+          }
+        }
+        p = end
+      }
+    }
+  }
+  hold i = 0
+  hold ng = st[11]
+  while i < ng {
+    hold gb2 = g_base(i)
+    when st[gb2 + 1] == 0 - 1 {
+      hold e7 = fail(1, concat(concat("cannot infer the type of variable '", unintern(pool, st[gb2])), "'"))
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+// ---- deterministic dumpers ------------------------------------------------
+
+make dump_defs(st: list, pool: list) -> str {
+  hold out = "; native_aot phase 1\n"
+  hold ns = st[8]
+  out = concat(out, concat(concat("structs ", numstr(ns)), "\n"))
+  hold i = 0
+  while i < ns {
+    hold sb = s_base(i)
+    hold nf = st[sb + 1]
+    out = concat(out, "struct ")
+    out = concat(out, numstr(i))
+    out = concat(out, " ")
+    out = concat(out, unintern(pool, st[sb]))
+    out = concat(out, " nf=")
+    out = concat(out, numstr(nf))
+    out = concat(out, "\n")
+    hold j = 0
+    while j < nf {
+      hold fn_slot = sb + 4 + j
+      hold fk_slot = sb + 20 + j
+      hold fs_slot = sb + 36 + j
+      out = concat(out, "  field ")
+      out = concat(out, numstr(j))
+      out = concat(out, " ")
+      out = concat(out, unintern(pool, st[fn_slot]))
+      out = concat(out, " kind=")
+      out = concat(out, numstr(st[fk_slot]))
+      out = concat(out, " sid=")
+      out = concat(out, numstr(st[fs_slot]))
+      out = concat(out, "\n")
+      j = j + 1
+    }
+    i = i + 1
+  }
+  hold ngs = st[9]
+  out = concat(out, concat(concat("gstructs ", numstr(ngs)), "\n"))
+  i = 0
+  while i < ngs {
+    hold gb = gs_base(i)
+    hold np = st[gb + 1]
+    hold gnf = st[gb + 2]
+    out = concat(out, "gstruct ")
+    out = concat(out, numstr(i))
+    out = concat(out, " ")
+    out = concat(out, unintern(pool, st[gb]))
+    out = concat(out, " np=")
+    out = concat(out, numstr(np))
+    out = concat(out, " nf=")
+    out = concat(out, numstr(gnf))
+    out = concat(out, "\n")
+    hold j2 = 0
+    while j2 < np {
+      hold tslot = gb + 4 + j2
+      out = concat(out, "  tparam ")
+      out = concat(out, numstr(j2))
+      out = concat(out, " ")
+      out = concat(out, unintern(pool, st[tslot]))
+      out = concat(out, "\n")
+      j2 = j2 + 1
+    }
+    j2 = 0
+    while j2 < gnf {
+      hold gfslot = gb + 12 + j2
+      out = concat(out, "  gfield ")
+      out = concat(out, numstr(j2))
+      out = concat(out, " ")
+      out = concat(out, unintern(pool, st[gfslot]))
+      out = concat(out, "\n")
+      j2 = j2 + 1
+    }
+    i = i + 1
+  }
+  hold nf = st[10]
+  out = concat(out, concat(concat("fns ", numstr(nf)), "\n"))
+  i = 0
+  while i < nf {
+    hold fb = f_base(i)
+    hold fnp = st[fb + 1]
+    hold fntp = st[fb + 3]
+    out = concat(out, "fn ")
+    out = concat(out, numstr(i))
+    out = concat(out, " ")
+    out = concat(out, unintern(pool, st[fb]))
+    out = concat(out, " nparam=")
+    out = concat(out, numstr(fnp))
+    out = concat(out, " gen=")
+    out = concat(out, numstr(st[fb + 2]))
+    out = concat(out, " ntp=")
+    out = concat(out, numstr(fntp))
+    out = concat(out, " rk=")
+    out = concat(out, numstr(st[fb + 4]))
+    out = concat(out, " rtp=")
+    out = concat(out, numstr(st[fb + 5]))
+    out = concat(out, "\n")
+    hold j3 = 0
+    while j3 < fnp {
+      hold pns = fn_pn_slot(fb, j3)
+      hold pks = fn_pk_slot(fb, j3)
+      hold ptps = fn_ptp_slot(fb, j3)
+      out = concat(out, "  param ")
+      out = concat(out, numstr(j3))
+      out = concat(out, " ")
+      out = concat(out, unintern(pool, st[pns]))
+      out = concat(out, " k=")
+      out = concat(out, numstr(st[pks]))
+      out = concat(out, " tp=")
+      out = concat(out, numstr(st[ptps]))
+      out = concat(out, "\n")
+      j3 = j3 + 1
+    }
+    j3 = 0
+    while j3 < fntp {
+      hold ftps = fb + 26 + j3
+      out = concat(out, "  ftparam ")
+      out = concat(out, numstr(j3))
+      out = concat(out, " ")
+      out = concat(out, unintern(pool, st[ftps]))
+      out = concat(out, "\n")
+      j3 = j3 + 1
+    }
+    i = i + 1
+  }
+  hold ng = st[11]
+  out = concat(out, concat(concat("globals ", numstr(ng)), "\n"))
+  i = 0
+  while i < ng {
+    hold glb = g_base(i)
+    out = concat(out, "glob ")
+    out = concat(out, numstr(i))
+    out = concat(out, " ")
+    out = concat(out, unintern(pool, st[glb]))
+    out = concat(out, " kind=")
+    out = concat(out, numstr(st[glb + 1]))
+    out = concat(out, " sid=")
+    out = concat(out, numstr(st[glb + 2]))
+    out = concat(out, "\n")
+    i = i + 1
+  }
+  give out
+}
+
+make dump_infer(st: list, pool: list) -> str {
+  hold out = "; native_aot phase 2\n"
+  hold ns = st[8]
+  out = concat(out, concat(concat("structs ", numstr(ns)), "\n"))
+  hold i = 0
+  while i < ns {
+    hold sb = s_base(i)
+    hold nf = st[sb + 1]
+    hold gskn = st[sb + 2]
+    out = concat(out, "struct ")
+    out = concat(out, numstr(i))
+    out = concat(out, " ")
+    out = concat(out, unintern(pool, st[sb]))
+    out = concat(out, " nf=")
+    out = concat(out, numstr(nf))
+    out = concat(out, " gskn=")
+    out = concat(out, numstr(gskn))
+    out = concat(out, "\n")
+    hold j = 0
+    while j < nf {
+      hold fn_slot = sb + 4 + j
+      hold fk_slot = sb + 20 + j
+      hold fs_slot = sb + 36 + j
+      out = concat(out, "  field ")
+      out = concat(out, numstr(j))
+      out = concat(out, " ")
+      out = concat(out, unintern(pool, st[fn_slot]))
+      out = concat(out, " kind=")
+      out = concat(out, numstr(st[fk_slot]))
+      out = concat(out, " sid=")
+      out = concat(out, numstr(st[fs_slot]))
+      out = concat(out, "\n")
+      j = j + 1
+    }
+    j = 0
+    while j < gskn {
+      hold gk_slot = sb + 100 + j
+      hold gs_slot = sb + 108 + j
+      out = concat(out, "  targ ")
+      out = concat(out, numstr(j))
+      out = concat(out, " kind=")
+      out = concat(out, numstr(st[gk_slot]))
+      out = concat(out, " sid=")
+      out = concat(out, numstr(st[gs_slot]))
+      out = concat(out, "\n")
+      j = j + 1
+    }
+    i = i + 1
+  }
+  hold nf = st[10]
+  out = concat(out, concat(concat("fns ", numstr(nf)), "\n"))
+  i = 0
+  while i < nf {
+    hold fb = f_base(i)
+    hold fnp = st[fb + 1]
+    out = concat(out, "fn ")
+    out = concat(out, numstr(i))
+    out = concat(out, " ")
+    out = concat(out, unintern(pool, st[fb]))
+    out = concat(out, " nparam=")
+    out = concat(out, numstr(fnp))
+    out = concat(out, " gen=")
+    out = concat(out, numstr(st[fb + 2]))
+    out = concat(out, " rk=")
+    out = concat(out, numstr(st[fb + 4]))
+    out = concat(out, " inst_of=")
+    out = concat(out, numstr(st[fb + 6]))
+    out = concat(out, " queued=")
+    out = concat(out, numstr(st[fb + 7]))
+    out = concat(out, "\n")
+    hold j2 = 0
+    while j2 < fnp {
+      hold pns = fn_pn_slot(fb, j2)
+      hold pks = fn_pk_slot(fb, j2)
+      out = concat(out, "  param ")
+      out = concat(out, numstr(j2))
+      out = concat(out, " ")
+      out = concat(out, unintern(pool, st[pns]))
+      out = concat(out, " k=")
+      out = concat(out, numstr(st[pks]))
+      out = concat(out, "\n")
+      j2 = j2 + 1
+    }
+    i = i + 1
+  }
+  hold npend = st[12]
+  out = concat(out, concat(concat("pend ", numstr(npend)), "\n"))
+  i = 0
+  while i < npend {
+    hold ps = pend_slot(i)
+    hold fi = st[ps]
+    hold fb2 = f_base(fi)
+    out = concat(out, "  emit ")
+    out = concat(out, numstr(i))
+    out = concat(out, " fn=")
+    out = concat(out, numstr(fi))
+    out = concat(out, " ")
+    out = concat(out, unintern(pool, st[fb2]))
+    out = concat(out, "\n")
+    i = i + 1
+  }
+  hold ng = st[11]
+  out = concat(out, concat(concat("globals ", numstr(ng)), "\n"))
+  i = 0
+  while i < ng {
+    hold glb = g_base(i)
+    out = concat(out, "glob ")
+    out = concat(out, numstr(i))
+    out = concat(out, " ")
+    out = concat(out, unintern(pool, st[glb]))
+    out = concat(out, " kind=")
+    out = concat(out, numstr(st[glb + 1]))
+    out = concat(out, " sid=")
+    out = concat(out, numstr(st[glb + 2]))
+    out = concat(out, "\n")
+    i = i + 1
+  }
+  give out
+}
+
+make push_u64_le(bs: list, v: num) -> list {
+  bs = push(bs, bit_and(v, 255))
+  bs = push(bs, bit_and(shr(v, 8), 255))
+  bs = push(bs, bit_and(shr(v, 16), 255))
+  bs = push(bs, bit_and(shr(v, 24), 255))
+  bs = push(bs, 0)
+  bs = push(bs, 0)
+  bs = push(bs, 0)
+  bs = push(bs, 0)
+  give bs
+}
+
+make build_roots_bin(st: list) -> list {
+  // DNA_START = OFF_ROOTS (144) + NROOT (66) * 8 = 672 -> d_glob = 672.
+  hold bs = []
+  hold ng = st[11]
+  hold i = 0
+  while i < ng {
+    hold glb = g_base(i)
+    hold k = st[glb + 1]
+    when k == 1 || k == 2 || k == 3 {
+      bs = push_u64_le(bs, 672 + 8 * i)
+    }
+    i = i + 1
+  }
+  bs = push_u64_le(bs, 32)
+  bs = push_u64_le(bs, 0)
+  give bs
+}

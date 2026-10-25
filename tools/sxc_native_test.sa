@@ -1,0 +1,376 @@
+// tools/sxc_native_test.sa -- Comprehensive pure-Sayanox verification suite for
+// tools/sxc_native.sa: C-free x86-64 ELF64 self-compilation fixed point
+// (gen2.elf == gen3.elf), C-free compilation of selfhost/native_aot.sa and
+// compiler tools, and full gen2 == sxc_native execution parity across 7..12
+// parameters, 64-bit bitwise ops, list index mutation, binary I/O, and OS stubs.
+
+make fail_test(msg: str) -> num {
+  show concat("[FAIL] sxc_native_test: ", msg)
+  hold s = exit(1)
+  give 0
+}
+
+make assert_eq_num(got: num, want: num, label: str) -> num {
+  when got != want {
+    hold m = concat(label, concat(": got ", concat(numstr(got), concat(", want ", numstr(want)))))
+    hold f = fail_test(m)
+  }
+  give 0
+}
+
+make assert_eq_str(got: str, want: str, label: str) -> num {
+  when string_eq(got, want) != 1 {
+    hold m = concat(label, concat(": got <", concat(got, concat(">, want <", concat(want, ">")))))
+    hold f = fail_test(m)
+  }
+  give 0
+}
+
+make check_static_elf64_x86_64(path: str, label: str) -> list {
+  hold bs = []
+  hold n = read_bytes(path, bs)
+  when n < 120 {
+    hold f = fail_test(concat(label, ": ELF too small"))
+  }
+  hold c0 = assert_eq_num(bs[0], 127, concat(label, " magic[0]"))
+  hold c1 = assert_eq_num(bs[1], 69, concat(label, " magic[1]"))
+  hold c2 = assert_eq_num(bs[2], 76, concat(label, " magic[2]"))
+  hold c3 = assert_eq_num(bs[3], 70, concat(label, " magic[3]"))
+  hold c4 = assert_eq_num(bs[4], 2, concat(label, " ELFCLASS64"))
+  hold c5 = assert_eq_num(bs[5], 1, concat(label, " ELFDATA2LSB"))
+  hold etype = bs[16] + bs[17] * 256
+  hold emach = bs[18] + bs[19] * 256
+  hold c6 = assert_eq_num(etype, 2, concat(label, " ET_EXEC"))
+  hold c7 = assert_eq_num(emach, 62, concat(label, " EM_X86_64"))
+  // Verify every program header has p_type != PT_INTERP (3) and != PT_DYNAMIC (2)
+  hold phoff = bs[32] + bs[33] * 256
+  hold phentsize = bs[54] + bs[55] * 256
+  hold phnum = bs[56] + bs[57] * 256
+  hold i = 0
+  while i < phnum {
+    hold off = phoff + i * phentsize
+    hold ptype = bs[off] + bs[off + 1] * 256 + bs[off + 2] * 65536 + bs[off + 3] * 16777216
+    when ptype == 2 || ptype == 3 {
+      hold fdyn = fail_test(concat(label, ": unexpected PT_DYNAMIC/PT_INTERP in static ELF64"))
+    }
+    i = i + 1
+  }
+  give bs
+}
+
+make assert_bytes_identical(a: list, b: list, label: str) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  hold cl = assert_eq_num(na, nb, concat(label, " byte length"))
+  hold i = 0
+  while i < na {
+    hold ai = a[i]
+    hold bi = b[i]
+    when ai != bi {
+      hold m = concat(label, concat(": byte mismatch at offset ", numstr(i)))
+      hold f = fail_test(m)
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make build_feature_fixture(path: str) -> num {
+  hold q = chr(34)
+  hold nl = chr(10)
+  hold s = ""
+  s = concat(s, "struct Pair { a, b }")
+  s = concat(s, nl)
+  s = concat(s, "make init_pair() -> num {")
+  s = concat(s, nl)
+  s = concat(s, "  hold p = Pair { 100, 200 }")
+  s = concat(s, nl)
+  s = concat(s, "  give p.a")
+  s = concat(s, nl)
+  s = concat(s, "}")
+  s = concat(s, nl)
+  s = concat(s, "make sum7(a: num, b: num, c: num, d: num, e: num, f: num, g: num) -> num {")
+  s = concat(s, nl)
+  s = concat(s, "  give a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7")
+  s = concat(s, nl)
+  s = concat(s, "}")
+  s = concat(s, nl)
+  s = concat(s, "make mix10(a: num, b: str, c: num, d: list, e: num, f: num, g: num, h: str, i: num, j: num) -> str {")
+  s = concat(s, nl)
+  s = concat(s, "  hold total = a + c + d[1] + e + f + g + i + j")
+  s = concat(s, nl)
+  s = concat(s, "  give concat(b, concat(h, numstr(total)))")
+  s = concat(s, nl)
+  s = concat(s, "}")
+  s = concat(s, nl)
+  s = concat(s, "make sum12(p1: num, p2: num, p3: num, p4: num, p5: num, p6: num, p7: num, p8: num, p9: num, p10: num, p11: num, p12: num) -> num {")
+  s = concat(s, nl)
+  s = concat(s, "  give p1 + p2 + p3 + p4 + p5 + p6 + p7 * 10 + p8 * 10 + p9 * 10 + p10 * 10 + p11 * 10 + p12 * 100")
+  s = concat(s, nl)
+  s = concat(s, "}")
+  s = concat(s, nl)
+  // Test 7, 10, 12 params (odd and even >6 stack frames)
+  s = concat(s, "show sum7(1, 2, 3, 4, 5, 6, 7)")
+  s = concat(s, nl)
+  s = concat(s, "hold xs = [10, 20, 30]")
+  s = concat(s, nl)
+  s = concat(s, "hold pr = Pair { 100, 200 }")
+  s = concat(s, nl)
+  s = concat(s, concat("show mix10(1, ", concat(q, concat("hi-", concat(q, concat(", 2, xs, 3, pr.a + pr.b, 4, ", concat(q, concat("ok:", concat(q, ", 5, 6)")))))))))
+  s = concat(s, nl)
+  s = concat(s, "show sum12(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)")
+  s = concat(s, nl)
+  // Test list index write before and after reallocation
+  s = concat(s, "xs[1] = 99")
+  s = concat(s, nl)
+  s = concat(s, "hold k = 0")
+  s = concat(s, nl)
+  s = concat(s, "while k < 20 {")
+  s = concat(s, nl)
+  s = concat(s, "  xs = push(xs, k * 3)")
+  s = concat(s, nl)
+  s = concat(s, "  k = k + 1")
+  s = concat(s, nl)
+  s = concat(s, "}")
+  s = concat(s, nl)
+  s = concat(s, "xs[0] = 777")
+  s = concat(s, nl)
+  s = concat(s, "xs[22] = 888")
+  s = concat(s, nl)
+  s = concat(s, "show xs[0] + xs[1] + xs[22]")
+  s = concat(s, nl)
+  // Test 64-bit bitwise operations including bit 63 and 32-bit unsigned
+  s = concat(s, "hold hi63 = shl(1, 63)")
+  s = concat(s, nl)
+  s = concat(s, "show shr(hi63, 63)")
+  s = concat(s, nl)
+  s = concat(s, "show bit_and(bit_not(0), 65535)")
+  s = concat(s, nl)
+  s = concat(s, "show bit_xor(bit_or(240, 15), 170)")
+  s = concat(s, nl)
+  s = concat(s, "show shr(4294967295, 24)")
+  s = concat(s, nl)
+  // Test write_bytes (>4096 bytes), read_bytes, bytes_f64
+  s = concat(s, "hold raw = []")
+  s = concat(s, nl)
+  s = concat(s, "hold bi = 0")
+  s = concat(s, nl)
+  s = concat(s, "while bi < 5000 {")
+  s = concat(s, nl)
+  s = concat(s, "  raw = push(raw, bi % 256)")
+  s = concat(s, nl)
+  s = concat(s, "  bi = bi + 1")
+  s = concat(s, nl)
+  s = concat(s, "}")
+  s = concat(s, nl)
+  s = concat(s, "raw = bytes_f64(raw, 42)")
+  s = concat(s, nl)
+  hold binp = concat(path, ".bin")
+  s = concat(s, concat("show write_bytes(", concat(q, concat(binp, concat(q, ", raw)")))))
+  s = concat(s, nl)
+  s = concat(s, "hold rd = [55]")
+  s = concat(s, nl)
+  s = concat(s, concat("show read_bytes(", concat(q, concat(binp, concat(q, ", rd)")))))
+  s = concat(s, nl)
+  s = concat(s, "show len(rd)")
+  s = concat(s, nl)
+  s = concat(s, "show rd[0] + rd[256] + rd[5006] + rd[5007]")
+  s = concat(s, nl)
+  // Test getenv, path_kind, run_command, && / || value expressions
+  s = concat(s, concat("show getenv(", concat(q, concat("SX_TEST_TOKEN", concat(q, ")")))))
+  s = concat(s, nl)
+  s = concat(s, concat("show path_kind(", concat(q, concat(binp, concat(q, ")")))))
+  s = concat(s, nl)
+  s = concat(s, concat("show path_kind(", concat(q, concat("tools", concat(q, ")")))))
+  s = concat(s, nl)
+  s = concat(s, concat("show path_kind(", concat(q, concat("/nonexistent_sx_file_999", concat(q, ")")))))
+  s = concat(s, nl)
+  s = concat(s, concat("show run_command(", concat(q, concat("exit 23", concat(q, ")")))))
+  s = concat(s, nl)
+  s = concat(s, "hold vlogic = 1 == 1 && (2 == 3 || 5 > 4)")
+  s = concat(s, nl)
+  s = concat(s, "show vlogic")
+  s = concat(s, nl)
+  s = concat(s, "hold ex = exit(37)")
+  s = concat(s, nl)
+  when write_file(path, s) != 1 {
+    hold fw = fail_test(concat("cannot write ", path))
+  }
+  give 0
+}
+
+hold dir = "selfhost/seed_tests/sxc_native_gate"
+hold mk = run_command(concat("rm -rf ", concat(dir, concat(" && mkdir -p ", dir))))
+hold cm = assert_eq_num(mk, 0, "mkdir gate dir")
+
+hold sxc_bin = "./tools/sxc_native"
+when path_kind(sxc_bin) != 1 {
+  hold fb0 = fail_test("missing ./tools/sxc_native")
+}
+
+// 1. Self-compile tools/sxc_native.sa -> gen2.elf -> gen3.elf with ZERO C compiler
+hold gen2_elf = concat(dir, "/sxc_native_gen2.elf")
+hold gen3_elf = concat(dir, "/sxc_native_gen3.elf")
+hold rc1 = run_command(concat(sxc_bin, concat(" tools/sxc_native.sa ", gen2_elf)))
+hold c_rc1 = assert_eq_num(rc1, 0, "sxc_native -> gen2.elf")
+hold b_gen2 = check_static_elf64_x86_64(gen2_elf, "sxc_native_gen2.elf")
+
+hold rc2 = run_command(concat(gen2_elf, concat(" tools/sxc_native.sa ", gen3_elf)))
+hold c_rc2 = assert_eq_num(rc2, 0, "gen2.elf -> gen3.elf (no cc)")
+hold b_gen3 = check_static_elf64_x86_64(gen3_elf, "sxc_native_gen3.elf")
+hold c_fp = assert_bytes_identical(b_gen2, b_gen3, "sxc_native ELF64 fixed point")
+show concat("[ok] C-free x86-64 ELF64 fixed point: sxc_native_gen2.elf == sxc_native_gen3.elf (", concat(numstr(len(b_gen3)), " bytes)"))
+
+// 2. Compile selfhost/native_aot.sa directly with gen3.elf (no cc) and verify byte-identical output to ./selfhost/native_aot
+hold naot_elf = concat(dir, "/native_aot_pure.elf")
+hold rc3 = run_command(concat(gen3_elf, concat(" selfhost/native_aot.sa ", naot_elf)))
+hold c_rc3 = assert_eq_num(rc3, 0, "gen3.elf -> native_aot_pure.elf")
+hold b_naot = check_static_elf64_x86_64(naot_elf, "native_aot_pure.elf")
+
+hold out_ref = concat(dir, "/nested_ref.elf")
+hold out_pure = concat(dir, "/nested_pure.elf")
+hold rc4 = run_command(concat("./selfhost/native_aot selfhost/generic_struct_nested.sa ", out_ref))
+hold rc5 = run_command(concat(naot_elf, concat(" selfhost/generic_struct_nested.sa ", out_pure)))
+hold c_rc4 = assert_eq_num(rc4, 0, "ref native_aot")
+hold c_rc5 = assert_eq_num(rc5, 0, "pure native_aot")
+hold b_ref = check_static_elf64_x86_64(out_ref, "nested_ref.elf")
+hold b_pure = check_static_elf64_x86_64(out_pure, "nested_pure.elf")
+hold c_np = assert_bytes_identical(b_ref, b_pure, "native_aot vs native_aot_pure emitted ELF")
+show "[ok] C-free native_aot_pure.elf emits byte-identical ELF64 binaries to ./selfhost/native_aot"
+
+// 3. Full gen2 == sxc_native_gen3.elf execution & exit-code parity on 7..12 params, 64-bit bitwise, list[i]=v, binary I/O, getenv, path_kind, run_command, exit
+hold fx = concat(dir, "/full_features.sa")
+hold bf = build_feature_fixture(fx)
+hold fx_c = concat(dir, "/full_features.c")
+hold fx_g2 = concat(dir, "/full_features_gen2")
+hold fx_nat = concat(dir, "/full_features_nat.elf")
+hold out_g2 = concat(dir, "/out_gen2.txt")
+hold out_nat = concat(dir, "/out_nat.txt")
+
+hold rc_g2c = run_command(concat("./selfhost/gen2 ", concat(fx, concat(" ", fx_c))))
+hold c_g2c = assert_eq_num(rc_g2c, 0, "gen2 compile fixture")
+hold rc_cc = run_command(concat("cc -std=gnu99 -O2 -Wno-implicit-function-declaration ", concat(fx_c, concat(" -o ", fx_g2))))
+hold c_cc = assert_eq_num(rc_cc, 0, "cc fixture")
+hold rc_nc = run_command(concat(gen3_elf, concat(" ", concat(fx, concat(" ", fx_nat)))))
+hold c_nc = assert_eq_num(rc_nc, 0, "gen3.elf compile fixture")
+
+hold run_g2 = run_command(concat("SX_TEST_TOKEN=sayanox-elf-ok ", concat(fx_g2, concat(" > ", out_g2))))
+hold run_nat = run_command(concat("SX_TEST_TOKEN=sayanox-elf-ok ", concat(fx_nat, concat(" > ", out_nat))))
+hold c_ex1 = assert_eq_num(run_g2, 37, "gen2 exit(37)")
+hold c_ex2 = assert_eq_num(run_nat, 37, "sxc_native exit(37)")
+hold c_out = assert_eq_str(read_file(out_nat), read_file(out_g2), "sxc_native vs gen2 stdout")
+show "[ok] 100% stdout + exit(37) parity between gen2 and C-free sxc_native_gen3.elf across all extended features"
+
+// 4. Test 10-param struct argument + bare exit(41) statement directly on sxc_native_gen3.elf
+hold fx2 = concat(dir, "/struct10_bare_exit.sa")
+hold nl2 = chr(10)
+hold s2 = "struct Pair { a, b }"
+s2 = concat(s2, nl2)
+s2 = concat(s2, "make use10(a: num, b: num, c: num, d: num, e: num, f: num, g: Pair, h: num, i: num, j: num) -> num {")
+s2 = concat(s2, nl2)
+s2 = concat(s2, "  give a + b + c + d + e + f + g.a + g.b + h + i + j")
+s2 = concat(s2, nl2)
+s2 = concat(s2, "}")
+s2 = concat(s2, nl2)
+s2 = concat(s2, "hold p = Pair { a: 30, b: 70 }")
+s2 = concat(s2, nl2)
+s2 = concat(s2, "show use10(1, 2, 3, 4, 5, 6, p, 7, 8, 9)")
+s2 = concat(s2, nl2)
+s2 = concat(s2, "exit(41)")
+s2 = concat(s2, nl2)
+when write_file(fx2, s2) != 1 {
+  hold fw2 = fail_test("cannot write struct10_bare_exit.sa")
+}
+hold fx2_elf = concat(dir, "/struct10_bare_exit.elf")
+hold fx2_out = concat(dir, "/struct10_bare_exit.out")
+hold rc_fx2 = run_command(concat(gen3_elf, concat(" ", concat(fx2, concat(" ", fx2_elf)))))
+hold c_fx2 = assert_eq_num(rc_fx2, 0, "gen3.elf compile struct10_bare_exit")
+hold run_fx2 = run_command(concat(fx2_elf, concat(" > ", fx2_out)))
+hold c_ex41 = assert_eq_num(run_fx2, 41, "bare exit(41)")
+hold c_s10 = assert_eq_str(read_file(fx2_out), concat("145", nl2), "10-param struct arg result")
+show "[ok] 10-param stack struct argument + bare exit(41) verified"
+
+// 5. Verify 16-param call, +=/-=, path_real, and spawn/child_*/read_line/read_n IPC in pure ELF64
+hold child_sa = concat(dir, "/ipc_child.sa")
+hold cs = "hold hdr = read_line()"
+cs = concat(cs, nl2)
+cs = concat(cs, "hold blank = read_line()")
+cs = concat(cs, nl2)
+cs = concat(cs, "hold body = read_n(5)")
+cs = concat(cs, nl2)
+cs = concat(cs, "hold w1 = write_out(concat(hdr, nl_s()))")
+cs = concat(cs, nl2)
+cs = concat(cs, "hold w2 = write_out(body)")
+cs = concat(cs, nl2)
+cs = concat(cs, "exit(19)")
+cs = concat(cs, nl2)
+cs = concat("make nl_s() -> str { give chr(10) }", concat(nl2, cs))
+when write_file(child_sa, cs) != 1 {
+  hold fwc = fail_test("cannot write ipc_child.sa")
+}
+hold child_elf = concat(dir, "/ipc_child.elf")
+hold rc_ce = run_command(concat(gen3_elf, concat(" ", concat(child_sa, concat(" ", child_elf)))))
+hold c_ce = assert_eq_num(rc_ce, 0, "gen3.elf compile ipc_child")
+
+hold par_sa = concat(dir, "/ipc_parent.sa")
+hold ps = "make sum16(a1: num, a2: num, a3: num, a4: num, a5: num, a6: num, a7: num, a8: num, a9: num, a10: num, a11: num, a12: num, a13: num, a14: num, a15: num, a16: num) -> num {"
+ps = concat(ps, nl2)
+ps = concat(ps, "  give a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16")
+ps = concat(ps, nl2)
+ps = concat(ps, "}")
+ps = concat(ps, nl2)
+ps = concat(ps, "hold acc = sum16(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16)")
+ps = concat(ps, nl2)
+ps = concat(ps, "acc += 14")
+ps = concat(ps, nl2)
+ps = concat(ps, "acc -= 10")
+ps = concat(ps, nl2)
+ps = concat(ps, "hold msg = \"ok\"")
+ps = concat(ps, nl2)
+ps = concat(ps, "msg += \"-ipc\"")
+ps = concat(ps, nl2)
+ps = concat(ps, "show acc")
+ps = concat(ps, nl2)
+ps = concat(ps, "show msg")
+ps = concat(ps, nl2)
+ps = concat(ps, "show len(path_real(arg(1))) > 0")
+ps = concat(ps, nl2)
+ps = concat(ps, "hold h = spawn(arg(1))")
+ps = concat(ps, nl2)
+ps = concat(ps, "hold s1 = child_send(h, \"HELLO\\r\\n\\r\\nWORLD\")")
+ps = concat(ps, nl2)
+ps = concat(ps, "show child_line(h)")
+ps = concat(ps, nl2)
+ps = concat(ps, "show child_recv(h, 5)")
+ps = concat(ps, nl2)
+ps = concat(ps, "show child_close(h)")
+ps = concat(ps, nl2)
+when write_file(par_sa, ps) != 1 {
+  hold fwp = fail_test("cannot write ipc_parent.sa")
+}
+hold par_elf = concat(dir, "/ipc_parent.elf")
+hold par_out = concat(dir, "/ipc_parent.out")
+hold rc_pe = run_command(concat(gen3_elf, concat(" ", concat(par_sa, concat(" ", par_elf)))))
+hold c_pe = assert_eq_num(rc_pe, 0, "gen3.elf compile ipc_parent")
+hold rc_pr = run_command(concat(par_elf, concat(" ", concat(child_elf, concat(" > ", par_out)))))
+hold c_pr = assert_eq_num(rc_pr, 0, "ipc_parent exit 0")
+hold want_ipc = concat("140", concat(nl2, concat("ok-ipc", concat(nl2, concat("1", concat(nl2, concat("HELLO", concat(nl2, concat("WORLD", concat(nl2, concat("19", nl2)))))))))))
+hold c_ipc = assert_eq_str(read_file(par_out), want_ipc, "16-param + +=/-= + path_real + spawn/child_* IPC")
+show "[ok] 16-param stack ABI, +=/-=, path_real, and spawn/child_* process-pipe IPC verified"
+
+// 6. Verify 100% C-free ELF64 compilation of sayanox_lsp, sxpkg, sxdiag, and 20k-line compiler_min.sa
+hold lsp_elf = concat(dir, "/sayanox_lsp.elf")
+hold pkg_elf = concat(dir, "/sxpkg.elf")
+hold diag_elf = concat(dir, "/sxdiag.elf")
+hold cmin_elf = concat(dir, "/compiler_min.elf")
+hold c_tl1 = assert_eq_num(run_command(concat(gen3_elf, concat(" tools/sayanox_lsp.sa ", lsp_elf))), 0, "C-free sayanox_lsp.elf")
+hold c_tl2 = assert_eq_num(run_command(concat(gen3_elf, concat(" tools/sxpkg.sa ", pkg_elf))), 0, "C-free sxpkg.elf")
+hold c_tl3 = assert_eq_num(run_command(concat(gen3_elf, concat(" tools/sxdiag.sa ", diag_elf))), 0, "C-free sxdiag.elf")
+hold c_tl4 = assert_eq_num(run_command(concat(gen3_elf, concat(" selfhost/compiler_min.sa ", cmin_elf))), 0, "C-free compiler_min.elf")
+hold g2_ir_c = concat(dir, "/g2_ir.c")
+hold elf_ir_c = concat(dir, "/elf_ir.c")
+hold c_cm1 = assert_eq_num(run_command(concat("./selfhost/gen2 selfhost/native_ir_log_test.sa ", concat(g2_ir_c, " >/dev/null"))), 0, "gen2 emit C")
+hold c_cm2 = assert_eq_num(run_command(concat(cmin_elf, concat(" selfhost/native_ir_log_test.sa ", concat(elf_ir_c, " >/dev/null")))), 0, "compiler_min.elf emit C")
+hold c_cm3 = assert_eq_str(read_file(elf_ir_c), read_file(g2_ir_c), "compiler_min.elf == gen2 C output")
+show "[ok] sayanox_lsp, sxpkg, sxdiag, and 20k-line compiler_min.sa compiled C-free with byte-identical C output"
+show "SXC-NATIVE-SELFCOMPILE-OK"

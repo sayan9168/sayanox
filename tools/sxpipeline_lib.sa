@@ -1,0 +1,433 @@
+// tools/sxpipeline_lib.sa -- Complete 5-phase Sayanox x86-64 native AOT
+// compilation pipeline (phases 1..5, SX_DEFS_DUMP, SX_EMIT_LOG, SX_ENCODE_LOG,
+// SX_LINK_DUMP, ELF64 link, chmod 0755). Shared by tools/sxemit.sa and
+// selfhost/native_aot.sa.
+
+make sh_quote(s: str) -> str {
+  hold out = "'"
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, "'\\''")
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(out, "'")
+}
+
+make write_defs_dump_dir(dir: str, src: str, st: list, pool: list) -> num {
+  hold p1 = concat(dir, "/defs.txt")
+  hold dt = dump_defs(st, pool)
+  when write_file(p1, dt) != 1 {
+    hold e1 = fail(1, concat("cannot open SX_DEFS_DUMP file ", p1))
+  }
+  hold p2 = concat(dir, "/expand.sa")
+  when write_file(p2, src) != 1 {
+    hold e2 = fail(1, concat("cannot open SX_DEFS_DUMP file ", p2))
+  }
+  give 0
+}
+
+make write_link_dump_dir(dir: str, code: list, data: list, patch: list, meta_txt: str) -> num {
+  hold pc = concat(dir, "/code.bin")
+  when write_bytes(pc, code) != 1 {
+    hold e1 = fail(1, concat("cannot write ", pc))
+  }
+  hold pd = concat(dir, "/data.bin")
+  when write_bytes(pd, data) != 1 {
+    hold e2 = fail(1, concat("cannot write ", pd))
+  }
+  hold pp = concat(dir, "/patch.bin")
+  when write_bytes(pp, patch) != 1 {
+    hold e3 = fail(1, concat("cannot write ", pp))
+  }
+  hold pm = concat(dir, "/meta.txt")
+  when write_file(pm, meta_txt) != 1 {
+    hold e4 = fail(1, concat("cannot write ", pm))
+  }
+  give 0
+}
+
+make compile_native_aot(in_path: str, out_path: str) -> num {
+  hold neg1 = 0 - 1
+  hold ilog_env = getenv("SX_EMIT_LOG")
+  hold ilog_on = 0
+  when len(ilog_env) > 0 {
+    ilog_on = 1
+    when write_file(ilog_env, "") != 1 {
+      hold eil = fail(1, concat("cannot open SX_EMIT_LOG file ", ilog_env))
+    }
+  }
+  hold elog_env = getenv("SX_ENCODE_LOG")
+  hold elog_on = 0
+  when len(elog_env) > 0 {
+    elog_on = 1
+    when write_file(elog_env, "") != 1 {
+      hold eel = fail(1, concat("cannot open SX_ENCODE_LOG file ", elog_env))
+    }
+  }
+
+  when path_kind(in_path) != 1 {
+    hold enf = fail(1, concat("cannot open use file: ", in_path))
+  }
+  hold raw = read_file(in_path)
+  hold dir = dir_of(in_path)
+  hold src = expand_use(raw, dir, 0)
+  hold sn = len(src)
+
+  // Phase 1: collect_defs + optional SX_DEFS_DUMP
+  hold st = make_state(sn)
+  hold pool = []
+  hold cd = collect_defs(src, st, pool)
+  hold defs_env = getenv("SX_DEFS_DUMP")
+  when len(defs_env) > 0 {
+    hold wd = write_defs_dump_dir(defs_env, src, st, pool)
+  }
+
+  // Phase 2: kind inference + generic instantiation
+  hold inf = infer(src, st, pool)
+
+  // Initialize data segment (DNA_START, d_glob, runtime strings, d_pow 1e0..1e308)
+  hold data = init_data_seg()
+
+  // Initialize x86-64 encoder state
+  hold est = make_enc_state(0)
+  est = enable_enc_logs(est, elog_on, ilog_on, in_path)
+
+  // Phase 3a: entry stub
+  est = ilogc(est, "=== phase: entry (data base, argc/argv, stack top, gc threshold) ===")
+  est = lea_r12_data(est)
+  est = mv_r64m(est, 0, 4, neg1, 0, 0)
+  est = mv_m64(est, 12, neg1, 0, 16, 0)
+  est = lea_rm(est, 0, 4, neg1, 0, 8)
+  est = mv_m64(est, 12, neg1, 0, 8, 0)
+  est = mv_rr(est, 0, 4)
+  est = mv_m64(est, 12, neg1, 0, 104, 0)
+  est = mov_imm64(est, 0, 65536)
+  est = mv_m64(est, 12, neg1, 0, 80, 0)
+  est = lea_rm(est, 7, 12, neg1, 0, 672)
+  est = mov_imm64(est, 1, 64)
+  est = xor_rr(est, 0, 0)
+  est = rep_stosq_inst(est)
+
+  // Phase 3b: top-level statements
+  est = ilogc(est, "=== phase: top level ===")
+  hold lp_st = []
+  st[0] = 0
+  st[5] = 0 - 1
+  st[30] = 0
+  st[31] = 0 - 1
+  st[32] = 0
+  st[33] = 0
+  st[34] = 0
+  st[35] = 0
+  est = emit_prog(src, st, pool, est, data, lp_st, 0, 0)
+
+  // Phase 3c: exit(0) syscall
+  est = ilogc(est, "=== phase: exit syscall ===")
+  est = mov_imm64(est, 0, 60)
+  est = xor_rr(est, 7, 7)
+  est = syscall_inst(est)
+
+  // Phase 3d: top-level make bodies + monomorphised generic instances
+  est = ilogc(est, "=== phase: make bodies (top level walk) ===")
+  hold q = 0
+  while q < sn {
+    hold line = q
+    st[0] = q
+    hold zs = sw_st(src, st)
+    q = st[0]
+    when q >= sn {
+      q = sn
+    } otherwise {
+      when at(src, sn, q) == 47 && at(src, sn, q + 1) == 47 {
+        hold ec = eol_st(src, st)
+        q = st[0]
+      } otherwise {
+        hold did_fn = 0
+        when mkw_st(src, st, "make") == 1 {
+          hold fnm = pid_st(src, st)
+          when len(fnm) > 0 {
+            hold fi = f_find(st, pool, fnm)
+            when fi >= 0 {
+              hold fb = f_base(fi)
+              hold body_at = st[0]
+              st[fb + 35] = body_at
+              when st[fb + 2] == 0 {
+                st[0] = body_at
+                est = emit_fn(src, st, pool, est, data, lp_st, fi)
+                q = st[0]
+                did_fn = 1
+              }
+            }
+          }
+        }
+        when did_fn == 0 {
+          q = skip_stmt(src, sn, line)
+        }
+      }
+    }
+  }
+
+  hold pk = 0
+  while pk < st[12] {
+    hold pslot = pend_slot(pk)
+    hold j = st[pslot]
+    hold jb = f_base(j)
+    hold base_fi = j
+    when st[jb + 6] >= 0 {
+      base_fi = st[jb + 6]
+    }
+    hold bb = f_base(base_fi)
+    st[0] = st[bb + 35]
+    est = emit_fn(src, st, pool, est, data, lp_st, j)
+    pk = pk + 1
+  }
+
+  // Phase 4: runtime builtins (3,521 bytes)
+  est = ilogc(est, "=== phase: runtime stubs (builtin) ===")
+  est = emit_builtins_all(est)
+
+  // Phase 4b: mark & sweep collector (1,209 bytes)
+  est = ilogc(est, "=== phase: collector ===")
+  est = emit_gc_all(est)
+
+  // Populate precise GC heap root table at OFF_ROOTS (144)
+  hold wr = write_roots_into_data(data, st)
+
+  // Extract segments & patches
+  hold code_bytes = extract_code_bytes(est)
+  hold patch_bytes = build_patch_bytes(est, st, pool)
+  hold meta_txt = build_meta_txt(est, data)
+
+  // Optional SX_LINK_DUMP
+  hold link_env = getenv("SX_LINK_DUMP")
+  when len(link_env) > 0 {
+    hold wl = write_link_dump_dir(link_env, code_bytes, data, patch_bytes, meta_txt)
+  }
+
+  // Phase 5: link static x86-64 ELF64 image & mark executable
+  hold elf_img = link_image(code_bytes, data, patch_bytes, est[4])
+  when write_bytes(out_path, elf_img) != 1 {
+    hold ewe = fail(1, concat("cannot write ", out_path))
+  }
+  hold ch = run_command(concat("chmod 0755 ", sh_quote(out_path)))
+
+  // Flush optional SX_EMIT_LOG / SX_ENCODE_LOG
+  when ilog_on == 1 {
+    est = ilogc(est, concat("code bytes: ", istr(here_local(est))))
+    hold il_bytes = extract_ilog_bytes(est)
+    when write_bytes(ilog_env, il_bytes) != 1 {
+      hold eil2 = fail(1, concat("cannot open SX_EMIT_LOG file ", ilog_env))
+    }
+  }
+  when elog_on == 1 {
+    hold el_bytes = extract_elog_bytes(est)
+    when write_bytes(elog_env, el_bytes) != 1 {
+      hold eel2 = fail(1, concat("cannot open SX_ENCODE_LOG file ", elog_env))
+    }
+  }
+  give 0
+}
+
+make compile_native_aot_full_raw(in_path: str, raw: str, out_path: str) -> num {
+  hold neg1 = 0 - 1
+  hold ilog_env = getenv("SX_EMIT_LOG")
+  hold ilog_on = 0
+  when len(ilog_env) > 0 {
+    ilog_on = 1
+    when write_file(ilog_env, "") != 1 {
+      hold eil = fail(1, concat("cannot open SX_EMIT_LOG file ", ilog_env))
+    }
+  }
+  hold elog_env = getenv("SX_ENCODE_LOG")
+  hold elog_on = 0
+  when len(elog_env) > 0 {
+    elog_on = 1
+    when write_file(elog_env, "") != 1 {
+      hold eel = fail(1, concat("cannot open SX_ENCODE_LOG file ", elog_env))
+    }
+  }
+
+  hold dir = dir_of(in_path)
+  hold src = expand_use(raw, dir, 0)
+  hold sn = len(src)
+
+  // Phase 1: collect_defs (full selfhost mode st[39] = 1)
+  hold st = new_full_state(sn)
+  hold pool = []
+  hold cd = collect_defs(src, st, pool)
+  hold defs_env = getenv("SX_DEFS_DUMP")
+  when len(defs_env) > 0 {
+    hold wd = write_defs_dump_dir(defs_env, src, st, pool)
+  }
+
+  // Phase 2: kind inference + generic instantiation
+  hold inf = infer(src, st, pool)
+
+  // Initialize data segment + 48-byte fast strlen cache (3864..3911)
+  // + 256-byte child-proc table (3912..4167) + 16384-byte ext globals (4168..20551)
+  // + 16448-byte ext GC root table (20552..36999)
+  hold data = init_data_seg()
+  data = d_alloc(data, 48)
+  data = d_alloc(data, 256)
+  data = d_alloc(data, 16384)
+  data = d_alloc(data, 16448)
+
+  // Initialize extended x86-64 encoder state
+  hold est = new_full_enc_state(0)
+  est = enable_enc_logs(est, elog_on, ilog_on, in_path)
+
+  // Phase 3a: entry stub (32 MB initial GC threshold for compiler workloads)
+  est = ilogc(est, "=== phase: entry (data base, argc/argv, stack top, gc threshold) ===")
+  est = lea_r12_data(est)
+  est = mv_r64m(est, 0, 4, neg1, 0, 0)
+  est = mv_m64(est, 12, neg1, 0, 16, 0)
+  est = lea_rm(est, 0, 4, neg1, 0, 8)
+  est = mv_m64(est, 12, neg1, 0, 8, 0)
+  est = mv_rr(est, 0, 4)
+  est = mv_m64(est, 12, neg1, 0, 104, 0)
+  est = mov_imm64(est, 0, 33554432)
+  est = mv_m64(est, 12, neg1, 0, 80, 0)
+  est = lea_rm(est, 7, 12, neg1, 0, 672)
+  est = mov_imm64(est, 1, 64)
+  est = xor_rr(est, 0, 0)
+  est = rep_stosq_inst(est)
+  est = lea_rm(est, 7, 12, neg1, 0, 3912)
+  est = mov_imm64(est, 1, 2080)
+  est = xor_rr(est, 0, 0)
+  est = rep_stosq_inst(est)
+
+  // Phase 3b: top-level statements
+  est = ilogc(est, "=== phase: top level ===")
+  hold lp_st = []
+  st[0] = 0
+  st[5] = 0 - 1
+  st[30] = 0
+  st[31] = 0 - 1
+  st[32] = 0
+  st[33] = 0
+  st[34] = 0
+  st[35] = 0
+  est = emit_prog(src, st, pool, est, data, lp_st, 0, 0)
+
+  // Phase 3c: exit(0) syscall
+  est = ilogc(est, "=== phase: exit syscall ===")
+  est = mov_imm64(est, 0, 60)
+  est = xor_rr(est, 7, 7)
+  est = syscall_inst(est)
+
+  // Phase 3d: top-level make bodies + monomorphised generic instances
+  est = ilogc(est, "=== phase: make bodies (top level walk) ===")
+  hold q = 0
+  while q < sn {
+    hold line = q
+    st[0] = q
+    hold zs = sw_st(src, st)
+    q = st[0]
+    when q >= sn {
+      q = sn
+    } otherwise {
+      when at(src, sn, q) == 47 && at(src, sn, q + 1) == 47 {
+        hold ec = eol_st(src, st)
+        q = st[0]
+      } otherwise {
+        hold did_fn = 0
+        when mkw_st(src, st, "make") == 1 {
+          hold fnm = pid_st(src, st)
+          when len(fnm) > 0 {
+            hold fi = f_find(st, pool, fnm)
+            when fi >= 0 {
+              hold fb = f_base(fi)
+              hold body_at = st[0]
+              st[fb + 35] = body_at
+              when st[fb + 2] == 0 {
+                st[0] = body_at
+                est = emit_fn(src, st, pool, est, data, lp_st, fi)
+                q = st[0]
+                did_fn = 1
+              }
+            }
+          }
+        }
+        when did_fn == 0 {
+          q = skip_stmt(src, sn, line)
+        }
+      }
+    }
+  }
+
+  hold pk = 0
+  while pk < st[12] {
+    hold pslot = pend_slot(pk)
+    hold j = st[pslot]
+    hold jb = f_base(j)
+    hold base_fi = j
+    when st[jb + 6] >= 0 {
+      base_fi = st[jb + 6]
+    }
+    hold bb = f_base(base_fi)
+    st[0] = st[bb + 35]
+    est = emit_fn(src, st, pool, est, data, lp_st, j)
+    pk = pk + 1
+  }
+
+  // Phase 4: runtime builtins + selfhost extended stubs (30..36)
+  est = ilogc(est, "=== phase: runtime stubs (builtin) ===")
+  est = emit_builtins_all(est)
+  est = emit_builtins_full_ext(est)
+
+  // Phase 4b: mark & sweep collector
+  est = ilogc(est, "=== phase: collector ===")
+  est = emit_gc_all(est)
+  est = emit_gc_full_ext(est)
+
+  // Populate precise GC heap root table at OFF_ROOTS (144)
+  hold wr = write_roots_into_data(data, st)
+
+  // Extract segments & patches
+  hold code_bytes = extract_code_bytes(est)
+  hold patch_bytes = build_patch_bytes(est, st, pool)
+  hold meta_txt = build_meta_txt(est, data)
+
+  // Optional SX_LINK_DUMP
+  hold link_env = getenv("SX_LINK_DUMP")
+  when len(link_env) > 0 {
+    hold wl = write_link_dump_dir(link_env, code_bytes, data, patch_bytes, meta_txt)
+  }
+
+  // Phase 5: link static x86-64 ELF64 image & mark executable
+  hold elf_img = link_image(code_bytes, data, patch_bytes, est[4])
+  when write_bytes(out_path, elf_img) != 1 {
+    hold ewe = fail(1, concat("cannot write ", out_path))
+  }
+  hold ch = run_command(concat("chmod 0755 ", sh_quote(out_path)))
+
+  // Flush optional SX_EMIT_LOG / SX_ENCODE_LOG
+  when ilog_on == 1 {
+    est = ilogc(est, concat("code bytes: ", istr(here_local(est))))
+    hold il_bytes = extract_ilog_bytes(est)
+    when write_bytes(ilog_env, il_bytes) != 1 {
+      hold eil2 = fail(1, concat("cannot open SX_EMIT_LOG file ", ilog_env))
+    }
+  }
+  when elog_on == 1 {
+    hold el_bytes = extract_elog_bytes(est)
+    when write_bytes(elog_env, el_bytes) != 1 {
+      hold eel2 = fail(1, concat("cannot open SX_ENCODE_LOG file ", elog_env))
+    }
+  }
+  give 0
+}
+
+make compile_native_aot_full(in_path: str, out_path: str) -> num {
+  when path_kind(in_path) != 1 {
+    hold enf = fail(1, concat("cannot open use file: ", in_path))
+  }
+  hold raw = read_file(in_path)
+  give compile_native_aot_full_raw(in_path, raw, out_path)
+}

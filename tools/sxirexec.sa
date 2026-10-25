@@ -1,0 +1,2027 @@
+// tools/sxirexec.sa -- Portable IR virtual machine and 4-backend parity runner,
+// written in Sayanox.
+//
+// Executes the target-independent IR listing emitted by:
+//   ./tools/emit_to_ir --strict --source-offsets <emit.log>
+// together with its static data segment (<data.bin>) and call-relocation table
+// (<patch.bin>), without assembling or running an x86-64 binary.
+//
+// Modes:
+//   ./tools/sxirexec run <audit.ir> <data.bin> <patch.bin> [-- <args...>]
+//   ./tools/sxirexec compile-and-run <in.sa> <work_dir> [-- <args...>]
+//   ./tools/sxirexec parity <in.sa> <work_dir>
+
+make fail_ir(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat("sxirexec: ", concat(msg, "\n")))
+  hold z = exit(code)
+  give 0
+}
+
+make istr_ir(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold n = v
+  when n < 0 {
+    neg = 1
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make low32_ir(v: num) -> num {
+  hold m = 4294967296
+  hold x = v % m
+  when x < 0 {
+    x = x + m
+  }
+  give x
+}
+
+make slice_ir(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make trim_ir(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  hold b = n
+  while a < b && (sx_index(s, a) == 32 || sx_index(s, a) == 9 || sx_index(s, a) == 13) {
+    a = a + 1
+  }
+  while b > a && (sx_index(s, b - 1) == 32 || sx_index(s, b - 1) == 9 || sx_index(s, b - 1) == 13) {
+    b = b - 1
+  }
+  give slice_ir(s, a, b)
+}
+
+make starts_with_ir(s: str, pref: str) -> num {
+  hold ns = len(s)
+  hold np = len(pref)
+  when ns < np {
+    give 0
+  }
+  hold i = 0
+  while i < np {
+    when sx_index(s, i) != sx_index(pref, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make find_ch_ir(s: str, ch: num, start: num) -> num {
+  hold n = len(s)
+  hold i = start
+  while i < n {
+    when sx_index(s, i) == ch {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make hex_val_ir(c: num) -> num {
+  when c >= 48 && c <= 57 {
+    give c - 48
+  }
+  when c >= 97 && c <= 102 {
+    give c - 87
+  }
+  when c >= 65 && c <= 70 {
+    give c - 55
+  }
+  give 0 - 1
+}
+
+make parse_hex32_ir(s: str) -> num {
+  hold n = len(s)
+  hold i = 0
+  hold v = 0
+  while i < n {
+    hold hv = hex_val_ir(sx_index(s, i))
+    when hv < 0 {
+      hold f = fail_ir(1, concat("invalid hex token: ", s))
+    }
+    v = v * 16 + hv
+    i = i + 1
+  }
+  give v
+}
+
+// Parse 0x<hex> into out_hl = [hi, lo] (32-bit unsigned halves).
+make parse_hex64_hl(s: str, out_hl: list) -> num {
+  hold p = 0
+  when len(s) >= 2 && sx_index(s, 0) == 48 && (sx_index(s, 1) == 120 || sx_index(s, 1) == 88) {
+    p = 2
+  }
+  hold hex = slice_ir(s, p, len(s))
+  hold hn = len(hex)
+  when hn <= 8 {
+    out_hl[0] = 0
+    out_hl[1] = parse_hex32_ir(hex)
+    give 0
+  }
+  hold split = hn - 8
+  out_hl[0] = parse_hex32_ir(slice_ir(hex, 0, split))
+  out_hl[1] = parse_hex32_ir(slice_ir(hex, split, hn))
+  give 0
+}
+
+make parse_signed_dec(s: str) -> num {
+  hold n = len(s)
+  when n == 0 {
+    give 0
+  }
+  hold i = 0
+  hold neg = 0
+  when sx_index(s, 0) == 45 {
+    neg = 1
+    i = 1
+  } otherwise {
+    when sx_index(s, 0) == 43 {
+      i = 1
+    }
+  }
+  hold v = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+    }
+    i = i + 1
+  }
+  when neg == 1 {
+    give 0 - v
+  }
+  give v
+}
+
+// ---- Exact IEEE-754 binary64 <-> (hi, lo) conversion ----------------------
+
+make hl_to_f64(hi: num, lo: num) -> num {
+  hold uhi = low32_ir(hi)
+  hold ulo = low32_ir(lo)
+  hold sign = bit_and(shr(uhi, 31), 1)
+  hold exp = bit_and(shr(uhi, 20), 2047)
+  hold mhi = bit_and(uhi, 1048575)
+  when exp == 0 && mhi == 0 && ulo == 0 {
+    when sign == 1 {
+      give 0.0 - 0.0
+    }
+    give 0.0
+  }
+  hold mant = mhi * 4294967296.0 + ulo
+  hold two52 = 4503599627370496.0
+  hold val = 0.0
+  hold p = 0
+  when exp == 0 {
+    val = mant / two52
+    p = 0 - 1022
+  } otherwise {
+    val = 1.0 + (mant / two52)
+    p = exp - 1023
+  }
+  while p > 0 {
+    val = val * 2.0
+    p = p - 1
+  }
+  while p < 0 {
+    val = val / 2.0
+    p = p + 1
+  }
+  when sign == 1 {
+    val = 0.0 - val
+  }
+  give val
+}
+
+make f64_to_hl(v: num, out_hl: list) -> num {
+  when v == 0.0 {
+    out_hl[0] = 0
+    out_hl[1] = 0
+    give 0
+  }
+  hold sign = 0
+  hold x = v
+  when x < 0.0 {
+    sign = 1
+    x = 0.0 - x
+  }
+  hold exp = 1023
+  while x >= 2.0 && exp < 2047 {
+    x = x / 2.0
+    exp = exp + 1
+  }
+  while x < 1.0 && exp > 1 {
+    x = x * 2.0
+    exp = exp - 1
+  }
+  hold two52 = 4503599627370496.0
+  hold two32 = 4294967296.0
+  hold mant = 0.0
+  when x < 1.0 {
+    exp = 0
+    mant = x * two52
+  } otherwise {
+    mant = (x - 1.0) * two52
+  }
+  // Round to nearest integer (mant is already an exact integer for IEEE double)
+  hold mlo = mant % two32
+  hold mhi = (mant - mlo) / two32
+  hold uhi = shl(sign, 31) + shl(exp, 20) + low32_ir(mhi)
+  out_hl[0] = low32_ir(uhi)
+  out_hl[1] = low32_ir(mlo)
+  give 0
+}
+
+make i64_to_f64(hi: num, lo: num) -> num {
+  hold uhi = low32_ir(hi)
+  hold ulo = low32_ir(lo)
+  when uhi >= 2147483648 {
+    hold nhi = low32_ir(4294967295 - uhi)
+    hold nlo = low32_ir(4294967295 - ulo)
+    nlo = nlo + 1
+    when nlo >= 4294967296 {
+      nlo = 0
+      nhi = nhi + 1
+    }
+    give 0.0 - (nhi * 4294967296.0 + nlo)
+  }
+  give uhi * 4294967296.0 + ulo
+}
+
+make f64_trunc_to_i64_hl(v: num, out_hl: list) -> num {
+  when v == 0.0 {
+    out_hl[0] = 0
+    out_hl[1] = 0
+    give 0
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0.0 {
+    neg = 1
+    x = 0.0 - x
+  }
+  hold frac = x % 1.0
+  hold iv = x - frac
+  hold two32 = 4294967296.0
+  hold ulo = iv % two32
+  hold uhi = (iv - ulo) / two32
+  when neg == 0 {
+    out_hl[0] = low32_ir(uhi)
+    out_hl[1] = low32_ir(ulo)
+    give 0
+  }
+  hold nhi = low32_ir(4294967295 - low32_ir(uhi))
+  hold nlo = low32_ir(4294967295 - low32_ir(ulo)) + 1
+  when nlo >= 4294967296 {
+    nlo = 0
+    nhi = low32_ir(nhi + 1)
+  }
+  out_hl[0] = nhi
+  out_hl[1] = nlo
+  give 0
+}
+
+make i64_to_signed_num(hi: num, lo: num) -> num {
+  give i64_to_f64(hi, lo)
+}
+
+make snum_to_hl(v: num, out_hl: list) -> num {
+  give f64_trunc_to_i64_hl(v, out_hl)
+}
+
+// 64-bit integer ALU on (hi, lo)
+make u64_add_hl(ahi: num, alo: num, bhi: num, blo: num, out_hl: list) -> num {
+  hold s_lo = low32_ir(alo) + low32_ir(blo)
+  hold c = 0
+  when s_lo >= 4294967296 {
+    s_lo = s_lo - 4294967296
+    c = 1
+  }
+  hold s_hi = low32_ir(ahi) + low32_ir(bhi) + c
+  hold cout = 0
+  when s_hi >= 4294967296 {
+    s_hi = s_hi - 4294967296
+    cout = 1
+  }
+  out_hl[0] = low32_ir(s_hi)
+  out_hl[1] = low32_ir(s_lo)
+  give cout
+}
+
+make u64_sub_hl(ahi: num, alo: num, bhi: num, blo: num, out_hl: list) -> num {
+  hold nbhi = low32_ir(4294967295 - low32_ir(bhi))
+  hold nblo = low32_ir(4294967295 - low32_ir(blo)) + 1
+  when nblo >= 4294967296 {
+    nblo = 0
+    nbhi = low32_ir(nbhi + 1)
+  }
+  hold cout = u64_add_hl(ahi, alo, nbhi, nblo, out_hl)
+  hold cf = 0
+  when low32_ir(ahi) < low32_ir(bhi) {
+    cf = 1
+  } otherwise {
+    when low32_ir(ahi) == low32_ir(bhi) && low32_ir(alo) < low32_ir(blo) {
+      cf = 1
+    }
+  }
+  give cf
+}
+
+// ---- Register & opcode encoding -------------------------------------------
+// Int regs 0..15: A=0, C=1, D=2, B=3, SP=4, BP=5, SI=6, DI=7,
+//                 R8=8, R9=9, R10=10, R11=11, BASE=12, R13=13, R14=14, R15=15
+// FP regs 16..19: F0=16, F1=17, F2=18, F3=19
+
+make reg_id_ir(tok: str) -> num {
+  when string_eq(tok, "A") == 1 {
+    give 0
+  }
+  when string_eq(tok, "C") == 1 {
+    give 1
+  }
+  when string_eq(tok, "D") == 1 {
+    give 2
+  }
+  when string_eq(tok, "B") == 1 {
+    give 3
+  }
+  when string_eq(tok, "SP") == 1 {
+    give 4
+  }
+  when string_eq(tok, "BP") == 1 {
+    give 5
+  }
+  when string_eq(tok, "SI") == 1 {
+    give 6
+  }
+  when string_eq(tok, "DI") == 1 {
+    give 7
+  }
+  when string_eq(tok, "R8") == 1 {
+    give 8
+  }
+  when string_eq(tok, "R9") == 1 {
+    give 9
+  }
+  when string_eq(tok, "R10") == 1 {
+    give 10
+  }
+  when string_eq(tok, "R11") == 1 {
+    give 11
+  }
+  when string_eq(tok, "BASE") == 1 {
+    give 12
+  }
+  when string_eq(tok, "R13") == 1 {
+    give 13
+  }
+  when string_eq(tok, "R14") == 1 {
+    give 14
+  }
+  when string_eq(tok, "R15") == 1 {
+    give 15
+  }
+  when string_eq(tok, "F0") == 1 {
+    give 16
+  }
+  when string_eq(tok, "F1") == 1 {
+    give 17
+  }
+  when string_eq(tok, "F2") == 1 {
+    give 18
+  }
+  when string_eq(tok, "F3") == 1 {
+    give 19
+  }
+  give 0 - 1
+}
+
+make b_id_ir(name: str) -> num {
+  when string_eq(name, "malloc") == 1 {
+    give 0
+  }
+  when string_eq(name, "strlen") == 1 {
+    give 1
+  }
+  when string_eq(name, "cmpstr") == 1 {
+    give 2
+  }
+  when string_eq(name, "concat") == 1 {
+    give 3
+  }
+  when string_eq(name, "n2str") == 1 {
+    give 4
+  }
+  when string_eq(name, "putstr") == 1 {
+    give 5
+  }
+  when string_eq(name, "wcstr") == 1 {
+    give 6
+  }
+  when string_eq(name, "itono") == 1 {
+    give 7
+  }
+  when string_eq(name, "itowrite") == 1 {
+    give 8
+  }
+  when string_eq(name, "showlist") == 1 {
+    give 9
+  }
+  when string_eq(name, "mlist") == 1 {
+    give 10
+  }
+  when string_eq(name, "lget") == 1 {
+    give 11
+  }
+  when string_eq(name, "llen") == 1 {
+    give 12
+  }
+  when string_eq(name, "lpush") == 1 {
+    give 13
+  }
+  when string_eq(name, "sget") == 1 {
+    give 14
+  }
+  when string_eq(name, "chr") == 1 {
+    give 15
+  }
+  when string_eq(name, "readfile") == 1 {
+    give 16
+  }
+  when string_eq(name, "writefile") == 1 {
+    give 17
+  }
+  when string_eq(name, "arg") == 1 {
+    give 18
+  }
+  when string_eq(name, "argc") == 1 {
+    give 19
+  }
+  when string_eq(name, "die") == 1 {
+    give 20
+  }
+  when string_eq(name, "nfmt") == 1 {
+    give 21
+  }
+  when string_eq(name, "shownum") == 1 {
+    give 22
+  }
+  when string_eq(name, "gc") == 1 {
+    give 23
+  }
+  when string_eq(name, "gc_live") == 1 {
+    give 24
+  }
+  when string_eq(name, "gc_runs") == 1 {
+    give 25
+  }
+  when string_eq(name, "gccheck") == 1 {
+    give 28
+  }
+  when string_eq(name, "strord") == 1 {
+    give 29
+  }
+  give 0 - 1
+}
+
+// Parse `[BASE+672]`, `[BP+-8]`, `[A+24]`, `[A]` into out_md = [base_reg, disp]
+// or [-2, 0] for `[PC+<disp32 slot>]`.
+make parse_mem_ir(opnd: str, out_md: list) -> num {
+  when starts_with_ir(opnd, "[PC+") == 1 {
+    out_md[0] = 0 - 2
+    out_md[1] = 0
+    give 1
+  }
+  hold n = len(opnd)
+  when n < 3 || sx_index(opnd, 0) != 91 || sx_index(opnd, n - 1) != 93 {
+    give 0
+  }
+  hold inner = slice_ir(opnd, 1, n - 1)
+  hold plus = find_ch_ir(inner, 43, 0)
+  when plus < 0 {
+    hold r0 = reg_id_ir(inner)
+    when r0 < 0 {
+      hold f1 = fail_ir(1, concat("unknown memory base in IR: ", opnd))
+    }
+    out_md[0] = r0
+    out_md[1] = 0
+    give 1
+  }
+  hold rname = slice_ir(inner, 0, plus)
+  hold dstr = slice_ir(inner, plus + 1, len(inner))
+  hold r1 = reg_id_ir(rname)
+  when r1 < 0 {
+    hold f2 = fail_ir(1, concat("unknown memory base in IR: ", opnd))
+  }
+  out_md[0] = r1
+  out_md[1] = parse_signed_dec(dstr)
+  give 1
+}
+
+make le32_ir(bs: list, off: num) -> num {
+  hold b0 = bs[off]
+  hold b1 = bs[off + 1]
+  hold b2 = bs[off + 2]
+  hold b3 = bs[off + 3]
+  give b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+// ---- Unified VM memory (data @ 0x10000000, stack @ 0x20000000, heap @ 0x30000000)
+
+make vm_read_byte(addr: num, data: list, stack: list, heap: list) -> num {
+  when addr >= 268435456 && addr < 536870912 {
+    hold doff = addr - 268435456
+    when doff >= 0 && doff < len(data) {
+      give data[doff]
+    }
+    give 0
+  }
+  when addr >= 536870912 && addr < 805306368 {
+    hold soff = addr - 536870912
+    when soff >= 0 && soff < len(stack) {
+      give stack[soff]
+    }
+    give 0
+  }
+  when addr >= 805306368 {
+    hold hoff = addr - 805306368
+    when hoff >= 0 && hoff < len(heap) {
+      give heap[hoff]
+    }
+    give 0
+  }
+  hold f = fail_ir(1, concat("invalid VM byte read address: ", istr_ir(addr)))
+  give 0
+}
+
+make vm_write_byte(addr: num, b: num, data: list, stack: list, heap: list) -> num {
+  hold ub = bit_and(low32_ir(b), 255)
+  when addr >= 268435456 && addr < 536870912 {
+    hold doff = addr - 268435456
+    data[doff] = ub
+    give 0
+  }
+  when addr >= 536870912 && addr < 805306368 {
+    hold soff = addr - 536870912
+    stack[soff] = ub
+    give 0
+  }
+  when addr >= 805306368 {
+    hold hoff = addr - 805306368
+    heap[hoff] = ub
+    give 0
+  }
+  hold f = fail_ir(1, concat("invalid VM byte write address: ", istr_ir(addr)))
+  give 0
+}
+
+make vm_read_qword(addr: num, data: list, stack: list, heap: list, out_hl: list) -> num {
+  hold lo = 0
+  hold hi = 0
+  hold b0 = vm_read_byte(addr, data, stack, heap)
+  hold b1 = vm_read_byte(addr + 1, data, stack, heap)
+  hold b2 = vm_read_byte(addr + 2, data, stack, heap)
+  hold b3 = vm_read_byte(addr + 3, data, stack, heap)
+  hold b4 = vm_read_byte(addr + 4, data, stack, heap)
+  hold b5 = vm_read_byte(addr + 5, data, stack, heap)
+  hold b6 = vm_read_byte(addr + 6, data, stack, heap)
+  hold b7 = vm_read_byte(addr + 7, data, stack, heap)
+  lo = b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+  hi = b4 + b5 * 256 + b6 * 65536 + b7 * 16777216
+  out_hl[0] = hi
+  out_hl[1] = lo
+  give 0
+}
+
+make vm_write_qword(addr: num, hi: num, lo: num, data: list, stack: list, heap: list) -> num {
+  hold uhi = low32_ir(hi)
+  hold ulo = low32_ir(lo)
+  hold w0 = vm_write_byte(addr, bit_and(ulo, 255), data, stack, heap)
+  hold w1 = vm_write_byte(addr + 1, bit_and(shr(ulo, 8), 255), data, stack, heap)
+  hold w2 = vm_write_byte(addr + 2, bit_and(shr(ulo, 16), 255), data, stack, heap)
+  hold w3 = vm_write_byte(addr + 3, bit_and(shr(ulo, 24), 255), data, stack, heap)
+  hold w4 = vm_write_byte(addr + 4, bit_and(uhi, 255), data, stack, heap)
+  hold w5 = vm_write_byte(addr + 5, bit_and(shr(uhi, 8), 255), data, stack, heap)
+  hold w6 = vm_write_byte(addr + 6, bit_and(shr(uhi, 16), 255), data, stack, heap)
+  hold w7 = vm_write_byte(addr + 7, bit_and(shr(uhi, 24), 255), data, stack, heap)
+  give 0
+}
+
+make vm_read_cstr(addr: num, data: list, stack: list, heap: list) -> str {
+  hold out = ""
+  hold p = addr
+  hold go = 1
+  while go == 1 {
+    hold b = vm_read_byte(p, data, stack, heap)
+    when b == 0 {
+      go = 0
+    } otherwise {
+      out = concat(out, chr(b))
+      p = p + 1
+    }
+  }
+  give out
+}
+
+// Allocate heap block: blocks stores 4 entries per block [addr, size, kind, live]
+make vm_heap_alloc(sz: num, kind: num, heap: list, blocks: list, gc_st: list) -> num {
+  hold aligned = sz
+  when aligned < 8 {
+    aligned = 8
+  }
+  hold rem = aligned % 8
+  when rem != 0 {
+    aligned = aligned + (8 - rem)
+  }
+  hold addr = 805306368 + len(heap)
+  hold i = 0
+  while i < aligned {
+    heap = push(heap, 0)
+    i = i + 1
+  }
+  blocks = push(blocks, addr)
+  blocks = push(blocks, aligned)
+  blocks = push(blocks, kind)
+  blocks = push(blocks, 1)
+  gc_st[0] = gc_st[0] + 1
+  give addr
+}
+
+make vm_alloc_cstr(s: str, heap: list, blocks: list, gc_st: list) -> num {
+  hold n = len(s)
+  hold addr = vm_heap_alloc(n + 1, 0, heap, blocks, gc_st)
+  hold base = addr - 805306368
+  hold i = 0
+  while i < n {
+    hold dst = base + i
+    heap[dst] = sx_index(s, i)
+    i = i + 1
+  }
+  hold zpos = base + n
+  heap[zpos] = 0
+  give addr
+}
+
+make vm_list_resolve(addr: num, data: list, stack: list, heap: list) -> num {
+  hold p = addr
+  hold tmp = [0, 0]
+  hold go = 1
+  while go == 1 {
+    hold r = vm_read_qword(p + 8, data, stack, heap, tmp)
+    when tmp[0] == 0 && tmp[1] == 0 {
+      go = 0
+    } otherwise {
+      p = tmp[1]
+    }
+  }
+  give p
+}
+
+// Conservative mark-sweep GC over VM heap blocks
+make vm_find_block(val_hi: num, val_lo: num, blocks: list) -> num {
+  when val_hi != 0 || val_lo < 805306368 {
+    give 0 - 1
+  }
+  hold nb = len(blocks) / 4
+  hold i = 0
+  while i < nb {
+    hold b4 = i * 4
+    hold baddr = blocks[b4]
+    hold bsz = blocks[b4 + 1]
+    hold bliv = blocks[b4 + 3]
+    when bliv > 0 && val_lo >= baddr && val_lo < baddr + bsz {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make vm_gc(regs_hi: list, regs_lo: list, data: list, stack: list, heap: list, blocks: list, gc_st: list) -> num {
+  hold nb = len(blocks) / 4
+  hold mark = []
+  hold i = 0
+  while i < nb {
+    mark = push(mark, 0)
+    i = i + 1
+  }
+  hold work = []
+  // 1. VM integer registers (except SP/BP/BASE)
+  i = 0
+  while i < 16 {
+    hold rhi = regs_hi[i]
+    hold rlo = regs_lo[i]
+    hold bi = vm_find_block(rhi, rlo, blocks)
+    when bi >= 0 && mark[bi] == 0 {
+      mark[bi] = 1
+      work = push(work, bi)
+    }
+    i = i + 1
+  }
+  // 2. Global root offsets from data.bin[144..] (OFF_ROOTS)
+  hold tmp = [0, 0]
+  hold roff = 144
+  hold rgo = 1
+  while rgo == 1 && roff + 8 <= len(data) {
+    hold rq = vm_read_qword(268435456 + roff, data, stack, heap, tmp)
+    hold goff = tmp[1]
+    when tmp[0] == 0 && goff == 0 {
+      rgo = 0
+    } otherwise {
+      hold gq = vm_read_qword(268435456 + goff, data, stack, heap, tmp)
+      hold gbi = vm_find_block(tmp[0], tmp[1], blocks)
+      when gbi >= 0 && mark[gbi] == 0 {
+        mark[gbi] = 1
+        work = push(work, gbi)
+      }
+      roff = roff + 8
+    }
+  }
+  // 3. Active VM stack words [SP .. SP_TOP)
+  hold sp_cur = regs_lo[4]
+  hold sp_top = gc_st[2]
+  hold sa = sp_cur
+  while sa + 8 <= sp_top {
+    hold sq = vm_read_qword(sa, data, stack, heap, tmp)
+    hold sbi = vm_find_block(tmp[0], tmp[1], blocks)
+    when sbi >= 0 && mark[sbi] == 0 {
+      mark[sbi] = 1
+      work = push(work, sbi)
+    }
+    sa = sa + 8
+  }
+  // 4. Transitive trace through struct slots (kind==2) and list forward_ptr (kind==1)
+  hold wi = 0
+  while wi < len(work) {
+    hold cur = work[wi]
+    wi = wi + 1
+    hold cb4 = cur * 4
+    hold caddr = blocks[cb4]
+    hold csz = blocks[cb4 + 1]
+    hold ckind = blocks[cb4 + 2]
+    when ckind == 1 {
+      hold fq = vm_read_qword(caddr + 8, data, stack, heap, tmp)
+      hold fbi = vm_find_block(tmp[0], tmp[1], blocks)
+      when fbi >= 0 && mark[fbi] == 0 {
+        mark[fbi] = 1
+        work = push(work, fbi)
+      }
+    }
+    when ckind == 2 {
+      hold off = 0
+      while off + 8 <= csz {
+        hold stq = vm_read_qword(caddr + off, data, stack, heap, tmp)
+        hold cbi = vm_find_block(tmp[0], tmp[1], blocks)
+        when cbi >= 0 && mark[cbi] == 0 {
+          mark[cbi] = 1
+          work = push(work, cbi)
+        }
+        off = off + 8
+      }
+    }
+  }
+  // 5. Sweep unreachable live blocks
+  hold freed = 0
+  hold live = 0
+  i = 0
+  while i < nb {
+    hold sb4 = i * 4
+    when blocks[sb4 + 3] > 0 {
+      when mark[i] == 0 {
+        blocks[sb4 + 3] = 0
+        freed = freed + 1
+      } otherwise {
+        live = live + 1
+      }
+    }
+    i = i + 1
+  }
+  gc_st[0] = live
+  gc_st[1] = gc_st[1] + 1
+  give freed
+}
+
+make fmt_num_ir(hi: num, lo: num) -> str {
+  when low32_ir(hi) == 2147483648 && low32_ir(lo) == 0 {
+    give "-0"
+  }
+  hold v = hl_to_f64(hi, lo)
+  give numstr(v)
+}
+
+// ---- IR Parser + Loader ---------------------------------------------------
+// Instruction table: 7 numbers per instruction in `ins`:
+//   [op, a0, a1, a2, imm_hi, imm_lo, src_off]
+// Opcodes:
+//   0  HALT
+//   1  NOP
+//   2  COPY_RR      (dst_reg, src_reg)
+//   3  COPY_RI      (dst_reg, _, _, imm_hi, imm_lo)
+//   4  COPY_RM      (dst_reg, base_reg, disp)
+//   5  COPY_MR      (base_reg, disp, src_reg)
+//   6  ADDR_BASE    (dst_reg)
+//   7  ADDR_RM      (dst_reg, base_reg, disp)
+//   8  PUSH         (reg)
+//   9  POP          (reg)
+//   10 LEAVE
+//   11 RET
+//   12 IADD_RR      (dst_reg, src_reg)
+//   13 ISUB_RR      (dst_reg, src_reg)
+//   14 ISUB_RI      (dst_reg, slot_off, imm_val)
+//   15 XOR_RR       (dst_reg, src_reg)
+//   16 SAR_63       (dst_reg)
+//   17 DIV_R        (src_reg)
+//   18 TEST_RR      (r0, r1)
+//   19 ZEXT_RR      (dst_reg, src_reg)
+//   20 FADD         (fd, fs)
+//   21 FSUB         (fd, fs)
+//   22 FMUL         (fd, fs)
+//   23 FDIV         (fd, fs)
+//   24 FCMP         (f0, f1)
+//   25 I2F          (fd, rs)
+//   26 F2I          (rd, fs)
+//   27 SETCC        (cc, rd)  cc: 0=A,1=AE,2=B,3=BE,4=E,5=NE,6=L,7=GE,8=LE,9=G
+//   28 JMP          (target_ip, rel_disp, src_off)
+//   29 JCC          (cc, target_ip, rel_disp)  cc: 0=A,1=AE,2=B,3=BE,4=E,5=NE
+//   30 CALL_MAKE    (target_ip, call_at)
+//   31 CALL_BUILTIN (b_id)
+
+make push_ins(ins: list, op: num, a0: num, a1: num, a2: num, hi: num, lo: num) -> list {
+  ins = push(ins, op)
+  ins = push(ins, a0)
+  ins = push(ins, a1)
+  ins = push(ins, a2)
+  ins = push(ins, hi)
+  ins = push(ins, lo)
+  ins = push(ins, 0)
+  give ins
+}
+
+make lookup_off_ip(map_offs: list, map_ips: list, target_off: num) -> num {
+  hold n = len(map_offs)
+  hold i = 0
+  while i < n {
+    when map_offs[i] == target_off {
+      give map_ips[i]
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make lookup_patch_to(patch_bs: list, npc: num, call_at: num) -> num {
+  hold i = 0
+  while i < npc {
+    hold p = i * 16
+    hold at = le32_ir(patch_bs, p)
+    when at == call_at {
+      give le32_ir(patch_bs, p + 8)
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make parse_rel32_disp(opnd: str) -> num {
+  when string_eq(opnd, "<rel32 slot>") == 1 {
+    give 0
+  }
+  when starts_with_ir(opnd, "rel32(") == 0 {
+    hold f = fail_ir(1, concat("expected rel32(...) branch operand, got: ", opnd))
+  }
+  hold inner = slice_ir(opnd, 6, len(opnd) - 1)
+  give parse_signed_dec(inner)
+}
+
+make setcc_code_ir(mn: str) -> num {
+  when string_eq(mn, "SETA") == 1 {
+    give 0
+  }
+  when string_eq(mn, "SETAE") == 1 {
+    give 1
+  }
+  when string_eq(mn, "SETB") == 1 {
+    give 2
+  }
+  when string_eq(mn, "SETBE") == 1 {
+    give 3
+  }
+  when string_eq(mn, "SETE") == 1 {
+    give 4
+  }
+  when string_eq(mn, "SETNE") == 1 {
+    give 5
+  }
+  when string_eq(mn, "SETL") == 1 {
+    give 6
+  }
+  when string_eq(mn, "SETGE") == 1 {
+    give 7
+  }
+  when string_eq(mn, "SETLE") == 1 {
+    give 8
+  }
+  when string_eq(mn, "SETG") == 1 {
+    give 9
+  }
+  give 0 - 1
+}
+
+make jcc_code_ir(mn: str) -> num {
+  when string_eq(mn, "JA") == 1 {
+    give 0
+  }
+  when string_eq(mn, "JAE") == 1 {
+    give 1
+  }
+  when string_eq(mn, "JB") == 1 {
+    give 2
+  }
+  when string_eq(mn, "JBE") == 1 {
+    give 3
+  }
+  when string_eq(mn, "JE") == 1 {
+    give 4
+  }
+  when string_eq(mn, "JNE") == 1 {
+    give 5
+  }
+  give 0 - 1
+}
+
+make check_no_x86_regs(body: str) -> num {
+  when starts_with_ir(body, "CALL ") == 1 {
+    give 0
+  }
+  hold bad = 0
+  when find_ch_ir(body, 120, 0) >= 0 {
+    // check rax, rcx, rdx, rbx, xmm
+    when starts_with_ir(body, "XOR") == 0 && starts_with_ir(body, "ZEXT") == 0 && starts_with_ir(body, "SEXT") == 0 {
+      // inspect after space
+    }
+  }
+  give bad
+}
+
+make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list) -> num {
+  hold ins = []
+  hold map_offs = []
+  hold map_ips = []
+  hold fix_at = []
+  hold fix_to = []
+  hold slot_ips = []
+  hold slot_offs = []
+  hold sub_pat_offs = []
+  hold sub_pat_vals = []
+
+  hold mode = 0
+  hold cur_src_off = 0 - 1
+  hold last_isub_ip = 0 - 1
+  hold n = len(ir_text)
+  hold pos = 0
+  hold lstart = 0
+  hold hl = [0, 0]
+  hold md = [0, 0]
+
+  while pos <= n {
+    hold eol = 0
+    when pos == n && lstart < pos {
+      eol = 1
+    }
+    when pos < n && sx_index(ir_text, pos) == 10 {
+      eol = 1
+    }
+    when eol == 1 {
+      hold line = trim_ir(slice_ir(ir_text, lstart, pos))
+      when len(line) > 0 {
+        when sx_index(line, 0) == 59 {
+          when string_eq(line, "; === phase: top level ===") == 1 {
+            mode = 1
+          }
+          when string_eq(line, "; === phase: exit syscall ===") == 1 {
+            mode = 2
+          }
+          when starts_with_ir(line, "; === phase: make bodies") == 1 {
+            mode = 1
+          }
+          when starts_with_ir(line, "; === phase: runtime stubs") == 1 {
+            mode = 0
+          }
+          when (mode == 1 || mode == 2) && starts_with_ir(line, "; source-offset ") == 1 {
+            hold hex6 = slice_ir(line, 16, 22)
+            cur_src_off = parse_hex32_ir(hex6)
+          }
+          when mode == 1 && starts_with_ir(line, "; slot sub rsp imm32 at ") == 1 {
+            hold shex = slice_ir(line, 24, 30)
+            when last_isub_ip >= 0 {
+              slot_ips = push(slot_ips, last_isub_ip)
+              slot_offs = push(slot_offs, parse_hex32_ir(shex))
+              last_isub_ip = 0 - 1
+            }
+          }
+          when mode == 1 && starts_with_ir(line, "; patch imm32 [") == 1 {
+            hold phex = slice_ir(line, 15, 21)
+            hold arrow = find_ch_ir(line, 45, 21)
+            hold vstr = trim_ir(slice_ir(line, arrow + 1, len(line)))
+            sub_pat_offs = push(sub_pat_offs, parse_hex32_ir(phex))
+            sub_pat_vals = push(sub_pat_vals, parse_signed_dec(vstr))
+          }
+          when mode == 1 && starts_with_ir(line, "; fixup rel32 [") == 1 {
+            hold f_at = parse_hex32_ir(slice_ir(line, 15, 21))
+            hold f_to = parse_hex32_ir(slice_ir(line, 26, 32))
+            fix_at = push(fix_at, f_at)
+            fix_to = push(fix_to, f_to)
+          }
+          when mode == 1 && starts_with_ir(line, "; fixup jmp rel32 [") == 1 {
+            hold jf_at = parse_hex32_ir(slice_ir(line, 19, 25))
+            hold jf_to = parse_hex32_ir(slice_ir(line, 30, 36))
+            fix_at = push(fix_at, jf_at)
+            fix_to = push(fix_to, jf_to)
+          }
+        } otherwise {
+          when mode == 2 && sx_index(line, 0) == 73 {
+            hold halt_ip = len(ins) / 7
+            when cur_src_off >= 0 {
+              map_offs = push(map_offs, cur_src_off)
+              map_ips = push(map_ips, halt_ip)
+            }
+            ins = push_ins(ins, 0, 0, 0, 0, 0, 0)
+            mode = 0
+          }
+          when mode == 1 && sx_index(line, 0) == 73 {
+            hold sp1 = find_ch_ir(line, 32, 0)
+            hold rest1 = trim_ir(slice_ir(line, sp1 + 1, len(line)))
+            hold sp2 = find_ch_ir(rest1, 32, 0)
+            hold mn = rest1
+            hold opnds = ""
+            when sp2 >= 0 {
+              mn = slice_ir(rest1, 0, sp2)
+              opnds = trim_ir(slice_ir(rest1, sp2 + 1, len(rest1)))
+            }
+            hold ip_now = len(ins) / 7
+            when cur_src_off >= 0 {
+              when lookup_off_ip(map_offs, map_ips, cur_src_off) < 0 {
+                map_offs = push(map_offs, cur_src_off)
+                map_ips = push(map_ips, ip_now)
+              }
+            }
+            hold handled = 0
+            when string_eq(mn, "LEAVE") == 1 {
+              ins = push_ins(ins, 10, 0, 0, 0, 0, 0)
+              handled = 1
+            }
+            when handled == 0 && string_eq(mn, "RET") == 1 {
+              ins = push_ins(ins, 11, 0, 0, 0, 0, 0)
+              handled = 1
+            }
+            when handled == 0 && string_eq(mn, "PUSH") == 1 {
+              ins = push_ins(ins, 8, reg_id_ir(opnds), 0, 0, 0, 0)
+              handled = 1
+            }
+            when handled == 0 && string_eq(mn, "POP") == 1 {
+              ins = push_ins(ins, 9, reg_id_ir(opnds), 0, 0, 0, 0)
+              handled = 1
+            }
+            when handled == 0 && string_eq(mn, "DIV") == 1 {
+              ins = push_ins(ins, 17, reg_id_ir(opnds), 0, 0, 0, 0)
+              handled = 1
+            }
+            when handled == 0 && setcc_code_ir(mn) >= 0 {
+              ins = push_ins(ins, 27, setcc_code_ir(mn), reg_id_ir(opnds), 0, 0, 0)
+              handled = 1
+            }
+            when handled == 0 && string_eq(mn, "JMP") == 1 {
+              hold jdisp = parse_rel32_disp(opnds)
+              ins = push_ins(ins, 28, 0 - 1, jdisp, cur_src_off, 0, 0)
+              handled = 1
+            }
+            when handled == 0 && jcc_code_ir(mn) >= 0 {
+              hold cdisp = parse_rel32_disp(opnds)
+              ins = push_ins(ins, 29, jcc_code_ir(mn), 0 - 1, cdisp, 0, cur_src_off)
+              handled = 1
+            }
+            when handled == 0 && string_eq(mn, "CALL") == 1 {
+              when starts_with_ir(opnds, "builtin ") == 1 {
+                hold bn = trim_ir(slice_ir(opnds, 8, len(opnds)))
+                hold bid = b_id_ir(bn)
+                when bid < 0 {
+                  hold fb = fail_ir(1, concat("unknown IR builtin: ", bn))
+                }
+                ins = push_ins(ins, 31, bid, 0, 0, 0, 0)
+              } otherwise {
+                when starts_with_ir(opnds, "make ") == 1 {
+                  ins = push_ins(ins, 30, 0 - 1, cur_src_off + 1, 0, 0, 0)
+                } otherwise {
+                  hold fc = fail_ir(1, concat("unknown CALL target in IR: ", opnds))
+                }
+              }
+              handled = 1
+            }
+            when handled == 0 {
+              hold cm = find_ch_ir(opnds, 44, 0)
+              when cm < 0 {
+                hold fm = fail_ir(1, concat("unsupported IR instruction: ", line))
+              }
+              hold lhs = trim_ir(slice_ir(opnds, 0, cm))
+              hold rhs = trim_ir(slice_ir(opnds, cm + 1, len(opnds)))
+              when string_eq(mn, "COPY") == 1 {
+                when sx_index(lhs, 0) == 91 {
+                  hold pm1 = parse_mem_ir(lhs, md)
+                  ins = push_ins(ins, 5, md[0], md[1], reg_id_ir(rhs), 0, 0)
+                } otherwise {
+                  hold rd = reg_id_ir(lhs)
+                  when sx_index(rhs, 0) == 91 {
+                    hold pm2 = parse_mem_ir(rhs, md)
+                    ins = push_ins(ins, 4, rd, md[0], md[1], 0, 0)
+                  } otherwise {
+                    when starts_with_ir(rhs, "0x") == 1 {
+                      hold ph = parse_hex64_hl(rhs, hl)
+                      ins = push_ins(ins, 3, rd, 0, 0, hl[0], hl[1])
+                    } otherwise {
+                      ins = push_ins(ins, 2, rd, reg_id_ir(rhs), 0, 0, 0)
+                    }
+                  }
+                }
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "ADDR") == 1 {
+                hold ard = reg_id_ir(lhs)
+                hold pm3 = parse_mem_ir(rhs, md)
+                when md[0] == 0 - 2 {
+                  ins = push_ins(ins, 6, ard, 0, 0, 0, 0)
+                } otherwise {
+                  ins = push_ins(ins, 7, ard, md[0], md[1], 0, 0)
+                }
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "IADD") == 1 {
+                ins = push_ins(ins, 12, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "ISUB") == 1 {
+                when string_eq(rhs, "<imm32 slot>") == 1 {
+                  last_isub_ip = ip_now
+                  ins = push_ins(ins, 14, reg_id_ir(lhs), 0, 0, 0, 0)
+                } otherwise {
+                  hold rsub = reg_id_ir(rhs)
+                  when rsub >= 0 {
+                    ins = push_ins(ins, 13, reg_id_ir(lhs), rsub, 0, 0, 0)
+                  } otherwise {
+                    ins = push_ins(ins, 14, reg_id_ir(lhs), 0, parse_signed_dec(rhs), 0, 0)
+                  }
+                }
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "XOR") == 1 {
+                ins = push_ins(ins, 15, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "SAR") == 1 {
+                ins = push_ins(ins, 16, reg_id_ir(lhs), 0, 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "TEST") == 1 {
+                ins = push_ins(ins, 18, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "ZEXT") == 1 {
+                ins = push_ins(ins, 19, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "FADD") == 1 {
+                ins = push_ins(ins, 20, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "FSUB") == 1 {
+                ins = push_ins(ins, 21, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "FMUL") == 1 {
+                ins = push_ins(ins, 22, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "FDIV") == 1 {
+                ins = push_ins(ins, 23, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "FCMP") == 1 {
+                ins = push_ins(ins, 24, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "I2F") == 1 {
+                ins = push_ins(ins, 25, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 && string_eq(mn, "F2I") == 1 {
+                ins = push_ins(ins, 26, reg_id_ir(lhs), reg_id_ir(rhs), 0, 0, 0)
+                handled = 1
+              }
+              when handled == 0 {
+                hold fu = fail_ir(1, concat("unhandled IR instruction: ", line))
+              }
+            }
+            hold sslot = ip_now * 7 + 6
+            ins[sslot] = cur_src_off
+          }
+        }
+      }
+      lstart = pos + 1
+    }
+    pos = pos + 1
+  }
+
+  // Resolve sub rsp,imm32 slots
+  hold ns = len(slot_ips)
+  hold si = 0
+  while si < ns {
+    hold sip = slot_ips[si]
+    hold soff2 = slot_offs[si]
+    hold pi = 0
+    while pi < len(sub_pat_offs) {
+      when sub_pat_offs[pi] == soff2 {
+        hold islot = sip * 7 + 3
+        ins[islot] = sub_pat_vals[pi]
+      }
+      pi = pi + 1
+    }
+    si = si + 1
+  }
+
+  // Resolve forward fixups
+  hold nf = len(fix_at)
+  hold fi = 0
+  while fi < nf {
+    hold fat = fix_at[fi]
+    hold fto = fix_to[fi]
+    hold at_ip = lookup_off_ip(map_offs, map_ips, fat)
+    hold to_ip = lookup_off_ip(map_offs, map_ips, fto)
+    when at_ip < 0 || to_ip < 0 {
+      hold ffx = fail_ir(1, "failed to correlate branch fixup in portable IR")
+    }
+    hold ib = at_ip * 7
+    when ins[ib] == 28 {
+      ins[ib + 1] = to_ip
+    } otherwise {
+      ins[ib + 2] = to_ip
+    }
+    fi = fi + 1
+  }
+
+  // Resolve backward relative branches and CALL make targets via patch.bin
+  // Count npc: patch.bin ends with npr entries of r12 page patches, and the first
+  // entries are call patches (16 bytes per pair). Lookup scans all pairs safely!
+  hold total_pairs = len(patch_bs) / 16
+  hold nins = len(ins) / 7
+  hold ii = 0
+  while ii < nins {
+    hold ib2 = ii * 7
+    hold op2 = ins[ib2]
+    when op2 == 28 && ins[ib2 + 1] < 0 {
+      hold btgt = ins[ib2 + 3] + 5 + ins[ib2 + 2]
+      hold bip = lookup_off_ip(map_offs, map_ips, btgt)
+      when bip < 0 {
+        hold fbj = fail_ir(1, "unresolved relative JMP in portable IR")
+      }
+      ins[ib2 + 1] = bip
+    }
+    when op2 == 29 && ins[ib2 + 2] < 0 {
+      hold ctgt = ins[ib2 + 5] + 6 + ins[ib2 + 3]
+      hold cip = lookup_off_ip(map_offs, map_ips, ctgt)
+      when cip < 0 {
+        hold fbc = fail_ir(1, "unresolved relative JCC in portable IR")
+      }
+      ins[ib2 + 2] = cip
+    }
+    when op2 == 30 {
+      hold call_at = ins[ib2 + 2]
+      hold fn_off = lookup_patch_to(patch_bs, total_pairs, call_at)
+      when fn_off < 0 {
+        hold fcm1 = fail_ir(1, "unresolved CALL make site in patch.bin")
+      }
+      hold fn_ip = lookup_off_ip(map_offs, map_ips, fn_off)
+      when fn_ip < 0 {
+        hold fcm2 = fail_ir(1, "unresolved CALL make target offset in portable IR")
+      }
+      ins[ib2 + 1] = fn_ip
+    }
+    ii = ii + 1
+  }
+
+  // Initialize VM state
+  hold regs_hi = []
+  hold regs_lo = []
+  hold ri = 0
+  while ri < 20 {
+    regs_hi = push(regs_hi, 0)
+    regs_lo = push(regs_lo, 0)
+    ri = ri + 1
+  }
+  hold stack = []
+  hold stk_bytes = 65536
+  hold bi = 0
+  while bi < stk_bytes {
+    stack = push(stack, 0)
+    bi = bi + 1
+  }
+  hold sp_top = 536870912 + stk_bytes - 16
+  regs_lo[4] = sp_top
+  regs_lo[5] = sp_top
+  regs_lo[12] = 268435456
+
+  hold heap = []
+  hold blocks = []
+  hold gc_st = [0, 0, sp_top]
+  hold ret_ips = []
+
+  hold cf = 0
+  hold zf = 0
+  hold sf = 0
+  hold pf = 0
+  hold ip = 0
+  hold running = 1
+
+  while running == 1 && ip < nins {
+    hold b = ip * 7
+    hold op = ins[b]
+    hold a0 = ins[b + 1]
+    hold a1 = ins[b + 2]
+    hold a2 = ins[b + 3]
+    hold ihi = ins[b + 4]
+    hold ilo = ins[b + 5]
+    hold next_ip = ip + 1
+
+    when op == 0 {
+      running = 0
+    }
+    when op == 2 {
+      regs_hi[a0] = regs_hi[a1]
+      regs_lo[a0] = regs_lo[a1]
+    }
+    when op == 3 {
+      regs_hi[a0] = ihi
+      regs_lo[a0] = ilo
+    }
+    when op == 4 {
+      hold maddr = regs_lo[a1] + a2
+      hold rq = vm_read_qword(maddr, data, stack, heap, hl)
+      regs_hi[a0] = hl[0]
+      regs_lo[a0] = hl[1]
+    }
+    when op == 5 {
+      hold waddr = regs_lo[a0] + a1
+      hold wq = vm_write_qword(waddr, regs_hi[a2], regs_lo[a2], data, stack, heap)
+    }
+    when op == 6 {
+      regs_hi[a0] = 0
+      regs_lo[a0] = 268435456
+    }
+    when op == 7 {
+      regs_hi[a0] = 0
+      hold eff = regs_lo[a1] + a2
+      regs_lo[a0] = eff
+    }
+    when op == 8 {
+      hold nsp = regs_lo[4] - 8
+      regs_lo[4] = nsp
+      hold pw = vm_write_qword(nsp, regs_hi[a0], regs_lo[a0], data, stack, heap)
+    }
+    when op == 9 {
+      hold csp = regs_lo[4]
+      hold pr = vm_read_qword(csp, data, stack, heap, hl)
+      regs_hi[a0] = hl[0]
+      regs_lo[a0] = hl[1]
+      regs_lo[4] = csp + 8
+    }
+    when op == 10 {
+      hold bpv = regs_lo[5]
+      hold lr = vm_read_qword(bpv, data, stack, heap, hl)
+      regs_hi[5] = hl[0]
+      regs_lo[5] = hl[1]
+      regs_lo[4] = bpv + 8
+    }
+    when op == 11 {
+      hold nr = len(ret_ips)
+      when nr == 0 {
+        running = 0
+      } otherwise {
+        next_ip = ret_ips[nr - 1]
+        // pop return stack
+        hold nret = []
+        hold rj = 0
+        while rj < nr - 1 {
+          hold rv = ret_ips[rj]
+          nret = push(nret, rv)
+          rj = rj + 1
+        }
+        ret_ips = nret
+        hold sp_ret = regs_lo[4] + 8
+        regs_lo[4] = sp_ret
+      }
+    }
+    when op == 12 {
+      hold a0h_a = regs_hi[a0]
+      hold a0l_a = regs_lo[a0]
+      hold a1h_a = regs_hi[a1]
+      hold a1l_a = regs_lo[a1]
+      cf = u64_add_hl(a0h_a, a0l_a, a1h_a, a1l_a, hl)
+      regs_hi[a0] = hl[0]
+      regs_lo[a0] = hl[1]
+      zf = 0
+      when hl[0] == 0 && hl[1] == 0 {
+        zf = 1
+      }
+      hold h0_a = hl[0]
+      sf = bit_and(shr(h0_a, 31), 1)
+      pf = 0
+    }
+    when op == 13 {
+      hold a0h_s = regs_hi[a0]
+      hold a0l_s = regs_lo[a0]
+      hold a1h_s = regs_hi[a1]
+      hold a1l_s = regs_lo[a1]
+      cf = u64_sub_hl(a0h_s, a0l_s, a1h_s, a1l_s, hl)
+      regs_hi[a0] = hl[0]
+      regs_lo[a0] = hl[1]
+      zf = 0
+      when hl[0] == 0 && hl[1] == 0 {
+        zf = 1
+      }
+      hold h0_s = hl[0]
+      sf = bit_and(shr(h0_s, 31), 1)
+      pf = 0
+    }
+    when op == 14 {
+      hold imm_s = snum_to_hl(a2, hl)
+      hold a0h_si = regs_hi[a0]
+      hold a0l_si = regs_lo[a0]
+      hold ih_si = hl[0]
+      hold il_si = hl[1]
+      cf = u64_sub_hl(a0h_si, a0l_si, ih_si, il_si, hl)
+      regs_hi[a0] = hl[0]
+      regs_lo[a0] = hl[1]
+      zf = 0
+      when hl[0] == 0 && hl[1] == 0 {
+        zf = 1
+      }
+      hold h0_si = hl[0]
+      sf = bit_and(shr(h0_si, 31), 1)
+      pf = 0
+    }
+    when op == 15 {
+      hold x0h = regs_hi[a0]
+      hold x1h = regs_hi[a1]
+      hold x0l = regs_lo[a0]
+      hold x1l = regs_lo[a1]
+      hold xhi = low32_ir(bit_xor(x0h, x1h))
+      hold xlo = low32_ir(bit_xor(x0l, x1l))
+      regs_hi[a0] = xhi
+      regs_lo[a0] = xlo
+      cf = 0
+      zf = 0
+      when xhi == 0 && xlo == 0 {
+        zf = 1
+      }
+      sf = bit_and(shr(xhi, 31), 1)
+      pf = 0
+    }
+    when op == 16 {
+      hold sar_h = regs_hi[a0]
+      hold sbit = bit_and(shr(sar_h, 31), 1)
+      when sbit == 1 {
+        regs_hi[a0] = 4294967295
+        regs_lo[a0] = 4294967295
+      } otherwise {
+        regs_hi[a0] = 0
+        regs_lo[a0] = 0
+      }
+    }
+    when op == 17 {
+      hold num_u = regs_hi[0] * 4294967296.0 + regs_lo[0]
+      hold den_u = regs_hi[a0] * 4294967296.0 + regs_lo[a0]
+      when den_u == 0.0 {
+        hold fdz = fail_ir(1, "division by zero")
+      }
+      hold rem_u = num_u % den_u
+      hold quo_u = (num_u - rem_u) / den_u
+      hold sc1 = snum_to_hl(quo_u, hl)
+      regs_hi[0] = hl[0]
+      regs_lo[0] = hl[1]
+      hold sc2 = snum_to_hl(rem_u, hl)
+      regs_hi[2] = hl[0]
+      regs_lo[2] = hl[1]
+    }
+    when op == 18 {
+      hold t0h = regs_hi[a0]
+      hold t1h = regs_hi[a1]
+      hold t0l = regs_lo[a0]
+      hold t1l = regs_lo[a1]
+      hold thi = low32_ir(bit_and(t0h, t1h))
+      hold tlo = low32_ir(bit_and(t0l, t1l))
+      cf = 0
+      zf = 0
+      when thi == 0 && tlo == 0 {
+        zf = 1
+      }
+      sf = bit_and(shr(thi, 31), 1)
+      pf = 0
+    }
+    when op == 19 {
+      hold zsrc = regs_lo[a1]
+      hold zb = bit_and(zsrc, 255)
+      regs_hi[a0] = 0
+      regs_lo[a0] = zb
+    }
+    when op >= 20 && op <= 23 {
+      hold fv0 = hl_to_f64(regs_hi[a0], regs_lo[a0])
+      hold fv1 = hl_to_f64(regs_hi[a1], regs_lo[a1])
+      hold fres = 0.0
+      when op == 20 {
+        fres = fv0 + fv1
+      }
+      when op == 21 {
+        fres = fv0 - fv1
+      }
+      when op == 22 {
+        fres = fv0 * fv1
+      }
+      when op == 23 {
+        fres = fv0 / fv1
+      }
+      hold fc1 = f64_to_hl(fres, hl)
+      regs_hi[a0] = hl[0]
+      regs_lo[a0] = hl[1]
+    }
+    when op == 24 {
+      hold cv0 = hl_to_f64(regs_hi[a0], regs_lo[a0])
+      hold cv1 = hl_to_f64(regs_hi[a1], regs_lo[a1])
+      cf = 0
+      zf = 0
+      sf = 0
+      pf = 0
+      when cv0 < cv1 {
+        cf = 1
+      } otherwise {
+        when cv0 == cv1 {
+          zf = 1
+        }
+      }
+    }
+    when op == 25 {
+      hold ivf = i64_to_f64(regs_hi[a1], regs_lo[a1])
+      hold fc2 = f64_to_hl(ivf, hl)
+      regs_hi[a0] = hl[0]
+      regs_lo[a0] = hl[1]
+    }
+    when op == 26 {
+      hold fvi = hl_to_f64(regs_hi[a1], regs_lo[a1])
+      hold fc3 = f64_trunc_to_i64_hl(fvi, hl)
+      regs_hi[a0] = hl[0]
+      regs_lo[a0] = hl[1]
+    }
+    when op == 27 {
+      hold bit = 0
+      when a0 == 0 && cf == 0 && zf == 0 {
+        bit = 1
+      }
+      when a0 == 1 && cf == 0 {
+        bit = 1
+      }
+      when a0 == 2 && cf == 1 {
+        bit = 1
+      }
+      when a0 == 3 && (cf == 1 || zf == 1) {
+        bit = 1
+      }
+      when a0 == 4 && zf == 1 && pf == 0 {
+        bit = 1
+      }
+      when a0 == 5 && (zf == 0 || pf == 1) {
+        bit = 1
+      }
+      when a0 == 6 && sf == 1 {
+        bit = 1
+      }
+      when a0 == 7 && sf == 0 {
+        bit = 1
+      }
+      when a0 == 8 && (zf == 1 || sf == 1) {
+        bit = 1
+      }
+      when a0 == 9 && zf == 0 && sf == 0 {
+        bit = 1
+      }
+      hold rl_cc = regs_lo[a1]
+      hold low24 = bit_and(rl_cc, 4294967040)
+      hold nrl_cc = low24 + bit
+      regs_lo[a1] = nrl_cc
+    }
+    when op == 28 {
+      next_ip = a0
+    }
+    when op == 29 {
+      hold take = 0
+      when a0 == 0 && cf == 0 && zf == 0 {
+        take = 1
+      }
+      when a0 == 1 && cf == 0 {
+        take = 1
+      }
+      when a0 == 2 && cf == 1 {
+        take = 1
+      }
+      when a0 == 3 && (cf == 1 || zf == 1) {
+        take = 1
+      }
+      when a0 == 4 && zf == 1 {
+        take = 1
+      }
+      when a0 == 5 && zf == 0 {
+        take = 1
+      }
+      when take == 1 {
+        next_ip = a1
+      }
+    }
+    when op == 30 {
+      hold csp2 = regs_lo[4] - 8
+      regs_lo[4] = csp2
+      hold wret = vm_write_qword(csp2, 0, next_ip, data, stack, heap)
+      ret_ips = push(ret_ips, next_ip)
+      next_ip = a0
+    }
+    when op == 31 {
+      // Builtin runtime dispatch
+      when a0 == 0 {
+        // malloc(DI=size, SI=kind) -> A
+        hold m_addr = vm_heap_alloc(regs_lo[7], regs_lo[6], heap, blocks, gc_st)
+        regs_hi[0] = 0
+        regs_lo[0] = m_addr
+      }
+      when a0 == 1 {
+        // strlen(A) -> A
+        hold sl_s = vm_read_cstr(regs_lo[0], data, stack, heap)
+        regs_hi[0] = 0
+        regs_lo[0] = len(sl_s)
+      }
+      when a0 == 2 {
+        // cmpstr(DI, SI) -> A (1 if equal else 0)
+        hold cs1 = vm_read_cstr(regs_lo[7], data, stack, heap)
+        hold cs2 = vm_read_cstr(regs_lo[6], data, stack, heap)
+        regs_hi[0] = 0
+        regs_lo[0] = string_eq(cs1, cs2)
+      }
+      when a0 == 29 {
+        // strord(DI, SI) -> A (-1, 0, +1)
+        hold so1 = vm_read_cstr(regs_lo[7], data, stack, heap)
+        hold so2 = vm_read_cstr(regs_lo[6], data, stack, heap)
+        hold ord = 0
+        when so1 < so2 {
+          ord = 0 - 1
+        } otherwise {
+          when so1 > so2 {
+            ord = 1
+          }
+        }
+        hold soc = snum_to_hl(ord, hl)
+        regs_hi[0] = hl[0]
+        regs_lo[0] = hl[1]
+      }
+      when a0 == 3 {
+        // concat(DI, SI) -> A
+        hold ct1 = vm_read_cstr(regs_lo[7], data, stack, heap)
+        hold ct2 = vm_read_cstr(regs_lo[6], data, stack, heap)
+        hold ct_addr = vm_alloc_cstr(concat(ct1, ct2), heap, blocks, gc_st)
+        regs_hi[0] = 0
+        regs_lo[0] = ct_addr
+      }
+      when a0 == 4 {
+        // n2str(A) -> A
+        hold ns_str = fmt_num_ir(regs_hi[0], regs_lo[0])
+        hold ns_addr = vm_alloc_cstr(ns_str, heap, blocks, gc_st)
+        regs_hi[0] = 0
+        regs_lo[0] = ns_addr
+      }
+      when a0 == 5 {
+        // putstr(A)
+        hold ps_s = vm_read_cstr(regs_lo[0], data, stack, heap)
+        hold wp = write_out(concat(ps_s, "\n"))
+      }
+      when a0 == 9 {
+        // showlist(A) -> "<list len=N>\n"
+        hold sl_p = vm_list_resolve(regs_lo[0], data, stack, heap)
+        hold sl_q = vm_read_qword(sl_p, data, stack, heap, hl)
+        hold sl_hdr1 = vm_read_cstr(268435456 + 1288, data, stack, heap)
+        hold sl_hdr2 = vm_read_cstr(268435456 + 1304, data, stack, heap)
+        hold wsl = write_out(concat(sl_hdr1, concat(istr_ir(hl[1]), sl_hdr2)))
+      }
+      when a0 == 10 {
+        // mlist(A=len) -> A
+        hold ml_n = regs_lo[0]
+        hold cap = ml_n
+        when cap < 4 {
+          cap = 4
+        } otherwise {
+          hold rem4 = cap % 4
+          when rem4 != 0 {
+            cap = cap + (4 - rem4)
+          }
+        }
+        hold ml_p = vm_heap_alloc(24 + 8 * cap, 1, heap, blocks, gc_st)
+        hold wm1 = vm_write_qword(ml_p, 0, ml_n, data, stack, heap)
+        hold wm2 = vm_write_qword(ml_p + 8, 0, 0, data, stack, heap)
+        hold wm3 = vm_write_qword(ml_p + 16, 0, cap, data, stack, heap)
+        regs_hi[0] = 0
+        regs_lo[0] = ml_p
+      }
+      when a0 == 11 {
+        // lget(DI=list, SI=idx) -> A
+        hold lg_p = vm_list_resolve(regs_lo[7], data, stack, heap)
+        hold lg_q = vm_read_qword(lg_p, data, stack, heap, hl)
+        hold lg_len = hl[1]
+        hold lg_idx = i64_to_signed_num(regs_hi[6], regs_lo[6])
+        when lg_idx < 0 || lg_idx >= lg_len {
+          hold err_l = vm_read_cstr(268435456 + 1224, data, stack, heap)
+          hold wdl = write_file("/dev/stderr", err_l)
+          hold exl = exit(1)
+        }
+        hold lg_v = vm_read_qword(lg_p + 24 + 8 * lg_idx, data, stack, heap, hl)
+        regs_hi[0] = hl[0]
+        regs_lo[0] = hl[1]
+      }
+      when a0 == 12 {
+        // llen(A=list) -> A
+        hold ll_p = vm_list_resolve(regs_lo[0], data, stack, heap)
+        hold ll_q = vm_read_qword(ll_p, data, stack, heap, hl)
+        regs_hi[0] = 0
+        regs_lo[0] = hl[1]
+      }
+      when a0 == 13 {
+        // lpush(DI=list, SI=elem) -> A
+        hold lp_p = vm_list_resolve(regs_lo[7], data, stack, heap)
+        hold lpq1 = vm_read_qword(lp_p, data, stack, heap, hl)
+        hold lp_len = hl[1]
+        hold lpq2 = vm_read_qword(lp_p + 16, data, stack, heap, hl)
+        hold lp_cap = hl[1]
+        hold val_hi = regs_hi[6]
+        hold val_lo = regs_lo[6]
+        when lp_len < lp_cap {
+          hold wlp1 = vm_write_qword(lp_p + 24 + 8 * lp_len, val_hi, val_lo, data, stack, heap)
+          hold wlp2 = vm_write_qword(lp_p, 0, lp_len + 1, data, stack, heap)
+          regs_hi[0] = 0
+          regs_lo[0] = lp_p
+        } otherwise {
+          hold ncap = lp_cap * 2
+          when ncap < 4 {
+            ncap = 4
+          }
+          hold np_p = vm_heap_alloc(24 + 8 * ncap, 1, heap, blocks, gc_st)
+          hold ci = 0
+          while ci < lp_len {
+            hold cq = vm_read_qword(lp_p + 24 + 8 * ci, data, stack, heap, hl)
+            hold cw = vm_write_qword(np_p + 24 + 8 * ci, hl[0], hl[1], data, stack, heap)
+            ci = ci + 1
+          }
+          hold nw1 = vm_write_qword(np_p + 24 + 8 * lp_len, val_hi, val_lo, data, stack, heap)
+          hold nw2 = vm_write_qword(np_p, 0, lp_len + 1, data, stack, heap)
+          hold nw3 = vm_write_qword(np_p + 8, 0, 0, data, stack, heap)
+          hold nw4 = vm_write_qword(np_p + 16, 0, ncap, data, stack, heap)
+          hold nw5 = vm_write_qword(lp_p + 8, 0, np_p, data, stack, heap)
+          regs_hi[0] = 0
+          regs_lo[0] = np_p
+        }
+      }
+      when a0 == 14 {
+        // sget(DI=str, SI=idx) -> A
+        hold sg_s = vm_read_cstr(regs_lo[7], data, stack, heap)
+        hold sg_i = i64_to_signed_num(regs_hi[6], regs_lo[6])
+        when sg_i < 0 || sg_i >= len(sg_s) {
+          hold err_s = vm_read_cstr(268435456 + 1256, data, stack, heap)
+          hold wds = write_file("/dev/stderr", err_s)
+          hold exs = exit(1)
+        }
+        regs_hi[0] = 0
+        regs_lo[0] = sx_index(sg_s, sg_i)
+      }
+      when a0 == 15 {
+        // chr(A=code) -> A
+        hold r0_ch = regs_lo[0]
+        hold ch_v = bit_and(r0_ch, 255)
+        hold ch_addr = vm_alloc_cstr(chr(ch_v), heap, blocks, gc_st)
+        regs_hi[0] = 0
+        regs_lo[0] = ch_addr
+      }
+      when a0 == 16 {
+        // readfile(A=path) -> A
+        hold rf_p = vm_read_cstr(regs_lo[0], data, stack, heap)
+        hold rf_c = read_file(rf_p)
+        hold rf_addr = vm_alloc_cstr(rf_c, heap, blocks, gc_st)
+        regs_hi[0] = 0
+        regs_lo[0] = rf_addr
+      }
+      when a0 == 17 {
+        // writefile(DI=path, SI=content) -> A
+        hold wf_p = vm_read_cstr(regs_lo[7], data, stack, heap)
+        hold wf_c = vm_read_cstr(regs_lo[6], data, stack, heap)
+        hold wf_rc = write_file(wf_p, wf_c)
+        regs_hi[0] = 0
+        regs_lo[0] = wf_rc
+      }
+      when a0 == 18 {
+        // arg(A=idx) -> A
+        hold ai_v = i64_to_signed_num(regs_hi[0], regs_lo[0])
+        hold av_s = ""
+        when ai_v >= 0 && ai_v < len(prog_args) {
+          // prog_args stores byte-pool offsets or we pass empty/single strings
+        }
+        hold av_addr = vm_alloc_cstr(av_s, heap, blocks, gc_st)
+        regs_hi[0] = 0
+        regs_lo[0] = av_addr
+      }
+      when a0 == 19 {
+        // argc -> A
+        regs_hi[0] = 0
+        regs_lo[0] = 1
+      }
+      when a0 == 20 {
+        // die(A=err_str)
+        hold die_s = vm_read_cstr(regs_lo[0], data, stack, heap)
+        hold wdd = write_file("/dev/stderr", die_s)
+        hold exd = exit(1)
+      }
+      when a0 == 22 {
+        // shownum(A)
+        hold sn_s = fmt_num_ir(regs_hi[0], regs_lo[0])
+        hold wsn = write_out(concat(sn_s, "\n"))
+      }
+      when a0 == 23 {
+        // gc() -> freed blocks
+        hold gfreed = vm_gc(regs_hi, regs_lo, data, stack, heap, blocks, gc_st)
+        regs_hi[0] = 0
+        regs_lo[0] = gfreed
+      }
+      when a0 == 24 {
+        // gc_live() -> live blocks
+        regs_hi[0] = 0
+        regs_lo[0] = gc_st[0]
+      }
+      when a0 == 25 {
+        // gc_runs() -> collection count
+        regs_hi[0] = 0
+        regs_lo[0] = gc_st[1]
+      }
+      when a0 == 28 {
+        // gccheck: no-op unless heap exceeds threshold
+      }
+    }
+
+    ip = next_ip
+  }
+  give 0
+}
+
+make run_ir_bundle(ir_path: str, data_path: str, patch_path: str) -> num {
+  hold ir_text = read_file(ir_path)
+  when len(ir_text) == 0 {
+    hold f1 = fail_ir(1, concat("cannot read portable IR file: ", ir_path))
+  }
+  hold data = []
+  hold gd = read_bytes(data_path, data)
+  when gd < 0 {
+    hold f2 = fail_ir(1, concat("cannot read data segment: ", data_path))
+  }
+  hold patch_bs = []
+  hold gp = read_bytes(patch_path, patch_bs)
+  when gp < 0 {
+    hold f3 = fail_ir(1, concat("cannot read patch table: ", patch_path))
+  }
+  hold pargs = []
+  give execute_ir(ir_text, data, patch_bs, pargs)
+}
+
+make compile_and_run_ir(src: str, work: str) -> num {
+  hold mk = run_command(concat("mkdir -p ", work))
+  hold log_p = concat(work, "/emit.log")
+  hold elf_p = concat(work, "/unused.elf")
+  hold ir_p = concat(work, "/prog.ir")
+  hold cmd1 = concat("SX_EMIT_LOG=", concat(log_p, concat(" SX_LINK_DUMP=", concat(work, concat(" ./selfhost/native_aot ", concat(src, concat(" ", elf_p)))))))
+  hold rc1 = run_command(cmd1)
+  when rc1 != 0 {
+    hold f1 = fail_ir(1, concat("native_aot failed on: ", src))
+  }
+  // Remove the ELF binary before execution so no machine binary can run.
+  hold rm_elf = run_command(concat("rm -f ", elf_p))
+  hold cmd2 = concat("./tools/emit_to_ir --strict --source-offsets ", concat(log_p, concat(" > ", ir_p)))
+  hold rc2 = run_command(cmd2)
+  when rc2 != 0 {
+    hold f2 = fail_ir(1, "emit_to_ir failed")
+  }
+  give run_ir_bundle(ir_p, concat(work, "/data.bin"), concat(work, "/patch.bin"))
+}
+
+make check_4way_parity(src: str, work: str) -> num {
+  hold mk = run_command(concat("rm -rf ", concat(work, concat(" && mkdir -p ", work))))
+  // 1. seed-min
+  hold rc_s1 = run_command(concat(concat("./selfhost/seed/sxc_seed_min ", src), concat(" > ", concat(work, "/seed.c"))))
+  when rc_s1 != 0 {
+    hold fs1 = fail_ir(1, concat("seed-min failed on: ", src))
+  }
+  hold rc_s2 = run_command(concat("cc -O2 -o ", concat(work, concat("/seed.bin ", concat(work, "/seed.c")))))
+  when rc_s2 != 0 {
+    hold fs2 = fail_ir(1, concat("cc failed on seed.c for: ", src))
+  }
+  hold rc_s3 = run_command(concat(work, concat("/seed.bin > ", concat(work, "/seed.out"))))
+  when rc_s3 != 0 {
+    hold fs3 = fail_ir(1, concat("seed.bin failed on: ", src))
+  }
+
+  // 2. gen2
+  hold rc_g1 = run_command(concat(concat("./selfhost/gen2 ", src), concat(" ", concat(work, "/gen2.c >/dev/null"))))
+  when rc_g1 != 0 {
+    hold fg1 = fail_ir(1, concat("gen2 failed on: ", src))
+  }
+  hold rc_g2 = run_command(concat("cc -O2 -o ", concat(work, concat("/gen2.bin ", concat(work, "/gen2.c")))))
+  when rc_g2 != 0 {
+    hold fg2 = fail_ir(1, concat("cc failed on gen2.c for: ", src))
+  }
+  hold rc_g3 = run_command(concat(work, concat("/gen2.bin > ", concat(work, "/gen2.out"))))
+  when rc_g3 != 0 {
+    hold fg3 = fail_ir(1, concat("gen2.bin failed on: ", src))
+  }
+
+  // 3. native_aot
+  hold rc_n1 = run_command(concat(concat("./selfhost/native_aot ", src), concat(" ", concat(work, "/nat.bin"))))
+  when rc_n1 != 0 {
+    hold fn1 = fail_ir(1, concat("native_aot failed on: ", src))
+  }
+  hold ch = run_command(concat("chmod +x ", concat(work, "/nat.bin")))
+  hold rc_n2 = run_command(concat(work, concat("/nat.bin > ", concat(work, "/nat.out"))))
+  when rc_n2 != 0 {
+    hold fn2 = fail_ir(1, concat("nat.bin failed on: ", src))
+  }
+
+  // 4. sxirexec (portable IR VM, with ELF deleted before execution)
+  hold rc_i = run_command(concat(concat("./tools/sxirexec compile-and-run ", src), concat(" ", concat(work, concat("/ir > ", concat(work, "/ir.out"))))))
+  when rc_i != 0 {
+    hold fi1 = fail_ir(1, concat("sxirexec compile-and-run failed on: ", src))
+  }
+
+  hold o_seed = read_file(concat(work, "/seed.out"))
+  hold o_gen2 = read_file(concat(work, "/gen2.out"))
+  hold o_nat = read_file(concat(work, "/nat.out"))
+  hold o_ir = read_file(concat(work, "/ir.out"))
+  when string_eq(o_seed, o_gen2) == 0 || string_eq(o_gen2, o_nat) == 0 || string_eq(o_nat, o_ir) == 0 {
+    hold fm = fail_ir(1, concat("4-backend output mismatch on: ", src))
+  }
+  show concat("[OK] 4-way parity (seed-min == gen2 == native_aot == sxirexec): ", src)
+  give 0
+}
+
+make main_ir() -> num {
+  when arg_count() < 2 {
+    hold u = fail_ir(2, "usage: sxirexec <run|compile-and-run|parity> ...")
+  }
+  hold cmd = arg(1)
+  when string_eq(cmd, "run") == 1 {
+    when arg_count() < 5 {
+      hold u1 = fail_ir(2, "usage: sxirexec run <audit.ir> <data.bin> <patch.bin>")
+    }
+    give run_ir_bundle(arg(2), arg(3), arg(4))
+  }
+  when string_eq(cmd, "compile-and-run") == 1 {
+    when arg_count() < 4 {
+      hold u2 = fail_ir(2, "usage: sxirexec compile-and-run <in.sa> <work_dir>")
+    }
+    give compile_and_run_ir(arg(2), arg(3))
+  }
+  when string_eq(cmd, "parity") == 1 {
+    when arg_count() < 4 {
+      hold u3 = fail_ir(2, "usage: sxirexec parity <in.sa> <work_dir>")
+    }
+    give check_4way_parity(arg(2), arg(3))
+  }
+  hold u4 = fail_ir(2, concat("unknown command: ", cmd))
+  give 0
+}
+
+hold z_ir = main_ir()

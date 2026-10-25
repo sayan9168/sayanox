@@ -1,0 +1,5 @@
+module vec as vcore from "../pkg/core/vec.sa"
+
+make broken_bare() -> num {
+  give vcore
+}

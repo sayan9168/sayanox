@@ -1,0 +1,2930 @@
+// ===== EMIT-SEAM-BEGIN: the language-level emitter. No code bytes are
+// written here: instructions come from the encoder API in tools/sxenc_lib.sa
+// and label positions from here_local(). Asserted by test-native-emit-split
+// and test-native-ir-log. =====
+
+make argreg_of(i: num) -> num {
+  when i == 0 {
+    give 7
+  }
+  when i == 1 {
+    give 6
+  }
+  when i == 2 {
+    give 2
+  }
+  when i == 3 {
+    give 1
+  }
+  when i == 4 {
+    give 8
+  }
+  give 9
+}
+
+make load_global_em(est: list, st: list, gi: num) -> list {
+  hold neg1 = 0 - 1
+  hold gb = g_base(gi)
+  hold off = st[gb + 3]
+  when off != 0 {
+    give mv_r64m(est, 0, 5, neg1, 0, off)
+  }
+  when gi >= 64 {
+    give mv_r64m(est, 0, 12, neg1, 0, 4168 + 8 * (gi - 64))
+  }
+  give mv_r64m(est, 0, 12, neg1, 0, 672 + 8 * gi)
+}
+
+make store_global_em(est: list, st: list, gi: num) -> list {
+  hold neg1 = 0 - 1
+  hold gb = g_base(gi)
+  hold off = st[gb + 3]
+  when off != 0 {
+    give mv_m64(est, 5, neg1, 0, off, 0)
+  }
+  when gi >= 64 {
+    give mv_m64(est, 12, neg1, 0, 4168 + 8 * (gi - 64), 0)
+  }
+  give mv_m64(est, 12, neg1, 0, 672 + 8 * gi, 0)
+}
+
+make load_param_em(est: list, i: num) -> list {
+  hold neg1 = 0 - 1
+  hold disp = 0 - 8 * (i + 1)
+  give mv_r64m(est, 0, 5, neg1, 0, disp)
+}
+
+make store_scr_em(est: list) -> list {
+  hold neg1 = 0 - 1
+  give mv_m64(est, 12, neg1, 0, 32, 0)
+}
+
+make load_scr_em(est: list) -> list {
+  hold neg1 = 0 - 1
+  give mv_r64m(est, 0, 12, neg1, 0, 32)
+}
+
+make save_scr_em(est: list, r: num) -> list {
+  hold neg1 = 0 - 1
+  give mv_m64(est, 12, neg1, 0, 32, r)
+}
+
+make lit_begin_em(est: list) -> list {
+  hold neg1 = 0 - 1
+  est = mv_r64m(est, 14, 12, neg1, 0, 32)
+  est = push_r(est, 14)
+  give est
+}
+
+make lit_end_em(est: list) -> list {
+  est = load_scr_em(est)
+  est = pop_r(est, 14)
+  est = save_scr_em(est, 14)
+  give est
+}
+
+make jl_patch6(est: list, jl: list, to: num) -> list {
+  hold n = len(jl)
+  hold i = 0
+  while i < n {
+    est = erel32(est, jl[i], to)
+    i = i + 1
+  }
+  give est
+}
+
+make jl_patch5(est: list, jl: list, to: num) -> list {
+  hold n = len(jl)
+  hold i = 0
+  while i < n {
+    est = erel32j(est, jl[i], to)
+    i = i + 1
+  }
+  give est
+}
+
+make lp_record(lp_st: list, depth_idx: num, kind: num, at: num) -> list {
+  lp_st = push(lp_st, depth_idx)
+  lp_st = push(lp_st, kind)
+  lp_st = push(lp_st, at)
+  give lp_st
+}
+
+make lp_patch(est: list, lp_st: list, depth_idx: num, kind: num, to: num) -> list {
+  hold n = len(lp_st)
+  hold i = 0
+  while i + 2 < n {
+    when lp_st[i] == depth_idx && lp_st[i + 1] == kind {
+      est = erel32j(est, lp_st[i + 2], to)
+      lp_st[i] = 0 - 1
+    }
+    i = i + 3
+  }
+  give est
+}
+
+make top_dots(src: str, s: num, e: num) -> num {
+  hold d = 0
+  hold q = s
+  while q + 1 < e {
+    hold c = sx_index(src, q)
+    when c == 34 {
+      q = q + 1
+      while q < e && sx_index(src, q) != 34 {
+        when sx_index(src, q) == 92 && q + 1 < e {
+          q = q + 1
+        }
+        q = q + 1
+      }
+      q = q + 1
+    } otherwise {
+      when c == 40 || c == 91 {
+        d = d + 1
+      } otherwise {
+        when c == 41 || c == 93 {
+          when d > 0 {
+            d = d - 1
+          }
+        } otherwise {
+          when d == 0 && c == 46 && sx_index(src, q + 1) == 46 {
+            give q
+          }
+        }
+      }
+      q = q + 1
+    }
+  }
+  give 0 - 1
+}
+
+// ---- expression emitter ---------------------------------------------------
+
+make emit_logic(src: str, st: list, pool: list, est: list, data: list, s: num, e: num) -> list {
+  hold fl = []
+  est = gen_cond_live(src, st, pool, est, data, s, e, 0, fl, "value")
+  est = mov_imm64_hl(est, 0, 1072693248, 0)
+  est = jmp5_slot(est)
+  hold done_at = here_local(est) - 5
+  est = jl_patch6(est, fl, here_local(est))
+  est = mov_imm64(est, 0, 0)
+  est = erel32j(est, done_at, here_local(est))
+  st[30] = 0
+  st[31] = 0 - 1
+  give est
+}
+
+make fld_emit(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
+  hold z = sw_st(src, st)
+  hold fe = fld_end(src, st[1], st[0])
+  when logic_span_st(src, st, st[0], fe) == 1 {
+    est = emit_logic(src, st, pool, est, data, st[0], fe)
+    st[0] = fe
+    give est
+  }
+  give emit_expr(src, st, pool, est, data, depth)
+}
+
+make arg_emit(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
+  hold z = sw_st(src, st)
+  hold ae = arg_end(src, st[1], st[0])
+  when logic_span_st(src, st, st[0], ae) == 1 {
+    est = emit_logic(src, st, pool, est, data, st[0], ae)
+    st[0] = ae
+    give est
+  }
+  give emit_expr(src, st, pool, est, data, depth + 1)
+}
+
+make emit_rhs(src: str, st: list, pool: list, est: list, data: list) -> list {
+  hold z = sw_st(src, st)
+  hold s = st[0]
+  hold e = rhs_end(src, st[1], s)
+  when logic_span_st(src, st, s, e) == 1 {
+    est = emit_logic(src, st, pool, est, data, s, e)
+    st[0] = e
+    give est
+  }
+  give emit_expr(src, st, pool, est, data, 0)
+}
+
+make emit_call_builtin(src: str, st: list, pool: list, est: list, data: list, n: str, depth: num) -> list {
+  hold sn = st[1]
+  when at(src, sn, st[0]) != 40 {
+    hold e0 = fail(1, concat("expected ( after ", n))
+  }
+  st[0] = st[0] + 1
+  when string_eq(n, "concat") == 1 {
+    est = emit_expr(src, st, pool, est, data, 0)
+    when st[30] == 1 {
+      est = push_r(est, 0)
+    } otherwise {
+      when st[30] == 0 {
+        est = callb(est, 4)
+        est = push_r(est, 0)
+      } otherwise {
+        hold ec1 = fail(1, "concat needs strings or numbers")
+      }
+    }
+    hold z1 = sw_st(src, st)
+    when at(src, sn, st[0]) != 44 {
+      hold ec2 = fail(1, "concat takes 2 args")
+    }
+    st[0] = st[0] + 1
+    est = emit_expr(src, st, pool, est, data, 0)
+    when st[30] == 1 {
+      est = push_r(est, 0)
+    } otherwise {
+      when st[30] == 0 {
+        est = callb(est, 4)
+        est = push_r(est, 0)
+      } otherwise {
+        hold ec3 = fail(1, "concat needs strings or numbers")
+      }
+    }
+    hold z2 = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold ec4 = fail(1, "concat takes 2 args")
+    }
+    st[0] = st[0] + 1
+    est = pop_r(est, 6)
+    est = pop_r(est, 7)
+    est = callb(est, 3)
+    st[30] = 1
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "len") == 1 {
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] == 2 {
+      est = callb(est, 12)
+    } otherwise {
+      when st[30] == 1 {
+        est = callb(est, 1)
+      } otherwise {
+        hold el1 = fail(1, "len takes a string or a list")
+      }
+    }
+    est = emit_i2d(est)
+    hold zl = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold el2 = fail(1, "len takes 1 arg")
+    }
+    st[0] = st[0] + 1
+    st[30] = 0
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "chr") == 1 {
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 0 {
+      hold ech1 = fail(1, "chr takes a number")
+    }
+    est = emit_d2i(est)
+    est = callb(est, 15)
+    hold zch = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold ech2 = fail(1, "chr takes 1 arg")
+    }
+    st[0] = st[0] + 1
+    st[30] = 1
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "sx_index") == 1 || string_eq(n, "index") == 1 || (st[39] == 1 && string_eq(n, "sx_idx") == 1) {
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 1 {
+      hold ei1 = fail(1, concat(n, " takes a string"))
+    }
+    est = push_r(est, 0)
+    hold zi1 = sw_st(src, st)
+    when at(src, sn, st[0]) != 44 {
+      hold ei2 = fail(1, concat(n, " takes 2 args"))
+    }
+    st[0] = st[0] + 1
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 0 {
+      hold ei3 = fail(1, concat(n, ": the index must be a number"))
+    }
+    est = emit_d2i(est)
+    est = mv_rr(est, 6, 0)
+    hold zi2 = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold ei4 = fail(1, concat(n, " takes 2 args"))
+    }
+    st[0] = st[0] + 1
+    est = pop_r(est, 7)
+    est = callb(est, 14)
+    est = emit_i2d(est)
+    st[30] = 0
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "http_get") == 1 {
+    hold eh = fail(1, "http_get is not supported by the native backend yet (use gen2 or the seed)")
+  }
+  when string_eq(n, "read_file") == 1 {
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 1 {
+      hold erf1 = fail(1, "read_file takes a string (the path)")
+    }
+    est = mv_rr(est, 7, 0)
+    est = callb(est, 16)
+    hold zrf = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold erf2 = fail(1, "read_file takes 1 arg")
+    }
+    st[0] = st[0] + 1
+    st[30] = 1
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "write_file") == 1 {
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 1 {
+      hold ewf1 = fail(1, "write_file takes (path, text)")
+    }
+    est = push_r(est, 0)
+    hold zwf1 = sw_st(src, st)
+    when at(src, sn, st[0]) != 44 {
+      hold ewf2 = fail(1, "write_file takes 2 args")
+    }
+    st[0] = st[0] + 1
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 1 {
+      hold ewf3 = fail(1, "write_file takes (path, text)")
+    }
+    est = mv_rr(est, 6, 0)
+    hold zwf2 = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold ewf4 = fail(1, "write_file takes 2 args")
+    }
+    st[0] = st[0] + 1
+    est = pop_r(est, 7)
+    est = callb(est, 17)
+    est = emit_i2d(est)
+    st[30] = 0
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "arg") == 1 {
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 0 {
+      hold ea1 = fail(1, "arg takes a number")
+    }
+    est = emit_d2i(est)
+    est = callb(est, 18)
+    hold za = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold ea2 = fail(1, "arg takes 1 arg")
+    }
+    st[0] = st[0] + 1
+    st[30] = 1
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "arg_count") == 1 {
+    hold zac = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold eac = fail(1, "arg_count takes no args")
+    }
+    st[0] = st[0] + 1
+    est = callb(est, 19)
+    est = emit_i2d(est)
+    st[30] = 0
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "string_eq") == 1 || string_eq(n, "sx_eq") == 1 {
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 1 {
+      hold ese1 = fail(1, concat(n, " takes 2 strings"))
+    }
+    est = push_r(est, 0)
+    hold zse1 = sw_st(src, st)
+    when at(src, sn, st[0]) != 44 {
+      hold ese2 = fail(1, concat(n, " takes 2 args"))
+    }
+    st[0] = st[0] + 1
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 1 {
+      hold ese3 = fail(1, concat(n, " takes 2 strings"))
+    }
+    est = mv_rr(est, 6, 0)
+    hold zse2 = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold ese4 = fail(1, concat(n, " takes 2 args"))
+    }
+    st[0] = st[0] + 1
+    est = pop_r(est, 7)
+    est = callb(est, 2)
+    est = emit_i2d(est)
+    st[30] = 0
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "push") == 1 {
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 2 {
+      hold ep1 = fail(1, "push takes (list, number)")
+    }
+    est = push_r(est, 0)
+    hold zp1 = sw_st(src, st)
+    when at(src, sn, st[0]) != 44 {
+      hold ep2 = fail(1, "push takes 2 args")
+    }
+    st[0] = st[0] + 1
+    est = arg_emit(src, st, pool, est, data, 0)
+    when st[30] != 0 {
+      hold ep3 = fail(1, "push takes (list, number)")
+    }
+    est = mv_rr(est, 6, 0)
+    hold zp2 = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold ep4 = fail(1, "push takes 2 args")
+    }
+    st[0] = st[0] + 1
+    est = pop_r(est, 7)
+    est = callb(est, 13)
+    st[30] = 2
+    st[31] = 0 - 1
+    give est
+  }
+  when string_eq(n, "gc") == 1 || string_eq(n, "gc_live") == 1 || string_eq(n, "gc_runs") == 1 {
+    hold zgc = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold egc = fail(1, concat(n, " takes no args"))
+    }
+    st[0] = st[0] + 1
+    when string_eq(n, "gc") == 1 {
+      est = callb(est, 23)
+    } otherwise {
+      when string_eq(n, "gc_live") == 1 {
+        est = callb(est, 24)
+      } otherwise {
+        est = callb(est, 25)
+      }
+    }
+    est = emit_i2d(est)
+    st[30] = 0
+    st[31] = 0 - 1
+    give est
+  }
+  when st[39] == 1 {
+    when string_eq(n, "numstr") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ens1 = fail(1, "numstr takes a number")
+      }
+      est = callb(est, 4)
+      hold zns = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ens2 = fail(1, "numstr takes 1 arg")
+      }
+      st[0] = st[0] + 1
+      st[30] = 1
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "exit") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold eex1 = fail(1, "exit takes a number")
+      }
+      est = emit_d2i(est)
+      est = mv_rr(est, 7, 0)
+      est = mov_imm64(est, 0, 60)
+      est = syscall_inst(est)
+      est = mov_imm64(est, 0, 0)
+      hold zex = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold eex2 = fail(1, "exit takes 1 arg")
+      }
+      st[0] = st[0] + 1
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "bit_not") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ebn1 = fail(1, "bit_not takes a number")
+      }
+      est = emit_d2u64(est)
+      est = fm7(est, 2, 0)
+      est = emit_u64_to_d(est)
+      hold zbn = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ebn2 = fail(1, "bit_not takes 1 arg")
+      }
+      st[0] = st[0] + 1
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "bit_and") == 1 || string_eq(n, "bit_or") == 1 || string_eq(n, "bit_xor") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ebo1 = fail(1, concat(n, " takes 2 numbers"))
+      }
+      est = emit_d2u64(est)
+      est = push_r(est, 0)
+      hold zbo1 = sw_st(src, st)
+      when at(src, sn, st[0]) != 44 {
+        hold ebo2 = fail(1, concat(n, " takes 2 args"))
+      }
+      st[0] = st[0] + 1
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ebo3 = fail(1, concat(n, " takes 2 numbers"))
+      }
+      est = emit_d2u64(est)
+      est = mv_rr(est, 1, 0)
+      est = pop_r(est, 0)
+      hold bop = 33
+      when string_eq(n, "bit_or") == 1 {
+        bop = 9
+      }
+      when string_eq(n, "bit_xor") == 1 {
+        bop = 49
+      }
+      est = bin_rr(est, bop, 0, 1)
+      est = emit_u64_to_d(est)
+      hold zbo2 = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ebo4 = fail(1, concat(n, " takes 2 args"))
+      }
+      st[0] = st[0] + 1
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "shl") == 1 || string_eq(n, "shr") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold esh1 = fail(1, concat(n, " takes 2 numbers"))
+      }
+      est = emit_d2u64(est)
+      est = push_r(est, 0)
+      hold zsh1 = sw_st(src, st)
+      when at(src, sn, st[0]) != 44 {
+        hold esh2 = fail(1, concat(n, " takes 2 args"))
+      }
+      st[0] = st[0] + 1
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold esh3 = fail(1, concat(n, " takes 2 numbers"))
+      }
+      est = emit_d2i(est)
+      est = mv_rr(est, 1, 0)
+      est = pop_r(est, 0)
+      when string_eq(n, "shl") == 1 {
+        est = shl_cl(est, 0)
+      } otherwise {
+        est = shr_cl(est, 0)
+      }
+      est = emit_u64_to_d(est)
+      hold zsh2 = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold esh4 = fail(1, concat(n, " takes 2 args"))
+      }
+      st[0] = st[0] + 1
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "getenv") == 1 || string_eq(n, "read_dir") == 1 || string_eq(n, "path_real") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 1 {
+        hold ege1 = fail(1, concat(n, " takes a string"))
+      }
+      est = mv_rr(est, 7, 0)
+      when string_eq(n, "getenv") == 1 {
+        est = callb(est, 33)
+      }
+      when string_eq(n, "read_dir") == 1 {
+        est = callb(est, 39)
+      }
+      when string_eq(n, "path_real") == 1 {
+        est = callb(est, 49)
+      }
+      hold zge = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ege2 = fail(1, concat(n, " takes 1 arg"))
+      }
+      st[0] = st[0] + 1
+      st[30] = 1
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "read_line") == 1 {
+      hold zrl = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold erl = fail(1, "read_line takes 0 args")
+      }
+      st[0] = st[0] + 1
+      est = callb(est, 42)
+      st[30] = 1
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "read_n") == 1 || string_eq(n, "child_line") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ern1 = fail(1, concat(n, " takes a number"))
+      }
+      est = emit_d2i(est)
+      est = mv_rr(est, 7, 0)
+      when string_eq(n, "read_n") == 1 {
+        est = callb(est, 43)
+      } otherwise {
+        est = callb(est, 47)
+      }
+      hold zrn = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ern2 = fail(1, concat(n, " takes 1 arg"))
+      }
+      st[0] = st[0] + 1
+      st[30] = 1
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "child_close") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ecc1 = fail(1, "child_close takes a number")
+      }
+      est = emit_d2i(est)
+      est = mv_rr(est, 7, 0)
+      est = callb(est, 48)
+      est = emit_i2d(est)
+      hold zcc = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ecc2 = fail(1, "child_close takes 1 arg")
+      }
+      st[0] = st[0] + 1
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "child_send") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ecs1 = fail(1, "child_send takes (handle, string)")
+      }
+      est = emit_d2i(est)
+      est = push_r(est, 0)
+      hold zcs1 = sw_st(src, st)
+      when at(src, sn, st[0]) != 44 {
+        hold ecs2 = fail(1, "child_send takes 2 args")
+      }
+      st[0] = st[0] + 1
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 1 {
+        hold ecs3 = fail(1, "child_send takes (handle, string)")
+      }
+      est = mv_rr(est, 6, 0)
+      hold zcs2 = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ecs4 = fail(1, "child_send takes 2 args")
+      }
+      st[0] = st[0] + 1
+      est = pop_r(est, 7)
+      est = callb(est, 45)
+      est = emit_i2d(est)
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "child_recv") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ecr1 = fail(1, "child_recv takes (handle, count)")
+      }
+      est = emit_d2i(est)
+      est = push_r(est, 0)
+      hold zcr1 = sw_st(src, st)
+      when at(src, sn, st[0]) != 44 {
+        hold ecr2 = fail(1, "child_recv takes 2 args")
+      }
+      st[0] = st[0] + 1
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ecr3 = fail(1, "child_recv takes (handle, count)")
+      }
+      est = emit_d2i(est)
+      est = mv_rr(est, 6, 0)
+      hold zcr2 = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ecr4 = fail(1, "child_recv takes 2 args")
+      }
+      st[0] = st[0] + 1
+      est = pop_r(est, 7)
+      est = callb(est, 46)
+      st[30] = 1
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "flush_out") == 1 {
+      hold zfo = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold efo = fail(1, "flush_out takes 0 args")
+      }
+      st[0] = st[0] + 1
+      est = xor_rr(est, 0, 0)
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "write_out") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 1 {
+        hold ewo1 = fail(1, "write_out takes a string")
+      }
+      est = callb(est, 6)
+      est = mov_imm64_hl(est, 0, 1072693248, 0)
+      hold zwo = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ewo2 = fail(1, "write_out takes 1 arg")
+      }
+      st[0] = st[0] + 1
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "path_kind") == 1 || string_eq(n, "path_size") == 1 || string_eq(n, "make_dir") == 1 || string_eq(n, "remove_path") == 1 || string_eq(n, "run_command") == 1 || string_eq(n, "spawn") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 1 {
+        hold epk1 = fail(1, concat(n, " takes a string"))
+      }
+      est = mv_rr(est, 7, 0)
+      when string_eq(n, "path_kind") == 1 {
+        est = callb(est, 34)
+      }
+      when string_eq(n, "run_command") == 1 {
+        est = callb(est, 35)
+      }
+      when string_eq(n, "make_dir") == 1 {
+        est = callb(est, 37)
+      }
+      when string_eq(n, "remove_path") == 1 {
+        est = callb(est, 38)
+      }
+      when string_eq(n, "path_size") == 1 {
+        est = callb(est, 41)
+      }
+      when string_eq(n, "spawn") == 1 {
+        est = callb(est, 44)
+      }
+      est = emit_i2d(est)
+      hold zpk = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold epk2 = fail(1, concat(n, " takes 1 arg"))
+      }
+      st[0] = st[0] + 1
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "make_link") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 1 {
+        hold eml1 = fail(1, "make_link takes (target, path)")
+      }
+      est = push_r(est, 0)
+      hold zml1 = sw_st(src, st)
+      when at(src, sn, st[0]) != 44 {
+        hold eml2 = fail(1, "make_link takes 2 args")
+      }
+      st[0] = st[0] + 1
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 1 {
+        hold eml3 = fail(1, "make_link takes (target, path)")
+      }
+      est = mv_rr(est, 6, 0)
+      hold zml2 = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold eml4 = fail(1, "make_link takes 2 args")
+      }
+      st[0] = st[0] + 1
+      est = pop_r(est, 7)
+      est = callb(est, 40)
+      est = emit_i2d(est)
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "write_bytes") == 1 || string_eq(n, "read_bytes") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 1 {
+        hold ewb1 = fail(1, concat(n, " takes (path, list)"))
+      }
+      est = push_r(est, 0)
+      hold zwb1 = sw_st(src, st)
+      when at(src, sn, st[0]) != 44 {
+        hold ewb2 = fail(1, concat(n, " takes 2 args"))
+      }
+      st[0] = st[0] + 1
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 2 {
+        hold ewb3 = fail(1, concat(n, " takes (path, list)"))
+      }
+      est = mv_rr(est, 6, 0)
+      hold zwb2 = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ewb4 = fail(1, concat(n, " takes 2 args"))
+      }
+      st[0] = st[0] + 1
+      est = pop_r(est, 7)
+      when string_eq(n, "write_bytes") == 1 {
+        est = callb(est, 31)
+      } otherwise {
+        est = callb(est, 32)
+      }
+      est = emit_i2d(est)
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "bytes_f64") == 1 {
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 2 {
+        hold ebf1 = fail(1, "bytes_f64 takes (list, number)")
+      }
+      est = push_r(est, 0)
+      hold zbf1 = sw_st(src, st)
+      when at(src, sn, st[0]) != 44 {
+        hold ebf2 = fail(1, "bytes_f64 takes 2 args")
+      }
+      st[0] = st[0] + 1
+      est = arg_emit(src, st, pool, est, data, 0)
+      when st[30] != 0 {
+        hold ebf3 = fail(1, "bytes_f64 takes (list, number)")
+      }
+      est = mv_rr(est, 6, 0)
+      hold zbf2 = sw_st(src, st)
+      when at(src, sn, st[0]) != 41 {
+        hold ebf4 = fail(1, "bytes_f64 takes 2 args")
+      }
+      st[0] = st[0] + 1
+      est = pop_r(est, 7)
+      est = callb(est, 36)
+      st[30] = 2
+      st[31] = 0 - 1
+      give est
+    }
+  }
+  hold eu = fail(1, concat("unknown builtin ", n))
+  give est
+}
+
+make emit_interp_str(src: str, st: list, pool: list, est: list, data: list) -> list {
+  hold neg1 = 0 - 1
+  hold sn = st[1]
+  hold q = st[0] + 1
+  hold holes = 0
+  hold has_acc = 0
+  hold lit = ""
+  while q < sn && at(src, sn, q) != 34 {
+    hold c = at(src, sn, q)
+    when c == 92 {
+      when q + 1 >= sn {
+        hold eu1 = fail(1, "unterminated string")
+      }
+      hold x = at(src, sn, q + 1)
+      hold outc = x
+      when x == 110 {
+        outc = 10
+      } otherwise {
+        when x == 116 {
+          outc = 9
+        } otherwise {
+          when x == 114 {
+            outc = 13
+          }
+        }
+      }
+      lit = concat(lit, chr(outc))
+      q = q + 2
+    } otherwise {
+      when c == 36 && at(src, sn, q + 1) == 123 {
+        when len(lit) > 0 {
+          hold loff = d_next_off(data)
+          data = d_str_alloc(data, lit)
+          lit = ""
+          when has_acc == 0 {
+            est = lea_rm(est, 0, 12, neg1, 0, loff)
+            has_acc = 1
+          } otherwise {
+            est = push_r(est, 0)
+            est = lea_rm(est, 6, 12, neg1, 0, loff)
+            est = pop_r(est, 7)
+            est = callb(est, 3)
+          }
+        }
+        holes = holes + 1
+        when holes > 16 {
+          hold eh1 = fail(1, "interpolation requires a closed identifier hole; maximum 16 holes per string")
+        }
+        q = q + 2
+        hold r = q
+        hold hscan = 1
+        while hscan == 1 {
+          when r >= sn {
+            hscan = 0
+          } otherwise {
+            hold rc = at(src, sn, r)
+            when rc == 125 || rc == 34 || rc == 10 || rc == 13 {
+              hscan = 0
+            } otherwise {
+              r = r + 1
+            }
+          }
+        }
+        when r >= sn || at(src, sn, r) != 125 {
+          hold eh2 = fail(1, "interpolation requires a closed identifier hole; maximum 16 holes per string")
+        }
+        when r == q {
+          hold eh3 = fail(1, "interpolation requires a closed identifier hole; maximum 16 holes per string")
+        }
+        when id0c(at(src, sn, q)) == 0 {
+          hold eh4 = fail(1, "interpolation requires a plain identifier hole")
+        }
+        hold k = q + 1
+        while k < r {
+          when idcc(at(src, sn, k)) == 0 {
+            hold eh5 = fail(1, "interpolation requires a plain identifier hole")
+          }
+          k = k + 1
+        }
+        hold hname = sub(src, q, r)
+        when has_acc == 1 {
+          est = push_r(est, 0)
+        }
+        hold found = 0
+        hold hk = 0 - 1
+        when st[5] >= 0 {
+          hold cfb = f_base(st[5])
+          hold cnp = st[cfb + 1]
+          hold pi = 0
+          while pi < cnp {
+            hold pns = fn_pn_slot(cfb, pi)
+            hold pno = st[pns]
+            when pool_eq(pool, pno, hname) == 1 {
+              est = load_param_em(est, pi)
+              hold pks = fn_pk_slot(cfb, pi)
+              hk = st[pks]
+              found = 1
+              pi = cnp
+            }
+            pi = pi + 1
+          }
+        }
+        when found == 0 {
+          hold gi = g_find(st, pool, hname)
+          when gi < 0 {
+            hold eh6 = fail(1, concat(concat("undefined variable '", hname), "' in string interpolation"))
+          }
+          est = load_global_em(est, st, gi)
+          hold gb = g_base(gi)
+          hk = st[gb + 1]
+        }
+        when hk == 0 {
+          est = callb(est, 4)
+        } otherwise {
+          when hk != 1 {
+            hold mhk = concat("cannot interpolate '", hname)
+            mhk = concat(mhk, "' (expected number or string, got ")
+            mhk = concat(mhk, kname(hk))
+            mhk = concat(mhk, ")")
+            hold eh7 = fail(1, mhk)
+          }
+        }
+        when has_acc == 0 {
+          has_acc = 1
+        } otherwise {
+          est = mv_rr(est, 6, 0)
+          est = pop_r(est, 7)
+          est = callb(est, 3)
+        }
+        q = r + 1
+      } otherwise {
+        lit = concat(lit, chr(c))
+        q = q + 1
+      }
+    }
+  }
+  when q >= sn || at(src, sn, q) != 34 {
+    hold eu2 = fail(1, "unterminated string")
+  }
+  st[0] = q + 1
+  when len(lit) > 0 {
+    hold toff = d_next_off(data)
+    data = d_str_alloc(data, lit)
+    when has_acc == 0 {
+      est = lea_rm(est, 0, 12, neg1, 0, toff)
+      has_acc = 1
+    } otherwise {
+      est = push_r(est, 0)
+      est = lea_rm(est, 6, 12, neg1, 0, toff)
+      est = pop_r(est, 7)
+      est = callb(est, 3)
+    }
+  }
+  when has_acc == 0 {
+    hold eoff = d_next_off(data)
+    data = d_str_alloc(data, "")
+    est = lea_rm(est, 0, 12, neg1, 0, eoff)
+  }
+  st[30] = 1
+  st[31] = 0 - 1
+  give est
+}
+
+make emit_prim(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
+  hold neg1 = 0 - 1
+  hold z0 = sw_st(src, st)
+  hold sn = st[1]
+  when depth > 32 {
+    hold ed = fail(1, "expression too deep")
+  }
+  hold c0 = at(src, sn, st[0])
+
+  // List literal: [ ... ]
+  when c0 == 91 {
+    hold saved_p = st[0]
+    st[0] = st[0] + 1
+    hold n_el = 0
+    hold lgo = 1
+    while lgo == 1 {
+      hold zl1 = sw_st(src, st)
+      when at(src, sn, st[0]) == 93 {
+        st[0] = st[0] + 1
+        lgo = 0
+      } otherwise {
+        hold pk = pk_full(src, st, pool, depth + 1)
+        n_el = n_el + 1
+        hold zl2 = sw_st(src, st)
+        when at(src, sn, st[0]) == 44 {
+          st[0] = st[0] + 1
+        } otherwise {
+          when at(src, sn, st[0]) == 93 {
+            st[0] = st[0] + 1
+            lgo = 0
+          } otherwise {
+            hold el1 = fail(1, "list literal needs , or ]")
+          }
+        }
+      }
+    }
+    st[0] = saved_p + 1
+    when n_el == 0 {
+      hold zl3 = sw_st(src, st)
+      when at(src, sn, st[0]) != 93 {
+        hold el2 = fail(1, "list literal needs ]")
+      }
+      st[0] = st[0] + 1
+    }
+    est = lit_begin_em(est)
+    est = mov_imm64(est, 0, n_el)
+    est = callb(est, 10)
+    est = store_scr_em(est)
+    hold li = 0
+    while li < n_el {
+      hold zl4 = sw_st(src, st)
+      est = emit_expr(src, st, pool, est, data, depth + 1)
+      when st[30] != 0 {
+        hold el3 = fail(1, "list elements must be numbers")
+      }
+      est = mv_rr(est, 11, 0)
+      est = load_scr_em(est)
+      est = mv_m64(est, 0, neg1, 0, 24 + 8 * li, 11)
+      hold zl5 = sw_st(src, st)
+      when li + 1 < n_el {
+        when at(src, sn, st[0]) != 44 {
+          hold el4 = fail(1, "list literal needs , or ]")
+        }
+        st[0] = st[0] + 1
+      } otherwise {
+        when at(src, sn, st[0]) != 93 {
+          hold el5 = fail(1, "list literal needs , or ]")
+        }
+        st[0] = st[0] + 1
+      }
+      li = li + 1
+    }
+    est = lit_end_em(est)
+    st[30] = 2
+    st[31] = 0 - 1
+    give est
+  }
+
+  // String literal: "..."
+  when c0 == 34 {
+    when str_has_interp(src, sn, st[0]) == 1 {
+      give emit_interp_str(src, st, pool, est, data)
+    }
+    hold sval = pstr_val_st(src, st)
+    hold soff = d_next_off(data)
+    data = d_str_alloc(data, sval)
+    est = lea_rm(est, 0, 12, neg1, 0, soff)
+    st[30] = 1
+    st[31] = 0 - 1
+    give est
+  }
+
+  // Parenthesized expression or logic group: ( ... )
+  when c0 == 40 {
+    hold pc = paren_close(src, sn, st[0])
+    when pc >= 0 && logic_span(src, st[0] + 1, pc) == 1 {
+      est = emit_logic(src, st, pool, est, data, st[0] + 1, pc)
+      st[0] = pc + 1
+      give est
+    }
+    st[0] = st[0] + 1
+    est = emit_expr(src, st, pool, est, data, depth + 1)
+    hold zp = sw_st(src, st)
+    when at(src, sn, st[0]) != 41 {
+      hold ep = fail(1, "expected )")
+    }
+    st[0] = st[0] + 1
+    give est
+  }
+
+  // Unary minus: -x -> 0.0 - x
+  when c0 == 45 {
+    st[0] = st[0] + 1
+    est = emit_prim(src, st, pool, est, data, depth + 1)
+    when st[30] != 0 {
+      hold eum = fail(1, "unary - on a non-number")
+    }
+    est = movq_xr(est, 1, 0)
+    est = xor_rr(est, 0, 0)
+    est = movq_xr(est, 0, 0)
+    est = subsd(est, 0, 1)
+    est = movq_rx(est, 0, 0)
+    st[30] = 0
+    st[31] = 0 - 1
+    give est
+  }
+
+  // Number literal
+  hold hl = [0, 0]
+  when pnum_hl_st(src, st, hl) == 1 {
+    est = mov_imm64_hl(est, 0, hl[0], hl[1])
+    st[30] = 0
+    st[31] = 0 - 1
+    give est
+  }
+
+  // Identifier: true/false, param, struct literal, call, or global/local var
+  hold n = pid_st(src, st)
+  when len(n) > 0 {
+    when string_eq(n, "true") == 1 {
+      est = mov_imm64_hl(est, 0, 1072693248, 0)
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when string_eq(n, "false") == 1 {
+      est = mov_imm64(est, 0, 0)
+      st[30] = 0
+      st[31] = 0 - 1
+      give est
+    }
+    when st[5] >= 0 {
+      hold cfb = f_base(st[5])
+      hold cnp = st[cfb + 1]
+      hold pi = 0
+      while pi < cnp {
+        hold pns = fn_pn_slot(cfb, pi)
+        when pool_eq(pool, st[pns], n) == 1 {
+          est = load_param_em(est, pi)
+          hold pks = fn_pk_slot(cfb, pi)
+          st[30] = st[pks]
+          when st[30] == 3 && st[cfb + 2] == 0 {
+            hold pss = fn_ps_slot(cfb, pi)
+            st[31] = st[pss]
+          } otherwise {
+            st[31] = 0 - 1
+          }
+          give est
+        }
+        pi = pi + 1
+      }
+    }
+    hold after_n = st[0]
+    hold zn1 = sw_st(src, st)
+    hold qpos = st[0]
+    when at(src, sn, qpos) == 60 && gs_find(st, pool, n) >= 0 {
+      st[0] = after_n
+      hold gsi = gs_instantiate(src, st, pool, n)
+      when gsi >= 0 {
+        hold gsb = s_base(gsi)
+        n = unintern(pool, st[gsb])
+        after_n = st[0]
+        hold zn2 = sw_st(src, st)
+        qpos = st[0]
+      } otherwise {
+        st[0] = qpos
+      }
+    }
+
+    // Struct literal: Name { ... }
+    hold is_slit = 0
+    when at(src, sn, qpos) == 123 {
+      when s_find(st, pool, n) >= 0 || g_find(st, pool, n) < 0 {
+        is_slit = 1
+      }
+    }
+    when is_slit == 1 {
+      hold sid = s_find(st, pool, n)
+      when sid < 0 && gs_find(st, pool, n) >= 0 {
+        hold egs = fail(1, concat(concat("'", n), concat(concat("' is a generic struct: write ", n), "<num> { ... } with one type argument per type parameter")))
+      }
+      when sid < 0 {
+        hold eus = fail(1, concat(concat("unknown struct '", n), "'"))
+      }
+      st[0] = qpos + 1
+      hold sb = s_base(sid)
+      hold snm = unintern(pool, st[sb])
+      hold nf = st[sb + 1]
+      est = lit_begin_em(est)
+      est = mov_imm64(est, 0, 8 * nf)
+      est = mv_rr(est, 7, 0)
+      est = mov_imm64(est, 6, 2)
+      est = callb(est, 0)
+      est = store_scr_em(est)
+      hold cnt = 0
+      hold sgo = 1
+      while sgo == 1 {
+        hold zs1 = sw_st(src, st)
+        when at(src, sn, st[0]) == 125 {
+          st[0] = st[0] + 1
+          sgo = 0
+        } otherwise {
+          hold f_pos = st[0]
+          hold has_lbl = 0
+          hold lb = ""
+          when id0c(at(src, sn, f_pos)) == 1 {
+            lb = pid_raw_st(src, st)
+            hold zs2 = sw_st(src, st)
+            when at(src, sn, st[0]) == 58 {
+              has_lbl = 1
+              st[0] = st[0] + 1
+            } otherwise {
+              st[0] = f_pos
+            }
+          }
+          when cnt >= nf {
+            hold esf1 = fail(1, concat(concat("too many fields in struct '", n), "' literal"))
+          }
+          when has_lbl == 1 {
+            hold fidx = s_field(st, pool, sid, lb)
+            when fidx < 0 {
+              hold esf2 = fail(1, concat(concat("no field '", lb), concat(concat("' in struct '", n), "'")))
+            }
+            when fidx != cnt {
+              hold esf3 = fail(1, concat(concat("struct '", n), "' literal fields must be given in declaration order"))
+            }
+          }
+          est = fld_emit(src, st, pool, est, data, depth + 1)
+          when st[30] == 3 && st[31] >= sid {
+            hold xsb = s_base(st[31])
+            hold xsb_ni = st[xsb]
+            hold xsnm = unintern(pool, xsb_ni)
+            hold esf4 = fail(1, concat(concat("struct '", snm), concat(concat("' nests struct '", xsnm), "' declared later; declare the nested struct first")))
+          }
+          hold fk_slot = sb + 20 + cnt
+          when st[fk_slot] != st[30] {
+            hold fn_slot = sb + 4 + cnt
+            hold fn_ni = st[fn_slot]
+            hold fnm_s = unintern(pool, fn_ni)
+            hold esf5 = fail(1, concat(concat("struct field '", snm), concat(concat(".", fnm_s), "' is used with two different types")))
+          }
+          est = mv_rr(est, 11, 0)
+          est = load_scr_em(est)
+          est = lea_rm(est, 0, 0, neg1, 0, 8 * cnt)
+          est = mv_m64(est, 0, neg1, 0, 0, 11)
+          cnt = cnt + 1
+          hold zs3 = sw_st(src, st)
+          when at(src, sn, st[0]) == 44 {
+            st[0] = st[0] + 1
+          } otherwise {
+            when at(src, sn, st[0]) == 125 {
+              st[0] = st[0] + 1
+              sgo = 0
+            } otherwise {
+              hold esf6 = fail(1, "struct literal needs , or }")
+            }
+          }
+        }
+      }
+      when cnt != nf {
+        hold m_sf = concat("struct '", n)
+        m_sf = concat(m_sf, "' literal must fill every field (")
+        m_sf = concat(m_sf, istr(nf))
+        m_sf = concat(m_sf, " expected, ")
+        m_sf = concat(m_sf, istr(cnt))
+        m_sf = concat(m_sf, " given)")
+        hold esf7 = fail(1, m_sf)
+      }
+      est = lit_end_em(est)
+      st[30] = 3
+      st[31] = sid
+      give est
+    }
+
+    // Function or builtin call: name( ... )
+    when at(src, sn, qpos) == 40 {
+      when builtin_arity_st(st, n) >= 0 {
+        st[0] = qpos
+        give emit_call_builtin(src, st, pool, est, data, n, depth)
+      }
+      hold fi = f_find(st, pool, n)
+      when fi >= 0 {
+        st[0] = qpos + 1
+        hold fb = f_base(fi)
+        hold nargs = 0
+        hold kinds = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        hold max_ca = 6
+        when st[39] == 1 {
+          max_ca = 20
+        }
+        hold pad = 0
+        when st[39] == 1 && st[fb + 1] > 6 && (st[fb + 1] % 2) == 1 {
+          pad = 1
+          est = push_r(est, 0)
+        }
+        hold cgo = 1
+        while cgo == 1 {
+          hold zc1 = sw_st(src, st)
+          when at(src, sn, st[0]) == 41 {
+            st[0] = st[0] + 1
+            cgo = 0
+          } otherwise {
+            est = arg_emit(src, st, pool, est, data, depth)
+            when nargs >= max_ca {
+              hold efc1 = fail(1, concat(concat("too many arguments to '", n), "'"))
+            }
+            kinds[nargs] = st[30]
+            when st[fb + 2] == 0 {
+              hold want_k = 0
+              when nargs < st[fb + 1] {
+                hold pks2 = fn_pk_slot(fb, nargs)
+                want_k = st[pks2]
+              }
+              when st[30] != want_k && want_k == 0 {
+                hold xk_c1 = st[30]
+                hold m_fc1 = concat("function '", n)
+                m_fc1 = concat(m_fc1, "' takes numbers (arg ")
+                m_fc1 = concat(m_fc1, istr(nargs + 1))
+                m_fc1 = concat(m_fc1, " is ")
+                m_fc1 = concat(m_fc1, kname(xk_c1))
+                m_fc1 = concat(m_fc1, ")")
+                hold efc2 = fail(1, m_fc1)
+              }
+              when st[30] != want_k {
+                hold xk_c2 = st[30]
+                hold m_fc2 = concat("function '", n)
+                m_fc2 = concat(m_fc2, "' takes ")
+                m_fc2 = concat(m_fc2, kname(want_k))
+                m_fc2 = concat(m_fc2, " (arg ")
+                m_fc2 = concat(m_fc2, istr(nargs + 1))
+                m_fc2 = concat(m_fc2, " is ")
+                m_fc2 = concat(m_fc2, kname(xk_c2))
+                m_fc2 = concat(m_fc2, ")")
+                hold efc3 = fail(1, m_fc2)
+              }
+              when want_k == 3 && st[30] == 3 && nargs < st[fb + 1] {
+                hold wps_s = fn_ps_slot(fb, nargs)
+                hold wps = st[wps_s]
+                when wps >= 0 && st[31] != wps {
+                  hold wsb_c = s_base(wps)
+                  hold wno = st[wsb_c]
+                  hold got_snm = "<unknown>"
+                  when st[31] >= 0 {
+                    hold gsb_c = s_base(st[31])
+                    hold gno = st[gsb_c]
+                    got_snm = unintern(pool, gno)
+                  }
+                  hold m_fc3 = concat("function '", n)
+                  m_fc3 = concat(m_fc3, "' takes struct '")
+                  m_fc3 = concat(m_fc3, unintern(pool, wno))
+                  m_fc3 = concat(m_fc3, "' (arg ")
+                  m_fc3 = concat(m_fc3, istr(nargs + 1))
+                  m_fc3 = concat(m_fc3, " is struct '")
+                  m_fc3 = concat(m_fc3, got_snm)
+                  m_fc3 = concat(m_fc3, "')")
+                  hold efc3b = fail(1, m_fc3)
+                }
+              }
+            }
+            est = push_r(est, 0)
+            nargs = nargs + 1
+            hold zc2 = sw_st(src, st)
+            when at(src, sn, st[0]) == 44 {
+              st[0] = st[0] + 1
+            } otherwise {
+              when at(src, sn, st[0]) == 41 {
+                st[0] = st[0] + 1
+                cgo = 0
+              } otherwise {
+                hold efc4 = fail(1, "call needs , or )")
+              }
+            }
+          }
+        }
+        when st[fb + 2] == 1 {
+          fi = pick_instance(st, pool, fi, kinds, nargs)
+          fb = f_base(fi)
+        }
+        when nargs != st[fb + 1] {
+          hold exp_np = st[fb + 1]
+          hold m_ar = concat("function '", n)
+          m_ar = concat(m_ar, "' takes ")
+          m_ar = concat(m_ar, istr(exp_np))
+          m_ar = concat(m_ar, " args, got ")
+          m_ar = concat(m_ar, istr(nargs))
+          hold efc5 = fail(1, m_ar)
+        }
+        when nargs <= 6 {
+          hold ai = nargs - 1
+          while ai >= 0 {
+            est = pop_r(est, argreg_of(ai))
+            ai = ai - 1
+          }
+          hold fb_ni = st[fb]
+          hold fnm_call = unintern(pool, fb_ni)
+          est = callf(est, fi, fnm_call)
+        } otherwise {
+          hold ai2 = 0
+          while ai2 < 6 {
+            hold stk_off = 8 * (nargs - 1 - ai2)
+            est = mv_r64m(est, argreg_of(ai2), 4, neg1, 0, stk_off)
+            ai2 = ai2 + 1
+          }
+          hold fb_ni2 = st[fb]
+          hold fnm_call2 = unintern(pool, fb_ni2)
+          est = callf(est, fi, fnm_call2)
+          est = bin_imm32(est, 0, 4, 8 * (nargs + pad))
+        }
+        st[30] = st[fb + 4]
+        when st[30] == 3 && st[fb + 2] == 0 {
+          st[31] = st[fb + 32]
+        } otherwise {
+          st[31] = 0 - 1
+        }
+        give est
+      }
+    }
+
+    st[0] = after_n
+    when string_eq(n, "and") == 1 || string_eq(n, "or") == 1 || string_eq(n, "not") == 1 {
+      hold ewo = fail(1, concat(concat("'", n), "' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)"))
+    }
+    hold gi = g_find(st, pool, n)
+    when gi < 0 {
+      hold euv1 = fail(1, concat(concat("undefined variable '", n), "' (hold it first)"))
+    }
+    hold gb = g_base(gi)
+    when st[gb + 1] == 0 - 1 {
+      hold euv2 = fail(1, concat(concat("undefined variable '", n), "' (hold it first)"))
+    }
+    est = load_global_em(est, st, gi)
+    st[30] = st[gb + 1]
+    when st[gb + 1] == 3 {
+      st[31] = st[gb + 2]
+    } otherwise {
+      st[31] = 0 - 1
+    }
+    give est
+  }
+
+  hold ebad = fail(1, "bad expression (expected a number, string, list, name)")
+  give est
+}
+
+make emit_sdiv(est: list) -> list {
+  est = mv_rr(est, 8, 0)
+  est = mv_rr(est, 9, 1)
+  est = mv_rr(est, 10, 0)
+  est = sar_imm(est, 10, 63)
+  est = xor_rr(est, 8, 10)
+  est = bin_rr(est, 41, 8, 10)
+  est = mv_rr(est, 11, 1)
+  est = sar_imm(est, 11, 63)
+  est = xor_rr(est, 9, 11)
+  est = bin_rr(est, 41, 9, 11)
+  est = xor_rr(est, 10, 11)
+  est = mv_rr(est, 0, 8)
+  est = xor_rr(est, 2, 2)
+  est = fm7(est, 6, 9)
+  est = xor_rr(est, 0, 10)
+  est = bin_rr(est, 41, 0, 10)
+  est = xor_rr(est, 2, 10)
+  est = bin_rr(est, 41, 2, 10)
+  give est
+}
+
+make emit_post(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
+  hold neg1 = 0 - 1
+  est = emit_prim(src, st, pool, est, data, depth)
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    hold saved = st[0]
+    hold zp = sw_st(src, st)
+    hold q = st[0]
+    hold qc = at(src, sn, q)
+    when qc == 91 {
+      when st[30] != 2 && st[30] != 1 {
+        hold xk_ix = st[30]
+        hold ep1 = fail(1, concat("cannot index a ", kname(xk_ix)))
+      }
+      hold base_k = st[30]
+      st[0] = q + 1
+      est = push_r(est, 0)
+      est = emit_expr(src, st, pool, est, data, depth + 1)
+      when st[30] != 0 {
+        hold ep2 = fail(1, "index must be a number")
+      }
+      est = emit_d2i(est)
+      est = mv_rr(est, 6, 0)
+      est = pop_r(est, 0)
+      est = mv_rr(est, 7, 0)
+      when base_k == 2 {
+        est = callb(est, 11)
+      } otherwise {
+        est = callb(est, 14)
+        est = emit_i2d(est)
+      }
+      hold zp2 = sw_st(src, st)
+      when at(src, sn, st[0]) != 93 {
+        hold ep3 = fail(1, "expected ] after index")
+      }
+      st[0] = st[0] + 1
+      st[30] = 0
+      st[31] = 0 - 1
+    } otherwise {
+      when qc == 46 {
+        when st[30] != 3 {
+          hold xk_fa = st[30]
+          hold ep4 = fail(1, concat(concat("cannot access a field (value is ", kname(xk_fa)), ")"))
+        }
+        hold sid = st[31]
+        when sid < 0 {
+          hold ep5 = fail(1, "cannot resolve the struct type here")
+        }
+        st[0] = q + 1
+        hold fnm = pid_st(src, st)
+        when len(fnm) == 0 {
+          hold ep6 = fail(1, "expected a field name after .")
+        }
+        hold fidx = s_field(st, pool, sid, fnm)
+        hold sb = s_base(sid)
+        when fidx < 0 {
+          hold sb_ni = st[sb]
+          hold snm_fa = unintern(pool, sb_ni)
+          hold ep7 = fail(1, concat(concat("no field '", fnm), concat(concat("' in struct '", snm_fa), "'")))
+        }
+        hold seen_fa = sb + 52 + fidx
+        when st[sb + 2] == 0 && st[seen_fa] == 0 {
+          hold sb_ni2 = st[sb]
+          hold snm_fa2 = unintern(pool, sb_ni2)
+          hold ep7b = fail(1, concat(concat("struct '", snm_fa2), concat(concat("' field '", fnm), "' has unresolved type")))
+        }
+        est = mv_r64m(est, 0, 0, neg1, 0, 8 * fidx)
+        hold fk_s = sb + 20 + fidx
+        hold fs_s = sb + 36 + fidx
+        st[30] = st[fk_s]
+        when st[30] == 3 {
+          st[31] = st[fs_s]
+        } otherwise {
+          st[31] = 0 - 1
+        }
+      } otherwise {
+        st[0] = saved
+        go = 0
+      }
+    }
+  }
+  give est
+}
+
+make emit_term(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
+  hold neg1 = 0 - 1
+  est = emit_post(src, st, pool, est, data, depth)
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    hold z = sw_st(src, st)
+    hold op = at(src, sn, st[0])
+    when op != 42 && op != 47 && op != 37 {
+      go = 0
+    } otherwise {
+      when op == 47 && at(src, sn, st[0] + 1) == 47 {
+        go = 0
+      } otherwise {
+        when st[30] != 0 {
+          hold et1 = fail(1, concat(chr(op), " is numeric-only"))
+        }
+        st[0] = st[0] + 1
+        est = push_r(est, 0)
+        est = emit_post(src, st, pool, est, data, depth)
+        when st[30] != 0 {
+          hold et2 = fail(1, concat(chr(op), " is numeric-only"))
+        }
+        est = mv_rr(est, 1, 0)
+        est = pop_r(est, 0)
+        when op == 42 {
+          est = movq_xr(est, 0, 0)
+          est = movq_xr(est, 1, 1)
+          est = mulsd(est, 0, 1)
+          est = movq_rx(est, 0, 0)
+        } otherwise {
+          when op == 47 {
+            est = movq_xr(est, 0, 0)
+            est = movq_xr(est, 1, 1)
+            est = divsd(est, 0, 1)
+            est = movq_rx(est, 0, 0)
+          } otherwise {
+            est = movq_xr(est, 1, 1)
+            est = cvttsd2si(est, 1, 1)
+            est = test_rr(est, 1, 1)
+            hold jz = here_local(est)
+            est = jcc_rel32(est, 4, 0)
+            est = emit_d2i(est)
+            est = emit_sdiv(est)
+            est = mv_rr(est, 0, 2)
+            est = emit_i2d(est)
+            hold jmp_at = here_local(est)
+            est = jmp_rel32(est, 0)
+            hold die_code = here_local(est)
+            est = lea_rm(est, 0, 12, neg1, 0, 1184)
+            est = callb(est, 20)
+            est = erel32j(est, jmp_at, here_local(est))
+            est = erel32(est, jz, die_code)
+          }
+        }
+      }
+    }
+  }
+  give est
+}
+
+make emit_rel(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
+  est = emit_term(src, st, pool, est, data, depth)
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    hold z = sw_st(src, st)
+    hold op = at(src, sn, st[0])
+    when op != 43 && op != 45 {
+      go = 0
+    } otherwise {
+      st[0] = st[0] + 1
+      est = push_r(est, 0)
+      hold lk = st[30]
+      est = emit_term(src, st, pool, est, data, depth)
+      est = pop_r(est, 1)
+      when op == 43 {
+        when lk == 1 || st[30] == 1 {
+          when lk != 1 && lk != 0 {
+            hold er1 = fail(1, "+ is for numbers or strings")
+          }
+          when st[30] != 1 && st[30] != 0 {
+            hold er2 = fail(1, "+ is for numbers or strings")
+          }
+          est = push_r(est, 0)
+          est = mv_rr(est, 0, 1)
+          when lk != 1 {
+            est = callb(est, 4)
+          }
+          est = pop_r(est, 1)
+          est = push_r(est, 0)
+          est = mv_rr(est, 0, 1)
+          when st[30] != 1 {
+            est = callb(est, 4)
+          }
+          est = mv_rr(est, 6, 0)
+          est = pop_r(est, 7)
+          est = callb(est, 3)
+          st[30] = 1
+          st[31] = 0 - 1
+        } otherwise {
+          when lk != 0 || st[30] != 0 {
+            hold er3 = fail(1, "+ is for numbers or strings")
+          }
+          est = movq_xr(est, 0, 1)
+          est = movq_xr(est, 1, 0)
+          est = addsd(est, 0, 1)
+          est = movq_rx(est, 0, 0)
+        }
+      } otherwise {
+        when lk != 0 || st[30] != 0 {
+          hold er4 = fail(1, "- is numeric-only")
+        }
+        est = movq_xr(est, 0, 1)
+        est = movq_xr(est, 1, 0)
+        est = subsd(est, 0, 1)
+        est = movq_rx(est, 0, 0)
+      }
+    }
+  }
+  give est
+}
+
+make emit_expr(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
+  est = emit_rel(src, st, pool, est, data, depth)
+  hold z = sw_st(src, st)
+  hold sn = st[1]
+  hold c0 = at(src, sn, st[0])
+  hold c1 = at(src, sn, st[0] + 1)
+  hold op = ""
+  hold oplen = 0
+  when c0 == 61 && c1 == 61 {
+    op = "=="
+    oplen = 2
+  } otherwise {
+    when c0 == 33 && c1 == 61 {
+      op = "!="
+      oplen = 2
+    } otherwise {
+      when c0 == 60 && c1 == 61 {
+        op = "<="
+        oplen = 2
+      } otherwise {
+        when c0 == 62 && c1 == 61 {
+          op = ">="
+          oplen = 2
+        } otherwise {
+          when c0 == 60 {
+            op = "<"
+            oplen = 1
+          } otherwise {
+            when c0 == 62 {
+              op = ">"
+              oplen = 1
+            }
+          }
+        }
+      }
+    }
+  }
+  when oplen == 0 {
+    give est
+  }
+  when st[30] == 2 || st[30] == 3 {
+    hold xk_cm1 = st[30]
+    hold ec1 = fail(1, concat(concat("cannot compare ", kname(xk_cm1)), " with a value"))
+  }
+  st[0] = st[0] + oplen
+  est = push_r(est, 0)
+  hold lk = st[30]
+  est = emit_rel(src, st, pool, est, data, depth)
+  est = pop_r(est, 1)
+  when lk == 1 {
+    when st[30] != 1 {
+      hold ec2 = fail(1, "string compared with a non-string")
+    }
+    est = mv_rr(est, 7, 1)
+    est = mv_rr(est, 6, 0)
+    when string_eq(op, "==") == 1 || string_eq(op, "!=") == 1 {
+      est = callb(est, 2)
+      est = test_rr(est, 0, 0)
+      when string_eq(op, "==") == 1 {
+        est = setcc(est, 5, 0)
+      } otherwise {
+        est = setcc(est, 4, 0)
+      }
+      est = movzx_al_to_rax(est)
+    } otherwise {
+      est = callb(est, 29)
+      est = test_rr(est, 0, 0)
+      hold scc = 13
+      when string_eq(op, "<") == 1 {
+        scc = 12
+      }
+      when string_eq(op, "<=") == 1 {
+        scc = 14
+      }
+      when string_eq(op, ">") == 1 {
+        scc = 15
+      }
+      est = setcc(est, scc, 0)
+      est = movzx_al_to_rax(est)
+    }
+    est = emit_i2d(est)
+  } otherwise {
+    when st[30] != 0 {
+      hold xk_cm3 = st[30]
+      hold ec3 = fail(1, concat("number compared with ", kname(xk_cm3)))
+    }
+    est = movq_xr(est, 0, 1)
+    est = movq_xr(est, 1, 0)
+    est = ucomisd(est, 0, 1)
+    hold cc = 3
+    when string_eq(op, "==") == 1 {
+      cc = 4
+    }
+    when string_eq(op, "!=") == 1 {
+      cc = 5
+    }
+    when string_eq(op, "<") == 1 {
+      cc = 2
+    }
+    when string_eq(op, "<=") == 1 {
+      cc = 6
+    }
+    when string_eq(op, ">") == 1 {
+      cc = 7
+    }
+    est = setcc(est, cc, 0)
+    est = movzx_al_to_rax(est)
+    est = emit_i2d(est)
+  }
+  st[30] = 0
+  st[31] = 0 - 1
+  give est
+}
+
+// ---- short-circuit boolean conditions (when / while / value logic) --------
+
+make gen_cond_live(src: str, st: list, pool: list, est: list, data: list, s0: num, e0: num, jump_if: num, out_jl: list, what: str) -> list {
+  hold s = s0
+  hold e = e0
+  while s < e && is_space(sx_index(src, s)) == 1 {
+    s = s + 1
+  }
+  while e > s && is_space(sx_index(src, e - 1)) == 1 {
+    e = e - 1
+  }
+  when s >= e {
+    hold e1 = fail(1, concat(concat("missing operand in ", what), " condition"))
+  }
+
+  // or: loosest precedence
+  hold or_at = cond_op(src, st, s, e, "or")
+  when or_at >= 0 {
+    hold ps = []
+    hold pe = []
+    hold r = s
+    hold k = 0
+    hold go = 1
+    while go == 1 {
+      hold x = cond_op(src, st, r, e, "or")
+      when k >= 256 {
+        hold e2 = fail(1, "condition is too long for the native compiler")
+      }
+      ps = push(ps, r)
+      when x >= 0 {
+        pe = push(pe, x)
+        r = x + cond_op_len(src, x, "or")
+      } otherwise {
+        pe = push(pe, e)
+        go = 0
+      }
+      k = k + 1
+    }
+    when jump_if == 1 {
+      hold i = 0
+      while i < k {
+        hold psi = ps[i]
+        hold pei = pe[i]
+        est = gen_cond_live(src, st, pool, est, data, psi, pei, 1, out_jl, what)
+        i = i + 1
+      }
+    } otherwise {
+      hold tl = []
+      hold i2 = 0
+      while i2 < k - 1 {
+        hold psi2 = ps[i2]
+        hold pei2 = pe[i2]
+        est = gen_cond_live(src, st, pool, est, data, psi2, pei2, 1, tl, what)
+        i2 = i2 + 1
+      }
+      hold psl = ps[k - 1]
+      hold pel = pe[k - 1]
+      est = gen_cond_live(src, st, pool, est, data, psl, pel, 0, out_jl, what)
+      est = jl_patch6(est, tl, here_local(est))
+    }
+    give est
+  }
+
+  // and
+  hold and_at = cond_op(src, st, s, e, "and")
+  when and_at >= 0 {
+    hold ps2 = []
+    hold pe2 = []
+    hold r2 = s
+    hold k2 = 0
+    hold go2 = 1
+    while go2 == 1 {
+      hold x2 = cond_op(src, st, r2, e, "and")
+      when k2 >= 256 {
+        hold e3 = fail(1, "condition is too long for the native compiler")
+      }
+      ps2 = push(ps2, r2)
+      when x2 >= 0 {
+        pe2 = push(pe2, x2)
+        r2 = x2 + cond_op_len(src, x2, "and")
+      } otherwise {
+        pe2 = push(pe2, e)
+        go2 = 0
+      }
+      k2 = k2 + 1
+    }
+    when jump_if == 0 {
+      hold j = 0
+      while j < k2 {
+        hold psj = ps2[j]
+        hold pej = pe2[j]
+        est = gen_cond_live(src, st, pool, est, data, psj, pej, 0, out_jl, what)
+        j = j + 1
+      }
+    } otherwise {
+      hold fl = []
+      hold j2 = 0
+      while j2 < k2 - 1 {
+        hold psj2 = ps2[j2]
+        hold pej2 = pe2[j2]
+        est = gen_cond_live(src, st, pool, est, data, psj2, pej2, 0, fl, what)
+        j2 = j2 + 1
+      }
+      hold ps2l = ps2[k2 - 1]
+      hold pe2l = pe2[k2 - 1]
+      est = gen_cond_live(src, st, pool, est, data, ps2l, pe2l, 1, out_jl, what)
+      est = jl_patch6(est, fl, here_local(est))
+    }
+    give est
+  }
+
+  // prefix not
+  when e - s >= 3 && string_eq(sub(src, s, s + 3), "not") == 1 {
+    hold next_ok = 1
+    when s + 3 < e && idcc(sx_index(src, s + 3)) == 1 {
+      next_ok = 0
+    }
+    when next_ok == 1 {
+      hold flip = 1
+      when jump_if == 1 {
+        flip = 0
+      }
+      give gen_cond_live(src, st, pool, est, data, s + 3, e, flip, out_jl, what)
+    }
+  }
+
+  // parenthesized group
+  when cond_wrapped(src, s, e) == 1 {
+    give gen_cond_live(src, st, pool, est, data, s + 1, e - 1, jump_if, out_jl, what)
+  }
+
+  // atom
+  hold saved_p = st[0]
+  st[6] = st[6] + 1
+  st[0] = s
+  est = emit_expr(src, st, pool, est, data, 0)
+  hold zc = sw_st(src, st)
+  hold after_atom = st[0]
+  st[6] = st[6] - 1
+  st[0] = saved_p
+  when after_atom < e {
+    hold e4 = fail(1, concat(concat("unexpected text in ", what), " condition (use and, or, not and parentheses between comparisons)"))
+  }
+  when st[30] == 0 - 1 {
+    hold e5 = fail(1, concat(concat("cannot infer the type of the ", what), " condition"))
+  }
+  when st[30] != 0 {
+    hold xk_cn = st[30]
+    hold e6 = fail(1, concat(concat(what, " condition must be a number (got "), concat(kname(xk_cn), ")")))
+  }
+  est = bin_rr(est, 1, 0, 0)
+  hold j_at = here_local(est)
+  hold jcc = 4
+  when jump_if == 1 {
+    jcc = 5
+  }
+  est = jcc_rel32(est, jcc, 0)
+  out_jl = push(out_jl, j_at)
+  give est
+}
+
+// ---- statements: when, for, make, prog ------------------------------------
+
+make emit_when_body(src: str, st: list, pool: list, est: list, data: list, lp_st: list, in_fn: num) -> list {
+  hold sn = st[1]
+  hold ce = cond_end(src, sn, st[0])
+  hold fl = []
+  hold cs0 = st[0]
+  est = gen_cond_live(src, st, pool, est, data, cs0, ce, 0, fl, "when")
+  st[0] = ce
+  hold z1 = sw_st(src, st)
+  when at(src, sn, st[0]) != 123 {
+    hold ew1 = fail(1, "when needs { ... }")
+  }
+  st[0] = st[0] + 1
+  est = emit_prog(src, st, pool, est, data, lp_st, in_fn, 1)
+  hold z2 = sw_st(src, st)
+  hold has_else = 0
+  hold chain = 0
+  when mkw_st(src, st, "elif") == 1 {
+    has_else = 1
+    chain = 1
+  } otherwise {
+    when mkw_st(src, st, "otherwise") == 1 || mkw_st(src, st, "else") == 1 {
+      has_else = 1
+      hold z3 = sw_st(src, st)
+      when mkw_st(src, st, "when") == 1 || mkw_st(src, st, "if") == 1 {
+        chain = 1
+      }
+    }
+  }
+  when has_else == 1 {
+    hold jmpend_at = here_local(est)
+    est = jmp_rel32(est, 0)
+    hold j2 = here_local(est)
+    when chain == 1 {
+      est = emit_when_body(src, st, pool, est, data, lp_st, in_fn)
+    } otherwise {
+      hold z4 = sw_st(src, st)
+      when at(src, sn, st[0]) != 123 {
+        hold ew2 = fail(1, "else needs { ... }")
+      }
+      st[0] = st[0] + 1
+      est = emit_prog(src, st, pool, est, data, lp_st, in_fn, 1)
+    }
+    est = erel32j(est, jmpend_at, here_local(est))
+    est = jl_patch6(est, fl, j2)
+  } otherwise {
+    est = jl_patch6(est, fl, here_local(est))
+  }
+  give est
+}
+
+make for_slot_em(st: list, pool: list, nm: str) -> num {
+  when st[5] < 0 {
+    give g_decl(st, pool, nm)
+  }
+  hold lbase = st[32]
+  hold ng = st[11]
+  hold i = lbase
+  while i < ng {
+    hold gb = g_base(i)
+    when pool_eq(pool, st[gb], nm) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  hold max_lv = 64
+  when st[39] == 1 {
+    max_lv = 4096
+  }
+  when ng >= max_lv {
+    hold e1 = fail(1, "too many variables (native limit reached)")
+  }
+  hold gi = ng
+  st[11] = ng + 1
+  hold n_gb = g_base(gi)
+  st[n_gb] = intern(pool, nm)
+  st[n_gb + 1] = 0 - 1
+  st[n_gb + 2] = 0 - 1
+  hold fb = f_base(st[5])
+  hold nparam = st[fb + 1]
+  hold j = 0
+  while j < nparam {
+    hold pns = fn_pn_slot(fb, j)
+    when pool_eq(pool, st[pns], nm) == 1 {
+      hold p_off = 0 - 8 * (j + 1)
+      st[n_gb + 3] = p_off
+      hold pks = fn_pk_slot(fb, j)
+      st[n_gb + 1] = st[pks]
+      when st[pks] == 3 && st[fb + 2] == 0 {
+        hold pss_f = fn_ps_slot(fb, j)
+        st[n_gb + 2] = st[pss_f]
+      }
+      give gi
+    }
+    j = j + 1
+  }
+  hold nloc = st[33]
+  hold l_off = 0 - 8 * (nparam + 1 + nloc)
+  st[n_gb + 3] = l_off
+  st[33] = nloc + 1
+  give gi
+}
+
+make for_var_em(st: list, pool: list, nm: str, kind: num) -> num {
+  hold gi = for_slot_em(st, pool, nm)
+  hold gb = g_base(gi)
+  when st[gb + 1] == 0 - 1 {
+    st[gb + 1] = kind
+    st[gb + 2] = 0 - 1
+  } otherwise {
+    when st[gb + 1] != kind {
+      hold e1 = fail(1, concat(concat("variable '", nm), "' is used with two different types"))
+    }
+  }
+  give gi
+}
+
+make for_hidden_em(st: list, pool: list, tag: str, id0_val: num, kind: num) -> num {
+  hold id = id0_val
+  hold hn = ""
+  hold go = 1
+  while go == 1 {
+    hn = concat("$for", concat(istr(id), concat("_", tag)))
+    hold ex = 0
+    when g_find(st, pool, hn) >= 0 {
+      ex = 1
+    }
+    when st[5] >= 0 {
+      hold fb = f_base(st[5])
+      hold nparam = st[fb + 1]
+      hold j = 0
+      while j < nparam {
+        hold pns = fn_pn_slot(fb, j)
+        when pool_eq(pool, st[pns], hn) == 1 {
+          ex = 1
+        }
+        j = j + 1
+      }
+    }
+    when ex == 0 {
+      go = 0
+    } otherwise {
+      id = st[35]
+      st[35] = st[35] + 1
+    }
+  }
+  hold gi = for_slot_em(st, pool, hn)
+  hold gb = g_base(gi)
+  st[gb + 1] = kind
+  st[gb + 2] = 0 - 1
+  give gi
+}
+
+make eval_sub_em(src: str, st: list, pool: list, est: list, data: list, s0: num, e0: num) -> list {
+  hold s = s0
+  hold e = e0
+  while s < e && is_space(sx_index(src, s)) == 1 {
+    s = s + 1
+  }
+  while e > s && is_space(sx_index(src, e - 1)) == 1 {
+    e = e - 1
+  }
+  when s >= e {
+    hold e1 = fail(1, "for needs a value after 'in'")
+  }
+  hold sub_s = sub(src, s, e)
+  hold saved_p = st[0]
+  hold saved_sn = st[1]
+  st[0] = 0
+  st[1] = len(sub_s)
+  est = emit_expr(sub_s, st, pool, est, data, 0)
+  hold z = sw_st(sub_s, st)
+  hold rem_p = st[0]
+  hold rem_sn = st[1]
+  st[0] = saved_p
+  st[1] = saved_sn
+  when rem_p < rem_sn {
+    hold e2 = fail(1, "unexpected text in the for header")
+  }
+  give est
+}
+
+make emit_for(src: str, st: list, pool: list, est: list, data: list, lp_st: list, in_fn: num) -> list {
+  hold sn = st[1]
+  hold z0 = sw_st(src, st)
+  hold nm = pid_st(src, st)
+  when len(nm) == 0 {
+    hold ef1 = fail(1, "for needs a name: for NAME in EXPR { ... }")
+  }
+  when string_eq(nm, "true") == 1 || string_eq(nm, "false") == 1 {
+    hold ef2 = fail(1, "for binder cannot be a boolean literal")
+  }
+  hold z1 = sw_st(src, st)
+  when mkw_st(src, st, "in") == 0 {
+    hold ef3 = fail(1, "for needs 'in': for NAME in EXPR { ... }")
+  }
+  hold he = cond_end(src, sn, st[0])
+  hold hs = st[0]
+  hold he2 = he
+  while hs < he2 && is_space(sx_index(src, hs)) == 1 {
+    hs = hs + 1
+  }
+  while he2 > hs && is_space(sx_index(src, he2 - 1)) == 1 {
+    he2 = he2 - 1
+  }
+  hold id = st[35]
+  st[35] = id + 1
+  hold dots = top_dots(src, hs, he2)
+  hold top_gi = 0 - 1
+  hold src_gi = 0 - 1
+  hold idx_gi = 0 - 1
+  hold end_gi = 0 - 1
+  hold top = here_local(est)
+  hold mode = 0
+
+  when dots >= 0 {
+    mode = 0
+    est = eval_sub_em(src, st, pool, est, data, hs, dots)
+    when st[30] != 0 {
+      hold ef4 = fail(1, "for range bounds must be numbers")
+    }
+    top_gi = for_var_em(st, pool, nm, 0)
+    est = store_global_em(est, st, top_gi)
+    top = here_local(est)
+    est = eval_sub_em(src, st, pool, est, data, dots + 2, he2)
+    when st[30] != 0 {
+      hold ef5 = fail(1, "for range bounds must be numbers")
+    }
+    end_gi = for_hidden_em(st, pool, "end", id, 0)
+    est = store_global_em(est, st, end_gi)
+    est = load_global_em(est, st, top_gi)
+    est = movq_xr(est, 0, 0)
+    est = load_global_em(est, st, end_gi)
+    est = movq_xr(est, 1, 0)
+    est = ucomisd(est, 0, 1)
+  } otherwise {
+    est = eval_sub_em(src, st, pool, est, data, hs, he2)
+    when st[30] == 2 {
+      mode = 1
+      src_gi = for_hidden_em(st, pool, "src", id, 2)
+      top_gi = for_var_em(st, pool, nm, 0)
+    } otherwise {
+      when st[30] == 1 {
+        mode = 2
+        src_gi = for_hidden_em(st, pool, "src", id, 1)
+        top_gi = for_var_em(st, pool, nm, 1)
+      } otherwise {
+        hold xk_fr = st[30]
+        hold ef6 = fail(1, concat(concat("for needs a range (a..b), a list or a string (got ", kname(xk_fr)), ")"))
+      }
+    }
+    est = store_global_em(est, st, src_gi)
+    idx_gi = for_hidden_em(st, pool, "idx", id, 0)
+    est = mov_imm64(est, 0, 0)
+    est = store_global_em(est, st, idx_gi)
+    top = here_local(est)
+    est = load_global_em(est, st, src_gi)
+    when mode == 1 {
+      est = callb(est, 12)
+    } otherwise {
+      est = callb(est, 1)
+    }
+    est = emit_i2d(est)
+    est = movq_xr(est, 1, 0)
+    est = load_global_em(est, st, idx_gi)
+    est = movq_xr(est, 0, 0)
+    est = ucomisd(est, 0, 1)
+  }
+
+  hold exit_at = here_local(est)
+  est = jcc_rel32(est, 3, 0)
+  when mode != 0 {
+    est = load_global_em(est, st, idx_gi)
+    est = emit_d2i(est)
+    est = mv_rr(est, 6, 0)
+    est = load_global_em(est, st, src_gi)
+    est = mv_rr(est, 7, 0)
+    when mode == 1 {
+      est = callb(est, 11)
+    } otherwise {
+      est = callb(est, 14)
+      est = callb(est, 15)
+    }
+    est = store_global_em(est, st, top_gi)
+  }
+
+  when st[34] >= 64 {
+    hold ef7 = fail(1, "native loop nesting limit is 64")
+  }
+  hold my_depth = st[34]
+  st[34] = my_depth + 1
+  st[0] = he
+  hold zb = sw_st(src, st)
+  when at(src, sn, st[0]) != 123 {
+    hold ef8 = fail(1, "for needs { ... }")
+  }
+  st[0] = st[0] + 1
+  est = emit_prog(src, st, pool, est, data, lp_st, in_fn, 1)
+  st[34] = my_depth
+
+  est = lp_patch(est, lp_st, my_depth, 1, here_local(est))
+  when mode == 0 {
+    est = load_global_em(est, st, top_gi)
+    est = movq_xr(est, 0, 0)
+  } otherwise {
+    est = load_global_em(est, st, idx_gi)
+    est = movq_xr(est, 0, 0)
+  }
+  est = mov_imm64_hl(est, 1, 1072693248, 0)
+  est = movq_xr(est, 1, 1)
+  est = addsd(est, 0, 1)
+  est = movq_rx(est, 0, 0)
+  when mode == 0 {
+    est = store_global_em(est, st, top_gi)
+  } otherwise {
+    est = store_global_em(est, st, idx_gi)
+  }
+  est = jmp_rel32(est, top - here_local(est) - 5)
+  est = erel32(est, exit_at, here_local(est))
+  est = lp_patch(est, lp_st, my_depth, 0, here_local(est))
+  give est
+}
+
+make emit_fn(src: str, st: list, pool: list, est: list, data: list, lp_st: list, fi: num) -> list {
+  hold neg1 = 0 - 1
+  when fi < 0 {
+    hold ef0 = fail(1, "unknown function")
+  }
+  hold fb = f_base(fi)
+  hold fnm = unintern(pool, st[fb])
+  hold start_off = here_local(est)
+  st[fb + 34] = start_off
+  hold hdr = concat("--- make ", fnm)
+  hdr = concat(hdr, "[")
+  hdr = concat(hdr, istr(fi))
+  hdr = concat(hdr, "] at ")
+  hdr = concat(hdr, hex_off6(here_global(est)))
+  hdr = concat(hdr, " ---")
+  est = ilogc(est, hdr)
+  est = push_r(est, 5)
+  est = mv_rr(est, 5, 4)
+  est = sub_rsp_imm32_slot(est)
+  hold frame_at = here_local(est) - 4
+  est = lea_r12_data(est)
+
+  hold nparam = st[fb + 1]
+  hold i = 0
+  while i < nparam {
+    hold disp = 0 - 8 * (i + 1)
+    when i < 6 {
+      est = mv_m64(est, 5, neg1, 0, disp, argreg_of(i))
+    } otherwise {
+      hold caller_off = 16 + 8 * (nparam - 1 - i)
+      est = mv_r64m(est, 0, 5, neg1, 0, caller_off)
+      est = mv_m64(est, 5, neg1, 0, disp, 0)
+    }
+    i = i + 1
+  }
+
+  hold sn = st[1]
+  hold z1 = sw_st(src, st)
+  hold ntp = st[fb + 3]
+  st[13] = ntp
+  i = 0
+  while i < ntp {
+    hold tps = fb + 26 + i
+    hold gts = 16 + i
+    st[gts] = st[tps]
+    i = i + 1
+  }
+  when at(src, sn, st[0]) == 60 {
+    while at(src, sn, st[0]) != 0 && at(src, sn, st[0]) != 62 {
+      st[0] = st[0] + 1
+    }
+    when at(src, sn, st[0]) == 62 {
+      st[0] = st[0] + 1
+    }
+    hold z2 = sw_st(src, st)
+  }
+  when at(src, sn, st[0]) != 40 {
+    hold ef1 = fail(1, concat(concat("make ", fnm), ": expected (params)"))
+  }
+  st[0] = st[0] + 1
+  hold ploop = 1
+  while ploop == 1 {
+    hold z3 = sw_st(src, st)
+    when at(src, sn, st[0]) == 41 {
+      st[0] = st[0] + 1
+      ploop = 0
+    } otherwise {
+      hold pm = pid_st(src, st)
+      when len(pm) == 0 {
+        hold ef2 = fail(1, concat(concat("make ", fnm), ": bad param list"))
+      }
+      hold st1 = sig_type_st(src, st, pool, fnm)
+      hold z4 = sw_st(src, st)
+      when at(src, sn, st[0]) == 44 {
+        st[0] = st[0] + 1
+      } otherwise {
+        when at(src, sn, st[0]) == 41 {
+          st[0] = st[0] + 1
+          ploop = 0
+        } otherwise {
+          hold ef3 = fail(1, concat(concat("make ", fnm), ": bad param list"))
+        }
+      }
+    }
+  }
+  hold z5 = sw_st(src, st)
+  hold check_ret = 0
+  when at(src, sn, st[0]) == 45 && at(src, sn, st[0] + 1) == 62 {
+    check_ret = 1
+  }
+  hold sr1 = sig_ret_st(src, st, pool, fnm)
+  st[13] = 0
+  hold z6 = sw_st(src, st)
+  when at(src, sn, st[0]) != 123 {
+    hold ef4 = fail(1, concat(concat("make ", fnm), ": expected { ... }"))
+  }
+  when check_ret == 1 {
+    hold flow_pos = st[0]
+    hold flow_box = [flow_pos]
+    when rf_block(src, sn, flow_box, 0) == 0 {
+      hold ef5 = fail(1, concat(concat("make ", fnm), " may fall through without give"))
+    }
+  }
+  st[0] = st[0] + 1
+  st[5] = fi
+  st[32] = st[11]
+  st[33] = 0
+  est = emit_prog(src, st, pool, est, data, lp_st, 1, 1)
+  hold fn_nloc = st[33]
+  hold raw_fr = 8 * (nparam + fn_nloc) + 16
+  hold rem_fr = raw_fr % 16
+  when rem_fr != 0 {
+    raw_fr = raw_fr + (16 - rem_fr)
+  }
+  est = patch_imm32(est, frame_at, raw_fr)
+  st[11] = st[32]
+  st[5] = 0 - 1
+  est = mov_imm64(est, 0, 0)
+  est = leave_ret(est)
+  give est
+}
+
+make emit_prog(src: str, st: list, pool: list, est: list, data: list, lp_st: list, in_fn: num, stop: num) -> list {
+  hold neg1 = 0 - 1
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    hold z0 = sw_st(src, st)
+    hold c = at(src, sn, st[0])
+    when c == 0 {
+      give est
+    }
+    when stop == 1 && c == 125 {
+      st[0] = st[0] + 1
+      give est
+    }
+    when c == 47 && at(src, sn, st[0] + 1) == 47 {
+      hold ec = eol_st(src, st)
+    } otherwise {
+      est = callb(est, 28)
+      hold line = st[0]
+      hold z1 = sw_st(src, st)
+      hold done = 0
+
+      // hold
+      when done == 0 && mkw_st(src, st, "hold") == 1 {
+        done = 1
+        hold nm = pid_st(src, st)
+        when len(nm) == 0 {
+          hold eh1 = fail(1, "hold needs a name")
+        }
+        hold ann = hold_kind_st(src, st, pool, nm, st[5])
+        hold ann_sid = st[7]
+        hold zh = sw_st(src, st)
+        when at(src, sn, st[0]) != 61 {
+          hold eh2 = fail(1, "hold needs '='")
+        }
+        st[0] = st[0] + 1
+        hold gi = 0 - 1
+        when st[5] >= 0 {
+          hold cfb = f_base(st[5])
+          hold cnp = st[cfb + 1]
+          hold pj = 0
+          while pj < cnp {
+            hold pns = fn_pn_slot(cfb, pj)
+            when pool_eq(pool, st[pns], nm) == 1 {
+              hold cfb_ni = st[cfb]
+              hold cfnm = unintern(pool, cfb_ni)
+              hold eh3 = fail(1, concat(concat("cannot hold '", nm), concat("': it is a parameter of make ", cfnm)))
+            }
+            pj = pj + 1
+          }
+          hold lj = st[32]
+          while lj < st[11] {
+            hold lgb = g_base(lj)
+            when pool_eq(pool, st[lgb], nm) == 1 {
+              gi = lj
+              lj = st[11]
+            }
+            lj = lj + 1
+          }
+          when gi < 0 {
+            hold max_lv2 = 64
+            when st[39] == 1 {
+              max_lv2 = 4096
+            }
+            when st[11] >= max_lv2 {
+              hold eh4 = fail(1, "too many variables (native limit reached)")
+            }
+            gi = st[11]
+            st[11] = gi + 1
+            hold ngb = g_base(gi)
+            st[ngb] = intern(pool, nm)
+            st[ngb + 1] = 0 - 1
+            st[ngb + 2] = 0 - 1
+            hold nloc = st[33]
+            hold l_off2 = 0 - 8 * (cnp + 1 + nloc)
+            st[ngb + 3] = l_off2
+            st[33] = nloc + 1
+          }
+        } otherwise {
+          gi = g_decl(st, pool, nm)
+        }
+        est = emit_rhs(src, st, pool, est, data)
+        hold k = st[30]
+        when ann >= 0 && ann != k {
+          hold eh5 = fail(1, concat(concat("hold '", nm), "': initializer disagrees with declared type"))
+        }
+        when ann == 3 {
+          when ann_sid < 0 || st[31] != ann_sid {
+            hold as_nm = "<unknown>"
+            when ann_sid >= 0 {
+              hold asb = s_base(ann_sid)
+              hold asb_ni = st[asb]
+              as_nm = unintern(pool, asb_ni)
+            }
+            hold eh6 = fail(1, concat(concat("hold '", nm), concat("': initializer disagrees with declared struct type ", as_nm)))
+          }
+        }
+        when k == 0 - 1 {
+          hold eh7 = fail(1, concat(concat("cannot infer the type of variable '", nm), "'"))
+        }
+        hold gb = g_base(gi)
+        when st[gb + 1] == 0 - 1 {
+          st[gb + 1] = k
+          when k == 3 {
+            st[gb + 2] = st[31]
+          } otherwise {
+            st[gb + 2] = 0 - 1
+          }
+        } otherwise {
+          when st[gb + 1] != k {
+            hold eh8 = fail(1, concat(concat("variable '", nm), "' is used with two different types"))
+          } otherwise {
+            when st[gb + 1] == 3 && st[gb + 2] < 0 && st[31] >= 0 {
+              st[gb + 2] = st[31]
+            } otherwise {
+              when st[gb + 1] == 3 && st[gb + 2] >= 0 && st[31] >= 0 && st[gb + 2] != st[31] {
+                hold eh9 = fail(1, concat(concat("variable '", nm), "' is used with two different struct types"))
+              }
+            }
+          }
+        }
+        when k == 3 && st[31] < 0 {
+          hold eh10 = fail(1, concat(concat("cannot infer the struct type of '", nm), "'"))
+        }
+        est = store_global_em(est, st, gi)
+        hold es1 = endstmt_st(src, st)
+      }
+
+      // show
+      when done == 0 && mkw_st(src, st, "show") == 1 {
+        done = 1
+        hold zs = sw_st(src, st)
+        est = emit_rhs(src, st, pool, est, data)
+        when st[30] == 0 {
+          est = callb(est, 22)
+        } otherwise {
+          when st[30] == 1 {
+            est = callb(est, 5)
+          } otherwise {
+            when st[30] == 2 {
+              est = callb(est, 9)
+            } otherwise {
+              hold esh = fail(1, "show of a struct value is not supported")
+            }
+          }
+        }
+        hold es2 = endstmt_st(src, st)
+      }
+
+      // when
+      when done == 0 && mkw_st(src, st, "when") == 1 {
+        done = 1
+        est = emit_when_body(src, st, pool, est, data, lp_st, in_fn)
+      }
+
+      // elif without when
+      when done == 0 && mkw_st(src, st, "elif") == 1 {
+        hold eel = fail(1, "elif without a when before it")
+      }
+
+      // for
+      when done == 0 && mkw_st(src, st, "for") == 1 {
+        done = 1
+        est = emit_for(src, st, pool, est, data, lp_st, in_fn)
+      }
+
+      // break
+      when done == 0 && mkw_st(src, st, "break") == 1 {
+        done = 1
+        when st[34] == 0 {
+          hold ebr = fail(1, "break outside a loop")
+        }
+        hold brk_at = here_local(est)
+        est = jmp_rel32(est, 0)
+        lp_st = lp_record(lp_st, st[34] - 1, 0, brk_at)
+        hold es3 = endstmt_st(src, st)
+      }
+
+      // continue
+      when done == 0 && mkw_st(src, st, "continue") == 1 {
+        done = 1
+        when st[34] == 0 {
+          hold eco = fail(1, "continue outside a loop")
+        }
+        hold cont_at = here_local(est)
+        est = jmp_rel32(est, 0)
+        lp_st = lp_record(lp_st, st[34] - 1, 1, cont_at)
+        hold es4 = endstmt_st(src, st)
+      }
+
+      // while
+      when done == 0 && mkw_st(src, st, "while") == 1 {
+        done = 1
+        hold top_w = here_local(est)
+        hold ce_w = cond_end(src, sn, st[0])
+        hold fl_w = []
+        hold cs_w = st[0]
+        est = gen_cond_live(src, st, pool, est, data, cs_w, ce_w, 0, fl_w, "while")
+        st[0] = ce_w
+        hold zw = sw_st(src, st)
+        when at(src, sn, st[0]) != 123 {
+          hold ewh1 = fail(1, "while needs { ... }")
+        }
+        st[0] = st[0] + 1
+        when st[34] >= 64 {
+          hold ewh2 = fail(1, "native loop nesting limit is 64")
+        }
+        hold my_wdepth = st[34]
+        st[34] = my_wdepth + 1
+        est = emit_prog(src, st, pool, est, data, lp_st, in_fn, 1)
+        st[34] = my_wdepth
+        est = lp_patch(est, lp_st, my_wdepth, 1, top_w)
+        est = jmp_rel32(est, top_w - here_local(est) - 5)
+        est = jl_patch6(est, fl_w, here_local(est))
+        est = lp_patch(est, lp_st, my_wdepth, 0, here_local(est))
+      }
+
+      // make
+      when done == 0 && mkw_st(src, st, "make") == 1 {
+        done = 1
+        when in_fn == 1 || stop == 1 {
+          hold emk = fail(1, "make must be at the top level (not inside a block or another function)")
+        }
+        st[0] = skip_stmt(src, sn, line)
+      }
+
+      // give
+      when done == 0 && mkw_st(src, st, "give") == 1 {
+        done = 1
+        when in_fn == 0 {
+          hold egv1 = fail(1, "give outside a make function")
+        }
+        est = emit_rhs(src, st, pool, est, data)
+        when st[30] == 0 - 1 {
+          hold egv2 = fail(1, "cannot infer the type of the give value")
+        }
+        hold rfb = f_base(st[5])
+        hold rfk = st[rfb + 4]
+        hold xk_gv = st[30]
+        when xk_gv != rfk {
+          hold egv3 = fail(1, concat(concat("give must give ", kname(rfk)), concat(concat(" (got ", kname(xk_gv)), ")")))
+        }
+        when rfk == 3 && st[rfb + 2] == 0 {
+          hold want_rs = st[rfb + 32]
+          when want_rs >= 0 && st[31] != want_rs {
+            hold wrsb = s_base(want_rs)
+            hold wrno = st[wrsb]
+            hold grsnm = "<unknown>"
+            when st[31] >= 0 {
+              hold grsb = s_base(st[31])
+              hold grno = st[grsb]
+              grsnm = unintern(pool, grno)
+            }
+            hold egv4 = fail(1, concat(concat("give must give struct '", unintern(pool, wrno)), concat(concat("' (got struct '", grsnm), "')")))
+          }
+        }
+        est = leave_ret(est)
+        hold es5 = endstmt_st(src, st)
+      }
+
+      // struct
+      when done == 0 && mkw_st(src, st, "struct") == 1 {
+        done = 1
+        st[0] = skip_stmt(src, sn, line)
+      }
+
+      // assignment `a = expr` or bare `push(xs, v)`
+      when done == 0 {
+        hold stmt_p = st[0]
+        hold w = pid_raw_st(src, st)
+        hold zw2 = sw_st(src, st)
+        hold q2 = st[0]
+        when len(w) > 0 && at(src, sn, q2) == 61 && at(src, sn, q2 + 1) != 61 {
+          hold gi_a = g_find(st, pool, w)
+          hold pi_a = 0 - 1
+          when st[5] >= 0 {
+            hold afb = f_base(st[5])
+            hold anp = st[afb + 1]
+            hold aj = 0
+            while aj < anp {
+              hold apns = fn_pn_slot(afb, aj)
+              when pool_eq(pool, st[apns], w) == 1 {
+                pi_a = aj
+                aj = anp
+              }
+              aj = aj + 1
+            }
+          }
+          when gi_a < 0 && pi_a < 0 {
+            hold eas1 = fail(1, concat(concat("cannot assign to \"", w), "\" (hold it first)"))
+          }
+          st[0] = q2 + 1
+          est = emit_rhs(src, st, pool, est, data)
+          when st[30] == 0 - 1 {
+            hold eas2 = fail(1, "cannot infer the type of the assignment value")
+          }
+          when pi_a >= 0 {
+            hold afb2 = f_base(st[5])
+            hold apks = fn_pk_slot(afb2, pi_a)
+            hold apk_v = st[apks]
+            when st[30] != apk_v {
+              hold eas3 = fail(1, concat(concat("assignment to parameter '", w), concat("' must be ", kname(apk_v))))
+            }
+            when apk_v == 3 && st[afb2 + 2] == 0 {
+              hold waps_s = fn_ps_slot(afb2, pi_a)
+              hold waps = st[waps_s]
+              when waps >= 0 && st[31] != waps {
+                hold wasb = s_base(waps)
+                hold wano = st[wasb]
+                hold eas3b = fail(1, concat(concat("assignment to parameter '", w), concat("' must be struct '", concat(unintern(pool, wano), "'"))))
+              }
+            }
+            hold adisp = 0 - 8 * (pi_a + 1)
+            est = mv_m64(est, 5, neg1, 0, adisp, 0)
+          } otherwise {
+            when st[30] == 3 {
+              hold eas4 = fail(1, concat(concat("assignment of a struct value to '", w), "' is not supported (use hold for a fresh copy)"))
+            }
+            hold agb = g_base(gi_a)
+            when st[agb + 1] == 0 - 1 {
+              st[agb + 1] = st[30]
+              st[agb + 2] = 0 - 1
+            } otherwise {
+              when st[agb + 1] != st[30] {
+                hold eas5 = fail(1, concat(concat("variable '", w), "' is used with two different types"))
+              }
+            }
+            est = store_global_em(est, st, gi_a)
+          }
+          hold es6 = endstmt_st(src, st)
+        } otherwise {
+          when st[39] == 1 && len(w) > 0 && at(src, sn, q2) == 91 {
+            hold gi_ls = g_find(st, pool, w)
+            hold pi_ls = 0 - 1
+            when st[5] >= 0 {
+              hold lfb = f_base(st[5])
+              hold lnp = st[lfb + 1]
+              hold lj2 = 0
+              while lj2 < lnp {
+                hold lpns = fn_pn_slot(lfb, lj2)
+                when pool_eq(pool, st[lpns], w) == 1 {
+                  pi_ls = lj2
+                  lj2 = lnp
+                }
+                lj2 = lj2 + 1
+              }
+            }
+            when gi_ls < 0 && pi_ls < 0 {
+              hold els1 = fail(1, concat(concat("cannot index-assign \"", w), "\" (hold it first)"))
+            }
+            when pi_ls >= 0 {
+              hold lfb2 = f_base(st[5])
+              hold lpks = fn_pk_slot(lfb2, pi_ls)
+              when st[lpks] != 2 {
+                hold els2 = fail(1, concat(concat("parameter '", w), "' is not a list"))
+              }
+              est = load_param_em(est, pi_ls)
+            } otherwise {
+              hold lgb2 = g_base(gi_ls)
+              when st[lgb2 + 1] != 2 {
+                hold els3 = fail(1, concat(concat("variable '", w), "' is not a list"))
+              }
+              est = load_global_em(est, st, gi_ls)
+            }
+            est = push_r(est, 0)
+            st[0] = q2 + 1
+            est = emit_expr(src, st, pool, est, data, 0)
+            when st[30] != 0 {
+              hold els4 = fail(1, "list index must be a number")
+            }
+            est = emit_d2i(est)
+            est = push_r(est, 0)
+            hold zls1 = sw_st(src, st)
+            when at(src, sn, st[0]) != 93 {
+              hold els5 = fail(1, "expected ] after list index")
+            }
+            st[0] = st[0] + 1
+            hold zls2 = sw_st(src, st)
+            when at(src, sn, st[0]) != 61 || at(src, sn, st[0] + 1) == 61 {
+              hold els6 = fail(1, "expected = after list[index]")
+            }
+            st[0] = st[0] + 1
+            est = emit_rhs(src, st, pool, est, data)
+            when st[30] != 0 {
+              hold els7 = fail(1, "list elements must be numbers")
+            }
+            est = mv_rr(est, 2, 0)
+            est = pop_r(est, 6)
+            est = pop_r(est, 7)
+            est = callb(est, 30)
+            hold es_ls = endstmt_st(src, st)
+          } otherwise {
+            when st[39] == 1 && len(w) > 0 && (at(src, sn, q2) == 43 || at(src, sn, q2) == 45) && at(src, sn, q2 + 1) == 61 {
+              hold cop = at(src, sn, q2)
+              hold gi_ca = g_find(st, pool, w)
+              hold pi_ca = 0 - 1
+              when st[5] >= 0 {
+                hold cfb_ca = f_base(st[5])
+                hold cnp_ca = st[cfb_ca + 1]
+                hold cj_ca = 0
+                while cj_ca < cnp_ca {
+                  hold cpns_ca = fn_pn_slot(cfb_ca, cj_ca)
+                  when pool_eq(pool, st[cpns_ca], w) == 1 {
+                    pi_ca = cj_ca
+                    cj_ca = cnp_ca
+                  }
+                  cj_ca = cj_ca + 1
+                }
+              }
+              when gi_ca < 0 && pi_ca < 0 {
+                hold eca1 = fail(1, concat(concat("cannot assign to \"", w), "\" (hold it first)"))
+              }
+              hold lhs_k = 0
+              when pi_ca >= 0 {
+                hold cfb_ca2 = f_base(st[5])
+                hold cpks_ca = fn_pk_slot(cfb_ca2, pi_ca)
+                lhs_k = st[cpks_ca]
+                est = load_param_em(est, pi_ca)
+              } otherwise {
+                hold cgb_ca = g_base(gi_ca)
+                lhs_k = st[cgb_ca + 1]
+                est = load_global_em(est, st, gi_ca)
+              }
+              est = push_r(est, 0)
+              st[0] = q2 + 2
+              est = emit_rhs(src, st, pool, est, data)
+              est = pop_r(est, 1)
+              when cop == 43 && lhs_k == 1 {
+                when st[30] != 1 {
+                  hold eca2 = fail(1, "+= on string requires a string")
+                }
+                est = mv_rr(est, 7, 1)
+                est = mv_rr(est, 6, 0)
+                est = callb(est, 3)
+              } otherwise {
+                when lhs_k != 0 || st[30] != 0 {
+                  hold eca3 = fail(1, "compound assignment requires numbers")
+                }
+                est = movq_xr(est, 0, 1)
+                est = movq_xr(est, 1, 0)
+                when cop == 43 {
+                  est = addsd(est, 0, 1)
+                } otherwise {
+                  est = subsd(est, 0, 1)
+                }
+                est = movq_rx(est, 0, 0)
+              }
+              when pi_ca >= 0 {
+                hold cdisp = 0 - 8 * (pi_ca + 1)
+                est = mv_m64(est, 5, neg1, 0, cdisp, 0)
+              } otherwise {
+                est = store_global_em(est, st, gi_ca)
+              }
+              hold es_ca = endstmt_st(src, st)
+            } otherwise {
+              when len(w) > 0 && at(src, sn, q2) == 40 && (string_eq(w, "push") == 1 || (st[39] == 1 && string_eq(w, "exit") == 1)) {
+                st[0] = stmt_p
+                est = emit_expr(src, st, pool, est, data, 0)
+                hold es7 = endstmt_st(src, st)
+              } otherwise {
+                hold eunk = fail(1, concat(concat("unknown statement: \"", w), "\" (native speaks hold/show/when/else/while/make/give/struct, or the bare call push(xs, v))"))
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  give est
+}
+
+// ===== EMIT-SEAM-END: below this line the compiler is backend code again --
+// the runtime stubs, the collector and the ELF container. =====

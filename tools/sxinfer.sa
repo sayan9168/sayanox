@@ -1,0 +1,59 @@
+// tools/sxinfer.sa -- PHASE 2 OF THE NATIVE FRONT END, IN SAYANOX
+// (Phase D, step 6; docs/ALL_SAYANOX_PHASE.md).
+//
+// Usage:
+//   ./tools/sxinfer <program.sa> infer <out.txt>
+//   ./tools/sxinfer <program.sa> defs  <out.txt>
+//   ./tools/sxinfer <program.sa> roots <out.bin>
+
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxinfer: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+use "tools/sxinfer_lib.sa"
+
+// ---- driver ---------------------------------------------------------------
+
+hold argn = arg_count()
+when argn < 4 {
+  hold u = fail(2, "usage: sxinfer <program.sa> <infer|defs|roots> <out>")
+}
+hold path = arg(1)
+hold mode = arg(2)
+hold outp = arg(3)
+when path_kind(path) != 1 {
+  hold nf2 = fail(1, concat("cannot open use file: ", path))
+}
+hold raw = read_file(path)
+hold dir = dir_of(path)
+hold src = expand_use(raw, dir, 0)
+hold st = make_state(len(src))
+hold pool = []
+hold c0 = collect_defs(src, st, pool)
+
+when string_eq(mode, "defs") == 1 {
+  hold dt = dump_defs(st, pool)
+  when write_file(outp, dt) != 1 {
+    hold we1 = fail(1, concat("cannot write ", outp))
+  }
+  hold ok1 = exit(0)
+}
+when string_eq(mode, "infer") == 1 {
+  hold inf = infer(src, st, pool)
+  hold it = dump_infer(st, pool)
+  when write_file(outp, it) != 1 {
+    hold we2 = fail(1, concat("cannot write ", outp))
+  }
+  hold ok2 = exit(0)
+}
+when string_eq(mode, "roots") == 1 {
+  hold inf2 = infer(src, st, pool)
+  hold rb = build_roots_bin(st)
+  when write_bytes(outp, rb) != 1 {
+    hold we3 = fail(1, concat("cannot write ", outp))
+  }
+  hold ok3 = exit(0)
+}
+hold bad = fail(2, concat(concat("unknown mode '", mode), "' (expected infer, defs or roots)"))

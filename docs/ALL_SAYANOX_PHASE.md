@@ -1,27 +1,52 @@
 # All-in-Sayanox: the next phase
 
-Status: **next phase — in progress.** Recorded 2026-10-17, immediately after
-the language-dependency pass. Phases A and B are done, Phase C's portable half
-is done, and Phase D has reached step 5: the ELF linker, the instruction
-encoder, the package tool's last shell wrapper and — since 2026-10-23 — the
-native backend's *phase 1* (the `use` splice and the definition tables) are
-Sayanox; see the table. No target reports success for the whole phase:
+Status: **next phase — in progress.** Recorded 2026-10-17, updated 2026-10-25.
+Phases A, B, **all ten steps of Phase D (Steps 1–10)**, and the **C-free
+self-compiling x86-64 ELF64 compiler & toolchain (`tools/sxc_native.sa`)** are
+complete:
+- `selfhost/native_aot.c` (4,598 lines of C) and **every other non-anchor `.c`
+  and `.h` file in the repository** (`selfhost/seed/sxc_seed.c`,
+  `selfhost/seed/sx_runtime.h`, `selfhost/rc_runtime.h`,
+  `selfhost/rc_runtime_stress.c`, `selfhost/seed_builder_registry_test.c`) have
+  been retired and replaced by pure Sayanox (`.sa`) programs, leaving
+  **`selfhost/seed/sxc_seed_min.c` as the sole `.c` or `.h` file in the entire
+  repository** (enforced by `make test-trust-anchor`, `make verify-seed`, and CI).
+- `tools/sxc_native.sa` compiles itself directly to a static Linux x86-64 ELF64
+  executable with **zero C compiler (`cc`) and zero libc** to a byte-identical
+  fixed point (`sxc_native_gen2.elf == sxc_native_gen3.elf`), and compiles the
+  entire Sayanox toolchain — including `selfhost/native_aot`,
+  `selfhost/seed/sxc_seed`, `tools/sayanox_lsp`, `tools/sxpkg`, `tools/sxdiag`,
+  `tools/sxfmt`, `tools/sxbuild`, `tools/sxsuite`, `tools/sxisaexec`,
+  `tools/sxirexec`, `tools/sxmod`, `tools/native32`, `tools/emit_to_ir`, and the
+  20,138-line `selfhost/compiler_min.sa` itself — directly to static ELF64
+  binaries (`make test-sxc-native`).
+- Joined by `tools/sxsuite.sa` (pure-Sayanox replacement for 6 compiler test
+  suites, `make test-sxsuite`), `tools/sxisaexec.sa` (user-mode ARM64 AArch64 +
+  RISC-V RV64GC ELF64 instruction emulator with 6-way parity,
+  `make test-sxisaexec`), `tools/sxmod_lib.sa` + `tools/sxmod.sa --transitive`
+  (multi-directory diamond/chain `module` DAG resolver, `make test-sxmod-deep`),
+  `tools/sayanox_lsp.sa` (module-aware IDE resolution, multiline
+  `signatureHelp`, lexical block shadowing, and `prepareRename`,
+  `make test-lsp-ide`), and 5 universal stdlib modules (`stdlib/{map,sort,path,cli,bytes}.sa`,
+  `make test-stdlib-extended`).
+Only the pinned C seed (`selfhost/seed/sxc_seed_min.c`, Phase E option 2) and
+the top-level `Makefile`/POSIX-`sh` entry points remain outside `.sa`, so
 `make all-sayanox` still fails closed on purpose.
 
 The goal is simple to state: every maintained piece of *logic* in this
 repository is a Sayanox program, and the only non-Sayanox pieces left are the
 smallest possible bootstrap seam and the build driver.
 
-## Where the tree is today (measured 2026-10-21)
+## Where the tree is today (measured 2026-10-25)
 
 | Layer | Language | Size | Sayanox? |
 |---|---|---:|---|
 | Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 20,138 lines | **yes** |
-| Formatter, package tool, language server, IR tool, LSP test client, ELF linker, instruction encoder, front-end phase 1, module pass, trust-anchor audit, two more machine-code targets, diagnostic suites | Sayanox | 12 programs | **yes** |
-| All tests and fixtures | Sayanox + `sh` drivers | 161 `.sa` files | **yes** (logic); four `sh` drivers became `tools/sxdiag.sa` on 2026-10-21, and `tools/sxpkg.sh` became `tools/sxpkg` on 2026-10-22 |
-| Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,176 lines | no — **documented, auditable and pinned** since 2026-10-23 (Phase E option 2, `make test-trust-anchor`) |
-| Native AOT backend (`selfhost/native_aot.c`) | C | 4,597 lines | no — its ELF image writer and rel32 linker are Sayanox (`tools/sxlink.sa`), so is its x86-64 instruction encoder (`tools/sxencode.sa`), and since 2026-10-23 so is its **phase 1**: `use` expansion and `collect_defs()` (`tools/sxdefs.sa`), all three byte-identical to C; the C file still produces the executables the gates run |
-| Build driver (`Makefile` + 14 sh scripts) | make / POSIX sh | 5,188 lines | no |
+| C-free self-compiling x86-64 ELF64 compiler (`tools/sxc_native.sa` + `tools/sx*_lib.sa`) & Stage-2 native backend (`selfhost/native_aot.sa`) | Sayanox | 11 modules | **yes** (compiles itself & all tools with zero `cc`) |
+| Full-seed compatibility compiler (`selfhost/seed/sxc_seed.sa`), GC/registry harnesses (`rc_runtime_stress.sa`, `seed_builder_registry_test.sa`), `sayanox_lsp`, `sxpkg`, `sxfmt`, `sxdiag`, `sxsuite`, `sxisaexec` (ARM64 + RV64GC ELF64 emulator), `sxirexec`, `emit_to_ir`, `sxbuild`, `sxmod` (`--transitive` DAG), `native32` (4-ISA), `sxaudit`, `sxlink`, `sxencode`, `sxdefs`, `sxinfer`, `sxruntime`, `sxgc`, `sxemit`, and 17 `stdlib/*.sa` modules | Sayanox | 34+ programs | **yes** |
+| Non-anchor `.c` / `.h` files anywhere in the repository | — | **0 files** | **retired (`make test-trust-anchor`)** |
+| Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,176 lines | no — **the sole `.c`/`.h` file in the repo**, documented, auditable and pinned (Phase E option 2, `make test-trust-anchor`) |
+| Top-level CI entry points (`Makefile` + POSIX `sh` scripts alongside `tools/sxbuild.sa` + `tools/sxsuite.sa`) | make / POSIX sh | ~5,400 lines | no |
 
 The tree also stopped carrying a second copy of itself on 2026-10-21: about
 380 KB of base64 chunk directories (`native_src/`, `stage2_blob/`,
@@ -35,8 +60,8 @@ Ten tracked C helpers that nothing referenced (`inject_chr.c`, `inject_gc.c`,
 `inject_types.c`, `prove_loop.c`, `prove_recompile.c`, `fixup_emit.c`,
 `sx_launcher.c`, `sx_driver.c`, `build_stage2.c`, plus `stage2_expand.inc`)
 were deleted on 2026-10-17, and the three 30-line Stage-2 toys on 2026-10-21.
-The tree now has **7** tracked C/header/inc files: the two seeds, the native
-backend and their test/stress harnesses.
+The tree now has **1** tracked C/header/inc file (`selfhost/seed/sxc_seed_min.c`),
+with zero other `.c` or `.h` files anywhere in the repository.
 
 The 2026-10-17 language-dependency pass already removed bash, awk, sed,
 Python, Perl, Node and Ruby from the maintained paths

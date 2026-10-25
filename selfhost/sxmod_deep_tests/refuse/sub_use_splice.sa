@@ -1,0 +1,3 @@
+module bad_use_mod as bu from "bad_use_mod.sa"
+
+show bu.wrap()

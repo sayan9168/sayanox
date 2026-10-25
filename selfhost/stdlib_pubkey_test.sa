@@ -1,0 +1,45 @@
+// selfhost/stdlib_pubkey_test.sa -- 4-backend parity & tamper test for
+// stdlib/pubkey.sa (Curve25519 Schnorr-SHA256 public-key signatures).
+
+use "stdlib/crypto.sa"
+use "stdlib/pubkey.sa"
+
+make run_pubkey_tests() -> num {
+  hold seed1 = pk_seed_from_passphrase("alice-registry-signing-key-v1")
+  hold seed2 = pk_seed_from_passphrase("bob-other-signing-key-v1")
+
+  hold pub1 = pk_pubkey(seed1)
+  hold pub2 = pk_pubkey(seed2)
+  hold kid1 = pk_keyid(pub1)
+  hold kid2 = pk_keyid(pub2)
+
+  show len(pub1)
+  show len(kid1)
+  show string_eq(pub1, pub2)
+  show string_eq(kid1, kid2)
+
+  // Subgroup sanity: L * B == identity (0, 1)
+  hold lb = pk_pt_scalarmult(pk_pt_base(), pk_const_L())
+  show pk_pt_eq(lb, pk_pt_id())
+
+  // Multi-message signing with the same keypair + public-key-only verification
+  hold m1 = "sayanox-pkg-v1\nname=math\nversion=0.1.0\nsha256=20c269795b03f933a723721400d7f5eef29aa8df6dd43a058b437f0e5edfce4e\n"
+  hold m2 = "sayanox-index-v1\nhello=0.1.0\nmath=0.1.0\n"
+
+  hold sig1 = pk_sign(seed1, m1)
+  hold sig2 = pk_sign(seed1, m2)
+
+  show len(sig1)
+  show pk_verify(pub1, m1, sig1)
+  show pk_verify(pub1, m2, sig2)
+
+  // Cross-message, tampered-message, wrong-pubkey, and malformed rejections
+  show pk_verify(pub1, m2, sig1)
+  show pk_verify(pub1, concat(m1, "x"), sig1)
+  show pk_verify(pub2, m1, sig1)
+  show pk_verify("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", m1, sig1)
+  show pk_verify(pub1, m1, concat("00", sig1))
+  give 1
+}
+
+show run_pubkey_tests()

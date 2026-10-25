@@ -1,0 +1,7 @@
+struct Outer {
+  a
+}
+struct Inner {
+  x
+}
+hold o = Outer { Inner { 1 } }

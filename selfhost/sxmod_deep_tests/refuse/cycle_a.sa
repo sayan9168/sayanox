@@ -1,0 +1,7 @@
+module cb from "cycle_b.sa"
+
+make fa(x: num) -> num {
+  give cb.fb(x)
+}
+
+show fa(1)

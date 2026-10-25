@@ -1,0 +1,5 @@
+struct P {
+  x
+}
+hold p = P { 1 }
+show p.nope

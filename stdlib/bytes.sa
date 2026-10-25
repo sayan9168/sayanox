@@ -1,0 +1,322 @@
+// stdlib/bytes.sa -- Pure-Sayanox byte buffer operations, hex & Base64 codecs,
+// little/big-endian integer packing, and CRC-16/CCITT-FALSE (prefix `sbytes_`).
+//
+// Portable across seed-min, gen2, native_aot, sxc_native, and sxirexec.
+
+make sbytes_from_str(s: str) -> list {
+  hold out = []
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold out = push(out, sx_index(s, i))
+    hold i = i + 1
+  }
+  give out
+}
+
+make sbytes_to_str(bs: list) -> str {
+  hold out = ""
+  hold n = len(bs)
+  hold i = 0
+  while i < n {
+    hold b = bs[i]
+    when b > 0 {
+      when b < 256 {
+        hold out = concat(out, chr(b))
+      }
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+make sbytes_eq(a: list, b: list) -> num {
+  hold na = len(a)
+  when na != len(b) {
+    give 0
+  }
+  hold i = 0
+  while i < na {
+    when a[i] != b[i] {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+make sbytes_slice(bs: list, lo: num, hi: num) -> list {
+  hold out = []
+  hold n = len(bs)
+  hold a = lo
+  when a < 0 {
+    hold a = 0
+  }
+  hold b = hi
+  when b > n {
+    hold b = n
+  }
+  hold i = a
+  while i < b {
+    hold out = push(out, bs[i])
+    hold i = i + 1
+  }
+  give out
+}
+
+make sbytes_hex_encode(bs: list) -> str {
+  hold hex = "0123456789abcdef"
+  hold out = ""
+  hold n = len(bs)
+  hold i = 0
+  while i < n {
+    hold v = bs[i] % 256
+    hold lo = v % 16
+    hold hi = (v - lo) / 16
+    hold out = concat(out, chr(sx_index(hex, hi)))
+    hold out = concat(out, chr(sx_index(hex, lo)))
+    hold i = i + 1
+  }
+  give out
+}
+
+make sbytes_hex_nibble(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give c - 48
+    }
+  }
+  when c >= 97 {
+    when c <= 102 {
+      give c - 87
+    }
+  }
+  when c >= 65 {
+    when c <= 70 {
+      give c - 55
+    }
+  }
+  give 0 - 1
+}
+
+make sbytes_hex_decode(s: str) -> list {
+  hold out = []
+  hold n = len(s)
+  hold rem2 = n % 2
+  when rem2 != 0 {
+    give out
+  }
+  hold i = 0
+  while i < n {
+    hold hi = sbytes_hex_nibble(sx_index(s, i))
+    hold lo = sbytes_hex_nibble(sx_index(s, i + 1))
+    when hi < 0 {
+      hold empty = []
+      give empty
+    }
+    when lo < 0 {
+      hold emptyb = []
+      give emptyb
+    }
+    hold out = push(out, hi * 16 + lo)
+    hold i = i + 2
+  }
+  give out
+}
+
+make sbytes_b64_encode(bs: list) -> str {
+  hold alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  hold n = len(bs)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold b0 = bs[i] % 256
+    hold b1 = 0
+    hold b2 = 0
+    hold rem = n - i
+    when rem > 1 {
+      hold b1 = bs[i + 1] % 256
+    }
+    when rem > 2 {
+      hold b2 = bs[i + 2] % 256
+    }
+    hold triple = b0 * 65536 + b1 * 256 + b2
+    hold c3 = triple % 64
+    hold t2 = (triple - c3) / 64
+    hold c2 = t2 % 64
+    hold t1 = (t2 - c2) / 64
+    hold c1 = t1 % 64
+    hold c0 = (t1 - c1) / 64
+    hold out = concat(out, chr(sx_index(alpha, c0)))
+    hold out = concat(out, chr(sx_index(alpha, c1)))
+    when rem > 1 {
+      hold out = concat(out, chr(sx_index(alpha, c2)))
+    } otherwise {
+      hold out = concat(out, "=")
+    }
+    when rem > 2 {
+      hold out = concat(out, chr(sx_index(alpha, c3)))
+    } otherwise {
+      hold out = concat(out, "=")
+    }
+    hold i = i + 3
+  }
+  give out
+}
+
+make sbytes_b64_val(c: num) -> num {
+  when c >= 65 {
+    when c <= 90 {
+      give c - 65
+    }
+  }
+  when c >= 97 {
+    when c <= 122 {
+      give c - 71
+    }
+  }
+  when c >= 48 {
+    when c <= 57 {
+      give c + 4
+    }
+  }
+  when c == 43 {
+    give 62
+  }
+  when c == 47 {
+    give 63
+  }
+  give 0 - 1
+}
+
+make sbytes_b64_decode(s: str) -> list {
+  hold out = []
+  hold n = len(s)
+  hold rem4 = n % 4
+  when rem4 != 0 {
+    give out
+  }
+  hold i = 0
+  while i < n {
+    hold ch0 = sx_index(s, i)
+    hold ch1 = sx_index(s, i + 1)
+    hold ch2 = sx_index(s, i + 2)
+    hold ch3 = sx_index(s, i + 3)
+    hold v0 = sbytes_b64_val(ch0)
+    hold v1 = sbytes_b64_val(ch1)
+    when v0 < 0 {
+      hold empty0 = []
+      give empty0
+    }
+    when v1 < 0 {
+      hold empty0b = []
+      give empty0b
+    }
+    hold v2 = 0
+    when ch2 != 61 {
+      hold v2 = sbytes_b64_val(ch2)
+      when v2 < 0 {
+        hold empty1 = []
+        give empty1
+      }
+    }
+    hold v3 = 0
+    when ch3 != 61 {
+      hold v3 = sbytes_b64_val(ch3)
+      when v3 < 0 {
+        hold empty2 = []
+        give empty2
+      }
+    }
+    hold triple = v0 * 262144 + v1 * 4096 + v2 * 64 + v3
+    hold b2 = triple % 256
+    hold t1 = (triple - b2) / 256
+    hold b1 = t1 % 256
+    hold b0 = (t1 - b1) / 256
+    hold out = push(out, b0)
+    when ch2 != 61 {
+      hold out = push(out, b1)
+    }
+    when ch3 != 61 {
+      hold out = push(out, b2)
+    }
+    hold i = i + 4
+  }
+  give out
+}
+
+make sbytes_put_u16le(bs: list, v: num) -> list {
+  hold out = bs
+  hold u = v % 65536
+  hold b0 = u % 256
+  hold b1 = (u - b0) / 256
+  hold out = push(out, b0)
+  hold out = push(out, b1)
+  give out
+}
+
+make sbytes_get_u16le(bs: list, off: num) -> num {
+  give bs[off] + bs[off + 1] * 256
+}
+
+make sbytes_put_u32be(bs: list, v: num) -> list {
+  hold out = bs
+  hold u = v
+  hold b3 = u % 256
+  hold u = (u - b3) / 256
+  hold b2 = u % 256
+  hold u = (u - b2) / 256
+  hold b1 = u % 256
+  hold b0 = (u - b1) / 256
+  hold out = push(out, b0 % 256)
+  hold out = push(out, b1)
+  hold out = push(out, b2)
+  hold out = push(out, b3)
+  give out
+}
+
+make sbytes_get_u32be(bs: list, off: num) -> num {
+  give ((bs[off] * 256 + bs[off + 1]) * 256 + bs[off + 2]) * 256 + bs[off + 3]
+}
+
+make sbytes_xor16(a: num, b: num) -> num {
+  hold x = a
+  hold y = b
+  hold res = 0
+  hold bit = 1
+  hold k = 0
+  while k < 16 {
+    hold bx = x % 2
+    hold by = y % 2
+    when bx != by {
+      hold res = res + bit
+    }
+    hold x = (x - bx) / 2
+    hold y = (y - by) / 2
+    hold bit = bit * 2
+    hold k = k + 1
+  }
+  give res
+}
+
+make sbytes_crc16_ccitt(bs: list) -> num {
+  hold crc = 65535
+  hold n = len(bs)
+  hold i = 0
+  while i < n {
+    hold b = bs[i] % 256
+    hold crc = sbytes_xor16(crc, b * 256)
+    hold bit = 0
+    while bit < 8 {
+      when crc >= 32768 {
+        hold shifted = (crc * 2) % 65536
+        hold crc = sbytes_xor16(shifted, 4129)
+      } otherwise {
+        hold crc = (crc * 2) % 65536
+      }
+      hold bit = bit + 1
+    }
+    hold i = i + 1
+  }
+  give crc
+}

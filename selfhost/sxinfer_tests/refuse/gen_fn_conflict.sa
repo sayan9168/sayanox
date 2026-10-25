@@ -1,0 +1,4 @@
+make same<T>(a: T, b: T) -> T {
+  give a
+}
+hold x = same(1, "s")

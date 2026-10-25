@@ -1,0 +1,5 @@
+module vec as vcore from "../pkg/core/vec.sa"
+
+make broken() -> num {
+  give vcore.nonexistent(1)
+}

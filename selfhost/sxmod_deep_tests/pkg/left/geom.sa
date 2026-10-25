@@ -1,0 +1,10 @@
+module vec as vcore from "../core/vec.sa"
+
+make norm_sq(p: vcore.Vec2) -> num {
+  give vcore.dot(p, p)
+}
+
+make unit_step(k: num) -> vcore.Vec2 {
+  hold kp1 = k + 1
+  give vcore.make_vec(k, kp1)
+}

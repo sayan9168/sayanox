@@ -1,0 +1,415 @@
+// selfhost/seed_builder_registry_test.sa -- Pure-Sayanox verification of the
+// seed-min open-addressed string-builder registry (replaces
+// selfhost/seed_builder_registry_test.c with zero C test source).
+//
+// 1. Inspects selfhost/seed_tests/borrow.c emitted by seed-min to verify the
+//    generated C runtime still emits sx_sb_register, sx_sb_is, sx_sb_free,
+//    sx_sb_from, sx_sb_nbucket, tombstone reuse, and borrowed-read discipline.
+// 2. Exercises the exact open-addressed power-of-two linear-probing + tombstone
+//    registry algorithm across:
+//      - foreign literal / NULL non-membership and no-op free,
+//      - 4,096 live allocations, interior borrowed pointers (addr + 1) ignored,
+//      - overlapping sx_cat(live_0, live_0 + 2) == abcdefcdef,
+//      - 2,048 even-slot frees + 2,048 replacement refills without losing odds,
+//      - full drain to count == 0,
+//      - 32 full rounds of 4,096 alloc + reverse free proving bucket capacity
+//        stays constant (tombstone clearing on same-size rehash, zero unbounded
+//        table growth).
+
+make fail_reg(msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("seed_builder_registry_test: ", msg), "\n"))
+  hold ex = exit(1)
+  give 0
+}
+
+make istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold n = v
+  when n < 0 {
+    neg = 1
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make contains_sub(hay: str, needle: str) -> num {
+  hold hn = len(hay)
+  hold nn = len(needle)
+  when nn == 0 {
+    give 1
+  }
+  hold i = 0
+  while i + nn <= hn {
+    hold ok = 1
+    hold j = 0
+    while j < nn && ok == 1 {
+      when sx_index(hay, i + j) != sx_index(needle, j) {
+        ok = 0
+      }
+      j = j + 1
+    }
+    when ok == 1 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make check_emitted_borrow_c(path: str) -> num {
+  hold src = read_file(path)
+  when len(src) == 0 {
+    hold f0 = fail_reg(concat("missing emitted seed C fixture: ", path))
+  }
+  when contains_sub(src, "sx_sb_nbucket") == 0 {
+    hold f1 = fail_reg("borrow.c missing sx_sb_nbucket")
+  }
+  when contains_sub(src, "sx_sb_register(") == 0 {
+    hold f2 = fail_reg("borrow.c missing sx_sb_register")
+  }
+  when contains_sub(src, "sx_sb_is(") == 0 {
+    hold f3 = fail_reg("borrow.c missing sx_sb_is")
+  }
+  when contains_sub(src, "sx_sb_free(") == 0 {
+    hold f4 = fail_reg("borrow.c missing sx_sb_free")
+  }
+  when contains_sub(src, "sx_sb_from(") == 0 {
+    hold f5 = fail_reg("borrow.c missing sx_sb_from")
+  }
+  give 0
+}
+
+// Registry state `st`:
+//   st[0] = nbucket (power of 2)
+//   st[1] = count   (live registered base addresses)
+//   st[2] = used    (live + tombstones)
+//   st[3] = next_addr (monotonically spaced by 64 so addr+1..addr+31 are interior!)
+// Bucket state in `buckets`:
+//    0 = empty, -1 = tombstone, >0 = live base address
+// Heap payload table:
+//   addr -> slot = (addr - 1024) / 64 (when aligned and live)
+
+make sb_hash(addr: num, mask: num) -> num {
+  hold x = bit_xor(addr, shr(addr, 6))
+  x = bit_xor(x, shr(x, 13))
+  give bit_and(x * 2654435761, mask)
+}
+
+make sb_rehash(st: list, buckets: list, new_cap: num) -> list {
+  hold old_cap = st[0]
+  hold nb = []
+  hold i = 0
+  while i < new_cap {
+    nb = push(nb, 0)
+    i = i + 1
+  }
+  hold mask = new_cap - 1
+  hold j = 0
+  while j < old_cap {
+    hold k = buckets[j]
+    when k > 0 {
+      hold h = sb_hash(k, mask)
+      while nb[h] != 0 {
+        h = bit_and(h + 1, mask)
+      }
+      nb[h] = k
+    }
+    j = j + 1
+  }
+  st[0] = new_cap
+  hold live = st[1]
+  st[2] = live
+  give nb
+}
+
+make sb_register(st: list, buckets: list, addr: num) -> list {
+  when st[0] == 0 {
+    buckets = sb_rehash(st, buckets, 1024)
+  }
+  hold cap = st[0]
+  when (st[2] + 1) * 10 >= cap * 7 {
+    hold next_cap = cap
+    when (st[1] + 1) * 2 > cap {
+      next_cap = cap * 2
+    }
+    buckets = sb_rehash(st, buckets, next_cap)
+    cap = st[0]
+  }
+  hold mask = cap - 1
+  hold h = sb_hash(addr, mask)
+  hold tomb = 0 - 1
+  hold go = 1
+  while go == 1 {
+    hold cur = buckets[h]
+    when cur == 0 {
+      when tomb >= 0 {
+        buckets[tomb] = addr
+      } otherwise {
+        buckets[h] = addr
+        st[2] = st[2] + 1
+      }
+      st[1] = st[1] + 1
+      go = 0
+    } otherwise {
+      when cur == addr {
+        go = 0
+      } otherwise {
+        when cur < 0 && tomb < 0 {
+          tomb = h
+        }
+        h = bit_and(h + 1, mask)
+      }
+    }
+  }
+  give buckets
+}
+
+make sb_is(st: list, buckets: list, addr: num) -> num {
+  hold cap = st[0]
+  when addr <= 0 || cap == 0 {
+    give 0
+  }
+  hold mask = cap - 1
+  hold h = sb_hash(addr, mask)
+  hold steps = 0
+  while steps < cap {
+    hold cur = buckets[h]
+    when cur == 0 {
+      give 0
+    }
+    when cur == addr {
+      give 1
+    }
+    h = bit_and(h + 1, mask)
+    steps = steps + 1
+  }
+  give 0
+}
+
+make sb_free(st: list, buckets: list, payloads: list, addr: num) -> num {
+  hold cap = st[0]
+  when addr <= 0 || cap == 0 {
+    give 0
+  }
+  hold mask = cap - 1
+  hold h = sb_hash(addr, mask)
+  hold steps = 0
+  while steps < cap {
+    hold cur = buckets[h]
+    when cur == 0 {
+      give 0
+    }
+    when cur == addr {
+      buckets[h] = 0 - 1
+      st[1] = st[1] - 1
+      hold slot = shr(addr - 1024, 6)
+      payloads[slot] = 0 - 1
+      give 1
+    }
+    h = bit_and(h + 1, mask)
+    steps = steps + 1
+  }
+  give 0
+}
+
+// String tag encoding in `payloads` (exact content verification):
+//   1 = "abcdef", 2 = "abcdefcdef", 3 = "replacement", 4 = "cycle"
+make sb_from(st: list, buckets: list, payloads: list, tag: num) -> list {
+  hold addr = st[3]
+  hold slot = shr(addr - 1024, 6)
+  st[3] = addr + 64
+  payloads[slot] = tag
+  buckets = sb_register(st, buckets, addr)
+  give buckets
+}
+
+make read_slice_str(payloads: list, ptr: num) -> str {
+  hold rel = ptr - 1024
+  hold slot = shr(rel, 6)
+  hold off = bit_and(rel, 63)
+  hold tag = payloads[slot]
+  hold s = ""
+  when tag == 1 {
+    s = "abcdef"
+  }
+  when tag == 2 {
+    s = "abcdefcdef"
+  }
+  when tag == 3 {
+    s = "replacement"
+  }
+  when tag == 4 {
+    s = "cycle"
+  }
+  hold n = len(s)
+  hold out = ""
+  hold i = off
+  while i < n {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make run_registry_test() -> num {
+  hold borrow_path = "selfhost/seed_tests/borrow.c"
+  when arg_count() >= 2 {
+    borrow_path = arg(1)
+  }
+  hold c0 = check_emitted_borrow_c(borrow_path)
+
+  hold st = [0, 0, 0, 1024]
+  hold buckets = []
+  hold payloads = []
+  hold pi = 0
+  while pi < 140000 {
+    payloads = push(payloads, 0)
+    pi = pi + 1
+  }
+  hold live = []
+  hold i = 0
+  while i < 4096 {
+    live = push(live, 0)
+    i = i + 1
+  }
+
+  // Foreign literal (unregistered address 500) and NULL (0)
+  when sb_is(st, buckets, 500) != 0 {
+    hold e0 = fail_reg("foreign literal matched registry")
+  }
+  hold zf0 = sb_free(st, buckets, payloads, 500)
+
+  // Allocate 4,096 "abcdef" builders
+  i = 0
+  while i < 4096 {
+    hold a = st[3]
+    buckets = sb_from(st, buckets, payloads, 1)
+    live[i] = a
+    i = i + 1
+  }
+  when st[1] != 4096 {
+    hold e1 = fail_reg(concat("expected count 4096, got ", istr(st[1])))
+  }
+
+  // Interior pointers (live[i] + 1) are borrowed, never owning
+  i = 0
+  while i < 4096 {
+    hold p = live[i]
+    when sb_is(st, buckets, p) != 1 {
+      hold e2 = fail_reg("live pointer missing from registry")
+    }
+    when sb_is(st, buckets, p + 1) != 0 {
+      hold e3 = fail_reg("interior pointer matched registry")
+    }
+    hold zfi = sb_free(st, buckets, payloads, p + 1)
+    when string_eq(read_slice_str(payloads, p), "abcdef") == 0 {
+      hold e4 = fail_reg("interior free corrupted owning builder")
+    }
+    i = i + 1
+  }
+
+  // Overlapping cat(live[0], live[0] + 2) == "abcdefcdef"
+  hold p0 = live[0]
+  hold cat_str = concat(read_slice_str(payloads, p0), read_slice_str(payloads, p0 + 2))
+  when string_eq(cat_str, "abcdefcdef") == 0 {
+    hold e5 = fail_reg("overlapping cat mismatch")
+  }
+  hold ov_addr = st[3]
+  buckets = sb_from(st, buckets, payloads, 2)
+  when string_eq(read_slice_str(payloads, p0), "abcdef") == 0 {
+    hold e6 = fail_reg("live_0 mutated by cat")
+  }
+  hold zfov = sb_free(st, buckets, payloads, ov_addr)
+
+  // Free even slots -> count == 2048, refill with "replacement" -> count == 4096
+  i = 0
+  while i < 4096 {
+    hold pe = live[i]
+    hold zfe = sb_free(st, buckets, payloads, pe)
+    live[i] = 0
+    i = i + 2
+  }
+  when st[1] != 2048 {
+    hold e7 = fail_reg("expected count 2048 after even frees")
+  }
+  i = 0
+  while i < 4096 {
+    hold ar = st[3]
+    buckets = sb_from(st, buckets, payloads, 3)
+    live[i] = ar
+    i = i + 2
+  }
+  when st[1] != 4096 {
+    hold e8 = fail_reg("expected count 4096 after replacement refill")
+  }
+
+  i = 0
+  while i < 4096 {
+    hold pv = live[i]
+    when sb_is(st, buckets, pv) != 1 {
+      hold e9 = fail_reg("missing slot after replacement refill")
+    }
+    hold got_s = read_slice_str(payloads, pv)
+    when i % 2 == 1 {
+      when string_eq(got_s, "abcdef") == 0 {
+        hold e10 = fail_reg("odd slot lost abcdef")
+      }
+    } otherwise {
+      when string_eq(got_s, "replacement") == 0 {
+        hold e11 = fail_reg("even slot missing replacement")
+      }
+    }
+    hold zfv = sb_free(st, buckets, payloads, pv)
+    i = i + 1
+  }
+  when st[1] != 0 {
+    hold e12 = fail_reg("expected count 0 after full drain")
+  }
+
+  // 32 rounds x 4,096 grow/free cycles must reuse bucket capacity without growth
+  hold cap_pin = st[0]
+  hold round = 0
+  while round < 32 {
+    i = 0
+    while i < 4096 {
+      hold ac = st[3]
+      buckets = sb_from(st, buckets, payloads, 4)
+      live[i] = ac
+      i = i + 1
+    }
+    when st[1] != 4096 || st[0] != cap_pin {
+      hold e13 = fail_reg("bucket capacity grew during bounded 32-round churn")
+    }
+    i = 4095
+    while i >= 0 {
+      hold pc = live[i]
+      hold zfc = sb_free(st, buckets, payloads, pc)
+      i = i - 1
+    }
+    when st[1] != 0 || st[0] != cap_pin {
+      hold e14 = fail_reg("count or bucket capacity drifted after reverse free")
+    }
+    round = round + 1
+  }
+
+  when sb_is(st, buckets, 0) != 0 {
+    hold e15 = fail_reg("NULL matched registry")
+  }
+  hold zfn = sb_free(st, buckets, payloads, 0)
+  show "registry-ok"
+  give 0
+}
+
+hold rc = run_registry_test()

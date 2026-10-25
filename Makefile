@@ -1,14 +1,22 @@
 # Sayanox bootstrap Makefile — sole entry point
 # Preferred: make true-selfhost (seed-min -> gen1-min -> gen2). Optional: native, gen3; full is not yet implemented
 
+# Pin the C locale across every recipe and sub-make so C compiler diagnostics
+# (GCC quotes identifiers as UTF-8 curly quotes under LANG=C.UTF-8), sort order
+# and character ranges behave identically on runner images and local shells.
+export LC_ALL := C
+
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || (command -v gcc >/dev/null 2>&1 && echo gcc || echo cc))
 
-SEED_C   := selfhost/seed/sxc_seed.c
-SEED_H   := selfhost/seed/sx_runtime.h
+SEED_SA  := selfhost/seed/sxc_seed.sa
 SEED_BIN := selfhost/seed/sxc_seed
 SEED_MIN_C   := selfhost/seed/sxc_seed_min.c
 SEED_MIN_BIN := selfhost/seed/sxc_seed_min
-NATIVE_SRC := selfhost/native_aot.c
+SXC_NATIVE_SA := tools/sxc_native.sa
+SXC_NATIVE_LIBS := tools/sxenc_lib.sa tools/sxinfer_lib.sa tools/sxdata_lib.sa tools/sxemit_lib.sa tools/sxruntime_lib.sa tools/sxgc_lib.sa tools/sxlink_lib.sa tools/sxpipeline_lib.sa tools/sxmod_lib.sa
+SXC_NATIVE_BIN := tools/sxc_native
+NATIVE_SRC := selfhost/native_aot.sa
+NATIVE_LIBS := tools/sxenc_lib.sa tools/sxinfer_lib.sa tools/sxdata_lib.sa tools/sxemit_lib.sa tools/sxruntime_lib.sa tools/sxgc_lib.sa tools/sxlink_lib.sa tools/sxpipeline_lib.sa
 NATIVE_BIN := selfhost/native_aot
 MIN_SA   := selfhost/compiler_min.sa
 MIN_MODULE := selfhost/modules/compiler_text.sa
@@ -40,7 +48,8 @@ SXDIAG_BIN := tools/sxdiag
         test-boot test-fn test-fn2 test-list test-struct test-parity test-chain test-condmod test-user test-nest test-prec test-float test-parens test-push-stmt test-full-lang test-native-num test-native-io test-native-mem \
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
         pack-compiler test-http-get test-sayacrawl test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
-        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-native-sxdefs test-sxdiag test-native32 test-native-arm64 test-sxmod test-trust-anchor
+        test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-native-sxdefs test-native-sxinfer test-native-sxruntime test-native-sxgc test-native-sxemit test-sxdiag test-native32 test-native-arm64 test-native-riscv64 test-stdlib-json-write test-sxmod test-trust-anchor \
+        sxc-native test-sxc-native test-sxsuite test-sxisaexec test-sxmod-deep test-lsp-ide test-stdlib-extended
 
 all: true-selfhost-min
 
@@ -98,31 +107,13 @@ assert-out = @__got=$$($(1)) || { echo "[FAIL] $(1): program exited nonzero"; ex
 # alias so existing invocations keep working.
 # ---------------------------------------------------------------------------
 verify-seed:
-	@test -f $(SEED_C) || { echo "FAIL: missing $(SEED_C)"; exit 1; }
-	@test -f $(SEED_H) || { echo "FAIL: missing $(SEED_H)"; exit 1; }
-	@grep -q -F 'offsetof(SxStrHdr,data)' $(SEED_H) \
-	  || { echo "FAIL: $(SEED_H) is stale: missing offsetof(SxStrHdr,data)"; exit 1; }
-	@grep -q -F '#include <stddef.h>' $(SEED_H) \
-	  || { echo "FAIL: $(SEED_H) is stale: missing #include <stddef.h>"; exit 1; }
-	@grep -q -F '#include <stdarg.h>' $(SEED_H) \
-	  || { echo "FAIL: $(SEED_H) is stale: missing #include <stdarg.h> (the seed-generated sx_lit_list is variadic)"; exit 1; }
-	@grep -q -F 'char ob[2]={(char)(ch),0}' $(SEED_C) \
-	  || { echo "FAIL: $(SEED_C) is stale: P1() does not build the operator token text from the character value"; exit 1; }
-	@if grep -q -F 'ptok(k,(const char*)#ch' $(SEED_C); then \
-	  echo "FAIL: $(SEED_C) is stale: P1() records an operator token as the quoted char literal (#ch), so single-character operators are dropped from the generated C"; exit 1; fi
-	@if grep -q -F 'docs/MEMORY.md for the authoritative' $(SEED_H); then \
-	  echo "FAIL: $(SEED_H) is stale: still points at the nonexistent docs/MEMORY.md"; exit 1; fi
-	@grep -q -F 'SX_TAB_CAP 2097152' $(SEED_H) \
-	  || { echo "FAIL: $(SEED_H) is stale: SX_TAB_CAP is not 2097152"; exit 1; }
-	@grep -q -F 'sx_tab_add(h->data,1);' $(SEED_H) \
-	  || { echo "FAIL: $(SEED_H) is stale: missing sx_tab_add(h->data,1);"; exit 1; }
-	@grep -q -F 'sx_tab_find((void*)p);' $(SEED_H) \
-	  || { echo "FAIL: $(SEED_H) is stale: missing sx_tab_find((void*)p);"; exit 1; }
-	@if grep -q -F '(char*)p-sizeof(SxStrHdr)' $(SEED_H); then \
-	  echo "FAIL: $(SEED_H) is stale: pre-fix sizeof(SxStrHdr) arithmetic present"; exit 1; fi
-	@if grep -q -F 'SX_TAB_CAP 262144' $(SEED_H); then \
-	  echo "FAIL: $(SEED_H) is stale: pre-fix SX_TAB_CAP 262144 present"; exit 1; fi
-	@echo "[OK] verify-seed (checked-in sources verified; no awk/sed patching)"
+	@test -f $(SEED_MIN_C) || { echo "FAIL: missing $(SEED_MIN_C)"; exit 1; }
+	@test -f selfhost/seed/sxc_seed_min.audit || { echo "FAIL: missing selfhost/seed/sxc_seed_min.audit"; exit 1; }
+	@test -f $(SEED_SA) || { echo "FAIL: missing $(SEED_SA)"; exit 1; }
+	@for f in selfhost/seed/sxc_seed.c selfhost/seed/sx_runtime.h selfhost/rc_runtime.h selfhost/rc_runtime_stress.c selfhost/seed_builder_registry_test.c; do \
+	  test ! -e "$$f" || { echo "FAIL: retired C/header file $$f reappeared"; exit 1; }; \
+	done
+	@echo "[OK] verify-seed (single C trust anchor + Sayanox seed verified; no awk/sed patching)"
 
 fix-seed: verify-seed
 
@@ -184,21 +175,23 @@ restore-compiler: restore-compiler-module
 	cat $(MIN_SA).tmp > $(MIN_SA); rm -f $(MIN_SA).tmp; \
 	echo "[OK] restore-compiler (restored offline from gzip+base64 parts; no Python, no network)"
 
-seed-bin: fix-seed
-	$(CC) -O2 -o $(SEED_BIN) $(SEED_C) -I selfhost/seed
-	@echo "[OK] seed-bin"
+seed-bin: fix-seed $(SEED_SA) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SEED_SA) $(SEED_BIN)
+	@echo "[OK] seed-bin (C-free ELF64 built from $(SEED_SA) by sxc_native)"
 
 $(GEN1_C): seed-bin restore-compiler
 	./$(SEED_BIN) $(MIN_SA) > $(GEN1_C)
 	@test -s $(GEN1_C)
 
 $(GEN1): $(GEN1_C)
-	$(CC) -O2 -o $(GEN1) $(GEN1_C) -I selfhost/seed
+	$(CC) -O2 -o $(GEN1) $(GEN1_C) -lm
 	@echo "[OK] gen1"
 
 # The maintained gen2 path is bootstrapped by the small pure-min C seed.
 # The older full-seed route is experimental and does not define this target.
-$(GEN1_MIN_C): $(SEED_MIN_BIN) restore-compiler
+# restore-compiler is order-only so a phony recovery check does not force every
+# sub-make and CI hand-off job to rebuild gen1_min and gen2 from scratch.
+$(GEN1_MIN_C): $(SEED_MIN_BIN) $(MIN_SA) $(MIN_MODULE) | restore-compiler
 	./$(SEED_MIN_BIN) $(MIN_SA) > $(GEN1_MIN_C)
 	@test -s $(GEN1_MIN_C)
 
@@ -206,7 +199,7 @@ $(GEN1_MIN): $(GEN1_MIN_C)
 	$(CC) -O2 -o $(GEN1_MIN) $(GEN1_MIN_C)
 	@echo "[OK] gen1_min"
 
-$(GEN2_C): $(GEN1_MIN) restore-compiler
+$(GEN2_C): $(GEN1_MIN) $(MIN_SA) $(MIN_MODULE) | restore-compiler
 	./$(GEN1_MIN) $(MIN_SA) $(GEN2_C)
 	@test -s $(GEN2_C)
 
@@ -214,27 +207,39 @@ $(GEN2): $(GEN2_C)
 	$(CC) -O2 -o $(GEN2) $(GEN2_C)
 	@echo "[OK] gen2"
 
-$(SXFMT_BIN): $(GEN2) tools/sxfmt.sa
-	./$(GEN2) tools/sxfmt.sa $(SXFMT_C) >/dev/null
-	$(CC) -O2 -o $(SXFMT_BIN) $(SXFMT_C)
-	@echo "[OK] Sayanox formatter built from tools/sxfmt.sa"
+# C-free self-compiling x86-64 ELF64 compiler (tools/sxc_native): bootstrapped
+# once from gen2 and immediately verified at its C-free ELF64 fixed point.
+$(SXC_NATIVE_BIN): $(SXC_NATIVE_SA) $(SXC_NATIVE_LIBS) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(GEN2) $(SXC_NATIVE_SA) $(TESTS)/sxc_native_boot.c >/dev/null
+	@if grep -q '^#error' $(TESTS)/sxc_native_boot.c; then echo "[FAIL] sxc_native: #error in bootstrap C"; exit 1; fi
+	$(CC) -std=gnu99 -O2 -Wno-implicit-function-declaration -o $(TESTS)/sxc_native_boot $(TESTS)/sxc_native_boot.c
+	./$(TESTS)/sxc_native_boot $(SXC_NATIVE_SA) $(TESTS)/sxc_native_fp1
+	./$(TESTS)/sxc_native_fp1 $(SXC_NATIVE_SA) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXC_NATIVE_SA) $(TESTS)/sxc_native_fp2
+	cmp -s $(SXC_NATIVE_BIN) $(TESTS)/sxc_native_fp2
+	@rm -f $(TESTS)/sxc_native_fp1 $(TESTS)/sxc_native_fp2
+	@echo "[OK] C-free x86-64 ELF64 compiler $(SXC_NATIVE_BIN) reached self-hosted fixed point"
+
+sxc-native: $(SXC_NATIVE_BIN)
+
+$(SXFMT_BIN): $(SXC_NATIVE_BIN) tools/sxfmt.sa
+	./$(SXC_NATIVE_BIN) tools/sxfmt.sa $(SXFMT_BIN)
+	@echo "[OK] Sayanox formatter built C-free from tools/sxfmt.sa"
 
 sxfmt: $(SXFMT_BIN)
 
-$(SXPKG_BIN): $(GEN2) tools/sxpkg.sa
-	./$(GEN2) tools/sxpkg.sa $(SXPKG_C) >/dev/null
-	$(CC) -O2 -o $(SXPKG_BIN) $(SXPKG_C)
-	@echo "[OK] Sayanox local package-lock tool built from tools/sxpkg.sa"
+$(SXPKG_BIN): $(SXC_NATIVE_BIN) tools/sxpkg.sa stdlib/crypto.sa stdlib/pubkey.sa
+	./$(SXC_NATIVE_BIN) tools/sxpkg.sa $(SXPKG_BIN)
+	@echo "[OK] Sayanox local package-lock tool built C-free from tools/sxpkg.sa"
 
 sxpkg: $(SXPKG_BIN)
 tools: sxfmt sxpkg
 
-# The language server is a normal Sayanox program: gen2 compiles it, cc builds
-# it. Since 2026-10-17 the folder index is Sayanox too (read_dir/path_kind/
-# path_size/path_real), so there is no C header and no generated-C binder.
-$(LSP_BIN): $(GEN2) tools/sayanox_lsp.sa
-	$(GEN2) tools/sayanox_lsp.sa $(LSP_C)
-	$(CC) -O2 -Werror=implicit-function-declaration -o $(LSP_BIN) $(LSP_C)
+# The language server is compiled directly to a static x86-64 ELF64 binary by
+# sxc_native with zero C compiler and zero libc.
+$(LSP_BIN): $(SXC_NATIVE_BIN) tools/sayanox_lsp.sa
+	./$(SXC_NATIVE_BIN) tools/sayanox_lsp.sa $(LSP_BIN)
 
 lsp: $(LSP_BIN)
 	@echo "=== LSP-OK ==="
@@ -1549,7 +1554,8 @@ test-sxpkg-sayanox-logic: sxpkg
 	@$(CC) -O2 -o $(TESTS)/sxpkg-sayanox/quotes $(TESTS)/sxpkg-sayanox/quotes.c
 	@q=$$($(TESTS)/sxpkg-sayanox/quotes); test "$$q" = 1 \
 	  || { echo "[FAIL] the quotes fixture printed '$$q', want 1"; exit 1; }
-	@if grep -q -F ', double str,' tools/sxpkg.c; then \
+	@./$(GEN2) tools/sxpkg.sa $(TESTS)/sxpkg-sayanox/sxpkg_check.c >/dev/null
+	@if grep -q -F ', double str,' $(TESTS)/sxpkg-sayanox/sxpkg_check.c; then \
 	  echo "[FAIL] a typed make in tools/sxpkg.sa lost its parameter types"; \
 	  echo "       (a comment with an odd number of double quotes does that)"; exit 1; fi
 	@# ---- publish ----
@@ -1760,46 +1766,40 @@ test-sxpkg-sayanox-logic: sxpkg
 .PHONY: test-native-emit-split
 test-native-emit-split: $(NATIVE_BIN)
 	mkdir -p $(TESTS)
-	test $$(grep -c -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c) -eq 1 \
+	test $$(grep -c -F 'EMIT-SEAM-BEGIN: the language-level emitter.' tools/sxemit_lib.sa) -eq 1 \
 	  || { echo "[FAIL] the EMIT-SEAM-BEGIN marker is missing or duplicated"; exit 1; }
-	test $$(grep -c -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c) -eq 1 \
+	test $$(grep -c -F 'EMIT-SEAM-END: below this line' tools/sxemit_lib.sa) -eq 1 \
 	  || { echo "[FAIL] the EMIT-SEAM-END marker is missing or duplicated"; exit 1; }
-	test $$(grep -c -F '/* ================= phase 1: collect definitions' selfhost/native_aot.c) -eq 1 \
-	  || { echo "[FAIL] the phase-1 marker is missing or duplicated"; exit 1; }
-	test $$(grep -c -F 'x86-64 mini encoder' selfhost/native_aot.c) -eq 1 \
-	  || { echo "[FAIL] the encoder marker is missing or duplicated"; exit 1; }
-	b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c | cut -d: -f1); \
-	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c | cut -d: -f1); \
-	 p1=$$(grep -n -F '/* ================= phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
-	 enc=$$(grep -n -F 'x86-64 mini encoder' selfhost/native_aot.c | cut -d: -f1); \
+	test $$(grep -c -F 'make collect_defs(' tools/sxinfer_lib.sa) -eq 1 \
+	  || { echo "[FAIL] the phase-1 collect_defs entry is missing or duplicated"; exit 1; }
+	test $$(grep -c -F 'make make_enc_state(' tools/sxenc_lib.sa) -eq 1 \
+	  || { echo "[FAIL] the encoder entry is missing or duplicated"; exit 1; }
+	b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' tools/sxemit_lib.sa | cut -d: -f1); \
+	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' tools/sxemit_lib.sa | cut -d: -f1); \
 	 if [ "$$b" -ge "$$e" ]; then echo "[FAIL] the emit-seam markers are out of order"; exit 1; fi; \
-	 if [ "$$enc" -ge "$$p1" ] || [ "$$p1" -ge "$$b" ]; then \
-	   echo "[FAIL] the file layout changed: expected encoder < phase 1 < EMIT-SEAM-BEGIN"; exit 1; fi; \
-	 tail -n +$$((b + 1)) selfhost/native_aot.c | head -n $$((e - b - 1)) > $(TESTS)/seam_region.c; \
-	 for pat in 'e1(' 'e32(' 'e64(' 'memcpy(code' 'memcpy(&code'; do \
-	   if grep -q -F "$$pat" $(TESTS)/seam_region.c; then \
+	 tail -n +$$((b + 1)) tools/sxemit_lib.sa | head -n $$((e - b - 1)) > $(TESTS)/seam_region.sa; \
+	 for pat in 'e1(' 'e16(' 'e32(' 'enc_code_at(' '36000'; do \
+	   if grep -q -F "$$pat" $(TESTS)/seam_region.sa; then \
 	     echo "[FAIL] the language emitter writes code bytes directly: $$pat"; \
-	     grep -n -F "$$pat" $(TESTS)/seam_region.c | head -3; exit 1; fi; \
+	     grep -n -F "$$pat" $(TESTS)/seam_region.sa | head -3; exit 1; fi; \
 	 done; \
-	 if [ -n "$$(grep -n -w 'cn' $(TESTS)/seam_region.c | head -3)" ]; then \
-	   echo "[FAIL] the language emitter reads the code cursor directly (use here()):"; \
-	   grep -n -w 'cn' $(TESTS)/seam_region.c | head -3; exit 1; fi; \
-	 echo "[OK] emit seam: $$((e - b)) lines of language-level emitter, no raw byte write, no direct cursor read"
-	# ---- the seam API is defined in the encoder region, above phase 1 ----
-	p1=$$(grep -n -F '/* ================= phase 1: collect definitions' selfhost/native_aot.c | cut -d: -f1); \
-	 for fn in 'static size_t here(void)' 'static void patch_imm32' 'static void leave_ret' \
-	           'static size_t sub_rsp_imm32_slot' 'static size_t jmp5_slot' 'static void erel32j'; do \
-	   ln=$$(grep -n -F "$$fn" selfhost/native_aot.c | head -1 | cut -d: -f1); \
-	   if [ -z "$$ln" ] || [ "$$ln" -ge "$$p1" ]; then \
-	     echo "[FAIL] seam helper is not defined in the encoder region: $$fn"; exit 1; fi; \
-	 done
-	echo "[OK] emit seam: here()/patch_imm32/leave_ret/sub_rsp_imm32_slot/jmp5_slot/erel32j are all encoder-region primitives"
-	# ---- and the backend still works end to end ----
+	 if [ -n "$$(grep -n -F 'est[' $(TESTS)/seam_region.sa | head -3)" ]; then \
+	   echo "[FAIL] the language emitter reads the encoder state directly (use here_local()):"; \
+	   grep -n -F 'est[' $(TESTS)/seam_region.sa | head -3; exit 1; fi; \
+	 echo "[OK] emit seam: $$((e - b)) lines of Sayanox language-level emitter, no raw byte write, no direct cursor read"
+	# ---- the seam API is defined in tools/sxenc_lib.sa, separate from phase 1/3 ----
+	for fn in 'make here_local(' 'make patch_imm32(' 'make leave_ret(' \
+	          'make sub_rsp_imm32_slot(' 'make jmp5_slot(' 'make erel32j('; do \
+	  grep -q -F "$$fn" tools/sxenc_lib.sa \
+	    || { echo "[FAIL] seam helper is not defined in tools/sxenc_lib.sa: $$fn"; exit 1; }; \
+	done
+	echo "[OK] emit seam: here_local/patch_imm32/leave_ret/sub_rsp_imm32_slot/jmp5_slot/erel32j are all tools/sxenc_lib.sa primitives"
+	# ---- and the Sayanox backend works end to end ----
 	./$(NATIVE_BIN) selfhost/generic_struct_concrete.sa $(TESTS)/seam_nat
 	$(call assert-out,./$(TESTS)/seam_nat,7\nseven\n8\neight\n2\n8\n9)
 	./$(NATIVE_BIN) selfhost/native_strord_test.sa $(TESTS)/seam_nat2
 	test -x $(TESTS)/seam_nat2 && ./$(TESTS)/seam_nat2 > $(TESTS)/seam_nat2.out
-	echo "[OK] native emit split: the language emitter is backend-free, the encoder and the phase-4 stubs are the only machine code, and emitted programs still run"
+	echo "[OK] native emit split: the Sayanox language emitter is backend-free, tools/sxenc_lib.sa and phase-4/4b stubs are the only machine code, and emitted programs run"
 
 # ---------------------------------------------------------------------------
 # test-native-ir-log: the emit tree's instruction list is inspectable, and
@@ -1898,11 +1898,11 @@ test-native-ir-log: $(NATIVE_BIN)
 	   echo "(if that is intentional, update IRL_MN_WANT and say why in docs/NATIVE_IR.md)"; exit 1; fi
 	echo "[OK] native ir log: the fixture's top level emits exactly these mnemonics: $(IRL_MN_WANT)"
 	# ---- 9. only the encoder records; the emitter may announce, not write ----
-	@b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' selfhost/native_aot.c | cut -d: -f1); \
-	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' selfhost/native_aot.c | cut -d: -f1); \
-	 tail -n +$$((b + 1)) selfhost/native_aot.c | head -n $$((e - b - 1)) > $(TESTS)/irl_seam.c; \
-	 test $$(grep -c -w 'ilogf' $(TESTS)/irl_seam.c) -eq 0 \
-	  || { echo "[FAIL] the language emitter touches the recorder state:"; grep -n -w 'ilogf' $(TESTS)/irl_seam.c | head -3; exit 1; }
+	@b=$$(grep -n -F 'EMIT-SEAM-BEGIN: the language-level emitter.' tools/sxemit_lib.sa | cut -d: -f1); \
+	 e=$$(grep -n -F 'EMIT-SEAM-END: below this line' tools/sxemit_lib.sa | cut -d: -f1); \
+	 tail -n +$$((b + 1)) tools/sxemit_lib.sa | head -n $$((e - b - 1)) > $(TESTS)/irl_seam.sa; \
+	 test $$(grep -c -E 'ilog_inst|ilog_push' $(TESTS)/irl_seam.sa) -eq 0 \
+	  || { echo "[FAIL] the language emitter touches the recorder state:"; grep -n -E 'ilog_inst|ilog_push' $(TESTS)/irl_seam.sa | head -3; exit 1; }
 	echo "[OK] native ir log: the instruction list is written by the encoder alone -- a second backend replaces the encoder and keeps the emit tree"
 
 # ---------------------------------------------------------------------------
@@ -1928,10 +1928,9 @@ test-native-ir-log: $(NATIVE_BIN)
 # translation, and deliberately does NOT claim a second backend or ISA.
 # tools/emit_to_ir is now a Sayanox program: gen2 compiles it, cc builds it.
 # It writes the listing to stdout, so call sites redirect.
-tools/emit_to_ir: tools/emit_to_ir.sa $(GEN2)
-	./$(GEN2) tools/emit_to_ir.sa $(TESTS)/emit_to_ir.c >/dev/null
-	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/emit_to_ir.c
-	@echo "[OK] Sayanox IR translator built from tools/emit_to_ir.sa"
+tools/emit_to_ir: tools/emit_to_ir.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/emit_to_ir.sa $@
+	@echo "[OK] Sayanox IR translator built C-free from tools/emit_to_ir.sa"
 
 .PHONY: test-emit-to-ir
 test-emit-to-ir: tools/emit_to_ir
@@ -1987,12 +1986,9 @@ native-test: test-native-ir-portable
 SXLINK_BIN := tools/sxlink
 SXLINK_SA  := tools/sxlink.sa
 
-tools/sxlink: $(SXLINK_SA) $(GEN2)
-	@mkdir -p $(TESTS)
-	./$(GEN2) $(SXLINK_SA) $(TESTS)/sxlink.c >/dev/null
-	@if grep -q '#error' $(TESTS)/sxlink.c; then echo "[FAIL] sxlink: #error in the generated C"; exit 1; fi
-	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/sxlink.c
-	@echo "[OK] Sayanox ELF linker built from $(SXLINK_SA)"
+tools/sxlink: $(SXLINK_SA) tools/sxlink_lib.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXLINK_SA) $@
+	@echo "[OK] Sayanox ELF linker built C-free from $(SXLINK_SA)"
 
 .PHONY: test-native-sxlink
 test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
@@ -2086,34 +2082,25 @@ test-native-sxlink: $(NATIVE_BIN) $(SXLINK_BIN)
 SXA_BIN := tools/sxaudit
 SXA_SA  := tools/sxaudit.sa
 
-tools/sxaudit: $(SXA_SA) stdlib/crypto.sa $(GEN2)
-	./$(GEN2) $(SXA_SA) $(TESTS)/sxaudit.c >/dev/null
-	@if grep -q '#error' $(TESTS)/sxaudit.c; then \
-	  echo "[FAIL] sxaudit: #error in the generated C"; head -1 $(TESTS)/sxaudit.c; exit 1; fi
-	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/sxaudit.c
-	@echo '[OK] the trust-anchor auditor built from tools/sxaudit.sa by gen2'
+tools/sxaudit: $(SXA_SA) stdlib/crypto.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXA_SA) $@
+	@echo '[OK] the trust-anchor auditor built C-free from tools/sxaudit.sa'
 
 SXM_BIN := tools/sxmod
 SXM_SA  := tools/sxmod.sa
 SXM_T   := selfhost/sxmod_tests
 
-tools/sxmod: $(SXM_SA) $(GEN2)
-	./$(GEN2) $(SXM_SA) $(TESTS)/sxmod.c >/dev/null
-	@if grep -q '#error' $(TESTS)/sxmod.c; then \
-	  echo "[FAIL] sxmod: #error in the generated C"; head -1 $(TESTS)/sxmod.c; exit 1; fi
-	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/sxmod.c
-	@echo '[OK] the namespacing pass built from tools/sxmod.sa by gen2'
+tools/sxmod: $(SXM_SA) tools/sxmod_lib.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXM_SA) $@
+	@echo '[OK] the namespacing pass built C-free from tools/sxmod.sa'
 
 N32_BIN := tools/native32
 N32_SA  := tools/native32.sa
 N32_T   := selfhost/native32_tests
 
-tools/native32: $(N32_SA) $(GEN2)
-	@mkdir -p $(TESTS)
-	./$(GEN2) $(N32_SA) $(TESTS)/native32.c >/dev/null
-	@if grep -q '#error' $(TESTS)/native32.c; then echo "[FAIL] native32: #error in the generated C"; exit 1; fi
-	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/native32.c
-	@echo "[OK] the i386 backend built from $(N32_SA) by gen2"
+tools/native32: $(N32_SA) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(N32_SA) $@
+	@echo "[OK] the multi-ISA backend built C-free from $(N32_SA)"
 
 .PHONY: test-native32
 test-native32: $(SEED_MIN_BIN) $(GEN2) $(N32_BIN)
@@ -2279,6 +2266,76 @@ test-native-arm64: $(SEED_MIN_BIN) $(N32_BIN)
 
 native-test: test-native-arm64
 
+# ---------------------------------------------------------------------------
+# test-native-riscv64: FOURTH machine-code target -- RV64IM Linux ELF64
+# (ELFCLASS64 / EM_RISCV = 243), emitted by tools/native32.sa in Sayanox.
+#
+# Like arm64, these RV64IM images are NOT executed on an x86-64 host without an
+# emulator: the gate pins byte-determinism, reviewed golden agreement, the
+# ELF64/EM_RISCV container, the print-decimal prologue (`addiw t0,a0,0`) and
+# exit epilogue (`addi a0,zero,0` / `addi a7,zero,93` / `ecall`), three-way
+# data-segment identity across i386, arm64 and riscv64, and all nine subset
+# refusals.
+# ---------------------------------------------------------------------------
+.PHONY: test-native-riscv64
+test-native-riscv64: $(SEED_MIN_BIN) $(N32_BIN)
+	@mkdir -p $(TESTS)/n32
+	@for f in expr flow text; do \
+	  ./$(N32_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.rv64 riscv64 \
+	    || { echo "[FAIL] native32 riscv64 refused $$f.sa, which is inside its documented subset"; exit 1; }; \
+	  ./$(N32_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.rv64b riscv64; \
+	  cmp $(TESTS)/n32/$$f.rv64 $(TESTS)/n32/$$f.rv64b \
+	    || { echo "[FAIL] the riscv64 encoder emitted different bytes for $$f.sa on a second run"; exit 1; }; \
+	  cmp $(TESTS)/n32/$$f.rv64 $(N32_T)/golden/$$f.riscv64.elf \
+	    || { echo "[FAIL] the riscv64 image for $$f.sa differs from the reviewed golden $(N32_T)/golden/$$f.riscv64.elf"; exit 1; }; \
+	done
+	@echo '[OK] riscv64: expr, flow and text are emitted, byte-deterministic, and byte-identical to the reviewed goldens -- emitted and pinned here, never executed on x86-64'
+	@test "$$(od -An -tx1 -v -N 8 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 7f454c4602010100 \
+	  || { echo "[FAIL] the riscv64 image is no longer ELFCLASS64"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 16 -N 2 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 2 \
+	  || { echo "[FAIL] the riscv64 image is no longer ET_EXEC"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 18 -N 2 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 243 \
+	  || { echo "[FAIL] e_machine is no longer EM_RISCV (243)"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 54 -N 2 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 56 \
+	  || { echo "[FAIL] e_phentsize is no longer the ELF64 value 56"; exit 1; }
+	@test "$$(od -An -tu2 -v -j 56 -N 2 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 2 \
+	  || { echo "[FAIL] the riscv64 image no longer has exactly two program headers"; exit 1; }
+	@test "$$(od -An -tu8 -v -j 24 -N 8 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 4194600 \
+	  || { echo "[FAIL] the riscv64 entry point moved (0x400000 + 176 header bytes + the 120-byte print-decimal routine)"; exit 1; }
+	@test "$$(od -An -tu8 -v -j 80 -N 8 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 4194304 \
+	  || { echo "[FAIL] the riscv64 text segment no longer loads at 0x400000"; exit 1; }
+	@test "$$(od -An -tu8 -v -j 136 -N 8 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 4198400 \
+	  || { echo "[FAIL] the riscv64 data segment no longer loads at 0x401000"; exit 1; }
+	@test "$$(od -An -tx1 -v -j 176 -N 4 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 9b020500 \
+	  || { echo "[FAIL] the riscv64 print routine no longer starts with addiw t0, a0, 0"; exit 1; }
+	@sz=$$(od -An -tu8 -v -j 96 -N 8 $(TESTS)/n32/expr.rv64 | tr -d ' \n'); \
+	 test "$$(od -An -tx1 -v -j $$((sz - 12)) -N 12 $(TESTS)/n32/expr.rv64 | tr -d ' \n')" = 130500009308d00573000000 \
+	   || { echo "[FAIL] the riscv64 text segment no longer ends in addi a0,zero,0 / addi a7,zero,93 / ecall"; exit 1; }
+	@echo '[OK] riscv64 container: ELFCLASS64 / ET_EXEC / EM_RISCV (243), two program headers, entry 0x400128, text at 0x400000 and data at 0x401000, exit via ecall with a7=93'
+	@for f in expr flow text; do \
+	  ./$(N32_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.i32 i386; \
+	  ./$(N32_BIN) $(N32_T)/$$f.sa $(TESTS)/n32/$$f.a64 arm64; \
+	  tail -c +4097 $(TESTS)/n32/$$f.i32 > $(TESTS)/n32/$$f.d32; \
+	  tail -c +4097 $(TESTS)/n32/$$f.a64 > $(TESTS)/n32/$$f.d64; \
+	  tail -c +4097 $(TESTS)/n32/$$f.rv64 > $(TESTS)/n32/$$f.drv; \
+	  cmp $(TESTS)/n32/$$f.d32 $(TESTS)/n32/$$f.drv \
+	    || { echo "[FAIL] i386 and riscv64 disagree on the data segment for $$f.sa"; exit 1; }; \
+	  cmp $(TESTS)/n32/$$f.d64 $(TESTS)/n32/$$f.drv \
+	    || { echo "[FAIL] arm64 and riscv64 disagree on the data segment for $$f.sa"; exit 1; }; \
+	  if cmp -s $(TESTS)/n32/$$f.a64 $(TESTS)/n32/$$f.rv64; then \
+	    echo "[FAIL] arm64 and riscv64 images are identical on $$f.sa"; exit 1; fi; \
+	done
+	@echo '[OK] one front end, three encoders: i386, arm64 and riscv64 lay out byte-identical data segments while emitting distinct machine code'
+	@for f in $(N32_T)/refuse/*.sa; do \
+	  if ./$(N32_BIN) $$f $(TESTS)/n32/bad.rv64 riscv64 > $(TESTS)/n32/badrv.err 2>&1; then \
+	    echo "[FAIL] the riscv64 target accepted $$f, which is outside the subset"; exit 1; fi; \
+	  grep -q 'native32: ' $(TESTS)/n32/badrv.err \
+	    || { echo "[FAIL] $$f was refused for riscv64 without a native32 diagnostic"; exit 1; }; \
+	done
+	@echo '[OK] riscv64 refusals: all nine out-of-subset programs are refused cleanly on this target too'
+
+native-test: test-native-riscv64
+
 
 # ---------------------------------------------------------------------------
 # test-sxmod: module namespacing, as a source-to-source pass in Sayanox.
@@ -2304,10 +2361,10 @@ test-sxmod: $(SEED_MIN_BIN) $(GEN2) $(SXM_BIN)
 	@grep -q 'duplicate function name' $(TESTS)/sxm/collide.err \
 	  || { echo "[FAIL] seed-min refused the flat splice for the wrong reason"; cat $(TESTS)/sxm/collide.err; exit 1; }
 	@./$(GEN2) $(SXM_T)/collide_flat.sa $(TESTS)/sxm/collide_g2.c >/dev/null 2>&1 || true
-	@if $(CC) -O2 -o $(TESTS)/sxm/collide_g2 $(TESTS)/sxm/collide_g2.c 2>$(TESTS)/sxm/collide_g2.err; then \
+	@if LC_ALL=C $(CC) -O2 -o $(TESTS)/sxm/collide_g2 $(TESTS)/sxm/collide_g2.c 2>$(TESTS)/sxm/collide_g2.err; then \
 	  echo "[FAIL] the C gen2 emitted for the flat splice compiled, so there was no collision"; exit 1; fi
 	@grep -q "'add'" $(TESTS)/sxm/collide_g2.err \
-	  || { echo "[FAIL] cc rejected gen2's flat splice for an unrelated reason"; exit 1; }
+	  || { echo "[FAIL] cc rejected gen2's flat splice for an unrelated reason"; cat $(TESTS)/sxm/collide_g2.err; exit 1; }
 	@if [ -x $(NATIVE_BIN) ]; then \
 	  if ./$(NATIVE_BIN) $(SXM_T)/collide_flat.sa $(TESTS)/sxm/collide_nat >/dev/null 2>$(TESTS)/sxm/collide_nat.err; then \
 	    echo "[FAIL] native_aot accepted two spliced modules that both declare add"; exit 1; fi; \
@@ -2413,7 +2470,9 @@ test-trust-anchor: $(GEN2) $(SXA_BIN) $(SEED_MIN_BIN)
 	  || { echo "[FAIL] the seed build rule changed shape; re-audit what C the bootstrap compiles"; exit 1; }
 	@test "$$(grep -c '\.c' $(TESTS)/anchor/seed.audit)" = 1 \
 	  || { echo "[FAIL] the audit record names more than one C file"; exit 1; }
-	@echo '[OK] one anchor: the seed-min rule compiles selfhost/seed/sxc_seed_min.c and nothing else; every later .c in the chain (gen1_min.c, gen2.c, gen3.c, gen4.c) is generated by the toolchain and gitignored'
+	@test "$$(git ls-files '*.c' '*.h')" = "selfhost/seed/sxc_seed_min.c" \
+	  || { echo "[FAIL] tracked .c/.h files exist outside selfhost/seed/sxc_seed_min.c:"; git ls-files '*.c' '*.h'; exit 1; }
+	@echo '[OK] one anchor: selfhost/seed/sxc_seed_min.c is the ONLY tracked .c/.h file in the entire repository; every later .c in the bootstrap chain is generated and gitignored'
 	@# 3. the external surface of the anchor
 	@test "$$(grep -c '^#include' $(SEED_MIN_C))" = 4 \
 	  || { echo "[FAIL] the seed's #include set changed size"; grep '^#include' $(SEED_MIN_C); exit 1; }
@@ -2508,12 +2567,9 @@ SXENCODE_OPS := J_cc J_mp L_bind L_new addsd b bin_imm32 bin_imm8 bin_rr call_p 
                 raw_patch32 sar_imm setcc shl_imm shr_imm stal_rdi stb_rdi \
                 sub_rsp_slot subsd test_rr ucomisd xor_rr
 
-tools/sxencode: $(SXENCODE_SA) $(GEN2)
-	@mkdir -p $(TESTS)
-	./$(GEN2) $(SXENCODE_SA) $(TESTS)/sxencode.c >/dev/null
-	@if grep -q '#error' $(TESTS)/sxencode.c; then echo "[FAIL] sxencode: #error in the generated C"; exit 1; fi
-	$(CC) -O2 -Werror=implicit-function-declaration -o $@ $(TESTS)/sxencode.c
-	@echo "[OK] Sayanox instruction encoder built from $(SXENCODE_SA)"
+tools/sxencode: $(SXENCODE_SA) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXENCODE_SA) $@
+	@echo "[OK] Sayanox instruction encoder built C-free from $(SXENCODE_SA)"
 
 .PHONY: test-native-sxencode
 test-native-sxencode: $(NATIVE_BIN) $(SXENCODE_BIN)
@@ -2602,12 +2658,9 @@ SXDEFS_FIX := selfhost/sxdefs_tests/program.sa selfhost/sxdefs_tests/quirks.sa \
               selfhost/stdlib_json_deep_test.sa selfhost/generic_struct_nested.sa \
               selfhost/full_language_expr.sa tools/sxencode.sa tools/native32.sa
 
-tools/sxdefs: $(SXDEFS_SA) $(GEN2)
-	@mkdir -p $(TESTS)
-	./$(GEN2) $(SXDEFS_SA) $(TESTS)/sxdefs.c >/dev/null
-	@if grep -q '#error' $(TESTS)/sxdefs.c; then echo "[FAIL] sxdefs: #error in the generated C"; exit 1; fi
-	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $@ $(TESTS)/sxdefs.c
-	@echo "[OK] Sayanox phase-1 front end built from $(SXDEFS_SA)"
+tools/sxdefs: $(SXDEFS_SA) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXDEFS_SA) $@
+	@echo "[OK] Sayanox phase-1 front end built C-free from $(SXDEFS_SA)"
 
 .PHONY: test-native-sxdefs
 test-native-sxdefs: $(NATIVE_BIN) $(SXDEFS_BIN)
@@ -2727,6 +2780,263 @@ test-native-sxdefs: $(NATIVE_BIN) $(SXDEFS_BIN)
 	@echo "[OK] sxdefs: an unknown mode, a missing input and a missing output path are clear errors"
 
 native-test: test-native-sxdefs
+
+# ---------------------------------------------------------------------------
+# tools/sxinfer + test-native-sxinfer: PHASE 2 OF THE NATIVE FRONT END, IN
+# SAYANOX (Phase D step 6).
+#
+# tools/sxdefs.sa stopped before infer(): every field kind was -1, every
+# unannotated global kind was -1, and no generic template had been
+# instantiated. tools/sxinfer.sa ports phase 2 -- pk_*, the 16-round fixpoint,
+# gs_instantiate() (including nested Box<Box<num>> and Pair<Box<str>, list>),
+# pick_instance() generic function monomorphisation, dry gen_cond() over
+# and/or/not, and the pk_soft=0 validation pass -- with ZERO C changes to
+# selfhost/native_aot.c.
+#
+# Checked four ways:
+#   * its phase-1 defs slice is byte-identical to SX_DEFS_DUMP on 12 fixtures;
+#   * its binary heap-root table (OFF_ROOTS) is byte-identical to
+#     SX_LINK_DUMP's data.bin[144..] on all 12 fixtures;
+#   * its resolved infer.txt pins three-level concrete chains, nested generic
+#     struct specialisations and generic function monomorphisations;
+#   * 39 phase-1-clean, phase-2-invalid fixtures (39 distinct messages) are
+#     accepted by sxdefs and refused by both native_aot and sxinfer with exit 1
+#     and byte-identical diagnostic text.
+# ---------------------------------------------------------------------------
+SXINFER_BIN := tools/sxinfer
+SXINFER_SA  := tools/sxinfer.sa
+SXINFER_FIX := selfhost/sxinfer_tests/program.sa selfhost/sxdefs_tests/program.sa \
+               selfhost/sxdefs_tests/quirks.sa selfhost/generic_struct_concrete.sa \
+               selfhost/generic_struct_box.sa selfhost/generic_struct_nested.sa \
+               selfhost/full_language_expr.sa selfhost/native_generics_test.sa \
+               selfhost/native_strord_test.sa selfhost/stdlib_growth_test.sa \
+               selfhost/stdlib_json_deep_test.sa selfhost/stdlib_crypto_test.sa
+
+tools/sxinfer: $(SXINFER_SA) tools/sxinfer_lib.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXINFER_SA) $@
+	@echo "[OK] Sayanox phase-2 kind inference built C-free from $(SXINFER_SA)"
+
+.PHONY: test-native-sxinfer
+test-native-sxinfer: $(NATIVE_BIN) $(SXDEFS_BIN) $(SXINFER_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/sxinfer
+	@for fix in $(SXINFER_FIX); do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  pdir=$${fix%/*}; pdir=$${pdir##*/}; tag=$${pdir}_$${name}; \
+	  d=$(TESTS)/sxinfer/$$tag; \
+	  mkdir -p $$d; \
+	  SX_DEFS_DUMP=$$d SX_LINK_DUMP=$$d ./$(NATIVE_BIN) $$fix $$d/c.elf > $$d/c.log 2>&1 \
+	    || { echo "[FAIL] sxinfer: native_aot refused $$fix"; cat $$d/c.log; exit 1; }; \
+	  ./$(SXINFER_BIN) $$fix defs $$d/sx.defs \
+	    || { echo "[FAIL] sxinfer: defs mode refused $$fix"; exit 1; }; \
+	  cmp $$d/defs.txt $$d/sx.defs \
+	    || { echo "[FAIL] sxinfer: phase-1 defs mismatch on $$fix"; exit 1; }; \
+	  ./$(SXINFER_BIN) $$fix roots $$d/sx.roots \
+	    || { echo "[FAIL] sxinfer: roots mode refused $$fix"; exit 1; }; \
+	  rsz=$$(wc -c < $$d/sx.roots); \
+	  dd if=$$d/data.bin bs=1 skip=144 count=$$rsz of=$$d/c.roots 2>/dev/null; \
+	  cmp $$d/c.roots $$d/sx.roots \
+	    || { echo "[FAIL] sxinfer: binary OFF_ROOTS table disagrees with native_aot data.bin on $$fix"; exit 1; }; \
+	  ./$(SXINFER_BIN) $$fix infer $$d/sx.infer \
+	    || { echo "[FAIL] sxinfer: infer mode refused $$fix"; exit 1; }; \
+	  echo "  [ok] $$tag: $$rsz root-table bytes exact, $$(wc -l < $$d/sx.infer) infer lines"; \
+	done
+	@chmod +x $(TESTS)/sxinfer/sxinfer_tests_program/c.elf
+	@$(TESTS)/sxinfer/sxinfer_tests_program/c.elf > $(TESTS)/sxinfer/program.out
+	@cmp selfhost/sxinfer_tests/program.want $(TESTS)/sxinfer/program.out \
+	  || { echo "[FAIL] sxinfer: fixture program output drifted"; exit 1; }
+	@# ---- pin the resolved phase-2 contract by content ----
+	@grep -q -F 'struct 1 Rect nf=2 gskn=0' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F '  field 0 o kind=3 sid=0' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F 'struct 2 Scene nf=2 gskn=0' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F '  field 0 r kind=3 sid=1' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F 'struct 4 Box__Box__n nf=1 gskn=1' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F '  targ 0 kind=3 sid=3' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F 'struct 6 Pair__Box__s_l nf=2 gskn=2' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F 'fn 2 id nparam=1 gen=0 rk=1 inst_of=0 queued=0' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F 'fn 3 id nparam=1 gen=0 rk=2 inst_of=0 queued=0' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F 'fn 4 first nparam=2 gen=0 rk=1 inst_of=1 queued=0' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F 'glob 1 inner_x kind=0 sid=-1' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F 'glob 6 g_lst kind=2 sid=-1' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@grep -q -F 'glob 7 g_mix kind=1 sid=-1' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer
+	@if grep 'kind=-1' $(TESTS)/sxinfer/sxinfer_tests_program/sx.infer >/dev/null; then \
+	  echo "[FAIL] sxinfer: an unresolved kind=-1 survived phase 2"; exit 1; fi
+	@echo "[OK] sxinfer: 12 fixtures match native_aot on phase-1 defs and binary OFF_ROOTS; nested generic structs, 3-level field chains and generic function monomorphisations are pinned"
+	@# ---- 39 phase-2 refusals: accepted by phase 1, refused identically in phase 2 ----
+	@test "$$(ls selfhost/sxinfer_tests/refuse/*.sa | wc -l)" = 39 \
+	  || { echo "[FAIL] sxinfer: refusal fixture count is no longer 39"; exit 1; }
+	@mkdir -p $(TESTS)/sxinfer/refuse
+	@for fix in selfhost/sxinfer_tests/refuse/*.sa; do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  d=$(TESTS)/sxinfer/refuse; \
+	  ./$(SXDEFS_BIN) $$fix defs $$d/$$name.p1 \
+	    || { echo "[FAIL] sxinfer: $$name failed in phase 1 instead of phase 2"; exit 1; }; \
+	  ./$(NATIVE_BIN) $$fix $$d/$$name.elf 2> $$d/$$name.c.err; crc=$$?; \
+	  ./$(SXINFER_BIN) $$fix infer $$d/$$name.inf 2> $$d/$$name.s.err; src=$$?; \
+	  [ $$crc = 1 ] || { echo "[FAIL] sxinfer: native_aot did not refuse $$name (exit $$crc)"; exit 1; }; \
+	  [ $$src = 1 ] || { echo "[FAIL] sxinfer: Sayanox phase 2 did not refuse $$name (exit $$src)"; exit 1; }; \
+	  cut -d' ' -f2- < $$d/$$name.c.err > $$d/$$name.c.msg; \
+	  cut -d' ' -f2- < $$d/$$name.s.err > $$d/$$name.s.msg; \
+	  cmp -s $$d/$$name.c.msg $$d/$$name.s.msg || { \
+	    echo "[FAIL] sxinfer: different diagnostic for $$name"; \
+	    echo "  native_aot: $$(cat $$d/$$name.c.msg)"; \
+	    echo "  sxinfer   : $$(cat $$d/$$name.s.msg)"; exit 1; }; \
+	done
+	@test "$$(cat $(TESTS)/sxinfer/refuse/*.c.msg | sort -u | wc -l)" = 39 \
+	  || { echo "[FAIL] sxinfer: refusal messages are no longer 39 distinct diagnostics"; exit 1; }
+	@if ./$(SXINFER_BIN) selfhost/sxinfer_tests/program.sa bogus $(TESTS)/sxinfer/bad.out >/dev/null 2>&1; then \
+	  echo "[FAIL] sxinfer accepted an unknown mode"; exit 1; fi
+	@if ./$(SXINFER_BIN) selfhost/sxinfer_tests/nope.sa infer $(TESTS)/sxinfer/bad.out >/dev/null 2>&1; then \
+	  echo "[FAIL] sxinfer accepted a missing file"; exit 1; fi
+	@echo "[OK] sxinfer: 39 phase-1-clean programs are refused in phase 2 with 39 distinct byte-identical diagnostics"
+
+native-test: test-native-sxinfer
+
+# ---------------------------------------------------------------------------
+# tools/sxruntime + tools/sxgc: PHASE D STEPS 8 & 9 -- THE 856-LINE x86-64
+# RUNTIME BUILTINS AND THE 339-LINE COLLECTOR, IN SAYANOX.
+#
+# Built on tools/sxenc_lib.sa (no C added to selfhost/native_aot.c):
+#   * tools/sxruntime.sa emits all 24 phase-4 runtime routines (3,521 bytes:
+#     r_malloc, r_strlen, r_cmpstr, r_strord, r_concat, r_n2str, r_shownum,
+#     r_putstr, r_wcstr, r_itono, r_itowrite, r_showlist, r_mlist, r_lget,
+#     r_llen, r_lpush, r_sget, r_chr, r_readfile, r_writefile, r_arg, r_argc,
+#     r_nfmt IEEE-754 %g formatter, r_die);
+#   * tools/sxgc.sa emits all 6 native mark & sweep collector routines (1,209
+#     bytes: r_findblock, r_mark, r_gc, r_gccheck, r_gc_live, r_gc_runs).
+#
+# Chaining `sxruntime -> sxgc -> sxlink` replaces all 4,730 bytes of machine-
+# code runtime and collector plus their patch.bin relocations and links the
+# final x86-64 ELF in Sayanox, byte-identical to native_aot.
+# ---------------------------------------------------------------------------
+SXRUNTIME_BIN := tools/sxruntime
+SXRUNTIME_SA  := tools/sxruntime.sa
+SXGC_BIN      := tools/sxgc
+SXGC_SA       := tools/sxgc.sa
+SXEMIT_BIN    := tools/sxemit
+SXEMIT_SA     := tools/sxemit.sa
+SXRTGC_FIX    := selfhost/sxinfer_tests/program.sa selfhost/native_strord_test.sa \
+                 selfhost/stdlib_growth_test.sa selfhost/stdlib_crypto_test.sa
+
+tools/sxemit: $(SXEMIT_SA) $(NATIVE_LIBS) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXEMIT_SA) $@
+	@echo "[OK] Sayanox phase-3/full native emitter built C-free from $(SXEMIT_SA)"
+
+tools/sxruntime: $(SXRUNTIME_SA) tools/sxruntime_lib.sa tools/sxenc_lib.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXRUNTIME_SA) $@
+	@echo "[OK] Sayanox x86-64 runtime emitter built C-free from $(SXRUNTIME_SA)"
+
+tools/sxgc: $(SXGC_SA) tools/sxgc_lib.sa tools/sxenc_lib.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXGC_SA) $@
+	@echo "[OK] Sayanox x86-64 collector emitter built C-free from $(SXGC_SA)"
+
+.PHONY: test-native-sxruntime
+test-native-sxruntime: $(NATIVE_BIN) $(SXRUNTIME_BIN) $(SXLINK_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/sxruntime
+	@for fix in $(SXRTGC_FIX); do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  d=$(TESTS)/sxruntime/$$name; \
+	  mkdir -p $$d/in $$d/out; \
+	  ./$(NATIVE_BIN) $$fix $$d/off.elf >/dev/null; \
+	  SX_EMIT_LOG=$$d/emit.log SX_LINK_DUMP=$$d/in ./$(NATIVE_BIN) $$fix $$d/c.elf >/dev/null; \
+	  cmp $$d/off.elf $$d/c.elf || { echo "[FAIL] sxruntime: dump changed emitted bytes on $$name"; exit 1; }; \
+	  ./$(SXRUNTIME_BIN) $$d/emit.log $$d/in $$d/out >/dev/null \
+	    || { echo "[FAIL] sxruntime disagreed on $$name"; exit 1; }; \
+	  cmp $$d/in/code.bin $$d/out/code.bin || { echo "[FAIL] sxruntime: spliced code.bin differs on $$name"; exit 1; }; \
+	  cmp $$d/in/patch.bin $$d/out/patch.bin || { echo "[FAIL] sxruntime: spliced patch.bin differs on $$name"; exit 1; }; \
+	  ./$(SXLINK_BIN) $$d/c.elf $$d/out $$d/sx.elf >/dev/null; \
+	  chmod +x $$d/sx.elf; \
+	  cmp $$d/c.elf $$d/sx.elf || { echo "[FAIL] sxruntime: Sayanox-linked ELF differs on $$name"; exit 1; }; \
+	  $$d/c.elf > $$d/c.out; $$d/sx.elf > $$d/sx.out; \
+	  cmp $$d/c.out $$d/sx.out || { echo "[FAIL] sxruntime: stdout differs on $$name"; exit 1; }; \
+	  echo "  [ok] $$name: 3521 runtime bytes + patches byte-identical and runnable"; \
+	done
+	@# tamper control: flipping runtime bytes must be caught at the exact offset
+	@mkdir -p $(TESTS)/sxruntime/tamper/in
+	@cp $(TESTS)/sxruntime/program/in/* $(TESTS)/sxruntime/tamper/in/
+	@csz=$$(wc -c < $(TESTS)/sxruntime/tamper/in/code.bin); \
+	  printf '\252\125' | dd of=$(TESTS)/sxruntime/tamper/in/code.bin bs=1 seek=$$((csz - 2000)) count=2 conv=notrunc 2>/dev/null
+	@if ./$(SXRUNTIME_BIN) $(TESTS)/sxruntime/program/emit.log $(TESTS)/sxruntime/tamper/in $(TESTS)/sxruntime/tamper/out >/dev/null 2>&1; then \
+	  echo "[FAIL] sxruntime accepted a tampered runtime byte"; exit 1; fi
+	@./$(SXRUNTIME_BIN) $(TESTS)/sxruntime/program/emit.log $(TESTS)/sxruntime/tamper/in $(TESTS)/sxruntime/tamper/out 2>&1 >/dev/null | grep -q 'byte mismatch at runtime'
+	@echo "[OK] sxruntime: all 24 x86-64 runtime routines (3,521 bytes, incl. IEEE-754 %g formatter) match native_aot byte-for-byte, link via sxlink and execute identically"
+
+.PHONY: test-native-sxgc
+test-native-sxgc: $(NATIVE_BIN) $(SXRUNTIME_BIN) $(SXGC_BIN) $(SXLINK_BIN)
+	@mkdir -p $(TESTS)
+	@rm -rf $(TESTS)/sxgc
+	@printf 'hold i = 0\nwhile i < 200000 {\n  hold t = concat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b")\n  hold i = i + 1\n}\nshow i\nshow gc_runs()\n' > $(TESTS)/sxgc_oom.sa
+	@printf 'struct Box {\n  n,\n  s\n}\nhold b = Box { 1, "hello-world" }\nhold a0 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\nhold xs = []\nhold i = 0\nwhile i < 30000 {\n  hold junk = concat("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "yyyyyyyyyyyyyyyyyyyyyyyyyy")\n  push(xs, i)\n  hold i = i + 1\n}\nshow len(a0)\nshow b.s\nshow len(xs)\nshow xs[29999]\nshow gc() >= 0\nshow gc_live() > 0\n' > $(TESTS)/sxgc_keep.sa
+	@for fix in $(TESTS)/sxgc_oom.sa $(TESTS)/sxgc_keep.sa selfhost/sxinfer_tests/program.sa; do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  d=$(TESTS)/sxgc/$$name; \
+	  mkdir -p $$d/in $$d/rt $$d/rt_gc; \
+	  SX_EMIT_LOG=$$d/emit.log SX_LINK_DUMP=$$d/in ./$(NATIVE_BIN) $$fix $$d/c.elf >/dev/null; \
+	  ./$(SXRUNTIME_BIN) $$d/emit.log $$d/in $$d/rt >/dev/null; \
+	  ./$(SXGC_BIN) $$d/emit.log $$d/rt $$d/rt_gc >/dev/null; \
+	  cmp $$d/in/code.bin $$d/rt_gc/code.bin || { echo "[FAIL] sxgc: spliced code.bin differs on $$name"; exit 1; }; \
+	  cmp $$d/in/patch.bin $$d/rt_gc/patch.bin || { echo "[FAIL] sxgc: spliced patch.bin differs on $$name"; exit 1; }; \
+	  ./$(SXLINK_BIN) $$d/c.elf $$d/rt_gc $$d/sx.elf >/dev/null; \
+	  chmod +x $$d/sx.elf; \
+	  cmp $$d/c.elf $$d/sx.elf || { echo "[FAIL] sxgc: chained sxruntime+sxgc+sxlink ELF differs on $$name"; exit 1; }; \
+	  echo "  [ok] $$name: 4730 runtime+collector bytes emitted and linked in Sayanox, byte-identical to C"; \
+	done
+	@# execute the Sayanox-emitted collector under the 4 MiB address-space cap
+	@__o=$$(sh -c 'ulimit -v 4096; ./$(TESTS)/sxgc/sxgc_oom/sx.elf') || { \
+	  echo "[FAIL] Sayanox-emitted collector died under a 4 MiB cap"; exit 1; }; \
+	  printf '%s\n' "$$__o" | { \
+	    IFS= read -r __i; IFS= read -r __r; \
+	    [ "$$__i" = "200000" ] && [ "$$__r" -ge 1 ] 2>/dev/null \
+	      || { echo "[FAIL] Sayanox-emitted collector bad output: $$__o"; exit 1; }; }
+	$(call assert-out,./$(TESTS)/sxgc/sxgc_keep/sx.elf,48\nhello-world\n30000\n29999\n1\n1)
+	@# tamper control on the collector region
+	@mkdir -p $(TESTS)/sxgc/tamper/in
+	@cp $(TESTS)/sxgc/sxgc_oom/in/* $(TESTS)/sxgc/tamper/in/
+	@csz=$$(wc -c < $(TESTS)/sxgc/tamper/in/code.bin); \
+	  printf '\377' | dd of=$(TESTS)/sxgc/tamper/in/code.bin bs=1 seek=$$((csz - 20)) count=1 conv=notrunc 2>/dev/null
+	@if ./$(SXGC_BIN) $(TESTS)/sxgc/sxgc_oom/emit.log $(TESTS)/sxgc/tamper/in $(TESTS)/sxgc/tamper/out >/dev/null 2>&1; then \
+	  echo "[FAIL] sxgc accepted a tampered collector byte"; exit 1; fi
+	@./$(SXGC_BIN) $(TESTS)/sxgc/sxgc_oom/emit.log $(TESTS)/sxgc/tamper/in $(TESTS)/sxgc/tamper/out 2>&1 >/dev/null | grep -q 'byte mismatch at collector'
+	@echo "[OK] sxgc: all 6 x86-64 collector routines (1,209 bytes) + sxruntime (3,521 bytes) + sxlink produce byte-identical ELFs and reclaim 200k allocations inside 4 MiB"
+
+.PHONY: test-native-sxemit
+test-native-sxemit: $(NATIVE_BIN) $(SXEMIT_BIN) $(SXENCODE_BIN) $(SEED_MIN_BIN) $(GEN2)
+	@mkdir -p $(TESTS)/sxemit
+	@printf 'hold b1 = 0.1\nhold b2 = 0.2\nhold b4 = 3.141592653589793\nhold t0 = 9007199254740992\nhold t1 = 9007199254740993\nhold t2 = 9007199254740994\nhold t3 = 9007199254740995\nhold c2 = 999999999999999934463\nhold c3 = 999999999999999934465\nshow b1 + b2\nshow b4\nshow t1 - t0\nshow t3 - t2\nwhen c3 > c2 {\n  show 1\n}\n' > $(TESTS)/sxemit/ieee_edge.sa
+	@for fix in selfhost/sxinfer_tests/program.sa selfhost/native_strord_test.sa selfhost/native_cond_test.sa selfhost/stdlib_crypto_test.sa $(TESTS)/sxemit/ieee_edge.sa; do \
+	  name=$${fix##*/}; name=$${name%.sa}; \
+	  d=$(TESTS)/sxemit/$$name; \
+	  mkdir -p $$d/na_ld $$d/sx_ld $$d/na_dd $$d/sx_dd; \
+	  SX_LINK_DUMP=$$d/na_ld SX_DEFS_DUMP=$$d/na_dd SX_EMIT_LOG=$$d/na.ilog SX_ENCODE_LOG=$$d/na.elog \
+	    ./$(NATIVE_BIN) $$fix $$d/na.elf >/dev/null; \
+	  SX_LINK_DUMP=$$d/sx_ld SX_DEFS_DUMP=$$d/sx_dd SX_EMIT_LOG=$$d/sx.ilog SX_ENCODE_LOG=$$d/sx.elog \
+	    ./$(SXEMIT_BIN) $$fix $$d/sx.elf >/dev/null; \
+	  cmp $$d/na.elf $$d/sx.elf || { echo "[FAIL] sxemit: ELF differs on $$name"; exit 1; }; \
+	  cmp $$d/na_ld/code.bin $$d/sx_ld/code.bin || { echo "[FAIL] sxemit: code.bin differs on $$name"; exit 1; }; \
+	  cmp $$d/na_ld/data.bin $$d/sx_ld/data.bin || { echo "[FAIL] sxemit: data.bin differs on $$name"; exit 1; }; \
+	  cmp $$d/na_ld/patch.bin $$d/sx_ld/patch.bin || { echo "[FAIL] sxemit: patch.bin differs on $$name"; exit 1; }; \
+	  cmp $$d/na.ilog $$d/sx.ilog || { echo "[FAIL] sxemit: SX_EMIT_LOG differs on $$name"; exit 1; }; \
+	  cmp $$d/na.elog $$d/sx.elog || { echo "[FAIL] sxemit: SX_ENCODE_LOG differs on $$name"; exit 1; }; \
+	  ./$(SXENCODE_BIN) $$d/sx.elog $$d/sx_ld/code.bin $$d/re_code.bin >/dev/null; \
+	  cmp $$d/sx_ld/code.bin $$d/re_code.bin || { echo "[FAIL] sxemit: sxencode round-trip differs on $$name"; exit 1; }; \
+	  $$d/sx.elf > $$d/sx.out; \
+	  ./$(GEN2) $$fix $$d/g2.c >/dev/null && $(CC) -O1 -o $$d/g2 $$d/g2.c && $$d/g2 > $$d/g2.out; \
+	  cmp $$d/sx.out $$d/g2.out || { echo "[FAIL] sxemit: runtime output differs from gen2 on $$name"; exit 1; }; \
+	  echo "  [ok] $$name: ELF + code.bin + data.bin + logs + gen2 execution parity verified"; \
+	done
+	@# Phase-3 refusal diagnostics (return-flow proof, loop/scope refusals)
+	@printf 'make f(x: num) -> num {\n  when x > 0 {\n    give 1\n  }\n}\nshow f(1)\n' > $(TESTS)/sxemit/bad_rf.sa
+	@if ./$(SXEMIT_BIN) $(TESTS)/sxemit/bad_rf.sa $(TESTS)/sxemit/bad_rf.elf 2>$(TESTS)/sxemit/bad_rf.err; then \
+	  echo "[FAIL] sxemit accepted a function that falls off without give"; exit 1; fi
+	@grep -q 'may fall through without give' $(TESTS)/sxemit/bad_rf.err
+	@printf 'break\n' > $(TESTS)/sxemit/bad_brk.sa
+	@if ./$(SXEMIT_BIN) $(TESTS)/sxemit/bad_brk.sa $(TESTS)/sxemit/bad_brk.elf 2>$(TESTS)/sxemit/bad_brk.err; then \
+	  echo "[FAIL] sxemit accepted break outside loop"; exit 1; fi
+	@grep -q 'break outside a loop' $(TESTS)/sxemit/bad_brk.err
+	@echo "[OK] sxemit: phase-3 emit tree + pure-Sayanox IEEE-754 encoder + phases 1..5 match native_aot and gen2 across all fixtures"
+
+native-test: test-native-sxruntime test-native-sxgc test-native-sxemit
 
 native-test: test-native-sxlink test-native-sxencode test-sxdiag
 
@@ -3891,9 +4201,11 @@ test-doc-claims:
 	if [ "$$miss" != 0 ]; then exit 1; fi
 	@grep -q 'The Stage-2 host is not in this repository' docs/FULL_LANGUAGE_SELFHOST.md \
 	  || { echo "[FAIL] docs/FULL_LANGUAGE_SELFHOST.md lost its honest Stage-2 section"; exit 1; }
-	@for f in selfhost/seed/sxc_seed_min.c selfhost/compiler_min.sa selfhost/native_aot.c docs/STATUS.md docs/STDLIB.md; do \
+	@for f in selfhost/seed/sxc_seed_min.c selfhost/compiler_min.sa selfhost/native_aot.sa docs/STATUS.md docs/STDLIB.md; do \
 	  test -s "$$f" || { echo "[FAIL] docs/FULL_LANGUAGE_SELFHOST.md references $$f, which is missing or empty"; exit 1; }; \
 	done
+	@test ! -e selfhost/native_aot.c \
+	  || { echo "[FAIL] the C native backend selfhost/native_aot.c is back: selfhost/native_aot.sa superseded it"; exit 1; }
 	@# the next phase is recorded and still honestly open
 	@grep -q 'ALL_SAYANOX_PHASE.md' README.md \
 	  || { echo "[FAIL] README.md no longer links the all-in-Sayanox next phase"; exit 1; }
@@ -3931,7 +4243,7 @@ test-for-str: test-doc-claims
 DEP_SHIM_DIR := $(TESTS)/depshim
 DEP_SHIM_LOG := $(TESTS)/depshim.log
 .PHONY: test-language-deps
-test-language-deps: $(GEN2) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN)
+test-language-deps: $(GEN2) $(SXC_NATIVE_BIN) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN)
 	@# ---- static ----
 	@if grep -rl '^#!.*bash' --include='*.sh' --include='sx' . 2>/dev/null | grep -q .; then \
 	  echo "[FAIL] a tracked script still has a bash shebang:"; \
@@ -3955,11 +4267,11 @@ test-language-deps: $(GEN2) $(LSP_BIN) $(NATIVE_BIN) $(SEED_MIN_BIN) $(SXPKG_BIN
 	  chmod +x "$(DEP_SHIM_DIR)/$$t"; \
 	done
 	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" sh -c \
-	  './$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim.c && ./$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim_again.c'
+	  './$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim.c && ./$(GEN2) tools/sayanox_lsp.sa $(TESTS)/lsp_shim_again.c && ./$(SXC_NATIVE_BIN) tools/sayanox_lsp.sa $(TESTS)/lsp_shim.elf'
 	@cmp $(TESTS)/lsp_shim.c $(TESTS)/lsp_shim_again.c
-	@cmp $(TESTS)/lsp_shim.c $(LSP_C)
+	@cmp $(TESTS)/lsp_shim.elf $(LSP_BIN)
 	@PATH="$(CURDIR)/$(DEP_SHIM_DIR):$$PATH" $(MAKE) --no-print-directory \
-	  -o $(GEN2_C) -o $(GEN2) -o $(GEN1_MIN_C) -o $(GEN1_MIN) -o $(SEED_MIN_BIN) \
+	  -o $(GEN2_C) -o $(GEN2) -o $(GEN1_MIN_C) -o $(GEN1_MIN) -o $(SEED_MIN_BIN) -o $(SXC_NATIVE_BIN) \
 	  test-lsp test-lsp-robust test-native-ir-log test-native-mem test-seed-gc test-seed-generics test-sxpkg-online-local test-sxpkg-sayanox-logic
 	@if [ -s $(DEP_SHIM_LOG) ]; then echo "[FAIL] a removed interpreter was invoked:"; cat $(DEP_SHIM_LOG); exit 1; fi
 	@echo "[OK] language deps: no bash/awk/sed/python/perl/node/ruby invoked by the exercised build, test and LSP paths"
@@ -4403,39 +4715,27 @@ selfhost: true-selfhost
 all-sayanox:
 	@echo "=== ALL-SAYANOX: next phase, not implemented ==="
 	@printf '  %-28s %6s lines  %s\n' seed "$$(wc -l < selfhost/seed/sxc_seed_min.c)" selfhost/seed/sxc_seed_min.c
-	@printf '  %-28s %6s lines  %s\n' native-backend "$$(wc -l < selfhost/native_aot.c)" selfhost/native_aot.c
+	@printf '  %-28s %6s files  %s\n' non-anchor-c-or-h "$$(git ls-files '*.c' '*.h' | grep -vc '^selfhost/seed/sxc_seed_min\.c$$' || true)" '.c/.h'
 	@printf '  %-28s %6s lines  %s\n' build-driver "$$(wc -l < Makefile)" Makefile
 	@printf '  %-28s %6s files  %s\n' build-scripts "$$(git ls-files '*.sh' | wc -l)" 'POSIX sh'
 	@printf '  %-28s %6s files  %s\n' sayanox-source "$$(git ls-files '*.sa' | wc -l)" '.sa'
-	@echo "  done: compiler, formatter, the whole package tool (one Sayanox"
-	@echo "        binary since 2026-10-22: every command, the online opt-in"
-	@echo "        policy, SAYANOX_ROOT and its exit statuses; only curl/wget"
-	@echo "        is still an external program), language server, IR"
-	@echo "        translator, LSP folder index, LSP test client, byte-buffer"
-	@echo "        + bitwise builtins, the read_bytes binary reader, the native"
-	@echo "        backend's ELF image writer + rel32 linker (tools/sxlink.sa),"
-	@echo "        its x86-64 instruction encoder (tools/sxencode.sa) and its"
-	@echo "        front-end phase 1 -- the use splice and the definition"
-	@echo "        tables (tools/sxdefs.sa), all three byte-identical to C,"
-	@echo "        the run_command(cmd) and"
-	@echo "        getenv(name) driver builtins, and the diagnostic suites"
-	@echo "        (tools/sxdiag.sa) that replaced four sh drivers"
+	@echo "  done: compiler, C-free self-compiling x86-64 ELF64 compiler (tools/sxc_native.sa),"
+	@echo "        native x86-64 ELF64 AOT backend (selfhost/native_aot.sa), pure-Sayanox"
+	@echo "        seed compiler (selfhost/seed/sxc_seed.sa), four-target machine-code"
+	@echo "        backend + user-mode arm64/riscv64 ELF64 emulator (tools/native32.sa +"
+	@echo "        tools/sxisaexec.sa), transitive DAG module binder (tools/sxmod_lib.sa +"
+	@echo "        tools/sxmod.sa), Sayanox build & compiler test suites (tools/sxbuild.sa +"
+	@echo "        tools/sxsuite.sa), Stage-2 parity + IR VM (tools/sxstage2_parity.sa +"
+	@echo "        tools/sxirexec.sa), Curve25519 Schnorr-SHA256 package signing (stdlib/pubkey.sa"
+	@echo "        + tools/sxpkg.sa), C-free ELF64 LSP server (tools/sayanox_lsp.sa), extended"
+	@echo "        5-backend stdlib (map/sort/path/cli/bytes), formatter, seed auditor, and"
+	@echo "        diagnostic suites -- zero non-anchor .c/.h files remain in the repository"
 	@echo "  plan: docs/ALL_SAYANOX_PHASE.md"
 	@echo '[FAIL] not all maintained logic is Sayanox yet; refusing an all-in-Sayanox claim'
 	@exit 1
 
-# tools/sxdiag: the negative-diagnostic suites, in Sayanox (2026-10-21).
-# It replaced four shell drivers (test_return_paths.sh, test_name_resolution.sh,
-# test_inline_expression_errors.sh, test_list_postfix_errors.sh) that wrote a
-# bad fixture, ran a frontend and grepped for the diagnostic. `run_command(cmd)` is the
-# builtin that made the move possible: a Sayanox program can now start a
-# program with arguments and read its exit status.
-$(SXDIAG_BIN): $(SXDIAG_SA) $(GEN2)
-	./$(GEN2) $(SXDIAG_SA) $(SXDIAG_C) >/dev/null
-	@# '^#error': the tool QUOTES the marker in its own assertions, so only a
-	@# directive at the start of a line is a real refusal
-	@if grep -q '^#error' $(SXDIAG_C); then echo "[FAIL] sxdiag: #error in the generated C"; exit 1; fi
-	$(CC) -O2 -Werror=implicit-function-declaration -o $(SXDIAG_BIN) $(SXDIAG_C)
+$(SXDIAG_BIN): $(SXDIAG_SA) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXDIAG_SA) $(SXDIAG_BIN)
 
 .PHONY: test-sxdiag
 test-sxdiag: $(SXDIAG_BIN) $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
@@ -4484,8 +4784,8 @@ test-sxdiag: $(SXDIAG_BIN) $(GEN2) $(SEED_MIN_BIN) $(NATIVE_BIN)
 	  echo "[FAIL] native accepted getenv() without implementing it"; exit 1; fi
 	@echo "[OK] sxdiag: 23 inline, 7 postfix, 14 return-path and 31 name-resolution refusals checked in Sayanox, with an unknown-suite refusal and two accept-everything controls; run_command and getenv refused by seed-min and native"
 
-$(NATIVE_BIN): $(NATIVE_SRC)
-	$(CC) -O2 -o $(NATIVE_BIN) $(NATIVE_SRC)
+$(NATIVE_BIN): $(NATIVE_SRC) $(NATIVE_LIBS) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(NATIVE_SRC) $(NATIVE_BIN)
 native: $(NATIVE_BIN)
 	@echo "=== NATIVE-OK ==="
 native-test: $(NATIVE_BIN) $(SEED_MIN_BIN)
@@ -4690,11 +4990,10 @@ grammar: true-selfhost-min
 	$(call assert-out,./$(TESTS)/grammar,grammar-ok)
 	@echo "=== GRAMMAR-OK ==="
 
-gc-test:
-	$(CC) -O2 -o $(TESTS)/rc_runtime_stress selfhost/rc_runtime_stress.c
+gc-test: $(SXC_NATIVE_BIN) selfhost/rc_runtime_stress.sa
+	@mkdir -p $(TESTS)
+	./$(SXC_NATIVE_BIN) selfhost/rc_runtime_stress.sa $(TESTS)/rc_runtime_stress
 	@# 2005 = the 5 chars of "start" plus the 2000 appends in the stress loop.
-	@# The old check was `grep -qx gc-rc-ok`, which passed no matter what size
-	@# the concat chain came out as; pinning it makes the length part of the test.
 	$(call assert-out,./$(TESTS)/rc_runtime_stress,2005\ngc-rc-ok)
 	@echo "=== GC-RC-OK ==="
 
@@ -4757,7 +5056,7 @@ gen3:
 subset: seed-bin
 	@printf 'hold x = 42\nshow x\n' > selfhost/_smoke.sa
 	./$(SEED_BIN) selfhost/_smoke.sa > selfhost/_smoke.c
-	$(CC) -O2 -o selfhost/_smoke selfhost/_smoke.c -I selfhost/seed
+	$(CC) -O2 -o selfhost/_smoke selfhost/_smoke.c -lm
 	$(call assert-out,./selfhost/_smoke,42)
 	@echo "=== SUBSET-SELFHOST-OK ==="
 
@@ -4768,13 +5067,9 @@ gen2: $(GEN2)
 test: true-selfhost
 	@echo TEST-OK
 
-# clean removes only GENERATED files -- $(SEED_BIN) (selfhost/seed/sxc_seed) is
-# tracked in git, and `make clean` deleting a tracked file used to leave a
-# deleted-but-committed binary in the working tree.  Rebuild it with
-# `make seed-bin` (it is a .PHONY target, so it always rebuilds from source).
 clean:
 	rm -f $(GEN1) $(GEN1_C) $(GEN1_MIN) $(GEN1_MIN_C) $(GEN2) $(GEN2_C) $(GEN3) $(GEN3_C) selfhost/gen4.c
-	rm -f $(SEED_MIN_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) tools/emit_to_ir tools/emit_to_ir.c tools/sxlink
+	rm -f $(SEED_MIN_BIN) $(SEED_BIN) $(SXC_NATIVE_BIN) $(NATIVE_BIN) selfhost/boot_from_gen2 selfhost/boot_from_gen2.c $(SXFMT_BIN) $(SXFMT_C) $(SXPKG_BIN) $(SXPKG_C) $(LSP_BIN) $(LSP_C) $(SXDIAG_BIN) $(SXDIAG_C) tools/emit_to_ir tools/emit_to_ir.c tools/sxlink tools/sxencode tools/sxdefs tools/native32 tools/sxmod tools/sxaudit tools/sxinfer tools/sxruntime tools/sxgc tools/sxemit tools/sxbuild tools/sxstage2_parity tools/sxirexec tools/sxpkg_pubkey_test tools/sxsuite tools/sxisaexec tools/sxc_native_test tools/sxisaexec_test tools/sxmod_deep_test tools/lsp_ide_test
 
 # ---------------------------------------------------------------------------
 # doctor: check core tools. Expanded feature gates also use POSIX utilities;
@@ -5593,7 +5888,7 @@ native-test: test-list-postfix
 
 # Seed-only lexical edge cases plus shared numeric string-read stress.
 .PHONY: test-seed-borrow
-test-seed-borrow: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
+test-seed-borrow: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) $(SXC_NATIVE_BIN)
 	@mkdir -p $(TESTS)
 	./$(SEED_MIN_BIN) selfhost/seed_borrow_test.sa > $(TESTS)/borrow.c
 	$(CC) -O2 -o $(TESTS)/borrow $(TESTS)/borrow.c
@@ -5611,7 +5906,8 @@ test-seed-borrow: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
 	$(call assert-out,./$(TESTS)/borrow-stress-g2,16481\n16384\n97\n3\n7)
 	./$(NATIVE_BIN) selfhost/seed_borrow_stress.sa $(TESTS)/borrow-stress-native
 	$(call assert-out,./$(TESTS)/borrow-stress-native,16481\n16384\n97\n3\n7)
-	$(CC) -O2 -o $(TESTS)/builder-registry selfhost/seed_builder_registry_test.c
+	./$(GEN2) selfhost/seed_builder_registry_test.sa $(TESTS)/builder-registry.c >/dev/null
+	./$(SXC_NATIVE_BIN) selfhost/seed_builder_registry_test.sa $(TESTS)/builder-registry
 	$(call assert-out,./$(TESTS)/builder-registry,registry-ok)
 	@echo '[OK] seed borrowing: read-only parameters, writable aliases/branches/binders/returns; 30000 reads of 16 KiB with live list (seed/gen2/native)'
 test-stage2: test-seed-borrow
@@ -5767,7 +6063,7 @@ test-seed-sanitize: test-seed-borrow test-seed-list-budget test-seed-collector
 	  ./$(TESTS)/$$name > $(TESTS)/$$name-plain.out; \
 	  cmp $(TESTS)/$$name-plain.out $(TESTS)/$$name-asan.out; \
 	done
-	$(CC) $(SANITIZER_FLAGS) -o $(TESTS)/builder-registry-asan selfhost/seed_builder_registry_test.c
+	$(CC) $(SANITIZER_FLAGS) -o $(TESTS)/builder-registry-asan $(TESTS)/builder-registry.c
 	$(call assert-out,env ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(TESTS)/builder-registry-asan,registry-ok)
 	@echo '[OK] seed ASan/UBSan: aliases/returns/recursion, borrowed reads, list realloc/aliases, a collecting 4M-drop churn, 32 registry reuse cycles; leak detection explicitly OFF'
 
@@ -5951,10 +6247,9 @@ test-sxpkg-transfer-hardening: sxpkg
 test-sxpkg-online-optin: test-sxpkg-transfer-hardening
 
 .PHONY: test-lsp-workspace
-test-lsp-workspace: $(LSP_BIN) $(GEN2) tools/lsp_workspace_test.sa
+test-lsp-workspace: $(LSP_BIN) $(SXC_NATIVE_BIN) tools/lsp_workspace_test.sa
 	@mkdir -p $(TESTS)
-	./$(GEN2) tools/lsp_workspace_test.sa $(TESTS)/lsp_workspace_test.c >/dev/null
-	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/lsp-workspace-test $(TESTS)/lsp_workspace_test.c
+	./$(SXC_NATIVE_BIN) tools/lsp_workspace_test.sa $(TESTS)/lsp-workspace-test
 	@rm -rf '$(TESTS)/lsp workspace' && mkdir -p '$(TESTS)/lsp workspace'
 	./$(TESTS)/lsp-workspace-test '$(CURDIR)/$(LSP_BIN)' '$(CURDIR)/$(TESTS)/lsp workspace'
 	@echo '[OK] LSP folder index: framed Sayanox client, unopened files, overlays, refresh, URI/path boundaries and file cap; no interpreter'
@@ -6067,6 +6362,35 @@ test-stdlib-json-deep: $(SEED_MIN_BIN) $(GEN2)
 
 test-stdlib-modules: test-stdlib-json-deep
 native-test: test-stdlib-json-deep
+
+# ---------------------------------------------------------------------------
+# test-stdlib-json-write: stdlib/json_write.sa -- nested JSON construction,
+# functional key update/delete (jw_obj_set / jw_obj_del), minification and
+# multi-level pretty-printing, round-tripping through stdlib/json_deep.sa's
+# RFC 8259 validator and path reader across seed-min, gen2 and native_aot.
+# ---------------------------------------------------------------------------
+JW_WANT := 1\n2\nobject\n0\n1\n3.75\n-3.25\nnull\n0\n0\n2\nalpha\ntls\nbeta\n"node"\n8080\n0\n1\n1\nedge\n3.75\n{\n  "a": [],\n  "b": [\n    1\n  ]\n}\njson-write-done
+
+.PHONY: test-stdlib-json-write
+test-stdlib-json-write: $(SEED_MIN_BIN) $(GEN2)
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/stdlib_json_write_test.sa > $(TESTS)/jsonw_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/jsonw_seed $(TESTS)/jsonw_seed.c
+	./$(GEN2) selfhost/stdlib_json_write_test.sa $(TESTS)/jsonw_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/jsonw_gen2 $(TESTS)/jsonw_gen2.c
+	$(call assert-out,./$(TESTS)/jsonw_seed,$(JW_WANT))
+	$(call assert-out,./$(TESTS)/jsonw_gen2,$(JW_WANT))
+	@if [ -x $(NATIVE_BIN) ]; then \
+	  ./$(NATIVE_BIN) selfhost/stdlib_json_write_test.sa $(TESTS)/jsonw_native || exit 1; \
+	  ./$(TESTS)/jsonw_native > $(TESTS)/jsonw_native.out || exit 1; \
+	  ./$(TESTS)/jsonw_seed > $(TESTS)/jsonw_seed.out || exit 1; \
+	  cmp $(TESTS)/jsonw_seed.out $(TESTS)/jsonw_native.out || { echo '[FAIL] native json_write differs from seed-min'; exit 1; }; \
+	  echo '[OK] native json_write parity (nested builder, set/del, pretty-printer)'; \
+	else echo '[SKIP] native json_write parity: native_aot not built'; fi
+	@echo '[OK] stdlib/json_write.sa: nested objects/arrays, jw_obj_set/jw_obj_del, jw_minify and jw_pretty round-trip through json_deep.sa identically on seed-min, gen2 and native'
+
+test-stdlib-modules: test-stdlib-json-write
+native-test: test-stdlib-json-write
 
 # ---------------------------------------------------------------------------
 # test-sxpkg-crypto: the package tool's cryptographic acceptance test.
@@ -6208,10 +6532,9 @@ test-sxpkg: test-sxpkg-crypto
 # The scratch folder has a space in its name on purpose: every URI in the
 # session is percent-encoded, like the folder-index gate.
 .PHONY: test-lsp-semantic
-test-lsp-semantic: $(LSP_BIN) $(GEN2) tools/lsp_semantic_test.sa
+test-lsp-semantic: $(LSP_BIN) $(SXC_NATIVE_BIN) tools/lsp_semantic_test.sa
 	@mkdir -p $(TESTS)
-	./$(GEN2) tools/lsp_semantic_test.sa $(TESTS)/lsp_semantic_test.c >/dev/null
-	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/lsp-semantic-test $(TESTS)/lsp_semantic_test.c
+	./$(SXC_NATIVE_BIN) tools/lsp_semantic_test.sa $(TESTS)/lsp-semantic-test
 	@rm -rf '$(TESTS)/lsp semantic' && mkdir -p '$(TESTS)/lsp semantic'
 	./$(TESTS)/lsp-semantic-test '$(CURDIR)/$(LSP_BIN)' '$(CURDIR)/$(TESTS)/lsp semantic'
 	@echo '[OK] LSP semantic resolution: scope-aware definition/references/rename, folder-wide rename, file watching'
@@ -6273,3 +6596,207 @@ test-struct-field-struct: $(SEED_MIN_BIN) $(GEN2)
 	@echo '[OK] struct-typed struct fields: seed-min, gen2 and native all read o.b.v, from a name and from a nested literal (this is what unblocked nested generics on gen2)'
 
 test-type-refusals: test-struct-field-struct
+
+# ---------------------------------------------------------------------------
+# tools/sxbuild + test-sxbuild: Sayanox build/bootstrap/parity/tool driver.
+# ---------------------------------------------------------------------------
+SXBUILD_BIN := tools/sxbuild
+SXBUILD_SA  := tools/sxbuild.sa
+
+$(SXBUILD_BIN): $(SXBUILD_SA) tools/sxmod_lib.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXBUILD_SA) $(SXBUILD_BIN)
+
+.PHONY: test-sxbuild
+test-sxbuild: $(SXBUILD_BIN) $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
+	@mkdir -p $(TESTS)/sxbuild_gate
+	./$(SXBUILD_BIN) doctor >/dev/null
+	./$(SXBUILD_BIN) inventory > $(TESTS)/sxbuild_gate/inv.out
+	@grep -q 'native_aot.c present: *0' $(TESTS)/sxbuild_gate/inv.out \
+	  || { echo "[FAIL] sxbuild inventory did not report native_aot.c present: 0"; exit 1; }
+	@grep -q 'non-anchor .c/.h files: *0' $(TESTS)/sxbuild_gate/inv.out \
+	  || { echo "[FAIL] sxbuild inventory did not report non-anchor .c/.h files: 0"; exit 1; }
+	./$(SXBUILD_BIN) parity selfhost/native_ir_log_test.sa $(TESTS)/sxbuild_gate/parity
+	@echo "[OK] sxbuild: doctor, inventory (0 non-anchor C/H files), and 3-backend parity verified C-free"
+
+native-test: test-sxbuild
+
+# ---------------------------------------------------------------------------
+# tools/sxstage2_parity + test-native-stage2-parity: Stage-2 struct-typed
+# functions and ${id} string interpolation parity + 23 refusals on native_aot.
+# ---------------------------------------------------------------------------
+SXSTAGE2_BIN := tools/sxstage2_parity
+SXSTAGE2_SA  := tools/sxstage2_parity.sa
+
+$(SXSTAGE2_BIN): $(SXSTAGE2_SA) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXSTAGE2_SA) $(SXSTAGE2_BIN)
+
+.PHONY: test-native-stage2-parity
+test-native-stage2-parity: $(SXSTAGE2_BIN) $(GEN2) $(NATIVE_BIN)
+	./$(SXSTAGE2_BIN) $(TESTS)/stage2_parity
+
+native-test: test-native-stage2-parity
+
+# ---------------------------------------------------------------------------
+# tools/sxirexec + test-ir-exec: Portable IR virtual machine and 4-backend
+# parity runner (seed-min == gen2 == native_aot == sxirexec, plus ELF-deleted
+# compile-and-run execution on Stage-2 struct functions and interpolation).
+# ---------------------------------------------------------------------------
+SXIREXEC_BIN := tools/sxirexec
+SXIREXEC_SA  := tools/sxirexec.sa
+
+$(SXIREXEC_BIN): $(SXIREXEC_SA) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXIREXEC_SA) $(SXIREXEC_BIN)
+
+.PHONY: test-ir-exec
+test-ir-exec: $(SXIREXEC_BIN) $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) tools/emit_to_ir
+	@mkdir -p $(TESTS)/irexec_gate
+	@for f in native_ir_log_test stdlib_growth_test stdlib_crypto_test stdlib_json_write_test; do \
+	  ./$(SXIREXEC_BIN) parity selfhost/$$f.sa $(TESTS)/irexec_gate/$$f || exit 1; \
+	done
+	@for f in selfhost/struct_function_tests/values.sa selfhost/struct_function_tests/gc.sa selfhost/interpolation_tests/values.sa selfhost/interpolation_tests/gc.sa selfhost/generic_struct_nested.sa; do \
+	  ./$(NATIVE_BIN) $$f $(TESTS)/irexec_gate/ref.bin && chmod +x $(TESTS)/irexec_gate/ref.bin || exit 1; \
+	  ./$(TESTS)/irexec_gate/ref.bin > $(TESTS)/irexec_gate/ref.out || exit 1; \
+	  ./$(SXIREXEC_BIN) compile-and-run $$f $(TESTS)/irexec_gate/vm > $(TESTS)/irexec_gate/vm.out || exit 1; \
+	  test ! -e $(TESTS)/irexec_gate/vm/prog.elf || { echo "[FAIL] prog.elf was not deleted before IR VM execution"; exit 1; }; \
+	  cmp $(TESTS)/irexec_gate/ref.out $(TESTS)/irexec_gate/vm.out || { echo "[FAIL] sxirexec disagreed with native_aot on $$f"; exit 1; }; \
+	done
+	@echo "[OK] sxirexec: 4-way portable IR VM parity + ELF-deleted Stage-2 execution verified"
+
+native-test: test-ir-exec
+
+# ---------------------------------------------------------------------------
+# tools/sxpkg_pubkey_test + test-sxpkg-pubkey: Curve25519 Schnorr-SHA256
+# public-key package signatures (pubsig=) and signed registry indices
+# (INDEX.sig) verified with .sec deleted.
+# ---------------------------------------------------------------------------
+SXPKGPUB_BIN := tools/sxpkg_pubkey_test
+SXPKGPUB_SA  := tools/sxpkg_pubkey_test.sa
+
+$(SXPKGPUB_BIN): $(SXPKGPUB_SA) $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) $(SXPKGPUB_SA) $(SXPKGPUB_BIN)
+
+.PHONY: test-sxpkg-pubkey
+test-sxpkg-pubkey: sxpkg $(SXPKGPUB_BIN) $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) stdlib/pubkey.sa selfhost/stdlib_pubkey_test.sa
+	./$(SXPKGPUB_BIN) $(TESTS)/sxpkg_pubkey
+
+test-sxpkg: test-sxpkg-pubkey
+native-test: test-sxpkg-pubkey
+
+# ---------------------------------------------------------------------------
+# test-lsp-types: LSP static type-level hover (params, locals, generic struct
+# field substitution, cross-file call return types) and cross-file workspace /
+# use-module definition & signatureHelp over framed JSON-RPC.
+# ---------------------------------------------------------------------------
+.PHONY: test-lsp-types
+test-lsp-types: $(LSP_BIN) $(SXC_NATIVE_BIN) tools/lsp_types_test.sa
+	@mkdir -p $(TESTS)
+	./$(SXC_NATIVE_BIN) tools/lsp_types_test.sa $(TESTS)/lsp-types-test
+	./$(TESTS)/lsp-types-test '$(CURDIR)/$(LSP_BIN)' '$(CURDIR)/$(TESTS)/lsp_types'
+
+test-lsp test-lsp-robust: test-lsp-types
+
+# ---------------------------------------------------------------------------
+# test-lsp-ide: LSP module-aware namespace hover/definition/signatureHelp,
+# multiline call signatureHelp, lexical block-scoped shadowing, and
+# textDocument/prepareRename positive & negative checks.
+# ---------------------------------------------------------------------------
+tools/lsp_ide_test: tools/lsp_ide_test.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/lsp_ide_test.sa $@
+
+.PHONY: test-lsp-ide
+test-lsp-ide: $(LSP_BIN) tools/lsp_ide_test
+	./tools/lsp_ide_test '$(CURDIR)/$(LSP_BIN)' '$(CURDIR)/$(TESTS)/lsp_ide'
+
+test-lsp test-lsp-robust: test-lsp-ide
+native-test: test-lsp-ide
+
+# ---------------------------------------------------------------------------
+# test-sxc-native: C-free self-compiling x86-64 ELF64 compiler fixed point
+# (gen2.elf == gen3.elf), native_aot byte identity, 16-param stack ABI, +=/-=,
+# path_real, spawn/child_* IPC, and C-free sayanox_lsp/sxpkg/sxdiag/compiler_min.
+# ---------------------------------------------------------------------------
+tools/sxc_native_test: tools/sxc_native_test.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/sxc_native_test.sa $@
+
+.PHONY: test-sxc-native
+test-sxc-native: $(SXC_NATIVE_BIN) $(NATIVE_BIN) $(GEN2) tools/sxc_native_test
+	@rm -rf $(TESTS)/sxc_native_gate && mkdir -p $(TESTS)/sxc_native_gate
+	./tools/sxc_native_test $(TESTS)/sxc_native_gate
+
+native-test: test-sxc-native
+
+# ---------------------------------------------------------------------------
+# test-sxsuite: Pure-Sayanox compiler test driver replacing legacy .sh drivers
+# across stage2_interp, struct_fn, generic_struct_limits, full_lang_ready,
+# compiler_features, and ir_audit.
+# ---------------------------------------------------------------------------
+tools/sxsuite: tools/sxsuite.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/sxsuite.sa $@
+
+.PHONY: test-sxsuite
+test-sxsuite: tools/sxsuite $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) tools/emit_to_ir
+	./tools/sxsuite all
+	@if ./tools/sxsuite bogus >/dev/null 2>&1; then echo "[FAIL] sxsuite accepted unknown suite"; exit 1; fi
+	@echo "[OK] sxsuite: 6 compiler suites verified in C-free Sayanox"
+
+native-test: test-sxsuite
+
+# ---------------------------------------------------------------------------
+# test-sxisaexec: User-mode ARM64 (AArch64) & RISC-V 64 (RV64GC) ELF64 Linux
+# instruction emulator with 6-way execution parity + negative fault controls.
+# ---------------------------------------------------------------------------
+tools/sxisaexec: tools/sxisaexec.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/sxisaexec.sa $@
+
+tools/sxisaexec_test: tools/sxisaexec_test.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/sxisaexec_test.sa $@
+
+.PHONY: test-sxisaexec
+test-sxisaexec: tools/sxisaexec tools/sxisaexec_test $(N32_BIN) $(SXIREXEC_BIN) $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) tools/emit_to_ir
+	@rm -rf $(TESTS)/sxisaexec_gate && mkdir -p $(TESTS)/sxisaexec_gate
+	./tools/sxisaexec_test $(TESTS)/sxisaexec_gate
+
+native-test: test-sxisaexec
+
+# ---------------------------------------------------------------------------
+# test-sxmod-deep: Transitive multi-directory module DAG resolution, singleton
+# initialization, cross-module structs, 4-way backend parity, and 6 refusals.
+# ---------------------------------------------------------------------------
+tools/sxmod_deep_test: tools/sxmod_deep_test.sa $(SXC_NATIVE_BIN)
+	./$(SXC_NATIVE_BIN) tools/sxmod_deep_test.sa $@
+
+.PHONY: test-sxmod-deep
+test-sxmod-deep: tools/sxmod_deep_test $(SXM_BIN) $(SXC_NATIVE_BIN) $(SXBUILD_BIN) $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN)
+	@rm -rf $(TESTS)/sxmod_deep_gate && mkdir -p $(TESTS)/sxmod_deep_gate
+	./tools/sxmod_deep_test $(TESTS)/sxmod_deep_gate
+
+native-test: test-sxmod-deep
+
+# ---------------------------------------------------------------------------
+# test-stdlib-extended: 5-backend execution parity (seed-min == gen2 ==
+# native_aot == sxc_native == sxirexec) across stdlib/map.sa, stdlib/sort.sa,
+# stdlib/path.sa, stdlib/cli.sa, and stdlib/bytes.sa.
+# ---------------------------------------------------------------------------
+.PHONY: test-stdlib-extended
+test-stdlib-extended: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) $(SXC_NATIVE_BIN) $(SXIREXEC_BIN) tools/emit_to_ir selfhost/stdlib_extended_test.sa stdlib/map.sa stdlib/sort.sa stdlib/path.sa stdlib/cli.sa stdlib/bytes.sa
+	@rm -rf $(TESTS)/stdlib_ext && mkdir -p $(TESTS)/stdlib_ext
+	./$(SEED_MIN_BIN) selfhost/stdlib_extended_test.sa > $(TESTS)/stdlib_ext/seed.c
+	$(CC) -O2 -o $(TESTS)/stdlib_ext/seed $(TESTS)/stdlib_ext/seed.c -lm
+	./$(GEN2) selfhost/stdlib_extended_test.sa $(TESTS)/stdlib_ext/gen2.c >/dev/null
+	$(CC) -O2 -o $(TESTS)/stdlib_ext/gen2 $(TESTS)/stdlib_ext/gen2.c
+	./$(NATIVE_BIN) selfhost/stdlib_extended_test.sa $(TESTS)/stdlib_ext/nat
+	./$(SXC_NATIVE_BIN) selfhost/stdlib_extended_test.sa $(TESTS)/stdlib_ext/sxc
+	./$(TESTS)/stdlib_ext/seed > $(TESTS)/stdlib_ext/seed.out
+	./$(TESTS)/stdlib_ext/gen2 > $(TESTS)/stdlib_ext/gen2.out
+	./$(TESTS)/stdlib_ext/nat > $(TESTS)/stdlib_ext/nat.out
+	./$(TESTS)/stdlib_ext/sxc > $(TESTS)/stdlib_ext/sxc.out
+	./$(SXIREXEC_BIN) compile-and-run selfhost/stdlib_extended_test.sa $(TESTS)/stdlib_ext/vm > $(TESTS)/stdlib_ext/vm.out
+	cmp $(TESTS)/stdlib_ext/seed.out $(TESTS)/stdlib_ext/gen2.out
+	cmp $(TESTS)/stdlib_ext/seed.out $(TESTS)/stdlib_ext/nat.out
+	cmp $(TESTS)/stdlib_ext/seed.out $(TESTS)/stdlib_ext/sxc.out
+	cmp $(TESTS)/stdlib_ext/seed.out $(TESTS)/stdlib_ext/vm.out
+	grep -q '^stdlib-extended-ok$$' $(TESTS)/stdlib_ext/seed.out
+	@echo "[OK] stdlib extended: 5-way parity (seed-min == gen2 == native_aot == sxc_native == sxirexec) across map, sort, path, cli, and bytes"
+
+test-stdlib-modules: test-stdlib-extended
+native-test: test-stdlib-extended

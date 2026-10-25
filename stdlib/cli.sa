@@ -1,0 +1,250 @@
+// stdlib/cli.sa -- Pure-Sayanox command-line argument packer and flag/option/
+// positional parser (prefix `scli_`).
+//
+// Portable across seed-min, gen2, native_aot, sxc_native, and sxirexec.
+
+make scli_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold v = n
+  hold out = ""
+  while v > 0 {
+    hold d = v % 10
+    hold out = concat(chr(48 + d), out)
+    hold v = (v - d) / 10
+  }
+  give out
+}
+
+make scli_sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+make scli_empty() -> str {
+  give ""
+}
+
+make scli_push(packed: str, item: str) -> str {
+  give concat(packed, concat(scli_istr(len(item)), concat(":", item)))
+}
+
+make scli_read_rec(packed: str, pos: num) -> list {
+  hold n = len(packed)
+  hold i = pos
+  hold ln = 0
+  hold rd = 1
+  while rd == 1 {
+    when i >= n {
+      hold rd = 0
+    } otherwise {
+      when sx_index(packed, i) == 58 {
+        hold rd = 0
+      } otherwise {
+        hold ln = ln * 10 + (sx_index(packed, i) - 48)
+        hold i = i + 1
+      }
+    }
+  }
+  hold res = []
+  hold res = push(res, i + 1)
+  hold res = push(res, i + 1 + ln)
+  give res
+}
+
+make scli_count(packed: str) -> num {
+  hold n = len(packed)
+  hold pos = 0
+  hold cnt = 0
+  while pos < n {
+    hold r = scli_read_rec(packed, pos)
+    hold pos = r[1]
+    hold cnt = cnt + 1
+  }
+  give cnt
+}
+
+make scli_at(packed: str, idx: num) -> str {
+  hold n = len(packed)
+  hold pos = 0
+  hold cur = 0
+  while pos < n {
+    hold r = scli_read_rec(packed, pos)
+    when cur == idx {
+      give scli_sub(packed, r[0], r[1])
+    }
+    hold pos = r[1]
+    hold cur = cur + 1
+  }
+  give ""
+}
+
+make scli_spec_has(spec: str, opt: str) -> num {
+  hold padded_s = concat(" ", concat(spec, " "))
+  hold padded_o = concat(" ", concat(opt, " "))
+  hold hn = len(padded_s)
+  hold nn = len(padded_o)
+  hold i = 0
+  while i + nn <= hn {
+    hold ok = 1
+    hold j = 0
+    while j < nn {
+      when sx_index(padded_s, i + j) != sx_index(padded_o, j) {
+        hold ok = 0
+      }
+      hold j = j + 1
+    }
+    when ok == 1 {
+      give 1
+    }
+    hold i = i + 1
+  }
+  give 0
+}
+
+make scli_eq_prefix(tok: str, opt: str) -> num {
+  hold pre = concat(opt, "=")
+  hold pn = len(pre)
+  when len(tok) < pn {
+    give 0
+  }
+  hold i = 0
+  while i < pn {
+    when sx_index(tok, i) != sx_index(pre, i) {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+make scli_has_flag(packed: str, flag: str, val_opts: str) -> num {
+  hold n = scli_count(packed)
+  hold i = 0
+  hold stop_opts = 0
+  while i < n {
+    hold tok = scli_at(packed, i)
+    hold is_dd = 0
+    when stop_opts == 0 {
+      when string_eq(tok, "--") == 1 {
+        hold is_dd = 1
+      }
+    }
+    when is_dd == 1 {
+      hold stop_opts = 1
+      hold i = i + 1
+    } otherwise {
+      when stop_opts == 0 {
+        when string_eq(tok, flag) == 1 {
+          give 1
+        }
+        when scli_spec_has(val_opts, tok) == 1 {
+          hold i = i + 2
+        } otherwise {
+          hold i = i + 1
+        }
+      } otherwise {
+        hold i = i + 1
+      }
+    }
+  }
+  give 0
+}
+
+make scli_opt_val(packed: str, opt: str, fallback: str) -> str {
+  hold n = scli_count(packed)
+  hold i = 0
+  hold stop_opts = 0
+  hold found = fallback
+  while i < n {
+    hold tok = scli_at(packed, i)
+    hold is_dd2 = 0
+    when stop_opts == 0 {
+      when string_eq(tok, "--") == 1 {
+        hold is_dd2 = 1
+      }
+    }
+    when is_dd2 == 1 {
+      hold stop_opts = 1
+      hold i = i + 1
+    } otherwise {
+      when stop_opts == 0 {
+        hold match_next = 0
+        when string_eq(tok, opt) == 1 {
+          when i + 1 < n {
+            hold match_next = 1
+          }
+        }
+        when match_next == 1 {
+          hold found = scli_at(packed, i + 1)
+          hold i = i + 2
+        } otherwise {
+          when scli_eq_prefix(tok, opt) == 1 {
+            hold found = scli_sub(tok, len(opt) + 1, len(tok))
+          }
+          hold i = i + 1
+        }
+      } otherwise {
+        hold i = i + 1
+      }
+    }
+  }
+  give found
+}
+
+make scli_collect_pos(packed: str, val_opts: str) -> str {
+  hold n = scli_count(packed)
+  hold i = 0
+  hold stop_opts = 0
+  hold out = scli_empty()
+  while i < n {
+    hold tok = scli_at(packed, i)
+    hold is_dd3 = 0
+    when stop_opts == 0 {
+      when string_eq(tok, "--") == 1 {
+        hold is_dd3 = 1
+      }
+    }
+    when is_dd3 == 1 {
+      hold stop_opts = 1
+      hold i = i + 1
+    } otherwise {
+      when stop_opts == 1 {
+        hold out = scli_push(out, tok)
+        hold i = i + 1
+      } otherwise {
+        hold is_opt = 0
+        when len(tok) > 1 {
+          when sx_index(tok, 0) == 45 {
+            hold is_opt = 1
+          }
+        }
+        when is_opt == 1 {
+          when scli_spec_has(val_opts, tok) == 1 {
+            hold i = i + 2
+          } otherwise {
+            hold i = i + 1
+          }
+        } otherwise {
+          hold out = scli_push(out, tok)
+          hold i = i + 1
+        }
+      }
+    }
+  }
+  give out
+}
+
+make scli_pos_count(packed: str, val_opts: str) -> num {
+  give scli_count(scli_collect_pos(packed, val_opts))
+}
+
+make scli_pos_at(packed: str, val_opts: str, idx: num) -> str {
+  give scli_at(scli_collect_pos(packed, val_opts), idx)
+}

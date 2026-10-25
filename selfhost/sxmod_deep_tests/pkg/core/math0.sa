@@ -1,0 +1,20 @@
+// Stage-0/1/2 universal core module for 4-way parity (seed-min == gen2 == native_aot == sxc_native).
+
+make base_k() -> num {
+  give 7
+}
+
+make boot_tag() -> num {
+  show "math0-init-once"
+  give base_k()
+}
+
+hold k_seed = boot_tag()
+
+make sq(x: num) -> num {
+  give x * x
+}
+
+make affine(x: num, b: num) -> num {
+  give sq(x) + base_k() * b
+}

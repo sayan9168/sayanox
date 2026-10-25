@@ -1,0 +1,11 @@
+module math0 as m0 from "../core/math0.sa"
+
+make step_sum(n: num) -> num {
+  hold acc = 0
+  hold i = 1
+  while i <= n {
+    acc = acc + m0.affine(i, 2)
+    i = i + 1
+  }
+  give acc
+}

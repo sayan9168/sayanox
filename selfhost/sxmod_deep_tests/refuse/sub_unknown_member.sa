@@ -1,0 +1,3 @@
+module bad_unknown_mod as bu from "bad_unknown_mod.sa"
+
+show bu.broken()

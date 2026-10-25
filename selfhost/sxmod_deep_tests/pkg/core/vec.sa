@@ -1,0 +1,31 @@
+// Bottom of diamond DAG: declares struct Vec2, boot counter, and vector ops.
+
+struct Vec2 { x, y }
+hold zero_vec = Vec2 { x: 0, y: 0 }
+
+make base_val() -> num {
+  give 10
+}
+
+make count_boot() -> num {
+  show "core-boot-once"
+  give base_val()
+}
+
+hold boot_base = count_boot()
+
+make make_vec(px: num, py: num) -> Vec2 {
+  hold rv = Vec2 { x: px, y: py }
+  give rv
+}
+
+make dot(a: Vec2, b: Vec2) -> num {
+  hold res = a.x * b.x + a.y * b.y
+  give res
+}
+
+make scale_sum(v: Vec2) -> num {
+  hold sxy = v.x + v.y
+  hold sum = sxy * base_val()
+  give sum
+}

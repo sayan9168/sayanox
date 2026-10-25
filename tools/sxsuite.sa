@@ -1,0 +1,997 @@
+// tools/sxsuite.sa -- Pure-Sayanox test-suite runner porting the six POSIX sh
+// regression drivers into first-class Sayanox logic (Phase B / Milestone 2):
+//
+//   ./tools/sxsuite stage2_interp [workdir]
+//   ./tools/sxsuite struct_fn [workdir]
+//   ./tools/sxsuite generic_struct_limits [workdir]
+//   ./tools/sxsuite full_lang_ready [workdir]
+//   ./tools/sxsuite compiler_features [workdir]
+//   ./tools/sxsuite ir_audit [workdir]
+//   ./tools/sxsuite all [workdir]
+//
+// Unknown suite names exit 2; any failed assertion prints [FAIL] and exits 1.
+
+make fail_suite(code: num, msg: str) -> num {
+  show concat("[FAIL] sxsuite: ", msg)
+  hold w = write_file("/dev/stderr", concat(concat("[FAIL] sxsuite: ", msg), "\n"))
+  hold s = exit(code)
+  give 0
+}
+
+make istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold n = v
+  when n < 0 {
+    neg = 1
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make find_sub(t: str, p: str) -> num {
+  hold n = len(t)
+  hold m = len(p)
+  when m == 0 {
+    give 0
+  }
+  hold i = 0
+  while i + m <= n {
+    hold ok = 1
+    hold k = 0
+    while k < m {
+      when sx_index(t, i + k) != sx_index(p, k) {
+        ok = 0
+        k = m
+      } otherwise {
+        k = k + 1
+      }
+    }
+    when ok == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make contains(t: str, p: str) -> num {
+  when find_sub(t, p) >= 0 {
+    give 1
+  }
+  give 0
+}
+
+make has_line_prefix(t: str, pref: str) -> num {
+  hold n = len(t)
+  hold m = len(pref)
+  hold i = 0
+  while i < n {
+    when i + m <= n {
+      hold ok = 1
+      hold k = 0
+      while k < m {
+        when sx_index(t, i + k) != sx_index(pref, k) {
+          ok = 0
+          k = m
+        } otherwise {
+          k = k + 1
+        }
+      }
+      when ok == 1 {
+        give 1
+      }
+    }
+    while i < n && sx_index(t, i) != 10 {
+      i = i + 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make sh_q(s: str) -> str {
+  hold sq = chr(39)
+  hold bs = chr(92)
+  hold out = sq
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, concat(sq, concat(bs, concat(sq, sq))))
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(out, sq)
+}
+
+make cc_bin() -> str {
+  hold c = getenv("CC")
+  when len(c) > 0 {
+    give c
+  }
+  give "cc"
+}
+
+make mk_clean_dir(d: str) -> num {
+  hold cmd = concat("rm -rf ", concat(sh_q(d), concat(" && mkdir -p ", sh_q(d))))
+  when run_command(cmd) != 0 {
+    hold f = fail_suite(1, concat("cannot prepare workdir ", d))
+  }
+  give 0
+}
+
+make must_write(p: str, s: str) -> num {
+  when write_file(p, s) != 1 {
+    hold f = fail_suite(1, concat("cannot write ", p))
+  }
+  give 0
+}
+
+make assert_files_identical(a: str, b: str, label: str) -> num {
+  hold ba = []
+  hold bb = []
+  hold na = read_bytes(a, ba)
+  hold nb = read_bytes(b, bb)
+  when na < 0 || nb < 0 {
+    hold f0 = fail_suite(1, concat(label, ": unreadable comparison file"))
+  }
+  when na != nb {
+    hold f1 = fail_suite(1, concat(label, concat(": size mismatch ", concat(istr(na), concat(" vs ", istr(nb))))))
+  }
+  hold i = 0
+  while i < na {
+    hold xa = ba[i]
+    hold xb = bb[i]
+    when xa != xb {
+      hold f2 = fail_suite(1, concat(label, concat(": byte mismatch at ", istr(i))))
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make active_c_compilers(env_key: str) -> list {
+  hold ov = getenv(env_key)
+  hold out = []
+  when string_eq(ov, "gen2") == 1 {
+    out = push(out, 2)
+    give out
+  }
+  when string_eq(ov, "gen3") == 1 {
+    out = push(out, 3)
+    give out
+  }
+  out = push(out, 2)
+  when path_kind("selfhost/gen3") == 1 {
+    out = push(out, 3)
+  }
+  give out
+}
+
+make compiler_name(cid: num) -> str {
+  when cid == 1 {
+    give "gen1_min"
+  }
+  when cid == 2 {
+    give "gen2"
+  }
+  give "gen3"
+}
+
+// ---- Suite 1: stage2_interp -----------------------------------------------
+
+make interp_bad_source(idx: num) -> str {
+  hold q = chr(34)
+  hold nl = chr(10)
+  hold dl = concat(chr(36), "{")
+  when idx == 0 {
+    give concat("show ", concat(q, concat(dl, concat("}", concat(q, nl)))))
+  }
+  when idx == 1 {
+    give concat("show ", concat(q, concat(dl, concat("name", concat(q, nl)))))
+  }
+  when idx == 2 {
+    give concat("hold n = 1", concat(nl, concat("show ", concat(q, concat(dl, concat("n + 1}", concat(q, nl)))))))
+  }
+  when idx == 3 {
+    give concat("show ", concat(q, concat(dl, concat("arg_count()}", concat(q, nl)))))
+  }
+  when idx == 4 {
+    hold s4 = concat("struct Point { x }", nl)
+    s4 = concat(s4, concat("hold p = Point { x: 7 }", nl))
+    give concat(s4, concat("show ", concat(q, concat(dl, concat("p.x}", concat(q, nl))))))
+  }
+  when idx == 5 {
+    give concat("show ", concat(q, concat(dl, concat("missing}", concat(q, nl)))))
+  }
+  when idx == 6 {
+    hold s6 = concat("hold xs = [1, 2]", nl)
+    give concat(s6, concat("show ", concat(q, concat(dl, concat("xs}", concat(q, nl))))))
+  }
+  when idx == 7 {
+    hold s7 = concat("struct Point { x }", nl)
+    s7 = concat(s7, concat("hold p = Point { x: 7 }", nl))
+    give concat(s7, concat("show ", concat(q, concat(dl, concat("p}", concat(q, nl))))))
+  }
+  when idx == 8 {
+    give concat("show ", concat(q, concat(dl, concat("1}", concat(q, nl)))))
+  }
+  hold s9 = concat("hold n = 1", concat(nl, concat("show ", q)))
+  hold k = 0
+  while k < 17 {
+    s9 = concat(s9, concat(dl, "n}"))
+    k = k + 1
+  }
+  give concat(s9, concat(q, nl))
+}
+
+make interp_pos_name(idx: num) -> str {
+  when idx == 0 {
+    give "values"
+  }
+  when idx == 1 {
+    give "import"
+  }
+  when idx == 2 {
+    give "gc"
+  }
+  when idx == 3 {
+    give "escaped"
+  }
+  give "struct_integration"
+}
+
+make suite_stage2_interp(base: str) -> num {
+  hold dir = concat(base, "/stage2_interp")
+  hold z0 = mk_clean_dir(dir)
+  hold cc = cc_bin()
+  hold comps = active_c_compilers("INTERPOLATION_COMPILERS")
+  hold ci = 0
+  while ci < len(comps) {
+    hold cid = comps[ci]
+    hold cname = compiler_name(cid)
+    hold cbin = concat("./selfhost/", cname)
+    when path_kind(cbin) != 1 {
+      hold fm = fail_suite(1, concat("missing compiler ", cbin))
+    }
+    hold pi = 0
+    while pi < 5 {
+      hold pname = interp_pos_name(pi)
+      hold stem = concat(dir, concat("/", concat(cname, concat("-", pname))))
+      hold in_sa = concat("selfhost/interpolation_tests/", concat(pname, ".sa"))
+      hold want_f = concat("selfhost/interpolation_tests/", concat(pname, ".want"))
+      hold cmd_c = concat(sh_q(cbin), concat(" ", concat(sh_q(in_sa), concat(" ", concat(sh_q(concat(stem, ".c")), concat(" >", concat(sh_q(concat(stem, ".log")), " 2>&1")))))))
+      when run_command(cmd_c) != 0 {
+        hold fc = fail_suite(1, concat(cname, concat(" interpolation compile failed: ", pname)))
+      }
+      hold oi = 0
+      while oi < 2 {
+        hold opt = "0"
+        when oi == 1 {
+          opt = "2"
+        }
+        hold exe = concat(stem, concat("-O", opt))
+        hold out_f = concat(exe, ".out")
+        hold cmd_cc = concat(cc, concat(" -std=c11 -D_POSIX_C_SOURCE=200809L -O", concat(opt, concat(" -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(exe), concat(" ", sh_q(concat(stem, ".c"))))))))
+        when run_command(cmd_cc) != 0 {
+          hold fcc = fail_suite(1, concat(cname, concat(" cc failed on ", pname)))
+        }
+        when run_command(concat(sh_q(exe), concat(" > ", sh_q(out_f)))) != 0 {
+          hold fr = fail_suite(1, concat(cname, concat(" runtime failed on ", pname)))
+        }
+        hold ca = assert_files_identical(want_f, out_f, concat(cname, concat(" ", pname)))
+        oi = oi + 1
+      }
+      pi = pi + 1
+    }
+    // 10 negative refusal cases
+    hold bi = 0
+    while bi < 10 {
+      hold bad_sa = concat(dir, concat("/bad-", concat(istr(bi), ".sa")))
+      hold bad_c = concat(dir, concat("/", concat(cname, concat("-bad-", concat(istr(bi), ".c")))))
+      hold bad_exe = concat(dir, concat("/", concat(cname, concat("-bad-", istr(bi)))))
+      hold mw = must_write(bad_sa, interp_bad_source(bi))
+      hold r_bad = run_command(concat(sh_q(cbin), concat(" ", concat(sh_q(bad_sa), concat(" ", concat(sh_q(bad_c), " >/dev/null 2>&1"))))))
+      hold ctext = read_file(bad_c)
+      when has_line_prefix(ctext, "#error sayanox-min:") != 1 {
+        hold fe = fail_suite(1, concat(cname, concat(" interpolation bad case ", concat(istr(bi), " lacks #error sayanox-min:"))))
+      }
+      when run_command(concat(cc, concat(" -O2 -o ", concat(sh_q(bad_exe), concat(" ", concat(sh_q(bad_c), " >/dev/null 2>&1")))))) == 0 {
+        hold fa = fail_suite(1, concat(cname, concat(" accepted bad interpolation case ", istr(bi))))
+      }
+      bi = bi + 1
+    }
+    // 16-hole boundary positive case
+    hold q = chr(34)
+    hold nl = chr(10)
+    hold dl = concat(chr(36), "{")
+    hold lim_s = concat("hold n = 1", concat(nl, concat("show ", q)))
+    hold lk = 0
+    while lk < 16 {
+      lim_s = concat(lim_s, concat(dl, "n}"))
+      lk = lk + 1
+    }
+    lim_s = concat(lim_s, concat(q, nl))
+    hold lim_sa = concat(dir, "/limit16.sa")
+    hold lim_c = concat(dir, concat("/", concat(cname, "-limit16.c")))
+    hold lim_exe = concat(dir, concat("/", concat(cname, "-limit16")))
+    hold lim_out = concat(lim_exe, ".out")
+    hold mw2 = must_write(lim_sa, lim_s)
+    when run_command(concat(sh_q(cbin), concat(" ", concat(sh_q(lim_sa), concat(" ", concat(sh_q(lim_c), " >/dev/null 2>&1")))))) != 0 {
+      hold fl1 = fail_suite(1, concat(cname, " 16-hole limit failed to compile"))
+    }
+    when run_command(concat(cc, concat(" -O2 -o ", concat(sh_q(lim_exe), concat(" ", sh_q(lim_c)))))) != 0 {
+      hold fl2 = fail_suite(1, concat(cname, " 16-hole C failed to compile"))
+    }
+    when run_command(concat(sh_q(lim_exe), concat(" > ", sh_q(lim_out)))) != 0 {
+      hold fl3 = fail_suite(1, concat(cname, " 16-hole binary failed"))
+    }
+    when string_eq(read_file(lim_out), concat("1111111111111111", nl)) != 1 {
+      hold fl4 = fail_suite(1, concat(cname, " 16-hole output mismatch"))
+    }
+    show concat("[OK] sxsuite stage2_interp (", concat(cname, "): 5 fixtures O0/O2, 16-hole boundary, and 10 source-diagnostic refusals"))
+    ci = ci + 1
+  }
+  give 0
+}
+
+// ---- Suite 2: struct_fn ---------------------------------------------------
+
+make struct_fn_pos_name(idx: num) -> str {
+  when idx == 0 {
+    give "values"
+  }
+  when idx == 1 {
+    give "gc"
+  }
+  give "gc_register"
+}
+
+make struct_fn_bad_source(idx: num) -> str {
+  hold nl = chr(10)
+  when idx == 12 {
+    hold u = concat("struct Point { x }", nl)
+    u = concat(u, concat("make bad(p: Point) -> num {", nl))
+    u = concat(u, concat("  give p.x", nl))
+    u = concat(u, concat("}", nl))
+    give concat(u, concat("hold p = Point { x: 7 }", nl))
+  }
+  hold pre = concat("struct Point { x }", nl)
+  pre = concat(pre, concat("struct Other { x }", nl))
+  pre = concat(pre, concat("hold p = Point { x: 7 }", nl))
+  pre = concat(pre, concat("hold other = Other { x: 8 }", nl))
+  pre = concat(pre, concat("make copy_point(p: Point) -> Point {", nl))
+  pre = concat(pre, concat("  give p", nl))
+  pre = concat(pre, concat("}", nl))
+  when idx == 0 {
+    give concat(pre, concat("hold q = copy_point(1)", nl))
+  }
+  when idx == 1 {
+    give concat(pre, concat("hold q = copy_point(other)", nl))
+  }
+  when idx == 2 {
+    give concat(pre, concat("make bad(p: Point) -> Point {", concat(nl, concat("  give 1", concat(nl, concat("}", nl))))))
+  }
+  when idx == 3 {
+    give concat(pre, concat("make bad(p: Other) -> Point {", concat(nl, concat("  give p", concat(nl, concat("}", nl))))))
+  }
+  when idx == 4 {
+    give concat(pre, concat("make bad(p: Point) -> num {", concat(nl, concat("  give p", concat(nl, concat("}", nl))))))
+  }
+  when idx == 5 {
+    give concat(pre, concat("hold q = copy_point(p, p)", nl))
+  }
+  when idx == 6 {
+    give concat(pre, concat("hold q = copy_point()", nl))
+  }
+  when idx == 7 {
+    give concat(pre, concat("hold q = copy_point(copy_point(other))", nl))
+  }
+  when idx == 8 {
+    give concat(pre, concat("hold q = copy_point(p) + 1", nl))
+  }
+  when idx == 9 {
+    give concat(pre, concat("hold q = (copy_point(p))", nl))
+  }
+  when idx == 10 {
+    give concat(pre, concat("make bad(p: Missing) -> num {", concat(nl, concat("  give 1", concat(nl, concat("}", nl))))))
+  }
+  when idx == 11 {
+    give concat(pre, concat("make bad(p: num) -> Missing {", concat(nl, concat("  give p", concat(nl, concat("}", nl))))))
+  }
+  give concat(pre, concat("show copy_point(p)", nl))
+}
+
+make suite_struct_fn(base: str) -> num {
+  hold dir = concat(base, "/struct_fn")
+  hold z0 = mk_clean_dir(dir)
+  hold cc = cc_bin()
+  hold comps = active_c_compilers("STRUCT_FUNCTION_COMPILERS")
+  hold ci = 0
+  while ci < len(comps) {
+    hold cid = comps[ci]
+    hold cname = compiler_name(cid)
+    hold cbin = concat("./selfhost/", cname)
+    when path_kind(cbin) != 1 {
+      hold fm = fail_suite(1, concat("missing compiler ", cbin))
+    }
+    hold pi = 0
+    while pi < 3 {
+      hold pname = struct_fn_pos_name(pi)
+      hold stem = concat(dir, concat("/", concat(cname, concat("-", pname))))
+      hold in_sa = concat("selfhost/struct_function_tests/", concat(pname, ".sa"))
+      hold want_f = concat("selfhost/struct_function_tests/", concat(pname, ".want"))
+      when run_command(concat(sh_q(cbin), concat(" ", concat(sh_q(in_sa), concat(" ", concat(sh_q(concat(stem, ".c")), " >/dev/null 2>&1")))))) != 0 {
+        hold fc = fail_suite(1, concat(cname, concat(" struct_fn failed: ", pname)))
+      }
+      hold oi = 0
+      while oi < 2 {
+        hold opt = "0"
+        when oi == 1 {
+          opt = "2"
+        }
+        hold exe = concat(stem, concat("-O", opt))
+        hold out_f = concat(exe, ".out")
+        hold cmd_cc = concat(cc, concat(" -O", concat(opt, concat(" -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(exe), concat(" ", sh_q(concat(stem, ".c"))))))))
+        when run_command(cmd_cc) != 0 {
+          hold fcc = fail_suite(1, concat(cname, concat(" struct_fn cc failed: ", pname)))
+        }
+        when run_command(concat(sh_q(exe), concat(" > ", sh_q(out_f)))) != 0 {
+          hold fr = fail_suite(1, concat(cname, concat(" struct_fn run failed: ", pname)))
+        }
+        hold ca = assert_files_identical(want_f, out_f, concat(cname, concat(" struct_fn ", pname)))
+        oi = oi + 1
+      }
+      pi = pi + 1
+    }
+    hold bi = 0
+    while bi < 14 {
+      hold bad_sa = concat(dir, concat("/sfn-bad-", concat(istr(bi), ".sa")))
+      hold bad_c = concat(dir, concat("/", concat(cname, concat("-sfn-bad-", concat(istr(bi), ".c")))))
+      hold bad_exe = concat(dir, concat("/", concat(cname, concat("-sfn-bad-", istr(bi)))))
+      hold mw = must_write(bad_sa, struct_fn_bad_source(bi))
+      hold r_bad = run_command(concat(sh_q(cbin), concat(" ", concat(sh_q(bad_sa), concat(" ", concat(sh_q(bad_c), " >/dev/null 2>&1"))))))
+      when has_line_prefix(read_file(bad_c), "#error sayanox-min:") != 1 {
+        hold fe = fail_suite(1, concat(cname, concat(" struct_fn bad ", concat(istr(bi), " lacks #error sayanox-min:"))))
+      }
+      when run_command(concat(cc, concat(" -O2 -o ", concat(sh_q(bad_exe), concat(" ", concat(sh_q(bad_c), " >/dev/null 2>&1")))))) == 0 {
+        hold fa = fail_suite(1, concat(cname, concat(" accepted struct_fn bad case ", istr(bi))))
+      }
+      bi = bi + 1
+    }
+    show concat("[OK] sxsuite struct_fn (", concat(cname, "): 3 fixtures O0/O2 and 14 checked refusals"))
+    ci = ci + 1
+  }
+  give 0
+}
+
+// ---- Suite 3: generic_struct_limits ---------------------------------------
+
+make has_generic_refusal_diag(msg: str) -> num {
+  when contains(msg, "a type argument must be") == 1 {
+    give 1
+  }
+  when contains(msg, "type argument, got") == 1 {
+    give 1
+  }
+  when contains(msg, "type arguments, got") == 1 {
+    give 1
+  }
+  when contains(msg, "is a generic struct") == 1 {
+    give 1
+  }
+  give 0
+}
+
+make check_generic_type_limit(dir: str, name: str, ty: str, val: str) -> num {
+  hold q = chr(34)
+  hold nl = chr(10)
+  hold cc = cc_bin()
+  hold s = concat("struct Box<T> { v }", nl)
+  s = concat(s, concat("struct Pair<A, B> { a, b }", nl))
+  s = concat(s, concat("struct Pt { x }", nl))
+  s = concat(s, concat("hold good = Box<num> { 7 }", nl))
+  s = concat(s, concat("hold text = Box<str> { ", concat(q, concat("safe", concat(q, concat(" }", nl))))))
+  s = concat(s, concat("hold nest = Box<Box<num>> { good }", nl))
+  s = concat(s, concat("hold bad = ", concat(ty, concat(" { ", concat(val, concat(" }", nl))))))
+  s = concat(s, concat("show good.v", nl))
+  s = concat(s, concat("show text.v", nl))
+  s = concat(s, concat("show nest.v.v", nl))
+  hold src = concat(dir, concat("/", concat(name, ".sa")))
+  hold mw = must_write(src, s)
+
+  hold seed_c = concat(dir, concat("/", concat(name, "-seed.c")))
+  hold seed_err = concat(dir, concat("/", concat(name, "-seed.err")))
+  when run_command(concat("./selfhost/seed/sxc_seed_min ", concat(sh_q(src), concat(" > ", concat(sh_q(seed_c), concat(" 2> ", sh_q(seed_err))))))) == 0 {
+    hold fs1 = fail_suite(1, concat("seed accepted ", name))
+  }
+  hold serr = read_file(seed_err)
+  when contains(serr, "seed_min:") != 1 || has_generic_refusal_diag(serr) != 1 {
+    hold fs2 = fail_suite(1, concat("seed missing diagnostic on ", name))
+  }
+
+  hold g2_c = concat(dir, concat("/", concat(name, "-gen2.c")))
+  hold g2_o = concat(dir, concat("/", concat(name, "-gen2.o")))
+  hold rg2 = run_command(concat("./selfhost/gen2 ", concat(sh_q(src), concat(" ", concat(sh_q(g2_c), " >/dev/null 2>&1")))))
+  when contains(read_file(g2_c), "#error sayanox-min:") != 1 {
+    hold fg1 = fail_suite(1, concat("gen2 missing #error on ", name))
+  }
+  when run_command(concat(cc, concat(" -c ", concat(sh_q(g2_c), concat(" -o ", concat(sh_q(g2_o), " >/dev/null 2>&1")))))) == 0 {
+    hold fg2 = fail_suite(1, concat("gen2 C compiled on refused ", name))
+  }
+
+  hold nat_b = concat(dir, concat("/", concat(name, "-nat")))
+  hold nat_err = concat(dir, concat("/", concat(name, "-nat.err")))
+  when run_command(concat("./selfhost/native_aot ", concat(sh_q(src), concat(" ", concat(sh_q(nat_b), concat(" > ", concat(sh_q(nat_err), " 2>&1"))))))) == 0 {
+    hold fn1 = fail_suite(1, concat("native_aot accepted ", name))
+  }
+  when has_generic_refusal_diag(read_file(nat_err)) != 1 {
+    hold fn2 = fail_suite(1, concat("native_aot missing diagnostic on ", name))
+  }
+  give 0
+}
+
+make check_generic_lit_limit(dir: str, name: str, ty: str, val: str, want: str) -> num {
+  hold q = chr(34)
+  hold nl = chr(10)
+  hold s = concat("struct Box<T> { v }", nl)
+  s = concat(s, concat("hold good = Box<num> { 7 }", nl))
+  s = concat(s, concat("hold text = Box<str> { ", concat(q, concat("safe", concat(q, concat(" }", nl))))))
+  s = concat(s, concat("hold bad = ", concat(ty, concat(" { ", concat(val, concat(" }", nl))))))
+  s = concat(s, concat("show good.v", nl))
+  hold src = concat(dir, concat("/", concat(name, ".sa")))
+  hold mw = must_write(src, s)
+
+  hold seed_c = concat(dir, concat("/", concat(name, "-seed.c")))
+  hold seed_err = concat(dir, concat("/", concat(name, "-seed.err")))
+  when run_command(concat("./selfhost/seed/sxc_seed_min ", concat(sh_q(src), concat(" > ", concat(sh_q(seed_c), concat(" 2> ", sh_q(seed_err))))))) == 0 {
+    hold fs1 = fail_suite(1, concat("seed accepted literal mismatch ", name))
+  }
+  when contains(read_file(seed_err), want) != 1 {
+    hold fs2 = fail_suite(1, concat("seed wrong diagnostic on ", name))
+  }
+
+  hold nat_b = concat(dir, concat("/", concat(name, "-nat")))
+  hold nat_err = concat(dir, concat("/", concat(name, "-nat.err")))
+  when run_command(concat("./selfhost/native_aot ", concat(sh_q(src), concat(" ", concat(sh_q(nat_b), concat(" > ", concat(sh_q(nat_err), " 2>&1"))))))) == 0 {
+    hold fn1 = fail_suite(1, concat("native_aot accepted literal mismatch ", name))
+  }
+  when contains(read_file(nat_err), want) != 1 {
+    hold fn2 = fail_suite(1, concat("native_aot wrong diagnostic on ", name))
+  }
+  give 0
+}
+
+make suite_generic_struct_limits(base: str) -> num {
+  hold q = chr(34)
+  hold dir = concat(base, "/generic_struct_limits")
+  hold z0 = mk_clean_dir(dir)
+  hold c1 = check_generic_type_limit(dir, "concrete-struct", "Box<Pt>", "7")
+  hold c2 = check_generic_type_limit(dir, "concrete-struct-second", "Pair<num, Pt>", "1, 2")
+  hold c3 = check_generic_type_limit(dir, "unknown-name", "Box<Nope>", "7")
+  hold c4 = check_generic_type_limit(dir, "escaped-parameter", "Box<T>", "7")
+  hold c5 = check_generic_type_limit(dir, "too-many", "Box<num, str>", concat("7, ", concat(q, concat("x", q))))
+  hold c6 = check_generic_type_limit(dir, "too-few", "Pair<num>", concat("1, ", concat(q, concat("x", q))))
+  hold c7 = check_generic_type_limit(dir, "bare-template", "Box", "7")
+
+  hold a1 = check_generic_lit_limit(dir, "nested-gets-number", "Box<Box<num>>", "7", "its type argument says so")
+  hold a2 = check_generic_lit_limit(dir, "nested-wrong-struct", "Box<Box<num>>", "text", "the literal gives a Box__s")
+  hold a3 = check_generic_lit_limit(dir, "list-gets-number", "Box<list>", "7", "its type argument says so")
+  show "[OK] sxsuite generic_struct_limits: 7 type-arg refusals (seed/gen2/native) + 3 literal-agreement refusals (seed/native)"
+  give 0
+}
+
+// ---- Suite 4: full_lang_ready ---------------------------------------------
+
+make full_lang_probe_name(idx: num) -> str {
+  when idx == 0 {
+    give "string_interpolation"
+  }
+  when idx == 1 {
+    give "struct_function"
+  }
+  when idx == 2 {
+    give "field_expression"
+  }
+  give "index_call"
+}
+
+make suite_full_lang_ready(base: str) -> num {
+  hold dir = concat(base, "/full_lang_ready")
+  hold z0 = mk_clean_dir(dir)
+  hold cc = cc_bin()
+  hold comps = active_c_compilers("SXSUITE_COMPILERS")
+  hold ci = 0
+  while ci < len(comps) {
+    hold cid = comps[ci]
+    hold cname = compiler_name(cid)
+    hold cbin = concat("./selfhost/", cname)
+    when path_kind(cbin) != 1 {
+      hold fm = fail_suite(1, concat("missing compiler ", cbin))
+    }
+    hold pi = 0
+    while pi < 4 {
+      hold pname = full_lang_probe_name(pi)
+      hold stem = concat(dir, concat("/", concat(cname, concat("-", pname))))
+      hold in_sa = concat("selfhost/full_language_tests/", concat(pname, ".sa"))
+      hold want_f = concat("selfhost/full_language_tests/", concat(pname, ".want"))
+      hold out_f = concat(stem, ".out")
+      when run_command(concat(sh_q(cbin), concat(" ", concat(sh_q(in_sa), concat(" ", concat(sh_q(concat(stem, ".c")), " >/dev/null 2>&1")))))) != 0 {
+        hold fc = fail_suite(1, concat(cname, concat(" refusal on ", pname)))
+      }
+      when run_command(concat(cc, concat(" -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(stem), concat(" ", concat(sh_q(concat(stem, ".c")), " >/dev/null 2>&1")))))) != 0 {
+        hold fcc = fail_suite(1, concat(cname, concat(" C build failed on ", pname)))
+      }
+      when run_command(concat(sh_q(stem), concat(" > ", sh_q(out_f)))) != 0 {
+        hold fr = fail_suite(1, concat(cname, concat(" runtime failed on ", pname)))
+      }
+      hold ca = assert_files_identical(want_f, out_f, concat(cname, concat(" ", pname)))
+      pi = pi + 1
+    }
+    show concat("[OK] sxsuite full_lang_ready (", concat(cname, "): all 4 closure probes verified"))
+    ci = ci + 1
+  }
+  give 0
+}
+
+// ---- Suite 5: compiler_features -------------------------------------------
+
+make check_compiler_c_invariants(cpath: str, is_gen1: num) -> num {
+  hold t = read_file(cpath)
+  when len(t) == 0 {
+    hold f0 = fail_suite(1, concat("empty compiler C artifact ", cpath))
+  }
+  hold lb = chr(123)
+  hold rb = chr(125)
+  hold w_cp = concat("typedef struct ", concat(lb, concat(" char *input; char *output; ", concat(rb, " CompilerPaths;"))))
+  when contains(t, w_cp) != 1 {
+    hold f1 = fail_suite(1, concat(cpath, ": missing CompilerPaths typedef"))
+  }
+  when contains(t, "sx_read(compiler_paths.input)") != 1 {
+    hold f2 = fail_suite(1, concat(cpath, ": missing sx_read(compiler_paths.input)"))
+  }
+  when contains(t, "sx_len(compiler_paths.input)") != 1 {
+    hold f3 = fail_suite(1, concat(cpath, ": missing sx_len(compiler_paths.input)"))
+  }
+  when contains(t, "sx_idx(compiler_paths.input,exd)") != 1 {
+    hold f4 = fail_suite(1, concat(cpath, ": missing sx_idx(compiler_paths.input,exd)"))
+  }
+  when contains(t, "sx_write(compiler_paths.output,out)") != 1 {
+    hold f5 = fail_suite(1, concat(cpath, ": missing sx_write(compiler_paths.output,out)"))
+  }
+  hold w_cs = concat("typedef struct ", concat(lb, concat(" double bytes; ", concat(rb, " CompilerSourceSize__n;"))))
+  when contains(t, w_cs) != 1 {
+    hold f6 = fail_suite(1, concat(cpath, ": missing CompilerSourceSize__n typedef"))
+  }
+  when contains(t, "compiler_source_size.bytes") != 1 {
+    hold f7 = fail_suite(1, concat(cpath, ": missing compiler_source_size.bytes"))
+  }
+  when is_gen1 == 1 {
+    when contains(t, "double stop = _sx_gen_") != 1 || contains(t, "(end,sx_len(text))") != 1 {
+      hold f8 = fail_suite(1, concat(cpath, ": missing monomorphised _sx_gen_ call"))
+    }
+  } otherwise {
+    when contains(t, "sxminimum__n(end,sx_len(text))") != 1 {
+      hold f9 = fail_suite(1, concat(cpath, ": missing sxminimum__n(end,sx_len(text))"))
+    }
+  }
+  give 0
+}
+
+make suite_compiler_features(base: str) -> num {
+  hold q = chr(34)
+  hold nl = chr(10)
+  hold dir = concat(base, "/compiler_features")
+  hold z0 = mk_clean_dir(dir)
+  hold cc = cc_bin()
+
+  hold cm = read_file("selfhost/compiler_min.sa")
+  hold want_use = concat("use ", concat(q, concat("selfhost/modules/compiler_text.sa", q)))
+  when contains(cm, want_use) != 1 {
+    hold fu = fail_suite(1, "compiler_min.sa missing compiler_text.sa module use")
+  }
+  hold ct = read_file("selfhost/modules/compiler_text.sa")
+  when contains(ct, "make sxminimum<T>") != 1 {
+    hold fg = fail_suite(1, "compiler_text.sa missing make sxminimum<T>")
+  }
+
+  hold checked_c = 0
+  when path_kind("selfhost/gen1_min.c") == 1 {
+    hold i1 = check_compiler_c_invariants("selfhost/gen1_min.c", 1)
+    checked_c = checked_c + 1
+  }
+  when path_kind("selfhost/gen2.c") == 1 {
+    hold i2 = check_compiler_c_invariants("selfhost/gen2.c", 0)
+    checked_c = checked_c + 1
+  }
+  when path_kind("selfhost/gen3.c") == 1 {
+    hold i3 = check_compiler_c_invariants("selfhost/gen3.c", 0)
+    checked_c = checked_c + 1
+  }
+  when path_kind("selfhost/gen4.c") == 1 {
+    hold i4 = check_compiler_c_invariants("selfhost/gen4.c", 0)
+    checked_c = checked_c + 1
+  }
+  when checked_c == 0 {
+    // Emit a fresh C copy from gen2 so compiler_features is self-sufficient even after partial clean
+    hold fresh_c = concat(dir, "/gen2_fresh.c")
+    when run_command(concat("./selfhost/gen2 selfhost/compiler_min.sa ", concat(sh_q(fresh_c), " >/dev/null 2>&1"))) != 0 {
+      hold ff = fail_suite(1, "cannot emit fresh compiler C via gen2")
+    }
+    hold i_f = check_compiler_c_invariants(fresh_c, 0)
+    checked_c = 1
+  }
+  when path_kind("selfhost/gen3.c") == 1 && path_kind("selfhost/gen4.c") == 1 {
+    hold fp = assert_files_identical("selfhost/gen3.c", "selfhost/gen4.c", "gen3.c == gen4.c")
+  }
+
+  hold want_out = concat("3", concat(nl, concat("-5", concat(nl, concat("bcd", concat(nl, concat("cdef", concat(nl, concat("0", concat(nl, concat("0", concat(nl, concat("1024", nl)))))))))))))
+  hold gi = 1
+  while gi <= 3 {
+    hold gname = compiler_name(gi)
+    hold gbin = concat("./selfhost/", gname)
+    when path_kind(gbin) == 1 {
+      hold stem = concat(dir, concat("/ctext-", gname))
+      hold out_f = concat(stem, ".out")
+      when run_command(concat(sh_q(gbin), concat(" selfhost/compiler_text_test.sa ", concat(sh_q(concat(stem, ".c")), " >/dev/null 2>&1")))) != 0 {
+        hold fc = fail_suite(1, concat(gname, " failed compiler_text_test.sa"))
+      }
+      when run_command(concat(cc, concat(" -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(stem), concat(" ", sh_q(concat(stem, ".c"))))))) != 0 {
+        hold fcc = fail_suite(1, concat(gname, " compiler_text_test C build failed"))
+      }
+      when run_command(concat(sh_q(stem), concat(" > ", sh_q(out_f)))) != 0 {
+        hold fr = fail_suite(1, concat(gname, " compiler_text_test runtime failed"))
+      }
+      when string_eq(read_file(out_f), want_out) != 1 {
+        hold fo = fail_suite(1, concat(gname, " compiler_text_test output mismatch"))
+      }
+    }
+    gi = gi + 1
+  }
+  // Compile compiler_text_test.sa with sxc_native too when present!
+  when path_kind("./tools/sxc_native") == 1 {
+    hold nbin = concat(dir, "/ctext-sxc_native")
+    hold nout = concat(nbin, ".out")
+    when run_command(concat("./tools/sxc_native selfhost/compiler_text_test.sa ", sh_q(nbin))) != 0 {
+      hold fn1 = fail_suite(1, "sxc_native failed compiler_text_test.sa")
+    }
+    when run_command(concat(sh_q(nbin), concat(" > ", sh_q(nout)))) != 0 {
+      hold fn2 = fail_suite(1, "sxc_native compiler_text_test runtime failed")
+    }
+    when string_eq(read_file(nout), want_out) != 1 {
+      hold fn3 = fail_suite(1, "sxc_native compiler_text_test output mismatch")
+    }
+  }
+  show concat("[OK] sxsuite compiler_features: source module/generics/structs verified across ", concat(istr(checked_c), " C generation artifact(s) + live compiler_text_test parity"))
+  give 0
+}
+
+// ---- Suite 6: ir_audit ----------------------------------------------------
+
+make suite_ir_audit(base: str) -> num {
+  hold nl = chr(10)
+  hold dir = concat(base, "/ir_audit")
+  hold z0 = mk_clean_dir(dir)
+  hold tool = "./tools/emit_to_ir"
+  when path_kind(tool) != 1 {
+    hold ft = fail_suite(1, "missing ./tools/emit_to_ir")
+  }
+
+  hold in1 = concat(";  phase  ", nl)
+  in1 = concat(in1, concat("000000  mov rax,[r12+8]", nl))
+  in1 = concat(in1, concat("000001  addsd xmm10,xmm1", nl))
+  in1 = concat(in1, concat("000002  call make rax", nl))
+  in1 = concat(in1, concat("000003  mystery eax,rax_tail,0xrax,r8b", nl))
+  in1 = concat(in1, concat("changed log format", nl))
+  in1 = concat(in1, concat("000004  ", nl))
+  in1 = concat(in1, "000005  ret")
+
+  hold hdr = concat("; portable IR listing (docs/NATIVE_IR.md) -- translated from an", nl)
+  hdr = concat(hdr, concat("; SX_EMIT_LOG instruction list by tools/emit_to_ir.sa. This is an", nl))
+  hdr = concat(hdr, concat("; analysis format: no backend assembles or executes it.", nl))
+
+  hold want1 = concat(hdr, concat("; phase", nl))
+  want1 = concat(want1, concat("I0     COPY A,[BASE+8]", nl))
+  want1 = concat(want1, concat("I1     FADD F10,F1", nl))
+  want1 = concat(want1, concat("I2     CALL make rax", nl))
+  want1 = concat(want1, concat("I3     MYSTERY A,rax_tail,0xrax,R8", nl))
+  want1 = concat(want1, concat("; UNTRANSLATED: changed log format", nl))
+  want1 = concat(want1, concat("; UNTRANSLATED: 000004  ", nl))
+  want1 = concat(want1, concat("I4     RET", nl))
+
+  hold in_f = concat(dir, "/in")
+  hold out_f = concat(dir, "/out")
+  hold want_f = concat(dir, "/want")
+  hold mw1 = must_write(in_f, in1)
+  hold mw2 = must_write(want_f, want1)
+  when run_command(concat(sh_q(tool), concat(" ", concat(sh_q(in_f), concat(" > ", sh_q(out_f)))))) != 0 {
+    hold r1 = fail_suite(1, "emit_to_ir basic run failed")
+  }
+  hold c1 = assert_files_identical(want_f, out_f, "emit_to_ir exact output")
+
+  // 4096-operand dynamic line growth + determinism
+  hold chunk64 = ""
+  hold ci = 0
+  while ci < 64 {
+    chunk64 = concat(chunk64, "rax,")
+    ci = ci + 1
+  }
+  hold long_s = "000000  mystery "
+  hold cj = 0
+  while cj < 64 {
+    long_s = concat(long_s, chunk64)
+    cj = cj + 1
+  }
+  hold long_f = concat(dir, "/long")
+  hold long_ir = concat(dir, "/long.ir")
+  hold long_ir2 = concat(dir, "/long2.ir")
+  hold mw3 = must_write(long_f, long_s)
+  when run_command(concat(sh_q(tool), concat(" ", concat(sh_q(long_f), concat(" > ", sh_q(long_ir)))))) != 0 {
+    hold fl1 = fail_suite(1, "emit_to_ir long line failed")
+  }
+  when run_command(concat(sh_q(tool), concat(" ", concat(sh_q(long_f), concat(" > ", sh_q(long_ir2)))))) != 0 {
+    hold fl2 = fail_suite(1, "emit_to_ir long line repeat failed")
+  }
+  hold c2 = assert_files_identical(long_ir, long_ir2, "emit_to_ir long line determinism")
+  when contains(read_file(long_ir), "rax") == 1 {
+    hold fl3 = fail_suite(1, "long operand line left untranslated rax")
+  }
+
+  // Exit codes: 2 for missing args, 1 for unreadable file
+  when run_command(concat(sh_q(tool), " >/dev/null 2>&1")) != 2 {
+    hold fe2 = fail_suite(1, "emit_to_ir missing args must exit 2")
+  }
+  when run_command(concat(sh_q(tool), concat(" ", concat(sh_q(concat(dir, "/absent")), " >/dev/null 2>&1")))) != 1 {
+    hold fe3 = fail_suite(1, "emit_to_ir absent input must exit 1")
+  }
+  when run_command(concat(sh_q(tool), concat(" --strict ", concat(sh_q(concat(dir, "/absent")), " >/dev/null 2>&1")))) != 1 {
+    hold fe4 = fail_suite(1, "emit_to_ir --strict absent input must exit 1")
+  }
+
+  // NUL-byte truncation check using pure-Sayanox write_bytes (no printf \000 needed!)
+  hold nul_f = concat(dir, "/nul")
+  hold nul_ir = concat(dir, "/nul.ir")
+  hold nul_bs = [98, 97, 100, 0, 105, 110, 112, 117, 116]
+  when write_bytes(nul_f, nul_bs) != 1 {
+    hold fnw = fail_suite(1, "write_bytes nul fixture failed")
+  }
+  when run_command(concat(sh_q(tool), concat(" ", concat(sh_q(nul_f), concat(" > ", sh_q(nul_ir)))))) != 0 {
+    hold fnr = fail_suite(1, "emit_to_ir nul fixture failed")
+  }
+  when has_line_prefix(read_file(nul_ir), "; UNTRANSLATED: bad") != 1 {
+    hold fnu = fail_suite(1, "NUL truncation did not produce ; UNTRANSLATED: bad")
+  }
+
+  // --strict --source-offsets audit mode
+  hold aud_in = concat("; audit", nl)
+  aud_in = concat(aud_in, concat("000010  mov eax,rax", nl))
+  aud_in = concat(aud_in, concat("000010  mystery r8b", nl))
+  aud_in = concat(aud_in, "000020  call make rax")
+
+  hold aud_want = concat(hdr, concat("; audit", nl))
+  aud_want = concat(aud_want, concat("; source-offset 000010 -> I0", nl))
+  aud_want = concat(aud_want, concat("I0     COPY A,A", nl))
+  aud_want = concat(aud_want, concat("; source-offset 000010 -> I1", nl))
+  aud_want = concat(aud_want, concat("I1     MYSTERY R8", nl))
+  aud_want = concat(aud_want, concat("; source-offset 000020 -> I2", nl))
+  aud_want = concat(aud_want, concat("I2     CALL make rax", nl))
+
+  hold aud_f = concat(dir, "/audit")
+  hold aud_wf = concat(dir, "/audit.want")
+  hold aud_ir = concat(dir, "/audit.ir")
+  hold aud_ir2 = concat(dir, "/audit2.ir")
+  hold mwa1 = must_write(aud_f, aud_in)
+  hold mwa2 = must_write(aud_wf, aud_want)
+  when run_command(concat(sh_q(tool), concat(" --strict --source-offsets ", concat(sh_q(aud_f), concat(" > ", sh_q(aud_ir)))))) != 0 {
+    hold fa1 = fail_suite(1, "audit mode failed")
+  }
+  hold c3 = assert_files_identical(aud_wf, aud_ir, "audit exact output")
+  when run_command(concat(sh_q(tool), concat(" --strict --source-offsets ", concat(sh_q(aud_f), concat(" > ", sh_q(aud_ir2)))))) != 0 {
+    hold fa2 = fail_suite(1, "audit repeat failed")
+  }
+  hold c4 = assert_files_identical(aud_ir, aud_ir2, "audit determinism")
+
+  // Backwards offset refusal
+  hold back_f = concat(dir, "/backwards")
+  hold msg_f = concat(dir, "/msg")
+  hold mwb = must_write(back_f, concat("000010  ret", concat(nl, concat("000009  ret", nl))))
+  when run_command(concat(sh_q(tool), concat(" --strict ", concat(sh_q(back_f), concat(" >/dev/null 2> ", sh_q(msg_f)))))) == 0 {
+    hold fb1 = fail_suite(1, "--strict accepted backwards offsets")
+  }
+  when contains(read_file(msg_f), "line 2: instruction offsets go backwards") != 1 {
+    hold fb2 = fail_suite(1, "missing backwards-offsets diagnostic")
+  }
+
+  // Malformed record refusals
+  hold mi = 0
+  while mi < 3 {
+    hold rec = "changed log format"
+    when mi == 1 {
+      rec = "000000  "
+    }
+    when mi == 2 {
+      rec = "00000g  ret"
+    }
+    hold bad_f = concat(dir, "/bad-rec")
+    hold mwr = must_write(bad_f, concat(rec, nl))
+    when run_command(concat(sh_q(tool), concat(" --strict ", concat(sh_q(bad_f), concat(" >/dev/null 2> ", sh_q(msg_f)))))) == 0 {
+      hold fmr1 = fail_suite(1, "--strict accepted malformed record")
+    }
+    when contains(read_file(msg_f), "line 1: malformed instruction record") != 1 {
+      hold fmr2 = fail_suite(1, "missing malformed-record diagnostic")
+    }
+    mi = mi + 1
+  }
+
+  // Explicit -- positional separator agreement
+  hold p1 = concat(dir, "/plain.ir")
+  hold p2 = concat(dir, "/pos.ir")
+  when run_command(concat(sh_q(tool), concat(" ", concat(sh_q(aud_f), concat(" > ", sh_q(p1)))))) != 0 {
+    hold fp1 = fail_suite(1, "plain run failed")
+  }
+  when run_command(concat(sh_q(tool), concat(" -- ", concat(sh_q(aud_f), concat(" > ", sh_q(p2)))))) != 0 {
+    hold fp2 = fail_suite(1, "-- positional run failed")
+  }
+  hold c5 = assert_files_identical(p1, p2, "-- positional parity")
+  show "[OK] sxsuite ir_audit: exact IR output, 4096-op dynamic growth, NUL truncation, strict source-offsets, and malformed/backwards refusals"
+  give 0
+}
+
+// ---- CLI Entry ------------------------------------------------------------
+
+when arg_count() < 2 {
+  hold u = fail_suite(2, "usage: sxsuite <stage2_interp|struct_fn|generic_struct_limits|full_lang_ready|compiler_features|ir_audit|all> [workdir]")
+}
+
+hold suite = arg(1)
+hold workdir = "selfhost/seed_tests/sxsuite"
+when arg_count() >= 3 {
+  workdir = arg(2)
+}
+
+hold ran = 0
+when string_eq(suite, "stage2_interp") == 1 || string_eq(suite, "all") == 1 {
+  hold r1 = suite_stage2_interp(workdir)
+  ran = 1
+}
+when string_eq(suite, "struct_fn") == 1 || string_eq(suite, "all") == 1 {
+  hold r2 = suite_struct_fn(workdir)
+  ran = 1
+}
+when string_eq(suite, "generic_struct_limits") == 1 || string_eq(suite, "all") == 1 {
+  hold r3 = suite_generic_struct_limits(workdir)
+  ran = 1
+}
+when string_eq(suite, "full_lang_ready") == 1 || string_eq(suite, "all") == 1 {
+  hold r4 = suite_full_lang_ready(workdir)
+  ran = 1
+}
+when string_eq(suite, "compiler_features") == 1 || string_eq(suite, "all") == 1 {
+  hold r5 = suite_compiler_features(workdir)
+  ran = 1
+}
+when string_eq(suite, "ir_audit") == 1 || string_eq(suite, "all") == 1 {
+  hold r6 = suite_ir_audit(workdir)
+  ran = 1
+}
+when ran == 0 {
+  hold uk = fail_suite(2, concat("unknown suite: ", suite))
+}
+when string_eq(suite, "all") == 1 {
+  show "[OK] sxsuite all: all 6 pure-Sayanox regression suites passed"
+}

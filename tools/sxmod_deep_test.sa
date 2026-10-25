@@ -1,0 +1,168 @@
+// tools/sxmod_deep_test.sa -- Pure-Sayanox regression harness for transitive
+// multi-directory DAG module resolution (sxmod --transitive, sxc_native direct
+// in-memory compilation, Stage-2 diamond struct parity, and sxbuild 4-backend parity).
+
+make fail(msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxmod_deep_test FAIL: ", msg), "\n"))
+  hold stop = exit(1)
+  give 0
+}
+
+make sh_quote(s: str) -> str {
+  hold out = "'"
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, "'\\''")
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(out, "'")
+}
+
+make has_sub(hay: str, needle: str) -> num {
+  hold hn = len(hay)
+  hold nn = len(needle)
+  when nn == 0 {
+    give 1
+  }
+  hold i = 0
+  while i + nn <= hn {
+    hold ok = 1
+    hold j = 0
+    while j < nn && ok == 1 {
+      when sx_index(hay, i + j) != sx_index(needle, j) {
+        ok = 0
+      }
+      j = j + 1
+    }
+    when ok == 1 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make check_refusal(work: str, src: str, expect_sub: str) -> num {
+  hold out_sa = concat(work, "/refuse_out.sa")
+  hold err1 = concat(work, "/refuse_sxmod.err")
+  hold cmd1 = "./tools/sxmod --transitive "
+  cmd1 = concat(cmd1, concat(sh_quote(src), " "))
+  cmd1 = concat(cmd1, concat(sh_quote(out_sa), " 2> "))
+  cmd1 = concat(cmd1, sh_quote(err1))
+  when run_command(cmd1) == 0 {
+    hold e1 = fail(concat("sxmod --transitive accepted invalid input: ", src))
+  }
+  hold diag1 = read_file(err1)
+  when has_sub(diag1, expect_sub) != 1 {
+    hold e2 = fail(concat(concat("sxmod --transitive diagnostic missing '", expect_sub), concat("' on ", src)))
+  }
+
+  hold out_elf = concat(work, "/refuse_out.elf")
+  hold err2 = concat(work, "/refuse_sxc.err")
+  hold cmd2 = "./tools/sxc_native "
+  cmd2 = concat(cmd2, concat(sh_quote(src), " "))
+  cmd2 = concat(cmd2, concat(sh_quote(out_elf), " 2> "))
+  cmd2 = concat(cmd2, sh_quote(err2))
+  when run_command(cmd2) == 0 {
+    hold e3 = fail(concat("sxc_native accepted invalid module input: ", src))
+  }
+  hold diag2 = read_file(err2)
+  when has_sub(diag2, expect_sub) != 1 {
+    hold e4 = fail(concat(concat("sxc_native diagnostic missing '", expect_sub), concat("' on ", src)))
+  }
+  give 0
+}
+
+make main_test() -> num {
+  hold work = "selfhost/seed_tests/sxmod_deep_gate"
+  when arg_count() >= 2 {
+    work = arg(1)
+  }
+  hold mk = run_command(concat("mkdir -p ", sh_quote(work)))
+
+  hold app = "selfhost/sxmod_deep_tests/diamond_app.sa"
+  hold expected = "core-boot-once\n25\n171\n10\n"
+
+  // 1. Direct C-free compilation of diamond DAG via sxc_native
+  hold direct_elf = concat(work, "/diamond_direct.elf")
+  hold direct_out = concat(work, "/diamond_direct.out")
+  hold c_dir = concat(concat("./tools/sxc_native ", sh_quote(app)), concat(" ", sh_quote(direct_elf)))
+  when run_command(c_dir) != 0 {
+    hold ed1 = fail("sxc_native direct transitive compilation failed on diamond_app.sa")
+  }
+  when run_command(concat(concat(sh_quote(direct_elf), " > "), sh_quote(direct_out))) != 0 {
+    hold ed2 = fail("sxc_native direct diamond ELF exited nonzero")
+  }
+  hold got_direct = read_file(direct_out)
+  when string_eq(got_direct, expected) == 0 {
+    hold ed3 = fail(concat("sxc_native diamond output mismatch: ", got_direct))
+  }
+  show "[OK] sxc_native compiled 3-directory diamond module DAG directly to ELF64 (singleton init + qualified struct types)"
+
+  // 2. Stage-2 3-way parity on diamond_app.sa (gen2 == native_aot == sxc_native)
+  hold lowered_sa = concat(work, "/diamond_lowered.sa")
+  hold c_low = concat(concat("./tools/sxmod --transitive ", sh_quote(app)), concat(" ", sh_quote(lowered_sa)))
+  when run_command(c_low) != 0 {
+    hold el1 = fail("sxmod --transitive failed on diamond_app.sa")
+  }
+  hold g2_bin = concat(work, "/diamond_gen2")
+  hold g2_out = concat(work, "/diamond_gen2.out")
+  when run_command(concat(concat("SXBUILD_VIA_C=1 ./tools/sxbuild build ", sh_quote(app)), concat(" ", concat(sh_quote(g2_bin), " >/dev/null")))) != 0 {
+    hold eg1 = fail("gen2 build failed on diamond_app.sa")
+  }
+  when run_command(concat(concat(sh_quote(g2_bin), " > "), sh_quote(g2_out))) != 0 {
+    hold eg2 = fail("gen2 diamond binary exited nonzero")
+  }
+  hold na_bin = concat(work, "/diamond_nat.elf")
+  hold na_out = concat(work, "/diamond_nat.out")
+  when run_command(concat(concat("./selfhost/native_aot ", sh_quote(lowered_sa)), concat(" ", sh_quote(na_bin)))) != 0 {
+    hold ena1 = fail("native_aot failed on lowered diamond_app.sa")
+  }
+  when run_command(concat(concat(sh_quote(na_bin), " > "), sh_quote(na_out))) != 0 {
+    hold ena2 = fail("native_aot diamond ELF exited nonzero")
+  }
+  when string_eq(read_file(g2_out), expected) == 0 || string_eq(read_file(na_out), expected) == 0 {
+    hold es2p = fail("Stage-2 parity mismatch on diamond_app.sa")
+  }
+  show "[OK] Stage-2 3-way parity (gen2 == native_aot == sxc_native) on diamond_app.sa"
+
+  // 3. Full 4-backend parity (seed-min == gen2 == native_aot == sxc_native) on 3-layer chain_parity.sa
+  hold chain_app = "selfhost/sxmod_deep_tests/chain_parity.sa"
+  hold pdir = concat(work, "/parity")
+  hold c_par = concat(concat("./tools/sxbuild parity ", sh_quote(chain_app)), concat(" ", sh_quote(pdir)))
+  when run_command(c_par) != 0 {
+    hold ep1 = fail("sxbuild parity failed on chain_parity.sa")
+  }
+  when string_eq(read_file(concat(pdir, "/sxc_nat.out")), "math0-init-once\n86\n46\n7\n") == 0 {
+    hold ep2 = fail("chain_parity.sa unexpected output")
+  }
+  show "[OK] sxmod --transitive + sxbuild 4-backend parity (seed-min == gen2 == native_aot == sxc_native) on chain_parity.sa"
+
+  // 4. Default 2-arg sxmod must still refuse nested modules (pinned 1-level contract)
+  hold flat_out = concat(work, "/flat_should_fail.sa")
+  hold flat_err = concat(work, "/flat.err")
+  hold c_flat = concat(concat("./tools/sxmod ", sh_quote(app)), concat(concat(" ", sh_quote(flat_out)), concat(" 2> ", sh_quote(flat_err))))
+  when run_command(c_flat) == 0 {
+    hold ef1 = fail("default 2-arg sxmod accepted nested modules without --transitive")
+  }
+  show "[OK] default 2-arg sxmod preserves 1-level refusal contract without --transitive"
+
+  // 5. Transitive negative controls across both sxmod --transitive and sxc_native
+  hold r1 = check_refusal(work, "selfhost/sxmod_deep_tests/refuse/cycle_a.sa", "module cycle detected")
+  hold r2 = check_refusal(work, "selfhost/sxmod_deep_tests/refuse/conflict_main.sa", "already bound to")
+  hold r3 = check_refusal(work, "selfhost/sxmod_deep_tests/refuse/sub_unknown_member.sa", "has no member")
+  hold r4 = check_refusal(work, "selfhost/sxmod_deep_tests/refuse/sub_bare_alias.sa", "is a module alias")
+  hold r5 = check_refusal(work, "selfhost/sxmod_deep_tests/refuse/sub_shadow_alias.sa", "shadows a module-level name or imported alias")
+  hold r6 = check_refusal(work, "selfhost/sxmod_deep_tests/refuse/sub_use_splice.sa", "splice inside a namespaced module")
+  show "[OK] 6 transitive module refusals (cycle, rebind conflict, unknown member, bare alias, shadow alias, use splice) verified on sxmod --transitive and sxc_native"
+  show "=== SXMOD-DEEP-OK ==="
+  give 0
+}
+
+hold rc = main_test()

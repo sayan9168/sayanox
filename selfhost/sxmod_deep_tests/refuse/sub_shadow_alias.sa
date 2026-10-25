@@ -1,0 +1,3 @@
+module bad_shadow_mod as bs from "bad_shadow_mod.sa"
+
+show bs.broken_shadow(4)
