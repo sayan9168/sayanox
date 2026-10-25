@@ -1,0 +1,4 @@
+make f(a) {
+  give a
+}
+hold x = f(1, 2)

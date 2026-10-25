@@ -14,6 +14,7 @@ checked by a `make` target; the backend columns below say what is verified.
 | `stdlib/str_text.sa` | 18 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/json_util.sa` | flat-object JSON build/read (`j_escape`, `j_kv_text`, `j_kv_number`, `j_kv_flag`, `j_pair`, `j_obj`, `j_arr_numbers`, `j_has`, `j_get_text`, `j_get_number`, `j_get_flag`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/json_deep.sa` | nested JSON reader, any depth (`jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with `[i]` indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep` |
+| `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa` | seed-min, gen2, native | `test-stdlib-json-write` |
 | `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
 
 ## Why two kinds of module
@@ -261,7 +262,25 @@ is installed the gate also compares against it; when it is not, that one check
 prints `[SKIP]` and the rest still runs, because no bootstrap gate may depend
 on a tool outside the minimal set.
 
-This is a hashing module, not a cryptography library: no public-key
-signatures, no cipher, no key derivation beyond HMAC, no constant-time
-promise. `tools/sxpkg` uses it for package digests and keyed signatures --
-see [REGISTRY.md](REGISTRY.md).
+This module provides SHA-256 and HMAC-SHA256 primitives (`tools/sxpkg` uses it
+for package digests and symmetric keyed signatures). Asymmetric signatures live
+in `stdlib/pubkey.sa` below.
+
+### `stdlib/pubkey.sa` -- Curve25519 Schnorr-SHA256 public-key signatures
+
+`stdlib/pubkey.sa` implements portable pure-Sayanox asymmetric key derivation,
+deterministic Schnorr signing, and public-key-only verification on the twisted
+Edwards curve `-x^2 + y^2 = 1 + d*x^2*y^2` over `GF(2^255 - 19)` using the
+RFC 8032 Ed25519 basepoint `B` and prime subgroup order `L`:
+
+* `pk_seed_from_passphrase(pass)` / `pk_pubkey(seed_hex)` / `pk_keyid(pub_hex)`
+* `pk_sign(seed_hex, msg)` -> 128-hex `(R || S)` deterministic signature
+* `pk_verify(pub_hex, msg, sig_hex)` -> `1` iff `S < L`, `A` and `R` decode to
+  canonical curve points, and `[8*S]B == [8]R + [8*e]A` (never touches the
+  secret seed)
+
+`make test-sxpkg-pubkey` pins 3-way native parity (`seed-min == gen2 == native_aot`)
+on `selfhost/stdlib_pubkey_test.sa` plus end-to-end `sxpkg` package (`pubsig=`)
+and index (`INDEX.sig`) verification with `.sec` deleted. Arithmetic uses 16-bit
+limbs inside IEEE-754 doubles (exact below `2^53`), with no constant-time
+side-channel claim.

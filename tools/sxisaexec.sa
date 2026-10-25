@@ -1,0 +1,1474 @@
+// tools/sxisaexec.sa -- Pure-Sayanox user-mode ELF64 machine-code emulator for
+// AArch64 (EM_AARCH64 = 183) and RISC-V RV64IM (EM_RISCV = 243).
+//
+// Loads real static ELF64 PT_LOAD segments into a permission-checked virtual
+// address space with a 64 KiB user stack, decodes and executes 32-bit little-
+// endian AArch64 and RV64IM instructions from e_entry, services Linux user
+// syscalls write (64) and exit (93), and enforces memory, alignment, opcode,
+// and step-budget invariants.
+//
+// Usage:
+//   ./tools/sxisaexec [--arch auto|arm64|riscv64] [--max-steps N] [--out FILE] <elf64>
+
+make fail_isa(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxisaexec: ", msg), "\n"))
+  hold s = exit(code)
+  give 0
+}
+
+make istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold n = v
+  when n < 0 {
+    neg = 1
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make parse_uint(s: str) -> num {
+  hold n = len(s)
+  when n == 0 {
+    give 0 - 1
+  }
+  hold v = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c < 48 || c > 57 {
+      give 0 - 1
+    }
+    v = v * 10 + (c - 48)
+    i = i + 1
+  }
+  give v
+}
+
+make u32(v: num) -> num {
+  hold r = v % 4294967296
+  when r < 0 {
+    r = r + 4294967296
+  }
+  give r
+}
+
+make s32(u: num) -> num {
+  hold x = u32(u)
+  when x >= 2147483648 {
+    give x - 4294967296
+  }
+  give x
+}
+
+make signext(u: num, bits: num) -> num {
+  hold half = shl(1, bits - 1)
+  hold full = shl(1, bits)
+  hold m = bit_and(u, full - 1)
+  when m >= half {
+    give m - full
+  }
+  give m
+}
+
+make mul32_u(a: num, b: num) -> num {
+  hold ua = u32(a)
+  hold ub = u32(b)
+  hold blo = bit_and(ub, 65535)
+  hold bhi = shr(ub, 16)
+  hold p0 = u32(ua * blo)
+  hold p1 = bit_and(u32(ua * bhi), 65535) * 65536
+  give u32(p0 + p1)
+}
+
+make div_u32(a: num, b: num) -> num {
+  hold ua = u32(a)
+  hold ub = u32(b)
+  when ub == 0 {
+    give 4294967295
+  }
+  hold rem = ua % ub
+  give (ua - rem) / ub
+}
+
+make rem_u32(a: num, b: num) -> num {
+  hold ua = u32(a)
+  hold ub = u32(b)
+  when ub == 0 {
+    give ua
+  }
+  give ua % ub
+}
+
+make div_s32_rv(sa: num, sb: num) -> num {
+  when sb == 0 {
+    give 0 - 1
+  }
+  when sa == (0 - 2147483648) && sb == (0 - 1) {
+    give 0 - 2147483648
+  }
+  hold sgn = 1
+  hold aa = sa
+  hold bb = sb
+  when aa < 0 {
+    aa = 0 - aa
+    sgn = 0 - sgn
+  }
+  when bb < 0 {
+    bb = 0 - bb
+    sgn = 0 - sgn
+  }
+  hold q = (aa - (aa % bb)) / bb
+  give sgn * q
+}
+
+make rem_s32_rv(sa: num, sb: num) -> num {
+  when sb == 0 {
+    give sa
+  }
+  when sa == (0 - 2147483648) && sb == (0 - 1) {
+    give 0
+  }
+  hold sgn = 1
+  hold aa = sa
+  hold bb = sb
+  when aa < 0 {
+    aa = 0 - aa
+    sgn = 0 - 1
+  }
+  when bb < 0 {
+    bb = 0 - bb
+  }
+  give sgn * (aa % bb)
+}
+
+make div_s32_arm(sa: num, sb: num) -> num {
+  when sb == 0 {
+    give 0
+  }
+  give div_s32_rv(sa, sb)
+}
+
+make slt64(alo: num, ahi: num, blo: num, bhi: num) -> num {
+  hold sa = s32(ahi)
+  hold sb = s32(bhi)
+  when sa < sb {
+    give 1
+  }
+  when sa > sb {
+    give 0
+  }
+  when alo < blo {
+    give 1
+  }
+  give 0
+}
+
+make sltu64(alo: num, ahi: num, blo: num, bhi: num) -> num {
+  when ahi < bhi {
+    give 1
+  }
+  when ahi > bhi {
+    give 0
+  }
+  when alo < blo {
+    give 1
+  }
+  give 0
+}
+
+// ---- ELF64 header helpers -------------------------------------------------
+
+make rd_u16(bs: list, off: num) -> num {
+  give bs[off] + bs[off + 1] * 256
+}
+
+make rd_u32(bs: list, off: num) -> num {
+  give bs[off] + bs[off + 1] * 256 + bs[off + 2] * 65536 + bs[off + 3] * 16777216
+}
+
+make rd_u64_lo(bs: list, off: num) -> num {
+  hold hi = rd_u32(bs, off + 4)
+  when hi != 0 {
+    hold f = fail_isa(1, "ELF64 field exceeds 32-bit user address window")
+  }
+  give rd_u32(bs, off)
+}
+
+// ---- Virtual Memory Model -------------------------------------------------
+// Image window: [0x400000 .. 0x420000) (131,072 bytes; 32 pages of 4096 B)
+//   page_perm[0..31]: bit 1 = R, bit 2 = W, bit 4 = X (matches ELF PF_X=1, PF_W=2, PF_R=4)
+// Stack window: [0x7FFF0000 .. 0x80000000) (65,536 bytes, RW)
+
+make mem_check(page_perm: list, addr: num, size: num, req_pf: num) -> num {
+  when addr < 0 || size < 0 {
+    hold f0 = fail_isa(1, concat("memory fault at negative address ", istr(addr)))
+  }
+  when size == 0 {
+    give 0
+  }
+  hold last = addr + size - 1
+  // Image window: 4194304 .. 4325375
+  when addr >= 4194304 && last < 4325376 {
+    hold p0 = shr(addr - 4194304, 12)
+    hold p1 = shr(last - 4194304, 12)
+    hold p = p0
+    while p <= p1 {
+      hold pf = page_perm[p]
+      when bit_and(pf, req_pf) != req_pf {
+        hold fp = fail_isa(1, concat("memory permission fault at vaddr ", istr(addr)))
+      }
+      p = p + 1
+    }
+    give 1
+  }
+  // Stack window: 2147418112 .. 2147483647 (PF_R | PF_W = 6)
+  when addr >= 2147418112 && last < 2147483648 {
+    when bit_and(6, req_pf) != req_pf {
+      hold fs = fail_isa(1, "execution fault on non-executable stack")
+    }
+    give 2
+  }
+  hold fu = fail_isa(1, concat("unmapped memory access at vaddr ", istr(addr)))
+  give 0
+}
+
+make vmem_ld8(img_mem: list, stk_mem: list, page_perm: list, addr: num) -> num {
+  hold seg = mem_check(page_perm, addr, 1, 4)
+  when seg == 1 {
+    give img_mem[addr - 4194304]
+  }
+  give stk_mem[addr - 2147418112]
+}
+
+make vmem_st8(img_mem: list, stk_mem: list, page_perm: list, addr: num, b: num) -> num {
+  hold seg = mem_check(page_perm, addr, 1, 2)
+  hold vb = bit_and(b, 255)
+  when seg == 1 {
+    img_mem[addr - 4194304] = vb
+    give 0
+  }
+  stk_mem[addr - 2147418112] = vb
+  give 0
+}
+
+make vmem_ld32(img_mem: list, stk_mem: list, page_perm: list, addr: num, req_pf: num) -> num {
+  hold seg = mem_check(page_perm, addr, 4, req_pf)
+  when seg == 1 {
+    hold o = addr - 4194304
+    give img_mem[o] + img_mem[o + 1] * 256 + img_mem[o + 2] * 65536 + img_mem[o + 3] * 16777216
+  }
+  hold s = addr - 2147418112
+  give stk_mem[s] + stk_mem[s + 1] * 256 + stk_mem[s + 2] * 65536 + stk_mem[s + 3] * 16777216
+}
+
+make vmem_st32(img_mem: list, stk_mem: list, page_perm: list, addr: num, v: num) -> num {
+  hold seg = mem_check(page_perm, addr, 4, 2)
+  hold u = u32(v)
+  when seg == 1 {
+    hold o = addr - 4194304
+    img_mem[o] = bit_and(u, 255)
+    img_mem[o + 1] = bit_and(shr(u, 8), 255)
+    img_mem[o + 2] = bit_and(shr(u, 16), 255)
+    img_mem[o + 3] = bit_and(shr(u, 24), 255)
+    give 0
+  }
+  hold s = addr - 2147418112
+  stk_mem[s] = bit_and(u, 255)
+  stk_mem[s + 1] = bit_and(shr(u, 8), 255)
+  stk_mem[s + 2] = bit_and(shr(u, 16), 255)
+  stk_mem[s + 3] = bit_and(shr(u, 24), 255)
+  give 0
+}
+
+// ---- Register File Helpers ------------------------------------------------
+
+make set_rv_s32(rlo: list, rhi: list, rd: num, v: num) -> num {
+  when rd == 0 {
+    give 0
+  }
+  hold u = u32(v)
+  rlo[rd] = u
+  when u >= 2147483648 {
+    rhi[rd] = 4294967295
+  } otherwise {
+    rhi[rd] = 0
+  }
+  give 0
+}
+
+make set_rv_64(rlo: list, rhi: list, rd: num, lo: num, hi: num) -> num {
+  when rd == 0 {
+    give 0
+  }
+  rlo[rd] = u32(lo)
+  rhi[rd] = u32(hi)
+  give 0
+}
+
+make set_arm_w(rlo: list, rhi: list, rd: num, v: num) -> num {
+  when rd == 31 {
+    give 0
+  }
+  rlo[rd] = u32(v)
+  rhi[rd] = 0
+  give 0
+}
+
+make set_arm_x(rlo: list, rhi: list, rd: num, lo: num, hi: num) -> num {
+  when rd == 31 {
+    give 0
+  }
+  rlo[rd] = u32(lo)
+  rhi[rd] = u32(hi)
+  give 0
+}
+
+make arm_cond_ok(cond: num, nf: num, zf: num, cf: num, vf: num) -> num {
+  when cond == 0 {
+    give zf
+  }
+  when cond == 1 {
+    give 1 - zf
+  }
+  when cond == 2 {
+    give cf
+  }
+  when cond == 3 {
+    give 1 - cf
+  }
+  when cond == 4 {
+    give nf
+  }
+  when cond == 5 {
+    give 1 - nf
+  }
+  when cond == 6 {
+    give vf
+  }
+  when cond == 7 {
+    give 1 - vf
+  }
+  when cond == 8 {
+    when cf == 1 && zf == 0 {
+      give 1
+    }
+    give 0
+  }
+  when cond == 9 {
+    when cf == 0 || zf == 1 {
+      give 1
+    }
+    give 0
+  }
+  when cond == 10 {
+    when nf == vf {
+      give 1
+    }
+    give 0
+  }
+  when cond == 11 {
+    when nf != vf {
+      give 1
+    }
+    give 0
+  }
+  when cond == 12 {
+    when zf == 0 && nf == vf {
+      give 1
+    }
+    give 0
+  }
+  when cond == 13 {
+    when zf == 1 || nf != vf {
+      give 1
+    }
+    give 0
+  }
+  give 1
+}
+
+// ---- RV64IM Execution Loop ------------------------------------------------
+
+make exec_rv64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_steps: num, out_bytes: list, meta: list) -> list {
+  hold rlo = []
+  hold rhi = []
+  hold ri = 0
+  while ri < 32 {
+    rlo = push(rlo, 0)
+    rhi = push(rhi, 0)
+    ri = ri + 1
+  }
+  // x2 = sp = 0x80000000 - 16
+  rlo[2] = 2147483632
+  rhi[2] = 0
+
+  hold pc = entry
+  hold steps = 0
+  while steps < max_steps {
+    when bit_and(pc, 3) != 0 {
+      hold fa = fail_isa(1, concat("RV64 misaligned PC ", istr(pc)))
+    }
+    hold w = vmem_ld32(img_mem, stk_mem, page_perm, pc, 1)
+    steps = steps + 1
+    hold op = bit_and(w, 127)
+    hold rd = bit_and(shr(w, 7), 31)
+    hold f3 = bit_and(shr(w, 12), 7)
+    hold rs1 = bit_and(shr(w, 15), 31)
+    hold rs2 = bit_and(shr(w, 20), 31)
+    hold f7 = shr(w, 25)
+    hold next_pc = pc + 4
+    hold handled = 0
+
+    // LUI (55)
+    when op == 55 {
+      hold u_lui = w - bit_and(w, 4095)
+      hold z_lui = set_rv_s32(rlo, rhi, rd, u_lui)
+      handled = 1
+    }
+    // AUIPC (23)
+    when op == 23 {
+      hold u_aui = u32(pc + (w - bit_and(w, 4095)))
+      hold z_aui = set_rv_s32(rlo, rhi, rd, u_aui)
+      handled = 1
+    }
+    // JAL (111)
+    when op == 111 {
+      hold b20 = bit_and(shr(w, 31), 1)
+      hold b10_1 = bit_and(shr(w, 21), 1023)
+      hold b11 = bit_and(shr(w, 20), 1)
+      hold b19_12 = bit_and(shr(w, 12), 255)
+      hold raw21 = shl(b20, 20) + shl(b19_12, 12) + shl(b11, 11) + shl(b10_1, 1)
+      hold dj = signext(raw21, 21)
+      hold z_jal = set_rv_64(rlo, rhi, rd, pc + 4, 0)
+      next_pc = pc + dj
+      handled = 1
+    }
+    // JALR (103)
+    when op == 103 && f3 == 0 {
+      hold imm_jr = signext(shr(w, 20), 12)
+      hold r1_jr = rlo[rs1]
+      hold tgt_jr = bit_and(u32(r1_jr + imm_jr), 4294967294)
+      hold z_jr = set_rv_64(rlo, rhi, rd, pc + 4, 0)
+      next_pc = tgt_jr
+      handled = 1
+    }
+    // BRANCH (99)
+    when op == 99 {
+      hold bb12 = bit_and(shr(w, 31), 1)
+      hold bb10_5 = bit_and(shr(w, 25), 63)
+      hold bb4_1 = bit_and(shr(w, 8), 15)
+      hold bb11 = bit_and(shr(w, 7), 1)
+      hold raw13 = shl(bb12, 12) + shl(bb11, 11) + shl(bb10_5, 5) + shl(bb4_1, 1)
+      hold db = signext(raw13, 13)
+      hold l1 = rlo[rs1]
+      hold h1 = rhi[rs1]
+      hold l2 = rlo[rs2]
+      hold h2 = rhi[rs2]
+      hold take = 0
+      when f3 == 0 && l1 == l2 && h1 == h2 {
+        take = 1
+      }
+      when f3 == 1 && (l1 != l2 || h1 != h2) {
+        take = 1
+      }
+      when f3 == 4 && slt64(l1, h1, l2, h2) == 1 {
+        take = 1
+      }
+      when f3 == 5 && slt64(l1, h1, l2, h2) == 0 {
+        take = 1
+      }
+      when f3 == 6 && sltu64(l1, h1, l2, h2) == 1 {
+        take = 1
+      }
+      when f3 == 7 && sltu64(l1, h1, l2, h2) == 0 {
+        take = 1
+      }
+      when take == 1 {
+        next_pc = pc + db
+      }
+      handled = 1
+    }
+    // LOAD (3)
+    when op == 3 {
+      hold imm_ld = signext(shr(w, 20), 12)
+      hold adr_ld = u32(rlo[rs1] + imm_ld)
+      when f3 == 0 {
+        hold b_lb = vmem_ld8(img_mem, stk_mem, page_perm, adr_ld)
+        hold z_lb = set_rv_s32(rlo, rhi, rd, signext(b_lb, 8))
+        handled = 1
+      }
+      when f3 == 4 {
+        hold b_lbu = vmem_ld8(img_mem, stk_mem, page_perm, adr_ld)
+        hold z_lbu = set_rv_64(rlo, rhi, rd, b_lbu, 0)
+        handled = 1
+      }
+      when f3 == 2 {
+        hold w_lw = vmem_ld32(img_mem, stk_mem, page_perm, adr_ld, 4)
+        hold z_lw = set_rv_s32(rlo, rhi, rd, w_lw)
+        handled = 1
+      }
+      when f3 == 6 {
+        hold w_lwu = vmem_ld32(img_mem, stk_mem, page_perm, adr_ld, 4)
+        hold z_lwu = set_rv_64(rlo, rhi, rd, w_lwu, 0)
+        handled = 1
+      }
+      when f3 == 3 {
+        hold lo_ld = vmem_ld32(img_mem, stk_mem, page_perm, adr_ld, 4)
+        hold hi_ld = vmem_ld32(img_mem, stk_mem, page_perm, adr_ld + 4, 4)
+        hold z_ld = set_rv_64(rlo, rhi, rd, lo_ld, hi_ld)
+        handled = 1
+      }
+    }
+    // STORE (35)
+    when op == 35 {
+      hold raw_st = shl(f7, 5) + rd
+      hold imm_st = signext(raw_st, 12)
+      hold adr_st = u32(rlo[rs1] + imm_st)
+      when f3 == 0 {
+        hold z_sb = vmem_st8(img_mem, stk_mem, page_perm, adr_st, rlo[rs2])
+        handled = 1
+      }
+      when f3 == 2 {
+        hold z_sw = vmem_st32(img_mem, stk_mem, page_perm, adr_st, rlo[rs2])
+        handled = 1
+      }
+      when f3 == 3 {
+        hold z_sd0 = vmem_st32(img_mem, stk_mem, page_perm, adr_st, rlo[rs2])
+        hold z_sd1 = vmem_st32(img_mem, stk_mem, page_perm, adr_st + 4, rhi[rs2])
+        handled = 1
+      }
+    }
+    // OP-IMM 64 (19)
+    when op == 19 {
+      hold simm = signext(shr(w, 20), 12)
+      hold ilo = u32(simm)
+      hold ihi = 0
+      when simm < 0 {
+        ihi = 4294967295
+      }
+      hold xlo = rlo[rs1]
+      hold xhi = rhi[rs1]
+      when f3 == 0 {
+        hold slo = xlo + ilo
+        hold cy = 0
+        when slo >= 4294967296 {
+          slo = slo - 4294967296
+          cy = 1
+        }
+        hold shi = u32(xhi + ihi + cy)
+        hold z_ai = set_rv_64(rlo, rhi, rd, slo, shi)
+        handled = 1
+      }
+      when f3 == 2 {
+        hold z_slti = set_rv_64(rlo, rhi, rd, slt64(xlo, xhi, ilo, ihi), 0)
+        handled = 1
+      }
+      when f3 == 3 {
+        hold z_sltiu = set_rv_64(rlo, rhi, rd, sltu64(xlo, xhi, ilo, ihi), 0)
+        handled = 1
+      }
+      when f3 == 4 {
+        hold z_xi = set_rv_64(rlo, rhi, rd, bit_xor(xlo, ilo), bit_xor(xhi, ihi))
+        handled = 1
+      }
+      when f3 == 6 {
+        hold z_oi = set_rv_64(rlo, rhi, rd, bit_or(xlo, ilo), bit_or(xhi, ihi))
+        handled = 1
+      }
+      when f3 == 7 {
+        hold z_ni = set_rv_64(rlo, rhi, rd, bit_and(xlo, ilo), bit_and(xhi, ihi))
+        handled = 1
+      }
+    }
+    // OP-IMM-32 (27)
+    when op == 27 {
+      hold simm32 = signext(shr(w, 20), 12)
+      when f3 == 0 {
+        hold r1_aw = rlo[rs1]
+        hold z_aw = set_rv_s32(rlo, rhi, rd, u32(r1_aw + simm32))
+        handled = 1
+      }
+    }
+    // OP 64 (51)
+    when op == 51 {
+      hold a1_lo = rlo[rs1]
+      hold a1_hi = rhi[rs1]
+      hold a2_lo = rlo[rs2]
+      hold a2_hi = rhi[rs2]
+      when f7 == 0 && f3 == 0 {
+        hold r_lo = a1_lo + a2_lo
+        hold r_cy = 0
+        when r_lo >= 4294967296 {
+          r_lo = r_lo - 4294967296
+          r_cy = 1
+        }
+        hold z_add = set_rv_64(rlo, rhi, rd, r_lo, u32(a1_hi + a2_hi + r_cy))
+        handled = 1
+      }
+      when f7 == 32 && f3 == 0 {
+        hold d_lo = a1_lo - a2_lo
+        hold d_bw = 0
+        when d_lo < 0 {
+          d_lo = d_lo + 4294967296
+          d_bw = 1
+        }
+        hold z_sub = set_rv_64(rlo, rhi, rd, d_lo, u32(a1_hi - a2_hi - d_bw))
+        handled = 1
+      }
+      when f7 == 0 && f3 == 2 {
+        hold z_slt = set_rv_64(rlo, rhi, rd, slt64(a1_lo, a1_hi, a2_lo, a2_hi), 0)
+        handled = 1
+      }
+      when f7 == 0 && f3 == 3 {
+        hold z_sltu = set_rv_64(rlo, rhi, rd, sltu64(a1_lo, a1_hi, a2_lo, a2_hi), 0)
+        handled = 1
+      }
+      when f7 == 0 && f3 == 4 {
+        hold z_xor = set_rv_64(rlo, rhi, rd, bit_xor(a1_lo, a2_lo), bit_xor(a1_hi, a2_hi))
+        handled = 1
+      }
+      when f7 == 0 && f3 == 6 {
+        hold z_or = set_rv_64(rlo, rhi, rd, bit_or(a1_lo, a2_lo), bit_or(a1_hi, a2_hi))
+        handled = 1
+      }
+      when f7 == 0 && f3 == 7 {
+        hold z_and = set_rv_64(rlo, rhi, rd, bit_and(a1_lo, a2_lo), bit_and(a1_hi, a2_hi))
+        handled = 1
+      }
+    }
+    // OP-32 + M-32 (59)
+    when op == 59 {
+      hold w1 = rlo[rs1]
+      hold w2 = rlo[rs2]
+      when f7 == 0 && f3 == 0 {
+        hold z_addw = set_rv_s32(rlo, rhi, rd, u32(w1 + w2))
+        handled = 1
+      }
+      when f7 == 32 && f3 == 0 {
+        hold z_subw = set_rv_s32(rlo, rhi, rd, u32(w1 - w2))
+        handled = 1
+      }
+      when f7 == 1 && f3 == 0 {
+        hold z_mulw = set_rv_s32(rlo, rhi, rd, mul32_u(w1, w2))
+        handled = 1
+      }
+      when f7 == 1 && f3 == 4 {
+        hold z_divw = set_rv_s32(rlo, rhi, rd, div_s32_rv(s32(w1), s32(w2)))
+        handled = 1
+      }
+      when f7 == 1 && f3 == 5 {
+        hold z_divuw = set_rv_s32(rlo, rhi, rd, div_u32(w1, w2))
+        handled = 1
+      }
+      when f7 == 1 && f3 == 6 {
+        hold z_remw = set_rv_s32(rlo, rhi, rd, rem_s32_rv(s32(w1), s32(w2)))
+        handled = 1
+      }
+      when f7 == 1 && f3 == 7 {
+        hold z_remuw = set_rv_s32(rlo, rhi, rd, rem_u32(w1, w2))
+        handled = 1
+      }
+    }
+    // ECALL (115)
+    when w == 115 {
+      hold sysno = rlo[17]
+      when sysno == 64 {
+        hold fd = rlo[10]
+        hold buf = rlo[11]
+        hold cnt = rlo[12]
+        when fd != 1 && fd != 2 {
+          hold ffd = fail_isa(1, concat("RV64 unsupported write fd ", istr(fd)))
+        }
+        hold wi = 0
+        while wi < cnt {
+          hold wb = vmem_ld8(img_mem, stk_mem, page_perm, buf + wi)
+          out_bytes = push(out_bytes, wb)
+          wi = wi + 1
+        }
+        hold z_wr = set_rv_64(rlo, rhi, 10, cnt, 0)
+        handled = 1
+      }
+      when sysno == 93 {
+        hold rv_a0 = rlo[10]
+        hold rv_ex = bit_and(rv_a0, 255)
+        meta[0] = steps
+        meta[1] = rv_ex
+        meta[2] = len(out_bytes)
+        give out_bytes
+      }
+      when handled == 0 {
+        hold fsys = fail_isa(1, concat("RV64 unsupported ecall ", istr(sysno)))
+      }
+    }
+
+    when handled == 0 {
+      hold fill = fail_isa(1, concat("RV64 illegal or unsupported instruction word ", concat(istr(w), concat(" at pc ", istr(pc)))))
+    }
+    pc = next_pc
+  }
+  hold fstep = fail_isa(1, concat("RV64 step budget exceeded (", concat(istr(max_steps), " instructions)")))
+  give out_bytes
+}
+
+// ---- AArch64 Execution Loop -----------------------------------------------
+
+make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_steps: num, out_bytes: list, meta: list) -> list {
+  hold rlo = []
+  hold rhi = []
+  hold ri = 0
+  while ri < 31 {
+    rlo = push(rlo, 0)
+    rhi = push(rhi, 0)
+    ri = ri + 1
+  }
+  hold sp_lo = 2147483632
+  hold nf = 0
+  hold zf = 0
+  hold cf = 0
+  hold vf = 0
+
+  hold pc = entry
+  hold steps = 0
+  while steps < max_steps {
+    when bit_and(pc, 3) != 0 {
+      hold fa = fail_isa(1, concat("AArch64 misaligned PC ", istr(pc)))
+    }
+    hold w = vmem_ld32(img_mem, stk_mem, page_perm, pc, 1)
+    steps = steps + 1
+    hold next_pc = pc + 4
+    hold handled = 0
+
+    hold sf = bit_and(shr(w, 31), 1)
+    hold top8 = bit_and(shr(w, 23), 255)
+    hold mid5 = bit_and(shr(w, 24), 31)
+    hold top6 = shr(w, 26)
+    hold rd = bit_and(w, 31)
+    hold rn = bit_and(shr(w, 5), 31)
+    hold rm = bit_and(shr(w, 16), 31)
+
+    // 1. Move Wide Immediate: MOVZ (top8 == 165) / MOVK (top8 == 229)
+    when top8 == 165 {
+      hold hw_z = bit_and(shr(w, 21), 3)
+      hold imm16_z = bit_and(shr(w, 5), 65535)
+      hold zlo = 0
+      hold zhi = 0
+      when hw_z == 0 {
+        zlo = imm16_z
+      }
+      when hw_z == 1 {
+        zlo = imm16_z * 65536
+      }
+      when hw_z == 2 && sf == 1 {
+        zhi = imm16_z
+      }
+      when hw_z == 3 && sf == 1 {
+        zhi = imm16_z * 65536
+      }
+      when sf == 0 {
+        hold zz0 = set_arm_w(rlo, rhi, rd, zlo)
+      } otherwise {
+        hold zz1 = set_arm_x(rlo, rhi, rd, zlo, zhi)
+      }
+      handled = 1
+    }
+    when top8 == 229 {
+      hold hw_k = bit_and(shr(w, 21), 3)
+      hold imm16_k = bit_and(shr(w, 5), 65535)
+      hold klo = 0
+      hold khi = 0
+      when rd < 31 {
+        klo = rlo[rd]
+        khi = rhi[rd]
+      }
+      when hw_k == 0 {
+        klo = bit_and(klo, 4294901760) + imm16_k
+      }
+      when hw_k == 1 {
+        klo = bit_and(klo, 65535) + imm16_k * 65536
+      }
+      when hw_k == 2 && sf == 1 {
+        khi = bit_and(khi, 4294901760) + imm16_k
+      }
+      when hw_k == 3 && sf == 1 {
+        khi = bit_and(khi, 65535) + imm16_k * 65536
+      }
+      when sf == 0 {
+        hold zk0 = set_arm_w(rlo, rhi, rd, klo)
+      } otherwise {
+        hold zk1 = set_arm_x(rlo, rhi, rd, klo, khi)
+      }
+      handled = 1
+    }
+
+    // 2. Add/Subtract Immediate (mid5 == 17)
+    when handled == 0 && mid5 == 17 {
+      hold is_sub_i = bit_and(shr(w, 30), 1)
+      hold s_flag_i = bit_and(shr(w, 29), 1)
+      hold sh_i = bit_and(shr(w, 22), 1)
+      hold imm12_i = bit_and(shr(w, 10), 4095)
+      when sh_i == 1 {
+        imm12_i = imm12_i * 4096
+      }
+      hold base_lo = sp_lo
+      hold base_hi = 0
+      when rn < 31 {
+        base_lo = rlo[rn]
+        base_hi = rhi[rn]
+      }
+      when sf == 0 {
+        hold a32 = u32(base_lo)
+        hold b32 = u32(imm12_i)
+        hold r32 = 0
+        when is_sub_i == 0 {
+          r32 = u32(a32 + b32)
+          when s_flag_i == 1 {
+            nf = 0
+            when r32 >= 2147483648 {
+              nf = 1
+            }
+            zf = 0
+            when r32 == 0 {
+              zf = 1
+            }
+            cf = 0
+            when a32 + b32 >= 4294967296 {
+              cf = 1
+            }
+            vf = 0
+            when (s32(a32) + s32(b32)) != s32(r32) {
+              vf = 1
+            }
+          }
+        } otherwise {
+          r32 = u32(a32 - b32)
+          when s_flag_i == 1 {
+            nf = 0
+            when r32 >= 2147483648 {
+              nf = 1
+            }
+            zf = 0
+            when r32 == 0 {
+              zf = 1
+            }
+            cf = 0
+            when a32 >= b32 {
+              cf = 1
+            }
+            vf = 0
+            when (s32(a32) - s32(b32)) != s32(r32) {
+              vf = 1
+            }
+          }
+        }
+        when rd == 31 && s_flag_i == 0 {
+          sp_lo = r32
+        } otherwise {
+          hold z_asi = set_arm_w(rlo, rhi, rd, r32)
+        }
+      } otherwise {
+        hold res_lo = 0
+        hold res_hi = 0
+        when is_sub_i == 0 {
+          res_lo = base_lo + imm12_i
+          hold cy64 = 0
+          when res_lo >= 4294967296 {
+            res_lo = res_lo - 4294967296
+            cy64 = 1
+          }
+          res_hi = u32(base_hi + cy64)
+        } otherwise {
+          res_lo = base_lo - imm12_i
+          hold bw64 = 0
+          when res_lo < 0 {
+            res_lo = res_lo + 4294967296
+            bw64 = 1
+          }
+          res_hi = u32(base_hi - bw64)
+        }
+        when rd == 31 && s_flag_i == 0 {
+          sp_lo = res_lo
+        } otherwise {
+          hold z_asi64 = set_arm_x(rlo, rhi, rd, res_lo, res_hi)
+        }
+      }
+      handled = 1
+    }
+
+    // 3. Add/Subtract Shifted Register (mid5 == 11, bit 21 == 0)
+    when handled == 0 && mid5 == 11 && bit_and(shr(w, 21), 1) == 0 {
+      hold is_sub_r = bit_and(shr(w, 30), 1)
+      hold s_flag_r = bit_and(shr(w, 29), 1)
+      hold nlo = 0
+      hold nhi = 0
+      when rn < 31 {
+        nlo = rlo[rn]
+        nhi = rhi[rn]
+      }
+      hold mlo = 0
+      hold mhi = 0
+      when rm < 31 {
+        mlo = rlo[rm]
+        mhi = rhi[rm]
+      }
+      when sf == 0 {
+        hold rr32 = 0
+        when is_sub_r == 0 {
+          rr32 = u32(nlo + mlo)
+          when s_flag_r == 1 {
+            nf = 0
+            when rr32 >= 2147483648 {
+              nf = 1
+            }
+            zf = 0
+            when rr32 == 0 {
+              zf = 1
+            }
+            cf = 0
+            when nlo + mlo >= 4294967296 {
+              cf = 1
+            }
+            vf = 0
+            when (s32(nlo) + s32(mlo)) != s32(rr32) {
+              vf = 1
+            }
+          }
+        } otherwise {
+          rr32 = u32(nlo - mlo)
+          when s_flag_r == 1 {
+            nf = 0
+            when rr32 >= 2147483648 {
+              nf = 1
+            }
+            zf = 0
+            when rr32 == 0 {
+              zf = 1
+            }
+            cf = 0
+            when nlo >= mlo {
+              cf = 1
+            }
+            vf = 0
+            when (s32(nlo) - s32(mlo)) != s32(rr32) {
+              vf = 1
+            }
+          }
+        }
+        hold z_asr = set_arm_w(rlo, rhi, rd, rr32)
+      } otherwise {
+        hold rlo64 = 0
+        hold rhi64 = 0
+        when is_sub_r == 0 {
+          rlo64 = nlo + mlo
+          hold rcy = 0
+          when rlo64 >= 4294967296 {
+            rlo64 = rlo64 - 4294967296
+            rcy = 1
+          }
+          rhi64 = u32(nhi + mhi + rcy)
+        } otherwise {
+          rlo64 = nlo - mlo
+          hold rbw = 0
+          when rlo64 < 0 {
+            rlo64 = rlo64 + 4294967296
+            rbw = 1
+          }
+          rhi64 = u32(nhi - mhi - rbw)
+        }
+        hold z_asr64 = set_arm_x(rlo, rhi, rd, rlo64, rhi64)
+      }
+      handled = 1
+    }
+
+    // 4. Logical Shifted Register: AND/ORR/EOR (mid5 == 10)
+    when handled == 0 && mid5 == 10 {
+      hold opc_l = bit_and(shr(w, 29), 3)
+      hold ln_lo = 0
+      hold ln_hi = 0
+      when rn < 31 {
+        ln_lo = rlo[rn]
+        ln_hi = rhi[rn]
+      }
+      hold lm_lo = 0
+      hold lm_hi = 0
+      when rm < 31 {
+        lm_lo = rlo[rm]
+        lm_hi = rhi[rm]
+      }
+      hold lo_out = 0
+      hold hi_out = 0
+      when opc_l == 0 {
+        lo_out = bit_and(ln_lo, lm_lo)
+        hi_out = bit_and(ln_hi, lm_hi)
+      }
+      when opc_l == 1 {
+        lo_out = bit_or(ln_lo, lm_lo)
+        hi_out = bit_or(ln_hi, lm_hi)
+      }
+      when opc_l == 2 {
+        lo_out = bit_xor(ln_lo, lm_lo)
+        hi_out = bit_xor(ln_hi, lm_hi)
+      }
+      when sf == 0 {
+        hold zl0 = set_arm_w(rlo, rhi, rd, lo_out)
+      } otherwise {
+        hold zl1 = set_arm_x(rlo, rhi, rd, lo_out, hi_out)
+      }
+      handled = 1
+    }
+
+    // 5. Data-Processing 3-Source: MADD / MSUB (mid5 == 27)
+    when handled == 0 && mid5 == 27 {
+      hold o0_m = bit_and(shr(w, 15), 1)
+      hold ra_m = bit_and(shr(w, 10), 31)
+      hold vn = 0
+      when rn < 31 {
+        vn = rlo[rn]
+      }
+      hold vm = 0
+      when rm < 31 {
+        vm = rlo[rm]
+      }
+      hold va = 0
+      when ra_m < 31 {
+        va = rlo[ra_m]
+      }
+      hold prod = mul32_u(vn, vm)
+      hold mres = u32(va + prod)
+      when o0_m == 1 {
+        mres = u32(va - prod)
+      }
+      hold zm = set_arm_w(rlo, rhi, rd, mres)
+      handled = 1
+    }
+
+    // 6. Data-Processing 2-Source: UDIV / SDIV & CSINC (mid5 == 26)
+    when handled == 0 && mid5 == 26 {
+      // UDIV / SDIV: bits[30:21] == 0x0D6 (214), bits[15:11] == 1
+      when bit_and(shr(w, 21), 1023) == 214 && bit_and(shr(w, 11), 31) == 1 {
+        hold is_sdiv = bit_and(shr(w, 10), 1)
+        hold dn = 0
+        when rn < 31 {
+          dn = rlo[rn]
+        }
+        hold dm = 0
+        when rm < 31 {
+          dm = rlo[rm]
+        }
+        hold dres = 0
+        when is_sdiv == 0 {
+          when dm == 0 {
+            dres = 0
+          } otherwise {
+            dres = div_u32(dn, dm)
+          }
+        } otherwise {
+          dres = u32(div_s32_arm(s32(dn), s32(dm)))
+        }
+        hold zd = set_arm_w(rlo, rhi, rd, dres)
+        handled = 1
+      }
+      // CSINC / CSET: (w & 0x7FE00C00) == 0x1A800400
+      when handled == 0 && bit_and(shr(w, 21), 1023) == 212 && bit_and(shr(w, 10), 3) == 1 {
+        hold cc_cs = bit_and(shr(w, 12), 15)
+        hold cvn = 0
+        when rn < 31 {
+          cvn = rlo[rn]
+        }
+        hold cvm = 0
+        when rm < 31 {
+          cvm = rlo[rm]
+        }
+        hold cres = u32(cvm + 1)
+        when arm_cond_ok(cc_cs, nf, zf, cf, vf) == 1 {
+          cres = cvn
+        }
+        hold zcs = set_arm_w(rlo, rhi, rd, cres)
+        handled = 1
+      }
+    }
+
+    // 7. Pre-index STR Xrt, [Xn|SP, #simm9]! (0xF8000C00) & Post-index LDR Xrt, [Xn|SP], #simm9 (0xF8400400)
+    when handled == 0 && shr(w, 21) == 1984 && bit_and(shr(w, 10), 3) == 3 {
+      hold simm9_st = signext(bit_and(shr(w, 12), 511), 9)
+      hold base_pre = sp_lo
+      when rn < 31 {
+        base_pre = rlo[rn]
+      }
+      hold new_addr = u32(base_pre + simm9_st)
+      when rn == 31 {
+        sp_lo = new_addr
+      } otherwise {
+        rlo[rn] = new_addr
+      }
+      hold slo_v = 0
+      hold shi_v = 0
+      when rd < 31 {
+        slo_v = rlo[rd]
+        shi_v = rhi[rd]
+      }
+      hold zs0 = vmem_st32(img_mem, stk_mem, page_perm, new_addr, slo_v)
+      hold zs1 = vmem_st32(img_mem, stk_mem, page_perm, new_addr + 4, shi_v)
+      handled = 1
+    }
+    when handled == 0 && shr(w, 21) == 1986 && bit_and(shr(w, 10), 3) == 1 {
+      hold simm9_ld = signext(bit_and(shr(w, 12), 511), 9)
+      hold base_post = sp_lo
+      when rn < 31 {
+        base_post = rlo[rn]
+      }
+      hold llo = vmem_ld32(img_mem, stk_mem, page_perm, base_post, 4)
+      hold lhi = vmem_ld32(img_mem, stk_mem, page_perm, base_post + 4, 4)
+      hold zl64 = set_arm_x(rlo, rhi, rd, llo, lhi)
+      hold upd_addr = u32(base_post + simm9_ld)
+      when rn == 31 {
+        sp_lo = upd_addr
+      } otherwise {
+        rlo[rn] = upd_addr
+      }
+      handled = 1
+    }
+
+    // 8. Unsigned Immediate Load/Store: (w >> 24) & 0x3B == 0x39
+    when handled == 0 && bit_and(shr(w, 24), 59) == 57 {
+      hold sz_ls = shr(w, 30)
+      hold opc_ls = bit_and(shr(w, 22), 3)
+      hold uimm12 = bit_and(shr(w, 10), 4095)
+      hold off_ls = shl(uimm12, sz_ls)
+      hold base_ls = sp_lo
+      when rn < 31 {
+        base_ls = rlo[rn]
+      }
+      hold adr_ls = u32(base_ls + off_ls)
+      when sz_ls == 0 && opc_ls == 0 {
+        hold bv_s = 0
+        when rd < 31 {
+          bv_s = rlo[rd]
+        }
+        hold z_strb = vmem_st8(img_mem, stk_mem, page_perm, adr_ls, bv_s)
+        handled = 1
+      }
+      when sz_ls == 0 && opc_ls == 1 {
+        hold bv_l = vmem_ld8(img_mem, stk_mem, page_perm, adr_ls)
+        hold z_ldrb = set_arm_w(rlo, rhi, rd, bv_l)
+        handled = 1
+      }
+      when sz_ls == 2 && opc_ls == 0 {
+        hold wv_s = 0
+        when rd < 31 {
+          wv_s = rlo[rd]
+        }
+        hold z_strw = vmem_st32(img_mem, stk_mem, page_perm, adr_ls, wv_s)
+        handled = 1
+      }
+      when sz_ls == 2 && opc_ls == 1 {
+        hold wv_l = vmem_ld32(img_mem, stk_mem, page_perm, adr_ls, 4)
+        hold z_ldrw = set_arm_w(rlo, rhi, rd, wv_l)
+        handled = 1
+      }
+      when sz_ls == 3 && opc_ls == 0 {
+        hold xlo_s = 0
+        hold xhi_s = 0
+        when rd < 31 {
+          xlo_s = rlo[rd]
+          xhi_s = rhi[rd]
+        }
+        hold z_strx0 = vmem_st32(img_mem, stk_mem, page_perm, adr_ls, xlo_s)
+        hold z_strx1 = vmem_st32(img_mem, stk_mem, page_perm, adr_ls + 4, xhi_s)
+        handled = 1
+      }
+      when sz_ls == 3 && opc_ls == 1 {
+        hold xlo_l = vmem_ld32(img_mem, stk_mem, page_perm, adr_ls, 4)
+        hold xhi_l = vmem_ld32(img_mem, stk_mem, page_perm, adr_ls + 4, 4)
+        hold z_ldrx = set_arm_x(rlo, rhi, rd, xlo_l, xhi_l)
+        handled = 1
+      }
+    }
+
+    // 9. Unconditional B (top6 == 5) and BL (top6 == 37)
+    when handled == 0 && (top6 == 5 || top6 == 37) {
+      hold imm26 = signext(bit_and(w, 67108863), 26)
+      when top6 == 37 {
+        hold z_bl = set_arm_x(rlo, rhi, 30, pc + 4, 0)
+      }
+      next_pc = pc + imm26 * 4
+      handled = 1
+    }
+
+    // 10. Conditional Branch B.cond (0x54000000: (w >> 24) == 84 && bit 4 == 0)
+    when handled == 0 && shr(w, 24) == 84 && bit_and(shr(w, 4), 1) == 0 {
+      hold cond_b = bit_and(w, 15)
+      hold imm19 = signext(bit_and(shr(w, 5), 524287), 19)
+      when arm_cond_ok(cond_b, nf, zf, cf, vf) == 1 {
+        next_pc = pc + imm19 * 4
+      }
+      handled = 1
+    }
+
+    // 11. RET Rn ((w & 0xFFFFFC1F) == 0xD65F0000 -> (w >> 10) == 3512256)
+    when handled == 0 && shr(w, 10) == 3512256 && rd == 0 {
+      when rn == 31 {
+        hold fret = fail_isa(1, "AArch64 RET XZR fault")
+      }
+      next_pc = rlo[rn]
+      handled = 1
+    }
+
+    // 12. SVC #0 (0xD4000001 = 3556769793)
+    when handled == 0 && w == 3556769793 {
+      hold asys = rlo[8]
+      when asys == 64 {
+        hold afd = rlo[0]
+        hold abuf = rlo[1]
+        hold acnt = rlo[2]
+        when afd != 1 && afd != 2 {
+          hold fafd = fail_isa(1, concat("AArch64 unsupported write fd ", istr(afd)))
+        }
+        hold awi = 0
+        while awi < acnt {
+          hold awb = vmem_ld8(img_mem, stk_mem, page_perm, abuf + awi)
+          out_bytes = push(out_bytes, awb)
+          awi = awi + 1
+        }
+        hold zwr = set_arm_x(rlo, rhi, 0, acnt, 0)
+        handled = 1
+      }
+      when asys == 93 {
+        hold arm_x0 = rlo[0]
+        hold arm_ex = bit_and(arm_x0, 255)
+        meta[0] = steps
+        meta[1] = arm_ex
+        meta[2] = len(out_bytes)
+        give out_bytes
+      }
+      when handled == 0 {
+        hold fasys = fail_isa(1, concat("AArch64 unsupported svc ", istr(asys)))
+      }
+    }
+
+    when handled == 0 {
+      hold faill = fail_isa(1, concat("AArch64 illegal or unsupported instruction word ", concat(istr(w), concat(" at pc ", istr(pc)))))
+    }
+    pc = next_pc
+  }
+  hold fastep = fail_isa(1, concat("AArch64 step budget exceeded (", concat(istr(max_steps), " instructions)")))
+  give out_bytes
+}
+
+// ---- ELF64 Loader & CLI Dispatch ------------------------------------------
+
+make main_isa() -> num {
+  hold want_arch = "auto"
+  hold max_steps = 2000000
+  hold out_file = ""
+  hold stats_file = ""
+  hold elf_path = ""
+
+  hold ac = arg_count()
+  hold ai = 1
+  while ai < ac {
+    hold a = arg(ai)
+    when string_eq(a, "--arch") == 1 {
+      when ai + 1 >= ac {
+        hold f0 = fail_isa(2, "missing value after --arch")
+      }
+      want_arch = arg(ai + 1)
+      when string_eq(want_arch, "auto") != 1 && string_eq(want_arch, "arm64") != 1 && string_eq(want_arch, "riscv64") != 1 {
+        hold f1 = fail_isa(2, concat("unknown --arch: ", want_arch))
+      }
+      ai = ai + 2
+    } otherwise {
+      when string_eq(a, "--max-steps") == 1 {
+        when ai + 1 >= ac {
+          hold f2 = fail_isa(2, "missing value after --max-steps")
+        }
+        max_steps = parse_uint(arg(ai + 1))
+        when max_steps <= 0 {
+          hold f3 = fail_isa(2, "invalid --max-steps")
+        }
+        ai = ai + 2
+      } otherwise {
+        when string_eq(a, "--out") == 1 {
+          when ai + 1 >= ac {
+            hold f4 = fail_isa(2, "missing value after --out")
+          }
+          out_file = arg(ai + 1)
+          ai = ai + 2
+        } otherwise {
+          when string_eq(a, "--stats") == 1 {
+            when ai + 1 >= ac {
+              hold f5 = fail_isa(2, "missing value after --stats")
+            }
+            stats_file = arg(ai + 1)
+            ai = ai + 2
+          } otherwise {
+            when len(elf_path) > 0 {
+              hold f6 = fail_isa(2, "usage: sxisaexec (--arch auto|arm64|riscv64) (--max-steps N) (--out FILE) (--stats FILE) <elf64>")
+            }
+            elf_path = a
+            ai = ai + 1
+          }
+        }
+      }
+    }
+  }
+
+  when len(elf_path) == 0 {
+    hold fu = fail_isa(2, "usage: sxisaexec (--arch auto|arm64|riscv64) (--max-steps N) (--out FILE) (--stats FILE) <elf64>")
+  }
+
+  hold bs = []
+  hold nbytes = read_bytes(elf_path, bs)
+  when nbytes < 64 {
+    hold fr = fail_isa(1, concat("cannot read ELF64 image: ", elf_path))
+  }
+  when bs[0] != 127 || bs[1] != 69 || bs[2] != 76 || bs[3] != 70 {
+    hold fm = fail_isa(1, "not an ELF image (bad magic)")
+  }
+  when bs[4] != 2 || bs[5] != 1 {
+    hold fc = fail_isa(1, "expected 64-bit little-endian ELFCLASS64/ELFDATA2LSB")
+  }
+  hold etype = rd_u16(bs, 16)
+  when etype != 2 {
+    hold ft = fail_isa(1, "expected static ET_EXEC (2) ELF64 image")
+  }
+  hold emach = rd_u16(bs, 18)
+  when emach != 183 && emach != 243 {
+    hold fe = fail_isa(1, concat("unsupported e_machine ", concat(istr(emach), " (expected 183=EM_AARCH64 or 243=EM_RISCV)")))
+  }
+  when string_eq(want_arch, "arm64") == 1 && emach != 183 {
+    hold fma = fail_isa(1, "ELF e_machine does not match --arch arm64")
+  }
+  when string_eq(want_arch, "riscv64") == 1 && emach != 243 {
+    hold fmr = fail_isa(1, "ELF e_machine does not match --arch riscv64")
+  }
+
+  hold entry = rd_u64_lo(bs, 24)
+  hold phoff = rd_u64_lo(bs, 32)
+  hold phentsz = rd_u16(bs, 54)
+  hold phnum = rd_u16(bs, 56)
+  when phentsz < 56 || phnum < 1 || phoff + phnum * phentsz > nbytes {
+    hold fph = fail_isa(1, "malformed ELF64 program header table")
+  }
+
+  // Allocate 128 KiB image memory + 32 page permission entries + 64 KiB stack
+  hold img_mem = []
+  hold mi = 0
+  while mi < 131072 {
+    img_mem = push(img_mem, 0)
+    mi = mi + 1
+  }
+  hold page_perm = []
+  hold pi = 0
+  while pi < 32 {
+    page_perm = push(page_perm, 0)
+    pi = pi + 1
+  }
+  hold stk_mem = []
+  hold si = 0
+  while si < 65536 {
+    stk_mem = push(stk_mem, 0)
+    si = si + 1
+  }
+
+  hold loaded_segs = 0
+  hold hi = 0
+  while hi < phnum {
+    hold base = phoff + hi * phentsz
+    hold ptype = rd_u32(bs, base)
+    when ptype == 2 || ptype == 3 {
+      hold fdyn = fail_isa(1, "dynamic PT_DYNAMIC/PT_INTERP ELF is not supported")
+    }
+    when ptype == 1 {
+      hold pflags = bit_and(rd_u32(bs, base + 4), 7)
+      hold poff = rd_u64_lo(bs, base + 8)
+      hold pvaddr = rd_u64_lo(bs, base + 16)
+      hold pfilesz = rd_u64_lo(bs, base + 32)
+      hold pmemsz = rd_u64_lo(bs, base + 40)
+      when pmemsz < pfilesz || poff + pfilesz > nbytes {
+        hold fseg = fail_isa(1, "PT_LOAD segment exceeds ELF file bounds")
+      }
+      when pvaddr < 4194304 || pvaddr + pmemsz > 4325376 {
+        hold fva = fail_isa(1, "PT_LOAD virtual address outside user image window 0x400000..0x420000")
+      }
+      when pmemsz > 0 {
+        hold pg0 = shr(pvaddr - 4194304, 12)
+        hold pg1 = shr(pvaddr + pmemsz - 1 - 4194304, 12)
+        hold pg = pg0
+        while pg <= pg1 {
+          hold cur_pf = page_perm[pg]
+          hold nxt_pf = bit_or(cur_pf, pflags)
+          page_perm[pg] = nxt_pf
+          pg = pg + 1
+        }
+      }
+      hold bi = 0
+      while bi < pfilesz {
+        img_mem[pvaddr - 4194304 + bi] = bs[poff + bi]
+        bi = bi + 1
+      }
+      loaded_segs = loaded_segs + 1
+    }
+    hi = hi + 1
+  }
+  when loaded_segs == 0 {
+    hold fnl = fail_isa(1, "ELF64 contains no PT_LOAD segments")
+  }
+
+  hold out_bytes = []
+  hold meta = [0, 0, 0]
+  when emach == 183 {
+    out_bytes = exec_arm64(img_mem, stk_mem, page_perm, entry, max_steps, out_bytes, meta)
+  } otherwise {
+    out_bytes = exec_rv64(img_mem, stk_mem, page_perm, entry, max_steps, out_bytes, meta)
+  }
+
+  hold total_out = meta[2]
+  when len(out_file) > 0 {
+    when write_bytes(out_file, out_bytes) != 1 {
+      hold fwo = fail_isa(1, concat("cannot write --out ", out_file))
+    }
+  } otherwise {
+    hold out_s = ""
+    hold oi = 0
+    while oi < total_out {
+      hold ob = out_bytes[oi]
+      when ob != 0 {
+        out_s = concat(out_s, chr(ob))
+      }
+      oi = oi + 1
+    }
+    hold z_wo = write_out(out_s)
+    hold z_fl = flush_out()
+  }
+
+  when len(stats_file) > 0 {
+    hold aname = "riscv64"
+    when emach == 183 {
+      aname = "arm64"
+    }
+    hold m_steps = meta[0]
+    hold m_code = meta[1]
+    hold st_line = concat("arch=", concat(aname, concat(" steps=", concat(istr(m_steps), concat(" exit=", concat(istr(m_code), "\n"))))))
+    when write_file(stats_file, st_line) != 1 {
+      hold fws = fail_isa(1, concat("cannot write --stats ", stats_file))
+    }
+  }
+
+  hold exit_code = meta[1]
+  hold z_ex = exit(exit_code)
+  give 0
+}
+
+hold rc = main_isa()

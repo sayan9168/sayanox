@@ -1,0 +1,5 @@
+use "alt_vec.sa"
+
+make wrap() -> num {
+  give fake_fn()
+}

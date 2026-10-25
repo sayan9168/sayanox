@@ -1,0 +1,396 @@
+// tools/lsp_ide_test.sa -- Pure-Sayanox live JSON-RPC regression client for
+// Milestone 5 IDE-grade LSP features:
+//   1. prepareRename capability negotiation + safe identifier/keyword/string/comment validation
+//   2. Namespaced `module NAME as ALIAS from "path.sa"` diagnostics, cross-file hover,
+//      cross-file definition (alias, alias.fn, alias.Struct field), and struct return inference
+//   3. Multi-line call expressions + qualified `alias.fn(\n a,\n b\n)` in signatureHelp
+//   4. Lexical block-scope shadowing (`when { hold x = "str"; ... }` vs outer `x: num`)
+
+make istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold n = v
+  when n < 0 {
+    neg = 1
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make starts(t: str, i: num, p: str) -> num {
+  hold n = len(p)
+  hold k = 0
+  when i + n > len(t) {
+    give 0
+  }
+  while k < n {
+    when sx_index(t, i + k) != sx_index(p, k) {
+      give 0
+    }
+    k = k + 1
+  }
+  give 1
+}
+
+make find_from(t: str, p: str, from: num) -> num {
+  hold n = len(t)
+  hold m = len(p)
+  hold i = 0
+  when m <= 0 {
+    give 0 - 1
+  }
+  when from > 0 {
+    i = from
+  }
+  while i + m <= n {
+    when starts(t, i, p) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make has(t: str, p: str) -> num {
+  when find_from(t, p, 0) >= 0 {
+    give 1
+  }
+  give 0
+}
+
+make check(ok: num, msg: str) -> num {
+  when ok == 0 {
+    show concat("[FAIL] lsp_ide_test: ", msg)
+    hold code = exit(1)
+  }
+  give ok
+}
+
+make uri(path: str) -> str {
+  hold hex = "0123456789ABCDEF"
+  hold out = "file://"
+  hold i = 0
+  hold n = len(path)
+  while i < n {
+    hold c = sx_index(path, i)
+    when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) {
+      out = concat(out, chr(c))
+    } otherwise {
+      when c == 47 || c == 45 || c == 46 || c == 95 || c == 126 {
+        out = concat(out, chr(c))
+      } otherwise {
+        hold hi = 0
+        hold lo = c
+        while lo >= 16 {
+          lo = lo - 16
+          hi = hi + 1
+        }
+        out = concat(out, "%")
+        out = concat(out, chr(sx_index(hex, hi)))
+        out = concat(out, chr(sx_index(hex, lo)))
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make id_key(id: num, q: str) -> str {
+  hold out = concat(q, concat("id", concat(q, ":")))
+  out = concat(out, istr(id))
+  out = concat(out, ",")
+  give out
+}
+
+make read_frame(h: num) -> str {
+  hold head = child_line(h)
+  when len(head) == 0 {
+    give ""
+  }
+  hold i = 15
+  hold n = len(head)
+  hold v = 0
+  hold seen = 0
+  while i < n {
+    hold c = sx_index(head, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      seen = 1
+    }
+    i = i + 1
+  }
+  when seen == 0 {
+    give ""
+  }
+  hold blank = child_line(h)
+  give child_recv(h, v)
+}
+
+make answer(h: num, key: str) -> str {
+  hold body = read_frame(h)
+  when len(body) == 0 {
+    give ""
+  }
+  while has(body, key) == 0 {
+    body = read_frame(h)
+    when len(body) == 0 {
+      give ""
+    }
+  }
+  give body
+}
+
+make send_frame(h: num, body: str) -> num {
+  hold out = "Content-Length: "
+  out = concat(out, istr(len(body)))
+  out = concat(out, "\r\n\r\n")
+  out = concat(out, body)
+  give child_send(h, out)
+}
+
+make request_body(id: num, method: str, params: str, q: str) -> str {
+  hold out = "{"
+  out = concat(out, concat(q, concat("jsonrpc", concat(q, concat(":", concat(q, concat("2.0", concat(q, ","))))))))
+  out = concat(out, concat(q, concat("id", concat(q, concat(":", concat(istr(id), ","))))))
+  out = concat(out, concat(q, concat("method", concat(q, concat(":", concat(q, concat(method, concat(q, ","))))))))
+  out = concat(out, concat(q, concat("params", concat(q, concat(":", concat(params, "}"))))))
+  give out
+}
+
+make notify_body(method: str, params: str, q: str) -> str {
+  hold out = "{"
+  out = concat(out, concat(q, concat("jsonrpc", concat(q, concat(":", concat(q, concat("2.0", concat(q, ","))))))))
+  out = concat(out, concat(q, concat("method", concat(q, concat(":", concat(q, concat(method, concat(q, ","))))))))
+  out = concat(out, concat(q, concat("params", concat(q, concat(":", concat(params, "}"))))))
+  give out
+}
+
+make json_esc_test(s: str) -> str {
+  hold q = chr(34)
+  hold bs = chr(92)
+  hold out = ""
+  hold i = 0
+  hold n = len(s)
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      out = concat(out, concat(bs, q))
+    } otherwise {
+      when c == 92 {
+        out = concat(out, concat(bs, bs))
+      } otherwise {
+        when c == 10 {
+          out = concat(out, concat(bs, "n"))
+        } otherwise {
+          out = concat(out, chr(c))
+        }
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make pos_params(doc_u: str, ln: num, ch: num, q: str) -> str {
+  hold p = "{"
+  p = concat(p, concat(q, concat("textDocument", concat(q, concat(":{", concat(q, concat("uri", concat(q, concat(":", concat(q, concat(doc_u, concat(q, "},"))))))))))))
+  p = concat(p, concat(q, concat("position", concat(q, concat(":{", concat(q, concat("line", concat(q, concat(":", concat(istr(ln), concat(",", concat(q, concat("character", concat(q, concat(":", concat(istr(ch), "}}"))))))))))))))))
+  give p
+}
+
+make sh_quote_lt(s: str) -> str {
+  hold sq = chr(39)
+  hold bs = chr(92)
+  hold out = sq
+  hold i = 0
+  hold n = len(s)
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, concat(sq, concat(bs, concat(sq, sq))))
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  out = concat(out, sq)
+  give out
+}
+
+make run_ide_tests(server: str, scratch: str) -> num {
+  hold q = chr(34)
+  hold rq = sh_quote_lt(scratch)
+  hold rc0 = run_command(concat("rm -rf ", concat(rq, concat(" && mkdir -p ", concat(rq, "/sub")))))
+  hold w0 = check(rc0 == 0, "mkdir scratch/sub")
+  hold root = path_real(scratch)
+  hold root_u = uri(root)
+
+  // Unopened namespaced module sub/vec.sa
+  hold vec_p = concat(root, "/sub/vec.sa")
+  hold vec_src = "struct Vec2 {\n"
+  vec_src = concat(vec_src, "  x: num,\n")
+  vec_src = concat(vec_src, "  y: num\n")
+  vec_src = concat(vec_src, "}\n")
+  vec_src = concat(vec_src, "make make_vec(px: num, py: num) -> Vec2 {\n")
+  vec_src = concat(vec_src, "  hold rv = Vec2 { x: px, y: py }\n")
+  vec_src = concat(vec_src, "  give rv\n")
+  vec_src = concat(vec_src, "}\n")
+  vec_src = concat(vec_src, "make dot(a: Vec2, b: Vec2) -> num {\n")
+  vec_src = concat(vec_src, "  give a.x * b.x + a.y * b.y\n")
+  vec_src = concat(vec_src, "}\n")
+  hold wv = check(write_file(vec_p, vec_src) == 1, "write sub/vec.sa")
+  hold vec_u = uri(vec_p)
+
+  // Open main.sa exercising:
+  //   line 0: module vec as vc from "sub/vec.sa"
+  //   line 1: make demo(x: num) -> num {
+  //   line 2:   when x > 0 {
+  //   line 3:     hold x = "inner-shadow"
+  //   line 4:     show x
+  //   line 5:   }
+  //   line 6:   give x + 1
+  //   line 7: }
+  //   line 8: hold p = vc.make_vec(3, 4)
+  //   line 9: hold d = vc.dot(
+  //   line 10:   p,
+  //   line 11:   p
+  //   line 12: )
+  //   line 13: show p.x // comment_tok
+  hold main_p = concat(root, "/main.sa")
+  hold main_src = concat("module vec as vc from ", concat(q, concat("sub/vec.sa", concat(q, "\n"))))
+  main_src = concat(main_src, "make demo(x: num) -> num {\n")
+  main_src = concat(main_src, "  when x > 0 {\n")
+  main_src = concat(main_src, concat("    hold x = ", concat(q, concat("inner-shadow", concat(q, "\n")))))
+  main_src = concat(main_src, "    show x\n")
+  main_src = concat(main_src, "  }\n")
+  main_src = concat(main_src, "  give x + 1\n")
+  main_src = concat(main_src, "}\n")
+  main_src = concat(main_src, "hold p = vc.make_vec(3, 4)\n")
+  main_src = concat(main_src, "hold d = vc.dot(\n")
+  main_src = concat(main_src, "  p,\n")
+  main_src = concat(main_src, "  p\n")
+  main_src = concat(main_src, ")\n")
+  main_src = concat(main_src, "show p.x // comment_tok\n")
+  hold wm = check(write_file(main_p, main_src) == 1, "write main.sa")
+  hold main_u = uri(main_p)
+
+  hold h = spawn(server)
+  hold wh = check(h > 0, "spawn sayanox_lsp")
+
+  // 1. Initialize with prepareSupport:true -> server advertises prepareProvider:true
+  hold caps = concat("{", concat(q, concat("textDocument", concat(q, concat(":{", concat(q, concat("rename", concat(q, concat(":{", concat(q, concat("prepareSupport", concat(q, ":true}}}}"))))))))))))
+  hold init_p = concat("{", concat(q, concat("rootUri", concat(q, concat(":", concat(q, concat(root_u, concat(q, concat(",", concat(q, concat("capabilities", concat(q, concat(":", concat(caps, "}"))))))))))))))
+  hold s1 = check(send_frame(h, request_body(1, "initialize", init_p, q)) == 1, "send initialize")
+  hold r1 = answer(h, id_key(1, q))
+  hold c1 = check(has(r1, "\"prepareProvider\":true") == 1, "prepareProvider advertised")
+  hold s2 = check(send_frame(h, notify_body("initialized", "{}", q)) == 1, "send initialized")
+
+  // Open main.sa -> publishDiagnostics must have zero errors (module statement recognized!)
+  hold open_p = concat("{", concat(q, concat("textDocument", concat(q, concat(":{", concat(q, concat("uri", concat(q, concat(":", concat(q, concat(main_u, concat(q, concat(",", concat(q, concat("languageId", concat(q, concat(":", concat(q, concat("sa", concat(q, concat(",", concat(q, concat("version", concat(q, concat(":1,", concat(q, concat("text", concat(q, concat(":", concat(q, concat(json_esc_test(main_src), concat(q, "}}"))))))))))))))))))))))))))))))))
+  hold s3 = check(send_frame(h, notify_body("textDocument/didOpen", open_p, q)) == 1, "send didOpen")
+  hold diag_frame = read_frame(h)
+  hold cd0 = check(has(diag_frame, "\"diagnostics\":[]") == 1, "clean diagnostics on module file")
+
+  // 2. Module hover & cross-file definition
+  // Hover on `vc` at line 8 col 9
+  hold s4 = check(send_frame(h, request_body(2, "textDocument/hover", pos_params(main_u, 8, 9, q), q)) == 1, "hover vc")
+  hold r2 = answer(h, id_key(2, q))
+  hold ch1 = check(has(r2, "module vec as vc") == 1, "hover module alias vc")
+
+  // Hover on `dot` in `vc.dot(` at line 9 col 13
+  hold s5 = check(send_frame(h, request_body(3, "textDocument/hover", pos_params(main_u, 9, 13, q), q)) == 1, "hover vc.dot")
+  hold r3 = answer(h, id_key(3, q))
+  hold ch2 = check(has(r3, "make dot(a: Vec2, b: Vec2) -> num") == 1 && has(r3, "vec.sa") == 1, "hover vc.dot signature from unopened sub/vec.sa")
+
+  // Go-to-Definition on `dot` in `vc.dot(` at line 9 col 13 -> sub/vec.sa line 8
+  hold s6 = check(send_frame(h, request_body(4, "textDocument/definition", pos_params(main_u, 9, 13, q), q)) == 1, "def vc.dot")
+  hold r4 = answer(h, id_key(4, q))
+  hold cd1 = check(has(r4, vec_u) == 1 && has(r4, "\"line\":8") == 1, "definition vc.dot -> sub/vec.sa line 8")
+
+  // Go-to-Definition on `.x` in `show p.x` at line 13 col 7 -> sub/vec.sa line 1 (inferred p: vc.Vec2!)
+  hold s7 = check(send_frame(h, request_body(5, "textDocument/definition", pos_params(main_u, 13, 7, q), q)) == 1, "def p.x across module")
+  hold r5 = answer(h, id_key(5, q))
+  hold cd2 = check(has(r5, vec_u) == 1 && has(r5, "\"line\":1") == 1, "definition p.x -> sub/vec.sa struct Vec2 field x")
+  show "module IDE: clean diagnostics, alias hover, cross-file vc.dot definition, and cross-module struct field p.x resolution"
+
+  // 3. Multi-line qualified signatureHelp on 2nd arg of `vc.dot(\n  p,\n  p\n)` (line 11 col 3)
+  hold s8 = check(send_frame(h, request_body(6, "textDocument/signatureHelp", pos_params(main_u, 11, 3, q), q)) == 1, "multiline sigHelp")
+  hold r6 = answer(h, id_key(6, q))
+  hold cs1 = check(has(r6, "make dot(a: Vec2, b: Vec2) -> num") == 1 && has(r6, "\"activeParameter\":1") == 1, "multiline vc.dot signatureHelp activeParameter 1")
+  show "multiline signatureHelp: 4-line qualified vc.dot call resolved with activeParameter=1"
+
+  // 4. Lexical block-scope shadowing inside `demo(x: num)`:
+  //   - line 4 col 9 (`show x` inside `when` block): definition -> line 3 (`hold x = "inner-shadow"`), hover -> `x: str`
+  //   - line 6 col 7 (`give x + 1` after `when` closes): definition -> line 1 (`make demo(x: num)`), hover -> `x: num` parameter
+  hold s9 = check(send_frame(h, request_body(7, "textDocument/definition", pos_params(main_u, 4, 9, q), q)) == 1, "def inner x")
+  hold r7 = answer(h, id_key(7, q))
+  hold cb1 = check(has(r7, "\"line\":3") == 1, "inner block x resolves to line 3 hold x")
+
+  hold s10 = check(send_frame(h, request_body(8, "textDocument/hover", pos_params(main_u, 4, 9, q), q)) == 1, "hover inner x")
+  hold r8 = answer(h, id_key(8, q))
+  hold cb2 = check(has(r8, "x: str") == 1, "inner block x inferred as str")
+
+  hold s11 = check(send_frame(h, request_body(9, "textDocument/definition", pos_params(main_u, 6, 7, q), q)) == 1, "def outer x after block")
+  hold r9 = answer(h, id_key(9, q))
+  hold cb3 = check(has(r9, "\"line\":1") == 1, "post-block x resolves back to parameter on line 1")
+
+  hold s12 = check(send_frame(h, request_body(10, "textDocument/hover", pos_params(main_u, 6, 7, q), q)) == 1, "hover outer x after block")
+  hold r10 = answer(h, id_key(10, q))
+  hold cb4 = check(has(r10, "x: num") == 1 && has(r10, "parameter") == 1, "post-block x hover restores parameter x: num")
+  show "lexical block scope: inner hold shadows parameter inside block and restores parameter after block closes"
+
+  // 5. prepareRename positive & negative checks
+  //   - valid identifier `p` on line 8 col 5 -> placeholder:"p"
+  //   - keyword `hold` on line 8 col 1 -> result:null
+  //   - string interior `"inner-shadow"` on line 3 col 16 -> result:null
+  //   - comment `// comment_tok` on line 13 col 15 -> result:null
+  hold s13 = check(send_frame(h, request_body(11, "textDocument/prepareRename", pos_params(main_u, 8, 5, q), q)) == 1, "prepRename p")
+  hold r11 = answer(h, id_key(11, q))
+  hold cp1 = check(has(r11, "\"placeholder\":\"p\"") == 1, "prepareRename accepts identifier p")
+
+  hold s14 = check(send_frame(h, request_body(12, "textDocument/prepareRename", pos_params(main_u, 8, 1, q), q)) == 1, "prepRename hold")
+  hold r12 = answer(h, id_key(12, q))
+  hold cp2 = check(has(r12, "\"result\":null") == 1, "prepareRename refuses keyword hold")
+
+  hold s15 = check(send_frame(h, request_body(13, "textDocument/prepareRename", pos_params(main_u, 3, 16, q), q)) == 1, "prepRename string")
+  hold r13 = answer(h, id_key(13, q))
+  hold cp3 = check(has(r13, "\"result\":null") == 1, "prepareRename refuses string interior")
+
+  hold s16 = check(send_frame(h, request_body(14, "textDocument/prepareRename", pos_params(main_u, 13, 15, q), q)) == 1, "prepRename comment")
+  hold r14 = answer(h, id_key(14, q))
+  hold cp4 = check(has(r14, "\"result\":null") == 1, "prepareRename refuses // comment")
+  show "prepareRename: accepts user identifiers and refuses keywords, string literals, and comments"
+
+  // Clean shutdown + exit
+  hold s17 = check(send_frame(h, request_body(15, "shutdown", "null", q)) == 1, "shutdown")
+  hold r15 = answer(h, id_key(15, q))
+  hold s18 = check(send_frame(h, notify_body("exit", "null", q)) == 1, "exit")
+  hold st_close = child_close(h)
+  show "[OK] LSP IDE upgrade: module namespaces, multiline signatureHelp, block-scoped shadowing, and prepareRename verified"
+  give 0
+}
+
+make main_ide() -> num {
+  hold srv = "./tools/sayanox_lsp"
+  hold scr = "/tmp/lsp_ide_scratch"
+  when arg_count() >= 2 {
+    srv = arg(1)
+  }
+  when arg_count() >= 3 {
+    scr = arg(2)
+  }
+  give run_ide_tests(srv, scr)
+}
+
+hold ok = main_ide()

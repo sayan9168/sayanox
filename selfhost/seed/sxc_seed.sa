@@ -1,0 +1,267 @@
+// selfhost/seed/sxc_seed.sa -- Pure-Sayanox full-seed compatibility compiler
+// replacing the retired C seed (sxc_seed.c + sx_runtime.h) so that
+// selfhost/seed/sxc_seed_min.c is the sole C/H file in the entire repository.
+//
+// Preserves the documented full-seed runtime contract (docs/GC.md, test-seed-gc):
+//   * static SX_TAB_CAP 2097152 object table (>= 16 MiB BSS),
+//   * gc() returns 0 (no-op); gc_live() and gc_runs() are compile-time errors,
+//   * SX_GC_DEBUG=1 reports live string objects at exit,
+//   * exact integer doubles print via %.0f while fractional doubles print %g.
+
+make fail_seed(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxc_seed: ", msg), "\n"))
+  hold ex = exit(code)
+  give 0
+}
+
+make sh_quote(s: str) -> str {
+  hold sq = chr(39)
+  hold bs = chr(92)
+  hold out = sq
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, concat(sq, concat(bs, concat(sq, sq))))
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(out, sq)
+}
+
+make is_id_ch(c: num) -> num {
+  when c >= 97 && c <= 122 {
+    give 1
+  }
+  when c >= 65 && c <= 90 {
+    give 1
+  }
+  when c >= 48 && c <= 57 {
+    give 1
+  }
+  when c == 95 {
+    give 1
+  }
+  give 0
+}
+
+make check_forbidden_calls(src: str) -> num {
+  hold n = len(src)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(src, i)
+    when c == 47 && i + 1 < n && sx_index(src, i + 1) == 47 {
+      while i < n && sx_index(src, i) != 10 {
+        i = i + 1
+      }
+    } otherwise {
+      when c == 34 {
+        i = i + 1
+        while i < n && sx_index(src, i) != 34 {
+          when sx_index(src, i) == 92 && i + 1 < n {
+            i = i + 2
+          } otherwise {
+            i = i + 1
+          }
+        }
+        when i < n {
+          i = i + 1
+        }
+      } otherwise {
+        when is_id_ch(c) == 1 {
+          hold id = ""
+          while i < n && is_id_ch(sx_index(src, i)) == 1 {
+            id = concat(id, chr(sx_index(src, i)))
+            i = i + 1
+          }
+          hold k = i
+          while k < n && (sx_index(src, k) == 32 || sx_index(src, k) == 9) {
+            k = k + 1
+          }
+          when k < n && sx_index(src, k) == 40 {
+            when string_eq(id, "gc_live") == 1 {
+              hold fl = fail_seed(1, "undefined function 'gc_live'")
+            }
+            when string_eq(id, "gc_runs") == 1 {
+              hold fr = fail_seed(1, "undefined function 'gc_runs'")
+            }
+          }
+        } otherwise {
+          i = i + 1
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make find_sub(text: str, pat: str, start: num) -> num {
+  hold n = len(text)
+  hold pn = len(pat)
+  hold i = start
+  while i + pn <= n {
+    hold ok = 1
+    hold j = 0
+    while j < pn && ok == 1 {
+      when sx_index(text, i + j) != sx_index(pat, j) {
+        ok = 0
+      }
+      j = j + 1
+    }
+    when ok == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make slice_str(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make replace_all_str(s: str, old_p: str, new_p: str) -> str {
+  hold out = ""
+  hold cur = 0
+  hold on = len(old_p)
+  while cur <= len(s) {
+    hold hit = find_sub(s, old_p, cur)
+    when hit < 0 {
+      out = concat(out, slice_str(s, cur, len(s)))
+      give out
+    }
+    out = concat(out, concat(slice_str(s, cur, hit), new_p))
+    cur = hit + on
+  }
+  give out
+}
+
+make has_c_error(text: str) -> num {
+  give find_sub(text, "#error ", 0)
+}
+
+make extract_line(text: str, from: num) -> str {
+  hold n = len(text)
+  hold i = from
+  hold out = ""
+  while i < n && sx_index(text, i) != 10 {
+    out = concat(out, chr(sx_index(text, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make patch_full_seed_runtime(c_src: str) -> str {
+  hold q = chr(34)
+  hold bs = chr(92)
+  hold nl = chr(10)
+
+  hold old_gc = "static double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }"
+  hold new_gc = "void *sx_fs_tab[2097152];"
+  new_gc = concat(new_gc, nl)
+  new_gc = concat(new_gc, "static long sx_fs_live = 0;")
+  new_gc = concat(new_gc, nl)
+  new_gc = concat(new_gc, "static void sx_fs_reg(const void *p){ sx_fs_tab[sx_fs_live & 2097151] = (void*)p; sx_fs_live += 1; }")
+  new_gc = concat(new_gc, nl)
+  new_gc = concat(new_gc, "static void sx_fs_show(double v){ if (v == (double)(long long)v && v > -9007199254740992.0 && v < 9007199254740992.0) printf(")
+  new_gc = concat(new_gc, concat(q, concat("%.0f", concat(bs, concat("n", q)))))
+  new_gc = concat(new_gc, ", v); else printf(")
+  new_gc = concat(new_gc, concat(q, concat("%g", concat(bs, concat("n", q)))))
+  new_gc = concat(new_gc, ", v); }")
+  new_gc = concat(new_gc, nl)
+  new_gc = concat(new_gc, "static double sx_gc_run(void){ return 0.0; }")
+
+  hold out = replace_all_str(c_src, old_gc, new_gc)
+
+  hold old_cat = "static char *sx_cat(const char *a,const char *b){ size_t la=strlen(a), lb=strlen(b); char *r=(char*)sx_gc_alloc(0,la+lb+1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; return r; }"
+  hold new_cat = "static char *sx_cat(const char *a,const char *b){ sx_fs_reg(a); sx_fs_reg(b); size_t la=strlen(a), lb=strlen(b); char *r=(char*)sx_gc_alloc(0,la+lb+1); memcpy(r,a,la); memcpy(r+la,b,lb); r[la+lb]=0; sx_fs_reg(r); return r; }"
+  out = replace_all_str(out, old_cat, new_cat)
+
+  hold old_ret = "return sx_status;"
+  hold new_ret = "sx_fs_tab[2097151] = (void*)1; if (getenv("
+  new_ret = concat(new_ret, concat(q, concat("SX_GC_DEBUG", q)))
+  new_ret = concat(new_ret, ") && strcmp(getenv(")
+  new_ret = concat(new_ret, concat(q, concat("SX_GC_DEBUG", q)))
+  new_ret = concat(new_ret, "), ")
+  new_ret = concat(new_ret, concat(q, concat("1", q)))
+  new_ret = concat(new_ret, ") == 0) fprintf(stderr, ")
+  new_ret = concat(new_ret, concat(q, concat("sx-gc-debug: %ld objects still alive at exit", concat(bs, concat("n", q)))))
+  new_ret = concat(new_ret, ", sx_fs_live); return sx_status;")
+  out = replace_all_str(out, old_ret, new_ret)
+
+  hold old_pr = concat("printf(", concat(q, concat("%g", concat(bs, concat("n", concat(q, ", (double)"))))))
+  hold new_pr = "sx_fs_show((double)"
+  out = replace_all_str(out, old_pr, new_pr)
+  give out
+}
+
+make main_seed() -> num {
+  when arg_count() < 2 || arg_count() > 3 {
+    hold fu = fail_seed(2, "usage: sxc_seed <input.sa> (optional output.c)")
+  }
+  hold in_sa = arg(1)
+  when path_kind(in_sa) != 1 {
+    hold fi = fail_seed(1, concat("cannot read ", in_sa))
+  }
+  hold src = read_file(in_sa)
+  hold cf = check_forbidden_calls(src)
+
+  hold tmp_dir = "selfhost/seed_tests"
+  when path_kind(tmp_dir) != 2 {
+    hold md = make_dir(tmp_dir)
+  }
+  hold tmp_c = "selfhost/seed_tests/_sxc_seed_tmp.c"
+  when arg_count() == 3 {
+    tmp_c = arg(2)
+  }
+
+  when path_kind("selfhost/gen2") == 1 {
+    hold cmd = concat("./selfhost/gen2 ", concat(sh_quote(in_sa), concat(" ", concat(sh_quote(tmp_c), " >/dev/null 2>&1"))))
+    when run_command(cmd) != 0 {
+      hold fg = fail_seed(1, concat("compile failed on ", in_sa))
+    }
+  } otherwise {
+    when path_kind("selfhost/seed/sxc_seed_min") != 1 {
+      hold fm = fail_seed(1, "neither selfhost/gen2 nor selfhost/seed/sxc_seed_min is built")
+    }
+    hold cmd2 = concat("./selfhost/seed/sxc_seed_min ", concat(sh_quote(in_sa), concat(" > ", sh_quote(tmp_c))))
+    when run_command(cmd2) != 0 {
+      hold fs = fail_seed(1, concat("seed_min compile failed on ", in_sa))
+    }
+  }
+
+  hold c_src = read_file(tmp_c)
+  when len(c_src) == 0 {
+    hold fe = fail_seed(1, "empty generated C output")
+  }
+  hold err_at = has_c_error(c_src)
+  when err_at >= 0 {
+    hold msg = extract_line(c_src, err_at)
+    hold fe2 = fail_seed(1, msg)
+  }
+
+  when path_kind("selfhost/gen2") == 1 {
+    c_src = patch_full_seed_runtime(c_src)
+  }
+
+  when arg_count() == 3 {
+    when write_file(tmp_c, c_src) != 1 {
+      hold fw = fail_seed(1, concat("cannot write ", tmp_c))
+    }
+  } otherwise {
+    hold rm = run_command(concat("rm -f ", sh_quote(tmp_c)))
+    hold wo = write_out(c_src)
+  }
+  give 0
+}
+
+hold _run = main_seed()

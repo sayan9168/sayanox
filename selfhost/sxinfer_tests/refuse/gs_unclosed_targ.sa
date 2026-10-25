@@ -1,0 +1,4 @@
+struct Box<T> {
+  v
+}
+hold b = Box<num { 1 }

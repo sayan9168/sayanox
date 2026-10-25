@@ -347,30 +347,23 @@ folder, invalid/nonlocal roots, symlink/hidden/oversized filtering and the
 128-file cap. Existing protocol, Unicode and four-buffer probes remain.
 Logs: [2026-10-16 workspace LSP](gate-logs/2026-10-16-lsp-workspace/).
 
-### Remaining IDE gaps — not IDE-complete
+### Remaining IDE gaps — still not IDE-complete
 
-*Rewritten 2026-10-22: the three items this section used to lead with
-(semantic resolution, rename beyond open buffers, file watching) are
-implemented and gated; what is left is listed below.*
+*Updated 2026-10-24: `hover`, `definition`, and `signatureHelp` now perform
+static type inference and cross-file resolution across `use "..."` imports,
+open overlays, and unopened indexed workspace `.sa` files (`make test-lsp-types`,
+`tools/lsp_types_test.sa`), including parameter types, cross-file call return
+types, struct field hover/definition (`p.x`), and single-parameter generic
+struct field substitution (`Box<num>.val -> num`).*
 
-Resolution is **scope resolution, not type resolution**. The server knows
-which declaration binds a name — a parameter, a `hold` in the enclosing body,
-or a top-level `make`/`hold`/`struct` — and it ignores words inside strings
-and comments. It does **not** know types: a struct field and a variable with
-the same name are the same name to it, `use`d files are not followed to their
-declarations (a top-level name is searched for across the folder index by
-spelling), and shadowing inside nested `when`/`while` blocks of the same
-function body is not distinguished from the body's own binding. There is no
-compiler-backed symbol table: the resolver is a brace-depth scan of the
-document, not the front end that gen2 uses.
-
-Signature help still requires a same-document declaration and a same-line
-call; code actions still offer formatting only, not diagnostic fixes. Hover,
-documentSymbol and diagnostics retain their open-document behavior, and there
-is no workspace diagnostic pass (a watched-file notification publishes
-diagnostics for the named files only, up to 32 per notification). Four
-open-buffer slots and the 128-file folder cap remain. These improvements do
-not establish IDE completeness.
+What remains open is stated plainly: the analyzer is still a line- and
+brace-oriented scanner rather than the full `gen2` front end. Shadowing inside
+nested `when`/`while` blocks of the same function body is not distinguished
+from the body's own binding, multi-line call expressions are not parsed by
+`signatureHelp`, code actions offer formatting only, and there is no
+workspace-wide diagnostic push beyond watched-file notifications (up to 32 per
+notification). Four open-buffer slots and the 128-file / 256 KiB folder cap
+remain. These improvements do not establish IDE completeness.
 
 ## Semantic resolution, folder rename and file watching (2026-10-22)
 

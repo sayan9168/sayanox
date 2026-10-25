@@ -1,0 +1,201 @@
+// selfhost/rc_runtime_stress.sa -- Pure-Sayanox reference-counted string pool
+// and deterministic slot-reuse stress verification (replaces rc_runtime.h and
+// rc_runtime_stress.c with zero C compiler dependency).
+//
+// Models an explicit reference-counted string allocator with intrusive header
+// fields (rc, byte_len, free-list next link) and deterministic immediate
+// reclamation on rc == 0. Runs 2,000 sequential concat + release steps from
+// the initial 5-byte seed string, asserts bounded slot count, exact final
+// length 2005, and complete reclamation to 0 live objects on final release.
+
+make fail_rc(msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("rc_runtime_stress: ", msg), "\n"))
+  hold ex = exit(1)
+  give 0
+}
+
+// Pool metadata in `meta: list`:
+//   meta[0] = free_head (-1 when empty)
+//   meta[1] = live_count
+//   meta[2] = total_slots_allocated
+//   meta[3] = arena_bump_offset
+
+make rc_alloc_slot(meta: list, rcs: list, lens: list, nexts: list, offs: list, caps: list, need_len: num) -> num {
+  hold cur = meta[0]
+  hold prev = 0 - 1
+  while cur >= 0 {
+    hold cap = caps[cur]
+    when cap >= need_len {
+      hold nxt = nexts[cur]
+      when prev < 0 {
+        meta[0] = nxt
+      } otherwise {
+        nexts[prev] = nxt
+      }
+      rcs[cur] = 1
+      lens[cur] = need_len
+      nexts[cur] = 0 - 1
+      meta[1] = meta[1] + 1
+      give cur
+    }
+    prev = cur
+    cur = nexts[cur]
+  }
+  hold id = meta[2]
+  when id >= 64 {
+    hold f0 = fail_rc("slot pool exhausted (free-list leak)")
+  }
+  hold off = meta[3]
+  hold cap_new = 16
+  while cap_new < need_len {
+    cap_new = cap_new * 2
+  }
+  when off + cap_new > 32768 {
+    hold f1 = fail_rc("arena exhausted (free-list leak)")
+  }
+  rcs[id] = 1
+  lens[id] = need_len
+  nexts[id] = 0 - 1
+  offs[id] = off
+  caps[id] = cap_new
+  meta[1] = meta[1] + 1
+  meta[2] = id + 1
+  meta[3] = off + cap_new
+  give id
+}
+
+make rc_str_new(meta: list, rcs: list, lens: list, nexts: list, offs: list, caps: list, arena: list, lit: str) -> num {
+  hold n = len(lit)
+  hold id = rc_alloc_slot(meta, rcs, lens, nexts, offs, caps, n)
+  hold base = offs[id]
+  hold i = 0
+  while i < n {
+    hold ch = sx_index(lit, i)
+    arena[base + i] = ch
+    i = i + 1
+  }
+  give id
+}
+
+make rc_retain(rcs: list, id: num) -> num {
+  when id < 0 {
+    give id
+  }
+  hold c = rcs[id]
+  when c <= 0 {
+    hold f = fail_rc("retain on dead object")
+  }
+  rcs[id] = c + 1
+  give id
+}
+
+make rc_release(meta: list, rcs: list, lens: list, nexts: list, id: num) -> num {
+  when id < 0 {
+    give 0
+  }
+  hold c = rcs[id]
+  when c <= 0 {
+    hold f = fail_rc("double release on dead object")
+  }
+  c = c - 1
+  rcs[id] = c
+  when c == 0 {
+    lens[id] = 0
+    hold fh = meta[0]
+    nexts[id] = fh
+    meta[0] = id
+    meta[1] = meta[1] - 1
+  }
+  give 0
+}
+
+make rc_concat(meta: list, rcs: list, lens: list, nexts: list, offs: list, caps: list, arena: list, a: num, b: num) -> num {
+  hold la = lens[a]
+  hold lb = lens[b]
+  hold total = la + lb
+  hold out = rc_alloc_slot(meta, rcs, lens, nexts, offs, caps, total)
+  hold oa = offs[a]
+  hold ob = offs[b]
+  hold oo = offs[out]
+  hold i = 0
+  while i < la {
+    hold ba = arena[oa + i]
+    arena[oo + i] = ba
+    i = i + 1
+  }
+  hold j = 0
+  while j < lb {
+    hold bb = arena[ob + j]
+    arena[oo + la + j] = bb
+    j = j + 1
+  }
+  give out
+}
+
+make run_stress() -> num {
+  hold meta = [0 - 1, 0, 0, 0]
+  hold rcs = []
+  hold lens = []
+  hold nexts = []
+  hold offs = []
+  hold caps = []
+  hold arena = []
+  hold si = 0
+  while si < 64 {
+    rcs = push(rcs, 0)
+    lens = push(lens, 0)
+    nexts = push(nexts, 0 - 1)
+    offs = push(offs, 0)
+    caps = push(caps, 0)
+    si = si + 1
+  }
+  hold ai = 0
+  while ai < 32768 {
+    arena = push(arena, 0)
+    ai = ai + 1
+  }
+
+  hold s = rc_str_new(meta, rcs, lens, nexts, offs, caps, arena, "start")
+  hold alias = rc_retain(rcs, s)
+  hold r0 = rc_release(meta, rcs, lens, nexts, alias)
+  when meta[1] != 1 {
+    hold f0 = fail_rc("retain/release changed live count")
+  }
+
+  hold i = 0
+  while i < 2000 {
+    hold rhs = rc_str_new(meta, rcs, lens, nexts, offs, caps, arena, "x")
+    hold next_s = rc_concat(meta, rcs, lens, nexts, offs, caps, arena, s, rhs)
+    hold r1 = rc_release(meta, rcs, lens, nexts, rhs)
+    hold r2 = rc_release(meta, rcs, lens, nexts, s)
+    s = next_s
+    i = i + 1
+  }
+
+  hold final_len = lens[s]
+  when final_len != 2005 {
+    hold f1 = fail_rc("unexpected final length")
+  }
+  hold s_off = offs[s]
+  when arena[s_off] != 115 || arena[s_off + 4] != 116 || arena[s_off + 5] != 120 || arena[s_off + 2004] != 120 {
+    hold f2 = fail_rc("corrupted string payload in rc arena")
+  }
+  when meta[1] != 1 {
+    hold f3 = fail_rc("leaked intermediate strings during concat loop")
+  }
+  // Free-list reuse keeps total slots small (<= 24 slots across 4,001 allocations)
+  when meta[2] > 24 {
+    hold f4 = fail_rc("free-list failed to reuse released slots")
+  }
+
+  hold rf = rc_release(meta, rcs, lens, nexts, s)
+  when meta[1] != 0 {
+    hold f5 = fail_rc("final release left live objects")
+  }
+
+  show final_len
+  show "gc-rc-ok"
+  give 0
+}
+
+hold rc = run_stress()

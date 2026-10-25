@@ -585,7 +585,7 @@ make known_word(w: str) -> num {
   when string_eq(w, "break") || string_eq(w, "continue") {
     ok = 1
   }
-  when string_eq(w, "make") || string_eq(w, "struct") || string_eq(w, "use") {
+  when string_eq(w, "make") || string_eq(w, "struct") || string_eq(w, "use") || string_eq(w, "module") {
     ok = 1
   }
   when string_eq(w, "true") || string_eq(w, "false") {
@@ -759,6 +759,9 @@ make doc_for(w: str) -> str {
   when string_eq(w, "remove_path") {
     d = "`remove_path(path)` removes a file or an empty directory."
   }
+  when string_eq(w, "module") {
+    d = "`module name [as alias] from \"path.sa\"` imports a namespaced module."
+  }
   give d
 }
 
@@ -821,6 +824,9 @@ make diagnostics(text: str, dir: str) -> str {
   hold body = ""
   hold z = 0
   hold l2 = 0
+  hold pdepth = 0
+  hold popen_line = 0
+  hold was_in_parens = 0
   lines = count_lines(text)
   while l < lines {
     line = line_text(text, l)
@@ -846,14 +852,7 @@ make diagnostics(text: str, dir: str) -> str {
       }
     }
     when blank == 0 {
-      c = sx_index(line, i)
-      when c == 125 {
-        depth -= 1
-      }
-      when c == 123 {
-        depth += 1
-      }
-      // braces and parens must balance within the statement line
+      // braces and parens balance across statements (strings & // excluded)
       bd = 0
       pd = 0
       st = 0
@@ -900,12 +899,27 @@ make diagnostics(text: str, dir: str) -> str {
         items = items + diag_item(l, utf16_span(line, n - 1), 1, "SX1002", "unterminated string", count)
         count += 1
       }
-      when pd != 0 {
+      depth = depth + bd
+      was_in_parens = 0
+      when pdepth > 0 {
+        was_in_parens = 1
+      }
+      when pdepth == 0 && pd > 0 {
+        popen_line = l
+      }
+      pdepth = pdepth + pd
+      when pdepth < 0 {
         items = items + diag_item(l, utf16_span(line, n - 1), 1, "SX1004", "unbalanced parentheses", count)
         count += 1
+        pdepth = 0
+      }
+      when pdepth > 0 && bd != 0 {
+        items = items + diag_item(popen_line, utf16_span(line_text(text, popen_line), 0), 1, "SX1004", "unbalanced parentheses", count)
+        count += 1
+        pdepth = 0
       }
       c = sx_index(line, a)
-      when is_word(c) == 1 {
+      when was_in_parens == 0 && is_word(c) == 1 {
         w = ""
         q = a
         while q < n {
@@ -978,6 +992,35 @@ make diagnostics(text: str, dir: str) -> str {
             }
           }
         }
+        when string_eq(w, "module") {
+          u = find_from(line, "\"", q)
+          when u >= 0 {
+            v = find_from(line, "\"", u + 1)
+            when v < 0 {
+              items = items + diag_item(l, utf16_span(line, n - 1), 1, "SX1005", "unterminated module path", count)
+              count += 1
+            } otherwise {
+              path = ""
+              z = u + 1
+              while z < v {
+                path = path + chr(sx_index(line, z))
+                z += 1
+              }
+              full = path
+              c = sx_index(path, 0)
+              when c != 47 {
+                full = concat(dir, path)
+              }
+              body = read_file(full)
+              when len(body) <= 0 && path_kind(path) != 1 {
+                msg = concat("cannot read module '", path)
+                msg = concat(msg, "' (looked next to the document)")
+                items = items + diag_item(l, utf16_span(line, u), 2, "SX1005", msg, count)
+                count += 1
+              }
+            }
+          }
+        }
       }
     }
     l += 1
@@ -995,6 +1038,10 @@ make diagnostics(text: str, dir: str) -> str {
       msg = concat(msg, "more '}' than '{'")
     }
     items = items + diag_item(l2, utf16_span(line_text(text, l2), 0), 1, "SX1003", msg, count)
+    count += 1
+  }
+  when pdepth != 0 {
+    items = items + diag_item(popen_line, utf16_span(line_text(text, popen_line), 0), 1, "SX1004", "unbalanced parentheses", count)
     count += 1
   }
   give concat("[", concat(items, "]"))
@@ -2387,6 +2434,9 @@ make known_method(m: str) -> num {
   when string_eq(m, "textDocument/rename") {
     give 1
   }
+  when string_eq(m, "textDocument/prepareRename") {
+    give 1
+  }
   when string_eq(m, "textDocument/signatureHelp") {
     give 1
   }
@@ -2451,13 +2501,21 @@ make watch_registration() -> str {
   give p
 }
 
-make capabilities() -> str {
+make capabilities_ext(prep_ren: num) -> str {
   hold c = ""
-  c = "{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\" \"]},"
+  c = "{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\" \",\".\"]},"
   c = concat(c, "\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,")
-  c = concat(c, "\"referencesProvider\":true,\"documentFormattingProvider\":true,\"workspaceSymbolProvider\":true,\"renameProvider\":true,\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"codeActionProvider\":true,")
+  when prep_ren == 1 {
+    c = concat(c, "\"referencesProvider\":true,\"documentFormattingProvider\":true,\"workspaceSymbolProvider\":true,\"renameProvider\":{\"prepareProvider\":true},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"codeActionProvider\":true,")
+  } otherwise {
+    c = concat(c, "\"referencesProvider\":true,\"documentFormattingProvider\":true,\"workspaceSymbolProvider\":true,\"renameProvider\":true,\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"codeActionProvider\":true,")
+  }
   c = concat(c, "\"diagnosticProvider\":{\"interFileDependencies\":false,\"workspaceDiagnostics\":false}}")
   give c
+}
+
+make capabilities() -> str {
+  give capabilities_ext(0)
 }
 
 make dir_of(uri: str) -> str {
@@ -2844,6 +2902,1409 @@ make watched_refresh(body: str, open0: str, open1: str, open2: str, open3: str) 
   give sent
 }
 
+// ------------------------------------ type-level hover & cross-file resolution
+
+make strip_line_comment(s: str) -> str {
+  hold n = len(s)
+  hold i = 0
+  hold qmode = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when qmode == 1 {
+      when c == 92 {
+        i = i + 2
+      } otherwise {
+        when c == 34 {
+          qmode = 0
+        }
+        i = i + 1
+      }
+    } otherwise {
+      when c == 34 {
+        qmode = 1
+        i = i + 1
+      } otherwise {
+        when c == 47 && i + 1 < n {
+          when sx_index(s, i + 1) == 47 {
+            give trim_str(sub_str(s, 0, i))
+          }
+        }
+        i = i + 1
+      }
+    }
+  }
+  give trim_str(s)
+}
+
+make basename_uri(u: str) -> str {
+  hold n = len(u)
+  hold i = 0
+  hold last = 0
+  while i < n {
+    when sx_index(u, i) == 47 {
+      last = i + 1
+    }
+    i = i + 1
+  }
+  give sub_str(u, last, n)
+}
+
+make parse_int_str(s: str) -> num {
+  hold n = len(s)
+  hold i = 0
+  hold v = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+    }
+    i = i + 1
+  }
+  give v
+}
+
+make open_or_disk(u: str, p: str, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
+  when len(u) > 0 {
+    when string_eq(u, u0) == 1 {
+      give t0
+    }
+    when string_eq(u, u1) == 1 {
+      give t1
+    }
+    when string_eq(u, u2) == 1 {
+      give t2
+    }
+    when string_eq(u, u3) == 1 {
+      give t3
+    }
+  }
+  when len(p) > 0 {
+    give read_file(p)
+  }
+  give ""
+}
+
+make resolve_use_pair(rel_p: str, docuri: str) -> str {
+  when len(rel_p) <= 0 {
+    give ""
+  }
+  hold dec = ws_decode(docuri)
+  hold base_dir = ""
+  when len(dec) > 0 {
+    base_dir = dir_of(concat("file://", dec))
+  } otherwise {
+    base_dir = dir_of(docuri)
+  }
+  hold full = rel_p
+  when sx_index(rel_p, 0) != 47 {
+    full = concat(base_dir, rel_p)
+  }
+  hold real_p = path_real(full)
+  when len(real_p) > 0 {
+    full = real_p
+  }
+  hold enc_u = concat("file://", ws_encode(full))
+  give concat(enc_u, concat("\n", concat(full, "\n")))
+}
+
+// Parse one `module NAME [as ALIAS] from "path.sa"` line.
+// part 0 -> mname, part 1 -> alias, part 2 -> rel_path ("" if not a valid module line).
+make parse_module_import_part(raw_line: str, part: num) -> str {
+  hold t = strip_line_comment(raw_line)
+  when starts(t, 0, "module ") == 0 {
+    give ""
+  }
+  hold rest = trim_str(sub_str(t, 7, len(t)))
+  hold i = 0
+  hold mname = ""
+  while i < len(rest) && is_ident(sx_index(rest, i)) == 1 {
+    mname = concat(mname, chr(sx_index(rest, i)))
+    i = i + 1
+  }
+  when len(mname) <= 0 {
+    give ""
+  }
+  rest = trim_str(sub_str(rest, len(mname), len(rest)))
+  hold alias = mname
+  when starts(rest, 0, "as ") == 1 {
+    rest = trim_str(sub_str(rest, 3, len(rest)))
+    alias = ""
+    i = 0
+    while i < len(rest) && is_ident(sx_index(rest, i)) == 1 {
+      alias = concat(alias, chr(sx_index(rest, i)))
+      i = i + 1
+    }
+    when len(alias) <= 0 {
+      give ""
+    }
+    rest = trim_str(sub_str(rest, len(alias), len(rest)))
+  }
+  when starts(rest, 0, "from ") == 0 && starts(rest, 0, "from\"") == 0 {
+    give ""
+  }
+  hold q1 = find(rest, "\"")
+  when q1 < 0 {
+    give ""
+  }
+  hold q2 = find_from(rest, "\"", q1 + 1)
+  when q2 <= q1 + 1 {
+    give ""
+  }
+  hold rel = sub_str(rest, q1 + 1, q2)
+  when part == 0 {
+    give mname
+  }
+  when part == 1 {
+    give alias
+  }
+  give rel
+}
+
+make doc_module_manifest(doc: str, docuri: str) -> str {
+  hold out = ""
+  hold lines = count_lines(doc)
+  hold l = 0
+  while l < lines {
+    hold rel = parse_module_import_part(line_text(doc, l), 2)
+    when len(rel) > 0 {
+      hold pair = resolve_use_pair(rel, docuri)
+      out = concat(out, pair)
+    }
+    l = l + 1
+  }
+  give out
+}
+
+// Look up `alias` among `module NAME [as ALIAS] from "path.sa"` lines in `doc`.
+// Returns: mname\ndecl_line\ntarget_uri\ntarget_path\nrel_path (or "" if not found).
+make doc_module_lookup(doc: str, docuri: str, alias: str) -> str {
+  when len(alias) <= 0 {
+    give ""
+  }
+  hold lines = count_lines(doc)
+  hold l = 0
+  while l < lines {
+    hold raw = line_text(doc, l)
+    hold al = parse_module_import_part(raw, 1)
+    when string_eq(al, alias) == 1 {
+      hold mname = parse_module_import_part(raw, 0)
+      hold rel = parse_module_import_part(raw, 2)
+      hold pair = resolve_use_pair(rel, docuri)
+      when len(pair) > 0 {
+        hold tu = line_text(pair, 0)
+        hold tp = line_text(pair, 1)
+        give concat(mname, concat("\n", concat(numstr(l), concat("\n", concat(tu, concat("\n", concat(tp, concat("\n", rel))))))))
+      }
+    }
+    l = l + 1
+  }
+  give ""
+}
+
+make module_uri_on_line(lt: str, docuri: str, u0: str, u1: str, u2: str, u3: str) -> str {
+  hold rel = parse_module_import_part(lt, 2)
+  when len(rel) <= 0 {
+    give ""
+  }
+  hold pair = resolve_use_pair(rel, docuri)
+  when len(pair) <= 0 {
+    give ""
+  }
+  hold target_u = line_text(pair, 0)
+  hold target_p = line_text(pair, 1)
+  when string_eq(target_u, u0) == 1 || string_eq(target_u, u1) == 1 || string_eq(target_u, u2) == 1 || string_eq(target_u, u3) == 1 {
+    give target_u
+  }
+  when path_kind(target_p) == 1 {
+    give target_u
+  }
+  give ""
+}
+
+// Lexical block-scope local binder inside [fnl, fnend] visible at `at_ln`.
+// Distinguishes inner `when`/`while`/`for` block `hold` shadowing from outer
+// parameters/locals while ignoring sibling inner blocks that closed before `at_ln`.
+make scoped_local_decl_line(text: str, fnl: num, fnend: num, at_ln: num, w: str) -> num {
+  when len(w) <= 0 || fnl < 0 {
+    give 0 - 1
+  }
+  hold b0 = 0 - 1
+  when sig_param(line_text(text, fnl), w) == 1 {
+    b0 = fnl
+  }
+  hold b1 = 0 - 1
+  hold b2 = 0 - 1
+  hold b3 = 0 - 1
+  hold b4 = 0 - 1
+  hold hd = concat("hold ", w)
+  hold fr = concat("for ", w)
+  hold d = brace_delta(line_text(text, fnl))
+  when d < 1 {
+    d = 1
+  }
+  hold stop = at_ln
+  when stop > fnend {
+    stop = fnend
+  }
+  hold l = fnl + 1
+  while l <= stop {
+    hold raw = line_text(text, l)
+    hold t = trim_str(raw)
+    hold is_bind = 0
+    when starts(t, 0, hd) == 1 && word_bound(t, len(hd)) == 1 {
+      is_bind = 1
+    }
+    when starts(t, 0, fr) == 1 && word_bound(t, len(fr)) == 1 {
+      is_bind = 1
+    }
+    when is_bind == 1 {
+      when d <= 1 {
+        b1 = l
+      }
+      when d == 2 {
+        b2 = l
+      }
+      when d == 3 {
+        b3 = l
+      }
+      when d >= 4 {
+        b4 = l
+      }
+    }
+    when l < stop {
+      hold nd = d + brace_delta(raw)
+      when nd < 4 {
+        b4 = 0 - 1
+      }
+      when nd < 3 {
+        b3 = 0 - 1
+      }
+      when nd < 2 {
+        b2 = 0 - 1
+      }
+      d = nd
+    }
+    l = l + 1
+  }
+  when b4 >= 0 {
+    give b4
+  }
+  when b3 >= 0 {
+    give b3
+  }
+  when b2 >= 0 {
+    give b2
+  }
+  when b1 >= 0 {
+    give b1
+  }
+  when b0 >= 0 {
+    give b0
+  }
+  give local_decl_line(text, fnl, fnend, w)
+}
+
+make doc_use_manifest(doc: str, docuri: str) -> str {
+  hold out = ""
+  hold lines = count_lines(doc)
+  hold l = 0
+  while l < lines {
+    hold t = trim_str(line_text(doc, l))
+    when starts(t, 0, "use ") == 1 || starts(t, 0, "use\"") == 1 {
+      hold q1 = find(t, "\"")
+      when q1 >= 0 {
+        hold q2 = find_from(t, "\"", q1 + 1)
+        when q2 > q1 + 1 {
+          hold rel = sub_str(t, q1 + 1, q2)
+          hold pair = resolve_use_pair(rel, docuri)
+          out = concat(out, pair)
+        }
+      }
+    }
+    l = l + 1
+  }
+  give out
+}
+
+make use_uri_on_line(lt: str, docuri: str, u0: str, u1: str, u2: str, u3: str) -> str {
+  hold t = trim_str(lt)
+  when starts(t, 0, "use ") == 0 && starts(t, 0, "use\"") == 0 {
+    give ""
+  }
+  hold q1 = find(t, "\"")
+  when q1 < 0 {
+    give ""
+  }
+  hold q2 = find_from(t, "\"", q1 + 1)
+  when q2 <= q1 + 1 {
+    give ""
+  }
+  hold rel = sub_str(t, q1 + 1, q2)
+  hold pair = resolve_use_pair(rel, docuri)
+  when len(pair) <= 0 {
+    give ""
+  }
+  hold target_u = line_text(pair, 0)
+  hold target_p = line_text(pair, 1)
+  when string_eq(target_u, u0) == 1 || string_eq(target_u, u1) == 1 || string_eq(target_u, u2) == 1 || string_eq(target_u, u3) == 1 {
+    give target_u
+  }
+  when path_kind(target_p) == 1 {
+    give target_u
+  }
+  give ""
+}
+
+// Search order: doc -> explicit use targets -> open buffers -> workspace index.
+// Returns: uri\nline_num\ntrimmed_decl_line (or empty string if not found).
+make ws_find_top_decl(w: str, doc: str, docuri: str, manifest: str, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
+  when len(w) <= 0 {
+    give ""
+  }
+  hold dl = top_decl_line(doc, w)
+  when dl >= 0 {
+    hold dtxt = strip_line_comment(line_text(doc, dl))
+    give concat(docuri, concat("\n", concat(numstr(dl), concat("\n", dtxt))))
+  }
+  hold uses = doc_use_manifest(doc, docuri)
+  hold urows = count_lines(uses)
+  hold r = 0
+  while r + 1 < urows {
+    hold uu = line_text(uses, r)
+    hold up = line_text(uses, r + 1)
+    hold usrc = open_or_disk(uu, up, u0, t0, u1, t1, u2, t2, u3, t3)
+    when len(usrc) > 0 {
+      hold udl = top_decl_line(usrc, w)
+      when udl >= 0 {
+        hold udtxt = strip_line_comment(line_text(usrc, udl))
+        give concat(uu, concat("\n", concat(numstr(udl), concat("\n", udtxt))))
+      }
+    }
+    r = r + 2
+  }
+  when len(u0) > 0 && string_eq(u0, docuri) == 0 {
+    hold dl0 = top_decl_line(t0, w)
+    when dl0 >= 0 {
+      give concat(u0, concat("\n", concat(numstr(dl0), concat("\n", strip_line_comment(line_text(t0, dl0))))))
+    }
+  }
+  when len(u1) > 0 && string_eq(u1, docuri) == 0 {
+    hold dl1 = top_decl_line(t1, w)
+    when dl1 >= 0 {
+      give concat(u1, concat("\n", concat(numstr(dl1), concat("\n", strip_line_comment(line_text(t1, dl1))))))
+    }
+  }
+  when len(u2) > 0 && string_eq(u2, docuri) == 0 {
+    hold dl2 = top_decl_line(t2, w)
+    when dl2 >= 0 {
+      give concat(u2, concat("\n", concat(numstr(dl2), concat("\n", strip_line_comment(line_text(t2, dl2))))))
+    }
+  }
+  when len(u3) > 0 && string_eq(u3, docuri) == 0 {
+    hold dl3 = top_decl_line(t3, w)
+    when dl3 >= 0 {
+      give concat(u3, concat("\n", concat(numstr(dl3), concat("\n", strip_line_comment(line_text(t3, dl3))))))
+    }
+  }
+  hold mrows = count_lines(manifest)
+  hold mr = 0
+  while mr + 1 < mrows {
+    hold mu = line_text(manifest, mr)
+    hold mp = line_text(manifest, mr + 1)
+    when string_eq(mu, u0) == 0 && string_eq(mu, u1) == 0 && string_eq(mu, u2) == 0 && string_eq(mu, u3) == 0 && string_eq(mu, docuri) == 0 {
+      hold msrc = read_file(mp)
+      hold mdl = top_decl_line(msrc, w)
+      when mdl >= 0 {
+        give concat(mu, concat("\n", concat(numstr(mdl), concat("\n", strip_line_comment(line_text(msrc, mdl))))))
+      }
+    }
+    mr = mr + 2
+  }
+  give ""
+}
+
+make base_type_name(tname: str) -> str {
+  hold lt = find(tname, "<")
+  when lt > 0 {
+    give trim_str(sub_str(tname, 0, lt))
+  }
+  give trim_str(tname)
+}
+
+make first_type_arg(tname: str) -> str {
+  hold lt = find(tname, "<")
+  hold gt = find(tname, ">")
+  when lt > 0 && gt > lt + 1 {
+    hold inside = sub_str(tname, lt + 1, gt)
+    hold cm = find(inside, ",")
+    when cm > 0 {
+      give trim_str(sub_str(inside, 0, cm))
+    }
+    give trim_str(inside)
+  }
+  give ""
+}
+
+make source_for_uri(target_u: str, doc: str, docuri: str, manifest: str, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
+  when string_eq(target_u, docuri) == 1 {
+    give doc
+  }
+  when string_eq(target_u, u0) == 1 {
+    give t0
+  }
+  when string_eq(target_u, u1) == 1 {
+    give t1
+  }
+  when string_eq(target_u, u2) == 1 {
+    give t2
+  }
+  when string_eq(target_u, u3) == 1 {
+    give t3
+  }
+  hold uses = doc_use_manifest(doc, docuri)
+  hold urows = count_lines(uses)
+  hold r = 0
+  while r + 1 < urows {
+    when string_eq(line_text(uses, r), target_u) == 1 {
+      give read_file(line_text(uses, r + 1))
+    }
+    r = r + 2
+  }
+  hold mods = doc_module_manifest(doc, docuri)
+  hold mrows = count_lines(mods)
+  hold mr = 0
+  while mr + 1 < mrows {
+    when string_eq(line_text(mods, mr), target_u) == 1 {
+      give read_file(line_text(mods, mr + 1))
+    }
+    mr = mr + 2
+  }
+  give workspace_text(manifest, target_u)
+}
+
+make parse_struct_summary(src: str, sline: num) -> str {
+  hold lines = count_lines(src)
+  hold hdr = strip_line_comment(line_text(src, sline))
+  hold bo = find(hdr, "{")
+  hold head_nm = hdr
+  when bo > 0 {
+    head_nm = trim_str(sub_str(hdr, 0, bo))
+  }
+  hold fields = ""
+  hold nf = 0
+  hold l = sline + 1
+  hold done = 0
+  while l < lines && done == 0 {
+    hold fl = strip_line_comment(line_text(src, l))
+    when find(fl, "}") >= 0 {
+      done = 1
+    } otherwise {
+      hold col = find(fl, ":")
+      when col > 0 {
+        hold fnm = trim_str(sub_str(fl, 0, col))
+        hold fty = trim_str(sub_str(fl, col + 1, len(fl)))
+        when sx_index(fty, len(fty) - 1) == 44 {
+          fty = trim_str(sub_str(fty, 0, len(fty) - 1))
+        }
+        when nf > 0 {
+          fields = concat(fields, ", ")
+        }
+        fields = concat(fields, concat(fnm, concat(": ", fty)))
+        nf = nf + 1
+      }
+    }
+    l = l + 1
+  }
+  give concat(head_nm, concat(" { ", concat(fields, " }")))
+}
+
+// Returns: field_uri\nfield_line\nfield_type (with single generic param substituted)
+make ws_find_struct_field(stype: str, fname: str, doc: str, docuri: str, manifest: str, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
+  hold bname = base_type_name(stype)
+  when len(bname) <= 0 || len(fname) <= 0 {
+    give ""
+  }
+  hold hit = ""
+  hold qdot = find(bname, ".")
+  when qdot > 0 {
+    hold mal = trim_str(sub_str(bname, 0, qdot))
+    hold mstruct = trim_str(sub_str(bname, qdot + 1, len(bname)))
+    hold mhit = doc_module_lookup(doc, docuri, mal)
+    when len(mhit) > 0 {
+      hold mu = line_text(mhit, 2)
+      hold mp = line_text(mhit, 3)
+      hold msrc0 = open_or_disk(mu, mp, u0, t0, u1, t1, u2, t2, u3, t3)
+      hold msdl = top_decl_line(msrc0, mstruct)
+      when msdl >= 0 {
+        hit = concat(mu, concat("\n", concat(numstr(msdl), concat("\n", strip_line_comment(line_text(msrc0, msdl))))))
+      }
+    }
+    bname = mstruct
+  }
+  when len(hit) <= 0 {
+    hit = ws_find_top_decl(bname, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+  }
+  when len(hit) <= 0 {
+    give ""
+  }
+  hold su = line_text(hit, 0)
+  hold sl = parse_int_str(line_text(hit, 1))
+  hold shdr = line_text(hit, 2)
+  when starts(shdr, 0, "struct ") == 0 {
+    give ""
+  }
+  hold tparam = first_type_arg(shdr)
+  hold targ = first_type_arg(stype)
+  hold ssrc = source_for_uri(su, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+  // Support inline `struct Vec2 { x, y }` single-line declarations
+  hold bo_inline = find(shdr, "{")
+  hold bc_inline = find(shdr, "}")
+  when bo_inline > 0 && bc_inline > bo_inline {
+    hold in_body = sub_str(shdr, bo_inline + 1, bc_inline)
+    hold ii = 0
+    hold in_n = len(in_body)
+    while ii < in_n {
+      while ii < in_n && (sx_index(in_body, ii) == 32 || sx_index(in_body, ii) == 9 || sx_index(in_body, ii) == 44) {
+        ii = ii + 1
+      }
+      hold fnm0 = ""
+      while ii < in_n && is_ident(sx_index(in_body, ii)) == 1 {
+        fnm0 = concat(fnm0, chr(sx_index(in_body, ii)))
+        ii = ii + 1
+      }
+      hold fty0 = "any"
+      while ii < in_n && (sx_index(in_body, ii) == 32 || sx_index(in_body, ii) == 9) {
+        ii = ii + 1
+      }
+      when ii < in_n && sx_index(in_body, ii) == 58 {
+        ii = ii + 1
+        hold fts = ii
+        while ii < in_n && sx_index(in_body, ii) != 44 {
+          ii = ii + 1
+        }
+        fty0 = trim_str(sub_str(in_body, fts, ii))
+      } otherwise {
+        while ii < in_n && sx_index(in_body, ii) != 44 {
+          ii = ii + 1
+        }
+      }
+      when string_eq(fnm0, fname) == 1 {
+        when len(tparam) > 0 && len(targ) > 0 && string_eq(fty0, tparam) == 1 {
+          fty0 = targ
+        }
+        give concat(su, concat("\n", concat(numstr(sl), concat("\n", fty0))))
+      }
+    }
+    give ""
+  }
+  hold lines = count_lines(ssrc)
+  hold l = sl + 1
+  while l < lines {
+    hold fl = strip_line_comment(line_text(ssrc, l))
+    when find(fl, "}") >= 0 {
+      give ""
+    }
+    hold col = find(fl, ":")
+    when col > 0 {
+      hold fnm = trim_str(sub_str(fl, 0, col))
+      when string_eq(fnm, fname) == 1 {
+        hold fty = trim_str(sub_str(fl, col + 1, len(fl)))
+        when len(fty) > 0 && sx_index(fty, len(fty) - 1) == 44 {
+          fty = trim_str(sub_str(fty, 0, len(fty) - 1))
+        }
+        when len(tparam) > 0 && len(targ) > 0 && string_eq(fty, tparam) == 1 {
+          fty = targ
+        }
+        give concat(su, concat("\n", concat(numstr(l), concat("\n", fty))))
+      }
+    } otherwise {
+      hold fnm_u = trim_str(fl)
+      when len(fnm_u) > 0 && sx_index(fnm_u, len(fnm_u) - 1) == 44 {
+        fnm_u = trim_str(sub_str(fnm_u, 0, len(fnm_u) - 1))
+      }
+      when is_ident_word(fnm_u) == 1 && string_eq(fnm_u, fname) == 1 {
+        give concat(su, concat("\n", concat(numstr(l), "\nany")))
+      }
+    }
+    l = l + 1
+  }
+  give ""
+}
+
+make extract_fn_ret_type(decl_line: str) -> str {
+  hold ar = find(decl_line, "->")
+  when ar < 0 {
+    give "void"
+  }
+  hold rest = trim_str(sub_str(decl_line, ar + 2, len(decl_line)))
+  hold bo = find(rest, "{")
+  when bo >= 0 {
+    rest = trim_str(sub_str(rest, 0, bo))
+  }
+  give rest
+}
+
+make extract_param_type(sig_line: str, pname: str) -> str {
+  hold po = find(sig_line, "(")
+  hold pc = find_from(sig_line, ")", po)
+  when po < 0 || pc <= po {
+    give ""
+  }
+  hold inner = sub_str(sig_line, po + 1, pc)
+  hold n = len(inner)
+  hold start = 0
+  hold i = 0
+  hold depth = 0
+  while i <= n {
+    hold split = 0
+    when i == n {
+      split = 1
+    } otherwise {
+      hold c = sx_index(inner, i)
+      when c == 60 {
+        depth = depth + 1
+      }
+      when c == 62 {
+        depth = depth - 1
+      }
+      when c == 44 && depth <= 0 {
+        split = 1
+      }
+    }
+    when split == 1 {
+      hold piece = trim_str(sub_str(inner, start, i))
+      hold col = find(piece, ":")
+      when col > 0 {
+        hold pnm = trim_str(sub_str(piece, 0, col))
+        when string_eq(pnm, pname) == 1 {
+          give trim_str(sub_str(piece, col + 1, len(piece)))
+        }
+      }
+      start = i + 1
+    }
+    i = i + 1
+  }
+  give ""
+}
+
+make builtin_ret_type(callee: str) -> str {
+  when string_eq(callee, "concat") == 1 || string_eq(callee, "chr") == 1 || string_eq(callee, "sub_str") == 1 || string_eq(callee, "read_file") == 1 || string_eq(callee, "read_dir") == 1 || string_eq(callee, "arg") == 1 || string_eq(callee, "getenv") == 1 || string_eq(callee, "path_real") == 1 || string_eq(callee, "numstr") == 1 || string_eq(callee, "child_line") == 1 || string_eq(callee, "child_recv") == 1 {
+    give "str"
+  }
+  when string_eq(callee, "len") == 1 || string_eq(callee, "sx_index") == 1 || string_eq(callee, "string_eq") == 1 || string_eq(callee, "arg_count") == 1 || string_eq(callee, "write_file") == 1 || string_eq(callee, "path_kind") == 1 || string_eq(callee, "path_size") == 1 || string_eq(callee, "remove_path") == 1 || string_eq(callee, "run_command") == 1 || string_eq(callee, "exit") == 1 || string_eq(callee, "bit_and") == 1 || string_eq(callee, "bit_or") == 1 || string_eq(callee, "bit_xor") == 1 || string_eq(callee, "bit_not") == 1 || string_eq(callee, "shl") == 1 || string_eq(callee, "shr") == 1 || string_eq(callee, "spawn") == 1 || string_eq(callee, "child_send") == 1 || string_eq(callee, "child_close") == 1 || string_eq(callee, "gc_runs") == 1 || string_eq(callee, "gc_bytes") == 1 {
+    give "num"
+  }
+  when string_eq(callee, "push") == 1 || string_eq(callee, "read_bytes") == 1 {
+    give "list"
+  }
+  give ""
+}
+
+make is_ident_word(s: str) -> num {
+  hold n = len(s)
+  when n <= 0 {
+    give 0
+  }
+  hold c0 = sx_index(s, 0)
+  when is_ident(c0) == 0 || (c0 >= 48 && c0 <= 57) {
+    give 0
+  }
+  hold i = 1
+  while i < n {
+    when is_ident(sx_index(s, i)) == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make recv_before_dot(lt: str, bytepos: num) -> str {
+  hold n = len(lt)
+  when bytepos < 0 || bytepos > n {
+    give ""
+  }
+  hold ws = bytepos
+  when ws == n && ws > 0 {
+    ws = ws - 1
+  }
+  while ws > 0 && is_ident(sx_index(lt, ws - 1)) == 1 {
+    ws = ws - 1
+  }
+  when ws <= 1 {
+    give ""
+  }
+  when sx_index(lt, ws - 1) != 46 {
+    give ""
+  }
+  hold re = ws - 1
+  hold rs = re
+  while rs > 0 && is_ident(sx_index(lt, rs - 1)) == 1 {
+    rs = rs - 1
+  }
+  when rs >= re {
+    give ""
+  }
+  give sub_str(lt, rs, re)
+}
+
+make hold_rhs_of(line: str) -> str {
+  hold cl = strip_line_comment(line)
+  hold eq = find(cl, "=")
+  when eq < 0 {
+    give ""
+  }
+  give trim_str(sub_str(cl, eq + 1, len(cl)))
+}
+
+make hold_ann_of(line: str, vname: str) -> str {
+  hold cl = strip_line_comment(line)
+  hold eq = find(cl, "=")
+  hold lhs = cl
+  when eq > 0 {
+    lhs = sub_str(cl, 0, eq)
+  }
+  hold col = find(lhs, ":")
+  when col > 0 {
+    give trim_str(sub_str(lhs, col + 1, len(lhs)))
+  }
+  give ""
+}
+
+// Forward-free mutual recursion via depth-bounded lsp_infer_type(mode, ...):
+// mode 0 = infer expression `target`, mode 1 = infer variable `target` at line `at_ln`.
+make lsp_infer_type(mode: num, target: str, doc: str, docuri: str, at_ln: num, depth: num, manifest: str, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
+  when depth > 5 {
+    give ""
+  }
+  when mode == 1 {
+    hold vname = trim_str(target)
+    when len(vname) <= 0 {
+      give ""
+    }
+    hold fnl = fn_open_line(doc, at_ln)
+    when fnl >= 0 {
+      hold fnend = fn_close_line(doc, fnl)
+      hold sig_l = strip_line_comment(line_text(doc, fnl))
+      hold l = scoped_local_decl_line(doc, fnl, fnend, at_ln, vname)
+      when l == fnl && sig_param(sig_l, vname) == 1 {
+        give extract_param_type(sig_l, vname)
+      }
+      when l > fnl {
+        hold dl = strip_line_comment(line_text(doc, l))
+        when starts(dl, 0, concat("for ", vname)) == 1 {
+          give "num"
+        }
+        hold ann = hold_ann_of(dl, vname)
+        when len(ann) > 0 {
+          give ann
+        }
+        hold rhs = hold_rhs_of(dl)
+        give lsp_infer_type(0, rhs, doc, docuri, l, depth + 1, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      }
+      when sig_param(sig_l, vname) == 1 {
+        give extract_param_type(sig_l, vname)
+      }
+    }
+    hold thit = ws_find_top_decl(vname, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+    when len(thit) > 0 {
+      hold tu = line_text(thit, 0)
+      hold tl = parse_int_str(line_text(thit, 1))
+      hold td = line_text(thit, 2)
+      when starts(td, 0, "hold ") == 1 {
+        hold tann = hold_ann_of(td, vname)
+        when len(tann) > 0 {
+          give tann
+        }
+        hold tsrc = source_for_uri(tu, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+        give lsp_infer_type(0, hold_rhs_of(td), tsrc, tu, tl, depth + 1, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      }
+    }
+    give ""
+  }
+
+  // mode == 0: expression type inference
+  hold e = strip_line_comment(target)
+  when len(e) <= 0 {
+    give ""
+  }
+  hold c0 = sx_index(e, 0)
+  when c0 == 34 {
+    give "str"
+  }
+  when c0 == 91 {
+    give "list"
+  }
+  when c0 >= 48 && c0 <= 57 {
+    give "num"
+  }
+  when c0 == 45 && len(e) > 1 {
+    hold c1 = sx_index(e, 1)
+    when c1 >= 48 && c1 <= 57 {
+      give "num"
+    }
+  }
+  // Struct literal: TypeName { ... }, alias.TypeName { ... }, or TypeName<Arg> { ... }
+  hold bo = find(e, "{")
+  hold po = find(e, "(")
+  when bo > 0 && (po < 0 || bo < po) {
+    hold sname = trim_str(sub_str(e, 0, bo))
+    hold bsn = base_type_name(sname)
+    when is_ident_word(bsn) == 1 {
+      give sname
+    }
+    hold sdot = find(bsn, ".")
+    when sdot > 0 {
+      hold smal = trim_str(sub_str(bsn, 0, sdot))
+      hold smnm = trim_str(sub_str(bsn, sdot + 1, len(bsn)))
+      when is_ident_word(smal) == 1 && is_ident_word(smnm) == 1 {
+        give sname
+      }
+    }
+  }
+  // Function call: callee(...), alias.callee(...), or callee<Arg>(...)
+  when po > 0 {
+    hold raw_cal = trim_str(sub_str(e, 0, po))
+    hold cal = base_type_name(raw_cal)
+    hold call_targ = first_type_arg(raw_cal)
+    hold cdot = find(cal, ".")
+    when cdot > 0 {
+      hold cmal = trim_str(sub_str(cal, 0, cdot))
+      hold cmfn = trim_str(sub_str(cal, cdot + 1, len(cal)))
+      hold cmhit = doc_module_lookup(doc, docuri, cmal)
+      when len(cmhit) > 0 && is_ident_word(cmfn) == 1 {
+        hold cmu = line_text(cmhit, 2)
+        hold cmp = line_text(cmhit, 3)
+        hold cmsrc = open_or_disk(cmu, cmp, u0, t0, u1, t1, u2, t2, u3, t3)
+        hold cmdl = top_decl_line(cmsrc, cmfn)
+        when cmdl >= 0 {
+          hold cmfd = strip_line_comment(line_text(cmsrc, cmdl))
+          when starts(cmfd, 0, "make ") == 1 {
+            hold cmrt = extract_fn_ret_type(cmfd)
+            when find(cmrt, ".") < 0 && is_ident_word(cmrt) == 1 && string_eq(cmrt, "num") == 0 && string_eq(cmrt, "str") == 0 && string_eq(cmrt, "list") == 0 && string_eq(cmrt, "void") == 0 {
+              cmrt = concat(cmal, concat(".", cmrt))
+            }
+            give cmrt
+          }
+        }
+      }
+    }
+    when is_ident_word(cal) == 1 {
+      hold bt = builtin_ret_type(cal)
+      when len(bt) > 0 {
+        give bt
+      }
+      hold fhit = ws_find_top_decl(cal, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      when len(fhit) > 0 {
+        hold fd = line_text(fhit, 2)
+        when starts(fd, 0, "make ") == 1 {
+          hold rt = extract_fn_ret_type(fd)
+          hold fn_tp = first_type_arg(sub_str(fd, 0, find(fd, "(")))
+          when len(fn_tp) > 0 && len(call_targ) > 0 && string_eq(rt, fn_tp) == 1 {
+            rt = call_targ
+          }
+          give rt
+        }
+      }
+    }
+  }
+  // Dot field or module member access: recv.field
+  hold dot = find(e, ".")
+  when dot > 0 && po < 0 {
+    hold rcv = trim_str(sub_str(e, 0, dot))
+    hold fld = trim_str(sub_str(e, dot + 1, len(e)))
+    when is_ident_word(rcv) == 1 && is_ident_word(fld) == 1 {
+      hold dmhit = doc_module_lookup(doc, docuri, rcv)
+      when len(dmhit) > 0 {
+        hold dmu = line_text(dmhit, 2)
+        hold dmp = line_text(dmhit, 3)
+        hold dmsrc = open_or_disk(dmu, dmp, u0, t0, u1, t1, u2, t2, u3, t3)
+        hold dmdl = top_decl_line(dmsrc, fld)
+        when dmdl >= 0 {
+          give lsp_infer_type(1, fld, dmsrc, dmu, dmdl, depth + 1, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+        }
+      }
+      hold rty = lsp_infer_type(1, rcv, doc, docuri, at_ln, depth + 1, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      when len(rty) > 0 {
+        hold fmeta = ws_find_struct_field(rty, fld, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+        when len(fmeta) > 0 {
+          give line_text(fmeta, 2)
+        }
+      }
+    }
+  }
+  // Bare variable reference
+  when is_ident_word(e) == 1 {
+    give lsp_infer_type(1, e, doc, docuri, at_ln, depth + 1, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+  }
+  // Binary arithmetic / comparison operators outside strings
+  when find(e, " + ") >= 0 {
+    hold p_plus = find(e, " + ")
+    hold lty = lsp_infer_type(0, sub_str(e, 0, p_plus), doc, docuri, at_ln, depth + 1, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+    when string_eq(lty, "str") == 1 {
+      give "str"
+    }
+    give "num"
+  }
+  when find(e, " - ") >= 0 || find(e, " * ") >= 0 || find(e, " / ") >= 0 || find(e, " % ") >= 0 || find(e, " == ") >= 0 || find(e, " != ") >= 0 || find(e, " < ") >= 0 || find(e, " > ") >= 0 {
+    give "num"
+  }
+  give ""
+}
+
+make wrap_hover_json(md: str) -> str {
+  hold b = "{\"contents\":{\"kind\":\"markdown\",\"value\":\""
+  b = b + json_esc(md)
+  b = b + "\"}}"
+  give b
+}
+
+make hover_typed(w: str, doc: str, docuri: str, ln: num, ch: num, ws_root: str, manifest: str, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
+  when len(doc) <= 0 || len(w) <= 0 {
+    give hover_for(w, doc)
+  }
+  hold lt = line_text(doc, ln)
+  hold bytepos = utf16_byte(lt, ch)
+  // 1. Module member or struct field hover on recv.member
+  hold recv = recv_before_dot(lt, bytepos)
+  when len(recv) > 0 {
+    hold mhit_h = doc_module_lookup(doc, docuri, recv)
+    when len(mhit_h) > 0 {
+      hold h_mname = line_text(mhit_h, 0)
+      hold h_mu = line_text(mhit_h, 2)
+      hold h_mp = line_text(mhit_h, 3)
+      hold h_msrc = open_or_disk(h_mu, h_mp, u0, t0, u1, t1, u2, t2, u3, t3)
+      hold h_mdl = top_decl_line(h_msrc, w)
+      when h_mdl >= 0 {
+        hold h_md = strip_line_comment(line_text(h_msrc, h_mdl))
+        when starts(h_md, 0, "make ") == 1 {
+          give wrap_hover_json(concat("`", concat(h_md, concat("` — in module `", concat(h_mname, concat("` (`", concat(basename_uri(h_mu), "`)")))))))
+        }
+        when starts(h_md, 0, "struct ") == 1 {
+          hold h_sum = parse_struct_summary(h_msrc, h_mdl)
+          give wrap_hover_json(concat("`", concat(h_sum, concat("` — in module `", concat(h_mname, concat("` (`", concat(basename_uri(h_mu), "`)")))))))
+        }
+        when starts(h_md, 0, "hold ") == 1 {
+          hold h_vty = lsp_infer_type(1, w, h_msrc, h_mu, h_mdl, 0, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+          when len(h_vty) <= 0 {
+            h_vty = "any"
+          }
+          give wrap_hover_json(concat("`", concat(recv, concat(".", concat(w, concat(": ", concat(h_vty, concat("` — in module `", concat(h_mname, "`")))))))))
+        }
+      }
+    }
+    hold rtype = lsp_infer_type(1, recv, doc, docuri, ln, 0, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+    when len(rtype) > 0 {
+      hold fhit = ws_find_struct_field(rtype, w, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      when len(fhit) > 0 {
+        hold fu = line_text(fhit, 0)
+        hold fty = line_text(fhit, 2)
+        hold fmd = concat("`", concat(rtype, concat(".", concat(w, concat(": ", concat(fty, "` — struct field"))))))
+        when string_eq(fu, docuri) == 0 {
+          fmd = concat(fmd, concat(" (defined in `", concat(basename_uri(fu), "`)")))
+        }
+        give wrap_hover_json(fmd)
+      }
+    }
+  }
+  // 1b. Hovering directly on a module alias identifier
+  hold mal_hit = doc_module_lookup(doc, docuri, w)
+  when len(mal_hit) > 0 {
+    hold mal_nm = line_text(mal_hit, 0)
+    hold mal_rel = line_text(mal_hit, 4)
+    give wrap_hover_json(concat("`module ", concat(mal_nm, concat(" as ", concat(w, concat(" from \"", concat(mal_rel, "\"` — namespaced module.")))))))
+  }
+  // 2. Builtin / keyword doc
+  hold bdoc = doc_for(w)
+  when len(bdoc) > 0 {
+    give wrap_hover_json(bdoc)
+  }
+  // 3. Local parameter or block-scoped local variable inside enclosing function
+  hold fnl = fn_open_line(doc, ln)
+  when fnl >= 0 {
+    hold fnend = fn_close_line(doc, fnl)
+    hold sig_l = strip_line_comment(line_text(doc, fnl))
+    hold sdecl = scoped_local_decl_line(doc, fnl, fnend, ln, w)
+    when sdecl > fnl {
+      hold vty = lsp_infer_type(1, w, doc, docuri, ln, 0, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      when len(vty) > 0 {
+        give wrap_hover_json(concat("`", concat(w, concat(": ", concat(vty, "` — local variable in this function.")))))
+      }
+      give hover_for(w, doc)
+    }
+    when sig_param(sig_l, w) == 1 {
+      hold pty = extract_param_type(sig_l, w)
+      when len(pty) <= 0 {
+        pty = "any"
+      }
+      give wrap_hover_json(concat("`", concat(w, concat(": ", concat(pty, "` — parameter in enclosing function.")))))
+    }
+  }
+  // 4. Top-level make / struct / hold across doc + use imports + open buffers + workspace index
+  hold thit = ws_find_top_decl(w, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+  when len(thit) > 0 {
+    hold tu = line_text(thit, 0)
+    hold tl = parse_int_str(line_text(thit, 1))
+    hold td = line_text(thit, 2)
+    when starts(td, 0, "make ") == 1 {
+      hold mmd = concat("`", concat(td, "`"))
+      when string_eq(tu, docuri) == 0 {
+        mmd = concat(mmd, concat(" — defined in `", concat(basename_uri(tu), "`")))
+      }
+      give wrap_hover_json(mmd)
+    }
+    when starts(td, 0, "struct ") == 1 {
+      hold ssrc = source_for_uri(tu, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      hold sum = parse_struct_summary(ssrc, tl)
+      hold smd = concat("`", concat(sum, "`"))
+      when string_eq(tu, docuri) == 0 {
+        smd = concat(smd, concat(" — defined in `", concat(basename_uri(tu), "`")))
+      }
+      give wrap_hover_json(smd)
+    }
+    when starts(td, 0, "hold ") == 1 {
+      hold tsrc2 = source_for_uri(tu, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      hold gty = lsp_infer_type(1, w, tsrc2, tu, tl, 0, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      // Preserve legacy rootless single-file numeric blurb expected by tools/sayanox-lsp-unicode.sh
+      when len(ws_root) <= 0 && string_eq(tu, docuri) == 1 && string_eq(gty, "num") == 1 && find(hold_rhs_of(td), "(") < 0 && find(hold_rhs_of(td), ".") < 0 {
+        give hover_for(w, doc)
+      }
+      when len(gty) > 0 {
+        hold gmd = concat("`", concat(w, concat(": ", concat(gty, "` — a variable"))))
+        when string_eq(tu, docuri) == 1 {
+          gmd = concat(gmd, " in this document.")
+        } otherwise {
+          gmd = concat(gmd, concat(" defined in `", concat(basename_uri(tu), "`.")))
+        }
+        give wrap_hover_json(gmd)
+      }
+    }
+  }
+  give hover_for(w, doc)
+}
+
+make definition_typed(w: str, doc: str, docuri: str, ln: num, ch: num, manifest: str, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
+  when len(doc) <= 0 {
+    give "null"
+  }
+  hold lt = line_text(doc, ln)
+  // 1. Clicking on a use "mod.sa" or module ... from "mod.sa" line jumps to line 0 of that module
+  hold uuri = use_uri_on_line(lt, docuri, u0, u1, u2, u3)
+  when len(uuri) > 0 {
+    give loc_line(uuri, 0)
+  }
+  hold muri = module_uri_on_line(lt, docuri, u0, u1, u2, u3)
+  when len(muri) > 0 {
+    give loc_line(muri, 0)
+  }
+  when len(w) <= 0 {
+    give "null"
+  }
+  // 2. Clicking on .member in alias.member or recv.field
+  hold bytepos = utf16_byte(lt, ch)
+  hold recv = recv_before_dot(lt, bytepos)
+  when len(recv) > 0 {
+    hold mhit_d = doc_module_lookup(doc, docuri, recv)
+    when len(mhit_d) > 0 {
+      hold d_mu = line_text(mhit_d, 2)
+      hold d_mp = line_text(mhit_d, 3)
+      hold d_msrc = open_or_disk(d_mu, d_mp, u0, t0, u1, t1, u2, t2, u3, t3)
+      hold d_mdl = top_decl_line(d_msrc, w)
+      when d_mdl >= 0 {
+        give loc_line(d_mu, d_mdl)
+      }
+    }
+    hold rtype = lsp_infer_type(1, recv, doc, docuri, ln, 0, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+    when len(rtype) > 0 {
+      hold fhit = ws_find_struct_field(rtype, w, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      when len(fhit) > 0 {
+        give loc_line(line_text(fhit, 0), parse_int_str(line_text(fhit, 1)))
+      }
+    }
+  }
+  // 2b. Clicking on a module alias identifier jumps to line 0 of that module file
+  hold mal_def = doc_module_lookup(doc, docuri, w)
+  when len(mal_def) > 0 {
+    hold mal_tu = line_text(mal_def, 2)
+    hold mal_tp = line_text(mal_def, 3)
+    when string_eq(mal_tu, u0) == 1 || string_eq(mal_tu, u1) == 1 || string_eq(mal_tu, u2) == 1 || string_eq(mal_tu, u3) == 1 || path_kind(mal_tp) == 1 {
+      give loc_line(mal_tu, 0)
+    }
+    give loc_line(docuri, parse_int_str(line_text(mal_def, 1)))
+  }
+  // 3. Enclosing function parameter / lexical block-scoped local binder
+  hold fnl = fn_open_line(doc, ln)
+  when fnl >= 0 {
+    hold fnend = fn_close_line(doc, fnl)
+    hold ldecl = scoped_local_decl_line(doc, fnl, fnend, ln, w)
+    when ldecl >= 0 {
+      give loc_line(docuri, ldecl)
+    }
+  }
+  // 4. Current document top-level declaration
+  hold tdecl = top_decl_line(doc, w)
+  when tdecl >= 0 {
+    give loc_line(docuri, tdecl)
+  }
+  // 5. Cross-file declaration in use imports, open buffers, or workspace folder index
+  hold whit = ws_find_top_decl(w, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+  when len(whit) > 0 {
+    give loc_line(line_text(whit, 0), parse_int_str(line_text(whit, 1)))
+  }
+  give definition_for(w, doc, docuri)
+}
+
+// Sanitize one line up to `limit_b` by blanking string interiors and stripping // comments
+// while preserving exact byte offsets of `(`, `)`, `,`, `.`, and identifiers outside strings.
+make sanitize_call_line(raw: str, limit_b: num) -> str {
+  hold n = len(raw)
+  when limit_b >= 0 && limit_b < n {
+    n = limit_b
+  }
+  hold out = ""
+  hold i = 0
+  hold in_s = 0
+  while i < n {
+    hold c = sx_index(raw, i)
+    when in_s == 1 {
+      when c == 92 && i + 1 < n {
+        out = concat(out, "  ")
+        i = i + 2
+      } otherwise {
+        when c == 34 {
+          in_s = 0
+        }
+        out = concat(out, " ")
+        i = i + 1
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(raw, i + 1) == 47 {
+        i = n
+      } otherwise {
+        when c == 34 {
+          in_s = 1
+          out = concat(out, " ")
+          i = i + 1
+        } otherwise {
+          out = concat(out, chr(c))
+          i = i + 1
+        }
+      }
+    }
+  }
+  give out
+}
+
+// Multi-line + qualified `alias.fn(...)` call scanner looking backwards up to 16 lines.
+// Returns: recv\ncallee\nactive_param (or "" if cursor is not inside an open call).
+make multiline_call_context(doc: str, line: num, ch: num) -> str {
+  hold min_l = line - 16
+  when min_l < 0 {
+    min_l = 0
+  }
+  hold joined = ""
+  hold l = min_l
+  while l <= line {
+    hold raw = line_text(doc, l)
+    hold lim = 0 - 1
+    when l == line {
+      lim = utf16_byte(raw, ch)
+    }
+    hold clean = sanitize_call_line(raw, lim)
+    joined = concat(joined, concat(clean, " "))
+    l = l + 1
+  }
+  // Scan backwards from end of `joined` to find innermost unmatched `(` and active comma count
+  hold i = len(joined) - 1
+  hold depth = 0
+  hold commas = 0
+  hold open_at = 0 - 1
+  while i >= 0 && open_at < 0 {
+    hold c = sx_index(joined, i)
+    when c == 41 {
+      depth = depth + 1
+    } otherwise {
+      when c == 40 {
+        when depth == 0 {
+          open_at = i
+        } otherwise {
+          depth = depth - 1
+        }
+      } otherwise {
+        when c == 44 && depth == 0 {
+          commas = commas + 1
+        }
+      }
+    }
+    i = i - 1
+  }
+  when open_at <= 0 {
+    give ""
+  }
+  hold p = open_at
+  while p > 0 && (sx_index(joined, p - 1) == 32 || sx_index(joined, p - 1) == 9) {
+    p = p - 1
+  }
+  hold ce = p
+  while p > 0 && is_ident(sx_index(joined, p - 1)) == 1 {
+    p = p - 1
+  }
+  when p >= ce {
+    give ""
+  }
+  hold callee = sub_str(joined, p, ce)
+  hold recv = ""
+  when p > 1 && sx_index(joined, p - 1) == 46 {
+    hold re = p - 1
+    hold rs = re
+    while rs > 0 && is_ident(sx_index(joined, rs - 1)) == 1 {
+      rs = rs - 1
+    }
+    when rs < re {
+      recv = sub_str(joined, rs, re)
+    }
+  }
+  give concat(recv, concat("\n", concat(callee, concat("\n", numstr(commas)))))
+}
+
+make sig_help_ws(w: str, doc: str, docuri: str, line: num, ch: num, manifest: str, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
+  when len(doc) <= 0 {
+    give "null"
+  }
+  hold ctx = multiline_call_context(doc, line, ch)
+  when len(ctx) <= 0 {
+    give sig_help(w, doc, line, ch)
+  }
+  hold recv = line_text(ctx, 0)
+  hold callee = line_text(ctx, 1)
+  hold active_idx = parse_int_str(line_text(ctx, 2))
+  // Single-line unqualified call in same document: try fast local sig_help first
+  when len(recv) <= 0 {
+    hold local_ans = sig_help(w, doc, line, ch)
+    when string_eq(local_ans, "null") == 0 {
+      give local_ans
+    }
+  }
+  hold fd = ""
+  when len(recv) > 0 {
+    hold mhit = doc_module_lookup(doc, docuri, recv)
+    when len(mhit) > 0 {
+      hold mu = line_text(mhit, 2)
+      hold mp = line_text(mhit, 3)
+      hold msrc = open_or_disk(mu, mp, u0, t0, u1, t1, u2, t2, u3, t3)
+      hold mdl = top_decl_line(msrc, callee)
+      when mdl >= 0 {
+        fd = strip_line_comment(line_text(msrc, mdl))
+      }
+    }
+  } otherwise {
+    hold dl_self = top_decl_line(doc, callee)
+    when dl_self >= 0 {
+      fd = strip_line_comment(line_text(doc, dl_self))
+    } otherwise {
+      hold fhit = ws_find_top_decl(callee, doc, docuri, manifest, u0, t0, u1, t1, u2, t2, u3, t3)
+      when len(fhit) > 0 {
+        fd = line_text(fhit, 2)
+      }
+    }
+  }
+  when starts(fd, 0, "make ") == 0 {
+    give "null"
+  }
+  // Construct synthetic 2-line buffer with exact active parameter comma count
+  hold call_ln = concat(callee, "(")
+  hold ci = 0
+  while ci < active_idx {
+    call_ln = concat(call_ln, "x,")
+    ci = ci + 1
+  }
+  hold cur_col = len(call_ln)
+  call_ln = concat(call_ln, "y)")
+  hold synth = concat(fd, concat("\n", concat(call_ln, "\n")))
+  give sig_help(callee, synth, 1, cur_col)
+}
+
+// Validate cursor for textDocument/prepareRename: refuses keywords, builtins,
+// string literals, // comments, numbers, and non-identifier positions.
+make prepare_rename_at(doc: str, ln: num, ch: num) -> str {
+  when len(doc) <= 0 {
+    give "null"
+  }
+  hold lt = line_text(doc, ln)
+  hold n = len(lt)
+  hold bytepos = utf16_byte(lt, ch)
+  when bytepos < 0 || bytepos > n {
+    give "null"
+  }
+  // Reject positions inside string literals or // comments
+  hold i = 0
+  hold in_s = 0
+  while i < bytepos && i < n {
+    hold c = sx_index(lt, i)
+    when in_s == 1 {
+      when c == 92 && i + 1 < n {
+        i = i + 2
+      } otherwise {
+        when c == 34 {
+          in_s = 0
+        }
+        i = i + 1
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(lt, i + 1) == 47 {
+        give "null"
+      }
+      when c == 34 {
+        in_s = 1
+      }
+      i = i + 1
+    }
+  }
+  when in_s == 1 {
+    give "null"
+  }
+  when bytepos < n && sx_index(lt, bytepos) == 47 && bytepos + 1 < n && sx_index(lt, bytepos + 1) == 47 {
+    give "null"
+  }
+  when bytepos < n && sx_index(lt, bytepos) == 34 {
+    give "null"
+  }
+  hold ws = bytepos
+  when ws == n && ws > 0 && is_ident(sx_index(lt, ws - 1)) == 1 {
+    ws = ws - 1
+  }
+  while ws > 0 && is_ident(sx_index(lt, ws - 1)) == 1 {
+    ws = ws - 1
+  }
+  hold we = ws
+  while we < n && is_ident(sx_index(lt, we)) == 1 {
+    we = we + 1
+  }
+  when we <= ws || bytepos < ws || bytepos > we {
+    give "null"
+  }
+  hold word = sub_str(lt, ws, we)
+  when is_ident_word(word) == 0 || known_word(word) == 1 {
+    give "null"
+  }
+  hold sp_a = utf16_span(lt, ws)
+  hold sp_b = utf16_span(lt, we - 1)
+  hold u_start = sp_a[0]
+  hold u_end = sp_b[1]
+  hold r = "{\"range\":{\"start\":{\"line\":"
+  r = concat(r, numstr(ln))
+  r = concat(r, ",\"character\":")
+  r = concat(r, numstr(u_start))
+  r = concat(r, "},\"end\":{\"line\":")
+  r = concat(r, numstr(ln))
+  r = concat(r, ",\"character\":")
+  r = concat(r, numstr(u_end))
+  r = concat(r, "}},\"placeholder\":\"")
+  r = concat(r, json_esc(word))
+  r = concat(r, "\"}")
+  give r
+}
+
 // ------------------------------------------------------- open documents
 // Four documents can be open at once. The dialect has no array of strings, so
 // the table is four parallel pairs of globals, and exactly three places touch
@@ -2973,7 +4434,11 @@ while running == 1 {
         when find(body, "didChangeWatchedFiles") >= 0 {
           watch_dyn = 1
         }
-        res = concat("{\"capabilities\":", capabilities())
+        hold prep_ren = 0
+        when find(body, "\"prepareSupport\":true") >= 0 || find(body, "\"prepareSupport\": true") >= 0 {
+          prep_ren = 1
+        }
+        res = concat("{\"capabilities\":", capabilities_ext(prep_ren))
         res = concat(res, ",\"serverInfo\":{\"name\":\"sayanox-lsp\",\"version\":\"2.0\"}}")
         d = reply(idraw, res)
       }
@@ -3129,34 +4594,17 @@ while running == 1 {
         d = reply(idraw, res)
       }
       when string_eq(method, "textDocument/hover") {
+        workspace_index = workspace_manifest(workspace_root)
         w = word_at(doc, ln, ch)
-        d = reply(idraw, hover_for(w, doc))
+        d = reply(idraw, hover_typed(w, doc, docuri, ln, ch, workspace_root, workspace_index, uri0, txt0, uri1, txt1, uri2, txt2, uri3, txt3))
       }
-      // Definition resolves the binder, not the first line that looks like
-      // one: a parameter or a `hold` inside the enclosing body wins over a
-      // top-level declaration of the same name further up the file.
+      // Definition resolves local binders, struct fields (recv.field), use targets,
+      // and top-level declarations across current doc, use imports, open buffers,
+      // and the bounded workspace folder index.
       when string_eq(method, "textDocument/definition") {
+        workspace_index = workspace_manifest(workspace_root)
         w = word_at(doc, ln, ch)
-        fnl = fn_open_line(doc, ln)
-        decl = 0 - 1
-        when fnl >= 0 {
-          fnend = fn_close_line(doc, fnl)
-          decl = local_decl_line(doc, fnl, fnend, w)
-        }
-        when decl >= 0 {
-          d = reply(idraw, loc_line(docuri, decl))
-        } otherwise {
-          // Not bound by the enclosing body: the binder is the top-level
-          // declaration. definition_for -- the first line at any depth that
-          // looks like a declaration -- is the last resort, so a name this
-          // document only uses still gets the old best-effort answer.
-          decl = top_decl_line(doc, w)
-          when decl >= 0 {
-            d = reply(idraw, loc_line(docuri, decl))
-          } otherwise {
-            d = reply(idraw, definition_for(w, doc, docuri))
-          }
-        }
+        d = reply(idraw, definition_typed(w, doc, docuri, ln, ch, workspace_index, uri0, txt0, uri1, txt1, uri2, txt2, uri3, txt3))
       }
       // Open buffers overlay the bounded disk index. Helpers cannot capture
       // the four-slot table, so the
@@ -3223,6 +4671,13 @@ while running == 1 {
       }
       when string_eq(method, "textDocument/formatting") {
         d = reply(idraw, format_edit(doc))
+      }
+      when string_eq(method, "textDocument/prepareRename") {
+        workspace_index = workspace_manifest(workspace_root)
+        when string_eq(uri, uri0) == 0 && string_eq(uri, uri1) == 0 && string_eq(uri, uri2) == 0 && string_eq(uri, uri3) == 0 {
+          doc = workspace_text(workspace_index, uri)
+        }
+        d = reply(idraw, prepare_rename_at(doc, ln, ch))
       }
       // Rename spans the open documents, like references: one changes entry
       // per open document that mentions the word, declaration included. An
@@ -3314,8 +4769,9 @@ while running == 1 {
         }
       }
       when string_eq(method, "textDocument/signatureHelp") {
+        workspace_index = workspace_manifest(workspace_root)
         w = word_at(doc, ln, ch)
-        d = reply(idraw, sig_help(w, doc, ln, ch))
+        d = reply(idraw, sig_help_ws(w, doc, docuri, ln, ch, workspace_index, uri0, txt0, uri1, txt1, uri2, txt2, uri3, txt3))
       }
       when string_eq(method, "textDocument/codeAction") {
         d = reply(idraw, code_actions(doc, docuri))

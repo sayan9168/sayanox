@@ -1,0 +1,141 @@
+// tools/sxstage2_parity.sa -- Stage-2 native backend parity harness, in Sayanox.
+//
+// Proves that ./selfhost/native_aot compiles and runs all Stage-2 concrete
+// struct-function fixtures, string-interpolation fixtures (including the
+// 16-hole limit, escaped \${...}, use-module splicing, and GC stress), and
+// full-language readiness fixtures with stdout byte-identical to ./selfhost/gen2,
+// while failing closed on all 10 string-interpolation refusals and all 13
+// struct-function type/arity/unresolved-field refusals.
+
+make fail_msg(msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat("[FAIL] sxstage2_parity: ", concat(msg, "\n")))
+  hold z = exit(1)
+  give 0
+}
+
+make check_pos(idx: num, src: str, work: str) -> num {
+  hold tag = concat(work, concat("/pos_", numstr(idx)))
+  hold nat_bin = concat(tag, ".nat")
+  hold nat_out = concat(tag, ".nat.out")
+  hold gen_c = concat(tag, ".c")
+  hold gen_bin = concat(tag, ".gen2")
+  hold gen_out = concat(tag, ".gen2.out")
+
+  hold rc1 = run_command(concat(concat("./selfhost/native_aot ", src), concat(" ", nat_bin)))
+  when rc1 != 0 {
+    hold f1 = fail_msg(concat("native_aot rejected valid Stage-2 fixture: ", src))
+  }
+  hold ch = run_command(concat("chmod +x ", nat_bin))
+  hold rc2 = run_command(concat(concat(nat_bin, " > "), nat_out))
+  when rc2 != 0 {
+    hold f2 = fail_msg(concat("native binary exited non-zero on: ", src))
+  }
+
+  hold rc3 = run_command(concat(concat("./selfhost/gen2 ", src), concat(" ", concat(gen_c, " >/dev/null"))))
+  when rc3 != 0 {
+    hold f3 = fail_msg(concat("gen2 failed on: ", src))
+  }
+  hold rc4 = run_command(concat(concat("cc -O2 -o ", gen_bin), concat(" ", gen_c)))
+  when rc4 != 0 {
+    hold f4 = fail_msg(concat("cc failed on gen2 C output for: ", src))
+  }
+  hold rc5 = run_command(concat(concat(gen_bin, " > "), gen_out))
+  when rc5 != 0 {
+    hold f5 = fail_msg(concat("gen2 binary exited non-zero on: ", src))
+  }
+
+  hold a = read_file(nat_out)
+  hold b = read_file(gen_out)
+  when string_eq(a, b) == 0 {
+    hold f6 = fail_msg(concat("stdout mismatch between native_aot and gen2 on: ", src))
+  }
+  show concat("  [ok] stage2 parity: ", src)
+  give 1
+}
+
+make check_refuse(idx: num, label: str, code: str, work: str) -> num {
+  hold base = concat(work, concat("/ref_", numstr(idx)))
+  hold sa = concat(base, ".sa")
+  hold bin = concat(base, ".nat")
+  hold err = concat(base, ".err")
+  hold wf = write_file(sa, code)
+  hold rc = run_command(concat(concat("./selfhost/native_aot ", sa), concat(" ", concat(bin, concat(" >", concat(err, " 2>&1"))))))
+  when rc == 0 {
+    hold f1 = fail_msg(concat("native_aot unexpectedly accepted invalid Stage-2 fixture: ", label))
+  }
+  hold msg = read_file(err)
+  when len(msg) == 0 {
+    hold f2 = fail_msg(concat("native_aot produced empty diagnostic on: ", label))
+  }
+  give 1
+}
+
+make main_run() -> num {
+  hold work = "selfhost/seed_tests/stage2_parity"
+  when arg_count() >= 2 {
+    work = arg(1)
+  }
+  hold mk = run_command(concat("rm -rf ", concat(work, concat(" && mkdir -p ", work))))
+
+  hold p = 0
+  p = p + check_pos(1, "selfhost/struct_function_tests/values.sa", work)
+  p = p + check_pos(2, "selfhost/struct_function_tests/gc.sa", work)
+  p = p + check_pos(3, "selfhost/struct_function_tests/gc_register.sa", work)
+  p = p + check_pos(4, "selfhost/interpolation_tests/values.sa", work)
+  p = p + check_pos(5, "selfhost/interpolation_tests/import.sa", work)
+  p = p + check_pos(6, "selfhost/interpolation_tests/gc.sa", work)
+  p = p + check_pos(7, "selfhost/interpolation_tests/escaped.sa", work)
+  p = p + check_pos(8, "selfhost/interpolation_tests/struct_integration.sa", work)
+  p = p + check_pos(9, "selfhost/full_language_tests/field_expression.sa", work)
+  p = p + check_pos(10, "selfhost/full_language_tests/index_call.sa", work)
+  p = p + check_pos(11, "selfhost/full_language_tests/string_interpolation.sa", work)
+  p = p + check_pos(12, "selfhost/full_language_tests/struct_function.sa", work)
+
+  hold q = chr(34)
+  hold dbrace = concat(chr(36), "{")
+  hold holes16 = ""
+  hold hi = 0
+  while hi < 16 {
+    holes16 = concat(holes16, concat(dbrace, "n}"))
+    hi = hi + 1
+  }
+  hold lim_sa = concat(work, "/limit16.sa")
+  hold lim_hdr = concat("hold n = 1\nshow ", q)
+  hold lim_ftr = concat(q, "\n")
+  hold wlim = write_file(lim_sa, concat(lim_hdr, concat(holes16, lim_ftr)))
+  p = p + check_pos(13, lim_sa, work)
+
+  hold r = 0
+  hold sh_q = concat("show ", q)
+  hold q_nl = concat(q, "\n")
+  r = r + check_refuse(1, "interp_unknown", concat(sh_q, concat(dbrace, concat("missing}", q_nl))), work)
+  r = r + check_refuse(2, "interp_empty", concat(sh_q, concat(dbrace, concat("}", q_nl))), work)
+  r = r + check_refuse(3, "interp_unclosed", concat("hold name = ", concat(q, concat("x", concat(q, concat("\nshow ", concat(q, concat(dbrace, concat("name", q_nl)))))))), work)
+  r = r + check_refuse(4, "interp_bad_id", concat(sh_q, concat(dbrace, concat("1}", q_nl))), work)
+  r = r + check_refuse(5, "interp_expr", concat("hold n = 1\n", concat(sh_q, concat(dbrace, concat("n + 1}", q_nl)))), work)
+  r = r + check_refuse(6, "interp_call", concat(sh_q, concat(dbrace, concat("arg_count()}", q_nl))), work)
+  r = r + check_refuse(7, "interp_field", concat("struct Point { x }\nhold p = Point { x: 7 }\n", concat(sh_q, concat(dbrace, concat("p.x}", q_nl)))), work)
+  r = r + check_refuse(8, "interp_list", concat("hold xs = [1, 2]\n", concat(sh_q, concat(dbrace, concat("xs}", q_nl)))), work)
+  r = r + check_refuse(9, "interp_struct", concat("struct Point { x }\nhold p = Point { x: 7 }\n", concat(sh_q, concat(dbrace, concat("p}", q_nl)))), work)
+  hold holes17 = concat(holes16, concat(dbrace, "n}"))
+  r = r + check_refuse(10, "interp_excess17", concat(lim_hdr, concat(holes17, lim_ftr)), work)
+
+  r = r + check_refuse(11, "sf_arg_scalar", "struct Point { x }\nhold w = Point { x: 0 }\nmake copy_point(p: Point) -> Point {\n  give p\n}\nhold q = copy_point(7)\n", work)
+  r = r + check_refuse(12, "sf_arg_identity", "struct Point { x }\nstruct Other { x }\nhold w = Point { x: 0 }\nhold o = Other { x: 7 }\nmake copy_point(p: Point) -> Point {\n  give p\n}\nhold q = copy_point(o)\n", work)
+  r = r + check_refuse(13, "sf_ret_scalar", "struct Point { x }\nhold w = Point { x: 0 }\nmake bad(p: Point) -> Point {\n  give 7\n}\n", work)
+  r = r + check_refuse(14, "sf_ret_identity", "struct Point { x }\nstruct Other { x }\nhold w = Point { x: 0 }\nhold o = Other { x: 0 }\nmake bad(p: Other) -> Point {\n  give p\n}\n", work)
+  r = r + check_refuse(15, "sf_scalar_ret", "struct Point { x }\nhold w = Point { x: 0 }\nmake bad(p: Point) -> num {\n  give p\n}\n", work)
+  r = r + check_refuse(16, "sf_arity_many", "struct Point { x }\nhold p = Point { x: 7 }\nmake copy_point(p: Point) -> Point {\n  give p\n}\nhold q = copy_point(p, p)\n", work)
+  r = r + check_refuse(17, "sf_arity_few", "struct Point { x }\nhold p = Point { x: 7 }\nmake copy_point(p: Point) -> Point {\n  give p\n}\nhold q = copy_point()\n", work)
+  r = r + check_refuse(18, "sf_nested_arg", "struct Point { x }\nstruct Other { x }\nhold p = Point { x: 7 }\nhold o = Other { x: 7 }\nmake copy_point(p: Point) -> Point {\n  give p\n}\nmake take_other(x: Other) -> num {\n  give x.x\n}\nhold n = take_other(copy_point(p))\n", work)
+  r = r + check_refuse(19, "sf_arith", "struct Point { x }\nhold p = Point { x: 7 }\nmake copy_point(p: Point) -> Point {\n  give p\n}\nhold n = copy_point(p) + 1\n", work)
+  r = r + check_refuse(20, "sf_unknown_param", "make bad(p: Missing) -> num {\n  give 1\n}\n", work)
+  r = r + check_refuse(21, "sf_unknown_ret", "make bad(n: num) -> Missing {\n  give n\n}\n", work)
+  r = r + check_refuse(22, "sf_unresolved_field", "struct Point { x }\nmake bad(p: Point) -> num {\n  give p.x\n}\n", work)
+  r = r + check_refuse(23, "sf_show_struct", "struct Point { x }\nhold p = Point { x: 7 }\nmake copy_point(p: Point) -> Point {\n  give p\n}\nshow copy_point(p)\n", work)
+
+  show concat("[OK] stage2 native parity: ", concat(numstr(p), concat(" positive fixtures + ", concat(numstr(r), " refusals verified"))))
+  give 0
+}
+
+hold z = main_run()

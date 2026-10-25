@@ -1,0 +1,1898 @@
+// tools/sxenc_lib.sa -- shared x86-64 machine-code encoder, label/fixup table,
+// builtin-offset table, SX_ENCODE_LOG / SX_EMIT_LOG recorders, and splicer
+// helpers for tools/sxruntime.sa, tools/sxgc.sa, tools/sxemit.sa, and
+// selfhost/native_aot.sa.
+//
+// State layout in `st: list`:
+//   [0]               base_cn (starting code offset in code.bin; 0 for full AOT)
+//   [1]               nlbl    (current label id counter; reset_labels sets to 0)
+//   [2]               lbl_hi  (max nlbl seen since init)
+//   [3]               nfix    (queued label rel32 sites)
+//   [4]               npc     (call_p records: max 8192)
+//   [5]               elog_on (1 when SX_ENCODE_LOG is active)
+//   [6]               ilog_on (1 when SX_EMIT_LOG is active)
+//   [7]               cn      (local code bytes emitted so far)
+//   [8]               npr     (lea_r12_data records: max 4096)
+//   [9]               elog_n  (bytes written into elog region)
+//   [10 .. 49]        builtin_off[0..39] (-1 if not defined yet)
+//   [100 .. 195]      lbl_pos[0..95] (local offset, -1 unbound)
+//   [200 .. 7111]     fix_slot: 3 numbers per site (label, local_at, width)
+//   [7200 .. 31775]   call_slot: 3 numbers per call (global_at_after_e8, kind, idx)
+//   [31776 .. 35871]  r12_slot: 1 number per lea_r12_data (global_at_of_disp32)
+//   [36000 ..]        code bytes (in unlogged mode: 36000..36000+cn-1;
+//                     in logged mode: 36000..298143 code, 298144..1799999 elog,
+//                     1800000.. ilog appended via push)
+
+make enc_meta() -> num {
+  give 36000
+}
+
+make istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold n = v
+  when n < 0 {
+    neg = 1
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make make_enc_state(base_cn: num) -> list {
+  hold st = []
+  hold i = 0
+  hold neg1 = 0 - 1
+  while i < 36000 {
+    st = push(st, 0)
+    i = i + 1
+  }
+  st[0] = base_cn
+  st[1] = 0
+  st[2] = 0
+  st[3] = 0
+  st[4] = 0
+  st[5] = 0
+  st[6] = 0
+  st[7] = 0
+  st[8] = 0
+  st[9] = 0
+  st[50] = 36000
+  st[51] = 8192
+  st[52] = 31776
+  st[53] = 4096
+  st[54] = 524288
+  st[55] = 560288
+  st[56] = 2100000
+  i = 0
+  while i < 40 {
+    hold bs = 10 + i
+    st[bs] = neg1
+    i = i + 1
+  }
+  i = 0
+  while i < 96 {
+    hold ls = 100 + i
+    st[ls] = neg1
+    i = i + 1
+  }
+  give st
+}
+
+make new_full_enc_state(base_cn: num) -> list {
+  hold st = []
+  hold i = 0
+  hold neg1 = 0 - 1
+  while i < 250000 {
+    st = push(st, 0)
+    i = i + 1
+  }
+  st[0] = base_cn
+  st[1] = 0
+  st[2] = 0
+  st[3] = 0
+  st[4] = 0
+  st[5] = 0
+  st[6] = 0
+  st[7] = 0
+  st[8] = 0
+  st[9] = 0
+  st[50] = 250000
+  st[51] = 65536
+  st[52] = 204000
+  st[53] = 32768
+  st[54] = 2097152
+  st[55] = 2350000
+  st[56] = 6500000
+  i = 0
+  while i < 40 {
+    hold bs = 10 + i
+    st[bs] = neg1
+    i = i + 1
+  }
+  i = 60
+  while i < 96 {
+    st[i] = neg1
+    i = i + 1
+  }
+  i = 0
+  while i < 96 {
+    hold ls = 100 + i
+    st[ls] = neg1
+    i = i + 1
+  }
+  give st
+}
+
+make here_local(st: list) -> num {
+  give st[7]
+}
+
+make here_global(st: list) -> num {
+  give st[0] + st[7]
+}
+
+make enc_code_at(st: list, i: num) -> num {
+  hold mbase = st[50]
+  hold idx = mbase + i
+  give st[idx]
+}
+
+make enc_call_at(st: list, k: num) -> num {
+  hold cs = 7200 + 3 * k
+  give st[cs]
+}
+
+make enc_call_kind(st: list, k: num) -> num {
+  hold cs = 7200 + 3 * k + 1
+  give st[cs]
+}
+
+make enc_call_idx(st: list, k: num) -> num {
+  hold cs = 7200 + 3 * k + 2
+  give st[cs]
+}
+
+make enc_r12_at(st: list, k: num) -> num {
+  hold rbase = st[52]
+  hold rs = rbase + k
+  give st[rs]
+}
+
+// ---- log helpers (SX_ENCODE_LOG / SX_EMIT_LOG) ----------------------------
+
+make elog_str_mut(st: list, s: str) -> num {
+  hold n = len(s)
+  hold cur = st[9]
+  hold ebase = st[55]
+  hold ibase = st[56]
+  when ebase + cur + n + 1 >= ibase {
+    hold oom = fail(1, "encode log OOM")
+  }
+  hold i = 0
+  while i < n {
+    hold dst = ebase + cur + i
+    st[dst] = sx_index(s, i)
+    i = i + 1
+  }
+  hold nl = ebase + cur + n
+  st[nl] = 10
+  st[9] = cur + n + 1
+  give 0
+}
+
+make elog_line(st: list, s: str) -> list {
+  when st[5] == 1 {
+    hold z = elog_str_mut(st, s)
+  }
+  give st
+}
+
+make ilog_push_str(st: list, s: str) -> list {
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    st = push(st, sx_index(s, i))
+    i = i + 1
+  }
+  give st
+}
+
+make hex_ch_lo(d: num) -> str {
+  when d < 10 {
+    give chr(48 + d)
+  }
+  give chr(87 + d)
+}
+
+make hex_u32_nopad(v: num) -> str {
+  when v <= 0 {
+    give "0"
+  }
+  hold out = ""
+  hold x = v
+  while x > 0 {
+    hold nib = bit_and(x, 15)
+    out = concat(hex_ch_lo(nib), out)
+    x = shr(x, 4)
+  }
+  give out
+}
+
+make hex_u32_pad8(v: num) -> str {
+  hold out = ""
+  hold x = v
+  hold i = 0
+  while i < 8 {
+    hold nib = bit_and(x, 15)
+    out = concat(hex_ch_lo(nib), out)
+    x = shr(x, 4)
+    i = i + 1
+  }
+  give out
+}
+
+make hex_off6(v: num) -> str {
+  hold s = hex_u32_nopad(v)
+  while len(s) < 6 {
+    s = concat("0", s)
+  }
+  give s
+}
+
+make hex_0x_hl(hi: num, lo: num) -> str {
+  when hi == 0 {
+    give concat("0x", hex_u32_nopad(lo))
+  }
+  give concat("0x", concat(hex_u32_nopad(hi), hex_u32_pad8(lo)))
+}
+
+make ilog_inst(st: list, s: str) -> list {
+  when st[6] == 1 {
+    st = ilog_push_str(st, hex_off6(here_global(st)))
+    st = push(st, 32)
+    st = push(st, 32)
+    st = ilog_push_str(st, s)
+    st = push(st, 10)
+  }
+  give st
+}
+
+make ilogc(st: list, s: str) -> list {
+  when st[6] == 1 {
+    st = ilog_push_str(st, ";       ")
+    st = ilog_push_str(st, s)
+    st = push(st, 10)
+  }
+  give st
+}
+
+make enable_enc_logs(st: list, elog_on: num, ilog_on: num, in_path: str) -> list {
+  when elog_on == 0 && ilog_on == 0 {
+    give st
+  }
+  hold ibase = st[56]
+  while len(st) < ibase {
+    st = push(st, 0)
+  }
+  st[5] = elog_on
+  st[6] = ilog_on
+  when elog_on == 1 {
+    hold z = elog_str_mut(st, concat("; native_aot encode log for ", in_path))
+  }
+  when ilog_on == 1 {
+    st = ilog_push_str(st, concat("; native_aot instruction list for ", in_path))
+    st = push(st, 10)
+    st = ilog_push_str(st, "; offset  instruction")
+    st = push(st, 10)
+  }
+  give st
+}
+
+make extract_elog_bytes(st: list) -> list {
+  hold bs = []
+  hold n = st[9]
+  hold ebase = st[55]
+  hold i = 0
+  while i < n {
+    hold idx = ebase + i
+    bs = push(bs, st[idx])
+    i = i + 1
+  }
+  give bs
+}
+
+make extract_ilog_bytes(st: list) -> list {
+  hold bs = []
+  hold end = len(st)
+  hold i = st[56]
+  while i < end {
+    bs = push(bs, st[i])
+    i = i + 1
+  }
+  give bs
+}
+
+// ---- register / mnemonic tables for SX_EMIT_LOG ---------------------------
+
+make rn_str(r: num) -> str {
+  when r == 0 {
+    give "rax"
+  }
+  when r == 1 {
+    give "rcx"
+  }
+  when r == 2 {
+    give "rdx"
+  }
+  when r == 3 {
+    give "rbx"
+  }
+  when r == 4 {
+    give "rsp"
+  }
+  when r == 5 {
+    give "rbp"
+  }
+  when r == 6 {
+    give "rsi"
+  }
+  when r == 7 {
+    give "rdi"
+  }
+  when r == 8 {
+    give "r8"
+  }
+  when r == 9 {
+    give "r9"
+  }
+  when r == 10 {
+    give "r10"
+  }
+  when r == 11 {
+    give "r11"
+  }
+  when r == 12 {
+    give "r12"
+  }
+  when r == 13 {
+    give "r13"
+  }
+  when r == 14 {
+    give "r14"
+  }
+  when r == 15 {
+    give "r15"
+  }
+  give "r?"
+}
+
+make r32n_str(r: num) -> str {
+  when r == 0 {
+    give "eax"
+  }
+  when r == 1 {
+    give "ecx"
+  }
+  when r == 2 {
+    give "edx"
+  }
+  when r == 3 {
+    give "ebx"
+  }
+  when r == 4 {
+    give "esp"
+  }
+  when r == 5 {
+    give "ebp"
+  }
+  when r == 6 {
+    give "esi"
+  }
+  when r == 7 {
+    give "edi"
+  }
+  when r == 8 {
+    give "r8d"
+  }
+  when r == 9 {
+    give "r9d"
+  }
+  when r == 10 {
+    give "r10d"
+  }
+  when r == 11 {
+    give "r11d"
+  }
+  when r == 12 {
+    give "r12d"
+  }
+  when r == 13 {
+    give "r13d"
+  }
+  when r == 14 {
+    give "r14d"
+  }
+  when r == 15 {
+    give "r15d"
+  }
+  give "r32?"
+}
+
+make xn_str(x: num) -> str {
+  when x >= 0 && x < 8 {
+    give concat("xmm", istr(x))
+  }
+  give "xmm?"
+}
+
+make binname_str(op: num) -> str {
+  when op == 1 || op == 3 {
+    give "add"
+  }
+  when op == 9 {
+    give "or"
+  }
+  when op == 33 {
+    give "and"
+  }
+  when op == 41 || op == 43 {
+    give "sub"
+  }
+  when op == 49 {
+    give "xor"
+  }
+  when op == 57 {
+    give "cmp"
+  }
+  hold hx = hex_u32_nopad(op)
+  when len(hx) < 2 {
+    hx = concat("0", hx)
+  }
+  give concat("bin", hx)
+}
+
+make ccname_str(c: num) -> str {
+  when c == 0 {
+    give "o"
+  }
+  when c == 1 {
+    give "no"
+  }
+  when c == 2 {
+    give "b"
+  }
+  when c == 3 {
+    give "ae"
+  }
+  when c == 4 {
+    give "e"
+  }
+  when c == 5 {
+    give "ne"
+  }
+  when c == 6 {
+    give "be"
+  }
+  when c == 7 {
+    give "a"
+  }
+  when c == 8 {
+    give "s"
+  }
+  when c == 9 {
+    give "ns"
+  }
+  when c == 10 {
+    give "p"
+  }
+  when c == 11 {
+    give "np"
+  }
+  when c == 12 {
+    give "l"
+  }
+  when c == 13 {
+    give "ge"
+  }
+  when c == 14 {
+    give "le"
+  }
+  when c == 15 {
+    give "g"
+  }
+  give concat("cc", istr(c))
+}
+
+make grp1name_str(d: num) -> str {
+  when d == 0 {
+    give "add"
+  }
+  when d == 1 {
+    give "or"
+  }
+  when d == 2 {
+    give "adc"
+  }
+  when d == 3 {
+    give "sbb"
+  }
+  when d == 4 {
+    give "and"
+  }
+  when d == 5 {
+    give "sub"
+  }
+  when d == 6 {
+    give "xor"
+  }
+  when d == 7 {
+    give "cmp"
+  }
+  give concat("grp1_", istr(d))
+}
+
+make fm7name_str(sub: num) -> str {
+  when sub == 0 || sub == 1 {
+    give "test"
+  }
+  when sub == 2 {
+    give "not"
+  }
+  when sub == 3 {
+    give "neg"
+  }
+  when sub == 4 {
+    give "mul"
+  }
+  when sub == 5 {
+    give "imul"
+  }
+  when sub == 6 {
+    give "div"
+  }
+  when sub == 7 {
+    give "idiv"
+  }
+  give "f7?"
+}
+
+make bname_str(i: num) -> str {
+  when i == 0 {
+    give "malloc"
+  }
+  when i == 1 {
+    give "strlen"
+  }
+  when i == 2 {
+    give "cmpstr"
+  }
+  when i == 3 {
+    give "concat"
+  }
+  when i == 4 {
+    give "n2str"
+  }
+  when i == 5 {
+    give "putstr"
+  }
+  when i == 6 {
+    give "wcstr"
+  }
+  when i == 7 {
+    give "itono"
+  }
+  when i == 8 {
+    give "itowrite"
+  }
+  when i == 9 {
+    give "showlist"
+  }
+  when i == 10 {
+    give "mlist"
+  }
+  when i == 11 {
+    give "lget"
+  }
+  when i == 12 {
+    give "llen"
+  }
+  when i == 13 {
+    give "lpush"
+  }
+  when i == 14 {
+    give "sget"
+  }
+  when i == 15 {
+    give "chr"
+  }
+  when i == 16 {
+    give "readfile"
+  }
+  when i == 17 {
+    give "writefile"
+  }
+  when i == 18 {
+    give "arg"
+  }
+  when i == 19 {
+    give "argc"
+  }
+  when i == 20 {
+    give "die"
+  }
+  when i == 21 {
+    give "nfmt"
+  }
+  when i == 22 {
+    give "shownum"
+  }
+  when i == 23 {
+    give "gc"
+  }
+  when i == 24 {
+    give "gc_live"
+  }
+  when i == 25 {
+    give "gc_runs"
+  }
+  when i == 26 {
+    give "findblock"
+  }
+  when i == 27 {
+    give "mark"
+  }
+  when i == 28 {
+    give "gccheck"
+  }
+  when i == 29 {
+    give "strord"
+  }
+  when i == 30 {
+    give "lset"
+  }
+  when i == 31 {
+    give "writebytes"
+  }
+  when i == 32 {
+    give "readbytes"
+  }
+  when i == 33 {
+    give "getenv"
+  }
+  when i == 34 {
+    give "pathkind"
+  }
+  when i == 35 {
+    give "runcmd"
+  }
+  when i == 36 {
+    give "bytesf64"
+  }
+  give concat("id", istr(i))
+}
+
+make imem_str(base: num, idx: num, scale: num, disp: num) -> str {
+  hold out = ""
+  when base >= 0 {
+    out = rn_str(base)
+  }
+  when idx >= 0 {
+    when len(out) > 0 {
+      out = concat(out, "+")
+    }
+    out = concat(out, concat(rn_str(idx), concat("*", istr(shl(1, scale)))))
+  }
+  when disp > 0 {
+    when len(out) > 0 {
+      out = concat(out, "+")
+    }
+    out = concat(out, istr(disp))
+  }
+  when disp < 0 {
+    when len(out) > 0 {
+      out = concat(out, "+")
+    }
+    out = concat(out, concat("-", istr(0 - disp)))
+  }
+  when len(out) == 0 {
+    out = "0"
+  }
+  give out
+}
+
+// ---- byte emission & patching ---------------------------------------------
+
+make set_builtin(st: list, b_id: num) -> list {
+  hold slot = 10 + b_id
+  when b_id >= 40 {
+    slot = 60 + (b_id - 40)
+  }
+  st[slot] = here_global(st)
+  give st
+}
+
+make reset_labels(st: list) -> list {
+  st[1] = 0
+  st[3] = 0
+  give st
+}
+
+make low32(v: num) -> num {
+  hold u = v
+  while u < 0 {
+    u = u + 4294967296
+  }
+  while u >= 4294967296 {
+    u = u - 4294967296
+  }
+  give u
+}
+
+make signed32(v: num) -> num {
+  hold u = low32(v)
+  when u >= 2147483648 {
+    give u - 4294967296
+  }
+  give u
+}
+
+make signed8(v: num) -> num {
+  hold u = bit_and(low32(v), 255)
+  when u >= 128 {
+    give u - 256
+  }
+  give u
+}
+
+make e1(st: list, b: num) -> list {
+  hold u = bit_and(low32(b), 255)
+  when st[5] == 0 && st[6] == 0 {
+    st = push(st, u)
+    st[7] = st[7] + 1
+    give st
+  }
+  hold cn = st[7]
+  hold ccap = st[54]
+  when cn >= ccap {
+    hold oom = fail(1, "code OOM")
+  }
+  hold mbase = st[50]
+  hold dst = mbase + cn
+  st[dst] = u
+  st[7] = cn + 1
+  when st[5] == 1 {
+    hold z = elog_str_mut(st, concat("b ", istr(u)))
+  }
+  give st
+}
+
+make e16(st: list, v: num) -> list {
+  hold u = low32(v)
+  st = e1(st, bit_and(u, 255))
+  st = e1(st, shr(u, 8))
+  give st
+}
+
+make e32(st: list, v: num) -> list {
+  hold u = low32(v)
+  st = e16(st, bit_and(u, 65535))
+  st = e16(st, shr(u, 16))
+  give st
+}
+
+make patch_local_i32(st: list, local_at: num, v: num) -> list {
+  hold mbase = st[50]
+  hold base = mbase + local_at
+  hold u = low32(v)
+  st[base] = bit_and(u, 255)
+  st[base + 1] = bit_and(shr(u, 8), 255)
+  st[base + 2] = bit_and(shr(u, 16), 255)
+  st[base + 3] = bit_and(shr(u, 24), 255)
+  give st
+}
+
+// erel32(at, to) for a 6-byte 0F 8x rel32 (both local offsets)
+make erel32(st: list, at: num, to: num) -> list {
+  hold gat = st[0] + at
+  hold gto = st[0] + to
+  hold d = signed32(to - (at + 6))
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("erel32 ", istr(gat)), concat(" ", istr(gto))))
+  }
+  when st[6] == 1 {
+    hold msg = concat("fixup rel32 [", hex_off6(gat))
+    msg = concat(msg, "] -> ")
+    msg = concat(msg, hex_off6(gto))
+    msg = concat(msg, " (")
+    msg = concat(msg, istr(d))
+    msg = concat(msg, ")")
+    st = ilogc(st, msg)
+  }
+  give patch_local_i32(st, at + 2, d)
+}
+
+// erel32j(at, to) for a 5-byte E9 rel32 (both local offsets)
+make erel32j(st: list, at: num, to: num) -> list {
+  hold gat = st[0] + at
+  hold gto = st[0] + to
+  hold d = signed32(to - (at + 5))
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("erel32j ", istr(gat)), concat(" ", istr(gto))))
+  }
+  when st[6] == 1 {
+    hold msg = concat("fixup jmp rel32 [", hex_off6(gat))
+    msg = concat(msg, "] -> ")
+    msg = concat(msg, hex_off6(gto))
+    msg = concat(msg, " (")
+    msg = concat(msg, istr(d))
+    msg = concat(msg, ")")
+    st = ilogc(st, msg)
+  }
+  give patch_local_i32(st, at + 1, d)
+}
+
+// raw_patch32(jmp_at + 1, end - (jmp_at + 5))
+make raw_patch32(st: list, at: num, v: num) -> list {
+  hold gat = st[0] + at
+  hold sv = signed32(v)
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("raw_patch32 ", istr(gat)), concat(" ", istr(sv))))
+  }
+  give patch_local_i32(st, at, sv)
+}
+
+make patch_imm32(st: list, at: num, v: num) -> list {
+  hold gat = st[0] + at
+  hold sv = signed32(v)
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("patch_imm32 ", istr(gat)), concat(" ", istr(sv))))
+  }
+  when st[6] == 1 {
+    hold msg = concat("patch imm32 [", hex_off6(gat))
+    msg = concat(msg, "] <- ")
+    msg = concat(msg, istr(sv))
+    st = ilogc(st, msg)
+  }
+  give patch_local_i32(st, at, sv)
+}
+
+make leave_ret(st: list) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, "leave_ret")
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, "leave")
+    st = ilog_inst(st, "ret")
+  }
+  st = e1(st, 201)
+  st = e1(st, 195)
+  give st
+}
+
+// Emits `sub rsp, imm32 (placeholder)` and leaves the 4-byte imm32 slot at here_local(st) - 4.
+make sub_rsp_imm32_slot(st: list) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, "sub_rsp_slot")
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, "sub rsp,<imm32 slot>")
+  }
+  st = e1(st, 72)
+  st = e1(st, 129)
+  st = e1(st, 236)
+  hold gat = here_global(st)
+  st = e32(st, 0)
+  when st[6] == 1 {
+    st = ilogc(st, concat("slot sub rsp imm32 at ", hex_off6(gat)))
+  }
+  give st
+}
+
+// Emits `jmp rel32 (placeholder)` and leaves the 5-byte instruction start at here_local(st) - 5.
+make jmp5_slot(st: list) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, "jmp5_slot")
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, "jmp <rel32 slot>")
+  }
+  hold gat = here_global(st)
+  st = e1(st, 233)
+  st = e32(st, 0)
+  when st[6] == 1 {
+    st = ilogc(st, concat("slot jmp rel32 at ", hex_off6(gat)))
+  }
+  give st
+}
+
+// ---- REX, ModRM, SIB, SSE2 ------------------------------------------------
+
+make rexb(st: list, W: num, R: num, X: num, B: num) -> list {
+  when W != 0 || R != 0 || X != 0 || B != 0 {
+    hold b = 64
+    when W != 0 {
+      b = bit_or(b, 8)
+    }
+    when R != 0 {
+      b = bit_or(b, 4)
+    }
+    when X != 0 {
+      b = bit_or(b, 2)
+    }
+    when B != 0 {
+      b = bit_or(b, 1)
+    }
+    st = e1(st, b)
+  }
+  give st
+}
+
+make emit_modrm(st: list, reg: num, rm: num, scale: num, idx: num, disp: num) -> list {
+  hold need_sib = 0
+  when bit_and(rm, 7) == 4 {
+    need_sib = 1
+  }
+  when idx >= 0 {
+    need_sib = 1
+  }
+  hold m = 0
+  when disp != 0 - 1 {
+    when disp >= 0 - 128 && disp <= 127 {
+      m = 1
+    } otherwise {
+      m = 2
+    }
+  }
+  hold rmv = bit_and(rm, 7)
+  when need_sib == 1 {
+    rmv = 4
+  }
+  hold byte = bit_or(shl(m, 6), bit_or(shl(bit_and(reg, 7), 3), rmv))
+  st = e1(st, byte)
+  when need_sib == 1 {
+    hold ii = 4
+    when idx >= 0 {
+      ii = idx
+    }
+    hold sib = bit_or(shl(scale, 6), bit_or(shl(bit_and(ii, 7), 3), bit_and(rm, 7)))
+    st = e1(st, sib)
+  }
+  when disp != 0 - 1 {
+    when m == 1 {
+      st = e1(st, disp)
+    } otherwise {
+      st = e32(st, disp)
+    }
+  }
+  give st
+}
+
+make sse_rr(st: list, pfx: num, op: num, W: num, reg: num, rm: num) -> list {
+  hold mod = bit_or(192, bit_or(shl(bit_and(reg, 7), 3), bit_and(rm, 7)))
+  st = e1(st, pfx)
+  st = rexb(st, W, reg > 7, 0, rm > 7)
+  st = e1(st, 15)
+  st = e1(st, op)
+  st = e1(st, mod)
+  give st
+}
+
+// ---- instructions ---------------------------------------------------------
+
+make mv_rr(st: list, d: num, s: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("mv_rr ", istr(d)), concat(" ", istr(s))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("mov ", rn_str(d)), concat(",", rn_str(s))))
+  }
+  hold mod = bit_or(192, bit_or(shl(bit_and(s, 7), 3), bit_and(d, 7)))
+  st = rexb(st, 1, s > 7, 0, d > 7)
+  st = e1(st, 137)
+  st = e1(st, mod)
+  give st
+}
+
+make mv_m64(st: list, base: num, idx: num, scale: num, disp: num, s: num) -> list {
+  when st[5] == 1 {
+    hold el = concat("mv_m64 ", istr(base))
+    el = concat(el, concat(" ", istr(idx)))
+    el = concat(el, concat(" ", istr(scale)))
+    el = concat(el, concat(" ", istr(disp)))
+    el = concat(el, concat(" ", istr(s)))
+    st = elog_line(st, el)
+  }
+  when st[6] == 1 {
+    hold mb = imem_str(base, idx, scale, disp)
+    st = ilog_inst(st, concat(concat("mov [", mb), concat("],", rn_str(s))))
+  }
+  st = rexb(st, 1, s > 7, idx > 7, base > 7)
+  st = e1(st, 137)
+  st = emit_modrm(st, s, base, scale, idx, disp)
+  give st
+}
+
+make mv_r64m(st: list, d: num, base: num, idx: num, scale: num, disp: num) -> list {
+  when st[5] == 1 {
+    hold el = concat("mv_r64m ", istr(d))
+    el = concat(el, concat(" ", istr(base)))
+    el = concat(el, concat(" ", istr(idx)))
+    el = concat(el, concat(" ", istr(scale)))
+    el = concat(el, concat(" ", istr(disp)))
+    st = elog_line(st, el)
+  }
+  when st[6] == 1 {
+    hold mb = imem_str(base, idx, scale, disp)
+    st = ilog_inst(st, concat(concat("mov ", rn_str(d)), concat(concat(",[", mb), "]")))
+  }
+  st = rexb(st, 1, d > 7, idx > 7, base > 7)
+  st = e1(st, 139)
+  st = emit_modrm(st, d, base, scale, idx, disp)
+  give st
+}
+
+make lea_rm(st: list, d: num, base: num, idx: num, scale: num, disp: num) -> list {
+  when st[5] == 1 {
+    hold el = concat("lea_rm ", istr(d))
+    el = concat(el, concat(" ", istr(base)))
+    el = concat(el, concat(" ", istr(idx)))
+    el = concat(el, concat(" ", istr(scale)))
+    el = concat(el, concat(" ", istr(disp)))
+    st = elog_line(st, el)
+  }
+  when st[6] == 1 {
+    hold mb = imem_str(base, idx, scale, disp)
+    st = ilog_inst(st, concat(concat("lea ", rn_str(d)), concat(concat(",[", mb), "]")))
+  }
+  st = rexb(st, 1, d > 7, idx > 7, base > 7)
+  st = e1(st, 141)
+  st = emit_modrm(st, d, base, scale, idx, disp)
+  give st
+}
+
+make mov_imm64_hl(st: list, r: num, hi: num, lo: num) -> list {
+  hold uhi = low32(hi)
+  hold ulo = low32(lo)
+  when st[5] == 1 {
+    hold el = concat("mov_imm64 ", istr(r))
+    el = concat(el, concat(" ", istr(uhi)))
+    el = concat(el, concat(" ", istr(ulo)))
+    st = elog_line(st, el)
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("mov ", rn_str(r)), concat(",", hex_0x_hl(uhi, ulo))))
+  }
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 184 + bit_and(r, 7))
+  st = e32(st, ulo)
+  st = e32(st, uhi)
+  give st
+}
+
+make mov_imm64(st: list, r: num, lo: num) -> list {
+  give mov_imm64_hl(st, r, 0, lo)
+}
+
+make mov_imm8m(st: list, base: num, idx: num, scale: num, disp: num, v: num) -> list {
+  hold uv = bit_and(low32(v), 255)
+  when st[5] == 1 {
+    hold el = concat("mov_imm8m ", istr(base))
+    el = concat(el, concat(" ", istr(idx)))
+    el = concat(el, concat(" ", istr(scale)))
+    el = concat(el, concat(" ", istr(disp)))
+    el = concat(el, concat(" ", istr(uv)))
+    st = elog_line(st, el)
+  }
+  when st[6] == 1 {
+    hold mb = imem_str(base, idx, scale, disp)
+    st = ilog_inst(st, concat(concat("mov byte [", mb), concat("],", istr(uv))))
+  }
+  st = rexb(st, 0, 0, idx > 7, base > 7)
+  st = e1(st, 198)
+  st = emit_modrm(st, 0, base, scale, idx, disp)
+  st = e1(st, uv)
+  give st
+}
+
+make mvz_rm(st: list, d: num, base: num, idx: num, scale: num, disp: num) -> list {
+  when st[5] == 1 {
+    hold el = concat("mvz_rm ", istr(d))
+    el = concat(el, concat(" ", istr(base)))
+    el = concat(el, concat(" ", istr(idx)))
+    el = concat(el, concat(" ", istr(scale)))
+    el = concat(el, concat(" ", istr(disp)))
+    st = elog_line(st, el)
+  }
+  when st[6] == 1 {
+    hold mb = imem_str(base, idx, scale, disp)
+    st = ilog_inst(st, concat(concat("movzx ", r32n_str(d)), concat(concat(",byte [", mb), "]")))
+  }
+  st = rexb(st, 0, d > 7, idx > 7, base > 7)
+  st = e1(st, 15)
+  st = e1(st, 182)
+  st = emit_modrm(st, d, base, scale, idx, disp)
+  give st
+}
+
+make bin_rr(st: list, op: num, d: num, s: num) -> list {
+  when st[5] == 1 {
+    hold el = concat("bin_rr ", istr(op))
+    el = concat(el, concat(" ", istr(d)))
+    el = concat(el, concat(" ", istr(s)))
+    st = elog_line(st, el)
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat(binname_str(op), " "), concat(rn_str(d), concat(",", rn_str(s)))))
+  }
+  hold mod = bit_or(192, bit_or(shl(bit_and(s, 7), 3), bit_and(d, 7)))
+  st = rexb(st, 1, s > 7, 0, d > 7)
+  st = e1(st, op)
+  st = e1(st, mod)
+  give st
+}
+
+make bin_imm8(st: list, op: num, r: num, v: num) -> list {
+  hold uv = bit_and(low32(v), 255)
+  when st[5] == 1 {
+    hold el = concat("bin_imm8 ", istr(op))
+    el = concat(el, concat(" ", istr(r)))
+    el = concat(el, concat(" ", istr(uv)))
+    st = elog_line(st, el)
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat(grp1name_str(op), " "), concat(rn_str(r), concat(",", istr(signed8(uv))))))
+  }
+  hold mod = bit_or(192, bit_or(shl(bit_and(op, 7), 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 131)
+  st = e1(st, mod)
+  st = e1(st, uv)
+  give st
+}
+
+make bin_imm32(st: list, op: num, r: num, v: num) -> list {
+  hold uv = low32(v)
+  when st[5] == 1 {
+    hold el = concat("bin_imm32 ", istr(op))
+    el = concat(el, concat(" ", istr(r)))
+    el = concat(el, concat(" ", istr(uv)))
+    st = elog_line(st, el)
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat(grp1name_str(op), " "), concat(rn_str(r), concat(",", istr(signed32(uv))))))
+  }
+  hold mod = bit_or(192, bit_or(shl(bit_and(op, 7), 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 129)
+  st = e1(st, mod)
+  st = e32(st, uv)
+  give st
+}
+
+make fm7(st: list, sub: num, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("fm7 ", istr(sub)), concat(" ", istr(r))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat(fm7name_str(sub), " "), rn_str(r)))
+  }
+  hold mod = bit_or(192, bit_or(shl(bit_and(sub, 7), 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 247)
+  st = e1(st, mod)
+  give st
+}
+
+make test_rr(st: list, a: num, b: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("test_rr ", istr(a)), concat(" ", istr(b))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("test ", rn_str(a)), concat(",", rn_str(b))))
+  }
+  hold mod = bit_or(192, bit_or(shl(bit_and(b, 7), 3), bit_and(a, 7)))
+  st = rexb(st, 1, b > 7, 0, a > 7)
+  st = e1(st, 133)
+  st = e1(st, mod)
+  give st
+}
+
+make xor_rr(st: list, a: num, b: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("xor_rr ", istr(a)), concat(" ", istr(b))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("xor ", rn_str(a)), concat(",", rn_str(b))))
+  }
+  hold mod = bit_or(192, bit_or(shl(bit_and(b, 7), 3), bit_and(a, 7)))
+  st = rexb(st, 1, b > 7, 0, a > 7)
+  st = e1(st, 49)
+  st = e1(st, mod)
+  give st
+}
+
+make incdec_r(st: list, inc: num, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("incdec_r ", istr(inc)), concat(" ", istr(r))))
+  }
+  when st[6] == 1 {
+    hold mn = "dec "
+    when inc != 0 {
+      mn = "inc "
+    }
+    st = ilog_inst(st, concat(mn, rn_str(r)))
+  }
+  hold sub = 1
+  when inc != 0 {
+    sub = 0
+  }
+  hold mod = bit_or(192, bit_or(shl(sub, 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 255)
+  st = e1(st, mod)
+  give st
+}
+
+make inc_mem_r(st: list, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat("inc_mem_r ", istr(r)))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("inc [", rn_str(r)), "]"))
+  }
+  hold mod = bit_or(64, bit_and(r, 7))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 255)
+  st = e1(st, mod)
+  st = e1(st, 0)
+  give st
+}
+
+make push_r(st: list, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat("push_r ", istr(r)))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat("push ", rn_str(r)))
+  }
+  when r > 7 {
+    st = e1(st, 73)
+  }
+  st = e1(st, 80 + bit_and(r, 7))
+  give st
+}
+
+make pop_r(st: list, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat("pop_r ", istr(r)))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat("pop ", rn_str(r)))
+  }
+  when r > 7 {
+    st = e1(st, 73)
+  }
+  st = e1(st, 88 + bit_and(r, 7))
+  give st
+}
+
+make jcc_rel32(st: list, c: num, d: num) -> list {
+  hold sd = signed32(d)
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("jcc_rel32 ", istr(c)), concat(" ", istr(sd))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("j", ccname_str(c)), concat(concat(" rel32(", istr(sd)), ")")))
+  }
+  st = e1(st, 15)
+  st = e1(st, 128 + c)
+  st = e32(st, sd)
+  give st
+}
+
+make jmp_rel32(st: list, d: num) -> list {
+  hold sd = signed32(d)
+  when st[5] == 1 {
+    st = elog_line(st, concat("jmp_rel32 ", istr(sd)))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("jmp rel32(", istr(sd)), ")"))
+  }
+  st = e1(st, 233)
+  st = e32(st, sd)
+  give st
+}
+
+make setcc(st: list, c: num, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("setcc ", istr(c)), concat(" ", istr(r))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("set", ccname_str(c)), concat(" ", r32n_str(r))))
+  }
+  hold mod = bit_or(192, bit_and(r, 7))
+  st = rexb(st, 0, 0, 0, r > 7)
+  st = e1(st, 15)
+  st = e1(st, 144 + c)
+  st = e1(st, mod)
+  give st
+}
+
+make movzx_al_to_rax(st: list) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, "movzx_al_to_rax")
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, "movzx rax,al")
+  }
+  st = rexb(st, 1, 0, 0, 0)
+  st = e1(st, 15)
+  st = e1(st, 182)
+  st = e1(st, 192)
+  give st
+}
+
+make sar_imm(st: list, r: num, v: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("sar_imm ", istr(r)), concat(" ", istr(v))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("sar ", rn_str(r)), concat(",", istr(v))))
+  }
+  hold mod = bit_or(192, bit_or(shl(7, 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 193)
+  st = e1(st, mod)
+  st = e1(st, v)
+  give st
+}
+
+make shl_imm(st: list, r: num, v: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("shl_imm ", istr(r)), concat(" ", istr(v))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("shl ", rn_str(r)), concat(",", istr(v))))
+  }
+  hold mod = bit_or(192, bit_or(shl(4, 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 193)
+  st = e1(st, mod)
+  st = e1(st, v)
+  give st
+}
+
+make shr_imm(st: list, r: num, v: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("shr_imm ", istr(r)), concat(" ", istr(v))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("shr ", rn_str(r)), concat(",", istr(v))))
+  }
+  hold mod = bit_or(192, bit_or(shl(5, 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 193)
+  st = e1(st, mod)
+  st = e1(st, v)
+  give st
+}
+
+make shl_cl(st: list, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat("shl_cl ", istr(r)))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("shl ", rn_str(r)), ",cl"))
+  }
+  hold mod = bit_or(192, bit_or(shl(4, 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 211)
+  st = e1(st, mod)
+  give st
+}
+
+make shr_cl(st: list, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat("shr_cl ", istr(r)))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("shr ", rn_str(r)), ",cl"))
+  }
+  hold mod = bit_or(192, bit_or(shl(5, 3), bit_and(r, 7)))
+  st = rexb(st, 1, 0, 0, r > 7)
+  st = e1(st, 211)
+  st = e1(st, mod)
+  give st
+}
+
+make movq_xr(st: list, x: num, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("movq_xr ", istr(x)), concat(" ", istr(r))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("movq ", xn_str(x)), concat(",", rn_str(r))))
+  }
+  give sse_rr(st, 102, 110, 1, x, r)
+}
+
+make movq_rx(st: list, r: num, x: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("movq_rx ", istr(r)), concat(" ", istr(x))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("movq ", rn_str(r)), concat(",", xn_str(x))))
+  }
+  give sse_rr(st, 102, 126, 1, x, r)
+}
+
+make addsd(st: list, a: num, b: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("addsd ", istr(a)), concat(" ", istr(b))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("addsd ", xn_str(a)), concat(",", xn_str(b))))
+  }
+  give sse_rr(st, 242, 88, 0, a, b)
+}
+
+make mulsd(st: list, a: num, b: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("mulsd ", istr(a)), concat(" ", istr(b))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("mulsd ", xn_str(a)), concat(",", xn_str(b))))
+  }
+  give sse_rr(st, 242, 89, 0, a, b)
+}
+
+make subsd(st: list, a: num, b: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("subsd ", istr(a)), concat(" ", istr(b))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("subsd ", xn_str(a)), concat(",", xn_str(b))))
+  }
+  give sse_rr(st, 242, 92, 0, a, b)
+}
+
+make divsd(st: list, a: num, b: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("divsd ", istr(a)), concat(" ", istr(b))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("divsd ", xn_str(a)), concat(",", xn_str(b))))
+  }
+  give sse_rr(st, 242, 94, 0, a, b)
+}
+
+make ucomisd(st: list, a: num, b: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("ucomisd ", istr(a)), concat(" ", istr(b))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("ucomisd ", xn_str(a)), concat(",", xn_str(b))))
+  }
+  give sse_rr(st, 102, 46, 0, a, b)
+}
+
+make cvtsi2sd(st: list, x: num, r: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("cvtsi2sd ", istr(x)), concat(" ", istr(r))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("cvtsi2sd ", xn_str(x)), concat(",", rn_str(r))))
+  }
+  give sse_rr(st, 242, 42, 1, x, r)
+}
+
+make cvttsd2si(st: list, r: num, x: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("cvttsd2si ", istr(r)), concat(" ", istr(x))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("cvttsd2si ", rn_str(r)), concat(",", xn_str(x))))
+  }
+  give sse_rr(st, 242, 44, 1, r, x)
+}
+
+make cvtsd2si(st: list, r: num, x: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("cvtsd2si ", istr(r)), concat(" ", istr(x))))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat(concat("cvtsd2si ", rn_str(r)), concat(",", xn_str(x))))
+  }
+  give sse_rr(st, 242, 45, 1, r, x)
+}
+
+make emit_d2i(st: list) -> list {
+  st = ilogc(st, "d2i: double bits in rax -> long")
+  st = movq_xr(st, 0, 0)
+  st = cvttsd2si(st, 0, 0)
+  give st
+}
+
+make emit_i2d(st: list) -> list {
+  st = ilogc(st, "i2d: long in rax -> double bits")
+  st = cvtsi2sd(st, 0, 0)
+  st = movq_rx(st, 0, 0)
+  give st
+}
+
+make emit_d2u64(st: list) -> list {
+  st = movq_xr(st, 0, 0)
+  st = mov_imm64_hl(st, 2, 1138753536, 0)
+  st = movq_xr(st, 1, 2)
+  st = ucomisd(st, 0, 1)
+  hold jbig = here_local(st)
+  st = jcc_rel32(st, 3, 0)
+  st = cvttsd2si(st, 0, 0)
+  hold jdone = here_local(st)
+  st = jmp_rel32(st, 0)
+  st = erel32(st, jbig, here_local(st))
+  st = mov_imm64_hl(st, 2, 1139802112, 0)
+  st = movq_xr(st, 2, 2)
+  st = ucomisd(st, 0, 2)
+  hold jbelow64 = here_local(st)
+  st = jcc_rel32(st, 2, 0)
+  st = xor_rr(st, 0, 0)
+  st = fm7(st, 2, 0)
+  hold jdone2 = here_local(st)
+  st = jmp_rel32(st, 0)
+  st = erel32(st, jbelow64, here_local(st))
+  st = subsd(st, 0, 1)
+  st = cvttsd2si(st, 0, 0)
+  st = mov_imm64_hl(st, 2, 2147483648, 0)
+  st = bin_rr(st, 9, 0, 2)
+  st = erel32j(st, jdone, here_local(st))
+  st = erel32j(st, jdone2, here_local(st))
+  give st
+}
+
+make emit_u64_to_d(st: list) -> list {
+  st = test_rr(st, 0, 0)
+  hold jpos = here_local(st)
+  st = jcc_rel32(st, 9, 0)
+  st = mv_rr(st, 2, 0)
+  st = shr_imm(st, 2, 1)
+  st = bin_imm8(st, 4, 0, 1)
+  st = bin_rr(st, 9, 2, 0)
+  st = cvtsi2sd(st, 0, 2)
+  st = addsd(st, 0, 0)
+  st = movq_rx(st, 0, 0)
+  hold jdone = here_local(st)
+  st = jmp_rel32(st, 0)
+  st = erel32(st, jpos, here_local(st))
+  st = cvtsi2sd(st, 0, 0)
+  st = movq_rx(st, 0, 0)
+  st = erel32j(st, jdone, here_local(st))
+  give st
+}
+
+make stb_rdi(st: list, v: num) -> list {
+  hold uv = bit_and(low32(v), 255)
+  when st[5] == 1 {
+    st = elog_line(st, concat("stb_rdi ", istr(uv)))
+  }
+  st = e1(st, 198)
+  st = e1(st, 7)
+  st = e1(st, uv)
+  give st
+}
+
+make stal_rdi(st: list) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, "stal_rdi")
+  }
+  st = e1(st, 136)
+  st = e1(st, 7)
+  give st
+}
+
+make syscall_inst(st: list) -> list {
+  st = e1(st, 15)
+  st = e1(st, 5)
+  give st
+}
+
+make ret_inst(st: list) -> list {
+  give e1(st, 195)
+}
+
+make rep_stosq_inst(st: list) -> list {
+  st = e1(st, 243)
+  st = e1(st, 72)
+  st = e1(st, 171)
+  give st
+}
+
+make callb(st: list, b_idx: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat("call_p 1 ", istr(b_idx)))
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, concat("call builtin ", bname_str(b_idx)))
+  }
+  st = e1(st, 232)
+  hold k = st[4]
+  hold ccap = st[51]
+  when k >= ccap {
+    hold oom = fail(1, "OOM patches")
+  }
+  hold cs = 7200 + 3 * k
+  st[cs] = here_global(st)
+  st[cs + 1] = 1
+  st[cs + 2] = b_idx
+  st[4] = k + 1
+  st = e32(st, 0)
+  give st
+}
+
+make callf(st: list, fi: num, fnm: str) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat("call_p 0 ", istr(fi)))
+  }
+  when st[6] == 1 {
+    hold nm = fnm
+    when len(nm) == 0 {
+      nm = concat("make", istr(fi))
+    }
+    st = ilog_inst(st, concat("call make ", nm))
+  }
+  st = e1(st, 232)
+  hold k = st[4]
+  hold ccap = st[51]
+  when k >= ccap {
+    hold oom = fail(1, "OOM patches")
+  }
+  hold cs = 7200 + 3 * k
+  st[cs] = here_global(st)
+  st[cs + 1] = 0
+  st[cs + 2] = fi
+  st[4] = k + 1
+  st = e32(st, 0)
+  give st
+}
+
+make lea_r12_data(st: list) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, "lea_r12_data")
+  }
+  when st[6] == 1 {
+    st = ilog_inst(st, "lea r12,[rip+<disp32 slot>]")
+  }
+  st = rexb(st, 1, 1, 0, 0)
+  st = e1(st, 141)
+  st = e1(st, 37)
+  hold k = st[8]
+  hold rcap = st[53]
+  when k >= rcap {
+    hold oom = fail(1, "OOM patches")
+  }
+  hold rbase = st[52]
+  hold rs = rbase + k
+  st[rs] = here_global(st)
+  st[8] = k + 1
+  st = e32(st, 0)
+  give st
+}
+
+// ---- label table (L_new, L_bind, J_cc, J_mp) ------------------------------
+
+make L_new(st: list) -> num {
+  hold id = st[1]
+  when st[5] == 1 {
+    hold z = elog_str_mut(st, concat("L_new ", istr(id)))
+  }
+  when id >= 96 {
+    hold oom = fail(1, "too many labels")
+  }
+  hold ls = 100 + id
+  st[ls] = 0 - 1
+  hold nf = st[3]
+  hold i = 0
+  while i < nf {
+    hold fs = 200 + 3 * i
+    when st[fs] == id {
+      st[fs] = 0 - 2
+    }
+    i = i + 1
+  }
+  st[1] = id + 1
+  when id + 1 > st[2] {
+    st[2] = id + 1
+  }
+  give id
+}
+
+make L_bind(st: list, l: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat("L_bind ", istr(l)))
+  }
+  hold here = here_local(st)
+  hold ls = 100 + l
+  st[ls] = here
+  hold nf = st[3]
+  hold i = 0
+  while i < nf {
+    hold fs = 200 + 3 * i
+    when st[fs] == l {
+      hold at = st[fs + 1]
+      hold w = st[fs + 2]
+      st = patch_local_i32(st, at + w - 4, here - (at + w))
+      st[fs] = 0 - 2
+    }
+    i = i + 1
+  }
+  give st
+}
+
+make queue_lbl_fix(st: list, l: num, at: num, w: num) -> list {
+  hold nf = st[3]
+  hold fs = 200 + 3 * nf
+  st[fs] = l
+  st[fs + 1] = at
+  st[fs + 2] = w
+  st[3] = nf + 1
+  give st
+}
+
+make J_cc(st: list, c: num, l: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat(concat("J_cc ", istr(c)), concat(" ", istr(l))))
+  }
+  hold at = here_local(st)
+  st = e1(st, 15)
+  st = e1(st, 128 + c)
+  hold ls = 100 + l
+  hold bound = st[ls]
+  when bound >= 0 {
+    st = e32(st, bound - (at + 6))
+  } otherwise {
+    st = e32(st, 0)
+    st = queue_lbl_fix(st, l, at, 6)
+  }
+  give st
+}
+
+make J_mp(st: list, l: num) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, concat("J_mp ", istr(l)))
+  }
+  hold at = here_local(st)
+  st = e1(st, 233)
+  hold ls = 100 + l
+  hold bound = st[ls]
+  when bound >= 0 {
+    st = e32(st, bound - (at + 5))
+  } otherwise {
+    st = e32(st, 0)
+    st = queue_lbl_fix(st, l, at, 5)
+  }
+  give st
+}
+
+// ---- SX_EMIT_LOG phase offset parser & SX_LINK_DUMP splicer ---------------
+
+make hex_val(c: num) -> num {
+  when c >= 48 && c <= 57 {
+    give c - 48
+  }
+  when c >= 97 && c <= 102 {
+    give c - 87
+  }
+  when c >= 65 && c <= 70 {
+    give c - 55
+  }
+  give 0 - 1
+}
+
+make find_sub_str(hay: str, needle: str) -> num {
+  hold hn = len(hay)
+  hold nn = len(needle)
+  hold i = 0
+  while i + nn <= hn {
+    hold same = 1
+    hold j = 0
+    while j < nn && same == 1 {
+      when sx_index(hay, i + j) != sx_index(needle, j) {
+        same = 0
+      }
+      j = j + 1
+    }
+    when same == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+// Reads the first 6-hex-digit instruction offset after `marker` in emit.log.
+make find_phase_offset(log_text: str, marker: str) -> num {
+  hold at = find_sub_str(log_text, marker)
+  when at < 0 {
+    give 0 - 1
+  }
+  hold n = len(log_text)
+  hold i = at
+  while i < n && sx_index(log_text, i) != 10 {
+    i = i + 1
+  }
+  i = i + 1
+  while i < n {
+    when i + 6 <= n && sx_index(log_text, i) != 59 {
+      hold v = 0
+      hold k = 0
+      hold ok = 1
+      while k < 6 {
+        hold hv = hex_val(sx_index(log_text, i + k))
+        when hv < 0 {
+          ok = 0
+        } otherwise {
+          v = v * 16 + hv
+        }
+        k = k + 1
+      }
+      when ok == 1 {
+        give v
+      }
+    }
+    while i < n && sx_index(log_text, i) != 10 {
+      i = i + 1
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make read_u32_le(bs: list, off: num) -> num {
+  hold b0 = bs[off]
+  hold b1 = bs[off + 1]
+  hold b2 = bs[off + 2]
+  hold b3 = bs[off + 3]
+  give b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+make append_u64_le(bs: list, v: num) -> list {
+  bs = push(bs, bit_and(v, 255))
+  bs = push(bs, bit_and(shr(v, 8), 255))
+  bs = push(bs, bit_and(shr(v, 16), 255))
+  bs = push(bs, bit_and(shr(v, 24), 255))
+  bs = push(bs, 0)
+  bs = push(bs, 0)
+  bs = push(bs, 0)
+  bs = push(bs, 0)
+  give bs
+}
+
+make parse_first_int(text: str) -> num {
+  hold n = len(text)
+  hold v = 0
+  hold i = 0
+  hold on = 0
+  while i < n {
+    hold c = sx_index(text, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      on = 1
+    } otherwise {
+      when on == 1 {
+        i = n
+      }
+    }
+    i = i + 1
+  }
+  give v
+}

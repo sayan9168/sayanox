@@ -1,0 +1,8 @@
+module geom as g from "pkg/left/geom.sa"
+module physics as ph from "pkg/right/physics.sa"
+module vec as vc from "pkg/core/vec.sa"
+
+hold p = vc.Vec2 { x: 3, y: 4 }
+show g.norm_sq(p)
+show ph.impulse(5)
+show vc.boot_base

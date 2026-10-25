@@ -1,0 +1,44 @@
+// selfhost/native_aot.sa -- Sayanox native x86-64 Linux ELF64 AOT compiler,
+// written entirely in Sayanox (Phase D, steps 1-10; docs/ALL_SAYANOX_PHASE.md).
+//
+// Replaces the 4,598-line C selfhost/native_aot.c as the sole producer of
+// ./selfhost/native_aot, preserving byte-identical output and all four
+// inspection seams:
+//   * SX_DEFS_DUMP=<dir>    -- phase-1 symbol tables + use-expanded source
+//   * SX_EMIT_LOG=<path>    -- human-readable x86-64 instruction list
+//   * SX_ENCODE_LOG=<path>  -- machine-re-encodable encoder call stream
+//   * SX_LINK_DUMP=<dir>    -- code.bin, data.bin, patch.bin, meta.txt
+//
+// Architecture:
+//   * tools/sxenc_lib.sa      -- x86-64 encoder + label/fixup + log recorders
+//   * tools/sxinfer_lib.sa    -- phase 1 (expand_use, collect_defs) + phase 2 (infer)
+//   * tools/sxdata_lib.sa     -- rf_block, exact BigInt IEEE-754 f64, data[] & roots
+//   * tools/sxemit_lib.sa     -- phase 3 language-level emitter (EMIT-SEAM)
+//   * tools/sxruntime_lib.sa  -- phase 4 x86-64 runtime builtins (3,521 B)
+//   * tools/sxgc_lib.sa       -- phase 4b x86-64 mark & sweep collector (1,209 B)
+//   * tools/sxlink_lib.sa     -- phase 5 static ELF64 linker
+//   * tools/sxpipeline_lib.sa -- top-level driver wiring phases 1..5
+//
+// Usage:
+//   ./selfhost/native_aot <in.sa> <out>
+
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("native_aot: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+use "tools/sxenc_lib.sa"
+use "tools/sxinfer_lib.sa"
+use "tools/sxdata_lib.sa"
+use "tools/sxemit_lib.sa"
+use "tools/sxruntime_lib.sa"
+use "tools/sxgc_lib.sa"
+use "tools/sxlink_lib.sa"
+use "tools/sxpipeline_lib.sa"
+
+when arg_count() < 3 {
+  hold u = write_file("/dev/stderr", "usage: native_aot in.sa out\n")
+  hold stop = exit(2)
+}
+hold ok = compile_native_aot(arg(1), arg(2))

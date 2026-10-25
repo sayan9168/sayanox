@@ -285,11 +285,17 @@ them.
   is gone. All pinned by `make test-sxpkg-polish`.
 * `add` warns when the package has no local registry copy yet.
 * The online commands (`sync`, `install`, `fetch`, `publish`) and their
-  thin-design limits are in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md). Two of the
-  three gaps that document listed are closed since 2026-10-22: a cryptographic
-  hash (`sha256=`) and a keyed signature (`sig=`/`signer=`) are recorded and
-  checked. Public-key signatures are still missing, and a transfer is still
-  not atomic beyond the `.part` staging.
+  thin-design limits are in [`SXPKG_ONLINE.md`](SXPKG_ONLINE.md). Since
+  2026-10-22 `sha256=` and symmetric HMAC `sig=`/`signer=` are recorded and
+  checked (`make test-sxpkg-crypto`), and since **2026-10-24** `stdlib/pubkey.sa`
+  + `tools/sxpkg.sa` add **Curve25519 Schnorr-SHA256 public-key signatures** for
+  both packages (`sxpkg keygen`, `sxpkg pubsign`, `sxpkg verify-pub`, `pubsig=`)
+  and registry indices (`sxpkg sign-index`, `sxpkg verify-index`, `INDEX.sig`),
+  pinned against `.sayanox/trusted_keys` and enforced on `sync` and `verify`
+  under `SAYANOX_REQUIRE_PUBKEY=1` (`make test-sxpkg-pubkey`, verified with the
+  publisher's `.sec` secret seed deleted from disk). Online key distribution /
+  certificate authorities are still outside scope, and transfers stage via
+  `.part` files.
 
 ### Offline search and process failures (2026-10-11)
 

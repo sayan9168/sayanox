@@ -1,0 +1,376 @@
+// stdlib/map.sa -- Open-addressed numeric hash map (nmap_*) and length-prefixed
+// binary-safe string map (smap_*), written in universal portable Sayanox.
+//
+// Portable across seed-min, gen2, native_aot, sxc_native, and sxirexec.
+//
+// nmap layout in a flat list:
+//   m[0] = cap (power of two >= 8)
+//   m[1] = live_count
+//   m[2] = used_plus_tombstones
+//   slot i (0 <= i < cap) at base = 3 + i * 3:
+//     m[base + 0] = state (0 = empty, 1 = live, 2 = tombstone)
+//     m[base + 1] = key (num)
+//     m[base + 2] = val (num)
+
+make nmap_alloc(cap: num) -> list {
+  hold m = []
+  hold m = push(m, cap)
+  hold m = push(m, 0)
+  hold m = push(m, 0)
+  hold i = 0
+  hold total = cap * 3
+  while i < total {
+    hold m = push(m, 0)
+    hold i = i + 1
+  }
+  give m
+}
+
+make nmap_new() -> list {
+  give nmap_alloc(8)
+}
+
+make nmap_len(m: list) -> num {
+  give m[1]
+}
+
+make nmap_hash_slot(k: num, cap: num) -> num {
+  hold x = k
+  when x < 0 {
+    hold x = 0 - x
+    hold x = x * 7 + 3
+  }
+  hold h = (x * 2654435) + 1013904
+  hold rem = h % cap
+  give rem
+}
+
+make nmap_find_live(m: list, k: num) -> num {
+  hold cap = m[0]
+  hold idx = nmap_hash_slot(k, cap)
+  hold steps = 0
+  while steps < cap {
+    hold base = 3 + idx * 3
+    hold st = m[base]
+    when st == 0 {
+      give 0 - 1
+    }
+    when st == 1 {
+      when m[base + 1] == k {
+        give base
+      }
+    }
+    hold idx = idx + 1
+    when idx >= cap {
+      hold idx = 0
+    }
+    hold steps = steps + 1
+  }
+  give 0 - 1
+}
+
+make nmap_has(m: list, k: num) -> num {
+  when nmap_find_live(m, k) >= 0 {
+    give 1
+  }
+  give 0
+}
+
+make nmap_get(m: list, k: num, fallback: num) -> num {
+  hold base = nmap_find_live(m, k)
+  when base < 0 {
+    give fallback
+  }
+  give m[base + 2]
+}
+
+make nmap_write_slot(m: list, packed_counts: num, dst: num, st: num, k: num, v: num) -> list {
+  hold new_used = packed_counts % 100000
+  hold new_live = (packed_counts - new_used) / 100000
+  hold n = len(m)
+  hold out = []
+  hold out = push(out, m[0])
+  hold out = push(out, new_live)
+  hold out = push(out, new_used)
+  hold i = 3
+  while i < n {
+    when i == dst {
+      hold out = push(out, st)
+      hold out = push(out, k)
+      hold out = push(out, v)
+      hold i = i + 3
+    } otherwise {
+      hold out = push(out, m[i])
+      hold i = i + 1
+    }
+  }
+  give out
+}
+
+make nmap_insert_raw(m: list, k: num, v: num) -> list {
+  hold cap = m[0]
+  hold idx = nmap_hash_slot(k, cap)
+  hold first_tomb = 0 - 1
+  hold steps = 0
+  while steps < cap {
+    hold base = 3 + idx * 3
+    hold st = m[base]
+    when st == 0 {
+      hold dst = base
+      hold nused = m[2]
+      when first_tomb >= 0 {
+        hold dst = first_tomb
+      } otherwise {
+        hold nused = nused + 1
+      }
+      give nmap_write_slot(m, (m[1] + 1) * 100000 + nused, dst, 1, k, v)
+    }
+    when st == 1 {
+      when m[base + 1] == k {
+        give nmap_write_slot(m, m[1] * 100000 + m[2], base, 1, k, v)
+      }
+    }
+    when st == 2 {
+      when first_tomb < 0 {
+        hold first_tomb = base
+      }
+    }
+    hold idx = idx + 1
+    when idx >= cap {
+      hold idx = 0
+    }
+    hold steps = steps + 1
+  }
+  when first_tomb >= 0 {
+    give nmap_write_slot(m, (m[1] + 1) * 100000 + m[2], first_tomb, 1, k, v)
+  }
+  give m
+}
+
+make nmap_rehash(m: list, new_cap: num) -> list {
+  hold out = nmap_alloc(new_cap)
+  hold old_cap = m[0]
+  hold i = 0
+  while i < old_cap {
+    hold base = 3 + i * 3
+    when m[base] == 1 {
+      hold k = m[base + 1]
+      hold v = m[base + 2]
+      hold out = nmap_insert_raw(out, k, v)
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+make nmap_put(m: list, k: num, v: num) -> list {
+  hold cur = m
+  hold cap = cur[0]
+  hold used = cur[2]
+  hold u10 = (used + 1) * 10
+  hold c7 = cap * 7
+  when u10 >= c7 {
+    hold cur = nmap_rehash(cur, cap * 2)
+  }
+  give nmap_insert_raw(cur, k, v)
+}
+
+make nmap_del(m: list, k: num) -> list {
+  hold base = nmap_find_live(m, k)
+  when base >= 0 {
+    give nmap_write_slot(m, (m[1] - 1) * 100000 + m[2], base, 2, 0, 0)
+  }
+  give m
+}
+
+make nmap_keys(m: list) -> list {
+  hold ks = []
+  hold cap = m[0]
+  hold i = 0
+  while i < cap {
+    hold base = 3 + i * 3
+    when m[base] == 1 {
+      hold ks = push(ks, m[base + 1])
+    }
+    hold i = i + 1
+  }
+  give ks
+}
+
+// ---------------------------------------------------------------------------
+// Length-prefixed binary-safe string map (smap_*)
+// ---------------------------------------------------------------------------
+
+make smap_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold v = n
+  hold out = ""
+  while v > 0 {
+    hold d = v % 10
+    hold out = concat(chr(48 + d), out)
+    hold v = (v - d) / 10
+  }
+  give out
+}
+
+make smap_sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+make smap_read_len(s: str, pos: num) -> list {
+  hold n = len(s)
+  hold i = pos
+  hold v = 0
+  hold scanning = 1
+  while scanning == 1 {
+    when i >= n {
+      hold scanning = 0
+    } otherwise {
+      when sx_index(s, i) == 58 {
+        hold scanning = 0
+      } otherwise {
+        hold v = v * 10 + (sx_index(s, i) - 48)
+        hold i = i + 1
+      }
+    }
+  }
+  hold res = []
+  hold res = push(res, v)
+  hold res = push(res, i + 1)
+  give res
+}
+
+make smap_empty() -> str {
+  give ""
+}
+
+make smap_len(sm: str) -> num {
+  hold n = len(sm)
+  hold pos = 0
+  hold cnt = 0
+  while pos < n {
+    hold kh = smap_read_len(sm, pos)
+    hold k_end = kh[1] + kh[0]
+    hold vh = smap_read_len(sm, k_end)
+    hold pos = vh[1] + vh[0]
+    hold cnt = cnt + 1
+  }
+  give cnt
+}
+
+make smap_has(sm: str, key: str) -> num {
+  hold n = len(sm)
+  hold pos = 0
+  while pos < n {
+    hold kh = smap_read_len(sm, pos)
+    hold ks = kh[1]
+    hold ke = ks + kh[0]
+    hold kcur = smap_sub(sm, ks, ke)
+    hold vh = smap_read_len(sm, ke)
+    hold ve = vh[1] + vh[0]
+    when string_eq(kcur, key) == 1 {
+      give 1
+    }
+    hold pos = ve
+  }
+  give 0
+}
+
+make smap_get(sm: str, key: str, fallback: str) -> str {
+  hold n = len(sm)
+  hold pos = 0
+  while pos < n {
+    hold kh = smap_read_len(sm, pos)
+    hold ks = kh[1]
+    hold ke = ks + kh[0]
+    hold kcur = smap_sub(sm, ks, ke)
+    hold vh = smap_read_len(sm, ke)
+    hold vs = vh[1]
+    hold ve = vs + vh[0]
+    when string_eq(kcur, key) == 1 {
+      give smap_sub(sm, vs, ve)
+    }
+    hold pos = ve
+  }
+  give fallback
+}
+
+make smap_encode_entry(key: str, val: str) -> str {
+  hold kp = concat(smap_istr(len(key)), concat(":", key))
+  hold vp = concat(smap_istr(len(val)), concat(":", val))
+  give concat(kp, vp)
+}
+
+make smap_put(sm: str, key: str, val: str) -> str {
+  hold n = len(sm)
+  hold pos = 0
+  hold out = ""
+  hold replaced = 0
+  while pos < n {
+    hold rec_start = pos
+    hold kh = smap_read_len(sm, pos)
+    hold ks = kh[1]
+    hold ke = ks + kh[0]
+    hold kcur = smap_sub(sm, ks, ke)
+    hold vh = smap_read_len(sm, ke)
+    hold ve = vh[1] + vh[0]
+    when string_eq(kcur, key) == 1 {
+      hold out = concat(out, smap_encode_entry(key, val))
+      hold replaced = 1
+    } otherwise {
+      hold out = concat(out, smap_sub(sm, rec_start, ve))
+    }
+    hold pos = ve
+  }
+  when replaced == 0 {
+    hold out = concat(out, smap_encode_entry(key, val))
+  }
+  give out
+}
+
+make smap_del(sm: str, key: str) -> str {
+  hold n = len(sm)
+  hold pos = 0
+  hold out = ""
+  while pos < n {
+    hold rec_start = pos
+    hold kh = smap_read_len(sm, pos)
+    hold ks = kh[1]
+    hold ke = ks + kh[0]
+    hold kcur = smap_sub(sm, ks, ke)
+    hold vh = smap_read_len(sm, ke)
+    hold ve = vh[1] + vh[0]
+    when string_eq(kcur, key) == 0 {
+      hold out = concat(out, smap_sub(sm, rec_start, ve))
+    }
+    hold pos = ve
+  }
+  give out
+}
+
+make smap_key_at(sm: str, idx: num) -> str {
+  hold n = len(sm)
+  hold pos = 0
+  hold cur = 0
+  while pos < n {
+    hold kh = smap_read_len(sm, pos)
+    hold ks = kh[1]
+    hold ke = ks + kh[0]
+    hold vh = smap_read_len(sm, ke)
+    hold ve = vh[1] + vh[0]
+    when cur == idx {
+      give smap_sub(sm, ks, ke)
+    }
+    hold cur = cur + 1
+    hold pos = ve
+  }
+  give ""
+}

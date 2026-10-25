@@ -1,0 +1,160 @@
+// stdlib/sort.sa -- Iterative O(n log n) stable bottom-up mergesort, binary
+// search, lower/upper bounds, deduplication, and order statistics (prefix `sort_`).
+//
+// Portable across seed-min, gen2, native_aot, sxc_native, and sxirexec.
+
+make sort_copy_list(xs: list) -> list {
+  hold out = []
+  hold n = len(xs)
+  hold i = 0
+  while i < n {
+    hold out = push(out, xs[i])
+    hold i = i + 1
+  }
+  give out
+}
+
+make sort_nums(xs: list) -> list {
+  hold n = len(xs)
+  hold a = sort_copy_list(xs)
+  when n <= 1 {
+    give a
+  }
+  hold width = 1
+  while width < n {
+    hold next_a = []
+    hold left = 0
+    while left < n {
+      hold mid = left + width
+      when mid > n {
+        hold mid = n
+      }
+      hold right = left + width * 2
+      when right > n {
+        hold right = n
+      }
+      hold i = left
+      hold j = mid
+      hold k = left
+      while k < right {
+        hold take_left = 0
+        when i < mid {
+          when j >= right {
+            hold take_left = 1
+          } otherwise {
+            when a[i] <= a[j] {
+              hold take_left = 1
+            }
+          }
+        }
+        when take_left == 1 {
+          hold next_a = push(next_a, a[i])
+          hold i = i + 1
+        } otherwise {
+          hold next_a = push(next_a, a[j])
+          hold j = j + 1
+        }
+        hold k = k + 1
+      }
+      hold left = left + width * 2
+    }
+    hold a = next_a
+    hold width = width * 2
+  }
+  give a
+}
+
+make sort_nums_desc(xs: list) -> list {
+  hold asc = sort_nums(xs)
+  hold n = len(asc)
+  hold out = []
+  hold i = n - 1
+  while i >= 0 {
+    hold out = push(out, asc[i])
+    hold i = i - 1
+  }
+  give out
+}
+
+make sort_is_sorted(xs: list) -> num {
+  hold n = len(xs)
+  hold i = 1
+  while i < n {
+    when xs[i] < xs[i - 1] {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+make sort_lower_bound(sorted_xs: list, target: num) -> num {
+  hold lo = 0
+  hold hi = len(sorted_xs)
+  while lo < hi {
+    hold span = hi - lo
+    hold half = (span - (span % 2)) / 2
+    hold mid = lo + half
+    when sorted_xs[mid] < target {
+      hold lo = mid + 1
+    } otherwise {
+      hold hi = mid
+    }
+  }
+  give lo
+}
+
+make sort_upper_bound(sorted_xs: list, target: num) -> num {
+  hold lo = 0
+  hold hi = len(sorted_xs)
+  while lo < hi {
+    hold span = hi - lo
+    hold half = (span - (span % 2)) / 2
+    hold mid = lo + half
+    when sorted_xs[mid] <= target {
+      hold lo = mid + 1
+    } otherwise {
+      hold hi = mid
+    }
+  }
+  give lo
+}
+
+make sort_bsearch(sorted_xs: list, target: num) -> num {
+  hold idx = sort_lower_bound(sorted_xs, target)
+  when idx < len(sorted_xs) {
+    when sorted_xs[idx] == target {
+      give idx
+    }
+  }
+  give 0 - 1
+}
+
+make sort_unique(xs: list) -> list {
+  hold s = sort_nums(xs)
+  hold n = len(s)
+  hold out = []
+  when n == 0 {
+    give out
+  }
+  hold out = push(out, s[0])
+  hold i = 1
+  while i < n {
+    when s[i] != s[i - 1] {
+      hold out = push(out, s[i])
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+make sort_kth(xs: list, k: num) -> num {
+  hold s = sort_nums(xs)
+  when k < 0 {
+    give 0 - 1
+  }
+  when k >= len(s) {
+    give 0 - 1
+  }
+  give s[k]
+}

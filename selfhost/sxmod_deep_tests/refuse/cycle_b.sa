@@ -1,0 +1,5 @@
+module ca from "cycle_a.sa"
+
+make fb(x: num) -> num {
+  give ca.fa(x)
+}

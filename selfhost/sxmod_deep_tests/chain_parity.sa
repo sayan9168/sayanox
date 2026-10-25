@@ -1,0 +1,6 @@
+module series as sr from "pkg/mid/series.sa"
+module math0 as m0 from "pkg/core/math0.sa"
+
+show sr.step_sum(4)
+show m0.affine(5, 3)
+show m0.k_seed

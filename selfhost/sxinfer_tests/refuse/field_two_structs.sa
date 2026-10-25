@@ -1,0 +1,11 @@
+struct A {
+  v
+}
+struct B {
+  v
+}
+struct W {
+  p
+}
+hold w1 = W { A { 1 } }
+hold w2 = W { B { 2 } }

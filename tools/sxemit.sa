@@ -1,0 +1,37 @@
+// tools/sxemit.sa -- PHASE 3 (THE LANGUAGE-LEVEL EMIT TREE) AND COMPLETE
+// SAYANOX NATIVE x86-64 AOT PIPELINE (Phase D, step 7; docs/ALL_SAYANOX_PHASE.md).
+//
+// Ports the entire ~1,350-line phase-3 emit tree (emit_prog, emit_fn,
+// emit_when_body, emit_for, gen_cond, emit_expr/rel/term/post/prim/call_builtin,
+// rf_block, and exact pure-Sayanox IEEE-754 decimal-to-binary64 encoding for
+// d_pow 1e0..1e308 and numeric literals) and wires phases 1..5 together in
+// Sayanox:
+//   * tools/sxinfer_lib.sa   -- phase 1 (expand_use, collect_defs) + phase 2 (infer)
+//   * tools/sxemit_lib.sa    -- phase 3 (language-level emitter, inside EMIT-SEAM)
+//   * tools/sxruntime_lib.sa -- phase 4 (24 x86-64 runtime routines, 3,521 B)
+//   * tools/sxgc_lib.sa      -- phase 4b (6 x86-64 collector routines, 1,209 B)
+//   * tools/sxlink_lib.sa    -- phase 5 (ELF64 static linker)
+//
+// Usage:
+//   ./tools/sxemit <in.sa> <out.elf>
+
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxemit: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+use "tools/sxenc_lib.sa"
+use "tools/sxinfer_lib.sa"
+use "tools/sxdata_lib.sa"
+use "tools/sxemit_lib.sa"
+use "tools/sxruntime_lib.sa"
+use "tools/sxgc_lib.sa"
+use "tools/sxlink_lib.sa"
+use "tools/sxpipeline_lib.sa"
+
+when arg_count() < 3 {
+  hold u = write_file("/dev/stderr", "usage: sxemit in.sa out\n")
+  hold stop = exit(2)
+}
+hold ok = compile_native_aot(arg(1), arg(2))

@@ -22,13 +22,14 @@
 // Nothing here touches the network.
 //
 // WHAT THE SIGNATURE IS AND IS NOT: sig= is a KEYED digest, HMAC-SHA256 with
-// a shared secret. It proves the bytes were signed by someone who holds that
-// key and that nothing changed afterwards. It is NOT a public-key signature:
-// a verifier needs the same secret the signer used, so it authenticates a
-// private or self-hosted registry, not an anonymous public download. There is
-// no Ed25519/RSA here and none is claimed.
+// a shared secret. For public or anonymous distribution, sxpkg also provides
+// Curve25519 Schnorr-SHA256 asymmetric signatures via stdlib/pubkey.sa:
+// signers hold a 32-byte secret seed (.sec) and verifiers pin only 32-byte
+// compressed public keys in .sayanox/trusted_keys for both pkg.meta (pubsig=)
+// and signed registry indices (INDEX.sig).
 
 use "../stdlib/crypto.sa"
+use "../stdlib/pubkey.sa"
 
 // pkgsum: checksum of a file's bytes, h = (h * 31 + byte) mod 1000000007.
 // It detects accidental edits to a locked package; it is not a security hash.
@@ -234,6 +235,32 @@ make meta_drop(text: str, key: str) -> str {
 make meta_set(text: str, key: str, value: str) -> str {
   hold out = meta_drop(text, key)
   give concat(out, concat(key, concat("=", concat(value, "\n"))))
+}
+
+// meta_key_count: count how many lines start with key= (prevents duplicate-key smuggling)
+make meta_key_count(text: str, key: str) -> num {
+  hold cnt = 0
+  hold line = ""
+  hold n = len(text)
+  hold i = 0
+  while i <= n {
+    hold c = 10
+    when i < n {
+      hold c = sx_index(text, i)
+    }
+    when c == 10 {
+      when len(line) > 0 {
+        when line_is_key(line, key) == 1 {
+          hold cnt = cnt + 1
+        }
+      }
+      hold line = ""
+    } otherwise {
+      hold line = concat(line, chr(c))
+    }
+    hold i = i + 1
+  }
+  give cnt
 }
 
 // line_key / line_val: split one `key=value` lock line at its first `=`
@@ -1113,6 +1140,215 @@ make need_online(target: str, optin: num) -> num {
   give 1
 }
 
+// ---- public-key signing & signed-index helpers ----------------------------
+// load_sec_seed: 64-hex Curve25519 signing seed from SAYANOX_SIGN_SECKEY,
+// SAYANOX_SIGN_SECFILE, or <keys_dir>/default.sec.
+make load_sec_seed(keys_dir: str) -> str {
+  hold env_sec = trim_ws(getenv("SAYANOX_SIGN_SECKEY"))
+  when len(env_sec) == 64 {
+    give env_sec
+  }
+  when len(env_sec) > 0 {
+    give pk_seed_from_passphrase(env_sec)
+  }
+  hold sec_file = getenv("SAYANOX_SIGN_SECFILE")
+  when len(sec_file) == 0 {
+    hold sec_file = joined(keys_dir, "default.sec")
+  }
+  hold raw = trim_ws(read_file(sec_file))
+  when len(raw) == 64 {
+    give raw
+  }
+  when len(raw) > 0 {
+    give pk_seed_from_passphrase(raw)
+  }
+  give ""
+}
+
+// pubkey_hex_ok: 1 iff pub_hex is a canonical 32-byte Curve25519 point.
+make pubkey_hex_ok(pub_hex: str) -> num {
+  when len(pub_hex) != 64 {
+    give 0
+  }
+  hold bs = cx_unhex(pub_hex)
+  when len(bs) != 32 {
+    give 0
+  }
+  hold pt = pk_decode_point(bs)
+  when len(pt) != 64 {
+    give 0
+  }
+  give 1
+}
+
+// trusted_has_pubkey: 1 iff pub_hex is pinned in .sayanox/trusted_keys
+// (lines of the form <keyid>=<64hex> or bare <64hex>; # starts comments).
+make trusted_has_pubkey(trusted_path: str, pub_hex: str) -> num {
+  when len(pub_hex) != 64 {
+    give 0
+  }
+  hold txt = read_file(trusted_path)
+  when len(txt) == 0 {
+    give 0
+  }
+  hold n = len(txt)
+  hold i = 0
+  hold ln = ""
+  while i <= n {
+    hold ch = 10
+    when i < n {
+      hold ch = sx_index(txt, i)
+    }
+    when ch == 10 {
+      hold tln = trim_ws(ln)
+      when len(tln) > 0 && sx_index(tln, 0) != 35 {
+        hold cand = line_val(tln)
+        when len(cand) == 0 {
+          hold cand = tln
+        }
+        when cx_eq_hex(cand, pub_hex) == 1 {
+          give 1
+        }
+      }
+      hold ln = ""
+    } otherwise {
+      hold ln = concat(ln, chr(ch))
+    }
+    hold i = i + 1
+  }
+  give 0
+}
+
+// check_pubsig: public-key verification of a single package in reg using ONLY
+// pinned public keys in trusted_path (no secret key is touched).
+// Returns: verified | unsigned | untrusted | BAD <reason>
+make check_pubsig(pkg_nm: str, reg: str, trusted_path: str) -> str {
+  hold meta = read_file(concat(concat(reg, "/"), concat(pkg_nm, "/pkg.meta")))
+  when len(meta) == 0 {
+    give "unsigned"
+  }
+  when meta_key_count(meta, "pubsig") > 1 || meta_key_count(meta, "pubkey") > 1 || meta_key_count(meta, "sha256") > 1 || meta_key_count(meta, "version") > 1 {
+    give "BAD duplicate security key in pkg.meta"
+  }
+  hold pubsig = pkgfield(meta, "pubsig")
+  when len(pubsig) == 0 {
+    give "unsigned"
+  }
+  hold pub = pkgfield(meta, "pubkey")
+  when len(pub) != 64 {
+    give "BAD missing or malformed pubkey in pkg.meta"
+  }
+  when trusted_has_pubkey(trusted_path, pub) == 0 {
+    give "untrusted"
+  }
+  hold pid = pkgfield(meta, "pubkeyid")
+  when len(pid) > 0 {
+    when cx_eq_hex(pid, pk_keyid(pub)) == 0 {
+      give "BAD pubkeyid does not match pubkey"
+    }
+  }
+  hold digest = pkgfield(meta, "sha256")
+  when len(digest) == 0 {
+    give "BAD missing sha256 in pkg.meta"
+  }
+  hold src = read_file(concat(concat(reg, "/"), concat(pkg_nm, "/main.sa")))
+  hold real_sha = pkgsha(src)
+  when cx_eq_hex(digest, real_sha) == 0 {
+    give "BAD main.sa does not match signed sha256"
+  }
+  hold mver = pkgfield(meta, "version")
+  when len(mver) == 0 {
+    hold mver = "0.0.0"
+  }
+  hold rec = sign_record(pkg_nm, mver, real_sha)
+  when pk_verify(pub, rec, pubsig) == 0 {
+    give "BAD public-key signature invalid"
+  }
+  give "verified"
+}
+
+// index_sign_record: canonical string binding INDEX bytes AND every listed
+// package name, version, and main.sa SHA-256. Returns !reason on missing pkg.
+make index_sign_record(idx_text: str, reg: str) -> str {
+  hold idx_sha = pkgsha(idx_text)
+  hold rec = concat("sayanox-index-v1\nindex_sha256=", concat(idx_sha, "\n"))
+  hold specs = lock_specs(idx_text, len(idx_text))
+  hold rest = specs
+  while len(rest) > 0 {
+    hold sp = take_field(rest)
+    hold rest = drop_field(rest)
+    hold pnm = dep_name(sp)
+    hold pvr = dep_ver(sp)
+    when package_name_ok(pnm) == 0 {
+      give concat("!unsafe package name in INDEX: ", pnm)
+    }
+    hold pmeta = read_file(concat(concat(reg, "/"), concat(pnm, "/pkg.meta")))
+    when len(pmeta) == 0 {
+      give concat("!missing pkg.meta for ", pnm)
+    }
+    hold mver = pkgfield(pmeta, "version")
+    when string_eq(mver, pvr) == 0 {
+      give concat("!INDEX version mismatch for ", pnm)
+    }
+    hold pmain = concat(concat(reg, "/"), concat(pnm, "/main.sa"))
+    when path_kind(pmain) != 1 {
+      give concat("!missing main.sa for ", pnm)
+    }
+    hold psha = pkgsha(read_file(pmain))
+    hold entry = concat("pkg=", concat(pnm, concat("@", concat(pvr, concat(":", concat(psha, "\n"))))))
+    hold rec = concat(rec, entry)
+  }
+  give rec
+}
+
+// verify_index_dir: verifies <reg>/INDEX + <reg>/INDEX.sig + every listed
+// package main.sa SHA-256 against pinned public keys in trusted_path.
+// Returns empty string on success, else error reason.
+make verify_index_dir(reg: str, trusted_path: str) -> str {
+  hold idx_p = joined(reg, "INDEX")
+  hold sig_p = joined(reg, "INDEX.sig")
+  when path_kind(idx_p) != 1 {
+    give "missing INDEX"
+  }
+  when path_kind(sig_p) != 1 {
+    give "missing INDEX.sig"
+  }
+  hold idx_txt = read_file(idx_p)
+  hold sig_txt = read_file(sig_p)
+  when meta_key_count(sig_txt, "pubsig") > 1 || meta_key_count(sig_txt, "pubkey") > 1 || meta_key_count(sig_txt, "index_sha256") > 1 {
+    give "duplicate security key in INDEX.sig"
+  }
+  hold pub = pkgfield(sig_txt, "pubkey")
+  hold pid = pkgfield(sig_txt, "pubkeyid")
+  hold claim_sha = pkgfield(sig_txt, "index_sha256")
+  hold pubsig = pkgfield(sig_txt, "pubsig")
+  when len(pub) != 64 || len(pubsig) != 128 {
+    give "malformed INDEX.sig"
+  }
+  when trusted_has_pubkey(trusted_path, pub) == 0 {
+    give "untrusted INDEX.sig public key"
+  }
+  when len(pid) > 0 {
+    when cx_eq_hex(pid, pk_keyid(pub)) == 0 {
+      give "INDEX.sig pubkeyid mismatch"
+    }
+  }
+  hold real_idx_sha = pkgsha(idx_txt)
+  when len(claim_sha) > 0 {
+    when cx_eq_hex(claim_sha, real_idx_sha) == 0 {
+      give "INDEX sha256 does not match INDEX.sig"
+    }
+  }
+  hold rec = index_sign_record(idx_txt, reg)
+  when len(rec) > 0 && sx_index(rec, 0) == 33 {
+    give tail1(rec)
+  }
+  when pk_verify(pub, rec, pubsig) == 0 {
+    give "invalid INDEX.sig signature"
+  }
+  give ""
+}
+
 // ---- the command line -----------------------------------------------------
 // `sxpkg --online <command>` used to be read by the shell; the flag is
 // consumed here by shifting every argument one place.
@@ -1209,6 +1445,22 @@ when len(key_file) == 0 {
 hold secret = load_key(key_file)
 // SAYANOX_REQUIRE_SIGNED=1 turns `unsigned` and `nokey` into verify failures.
 hold require_signed = string_eq(getenv("SAYANOX_REQUIRE_SIGNED"), "1")
+// Public-key trust anchor & enforcement:
+//   .sayanox/trusted_keys holds pinned 32-byte Curve25519 public keys.
+//   SAYANOX_REQUIRE_PUBKEY=1 makes verify and sync refuse unsigned or untrusted
+//   packages and registry indices.
+hold trusted_keys_path = getenv("SAYANOX_TRUSTED_KEYS")
+when len(trusted_keys_path) == 0 {
+  hold trusted_keys_path = rooted(root, ".sayanox/trusted_keys")
+}
+hold require_pubkey = string_eq(getenv("SAYANOX_REQUIRE_PUBKEY"), "1")
+hold is_keygen = string_eq(command, "keygen")
+hold is_trust_add = string_eq(command, "trust-add")
+hold is_trust_list = string_eq(command, "trust-list")
+hold is_pubsign = string_eq(command, "pubsign")
+hold is_verify_pub = string_eq(command, "verify-pub")
+hold is_sign_index = string_eq(command, "sign-index")
+hold is_verify_index = string_eq(command, "verify-index")
 hold meta_path = ""
 hold index = ""
 hold lock = ""
@@ -1566,6 +1818,21 @@ when is_sync == 1 {
         hold sy2d1 = download(concat(concat(concat(sy2target, "/"), sy2nm2), "/pkg.meta"), concat(concat(concat(registry_path, "/"), sy2nm2), "/pkg.meta"))
         hold sy2d2 = download(concat(concat(concat(sy2target, "/"), sy2nm2), "/main.sa"), concat(concat(concat(registry_path, "/"), sy2nm2), "/main.sa"))
         show concat("  synced ", concat(sy2nm2, concat("=", sy2vr2)))
+      }
+      when require_pubkey == 1 {
+        hold sy2sigok = download(concat(sy2target, "/INDEX.sig"), joined(registry_path, "INDEX.sig"))
+        when sy2sigok == 0 {
+          hold sy2rm4 = remove_path(sy2tmp)
+          hold sy2esig = say_err("sxpkg: FAILED fetching INDEX.sig (required by SAYANOX_REQUIRE_PUBKEY=1)")
+          hold sy2code = exit(1)
+        }
+        hold sy2vwhy = verify_index_dir(registry_path, trusted_keys_path)
+        when len(sy2vwhy) > 0 {
+          hold sy2rm5 = remove_path(sy2tmp)
+          hold sy2ebad = say_err(concat("sxpkg: FAILED signed-index verification: ", sy2vwhy))
+          hold sy2code = exit(1)
+        }
+        show "sxpkg: signed index verified"
       }
       hold sy2rm3 = remove_path(sy2tmp)
     }
@@ -1988,12 +2255,26 @@ when is_sync_local == 1 {
       show "sxpkg: rejected index with unsafe package name"
       hold sycode = exit(1)
     } otherwise {
+      when require_pubkey == 1 {
+        hold syiv = verify_index_dir(sydir, trusted_keys_path)
+        when len(syiv) > 0 {
+          show concat("sxpkg: FAILED signed-index verification: ", syiv)
+          hold sycode = exit(1)
+        }
+      }
       hold syw0 = write_file(index_path, syidx)
       when syw0 == 0 {
         show "sxpkg: FAILED writing the registry index"
         hold sycode = exit(1)
       } otherwise {
+        hold sysigsrc = concat(concat(sydir, "/"), "INDEX.sig")
+        when path_kind(sysigsrc) == 1 {
+          hold sysigw = write_file(joined(registry_path, "INDEX.sig"), read_file(sysigsrc))
+        }
         show "sxpkg: index updated"
+        when require_pubkey == 1 {
+          show "sxpkg: signed index verified"
+        }
         hold syrest2 = lock_specs(syidx, len(syidx))
         while len(syrest2) > 0 {
           hold syone2 = take_field(syrest2)
@@ -2327,6 +2608,27 @@ when is_verify == 1 {
                   } otherwise {
                     hold problems = problems + 1
                     show concat("sxpkg: SIGNATURE ", concat(vkey, concat(": ", vstat)))
+                  }
+                }
+              }
+              hold vpstat = check_pubsig(vkey, registry_path, trusted_keys_path)
+              when string_eq(vpstat, "verified") == 1 {
+                show concat("sxpkg: pubsig ok ", vkey)
+              } otherwise {
+                when string_eq(vpstat, "unsigned") == 1 {
+                  when require_pubkey == 1 {
+                    hold problems = problems + 1
+                    show concat("sxpkg: PUBKEY UNSIGNED ", vkey)
+                  }
+                } otherwise {
+                  when string_eq(vpstat, "untrusted") == 1 {
+                    when require_pubkey == 1 {
+                      hold problems = problems + 1
+                      show concat("sxpkg: PUBKEY UNTRUSTED ", vkey)
+                    }
+                  } otherwise {
+                    hold problems = problems + 1
+                    show concat("sxpkg: PUBKEY ", concat(vkey, concat(": ", vpstat)))
                   }
                 }
               }
@@ -2929,6 +3231,262 @@ when string_eq(command, "install-cached") {
   when icbad == 1 {
     hold iccode = exit(1)
   }
+}
+
+// keygen [keyname]: generate a Curve25519 signing seed (.sec) and public key
+// (.pub) under .sayanox/keys/. Uses SAYANOX_SECRET_SEED or SAYANOX_PASSPHRASE
+// when set for deterministic reproducible key generation.
+when is_keygen == 1 {
+  hold handled = 1
+  hold kname = arg(2 + online_shift)
+  when len(kname) == 0 {
+    hold kname = "default"
+  }
+  when package_name_ok(kname) == 0 {
+    show "sxpkg: invalid key name"
+    hold kgcode0 = exit(1)
+  }
+  hold kgmk = ensure_dir(keys_path)
+  hold seed_hex = trim_ws(getenv("SAYANOX_SECRET_SEED"))
+  when len(seed_hex) != 64 {
+    hold pass = getenv("SAYANOX_PASSPHRASE")
+    when len(pass) == 0 {
+      hold pass = concat(concat(root, ":"), kname)
+    }
+    hold seed_hex = pk_seed_from_passphrase(pass)
+  }
+  hold pub_hex = pk_pubkey(seed_hex)
+  hold kid_hex = pk_keyid(pub_hex)
+  hold sec_p = joined(keys_path, concat(kname, ".sec"))
+  hold pub_p = joined(keys_path, concat(kname, ".pub"))
+  when write_file(sec_p, concat(seed_hex, "\n")) == 0 || write_file(pub_p, concat(pub_hex, "\n")) == 0 {
+    show "sxpkg: FAILED writing keypair files"
+    hold kgcode1 = exit(1)
+  }
+  show concat("sxpkg: keygen ", kname)
+  show concat("  pubkey=", pub_hex)
+  show concat("  keyid=", kid_hex)
+}
+
+// trust-add <pubkey_hex|pubfile>: pin a Curve25519 public key in .sayanox/trusted_keys
+when is_trust_add == 1 {
+  hold handled = 1
+  hold raw_in = trim_ws(arg(2 + online_shift))
+  when len(raw_in) == 0 {
+    show "usage: sxpkg trust-add <pubkey-hex-or-file>"
+    hold tacode0 = exit(1)
+  }
+  hold pub_cand = raw_in
+  when len(pub_cand) != 64 && path_kind(raw_in) == 1 {
+    hold pub_cand = trim_ws(read_file(raw_in))
+  }
+  when pubkey_hex_ok(pub_cand) == 0 {
+    show "sxpkg: refusing malformed or off-curve public key"
+    hold tacode1 = exit(1)
+  }
+  hold tamk = ensure_dir(rooted(root, ".sayanox"))
+  hold tkid = pk_keyid(pub_cand)
+  when trusted_has_pubkey(trusted_keys_path, pub_cand) == 0 {
+    hold prev_tk = read_file(trusted_keys_path)
+    when len(prev_tk) > 0 && sx_index(prev_tk, len(prev_tk) - 1) != 10 {
+      hold prev_tk = concat(prev_tk, "\n")
+    }
+    hold new_tk = concat(prev_tk, concat(tkid, concat("=", concat(pub_cand, "\n"))))
+    when write_file(trusted_keys_path, new_tk) == 0 {
+      show "sxpkg: FAILED writing trusted_keys"
+      hold tacode2 = exit(1)
+    }
+  }
+  show concat("sxpkg: trusted ", concat(tkid, concat("=", pub_cand)))
+}
+
+// trust-list: list pinned Curve25519 public keys in .sayanox/trusted_keys
+when is_trust_list == 1 {
+  hold handled = 1
+  hold tltxt = read_file(trusted_keys_path)
+  when len(tltxt) == 0 {
+    show "sxpkg: no trusted public keys"
+  } otherwise {
+    hold tln = len(tltxt)
+    hold tli = 0
+    hold tlline = ""
+    while tli <= tln {
+      hold tlc = 10
+      when tli < tln {
+        hold tlc = sx_index(tltxt, tli)
+      }
+      when tlc == 10 {
+        hold tlt = trim_ws(tlline)
+        when len(tlt) > 0 && sx_index(tlt, 0) != 35 {
+          show concat("sxpkg: trusted ", tlt)
+        }
+        hold tlline = ""
+      } otherwise {
+        hold tlline = concat(tlline, chr(tlc))
+      }
+      hold tli = tli + 1
+    }
+  }
+}
+
+// pubsign <name>: sign registry package <name> with Curve25519 Schnorr-SHA256
+// and record sha256=, pubkey=, pubkeyid=, and pubsig= in pkg.meta.
+when is_pubsign == 1 {
+  hold handled = 1
+  when argn < 3 {
+    show "usage: sxpkg pubsign <name>"
+    hold pscode0 = exit(1)
+  }
+  hold ps_seed = load_sec_seed(keys_path)
+  when len(ps_seed) != 64 {
+    show "sxpkg: no public-key signing seed; run sxpkg keygen or set SAYANOX_SIGN_SECKEY"
+    hold pscode1 = exit(1)
+  }
+  hold psdir = concat(concat(registry_path, "/"), name)
+  hold psmain = concat(psdir, "/main.sa")
+  hold psmetap = concat(psdir, "/pkg.meta")
+  when path_kind(psmain) != 1 {
+    show concat("sxpkg: no registry copy of ", name)
+    hold pscode2 = exit(1)
+  }
+  hold pssrc = read_file(psmain)
+  hold psmeta = read_file(psmetap)
+  hold psver = pkgfield(psmeta, "version")
+  when len(psver) == 0 {
+    hold psver = "0.0.0"
+  }
+  hold psdigest = pkgsha(pssrc)
+  hold pspub = pk_pubkey(ps_seed)
+  hold pskid = pk_keyid(pspub)
+  hold pssig = pk_sign(ps_seed, sign_record(name, psver, psdigest))
+  hold psmeta = meta_set(psmeta, "sha256", psdigest)
+  hold psmeta = meta_set(psmeta, "pubkey", pspub)
+  hold psmeta = meta_set(psmeta, "pubkeyid", pskid)
+  hold psmeta = meta_set(psmeta, "pubsig", pssig)
+  when write_file(psmetap, psmeta) == 0 {
+    show concat("sxpkg: cannot write ", psmetap)
+    hold pscode3 = exit(1)
+  }
+  show concat("sxpkg: pubsigned ", concat(name, concat(" ", psver)))
+  show concat("  sha256=", psdigest)
+  show concat("  pubkeyid=", pskid)
+  show concat("  pubsig=", pssig)
+}
+
+// verify-pub [name]: verify one package (or all registry packages) against
+// .sayanox/trusted_keys using ONLY public keys (never reads any .sec file).
+when is_verify_pub == 1 {
+  hold handled = 1
+  hold vp_probs = 0
+  hold vp_cnt = 0
+  hold vp_list = ""
+  when len(name) > 0 {
+    hold vp_list = concat(name, "\n")
+  } otherwise {
+    hold vp_list = read_dir(registry_path)
+    when len(vp_list) > 0 && sx_index(vp_list, len(vp_list) - 1) != 10 {
+      hold vp_list = concat(vp_list, "\n")
+    }
+  }
+  hold vp_pos = 0
+  hold vp_ln = ""
+  while vp_pos < len(vp_list) {
+    hold vp_c = sx_index(vp_list, vp_pos)
+    when vp_c == 10 {
+      when len(vp_ln) > 0 {
+        hold vp_dir = concat(concat(registry_path, "/"), vp_ln)
+        when path_kind(vp_dir) == 2 {
+          hold vp_cnt = vp_cnt + 1
+          hold vp_res = check_pubsig(vp_ln, registry_path, trusted_keys_path)
+          when string_eq(vp_res, "verified") == 1 {
+            hold vp_meta = read_file(concat(vp_dir, "/pkg.meta"))
+            show concat("sxpkg: verified-pub ", concat(vp_ln, concat(" keyid=", pkgfield(vp_meta, "pubkeyid"))))
+          } otherwise {
+            show concat("sxpkg: FAILED ", concat(vp_ln, concat(": ", vp_res)))
+            hold vp_probs = vp_probs + 1
+          }
+        }
+      }
+      hold vp_ln = ""
+    } otherwise {
+      hold vp_ln = concat(vp_ln, chr(vp_c))
+    }
+    hold vp_pos = vp_pos + 1
+  }
+  when vp_cnt == 0 {
+    show "sxpkg: nothing to verify-pub"
+    hold vp_probs = vp_probs + 1
+  }
+  when vp_probs == 0 {
+    show concat("sxpkg: verify-pub ok (", concat(numstr(vp_cnt), " packages)"))
+  } otherwise {
+    show concat("sxpkg: verify-pub FAILED (", concat(numstr(vp_probs), " problem(s))"))
+    hold vp_code = exit(1)
+  }
+}
+
+// sign-index [reg_dir]: sign <reg_dir>/INDEX + every listed package sha256
+// and write <reg_dir>/INDEX.sig using the secret seed (.sec).
+when is_sign_index == 1 {
+  hold handled = 1
+  hold si_reg = arg(2 + online_shift)
+  when len(si_reg) == 0 {
+    hold si_reg = registry_path
+  } otherwise {
+    hold si_reg = strip_file_scheme(si_reg)
+  }
+  hold si_seed = load_sec_seed(keys_path)
+  when len(si_seed) != 64 {
+    show "sxpkg: no public-key signing seed; run sxpkg keygen or set SAYANOX_SIGN_SECKEY"
+    hold sicode0 = exit(1)
+  }
+  hold si_idxp = joined(si_reg, "INDEX")
+  when path_kind(si_idxp) != 1 {
+    show concat("sxpkg: missing INDEX at ", si_idxp)
+    hold sicode1 = exit(1)
+  }
+  hold si_idx = read_file(si_idxp)
+  hold si_rec = index_sign_record(si_idx, si_reg)
+  when len(si_rec) > 0 && sx_index(si_rec, 0) == 33 {
+    show concat("sxpkg: FAILED signing INDEX: ", tail1(si_rec))
+    hold sicode2 = exit(1)
+  }
+  hold si_pub = pk_pubkey(si_seed)
+  hold si_kid = pk_keyid(si_pub)
+  hold si_sha = pkgsha(si_idx)
+  hold si_sig = pk_sign(si_seed, si_rec)
+  hold si_doc = "# INDEX.sig\nversion=1\n"
+  hold si_doc = meta_set(si_doc, "index_sha256", si_sha)
+  hold si_doc = meta_set(si_doc, "pubkey", si_pub)
+  hold si_doc = meta_set(si_doc, "pubkeyid", si_kid)
+  hold si_doc = meta_set(si_doc, "pubsig", si_sig)
+  hold si_sigp = joined(si_reg, "INDEX.sig")
+  when write_file(si_sigp, si_doc) == 0 {
+    show concat("sxpkg: cannot write ", si_sigp)
+    hold sicode3 = exit(1)
+  }
+  show concat("sxpkg: signed index ", si_sigp)
+  show concat("  index_sha256=", si_sha)
+  show concat("  pubkeyid=", si_kid)
+}
+
+// verify-index [reg_dir]: verify <reg_dir>/INDEX + <reg_dir>/INDEX.sig + every
+// listed package main.sa SHA-256 against .sayanox/trusted_keys (public key only).
+when is_verify_index == 1 {
+  hold handled = 1
+  hold vi_reg = arg(2 + online_shift)
+  when len(vi_reg) == 0 {
+    hold vi_reg = registry_path
+  } otherwise {
+    hold vi_reg = strip_file_scheme(vi_reg)
+  }
+  hold vi_why = verify_index_dir(vi_reg, trusted_keys_path)
+  when len(vi_why) > 0 {
+    show concat("sxpkg: verify-index FAILED: ", vi_why)
+    hold vicode = exit(1)
+  }
+  hold vi_sigtxt = read_file(joined(vi_reg, "INDEX.sig"))
+  show concat("sxpkg: verify-index ok keyid=", pkgfield(vi_sigtxt, "pubkeyid"))
 }
 
 // help and an unknown command: the two answers the wrapper's case statement

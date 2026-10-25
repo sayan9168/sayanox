@@ -1,0 +1,8 @@
+struct P {
+  x
+}
+make id<T>(a: T) -> T {
+  give a
+}
+hold p = P { 1 }
+hold y = id(p)

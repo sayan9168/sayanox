@@ -53,8 +53,8 @@
 // code must fit in the first page (4096 - 116 bytes on i386, - 176 on
 // arm64). Each is checked or documented, never silently wrong.
 //
-// Usage:   ./tools/native32 program.sa out [i386|arm64]      (default i386)
-//          ./out                                             (i386 only)
+// Usage:   ./tools/native32 program.sa out [i386|arm64|riscv64] (default i386)
+//          ./out                                                (i386 only)
 
 make fail(code: num, msg: str) -> num {
   hold w = write_file("/dev/stderr", concat(concat("native32: ", msg), "\n"))
@@ -651,9 +651,102 @@ make a_imm26(xs: list, at: num, delta: num) -> list {
   give set_w(xs, at, w)
 }
 
+// ---- RISC-V 64-bit (RV64IM) instruction encoders --------------------------
+
+make rv_r(f7: num, rs2: num, rs1: num, f3: num, rd: num, op: num) -> num {
+  give shl(f7, 25) + shl(rs2, 20) + shl(rs1, 15) + shl(f3, 12) + shl(rd, 7) + op
+}
+
+make rv_i(imm: num, rs1: num, f3: num, rd: num, op: num) -> num {
+  hold u = imm
+  when u < 0 {
+    u = u + 4096
+  }
+  give shl(bit_and(u, 4095), 20) + shl(rs1, 15) + shl(f3, 12) + shl(rd, 7) + op
+}
+
+make rv_s(imm: num, rs2: num, rs1: num, f3: num) -> num {
+  hold u = imm
+  when u < 0 {
+    u = u + 4096
+  }
+  hold u12 = bit_and(u, 4095)
+  give shl(shr(u12, 5), 25) + shl(rs2, 20) + shl(rs1, 15) + shl(f3, 12) + shl(bit_and(u12, 31), 7) + 35
+}
+
+make rv_b_word(delta: num, rs2: num, rs1: num, f3: num) -> num {
+  hold u = delta
+  when u < 0 {
+    u = u + 8192
+  }
+  hold b12 = bit_and(shr(u, 12), 1)
+  hold b11 = bit_and(shr(u, 11), 1)
+  hold b10_5 = bit_and(shr(u, 5), 63)
+  hold b4_1 = bit_and(shr(u, 1), 15)
+  give b12 * 2147483648 + shl(b10_5, 25) + shl(rs2, 20) + shl(rs1, 15) + shl(f3, 12) + shl(b4_1, 8) + shl(b11, 7) + 99
+}
+
+make rv_j_word(delta: num, rd: num) -> num {
+  hold u = delta
+  when u < 0 {
+    u = u + 2097152
+  }
+  hold b20 = bit_and(shr(u, 20), 1)
+  hold b19_12 = bit_and(shr(u, 12), 255)
+  hold b11 = bit_and(shr(u, 11), 1)
+  hold b10_1 = bit_and(shr(u, 1), 1023)
+  give b20 * 2147483648 + shl(b10_1, 21) + shl(b11, 20) + shl(b19_12, 12) + shl(rd, 7) + 111
+}
+
+// 32-bit signed constant or low-4GiB address in two RV64I words:
+//   lui rd, hi20 ; addiw rd, rd, lo12
+make rv_li32(xs: list, rd: num, v: num) -> list {
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  hold b11 = bit_and(shr(u, 11), 1)
+  hold hi20 = bit_and(shr(u + b11 * 4096, 12), 1048575)
+  hold lo12 = bit_and(u, 4095)
+  hold w0 = 0
+  when bit_and(hi20, 524288) != 0 {
+    w0 = 2147483648 + shl(bit_and(hi20, 524287), 12) + shl(rd, 7) + 55
+  } otherwise {
+    w0 = shl(hi20, 12) + shl(rd, 7) + 55
+  }
+  hold w1 = 0
+  when bit_and(lo12, 2048) != 0 {
+    w1 = 2147483648 + shl(bit_and(lo12, 2047), 20) + shl(rd, 15) + shl(rd, 7) + 27
+  } otherwise {
+    w1 = shl(lo12, 20) + shl(rd, 15) + shl(rd, 7) + 27
+  }
+  xs = e_w(xs, w0)
+  xs = e_w(xs, w1)
+  give xs
+}
+
+make rv_set_abs(xs: list, at: num, v: num) -> list {
+  hold rd = bit_and(shr(w_at(xs, at), 7), 31)
+  hold tmp = rv_li32([], rd, v)
+  xs = set_w(xs, at, w_at(tmp, 0))
+  xs = set_w(xs, at + 4, w_at(tmp, 4))
+  give xs
+}
+
+make rv_push_a0(xs: list) -> list {
+  xs = e_w(xs, rv_i(0 - 16, 2, 0, 2, 19))
+  xs = e_w(xs, rv_s(0, 10, 2, 3))
+  give xs
+}
+
+make rv_pop_reg(xs: list, rd: num) -> list {
+  xs = e_w(xs, rv_i(0, 2, 3, rd, 3))
+  xs = e_w(xs, rv_i(16, 2, 0, 2, 19))
+  give xs
+}
+
 // ---- the shared emitter surface -------------------------------------------
-// arch 0 is i386, arch 1 is arm64. Every helper below emits the same meaning
-// for both, and the fixed sizes let the caller work out a patch site.
+// arch 0 is i386, arch 1 is arm64, arch 2 is riscv64.
 
 make emit_push_imm2(xs: list, arch: num, v: num) -> list {
   when arch == 0 {
@@ -661,6 +754,10 @@ make emit_push_imm2(xs: list, arch: num, v: num) -> list {
     xs = e32(xs, v)
     xs = e1(xs, 80)
     give xs
+  }
+  when arch == 2 {
+    xs = rv_li32(xs, 10, v)
+    give rv_push_a0(xs)
   }
   hold u = v
   when u < 0 {
@@ -673,13 +770,18 @@ make emit_push_imm2(xs: list, arch: num, v: num) -> list {
 }
 
 // value at the absolute address -> accumulator, then push. The caller records
-// the fixup site: len(code) + 1 on i386, len(code) on arm64.
+// the fixup site: len(code) + 1 on i386, len(code) on arm64/riscv64.
 make emit_load_global(xs: list, arch: num) -> list {
   when arch == 0 {
     xs = e1(xs, 161)
     xs = e32(xs, 0)
     xs = e1(xs, 80)
     give xs
+  }
+  when arch == 2 {
+    xs = rv_li32(xs, 5, 0)
+    xs = e_w(xs, rv_i(0, 5, 2, 10, 3))
+    give rv_push_a0(xs)
   }
   xs = a_addr(xs, 9)
   xs = e_w(xs, 3107979552)
@@ -693,6 +795,10 @@ make emit_store_global(xs: list, arch: num) -> list {
     xs = e32(xs, 0)
     give xs
   }
+  when arch == 2 {
+    xs = rv_li32(xs, 5, 0)
+    give e_w(xs, rv_s(0, 10, 5, 2))
+  }
   xs = a_addr(xs, 9)
   xs = e_w(xs, 3103785248)
   give xs
@@ -702,12 +808,54 @@ make emit_pop_acc(xs: list, arch: num) -> list {
   when arch == 0 {
     give e1(xs, 88)
   }
+  when arch == 2 {
+    give rv_pop_reg(xs, 10)
+  }
   give e_w(xs, 4165011424)
 }
 
 make emit_op2(xs: list, arch: num, op: num) -> list {
   when arch == 0 {
     give emit_op(xs, op)
+  }
+  when arch == 2 {
+    xs = rv_pop_reg(xs, 11)
+    xs = rv_pop_reg(xs, 10)
+    when op == 1 {
+      xs = e_w(xs, rv_r(0, 11, 10, 0, 10, 59))
+    }
+    when op == 2 {
+      xs = e_w(xs, rv_r(32, 11, 10, 0, 10, 59))
+    }
+    when op == 3 {
+      xs = e_w(xs, rv_r(1, 11, 10, 0, 10, 59))
+    }
+    when op == 4 {
+      xs = e_w(xs, rv_r(1, 11, 10, 6, 10, 59))
+    }
+    when op == 5 {
+      xs = e_w(xs, rv_r(32, 11, 10, 0, 10, 59))
+      xs = e_w(xs, rv_i(1, 10, 3, 10, 19))
+    }
+    when op == 6 {
+      xs = e_w(xs, rv_r(32, 11, 10, 0, 10, 59))
+      xs = e_w(xs, rv_r(0, 10, 0, 3, 10, 51))
+    }
+    when op == 7 {
+      xs = e_w(xs, rv_r(0, 11, 10, 2, 10, 51))
+    }
+    when op == 8 {
+      xs = e_w(xs, rv_r(0, 10, 11, 2, 10, 51))
+      xs = e_w(xs, rv_i(1, 10, 4, 10, 19))
+    }
+    when op == 9 {
+      xs = e_w(xs, rv_r(0, 10, 11, 2, 10, 51))
+    }
+    when op == 10 {
+      xs = e_w(xs, rv_r(0, 11, 10, 2, 10, 51))
+      xs = e_w(xs, rv_i(1, 10, 4, 10, 19))
+    }
+    give rv_push_a0(xs)
   }
   xs = e_w(xs, 4165011425)
   xs = e_w(xs, 4165011424)
@@ -759,6 +907,10 @@ make emit_test_jz(xs: list, arch: num) -> list {
     xs = e32(xs, 0)
     give xs
   }
+  when arch == 2 {
+    xs = e_w(xs, 19)
+    give e_w(xs, rv_b_word(0, 0, 10, 0))
+  }
   xs = e_w(xs, 1895825439)
   xs = e_w(xs, 1409286144)
   give xs
@@ -770,6 +922,9 @@ make emit_jmp(xs: list, arch: num) -> list {
     xs = e32(xs, 0)
     give xs
   }
+  when arch == 2 {
+    give e_w(xs, rv_j_word(0, 0))
+  }
   give e_w(xs, 335544320)
 }
 
@@ -777,12 +932,18 @@ make patch_jz(xs: list, arch: num, at: num, target: num) -> list {
   when arch == 0 {
     give patch32(xs, at, target - (at + 4))
   }
+  when arch == 2 {
+    give set_w(xs, at, rv_b_word(target - at, 0, 10, 0))
+  }
   give a_imm19(xs, at, target - at)
 }
 
 make patch_jmp(xs: list, arch: num, at: num, target: num) -> list {
   when arch == 0 {
     give patch32(xs, at, target - (at + 4))
+  }
+  when arch == 2 {
+    give set_w(xs, at, rv_j_word(target - at, 0))
   }
   give a_imm26(xs, at, target - at)
 }
@@ -793,6 +954,10 @@ make emit_call(xs: list, arch: num, target: num) -> list {
     hold at = len(xs)
     xs = e32(xs, 0)
     give patch32(xs, at, target - (at + 4))
+  }
+  when arch == 2 {
+    hold rat = len(xs)
+    give e_w(xs, rv_j_word(target - rat, 1))
   }
   hold aat = len(xs)
   xs = e_w(xs, 2483027968)
@@ -809,6 +974,12 @@ make emit_exit0(xs: list, arch: num) -> list {
     xs = e1(xs, 128)
     give xs
   }
+  when arch == 2 {
+    xs = e_w(xs, rv_i(0, 0, 0, 10, 19))
+    xs = e_w(xs, rv_i(93, 0, 0, 17, 19))
+    xs = e_w(xs, 115)
+    give xs
+  }
   xs = a_movz(xs, 1, 0, 0)
   xs = a_movz(xs, 1, 8, 93)
   xs = e_w(xs, 3556769793)
@@ -821,9 +992,8 @@ make put_u64(xs: list, v: num) -> list {
   give xs
 }
 
-// The arm64 container: ELFCLASS64, EM_AARCH64 (183), two PT_LOADs, the
-// classic 0x400000 load address. Nothing in this repository executes it.
-make elf64_arm(code: list, data: list, entry_off: num) -> list {
+// ELFCLASS64 two-PT_LOAD container: EM_AARCH64 (183) or EM_RISCV (243).
+make elf64_em(code: list, data: list, entry_off: num, em: num) -> list {
   hold base = 4194304
   hold hdr = 176
   hold cn = len(code)
@@ -839,7 +1009,7 @@ make elf64_arm(code: list, data: list, entry_off: num) -> list {
   img = push(img, 0)
   img = put_zeros(img, 8)
   img = put_u16(img, 2)
-  img = put_u16(img, 183)
+  img = put_u16(img, em)
   img = put_u32(img, 1)
   img = put_u64(img, base + hdr + entry_off)
   img = put_u64(img, 64)
@@ -883,21 +1053,24 @@ make elf64_arm(code: list, data: list, entry_off: num) -> list {
 
 make run() -> num {
   when arg_count() < 3 {
-    hold usage = fail(2, "usage: native32 <program.sa> <out> [i386|arm64]")
+    hold usage = fail(2, "usage: native32 <program.sa> <out> [i386|arm64|riscv64]")
   }
   hold srcpath = arg(1)
   hold outpath = arg(2)
 
   // arch 0 is i386 (the default, and the one this repository can run);
-  // arch 1 is arm64, emitted and byte-checked but never executed here.
+  // arch 1 is arm64 and arch 2 is riscv64, emitted and byte-checked here.
   hold arch = 0
   when arg_count() >= 4 {
     hold want_arch = arg(3)
     when string_eq(want_arch, "arm64") == 1 {
       arch = 1
     }
-    when string_eq(want_arch, "arm64") == 0 && string_eq(want_arch, "i386") == 0 {
-      hold badarch = fail(2, concat(concat("unknown target '", want_arch), "' (i386 or arm64)"))
+    when string_eq(want_arch, "riscv64") == 1 {
+      arch = 2
+    }
+    when string_eq(want_arch, "arm64") == 0 && string_eq(want_arch, "riscv64") == 0 && string_eq(want_arch, "i386") == 0 {
+      hold badarch = fail(2, concat(concat("unknown target '", want_arch), "' (i386, arm64 or riscv64)"))
     }
   }
   hold src = read_file(srcpath)
@@ -1041,6 +1214,47 @@ make run() -> num {
     code = a_movz(code, 1, 8, 64)
     code = e_w(code, 3556769793)
     code = e_w(code, 3596551104)
+  }
+  when arch == 2 {
+    // RV64IM decimal print routine: 27 words (108 bytes). a0 in, writes
+    // signed decimal + '\n' via Linux write(1, ptr, len) (a7=64), returns.
+    code = []
+    fixsite = []
+    fixoff = []
+    code = e_w(code, rv_i(0, 10, 0, 5, 27))
+    code = e_w(code, rv_i(0, 0, 0, 6, 19))
+    code = e_w(code, rv_b_word(12, 0, 5, 5))
+    code = e_w(code, rv_r(32, 5, 0, 0, 5, 59))
+    code = e_w(code, rv_i(1, 0, 0, 6, 19))
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = rv_li32(code, 7, 0)
+    code = e_w(code, rv_i(10, 0, 0, 12, 19))
+    hold rv_loop = len(code)
+    code = e_w(code, rv_r(1, 12, 5, 5, 13, 59))
+    code = e_w(code, rv_r(1, 12, 5, 7, 14, 59))
+    code = e_w(code, rv_i(48, 14, 0, 14, 19))
+    code = e_w(code, rv_i(0 - 1, 7, 0, 7, 19))
+    code = e_w(code, rv_s(0, 14, 7, 0))
+    code = e_w(code, rv_i(0, 13, 0, 5, 27))
+    hold rv_bne = len(code)
+    code = e_w(code, rv_b_word(rv_loop - rv_bne, 0, 5, 1))
+    code = e_w(code, rv_b_word(16, 0, 6, 0))
+    code = e_w(code, rv_i(0 - 1, 7, 0, 7, 19))
+    code = e_w(code, rv_i(45, 0, 0, 14, 19))
+    code = e_w(code, rv_s(0, 14, 7, 0))
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = rv_li32(code, 15, 0)
+    code = e_w(code, rv_i(10, 0, 0, 14, 19))
+    code = e_w(code, rv_s(0, 14, 15, 0))
+    code = e_w(code, rv_i(1, 15, 0, 12, 19))
+    code = e_w(code, rv_r(32, 7, 12, 0, 12, 51))
+    code = e_w(code, rv_i(0, 7, 0, 11, 19))
+    code = e_w(code, rv_i(1, 0, 0, 10, 19))
+    code = e_w(code, rv_i(64, 0, 0, 17, 19))
+    code = e_w(code, 115)
+    code = e_w(code, 32871)
   }
 
   hold entry_off = len(code)
@@ -1338,11 +1552,19 @@ make run() -> num {
         }
         fixsite = push(fixsite, len(code))
         fixoff = push(fixoff, litoff)
-        code = a_addr(code, 1)
-        code = a_movz(code, 0, 2, lbytes)
-        code = a_movz(code, 1, 0, 1)
-        code = a_movz(code, 1, 8, 64)
-        code = e_w(code, 3556769793)
+        when arch == 2 {
+          code = rv_li32(code, 11, 0)
+          code = rv_li32(code, 12, lbytes)
+          code = e_w(code, rv_i(1, 0, 0, 10, 19))
+          code = e_w(code, rv_i(64, 0, 0, 17, 19))
+          code = e_w(code, 115)
+        } otherwise {
+          code = a_addr(code, 1)
+          code = a_movz(code, 0, 2, lbytes)
+          code = a_movz(code, 1, 0, 1)
+          code = a_movz(code, 1, 8, 64)
+          code = e_w(code, 3556769793)
+        }
       }
     }
     when act == 7 || act == 8 {
@@ -1400,7 +1622,7 @@ make run() -> num {
   hold cn = len(code)
   hold hdrsz = 116
   hold dva = 134512640 + 4096
-  when arch == 1 {
+  when arch != 0 {
     hdrsz = 176
     dva = 4194304 + 4096
   }
@@ -1415,7 +1637,11 @@ make run() -> num {
     when arch == 0 {
       code = patch32(code, fixsite[f], dva + fixoff[f])
     } otherwise {
-      code = set_abs(code, fixsite[f], dva + fixoff[f])
+      when arch == 2 {
+        code = rv_set_abs(code, fixsite[f], dva + fixoff[f])
+      } otherwise {
+        code = set_abs(code, fixsite[f], dva + fixoff[f])
+      }
     }
     f = f + 1
   }
@@ -1424,7 +1650,11 @@ make run() -> num {
   when arch == 0 {
     img = elf32(code, data, entry_off)
   } otherwise {
-    img = elf64_arm(code, data, entry_off)
+    when arch == 2 {
+      img = elf64_em(code, data, entry_off, 243)
+    } otherwise {
+      img = elf64_em(code, data, entry_off, 183)
+    }
   }
   hold wrote = write_bytes(outpath, img)
   when wrote != 1 {

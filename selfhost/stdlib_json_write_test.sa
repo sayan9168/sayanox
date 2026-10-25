@@ -1,0 +1,64 @@
+// selfhost/stdlib_json_write_test.sa -- three-backend parity test for
+// stdlib/json_write.sa round-tripping through stdlib/json_deep.sa.
+
+use "stdlib/json_deep.sa"
+use "stdlib/json_write.sa"
+
+hold h0 = jw_obj_empty()
+hold h0 = jw_obj_add(h0, "name", jw_str("alpha"))
+hold h0 = jw_obj_add(h0, "port", jw_num(80))
+hold h0 = jw_obj_add(h0, "tags", jw_arr_add(jw_arr_add(jw_arr_empty(), jw_str("edge")), jw_str("tls")))
+
+hold h1 = jw_obj_empty()
+hold h1 = jw_obj_add(h1, "name", jw_str("beta\n\"node\""))
+hold h1 = jw_obj_add(h1, "port", jw_num(8080))
+hold h1 = jw_obj_add(h1, "tags", jw_arr_empty())
+
+hold hosts = jw_arr_empty()
+hold hosts = jw_arr_add(hosts, h0)
+hold hosts = jw_arr_add(hosts, h1)
+
+hold srv = jw_obj_empty()
+hold srv = jw_obj_add(srv, "enabled", jw_bool(1))
+hold srv = jw_obj_add(srv, "ratio", jw_num(2.5))
+hold srv = jw_obj_add(srv, "offset", jw_num(-3.25))
+hold srv = jw_obj_add(srv, "backup", jw_null())
+hold srv = jw_obj_add(srv, "hosts", hosts)
+hold srv = jw_obj_add(srv, "temp", jw_str("drop-me"))
+
+// In-place update + key removal on the nested server object
+hold srv = jw_obj_set(srv, "ratio", jw_num(3.75))
+hold srv = jw_obj_set(srv, "added", jw_bool(0))
+hold srv = jw_obj_del(srv, "temp")
+
+hold doc = jw_obj_empty()
+hold doc = jw_obj_add(doc, "version", jw_num(2))
+hold doc = jw_obj_add(doc, "empty_obj", jw_obj_empty())
+hold doc = jw_obj_add(doc, "server", srv)
+
+show jd_valid(doc)
+show jd_num(doc, "version")
+show jd_type(doc, "empty_obj")
+show jd_len(doc, "empty_obj")
+show jd_flag(doc, "server.enabled")
+show jd_num(doc, "server.ratio")
+show jd_num(doc, "server.offset")
+show jd_type(doc, "server.backup")
+show jd_flag(doc, "server.added")
+show jd_has(doc, "server.temp")
+show jd_len(doc, "server.hosts")
+show jd_text(doc, "server.hosts.0.name")
+show jd_text(doc, "server.hosts.0.tags.1")
+show jd_text(doc, "server.hosts.1.name")
+show jd_num(doc, "server.hosts.1.port")
+show jd_len(doc, "server.hosts.1.tags")
+
+hold pretty = jw_pretty(doc, 2)
+show jd_valid(pretty)
+show string_eq(jw_minify(pretty), doc)
+show jd_text(pretty, "server.hosts.0.tags.0")
+show jd_num(pretty, "server.ratio")
+
+hold tiny = jw_obj_add(jw_obj_add(jw_obj_empty(), "a", jw_arr_empty()), "b", jw_arr_add(jw_arr_empty(), jw_num(1)))
+show jw_pretty(tiny, 2)
+show "json-write-done"

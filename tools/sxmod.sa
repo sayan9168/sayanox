@@ -69,6 +69,8 @@ make fail(code: num, msg: str) -> num {
   give 0
 }
 
+use "tools/sxmod_lib.sa"
+
 // ---- small text helpers ---------------------------------------------------
 
 make sub(s: str, a: num, b: num) -> str {
@@ -508,7 +510,23 @@ make rewrite_main(text: str, aliases: str, allm: str, base: num, srcpath: str) -
 
 make run() -> num {
   when arg_count() < 3 {
-    hold usage = fail(2, "usage: sxmod <program.sa> <out.sa>")
+    hold usage = fail(2, "usage: sxmod (--transitive) <program.sa> <out.sa>")
+  }
+  when string_eq(arg(1), "--transitive") == 1 {
+    when arg_count() != 4 {
+      hold usage2 = fail(2, "usage: sxmod --transitive <program.sa> <out.sa>")
+    }
+    hold t_srcpath = arg(2)
+    hold t_outpath = arg(3)
+    hold t_src = read_file(t_srcpath)
+    when len(t_src) == 0 {
+      hold t_nosrc = fail(1, concat(concat("cannot read ", t_srcpath), " (or it is empty)"))
+    }
+    hold t_out = mxl_lower_transitive(t_src, t_srcpath)
+    when write_file(t_outpath, t_out) != 1 {
+      hold t_nw = fail(1, concat("cannot write ", t_outpath))
+    }
+    give 0
   }
   hold srcpath = arg(1)
   hold outpath = arg(2)

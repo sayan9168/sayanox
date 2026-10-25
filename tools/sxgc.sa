@@ -1,0 +1,157 @@
+// tools/sxgc.sa -- THE 339-LINE x86-64 COLLECTOR, IN SAYANOX
+// (Phase D, step 9; docs/ALL_SAYANOX_PHASE.md).
+//
+// Usage:
+//   ./tools/sxgc <emit.log> <in_dump_dir> <out_dump_dir>
+
+make fail_gc(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxgc: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+make fail(code: num, msg: str) -> num {
+  give fail_gc(code, msg)
+}
+
+use "tools/sxenc_lib.sa"
+use "tools/sxgc_lib.sa"
+
+// ---- driver ---------------------------------------------------------------
+
+hold argn = arg_count()
+when argn < 4 {
+  hold u = fail_gc(2, "usage: sxgc <emit.log> <in_dump_dir> <out_dump_dir>")
+}
+hold logp = arg(1)
+hold indir = arg(2)
+hold outdir = arg(3)
+
+when path_kind(logp) != 1 {
+  hold e1 = fail_gc(1, concat("cannot read emit log: ", logp))
+}
+hold log_text = read_file(logp)
+hold gc_start = find_phase_offset(log_text, "=== phase: collector ===")
+when gc_start < 0 {
+  hold e2 = fail_gc(1, "emit log has no collector phase marker")
+}
+
+hold code_in = []
+hold cn = read_bytes(concat(indir, "/code.bin"), code_in)
+when cn < 0 {
+  hold e3 = fail_gc(1, concat("cannot read ", concat(indir, "/code.bin")))
+}
+hold data_in = []
+hold dn = read_bytes(concat(indir, "/data.bin"), data_in)
+when dn < 0 {
+  hold e4 = fail_gc(1, concat("cannot read ", concat(indir, "/data.bin")))
+}
+hold patch_in = []
+hold pn = read_bytes(concat(indir, "/patch.bin"), patch_in)
+when pn < 0 || pn % 16 != 0 {
+  hold e5 = fail_gc(1, concat("bad patch.bin in ", indir))
+}
+hold meta_txt = read_file(concat(indir, "/meta.txt"))
+when len(meta_txt) == 0 {
+  hold e6 = fail_gc(1, concat("cannot read ", concat(indir, "/meta.txt")))
+}
+hold npc = parse_first_int(meta_txt)
+
+hold st = make_enc_state(gc_start)
+st = emit_gc_all(st)
+hold gc_len = here_local(st)
+when gc_start + gc_len != cn {
+  hold m1 = concat("collector size mismatch: Sayanox emitted ", numstr(gc_len))
+  m1 = concat(m1, concat(" bytes, C emitted ", numstr(cn - gc_start)))
+  hold e7 = fail_gc(1, m1)
+}
+
+hold i = 0
+while i < gc_len {
+  hold got_b = enc_code_at(st, i)
+  hold want_b = code_in[gc_start + i]
+  when got_b != want_b {
+    hold m2 = concat("byte mismatch at collector +", numstr(i))
+    m2 = concat(m2, concat(": got ", concat(numstr(got_b), concat(", want ", numstr(want_b)))))
+    hold e8 = fail_gc(1, m2)
+  }
+  i = i + 1
+}
+
+// Build spliced code.bin (0..gc_start from input, gc_start..cn from Sayanox)
+hold code_out = []
+i = 0
+while i < gc_start {
+  code_out = push(code_out, code_in[i])
+  i = i + 1
+}
+i = 0
+while i < gc_len {
+  code_out = push(code_out, enc_code_at(st, i))
+  i = i + 1
+}
+
+hold patch_out = []
+hold c_gc_calls = 0
+i = 0
+while i < npc {
+  hold at = read_u32_le(patch_in, i * 16)
+  hold to = read_u32_le(patch_in, i * 16 + 8)
+  when at < gc_start {
+    when to >= gc_start {
+      hold matched = 0 - 1
+      hold bi = 23
+      while bi <= 28 {
+        hold bo = st[10 + bi]
+        when bo == to {
+          matched = bo
+        }
+        bi = bi + 1
+      }
+      when matched < 0 {
+        hold e9 = fail_gc(1, concat("unknown collector target in patch.bin: ", numstr(to)))
+      }
+      patch_out = append_u64_le(patch_out, at)
+      patch_out = append_u64_le(patch_out, matched)
+    } otherwise {
+      patch_out = append_u64_le(patch_out, at)
+      patch_out = append_u64_le(patch_out, to)
+    }
+  } otherwise {
+    when c_gc_calls >= st[4] {
+      hold e10 = fail_gc(1, "C emitted more collector call patches than Sayanox")
+    }
+    hold sx_at = enc_call_at(st, c_gc_calls)
+    hold sx_bi = enc_call_idx(st, c_gc_calls)
+    hold sx_to = st[10 + sx_bi]
+    when sx_at != at || sx_to != to {
+      hold e11 = fail_gc(1, "collector call patch mismatch against patch.bin")
+    }
+    patch_out = append_u64_le(patch_out, sx_at)
+    patch_out = append_u64_le(patch_out, sx_to)
+    c_gc_calls = c_gc_calls + 1
+  }
+  i = i + 1
+}
+when c_gc_calls != st[4] {
+  hold e12 = fail_gc(1, "collector call patch count mismatch")
+}
+hold r_byte = npc * 16
+while r_byte < pn {
+  patch_out = push(patch_out, patch_in[r_byte])
+  r_byte = r_byte + 1
+}
+
+hold mkd = make_dir(outdir)
+when write_bytes(concat(outdir, "/code.bin"), code_out) != 1 {
+  hold e13 = fail_gc(1, "cannot write out code.bin")
+}
+when write_bytes(concat(outdir, "/data.bin"), data_in) != 1 {
+  hold e14 = fail_gc(1, "cannot write out data.bin")
+}
+when write_bytes(concat(outdir, "/patch.bin"), patch_out) != 1 {
+  hold e15 = fail_gc(1, "cannot write out patch.bin")
+}
+when write_file(concat(outdir, "/meta.txt"), meta_txt) != 1 {
+  hold e16 = fail_gc(1, "cannot write out meta.txt")
+}

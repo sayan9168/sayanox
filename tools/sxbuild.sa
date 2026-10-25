@@ -1,0 +1,958 @@
+// tools/sxbuild.sa -- Sayanox build, tool, parity, and bootstrap driver
+// (docs/ALL_SAYANOX_PHASE.md, Phase F / build-driver slice).
+//
+// Commands:
+//   ./tools/sxbuild doctor
+//   ./tools/sxbuild build <in.sa> <out>
+//   ./tools/sxbuild native <in.sa> <out>
+//   ./tools/sxbuild tool <name> [out_bin]
+//   ./tools/sxbuild parity <in.sa> <work_dir>
+//   ./tools/sxbuild bootstrap <out_dir>
+//   ./tools/sxbuild inventory
+
+make fail(code: num, msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("sxbuild: ", msg), "\n"))
+  hold stop = exit(code)
+  give 0
+}
+
+use "tools/sxmod_lib.sa"
+
+make istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold n = v
+  when n < 0 {
+    neg = 1
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make sh_quote(s: str) -> str {
+  hold out = "'"
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, "'\\''")
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(out, "'")
+}
+
+make cc_cmd() -> str {
+  hold env_cc = getenv("CC")
+  when len(env_cc) > 0 {
+    give env_cc
+  }
+  when run_command("command -v clang >/dev/null 2>&1") == 0 {
+    give "clang"
+  }
+  when run_command("command -v gcc >/dev/null 2>&1") == 0 {
+    give "gcc"
+  }
+  give "cc"
+}
+
+make gen2_bin() -> str {
+  hold env_c = getenv("SXBUILD_COMPILER")
+  when len(env_c) > 0 {
+    give env_c
+  }
+  give "./selfhost/gen2"
+}
+
+make seed_bin() -> str {
+  hold env_s = getenv("SXBUILD_SEED")
+  when len(env_s) > 0 {
+    give env_s
+  }
+  give "./selfhost/seed/sxc_seed_min"
+}
+
+make native_bin() -> str {
+  hold env_n = getenv("SXBUILD_NATIVE")
+  when len(env_n) > 0 {
+    give env_n
+  }
+  give "./selfhost/native_aot"
+}
+
+make sxc_native_bin() -> str {
+  hold env_sn = getenv("SXBUILD_SXC_NATIVE")
+  when len(env_sn) > 0 {
+    give env_sn
+  }
+  give "./tools/sxc_native"
+}
+
+make ensure_dir_p(p: str) -> num {
+  when len(p) == 0 || string_eq(p, ".") == 1 || string_eq(p, "/") == 1 {
+    give 1
+  }
+  when path_kind(p) == 2 {
+    give 1
+  }
+  // Create parents left to right
+  hold n = len(p)
+  hold i = 1
+  while i < n {
+    when sx_index(p, i) == 47 {
+      hold pref = ""
+      hold j = 0
+      while j < i {
+        pref = concat(pref, chr(sx_index(p, j)))
+        j = j + 1
+      }
+      when len(pref) > 0 && path_kind(pref) != 2 {
+        hold md = make_dir(pref)
+      }
+    }
+    i = i + 1
+  }
+  when path_kind(p) != 2 {
+    hold md2 = make_dir(p)
+  }
+  when path_kind(p) == 2 {
+    give 1
+  }
+  give 0
+}
+
+make parent_dir(p: str) -> str {
+  hold n = len(p)
+  hold last = 0 - 1
+  hold i = 0
+  while i < n {
+    when sx_index(p, i) == 47 {
+      last = i
+    }
+    i = i + 1
+  }
+  when last <= 0 {
+    give "."
+  }
+  hold out = ""
+  hold j = 0
+  while j < last {
+    out = concat(out, chr(sx_index(p, j)))
+    j = j + 1
+  }
+  give out
+}
+
+// Return first `#error ...` line in C file, or "" if none.
+make first_c_error_directive(c_path: str) -> str {
+  when path_kind(c_path) != 1 {
+    give "missing generated C output"
+  }
+  hold txt = read_file(c_path)
+  hold n = len(txt)
+  hold i = 0
+  while i < n {
+    hold ls = i
+    while i < n && sx_index(txt, i) != 10 {
+      i = i + 1
+    }
+    hold le = i
+    when i < n {
+      i = i + 1
+    }
+    when le - ls >= 6 {
+      when sx_index(txt, ls) == 35 && sx_index(txt, ls + 1) == 101 && sx_index(txt, ls + 2) == 114 && sx_index(txt, ls + 3) == 114 && sx_index(txt, ls + 4) == 111 && sx_index(txt, ls + 5) == 114 {
+        hold line = ""
+        hold k = ls
+        while k < le {
+          line = concat(line, chr(sx_index(txt, k)))
+          k = k + 1
+        }
+        give line
+      }
+    }
+  }
+  give ""
+}
+
+make files_byte_equal(p1: str, p2: str) -> num {
+  hold b1 = []
+  hold b2 = []
+  hold n1 = read_bytes(p1, b1)
+  hold n2 = read_bytes(p2, b2)
+  when n1 < 0 || n2 < 0 {
+    give 0
+  }
+  when n1 != n2 {
+    give 0
+  }
+  hold i = 0
+  while i < n1 {
+    when b1[i] != b2[i] {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make count_lines_in_file(p: str) -> num {
+  when path_kind(p) != 1 {
+    give 0
+  }
+  hold s = read_file(p)
+  hold n = len(s)
+  hold cnt = 0
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) == 10 {
+      cnt = cnt + 1
+    }
+    i = i + 1
+  }
+  give cnt
+}
+
+make ends_with(s: str, suf: str) -> num {
+  hold ns = len(s)
+  hold nf = len(suf)
+  when ns < nf {
+    give 0
+  }
+  hold off = ns - nf
+  hold i = 0
+  while i < nf {
+    when sx_index(s, off + i) != sx_index(suf, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// ---- doctor ---------------------------------------------------------------
+
+make check_tool_req(label: str, cmd: str) -> num {
+  hold q = sh_quote(cmd)
+  hold rc = run_command(concat(concat("command -v ", q), " >/dev/null 2>&1"))
+  when rc == 0 {
+    show concat(concat("[ok] ", label), concat(": ", cmd))
+    give 0
+  }
+  show concat(concat("[FAIL] ", label), concat(": missing ", cmd))
+  give 1
+}
+
+make cmd_doctor() -> num {
+  hold cc = cc_cmd()
+  hold bad = 0
+  show "sxbuild toolchain check"
+  bad = bad + check_tool_req("C99 compiler", cc)
+  bad = bad + check_tool_req("POSIX shell", "sh")
+  when path_kind("selfhost/seed/sxc_seed_min.c") == 1 {
+    show "[ok] seed source: selfhost/seed/sxc_seed_min.c"
+  } otherwise {
+    show "[FAIL] seed source missing: selfhost/seed/sxc_seed_min.c"
+    bad = bad + 1
+  }
+  when path_kind("selfhost/compiler_min.sa") == 1 {
+    show "[ok] compiler source: selfhost/compiler_min.sa"
+  } otherwise {
+    show "[FAIL] compiler source missing: selfhost/compiler_min.sa"
+    bad = bad + 1
+  }
+  when path_kind("selfhost/native_aot.sa") == 1 {
+    show "[ok] native backend source: selfhost/native_aot.sa"
+  } otherwise {
+    show "[FAIL] native backend source missing: selfhost/native_aot.sa"
+    bad = bad + 1
+  }
+  when bad > 0 {
+    hold e = fail(1, "doctor failed: required toolchain entry missing")
+  }
+  show "[OK] sxbuild doctor passed"
+  give 0
+}
+
+// ---- build <in.sa> <out> --------------------------------------------------
+
+make compile_sa_via_c(compiler_bin: str, in_sa: str, out_bin: str, c_tmp: str) -> num {
+  when path_kind(in_sa) != 1 {
+    hold e1 = fail(1, concat("input file not found: ", in_sa))
+  }
+  when path_kind(compiler_bin) != 1 {
+    hold e2 = fail(1, concat("compiler binary not found: ", compiler_bin))
+  }
+  hold pdir = parent_dir(out_bin)
+  hold ed1 = ensure_dir_p(pdir)
+  hold cdir = parent_dir(c_tmp)
+  hold ed2 = ensure_dir_p(cdir)
+
+  hold cmd1 = concat(sh_quote(compiler_bin), " ")
+  cmd1 = concat(cmd1, concat(sh_quote(in_sa), " "))
+  cmd1 = concat(cmd1, concat(sh_quote(c_tmp), " >/dev/null"))
+  hold rc1 = run_command(cmd1)
+  hold err_dir = first_c_error_directive(c_tmp)
+  when len(err_dir) > 0 {
+    when string_eq(getenv("SXBUILD_KEEP_C"), "1") == 0 {
+      hold rm1 = remove_path(c_tmp)
+    }
+    hold e3 = fail(1, concat(concat("compile error in ", in_sa), concat(": ", err_dir)))
+  }
+  when rc1 != 0 {
+    hold e4 = fail(1, concat("compiler exited nonzero on ", in_sa))
+  }
+
+  hold cc = cc_cmd()
+  hold cmd2 = concat(sh_quote(cc), " -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ")
+  cmd2 = concat(cmd2, concat(sh_quote(out_bin), " "))
+  cmd2 = concat(cmd2, sh_quote(c_tmp))
+  hold rc2 = run_command(cmd2)
+  when string_eq(getenv("SXBUILD_KEEP_C"), "1") == 0 {
+    hold rm2 = remove_path(c_tmp)
+  }
+  when rc2 != 0 {
+    hold e5 = fail(1, concat("C compilation failed for ", in_sa))
+  }
+  give 0
+}
+
+make cmd_build(in_sa: str, out_bin: str) -> num {
+  when path_kind(in_sa) != 1 {
+    hold e0 = fail(1, concat("input file not found: ", in_sa))
+  }
+  hold snb = sxc_native_bin()
+  when path_kind(snb) == 1 && string_eq(getenv("SXBUILD_VIA_C"), "1") == 0 {
+    hold pdir = parent_dir(out_bin)
+    hold ed0 = ensure_dir_p(pdir)
+    hold dcmd = concat(sh_quote(snb), " ")
+    dcmd = concat(dcmd, concat(sh_quote(in_sa), " "))
+    dcmd = concat(dcmd, concat(sh_quote(out_bin), " >/dev/null 2>&1"))
+    when run_command(dcmd) == 0 {
+      show concat(concat("[OK] sxbuild built ", out_bin), concat(" from ", in_sa))
+      give 0
+    }
+  }
+  hold src_eff = in_sa
+  hold mod_tmp = ""
+  hold raw_in = read_file(in_sa)
+  when mxl_has_module_header(raw_in) == 1 {
+    mod_tmp = concat(out_bin, ".sxbuild_mod.sa")
+    hold mdir = parent_dir(mod_tmp)
+    hold edm = ensure_dir_p(mdir)
+    hold lowered = mxl_lower_transitive(raw_in, in_sa)
+    when write_file(mod_tmp, lowered) != 1 {
+      hold emw = fail(1, concat("cannot write lowered module source: ", mod_tmp))
+    }
+    src_eff = mod_tmp
+  }
+  hold c_tmp = concat(out_bin, ".sxbuild_tmp.c")
+  hold ok = compile_sa_via_c(gen2_bin(), src_eff, out_bin, c_tmp)
+  when len(mod_tmp) > 0 {
+    hold rmm = remove_path(mod_tmp)
+  }
+  show concat(concat("[OK] sxbuild built ", out_bin), concat(" from ", in_sa))
+  give 0
+}
+
+// ---- native <in.sa> <out> -------------------------------------------------
+
+make ensure_native_compiler() -> str {
+  hold nb = native_bin()
+  when path_kind(nb) == 1 {
+    give nb
+  }
+  hold snb = sxc_native_bin()
+  when path_kind(snb) == 1 {
+    hold pdir = parent_dir(nb)
+    hold ed0 = ensure_dir_p(pdir)
+    hold cmd0 = concat(sh_quote(snb), concat(" selfhost/native_aot.sa ", sh_quote(nb)))
+    when run_command(cmd0) == 0 {
+      give nb
+    }
+  }
+  hold ed = ensure_dir_p("selfhost/seed_tests")
+  hold ok = compile_sa_via_c(gen2_bin(), "selfhost/native_aot.sa", nb, "selfhost/seed_tests/sxbuild_native_aot.c")
+  give nb
+}
+
+make cmd_native(in_sa: str, out_bin: str) -> num {
+  when path_kind(in_sa) != 1 {
+    hold e1 = fail(1, concat("input file not found: ", in_sa))
+  }
+  hold pdir = parent_dir(out_bin)
+  hold ed = ensure_dir_p(pdir)
+  hold snb = sxc_native_bin()
+  when path_kind(snb) == 1 {
+    hold scmd = concat(sh_quote(snb), " ")
+    scmd = concat(scmd, concat(sh_quote(in_sa), " "))
+    scmd = concat(scmd, sh_quote(out_bin))
+    when run_command(scmd) == 0 {
+      show concat(concat("[OK] sxbuild native ELF ", out_bin), concat(" from ", in_sa))
+      give 0
+    }
+  }
+  hold nb = ensure_native_compiler()
+  hold src_eff = in_sa
+  hold mod_tmp = ""
+  hold raw_in = read_file(in_sa)
+  when mxl_has_module_header(raw_in) == 1 {
+    mod_tmp = concat(out_bin, ".sxbuild_mod.sa")
+    hold lowered = mxl_lower_transitive(raw_in, in_sa)
+    when write_file(mod_tmp, lowered) != 1 {
+      hold emw = fail(1, concat("cannot write lowered module source: ", mod_tmp))
+    }
+    src_eff = mod_tmp
+  }
+  hold cmd = concat(sh_quote(nb), " ")
+  cmd = concat(cmd, concat(sh_quote(src_eff), " "))
+  cmd = concat(cmd, sh_quote(out_bin))
+  hold rc = run_command(cmd)
+  when len(mod_tmp) > 0 {
+    hold rmm = remove_path(mod_tmp)
+  }
+  when rc != 0 {
+    hold e2 = fail(1, concat("native compilation failed for ", in_sa))
+  }
+  show concat(concat("[OK] sxbuild native ELF ", out_bin), concat(" from ", in_sa))
+  give 0
+}
+
+// ---- tool <name> [out_bin] ------------------------------------------------
+
+make tool_source_for(name: str) -> str {
+  when string_eq(name, "native_aot") == 1 {
+    give "selfhost/native_aot.sa"
+  }
+  when string_eq(name, "sxfmt") == 1 {
+    give "tools/sxfmt.sa"
+  }
+  when string_eq(name, "sxpkg") == 1 {
+    give "tools/sxpkg.sa"
+  }
+  when string_eq(name, "sayanox_lsp") == 1 {
+    give "tools/sayanox_lsp.sa"
+  }
+  when string_eq(name, "sxdiag") == 1 {
+    give "tools/sxdiag.sa"
+  }
+  when string_eq(name, "sxmod") == 1 {
+    give "tools/sxmod.sa"
+  }
+  when string_eq(name, "sxaudit") == 1 {
+    give "tools/sxaudit.sa"
+  }
+  when string_eq(name, "native32") == 1 {
+    give "tools/native32.sa"
+  }
+  when string_eq(name, "emit_to_ir") == 1 {
+    give "tools/emit_to_ir.sa"
+  }
+  when string_eq(name, "sxlink") == 1 {
+    give "tools/sxlink.sa"
+  }
+  when string_eq(name, "sxencode") == 1 {
+    give "tools/sxencode.sa"
+  }
+  when string_eq(name, "sxdefs") == 1 {
+    give "tools/sxdefs.sa"
+  }
+  when string_eq(name, "sxinfer") == 1 {
+    give "tools/sxinfer.sa"
+  }
+  when string_eq(name, "sxruntime") == 1 {
+    give "tools/sxruntime.sa"
+  }
+  when string_eq(name, "sxgc") == 1 {
+    give "tools/sxgc.sa"
+  }
+  when string_eq(name, "sxemit") == 1 {
+    give "tools/sxemit.sa"
+  }
+  when string_eq(name, "sxbuild") == 1 {
+    give "tools/sxbuild.sa"
+  }
+  when string_eq(name, "sxc_native") == 1 {
+    give "tools/sxc_native.sa"
+  }
+  when string_eq(name, "sxsuite") == 1 {
+    give "tools/sxsuite.sa"
+  }
+  when string_eq(name, "sxisaexec") == 1 {
+    give "tools/sxisaexec.sa"
+  }
+  when string_eq(name, "sxstage2_parity") == 1 {
+    give "tools/sxstage2_parity.sa"
+  }
+  when string_eq(name, "sxirexec") == 1 {
+    give "tools/sxirexec.sa"
+  }
+  when string_eq(name, "sxc_seed") == 1 {
+    give "selfhost/seed/sxc_seed.sa"
+  }
+  when string_eq(name, "sxc_native_test") == 1 {
+    give "tools/sxc_native_test.sa"
+  }
+  when string_eq(name, "sxisaexec_test") == 1 {
+    give "tools/sxisaexec_test.sa"
+  }
+  when string_eq(name, "sxmod_deep_test") == 1 {
+    give "tools/sxmod_deep_test.sa"
+  }
+  when string_eq(name, "lsp_ide_test") == 1 {
+    give "tools/lsp_ide_test.sa"
+  }
+  when string_eq(name, "lsp_types_test") == 1 {
+    give "tools/lsp_types_test.sa"
+  }
+  when string_eq(name, "lsp_semantic_test") == 1 {
+    give "tools/lsp_semantic_test.sa"
+  }
+  when string_eq(name, "lsp_workspace_test") == 1 {
+    give "tools/lsp_workspace_test.sa"
+  }
+  when string_eq(name, "sxpkg_pubkey_test") == 1 {
+    give "tools/sxpkg_pubkey_test.sa"
+  }
+  give ""
+}
+
+make tool_default_out(name: str) -> str {
+  when string_eq(name, "native_aot") == 1 {
+    give "selfhost/native_aot"
+  }
+  when string_eq(name, "sxc_seed") == 1 {
+    give "selfhost/seed/sxc_seed"
+  }
+  give concat("tools/", name)
+}
+
+make cmd_tool(name: str, out_override: str) -> num {
+  hold src = tool_source_for(name)
+  when len(src) == 0 {
+    hold e1 = fail(2, concat("unknown tool: ", name))
+  }
+  hold out_bin = out_override
+  when len(out_bin) == 0 {
+    out_bin = tool_default_out(name)
+  }
+  hold snb = sxc_native_bin()
+  when path_kind(snb) == 1 && string_eq(getenv("SXBUILD_VIA_C"), "1") == 0 {
+    hold pdir = parent_dir(out_bin)
+    hold ed0 = ensure_dir_p(pdir)
+    hold tmp_out = out_bin
+    when string_eq(out_bin, "tools/sxc_native") == 1 || string_eq(out_bin, "./tools/sxc_native") == 1 || string_eq(out_bin, "tools/sxbuild") == 1 || string_eq(out_bin, "./tools/sxbuild") == 1 {
+      tmp_out = concat(out_bin, ".sxbuild_new")
+    }
+    hold dcmd = concat(sh_quote(snb), " ")
+    dcmd = concat(dcmd, concat(sh_quote(src), " "))
+    dcmd = concat(dcmd, concat(sh_quote(tmp_out), " >/dev/null 2>&1"))
+    when run_command(dcmd) == 0 {
+      when string_eq(tmp_out, out_bin) == 0 {
+        hold mvrc = run_command(concat(concat("mv -f ", sh_quote(tmp_out)), concat(" ", sh_quote(out_bin))))
+      }
+      show concat(concat("[OK] sxbuild tool ", name), concat(" -> ", out_bin))
+      give 0
+    }
+    when string_eq(tmp_out, out_bin) == 0 && path_kind(tmp_out) == 1 {
+      hold rmt = remove_path(tmp_out)
+    }
+  }
+  hold c_tmp = concat(out_bin, ".sxbuild_tmp.c")
+  hold ok = compile_sa_via_c(gen2_bin(), src, out_bin, c_tmp)
+  show concat(concat("[OK] sxbuild tool ", name), concat(" -> ", out_bin))
+  give 0
+}
+
+// ---- parity <in.sa> <work_dir> --------------------------------------------
+
+make ensure_seed_compiler() -> str {
+  hold sb = seed_bin()
+  when path_kind(sb) == 1 {
+    give sb
+  }
+  hold cc = cc_cmd()
+  hold pdir = parent_dir(sb)
+  hold ed = ensure_dir_p(pdir)
+  hold cmd = concat(sh_quote(cc), " -O2 -o ")
+  cmd = concat(cmd, concat(sh_quote(sb), " selfhost/seed/sxc_seed_min.c"))
+  when run_command(cmd) != 0 {
+    hold e = fail(1, "failed to compile sxc_seed_min.c")
+  }
+  give sb
+}
+
+make cmd_parity(in_sa: str, work_dir: str) -> num {
+  when path_kind(in_sa) != 1 {
+    hold e1 = fail(1, concat("input file not found: ", in_sa))
+  }
+  when ensure_dir_p(work_dir) != 1 {
+    hold e2 = fail(1, concat("cannot create work directory: ", work_dir))
+  }
+  hold cc = cc_cmd()
+  hold sb = ensure_seed_compiler()
+  hold g2 = gen2_bin()
+  hold nb = ensure_native_compiler()
+
+  hold src_eff = in_sa
+  hold raw_in = read_file(in_sa)
+  when mxl_has_module_header(raw_in) == 1 {
+    src_eff = concat(work_dir, "/lowered.sa")
+    hold lowered = mxl_lower_transitive(raw_in, in_sa)
+    when write_file(src_eff, lowered) != 1 {
+      hold elm = fail(1, concat("cannot write lowered source: ", src_eff))
+    }
+  }
+
+  hold ms_c = concat(work_dir, "/seed.c")
+  hold ms_bin = concat(work_dir, "/seed_bin")
+  hold ms_out = concat(work_dir, "/seed.out")
+  hold c1 = concat(sh_quote(sb), " ")
+  c1 = concat(c1, concat(sh_quote(src_eff), " > "))
+  c1 = concat(c1, sh_quote(ms_c))
+  when run_command(c1) != 0 {
+    hold es1 = fail(1, concat("seed-min failed on ", in_sa))
+  }
+  hold c1b = concat(sh_quote(cc), " -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ")
+  c1b = concat(c1b, concat(sh_quote(ms_bin), " "))
+  c1b = concat(c1b, sh_quote(ms_c))
+  when run_command(c1b) != 0 {
+    hold es2 = fail(1, concat("seed-min C compile failed on ", in_sa))
+  }
+  when run_command(concat(concat(sh_quote(ms_bin), " > "), sh_quote(ms_out))) != 0 {
+    hold es3 = fail(1, concat("seed-min binary exited nonzero on ", in_sa))
+  }
+
+  hold g2_c = concat(work_dir, "/gen2.c")
+  hold g2_bin = concat(work_dir, "/gen2_bin")
+  hold g2_out = concat(work_dir, "/gen2.out")
+  hold ok_g2 = compile_sa_via_c(g2, src_eff, g2_bin, g2_c)
+  when run_command(concat(concat(sh_quote(g2_bin), " > "), sh_quote(g2_out))) != 0 {
+    hold eg3 = fail(1, concat("gen2 binary exited nonzero on ", in_sa))
+  }
+
+  hold na_bin = concat(work_dir, "/nat.elf")
+  hold na_out = concat(work_dir, "/nat.out")
+  hold cn = concat(sh_quote(nb), " ")
+  cn = concat(cn, concat(sh_quote(src_eff), " "))
+  cn = concat(cn, sh_quote(na_bin))
+  when run_command(cn) != 0 {
+    hold en1 = fail(1, concat("native_aot failed on ", in_sa))
+  }
+  when run_command(concat(concat(sh_quote(na_bin), " > "), sh_quote(na_out))) != 0 {
+    hold en2 = fail(1, concat("native ELF exited nonzero on ", in_sa))
+  }
+
+  when files_byte_equal(ms_out, g2_out) != 1 {
+    hold ep1 = fail(1, concat("parity mismatch: seed-min != gen2 on ", in_sa))
+  }
+  when files_byte_equal(ms_out, na_out) != 1 {
+    hold ep2 = fail(1, concat("parity mismatch: seed-min != native_aot on ", in_sa))
+  }
+  hold snb = sxc_native_bin()
+  when path_kind(snb) == 1 {
+    hold sn_bin = concat(work_dir, "/sxc_nat.elf")
+    hold sn_out = concat(work_dir, "/sxc_nat.out")
+    hold csn = concat(sh_quote(snb), " ")
+    csn = concat(csn, concat(sh_quote(in_sa), " "))
+    csn = concat(csn, sh_quote(sn_bin))
+    when run_command(csn) != 0 {
+      hold esn1 = fail(1, concat("sxc_native failed on ", in_sa))
+    }
+    when run_command(concat(concat(sh_quote(sn_bin), " > "), sh_quote(sn_out))) != 0 {
+      hold esn2 = fail(1, concat("sxc_native ELF exited nonzero on ", in_sa))
+    }
+    when files_byte_equal(ms_out, sn_out) != 1 {
+      hold ep3 = fail(1, concat("parity mismatch: seed-min != sxc_native on ", in_sa))
+    }
+  }
+  show concat("[OK] sxbuild 3-backend parity (seed-min == gen2 == native_aot): ", in_sa)
+  give 0
+}
+
+// ---- bootstrap <out_dir> --------------------------------------------------
+
+make cmd_bootstrap(out_dir: str) -> num {
+  when ensure_dir_p(out_dir) != 1 {
+    hold ed = fail(1, concat("cannot create bootstrap directory: ", out_dir))
+  }
+  hold cc = cc_cmd()
+  hold comp_sa = getenv("SXBUILD_BOOTSTRAP_SA")
+  when len(comp_sa) == 0 {
+    comp_sa = "selfhost/compiler_min.sa"
+  }
+  when path_kind(comp_sa) != 1 {
+    hold ec = fail(1, concat("bootstrap compiler source missing: ", comp_sa))
+  }
+
+  hold seed_out = concat(out_dir, "/sxc_seed_min")
+  hold g1_c = concat(out_dir, "/gen1_min.c")
+  hold g1_bin = concat(out_dir, "/gen1_min")
+  hold g2_c = concat(out_dir, "/gen2.c")
+  hold g2_bin = concat(out_dir, "/gen2")
+  hold g3_c = concat(out_dir, "/gen3.c")
+  hold g3_bin = concat(out_dir, "/gen3")
+  hold g4_c = concat(out_dir, "/gen4.c")
+
+  show "[1/4] sxbuild: compiling C trust anchor -> sxc_seed_min"
+  hold s_cmd = concat(sh_quote(cc), " -O2 -o ")
+  s_cmd = concat(s_cmd, concat(sh_quote(seed_out), " selfhost/seed/sxc_seed_min.c"))
+  when run_command(s_cmd) != 0 {
+    hold es = fail(1, "bootstrap step 1 failed: sxc_seed_min.c")
+  }
+
+  show "[2/4] sxbuild: sxc_seed_min -> gen1_min"
+  hold g1_cmd = concat(sh_quote(seed_out), " ")
+  g1_cmd = concat(g1_cmd, concat(sh_quote(comp_sa), " > "))
+  g1_cmd = concat(g1_cmd, sh_quote(g1_c))
+  when run_command(g1_cmd) != 0 {
+    hold eg1 = fail(1, "bootstrap step 2 failed: seed-min -> gen1_min.c")
+  }
+  hold g1_cc = concat(sh_quote(cc), " -O2 -o ")
+  g1_cc = concat(g1_cc, concat(sh_quote(g1_bin), " "))
+  g1_cc = concat(g1_cc, sh_quote(g1_c))
+  when run_command(g1_cc) != 0 {
+    hold eg1b = fail(1, "bootstrap step 2 failed: cc gen1_min.c")
+  }
+
+  show "[3/4] sxbuild: gen1_min -> gen2"
+  hold keep_prev = getenv("SXBUILD_KEEP_C")
+  hold c2_cmd = concat(sh_quote(g1_bin), " ")
+  c2_cmd = concat(c2_cmd, concat(sh_quote(comp_sa), " "))
+  c2_cmd = concat(c2_cmd, concat(sh_quote(g2_c), " >/dev/null"))
+  when run_command(c2_cmd) != 0 {
+    hold eg2 = fail(1, "bootstrap step 3 failed: gen1_min -> gen2.c")
+  }
+  hold err2 = first_c_error_directive(g2_c)
+  when len(err2) > 0 {
+    hold eg2e = fail(1, concat("bootstrap step 3 #error: ", err2))
+  }
+  hold g2_cc = concat(sh_quote(cc), " -O2 -o ")
+  g2_cc = concat(g2_cc, concat(sh_quote(g2_bin), " "))
+  g2_cc = concat(g2_cc, sh_quote(g2_c))
+  when run_command(g2_cc) != 0 {
+    hold eg2b = fail(1, "bootstrap step 3 failed: cc gen2.c")
+  }
+
+  show "[4/4] sxbuild: gen2 -> gen3 -> gen4 fixed-point check"
+  hold c3_cmd = concat(sh_quote(g2_bin), " ")
+  c3_cmd = concat(c3_cmd, concat(sh_quote(comp_sa), " "))
+  c3_cmd = concat(c3_cmd, concat(sh_quote(g3_c), " >/dev/null"))
+  when run_command(c3_cmd) != 0 {
+    hold eg3 = fail(1, "bootstrap step 4 failed: gen2 -> gen3.c")
+  }
+  hold err3 = first_c_error_directive(g3_c)
+  when len(err3) > 0 {
+    hold eg3e = fail(1, concat("bootstrap step 4 #error: ", err3))
+  }
+  hold g3_cc = concat(sh_quote(cc), " -O2 -o ")
+  g3_cc = concat(g3_cc, concat(sh_quote(g3_bin), " "))
+  g3_cc = concat(g3_cc, sh_quote(g3_c))
+  when run_command(g3_cc) != 0 {
+    hold eg3b = fail(1, "bootstrap step 4 failed: cc gen3.c")
+  }
+  hold c4_cmd = concat(sh_quote(g3_bin), " ")
+  c4_cmd = concat(c4_cmd, concat(sh_quote(comp_sa), " "))
+  c4_cmd = concat(c4_cmd, concat(sh_quote(g4_c), " >/dev/null"))
+  when run_command(c4_cmd) != 0 {
+    hold eg4 = fail(1, "bootstrap step 4 failed: gen3 -> gen4.c")
+  }
+  when files_byte_equal(g3_c, g4_c) != 1 {
+    hold efp = fail(1, "bootstrap fixed-point FAILED: gen3.c != gen4.c")
+  }
+  show "[OK] sxbuild bootstrap complete: byte-identical gen3.c == gen4.c"
+  give 0
+}
+
+// ---- inventory ------------------------------------------------------------
+
+make is_generated_c_artifact(p: str) -> num {
+  when ends_with(p, ".h") == 1 {
+    give 0
+  }
+  when string_eq(p, "selfhost/gen1_min.c") == 1 || string_eq(p, "selfhost/gen2.c") == 1 || string_eq(p, "selfhost/gen3.c") == 1 || string_eq(p, "selfhost/gen4.c") == 1 || string_eq(p, "selfhost/boot_from_gen2.c") == 1 {
+    give 1
+  }
+  when ends_with(p, ".c") == 1 {
+    hold sa_peer = ""
+    hold n = len(p)
+    hold i = 0
+    while i < n - 2 {
+      sa_peer = concat(sa_peer, chr(sx_index(p, i)))
+      i = i + 1
+    }
+    sa_peer = concat(sa_peer, ".sa")
+    when path_kind(sa_peer) == 1 {
+      give 1
+    }
+  }
+  give 0
+}
+
+make walk_counts(dir: str, counts: list, depth: num) -> num {
+  when depth > 8 {
+    give 0
+  }
+  hold listing = read_dir(dir)
+  hold n = len(listing)
+  hold i = 0
+  while i < n {
+    hold ls = i
+    while i < n && sx_index(listing, i) != 10 {
+      i = i + 1
+    }
+    hold le = i
+    when i < n {
+      i = i + 1
+    }
+    when le > ls {
+      hold name = ""
+      hold k = ls
+      while k < le {
+        name = concat(name, chr(sx_index(listing, k)))
+        k = k + 1
+      }
+      hold skip = 0
+      when sx_index(name, 0) == 46 {
+        skip = 1
+      }
+      when string_eq(name, "seed_tests") == 1 || string_eq(name, "gen2_tests") == 1 || string_eq(name, "Unselected files") == 1 {
+        skip = 1
+      }
+      when skip == 0 {
+        hold full = name
+        when string_eq(dir, ".") == 0 {
+          full = concat(concat(dir, "/"), name)
+        }
+        hold pk = path_kind(full)
+        when pk == 2 {
+          hold w = walk_counts(full, counts, depth + 1)
+        }
+        when pk == 1 {
+          when ends_with(name, ".sa") == 1 {
+            counts[0] = counts[0] + 1
+          }
+          when ends_with(name, ".sh") == 1 {
+            counts[1] = counts[1] + 1
+          }
+          when ends_with(name, ".c") == 1 || ends_with(name, ".h") == 1 {
+            when string_eq(full, "selfhost/seed/sxc_seed_min.c") == 0 && is_generated_c_artifact(full) == 0 {
+              counts[2] = counts[2] + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make cmd_inventory() -> num {
+  hold counts = [0, 0, 0]
+  hold w = walk_counts(".", counts, 0)
+  hold seed_ln = count_lines_in_file("selfhost/seed/sxc_seed_min.c")
+  hold comp_ln = count_lines_in_file("selfhost/compiler_min.sa")
+  hold nat_ln = count_lines_in_file("selfhost/native_aot.sa")
+  hold mk_ln = count_lines_in_file("Makefile")
+  hold has_c_nat = 0
+  when path_kind("selfhost/native_aot.c") == 1 {
+    has_c_nat = 1
+  }
+  show "=== sxbuild workspace inventory ==="
+  show concat("  sayanox-files (.sa):     ", istr(counts[0]))
+  show concat("  compiler_min.sa lines:   ", istr(comp_ln))
+  show concat("  native_aot.sa lines:     ", istr(nat_ln))
+  show concat("  native_aot.c present:    ", istr(has_c_nat))
+  show concat("  non-anchor .c/.h files:  ", istr(counts[2]))
+  show concat("  sxc_seed_min.c lines:    ", istr(seed_ln))
+  show concat("  Makefile lines:          ", istr(mk_ln))
+  show concat("  shell-scripts (.sh):     ", istr(counts[1]))
+  give 0
+}
+
+make usage_exit() -> num {
+  hold m = "usage:\n"
+  m = concat(m, "  sxbuild doctor\n")
+  m = concat(m, "  sxbuild build <in.sa> <out>\n")
+  m = concat(m, "  sxbuild native <in.sa> <out>\n")
+  m = concat(m, "  sxbuild tool <name> [out_bin]\n")
+  m = concat(m, "  sxbuild parity <in.sa> <work_dir>\n")
+  m = concat(m, "  sxbuild bootstrap <out_dir>\n")
+  m = concat(m, "  sxbuild inventory\n")
+  hold w = write_file("/dev/stderr", m)
+  hold stop = exit(2)
+  give 0
+}
+
+// ---- entry ----------------------------------------------------------------
+
+when arg_count() < 2 {
+  hold u0 = usage_exit()
+}
+hold subcmd = arg(1)
+hold handled = 0
+
+when string_eq(subcmd, "doctor") == 1 {
+  handled = 1
+  hold r1 = cmd_doctor()
+}
+when string_eq(subcmd, "inventory") == 1 {
+  handled = 1
+  hold r2 = cmd_inventory()
+}
+when string_eq(subcmd, "build") == 1 {
+  handled = 1
+  when arg_count() < 4 {
+    hold u1 = usage_exit()
+  }
+  hold r3 = cmd_build(arg(2), arg(3))
+}
+when string_eq(subcmd, "native") == 1 {
+  handled = 1
+  when arg_count() < 4 {
+    hold u2 = usage_exit()
+  }
+  hold r4 = cmd_native(arg(2), arg(3))
+}
+when string_eq(subcmd, "tool") == 1 {
+  handled = 1
+  when arg_count() < 3 {
+    hold u3 = usage_exit()
+  }
+  hold out_ov = ""
+  when arg_count() >= 4 {
+    out_ov = arg(3)
+  }
+  hold r5 = cmd_tool(arg(2), out_ov)
+}
+when string_eq(subcmd, "parity") == 1 {
+  handled = 1
+  when arg_count() < 4 {
+    hold u4 = usage_exit()
+  }
+  hold r6 = cmd_parity(arg(2), arg(3))
+}
+when string_eq(subcmd, "bootstrap") == 1 {
+  handled = 1
+  when arg_count() < 3 {
+    hold u5 = usage_exit()
+  }
+  hold r7 = cmd_bootstrap(arg(2))
+}
+when handled == 0 {
+  hold uk = fail(2, concat("unknown command: ", subcmd))
+}

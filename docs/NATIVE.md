@@ -2,17 +2,17 @@
 
 ## Current implementation
 
-Sayanox currently has a self-contained Linux x86-64 native AOT seed in `selfhost/native_aot.c`.
+Sayanox has a self-hosted Linux x86-64 native AOT backend written entirely in Sayanox (`selfhost/native_aot.sa` + `tools/sx{enc,infer,data,emit,runtime,gc,link,pipeline}_lib.sa` + `tools/sxdefs.sa`). The 4,598-line C backend `selfhost/native_aot.c` was deleted on 2026-10-24 after Phase D Steps 1–10 proved byte-for-byte parity across every phase.
 
 The path is:
 
 ```text
-.sa -> native collection/kind passes -> recursive emit walk -> x86-64 Linux ELF
+.sa -> Sayanox collection/kind passes -> recursive Sayanox emit walk -> x86-64 Linux ELF
 ```
 
 The emitted program does not require a generated C file or a second compiler.
 
-The maintained native source (`selfhost/native_aot.c`, canonical and self-contained) covers the pure-min subset: `hold`, `show`, IEEE-double numeric expressions (`+ - * / %`, comparisons, parentheses), `when` / `else` / `otherwise`, `while`, lists, strings with the `concat`/`len`/`chr`/`string_eq`/`sx_index` builtins, structs including nested ones and typed copies, `use "file.sa"` module splice (depth <= 8), and top-level `make`/`give` functions with recursion (typed scalar/list functions and checked function-local holds; see the current tests). Anything else is a hard error with a clear message — see [`docs/STATUS.md`](STATUS.md) for the exact boundaries. `selfhost/native_src/` (59 historical base64 fragments of this file) was deleted on 2026-10-21: it was a copy of a copy, never read by any target.
+The maintained Sayanox native source (`selfhost/native_aot.sa`) covers the pure-min subset PLUS Stage-2 concrete struct-typed `make` functions and `${id}` string interpolation (`make test-native-stage2-parity`): `hold`, `show`, IEEE-double numeric expressions (`+ - * / %`, comparisons, parentheses), `when` / `else` / `otherwise`, `while`, `for`, lists, strings with `${id}` interpolation and the `concat`/`len`/`chr`/`string_eq`/`sx_index` builtins, structs including nested generic instantiations (`Box<Box<num>>`), concrete struct-typed function parameters & returns, `use "file.sa"` module splice (depth <= 8), and top-level `make`/`give` functions with recursion and mark-and-sweep GC. Anything else is a hard error with a clear message — see [`docs/STATUS.md`](STATUS.md) for the exact boundaries. `selfhost/native_src/` (59 historical base64 fragments) was deleted on 2026-10-21, and `selfhost/native_aot.c` was deleted on 2026-10-24.
 
 ## Cranelift status
 

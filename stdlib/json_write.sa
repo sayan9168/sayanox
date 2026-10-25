@@ -1,0 +1,584 @@
+// stdlib/json_write.sa -- NESTED JSON WRITER, MUTATOR AND PRETTY-PRINTER
+// (prefix `jw_`).
+//
+// Portable across seed-min, gen2 and native_aot (make test-stdlib-json-write):
+// fully typed signatures, one statement per line, every helper defined before
+// its callers, iterative brace/bracket walks (no recursion), and no late
+// compiler-only builtins.
+//
+// Complements `stdlib/json_deep.sa` (which validates and reads nested JSON by
+// dot-path): every document `jw_*` builds, updates or pretty-prints is valid
+// RFC 8259 JSON accepted by `jd_valid` and readable by `jd_text`/`jd_num`.
+//
+// HONEST SCOPE:
+//   * Nested construction (`jw_obj_empty`, `jw_obj_add`, `jw_arr_empty`,
+//     `jw_arr_add`, `jw_str`, `jw_num`, `jw_bool`, `jw_null`);
+//   * Functional top-level object key update and removal (`jw_obj_set`,
+//     `jw_obj_del`), skipping nested objects, arrays and quoted strings;
+//   * Whitespace minification (`jw_minify`) and iterative multi-level
+//     pretty-printing (`jw_pretty`, keeping empty `{}` and `[]` compact).
+//   * `jw_num` formats integers and up to 6 fractional places (matching
+//     `json_util.sa`); values are strings, not a heap AST.
+
+make jw_is_ws(c: num) -> num {
+  when c == 32 {
+    give 1
+  }
+  when c == 9 {
+    give 1
+  }
+  when c == 10 {
+    give 1
+  }
+  when c == 13 {
+    give 1
+  }
+  give 0
+}
+
+make jw_sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+make jw_spaces(n: num) -> str {
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold out = concat(out, " ")
+    hold i = i + 1
+  }
+  give out
+}
+
+make jw_escape(s: str) -> str {
+  hold out = ""
+  hold n = len(s)
+  hold i = 0
+  hold hexd = "0123456789abcdef"
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      hold out = concat(out, "\\\"")
+    } otherwise {
+      when c == 92 {
+        hold out = concat(out, "\\\\")
+      } otherwise {
+        when c == 8 {
+          hold out = concat(out, "\\b")
+        } otherwise {
+          when c == 12 {
+            hold out = concat(out, "\\f")
+          } otherwise {
+            when c == 10 {
+              hold out = concat(out, "\\n")
+            } otherwise {
+              when c == 13 {
+                hold out = concat(out, "\\r")
+              } otherwise {
+                when c == 9 {
+                  hold out = concat(out, "\\t")
+                } otherwise {
+                  when c < 32 {
+                    hold hi = (c - (c % 16)) / 16
+                    hold lo = c % 16
+                    hold esc = "\\u00"
+                    hold esc = concat(esc, chr(sx_index(hexd, hi)))
+                    hold esc = concat(esc, chr(sx_index(hexd, lo)))
+                    hold out = concat(out, esc)
+                  } otherwise {
+                    hold out = concat(out, chr(c))
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+make jw_str(s: str) -> str {
+  give concat(concat("\"", jw_escape(s)), "\"")
+}
+
+make jw_null() -> str {
+  give "null"
+}
+
+make jw_bool(b: num) -> str {
+  when b == 0 {
+    give "false"
+  }
+  give "true"
+}
+
+make jw_uint_str(v: num) -> str {
+  when v < 1 {
+    give "0"
+  }
+  hold digits = ""
+  hold x = v
+  while x >= 1 {
+    hold d = x % 10
+    hold digits = concat(chr(48 + d), digits)
+    hold x = (x - d) / 10
+  }
+  give digits
+}
+
+make jw_num(v: num) -> str {
+  hold sign = ""
+  hold x = v
+  when x < 0 {
+    hold sign = "-"
+    hold x = 0 - x
+  }
+  hold whole = x % 1000000000000000
+  hold frac = x - whole
+  hold scaled = frac * 1000000 + 0.5
+  hold fpart = scaled % 10000000
+  when fpart >= 1000000 {
+    hold whole = whole + 1
+    hold fpart = fpart - 1000000
+  }
+  hold head = concat(sign, jw_uint_str(whole))
+  when fpart < 1 {
+    give head
+  }
+  hold fdigs = ""
+  hold k = 0
+  hold rem = fpart
+  while k < 6 {
+    hold d = rem % 10
+    hold fdigs = concat(chr(48 + d), fdigs)
+    hold rem = (rem - d) / 10
+    hold k = k + 1
+  }
+  hold flen = 6
+  hold trim = 1
+  while trim == 1 {
+    hold trim = 0
+    when flen > 1 {
+      when sx_index(fdigs, flen - 1) == 48 {
+        hold flen = flen - 1
+        hold trim = 1
+      }
+    }
+  }
+  give concat(concat(head, "."), jw_sub(fdigs, 0, flen))
+}
+
+// ---- nested container builders --------------------------------------------
+
+make jw_skip_ws(doc: str, i0: num) -> num {
+  hold i = i0
+  hold n = len(doc)
+  hold go = 1
+  while go == 1 {
+    hold go = 0
+    when i < n {
+      when jw_is_ws(sx_index(doc, i)) == 1 {
+        hold i = i + 1
+        hold go = 1
+      }
+    }
+  }
+  give i
+}
+
+make jw_arr_empty() -> str {
+  give "[]"
+}
+
+make jw_arr_add(arr: str, raw_val: str) -> str {
+  hold n = len(arr)
+  when n < 2 {
+    give concat(concat("[", raw_val), "]")
+  }
+  hold inside = jw_skip_ws(arr, 1)
+  when inside >= n - 1 {
+    give concat(concat("[", raw_val), "]")
+  }
+  hold prefix = jw_sub(arr, 0, n - 1)
+  give concat(concat(concat(prefix, ","), raw_val), "]")
+}
+
+make jw_obj_empty() -> str {
+  give "{}"
+}
+
+make jw_kv(key: str, raw_val: str) -> str {
+  give concat(concat(jw_str(key), ":"), raw_val)
+}
+
+make jw_obj_add(obj: str, key: str, raw_val: str) -> str {
+  hold pair = jw_kv(key, raw_val)
+  hold n = len(obj)
+  when n < 2 {
+    give concat(concat("{", pair), "}")
+  }
+  hold inside = jw_skip_ws(obj, 1)
+  when inside >= n - 1 {
+    give concat(concat("{", pair), "}")
+  }
+  hold prefix = jw_sub(obj, 0, n - 1)
+  give concat(concat(concat(prefix, ","), pair), "}")
+}
+
+// ---- value scanner for functional object key update/delete ----------------
+
+// Given `doc[i0] == '"'`, returns index just past the closing `"`.
+make jw_skip_str(doc: str, i0: num) -> num {
+  hold n = len(doc)
+  hold i = i0 + 1
+  hold go = 1
+  while go == 1 {
+    when i >= n {
+      hold go = 0
+    } otherwise {
+      hold c = sx_index(doc, i)
+      when c == 92 {
+        hold i = i + 2
+      } otherwise {
+        when c == 34 {
+          hold i = i + 1
+          hold go = 0
+        } otherwise {
+          hold i = i + 1
+        }
+      }
+    }
+  }
+  give i
+}
+
+// Skips one complete JSON value starting at `i0`, returning the index after it.
+make jw_skip_val(doc: str, i0: num) -> num {
+  hold n = len(doc)
+  hold i = jw_skip_ws(doc, i0)
+  when i >= n {
+    give n
+  }
+  hold c0 = sx_index(doc, i)
+  when c0 == 34 {
+    give jw_skip_str(doc, i)
+  }
+  when c0 == 123 {
+    hold depth = 1
+    hold j = i + 1
+    while j < n {
+      when depth > 0 {
+        hold c = sx_index(doc, j)
+        when c == 34 {
+          hold j = jw_skip_str(doc, j)
+        } otherwise {
+          when c == 123 {
+            hold depth = depth + 1
+          }
+          when c == 91 {
+            hold depth = depth + 1
+          }
+          when c == 125 {
+            hold depth = depth - 1
+          }
+          when c == 93 {
+            hold depth = depth - 1
+          }
+          hold j = j + 1
+        }
+      } otherwise {
+        give j
+      }
+    }
+    give j
+  }
+  when c0 == 91 {
+    hold depth2 = 1
+    hold j2 = i + 1
+    while j2 < n {
+      when depth2 > 0 {
+        hold c2 = sx_index(doc, j2)
+        when c2 == 34 {
+          hold j2 = jw_skip_str(doc, j2)
+        } otherwise {
+          when c2 == 123 {
+            hold depth2 = depth2 + 1
+          }
+          when c2 == 91 {
+            hold depth2 = depth2 + 1
+          }
+          when c2 == 125 {
+            hold depth2 = depth2 - 1
+          }
+          when c2 == 93 {
+            hold depth2 = depth2 - 1
+          }
+          hold j2 = j2 + 1
+        }
+      } otherwise {
+        give j2
+      }
+    }
+    give j2
+  }
+  hold k = i
+  hold vgo = 1
+  while vgo == 1 {
+    hold vgo = 0
+    when k < n {
+      hold ch = sx_index(doc, k)
+      when ch != 44 {
+        when ch != 125 {
+          when ch != 93 {
+            when jw_is_ws(ch) == 0 {
+              hold k = k + 1
+              hold vgo = 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give k
+}
+
+// Updates `key` in place if present at the top level of `obj`, else appends it.
+make jw_obj_set(obj: str, key: str, raw_val: str) -> str {
+  hold target = jw_str(key)
+  hold n = len(obj)
+  hold i = jw_skip_ws(obj, 0)
+  when i >= n {
+    give jw_obj_add("{}", key, raw_val)
+  }
+  when sx_index(obj, i) != 123 {
+    give jw_obj_add("{}", key, raw_val)
+  }
+  hold i = jw_skip_ws(obj, i + 1)
+  hold out = "{"
+  hold count = 0
+  hold replaced = 0
+  hold go = 1
+  while go == 1 {
+    hold i = jw_skip_ws(obj, i)
+    when i >= n {
+      hold go = 0
+    } otherwise {
+      when sx_index(obj, i) == 125 {
+        hold go = 0
+      } otherwise {
+        when sx_index(obj, i) != 34 {
+          hold go = 0
+        } otherwise {
+          hold kend = jw_skip_str(obj, i)
+          hold kraw = jw_sub(obj, i, kend)
+          hold colon = jw_skip_ws(obj, kend)
+          hold vstart = jw_skip_ws(obj, colon + 1)
+          hold vend = jw_skip_val(obj, vstart)
+          when count > 0 {
+            hold out = concat(out, ",")
+          }
+          when string_eq(kraw, target) == 1 {
+            when replaced == 0 {
+              hold out = concat(out, concat(concat(kraw, ":"), raw_val))
+              hold replaced = 1
+            } otherwise {
+              hold out = concat(out, concat(concat(kraw, ":"), jw_sub(obj, vstart, vend)))
+            }
+          } otherwise {
+            hold out = concat(out, concat(concat(kraw, ":"), jw_sub(obj, vstart, vend)))
+          }
+          hold count = count + 1
+          hold i = jw_skip_ws(obj, vend)
+          when i < n {
+            when sx_index(obj, i) == 44 {
+              hold i = i + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  when replaced == 0 {
+    when count > 0 {
+      hold out = concat(out, ",")
+    }
+    hold out = concat(out, jw_kv(key, raw_val))
+  }
+  give concat(out, "}")
+}
+
+// Removes all top-level occurrences of `key` from `obj`.
+make jw_obj_del(obj: str, key: str) -> str {
+  hold target = jw_str(key)
+  hold n = len(obj)
+  hold i = jw_skip_ws(obj, 0)
+  when i >= n {
+    give "{}"
+  }
+  when sx_index(obj, i) != 123 {
+    give "{}"
+  }
+  hold i = jw_skip_ws(obj, i + 1)
+  hold out = "{"
+  hold count = 0
+  hold go = 1
+  while go == 1 {
+    hold i = jw_skip_ws(obj, i)
+    when i >= n {
+      hold go = 0
+    } otherwise {
+      when sx_index(obj, i) == 125 {
+        hold go = 0
+      } otherwise {
+        when sx_index(obj, i) != 34 {
+          hold go = 0
+        } otherwise {
+          hold kend = jw_skip_str(obj, i)
+          hold kraw = jw_sub(obj, i, kend)
+          hold colon = jw_skip_ws(obj, kend)
+          hold vstart = jw_skip_ws(obj, colon + 1)
+          hold vend = jw_skip_val(obj, vstart)
+          when string_eq(kraw, target) == 0 {
+            when count > 0 {
+              hold out = concat(out, ",")
+            }
+            hold out = concat(out, concat(concat(kraw, ":"), jw_sub(obj, vstart, vend)))
+            hold count = count + 1
+          }
+          hold i = jw_skip_ws(obj, vend)
+          when i < n {
+            when sx_index(obj, i) == 44 {
+              hold i = i + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give concat(out, "}")
+}
+
+// ---- minifier and iterative pretty-printer --------------------------------
+
+make jw_minify(doc: str) -> str {
+  hold n = len(doc)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold c = sx_index(doc, i)
+    when c == 34 {
+      hold send = jw_skip_str(doc, i)
+      hold out = concat(out, jw_sub(doc, i, send))
+      hold i = send
+    } otherwise {
+      when jw_is_ws(c) == 0 {
+        hold out = concat(out, chr(c))
+      }
+      hold i = i + 1
+    }
+  }
+  give out
+}
+
+make jw_pretty(doc: str, indent: num) -> str {
+  hold m = jw_minify(doc)
+  hold n = len(m)
+  hold out = ""
+  hold depth = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(m, i)
+    when c == 34 {
+      hold send = jw_skip_str(m, i)
+      hold out = concat(out, jw_sub(m, i, send))
+      hold i = send
+    } otherwise {
+      hold handled = 0
+      when c == 123 {
+        hold handled = 1
+        when i + 1 < n {
+          when sx_index(m, i + 1) == 125 {
+            hold out = concat(out, "{}")
+            hold i = i + 2
+          } otherwise {
+            hold depth = depth + 1
+            hold out = concat(out, "{\n")
+            hold out = concat(out, jw_spaces(depth * indent))
+            hold i = i + 1
+          }
+        } otherwise {
+          hold out = concat(out, "{")
+          hold i = i + 1
+        }
+      }
+      when handled == 0 {
+        when c == 91 {
+          hold handled = 1
+          when i + 1 < n {
+            when sx_index(m, i + 1) == 93 {
+              hold out = concat(out, "[]")
+              hold i = i + 2
+            } otherwise {
+              hold depth = depth + 1
+              hold out = concat(out, "[\n")
+              hold out = concat(out, jw_spaces(depth * indent))
+              hold i = i + 1
+            }
+          } otherwise {
+            hold out = concat(out, "[")
+            hold i = i + 1
+          }
+        }
+      }
+      when handled == 0 {
+        when c == 125 {
+          hold handled = 1
+          hold depth = depth - 1
+          hold out = concat(out, "\n")
+          hold out = concat(out, jw_spaces(depth * indent))
+          hold out = concat(out, "}")
+          hold i = i + 1
+        }
+      }
+      when handled == 0 {
+        when c == 93 {
+          hold handled = 1
+          hold depth = depth - 1
+          hold out = concat(out, "\n")
+          hold out = concat(out, jw_spaces(depth * indent))
+          hold out = concat(out, "]")
+          hold i = i + 1
+        }
+      }
+      when handled == 0 {
+        when c == 44 {
+          hold handled = 1
+          hold out = concat(out, ",\n")
+          hold out = concat(out, jw_spaces(depth * indent))
+          hold i = i + 1
+        }
+      }
+      when handled == 0 {
+        when c == 58 {
+          hold handled = 1
+          hold out = concat(out, ": ")
+          hold i = i + 1
+        }
+      }
+      when handled == 0 {
+        hold out = concat(out, chr(c))
+        hold i = i + 1
+      }
+    }
+  }
+  give out
+}

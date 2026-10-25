@@ -1,0 +1,315 @@
+// Sayanox LSP type-level hover & cross-file workspace resolution test client.
+// Spawns tools/sayanox_lsp directly over framed JSON-RPC (no Python, no sleep).
+
+make starts(t: str, i: num, p: str) -> num {
+  hold n = len(p)
+  hold k = 0
+  when i + n > len(t) {
+    give 0
+  }
+  while k < n {
+    when sx_index(t, i + k) != sx_index(p, k) {
+      give 0
+    }
+    k = k + 1
+  }
+  give 1
+}
+
+make find_from(t: str, p: str, from: num) -> num {
+  hold n = len(t)
+  hold m = len(p)
+  hold i = 0
+  when m <= 0 {
+    give 0 - 1
+  }
+  when from > 0 {
+    i = from
+  }
+  while i + m <= n {
+    when starts(t, i, p) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make has(t: str, p: str) -> num {
+  when find_from(t, p, 0) >= 0 {
+    give 1
+  }
+  give 0
+}
+
+make check(ok: num, msg: str) -> num {
+  when ok == 0 {
+    show concat("[FAIL] ", msg)
+    hold code = exit(1)
+  }
+  give ok
+}
+
+make uri(path: str) -> str {
+  hold hex = "0123456789ABCDEF"
+  hold out = "file://"
+  hold i = 0
+  hold n = len(path)
+  while i < n {
+    hold c = sx_index(path, i)
+    when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) {
+      out = out + chr(c)
+    } otherwise {
+      when c == 47 || c == 45 || c == 46 || c == 95 || c == 126 {
+        out = out + chr(c)
+      } otherwise {
+        hold hi = 0
+        hold lo = c
+        while lo >= 16 {
+          lo = lo - 16
+          hi = hi + 1
+        }
+        out = out + "%"
+        out = out + chr(sx_index(hex, hi))
+        out = out + chr(sx_index(hex, lo))
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make id_key(id: num, q: str) -> str {
+  hold out = q + "id" + q + ":"
+  out = out + numstr(id)
+  out = out + ","
+  give out
+}
+
+make read_frame(h: num) -> str {
+  hold head = child_line(h)
+  when len(head) == 0 {
+    give ""
+  }
+  hold i = 15
+  hold n = len(head)
+  hold v = 0
+  hold seen = 0
+  while i < n {
+    hold c = sx_index(head, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      seen = 1
+    }
+    i = i + 1
+  }
+  when seen == 0 {
+    give ""
+  }
+  hold blank = child_line(h)
+  give child_recv(h, v)
+}
+
+make answer(h: num, key: str) -> str {
+  hold body = read_frame(h)
+  when len(body) == 0 {
+    give ""
+  }
+  while has(body, key) == 0 {
+    body = read_frame(h)
+    when len(body) == 0 {
+      give ""
+    }
+  }
+  give body
+}
+
+make send_frame(h: num, body: str) -> num {
+  hold out = "Content-Length: "
+  out = out + numstr(len(body))
+  out = out + "\r\n\r\n"
+  out = out + body
+  give child_send(h, out)
+}
+
+make request_body(id: num, method: str, params: str, q: str) -> str {
+  hold out = "{"
+  out = out + q + "jsonrpc" + q + ":" + q + "2.0" + q + ","
+  out = out + q + "id" + q + ":" + numstr(id) + ","
+  out = out + q + "method" + q + ":" + q + method + q + ","
+  out = out + q + "params" + q + ":" + params + "}"
+  give out
+}
+
+make notify_body(method: str, params: str, q: str) -> str {
+  hold out = "{"
+  out = out + q + "jsonrpc" + q + ":" + q + "2.0" + q + ","
+  out = out + q + "method" + q + ":" + q + method + q + ","
+  out = out + q + "params" + q + ":" + params + "}"
+  give out
+}
+
+make json_esc_test(s: str) -> str {
+  hold out = ""
+  hold i = 0
+  hold n = len(s)
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      out = out + "\\\""
+    } otherwise {
+      when c == 92 {
+        out = out + "\\\\"
+      } otherwise {
+        when c == 10 {
+          out = out + "\\n"
+        } otherwise {
+          out = out + chr(c)
+        }
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make pos_params(doc_u: str, ln: num, ch: num, q: str) -> str {
+  hold p = "{"
+  p = p + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + doc_u + q + "},"
+  p = p + q + "position" + q + ":{" + q + "line" + q + ":" + numstr(ln) + "," + q + "character" + q + ":" + numstr(ch) + "}}"
+  give p
+}
+
+make sh_quote_lt(s: str) -> str {
+  hold sq = chr(39)
+  hold out = sq
+  hold i = 0
+  hold n = len(s)
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = out + sq + "\\" + sq + sq
+    } otherwise {
+      out = out + chr(c)
+    }
+    i = i + 1
+  }
+  out = out + sq
+  give out
+}
+
+make run_lsp_types(server: str, scratch: str) -> num {
+  hold q = chr(34)
+  hold rq = sh_quote_lt(scratch)
+  hold rc0 = run_command(concat("rm -rf ", concat(rq, concat(" && mkdir -p ", rq))))
+  hold w0 = check(rc0 == 0, "mkdir scratch")
+  hold root = path_real(scratch)
+  hold root_u = uri(root)
+
+  // 1. Unopened module imported via use
+  hold mod_p = root + "/math_types.sa"
+  hold mod_src = "struct Vec2 {\n  x: num,\n  y: num\n}\nstruct Box<T> {\n  val: T,\n  label: str\n}\nmake scale_vec(v: Vec2, k: num) -> Vec2 {\n  give v\n}\n"
+  hold wm = check(write_file(mod_p, mod_src) == 1, "write math_types.sa")
+  hold mod_u = uri(mod_p)
+
+  // 2. Unopened workspace sibling file (not imported via use, discovered via folder index)
+  hold ws_p = root + "/ws_extra.sa"
+  hold ws_src = "make ws_only_fn(msg: str, count: num) -> num {\n  give count\n}\n"
+  hold ww = check(write_file(ws_p, ws_src) == 1, "write ws_extra.sa")
+  hold ws_u = uri(ws_p)
+
+  // 3. Open app.sa in editor
+  hold app_p = root + "/app.sa"
+  hold app_src = "use \"math_types.sa\"\nmake run(p: Vec2) -> num {\n  hold scaled = scale_vec(p, 2)\n  hold b = Box<num> { val: scaled.x, label: \"ok\" }\n  give b.val\n}\nhold g_msg = concat(\"hi\", \"!\")\nhold g_res = ws_only_fn(g_msg, 5)\n"
+  hold wa = check(write_file(app_p, app_src) == 1, "write app.sa")
+  hold app_u = uri(app_p)
+
+  hold h = spawn(server)
+  hold wh = check(h > 0, "spawn lsp server")
+
+  hold init_p = "{" + q + "rootUri" + q + ":" + q + root_u + q + "," + q + "capabilities" + q + ":{}}"
+  hold s1 = check(send_frame(h, request_body(1, "initialize", init_p, q)) == 1, "send initialize")
+  hold r1 = answer(h, id_key(1, q))
+  hold c1 = check(has(r1, "hoverProvider") == 1, "initialize hoverProvider")
+  hold s2 = check(send_frame(h, notify_body("initialized", "{}", q)) == 1, "send initialized")
+
+  hold open_p = "{" + q + "textDocument" + q + ":{" + q + "uri" + q + ":" + q + app_u + q + "," + q + "languageId" + q + ":" + q + "sa" + q + "," + q + "version" + q + ":1," + q + "text" + q + ":" + q + json_esc_test(app_src) + q + "}}"
+  hold s3 = check(send_frame(h, notify_body("textDocument/didOpen", open_p, q)) == 1, "send didOpen")
+
+  // Hover 1: parameter `p` on line 2 (`scale_vec(p, 2)`, col 26) -> `p: Vec2`
+  hold s4 = check(send_frame(h, request_body(2, "textDocument/hover", pos_params(app_u, 2, 26, q), q)) == 1, "hover param p")
+  hold r4 = answer(h, id_key(2, q))
+  hold c4 = check(has(r4, "`p: Vec2`") == 1, concat("hover inferred parameter type Vec2: ", r4))
+
+  // Hover 2: local `scaled` on line 2 (col 8) -> `scaled: Vec2` (inferred from cross-file scale_vec return type)
+  hold s5 = check(send_frame(h, request_body(3, "textDocument/hover", pos_params(app_u, 2, 8, q), q)) == 1, "hover local scaled")
+  hold r5 = answer(h, id_key(3, q))
+  hold c5 = check(has(r5, "`scaled: Vec2`") == 1, concat("hover inferred call return type Vec2: ", r5))
+
+  // Hover 3: struct field `.x` in `scaled.x` on line 3 (col 34) -> `Vec2.x: num` from math_types.sa
+  hold s6 = check(send_frame(h, request_body(4, "textDocument/hover", pos_params(app_u, 3, 34, q), q)) == 1, "hover field scaled.x")
+  hold r6 = answer(h, id_key(4, q))
+  hold c6 = check(has(r6, "`Vec2.x: num`") == 1 && has(r6, "math_types.sa") == 1, concat("hover cross-file struct field Vec2.x: ", r6))
+
+  // Hover 4: generic struct field `.val` in `b.val` on line 4 (col 9) -> `Box<num>.val: num`
+  hold s7 = check(send_frame(h, request_body(5, "textDocument/hover", pos_params(app_u, 4, 9, q), q)) == 1, "hover generic field b.val")
+  hold r7 = answer(h, id_key(5, q))
+  hold c7 = check(has(r7, "`Box<num>.val: num`") == 1, concat("hover generic struct field Box<num>.val: ", r7))
+
+  // Hover 5: top-level `g_msg` (`str`) and `g_res` (`num` from unopened workspace fn ws_only_fn)
+  hold s8 = check(send_frame(h, request_body(6, "textDocument/hover", pos_params(app_u, 6, 6, q), q)) == 1, "hover g_msg")
+  hold r8 = answer(h, id_key(6, q))
+  hold c8 = check(has(r8, "`g_msg: str`") == 1, concat("hover top-level g_msg str: ", r8))
+
+  hold s9 = check(send_frame(h, request_body(7, "textDocument/hover", pos_params(app_u, 7, 6, q), q)) == 1, "hover g_res")
+  hold r9 = answer(h, id_key(7, q))
+  hold c9 = check(has(r9, "`g_res: num`") == 1, concat("hover top-level g_res num from workspace fn: ", r9))
+
+  // Hover 6: cross-file struct type name `Vec2` on line 1 (col 13) -> `struct Vec2 { x: num, y: num }`
+  hold s10 = check(send_frame(h, request_body(8, "textDocument/hover", pos_params(app_u, 1, 13, q), q)) == 1, "hover struct Vec2")
+  hold r10 = answer(h, id_key(8, q))
+  hold c10 = check(has(r10, "struct Vec2 { x: num, y: num }") == 1, concat("hover cross-file struct summary: ", r10))
+  show "type hover: params, cross-file calls, struct fields, generic Box<num>.val, and workspace globals"
+
+  // Definition 1: clicking `use "math_types.sa"` (line 0, col 6) jumps to math_types.sa line 0
+  hold line0_tok = q + "line" + q + ":0"
+  hold line1_tok = q + "line" + q + ":1"
+  hold act1_tok = q + "activeParameter" + q + ":1"
+  hold s11 = check(send_frame(h, request_body(9, "textDocument/definition", pos_params(app_u, 0, 6, q), q)) == 1, "def use path")
+  hold r11 = answer(h, id_key(9, q))
+  hold c11 = check(has(r11, mod_u) == 1 && has(r11, line0_tok) == 1, concat("def use target math_types.sa: ", r11))
+
+  // Definition 2: clicking `.x` in `scaled.x` (line 3, col 34) jumps to field `x: num` (line 1) in math_types.sa
+  hold s12 = check(send_frame(h, request_body(10, "textDocument/definition", pos_params(app_u, 3, 34, q), q)) == 1, "def field .x")
+  hold r12 = answer(h, id_key(10, q))
+  hold c12 = check(has(r12, mod_u) == 1 && has(r12, line1_tok) == 1, concat("def struct field Vec2.x in math_types.sa: ", r12))
+
+  // Definition 3: clicking `ws_only_fn` (line 7, col 15) jumps to unopened workspace file ws_extra.sa line 0
+  hold s13 = check(send_frame(h, request_body(11, "textDocument/definition", pos_params(app_u, 7, 15, q), q)) == 1, "def workspace fn")
+  hold r13 = answer(h, id_key(11, q))
+  hold c13 = check(has(r13, ws_u) == 1 && has(r13, line0_tok) == 1, concat("def unopened workspace fn ws_only_fn: ", r13))
+  show "cross-file definition: use module path, struct field Vec2.x, and unopened workspace function"
+
+  // SignatureHelp: inside `scale_vec(p, 2)` after comma (line 2, col 29) resolves unopened math_types.sa!
+  hold s14 = check(send_frame(h, request_body(12, "textDocument/signatureHelp", pos_params(app_u, 2, 29, q), q)) == 1, "sigHelp cross-file")
+  hold r14 = answer(h, id_key(12, q))
+  hold c14 = check(has(r14, "make scale_vec(v: Vec2, k: num) -> Vec2") == 1 && has(r14, act1_tok) == 1, concat("sigHelp cross-file activeParameter 1: ", r14))
+  show "cross-file signatureHelp: unopened module signature and activeParameter"
+
+  hold s15 = send_frame(h, request_body(13, "shutdown", "null", q))
+  hold r15 = answer(h, id_key(13, q))
+  hold s16 = send_frame(h, notify_body("exit", "null", q))
+  hold closed = child_close(h)
+  show "[OK] LSP type-level hover & cross-file workspace resolution verified"
+  give 0
+}
+
+hold srv_bin = "./tools/sayanox_lsp"
+hold scr_dir = "selfhost/seed_tests/lsp_types"
+when arg_count() >= 2 {
+  srv_bin = arg(1)
+}
+when arg_count() >= 3 {
+  scr_dir = arg(2)
+}
+hold lt_rc = run_lsp_types(srv_bin, scr_dir)

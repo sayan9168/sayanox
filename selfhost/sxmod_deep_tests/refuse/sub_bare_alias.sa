@@ -1,0 +1,3 @@
+module bad_bare_mod as bb from "bad_bare_mod.sa"
+
+show bb.broken_bare()

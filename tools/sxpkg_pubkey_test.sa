@@ -1,0 +1,187 @@
+// tools/sxpkg_pubkey_test.sa -- pure-Sayanox verification harness for
+// Curve25519 Schnorr-SHA256 package signatures (pubsig=) and signed registry
+// indices (INDEX.sig) in stdlib/pubkey.sa + tools/sxpkg.sa.
+
+make die_pkt(msg: str) -> num {
+  show concat("[FAIL] ", msg)
+  give exit(1)
+}
+
+make sh_quote_pkt(s: str) -> str {
+  hold sq = chr(39)
+  hold out = sq
+  hold i = 0
+  hold n = len(s)
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, concat(sq, concat("\\", concat(sq, sq))))
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  out = concat(out, sq)
+  give out
+}
+
+make must_ok(cmd: str, label: str) -> num {
+  hold rc = run_command(cmd)
+  when rc != 0 {
+    hold d = die_pkt(concat(label, " exited non-zero"))
+  }
+  give 1
+}
+
+make must_fail(cmd: str, label: str) -> num {
+  hold rc = run_command(cmd)
+  when rc == 0 {
+    hold d = die_pkt(concat(label, " unexpectedly exited 0"))
+  }
+  give 1
+}
+
+make has_sub(hay: str, needle: str) -> num {
+  hold hn = len(hay)
+  hold nn = len(needle)
+  when nn == 0 {
+    give 1
+  }
+  when nn > hn {
+    give 0
+  }
+  hold i = 0
+  while i + nn <= hn {
+    hold ok = 1
+    hold j = 0
+    while j < nn {
+      when sx_index(hay, i + j) != sx_index(needle, j) {
+        ok = 0
+        j = nn
+      } otherwise {
+        j = j + 1
+      }
+    }
+    when ok == 1 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make run_suite(work: str) -> num {
+  hold wq = sh_quote_pkt(work)
+  hold rm0 = run_command(concat("rm -rf ", concat(wq, concat(" && mkdir -p ", wq))))
+
+  // 1. 3-way native parity on selfhost/stdlib_pubkey_test.sa
+  hold pdir = concat(work, "/parity")
+  hold pdq = sh_quote_pkt(pdir)
+  hold mkp = run_command(concat("mkdir -p ", pdq))
+  hold r1 = must_ok(concat("./selfhost/seed/sxc_seed_min selfhost/stdlib_pubkey_test.sa > ", concat(sh_quote_pkt(concat(pdir, "/seed.c")), concat(" && cc -O2 -o ", concat(sh_quote_pkt(concat(pdir, "/seed.bin")), concat(" ", sh_quote_pkt(concat(pdir, "/seed.c"))))))), "seed-min build stdlib_pubkey_test")
+  hold r2 = must_ok(concat("./selfhost/gen2 selfhost/stdlib_pubkey_test.sa ", concat(sh_quote_pkt(concat(pdir, "/gen2.c")), concat(" >/dev/null && cc -O2 -o ", concat(sh_quote_pkt(concat(pdir, "/gen2.bin")), concat(" ", sh_quote_pkt(concat(pdir, "/gen2.c"))))))), "gen2 build stdlib_pubkey_test")
+  hold r3 = must_ok(concat("./selfhost/native_aot selfhost/stdlib_pubkey_test.sa ", concat(sh_quote_pkt(concat(pdir, "/nat.bin")), concat(" && chmod +x ", sh_quote_pkt(concat(pdir, "/nat.bin"))))), "native_aot build stdlib_pubkey_test")
+  hold r4 = must_ok(concat(sh_quote_pkt(concat(pdir, "/seed.bin")), concat(" > ", sh_quote_pkt(concat(pdir, "/seed.out")))), "seed-min run")
+  hold r5 = must_ok(concat(sh_quote_pkt(concat(pdir, "/gen2.bin")), concat(" > ", sh_quote_pkt(concat(pdir, "/gen2.out")))), "gen2 run")
+  hold r6 = must_ok(concat(sh_quote_pkt(concat(pdir, "/nat.bin")), concat(" > ", sh_quote_pkt(concat(pdir, "/nat.out")))), "native_aot run")
+  hold so = read_file(concat(pdir, "/seed.out"))
+  hold go = read_file(concat(pdir, "/gen2.out"))
+  hold no = read_file(concat(pdir, "/nat.out"))
+  when string_eq(so, go) == 0 || string_eq(go, no) == 0 {
+    hold dp = die_pkt("stdlib_pubkey_test parity mismatch across seed-min/gen2/native_aot")
+  }
+  show "[OK] stdlib/pubkey.sa 3-way parity: seed-min == gen2 == native_aot"
+
+  // 2. Publisher signs packages and INDEX, then deletes secret seed (.sec)
+  hold pub_root = concat(work, "/publisher")
+  hold cons_root = concat(work, "/consumer")
+  hold atk_root = concat(work, "/attacker")
+  hold mkd = must_ok(concat("mkdir -p ", concat(sh_quote_pkt(pub_root), concat(" ", concat(sh_quote_pkt(cons_root), concat(" ", sh_quote_pkt(atk_root)))))), "mkdir roots")
+
+  hold pub_env = concat("SAYANOX_ROOT=", concat(sh_quote_pkt(pub_root), " "))
+  hold p1 = must_ok(concat(pub_env, "./tools/sxpkg init >/dev/null"), "pub init")
+  hold p2 = must_ok(concat(pub_env, "./tools/sxpkg seed >/dev/null"), "pub seed")
+  hold p3 = must_ok(concat(pub_env, "SAYANOX_PASSPHRASE=publisher-release-key ./tools/sxpkg keygen default >/dev/null"), "pub keygen")
+  hold p4 = must_ok(concat(pub_env, "./tools/sxpkg pubsign hello >/dev/null"), "pub pubsign hello")
+  hold p5 = must_ok(concat(pub_env, "./tools/sxpkg pubsign math >/dev/null"), "pub pubsign math")
+  hold p6 = must_ok(concat(pub_env, "./tools/sxpkg sign-index >/dev/null"), "pub sign-index")
+
+  // Delete secret key completely before any verification!
+  hold sec_file = concat(pub_root, "/.sayanox/keys/default.sec")
+  hold pub_file = concat(pub_root, "/.sayanox/keys/default.pub")
+  hold del_ok = remove_path(sec_file)
+  when path_kind(sec_file) != 0 {
+    hold ds = die_pkt("failed to delete publisher .sec key before verification")
+  }
+
+  // 3. Consumer pins ONLY default.pub and verifies sync, index, and packages
+  hold cons_env = concat("SAYANOX_ROOT=", concat(sh_quote_pkt(cons_root), " "))
+  hold c1 = must_ok(concat(cons_env, "./tools/sxpkg init >/dev/null"), "cons init")
+  hold c2 = must_ok(concat(cons_env, concat("./tools/sxpkg trust-add ", concat(sh_quote_pkt(pub_file), " >/dev/null"))), "cons trust-add")
+  hold c3 = must_fail(concat(cons_env, "./tools/sxpkg trust-add ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff >/dev/null 2>&1"), "reject off-curve pubkey")
+
+  hold reg_url = concat("file://", concat(pub_root, "/.sayanox/registry"))
+  hold sync_out = concat(work, "/sync.out")
+  hold c4 = must_ok(concat(cons_env, concat("SAYANOX_REQUIRE_PUBKEY=1 SAYANOX_REGISTRY=", concat(sh_quote_pkt(reg_url), concat(" ./tools/sxpkg sync > ", sh_quote_pkt(sync_out))))), "cons signed sync")
+  when has_sub(read_file(sync_out), "sxpkg: signed index verified") == 0 {
+    hold dsy = die_pkt("sync did not report signed index verified")
+  }
+  hold c5 = must_ok(concat(cons_env, "./tools/sxpkg verify-index >/dev/null"), "cons verify-index")
+  hold c6 = must_ok(concat(cons_env, "./tools/sxpkg verify-pub >/dev/null"), "cons verify-pub all")
+  hold c7 = must_ok(concat(cons_env, "./tools/sxpkg add math 0.1.0 >/dev/null"), "cons add math")
+  hold ver_out = concat(work, "/verify.out")
+  hold c8 = must_ok(concat(cons_env, concat("SAYANOX_REQUIRE_PUBKEY=1 ./tools/sxpkg verify > ", sh_quote_pkt(ver_out))), "cons verify with REQUIRE_PUBKEY")
+  when has_sub(read_file(ver_out), "sxpkg: pubsig ok math") == 0 {
+    hold dv = die_pkt("verify did not report pubsig ok math")
+  }
+  show "[OK] public-key verification succeeded with .sec deleted (sync + verify-index + verify-pub + verify)"
+
+  // 4. Adversarial tamper tests (all must fail non-zero)
+  hold math_main = concat(cons_root, "/.sayanox/registry/math/main.sa")
+  hold orig_math = read_file(math_main)
+  hold w_t1 = write_file(math_main, concat(orig_math, "\n// tampered\n"))
+  hold t1 = must_fail(concat(cons_env, "./tools/sxpkg verify-pub math >/dev/null 2>&1"), "tampered main.sa verify-pub")
+  hold t2 = must_fail(concat(cons_env, "./tools/sxpkg verify-index >/dev/null 2>&1"), "tampered main.sa verify-index")
+  hold t3 = must_fail(concat(cons_env, "SAYANOX_REQUIRE_PUBKEY=1 ./tools/sxpkg verify >/dev/null 2>&1"), "tampered main.sa verify")
+  hold w_r1 = write_file(math_main, orig_math)
+
+  // Tamper INDEX
+  hold idx_file = concat(cons_root, "/.sayanox/registry/INDEX")
+  hold orig_idx = read_file(idx_file)
+  hold w_t2 = write_file(idx_file, "hello=0.1.0\n")
+  hold t4 = must_fail(concat(cons_env, "./tools/sxpkg verify-index >/dev/null 2>&1"), "truncated INDEX verify-index")
+  hold w_r2 = write_file(idx_file, orig_idx)
+
+  // Forge pubsig in pkg.meta (both duplicate-key smuggling and direct replacement)
+  hold math_meta = concat(cons_root, "/.sayanox/registry/math/pkg.meta")
+  hold orig_meta = read_file(math_meta)
+  hold forged_sig = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  hold w_t3 = write_file(math_meta, concat(orig_meta, concat("pubsig=", concat(forged_sig, "\n"))))
+  hold t5 = must_fail(concat(cons_env, "./tools/sxpkg verify-pub math >/dev/null 2>&1"), "smuggled duplicate pubsig verify-pub")
+  hold repl_meta = "name=math\nversion=0.1.0\nsum=718013937\nsha256=20c269795b03f933a723721400d7f5eef29aa8df6dd43a058b437f0e5edfce4e\npubkey="
+  hold pub_val = read_file(pub_file)
+  hold repl_meta = concat(repl_meta, concat(pub_val, concat("pubsig=", concat(forged_sig, "\n"))))
+  hold w_t3b = write_file(math_meta, repl_meta)
+  hold t5b = must_fail(concat(cons_env, "./tools/sxpkg verify-pub math >/dev/null 2>&1"), "replaced forged pubsig verify-pub")
+  hold w_r3 = write_file(math_meta, orig_meta)
+
+  // Unpinned attacker keypair signs its own registry -> consumer refuses sync and verify-pub
+  hold atk_env = concat("SAYANOX_ROOT=", concat(sh_quote_pkt(atk_root), " "))
+  hold a1 = must_ok(concat(atk_env, "./tools/sxpkg init >/dev/null"), "atk init")
+  hold a1b = must_ok(concat(atk_env, "./tools/sxpkg seed >/dev/null"), "atk seed")
+  hold a2 = must_ok(concat(atk_env, "SAYANOX_PASSPHRASE=attacker-unpinned-key ./tools/sxpkg keygen default >/dev/null"), "atk keygen")
+  hold a3 = must_ok(concat(atk_env, "./tools/sxpkg pubsign hello >/dev/null"), "atk pubsign hello")
+  hold a3b = must_ok(concat(atk_env, "./tools/sxpkg pubsign math >/dev/null"), "atk pubsign math")
+  hold a3c = must_ok(concat(atk_env, "./tools/sxpkg sign-index >/dev/null"), "atk sign-index")
+  hold atk_url = concat("file://", concat(atk_root, "/.sayanox/registry"))
+  hold t6 = must_fail(concat(cons_env, concat("SAYANOX_REQUIRE_PUBKEY=1 SAYANOX_REGISTRY=", concat(sh_quote_pkt(atk_url), " ./tools/sxpkg sync >/dev/null 2>&1"))), "untrusted key sync refusal")
+  hold t7 = must_fail(concat(cons_env, concat("./tools/sxpkg verify-index ", concat(sh_quote_pkt(concat(atk_root, "/.sayanox/registry")), " >/dev/null 2>&1"))), "untrusted key verify-index refusal")
+  show "[OK] adversarial refusals: tampered main.sa, truncated INDEX, forged pubsig, off-curve key, unpinned key (all exit 1)"
+  give 0
+}
+
+hold pkt_work = "selfhost/seed_tests/sxpkg_pubkey"
+when arg_count() >= 2 {
+  pkt_work = arg(1)
+}
+hold pkt_rc = run_suite(pkt_work)

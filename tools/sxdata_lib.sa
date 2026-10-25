@@ -1,0 +1,867 @@
+// tools/sxdata_lib.sa -- Structural return-flow proof (rf_block), pure-Sayanox
+// exact IEEE-754 decimal-to-binary64 converter (Clinger/BigInt round-to-even),
+// data-segment builder (d_alloc, d_str, d_pow 1e0..1e308, OFF_ROOTS), and
+// patch/seam assembly for tools/sxemit.sa and selfhost/native_aot.sa.
+
+// ---- structural return proof (rf_block) -----------------------------------
+
+make rf_space(src: str, sn: num, p_box: list) -> num {
+  hold go = 1
+  while go == 1 {
+    while is_space(at(src, sn, p_box[0])) == 1 {
+      p_box[0] = p_box[0] + 1
+    }
+    when at(src, sn, p_box[0]) == 47 && at(src, sn, p_box[0] + 1) == 47 {
+      while at(src, sn, p_box[0]) != 0 && at(src, sn, p_box[0]) != 10 {
+        p_box[0] = p_box[0] + 1
+      }
+    } otherwise {
+      go = 0
+    }
+  }
+  give 0
+}
+
+make rf_word(src: str, sn: num, p_box: list) -> str {
+  hold out = ""
+  hold n = 0
+  while idcc(at(src, sn, p_box[0])) == 1 {
+    when n < 63 {
+      hold p0_rf = p_box[0]
+      hold ch_rf = at(src, sn, p0_rf)
+      out = concat(out, chr(ch_rf))
+      n = n + 1
+    }
+    p_box[0] = p_box[0] + 1
+  }
+  give out
+}
+
+make rf_skip(src: str, sn: num, p_box: list, mode: num) -> num {
+  hold nesting = 0
+  while at(src, sn, p_box[0]) != 0 {
+    hold c = at(src, sn, p_box[0])
+    when c == 34 {
+      p_box[0] = p_box[0] + 1
+      while at(src, sn, p_box[0]) != 0 && at(src, sn, p_box[0]) != 34 {
+        when at(src, sn, p_box[0]) == 92 && at(src, sn, p_box[0] + 1) != 0 {
+          p_box[0] = p_box[0] + 1
+        }
+        p_box[0] = p_box[0] + 1
+      }
+      when at(src, sn, p_box[0]) != 0 {
+        p_box[0] = p_box[0] + 1
+      }
+    } otherwise {
+      when c == 47 && at(src, sn, p_box[0] + 1) == 47 {
+        while at(src, sn, p_box[0]) != 0 && at(src, sn, p_box[0]) != 10 {
+          p_box[0] = p_box[0] + 1
+        }
+      } otherwise {
+        when nesting == 0 {
+          when mode == 1 && c == 123 {
+            give 0
+          }
+          when mode == 0 {
+            when c == 10 || c == 13 || c == 125 {
+              give 0
+            }
+          }
+        }
+        when c == 40 || c == 91 || c == 123 {
+          nesting = nesting + 1
+        }
+        when c == 41 || c == 93 || c == 125 {
+          nesting = nesting - 1
+        }
+        p_box[0] = p_box[0] + 1
+      }
+    }
+  }
+  give 0
+}
+
+make rf_block(src: str, sn: num, p_box: list, level: num) -> num {
+  when level > 128 {
+    p_box[0] = sn
+    give 0
+  }
+  hold z0 = rf_space(src, sn, p_box)
+  when at(src, sn, p_box[0]) != 123 {
+    p_box[0] = sn
+    give 0
+  }
+  p_box[0] = p_box[0] + 1
+  hold proven = 0
+  while at(src, sn, p_box[0]) != 0 {
+    hold z1 = rf_space(src, sn, p_box)
+    when at(src, sn, p_box[0]) == 125 {
+      p_box[0] = p_box[0] + 1
+      give proven
+    }
+    when at(src, sn, p_box[0]) == 0 {
+      give 0
+    }
+    hold word = rf_word(src, sn, p_box)
+    when string_eq(word, "when") == 1 {
+      hold sk1 = rf_skip(src, sn, p_box, 1)
+      hold all = rf_block(src, sn, p_box, level + 1)
+      hold final_else = 0
+      hold chain_go = 1
+      while chain_go == 1 {
+        hold q_pos = p_box[0]
+        hold q_box = [q_pos]
+        hold zs = rf_space(src, sn, q_box)
+        hold tail = rf_word(src, sn, q_box)
+        hold is_else = 0
+        when string_eq(tail, "else") == 1 || string_eq(tail, "otherwise") == 1 {
+          is_else = 1
+        }
+        when string_eq(tail, "elif") == 0 && is_else == 0 {
+          chain_go = 0
+        } otherwise {
+          p_box[0] = q_box[0]
+          hold zs2 = rf_space(src, sn, p_box)
+          when is_else == 1 {
+            hold q2_pos = p_box[0]
+            hold q2_box = [q2_pos]
+            hold tail2 = rf_word(src, sn, q2_box)
+            when string_eq(tail2, "if") == 1 || string_eq(tail2, "when") == 1 {
+              p_box[0] = q2_box[0]
+            } otherwise {
+              final_else = 1
+            }
+          }
+          hold sk2 = rf_skip(src, sn, p_box, 1)
+          hold arm = rf_block(src, sn, p_box, level + 1)
+          when all == 1 && arm == 1 {
+            all = 1
+          } otherwise {
+            all = 0
+          }
+          when final_else == 1 {
+            chain_go = 0
+          }
+        }
+      }
+      when all == 1 && final_else == 1 {
+        proven = 1
+      }
+    } otherwise {
+      when string_eq(word, "while") == 1 || string_eq(word, "for") == 1 {
+        hold sk3 = rf_skip(src, sn, p_box, 1)
+        hold wb = rf_block(src, sn, p_box, level + 1)
+      } otherwise {
+        when string_eq(word, "give") == 1 {
+          proven = 1
+        }
+        hold sk4 = rf_skip(src, sn, p_box, 0)
+      }
+    }
+  }
+  give 0
+}
+
+// ---- exact IEEE-754 decimal-to-binary64 (base 2^24 BigInt) ----------------
+
+make bi_mul_add(b: list, mul: num, add: num) -> list {
+  hold nb = len(b)
+  when nb == 0 {
+    when add == 0 {
+      give b
+    }
+    hold one = [add]
+    give one
+  }
+  hold carry = add
+  hold i = 0
+  while i < nb {
+    hold v = b[i] * mul + carry
+    b[i] = bit_and(v, 16777215)
+    carry = shr(v, 24)
+    i = i + 1
+  }
+  when carry > 0 {
+    b = push(b, carry)
+  }
+  give b
+}
+
+make bi_shl(b: list, bits: num) -> list {
+  when len(b) == 0 || bits <= 0 {
+    give b
+  }
+  hold rem = bits % 24
+  hold full = (bits - rem) / 24
+  hold out = []
+  hold i = 0
+  while i < full {
+    out = push(out, 0)
+    i = i + 1
+  }
+  when rem == 0 {
+    i = 0
+    hold nb = len(b)
+    while i < nb {
+      out = push(out, b[i])
+      i = i + 1
+    }
+    give out
+  }
+  hold carry = 0
+  hold nb2 = len(b)
+  i = 0
+  while i < nb2 {
+    hold bi = b[i]
+    hold v = shl(bi, rem) + carry
+    out = push(out, bit_and(v, 16777215))
+    carry = shr(v, 24)
+    i = i + 1
+  }
+  when carry > 0 {
+    out = push(out, carry)
+  }
+  give out
+}
+
+make bi_shl1(b: list) -> list {
+  give bi_shl(b, 1)
+}
+
+make bi_cmp(a: list, b: list) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  when na > nb {
+    give 1
+  }
+  when na < nb {
+    give 0 - 1
+  }
+  hold i = na - 1
+  while i >= 0 {
+    when a[i] > b[i] {
+      give 1
+    }
+    when a[i] < b[i] {
+      give 0 - 1
+    }
+    i = i - 1
+  }
+  give 0
+}
+
+make bi_sub(a: list, b: list) -> list {
+  hold na = len(a)
+  hold nb = len(b)
+  hold raw = []
+  hold borrow = 0
+  hold i = 0
+  while i < na {
+    hold av = a[i]
+    hold bv = 0
+    when i < nb {
+      bv = b[i]
+    }
+    hold diff = av - bv - borrow
+    when diff < 0 {
+      diff = diff + 16777216
+      borrow = 1
+    } otherwise {
+      borrow = 0
+    }
+    raw = push(raw, diff)
+    i = i + 1
+  }
+  hold top = len(raw)
+  while top > 0 && raw[top - 1] == 0 {
+    top = top - 1
+  }
+  hold out = []
+  i = 0
+  while i < top {
+    out = push(out, raw[i])
+    i = i + 1
+  }
+  give out
+}
+
+make bi_bitlen(b: list) -> num {
+  hold nb = len(b)
+  when nb == 0 {
+    give 0
+  }
+  hold top = b[nb - 1]
+  hold tb = 0
+  while top > 0 {
+    top = shr(top, 1)
+    tb = tb + 1
+  }
+  give (nb - 1) * 24 + tb
+}
+
+make bi_get_bit(b: list, bit_idx: num) -> num {
+  when bit_idx < 0 {
+    give 0
+  }
+  hold sh = bit_idx % 24
+  hold limb = (bit_idx - sh) / 24
+  when limb >= len(b) {
+    give 0
+  }
+  hold bl = b[limb]
+  give bit_and(shr(bl, sh), 1)
+}
+
+make bi_any_below(b: list, hi_excl: num) -> num {
+  when hi_excl <= 0 {
+    give 0
+  }
+  hold sh = hi_excl % 24
+  hold full = (hi_excl - sh) / 24
+  hold i = 0
+  while i < full && i < len(b) {
+    when b[i] != 0 {
+      give 1
+    }
+    i = i + 1
+  }
+  when sh > 0 && full < len(b) {
+    hold mask = shl(1, sh) - 1
+    hold bf = b[full]
+    when bit_and(bf, mask) != 0 {
+      give 1
+    }
+  }
+  give 0
+}
+
+make bi_to_f64_hl(n: list, out_hl: list) -> num {
+  when len(n) == 0 {
+    out_hl[0] = 0
+    out_hl[1] = 0
+    give 0
+  }
+  hold bl = bi_bitlen(n)
+  hold e = bl - 1
+  when e > 1023 {
+    out_hl[0] = 2146435072
+    out_hl[1] = 0
+    give 0
+  }
+  hold hi21 = 0
+  hold k = 0
+  while k < 21 {
+    hi21 = hi21 * 2 + bi_get_bit(n, bl - 1 - k)
+    k = k + 1
+  }
+  hold lo32 = 0
+  while k < 53 {
+    lo32 = lo32 * 2 + bi_get_bit(n, bl - 1 - k)
+    k = k + 1
+  }
+  when bl > 53 {
+    hold rbit = bi_get_bit(n, bl - 54)
+    hold sticky = bi_any_below(n, bl - 54)
+    when rbit == 1 {
+      when sticky == 1 || bit_and(lo32, 1) == 1 {
+        lo32 = lo32 + 1
+        when lo32 >= 4294967296 {
+          lo32 = 0
+          hi21 = hi21 + 1
+        }
+        when hi21 >= 2097152 {
+          hi21 = 1048576
+          e = e + 1
+        }
+      }
+    }
+  }
+  when e > 1023 {
+    out_hl[0] = 2146435072
+    out_hl[1] = 0
+    give 0
+  }
+  hold biased = e + 1023
+  hold hval = biased * 1048576 + hi21 - 1048576
+  out_hl[0] = hval
+  out_hl[1] = lo32
+  give 0
+}
+
+make dec_to_f64_hl(s: str, out_hl: list) -> num {
+  hold sn = len(s)
+  hold m = []
+  hold frac = 0
+  hold seen_dot = 0
+  hold ndig = 0
+  hold i = 0
+  while i < sn {
+    hold c = sx_index(s, i)
+    when c == 46 {
+      seen_dot = 1
+    } otherwise {
+      when c >= 48 && c <= 57 {
+        hold d = c - 48
+        when len(m) > 0 || d > 0 {
+          m = bi_mul_add(m, 10, d)
+          ndig = ndig + 1
+        }
+        when seen_dot == 1 {
+          frac = frac + 1
+        }
+      }
+    }
+    i = i + 1
+  }
+  when len(m) == 0 {
+    out_hl[0] = 0
+    out_hl[1] = 0
+    give 0
+  }
+  when frac == 0 {
+    give bi_to_f64_hl(m, out_hl)
+  }
+  when ndig - frac < 0 - 325 {
+    out_hl[0] = 0
+    out_hl[1] = 0
+    give 0
+  }
+  hold den = [1]
+  i = 0
+  while i < frac {
+    den = bi_mul_add(den, 5, 0)
+    i = i + 1
+  }
+  hold bn = bi_bitlen(m)
+  hold bd = bi_bitlen(den)
+  hold num_s = m
+  hold den_s = den
+  when bn > bd {
+    den_s = bi_shl(den_s, bn - bd)
+  }
+  when bd > bn {
+    num_s = bi_shl(num_s, bd - bn)
+  }
+  hold e = (bn - bd) - frac
+  when bi_cmp(num_s, den_s) < 0 {
+    num_s = bi_shl1(num_s)
+    e = e - 1
+  }
+  when e > 1023 {
+    out_hl[0] = 2146435072
+    out_hl[1] = 0
+    give 0
+  }
+  when e < 0 - 1075 {
+    out_hl[0] = 0
+    out_hl[1] = 0
+    give 0
+  }
+  hold qbits = []
+  hold rem = num_s
+  hold step = 0
+  while step < 55 {
+    when step > 0 {
+      rem = bi_shl1(rem)
+    }
+    when bi_cmp(rem, den_s) >= 0 {
+      qbits = push(qbits, 1)
+      rem = bi_sub(rem, den_s)
+    } otherwise {
+      qbits = push(qbits, 0)
+    }
+    step = step + 1
+  }
+  hold rem_nz = 0
+  when len(rem) > 0 {
+    rem_nz = 1
+  }
+  when e >= 0 - 1022 {
+    hold hi21 = 0
+    hold k = 0
+    while k < 21 {
+      hi21 = hi21 * 2 + qbits[k]
+      k = k + 1
+    }
+    hold lo32 = 0
+    while k < 53 {
+      lo32 = lo32 * 2 + qbits[k]
+      k = k + 1
+    }
+    hold rbit = qbits[53]
+    hold sticky = rem_nz
+    when qbits[54] == 1 {
+      sticky = 1
+    }
+    when rbit == 1 {
+      when sticky == 1 || bit_and(lo32, 1) == 1 {
+        lo32 = lo32 + 1
+        when lo32 >= 4294967296 {
+          lo32 = 0
+          hi21 = hi21 + 1
+        }
+        when hi21 >= 2097152 {
+          hi21 = 1048576
+          e = e + 1
+        }
+      }
+    }
+    when e > 1023 {
+      out_hl[0] = 2146435072
+      out_hl[1] = 0
+      give 0
+    }
+    hold biased = e + 1023
+    hold hval2 = biased * 1048576 + hi21 - 1048576
+    out_hl[0] = hval2
+    out_hl[1] = lo32
+    give 0
+  }
+  // Subnormal: -1075 <= e <= -1023
+  hold hi20 = 0
+  hold bit_m = 0
+  while bit_m < 20 {
+    hold j1 = e + 1023 + bit_m
+    hold b1 = 0
+    when j1 >= 0 {
+      b1 = qbits[j1]
+    }
+    hi20 = hi20 * 2 + b1
+    bit_m = bit_m + 1
+  }
+  hold lo32_s = 0
+  while bit_m < 52 {
+    hold j2 = e + 1023 + bit_m
+    hold b2 = 0
+    when j2 >= 0 {
+      b2 = qbits[j2]
+    }
+    lo32_s = lo32_s * 2 + b2
+    bit_m = bit_m + 1
+  }
+  hold rj = e + 1075
+  hold rbit_s = qbits[rj]
+  hold sticky_s = rem_nz
+  hold sj = rj + 1
+  while sj < 55 {
+    when qbits[sj] == 1 {
+      sticky_s = 1
+    }
+    sj = sj + 1
+  }
+  when rbit_s == 1 {
+    when sticky_s == 1 || bit_and(lo32_s, 1) == 1 {
+      lo32_s = lo32_s + 1
+      when lo32_s >= 4294967296 {
+        lo32_s = 0
+        hi20 = hi20 + 1
+      }
+    }
+  }
+  out_hl[0] = hi20
+  out_hl[1] = lo32_s
+  give 0
+}
+
+make pnum_hl_st(src: str, st: list, out_hl: list) -> num {
+  hold z = sw_st(src, st)
+  hold sn = st[1]
+  hold s0 = st[0]
+  when is_digit(at(src, sn, s0)) == 0 {
+    give 0
+  }
+  while is_digit(at(src, sn, st[0])) == 1 {
+    st[0] = st[0] + 1
+  }
+  when at(src, sn, st[0]) == 46 {
+    when is_digit(at(src, sn, st[0] + 1)) == 0 {
+      hold e1 = fail(1, "malformed number literal (a '.' must be followed by digits)")
+    }
+    st[0] = st[0] + 1
+    while is_digit(at(src, sn, st[0])) == 1 {
+      st[0] = st[0] + 1
+    }
+  }
+  hold nxt = at(src, sn, st[0])
+  when nxt == 46 || id0c(nxt) == 1 {
+    hold e2 = fail(1, "malformed number literal")
+  }
+  hold end_tok = st[0]
+  when end_tok - s0 > 63 {
+    end_tok = s0 + 63
+  }
+  hold tok = sub(src, s0, end_tok)
+  hold cv = dec_to_f64_hl(tok, out_hl)
+  give 1
+}
+
+make pstr_val_st(src: str, st: list) -> str {
+  hold z = sw_st(src, st)
+  hold sn = st[1]
+  when at(src, sn, st[0]) != 34 {
+    hold e0 = fail(1, "unterminated string")
+  }
+  st[0] = st[0] + 1
+  hold out = ""
+  hold cnt = 0
+  while at(src, sn, st[0]) != 0 && at(src, sn, st[0]) != 34 {
+    hold c = at(src, sn, st[0])
+    st[0] = st[0] + 1
+    when c == 92 && at(src, sn, st[0]) != 0 {
+      hold x = at(src, sn, st[0])
+      st[0] = st[0] + 1
+      when x == 110 {
+        c = 10
+      } otherwise {
+        when x == 116 {
+          c = 9
+        } otherwise {
+          when st[39] == 1 && x == 114 {
+            c = 13
+          } otherwise {
+            c = x
+          }
+        }
+      }
+    }
+    when st[39] == 1 || cnt + 1 < 512 {
+      out = concat(out, chr(c))
+      cnt = cnt + 1
+    }
+  }
+  when at(src, sn, st[0]) == 34 {
+    st[0] = st[0] + 1
+  }
+  give out
+}
+
+make endstmt_st(src: str, st: list) -> num {
+  hold z = sw_st(src, st)
+  hold sn = st[1]
+  hold c = at(src, sn, st[0])
+  when c == 0 || c == 125 {
+    give 0
+  }
+  when c == 47 && at(src, sn, st[0] + 1) == 47 {
+    give 0
+  }
+  hold saved = st[0]
+  when mkw_st(src, st, "hold") == 1 || mkw_st(src, st, "show") == 1 || mkw_st(src, st, "when") == 1 || mkw_st(src, st, "while") == 1 || mkw_st(src, st, "make") == 1 || mkw_st(src, st, "give") == 1 || mkw_st(src, st, "struct") == 1 || mkw_st(src, st, "otherwise") == 1 || mkw_st(src, st, "else") == 1 || mkw_st(src, st, "for") == 1 || mkw_st(src, st, "break") == 1 || mkw_st(src, st, "continue") == 1 || mkw_st(src, st, "elif") == 1 {
+    st[0] = saved
+    give 0
+  }
+  st[0] = saved
+  when id0c(c) == 1 {
+    hold w = pid_raw_st(src, st)
+    when string_eq(w, "and") == 1 || string_eq(w, "or") == 1 || string_eq(w, "not") == 1 {
+      st[0] = saved
+      hold e1 = fail(1, concat(concat("'", w), "' is a full-language word operator and not in the native subset outside when/while conditions (native speaks the pure-min expressions; use selfhost/gen2)"))
+    }
+    hold z2 = sw_st(src, st)
+    hold c2 = at(src, sn, st[0])
+    when c2 == 61 && at(src, sn, st[0] + 1) != 61 {
+      st[0] = saved
+      give 0
+    }
+    when c2 == 40 && string_eq(w, "push") == 1 {
+      st[0] = saved
+      give 0
+    }
+    when st[39] == 1 && (c2 == 91 || (c2 == 40 && string_eq(w, "exit") == 1) || ((c2 == 43 || c2 == 45) && at(src, sn, st[0] + 1) == 61)) {
+      st[0] = saved
+      give 0
+    }
+  }
+  st[0] = saved
+  hold e2 = fail(1, "unexpected token after statement (expected end of line or next statement)")
+  give 0
+}
+
+// ---- data segment builder -------------------------------------------------
+
+make d_next_off(data: list) -> num {
+  hold dn = len(data)
+  hold rem = dn % 8
+  when rem == 0 {
+    give dn
+  }
+  give dn + (8 - rem)
+}
+
+make d_alloc(data: list, n: num) -> list {
+  while len(data) % 8 != 0 {
+    data = push(data, 0)
+  }
+  when n > 524288 || len(data) + n > 524288 {
+    hold oom = fail(1, "data OOM")
+  }
+  hold i = 0
+  while i < n {
+    data = push(data, 0)
+    i = i + 1
+  }
+  give data
+}
+
+make d_str_alloc(data: list, s: str) -> list {
+  hold n = len(s)
+  hold at = d_next_off(data)
+  data = d_alloc(data, n + 1)
+  hold i = 0
+  while i < n {
+    hold dst = at + i
+    data[dst] = sx_index(s, i)
+    i = i + 1
+  }
+  give data
+}
+
+make d_put_u32_at(data: list, off: num, v: num) -> num {
+  hold u = low32(v)
+  data[off] = bit_and(u, 255)
+  data[off + 1] = bit_and(shr(u, 8), 255)
+  data[off + 2] = bit_and(shr(u, 16), 255)
+  data[off + 3] = bit_and(shr(u, 24), 255)
+  give 0
+}
+
+make d_put_hl_at(data: list, off: num, hi: num, lo: num) -> num {
+  hold a = d_put_u32_at(data, off, lo)
+  hold b = d_put_u32_at(data, off + 4, hi)
+  give 0
+}
+
+// Fixed offsets matching native_aot.c:
+//   DNA_START = 672
+//   d_glob    = 672  (64*8 = 512 bytes)
+//   d_err_div = 1184 ("division by zero\n")
+//   d_pow     = 1392 (309 IEEE-754 doubles 1e0..1e308)
+make init_data_seg() -> list {
+  hold data = []
+  hold i = 0
+  while i < 672 {
+    data = push(data, 0)
+    i = i + 1
+  }
+  data = d_alloc(data, 512)
+  data = d_str_alloc(data, "division by zero\n")
+  data = d_str_alloc(data, "out of memory\n")
+  data = d_str_alloc(data, "list index out of range\n")
+  data = d_str_alloc(data, "string index out of range\n")
+  data = d_str_alloc(data, "[list len=")
+  data = d_str_alloc(data, "]\n")
+  data = d_str_alloc(data, "\n")
+  data = d_str_alloc(data, "")
+  data = d_alloc(data, 64)
+  hold d_pow = d_next_off(data)
+  data = d_alloc(data, 2472)
+  hold pow10 = [1]
+  hold hl = [0, 0]
+  i = 0
+  while i <= 308 {
+    hold cv = bi_to_f64_hl(pow10, hl)
+    hold wr = d_put_hl_at(data, d_pow + 8 * i, hl[0], hl[1])
+    when i < 308 {
+      pow10 = bi_mul_add(pow10, 10, 0)
+    }
+    i = i + 1
+  }
+  give data
+}
+
+make write_roots_into_data(data: list, st: list) -> num {
+  hold off = 144
+  hold ext_off = 20552
+  hold nroot = 0
+  hold ng = st[11]
+  hold i = 0
+  while i < ng {
+    hold gb = g_base(i)
+    hold k = st[gb + 1]
+    when k == 1 || k == 2 || k == 3 {
+      hold goff = 672 + 8 * i
+      when i >= 64 {
+        goff = 4168 + 8 * (i - 64)
+      }
+      when st[39] == 1 && nroot >= 60 {
+        hold wx = d_put_hl_at(data, ext_off, 0, goff)
+        ext_off = ext_off + 8
+      } otherwise {
+        hold w1 = d_put_hl_at(data, off, 0, goff)
+        off = off + 8
+      }
+      nroot = nroot + 1
+    }
+    i = i + 1
+  }
+  hold w2 = d_put_hl_at(data, off, 0, 32)
+  off = off + 8
+  hold w3 = d_put_hl_at(data, off, 0, 0)
+  when st[39] == 1 {
+    hold w4 = d_put_hl_at(data, ext_off, 0, 0)
+  }
+  give 0
+}
+
+make extract_code_bytes(est: list) -> list {
+  hold bs = []
+  hold cn = here_local(est)
+  hold i = 0
+  while i < cn {
+    bs = push(bs, enc_code_at(est, i))
+    i = i + 1
+  }
+  give bs
+}
+
+make build_patch_bytes(est: list, st: list, pool: list) -> list {
+  hold patch = []
+  hold npc = est[4]
+  hold npr = est[8]
+  hold cn = here_local(est)
+  hold i = 0
+  while i < npc {
+    hold at = enc_call_at(est, i)
+    hold kind = enc_call_kind(est, i)
+    hold idx = enc_call_idx(est, i)
+    hold to = 0
+    when kind == 0 {
+      hold fb = f_base(idx)
+      to = st[fb + 34]
+      when to < 0 {
+        hold fnm = unintern(pool, st[fb])
+        hold e1 = fail(1, concat(concat("function '", fnm), "' was called but never emitted"))
+      }
+    } otherwise {
+      hold bslot = 10 + idx
+      when idx >= 40 {
+        bslot = 60 + (idx - 40)
+      }
+      to = est[bslot]
+    }
+    patch = append_u64_le(patch, at)
+    patch = append_u64_le(patch, to)
+    i = i + 1
+  }
+  hold r12_to = round_page(cn)
+  i = 0
+  while i < npr {
+    hold rat = enc_r12_at(est, i)
+    patch = append_u64_le(patch, rat)
+    patch = append_u64_le(patch, r12_to)
+    i = i + 1
+  }
+  give patch
+}
+
+make build_meta_txt(est: list, data: list) -> str {
+  hold npc = est[4]
+  hold npr = est[8]
+  hold cn = here_local(est)
+  hold dn = len(data)
+  hold s = concat(istr(npc), " ")
+  s = concat(s, concat(istr(npr), " "))
+  s = concat(s, concat(istr(cn), " "))
+  s = concat(s, concat(istr(dn), "\n"))
+  give s
+}

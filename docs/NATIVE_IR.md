@@ -417,10 +417,13 @@ applying it.
   claimed; they are copied, not encoded, because the C source writes them as
   literals. That is the honest boundary: the *encoder* is Sayanox, the
   hand-written runtime stubs are transported.
-* `native_aot` still drives its own encoder to produce the executables the gates
-  run. Making `sxencode` the producer would make the native backend's output
-  path depend on gen2 — the same bootstrap ordering change `sxlink` has not made
-  either.
-* It is not a second backend. There is still one executable target: x86-64
-  Linux ELF, with one encoder and one linker, now both proved equal to the C
-  bytes by fixtures.
+* Since 2026-10-24 (Phase D Step 10), `selfhost/native_aot.sa` + `tools/sxenc_lib.sa`
+  IS the sole producer of `./selfhost/native_aot` (`selfhost/native_aot.c` is deleted).
+* **Portable IR virtual machine (`tools/sxirexec.sa`, 2026-10-24):**
+  `tools/sxirexec` loads the portable IR emitted by `tools/emit_to_ir --strict --source-offsets`
+  plus `data.bin` (`SX_LINK_DUMP`) and executes the program on a pure-Sayanox register/stack/heap
+  VM with zero host x86-64 ELF execution (`compile-and-run` deletes the ELF binary before VM
+  execution). `make test-ir-exec` verifies 4-way parity (`seed-min == gen2 == native_aot == sxirexec`)
+  across SHA-256/HMAC-SHA256 (`stdlib_crypto_test.sa`), `stdlib_json_write_test.sa`,
+  `stdlib_growth_test.sa`, and `native_ir_log_test.sa`, plus Stage-2 struct-typed functions and
+  `${id}` string interpolation.

@@ -429,6 +429,12 @@ make skip_stmt(s: str, n: num, from: num) -> num {
       i = i + 1
       hand = 1
     }
+    when hand == 0 && c == 47 && i + 1 < n && sx_index(s, i + 1) == 47 {
+      while i < n && sx_index(s, i) != 10 {
+        i = i + 1
+      }
+      hand = 1
+    }
     when hand == 0 && c == 34 {
       inq = 1
       i = i + 1
@@ -448,6 +454,12 @@ make skip_stmt(s: str, n: num, from: num) -> num {
             inq = 0
           }
           i = i + 1
+          h2 = 1
+        }
+        when h2 == 0 && c2 == 47 && i + 1 < n && sx_index(s, i + 1) == 47 {
+          while i < n && sx_index(s, i) != 10 {
+            i = i + 1
+          }
           h2 = 1
         }
         when h2 == 0 && c2 == 34 {
@@ -595,7 +607,8 @@ make scan_fields(s: str, n: num, p: list, nm: str) -> str {
 // takes its own type parameters and nothing else. res[0] is the kind, res[1]
 // the type-parameter index (-1 when it is not one).
 
-make sig_type(s: str, n: num, p: list, nm: str, gtp: str, res: list) -> num {
+make sig_type(s: str, p: list, nm: str, gtp: str, snames: str, res: list) -> num {
+  hold n = len(s)
   res[0] = 0
   res[1] = 0 - 1
   hold z = sw(s, n, p)
@@ -623,13 +636,18 @@ make sig_type(s: str, n: num, p: list, nm: str, gtp: str, res: list) -> num {
     res[0] = 2
     give 1
   }
+  when tbl_has(snames, t) == 1 {
+    res[0] = 3
+    give 1
+  }
   when string_eq(t, "num") == 0 {
     hold e3 = fail(1, concat(concat(concat("make ", nm), concat(": parameter type '", t)), "' is not in the native subset (native takes num)"))
   }
   give 1
 }
 
-make sig_ret(s: str, n: num, p: list, nm: str, gtp: str, res: list) -> num {
+make sig_ret(s: str, p: list, nm: str, gtp: str, snames: str, res: list) -> num {
+  hold n = len(s)
   res[0] = 0
   res[1] = 0 - 1
   hold z = sw(s, n, p)
@@ -655,6 +673,10 @@ make sig_ret(s: str, n: num, p: list, nm: str, gtp: str, res: list) -> num {
   }
   when string_eq(t, "list") == 1 {
     res[0] = 2
+    give 1
+  }
+  when tbl_has(snames, t) == 1 {
+    res[0] = 3
     give 1
   }
   when string_eq(t, "num") == 0 {
@@ -957,7 +979,7 @@ make collect(src: str) -> str {
           when np >= 6 {
             hold e21 = fail(1, concat(concat("make ", nm), ": at most 6 params"))
           }
-          typed = typed + sig_type(src, n, p, nm, gtp, res)
+          typed = typed + sig_type(src, p, nm, gtp, snames, res)
           ptxt = concat(ptxt, "  param ")
           ptxt = concat(ptxt, numstr(np))
           ptxt = concat(ptxt, " ")
@@ -984,7 +1006,7 @@ make collect(src: str) -> str {
           }
         }
       }
-      hold r1 = sig_ret(src, n, p, nm, gtp, res)
+      hold r1 = sig_ret(src, p, nm, gtp, snames, res)
       rk = res[0]
       rtp = res[1]
       hold ck = sig_check(nm, np, typed, r1)

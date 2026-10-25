@@ -1,11 +1,16 @@
 # Status
 
-Last updated: **2026-10-23** (the native backend's front-end phase 1 in
-Sayanox; i386 and aarch64 machine-code backends, a module-namespacing pass
-and a pinned trust-anchor audit, all written in Sayanox; expression-valued
-struct fields and checked index calls; nested generic structs; a collector in
-the bootstrap seed; stdlib cryptography and nested JSON, package digests and
-signatures, LSP semantic resolution)
+Last updated: **2026-10-25** (C-free self-compiling x86-64 ELF64 compiler &
+toolchain `tools/sxc_native.sa` compiling itself, all 30+ tools including
+`sayanox_lsp`/`sxpkg`/`sxdiag`, and 20,138-line `compiler_min.sa` directly to
+static Linux ELF64 binaries with zero `cc` and zero libc; all 5 remaining
+non-anchor `.c`/`.h` files retired to Sayanox so `selfhost/seed/sxc_seed_min.c`
+is the sole `.c`/`.h` file in the entire repository; `tools/sxsuite.sa` 6-suite
+compiler test runner; `tools/sxisaexec.sa` user-mode ARM64 & RISC-V 64 ELF64
+instruction emulator with 6-way parity; `tools/sxmod_lib.sa` transitive
+multi-directory `module` DAG resolver; `tools/sayanox_lsp.sa` module IDE,
+multiline `signatureHelp`, lexical block shadowing, and `prepareRename`; and
+5-backend `stdlib/{map,sort,path,cli,bytes}.sa`)
 
 The short version — every finished item next to the `make` gate that proves
 it, and every unfinished item next to the place the build refuses to claim it

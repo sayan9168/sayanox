@@ -53,10 +53,8 @@ cc -O2 -o "$D/min" "$D/min.c"
 "$D/min" > "$D/min.out"
 cmp -s "$D/min.out" "$D/want.txt" || { echo "FAIL: seed-min output differs"; diff "$D/want.txt" "$D/min.out" || true; exit 1; }
 
-# full seed -- its generated C needs the runtime header and <stdarg.h>.
+# full seed (selfhost/seed/sxc_seed.sa) -- emits standalone C directly.
 "$SEED" "$D/t.sa" > "$D/seed.c"
-# no -include stdarg.h workaround: selfhost/seed/sx_runtime.h includes it,
-# because the seed-generated preamble emits a variadic sx_lit_list
 cc -O2 -I"$SEED_DIR" -o "$D/seed" "$D/seed.c" -lm
 "$D/seed" > "$D/seed.out"
 cmp -s "$D/seed.out" "$D/want.txt" || { echo "FAIL: seed output differs"; diff "$D/want.txt" "$D/seed.out" || true; exit 1; }

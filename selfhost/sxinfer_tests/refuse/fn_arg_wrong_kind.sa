@@ -1,0 +1,4 @@
+make f(a: str) -> num {
+  give len(a)
+}
+hold x = f(1)

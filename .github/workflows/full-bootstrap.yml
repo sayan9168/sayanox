@@ -40,6 +40,7 @@ concurrency:
 
 env:
   CC: cc
+  LC_ALL: C
 
 jobs:
   full-bootstrap:
@@ -90,13 +91,22 @@ jobs:
           for f in selfhost/gen1.c selfhost/gen1 selfhost/gen1_min.c selfhost/gen1_min \
                    selfhost/gen2.c selfhost/gen2 selfhost/gen3.c selfhost/gen3 \
                    selfhost/gen4.c selfhost/boot_from_gen2 selfhost/boot_from_gen2.c \
-                   selfhost/native_aot selfhost/seed/sxc_seed_min; do
+                   selfhost/native_aot selfhost/seed/sxc_seed selfhost/seed/sxc_seed_min \
+                   tools/sxfmt tools/sxfmt.c tools/sxpkg tools/sxpkg.c \
+                   tools/sayanox_lsp tools/sayanox_lsp.c tools/sxdiag tools/sxdiag.c \
+                   tools/emit_to_ir tools/sxlink tools/sxencode tools/sxdefs \
+                   tools/native32 tools/sxmod tools/sxaudit \
+                   tools/sxinfer tools/sxruntime tools/sxgc tools/sxemit \
+                   tools/sxbuild tools/sxstage2_parity tools/sxirexec tools/sxpkg_pubkey_test \
+                   tools/sxc_native tools/sxc_native_test tools/sxsuite \
+                   tools/sxisaexec tools/sxisaexec_test tools/sxmod_deep_test tools/lsp_ide_test; do
             if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
               echo "::error::$f is tracked but must be generated"
               exit 1
             fi
           done
-          echo "[OK] no generated bootstrap artifact is tracked in git"
+          test "$(git ls-files '*.c' '*.h')" = "selfhost/seed/sxc_seed_min.c"
+          echo "[OK] no generated bootstrap artifact is tracked in git, and sxc_seed_min.c is the sole tracked .c/.h file"
 
       # The fixed point is the result worth keeping, and it fits in a log line:
       # gen3.c and gen4.c are the same bytes, so their digests must match.

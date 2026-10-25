@@ -1,0 +1,5 @@
+struct P {
+  x
+}
+hold a = P { 1 }
+hold b = P { "s" }

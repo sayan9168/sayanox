@@ -1,0 +1,784 @@
+// stdlib/pubkey.sa -- Public-key signatures over Curve25519 (Schnorr-25519
+// with SHA-256), written in portable Sayanox (prefix `pk_`).
+//
+// Requires `stdlib/crypto.sa` to be loaded before this module:
+//   use "stdlib/crypto.sa"
+//   use "stdlib/pubkey.sa"
+//
+// Portable across seed-min, gen2, native_aot, and sxirexec
+// (make test-sxpkg-pubkey): fully typed signatures, <= 6 parameters, one
+// statement per line, functional list construction, and exact 16-bit limb
+// arithmetic (< 2^53) in IEEE-754 doubles.
+//
+// MATHEMATICAL CONSTRUCTION & HONEST SCOPE:
+//   * Curve: RFC 8032 twisted Edwards Curve25519 (-x^2 + y^2 = 1 + d*x^2*y^2)
+//     over GF(2^255 - 19), prime-order subgroup L = 2^252 + 27742317777372353535851937790883648493,
+//     standard RFC 8032 basepoint B (By = 4/5 mod p, Bx >= 0 even).
+//   * Scheme: deterministic Schnorr signatures over subgroup <B> using
+//     domain-separated 512-bit wide SHA-256 hashes reduced modulo L
+//     ("sayanox-pk-v1:*"). This is Ed25519-curve Schnorr-SHA256 (reusing
+//     stdlib/crypto.sa's audited SHA-256), NOT wire-identical to RFC 8032
+//     Ed25519-SHA512.
+//   * Secret seed: 64 lowercase hex chars (32 bytes); verifier NEVER sees the
+//     secret seed or scalar s -- verification uses ONLY the 64-hex compressed
+//     public key A = s * B.
+//   * Reference implementation: like stdlib/crypto.sa, scalar multiplication
+//     is variable-time in Sayanox and intended for offline/registry package
+//     and index authenticity verification, not side-channel-hostile enclaves.
+
+// ---------------------------------------------------------------------------
+// Curve constants in 16 little-endian base-2^16 limbs
+// ---------------------------------------------------------------------------
+
+make pk_const_p() -> list {
+  give [65517, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 32767]
+}
+
+make pk_const_d() -> list {
+  give [30883, 4953, 19914, 30187, 55467, 16705, 2637, 112, 59544, 30585, 16505, 36039, 65139, 11119, 27886, 20995]
+}
+
+make pk_const_2d() -> list {
+  give [61785, 9906, 39828, 60374, 45398, 33411, 5274, 224, 53552, 61171, 33010, 6542, 64743, 22239, 55772, 9222]
+}
+
+make pk_const_sqrtm1() -> list {
+  give [41136, 18958, 6951, 50414, 58488, 44335, 6150, 12099, 55207, 15867, 153, 11085, 57099, 20417, 9344, 11139]
+}
+
+make pk_const_bx() -> list {
+  give [54554, 36645, 11616, 51542, 42930, 38181, 51040, 26924, 56412, 64982, 57905, 49316, 21502, 52590, 14035, 8553]
+}
+
+make pk_const_by() -> list {
+  give [26200, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214]
+}
+
+make pk_const_L() -> list {
+  give [54253, 23797, 25370, 22546, 40150, 41719, 63966, 5342, 0, 0, 0, 0, 0, 0, 0, 4096]
+}
+
+make pk_fe_zero() -> list {
+  give [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+}
+
+make pk_fe_one() -> list {
+  give [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+}
+
+// Floor division by 65536 that works for negative and non-negative integers.
+make pk_div65536(x: num) -> num {
+  hold r = x % 65536
+  when r < 0 {
+    hold r = r + 65536
+  }
+  give (x - r) / 65536
+}
+
+make pk_mod65536(x: num) -> num {
+  hold r = x % 65536
+  when r < 0 {
+    hold r = r + 65536
+  }
+  give r
+}
+
+// Single carry pass mod (2^256 - 38)
+make pk_fe_carry1(a: list) -> list {
+  hold tmp = []
+  hold carry = 0
+  hold i = 0
+  while i < 16 {
+    hold v = a[i] + carry
+    hold lo = pk_mod65536(v)
+    hold carry = pk_div65536(v)
+    hold tmp = push(tmp, lo)
+    hold i = i + 1
+  }
+  hold out = []
+  hold c2 = carry * 38
+  hold j = 0
+  while j < 16 {
+    hold w = tmp[j] + c2
+    hold wlo = pk_mod65536(w)
+    hold c2 = pk_div65536(w)
+    hold out = push(out, wlo)
+    hold j = j + 1
+  }
+  when c2 != 0 {
+    hold out2 = []
+    hold c3 = c2 * 38
+    hold k = 0
+    while k < 16 {
+      hold u = out[k] + c3
+      hold ulo = pk_mod65536(u)
+      hold c3 = pk_div65536(u)
+      hold out2 = push(out2, ulo)
+      hold k = k + 1
+    }
+    give out2
+  }
+  give out
+}
+
+// Compare 16-limb unsigned a >= b
+make pk_u256_ge(a: list, b: list) -> num {
+  hold i = 15
+  while i >= 0 {
+    hold ai = a[i]
+    hold bi = b[i]
+    when ai > bi {
+      give 1
+    }
+    when ai < bi {
+      give 0
+    }
+    hold i = i - 1
+  }
+  give 1
+}
+
+make pk_u256_sub(a: list, b: list) -> list {
+  hold out = []
+  hold borrow = 0
+  hold i = 0
+  while i < 16 {
+    hold d = a[i] - b[i] - borrow
+    when d < 0 {
+      hold d = d + 65536
+      hold borrow = 1
+    } otherwise {
+      hold borrow = 0
+    }
+    hold out = push(out, d)
+    hold i = i + 1
+  }
+  give out
+}
+
+// Canonicalize into [0, p - 1] where p = 2^255 - 19
+make pk_fe_canon(a: list) -> list {
+  hold x = pk_fe_carry1(pk_fe_carry1(a))
+  hold p = pk_const_p()
+  when pk_u256_ge(x, p) == 1 {
+    hold x = pk_u256_sub(x, p)
+  }
+  when pk_u256_ge(x, p) == 1 {
+    hold x = pk_u256_sub(x, p)
+  }
+  give x
+}
+
+make pk_fe_eq(a: list, b: list) -> num {
+  hold ca = pk_fe_canon(a)
+  hold cb = pk_fe_canon(b)
+  hold diff = 0
+  hold i = 0
+  while i < 16 {
+    when ca[i] != cb[i] {
+      hold diff = diff + 1
+    }
+    hold i = i + 1
+  }
+  when diff == 0 {
+    give 1
+  }
+  give 0
+}
+
+make pk_fe_add(a: list, b: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < 16 {
+    hold s = a[i] + b[i]
+    hold out = push(out, s)
+    hold i = i + 1
+  }
+  give pk_fe_carry1(out)
+}
+
+make pk_fe_sub(a: list, b: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < 16 {
+    hold d = a[i] - b[i]
+    hold out = push(out, d)
+    hold i = i + 1
+  }
+  give pk_fe_carry1(out)
+}
+
+make pk_fe_mul(a: list, b: list) -> list {
+  hold raw = []
+  hold i = 0
+  while i < 16 {
+    hold acc = 0
+    hold j = 0
+    while j <= i {
+      hold k1 = i - j
+      hold acc = acc + a[j] * b[k1]
+      hold j = j + 1
+    }
+    hold acc_hi = 0
+    while j < 16 {
+      hold k2 = 16 + i - j
+      hold acc_hi = acc_hi + a[j] * b[k2]
+      hold j = j + 1
+    }
+    hold tot = acc + 38 * acc_hi
+    hold raw = push(raw, tot)
+    hold i = i + 1
+  }
+  give pk_fe_carry1(raw)
+}
+
+make pk_fe_sq(a: list) -> list {
+  give pk_fe_mul(a, a)
+}
+
+// z^(p - 2) mod p, where p - 2 = 2^255 - 21 (all bits 0..254 set except 2 and 4)
+make pk_fe_inv(z: list) -> list {
+  hold r = pk_fe_one()
+  hold k = 254
+  while k >= 0 {
+    hold r = pk_fe_sq(r)
+    when k != 2 {
+      when k != 4 {
+        hold r = pk_fe_mul(r, z)
+      }
+    }
+    hold k = k - 1
+  }
+  give pk_fe_canon(r)
+}
+
+// z^((p + 3) / 8) mod p, where (p + 3)/8 = 2^252 - 2 (bits 251..1 set, bit 0 clear)
+make pk_fe_pow_p38(z: list) -> list {
+  hold r = pk_fe_one()
+  hold k = 251
+  while k >= 0 {
+    hold r = pk_fe_sq(r)
+    when k != 0 {
+      hold r = pk_fe_mul(r, z)
+    }
+    hold k = k - 1
+  }
+  give pk_fe_canon(r)
+}
+
+// ---------------------------------------------------------------------------
+// Extended twisted Edwards points [X0..15, Y0..15, Z0..15, T0..15] (64 nums)
+// ---------------------------------------------------------------------------
+
+make pk_pt_pack4(x: list, y: list, z: list, t: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < 16 {
+    hold v = x[i]
+    hold out = push(out, v)
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < 16 {
+    hold v = y[i]
+    hold out = push(out, v)
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < 16 {
+    hold v = z[i]
+    hold out = push(out, v)
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < 16 {
+    hold v = t[i]
+    hold out = push(out, v)
+    hold i = i + 1
+  }
+  give out
+}
+
+make pk_pt_coord(p: list, which: num) -> list {
+  hold out = []
+  hold base = which * 16
+  hold i = 0
+  while i < 16 {
+    hold idx = base + i
+    hold v = p[idx]
+    hold out = push(out, v)
+    hold i = i + 1
+  }
+  give out
+}
+
+make pk_pt_id() -> list {
+  hold z0 = pk_fe_zero()
+  hold z1 = pk_fe_one()
+  give pk_pt_pack4(z0, z1, z1, z0)
+}
+
+make pk_pt_base() -> list {
+  hold bx = pk_const_bx()
+  hold by = pk_const_by()
+  hold z1 = pk_fe_one()
+  hold bt = pk_fe_canon(pk_fe_mul(bx, by))
+  give pk_pt_pack4(bx, by, z1, bt)
+}
+
+// Unified twisted Edwards addition on -x^2 + y^2 = 1 + d*x^2*y^2
+make pk_pt_add(p: list, q: list) -> list {
+  hold x1 = pk_pt_coord(p, 0)
+  hold y1 = pk_pt_coord(p, 1)
+  hold z1 = pk_pt_coord(p, 2)
+  hold t1 = pk_pt_coord(p, 3)
+
+  hold x2 = pk_pt_coord(q, 0)
+  hold y2 = pk_pt_coord(q, 1)
+  hold z2 = pk_pt_coord(q, 2)
+  hold t2 = pk_pt_coord(q, 3)
+
+  hold a = pk_fe_mul(pk_fe_sub(y1, x1), pk_fe_sub(y2, x2))
+  hold b = pk_fe_mul(pk_fe_add(y1, x1), pk_fe_add(y2, x2))
+  hold c = pk_fe_mul(pk_const_2d(), pk_fe_mul(t1, t2))
+  hold z12 = pk_fe_mul(z1, z2)
+  hold d = pk_fe_add(z12, z12)
+  hold e = pk_fe_sub(b, a)
+  hold f = pk_fe_sub(d, c)
+  hold g = pk_fe_add(d, c)
+  hold h = pk_fe_add(b, a)
+
+  hold x3 = pk_fe_mul(e, f)
+  hold y3 = pk_fe_mul(g, h)
+  hold z3 = pk_fe_mul(f, g)
+  hold t3 = pk_fe_mul(e, h)
+  give pk_pt_pack4(x3, y3, z3, t3)
+}
+
+// Extract bit k (0..255) from a 16-limb scalar
+make pk_scalar_bit(s: list, k: num) -> num {
+  hold rem = k % 16
+  hold wi = (k - rem) / 16
+  hold w = s[wi]
+  hold d = cx_pow2(rem)
+  hold lo = w % d
+  hold shifted = (w - lo) / d
+  give shifted % 2
+}
+
+make pk_pt_scalarmult(p: list, s: list) -> list {
+  hold acc = pk_pt_id()
+  hold cur = p
+  hold k = 0
+  while k < 255 {
+    when pk_scalar_bit(s, k) == 1 {
+      hold acc = pk_pt_add(acc, cur)
+    }
+    hold cur = pk_pt_add(cur, cur)
+    hold k = k + 1
+  }
+  give acc
+}
+
+make pk_pt_eq(p: list, q: list) -> num {
+  hold px = pk_pt_coord(p, 0)
+  hold py = pk_pt_coord(p, 1)
+  hold pz = pk_pt_coord(p, 2)
+  hold qx = pk_pt_coord(q, 0)
+  hold qy = pk_pt_coord(q, 1)
+  hold qz = pk_pt_coord(q, 2)
+  when pk_fe_eq(pk_fe_mul(px, qz), pk_fe_mul(qx, pz)) == 0 {
+    give 0
+  }
+  when pk_fe_eq(pk_fe_mul(py, qz), pk_fe_mul(qy, pz)) == 0 {
+    give 0
+  }
+  give 1
+}
+
+// Encode point into 32 compressed bytes (RFC 8032 Section 5.1.2)
+make pk_encode_point(p: list) -> list {
+  hold px = pk_pt_coord(p, 0)
+  hold py = pk_pt_coord(p, 1)
+  hold pz = pk_pt_coord(p, 2)
+  hold zinv = pk_fe_inv(pz)
+  hold x = pk_fe_canon(pk_fe_mul(px, zinv))
+  hold y = pk_fe_canon(pk_fe_mul(py, zinv))
+  hold xpar = x[0] % 2
+
+  hold bs = []
+  hold i = 0
+  while i < 16 {
+    hold w = y[i]
+    hold blo = w % 256
+    hold bhi = (w - blo) / 256
+    when i == 15 {
+      hold bhi = bhi + xpar * 128
+    }
+    hold bs = push(bs, blo)
+    hold bs = push(bs, bhi)
+    hold i = i + 1
+  }
+  give bs
+}
+
+// Decode 32 compressed bytes into extended point, or [] if invalid/non-canonical
+make pk_decode_point(bs: list) -> list {
+  when len(bs) != 32 {
+    give []
+  }
+  hold b31 = bs[31]
+  hold b31_low = b31 % 128
+  hold xsign = (b31 - b31_low) / 128
+
+  hold y = []
+  hold i = 0
+  while i < 16 {
+    hold lo = bs[2 * i]
+    hold hi = bs[2 * i + 1]
+    when i == 15 {
+      hold hi = b31_low
+    }
+    hold y = push(y, lo + hi * 256)
+    hold i = i + 1
+  }
+
+  // Reject non-canonical y >= p
+  when pk_u256_ge(y, pk_const_p()) == 1 {
+    give []
+  }
+
+  hold y2 = pk_fe_sq(y)
+  hold one = pk_fe_one()
+  hold u = pk_fe_sub(y2, one)
+  hold v = pk_fe_add(pk_fe_mul(pk_const_d(), y2), one)
+  hold x2 = pk_fe_canon(pk_fe_mul(u, pk_fe_inv(v)))
+  hold x = pk_fe_pow_p38(x2)
+
+  when pk_fe_eq(pk_fe_sq(x), x2) == 0 {
+    hold x = pk_fe_canon(pk_fe_mul(x, pk_const_sqrtm1()))
+  }
+  when pk_fe_eq(pk_fe_sq(x), x2) == 0 {
+    give []
+  }
+
+  hold x = pk_fe_canon(x)
+  hold z0 = pk_fe_zero()
+  when pk_fe_eq(x, z0) == 1 {
+    when xsign == 1 {
+      give []
+    }
+  }
+  hold cur_sign = x[0] % 2
+  when cur_sign != xsign {
+    hold x = pk_fe_canon(pk_fe_sub(z0, x))
+  }
+
+  // Verify point satisfies curve equation: -x^2 + y^2 == 1 + d*x^2*y^2
+  hold xx = pk_fe_sq(x)
+  hold lhs = pk_fe_sub(y2, xx)
+  hold rhs = pk_fe_add(one, pk_fe_mul(pk_const_d(), pk_fe_mul(xx, y2)))
+  when pk_fe_eq(lhs, rhs) == 0 {
+    give []
+  }
+
+  hold t = pk_fe_canon(pk_fe_mul(x, y))
+  give pk_pt_pack4(x, y, one, t)
+}
+
+// ---------------------------------------------------------------------------
+// Exact scalar arithmetic modulo L (subgroup order)
+// ---------------------------------------------------------------------------
+
+// Double a 16-limb integer + bit_in, reduce modulo L if >= L
+make pk_modL_step(acc: list, bit_in: num, l_val: list) -> list {
+  hold out = []
+  hold carry = bit_in
+  hold i = 0
+  while i < 16 {
+    hold v = acc[i] * 2 + carry
+    hold lo = v % 65536
+    hold carry = (v - lo) / 65536
+    hold out = push(out, lo)
+    hold i = i + 1
+  }
+  when carry > 0 {
+    hold out = pk_u256_sub(out, l_val)
+  } otherwise {
+    when pk_u256_ge(out, l_val) == 1 {
+      hold out = pk_u256_sub(out, l_val)
+    }
+  }
+  give out
+}
+
+// Reduce an arbitrary-length little-endian base-2^16 limb vector modulo L
+make pk_limbs_mod_L(limbs: list) -> list {
+  hold acc = pk_fe_zero()
+  hold l_val = pk_const_L()
+  hold idx = len(limbs) - 1
+  while idx >= 0 {
+    hold w = limbs[idx]
+    hold b = 15
+    while b >= 0 {
+      hold d = cx_pow2(b)
+      hold lo = w % d
+      hold top = (w - lo) / d
+      hold bit = top % 2
+      hold acc = pk_modL_step(acc, bit, l_val)
+      hold b = b - 1
+    }
+    hold idx = idx - 1
+  }
+  give acc
+}
+
+make pk_bytes32_to_limbs16(bs: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < 16 {
+    hold lo = bs[2 * i]
+    hold hi = bs[2 * i + 1]
+    hold out = push(out, lo + hi * 256)
+    hold i = i + 1
+  }
+  give out
+}
+
+make pk_limbs16_to_bytes32(limbs: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < 16 {
+    hold w = limbs[i]
+    hold lo = w % 256
+    hold hi = (w - lo) / 256
+    hold out = push(out, lo)
+    hold out = push(out, hi)
+    hold i = i + 1
+  }
+  give out
+}
+
+// (r + e * s) mod L for 16-limb scalars r, e, s
+make pk_scalar_muladd_L(r: list, e: list, s: list) -> list {
+  hold prod = []
+  hold k = 0
+  while k < 32 {
+    hold sum = 0
+    when k < 16 {
+      hold sum = r[k]
+    }
+    hold i = 0
+    while i < 16 {
+      hold j = k - i
+      when j >= 0 {
+        when j < 16 {
+          hold sum = sum + e[i] * s[j]
+        }
+      }
+      hold i = i + 1
+    }
+    hold prod = push(prod, sum)
+    hold k = k + 1
+  }
+  hold norm = []
+  hold carry = 0
+  hold m = 0
+  while m < 32 {
+    hold v = prod[m] + carry
+    hold lo = v % 65536
+    hold carry = (v - lo) / 65536
+    hold norm = push(norm, lo)
+    hold m = m + 1
+  }
+  while carry > 0 {
+    hold clo = carry % 65536
+    hold carry = (carry - clo) / 65536
+    hold norm = push(norm, clo)
+  }
+  give pk_limbs_mod_L(norm)
+}
+
+make pk_append_bytes(dst: list, src: list) -> list {
+  hold out = dst
+  hold i = 0
+  while i < len(src) {
+    hold b = src[i]
+    hold out = push(out, b)
+    hold i = i + 1
+  }
+  give out
+}
+
+// Wide 512-bit domain-separated SHA-256 hash reduced modulo L
+make pk_hash_scalar(domain: str, part1: list, part2: list, part3: list) -> list {
+  hold dom = cx_bytes(domain)
+  hold m0 = pk_append_bytes(dom, [0])
+  hold m0 = pk_append_bytes(m0, part1)
+  hold m0 = pk_append_bytes(m0, part2)
+  hold m0 = pk_append_bytes(m0, part3)
+  hold h0 = cx_sha256_raw(m0)
+
+  hold m1 = pk_append_bytes(dom, [1])
+  hold m1 = pk_append_bytes(m1, part1)
+  hold m1 = pk_append_bytes(m1, part2)
+  hold m1 = pk_append_bytes(m1, part3)
+  hold h1 = cx_sha256_raw(m1)
+
+  hold all64 = pk_append_bytes(h0, h1)
+  hold limbs32 = []
+  hold i = 0
+  while i < 32 {
+    hold lo = all64[2 * i]
+    hold hi = all64[2 * i + 1]
+    hold limbs32 = push(limbs32, lo + hi * 256)
+    hold i = i + 1
+  }
+  give pk_limbs_mod_L(limbs32)
+}
+
+// Derive secret scalar s in [1, L - 1] from 32-byte seed
+make pk_secret_scalar(seed_bytes: list) -> list {
+  hold s = pk_hash_scalar("sayanox-pk-v1:key:", seed_bytes, [], [])
+  when pk_u256_ge(pk_fe_zero(), s) == 1 {
+    give pk_fe_one()
+  }
+  give s
+}
+
+// ---------------------------------------------------------------------------
+// Public API: seed derivation, public key, key id, sign, verify
+// ---------------------------------------------------------------------------
+
+// Derive a deterministic 64-hex secret seed from arbitrary passphrase/material
+make pk_seed_from_passphrase(material: str) -> str {
+  hold raw = cx_sha256_raw(cx_bytes(concat("sayanox-pk-v1:seed:", material)))
+  give cx_hex(raw)
+}
+
+// Compute 64-hex compressed Curve25519 public key from 64-hex secret seed.
+// Returns "" if seed_hex is not valid 64-char hex.
+make pk_pubkey(seed_hex: str) -> str {
+  when len(seed_hex) != 64 {
+    give ""
+  }
+  hold seed = cx_unhex(seed_hex)
+  when len(seed) != 32 {
+    give ""
+  }
+  hold s = pk_secret_scalar(seed)
+  hold a_pt = pk_pt_scalarmult(pk_pt_base(), s)
+  give cx_hex(pk_encode_point(a_pt))
+}
+
+// Public key fingerprint: first 16 lowercase hex chars of SHA-256(pubkey_bytes)
+make pk_keyid(pubkey_hex: str) -> str {
+  when len(pubkey_hex) != 64 {
+    give ""
+  }
+  hold pub_bs = cx_unhex(pubkey_hex)
+  when len(pub_bs) != 32 {
+    give ""
+  }
+  hold dig = cx_hex(cx_sha256_raw(pub_bs))
+  hold out = ""
+  hold i = 0
+  while i < 16 {
+    hold out = concat(out, chr(sx_index(dig, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Sign message string with 64-hex secret seed -> 128-hex signature (R || S)
+make pk_sign(seed_hex: str, msg: str) -> str {
+  when len(seed_hex) != 64 {
+    give ""
+  }
+  hold seed = cx_unhex(seed_hex)
+  when len(seed) != 32 {
+    give ""
+  }
+  hold s = pk_secret_scalar(seed)
+  hold base = pk_pt_base()
+  hold a_pt = pk_pt_scalarmult(base, s)
+  hold a_bs = pk_encode_point(a_pt)
+  hold msg_bs = cx_bytes(msg)
+
+  hold r = pk_hash_scalar("sayanox-pk-v1:nonce:", seed, a_bs, msg_bs)
+  hold r_pt = pk_pt_scalarmult(base, r)
+  hold r_bs = pk_encode_point(r_pt)
+
+  hold e = pk_hash_scalar("sayanox-pk-v1:chal:", r_bs, a_bs, msg_bs)
+  hold s_sig = pk_scalar_muladd_L(r, e, s)
+  hold s_bs = pk_limbs16_to_bytes32(s_sig)
+
+  give concat(cx_hex(r_bs), cx_hex(s_bs))
+}
+
+// Verify 128-hex signature using ONLY the 64-hex public key and message.
+// Rejects malformed hex, off-curve/non-canonical points, S >= L, identity A,
+// tampered messages, tampered signatures, and wrong public keys.
+make pk_verify(pubkey_hex: str, msg: str, sig_hex: str) -> num {
+  when len(pubkey_hex) != 64 {
+    give 0
+  }
+  when len(sig_hex) != 128 {
+    give 0
+  }
+  hold a_bs = cx_unhex(pubkey_hex)
+  when len(a_bs) != 32 {
+    give 0
+  }
+  hold sig_bs = cx_unhex(sig_hex)
+  when len(sig_bs) != 64 {
+    give 0
+  }
+  hold a_pt = pk_decode_point(a_bs)
+  when len(a_pt) != 64 {
+    give 0
+  }
+  // Reject identity public key (0, 1)
+  when pk_pt_eq(a_pt, pk_pt_id()) == 1 {
+    give 0
+  }
+
+  hold r_bs = []
+  hold s_bs = []
+  hold i = 0
+  while i < 32 {
+    hold rb = sig_bs[i]
+    hold sb = sig_bs[32 + i]
+    hold r_bs = push(r_bs, rb)
+    hold s_bs = push(s_bs, sb)
+    hold i = i + 1
+  }
+
+  hold r_pt = pk_decode_point(r_bs)
+  when len(r_pt) != 64 {
+    give 0
+  }
+
+  hold s_limbs = pk_bytes32_to_limbs16(s_bs)
+  when pk_u256_ge(s_limbs, pk_const_L()) == 1 {
+    give 0
+  }
+
+  // Cofactor-cleared subgroup equation: 8 * (S * B) == 8 * (R + e * A)
+  hold msg_bs = cx_bytes(msg)
+  hold e = pk_hash_scalar("sayanox-pk-v1:chal:", r_bs, a_bs, msg_bs)
+  hold sb_pt = pk_pt_scalarmult(pk_pt_base(), s_limbs)
+  hold ea_pt = pk_pt_scalarmult(a_pt, e)
+  hold rhs_pt = pk_pt_add(r_pt, ea_pt)
+
+  // Multiply both sides by cofactor 8 (three point doublings)
+  hold lhs8 = pk_pt_add(sb_pt, sb_pt)
+  hold lhs8 = pk_pt_add(lhs8, lhs8)
+  hold lhs8 = pk_pt_add(lhs8, lhs8)
+
+  hold rhs8 = pk_pt_add(rhs_pt, rhs_pt)
+  hold rhs8 = pk_pt_add(rhs8, rhs8)
+  hold rhs8 = pk_pt_add(rhs8, rhs8)
+
+  give pk_pt_eq(lhs8, rhs8)
+}

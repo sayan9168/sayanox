@@ -44,6 +44,7 @@
 *.part linguist-generated=true
 *.cpart linguist-generated=true
 *.hex linguist-generated=true
+*.elf binary linguist-generated=true
 
 # ---------------------------------------------------------------------------
 # Generated artifacts: build and test logs

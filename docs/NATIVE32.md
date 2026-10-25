@@ -1,10 +1,11 @@
-# Second and third machine-code targets: i386 and arm64 (2026-10-23)
+# Second, third and fourth machine-code targets: i386, arm64 and riscv64
 
 `tools/native32.sa` compiles a Sayanox program to a **32-bit x86 (i386) Linux
-ELF executable**, or — with `arm64` as its third argument — to a **64-bit ARM
-(AArch64) Linux ELF executable**. It is written in Sayanox, compiled by
-`selfhost/gen2`, and it emits machine code and the ELF container itself — no
-assembler, no linker, no C.
+ELF executable**, — with `arm64` as its third argument — to a **64-bit ARM
+(AArch64) Linux ELF executable**, or — with `riscv64` as its third argument —
+to a **64-bit RISC-V (RV64IM, `EM_RISCV = 243`) Linux ELF executable**. It is
+written in Sayanox, compiled by `selfhost/gen2`, and it emits machine code and
+the ELF container itself — no assembler, no linker, no C.
 
 ```sh
 make tools/native32
@@ -13,9 +14,11 @@ chmod +x /tmp/flow
 /tmp/flow            # 45 1 0 5040 21 10, one per line
 
 ./tools/native32 selfhost/native32_tests/flow.sa /tmp/flow.a64 arm64
+./tools/native32 selfhost/native32_tests/flow.sa /tmp/flow.rv64 riscv64
 ```
 
-`make test-native32` and `make test-native-arm64` are the gates.
+`make test-native32`, `make test-native-arm64` and `make test-native-riscv64`
+are the gates.
 
 **Read this before the rest:** the i386 images are *executed* by the gate on
 this machine and their stdout is compared with three other backends. The
