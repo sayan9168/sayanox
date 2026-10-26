@@ -833,6 +833,12 @@ make walk_counts(dir: str, counts: list, depth: num) -> num {
       when string_eq(name, "seed_tests") == 1 || string_eq(name, "gen2_tests") == 1 || string_eq(name, "Unselected files") == 1 {
         skip = 1
       }
+      // CI hand-off directories hold generated C, not sources. The workflow
+      // keeps them outside the checkout; skipping them here is belt and braces
+      // so a stray copy cannot turn the C-free inventory into a false alarm.
+      when string_eq(name, "gate-binaries") == 1 || string_eq(name, "ci-artifacts") == 1 {
+        skip = 1
+      }
       when skip == 0 {
         hold full = name
         when string_eq(dir, ".") == 0 {

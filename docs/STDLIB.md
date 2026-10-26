@@ -1,7 +1,7 @@
 # Standard library (stdlib/)
 
-Ten modules, split by what they need from the compiler. Every helper is
-checked by a `make` target; the backend columns below say what is verified.
+Modules, split by what they need from the compiler. Every helper is checked
+by a `make` target; the backend columns below say what is verified.
 
 | Module | Helpers | Backends | Gate |
 |---|---|---|---|
@@ -16,6 +16,7 @@ checked by a `make` target; the backend columns below say what is verified.
 | `stdlib/json_deep.sa` | nested JSON reader, any depth (`jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with `[i]` indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep` |
 | `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa` | seed-min, gen2, native | `test-stdlib-json-write` |
 | `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
+| `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals | seed-min, gen2, native | `test-stdlib-csv` |
 
 ## Why two kinds of module
 
@@ -284,3 +285,30 @@ on `selfhost/stdlib_pubkey_test.sa` plus end-to-end `sxpkg` package (`pubsig=`)
 and index (`INDEX.sig`) verification with `.sec` deleted. Arithmetic uses 16-bit
 limbs inside IEEE-754 doubles (exact below `2^53`), with no constant-time
 side-channel claim.
+
+
+## `csv.sa`: CSV rows without string lists (2026-10-26)
+
+The dialect refuses string-valued list elements, so a parsed CSV row cannot be
+a `list` of `str`. `csv.sa` uses the same trick as `cli.sa`: a **packed string**
+where every field is stored as its decimal byte length, a colon, and the raw
+bytes (`3:abc0:` holds `abc` and the empty field). `csv_parse_row` returns that
+packed form; `csv_ok`, `csv_count`, `csv_at`, `csv_push` and `csv_empty` are the
+operations on it, and `csv_write_row` turns it back into a CSV record.
+
+* `csv_parse_row` handles one record (no trailing newline). A quoted field may
+  contain commas, CR, LF and doubled quote characters. A quote inside an
+  unquoted field, an unclosed quoted field, or any byte other than a comma
+  after a closing quote makes the row invalid: the result is the single-byte
+  error marker `chr(33)`, which `csv_ok` rejects and `csv_count` reads as zero.
+  An empty line is one empty field; a trailing comma makes one more.
+* `csv_write_row` quotes a field only when it contains a comma, a quote, CR or
+  LF, and doubles every quote inside it. Quote characters are always built
+  with `chr(34)` so no source line needs an escape.
+* Strings stay byte strings. A UTF-8 rune is several bytes and is preserved as
+  several bytes; this is not a Unicode-aware CSV implementation.
+* Gate: `make test-stdlib-csv` pins 44 hand-computed values from
+  `selfhost/stdlib_csv_test.sa` on seed-min and gen2, requires native_aot to
+  produce byte-identical stdout, checks that the module stands alone, and
+  checks that its `csv_` prefix coexists with `stdlib/str_text.sa`'s `t_`
+  helpers.

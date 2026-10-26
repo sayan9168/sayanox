@@ -36,6 +36,13 @@ concurrency:
 # tracked sources, so no gate is skipped and nothing is fetched from outside the
 # repository. `.github/workflows/full-bootstrap.yml` re-runs the whole chain in
 # one job, in order, with no hand-off, so the sequential claim stays verified.
+#
+# The hand-off directory lives in RUNNER_TEMP, never in the checkout. Two
+# generated C files (gen2.c and gen1_min.c) travel with the binaries because
+# gen3's source-feature test greps them; if those files are extracted into the
+# workspace, `sxbuild inventory` counts them as non-anchor C sources and gate 4
+# fails on a clean tree (run 40267460446). Both restore steps pin `test ! -e
+# gate-binaries`, and `make test-ci-shape` checks the YAML itself.
 env:
   # One place to change the runner's C compiler choice; `make` picks it up.
   CC: cc
@@ -137,13 +144,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: gate-binaries
-          path: gate-binaries
+          path: ${{ runner.temp }}/gate-binaries
 
       - name: Put the handed-over binaries back where make expects them
         run: |
           set -eux
           pwd
-          find gate-binaries -type f -print
+          find "$RUNNER_TEMP/gate-binaries" -type f -print
           mkdir -p selfhost/seed selfhost/seed_tests
           missing=0
           for pair in \
@@ -154,7 +161,7 @@ jobs:
             "sxc_seed_min:selfhost/seed/sxc_seed_min"; do
             name=${pair%%:*}
             dest=${pair##*:}
-            src=$(find gate-binaries -type f -name "$name" -print | head -n 1)
+            src=$(find "$RUNNER_TEMP/gate-binaries" -type f -name "$name" -print | head -n 1)
             if [ -z "$src" ]; then
               echo "::error::$name did not arrive from the bootstrap job"
               missing=1
@@ -184,6 +191,10 @@ jobs:
           ./selfhost/gen2 selfhost/mini_in.sa selfhost/seed_tests/_handoff.c
           test -s selfhost/seed_tests/_handoff.c
           rm -f selfhost/seed_tests/_handoff.c
+          # The hand-off must not leave generated C inside the checkout:
+          # sxbuild inventory walks the workspace and counts .c files.
+          test ! -e gate-binaries
+          rm -rf "$RUNNER_TEMP/gate-binaries"
 
       - name: "make gen3 (gen3 == gen4 byte-identical fixed point)"
         run: make gen3
@@ -220,13 +231,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: gate-binaries
-          path: gate-binaries
+          path: ${{ runner.temp }}/gate-binaries
 
       - name: Put the handed-over binaries back where make expects them
         run: |
           set -eux
           pwd
-          find gate-binaries -type f -print
+          find "$RUNNER_TEMP/gate-binaries" -type f -print
           mkdir -p selfhost/seed selfhost/seed_tests
           missing=0
           for pair in \
@@ -238,7 +249,7 @@ jobs:
             "sxc_native:tools/sxc_native"; do
             name=${pair%%:*}
             dest=${pair##*:}
-            src=$(find gate-binaries -type f -name "$name" -print | head -n 1)
+            src=$(find "$RUNNER_TEMP/gate-binaries" -type f -name "$name" -print | head -n 1)
             if [ -z "$src" ]; then
               echo "::error::$name did not arrive from the bootstrap job"
               missing=1
@@ -272,6 +283,10 @@ jobs:
           ./selfhost/gen2 selfhost/mini_in.sa selfhost/seed_tests/_handoff2.c
           test -s selfhost/seed_tests/_handoff2.c
           rm -f selfhost/seed_tests/_handoff.c selfhost/seed_tests/_handoff2.c
+          # The hand-off must not leave generated C inside the checkout:
+          # sxbuild inventory walks the workspace and counts .c files.
+          test ! -e gate-binaries
+          rm -rf "$RUNNER_TEMP/gate-binaries"
 
       - name: "make native-test (x86-64 backend - subset, use, functions, parity)"
         run: make native-test
@@ -289,6 +304,9 @@ jobs:
         with:
           clean: true
           fetch-depth: 1
+
+      - name: "Verify the CI hand-off shape (fast, static)"
+        run: make test-ci-shape
 
       - name: Verify generated artifacts are not tracked
         run: |
