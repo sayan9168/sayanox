@@ -1,11 +1,23 @@
-# Dependency audit — 2026-10-17
+# Dependency audit — 2026-10-17 (updated 2026-10-25)
+
+## Current shell-source status
+
+All 14 remaining tracked `.sh` scripts have been deleted and their behavior
+ported into `tools/sxsuite.sa`, `tools/sxlsp_probe.sa`,
+`tools/sxpkg_transfer_test.sa`, `tools/sxnet_test.sa`, and `tools/sxpack.sa`.
+`git ls-files '*.sh'` is empty; `make test-language-deps` and
+`make test-trust-anchor` pin that. The Makefile still contains inline POSIX
+recipes, including the minimal base64/gzip source-recovery fallback needed
+before `sxpack` can be built. The optional local HTTP/crawler tests use Python
+only as a fixture server; no Python script is tracked.
 
 ## Maintained contract
 
-Bootstrap and maintained tooling need **make + a C99-capable C toolchain +
-POSIX shell/utilities**. They do **not** need bash, awk, sed, Python, Perl,
-Node, Ruby or a network client. `make test-language-deps` checks that boundary
-two ways (a static scan and a failing PATH shim) and is part of
+Bootstrap needs **make + a C99-capable C toolchain + POSIX shell/utilities**.
+The default bootstrap and interpreter-free gates do not need bash, awk, sed,
+Perl, Node, Ruby or a network client. Python is not needed by the bootstrap,
+but the optional local HTTP fixture tests use it. `make test-language-deps`
+checks selected maintained paths with a failing PATH shim and is part of
 `true-selfhost`.
 
 | Path | Requirements / boundary |
@@ -18,9 +30,10 @@ two ways (a static scan and a failing PATH shim) and is part of
 | negative-diagnostic suites (`test-sxdiag`) | `tools/sxdiag.sa`, compiled by gen2 then cc; drives the frontends through `run_command(cmd)` instead of `sh` |
 | native image link (`test-native-sxlink`) | `tools/sxlink.sa`, compiled by gen2 then cc; proved against the C `write_elf()` by `SX_LINK_DUMP`, does not produce the shipped executables |
 | native instruction encode (`test-native-sxencode`) | `tools/sxencode.sa`, compiled by gen2 then cc; proved against the C encoder by `SX_ENCODE_LOG`, does not produce the shipped executables |
-| offline packer (`make pack-compiler`) | POSIX sh, `gzip`, `base64`, `tr`, `split`, `cmp` |
-| source-present restore | local marker checks with `grep`; no decoding/network |
-| missing-source restore | additionally `base64`, `gzip`, `cat`, `tr`, `rm`; checked-in offline bundle |
+| offline packer (`make pack-compiler`) | `tools/sxpack.sa` built by `sxc_native`; `gzip` for compression, `base64` in the pure-Sayanox codec, `cmp` for byte verification |
+| source-present restore | marker checks with `grep`; no decoding/network |
+| missing-source bootstrap restore | base64/gzip decoding through a small inline Makefile recipe (must run before the Sayanox packer can be built) |
+| post-bootstrap missing-source restore (`tools/sxpack restore`) | Sayanox Base64 decoder + `gzip`, verified before replacing either source |
 | optional `test-network` / HTTP / crawler tests | Python test server and curl; explicitly excluded from bootstrap |
 | explicit remote package transfer | optional curl/wget, online opt-in; not needed by bootstrap or local package tests |
 

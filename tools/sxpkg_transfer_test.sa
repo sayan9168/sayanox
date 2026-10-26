@@ -1,0 +1,468 @@
+// tools/sxpkg_transfer_test.sa -- Pure-Sayanox package transfer hardening suite.
+// Replaces selfhost/test_sxpkg_transfer_hardening.sh with zero POSIX shell scripts.
+// Built C-free via ./tools/sxc_native.
+//
+// Dual-role binary: when invoked via arg(0) ending in /curl or /wget (or bare
+// curl / wget), acts as the mock HTTP transport binary on PATH; otherwise runs
+// all 11 online opt-in, rollback, safe-name, INDEX/lock, and cache checks.
+
+make ends_with(s: str, suf: str) -> num {
+  hold ns = len(s)
+  hold nf = len(suf)
+  when nf > ns {
+    give 0
+  }
+  hold off = ns - nf
+  hold i = 0
+  while i < nf {
+    when sx_index(s, off + i) != sx_index(suf, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make starts_with(s: str, pfx: str) -> num {
+  hold ns = len(s)
+  hold np = len(pfx)
+  when np > ns {
+    give 0
+  }
+  hold i = 0
+  while i < np {
+    when sx_index(s, i) != sx_index(pfx, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make contains(hay: str, needle: str) -> num {
+  hold nh = len(hay)
+  hold nn = len(needle)
+  when nn == 0 {
+    give 1
+  }
+  when nn > nh {
+    give 0
+  }
+  hold lim = nh - nn
+  hold i = 0
+  while i <= lim {
+    when sx_index(hay, i) == sx_index(needle, 0) {
+      hold j = 1
+      hold ok = 1
+      while j < nn {
+        when sx_index(hay, i + j) != sx_index(needle, j) {
+          ok = 0
+          j = nn
+        } otherwise {
+          j = j + 1
+        }
+      }
+      when ok == 1 {
+        give 1
+      }
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make detect_mock_role(argv0: str) -> str {
+  when string_eq(argv0, "curl") == 1 || ends_with(argv0, "/curl") == 1 {
+    give "curl"
+  }
+  when string_eq(argv0, "wget") == 1 || ends_with(argv0, "/wget") == 1 {
+    give "wget"
+  }
+  give ""
+}
+
+make run_mock_transport(role: str) -> num {
+  hold nl = chr(10)
+  hold calls_f = getenv("MOCK_CALLS")
+  when len(calls_f) > 0 {
+    hold prev = ""
+    when path_kind(calls_f) == 1 {
+      prev = read_file(calls_f)
+    }
+    hold w0 = write_file(calls_f, concat(prev, concat(role, nl)))
+  }
+  hold dest = ""
+  hold ac = arg_count()
+  hold i = 1
+  while i < ac {
+    hold a = arg(i)
+    hold is_o = 0
+    when string_eq(a, "-o") == 1 {
+      is_o = 1
+    }
+    when string_eq(a, "-O") == 1 {
+      is_o = 1
+    }
+    when is_o == 1 && i + 1 < ac {
+      dest = arg(i + 1)
+      i = i + 2
+    } otherwise {
+      i = i + 1
+    }
+  }
+  when len(dest) == 0 {
+    hold e2 = exit(2)
+  }
+  when string_eq(getenv("MOCK_FAIL"), "1") == 1 {
+    hold wp = write_file(dest, concat("partial", nl))
+    hold e1 = exit(1)
+  }
+  hold src = getenv("MOCK_SOURCE")
+  hold bs = []
+  when read_bytes(src, bs) < 0 {
+    hold e4 = exit(4)
+  }
+  when write_bytes(dest, bs) != 1 {
+    hold e3 = exit(3)
+  }
+  hold e0 = exit(0)
+  give 0
+}
+
+make fail_test(msg: str) -> num {
+  hold nl = chr(10)
+  hold w = write_file("/dev/stderr", concat("[FAIL] ", concat(msg, nl)))
+  hold z = exit(1)
+  give 0
+}
+
+make sh_q(s: str) -> str {
+  hold sq = chr(39)
+  hold out = sq
+  hold i = 0
+  hold n = len(s)
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, concat(sq, concat(chr(92), concat(sq, sq))))
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(out, sq)
+}
+
+make run_quiet(proj: str, cmd: str) -> num {
+  hold full = concat("cd ", concat(sh_q(proj), concat(" && ", concat(cmd, " >/dev/null 2>&1"))))
+  give run_command(full)
+}
+
+make run_capture(proj: str, cmd: str, out_f: str) -> num {
+  hold full = concat("cd ", concat(sh_q(proj), concat(" && ", concat(cmd, concat(" >", concat(sh_q(out_f), " 2>&1"))))))
+  give run_command(full)
+}
+
+make check_no_staging(dir: str, depth: num) -> num {
+  when depth > 8 {
+    give 0
+  }
+  hold listing = read_dir(dir)
+  hold n = len(listing)
+  hold i = 0
+  while i < n {
+    hold ls = i
+    while i < n && sx_index(listing, i) != 10 {
+      i = i + 1
+    }
+    hold le = i
+    when i < n {
+      i = i + 1
+    }
+    when le > ls {
+      hold name = ""
+      hold k = ls
+      while k < le {
+        name = concat(name, chr(sx_index(listing, k)))
+        k = k + 1
+      }
+      when string_eq(name, ".") == 0 && string_eq(name, "..") == 0 {
+        when ends_with(name, ".part") == 1 || starts_with(name, ".fetch.") == 1 {
+          hold f = fail_test(concat("leftover staging artifact: ", concat(dir, concat("/", name))))
+        }
+        hold full = concat(dir, concat("/", name))
+        when path_kind(full) == 2 {
+          hold sub = check_no_staging(full, depth + 1)
+        }
+      }
+    }
+  }
+  give 0
+}
+
+hold role0 = detect_mock_role(arg(0))
+when len(role0) > 0 {
+  hold mr = run_mock_transport(role0)
+}
+
+hold nl = chr(10)
+hold lb = chr(123)
+hold rb = chr(125)
+hold self_bin = path_real(arg(0))
+when len(self_bin) == 0 {
+  self_bin = path_real("./tools/sxpkg_transfer_test")
+}
+hold sxpkg_bin = path_real("./tools/sxpkg")
+when len(sxpkg_bin) == 0 || path_kind(sxpkg_bin) != 1 {
+  hold fm0 = fail_test("missing ./tools/sxpkg binary")
+}
+
+hold base_rel = "selfhost/seed_tests/sxpkg_transfer"
+when arg_count() >= 2 {
+  base_rel = arg(1)
+}
+hold prep_cmd = concat("rm -rf ", concat(sh_q(base_rel), concat(" && mkdir -p ", sh_q(base_rel))))
+when run_command(prep_cmd) != 0 {
+  hold fm1 = fail_test("cannot create transfer workdir")
+}
+hold base = path_real(base_rel)
+hold proj = concat(base, "/proj")
+hold mock_dir = concat(base, "/mock")
+hold wget_dir = concat(base, "/wget-only")
+when make_dir(proj) != 1 || make_dir(mock_dir) != 1 || make_dir(wget_dir) != 1 {
+  hold fm2 = fail_test("cannot mkdir test subdirectories")
+}
+
+// Install pure-Sayanox ELF64 mock curl and mock wget binaries (executable copies of self)
+hold self_bytes = []
+when read_bytes(self_bin, self_bytes) <= 0 {
+  hold fm3a = fail_test("cannot read self ELF binary")
+}
+hold mock_curl = concat(mock_dir, "/curl")
+hold mock_wget = concat(wget_dir, "/wget")
+when write_bytes(mock_curl, self_bytes) != 1 || write_bytes(mock_wget, self_bytes) != 1 {
+  hold fm3 = fail_test("cannot write mock curl/wget ELF binaries")
+}
+when run_command(concat("chmod +x ", concat(sh_q(mock_curl), concat(" ", sh_q(mock_wget))))) != 0 {
+  hold fm4 = fail_test("cannot chmod +x mock curl/wget")
+}
+
+hold src_f = concat(base, "/source.sa")
+hold src_body = concat("make ok() -> num ", concat(lb, concat(" give 7 ", concat(rb, nl))))
+when write_file(src_f, src_body) != 1 {
+  hold fm5 = fail_test("cannot write source.sa")
+}
+hold calls_f = concat(base, "/calls.log")
+hold wi = write_file(calls_f, "")
+
+hold host_path = getenv("PATH")
+hold mock_path = concat(mock_dir, concat(":", host_path))
+hold env_common = concat("MOCK_SOURCE=", concat(sh_q(src_f), concat(" MOCK_CALLS=", concat(sh_q(calls_f), " "))))
+hold env_mock = concat("PATH=", concat(sh_q(mock_path), concat(" ", env_common)))
+
+// Initialize project
+when run_quiet(proj, concat(sh_q(sxpkg_bin), " init")) != 0 {
+  hold fi = fail_test("sxpkg init failed")
+}
+hold lock_p = concat(proj, "/sx.lock")
+hold lock0 = read_file(lock_p)
+hold out_f = concat(base, "/cmd.out")
+
+// 1. Transfer without --online or SAYANOX_ONLINE=1 must refuse before transport
+hold c1 = concat(env_mock, concat("SAYANOX_ONLINE=0 ", concat(sh_q(sxpkg_bin), " fetch https://mock.invalid/ok.sa remote")))
+when run_capture(proj, c1, out_f) == 0 {
+  hold f1a = fail_test("online fetch succeeded without opt-in")
+}
+when len(read_file(calls_f)) != 0 {
+  hold f1b = fail_test("transport invoked without online opt-in")
+}
+
+// 2. Unsafe package names must refuse before transport and leave sx.lock untouched
+hold ni = 0
+while ni < 6 {
+  hold bad = "../escape"
+  when ni == 1 {
+    bad = "a/b"
+  }
+  when ni == 2 {
+    bad = "bad name"
+  }
+  when ni == 3 {
+    bad = "a.b"
+  }
+  when ni == 4 {
+    bad = "name"
+  }
+  when ni == 5 {
+    bad = "version"
+  }
+  hold c2 = concat(env_mock, concat(sh_q(sxpkg_bin), concat(" --online fetch https://mock.invalid/ok.sa ", sh_q(bad))))
+  when run_quiet(proj, c2) == 0 {
+    hold f2a = fail_test(concat("accepted unsafe package name: ", bad))
+  }
+  ni = ni + 1
+}
+when len(read_file(calls_f)) != 0 {
+  hold f2b = fail_test("unsafe package name reached transport")
+}
+when string_eq(read_file(lock_p), lock0) != 1 {
+  hold f2c = fail_test("unsafe package name modified sx.lock")
+}
+
+// 3. Interrupted transfer rolls back partial registry/pkgs/lock state
+hold c3 = concat(env_mock, concat("MOCK_FAIL=1 ", concat(sh_q(sxpkg_bin), " --online fetch https://mock.invalid/ok.sa broken")))
+when run_quiet(proj, c3) == 0 {
+  hold f3a = fail_test("failed transfer reported success")
+}
+when path_kind(concat(proj, "/.sayanox/registry/broken")) != 0 || path_kind(concat(proj, "/.sayanox/pkgs/broken")) != 0 {
+  hold f3b = fail_test("failed transfer left partial package directory")
+}
+when string_eq(read_file(lock_p), lock0) != 1 {
+  hold f3c = fail_test("failed transfer modified sx.lock")
+}
+
+// 4. Successful mocked curl transfer verifies cleanly
+hold c4 = concat(env_mock, concat(sh_q(sxpkg_bin), " --online fetch https://mock.invalid/ok.sa remote"))
+when run_quiet(proj, c4) != 0 {
+  hold f4a = fail_test("mocked curl fetch failed")
+}
+when run_capture(proj, concat(sh_q(sxpkg_bin), " verify"), out_f) != 0 {
+  hold f4b = fail_test("sxpkg verify failed after curl fetch")
+}
+when contains(read_file(out_f), "verify ok") != 1 {
+  hold f4c = fail_test("verify output missing verify ok")
+}
+hold sum_key = concat("sum", chr(61))
+when contains(read_file(concat(proj, "/.sayanox/registry/remote/pkg.meta")), sum_key) != 1 {
+  hold f4d = fail_test("pkg.meta missing sum=")
+}
+when string_eq(read_file(concat(proj, "/.sayanox/registry/remote/main.sa")), src_body) != 1 {
+  hold f4e = fail_test("fetched main.sa differs from source.sa")
+}
+when string_eq(read_file(concat(proj, "/.sayanox/pkgs/remote/main.sa")), src_body) != 1 {
+  hold f4f = fail_test("installed pkgs/remote/main.sa differs from source.sa")
+}
+
+// 5. Re-fetching an existing package refuses before transport without mutating lock
+hold wc1 = write_file(calls_f, "")
+hold lock_after_remote = read_file(lock_p)
+hold c5 = concat(env_mock, concat(sh_q(sxpkg_bin), " --online fetch https://mock.invalid/other.sa remote"))
+when run_quiet(proj, c5) == 0 {
+  hold f5a = fail_test("duplicate fetch succeeded over existing package")
+}
+when len(read_file(calls_f)) != 0 {
+  hold f5b = fail_test("duplicate fetch invoked transport")
+}
+when string_eq(read_file(lock_p), lock_after_remote) != 1 {
+  hold f5c = fail_test("duplicate fetch modified sx.lock")
+}
+
+// 6. wget-only PATH fallback with SAYANOX_ONLINE=1
+hold wc2 = write_file(calls_f, "")
+hold env_wget = concat("PATH=", concat(sh_q(wget_dir), concat(" ", env_common)))
+hold c6 = concat(env_wget, concat("SAYANOX_ONLINE=1 ", concat(sh_q(sxpkg_bin), " fetch https://mock.invalid/ok.sa via_wget")))
+when run_quiet(proj, c6) != 0 {
+  hold f6a = fail_test("wget-only fetch failed")
+}
+when contains(read_file(calls_f), "wget") != 1 {
+  hold f6b = fail_test("wget fallback did not record wget call")
+}
+when run_capture(proj, concat(sh_q(sxpkg_bin), " verify"), out_f) != 0 {
+  hold f6c = fail_test("verify failed after wget fetch")
+}
+when contains(read_file(out_f), "verify ok") != 1 {
+  hold f6d = fail_test("verify output missing verify ok after wget fetch")
+}
+
+// 7. Relative local path fetch needs neither online opt-in nor transport
+hold wc3 = write_file(calls_f, "")
+when write_file(concat(proj, "/local.sa"), src_body) != 1 {
+  hold f7w = fail_test("cannot write proj/local.sa")
+}
+hold c7 = concat(env_mock, concat(sh_q(sxpkg_bin), " fetch local.sa localpkg"))
+when run_quiet(proj, c7) != 0 {
+  hold f7a = fail_test("local path fetch failed")
+}
+when len(read_file(calls_f)) != 0 {
+  hold f7b = fail_test("local path fetch invoked network transport")
+}
+
+// 8. Unsafe downloaded INDEX rejected during --online sync
+hold bad_idx = concat(base, "/bad.index")
+hold esc_line = concat("../escape", concat(chr(61), concat("0.1.0", nl)))
+when write_file(bad_idx, esc_line) != 1 {
+  hold f8w = fail_test("cannot write bad.index")
+}
+hold idx_p = concat(proj, "/.sayanox/registry/INDEX")
+hold init_idx = concat("remote", concat(chr(61), concat("0.0.0-fetch", nl)))
+when write_file(idx_p, init_idx) != 1 {
+  hold f8i = fail_test("cannot write initial INDEX")
+}
+hold env_bad_idx = concat("PATH=", concat(sh_q(mock_path), concat(" SAYANOX_REGISTRY=https://mock.invalid/registry MOCK_SOURCE=", concat(sh_q(bad_idx), concat(" MOCK_CALLS=", concat(sh_q(calls_f), " "))))))
+hold c8 = concat(env_bad_idx, concat(sh_q(sxpkg_bin), " --online sync"))
+when run_quiet(proj, c8) == 0 {
+  hold f8a = fail_test("sync accepted unsafe INDEX entry")
+}
+when string_eq(read_file(idx_p), init_idx) != 1 {
+  hold f8b = fail_test("rejected sync overwrote existing INDEX")
+}
+when path_kind(concat(proj, "/.sayanox/escape")) != 0 {
+  hold f8c = fail_test("unsafe INDEX escaped registry directory")
+}
+
+// 9. Hand-edited unsafe sx.lock rejected by install and install-local without transport
+hold wc4 = write_file(calls_f, "")
+hold good_lock = read_file(lock_p)
+when write_file(lock_p, concat(good_lock, esc_line)) != 1 {
+  hold f9w = fail_test("cannot write unsafe sx.lock")
+}
+hold env_reg = concat(env_mock, "SAYANOX_REGISTRY=https://mock.invalid/registry ")
+hold c9a = concat(env_reg, concat(sh_q(sxpkg_bin), " install"))
+when run_quiet(proj, c9a) == 0 {
+  hold f9a = fail_test("install accepted unsafe sx.lock entry")
+}
+hold c9a2 = concat(env_reg, concat(sh_q(sxpkg_bin), " --online install"))
+when run_quiet(proj, c9a2) == 0 {
+  hold f9a2 = fail_test("online install accepted unsafe sx.lock entry")
+}
+hold c9b = concat(env_reg, concat(sh_q(sxpkg_bin), " install-local"))
+when run_quiet(proj, c9b) == 0 {
+  hold f9b = fail_test("install-local accepted unsafe sx.lock entry")
+}
+when len(read_file(calls_f)) != 0 {
+  hold f9c = fail_test("unsafe sx.lock reached network transport")
+}
+when write_file(lock_p, good_lock) != 1 {
+  hold f9r = fail_test("cannot restore good sx.lock")
+}
+
+// 10. Offline cached install without INDEX succeeds without touching transport
+hold rm_idx = remove_path(idx_p)
+hold wc5 = write_file(calls_f, "")
+hold c10 = concat(env_reg, concat("SAYANOX_ONLINE=0 ", concat(sh_q(sxpkg_bin), " install")))
+when run_quiet(proj, c10) != 0 {
+  hold f10a = fail_test("offline cached install failed")
+}
+when len(read_file(calls_f)) != 0 {
+  hold f10b = fail_test("offline cached install invoked transport")
+}
+when run_capture(proj, concat(sh_q(sxpkg_bin), " verify"), out_f) != 0 {
+  hold f10c = fail_test("verify failed after offline cached install")
+}
+when contains(read_file(out_f), "verify ok") != 1 {
+  hold f10d = fail_test("verify output missing verify ok after cached install")
+}
+
+// 11. Tampered cache detected by verify with MISMATCH, and zero staging files left
+when write_file(concat(proj, "/.sayanox/registry/remote/main.sa"), concat("tampered", nl)) != 1 {
+  hold f11w = fail_test("cannot tamper cached main.sa")
+}
+when run_capture(proj, concat(sh_q(sxpkg_bin), " verify"), out_f) == 0 {
+  hold f11a = fail_test("verify accepted tampered cached main.sa")
+}
+when contains(read_file(out_f), "MISMATCH") != 1 {
+  hold f11b = fail_test("verify on tampered cache did not report MISMATCH")
+}
+
+hold st_ok = check_no_staging(proj, 0)
+show "[OK] sxpkg transfer hardening: opt-in, safe names, rollback, curl/wget, INDEX/lock and sum verification"

@@ -1,6 +1,6 @@
 // tools/native32.sa -- SECOND and THIRD machine-code targets for Sayanox:
-// 32-bit x86 (i386) and 64-bit ARM (AArch64) Linux ELF, written in Sayanox
-// and compiled by selfhost/gen2. One front end, two encoders, picked by the
+// 32-bit x86 (i386), AArch64 and RV64IM Linux ELF, written in Sayanox
+// and compiled by selfhost/gen2. One front end, three encoders, picked by the
 // third argument.
 //
 // Why this file exists. Until 2026-10-23 the only machine-code backend was
@@ -11,31 +11,34 @@
 // reproduce that list at all -- it is an independent front end and an
 // independent encoder per target -- so what it proves is narrow and concrete:
 // a Sayanox program can be turned into machine code for instruction sets that
-// are not x86-64. The i386 image runs here and prints the same bytes as the
-// seed compiler's C output. The arm64 image CANNOT run here -- this machine
-// is x86-64 and the repository has no emulator -- so that one is only ever
-// emitted, pinned byte for byte against a tracked golden image, and read back
-// instruction by instruction by a human with a disassembler. No gate in this
-// repository claims the arm64 image executes, because nothing executes it.
+// are not x86-64. The i386 image runs here. A Sayanox user-mode emulator
+// executes generated AArch64 and RV64 images on x86-64 too, so integer and
+// bounded string operations are checked end-to-end rather than only pinned.
 //
-// What it is NOT. This is not the native subset. It handles the documented
-// integer subset below and refuses everything else by name, with a
-// diagnostic and a non-zero exit. It has no heap, no strings as values, no
-// lists, no structs, no functions, no collector and no file IO.
+// What it is NOT. This is still a bounded AOT subset, not the complete
+// Sayanox runtime. It supports static strings, len, byte indexing, and a
+// bounded bump-heap concat; it has no lists, structs, user functions,
+// collector, general file API, or floating-point expression code. Unsupported
+// forms are refused with a diagnostic and non-zero exit.
 //
 // The subset, exactly:
 //
-//     hold NAME = <integer expression>     a name is a 4-byte global slot
-//     NAME = <integer expression>          re-`hold` assigns the same slot
+//     hold NAME = <integer expression>     numeric names use 4-byte slots
+//     hold NAME = "literal"                strings use pointer + length slots
+//     NAME = <same-type value>             re-`hold` assigns the same slot
 //     show <integer expression>            decimal, then a newline
 //     show "literal"                       the literal, then a newline
+//     show STRING_NAME                     writes the string's current span
+//     STRING_NAME[INDEX_EXPR]              byte value; negative index from end
+//     concat(STRING_ARG, STRING_ARG)       bounded heap-backed concatenation; each arg is a variable or literal
 //     when <expression> { ... }            zero is false, anything else true
 //     } otherwise { ... }
 //     while <expression> { ... }
 //     // comments, blank lines
 //
 //   expressions: + - * % , the six comparisons, parentheses, unary minus,
-//   decimal integer literals and names. `/` is refused on purpose: a Sayanox
+//   decimal integer literals, numeric names and `len(STRING_NAME)`. `/` is
+//   refused on purpose: a Sayanox
 //   number is a double, `7 / 2` is 3.5, and this backend has no doubles, so
 //   accepting it would mean printing a different answer than every other
 //   backend. A literal with a `.` is refused for the same reason.
@@ -89,6 +92,18 @@ make put_u16(xs: list, v: num) -> list {
 make put_u32(xs: list, v: num) -> list {
   xs = put_u16(xs, bit_and(v, 65535))
   xs = put_u16(xs, bit_and(shr(v, 16), 65535))
+  give xs
+}
+
+make set_u32(xs: list, at: num, v: num) -> list {
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  xs[at] = bit_and(u, 255)
+  xs[at + 1] = bit_and(shr(u, 8), 255)
+  xs[at + 2] = bit_and(shr(u, 16), 255)
+  xs[at + 3] = bit_and(shr(u, 24), 255)
   give xs
 }
 
@@ -210,9 +225,145 @@ make slot_of(tbl: str, nm: str) -> num {
   give r
 }
 
+make is_text_literal(s: str) -> num {
+  hold n = len(s)
+  when n < 2 || sx_index(s, 0) != 34 || sx_index(s, n - 1) != 34 {
+    give 0
+  }
+  hold i = 1
+  while i < n - 1 {
+    hold c = sx_index(s, i)
+    when c == 92 {
+      when i + 1 >= n - 1 || sx_index(s, i + 1) == 48 {
+        give 0
+      }
+      i = i + 2
+    } otherwise {
+      when c == 34 || c == 0 {
+        give 0
+      }
+      i = i + 1
+    }
+  }
+  give 1
+}
+
+// A deliberately bounded dynamic-string operation: concat(NAME_OR_LITERAL,
+// NAME_OR_LITERAL). Arguments are not arbitrary string expressions.
+make split_concat(s: str) -> str {
+  hold n = len(s)
+  when starts(s, "concat(") == 0 || n < 9 || sx_index(s, n - 1) != 41 {
+    give "!malformed concat call"
+  }
+  hold body = sub(s, 7, n - 1)
+  hold bn = len(body)
+  hold comma = 0 - 1
+  hold quoted = 0
+  hold escaped = 0
+  hold i = 0
+  while i < bn {
+    hold c = sx_index(body, i)
+    when quoted == 1 {
+      when escaped == 1 {
+        escaped = 0
+      } otherwise {
+        when c == 92 {
+          escaped = 1
+        } otherwise {
+          when c == 34 {
+            quoted = 0
+          }
+        }
+      }
+    } otherwise {
+      when c == 34 {
+        quoted = 1
+      } otherwise {
+        when c == 44 {
+          when comma >= 0 {
+            give "!concat accepts exactly two string arguments"
+          }
+          comma = i
+        }
+      }
+    }
+    i = i + 1
+  }
+  when comma < 0 {
+    give "!concat requires two string arguments"
+  }
+  hold left = trim(sub(body, 0, comma))
+  hold right = trim(sub(body, comma + 1, bn))
+  when len(left) == 0 || len(right) == 0 || (is_text_literal(left) == 0 && string_eq(first_word(left), left) == 0) || (is_text_literal(right) == 0 && string_eq(first_word(right), right) == 0) {
+    give "!concat arguments must be string variable names or string literals"
+  }
+  give concat(concat(left, chr(1)), right)
+}
+
+make concat_left(parts: str) -> str {
+  hold i = 0
+  hold n = len(parts)
+  hold out = ""
+  while i < n && sx_index(parts, i) != 1 {
+    out = concat(out, chr(sx_index(parts, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make concat_right(parts: str) -> str {
+  hold i = 0
+  hold n = len(parts)
+  hold out = ""
+  while i < n && sx_index(parts, i) != 1 {
+    i = i + 1
+  }
+  i = i + 1
+  while i < n {
+    out = concat(out, chr(sx_index(parts, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// Decode a quoted literal into the static data pool; `show` adds its newline.
+make append_text(data: list, lit: str) -> list {
+  hold i = 0
+  hold n = len(lit)
+  while i < n {
+    hold c = sx_index(lit, i)
+    when c == 92 && i + 1 < n {
+      hold esc = sx_index(lit, i + 1)
+      when esc == 48 {
+        // Sayanox's C-string runtime observes the prefix before NUL; retain
+        // the same visible bytes and append `show`'s newline below.
+        i = n
+      } otherwise {
+        hold b = esc
+        when esc == 110 {
+          b = 10
+        }
+        when esc == 116 {
+          b = 9
+        }
+        data = push(data, b)
+        i = i + 2
+      }
+    } otherwise {
+      when c == 0 {
+        i = n
+      } otherwise {
+        data = push(data, c)
+        i = i + 1
+      }
+    }
+  }
+  give data
+}
+
 // ---- the expression tokenizer --------------------------------------------
 // Tokens are separated by byte 1. A token is "n<digits>", "v<name>", "o<op>",
-// "(" or ")". A refusal comes back as "!<reason>" so the caller can name it.
+// "(" / ")" / "[" / "]". A refusal comes back as "!<reason>" so the caller can name it.
 
 make add_tok(out: str, t: str) -> str {
   give concat(concat(out, t), chr(1))
@@ -248,11 +399,8 @@ make tokenize(ex: str) -> str {
         nmtext = concat(nmtext, chr(sx_index(ex, i)))
         i = i + 1
       }
-      when i < n && sx_index(ex, i) == 40 {
+      when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 {
         bad = concat(concat("a call to '", nmtext), "' (this backend has no functions)")
-      }
-      when i < n && sx_index(ex, i) == 91 {
-        bad = concat(concat("an index into '", nmtext), "' (this backend has no lists)")
       }
       when i < n && sx_index(ex, i) == 46 {
         bad = concat(concat("a field of '", nmtext), "' (this backend has no structs)")
@@ -328,6 +476,16 @@ make tokenize(ex: str) -> str {
       }
       when done == 0 && len(bad) == 0 && c == 41 {
         out = add_tok(out, ")")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 91 {
+        out = add_tok(out, "[")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 93 {
+        out = add_tok(out, "]")
         i = i + 1
         done = 1
       }
@@ -510,7 +668,7 @@ make emit_op(xs: list, op: num) -> list {
 // segment holding the data, each on its own page. 0x08048000 is the classic
 // i386 load address; nothing here is position independent.
 
-make elf32(code: list, data: list, entry_off: num) -> list {
+make elf32(code: list, data: list, entry_off: num, data_mem: num) -> list {
   hold base = 134512640
   hold hdr = 116
   hold cn = len(code)
@@ -551,7 +709,7 @@ make elf32(code: list, data: list, entry_off: num) -> list {
   img = put_u32(img, base + 4096)
   img = put_u32(img, base + 4096)
   img = put_u32(img, dn)
-  img = put_u32(img, dn)
+  img = put_u32(img, data_mem)
   img = put_u32(img, 6)
   img = put_u32(img, 4096)
   hold i = 0
@@ -993,7 +1151,7 @@ make put_u64(xs: list, v: num) -> list {
 }
 
 // ELFCLASS64 two-PT_LOAD container: EM_AARCH64 (183) or EM_RISCV (243).
-make elf64_em(code: list, data: list, entry_off: num, em: num) -> list {
+make elf64_em(code: list, data: list, entry_off: num, em: num, data_mem: num) -> list {
   hold base = 4194304
   hold hdr = 176
   hold cn = len(code)
@@ -1035,7 +1193,7 @@ make elf64_em(code: list, data: list, entry_off: num, em: num) -> list {
   img = put_u64(img, base + 4096)
   img = put_u64(img, base + 4096)
   img = put_u64(img, dn)
-  img = put_u64(img, dn)
+  img = put_u64(img, data_mem)
   img = put_u64(img, 4096)
   hold i = 0
   while i < cn {
@@ -1090,6 +1248,9 @@ make run() -> num {
   hold fixsite = []
   hold fixoff = []
   hold names = ""
+  hold strnames = ""
+  hold heap_on = 0
+  hold heap_cursor_slot = 0 - 1
 
   // data 0..31 is the decimal buffer; byte 31 is the newline the routine
   // writes, so digits grow downwards from 30.
@@ -1284,6 +1445,8 @@ make run() -> num {
     hold extext = ""
     hold slot = 0
     hold lit = ""
+    hold callleft = ""
+    hold callright = ""
     hold word = first_word(line)
 
     // ---- classify ----
@@ -1304,18 +1467,54 @@ make run() -> num {
         when len(nm) == 0 || starts(after, "=") == 0 || starts(after, "==") == 1 {
           hold badhold = fail(1, concat(concat("line ", numstr(lineno)), ": a `hold` needs a name and a single `=`"))
         }
+        extext = trim(sub(after, 1, len(after)))
+        hold istext = 0
+        hold isconcat_hold = 0
+        when is_text_literal(extext) == 1 {
+          istext = 1
+        } otherwise {
+          when len(extext) > 0 && sx_index(extext, 0) == 34 {
+            hold badstringexpr = fail(1, concat(concat("line ", numstr(lineno)), ": only a string literal may initialize a native32 string value"))
+          }
+        }
+        when starts(extext, "concat(") == 1 {
+          hold parts_hold = split_concat(extext)
+          when sx_index(parts_hold, 0) == 33 {
+            hold badconcat = fail(1, concat(concat("line ", numstr(lineno)), concat(": ", sub(parts_hold, 1, len(parts_hold)))))
+          }
+          callleft = concat_left(parts_hold)
+          callright = concat_right(parts_hold)
+          isconcat_hold = 1
+          extext = ""
+        }
         slot = slot_of(names, nm)
         when slot < 0 {
-          // a slot is wherever the data segment currently ends: string
-          // literals are appended to the same buffer, so a fixed stride
-          // would overlap one as soon as a `show "..."` came first
           slot = len(data)
-          data = put_zeros(data, 4)
+          when istext == 1 || isconcat_hold == 1 {
+            data = put_zeros(data, 8)
+            strnames = concat(strnames, concat(concat(concat("|", nm), "="), "1"))
+            strnames = concat(strnames, "|")
+          } otherwise {
+            data = put_zeros(data, 4)
+          }
           names = concat(names, concat(concat(concat("|", nm), "="), numstr(slot)))
           names = concat(names, "|")
+        } otherwise {
+          when (slot_of(strnames, nm) >= 0 && istext == 0 && isconcat_hold == 0) || (slot_of(strnames, nm) < 0 && (istext == 1 || isconcat_hold == 1)) {
+            hold badtype = fail(1, concat(concat("line ", numstr(lineno)), ": a variable cannot change between numeric and string values"))
+          }
         }
-        extext = trim(sub(after, 1, len(after)))
-        act = 1
+        when istext == 1 {
+          lit = sub(extext, 1, len(extext) - 1)
+          extext = ""
+          act = 4
+        } otherwise {
+          when isconcat_hold == 1 {
+            act = 10
+          } otherwise {
+            act = 1
+          }
+        }
       }
       when act == 0 && starts(line, "show ") == 1 {
         hold shown = trim(sub(line, 5, len(line)))
@@ -1323,14 +1522,20 @@ make run() -> num {
           hold badshow = fail(1, concat(concat("line ", numstr(lineno)), ": `show` with nothing to show"))
         }
         when sx_index(shown, 0) == 34 {
-          when sx_index(shown, len(shown) - 1) != 34 || len(shown) < 2 {
-            hold badstr = fail(1, concat(concat("line ", numstr(lineno)), ": an unterminated string literal"))
+          when is_text_literal(shown) == 0 {
+            hold badstr = fail(1, concat(concat("line ", numstr(lineno)), ": `show` accepts one string literal, not a string expression"))
           }
           lit = sub(shown, 1, len(shown) - 1)
           act = 3
         } otherwise {
-          extext = shown
-          act = 2
+          hold shown_slot = slot_of(names, shown)
+          when shown_slot >= 0 && slot_of(strnames, shown) >= 0 {
+            slot = shown_slot
+            act = 9
+          } otherwise {
+            extext = shown
+            act = 2
+          }
         }
       }
       when act == 0 && starts(line, "when ") == 1 {
@@ -1355,7 +1560,39 @@ make run() -> num {
             hold badname = fail(1, concat(concat(concat("line ", numstr(lineno)), ": assignment to an unknown name '"), concat(word, "' (declare it with `hold` first)")))
           }
           extext = trim(sub(tail, 1, len(tail)))
-          act = 1
+          hold assign_text = 0
+          hold assign_concat = 0
+          when is_text_literal(extext) == 1 {
+            assign_text = 1
+          } otherwise {
+            when len(extext) > 0 && sx_index(extext, 0) == 34 {
+              hold badstrassign = fail(1, concat(concat("line ", numstr(lineno)), ": only a string literal may be assigned to a native32 string value"))
+            }
+          }
+          when starts(extext, "concat(") == 1 {
+            hold parts_assign = split_concat(extext)
+            when sx_index(parts_assign, 0) == 33 {
+              hold badconcatassign = fail(1, concat(concat("line ", numstr(lineno)), concat(": ", sub(parts_assign, 1, len(parts_assign)))))
+            }
+            callleft = concat_left(parts_assign)
+            callright = concat_right(parts_assign)
+            assign_concat = 1
+            extext = ""
+          }
+          when (slot_of(strnames, word) >= 0 && assign_text == 0 && assign_concat == 0) || (slot_of(strnames, word) < 0 && (assign_text == 1 || assign_concat == 1)) {
+            hold badassign_type = fail(1, concat(concat("line ", numstr(lineno)), ": a variable cannot change between numeric and string values"))
+          }
+          when assign_text == 1 {
+            lit = sub(extext, 1, len(extext) - 1)
+            extext = ""
+            act = 4
+          } otherwise {
+            when assign_concat == 1 {
+              act = 10
+            } otherwise {
+              act = 1
+            }
+          }
         }
       }
       when act == 0 {
@@ -1378,6 +1615,7 @@ make run() -> num {
       }
       hold want = 1
       hold depth = 0
+      hold pending_string_index = 0
       hold k = 0
       while k < tn {
         hold t = tok_at(toks, k)
@@ -1397,19 +1635,75 @@ make run() -> num {
           when want == 0 {
             hold twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
           }
-          hold vslot = slot_of(names, sub(t, 1, len(t)))
-          when vslot < 0 {
-            hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(sub(t, 1, len(t)), "'")))
+          hold vname = sub(t, 1, len(t))
+          hold is_len_call = 0
+          when string_eq(vname, "len") == 1 && k + 3 < tn {
+            when string_eq(tok_at(toks, k + 1), "(") == 1 && string_eq(tok_at(toks, k + 3), ")") == 1 {
+              is_len_call = 1
+            }
           }
-          hold vat = len(code)
-          when arch == 0 {
-            fixsite = push(fixsite, vat + 1)
+          when is_len_call == 1 {
+            hold argtok = tok_at(toks, k + 2)
+            when sx_index(argtok, 0) != 118 {
+              hold bad_len_arg = fail(1, concat(concat("line ", numstr(lineno)), ": this backend's len() accepts a string variable name"))
+            }
+            hold argname = sub(argtok, 1, len(argtok))
+            hold arg_slot = slot_of(names, argname)
+            when arg_slot < 0 {
+              hold bad_len_name = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(argname, "' in len()")))
+            }
+            when slot_of(strnames, argname) < 0 {
+              hold bad_len_type = fail(1, concat(concat("line ", numstr(lineno)), ": len() requires a string variable"))
+            }
+            hold vat = len(code)
+            when arch == 0 {
+              fixsite = push(fixsite, vat + 1)
+            } otherwise {
+              fixsite = push(fixsite, vat)
+            }
+            fixoff = push(fixoff, arg_slot + 4)
+            code = emit_load_global(code, arch)
+            want = 0
+            k = k + 3
           } otherwise {
-            fixsite = push(fixsite, vat)
+            hold vslot = slot_of(names, vname)
+            when vslot < 0 {
+              hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(vname, "'")))
+            }
+            when slot_of(strnames, vname) >= 0 {
+              when k + 1 >= tn || string_eq(tok_at(toks, k + 1), "[") == 0 {
+                hold stringnum = fail(1, concat(concat(concat("line ", numstr(lineno)), ": string variable '"), concat(vname, "' used as a number (index it with [i])")))
+              }
+              hold svat = len(code)
+              when arch == 0 {
+                fixsite = push(fixsite, svat + 1)
+              } otherwise {
+                fixsite = push(fixsite, svat)
+              }
+              fixoff = push(fixoff, vslot)
+              code = emit_load_global(code, arch)
+              hold slat = len(code)
+              when arch == 0 {
+                fixsite = push(fixsite, slat + 1)
+              } otherwise {
+                fixsite = push(fixsite, slat)
+              }
+              fixoff = push(fixoff, vslot + 4)
+              code = emit_load_global(code, arch)
+              want = 0
+              pending_string_index = 1
+            } otherwise {
+              hold vat2 = len(code)
+              when arch == 0 {
+                fixsite = push(fixsite, vat2 + 1)
+              } otherwise {
+                fixsite = push(fixsite, vat2)
+              }
+              fixoff = push(fixoff, vslot)
+              code = emit_load_global(code, arch)
+              want = 0
+            }
           }
-          fixoff = push(fixoff, vslot)
-          code = emit_load_global(code, arch)
-          want = 0
         }
         when t0 == 40 {
           when want == 0 {
@@ -1438,6 +1732,132 @@ make run() -> num {
           when open == 0 {
             hold unbal = fail(1, concat(concat("line ", numstr(lineno)), ": a ')' with no '('"))
           }
+        }
+        when t0 == 91 {
+          when want == 1 || pending_string_index == 0 {
+            hold badindexopen = fail(1, concat(concat("line ", numstr(lineno)), ": `[` must index a string variable"))
+          }
+          pending_string_index = 0
+          when depth < len(ops) {
+            ops[depth] = 0 - 1
+          } otherwise {
+            ops = push(ops, 0 - 1)
+          }
+          depth = depth + 1
+          want = 1
+        }
+        when t0 == 93 {
+          when want == 1 {
+            hold emptyindex = fail(1, concat(concat("line ", numstr(lineno)), ": an empty string index"))
+          }
+          hold close_index = 0
+          while depth > 0 && close_index == 0 {
+            depth = depth - 1
+            when ops[depth] == 0 - 1 {
+              close_index = 1
+            } otherwise {
+              when ops[depth] == 0 {
+                hold unclosed_paren_index = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' with no ')' inside a string index"))
+              }
+              code = emit_op2(code, arch, ops[depth])
+            }
+          }
+          when close_index == 0 {
+            hold unclosed_index = fail(1, concat(concat("line ", numstr(lineno)), ": a ']' with no '['"))
+          }
+          when arch == 0 {
+            code = e1(code, 90)
+            code = e1(code, 89)
+            code = e1(code, 88)
+            code = e1(code, 133)
+            code = e1(code, 210)
+            code = e1(code, 15)
+            code = e1(code, 137)
+            hold neg_index_site = len(code)
+            code = e32(code, 0)
+            code = e1(code, 1)
+            code = e1(code, 202)
+            hold neg_index_done = len(code)
+            code = patch32(code, neg_index_site, neg_index_done - (neg_index_site + 4))
+            code = e1(code, 59)
+            code = e1(code, 209)
+            hold bad_index_site = len(code)
+            code = e1(code, 15)
+            code = e1(code, 131)
+            code = e32(code, 0)
+            code = e1(code, 15)
+            code = e1(code, 182)
+            code = e1(code, 4)
+            code = e1(code, 16)
+            code = e1(code, 80)
+            hold done_index_site = len(code)
+            code = e1(code, 233)
+            code = e32(code, 0)
+            hold bad_index = len(code)
+            code = e1(code, 184)
+            code = e32(code, 1)
+            code = e1(code, 187)
+            code = e32(code, 1)
+            code = e1(code, 205)
+            code = e1(code, 128)
+            hold done_index = len(code)
+            code = patch32(code, bad_index_site + 2, bad_index - (bad_index_site + 6))
+            code = patch32(code, done_index_site + 1, done_index - (done_index_site + 5))
+          } otherwise {
+            when arch == 1 {
+              code = emit_pop_acc(code, arch)
+              code = e_w(code, 2852127724)
+              code = emit_pop_acc(code, arch)
+              code = e_w(code, 2852127723)
+              code = emit_pop_acc(code, arch)
+              code = e_w(code, 2852127722)
+              code = e_w(code, 1895825823)
+              hold neg_a64_site = len(code)
+              code = e_w(code, 1409286154)
+              code = e_w(code, 185270668)
+              hold neg_a64_done = len(code)
+              code = a_imm19(code, neg_a64_site, neg_a64_done - neg_a64_site)
+              code = e_w(code, 1795883423)
+              hold bad_a64_site = len(code)
+              code = e_w(code, 1409286146)
+              code = e_w(code, 2332819786)
+              code = e_w(code, 960495936)
+              code = e_w(code, 4162785248)
+              hold done_a64_site = len(code)
+              code = e_w(code, 335544320)
+              hold bad_a64 = len(code)
+              code = a_movz(code, 1, 0, 1)
+              code = a_movz(code, 1, 8, 93)
+              code = e_w(code, 3556769793)
+              hold done_a64 = len(code)
+              code = a_imm19(code, bad_a64_site, bad_a64 - bad_a64_site)
+              code = a_imm26(code, done_a64_site, done_a64 - done_a64_site)
+            } otherwise {
+              code = rv_pop_reg(code, 12)
+              code = rv_pop_reg(code, 11)
+              code = rv_pop_reg(code, 10)
+              hold neg_rv_site = len(code)
+              code = e_w(code, rv_b_word(0, 0, 12, 5))
+              code = e_w(code, rv_r(0, 11, 12, 0, 12, 59))
+              hold neg_rv_done = len(code)
+              code = set_w(code, neg_rv_site, rv_b_word(neg_rv_done - neg_rv_site, 0, 12, 5))
+              hold bad_rv_site = len(code)
+              code = e_w(code, rv_b_word(0, 11, 12, 7))
+              code = e_w(code, rv_r(0, 12, 10, 0, 10, 51))
+              code = e_w(code, rv_i(0, 10, 4, 10, 3))
+              code = rv_push_a0(code)
+              hold done_rv_site = len(code)
+              code = e_w(code, rv_j_word(0, 0))
+              hold bad_rv = len(code)
+              code = e_w(code, rv_i(1, 0, 0, 10, 19))
+              code = e_w(code, rv_i(93, 0, 0, 17, 19))
+              code = e_w(code, 115)
+              hold done_rv = len(code)
+              code = set_w(code, bad_rv_site, rv_b_word(bad_rv - bad_rv_site, 11, 12, 7))
+              code = set_w(code, done_rv_site, rv_j_word(done_rv - done_rv_site, 0))
+            }
+          }
+          want = 0
         }
         when t0 == 111 {
           hold oc = op_code(t)
@@ -1505,34 +1925,9 @@ make run() -> num {
     }
     when act == 3 {
       hold litoff = len(data)
-      hold li = 0
-      hold ln = len(lit)
-      hold lbytes = 0
-      while li < ln {
-        hold lc = sx_index(lit, li)
-        when lc == 92 && li + 1 < ln {
-          hold esc = sx_index(lit, li + 1)
-          hold ec2 = esc
-          when esc == 110 {
-            ec2 = 10
-          }
-          when esc == 116 {
-            ec2 = 9
-          }
-          when esc == 48 {
-            ec2 = 0
-          }
-          data = push(data, ec2)
-          lbytes = lbytes + 1
-          li = li + 2
-        } otherwise {
-          data = push(data, lc)
-          lbytes = lbytes + 1
-          li = li + 1
-        }
-      }
+      data = append_text(data, lit)
       data = push(data, 10)
-      lbytes = lbytes + 1
+      hold lbytes = len(data) - litoff
       when arch == 0 {
         code = e1(code, 184)
         code = e32(code, 4)
@@ -1564,6 +1959,395 @@ make run() -> num {
           code = a_movz(code, 1, 0, 1)
           code = a_movz(code, 1, 8, 64)
           code = e_w(code, 3556769793)
+        }
+      }
+    }
+    when act == 4 {
+      hold litoff2 = len(data)
+      data = append_text(data, lit)
+      hold lbytes2 = len(data) - litoff2
+      data = push(data, 10)
+      when lbytes2 > 65535 {
+        hold bigvalue = fail(1, concat(concat("line ", numstr(lineno)), ": a string value of 64 KiB or more"))
+      }
+      hold strbase = 4198400
+      when arch == 0 {
+        strbase = 134516736
+      }
+      code = emit_push_imm2(code, arch, strbase + litoff2)
+      code = emit_pop_acc(code, arch)
+      hold psite = len(code)
+      when arch == 0 {
+        fixsite = push(fixsite, psite + 1)
+      } otherwise {
+        fixsite = push(fixsite, psite)
+      }
+      fixoff = push(fixoff, slot)
+      code = emit_store_global(code, arch)
+      code = emit_push_imm2(code, arch, lbytes2)
+      code = emit_pop_acc(code, arch)
+      hold lsite = len(code)
+      when arch == 0 {
+        fixsite = push(fixsite, lsite + 1)
+      } otherwise {
+        fixsite = push(fixsite, lsite)
+      }
+      fixoff = push(fixoff, slot + 4)
+      code = emit_store_global(code, arch)
+    }
+    when act == 9 {
+      hold pvat = len(code)
+      when arch == 0 {
+        fixsite = push(fixsite, pvat + 1)
+      } otherwise {
+        fixsite = push(fixsite, pvat)
+      }
+      fixoff = push(fixoff, slot)
+      code = emit_load_global(code, arch)
+      code = emit_pop_acc(code, arch)
+      when arch == 0 {
+        code = e1(code, 137)
+        code = e1(code, 193)
+      } otherwise {
+        when arch == 2 {
+          code = e_w(code, rv_i(0, 10, 0, 11, 19))
+        } otherwise {
+          code = e_w(code, 2852127713)
+        }
+      }
+      hold lvat = len(code)
+      when arch == 0 {
+        fixsite = push(fixsite, lvat + 1)
+      } otherwise {
+        fixsite = push(fixsite, lvat)
+      }
+      fixoff = push(fixoff, slot + 4)
+      code = emit_load_global(code, arch)
+      code = emit_pop_acc(code, arch)
+      when arch == 0 {
+        code = e1(code, 137)
+        code = e1(code, 194)
+        code = e1(code, 66)
+        code = e1(code, 184)
+        code = e32(code, 4)
+        code = e1(code, 187)
+        code = e32(code, 1)
+        code = e1(code, 205)
+        code = e1(code, 128)
+      } otherwise {
+        when arch == 2 {
+          code = e_w(code, rv_i(0, 10, 0, 12, 19))
+          code = e_w(code, rv_i(1, 12, 0, 12, 19))
+          code = e_w(code, rv_i(1, 0, 0, 10, 19))
+          code = e_w(code, rv_i(64, 0, 0, 17, 19))
+          code = e_w(code, 115)
+        } otherwise {
+          code = e_w(code, 2852127714)
+          code = e_w(code, 2432697410)
+          code = a_movz(code, 1, 0, 1)
+          code = a_movz(code, 1, 8, 64)
+          code = e_w(code, 3556769793)
+        }
+      }
+    }
+    when act == 10 {
+      hold leftslot = slot_of(names, callleft)
+      hold rightslot = slot_of(names, callright)
+      when leftslot < 0 && is_text_literal(callleft) == 1 {
+        leftslot = len(data)
+        data = put_zeros(data, 8)
+        hold leftlitoff = len(data)
+        data = append_text(data, sub(callleft, 1, len(callleft) - 1))
+        hold leftlitlen = len(data) - leftlitoff
+        hold literal_base = 4198400
+        when arch == 0 {
+          literal_base = 134516736
+        }
+        data = set_u32(data, leftslot, literal_base + leftlitoff)
+        data = set_u32(data, leftslot + 4, leftlitlen)
+      }
+      when rightslot < 0 && is_text_literal(callright) == 1 {
+        rightslot = len(data)
+        data = put_zeros(data, 8)
+        hold rightlitoff = len(data)
+        data = append_text(data, sub(callright, 1, len(callright) - 1))
+        hold rightlitlen = len(data) - rightlitoff
+        hold literal_base2 = 4198400
+        when arch == 0 {
+          literal_base2 = 134516736
+        }
+        data = set_u32(data, rightslot, literal_base2 + rightlitoff)
+        data = set_u32(data, rightslot + 4, rightlitlen)
+      }
+      when leftslot < 0 || rightslot < 0 {
+        hold missing_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat inputs must be declared string variables or string literals"))
+      }
+      when (slot_of(names, callleft) >= 0 && slot_of(strnames, callleft) < 0) || (slot_of(names, callright) >= 0 && slot_of(strnames, callright) < 0) {
+        hold nonstring_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat variable arguments must be strings"))
+      }
+      when heap_on == 0 {
+        heap_cursor_slot = len(data)
+        data = put_zeros(data, 4)
+        heap_on = 1
+      }
+      hold heap_start_off = 65536
+      hold heap_end_off = 126976
+      when arch == 0 {
+        // Load both (pointer,length) pairs into esi/ecx and ebp/edx.
+        code = e1(code, 139)
+        code = e1(code, 53)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, leftslot)
+        code = e32(code, 0)
+        code = e1(code, 139)
+        code = e1(code, 13)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, leftslot + 4)
+        code = e32(code, 0)
+        code = e1(code, 139)
+        code = e1(code, 45)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, rightslot)
+        code = e32(code, 0)
+        code = e1(code, 139)
+        code = e1(code, 21)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, rightslot + 4)
+        code = e32(code, 0)
+        // EAX is the old bump pointer; EBX preserves the result pointer.
+        code = e1(code, 139)
+        code = e1(code, 5)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, heap_cursor_slot)
+        code = e32(code, 0)
+        code = e1(code, 137)
+        code = e1(code, 195)
+        code = e1(code, 1)
+        code = e1(code, 202)
+        code = e1(code, 1)
+        code = e1(code, 208)
+        code = e1(code, 64)
+        code = e1(code, 64)
+        // Refuse a concat that would cross the mapped 60 KiB heap.
+        code = e1(code, 61)
+        hold i386_heap_end = 134516736 + heap_end_off
+        code = e32(code, i386_heap_end)
+        code = e1(code, 15)
+        code = e1(code, 134)
+        hold i386_good_disp = len(code)
+        code = e32(code, 0)
+        code = e1(code, 184)
+        code = e32(code, 1)
+        code = e1(code, 187)
+        code = e32(code, 1)
+        code = e1(code, 205)
+        code = e1(code, 128)
+        hold i386_good = len(code)
+        code = patch32(code, i386_good_disp, i386_good - (i386_good_disp + 4))
+        code = e1(code, 163)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, heap_cursor_slot)
+        code = e32(code, 0)
+        // Copy with REP MOVSB, then terminate and publish the new pair.
+        code = e1(code, 137)
+        code = e1(code, 223)
+        code = e1(code, 243)
+        code = e1(code, 164)
+        code = e1(code, 137)
+        code = e1(code, 238)
+        code = e1(code, 139)
+        code = e1(code, 13)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, rightslot + 4)
+        code = e32(code, 0)
+        code = e1(code, 243)
+        code = e1(code, 164)
+        code = e1(code, 198)
+        code = e1(code, 7)
+        code = e1(code, 10)
+        code = e1(code, 71)
+        code = e1(code, 198)
+        code = e1(code, 7)
+        code = e1(code, 0)
+        code = e1(code, 137)
+        code = e1(code, 29)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, slot)
+        code = e32(code, 0)
+        code = e1(code, 137)
+        code = e1(code, 21)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, slot + 4)
+        code = e32(code, 0)
+      } otherwise {
+        when arch == 1 {
+          // AArch64: w10/w11 and w12/w13 are source pairs; w14 is the
+          // destination and w15 the total length.
+          hold afix0 = len(code)
+          fixsite = push(fixsite, afix0)
+          fixoff = push(fixoff, leftslot)
+          code = a_addr(code, 9)
+          code = e_w(code, 3107979562)
+          code = e_w(code, 3107980587)
+          hold afix1 = len(code)
+          fixsite = push(fixsite, afix1)
+          fixoff = push(fixoff, rightslot)
+          code = a_addr(code, 9)
+          code = e_w(code, 3107979564)
+          code = e_w(code, 3107980589)
+          hold afix2 = len(code)
+          fixsite = push(fixsite, afix2)
+          fixoff = push(fixoff, heap_cursor_slot)
+          code = a_addr(code, 9)
+          code = e_w(code, 3107979566)
+          code = e_w(code, 185401711)
+          code = e_w(code, 185532880)
+          code = e_w(code, 285214224)
+          code = e_w(code, 285214224)
+          code = a_movz(code, 0, 17, 0)
+          code = a_movk16(code, 0, 17, 66)
+          code = e_w(code, 1796276767)
+          hold a_good_site = len(code)
+          code = e_w(code, 1409286153)
+          code = a_movz(code, 1, 0, 1)
+          code = a_movz(code, 1, 8, 93)
+          code = e_w(code, 3556769793)
+          hold a_good = len(code)
+          code = a_imm19(code, a_good_site, a_good - a_good_site)
+          hold afix3 = len(code)
+          fixsite = push(fixsite, afix3)
+          fixoff = push(fixoff, heap_cursor_slot)
+          code = a_addr(code, 9)
+          code = e_w(code, 3103785264)
+          // Publish the original allocation base (w14); w16 is already the
+          // advanced heap cursor and must not become the string pointer.
+          hold aoutfix = len(code)
+          fixsite = push(fixsite, aoutfix)
+          fixoff = push(fixoff, slot)
+          code = a_addr(code, 9)
+          code = e_w(code, 3103785262)
+          hold a_left_cmp = len(code)
+          code = e_w(code, 1895825791)
+          hold a_left_skip_site = len(code)
+          code = e_w(code, 1409286144)
+          hold a_left_loop = len(code)
+          code = e_w(code, 960495953)
+          code = e_w(code, 956301777)
+          code = e_w(code, 2432697674)
+          code = e_w(code, 2432697806)
+          code = e_w(code, 1358955883)
+          code = e_w(code, 1895825791)
+          hold a_left_back_site = len(code)
+          code = e_w(code, 1409286145)
+          hold a_left_done = len(code)
+          code = a_imm19(code, a_left_skip_site, a_left_done - a_left_skip_site)
+          code = a_imm19(code, a_left_back_site, a_left_loop - a_left_back_site)
+          hold a_right_cmp = len(code)
+          code = e_w(code, 1895825855)
+          hold a_right_skip_site = len(code)
+          code = e_w(code, 1409286144)
+          hold a_right_loop = len(code)
+          code = e_w(code, 960496017)
+          code = e_w(code, 956301777)
+          code = e_w(code, 2432697740)
+          code = e_w(code, 2432697806)
+          code = e_w(code, 1358955949)
+          code = e_w(code, 1895825855)
+          hold a_right_back_site = len(code)
+          code = e_w(code, 1409286145)
+          hold a_right_done = len(code)
+          code = a_imm19(code, a_right_skip_site, a_right_done - a_right_skip_site)
+          code = a_imm19(code, a_right_back_site, a_right_loop - a_right_back_site)
+          code = a_movz(code, 0, 17, 10)
+          code = e_w(code, 956301777)
+          code = e_w(code, 2432697806)
+          code = e_w(code, 956301791)
+          hold afix5 = len(code)
+          fixsite = push(fixsite, afix5)
+          fixoff = push(fixoff, slot + 4)
+          // The fixup already targets slot+4, so store at [x9] (offset 0).
+          code = a_addr(code, 9)
+          code = e_w(code, 3103785263)
+        } otherwise {
+          // RV64: t1/t2 and t3/t4 are the source pairs; t5 holds the
+          // destination pointer and t6 the total length.
+          hold rfix0 = len(code)
+          code = rv_li32(code, 5, 0)
+          fixsite = push(fixsite, rfix0)
+          fixoff = push(fixoff, leftslot)
+          code = e_w(code, rv_i(0, 5, 2, 6, 3))
+          code = e_w(code, rv_i(4, 5, 2, 7, 3))
+          hold rfix1 = len(code)
+          code = rv_li32(code, 5, 0)
+          fixsite = push(fixsite, rfix1)
+          fixoff = push(fixoff, rightslot)
+          code = e_w(code, rv_i(0, 5, 2, 28, 3))
+          code = e_w(code, rv_i(4, 5, 2, 29, 3))
+          hold rfix2 = len(code)
+          code = rv_li32(code, 5, 0)
+          fixsite = push(fixsite, rfix2)
+          fixoff = push(fixoff, heap_cursor_slot)
+          code = e_w(code, rv_i(0, 5, 2, 30, 3))
+          code = e_w(code, rv_r(0, 29, 7, 0, 31, 51))
+          code = e_w(code, rv_r(0, 31, 30, 0, 20, 51))
+          code = e_w(code, rv_i(1, 20, 0, 20, 19))
+          code = e_w(code, rv_i(1, 20, 0, 20, 19))
+          code = rv_li32(code, 21, 4198400 + heap_end_off)
+          code = e_w(code, rv_r(0, 20, 21, 3, 22, 51))
+          hold r_good_site = len(code)
+          code = e_w(code, rv_b_word(0, 0, 22, 0))
+          code = e_w(code, rv_i(1, 0, 0, 10, 19))
+          code = e_w(code, rv_i(93, 0, 0, 17, 19))
+          code = e_w(code, 115)
+          hold r_good = len(code)
+          code = set_w(code, r_good_site, rv_b_word(r_good - r_good_site, 0, 22, 0))
+          hold rfix3 = len(code)
+          code = rv_li32(code, 5, 0)
+          fixsite = push(fixsite, rfix3)
+          fixoff = push(fixoff, heap_cursor_slot)
+          code = e_w(code, rv_s(0, 20, 5, 2))
+          code = e_w(code, rv_i(0, 30, 0, 19, 19))
+          hold r_left_skip_site = len(code)
+          code = e_w(code, rv_b_word(0, 0, 7, 0))
+          hold r_left_loop = len(code)
+          code = e_w(code, rv_i(0, 6, 4, 23, 3))
+          code = e_w(code, rv_s(0, 23, 19, 0))
+          code = e_w(code, rv_i(1, 6, 0, 6, 19))
+          code = e_w(code, rv_i(1, 19, 0, 19, 19))
+          code = e_w(code, rv_i(0 - 1, 7, 0, 7, 19))
+          hold r_left_back_site = len(code)
+          code = e_w(code, rv_b_word(0, 0, 7, 1))
+          hold r_left_done = len(code)
+          code = set_w(code, r_left_skip_site, rv_b_word(r_left_done - r_left_skip_site, 0, 7, 0))
+          code = set_w(code, r_left_back_site, rv_b_word(r_left_loop - r_left_back_site, 0, 7, 1))
+          hold r_right_skip_site = len(code)
+          code = e_w(code, rv_b_word(0, 0, 29, 0))
+          hold r_right_loop = len(code)
+          code = e_w(code, rv_i(0, 28, 4, 23, 3))
+          code = e_w(code, rv_s(0, 23, 19, 0))
+          code = e_w(code, rv_i(1, 28, 0, 28, 19))
+          code = e_w(code, rv_i(1, 19, 0, 19, 19))
+          code = e_w(code, rv_i(0 - 1, 29, 0, 29, 19))
+          hold r_right_back_site = len(code)
+          code = e_w(code, rv_b_word(0, 0, 29, 1))
+          hold r_right_done = len(code)
+          code = set_w(code, r_right_skip_site, rv_b_word(r_right_done - r_right_skip_site, 0, 29, 0))
+          code = set_w(code, r_right_back_site, rv_b_word(r_right_loop - r_right_back_site, 0, 29, 1))
+          code = e_w(code, rv_i(10, 0, 0, 23, 19))
+          code = e_w(code, rv_s(0, 23, 19, 0))
+          code = e_w(code, rv_i(1, 19, 0, 19, 19))
+          code = e_w(code, rv_s(0, 0, 19, 0))
+          hold rfix4 = len(code)
+          code = rv_li32(code, 5, 0)
+          fixsite = push(fixsite, rfix4)
+          fixoff = push(fixoff, slot)
+          // x30 retains the original heap allocation base for the result.
+          code = e_w(code, rv_s(0, 30, 5, 2))
+          hold rfix5 = len(code)
+          code = rv_li32(code, 5, 0)
+          fixsite = push(fixsite, rfix5)
+          fixoff = push(fixoff, slot + 4)
+          code = e_w(code, rv_s(0, 31, 5, 2))
         }
       }
     }
@@ -1626,6 +2410,14 @@ make run() -> num {
     hdrsz = 176
     dva = 4194304 + 4096
   }
+  hold data_mem = len(data)
+  when heap_on == 1 {
+    when len(data) >= 65536 {
+      hold static_too_large = fail(1, "static globals and strings reach the concat heap reservation")
+    }
+    data = patch32(data, heap_cursor_slot, dva + 65536)
+    data_mem = 126976
+  }
   when cn + hdrsz > 4096 {
     hold toolarge = fail(1, concat(concat("the emitted code is ", numstr(cn)), " bytes; a v1 image keeps code in the first page"))
   }
@@ -1648,12 +2440,12 @@ make run() -> num {
 
   hold img = []
   when arch == 0 {
-    img = elf32(code, data, entry_off)
+    img = elf32(code, data, entry_off, data_mem)
   } otherwise {
     when arch == 2 {
-      img = elf64_em(code, data, entry_off, 243)
+      img = elf64_em(code, data, entry_off, 243, data_mem)
     } otherwise {
-      img = elf64_em(code, data, entry_off, 183)
+      img = elf64_em(code, data, entry_off, 183, data_mem)
     }
   }
   hold wrote = write_bytes(outpath, img)

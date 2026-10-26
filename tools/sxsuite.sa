@@ -176,6 +176,11 @@ make active_c_compilers(env_key: str) -> list {
     out = push(out, 3)
     give out
   }
+  when string_eq(getenv("SXSUITE_REQUIRE_GEN3"), "1") == 1 {
+    when path_kind("selfhost/gen3") != 1 {
+      hold fg3 = fail_suite(1, "missing compiler ./selfhost/gen3 (run make gen3 first)")
+    }
+  }
   out = push(out, 2)
   when path_kind("selfhost/gen3") == 1 {
     out = push(out, 3)
@@ -708,6 +713,15 @@ make suite_compiler_features(base: str) -> num {
   hold ct = read_file("selfhost/modules/compiler_text.sa")
   when contains(ct, "make sxminimum<T>") != 1 {
     hold fg = fail_suite(1, "compiler_text.sa missing make sxminimum<T>")
+  }
+
+  when string_eq(getenv("SXSUITE_REQUIRE_GEN3"), "1") == 1 {
+    when path_kind("selfhost/gen1_min.c") != 1 || path_kind("selfhost/gen2.c") != 1 || path_kind("selfhost/gen3.c") != 1 || path_kind("selfhost/gen4.c") != 1 {
+      hold fga = fail_suite(1, "missing gen1_min.c/gen2.c/gen3.c/gen4.c artifacts for gen3 audit")
+    }
+    when path_kind("selfhost/gen1_min") != 1 || path_kind("selfhost/gen2") != 1 || path_kind("selfhost/gen3") != 1 {
+      hold fgb = fail_suite(1, "missing gen1_min/gen2/gen3 binaries for gen3 audit")
+    }
   }
 
   hold checked_c = 0

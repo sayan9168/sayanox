@@ -105,8 +105,8 @@ The **pure-min** dialect currently supports:
 | C-free self-compiling x86-64 ELF64 compiler (`tools/sxc_native.sa`) | ✅ compiles itself, all tools, and `compiler_min.sa` directly to static ELF64 with zero `cc` / zero libc |
 | Native AOT (x86-64 Linux, written in Sayanox) | ✅ (`selfhost/native_aot.sa`, C backend deleted) |
 | Portable IR VM (`tools/sxirexec.sa`) | ✅ executes `emit_to_ir` portable IR directly in Sayanox |
-| i386 Linux ELF, emitted by a Sayanox program | ✅ (integer subset) |
-| aarch64 & riscv64 ELF64, emitted & user-mode executed in Sayanox | ✅ emitted by `tools/native32.sa` and executed with 6-way parity by `tools/sxisaexec.sa` (integer subset) |
+| i386 Linux ELF, emitted by a Sayanox program | ✅ integer expressions, static string spans, `len`, byte indexing, and bounded variable-to-variable `concat` |
+| aarch64 & riscv64 ELF64, emitted & user-mode executed in Sayanox | ✅ `tools/native32.sa` emits the same bounded integer/string subset; `tools/sxisaexec.sa` executes it with six-way parity |
 
 See [docs/STATUS.md](docs/STATUS.md) for the full tested feature matrix and known limitations.
 
@@ -129,7 +129,7 @@ for anything to move from the second table to the first.
 | 5 | **Stdlib: nested JSON reader + writer/pretty-printer + symmetric & public-key cryptography** — `stdlib/json_deep.sa` reads/validates nested documents, `stdlib/json_write.sa` builds, updates (`jw_obj_set`/`jw_obj_del`), minifies and pretty-prints nested JSON, `stdlib/crypto.sa` implements SHA-256 and HMAC-SHA256, and `stdlib/pubkey.sa` implements Curve25519 (`GF(2^255 - 19)`) Schnorr-SHA256 public-key signatures. Byte-identical on all three backends | `make test-stdlib-json-deep`, `make test-stdlib-json-write`, `make test-stdlib-crypto`, `make test-sxpkg-pubkey` |
 | 6 | **Package digests, provenance, HMAC signatures, and public-key package + index verification** — `pkg.meta` carries `sha256=`, `origin=`, symmetric `sig=`/`signer=`, and asymmetric Curve25519 `pubkey=`/`pubkeyid=`/`pubsig=`; `sxpkg sign-index` / `verify-index` signs and verifies `INDEX.sig` + listed package digests against `.sayanox/trusted_keys` with `.sec` deleted | `make test-sxpkg-crypto`, `make test-sxpkg-pubkey`, `make test-sxpkg-transfer-hardening` |
 | 7 | **LSP semantic + type-level hover & cross-file workspace resolution** — definition, references, rename, `hover` (parameter types, inferred call/struct/generic `Box<num>.val` types), and `signatureHelp` resolve across local scopes, `use "..."` imports, open overlays, and unopened indexed workspace `.sa` files | `make test-lsp-semantic`, `make test-lsp-workspace`, `make test-lsp-types` |
-| 8 | **A second machine target** — `tools/native32.sa`, written in Sayanox, emits **i386** Linux ELF for a documented integer subset; four backends print identical bytes, ELFCLASS32/EM_386 and determinism are pinned, nine refusals | `make test-native32` ([NATIVE32.md](docs/NATIVE32.md)) |
+| 8 | **A second machine target** — `tools/native32.sa`, written in Sayanox, emits **i386** Linux ELF for integer expressions, static string spans, `len(string)`, byte indexing, and bounded variable-to-variable `concat`; ELFCLASS32/EM_386 and determinism are pinned, with the supported boundary and explicit refusals tested | `make test-native32` ([NATIVE32.md](docs/NATIVE32.md)) |
 | 9 | **Third and fourth machine targets, emitted** — `tools/native32.sa` with `arm64` emits ELF64/EM_AARCH64 and with `riscv64` emits ELF64/EM_RISCV (RV64IM); containers, goldens, three-way data-segment agreement across i386/arm64/riscv64 and the refusals are pinned | `make test-native-arm64`, `make test-native-riscv64` |
 | 10 | **Module namespacing, one layer out** — `tools/sxmod.sa` rewrites `module NAME from "path"` + `alias.member` into prefixed flat declarations. The gate first proves the flat dialect **cannot** compose two modules that both declare `add` (all three backends refuse it), then compiles the namespaced version to identical stdout, and pins 16 refusals | `make test-sxmod` ([MODULES.md](docs/MODULES.md)) |
 | 11 | **The C trust anchor is pinned and audited** — the seed is one file: 2,176 lines, 100,919 bytes, SHA-256 `e4cc34b4…a2a01cb9`, recomputed by `tools/sxaudit.sa` (Sayanox, on `stdlib/crypto.sa`) and compared with the tracked pin; four standard headers, no `system`/`exec*`/`socket`/`getenv` in the compiler surface; compiling the 20.1k-line compiler twice gives byte-identical C | `make test-trust-anchor` |
@@ -141,7 +141,7 @@ for anything to move from the second table to the first.
 | 17 | **The documentation is machine-checked** — the docs may not claim what the build does not do; `all-sayanox` must still fail, no Stage-2 placeholder may return, legacy docs keep their banner | `make test-doc-claims` |
 | 18 | **C-free self-compiling x86-64 ELF64 compiler & toolchain (`tools/sxc_native.sa`) + single C trust anchor** — `sxc_native` compiles itself (`gen2.elf == gen3.elf`), all 30+ Sayanox tools (`sayanox_lsp`, `sxpkg`, `sxdiag`, `sxfmt`, `sxbuild`, `sxc_seed`, `native_aot`, etc.), and the 20,138-line `compiler_min.sa` directly to static Linux x86-64 ELF64 binaries with **zero C compiler (`cc`) and zero libc**; `selfhost/seed/sxc_seed_min.c` is the **only `.c`/`.h` file in the entire repository** (`0` non-anchor `.c`/`.h` files) | `make test-sxc-native`, `make test-trust-anchor`, `make verify-seed` |
 | 19 | **Pure-Sayanox compiler suite runner (`tools/sxsuite.sa`)** — executes 6 compiler test suites (`stage2_interp`, `struct_fn`, `generic_struct_limits`, `full_lang_ready`, `compiler_features`, `ir_audit`) directly in C-free Sayanox | `make test-sxsuite` |
-| 20 | **User-mode ARM64 & RISC-V 64 ELF64 emulator (`tools/sxisaexec.sa`)** — decodes and executes real `EM_AARCH64` and `EM_RISCV` (`RV64IM`) Linux ELF64 binaries (`write`/`exit` Linux syscalls) in Sayanox with 6-way execution parity (`seed-min == gen2 == native_aot == sxirexec == arm64 == riscv64`) and fault controls | `make test-sxisaexec` |
+| 20 | **User-mode ARM64 & RISC-V ELF64 emulator (`tools/sxisaexec.sa`)** — executes the tested AArch64/RV64IM integer and static-string compiler subset with 6-way parity; also probes scalar RV64F/D and AArch64 S/D arithmetic plus bounded `openat`/`read`/`write`/`close` syscalls. Not a full RV64GC ISA or full-language compiler claim. | `make test-sxisaexec` |
 | 21 | **Transitive multi-directory `module` DAG binder (`tools/sxmod_lib.sa`)** — resolves multi-directory diamond/chain `module` graphs with cycle detection, topological ordering, singleton init, and cross-module `Mod_<mod>_<Struct>` types across `sxc_native`, `sxbuild`, and `sxmod --transitive` | `make test-sxmod-deep` |
 | 22 | **Module-aware LSP IDE features (`tools/sayanox_lsp.sa`)** — `module ... from "..."` hover/definition/signatureHelp, cross-module struct field resolution, multiline `signatureHelp`, lexical block-scoped shadowing, and `textDocument/prepareRename` | `make test-lsp-ide` |
 | 23 | **Extended 5-backend standard library** — `stdlib/map.sa`, `stdlib/sort.sa`, `stdlib/path.sa`, `stdlib/cli.sa`, and `stdlib/bytes.sa` (hex/base64/LE32/CRC-16) verified across 5 backends (`seed-min == gen2 == native_aot == sxc_native == sxirexec`) | `make test-stdlib-extended` |
@@ -157,7 +157,7 @@ for anything to move from the second table to the first.
 | 5 | **Stdlib depth** | `json_write.sa` updates top-level object keys functionally (numbers beyond 6 fractional places are rounded). `pubkey.sa` / `crypto.sa` run on IEEE-754 doubles with no constant-time side-channel claim. HTTP stays optional and outside the bootstrap | [docs/STDLIB.md](docs/STDLIB.md), `make test-network` (optional) |
 | 6 | **Package transport & key distribution** | Asymmetric Curve25519 package (`pubsig=`) and index (`INDEX.sig`) verification work offline against pinned `.sayanox/trusted_keys`; online key discovery/CA infrastructure does not exist, and HTTP transport still shells out to `curl`/`wget` | [docs/REGISTRY.md](docs/REGISTRY.md) |
 | 7 | **An IDE-complete LSP** | `hover`, `definition`, and `signatureHelp` now infer static types and resolve across `use "..."` and indexed workspace `.sa` files, but the server is still a line/brace-oriented analyzer rather than the full compiler front end: 4 open buffers, 128 indexed files, 256 KiB each, no incremental text sync, and no workspace-wide diagnostic push | [docs/LSP.md](docs/LSP.md) — "still not IDE-complete" |
-| 8 | **Second-ISA parity** | `tools/sxirexec.sa` executes the full portable x86-64 IR on a Sayanox VM (`make test-ir-exec`), while `tools/native32.sa` (`i386`, `arm64`, `riscv64`) covers a **documented integer subset** and **nothing aarch64 or riscv64 has ever been executed here** (no ARM/RISC-V hardware or emulator) | [docs/NATIVE32.md](docs/NATIVE32.md), [docs/NATIVE_IR.md](docs/NATIVE_IR.md) |
+| 8 | **Full ARM64/RV64GC native compiler/runtime** | `tools/native32.sa` currently emits integer expressions, static string spans, `len`, byte indexing and bounded variable-to-variable `concat` for i386/AArch64/RV64IM, with six-way execution parity; `sxisaexec` also has emulator-only scalar-FP and file-syscall probes. General strings, lists, structs, user functions, FP code generation, file I/O runtime, GC, and broad RV64GC/AArch64 coverage remain open. | [docs/NATIVE32.md](docs/NATIVE32.md), [docs/NATIVE_IR.md](docs/NATIVE_IR.md) |
 | 9 | **Namespacing in the language** | `sxmod` is a source-to-source pass. The dialect still has shared declaration tables and no module identity, private visibility, nesting, search paths or import cache. Not planned in the bootstrap compiler | [docs/MODULES.md](docs/MODULES.md) |
 | 10 | **`.sa` on GitHub** | Not registered in github-linguist, so the language bar keeps showing C. The upstream contribution is prepared but not opened (Linguist wants demonstrated in-the-wild usage) | [docs/LINGUIST.md](docs/LINGUIST.md) |
 | 11 | **Platforms and registry growth** | x86-64 Linux (plus i386 integer subset and portable IR VM) is executed; the package registry is local; the stdlib is twelve modules | roadmap below |
@@ -224,7 +224,7 @@ the environment the wrappers used to read.
 | `tools/sxbuild.sa` | Sayanox build/bootstrap/parity/tool driver (`doctor`, `inventory`, `build`, `native`, `tool`, `parity`, `bootstrap`) |
 | `tools/sxstage2_parity.sa` | Sayanox Stage-2 native parity harness (struct-typed `make` + `${id}` interpolation) |
 | `tools/sxirexec.sa` | Sayanox Portable IR virtual machine and 4-backend parity runner (`emit_to_ir` execution) |
-| `tools/native32.sa` | Sayanox i386 / x86-64 / aarch64 / riscv64 ELF emitter (integer subset) |
+| `tools/native32.sa` | Sayanox i386 / AArch64 / RV64IM ELF emitter (integer, static strings, `len`, bounded `concat`) |
 | `tools/sxmod.sa` | Sayanox module-namespacing pass (`module` / `alias.member`) |
 | `tools/sxaudit.sa` | Sayanox auditor for the C seed (size + SHA-256 against the pin) |
 | `tools/sxdiag.sa` | Sayanox negative-diagnostic suites (replaced four `sh` drivers) |
@@ -272,7 +272,7 @@ has the short version.
 - [x] A collector in the bootstrap seed (strings) (`make test-seed-collector`)
 - [x] Nested generic structs on all three backends (`make test-generic-structs-nested`)
 - [x] Nested JSON reader and SHA-256/HMAC-SHA256 in the stdlib
-- [x] A second and third machine target emitted by a Sayanox program — i386 runs, aarch64 is pinned but not executed
+- [x] Multi-ISA Sayanox emitter for i386/AArch64/RV64IM with integer, static-string, byte-indexing and bounded-concat subset; AArch64/RV64 output executes under `sxisaexec`
 - [x] Module namespacing one layer out (`make test-sxmod`)
 - [x] The C seed pinned and audited as a documented exception (`make test-trust-anchor`)
 - [x] **Native AOT backend completely in Sayanox (Phase D steps 1–10)**: `selfhost/native_aot.sa` + `tools/sx*_lib.sa` replaced and deleted `selfhost/native_aot.c` (`make test-native-sxemit`, `make native-test`)
@@ -286,18 +286,19 @@ has the short version.
 - [x] **User-mode ARM64 & RISC-V 64 ELF64 instruction emulator with 6-way parity (`tools/sxisaexec.sa`)** (`make test-sxisaexec`)
 - [x] **Transitive multi-directory `module` DAG resolution (`tools/sxmod_lib.sa`)** (`make test-sxmod-deep`)
 - [x] **Extended 5-backend standard library (`map`, `sort`, `path`, `cli`, `bytes`)** (`make test-stdlib-extended`)
+- [x] **Port the remaining 14 tracked POSIX `.sh` scripts to Sayanox**: `sxsuite`, LSP protocol probes, package-transfer security harness, local HTTP/crawler tests, and `sxpack`; `git ls-files '*.sh'` is now empty (`make test-language-deps`, `make test-trust-anchor`)
 - [ ] **Next phase — all-in-Sayanox completion** ([plan](docs/ALL_SAYANOX_PHASE.md)):
-      Phase D (Steps 1–10) and C-free ELF64 self-compilation (`sxc_native`) are complete with 0 non-anchor `.c`/`.h` files; `make all-sayanox` still fails closed while the single pinned C trust anchor (`sxc_seed_min.c`) and top-level `Makefile`/`sh` entry points remain
+      Phase D (Steps 1–10), C-free ELF64 self-compilation (`sxc_native`), and all 14 tracked shell-script ports are complete; `make all-sayanox` still fails closed while the single pinned C trust anchor (`sxc_seed_min.c`) and top-level `Makefile` remain
 - [ ] Full Stage-2 language self-hosting in `seed-min` bootstrap (`make true-selfhost-full` fails closed)
-- [ ] Full heap/collector native codegen on ARM64 / RISC-V beyond the integer subset
+- [ ] Full ARM64/RV64 native compiler/runtime beyond the integer subset (strings, lists, structs, `make`/`give`, floats, file I/O, GC); emulator FP/syscall coverage is in progress (`docs/ALL_SAYANOX_PHASE.md`)
 - [ ] Broader platform support
 
 ### Next phase: everything in Sayanox
 
-The maintained *logic* — including the entire x86-64 native AOT backend (`selfhost/native_aot.sa`), the compiler (`selfhost/compiler_min.sa`), the formatter, the package tool (with public-key package and index verification), the portable IR VM, the build driver (`tools/sxbuild.sa`), and the language server — is written in Sayanox. Since 2026-10-17 no maintained path needs bash, awk, sed or Python either.
+The maintained *logic* — including the entire x86-64 native AOT backend (`selfhost/native_aot.sa`), the compiler (`selfhost/compiler_min.sa`), the formatter, package tool, portable IR VM, build driver (`tools/sxbuild.sa`), language server, compiler-test runner, and the test/pack/restore helpers — is written in Sayanox. All 14 remaining tracked shell scripts have been retired; `git ls-files '*.sh'` is empty. The Makefile still uses inline POSIX recipes, and optional local HTTP fixtures use Python as a host test utility.
 
 What is still not Sayanox is small, measurable, and listed in
-[docs/ALL_SAYANOX_PHASE.md](docs/ALL_SAYANOX_PHASE.md): the 2,176-line pinned C seed (`selfhost/seed/sxc_seed_min.c`) and the top-level `Makefile`/POSIX-`sh` entry points.
+[docs/ALL_SAYANOX_PHASE.md](docs/ALL_SAYANOX_PHASE.md): the 2,176-line pinned C seed (`selfhost/seed/sxc_seed_min.c`) and the top-level `Makefile`.
 `make all-sayanox` prints that inventory on every run — it computes the numbers
 instead of quoting them — and then **fails closed**, the same way
 `true-selfhost-full` refuses to claim a full-language self-host, so the

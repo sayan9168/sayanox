@@ -1,0 +1,43 @@
+// native32: static string values carry a data pointer and a runtime length.
+// This exercises reassignment, both branch paths, loop updates, and literals.
+hold msg = "short"
+show msg
+show len(msg)
+show len(msg) + 1
+hold ix = 1
+show msg[ix]
+show msg[2 + 1]
+show msg[-1]
+show msg[len(msg) - 1]
+hold suffix = "!"
+hold empty = ""
+hold blank = concat(empty, empty)
+show blank
+show len(blank)
+hold joined = concat(msg, suffix)
+show joined
+show len(joined)
+show joined[5]
+joined = concat(joined, suffix)
+show joined
+msg = "a longer string"
+show msg
+show len(msg)
+hold choice = 0
+when choice == 0 {
+  msg = "branch-A"
+} otherwise {
+  msg = "branch B is longer"
+}
+show msg
+show len(msg)
+hold i = 0
+while i < 3 {
+  msg = "loop"
+  i = i + 1
+}
+show msg
+show len(msg)
+hold number = 42
+show number
+show "literal still works"

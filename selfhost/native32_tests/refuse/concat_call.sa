@@ -1,0 +1,3 @@
+hold text = "x"
+hold invalid = concat(text, chr(121))
+show invalid

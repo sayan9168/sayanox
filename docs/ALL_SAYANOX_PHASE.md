@@ -20,9 +20,16 @@ complete:
   `tools/sxirexec`, `tools/sxmod`, `tools/native32`, `tools/emit_to_ir`, and the
   20,138-line `selfhost/compiler_min.sa` itself — directly to static ELF64
   binaries (`make test-sxc-native`).
+- The remaining **14 tracked POSIX-shell scripts are now retired**. Their test,
+  LSP probe, pack/restore, local HTTP/crawler and transfer-mock logic is in
+  `tools/{sxsuite,sxlsp_probe,sxpkg_transfer_test,sxnet_test,sxpack}.sa`;
+  `git ls-files '*.sh'` is pinned to empty by `make test-trust-anchor` and
+  `make test-language-deps`. The Makefile retains only essential inline
+  bootstrap recipes (the compiler-source recovery fallback still needs the
+  host's `base64` and `gzip`, before Sayanox can build `sxpack`).
 - Joined by `tools/sxsuite.sa` (pure-Sayanox replacement for 6 compiler test
   suites, `make test-sxsuite`), `tools/sxisaexec.sa` (user-mode ARM64 AArch64 +
-  RISC-V RV64GC ELF64 instruction emulator with 6-way parity,
+  RISC-V RV64IM ELF64 instruction emulator with scalar FP/syscall probes and 6-way parity,
   `make test-sxisaexec`), `tools/sxmod_lib.sa` + `tools/sxmod.sa --transitive`
   (multi-directory diamond/chain `module` DAG resolver, `make test-sxmod-deep`),
   `tools/sayanox_lsp.sa` (module-aware IDE resolution, multiline
@@ -30,12 +37,14 @@ complete:
   `make test-lsp-ide`), and 5 universal stdlib modules (`stdlib/{map,sort,path,cli,bytes}.sa`,
   `make test-stdlib-extended`).
 Only the pinned C seed (`selfhost/seed/sxc_seed_min.c`, Phase E option 2) and
-the top-level `Makefile`/POSIX-`sh` entry points remain outside `.sa`, so
-`make all-sayanox` still fails closed on purpose.
+the top-level `Makefile` (including inline POSIX recipe commands) remain
+outside `.sa`, so `make all-sayanox` still fails closed on purpose.
 
 The goal is simple to state: every maintained piece of *logic* in this
-repository is a Sayanox program, and the only non-Sayanox pieces left are the
-smallest possible bootstrap seam and the build driver.
+repository is a Sayanox program, and the only non-Sayanox source pieces left
+are the smallest possible bootstrap seam and the build driver. Online package
+transfers still delegate socket I/O to external curl/wget; optional local
+network fixtures use Python's HTTP server.
 
 ## Where the tree is today (measured 2026-10-25)
 
@@ -43,10 +52,10 @@ smallest possible bootstrap seam and the build driver.
 |---|---|---:|---|
 | Compiler (`selfhost/compiler_min.sa` + module) | Sayanox | 20,138 lines | **yes** |
 | C-free self-compiling x86-64 ELF64 compiler (`tools/sxc_native.sa` + `tools/sx*_lib.sa`) & Stage-2 native backend (`selfhost/native_aot.sa`) | Sayanox | 11 modules | **yes** (compiles itself & all tools with zero `cc`) |
-| Full-seed compatibility compiler (`selfhost/seed/sxc_seed.sa`), GC/registry harnesses (`rc_runtime_stress.sa`, `seed_builder_registry_test.sa`), `sayanox_lsp`, `sxpkg`, `sxfmt`, `sxdiag`, `sxsuite`, `sxisaexec` (ARM64 + RV64GC ELF64 emulator), `sxirexec`, `emit_to_ir`, `sxbuild`, `sxmod` (`--transitive` DAG), `native32` (4-ISA), `sxaudit`, `sxlink`, `sxencode`, `sxdefs`, `sxinfer`, `sxruntime`, `sxgc`, `sxemit`, and 17 `stdlib/*.sa` modules | Sayanox | 34+ programs | **yes** |
+| Full-seed compatibility compiler (`selfhost/seed/sxc_seed.sa`), GC/registry harnesses (`rc_runtime_stress.sa`, `seed_builder_registry_test.sa`), `sayanox_lsp`, `sxpkg`, `sxfmt`, `sxdiag`, `sxsuite`, `sxisaexec` (AArch64 + RV64 F/D-subset ELF64 emulator), `sxirexec`, `emit_to_ir`, `sxbuild`, `sxmod` (`--transitive` DAG), `native32` (4-ISA), `sxaudit`, `sxlink`, `sxencode`, `sxdefs`, `sxinfer`, `sxruntime`, `sxgc`, `sxemit`, and 17 `stdlib/*.sa` modules | Sayanox | 34+ programs | **yes** |
 | Non-anchor `.c` / `.h` files anywhere in the repository | — | **0 files** | **retired (`make test-trust-anchor`)** |
 | Seed (`selfhost/seed/sxc_seed_min.c`) | C | 2,176 lines | no — **the sole `.c`/`.h` file in the repo**, documented, auditable and pinned (Phase E option 2, `make test-trust-anchor`) |
-| Top-level CI entry points (`Makefile` + POSIX `sh` scripts alongside `tools/sxbuild.sa` + `tools/sxsuite.sa`) | make / POSIX sh | ~5,400 lines | no |
+| Top-level CI entry points (`Makefile` + inline recipes alongside `tools/sxbuild.sa` + `tools/sxsuite.sa`) | make / POSIX recipe shell | ~5,400 lines; **0 tracked `.sh`** | no |
 
 The tree also stopped carrying a second copy of itself on 2026-10-21: about
 380 KB of base64 chunk directories (`native_src/`, `stage2_blob/`,
@@ -74,10 +83,14 @@ package managers.
 Each phase ends with a gate, and each phase keeps `gen3 == gen4` green. No
 phase may weaken an existing test to pass.
 
-### Phase A — tool logic and interpreter freedom (done, 2026-10-17)
+### Phase A — tool logic and interpreter freedom (done, 2026-10-17; all tracked shell scripts retired, 2026-10-25)
 
 Compiler, formatter, local package commands, language server and the LSP binder
-are `.sa`. All tracked scripts are POSIX `sh`. Gate: `test-language-deps`.
+are `.sa`. The 14 remaining tracked `.sh` entry points have since been ported
+or replaced with pure-Sayanox suites and tools; the tracked `.sh` count is now
+zero. The offline compiler-source fallback remains a small inline Makefile
+recipe because it must run before the Sayanox packer can be built. Gate:
+`test-language-deps`.
 
 ### Phase B — small tools in Sayanox (in progress)
 
@@ -157,24 +170,22 @@ are `.sa`. All tracked scripts are POSIX `sh`. Gate: `test-language-deps`.
      `seed` command.
    * `sync` from a local registry refuses an unsafe index without writing it,
      where the shell needed a `mktemp` file to do the same.
-   * the http(s) halves of `sync`, `install` and `fetch` are unchanged shell,
-     including the `.fetch.XXXXXX` staging directory and its `trap` rollback.
+   * online transport still invokes `curl` or `wget` through `run_command`; the
+     security boundary is pinned by `tools/sxpkg_transfer_test.sa`, a pure-
+     Sayanox mock transport suite. No tracked shell test driver is required.
 
-### Phase C — package and process behavior in Sayanox (in progress)
+### Phase C — package and process behavior in Sayanox (transport boundary remains)
 
 Phase C started with the process and directory builtins (`spawn`, `child_*`,
-`make_dir`, `make_link`, `remove_path` and the directory builtins), which is
-what unblocked everything below. What is left of Phase C is the network
-transport itself, and it is blocked by the language rather than by effort:
-`spawn(path)` takes no arguments, so Sayanox cannot run
-`curl -fsSL --connect-timeout 10 --max-time 60 <url> -o <part>`, and
-`selfhost/test_sxpkg_transfer_hardening.sh` mocks `curl`/`wget` through `PATH`
-and asserts `$MOCK_CALLS` contains them, so switching to `http_get` would
-break a gate that must stay unchanged. `docs/SXPKG_ONLINE.md` records the same
-boundary. The portable slice is done; the transport is a documented exception,
-not a missing step.
+`make_dir`, `make_link`, `remove_path` and the directory builtins), which
+unblocked the tools. Package transfer policy and hardening are Sayanox. The
+actual HTTP transport is still an external `curl` or `wget` executable:
+`spawn(path)` takes no arguments, and `run_command` is used by `tools/sxpkg.sa`
+to pass transport arguments. This is a documented dependency, not shell source.
+`tools/sxpkg_transfer_test.sa` provides mocked curl/wget binaries and verifies
+opt-in, path safety, rollback and cache verification with no network.
 Tests: `test-sxpkg`, `test-sxpkg-polish`, `test-sxpkg-online-local`,
-`test-sxpkg-transfer-hardening`, `test-sxpkg-online-optin` must pass unchanged.
+`test-sxpkg-transfer-hardening`, `test-sxpkg-online-optin`.
 
 ### Phase D — native backend in Sayanox
 
@@ -531,3 +542,34 @@ The IR tool has already left it.
   compiler first.
 * No generated C is checked in; `gen3 == gen4` byte identity stays a gate at
   every phase.
+
+## Current next phase
+
+### Phase F — full ARM64 and RISC-V native backend (in progress; started 2026-10-25)
+
+The goal is to extend `tools/native32.sa` from integer expressions and static
+string spans to full string/list/struct/function support, IEEE-754 values, file
+I/O, and GC, compiling and executing natively for AArch64 and RV64GC. The
+recent static-string slice is useful but does not close the compiler/runtime
+milestone; a capable ELF emulator is necessary for proof but does not itself
+mean the backend is complete.
+
+**Verified compiler slice:** string values use image-backed pointer+length
+globals and support literal assignment/reassignment, `show`, `len`, zero-based
+byte indexing (negative-from-end included), and bounded variable-to-variable
+`concat` on i386, AArch64, and RV64IM. `make test-sxisaexec` includes six-way
+parity for empty and dynamic strings, indexed reads and lengths, as well as the
+earlier integer fixtures; bounds and heap exhaustion are checked.
+
+**Verified emulator-only probes:** `tools/sxisaexec.sa` executes scalar
+IEEE-754 S/D arithmetic and Linux `openat`/`read`/`write`/`close`/`exit` on
+both architectures against temporary host files. The virtual file table is
+intentionally bounded to one open file and 64 KiB per file; it is test
+infrastructure, not the target runtime ABI.
+
+Still open for the backend: general heap-backed/dynamic string operations
+(beyond the bounded variable-to-variable `concat` slice), lists, structs, user
+`make`/`give`, IEEE-754 code generation and formatting, native file I/O,
+mark-and-sweep GC, full RV64GC/AArch64 coverage, and broad parity for each.
+Until these are implemented and gated, native32 is a deliberately limited
+compiler subset, not a full-language native compiler claim.

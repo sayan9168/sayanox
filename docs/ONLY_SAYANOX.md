@@ -89,12 +89,14 @@ is written in Sayanox.
   Everything *around* it is Sayanox since 2026-10-22: `tools/sxpkg.sa` is the
   whole package tool, with `getenv` for SAYANOX_ROOT/SAYANOX_REGISTRY/
   SAYANOX_ONLINE and `run_command` to start the transport it found on PATH.
-  `tools/sxpkg.sh` is deleted. `test-sxpkg-transfer-hardening` still pins
-  curl/wget as the transport, which is a decision about which program is
-  allowed to open a socket, not about who writes the policy.
-- `Makefile` and POSIX-shell recipes — build/test orchestration. All tracked
-  scripts are `#!/bin/sh`; bash, awk and sed are not part of the maintained
-  toolchain (`make test-language-deps`).
+`tools/sxpkg.sh` is deleted. `test-sxpkg-transfer-hardening` now runs from
+`tools/sxpkg_transfer_test.sa`; it still pins curl/wget as the transport, which
+is a decision about which program is allowed to open a socket, not about who
+writes the policy. The 14 remaining tracked `.sh` test/build drivers were
+migrated on 2026-10-25, leaving zero tracked `.sh` files.
+- `Makefile` and inline POSIX-shell recipes — build/test orchestration. Zero
+  tracked `.sh` scripts remain; bash, awk and sed are not part of the
+  maintained toolchain (`make test-language-deps`).
 - Generated C and native binaries — build outputs, not Sayanox source.
 
 The verified portable program path is `.sa -> generated C -> host C compiler ->

@@ -1,0 +1,8 @@
+hold unit = "x"
+hold grown = ""
+hold i = 0
+while i < 400 {
+  grown = concat(grown, unit)
+  i = i + 1
+}
+show "unreachable"

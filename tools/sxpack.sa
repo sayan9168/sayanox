@@ -1,0 +1,526 @@
+// tools/sxpack.sa -- Pure-Sayanox offline compiler packer, restorer, and verifier.
+// Replaces selfhost/pack_compiler_min.sh and selfhost/restore_compiler_min.sh
+// using pure-Sayanox RFC 4648 Base64 encoding/decoding and 1100-byte chunking
+// (zero split, base64, tr, or awk dependency).
+// Built C-free via ./tools/sxc_native.
+//
+// Subcommands:
+//   sxpack pack
+//   sxpack restore
+//   sxpack verify
+
+make istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold v = n
+  hold s = ""
+  while v >= 1 {
+    hold d = v % 10
+    v = (v - d) / 10
+    s = concat(chr(48 + d), s)
+  }
+  give s
+}
+
+make pad4(n: num) -> str {
+  hold s = istr(n)
+  while len(s) < 4 {
+    s = concat("0", s)
+  }
+  give s
+}
+
+make fail_pack(msg: str) -> num {
+  hold nl = chr(10)
+  hold w = write_file("/dev/stderr", concat("FAIL: ", concat(msg, nl)))
+  hold z = exit(1)
+  give 0
+}
+
+make contains(hay: str, needle: str) -> num {
+  hold nh = len(hay)
+  hold nn = len(needle)
+  when nn == 0 {
+    give 1
+  }
+  when nn > nh {
+    give 0
+  }
+  hold lim = nh - nn
+  hold i = 0
+  while i <= lim {
+    when sx_index(hay, i) == sx_index(needle, 0) {
+      hold j = 1
+      hold ok = 1
+      while j < nn {
+        when sx_index(hay, i + j) != sx_index(needle, j) {
+          ok = 0
+          j = nn
+        } otherwise {
+          j = j + 1
+        }
+      }
+      when ok == 1 {
+        give 1
+      }
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make ends_with(s: str, suf: str) -> num {
+  hold ns = len(s)
+  hold nf = len(suf)
+  when nf > ns {
+    give 0
+  }
+  hold off = ns - nf
+  hold i = 0
+  while i < nf {
+    when sx_index(s, off + i) != sx_index(suf, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make b64_char(v: num) -> str {
+  hold tab = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  give chr(sx_index(tab, v))
+}
+
+make b64_val(c: num) -> num {
+  when c >= 65 && c <= 90 {
+    give c - 65
+  }
+  when c >= 97 && c <= 122 {
+    give c - 97 + 26
+  }
+  when c >= 48 && c <= 57 {
+    give c - 48 + 52
+  }
+  when c == 43 {
+    give 62
+  }
+  when c == 47 {
+    give 63
+  }
+  give -1
+}
+
+make b64_encode(bs: list) -> str {
+  hold n = len(bs)
+  hold i = 0
+  // Build in 256-triplet chunks so string concatenation stays linear-ish
+  hold total = ""
+  hold chunk = ""
+  hold grp = 0
+  while i + 2 < n {
+    hold b0 = bs[i]
+    hold b1 = bs[i + 1]
+    hold b2 = bs[i + 2]
+    hold v0 = (b0 - (b0 % 4)) / 4
+    hold v1 = (b0 % 4) * 16 + (b1 - (b1 % 16)) / 16
+    hold v2 = (b1 % 16) * 4 + (b2 - (b2 % 64)) / 64
+    hold v3 = b2 % 64
+    chunk = concat(chunk, concat(b64_char(v0), concat(b64_char(v1), concat(b64_char(v2), b64_char(v3)))))
+    grp = grp + 1
+    when grp >= 256 {
+      total = concat(total, chunk)
+      chunk = ""
+      grp = 0
+    }
+    i = i + 3
+  }
+  when i < n {
+    hold r0 = bs[i]
+    when i + 1 < n {
+      hold r1 = bs[i + 1]
+      hold u0 = (r0 - (r0 % 4)) / 4
+      hold u1 = (r0 % 4) * 16 + (r1 - (r1 % 16)) / 16
+      hold u2 = (r1 % 16) * 4
+      chunk = concat(chunk, concat(b64_char(u0), concat(b64_char(u1), concat(b64_char(u2), "="))))
+    } otherwise {
+      hold w0 = (r0 - (r0 % 4)) / 4
+      hold w1 = (r0 % 4) * 16
+      chunk = concat(chunk, concat(b64_char(w0), concat(b64_char(w1), "==")))
+    }
+  }
+  total = concat(total, chunk)
+  give total
+}
+
+make b64_decode(s: str) -> list {
+  hold out = []
+  hold n = len(s)
+  hold q0 = 0
+  hold q1 = 0
+  hold q2 = 0
+  hold q3 = 0
+  hold k = 0
+  hold pad = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 10 || c == 13 || c == 32 || c == 9 {
+      i = i + 1
+    } otherwise {
+      hold v = 0
+      when c == 61 {
+        pad = pad + 1
+        v = 0
+      } otherwise {
+        v = b64_val(c)
+        when v < 0 {
+          hold fb = fail_pack("invalid base64 byte in archive")
+        }
+      }
+      when k == 0 {
+        q0 = v
+      }
+      when k == 1 {
+        q1 = v
+      }
+      when k == 2 {
+        q2 = v
+      }
+      when k == 3 {
+        q3 = v
+      }
+      k = k + 1
+      when k == 4 {
+        hold b0 = q0 * 4 + (q1 - (q1 % 16)) / 16
+        out = push(out, b0)
+        when pad < 2 {
+          hold b1 = (q1 % 16) * 16 + (q2 - (q2 % 4)) / 4
+          out = push(out, b1)
+        }
+        when pad < 1 {
+          hold b2 = (q2 % 4) * 64 + q3
+          out = push(out, b2)
+        }
+        k = 0
+        pad = 0
+      }
+      i = i + 1
+    }
+  }
+  give out
+}
+
+make slice_str(s: str, start: num, end_pos: num) -> str {
+  hold out = ""
+  hold chunk = ""
+  hold cnt = 0
+  hold i = start
+  while i < end_pos {
+    chunk = concat(chunk, chr(sx_index(s, i)))
+    cnt = cnt + 1
+    when cnt >= 256 {
+      out = concat(out, chunk)
+      chunk = ""
+      cnt = 0
+    }
+    i = i + 1
+  }
+  give concat(out, chunk)
+}
+
+make valid_compiler_source(s: str) -> num {
+  when len(s) < 10000 {
+    give 0
+  }
+  when contains(s, "read_file") != 1 {
+    give 0
+  }
+  when contains(s, "arg_count") != 1 {
+    give 0
+  }
+  when contains(s, "sx_eq") != 1 {
+    give 0
+  }
+  give 1
+}
+
+make valid_module_source(s: str) -> num {
+  when len(s) < 100 {
+    give 0
+  }
+  when contains(s, "make sxminimum<T>") != 1 {
+    give 0
+  }
+  when contains(s, "make sxeslice(") != 1 {
+    give 0
+  }
+  give 1
+}
+
+make read_sorted_b64_parts(dir: str) -> str {
+  hold total = ""
+  hold idx = 0
+  hold more = 1
+  while more == 1 {
+    hold p4 = concat(dir, concat("/", concat(pad4(idx), ".b64")))
+    when path_kind(p4) == 1 {
+      total = concat(total, read_file(p4))
+      idx = idx + 1
+    } otherwise {
+      more = 0
+    }
+  }
+  give total
+}
+
+make decode_gz_b64_to_file(b64_text: str, tmp_gz: str, out_tmp: str) -> num {
+  hold gz_bytes = b64_decode(b64_text)
+  when len(gz_bytes) == 0 {
+    hold r0 = remove_path(tmp_gz)
+    give 0
+  }
+  when write_bytes(tmp_gz, gz_bytes) != 1 {
+    hold r1 = remove_path(tmp_gz)
+    give 0
+  }
+  hold q = chr(34)
+  hold cmd = concat("gzip -d -c ", concat(q, concat(tmp_gz, concat(q, concat(" > ", concat(q, concat(out_tmp, q)))))))
+  hold rc = run_command(cmd)
+  hold r2 = remove_path(tmp_gz)
+  when rc != 0 {
+    hold r3 = remove_path(out_tmp)
+    give 0
+  }
+  give 1
+}
+
+make assert_bytes_same(pa: str, pb: str, label: str) -> num {
+  hold ba = []
+  hold bb = []
+  hold na = read_bytes(pa, ba)
+  hold nb = read_bytes(pb, bb)
+  when na < 0 || nb < 0 || na != nb {
+    hold fl = fail_pack(concat(label, ": byte length mismatch"))
+  }
+  hold i = 0
+  hold n = na
+  while i < n {
+    hold xa = ba[i]
+    hold xb = bb[i]
+    when xa != xb {
+      hold fb = fail_pack(concat(label, concat(": byte mismatch at ", istr(i))))
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make run_pack() -> num {
+  hold nl = chr(10)
+  hold q = chr(34)
+  hold src = "selfhost/compiler_min.sa"
+  hold mod_src = "selfhost/modules/compiler_min_tmp"
+  hold mod_sa = "selfhost/modules/compiler_text.sa"
+  hold mod_blob = "selfhost/modules/compiler_text.sa.gz.b64"
+  hold outdir = "selfhost/compiler_min_gz"
+
+  when path_kind(src) != 1 || valid_compiler_source(read_file(src)) != 1 {
+    hold fs = fail_pack("selfhost/compiler_min.sa missing or invalid")
+  }
+  when path_kind(mod_sa) != 1 || valid_module_source(read_file(mod_sa)) != 1 {
+    hold fm = fail_pack("selfhost/modules/compiler_text.sa missing or invalid")
+  }
+  hold mk = make_dir(outdir)
+
+  // Clear existing *.b64 parts in selfhost/compiler_min_gz
+  hold listing = read_dir(outdir)
+  hold ln = len(listing)
+  hold li = 0
+  while li < ln {
+    hold ls = li
+    while li < ln && sx_index(listing, li) != 10 {
+      li = li + 1
+    }
+    hold le = li
+    when li < ln {
+      li = li + 1
+    }
+    when le > ls {
+      hold nm = slice_str(listing, ls, le)
+      when ends_with(nm, ".b64") == 1 {
+        hold rp = remove_path(concat(outdir, concat("/", nm)))
+      }
+    }
+  }
+
+  // Compress compiler_min.sa with deterministic gzip -9 -n and split into 1100-char parts
+  hold tmp_gz = concat(outdir, "/.pack.tmp.gz")
+  when run_command(concat("gzip -9 -n -c ", concat(q, concat(src, concat(q, concat(" > ", concat(q, concat(tmp_gz, q)))))))) != 0 {
+    hold fg1 = fail_pack("gzip -9 -n failed on compiler_min.sa")
+  }
+  hold gz1_bs = []
+  when read_bytes(tmp_gz, gz1_bs) <= 0 {
+    hold fg1b = fail_pack("cannot read compressed compiler_min.sa")
+  }
+  hold b64_all = b64_encode(gz1_bs)
+  hold rg1 = remove_path(tmp_gz)
+
+  hold total_len = len(b64_all)
+  hold pos = 0
+  hold part = 0
+  while pos < total_len {
+    hold stop = pos + 1100
+    when stop > total_len {
+      stop = total_len
+    }
+    hold chunk = slice_str(b64_all, pos, stop)
+    hold pfile = concat(outdir, concat("/", concat(pad4(part), ".b64")))
+    when write_file(pfile, concat(chunk, nl)) != 1 {
+      hold fw = fail_pack(concat("cannot write ", pfile))
+    }
+    pos = stop
+    part = part + 1
+  }
+
+  // Also pack compiler_text.sa -> compiler_text.sa.gz.b64 (76-char wrapped lines)
+  hold m_gz = concat(mod_src, ".gz")
+  when run_command(concat("gzip -9 -n -c ", concat(q, concat(mod_sa, concat(q, concat(" > ", concat(q, concat(m_gz, q)))))))) != 0 {
+    hold fg2 = fail_pack("gzip -9 -n failed on compiler_text.sa")
+  }
+  hold gz2_bs = []
+  when read_bytes(m_gz, gz2_bs) <= 0 {
+    hold fg2b = fail_pack("cannot read compressed compiler_text.sa")
+  }
+  hold m_b64 = b64_encode(gz2_bs)
+  hold rg2 = remove_path(m_gz)
+  hold m_wrapped = ""
+  hold mp = 0
+  hold mn = len(m_b64)
+  while mp < mn {
+    hold mstop = mp + 76
+    when mstop > mn {
+      mstop = mn
+    }
+    m_wrapped = concat(m_wrapped, concat(slice_str(m_b64, mp, mstop), nl))
+    mp = mstop
+  }
+  when write_file(mod_blob, m_wrapped) != 1 {
+    hold fwm = fail_pack("cannot write compiler_text.sa.gz.b64")
+  }
+
+  // Verify round-trip byte identity immediately
+  hold v = run_verify()
+  show concat("[OK] packed selfhost/compiler_min.sa into ", concat(istr(part), " part(s) (1100-char chunks, verified byte-identical)"))
+  give 0
+}
+
+make run_verify() -> num {
+  hold src = "selfhost/compiler_min.sa"
+  hold mod_sa = "selfhost/modules/compiler_text.sa"
+  hold mod_blob = "selfhost/modules/compiler_text.sa.gz.b64"
+  hold outdir = "selfhost/compiler_min_gz"
+
+  hold joined = read_sorted_b64_parts(outdir)
+  when len(joined) == 0 {
+    hold f0 = fail_pack("no selfhost/compiler_min_gz/*.b64 parts found")
+  }
+  hold v_gz = concat(outdir, "/.verify.tmp.gz")
+  hold v_sa = concat(outdir, "/.verify.tmp.sa")
+  when decode_gz_b64_to_file(joined, v_gz, v_sa) != 1 {
+    hold f1 = fail_pack("cannot decode selfhost/compiler_min_gz/*.b64")
+  }
+  hold c1 = assert_bytes_same(src, v_sa, "compiler_min.sa archive verify")
+  hold rv1 = remove_path(v_sa)
+
+  when path_kind(mod_blob) != 1 {
+    hold f2 = fail_pack("missing selfhost/modules/compiler_text.sa.gz.b64")
+  }
+  hold vm_gz = "selfhost/modules/.verify.tmp.gz"
+  hold vm_sa = "selfhost/modules/.verify.tmp.sa"
+  when decode_gz_b64_to_file(read_file(mod_blob), vm_gz, vm_sa) != 1 {
+    hold f3 = fail_pack("cannot decode compiler_text.sa.gz.b64")
+  }
+  hold c2 = assert_bytes_same(mod_sa, vm_sa, "compiler_text.sa archive verify")
+  hold rv2 = remove_path(vm_sa)
+  give 0
+}
+
+make run_restore() -> num {
+  hold mod_sa = "selfhost/modules/compiler_text.sa"
+  hold mod_blob = "selfhost/modules/compiler_text.sa.gz.b64"
+  hold src = "selfhost/compiler_min.sa"
+  hold outdir = "selfhost/compiler_min_gz"
+
+  // 1. Ensure compiler_text.sa
+  when path_kind(mod_sa) == 1 && valid_module_source(read_file(mod_sa)) == 1 {
+    show "[OK] compiler module (checked-in source verified; no decoder used)"
+  } otherwise {
+    when path_kind(mod_blob) != 1 {
+      hold fm0 = fail_pack("compiler text module and recovery blob missing")
+    }
+    hold tm_gz = "selfhost/modules/.restore.tmp.gz"
+    hold tm_sa = "selfhost/modules/.restore.tmp.sa"
+    when decode_gz_b64_to_file(read_file(mod_blob), tm_gz, tm_sa) != 1 {
+      hold fm1 = fail_pack("compiler module recovery decode failed")
+    }
+    hold m_txt = read_file(tm_sa)
+    when valid_module_source(m_txt) != 1 {
+      hold rm_bad = remove_path(tm_sa)
+      hold fm2 = fail_pack("compiler module recovery failed marker verification")
+    }
+    when write_file(mod_sa, m_txt) != 1 {
+      hold rm_bad2 = remove_path(tm_sa)
+      hold fm3 = fail_pack("cannot write restored compiler_text.sa")
+    }
+    hold rm_ok = remove_path(tm_sa)
+    show "[OK] compiler module restored offline"
+  }
+
+  // 2. Ensure compiler_min.sa
+  when path_kind(src) == 1 && valid_compiler_source(read_file(src)) == 1 {
+    show "[OK] restore-compiler (checked-in source verified; no base64/gzip used)"
+    give 0
+  }
+
+  hold joined = read_sorted_b64_parts(outdir)
+  when len(joined) == 0 {
+    hold fc0 = fail_pack("no selfhost/compiler_min.sa and no compiler_min_gz bundle to restore from")
+  }
+  hold tc_gz = "selfhost/.restore_min.tmp.gz"
+  hold tc_sa = "selfhost/.restore_min.tmp.sa"
+  when decode_gz_b64_to_file(joined, tc_gz, tc_sa) != 1 {
+    hold fc1 = fail_pack("could not decode selfhost/compiler_min_gz/*.b64")
+  }
+  hold c_txt = read_file(tc_sa)
+  when valid_compiler_source(c_txt) != 1 {
+    hold rc_bad = remove_path(tc_sa)
+    hold fc2 = fail_pack("restored compiler_min is missing expected markers (existing source left untouched)")
+  }
+  when write_file(src, c_txt) != 1 {
+    hold rc_bad2 = remove_path(tc_sa)
+    hold fc3 = fail_pack("cannot write restored selfhost/compiler_min.sa")
+  }
+  hold rc_ok = remove_path(tc_sa)
+  show "[OK] restore-compiler (restored offline from gzip+base64 parts; no Python, no network)"
+  give 0
+}
+
+when arg_count() < 2 {
+  hold u = fail_pack("usage: sxpack <pack|restore|verify>")
+}
+hold mode = arg(1)
+when string_eq(mode, "pack") == 1 {
+  hold r1 = run_pack()
+  hold e1 = exit(0)
+}
+when string_eq(mode, "restore") == 1 {
+  hold r2 = run_restore()
+  hold e2 = exit(0)
+}
+when string_eq(mode, "verify") == 1 {
+  hold r3 = run_verify()
+  show "[OK] sxpack verify: compiler_min_gz and compiler_text.sa.gz.b64 match checked-in sources byte-for-byte"
+  hold e3 = exit(0)
+}
+hold uk = fail_pack(concat("unknown subcommand: ", mode))

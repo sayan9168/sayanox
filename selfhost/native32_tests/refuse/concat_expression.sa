@@ -1,0 +1,4 @@
+hold left = "x"
+hold right = "y"
+hold invalid = concat(left, right + "!")
+show invalid
