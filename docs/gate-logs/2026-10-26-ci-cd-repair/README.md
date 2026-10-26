@@ -47,7 +47,13 @@ The last green runs before the streak were `39926946230` (nightly) and
    and the single tracked C/H file, then publishes a source tarball, the
    generated `gen3.c`/`gen4.c`, SHA-256 digests and a `BUILD_INFO.md` as a
    GitHub release. `--verify-tag` is applied only to real tag pushes.
-6. **Developer entry points.** `make ci` runs the nightly chain locally;
+6. **No more cancelled main verifications.** `ci.yml` now cancels
+   in-progress runs only for `pull_request` events. Previously two quick
+   merges shared one concurrency group on `refs/heads/main` and the newer
+   run cancelled the older one (run `40056484784` was cancelled that way),
+   leaving a main commit with no CI result. `make test-ci-shape` pins the
+   expression.
+7. **Developer entry points.** `make ci` runs the nightly chain locally;
    README carries CI/full-bootstrap badges and a CI/CD section.
 
 ## New feature: `stdlib/csv.sa`

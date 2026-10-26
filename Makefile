@@ -6857,6 +6857,8 @@ test-ci-shape:
 	done
 	@grep -qF 'contents: write' .github/workflows/release.yml \
 	  || { echo "[FAIL] release.yml needs contents: write to publish a release"; exit 1; }
+	@grep -qF "github.event_name == 'pull_request'" .github/workflows/ci.yml \
+	  || { echo '[FAIL] ci.yml must not cancel a completed main-push verification'; exit 1; }
 	@echo '[OK] CI/CD shape: hand-off outside the checkout, both sequential workflows run all four gates, release publishing is permitted'
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,10 @@ permissions:
 
 concurrency:
   group: sayanox-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A second merge to main must not cancel the first one's verification:
+  # run 40056484784 was cancelled that way, leaving a main commit with no
+  # green check at all. PR updates still cancel their own superseded runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The whole bootstrap is Makefile-only and offline: a clean checkout plus the
 # core toolchain plus POSIX utilities documented in DEPENDENCY.md.
