@@ -14,6 +14,17 @@ multi-directory `module` DAG resolver; `tools/sayanox_lsp.sa` module IDE,
 multiline `signatureHelp`, lexical block shadowing, and `prepareRename`; and
 5-backend `stdlib/{map,sort,path,cli,bytes}.sa`)
 
+**2026-10-26 (second increment).** Three more portable stdlib modules landed
+with one gate: `stdlib/url.sa` (percent-encoding + packed query strings),
+`stdlib/datetime.sa` (proleptic Gregorian calendar / Julian Day Numbers), and
+`stdlib/hash.sa` (rolling hashes, djb2, sdbm, RFC 1950 Adler-32 and Luhn
+check digits). `make test-stdlib-next` pins 106 `label=value` lines that were
+computed independently with host Python `urllib.parse`, `datetime`/`calendar`
+and `zlib`, then requires seed-min == gen2 == native_aot on all of them, plus
+standalone use of each module and coexistence of the `csv_`/`surl_`/`dt_`/`sh_`
+prefixes. Together with `csv.sa` that is 150 oracle-pinned values; the stdlib
+is now twenty-one `.sa` modules. `hash.sa` is explicitly non-cryptographic.
+
 **2026-10-26.** CI was red on `main` for three separate reasons across the
 last six runs: the `test-seed-gc` bootstrap dependency (fixed on the branch by
 `d529891`), the `test-sxmod` flat splice (fixed by the later module work), and

@@ -1,0 +1,338 @@
+// stdlib/url.sa -- percent-encoding and query strings (prefix surl_).
+//
+// Portable across seed-min, gen2 and native_aot (make test-stdlib-next).
+// All strings are byte strings. A query is a PACKED string of alternating
+// length-prefixed fields: each pair is <len>:<key><len>:<value>. That is the
+// same representation stdlib/cli.sa and stdlib/csv.sa use, because the dialect
+// refuses string-valued list elements.
+//
+// Authoring rules honoured here (see docs/STDLIB.md): every helper is defined
+// before its first caller, every accumulation goes through a hold, and no
+// comment contains an unbalanced quote character.
+
+// ---- packed-string primitives ---------------------------------------------
+
+make surl_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold v = n
+  hold out = ""
+  while v > 0 {
+    hold d = v % 10
+    hold out = concat(chr(48 + d), out)
+    hold v = (v - d) / 10
+  }
+  give out
+}
+
+make surl_sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// One length-prefixed field: returns [byte offset, one past the last byte].
+make surl_read_rec(packed: str, pos: num) -> list {
+  hold n = len(packed)
+  hold i = pos
+  hold ln = 0
+  hold rd = 1
+  while rd == 1 {
+    when i >= n {
+      hold rd = 0
+    } otherwise {
+      when sx_index(packed, i) == 58 {
+        hold rd = 0
+      } otherwise {
+        hold ln = ln * 10 + (sx_index(packed, i) - 48)
+        hold i = i + 1
+      }
+    }
+  }
+  hold res = []
+  hold res = push(res, i + 1)
+  hold res = push(res, i + 1 + ln)
+  give res
+}
+
+// ---- percent-encoding ------------------------------------------------------
+
+make surl_is_unreserved(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give 1
+    }
+  }
+  when c >= 65 {
+    when c <= 90 {
+      give 1
+    }
+  }
+  when c >= 97 {
+    when c <= 122 {
+      give 1
+    }
+  }
+  when c == 45 {
+    give 1
+  }
+  when c == 46 {
+    give 1
+  }
+  when c == 95 {
+    give 1
+  }
+  when c == 126 {
+    give 1
+  }
+  give 0
+}
+
+// Value of one hex digit, or -1 when the byte is not a hex digit.
+make surl_hex_digit(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give c - 48
+    }
+  }
+  when c >= 65 {
+    when c <= 70 {
+      give c - 55
+    }
+  }
+  when c >= 97 {
+    when c <= 102 {
+      give c - 87
+    }
+  }
+  give 0 - 1
+}
+
+make surl_encode(s: str) -> str {
+  hold hex = "0123456789ABCDEF"
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when surl_is_unreserved(c) == 1 {
+      hold out = concat(out, chr(c))
+    } otherwise {
+      hold lo = c % 16
+      hold hi = (c - lo) / 16
+      hold out = concat(out, "%")
+      hold out = concat(out, chr(sx_index(hex, hi)))
+      hold out = concat(out, chr(sx_index(hex, lo)))
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// A percent sign must be followed by exactly two hex digits. A NUL byte is
+// deliberately not produced: strings are C strings, so %00 would truncate.
+make surl_decode_ok(s: str) -> num {
+  hold i = 0
+  while i < len(s) {
+    when sx_index(s, i) == 37 {
+      when i + 2 >= len(s) {
+        give 0
+      }
+      when surl_hex_digit(sx_index(s, i + 1)) < 0 {
+        give 0
+      }
+      when surl_hex_digit(sx_index(s, i + 2)) < 0 {
+        give 0
+      }
+      hold i = i + 3
+    } otherwise {
+      hold i = i + 1
+    }
+  }
+  give 1
+}
+
+make surl_decode(s: str) -> str {
+  when surl_decode_ok(s) == 0 {
+    give ""
+  }
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c == 37 {
+      hold hi = surl_hex_digit(sx_index(s, i + 1))
+      hold lo = surl_hex_digit(sx_index(s, i + 2))
+      when hi * 16 + lo == 0 {
+        give ""
+      }
+      hold out = concat(out, chr(hi * 16 + lo))
+      hold i = i + 3
+    } otherwise {
+      hold out = concat(out, chr(c))
+      hold i = i + 1
+    }
+  }
+  give out
+}
+
+// ---- packed query ----------------------------------------------------------
+
+make surl_query_empty() -> str {
+  give ""
+}
+
+make surl_query_push(q: str, key: str, value: str) -> str {
+  give concat(concat(q, concat(surl_istr(len(key)), concat(":", key))), concat(surl_istr(len(value)), concat(":", value)))
+}
+
+make surl_query_count(q: str) -> num {
+  hold n = len(q)
+  hold pos = 0
+  hold cnt = 0
+  while pos < n {
+    hold r1 = surl_read_rec(q, pos)
+    hold pos = r1[1]
+    hold r2 = surl_read_rec(q, pos)
+    hold pos = r2[1]
+    hold cnt = cnt + 1
+  }
+  give cnt
+}
+
+make surl_query_key(q: str, idx: num) -> str {
+  when idx >= surl_query_count(q) {
+    give ""
+  }
+  hold n = len(q)
+  hold pos = 0
+  hold cur = 0
+  while pos < n {
+    hold r1 = surl_read_rec(q, pos)
+    when cur == idx {
+      give surl_sub(q, r1[0], r1[1])
+    }
+    hold pos = r1[1]
+    hold r2 = surl_read_rec(q, pos)
+    hold pos = r2[1]
+    hold cur = cur + 1
+  }
+  give ""
+}
+
+make surl_query_value(q: str, idx: num) -> str {
+  when idx >= surl_query_count(q) {
+    give ""
+  }
+  hold n = len(q)
+  hold pos = 0
+  hold cur = 0
+  while pos < n {
+    hold r1 = surl_read_rec(q, pos)
+    hold pos = r1[1]
+    hold r2 = surl_read_rec(q, pos)
+    when cur == idx {
+      give surl_sub(q, r2[0], r2[1])
+    }
+    hold pos = r2[1]
+    hold cur = cur + 1
+  }
+  give ""
+}
+
+make surl_query_get(q: str, key: str, dflt: str) -> str {
+  hold n = surl_query_count(q)
+  hold i = 0
+  while i < n {
+    when string_eq(surl_query_key(q, i), key) == 1 {
+      give surl_query_value(q, i)
+    }
+    hold i = i + 1
+  }
+  give dflt
+}
+
+make surl_query_has(q: str, key: str) -> num {
+  hold n = surl_query_count(q)
+  hold i = 0
+  while i < n {
+    when string_eq(surl_query_key(q, i), key) == 1 {
+      give 1
+    }
+    hold i = i + 1
+  }
+  give 0
+}
+
+// Parse a=1&b=2 into a packed query. Both sides are percent-decoded; one bad
+// escape refuses the whole query (the empty packed query, count zero).
+make surl_query_parse(text: str) -> str {
+  hold out = ""
+  hold n = len(text)
+  hold i = 0
+  when n == 0 {
+    give ""
+  }
+  while i < n {
+    hold key = ""
+    hold value = ""
+    hold eq = 0
+    hold run = 1
+    while run == 1 {
+      when i >= n {
+        hold run = 0
+      } otherwise {
+        hold c = sx_index(text, i)
+        when c == 38 {
+          hold run = 0
+        } otherwise {
+          when c == 61 {
+            when eq == 0 {
+              hold eq = 1
+            } otherwise {
+              hold value = concat(value, chr(c))
+            }
+          } otherwise {
+            when eq == 0 {
+              hold key = concat(key, chr(c))
+            } otherwise {
+              hold value = concat(value, chr(c))
+            }
+          }
+          hold i = i + 1
+        }
+      }
+    }
+    when i < n {
+      hold i = i + 1
+    }
+    when surl_decode_ok(key) == 0 {
+      give ""
+    }
+    when surl_decode_ok(value) == 0 {
+      give ""
+    }
+    hold out = surl_query_push(out, surl_decode(key), surl_decode(value))
+  }
+  give out
+}
+
+make surl_query_write(q: str) -> str {
+  hold out = ""
+  hold n = surl_query_count(q)
+  hold i = 0
+  while i < n {
+    when i > 0 {
+      hold out = concat(out, "&")
+    }
+    hold out = concat(out, surl_encode(surl_query_key(q, i)))
+    hold out = concat(out, "=")
+    hold out = concat(out, surl_encode(surl_query_value(q, i)))
+    hold i = i + 1
+  }
+  give out
+}

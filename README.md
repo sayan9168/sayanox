@@ -141,7 +141,7 @@ See [docs/STATUS.md](docs/STATUS.md) for the full tested feature matrix and know
 
 ## Status
 
-Two tables, nothing between them. 166 `make test-*` targets back them up; the
+Two tables, nothing between them. 167 `make test-*` targets back them up; the
 four hard gates above have to stay green, with gen3 and gen4 byte-identical,
 for anything to move from the second table to the first.
 
@@ -173,6 +173,9 @@ for anything to move from the second table to the first.
 | 22 | **Module-aware LSP IDE features (`tools/sayanox_lsp.sa`)** — `module ... from "..."` hover/definition/signatureHelp, cross-module struct field resolution, multiline `signatureHelp`, lexical block-scoped shadowing, and `textDocument/prepareRename` | `make test-lsp-ide` |
 | 23 | **Extended 5-backend standard library** — `stdlib/map.sa`, `stdlib/sort.sa`, `stdlib/path.sa`, `stdlib/cli.sa`, and `stdlib/bytes.sa` (hex/base64/LE32/CRC-16) verified across 5 backends (`seed-min == gen2 == native_aot == sxc_native == sxirexec`) | `make test-stdlib-extended` |
 | 24 | **CSV row codec in the stdlib** — `stdlib/csv.sa` parses and writes RFC 4180-style rows (quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals) with a packed-string row type; 44 hand-computed values identical on seed-min, gen2 and native | `make test-stdlib-csv` |
+| 25 | **URL / query-string codec (`stdlib/url.sa`)** — percent-encoding and decoding, packed query strings with parse/write/get/has, and refusal of malformed escapes and NUL bytes; 39 values pinned by an independent `urllib` oracle | `make test-stdlib-next` |
+| 26 | **Gregorian calendar arithmetic (`stdlib/datetime.sa`)** — Julian Day Numbers, leap years, weekday names, day-of-year, add-days, `YYYY-MM-DD` format/parse and the inverse conversion; 43 values pinned by Python `datetime`/`calendar` | `make test-stdlib-next` |
+| 27 | **Checksums and Luhn digits (`stdlib/hash.sa`)** — byte sums, rolling/djb2/sdbm/poly131 hashes, RFC 1950 Adler-32 and Luhn check-digit generation/validation; 24 values pinned by `zlib` and a hand-written Luhn oracle; explicitly non-cryptographic | `make test-stdlib-next` |
 
 ### Remaining — and where the build refuses to claim it
 
@@ -188,7 +191,7 @@ for anything to move from the second table to the first.
 | 8 | **Full ARM64/RV64GC native compiler/runtime** | `tools/native32.sa` currently emits integer expressions, static string spans, `len`, byte indexing and bounded variable-to-variable `concat` for i386/AArch64/RV64IM, with six-way execution parity; `sxisaexec` also has emulator-only scalar-FP and file-syscall probes. General strings, lists, structs, user functions, FP code generation, file I/O runtime, GC, and broad RV64GC/AArch64 coverage remain open. | [docs/NATIVE32.md](docs/NATIVE32.md), [docs/NATIVE_IR.md](docs/NATIVE_IR.md) |
 | 9 | **Namespacing in the language** | `sxmod` is a source-to-source pass. The dialect still has shared declaration tables and no module identity, private visibility, nesting, search paths or import cache. Not planned in the bootstrap compiler | [docs/MODULES.md](docs/MODULES.md) |
 | 10 | **`.sa` on GitHub** | Not registered in github-linguist, so the language bar keeps showing C. The upstream contribution is prepared but not opened (Linguist wants demonstrated in-the-wild usage) | [docs/LINGUIST.md](docs/LINGUIST.md) |
-| 11 | **Platforms and registry growth** | x86-64 Linux (plus i386 integer subset and portable IR VM) is executed; the package registry is local; the stdlib is eighteen `.sa` modules, including the new `csv.sa` row codec | roadmap below |
+| 11 | **Platforms and registry growth** | x86-64 Linux (plus i386 integer subset and portable IR VM) is executed; the package registry is local; the stdlib is twenty-one `.sa` modules, including `csv.sa`, `url.sa`, `datetime.sa` and `hash.sa` | roadmap below |
 
 ### What is deliberately refused
 
@@ -256,7 +259,7 @@ the environment the wrappers used to read.
 | `tools/sxmod.sa` | Sayanox module-namespacing pass (`module` / `alias.member`) |
 | `tools/sxaudit.sa` | Sayanox auditor for the C seed (size + SHA-256 against the pin) |
 | `tools/sxdiag.sa` | Sayanox negative-diagnostic suites (replaced four `sh` drivers) |
-| `stdlib/` | Twelve Sayanox modules, including `json_deep.sa`, `json_write.sa`, `crypto.sa`, and `pubkey.sa` |
+| `stdlib/` | Twenty-one Sayanox modules, including `json_deep.sa`, `json_write.sa`, `crypto.sa`, `pubkey.sa`, `csv.sa`, `url.sa`, `datetime.sa`, and `hash.sa` |
 | `Makefile` | Bootstrap, tests, verification |
 | `docs/` | Status, design notes, language docs |
 | `docs/gate-logs/` | One dated folder per landed change: what was claimed, and the run that proves it |
@@ -314,6 +317,7 @@ has the short version.
 - [x] **User-mode ARM64 & RISC-V 64 ELF64 instruction emulator with 6-way parity (`tools/sxisaexec.sa`)** (`make test-sxisaexec`)
 - [x] **Transitive multi-directory `module` DAG resolution (`tools/sxmod_lib.sa`)** (`make test-sxmod-deep`)
 - [x] **CI/CD repaired and gated** — artifact hand-off outside the checkout, aligned nightly audit, fast shape gate, local `make ci`, workflow badges and a tag-triggered release pipeline (`make test-ci-shape`)
+- [x] **Portable stdlib data & time batch** — `csv.sa` (rows), `url.sa` (percent-encoding + query strings), `datetime.sa` (Gregorian calendar / JDN), `hash.sa` (rolling hashes, Adler-32, Luhn); 150 oracle-pinned values on seed-min == gen2 == native (`make test-stdlib-csv`, `make test-stdlib-next`)
 - [x] **Extended 5-backend standard library (`map`, `sort`, `path`, `cli`, `bytes`)** (`make test-stdlib-extended`)
 - [x] **Port the remaining 14 tracked POSIX `.sh` scripts to Sayanox**: `sxsuite`, LSP protocol probes, package-transfer security harness, local HTTP/crawler tests, and `sxpack`; `git ls-files '*.sh'` is now empty (`make test-language-deps`, `make test-trust-anchor`)
 - [ ] **Next phase — all-in-Sayanox completion** ([plan](docs/ALL_SAYANOX_PHASE.md)):

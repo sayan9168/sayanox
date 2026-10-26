@@ -17,6 +17,9 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa` | seed-min, gen2, native | `test-stdlib-json-write` |
 | `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
 | `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals | seed-min, gen2, native | `test-stdlib-csv` |
+| `stdlib/url.sa` | percent-encoding/decoding (`surl_encode`, `surl_decode`, `surl_decode_ok`) and packed query strings (`surl_query_parse`, `surl_query_write`, `surl_query_push`, `surl_query_count`, `surl_query_key`, `surl_query_value`, `surl_query_get`, `surl_query_has`, `surl_query_empty`) | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/datetime.sa` | proleptic Gregorian calendar: `dt_is_leap`, `dt_days_in_month`, `dt_valid`, `dt_jdn`, `dt_from_jdn`, `dt_weekday`, `dt_weekday_name`, `dt_month_name`, `dt_day_of_year`, `dt_days_between`, `dt_add_days`, `dt_format`, `dt_parse`, `dt_istr` | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/hash.sa` | non-cryptographic checksums: `sh_sum_bytes`, `sh_is_digits`, `sh_poly`, `sh_djb2`, `sh_poly131`, `sh_sdbm`, `sh_adler32`, `sh_luhn_sum`, `sh_luhn_check_digit`, `sh_luhn_valid`, `sh_istr` | seed-min, gen2, native | `test-stdlib-next` |
 
 ## Why two kinds of module
 
@@ -312,3 +315,41 @@ operations on it, and `csv_write_row` turns it back into a CSV record.
   produce byte-identical stdout, checks that the module stands alone, and
   checks that its `csv_` prefix coexists with `stdlib/str_text.sa`'s `t_`
   helpers.
+
+
+## The 2026-10-26 batch: `url.sa`, `datetime.sa`, `hash.sa`
+
+Three more portable modules, one gate (`make test-stdlib-next`). Their expected
+output is **not** produced by running Sayanox: `selfhost/stdlib_url.want`,
+`selfhost/stdlib_datetime.want` and `selfhost/stdlib_hash.want` were computed
+independently with host Python standard libraries (`urllib.parse`,
+`datetime`/`calendar`, `zlib`) plus hand-written rolling-hash and Luhn oracles.
+The gate requires seed-min, gen2 and native_aot to reproduce all 106 lines
+byte-for-byte, and also checks that each module stands alone and that the
+`csv_` / `surl_` / `dt_` / `sh_` prefixes coexist in one spliced program.
+
+* **`url.sa` (`surl_`)** — `surl_encode` percent-encodes every byte outside
+  `A-Z a-z 0-9 - . _ ~` as uppercase `%XX`. `surl_decode_ok` rejects a stray
+  percent sign or a non-hex escape, and `surl_decode` returns an empty string
+  in that case. `%00` is refused too: strings are C strings, so a NUL byte
+  would silently truncate. A query is a packed string of alternating
+  length-prefixed key/value fields (same trick as `cli.sa` and `csv.sa`),
+  because the dialect refuses string-valued list elements. `surl_query_parse`
+  splits on `&` and the first `=`, decodes both sides, and refuses the whole
+  query on one bad escape; `surl_query_write` re-encodes and rejoins it.
+
+* **`datetime.sa` (`dt_`)** — proleptic Gregorian, years 1..9999. `dt_jdn`
+  is the Julian Day Number; `dt_from_jdn` inverts it by binary search over
+  years and a linear scan over months that call `dt_jdn` itself, so the inverse
+  cannot drift from the forward conversion. Weekdays are `0 = Monday ..
+  6 = Sunday`. Invalid dates return documented sentinels (`-1`, `[0,0,0]` or
+  the empty string) instead of a guess. No floating-point transcendental
+  functions and no platform date APIs are involved.
+
+* **`hash.sa` (`sh_`)** — checksums only, **not cryptographic**; use
+  `stdlib/crypto.sa` for SHA-256/HMAC. `sh_poly` is a rolling hash modulo the
+  31-bit prime 2147483647, which keeps every product below 2^53 so a C double
+  holds each step exactly. `sh_adler32` is RFC 1950 Adler-32 as one number
+  (`B * 65536 + A`). `sh_luhn_check_digit` computes a Luhn check digit for an
+  all-digit payload and `sh_luhn_valid` validates a complete number; both
+  refuse non-digit input.

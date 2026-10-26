@@ -1,0 +1,32 @@
+// stdlib/hash.sa fixture. Every line is a label=value pair; the full stdout is
+// pinned by selfhost/stdlib_hash.want and must be byte-identical on seed-min,
+// gen2 and native_aot (make test-stdlib-next).
+use "stdlib/hash.sa"
+
+show concat("sum.abc=", sh_istr(sh_sum_bytes("abc")))
+show concat("sum.empty=", sh_istr(sh_sum_bytes("")))
+show concat("sum.az=", sh_istr(sh_sum_bytes("AZ")))
+show concat("digits.123=", sh_istr(sh_is_digits("123")))
+show concat("digits.12a=", sh_istr(sh_is_digits("12a")))
+show concat("digits.empty=", sh_istr(sh_is_digits("")))
+
+show concat("poly31.abc=", sh_istr(sh_poly("abc", 31, 0)))
+show concat("poly31.ab=", sh_istr(sh_poly("ab", 31, 0)))
+show concat("djb2.abc=", sh_istr(sh_djb2("abc")))
+show concat("djb2.empty=", sh_istr(sh_djb2("")))
+show concat("poly131.abc=", sh_istr(sh_poly131("abc")))
+show concat("sdbm.abc=", sh_istr(sh_sdbm("abc")))
+
+show concat("adler32.wikipedia=", sh_istr(sh_adler32("Wikipedia")))
+show concat("adler32.abc=", sh_istr(sh_adler32("abc")))
+show concat("adler32.empty=", sh_istr(sh_adler32("")))
+
+show concat("luhn.check.7992739871=", sh_istr(sh_luhn_check_digit("7992739871")))
+show concat("luhn.valid.79927398713=", sh_istr(sh_luhn_valid("79927398713")))
+show concat("luhn.invalid.79927398710=", sh_istr(sh_luhn_valid("79927398710")))
+show concat("luhn.roundtrip=", sh_istr(sh_luhn_valid(concat("7992739871", sh_istr(sh_luhn_check_digit("7992739871"))))))
+show concat("luhn.nondigit=", sh_istr(sh_luhn_check_digit("12a")))
+show concat("luhn.empty=", sh_istr(sh_luhn_check_digit("")))
+show concat("luhn.valid.0=", sh_istr(sh_luhn_valid("0")))
+show concat("luhn.check.0=", sh_istr(sh_luhn_check_digit("0")))
+show "hash-done"

@@ -50,7 +50,7 @@ SXDIAG_BIN := tools/sxdiag
         pack-compiler test-http-get test-sayacrawl test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
         test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-native-sxdefs test-native-sxinfer test-native-sxruntime test-native-sxgc test-native-sxemit test-sxdiag test-native32 test-native-arm64 test-native-riscv64 test-stdlib-json-write test-sxmod test-trust-anchor \
         sxc-native test-sxc-native test-sxsuite test-sxisaexec test-sxmod-deep test-lsp-ide test-stdlib-extended \
-        ci test-ci-shape test-stdlib-csv
+        ci test-ci-shape test-stdlib-csv test-stdlib-next
 
 all: true-selfhost-min
 
@@ -6921,3 +6921,76 @@ test-stdlib-csv: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) stdlib/csv.sa selfhost/st
 
 native-test: test-stdlib-csv
 native-test: test-ci-shape
+
+# ---------------------------------------------------------------------------
+# test-stdlib-next: three new portable stdlib modules, one gate.
+#
+#   stdlib/url.sa       percent-encoding/decoding + packed query strings
+#   stdlib/datetime.sa  Gregorian calendar arithmetic (JDN, leap years,
+#                       weekday, add days, format/parse)
+#   stdlib/hash.sa      non-cryptographic checksums: rolling hashes, djb2,
+#                       sdbm, Adler-32 and Luhn check digits
+#
+# Each fixture prints label=value lines. selfhost/stdlib_{url,datetime,hash}.want
+# holds EXPECTED output computed independently with host Python standard
+# libraries (datetime/calendar, urllib.parse, zlib) and hand-written Luhn /
+# rolling-hash oracles -- not by running these Sayanox modules. seed-min, gen2
+# and native_aot must all reproduce those bytes exactly. Standalone use of each
+# module and coexistence of all four prefixes (csv_/surl_/dt_/sh_) are pinned
+# too, so a name collision or a stray dependency breaks the gate.
+# ---------------------------------------------------------------------------
+NEXT_MODULES := url datetime hash
+
+.PHONY: test-stdlib-next
+test-stdlib-next: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) \
+                  stdlib/url.sa stdlib/datetime.sa stdlib/hash.sa \
+                  selfhost/stdlib_url_test.sa selfhost/stdlib_url.want \
+                  selfhost/stdlib_datetime_test.sa selfhost/stdlib_datetime.want \
+                  selfhost/stdlib_hash_test.sa selfhost/stdlib_hash.want
+	@mkdir -p $(TESTS)/stdlib_next
+	@set -e; for m in $(NEXT_MODULES); do \
+	  ./$(SEED_MIN_BIN) selfhost/stdlib_$${m}_test.sa > $(TESTS)/stdlib_next/$${m}_seed.c; \
+	  $(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/stdlib_next/$${m}_seed $(TESTS)/stdlib_next/$${m}_seed.c; \
+	  ./$(GEN2) selfhost/stdlib_$${m}_test.sa $(TESTS)/stdlib_next/$${m}_gen2.c >/dev/null; \
+	  $(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/stdlib_next/$${m}_gen2 $(TESTS)/stdlib_next/$${m}_gen2.c; \
+	  ./$(NATIVE_BIN) selfhost/stdlib_$${m}_test.sa $(TESTS)/stdlib_next/$${m}_native; \
+	  ./$(TESTS)/stdlib_next/$${m}_seed > $(TESTS)/stdlib_next/$${m}_seed.out; \
+	  ./$(TESTS)/stdlib_next/$${m}_gen2 > $(TESTS)/stdlib_next/$${m}_gen2.out; \
+	  ./$(TESTS)/stdlib_next/$${m}_native > $(TESTS)/stdlib_next/$${m}_native.out; \
+	  cmp $(TESTS)/stdlib_next/$${m}_seed.out $(TESTS)/stdlib_next/$${m}_gen2.out || { echo "[FAIL] stdlib/$${m}.sa: gen2 differs from seed-min"; exit 1; }; \
+	  cmp $(TESTS)/stdlib_next/$${m}_seed.out $(TESTS)/stdlib_next/$${m}_native.out || { echo "[FAIL] stdlib/$${m}.sa: native_aot differs from seed-min"; exit 1; }; \
+	  cmp $(TESTS)/stdlib_next/$${m}_seed.out selfhost/stdlib_$${m}.want || { echo "[FAIL] stdlib/$${m}.sa: output differs from the independently computed .want oracle"; exit 1; }; \
+	  echo "[OK] stdlib/$${m}.sa: $$(wc -l < selfhost/stdlib_$${m}.want) oracle-pinned values, seed-min == gen2 == native_aot"; \
+	done
+	@# each module stands alone, and all four prefixes coexist in one program
+	@printf 'use "stdlib/url.sa"\nshow surl_encode("a b")\n' > $(TESTS)/stdlib_next/alone_url.sa
+	./$(SEED_MIN_BIN) $(TESTS)/stdlib_next/alone_url.sa > $(TESTS)/stdlib_next/alone_url.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stdlib_next/alone_url $(TESTS)/stdlib_next/alone_url.c
+	$(call assert-out,./$(TESTS)/stdlib_next/alone_url,a%20b)
+	./$(GEN2) $(TESTS)/stdlib_next/alone_url.sa $(TESTS)/stdlib_next/alone_url_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stdlib_next/alone_url_g2 $(TESTS)/stdlib_next/alone_url_g2.c
+	$(call assert-out,./$(TESTS)/stdlib_next/alone_url_g2,a%20b)
+	@printf 'use "stdlib/datetime.sa"\nshow dt_format(2024, 2, 29)\n' > $(TESTS)/stdlib_next/alone_dt.sa
+	./$(SEED_MIN_BIN) $(TESTS)/stdlib_next/alone_dt.sa > $(TESTS)/stdlib_next/alone_dt.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stdlib_next/alone_dt $(TESTS)/stdlib_next/alone_dt.c
+	$(call assert-out,./$(TESTS)/stdlib_next/alone_dt,2024-02-29)
+	./$(GEN2) $(TESTS)/stdlib_next/alone_dt.sa $(TESTS)/stdlib_next/alone_dt_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stdlib_next/alone_dt_g2 $(TESTS)/stdlib_next/alone_dt_g2.c
+	$(call assert-out,./$(TESTS)/stdlib_next/alone_dt_g2,2024-02-29)
+	@printf 'use "stdlib/hash.sa"\nshow sh_istr(sh_adler32("Wikipedia"))\n' > $(TESTS)/stdlib_next/alone_sh.sa
+	./$(SEED_MIN_BIN) $(TESTS)/stdlib_next/alone_sh.sa > $(TESTS)/stdlib_next/alone_sh.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stdlib_next/alone_sh $(TESTS)/stdlib_next/alone_sh.c
+	$(call assert-out,./$(TESTS)/stdlib_next/alone_sh,300286872)
+	./$(GEN2) $(TESTS)/stdlib_next/alone_sh.sa $(TESTS)/stdlib_next/alone_sh_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stdlib_next/alone_sh_g2 $(TESTS)/stdlib_next/alone_sh_g2.c
+	$(call assert-out,./$(TESTS)/stdlib_next/alone_sh_g2,300286872)
+	@printf 'use "stdlib/csv.sa"\nuse "stdlib/url.sa"\nuse "stdlib/datetime.sa"\nuse "stdlib/hash.sa"\nshow surl_encode("a b")\nshow dt_format(2024, 2, 29)\nshow sh_sum_bytes("ab")\nshow csv_count(csv_parse_row("x,y"))\n' > $(TESTS)/stdlib_next/all.sa
+	./$(SEED_MIN_BIN) $(TESTS)/stdlib_next/all.sa > $(TESTS)/stdlib_next/all.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stdlib_next/all $(TESTS)/stdlib_next/all.c
+	$(call assert-out,./$(TESTS)/stdlib_next/all,a%20b\n2024-02-29\n195\n2)
+	./$(GEN2) $(TESTS)/stdlib_next/all.sa $(TESTS)/stdlib_next/all_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/stdlib_next/all_g2 $(TESTS)/stdlib_next/all_g2.c
+	$(call assert-out,./$(TESTS)/stdlib_next/all_g2,a%20b\n2024-02-29\n195\n2)
+	@echo '[OK] stdlib-next: url (39) + datetime (43) + hash (24) = 106 oracle-pinned values, 3-backend parity, standalone modules and csv_/surl_/dt_/sh_ coexistence'
+
+native-test: test-stdlib-next

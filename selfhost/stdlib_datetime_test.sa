@@ -1,0 +1,65 @@
+// stdlib/datetime.sa fixture. Every line is a label=value pair; the full
+// stdout is pinned by selfhost/stdlib_datetime.want and must be byte-identical
+// on seed-min, gen2 and native_aot (make test-stdlib-next).
+use "stdlib/datetime.sa"
+
+show concat("leap.2000=", dt_istr(dt_is_leap(2000)))
+show concat("leap.1900=", dt_istr(dt_is_leap(1900)))
+show concat("leap.2004=", dt_istr(dt_is_leap(2004)))
+show concat("leap.2100=", dt_istr(dt_is_leap(2100)))
+show concat("dim.2000.02=", dt_istr(dt_days_in_month(2000, 2)))
+show concat("dim.1900.02=", dt_istr(dt_days_in_month(1900, 2)))
+show concat("dim.2024.04=", dt_istr(dt_days_in_month(2024, 4)))
+show concat("dim.2024.13=", dt_istr(dt_days_in_month(2024, 13)))
+show concat("valid.20240229=", dt_istr(dt_valid(2024, 2, 29)))
+show concat("valid.20230229=", dt_istr(dt_valid(2023, 2, 29)))
+show concat("valid.00010101=", dt_istr(dt_valid(1, 1, 1)))
+
+show concat("jdn.20000101=", dt_istr(dt_jdn(2000, 1, 1)))
+show concat("jdn.19700101=", dt_istr(dt_jdn(1970, 1, 1)))
+show concat("jdn.00010101=", dt_istr(dt_jdn(1, 1, 1)))
+show concat("jdn.20241026=", dt_istr(dt_jdn(2024, 10, 26)))
+show concat("jdn.bad=", dt_istr(dt_jdn(2023, 2, 29)))
+
+hold f = dt_from_jdn(2451545)
+show concat("from.2451545=", dt_format(f[0], f[1], f[2]))
+hold g = dt_from_jdn(1721426)
+show concat("from.1721426=", dt_format(g[0], g[1], g[2]))
+hold h = dt_from_jdn(2460677)
+show concat("from.2460677=", dt_format(h[0], h[1], h[2]))
+hold rt = dt_from_jdn(dt_jdn(2024, 10, 26))
+show concat("roundtrip=", dt_format(rt[0], rt[1], rt[2]))
+
+hold a = dt_add_days(2024, 2, 28, 1)
+show concat("add.leap=", dt_format(a[0], a[1], a[2]))
+hold b = dt_add_days(2023, 12, 31, 1)
+show concat("add.year=", dt_format(b[0], b[1], b[2]))
+hold c = dt_add_days(2000, 1, 1, -1)
+show concat("add.back=", dt_format(c[0], c[1], c[2]))
+hold z = dt_add_days(2023, 2, 29, 1)
+show concat("add.bad=", dt_format(z[0], z[1], z[2]))
+
+show concat("wd.20000101=", dt_istr(dt_weekday(2000, 1, 1)))
+show concat("wdn.20000101=", dt_weekday_name(2000, 1, 1))
+show concat("wdn.20241026=", dt_weekday_name(2024, 10, 26))
+show concat("wdn.bad=", dt_weekday_name(2023, 2, 29))
+show concat("monthname.1=", dt_month_name(1))
+show concat("monthname.12=", dt_month_name(12))
+show concat("monthname.13=", dt_month_name(13))
+
+show concat("doy.20241026=", dt_istr(dt_day_of_year(2024, 10, 26)))
+show concat("doy.20230101=", dt_istr(dt_day_of_year(2023, 1, 1)))
+show concat("doy.20231231=", dt_istr(dt_day_of_year(2023, 12, 31)))
+show concat("doy.bad=", dt_istr(dt_day_of_year(2023, 2, 29)))
+show concat("between=", dt_istr(dt_days_between(2024, 1, 1, 2025, 1, 1)))
+show concat("between.neg=", dt_istr(dt_days_between(2025, 1, 1, 2024, 1, 1)))
+
+show concat("format.1=", dt_format(1, 2, 3))
+show concat("format.bad=", dt_format(2023, 2, 29))
+hold p = dt_parse("2024-10-26")
+show concat("parse.ok=", dt_format(p[0], p[1], p[2]))
+hold bad = dt_parse("2023-02-29")
+show concat("parse.bad=", dt_format(bad[0], bad[1], bad[2]))
+hold shortdate = dt_parse("2024-1-1")
+show concat("parse.short=", dt_format(shortdate[0], shortdate[1], shortdate[2]))
+show "datetime-done"
