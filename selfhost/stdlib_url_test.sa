@@ -1,0 +1,53 @@
+// stdlib/url.sa fixture. Every line is a label=value pair; the full stdout is
+// pinned by selfhost/stdlib_url.want and must be byte-identical on seed-min,
+// gen2 and native_aot (make test-stdlib-next).
+use "stdlib/url.sa"
+
+// ---- percent-encoding ----
+show concat("enc.hello=", surl_encode("hello world"))
+show concat("enc.path=", surl_encode("a/b?c=d&e"))
+show concat("enc.unres=", surl_encode("-._~AZaz09"))
+show concat("enc.empty=", surl_encode(""))
+show concat("enc.pct=", surl_encode("100%"))
+show concat("enc.lf=", surl_encode(concat("a", chr(10))))
+show concat("enc.tilde=", surl_encode("~"))
+
+// ---- percent-decoding ----
+show concat("dec.hello=", surl_decode("hello%20world"))
+show concat("dec.mixed=", surl_decode("a%2Fb%3Fc%3Dd"))
+show concat("dec.lower=", surl_decode("%61%62"))
+show concat("dec.ok1=", surl_istr(surl_decode_ok("a%2Fb")))
+show concat("dec.ok2=", surl_istr(surl_decode_ok("a%2")))
+show concat("dec.ok3=", surl_istr(surl_decode_ok("a%GG")))
+show concat("dec.ok4=", surl_istr(surl_decode_ok("abc")))
+show concat("dec.badlen=", surl_istr(len(surl_decode("a%2"))))
+show concat("dec.nul=", surl_istr(len(surl_decode("a%00b"))))
+show concat("dec.lf=", surl_istr(len(surl_decode("a%0a"))))
+show concat("dec.roundtrip=", surl_decode(surl_encode("a b/c?")))
+
+// ---- packed query ----
+hold p = surl_query_parse("a=1&b=two%20words&c")
+show concat("q.count=", surl_istr(surl_query_count(p)))
+show concat("q.k0=", surl_query_key(p, 0))
+show concat("q.v0=", surl_query_value(p, 0))
+show concat("q.k1=", surl_query_key(p, 1))
+show concat("q.v1=", surl_query_value(p, 1))
+show concat("q.k2=", surl_query_key(p, 2))
+show concat("q.v2len=", surl_istr(len(surl_query_value(p, 2))))
+show concat("q.getb=", surl_query_get(p, "b", "none"))
+show concat("q.getz=", surl_query_get(p, "z", "none"))
+show concat("q.hasc=", surl_istr(surl_query_has(p, "c")))
+show concat("q.hasz=", surl_istr(surl_query_has(p, "z")))
+show concat("q.write=", surl_query_write(p))
+show concat("q.oob=", surl_istr(len(surl_query_key(p, 9))))
+
+hold e = surl_query_empty()
+show concat("q.emptycount=", surl_istr(surl_query_count(e)))
+show concat("q.emptywrite=", surl_query_write(e))
+hold p2 = surl_query_push(surl_query_push(e, "k", "v v"), "x", "y/z")
+show concat("q.pushcount=", surl_istr(surl_query_count(p2)))
+show concat("q.pushwrite=", surl_query_write(p2))
+show concat("q.badcount=", surl_istr(surl_query_count(surl_query_parse("bad=%ZZ"))))
+show concat("q.badwrite=", surl_query_write(surl_query_parse("bad=%ZZ")))
+show concat("q.eqvalue=", surl_query_value(surl_query_parse("a=1=2"), 0))
+show "url-done"

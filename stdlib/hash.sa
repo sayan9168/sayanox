@@ -1,0 +1,149 @@
+// stdlib/hash.sa -- byte sums, rolling hashes, Adler-32 and Luhn digits
+// (prefix sh_).
+//
+// Portable across seed-min, gen2 and native_aot (make test-stdlib-next).
+// Everything is arithmetic on doubles: no bit operators, no late builtins.
+// The 31-bit prime 2147483647 keeps every intermediate product below 2^53,
+// so a Sayanox number (a C double) holds each step exactly.
+//
+// These are NON-CRYPTOGRAPHIC checksums. stdlib/crypto.sa is the SHA-256 /
+// HMAC module; do not use sh_* where an adversary chooses the input.
+
+make sh_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold sign = ""
+  hold v = n
+  when v < 0 {
+    hold sign = "-"
+    hold v = 0 - v
+  }
+  hold out = ""
+  while v > 0 {
+    hold d = v % 10
+    hold out = concat(chr(48 + d), out)
+    hold v = (v - d) / 10
+  }
+  give concat(sign, out)
+}
+
+make sh_is_digit_byte(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give 1
+    }
+  }
+  give 0
+}
+
+make sh_is_digits(s: str) -> num {
+  when len(s) == 0 {
+    give 0
+  }
+  hold i = 0
+  while i < len(s) {
+    when sh_is_digit_byte(sx_index(s, i)) == 0 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+make sh_sum_bytes(s: str) -> num {
+  hold total = 0
+  hold i = 0
+  while i < len(s) {
+    hold total = total + sx_index(s, i)
+    hold i = i + 1
+  }
+  give total
+}
+
+// Generic rolling hash: h = (h * base + byte) mod 2147483647.
+make sh_poly(s: str, base: num, seed: num) -> num {
+  hold h = seed
+  hold i = 0
+  while i < len(s) {
+    hold h = (h * base + sx_index(s, i)) % 2147483647
+    hold i = i + 1
+  }
+  give h
+}
+
+make sh_djb2(s: str) -> num {
+  give sh_poly(s, 33, 5381)
+}
+
+make sh_poly131(s: str) -> num {
+  give sh_poly(s, 131, 7)
+}
+
+make sh_sdbm(s: str) -> num {
+  hold h = 0
+  hold i = 0
+  while i < len(s) {
+    hold h = (sx_index(s, i) + h * 65599) % 2147483647
+    hold i = i + 1
+  }
+  give h
+}
+
+// Adler-32 as specified by RFC 1950, returned as one number (B * 65536 + A).
+make sh_adler32(s: str) -> num {
+  hold a = 1
+  hold b = 0
+  hold i = 0
+  while i < len(s) {
+    hold a = (a + sx_index(s, i)) % 65521
+    hold b = (b + a) % 65521
+    hold i = i + 1
+  }
+  give b * 65536 + a
+}
+
+// Luhn sum. `start` is the position (counting from the right, 0-based) of the
+// rightmost byte of s; digits at odd positions are doubled. For a complete
+// number the rightmost digit is position 0; for a payload that will receive a
+// check digit its rightmost digit is position 1.
+make sh_luhn_sum(s: str, start: num) -> num {
+  hold total = 0
+  hold i = len(s) - 1
+  hold k = 0
+  while i >= 0 {
+    hold d = sx_index(s, i) - 48
+    when (start + k) % 2 == 1 {
+      hold d = d * 2
+      when d > 9 {
+        hold d = d - 9
+      }
+    }
+    hold total = total + d
+    hold k = k + 1
+    hold i = i - 1
+  }
+  give total
+}
+
+// Check digit for a numeric payload, or -1 when the payload is not all digits.
+make sh_luhn_check_digit(s: str) -> num {
+  when sh_is_digits(s) == 0 {
+    give 0 - 1
+  }
+  hold r = sh_luhn_sum(s, 1) % 10
+  when r == 0 {
+    give 0
+  }
+  give 10 - r
+}
+
+make sh_luhn_valid(s: str) -> num {
+  when sh_is_digits(s) == 0 {
+    give 0
+  }
+  when sh_luhn_sum(s, 0) % 10 == 0 {
+    give 1
+  }
+  give 0
+}

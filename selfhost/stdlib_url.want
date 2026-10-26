@@ -1,0 +1,39 @@
+enc.hello=hello%20world
+enc.path=a%2Fb%3Fc%3Dd%26e
+enc.unres=-._~AZaz09
+enc.empty=
+enc.pct=100%25
+enc.lf=a%0A
+enc.tilde=~
+dec.hello=hello world
+dec.mixed=a/b?c=d
+dec.lower=ab
+dec.ok1=1
+dec.ok2=0
+dec.ok3=0
+dec.ok4=1
+dec.badlen=0
+dec.nul=0
+dec.lf=2
+dec.roundtrip=a b/c?
+q.count=3
+q.k0=a
+q.v0=1
+q.k1=b
+q.v1=two words
+q.k2=c
+q.v2len=0
+q.getb=two words
+q.getz=none
+q.hasc=1
+q.hasz=0
+q.write=a=1&b=two%20words&c=
+q.oob=0
+q.emptycount=0
+q.emptywrite=
+q.pushcount=2
+q.pushwrite=k=v%20v&x=y%2Fz
+q.badcount=0
+q.badwrite=
+q.eqvalue=1=2
+url-done

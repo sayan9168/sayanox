@@ -1,0 +1,268 @@
+// stdlib/datetime.sa -- Gregorian calendar arithmetic (prefix dt_).
+//
+// Portable across seed-min, gen2 and native_aot (make test-stdlib-next).
+// Numbers only (doubles), lists of numbers for multi-value returns, and
+// strings for formatting. No bit operators, no late builtins.
+//
+// The Julian Day Number (JDN) is the integer at noon UTC on the given date.
+// dt_jdn is the forward conversion; dt_from_jdn inverts it by binary search
+// over years and a linear scan over months using dt_jdn itself, so the inverse
+// is correct by construction rather than by a second hand-written formula.
+// Weekdays are 0 = Monday .. 6 = Sunday (JDN mod 7).
+//
+// Range: years 1..9999, proleptic Gregorian calendar. Anything outside that
+// range, or an invalid date, returns a documented sentinel instead of a guess.
+
+make dt_idiv(a: num, b: num) -> num {
+  hold r = a % b
+  give (a - r) / b
+}
+
+make dt_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold sign = ""
+  hold v = n
+  when v < 0 {
+    hold sign = "-"
+    hold v = 0 - v
+  }
+  hold out = ""
+  while v > 0 {
+    hold d = v % 10
+    hold out = concat(chr(48 + d), out)
+    hold v = (v - d) / 10
+  }
+  give concat(sign, out)
+}
+
+make dt_pad2(n: num) -> str {
+  when n < 10 {
+    give concat("0", dt_istr(n))
+  }
+  give dt_istr(n)
+}
+
+make dt_pad4(n: num) -> str {
+  when n < 10 {
+    give concat("000", dt_istr(n))
+  }
+  when n < 100 {
+    give concat("00", dt_istr(n))
+  }
+  when n < 1000 {
+    give concat("0", dt_istr(n))
+  }
+  give dt_istr(n)
+}
+
+make dt_is_leap(y: num) -> num {
+  when y % 400 == 0 {
+    give 1
+  }
+  when y % 100 == 0 {
+    give 0
+  }
+  when y % 4 == 0 {
+    give 1
+  }
+  give 0
+}
+
+make dt_days_in_month(y: num, m: num) -> num {
+  when m == 2 {
+    when dt_is_leap(y) == 1 {
+      give 29
+    } otherwise {
+      give 28
+    }
+  }
+  when m == 4 {
+    give 30
+  }
+  when m == 6 {
+    give 30
+  }
+  when m == 9 {
+    give 30
+  }
+  when m == 11 {
+    give 30
+  }
+  when m >= 1 {
+    when m <= 12 {
+      give 31
+    }
+  }
+  give 0
+}
+
+make dt_valid(y: num, m: num, d: num) -> num {
+  when y < 1 {
+    give 0
+  }
+  when m < 1 {
+    give 0
+  }
+  when m > 12 {
+    give 0
+  }
+  when d < 1 {
+    give 0
+  }
+  when d > dt_days_in_month(y, m) {
+    give 0
+  }
+  give 1
+}
+
+make dt_jdn(y: num, m: num, d: num) -> num {
+  when dt_valid(y, m, d) == 0 {
+    give 0 - 1
+  }
+  hold a = dt_idiv(14 - m, 12)
+  hold y2 = y + 4800 - a
+  hold m2 = m + 12 * a - 3
+  give d + dt_idiv(153 * m2 + 2, 5) + 365 * y2 + dt_idiv(y2, 4) - dt_idiv(y2, 100) + dt_idiv(y2, 400) - 32045
+}
+
+make dt_year_from_jdn(j: num) -> num {
+  hold lo = 1
+  hold hi = 9999
+  while lo < hi {
+    hold mid = dt_idiv(lo + hi + 1, 2)
+    when dt_jdn(mid, 1, 1) <= j {
+      hold lo = mid
+    } otherwise {
+      hold hi = mid - 1
+    }
+  }
+  give lo
+}
+
+make dt_from_jdn(j: num) -> list {
+  when j < dt_jdn(1, 1, 1) {
+    give [0, 0, 0]
+  }
+  hold y = dt_year_from_jdn(j)
+  hold m = 1
+  hold run = 1
+  while run == 1 {
+    when m >= 12 {
+      hold run = 0
+    } otherwise {
+      when dt_jdn(y, m + 1, 1) <= j {
+        hold m = m + 1
+      } otherwise {
+        hold run = 0
+      }
+    }
+  }
+  hold d = j - dt_jdn(y, m, 1) + 1
+  give [y, m, d]
+}
+
+make dt_weekday(y: num, m: num, d: num) -> num {
+  when dt_valid(y, m, d) == 0 {
+    give 0 - 1
+  }
+  give dt_jdn(y, m, d) % 7
+}
+
+make dt_weekday_name(y: num, m: num, d: num) -> str {
+  when dt_valid(y, m, d) == 0 {
+    give ""
+  }
+  hold names = "MonTueWedThuFriSatSun"
+  hold i = dt_weekday(y, m, d) * 3
+  give concat(concat(chr(sx_index(names, i)), chr(sx_index(names, i + 1))), chr(sx_index(names, i + 2)))
+}
+
+make dt_month_name(m: num) -> str {
+  when m < 1 {
+    give ""
+  }
+  when m > 12 {
+    give ""
+  }
+  hold names = "JanFebMarAprMayJunJulAugSepOctNovDec"
+  hold i = (m - 1) * 3
+  give concat(concat(chr(sx_index(names, i)), chr(sx_index(names, i + 1))), chr(sx_index(names, i + 2)))
+}
+
+make dt_day_of_year(y: num, m: num, d: num) -> num {
+  when dt_valid(y, m, d) == 0 {
+    give 0 - 1
+  }
+  hold total = d
+  hold k = 1
+  while k < m {
+    hold total = total + dt_days_in_month(y, k)
+    hold k = k + 1
+  }
+  give total
+}
+
+make dt_days_between(y1: num, m1: num, d1: num, y2: num, m2: num, d2: num) -> num {
+  when dt_valid(y1, m1, d1) == 0 {
+    give 0
+  }
+  when dt_valid(y2, m2, d2) == 0 {
+    give 0
+  }
+  give dt_jdn(y2, m2, d2) - dt_jdn(y1, m1, d1)
+}
+
+make dt_add_days(y: num, m: num, d: num, n: num) -> list {
+  when dt_valid(y, m, d) == 0 {
+    give [0, 0, 0]
+  }
+  give dt_from_jdn(dt_jdn(y, m, d) + n)
+}
+
+make dt_format(y: num, m: num, d: num) -> str {
+  when dt_valid(y, m, d) == 0 {
+    give ""
+  }
+  give concat(concat(dt_pad4(y), "-"), concat(concat(dt_pad2(m), "-"), dt_pad2(d)))
+}
+
+make dt_parse_uint(s: str, a: num, b: num) -> num {
+  hold v = 0
+  hold i = a
+  while i < b {
+    hold c = sx_index(s, i)
+    when c < 48 {
+      give 0 - 1
+    }
+    when c > 57 {
+      give 0 - 1
+    }
+    hold v = v * 10 + (c - 48)
+    hold i = i + 1
+  }
+  give v
+}
+
+make dt_parse(s: str) -> list {
+  when len(s) != 10 {
+    give [0, 0, 0]
+  }
+  when sx_index(s, 4) != 45 {
+    give [0, 0, 0]
+  }
+  when sx_index(s, 7) != 45 {
+    give [0, 0, 0]
+  }
+  hold y = dt_parse_uint(s, 0, 4)
+  hold m = dt_parse_uint(s, 5, 7)
+  hold d = dt_parse_uint(s, 8, 10)
+  when y < 1 {
+    give [0, 0, 0]
+  }
+  when dt_valid(y, m, d) == 0 {
+    give [0, 0, 0]
+  }
+  give [y, m, d]
+}
