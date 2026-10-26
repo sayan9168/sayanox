@@ -1,6 +1,7 @@
 # Status
 
-Last updated: **2026-10-25** (C-free self-compiling x86-64 ELF64 compiler &
+Last updated: **2026-10-26** (CI/CD repaired and gated; CSV row codec added to
+the stdlib; C-free self-compiling x86-64 ELF64 compiler &
 toolchain `tools/sxc_native.sa` compiling itself, all 30+ tools including
 `sayanox_lsp`/`sxpkg`/`sxdiag`, and 20,138-line `compiler_min.sa` directly to
 static Linux ELF64 binaries with zero `cc` and zero libc; all non-anchor
@@ -12,6 +13,21 @@ and file-syscall probes; `tools/sxmod_lib.sa` transitive
 multi-directory `module` DAG resolver; `tools/sayanox_lsp.sa` module IDE,
 multiline `signatureHelp`, lexical block shadowing, and `prepareRename`; and
 5-backend `stdlib/{map,sort,path,cli,bytes}.sa`)
+
+**2026-10-26.** CI was red on `main` for three separate reasons across the
+last six runs: the `test-seed-gc` bootstrap dependency (fixed on the branch by
+`d529891`), the `test-sxmod` flat splice (fixed by the later module work), and
+`test-sxbuild` counting the CI artifact's own generated C files as non-anchor
+sources. The last one is the reason gate 4 still failed on run 40267460446:
+`gate-binaries/gen2.c` and `gate-binaries/gen1_min.c` were extracted **inside**
+the checkout. The hand-off now goes to `$RUNNER_TEMP/gate-binaries`, both
+restore steps pin `test ! -e gate-binaries`, `sxbuild.sa` skips transient
+hand-off directories, and `make test-ci-shape` statically checks all three
+workflow files. The nightly audit list was aligned with CI's, `make ci` runs
+the sequential chain locally, and `.github/workflows/release.yml` publishes a
+gated source release on `v*` tags. New feature: `stdlib/csv.sa`, a row codec
+with 44 hand-computed values on seed-min == gen2 == native (`make
+test-stdlib-csv`).
 
 The short version — every finished item next to the `make` gate that proves
 it, and every unfinished item next to the place the build refuses to claim it

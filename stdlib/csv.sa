@@ -1,0 +1,286 @@
+// stdlib/csv.sa -- RFC 4180-style CSV row codec for byte strings (prefix csv_).
+//
+// Portable across seed-min, gen2 and native_aot (make test-stdlib-csv).
+// The dialect refuses string-valued list elements, so a parsed row is a
+// PACKED string instead: each field is stored as its decimal byte length, a
+// colon, and the raw bytes. That is the same representation stdlib/cli.sa
+// uses for argv. csv_parse_row returns the packed form; csv_ok, csv_count,
+// csv_at, csv_push and csv_write_row are the operations on it.
+//
+// Quote characters are always chr(34), comma chr(44), CR chr(13) and LF
+// chr(10). Strings are byte strings, exactly like the rest of the stdlib:
+// a UTF-8 rune is several bytes and stays several bytes.
+//
+// Authoring rules honoured here (see docs/STDLIB.md): every helper is defined
+// before its first caller, every accumulation goes through a hold, and no
+// comment contains an unbalanced quote character.
+
+// ---- packed-row primitives ------------------------------------------------
+
+make csv_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold v = n
+  hold out = ""
+  while v > 0 {
+    hold d = v % 10
+    hold out = concat(chr(48 + d), out)
+    hold v = (v - d) / 10
+  }
+  give out
+}
+
+make csv_sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+make csv_empty() -> str {
+  give ""
+}
+
+make csv_push(packed: str, field: str) -> str {
+  give concat(packed, concat(csv_istr(len(field)), concat(":", field)))
+}
+
+// Returns a two-number list: the byte offset of the field and one past it.
+make csv_read_rec(packed: str, pos: num) -> list {
+  hold n = len(packed)
+  hold i = pos
+  hold ln = 0
+  hold rd = 1
+  while rd == 1 {
+    when i >= n {
+      hold rd = 0
+    } otherwise {
+      when sx_index(packed, i) == 58 {
+        hold rd = 0
+      } otherwise {
+        hold ln = ln * 10 + (sx_index(packed, i) - 48)
+        hold i = i + 1
+      }
+    }
+  }
+  hold res = []
+  hold res = push(res, i + 1)
+  hold res = push(res, i + 1 + ln)
+  give res
+}
+
+// An error from csv_parse_row is the single byte chr(33), which no valid
+// packed row can start with (a valid row starts with a decimal digit).
+make csv_ok(packed: str) -> num {
+  when len(packed) == 0 {
+    give 1
+  }
+  when sx_index(packed, 0) == 33 {
+    give 0
+  }
+  give 1
+}
+
+make csv_count(packed: str) -> num {
+  when csv_ok(packed) == 0 {
+    give 0
+  }
+  hold n = len(packed)
+  hold pos = 0
+  hold cnt = 0
+  while pos < n {
+    hold r = csv_read_rec(packed, pos)
+    hold pos = r[1]
+    hold cnt = cnt + 1
+  }
+  give cnt
+}
+
+make csv_at(packed: str, idx: num) -> str {
+  when csv_ok(packed) == 0 {
+    give ""
+  }
+  when idx >= csv_count(packed) {
+    give ""
+  }
+  hold n = len(packed)
+  hold pos = 0
+  hold cur = 0
+  while pos < n {
+    hold r = csv_read_rec(packed, pos)
+    when cur == idx {
+      give csv_sub(packed, r[0], r[1])
+    }
+    hold pos = r[1]
+    hold cur = cur + 1
+  }
+  give ""
+}
+
+// ---- writing --------------------------------------------------------------
+
+make csv_needs_quote(s: str) -> num {
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c == 44 {
+      give 1
+    }
+    when c == 34 {
+      give 1
+    }
+    when c == 13 {
+      give 1
+    }
+    when c == 10 {
+      give 1
+    }
+    hold i = i + 1
+  }
+  give 0
+}
+
+make csv_quote(s: str) -> str {
+  hold q = chr(34)
+  hold out = q
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      hold out = concat(out, concat(q, q))
+    } otherwise {
+      hold out = concat(out, chr(c))
+    }
+    hold i = i + 1
+  }
+  give concat(out, q)
+}
+
+make csv_write_row(packed: str) -> str {
+  when csv_ok(packed) == 0 {
+    give ""
+  }
+  hold out = ""
+  hold n = csv_count(packed)
+  hold k = 0
+  while k < n {
+    when k > 0 {
+      hold out = concat(out, ",")
+    }
+    hold f = csv_at(packed, k)
+    when csv_needs_quote(f) == 1 {
+      hold out = concat(out, csv_quote(f))
+    } otherwise {
+      hold out = concat(out, f)
+    }
+    hold k = k + 1
+  }
+  give out
+}
+
+// ---- reading --------------------------------------------------------------
+//
+// csv_parse_row accepts one record without a trailing newline. A quoted field
+// may contain commas, CR, LF and doubled quote characters. A quote inside an
+// unquoted field, an unclosed quoted field, or any byte other than a comma
+// after a closing quote makes the row invalid, and the result is the error
+// marker that csv_ok rejects. An empty line is one empty field; a trailing
+// comma also produces one final empty field.
+
+make csv_parse_row(line: str) -> str {
+  hold n = len(line)
+  hold i = 0
+  hold out = ""
+  hold bad = 0
+  when n == 0 {
+    hold out = csv_push(out, "")
+  }
+  while i < n {
+    hold field = ""
+    hold c = sx_index(line, i)
+    when c == 34 {
+      hold i = i + 1
+      hold closed = 0
+      hold run = 1
+      while run == 1 {
+        when i >= n {
+          hold run = 0
+        } otherwise {
+          hold d = sx_index(line, i)
+          when d == 34 {
+            when i + 1 < n {
+              hold e = sx_index(line, i + 1)
+              when e == 34 {
+                hold field = concat(field, chr(34))
+                hold i = i + 2
+              } otherwise {
+                hold closed = 1
+                hold run = 0
+                hold i = i + 1
+              }
+            } otherwise {
+              hold closed = 1
+              hold run = 0
+              hold i = i + 1
+            }
+          } otherwise {
+            hold field = concat(field, chr(d))
+            hold i = i + 1
+          }
+        }
+      }
+      when closed == 0 {
+        hold bad = 1
+      }
+      when i < n {
+        hold d = sx_index(line, i)
+        when d != 44 {
+          hold bad = 1
+        }
+      }
+      when bad == 1 {
+        hold i = n
+      }
+    } otherwise {
+      hold run = 1
+      while run == 1 {
+        when i >= n {
+          hold run = 0
+        } otherwise {
+          hold d = sx_index(line, i)
+          when d == 44 {
+            hold run = 0
+          } otherwise {
+            when d == 34 {
+              hold bad = 1
+            }
+            hold field = concat(field, chr(d))
+            hold i = i + 1
+          }
+        }
+      }
+    }
+    hold out = csv_push(out, field)
+    when i < n {
+      hold d = sx_index(line, i)
+      when d == 44 {
+        hold i = i + 1
+        when i == n {
+          hold out = csv_push(out, "")
+        }
+      }
+    }
+  }
+  when bad == 1 {
+    give "!"
+  }
+  give out
+}
+
+make csv_is_valid_row(line: str) -> num {
+  give csv_ok(csv_parse_row(line))
+}

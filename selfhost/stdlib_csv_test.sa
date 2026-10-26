@@ -1,0 +1,85 @@
+// stdlib/csv.sa -- one fixture, three backends, every value hand-computed.
+//
+// make test-stdlib-csv pins the ENTIRE stdout below with CSV_WANT and also
+// requires seed-min, gen2 and native_aot to print identical bytes. Quote
+// characters are built with chr(34) so no source line needs an escape.
+use "stdlib/csv.sa"
+
+hold q = chr(34)
+
+// ---- plain rows, empty fields, and the packed representation ----
+hold r1 = csv_parse_row("a,b,c")
+show csv_ok(r1)
+show csv_count(r1)
+show csv_at(r1, 0)
+show csv_at(r1, 1)
+show csv_at(r1, 2)
+show len(csv_at(r1, 3))
+
+hold r2 = csv_parse_row("a,,c")
+show csv_count(r2)
+show len(csv_at(r2, 1))
+show csv_at(r2, 2)
+
+hold r3 = csv_parse_row("")
+show csv_count(r3)
+show len(csv_at(r3, 0))
+
+hold r4 = csv_parse_row("a,")
+show csv_count(r4)
+show len(csv_at(r4, 1))
+
+hold r5 = csv_parse_row(",a")
+show csv_count(r5)
+show csv_at(r5, 1)
+
+// ---- quoted fields, embedded commas and doubled quotes ----
+hold quoted = concat(q, concat("a,b", q))
+hold r6 = csv_parse_row(concat(quoted, ",c"))
+show csv_ok(r6)
+show csv_count(r6)
+show csv_at(r6, 0)
+show csv_at(r6, 1)
+
+hold esc = concat(q, concat("a", concat(q, concat(q, concat("b", q)))))
+hold r7 = csv_parse_row(concat(esc, ",c"))
+show csv_ok(r7)
+show csv_at(r7, 0)
+show csv_at(r7, 1)
+
+// ---- three malformed rows are refused, not silently misread ----
+show csv_ok(csv_parse_row(concat("a", concat(q, "b,c"))))
+show csv_ok(csv_parse_row(concat(q, "a,b")))
+show csv_ok(csv_parse_row(concat(concat(q, "a"), concat(q, "x,c"))))
+
+// ---- quoting policy ----
+show csv_needs_quote("plain")
+show csv_needs_quote("a,b")
+show csv_needs_quote(concat("a", q))
+show csv_needs_quote(concat("a", chr(10)))
+
+// ---- writing, including a round trip through the parser ----
+show csv_write_row(r1)
+show csv_write_row(r2)
+show csv_write_row(r6)
+show csv_write_row(r7)
+show csv_write_row(r3)
+
+// ---- the error marker and the empty packed row ----
+show csv_ok("!")
+show csv_count("!")
+hold p = csv_push(csv_empty(), "x")
+show csv_count(p)
+show csv_at(p, 0)
+
+hold rt = csv_parse_row(csv_write_row(r7))
+show csv_count(rt)
+show csv_at(rt, 0)
+show csv_ok(rt)
+
+// ---- a multi-digit length prefix in the packed form ----
+hold p2 = csv_push(csv_empty(), "0123456789abcdef")
+show csv_count(p2)
+show csv_at(p2, 0)
+
+show "csv-done"

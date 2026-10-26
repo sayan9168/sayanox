@@ -1,0 +1,119 @@
+name: release
+
+# CD, not a second CI opinion. Pushing a v* tag (or dispatching this workflow
+# with an explicit tag) runs the SAME four hard gates as full-bootstrap.yml in
+# ONE job, ONE clean checkout, in order, with no artifact hand-off and no
+# cache, and only then publishes a source bundle plus the fixed-point evidence.
+#
+# A release is therefore a statement that can be checked: its gen3.c and gen4.c
+# were produced by this tree on a clean runner, byte-identically. Nothing is
+# built outside the four gates, and the same runtime shims used by CI apply, so
+# no Python/Node/Ruby/Perl/curl/wget client can sneak into the build.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or use (e.g. v0.3.30)"
+        required: true
+        default: "v0.3.30"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sayanox-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CC: cc
+  LC_ALL: C
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  release:
+    name: "gated release: four hard gates, then publish"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Clean checkout
+        uses: actions/checkout@v7
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Block non-bootstrap runtimes and real network clients
+        run: |
+          set -e
+          guard="$RUNNER_TEMP/bootstrap-no-runtimes"
+          mkdir -p "$guard"
+          for tool in python python3 node ruby perl curl wget; do
+            printf '%s\n' '#!/bin/sh' \
+              'printf "forbidden bootstrap invocation: %s\n" "$0" >> "$RUNNER_TEMP/bootstrap-forbidden-invocations"' \
+              'exit 99' > "$guard/$tool"
+            chmod +x "$guard/$tool"
+          done
+          printf '%s\n' "$guard" >> "$GITHUB_PATH"
+
+      - name: "make doctor (minimal toolchain is complete)"
+        run: make doctor
+
+      - name: "Verify the CI workflow shape (fast, static)"
+        run: make test-ci-shape
+
+      - name: "make true-selfhost (seed-min -> gen1_min -> gen2 + feature tests)"
+        run: make true-selfhost
+
+      - name: "make gen3 (gen3 == gen4 byte-identical fixed point)"
+        run: make gen3
+
+      - name: "make native-test (x86-64 backend - subset, use, functions, parity)"
+        run: make native-test
+
+      - name: Verify no blocked command was invoked
+        run: test ! -e "$RUNNER_TEMP/bootstrap-forbidden-invocations"
+
+      - name: Verify the fixed point and the tracked-artifact audit
+        run: |
+          set -e
+          cmp selfhost/gen3.c selfhost/gen4.c
+          test "$(git ls-files '*.c' '*.h')" = "selfhost/seed/sxc_seed_min.c"
+          echo "[OK] release tree: gen3.c == gen4.c and sxc_seed_min.c is the sole tracked C/H file"
+
+      - name: Package the release bundle
+        run: |
+          set -eux
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="sayanox-$RELEASE_TAG/" \
+            -o "dist/sayanox-$RELEASE_TAG-src.tar.gz" HEAD
+          sha256sum selfhost/gen2.c selfhost/gen3.c selfhost/gen4.c > dist/fixed-point.sha256
+          cp selfhost/gen3.c dist/gen3.c
+          cp selfhost/gen4.c dist/gen4.c
+          {
+            echo "# Sayanox $RELEASE_TAG"
+            echo
+            echo "Built from a clean checkout by .github/workflows/release.yml."
+            echo "Gates, in order: make doctor, make true-selfhost, make gen3, make native-test."
+            echo "The fixed point is byte-identical: gen3.c == gen4.c."
+            echo
+            echo '```'
+            cat dist/fixed-point.sha256
+            echo '```'
+          } > dist/BUILD_INFO.md
+          ls -l dist
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eux
+          # A pushed tag already exists, so require it. A manual dispatch may
+          # name a new tag, in which case gh creates it from this checkout.
+          verify=""
+          if [ "${{ github.event_name }}" = "push" ]; then verify="--verify-tag"; fi
+          gh release create "$RELEASE_TAG" dist/* \
+            --title "Sayanox $RELEASE_TAG" \
+            --notes-file dist/BUILD_INFO.md \
+            $verify

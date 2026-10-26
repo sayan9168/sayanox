@@ -49,7 +49,8 @@ SXDIAG_BIN := tools/sxdiag
         test-for-str test-seed-for-untyped test-seed-for-fields test-gen2-gaps test-registry-sums test-stdlib test-pkgs test-stage2-demos test-stage2 \
         pack-compiler test-http-get test-sayacrawl test-lsp-robust test-stdlib-growth test-sxpkg-polish test-stdlib-modules test-gen2-index-expr test-gen2-expr-lowering test-doc-claims test-native-strord test-native-cond test-native-lang test-native-locals test-give-index test-typed-sig test-list-expr test-list-paren test-native-strfn test-native-strgen test-native-listgen test-native-logicarg test-cond-string test-gen2-logic-builtin test-struct-logic test-logic-value test-native-generics test-sxpkg-online-local test-seed-gc test-generic-structs test-sxpkg-online-optin test-native-emit-split test-native-ir-log test-for-paren test-gen2-index-mod test-type-refusals test-native-ir-portable test-gen2-list-struct-fields test-language-deps test-exit-builtin test-path-builtins test-proc-builtins test-comment-quotes test-native-primitives \
         test-sxpkg-sayanox-logic test-read-bytes test-native-sxlink test-native-sxencode test-native-sxdefs test-native-sxinfer test-native-sxruntime test-native-sxgc test-native-sxemit test-sxdiag test-native32 test-native-arm64 test-native-riscv64 test-stdlib-json-write test-sxmod test-trust-anchor \
-        sxc-native test-sxc-native test-sxsuite test-sxisaexec test-sxmod-deep test-lsp-ide test-stdlib-extended
+        sxc-native test-sxc-native test-sxsuite test-sxisaexec test-sxmod-deep test-lsp-ide test-stdlib-extended \
+        ci test-ci-shape test-stdlib-csv
 
 all: true-selfhost-min
 
@@ -6819,3 +6820,104 @@ test-stdlib-extended: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) $(SXC_NATIVE_BIN) $(
 
 test-stdlib-modules: test-stdlib-extended
 native-test: test-stdlib-extended
+
+# ---------------------------------------------------------------------------
+# test-ci-shape: the CI/CD configuration is a gate, not a convention.
+#
+# Run 40267460446 is the reason this exists. Gates 3 and 4 downloaded the
+# bootstrap artifact into ./gate-binaries, which put gen2.c and gen1_min.c
+# (generated C) inside the checkout. `sxbuild inventory` walks the workspace,
+# counted them as non-anchor C sources, and `make test-sxbuild` failed on a
+# tree that was otherwise perfectly clean. The hand-off now lives in
+# RUNNER_TEMP. These checks fail fast in the audit job, before the 30-minute
+# gates start, if anyone moves it back or drops a workflow.
+# ---------------------------------------------------------------------------
+.PHONY: test-ci-shape
+test-ci-shape:
+	@for f in .github/workflows/ci.yml .github/workflows/full-bootstrap.yml .github/workflows/release.yml; do \
+	  test -s "$$f" || { echo "[FAIL] missing CI/CD workflow: $$f"; exit 1; }; \
+	done
+	@test "$$(grep -cF 'path: $${{ runner.temp }}/gate-binaries' .github/workflows/ci.yml)" = 2 \
+	  || { echo "[FAIL] ci.yml: both gate-binaries downloads must use runner.temp, outside the checkout"; exit 1; }
+	@test "$$(grep -cF 'RUNNER_TEMP/gate-binaries' .github/workflows/ci.yml)" = 6 \
+	  || { echo "[FAIL] ci.yml: both restore steps must find, copy from and remove RUNNER_TEMP/gate-binaries"; exit 1; }
+	@test "$$(grep -cF 'test ! -e gate-binaries' .github/workflows/ci.yml)" = 2 \
+	  || { echo "[FAIL] ci.yml: both restore steps must prove the checkout has no gate-binaries directory"; exit 1; }
+	@test "$$(grep -cF 'path: gate-binaries' .github/workflows/ci.yml)" = 1 \
+	  || { echo "[FAIL] ci.yml: only the upload step may use a workspace-relative gate-binaries path"; exit 1; }
+	@for f in .github/workflows/ci.yml .github/workflows/full-bootstrap.yml; do \
+	  grep -qF 'make test-ci-shape' "$$f" \
+	    || { echo "[FAIL] $$f does not run the CI shape gate"; exit 1; }; \
+	done
+	@for f in .github/workflows/full-bootstrap.yml .github/workflows/release.yml; do \
+	  for g in 'run: make doctor' 'run: make true-selfhost' 'run: make gen3' 'run: make native-test'; do \
+	    grep -qF "$$g" "$$f" \
+	      || { echo "[FAIL] $$f is missing the sequential gate $$g"; exit 1; }; \
+	  done; \
+	done
+	@grep -qF 'contents: write' .github/workflows/release.yml \
+	  || { echo "[FAIL] release.yml needs contents: write to publish a release"; exit 1; }
+	@grep -qF "github.event_name == 'pull_request'" .github/workflows/ci.yml \
+	  || { echo '[FAIL] ci.yml must not cancel a completed main-push verification'; exit 1; }
+	@echo '[OK] CI/CD shape: hand-off outside the checkout, both sequential workflows run all four gates, release publishing is permitted'
+
+# ---------------------------------------------------------------------------
+# ci: the nightly full-bootstrap chain, as one local command. It deliberately
+# shares the four hard gates with .github/workflows/full-bootstrap.yml instead
+# of reimplementing them, so a local green run means the same thing as a green
+# nightly run. `make test-ci-shape` (part of native-test) pins that sharing.
+# ---------------------------------------------------------------------------
+.PHONY: ci
+ci: doctor
+	@echo '=== CI: doctor -> true-selfhost -> gen3 -> native-test ==='
+	@$(MAKE) true-selfhost
+	@$(MAKE) gen3
+	@$(MAKE) native-test
+	@echo '=== CI-OK: DOCTOR-OK / TRUE-SELFHOST-MIN-OK / GEN3-OK / NATIVE-TEST-OK ==='
+
+# ---------------------------------------------------------------------------
+# stdlib/csv.sa: an RFC 4180-style CSV ROW codec for byte strings.
+#
+# Parsed rows are PACKED strings ("<len>:<bytes>" per field) because the
+# dialect refuses string-valued list elements. csv_parse_row validates and
+# parses one record (quoted fields, embedded commas/CR/LF, doubled quotes),
+# csv_write_row quotes and escapes, and csv_ok/csv_count/csv_at/csv_push/
+# csv_empty/csv_needs_quote/csv_quote/csv_is_valid_row are the public API.
+# The fixture's 44 lines are hand-computed; seed-min, gen2 and native_aot must
+# print byte-identical stdout, and the module must stand alone next to
+# stdlib/str_text.sa without a name collision.
+# ---------------------------------------------------------------------------
+CSV_WANT := 1\n3\na\nb\nc\n0\n3\n0\nc\n1\n0\n2\n0\n2\na\n1\n2\na,b\nc\n1\na"b\nc\n0\n0\n0\n0\n1\n1\n1\na,b,c\na,,c\n"a,b",c\n"a""b",c\n\n0\n0\n1\nx\n2\na"b\n1\n1\n0123456789abcdef\ncsv-done
+
+.PHONY: test-stdlib-csv
+test-stdlib-csv: $(SEED_MIN_BIN) $(GEN2) $(NATIVE_BIN) stdlib/csv.sa selfhost/stdlib_csv_test.sa
+	@mkdir -p $(TESTS)
+	./$(SEED_MIN_BIN) selfhost/stdlib_csv_test.sa > $(TESTS)/csv_seed.c
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/csv_seed $(TESTS)/csv_seed.c
+	./$(GEN2) selfhost/stdlib_csv_test.sa $(TESTS)/csv_gen2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o $(TESTS)/csv_gen2 $(TESTS)/csv_gen2.c
+	$(call assert-out,./$(TESTS)/csv_seed,$(CSV_WANT))
+	$(call assert-out,./$(TESTS)/csv_gen2,$(CSV_WANT))
+	./$(NATIVE_BIN) selfhost/stdlib_csv_test.sa $(TESTS)/csv_native
+	@./$(TESTS)/csv_native > $(TESTS)/csv_native.out
+	@./$(TESTS)/csv_seed > $(TESTS)/csv_seed.out
+	@cmp $(TESTS)/csv_seed.out $(TESTS)/csv_native.out \
+	  || { echo '[FAIL] native_aot stdlib/csv.sa output differs from seed-min'; exit 1; }
+	@grep -q '^csv-done$$' $(TESTS)/csv_seed.out \
+	  || { echo '[FAIL] the CSV fixture did not run to completion'; exit 1; }
+	@# the module stands alone, and its csv_ prefix coexists with t_ helpers
+	@printf 'use "stdlib/csv.sa"\nshow csv_count(csv_parse_row("x,y"))\nshow csv_is_valid_row("a,b")\nshow csv_is_valid_row(concat(chr(34), "a,b"))\n' > $(TESTS)/csv_alone.sa
+	./$(SEED_MIN_BIN) $(TESTS)/csv_alone.sa > $(TESTS)/csv_alone.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/csv_alone $(TESTS)/csv_alone.c
+	$(call assert-out,./$(TESTS)/csv_alone,2\n1\n0)
+	./$(GEN2) $(TESTS)/csv_alone.sa $(TESTS)/csv_alone_g2.c >/dev/null
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/csv_alone_g2 $(TESTS)/csv_alone_g2.c
+	$(call assert-out,./$(TESTS)/csv_alone_g2,2\n1\n0)
+	@printf 'use "stdlib/csv.sa"\nuse "stdlib/str_text.sa"\nshow csv_at(csv_parse_row("p,q"), 1)\nshow t_trim("  hi  ")\n' > $(TESTS)/csv_all.sa
+	./$(SEED_MIN_BIN) $(TESTS)/csv_all.sa > $(TESTS)/csv_all.c
+	$(CC) -O2 -Werror=implicit-function-declaration -o $(TESTS)/csv_all $(TESTS)/csv_all.c
+	$(call assert-out,./$(TESTS)/csv_all,q\nhi)
+	@echo '[OK] stdlib/csv.sa: 44 hand-computed values on seed-min == gen2 == native_aot; quoted fields, escaped quotes, 3 malformed-row refusals, quoting, round trip and module coexistence'
+
+native-test: test-stdlib-csv
+native-test: test-ci-shape

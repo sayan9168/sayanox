@@ -73,6 +73,9 @@ jobs:
       - name: "make doctor (minimal toolchain is complete)"
         run: make doctor
 
+      - name: "Verify the CI workflow shape (fast, static)"
+        run: make test-ci-shape
+
       - name: "make true-selfhost (seed-min -> gen1_min -> gen2 + feature tests)"
         run: make true-selfhost
 
@@ -99,7 +102,9 @@ jobs:
                    tools/sxinfer tools/sxruntime tools/sxgc tools/sxemit \
                    tools/sxbuild tools/sxstage2_parity tools/sxirexec tools/sxpkg_pubkey_test \
                    tools/sxc_native tools/sxc_native_test tools/sxsuite \
-                   tools/sxisaexec tools/sxisaexec_test tools/sxmod_deep_test tools/lsp_ide_test; do
+                   tools/sxisaexec tools/sxisaexec_test tools/sxmod_deep_test tools/lsp_ide_test \
+                   tools/sxpack tools/sxlsp_probe tools/sxpkg_transfer_test tools/sxnet_test \
+                   tools/sxarch_aot tools/sxarch_aot_test; do
             if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
               echo "::error::$f is tracked but must be generated"
               exit 1

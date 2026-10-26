@@ -10,6 +10,8 @@
 
 [![License: Sayanox](https://img.shields.io/badge/License-Sayanox%20v1.1-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/Language-Sayanox-blue)](https://github.com/sayan9168/sayanox)
+[![CI](https://github.com/sayan9168/sayanox/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sayan9168/sayanox/actions/workflows/ci.yml)
+[![full-bootstrap](https://github.com/sayan9168/sayanox/actions/workflows/full-bootstrap.yml/badge.svg?branch=main)](https://github.com/sayan9168/sayanox/actions/workflows/full-bootstrap.yml)
 [![Status](https://img.shields.io/badge/Status-Active%20Development-orange)](docs/STATUS.md)
 
 </div>
@@ -76,6 +78,31 @@ make native
 
 ---
 
+## CI/CD
+
+| Workflow | Trigger | What it proves |
+|---|---|---|
+| [CI](.github/workflows/ci.yml) | push / PR to `main`, manual | four hard gates, split into four jobs after one clean bootstrap; fast audit of tracked artifacts, doc claims and the CI shape |
+| [full-bootstrap](.github/workflows/full-bootstrap.yml) | nightly 03:30 UTC, manual | the same four gates in **one** job, in order, with no artifact hand-off and no cache |
+| [release](.github/workflows/release.yml) | `v*` tag, manual | the same four gates, then a source bundle and fixed-point digests published as a GitHub release |
+
+CI's `bootstrap` job builds `gen2` and hands six files to gates 3 and 4. They
+are downloaded into `$RUNNER_TEMP/gate-binaries`, **outside the checkout**.
+Two of those files (`gen2.c`, `gen1_min.c`) are generated C; extracting them
+into the workspace made `sxbuild inventory` report non-anchor C sources and
+failed gate 4 on an otherwise clean tree (run 40267460446). Both restore steps
+assert `test ! -e gate-binaries` and `make test-ci-shape` checks the workflow
+YAML itself, so the invariant cannot silently drift.
+
+Locally, `make ci` runs the nightly chain in one command:
+
+```sh
+make ci              # doctor -> true-selfhost -> gen3 -> native-test
+make test-ci-shape   # fast static check of all three workflow files
+```
+
+---
+
 ## Language Features (Current Milestone)
 
 The **pure-min** dialect currently supports:
@@ -114,7 +141,7 @@ See [docs/STATUS.md](docs/STATUS.md) for the full tested feature matrix and know
 
 ## Status
 
-Two tables, nothing between them. 147 `make test-*` targets back them up; the
+Two tables, nothing between them. 166 `make test-*` targets back them up; the
 four hard gates above have to stay green, with gen3 and gen4 byte-identical,
 for anything to move from the second table to the first.
 
@@ -145,6 +172,7 @@ for anything to move from the second table to the first.
 | 21 | **Transitive multi-directory `module` DAG binder (`tools/sxmod_lib.sa`)** — resolves multi-directory diamond/chain `module` graphs with cycle detection, topological ordering, singleton init, and cross-module `Mod_<mod>_<Struct>` types across `sxc_native`, `sxbuild`, and `sxmod --transitive` | `make test-sxmod-deep` |
 | 22 | **Module-aware LSP IDE features (`tools/sayanox_lsp.sa`)** — `module ... from "..."` hover/definition/signatureHelp, cross-module struct field resolution, multiline `signatureHelp`, lexical block-scoped shadowing, and `textDocument/prepareRename` | `make test-lsp-ide` |
 | 23 | **Extended 5-backend standard library** — `stdlib/map.sa`, `stdlib/sort.sa`, `stdlib/path.sa`, `stdlib/cli.sa`, and `stdlib/bytes.sa` (hex/base64/LE32/CRC-16) verified across 5 backends (`seed-min == gen2 == native_aot == sxc_native == sxirexec`) | `make test-stdlib-extended` |
+| 24 | **CSV row codec in the stdlib** — `stdlib/csv.sa` parses and writes RFC 4180-style rows (quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals) with a packed-string row type; 44 hand-computed values identical on seed-min, gen2 and native | `make test-stdlib-csv` |
 
 ### Remaining — and where the build refuses to claim it
 
@@ -160,7 +188,7 @@ for anything to move from the second table to the first.
 | 8 | **Full ARM64/RV64GC native compiler/runtime** | `tools/native32.sa` currently emits integer expressions, static string spans, `len`, byte indexing and bounded variable-to-variable `concat` for i386/AArch64/RV64IM, with six-way execution parity; `sxisaexec` also has emulator-only scalar-FP and file-syscall probes. General strings, lists, structs, user functions, FP code generation, file I/O runtime, GC, and broad RV64GC/AArch64 coverage remain open. | [docs/NATIVE32.md](docs/NATIVE32.md), [docs/NATIVE_IR.md](docs/NATIVE_IR.md) |
 | 9 | **Namespacing in the language** | `sxmod` is a source-to-source pass. The dialect still has shared declaration tables and no module identity, private visibility, nesting, search paths or import cache. Not planned in the bootstrap compiler | [docs/MODULES.md](docs/MODULES.md) |
 | 10 | **`.sa` on GitHub** | Not registered in github-linguist, so the language bar keeps showing C. The upstream contribution is prepared but not opened (Linguist wants demonstrated in-the-wild usage) | [docs/LINGUIST.md](docs/LINGUIST.md) |
-| 11 | **Platforms and registry growth** | x86-64 Linux (plus i386 integer subset and portable IR VM) is executed; the package registry is local; the stdlib is twelve modules | roadmap below |
+| 11 | **Platforms and registry growth** | x86-64 Linux (plus i386 integer subset and portable IR VM) is executed; the package registry is local; the stdlib is eighteen `.sa` modules, including the new `csv.sa` row codec | roadmap below |
 
 ### What is deliberately refused
 
@@ -285,6 +313,7 @@ has the short version.
 - [x] **Pure-Sayanox compiler test suite runner (`tools/sxsuite.sa`)** (`make test-sxsuite`)
 - [x] **User-mode ARM64 & RISC-V 64 ELF64 instruction emulator with 6-way parity (`tools/sxisaexec.sa`)** (`make test-sxisaexec`)
 - [x] **Transitive multi-directory `module` DAG resolution (`tools/sxmod_lib.sa`)** (`make test-sxmod-deep`)
+- [x] **CI/CD repaired and gated** — artifact hand-off outside the checkout, aligned nightly audit, fast shape gate, local `make ci`, workflow badges and a tag-triggered release pipeline (`make test-ci-shape`)
 - [x] **Extended 5-backend standard library (`map`, `sort`, `path`, `cli`, `bytes`)** (`make test-stdlib-extended`)
 - [x] **Port the remaining 14 tracked POSIX `.sh` scripts to Sayanox**: `sxsuite`, LSP protocol probes, package-transfer security harness, local HTTP/crawler tests, and `sxpack`; `git ls-files '*.sh'` is now empty (`make test-language-deps`, `make test-trust-anchor`)
 - [ ] **Next phase — all-in-Sayanox completion** ([plan](docs/ALL_SAYANOX_PHASE.md)):
