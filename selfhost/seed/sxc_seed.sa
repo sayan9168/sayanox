@@ -103,6 +103,16 @@ make find_sub(text: str, pat: str, start: num) -> num {
   hold pn = len(pat)
   hold i = start
   while i + pn <= n {
+    // Runtime patches apply to C code, never to compiler-emitted C string
+    // literals. Starting offsets are always immediately after a code match.
+    hold quote = sx_index(text, i)
+    when quote == 34 || quote == 39 {
+      i = i + 1
+      while i < n && sx_index(text, i) != quote {
+        when sx_index(text, i) == 92 { i = i + 2 } otherwise { i = i + 1 }
+      }
+      i = i + 1
+    } otherwise {
     hold ok = 1
     hold j = 0
     while j < pn && ok == 1 {
@@ -115,11 +125,19 @@ make find_sub(text: str, pat: str, start: num) -> num {
       give i
     }
     i = i + 1
+    }
   }
   give 0 - 1
 }
 
 make slice_str(s: str, a: num, b: num) -> str {
+  // Bound leaf concatenation: copying a compiler-sized suffix one byte at a
+  // time was quadratic. Balanced joining preserves exact bytes in O(n log n).
+  when b - a > 256 {
+    hold span = b - a
+    hold mid = a + (span - span % 2) / 2
+    give concat(slice_str(s, a, mid), slice_str(s, mid, b))
+  }
   hold out = ""
   hold i = a
   while i < b {
@@ -145,8 +163,32 @@ make replace_all_str(s: str, old_p: str, new_p: str) -> str {
   give out
 }
 
+// Only a generated preprocessor directive is a compiler refusal. A quoted
+// diagnostic string in compiler_min's own generated C is ordinary source.
 make has_c_error(text: str) -> num {
-  give find_sub(text, "#error ", 0)
+  hold line = 0
+  while line < len(text) {
+    hold pos = line
+    while pos < len(text) && (sx_index(text, pos) == 32 || sx_index(text, pos) == 9) { pos = pos + 1 }
+    when pos + 6 <= len(text) && string_eq(slice_str(text, pos, pos + 6), "#error") == 1 {
+      hold end = pos + 6
+      when end == len(text) || sx_index(text, end) == 32 || sx_index(text, end) == 9 || sx_index(text, end) == 10 { give pos }
+    }
+    while line < len(text) && sx_index(text, line) != 10 { line = line + 1 }
+    line = line + 1
+  }
+  give 0 - 1
+}
+make seed_temp_dir() -> str {
+  when path_kind("selfhost/seed_tests") == 0 { hold mk = make_dir("selfhost/seed_tests") }
+  hold i = 0
+  while i < 1024 {
+    hold path = concat("selfhost/seed_tests/_sxc_seed_tmp", numstr(i))
+    when make_dir(path) == 1 { give path }
+    i = i + 1
+  }
+  hold bad = fail_seed(1, "cannot reserve an exclusive compiler temporary directory")
+  give ""
 }
 
 make extract_line(text: str, from: num) -> str {
@@ -219,27 +261,31 @@ make main_seed() -> num {
   when path_kind(tmp_dir) != 2 {
     hold md = make_dir(tmp_dir)
   }
-  hold tmp_c = "selfhost/seed_tests/_sxc_seed_tmp.c"
-  when arg_count() == 3 {
-    tmp_c = arg(2)
+  hold tmp_c = ""
+  hold tmp_dir = ""
+  hold compile_status = 0
+  when arg_count() == 3 { tmp_c = arg(2) } otherwise {
+    tmp_dir = seed_temp_dir()
+    tmp_c = concat(tmp_dir, "/out.c")
   }
 
   when path_kind("selfhost/gen2") == 1 {
     hold cmd = concat("./selfhost/gen2 ", concat(sh_quote(in_sa), concat(" ", concat(sh_quote(tmp_c), " >/dev/null 2>&1"))))
-    when run_command(cmd) != 0 {
-      hold fg = fail_seed(1, concat("compile failed on ", in_sa))
-    }
+    compile_status = run_command(cmd)
   } otherwise {
     when path_kind("selfhost/seed/sxc_seed_min") != 1 {
       hold fm = fail_seed(1, "neither selfhost/gen2 nor selfhost/seed/sxc_seed_min is built")
     }
     hold cmd2 = concat("./selfhost/seed/sxc_seed_min ", concat(sh_quote(in_sa), concat(" > ", sh_quote(tmp_c))))
-    when run_command(cmd2) != 0 {
-      hold fs = fail_seed(1, concat("seed_min compile failed on ", in_sa))
-    }
+    compile_status = run_command(cmd2)
   }
 
   hold c_src = read_file(tmp_c)
+  when len(tmp_dir) > 0 {
+    hold rm_c = remove_path(tmp_c)
+    hold rm_dir = remove_path(tmp_dir)
+  }
+  when compile_status != 0 { hold failed = fail_seed(1, concat("compile failed on ", in_sa)) }
   when len(c_src) == 0 {
     hold fe = fail_seed(1, "empty generated C output")
   }
@@ -258,7 +304,6 @@ make main_seed() -> num {
       hold fw = fail_seed(1, concat("cannot write ", tmp_c))
     }
   } otherwise {
-    hold rm = run_command(concat("rm -f ", sh_quote(tmp_c)))
     hold wo = write_out(c_src)
   }
   give 0

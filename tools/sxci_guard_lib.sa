@@ -1,0 +1,110 @@
+// CI runtime/network/build-tool guard. Native static ELF shims, emitted in
+// Sayanox before bootstrap; no shell scripts or compiler are needed to arm it.
+make cg_put(bytes: list, at: num, value: num, count: num) -> num {
+  hold i = 0
+  while i < count {
+    hold low = value % 256
+    bytes[at + i] = low
+    value = (value - low) / 256
+    i = i + 1
+  }
+  give 0
+}
+make cg_text(bytes: list, text: str) -> num {
+  hold i = 0
+  while i < len(text) {
+    hold byte = sx_index(text, i)
+    when byte == 0 { hold e = fail(1, "NUL in guard text") }
+    bytes = push(bytes, byte)
+    i = i + 1
+  }
+  bytes = push(bytes, 0)
+  give 0
+}
+make cg_emit(path: str, marker: str, tool: str) -> num {
+  hold image = []
+  hold i = 0
+  while i < 128 { image = push(image, 0)
+    i = i + 1 }
+  // open(marker, O_WRONLY|O_CREAT|O_APPEND,0644), write(message), exit(99).
+  hold code = [184,2,0,0,0,72,191,0,0,0,0,0,0,0,0,190,65,4,0,0,186,164,1,0,0,15,5,72,137,199,184,1,0,0,0,72,190,0,0,0,0,0,0,0,0,186,0,0,0,0,15,5,184,60,0,0,0,191,99,0,0,0,15,5]
+  i = 0
+  while i < len(code) { image = push(image, code[i])
+    i = i + 1 }
+  hold marker_at = len(image)
+  hold marker_text = cg_text(image, marker)
+  hold message_at = len(image)
+  hold message = concat(concat("forbidden bootstrap invocation: ", tool), "\n")
+  hold message_text = cg_text(image, message)
+  hold base = 4194304
+  hold a = cg_put(image, 128 + 7, base + marker_at, 8)
+  hold b = cg_put(image, 128 + 37, base + message_at, 8)
+  hold c = cg_put(image, 128 + 46, len(message), 4)
+  image[0] = 127
+  image[1] = 69
+  image[2] = 76
+  image[3] = 70
+  image[4] = 2
+  image[5] = 1
+  image[6] = 1
+  hold h0 = cg_put(image, 16, 2, 2)
+  hold h1 = cg_put(image, 18, 62, 2)
+  hold h2 = cg_put(image, 20, 1, 4)
+  hold h3 = cg_put(image, 24, base + 128, 8)
+  hold h4 = cg_put(image, 32, 64, 8)
+  hold h5 = cg_put(image, 52, 64, 2)
+  hold h6 = cg_put(image, 54, 56, 2)
+  hold h7 = cg_put(image, 56, 1, 2)
+  hold ph0 = cg_put(image, 64, 1, 4)
+  hold ph1 = cg_put(image, 68, 5, 4)
+  hold ph2 = cg_put(image, 80, base, 8)
+  hold ph3 = cg_put(image, 88, base, 8)
+  hold ph4 = cg_put(image, 96, len(image), 8)
+  hold ph5 = cg_put(image, 104, len(image), 8)
+  hold ph6 = cg_put(image, 112, 4096, 8)
+  when write_bytes(path, image) != 1 { hold e = fail(1, "cannot write CI guard executable") }
+  give target_run(concat("chmod 0755 ", sh_quote(path)), "publish native CI guard")
+}
+make cg_root() -> str {
+  hold temp = getenv("RUNNER_TEMP")
+  when len(temp) == 0 || path_kind(temp) != 2 { hold e = fail(2, "CI guard requires an existing RUNNER_TEMP directory") }
+  give concat(temp, "/sayanox-ci-guard")
+}
+make cmd_ci_guard() -> num {
+  hold root = cg_root()
+  hold bin = concat(root, "/bin")
+  hold dir = ensure_dir_p(bin)
+  when dir != 1 { hold e = fail(1, "cannot create CI guard directory") }
+  hold marker = concat(root, "/invoked")
+  when path_kind(marker) != 0 { hold e = fail(1, "previous forbidden invocation recorded; refusing to erase CI evidence") }
+  hold probe = concat(root, "/write-probe")
+  when write_file(probe, "probe") != 1 { hold e = fail(1, "CI guard evidence directory is not writable") }
+  hold rm = remove_path(probe)
+  hold names = "make\npython\npython3\nnode\nruby\nperl\ncurl\nwget\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold tool = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold emitted = cg_emit(concat(concat(bin, "/"), tool), marker, tool)
+  }
+  hold path_file = getenv("GITHUB_PATH")
+  when len(path_file) == 0 { hold e = fail(2, "CI guard requires GITHUB_PATH for the next workflow step") }
+  hold old = read_file(path_file)
+  when len(old) > 0 && sx_index(old, len(old) - 1) != 10 { old = concat(old, "\n") }
+  when write_file(path_file, concat(old, concat(bin, "\n"))) != 1 { hold e = fail(1, "cannot register CI guard PATH") }
+  show "[OK] Sayanox CI guards armed for subsequent workflow steps"
+  give 0
+}
+make cmd_ci_guard_check() -> num {
+  hold root = cg_root()
+  when path_kind(concat(root, "/bin/make")) != 1 { hold e = fail(1, "CI guards were never armed") }
+  hold marker = concat(root, "/invoked")
+  when path_kind(marker) != 0 {
+    show read_file(marker)
+    hold e = fail(1, "forbidden bootstrap invocation, including any swallowed child failure")
+  }
+  show "[OK] no forbidden bootstrap runtime/network/build-tool invocation"
+  give 0
+}

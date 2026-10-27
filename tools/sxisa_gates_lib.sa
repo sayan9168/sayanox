@@ -1,0 +1,209 @@
+// Cross-ISA containers and namespace binder contracts, without host byte tools.
+use "tools/sxisa_targets_lib.sa"
+make xc_command(source: str, output: str, arch: str) -> str {
+  give concat("./tools/native32 ", concat(gl_sh_quote(source), concat(" ", concat(gl_sh_quote(output), concat(" ", arch)))))
+}
+make xc_int(file: str, offset: num, width: num, want: num) -> num {
+  hold bytes = []
+  hold n = read_bytes(file, bytes)
+  when offset < 0 || n < offset + width { give gl_fail("ELF integer outside file") }
+  give gl_assert_eq_num(xb_integer(bytes, offset, width), want, concat("ELF integer: ", file))
+}
+make xc_hex(file: str, offset: num, want: str) -> num {
+  hold bytes = []
+  hold n = read_bytes(file, bytes)
+  when n < offset + len(want) / 2 { give gl_fail("ELF byte pin outside file") }
+  hold i = 0
+  while i < len(want) {
+    hold byte = xi_hex(gl_slice(want, i, i + 2))
+    hold equal = gl_assert_eq_num(bytes[offset + i / 2], byte, "reviewed ELF instruction/header byte")
+    i = i + 2
+  }
+  give 0
+}
+make xc_data(a: str, b: str) -> num {
+  hold aa = []
+  hold bb = []
+  hold na = read_bytes(a, aa)
+  hold nb = read_bytes(b, bb)
+  when na <= 4096 || na != nb { give gl_fail("cross-ISA data segment sizes disagree") }
+  hold i = 4096
+  while i < na {
+    when aa[i] != bb[i] { give gl_fail("cross-ISA data bytes disagree") }
+    i = i + 1
+  }
+  give gl_assert_eq_num(gl_files_equal(a, b), 0, "encoders must emit distinct text")
+}
+make xc_refusals(source_dir: str, d: str, arch: str, module: num, expected: num) -> num {
+  hold names = read_dir(source_dir)
+  hold total = 0
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    when len(name) >= 3 && string_eq(gl_slice(name, len(name) - 3, len(name)), ".sa") == 1 {
+      hold cmd = xc_command(kp_join(source_dir, name), kp_join(d, "bad.elf"), arch)
+      hold needle = "native32: "
+      when module == 1 { cmd = concat("./tools/sxmod ", concat(gl_sh_quote(kp_join(source_dir, name)), concat(" ", gl_sh_quote(kp_join(d, "bad.sa")))))
+        needle = "sxmod: " }
+      hold refused = xb_fail_command(cmd, kp_join(d, "bad.err"), needle)
+      total = total + 1
+    }
+  }
+  give gl_assert_eq_num(total, expected, "complete backend refusal matrix")
+}
+make xc_header(file: str, arch: str) -> num {
+  when string_eq(arch, "i386") == 1 {
+    hold magic = xc_hex(file, 0, "7f454c4601010100")
+    hold type = xc_int(file, 16, 2, 2)
+    hold machine = xc_int(file, 18, 2, 3)
+    hold ph = xc_int(file, 44, 2, 2)
+    give xc_int(file, 24, 4, 134512842)
+  }
+  hold magic = xc_hex(file, 0, "7f454c4602010100")
+  hold type = xc_int(file, 16, 2, 2)
+  hold machine = 183
+  hold entry = 4194612
+  hold first = "e403002a"
+  hold exit_bytes = "000080d2a80b80d2010000d4"
+  when string_eq(arch, "riscv64") == 1 { machine = 243
+    entry = 4194600
+    first = "9b020500"
+    exit_bytes = "130500009308d00573000000" }
+  hold em = xc_int(file, 18, 2, machine)
+  hold entsize = xc_int(file, 54, 2, 56)
+  hold ph = xc_int(file, 56, 2, 2)
+  hold ep = xc_int(file, 24, 8, entry)
+  hold text = xc_int(file, 80, 8, 4194304)
+  hold data = xc_int(file, 136, 8, 4198400)
+  hold instruction = xc_hex(file, 176, first)
+  hold bytes = []
+  hold size = read_bytes(file, bytes)
+  hold end = xb_integer(bytes, 96, 8)
+  when end < 188 || end > size { give gl_fail("invalid text segment size") }
+  give xc_hex(file, end - 12, exit_bytes)
+}
+make xc_containers(d: str, arch: str) -> num {
+  hold can_run = 1
+  when string_eq(arch, "i386") == 1 {
+    hold canary_source = kp_write(d, "canary.sa", "show 1\n")
+    hold canary = pg_command(xc_command(kp_join(d, "canary.sa"), kp_join(d, "canary"), arch), "i386 execution canary")
+    hold executable = xb_publish(kp_join(d, "canary"))
+    hold status = gl_run_merged(gl_sh_quote(kp_join(d, "canary")), kp_join(d, "canary.out"))
+    when status != 0 || string_eq(read_file(kp_join(d, "canary.out")), "1\n") == 0 {
+      can_run = 0
+      show "[SKIP] kernel cannot execute i386; deterministic containers and all byte assertions still run"
+    }
+  }
+  hold names = "expr\nflow\ntext\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold source = kp_join("selfhost/native32_tests", concat(name, ".sa"))
+    hold file = kp_join(d, concat(name, ".elf"))
+    hold compile = pg_command(xc_command(source, file, arch), "native32 ISA encode")
+    compile = pg_command(xc_command(source, kp_join(d, "again.elf"), arch), "deterministic ISA encode")
+    hold equal = gl_assert_files_eq(file, kp_join(d, "again.elf"), "repeatable ISA image")
+    hold header = xc_header(file, arch)
+    when string_eq(arch, "i386") == 0 {
+      hold golden = kp_join("selfhost/native32_tests/golden", concat(name, concat(".", concat(arch, ".elf"))))
+      equal = gl_assert_files_eq(file, golden, "reviewed machine-code golden")
+      compile = pg_command(xc_command(source, kp_join(d, "i386.elf"), "i386"), "alternate encoder")
+      hold data = xc_data(file, kp_join(d, "i386.elf"))
+      when string_eq(arch, "riscv64") == 1 {
+        compile = pg_command(xc_command(source, kp_join(d, "arm64.elf"), "arm64"), "third encoder")
+        data = xc_data(file, kp_join(d, "arm64.elf"))
+      }
+    } otherwise {
+      hold expected = 4140
+      when string_eq(name, "flow") == 1 { expected = 4172 }
+      when string_eq(name, "text") == 1 { expected = 4185 }
+      hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
+      hold cdir = kp_join(d, name)
+      hold oracle = xq_parity_unknown(source, cdir)
+      hold nat_magic = xc_hex(kp_join(cdir, "native"), 0, "7f454c4602010100")
+      hold nat_machine = xc_int(kp_join(cdir, "native"), 18, 2, 62)
+      when can_run == 1 {
+        hold executable = xb_publish(file)
+        hold run = pg_capture(gl_sh_quote(file), kp_join(d, "i386.out"))
+        equal = gl_assert_files_eq(kp_join(cdir, "seed.out"), kp_join(d, "i386.out"), "four-backend/two-ISA parity")
+      }
+    }
+  }
+  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 15)
+  when string_eq(arch, "arm64") == 1 { hold unknown = xb_fail_command(xc_command("selfhost/native32_tests/expr.sa", kp_join(d, "bad.elf"), "sparc"), kp_join(d, "unknown.err"), "native32: unknown target") }
+  when string_eq(arch, "i386") == 1 {
+    names = "division\nstrvalue\nnulstring\nfunction\nlist\nconcat_call\nconcat_expression\n"
+    pos = 0
+    while pos < len(names) {
+      hold start = pos
+      while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+      hold name = gl_slice(names, start, pos)
+      pos = pos + 1
+      hold source = kp_join("selfhost/native32_tests/refuse", concat(name, ".sa"))
+      hold emitted = pg_emit(0, source, kp_join(d, "legal.c"), 0)
+      hold built = gl_compile_c(kp_join(d, "legal.c"), kp_join(d, "legal"), "-Werror=implicit-function-declaration")
+      hold run = pg_capture(gl_sh_quote(kp_join(d, "legal")), kp_join(d, "legal.out"))
+      when string_eq(name, "division") == 1 { hold value = kp_eq(d, "legal.out", "3.5\n") }
+    }
+    names = "heap_exhaust\nstring_index_oob\n"
+    pos = 0
+    while pos < len(names) {
+      hold start = pos
+      while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+      hold name = gl_slice(names, start, pos)
+      pos = pos + 1
+      hold source = kp_join("selfhost/native32_tests", concat(name, ".sa"))
+      hold built = pg_command(xc_command(source, kp_join(d, "fault.elf"), arch), "bounded i386 fault fixture")
+      when can_run == 1 {
+        hold executable = xb_publish(kp_join(d, "fault.elf"))
+        hold status = gl_run_merged(gl_sh_quote(kp_join(d, "fault.elf")), kp_join(d, "fault.out"))
+        hold refused = gl_assert_eq_num(status, 1, "bounded i386 fault status")
+        hold empty = kp_eq(d, "fault.out", "")
+      }
+    }
+  }
+  give 0
+}
+make xc_module(d: str) -> num {
+  hold flat = "selfhost/sxmod_tests/collide_flat.sa"
+  hold seed = xl_reject(0, flat, kp_join(d, "collision.seed"), "duplicate function name")
+  hold gen2 = pg_emit(1, flat, kp_join(d, "collision.gen2.c"), 1)
+  hold cc = concat("LC_ALL=C cc -O2 -o ", concat(gl_sh_quote(kp_join(d, "collision.gen2")), concat(" ", gl_sh_quote(kp_join(d, "collision.gen2.c")))))
+  hold rejected = xb_fail_command(cc, kp_join(d, "collision.cc.err"), "'add'")
+  hold native = xl_reject(2, flat, kp_join(d, "collision.native"), "declared twice")
+  hold command = concat("./tools/sxmod selfhost/sxmod_tests/app.sa ", gl_sh_quote(kp_join(d, "app.sa")))
+  hold bind = pg_command(command, "namespaced module composition")
+  command = concat("./tools/sxmod selfhost/sxmod_tests/app.sa ", gl_sh_quote(kp_join(d, "app2.sa")))
+  bind = pg_command(command, "deterministic module composition")
+  hold deterministic = xb_equal(d, "app.sa", "app2.sa")
+  hold parity = xr_three(kp_join(d, "app.sa"), kp_join(d, "parity"), gl_strip_trailing_nl(read_file("selfhost/sxmod_tests/app.want")))
+  hold pins = "make math__add(\nmake text__add(\nshow math__scaled(4, math__scale)\nhold math__base = math__add(40, 2)\nhold once = math__scaled(v, k)\n\"add is a word in this string\"\nthe word add appears in this comment\nshow p.x\nhold mark = \"!\"\n"
+  hold pinned = xf_pin(kp_join(d, "app.sa"), pins)
+  hold no_locals = pg_not_contains(kp_join(d, "app.sa"), "text__mark")
+  no_locals = pg_not_contains(kp_join(d, "app.sa"), "math__once")
+  no_locals = pg_not_contains(kp_join(d, "app.sa"), "math__v")
+  no_locals = pg_not_contains(kp_join(d, "app.sa"), "p__x")
+  command = concat("./tools/sxmod selfhost/sxmod_tests/unqualified.sa ", gl_sh_quote(kp_join(d, "unqualified.sa")))
+  bind = pg_command(command, "unqualified name stays unqualified")
+  hold unqualified = xl_reject(0, kp_join(d, "unqualified.sa"), kp_join(d, "unqualified"), "unknown function")
+  give xc_refusals("selfhost/sxmod_tests/refuse", d, "", 1, 16)
+}
+make xc_dispatch(name: str) -> num {
+  hold d = concat("selfhost/seed_tests/sxgates/", name)
+  hold clean = gl_clean_dir(d)
+  hold result = 0
+  when string_eq(name, "test-sxmod") == 1 { result = xc_module(d) } otherwise {
+    hold arch = "i386"
+    when string_eq(name, "test-native-arm64") == 1 { arch = "arm64" }
+    when string_eq(name, "test-native-riscv64") == 1 { arch = "riscv64" }
+    result = xc_containers(d, arch)
+  }
+  show concat("[OK] Sayanox ISA/module acceptance: ", name)
+  give result
+}

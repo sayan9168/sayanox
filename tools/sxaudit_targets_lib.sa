@@ -1,0 +1,1 @@
+make xa_known(name: str) -> num { give string_eq(name, "test-doc-claims") || string_eq(name, "test-trust-anchor") }

@@ -1,0 +1,29 @@
+// Target names/dependency declarations; no recipes.
+make xr_name(index: num) -> str {
+  when index == 0 { give "test-seed-for-range" }
+  when index == 1 { give "test-seed-for-calls" }
+  when index == 2 { give "test-seed-for-fields" }
+  when index == 3 { give "test-seed-generics" }
+  when index == 4 { give "test-generic-structs-nested" }
+  when index == 5 { give "test-struct-field-struct" }
+  when index == 6 { give "test-type-refusals" }
+  when index == 7 { give "test-gen2-index-expr" }
+  when index == 8 { give "test-exit-builtin" }
+  when index == 9 { give "test-path-builtins" }
+  when index == 10 { give "test-native-primitives" }
+  when index == 11 { give "test-read-bytes" }
+  when index == 12 { give "test-cond-string" }
+  when index == 13 { give "test-native-io" }
+  when index == 14 { give "test-seed-limits" }
+  when index == 15 { give "test-stdlib-crypto" }
+  give ""
+}
+make xr_count() -> num { give 16 }
+make xr_known(name: str) -> num {
+  hold i = 0
+  while i < xr_count() {
+    when string_eq(name, xr_name(i)) == 1 { give 1 }
+    i = i + 1
+  }
+  give 0
+}

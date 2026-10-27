@@ -12,346 +12,52 @@ permissions:
 
 concurrency:
   group: sayanox-ci-${{ github.workflow }}-${{ github.ref }}
-  # A second merge to main must not cancel the first one's verification:
-  # run 40056484784 was cancelled that way, leaving a main commit with no
-  # green check at all. PR updates still cancel their own superseded runs.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# The whole bootstrap is Makefile-only and offline: a clean checkout plus the
-# core toolchain plus POSIX utilities documented in DEPENDENCY.md.
-# No Python/Node/Ruby/Perl runtime or real network client may run inside the
-# four gates; guard wrappers also record errors swallowed by a test recipe.
-#
-# Shape (2026-10-20). The four gates used to run sequentially inside ONE job
-# with `timeout-minutes: 25`. They needed ~25m15s, so the runner killed the job
-# in the middle of `make native-test` and CI reported "The job has exceeded the
-# maximum execution time" instead of a result. The gates are independent once
-# gen2 exists, so they now run as separate jobs:
-#
-#   bootstrap   make doctor + make true-selfhost   builds seed-min, gen1_min, gen2
-#   fixed-point make gen3                          needs bootstrap's gen2      } in
-#   native      make native-test                   needs bootstrap's seed-min  } parallel
-#   audit       tracked-artifact + all-sayanox inventory checks (builds nothing)
-#
-# Every job still runs `make` itself against a clean checkout, still blocks the
-# forbidden runtimes, and still fails if any of them is invoked. The only thing
-# passed between jobs is a binary that the previous job built with `make` from
-# tracked sources, so no gate is skipped and nothing is fetched from outside the
-# repository. `.github/workflows/full-bootstrap.yml` re-runs the whole chain in
-# one job, in order, with no hand-off, so the sequential claim stays verified.
-#
-# The hand-off directory lives in RUNNER_TEMP, never in the checkout. Two
-# generated C files (gen2.c and gen1_min.c) travel with the binaries because
-# gen3's source-feature test greps them; if those files are extracted into the
-# workspace, `sxbuild inventory` counts them as non-anchor C sources and gate 4
-# fails on a clean tree (run 40267460446). Both restore steps pin `test ! -e
-# gate-binaries`, and `make test-ci-shape` checks the YAML itself.
 env:
-  # One place to change the runner's C compiler choice; `make` picks it up.
   CC: cc
   LC_ALL: C
 
 jobs:
-  bootstrap:
-    name: "gate 1+2: doctor, true-selfhost (seed-min -> gen1_min -> gen2)"
+  migrated-gates:
+    name: Sayanox entry and migrated acceptance gates
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
-      - name: Clean checkout
-        uses: actions/checkout@v7
-        with:
-          clean: true
-          fetch-depth: 1
+      - uses: actions/checkout@v7
+      - name: Verify reviewed entry and source checksums before execution
+        run: sha256sum -c bootstrap/sx.sha256
+      - name: Arm native Sayanox runtime and network guards before bootstrap
+        run: ./sx ci-guard
+      - name: Rebuild and compare the native Sayanox entry
+        run: ./sx verify-entry
+      - name: Prove native bootstrap without a C seed or C compiler
+        run: ./sx target test-native-bootstrap
+      - name: Driver, no-build-file and poison-build-tool integration
+        run: ./sx target doctor test-driver
+      - name: Remaining stdlib, bootstrap resource budget and workflow shape
+        run: ./sx target test-remaining-stdlib
+      - name: Remaining implemented acceptance executables
+        run: ./sx target test-sxpkg-pubkey test-sxpkg-transfer-hardening test-sxc-native test-sxisaexec test-sxmod-deep
+      - name: Check forbidden invocation evidence, even after a failed gate
+        if: always()
+        run: ./sx ci-guard-check
 
-      - name: Block non-bootstrap runtimes and real network clients
-        run: |
-          set -e
-          guard="$RUNNER_TEMP/bootstrap-no-runtimes"
-          mkdir -p "$guard"
-          for tool in python python3 node ruby perl curl wget; do
-            printf '%s\n' '#!/bin/sh' \
-              'printf "forbidden bootstrap invocation: %s\n" "$0" >> "$RUNNER_TEMP/bootstrap-forbidden-invocations"' \
-              'exit 99' > "$guard/$tool"
-            chmod +x "$guard/$tool"
-          done
-          printf '%s\n' "$guard" >> "$GITHUB_PATH"
-
-      - name: "make doctor (minimal toolchain is complete)"
-        run: make doctor
-
-      - name: "make true-selfhost (seed-min -> gen1_min -> gen2 + feature tests)"
-        run: make true-selfhost
-
-      # gen3 and native-test need a compiler that THIS job built. Handing the
-      # binaries over is what makes the gates parallel; the alternative was
-      # rebuilding the whole chain in each job (three times 25 minutes of
-      # runner). They are staged flat, because the first two runs of this shape
-      # showed that the directory layout inside an artifact is not something a
-      # later job should have to guess.
-      # The two generated C files travel with the binaries because
-      # selfhost/test_compiler_source_features.sh -- which `make gen3` runs --
-      # greps gen1_min.c, gen2.c, gen3.c and gen4.c for the shape of the
-      # compiler's own output. Without them the gate fails on a missing file
-      # rather than on a wrong one, which is exactly what happened in run
-      # 39471474117.
-      - name: Stage the gate binaries flat
-        run: |
-          set -eux
-          mkdir -p gate-binaries
-          cp selfhost/gen2 gate-binaries/gen2
-          cp selfhost/gen2.c gate-binaries/gen2.c
-          cp selfhost/gen1_min gate-binaries/gen1_min
-          cp selfhost/gen1_min.c gate-binaries/gen1_min.c
-          cp selfhost/seed/sxc_seed_min gate-binaries/sxc_seed_min
-          cp tools/sxc_native gate-binaries/sxc_native
-          chmod 0755 gate-binaries/gen2 gate-binaries/gen1_min gate-binaries/sxc_seed_min gate-binaries/sxc_native
-          ls -l gate-binaries
-
-      - name: Upload the gate binaries
-        uses: actions/upload-artifact@v7
-        with:
-          name: gate-binaries
-          path: gate-binaries
-          if-no-files-found: error
-          retention-days: 2
-
-      - name: Verify no blocked command was invoked
-        run: test ! -e "$RUNNER_TEMP/bootstrap-forbidden-invocations"
-
-  fixed-point:
-    name: "gate 3: gen3 (gen3 == gen4 byte-identical fixed point)"
+  full-acceptance-blocker:
+    name: Complete original acceptance
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: bootstrap
+    timeout-minutes: 90
     steps:
-      - name: Clean checkout
-        uses: actions/checkout@v7
-        with:
-          clean: true
-          fetch-depth: 1
-
-      - name: Block non-bootstrap runtimes and real network clients
-        run: |
-          set -e
-          guard="$RUNNER_TEMP/bootstrap-no-runtimes"
-          mkdir -p "$guard"
-          for tool in python python3 node ruby perl curl wget; do
-            printf '%s\n' '#!/bin/sh' \
-              'printf "forbidden bootstrap invocation: %s\n" "$0" >> "$RUNNER_TEMP/bootstrap-forbidden-invocations"' \
-              'exit 99' > "$guard/$tool"
-            chmod +x "$guard/$tool"
-          done
-          printf '%s\n' "$guard" >> "$GITHUB_PATH"
-
-      - name: Download the gate binaries built by the bootstrap job
-        uses: actions/download-artifact@v8
-        with:
-          name: gate-binaries
-          path: ${{ runner.temp }}/gate-binaries
-
-      - name: Put the handed-over binaries back where make expects them
-        run: |
-          set -eux
-          pwd
-          find "$RUNNER_TEMP/gate-binaries" -type f -print
-          mkdir -p selfhost/seed selfhost/seed_tests
-          missing=0
-          for pair in \
-            "gen2:selfhost/gen2" \
-            "gen2.c:selfhost/gen2.c" \
-            "gen1_min:selfhost/gen1_min" \
-            "gen1_min.c:selfhost/gen1_min.c" \
-            "sxc_seed_min:selfhost/seed/sxc_seed_min"; do
-            name=${pair%%:*}
-            dest=${pair##*:}
-            src=$(find "$RUNNER_TEMP/gate-binaries" -type f -name "$name" -print | head -n 1)
-            if [ -z "$src" ]; then
-              echo "::error::$name did not arrive from the bootstrap job"
-              missing=1
-              continue
-            fi
-            cp "$src" "$dest"
-            chmod 0755 "$dest"
-          done
-          test "$missing" = 0
-          # make rebuilds a target whose prerequisite is newer than or the same
-          # age as it, and an artifact does not preserve mtimes, so every
-          # restored file lands with the extraction time. Stamp them in strict
-          # topological order (sxc_seed_min -> gen1_min.c -> gen1_min -> gen2.c
-          # -> gen2) so `make gen3` uses the handed-over compiler directly.
-          touch selfhost/seed/sxc_seed_min
-          sleep 1
-          touch selfhost/gen1_min.c
-          sleep 1
-          touch selfhost/gen1_min
-          sleep 1
-          touch selfhost/gen2.c
-          sleep 1
-          touch selfhost/gen2
-          ls -l selfhost/gen2 selfhost/gen2.c selfhost/gen1_min selfhost/gen1_min.c selfhost/seed/sxc_seed_min
-          # the point of the hand-off: gen2 is the compiler make gen3 will use,
-          # so it has to actually run here, not just exist
-          ./selfhost/gen2 selfhost/mini_in.sa selfhost/seed_tests/_handoff.c
-          test -s selfhost/seed_tests/_handoff.c
-          rm -f selfhost/seed_tests/_handoff.c
-          # The hand-off must not leave generated C inside the checkout:
-          # sxbuild inventory walks the workspace and counts .c files.
-          test ! -e gate-binaries
-          rm -rf "$RUNNER_TEMP/gate-binaries"
-
-      - name: "make gen3 (gen3 == gen4 byte-identical fixed point)"
-        run: make gen3
-
-      - name: Verify no blocked command was invoked
-        run: test ! -e "$RUNNER_TEMP/bootstrap-forbidden-invocations"
-
-  native:
-    name: "gate 4: native-test (x86-64 backend - subset, use, functions, parity)"
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: bootstrap
-    steps:
-      - name: Clean checkout
-        uses: actions/checkout@v7
-        with:
-          clean: true
-          fetch-depth: 1
-
-      - name: Block non-bootstrap runtimes and real network clients
-        run: |
-          set -e
-          guard="$RUNNER_TEMP/bootstrap-no-runtimes"
-          mkdir -p "$guard"
-          for tool in python python3 node ruby perl curl wget; do
-            printf '%s\n' '#!/bin/sh' \
-              'printf "forbidden bootstrap invocation: %s\n" "$0" >> "$RUNNER_TEMP/bootstrap-forbidden-invocations"' \
-              'exit 99' > "$guard/$tool"
-            chmod +x "$guard/$tool"
-          done
-          printf '%s\n' "$guard" >> "$GITHUB_PATH"
-
-      - name: Download the gate binaries built by the bootstrap job
-        uses: actions/download-artifact@v8
-        with:
-          name: gate-binaries
-          path: ${{ runner.temp }}/gate-binaries
-
-      - name: Put the handed-over binaries back where make expects them
-        run: |
-          set -eux
-          pwd
-          find "$RUNNER_TEMP/gate-binaries" -type f -print
-          mkdir -p selfhost/seed selfhost/seed_tests
-          missing=0
-          for pair in \
-            "gen2:selfhost/gen2" \
-            "gen2.c:selfhost/gen2.c" \
-            "gen1_min:selfhost/gen1_min" \
-            "gen1_min.c:selfhost/gen1_min.c" \
-            "sxc_seed_min:selfhost/seed/sxc_seed_min" \
-            "sxc_native:tools/sxc_native"; do
-            name=${pair%%:*}
-            dest=${pair##*:}
-            src=$(find "$RUNNER_TEMP/gate-binaries" -type f -name "$name" -print | head -n 1)
-            if [ -z "$src" ]; then
-              echo "::error::$name did not arrive from the bootstrap job"
-              missing=1
-              continue
-            fi
-            cp "$src" "$dest"
-            chmod 0755 "$dest"
-          done
-          test "$missing" = 0
-          # make rebuilds a target whose prerequisite is newer than or the same
-          # age as it, and an artifact does not preserve mtimes, so every
-          # restored file lands with the extraction time. Stamp them in strict
-          # topological order (sxc_seed_min -> gen1_min.c -> gen1_min -> gen2.c
-          # -> gen2 -> sxc_native) so `make native-test` uses the handed-over binaries directly.
-          touch selfhost/seed/sxc_seed_min
-          sleep 1
-          touch selfhost/gen1_min.c
-          sleep 1
-          touch selfhost/gen1_min
-          sleep 1
-          touch selfhost/gen2.c
-          sleep 1
-          touch selfhost/gen2
-          sleep 1
-          touch tools/sxc_native
-          ls -l selfhost/gen2 selfhost/gen2.c selfhost/gen1_min selfhost/gen1_min.c selfhost/seed/sxc_seed_min tools/sxc_native
-          # native-test compares three backends on the same sources, so both the
-          # seed-min compiler and gen2 have to run, not just exist
-          ./selfhost/seed/sxc_seed_min selfhost/mini_in.sa > selfhost/seed_tests/_handoff.c
-          test -s selfhost/seed_tests/_handoff.c
-          ./selfhost/gen2 selfhost/mini_in.sa selfhost/seed_tests/_handoff2.c
-          test -s selfhost/seed_tests/_handoff2.c
-          rm -f selfhost/seed_tests/_handoff.c selfhost/seed_tests/_handoff2.c
-          # The hand-off must not leave generated C inside the checkout:
-          # sxbuild inventory walks the workspace and counts .c files.
-          test ! -e gate-binaries
-          rm -rf "$RUNNER_TEMP/gate-binaries"
-
-      - name: "make native-test (x86-64 backend - subset, use, functions, parity)"
-        run: make native-test
-
-      - name: Verify no blocked command was invoked
-        run: test ! -e "$RUNNER_TEMP/bootstrap-forbidden-invocations"
-
-  audit:
-    name: "audit: generated artifacts untracked, all-sayanox inventory honest"
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Clean checkout
-        uses: actions/checkout@v7
-        with:
-          clean: true
-          fetch-depth: 1
-
-      - name: "Verify the CI hand-off shape (fast, static)"
-        run: make test-ci-shape
-
-      - name: Verify generated artifacts are not tracked
-        run: |
-          set -e
-          for f in selfhost/gen1.c selfhost/gen1 selfhost/gen1_min.c selfhost/gen1_min \
-                   selfhost/gen2.c selfhost/gen2 selfhost/gen3.c selfhost/gen3 \
-                   selfhost/gen4.c selfhost/boot_from_gen2 selfhost/boot_from_gen2.c \
-                   selfhost/native_aot selfhost/seed/sxc_seed selfhost/seed/sxc_seed_min \
-                   tools/sxfmt tools/sxfmt.c tools/sxpkg tools/sxpkg.c \
-                   tools/sayanox_lsp tools/sayanox_lsp.c tools/sxdiag tools/sxdiag.c \
-                   tools/emit_to_ir tools/sxlink tools/sxencode tools/sxdefs \
-                   tools/native32 tools/sxmod tools/sxaudit \
-                   tools/sxinfer tools/sxruntime tools/sxgc tools/sxemit \
-                   tools/sxbuild tools/sxstage2_parity tools/sxirexec tools/sxpkg_pubkey_test \
-                   tools/sxc_native tools/sxc_native_test tools/sxsuite \
-                   tools/sxisaexec tools/sxisaexec_test tools/sxmod_deep_test tools/lsp_ide_test \
-                   tools/sxpack tools/sxlsp_probe tools/sxpkg_transfer_test tools/sxnet_test \
-                   tools/sxarch_aot tools/sxarch_aot_test; do
-            if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
-              echo "::error::$f is tracked but must be generated"
-              exit 1
-            fi
-          done
-          test "$(git ls-files '*.c' '*.h')" = "selfhost/seed/sxc_seed_min.c"
-          echo "[OK] no generated bootstrap artifact is tracked in git, and sxc_seed_min.c is the sole tracked .c/.h file"
-
-      # `make all-sayanox` is deliberately fail-closed: it prints the measured
-      # inventory of what is still not Sayanox (the C seed, the C native
-      # backend, the make/sh build driver) and exits 1, and
-      # `make test-doc-claims` fails if it ever starts returning 0 without the
-      # documents being updated. So the check here is that it STILL refuses, and
-      # the inventory is published in the job log where the remaining rows can
-      # be read. When a phase removes a row, this step's expectation flips with
-      # it (docs/ALL_SAYANOX_PHASE.md records the plan).
-      - name: Publish the all-sayanox inventory (must still refuse a claim)
-        run: |
-          set -e
-          if make all-sayanox > "$RUNNER_TEMP/all-sayanox.log" 2>&1; then
-            cat "$RUNNER_TEMP/all-sayanox.log"
-            echo "::error::all-sayanox now reports success; update docs/ALL_SAYANOX_PHASE.md, docs/STATUS.md, README.md and make test-doc-claims in the same change"
-            exit 1
-          fi
-          cat "$RUNNER_TEMP/all-sayanox.log"
-          grep -q 'refusing an all-in-Sayanox claim' "$RUNNER_TEMP/all-sayanox.log"
-          echo "[OK] all-sayanox still fails closed and printed its inventory above"
+      - uses: actions/checkout@v7
+      - name: Verify reviewed entry and source checksums before execution
+        run: sha256sum -c bootstrap/sx.sha256
+      - name: Arm native Sayanox runtime and network guards before bootstrap
+        run: ./sx ci-guard
+      # Do not use continue-on-error or substitute only a smaller migrated subset.
+      # ci retains doctor -> true-selfhost -> gen3 -> native-test, preceded by
+      # the complete-coverage and workflow-shape gates. No missing gate passes.
+      - name: Require complete migration and original hard gates
+        run: ./sx ci
+      - name: Check forbidden invocation evidence, even after a failed gate
+        if: always()
+        run: ./sx ci-guard-check

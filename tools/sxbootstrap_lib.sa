@@ -1,0 +1,139 @@
+use "tools/sxpack_lib.sa"
+use "tools/sxnative_bootstrap_lib.sa"
+// Sayanox-owned bootstrap DAG. A state vector prevents duplicate prerequisites
+// within one request; no timestamp shell probes, Makefile parser or make calls.
+make bt_require_file(p: str) -> num {
+  when path_kind(p) != 1 || len(read_file(p)) == 0 {
+    hold e = fail(1, concat("missing or empty file: ", p))
+  }
+  give 0
+}
+
+make bt_verify_seed() -> num {
+  hold a = bt_require_file("selfhost/seed/sxc_seed_min.sa")
+  hold b = bt_require_file("selfhost/seed/seed_runtime_lib.sa")
+  hold c = bt_require_file("selfhost/seed/sxc_seed.sa")
+  hold d = bt_require_file("bootstrap/sxc_native.bin")
+  hold pins = bt_require_file("bootstrap/native.sha256")
+  hold i = 0
+  while i < 7 {
+    hold retired = "selfhost/seed/sxc_seed.c"
+    when i == 1 { retired = "selfhost/seed/sx_runtime.h" }
+    when i == 2 { retired = "selfhost/rc_runtime.h" }
+    when i == 3 { retired = "selfhost/rc_runtime_stress.c" }
+    when i == 4 { retired = "selfhost/seed_builder_registry_test.c" }
+    when i == 5 { retired = "selfhost/seed/sxc_seed_min.c" }
+    when i == 6 { retired = "selfhost/seed/sxc_seed_min.audit" }
+    when path_kind(retired) != 0 {
+      hold e = fail(1, concat("retired trust-anchor file reappeared: ", retired))
+    }
+    i = i + 1
+  }
+  show "[OK] verify-seed: Sayanox frontend/runtime and explicit native anchor"
+  give 0
+}
+
+// Publish executable bytes atomically; never overwrite a running compiler.
+make bt_install_exec(source: str, destination: str) -> num {
+  hold bytes = []
+  hold size = read_bytes(source, bytes)
+  hold staged = concat(destination, ".sxbuild_new")
+  when size <= 0 || write_bytes(staged, bytes) != 1 {
+    give fail(1, concat("cannot stage executable: ", destination))
+  }
+  hold mode = target_run(concat("chmod +x ", sh_quote(staged)), "executable mode")
+  give target_run(concat("mv -f ", concat(sh_quote(staged), concat(" ", sh_quote(destination)))), "install executable")
+}
+
+make bt_sa_seed() -> num {
+  hold verified = bt_verify_seed()
+  hold restore = bt_restore()
+  hold native = bt_native_bootstrap()
+  hold emitter = target_run("./tools/sxc_native selfhost/compiler_min.sa selfhost/native_c_emitter.sxbuild_new", "Sayanox C-output compiler")
+  hold installed = bt_install_exec("selfhost/native_c_emitter.sxbuild_new", "selfhost/native_c_emitter")
+  hold rm = remove_path("selfhost/native_c_emitter.sxbuild_new")
+  hold cli = target_run("./tools/sxc_native selfhost/seed/sxc_seed_min.sa selfhost/seed/sxc_seed_min.sxbuild_new", "Sayanox seed CLI")
+  hold published = bt_install_exec("selfhost/seed/sxc_seed_min.sxbuild_new", "selfhost/seed/sxc_seed_min")
+  hold rmcli = remove_path("selfhost/seed/sxc_seed_min.sxbuild_new")
+  show "[OK] seed compiler built entirely from Sayanox; no C seed/compiler used"
+  give 0
+}
+
+make bt_restore() -> num {
+  hold compiler = read_file("selfhost/compiler_min.sa")
+  hold module = read_file("selfhost/modules/compiler_text.sa")
+  when mxl_find_sub(compiler, "read_file") >= 0 && mxl_find_sub(compiler, "arg_count") >= 0 && mxl_find_sub(compiler, "sx_eq") >= 0 && mxl_find_sub(module, "make sxminimum<T>") >= 0 && mxl_find_sub(module, "make sxeslice(") >= 0 {
+    show "[OK] checked-in compiler and module sources verified"
+    give 0
+  }
+  // Root sx already contains this decoder; no compiler or packer binary is needed.
+  give sp_run_restore()
+}
+
+make bt_cc(src: str, out: str) -> num {
+  hold r = bt_require_file(src)
+  hold cmd = concat(sh_quote(cc_cmd()), " -std=gnu99 -O2 -Wno-implicit-function-declaration -o ")
+  cmd = concat(cmd, concat(sh_quote(out), " "))
+  cmd = concat(cmd, sh_quote(src))
+  hold rc = target_run(cmd, out)
+  give 0
+}
+
+make bt_emit(compiler: str, source: str, out: str, stdout_mode: num) -> num {
+  hold input = bt_require_file(source)
+  hold cmd = concat(sh_quote(compiler), " ")
+  cmd = concat(cmd, sh_quote(source))
+  when stdout_mode == 1 {
+    cmd = concat(cmd, " > ")
+  } otherwise {
+    cmd = concat(cmd, " ")
+  }
+  cmd = concat(cmd, sh_quote(out))
+  hold r = target_run(cmd, out)
+  hold f = bt_require_file(out)
+  hold err = first_c_error_directive(out)
+  when len(err) > 0 {
+    hold e = fail(1, concat("bootstrap emitter rejected source: ", err))
+  }
+  give 0
+}
+
+make bt_build(stage: num, built: list) -> num {
+  when built[stage] == 1 {
+    give 0
+  }
+  hold dir = ensure_dir_p("selfhost/seed_tests")
+  when dir != 1 {
+    hold e = fail(1, "cannot create bootstrap work directory")
+  }
+  when stage == 0 {
+    hold seed = bt_sa_seed()
+  }
+  when stage == 1 {
+    hold prev = bt_build(0, built)
+    hold restore = bt_restore()
+    hold emit = bt_emit("./selfhost/seed/sxc_seed_min", "selfhost/compiler_min.sa", "selfhost/gen1_min.c", 1)
+    hold cc = bt_cc("selfhost/gen1_min.c", "selfhost/gen1_min")
+  }
+  when stage == 2 {
+    hold prev = bt_build(1, built)
+    hold emit = bt_emit("./selfhost/gen1_min", "selfhost/compiler_min.sa", "selfhost/gen2.c", 0)
+    hold cc = bt_cc("selfhost/gen2.c", "selfhost/gen2")
+  }
+  when stage == 3 {
+    hold native = bt_native_bootstrap()
+  }
+
+  when stage == 4 {
+    hold prev = bt_build(2, built)
+    hold emit = bt_emit("./selfhost/gen2", "selfhost/compiler_min.sa", "selfhost/gen3.c", 0)
+    hold cc = bt_cc("selfhost/gen3.c", "selfhost/gen3")
+    hold emit2 = bt_emit("./selfhost/gen3", "selfhost/compiler_min.sa", "selfhost/gen4.c", 0)
+    when files_byte_equal("selfhost/gen3.c", "selfhost/gen4.c") != 1 {
+      hold e = fail(1, "gen3.c != gen4.c")
+    }
+    show "[OK] gen3 == gen4 fixed point"
+  }
+  built[stage] = 1
+  give 0
+}

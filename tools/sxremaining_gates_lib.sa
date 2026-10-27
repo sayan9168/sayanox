@@ -1,0 +1,367 @@
+// Remaining language/runtime acceptance contracts, implemented in Sayanox.
+// Only compiler/program launches, cc and chmod cross the host boundary.
+use "tools/sxremaining_targets_lib.sa"
+use "tools/sxremaining_fixtures_lib.sa"
+
+make xr_strict_flags() -> str { give "-Werror=implicit-function-declaration -Werror=incompatible-pointer-types" }
+make xr_case(stage: num, source: str, base: str, want: str, flags: str) -> num {
+  hold out = base
+  when stage != 2 && stage != 5 { out = concat(base, ".c") }
+  hold emitted = pg_emit(stage, source, out, 0)
+  when stage != 2 && stage != 5 { hold built = gl_compile_c(out, base, flags) }
+  give gl_assert_out(gl_sh_quote(base), want, concat(base, ".out"))
+}
+make xr_fixture(gate: str, name: str, d: str) -> str {
+  hold source = xr_source(gate, name)
+  when len(source) == 0 { hold e = gl_fail(concat("missing fixture: ", name)) }
+  hold path = concat(concat(d, "/"), name)
+  hold wrote = gl_must_write(path, source)
+  give path
+}
+make xr_reject(stage: num, source: str, base: str, needle: str) -> num {
+  hold compiler = "./selfhost/seed/sxc_seed_min"
+  when stage == 1 { compiler = "./selfhost/gen2" }
+  when stage == 2 { compiler = "./selfhost/native_aot" }
+  hold output = concat(base, ".c")
+  hold cmd = concat(gl_sh_quote(compiler), concat(" ", gl_sh_quote(source)))
+  when stage == 0 { cmd = concat(cmd, concat(" > ", gl_sh_quote(output))) } otherwise {
+    cmd = concat(cmd, concat(" ", gl_sh_quote(output)))
+  }
+  hold log = concat(base, ".err")
+  hold status = gl_run_merged(cmd, log)
+  when stage == 1 {
+    hold refused = pg_contains(output, "#error sayanox-min:")
+  } otherwise {
+    when status == 0 { hold e = gl_fail(concat("invalid fixture accepted: ", source)) }
+    when len(read_file(log)) == 0 { hold e = gl_fail(concat("empty refusal diagnostic: ", source)) }
+  }
+  when len(needle) > 0 { hold diagnostic = pr_assert(log, needle, 0, 0, 0, 0, 1) }
+  give 0
+}
+make xr_matrix(gate: str, group: num, stage: num, d: str, needle: str) -> num {
+  hold i = 0
+  hold source = xr_bad_source(gate, group, i)
+  while len(source) > 0 {
+    hold path = concat(d, "/negative.sa")
+    hold wrote = gl_must_write(path, source)
+    hold refused = xr_reject(stage, path, concat(d, "/negative"), needle)
+    when string_eq(gate, "test-seed-limits") == 1 && group == 0 {
+      hold message = read_file(concat(d, "/negative.err"))
+      when pg_find(message, "generic") < 0 && pg_find(message, "type parameter") < 0 { hold e = gl_fail("missing generic signature diagnostic") }
+    }
+    i = i + 1
+    source = xr_bad_source(gate, group, i)
+  }
+  give gl_assert_eq_num(i, xr_bad_count(gate, group), concat("complete refusal matrix: ", gate))
+}
+make xr_three(source: str, d: str, want: str) -> num {
+  hold dir = gl_ensure_dir(d)
+  hold stage = 0
+  while stage < 3 {
+    hold check = xr_case(stage, source, concat(concat(d, "/stage"), gl_istr(stage)), want, xr_strict_flags())
+    stage = stage + 1
+  }
+  give 0
+}
+
+make xr_range(d: str) -> num {
+  hold gate = "test-seed-for-range"
+  hold parity = xr_three("selfhost/seed_for_range_test.sa", d, xr_oracle("SFR_WANT"))
+  give xr_matrix(gate, 0, 0, d, "")
+}
+make xr_calls(d: str) -> num {
+  hold gate = "test-seed-for-calls"
+  hold parity = xr_three("selfhost/seed_for_calls_test.sa", d, xr_oracle("SFC_WANT"))
+  hold forward = xr_case(0, "selfhost/seed_producer_forward_test.sa", concat(d, "/forward"), "o\nk\n8\n9", xr_strict_flags())
+  hold matrix = xr_matrix(gate, 0, 0, d, "seed_min:")
+  hold part = "x"
+  hold i = 0
+  while i < 15 { part = concat(part, part)
+    i = i + 1 }
+  hold source = concat("for ch in concat(\"", part)
+  source = concat(source, concat("\",\"", part))
+  source = concat(source, "\") { show ch }\n")
+  hold wrote = gl_must_write(concat(d, "/large.sa"), source)
+  give xr_reject(0, concat(d, "/large.sa"), concat(d, "/large"), "64 KiB lowering limit")
+}
+make xr_fields(d: str) -> num {
+  hold gate = "test-seed-for-fields"
+  hold parity = xr_three("selfhost/seed_for_fields_test.sa", d, xr_oracle("SFF_WANT"))
+  hold definition = pg_contains(concat(d, "/stage1.c"), "static double sx_len")
+  hold source = xr_fixture(gate, "for_fields_struct_fn.sa", d)
+  hold body = xr_three(source, concat(d, "/body"), "7")
+  give xr_matrix(gate, 0, 0, d, "seed_min:")
+}
+make xr_generics(d: str) -> num {
+  hold gate = "test-seed-generics"
+  hold parity = xr_three("selfhost/seed_generics_test.sa", d, xr_oracle("SGEN_WANT"))
+  hold extended = xr_case(0, "selfhost/seed_generics_extended_test.sa", concat(d, "/extended"), "3\nhi\n2\nfirst\nsecond\n2\n8\nnested\n15\nxyxyxy\n3\n6\no\nk\n4\n5\n6", xr_strict_flags())
+  hold scope = xr_case(0, "selfhost/seed_generics_scope_test.sa", concat(d, "/scope"), "7\nT : T }\nkept\n7\nT : T }\n9\n5", xr_strict_flags())
+  hold emit = pg_emit(0, "selfhost/seed_generics_test.sa", concat(d, "/again.c"), 0)
+  hold stable = gl_assert_files_eq(concat(d, "/stage0.c"), concat(d, "/again.c"), "deterministic generic specialization")
+  when pr_count(concat(d, "/stage0.c"), "#define SX_SEED_PROFILE 1", 1, 1, 0, 0) == 1 {
+    hold count = gl_assert_eq_num(pr_count(concat(d, "/stage0.c"), "^static .*id__.*{", 0, 0, 0, 0), 3, "specialization deduplication")
+    hold unused = pr_assert(concat(d, "/stage0.c"), "^static .*unused__", 0, 0, 0, 0, 0)
+  } otherwise {
+    hold count = gl_assert_eq_num(pr_count(concat(d, "/stage0.c"), "^static .*_sx_gen_0_.*){", 0, 0, 0, 0), 3, "specialization deduplication")
+    hold unused = pr_assert(concat(d, "/stage0.c"), "^static .*_sx_gen_4_", 0, 0, 0, 0, 0)
+  }
+  hold matrix = xr_matrix(gate, 0, 0, d, "seed_min:")
+  hold source = "make many<A,B,C,D,E,F>(a:A,b:B,c:C,d:D,e:E,f:F)->A { give a }\n"
+  hold i = 0
+  while i < 512 {
+    hold n = i
+    hold line = "show many("
+    hold j = 0
+    while j < 6 {
+      hold k = n % 3
+      n = (n - k) / 3
+      hold value = "1"
+      when k == 1 { value = "\"s\"" }
+      when k == 2 { value = "[]" }
+      when j > 0 { line = concat(line, ",") }
+      line = concat(line, value)
+      j = j + 1
+    }
+    source = concat(source, concat(line, ")\n"))
+    i = i + 1
+  }
+  hold wrote = gl_must_write(concat(d, "/limit.sa"), source)
+  give xr_reject(0, concat(d, "/limit.sa"), concat(d, "/limit"), "function/specialization limit is 512")
+}
+make xr_struct_field(d: str) -> num {
+  hold source = xr_fixture("test-struct-field-struct", "sfs.sa", d)
+  hold parity = xr_three(source, d, "7")
+  source = xr_fixture("test-struct-field-struct", "sfs_lit.sa", d)
+  give xr_case(1, source, concat(d, "/literal"), "8", xr_strict_flags())
+}
+make xr_nested(d: str) -> num {
+  hold parity = xr_three("selfhost/generic_struct_nested.sa", d, "7\n41\n7\n3\n4\n7\n7\nouter\n9\nnine\ninner")
+  hold stage = 0
+  while stage < 2 {
+    hold file = concat(concat(d, "/stage"), concat(gl_istr(stage), ".c"))
+    hold a = pg_contains(file, "typedef struct { double v; } Box__n;")
+    hold b = pg_contains(file, "typedef struct { Box__n v; } Box__Box__n;")
+    hold c = pg_contains(file, "typedef struct { Box__Box__n v; } Box__Box__Box__n;")
+    hold e = pg_contains(file, "typedef struct { sx_list *v; } Box__l;")
+    hold f = pg_contains(file, "typedef struct { char *v; } Box__s;")
+    hold g = pg_contains(file, "typedef struct { Box__n a; char *b; } Pair__Box__n_s;")
+    hold h = pg_contains(file, "typedef struct { double a; char *b; } Pair__ns;")
+    hold inner = pg_find(read_file(file), "} Box__n;")
+    hold outer = pg_find(read_file(file), "} Box__Box__n;")
+    hold order = gl_assert_eq_num(inner < outer, 1, "inner generic layout precedes outer")
+    stage = stage + 1
+  }
+  give 0
+}
+make xr_types(d: str) -> num {
+  hold gate = "test-type-refusals"
+  hold source = xr_fixture(gate, "ttr_nested.sa", d)
+  hold stage = 0
+  while stage < 3 {
+    hold needle = "a type argument must be"
+    when stage == 1 { needle = "" }
+    hold a = xr_reject(stage, source, concat(d, "/nested"), needle)
+    source = xr_fixture(gate, "ttr_fieldann.sa", d)
+    needle = "field annotations are not supported"
+    when stage == 1 { needle = "" }
+    hold b = xr_reject(stage, source, concat(d, "/fieldann"), needle)
+    when stage == 1 { hold diagnostic = pg_contains(concat(d, "/fieldann.c"), "struct field annotations are not supported") }
+    source = xr_fixture(gate, "ttr_nested.sa", d)
+    stage = stage + 1
+  }
+  source = xr_fixture(gate, "ttr_holdann.sa", d)
+  hold positive = xr_three(source, d, "1\n2")
+  hold i = 0
+  while i < 2 {
+    hold fixture = "ttr_holdann_bad.sa"
+    when i == 1 { fixture = "ttr_holdann_wrongstruct.sa" }
+    source = xr_fixture(gate, fixture, d)
+    stage = 0
+    while stage < 3 {
+      hold needle = "declared struct\\|type mismatch"
+      when stage == 1 { needle = "" }
+      when stage == 2 { needle = "declared\\|two different types" }
+      hold negative = xr_reject(stage, source, concat(d, "/holdann_bad"), needle)
+      stage = stage + 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+make xr_index(d: str) -> num {
+  hold gate = "test-gen2-index-expr"
+  hold parity = xr_three("selfhost/gen2_index_expr_test.sa", d, xr_oracle("GIXE_WANT"))
+  hold file = concat(d, "/stage1.c")
+  hold a = pg_contains(file, "sx_lget(xs,i - 1.0)")
+  hold b = pg_contains(file, "if (sx_lget(xs,i - 1.0) == 20.0)")
+  hold c = pg_contains(file, "for (k = 0.0; k < sx_lget(xs,0.0) / 5.0")
+  hold e = pg_contains(file, "if (sx_lget(ys,z) < sx_lget(ys,z - 1.0))")
+  hold f = pg_contains(file, "sx_idx(s,i)")
+  hold raw = pg_not_contains(file, "xs[i")
+  hold names = "call\ncomma\nquote\nempty\nunbal\ntrailop\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold source = xr_fixture(gate, concat(concat("gixe_bad_", name), ".sa"), d)
+    hold refused = xr_reject(1, source, concat(d, "/bad"), "^min: ")
+  }
+  hold source = xr_fixture(gate, "gixe_neg.sa", d)
+  hold seed = xr_case(0, source, concat(d, "/neg0"), "40\n30", "")
+  hold gen2 = xr_case(1, source, concat(d, "/neg1"), "40\n30", "")
+  hold output = concat(d, "/neg_native")
+  hold command = concat("./selfhost/native_aot ", concat(gl_sh_quote(source), concat(" ", gl_sh_quote(output))))
+  when gl_run_merged(command, concat(d, "/neg_compile.log")) == 0 {
+    hold negative = pg_expect_failure(concat(gl_sh_quote(output), " >/dev/null 2>&1"), "native negative index")
+  }
+  give 0
+}
+make xr_exit(d: str) -> num {
+  hold source = xr_fixture("test-exit-builtin", "exit_builtin.sa", d)
+  hold base = concat(d, "/exit")
+  hold emitted = pg_emit(1, source, concat(base, ".c"), 0)
+  hold built = gl_compile_c(concat(base, ".c"), base, xr_strict_flags())
+  hold normal = gl_assert_out(concat(gl_sh_quote(base), " keep"), "42", concat(d, "/keep.out"))
+  hold log = concat(d, "/stop.out")
+  hold status = run_command(concat(gl_sh_quote(base), concat(" stop > ", gl_sh_quote(log))))
+  hold code = gl_assert_eq_num(status, 7, "exit status propagates")
+  hold flushed = gl_assert_eq_str(read_file(log), "before-exit\n", "stdout flushed before exit")
+  give xr_reject(0, source, concat(d, "/seed"), "call names an unknown function or builtin")
+}
+make xr_path(d: str) -> num {
+  hold dir = gl_ensure_dir(concat(d, "/pathb_dir/sub"))
+  hold a = gl_must_write(concat(d, "/pathb_dir/a.sa"), "x")
+  hold b = gl_must_write(concat(d, "/pathb_dir/sub/b.sa"), "yy")
+  hold link = gl_assert_eq_num(make_link("pathb_dir", concat(d, "/pathb_dir_link")), 1, "symlink fixture")
+  hold source = xr_fixture("test-path-builtins", "pathb_gen.sa", d)
+  hold want = concat("9\n2\n1\n1\n3\n0\n1\n2\n", path_real(concat(d, "/pathb_dir")))
+  want = concat(want, "\n0")
+  hold parity = xr_case(1, source, concat(d, "/path"), want, xr_strict_flags())
+  give xr_reject(0, source, concat(d, "/seed"), "call names an unknown function or builtin")
+}
+make xr_primitives(d: str) -> num {
+  hold base = concat(d, "/primitives")
+  hold emitted = pg_emit(1, "selfhost/native_primitives.sa", concat(base, ".c"), 0)
+  hold clean = pg_not_contains(concat(base, ".c"), "#error")
+  hold built = gl_compile_c(concat(base, ".c"), base, xr_strict_flags())
+  hold elf = concat(path_real(d), "/primitives.elf")
+  hold bytes_file = concat(path_real(d), "/primitives.bin")
+  hold command = concat(gl_sh_quote(base), concat(" ", gl_sh_quote(elf)))
+  command = concat(command, concat(" ", gl_sh_quote(bytes_file)))
+  hold exact = gl_assert_out(command, "bit_and bit_or bit_xor bit_not shl shr bytes_f64 write_bytes: checked, and the emitted ELF exits 42", concat(d, "/primitives.out"))
+  hold bytes = []
+  hold count = read_bytes(elf, bytes)
+  hold size = gl_assert_eq_num(count, 132, "ELF byte size")
+  hold magic = gl_assert_eq_num(bytes[0] == 127 && bytes[1] == 69 && bytes[2] == 76 && bytes[3] == 70, 1, "ELF magic")
+  hold machine = gl_assert_eq_num(bytes[18] == 62 && bytes[19] == 0, 1, "x86-64 ELF machine")
+  hold executable = pg_command(concat("chmod +x ", gl_sh_quote(elf)), "publish primitive ELF")
+  hold status = gl_assert_eq_num(run_command(gl_sh_quote(elf)), 42, "emitted ELF exits 42")
+  hold source = xr_fixture("test-native-primitives", "native_primitives_seed.sa", d)
+  give xr_reject(0, source, concat(d, "/seed"), "call names an unknown function or builtin")
+}
+make xr_bytes(d: str) -> num {
+  hold gate = "test-read-bytes"
+  hold dir = gl_ensure_dir(concat(d, "/run"))
+  hold source = xr_fixture(gate, "read_bytes.sa", d)
+  hold base = concat(d, "/bytes")
+  hold emitted = pg_emit(1, source, concat(base, ".c"), 0)
+  hold clean = pg_not_contains(concat(base, ".c"), "#error")
+  hold built = gl_compile_c(concat(base, ".c"), base, xr_strict_flags())
+  hold command = concat(gl_sh_quote(base), concat(" ", gl_sh_quote(path_real(concat(d, "/run")))))
+  hold exact = gl_assert_out(command, "1\n4\n4\n72\n0\n255\n10\n4\n8\n72\n-1\n8\n1\n8", concat(d, "/bytes.out"))
+  hold size1 = gl_assert_eq_num(path_size(concat(d, "/run/WRITEBIN")), 4, "binary NUL survives write")
+  hold size2 = gl_assert_eq_num(path_size(concat(d, "/run/WRITEBIN2")), 8, "second read appends buffer")
+  source = xr_fixture(gate, "read_bytes_seed.sa", d)
+  hold seed = xr_reject(0, source, concat(d, "/seed"), "call names an unknown function or builtin")
+  give xr_reject(2, source, concat(d, "/native"), "")
+}
+make xr_cond(d: str) -> num {
+  hold matrix = xr_matrix("test-cond-string", 0, 1, d, "a condition must be numeric")
+  hold native = xr_matrix("test-cond-string", 0, 2, d, "")
+  hold gen2 = xr_case(1, "selfhost/cond_string_ok_test.sa", concat(d, "/gen2"), "7\n8", "")
+  give xr_case(2, "selfhost/cond_string_ok_test.sa", concat(d, "/native"), "7\n8", "")
+}
+make xr_io(d: str) -> num {
+  hold source = xr_fixture("test-native-io", "ts_io.sa", d)
+  hold stage = 0
+  while stage < 3 {
+    hold base = concat(concat(d, "/io"), gl_istr(stage))
+    hold output = base
+    when stage < 2 { output = concat(base, ".c") }
+    hold emit = pg_emit(stage, source, output, 0)
+    when stage < 2 { hold built = gl_compile_c(output, base, "") }
+    // Use ./ in both invocation and argv[0] oracle, as the original gate did.
+    hold executable = concat("./", base)
+    hold command = concat(gl_sh_quote(executable), " alpha 'beta gamma'")
+    hold want = concat("3\nalpha\nbeta gamma\n0\n1\n1\nshort\n0\n0\n1\n163840\n57\n", executable)
+    hold exact = gl_assert_out(command, want, concat(base, ".out"))
+    stage = stage + 1
+  }
+  give 0
+}
+make xr_limits(d: str) -> num {
+  hold gate = "test-seed-limits"
+  hold generics = xr_matrix(gate, 0, 0, d, "seed-min")
+  hold message = read_file(concat(d, "/negative.err"))
+  when pg_find(message, "generic") < 0 && pg_find(message, "type parameter") < 0 { hold e = gl_fail("missing generic signature diagnostic") }
+  hold iteration = xr_matrix(gate, 1, 0, d, "seed-min for")
+  hold source = xr_fixture(gate, "seed_for_body.sa", d)
+  give xr_case(0, source, concat(d, "/body"), "1\n2\n0", xr_strict_flags())
+}
+make xr_crypto(d: str) -> num {
+  hold parity = xr_three("selfhost/stdlib_crypto_test.sa", d, xr_oracle("CRY_WANT"))
+  when run_command("command -v sha256sum >/dev/null 2>&1") == 0 {
+    hold a = gl_must_write(concat(d, "/crypto_abc.bin"), "abc")
+    hold part = ""
+    hold i = 0
+    while i < 55 { part = concat(part, "a")
+      i = i + 1 }
+    hold b = gl_must_write(concat(d, "/crypto_55.bin"), part)
+    hold c = gl_must_write(concat(d, "/crypto_56.bin"), concat(part, "a"))
+    hold oracle = ""
+    i = 0
+    while i < 3 {
+      hold file = "crypto_abc.bin"
+      when i == 1 { file = "crypto_55.bin" }
+      when i == 2 { file = "crypto_56.bin" }
+      hold log = concat(d, "/host.sha")
+      hold captured = pg_capture(concat("sha256sum ", gl_sh_quote(concat(concat(d, "/"), file))), log)
+      hold hash = gl_slice(read_file(log), 0, 64)
+      hold size = gl_assert_eq_num(len(hash), 64, "host digest width")
+      when i > 0 { oracle = concat(oracle, "\n") }
+      oracle = concat(oracle, hash)
+      i = i + 1
+    }
+    hold source = xr_fixture("test-stdlib-crypto", "crypto_oracle.sa", d)
+    hold independent = xr_case(1, source, concat(d, "/oracle"), oracle, "")
+  }
+  hold source = xr_fixture("test-stdlib-crypto", "crypto_tamper.sa", d)
+  give xr_case(0, source, concat(d, "/tamper"), "1\n0\n0\n1", "")
+}
+
+make xr_dispatch(name: str) -> num {
+  hold d = concat("selfhost/seed_tests/xr/", name)
+  hold clean = gl_clean_dir(d)
+  hold status = 0
+  when string_eq(name, "test-seed-for-range") == 1 { status = xr_range(d) }
+  when string_eq(name, "test-seed-for-calls") == 1 { status = xr_calls(d) }
+  when string_eq(name, "test-seed-for-fields") == 1 { status = xr_fields(d) }
+  when string_eq(name, "test-seed-generics") == 1 { status = xr_generics(d) }
+  when string_eq(name, "test-generic-structs-nested") == 1 { status = xr_nested(d) }
+  when string_eq(name, "test-struct-field-struct") == 1 { status = xr_struct_field(d) }
+  when string_eq(name, "test-type-refusals") == 1 { status = xr_types(d) }
+  when string_eq(name, "test-gen2-index-expr") == 1 { status = xr_index(d) }
+  when string_eq(name, "test-exit-builtin") == 1 { status = xr_exit(d) }
+  when string_eq(name, "test-path-builtins") == 1 { status = xr_path(d) }
+  when string_eq(name, "test-native-primitives") == 1 { status = xr_primitives(d) }
+  when string_eq(name, "test-read-bytes") == 1 { status = xr_bytes(d) }
+  when string_eq(name, "test-cond-string") == 1 { status = xr_cond(d) }
+  when string_eq(name, "test-native-io") == 1 { status = xr_io(d) }
+  when string_eq(name, "test-seed-limits") == 1 { status = xr_limits(d) }
+  when string_eq(name, "test-stdlib-crypto") == 1 { status = xr_crypto(d) }
+  show concat("[OK] Sayanox gate: ", name)
+  give status
+}

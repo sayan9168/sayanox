@@ -1,0 +1,187 @@
+// Remaining language contracts: explicit backends, oracles and refusals.
+use "tools/sxlast_language_targets_lib.sa"
+use "tools/sxlast_language_fixtures_lib.sa"
+make xl_reject(stage: num, source: str, base: str, needle: str) -> num {
+  when stage == 1 {
+    hold reject = xr_reject(stage, source, base, "")
+    when len(needle) > 0 { hold words = pg_contains(concat(base, ".c"), needle) }
+    give 0
+  }
+  give xr_reject(stage, source, base, needle)
+}
+make xl_reject_three(source: str, d: str, a: str, b: str, c: str) -> num {
+  hold dir = gl_ensure_dir(d)
+  hold seed = xl_reject(0, source, kp_join(d, "seed"), a)
+  hold gen2 = xl_reject(1, source, kp_join(d, "gen2"), b)
+  give xl_reject(2, source, kp_join(d, "native"), c)
+}
+make xl_fixture(gate: str, name: str, d: str) -> str {
+  hold text = xl_source(gate, name)
+  when len(text) == 0 { hold e = gl_fail(concat("missing language acceptance fixture: ", name)) }
+  hold path = kp_join(d, name)
+  hold write = gl_must_write(path, text)
+  give path
+}
+make xl_generics(d: str) -> num {
+  hold gate = "test-generics"
+  hold source = xl_fixture(gate, "tg.sa", d)
+  hold g2 = xr_case(1, source, kp_join(d, "tg"), xl_want(gate, "tg"), "-O2 -Wall -Werror=implicit-function-declaration")
+  hold g1 = xr_case(3, source, kp_join(d, "tg_g1"), xl_want(gate, "tg_g1"), "")
+  hold seed = xl_reject(0, source, kp_join(d, "tg_seed"), "unknown or unsupported function")
+  source = xl_fixture(gate, "tg_bad.sa", d)
+  hold bad = xl_reject(1, source, kp_join(d, "bad1"), "must be written with type parameters used by every parameter")
+  source = xl_fixture(gate, "tg_bad2.sa", d)
+  bad = xl_reject(1, source, kp_join(d, "bad2"), "must be written with type parameters used by every parameter")
+  source = xl_fixture(gate, "tg_mp.sa", d)
+  g2 = xr_case(1, source, kp_join(d, "tg_mp"), xl_want(gate, "tg_mp"), "-O2 -Wall -Werror=implicit-function-declaration")
+  g1 = xr_case(3, source, kp_join(d, "tg_mp_g1"), xl_want(gate, "tg_mp_g1"), "")
+  hold cparity = xb_equal(d, "tg_mp.c", "tg_mp_g1.c")
+  hold shared = xr_three(source, kp_join(d, "multi_parity"), xl_want(gate, "tg_mp"))
+  give xl_generic_counts(d)
+}
+make xl_struct_refusal(d: str, name: str, seed: str, gen2: str, native: str) -> num {
+  hold source = xl_fixture("test-generic-structs", name, d)
+  hold base = kp_join(d, name)
+  hold a = xl_reject(0, source, concat(base, ".seed"), seed)
+  hold b = xl_reject(1, source, concat(base, ".gen2"), gen2)
+  give xl_reject(2, source, concat(base, ".native"), native)
+}
+make xl_structs(d: str) -> num {
+  hold gate = "test-generic-structs"
+  hold box = kp_join(d, "box")
+  hold parity = xr_three("selfhost/generic_struct_box.sa", box, xl_want(gate, "gs_box_ms"))
+  hold pins = "typedef struct { double v; } Box__n;\ntypedef struct { char *v; } Box__s;\ntypedef struct { double a; char *b; } Pair__ns;\n"
+  hold layout = xf_pin(kp_join(box, "stage0.c"), pins)
+  layout = xf_pin(kp_join(box, "stage1.c"), pins)
+  hold arity = xl_struct_refusal(d, "gs_arity.sa", "Box takes 1 type argument, got 2", "#error sayanox-min:", "takes 1 type argument, got 2")
+  hold concrete = xl_struct_refusal(d, "gs_argstruct.sa", "a type argument must be num, str, list or an instantiation of a generic struct (got 'NumBox')", "#error sayanox-min:", "a type argument must be num, str, list or an instantiation of a generic struct (got 'NumBox')")
+  hold source = xl_fixture(gate, "gs_arglist.sa", d)
+  hold list = kp_join(d, "list")
+  parity = xr_three(source, list, xl_want(gate, "gs_arglist_ms"))
+  layout = pg_contains(kp_join(list, "stage0.c"), "typedef struct { sx_list *v; } Box__l;")
+  layout = pg_contains(kp_join(list, "stage1.c"), "typedef struct { sx_list *v; } Box__l;")
+  hold bare = xl_struct_refusal(d, "gs_bare.sa", "Box is a generic struct: write Box<num> { ... }", "#error sayanox-min:", "is a generic struct: write Box<num> { ... }")
+  hold kinds = xl_struct_refusal(d, "gs_twokinds.sa", "Box__n field 'v' is num (its type argument says so), the literal gives str", "#error sayanox-min: struct field is used with two different value kinds", "field 'v' is a number (its type argument says so), the literal gives a string")
+  parity = xr_three("selfhost/generic_struct_concrete.sa", kp_join(d, "concrete"), xl_want(gate, "gs_conc_ms"))
+  source = xl_fixture(gate, "gs_field_lit.sa", d)
+  hold field = xr_case(0, source, kp_join(d, "field_seed"), "7", "")
+  hold unsupported = xl_reject(1, source, kp_join(d, "field_gen2"), "#error sayanox-min: struct/list literal value must be a number, string, name, or nested struct")
+  give xl_reject(2, source, kp_join(d, "field_native"), "is used with two different types")
+}
+make xl_native_fixture(d: str, name: str, want: str) -> num {
+  hold source = xl_fixture("test-native-num", name, d)
+  give xr_case(2, source, kp_join(d, concat(name, ".native")), want, "")
+}
+make xl_native_existing(d: str, name: str, want: str) -> num {
+  give xr_case(2, concat("selfhost/seed_tests/", concat(name, ".sa")), kp_join(d, name), want, "")
+}
+make xl_num(d: str) -> num {
+  hold gate = "test-native-num"
+  hold float = xl_native_existing(d, "ts_float", xl_want(gate, "ts_float_nat"))
+  hold big = xl_native_existing(d, "ts_big", xl_want(gate, "ts_big_nat"))
+  hold parens = xl_native_existing(d, "ts_parens", xl_want(gate, "ts_parens_nat"))
+  hold push = xl_native_existing(d, "ts_push", xl_want(gate, "ts_push_nat"))
+  hold modzero = pg_emit(2, "selfhost/seed_tests/ts_modzero.sa", kp_join(d, "modzero"), 0)
+  hold zero = xb_fail_command(gl_sh_quote(kp_join(d, "modzero")), kp_join(d, "modzero.err"), "division by zero")
+  hold fmt = xl_fixture(gate, "ts_fmt.sa", d)
+  hold oracle = xq_parity_unknown(fmt, kp_join(d, "formatting"))
+  hold div = xl_native_fixture(d, "ts_div0.sa", xl_want(gate, "ts_div0_nat"))
+  hold strnum = xl_reject(2, "selfhost/seed_tests/ts_strnum.sa", kp_join(d, "strnum"), "a string + a number is not in the pure-min subset")
+  hold numstr = xl_reject(2, "selfhost/seed_tests/ts_numstr.sa", kp_join(d, "numstr"), "a string + a number is not in the pure-min subset")
+  hold source = xl_fixture(gate, "ts_barecall.sa", d)
+  hold bare = xl_reject(2, source, kp_join(d, "barecall"), "unknown statement: \"write_file\"")
+  source = xl_fixture(gate, "ts_bareuser.sa", d)
+  bare = xl_reject(2, source, kp_join(d, "bareuser"), "unknown statement: \"f\"")
+  hold cat = xl_native_fixture(d, "ts_fcat_n.sa", xl_want(gate, "ts_fcat_nat"))
+  source = xl_fixture(gate, "ts_div0b.sa", d)
+  hold seed = xr_case(0, source, kp_join(d, "div0_seed"), xl_want(gate, "ts_div0b_sm"), "")
+  source = xl_fixture(gate, "ts_mod0.sa", d)
+  hold mod = pg_emit(2, source, kp_join(d, "mod0"), 0)
+  zero = xb_fail_command(gl_sh_quote(kp_join(d, "mod0")), kp_join(d, "mod0.err"), "division by zero")
+  source = xl_fixture(gate, "ts_floatbad_nat.sa", d)
+  hold malformed = xl_reject(2, source, kp_join(d, "malformed"), "malformed number literal")
+  source = xl_fixture(gate, "ts_natfix.sa", d)
+  hold fixes = xr_case(0, source, kp_join(d, "fixes.seed"), xl_want(gate, "ts_natfix_nat"), "")
+  fixes = xr_case(2, source, kp_join(d, "fixes.native"), xl_want(gate, "ts_natfix_nat"), "")
+  hold alias = xl_native_existing(d, "ts_lalias", xl_want(gate, "ts_lalias_nat"))
+  hold list_bad = xl_reject(2, "selfhost/seed_tests/ts_lop.sa", kp_join(d, "list_op"), "")
+  hold eleven = xl_native_existing(d, "ts_l11", xl_want(gate, "ts_l11_nat"))
+  hold struct_list = xl_reject(2, "selfhost/seed_tests/ts_sinl.sa", kp_join(d, "struct_list"), "")
+  give xl_reject(2, "selfhost/seed_tests/ts_sinl2.sa", kp_join(d, "struct_push"), "")
+}
+make xl_stage2(d: str) -> num {
+  hold gate = "test-stage2"
+  hold source = xl_fixture(gate, "s2.sa", d)
+  hold want = xl_want(gate, "s2")
+  hold gen2 = xr_case(1, source, kp_join(d, "s2"), want, "-O2 -Wall -Werror=implicit-function-declaration")
+  hold gen1 = xr_case(3, source, kp_join(d, "s2_g1"), want, "")
+  hold fixed = xb_equal(d, "s2.c", "s2_g1.c")
+  hold seed = xr_case(0, source, kp_join(d, "s2_seed"), want, "-O2 -Werror=incompatible-pointer-types")
+  hold pins = "if (!(a == 2.0) && b == 0.0) {\nif (!(sx_eq(s, \"no\") == 1.0)) {\nif (!(a == 1.0) || b == 9.0) {\nif (a == 1.0 && b == 0.0) {\nif (a == 2.0 || b == 0.0) {\nwhile (m < 3.0 && a == 1.0) {\nsx_list *__sx_fv\nfor (double __sx_ix = 0.0; __sx_ix < sx_llen(__sx_fv\nc = sx_chr(sx_idx(__sx_fv\n"
+  hold shape = xf_pin(kp_join(d, "s2.c"), pins)
+  source = xl_fixture(gate, "s2_for.sa", d)
+  hold native = xr_case(2, source, kp_join(d, "for_native"), "1\n2", "")
+  source = xl_fixture(gate, "s2_and.sa", d)
+  native = xr_case(2, source, kp_join(d, "and_native"), "1", "")
+  source = xl_fixture(gate, "s2_not.sa", d)
+  native = xr_case(2, source, kp_join(d, "not_native"), "1", "")
+  source = xl_fixture(gate, "s2_true.sa", d)
+  give xr_case(2, source, kp_join(d, "true_native"), "1\n0", "")
+}
+make xl_forstr(d: str) -> num {
+  hold gate = "test-for-str"
+  hold names = "fs_vowels\nfs_brk\nfs_nest\nfs_bytes\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold source = xl_fixture(gate, concat(name, ".sa"), d)
+    hold gen2 = xr_case(1, source, kp_join(d, concat(name, ".gen2")), xl_want(gate, name), "")
+    hold seed = xr_case(0, source, kp_join(d, concat(name, ".seed")), xl_want(gate, name), "")
+  }
+  hold source = xl_fixture(gate, "fs_num.sa", d)
+  hold bad = xl_reject(1, source, kp_join(d, "number"), "'x' is not a list or a string")
+  source = xl_fixture(gate, "fs_clash.sa", d)
+  bad = xl_reject(1, source, kp_join(d, "clash"), "'n' is already a number or a list")
+  source = xl_fixture(gate, "fs_listclash.sa", d)
+  bad = xl_reject(1, source, kp_join(d, "listclash"), "'c' is already a number or a list")
+  source = xl_fixture(gate, "fs_nat.sa", d)
+  hold native = xr_case(2, source, kp_join(d, "native"), "a\nb\nc", "")
+  source = xl_fixture(gate, "fs_pair.sa", d)
+  bad = xl_reject(1, source, kp_join(d, "pair.gen2"), "must be written with type parameters used by every parameter")
+  give xl_reject(2, source, kp_join(d, "pair.native"), "type parameters used by every parameter")
+}
+make xl_full(d: str) -> num {
+  hold parity = xr_three("selfhost/full_language_expr.sa", kp_join(d, "parity"), xl_want("test-full-language-expr", "fle_ms"))
+  hold pins = "Size one = ((Size){(sx_len(text) + 1.0)});\nSize two = ((Size){(((2.0 + 3.0)) * 4.0)});\nSize five = ((Size){(offset() + twice(3.0))});\nLabel tag = ((Label){sx_cat(head,\"anox\")});\nsx_lget(values,twice(offset()))\n"
+  hold lowering = xf_pin(kp_join(d, "parity/stage1.c"), pins)
+  hold source = xl_fixture("test-full-language-expr", "fle_unknown.sa", d)
+  hold rejected = xl_reject_three(source, kp_join(d, "unknown"), "", "#error sayanox-min:", "")
+  source = xl_fixture("test-full-language-expr", "fle_arity.sa", d)
+  rejected = xl_reject_three(source, kp_join(d, "arity"), "", "#error sayanox-min:", "")
+  source = xl_fixture("test-full-language-expr", "fle_strcall.sa", d)
+  rejected = xl_reject(1, source, kp_join(d, "strcall.gen2"), "#error sayanox-min:")
+  rejected = xl_reject(2, source, kp_join(d, "strcall.native"), "")
+  hold emit = pg_emit(0, source, kp_join(d, "strcall.seed.c"), 1)
+  hold cmd = concat("cc -O2 -o ", concat(gl_sh_quote(kp_join(d, "strcall.seed")), concat(" ", gl_sh_quote(kp_join(d, "strcall.seed.c")))))
+  hold c_failure = xb_fail_command(cmd, kp_join(d, "strcall.seed.err"), "")
+  // The independent reviewed full-language acceptance specification is still
+  // absent; the driver must not turn expression coverage into a full claim.
+  hold refuse = pg_contains("tools/sxclaims_lib.sa", "refusing a full-language claim")
+  give pg_contains("tools/sxclaims_lib.sa", "fail(1,")
+}
+make xl_dispatch(name: str) -> num {
+  hold d = concat("selfhost/seed_tests/sxgates/", name)
+  hold clean = gl_clean_dir(d)
+  hold result = 0
+  when string_eq(name, "test-generics") == 1 { result = xl_generics(d) }
+  when string_eq(name, "test-native-num") == 1 { result = xl_num(d) }
+  when string_eq(name, "test-generic-structs") == 1 { result = xl_structs(d) }
+  when string_eq(name, "test-stage2") == 1 { result = xl_stage2(d) }
+  when string_eq(name, "test-for-str") == 1 { result = xl_forstr(d) }
+  when string_eq(name, "test-full-language-expr") == 1 { result = xl_full(d) }
+  show concat("[OK] Sayanox language acceptance: ", name)
+  give result
+}

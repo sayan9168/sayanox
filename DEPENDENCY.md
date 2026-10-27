@@ -1,209 +1,79 @@
-# Dependency audit — 2026-10-17 (updated 2026-10-25)
+# Dependency audit — 2026-10-27
 
-## Current shell-source status
+All maintained implementation source is Sayanox. The Makefile, final frozen C
+seed and maintained shell scripts are retired. The original 236 target names
+are implemented by native `./sx`; target registration and actual full guarded
+acceptance are measured separately in [the migration report](docs/MAKEFILE_MIGRATION.md).
 
-All 14 remaining tracked `.sh` scripts have been deleted and their behavior
-ported into `tools/sxsuite.sa`, `tools/sxlsp_probe.sa`,
-`tools/sxpkg_transfer_test.sa`, `tools/sxnet_test.sa`, and `tools/sxpack.sa`.
-`git ls-files '*.sh'` is empty; `make test-language-deps` and
-`make test-trust-anchor` pin that. The Makefile still contains inline POSIX
-recipes, including the minimal base64/gzip source-recovery fallback needed
-before `sxpack` can be built. The optional local HTTP/crawler tests use Python
-only as a fixture server; no Python script is tracked.
+## Trust inputs
 
-## Maintained contract
+- Generated static Linux x86-64 `sx`, rebuilt from `tools/sxbuild.sa` by
+  `./sx verify-entry`.
+- Pinned native `bootstrap/sxc_native.bin`, reconstructed from its Sayanox
+  compiler sources over three generations, requiring source-built equality with
+  the anchor before installation.
+- `bootstrap/sx.sha256`, `bootstrap/native.sha256` and the Sayanox SHA-256/size
+  audit `bootstrap/sxc_native.audit` make input drift visible.
 
-Bootstrap needs **make + a C99-capable C toolchain + POSIX shell/utilities**.
-The default bootstrap and interpreter-free gates do not need bash, awk, sed,
-Perl, Node, Ruby or a network client. Python is not needed by the bootstrap,
-but the optional local HTTP fixture tests use it. `make test-language-deps`
-checks selected maintained paths with a failing PATH shim and is part of
-`true-selfhost`.
+These binary inputs are explicitly trusted, not independent proof of source
+trustworthiness. Hashes/self-reproduction cannot eliminate trusting-trust attacks.
+See [bootstrap provenance](bootstrap/README.md).
 
-| Path | Requirements / boundary |
-|---|---|
-| seed-min → gen1-min → gen2 | make, C compiler (including its assembler/linker), POSIX shell and utilities |
-| gen2 → gen3 → gen4 | same; `cmp` checks the C fixed point |
-| native-test | same, on **x86-64 Linux** (generated ELF uses Linux syscalls) |
-| LSP build (`make lsp`) | gen2 + cc only; the folder index is Sayanox (no C header, no binder) |
-| portable analysis listing | `tools/emit_to_ir.sa`, compiled by gen2 then cc; not a second backend |
-| negative-diagnostic suites (`test-sxdiag`) | `tools/sxdiag.sa`, compiled by gen2 then cc; drives the frontends through `run_command(cmd)` instead of `sh` |
-| native image link (`test-native-sxlink`) | `tools/sxlink.sa`, compiled by gen2 then cc; proved against the C `write_elf()` by `SX_LINK_DUMP`, does not produce the shipped executables |
-| native instruction encode (`test-native-sxencode`) | `tools/sxencode.sa`, compiled by gen2 then cc; proved against the C encoder by `SX_ENCODE_LOG`, does not produce the shipped executables |
-| offline packer (`make pack-compiler`) | `tools/sxpack.sa` built by `sxc_native`; `gzip` for compression, `base64` in the pure-Sayanox codec, `cmp` for byte verification |
-| source-present restore | marker checks with `grep`; no decoding/network |
-| missing-source bootstrap restore | base64/gzip decoding through a small inline Makefile recipe (must run before the Sayanox packer can be built) |
-| post-bootstrap missing-source restore (`tools/sxpack restore`) | Sayanox Base64 decoder + `gzip`, verified before replacing either source |
-| optional `test-network` / HTTP / crawler tests | Python test server and curl; explicitly excluded from bootstrap |
-| explicit remote package transfer | optional curl/wget, online opt-in; not needed by bootstrap or local package tests |
+## Permitted external tool boundaries
 
-`grep`, `cmp`, `mkdir` are core checks. The expanded feature gates also use
-POSIX utilities such as `cat`, `chmod`, `cp`, `cut`, `diff`, `dirname`, `find`,
-`head`, `paste`, `rm`, `sort`, `tail`, `tr`, `wc`. These are utilities, not a
-language runtime requirement: no maintained recipe invokes `awk` or `sed` any
-more. Doctor checks the core set, not an exhaustive execution trace of every
-optional test recipe. Its success is **not** a minimal-PATH proof.
+- Linux x86-64 and its syscall ABI execute the static native compiler/tools.
+- A POSIX process-launch shell runs leaf commands assembled by the Sayanox
+  driver. Quoting, graph selection, dependency state, validations and assertions
+  belong to Sayanox, not an embedded legacy recipe interpreter.
+- The external C99 toolchain (including its assembler/linker) compiles
+  **generated C output** for retained compatibility, self-hosting and parity
+  tests. No maintained C bootstrap compiler source is compiled.
+- `chmod`/`mv` publish staged native executables. Git and checksum/archive tools
+  provide repository, integrity and release-container operations.
+- `gzip` is a leaf compressor/decompressor for offline recovery. Base64,
+  partitioning, recovery orchestration and byte-identity checks are Sayanox.
+- Optional external transport is explicit. Maintained local HTTP/package/LSP
+  fixtures and clients are Sayanox; bootstrap must not download a compiler.
 
-## What changed on 2026-10-17
+A native tool failure never silently falls back to C. Explicit C tool emission
+remains available with `SXBUILD_VIA_C=1`; that is an intentional host-C route,
+not the native bootstrap. Existing CC/compiler override failure propagation is
+preserved.
 
-The language boundary is now C, make, POSIX sh and Sayanox — plus optional
-tools that are never on the bootstrap path.
+## Ownership of operations
 
-* **bash → POSIX sh.** All six bash scripts were ported and every tracked
-  script is now `#!/bin/sh`: `selfhost/restore_compiler_min.sh`,
-  `selfhost/pack_compiler_min.sh` and four others. Three of those six were
-  deleted on 2026-10-21 (`selfhost/sx`, `selfhost/restore_stage2.sh`,
-  `selfhost/restore_sxc_full.sh`), together with `selfhost/lang_quality.sh`;
-  see "Deleted scaffolding" below.
-* **awk removed from the build.** `tools/lsp_workspace_bind.awk` was replaced
-  by a Sayanox binder, and that binder has since been removed as well (the
-  server walks folders itself with the directory builtins). The old binder's output
-  on the real `tools/sayanox_lsp.sa` translation is byte-identical to the old
-  awk output (75,678 bytes), and it fails closed with a C `#error` if the
-  generated fallback shape changes. The Makefile also checks that the bridge
-  applied exactly once.
-* **awk removed from tests and tooling.** The offline packer chunks with
-  `split -b 1100`; `sed -n Np` line extraction in recipes is POSIX `read`; the
-  native IR-log invariant and vocabulary checks use `grep`/`cut`/`sort`/
-  `paste`; the emit-seam extraction uses `head`/`tail`; the 512-entry generic
-  limit fixture is generated by the shell; the package tool reads manifest and
-  checksum fields itself (it is a Sayanox program, `tools/sxpkg.sa`).
-* **sed removed from the maintained scripts and recipes.** The legacy
-  sed-based `tools/sayanox-lsp.sh` shell stub was deleted; the maintained
-  server is `tools/sayanox_lsp.sa` (built by gen2, bound by the Sayanox binder).
-* **Python removed from the restore scripts.** `restore_sxc_full.sh` loses its
-  dead `install_sxc_full.py` installer branch and `restore_compiler_min.sh`
-  replaces its Python heredoc with `base64`+`tr`. Since 2026-10-21 Python is
-  used in exactly one place, and only in optional targets: `tools/test-http-get.sh`
-  and `tools/test-sayacrawl.sh` start `python3 -m http.server` as the local test
-  server. Nothing on the bootstrap or maintained gate path needs it
-  (`make test-language-deps` proves that by shimming `python3` to fail).
-* **Portable base64.** `base64 -w 0` (a GNU extension) is gone; the packer
-  uses `base64 | tr -d '\n'`, and process substitution is a temp file.
+`./sx target <name>` uses Sayanox implementations for build/bootstrap,
+dependencies, tests, clean, recovery, audits, CI and release logic. Cleanup
+preserves trusted entry/anchor/source inputs and removes disposable artifacts.
+The C-output runtime text in Sayanox backend templates is generated output,
+not a disguised stored C parser or compiler.
 
-## Deleted scaffolding (2026-10-21)
+Stage 0 builds the native C-output frontend and seed CLI from Sayanox. Later
+stages retain real own-source C compilation and fixed-point checks. The native
+origin chain C1 -> C2 == C3 passes, and complete C1 emission passes under the
+existing 64 MiB address-space bound. The Sayanox seed's string/list tracing
+collector retains borrowing/alias semantics and passes the 4 MiB churn budget.
 
-The repository had grown a second copy of itself. These were removed because
-nothing on a maintained path read them:
-
-* **Chunk and bundle copies** that restored files already present as
-  plaintext: `selfhost/native_src/` (59 fragments of `native_aot.c`),
-  `stage2_src/`, `stage2_blob/`, `sxc_full_b64/`, `sxc_full_b64_plain/`,
-  `sxc_full_lines/`, `sxc_sa_parts/`, `sxc_out_c/`, `stage2_template_parts/`,
-  `codegen_{a,b,c,d}.b64`, `codegen.sa.gz.b64`, `sxc.sa.b64`, `sxc_fn.sa.b64`,
-  `stage2_tpl_a.b64`, `stage2_template.c{,.gz}.b64`, `native_aot.c.gz.b64` and
-  `compiler_min.sa.gz.b64{,.p0 ... .p3}` — about 380 KB of base64. The one
-  bundle that is still read (`selfhost/compiler_min_gz/`, the offline copy of
-  `compiler_min.sa`) stays.
-* **The Stage-2 placeholders**: `selfhost/stage2_template.c` (93 bytes,
-  `PLACEHOLDER`), `selfhost/sxc_full.c` and `sxc_full_minimal.c` (30-line toys),
-  `selfhost/restore_stage2.sh`, `restore_stage2_template.sh`, `restore_sxc.sh`,
-  `restore_sxc_full.sh` (restorers whose inputs were gone, so they could only
-  exit 1), and `selfhost/sx` (a CLI wrapper for the absent host). Keeping them
-  byte-identical to keep a test true was a cost with no benefit;
-  `make test-doc-claims` now asserts they stay gone.
-* **`selfhost/lang_quality.sh`** and its fixtures: it drove the same absent
-  host, and `make test-language-deps` did not run it.
-* **`sayascrape/*.py`** (738 lines, the last Python in the tree) and its
-  `make test-scrape` target. `sayascrape/crawl.sa` is the crawler and
-  `make test-sayacrawl` still tests it.
-* **Four `sh` diagnostic drivers and ~70 dead `.sa` demos/fixtures**:
-  `test_return_paths.sh`, `test_name_resolution.sh`,
-  `test_inline_expression_errors.sh`, `test_list_postfix_errors.sh` became
-  `tools/sxdiag.sa` (their cases now live in Sayanox and are run by
-  `make test-sxdiag`), and the `.sa` files that no target referenced — the
-  `stage*` sketches, the `*_demo.sa` experiments, `typecheck`/`typeenv`/
-  `ast`/`semantic` stage experiments — were deleted. `examples/` keeps only the
-  programs a target or the README names.
-* **33 abandoned documents**: the `docs/STAGE5..STAGE28` sequence,
-  `docs/ABC_COMPLETE.md`, `docs/UNIFIED.md`, `docs/SXC_*.md`,
-  `docs/SELFHOST_*.md`, `docs/PURE_SA.md`, `docs/SHELL.md`,
-  `docs/SAYANOXC.md`, `docs/RUST_OPTIONAL.md`, `docs/CRANELIFT.md` and the five
-  `selfhost/*.md` pages that documented the deleted CLI.
-
-## The `run_command(cmd)` builtin (2026-10-21)
-
-`spawn(path)` starts a program with no arguments, which is why so much build
-and test logic had to stay in the shell: a driver that cannot say
-`gen2 in.sa out.c` cannot be written in Sayanox. `run_command(cmd)` closes that:
-one command line, `/bin/sh -c`, the exit status as a number, and the child's
-stdout/stderr inherited. It is wired through the same sixteen sites as every
-other builtin, seed-min refuses it like every other late builtin, and the
-native backend refuses it too (`make test-sxdiag` pins all three). The first
-consumer is `tools/sxdiag.sa`; the next ones are the remaining `sh` drivers.
-
-It is a driver primitive, not a build system: the quoting rules are the
-shell's, and the command lines are built from paths this repository controls.
-
-## What is left for the next phase
-
-This pass removed *interpreters*, not C. The next phase — writing the remaining
-pieces in Sayanox — is recorded in
-[`docs/ALL_SAYANOX_PHASE.md`](docs/ALL_SAYANOX_PHASE.md): a C seed (2,035
-lines), a C native backend (4,498 lines, of which the image writer, rel32
-linker and instruction encoder now exist in Sayanox and are proved
-byte-identical), and the make/POSIX-sh build driver. The IR tool, the LSP
-directory bridge, the LSP test client, the linker and the encoder have already
-left that list. `make all-sayanox` prints the remaining inventory and
-fails closed.
-
-## How this is checked
+## Executable enforcement
 
 ```sh
-make test-language-deps
+sha256sum -c bootstrap/sx.sha256
+./sx verify-entry
+./sx target test-native-bootstrap test-language-deps test-trust-anchor test-doc-claims
+./sx ci-guard
+./sx ci
+./sx target test-driver
+./sx ci-guard-check
 ```
 
-1. **Static:** every tracked shebang script is POSIX sh; no recipe line
-   invokes `awk` or `sed`; the old awk binder does not exist; the Sayanox
-   binder and `split` chunking are in the build.
-2. **Dynamic:** a PATH shim makes `bash`, `awk`, `sed`, `python3`, `python`,
-   `perl`, `node` and `ruby` fail loudly and log any invocation. The LSP build
-   (gen2 + binder), `test-lsp`, `test-lsp-robust`, `test-native-ir-log`,
-   `test-native-mem`, `test-seed-gc`, `test-seed-generics` and
-   `test-sxpkg-online-local` are re-run under that PATH (already-built
-   compilers are kept with `-o`). The log must stay empty.
+CI guard creation and checking are Sayanox. Native recording shims refuse and
+record make, Python/Python3, Node, Ruby, Perl, curl and wget; swallowed child
+failures remain visible in the evidence marker. The isolated compiler/seed
+bootstrap additionally poisons cc/gcc/clang and contains no C source. Changed
+source/anchor inputs must be refused without replacing the installed compiler.
 
-This is a boundary test of the exercised paths. It is not a claim that every
-optional target — for example the opt-in Python HTTP tests — is interpreter
-free, and it is not a minimal-PATH proof for installs that lack basic POSIX
-utilities.
-
-## Dependency regression corrected (2026-10-15, still in force)
-
-PR #26's `native-test` reached `python3 tools/emit_to_ir.py` through
-`test-native-ir-portable`. Its green gate on this host did **not** establish
-Python independence, and the old doctor message/document claim was too broad.
-The audit also found `true-selfhost` invoked Python HTTP/crawler tests. Those
-remain available via `make test-network`, not as bootstrap prerequisites.
-Package tests now use local copies and a checked transport stub, not real DNS
-or network transfers.
-
-The translator is replaced with streaming C99; the Python file is removed.
-`make test-emit-to-ir` exercises it without an interpreter. Unknown log lines
-are preserved as comments; read/write errors fail rather than printing PASS.
-
-The older 2026-10-04–07 command-count and 400 MB measurements described older
-commits, not this expanded compiler/test suite. They are not current claims.
-Historical verification output remains in `docs/logs/`; consult its dated
-README.
-
-## Reproduce
-
-```sh
-make doctor
-make true-selfhost
-make gen3
-make native-test
-```
-
-The four targets exit 0 with no interpreter or network client on the path. The
-2026-10-17 language-dependency run is recorded in
-[`docs/gate-logs/2026-10-17-language-deps/`](docs/gate-logs/2026-10-17-language-deps/).
-Earlier 2026-10-15 dependency-stage runs used a PATH prefix whose `python`,
-`python3`, `node`, `ruby`, `perl`, `curl` and `wget` commands fail loudly and
-log any invocation; those logs remain in `docs/logs/ten-deps-*.log` and
-`docs/logs/ten-final-*.log`.
-
-Compiler-source recovery remains offline. After changing compiler_min.sa,
-regenerate its checked-in bundle with `make pack-compiler` and verify a
-byte-identical decode; a source-present gate alone does not check bundle sync.
+The original complete CI chain is retained; a smaller successful subset is not
+substituted for it. Release still requires the full chain, entry equality,
+gen3/gen4 C identity and clean tracked source. No publication is implied by
+source migration, auditing or a release plan. Full-language conformance beyond
+the reviewed acceptance subset remains a separate fail-closed claim.

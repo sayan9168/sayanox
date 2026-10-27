@@ -5,8 +5,8 @@
 # Sayanox is NOT yet a language in github-linguist's languages.yml and `.sa` is
 # not claimed by any entry there (verified against lib/linguist/languages.yml).
 # A repository-local .gitattributes cannot register a new language, so until an
-# upstream entry is merged the language bar will keep showing C / Makefile /
-# Shell. The two `*.sa` rules below are inert today and become effective the
+# upstream entry is merged the language bar will keep showing C; the build file and tracked shell
+# scripts have been removed. The two `*.sa` rules below are inert today and become effective the
 # moment Linguist learns the language -- `linguist-language=Sayanox` resolves to
 # nothing while "Sayanox" is unknown to Linguist, and is simply ignored.
 #
@@ -55,12 +55,12 @@ docs/logs/** linguist-generated=true
 # ---------------------------------------------------------------------------
 # Generated artifacts: C emitted by the self-hosting compilers
 # ---------------------------------------------------------------------------
-# Every one of these is produced by `make` and is already listed in .gitignore;
+# Every one of these is produced by the Sayanox driver and is already listed in .gitignore;
 # the rules are here so that a stray commit, or a future tracking change, cannot
 # quietly turn generated C into the largest language in the repository.
 #
 # gen1.c / gen1_min.c / gen2.c / gen3.c / gen4.c are compiler output, as are the
-# boot* C files and the scratch programs the Makefile writes.
+# boot* C files and the scratch programs the driver/test gates write.
 selfhost/gen*.c linguist-generated=true
 selfhost/boot.c linguist-generated=true
 selfhost/boot2.c linguist-generated=true
@@ -103,3 +103,6 @@ selfhost/native_aot.c -linguist-generated
 # A hand-written README.md next to generated chunks stays visible as
 # documentation, whichever directory it is in.
 **/README.md -linguist-generated
+
+# Reviewed native Sayanox bootstrap entry; provenance in bootstrap/README.md.
+/sx binary linguist-generated=true

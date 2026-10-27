@@ -1,0 +1,80 @@
+// Target manifest shared by driver and regression runner.
+// Numeric selectors avoid unsupported string-valued list elements.
+make pg_name(index: num) -> str {
+  when index == 0 { give "test-mod" }
+  when index == 1 { give "test-user" }
+  when index == 2 { give "test-chain" }
+  when index == 3 { give "test-condmod" }
+  when index == 4 { give "test-struct2" }
+  when index == 5 { give "test-list2" }
+  when index == 6 { give "test-use" }
+  when index == 7 { give "test-nest" }
+  when index == 8 { give "test-prec" }
+  when index == 9 { give "test-float" }
+  when index == 10 { give "test-parens" }
+  when index == 11 { give "test-full-lang" }
+  when index == 12 { give "test-native-strord" }
+  when index == 13 { give "test-give-index" }
+  when index == 14 { give "test-list-paren" }
+  when index == 15 { give "test-native-logicarg" }
+  when index == 16 { give "test-gen2-logic-builtin" }
+  when index == 17 { give "test-struct-logic" }
+  when index == 18 { give "test-builtin-names" }
+  when index == 19 { give "test-fn2" }
+  when index == 20 { give "test-lsp-unicode" }
+  when index == 21 { give "test-native-range-live" }
+  when index == 22 { give "test-native-for-functions" }
+  when index == 23 { give "test-native-list-alias" }
+  when index == 24 { give "test-inline-runtime" }
+  when index == 25 { give "test-seed-list-sequence" }
+  when index == 26 { give "test-list-struct-fields" }
+  when index == 27 { give "test-gen2-list-struct-fields" }
+  when index == 28 { give "test-seed-list-budget" }
+  when index == 29 { give "test-stdlib-list-search" }
+  give ""
+}
+
+make pg_count() -> num { give 30 }
+
+make pg_known(name: str) -> num {
+  hold i = 0
+  while i < pg_count() {
+    when string_eq(name, pg_name(i)) == 1 { give 1 }
+    i = i + 1
+  }
+  give 0
+}
+
+make pg_mask(name: str) -> num {
+  when string_eq(name, "test-mod") == 1 { give 2 }
+  when string_eq(name, "test-user") == 1 { give 3 }
+  when string_eq(name, "test-chain") == 1 { give 3 }
+  when string_eq(name, "test-condmod") == 1 { give 2 }
+  when string_eq(name, "test-struct2") == 1 { give 2 }
+  when string_eq(name, "test-list2") == 1 { give 2 }
+  when string_eq(name, "test-use") == 1 { give 2 }
+  when string_eq(name, "test-nest") == 1 { give 3 }
+  when string_eq(name, "test-prec") == 1 { give 3 }
+  when string_eq(name, "test-float") == 1 { give 3 }
+  when string_eq(name, "test-parens") == 1 { give 3 }
+  when string_eq(name, "test-full-lang") == 1 { give 3 }
+  when string_eq(name, "test-native-strord") == 1 { give 7 }
+  when string_eq(name, "test-give-index") == 1 { give 6 }
+  when string_eq(name, "test-list-paren") == 1 { give 6 }
+  when string_eq(name, "test-native-logicarg") == 1 { give 4 }
+  when string_eq(name, "test-gen2-logic-builtin") == 1 { give 6 }
+  when string_eq(name, "test-struct-logic") == 1 { give 6 }
+  when string_eq(name, "test-builtin-names") == 1 { give 3 }
+  when string_eq(name, "test-fn2") == 1 { give 2 }
+  when string_eq(name, "test-lsp-unicode") == 1 { give 24 }
+  when string_eq(name, "test-native-range-live") == 1 { give 4 }
+  when string_eq(name, "test-native-for-functions") == 1 { give 7 }
+  when string_eq(name, "test-native-list-alias") == 1 { give 7 }
+  when string_eq(name, "test-inline-runtime") == 1 { give 7 }
+  when string_eq(name, "test-seed-list-sequence") == 1 { give 7 }
+  when string_eq(name, "test-list-struct-fields") == 1 { give 7 }
+  when string_eq(name, "test-gen2-list-struct-fields") == 1 { give 2 }
+  when string_eq(name, "test-seed-list-budget") == 1 { give 1 }
+  when string_eq(name, "test-stdlib-list-search") == 1 { give 7 }
+  give 0
+}

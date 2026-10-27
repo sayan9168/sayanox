@@ -1,0 +1,40 @@
+// Honesty boundaries, not success aliases. These commands intentionally refuse
+// claims for which no reviewed exhaustive acceptance specification exists.
+make cmd_full_claim_refusal() -> num {
+  give fail(1, "no reviewed exhaustive full-language acceptance specification; refusing a full-language claim")
+}
+make cmd_all_sayanox() -> num {
+  show "=== ALL-SAYANOX: maintained source + explicit native binary trust input ==="
+  hold dir = gl_ensure_dir("selfhost/seed_tests")
+  hold inventory = "selfhost/seed_tests/all-sayanox-tracked.out"
+  hold tracked = pg_capture("git ls-files '*.c' '*.h' '*.sh' '*.sa'", inventory)
+  hold names = read_file(inventory)
+  hold counts = [0, 0, 0]
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold path = gl_slice(names, start, pos)
+    pos = pos + 1
+    when path_kind(path) != 0 {
+      when ends_with(path, ".c") == 1 || ends_with(path, ".h") == 1 { counts[0] = counts[0] + 1 }
+      when ends_with(path, ".sh") == 1 { counts[1] = counts[1] + 1 }
+      when ends_with(path, ".sa") == 1 { counts[2] = counts[2] + 1 }
+    }
+  }
+  show concat("  maintained tracked C/H files: ", istr(counts[0]))
+  show concat("  tracked shell scripts: ", istr(counts[1]))
+  show concat("  tracked Sayanox sources: ", istr(counts[2]))
+  show concat("  build-driver entry-source lines (tools/sxbuild.sa): ", istr(count_lines_in_file("tools/sxbuild.sa")))
+  when counts[0] != 0 || counts[1] != 0 || path_kind("Makefile") != 0 || path_kind("selfhost/seed/sxc_seed_min.c") != 0 {
+    give fail(1, "maintained C/header, shell script or Makefile remains; refusing an all-in-Sayanox claim")
+  }
+  hold inputs = bt_verify_seed()
+  hold native = bt_native_bootstrap()
+  hold entry = cmd_verify_entry()
+  show "[OK] all maintained implementation source is Sayanox"
+  show "  explicit trusted binary: bootstrap/sxc_native.bin; hashes and self-reproduction are not an independent trust proof"
+  show "  generated C compatibility output/tests and necessary external host tools remain supported"
+  show "  this inventory/bootstrap audit is not a full-language conformance claim or a replacement for CI"
+  give 0
+}

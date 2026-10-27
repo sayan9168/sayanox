@@ -1,0 +1,52 @@
+// Loopback-only HTTP fixture server. HTTP policy/routing is Sayanox; the
+// private child binding supplies bounded socket reads/writes, no HTTP logic.
+use "tools/sxnet_io_lib.sa"
+hold root = read_line()
+hold port_file = read_line()
+hold pid_file = read_line()
+hold bridge = read_line()
+when path_kind(root) != 2 || path_kind(bridge) != 1 { hold bad = ns_fail("invalid fixture server configuration") }
+hold h = spawn(bridge)
+when h <= 0 { hold bad = ns_fail("cannot start socket binding") }
+hold port = ns_number(child_line(h))
+hold pid = ns_number(child_line(h))
+when port < 1 || port > 65535 || pid < 2 { hold bad = ns_fail("invalid server handshake") }
+hold wp = write_file(port_file, concat(ns_dec(port), "\n"))
+hold wi = write_file(pid_file, concat(ns_dec(pid), "\n"))
+when wp != 1 || wi != 1 { hold bad = ns_fail("cannot write server readiness records") }
+show "READY"
+while true {
+  hold event = child_line(h)
+  when string_eq(event, "A") == 0 { hold bad = ns_fail("server socket accept failed") }
+  hold request = ""
+  hold complete = 0
+  while complete == 0 && len(request) < 32768 {
+    hold packet = ns_recv(h)
+    when len(packet) == 0 { complete = 2 } otherwise {
+      request = concat(request, packet)
+      when ns_find(request, "\r\n\r\n") >= 0 { complete = 1 }
+    }
+  }
+  hold body = "not found\n"
+  hold status = "404 Not Found"
+  when complete == 1 && ns_find(request, "GET ") == 0 {
+    hold end = 4
+    while end < len(request) && sx_index(request, end) != 32 { end = end + 1 }
+    hold url = ns_slice(request, 4, end)
+    hold query = ns_find(url, "?")
+    when query >= 0 { url = ns_slice(url, 0, query) }
+    when string_eq(url, "/") == 1 { url = "/index.html" }
+    when len(url) > 0 && sx_index(url, 0) == 47 && ns_find(url, "..") < 0 && ns_find(url, "%") < 0 && ns_find(url, "\\") < 0 {
+      hold path = concat(root, url)
+      when path_kind(path) == 1 {
+        body = read_file(path)
+        status = "200 OK"
+      }
+    }
+  }
+  when len(body) > 7000 { body = "fixture body too large\n"
+    status = "413 Content Too Large" }
+  hold response = concat("HTTP/1.1 ", concat(status, concat("\r\nContent-Length: ", concat(ns_dec(len(body)), concat("\r\nConnection: close\r\n\r\n", body)))))
+  when complete != 2 { hold sent = ns_send(h, response) }
+  hold close = child_send(h, "C\n")
+}

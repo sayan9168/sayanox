@@ -1,0 +1,1 @@
+make xi_known(name: str) -> num { give string_eq(name, "test-native-ir-log") || string_eq(name, "test-native-ir-portable") }

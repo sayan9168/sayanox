@@ -1,5 +1,17 @@
 # Status
 
+> **2026-10-27 current checkpoint:** all 236 original target names are
+> implemented in the Sayanox driver. Native compiler and seed reconstruction
+> use Sayanox and explicit pinned native trust inputs. The native-origin
+> own-source C chain passes (C2 == C3), including C1 emission under 64 MiB;
+> the final frozen C seed and its audit have been deleted. All 14 seed gates,
+> GC budgets, isolated poisoned-compiler reconstruction and six actual
+> ASan/UBSan stdout comparisons pass. **Final guarded CI/driver acceptance is
+> pending**; earlier statuses below are historical, not that final evidence.
+> See [native bootstrap](NATIVE_BOOTSTRAP.md) and
+> [all-source migration](ALL_SAYANOX_PHASE.md).
+
+
 Last updated: **2026-10-26** (CI/CD repaired and gated; CSV row codec added to
 the stdlib; C-free self-compiling x86-64 ELF64 compiler &
 toolchain `tools/sxc_native.sa` compiling itself, all 30+ tools including

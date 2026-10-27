@@ -1,0 +1,106 @@
+// Shared operations for migrated regression gates. Control flow, fixture IO,
+// output comparisons and diagnostic assertions execute in Sayanox, not sh.
+// Commands below only launch a compiler or program (with redirected streams).
+make pg_find(text: str, part: str) -> num {
+  hold i = 0
+  while i + len(part) <= len(text) {
+    hold j = 0
+    while j < len(part) && sx_index(text, i + j) == sx_index(part, j) {
+      j = j + 1
+    }
+    when j == len(part) { give i }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make pg_contains(file: str, text: str) -> num {
+  when path_kind(file) != 1 {
+    hold e = gl_fail(concat("missing diagnostic/output file: ", file))
+  }
+  when pg_find(read_file(file), text) < 0 {
+    hold e = gl_fail(concat(concat(file, ": missing expected text: "), text))
+  }
+  give 0
+}
+
+make pg_not_contains(file: str, text: str) -> num {
+  when path_kind(file) != 1 {
+    hold e = gl_fail(concat("missing diagnostic/output file: ", file))
+  }
+  when pg_find(read_file(file), text) >= 0 {
+    hold e = gl_fail(concat(concat(file, ": unexpected text: "), text))
+  }
+  give 0
+}
+
+make pg_capture(command: str, file: str) -> num {
+  hold cmd = concat("LC_ALL=C ", command)
+  cmd = concat(cmd, concat(" > ", gl_sh_quote(file)))
+  give gl_assert_eq_num(run_command(cmd), 0, concat("run: ", command))
+}
+
+make pg_expect_failure(command: str, label: str) -> num {
+  when run_command(concat("LC_ALL=C ", command)) == 0 {
+    hold e = gl_fail(concat("unexpected success: ", label))
+  }
+  give 0
+}
+
+make pg_emit(kind: num, source: str, out: str, allow_failure: num) -> num {
+  give pg_emit_stream(kind, source, out, allow_failure, concat(out, ".emit.log"), concat(out, ".err"))
+}
+
+make pg_emit_stream(kind: num, source: str, out: str, allow_failure: num, stdout_file: str, stderr_file: str) -> num {
+  hold compiler = "./selfhost/seed/sxc_seed_min"
+  when kind == 1 { compiler = "./selfhost/gen2" }
+  when kind == 2 { compiler = "./selfhost/native_aot" }
+  when kind == 3 { compiler = "./selfhost/gen1_min" }
+  when kind == 4 { compiler = "./selfhost/seed/sxc_seed" }
+  when kind == 5 { compiler = "./tools/sxc_native" }
+  hold old = remove_path(out)
+  hold cmd = concat(gl_sh_quote(compiler), concat(" ", gl_sh_quote(source)))
+  when kind == 0 || kind == 4 {
+    cmd = concat(cmd, " > ")
+  } otherwise {
+    cmd = concat(cmd, " ")
+  }
+  cmd = concat(cmd, gl_sh_quote(out))
+  // Keep negative-case diagnostics available without flooding gate stdout.
+  when kind != 0 && kind != 4 {
+    cmd = concat(cmd, concat(" > ", gl_sh_quote(stdout_file)))
+  }
+  cmd = concat(cmd, concat(" 2> ", gl_sh_quote(stderr_file)))
+  hold rc = run_command(concat("LC_ALL=C ", cmd))
+  when allow_failure == 0 {
+    hold a = gl_assert_eq_num(rc, 0, concat("compile: ", source))
+    hold b = gl_assert_eq_num(path_kind(out), 1, concat("compiler produced: ", out))
+  }
+  give 0
+}
+
+make pg_command(command: str, label: str) -> num {
+  hold rc = run_command(concat("LC_ALL=C ", command))
+  give gl_assert_eq_num(rc, 0, label)
+}
+
+make pg_probe(command: str, mode: num, file: str) -> num {
+  hold cmd = concat("LC_ALL=C ", command)
+  when mode == 2 {
+    cmd = concat(cmd, concat(" >/dev/null 2> ", gl_sh_quote(file)))
+  } otherwise {
+    cmd = concat(cmd, concat(" > ", gl_sh_quote(file)))
+    when mode == 1 { cmd = concat(cmd, " 2>&1") }
+  }
+  // A diagnostic pipeline checked grep's result, not the child's exit status.
+  hold status = run_command(cmd)
+  give 0
+}
+
+make pg_copy(source: str, destination: str) -> num {
+  hold bytes = []
+  hold count = read_bytes(source, bytes)
+  when count < 0 { give gl_fail(concat("cannot copy missing input: ", source)) }
+  hold written = write_bytes(destination, bytes)
+  give gl_assert_eq_num(written, 1, concat("copy to ", destination))
+}

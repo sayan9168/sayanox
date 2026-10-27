@@ -1,0 +1,167 @@
+// Stdlib and IR acceptance gates, with Sayanox loops and byte comparisons.
+use "tools/sxport_lib.sa"
+
+make ep_known(name: str) -> num {
+  when string_eq(name, "test-stdlib-next") == 1 || string_eq(name, "test-stdlib-csv") == 1 || string_eq(name, "test-stdlib-extended") == 1 || string_eq(name, "test-ir-exec") == 1 { give 1 }
+  give 0
+}
+
+make ep_compile(kind: num, source: str, bin: str) -> num {
+  when kind < 2 {
+    hold c = concat(bin, ".c")
+    hold emitted = pg_emit(kind, source, c, 0)
+    // -lm follows the C input so both as-needed and traditional linkers work.
+    hold cmd = concat(sh_quote(cc_cmd()), " -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ")
+    cmd = concat(cmd, concat(sh_quote(bin), " "))
+    cmd = concat(cmd, concat(sh_quote(c), " -lm"))
+    give target_run(cmd, concat("compile ", source))
+  }
+  hold compiler = "./selfhost/native_aot"
+  when kind == 3 { compiler = sxc_native_bin() }
+  hold cmd = concat(sh_quote(compiler), " ")
+  cmd = concat(cmd, concat(sh_quote(source), " "))
+  give target_run(concat(cmd, sh_quote(bin)), concat("compile ", source))
+}
+
+make ep_has_line(file: str, line: str) -> num {
+  hold text = read_file(file)
+  hold i = 0
+  while i < len(text) {
+    hold start = i
+    while i < len(text) && sx_index(text, i) != 10 { i = i + 1 }
+    when string_eq(gl_slice(text, start, i), line) == 1 { give 0 }
+    i = i + 1
+  }
+  give gl_fail(concat(file, concat(": missing exact line: ", line)))
+}
+
+make ep_snippet(source: str, want: str, base: str) -> num {
+  hold sa = concat(base, ".sa")
+  hold w = gl_must_write(sa, source)
+  hold kind = 0
+  while kind < 2 {
+    hold bin = concat(base, gl_istr(kind))
+    hold compile = ep_compile(kind, sa, bin)
+    hold output = gl_assert_out(sh_quote(bin), want, concat(bin, ".out"))
+    kind = kind + 1
+  }
+  give 0
+}
+
+make ep_next() -> num {
+  hold dir = "selfhost/seed_tests/stdlib_next"
+  hold created = gl_ensure_dir(dir)
+  hold index = 0
+  while index < 3 {
+    hold module = "url"
+    when index == 1 { module = "datetime" }
+    when index == 2 { module = "hash" }
+    hold source = concat(concat("selfhost/stdlib_", module), "_test.sa")
+    hold oracle = concat(concat("selfhost/stdlib_", module), ".want")
+    hold expected = bt_require_file(oracle)
+    hold base = concat(concat(dir, "/"), module)
+    hold kind = 0
+    while kind < 3 {
+      hold bin = concat(base, gl_istr(kind))
+      hold c = ep_compile(kind, source, bin)
+      hold r = pg_capture(sh_quote(bin), concat(bin, ".out"))
+      hold a = gl_assert_files_eq(concat(bin, ".out"), oracle, concat(module, " independently computed oracle"))
+      kind = kind + 1
+    }
+    index = index + 1
+  }
+  hold a = ep_snippet("use \"stdlib/url.sa\"\nshow surl_encode(\"a b\")\n", "a%20b", concat(dir, "/alone_url"))
+  hold b = ep_snippet("use \"stdlib/datetime.sa\"\nshow dt_format(2024, 2, 29)\n", "2024-02-29", concat(dir, "/alone_dt"))
+  hold c = ep_snippet("use \"stdlib/hash.sa\"\nshow sh_istr(sh_adler32(\"Wikipedia\"))\n", "300286872", concat(dir, "/alone_hash"))
+  hold d = ep_snippet("use \"stdlib/csv.sa\"\nuse \"stdlib/url.sa\"\nuse \"stdlib/datetime.sa\"\nuse \"stdlib/hash.sa\"\nshow surl_encode(\"a b\")\nshow dt_format(2024, 2, 29)\nshow sh_sum_bytes(\"ab\")\nshow csv_count(csv_parse_row(\"x,y\"))\n", "a%20b\n2024-02-29\n195\n2", concat(dir, "/all"))
+  give 0
+}
+
+make ep_extended() -> num {
+  hold dir = "selfhost/seed_tests/stdlib_ext"
+  hold clean = gl_clean_dir(dir)
+  hold kind = 0
+  while kind < 4 {
+    hold bin = concat(concat(dir, "/program"), gl_istr(kind))
+    hold c = ep_compile(kind, "selfhost/stdlib_extended_test.sa", bin)
+    hold run = pg_capture(sh_quote(bin), concat(bin, ".out"))
+    kind = kind + 1
+  }
+  hold vm = concat(dir, "/vm")
+  hold cmd = concat("./tools/sxirexec compile-and-run selfhost/stdlib_extended_test.sa ", sh_quote(vm))
+  hold run = pg_capture(cmd, concat(dir, "/vm.out"))
+  hold reference = concat(dir, "/program0.out")
+  kind = 1
+  while kind < 4 {
+    hold out = concat(concat(concat(dir, "/program"), gl_istr(kind)), ".out")
+    hold a = gl_assert_files_eq(reference, out, "stdlib extended backend parity")
+    kind = kind + 1
+  }
+  hold a = gl_assert_files_eq(reference, concat(dir, "/vm.out"), "stdlib extended IR VM parity")
+  give ep_has_line(reference, "stdlib-extended-ok")
+}
+
+make ep_ir() -> num {
+  hold dir = "selfhost/seed_tests/irexec_gate"
+  hold created = gl_ensure_dir(dir)
+  hold i = 0
+  while i < 4 {
+    hold stem = "native_ir_log_test"
+    when i == 1 { stem = "stdlib_growth_test" }
+    when i == 2 { stem = "stdlib_crypto_test" }
+    when i == 3 { stem = "stdlib_json_write_test" }
+    hold source = concat(concat("selfhost/", stem), ".sa")
+    hold cmd = concat("./tools/sxirexec parity ", concat(sh_quote(source), " "))
+    hold run = target_run(concat(cmd, sh_quote(concat(concat(dir, "/"), stem))), "4-way IR parity")
+    i = i + 1
+  }
+  i = 0
+  while i < 5 {
+    hold source = "selfhost/struct_function_tests/values.sa"
+    when i == 1 { source = "selfhost/struct_function_tests/gc.sa" }
+    when i == 2 { source = "selfhost/interpolation_tests/values.sa" }
+    when i == 3 { source = "selfhost/interpolation_tests/gc.sa" }
+    when i == 4 { source = "selfhost/generic_struct_nested.sa" }
+    hold ref = concat(dir, "/ref.bin")
+    hold compile = ep_compile(2, source, ref)
+    hold run = pg_capture(sh_quote(ref), concat(dir, "/ref.out"))
+    hold vm = concat(dir, "/vm")
+    hold cmd = concat("./tools/sxirexec compile-and-run ", concat(sh_quote(source), " "))
+    hold vm_run = pg_capture(concat(cmd, sh_quote(vm)), concat(dir, "/vm.out"))
+    hold no_elf = gl_assert_eq_num(path_kind(concat(vm, "/prog.elf")), 0, "ELF deleted before IR VM execution")
+    hold parity = gl_assert_files_eq(concat(dir, "/ref.out"), concat(dir, "/vm.out"), "native == IR VM")
+    i = i + 1
+  }
+  give 0
+}
+
+make ep_run(name: str, built: list) -> num {
+  hold baseline = rt_baseline(built)
+  when string_eq(name, "test-stdlib-next") == 1 { give ep_next() }
+  when string_eq(name, "test-stdlib-csv") == 1 { give ep_csv() }
+  hold ir = target_native_tool("sxirexec")
+  hold emitter = target_native_tool("emit_to_ir")
+  when string_eq(name, "test-stdlib-extended") == 1 { give ep_extended() }
+  when string_eq(name, "test-ir-exec") == 1 { give ep_ir() }
+  give fail(2, "unknown parity gate")
+}
+
+make ep_csv() -> num {
+  hold dir = "selfhost/seed_tests/csv_port"
+  hold created = gl_ensure_dir(dir)
+  hold expected = "1\n3\na\nb\nc\n0\n3\n0\nc\n1\n0\n2\n0\n2\na\n1\n2\na,b\nc\n1\na\"b\nc\n0\n0\n0\n0\n1\n1\n1\na,b,c\na,,c\n\"a,b\",c\n\"a\"\"b\",c\n\n0\n0\n1\nx\n2\na\"b\n1\n1\n0123456789abcdef\ncsv-done"
+  hold kind = 0
+  while kind < 3 {
+    hold bin = concat(concat(dir, "/program"), gl_istr(kind))
+    hold c = ep_compile(kind, "selfhost/stdlib_csv_test.sa", bin)
+    hold output = gl_assert_out(sh_quote(bin), expected, concat(bin, ".out"))
+    when kind > 0 {
+      hold parity = gl_assert_files_eq(concat(dir, "/program0.out"), concat(bin, ".out"), "CSV byte-for-byte parity")
+    }
+    kind = kind + 1
+  }
+  hold done = ep_has_line(concat(dir, "/program0.out"), "csv-done")
+  hold alone = ep_snippet("use \"stdlib/csv.sa\"\nshow csv_count(csv_parse_row(\"x,y\"))\nshow csv_is_valid_row(\"a,b\")\nshow csv_is_valid_row(concat(chr(34), \"a,b\"))\n", "2\n1\n0", concat(dir, "/alone"))
+  hold coexist = ep_snippet("use \"stdlib/csv.sa\"\nuse \"stdlib/str_text.sa\"\nshow csv_at(csv_parse_row(\"p,q\"), 1)\nshow t_trim(\"  hi  \" )\n", "q\nhi", concat(dir, "/coexist"))
+  give 0
+}

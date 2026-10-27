@@ -1,0 +1,196 @@
+// Phase-one and phase-two parity, including every refusal fixture.
+use "tools/sxfront_targets_lib.sa"
+make xf_fixtures(infer: num) -> str {
+  when infer == 0 { give "selfhost/sxdefs_tests/program.sa\nselfhost/sxdefs_tests/quirks.sa\nselfhost/native_strord_test.sa\nselfhost/stdlib_growth_test.sa\nselfhost/stdlib_json_deep_test.sa\nselfhost/generic_struct_nested.sa\nselfhost/full_language_expr.sa\ntools/sxencode.sa\ntools/native32.sa\n" }
+  give "selfhost/sxinfer_tests/program.sa\nselfhost/sxdefs_tests/program.sa\nselfhost/sxdefs_tests/quirks.sa\nselfhost/generic_struct_concrete.sa\nselfhost/generic_struct_box.sa\nselfhost/generic_struct_nested.sa\nselfhost/full_language_expr.sa\nselfhost/native_generics_test.sa\nselfhost/native_strord_test.sa\nselfhost/stdlib_growth_test.sa\nselfhost/stdlib_json_deep_test.sa\nselfhost/stdlib_crypto_test.sa\n"
+}
+make xf_cmd(tool: str, source: str, mode: str, out: str) -> str {
+  give concat(concat(concat("./tools/", tool), concat(" ", gl_sh_quote(source))), concat(concat(" ", mode), concat(" ", gl_sh_quote(out))))
+}
+make xf_native(source: str, out: str, env: str) -> str {
+  give concat(concat(env, " ./selfhost/native_aot "), concat(gl_sh_quote(source), concat(" ", gl_sh_quote(out))))
+}
+make xf_run(command: str, log: str, expected: num) -> num {
+  give gl_assert_eq_num(gl_run_merged(command, log), expected, command)
+}
+make xf_bytes(d: str) -> num {
+  hold data = []
+  hold roots = []
+  hold nd = read_bytes(kp_join(d, "data.bin"), data)
+  hold nr = read_bytes(kp_join(d, "sx.roots"), roots)
+  when nr < 1 || nd < 144 + nr { give gl_fail("missing/truncated binary OFF_ROOTS table") }
+  hold i = 0
+  while i < nr {
+    when data[144 + i] != roots[i] { give gl_fail("OFF_ROOTS binary mismatch at offset 144") }
+    i = i + 1
+  }
+  give 0
+}
+make xf_pin(file: str, needles: str) -> num {
+  hold text = read_file(file)
+  hold pos = 0
+  while pos < len(needles) {
+    hold start = pos
+    while pos < len(needles) && sx_index(needles, pos) != 10 { pos = pos + 1 }
+    hold line = gl_slice(needles, start, pos)
+    pos = pos + 1
+    hold pin = kp_has(text, line)
+  }
+  give 0
+}
+make xf_strip_diagnostic(text: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(text) {
+    hold start = i
+    while i < len(text) && sx_index(text, i) != 10 { i = i + 1 }
+    hold line = gl_slice(text, start, i)
+    hold split = pg_find(line, " ")
+    when split < 1 || split + 1 >= len(line) { hold e = gl_fail("empty or unprefixed front-end diagnostic") }
+    out = concat(out, concat(gl_slice(line, split + 1, len(line)), "\n"))
+    i = i + 1
+  }
+  when len(out) == 0 { hold e = gl_fail("refusal without diagnostic") }
+  give out
+}
+make xf_refuse(source: str, d: str, infer: num) -> str {
+  hold mkdir = gl_ensure_dir(d)
+  hold native = xf_native(source, kp_join(d, "bad.elf"), "")
+  hold nlog = kp_join(d, "native.err")
+  hold ncmd = concat(native, concat(" > /dev/null 2> ", gl_sh_quote(nlog)))
+  hold nstatus = gl_assert_eq_num(run_command(ncmd), 1, "native front-end refusal")
+  hold tool = "sxdefs"
+  hold mode = "defs"
+  when infer == 1 {
+    hold phase1 = pg_command(xf_cmd("sxdefs", source, "defs", kp_join(d, "phase1.defs")), "phase-2 refusal must pass phase 1")
+    tool = "sxinfer"
+    mode = "infer"
+  }
+  hold slog = kp_join(d, "sayanox.err")
+  hold scmd = concat(xf_cmd(tool, source, mode, kp_join(d, "bad.tables")), concat(" > /dev/null 2> ", gl_sh_quote(slog)))
+  hold sstatus = gl_assert_eq_num(run_command(scmd), 1, "Sayanox front-end refusal")
+  hold cn = xf_strip_diagnostic(read_file(nlog))
+  hold sn = xf_strip_diagnostic(read_file(slog))
+  hold equal = gl_assert_eq_str(cn, sn, concat("front-end refusal words: ", source))
+  give cn
+}
+make xf_refusals(d: str, infer: num) -> num {
+  hold source = "selfhost/sxdefs_tests/refuse"
+  hold expected = 34
+  when infer == 1 { source = "selfhost/sxinfer_tests/refuse"
+    expected = 39 }
+  hold files = read_dir(source)
+  hold messages = ""
+  hold total = 0
+  hold distinct = 0
+  hold pos = 0
+  while pos < len(files) {
+    hold start = pos
+    while pos < len(files) && sx_index(files, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(files, start, pos)
+    pos = pos + 1
+    when len(name) >= 3 && string_eq(gl_slice(name, len(name) - 3, len(name)), ".sa") == 1 {
+      hold text = xf_refuse(kp_join(source, name), kp_join(kp_join(d, "refuse"), name), infer)
+      when xb_words_has(messages, gl_strip_trailing_nl(text)) == 0 { distinct = distinct + 1
+        messages = concat(messages, text) }
+      total = total + 1
+    }
+  }
+  hold count = gl_assert_eq_num(total, expected, "front-end refusal fixture cardinality")
+  when infer == 0 && distinct < 24 { give gl_fail("phase-one refusal diagnostic coverage collapsed") }
+  when infer == 1 { hold exact = gl_assert_eq_num(distinct, 39, "39 distinct phase-two refusals") }
+  give 0
+}
+make xf_defs_pins(d: str) -> num {
+  hold program = kp_join(d, "sxdefs_tests_program")
+  hold defs = kp_join(program, "defs.txt")
+  hold needles = "fn 0 shout nparam=1 gen=0 ntp=0 rk=1 rtp=-1\nstruct 0 Point nf=2\ngstruct 0 Box np=1 nf=1\ngstruct 1 Pair np=2 nf=2\nfn 5 pick nparam=2 gen=1 ntp=2 rk=0 rtp=0\n  param 1 b k=0 tp=1\nglob 1 title kind=1 sid=-1\nglob 2 here kind=3 sid=0\nglob 3 sizes kind=2 sid=-1\nglob 4 s kind=3 sid=1\n"
+  hold pin = xf_pin(defs, needles)
+  hold count = gl_assert_eq_num(pr_count(defs, "^glob ", 0, 0, 0, 0), 6, "six top-level globals")
+  hold inner = pg_not_contains(defs, "inner")
+  hold text = read_file(defs)
+  hold pos = 0
+  while pos < len(text) {
+    hold start = pos
+    while pos < len(text) && sx_index(text, pos) != 10 { pos = pos + 1 }
+    hold line = gl_slice(text, start, pos)
+    pos = pos + 1
+    when gl_starts_with(line, "  field ") == 1 { hold unresolved = kp_has(line, "kind=-1 sid=-1") }
+  }
+  hold expansion = kp_join(program, "expand.sa")
+  hold no_use = gl_assert_eq_num(pr_count(expansion, "^use \"mods/geom.sa\"", 0, 0, 0, 0), 0, "module use expanded")
+  pin = xf_pin(expansion, "make shout(s: str) -> str\nuse \"not-a-real-file.sa\"\n")
+  hold run = pg_capture(gl_sh_quote(kp_join(program, "c.elf")), kp_join(d, "program.out"))
+  give gl_assert_files_eq("selfhost/sxdefs_tests/program.want", kp_join(d, "program.out"), "real phase-one fixture output")
+}
+make xf_infer_pins(d: str) -> num {
+  hold program = kp_join(d, "sxinfer_tests_program")
+  hold file = kp_join(program, "sx.infer")
+  hold needles = "struct 1 Rect nf=2 gskn=0\n  field 0 o kind=3 sid=0\nstruct 2 Scene nf=2 gskn=0\n  field 0 r kind=3 sid=1\nstruct 4 Box__Box__n nf=1 gskn=1\n  targ 0 kind=3 sid=3\nstruct 6 Pair__Box__s_l nf=2 gskn=2\nfn 2 id nparam=1 gen=0 rk=1 inst_of=0 queued=0\nfn 3 id nparam=1 gen=0 rk=2 inst_of=0 queued=0\nfn 4 first nparam=2 gen=0 rk=1 inst_of=1 queued=0\nglob 1 inner_x kind=0 sid=-1\nglob 6 g_lst kind=2 sid=-1\nglob 7 g_mix kind=1 sid=-1\n"
+  hold pin = xf_pin(file, needles)
+  hold resolved = pg_not_contains(file, "kind=-1")
+  hold run = pg_capture(gl_sh_quote(kp_join(program, "c.elf")), kp_join(d, "program.out"))
+  give gl_assert_files_eq("selfhost/sxinfer_tests/program.want", kp_join(d, "program.out"), "real phase-two fixture output")
+}
+make xf_dispatch(name: str) -> num {
+  hold infer = string_eq(name, "test-native-sxinfer")
+  hold d = concat("selfhost/seed_tests/sxgates/", name)
+  hold clean = gl_clean_dir(d)
+  hold fixtures = xf_fixtures(infer)
+  hold pos = 0
+  hold count = 0
+  while pos < len(fixtures) {
+    hold start = pos
+    while pos < len(fixtures) && sx_index(fixtures, pos) != 10 { pos = pos + 1 }
+    hold source = gl_slice(fixtures, start, pos)
+    pos = pos + 1
+    hold parent = gl_parent_dir(source)
+    hold tag = concat(xb_basename(concat(parent, ".sa")), concat("_", xb_basename(source)))
+    hold folder = kp_join(d, tag)
+    hold mkdir = gl_ensure_dir(folder)
+    hold env = concat("SX_DEFS_DUMP=", gl_sh_quote(folder))
+    when infer == 1 { env = concat(env, concat(" SX_LINK_DUMP=", gl_sh_quote(folder))) }
+    hold cmd = xf_native(source, kp_join(folder, "c.elf"), env)
+    hold rc = gl_run_merged(cmd, kp_join(folder, "c.log"))
+    when infer == 0 {
+      hold off = gl_run_merged(xf_native(source, kp_join(folder, "off.elf"), ""), kp_join(folder, "off.log"))
+      hold inert_status = gl_assert_eq_num(rc, off, "phase-one dump status inertness")
+      hold inert_log = xb_equal(folder, "off.log", "c.log")
+      when path_kind(kp_join(folder, "off.elf")) == 1 { hold inert_elf = xb_equal(folder, "off.elf", "c.elf") }
+      hold expand = pg_command(xf_cmd("sxdefs", source, "expand", kp_join(folder, "sx.expand")), "Sayanox expansion")
+      hold expansion = xb_equal(folder, "expand.sa", "sx.expand")
+    } otherwise { hold compiled = gl_assert_eq_num(rc, 0, "phase-two positive native fixture") }
+    hold tool = "sxdefs"
+    when infer == 1 { tool = "sxinfer" }
+    hold defs = pg_command(xf_cmd(tool, source, "defs", kp_join(folder, "sx.defs")), "Sayanox definition table")
+    hold tables = xb_equal(folder, "defs.txt", "sx.defs")
+    when infer == 1 {
+      hold roots = pg_command(xf_cmd(tool, source, "roots", kp_join(folder, "sx.roots")), "Sayanox root table")
+      hold binary = xf_bytes(folder)
+      hold resolved = pg_command(xf_cmd(tool, source, "infer", kp_join(folder, "sx.infer")), "Sayanox inference")
+    }
+    count = count + 1
+  }
+  hold expected = 9
+  when infer == 1 { expected = 12 }
+  hold cardinality = gl_assert_eq_num(count, expected, "front-end positive fixture cardinality")
+  when infer == 0 {
+    hold pin = xf_defs_pins(d)
+    hold compiler_refusal = xf_refuse("selfhost/compiler_min.sa", kp_join(d, "compiler_refusal"), 0)
+    hold reason = kp_has(compiler_refusal, "at most 6 params")
+  } otherwise { hold pin = xf_infer_pins(d) }
+  hold refusals = xf_refusals(d, infer)
+  hold tool = "sxdefs"
+  hold source = "selfhost/sxdefs_tests/program.sa"
+  when infer == 1 { tool = "sxinfer"
+    source = "selfhost/sxinfer_tests/program.sa" }
+  hold bad = xb_fail_command(xf_cmd(tool, source, "bogus", kp_join(d, "bad.out")), kp_join(d, "bad-mode.log"), "unknown mode")
+  when infer == 0 {
+    bad = xb_fail_command(xf_cmd(tool, source, "tables", kp_join(d, "bad.out")), kp_join(d, "bad-tables.log"), "unknown mode 'tables'")
+    hold no_output = concat(concat("./tools/", tool), concat(" ", concat(gl_sh_quote(source), " defs")))
+    bad = xb_fail_command(no_output, kp_join(d, "missing-output.log"), "")
+  }
+  bad = xb_fail_command(xf_cmd(tool, "selfhost/missing-front-end-fixture.sa", "defs", kp_join(d, "bad.out")), kp_join(d, "missing-source.log"), "")
+  show concat("[OK] Sayanox front-end acceptance: ", name)
+  give 0
+}

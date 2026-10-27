@@ -1,0 +1,478 @@
+// Offline package acceptance state machines. No legacy recipes or shell
+// interpreters: commands only set a child's cwd/environment and launch sxpkg.
+use "tools/sxpkg_targets_lib.sa"
+make kp_join(a: str, b: str) -> str { give concat(concat(a, "/"), b) }
+make kp_write(d: str, file: str, text: str) -> num { give gl_must_write(kp_join(d, file), text) }
+make kp_eq(d: str, file: str, want: str) -> num { give gl_assert_eq_str(read_file(kp_join(d, file)), want, file) }
+make kp_exists(d: str, file: str, kind: num) -> num { give gl_assert_eq_num(path_kind(kp_join(d, file)), kind, file) }
+make kp_copy_tree(source: str, dest: str) -> num {
+  when path_kind(source) == 1 { give pg_copy(source, dest) }
+  when path_kind(source) != 2 { give gl_fail(concat("invalid fixture directory: ", source)) }
+  hold mkdir = gl_ensure_dir(dest)
+  hold names = read_dir(source)
+  hold i = 0
+  while i < len(names) {
+    hold start = i
+    while i < len(names) && sx_index(names, i) != 10 { i = i + 1 }
+    hold name = gl_slice(names, start, i)
+    i = i + 1
+    when len(name) > 0 { hold copy = kp_copy_tree(kp_join(source, name), kp_join(dest, name)) }
+  }
+  give 0
+}
+make kp_field(text: str, key: str) -> str {
+  hold prefix = concat(key, "=")
+  hold i = 0
+  while i < len(text) {
+    hold start = i
+    while i < len(text) && sx_index(text, i) != 10 { i = i + 1 }
+    hold line = gl_slice(text, start, i)
+    i = i + 1
+    when gl_starts_with(line, prefix) == 1 { give gl_slice(line, len(prefix), len(line)) }
+  }
+  give ""
+}
+make kp_hex(text: str, count: num, label: str) -> num {
+  hold width = gl_assert_eq_num(len(text), count, label)
+  hold i = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when (c < 48 || c > 57) && (c < 97 || c > 102) { give gl_fail(concat("non-hex ", label)) }
+    i = i + 1
+  }
+  give 0
+}
+make kp_has(text: str, needle: str) -> num {
+  when pg_find(text, needle) < 0 { give gl_fail(concat("package output missing: ", needle)) }
+  give 0
+}
+make kp_run(d: str, args: str, env: str, expected: num) -> str {
+  hold cwd = path_real(d)
+  when len(cwd) == 0 { hold e = gl_fail("package test directory missing") }
+  hold tool = path_real("tools/sxpkg")
+  hold log = kp_join(cwd, "command.out")
+  hold cmd = concat("cd ", concat(gl_sh_quote(cwd), " && "))
+  cmd = concat(cmd, "SAYANOX_ROOT=. SAYANOX_REGISTRY='' SAYANOX_SIGN_KEY='' SAYANOX_REQUIRE_SIGNED='' SAYANOX_ONLINE='' ")
+  cmd = concat(cmd, concat(env, " "))
+  cmd = concat(cmd, concat(gl_sh_quote(tool), concat(" ", args)))
+  hold rc = gl_run_merged(cmd, log)
+  when expected < 0 {
+    when rc == 0 { hold e = gl_fail(concat("package command unexpectedly succeeded: ", args)) }
+  } otherwise {
+    hold exact = gl_assert_eq_num(rc, expected, concat("package command status: ", args))
+  }
+  give read_file(log)
+}
+make kp_out(d: str, args: str, want: str) -> num {
+  hold text = kp_run(d, args, "", 0)
+  give gl_assert_eq_str(gl_strip_trailing_nl(text), want, concat("package stdout: ", args))
+}
+make kp_no_staging(d: str) -> num {
+  hold names = read_dir(d)
+  hold i = 0
+  while i < len(names) {
+    hold start = i
+    while i < len(names) && sx_index(names, i) != 10 { i = i + 1 }
+    hold name = gl_slice(names, start, i)
+    i = i + 1
+    when len(name) >= 5 && string_eq(gl_slice(name, len(name) - 5, len(name)), ".part") == 1 { give gl_fail("partial download left behind") }
+    when gl_starts_with(name, ".fetch.") == 1 { give gl_fail("fetch staging directory left behind") }
+    when path_kind(kp_join(d, name)) == 2 { hold sub = kp_no_staging(kp_join(d, name)) }
+  }
+  give 0
+}
+make kp_basic(d: str) -> num {
+  hold lock = kp_write(d, "sx.lock", "")
+  hold toml = kp_write(d, "sx.toml", "")
+  hold init = kp_run(d, "init", "", 0)
+  hold empty = kp_eq(d, "sx.lock", "# sx.lock\nversion=1\n")
+  hold config = kp_eq(d, "sx.toml", "name = \"my-pkg\"\nversion = \"0.1.0\"\n")
+  hold a = kp_run(d, "add math 0.1.0", "", 0)
+  hold b = kp_run(d, "add math 0.2.0", "", 0)
+  hold c = kp_run(d, "add strings", "", 0)
+  hold updated = kp_eq(d, "sx.lock", "# sx.lock\nversion=1\nmath=0.2.0\nstrings=0.1.0\n")
+  hold list = kp_out(d, "list", "sxpkg: locked packages\nmath=0.2.0\nstrings=0.1.0")
+  hold remove = kp_run(d, "remove math", "", 0)
+  hold final = "# sx.lock\nversion=1\nstrings=0.1.0\n"
+  hold checked = kp_eq(d, "sx.lock", final)
+  init = kp_run(d, "init", "", 0)
+  give kp_eq(d, "sx.lock", final)
+}
+make kp_wrapper(d: str) -> num {
+  hold lock = kp_write(d, "sx.lock", "")
+  hold toml = kp_write(d, "sx.toml", "")
+  hold init = kp_run(d, "init", "", 0)
+  hold add = kp_run(d, "add local-pkg", "", 0)
+  hold list = kp_out(d, "list", "sxpkg: locked packages\nlocal-pkg=0.1.0")
+  hold remove = kp_run(d, "remove local-pkg", "", 0)
+  hold empty = kp_out(d, "list", "sxpkg: locked packages\n(none)")
+  hold seed = kp_run(d, "seed", "", 0)
+  hold index = kp_eq(d, ".sayanox/registry/INDEX", "hello=0.1.0\nmath=0.1.0\n")
+  hold search = kp_out(d, "search math", "sxpkg: search math\n  math 0.1.0")
+  hold info = kp_out(d, "info math", "name=math\nversion=0.1.0\ndesc=tiny math helpers (dbl, sqr)\nsum=718013937\nsha256=20c269795b03f933a723721400d7f5eef29aa8df6dd43a058b437f0e5edfce4e\norigin=seed:builtin")
+  hold project_lock = kp_write(d, "project/sx.lock", "")
+  hold project_toml = kp_write(d, "project/sx.toml", "")
+  init = kp_run(d, "init", "SAYANOX_ROOT=project", 0)
+  hold rooted = kp_eq(d, "project/sx.lock", "# sx.lock\nversion=1\n")
+  add = kp_run(d, "add rooted 0.1.0", "SAYANOX_ROOT=project", 0)
+  give kp_eq(d, "project/sx.lock", "# sx.lock\nversion=1\nrooted=0.1.0\n")
+}
+make kp_polish(d: str) -> num {
+  hold lock = kp_write(d, "sx.lock", "")
+  hold toml = kp_write(d, "sx.toml", "name = \"pol-pkg\"\nversion = \"0.1.0\"\n")
+  hold init = kp_run(d, "init", "", 0)
+  hold add = kp_run(d, "add nosuch 1.0", "", 0)
+  hold note = kp_has(add, "nosuch has no local registry copy")
+  hold verify = kp_run(d, "verify", "", -1)
+  hold install = kp_run(d, concat("install-local ", gl_sh_quote(path_real("registry"))), "", -1)
+  hold unknown = kp_run(d, "bogus", "", 2)
+  hold publish = kp_run(d, "publish", "", 0)
+  hold saved = kp_write(d, "publish.out", publish)
+  give gl_assert_eq_num(pr_count(kp_join(d, "publish.out"), "sxpkg: published locally pol-pkg 0.1.0", 1, 0, 0, 0), 1, "publish reports exactly once")
+}
+make kp_crypto(d: str) -> num {
+  hold a = kp_write(d, "c1.sa", "make az(n) {\n  give n\n}\n")
+  hold b = kp_write(d, "c2.sa", "make b[(n) {\n  give n\n}\n")
+  hold different = gl_assert_eq_num(gl_files_equal(kp_join(d, "c1.sa"), kp_join(d, "c2.sa")), 0, "distinct collision fixtures")
+  hold sum1 = kp_run(d, "sum c1.sa", "", 0)
+  hold sum2 = kp_run(d, "sum c2.sa", "", 0)
+  hold h1 = kp_run(d, "sha256 c1.sa", "", 0)
+  hold h2 = kp_run(d, "sha256 c2.sa", "", 0)
+  // Prefix fields have fixed widths; compare the numeric/digest token only.
+  hold s1 = gl_slice(sum1, 11, pg_find(sum1, " c1.sa"))
+  hold s2 = gl_slice(sum2, 11, pg_find(sum2, " c2.sa"))
+  hold weak = gl_assert_eq_str(s1, s2, "weak sum collision")
+  hold strong = gl_assert_eq_num(string_eq(gl_slice(h1, 14, 78), gl_slice(h2, 14, 78)), 0, "SHA-256 distinguishes collision")
+  hold project = kp_join(d, "proj")
+  hold mkdir = gl_ensure_dir(project)
+  hold init = kp_run(project, "init", "", 0)
+  hold seed = kp_run(project, "seed", "", 0)
+  hold meta_file = kp_join(project, ".sayanox/registry/math/pkg.meta")
+  hold main_file = kp_join(project, ".sayanox/registry/math/main.sa")
+  hold meta = read_file(meta_file)
+  hold sha = kp_hex(kp_field(meta, "sha256"), 64, "seed digest")
+  hold origin = gl_assert_eq_str(kp_field(meta, "origin"), "seed:builtin", "seed provenance")
+  when len(kp_field(meta, "sum")) == 0 { hold e = gl_fail("legacy sum field dropped") }
+  when run_command("command -v sha256sum >/dev/null 2>&1") == 0 {
+    hold host = pg_capture(concat("sha256sum ", gl_sh_quote(main_file)), kp_join(d, "host.sha"))
+    hold oracle = gl_assert_eq_str(gl_slice(read_file(kp_join(d, "host.sha")), 0, 64), kp_field(meta, "sha256"), "independent package digest oracle")
+  }
+  hold add = kp_run(project, "add math 0.1.0", "", 0)
+  hold original = read_file(main_file)
+  hold swap_a = "make dbl(n) {\n  give n + n\n}\nmake sqr(n) {\n  give n * n\n}\n"
+  hold swap_b = "make dbl(n) {\n  hJve n + n\n}\nmake sqr(n) {\n  give n * n\n}\n"
+  hold fixture = gl_assert_eq_str(original, swap_a, "seeded math collision baseline")
+  a = kp_write(d, "swap_a.sa", swap_a)
+  b = kp_write(d, "swap_b.sa", swap_b)
+  sum1 = kp_run(d, "sum swap_a.sa", "", 0)
+  sum2 = kp_run(d, "sum swap_b.sa", "", 0)
+  hold swap_sum = gl_assert_eq_str(gl_slice(sum1, 11, pg_find(sum1, " swap_a.sa")), gl_slice(sum2, 11, pg_find(sum2, " swap_b.sa")), "swap preserves weak sum")
+  hold mutate = gl_must_write(main_file, swap_b)
+  hold refused = kp_run(project, "verify", "", -1)
+  hold digest_reason = kp_has(refused, "hashes to")
+  hold restore = gl_must_write(main_file, original)
+  hold unsigned = kp_out(project, "verify", "sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages)")
+  hold sign = kp_run(project, "sign math", "SAYANOX_SIGN_KEY=test-key-1", 0)
+  hold reported = gl_assert_eq_num(gl_starts_with(sign, "sxpkg: signed math 0.1.0\n"), 1, "sign output")
+  hold signed_meta = read_file(meta_file)
+  hold sig = kp_hex(kp_field(signed_meta, "sig"), 64, "signature")
+  hold signer = kp_hex(kp_field(signed_meta, "signer"), 16, "signer identity")
+  hold auth = kp_run(project, "authenticate math", "SAYANOX_SIGN_KEY=test-key-1", 0)
+  hold authentic = kp_has(auth, "sxpkg: authentic math signer=")
+  hold verified = kp_run(project, "verify", "SAYANOX_SIGN_KEY=test-key-1", 0)
+  hold signature_ok = kp_has(verified, "sxpkg: signature ok math\n")
+  hold keyfile = kp_write(project, ".sayanox/keys/default.key", "test-key-1\n")
+  auth = kp_run(project, "authenticate math", "", 0)
+  hold disk_key = kp_has(auth, "sxpkg: authentic math")
+  auth = kp_run(project, "authenticate math", "SAYANOX_SIGN_KEY=another-key", -1)
+  hold bad_key = kp_has(auth, "BAD")
+  mutate = gl_must_write(main_file, swap_b)
+  auth = kp_run(project, "authenticate math", "SAYANOX_SIGN_KEY=test-key-1", -1)
+  hold bad_bytes = kp_has(auth, "BAD main.sa does not match the signed sha256")
+  restore = gl_must_write(main_file, original)
+  hold lines = ""
+  hold pos = 0
+  while pos < len(signed_meta) {
+    hold start = pos
+    while pos < len(signed_meta) && sx_index(signed_meta, pos) != 10 { pos = pos + 1 }
+    hold line = gl_slice(signed_meta, start, pos)
+    pos = pos + 1
+    when gl_starts_with(line, "sha256=") == 0 { lines = concat(lines, concat(line, "\n")) }
+  }
+  lines = concat(lines, "sha256=0000000000000000000000000000000000000000000000000000000000000000\n")
+  mutate = gl_must_write(meta_file, lines)
+  auth = kp_run(project, "authenticate math", "SAYANOX_SIGN_KEY=test-key-1", -1)
+  restore = gl_must_write(meta_file, signed_meta)
+  hold rm_key = remove_path(kp_join(project, ".sayanox/keys/default.key"))
+  auth = kp_run(project, "authenticate math", "", 0)
+  hold nokey = kp_has(auth, "sxpkg: NOKEY math")
+  auth = kp_run(project, "authenticate math", "SAYANOX_REQUIRE_SIGNED=1", -1)
+  add = kp_run(project, "add hello 0.1.0", "", 0)
+  verified = kp_run(project, "verify", "SAYANOX_SIGN_KEY=test-key-1 SAYANOX_REQUIRE_SIGNED=1", -1)
+  hold unsigned_rejected = kp_has(verified, "sxpkg: UNSIGNED hello\n")
+  hold pub = kp_join(d, "pub")
+  hold toml = kp_write(pub, "sx.toml", "name = \"provpkg\"\nversion = \"2.0.0\"\n")
+  hold source = kp_write(pub, "main.sa", "show \"published\"\n")
+  hold publish = kp_run(pub, "publish", "", 0)
+  meta = read_file(kp_join(pub, ".sayanox/registry/provpkg/pkg.meta"))
+  hold pub_digest = kp_hex(kp_field(meta, "sha256"), 64, "published digest")
+  give gl_assert_eq_num(gl_starts_with(kp_field(meta, "origin"), "publish:"), 1, "publish provenance")
+}
+make kp_registry(d: str) -> num {
+  hold names = "hello\nmath\nstrings\n"
+  hold i = 0
+  while i < len(names) {
+    hold start = i
+    while i < len(names) && sx_index(names, i) != 10 { i = i + 1 }
+    hold name = gl_slice(names, start, i)
+    i = i + 1
+    hold dir = kp_join("registry", name)
+    hold sum = kp_field(read_file(kp_join(dir, "pkg.meta")), "sum")
+    when len(sum) == 0 { give gl_fail("missing registry sum") }
+    hold main = kp_join(dir, "main.sa")
+    hold log = kp_join(d, "sum.out")
+    hold captured = pg_capture(concat("./tools/sxpkg sum ", gl_sh_quote(main)), log)
+    hold exact = gl_assert_eq_str(read_file(log), concat("sxpkg: sum ", concat(sum, concat(" ", concat(main, "\n")))), "repository registry sum")
+  }
+  give 0
+}
+make kp_online_local(d: str) -> num {
+  hold good = kp_copy_tree(path_real("registry"), kp_join(d, "good"))
+  hold bad = kp_copy_tree(kp_join(d, "good"), kp_join(d, "bad"))
+  hold missing = kp_copy_tree(kp_join(d, "good"), kp_join(d, "miss"))
+  hold file = kp_join(d, "bad/strings/main.sa")
+  hold tamper = gl_must_write(file, concat(read_file(file), "show 999\n"))
+  hold removed = gl_rm_tree(kp_join(d, "miss/strings"))
+  hold i = 0
+  while i < 3 {
+    hold name = "good"
+    when i == 1 { name = "bad" }
+    when i == 2 { name = "miss" }
+    hold project = kp_join(d, concat("p_", name))
+    hold mkdir = gl_ensure_dir(project)
+    hold init = kp_run(project, "init", "", 0)
+    hold add = kp_run(project, "add strings 0.1.0", "", 0)
+    hold env = concat("SAYANOX_REGISTRY=", gl_sh_quote(concat("file://", path_real(kp_join(d, name)))))
+    hold expected = 0
+    when i > 0 { expected = 1 }
+    hold install = kp_run(project, "install", env, expected)
+    when i == 0 { hold verified = kp_has(install, "verify ok") }
+    when i == 1 { hold rolled_back = kp_exists(project, ".sayanox/registry/strings/main.sa", 0) }
+    when i == 2 { hold no_partial = kp_exists(project, ".sayanox/registry/strings/main.sa.part", 0) }
+    i = i + 1
+  }
+  give 0
+}
+make kp_optin(d: str) -> num {
+  hold project = kp_join(d, "p")
+  hold mkdir = gl_ensure_dir(project)
+  hold init = kp_run(project, "init", "", 0)
+  hold add = kp_run(project, "add strings 0.1.0", "", 0)
+  hold remote = "SAYANOX_REGISTRY=https://registry.invalid/r"
+  hold text = kp_run(project, "sync", remote, -1)
+  hold refusal = kp_has(text, "refusing to use the network without an explicit opt-in")
+  hold hint = kp_has(text, "SAYANOX_ONLINE=1")
+  hold offline = kp_has(text, "install-local")
+  // A native Sayanox mock transport, never a shell script or real network call.
+  hold mock = kp_join(d, "mock")
+  hold mock_dir = gl_ensure_dir(mock)
+  hold source = kp_write(mock, "curl.sa", "hold w = write_file(\"/dev/stderr\", \"test transfer attempted\\n\")\nhold e = exit(1)\n")
+  hold build_cmd = concat("./tools/sxc_native ", concat(gl_sh_quote(kp_join(mock, "curl.sa")), concat(" ", gl_sh_quote(kp_join(mock, "curl")))))
+  hold built = pg_command(build_cmd, "native mock curl")
+  hold env = concat("PATH=", gl_sh_quote(concat(path_real(mock), concat(":", getenv("PATH")))))
+  env = concat(env, concat(" ", remote))
+  hold i = 0
+  while i < 2 {
+    hold args = "sync"
+    hold options = concat(env, " SAYANOX_ONLINE=1")
+    when i == 1 { args = "--online sync"
+      options = env }
+    text = kp_run(project, args, options, 0)
+    hold attempt = kp_has(text, "test transfer attempted")
+    hold fallback = kp_has(text, "online sync failed; using local seed")
+    when pg_find(text, "refusing to use the network") >= 0 { give gl_fail("opt-in did not lift refusal") }
+    i = i + 1
+  }
+  hold rm = gl_rm_tree(kp_join(project, ".sayanox/registry/strings"))
+  hold copy = kp_copy_tree("registry/strings", kp_join(project, ".sayanox/registry/strings"))
+  text = kp_run(project, "install", remote, 0)
+  hold verified = kp_has(text, "verify ok")
+  when pg_find(text, "refusing to use the network") >= 0 { give gl_fail("all-local install asked for network permission") }
+  rm = gl_rm_tree(kp_join(project, ".sayanox/registry/strings"))
+  text = kp_run(project, "install", remote, -1)
+  hold needed = kp_has(text, "refusing to use the network without an explicit opt-in")
+  hold one = kp_write(d, "one.sa", "show 1\n")
+  text = kp_run(project, concat("fetch ", concat(gl_sh_quote(concat("file://", path_real(kp_join(d, "one.sa")))), " onepkg")), "", 0)
+  hold fetched = kp_has(text, "fetched onepkg")
+  text = kp_run(project, "fetch https://registry.invalid/one.sa onepkg2", "", -1)
+  hold permission = kp_has(text, "refusing to use the network without an explicit opt-in")
+  hold absent = kp_exists(project, ".sayanox/registry/onepkg2", 0)
+  give kp_no_staging(d)
+}
+make kp_pkgs(d: str) -> num {
+  hold project = kp_join(d, "project")
+  hold mkdir = gl_ensure_dir(project)
+  hold init = kp_run(project, "init", "", 0)
+  hold seed = kp_run(project, "seed", "", 0)
+  when len(read_file(kp_join(project, ".sayanox/registry/math/main.sa"))) == 0 { give gl_fail("seeded math is empty") }
+  hold add = kp_run(project, "add math 0.1.0", "", 0)
+  hold list = kp_out(project, "list", "sxpkg: locked packages\nmath=0.1.0")
+  hold search = kp_out(project, "search math", "sxpkg: search math\n  math 0.1.0")
+  hold source = kp_write(project, "use_math.sa", "use \".sayanox/registry/math/main.sa\"\nshow dbl(21)\nshow sqr(6)\n")
+  hold parity = xr_three(kp_join(project, "use_math.sa"), kp_join(project, "math_parity"), "42\n36")
+  hold deps = kp_join(d, "dependencies")
+  hold copy = kp_copy_tree(path_real("registry"), kp_join(deps, "registry"))
+  mkdir = gl_ensure_dir(kp_join(deps, ".sayanox/registry"))
+  init = kp_run(deps, "init", "", 0)
+  hold closure = kp_out(deps, "add calc 0.1.0", "sxpkg: locked math 0.1.0 (dependency of calc)\nsxpkg: locked calc 0.1.0\nsxpkg: note: calc has no local registry copy yet (run: sxpkg seed; or sxpkg sync when online)")
+  hold lock = kp_eq(deps, "sx.lock", "# sx.lock\nversion=1\ncalc=0.1.0\nmath=0.1.0\n")
+  hold resolution = kp_out(deps, "deps", "sxpkg: dependency closure\n  calc 0.1.0\n  math 0.1.0")
+  hold rm = gl_rm_tree(kp_join(deps, ".sayanox/registry"))
+  hold failure = kp_out(deps, "install registry", "sxpkg: MISSING calc: cannot write .sayanox/registry/calc/; run sxpkg install-local to create the folders\nsxpkg: MISSING math: cannot write .sayanox/registry/math/; run sxpkg install-local to create the folders\nsxpkg: install FAILED (2 problem(s))")
+  hold installed = kp_out(deps, "install-local registry", "sxpkg: installed calc 0.1.0\nsxpkg: installed math 0.1.0\nsxpkg: install ok")
+  hold verified = kp_out(deps, "verify", "sxpkg: verified calc 0.1.0\nsxpkg: verified math 0.1.0\nsxpkg: verify ok (2 locked packages)")
+  source = kp_write(deps, "use_calc.sa", "use \".sayanox/registry/calc/main.sa\"\nshow dblsqr(3)\nshow sqr(5)\n")
+  parity = xr_three(kp_join(deps, "use_calc.sa"), kp_join(deps, "calc_parity"), "36\n25")
+  lock = kp_write(deps, "sx.lock", "# sx.lock\nversion=1\ncalc=0.1.0\n")
+  hold missing_dep = kp_out(deps, "deps", "sxpkg: DEP calc needs math@0.1.0 which is not in sx.lock; run: sxpkg add math 0.1.0")
+  lock = kp_write(deps, "sx.lock", "# sx.lock\nversion=1\ncalc=0.1.0\nmath=0.2.0\n")
+  hold mismatch_dep = kp_out(deps, "deps", "sxpkg: DEP calc needs math@0.1.0 but sx.lock has 0.2.0")
+  verified = kp_out(project, "verify", "sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages)")
+  hold tamper = kp_write(project, ".sayanox/registry/math/main.sa", "make dbl(n) {\n  give n + n + 0\n}\n")
+  hold failed = kp_run(project, "verify", "", -1)
+  hold report = gl_assert_eq_str(failed, "sxpkg: MISMATCH math: main.sa sums to 115762249 but pkg.meta says 718013937\nsxpkg: verify FAILED (1 problem(s))\n", "exact tamper report")
+  seed = kp_run(project, "seed", "", 0)
+  verified = kp_out(project, "verify", "sxpkg: verified math 0.1.0\nsxpkg: verify ok (1 locked packages)")
+  give kp_out(project, "sum .sayanox/registry/math/main.sa", "sxpkg: sum 718013937 .sayanox/registry/math/main.sa")
+}
+make kp_logic(d: str) -> num {
+  hold quote = kp_write(d, "quotes.sa", "// a comment with two \"quotes\" in it, balanced\nmake f(a: num, b: str) -> num {\n  give len(b)\n}\nshow f(1, \"x\")\n")
+  hold gen2 = pg_emit(1, kp_join(d, "quotes.sa"), kp_join(d, "quotes.c"), 0)
+  hold typed = pg_contains(kp_join(d, "quotes.c"), "static double f(double a, char *b)")
+  hold compile = gl_compile_c(kp_join(d, "quotes.c"), kp_join(d, "quotes"), "")
+  hold run = pg_capture(gl_sh_quote(kp_join(d, "quotes")), kp_join(d, "quotes.out"))
+  hold quote_output = kp_eq(d, "quotes.out", "1\n")
+  gen2 = pg_emit(1, "tools/sxpkg.sa", kp_join(d, "sxpkg_check.c"), 0)
+  hold no_double = pg_not_contains(kp_join(d, "sxpkg_check.c"), ", double str,")
+  hold toml = kp_write(d, "sx.toml", "name = \"pub-pkg\"\nversion = \"2.3.4\"\n")
+  hold source = kp_write(d, "main.sa", "show \"pub\"\n")
+  hold lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\n")
+  hold published = kp_run(d, "publish", "", 0)
+  hold report = kp_has(published, "sxpkg: published locally pub-pkg 2.3.4")
+  hold log = kp_write(d, "publish.out", published)
+  hold once = gl_assert_eq_num(pr_count(kp_join(d, "publish.out"), "sxpkg: published locally", 1, 0, 0, 0), 1, "one publish report")
+  hold exists = kp_exists(d, ".sayanox/registry/pub-pkg/main.sa", 1)
+  hold meta = read_file(kp_join(d, ".sayanox/registry/pub-pkg/pkg.meta"))
+  hold name = gl_assert_eq_str(kp_field(meta, "name"), "pub-pkg", "published name")
+  hold version = gl_assert_eq_str(kp_field(meta, "version"), "2.3.4", "published version")
+  when pr_match(kp_field(meta, "sum"), "^[0-9][0-9]*$", 0) != 1 { give gl_fail("publish omitted numeric sum") }
+  hold index = kp_eq(d, ".sayanox/registry/INDEX", "pub-pkg=2.3.4\n")
+  hold not_installed = kp_exists(d, ".sayanox/pkgs", 0)
+  published = kp_run(d, "publish", "", 0)
+  index = kp_eq(d, ".sayanox/registry/INDEX", "pub-pkg=2.3.4\n")
+  lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\npub-pkg=2.3.4\n")
+  hold verified = kp_run(d, "verify", "", 0)
+  hold ok = kp_has(verified, "verify ok")
+  hold copy = kp_copy_tree("registry/math", kp_join(d, "srcreg/math"))
+  copy = kp_copy_tree("registry/strings", kp_join(d, "srcreg/strings"))
+  lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\nmath=0.1.0\nstrings=0.1.0\n")
+  hold install = kp_run(d, "install-local srcreg", "", 0)
+  ok = kp_has(install, "sxpkg: install ok")
+  exists = kp_exists(d, ".sayanox/registry/math/pkg.meta", 1)
+  exists = kp_exists(d, ".sayanox/pkgs/math", 2)
+  verified = kp_run(d, "verify", "", 0)
+  ok = kp_has(verified, "verify ok")
+  lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\nnosuch=9.9\n")
+  install = kp_run(d, "install-local srcreg", "", -1)
+  lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\n../escape=1.0\n")
+  install = kp_run(d, "install-local srcreg", "", -1)
+  hold no_escape = kp_exists(gl_parent_dir(d), "escape", 0)
+  hold removed = remove_path(kp_join(d, "sx.lock"))
+  install = kp_run(d, "install-local srcreg", "", -1)
+  copy = kp_copy_tree("registry/hello", kp_join(d, "syncreg/hello"))
+  copy = kp_copy_tree("registry/math", kp_join(d, "syncreg/math"))
+  hold want_index = "hello=0.1.0\nmath=0.1.0\n"
+  index = kp_write(d, "syncreg/INDEX", want_index)
+  lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\n")
+  hold rm = gl_rm_tree(kp_join(d, ".sayanox"))
+  hold env = concat("SAYANOX_REGISTRY=", gl_sh_quote(concat("file://", path_real(kp_join(d, "syncreg")))))
+  hold sync = kp_run(d, "sync", env, 0)
+  ok = kp_has(sync, "sxpkg: index updated")
+  ok = kp_has(sync, "  synced math=0.1.0")
+  index = kp_eq(d, ".sayanox/registry/INDEX", want_index)
+  sync = kp_run(d, "sync", env, 0)
+  log = kp_write(d, "sync2.out", sync)
+  once = gl_assert_eq_num(pr_count(kp_join(d, "sync2.out"), "  synced math=0.1.0", 1, 0, 0, 0), 1, "one sync report")
+  index = kp_write(d, "badreg/INDEX", "../escape=0.1.0\nmath=0.1.0\n")
+  env = concat("SAYANOX_REGISTRY=", gl_sh_quote(concat("file://", path_real(kp_join(d, "badreg")))))
+  sync = kp_run(d, "sync", env, -1)
+  index = kp_eq(d, ".sayanox/registry/INDEX", want_index)
+  no_escape = kp_exists(gl_parent_dir(d), "escape", 0)
+  rm = gl_rm_tree(kp_join(d, ".sayanox"))
+  sync = kp_run(d, "sync", "SAYANOX_REGISTRY=file:///nonexistent-registry", 0)
+  ok = kp_has(sync, "sxpkg: local registry seeded")
+  rm = gl_rm_tree(kp_join(d, ".sayanox"))
+  lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\n")
+  source = kp_write(d, "fetchsrc.sa", "show \"fetched\"\n")
+  hold fetch = kp_run(d, "fetch fetchsrc.sa fetched", "", 0)
+  ok = kp_has(fetch, "sxpkg: fetched fetched from fetchsrc.sa (checksum recorded; not authenticated)")
+  exists = kp_exists(d, ".sayanox/registry/fetched/main.sa", 1)
+  exists = kp_exists(d, ".sayanox/pkgs/fetched/main.sa", 1)
+  meta = read_file(kp_join(d, ".sayanox/registry/fetched/pkg.meta"))
+  when pr_match(kp_field(meta, "sum"), "^[0-9][0-9]*$", 0) != 1 { give gl_fail("fetch omitted numeric sum") }
+  hold pinned = kp_has(read_file(kp_join(d, "sx.lock")), "fetched=0.0.0")
+  verified = kp_run(d, "verify", "", 0)
+  ok = kp_has(verified, "verify ok")
+  fetch = kp_run(d, "fetch fetchsrc.sa fetched", "", -1)
+  pinned = kp_has(read_file(kp_join(d, "sx.lock")), "fetched=0.0.0")
+  hold clean = kp_no_staging(d)
+  rm = gl_rm_tree(kp_join(d, ".sayanox"))
+  lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\n")
+  hold obstruct = kp_write(d, ".sayanox", "not a directory")
+  fetch = kp_run(d, "fetch fetchsrc.sa rolled", "", -1)
+  exists = kp_exists(d, ".sayanox/registry/rolled", 0)
+  exists = kp_exists(d, ".sayanox/pkgs/rolled", 0)
+  lock = kp_eq(d, "sx.lock", "# sx.lock\nversion=1\n")
+  rm = gl_rm_tree(kp_join(d, ".sayanox"))
+  hold primitive = kp_run(d, "ensure-dir deep/a/b", "", 0)
+  exists = kp_exists(d, "deep/a/b", 2)
+  primitive = kp_run(d, "ensure-dir deep/a/b", "", 0)
+  primitive = kp_run(d, "rm-tree deep", "", 0)
+  exists = kp_exists(d, "deep", 0)
+  primitive = kp_run(d, "rm-tree deep", "", 0)
+  source = kp_write(d, "csrc/a", "one")
+  source = kp_write(d, "csrc/sub/b", "two")
+  primitive = kp_run(d, "copy-tree csrc cdst", "", 0)
+  hold copied = kp_eq(d, "cdst/a", "one")
+  copied = kp_eq(d, "cdst/sub/b", "two")
+  lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\n../escape=0.1.0")
+  primitive = kp_run(d, "check-lock", "", -1)
+  lock = kp_write(d, "sx.lock", "# sx.lock\nversion=1\nstrings=0.1.0\n../escape=0.1.0\n")
+  primitive = kp_run(d, "check-lock", "", -1)
+  ok = kp_has(primitive, "sxpkg: refusing unsafe package name '../escape'")
+  hold seed = kp_run(d, "seed", "", 0)
+  lock = kp_write(d, "sx.lock", "hello=0.1.0\nstrings=0.1.0\n")
+  hold need_fetch = kp_out(d, "need-fetch", "strings")
+  hold cached = kp_out(d, "install-cached icdir", "sxpkg: installed hello -> icdir/hello\nsxpkg: missing strings in registry")
+  exists = kp_exists(d, "icdir/hello/main.sa", 1)
+  lock = kp_write(d, "sx.lock", "hello=0.1.0\n../escape=0.1.0\n")
+  primitive = kp_run(d, "install-cached icdir2", "", -1)
+  no_escape = kp_exists(gl_parent_dir(d), "escape", 0)
+  give kp_no_staging(d)
+}
+make kp_dispatch(name: str) -> num {
+  hold d = concat("selfhost/seed_tests/sxgates/", name)
+  hold clean = gl_clean_dir(d)
+  hold result = 0
+  when string_eq(name, "test-sxpkg") == 1 { result = kp_basic(d) }
+  when string_eq(name, "test-sxpkg-wrapper") == 1 { result = kp_wrapper(d) }
+  when string_eq(name, "test-sxpkg-polish") == 1 { result = kp_polish(d) }
+  when string_eq(name, "test-sxpkg-sayanox-logic") == 1 { result = kp_logic(d) }
+  when string_eq(name, "test-sxpkg-online-optin") == 1 { result = kp_optin(d) }
+  when string_eq(name, "test-sxpkg-online-local") == 1 { result = kp_online_local(d) }
+  when string_eq(name, "test-sxpkg-crypto") == 1 { result = kp_crypto(d) }
+  when string_eq(name, "test-registry-sums") == 1 { result = kp_registry(d) }
+  when string_eq(name, "test-pkgs") == 1 { result = kp_pkgs(d) }
+  show concat("[OK] Sayanox package acceptance: ", name)
+  give result
+}

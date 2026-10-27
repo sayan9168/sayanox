@@ -1,0 +1,233 @@
+// Driver regression tests. Build with sxc_native and run from repository root.
+use "tools/sxgate_lib.sa"
+use "tools/sxport_lib.sa"
+use "tools/sxpattern_lib.sa"
+use "tools/sxlimit_lib.sa"
+
+hold d = "selfhost/seed_tests/sxtargets_test"
+hold clean = gl_clean_dir(d)
+hold log = concat(d, "/command.log")
+hold rc = gl_run_merged("./tools/sxbuild target", log)
+hold a = gl_assert_eq_num(rc, 2, "missing target exits 2")
+rc = gl_run_merged("./tools/sxbuild target sxfmt __not_a_target__", log)
+hold b = gl_assert_eq_num(rc, 2, "unknown target exits 2")
+hold c = gl_assert_eq_num(len(read_file(log)) > 0, 1, "unknown target diagnostic")
+when gl_has_line_starting(read_file(log), "[OK]") == 1 {
+  hold e = gl_fail("valid target executed before invalid-target validation")
+}
+rc = gl_run_merged("./tools/sxbuild target sxfmt", log)
+hold fmt = gl_assert_eq_num(rc, 0, "formatter build")
+hold copy = concat(d, "/sxfmt.before")
+hold cp = gl_assert_eq_num(run_command(concat("cp tools/sxfmt ", gl_sh_quote(copy))), 0, "save formatter")
+rc = gl_run_merged("SXBUILD_SXC_NATIVE=/bin/false ./tools/sxbuild target sxfmt", log)
+when rc == 0 {
+  hold e = gl_fail("native compiler failure incorrectly passed")
+}
+hold unchanged = gl_assert_files_eq("tools/sxfmt", copy, "failed compilation preserves installed tool")
+hold no_tmp = gl_assert_eq_num(path_kind("tools/sxfmt.sxbuild_new"), 0, "failed staging output removed")
+rc = gl_run_merged("SXBUILD_SXC_NATIVE=/bin/false ./tools/sxbuild target sxfmt test-sxfmt", log)
+when rc == 0 {
+  hold e = gl_fail("failed first target incorrectly passed")
+}
+when gl_has_line_starting(read_file(log), "[OK] Sayanox gate:") == 1 {
+  hold e = gl_fail("test ran after prerequisite target failed")
+}
+rc = gl_run_merged("./tools/sxbuild target verify-seed restore-compiler seed-min test-struct test-list test-fn test-migrated", log)
+hold gates = gl_assert_eq_num(rc, 0, "Sayanox-owned seed/build/test targets")
+show "[OK] Sayanox target-driver regression tests"
+
+// The native root entry survives removal of all generated compilers/tools.
+rc = gl_run_merged("./sx doctor", log)
+hold root_entry = gl_assert_eq_num(rc, 0, "native root entry doctor")
+// Registration now closes all original targets. Exercise CI's prerequisite
+// failure propagation without recursively running the whole CI suite inside
+// test-driver (and racing its shared fixtures with an outer acceptance run).
+rc = gl_run_merged("./sx migration", log)
+hold coverage = gl_assert_eq_num(rc, 0, "all original targets registered")
+hold complete = pg_contains(log, "236 / 236")
+rc = gl_run_merged("CC=/__sayanox_deliberately_missing_cc__ ./sx ci", log)
+hold blocked_ci = gl_assert_eq_num(rc, 1, "CI prerequisite failure propagates")
+hold failed_doctor = pg_contains(log, "doctor failed: required toolchain entry missing")
+when gl_has_line_starting(read_file(log), "[OK] complete original CI acceptance chain") == 1 {
+  hold e = gl_fail("CI reported success after a prerequisite failure")
+}
+
+// Native CI guard regression: every forbidden tool records and exits 99.
+// Failures caught by a child must still fail the end-of-job evidence check.
+hold guard_temp = concat(d, "/ci-guard-test")
+hold guard_dir = gl_ensure_dir(guard_temp)
+hold absolute_guard = path_real(guard_temp)
+hold path_file = concat(absolute_guard, "/path.env")
+hold env = concat("RUNNER_TEMP=", gl_sh_quote(absolute_guard))
+env = concat(env, concat(" GITHUB_PATH=", gl_sh_quote(path_file)))
+env = concat(env, " ./sx ")
+rc = gl_run_merged(concat(env, "ci-guard"), log)
+hold armed = gl_assert_eq_num(rc, 0, "native CI guards arm without a compiler")
+rc = gl_run_merged(concat(env, "ci-guard-check"), log)
+hold quiet = gl_assert_eq_num(rc, 0, "unused guards pass")
+hold bin = concat(absolute_guard, "/sayanox-ci-guard/bin")
+hold registered = gl_assert_eq_str(read_file(path_file), concat(bin, "\n"), "guard path registered for next workflow step")
+hold tools = "make\npython\npython3\nnode\nruby\nperl\ncurl\nwget\n"
+hold expected = ""
+hold offset = 0
+while offset < len(tools) {
+  hold start = offset
+  while offset < len(tools) && sx_index(tools, offset) != 10 { offset = offset + 1 }
+  hold tool = gl_slice(tools, start, offset)
+  offset = offset + 1
+  hold shim = concat(concat(bin, "/"), tool)
+  hold rejected = gl_assert_eq_num(run_command(gl_sh_quote(shim)), 99, concat("forbidden child status: ", tool))
+  expected = concat(expected, concat(concat("forbidden bootstrap invocation: ", tool), "\n"))
+}
+hold marker = concat(absolute_guard, "/sayanox-ci-guard/invoked")
+hold append = gl_assert_eq_str(read_file(marker), expected, "all forbidden calls append durable evidence")
+rc = gl_run_merged(concat(env, "ci-guard-check"), log)
+hold swallowed = gl_assert_eq_num(rc, 1, "swallowed failures still fail CI evidence check")
+rc = gl_run_merged(concat(env, "ci-guard"), log)
+hold rearm = gl_assert_eq_num(rc, 1, "rearming cannot erase CI evidence")
+hold retained = gl_assert_eq_str(read_file(marker), expected, "failed rearm retains evidence")
+show "[OK] native Sayanox CI guards: eight tools, exit 99, append evidence and swallowed-failure detection"
+
+// Release planning validates data without creating artifacts or publishing.
+rc = gl_run_merged("RELEASE_TAG=v0.0.0-test ./sx release-plan", log)
+hold plan_ok = gl_assert_eq_num(rc, 0, "release dry plan")
+hold plan_text = pg_contains(log, "Plan only: no archive, tag or release was created")
+rc = gl_run_merged("RELEASE_TAG='v1;not-a-command' ./sx release-plan", log)
+hold unsafe_tag = gl_assert_eq_num(rc, 2, "unsafe release tag rejected")
+rc = gl_run_merged("RELEASE_TAG='' ./sx release-plan", log)
+hold missing_tag = gl_assert_eq_num(rc, 2, "missing release tag rejected")
+show "[OK] Sayanox release plan: valid version, unsafe input and missing tag"
+
+rc = gl_run_merged("./tools/sxbuild target test-recovery", log)
+hold cold_recovery = gl_assert_eq_num(rc, 0, "cold missing-source recovery without compiler binaries")
+show "[OK] native-entry offline recovery and corruption refusal"
+
+rc = gl_run_merged("./tools/sxbuild target test-native-bootstrap", log)
+hold native_bootstrap = gl_assert_eq_num(rc, 0, "native bootstrap without C seed/compiler and source-pin refusal")
+show "[OK] isolated native Sayanox compiler bootstrap"
+
+// Exercise cleanup in an isolated fake checkout, never in the live workspace.
+// The only shell composition here sets a child process's working directory.
+hold driver = path_real("tools/sxbuild")
+hold fake = concat(d, "/clean-root")
+hold fake_dir = gl_ensure_dir(fake)
+hold marker1 = gl_must_write(concat(fake, "/tools/sxbuild.sa"), "driver source sentinel")
+hold marker2 = gl_must_write(concat(fake, "/selfhost/compiler_min.sa"), "compiler source sentinel")
+hold entry_sentinel = gl_must_write(concat(fake, "/sx"), "persistent native entry")
+hold sentinel = gl_must_write(concat(fake, "/unrelated.txt"), "do not delete")
+hold plan_file = concat(d, "/clean-plan")
+rc = run_command(concat("./tools/sxbuild target clean-plan > ", gl_sh_quote(plan_file)))
+hold plan_status = gl_assert_eq_num(rc, 0, "cleanup plan")
+hold plan = read_file(plan_file)
+hold pos = 0
+while pos < len(plan) {
+  hold start = pos
+  while pos < len(plan) && sx_index(plan, pos) != 10 { pos = pos + 1 }
+  hold name = gl_slice(plan, start, pos)
+  pos = pos + 1
+  when len(name) > 0 {
+    hold output = gl_must_write(concat(concat(fake, "/"), name), "generated output")
+  }
+}
+hold launch = concat("cd ", gl_sh_quote(path_real(fake)))
+launch = concat(launch, concat(" && ", concat(gl_sh_quote(driver), " target clean")))
+rc = gl_run_merged(launch, path_real(log))
+hold cleaned = gl_assert_eq_num(rc, 0, "cleanup isolated checkout")
+pos = 0
+while pos < len(plan) {
+  hold start = pos
+  while pos < len(plan) && sx_index(plan, pos) != 10 { pos = pos + 1 }
+  hold name = gl_slice(plan, start, pos)
+  pos = pos + 1
+  when len(name) > 0 {
+    hold gone = gl_assert_eq_num(path_kind(concat(concat(fake, "/"), name)), 0, concat("clean removes ", name))
+  }
+}
+hold keep_entry = gl_assert_eq_str(read_file(concat(fake, "/sx")), "persistent native entry", "clean preserves root entry")
+hold keep1 = gl_assert_eq_str(read_file(concat(fake, "/tools/sxbuild.sa")), "driver source sentinel", "clean preserves driver source")
+hold keep2 = gl_assert_eq_str(read_file(concat(fake, "/selfhost/compiler_min.sa")), "compiler source sentinel", "clean preserves compiler source")
+hold keep3 = gl_assert_eq_str(read_file(concat(fake, "/unrelated.txt")), "do not delete", "clean preserves unrelated files")
+hold blocked = gl_ensure_dir(concat(fake, "/tools/sxgates"))
+rc = gl_run_merged(launch, path_real(log))
+when rc == 0 { hold e = gl_fail("clean accepted a directory in the output allowlist") }
+show "[OK] Sayanox clean: explicit output allowlist, source preservation, directory refusal"
+
+// Optional integration proof: an isolated working directory has no Makefile;
+// PATH's make executable is a Sayanox poison program that records any call.
+when arg_count() == 2 && string_eq(arg(1), "--without-make") == 1 {
+  hold workspace = concat(d, "/without_make")
+  hold created = gl_clean_dir(workspace)
+  hold root = path_real(".")
+  hold index = 0
+  // Native bootstrap is a real dependency, including in the no-Make fixture.
+  while index < 9 {
+    hold name = "tools"
+    when index == 1 { name = "selfhost" }
+    when index == 2 { name = "stdlib" }
+    when index == 3 { name = "docs" }
+    when index == 4 { name = "sx" }
+    when index == 5 { name = ".github" }
+    when index == 6 { name = "README.md" }
+    when index == 7 { name = "registry" }
+    when index == 8 { name = "bootstrap" }
+    hold link = 1
+    when index == 6 {
+      hold readme_copy = gl_must_write(concat(workspace, "/README.md"), read_file(concat(root, "/README.md")))
+    } otherwise {
+      when index == 4 {
+        // The entry-integrity audit requires an actual executable file, not a
+        // symlink. Copy bytes/mode with the permitted host file-copy utility.
+        hold entry_copy = run_command(concat("cp ", concat(gl_sh_quote(concat(root, "/sx")), concat(" ", gl_sh_quote(concat(workspace, "/sx"))))))
+        hold copied = gl_assert_eq_num(entry_copy, 0, "copy native entry into integration workspace")
+      } otherwise {
+        link = make_link(concat(concat(root, "/"), name), concat(concat(workspace, "/"), name))
+      }
+    }
+    hold linked = gl_assert_eq_num(link, 1, concat("link workspace ", name))
+    index = index + 1
+  }
+  hold absent = gl_assert_eq_num(path_kind(concat(workspace, "/Makefile")), 0, "integration workspace has no Makefile")
+  hold shim = concat(d, "/poison_bin")
+  hold shim_dir = gl_ensure_dir(shim)
+  hold shim_absolute = path_real(shim)
+  hold invocation_log = concat(shim_absolute, "/invoked")
+  hold poison_source = concat(shim_absolute, "/reject_make.sa")
+  hold poison = concat(shim_absolute, "/make")
+  hold source = concat("hold w = write_file(\"", invocation_log)
+  source = concat(source, "\", \"make was invoked\\n\")\nhold e = exit(97)\n")
+  hold fixture = gl_must_write(poison_source, source)
+  hold compile = concat("./tools/sxc_native ", concat(gl_sh_quote(poison_source), " "))
+  compile = concat(compile, gl_sh_quote(poison))
+  hold compiled = gl_assert_eq_num(run_command(compile), 0, "compile Sayanox make-poison fixture")
+  hold launch = concat("cd ", gl_sh_quote(path_real(workspace)))
+  launch = concat(launch, concat(" && PATH=", gl_sh_quote(concat(concat(shim_absolute, ":"), getenv("PATH")))))
+  launch = concat(launch, concat(" ", gl_sh_quote(driver)))
+  launch = concat(launch, " target test-ported test-ported-more test-memory test-remaining-language test-backend-modules test-package-acceptance test-front-end-acceptance test-native-ir-log test-native-ir-portable test-last-language test-native32 test-native-arm64 test-native-riscv64 test-sxmod test-migrated test-lsp test-lsp-robust test-stdlib-next test-stdlib-csv test-stdlib-extended test-ir-exec test-sxsuite test-native-stage2-parity")
+  hold status = gl_run_merged(launch, path_real(log))
+  hold passed = gl_assert_eq_num(status, 0, "gates run without Makefile")
+  hold unused = gl_assert_eq_num(path_kind(invocation_log), 0, "make never invoked")
+  show "[OK] no-Makefile integration: migrated gates pass, Sayanox make-poison never invoked"
+}
+
+// Native pattern predicates replace grep processes in migrated gates.
+hold pattern_file = concat(d, "/patterns.txt")
+hold fixture = gl_must_write(pattern_file, "abc123\norange\n  x\n\n")
+hold p0 = gl_assert_eq_num(pr_count(pattern_file, "^[a-z]*[0-9][0-9][0-9]$", 0, 0, 0, 0), 1, "BRE range/repetition")
+hold p1 = gl_assert_eq_num(pr_count(pattern_file, "abc123\\|orange", 0, 1, 0, 0), 2, "whole-line BRE alternatives")
+hold p2 = gl_assert_eq_num(pr_count(pattern_file, "^[[:space:]]+x$", 0, 0, 0, 1), 1, "ERE POSIX class/plus")
+hold p3 = gl_assert_eq_num(pr_count(pattern_file, "^$", 0, 0, 0, 0), 1, "empty line")
+hold p4 = gl_assert_eq_num(pr_count(pattern_file, "orange", 1, 1, 1, 0), 3, "fixed whole-line inverted count")
+hold p5 = gl_assert_eq_num(pr_match("aaab", "^a*ab$", 0), 1, "greedy backtracking")
+hold p6 = gl_assert_eq_num(pr_match("[x]", "^\\[x]$", 0), 1, "escaped literal")
+hold p7 = gl_assert_eq_num(pr_match("abc", "^[^0-9]*$", 0), 1, "negated bracket class")
+
+// The limited launcher must retain the parent's environment and child status.
+hold limited_source = concat(d, "/limited_child.sa")
+hold limited_bin = concat(d, "/limited_child")
+hold limited_text = gl_must_write(limited_source, "show getenv(\"PATH\")\nhold e = exit(37)\n")
+hold compiled = gl_assert_eq_num(run_command(concat("./tools/sxc_native ", concat(gl_sh_quote(limited_source), concat(" ", gl_sh_quote(limited_bin))))), 0, "compile limited child")
+hold limited_out = concat(d, "/limited_child.out")
+hold limited_status = lm_capture(gl_sh_quote(limited_bin), 4096, limited_out, concat(d, "/limit"))
+hold status_ok = gl_assert_eq_num(limited_status, 37, "limited child exit status")
+hold env_ok = gl_assert_eq_str(gl_strip_trailing_nl(read_file(limited_out)), getenv("PATH"), "limited child inherited environment")
+show "[OK] Sayanox pattern predicates and syscall resource-limit launcher"

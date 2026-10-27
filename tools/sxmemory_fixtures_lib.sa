@@ -1,0 +1,19 @@
+// Regression programs from the original memory/GC gate contracts.
+make nm_source(stem: str) -> str {
+  when string_eq(stem, "native_mem") == 1 { give "hold s = \"x\"\nhold i = 0\nwhile i < 2000 {\n  hold s = concat(s, \"ab\")\n  hold i = i + 1\n}\nshow len(s)\nshow s[0]\nshow s[4000]\nhold xs = []\nhold j = 0\nwhile j < 1500 {\n  push(xs, j * 2)\n  hold j = j + 1\n}\nshow len(xs)\nshow xs[1499]\nhold t = concat(\"\", \"tail\")\nshow t\n" }
+  when string_eq(stem, "native_mem_oom") == 1 { give "hold i = 0\nwhile i < 200000 {\n  hold t = concat(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"b\")\n  hold i = i + 1\n}\nshow i\nshow gc_runs()\n" }
+  when string_eq(stem, "native_mem_gc") == 1 { give "hold i = 0\nwhile i < 5000 {\n  hold t = concat(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"b\")\n  hold i = i + 1\n}\nshow gc_runs()\nshow gc()\nshow gc_live()\n" }
+  when string_eq(stem, "native_mem_keep") == 1 { give "struct Box {\n  n,\n  s\n}\nhold b = Box { 1, \"hello-world\" }\nhold a0 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\nhold a3 = \"dddddddddddddddddddddddddddd\"\nhold xs = []\nhold i = 0\nwhile i < 30000 {\n  hold junk = concat(\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", \"yyyyyyyyyyyyyyyyyyyyyyyyyy\")\n  push(xs, i)\n  hold i = i + 1\n}\nshow len(a0)\nshow a0[0]\nshow a0[47]\nshow a3[27]\nshow b.n\nshow b.s\nshow len(xs)\nshow xs[0]\nshow xs[29999]\n" }
+  when string_eq(stem, "native_bigalloc") == 1 { give "hold s = \"x\"\nhold i = 0\nwhile i < 18 {\n  hold s = concat(s, s)\n  hold i = i + 1\n}\nshow len(s)\nshow s[262143]\n" }
+  when string_eq(stem, "native_biglist") == 1 { give "hold xs = []\nhold j = 0\nwhile j < 100000 {\n  push(xs, j)\n  hold j = j + 1\n}\nshow len(xs)\nshow xs[0]\nshow xs[99999]\n" }
+  when string_eq(stem, "native_mem_fit") == 1 { give "hold i = 0\nwhile i < 20000 {\n  hold t = concat(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"b\")\n  hold i = i + 1\n}\nshow i\n" }
+  when string_eq(stem, "native_oom_out") == 1 { give "show \"before\"\nhold s = \"abcdefgh\"\nhold i = 0\nwhile i < 20 {\n  hold s = concat(s, s)\n  hold i = i + 1\n}\nshow len(s)\nshow \"after\"\n" }
+  when string_eq(stem, "gc_builtins") == 1 { give "hold base = gc_live()\nhold s = \"\"\nhold i = 0\nwhile i < 2000 {\n  s = concat(s, \"abc\")\n  i = i + 1\n}\nhold got = gc()\nhold after = gc_live()\nwhen after < base + 200000 {\n  show \"bounded\"\n}\nwhen gc_runs() > 0 {\n  show \"ran\"\n}\nshow len(s)\nwhen got > 0 {\n  show \"reclaimed\"\n}\nshow sx_index(s, 0)\n" }
+  when string_eq(stem, "sgc_gc_ms") == 1 { give "show gc()\nshow gc_runs()\nshow gc_live()\n" }
+  when string_eq(stem, "sgc_gc_bad") == 1 { give "show gc(1)\n" }
+  when string_eq(stem, "sgc_noop_fs") == 1 { give "show gc()\n" }
+  when string_eq(stem, "sgc_live_fs") == 1 { give "show gc_live()\n" }
+  when string_eq(stem, "sgc_runs_g2") == 1 { give "hold i = 0\nwhile i < 200000 {\n  hold t = concat(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"b\")\n  hold i = i + 1\n}\nshow i\nshow gc_runs()\nshow gc_live()\n" }
+  hold e = gl_fail(concat("unknown memory fixture: ", stem))
+  give ""
+}

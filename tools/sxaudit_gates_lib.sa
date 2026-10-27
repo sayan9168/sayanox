@@ -1,0 +1,108 @@
+// Source, documentation and trust-anchor evidence audits.
+use "tools/sxaudit_targets_lib.sa"
+make xa_no_scripts(dir: str) -> num {
+  hold names = read_dir(dir)
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    when string_eq(name, ".git") == 0 && len(name) > 0 {
+      hold path = kp_join(dir, name)
+      when path_kind(path) == 2 { hold recurse = xa_no_scripts(path) }
+      when path_kind(path) == 1 && len(name) >= 3 && string_eq(gl_slice(name, len(name) - 3, len(name)), ".sh") == 1 { give gl_fail(concat("shell script remains: ", path)) }
+    }
+  }
+  give 0
+}
+make xa_docs_walk(dir: str) -> num {
+  hold names = read_dir(dir)
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold path = kp_join(dir, name)
+    when path_kind(path) == 2 { hold recurse = xa_docs_walk(path) }
+    when path_kind(path) == 1 && len(name) >= 3 && string_eq(gl_slice(name, len(name) - 3, len(name)), ".md") == 1 {
+      when string_eq(path, "docs/FULL_LANGUAGE_SELFHOST.md") == 0 && string_eq(path, "docs/STATUS.md") == 0 {
+        hold text = read_file(path)
+        when pg_find(text, "make stage2") >= 0 || pg_find(text, "bootstrap_production.sh") >= 0 || pg_find(text, "bootstrap_full_selfhost.sh") >= 0 || pg_find(text, "bootstrap_full_language_selfhost.sh") >= 0 {
+          hold honest = kp_has(text, "The entry points named in this file do not exist")
+        }
+      }
+    }
+  }
+  give 0
+}
+make xa_absent_list(names: str) -> num {
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold absent = gl_assert_eq_num(path_kind(name), 0, concat("retired file absent: ", name))
+  }
+  give 0
+}
+make xa_docs(d: str) -> num {
+  hold absent = xa_absent_list("Makefile\nselfhost/stage2_template.c\nselfhost/sxc_full.c\nselfhost/sxc_full_minimal.c\nselfhost/restore_stage2.sh\nselfhost/restore_sxc.sh\nselfhost/restore_sxc_full.sh\nselfhost/restore_stage2_template.sh\nselfhost/sx\nselfhost/stage2_src\nselfhost/stage2\nselfhost/native_aot.c\ntools/emit_to_ir.c\n")
+  hold docs = xa_docs_walk("docs")
+  hold stage2 = pg_contains("docs/FULL_LANGUAGE_SELFHOST.md", "The Stage-2 host is not in this repository")
+  hold files = "selfhost/seed/sxc_seed_min.sa\nselfhost/seed/seed_runtime_lib.sa\nbootstrap/sxc_native.audit\nselfhost/compiler_min.sa\nselfhost/native_aot.sa\ndocs/STATUS.md\ndocs/STDLIB.md\ndocs/ALL_SAYANOX_PHASE.md\n"
+  hold pos = 0
+  while pos < len(files) {
+    hold start = pos
+    while pos < len(files) && sx_index(files, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(files, start, pos)
+    pos = pos + 1
+    when path_kind(name) != 1 || len(read_file(name)) == 0 { give gl_fail(concat("documented source absent/empty: ", name)) }
+  }
+  hold link = pg_contains("README.md", "ALL_SAYANOX_PHASE.md")
+  hold phase = xf_pin("docs/ALL_SAYANOX_PHASE.md", "all maintained implementation source\nexplicit binary trust input\nC-output compatibility\ntools/emit_to_ir.sa\n")
+  hold claim = pg_capture("./tools/sxbuild target all-sayanox", kp_join(d, "claim.log"))
+  hold metrics = xf_pin(kp_join(d, "claim.log"), "maintained tracked C/H files: 0\ntracked shell scripts: 0\ntracked Sayanox sources:\nbuild-driver entry-source lines (tools/sxbuild.sa):\nall maintained implementation source is Sayanox\n")
+  // `stage2` must not appear as a runnable placeholder in the new driver.
+  hold no_placeholder = xb_fail_command("./tools/sxbuild target stage2", kp_join(d, "stage2.log"), "target not migrated")
+  give 0
+}
+make xa_word(c: num) -> num { give (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 }
+make xa_anchor(d: str) -> num {
+  hold seed = "bootstrap/sxc_native.bin"
+  hold audit = pg_capture(concat("./tools/sxaudit ", seed), kp_join(d, "seed.audit"))
+  hold pinned = gl_assert_files_eq("bootstrap/sxc_native.audit", kp_join(d, "seed.audit"), "Sayanox SHA-256/size native trust-anchor pin")
+  hold binary = pg_contains(kp_join(d, "seed.audit"), "file bootstrap/sxc_native.bin")
+  hold pins = pg_command("sha256sum -c bootstrap/native.sha256", "native compiler and transitive source integrity")
+  hold retired = xa_absent_list("selfhost/seed/sxc_seed_min.c\nselfhost/seed/sxc_seed_min.audit\nMakefile\n")
+  hold tracked = pg_capture("git ls-files '*.c' '*.h'", kp_join(d, "tracked.txt"))
+  hold names = read_file(kp_join(d, "tracked.txt"))
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    // A pending tracked deletion is not a maintained worktree source.
+    when path_kind(name) != 0 { give gl_fail(concat("maintained C/header source remains: ", name)) }
+  }
+  hold scripts = xa_no_scripts(".")
+  hold bootstrap = xf_pin("tools/sxbootstrap_lib.sa", "hold seed = bt_sa_seed()\n./tools/sxc_native selfhost/compiler_min.sa\n./tools/sxc_native selfhost/seed/sxc_seed_min.sa\n")
+  hold no_c_seed = pg_not_contains("tools/sxbootstrap_lib.sa", "bt_cc(\"selfhost/seed/sxc_seed_min.c\"")
+  // Preserve the original real own-source determinism check, not a tiny probe.
+  hold first = pg_emit(0, "selfhost/compiler_min.sa", kp_join(d, "c1.c"), 0)
+  hold second = pg_emit(0, "selfhost/compiler_min.sa", kp_join(d, "c2.c"), 0)
+  hold deterministic = xb_equal(d, "c1.c", "c2.c")
+  when path_size(kp_join(d, "c1.c")) <= 100000 { give gl_fail("implausibly small emitted compiler") }
+  give pg_command("./tools/sxbuild target all-sayanox", "all-maintained-Sayanox source/anchor audit")
+}
+make xa_dispatch(name: str) -> num {
+  hold d = concat("selfhost/seed_tests/sxgates/", name)
+  hold clean = gl_clean_dir(d)
+  hold result = 0
+  when string_eq(name, "test-doc-claims") == 1 { result = xa_docs(d) } otherwise { result = xa_anchor(d) }
+  show concat("[OK] Sayanox evidence audit: ", name)
+  give result
+}

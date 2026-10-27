@@ -1,0 +1,138 @@
+// Sayanox-owned regression gates. No make invocation or embedded shell recipe.
+// The shell is used only to launch the compiler/program with arguments.
+use "tools/sxgate_lib.sa"
+use "tools/sxlimit_lib.sa"
+use "tools/sxported_gates_lib.sa"
+use "tools/sxmore_gates_lib.sa"
+use "tools/sxmemory_gates_lib.sa"
+use "tools/sxremaining_gates_lib.sa"
+use "tools/sxbackend_gates_lib.sa"
+use "tools/sxstdlib_remaining_gates_lib.sa"
+use "tools/sxpkg_gates_lib.sa"
+use "tools/sxfront_gates_lib.sa"
+use "tools/sxir_gates_lib.sa"
+use "tools/sxaudit_gates_lib.sa"
+use "tools/sxlast_language_gates_lib.sa"
+use "tools/sxisa_gates_lib.sa"
+use "tools/sxnative_acceptance_gates_lib.sa"
+
+make gate_formatter(d: str) -> num {
+  hold input = concat(d, "/input.sa")
+  hold output = concat(d, "/output.sa")
+  hold again = concat(d, "/again.sa")
+  hold w = gl_must_write(input, "hold x = 1  \nwhen x > 0 {  \nshow \"brace } // not comment\"\n// comment { }\nwhen x == 1 {\n  show 42   \n}\n}\n")
+  hold want = "hold x = 1\nwhen x > 0 {\n  show \"brace } // not comment\"\n  // comment { }\n  when x == 1 {\n    show 42\n  }\n}\n"
+  hold cmd = concat("./tools/sxfmt ", concat(gl_sh_quote(input), concat(" ", gl_sh_quote(output))))
+  hold r = gl_assert_eq_num(run_command(cmd), 0, "formatter status")
+  hold a = gl_assert_eq_str(read_file(output), want, "formatter strings/comments/indentation")
+  cmd = concat("./tools/sxfmt ", concat(gl_sh_quote(output), concat(" ", gl_sh_quote(again))))
+  hold r2 = gl_assert_eq_num(run_command(cmd), 0, "formatter second status")
+  hold a2 = gl_assert_files_eq(output, again, "formatter idempotence")
+  hold w2 = gl_must_write(input, "hold x = 7  ")
+  cmd = concat("./tools/sxfmt ", concat(gl_sh_quote(input), concat(" ", gl_sh_quote(output))))
+  hold r3 = gl_assert_eq_num(run_command(cmd), 0, "formatter final-newline status")
+  hold a3 = gl_assert_eq_str(read_file(output), "hold x = 7\n", "formatter final newline")
+  give 0
+}
+
+make gate_simple(name: str, d: str) -> num {
+  hold source = "hold n = 0\nhold n = 1\nhold n = 2\nshow n\n"
+  hold want = "2"
+  when string_eq(name, "test-while") == 1 {
+    source = "hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow \"done\"\n"
+    want = "0\n1\n2\ndone"
+  }
+  when string_eq(name, "test-when") == 1 {
+    source = "hold x = 2\nwhen x == 1 {\n  show 11\n}\nshow 99\n"
+    want = "99"
+  }
+  hold sa = concat(d, "/input.sa")
+  hold c = concat(d, "/output.c")
+  hold bin = concat(d, "/program")
+  hold w = gl_must_write(sa, source)
+  hold b = gl_build_gen2(sa, c, bin, "")
+  hold a = gl_assert_out(gl_sh_quote(bin), want, concat(d, "/stdout"))
+  give 0
+}
+
+when arg_count() != 2 {
+  show "usage: sxgates <migrated-gate-name>"
+  hold e = exit(2)
+}
+hold name = arg(1)
+when string_eq(name, "native-test-body") == 1 {
+  hold original_native = ng_dispatch()
+  hold success = exit(0)
+}
+hold known = pg_known(name) || mp_known(name) || nm_known(name) || xr_known(name) || xb_known(name) || xq_known(name) || kp_known(name) || xf_known(name) || xi_known(name) || xa_known(name) || xl_known(name) || xc_known(name)
+when string_eq(name, "test-sxfmt") == 1 || string_eq(name, "test-reassign") == 1 || string_eq(name, "test-while") == 1 || string_eq(name, "test-when") == 1 {
+  known = 1
+}
+when known == 0 {
+  show concat("unknown gate: ", name)
+  hold e2 = exit(2)
+}
+hold dir = concat("selfhost/seed_tests/sxgates/", name)
+hold clean = gl_clean_dir(dir)
+when xc_known(name) == 1 {
+  hold isa = xc_dispatch(name)
+} otherwise {
+when xa_known(name) == 1 {
+  hold audits = xa_dispatch(name)
+} otherwise {
+when xl_known(name) == 1 {
+  hold language = xl_dispatch(name)
+} otherwise {
+when xi_known(name) == 1 {
+  hold listing = xi_dispatch(name)
+} otherwise {
+when xf_known(name) == 1 {
+  hold front = xf_dispatch(name)
+} otherwise {
+when kp_known(name) == 1 {
+  hold packages = kp_dispatch(name)
+} otherwise {
+when xq_known(name) == 1 {
+  hold stdlib = xq_dispatch(name)
+} otherwise {
+when xb_known(name) == 1 {
+  hold backend = xb_dispatch(name)
+} otherwise {
+when xr_known(name) == 1 {
+  hold remaining = xr_dispatch(name)
+} otherwise {
+when nm_known(name) == 1 {
+  hold memory = nm_dispatch(name)
+} otherwise {
+  when mp_known(name) == 1 {
+    hold ported2 = mp_dispatch(name)
+  } otherwise {
+    when pg_known(name) == 1 {
+      hold ported = pg_dispatch(name)
+    } otherwise {
+      when string_eq(name, "test-sxfmt") == 1 {
+        hold r = gate_formatter(dir)
+      } otherwise {
+        hold r2 = gate_simple(name, dir)
+      }
+      show concat("[OK] Sayanox gate: ", name)
+    }
+  }
+}
+
+}
+
+}
+
+}
+
+}
+
+}
+
+}
+
+}
+}
+
+}

@@ -1,0 +1,43 @@
+// Original fixtures and hand-computed output oracles, no recipes.
+make xq_source(gate: str, fixture: str) -> str {
+  when string_eq(gate, "test-stdlib") == 1 {
+    when string_eq(fixture, "std_t.sa") == 1 { give "use \"stdlib/tiny.sa\"\nshow min2(3, 7)\nshow max2(3, 7)\nshow absv(0 - 5)\nshow absv(5)\nshow sum_to(10)\nshow pow_int(2, 10)\nshow is_even(42)\nshow is_even(7)\nshow gcd(48, 36)\nshow gcd(1071, 462)\nshow clamp(15, 0, 10)\nshow clamp(0 - 3, 0, 10)\nshow clamp(4, 0, 10)\nshow sign(0 - 9)\nshow sign(0)\nshow sign(12)\nshow is_odd(7)\nshow is_odd(0 - 4)\nshow is_odd(0 - 3)\nshow lcm(4, 6)\nshow lcm(0, 5)\nshow lcm(21, 6)\nshow fact(5)\nshow fact(0)\nshow fib(10)\nshow fib(1)\nshow is_prime(2)\nshow is_prime(1)\nshow is_prime(91)\nshow is_prime(97)\nshow sum_range(1, 5)\nshow sum_range(5, 5)\nshow sum_range(6, 5)\nshow sum_sq(4)\nshow count_digits(0)\nshow count_digits(12345)\nshow count_digits(0 - 42)\nshow digit_sum(12345)\nshow digit_sum(0 - 99)\nshow trunc10(456)\nshow reverse_num(1234)\nshow reverse_num(1200)\nshow is_square(0)\nshow is_square(49)\nshow is_square(50)\nshow between(5, 1, 10)\nshow between(0, 1, 10)\nshow between(11, 1, 10)\n" }
+    when string_eq(fixture, "std_sl.sa") == 1 { give "use \"stdlib/str_util.sa\"\nuse \"stdlib/list_util.sa\"\nuse \"stdlib/file_util.sa\"\nshow s_len(\"hello\")\nshow s_at(\"hello\", 1)\nshow s_join(\"ab\", \"cd\")\nshow s_prefix(\"hello\", 3)\nshow s_prefix(\"hi\", 9)\nshow s_suffix(\"hello\", 2)\nshow s_suffix(\"hi\", 9)\nshow s_reverse(\"hello\")\nshow s_repeat(\"xy\", 3)\nshow s_count(\"banana\", 97)\nshow s_contains(\"banana\", 97)\nshow s_contains(\"banana\", 122)\nshow s_eq(\"ab\", \"ab\")\nshow s_eq(\"ab\", \"ac\")\nshow s_upper(\"Hi There 42!\")\nshow s_lower(\"Hi There 42!\")\nshow s_starts(\"hello\", \"he\")\nshow s_starts(\"hello\", \"lo\")\nshow s_ends(\"hello\", \"lo\")\nshow s_ends(\"hello\", \"he\")\nhold xs = [3, 1, 4, 1, 5]\nshow l_len(xs)\nshow l_get(xs, 2)\nshow l_sum(xs)\nshow l_max(xs)\nshow l_min(xs)\nshow l_count(xs, 1)\nshow l_contains(xs, 9)\nhold r = l_reverse(xs)\nshow len(r)\nshow r[0]\nshow r[4]\nhold g = l_range(4)\nshow len(g)\nshow g[3]\nhold p = \"selfhost/seed_tests/xq/test-stdlib/std_f.txt\"\nshow f_write(p, \"one\\ntwo\\nthree\")\nshow f_read(p)\nshow f_size(p)\nshow f_lines(p)\nshow f_exists(p)\nshow f_exists(\"selfhost/seed_tests/xq/test-stdlib/std_no_such_file\")\n" }
+  }
+  when string_eq(gate, "test-stdlib-growth") == 1 {
+  }
+  when string_eq(gate, "test-stdlib-modules") == 1 {
+    when string_eq(fixture, "stm_alone_num.sa") == 1 { give "use \"stdlib/num_util.sa\"\nshow nu_floor(2.5)\nshow nu_ceil(2.5)\n" }
+    when string_eq(fixture, "stm_alone_list.sa") == 1 { give "use \"stdlib/list_algo.sa\"\nhold xs = [3, 1, 2]\nhold s = la_sort(xs)\nshow s[0]\nshow s[2]\nshow la_sorted(s)\n" }
+    when string_eq(fixture, "stm_alone_str.sa") == 1 { give "use \"stdlib/str_text.sa\"\nshow t_trim(\"  hi  \")\nshow t_word_count(\"a b  c\")\nshow t_uint_str(90)\n" }
+    when string_eq(fixture, "stm_all.sa") == 1 { give "use \"stdlib/tiny.sa\"\nuse \"stdlib/num_util.sa\"\nuse \"stdlib/str_util.sa\"\nuse \"stdlib/str_text.sa\"\nuse \"stdlib/list_util.sa\"\nuse \"stdlib/list_algo.sa\"\nuse \"stdlib/file_util.sa\"\nshow gcd(12, 18)\nshow nu_round(2.6)\nshow s_len(\"abc\")\nshow t_index_of(\"abc\", 99)\nhold xs = [2, 1]\nshow l_sum(xs)\nhold s = la_sort(xs)\nshow s[0]\nshow f_exists(\"selfhost/seed_tests/xq/test-stdlib-modules/stm_no_such_file\")\n" }
+  }
+  when string_eq(gate, "test-gen2-gaps") == 1 {
+    when string_eq(fixture, "gg_len.sa") == 1 { give "hold xs = [1, 2, 3, 4]\nhold s = \"abcd\"\nfor i in 0..len(xs) {\n  show i\n}\nfor j in 0..len(s) {\n  show j\n}\n" }
+    when string_eq(fixture, "gg_chain.sa") == 1 { give "hold n = 0\nwhile n < 6 {\n  when n == 0 {\n    show 100\n  } else when n == 1 {\n    show 101\n  } else if n == 2 {\n    show 102\n  } otherwise when n == 3 {\n    show 103\n  } else {\n    show 109\n  }\n  when n >= 4 {\n    when n == 4 {\n      show 7\n    } else when n == 5 {\n      show 8\n    }\n  }\n  hold n = n + 1\n}\nshow \"done\"\n" }
+    when string_eq(fixture, "gg_streq.sa") == 1 { give "hold s = \"ab\"\nhold t = concat(\"a\", \"b\")\nhold u = concat(\"a\", \"c\")\nwhen t == s {\n  show 1\n} otherwise {\n  show 0\n}\nwhen t != u {\n  show 2\n} otherwise {\n  show 3\n}\nwhen s == \"ab\" {\n  show 4\n}\nwhen u == \"ab\" {\n  show 5\n} otherwise {\n  show 6\n}\nwhen string_eq(t, s) == 1 {\n  show 7\n}\n" }
+    when string_eq(fixture, "gg_pct.sa") == 1 { give "hold m = 17\nhold d = chr(48 + m % 10)\nshow d\nshow concat(\"x\", chr(48 + m % 10))\nhold x = 3\nhold e = chr(48 + x * m % 10)\nshow e\nshow concat(\"100%\", chr(50 + m % 3))\nhold r = concat(\"v=\", chr(48 + m / 2 % 10))\nshow r\n" }
+    when string_eq(fixture, "gg_ord.sa") == 1 { give "hold s = \"ab\"\nhold t = concat(\"a\", \"b\")\nhold u = concat(\"a\", \"c\")\nhold n = 3\nwhen t == s {\n  show 1\n}\nwhen t != u {\n  show 2\n}\nwhen s < u {\n  show 3\n}\nwhen u < s {\n  show 4\n} otherwise {\n  show 5\n}\nwhen s <= t {\n  show 6\n}\nwhen u >= t {\n  show 7\n}\nwhen u > t {\n  show 8\n}\nwhen t > u {\n  show 9\n} otherwise {\n  show 10\n}\nwhen n < 5 {\n  show 11\n}\nwhen n >= 3 {\n  show 12\n}\nwhen t < \"b\" {\n  show 13\n}\nwhen \"a\" < u {\n  show 14\n} otherwise {\n  show 15\n}\n" }
+    when string_eq(fixture, "gg_ordmix.sa") == 1 { give "hold s = \"ab\"\nhold n = 3\nwhen s < n {\n  show 1\n}\n" }
+  }
+  give ""
+}
+make xq_oracle(key: str) -> str {
+  when string_eq(key, "std_g2") == 1 { give "3\n7\n5\n5\n55\n1024\n1\n0\n12\n21\n10\n0\n4\n-1\n0\n1\n1\n0\n1\n12\n0\n42\n120\n1\n55\n1\n1\n0\n0\n1\n15\n5\n0\n30\n1\n5\n2\n15\n18\n45\n4321\n21\n1\n1\n0\n1\n0\n0" }
+  when string_eq(key, "std_sl") == 1 { give "5\n101\nabcd\nhel\nhi\nlo\nhi\nolleh\nxyxyxy\n3\n1\n0\n1\n0\nHI THERE 42!\nhi there 42!\n1\n0\n1\n0\n5\n4\n14\n5\n1\n2\n0\n5\n5\n3\n4\n3\n1\none\ntwo\nthree\n13\n3\n1\n0" }
+  when string_eq(key, "sg_g2") == 1 { give "55\n0\n0\n2\n9\n-7\n4\n4\n0\n1\n24\n1\n1\n0\n8\n16\n5\n1\n3\n0\n1\n0\n0\n1\n0\n3\n4\n4\n1000" }
+  when string_eq(key, "stm_alone_num") == 1 { give "2\n3" }
+  when string_eq(key, "stm_alone_list") == 1 { give "1\n3\n1" }
+  when string_eq(key, "stm_alone_list_g2") == 1 { give "1\n3\n1" }
+  when string_eq(key, "stm_alone_str") == 1 { give "hi\n3\n90" }
+  when string_eq(key, "stm_alone_str_g2") == 1 { give "hi\n3\n90" }
+  when string_eq(key, "stm_all_seed") == 1 { give "6\n3\n3\n2\n3\n1\n0" }
+  when string_eq(key, "stm_all_g2") == 1 { give "6\n3\n3\n2\n3\n1\n0" }
+  when string_eq(key, "gg_len") == 1 { give "0\n1\n2\n3\n0\n1\n2\n3" }
+  when string_eq(key, "gg_chain") == 1 { give "100\n101\n102\n103\n109\n7\n109\n8\ndone" }
+  when string_eq(key, "gg_streq") == 1 { give "1\n2\n4\n6\n7" }
+  when string_eq(key, "gg_pct") == 1 { give "7\nx7\n1\n100%4\nv=8" }
+  when string_eq(key, "gg_ord") == 1 { give "1\n2\n3\n5\n6\n7\n8\n10\n11\n12\n13\n14" }
+  when string_eq(key, "STM_WANT") == 1 { give "2\n-2\n2\n-3\n3\n3\n-2\n3\n3\n2\n-2\n0.25\n-0.25\n3\n7\n2\n1\n3\n-3\n2\n1\n150\n1\n3.5\n2\n3.14159\n180\n269.5\n1\n5\n1\n1\n3\n4\n5\n0\n1\n5\n2\n1\n-1\n3\n3\n3\n1\n1\n2\n1\n1\n1\n3\n6\n3\n7\n6\n11\n2\n22\n3\n4\n4\n6\n9\n6\n9\n4\n5\n1\n5\n-1\nell\nlo\n\nab\nab  \n  ab\n\n-1\n1\n0\n1\n0\n0\n007\n7..\n1234\n2\n0\nazc\nabc\n0\n97\n3105\n42\n0\n1234\n0\n7\nmodules-done" }
+  give ""
+}

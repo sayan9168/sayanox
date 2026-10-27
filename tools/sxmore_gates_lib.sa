@@ -1,0 +1,1492 @@
+// Second regression migration: source-owned fixtures, branches and assertions.
+use "tools/sxpattern_lib.sa"
+use "tools/sxmore_targets_lib.sa"
+
+make mp_test_push_stmt() -> num {
+  hold p0 = gl_assert_eq_num(path_kind("selfhost/gen2"), 1, "compiler present: selfhost/gen2")
+  hold p1 = gl_assert_eq_num(path_kind("selfhost/seed/sxc_seed_min"), 1, "compiler present: selfhost/seed/sxc_seed_min")
+  hold p2 = gl_ensure_dir("selfhost/seed_tests")
+  hold p3 = gl_must_write("selfhost/seed_tests/ts_push.sa", "hold xs = []\npush(xs, 5)\npush(xs, 6 + 1)\nhold i = 0\nwhile i < 3 {\n  push(xs, i * 10)\n  hold i = i + 1\n}\nshow len(xs)\nshow xs[1]\nshow xs[4]\n")
+  hold p4 = pg_emit_stream(0, "selfhost/seed_tests/ts_push.sa", "selfhost/seed_tests/ts_push_sm.c", 0, "selfhost/seed_tests/ts_push_sm.c.emit.log", "selfhost/seed_tests/ts_push_sm.c.err")
+  hold p5 = gl_compile_c("selfhost/seed_tests/ts_push_sm.c", "selfhost/seed_tests/ts_push_sm", "-O2")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/ts_push_sm", "5\n7\n20", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = pg_emit_stream(1, "selfhost/seed_tests/ts_push.sa", "selfhost/seed_tests/ts_push_g2.c", 0, "/dev/null", "selfhost/seed_tests/ts_push_g2.c.err")
+  hold p8 = gl_compile_c("selfhost/seed_tests/ts_push_g2.c", "selfhost/seed_tests/ts_push_g2", "-O2")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/ts_push_g2", "5\n7\n20", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_must_write("selfhost/seed_tests/ts_pushbad.sa", "hold n = 1\npush(n, 5)\n")
+  hold p11 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_pushbad.sa >/dev/null 2>&1", "test-push-stmt refusal")
+  hold p12 = pg_probe("./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_pushbad.sa", 2, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p13 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "'n' is not a list", 0, 0, 0, 0, 1)
+  hold p14 = pg_emit_stream(1, "selfhost/seed_tests/ts_pushbad.sa", "selfhost/seed_tests/ts_pushbad_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_pushbad_g2.c.err")
+  hold p15 = pr_assert("selfhost/seed_tests/ts_pushbad_g2.c", "'n' is not a list", 0, 0, 0, 0, 1)
+  hold p16 = gl_must_write("selfhost/seed_tests/ts_unkstmt.sa", "hold i = 0\nwhile i < 3 {\n  hold i = i + 1\n  when i == 2 { kantho }\n}\n")
+  hold p17 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_unkstmt.sa >/dev/null 2>&1", "test-push-stmt refusal")
+  hold p18 = pg_emit_stream(1, "selfhost/seed_tests/ts_unkstmt.sa", "selfhost/seed_tests/ts_unkstmt_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_unkstmt_g2.c.err")
+  hold p19 = pr_assert("selfhost/seed_tests/ts_unkstmt_g2.c", "unknown statement 'kantho'", 0, 0, 0, 0, 1)
+  hold p20 = gl_must_write("selfhost/seed_tests/ts_cont.sa", "hold i = 0\nwhile i < 3 {\n  hold i = i + 1\n  when i == 2 { continue }\n}\nshow i\n")
+  hold p21 = pg_emit_stream(0, "selfhost/seed_tests/ts_cont.sa", "selfhost/seed_tests/ts_cont_sm.c", 0, "selfhost/seed_tests/ts_cont_sm.c.emit.log", "selfhost/seed_tests/ts_cont_sm.c.err")
+  hold p22 = gl_compile_c("selfhost/seed_tests/ts_cont_sm.c", "selfhost/seed_tests/ts_cont_sm", "-O2")
+  hold p23 = gl_assert_out("./selfhost/seed_tests/ts_cont_sm", "3", "selfhost/seed_tests/sxported.stdout")
+  hold p24 = pg_emit_stream(1, "selfhost/seed_tests/ts_cont.sa", "selfhost/seed_tests/ts_cont_g2.c", 0, "/dev/null", "selfhost/seed_tests/ts_cont_g2.c.err")
+  hold p25 = gl_compile_c("selfhost/seed_tests/ts_cont_g2.c", "selfhost/seed_tests/ts_cont_g2", "-O2")
+  hold p26 = gl_assert_out("./selfhost/seed_tests/ts_cont_g2", "3", "selfhost/seed_tests/sxported.stdout")
+  hold p27 = gl_must_write("selfhost/seed_tests/ts_junk.sa", "hold a = 1\nshow a b\n")
+  hold p28 = pg_emit_stream(1, "selfhost/seed_tests/ts_junk.sa", "selfhost/seed_tests/ts_junk_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_junk_g2.c.err")
+  hold p29 = pr_assert("selfhost/seed_tests/ts_junk_g2.c", "#error", 0, 0, 0, 0, 1)
+  hold p30 = gl_must_write("selfhost/seed_tests/ts_lalias.sa", "hold xs = [1, 2]\nhold ys = xs\npush(ys, 9)\nshow ys[2]\nshow len(ys)\n")
+  hold p31 = pg_emit_stream(0, "selfhost/seed_tests/ts_lalias.sa", "selfhost/seed_tests/ts_lalias_sm.c", 0, "selfhost/seed_tests/ts_lalias_sm.c.emit.log", "selfhost/seed_tests/ts_lalias_sm.c.err")
+  hold p32 = gl_compile_c("selfhost/seed_tests/ts_lalias_sm.c", "selfhost/seed_tests/ts_lalias_sm", "-O2")
+  hold p33 = gl_assert_out("./selfhost/seed_tests/ts_lalias_sm", "9\n3", "selfhost/seed_tests/sxported.stdout")
+  hold p34 = pg_emit_stream(1, "selfhost/seed_tests/ts_lalias.sa", "selfhost/seed_tests/ts_lalias_g2.c", 0, "/dev/null", "selfhost/seed_tests/ts_lalias_g2.c.err")
+  hold p35 = gl_compile_c("selfhost/seed_tests/ts_lalias_g2.c", "selfhost/seed_tests/ts_lalias_g2", "-O2")
+  hold p36 = gl_assert_out("./selfhost/seed_tests/ts_lalias_g2", "9\n3", "selfhost/seed_tests/sxported.stdout")
+  hold p37 = gl_must_write("selfhost/seed_tests/ts_lop.sa", "hold xs = [1]\nhold ys = xs + 1\n")
+  hold p38 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_lop.sa >/dev/null 2>&1", "test-push-stmt refusal")
+  hold p39 = pg_emit_stream(1, "selfhost/seed_tests/ts_lop.sa", "selfhost/seed_tests/ts_lop_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_lop_g2.c.err")
+  hold p40 = pr_assert("selfhost/seed_tests/ts_lop_g2.c", "list 'xs' can only be held whole", 0, 0, 0, 0, 1)
+  hold p41 = gl_must_write("selfhost/seed_tests/ts_sop.sa", "hold s = \"a\"\nshow s - 1\n")
+  hold p42 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_sop.sa >/dev/null 2>&1", "test-push-stmt refusal")
+  hold p43 = gl_must_write("selfhost/seed_tests/ts_l11.sa", "hold xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]\nshow len(xs)\nshow xs[10]\n")
+  hold p44 = pg_emit_stream(0, "selfhost/seed_tests/ts_l11.sa", "selfhost/seed_tests/ts_l11_sm.c", 0, "selfhost/seed_tests/ts_l11_sm.c.emit.log", "selfhost/seed_tests/ts_l11_sm.c.err")
+  hold p45 = gl_compile_c("selfhost/seed_tests/ts_l11_sm.c", "selfhost/seed_tests/ts_l11_sm", "-O2")
+  hold p46 = gl_assert_out("./selfhost/seed_tests/ts_l11_sm", "11\n11", "selfhost/seed_tests/sxported.stdout")
+  hold p47 = pg_emit_stream(1, "selfhost/seed_tests/ts_l11.sa", "selfhost/seed_tests/ts_l11_g2.c", 0, "/dev/null", "selfhost/seed_tests/ts_l11_g2.c.err")
+  hold p48 = gl_compile_c("selfhost/seed_tests/ts_l11_g2.c", "selfhost/seed_tests/ts_l11_g2", "-O2")
+  hold p49 = gl_assert_out("./selfhost/seed_tests/ts_l11_g2", "11\n11", "selfhost/seed_tests/sxported.stdout")
+  hold p50 = gl_must_write("selfhost/seed_tests/ts_sinl.sa", "struct P {\n  x\n}\nhold p = P { x: 1 }\nhold xs = [p]\n")
+  hold p51 = gl_must_write("selfhost/seed_tests/ts_sinl2.sa", "struct P {\n  x\n}\nhold p = P { x: 1 }\nhold xs = []\npush(xs, p)\n")
+  hold p52 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_sinl.sa >/dev/null 2>&1", "test-push-stmt refusal")
+  hold p53 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_sinl2.sa >/dev/null 2>&1", "test-push-stmt refusal")
+  hold p54 = pg_emit_stream(1, "selfhost/seed_tests/ts_sinl.sa", "selfhost/seed_tests/ts_sinl_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_sinl_g2.c.err")
+  hold p55 = pr_assert("selfhost/seed_tests/ts_sinl_g2.c", "list elements must be numbers", 0, 0, 0, 0, 1)
+  hold p56 = pg_emit_stream(1, "selfhost/seed_tests/ts_sinl2.sa", "selfhost/seed_tests/ts_sinl2_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_sinl2_g2.c.err")
+  hold p57 = pr_assert("selfhost/seed_tests/ts_sinl2_g2.c", "push: 'p' is not a number", 0, 0, 0, 0, 1)
+  hold p58 = gl_must_write("selfhost/seed_tests/ts_strnum.sa", "hold s = \"a\"\nhold n = 4\nshow s + n\n")
+  hold p59 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_strnum.sa >/dev/null 2>&1", "test-push-stmt refusal")
+  hold p60 = pg_emit_stream(1, "selfhost/seed_tests/ts_strnum.sa", "selfhost/seed_tests/ts_strnum_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_strnum_g2.c.err")
+  hold p61 = pr_assert("selfhost/seed_tests/ts_strnum_g2.c", "'n' is not a string", 0, 0, 0, 0, 1)
+  hold p62 = gl_must_write("selfhost/seed_tests/ts_numstr.sa", "hold s = \"a\"\nshow 3 + s\n")
+  hold p63 = pg_emit_stream(1, "selfhost/seed_tests/ts_numstr.sa", "selfhost/seed_tests/ts_numstr_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_numstr_g2.c.err")
+  hold p64 = pr_assert("selfhost/seed_tests/ts_numstr_g2.c", "is a string but the left side is not", 0, 0, 0, 0, 1)
+  hold p65 = gl_must_write("selfhost/seed_tests/ts_strmul.sa", "hold s = \"a\"\nshow s * 2\n")
+  hold p66 = pg_emit_stream(1, "selfhost/seed_tests/ts_strmul.sa", "selfhost/seed_tests/ts_strmul_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_strmul_g2.c.err")
+  hold p67 = pr_assert("selfhost/seed_tests/ts_strmul_g2.c", "only + works on strings (found '\\*')", 0, 0, 0, 0, 1)
+  hold p68 = gl_must_write("selfhost/seed_tests/ts_strlist.sa", "hold xs = [\"a\"]\n")
+  hold p69 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/ts_strlist.sa >/dev/null 2>&1", "test-push-stmt refusal")
+  hold p70 = pg_emit_stream(1, "selfhost/seed_tests/ts_strlist.sa", "selfhost/seed_tests/ts_strlist_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_strlist_g2.c.err")
+  hold p71 = pr_assert("selfhost/seed_tests/ts_strlist_g2.c", "list elements must be numbers", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_stage2_demos() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/minimal_lexer.sa", "selfhost/seed_tests/stage2_lexer_sm.c", 0, "selfhost/seed_tests/stage2_lexer_sm.c.emit.log", "selfhost/seed_tests/stage2_lexer_sm.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/stage2_lexer_sm.c", "selfhost/seed_tests/stage2_lexer_sm", "-O2")
+  hold p3 = pg_emit_stream(1, "selfhost/minimal_lexer.sa", "selfhost/seed_tests/stage2_lexer_g2.c", 0, "/dev/null", "selfhost/seed_tests/stage2_lexer_g2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/stage2_lexer_g2.c", "selfhost/seed_tests/stage2_lexer_g2", "-O2")
+  hold p5 = pg_capture("./selfhost/seed_tests/stage2_lexer_sm", "selfhost/seed_tests/stage2_lexer_sm.out")
+  hold p6 = pg_capture("./selfhost/seed_tests/stage2_lexer_g2", "selfhost/seed_tests/stage2_lexer_g2.out")
+  hold p7 = gl_assert_files_eq("selfhost/seed_tests/stage2_lexer_sm.out", "selfhost/seed_tests/stage2_lexer_g2.out", "test-stage2-demos parity")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/stage2_lexer_g2", "=== Self-Hosting Phase 1.5 ===\nshow 42\n7\n115\n104\n111\n119\n32\n52\n50\nTokens:\n1\n11\n0\nPhase 1.5 complete — dynamic push + len + string walk", "selfhost/seed_tests/sxported.stdout")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p9 = pg_emit_stream(2, "selfhost/minimal_lexer.sa", "selfhost/seed_tests/stage2_lexer_nat", 0, "selfhost/seed_tests/stage2_lexer_nat.emit.log", "selfhost/seed_tests/stage2_lexer_nat.err")
+  hold p10 = pg_capture("./selfhost/seed_tests/stage2_lexer_nat", "selfhost/seed_tests/stage2_lexer_nat.out")
+  hold p11 = gl_assert_files_eq("selfhost/seed_tests/stage2_lexer_sm.out", "selfhost/seed_tests/stage2_lexer_nat.out", "test-stage2-demos parity")
+  }
+  hold p12 = pg_emit_stream(0, "selfhost/stage2_functions.sa", "selfhost/seed_tests/stage2_fn_sm.c", 0, "selfhost/seed_tests/stage2_fn_sm.c.emit.log", "selfhost/seed_tests/stage2_fn_sm.c.err")
+  hold p13 = gl_compile_c("selfhost/seed_tests/stage2_fn_sm.c", "selfhost/seed_tests/stage2_fn_sm", "-O2")
+  hold p14 = pg_emit_stream(1, "selfhost/stage2_functions.sa", "selfhost/seed_tests/stage2_fn_g2.c", 0, "/dev/null", "selfhost/seed_tests/stage2_fn_g2.c.err")
+  hold p15 = gl_compile_c("selfhost/seed_tests/stage2_fn_g2.c", "selfhost/seed_tests/stage2_fn_g2", "-O2")
+  hold p16 = gl_assert_out("./selfhost/seed_tests/stage2_fn_sm", "42\n1764", "selfhost/seed_tests/sxported.stdout")
+  hold p17 = gl_assert_out("./selfhost/seed_tests/stage2_fn_g2", "42\n1764", "selfhost/seed_tests/sxported.stdout")
+  hold p18 = pg_emit_stream(0, "selfhost/stage2_variables.sa", "selfhost/seed_tests/stage2_var_sm.c", 0, "selfhost/seed_tests/stage2_var_sm.c.emit.log", "selfhost/seed_tests/stage2_var_sm.c.err")
+  hold p19 = gl_compile_c("selfhost/seed_tests/stage2_var_sm.c", "selfhost/seed_tests/stage2_var_sm", "-O2")
+  hold p20 = pg_emit_stream(1, "selfhost/stage2_variables.sa", "selfhost/seed_tests/stage2_var_g2.c", 0, "/dev/null", "selfhost/seed_tests/stage2_var_g2.c.err")
+  hold p21 = gl_compile_c("selfhost/seed_tests/stage2_var_g2.c", "selfhost/seed_tests/stage2_var_g2", "-O2")
+  hold p22 = gl_assert_out("./selfhost/seed_tests/stage2_var_sm", "42", "selfhost/seed_tests/sxported.stdout")
+  hold p23 = gl_assert_out("./selfhost/seed_tests/stage2_var_g2", "42", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_native_lang() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/native_lang_test.sa", "selfhost/seed_tests/nla_g2.c", 0, "/dev/null", "selfhost/seed_tests/nla_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/nla_g2.c", "selfhost/seed_tests/nla_g2", "-O2")
+  hold p3 = gl_assert_out("./selfhost/seed_tests/nla_g2", "1\n0\n5\n7\n300\n200\n100\n2\n4\n10\n12\na\nb\nc\n0\n1\n2\n4\n5\n1\n3\n4\n0\n10\n20\n1\n77", "selfhost/seed_tests/sxported.stdout")
+  hold p4 = pg_emit_stream(0, "selfhost/native_lang_test.sa", "selfhost/seed_tests/nla_seed.c", 0, "selfhost/seed_tests/nla_seed.c.emit.log", "selfhost/seed_tests/nla_seed.c.err")
+  hold p5 = gl_compile_c("selfhost/seed_tests/nla_seed.c", "selfhost/seed_tests/nla_seed", "-O2")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/nla_seed", "1\n0\n5\n7\n300\n200\n100\n2\n4\n10\n12\na\nb\nc\n0\n1\n2\n4\n5\n1\n3\n4\n0\n10\n20\n1\n77", "selfhost/seed_tests/sxported.stdout")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p7 = pg_emit_stream(2, "selfhost/native_lang_test.sa", "selfhost/seed_tests/nla_nat", 0, "selfhost/seed_tests/nla_nat.emit.log", "selfhost/seed_tests/nla_nat.err")
+  hold p8 = pg_capture("./selfhost/seed_tests/nla_nat", "selfhost/seed_tests/nla_nat.out")
+  hold p9 = pg_capture("./selfhost/seed_tests/nla_g2", "selfhost/seed_tests/nla_g2.out")
+  hold p10 = gl_assert_files_eq("selfhost/seed_tests/nla_g2.out", "selfhost/seed_tests/nla_nat.out", "test-native-lang parity")
+  hold p11 = gl_must_write("selfhost/seed_tests/nla_neg1.sa", "make f(n) {\n  for i in 0..2 {\n    show i\n  }\n  give 0\n}\nshow f(1)\n")
+  hold p12 = pg_emit_stream(2, "selfhost/seed_tests/nla_neg1.sa", "selfhost/seed_tests/nla_neg1", 0, "selfhost/seed_tests/nla_neg1.emit.log", "selfhost/seed_tests/nla_neg1.err")
+  hold p13 = gl_must_write("selfhost/seed_tests/nla_for_fn.want", "0\n1\n0\n")
+  hold p14 = pg_capture("./selfhost/seed_tests/nla_neg1", "selfhost/seed_tests/nla_for_fn.out")
+  hold p15 = gl_assert_files_eq("selfhost/seed_tests/nla_for_fn.want", "selfhost/seed_tests/nla_for_fn.out", "test-native-lang parity")
+  hold p16 = gl_must_write("selfhost/seed_tests/nla_neg2.sa", "hold a = 1\nbreak\n")
+  hold p17 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nla_neg2.sa selfhost/seed_tests/nla_neg2", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p18 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "break outside a loop", 0, 0, 0, 0, 1)
+  hold p19 = gl_must_write("selfhost/seed_tests/nla_neg3.sa", "hold s = \"ab\"\nwhen s and 1 {\n  show 1\n}\n")
+  hold p20 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nla_neg3.sa selfhost/seed_tests/nla_neg3", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p21 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "must be a number", 0, 0, 0, 0, 1)
+  }
+  give 0
+}
+
+make mp_test_native_locals() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/native_locals_test.sa", "selfhost/seed_tests/nlo_g2.c", 0, "/dev/null", "selfhost/seed_tests/nlo_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/nlo_g2.c", "selfhost/seed_tests/nlo_g2", "-O2")
+  hold p3 = gl_assert_out("./selfhost/seed_tests/nlo_g2", "20\n1\n2\n10\n7\n6\n4", "selfhost/seed_tests/sxported.stdout")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p4 = pg_emit_stream(2, "selfhost/native_locals_test.sa", "selfhost/seed_tests/nlo_nat", 0, "selfhost/seed_tests/nlo_nat.emit.log", "selfhost/seed_tests/nlo_nat.err")
+  hold p5 = pg_capture("./selfhost/seed_tests/nlo_nat", "selfhost/seed_tests/nlo_nat.out")
+  hold p6 = pg_capture("./selfhost/seed_tests/nlo_g2", "selfhost/seed_tests/nlo_g2.out")
+  hold p7 = gl_assert_files_eq("selfhost/seed_tests/nlo_g2.out", "selfhost/seed_tests/nlo_nat.out", "test-native-locals parity")
+  hold p8 = gl_must_write("selfhost/seed_tests/nlo_neg1.sa", "hold x = 1\nmake f(x) {\n  hold x = 2\n  give x\n}\nshow f(1)\n")
+  hold p9 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nlo_neg1.sa selfhost/seed_tests/nlo_neg1", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p10 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "it is a parameter of make", 0, 0, 0, 0, 1)
+  }
+  give 0
+}
+
+make mp_test_typed_sig() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/typed_sig_test.sa", "selfhost/seed_tests/tsg_g2.c", 0, "/dev/null", "selfhost/seed_tests/tsg_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/tsg_g2.c", "selfhost/seed_tests/tsg_g2", "-O2")
+  hold p3 = gl_assert_out("./selfhost/seed_tests/tsg_g2", "5\n120\n7", "selfhost/seed_tests/sxported.stdout")
+  hold p4 = pg_emit_stream(0, "selfhost/typed_sig_test.sa", "selfhost/seed_tests/tsg_seed.c", 0, "selfhost/seed_tests/tsg_seed.c.emit.log", "selfhost/seed_tests/tsg_seed.c.err")
+  hold p5 = gl_compile_c("selfhost/seed_tests/tsg_seed.c", "selfhost/seed_tests/tsg_seed", "-O2 -Werror=incompatible-pointer-types")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/tsg_seed", "5\n120\n7", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = gl_must_write("selfhost/seed_tests/tsg_mixed.sa", "make bad(a: num, b) -> num {\n  give a + b\n}\nshow bad(1, 2)\n")
+  hold p8 = gl_must_write("selfhost/seed_tests/tsg_noret.sa", "make bad(a: num) {\n  give a\n}\nshow bad(1)\n")
+  hold p9 = pg_probe("./selfhost/gen2 selfhost/seed_tests/tsg_mixed.sa selfhost/seed_tests/tsg_m.c", 0, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p10 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "a typed make needs a type on every parameter", 0, 0, 0, 0, 1)
+  hold p11 = pg_probe("./selfhost/gen2 selfhost/seed_tests/tsg_noret.sa selfhost/seed_tests/tsg_n.c", 0, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p12 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "a typed make needs a return type", 0, 0, 0, 0, 1)
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p13 = pg_emit_stream(2, "selfhost/typed_sig_test.sa", "selfhost/seed_tests/tsg_nat", 0, "selfhost/seed_tests/tsg_nat.emit.log", "selfhost/seed_tests/tsg_nat.err")
+  hold p14 = pg_capture("./selfhost/seed_tests/tsg_nat", "selfhost/seed_tests/tsg_nat.out")
+  hold p15 = pg_capture("./selfhost/seed_tests/tsg_g2", "selfhost/seed_tests/tsg_g2.out")
+  hold p16 = gl_assert_files_eq("selfhost/seed_tests/tsg_g2.out", "selfhost/seed_tests/tsg_nat.out", "test-typed-sig parity")
+  hold p17 = pg_probe("./selfhost/native_aot selfhost/seed_tests/tsg_mixed.sa selfhost/seed_tests/tsg_m2", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p18 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "a typed signature needs a type on every parameter", 0, 0, 0, 0, 1)
+  hold p19 = pg_probe("./selfhost/native_aot selfhost/seed_tests/tsg_noret.sa selfhost/seed_tests/tsg_n2", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p20 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "a typed signature needs a return type", 0, 0, 0, 0, 1)
+  }
+  give 0
+}
+
+make mp_test_list_expr() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/list_expr_test.sa", "selfhost/seed_tests/lex_g2.c", 0, "/dev/null", "selfhost/seed_tests/lex_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/lex_g2.c", "selfhost/seed_tests/lex_g2", "-O2")
+  hold p3 = gl_assert_out("./selfhost/seed_tests/lex_g2", "5\n2\n14\n3\n8", "selfhost/seed_tests/sxported.stdout")
+  hold p4 = gl_must_write("selfhost/seed_tests/lex_bad.sa", "hold xs = [1, \"x\"]\nshow len(xs)\n")
+  hold p5 = pg_probe("./selfhost/gen2 selfhost/seed_tests/lex_bad.sa selfhost/seed_tests/lex_bad_g2.c", 0, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p6 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "list elements must be numbers", 0, 0, 0, 0, 1)
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p7 = pg_emit_stream(2, "selfhost/list_expr_test.sa", "selfhost/seed_tests/lex_nat", 0, "selfhost/seed_tests/lex_nat.emit.log", "selfhost/seed_tests/lex_nat.err")
+  hold p8 = pg_capture("./selfhost/seed_tests/lex_nat", "selfhost/seed_tests/lex_nat.out")
+  hold p9 = pg_capture("./selfhost/seed_tests/lex_g2", "selfhost/seed_tests/lex_g2.out")
+  hold p10 = gl_assert_files_eq("selfhost/seed_tests/lex_g2.out", "selfhost/seed_tests/lex_nat.out", "test-list-expr parity")
+  hold p11 = pg_probe("./selfhost/native_aot selfhost/seed_tests/lex_bad.sa selfhost/seed_tests/lex_bad_nat", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p12 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "list elements must be numbers", 0, 0, 0, 0, 1)
+  }
+  give 0
+}
+
+make mp_test_native_strfn() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/native_str_fn_test.sa", "selfhost/seed_tests/nsf_g2.c", 0, "/dev/null", "selfhost/seed_tests/nsf_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/nsf_g2.c", "selfhost/seed_tests/nsf_g2", "-O2")
+  hold p3 = pg_emit_stream(2, "selfhost/native_str_fn_test.sa", "selfhost/seed_tests/nsf_nat", 0, "selfhost/seed_tests/nsf_nat.emit.log", "selfhost/seed_tests/nsf_nat.err")
+  hold p4 = pg_capture("./selfhost/seed_tests/nsf_nat", "selfhost/seed_tests/nsf_nat.out")
+  hold p5 = pg_capture("./selfhost/seed_tests/nsf_g2", "selfhost/seed_tests/nsf_g2.out")
+  hold p6 = gl_must_write("selfhost/seed_tests/nsf_want.out", "hi bob\n6\nh\n1\n4\n")
+  hold p7 = gl_assert_files_eq("selfhost/seed_tests/nsf_nat.out", "selfhost/seed_tests/nsf_want.out", "test-native-strfn parity")
+  hold p8 = gl_assert_files_eq("selfhost/seed_tests/nsf_g2.out", "selfhost/seed_tests/nsf_want.out", "test-native-strfn parity")
+  hold p9 = gl_must_write("selfhost/seed_tests/nsf_bad1.sa", "make count(s: str) -> num {\n  give len(s)\n}\nshow count(5)\n")
+  hold p10 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nsf_bad1.sa selfhost/seed_tests/nsf_bad1", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p11 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "takes a string", 0, 0, 0, 0, 1)
+  hold p12 = gl_must_write("selfhost/seed_tests/nsf_bad2.sa", "make f(a: num) -> str {\n  give 1\n}\nhold z = f(1)\nshow z\n")
+  hold p13 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nsf_bad2.sa selfhost/seed_tests/nsf_bad2", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p14 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "give must give a string", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_native_strgen() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/native_str_gen_test.sa", "selfhost/seed_tests/nsg_g2.c", 0, "/dev/null", "selfhost/seed_tests/nsg_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/nsg_g2.c", "selfhost/seed_tests/nsg_g2", "-O2")
+  hold p3 = pg_emit_stream(2, "selfhost/native_str_gen_test.sa", "selfhost/seed_tests/nsg_nat", 0, "selfhost/seed_tests/nsg_nat.emit.log", "selfhost/seed_tests/nsg_nat.err")
+  hold p4 = pg_capture("./selfhost/seed_tests/nsg_nat", "selfhost/seed_tests/nsg_nat.out")
+  hold p5 = pg_capture("./selfhost/seed_tests/nsg_g2", "selfhost/seed_tests/nsg_g2.out")
+  hold p6 = gl_must_write("selfhost/seed_tests/nsg_want.out", "abc\n42\nyo\n7\n5\nnest\n")
+  hold p7 = gl_assert_files_eq("selfhost/seed_tests/nsg_nat.out", "selfhost/seed_tests/nsg_want.out", "test-native-strgen parity")
+  hold p8 = gl_assert_files_eq("selfhost/seed_tests/nsg_g2.out", "selfhost/seed_tests/nsg_want.out", "test-native-strgen parity")
+  hold p9 = gl_must_write("selfhost/seed_tests/nsg_bad1.sa", "make pair<T>(a: T, b: T) -> T {\n  give a\n}\nshow pair(1, \"x\")\n")
+  hold p10 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nsg_bad1.sa selfhost/seed_tests/nsg_bad1", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p11 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "given two different kinds", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_native_listgen() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/native_list_gen_test.sa", "selfhost/seed_tests/nlg_g2.c", 0, "/dev/null", "selfhost/seed_tests/nlg_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/nlg_g2.c", "selfhost/seed_tests/nlg_g2", "-O2")
+  hold p3 = pg_emit_stream(2, "selfhost/native_list_gen_test.sa", "selfhost/seed_tests/nlg_nat", 0, "selfhost/seed_tests/nlg_nat.emit.log", "selfhost/seed_tests/nlg_nat.err")
+  hold p4 = pg_capture("./selfhost/seed_tests/nlg_nat", "selfhost/seed_tests/nlg_nat.out")
+  hold p5 = pg_capture("./selfhost/seed_tests/nlg_g2", "selfhost/seed_tests/nlg_g2.out")
+  hold p6 = gl_must_write("selfhost/seed_tests/nlg_want.out", "3\n4\n6\n3\n9\n2\n8\n")
+  hold p7 = gl_assert_files_eq("selfhost/seed_tests/nlg_nat.out", "selfhost/seed_tests/nlg_want.out", "test-native-listgen parity")
+  hold p8 = gl_assert_files_eq("selfhost/seed_tests/nlg_g2.out", "selfhost/seed_tests/nlg_want.out", "test-native-listgen parity")
+  hold p9 = gl_must_write("selfhost/seed_tests/nlg_bad1.sa", "make f(xs: list) -> num {\n  give xs\n}\nshow f([1])\n")
+  hold p10 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nlg_bad1.sa selfhost/seed_tests/nlg_bad1", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p11 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "give must give a number (got a list)", 0, 0, 0, 0, 1)
+  hold p12 = gl_must_write("selfhost/seed_tests/nlg_bad2.sa", "make g(s: struct) -> num {\n  give 1\n}\nshow 1\n")
+  hold p13 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nlg_bad2.sa selfhost/seed_tests/nlg_bad2", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p14 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "not in the native subset", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_logic_value() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/logic_value_test.sa", "selfhost/seed_tests/lv_g2.c", 0, "/dev/null", "selfhost/seed_tests/lv_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/lv_g2.c", "selfhost/seed_tests/lv_g2", "-O2")
+  hold p3 = gl_assert_out("./selfhost/seed_tests/lv_g2", "0\n1\n0\nx and y\n1\n1\n1\n1\n1\n1\n8\n2\n1\n", "selfhost/seed_tests/sxported.stdout")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p4 = pg_emit_stream(2, "selfhost/logic_value_test.sa", "selfhost/seed_tests/lv_nat", 0, "selfhost/seed_tests/lv_nat.emit.log", "selfhost/seed_tests/lv_nat.err")
+  hold p5 = pg_capture("./selfhost/seed_tests/lv_nat", "selfhost/seed_tests/lv_nat.out")
+  hold p6 = pg_capture("./selfhost/seed_tests/lv_g2", "selfhost/seed_tests/lv_g2.out")
+  hold p7 = gl_assert_files_eq("selfhost/seed_tests/lv_g2.out", "selfhost/seed_tests/lv_nat.out", "test-logic-value parity")
+  hold p8 = gl_must_write("selfhost/seed_tests/lv_bad.sa", "hold a = 1\nhold v = a and \"x\"\nshow v\n")
+  hold p9 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/lv_bad.sa selfhost/seed_tests/lv_bad_nat >/dev/null 2>&1", "test-logic-value refusal")
+  }
+  give 0
+}
+
+make mp_test_native_generics() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/native_generics_test.sa", "selfhost/seed_tests/ng_g2.c", 0, "/dev/null", "selfhost/seed_tests/ng_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/ng_g2.c", "selfhost/seed_tests/ng_g2", "-O2")
+  hold p3 = gl_assert_out("./selfhost/seed_tests/ng_g2", "7\n1\n4\n4\n10\n11\n6\n", "selfhost/seed_tests/sxported.stdout")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p4 = pg_emit_stream(2, "selfhost/native_generics_test.sa", "selfhost/seed_tests/ng_nat", 0, "selfhost/seed_tests/ng_nat.emit.log", "selfhost/seed_tests/ng_nat.err")
+  hold p5 = pg_capture("./selfhost/seed_tests/ng_nat", "selfhost/seed_tests/ng_nat.out")
+  hold p6 = pg_capture("./selfhost/seed_tests/ng_g2", "selfhost/seed_tests/ng_g2.out")
+  hold p7 = gl_assert_files_eq("selfhost/seed_tests/ng_g2.out", "selfhost/seed_tests/ng_nat.out", "test-native-generics parity")
+  hold p8 = gl_must_write("selfhost/seed_tests/ng_untyped.sa", "make f<T>(a) {\n  give a\n}\nshow f(1)\n")
+  hold p9 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/ng_untyped.sa selfhost/seed_tests/ng_untyped >/dev/null 2>&1", "test-native-generics refusal")
+  hold p10 = gl_must_write("selfhost/seed_tests/ng_str.sa", "make f<T>(a: T) -> T {\n  give a\n}\nshow f(\"x\")\n")
+  hold p11 = pg_emit_stream(2, "selfhost/seed_tests/ng_str.sa", "selfhost/seed_tests/ng_str", 0, "/dev/null", "selfhost/seed_tests/ng_str.err")
+  hold p12 = pg_probe("selfhost/seed_tests/ng_str", 0, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p13 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "x", 0, 1, 0, 0, 1)
+  hold p14 = gl_must_write("selfhost/seed_tests/ng_list.sa", "make f<T>(a: T) -> T {\n  give a\n}\nhold l = f([1, 2])\nshow 1\n")
+  hold p15 = pg_emit_stream(2, "selfhost/seed_tests/ng_list.sa", "selfhost/seed_tests/ng_list", 0, "/dev/null", "selfhost/seed_tests/ng_list.err")
+  hold p16 = pg_probe("selfhost/seed_tests/ng_list", 0, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p17 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "1", 0, 1, 0, 0, 1)
+  }
+  give 0
+}
+
+make mp_test_native_cond() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/native_cond_test.sa", "selfhost/seed_tests/nco_g2.c", 0, "/dev/null", "selfhost/seed_tests/nco_g2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/nco_g2.c", "selfhost/seed_tests/nco_g2", "-O2")
+  hold p3 = gl_assert_out("./selfhost/seed_tests/nco_g2", "1\n3\n4\n6\n7\n9\n10\n11\n12\n13\n15\n17\n18\n0\n1\n2\n5\n1\n0", "selfhost/seed_tests/sxported.stdout")
+  hold p4 = pg_emit_stream(0, "selfhost/native_cond_test.sa", "selfhost/seed_tests/nco_seed.c", 0, "selfhost/seed_tests/nco_seed.c.emit.log", "selfhost/seed_tests/nco_seed.c.err")
+  hold p5 = gl_compile_c("selfhost/seed_tests/nco_seed.c", "selfhost/seed_tests/nco_seed", "-O2")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/nco_seed", "1\n3\n4\n6\n7\n9\n10\n11\n12\n13\n15\n17\n18\n0\n1\n2\n5\n1\n0", "selfhost/seed_tests/sxported.stdout")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p7 = pg_emit_stream(2, "selfhost/native_cond_test.sa", "selfhost/seed_tests/nco_nat", 0, "selfhost/seed_tests/nco_nat.emit.log", "selfhost/seed_tests/nco_nat.err")
+  hold p8 = pg_capture("./selfhost/seed_tests/nco_nat", "selfhost/seed_tests/nco_nat.out")
+  hold p9 = pg_capture("./selfhost/seed_tests/nco_g2", "selfhost/seed_tests/nco_g2.out")
+  hold p10 = gl_assert_files_eq("selfhost/seed_tests/nco_g2.out", "selfhost/seed_tests/nco_nat.out", "test-native-cond parity")
+  hold p11 = gl_must_write("selfhost/seed_tests/nco_neg1.sa", "hold s = \"ab\"\nhold a = 1\nwhen s and a {\n  show 1\n}\n")
+  hold p12 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nco_neg1.sa selfhost/seed_tests/nco_neg1", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p13 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "must be a number", 0, 0, 0, 0, 1)
+  hold p14 = gl_must_write("selfhost/seed_tests/nco_neg2.sa", "hold a = 1\nshow a and a\n")
+  hold p15 = pg_emit_stream(2, "selfhost/seed_tests/nco_neg2.sa", "selfhost/seed_tests/nco_neg2", 0, "/dev/null", "selfhost/seed_tests/nco_neg2.err")
+  hold p16 = pg_probe("./selfhost/seed_tests/nco_neg2", 0, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p17 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "1", 0, 1, 0, 0, 1)
+  hold p18 = gl_must_write("selfhost/seed_tests/nco_neg3.sa", "hold a = 1\nwhen a and {\n  show 1\n}\n")
+  hold p19 = pg_probe("./selfhost/native_aot selfhost/seed_tests/nco_neg3.sa selfhost/seed_tests/nco_neg3", 1, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p20 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "missing operand", 0, 0, 0, 0, 1)
+  }
+  give 0
+}
+
+make mp_test_proc_builtins() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = gl_rm_tree("selfhost/seed_tests/proc_frame_dir")
+  hold p2 = pg_emit_stream(1, "selfhost/proc_frame_server.sa", "selfhost/seed_tests/proc_frame_server.c", 0, "/dev/null", "selfhost/seed_tests/proc_frame_server.c.err")
+  hold p3 = gl_compile_c("selfhost/seed_tests/proc_frame_server.c", "selfhost/seed_tests/proc_frame_server", "-O2 -Werror=implicit-function-declaration")
+  hold p4 = pg_emit_stream(1, "selfhost/proc_frame_client.sa", "selfhost/seed_tests/proc_frame_client.c", 0, "/dev/null", "selfhost/seed_tests/proc_frame_client.c.err")
+  hold p5 = gl_compile_c("selfhost/seed_tests/proc_frame_client.c", "selfhost/seed_tests/proc_frame_client", "-O2 -Werror=implicit-function-declaration")
+  hold p6 = pg_command(concat("./selfhost/seed_tests/proc_frame_client '", concat(path_real("."), concat("/selfhost/seed_tests/proc_frame_server' '", concat(path_real("."), "/selfhost/seed_tests/proc_frame_dir' > selfhost/seed_tests/proc_frame.out")))), "test-proc-builtins child command")
+  hold p7 = gl_must_write("selfhost/seed_tests/proc_frame.want", "spawn, child_send, child_line, child_recv, child_close: one framed session, two answers, clean exit\nmake_dir, make_link, remove_path and dead handles behave as documented\n")
+  hold p8 = gl_assert_files_eq("selfhost/seed_tests/proc_frame.want", "selfhost/seed_tests/proc_frame.out", "test-proc-builtins parity")
+  hold p9 = gl_must_write("selfhost/seed_tests/proc_frame_seed.sa", "hold h = spawn(\"x\")\nshow h\nhold n = make_dir(\"x\")\nshow n\n")
+  hold p10 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/proc_frame_seed.sa > /dev/null 2>selfhost/seed_tests/proc_frame_seed.err", "test-proc-builtins refusal")
+  hold p11 = pr_assert("selfhost/seed_tests/proc_frame_seed.err", "call names an unknown function or builtin", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_comment_quotes() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = gl_rm_tree("selfhost/seed_tests/cq")
+  hold p2 = gl_ensure_dir("selfhost/seed_tests/cq")
+  hold p3 = gl_must_write("selfhost/seed_tests/cq/odd.sa", "// a comment with one \" quote inside it\nmake add2(a: num, b: num) -> num {\n  give a + b\n}\nhold r = add2(1, 2)\nshow r\n")
+  hold p4 = pg_emit_stream(1, "selfhost/seed_tests/cq/odd.sa", "selfhost/seed_tests/cq/odd.c", 0, "/dev/null", "selfhost/seed_tests/cq/odd.c.err")
+  hold p5 = pr_assert("selfhost/seed_tests/cq/odd.c", "static double add2(double a, double b);", 0, 0, 0, 0, 1)
+  hold p6 = pr_assert("selfhost/seed_tests/cq/odd.c", "double str[,)]", 0, 0, 0, 1, 0)
+  hold p7 = pr_assert("selfhost/seed_tests/cq/odd.c", "double num", 0, 0, 0, 0, 0)
+  hold p8 = gl_compile_c("selfhost/seed_tests/cq/odd.c", "selfhost/seed_tests/cq/odd", "-O2 -Werror=implicit-function-declaration")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/cq/odd", "3", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = pg_emit_stream(1, "tools/sxpkg.sa", "selfhost/seed_tests/cq/sxpkg.c", 0, "/dev/null", "selfhost/seed_tests/cq/sxpkg.c.err")
+  hold p11 = pr_assert("selfhost/seed_tests/cq/sxpkg.c", "double str[,)]", 0, 0, 0, 1, 0)
+  hold p12 = pr_assert("selfhost/seed_tests/cq/sxpkg.c", "static char \\*toml_field(char \\*text, char \\*key);", 0, 0, 0, 0, 1)
+  hold p13 = pg_emit_stream(0, "selfhost/seed_tests/cq/odd.sa", "selfhost/seed_tests/cq/odd_seed.c", 0, "selfhost/seed_tests/cq/odd_seed.c.emit.log", "selfhost/seed_tests/cq/odd_seed.c.err")
+  hold p14 = pr_assert("selfhost/seed_tests/cq/odd_seed.c", "static double add2(double a, double b){", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_for_paren() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/for_paren_test.sa", "selfhost/seed_tests/tfp_seed.c", 0, "selfhost/seed_tests/tfp_seed.c.emit.log", "selfhost/seed_tests/tfp_seed.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/tfp_seed.c", "selfhost/seed_tests/tfp_seed", "-O2 -Werror=implicit-function-declaration")
+  hold p3 = pg_emit_stream(1, "selfhost/for_paren_test.sa", "selfhost/seed_tests/tfp_gen2.c", 0, "/dev/null", "selfhost/seed_tests/tfp_gen2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/tfp_gen2.c", "selfhost/seed_tests/tfp_gen2", "-O2 -Werror=implicit-function-declaration")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/tfp_seed", "a\nb\n7\n8\na\nb\nx\ny\nz\nz\n3\nparen-done", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = pg_capture("./selfhost/seed_tests/tfp_seed", "selfhost/seed_tests/tfp_seed.out")
+  hold p7 = pg_capture("./selfhost/seed_tests/tfp_gen2", "selfhost/seed_tests/tfp_gen2.out")
+  hold p8 = gl_assert_files_eq("selfhost/seed_tests/tfp_seed.out", "selfhost/seed_tests/tfp_gen2.out", "test-for-paren parity")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p9 = pg_emit_stream(2, "selfhost/for_paren_test.sa", "selfhost/seed_tests/tfp_native", 0, "selfhost/seed_tests/tfp_native.emit.log", "selfhost/seed_tests/tfp_native.err")
+  hold p10 = pg_capture("./selfhost/seed_tests/tfp_native", "selfhost/seed_tests/tfp_native.out")
+  hold p11 = gl_assert_files_eq("selfhost/seed_tests/tfp_seed.out", "selfhost/seed_tests/tfp_native.out", "test-for-paren parity")
+  }
+  give 0
+}
+
+make mp_test_gen2_index_mod() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/gen2_index_mod_test.sa", "selfhost/seed_tests/gim_seed.c", 0, "selfhost/seed_tests/gim_seed.c.emit.log", "selfhost/seed_tests/gim_seed.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/gim_seed.c", "selfhost/seed_tests/gim_seed", "-O2 -Werror=implicit-function-declaration")
+  hold p3 = pg_emit_stream(1, "selfhost/gen2_index_mod_test.sa", "selfhost/seed_tests/gim_gen2.c", 0, "/dev/null", "selfhost/seed_tests/gim_gen2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/gim_gen2.c", "selfhost/seed_tests/gim_gen2", "-O2 -Werror=implicit-function-declaration")
+  hold p5 = pg_capture("./selfhost/seed_tests/gim_seed", "selfhost/seed_tests/gim_seed.out")
+  hold p6 = pg_capture("./selfhost/seed_tests/gim_gen2", "selfhost/seed_tests/gim_gen2.out")
+  hold p7 = gl_assert_files_eq("selfhost/seed_tests/gim_seed.out", "selfhost/seed_tests/gim_gen2.out", "test-gen2-index-mod parity")
+  hold p8 = pr_assert("selfhost/seed_tests/gim_gen2.c", "sx_mod", 1, 0, 0, 0, 1)
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p9 = pg_emit_stream(2, "selfhost/gen2_index_mod_test.sa", "selfhost/seed_tests/gim_native", 0, "selfhost/seed_tests/gim_native.emit.log", "selfhost/seed_tests/gim_native.err")
+  hold p10 = pg_capture("./selfhost/seed_tests/gim_native", "selfhost/seed_tests/gim_native.out")
+  hold p11 = gl_assert_files_eq("selfhost/seed_tests/gim_seed.out", "selfhost/seed_tests/gim_native.out", "test-gen2-index-mod parity")
+  }
+  give 0
+}
+
+make mp_test_gen2_expr_lowering() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/gen2_str_cat_test.sa", "selfhost/seed_tests/gsc_seed.c", 0, "selfhost/seed_tests/gsc_seed.c.emit.log", "selfhost/seed_tests/gsc_seed.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/gsc_seed.c", "selfhost/seed_tests/gsc_seed", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(1, "selfhost/gen2_str_cat_test.sa", "selfhost/seed_tests/gsc_gen2.c", 0, "/dev/null", "selfhost/seed_tests/gsc_gen2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/gsc_gen2.c", "selfhost/seed_tests/gsc_gen2", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/gsc_seed", "hi bob\nsay \"hi\" kim\nLR\nxabcy\nabc!\npq/p\n[L-R]\n1\n2\nhi abc\nstr-cat-done", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/gsc_gen2", "hi bob\nsay \"hi\" kim\nLR\nxabcy\nabc!\npq/p\n[L-R]\n1\n2\nhi abc\nstr-cat-done", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = pr_assert("selfhost/seed_tests/gsc_gen2.c", "return sx_cat(\"hi \" , n);", 1, 0, 0, 0, 1)
+  hold p8 = pr_assert("selfhost/seed_tests/gsc_gen2.c", "return sx_cat(sx_cat(\"x\" , n) , \"y\");", 1, 0, 0, 0, 1)
+  hold p9 = pr_assert("selfhost/seed_tests/gsc_gen2.c", "return sx_cat(n , \"!\");", 1, 0, 0, 0, 1)
+  hold p10 = pr_assert("selfhost/seed_tests/gsc_gen2.c", "return sx_cat(sx_cat(sx_cat(p, q) , \"/\") , p);", 1, 0, 0, 0, 1)
+  hold p11 = pr_assert("selfhost/seed_tests/gsc_gen2.c", "char *j = sx_cat(sx_cat(a, \"-\"), b);", 1, 0, 0, 0, 1)
+  hold p12 = pr_assert("selfhost/seed_tests/gsc_gen2.c", "\" + n", 0, 0, 0, 0, 0)
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p13 = pg_emit_stream(2, "selfhost/gen2_str_cat_test.sa", "selfhost/seed_tests/gsc_native", 0, "selfhost/seed_tests/gsc_native.emit.log", "selfhost/seed_tests/gsc_native.err")
+  hold p14 = pg_capture("./selfhost/seed_tests/gsc_native", "selfhost/seed_tests/gsc_native.out")
+  hold p15 = pg_capture("./selfhost/seed_tests/gsc_seed", "selfhost/seed_tests/gsc_seed.out")
+  hold p16 = gl_assert_files_eq("selfhost/seed_tests/gsc_seed.out", "selfhost/seed_tests/gsc_native.out", "test-gen2-expr-lowering parity")
+  }
+  hold p17 = pg_emit_stream(0, "selfhost/gen2_index_call_test.sa", "selfhost/seed_tests/gic_seed.c", 0, "selfhost/seed_tests/gic_seed.c.emit.log", "selfhost/seed_tests/gic_seed.c.err")
+  hold p18 = gl_compile_c("selfhost/seed_tests/gic_seed.c", "selfhost/seed_tests/gic_seed", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p19 = pg_emit_stream(1, "selfhost/gen2_index_call_test.sa", "selfhost/seed_tests/gic_gen2.c", 0, "/dev/null", "selfhost/seed_tests/gic_gen2.c.err")
+  hold p20 = gl_compile_c("selfhost/seed_tests/gic_gen2.c", "selfhost/seed_tests/gic_gen2", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p21 = gl_assert_out("./selfhost/seed_tests/gic_seed", "40\n30\n20\n40\n102\n101\n40\n70\n100\n101\n0\n1\n2\n1\n40\n2\n102\nindex-call-done", "selfhost/seed_tests/sxported.stdout")
+  hold p22 = gl_assert_out("./selfhost/seed_tests/gic_gen2", "40\n30\n20\n40\n102\n101\n40\n70\n100\n101\n0\n1\n2\n1\n40\n2\n102\nindex-call-done", "selfhost/seed_tests/sxported.stdout")
+  hold p23 = pr_assert("selfhost/seed_tests/gic_gen2.c", "sx_lget(xs,sx_llen(xs) - 1.0)", 1, 0, 0, 0, 1)
+  hold p24 = pr_assert("selfhost/seed_tests/gic_gen2.c", "sx_idx(s,sx_len(s) - 1.0)", 1, 0, 0, 0, 1)
+  hold p25 = pr_assert("selfhost/seed_tests/gic_gen2.c", "sx_lget(xs,sx_lget(ys,0.0))", 1, 0, 0, 0, 1)
+  hold p26 = pr_assert("selfhost/seed_tests/gic_gen2.c", "if (sx_lget(xs,sx_llen(xs) - 1.0) > 39.0)", 1, 0, 0, 0, 1)
+  hold p27 = pr_assert("selfhost/seed_tests/gic_gen2.c", "for (k = 0.0; k < sx_lget(ys,sx_llen(ys) - 1.0)", 1, 0, 0, 0, 1)
+  hold p28 = pr_assert("selfhost/seed_tests/gic_gen2.c", "return sx_lget(v,sx_llen(v) - 1.0);", 1, 0, 0, 0, 1)
+  hold p29 = pr_assert("selfhost/seed_tests/gic_gen2.c", "return sx_idx(t,sx_len(t) - 1.0);", 1, 0, 0, 0, 1)
+  hold p30 = pr_assert("selfhost/seed_tests/gic_gen2.c", "xs\\[", 0, 0, 0, 0, 0)
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p31 = pg_emit_stream(2, "selfhost/gen2_index_call_test.sa", "selfhost/seed_tests/gic_native", 0, "selfhost/seed_tests/gic_native.emit.log", "selfhost/seed_tests/gic_native.err")
+  hold p32 = pg_capture("./selfhost/seed_tests/gic_native", "selfhost/seed_tests/gic_native.out")
+  hold p33 = pg_capture("./selfhost/seed_tests/gic_seed", "selfhost/seed_tests/gic_seed.out")
+  hold p34 = gl_assert_files_eq("selfhost/seed_tests/gic_seed.out", "selfhost/seed_tests/gic_native.out", "test-gen2-expr-lowering parity")
+  }
+  hold p35 = gl_must_write("selfhost/seed_tests/gel_bad_call.sa", "hold xs = [1, 2, 3]\nmake pick(v: list) -> num {\n  give v[0]\n}\nshow xs[pick(xs)]\n")
+  hold p36 = gl_must_write("selfhost/seed_tests/gel_bad_quote.sa", "hold xs = [1, 2, 3]\nshow xs[\"a\"]\n")
+  hold p37 = gl_must_write("selfhost/seed_tests/gel_bad_unbal.sa", "hold xs = [1, 2, 3]\nhold ys = [0]\nshow xs[ys[0]\n")
+  hold p38 = gl_must_write("selfhost/seed_tests/gel_bad_mix.sa", "make bad(x: str, v: num) -> str {\n  give \"v=\" + v\n}\nshow bad(\"q\", 3)\n")
+  hold p39 = gl_must_write("selfhost/seed_tests/gel_bad_pctstr.sa", "make bad2(x: num, s: str) -> num {\n  give x % s\n}\nshow bad2(4, \"ab\")\n")
+  hold p40 = pg_emit_stream(1, "selfhost/seed_tests/gel_bad_call.sa", "selfhost/seed_tests/gel_bad_call.c", 0, "selfhost/seed_tests/gel_bad_call.msg", "selfhost/seed_tests/gel_bad_call.c.err")
+  hold p41 = pr_assert("selfhost/seed_tests/gel_bad_call.c", "#error sayanox-min:", 0, 0, 0, 0, 1)
+  hold p42 = pr_assert("selfhost/seed_tests/gel_bad_call.msg", "^min: ", 0, 0, 0, 0, 1)
+  hold p43 = pg_emit_stream(1, "selfhost/seed_tests/gel_bad_quote.sa", "selfhost/seed_tests/gel_bad_quote.c", 0, "selfhost/seed_tests/gel_bad_quote.msg", "selfhost/seed_tests/gel_bad_quote.c.err")
+  hold p44 = pr_assert("selfhost/seed_tests/gel_bad_quote.c", "#error sayanox-min:", 0, 0, 0, 0, 1)
+  hold p45 = pr_assert("selfhost/seed_tests/gel_bad_quote.msg", "^min: ", 0, 0, 0, 0, 1)
+  hold p46 = pg_emit_stream(1, "selfhost/seed_tests/gel_bad_unbal.sa", "selfhost/seed_tests/gel_bad_unbal.c", 0, "selfhost/seed_tests/gel_bad_unbal.msg", "selfhost/seed_tests/gel_bad_unbal.c.err")
+  hold p47 = pr_assert("selfhost/seed_tests/gel_bad_unbal.c", "#error sayanox-min:", 0, 0, 0, 0, 1)
+  hold p48 = pr_assert("selfhost/seed_tests/gel_bad_unbal.msg", "^min: ", 0, 0, 0, 0, 1)
+  hold p49 = pg_emit_stream(1, "selfhost/seed_tests/gel_bad_mix.sa", "selfhost/seed_tests/gel_bad_mix.c", 0, "selfhost/seed_tests/gel_bad_mix.msg", "selfhost/seed_tests/gel_bad_mix.c.err")
+  hold p50 = pr_assert("selfhost/seed_tests/gel_bad_mix.c", "#error sayanox-min:", 0, 0, 0, 0, 1)
+  hold p51 = pr_assert("selfhost/seed_tests/gel_bad_mix.msg", "^min: ", 0, 0, 0, 0, 1)
+  hold p52 = pg_emit_stream(1, "selfhost/seed_tests/gel_bad_pctstr.sa", "selfhost/seed_tests/gel_bad_pctstr.c", 0, "selfhost/seed_tests/gel_bad_pctstr.msg", "selfhost/seed_tests/gel_bad_pctstr.c.err")
+  hold p53 = pr_assert("selfhost/seed_tests/gel_bad_pctstr.c", "#error sayanox-min:", 0, 0, 0, 0, 1)
+  hold p54 = pr_assert("selfhost/seed_tests/gel_bad_pctstr.msg", "^min: ", 0, 0, 0, 0, 1)
+  hold p55 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/gel_bad_mix.sa >/dev/null 2>&1", "test-gen2-expr-lowering refusal")
+  hold p56 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/gel_bad_pctstr.sa >/dev/null 2>&1", "test-gen2-expr-lowering refusal")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p57 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/gel_bad_pctstr.sa selfhost/seed_tests/gel_bad_pctstr_nat >/dev/null 2>&1", "test-gen2-expr-lowering refusal")
+  }
+  give 0
+}
+
+make mp_test_parity() -> num {
+  hold p0 = gl_assert_eq_num(path_kind("selfhost/gen2"), 1, "compiler present: selfhost/gen2")
+  hold p1 = gl_assert_eq_num(path_kind("selfhost/seed/sxc_seed_min"), 1, "compiler present: selfhost/seed/sxc_seed_min")
+  hold p2 = gl_ensure_dir("selfhost/seed_tests")
+  hold p3 = gl_must_write("selfhost/seed_tests/par_lib.sa", "hold lib = 7\n")
+  hold p4 = gl_must_write("selfhost/seed_tests/par.sa", "use \"selfhost/seed_tests/par_lib.sa\"\n")
+  hold p5 = gl_must_write("selfhost/seed_tests/par.sa", concat(read_file("selfhost/seed_tests/par.sa"), "struct Point {\n  x,\n  y\n}\n"))
+  hold p6 = gl_must_write("selfhost/seed_tests/par.sa", concat(read_file("selfhost/seed_tests/par.sa"), "make twice(n) {\n  when n <= 0 {\n    give 0\n  }\n  give n * 2\n}\n"))
+  hold p7 = gl_must_write("selfhost/seed_tests/par.sa", concat(read_file("selfhost/seed_tests/par.sa"), "hold p = Point { x: 3, y: 4 }\n"))
+  hold p8 = gl_must_write("selfhost/seed_tests/par.sa", concat(read_file("selfhost/seed_tests/par.sa"), "hold xs = [10, 20, 30]\nhold i = 0\n"))
+  hold p9 = gl_must_write("selfhost/seed_tests/par.sa", concat(read_file("selfhost/seed_tests/par.sa"), "while i < 3 {\n  show i\n  hold i = i + 1\n}\n"))
+  hold p10 = gl_must_write("selfhost/seed_tests/par.sa", concat(read_file("selfhost/seed_tests/par.sa"), "when p.x < p.y {\n  show p.x + p.y\n} else {\n  show 0\n}\n"))
+  hold p11 = gl_must_write("selfhost/seed_tests/par.sa", concat(read_file("selfhost/seed_tests/par.sa"), "show lib\nshow 10 % 3\nshow twice(21)\nshow xs[2]\n"))
+  hold p12 = gl_must_write("selfhost/seed_tests/par.sa", concat(read_file("selfhost/seed_tests/par.sa"), "hold xs = push(xs, 40)\nshow len(xs)\nshow concat(\"a\", \"b\")\n"))
+  hold p13 = pg_emit_stream(0, "selfhost/seed_tests/par.sa", "selfhost/seed_tests/par_sm.c", 0, "selfhost/seed_tests/par_sm.c.emit.log", "selfhost/seed_tests/par_sm.c.err")
+  hold p14 = gl_compile_c("selfhost/seed_tests/par_sm.c", "selfhost/seed_tests/par_sm", "-O2")
+  hold p15 = pg_emit_stream(1, "selfhost/seed_tests/par.sa", "selfhost/seed_tests/par_g2.c", 0, "/dev/null", "selfhost/seed_tests/par_g2.c.err")
+  hold p16 = gl_compile_c("selfhost/seed_tests/par_g2.c", "selfhost/seed_tests/par_g2", "-O2")
+  hold p17 = pg_capture("./selfhost/seed_tests/par_sm", "selfhost/seed_tests/par_sm.out")
+  hold p18 = pg_capture("./selfhost/seed_tests/par_g2", "selfhost/seed_tests/par_g2.out")
+  hold p19 = gl_assert_files_eq("selfhost/seed_tests/par_sm.out", "selfhost/seed_tests/par_g2.out", "test-parity parity")
+  give 0
+}
+
+make mp_test_boot() -> num {
+  hold p0 = gl_assert_eq_num(path_kind("selfhost/gen2"), 1, "compiler present: selfhost/gen2")
+  hold p1 = pg_emit_stream(1, "selfhost/compiler_boot.sa", "selfhost/boot_from_gen2.c", 0, "/dev/null", "selfhost/boot_from_gen2.c.err")
+  hold p2 = gl_compile_c("selfhost/boot_from_gen2.c", "selfhost/boot_from_gen2", "-O2")
+  hold p3 = gl_ensure_dir("selfhost/seed_tests")
+  hold p4 = gl_must_write("selfhost/seed_tests/ts_re.sa", "hold n = 0\nhold n = 1\nhold n = 2\nshow n\n")
+  hold p5 = pg_command("./selfhost/boot_from_gen2 selfhost/seed_tests/ts_re.sa selfhost/seed_tests/ts_re_b.c >/dev/null", "test-boot child command")
+  hold p6 = gl_compile_c("selfhost/seed_tests/ts_re_b.c", "selfhost/seed_tests/ts_re_b", "-O2")
+  hold p7 = gl_assert_out("./selfhost/seed_tests/ts_re_b", "2", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_sxdiag() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_command("./tools/sxdiag inline ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-inline", "test-sxdiag child command")
+  hold p2 = pg_command("./tools/sxdiag postfix ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-postfix", "test-sxdiag child command")
+  hold p3 = pg_command("./tools/sxdiag return ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-return", "test-sxdiag child command")
+  hold p4 = pg_command("./tools/sxdiag name ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-name", "test-sxdiag child command")
+  hold p5 = pg_expect_failure("./tools/sxdiag bogus ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-bad >/dev/null 2>&1", "test-sxdiag refusal")
+  hold p6 = pg_probe("./tools/sxdiag bogus ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-bad", 2, "selfhost/seed_tests/sxmore.diagnostic")
+  hold p7 = pr_assert("selfhost/seed_tests/sxmore.diagnostic", "unknown suite", 0, 0, 0, 0, 1)
+  hold p8 = pg_expect_failure("./tools/sxdiag 2>/dev/null", "test-sxdiag refusal")
+  hold p9 = pg_expect_failure("./tools/sxdiag return /bin/true /bin/true /bin/true selfhost/seed_tests/sxdiag-dead >/dev/null 2>&1", "test-sxdiag refusal")
+  hold p10 = pg_expect_failure("./tools/sxdiag inline /bin/true /bin/true /bin/true selfhost/seed_tests/sxdiag-dead >/dev/null 2>&1", "test-sxdiag refusal")
+  hold p11 = gl_must_write("selfhost/seed_tests/sxdiag_run.sa", "show run_command(\"exit 3\")\nhold r = run_command(\"echo builtin-run-ok > selfhost/seed_tests/sxdiag-run.txt\")\nshow r\n")
+  hold p12 = pg_emit_stream(1, "selfhost/seed_tests/sxdiag_run.sa", "selfhost/seed_tests/sxdiag_run.c", 0, "/dev/null", "selfhost/seed_tests/sxdiag_run.c.err")
+  hold p13 = gl_compile_c("selfhost/seed_tests/sxdiag_run.c", "selfhost/seed_tests/sxdiag_run", "-O2 -Werror=implicit-function-declaration")
+  hold p14 = gl_assert_out("./selfhost/seed_tests/sxdiag_run", "3\n0", "selfhost/seed_tests/sxported.stdout")
+  hold p15 = pr_assert("selfhost/seed_tests/sxdiag-run.txt", "builtin-run-ok", 0, 0, 0, 0, 1)
+  hold p16 = gl_must_write("selfhost/seed_tests/sxdiag_run_seed.sa", "hold n = run_command(\"true\")\nshow n\n")
+  hold p17 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/sxdiag_run_seed.sa >/dev/null 2>selfhost/seed_tests/sxdiag_run_seed.err", "test-sxdiag refusal")
+  hold p18 = pr_assert("selfhost/seed_tests/sxdiag_run_seed.err", "unknown function or builtin", 0, 0, 0, 0, 1)
+  hold p19 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/sxdiag_run_seed.sa selfhost/seed_tests/sxdiag_run_native 2>/dev/null", "test-sxdiag refusal")
+  hold p20 = gl_must_write("selfhost/seed_tests/sxdiag_env.sa", "show getenv(\"SXDIAG_MARK\")\nhold unset = getenv(\"SXDIAG_NOT_SET\")\nshow concat(\"[\", concat(unset, \"]\"))\nwhen string_eq(getenv(\"SXDIAG_MODE\"), \"on\") { show \"mode-on\" }\n")
+  hold p21 = pg_emit_stream(1, "selfhost/seed_tests/sxdiag_env.sa", "selfhost/seed_tests/sxdiag_env.c", 0, "/dev/null", "selfhost/seed_tests/sxdiag_env.c.err")
+  hold p22 = gl_compile_c("selfhost/seed_tests/sxdiag_env.c", "selfhost/seed_tests/sxdiag_env", "-O2 -Werror=implicit-function-declaration")
+  hold p23 = gl_assert_out("SXDIAG_MARK=marked SXDIAG_MODE=on ./selfhost/seed_tests/sxdiag_env", "marked\n[]\nmode-on", "selfhost/seed_tests/sxported.stdout")
+  hold p24 = gl_assert_out("./selfhost/seed_tests/sxdiag_env", "\n[]", "selfhost/seed_tests/sxported.stdout")
+  hold p25 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/sxdiag_env.sa >/dev/null 2>selfhost/seed_tests/sxdiag_env_seed.err", "test-sxdiag refusal")
+  hold p26 = pr_assert("selfhost/seed_tests/sxdiag_env_seed.err", "unknown function or builtin", 0, 0, 0, 0, 1)
+  hold p27 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/sxdiag_env.sa selfhost/seed_tests/sxdiag_env_native 2>/dev/null", "test-sxdiag refusal")
+  give 0
+}
+
+make mp_test_stdlib_interpolation() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/stdlib_interpolation_test.sa", "selfhost/seed_tests/interp_seed.c", 0, "selfhost/seed_tests/interp_seed.c.emit.log", "selfhost/seed_tests/interp_seed.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/interp_seed.c", "selfhost/seed_tests/interp_seed", "-O2")
+  hold p3 = pg_emit_stream(1, "selfhost/stdlib_interpolation_test.sa", "selfhost/seed_tests/interp_gen2.c", 0, "selfhost/seed_tests/interp_gen2.c.emit.log", "selfhost/seed_tests/interp_gen2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/interp_gen2.c", "selfhost/seed_tests/interp_gen2", "-O2")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/interp_seed", "2\n10\n4\n-6\n0\n0.25\n1\n0\n0.5\n1\n25\n0.5", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/interp_gen2", "2\n10\n4\n-6\n0\n0.25\n1\n0\n0.5\n1\n25\n0.5", "selfhost/seed_tests/sxported.stdout")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p7 = pg_emit_stream(2, "selfhost/stdlib_interpolation_test.sa", "selfhost/seed_tests/interp_native", 0, "selfhost/seed_tests/interp_native.emit.log", "selfhost/seed_tests/interp_native.err")
+  hold p8 = pg_capture("./selfhost/seed_tests/interp_native", "selfhost/seed_tests/interp_native.out")
+  hold p9 = pg_capture("./selfhost/seed_tests/interp_seed", "selfhost/seed_tests/interp_seed.out")
+  hold p10 = gl_assert_files_eq("selfhost/seed_tests/interp_native.out", "selfhost/seed_tests/interp_seed.out", "test-stdlib-interpolation parity")
+  }
+  give 0
+}
+
+make mp_test_seed_stage2() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/seed_stage2_test.sa", "selfhost/seed_tests/seed_s2.c", 0, "selfhost/seed_tests/seed_s2.c.emit.log", "selfhost/seed_tests/seed_s2.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/seed_s2.c", "selfhost/seed_tests/seed_s2", "-O2")
+  hold p3 = pg_emit_stream(1, "selfhost/seed_stage2_test.sa", "selfhost/seed_tests/seed_s2_g2.c", 0, "selfhost/seed_tests/seed_s2_g2.c.emit.log", "selfhost/seed_tests/seed_s2_g2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/seed_s2_g2.c", "selfhost/seed_tests/seed_s2_g2", "-O2")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/seed_s2", "1\n0\n0\n1\n1\n0\n0\n1\n8\n8\n3\n11\n21\n2\n4\na\nand or not true false elif break continue", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/seed_s2_g2", "1\n0\n0\n1\n1\n0\n0\n1\n8\n8\n3\n11\n21\n2\n4\na\nand or not true false elif break continue", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = gl_must_write("selfhost/seed_tests/seed_s2_bad.sa", "break\n")
+  hold p8 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_s2_bad.sa > selfhost/seed_tests/seed_s2_bad.c 2> selfhost/seed_tests/seed_s2_bad.err", "test-seed-stage2 refusal")
+  hold p9 = gl_must_write("selfhost/seed_tests/seed_s2_bad.sa", "continue\n")
+  hold p10 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_s2_bad.sa > selfhost/seed_tests/seed_s2_bad.c 2> selfhost/seed_tests/seed_s2_bad.err", "test-seed-stage2 refusal")
+  hold p11 = gl_must_write("selfhost/seed_tests/seed_s2_bad.sa", "show not \"x\"\n")
+  hold p12 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_s2_bad.sa > selfhost/seed_tests/seed_s2_bad.c 2> selfhost/seed_tests/seed_s2_bad.err", "test-seed-stage2 refusal")
+  hold p13 = gl_must_write("selfhost/seed_tests/seed_s2_bad.sa", "show 1 and \"x\"\n")
+  hold p14 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_s2_bad.sa > selfhost/seed_tests/seed_s2_bad.c 2> selfhost/seed_tests/seed_s2_bad.err", "test-seed-stage2 refusal")
+  hold p15 = gl_must_write("selfhost/seed_tests/seed_s2_bad.sa", "show [] or 1\n")
+  hold p16 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_s2_bad.sa > selfhost/seed_tests/seed_s2_bad.c 2> selfhost/seed_tests/seed_s2_bad.err", "test-seed-stage2 refusal")
+  hold p17 = gl_must_write("selfhost/seed_tests/seed_s2_bad.sa", "show 1 and\n")
+  hold p18 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_s2_bad.sa > selfhost/seed_tests/seed_s2_bad.c 2> selfhost/seed_tests/seed_s2_bad.err", "test-seed-stage2 refusal")
+  hold p19 = gl_must_write("selfhost/seed_tests/seed_for_bad.sa", "for c in concat(1, \"b\") { show c }\n")
+  hold p20 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_for_bad.sa > /dev/null 2> selfhost/seed_tests/seed_for_bad.err", "test-seed-stage2 refusal")
+  hold p21 = pr_assert("selfhost/seed_tests/seed_for_bad.err", "seed-min for", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_pkg_errors() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests/pkg-errors-empty")
+  hold p1 = pg_expect_failure("SAYANOX_ROOT=selfhost/seed_tests/pkg-errors-empty tools/sxpkg search math >selfhost/seed_tests/pkg-search.err 2>&1", "test-pkg-errors refusal")
+  hold p2 = pr_assert("selfhost/seed_tests/pkg-search.err", "no local index", 0, 0, 0, 0, 1)
+  hold p3 = gl_must_write("selfhost/seed_tests/pkg-errors-file", "not a directory\n")
+  hold p4 = pg_expect_failure("SAYANOX_ROOT=selfhost/seed_tests/pkg-errors-file tools/sxpkg verify >selfhost/seed_tests/pkg-verify.err 2>&1", "test-pkg-errors refusal")
+  hold p5 = pr_assert("selfhost/seed_tests/pkg-verify.err", "could not run verify", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_seed_assignment() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/seed_assignment_test.sa", "selfhost/seed_tests/seed_assign.c", 0, "selfhost/seed_tests/seed_assign.c.emit.log", "selfhost/seed_tests/seed_assign.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/seed_assign.c", "selfhost/seed_tests/seed_assign", "-O2")
+  hold p3 = pg_emit_stream(1, "selfhost/seed_assignment_test.sa", "selfhost/seed_tests/seed_assign_g2.c", 0, "selfhost/seed_tests/seed_assign_g2.c.emit.log", "selfhost/seed_tests/seed_assign_g2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/seed_assign_g2.c", "selfhost/seed_tests/seed_assign_g2", "-O2")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/seed_assign", "3\nabbb\n3\n9\n10\n3\n4", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/seed_assign_g2", "3\nabbb\n3\n9\n10\n3\n4", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = gl_must_write("selfhost/seed_tests/seed_assign_bad.sa", "missing = 1\n")
+  hold p8 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_assign_bad.sa >/dev/null 2>selfhost/seed_tests/seed_assign_bad.err", "test-seed-assignment refusal")
+  hold p9 = pr_assert("selfhost/seed_tests/seed_assign_bad.err", "assignment", 0, 0, 0, 0, 1)
+  hold p10 = gl_must_write("selfhost/seed_tests/seed_assign_bad.sa", "hold n = 1\nn = \"wrong\"\n")
+  hold p11 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_assign_bad.sa >/dev/null 2>selfhost/seed_tests/seed_assign_bad.err", "test-seed-assignment refusal")
+  hold p12 = pr_assert("selfhost/seed_tests/seed_assign_bad.err", "assignment", 0, 0, 0, 0, 1)
+  hold p13 = gl_must_write("selfhost/seed_tests/seed_assign_bad.sa", "hold s = \"a\"\ns = 7\n")
+  hold p14 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_assign_bad.sa >/dev/null 2>selfhost/seed_tests/seed_assign_bad.err", "test-seed-assignment refusal")
+  hold p15 = pr_assert("selfhost/seed_tests/seed_assign_bad.err", "assignment", 0, 0, 0, 0, 1)
+  hold p16 = gl_must_write("selfhost/seed_tests/seed_assign_bad.sa", "hold xs = []\nxs = \"wrong\"\n")
+  hold p17 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_assign_bad.sa >/dev/null 2>selfhost/seed_tests/seed_assign_bad.err", "test-seed-assignment refusal")
+  hold p18 = pr_assert("selfhost/seed_tests/seed_assign_bad.err", "assignment", 0, 0, 0, 0, 1)
+  hold p19 = pg_emit_stream(0, "selfhost/seed_assignment_names_test.sa", "selfhost/seed_tests/seed_assign_names.c", 0, "selfhost/seed_tests/seed_assign_names.c.emit.log", "selfhost/seed_tests/seed_assign_names.c.err")
+  hold p20 = gl_compile_c("selfhost/seed_tests/seed_assign_names.c", "selfhost/seed_tests/seed_assign_names", "-O2")
+  hold p21 = gl_assert_out("./selfhost/seed_tests/seed_assign_names", "underscore\nprefix\ntemporary", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_seed_hold_types() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/seed_hold_types_test.sa", "selfhost/seed_tests/seed_types.c", 0, "selfhost/seed_tests/seed_types.c.emit.log", "selfhost/seed_tests/seed_types.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/seed_types.c", "selfhost/seed_tests/seed_types", "-O2 -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(1, "selfhost/seed_hold_types_test.sa", "selfhost/seed_tests/seed_types_g2.c", 0, "selfhost/seed_tests/seed_types_g2.c.emit.log", "selfhost/seed_tests/seed_types_g2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/seed_types_g2.c", "selfhost/seed_tests/seed_types_g2", "-O2")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/seed_types", "1\n4\nhello!\n3\n9\n7\nok\n8\nbranch\n8\n6", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/seed_types_g2", "1\n4\nhello!\n3\n9\n7\nok\n8\nbranch\n8\n6", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = gl_must_write("selfhost/seed_tests/seed_types_bad.sa", "hold n: num = \"x\"\n")
+  hold p8 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_types_bad.sa >/dev/null 2>selfhost/seed_tests/seed_types_bad.err", "test-seed-hold-types refusal")
+  hold p9 = pr_assert("selfhost/seed_tests/seed_types_bad.err", "hold", 0, 0, 0, 0, 1)
+  hold p10 = gl_must_write("selfhost/seed_tests/seed_types_bad.sa", "hold s: str = 1\n")
+  hold p11 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_types_bad.sa >/dev/null 2>selfhost/seed_tests/seed_types_bad.err", "test-seed-hold-types refusal")
+  hold p12 = pr_assert("selfhost/seed_tests/seed_types_bad.err", "hold", 0, 0, 0, 0, 1)
+  hold p13 = gl_must_write("selfhost/seed_tests/seed_types_bad.sa", "hold xs: list = \"x\"\n")
+  hold p14 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_types_bad.sa >/dev/null 2>selfhost/seed_tests/seed_types_bad.err", "test-seed-hold-types refusal")
+  hold p15 = pr_assert("selfhost/seed_tests/seed_types_bad.err", "hold", 0, 0, 0, 0, 1)
+  hold p16 = gl_must_write("selfhost/seed_tests/seed_types_bad.sa", "hold n: num = 1\nhold n = \"x\"\n")
+  hold p17 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_types_bad.sa >/dev/null 2>selfhost/seed_tests/seed_types_bad.err", "test-seed-hold-types refusal")
+  hold p18 = pr_assert("selfhost/seed_tests/seed_types_bad.err", "hold", 0, 0, 0, 0, 1)
+  hold p19 = gl_must_write("selfhost/seed_tests/seed_types_bad.sa", "hold n: num = 1\nn = \"x\"\n")
+  hold p20 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_types_bad.sa >/dev/null 2>selfhost/seed_tests/seed_types_bad.err", "test-seed-hold-types refusal")
+  hold p21 = pr_assert("selfhost/seed_tests/seed_types_bad.err", "hold", 0, 0, 0, 0, 1)
+  hold p22 = gl_must_write("selfhost/seed_tests/seed_types_bad.sa", "hold s: str = \"x\"\nhold s: num = 1\n")
+  hold p23 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_types_bad.sa >/dev/null 2>selfhost/seed_tests/seed_types_bad.err", "test-seed-hold-types refusal")
+  hold p24 = pr_assert("selfhost/seed_tests/seed_types_bad.err", "hold", 0, 0, 0, 0, 1)
+  hold p25 = gl_must_write("selfhost/seed_tests/seed_types_bad.sa", "hold x: unknown = 1\n")
+  hold p26 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_types_bad.sa >/dev/null 2>selfhost/seed_tests/seed_types_bad.err", "test-seed-hold-types refusal")
+  hold p27 = pr_assert("selfhost/seed_tests/seed_types_bad.err", "hold", 0, 0, 0, 0, 1)
+  hold p28 = gl_must_write("selfhost/seed_tests/seed_types_bad.sa", "make f() { hold x: num = 1\ngive x }\n")
+  hold p29 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/seed_types_bad.sa >/dev/null 2>selfhost/seed_tests/seed_types_bad.err", "test-seed-hold-types refusal")
+  hold p30 = pr_assert("selfhost/seed_tests/seed_types_bad.err", "hold", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_seed_for_literals() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/seed_for_literals_test.sa", "selfhost/seed_tests/for_lit_seed.c", 0, "selfhost/seed_tests/for_lit_seed.c.emit.log", "selfhost/seed_tests/for_lit_seed.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/for_lit_seed.c", "selfhost/seed_tests/for_lit_seed", "-O2 -Werror=implicit-function-declaration")
+  hold p3 = pg_emit_stream(1, "selfhost/seed_for_literals_test.sa", "selfhost/seed_tests/for_lit_gen2.c", 0, "selfhost/seed_tests/for_lit_gen2.c.emit.log", "selfhost/seed_tests/for_lit_gen2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/for_lit_gen2.c", "selfhost/seed_tests/for_lit_gen2", "-O2 -Werror=implicit-function-declaration")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/for_lit_seed", "tick\n2\n3\n7\n99\na\nc\n1\na\n1\na\n2\nb\n1\nb\n2\n2\ntick\n7\ntick\n7\ndone", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/for_lit_gen2", "tick\n2\n3\n7\n99\na\nc\n1\na\n1\na\n2\nb\n1\nb\n2\n2\ntick\n7\ntick\n7\ndone", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = gl_must_write("selfhost/seed_tests/for_lit_bad.sa", "hold c = 1\nfor c in \"ab\" { show c }\n")
+  hold p8 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_lit_bad.sa >/dev/null 2>selfhost/seed_tests/for_lit_bad.err", "test-seed-for-literals refusal")
+  hold p9 = gl_assert_eq_num(path_size("selfhost/seed_tests/for_lit_bad.err") > 0, 1, "nonempty selfhost/seed_tests/for_lit_bad.err")
+  hold p10 = gl_must_write("selfhost/seed_tests/for_lit_bad.sa", "hold x = \"a\"\nfor x in [1] { show x }\n")
+  hold p11 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_lit_bad.sa >/dev/null 2>selfhost/seed_tests/for_lit_bad.err", "test-seed-for-literals refusal")
+  hold p12 = gl_assert_eq_num(path_size("selfhost/seed_tests/for_lit_bad.err") > 0, 1, "nonempty selfhost/seed_tests/for_lit_bad.err")
+  hold p13 = gl_must_write("selfhost/seed_tests/for_lit_bad.sa", "for x in [\"a\"] { show x }\n")
+  hold p14 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_lit_bad.sa >/dev/null 2>selfhost/seed_tests/for_lit_bad.err", "test-seed-for-literals refusal")
+  hold p15 = gl_assert_eq_num(path_size("selfhost/seed_tests/for_lit_bad.err") > 0, 1, "nonempty selfhost/seed_tests/for_lit_bad.err")
+  hold p16 = gl_must_write("selfhost/seed_tests/for_lit_bad.sa", "for x in [[1]] { show x }\n")
+  hold p17 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_lit_bad.sa >/dev/null 2>selfhost/seed_tests/for_lit_bad.err", "test-seed-for-literals refusal")
+  hold p18 = gl_assert_eq_num(path_size("selfhost/seed_tests/for_lit_bad.err") > 0, 1, "nonempty selfhost/seed_tests/for_lit_bad.err")
+  hold p19 = gl_must_write("selfhost/seed_tests/for_lit_bad.sa", "for c in \"a\" + \"b\" { show c }\n")
+  hold p20 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_lit_bad.sa >/dev/null 2>selfhost/seed_tests/for_lit_bad.err", "test-seed-for-literals refusal")
+  hold p21 = gl_assert_eq_num(path_size("selfhost/seed_tests/for_lit_bad.err") > 0, 1, "nonempty selfhost/seed_tests/for_lit_bad.err")
+  hold p22 = gl_must_write("selfhost/seed_tests/for_lit_bad.sa", "for c in \"a\" show c\n")
+  hold p23 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_lit_bad.sa >/dev/null 2>selfhost/seed_tests/for_lit_bad.err", "test-seed-for-literals refusal")
+  hold p24 = gl_assert_eq_num(path_size("selfhost/seed_tests/for_lit_bad.err") > 0, 1, "nonempty selfhost/seed_tests/for_lit_bad.err")
+  hold p25 = gl_must_write("selfhost/seed_tests/for_lit_bad.sa", "hold _sx_iter_src_0 = 1\n")
+  hold p26 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_lit_bad.sa >/dev/null 2>selfhost/seed_tests/for_lit_bad.err", "test-seed-for-literals refusal")
+  hold p27 = gl_assert_eq_num(path_size("selfhost/seed_tests/for_lit_bad.err") > 0, 1, "nonempty selfhost/seed_tests/for_lit_bad.err")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p28 = pg_emit_stream(2, "selfhost/seed_for_literals_test.sa", "selfhost/seed_tests/for_lit_native", 0, "selfhost/seed_tests/for_lit_native.emit.log", "selfhost/seed_tests/for_lit_native.err")
+  hold p29 = pg_capture("./selfhost/seed_tests/for_lit_native", "selfhost/seed_tests/for_lit_native.out")
+  hold p30 = pg_capture("./selfhost/seed_tests/for_lit_seed", "selfhost/seed_tests/for_lit_seed.out")
+  hold p31 = gl_assert_files_eq("selfhost/seed_tests/for_lit_seed.out", "selfhost/seed_tests/for_lit_native.out", "test-seed-for-literals parity")
+  }
+  give 0
+}
+
+make mp_test_seed_for_untyped() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/seed_for_untyped_test.sa", "selfhost/seed_tests/for_untyped_seed.c", 0, "selfhost/seed_tests/for_untyped_seed.c.emit.log", "selfhost/seed_tests/for_untyped_seed.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/for_untyped_seed.c", "selfhost/seed_tests/for_untyped_seed", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(1, "selfhost/seed_for_untyped_test.sa", "selfhost/seed_tests/for_untyped_gen2.c", 0, "selfhost/seed_tests/for_untyped_gen2.c.emit.log", "selfhost/seed_tests/for_untyped_gen2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/for_untyped_gen2.c", "selfhost/seed_tests/for_untyped_gen2", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/for_untyped_seed", "6\na\nb\nc\nx\ny\n7\n8\n9\n0\n1\n2\n3\n12\na\nb\nc\nd\n0\n2\n4\n6\n0\nuntyped-for-done", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/for_untyped_gen2", "6\na\nb\nc\nx\ny\n7\n8\n9\n0\n1\n2\n3\n12\na\nb\nc\nd\n0\n2\n4\n6\n0\nuntyped-for-done", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = gl_must_write("selfhost/seed_tests/for_untyped_bad.sa", "hold g = [1]\nmake f() {\n  for v in g {\n    show v\n  }\n  give 0\n}\n")
+  hold p8 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_untyped_bad.sa >/dev/null 2>selfhost/seed_tests/for_untyped_bad.err", "test-seed-for-untyped refusal")
+  hold p9 = pr_assert("selfhost/seed_tests/for_untyped_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p10 = gl_must_write("selfhost/seed_tests/for_untyped_bad.sa", "hold g = 5\nmake f() {\n  show g\n  give 0\n}\n")
+  hold p11 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_untyped_bad.sa >/dev/null 2>selfhost/seed_tests/for_untyped_bad.err", "test-seed-for-untyped refusal")
+  hold p12 = pr_assert("selfhost/seed_tests/for_untyped_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p13 = gl_must_write("selfhost/seed_tests/for_untyped_bad.sa", "make f(a) {\n  for c in a {\n    show c\n  }\n  give 0\n}\n")
+  hold p14 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_untyped_bad.sa >/dev/null 2>selfhost/seed_tests/for_untyped_bad.err", "test-seed-for-untyped refusal")
+  hold p15 = pr_assert("selfhost/seed_tests/for_untyped_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p16 = gl_must_write("selfhost/seed_tests/for_untyped_bad.sa", "make f() {\n  for v in missing {\n    show v\n  }\n  give 0\n}\n")
+  hold p17 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_untyped_bad.sa >/dev/null 2>selfhost/seed_tests/for_untyped_bad.err", "test-seed-for-untyped refusal")
+  hold p18 = pr_assert("selfhost/seed_tests/for_untyped_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p19 = gl_must_write("selfhost/seed_tests/for_untyped_bad.sa", "make f() {\n  for i in 0..\"x\" {\n    show i\n  }\n  give 0\n}\n")
+  hold p20 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_untyped_bad.sa >/dev/null 2>selfhost/seed_tests/for_untyped_bad.err", "test-seed-for-untyped refusal")
+  hold p21 = pr_assert("selfhost/seed_tests/for_untyped_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p22 = gl_must_write("selfhost/seed_tests/for_untyped_bad.sa", "make f() {\n  hold xs = [1]\n  for xs in xs {\n    show xs\n  }\n  give 0\n}\n")
+  hold p23 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_untyped_bad.sa >/dev/null 2>selfhost/seed_tests/for_untyped_bad.err", "test-seed-for-untyped refusal")
+  hold p24 = pr_assert("selfhost/seed_tests/for_untyped_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p25 = gl_must_write("selfhost/seed_tests/for_untyped_bad.sa", "make f() {\n  for c in chr(\"x\") {\n    show c\n  }\n  give 0\n}\n")
+  hold p26 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_untyped_bad.sa >/dev/null 2>selfhost/seed_tests/for_untyped_bad.err", "test-seed-for-untyped refusal")
+  hold p27 = pr_assert("selfhost/seed_tests/for_untyped_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p28 = gl_must_write("selfhost/seed_tests/for_untyped_bad.sa", "make f() {\n  hold x = nosuch(1)\n  give x\n}\n")
+  hold p29 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_untyped_bad.sa >/dev/null 2>selfhost/seed_tests/for_untyped_bad.err", "test-seed-for-untyped refusal")
+  hold p30 = pr_assert("selfhost/seed_tests/for_untyped_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p31 = gl_must_write("selfhost/seed_tests/for_untyped_bad.sa", "hold a = nosuch()\n")
+  hold p32 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/for_untyped_bad.sa >/dev/null 2>selfhost/seed_tests/for_untyped_bad.err", "test-seed-for-untyped refusal")
+  hold p33 = pr_assert("selfhost/seed_tests/for_untyped_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p34 = pg_emit_stream(2, "selfhost/seed_for_untyped_test.sa", "selfhost/seed_tests/for_untyped_native", 0, "selfhost/seed_tests/for_untyped_native.emit.log", "selfhost/seed_tests/for_untyped_native.err")
+  hold p35 = pg_capture("./selfhost/seed_tests/for_untyped_native", "selfhost/seed_tests/for_untyped_native.out")
+  hold p36 = pg_capture("./selfhost/seed_tests/for_untyped_seed", "selfhost/seed_tests/for_untyped_seed.out")
+  hold p37 = gl_assert_files_eq("selfhost/seed_tests/for_untyped_seed.out", "selfhost/seed_tests/for_untyped_native.out", "test-seed-for-untyped parity")
+  }
+  give 0
+}
+
+make mp_test_seed_typed_functions() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/seed_typed_params_test.sa", "selfhost/seed_tests/typed_params_seed.c", 0, "selfhost/seed_tests/typed_params_seed.c.emit.log", "selfhost/seed_tests/typed_params_seed.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/typed_params_seed.c", "selfhost/seed_tests/typed_params_seed", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(1, "selfhost/seed_typed_params_test.sa", "selfhost/seed_tests/typed_params_gen2.c", 0, "selfhost/seed_tests/typed_params_gen2.c.emit.log", "selfhost/seed_tests/typed_params_gen2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/typed_params_gen2.c", "selfhost/seed_tests/typed_params_gen2", "-O2 -Werror=incompatible-pointer-types")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/typed_params_seed", "keep\nkeep!\nkeep\nb\na!\nxyxyxy\n3\n10\nkeep+\nkeep\n3\n4\nz\n+\ntyped-done", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/typed_params_gen2", "keep\nkeep!\nkeep\nb\na!\nxyxyxy\n3\n10\nkeep+\nkeep\n3\n4\nz\n+\ntyped-done", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = pg_emit_stream(0, "selfhost/seed_typed_loops_test.sa", "selfhost/seed_tests/typed_loops_seed.c", 0, "selfhost/seed_tests/typed_loops_seed.c.emit.log", "selfhost/seed_tests/typed_loops_seed.c.err")
+  hold p8 = gl_compile_c("selfhost/seed_tests/typed_loops_seed.c", "selfhost/seed_tests/typed_loops_seed", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p9 = pg_emit_stream(1, "selfhost/seed_typed_loops_test.sa", "selfhost/seed_tests/typed_loops_gen2.c", 0, "selfhost/seed_tests/typed_loops_gen2.c.emit.log", "selfhost/seed_tests/typed_loops_gen2.c.err")
+  hold p10 = gl_compile_c("selfhost/seed_tests/typed_loops_gen2.c", "selfhost/seed_tests/typed_loops_gen2", "-O2 -Werror=incompatible-pointer-types")
+  hold p11 = gl_assert_out("./selfhost/seed_tests/typed_loops_seed", "3\n0\n2\n3\n10\n10\nok!\nglobal\nloops-done", "selfhost/seed_tests/sxported.stdout")
+  hold p12 = gl_assert_out("./selfhost/seed_tests/typed_loops_gen2", "3\n0\n2\n3\n10\n10\nok!\nglobal\nloops-done", "selfhost/seed_tests/sxported.stdout")
+  hold p13 = pg_emit_stream(0, "selfhost/seed_typed_scope_test.sa", "selfhost/seed_tests/typed_scope_seed.c", 0, "selfhost/seed_tests/typed_scope_seed.c.emit.log", "selfhost/seed_tests/typed_scope_seed.c.err")
+  hold p14 = gl_compile_c("selfhost/seed_tests/typed_scope_seed.c", "selfhost/seed_tests/typed_scope_seed", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p15 = gl_assert_out("./selfhost/seed_tests/typed_scope_seed", "9\n11\nforward!\n1", "selfhost/seed_tests/sxported.stdout")
+  hold p16 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: str) -> str { give a }\nshow f(1)\n")
+  hold p17 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p18 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p19 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: str) -> str { give a }\nshow f(concat(1, 2))\n")
+  hold p20 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p21 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p22 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: num) -> num { give a }\nshow f(missing)\n")
+  hold p23 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p24 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p25 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: str) -> str { give a }\nshow f(unknown())\n")
+  hold p26 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p27 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p28 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: list) -> list { give a }\nhold x = f(\"bad\")\n")
+  hold p29 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p30 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p31 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: num) -> num { give a }\nshow f()\n")
+  hold p32 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p33 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p34 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: num, b) -> num { give a }\n")
+  hold p35 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p36 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p37 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a, b: str) -> str { give b }\n")
+  hold p38 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p39 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p40 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: str) { give a }\n")
+  hold p41 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p42 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p43 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: num, a: num) -> num { give a }\n")
+  hold p44 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p45 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p46 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: other) -> num { give 1 }\n")
+  hold p47 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p48 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p49 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: str) -> str { a = 1\ngive a }\n")
+  hold p50 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p51 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p52 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(a: str) -> str { hold a: num = 1\ngive a }\n")
+  hold p53 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p54 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p55 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f() -> num { when true { hold x = 1 }\ngive x }\n")
+  hold p56 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p57 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p58 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f() -> num { when true { give 1 } }\n")
+  hold p59 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p60 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p61 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f(s: str) -> num { while s { show 1 }\ngive 0 }\n")
+  hold p62 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p63 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p64 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f() -> num { hold n: num = \"bad\"\ngive n }\n")
+  hold p65 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p66 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  hold p67 = gl_must_write("selfhost/seed_tests/typed_functions_bad.sa", "make f() -> num { hold n: num = 1\nhold n: str = \"bad\"\ngive 0 }\n")
+  hold p68 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/typed_functions_bad.sa >/dev/null 2>selfhost/seed_tests/typed_functions_bad.err", "test-seed-typed-functions refusal")
+  hold p69 = pr_assert("selfhost/seed_tests/typed_functions_bad.err", "seed_min:", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_native_param_reassign() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(2, "selfhost/seed_typed_params_test.sa", "selfhost/seed_tests/npr_existing", 0, "selfhost/seed_tests/npr_existing.emit.log", "selfhost/seed_tests/npr_existing.err")
+  hold p2 = gl_assert_out("./selfhost/seed_tests/npr_existing", "keep\nkeep!\nkeep\nb\na!\nxyxyxy\n3\n10\nkeep+\nkeep\n3\n4\nz\n+\ntyped-done", "selfhost/seed_tests/sxported.stdout")
+  hold p3 = pg_emit_stream(0, "selfhost/native_param_reassign_test.sa", "selfhost/seed_tests/npr_seed.c", 0, "selfhost/seed_tests/npr_seed.c.emit.log", "selfhost/seed_tests/npr_seed.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/npr_seed.c", "selfhost/seed_tests/npr_seed", "-O2")
+  hold p5 = pg_emit_stream(1, "selfhost/native_param_reassign_test.sa", "selfhost/seed_tests/npr_gen2.c", 0, "selfhost/seed_tests/npr_gen2.c.emit.log", "selfhost/seed_tests/npr_gen2.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/npr_gen2.c", "selfhost/seed_tests/npr_gen2", "-O2")
+  hold p7 = pg_emit_stream(2, "selfhost/native_param_reassign_test.sa", "selfhost/seed_tests/npr_native", 0, "selfhost/seed_tests/npr_native.emit.log", "selfhost/seed_tests/npr_native.err")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/npr_seed", "1\n2\n9\naxxx\na", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/npr_gen2", "1\n2\n9\naxxx\na", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/npr_native", "1\n2\n9\naxxx\na", "selfhost/seed_tests/sxported.stdout")
+  hold p11 = pg_emit_stream(2, "selfhost/native_param_gc_test.sa", "selfhost/seed_tests/npr_gc", 0, "selfhost/seed_tests/npr_gc.emit.log", "selfhost/seed_tests/npr_gc.err")
+  hold p12 = gl_assert_out("./selfhost/seed_tests/npr_gc", "local!\nlocal!!\nglobal\n99\n1\n2\n7", "selfhost/seed_tests/sxported.stdout")
+  hold p13 = gl_must_write("selfhost/seed_tests/npr_bad.sa", "make f(s: str) -> str { s = 1\ngive s }\nshow f(\"a\")\n")
+  hold p14 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/npr_bad.sa selfhost/seed_tests/npr_bad 2>selfhost/seed_tests/npr_bad.err", "test-native-param-reassign refusal")
+  hold p15 = pr_assert("selfhost/seed_tests/npr_bad.err", "assignment to parameter", 0, 0, 0, 0, 1)
+  hold p16 = gl_must_write("selfhost/seed_tests/npr_bad.sa", "make f(xs: list) -> list { xs = \"bad\"\ngive xs }\nhold a = [1]\nhold b = f(a)\n")
+  hold p17 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/npr_bad.sa selfhost/seed_tests/npr_bad 2>selfhost/seed_tests/npr_bad.err", "test-native-param-reassign refusal")
+  hold p18 = pr_assert("selfhost/seed_tests/npr_bad.err", "assignment to parameter", 0, 0, 0, 0, 1)
+  hold p19 = gl_must_write("selfhost/seed_tests/npr_bad.sa", "make f(n: num) -> num { n = \"bad\"\ngive n }\nshow f(1)\n")
+  hold p20 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/npr_bad.sa selfhost/seed_tests/npr_bad 2>selfhost/seed_tests/npr_bad.err", "test-native-param-reassign refusal")
+  hold p21 = pr_assert("selfhost/seed_tests/npr_bad.err", "assignment to parameter", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_native_generic_local() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(2, "selfhost/seed_typed_loops_test.sa", "selfhost/seed_tests/ngl_loops", 0, "selfhost/seed_tests/ngl_loops.emit.log", "selfhost/seed_tests/ngl_loops.err")
+  hold p2 = gl_assert_out("./selfhost/seed_tests/ngl_loops", "3\n0\n2\n3\n10\n10\nok!\nglobal\nloops-done", "selfhost/seed_tests/sxported.stdout")
+  hold p3 = pg_emit_stream(2, "selfhost/seed_generics_extended_test.sa", "selfhost/seed_tests/ngl_extended", 0, "selfhost/seed_tests/ngl_extended.emit.log", "selfhost/seed_tests/ngl_extended.err")
+  hold p4 = gl_assert_out("./selfhost/seed_tests/ngl_extended", "3\nhi\n2\nfirst\nsecond\n2\n8\nnested\n15\nxyxyxy\n3\n6\no\nk\n4\n5\n6", "selfhost/seed_tests/sxported.stdout")
+  hold p5 = pg_emit_stream(2, "selfhost/native_generic_local_test.sa", "selfhost/seed_tests/ngl_native", 0, "selfhost/seed_tests/ngl_native.emit.log", "selfhost/seed_tests/ngl_native.err")
+  hold p6 = pg_emit_stream(0, "selfhost/native_generic_local_test.sa", "selfhost/seed_tests/ngl_seed.c", 0, "selfhost/seed_tests/ngl_seed.c.emit.log", "selfhost/seed_tests/ngl_seed.c.err")
+  hold p7 = gl_compile_c("selfhost/seed_tests/ngl_seed.c", "selfhost/seed_tests/ngl_seed", "-O2")
+  hold p8 = pg_emit_stream(1, "selfhost/native_generic_local_test.sa", "selfhost/seed_tests/ngl_gen2.c", 0, "selfhost/seed_tests/ngl_gen2.c.emit.log", "selfhost/seed_tests/ngl_gen2.c.err")
+  hold p9 = gl_compile_c("selfhost/seed_tests/ngl_gen2.c", "selfhost/seed_tests/ngl_gen2", "-O2")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/ngl_native", "9\nhello!\n3\nhello", "selfhost/seed_tests/sxported.stdout")
+  hold p11 = gl_assert_out("./selfhost/seed_tests/ngl_seed", "9\nhello!\n3\nhello", "selfhost/seed_tests/sxported.stdout")
+  hold p12 = gl_assert_out("./selfhost/seed_tests/ngl_gen2", "9\nhello!\n3\nhello", "selfhost/seed_tests/sxported.stdout")
+  hold p13 = gl_must_write("selfhost/seed_tests/ngl_bad.sa", "hold n: num = \"bad\"\n")
+  hold p14 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/ngl_bad.sa selfhost/seed_tests/ngl_bad 2>selfhost/seed_tests/ngl_bad.err", "test-native-generic-local refusal")
+  hold p15 = pr_assert("selfhost/seed_tests/ngl_bad.err", "native_aot:", 0, 0, 0, 0, 1)
+  hold p16 = gl_must_write("selfhost/seed_tests/ngl_bad.sa", "hold xs: list = 3\n")
+  hold p17 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/ngl_bad.sa selfhost/seed_tests/ngl_bad 2>selfhost/seed_tests/ngl_bad.err", "test-native-generic-local refusal")
+  hold p18 = pr_assert("selfhost/seed_tests/ngl_bad.err", "native_aot:", 0, 0, 0, 0, 1)
+  hold p19 = gl_must_write("selfhost/seed_tests/ngl_bad.sa", "hold s: str = \"a\"\nhold s: num = 2\n")
+  hold p20 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/ngl_bad.sa selfhost/seed_tests/ngl_bad 2>selfhost/seed_tests/ngl_bad.err", "test-native-generic-local refusal")
+  hold p21 = pr_assert("selfhost/seed_tests/ngl_bad.err", "native_aot:", 0, 0, 0, 0, 1)
+  hold p22 = gl_must_write("selfhost/seed_tests/ngl_bad.sa", "hold x: other = 1\n")
+  hold p23 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/ngl_bad.sa selfhost/seed_tests/ngl_bad 2>selfhost/seed_tests/ngl_bad.err", "test-native-generic-local refusal")
+  hold p24 = pr_assert("selfhost/seed_tests/ngl_bad.err", "native_aot:", 0, 0, 0, 0, 1)
+  hold p25 = gl_must_write("selfhost/seed_tests/ngl_bad.sa", "make f() -> num { hold x: num = \"bad\"\ngive 0 }\nshow f()\n")
+  hold p26 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/ngl_bad.sa selfhost/seed_tests/ngl_bad 2>selfhost/seed_tests/ngl_bad.err", "test-native-generic-local refusal")
+  hold p27 = pr_assert("selfhost/seed_tests/ngl_bad.err", "native_aot:", 0, 0, 0, 0, 1)
+  hold p28 = gl_must_write("selfhost/seed_tests/ngl_bad.sa", "make f<T>(x:T)->T { hold local:T = \"bad\"\ngive x }\nshow f(1)\n")
+  hold p29 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/ngl_bad.sa selfhost/seed_tests/ngl_bad 2>selfhost/seed_tests/ngl_bad.err", "test-native-generic-local refusal")
+  hold p30 = pr_assert("selfhost/seed_tests/ngl_bad.err", "native_aot:", 0, 0, 0, 0, 1)
+  hold p31 = gl_must_write("selfhost/seed_tests/ngl_bad.sa", "make f<T>(x:T)->T { give concat(x,\"bad\") }\nshow f(1)\n")
+  hold p32 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/ngl_bad.sa selfhost/seed_tests/ngl_bad 2>selfhost/seed_tests/ngl_bad.err", "test-native-generic-local refusal")
+  hold p33 = pr_assert("selfhost/seed_tests/ngl_bad.err", "native_aot:", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_gen2_forward() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/gen2_forward_test.sa", "selfhost/seed_tests/g2f.c", 0, "selfhost/seed_tests/g2f.c.emit.log", "selfhost/seed_tests/g2f.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/g2f.c", "selfhost/seed_tests/g2f", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -Werror=strict-prototypes")
+  hold p3 = pg_emit_stream(3, "selfhost/gen2_forward_test.sa", "selfhost/seed_tests/g2f_g1.c", 0, "selfhost/seed_tests/g2f_g1.c.emit.log", "selfhost/seed_tests/g2f_g1.c.err")
+  hold p4 = gl_assert_files_eq("selfhost/seed_tests/g2f.c", "selfhost/seed_tests/g2f_g1.c", "test-gen2-forward parity")
+  hold p5 = pg_emit_stream(0, "selfhost/gen2_forward_test.sa", "selfhost/seed_tests/g2f_seed.c", 0, "selfhost/seed_tests/g2f_seed.c.emit.log", "selfhost/seed_tests/g2f_seed.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/g2f_seed.c", "selfhost/seed_tests/g2f_seed", "-O2")
+  hold p7 = pg_emit_stream(2, "selfhost/gen2_forward_test.sa", "selfhost/seed_tests/g2f_native", 0, "selfhost/seed_tests/g2f_native.emit.log", "selfhost/seed_tests/g2f_native.err")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/g2f", "forward!\n2\n4\n1\n1\nzero", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/g2f_seed", "forward!\n2\n4\n1\n1\nzero", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/g2f_native", "forward!\n2\n4\n1\n1\nzero", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_gen2_function_scope() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/gen2_scope_test.sa", "selfhost/seed_tests/g2s.c", 0, "selfhost/seed_tests/g2s.c.emit.log", "selfhost/seed_tests/g2s.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/g2s.c", "selfhost/seed_tests/g2s", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(3, "selfhost/gen2_scope_test.sa", "selfhost/seed_tests/g2s_g1.c", 0, "selfhost/seed_tests/g2s_g1.c.emit.log", "selfhost/seed_tests/g2s_g1.c.err")
+  hold p4 = gl_assert_files_eq("selfhost/seed_tests/g2s.c", "selfhost/seed_tests/g2s_g1.c", "test-gen2-function-scope parity")
+  hold p5 = pg_emit_stream(0, "selfhost/gen2_scope_test.sa", "selfhost/seed_tests/g2s_seed.c", 0, "selfhost/seed_tests/g2s_seed.c.emit.log", "selfhost/seed_tests/g2s_seed.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/g2s_seed.c", "selfhost/seed_tests/g2s_seed", "-O2")
+  hold p7 = gl_assert_out("./selfhost/seed_tests/g2s", "12\n13\n11\n7\n8\n18\nglobal", "selfhost/seed_tests/sxported.stdout")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/g2s_seed", "12\n13\n11\n7\n8\n18\nglobal", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_gen2_boolean_args() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/gen2_boolean_args_test.sa", "selfhost/seed_tests/g2b.c", 0, "selfhost/seed_tests/g2b.c.emit.log", "selfhost/seed_tests/g2b.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/g2b.c", "selfhost/seed_tests/g2b", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(3, "selfhost/gen2_boolean_args_test.sa", "selfhost/seed_tests/g2b_g1.c", 0, "selfhost/seed_tests/g2b_g1.c.emit.log", "selfhost/seed_tests/g2b_g1.c.err")
+  hold p4 = gl_assert_files_eq("selfhost/seed_tests/g2b.c", "selfhost/seed_tests/g2b_g1.c", "test-gen2-boolean-args parity")
+  hold p5 = pg_emit_stream(0, "selfhost/gen2_boolean_args_test.sa", "selfhost/seed_tests/g2b_seed.c", 0, "selfhost/seed_tests/g2b_seed.c.emit.log", "selfhost/seed_tests/g2b_seed.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/g2b_seed.c", "selfhost/seed_tests/g2b_seed", "-O2")
+  hold p7 = pg_emit_stream(2, "selfhost/gen2_boolean_args_test.sa", "selfhost/seed_tests/g2b_native", 0, "selfhost/seed_tests/g2b_native.emit.log", "selfhost/seed_tests/g2b_native.err")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/g2b", "1\n0\n1\n2\n1\n1\n0\nyes!\nno\n7\n9\ntrue false true_value\n4\n5", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/g2b_seed", "1\n0\n1\n2\n1\n1\n0\nyes!\nno\n7\n9\ntrue false true_value\n4\n5", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/g2b_native", "1\n0\n1\n2\n1\n1\n0\nyes!\nno\n7\n9\ntrue false true_value\n4\n5", "selfhost/seed_tests/sxported.stdout")
+  hold p11 = gl_must_write("selfhost/seed_tests/g2b_compare.sa", "make number(n: num) -> num {\n give n\n}\nshow number(true == false)\n")
+  hold p12 = pg_emit_stream(1, "selfhost/seed_tests/g2b_compare.sa", "selfhost/seed_tests/g2b_compare.c", 0, "selfhost/seed_tests/g2b_compare.c.emit.log", "selfhost/seed_tests/g2b_compare.c.err")
+  hold p13 = gl_compile_c("selfhost/seed_tests/g2b_compare.c", "selfhost/seed_tests/g2b_compare", "-O2")
+  hold p14 = gl_assert_out("./selfhost/seed_tests/g2b_compare", "0", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_gen2_generic_queue() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/seed_generics_extended_test.sa", "selfhost/seed_tests/g2g_extended.c", 0, "selfhost/seed_tests/g2g_extended.c.emit.log", "selfhost/seed_tests/g2g_extended.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/g2g_extended.c", "selfhost/seed_tests/g2g_extended", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = gl_assert_out("./selfhost/seed_tests/g2g_extended", "3\nhi\n2\nfirst\nsecond\n2\n8\nnested\n15\nxyxyxy\n3\n6\no\nk\n4\n5\n6", "selfhost/seed_tests/sxported.stdout")
+  hold p4 = pg_emit_stream(3, "selfhost/seed_generics_extended_test.sa", "selfhost/seed_tests/g2g_extended_g1.c", 0, "selfhost/seed_tests/g2g_extended_g1.c.emit.log", "selfhost/seed_tests/g2g_extended_g1.c.err")
+  hold p5 = gl_assert_files_eq("selfhost/seed_tests/g2g_extended.c", "selfhost/seed_tests/g2g_extended_g1.c", "test-gen2-generic-queue parity")
+  hold p6 = pg_emit_stream(1, "selfhost/gen2_generic_queue_test.sa", "selfhost/seed_tests/g2g.c", 0, "selfhost/seed_tests/g2g.c.emit.log", "selfhost/seed_tests/g2g.c.err")
+  hold p7 = gl_compile_c("selfhost/seed_tests/g2g.c", "selfhost/seed_tests/g2g", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p8 = pg_emit_stream(0, "selfhost/gen2_generic_queue_test.sa", "selfhost/seed_tests/g2g_seed.c", 0, "selfhost/seed_tests/g2g_seed.c.emit.log", "selfhost/seed_tests/g2g_seed.c.err")
+  hold p9 = gl_compile_c("selfhost/seed_tests/g2g_seed.c", "selfhost/seed_tests/g2g_seed", "-O2")
+  hold p10 = pg_emit_stream(2, "selfhost/gen2_generic_queue_test.sa", "selfhost/seed_tests/g2g_native", 0, "selfhost/seed_tests/g2g_native.emit.log", "selfhost/seed_tests/g2g_native.err")
+  hold p11 = gl_assert_out("./selfhost/seed_tests/g2g", "3\ns\n2\n8", "selfhost/seed_tests/sxported.stdout")
+  hold p12 = gl_assert_out("./selfhost/seed_tests/g2g_seed", "3\ns\n2\n8", "selfhost/seed_tests/sxported.stdout")
+  hold p13 = gl_assert_out("./selfhost/seed_tests/g2g_native", "3\ns\n2\n8", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_gen2_list_return() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/gen2_list_return_test.sa", "selfhost/seed_tests/g2lr.c", 0, "selfhost/seed_tests/g2lr.c.emit.log", "selfhost/seed_tests/g2lr.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/g2lr.c", "selfhost/seed_tests/g2lr", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(3, "selfhost/gen2_list_return_test.sa", "selfhost/seed_tests/g2lr_g1.c", 0, "selfhost/seed_tests/g2lr_g1.c.emit.log", "selfhost/seed_tests/g2lr_g1.c.err")
+  hold p4 = gl_assert_files_eq("selfhost/seed_tests/g2lr.c", "selfhost/seed_tests/g2lr_g1.c", "test-gen2-list-return parity")
+  hold p5 = pg_emit_stream(0, "selfhost/gen2_list_return_test.sa", "selfhost/seed_tests/g2lr_seed.c", 0, "selfhost/seed_tests/g2lr_seed.c.emit.log", "selfhost/seed_tests/g2lr_seed.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/g2lr_seed.c", "selfhost/seed_tests/g2lr_seed", "-O2")
+  hold p7 = pg_emit_stream(2, "selfhost/gen2_list_return_test.sa", "selfhost/seed_tests/g2lr_native", 0, "selfhost/seed_tests/g2lr_native.emit.log", "selfhost/seed_tests/g2lr_native.err")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/g2lr", "0\n3\n3\n3\n4\n6\n0\n9\n0\n4\n0\n11\n12\n8", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/g2lr_seed", "0\n3\n3\n3\n4\n6\n0\n9\n0\n4\n0\n11\n12\n8", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/g2lr_native", "0\n3\n3\n3\n4\n6\n0\n9\n0\n4\n0\n11\n12\n8", "selfhost/seed_tests/sxported.stdout")
+  hold p11 = gl_must_write("selfhost/seed_tests/g2lr_bad.sa", "make f() -> num {\n give []\n}\nshow f()\n")
+  hold p12 = pg_emit_stream(1, "selfhost/seed_tests/g2lr_bad.sa", "selfhost/seed_tests/g2lr_bad.c", 0, "selfhost/seed_tests/g2lr_bad.log", "selfhost/seed_tests/g2lr_bad.c.err")
+  hold p13 = pr_assert("selfhost/seed_tests/g2lr_bad.c", "^#error", 0, 0, 0, 0, 1)
+  hold p14 = gl_must_write("selfhost/seed_tests/g2lr_bad.sa", "make f() -> list {\n give [\"bad\"]\n}\nhold xs = f()\n")
+  hold p15 = pg_emit_stream(1, "selfhost/seed_tests/g2lr_bad.sa", "selfhost/seed_tests/g2lr_bad.c", 0, "selfhost/seed_tests/g2lr_bad.log", "selfhost/seed_tests/g2lr_bad.c.err")
+  hold p16 = pr_assert("selfhost/seed_tests/g2lr_bad.c", "^#error", 0, 0, 0, 0, 1)
+  hold p17 = gl_must_write("selfhost/seed_tests/g2lr_bad.sa", "make f() -> list {\n give [[1]]\n}\nhold xs = f()\n")
+  hold p18 = pg_emit_stream(1, "selfhost/seed_tests/g2lr_bad.sa", "selfhost/seed_tests/g2lr_bad.c", 0, "selfhost/seed_tests/g2lr_bad.log", "selfhost/seed_tests/g2lr_bad.c.err")
+  hold p19 = pr_assert("selfhost/seed_tests/g2lr_bad.c", "^#error", 0, 0, 0, 0, 1)
+  hold p20 = gl_must_write("selfhost/seed_tests/g2lr_bad.sa", "make f() -> list {\n give [1][0]\n}\nhold xs = f()\n")
+  hold p21 = pg_emit_stream(1, "selfhost/seed_tests/g2lr_bad.sa", "selfhost/seed_tests/g2lr_bad.c", 0, "selfhost/seed_tests/g2lr_bad.log", "selfhost/seed_tests/g2lr_bad.c.err")
+  hold p22 = pr_assert("selfhost/seed_tests/g2lr_bad.c", "^#error", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_gen2_list_args() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/gen2_list_args_test.sa", "selfhost/seed_tests/g2la.c", 0, "selfhost/seed_tests/g2la.c.emit.log", "selfhost/seed_tests/g2la.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/g2la.c", "selfhost/seed_tests/g2la", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(3, "selfhost/gen2_list_args_test.sa", "selfhost/seed_tests/g2la_g1.c", 0, "selfhost/seed_tests/g2la_g1.c.emit.log", "selfhost/seed_tests/g2la_g1.c.err")
+  hold p4 = gl_assert_files_eq("selfhost/seed_tests/g2la.c", "selfhost/seed_tests/g2la_g1.c", "test-gen2-list-args parity")
+  hold p5 = pg_emit_stream(0, "selfhost/gen2_list_args_test.sa", "selfhost/seed_tests/g2la_seed.c", 0, "selfhost/seed_tests/g2la_seed.c.emit.log", "selfhost/seed_tests/g2la_seed.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/g2la_seed.c", "selfhost/seed_tests/g2la_seed", "-O2")
+  hold p7 = pg_emit_stream(2, "selfhost/gen2_list_args_test.sa", "selfhost/seed_tests/g2la_native", 0, "selfhost/seed_tests/g2la_native.emit.log", "selfhost/seed_tests/g2la_native.err")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/g2la", "0\n3\n1\n9\n2\n1\n9\n2\n3\n3\n2\n8\n-9\n0.5\n12\n[1,2] is text", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/g2la_seed", "0\n3\n1\n9\n2\n1\n9\n2\n3\n3\n2\n8\n-9\n0.5\n12\n[1,2] is text", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/g2la_native", "0\n3\n1\n9\n2\n1\n9\n2\n3\n3\n2\n8\n-9\n0.5\n12\n[1,2] is text", "selfhost/seed_tests/sxported.stdout")
+  hold p11 = gl_must_write("selfhost/seed_tests/g2la_index.sa", "show sx_index([8,9],1)\n")
+  hold p12 = pg_emit_stream(1, "selfhost/seed_tests/g2la_index.sa", "selfhost/seed_tests/g2la_index.c", 0, "selfhost/seed_tests/g2la_index.c.emit.log", "selfhost/seed_tests/g2la_index.c.err")
+  hold p13 = gl_compile_c("selfhost/seed_tests/g2la_index.c", "selfhost/seed_tests/g2la_index", "-O2 -Werror=incompatible-pointer-types")
+  hold p14 = gl_assert_out("./selfhost/seed_tests/g2la_index", "9", "selfhost/seed_tests/sxported.stdout")
+  hold p15 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([\"bad\"])\n")
+  hold p16 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p17 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p18 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([[1]])\n")
+  hold p19 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p20 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p21 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([1,])\n")
+  hold p22 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p23 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p24 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([1+])\n")
+  hold p25 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p26 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p27 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([1 2])\n")
+  hold p28 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p29 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p30 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([()])\n")
+  hold p31 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p32 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p33 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([(1+2])\n")
+  hold p34 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p35 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p36 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([1)])\n")
+  hold p37 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p38 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p39 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([1.2.3])\n")
+  hold p40 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p41 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p42 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([-])\n")
+  hold p43 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p44 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p45 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([1][0])\n")
+  hold p46 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p47 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  hold p48 = gl_must_write("selfhost/seed_tests/g2la_bad.sa", "make size(xs: list) -> num {\n give len(xs)\n}\nshow size([1]+2)\n")
+  hold p49 = pg_emit_stream(1, "selfhost/seed_tests/g2la_bad.sa", "selfhost/seed_tests/g2la_bad.c", 0, "selfhost/seed_tests/g2la_bad.log", "selfhost/seed_tests/g2la_bad.c.err")
+  hold p50 = pr_assert("selfhost/seed_tests/g2la_bad.c", "^#error.*inline list arguments", 0, 0, 0, 0, 1)
+  give 0
+}
+
+make mp_test_gen2_gc_roots() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = gl_compile_c("selfhost/gen2.c", "selfhost/seed_tests/gen2_o0", "-O0")
+  hold p2 = pg_command("./selfhost/seed_tests/gen2_o0 selfhost/gen2_list_return_test.sa selfhost/seed_tests/gc_root_return_o0.c", "test-gen2-gc-roots child command")
+  hold p3 = pg_emit_stream(1, "selfhost/gen2_list_return_test.sa", "selfhost/seed_tests/gc_root_return_o2.c", 0, "selfhost/seed_tests/gc_root_return_o2.c.emit.log", "selfhost/seed_tests/gc_root_return_o2.c.err")
+  hold p4 = gl_assert_files_eq("selfhost/seed_tests/gc_root_return_o0.c", "selfhost/seed_tests/gc_root_return_o2.c", "test-gen2-gc-roots parity")
+  hold p5 = pg_command("./selfhost/seed_tests/gen2_o0 selfhost/gen2_list_args_test.sa selfhost/seed_tests/gc_root_args_o0.c", "test-gen2-gc-roots child command")
+  hold p6 = pg_emit_stream(1, "selfhost/gen2_list_args_test.sa", "selfhost/seed_tests/gc_root_args_o2.c", 0, "selfhost/seed_tests/gc_root_args_o2.c.emit.log", "selfhost/seed_tests/gc_root_args_o2.c.err")
+  hold p7 = gl_assert_files_eq("selfhost/seed_tests/gc_root_args_o0.c", "selfhost/seed_tests/gc_root_args_o2.c", "test-gen2-gc-roots parity")
+  hold p8 = pg_emit_stream(1, "selfhost/gen2_gc_roots_test.sa", "selfhost/seed_tests/gc_roots.c", 0, "selfhost/seed_tests/gc_roots.c.emit.log", "selfhost/seed_tests/gc_roots.c.err")
+  hold p9 = gl_compile_c("selfhost/seed_tests/gc_roots.c", "selfhost/seed_tests/gc_roots_o0", "-O0")
+  hold p10 = gl_compile_c("selfhost/seed_tests/gc_roots.c", "selfhost/seed_tests/gc_roots_o2", "-O2")
+  hold p11 = gl_assert_out("./selfhost/seed_tests/gc_roots_o0", "main-root\n3\n5\nfunction-root\n7\n_sx_gc_programx", "selfhost/seed_tests/sxported.stdout")
+  hold p12 = gl_assert_out("./selfhost/seed_tests/gc_roots_o2", "main-root\n3\n5\nfunction-root\n7\n_sx_gc_programx", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_gen2_list_arithmetic() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/gen2_list_arithmetic_test.sa", "selfhost/seed_tests/g2lx.c", 0, "selfhost/seed_tests/g2lx.c.emit.log", "selfhost/seed_tests/g2lx.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/g2lx.c", "selfhost/seed_tests/g2lx", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(3, "selfhost/gen2_list_arithmetic_test.sa", "selfhost/seed_tests/g2lx_g1.c", 0, "selfhost/seed_tests/g2lx_g1.c.emit.log", "selfhost/seed_tests/g2lx_g1.c.err")
+  hold p4 = gl_assert_files_eq("selfhost/seed_tests/g2lx.c", "selfhost/seed_tests/g2lx_g1.c", "test-gen2-list-arithmetic parity")
+  hold p5 = pg_emit_stream(0, "selfhost/gen2_list_arithmetic_test.sa", "selfhost/seed_tests/g2lx_seed.c", 0, "selfhost/seed_tests/g2lx_seed.c.emit.log", "selfhost/seed_tests/g2lx_seed.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/g2lx_seed.c", "selfhost/seed_tests/g2lx_seed", "-O2")
+  hold p7 = pg_emit_stream(2, "selfhost/gen2_list_arithmetic_test.sa", "selfhost/seed_tests/g2lx_native", 0, "selfhost/seed_tests/g2lx_native.emit.log", "selfhost/seed_tests/g2lx_native.err")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/g2lx", "7\n9\n2.66667\n17\n2\n5\n2\n6\n-20\n3\n3\n2\n3\n[1 + 2] stays text\n4.5\n7\n1", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/g2lx_seed", "7\n9\n2.66667\n17\n2\n5\n2\n6\n-20\n3\n3\n2\n3\n[1 + 2] stays text\n4.5\n7\n1", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/g2lx_native", "7\n9\n2.66667\n17\n2\n5\n2\n6\n-20\n3\n3\n2\n3\n[1 + 2] stays text\n4.5\n7\n1", "selfhost/seed_tests/sxported.stdout")
+  hold p11 = gl_compile_c("selfhost/seed_tests/g2lx.c", "selfhost/seed_tests/g2lx_o0", "-O0")
+  hold p12 = gl_assert_out("./selfhost/seed_tests/g2lx_o0", "7\n9\n2.66667\n17\n2\n5\n2\n6\n-20\n3\n3\n2\n3\n[1 + 2] stays text\n4.5\n7\n1", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_return_paths() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/return_paths_test.sa", "selfhost/seed_tests/return_paths.c", 0, "selfhost/seed_tests/return_paths.c.emit.log", "selfhost/seed_tests/return_paths.c.err")
+  hold p2 = pg_emit_stream(3, "selfhost/return_paths_test.sa", "selfhost/seed_tests/return_paths_g1.c", 0, "selfhost/seed_tests/return_paths_g1.c.emit.log", "selfhost/seed_tests/return_paths_g1.c.err")
+  hold p3 = gl_assert_files_eq("selfhost/seed_tests/return_paths.c", "selfhost/seed_tests/return_paths_g1.c", "test-return-paths parity")
+  hold p4 = gl_compile_c("selfhost/seed_tests/return_paths.c", "selfhost/seed_tests/return_paths", "-O2 -Werror=return-type -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p5 = pg_emit_stream(0, "selfhost/return_paths_test.sa", "selfhost/seed_tests/return_paths_seed.c", 0, "selfhost/seed_tests/return_paths_seed.c.emit.log", "selfhost/seed_tests/return_paths_seed.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/return_paths_seed.c", "selfhost/seed_tests/return_paths_seed", "-O2 -Werror=return-type")
+  hold p7 = pg_emit_stream(2, "selfhost/return_paths_test.sa", "selfhost/seed_tests/return_paths_native", 0, "selfhost/seed_tests/return_paths_native.emit.log", "selfhost/seed_tests/return_paths_native.err")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/return_paths", "-1\n0\n1\n9\nyes } give //\nno { when\n1\n0\n2\n3\n8\ngeneric", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/return_paths_seed", "-1\n0\n1\n9\nyes } give //\nno { when\n1\n0\n2\n3\n8\ngeneric", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/return_paths_native", "-1\n0\n1\n9\nyes } give //\nno { when\n1\n0\n2\n3\n8\ngeneric", "selfhost/seed_tests/sxported.stdout")
+  hold p11 = pg_command("./tools/sxdiag return ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-return", "test-return-paths child command")
+  give 0
+}
+
+make mp_test_name_resolution() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/name_resolution_test.sa", "selfhost/seed_tests/name_resolution.c", 0, "selfhost/seed_tests/name_resolution.c.emit.log", "selfhost/seed_tests/name_resolution.c.err")
+  hold p2 = pg_emit_stream(3, "selfhost/name_resolution_test.sa", "selfhost/seed_tests/name_resolution_g1.c", 0, "selfhost/seed_tests/name_resolution_g1.c.emit.log", "selfhost/seed_tests/name_resolution_g1.c.err")
+  hold p3 = gl_assert_files_eq("selfhost/seed_tests/name_resolution.c", "selfhost/seed_tests/name_resolution_g1.c", "test-name-resolution parity")
+  hold p4 = gl_compile_c("selfhost/seed_tests/name_resolution.c", "selfhost/seed_tests/name_resolution", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p5 = pg_emit_stream(0, "selfhost/name_resolution_test.sa", "selfhost/seed_tests/name_resolution_seed.c", 0, "selfhost/seed_tests/name_resolution_seed.c.emit.log", "selfhost/seed_tests/name_resolution_seed.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/name_resolution_seed.c", "selfhost/seed_tests/name_resolution_seed", "-O2")
+  hold p7 = pg_emit_stream(2, "selfhost/name_resolution_test.sa", "selfhost/seed_tests/name_resolution_native", 0, "selfhost/seed_tests/name_resolution_native.emit.log", "selfhost/seed_tests/name_resolution_native.err")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/name_resolution", "4\n8\n9\n3\n4\nghost // { and missing() are only text\n5\n3\n4\ngeneric\n1\n2\no\nk", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/name_resolution_seed", "4\n8\n9\n3\n4\nghost // { and missing() are only text\n5\n3\n4\ngeneric\n1\n2\no\nk", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/name_resolution_native", "4\n8\n9\n3\n4\nghost // { and missing() are only text\n5\n3\n4\ngeneric\n1\n2\no\nk", "selfhost/seed_tests/sxported.stdout")
+  hold p11 = pg_command("./tools/sxdiag name ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-name", "test-name-resolution child command")
+  give 0
+}
+
+make mp_test_inline_expressions() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(1, "selfhost/inline_expressions_test.sa", "selfhost/seed_tests/inline_expr.c", 0, "selfhost/seed_tests/inline_expr.c.emit.log", "selfhost/seed_tests/inline_expr.c.err")
+  hold p2 = pg_emit_stream(3, "selfhost/inline_expressions_test.sa", "selfhost/seed_tests/inline_expr_g1.c", 0, "selfhost/seed_tests/inline_expr_g1.c.emit.log", "selfhost/seed_tests/inline_expr_g1.c.err")
+  hold p3 = gl_assert_files_eq("selfhost/seed_tests/inline_expr.c", "selfhost/seed_tests/inline_expr_g1.c", "test-inline-expressions parity")
+  hold p4 = gl_compile_c("selfhost/seed_tests/inline_expr.c", "selfhost/seed_tests/inline_expr", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p5 = pg_emit_stream(0, "selfhost/inline_expressions_test.sa", "selfhost/seed_tests/inline_expr_seed.c", 0, "selfhost/seed_tests/inline_expr_seed.c.emit.log", "selfhost/seed_tests/inline_expr_seed.c.err")
+  hold p6 = gl_compile_c("selfhost/seed_tests/inline_expr_seed.c", "selfhost/seed_tests/inline_expr_seed", "-O2")
+  hold p7 = pg_emit_stream(2, "selfhost/inline_expressions_test.sa", "selfhost/seed_tests/inline_expr_native", 0, "selfhost/seed_tests/inline_expr_native.emit.log", "selfhost/seed_tests/inline_expr_native.err")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/inline_expr", "8\n9\n9\n4\n7\n2\n1\n0\n2.66667\n10\n4\n2\n11\n12\n3\n99\n5\n1\n1\n8\n4\n5\n4\n-2\n3", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = gl_assert_out("./selfhost/seed_tests/inline_expr_seed", "8\n9\n9\n4\n7\n2\n1\n0\n2.66667\n10\n4\n2\n11\n12\n3\n99\n5\n1\n1\n8\n4\n5\n4\n-2\n3", "selfhost/seed_tests/sxported.stdout")
+  hold p10 = gl_assert_out("./selfhost/seed_tests/inline_expr_native", "8\n9\n9\n4\n7\n2\n1\n0\n2.66667\n10\n4\n2\n11\n12\n3\n99\n5\n1\n1\n8\n4\n5\n4\n-2\n3", "selfhost/seed_tests/sxported.stdout")
+  hold p11 = pg_emit_stream(1, "selfhost/inline_sequence_test.sa", "selfhost/seed_tests/inline_seq.c", 0, "selfhost/seed_tests/inline_seq.c.emit.log", "selfhost/seed_tests/inline_seq.c.err")
+  hold p12 = gl_compile_c("selfhost/seed_tests/inline_seq.c", "selfhost/seed_tests/inline_seq", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p13 = gl_compile_c("selfhost/seed_tests/inline_seq.c", "selfhost/seed_tests/inline_seq_o0", "-O0")
+  hold p14 = pg_emit_stream(2, "selfhost/inline_sequence_test.sa", "selfhost/seed_tests/inline_seq_native", 0, "selfhost/seed_tests/inline_seq_native.emit.log", "selfhost/seed_tests/inline_seq_native.err")
+  hold p15 = gl_assert_out("./selfhost/seed_tests/inline_seq", "1\n2\n3\n3\n22\n2\n77\n0\n1\n2", "selfhost/seed_tests/sxported.stdout")
+  hold p16 = gl_assert_out("./selfhost/seed_tests/inline_seq_o0", "1\n2\n3\n3\n22\n2\n77\n0\n1\n2", "selfhost/seed_tests/sxported.stdout")
+  hold p17 = gl_assert_out("./selfhost/seed_tests/inline_seq_native", "1\n2\n3\n3\n22\n2\n77\n0\n1\n2", "selfhost/seed_tests/sxported.stdout")
+  hold p18 = pg_command("./tools/sxdiag inline ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-inline", "test-inline-expressions child command")
+  give 0
+}
+
+make mp_test_list_postfix() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/list_postfix_test.sa", "selfhost/seed_tests/postfix_seed.c", 0, "selfhost/seed_tests/postfix_seed.c.emit.log", "selfhost/seed_tests/postfix_seed.c.err")
+  hold p2 = pg_emit_stream(1, "selfhost/list_postfix_test.sa", "selfhost/seed_tests/postfix_gen2.c", 0, "selfhost/seed_tests/postfix_gen2.c.emit.log", "selfhost/seed_tests/postfix_gen2.c.err")
+  hold p3 = gl_compile_c("selfhost/seed_tests/postfix_seed.c", "selfhost/seed_tests/postfix_seed", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p4 = gl_compile_c("selfhost/seed_tests/postfix_gen2.c", "selfhost/seed_tests/postfix_gen2", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p5 = pg_emit_stream(2, "selfhost/list_postfix_test.sa", "selfhost/seed_tests/postfix_native", 0, "selfhost/seed_tests/postfix_native.emit.log", "selfhost/seed_tests/postfix_native.err")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/postfix_seed", "10\n4\n97\n20\n20\n6\n2\n9\n12\n3\n40\n50\n99\ntyped", "selfhost/seed_tests/sxported.stdout")
+  hold p7 = gl_assert_out("./selfhost/seed_tests/postfix_gen2", "10\n4\n97\n20\n20\n6\n2\n9\n12\n3\n40\n50\n99\ntyped", "selfhost/seed_tests/sxported.stdout")
+  hold p8 = gl_assert_out("./selfhost/seed_tests/postfix_native", "10\n4\n97\n20\n20\n6\n2\n9\n12\n3\n40\n50\n99\ntyped", "selfhost/seed_tests/sxported.stdout")
+  hold p9 = pg_command("./tools/sxdiag postfix ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-postfix", "test-list-postfix child command")
+  give 0
+}
+
+make mp_test_seed_borrow() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/seed_borrow_test.sa", "selfhost/seed_tests/borrow.c", 0, "selfhost/seed_tests/borrow.c.emit.log", "selfhost/seed_tests/borrow.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/borrow.c", "selfhost/seed_tests/borrow", "-O2")
+  hold p3 = gl_assert_out("./selfhost/seed_tests/borrow", "6\nkeeper\nkeeper\nkeeper!?\nkeeper\nkeeper\nkeeper\nother\nkeeper\na\nb\nb!\nkeeper\nkeeper\nkeeper+\n7", "selfhost/seed_tests/sxported.stdout")
+  hold read_only = pr_assert("selfhost/seed_tests/borrow.c", "source = sx_sb_from(source)", 1, 0, 0, 0, 0)
+  when pr_count("selfhost/seed_tests/borrow.c", "#define SX_SEED_PROFILE 1", 1, 1, 0, 0) == 1 {
+    // Immutable fresh-allocation + conservative rooting replaces the old
+    // writable-parameter copy / early-free protocol. Keep every alias/lifetime
+    // output and allocation-pressure fixture, and inspect the active contract.
+    hold ownership = pg_contains("selfhost/seed_tests/borrow.c", "if(kind==0 && SX_SEED_PROFILE) return sx_sb_new(n);")
+    hold fresh_concat = pg_contains("selfhost/seed_tests/borrow.c", "char *r=(char*)sx_gc_alloc(0,la+lb+1);")
+    hold rooted = pg_contains("selfhost/seed_tests/borrow.c", "static void sx_gc_roots(")
+    hold poison = pg_contains("selfhost/seed_tests/borrow.c", "__asan_region_is_poisoned")
+    hold instrumented = pg_not_contains("selfhost/seed_tests/borrow.c", "no_sanitize")
+  } otherwise {
+    hold p5 = pr_assert("selfhost/seed_tests/borrow.c", "a = sx_sb_from(a)", 1, 0, 0, 0, 1)
+    hold p6 = pr_assert("selfhost/seed_tests/borrow.c", "s = sx_sb_from(s)", 1, 0, 0, 0, 1)
+  }
+  hold p7 = pg_emit_stream(0, "selfhost/seed_borrow_stress.sa", "selfhost/seed_tests/borrow-stress.c", 0, "selfhost/seed_tests/borrow-stress.c.emit.log", "selfhost/seed_tests/borrow-stress.c.err")
+  hold p8 = gl_compile_c("selfhost/seed_tests/borrow-stress.c", "selfhost/seed_tests/borrow-stress", "-O2")
+  hold p9 = lm_assert_out("./selfhost/seed_tests/borrow-stress", 131072, "16481\n16384\n97\n3\n7", "selfhost/seed_tests/sxmore_limit")
+  hold p10 = pg_emit_stream(1, "selfhost/seed_borrow_stress.sa", "selfhost/seed_tests/borrow-stress-g2.c", 0, "selfhost/seed_tests/borrow-stress-g2.c.emit.log", "selfhost/seed_tests/borrow-stress-g2.c.err")
+  hold p11 = gl_compile_c("selfhost/seed_tests/borrow-stress-g2.c", "selfhost/seed_tests/borrow-stress-g2", "-O2")
+  hold p12 = gl_assert_out("./selfhost/seed_tests/borrow-stress-g2", "16481\n16384\n97\n3\n7", "selfhost/seed_tests/sxported.stdout")
+  hold p13 = pg_emit_stream(2, "selfhost/seed_borrow_stress.sa", "selfhost/seed_tests/borrow-stress-native", 0, "selfhost/seed_tests/borrow-stress-native.emit.log", "selfhost/seed_tests/borrow-stress-native.err")
+  hold p14 = gl_assert_out("./selfhost/seed_tests/borrow-stress-native", "16481\n16384\n97\n3\n7", "selfhost/seed_tests/sxported.stdout")
+  hold p15 = pg_emit_stream(1, "selfhost/seed_builder_registry_test.sa", "selfhost/seed_tests/builder-registry.c", 0, "/dev/null", "selfhost/seed_tests/builder-registry.c.err")
+  hold p16 = pg_emit_stream(5, "selfhost/seed_builder_registry_test.sa", "selfhost/seed_tests/builder-registry", 0, "selfhost/seed_tests/builder-registry.emit.log", "selfhost/seed_tests/builder-registry.err")
+  hold p17 = gl_assert_out("./selfhost/seed_tests/builder-registry", "registry-ok", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_seed_collector() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/seed_gc_drop.sa", "selfhost/seed_tests/sgc_drop_ms.c", 0, "selfhost/seed_tests/sgc_drop_ms.c.emit.log", "selfhost/seed_tests/sgc_drop_ms.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/sgc_drop_ms.c", "selfhost/seed_tests/sgc_drop_ms", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(1, "selfhost/seed_gc_drop.sa", "selfhost/seed_tests/sgc_drop_g2.c", 0, "/dev/null", "selfhost/seed_tests/sgc_drop_g2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/sgc_drop_g2.c", "selfhost/seed_tests/sgc_drop_g2", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p5 = pr_assert("selfhost/seed_tests/sgc_drop_ms.c", "sx_gc_init((void*)&sx_gcanchor);", 1, 0, 0, 0, 1)
+  when pr_count("selfhost/seed_tests/sgc_drop_ms.c", "#define SX_SEED_PROFILE 1", 1, 1, 0, 0) == 1 {
+    hold root_body = pg_contains("selfhost/seed_tests/sgc_drop_ms.c", "static int _sx_gc_program(void){")
+    hold indirect = pg_contains("selfhost/seed_tests/sgc_drop_ms.c", "int (*volatile sx_entry)(void)=_sx_gc_program;")
+  } otherwise {
+    hold p6 = pr_assert("selfhost/seed_tests/sgc_drop_ms.c", "static int sx_prog(void){", 1, 0, 0, 0, 1)
+  }
+  hold p7 = pr_assert("selfhost/seed_tests/sgc_drop_ms.c", "if(sx_gc_bytes+need>sx_gc_thresh) sx_gc_collect();", 1, 0, 0, 0, 1)
+  when pr_count("selfhost/seed_tests/sgc_drop_ms.c", "#define SX_SEED_PROFILE 1", 1, 1, 0, 0) == 1 {
+    hold actual_loads = pg_not_contains("selfhost/seed_tests/sgc_drop_ms.c", "no_sanitize")
+    hold poisoned_words = pg_contains("selfhost/seed_tests/sgc_drop_ms.c", "if(!SX_SEED_WORD_OK(lo)) continue;")
+  } otherwise {
+    hold p8 = pr_assert("selfhost/seed_tests/sgc_drop_ms.c", "no_sanitize_address", 1, 0, 0, 0, 1)
+  }
+  hold p9 = lm_assert_out("./selfhost/seed_tests/sgc_drop_ms", 65536, "524288\n4.88e+08\n1\nauto\n524288\n97\n112", "selfhost/seed_tests/sxmore_limit")
+  hold p10 = lm_assert_out("./selfhost/seed_tests/sgc_drop_g2", 65536, "524288\n4.88e+08\n1\nauto\n524288\n97\n112", "selfhost/seed_tests/sxmore_limit")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p11 = pg_emit_stream(2, "selfhost/seed_gc_drop.sa", "selfhost/seed_tests/sgc_drop_native", 0, "selfhost/seed_tests/sgc_drop_native.emit.log", "selfhost/seed_tests/sgc_drop_native.err")
+  hold p12 = gl_assert_eq_num(lm_capture("./selfhost/seed_tests/sgc_drop_native", 65536, "selfhost/seed_tests/sgc_drop_native.out", "selfhost/seed_tests/sxmore_limit"), 0, "test-seed-collector limited child")
+  hold p13 = pg_capture("./selfhost/seed_tests/sgc_drop_ms", "selfhost/seed_tests/sgc_drop_ms.out")
+  hold p14 = gl_assert_files_eq("selfhost/seed_tests/sgc_drop_ms.out", "selfhost/seed_tests/sgc_drop_native.out", "test-seed-collector parity")
+  }
+  give 0
+}
+
+make mp_test_generic_struct_limits() -> num {
+  hold p0 = pg_command(concat("CC=", concat(gl_sh_quote(gl_cc()), " ./tools/sxsuite generic_struct_limits")), "test-generic-struct-limits child command")
+  give 0
+}
+
+make mp_test_stdlib_json_deep() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/stdlib_json_deep_test.sa", "selfhost/seed_tests/jsond_seed.c", 0, "selfhost/seed_tests/jsond_seed.c.emit.log", "selfhost/seed_tests/jsond_seed.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/jsond_seed.c", "selfhost/seed_tests/jsond_seed", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(1, "selfhost/stdlib_json_deep_test.sa", "selfhost/seed_tests/jsond_gen2.c", 0, "/dev/null", "selfhost/seed_tests/jsond_gen2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/jsond_gen2.c", "selfhost/seed_tests/jsond_gen2", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/jsond_seed", "ada\nalpha\nbeta\n80\n8080\nb\nbottom\nobject\nobject\narray\nobject\nstring\nnumber\ntrue\nfalse\nnull\n\n\n\n1\n2.5\n-3\n1000\n0.125\n1\n0\n0\n1\n0\n2\n4\n5\n0\n0\n0\n3\n-1\nname\ntags\n\nserver\n{\"name\":\"beta\",\"port\":8080,\"tags\":[]}\n[\"a\",\"b\"]\n1e3\n6122625c632f640a650966\n41c3a9e282acf09f9880\nxy\n10\narray\n}\n1\n1\n1\n1\n1\n1\n1\n1\n1\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\njson-deep-done", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/jsond_gen2", "ada\nalpha\nbeta\n80\n8080\nb\nbottom\nobject\nobject\narray\nobject\nstring\nnumber\ntrue\nfalse\nnull\n\n\n\n1\n2.5\n-3\n1000\n0.125\n1\n0\n0\n1\n0\n2\n4\n5\n0\n0\n0\n3\n-1\nname\ntags\n\nserver\n{\"name\":\"beta\",\"port\":8080,\"tags\":[]}\n[\"a\",\"b\"]\n1e3\n6122625c632f640a650966\n41c3a9e282acf09f9880\nxy\n10\narray\n}\n1\n1\n1\n1\n1\n1\n1\n1\n1\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\njson-deep-done", "selfhost/seed_tests/sxported.stdout")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p7 = pg_emit_stream(2, "selfhost/stdlib_json_deep_test.sa", "selfhost/seed_tests/jsond_native", 0, "selfhost/seed_tests/jsond_native.emit.log", "selfhost/seed_tests/jsond_native.err")
+  hold p8 = pg_capture("./selfhost/seed_tests/jsond_native", "selfhost/seed_tests/jsond_native.out")
+  hold p9 = pg_capture("./selfhost/seed_tests/jsond_seed", "selfhost/seed_tests/jsond_seed.out")
+  hold p10 = gl_assert_files_eq("selfhost/seed_tests/jsond_seed.out", "selfhost/seed_tests/jsond_native.out", "test-stdlib-json-deep parity")
+  }
+  hold p11 = gl_must_write("selfhost/seed_tests/jsond_mix.sa", "use \"stdlib/json_util.sa\"\nuse \"stdlib/json_deep.sa\"\nhold doc = j_obj(concat(concat(j_kv_text(\"k\", \"v\"), \",\"), j_kv_number(\"n\", 42)))\nshow doc\nshow jd_valid(doc)\nshow jd_text(doc, \"k\")\nshow jd_num(doc, \"n\")\nshow j_get_text(doc, \"k\")\nshow jd_len(doc, \"\")\n")
+  hold p12 = pg_emit_stream(0, "selfhost/seed_tests/jsond_mix.sa", "selfhost/seed_tests/jsond_mix.c", 0, "selfhost/seed_tests/jsond_mix.c.emit.log", "selfhost/seed_tests/jsond_mix.c.err")
+  hold p13 = gl_compile_c("selfhost/seed_tests/jsond_mix.c", "selfhost/seed_tests/jsond_mix", "-O2 -Werror=implicit-function-declaration")
+  hold p14 = gl_assert_out("./selfhost/seed_tests/jsond_mix", "{\"k\":\"v\",\"n\":42}\n1\nv\n42\nv\n2", "selfhost/seed_tests/sxported.stdout")
+  give 0
+}
+
+make mp_test_stdlib_json_write() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests")
+  hold p1 = pg_emit_stream(0, "selfhost/stdlib_json_write_test.sa", "selfhost/seed_tests/jsonw_seed.c", 0, "selfhost/seed_tests/jsonw_seed.c.emit.log", "selfhost/seed_tests/jsonw_seed.c.err")
+  hold p2 = gl_compile_c("selfhost/seed_tests/jsonw_seed.c", "selfhost/seed_tests/jsonw_seed", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p3 = pg_emit_stream(1, "selfhost/stdlib_json_write_test.sa", "selfhost/seed_tests/jsonw_gen2.c", 0, "/dev/null", "selfhost/seed_tests/jsonw_gen2.c.err")
+  hold p4 = gl_compile_c("selfhost/seed_tests/jsonw_gen2.c", "selfhost/seed_tests/jsonw_gen2", "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types")
+  hold p5 = gl_assert_out("./selfhost/seed_tests/jsonw_seed", "1\n2\nobject\n0\n1\n3.75\n-3.25\nnull\n0\n0\n2\nalpha\ntls\nbeta\n\"node\"\n8080\n0\n1\n1\nedge\n3.75\n{\n  \"a\": [],\n  \"b\": [\n    1\n  ]\n}\njson-write-done", "selfhost/seed_tests/sxported.stdout")
+  hold p6 = gl_assert_out("./selfhost/seed_tests/jsonw_gen2", "1\n2\nobject\n0\n1\n3.75\n-3.25\nnull\n0\n0\n2\nalpha\ntls\nbeta\n\"node\"\n8080\n0\n1\n1\nedge\n3.75\n{\n  \"a\": [],\n  \"b\": [\n    1\n  ]\n}\njson-write-done", "selfhost/seed_tests/sxported.stdout")
+  when path_kind("selfhost/native_aot") == 1 {
+  hold p7 = pg_emit_stream(2, "selfhost/stdlib_json_write_test.sa", "selfhost/seed_tests/jsonw_native", 0, "selfhost/seed_tests/jsonw_native.emit.log", "selfhost/seed_tests/jsonw_native.err")
+  hold p8 = pg_capture("./selfhost/seed_tests/jsonw_native", "selfhost/seed_tests/jsonw_native.out")
+  hold p9 = pg_capture("./selfhost/seed_tests/jsonw_seed", "selfhost/seed_tests/jsonw_seed.out")
+  hold p10 = gl_assert_files_eq("selfhost/seed_tests/jsonw_seed.out", "selfhost/seed_tests/jsonw_native.out", "test-stdlib-json-write parity")
+  }
+  give 0
+}
+
+make mp_test_sxbuild() -> num {
+  hold p0 = gl_ensure_dir("selfhost/seed_tests/sxbuild_gate")
+  hold p1 = pg_command("./tools/sxbuild doctor >/dev/null", "test-sxbuild child command")
+  hold p2 = pg_command("./tools/sxbuild inventory > selfhost/seed_tests/sxbuild_gate/inv.out", "test-sxbuild child command")
+  hold p3 = pr_assert("selfhost/seed_tests/sxbuild_gate/inv.out", "native_aot.c present: *0", 0, 0, 0, 0, 1)
+  hold p4 = pr_assert("selfhost/seed_tests/sxbuild_gate/inv.out", "non-anchor .c/.h files: *0", 0, 0, 0, 0, 1)
+  hold p5 = pg_command("./tools/sxbuild parity selfhost/native_ir_log_test.sa selfhost/seed_tests/sxbuild_gate/parity", "test-sxbuild child command")
+  give 0
+}
+
+make mp_dispatch(name: str) -> num {
+  hold dir = gl_ensure_dir("selfhost/seed_tests")
+  when string_eq(name, "test-push-stmt") == 1 {
+    hold r = mp_test_push_stmt()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-stage2-demos") == 1 {
+    hold r = mp_test_stage2_demos()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-native-lang") == 1 {
+    hold r = mp_test_native_lang()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-native-locals") == 1 {
+    hold dep = mp_dispatch("test-native-param-reassign")
+    hold dep = pg_dispatch("test-native-for-functions")
+    hold dep = pg_dispatch("test-native-list-alias")
+    hold dep = mp_dispatch("test-native-generic-local")
+    hold r = mp_test_native_locals()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-typed-sig") == 1 {
+    hold dep = mp_dispatch("test-seed-typed-functions")
+    hold dep = mp_dispatch("test-gen2-forward")
+    hold dep = mp_dispatch("test-gen2-function-scope")
+    hold dep = mp_dispatch("test-gen2-boolean-args")
+    hold dep = mp_dispatch("test-gen2-list-return")
+    hold dep = mp_dispatch("test-gen2-list-args")
+    hold dep = mp_dispatch("test-gen2-gc-roots")
+    hold dep = mp_dispatch("test-gen2-list-arithmetic")
+    hold dep = mp_dispatch("test-return-paths")
+    hold dep = mp_dispatch("test-name-resolution")
+    hold dep = mp_dispatch("test-inline-expressions")
+    hold dep = pg_dispatch("test-seed-list-sequence")
+    hold dep = mp_dispatch("test-list-postfix")
+    hold r = mp_test_typed_sig()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-list-expr") == 1 {
+    hold r = mp_test_list_expr()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-native-strfn") == 1 {
+    hold r = mp_test_native_strfn()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-native-strgen") == 1 {
+    hold r = mp_test_native_strgen()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-native-listgen") == 1 {
+    hold r = mp_test_native_listgen()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-logic-value") == 1 {
+    hold r = mp_test_logic_value()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-native-generics") == 1 {
+    hold r = mp_test_native_generics()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-native-cond") == 1 {
+    hold r = mp_test_native_cond()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-proc-builtins") == 1 {
+    hold r = mp_test_proc_builtins()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-comment-quotes") == 1 {
+    hold r = mp_test_comment_quotes()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-for-paren") == 1 {
+    hold r = mp_test_for_paren()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-index-mod") == 1 {
+    hold r = mp_test_gen2_index_mod()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-expr-lowering") == 1 {
+    hold r = mp_test_gen2_expr_lowering()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-parity") == 1 {
+    hold r = mp_test_parity()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-boot") == 1 {
+    hold r = mp_test_boot()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-sxdiag") == 1 {
+    hold r = mp_test_sxdiag()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-stdlib-interpolation") == 1 {
+    hold r = mp_test_stdlib_interpolation()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-seed-stage2") == 1 {
+    hold r = mp_test_seed_stage2()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-pkg-errors") == 1 {
+    hold r = mp_test_pkg_errors()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-seed-assignment") == 1 {
+    hold r = mp_test_seed_assignment()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-seed-hold-types") == 1 {
+    hold r = mp_test_seed_hold_types()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-seed-for-literals") == 1 {
+    hold r = mp_test_seed_for_literals()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-seed-for-untyped") == 1 {
+    hold r = mp_test_seed_for_untyped()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-seed-typed-functions") == 1 {
+    hold r = mp_test_seed_typed_functions()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-native-param-reassign") == 1 {
+    hold r = mp_test_native_param_reassign()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-native-generic-local") == 1 {
+    hold r = mp_test_native_generic_local()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-forward") == 1 {
+    hold r = mp_test_gen2_forward()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-function-scope") == 1 {
+    hold r = mp_test_gen2_function_scope()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-boolean-args") == 1 {
+    hold r = mp_test_gen2_boolean_args()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-generic-queue") == 1 {
+    hold r = mp_test_gen2_generic_queue()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-list-return") == 1 {
+    hold r = mp_test_gen2_list_return()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-list-args") == 1 {
+    hold r = mp_test_gen2_list_args()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-gc-roots") == 1 {
+    hold r = mp_test_gen2_gc_roots()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-gen2-list-arithmetic") == 1 {
+    hold r = mp_test_gen2_list_arithmetic()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-return-paths") == 1 {
+    hold r = mp_test_return_paths()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-name-resolution") == 1 {
+    hold r = mp_test_name_resolution()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-inline-expressions") == 1 {
+    hold dep = pg_dispatch("test-inline-runtime")
+    hold r = mp_test_inline_expressions()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-list-postfix") == 1 {
+    hold r = mp_test_list_postfix()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-seed-borrow") == 1 {
+    hold r = mp_test_seed_borrow()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-seed-collector") == 1 {
+    hold r = mp_test_seed_collector()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-generic-struct-limits") == 1 {
+    hold r = mp_test_generic_struct_limits()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-stdlib-json-deep") == 1 {
+    hold r = mp_test_stdlib_json_deep()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-stdlib-json-write") == 1 {
+    hold r = mp_test_stdlib_json_write()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  when string_eq(name, "test-sxbuild") == 1 {
+    hold r = mp_test_sxbuild()
+    show concat("[OK] Sayanox gate: ", name)
+    give 0
+  }
+  give gl_fail(concat("unknown migrated gate: ", name))
+}

@@ -1,0 +1,174 @@
+// Memory/collector gate orchestration and assertions in Sayanox.
+use "tools/sxmemory_fixtures_lib.sa"
+
+make nm_known(name: str) -> num {
+  when string_eq(name, "test-native-mem") == 1 || string_eq(name, "test-gc") == 1 || string_eq(name, "test-seed-gc") == 1 { give 1 }
+  give 0
+}
+
+make nm_compile(kind: num, source: str, stem: str) -> num {
+  hold bin = concat("selfhost/seed_tests/", stem)
+  when kind == 2 { give pg_emit(2, source, bin, 0) }
+  hold c = concat(bin, ".c")
+  hold emitted = pg_emit(kind, source, c, 0)
+  give gl_compile_c(c, bin, "-O2 -I selfhost/seed -lm")
+}
+
+make nm_build(kind: num, stem: str) -> num {
+  hold source = concat(concat("selfhost/seed_tests/", stem), ".sa")
+  hold written = gl_must_write(source, nm_source(stem))
+  give nm_compile(kind, source, stem)
+}
+
+make nm_out(stem: str, want: str, kib: num) -> num {
+  hold base = concat("selfhost/seed_tests/", stem)
+  when kib > 0 { give lm_assert_out(gl_sh_quote(base), kib, want, concat(base, ".limit")) }
+  give gl_assert_out(gl_sh_quote(base), want, concat(base, ".out"))
+}
+
+make nm_line(text: str, index: num) -> str {
+  hold i = 0
+  hold n = 0
+  while i < len(text) {
+    hold start = i
+    while i < len(text) && sx_index(text, i) != 10 { i = i + 1 }
+    when n == index { give gl_slice(text, start, i) }
+    n = n + 1
+    i = i + 1
+  }
+  give ""
+}
+
+make nm_number(text: str) -> num {
+  when len(text) == 0 { give gl_fail("missing numeric collector result") }
+  hold n = 0
+  hold i = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when c < 48 || c > 57 { give gl_fail(concat("invalid collector count: ", text)) }
+    n = n * 10 + c - 48
+    i = i + 1
+  }
+  give n
+}
+
+make nm_counts(stem: str, kib: num, expected_first: str, first_positive: num, count: num) -> num {
+  hold base = concat("selfhost/seed_tests/", stem)
+  hold out = concat(base, ".counts.out")
+  hold rc = 0
+  when kib > 0 { rc = lm_capture(gl_sh_quote(base), kib, out, concat(base, ".counts")) } otherwise {
+    rc = run_command(concat(gl_sh_quote(base), concat(" > ", gl_sh_quote(out))))
+  }
+  hold status = gl_assert_eq_num(rc, 0, concat(stem, " collector status"))
+  hold text = read_file(out)
+  when len(expected_first) > 0 { hold a = gl_assert_eq_str(nm_line(text, 0), expected_first, "churn iteration count") }
+  hold i = first_positive
+  while i < count {
+    when nm_number(nm_line(text, i)) < 1 { give gl_fail(concat(stem, ": collector did no work")) }
+    i = i + 1
+  }
+  give 0
+}
+
+make nm_oom(stem: str, kib: num, before: str) -> num {
+  hold base = concat("selfhost/seed_tests/", stem)
+  hold err = concat(base, ".oom.err")
+  hold cmd = concat(gl_sh_quote(base), concat(" 2> ", gl_sh_quote(err)))
+  hold out = concat(base, ".oom.out")
+  hold rc = lm_capture(cmd, kib, out, concat(base, ".oom"))
+  when rc == 0 { give gl_fail(concat(stem, ": retained live set survived memory cap")) }
+  hold diag = pg_contains(err, "out of memory")
+  hold not_segv = pg_not_contains(out, "Segmentation")
+  when len(before) > 0 { hold a = gl_assert_eq_str(gl_strip_trailing_nl(read_file(out)), before, "stdout flushed before OOM") }
+  give 0
+}
+
+make nm_native() -> num {
+  hold a = nm_build(2, "native_mem")
+  hold a1 = nm_out("native_mem", "4001\n120\n98\n1500\n2998\ntail", 0)
+  hold b = nm_build(2, "native_mem_oom")
+  hold b1 = nm_counts("native_mem_oom", 4096, "200000", 1, 2)
+  hold c = nm_build(2, "native_mem_gc")
+  hold c1 = nm_counts("native_mem_gc", 0, "", 0, 3)
+  hold d = nm_build(2, "native_mem_keep")
+  hold d1 = nm_out("native_mem_keep", "48\n97\n97\n100\n1\nhello-world\n30000\n0\n29999", 0)
+  hold e = nm_build(2, "native_bigalloc")
+  hold e1 = nm_out("native_bigalloc", "262144\n120", 0)
+  hold f = nm_build(2, "native_biglist")
+  hold f1 = nm_out("native_biglist", "100000\n0\n99999", 0)
+  hold g = nm_build(2, "native_mem_fit")
+  hold g1 = nm_out("native_mem_fit", "20000", 4096)
+  hold h = nm_build(2, "native_oom_out")
+  give nm_oom("native_oom_out", 4096, "before")
+}
+
+make nm_gc() -> num {
+  hold a = nm_build(1, "gc_builtins")
+  hold b = nm_out("gc_builtins", "bounded\nran\n6000\nreclaimed\n97", 0)
+  hold native = nm_compile(2, "selfhost/seed_tests/gc_builtins.sa", "gc_builtins_nat")
+  give nm_out("gc_builtins_nat", "bounded\nran\n6000\nreclaimed\n97", 0)
+}
+
+make nm_seed_gc() -> num {
+  hold budget = pg_dispatch("test-seed-list-budget")
+  hold collector = mp_dispatch("test-seed-collector")
+  hold i = 0
+  while i < 5 {
+    hold stem = "churn"
+    when i == 1 { stem = "grow" }
+    when i == 2 { stem = "retain" }
+    when i == 3 { stem = "ops" }
+    when i == 4 { stem = "tmp" }
+    hold source = concat(concat("selfhost/seed_gc_", stem), ".sa")
+    hold a = nm_compile(0, source, concat(concat("sgc_", stem), "_ms"))
+    hold b = nm_compile(1, source, concat(concat("sgc_", stem), "_g2"))
+    hold c = nm_compile(4, source, concat(concat("sgc_", stem), "_fs"))
+    i = i + 1
+  }
+  hold p0 = pg_contains("selfhost/seed_tests/sgc_grow_ms.c", "sx_sb_register(h)")
+  hold p1 = pg_contains("selfhost/seed_tests/sgc_grow_ms.c", "sx_sb_free(")
+  hold p2 = pg_contains("selfhost/seed_tests/sgc_grow_ms.c", "sx_gc_collect();")
+  hold a = nm_out("sgc_churn_ms", "200000", 4096)
+  hold b = nm_out("sgc_grow_ms", "2003\n97\n120", 4096)
+  hold c = nm_out("sgc_tmp_ms", "2000", 4096)
+  hold d = nm_oom("sgc_retain_ms", 4096, "before")
+  hold gc = nm_build(0, "sgc_gc_ms")
+  hold gc0 = nm_out("sgc_gc_ms", "0\n1\n0", 0)
+  hold bad_gc = gl_must_write("selfhost/seed_tests/sgc_gc_bad.sa", nm_source("sgc_gc_bad"))
+  hold bad_gc_status = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/sgc_gc_bad.sa >/dev/null 2>selfhost/seed_tests/sgc_gc_bad.err", "seed gc arity")
+  hold bad_gc_diag = pg_contains("selfhost/seed_tests/sgc_gc_bad.err", "seed_min:")
+  hold ops = "6\n5\n4\n2.5\n2\n9\n0\n1\n2"
+  hold op0 = nm_out("sgc_ops_ms", ops, 0)
+  hold op1 = nm_out("sgc_ops_g2", ops, 0)
+  hold op2 = nm_out("sgc_ops_fs", ops, 65536)
+  hold grow = nm_out("sgc_grow_fs", "2003\n97\n120", 65536)
+  hold noop = nm_build(4, "sgc_noop_fs")
+  hold noop0 = nm_out("sgc_noop_fs", "0", 0)
+  hold live = gl_must_write("selfhost/seed_tests/sgc_live_fs.sa", nm_source("sgc_live_fs"))
+  hold live0 = pg_expect_failure("./selfhost/seed/sxc_seed selfhost/seed_tests/sgc_live_fs.sa >/dev/null 2>selfhost/seed_tests/sgc_live_fs.err", "full seed gc_live refusal")
+  hold live1 = pg_contains("selfhost/seed_tests/sgc_live_fs.err", "undefined function 'gc_live'")
+  hold debug = pg_command("SX_GC_DEBUG=1 ./selfhost/seed_tests/sgc_tmp_fs >selfhost/seed_tests/sgc_tmp_fs.out 2>selfhost/seed_tests/sgc_tmp_fs.err", "full seed refcount debug")
+  hold debug0 = gl_assert_eq_str(gl_strip_trailing_nl(read_file("selfhost/seed_tests/sgc_tmp_fs.out")), "2000", "full seed temporary count")
+  hold debug1 = pg_contains("selfhost/seed_tests/sgc_tmp_fs.err", "sx-gc-debug: 6000 objects still alive at exit")
+  hold too_small = lm_capture("./selfhost/seed_tests/sgc_tmp_fs 2>/dev/null", 4096, "selfhost/seed_tests/sgc_small.out", "selfhost/seed_tests/sgc_small")
+  when too_small == 0 { give gl_fail("full seed static object table fit inside 4 MiB") }
+  hold retain0 = nm_out("sgc_retain_fs", "before\n8388608\nafter", 65536)
+  hold retain1 = nm_out("sgc_retain_ms", "before\n8.38861e+06\nafter", 0)
+  hold retain2 = nm_out("sgc_retain_g2", "before\n8.38861e+06\nafter", 0)
+  hold checks = gl_assert_eq_num(pr_count("selfhost/seed_tests/sgc_churn_g2.c", "sx: out of memory", 1, 0, 0, 0), 3, "all gen2 allocation sites checked")
+  hold churn = nm_out("sgc_churn_g2", "200000", 65536)
+  hold grow2 = nm_out("sgc_grow_g2", "2003\n97\n120", 8192)
+  hold retain3 = nm_out("sgc_retain_g2", "before\n8.38861e+06\nafter", 65536)
+  hold oom2 = nm_oom("sgc_churn_g2", 16384, "")
+  hold runs = nm_build(1, "sgc_runs_g2")
+  give nm_counts("sgc_runs_g2", 65536, "200000", 1, 3)
+}
+
+make nm_dispatch(name: str) -> num {
+  when nm_known(name) == 0 { give gl_fail(concat("unknown memory gate: ", name)) }
+  when string_eq(name, "test-native-mem") == 1 { hold r = nm_native() }
+  when string_eq(name, "test-gc") == 1 { hold r = nm_gc() }
+  when string_eq(name, "test-seed-gc") == 1 { hold r = nm_seed_gc() }
+  show concat("[OK] Sayanox memory gate: ", name)
+  give 0
+}

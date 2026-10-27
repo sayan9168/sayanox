@@ -1,0 +1,324 @@
+// Shared Sayanox gate helpers: file operations and assertions run in-process.
+// run_command still uses /bin/sh for launching child commands.
+// Built with sxc_native; this is not a shell-free runtime claim.
+
+make gl_fail(msg: str) -> num {
+  show concat("[FAIL] ", msg)
+  hold stop = exit(1)
+  give 1
+}
+
+make gl_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold neg = 0
+  when n < 0 {
+    neg = 1
+    n = 0 - n
+  }
+  hold out = ""
+  while n >= 1 {
+    hold d = n % 10
+    n = (n - d) / 10
+    out = concat(chr(48 + d), out)
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make gl_starts_with(s: str, pre: str) -> num {
+  hold sn = len(s)
+  hold pn = len(pre)
+  when pn > sn {
+    give 0
+  }
+  hold i = 0
+  while i < pn {
+    when sx_index(s, i) != sx_index(pre, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make gl_slice(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  when a < 0 {
+    a = 0
+  }
+  when b > n {
+    b = n
+  }
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make gl_strip_trailing_nl(s: str) -> str {
+  hold n = len(s)
+  while n > 0 && (sx_index(s, n - 1) == 10 || sx_index(s, n - 1) == 13) {
+    n = n - 1
+  }
+  give gl_slice(s, 0, n)
+}
+
+make gl_has_line_starting(s: str, pre: str) -> num {
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold ls = i
+    while i < n && sx_index(s, i) != 10 {
+      i = i + 1
+    }
+    hold line = gl_slice(s, ls, i)
+    when gl_starts_with(line, pre) == 1 {
+      give 1
+    }
+    when i < n {
+      i = i + 1
+    }
+  }
+  give 0
+}
+
+make gl_first_line_starting(s: str, pre: str) -> str {
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold ls = i
+    while i < n && sx_index(s, i) != 10 {
+      i = i + 1
+    }
+    hold le = i
+    when le > ls && sx_index(s, le - 1) == 13 {
+      le = le - 1
+    }
+    hold line = gl_slice(s, ls, le)
+    when gl_starts_with(line, pre) == 1 {
+      give line
+    }
+    when i < n {
+      i = i + 1
+    }
+  }
+  give ""
+}
+
+make gl_sh_quote(s: str) -> str {
+  hold sq = chr(39)
+  hold esc = concat(sq, concat(chr(92), concat(sq, sq)))
+  hold out = sq
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, esc)
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  out = concat(out, sq)
+  give out
+}
+
+make gl_parent_dir(p: str) -> str {
+  hold n = len(p)
+  hold last = 0 - 1
+  hold i = 0
+  while i < n {
+    when sx_index(p, i) == 47 {
+      last = i
+    }
+    i = i + 1
+  }
+  when last <= 0 {
+    give ""
+  }
+  give gl_slice(p, 0, last)
+}
+
+make gl_ensure_dir(p: str) -> num {
+  when len(p) == 0 || string_eq(p, ".") == 1 || string_eq(p, "/") == 1 {
+    give 1
+  }
+  when path_kind(p) == 2 {
+    give 1
+  }
+  hold par = gl_parent_dir(p)
+  when len(par) > 0 {
+    hold okp = gl_ensure_dir(par)
+  }
+  hold rc = make_dir(p)
+  when path_kind(p) == 2 {
+    give 1
+  }
+  give 0
+}
+
+make gl_rm_tree(p: str) -> num {
+  hold pk = path_kind(p)
+  when pk == 0 {
+    give 1
+  }
+  when pk == 1 || pk == 3 {
+    give remove_path(p)
+  }
+  when pk == 2 {
+    hold listing = read_dir(p)
+    hold n = len(listing)
+    hold i = 0
+    while i < n {
+      hold ls = i
+      while i < n && sx_index(listing, i) != 10 {
+        i = i + 1
+      }
+      hold name = gl_slice(listing, ls, i)
+      when i < n {
+        i = i + 1
+      }
+      when len(name) > 0 {
+        hold child = concat(p, concat("/", name))
+        hold sub = gl_rm_tree(child)
+      }
+    }
+    give remove_path(p)
+  }
+  give 0
+}
+
+make gl_clean_dir(p: str) -> num {
+  hold r = gl_rm_tree(p)
+  hold e = gl_ensure_dir(p)
+  when e != 1 {
+    hold f = gl_fail(concat("cannot create directory: ", p))
+  }
+  give 1
+}
+
+make gl_must_write(p: str, content: str) -> num {
+  hold par = gl_parent_dir(p)
+  when len(par) > 0 {
+    hold ed = gl_ensure_dir(par)
+  }
+  when write_file(p, content) != 1 {
+    hold f = gl_fail(concat("cannot write file: ", p))
+  }
+  give 0
+}
+
+make gl_files_equal(a: str, b: str) -> num {
+  hold ba = []
+  hold bb = []
+  hold na = read_bytes(a, ba)
+  hold nb = read_bytes(b, bb)
+  when na < 0 || nb < 0 || na != nb {
+    give 0
+  }
+  hold i = 0
+  while i < na {
+    when ba[i] != bb[i] {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make gl_assert_files_eq(a: str, b: str, label: str) -> num {
+  when gl_files_equal(a, b) != 1 {
+    hold f = gl_fail(concat(label, concat(" (", concat(a, concat(" != ", concat(b, ")"))))))
+  }
+  give 0
+}
+
+make gl_assert_eq_num(got: num, want: num, label: str) -> num {
+  when got != want {
+    hold f = gl_fail(concat(label, concat(": got ", concat(gl_istr(got), concat(", want ", gl_istr(want))))))
+  }
+  give 0
+}
+
+make gl_assert_eq_str(got: str, want: str, label: str) -> num {
+  when string_eq(got, want) != 1 {
+    show concat("--- want (", concat(label, ") ---"))
+    show want
+    show concat("--- got (", concat(label, ") ---"))
+    show got
+    hold f = gl_fail(concat(label, ": string mismatch"))
+  }
+  give 0
+}
+
+make gl_cc() -> str {
+  hold v = getenv("CC")
+  when len(v) > 0 {
+    give v
+  }
+  give "cc"
+}
+
+make gl_run_merged(cmd: str, out_file: str) -> num {
+  hold full = concat("LC_ALL=C ", cmd)
+  full = concat(full, concat(" > ", concat(gl_sh_quote(out_file), " 2>&1")))
+  give run_command(full)
+}
+
+make gl_assert_out(cmd: str, want: str, scratch_out: str) -> num {
+  hold par = gl_parent_dir(scratch_out)
+  when len(par) > 0 {
+    hold ed = gl_ensure_dir(par)
+  }
+  hold rc = run_command(concat(cmd, concat(" > ", gl_sh_quote(scratch_out))))
+  when rc != 0 {
+    hold f = gl_fail(concat(cmd, ": program exited nonzero"))
+  }
+  hold got = gl_strip_trailing_nl(read_file(scratch_out))
+  hold exp = gl_strip_trailing_nl(want)
+  when string_eq(got, exp) != 1 {
+    show "--- want ---"
+    show exp
+    show "--- got ---"
+    show got
+    hold f2 = gl_fail(concat(cmd, ": stdout does not match"))
+  }
+  give 0
+}
+
+make gl_compile_c(c_path: str, bin_path: str, flags: str) -> num {
+  hold cc = gl_cc()
+  hold cmd = concat("LC_ALL=C ", concat(gl_sh_quote(cc), " -o "))
+  cmd = concat(cmd, concat(gl_sh_quote(bin_path), concat(" ", gl_sh_quote(c_path))))
+  cmd = concat(cmd, concat(" ", flags))
+  when run_command(cmd) != 0 {
+    hold f = gl_fail(concat("C compilation failed for ", c_path))
+  }
+  give 0
+}
+
+make gl_build_gen2(sa_path: str, c_path: str, bin_path: str, cflags: str) -> num {
+  hold log_f = concat(c_path, ".gen2.log")
+  hold cmd = concat("./selfhost/gen2 ", concat(gl_sh_quote(sa_path), concat(" ", gl_sh_quote(c_path))))
+  when gl_run_merged(cmd, log_f) != 0 {
+    hold f = gl_fail(concat("gen2 exited nonzero on ", sa_path))
+  }
+  hold c_txt = read_file(c_path)
+  when gl_has_line_starting(c_txt, "#error") == 1 {
+    hold eline = gl_first_line_starting(c_txt, "#error")
+    hold f2 = gl_fail(concat("gen2 emitted #error on ", concat(sa_path, concat(": ", eline))))
+  }
+  hold eff = "-O2"
+  when len(cflags) > 0 {
+    eff = concat("-O2 ", cflags)
+  }
+  give gl_compile_c(c_path, bin_path, eff)
+}

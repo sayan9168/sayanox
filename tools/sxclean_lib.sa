@@ -1,0 +1,27 @@
+// Explicit generated-output allowlist from the retired clean recipes.
+// No globbing, recursive source-tree deletion, shell rm, or external manifest.
+make cl_apply(dry_run: num) -> num {
+  when path_kind("tools/sxbuild.sa") != 1 || path_kind("selfhost/compiler_min.sa") != 1 {
+    hold e = fail(1, "clean must run at a Sayanox repository root")
+  }
+  hold manifest = "tools/sxgates\nselfhost/native_c_emitter\nselfhost/gen1\nselfhost/gen1.c\nselfhost/gen1_min\nselfhost/gen1_min.c\nselfhost/gen2\nselfhost/gen2.c\nselfhost/gen3\nselfhost/gen3.c\nselfhost/gen4.c\nselfhost/seed/sxc_seed_min\nselfhost/seed/sxc_seed\ntools/sxc_native\nselfhost/native_aot\nselfhost/boot_from_gen2\nselfhost/boot_from_gen2.c\nselfhost/boot_from_gen2.c.err\nselfhost/boot_from_gen2.c.emit.log\ntools/sxfmt\ntools/sxfmt.c\ntools/sxpkg\ntools/sxpkg.c\ntools/sayanox_lsp\ntools/sayanox_lsp.c\ntools/sxdiag\ntools/sxdiag.c\ntools/emit_to_ir\ntools/emit_to_ir.c\ntools/sxlink\ntools/sxencode\ntools/sxdefs\ntools/native32\ntools/sxmod\ntools/sxaudit\ntools/sxinfer\ntools/sxruntime\ntools/sxgc\ntools/sxemit\ntools/sxbuild\ntools/sxstage2_parity\ntools/sxirexec\ntools/sxpkg_pubkey_test\ntools/sxsuite\ntools/sxisaexec\ntools/sxc_native_test\ntools/sxisaexec_test\ntools/sxmod_deep_test\ntools/lsp_ide_test\ntools/sxpack\ntools/sxlsp_probe\ntools/sxpkg_transfer_test\ntools/sxnet_test\ntools/sxnet_server\ntools/sxnet_curl\ntools/sxrecovery_test\ntools/sxnative_bootstrap_test\ntools/sxarch_aot\ntools/sxarch_aot_test\ntools/lsp_workspace_test\ntools/lsp_semantic_test\ntools/lsp_types_test\ntools/sxtargets_test\n"
+  hold i = 0
+  while i < len(manifest) {
+    hold start = i
+    while i < len(manifest) && sx_index(manifest, i) != 10 { i = i + 1 }
+    hold path = gl_slice(manifest, start, i)
+    i = i + 1
+    when len(path) > 0 {
+      when dry_run == 1 {
+        show path
+      } otherwise {
+        when path_kind(path) == 2 { hold e = fail(1, concat("refusing to remove a directory: ", path)) }
+        when path_kind(path) != 0 {
+          hold rm = remove_path(path)
+          when path_kind(path) != 0 { hold e = fail(1, concat("cannot remove build output: ", path)) }
+        }
+      }
+    }
+  }
+  give 0
+}

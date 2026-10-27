@@ -1,0 +1,186 @@
+make pr_char(text: str, at: num) -> num {
+  when at < 0 || at >= len(text) { give 0 }
+  give sx_index(text, at)
+}
+
+// Line-oriented grep predicates used by migrated gates. Matching is Sayanox,
+// not a grep process. Supported atoms: literals, ., bracket classes/ranges,
+// POSIX character classes, anchors, *, ERE +/?, and BRE/ERE alternatives.
+// Grouping/backreferences are intentionally not accepted by the migration.
+make pr_class(name: str, c: num) -> num {
+  hold digit = c >= 48 && c <= 57
+  hold lower = c >= 97 && c <= 122
+  hold upper = c >= 65 && c <= 90
+  when string_eq(name, "digit") == 1 { give digit }
+  when string_eq(name, "lower") == 1 { give lower }
+  when string_eq(name, "upper") == 1 { give upper }
+  when string_eq(name, "alpha") == 1 { give lower || upper }
+  when string_eq(name, "alnum") == 1 { give digit || lower || upper }
+  when string_eq(name, "xdigit") == 1 { give digit || (c >= 65 && c <= 70) || (c >= 97 && c <= 102) }
+  when string_eq(name, "space") == 1 { give c == 32 || (c >= 9 && c <= 13) }
+  when string_eq(name, "blank") == 1 { give c == 32 || c == 9 }
+  when string_eq(name, "cntrl") == 1 { give c < 32 || c == 127 }
+  when string_eq(name, "print") == 1 { give c >= 32 && c <= 126 }
+  when string_eq(name, "graph") == 1 { give c >= 33 && c <= 126 }
+  when string_eq(name, "punct") == 1 { give c >= 33 && c <= 126 && digit == 0 && lower == 0 && upper == 0 }
+  give gl_fail(concat("unsupported character class: ", name))
+}
+
+make pr_atom_end(p: str, start: num) -> num {
+  hold c = pr_char(p, start)
+  when c == 92 { give start + 2 }
+  when c != 91 { give start + 1 }
+  hold i = start + 1
+  when pr_char(p, i) == 94 { i = i + 1 }
+  when pr_char(p, i) == 93 { i = i + 1 }
+  while i < len(p) {
+    when pr_char(p, i) == 91 && pr_char(p, i + 1) == 58 {
+      i = i + 2
+      while i + 1 < len(p) && (pr_char(p, i) != 58 || pr_char(p, i + 1) != 93) { i = i + 1 }
+      i = i + 2
+    } otherwise {
+      when pr_char(p, i) == 93 { give i + 1 }
+      i = i + 1
+    }
+  }
+  give gl_fail(concat("unclosed bracket pattern: ", p))
+}
+
+make pr_atom(p: str, start: num, end: num, c: num) -> num {
+  hold a = pr_char(p, start)
+  when a == 92 { give c == pr_char(p, start + 1) }
+  when a == 46 { give 1 }
+  when a != 91 { give a == c }
+  hold i = start + 1
+  hold invert = 0
+  when pr_char(p, i) == 94 { invert = 1
+    i = i + 1 }
+  hold found = 0
+  while i < end - 1 {
+    hold a = pr_char(p, i)
+    when a == 91 && pr_char(p, i + 1) == 58 {
+      hold begin = i + 2
+      i = begin
+      while i < end && (pr_char(p, i) != 58 || pr_char(p, i + 1) != 93) { i = i + 1 }
+      when pr_class(gl_slice(p, begin, i), c) == 1 { found = 1 }
+      i = i + 2
+    } otherwise {
+      when i + 2 < end - 1 && pr_char(p, i + 1) == 45 {
+        when c >= a && c <= pr_char(p, i + 2) { found = 1 }
+        i = i + 3
+      } otherwise {
+        when a == c { found = 1 }
+        i = i + 1
+      }
+    }
+  }
+  when invert == 1 { give found == 0 }
+  give found
+}
+
+make pr_here(s: str, at: num, p: str, pos: num, extended: num) -> num {
+  when pos >= len(p) { give 1 }
+  when pr_char(p, pos) == 36 && pos + 1 == len(p) { give at == len(s) }
+  hold next = pr_atom_end(p, pos)
+  hold quant = pr_char(p, next)
+  hold repeat = quant == 42 || (extended == 1 && (quant == 43 || quant == 63))
+  when repeat == 1 {
+    hold low = 0
+    when quant == 43 { low = 1 }
+    hold count = 0
+    while at + count < len(s) && pr_atom(p, pos, next, pr_char(s, at + count)) == 1 {
+      count = count + 1
+      when quant == 63 { break }
+    }
+    while count >= low {
+      when pr_here(s, at + count, p, next + 1, extended) == 1 { give 1 }
+      count = count - 1
+    }
+    give 0
+  }
+  when at >= len(s) { give 0 }
+  when pr_atom(p, pos, next, pr_char(s, at)) == 0 { give 0 }
+  give pr_here(s, at + 1, p, next, extended)
+}
+
+make pr_one(s: str, p: str, extended: num) -> num {
+  when len(p) > 0 && pr_char(p, 0) == 94 { give pr_here(s, 0, p, 1, extended) }
+  hold i = 0
+  while i <= len(s) {
+    when pr_here(s, i, p, 0, extended) == 1 { give 1 }
+    i = i + 1
+  }
+  give 0
+}
+
+make pr_one_mode(s: str, p: str, extended: num, whole: num) -> num {
+  hold pattern = p
+  when whole == 1 {
+    when pr_char(pattern, 0) != 94 { pattern = concat("^", pattern) }
+    hold escapes = 0
+    hold j = len(pattern) - 2
+    while j >= 0 && pr_char(pattern, j) == 92 {
+      escapes = escapes + 1
+      j = j - 1
+    }
+    when pr_char(pattern, len(pattern) - 1) != 36 || escapes % 2 == 1 { pattern = concat(pattern, "$") }
+  }
+  give pr_one(s, pattern, extended)
+}
+
+make pr_match(s: str, p: str, extended: num) -> num {
+  give pr_match_mode(s, p, extended, 0)
+}
+
+make pr_match_mode(s: str, p: str, extended: num, whole: num) -> num {
+  hold begin = 0
+  hold i = 0
+  while i < len(p) {
+    hold c = pr_char(p, i)
+    when c == 91 {
+      i = pr_atom_end(p, i)
+    } otherwise {
+      hold separator = extended == 1 && c == 124
+      hold width = 1
+      when extended == 0 && c == 92 && pr_char(p, i + 1) == 124 { separator = 1
+        width = 2 }
+      when separator == 1 {
+        when pr_one_mode(s, gl_slice(p, begin, i), extended, whole) == 1 { give 1 }
+        i = i + width
+        begin = i
+      } otherwise {
+        when c == 92 { i = i + 1 }
+        i = i + 1
+      }
+    }
+  }
+  give pr_one_mode(s, gl_slice(p, begin, len(p)), extended, whole)
+}
+
+make pr_count(file: str, pattern: str, fixed: num, whole: num, invert: num, extended: num) -> num {
+  when path_kind(file) != 1 { hold e = gl_fail(concat("missing pattern input: ", file)) }
+  hold text = read_file(file)
+  hold i = 0
+  hold count = 0
+  while i < len(text) {
+    hold begin = i
+    while i < len(text) && pr_char(text, i) != 10 { i = i + 1 }
+    hold line = gl_slice(text, begin, i)
+    hold matched = 0
+    when fixed == 1 {
+      when whole == 1 { matched = string_eq(line, pattern) } otherwise { matched = pg_find(line, pattern) >= 0 }
+    } otherwise {
+      matched = pr_match_mode(line, pattern, extended, whole)
+    }
+    when invert == 1 { matched = matched == 0 }
+    when matched == 1 { count = count + 1 }
+    i = i + 1
+  }
+  give count
+}
+
+make pr_assert(file: str, pattern: str, fixed: num, whole: num, invert: num, extended: num, positive: num) -> num {
+  hold count = pr_count(file, pattern, fixed, whole, invert, extended)
+  when (count > 0) != positive { hold e = gl_fail(concat(concat(file, ": pattern assertion: "), pattern)) }
+  give 0
+}

@@ -263,10 +263,10 @@ make cmd_doctor() -> num {
   show "sxbuild toolchain check"
   bad = bad + check_tool_req("C99 compiler", cc)
   bad = bad + check_tool_req("POSIX shell", "sh")
-  when path_kind("selfhost/seed/sxc_seed_min.c") == 1 {
-    show "[ok] seed source: selfhost/seed/sxc_seed_min.c"
+  when path_kind("selfhost/seed/sxc_seed_min.sa") == 1 {
+    show "[ok] seed source: selfhost/seed/sxc_seed_min.sa"
   } otherwise {
-    show "[FAIL] seed source missing: selfhost/seed/sxc_seed_min.c"
+    show "[FAIL] seed source missing: selfhost/seed/sxc_seed_min.sa"
     bad = bad + 1
   }
   when path_kind("selfhost/compiler_min.sa") == 1 {
@@ -336,7 +336,11 @@ make cmd_build(in_sa: str, out_bin: str) -> num {
     hold e0 = fail(1, concat("input file not found: ", in_sa))
   }
   hold snb = sxc_native_bin()
-  when path_kind(snb) == 1 && string_eq(getenv("SXBUILD_VIA_C"), "1") == 0 {
+  when path_kind(snb) != 1 && string_eq(getenv("SXBUILD_VIA_C"), "1") == 0 {
+    hold stages = [0, 0, 0, 0, 0]
+    hold bootstrap = bt_build(3, stages)
+  }
+  when string_eq(getenv("SXBUILD_VIA_C"), "1") == 0 {
     hold pdir = parent_dir(out_bin)
     hold ed0 = ensure_dir_p(pdir)
     hold dcmd = concat(sh_quote(snb), " ")
@@ -373,20 +377,21 @@ make cmd_build(in_sa: str, out_bin: str) -> num {
 
 make ensure_native_compiler() -> str {
   hold nb = native_bin()
-  when path_kind(nb) == 1 {
-    give nb
-  }
+  when path_kind(nb) == 1 { give nb }
   hold snb = sxc_native_bin()
-  when path_kind(snb) == 1 {
-    hold pdir = parent_dir(nb)
-    hold ed0 = ensure_dir_p(pdir)
-    hold cmd0 = concat(sh_quote(snb), concat(" selfhost/native_aot.sa ", sh_quote(nb)))
-    when run_command(cmd0) == 0 {
-      give nb
-    }
+  when path_kind(snb) != 1 {
+    hold stages = [0, 0, 0, 0, 0]
+    hold bootstrap = bt_build(3, stages)
   }
-  hold ed = ensure_dir_p("selfhost/seed_tests")
-  hold ok = compile_sa_via_c(gen2_bin(), "selfhost/native_aot.sa", nb, "selfhost/seed_tests/sxbuild_native_aot.c")
+  hold pdir = parent_dir(nb)
+  hold ed = ensure_dir_p(pdir)
+  hold tmp = concat(nb, ".sxbuild_new")
+  hold command = concat(sh_quote(snb), concat(" selfhost/native_aot.sa ", sh_quote(tmp)))
+  when run_command(command) != 0 {
+    hold rm = remove_path(tmp)
+    hold e = fail(1, "native backend build failed; no implicit C fallback")
+  }
+  hold install = target_run(concat("mv -f ", concat(sh_quote(tmp), concat(" ", sh_quote(nb)))), "install native backend")
   give nb
 }
 
@@ -435,8 +440,22 @@ make cmd_native(in_sa: str, out_bin: str) -> num {
 // ---- tool <name> [out_bin] ------------------------------------------------
 
 make tool_source_for(name: str) -> str {
+  when string_eq(name, "sxtargets_test") == 1 { give "tools/sxtargets_test.sa" }
+  when string_eq(name, "sxnative_bootstrap_test") == 1 { give "tools/sxnative_bootstrap_test.sa" }
+  when string_eq(name, "sxrecovery_test") == 1 { give "tools/sxrecovery_test.sa" }
+  when string_eq(name, "sxlsp_probe") == 1 { give "tools/sxlsp_probe.sa" }
+  when string_eq(name, "sxnet_test") == 1 { give "tools/sxnet_test.sa" }
+  when string_eq(name, "sxnet_server") == 1 { give "tools/sxnet_server.sa" }
+  when string_eq(name, "sxnet_curl") == 1 { give "tools/sxnet_curl.sa" }
+  when string_eq(name, "sxpkg_transfer_test") == 1 { give "tools/sxpkg_transfer_test.sa" }
   when string_eq(name, "native_aot") == 1 {
     give "selfhost/native_aot.sa"
+  }
+  when string_eq(name, "sxgates") == 1 {
+    give "tools/sxgates.sa"
+  }
+  when string_eq(name, "sxpack") == 1 {
+    give "tools/sxpack.sa"
   }
   when string_eq(name, "sxfmt") == 1 {
     give "tools/sxfmt.sa"
@@ -551,19 +570,23 @@ make cmd_tool(name: str, out_override: str) -> num {
     out_bin = tool_default_out(name)
   }
   hold snb = sxc_native_bin()
-  when path_kind(snb) == 1 && string_eq(getenv("SXBUILD_VIA_C"), "1") == 0 {
+  when path_kind(snb) != 1 && string_eq(getenv("SXBUILD_VIA_C"), "1") == 0 {
+    hold stages = [0, 0, 0, 0, 0]
+    hold bootstrap = bt_build(3, stages)
+  }
+  when string_eq(getenv("SXBUILD_VIA_C"), "1") == 0 {
     hold pdir = parent_dir(out_bin)
     hold ed0 = ensure_dir_p(pdir)
-    hold tmp_out = out_bin
-    when string_eq(out_bin, "tools/sxc_native") == 1 || string_eq(out_bin, "./tools/sxc_native") == 1 || string_eq(out_bin, "tools/sxbuild") == 1 || string_eq(out_bin, "./tools/sxbuild") == 1 {
-      tmp_out = concat(out_bin, ".sxbuild_new")
-    }
+    hold tmp_out = concat(out_bin, ".sxbuild_new")
     hold dcmd = concat(sh_quote(snb), " ")
     dcmd = concat(dcmd, concat(sh_quote(src), " "))
     dcmd = concat(dcmd, concat(sh_quote(tmp_out), " >/dev/null 2>&1"))
     when run_command(dcmd) == 0 {
       when string_eq(tmp_out, out_bin) == 0 {
         hold mvrc = run_command(concat(concat("mv -f ", sh_quote(tmp_out)), concat(" ", sh_quote(out_bin))))
+        when mvrc != 0 {
+          hold e = fail(1, concat("cannot install tool: ", out_bin))
+        }
       }
       show concat(concat("[OK] sxbuild tool ", name), concat(" -> ", out_bin))
       give 0
@@ -571,6 +594,7 @@ make cmd_tool(name: str, out_override: str) -> num {
     when string_eq(tmp_out, out_bin) == 0 && path_kind(tmp_out) == 1 {
       hold rmt = remove_path(tmp_out)
     }
+    give fail(1, "native tool compilation failed; C output requires explicit SXBUILD_VIA_C=1")
   }
   hold c_tmp = concat(out_bin, ".sxbuild_tmp.c")
   hold ok = compile_sa_via_c(gen2_bin(), src, out_bin, c_tmp)
@@ -585,13 +609,13 @@ make ensure_seed_compiler() -> str {
   when path_kind(sb) == 1 {
     give sb
   }
-  hold cc = cc_cmd()
   hold pdir = parent_dir(sb)
   hold ed = ensure_dir_p(pdir)
-  hold cmd = concat(sh_quote(cc), " -O2 -o ")
-  cmd = concat(cmd, concat(sh_quote(sb), " selfhost/seed/sxc_seed_min.c"))
-  when run_command(cmd) != 0 {
-    hold e = fail(1, "failed to compile sxc_seed_min.c")
+  when ed != 1 { hold e = fail(1, "cannot create seed compiler directory") }
+  hold built = [0, 0, 0, 0, 0]
+  hold compiled = bt_build(0, built)
+  when string_eq(sb, "selfhost/seed/sxc_seed_min") == 0 && string_eq(sb, "./selfhost/seed/sxc_seed_min") == 0 {
+    hold installed = bt_install_exec("selfhost/seed/sxc_seed_min", sb)
   }
   give sb
 }
@@ -708,12 +732,10 @@ make cmd_bootstrap(out_dir: str) -> num {
   hold g3_bin = concat(out_dir, "/gen3")
   hold g4_c = concat(out_dir, "/gen4.c")
 
-  show "[1/4] sxbuild: compiling C trust anchor -> sxc_seed_min"
-  hold s_cmd = concat(sh_quote(cc), " -O2 -o ")
-  s_cmd = concat(s_cmd, concat(sh_quote(seed_out), " selfhost/seed/sxc_seed_min.c"))
-  when run_command(s_cmd) != 0 {
-    hold es = fail(1, "bootstrap step 1 failed: sxc_seed_min.c")
-  }
+  show "[1/4] sxbuild: native anchor -> Sayanox seed and C-output compiler"
+  hold built = [0, 0, 0, 0, 0]
+  hold compiled = bt_build(0, built)
+  hold installed = bt_install_exec("selfhost/seed/sxc_seed_min", seed_out)
 
   show "[2/4] sxbuild: sxc_seed_min -> gen1_min"
   hold g1_cmd = concat(sh_quote(seed_out), " ")
@@ -784,7 +806,7 @@ make is_generated_c_artifact(p: str) -> num {
   when ends_with(p, ".h") == 1 {
     give 0
   }
-  when string_eq(p, "selfhost/gen1_min.c") == 1 || string_eq(p, "selfhost/gen2.c") == 1 || string_eq(p, "selfhost/gen3.c") == 1 || string_eq(p, "selfhost/gen4.c") == 1 || string_eq(p, "selfhost/boot_from_gen2.c") == 1 {
+  when string_eq(p, "selfhost/gen1.c") == 1 || string_eq(p, "selfhost/gen1_min.c") == 1 || string_eq(p, "selfhost/gen2.c") == 1 || string_eq(p, "selfhost/gen3.c") == 1 || string_eq(p, "selfhost/gen4.c") == 1 || string_eq(p, "selfhost/boot_from_gen2.c") == 1 {
     give 1
   }
   when ends_with(p, ".c") == 1 {
@@ -856,7 +878,7 @@ make walk_counts(dir: str, counts: list, depth: num) -> num {
             counts[1] = counts[1] + 1
           }
           when ends_with(name, ".c") == 1 || ends_with(name, ".h") == 1 {
-            when string_eq(full, "selfhost/seed/sxc_seed_min.c") == 0 && is_generated_c_artifact(full) == 0 {
+            when is_generated_c_artifact(full) == 0 {
               counts[2] = counts[2] + 1
             }
           }
@@ -870,10 +892,9 @@ make walk_counts(dir: str, counts: list, depth: num) -> num {
 make cmd_inventory() -> num {
   hold counts = [0, 0, 0]
   hold w = walk_counts(".", counts, 0)
-  hold seed_ln = count_lines_in_file("selfhost/seed/sxc_seed_min.c")
+  hold seed_ln = count_lines_in_file("selfhost/seed/sxc_seed_min.sa")
   hold comp_ln = count_lines_in_file("selfhost/compiler_min.sa")
   hold nat_ln = count_lines_in_file("selfhost/native_aot.sa")
-  hold mk_ln = count_lines_in_file("Makefile")
   hold has_c_nat = 0
   when path_kind("selfhost/native_aot.c") == 1 {
     has_c_nat = 1
@@ -884,14 +905,20 @@ make cmd_inventory() -> num {
   show concat("  native_aot.sa lines:     ", istr(nat_ln))
   show concat("  native_aot.c present:    ", istr(has_c_nat))
   show concat("  non-anchor .c/.h files:  ", istr(counts[2]))
-  show concat("  sxc_seed_min.c lines:    ", istr(seed_ln))
-  show concat("  Makefile lines:          ", istr(mk_ln))
+  show concat("  sxc_seed_min.sa lines:    ", istr(seed_ln))
   show concat("  shell-scripts (.sh):     ", istr(counts[1]))
   give 0
 }
 
+use "tools/sxtargets_lib.sa"
+use "tools/sxmigration_lib.sa"
+use "tools/sxci_guard_lib.sa"
+use "tools/sxentry_lib.sa"
+use "tools/sxrelease_lib.sa"
+
 make usage_exit() -> num {
   hold m = "usage:\n"
+  m = concat(m, "  sxbuild target <name> [name ...]\n")
   m = concat(m, "  sxbuild doctor\n")
   m = concat(m, "  sxbuild build <in.sa> <out>\n")
   m = concat(m, "  sxbuild native <in.sa> <out>\n")
@@ -899,6 +926,11 @@ make usage_exit() -> num {
   m = concat(m, "  sxbuild parity <in.sa> <work_dir>\n")
   m = concat(m, "  sxbuild bootstrap <out_dir>\n")
   m = concat(m, "  sxbuild inventory\n")
+  m = concat(m, "  sxbuild migration\n")
+  m = concat(m, "  sx verify-entry\n")
+  m = concat(m, "  sx ci-guard | ci-guard-check\n")
+  m = concat(m, "  sx release-plan | release  (RELEASE_TAG required)\n")
+  m = concat(m, "  sx ci  (fail-closed full migration/CI gate)\n")
   hold w = write_file("/dev/stderr", m)
   hold stop = exit(2)
   give 0
@@ -911,6 +943,57 @@ when arg_count() < 2 {
 }
 hold subcmd = arg(1)
 hold handled = 0
+when string_eq(subcmd, "release-plan") == 1 {
+  handled = 1
+  hold release = cmd_release_plan()
+}
+when string_eq(subcmd, "release") == 1 {
+  handled = 1
+  hold release = cmd_release()
+}
+when string_eq(subcmd, "ci-guard") == 1 {
+  handled = 1
+  hold guard = cmd_ci_guard()
+}
+when string_eq(subcmd, "ci-guard-check") == 1 {
+  handled = 1
+  hold guard = cmd_ci_guard_check()
+}
+when string_eq(subcmd, "verify-entry") == 1 {
+  handled = 1
+  hold check = cmd_verify_entry()
+}
+when string_eq(subcmd, "ci") == 1 {
+  handled = 1
+  hold check = cmd_ci()
+}
+when string_eq(subcmd, "migration") == 1 {
+  handled = 1
+  hold report = cmd_migration()
+}
+when string_eq(subcmd, "target") == 1 {
+  handled = 1
+  when arg_count() < 3 {
+    hold u = usage_exit()
+  }
+  // Validate every requested target before performing any build or test.
+  hold i = 2
+  while i < arg_count() {
+    when target_known(arg(i)) == 0 {
+      hold e = fail(2, concat("target not migrated (no make fallback): ", arg(i)))
+    }
+    i = i + 1
+  }
+  i = 2
+  hold target_built = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  while i < arg_count() {
+    hold r = cmd_target(arg(i), target_built)
+    when string_eq(arg(i), "clean-plan") == 0 {
+      show concat("[OK] sxbuild target: ", arg(i))
+    }
+    i = i + 1
+  }
+}
 
 when string_eq(subcmd, "doctor") == 1 {
   handled = 1
