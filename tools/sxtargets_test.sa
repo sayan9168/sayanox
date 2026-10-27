@@ -33,6 +33,8 @@ when gl_has_line_starting(read_file(log), "[OK] Sayanox gate:") == 1 {
   hold e = gl_fail("test ran after prerequisite target failed")
 }
 rc = gl_run_merged("./tools/sxbuild target verify-seed restore-compiler seed-min test-struct test-list test-fn test-migrated", log)
+// Preserve the child diagnostic in CI instead of reporting only its exit code.
+when rc != 0 { show read_file(log) }
 hold gates = gl_assert_eq_num(rc, 0, "Sayanox-owned seed/build/test targets")
 show "[OK] Sayanox target-driver regression tests"
 
@@ -204,6 +206,7 @@ when arg_count() == 2 && string_eq(arg(1), "--without-make") == 1 {
   launch = concat(launch, concat(" ", gl_sh_quote(driver)))
   launch = concat(launch, " target test-ported test-ported-more test-memory test-remaining-language test-backend-modules test-package-acceptance test-front-end-acceptance test-native-ir-log test-native-ir-portable test-last-language test-native32 test-native-arm64 test-native-riscv64 test-sxmod test-migrated test-lsp test-lsp-robust test-stdlib-next test-stdlib-csv test-stdlib-extended test-ir-exec test-sxsuite test-native-stage2-parity")
   hold status = gl_run_merged(launch, path_real(log))
+  when status != 0 { show read_file(log) }
   hold passed = gl_assert_eq_num(status, 0, "gates run without Makefile")
   hold unused = gl_assert_eq_num(path_kind(invocation_log), 0, "make never invoked")
   show "[OK] no-Makefile integration: migrated gates pass, Sayanox make-poison never invoked"
