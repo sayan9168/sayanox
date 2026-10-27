@@ -15,6 +15,14 @@ hold c = gl_assert_eq_num(len(read_file(log)) > 0, 1, "unknown target diagnostic
 when gl_has_line_starting(read_file(log), "[OK]") == 1 {
   hold e = gl_fail("valid target executed before invalid-target validation")
 }
+// CI diagnostics must survive via the checks API without allowing a target
+// name's percent/newline bytes to create extra workflow-command lines.
+hold annotation_target = concat("missing%target", concat(chr(10), "next-line"))
+hold annotation_command = concat("GITHUB_ACTIONS=true ./tools/sxbuild target ", gl_sh_quote(annotation_target))
+hold annotation_rc = gl_run_merged(annotation_command, log)
+hold annotation_status = gl_assert_eq_num(annotation_rc, 2, "annotated failure preserves exit status")
+hold annotation_prefix = "::error title=Sayanox target failure::target not migrated (no make fallback): missing%25target%0Anext-line"
+hold annotation_line = gl_assert_eq_num(gl_has_line_starting(read_file(log), annotation_prefix), 1, "CI annotation escapes percent and newline")
 rc = gl_run_merged("./tools/sxbuild target sxfmt", log)
 hold fmt = gl_assert_eq_num(rc, 0, "formatter build")
 hold copy = concat(d, "/sxfmt.before")
