@@ -1,0 +1,270 @@
+// Bootstrap/acceptance closure in Sayanox; no recipe interpretation.
+use "tools/sxaggregate_targets_lib.sa"
+make ag_targets(names: str, built: list) -> num {
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    when len(name) > 0 { hold dep = cmd_target(name, built) }
+  }
+  give 0
+}
+make ag_case(compiler: str, name: str, source: str, want: str) -> num {
+  hold dir = gl_ensure_dir("selfhost/seed_tests/aggregate")
+  hold base = concat("selfhost/seed_tests/aggregate/", name)
+  hold input = concat(base, ".sa")
+  hold output = concat(base, ".c")
+  hold write = gl_must_write(input, source)
+  hold emit = bt_emit(compiler, input, output, 0)
+  hold cc = gl_compile_c(output, base, "-O2")
+  give gl_assert_out(sh_quote(base), want, concat(base, ".out"))
+}
+make ag_full_gen1(binary: num, built: list) -> num {
+  while len(built) < 13 { hold pad = push(built, 0) }
+  when built[12] == 0 {
+    hold seed = cmd_target("seed-bin", built)
+    hold restore = bt_restore()
+    hold regression = ag_seed_diagnostics()
+    hold emit = bt_emit("./selfhost/seed/sxc_seed", "selfhost/compiler_min.sa", "selfhost/gen1.c", 1)
+    built[12] = 1
+  }
+  when binary == 1 {
+    hold cmd = concat(sh_quote(cc_cmd()), " -O2 -o selfhost/gen1 selfhost/gen1.c -lm")
+    hold cc = target_run(cmd, "full-seed gen1 compiler")
+  }
+  give 0
+}
+make ag_gen3(built: list) -> num {
+  when len(built) > 11 && built[11] == 1 { give 0 }
+  hold fixed = bt_build(4, built)
+  hold reassign = ag_case("./selfhost/gen3", "g3_re", "hold n = 0\nhold n = 1\nhold n = 2\nshow n\n", "2")
+  hold loop = ag_case("./selfhost/gen3", "g3_wh", "hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow \"done\"\n", "0\n1\n2\ndone")
+  hold condition = ag_case("./selfhost/gen3", "g3_wn", "hold x = 2\nwhen x == 1 {\n  show 11\n}\nshow 99\n", "99")
+  hold mod = ag_case("./selfhost/gen3", "g3_mod", "hold a = 10\nshow a % 3\nwhen a > 5 { show 1 } else { show 0 }\n", "1\n1")
+  hold suite = target_native_tool("sxsuite")
+  hold features = target_run("SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite compiler_features", "gen3 compiler features")
+  hold structs = target_run("SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite struct_fn", "gen3 struct functions")
+  hold interpolation = target_run("SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite stage2_interp", "gen3 interpolation")
+  hold readiness = target_run("SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite full_lang_ready", "gen3 broader-language closure probes")
+  while len(built) < 12 { hold pad = push(built, 0) }
+  built[11] = 1
+  show "=== GEN3-OK ==="
+  give 0
+}
+make ag_minimum(built: list) -> num {
+  when len(built) > 10 && built[10] == 1 { give 0 }
+  hold seed = cmd_target("seed-min-gen1", built)
+  hold gen2 = bt_build(2, built)
+  hold gates = ag_targets(ag_minimum_targets(), built)
+  when files_byte_equal("selfhost/gen1_min.c", "selfhost/gen2.c") == 1 { give fail(1, "frozen copy: gen1_min.c equals gen2.c") }
+  hold boot = cmd_target("test-boot", built)
+  while len(built) < 12 { hold pad = push(built, 0) }
+  built[10] = 1
+  show "=== TRUE-SELFHOST-MIN-OK ==="
+  give 0
+}
+make ag_sanitize(built: list) -> num {
+  hold prereqs = ag_targets("test-seed-borrow\ntest-seed-list-budget\ntest-seed-collector\n", built)
+  hold flags = getenv("SANITIZER_FLAGS")
+  when len(flags) == 0 { flags = "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie" }
+  hold names = "borrow\nborrow-stress\nseed-list-budget\nsgc_drop_ms\nbuilder-registry\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold base = concat("selfhost/seed_tests/", name)
+    hold asan = concat(base, "-asan")
+    hold cc = gl_compile_c(concat(base, ".c"), asan, flags)
+    hold cmd = concat("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ", sh_quote(asan))
+    cmd = concat(cmd, concat(" > ", sh_quote(concat(asan, ".out"))))
+    cmd = concat(cmd, concat(" 2> ", sh_quote(concat(asan, ".err"))))
+    hold run = target_run(cmd, concat("ASan/UBSan: ", name))
+    when string_eq(name, "builder-registry") == 1 {
+      hold value = gl_assert_eq_str(gl_strip_trailing_nl(read_file(concat(asan, ".out"))), "registry-ok", "sanitized registry output")
+    } otherwise {
+      hold plain = concat(base, "-plain.out")
+      hold normal = target_run(concat(sh_quote(base), concat(" > ", sh_quote(plain))), "unsanitized oracle")
+      hold parity = gl_assert_files_eq(plain, concat(asan, ".out"), "sanitizer/plain output parity")
+    }
+  }
+  // An independent negative control proves that ASan still catches a real
+  // string-buffer read fault; no blanket no_sanitize attribute is used.
+  hold probe = "selfhost/seed_tests/asan-active"
+  hold source = gl_must_write(concat(probe, ".sa"), "hold asan_probe = concat(\"a\", \"bc\")\nshow len(asan_probe)\n")
+  hold emit = bt_emit("./selfhost/gen2", concat(probe, ".sa"), concat(probe, ".c"), 0)
+  hold text = read_file(concat(probe, ".c"))
+  hold token = "sx_len(asan_probe)"
+  hold at = mxl_find_sub(text, token)
+  when at < 0 { give fail(1, "sanitizer negative-control lowering drifted") }
+  text = concat(gl_slice(text, 0, at), concat("sx_len(asan_probe + 64)", gl_slice(text, at + len(token), len(text))))
+  hold write = gl_must_write(concat(probe, ".bad.c"), text)
+  hold cc = gl_compile_c(concat(probe, ".bad.c"), concat(probe, ".bad"), flags)
+  hold command = concat("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ", sh_quote(concat(probe, ".bad")))
+  hold status = gl_run_merged(command, concat(probe, ".bad.err"))
+  when status == 0 || mxl_find_sub(read_file(concat(probe, ".bad.err")), "AddressSanitizer") < 0 { give fail(1, "ASan failed to detect the corrupted string read") }
+  show "[OK] ASan/UBSan: five fixtures; leak detection explicitly OFF"
+  give 0
+}
+make ag_run(name: str, built: list) -> num {
+  when string_eq(name, "native-bootstrap") == 1 { give bt_build(3, built) }
+  when string_eq(name, "test-native-bootstrap") == 1 {
+    hold ready = bt_build(3, built)
+    hold runner = target_native_tool("sxnative_bootstrap_test")
+    give target_run("./tools/sxnative_bootstrap_test", "isolated native bootstrap acceptance")
+  }
+  when string_eq(name, "test-recovery") == 1 {
+    hold runner = target_native_tool("sxrecovery_test")
+    give target_run("./tools/sxrecovery_test", "cold entry recovery acceptance")
+  }
+  when string_eq(name, "test-full-seed-diagnostics") == 1 {
+    hold seed = cmd_target("seed-bin", built)
+    give ag_seed_diagnostics()
+  }
+  when string_eq(name, "ci") == 1 { give cmd_ci() }
+  when string_eq(name, "test-network") == 1 {
+    hold http = cmd_target("test-http-get", built)
+    give cmd_target("test-sayacrawl", built)
+  }
+  when string_eq(name, "test-http-get") == 1 || string_eq(name, "test-sayacrawl") == 1 {
+    hold ready = target_mask_ready(71, built)
+    hold server = target_native_tool("sxnet_server")
+    hold transport = target_native_tool("sxnet_curl")
+    hold runner = target_native_tool("sxnet_test")
+    when string_eq(name, "test-http-get") == 1 {
+      give target_run("./tools/sxnet_test http-get ./selfhost/gen2 ./selfhost/seed/sxc_seed_min ./selfhost/seed/sxc_seed ./selfhost/native_aot", name)
+    }
+    give target_run("./tools/sxnet_test sayacrawl ./selfhost/gen2 sayascrape/crawl.sa", name)
+  }
+  when string_eq(name, "native-test") == 1 {
+    hold before = ag_targets(ag_native_before(), built)
+    hold ready = target_mask_ready(7, built)
+    hold body = target_run("./tools/sxgates native-test-body", "original native acceptance matrix")
+    hold after = ag_targets(ag_native_after(), built)
+    show "=== NATIVE-TEST-OK ==="
+    give 0
+  }
+  when string_eq(name, "native-test-body") == 1 {
+    hold ready = target_mask_ready(7, built)
+    give target_run("./tools/sxgates native-test-body", "original native acceptance matrix")
+  }
+  when string_eq(name, "test-language-deps") == 1 { give ag_language_deps(built) }
+  when string_eq(name, "selfhost/gen1.c") == 1 { give ag_full_gen1(0, built) }
+  when string_eq(name, "selfhost/gen1") == 1 { give ag_full_gen1(1, built) }
+  when string_eq(name, "gen3") == 1 { give ag_gen3(built) }
+  when string_eq(name, "test-seed-sanitize") == 1 { give ag_sanitize(built) }
+  when string_eq(name, "gc-test") == 1 {
+    when path_kind(sxc_native_bin()) != 1 { hold compiler = bt_build(3, built) }
+    hold compile = target_run("./tools/sxc_native selfhost/rc_runtime_stress.sa selfhost/seed_tests/rc_runtime_stress", "RC stress compile")
+    hold output = gl_assert_out("./selfhost/seed_tests/rc_runtime_stress", "2005\ngc-rc-ok", "selfhost/seed_tests/rc_runtime_stress.out")
+    show "=== GC-RC-OK ==="
+    give 0
+  }
+  when string_eq(name, "subset") == 1 {
+    hold seed = cmd_target("seed-bin", built)
+    hold source = gl_must_write("selfhost/_smoke.sa", "hold x = 42\nshow x\n")
+    hold emit = bt_emit("./selfhost/seed/sxc_seed", "selfhost/_smoke.sa", "selfhost/_smoke.c", 1)
+    hold cc = gl_compile_c("selfhost/_smoke.c", "selfhost/_smoke", "-O2 -lm")
+    hold output = gl_assert_out("./selfhost/_smoke", "42", "selfhost/seed_tests/subset.out")
+    show "=== SUBSET-SELFHOST-OK ==="
+    give 0
+  }
+  hold minimum = ag_minimum(built)
+  when string_eq(name, "true-selfhost-full") == 1 {
+    hold gen3 = ag_gen3(built)
+    hold ready = cmd_target("test-full-language-readiness", built)
+    give cmd_full_claim_refusal()
+  }
+  when string_eq(name, "grammar") == 1 {
+    hold grammar = ag_case("./selfhost/gen2", "grammar", "hold n = 0\nwhile n < 3 {\n  hold n = n + 1\n}\nwhen n == 3 {\n  show \"grammar-ok\"\n} otherwise {\n  show \"grammar-fail\"\n}\n", "grammar-ok")
+    show "=== GRAMMAR-OK ==="
+  }
+  when string_eq(name, "test") == 1 { show "TEST-OK" }
+  give 0
+}
+
+make ag_no_scripts(d: str) -> num {
+  hold names = read_dir(d)
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    when len(name) > 0 && string_eq(name, ".git") == 0 {
+      hold file = concat(d, concat("/", name))
+      when path_kind(file) == 2 { hold recurse = ag_no_scripts(file) }
+      when path_kind(file) == 1 && len(name) >= 3 && string_eq(gl_slice(name, len(name) - 3, len(name)), ".sh") == 1 { give fail(1, concat("shell script remains: ", file)) }
+    }
+  }
+  give 0
+}
+make ag_language_deps(built: list) -> num {
+  hold ready = target_mask_ready(7, built)
+  hold scripts = ag_no_scripts(".")
+  when path_kind("Makefile") != 0 { give fail(1, "retired build file reappeared") }
+  when path_kind("tools/lsp_workspace_bind.awk") != 0 || path_kind("tools/lsp_workspace_bind.sa") != 0 || path_kind("tools/lsp_workspace.h") != 0 { give fail(1, "retired LSP bridge reappeared") }
+  hold lsp_source = read_file("tools/sayanox_lsp.sa")
+  when mxl_find_sub(lsp_source, "make workspace_manifest") < 0 || mxl_find_sub(lsp_source, "read_dir(") < 0 { give fail(1, "LSP no longer owns its directory index") }
+  when mxl_find_sub(read_file("tools/sxpack_lib.sa"), "pos + 1100") < 0 || mxl_find_sub(read_file("tools/sxpack.sa"), "use \"tools/sxpack_lib.sa\"") < 0 { give fail(1, "shared sxpack codec/chunk size changed") }
+  hold packer = target_native_tool("sxpack")
+  hold verify = target_run("./tools/sxpack verify", "Sayanox compiler recovery audit")
+  hold lsp = target_native_tool("sayanox_lsp")
+  hold pkg = target_native_tool("sxpkg")
+  hold probe = target_native_tool("sxlsp_probe")
+  hold transfer = target_native_tool("sxpkg_transfer_test")
+  hold dir = "selfhost/seed_tests/language-deps"
+  hold clean = gl_clean_dir(dir)
+  hold bin = concat(dir, "/bin")
+  hold mkdir = gl_ensure_dir(bin)
+  hold absolute = path_real(dir)
+  hold marker = concat(absolute, "/invoked")
+  hold names = "bash\nawk\nsed\npython3\npython\nperl\nnode\nruby\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold shim = cg_emit(concat(bin, concat("/", name)), marker, name)
+  }
+  hold prefix = concat("PATH=", concat(sh_quote(concat(path_real(bin), concat(":", getenv("PATH")))), " "))
+  hold first = concat(absolute, "/lsp.c")
+  hold second = concat(absolute, "/lsp-again.c")
+  hold native = concat(absolute, "/lsp.elf")
+  hold compile1 = target_run(concat(prefix, concat("./selfhost/gen2 tools/sayanox_lsp.sa ", sh_quote(first))), "guarded gen2 LSP build")
+  hold compile2 = target_run(concat(prefix, concat("./selfhost/gen2 tools/sayanox_lsp.sa ", sh_quote(second))), "guarded repeated LSP build")
+  hold compile3 = target_run(concat(prefix, concat("./tools/sxc_native tools/sayanox_lsp.sa ", sh_quote(native))), "guarded native LSP build")
+  hold c_equal = gl_assert_files_eq(first, second, "guarded deterministic C lowering")
+  hold elf_equal = gl_assert_files_eq(native, "tools/sayanox_lsp", "guarded native LSP byte parity")
+  hold command = concat(prefix, "./tools/sxbuild target test-lsp test-lsp-robust test-native-ir-log test-native-mem test-seed-gc test-seed-generics test-sxpkg-online-local test-sxpkg-sayanox-logic")
+  hold status = gl_run_merged(command, concat(absolute, "/acceptance.log"))
+  when path_kind(marker) != 0 { give fail(1, concat("removed interpreter invoked; evidence: ", marker)) }
+  when status != 0 { give fail(1, concat("guarded acceptance failed; log: ", concat(absolute, "/acceptance.log"))) }
+  show "[OK] language dependencies: native recording guards; no bash/awk/sed/Python/Perl/Node/Ruby invoked"
+  give 0
+}
+
+// Regression for the full-seed compiler rejecting quoted diagnostic text.
+make ag_seed_diagnostics() -> num {
+  hold quoted = ag_case("./selfhost/seed/sxc_seed", "full_seed_diagnostic_data", "show \"#error is diagnostic data\"\n", "#error is diagnostic data")
+  hold runtime_data = ag_case("./selfhost/seed/sxc_seed", "full_seed_runtime_data", "show \"static double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\"\nshow \"return sx_status;\"\n", "static double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\nreturn sx_status;")
+  hold dir = "selfhost/seed_tests/aggregate/"
+  hold source = concat(dir, "full_seed_invalid.sa")
+  hold output = concat(dir, "full_seed_invalid.c")
+  hold write = gl_must_write(source, "show nonexistent_identifier\n")
+  hold command = concat("./selfhost/seed/sxc_seed ", concat(sh_quote(source), concat(" ", sh_quote(output))))
+  hold log = concat(dir, "full_seed_invalid.err")
+  when gl_run_merged(command, log) == 0 { give fail(1, "full seed accepted a real generated error directive") }
+  when mxl_find_sub(read_file(log), "#error sayanox-min:") < 0 { give fail(1, "full seed lost its real refusal diagnostic") }
+  hold stdout_c = concat(dir, "full_seed_stdout.c")
+  command = concat("./selfhost/seed/sxc_seed ", concat(sh_quote(concat(dir, "full_seed_diagnostic_data.sa")), concat(" > ", sh_quote(stdout_c))))
+  hold stdout_mode = target_run(command, "full seed stdout temporary cleanup")
+  hold compile = gl_compile_c(stdout_c, concat(dir, "full_seed_stdout"), "-O2 -lm")
+  hold run = gl_assert_out(sh_quote(concat(dir, "full_seed_stdout")), "#error is diagnostic data", concat(dir, "full_seed_stdout.out"))
+  show "[OK] full-seed diagnostics: quoted directive accepted, real error refused, stdout temporary path exercised"
+  give 0
+}

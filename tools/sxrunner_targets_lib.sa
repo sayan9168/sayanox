@@ -1,0 +1,120 @@
+// Orchestration of existing Sayanox acceptance-suite executables. No make.
+make rt_suite(name: str) -> str {
+  when string_eq(name, "test-full-language-readiness") == 1 { give "full_lang_ready" }
+  when string_eq(name, "test-struct-functions") == 1 { give "struct_fn" }
+  when string_eq(name, "test-string-interpolation") == 1 { give "stage2_interp" }
+  when string_eq(name, "test-emit-to-ir") == 1 { give "ir_audit" }
+  when string_eq(name, "test-sxsuite") == 1 { give "all" }
+  give ""
+}
+
+make rt_lsp_client(name: str) -> str {
+  when string_eq(name, "test-lsp-workspace") == 1 { give "lsp_workspace_test" }
+  when string_eq(name, "test-lsp-semantic") == 1 { give "lsp_semantic_test" }
+  when string_eq(name, "test-lsp-types") == 1 { give "lsp_types_test" }
+  when string_eq(name, "test-lsp-ide") == 1 { give "lsp_ide_test" }
+  give ""
+}
+
+make rt_known(name: str) -> num {
+  when string_eq(name, "test-driver") == 1 { give 1 }
+  when len(rt_suite(name)) > 0 || len(rt_lsp_client(name)) > 0 { give 1 }
+  when string_eq(name, "test-native-stage2-parity") == 1 || string_eq(name, "test-sxpkg-pubkey") == 1 || string_eq(name, "test-sxpkg-transfer-hardening") == 1 || string_eq(name, "test-sxc-native") == 1 || string_eq(name, "test-sxisaexec") == 1 || string_eq(name, "test-sxmod-deep") == 1 || string_eq(name, "test-lsp") == 1 || string_eq(name, "test-lsp-robust") == 1 {
+    give 1
+  }
+  give 0
+}
+
+make rt_baseline(built: list) -> num {
+  when path_kind("selfhost/seed/sxc_seed_min") != 1 { hold dep = bt_build(0, built) }
+  when path_kind("selfhost/gen2") != 1 { hold dep = bt_build(2, built) }
+  when built[5] == 0 {
+    hold dep = target_native_tool("native_aot")
+    built[5] = 1
+  }
+  give 0
+}
+
+make rt_run_client(name: str, built: list) -> num {
+  when built[6] == 0 {
+    hold dep = target_native_tool("sayanox_lsp")
+    built[6] = 1
+  }
+  hold client = rt_lsp_client(name)
+  hold tool = target_native_tool(client)
+  hold folder = "selfhost/seed_tests/lsp_types"
+  when string_eq(name, "test-lsp-workspace") == 1 { folder = "selfhost/seed_tests/lsp workspace" }
+  when string_eq(name, "test-lsp-semantic") == 1 { folder = "selfhost/seed_tests/lsp semantic" }
+  when string_eq(name, "test-lsp-ide") == 1 { folder = "selfhost/seed_tests/lsp_ide" }
+  hold dir = gl_clean_dir(folder)
+  hold server = path_real("tools/sayanox_lsp")
+  hold absolute_folder = path_real(folder)
+  when len(server) == 0 || len(absolute_folder) == 0 { hold e = fail(1, "LSP paths could not be canonicalized") }
+  hold cmd = concat(concat("./tools/", client), " ")
+  cmd = concat(cmd, concat(sh_quote(server), " "))
+  give target_run(concat(cmd, sh_quote(absolute_folder)), name)
+}
+
+make rt_run(name: str, built: list) -> num {
+  when string_eq(name, "test-driver") == 1 {
+    hold driver = target_native_tool("sxbuild")
+    hold tool = target_native_tool("sxtargets_test")
+    give target_run("./tools/sxtargets_test --without-make", name)
+  }
+  when len(rt_lsp_client(name)) > 0 { give rt_run_client(name, built) }
+  when string_eq(name, "test-lsp") == 1 || string_eq(name, "test-lsp-robust") == 1 {
+    hold a = rt_run_client("test-lsp-workspace", built)
+    hold b = rt_run_client("test-lsp-semantic", built)
+    hold c = rt_run_client("test-lsp-types", built)
+    hold d = rt_run_client("test-lsp-ide", built)
+    hold unicode = cmd_target("test-lsp-unicode", built)
+    give rt_lsp_probe(name)
+  }
+  when string_eq(name, "test-sxpkg-transfer-hardening") == 1 {
+    hold a = target_native_tool("sxpkg")
+    hold b = target_native_tool("sxpkg_transfer_test")
+    give target_run("./tools/sxpkg_transfer_test", name)
+  }
+  hold baseline = rt_baseline(built)
+  hold suite = rt_suite(name)
+  when len(suite) > 0 {
+    hold tool = target_native_tool("sxsuite")
+    hold emitter = target_native_tool("emit_to_ir")
+    hold cmd = concat("./tools/sxsuite ", suite)
+    when string_eq(name, "test-emit-to-ir") == 1 { cmd = concat(cmd, " selfhost/seed_tests/emit-tool") }
+    hold run = target_run(cmd, name)
+    when string_eq(name, "test-sxsuite") == 1 {
+      when run_command("./tools/sxsuite bogus >/dev/null 2>&1") == 0 { hold e = fail(1, "sxsuite accepted unknown suite") }
+    }
+    give 0
+  }
+  when string_eq(name, "test-native-stage2-parity") == 1 {
+    hold tool = target_native_tool("sxstage2_parity")
+    give target_run("./tools/sxstage2_parity selfhost/seed_tests/stage2_parity", name)
+  }
+  when string_eq(name, "test-sxpkg-pubkey") == 1 {
+    hold a = target_native_tool("sxpkg")
+    hold b = target_native_tool("sxpkg_pubkey_test")
+    give target_run("./tools/sxpkg_pubkey_test selfhost/seed_tests/sxpkg_pubkey", name)
+  }
+  hold runner = "sxc_native_test"
+  hold folder = "selfhost/seed_tests/sxc_native_gate"
+  when string_eq(name, "test-sxisaexec") == 1 {
+    hold a = target_native_tool("sxisaexec")
+    hold b = target_native_tool("native32")
+    hold c = target_native_tool("sxirexec")
+    hold d = target_native_tool("emit_to_ir")
+    runner = "sxisaexec_test"
+    folder = "selfhost/seed_tests/sxisaexec_gate"
+  }
+  when string_eq(name, "test-sxmod-deep") == 1 {
+    hold a = target_native_tool("sxmod")
+    hold b = target_native_tool("sxbuild")
+    runner = "sxmod_deep_test"
+    folder = "selfhost/seed_tests/sxmod_deep_gate"
+  }
+  hold tool = target_native_tool(runner)
+  hold dir = gl_clean_dir(folder)
+  hold cmd = concat(concat("./tools/", runner), " ")
+  give target_run(concat(cmd, sh_quote(folder)), name)
+}

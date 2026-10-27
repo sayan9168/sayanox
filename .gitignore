@@ -71,3 +71,34 @@ tools/sxnet_test
 tools/sxarch_aot
 tools/sxarch_aot_test
 tools/sxdiag.c
+
+/tools/sxgates
+
+# Atomic Sayanox-driver build staging files
+*.sxbuild_new
+
+# Native Sayanox LSP acceptance clients
+/tools/lsp_workspace_test
+/tools/lsp_semantic_test
+/tools/lsp_types_test
+
+/tools/sxtargets_test
+
+/selfhost/boot_from_gen2.c.err
+
+# Native Sayanox loopback fixture helpers
+/tools/sxnet_server
+/tools/sxnet_curl
+/selfhost/_smoke
+/selfhost/_smoke.c
+/selfhost/_smoke.sa
+
+/tools/sxrecovery_test
+
+/tools/sxnative_bootstrap_test
+/native-bootstrap-reconstruction.log
+
+/selfhost/native_c_emitter
+
+# Local bootstrap diagnostics
+/bootstrap-work.log

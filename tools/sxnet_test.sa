@@ -109,46 +109,49 @@ make cc_bin() -> str {
   give "cc"
 }
 
-make has_python3() -> num {
-  when run_command("command -v python3 >/dev/null 2>&1") == 0 {
-    give 1
-  }
-  give 0
+// Private native test transport: no Python server or external curl/wget.
+use "tools/sxnet_io_lib.sa"
+make net_setup() -> num {
+  hold dir = "selfhost/seed_tests/net-runtime"
+  hold clean = ns_clean(dir)
+  when make_dir(concat(dir, "/bin")) != 1 { give ns_fail("cannot create private transport PATH") }
+  hold server = ns_emit(concat(dir, "/socket-server"), 0)
+  hold client = ns_emit(concat(dir, "/socket-client"), 1)
+  when server != 0 || client != 0 { give ns_fail("cannot publish native socket bindings") }
+  hold bytes = []
+  hold size = read_bytes("tools/sxnet_curl", bytes)
+  when size < 128 || write_bytes(concat(dir, "/bin/curl"), bytes) != 1 { give ns_fail("cannot install Sayanox fixture transport") }
+  give run_command("chmod 0700 selfhost/seed_tests/net-runtime/bin/curl")
 }
-
-// Start a local 127.0.0.1 HTTP server serving `serve_dir`, writing `<port>` to
-// `port_file` and `<pid>` to `pid_file` so we can terminate it deterministically.
+make net_run(cmd: str) -> num {
+  hold bin = path_real("selfhost/seed_tests/net-runtime/bin")
+  when len(bin) == 0 { give ns_fail("private transport PATH not prepared") }
+  hold prefix = concat("PATH=", concat(sh_q(concat(bin, concat(":", getenv("PATH")))), " "))
+  give run_command(concat(prefix, cmd))
+}
 make start_local_http(serve_dir: str, port_file: str, pid_file: str) -> str {
-  hold nl = chr(10)
-  hold py_f = concat(port_file, ".py")
-  hold py = ""
-  py = concat(py, concat("import http.server, os, sys", nl))
-  py = concat(py, concat("os.chdir(sys.argv[1])", nl))
-  py = concat(py, concat("class Q(http.server.SimpleHTTPRequestHandler):", nl))
-  py = concat(py, concat("    def log_message(self, *a): pass", nl))
-  py = concat(py, concat("s = http.server.HTTPServer(('127.0.0.1', 0), Q)", nl))
-  py = concat(py, concat("open(sys.argv[2], 'w').write(str(s.server_address[1]) + '\\n')", nl))
-  py = concat(py, concat("open(sys.argv[3], 'w').write(str(os.getpid()) + '\\n')", nl))
-  py = concat(py, concat("s.serve_forever()", nl))
-  hold wp = write_file(py_f, py)
-  hold rm1 = remove_path(port_file)
-  hold rm2 = remove_path(pid_file)
-  hold cmd = concat("python3 ", concat(sh_q(py_f), concat(" ", concat(sh_q(serve_dir), concat(" ", concat(sh_q(port_file), concat(" ", concat(sh_q(pid_file), " >/dev/null 2>&1 &"))))))))
-  hold rc = run_command(cmd)
-  hold tries = 0
-  while tries < 80 && path_kind(port_file) != 1 {
-    hold sl = run_command("sleep 0.05")
-    tries = tries + 1
-  }
+  hold h = spawn(path_real("tools/sxnet_server"))
+  when h <= 0 { give "" }
+  hold config = concat(serve_dir, concat("\n", concat(port_file, concat("\n", concat(pid_file, concat("\n", concat(path_real("selfhost/seed_tests/net-runtime/socket-server"), "\n")))))))
+  hold sent = child_send(h, config)
+  hold saved = write_file(concat(pid_file, ".handle"), ns_dec(h))
+  when string_eq(child_line(h), "READY") == 0 { hold closed = child_close(h)
+    hold remove_handle = remove_path(concat(pid_file, ".handle"))
+    give "" }
   give strip_ws(read_file(port_file))
 }
-
 make stop_local_http(pid_file: str) -> num {
+  when len(pid_file) == 0 { give 0 }
   when path_kind(pid_file) == 1 {
-    hold pid = strip_ws(read_file(pid_file))
-    when len(pid) > 0 {
-      hold k = run_command(concat("kill ", concat(sh_q(pid), " >/dev/null 2>&1 || true")))
-    }
+    hold pid = ns_decimal(read_file(pid_file))
+    when pid > 1 { hold kill = run_command(concat("kill ", concat(ns_dec(pid), " >/dev/null 2>&1"))) }
+    hold rm_pid = remove_path(pid_file)
+  }
+  hold hf = concat(pid_file, ".handle")
+  when path_kind(hf) == 1 {
+    hold h = ns_decimal(read_file(hf))
+    hold closed = child_close(h)
+    hold rm_handle = remove_path(hf)
   }
   give 0
 }
@@ -167,19 +170,13 @@ make fail_with_cleanup(msg: str, pid1: str, pid2: str) -> num {
 // ---- Subcommand 1: http-get -----------------------------------------------
 
 make run_http_get(gen2: str, seed_min: str, seed_bin: str, nat_bin: str) -> num {
-  when has_python3() != 1 {
-    show "[SKIP] test-http-get: no python3 for local server"
-    give 0
-  }
   hold nl = chr(10)
   hold q = chr(34)
   hold sq = chr(39)
   hold cc = cc_bin()
 
   hold work_rel = "selfhost/seed_tests/http_get"
-  when run_command(concat("rm -rf ", concat(sh_q(work_rel), concat(" && mkdir -p ", sh_q(work_rel))))) != 0 {
-    hold fw = fail_with_cleanup("cannot create http_get workdir", "", "")
-  }
+  hold clean_work = ns_clean(work_rel)
   hold work = path_real(work_rel)
   hold srv = concat(work, "/srv")
   hold ms = make_dir(srv)
@@ -213,13 +210,13 @@ make run_http_get(gen2: str, seed_min: str, seed_bin: str, nat_bin: str) -> num 
   hold g2_c = concat(work, "/t_g2.c")
   hold g2_b = concat(work, "/t_g2")
   hold g2_o = concat(work, "/g2.out")
-  when run_command(concat(sh_q(gen2), concat(" ", concat(sh_q(t_sa), concat(" ", concat(sh_q(g2_c), " >/dev/null")))))) != 0 {
+  when net_run(concat(sh_q(gen2), concat(" ", concat(sh_q(t_sa), concat(" ", concat(sh_q(g2_c), " >/dev/null")))))) != 0 {
     hold fg1 = fail_with_cleanup("gen2 compile failed on http_get", pid_f, "")
   }
-  when run_command(concat(cc, concat(" -O2 -o ", concat(sh_q(g2_b), concat(" ", sh_q(g2_c)))))) != 0 {
+  when net_run(concat(cc, concat(" -O2 -o ", concat(sh_q(g2_b), concat(" ", sh_q(g2_c)))))) != 0 {
     hold fg2 = fail_with_cleanup("gen2 C build failed on http_get", pid_f, "")
   }
-  when run_command(concat(sh_q(g2_b), concat(" > ", sh_q(g2_o)))) != 0 {
+  when net_run(concat(sh_q(g2_b), concat(" > ", sh_q(g2_o)))) != 0 {
     hold fg3 = fail_with_cleanup("gen2 http_get binary failed", pid_f, "")
   }
   when string_eq(read_file(g2_o), want) != 1 {
@@ -233,13 +230,13 @@ make run_http_get(gen2: str, seed_min: str, seed_bin: str, nat_bin: str) -> num 
   hold sm_c = concat(work, "/t_sm.c")
   hold sm_b = concat(work, "/t_sm")
   hold sm_o = concat(work, "/sm.out")
-  when run_command(concat(sh_q(seed_min), concat(" ", concat(sh_q(t_sa), concat(" > ", sh_q(sm_c)))))) != 0 {
+  when net_run(concat(sh_q(seed_min), concat(" ", concat(sh_q(t_sa), concat(" > ", sh_q(sm_c)))))) != 0 {
     hold fsm1 = fail_with_cleanup("seed_min compile failed on http_get", pid_f, "")
   }
-  when run_command(concat(cc, concat(" -O2 -o ", concat(sh_q(sm_b), concat(" ", sh_q(sm_c)))))) != 0 {
+  when net_run(concat(cc, concat(" -O2 -o ", concat(sh_q(sm_b), concat(" ", sh_q(sm_c)))))) != 0 {
     hold fsm2 = fail_with_cleanup("seed_min C build failed on http_get", pid_f, "")
   }
-  when run_command(concat(sh_q(sm_b), concat(" > ", sh_q(sm_o)))) != 0 {
+  when net_run(concat(sh_q(sm_b), concat(" > ", sh_q(sm_o)))) != 0 {
     hold fsm3 = fail_with_cleanup("seed_min http_get binary failed", pid_f, "")
   }
   when string_eq(read_file(sm_o), want) != 1 {
@@ -250,13 +247,13 @@ make run_http_get(gen2: str, seed_min: str, seed_bin: str, nat_bin: str) -> num 
   hold sd_c = concat(work, "/t_sd.c")
   hold sd_b = concat(work, "/t_sd")
   hold sd_o = concat(work, "/sd.out")
-  when run_command(concat(sh_q(seed_bin), concat(" ", concat(sh_q(t_sa), concat(" > ", sh_q(sd_c)))))) != 0 {
+  when net_run(concat(sh_q(seed_bin), concat(" ", concat(sh_q(t_sa), concat(" > ", sh_q(sd_c)))))) != 0 {
     hold fsd1 = fail_with_cleanup("sxc_seed compile failed on http_get", pid_f, "")
   }
-  when run_command(concat(cc, concat(" -std=gnu99 -O2 -o ", concat(sh_q(sd_b), concat(" ", concat(sh_q(sd_c), " -lm")))))) != 0 {
+  when net_run(concat(cc, concat(" -std=gnu99 -O2 -o ", concat(sh_q(sd_b), concat(" ", concat(sh_q(sd_c), " -lm")))))) != 0 {
     hold fsd2 = fail_with_cleanup("sxc_seed C build failed on http_get", pid_f, "")
   }
-  when run_command(concat(sh_q(sd_b), concat(" > ", sh_q(sd_o)))) != 0 {
+  when net_run(concat(sh_q(sd_b), concat(" > ", sh_q(sd_o)))) != 0 {
     hold fsd3 = fail_with_cleanup("sxc_seed http_get binary failed", pid_f, "")
   }
   when string_eq(read_file(sd_o), want) != 1 {
@@ -266,7 +263,7 @@ make run_http_get(gen2: str, seed_min: str, seed_bin: str, nat_bin: str) -> num 
   // 4. native_aot must explicitly refuse http_get
   hold nat_err = concat(work, "/nat.err")
   hold nat_out = concat(work, "/t_nat")
-  when run_command(concat(sh_q(nat_bin), concat(" ", concat(sh_q(t_sa), concat(" ", concat(sh_q(nat_out), concat(" >", concat(sh_q(nat_err), " 2>&1")))))))) == 0 {
+  when net_run(concat(sh_q(nat_bin), concat(" ", concat(sh_q(t_sa), concat(" ", concat(sh_q(nat_out), concat(" >", concat(sh_q(nat_err), " 2>&1")))))))) == 0 {
     hold fn1 = fail_with_cleanup("native_aot unexpectedly accepted http_get", pid_f, "")
   }
   when contains(read_file(nat_err), "http_get is not supported by the native backend") != 1 {
@@ -287,32 +284,20 @@ make run_sayacrawl(gen2: str, crawl_sa: str) -> num {
   hold cc = cc_bin()
 
   hold work_rel = "selfhost/seed_tests/sayacrawl"
-  hold prep = concat("rm -rf ", concat(sh_q(work_rel), concat(" && mkdir -p ", sh_q(work_rel))))
-  when run_command(prep) != 0 {
-    hold fw = fail_with_cleanup("cannot create sayacrawl workdir", "", "")
-  }
+  hold clean_work = ns_clean(work_rel)
   hold work = path_real(work_rel)
   hold crawl_c = concat(work, "/crawl.c")
   hold crawl_b = concat(work, "/crawl")
   hold c_cmd1 = concat(sh_q(gen2), concat(" ", concat(sh_q(crawl_sa), concat(" ", concat(sh_q(crawl_c), " >/dev/null")))))
-  when run_command(c_cmd1) != 0 {
+  when net_run(c_cmd1) != 0 {
     hold fc1 = fail_with_cleanup("gen2 failed to compile sayascrape/crawl.sa", "", "")
   }
   hold c_cmd2 = concat(cc, concat(" -O2 -o ", concat(sh_q(crawl_b), concat(" ", concat(sh_q(crawl_c), " -lm")))))
-  when run_command(c_cmd2) != 0 {
+  when net_run(c_cmd2) != 0 {
     hold fc2 = fail_with_cleanup("C build failed on sayascrape/crawl.c", "", "")
   }
 
   hold noauth_f = concat(work, "/noauth.txt")
-  when has_python3() != 1 {
-    hold na0 = run_command(concat(sh_q(crawl_b), concat(" http://127.0.0.1:9/index.html 127.0.0.1:9 > ", sh_q(noauth_f))))
-    when contains(read_file(noauth_f), "REFUSED: usage: crawl --authorized") != 1 {
-      hold fnb = fail_with_cleanup("missing --authorized diagnostic", "", "")
-    }
-    show "[SKIP] test-sayacrawl: no python3 for local fixture server (--authorized refusal checked)"
-    give 0
-  }
-
   hold site1 = concat(work, "/site")
   hold site1_priv = concat(site1, "/private")
   hold bare = concat(work, "/bare")
@@ -368,7 +353,7 @@ make run_sayacrawl(gen2: str, crawl_sa: str) -> num {
   want_full = concat(want_full, concat("DONE pages=6", nl))
 
   hold full_f = concat(work, "/full.txt")
-  hold r_full = run_command(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start1), concat(" ", concat(sh_q(host1), concat(" > ", sh_q(full_f))))))))
+  hold r_full = net_run(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start1), concat(" ", concat(sh_q(host1), concat(" > ", sh_q(full_f))))))))
   when r_full != 0 || string_eq(read_file(full_f), want_full) != 1 {
     hold ft1 = fail_with_cleanup(concat("full crawl output differs: ", read_file(full_f)), pid1_f, pid2_f)
   }
@@ -380,7 +365,7 @@ make run_sayacrawl(gen2: str, crawl_sa: str) -> num {
   want_cap = concat(want_cap, concat("FETCH depth=1 links=2 ", concat(base1, concat("/a.html", nl))))
   want_cap = concat(want_cap, concat("DONE pages=2", nl))
   hold cap_f = concat(work, "/cap.txt")
-  hold r_cap = run_command(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start1), concat(" ", concat(sh_q(host1), concat(" 2 > ", sh_q(cap_f))))))))
+  hold r_cap = net_run(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start1), concat(" ", concat(sh_q(host1), concat(" 2 > ", sh_q(cap_f))))))))
   when r_cap != 0 || string_eq(read_file(cap_f), want_cap) != 1 {
     hold ft2 = fail_with_cleanup("page cap output differs", pid1_f, pid2_f)
   }
@@ -391,13 +376,13 @@ make run_sayacrawl(gen2: str, crawl_sa: str) -> num {
   want_dep = concat(want_dep, concat("FETCH depth=0 links=5 ", concat(base1, concat("/index.html", nl))))
   want_dep = concat(want_dep, concat("DONE pages=1", nl))
   hold dep_f = concat(work, "/depth.txt")
-  hold r_dep = run_command(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start1), concat(" ", concat(sh_q(host1), concat(" 20 0 > ", sh_q(dep_f))))))))
+  hold r_dep = net_run(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start1), concat(" ", concat(sh_q(host1), concat(" 20 0 > ", sh_q(dep_f))))))))
   when r_dep != 0 || string_eq(read_file(dep_f), want_dep) != 1 {
     hold ft3 = fail_with_cleanup("depth cap output differs", pid1_f, pid2_f)
   }
 
   // 4. Refusal: no --authorized
-  hold r_na = run_command(concat(sh_q(crawl_b), concat(" ", concat(sh_q(start1), concat(" ", concat(sh_q(host1), concat(" > ", sh_q(noauth_f))))))))
+  hold r_na = net_run(concat(sh_q(crawl_b), concat(" ", concat(sh_q(start1), concat(" ", concat(sh_q(host1), concat(" > ", sh_q(noauth_f))))))))
   hold na_txt = read_file(noauth_f)
   when contains(na_txt, "FETCH") == 1 || contains(na_txt, "ROBOTS") == 1 {
     hold ft4a = fail_with_cleanup("crawl ran without --authorized", pid1_f, pid2_f)
@@ -408,7 +393,7 @@ make run_sayacrawl(gen2: str, crawl_sa: str) -> num {
 
   // 5. Refusal: START_URL off ALLOWED_HOST
   hold off_f = concat(work, "/offhost.txt")
-  hold r_off = run_command(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start1), concat(" other.example > ", sh_q(off_f))))))
+  hold r_off = net_run(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start1), concat(" other.example > ", sh_q(off_f))))))
   hold off_txt = read_file(off_f)
   when contains(off_txt, "REFUSED: START_URL is not on ALLOWED_HOST") != 1 || contains(off_txt, "FETCH") == 1 {
     hold ft5 = fail_with_cleanup("off-host refusal failed", pid1_f, pid2_f)
@@ -416,7 +401,7 @@ make run_sayacrawl(gen2: str, crawl_sa: str) -> num {
 
   // 6. Refusal: missing robots.txt (fail closed)
   hold nr_f = concat(work, "/norobots.txt")
-  hold r_nr = run_command(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start2), concat(" ", concat(sh_q(host2), concat(" > ", sh_q(nr_f))))))))
+  hold r_nr = net_run(concat(sh_q(crawl_b), concat(" --authorized ", concat(sh_q(start2), concat(" ", concat(sh_q(host2), concat(" > ", sh_q(nr_f))))))))
   hold want_nr = concat("REFUSED: robots.txt missing, empty or unreachable at ", concat(base2, concat("/robots.txt", nl)))
   when string_eq(read_file(nr_f), want_nr) != 1 {
     hold ft6 = fail_with_cleanup("missing-robots refusal differs", pid1_f, pid2_f)
@@ -438,6 +423,8 @@ when string_eq(mode, "http-get") == 1 {
   when arg_count() < 6 {
     hold f1 = fail_with_cleanup("usage: sxnet_test http-get <gen2> <seed_min> <seed> <native>", "", "")
   }
+  hold setup1 = net_setup()
+  when setup1 != 0 { hold failed = ns_fail("network fixture setup failed") }
   hold r1 = run_http_get(arg(2), arg(3), arg(4), arg(5))
   hold e1 = exit(0)
 }
@@ -445,6 +432,8 @@ when string_eq(mode, "sayacrawl") == 1 {
   when arg_count() < 4 {
     hold f2 = fail_with_cleanup("usage: sxnet_test sayacrawl <gen2> <crawl_sa>", "", "")
   }
+  hold setup2 = net_setup()
+  when setup2 != 0 { hold failed = ns_fail("network fixture setup failed") }
   hold r2 = run_sayacrawl(arg(2), arg(3))
   hold e2 = exit(0)
 }

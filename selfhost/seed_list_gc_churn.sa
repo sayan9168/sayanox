@@ -1,0 +1,23 @@
+// Discarded list headers AND backing buffers must be collected. The untouched
+// borrowed alias remains reachable across automatic collections in churn().
+// Unlike seed_list_lifetime_stress.sa this is a reclamation/memory-bound test.
+make churn(n: num) -> num {
+  hold i = 0
+  hold total = 0
+  while i < n {
+    hold temporary = [i, i + 1]
+    hold grown = push(temporary, i + 2)
+    total = total + len(grown)
+    i = i + 1
+  }
+  give total
+}
+hold keep = [17, 29]
+hold alias = keep
+show churn(150000)
+hold freed = gc()
+show len(alias)
+show alias[0]
+show alias[1]
+show len(keep)
+when gc_runs() > 1 { show "collected" } otherwise { show "not-collected" }

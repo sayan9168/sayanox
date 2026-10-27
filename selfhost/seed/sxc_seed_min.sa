@@ -1,0 +1,91 @@
+// Sayanox minimal-seed compatibility CLI. The shared Sayanox compiler owns
+// parsing/type checking/C lowering; this CLI selects the bounded, immutable
+// runtime profile. Generated C is output, never stored compiler implementation.
+use "selfhost/seed/seed_runtime_lib.sa"
+make seed_fail(message: str) -> num {
+  hold w = write_file("/dev/stderr", concat("seed_min: ", concat(message, "\n")))
+  hold stop = exit(1)
+  give 0
+}
+make seed_quote(text: str) -> str {
+  hold size = len(text)
+  hold out = "'"
+  hold i = 0
+  while i < size {
+    when sx_index(text, i) == 39 { out = concat(out, "'\\''") } otherwise { out = concat(out, chr(sx_index(text, i))) }
+    i = i + 1
+  }
+  give concat(out, "'")
+}
+make seed_slice(text: str, start: num, stop: num) -> str {
+  when stop - start > 256 {
+    hold span = stop - start
+    hold mid = start + (span - span % 2) / 2
+    give concat(seed_slice(text, start, mid), seed_slice(text, mid, stop))
+  }
+  hold out = ""
+  hold i = start
+  while i < stop { out = concat(out, chr(sx_index(text, i)))
+    i = i + 1 }
+  give out
+}
+make seed_find(text: str, token: str, start: num) -> num {
+  hold size = len(text)
+  hold i = start
+  while i + len(token) <= size {
+    hold j = 0
+    while j < len(token) && sx_index(text, i + j) == sx_index(token, j) { j = j + 1 }
+    when j == len(token) { give i }
+    i = i + 1
+  }
+  give 0 - 1
+}
+make seed_error(text: str) -> str {
+  hold size = len(text)
+  hold pos = 0
+  while pos < size {
+    hold begin = pos
+    while pos < size && sx_index(text, pos) != 10 { pos = pos + 1 }
+    hold start = begin
+    while start < pos && (sx_index(text, start) == 32 || sx_index(text, start) == 9) { start = start + 1 }
+    when start + 6 <= pos && string_eq(seed_slice(text, start, start + 6), "#error") == 1 {
+      give seed_slice(text, start, pos)
+    }
+    pos = pos + 1
+  }
+  give ""
+}
+when arg_count() < 2 || arg_count() > 3 { hold bad = seed_fail("usage: sxc_seed_min input.sa [output.c]") }
+when path_kind(arg(1)) != 1 { hold bad = seed_fail("open") }
+when path_kind("selfhost/seed_tests") != 2 { hold mk = make_dir("selfhost/seed_tests") }
+hold dir = ""
+hold i = 0
+while len(dir) == 0 && i < 1024 {
+  hold candidate = concat("selfhost/seed_tests/_sa_seed_", numstr(i))
+  when make_dir(candidate) == 1 { dir = candidate }
+  i = i + 1
+}
+when len(dir) == 0 { hold bad = seed_fail("cannot reserve output directory") }
+hold temp = concat(dir, "/out.c")
+hold command = concat("./selfhost/native_c_emitter ", concat(seed_quote(arg(1)), concat(" ", seed_quote(temp))))
+command = concat(command, " seed-profile")
+hold status = run_command(command)
+hold text = read_file(temp)
+hold rm = remove_path(temp)
+hold rmdir = remove_path(dir)
+when status != 0 { hold bad = seed_fail("Sayanox C-emitter failed") }
+hold error = seed_error(text)
+when len(error) > 0 {
+  when seed_find(error, "generic", 0) >= 0 { error = concat("seed-min generic: ", error) }
+  when seed_find(error, "type error: '", 0) >= 0 { error = concat("hold: ", error) }
+  when seed_find(error, "for loop:", 0) >= 0 { error = concat("seed-min for: ", error) }
+  hold bad = seed_fail(error)
+}
+hold begin = seed_find(text, "typedef struct sx_gcb {", 0)
+hold end = seed_find(text, "static double sx_gc_count(void){ return sx_gc_n; }", 0)
+when begin < 0 || end < begin { hold bad = seed_fail("C runtime profile boundary changed") }
+while end < len(text) && sx_index(text, end) != 10 { end = end + 1 }
+text = concat(seed_slice(text, 0, begin), concat(seed_runtime_c(), seed_slice(text, end, len(text))))
+hold output = "/dev/stdout"
+when arg_count() == 3 { output = arg(2) }
+when write_file(output, text) != 1 { hold bad = seed_fail("cannot write generated C") }

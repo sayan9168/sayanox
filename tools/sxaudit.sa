@@ -1,34 +1,9 @@
-// tools/sxaudit.sa -- the TRUST-ANCHOR AUDIT, written in Sayanox and
-// compiled by selfhost/gen2.
-//
-// Why this file exists. docs/ALL_SAYANOX_PHASE.md "Phase E -- the seed" says
-// the C seed has two honest end states and that **neither is implemented**:
-//
-//   1. a prebuilt, checksummed bootstrap binary (the binary is then the
-//      trust anchor), or
-//   2. a minimal C seed kept forever as a documented, auditable exception.
-//
-// This program implements the measurement half of option 2. It reports the
-// exact size and SHA-256 of a file, so that `make test-trust-anchor` can pin
-// the trust anchor against a tracked value and fail the moment it changes
-// without review. The digest is computed by stdlib/crypto.sa -- Sayanox
-// code, the same SHA-256 the package tool uses.
-//
-// WHAT THIS DOES NOT PROVE. A hash pin is tamper *evidence against drift*,
-// not immunity from a malicious seed: the seed compiled the compiler that
-// compiled this auditor, and no amount of hashing inside that circle breaks
-// it (Thompson, "Reflections on Trusting Trust"). Breaking it needs a second
-// independent implementation to diverse-double-compile against, which this
-// repository does not have. What the pin does buy is concrete: the anchor is
-// one named file of a known size and digest, it cannot change by accident or
-// in an unreviewed commit, and its external surface is small enough to read.
-//
-// Usage:   ./tools/sxaudit <file>
-//
-//   file selfhost/seed/sxc_seed_min.c
-//   bytes 71234
-//   lines 2176
-//   sha256 <64 hex digits>
+// Sayanox-owned byte-count/line-count/SHA-256 auditor. The maintained native
+// bootstrap anchor is bootstrap/sxc_native.bin; its explicit trust input is
+// pinned separately from compiler sources and the generated native entry.
+// Hashes/self-reproduction detect drift, not a malicious trusting-trust seed.
+// This is not independent diverse reconstruction or a full-language proof.
+// Usage: ./tools/sxaudit <file>; accepts binary files via read_bytes.
 
 use "../stdlib/crypto.sa"
 

@@ -1,0 +1,120 @@
+// Static acceptance programs and independent hand-computed stdout oracles.
+make xl_source(gate: str, name: str) -> str {
+  when string_eq(gate, "test-generics") == 1 {
+    when string_eq(name, "tg.sa") == 1 { give "make pickb<T>(a: T, b: T) -> T {\n  give a\n}\nmake twice<T>(a: T) -> T {\n  hold x: T = a\n  give pickb(x, x)\n}\nmake quad<T>(a: T) -> T {\n  give twice(twice(a))\n}\nmake wrap<T>(a: T) -> T {\n  hold t: T = a\n  when len(t) > 0 {\n    hold t = a\n  }\n  give t\n}\nmake shout(n: num) -> str {\n  give concat(\"v=\", numstr(n))\n}\nmake unused<T>(a: T) -> T {\n  give a\n}\nhold xs = [1, 2, 3]\nhold s = \"hi\"\nshow pickb(3, 7)\nshow twice(4)\nshow twice(s)\nshow quad(2)\nshow twice(twice(\"z\"))\nshow len(quad(xs))\nshow len(twice(s))\nhold y = twice(5)\nshow y + 1\nshow shout(twice(9))\nshow pickb(\"a\", \"b\")\nwhen twice(6) == 6 {\n  show 12\n}\nhold q = pickb(xs, xs)\nshow len(q)\nshow wrap(s)\nshow len(wrap(\"ab\"))\n" }
+    when string_eq(name, "tg_bad.sa") == 1 { give "make pair<T>(a: T, b: num) -> T {\n  give a\n}\nshow pair(1, 2)\n" }
+    when string_eq(name, "tg_bad2.sa") == 1 { give "make f2<T>(a: T) -> U {\n  give a\n}\nshow f2(1)\n" }
+    when string_eq(name, "tg_mp.sa") == 1 { give "make pair<A, B>(a: A, b: B) -> A {\n  give a\n}\nmake swap<A, B>(a: A, b: B) -> B {\n  give b\n}\nmake three<A, B, C>(a: A, b: B, c: C) -> C {\n  give c\n}\nmake usefirst<A, B>(a: A, b: B) -> A {\n  hold r: A = pair(a, b)\n  give r\n}\nhold xs = [1, 2, 3]\nhold s = \"hi\"\nshow pair(1, \"x\")\nshow swap(1, \"x\")\nshow swap(\"x\", 1)\nshow pair(\"x\", 1)\nshow pair(1, 2)\nshow len(three(1, \"x\", xs))\nshow usefirst(5, s)\nshow len(usefirst(xs, s))\nshow len(usefirst(xs, 7))\nshow pair(s, xs)\n" }
+  }
+  when string_eq(gate, "test-native-num") == 1 {
+    when string_eq(name, "ts_fmt.sa") == 1 { give "hold x = 0.0000000001\nhold i = 0\nwhile i < 400 {\n  show x\n  show 0 - x / 7\n  show x * 3.3 + 1\n  hold x = x * 1.37\n  hold i = i + 1\n}\nhold j = 0\nwhile j < 800 {\n  show j / 7\n  show j * j / 13\n  show j % 17\n  hold j = j + 1\n}\nshow 999999.5\nshow 123456789\nshow 0.0001\nshow 0.00001234\nshow 0 - 0\n" }
+    when string_eq(name, "ts_div0.sa") == 1 { give "show 1 / 0\nshow 0 - 1 / 0\nshow 0 / 0\n" }
+    when string_eq(name, "ts_barecall.sa") == 1 { give "write_file(\"selfhost/seed_tests/sxgates/test-native-num/ts_barecall.txt\", \"x\")\nshow 1\n" }
+    when string_eq(name, "ts_bareuser.sa") == 1 { give "make f(n) {\n  give n\n}\nf(1)\n" }
+    when string_eq(name, "ts_fcat_n.sa") == 1 { give "struct U {\n  name\n}\nhold u = U { name: \"x\" }\nhold t = u.name + \"y\"\nshow t\nshow u.name + \"z\"\n" }
+    when string_eq(name, "ts_div0b.sa") == 1 { give "show 1 / 0\nshow 0 - 1 / 0\nshow 0 / 0\n" }
+    when string_eq(name, "ts_mod0.sa") == 1 { give "show 7 % 0.5\n" }
+    when string_eq(name, "ts_floatbad_nat.sa") == 1 { give "hold x = 2.\n" }
+    when string_eq(name, "ts_natfix.sa") == 1 { give "hold n = 3\n// a comment line right after a number\nwhile n {\n  hold n = n - 1\n}\nshow (n > 1) + (n < 1)\nhold xs = [1]\npush(xs, 2.5)\nhold k = 0\nwhile k < 2 {\n  hold k = k + 0.5\n}\nshow k\nshow xs\nshow xs[1]\n" }
+  }
+  when string_eq(gate, "test-generic-structs") == 1 {
+    when string_eq(name, "gs_arity.sa") == 1 { give "struct Box<T> {\n  v\n}\nhold b = Box<num, str> { 7 }\nshow b.v\n" }
+    when string_eq(name, "gs_argstruct.sa") == 1 { give "struct NumBox {\n  v\n}\nstruct Box<T> {\n  v\n}\nhold n = NumBox { 3 }\nhold b = Box<NumBox> { n }\nshow b.v\n" }
+    when string_eq(name, "gs_arglist.sa") == 1 { give "struct Box<T> {\n  v\n}\nhold xs = [1, 2]\nhold b = Box<list> { xs }\nshow len(b.v)\npush(xs, 3)\nshow len(b.v)\n" }
+    when string_eq(name, "gs_bare.sa") == 1 { give "struct Box<T> {\n  v\n}\nhold b = Box { 7 }\nshow b.v\n" }
+    when string_eq(name, "gs_twokinds.sa") == 1 { give "struct Box<T> {\n  v\n}\nhold b = Box<num> { 7 }\nhold s = Box<num> { \"seven\" }\nshow b.v\nshow s.v\n" }
+    when string_eq(name, "gs_field_lit.sa") == 1 { give "struct NumBox {\n  v\n}\nhold a = NumBox { 7 }\nhold a2 = NumBox { a.v }\nshow a2.v\n" }
+  }
+  when string_eq(gate, "test-stage2") == 1 {
+    when string_eq(name, "s2.sa") == 1 { give "make mkl() -> list {\n  hold r = [4, 5]\n  give r\n}\nmake mks() -> str {\n  give \"pq\"\n}\nmake isone(n: num) -> num {\n  when not n == 5 {\n    give 1\n  }\n  give 0\n}\nhold a = 1\nhold b = 0\nhold s = \"hi\"\nhold xs = [7, 8]\nhold ys = [1, 2]\nshow true\nshow false\nwhen a == 1 and b == 0 {\n  show 1\n}\nwhen a == 2 or b == 0 {\n  show 2\n}\nwhen not a == 2 and b == 0 {\n  show 3\n}\nwhen not a == 1 or b == 9 {\n  show 4\n}\nwhen not s == \"no\" {\n  show 5\n}\nwhen not (a == 2) {\n  show 6\n}\nwhen a == 2 and 10 % 0 == 0 {\n  show 7\n}\nwhen a == 1 or 10 % 0 == 0 {\n  show 8\n}\nshow isone(4)\nshow isone(5)\nfor v in xs {\n  show v\n}\nfor v in [3, 4] {\n  show v\n}\nfor c in \"ab\" {\n  show c\n}\nfor c in mks() {\n  show c\n}\nfor v in mkl() {\n  show v\n}\nfor p in xs {\n  for q in ys {\n    show p\n    show q\n  }\n}\nfor v in xs {\n  when v == 7 {\n    continue\n  }\n  show v\n}\nfor v in xs {\n  when v == 8 {\n    break\n  }\n  show v\n}\nhold k = 0\nwhen a == 9 {\n  hold k = 1\n} elif a == 1 {\n  hold k = 2\n} otherwise {\n  hold k = 3\n}\nshow k\nhold m = 0\nwhile m < 3 and a == 1 {\n  hold m = m + 1\n}\nshow m\n" }
+    when string_eq(name, "s2_for.sa") == 1 { give "hold xs = [1, 2]\nfor v in xs {\n  show v\n}\n" }
+    when string_eq(name, "s2_and.sa") == 1 { give "hold a = 1\nhold b = 0\nwhen a == 1 and b == 0 {\n  show 1\n}\n" }
+    when string_eq(name, "s2_not.sa") == 1 { give "hold a = 1\nwhen not (a == 2) {\n  show 1\n}\n" }
+    when string_eq(name, "s2_true.sa") == 1 { give "show true\nshow false\n" }
+  }
+  when string_eq(gate, "test-for-str") == 1 {
+    when string_eq(name, "fs_vowels.sa") == 1 { give "hold word = \"sayanox\"\nhold vowels = 0\nhold other = 0\nfor ch in word {\n  when string_eq(ch, \"a\") == 1 || string_eq(ch, \"e\") == 1 || string_eq(ch, \"i\") == 1 || string_eq(ch, \"o\") == 1 || string_eq(ch, \"u\") == 1 {\n    hold vowels = vowels + 1\n  } otherwise {\n    hold other = other + 1\n  }\n}\nshow vowels\nshow other\n" }
+    when string_eq(name, "fs_brk.sa") == 1 { give "hold s = \"hello world\"\nhold n = 0\nfor c in s {\n  when string_eq(c, \" \") == 1 {\n    continue\n  }\n  hold n = n + 1\n  when string_eq(c, \"o\") == 1 {\n    break\n  }\n}\nshow n\n" }
+    when string_eq(name, "fs_nest.sa") == 1 { give "hold e = \"\"\nfor c in e {\n  show \"never\"\n}\nhold s = \"ab\"\nfor c in s {\n  for d in s {\n    show concat(c, d)\n  }\n}\nfor c in s {\n  show c\n}\nshow \"end\"\n" }
+    when string_eq(name, "fs_bytes.sa") == 1 { give "hold u = \"é\"\nhold n = 0\nfor b in u {\n  hold n = n + 1\n}\nshow n\n" }
+    when string_eq(name, "fs_num.sa") == 1 { give "hold x = 0\nfor c in x {\n  show c\n}\n" }
+    when string_eq(name, "fs_clash.sa") == 1 { give "hold n = 5\nhold s = \"ab\"\nfor n in s {\n  show n\n}\n" }
+    when string_eq(name, "fs_listclash.sa") == 1 { give "hold c = [1, 2]\nhold s = \"ab\"\nfor c in s {\n  show c\n}\n" }
+    when string_eq(name, "fs_nat.sa") == 1 { give "hold word = \"abc\"\nfor ch in word {\n  show ch\n}\n" }
+    when string_eq(name, "fs_pair.sa") == 1 { give "make pair<T>(a: T, b: str) -> T {\n  give a\n}\nshow pair(1, \"x\")\n" }
+  }
+  when string_eq(gate, "test-full-language-expr") == 1 {
+    when string_eq(name, "fle_unknown.sa") == 1 { give "hold values = [7, 9]\nshow values[nope()]\n" }
+    when string_eq(name, "fle_arity.sa") == 1 { give "make two(a: num, b: num) -> num {\n  give a + b\n}\nhold values = [7, 9]\nshow values[two(1)]\n" }
+    when string_eq(name, "fle_strcall.sa") == 1 { give "make tag() -> str {\n  give \"a\"\n}\nhold values = [7, 9]\nshow values[tag()]\n" }
+  }
+  give ""
+}
+make xl_want(gate: str, name: str) -> str {
+  when string_eq(gate, "test-generics") == 1 {
+    when string_eq(name, "tg") == 1 { give "3\n4\nhi\n2\nz\n3\n2\n6\nv=9\na\n12\n3\nhi\n2" }
+    when string_eq(name, "tg_g1") == 1 { give "3\n4\nhi\n2\nz\n3\n2\n6\nv=9\na\n12\n3\nhi\n2" }
+    when string_eq(name, "tg_mp") == 1 { give "1\nx\n1\nx\n1\n3\n5\n3\n3\nhi" }
+    when string_eq(name, "tg_mp_g1") == 1 { give "1\nx\n1\nx\n1\n3\n5\n3\n3\nhi" }
+    when string_eq(name, "tg_mp_seed") == 1 { give "1\nx\n1\nx\n1\n3\n5\n3\n3\nhi" }
+    when string_eq(name, "tg_mp_nat") == 1 { give "1\nx\n1\nx\n1\n3\n5\n3\n3\nhi" }
+  }
+  when string_eq(gate, "test-native-num") == 1 {
+    when string_eq(name, "ts_float_nat") == 1 { give "2.5\n5\n2.5\n7\n0.333333\n1.5\n1.25\n1\n2\n0.75\n-1.5\n1" }
+    when string_eq(name, "ts_big_nat") == 1 { give "1e+10\n1.00001e+10\n1e+10\n5e+09\n1e+10\n1\n1e+10\n1e+10" }
+    when string_eq(name, "ts_parens_nat") == 1 { give "20\n20\n1\n2\n5\n-3\n6\n20\n2\n14\n1\n6" }
+    when string_eq(name, "ts_push_nat") == 1 { give "5\n7\n20" }
+    when string_eq(name, "ts_div0_nat") == 1 { give "inf\n-inf\n-nan" }
+    when string_eq(name, "ts_fcat_nat") == 1 { give "xy\nxz" }
+    when string_eq(name, "ts_div0b_sm") == 1 { give "inf\n-inf\n-nan" }
+    when string_eq(name, "ts_natfix_nat") == 1 { give "1\n2\n[list len=2]\n2.5" }
+    when string_eq(name, "ts_natfix_sm") == 1 { give "1\n2\n[list len=2]\n2.5" }
+    when string_eq(name, "ts_lalias_nat") == 1 { give "9\n3" }
+    when string_eq(name, "ts_l11_nat") == 1 { give "11\n11" }
+  }
+  when string_eq(gate, "test-generic-structs") == 1 {
+    when string_eq(name, "gs_box_ms") == 1 { give "7\nseven\n8\n7\n9\nnine" }
+    when string_eq(name, "gs_box_g2") == 1 { give "7\nseven\n8\n7\n9\nnine" }
+    when string_eq(name, "gs_arglist_ms") == 1 { give "2\n3" }
+    when string_eq(name, "gs_arglist_g2") == 1 { give "2\n3" }
+    when string_eq(name, "gs_conc_ms") == 1 { give "7\nseven\n8\neight\n2\n8\n9" }
+    when string_eq(name, "gs_conc_g2") == 1 { give "7\nseven\n8\neight\n2\n8\n9" }
+    when string_eq(name, "gs_field_lit_ms") == 1 { give "7" }
+  }
+  when string_eq(gate, "test-stage2") == 1 {
+    when string_eq(name, "s2") == 1 { give "1\n0\n1\n2\n3\n5\n6\n8\n1\n0\n7\n8\n3\n4\na\nb\np\nq\n4\n5\n7\n1\n7\n2\n8\n1\n8\n2\n8\n7\n2\n3" }
+    when string_eq(name, "s2_g1") == 1 { give "1\n0\n1\n2\n3\n5\n6\n8\n1\n0\n7\n8\n3\n4\na\nb\np\nq\n4\n5\n7\n1\n7\n2\n8\n1\n8\n2\n8\n7\n2\n3" }
+  }
+  when string_eq(gate, "test-for-str") == 1 {
+    when string_eq(name, "fs_vowels") == 1 { give "3\n4" }
+    when string_eq(name, "fs_brk") == 1 { give "5" }
+    when string_eq(name, "fs_nest") == 1 { give "aa\nab\nba\nbb\na\nb\nend" }
+    when string_eq(name, "fs_bytes") == 1 { give "2" }
+  }
+  when string_eq(gate, "test-full-language-expr") == 1 {
+    when string_eq(name, "fle_ms") == 1 { give "4\n20\n2\n4\n7\nsayanox\n9\n11\n13\n11\n11" }
+    when string_eq(name, "fle_g2") == 1 { give "4\n20\n2\n4\n7\nsayanox\n9\n11\n13\n11\n11" }
+  }
+  give ""
+}
+
+make xl_generic_counts(d: str) -> num {
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg.c"), "static double twice__n(double a) {", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg.c"), "static char *twice__s(char * a) {", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg.c"), "static sx_list *twice__l(sx_list * a) {", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg.c"), "static double quad__n(double a) {", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg.c"), "unused__", 1, 0, 0, 0), 0, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static double pair__nn(double a, double b) {", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static double  pair__ns(double a, char * b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static char *  pair__sn(char * a, double b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static sx_list *  pair__ls(sx_list * a, char * b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static sx_list *  pair__ln(sx_list * a, double b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static char *  pair__sl(char * a, sx_list * b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static sx_list *  three__nsl(double a, char * b, sx_list * c);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static char *  swap__ns(double a, char * b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static double  swap__sn(char * a, double b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static sx_list *  usefirst__ls(sx_list * a, char * b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "static double  usefirst__ns(double a, char * b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  hold count = gl_assert_eq_num(pr_count(kp_join(d, "tg_mp.c"), "sx_list *r = pair__ls(a,b);", 1, 0, 0, 0), 1, "generic specialization/prototype cardinality")
+  give 0
+}

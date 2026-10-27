@@ -1,0 +1,35 @@
+// Native entrypoint maintenance. The checked-in `sx` is generated from the
+// same sources as tools/sxbuild, NOT an interpreter of legacy recipes.
+make cmd_verify_entry() -> num {
+  hold root = bt_require_file("sx")
+  hold work = ensure_dir_p("selfhost/seed_tests")
+  when work != 1 { hold e = fail(1, "cannot create entry verification directory") }
+  when path_kind(sxc_native_bin()) != 1 {
+    hold stages = [0, 0, 0, 0, 0]
+    hold boot = bt_build(3, stages)
+  }
+  hold tmp = "selfhost/seed_tests/sx.entry-check"
+  hold compile = concat(sh_quote(sxc_native_bin()), " tools/sxbuild.sa ")
+  hold run = target_run(concat(compile, sh_quote(tmp)), "rebuild native entry")
+  when files_byte_equal("sx", tmp) != 1 {
+    hold e = fail(1, "sx does not match current Sayanox driver sources; rebuild and review the entry and its checksum manifest")
+  }
+  hold rm = remove_path(tmp)
+  show "[OK] native sx entry matches the Sayanox source rebuild"
+  give 0
+}
+
+// Complete original CI chain. Coverage is checked before any acceptance run;
+// declaring a dispatcher implemented never substitutes for actually running
+// doctor -> selfhost -> gen3 -> native acceptance.
+make cmd_ci() -> num {
+  hold audit = cmd_migration()
+  hold built = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  hold doctor = cmd_target("doctor", built)
+  hold shape = cmd_target("test-ci-shape", built)
+  hold selfhost = cmd_target("true-selfhost", built)
+  hold fixed = cmd_target("gen3", built)
+  hold native = cmd_target("native-test", built)
+  show "[OK] complete original CI acceptance chain"
+  give 0
+}

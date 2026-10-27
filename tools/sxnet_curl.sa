@@ -1,0 +1,61 @@
+// Private fixture transport for the generated C runtime's curl command boundary.
+// NOT a production curl replacement: accepts only plain HTTP on IPv4 loopback.
+// It really connects, sends HTTP and reads the real Sayanox fixture server.
+use "tools/sxnet_io_lib.sa"
+hold url = ""
+hold i = 1
+while i < arg_count() {
+  hold value = arg(i)
+  when ns_find(value, "http://") == 0 { url = value }
+  i = i + 1
+}
+when len(url) == 0 || len(url) > 3000 { hold bad = exit(1) }
+hold slash = 7
+while slash < len(url) && sx_index(url, slash) != 47 { slash = slash + 1 }
+hold authority = ns_slice(url, 7, slash)
+hold colon = ns_find(authority, ":")
+when colon < 1 { hold bad = exit(1) }
+hold host = ns_slice(authority, 0, colon)
+when string_eq(host, "127.0.0.1") == 0 && string_eq(host, "localhost") == 0 { hold bad = exit(1) }
+hold port = 0
+i = colon + 1
+when i >= len(authority) { hold bad = exit(1) }
+while i < len(authority) {
+  hold c = sx_index(authority, i)
+  when c < 48 || c > 57 { hold bad = exit(1) }
+  port = port * 10 + c - 48
+  when port > 65535 { hold bad = exit(1) }
+  i = i + 1
+}
+when port < 1 { hold bad = exit(1) }
+hold path = "/"
+when slash < len(url) { path = ns_slice(url, slash, len(url)) }
+when ns_find(path, "\r") >= 0 || ns_find(path, "\n") >= 0 { hold bad = exit(1) }
+hold bridge = path_real("selfhost/seed_tests/net-runtime/socket-client")
+when len(bridge) == 0 { hold bad = ns_fail("fixture socket binding missing") }
+hold h = spawn(bridge)
+when h <= 0 { hold bad = exit(1) }
+hold configure = child_send(h, concat(ns_hex(port, 4), "\n"))
+when string_eq(child_line(h), "A") == 0 {
+  hold reaped = child_close(h)
+  hold bad = exit(1)
+}
+hold request = concat("GET ", concat(path, concat(" HTTP/1.1\r\nHost: ", concat(authority, "\r\nConnection: close\r\n\r\n"))))
+hold sent = ns_send(h, request)
+hold response = ""
+hold done = 0
+while done == 0 {
+  hold packet = ns_recv(h)
+  when len(packet) == 0 { done = 1 } otherwise {
+    response = concat(response, packet)
+    when len(response) > 1008192 { hold bad = ns_fail("fixture response exceeds runtime transfer budget") }
+  }
+}
+hold close = child_send(h, "C\n")
+hold reaped = child_close(h)
+when reaped != 0 { hold bad = exit(1) }
+hold split = ns_find(response, "\r\n\r\n")
+when split < 0 || ns_find(response, "HTTP/1.1 200 ") != 0 { hold bad = exit(1) }
+hold body = ns_slice(response, split + 4, len(response))
+when len(body) > 1000000 { hold bad = exit(1) }
+hold output = write_out(body)

@@ -1,0 +1,162 @@
+// Linux x86-64 socket binding, emitted in Sayanox like sxlimit/CI guards.
+// This fixed kernel-only bridge owns socket/bind/listen/accept/connect/read/
+// write/close, bounded 8192-byte private-pipe frames, and parent-death cleanup.
+// HTTP routing, parsing, responses, fixture state and assertions are Sayanox.
+// Leaf protocol: port/PID handshake (server), A, W<8 hex bytes>\n<payload>
+// -> OK; R\n -> <8 hex count>\n<payload>; C\n closes the connection.
+// Syscall reads/writes retry EINTR and finish partial private-pipe transfers.
+make ns_server_bytes() -> list { give [184,157,0,0,0,191,1,0,0,0,190,15,0,0,0,15,5,184,41,0,0,0,191,2,0,0,0,190,1,0,0,0,49,210,15,5,72,133,192,15,136,139,2,0,0,73,137,196,184,49,0,0,0,76,137,231,72,141,53,154,2,0,0,186,16,0,0,0,15,5,72,133,192,15,136,105,2,0,0,184,50,0,0,0,76,137,231,190,16,0,0,0,15,5,72,133,192,15,136,81,2,0,0,184,51,0,0,0,76,137,231,72,141,53,99,2,0,0,72,141,21,108,2,0,0,15,5,72,133,192,15,136,48,2,0,0,15,183,5,76,2,0,0,102,193,192,8,185,4,0,0,0,232,220,1,0,0,184,110,0,0,0,15,5,185,8,0,0,0,232,203,1,0,0,184,43,0,0,0,76,137,231,49,246,49,210,15,5,72,131,248,252,116,236,72,133,192,15,136,237,1,0,0,73,137,197,191,1,0,0,0,72,141,53,234,1,0,0,186,2,0,0,0,232,78,1,0,0,49,255,72,141,53,0,2,0,0,186,1,0,0,0,232,31,1,0,0,128,61,239,1,0,0,87,116,60,128,61,230,1,0,0,82,15,132,165,0,0,0,128,61,217,1,0,0,67,15,133,158,1,0,0,49,255,72,141,53,202,1,0,0,186,1,0,0,0,232,233,0,0,0,184,3,0,0,0,76,137,239,15,5,233,114,255,255,255,49,255,72,141,53,168,1,0,0,186,9,0,0,0,232,199,0,0,0,72,141,53,151,1,0,0,185,8,0,0,0,232,237,0,0,0,72,61,0,32,0,0,15,135,76,1,0,0,73,137,198,72,133,192,116,35,49,255,72,141,53,144,1,0,0,76,137,242,232,145,0,0,0,76,137,239,72,141,53,126,1,0,0,76,137,242,232,155,0,0,0,191,1,0,0,0,72,141,53,35,1,0,0,186,3,0,0,0,232,133,0,0,0,233,50,255,255,255,49,255,72,141,53,50,1,0,0,186,1,0,0,0,232,81,0,0,0,49,192,76,137,239,72,141,53,60,1,0,0,186,0,32,0,0,15,5,72,131,248,252,116,231,72,133,192,15,136,209,0,0,0,73,137,198,185,8,0,0,0,232,133,0,0,0,77,133,246,15,132,231,254,255,255,191,1,0,0,0,72,141,53,4,1,0,0,76,137,242,232,33,0,0,0,233,206,254,255,255,49,192,15,5,72,131,248,252,116,246,72,133,192,15,142,143,0,0,0,72,1,198,72,41,194,117,229,195,184,1,0,0,0,15,5,72,131,248,252,116,243,72,133,192,126,116,72,1,198,72,41,194,117,230,195,49,192,15,182,22,131,234,48,131,250,9,118,11,131,234,49,131,250,5,119,86,131,194,10,72,193,224,4,72,1,208,72,255,198,255,201,117,220,128,62,10,117,64,195,73,137,192,73,137,201,72,141,53,119,0,0,0,198,4,14,10,72,255,201,76,137,192,131,224,15,72,141,21,47,0,0,0,138,4,2,136,4,14,73,193,232,4,72,133,201,117,225,191,1,0,0,0,73,141,81,1,232,123,255,255,255,195,191,1,0,0,0,184,60,0,0,0,15,5,65,10,79,75,10,48,49,50,51,52,53,54,55,56,57,97,98,99,100,101,102,2,0,0,0,127,0,0,1,0,0,0,0,0,0,0,0,16] }
+make ns_server_memory() -> num { give 9101 }
+make ns_client_bytes() -> list { give [184,157,0,0,0,191,1,0,0,0,190,15,0,0,0,15,5,184,41,0,0,0,191,2,0,0,0,190,1,0,0,0,49,210,15,5,72,133,192,15,136,68,2,0,0,73,137,196,49,255,72,141,53,109,2,0,0,186,5,0,0,0,232,140,1,0,0,72,141,53,92,2,0,0,185,4,0,0,0,232,178,1,0,0,102,193,192,8,102,137,5,53,2,0,0,184,42,0,0,0,76,137,231,72,141,53,36,2,0,0,186,16,0,0,0,15,5,72,133,192,15,136,243,1,0,0,77,137,229,235,0,191,1,0,0,0,72,141,53,238,1,0,0,186,2,0,0,0,232,82,1,0,0,49,255,72,141,53,4,2,0,0,186,1,0,0,0,232,35,1,0,0,128,61,243,1,0,0,87,116,64,128,61,234,1,0,0,82,15,132,169,0,0,0,128,61,221,1,0,0,67,15,133,162,1,0,0,49,255,72,141,53,206,1,0,0,186,1,0,0,0,232,237,0,0,0,184,3,0,0,0,76,137,239,15,5,49,255,184,60,0,0,0,15,5,49,255,72,141,53,168,1,0,0,186,9,0,0,0,232,199,0,0,0,72,141,53,151,1,0,0,185,8,0,0,0,232,237,0,0,0,72,61,0,32,0,0,15,135,76,1,0,0,73,137,198,72,133,192,116,35,49,255,72,141,53,144,1,0,0,76,137,242,232,145,0,0,0,76,137,239,72,141,53,126,1,0,0,76,137,242,232,155,0,0,0,191,1,0,0,0,72,141,53,35,1,0,0,186,3,0,0,0,232,133,0,0,0,233,46,255,255,255,49,255,72,141,53,50,1,0,0,186,1,0,0,0,232,81,0,0,0,49,192,76,137,239,72,141,53,60,1,0,0,186,0,32,0,0,15,5,72,131,248,252,116,231,72,133,192,15,136,209,0,0,0,73,137,198,185,8,0,0,0,232,133,0,0,0,77,133,246,15,132,227,254,255,255,191,1,0,0,0,72,141,53,4,1,0,0,76,137,242,232,33,0,0,0,233,202,254,255,255,49,192,15,5,72,131,248,252,116,246,72,133,192,15,142,143,0,0,0,72,1,198,72,41,194,117,229,195,184,1,0,0,0,15,5,72,131,248,252,116,243,72,133,192,126,116,72,1,198,72,41,194,117,230,195,49,192,15,182,22,131,234,48,131,250,9,118,11,131,234,49,131,250,5,119,86,131,194,10,72,193,224,4,72,1,208,72,255,198,255,201,117,220,128,62,10,117,64,195,73,137,192,73,137,201,72,141,53,119,0,0,0,198,4,14,10,72,255,201,76,137,192,131,224,15,72,141,21,47,0,0,0,138,4,2,136,4,14,73,193,232,4,72,133,201,117,225,191,1,0,0,0,73,141,81,1,232,123,255,255,255,195,191,1,0,0,0,184,60,0,0,0,15,5,65,10,79,75,10,48,49,50,51,52,53,54,55,56,57,97,98,99,100,101,102,2,0,0,0,127,0,0,1,0,0,0,0,0,0,0,0,16] }
+make ns_client_memory() -> num { give 9030 }
+make ns_fail(msg: str) -> num {
+  hold write = write_file("/dev/stderr", concat("sxnet: ", concat(msg, "\n")))
+  hold status = exit(1)
+  give 0
+}
+make ns_slice(s: str, start: num, end: num) -> str {
+  hold out = ""
+  hold i = start
+  while i < end { out = concat(out, chr(sx_index(s, i)))
+    i = i + 1 }
+  give out
+}
+make ns_find(s: str, needle: str) -> num {
+  hold i = 0
+  while i + len(needle) <= len(s) {
+    when string_eq(ns_slice(s, i, i + len(needle)), needle) == 1 { give i }
+    i = i + 1
+  }
+  give 0 - 1
+}
+make ns_dec(n: num) -> str {
+  when n == 0 { give "0" }
+  hold out = ""
+  hold v = n
+  while v > 0 { hold digit = v % 10
+    v = (v - digit) / 10
+    out = concat(chr(48 + digit), out) }
+  give out
+}
+make ns_hex(n: num, width: num) -> str {
+  hold digits = "0123456789abcdef"
+  hold value = n
+  hold out = ""
+  hold i = 0
+  while i < width { hold digit = value % 16
+    value = (value - digit) / 16
+    out = concat(chr(sx_index(digits, digit)), out)
+    i = i + 1 }
+  when value != 0 { hold fail = ns_fail("hex frame overflow") }
+  give out
+}
+make ns_number(hex: str) -> num {
+  when len(hex) == 0 || len(hex) > 8 { hold fail = ns_fail("missing/invalid hexadecimal handshake") }
+  hold i = 0
+  hold n = 0
+  while i < len(hex) {
+    hold c = sx_index(hex, i)
+    hold digit = c - 48
+    when c >= 97 && c <= 102 { digit = c - 87 }
+    when (c < 48 || c > 57) && (c < 97 || c > 102) { hold fail = ns_fail("invalid handshake digit") }
+    n = n * 16 + digit
+    i = i + 1
+  }
+  give n
+}
+make ns_put(b: list, at: num, v: num, count: num) -> num {
+  hold value = v
+  hold i = 0
+  while i < count { hold byte = value % 256
+    b[at + i] = byte
+    value = (value - byte) / 256
+    i = i + 1 }
+  give 0
+}
+make ns_emit(file: str, client: num) -> num {
+  hold b = []
+  hold i = 0
+  while i < 128 { b = push(b, 0)
+    i = i + 1 }
+  hold code = ns_server_bytes()
+  hold memory = ns_server_memory()
+  when client == 1 { code = ns_client_bytes()
+    memory = ns_client_memory() }
+  i = 0
+  while i < len(code) { b = push(b, code[i])
+    i = i + 1 }
+  b[0] = 127
+  b[1] = 69
+  b[2] = 76
+  b[3] = 70
+  b[4] = 2
+  b[5] = 1
+  b[6] = 1
+  hold type = ns_put(b, 16, 2, 2)
+  hold machine = ns_put(b, 18, 62, 2)
+  hold version = ns_put(b, 20, 1, 4)
+  hold entry = ns_put(b, 24, 4194432, 8)
+  hold phoff = ns_put(b, 32, 64, 8)
+  hold ehsize = ns_put(b, 52, 64, 2)
+  hold phsize = ns_put(b, 54, 56, 2)
+  hold phcount = ns_put(b, 56, 1, 2)
+  hold load = ns_put(b, 64, 1, 4)
+  hold flags = ns_put(b, 68, 7, 4)
+  hold addr = ns_put(b, 80, 4194304, 8)
+  hold paddr = ns_put(b, 88, 4194304, 8)
+  hold filesz = ns_put(b, 96, len(b), 8)
+  hold memsz = ns_put(b, 104, memory, 8)
+  hold align = ns_put(b, 112, 4096, 8)
+  when write_bytes(file, b) != 1 { give ns_fail("cannot publish socket binding") }
+  // All callers supply a validated workspace filename without shell syntax.
+  when ns_find(file, "'") >= 0 || ns_find(file, "\n") >= 0 { give ns_fail("unsafe socket binding filename") }
+  give run_command(concat("chmod 0700 '", concat(file, "'")))
+}
+make ns_send(h: num, text: str) -> num {
+  when len(text) > 8192 { give ns_fail("socket frame exceeds 8192 bytes") }
+  hold frame = concat("W", concat(ns_hex(len(text), 8), concat("\n", text)))
+  hold sent = child_send(h, frame)
+  when string_eq(child_line(h), "OK") == 0 { give ns_fail("socket write failed") }
+  give 0
+}
+make ns_recv(h: num) -> str {
+  hold ask = child_send(h, "R\n")
+  hold n = ns_number(child_line(h))
+  when n > 8192 { hold fail = ns_fail("invalid socket read frame size") }
+  when n == 0 { give "" }
+  hold text = child_recv(h, n)
+  when len(text) != n { hold fail = ns_fail("short socket read frame") }
+  give text
+}
+make ns_rm_tree(path: str) -> num {
+  when path_kind(path) == 2 {
+    hold names = read_dir(path)
+    hold pos = 0
+    while pos < len(names) {
+      hold start = pos
+      while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+      hold name = ns_slice(names, start, pos)
+      pos = pos + 1
+      when len(name) > 0 { hold remove = ns_rm_tree(concat(path, concat("/", name))) }
+    }
+  }
+  when path_kind(path) != 0 && remove_path(path) != 1 { give ns_fail("cannot clean fixture directory") }
+  give 0
+}
+make ns_clean(path: str) -> num {
+  hold remove = ns_rm_tree(path)
+  when make_dir(path) != 1 { give ns_fail("cannot create fixture directory") }
+  give 0
+}
+make ns_decimal(s: str) -> num {
+  hold n = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c == 10 { give n }
+    when c < 48 || c > 57 { hold bad = ns_fail("invalid decimal process handle") }
+    n = n * 10 + c - 48
+    i = i + 1
+  }
+  give n
+}

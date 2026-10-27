@@ -1,0 +1,201 @@
+// Instruction-recorder and portable analysis-listing acceptance.
+use "tools/sxir_targets_lib.sa"
+make xi_hex(text: str) -> num {
+  hold out = 0
+  hold i = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when (c < 48 || c > 57) && (c < 97 || c > 102) { hold e = gl_fail("invalid instruction-list hex digit") }
+    hold digit = c - 48
+    when c >= 97 && c <= 102 { digit = c - 87 }
+    when digit < 0 || digit > 15 { hold e = gl_fail("invalid instruction-list hex offset") }
+    out = out * 16 + digit
+    i = i + 1
+  }
+  give out
+}
+make xi_instruction(line: str) -> num {
+  when len(line) < 9 { give 0 }
+  give string_eq(gl_slice(line, 6, 8), "  ")
+}
+make xi_mnemonic(line: str) -> str {
+  hold stop = 8
+  while stop < len(line) && sx_index(line, stop) != 32 { stop = stop + 1 }
+  give gl_slice(line, 8, stop)
+}
+make xi_record(d: str) -> num {
+  hold source = "selfhost/native_ir_log_test.sa"
+  hold baseline = xb_native(source, kp_join(d, "plain.elf"), "", kp_join(d, "plain.log"))
+  hold run = pg_capture(gl_sh_quote(kp_join(d, "plain.elf")), kp_join(d, "plain.out"))
+  hold output = kp_eq(d, "plain.out", "42\nir-log\n6\n3\n42\nir-log-done\n")
+  hold env = concat("SX_EMIT_LOG=", gl_sh_quote(kp_join(d, "emit.log")))
+  hold logged = xb_native(source, kp_join(d, "logged.elf"), env, kp_join(d, "logged.log"))
+  hold inert = xb_equal(d, "plain.elf", "logged.elf")
+  env = concat("SX_EMIT_LOG=", gl_sh_quote(kp_join(d, "again.log")))
+  logged = xb_native(source, kp_join(d, "again.elf"), env, kp_join(d, "again-compile.log"))
+  give xb_equal(d, "emit.log", "again.log")
+}
+make xi_log(d: str) -> num {
+  hold recorded = xi_record(d)
+  hold text = read_file(kp_join(d, "emit.log"))
+  hold phases = 0
+  hold fixups = 0
+  hold total = 0
+  hold previous = -1
+  hold instructions = 0
+  hold jumps = ""
+  hold vocabulary = ""
+  hold top = 0
+  hold pos = 0
+  while pos < len(text) {
+    hold start = pos
+    while pos < len(text) && sx_index(text, pos) != 10 { pos = pos + 1 }
+    hold line = gl_slice(text, start, pos)
+    pos = pos + 1
+    when len(line) == 0 { hold e = gl_fail("blank instruction-list record") }
+    when sx_index(line, 0) != 59 {
+      when xi_instruction(line) != 1 { hold e = gl_fail("malformed instruction-list record") }
+      hold offset = xi_hex(gl_slice(line, 0, 6))
+      when offset < previous { hold e = gl_fail("instruction offsets go backwards") }
+      previous = offset
+      instructions = instructions + 1
+      hold mnemonic = xi_mnemonic(line)
+      when gl_starts_with(mnemonic, "j") == 1 { jumps = concat(jumps, concat(gl_slice(line, 0, 6), "\n")) }
+      when top == 1 && xb_words_has(vocabulary, mnemonic) == 0 { vocabulary = concat(vocabulary, concat(mnemonic, "\n")) }
+    }
+    when pg_find(line, "=== phase:") >= 0 { phases = phases + 1 }
+    when pg_find(line, "=== phase: top level") >= 0 { top = 1 }
+    when pg_find(line, "=== phase: exit syscall") >= 0 { top = 0 }
+    when gl_starts_with(line, ";       code bytes: ") == 1 {
+      hold number = gl_slice(line, len(";       code bytes: "), len(line))
+      hold i = 0
+      while i < len(number) {
+        hold c = sx_index(number, i)
+        when c < 48 || c > 57 { hold e = gl_fail("invalid code-size record") }
+        total = total * 10 + c - 48
+        i = i + 1
+      }
+    }
+  }
+  hold phase_count = gl_assert_eq_num(phases, 6, "six recorder phases")
+  when total <= 0 || instructions < 1 { give gl_fail("instruction log is empty or has no code size") }
+  pos = 0
+  while pos < len(text) {
+    hold start = pos
+    while pos < len(text) && sx_index(text, pos) != 10 { pos = pos + 1 }
+    hold line = gl_slice(text, start, pos)
+    pos = pos + 1
+    when gl_starts_with(line, ";       fixup") == 1 {
+      hold bracket = pg_find(line, "[")
+      when bracket < 0 || len(line) < bracket + 7 { give gl_fail("malformed rel32 fixup") }
+      hold target = gl_slice(line, bracket + 1, bracket + 7)
+      when xb_words_has(jumps, target) == 0 { give gl_fail("fixup does not point to a jump instruction") }
+      fixups = fixups + 1
+    }
+  }
+  when fixups < 1 { give gl_fail("no rel32 fixup coverage") }
+  hold patterns = "call builtin id[0-9]\ncall make make[0-9]\nbin[0-9a-f][0-9a-f] \ngrp1_[0-9]\njcc[0-9][0-9]* \nsetcc[0-9][0-9]* \nf7?\nxmm?\nr32?\n"
+  pos = 0
+  while pos < len(patterns) {
+    hold start = pos
+    while pos < len(patterns) && sx_index(patterns, pos) != 10 { pos = pos + 1 }
+    hold pattern = gl_slice(patterns, start, pos)
+    pos = pos + 1
+    hold fixed = 0
+    when pg_find(pattern, "?") >= 0 { fixed = 1 }
+    hold absent = gl_assert_eq_num(pr_count(kp_join(d, "emit.log"), pattern, fixed, 0, 0, 0), 0, "no unnamed instruction operand")
+  }
+  hold register = gl_assert_eq_num(pr_count(kp_join(d, "emit.log"), "[^a-z0-9]r?", 0, 0, 0, 0), 0, "no placeholder register")
+  hold pins = "movq xmm0,rcx\nmovq xmm1,rax\naddsd xmm0,xmm1\nmulsd xmm0,xmm1\nmovq rax,xmm0\nucomisd xmm0,xmm1\nseta eax\nmovzx rax,al\ncvtsi2sd xmm0,rax\ncvttsd2si rax,xmm0\ncall make twice\ncall make join\n--- make twice[0] at \n--- make join[1] at \ncall builtin concat\ncall builtin putstr\ncall builtin strlen\ncall builtin shownum\ncall builtin mlist\ncall builtin lpush\ncall builtin lget\ncall builtin llen\nsub rsp,<imm32 slot>\nlea r12,[rip+<disp32 slot>]\nleave\nret\n"
+  hold pin = xf_pin(kp_join(d, "emit.log"), pins)
+  hold want = "add\naddsd\ncall\ncvtsi2sd\ncvttsd2si\njae\nje\njmp\nlea\nmov\nmovq\nmovzx\nmulsd\npop\npush\nseta\nucomisd\n"
+  hold count = 0
+  pos = 0
+  while pos < len(want) {
+    hold start = pos
+    while pos < len(want) && sx_index(want, pos) != 10 { pos = pos + 1 }
+    hold mnemonic = gl_slice(want, start, pos)
+    pos = pos + 1
+    when xb_words_has(vocabulary, mnemonic) != 1 { give gl_fail(concat("top-level mnemonic missing: ", mnemonic)) }
+    count = count + 1
+  }
+  hold got = 0
+  pos = 0
+  while pos < len(vocabulary) { when sx_index(vocabulary, pos) == 10 { got = got + 1 }
+    pos = pos + 1 }
+  hold exact = gl_assert_eq_num(got, count, "exact top-level instruction vocabulary")
+  hold emitter = read_file("tools/sxemit_lib.sa")
+  hold begin = pg_find(emitter, "EMIT-SEAM-BEGIN: the language-level emitter.")
+  hold end = pg_find(emitter, "EMIT-SEAM-END: below this line")
+  when begin < 0 || end <= begin { give gl_fail("emitter seam markers missing/misordered") }
+  hold seam = gl_slice(emitter, begin, end)
+  when pg_find(seam, "ilog_inst") >= 0 || pg_find(seam, "ilog_push") >= 0 { give gl_fail("language emitter writes recorder state") }
+  give 0
+}
+make xi_portable(d: str) -> num {
+  hold recorded = xi_record(d)
+  hold command = concat("./tools/emit_to_ir ", gl_sh_quote(kp_join(d, "emit.log")))
+  hold run = pg_capture(command, kp_join(d, "plain.ir"))
+  run = pg_capture(command, kp_join(d, "again.ir"))
+  hold deterministic = xb_equal(d, "plain.ir", "again.ir")
+  command = concat("./tools/emit_to_ir --strict --source-offsets ", gl_sh_quote(kp_join(d, "emit.log")))
+  run = pg_capture(command, kp_join(d, "audit.ir"))
+  run = pg_capture(command, kp_join(d, "audit-again.ir"))
+  deterministic = xb_equal(d, "audit.ir", "audit-again.ir")
+  hold text = read_file(kp_join(d, "audit.ir"))
+  hold base = ""
+  hold offsets = 0
+  hold pos = 0
+  while pos < len(text) {
+    hold start = pos
+    while pos < len(text) && sx_index(text, pos) != 10 { pos = pos + 1 }
+    hold line = gl_slice(text, start, pos)
+    pos = pos + 1
+    when gl_starts_with(line, "; source-offset ") == 1 { offsets = offsets + 1 } otherwise { base = concat(base, concat(line, "\n")) }
+  }
+  hold correlation = gl_assert_eq_str(base, read_file(kp_join(d, "plain.ir")), "source-offset records are the only audit difference")
+  hold instructions = pr_count(kp_join(d, "plain.ir"), "^I[0-9][0-9]* ", 0, 0, 0, 0)
+  hold count = gl_assert_eq_num(offsets, instructions, "one source correlation per IR instruction")
+  hold records = 0
+  text = read_file(kp_join(d, "emit.log"))
+  pos = 0
+  while pos < len(text) {
+    hold start = pos
+    while pos < len(text) && sx_index(text, pos) != 10 { pos = pos + 1 }
+    hold line = gl_slice(text, start, pos)
+    pos = pos + 1
+    when xi_instruction(line) == 1 && sx_index(line, 0) != 59 { records = records + 1 }
+  }
+  count = gl_assert_eq_num(records, instructions, "IR neither loses nor invents instructions")
+  text = read_file(kp_join(d, "plain.ir"))
+  pos = 0
+  while pos < len(text) {
+    hold start = pos
+    while pos < len(text) && sx_index(text, pos) != 10 { pos = pos + 1 }
+    hold line = gl_slice(text, start, pos)
+    pos = pos + 1
+    when pr_match(line, "^I[0-9][0-9]* ", 0) == 1 {
+      hold token = ""
+      hold i = 0
+      while i <= len(line) {
+        hold c = 0
+        when i < len(line) { c = sx_index(line, i) }
+        when (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 { token = concat(token, chr(c)) } otherwise {
+          hold registers = "rax\nrcx\nrdx\nrbx\nrsp\nrbp\nrsi\nrdi\nr12\nr13\nr14\nr15\n"
+          when len(token) > 0 && (xb_words_has(registers, token) == 1 || pr_match(token, "^xmm[0-9][0-9]*$", 0) == 1) { give gl_fail("physical x86 register survived IR abstraction") }
+          token = ""
+        }
+        i = i + 1
+      }
+    }
+  }
+  give xf_pin(kp_join(d, "plain.ir"), "FADD \nCALL make twice\nCALL builtin shownum\n=== phase: make bodies\nI2F \nFCMP \n")
+}
+make xi_dispatch(name: str) -> num {
+  hold d = concat("selfhost/seed_tests/sxgates/", name)
+  hold clean = gl_clean_dir(d)
+  hold result = 0
+  when string_eq(name, "test-native-ir-log") == 1 { result = xi_log(d) } otherwise { result = xi_portable(d) }
+  show concat("[OK] Sayanox IR acceptance: ", name)
+  give result
+}

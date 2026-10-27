@@ -1,0 +1,298 @@
+// Module-level backend parity and corruption controls, entirely in Sayanox.
+use "tools/sxbackend_targets_lib.sa"
+use "tools/sxbackend_fixtures_lib.sa"
+make xb_words_has(words: str, word: str) -> num {
+  give pg_find(concat("\n", words), concat(concat("\n", word), "\n")) >= 0
+}
+make xb_basename(path: str) -> str {
+  hold start = 0
+  hold i = 0
+  while i < len(path) {
+    when sx_index(path, i) == 47 { start = i + 1 }
+    i = i + 1
+  }
+  give gl_slice(path, start, len(path) - 3)
+}
+make xb_command(tool: str, a: str, b: str, c: str) -> str {
+  hold cmd = concat(concat("./tools/", tool), concat(" ", gl_sh_quote(a)))
+  cmd = concat(cmd, concat(" ", gl_sh_quote(b)))
+  give concat(cmd, concat(" ", gl_sh_quote(c)))
+}
+make xb_fail_command(command: str, log: str, needle: str) -> num {
+  when gl_run_merged(command, log) == 0 { give gl_fail("negative backend control unexpectedly passed") }
+  when len(needle) > 0 { hold a = pg_contains(log, needle) }
+  give 0
+}
+make xb_native(source: str, output: str, env: str, log: str) -> num {
+  hold cmd = concat(env, " ./selfhost/native_aot ")
+  cmd = concat(cmd, concat(gl_sh_quote(source), concat(" ", gl_sh_quote(output))))
+  give gl_assert_eq_num(gl_run_merged(cmd, log), 0, concat("native fixture: ", source))
+}
+make xb_equal(d: str, a: str, b: str) -> num {
+  give gl_assert_files_eq(concat(concat(d, "/"), a), concat(concat(d, "/"), b), concat("backend artifact: ", a))
+}
+make xb_publish(file: str) -> num { give pg_command(concat("chmod +x ", gl_sh_quote(file)), "publish backend ELF") }
+make xb_integer(bytes: list, at: num, count: num) -> num {
+  hold out = 0
+  hold factor = 1
+  hold i = 0
+  while i < count { out = out + bytes[at + i] * factor
+    factor = factor * 256
+    i = i + 1 }
+  give out
+}
+make xb_tamper(original: str, copy: str, distance: num, byte: num) -> num {
+  hold bytes = []
+  hold size = read_bytes(original, bytes)
+  when size <= distance { give gl_fail("tamper offset outside backend code") }
+  bytes[size - distance] = byte
+  give gl_assert_eq_num(write_bytes(copy, bytes), 1, "write mutated backend code")
+}
+make xb_dump_copy(source: str, dest: str) -> num {
+  hold dir = gl_ensure_dir(dest)
+  hold names = "code.bin\ndata.bin\npatch.bin\nmeta.txt\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold copy = pg_copy(concat(concat(source, "/"), name), concat(concat(dest, "/"), name))
+  }
+  give 0
+}
+make xb_gc(d: str) -> num {
+  hold source = xb_source("gc_oom")
+  hold file = concat(d, "/sxgc_oom.sa")
+  hold wrote = gl_must_write(file, source)
+  hold keep = gl_must_write(concat(d, "/sxgc_keep.sa"), xb_source("gc_keep"))
+  hold fixtures = concat(file, concat("\n", concat(concat(d, "/sxgc_keep.sa"), "\nselfhost/sxinfer_tests/program.sa\n")))
+  hold pos = 0
+  while pos < len(fixtures) {
+    hold start = pos
+    while pos < len(fixtures) && sx_index(fixtures, pos) != 10 { pos = pos + 1 }
+    file = gl_slice(fixtures, start, pos)
+    pos = pos + 1
+    hold folder = concat(concat(d, "/"), xb_basename(file))
+    hold dirs = gl_ensure_dir(concat(folder, "/in"))
+    hold rt = gl_ensure_dir(concat(folder, "/rt"))
+    hold gc = gl_ensure_dir(concat(folder, "/rt_gc"))
+    hold env = concat("SX_EMIT_LOG=", gl_sh_quote(concat(folder, "/emit.log")))
+    env = concat(env, concat(" SX_LINK_DUMP=", gl_sh_quote(concat(folder, "/in"))))
+    hold compile = xb_native(file, concat(folder, "/c.elf"), env, concat(folder, "/compile.log"))
+    hold runtime = pg_command(xb_command("sxruntime", concat(folder, "/emit.log"), concat(folder, "/in"), concat(folder, "/rt")), "runtime splice")
+    hold collector = pg_command(xb_command("sxgc", concat(folder, "/emit.log"), concat(folder, "/rt"), concat(folder, "/rt_gc")), "collector splice")
+    hold code = xb_equal(folder, "in/code.bin", "rt_gc/code.bin")
+    hold patch = xb_equal(folder, "in/patch.bin", "rt_gc/patch.bin")
+    hold link = pg_command(xb_command("sxlink", concat(folder, "/c.elf"), concat(folder, "/rt_gc"), concat(folder, "/sx.elf")), "link runtime + collector")
+    hold equal = xb_equal(folder, "c.elf", "sx.elf")
+    hold executable = xb_publish(concat(folder, "/sx.elf"))
+  }
+  hold log = concat(d, "/bounded.out")
+  hold status = lm_capture(gl_sh_quote(concat(d, "/sxgc_oom/sx.elf")), 4096, log, concat(d, "/limit"))
+  hold bounded = gl_assert_eq_num(status, 0, "collector runs under 4 MiB")
+  hold output = read_file(log)
+  hold split = pg_find(output, "\n")
+  hold iterations = gl_assert_eq_str(gl_slice(output, 0, split), "200000", "bounded collector iterations")
+  hold runs = gl_slice(output, split + 1, len(output))
+  hold run_count = 0
+  hold run_at = 0
+  while run_at < len(runs) && sx_index(runs, run_at) != 10 {
+    hold digit = sx_index(runs, run_at) - 48
+    when digit < 0 || digit > 9 { give gl_fail("nonnumeric collector count") }
+    run_count = run_count * 10 + digit
+    run_at = run_at + 1
+  }
+  when run_count < 1 { give gl_fail("collector did not run under cap") }
+  hold retained = gl_assert_out(gl_sh_quote(concat(d, "/sxgc_keep/sx.elf")), "48\nhello-world\n30000\n29999\n1\n1", concat(d, "/retained.out"))
+  hold copy = xb_dump_copy(concat(d, "/sxgc_oom/in"), concat(d, "/tamper/in"))
+  hold mutation = xb_tamper(concat(d, "/tamper/in/code.bin"), concat(d, "/tamper/in/code.bin"), 20, 255)
+  give xb_fail_command(xb_command("sxgc", concat(d, "/sxgc_oom/emit.log"), concat(d, "/tamper/in"), concat(d, "/tamper/out")), concat(d, "/tamper.log"), "byte mismatch at collector")
+}
+make xb_runtime(d: str) -> num {
+  hold fixtures = "selfhost/sxinfer_tests/program.sa\nselfhost/native_strord_test.sa\nselfhost/stdlib_growth_test.sa\nselfhost/stdlib_crypto_test.sa\n"
+  hold pos = 0
+  while pos < len(fixtures) {
+    hold start = pos
+    while pos < len(fixtures) && sx_index(fixtures, pos) != 10 { pos = pos + 1 }
+    hold file = gl_slice(fixtures, start, pos)
+    pos = pos + 1
+    hold folder = concat(concat(d, "/"), xb_basename(file))
+    hold in_dir = gl_ensure_dir(concat(folder, "/in"))
+    hold out_dir = gl_ensure_dir(concat(folder, "/out"))
+    hold off = xb_native(file, concat(folder, "/off.elf"), "", concat(folder, "/off.log"))
+    hold env = concat("SX_EMIT_LOG=", gl_sh_quote(concat(folder, "/emit.log")))
+    env = concat(env, concat(" SX_LINK_DUMP=", gl_sh_quote(concat(folder, "/in"))))
+    hold compile = xb_native(file, concat(folder, "/c.elf"), env, concat(folder, "/compile.log"))
+    hold observational = xb_equal(folder, "off.elf", "c.elf")
+    hold runtime = pg_command(xb_command("sxruntime", concat(folder, "/emit.log"), concat(folder, "/in"), concat(folder, "/out")), "runtime splice")
+    hold code = xb_equal(folder, "in/code.bin", "out/code.bin")
+    hold patch = xb_equal(folder, "in/patch.bin", "out/patch.bin")
+    hold link = pg_command(xb_command("sxlink", concat(folder, "/c.elf"), concat(folder, "/out"), concat(folder, "/sx.elf")), "link runtime")
+    hold equal = xb_equal(folder, "c.elf", "sx.elf")
+    hold executable = xb_publish(concat(folder, "/sx.elf"))
+    hold a = pg_capture(gl_sh_quote(concat(folder, "/c.elf")), concat(folder, "/c.out"))
+    hold b = pg_capture(gl_sh_quote(concat(folder, "/sx.elf")), concat(folder, "/sx.out"))
+    hold same = xb_equal(folder, "c.out", "sx.out")
+  }
+  hold copy = xb_dump_copy(concat(d, "/program/in"), concat(d, "/tamper/in"))
+  hold file = concat(d, "/tamper/in/code.bin")
+  hold bytes = []
+  hold size = read_bytes(file, bytes)
+  when size < 2000 { give gl_fail("runtime tamper offset outside code") }
+  bytes[size - 2000] = 170
+  bytes[size - 1999] = 85
+  hold write = gl_assert_eq_num(write_bytes(file, bytes), 1, "mutate runtime bytes")
+  give xb_fail_command(xb_command("sxruntime", concat(d, "/program/emit.log"), concat(d, "/tamper/in"), concat(d, "/tamper/out")), concat(d, "/tamper.log"), "byte mismatch at runtime")
+}
+make xb_emit(d: str) -> num {
+  hold edge = gl_must_write(concat(d, "/ieee_edge.sa"), xb_source("ieee_edge"))
+  hold fixtures = concat("selfhost/sxinfer_tests/program.sa\nselfhost/native_strord_test.sa\nselfhost/native_cond_test.sa\nselfhost/stdlib_crypto_test.sa\n", concat(concat(d, "/ieee_edge.sa"), "\n"))
+  hold pos = 0
+  while pos < len(fixtures) {
+    hold start = pos
+    while pos < len(fixtures) && sx_index(fixtures, pos) != 10 { pos = pos + 1 }
+    hold file = gl_slice(fixtures, start, pos)
+    pos = pos + 1
+    hold folder = concat(concat(d, "/"), xb_basename(file))
+    hold na_ld = gl_ensure_dir(concat(folder, "/na_ld"))
+    hold sx_ld = gl_ensure_dir(concat(folder, "/sx_ld"))
+    hold na_dd = gl_ensure_dir(concat(folder, "/na_dd"))
+    hold sx_dd = gl_ensure_dir(concat(folder, "/sx_dd"))
+    hold env = concat("SX_LINK_DUMP=", gl_sh_quote(concat(folder, "/na_ld")))
+    env = concat(env, concat(" SX_DEFS_DUMP=", gl_sh_quote(concat(folder, "/na_dd"))))
+    env = concat(env, concat(" SX_EMIT_LOG=", gl_sh_quote(concat(folder, "/na.ilog"))))
+    env = concat(env, concat(" SX_ENCODE_LOG=", gl_sh_quote(concat(folder, "/na.elog"))))
+    hold native = xb_native(file, concat(folder, "/na.elf"), env, concat(folder, "/na.log"))
+    env = concat("SX_LINK_DUMP=", gl_sh_quote(concat(folder, "/sx_ld")))
+    env = concat(env, concat(" SX_DEFS_DUMP=", gl_sh_quote(concat(folder, "/sx_dd"))))
+    env = concat(env, concat(" SX_EMIT_LOG=", gl_sh_quote(concat(folder, "/sx.ilog"))))
+    env = concat(env, concat(" SX_ENCODE_LOG=", gl_sh_quote(concat(folder, "/sx.elog"))))
+    hold cmd = concat(env, concat(" ./tools/sxemit ", concat(gl_sh_quote(file), concat(" ", gl_sh_quote(concat(folder, "/sx.elf"))))))
+    hold emit = pg_command(cmd, "independent emit pipeline")
+    hold a = xb_equal(folder, "na.elf", "sx.elf")
+    hold b = xb_equal(folder, "na_ld/code.bin", "sx_ld/code.bin")
+    hold c = xb_equal(folder, "na_ld/data.bin", "sx_ld/data.bin")
+    hold e = xb_equal(folder, "na_ld/patch.bin", "sx_ld/patch.bin")
+    hold f = xb_equal(folder, "na.ilog", "sx.ilog")
+    hold g = xb_equal(folder, "na.elog", "sx.elog")
+    hold encode = pg_command(xb_command("sxencode", concat(folder, "/sx.elog"), concat(folder, "/sx_ld/code.bin"), concat(folder, "/re_code.bin")), "encoder round trip")
+    hold h = xb_equal(folder, "sx_ld/code.bin", "re_code.bin")
+    hold sx_out = pg_capture(gl_sh_quote(concat(folder, "/sx.elf")), concat(folder, "/sx.out"))
+    hold emitted = pg_emit(1, file, concat(folder, "/g2.c"), 0)
+    hold built = gl_compile_c(concat(folder, "/g2.c"), concat(folder, "/g2"), "-O1")
+    hold g2_out = pg_capture(gl_sh_quote(concat(folder, "/g2")), concat(folder, "/g2.out"))
+    hold oracle = xb_equal(folder, "sx.out", "g2.out")
+  }
+  hold bad = gl_must_write(concat(d, "/bad_rf.sa"), "make f(x: num) -> num {\n  when x > 0 {\n    give 1\n  }\n}\nshow f(1)\n")
+  hold a = xb_fail_command(concat("./tools/sxemit ", concat(gl_sh_quote(concat(d, "/bad_rf.sa")), concat(" ", gl_sh_quote(concat(d, "/bad.elf"))))), concat(d, "/bad_rf.err"), "may fall through without give")
+  hold brk = gl_must_write(concat(d, "/bad_brk.sa"), "break\n")
+  give xb_fail_command(concat("./tools/sxemit ", concat(gl_sh_quote(concat(d, "/bad_brk.sa")), concat(" ", gl_sh_quote(concat(d, "/bad.elf"))))), concat(d, "/bad_brk.err"), "break outside a loop")
+}
+make xb_link(d: str) -> num {
+  hold hello = gl_must_write(concat(d, "/sxlink_hello.sa"), "hold x = 40\nhold x = x + 2\nshow x\n")
+  hold fn = gl_must_write(concat(d, "/sxlink_fn.sa"), xb_source("link_fn"))
+  hold data = gl_must_write(concat(d, "/sxlink_data.sa"), xb_source("link_data"))
+  hold fixtures = concat(concat(d, "/sxlink_hello.sa\n"), concat(concat(d, "/sxlink_fn.sa\n"), concat(concat(d, "/sxlink_data.sa\n"), "selfhost/native_strord_test.sa\nselfhost/stdlib_growth_test.sa\n")))
+  hold pos = 0
+  while pos < len(fixtures) {
+    hold start = pos
+    while pos < len(fixtures) && sx_index(fixtures, pos) != 10 { pos = pos + 1 }
+    hold file = gl_slice(fixtures, start, pos)
+    pos = pos + 1
+    hold folder = concat(concat(d, "/"), xb_basename(file))
+    hold dir = gl_ensure_dir(folder)
+    hold off = xb_native(file, concat(folder, "/off.elf"), "", concat(folder, "/off.log"))
+    hold env = concat("SX_LINK_DUMP=", gl_sh_quote(folder))
+    hold native = xb_native(file, concat(folder, "/c.elf"), env, concat(folder, "/compile.log"))
+    hold dump_safe = xb_equal(folder, "off.elf", "c.elf")
+    hold link = pg_command(xb_command("sxlink", concat(folder, "/c.elf"), folder, concat(folder, "/sx.elf")), "link exact image")
+    hold image_same = xb_equal(folder, "c.elf", "sx.elf")
+    hold executable = xb_publish(concat(folder, "/sx.elf"))
+    hold a = gl_run_merged(gl_sh_quote(concat(folder, "/c.elf")), concat(folder, "/c.out"))
+    hold b = gl_run_merged(gl_sh_quote(concat(folder, "/sx.elf")), concat(folder, "/sx.out"))
+    hold same = xb_equal(folder, "c.out", "sx.out")
+  }
+  hold hello_dir = concat(d, "/sxlink_hello")
+  hold out = gl_assert_out(gl_sh_quote(concat(hello_dir, "/sx.elf")), "42", concat(d, "/hello.out"))
+  hold bytes = []
+  hold count = read_bytes(concat(hello_dir, "/c.elf"), bytes)
+  when count < 192 { give gl_fail("short linked ELF") }
+  hold magic = gl_assert_eq_num(xb_integer(bytes, 0, 8), 282584257676671, "ELF ident")
+  hold headers = gl_assert_eq_num(xb_integer(bytes, 56, 2), 3, "ELF program headers")
+  hold entry = gl_assert_eq_num(xb_integer(bytes, 24, 8), 4198400, "ELF entry")
+  hold code = gl_assert_eq_num(xb_integer(bytes, 128, 8), 4096, "code page offset")
+  hold data_at = gl_assert_eq_num(xb_integer(bytes, 184, 8), 12288, "data page offset")
+  hold missing = xb_fail_command(xb_command("sxlink", concat(hello_dir, "/c.elf"), concat(d, "/nope"), concat(d, "/bad.elf")), concat(d, "/missing.err"), "cannot read code.bin")
+  // A real non-ELF fixture, not a removed build-file pathname.
+  hold nonelf = "not an ELF\n"
+  hold n = 0
+  while n < 6 { nonelf = concat(nonelf, nonelf)
+    n = n + 1 }
+  hold text = gl_must_write(concat(d, "/not-elf.txt"), nonelf)
+  give xb_fail_command(xb_command("sxlink", concat(d, "/not-elf.txt"), hello_dir, concat(d, "/bad.elf")), concat(d, "/nonelf.err"), "not an ELF")
+}
+make xb_encode(d: str) -> num {
+  hold names = pr_count("tools/sxencode.sa", "when string_eq(name, \"", 1, 0, 0, 0)
+  hold ids = pr_count("tools/sxencode.sa", "^  when id == [0-9]* { st = ", 0, 0, 0, 0)
+  hold counts = gl_assert_eq_num(names, ids, "encoder names and encodings agree")
+  hold hello = gl_must_write(concat(d, "/sxencode_hello.sa"), "hold x = 40\nhold x = x + 2\nshow x\n")
+  hold fixtures = concat(concat(d, "/sxencode_hello.sa\n"), "selfhost/native_ir_log_test.sa\nselfhost/native_logic_arg_test.sa\nselfhost/native_strord_test.sa\nselfhost/stdlib_growth_test.sa\n")
+  hold expected = xb_source("encode_ops")
+  hold seen = ""
+  hold pos = 0
+  while pos < len(fixtures) {
+    hold start = pos
+    while pos < len(fixtures) && sx_index(fixtures, pos) != 10 { pos = pos + 1 }
+    hold file = gl_slice(fixtures, start, pos)
+    pos = pos + 1
+    hold folder = concat(concat(d, "/"), xb_basename(file))
+    hold dir = gl_ensure_dir(folder)
+    hold off = xb_native(file, concat(folder, "/off.elf"), "", concat(folder, "/off.log"))
+    hold env = concat("SX_ENCODE_LOG=", gl_sh_quote(concat(folder, "/enc.log")))
+    env = concat(env, concat(" SX_LINK_DUMP=", gl_sh_quote(folder)))
+    hold native = xb_native(file, concat(folder, "/c.elf"), env, concat(folder, "/compile.log"))
+    hold observational = xb_equal(folder, "off.elf", "c.elf")
+    hold replay = pg_command(xb_command("sxencode", concat(folder, "/enc.log"), concat(folder, "/code.bin"), concat(folder, "/sx.bin")), "encoder replay")
+    hold equal = xb_equal(folder, "code.bin", "sx.bin")
+    hold log = read_file(concat(folder, "/enc.log"))
+    hold i = 0
+    while i < len(log) {
+      hold start_word = i
+      while i < len(log) && sx_index(log, i) != 32 && sx_index(log, i) != 10 { i = i + 1 }
+      hold word = gl_slice(log, start_word, i)
+      when len(word) > 0 && sx_index(word, 0) != 59 {
+        when xb_words_has(expected, word) == 0 { give gl_fail(concat("unexpected encode record: ", word)) }
+        when xb_words_has(seen, word) == 0 { seen = concat(seen, concat(word, "\n")) }
+      }
+      while i < len(log) && sx_index(log, i) != 10 { i = i + 1 }
+      i = i + 1
+    }
+  }
+  pos = 0
+  while pos < len(expected) {
+    hold start = pos
+    while pos < len(expected) && sx_index(expected, pos) != 10 { pos = pos + 1 }
+    hold word = gl_slice(expected, start, pos)
+    pos = pos + 1
+    when xb_words_has(seen, word) == 0 { give gl_fail(concat("unexercised encoder record: ", word)) }
+  }
+  hold hello_dir = concat(d, "/sxencode_hello")
+  hold missing = xb_fail_command(xb_command("sxencode", concat(d, "/nope.log"), concat(hello_dir, "/code.bin"), concat(d, "/bad.bin")), concat(d, "/missing.err"), "cannot read the encode log")
+  hold short = gl_must_write(concat(d, "/short.bin"), "1\n")
+  hold length = xb_fail_command(xb_command("sxencode", concat(hello_dir, "/enc.log"), concat(d, "/short.bin"), concat(d, "/bad.bin")), concat(d, "/short.err"), "different length")
+  hold bogus = gl_must_write(concat(d, "/bogus.log"), "bogus_record 1 2\n")
+  give xb_fail_command(xb_command("sxencode", concat(d, "/bogus.log"), concat(hello_dir, "/code.bin"), concat(d, "/bad.bin")), concat(d, "/bogus.err"), "unknown record")
+}
+make xb_dispatch(name: str) -> num {
+  hold d = concat("selfhost/seed_tests/xb/", name)
+  hold clean = gl_clean_dir(d)
+  hold status = 0
+  when string_eq(name, "test-native-sxruntime") == 1 { status = xb_runtime(d) }
+  when string_eq(name, "test-native-sxgc") == 1 { status = xb_gc(d) }
+  when string_eq(name, "test-native-sxemit") == 1 { status = xb_emit(d) }
+  when string_eq(name, "test-native-sxlink") == 1 { status = xb_link(d) }
+  when string_eq(name, "test-native-sxencode") == 1 { status = xb_encode(d) }
+  show concat("[OK] Sayanox gate: ", name)
+  give status
+}

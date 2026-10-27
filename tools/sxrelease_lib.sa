@@ -1,0 +1,93 @@
+// Release orchestration belongs to Sayanox. git archive and gh are leaf host
+// boundaries; tags, acceptance, integrity checks, evidence and argv are owned
+// here. Never publish until the complete original CI chain succeeds.
+make rl_tag() -> str {
+  hold tag = getenv("RELEASE_TAG")
+  when len(tag) < 2 || sx_index(tag, 0) != 118 { hold e = fail(2, "RELEASE_TAG must start with v and contain a version") }
+  hold i = 1
+  while i < len(tag) {
+    hold c = sx_index(tag, i)
+    hold ok = c >= 48 && c <= 57
+    when c >= 65 && c <= 90 { ok = 1 }
+    when c >= 97 && c <= 122 { ok = 1 }
+    when c == 45 || c == 46 || c == 95 { ok = 1 }
+    when ok == 0 { hold e = fail(2, "unsafe character in RELEASE_TAG") }
+    i = i + 1
+  }
+  give tag
+}
+make rl_digest(path: str) -> str {
+  hold command = concat("./tools/sxaudit ", sh_quote(path))
+  hold log = "selfhost/seed_tests/release-audit.out"
+  hold capture = pg_capture(command, log)
+  hold text = read_file(log)
+  hold at = pg_find(text, "\nsha256 ")
+  when at < 0 { hold e = fail(1, "missing Sayanox SHA-256 audit record") }
+  hold digest = gl_slice(text, at + 8, at + 72)
+  when len(digest) != 64 { hold e = fail(1, "short Sayanox SHA-256 audit record") }
+  hold i = 0
+  while i < len(digest) {
+    hold c = sx_index(digest, i)
+    when (c < 48 || c > 57) && (c < 97 || c > 102) { hold e = fail(1, "invalid Sayanox SHA-256 audit record") }
+    i = i + 1
+  }
+  give digest
+}
+make cmd_release_plan() -> num {
+  hold tag = rl_tag()
+  show concat("Release tag: ", tag)
+  show "Required: complete migration -> doctor -> workflow shape -> true-selfhost -> gen3 -> native-test"
+  show "Required: clean tracked tree, native entry/source pins, equal gen3/gen4 C, no forbidden bootstrap invocation"
+  show concat("Source archive: dist/sayanox-", concat(tag, "-src.tar.gz"))
+  show "Evidence: dist/fixed-point.sha256, dist/gen3.c, dist/gen4.c, dist/BUILD_INFO.md"
+  show "Plan only: no archive, tag or release was created"
+  give 0
+}
+make cmd_release() -> num {
+  hold tag = rl_tag()
+  // Never turn an unported hard gate into a smaller successful release gate.
+  hold acceptance = cmd_ci()
+  hold rebuilt_entry = cmd_verify_entry()
+  when len(getenv("GITHUB_PATH")) > 0 { hold guards = cmd_ci_guard_check() }
+  hold clean = target_run("git diff --quiet HEAD --", "release tracked sources must match HEAD")
+  when files_byte_equal("selfhost/gen3.c", "selfhost/gen4.c") != 1 { hold e = fail(1, "release fixed-point evidence differs") }
+  hold required = bt_require_file("selfhost/gen3.c")
+  hold cfiles = "selfhost/seed_tests/release-cfiles.out"
+  hold tracked = pg_capture("git ls-files '*.c' '*.h'", cfiles)
+  when len(read_file(cfiles)) != 0 { hold e = fail(1, "tracked C/header source in all-Sayanox release") }
+  hold dir = ensure_dir_p("dist")
+  when dir != 1 { hold e = fail(1, "cannot create release output directory") }
+  hold auditor = target_native_tool("sxaudit")
+  hold gen2 = rl_digest("selfhost/gen2.c")
+  hold gen3 = rl_digest("selfhost/gen3.c")
+  hold gen4 = rl_digest("selfhost/gen4.c")
+  hold sums = concat(gen2, "  selfhost/gen2.c\n")
+  sums = concat(sums, concat(gen3, "  selfhost/gen3.c\n"))
+  sums = concat(sums, concat(gen4, "  selfhost/gen4.c\n"))
+  hold sumfile = gl_must_write("dist/fixed-point.sha256", sums)
+  hold copy3 = pg_copy("selfhost/gen3.c", "dist/gen3.c")
+  hold copy4 = pg_copy("selfhost/gen4.c", "dist/gen4.c")
+  hold archive = concat("dist/sayanox-", concat(tag, "-src.tar.gz"))
+  hold prefix = concat("sayanox-", concat(tag, "/"))
+  hold command = concat("git archive --format=tar.gz --prefix=", sh_quote(prefix))
+  command = concat(command, concat(" -o ", sh_quote(archive)))
+  command = concat(command, " HEAD")
+  hold pack = target_run(command, "release source archive")
+  hold notes = concat("# Sayanox ", concat(tag, "\n\n"))
+  notes = concat(notes, "Built from a clean tracked tree through the Sayanox release driver.\n")
+  notes = concat(notes, "Complete baseline migration and all original hard gates passed.\n")
+  notes = concat(notes, "The fixed point is byte-identical: gen3.c == gen4.c.\n\n```\n")
+  notes = concat(notes, concat(sums, "```\n"))
+  hold info = gl_must_write("dist/BUILD_INFO.md", notes)
+  // No token is read, stored, printed or interpolated; gh inherits its own
+  // authentication environment from the workflow's existing GitHub grant.
+  command = concat("gh release create ", sh_quote(tag))
+  command = concat(command, concat(" ", sh_quote(archive)))
+  command = concat(command, " dist/fixed-point.sha256 dist/gen3.c dist/gen4.c dist/BUILD_INFO.md")
+  command = concat(command, concat(" --title ", sh_quote(concat("Sayanox ", tag))))
+  command = concat(command, " --notes-file dist/BUILD_INFO.md")
+  when string_eq(getenv("GITHUB_EVENT_NAME"), "push") == 1 { command = concat(command, " --verify-tag") }
+  hold publish = target_run(command, "publish gated GitHub release")
+  show concat("[OK] released ", tag)
+  give 0
+}

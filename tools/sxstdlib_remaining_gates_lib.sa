@@ -1,0 +1,164 @@
+// Remaining portable stdlib and gen2 gap contracts.
+use "tools/sxstdlib_remaining_targets_lib.sa"
+use "tools/sxstdlib_remaining_fixtures_lib.sa"
+make xq_fixture(gate: str, name: str, d: str) -> str {
+  hold source = xq_source(gate, name)
+  when len(source) == 0 { hold e = gl_fail(concat("missing stdlib fixture: ", name)) }
+  hold path = concat(concat(d, "/"), name)
+  hold wrote = gl_must_write(path, source)
+  give path
+}
+make xq_parity_unknown(source: str, d: str) -> num {
+  hold dir = gl_ensure_dir(d)
+  hold seed = pg_emit(0, source, concat(d, "/seed.c"), 0)
+  hold build = gl_compile_c(concat(d, "/seed.c"), concat(d, "/seed"), xr_strict_flags())
+  hold capture = pg_capture(gl_sh_quote(concat(d, "/seed")), concat(d, "/seed.out"))
+  hold want = gl_strip_trailing_nl(read_file(concat(d, "/seed.out")))
+  hold gen2 = xr_case(1, source, concat(d, "/gen2"), want, xr_strict_flags())
+  give xr_case(2, source, concat(d, "/native"), want, "")
+}
+make xq_modules(d: str) -> num {
+  hold gate = "test-stdlib-modules"
+  hold parity = xr_three("selfhost/stdlib_modules_test.sa", d, xq_oracle("STM_WANT"))
+  hold i = 0
+  while i < 4 {
+    hold name = "stm_alone_num"
+    when i == 1 { name = "stm_alone_list" }
+    when i == 2 { name = "stm_alone_str" }
+    when i == 3 { name = "stm_all" }
+    hold key = name
+    when i == 3 { key = "stm_all_seed" }
+    hold source = xq_fixture(gate, concat(name, ".sa"), d)
+    hold test = xr_three(source, concat(concat(d, "/"), name), xq_oracle(key))
+    i = i + 1
+  }
+  hold json = xq_parity_unknown("selfhost/stdlib_json_test.sa", concat(d, "/json"))
+  hold format = pg_contains(concat(d, "/json/seed.out"), "{\"name\":\"a\\\"b\",\"n\":42,\"ok\":true,\"pi\":3.5}")
+  give pg_contains(concat(d, "/json/seed.out"), "json-done")
+}
+make xq_stdlib(d: str) -> num {
+  hold source = xq_fixture("test-stdlib", "std_t.sa", d)
+  hold numeric = xr_three(source, concat(d, "/numeric"), xq_oracle("std_g2"))
+  source = xq_fixture("test-stdlib", "std_sl.sa", d)
+  give xr_three(source, concat(d, "/sl"), xq_oracle("std_sl"))
+}
+make xq_gaps(d: str) -> num {
+  hold gate = "test-gen2-gaps"
+  hold names = "gg_len\ngg_chain\ngg_streq\ngg_pct\ngg_ord\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold source = xq_fixture(gate, concat(name, ".sa"), d)
+    hold test = xr_three(source, concat(concat(d, "/"), name), xq_oracle(name))
+  }
+  hold list = pg_contains(concat(d, "/gg_len/stage1.c"), "sx_llen(")
+  hold string = pg_contains(concat(d, "/gg_len/stage1.c"), "sx_len(s)")
+  hold source = xq_fixture(gate, "gg_ordmix.sa", d)
+  hold seed = xr_reject(0, source, concat(d, "/mix_seed"), "")
+  give xr_reject(2, source, concat(d, "/mix_native"), "")
+}
+make xq_seam(d: str) -> num {
+  hold file = "tools/sxemit_lib.sa"
+  hold begin = "EMIT-SEAM-BEGIN: the language-level emitter."
+  hold end = "EMIT-SEAM-END: below this line"
+  hold bcount = gl_assert_eq_num(pr_count(file, begin, 1, 0, 0, 0), 1, "unique emit seam begin")
+  hold ecount = gl_assert_eq_num(pr_count(file, end, 1, 0, 0, 0), 1, "unique emit seam end")
+  hold defs = gl_assert_eq_num(pr_count("tools/sxinfer_lib.sa", "make collect_defs(", 1, 0, 0, 0), 1, "unique collect_defs entry")
+  hold encoder = gl_assert_eq_num(pr_count("tools/sxenc_lib.sa", "make make_enc_state(", 1, 0, 0, 0), 1, "unique encoder entry")
+  hold text = read_file(file)
+  hold b = pg_find(text, begin)
+  hold e = pg_find(text, end)
+  hold order = gl_assert_eq_num(b < e, 1, "emit seam marker order")
+  while b < len(text) && sx_index(text, b) != 10 { b = b + 1 }
+  hold region = gl_slice(text, b + 1, e)
+  hold forbidden = "e1(\ne16(\ne32(\nenc_code_at(\n36000\nest[\n"
+  hold i = 0
+  while i < len(forbidden) {
+    hold start = i
+    while i < len(forbidden) && sx_index(forbidden, i) != 10 { i = i + 1 }
+    hold pattern = gl_slice(forbidden, start, i)
+    i = i + 1
+    when pg_find(region, pattern) >= 0 { give gl_fail(concat("raw encoder access in language emitter: ", pattern)) }
+  }
+  hold helpers = "make here_local(\nmake patch_imm32(\nmake leave_ret(\nmake sub_rsp_imm32_slot(\nmake jmp5_slot(\nmake erel32j(\n"
+  i = 0
+  while i < len(helpers) {
+    hold start = i
+    while i < len(helpers) && sx_index(helpers, i) != 10 { i = i + 1 }
+    hold helper = gl_slice(helpers, start, i)
+    i = i + 1
+    hold required = pg_contains("tools/sxenc_lib.sa", helper)
+  }
+  hold concrete = xr_case(2, "selfhost/generic_struct_concrete.sa", concat(d, "/concrete"), "7\nseven\n8\neight\n2\n8\n9", "")
+  hold emit = pg_emit(2, "selfhost/native_strord_test.sa", concat(d, "/strord"), 0)
+  give pg_capture(gl_sh_quote(concat(d, "/strord")), concat(d, "/strord.out"))
+}
+make xq_budget(d: str) -> num {
+  hold command = concat("./selfhost/gen1_min selfhost/compiler_min.sa ", gl_sh_quote(concat(d, "/budget-gen2.c")))
+  hold status = lm_capture(command, 65536, concat(d, "/budget.out"), concat(d, "/limit"))
+  hold bounded = gl_assert_eq_num(status, 0, "compiler emits within 64 MiB address space")
+  give gl_assert_files_eq("selfhost/gen2.c", concat(d, "/budget-gen2.c"), "bounded and uncapped compiler C output")
+}
+make xq_ci_workflow(path: str, jobs: num) -> num {
+  hold text = read_file(path)
+  when len(text) == 0 { give gl_fail(concat("missing workflow: ", path)) }
+  hold pins = gl_assert_eq_num(pr_count(path, "run: sha256sum -c bootstrap/sx.sha256", 1, 0, 0, 0), jobs, "every workflow job pins entry and sources")
+  hold guard = gl_assert_eq_num(pr_count(path, "run: ./sx ci-guard", 1, 1, 0, 0), 0, "guard lines are indented, not unstructured commands")
+  hold arm = gl_assert_eq_num(pr_count(path, "        run: ./sx ci-guard", 1, 1, 0, 0), jobs, "every job arms native guards")
+  hold check = gl_assert_eq_num(pr_count(path, "        run: ./sx ci-guard-check", 1, 1, 0, 0), jobs, "every job checks forbidden invocation evidence")
+  hold always = gl_assert_eq_num(pr_count(path, "        if: always()", 1, 1, 0, 0), jobs, "guard checks survive gate failures")
+  hold runners = gl_assert_eq_num(pr_count(path, "    runs-on: ubuntu-latest", 1, 1, 0, 0), jobs, "native entry runner platform")
+  hold timeout = gl_assert_eq_num(pr_count(path, "    timeout-minutes: 90", 1, 1, 0, 0), jobs, "adequate original gate time budget")
+  hold noignore = pr_assert(path, "^[[:space:]]*continue-on-error:", 0, 0, 0, 0, 0)
+  hold nomake = pg_not_contains(path, "run: make ")
+  hold nohandoff = pg_not_contains(path, "gate-binaries")
+  hold gate_command = "        run: ./sx ci"
+  when string_eq(path, ".github/workflows/release.yml") == 1 { gate_command = "        run: ./sx release" }
+  hold coverage = gl_assert_eq_num(pr_count(path, gate_command, 1, 1, 0, 0), 1, "mandatory complete acceptance entry")
+  hold ordered = gl_assert_eq_num(pg_find(text, "sha256sum -c bootstrap/sx.sha256") < pg_find(text, "run: ./sx ci-guard"), 1, "pin before entry execution")
+  when string_eq(path, ".github/workflows/ci.yml") == 1 {
+    hold concurrency = pg_contains(path, "github.event_name == 'pull_request'")
+    hold migrated = pg_contains(path, "run: ./sx target doctor test-driver")
+    hold blocker = pg_contains(path, "full-acceptance-blocker:")
+  } otherwise {
+    hold rebuild = pg_contains(path, "run: ./sx verify-entry")
+    hold order = gl_assert_eq_num(pg_find(text, "run: ./sx ci-guard") < pg_find(text, "run: ./sx verify-entry"), 1, "guard before source bootstrap")
+  }
+  give 0
+}
+make xq_ci() -> num {
+  hold ci = xq_ci_workflow(".github/workflows/ci.yml", 2)
+  hold full = xq_ci_workflow(".github/workflows/full-bootstrap.yml", 1)
+  hold release = xq_ci_workflow(".github/workflows/release.yml", 1)
+  hold publish = pg_contains(".github/workflows/release.yml", "contents: write")
+  hold release_gate = pg_contains("tools/sxrelease_lib.sa", "hold acceptance = cmd_ci()")
+  hold release_source = read_file("tools/sxrelease_lib.sa")
+  hold gated_release = gl_assert_eq_num(pg_find(release_source, "hold acceptance = cmd_ci()") < pg_find(release_source, "gh release create "), 1, "acceptance before publication")
+  hold source = "tools/sxentry_lib.sa"
+  hold migration = pg_contains(source, "hold audit = cmd_migration()")
+  hold doctor = pg_contains(source, "cmd_target(\"doctor\", built)")
+  hold shape = pg_contains(source, "cmd_target(\"test-ci-shape\", built)")
+  hold bootstrap = pg_contains(source, "cmd_target(\"true-selfhost\", built)")
+  hold fixed = pg_contains(source, "cmd_target(\"gen3\", built)")
+  give pg_contains(source, "cmd_target(\"native-test\", built)")
+}
+
+make xq_dispatch(name: str) -> num {
+  hold d = concat("selfhost/seed_tests/xq/", name)
+  hold clean = gl_clean_dir(d)
+  hold status = 0
+  when string_eq(name, "test-native-emit-split") == 1 { status = xq_seam(d) }
+  when string_eq(name, "test-seed-bootstrap-budget") == 1 { status = xq_budget(d) }
+  when string_eq(name, "test-ci-shape") == 1 { status = xq_ci() }
+  when string_eq(name, "test-stdlib") == 1 { status = xq_stdlib(d) }
+  when string_eq(name, "test-stdlib-modules") == 1 { status = xq_modules(d) }
+  when string_eq(name, "test-gen2-gaps") == 1 { status = xq_gaps(d) }
+  when string_eq(name, "test-stdlib-growth") == 1 {
+    status = xr_three("selfhost/stdlib_growth_test.sa", d, xq_oracle("sg_g2"))
+  }
+  show concat("[OK] Sayanox gate: ", name)
+  give status
+}

@@ -21,12 +21,165 @@ make sxedigits(value: num) -> str {
 // Typed inline-expression lowering. Records encode position, kind and C text;
 // only the code suffix may contain arbitrary quoted source characters.
 make sxeslice(text: str, begin: num, end: num) -> str {
-  hold value = ""
-  hold i = begin
   hold stop = sxminimum(end, len(text))
-  while i < stop {
-    value = concat(value, chr(sx_index(text, i)))
+  give sxseed_slice(text, begin, stop)
+}
+
+make sxseed_id(c: num) -> num {
+  give (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95
+}
+// Lexical compatibility normalization for the minimal seed profile. Operates
+// on Sayanox, never on emitted C. Strings/escapes are opaque; comment contents
+// cannot introduce assignments or block delimiters.
+make sxseed_slice(text: str, begin: num, end: num) -> str {
+  when end - begin > 256 {
+    hold span = end - begin
+    hold middle = begin + (span - span % 2) / 2
+    give concat(sxseed_slice(text, begin, middle), sxseed_slice(text, middle, end))
+  }
+  hold out = ""
+  hold i = begin
+  while i < end { out = concat(out, chr(sx_index(text, i)))
+    i = i + 1 }
+  give out
+}
+make sxseed_normalize(text: str) -> str {
+  hold size = len(text)
+  hold out_size = 0
+  hold out = ""
+  hold chunk = ""
+  hold i = 0
+  hold depth = 0
+  hold give_depth = -1
+  hold last_code = 0
+  hold whitespace_line = 0
+  while i < size {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      chunk = concat(chunk, chr(c))
+      i = i + 1
+      hold quoted = 1
+      while i < size && quoted == 1 {
+        hold qc = sx_index(text, i)
+        chunk = concat(chunk, chr(qc))
+        i = i + 1
+        when qc == 92 && i < size {
+          chunk = concat(chunk, chr(sx_index(text, i)))
+          i = i + 1
+        } otherwise { when qc == 34 { quoted = 0 } }
+        when len(chunk) >= 512 {
+          out_size = out_size + len(chunk)
+          out = concat(out, chunk)
+          chunk = ""
+        }
+      }
+      last_code = out_size + len(chunk)
+      whitespace_line = 0
+    } otherwise {
+      when c == 47 && i + 1 < size && sx_index(text, i + 1) == 47 {
+        while i < size && sx_index(text, i) != 10 { i = i + 1 }
+      } otherwise {
+        when sxseed_id(c) == 1 && (c < 48 || c > 57) {
+          hold word = ""
+          while i < size && sxseed_id(sx_index(text, i)) == 1 {
+            word = concat(word, chr(sx_index(text, i)))
+            i = i + 1
+          }
+          when string_eq(word, "give") == 1 { give_depth = depth }
+          chunk = concat(chunk, word)
+          last_code = out_size + len(chunk)
+          whitespace_line = 0
+        } otherwise {
+          when c == 61 && whitespace_line == 1 {
+            // A declaration/assignment may put '=' after a newline/comment.
+            out = concat(out, chunk)
+            out = concat(sxseed_slice(out, 0, last_code), " ")
+            chunk = ""
+            out_size = last_code + 1
+          }
+          when c == 125 && give_depth == depth {
+            chunk = concat(chunk, "\n")
+            give_depth = -1
+          }
+          when c == 123 { depth = depth + 1 }
+          when c == 125 { depth = depth - 1 }
+          chunk = concat(chunk, chr(c))
+          when c == 10 || c == 13 {
+            give_depth = -1
+            whitespace_line = 1
+          } otherwise {
+            when c != 32 && c != 9 {
+              last_code = out_size + len(chunk)
+              whitespace_line = 0
+            }
+          }
+          i = i + 1
+        }
+      }
+    }
+    when len(chunk) >= 512 { out_size = out_size + len(chunk)
+      out = concat(out, chunk)
+      chunk = "" }
+  }
+  give concat(out, chunk)
+}
+
+// Count complete call arguments, not commas nested in strings/containers.
+make sxseed_arity(text: str, open: num) -> num {
+  hold i = open + 1
+  hold depth = 1
+  hold quote = 0
+  hold any = 0
+  hold count = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when quote == 1 {
+      when c == 92 { i = i + 1 } otherwise {
+        when c == 34 { quote = 0 }
+      }
+    } otherwise {
+      when c == 34 { quote = 1
+        any = 1
+      } otherwise {
+        when c == 40 || c == 91 || c == 123 { depth = depth + 1
+          any = 1
+        } otherwise {
+          when c == 41 || c == 93 || c == 125 {
+            depth = depth - 1
+            when depth == 0 {
+              when any == 0 && count > 0 { give 0 - 1
+              }
+              give count + any
+            }
+          } otherwise {
+            when c == 44 && depth == 1 {
+              when any == 0 { give 0 - 1
+              }
+              count = count + 1
+              any = 0
+            } otherwise {
+              when c != 32 && c != 9 && c != 10 && c != 13 { any = 1 }
+            }
+          }
+        }
+      }
+    }
     i = i + 1
   }
-  give value
+  give 0 - 1
+}
+make sxseed_csv_has(text: str, word: str) -> num {
+  hold i = 0
+  hold item = ""
+  while i <= len(text) {
+    hold c = 44
+    when i < len(text) { c = sx_index(text, i) }
+    when c == 44 {
+      when string_eq(item, word) == 1 { give 1
+      }
+      item = ""
+    } otherwise { item = concat(item, chr(c)) }
+    i = i + 1
+  }
+  give 0
 }

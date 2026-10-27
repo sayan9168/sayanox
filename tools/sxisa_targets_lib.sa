@@ -1,0 +1,13 @@
+make xc_name(index: num) -> str {
+  when index == 0 { give "test-native32" }
+  when index == 1 { give "test-native-arm64" }
+  when index == 2 { give "test-native-riscv64" }
+  when index == 3 { give "test-sxmod" }
+  give ""
+}
+make xc_known(name: str) -> num {
+  hold i = 0
+  while i < 4 { when string_eq(name, xc_name(i)) == 1 { give 1 }
+    i = i + 1 }
+  give 0
+}

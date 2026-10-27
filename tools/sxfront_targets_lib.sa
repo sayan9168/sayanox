@@ -1,0 +1,14 @@
+make xf_name(index: num) -> str {
+  when index == 0 { give "test-native-sxdefs" }
+  when index == 1 { give "test-native-sxinfer" }
+  give ""
+}
+make xf_count() -> num { give 2 }
+make xf_known(name: str) -> num {
+  hold i = 0
+  while i < xf_count() {
+    when string_eq(name, xf_name(i)) == 1 { give 1 }
+    i = i + 1
+  }
+  give 0
+}

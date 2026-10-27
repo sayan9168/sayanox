@@ -1,0 +1,58 @@
+// Seed regression fixtures/assertions formerly owned by Makefile.
+make sg_case(compiler: str, stem: str, source: str, want: str, seed: num) -> num {
+  hold dir = gl_ensure_dir("selfhost/seed_tests")
+  hold base = concat("selfhost/seed_tests/", stem)
+  hold sa = concat(base, ".sa")
+  hold c = concat(base, ".c")
+  hold w = gl_must_write(sa, source)
+  hold cmd = concat(gl_sh_quote(compiler), concat(" ", gl_sh_quote(sa)))
+  when seed == 1 {
+    cmd = concat(cmd, " > ")
+  } otherwise {
+    cmd = concat(cmd, " ")
+  }
+  cmd = concat(cmd, gl_sh_quote(c))
+  hold r = gl_assert_eq_num(run_command(cmd), 0, concat(stem, " compiler status"))
+  hold cc = gl_compile_c(c, base, "-O2")
+  hold out = gl_assert_out(gl_sh_quote(base), want, concat(base, ".out"))
+  give 0
+}
+
+make sg_known(name: str) -> num {
+  when string_eq(name, "seed-min") == 1 || string_eq(name, "seed-min-gen1") == 1 || string_eq(name, "test-struct") == 1 || string_eq(name, "test-list") == 1 || string_eq(name, "test-fn") == 1 {
+    give 1
+  }
+  give 0
+}
+
+make sg_gate(name: str) -> num {
+  hold compiler = "./selfhost/seed/sxc_seed_min"
+  when string_eq(name, "test-struct") == 1 {
+    give sg_case(compiler, "struct", "struct Point {\n  x,\n  y\n}\nhold p = Point { 3, 4 }\nshow p.x\nshow p.y\nshow p.x + p.y\n", "3\n4\n7", 1)
+  }
+  when string_eq(name, "test-list") == 1 {
+    give sg_case(compiler, "list", "hold xs = [10, 20, 30]\nshow xs[0]\nshow xs[1]\nshow xs[2]\nhold n = len(xs)\nshow n\nhold xs = push(xs, 40)\nshow xs[3]\nshow len(xs)\n", "10\n20\n30\n3\n40\n4", 1)
+  }
+  when string_eq(name, "test-fn") == 1 {
+    give sg_case(compiler, "fn", "make add(a, b) {\n  give a + b\n}\nmake square(x) {\n  give x * x\n}\nhold r = add(40, 2)\nshow r\nhold s = square(5)\nshow s\n", "42\n25", 1)
+  }
+  when string_eq(name, "seed-min-gen1") == 1 {
+    give sg_case("./selfhost/gen1_min", "sm_wh", "hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow \"done\"\n", "0\n1\n2\ndone", 0)
+  }
+  hold a = sg_case(compiler, "min_re", "hold n = 0\nhold n = n + 1\nshow n\n", "1", 1)
+  hold b = sg_case(compiler, "min_wh", "hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow \"done\"\n", "0\n1\n2\ndone", 1)
+  hold c = sg_case(compiler, "min_mod", "hold a = 10\nshow a % 3\nwhen a > 5 { show 1 } else { show 0 }\n", "1\n1", 1)
+  when mxl_find_sub(read_file("selfhost/seed_tests/min_mod.c"), "sx_mod((double)(a),(double)(3.0))") < 0 {
+    hold e = gl_fail("seed modulo lowering changed")
+  }
+  hold w = gl_must_write("selfhost/seed_tests/min_other.sa", "hold z = 99\n")
+  hold d = sg_case(compiler, "min_use", "use \"selfhost/seed_tests/min_other.sa\"\nshow z\n", "99", 1)
+  hold missing = remove_path("selfhost/seed_tests/min_missing.sa")
+  hold w2 = gl_must_write("selfhost/seed_tests/min_miss.sa", "use \"selfhost/seed_tests/min_missing.sa\"\nshow 1\n")
+  hold rc = run_command("./selfhost/seed/sxc_seed_min selfhost/seed_tests/min_miss.sa >/dev/null 2>&1")
+  when rc == 0 {
+    hold e = gl_fail("seed accepted missing import")
+  }
+  show "=== SEED-MIN-OK ==="
+  give 0
+}

@@ -1,0 +1,170 @@
+// Reviewed fixture data from the original acceptance contracts; no recipes.
+make xr_source(gate: str, fixture: str) -> str {
+  when string_eq(gate, "test-seed-for-range") == 1 {
+  }
+  when string_eq(gate, "test-seed-for-calls") == 1 {
+  }
+  when string_eq(gate, "test-seed-for-fields") == 1 {
+    when string_eq(fixture, "for_fields_struct_fn.sa") == 1 { give "struct P {\n  x,\n  y\n}\nmake f() {\n  hold p = P { x: 3, y: 4 }\n  show p.x + p.y\n  give 0\n}\nhold r = f()\n" }
+  }
+  when string_eq(gate, "test-seed-generics") == 1 {
+  }
+  when string_eq(gate, "test-generic-structs-nested") == 1 {
+  }
+  when string_eq(gate, "test-struct-field-struct") == 1 {
+    when string_eq(fixture, "sfs.sa") == 1 { give "struct Inner {\n  v\n}\nstruct Outer {\n  b\n}\nhold i = Inner { 7 }\nhold o = Outer { i }\nshow o.b.v\n" }
+    when string_eq(fixture, "sfs_lit.sa") == 1 { give "struct Inner {\n  v\n}\nstruct Outer {\n  b\n}\nhold o = Outer { Inner { 8 } }\nshow o.b.v\n" }
+  }
+  when string_eq(gate, "test-type-refusals") == 1 {
+    when string_eq(fixture, "ttr_nested.sa") == 1 { give "struct Pt {\n  x\n}\nstruct Box<T> {\n  v\n}\nhold b = Box<Pt> { 7 }\nshow 1\n" }
+    when string_eq(fixture, "ttr_fieldann.sa") == 1 { give "struct Pt {\n  x\n  y\n}\nstruct Wrap {\n  p: Pt\n  n\n}\nshow 1\n" }
+    when string_eq(fixture, "ttr_holdann.sa") == 1 { give "struct Pt {\n  x\n  y\n}\nhold p: Pt = Pt { 1, 2 }\nhold q: Pt = p\nshow q.x\nshow q.y\n" }
+    when string_eq(fixture, "ttr_holdann_bad.sa") == 1 { give "struct Pt {\n  x\n  y\n}\nhold p: Pt = 5\nshow 1\n" }
+    when string_eq(fixture, "ttr_holdann_wrongstruct.sa") == 1 { give "struct Pt {\n  x\n}\nstruct Qt {\n  x\n}\nhold p: Pt = Qt { 5 }\n" }
+  }
+  when string_eq(gate, "test-gen2-index-expr") == 1 {
+    when string_eq(fixture, "gixe_bad_call.sa") == 1 { give "hold xs = [1, 2, 3]\nmake pick(v: list) -> num {\n  give v[0]\n}\nshow xs[pick(xs)]\n" }
+    when string_eq(fixture, "gixe_bad_comma.sa") == 1 { give "hold xs = [1, 2, 3]\nshow xs[1, 2]\n" }
+    when string_eq(fixture, "gixe_bad_quote.sa") == 1 { give "hold xs = [1, 2, 3]\nshow xs[\"a\"]\n" }
+    when string_eq(fixture, "gixe_bad_empty.sa") == 1 { give "hold xs = [1, 2, 3]\nshow xs[]\n" }
+    when string_eq(fixture, "gixe_bad_unbal.sa") == 1 { give "hold xs = [1, 2, 3]\nhold i = 1\nshow xs[(i]\n" }
+    when string_eq(fixture, "gixe_bad_trailop.sa") == 1 { give "hold xs = [1, 2, 3]\nhold i = 1\nshow xs[i +]\n" }
+    when string_eq(fixture, "gixe_neg.sa") == 1 { give "hold xs = [10, 20, 30, 40]\nshow xs[-1]\nshow xs[-2]\n" }
+  }
+  when string_eq(gate, "test-exit-builtin") == 1 {
+    when string_eq(fixture, "exit_builtin.sa") == 1 { give "hold a = arg(1)\nwhen string_eq(a, \"stop\") {\n  hold msg = write_out(\"before-exit\\n\")\n  hold code = exit(7)\n}\nshow 42\n" }
+  }
+  when string_eq(gate, "test-path-builtins") == 1 {
+    when string_eq(fixture, "a.sa") == 1 { give "x" }
+    when string_eq(fixture, "b.sa") == 1 { give "yy" }
+    when string_eq(fixture, "pathb_gen.sa") == 1 { give "hold d = read_dir(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir\")\nshow len(d)\nshow path_kind(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir\")\nshow path_kind(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir/a.sa\")\nshow path_kind(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir/sub/b.sa\")\nshow path_kind(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir_link\")\nshow path_kind(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir/missing\")\nshow path_size(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir/a.sa\")\nshow path_size(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir/sub/b.sa\")\nshow path_real(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir/../pathb_dir\")\nshow len(path_real(\"selfhost/seed_tests/xr/test-path-builtins/pathb_dir/missing\"))\n" }
+  }
+  when string_eq(gate, "test-native-primitives") == 1 {
+    when string_eq(fixture, "native_primitives_seed.sa") == 1 { give "hold a = bit_and(12, 10)\nshow a\nhold b = write_bytes(\"x\", [])\nshow b\nhold c = bytes_f64([], 1.5)\nshow len(c)\nhold d = shl(1, 3)\nshow d\nhold e = shr(8, 1)\nshow e\n" }
+  }
+  when string_eq(gate, "test-read-bytes") == 1 {
+    when string_eq(fixture, "read_bytes.sa") == 1 { give "hold dir = arg(1)\nhold p1 = concat(dir, \"/WRITEBIN\")\nhold p2 = concat(dir, \"/WRITEBIN2\")\nhold xs = []\nxs = push(xs, 72)\nxs = push(xs, 0)\nxs = push(xs, 255)\nxs = push(xs, 10)\nhold wrote = write_bytes(p1, xs)\nshow wrote\nhold ys = []\nhold got = read_bytes(p1, ys)\nshow got\nshow len(ys)\nshow ys[0]\nshow ys[1]\nshow ys[2]\nshow ys[3]\nhold twice = read_bytes(p1, ys)\nshow twice\nshow len(ys)\nshow ys[4]\nhold miss = read_bytes(concat(dir, \"/READBIN-MISSING\"), ys)\nshow miss\nshow len(ys)\nhold round = write_bytes(p2, ys)\nshow round\nshow len(ys)\n" }
+    when string_eq(fixture, "read_bytes_seed.sa") == 1 { give "hold xs = []\nhold n = read_bytes(\"x\", xs)\nshow n\n" }
+  }
+  when string_eq(gate, "test-cond-string") == 1 {
+  }
+  when string_eq(gate, "test-native-io") == 1 {
+    when string_eq(fixture, "ts_io.sa") == 1 { give "show arg_count()\nshow arg(1)\nshow arg(2)\nshow len(arg(7))\nhold p = \"selfhost/seed_tests/xr/test-native-io/io_small.txt\"\nshow write_file(p, \"a first line that is long\")\nshow write_file(p, \"short\")\nshow read_file(p)\nshow len(read_file(\"selfhost/seed_tests/xr/test-native-io/io_does_not_exist.txt\"))\nshow write_file(\"selfhost/seed_tests/xr/test-native-io/io_no_such_dir/x.txt\", \"y\")\nhold s = \"0123456789\"\nhold i = 0\nwhile i < 14 {\n  hold s = concat(s, s)\n  hold i = i + 1\n}\nshow write_file(\"selfhost/seed_tests/xr/test-native-io/io_big.txt\", s)\nhold b = read_file(\"selfhost/seed_tests/xr/test-native-io/io_big.txt\")\nshow len(b)\nshow b[163839]\nshow arg(0)\n" }
+  }
+  when string_eq(gate, "test-seed-limits") == 1 {
+    when string_eq(fixture, "seed_for_body.sa") == 1 { give "make f() {\n  hold xs = [1, 2]\n  for x in xs {\n    show x\n  }\n  give 0\n}\nhold r = f()\nshow r\n" }
+  }
+  when string_eq(gate, "test-stdlib-crypto") == 1 {
+    when string_eq(fixture, "crypto_oracle.sa") == 1 { give "use \"stdlib/crypto.sa\"\nshow cx_sha256(read_file(\"selfhost/seed_tests/xr/test-stdlib-crypto/crypto_abc.bin\"))\nshow cx_sha256(read_file(\"selfhost/seed_tests/xr/test-stdlib-crypto/crypto_55.bin\"))\nshow cx_sha256(read_file(\"selfhost/seed_tests/xr/test-stdlib-crypto/crypto_56.bin\"))\n" }
+    when string_eq(fixture, "crypto_tamper.sa") == 1 { give "use \"stdlib/crypto.sa\"\nshow cx_eq_hex(cx_sha256(\"the quick brown fox\"), cx_sha256(\"the quick brown fox\"))\nshow cx_eq_hex(cx_sha256(\"the quick brown fox\"), cx_sha256(\"the quick brown fox.\"))\nshow cx_eq_hex(cx_hmac(\"k1\", \"m\"), cx_hmac(\"k2\", \"m\"))\nshow cx_eq_hex(cx_hmac(\"k1\", \"m\"), cx_hmac(\"k1\", \"m\"))\n" }
+  }
+  give ""
+}
+make xr_bad_source(gate: str, group: num, index: num) -> str {
+  when string_eq(gate, "test-seed-for-range") == 1 && group == 0 {
+    when index == 0 { give "for i in 0.. { show i }\n" }
+    when index == 1 { give "for i in ..3 { show i }\n" }
+    when index == 2 { give "for i in 1...3 { show i }\n" }
+    when index == 3 { give "for i in 1.2.3..4 { show i }\n" }
+    when index == 4 { give "for i in 0..2..3 { show i }\n" }
+    when index == 5 { give "for i in 0..\"x\" { show i }\n" }
+    when index == 6 { give "hold s = \"a\"\nfor i in s..3 { show i }\n" }
+    when index == 7 { give "for i in 0..missing { show i }\n" }
+    when index == 8 { give "for i in 0..len(1) { show i }\n" }
+    when index == 9 { give "for i in 0..len() { show i }\n" }
+    when index == 10 { give "hold s = \"a\"\nfor i in 0..len(s,s) { show i }\n" }
+    when index == 11 { give "for i in 0..f() { show i }\n" }
+    when index == 12 { give "hold i = []\nfor i in 0..3 { show i }\n" }
+    when index == 13 { give "for true in 0..3 { show true }\n" }
+    when index == 14 { give "for i in -\"x\"..3 { show i }\n" }
+    when index == 15 { give "for i in 0..([] == []) { show i }\n" }
+    when index == 16 { give "hold xs = [1]\nfor i in 0..xs[\"bad\"] { show i }\n" }
+    when index == 17 { give "hold n = 2\nfor i in 0..n.missing { show i }\n" }
+    when index == 18 { give "show 1..2\n" }
+    when index == 19 { give "show 2.\n" }
+    when index == 20 { give "show 1.2.3\n" }
+  }
+  when string_eq(gate, "test-seed-for-calls") == 1 && group == 0 {
+    when index == 0 { give "for x in missing() { show x }\n" }
+    when index == 1 { give "for x in chr(\"x\") { show x }\n" }
+    when index == 2 { give "for x in concat(1,\"a\") { show x }\n" }
+    when index == 3 { give "for x in concat(\"a\") { show x }\n" }
+    when index == 4 { give "for x in chr(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17) { show x }\n" }
+    when index == 5 { give "for x in push(\"x\",1) { show x }\n" }
+    when index == 6 { give "for x in push([],\"x\") { show x }\n" }
+    when index == 7 { give "for x in read_file(1) { show x }\n" }
+    when index == 8 { give "for x in chr(absent) { show x }\n" }
+    when index == 9 { give "make f() -> num { give 2 }\nfor x in f() { show x }\n" }
+    when index == 10 { give "make f() -> str { give 2 }\n" }
+    when index == 11 { give "make f() -> list { give \"x\" }\n" }
+    when index == 12 { give "make f() -> str { show \"no give\" }\n" }
+    when index == 13 { give "make f(n) -> str { give \"x\" }\n" }
+    when index == 14 { give "make f() -> other { give 1 }\n" }
+    when index == 15 { give "make f() -> str { give missing() }\n" }
+    when index == 16 { give "make f() -> str { hold s = \"x\"\nhold s = 2\ngive s }\n" }
+    when index == 17 { give "hold global = \"x\"\nmake f() -> str { give global }\n" }
+    when index == 18 { give "make f() -> str { when \"bad\" { give \"x\" }\ngive \"y\" }\n" }
+    when index == 19 { give "make f() -> str { give \"x\" }\nfor x in f(1) { show x }\n" }
+    when index == 20 { give "make f() -> str { give \"x\" }\nmake f() -> str { give \"y\" }\n" }
+    when index == 21 { give "make f() { give \"wrong\" }\nfor x in chr(f()) { show x }\n" }
+  }
+  when string_eq(gate, "test-seed-for-fields") == 1 && group == 0 {
+    when index == 0 { give "struct P {\n  name\n}\nhold p = P { name: \"ab\" }\nfor c in p.missing {\n  show c\n}\n" }
+    when index == 1 { give "struct P {\n  x\n}\nhold p = P { x: 3 }\nfor c in p.x {\n  show c\n}\n" }
+    when index == 2 { give "hold n = 3\nfor c in n.x {\n  show c\n}\n" }
+    when index == 3 { give "struct Q {\n  n\n}\nstruct P {\n  q\n}\nhold p = P { q: Q { n: \"x\" } }\nfor c in p.q {\n  show c\n}\n" }
+    when index == 4 { give "struct P {\n  name\n}\nhold p = P { name: \"ab\" }\nfor c in p.name[0] {\n  show c\n}\n" }
+    when index == 5 { give "struct P {\n  name\n}\nhold p = P { name: \"ab\" }\nfor i in p.name..3 {\n  show i\n}\n" }
+  }
+  when string_eq(gate, "test-seed-generics") == 1 && group == 0 {
+    when index == 0 { give "make f<T>(a: T, b: T) -> T { give a }\nshow f(1,\"bad\")\n" }
+    when index == 1 { give "make f<T>(a: T) -> T { give a }\nshow f()\n" }
+    when index == 2 { give "make f<T>(a: T) -> U { give a }\n" }
+    when index == 3 { give "make f<T,T>(a: T) -> T { give a }\n" }
+    when index == 4 { give "make f<T,U>(a: T) -> U { give a }\n" }
+    when index == 5 { give "make f<T>(a: num) -> T { give a }\n" }
+    when index == 6 { give "make f<T>(a: T) -> T { give \"bad\" }\nshow f(1)\n" }
+    when index == 7 { give "make f<T>(a: T) -> T { hold value: T = \"bad\"\ngive a }\nshow f(1)\n" }
+    when index == 8 { give "make f<T>(a: T) -> T { give _sx_gen_0_1(a) }\nshow f(1)\n" }
+    when index == 9 { give "make f<T>(a: T) -> T { when true { give a } }\nshow f(1)\n" }
+  }
+  when string_eq(gate, "test-cond-string") == 1 && group == 0 {
+    when index == 0 { give "hold s = \"ab\"\nhold a = 1\nwhen s and a {\n  show 1\n}\n" }
+    when index == 1 { give "hold s = \"ab\"\nhold a = 1\nwhen a and s {\n  show 1\n}\n" }
+    when index == 2 { give "hold s = \"ab\"\nhold a = 1\nwhen not s {\n  show 1\n}\n" }
+    when index == 3 { give "hold s = \"ab\"\nwhen s {\n  show 1\n}\n" }
+    when index == 4 { give "hold s = \"ab\"\nhold a = 1\nwhile s and a {\n  show 1\n  hold a = 0\n}\n" }
+    when index == 5 { give "hold s = \"ab\"\nhold a = 1\nwhen (s and a) {\n  show 1\n}\n" }
+  }
+  when string_eq(gate, "test-seed-limits") == 1 && group == 0 {
+    when index == 0 { give "make id<T>(x: num) -> T { give x }\n" }
+    when index == 1 { give "make first<A,B>(x: A) -> B { give x }\n" }
+  }
+  when string_eq(gate, "test-seed-limits") == 1 && group == 1 {
+    when index == 0 { give "hold xs = [1]\nfor x in xs() { show x }\n" }
+    when index == 1 { give "hold xs = [1]\nfor xs in xs { show xs }\n" }
+    when index == 2 { give "hold n = 1\nfor x in n { show x }\n" }
+    when index == 3 { give "hold n = 1\nhold s = \"ab\"\nfor n in s { show n }\n" }
+  }
+  give ""
+}
+make xr_oracle(key: str) -> str {
+  when string_eq(key, "SFR_WANT") == 1 { give "0\n1\n2\n3\n4\n5\n-1\n0\n1\n0.5\n1.5\n1\n2\n3\n0\n2\n3\n4\n0\n2\n10\n12\n5\n6\n7\n97\n98\n2\n3\n0\n2\n4\n6\n0\n1\nrange-done" }
+  when string_eq(key, "SFC_WANT") == 1 { give "labels\na\nb\nvalues\n4\n6\n100\nx\nA\nchanged\n1\n2\n2\nlabels\na\nlabels\na\nA\n9\nvalues\n0\n3\nfile\n1\nh\ni\ncalls-done" }
+  when string_eq(key, "SFF_WANT") == 1 { give "a\nb\nx\ny\n7\np\nq\nz\n0\na\nc\n2\n2\nm\nn\n2\n2\n3\nfields-done" }
+  when string_eq(key, "SGEN_WANT") == 1 { give "3\nhi\n2\nfirst\nsecond\n2\n8\nnested\n15\n3\n6\no\nk\n4\n5\n6" }
+  when string_eq(key, "GIXE_WANT") == 1 { give "30\n20\n30\n20\n20\n30\n30\n20\n40\n30\nc\nb\ne\n99\n50\n40\n20\n1\n2\n3\n4\n5\n6\n20\n30\n0\n1\n0\n1\n0\n1\n0\n1\n30\n1\n0\n1\nx\nindex-expr-done" }
+  when string_eq(key, "CRY_WANT") == 1 { give "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1\n9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318\nb35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a\n7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34\nffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb\n635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0\n26a66b061e8f48f39927c312f25293959729eee95978e2892d49d3512a5cc092\n32\nb0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7\n5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843\n60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54\n00\nff\nab\n3\n255\n0\n0\n1\n0\n0\n00000000\nffffffff\nf0f00000\nffffffff\n80000000\n0000000f\nfffffff0\n00000001\n0000003d\ncrypto-done" }
+  give ""
+}
+
+make xr_bad_count(gate: str, group: num) -> num {
+  when string_eq(gate, "test-seed-for-range") == 1 && group == 0 { give 21 }
+  when string_eq(gate, "test-seed-for-calls") == 1 && group == 0 { give 22 }
+  when string_eq(gate, "test-seed-for-fields") == 1 && group == 0 { give 6 }
+  when string_eq(gate, "test-seed-generics") == 1 && group == 0 { give 10 }
+  when string_eq(gate, "test-cond-string") == 1 && group == 0 { give 6 }
+  when string_eq(gate, "test-seed-limits") == 1 && group == 0 { give 2 }
+  when string_eq(gate, "test-seed-limits") == 1 && group == 1 { give 4 }
+  give 0
+}

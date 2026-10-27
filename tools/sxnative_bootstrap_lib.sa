@@ -1,0 +1,33 @@
+// Native bootstrap trust seam. This path never reconstructs a compiler from C.
+// A pinned prebuilt Sayanox compiler is an explicit trusted artifact, not an
+// independent trust proof; every stage below compiles the same reviewed .sa.
+make bt_native_bootstrap() -> num {
+  hold anchor = bt_require_file("bootstrap/sxc_native.bin")
+  hold pins = bt_require_file("bootstrap/native.sha256")
+  hold verify = target_run("sha256sum -c bootstrap/native.sha256", "native bootstrap integrity pins")
+  hold work = ensure_dir_p("selfhost/seed_tests/native-bootstrap")
+  when work != 1 { give fail(1, "cannot create native bootstrap directory") }
+  hold first = "selfhost/seed_tests/native-bootstrap/compiler1"
+  hold second = "selfhost/seed_tests/native-bootstrap/compiler2"
+  hold third = "selfhost/seed_tests/native-bootstrap/compiler3"
+  hold a = target_run(concat("./bootstrap/sxc_native.bin tools/sxc_native.sa ", sh_quote(first)), "native bootstrap stage 1")
+  hold b = target_run(concat(sh_quote(first), concat(" tools/sxc_native.sa ", sh_quote(second))), "native bootstrap stage 2")
+  hold c = target_run(concat(sh_quote(second), concat(" tools/sxc_native.sa ", sh_quote(third))), "native bootstrap stage 3")
+  when files_byte_equal(second, third) != 1 || files_byte_equal("bootstrap/sxc_native.bin", third) != 1 {
+    give fail(1, "native bootstrap source/anchor fixed point mismatch; installed compiler unchanged")
+  }
+  hold staged = "tools/sxc_native.sxbuild_new"
+  hold install_bytes = []
+  hold count = read_bytes(third, install_bytes)
+  when count <= 0 || write_bytes(staged, install_bytes) != 1 {
+    hold rm = remove_path(staged)
+    give fail(1, "cannot stage native bootstrap compiler")
+  }
+  hold mode = target_run("chmod +x tools/sxc_native.sxbuild_new", "native compiler executable mode")
+  hold install = target_run("mv -f tools/sxc_native.sxbuild_new tools/sxc_native", "install native bootstrap compiler")
+  hold rm1 = remove_path(first)
+  hold rm2 = remove_path(second)
+  hold rm3 = remove_path(third)
+  show "[OK] native Sayanox bootstrap: pinned anchor == source-built fixed point; no C compiler/seed used"
+  give 0
+}

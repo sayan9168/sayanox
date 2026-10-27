@@ -1,0 +1,170 @@
+// Acceptance program data extracted once, never interpreted as recipes.
+make ng_fixture_name(i: num) -> str {
+  when i == 0 { give "native_hello.sa" }
+  when i == 1 { give "native_negative.sa" }
+  when i == 2 { give "native_while.sa" }
+  when i == 3 { give "native_mod.sa" }
+  when i == 4 { give "native_else.sa" }
+  when i == 5 { give "native_list.sa" }
+  when i == 6 { give "native_push.sa" }
+  when i == 7 { give "native_oob.sa" }
+  when i == 8 { give "native_slot.sa" }
+  when i == 9 { give "native_undef.sa" }
+  when i == 10 { give "native_struct.sa" }
+  when i == 11 { give "native_fld.sa" }
+  when i == 12 { give "native_nest.sa" }
+  when i == 13 { give "native_nest3.sa" }
+  when i == 14 { give "native_nestfwd.sa" }
+  when i == 15 { give "native_nestlist.sa" }
+  when i == 16 { give "native_showstruct.sa" }
+  when i == 17 { give "native_nestchain.sa" }
+  when i == 18 { give "native_nestcopy.sa" }
+  when i == 19 { give "nu_other.sa" }
+  when i == 20 { give "nu_use.sa" }
+  when i == 21 { give "nu_mid.sa" }
+  when i == 22 { give "nu_top.sa" }
+  when i == 23 { give "nu_rel.sa" }
+  when i == 24 { give "nu_miss.sa" }
+  when i == 25 { give "nu_uq.sa" }
+  when i == 26 { give "native_fn.sa" }
+  when i == 27 { give "native_fn2.sa" }
+  when i == 28 { give "native_fn3.sa" }
+  when i == 29 { give "native_postmul.sa" }
+  when i == 30 { give "native_fnhold.sa" }
+  when i == 31 { give "native_giveout.sa" }
+  when i == 32 { give "native_mkin.sa" }
+  when i == 33 { give "native_fnargs.sa" }
+  when i == 34 { give "native_fnty.sa" }
+  when i == 35 { give "native_fngive.sa" }
+  give ""
+}
+make ng_fixture_count() -> num { give 36 }
+make ng_source(name: str, d: str) -> str {
+  when string_eq(name, "native_hello.sa") == 1 { give "hold x = 40\nhold x = x + 2\nshow x\n" }
+  when string_eq(name, "native_negative.sa") == 1 { give "hold z = -42\nshow z\n" }
+  when string_eq(name, "native_while.sa") == 1 { give "hold n = 0\nwhile n < 3 {\n  show n\n  hold n = n + 1\n}\nshow \"done\"\n" }
+  when string_eq(name, "native_mod.sa") == 1 { give "hold a = 10\nshow a % 3\nwhen a > 5 { show 1 } else { show 0 }\n" }
+  when string_eq(name, "native_else.sa") == 1 { give "hold a = 10\nwhen a < 5 { show 1 } else { show 2 }\nwhen a < 5 { show 3 } otherwise { show 4 }\nshow 5\n" }
+  when string_eq(name, "native_list.sa") == 1 { give "hold xs = [1, 2, 3]\nshow xs[0]\nshow len(xs)\n" }
+  when string_eq(name, "native_push.sa") == 1 { give "hold xs = []\npush(xs, 5)\npush(xs, 6)\npush(xs, 7)\npush(xs, 8)\npush(xs, 9)\nshow len(xs)\nshow xs[0]\nshow xs[4]\n" }
+  when string_eq(name, "native_oob.sa") == 1 { give "hold xs = [7]\nshow xs[9]\n" }
+  when string_eq(name, "native_slot.sa") == 1 { give "hold ab = 1\nhold ac = 2\nshow ab\nshow ac\n" }
+  when string_eq(name, "native_undef.sa") == 1 { give "hold x = 1\nshow y\n" }
+  when string_eq(name, "native_struct.sa") == 1 { give "struct Point {\n  x\n  y\n}\nhold p = Point { 1, 2 }\nshow p.x\nshow p.y\n" }
+  when string_eq(name, "native_fld.sa") == 1 { give "hold a = 1\nshow a.x\n" }
+  when string_eq(name, "native_nest.sa") == 1 { give "struct Point {\n  name,\n  x\n}\nstruct Line {\n  a,\n  b\n}\nhold l = Line { a: Point { name: \"p1\", x: 1 }, b: Point { name: \"p2\", x: 2 } }\nshow l.a.name\nshow l.a.x\nshow l.b.name\nshow l.b.x\nhold m = l.b\nshow m.name\nshow m.x\n" }
+  when string_eq(name, "native_nest3.sa") == 1 { give "struct Point {\n  x,\n  y\n}\nstruct Rect {\n  o,\n  sz\n}\nstruct Scene {\n  r,\n  label\n}\nhold s = Scene { r: Rect { o: Point { 1, 2 }, sz: Point { 3, 4 } }, label: \"main\" }\nshow s.r.o.x\nshow s.r.o.y\nshow s.r.sz.x\nshow s.label\nhold rr = s.r\nshow rr.sz.y\n" }
+  when string_eq(name, "native_nestfwd.sa") == 1 { give "struct Line {\n  a\n}\nstruct Point {\n  x\n}\nhold l = Line { a: Point { 1 } }\n" }
+  when string_eq(name, "native_nestlist.sa") == 1 { give "struct Line {\n  a\n}\nhold l = Line { a: [1] }\nhold alias = l.a\npush(alias, 2)\nshow len(l.a)\nshow l.a[1]\n" }
+  when string_eq(name, "native_showstruct.sa") == 1 { give "struct Point {\n  x\n}\nhold q = Point { x: 1 }\nshow q\n" }
+  when string_eq(name, "native_nestchain.sa") == 1 { give "struct Point {\n  x\n}\nhold p = Point { x: 1 }\nshow p.x.y\n" }
+  when string_eq(name, "native_nestcopy.sa") == 1 { give "struct Point {\n  x\n}\nstruct Mid {\n  p\n}\nstruct Top {\n  q\n}\nhold t = Top { q: Mid { p: Point { x: 7 } } }\nhold p2 = t.q.p\nshow p2.x\n" }
+  when string_eq(name, "nu_other.sa") == 1 { give "hold z = 99\n" }
+  when string_eq(name, "nu_use.sa") == 1 { give concat("use \"", concat(d, "/nu_other.sa\"\nshow z\n")) }
+  when string_eq(name, "nu_mid.sa") == 1 { give concat("use \"", concat(d, "/nu_other.sa\"\nhold y = 1\n")) }
+  when string_eq(name, "nu_top.sa") == 1 { give concat("use \"", concat(d, "/nu_mid.sa\"\nshow z\nshow y\n")) }
+  when string_eq(name, "nu_rel.sa") == 1 { give "use \"nu_other.sa\"\nshow z\n" }
+  when string_eq(name, "nu_miss.sa") == 1 { give concat("use \"", concat(d, "/nu_missing.sa\"\nshow 1\n")) }
+  when string_eq(name, "nu_uq.sa") == 1 { give "use other.sa\nshow 1\n" }
+  when string_eq(name, "native_fn.sa") == 1 { give "make add(a, b) {\n  give a + b\n}\nmake fac(n) {\n  when n <= 1 {\n    give 1\n  }\n  give n * fac(n - 1)\n}\nmake fib(n) {\n  when n <= 1 {\n    give n\n  } else {\n    give fib(n - 1) + fib(n - 2)\n  }\n}\nshow add(40, 2)\nshow fac(5)\nshow fib(20)\nhold r = add(fac(4), fib(7))\nshow r\n" }
+  when string_eq(name, "native_fn2.sa") == 1 { give "make sum6(a, b, c, d, e, f) {\n  give a + b + c + d + e + f\n}\nmake later(x) {\n  give helper(x) * 2\n}\nmake helper(x) {\n  give x + 1\n}\nmake is_even(n) {\n  when n == 0 {\n    give 1\n  }\n  give is_odd(n - 1)\n}\nmake is_odd(n) {\n  when n == 0 {\n    give 0\n  }\n  give is_even(n - 1)\n}\nmake z() {\n  give 7\n}\nmake bump(dummy) {\n  cnt = cnt + 1\n  give cnt\n}\nhold cnt = 0\nshow sum6(1, 2, 3, 4, 5, 6)\nshow later(4)\nshow is_even(10)\nshow z()\nshow bump(0)\nshow bump(0)\nshow cnt\n" }
+  when string_eq(name, "native_fn3.sa") == 1 { give "hold s = \"abc\"\nmake add(a, b) {\n  give a + b\n}\nshow add(len(s), 2)\nshow sx_index(s, 0)\nshow s[2]\nshow add(s[0], sx_index(s, 1))\n" }
+  when string_eq(name, "native_postmul.sa") == 1 { give "struct Point {\n  x,\n  y\n}\nhold p = Point { x: 3, y: 4 }\nhold xs = [10, 20]\nshow p.x * p.x\nshow 2 * p.y\nshow 3 * xs[0]\nshow 100 / 5 / 2\nshow 17 % 5 % 3\n" }
+  when string_eq(name, "native_fnhold.sa") == 1 { give "make f(n) {\n  hold t = n * 2\n  give t\n}\nshow f(3)\n" }
+  when string_eq(name, "native_giveout.sa") == 1 { give "give 5\n" }
+  when string_eq(name, "native_mkin.sa") == 1 { give "when 1 == 1 {\n  make g(x) {\n    give x\n  }\n}\n" }
+  when string_eq(name, "native_fnargs.sa") == 1 { give "make f(a) {\n  give a\n}\nshow f(1, 2)\n" }
+  when string_eq(name, "native_fnty.sa") == 1 { give "make f(a) {\n  give a\n}\nshow f(\"x\")\n" }
+  when string_eq(name, "native_fngive.sa") == 1 { give "make f(a) {\n  give \"x\"\n}\nshow f(1)\n" }
+  give ""
+}
+make ng_positive(i: num) -> str {
+  when i == 0 { give "native_hello" }
+  when i == 1 { give "native_negative" }
+  when i == 2 { give "native_while" }
+  when i == 3 { give "native_mod" }
+  when i == 4 { give "native_else" }
+  when i == 5 { give "native_list" }
+  when i == 6 { give "native_push" }
+  when i == 7 { give "native_slot" }
+  when i == 8 { give "native_struct" }
+  when i == 9 { give "native_nest" }
+  when i == 10 { give "native_nest3" }
+  when i == 11 { give "native_nestlist" }
+  when i == 12 { give "native_nestcopy" }
+  when i == 13 { give "nu_use" }
+  when i == 14 { give "nu_top" }
+  when i == 15 { give "nu_rel" }
+  when i == 16 { give "native_fn" }
+  when i == 17 { give "native_fn2" }
+  when i == 18 { give "native_fn3" }
+  when i == 19 { give "native_postmul" }
+  when i == 20 { give "native_fnhold" }
+  give ""
+}
+make ng_positive_count() -> num { give 21 }
+make ng_want(name: str) -> str {
+  when string_eq(name, "native_hello") == 1 { give "42" }
+  when string_eq(name, "native_negative") == 1 { give "-42" }
+  when string_eq(name, "native_while") == 1 { give "0\n1\n2\ndone" }
+  when string_eq(name, "native_mod") == 1 { give "1\n1" }
+  when string_eq(name, "native_else") == 1 { give "2\n4\n5" }
+  when string_eq(name, "native_list") == 1 { give "1\n3" }
+  when string_eq(name, "native_push") == 1 { give "5\n5\n9" }
+  when string_eq(name, "native_slot") == 1 { give "1\n2" }
+  when string_eq(name, "native_struct") == 1 { give "1\n2" }
+  when string_eq(name, "native_nest") == 1 { give "p1\n1\np2\n2\np2\n2" }
+  when string_eq(name, "native_nest3") == 1 { give "1\n2\n3\nmain\n4" }
+  when string_eq(name, "native_nest3_sm") == 1 { give "1\n2\n3\nmain\n4" }
+  when string_eq(name, "native_nest3_g2") == 1 { give "1\n2\n3\nmain\n4" }
+  when string_eq(name, "native_nestlist") == 1 { give "2\n2" }
+  when string_eq(name, "native_nestcopy") == 1 { give "7" }
+  when string_eq(name, "native_nestcopy_sm") == 1 { give "7" }
+  when string_eq(name, "native_nestcopy_g2") == 1 { give "7" }
+  when string_eq(name, "nu_use") == 1 { give "99" }
+  when string_eq(name, "nu_top") == 1 { give "99\n1" }
+  when string_eq(name, "nu_rel") == 1 { give "99" }
+  when string_eq(name, "native_fn") == 1 { give "42\n120\n6765\n37" }
+  when string_eq(name, "native_fn2") == 1 { give "21\n10\n1\n7\n1\n2\n2" }
+  when string_eq(name, "native_fn3") == 1 { give "5\n97\n99\n195" }
+  when string_eq(name, "native_postmul") == 1 { give "9\n8\n30\n10\n2" }
+  when string_eq(name, "native_postmul_sm") == 1 { give "9\n8\n30\n10\n2" }
+  when string_eq(name, "native_postmul_g2") == 1 { give "9\n8\n30\n10\n2" }
+  when string_eq(name, "native_fn_sm") == 1 { give "42\n120\n6765\n37" }
+  when string_eq(name, "native_fn_g2") == 1 { give "42\n120\n6765\n37" }
+  when string_eq(name, "nso_nat_gate") == 1 { give "1\n0\n1\n0\n1\n1\n1\n1\n1\n1\n1\n1\n1\n100\n300" }
+  when string_eq(name, "sg_nat_gate") == 1 { give "55\n0\n0\n2\n9\n-7\n4\n4\n0\n1\n24\n1\n1\n0\n8\n16\n5\n1\n3\n0\n1\n0\n0\n1\n0\n3\n4\n4\n1000" }
+  when string_eq(name, "native_fnhold") == 1 { give "6" }
+  give ""
+}
+make ng_negative(i: num) -> str {
+  when i == 0 { give "native_undef.sa" }
+  when i == 1 { give "native_fld.sa" }
+  when i == 2 { give "native_nestfwd.sa" }
+  when i == 3 { give "native_showstruct.sa" }
+  when i == 4 { give "native_nestchain.sa" }
+  when i == 5 { give "nu_miss.sa" }
+  when i == 6 { give "nu_uq.sa" }
+  when i == 7 { give "native_giveout.sa" }
+  when i == 8 { give "native_mkin.sa" }
+  when i == 9 { give "native_fnargs.sa" }
+  when i == 10 { give "native_fnty.sa" }
+  when i == 11 { give "native_fngive.sa" }
+  give ""
+}
+make ng_negative_count() -> num { give 12 }
+make ng_diagnostic(name: str) -> str {
+  when string_eq(name, "native_undef.sa") == 1 { give "undefined variable" }
+  when string_eq(name, "native_fld.sa") == 1 { give "cannot access a field" }
+  when string_eq(name, "native_nestfwd.sa") == 1 { give "declare the nested struct first" }
+  when string_eq(name, "native_showstruct.sa") == 1 { give "show of a struct" }
+  when string_eq(name, "native_nestchain.sa") == 1 { give "cannot access a field" }
+  when string_eq(name, "nu_miss.sa") == 1 { give "cannot open use file" }
+  when string_eq(name, "nu_uq.sa") == 1 { give "use needs a quoted path" }
+  when string_eq(name, "native_giveout.sa") == 1 { give "give outside a make function" }
+  when string_eq(name, "native_mkin.sa") == 1 { give "make must be at the top level" }
+  when string_eq(name, "native_fnargs.sa") == 1 { give "takes 1 args, got 2" }
+  when string_eq(name, "native_fnty.sa") == 1 { give "takes numbers" }
+  when string_eq(name, "native_fngive.sa") == 1 { give "give must give a number" }
+  give ""
+}

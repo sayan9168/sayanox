@@ -1,0 +1,20 @@
+// Additional stdlib, bootstrap budget and CI-shape obligations.
+make xq_name(index: num) -> str {
+  when index == 0 { give "test-stdlib" }
+  when index == 1 { give "test-stdlib-growth" }
+  when index == 2 { give "test-stdlib-modules" }
+  when index == 3 { give "test-gen2-gaps" }
+  when index == 4 { give "test-native-emit-split" }
+  when index == 5 { give "test-seed-bootstrap-budget" }
+  when index == 6 { give "test-ci-shape" }
+  give ""
+}
+make xq_count() -> num { give 7 }
+make xq_known(name: str) -> num {
+  hold i = 0
+  while i < xq_count() {
+    when string_eq(name, xq_name(i)) == 1 { give 1 }
+    i = i + 1
+  }
+  give 0
+}

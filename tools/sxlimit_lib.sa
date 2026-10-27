@@ -1,0 +1,105 @@
+// Linux x86-64 resource-limited child launcher emitted entirely in Sayanox.
+// The ELF sets RLIMIT_AS with syscall 160 and execs /bin/sh -c with the
+// inherited environment. No C helper, prlimit dependency or shell ulimit logic.
+// chmod is the same leaf host operation used by sxc_native's ELF publisher.
+make lm_put(bytes: list, at: num, value: num, count: num) -> num {
+  hold i = 0
+  while i < count {
+    hold low = value % 256
+    bytes[at + i] = low
+    value = (value - low) / 256
+    i = i + 1
+  }
+  give 0
+}
+
+make lm_text(bytes: list, text: str) -> num {
+  hold i = 0
+  while i < len(text) {
+    hold byte = sx_index(text, i)
+    when byte == 0 { give gl_fail("NUL byte in resource-limited command") }
+    bytes = push(bytes, byte)
+    i = i + 1
+  }
+  bytes = push(bytes, 0)
+  give 0
+}
+
+make lm_launcher(command: str, kib: num, path: str) -> num {
+  when kib <= 0 || kib > 1073741824 { give gl_fail("invalid address-space limit") }
+  hold image = []
+  hold i = 0
+  while i < 128 { image = push(image, 0)
+    i = i + 1 }
+  // Save initial envp in r12; setrlimit(9, limits); execve(sh, argv, envp).
+  hold code = [72,139,4,36,76,141,100,196,16,184,160,0,0,0,191,9,0,0,0,72,141,53,0,0,0,0,15,5,72,133,192,120,24,184,59,0,0,0,72,141,61,0,0,0,0,72,141,53,0,0,0,0,76,137,226,15,5,191,126,0,0,0,184,60,0,0,0,15,5]
+  i = 0
+  while i < len(code) { image = push(image, code[i])
+    i = i + 1 }
+  while len(image) % 8 != 0 { image = push(image, 0) }
+  hold limits = len(image)
+  i = 0
+  while i < 16 { image = push(image, 0)
+    i = i + 1 }
+  hold current = lm_put(image, limits, kib * 1024, 8)
+  hold maximum = lm_put(image, limits + 8, kib * 1024, 8)
+  hold shell = len(image)
+  hold shell_text = lm_text(image, "/bin/sh")
+  hold dash = len(image)
+  hold dash_text = lm_text(image, "-c")
+  hold cmd = len(image)
+  hold cmd_text = lm_text(image, command)
+  while len(image) % 8 != 0 { image = push(image, 0) }
+  hold argv = len(image)
+  i = 0
+  while i < 32 { image = push(image, 0)
+    i = i + 1 }
+  hold base = 4194304
+  hold a0 = lm_put(image, argv, base + shell, 8)
+  hold a1 = lm_put(image, argv + 8, base + dash, 8)
+  hold a2 = lm_put(image, argv + 16, base + cmd, 8)
+  hold rel0 = lm_put(image, 128 + 22, limits - 128 - 26, 4)
+  hold rel1 = lm_put(image, 128 + 41, shell - 128 - 45, 4)
+  hold rel2 = lm_put(image, 128 + 48, argv - 128 - 52, 4)
+  image[0] = 127
+  image[1] = 69
+  image[2] = 76
+  image[3] = 70
+  image[4] = 2
+  image[5] = 1
+  image[6] = 1
+  hold h0 = lm_put(image, 16, 2, 2)
+  hold h1 = lm_put(image, 18, 62, 2)
+  hold h2 = lm_put(image, 20, 1, 4)
+  hold h3 = lm_put(image, 24, base + 128, 8)
+  hold h4 = lm_put(image, 32, 64, 8)
+  hold h5 = lm_put(image, 52, 64, 2)
+  hold h6 = lm_put(image, 54, 56, 2)
+  hold h7 = lm_put(image, 56, 1, 2)
+  hold ph0 = lm_put(image, 64, 1, 4)
+  hold ph1 = lm_put(image, 68, 5, 4)
+  hold ph2 = lm_put(image, 80, base, 8)
+  hold ph3 = lm_put(image, 88, base, 8)
+  hold ph4 = lm_put(image, 96, len(image), 8)
+  hold ph5 = lm_put(image, 104, len(image), 8)
+  hold ph6 = lm_put(image, 112, 4096, 8)
+  hold written = gl_assert_eq_num(write_bytes(path, image), 1, "write limited launcher")
+  give gl_assert_eq_num(run_command(concat("chmod 0755 ", gl_sh_quote(path))), 0, "publish limited launcher")
+}
+
+make lm_run(command: str, kib: num, launcher: str) -> num {
+  hold built = lm_launcher(command, kib, launcher)
+  give run_command(gl_sh_quote(launcher))
+}
+
+make lm_assert_out(command: str, kib: num, want: str, base: str) -> num {
+  hold launcher = concat(base, ".elf")
+  hold built = lm_launcher(command, kib, launcher)
+  give gl_assert_out(gl_sh_quote(launcher), want, concat(base, ".out"))
+}
+
+make lm_capture(command: str, kib: num, stdout_file: str, base: str) -> num {
+  hold launcher = concat(base, ".elf")
+  hold built = lm_launcher(command, kib, launcher)
+  give run_command(concat(gl_sh_quote(launcher), concat(" > ", gl_sh_quote(stdout_file))))
+}

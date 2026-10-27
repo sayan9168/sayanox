@@ -1,0 +1,26 @@
+// Immutable dependency names, not executable legacy recipes.
+make ag_known(name: str) -> num {
+  when string_eq(name, "native-bootstrap") == 1 || string_eq(name, "test-native-bootstrap") == 1 { give 1 }
+  when string_eq(name, "test-full-seed-diagnostics") == 1 || string_eq(name, "test-recovery") == 1 { give 1 }
+  when string_eq(name, "test-network") == 1 || string_eq(name, "test-http-get") == 1 || string_eq(name, "test-sayacrawl") == 1 || string_eq(name, "ci") == 1 { give 1 }
+  when string_eq(name, "native-test") == 1 || string_eq(name, "native-test-body") == 1 { give 1 }
+  when string_eq(name, "test-language-deps") == 1 { give 1 }
+  when string_eq(name, "all") == 1 { give 1 }
+  when string_eq(name, "selfhost/gen1.c") == 1 { give 1 }
+  when string_eq(name, "selfhost/gen1") == 1 { give 1 }
+  when string_eq(name, "true-selfhost-min") == 1 { give 1 }
+  when string_eq(name, "true-selfhost-full") == 1 { give 1 }
+  when string_eq(name, "true-selfhost") == 1 { give 1 }
+  when string_eq(name, "selfhost") == 1 { give 1 }
+  when string_eq(name, "grammar") == 1 { give 1 }
+  when string_eq(name, "gc-test") == 1 { give 1 }
+  when string_eq(name, "gen3") == 1 { give 1 }
+  when string_eq(name, "subset") == 1 { give 1 }
+  when string_eq(name, "test") == 1 { give 1 }
+  when string_eq(name, "test-seed-sanitize") == 1 { give 1 }
+  give 0
+}
+make ag_minimum_targets() -> str { give "test-reassign\ntest-while\ntest-when\ntest-mod\ntest-struct2\ntest-list2\ntest-use\ntest-fn2\ntest-chain\ntest-condmod\ntest-user\ntest-nest\ntest-prec\ntest-float\ntest-parens\ntest-push-stmt\ntest-full-lang\ntest-generics\ntest-parity\ntest-stage2-demos\ntest-stage2\ntest-for-str\ntest-gen2-gaps\ntest-stdlib\ntest-pkgs\ntest-registry-sums\ntest-builtin-names\ntest-sxfmt\ntest-sxpkg\ntest-lsp\ntest-lsp-robust\ntest-stdlib-growth\ntest-stdlib-modules\ntest-gen2-index-expr\ntest-gen2-expr-lowering\ntest-doc-claims\ntest-sxpkg-polish\ntest-native-strord\ntest-native-cond\ntest-native-lang\ntest-native-locals\ntest-give-index\ntest-typed-sig\ntest-list-expr\ntest-list-paren\ntest-native-strfn\ntest-native-strgen\ntest-native-listgen\ntest-native-logicarg\ntest-cond-string\ntest-gen2-logic-builtin\ntest-struct-logic\ntest-logic-value\ntest-native-generics\ntest-gc\ntest-seed-gc\ntest-generic-structs\ntest-sxpkg-online-local\ntest-sxpkg-online-optin\ntest-sxpkg-sayanox-logic\ntest-read-bytes\ntest-full-language-expr\ntest-language-deps\n" }
+
+make ag_native_before() -> str { give "test-native-ir-portable\ntest-native32\ntest-native-arm64\ntest-native-riscv64\ntest-sxmod\ntest-trust-anchor\ntest-native-sxdefs\ntest-native-sxinfer\ntest-native-sxruntime\ntest-native-sxgc\ntest-native-sxemit\ntest-native-sxlink\ntest-native-sxencode\ntest-sxdiag\ntest-gen2-index-expr\ntest-for-paren\ntest-gen2-index-mod\ntest-type-refusals\ntest-gen2-expr-lowering\ntest-seed-for-untyped\ntest-seed-for-fields\ntest-native-param-reassign\ntest-native-for-functions\ntest-native-list-alias\ntest-seed-generics\ntest-native-generic-local\ntest-gen2-forward\ntest-gen2-function-scope\ntest-gen2-boolean-args\ntest-gen2-generic-queue\ntest-gen2-list-return\ntest-gen2-list-args\ntest-gen2-gc-roots\ntest-gen2-list-arithmetic\ntest-return-paths\ntest-name-resolution\ntest-inline-expressions\ntest-seed-list-sequence\ntest-list-postfix\ntest-seed-borrow\ntest-list-struct-fields\ntest-stdlib-list-search\ntest-stdlib-crypto\ntest-stdlib-json-deep\ntest-stdlib-json-write\ntest-sxbuild\ntest-native-stage2-parity\ntest-ir-exec\ntest-sxpkg-pubkey\ntest-lsp-ide\ntest-sxc-native\ntest-sxsuite\ntest-sxisaexec\ntest-sxmod-deep\ntest-stdlib-extended\ntest-stdlib-csv\ntest-ci-shape\ntest-stdlib-next\n" }
+make ag_native_after() -> str { give "test-native-num\ntest-native-io\ntest-native-mem\ntest-stdlib\ntest-stage2-demos\ntest-stage2\ntest-for-str\ntest-seed-gc\ntest-generic-structs\ntest-sxpkg-online-local\ntest-sxpkg-online-optin\ntest-native-emit-split\ntest-native-ir-log\ntest-for-paren\ntest-gen2-index-mod\ntest-type-refusals\ntest-native-ir-portable\n" }

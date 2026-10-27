@@ -1,0 +1,435 @@
+// Build-target orchestration in Sayanox. No Makefile parsing or make fallback.
+// Included by sxbuild; deliberately reject targets not yet migrated.
+make target_run(command: str, label: str) -> num {
+  when run_command(concat("LC_ALL=C ", command)) != 0 {
+    hold e = fail(1, concat("target failed: ", label))
+  }
+  give 0
+}
+
+make target_native_tool(name: str) -> num {
+  when path_kind(sxc_native_bin()) != 1 {
+    hold bootstrap_state = [0, 0, 0, 0, 0]
+    hold bootstrap = bt_build(3, bootstrap_state)
+  }
+  // Publish only after successful native compilation. Never hide a native
+  // failure behind the legacy C-emitter fallback in the general tool command.
+  hold source = tool_source_for(name)
+  when len(source) == 0 { hold e = fail(2, concat("unknown tool: ", name)) }
+  hold output = tool_default_out(name)
+  hold tmp = concat(output, ".sxbuild_new")
+  hold cmd = concat(sh_quote(sxc_native_bin()), " ")
+  cmd = concat(cmd, concat(sh_quote(source), " "))
+  cmd = concat(cmd, sh_quote(tmp))
+  when run_command(concat("LC_ALL=C ", cmd)) != 0 {
+    hold rm = remove_path(tmp)
+    hold e = fail(1, concat("native tool compilation failed: ", name))
+  }
+  hold install = target_run(concat(concat("mv -f ", sh_quote(tmp)), concat(" ", sh_quote(output))), concat("install ", name))
+  show concat("[OK] native tool: ", name)
+  give 0
+}
+
+use "tools/sxbootstrap_lib.sa"
+use "tools/sxgate_lib.sa"
+use "tools/sxseed_gates_lib.sa"
+use "tools/sxported_targets_lib.sa"
+use "tools/sxmore_targets_lib.sa"
+use "tools/sxremaining_targets_lib.sa"
+use "tools/sxbackend_targets_lib.sa"
+use "tools/sxstdlib_remaining_targets_lib.sa"
+use "tools/sxpkg_targets_lib.sa"
+use "tools/sxfront_targets_lib.sa"
+use "tools/sxir_targets_lib.sa"
+use "tools/sxaudit_targets_lib.sa"
+use "tools/sxlast_language_targets_lib.sa"
+use "tools/sxisa_targets_lib.sa"
+use "tools/sxclaims_lib.sa"
+use "tools/sxaggregate_lib.sa"
+use "tools/sxrunner_targets_lib.sa"
+use "tools/sxlsp_gate_lib.sa"
+use "tools/sxclean_lib.sa"
+use "tools/sxparity_gates_lib.sa"
+
+// File targets resolve to Sayanox build actions, never to make rules.
+make target_alias(name: str) -> str {
+  when string_eq(name, "selfhost/native_aot") == 1 { give "native" }
+  when string_eq(name, "selfhost/seed/sxc_seed") == 1 { give "seed-bin" }
+  when string_eq(name, "selfhost/seed/sxc_seed_min") == 1 { give "seed-min-bin" }
+  when string_eq(name, "selfhost/gen1_min") == 1 || string_eq(name, "selfhost/gen1_min.c") == 1 { give "gen1" }
+  when string_eq(name, "selfhost/gen2") == 1 || string_eq(name, "selfhost/gen2.c") == 1 { give "gen2" }
+  when string_eq(name, "tools/sxc_native") == 1 { give "sxc-native" }
+  give name
+}
+
+make target_file_tool(name: str) -> str {
+  when gl_starts_with(name, "tools/") == 1 {
+    hold tool = gl_slice(name, 6, len(name))
+    when len(tool_source_for(tool)) > 0 && string_eq(tool_default_out(tool), name) == 1 { give tool }
+  }
+  give ""
+}
+
+make target_memory_known(name: str) -> num {
+  when string_eq(name, "test-native-mem") == 1 || string_eq(name, "test-gc") == 1 || string_eq(name, "test-seed-gc") == 1 { give 1 }
+  give 0
+}
+
+make target_known(name: str) -> num {
+  when ag_known(name) == 1 { give 1 }
+  when xc_known(name) == 1 { give 1 }
+  when xa_known(name) == 1 || xl_known(name) == 1 || string_eq(name, "test-last-language") == 1 || string_eq(name, "all-sayanox") == 1 { give 1 }
+  when xi_known(name) == 1 { give 1 }
+  when xf_known(name) == 1 || string_eq(name, "test-front-end-acceptance") == 1 { give 1 }
+  when kp_known(name) == 1 || string_eq(name, "test-package-acceptance") == 1 { give 1 }
+  when xq_known(name) == 1 || string_eq(name, "test-remaining-stdlib") == 1 { give 1 }
+  when xb_known(name) == 1 || string_eq(name, "test-backend-modules") == 1 { give 1 }
+  when xr_known(name) == 1 || string_eq(name, "test-remaining-language") == 1 { give 1 }
+  when target_memory_known(name) == 1 || string_eq(name, "test-memory") == 1 { give 1 }
+  when string_eq(name, target_alias(name)) == 0 { give target_known(target_alias(name)) }
+  when len(target_file_tool(name)) > 0 || string_eq(name, "doctor") == 1 { give 1 }
+  when string_eq(name, "clean") == 1 || string_eq(name, "clean-plan") == 1 { give 1 }
+  when pg_known(name) == 1 || mp_known(name) == 1 || rt_known(name) == 1 || ep_known(name) == 1 || string_eq(name, "test-ported") == 1 || string_eq(name, "test-ported-more") == 1 { give 1 }
+  when sg_known(name) == 1 { give 1 }
+  when string_eq(name, "verify-seed") == 1 || string_eq(name, "fix-seed") == 1 || string_eq(name, "restore-compiler") == 1 || string_eq(name, "restore-compiler-module") == 1 || string_eq(name, "seed-min-bin") == 1 || string_eq(name, "gen1") == 1 || string_eq(name, "gen2") == 1 || string_eq(name, "sxc-native") == 1 || string_eq(name, "bootstrap-gen3") == 1 || string_eq(name, "native") == 1 || string_eq(name, "lsp") == 1 {
+    give 1
+  }
+  when string_eq(name, "tools") == 1 || string_eq(name, "sxfmt") == 1 || string_eq(name, "sxpkg") == 1 || string_eq(name, "seed-bin") == 1 || string_eq(name, "pack-compiler") == 1 || string_eq(name, "test-migrated") == 1 {
+    give 1
+  }
+  when string_eq(name, "test-sxfmt") == 1 || string_eq(name, "test-reassign") == 1 || string_eq(name, "test-while") == 1 || string_eq(name, "test-when") == 1 {
+    give 1
+  }
+  give 0
+}
+
+// Resolve prerequisites for migrated gates once per multi-target invocation.
+make target_mask_ready(mask: num, built: list) -> num {
+  when mask % 2 == 1 && path_kind("selfhost/seed/sxc_seed_min") != 1 {
+    hold dep = bt_build(0, built)
+  }
+  when ((mask - mask % 2) / 2) % 2 == 1 && path_kind("selfhost/gen2") != 1 {
+    hold dep = bt_build(2, built)
+  }
+  when ((mask - mask % 4) / 4) % 2 == 1 && built[5] == 0 {
+    hold dep = target_native_tool("native_aot")
+    built[5] = 1
+  }
+  when ((mask - mask % 8) / 8) % 2 == 1 && built[6] == 0 {
+    hold dep = target_native_tool("sayanox_lsp")
+    built[6] = 1
+  }
+  when ((mask - mask % 16) / 16) % 2 == 1 && built[7] == 0 {
+    hold dep = target_native_tool("sxlsp_probe")
+    built[7] = 1
+  }
+  when ((mask - mask % 32) / 32) % 2 == 1 && path_kind("selfhost/gen1_min") != 1 {
+    hold dep = bt_build(1, built)
+  }
+  when ((mask - mask % 64) / 64) % 2 == 1 && built[9] == 0 {
+    hold verify = bt_verify_seed()
+    hold dep = target_native_tool("sxc_seed")
+    built[9] = 1
+  }
+  when built[8] == 0 {
+    hold runner = target_native_tool("sxgates")
+    built[8] = 1
+  }
+  give 0
+}
+
+make target_ported_ready(name: str, built: list) -> num {
+  give target_mask_ready(pg_mask(name), built)
+}
+
+make target_more_ready(name: str, built: list) -> num {
+  hold deps = target_mask_ready(mp_mask(name), built)
+  hold tools = mp_tools(name)
+  hold i = 0
+  while i < len(tools) {
+    hold start = i
+    while i < len(tools) && sx_index(tools, i) != 10 { i = i + 1 }
+    hold tool = gl_slice(tools, start, i)
+    when len(tool) > 0 { hold dep = target_native_tool(tool) }
+    i = i + 1
+  }
+  give 0
+}
+
+make cmd_target(name: str, built: list) -> num {
+  when string_eq(name, target_alias(name)) == 0 { give cmd_target(target_alias(name), built) }
+  when len(target_file_tool(name)) > 0 { give target_native_tool(target_file_tool(name)) }
+  when string_eq(name, "doctor") == 1 { give cmd_doctor() }
+  when target_known(name) == 0 {
+    hold e = fail(2, concat("target not migrated (no make fallback): ", name))
+  }
+  when ag_known(name) == 1 { give ag_run(name, built) }
+  when string_eq(name, "clean") == 1 { give cl_apply(0) }
+  when string_eq(name, "clean-plan") == 1 { give cl_apply(1) }
+  when string_eq(name, "test-memory") == 1 {
+    hold a = cmd_target("test-native-mem", built)
+    hold b = cmd_target("test-gc", built)
+    give cmd_target("test-seed-gc", built)
+  }
+  when target_memory_known(name) == 1 {
+    hold mask = 6
+    when string_eq(name, "test-native-mem") == 1 { mask = 4 }
+    when string_eq(name, "test-seed-gc") == 1 { mask = 71 }
+    hold deps = target_mask_ready(mask, built)
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when xc_known(name) == 1 {
+    hold deps = target_mask_ready(7, built)
+    hold compiler = target_native_tool("native32")
+    when string_eq(name, "test-sxmod") == 1 { hold binder = target_native_tool("sxmod") }
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when string_eq(name, "all-sayanox") == 1 { give cmd_all_sayanox() }
+  when xa_known(name) == 1 {
+    hold deps = target_mask_ready(3, built)
+    when string_eq(name, "test-trust-anchor") == 1 { hold auditor = target_native_tool("sxaudit") }
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when string_eq(name, "test-last-language") == 1 {
+    hold i = 0
+    while i < xl_count() {
+      hold gate = cmd_target(xl_name(i), built)
+      i = i + 1
+    }
+    give 0
+  }
+  when xl_known(name) == 1 {
+    when string_eq(name, "test-generics") == 1 {
+      hold a = cmd_target("test-seed-limits", built)
+      hold b = cmd_target("test-seed-generics", built)
+      hold c = cmd_target("test-gen2-generic-queue", built)
+    }
+    when string_eq(name, "test-native-num") == 1 {
+      hold a = cmd_target("test-float", built)
+      hold b = cmd_target("test-parens", built)
+      hold c = cmd_target("test-push-stmt", built)
+    }
+    when string_eq(name, "test-generic-structs") == 1 {
+      hold a = cmd_target("test-generic-struct-limits", built)
+      hold b = cmd_target("test-generic-structs-nested", built)
+    }
+    when string_eq(name, "test-stage2") == 1 {
+      hold names = "test-exit-builtin\ntest-path-builtins\ntest-proc-builtins\ntest-comment-quotes\ntest-native-primitives\ntest-doc-claims\ntest-gen2-index-expr\ntest-gen2-expr-lowering\ntest-seed-stage2\ntest-seed-limits\ntest-seed-assignment\ntest-seed-hold-types\ntest-seed-for-literals\ntest-seed-for-range\ntest-seed-for-calls\ntest-seed-for-untyped\ntest-seed-for-fields\ntest-seed-typed-functions\ntest-seed-borrow\ntest-list-struct-fields\n"
+      hold pos = 0
+      while pos < len(names) {
+        hold start = pos
+        while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+        hold target = gl_slice(names, start, pos)
+        pos = pos + 1
+        hold dep = cmd_target(target, built)
+      }
+    }
+    when string_eq(name, "test-for-str") == 1 {
+      hold names = "test-doc-claims\ntest-gen2-index-expr\ntest-seed-stage2\ntest-seed-for-literals\ntest-seed-for-calls\ntest-seed-for-untyped\ntest-seed-for-fields\n"
+      hold pos = 0
+      while pos < len(names) {
+        hold start = pos
+        while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+        hold target = gl_slice(names, start, pos)
+        pos = pos + 1
+        hold dep = cmd_target(target, built)
+      }
+    }
+    hold deps = target_mask_ready(39, built)
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when xi_known(name) == 1 {
+    when string_eq(name, "test-native-ir-portable") == 1 {
+      hold translator = target_native_tool("emit_to_ir")
+      hold acceptance = cmd_target("test-emit-to-ir", built)
+    }
+    hold deps = target_mask_ready(4, built)
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when string_eq(name, "test-front-end-acceptance") == 1 {
+    hold i = 0
+    while i < xf_count() {
+      hold gate = cmd_target(xf_name(i), built)
+      i = i + 1
+    }
+    give 0
+  }
+  when xf_known(name) == 1 {
+    hold deps = target_mask_ready(4, built)
+    hold defs = target_native_tool("sxdefs")
+    when string_eq(name, "test-native-sxinfer") == 1 { hold infer = target_native_tool("sxinfer") }
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when string_eq(name, "test-package-acceptance") == 1 {
+    hold i = 0
+    while i < kp_count() {
+      hold gate = cmd_target(kp_name(i), built)
+      i = i + 1
+    }
+    give 0
+  }
+  when kp_known(name) == 1 {
+    hold deps = target_mask_ready(7, built)
+    when path_kind("tools/sxpkg") != 1 { hold pkg = target_native_tool("sxpkg") }
+    when path_kind("tools/sxc_native") != 1 { hold compiler = bt_build(3, built) }
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when string_eq(name, "test-remaining-stdlib") == 1 {
+    hold i = 0
+    while i < xq_count() {
+      hold gate = cmd_target(xq_name(i), built)
+      i = i + 1
+    }
+    give 0
+  }
+  when xq_known(name) == 1 {
+    when string_eq(name, "test-stdlib") == 1 { hold dep = cmd_target("test-stdlib-interpolation", built) }
+    when string_eq(name, "test-stdlib-modules") == 1 {
+      hold a = cmd_target("test-stdlib-list-search", built)
+      hold b = cmd_target("test-stdlib-crypto", built)
+      hold c = cmd_target("test-stdlib-json-deep", built)
+      hold e = cmd_target("test-stdlib-json-write", built)
+      hold f = cmd_target("test-stdlib-extended", built)
+    }
+    when string_eq(name, "test-seed-bootstrap-budget") == 1 {
+      when path_kind("selfhost/gen1_min") != 1 || path_kind("selfhost/gen2.c") != 1 { hold dep = bt_build(2, built) }
+    }
+    hold ready = target_mask_ready(7, built)
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when string_eq(name, "test-backend-modules") == 1 {
+    hold i = 0
+    while i < xb_count() {
+      hold gate = cmd_target(xb_name(i), built)
+      i = i + 1
+    }
+    give 0
+  }
+  when xb_known(name) == 1 {
+    hold ready = target_mask_ready(6, built)
+    hold link = target_native_tool("sxlink")
+    hold encode = target_native_tool("sxencode")
+    hold runtime = target_native_tool("sxruntime")
+    hold gc = target_native_tool("sxgc")
+    hold emit = target_native_tool("sxemit")
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when string_eq(name, "test-remaining-language") == 1 {
+    hold i = 0
+    while i < xr_count() {
+      hold gate = cmd_target(xr_name(i), built)
+      i = i + 1
+    }
+    give 0
+  }
+  when xr_known(name) == 1 {
+    when string_eq(name, "test-seed-for-range") == 1 { hold dep = cmd_target("test-native-range-live", built) }
+    when string_eq(name, "test-type-refusals") == 1 {
+      hold limits = cmd_target("test-generic-struct-limits", built)
+      hold nested = cmd_target("test-generic-structs-nested", built)
+      hold fields = cmd_target("test-struct-field-struct", built)
+    }
+    hold ready = target_mask_ready(7, built)
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when ep_known(name) == 1 { give ep_run(name, built) }
+  when rt_known(name) == 1 { give rt_run(name, built) }
+  when string_eq(name, "test-ported-more") == 1 {
+    hold i = 0
+    while i < mp_count() {
+      hold gate_name = mp_name(i)
+      hold dep = target_more_ready(gate_name, built)
+      hold gate = target_run(concat("./tools/sxgates ", sh_quote(gate_name)), gate_name)
+      i = i + 1
+    }
+    give 0
+  }
+  when mp_known(name) == 1 {
+    hold dep = target_more_ready(name, built)
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when string_eq(name, "test-ported") == 1 {
+    hold i = 0
+    while i < pg_count() {
+      hold gate_name = pg_name(i)
+      hold dep = target_ported_ready(gate_name, built)
+      hold gate = target_run(concat("./tools/sxgates ", sh_quote(gate_name)), gate_name)
+      i = i + 1
+    }
+    give 0
+  }
+  when pg_known(name) == 1 {
+    hold dep = target_ported_ready(name, built)
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when string_eq(name, "verify-seed") == 1 || string_eq(name, "fix-seed") == 1 {
+    give bt_verify_seed()
+  }
+  when string_eq(name, "restore-compiler") == 1 || string_eq(name, "restore-compiler-module") == 1 {
+    give bt_restore()
+  }
+  when sg_known(name) == 1 {
+    hold stage = 0
+    when string_eq(name, "seed-min-gen1") == 1 { stage = 1 }
+    hold dep = bt_build(stage, built)
+    give sg_gate(name)
+  }
+  when string_eq(name, "seed-min-bin") == 1 {
+    give bt_build(0, built)
+  }
+  when string_eq(name, "gen1") == 1 {
+    give bt_build(1, built)
+  }
+  when string_eq(name, "gen2") == 1 {
+    give bt_build(2, built)
+  }
+  when string_eq(name, "sxc-native") == 1 {
+    give bt_build(3, built)
+  }
+  when string_eq(name, "bootstrap-gen3") == 1 {
+    give bt_build(4, built)
+  }
+  when string_eq(name, "native") == 1 {
+    give target_native_tool("native_aot")
+  }
+  when string_eq(name, "lsp") == 1 {
+    give target_native_tool("sayanox_lsp")
+  }
+  when string_eq(name, "sxfmt") == 1 || string_eq(name, "sxpkg") == 1 {
+    hold r = target_native_tool(name)
+    give 0
+  }
+  when string_eq(name, "seed-bin") == 1 {
+    hold verify = bt_verify_seed()
+    hold r = target_native_tool("sxc_seed")
+    give 0
+  }
+  when string_eq(name, "tools") == 1 {
+    hold a = target_native_tool("sxfmt")
+    hold b = target_native_tool("sxpkg")
+    give 0
+  }
+  when string_eq(name, "pack-compiler") == 1 {
+    hold a = target_native_tool("sxpack")
+    hold b = target_run("./tools/sxpack pack", name)
+    give 0
+  }
+  hold runner = target_native_tool("sxgates")
+  when string_eq(name, "test-sxfmt") == 1 || string_eq(name, "test-migrated") == 1 {
+    hold fmt = target_native_tool("sxfmt")
+    hold gate = target_run("./tools/sxgates test-sxfmt", "test-sxfmt")
+  }
+  when string_eq(name, "test-sxfmt") == 0 {
+    when path_kind(gen2_bin()) != 1 {
+      hold e = fail(1, "gen2 missing; run sxbuild bootstrap selfhost first")
+    }
+    when string_eq(name, "test-migrated") == 1 {
+      hold a = target_run("./tools/sxgates test-reassign", "test-reassign")
+      hold b = target_run("./tools/sxgates test-while", "test-while")
+      hold c = target_run("./tools/sxgates test-when", "test-when")
+    } otherwise {
+      hold r = target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+    }
+  }
+  give 0
+}

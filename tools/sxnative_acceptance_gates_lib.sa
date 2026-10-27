@@ -1,0 +1,48 @@
+// Original native-test program matrix and hand-computed output assertions.
+use "tools/sxnative_acceptance_fixtures_lib.sa"
+make ng_dispatch() -> num {
+  hold d = "selfhost/seed_tests/sxgates/native-test-body"
+  hold clean = gl_clean_dir(d)
+  hold total = gl_assert_eq_num(ng_fixture_count(), 36, "native source fixture cardinality")
+  hold positive = gl_assert_eq_num(ng_positive_count(), 21, "native output oracle cardinality")
+  hold negative = gl_assert_eq_num(ng_negative_count(), 12, "native compile-refusal cardinality")
+  hold i = 0
+  while i < ng_fixture_count() {
+    hold name = ng_fixture_name(i)
+    hold text = ng_source(name, d)
+    when len(text) == 0 { hold missing = gl_fail("native acceptance source fixture missing") }
+    hold write = kp_write(d, name, text)
+    i = i + 1
+  }
+  i = 0
+  while i < ng_positive_count() {
+    hold name = ng_positive(i)
+    hold source = kp_join(d, concat(name, ".sa"))
+    hold output = xr_case(2, source, kp_join(d, name), ng_want(name), "")
+    i = i + 1
+  }
+  i = 0
+  while i < ng_negative_count() {
+    hold name = ng_negative(i)
+    hold source = kp_join(d, name)
+    hold message = ng_diagnostic(name)
+    when len(message) == 0 { hold missing = gl_fail("native refusal oracle missing") }
+    hold refused = xl_reject(2, source, kp_join(d, concat(name, ".negative")), message)
+    i = i + 1
+  }
+  hold bounds = pg_emit(2, kp_join(d, "native_oob.sa"), kp_join(d, "oob"), 0)
+  hold runtime = xb_fail_command(gl_sh_quote(kp_join(d, "oob")), kp_join(d, "oob.err"), "out of range")
+  hold names = "native_nest3\nnative_nestcopy\nnative_postmul\nnative_fn\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold parity = xr_three(kp_join(d, concat(name, ".sa")), kp_join(d, concat(name, ".parity")), ng_want(name))
+  }
+  hold ordering = xr_case(2, "selfhost/native_strord_test.sa", kp_join(d, "nso_nat_gate"), ng_want("nso_nat_gate"), "")
+  hold growth = xr_case(2, "selfhost/stdlib_growth_test.sa", kp_join(d, "sg_nat_gate"), ng_want("sg_nat_gate"), "")
+  show "[OK] original native-test body: 36 programs, 21 output oracles, 12 compile refusals, runtime bounds, nested/module/function and stdlib parity"
+  give 0
+}

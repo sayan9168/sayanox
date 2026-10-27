@@ -1,0 +1,46 @@
+// Cold missing-source recovery using only root sx and offline blobs.
+use "tools/sxgate_lib.sa"
+hold dir = "selfhost/seed_tests/cold-entry-recovery"
+hold clean = gl_clean_dir(dir)
+hold parts = gl_ensure_dir(concat(dir, "/selfhost/compiler_min_gz"))
+hold modules = gl_ensure_dir(concat(dir, "/selfhost/modules"))
+hold names = read_dir("selfhost/compiler_min_gz")
+hold pos = 0
+while pos < len(names) {
+  hold start = pos
+  while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+  hold name = gl_slice(names, start, pos)
+  pos = pos + 1
+  when len(name) > 4 {
+    hold source = concat("selfhost/compiler_min_gz/", name)
+    when path_kind(source) == 1 {
+      hold copy = gl_must_write(concat(dir, concat("/selfhost/compiler_min_gz/", name)), read_file(source))
+    }
+  }
+}
+hold blob = "selfhost/modules/compiler_text.sa.gz.b64"
+hold copy_module = gl_must_write(concat(dir, concat("/", blob)), read_file(blob))
+hold command = concat("cd ", gl_sh_quote(path_real(dir)))
+command = concat(command, concat(" && CC=/__missing_cc__ SXBUILD_SXC_NATIVE=/__missing_native__ ", gl_sh_quote(path_real("sx"))))
+command = concat(command, " target restore-compiler")
+hold log = concat(path_real("selfhost/seed_tests"), "/cold-entry-recovery.log")
+hold status = gl_run_merged(command, log)
+hold ok = gl_assert_eq_num(status, 0, "entry-only recovery without compiler binaries")
+hold compiler = concat(dir, "/selfhost/compiler_min.sa")
+hold module = concat(dir, "/selfhost/modules/compiler_text.sa")
+hold compiler_equal = gl_assert_files_eq(compiler, "selfhost/compiler_min.sa", "cold compiler recovery bytes")
+hold module_equal = gl_assert_files_eq(module, "selfhost/modules/compiler_text.sa", "cold module recovery bytes")
+hold no_tools = gl_assert_eq_num(path_kind(concat(dir, "/tools")), 0, "no compiler/tool directory in recovery workspace")
+hold no_seed = gl_assert_eq_num(path_kind(concat(dir, "/selfhost/seed")), 0, "no seed executable/source required for recovery")
+// Corruption must not replace an existing source with unvalidated data.
+hold corrupt = gl_must_write(concat(dir, "/selfhost/compiler_min_gz/0000.b64"), "not-a-base64-gzip-bundle")
+hold sentinel = gl_must_write(compiler, "invalid source sentinel; must survive failed recovery")
+status = gl_run_merged(command, log)
+when status == 0 { hold bad = gl_fail("corrupt recovery bundle accepted") }
+hold preserved = gl_assert_eq_str(read_file(compiler), "invalid source sentinel; must survive failed recovery", "failed recovery preserves source")
+hold bad_module = gl_must_write(concat(dir, concat("/", blob)), "invalid-base64-gzip")
+hold module_sentinel = gl_must_write(module, "invalid module sentinel")
+status = gl_run_merged(command, log)
+when status == 0 { hold bad = gl_fail("corrupt module recovery bundle accepted") }
+hold module_preserved = gl_assert_eq_str(read_file(module), "invalid module sentinel", "failed module recovery preserves source")
+show "[OK] cold entry-only recovery: compiler/module exact bytes, no compiler binaries, corrupt bundles refused and sources preserved"

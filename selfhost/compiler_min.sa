@@ -1,10 +1,79 @@
 use "selfhost/modules/compiler_text.sa"
 
+// A compact numeric source view avoids hidden whole-string length scans in
+// native sx_index when the runtime's two large-string cache slots alternate.
+// Six bytes fit exactly in both the native integer and C double number models.
+make sxsource_pack(text: str) -> list {
+  hold size = len(text)
+  hold words = [size]
+  hold i = 0
+  while i < size {
+    hold value = 0
+    hold power = 1
+    hold count = 0
+    while count < 6 && i < size {
+      value = value + sx_index(text, i) * power
+      power = power * 256
+      count = count + 1
+      i = i + 1
+    }
+    words = push(words, value)
+  }
+  give words
+}
+make sxsource_get(words: list, at: num) -> num {
+  hold size = words[0]
+  when at < 0 || at >= size { give 0
+  }
+  hold skip = at % 6
+  hold value = words[1 + (at - skip) / 6]
+  while skip > 0 {
+    value = (value - value % 256) / 256
+    skip = skip - 1
+  }
+  give value % 256
+}
+
+// Recognize only top-level C designators, not fields inside nested values.
+make sxseed_designator(text: str, field: str) -> num {
+  hold size = len(text)
+  hold key = concat(".", concat(field, "="))
+  hold i = 0
+  hold depth = 0
+  hold quote = 0
+  while i < size {
+    hold c = sx_index(text, i)
+    when quote == 1 {
+      when c == 92 { i = i + 1 } otherwise { when c == 34 { quote = 0 } }
+    } otherwise {
+      when c == 34 { quote = 1 } otherwise {
+        when depth == 0 && (i == 0 || sx_index(text, i - 1) == 44) && c == 46 {
+          hold j = 0
+          while j < len(key) && i + j < size && sx_index(text, i + j) == sx_index(key, j) { j = j + 1 }
+          when j == len(key) { give 1
+          }
+        }
+        when c == 40 || c == 91 || c == 123 { depth = depth + 1 }
+        when c == 41 || c == 93 || c == 125 { depth = depth - 1 }
+      }
+    }
+    i = i + 1
+  }
+  give 0
+}
+make sxseed_pending_field(text: str) -> str {
+  hold end = len(text) - 1
+  hold i = end - 1
+  while i >= 0 && sxseed_id(sx_index(text, i)) { i = i - 1 }
+  give sxseed_slice(text, i + 1, end)
+}
+
 make sxesegment(text: str, slot: num) -> str {
+  hold cached_size_text = len(text)
   hold start = 0
   hold i = 0
   hold part = 0
-  while i < len(text) {
+  while i < cached_size_text {
     when sx_index(text, i) == 1 {
       when part == slot {
         give sxeslice(text, start, i)
@@ -26,30 +95,33 @@ make sxerecord(at: num, kind: str, code: str) -> str {
   give concat(record, code)
 }
 make sxepos(record: str) -> num {
+  hold cached_size_record = len(record)
   hold i = 0
   hold value = 0
-  while i < len(record) && sx_index(record, i) != 1 {
+  while i < cached_size_record && sx_index(record, i) != 1 {
     value = value * 10 + sx_index(record, i) - 48
     i = i + 1
   }
   give value
 }
 make sxecode(record: str) -> str {
+  hold cached_size_record = len(record)
   hold i = 0
   hold separators = 0
-  while i < len(record) && separators < 2 {
+  while i < cached_size_record && separators < 2 {
     when sx_index(record, i) == 1 {
       separators = separators + 1
     }
     i = i + 1
   }
-  give sxeslice(record, i, len(record))
+  give sxeslice(record, i, cached_size_record)
 }
-make sxelookup(table: str, name: str, end: str) -> str {
+make sxelookup_span(table: str, name: str, end: str, begin: num, limit: num) -> str {
+  hold cached_size_table = limit
   hold key = concat("|", name)
   key = concat(key, end)
-  hold i = 0
-  while i + len(key) <= len(table) {
+  hold i = begin
+  while i + len(key) <= cached_size_table {
     hold j = 0
     hold match = 1
     while j < len(key) && match == 1 {
@@ -64,7 +136,7 @@ make sxelookup(table: str, name: str, end: str) -> str {
       }
       hold start = i + len(key)
       hold stop = start
-      while stop < len(table) && sx_index(table, stop) != 124 {
+      while stop < cached_size_table && sx_index(table, stop) != 124 {
         stop = stop + 1
       }
       give sxeslice(table, start, stop)
@@ -73,12 +145,34 @@ make sxelookup(table: str, name: str, end: str) -> str {
   }
   give ""
 }
-make sxecontains(text: str, word: str) -> num {
+// Look up directly in an encoded environment segment. Copying the complete
+// declarations table for every identifier made own-source checking quadratic
+// in allocated bytes, even though the parser only needs one tiny value.
+make sxelookup(table: str, name: str, end: str) -> str {
+  give sxelookup_span(table, name, end, 0, len(table))
+}
+make sxeenvlookup(env: str, slot: num, name: str, end: str) -> str {
+  hold size = len(env)
   hold i = 0
-  while i + len(word) <= len(text) {
+  hold part = 0
+  while i < size && part < slot {
+    when sx_index(env, i) == 1 { part = part + 1 }
+    i = i + 1
+  }
+  when part != slot { give ""
+  }
+  hold stop = i
+  while stop < size && sx_index(env, stop) != 1 { stop = stop + 1 }
+  give sxelookup_span(env, name, end, i, stop)
+}
+make sxecontains(text: str, word: str) -> num {
+  hold cached_size_text = len(text)
+  hold cached_size_word = len(word)
+  hold i = 0
+  while i + cached_size_word <= cached_size_text {
     hold j = 0
     hold match = 1
-    while j < len(word) && match == 1 {
+    while j < cached_size_word && match == 1 {
       when sx_index(text, i + j) != sx_index(word, j) {
         match = 0
       }
@@ -115,8 +209,9 @@ make gxkind(word: str) -> str {
 // skip() has always allowed a list to be written across lines with a note
 // between the arguments, so the pre-pass has to allow it too.
 make gxskip(text: str, at: num) -> num {
+  hold cached_size_text = len(text)
   hold i = at
-  hold n = len(text)
+  hold n = cached_size_text
   hold run = 1
   while run == 1 {
     while i < n && (sx_index(text, i) == 32 || sx_index(text, i) == 9 || sx_index(text, i) == 10 || sx_index(text, i) == 13) {
@@ -135,11 +230,12 @@ make gxskip(text: str, at: num) -> num {
 // Add `Name:f1,f2;` records to the running instantiation list, skipping the
 // names already there. Returns NAMES chr(1) DEFS.
 make gxmerge(names: str, defs: str, add: str) -> str {
+  hold cached_size_add = len(add)
   hold outn = names
   hold outd = defs
   hold cur = ""
   hold i = 0
-  while i < len(add) {
+  while i < cached_size_add {
     hold c = sx_index(add, i)
     when c == 59 {
       hold cn = ""
@@ -178,7 +274,8 @@ make gxmerge(names: str, defs: str, add: str) -> str {
 // CODE is empty when this is not a type-argument list this compiler accepts;
 // the caller then leaves the text alone and the ordinary diagnostics run.
 make gxargs(text: str, at: num, gsdefs: str, level: num) -> str {
-  hold n = len(text)
+  hold cached_size_text = len(text)
+  hold n = cached_size_text
   hold p = at + 1
   hold flat = ""
   hold joined = ""
@@ -286,8 +383,9 @@ make gxargs(text: str, at: num, gsdefs: str, level: num) -> str {
 }
 // every template in the source, as |Name:np:f1,f2| records
 make gxscan(text: str) -> str {
+  hold cached_size_text = len(text)
   hold out = "|"
-  hold n = len(text)
+  hold n = cached_size_text
   hold i = 0
   while i < n {
     hold c = sx_index(text, i)
@@ -379,10 +477,11 @@ make gxscan(text: str) -> str {
 // One pass: each instantiation `Box<num> {` becomes `Box__n {`. Gives the
 // mangled structs as sdefs records in first-use order, chr(1), then the
 make gxpass(text: str, gsdefs: str) -> str {
+  hold cached_size_text = len(text)
   hold defs = ""
   hold names = "|"
   hold out = ""
-  hold n = len(text)
+  hold n = cached_size_text
   hold i = 0
   hold cp = 0
   while i < n {
@@ -466,15 +565,16 @@ make gxpass(text: str, gsdefs: str) -> str {
 }
 // Identify calls with list/index syntax, without treating quoted '[' as code.
 make sxehaslist(text: str, open: num) -> num {
+  hold cached_size_text = len(text)
   hold i = open + 1
   hold depth = 1
   hold quote = 0
   hold found = 0
-  while i < len(text) && depth > 0 {
+  while i < cached_size_text && depth > 0 {
     hold c = sx_index(text, i)
     i = i + 1
     when quote == 1 {
-      when c == 92 && i < len(text) {
+      when c == 92 && i < cached_size_text {
         i = i + 1
       } otherwise {
         when c == 34 {
@@ -497,7 +597,7 @@ make sxehaslist(text: str, open: num) -> num {
     }
   }
   i = sxflowspace(text, i)
-  when i < len(text) && sx_index(text, i) == 91 {
+  when i < cached_size_text && sx_index(text, i) == 91 {
     found = 1
   }
   give found
@@ -505,18 +605,25 @@ make sxehaslist(text: str, open: num) -> num {
 // Pratt parser: scalar operators, typed calls, numeric lists and indexing.
 // env: numeric/all bindings, strings, lists, struct names, returns, signatures.
 make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: list) -> str {
+  hold cached_size_text = len(text)
   when level > 96 {
     give sxerecord(at, "e", "expression nesting exceeds 96")
   }
   hold i = sxflowspace(text, at)
   hold c = 0
-  when i < len(text) {
+  when i < cached_size_text {
     c = sx_index(text, i)
   }
   hold kind = "e"
   hold code = "expected an expression"
+  hold unary_width = 1
+  when c == 110 && string_eq(sxflowword(text, i), "not") { c = 33
+    unary_width = 3 }
   when c == 43 || c == 45 || c == 33 {
-    hold unary = sxeparse(text, i + 1, env, 7, level + 1, state)
+    hold unary_precedence = 7
+    // Word `not` negates a comparison, but stops before and/or.
+    when unary_width == 3 { unary_precedence = 3 }
+    hold unary = sxeparse(text, i + unary_width, env, unary_precedence, level + 1, state)
     when string_eq(sxesegment(unary, 1), "n") == 0 {
       give sxerecord(i, "e", "unary operator requires a number")
     }
@@ -545,7 +652,7 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
           give grouped
         }
         i = sxflowspace(text, sxepos(grouped))
-        when i >= len(text) || sx_index(text, i) != 41 {
+        when i >= cached_size_text || sx_index(text, i) != 41 {
           give sxerecord(i, "e", "unbalanced parentheses")
         }
         code = concat("(", sxecode(grouped))
@@ -555,15 +662,15 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
     } otherwise {
       when c >= 48 && c <= 57 {
         hold start = i
-        while i < len(text) && sx_index(text, i) >= 48 && sx_index(text, i) <= 57 {
+        while i < cached_size_text && sx_index(text, i) >= 48 && sx_index(text, i) <= 57 {
           i = i + 1
         }
         hold decimal = 0
-        when i < len(text) && sx_index(text, i) == 46 {
+        when i < cached_size_text && sx_index(text, i) == 46 {
           decimal = 1
           i = i + 1
           hold digits = i
-          while i < len(text) && sx_index(text, i) >= 48 && sx_index(text, i) <= 57 {
+          while i < cached_size_text && sx_index(text, i) >= 48 && sx_index(text, i) <= 57 {
             i = i + 1
           }
           when i == digits {
@@ -580,10 +687,10 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
           hold start = i
           i = i + 1
           hold quoted = 1
-          while i < len(text) && quoted == 1 {
+          while i < cached_size_text && quoted == 1 {
             hold ch = sx_index(text, i)
             i = i + 1
-            when ch == 92 && i < len(text) {
+            when ch == 92 && i < cached_size_text {
               i = i + 1
             } otherwise {
               when ch == 34 {
@@ -603,7 +710,7 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
             hold effects = ""
             hold count = 0
             hold more = 1
-            when i < len(text) && sx_index(text, i) == 93 {
+            when i < cached_size_text && sx_index(text, i) == 93 {
               more = 0
             }
             while more == 1 {
@@ -622,13 +729,13 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
               elements = concat(elements, temporary)
               count = count + 1
               i = sxflowspace(text, sxepos(element))
-              when i < len(text) && sx_index(text, i) == 44 {
+              when i < cached_size_text && sx_index(text, i) == 44 {
                 i = sxflowspace(text, i + 1)
               } otherwise {
                 more = 0
               }
             }
-            when i >= len(text) || sx_index(text, i) != 93 {
+            when i >= cached_size_text || sx_index(text, i) != 93 {
               give sxerecord(i, "e", "expected comma or closing list bracket")
             }
             i = i + 1
@@ -643,21 +750,23 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
             when (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 {
               hold name = sxflowword(text, i)
               i = sxflowspace(text, i + len(name))
-              when i < len(text) && sx_index(text, i) == 40 {
-                hold returns = sxesegment(env, 4)
-                hold signatures = sxesegment(env, 5)
+              when i < cached_size_text && sx_index(text, i) == 40 {
+                hold returns = ""
+                hold signatures = ""
                 returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|run_command=n|getenv=s|spawn=n|child_send=n|child_recv=s|child_line=s|child_close=n|make_dir=n|make_link=n|remove_path=n|write_bytes=n|bytes_f64=l|read_bytes=n|bit_and=n|bit_or=n|bit_xor=n|bit_not=n|shl=n|shr=n|len=n|index=n|")
                 signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|run_command=s|getenv=s|spawn=s|child_send=ns|child_recv=nn|child_line=n|child_close=n|make_dir=s|make_link=ss|remove_path=s|write_bytes=sl|bytes_f64=ln|read_bytes=sl|bit_and=nn|bit_or=nn|bit_xor=nn|bit_not=n|shl=nn|shr=nn|len=a|index=an|")
-                kind = sxelookup(returns, name, "=")
+                kind = sxeenvlookup(env, 4, name, "=")
+                when len(kind) == 0 { kind = sxelookup(returns, name, "=") }
                 when len(kind) == 0 {
                   give sxerecord(i, "e", "call has no checked return signature")
                 }
-                hold parameters = sxelookup(signatures, name, "=")
+                hold parameters = sxeenvlookup(env, 5, name, "=")
+                when len(parameters) == 0 { parameters = sxelookup(signatures, name, "=") }
                 hold args = ""
                 hold count = 0
                 i = sxflowspace(text, i + 1)
                 hold more = 1
-                when i < len(text) && sx_index(text, i) == 41 {
+                when i < cached_size_text && sx_index(text, i) == 41 {
                   more = 0
                 }
                 while more == 1 {
@@ -689,6 +798,9 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                     }
                   } otherwise {
                     when string_eq(expected, actual) == 0 {
+                      when count == 0 && (string_eq(name, "push") || string_eq(name, "sx_lpush")) {
+                        give sxerecord(i, "e", concat("'", concat(sxecode(argument), "' is not a list")))
+                      }
                       give sxerecord(i, "e", "call argument type mismatch")
                     }
                   }
@@ -699,13 +811,13 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                   args = concat(args, sxecode(argument))
                   count = count + 1
                   i = sxflowspace(text, sxepos(argument))
-                  when i < len(text) && sx_index(text, i) == 44 {
+                  when i < cached_size_text && sx_index(text, i) == 44 {
                     i = sxflowspace(text, i + 1)
                   } otherwise {
                     more = 0
                   }
                 }
-                when i >= len(text) || sx_index(text, i) != 41 || count != sxfpkcount(parameters) {
+                when i >= cached_size_text || sx_index(text, i) != 41 || count != sxfpkcount(parameters) {
                   give sxerecord(i, "e", "call argument count mismatch")
                 }
                 i = i + 1
@@ -731,10 +843,10 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                     code = "1.0"
                   }
                 } otherwise {
-                  hold numeric = sxelookup(sxesegment(env, 0), name, "|")
-                  hold strings = sxelookup(sxesegment(env, 1), name, "|")
-                  hold lists = sxelookup(sxesegment(env, 2), name, "|")
-                  hold structs = sxelookup(sxesegment(env, 3), name, "=")
+                  hold numeric = sxeenvlookup(env, 0, name, "|")
+                  hold strings = sxeenvlookup(env, 1, name, "|")
+                  hold lists = sxeenvlookup(env, 2, name, "|")
+                  hold structs = sxeenvlookup(env, 3, name, "=")
                   when len(numeric) == 0 && len(strings) == 0 && len(lists) == 0 {
                     give sxerecord(i, "e", "unbound expression name")
                   }
@@ -765,7 +877,7 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
     hold precedence = 0
     hold width = 1
     hold c = 0
-    when i < len(text) {
+    when i < cached_size_text {
       c = sx_index(text, i)
     }
     when c == 46 {
@@ -777,7 +889,7 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
       hold typename = sxeslice(kind, 1, len(kind))
       hold fieldkey = concat(typename, ".")
       fieldkey = concat(fieldkey, field)
-      hold fieldkind = sxelookup(sxesegment(env, 7), fieldkey, "=")
+      hold fieldkind = sxeenvlookup(env, 7, fieldkey, "=")
       when len(fieldkind) == 0 {
         give sxerecord(i, "e", "unknown or unresolved struct field")
       }
@@ -806,7 +918,7 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
         give sxerecord(i, "e", "index must be numeric")
       }
       i = sxflowspace(text, sxepos(index))
-      when i >= len(text) || sx_index(text, i) != 93 {
+      when i >= cached_size_text || sx_index(text, i) != 93 {
         give sxerecord(i, "e", "unbalanced index")
       }
       hold indexed = "sx_lget("
@@ -845,10 +957,16 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
       when c == 42 || c == 47 || c == 37 {
         precedence = 6
       }
+      when c == 97 && string_eq(sxflowword(text, i), "and") { precedence = 2
+        width = 3 }
+      when c == 111 && string_eq(sxflowword(text, i), "or") { precedence = 1
+        width = 2 }
       when precedence == 0 || precedence < minimum {
         running = 0
       } otherwise {
         op = sxeslice(text, i, i + width)
+        when c == 97 && width == 3 { op = "&&" }
+        when c == 111 && width == 2 { op = "||" }
         hold right = sxeparse(text, i + width, env, precedence + 1, level + 1, state)
         hold rightkind = sxesegment(right, 1)
         when string_eq(kind, "s") && string_eq(rightkind, "s") && (c == 43 || precedence == 3 || precedence == 4) {
@@ -897,10 +1015,11 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
 // Check value references against the current binding table before lowering.
 // Calls use a different namespace; field labels/selectors are not bindings.
 make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
+  hold cached_size_text = len(text)
   hold i = sxflowspace(text, 0)
   hold word = sxflowword(text, i)
   when string_eq(word, "hold") {
-    while i < len(text) && sx_index(text, i) != 61 {
+    while i < cached_size_text && sx_index(text, i) != 61 {
       i = i + 1
     }
     i = i + 1
@@ -921,15 +1040,15 @@ make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
   hold callnames = concat(functions, builtins)
   hold prev = 0
   hold braces = 0
-  while i < len(text) {
+  while i < cached_size_text {
     hold c = sx_index(text, i)
     when c == 34 {
       i = i + 1
       hold quote = 1
-      while i < len(text) && quote == 1 {
+      while i < cached_size_text && quote == 1 {
         hold q = sx_index(text, i)
         i = i + 1
-        when q == 92 && i < len(text) {
+        when q == 92 && i < cached_size_text {
           i = i + 1
         } otherwise {
           when q == 34 {
@@ -939,8 +1058,8 @@ make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
       }
       prev = 34
     } otherwise {
-      when c == 47 && i + 1 < len(text) && sx_index(text, i + 1) == 47 {
-        while i < len(text) && sx_index(text, i) != 10 {
+      when c == 47 && i + 1 < cached_size_text && sx_index(text, i + 1) == 47 {
+        while i < cached_size_text && sx_index(text, i) != 10 {
           i = i + 1
         }
       } otherwise {
@@ -949,7 +1068,7 @@ make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
           i = i + len(word)
           hold next = sxflowspace(text, i)
           hold after = 0
-          when next < len(text) {
+          when next < cached_size_text {
             after = sx_index(text, next)
           }
           hold ignore = 0
@@ -1026,16 +1145,17 @@ make sxcheckrefs(text: str, bindings: str, functions: str) -> str {
 // state appends event 1 for a hole, event 2 for a malformed hole.
 // Programs without a marker use the byte-preserving fast path.
 make sxinterpolate(text: str, private: str, state: list) -> str {
+  hold cached_size_text = len(text)
   hold marker = concat(chr(36), chr(123))
   when sxecontains(text, marker) == 0 {
     give text
   }
   hold out = ""
   hold at = 0
-  while at < len(text) {
+  while at < cached_size_text {
     hold c = sx_index(text, at)
-    when c == 47 && at + 1 < len(text) && sx_index(text, at + 1) == 47 {
-      while at < len(text) && sx_index(text, at) != 10 {
+    when c == 47 && at + 1 < cached_size_text && sx_index(text, at + 1) == 47 {
+      while at < cached_size_text && sx_index(text, at) != 10 {
         out = concat(out, chr(sx_index(text, at)))
         at = at + 1
       }
@@ -1046,11 +1166,11 @@ make sxinterpolate(text: str, private: str, state: list) -> str {
         hold expression = ""
         hold holes = 0
         hold quoted = 1
-        while at < len(text) && quoted == 1 {
+        while at < cached_size_text && quoted == 1 {
           c = sx_index(text, at)
-          when c == 92 && at + 1 < len(text) {
+          when c == 92 && at + 1 < cached_size_text {
             hold escaped = sx_index(text, at + 1)
-            when escaped == 36 && at + 2 < len(text) && sx_index(text, at + 2) == 123 {
+            when escaped == 36 && at + 2 < cached_size_text && sx_index(text, at + 2) == 123 {
               // A single escaped dollar protects a literal marker.
               fragment = concat(fragment, marker)
               at = at + 3
@@ -1074,7 +1194,7 @@ make sxinterpolate(text: str, private: str, state: list) -> str {
               at = at + 1
               quoted = 0
             } otherwise {
-              when c == 36 && at + 1 < len(text) && sx_index(text, at + 1) == 123 && holes < 16 {
+              when c == 36 && at + 1 < cached_size_text && sx_index(text, at + 1) == 123 && holes < 16 {
                 hold start = at + 2
                 hold name = sxflowword(text, start)
                 hold stop = start + len(name)
@@ -1082,7 +1202,7 @@ make sxinterpolate(text: str, private: str, state: list) -> str {
                 when len(name) > 0 {
                   hold first = sx_index(name, 0)
                   when (first >= 65 && first <= 90) || (first >= 97 && first <= 122) || first == 95 {
-                    when stop < len(text) && sx_index(text, stop) == 125 {
+                    when stop < cached_size_text && sx_index(text, stop) == 125 {
                       valid = 1
                     }
                   }
@@ -1113,7 +1233,7 @@ make sxinterpolate(text: str, private: str, state: list) -> str {
                   at = at + 1
                 }
               } otherwise {
-                when c == 36 && at + 1 < len(text) && sx_index(text, at + 1) == 123 {
+                when c == 36 && at + 1 < cached_size_text && sx_index(text, at + 1) == 123 {
                   push(state, 2)
                 }
                 fragment = concat(fragment, chr(c))
@@ -1137,13 +1257,14 @@ make sxinterpolate(text: str, private: str, state: list) -> str {
 // Struct function signature codec: scalar kinds stay one byte; a named
 // struct parameter is uName; so identity and argument boundaries survive.
 make sxfpkget(kinds: str, wanted: num) -> str {
+  hold cached_size_kinds = len(kinds)
   hold at = 0
   hold count = 0
-  while at < len(kinds) {
+  while at < cached_size_kinds {
     hold kind = chr(sx_index(kinds, at))
     at = at + 1
     when string_eq(kind, "u") {
-      while at < len(kinds) && sx_index(kinds, at) != 59 {
+      while at < cached_size_kinds && sx_index(kinds, at) != 59 {
         kind = concat(kind, chr(sx_index(kinds, at)))
         at = at + 1
       }
@@ -1157,13 +1278,14 @@ make sxfpkget(kinds: str, wanted: num) -> str {
   give ""
 }
 make sxfpkcount(kinds: str) -> num {
+  hold cached_size_kinds = len(kinds)
   hold at = 0
   hold count = 0
-  while at < len(kinds) {
+  while at < cached_size_kinds {
     hold c = sx_index(kinds, at)
     at = at + 1
     when c == 117 {
-      while at < len(kinds) && sx_index(kinds, at) != 59 {
+      while at < cached_size_kinds && sx_index(kinds, at) != 59 {
         at = at + 1
       }
       at = at + 1
@@ -1174,15 +1296,16 @@ make sxfpkcount(kinds: str) -> num {
 }
 // Discover concrete declaration identities, not layouts or path aliases.
 make sxfstructnames(text: str) -> str {
+  hold cached_size_text = len(text)
   hold names = "|"
   hold at = 0
-  while at < len(text) {
+  while at < cached_size_text {
     at = sxflowspace(text, at)
-    when at < len(text) {
+    when at < cached_size_text {
       when sx_index(text, at) == 34 {
         at = at + 1
         hold quoted = 1
-        while at < len(text) && quoted == 1 {
+        while at < cached_size_text && quoted == 1 {
           hold c = sx_index(text, at)
           at = at + 1
           when c == 92 {
@@ -1199,7 +1322,7 @@ make sxfstructnames(text: str) -> str {
           at = sxflowspace(text, at)
           hold name = sxflowword(text, at)
           at = sxflowspace(text, at + len(name))
-          when at < len(text) && sx_index(text, at) == 123 {
+          when at < cached_size_text && sx_index(text, at) == 123 {
             names = concat(names, name)
             names = concat(names, "|")
           }
@@ -1215,9 +1338,10 @@ make sxfstructnames(text: str) -> str {
 // Check expressions involving a struct binding or struct signature. Avoid
 // routing unrelated historical emitter syntax through the checked parser.
 make sxfneedscheck(text: str, returns: str, params: str, structs: str) -> num {
+  hold cached_size_text = len(text)
   hold at = 0
   hold quoted = 0
-  while at < len(text) {
+  while at < cached_size_text {
     hold c = sx_index(text, at)
     when quoted == 1 {
       at = at + 1
@@ -1238,7 +1362,7 @@ make sxfneedscheck(text: str, returns: str, params: str, structs: str) -> num {
             give 1
           }
           hold next = sxflowspace(text, at + len(word))
-          when next < len(text) && sx_index(text, next) == 40 {
+          when next < cached_size_text && sx_index(text, next) == 40 {
             hold result = sxelookup(returns, word, "=")
             when len(result) > 1 && sx_index(result, 0) == 117 {
               give 1
@@ -1274,8 +1398,9 @@ make sxfenv(decls: str, strings: str, lists: str, structs: str, returns: str, pa
   give env
 }
 make sxflowspace(text: str, at: num) -> num {
+  hold cached_size_text = len(text)
   hold i = at
-  hold n = len(text)
+  hold n = cached_size_text
   hold run = 1
   while i < n && run == 1 {
     hold c = sx_index(text, i)
@@ -1294,10 +1419,11 @@ make sxflowspace(text: str, at: num) -> num {
   give i
 }
 make sxflowword(text: str, at: num) -> str {
+  hold cached_size_text = len(text)
   hold i = at
   hold word = ""
   hold run = 1
-  while i < len(text) && run == 1 {
+  while i < cached_size_text && run == 1 {
     hold c = sx_index(text, i)
     when (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 {
       word = concat(word, chr(c))
@@ -1311,8 +1437,9 @@ make sxflowword(text: str, at: num) -> str {
 // Skip an expression/ordinary statement, respecting literal braces/quotes.
 // mode 1 locates the opening brace of a control body; mode 0 its line end.
 make sxflowskip(text: str, at: num, mode: num) -> num {
+  hold cached_size_text = len(text)
   hold i = at
-  hold n = len(text)
+  hold n = cached_size_text
   hold quote = 0
   hold nesting = 0
   hold run = 1
@@ -1356,20 +1483,21 @@ make sxflowskip(text: str, at: num, mode: num) -> num {
 }
 // Result: position after closing brace, proven-return flag.
 make sxflowblock(text: str, at: num, level: num) -> list {
-  hold limit = len(text)
+  hold cached_size_text = len(text)
+  hold limit = cached_size_text
   when level > 128 {
     give [limit, 0]
   }
   hold i = sxflowspace(text, at)
-  when i >= len(text) || sx_index(text, i) != 123 {
+  when i >= cached_size_text || sx_index(text, i) != 123 {
     give [limit, 0]
   }
   i = i + 1
   hold proven = 0
   hold run = 1
-  while i < len(text) && run == 1 {
+  while i < cached_size_text && run == 1 {
     i = sxflowspace(text, i)
-    when i >= len(text) {
+    when i >= cached_size_text {
       give [i, 0]
     }
     when sx_index(text, i) == 125 {
@@ -1443,10 +1571,11 @@ make sxflowblock(text: str, at: num, level: num) -> list {
 // raw_index(source, from, n) -> str: the text inside `[ ]`, copied verbatim
 // from `from` to the closing ']' ("" = cannot lower; callers refuse clearly).
 make tbl_has(table: str, name: str) -> num {
+  hold cached_size_table = len(table)
   hold thkey = concat(concat("|", name), "|")
   hold thi = 0
   hold thkl = len(thkey)
-  hold thtl = len(table)
+  hold thtl = cached_size_table
   hold thfound = 0
   while thi + thkl <= thtl && thfound == 0 {
     hold thmt = 1
@@ -1470,10 +1599,11 @@ make tbl_has(table: str, name: str) -> num {
 // ---------------------------------------------------------------------------
 // str_operand: is this expression text a string? It answers 1 for a quoted
 make str_operand(text: str, sdecls: str) -> num {
+  hold cached_size_text = len(text)
   // the operand scans leave the spacing of the source on either side, and a
   // table lookup is by exact name: trim spaces and tabs first
   hold sob = 0
-  hold soe = len(text)
+  hold soe = cached_size_text
   hold sorun = 1
   while sorun == 1 {
     when sob >= soe {
@@ -1543,9 +1673,10 @@ make str_operand(text: str, sdecls: str) -> num {
 // idx_lower: lower `[ ]` text into C. len(NAME)->sx_llen/sx_len, NAME[IDX]->
 // sx_lget/sx_idx (IDX lowered recursively), `%`->sx_mod(chain, atom) with the
 make idx_chain_start(out: str) -> num {
+  hold cached_size_out = len(out)
   hold ls = 0
   hold dep = 0
-  hold i = len(out) - 1
+  hold i = cached_size_out - 1
   hold done = 0
   while i >= 0 && done == 0 {
     hold c = sx_index(out, i)
@@ -1584,7 +1715,8 @@ make idx_chain_start(out: str) -> num {
 // idx_atom_end(text, from): the end of the factor starting at or after
 // `from` (spaces and one sign skipped): a number, a name with any
 make idx_atom_end(text: str, from: num) -> num {
-  hold n = len(text)
+  hold cached_size_text = len(text)
+  hold n = cached_size_text
   hold j = from
   while j < n && (sx_index(text, j) == 32 || sx_index(text, j) == 9) {
     hold j = j + 1
@@ -1630,9 +1762,10 @@ make idx_atom_end(text: str, from: num) -> num {
 
 // idx_sub: bytes [a, z) of s.
 make idx_sub(s: str, a: num, z: num) -> str {
+  hold cached_size_s = len(s)
   hold out = ""
   hold i = a
-  while i < z && i < len(s) {
+  while i < z && i < cached_size_s {
     hold out = concat(out, chr(sx_index(s, i)))
     hold i = i + 1
   }
@@ -1643,9 +1776,10 @@ make idx_sub(s: str, a: num, z: num) -> str {
 // |name=paramkinds|): an index may call a typed function that returns a
 // number, so they have to travel with every recursive descent.
 make idx_lower(text: str, ldecls: str, sdecls: str, fnret: str, fnpk: str) -> str {
+  hold cached_size_text = len(text)
   hold ixlout = ""
   hold ixli = 0
-  hold ixln = len(text)
+  hold ixln = cached_size_text
   hold ixlbad = 0
   while ixli < ixln && ixlbad == 0 {
     hold ixlnext = ixli + 1
@@ -2073,6 +2207,346 @@ make raw_index(source: str, from: num, n: num) -> str {
   give rixout
 }
 
+// Seed-profile checked calls reuse the expression parser and current lexical
+// environment, including original source spellings of the runtime builtins.
+make sxseed_env(decls: str, strings: str, lists: str, structs: str, returns: str, params: str, fields: str, private: str) -> str {
+  returns = concat(returns, "|len=n|index=n|concat=s|chr=s|numstr=s|sx_index=n|push=l|string_eq=n|arg=s|arg_count=n|read_file=s|write_file=n|read_line=s|read_n=s|write_out=n|flush_out=n|gc=n|gc_live=n|gc_runs=n|exit=n|http_get=s|read_dir=s|path_kind=n|path_size=n|path_real=s|")
+  params = concat(params, "|len=a|index=an|concat=ss|chr=n|numstr=n|sx_index=an|push=ln|string_eq=ss|arg=n|arg_count=|read_file=s|write_file=ss|read_line=|read_n=n|write_out=s|flush_out=|gc=|gc_live=|gc_runs=|exit=n|http_get=s|read_dir=s|path_kind=s|path_size=s|path_real=s|")
+  returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_chr=s|sx_read=s|sx_write=n|sx_http=s|sx_arg=s|sx_argc=n|sx_eq=n|sx_numstr=s|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_mod=n|sx_lget=n|sx_llen=n|sx_lpush=l|spawn=n|sx_spawn=n|child_send=n|sx_child_send=n|child_recv=s|sx_child_recv=s|child_line=s|sx_child_line=s|child_close=n|sx_child_close=n|make_dir=n|sx_make_dir=n|make_link=n|sx_make_link=n|remove_path=n|sx_remove_path=n|read_bytes=n|sx_read_bytes=n|write_bytes=n|sx_write_bytes=n|bytes_f64=l|sx_bytes_f64=l|bit_and=n|sx_bit_and=n|bit_or=n|sx_bit_or=n|bit_xor=n|sx_bit_xor=n|bit_not=n|sx_bit_not=n|shl=n|sx_shl=n|shr=n|sx_shr=n|sx_getenv=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|")
+  params = concat(params, "|sx_cat=ss|sx_len=a|sx_idx=sn|sx_chr=n|sx_read=s|sx_write=ss|sx_http=s|sx_arg=n|sx_argc=|sx_eq=ss|sx_numstr=n|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_mod=nn|sx_lget=ln|sx_llen=l|sx_lpush=ln|spawn=s|sx_spawn=s|child_send=ns|sx_child_send=ns|child_recv=nn|sx_child_recv=nn|child_line=n|sx_child_line=n|child_close=n|sx_child_close=n|make_dir=s|sx_make_dir=s|make_link=ss|sx_make_link=ss|remove_path=s|sx_remove_path=s|read_bytes=sl|sx_read_bytes=sl|write_bytes=sl|sx_write_bytes=sl|bytes_f64=ln|sx_bytes_f64=ln|bit_and=nn|sx_bit_and=nn|bit_or=nn|sx_bit_or=nn|bit_xor=nn|sx_bit_xor=nn|bit_not=n|sx_bit_not=n|shl=nn|sx_shl=nn|shr=nn|sx_shr=nn|sx_getenv=s|sx_read_dir=s|sx_path_kind=s|sx_path_size=s|sx_path_real=s|")
+  give sxfenv(decls, strings, lists, structs, returns, params, fields, private)
+}
+// Validate complete iteration headers before the permissive C lowering.
+make sxseed_for(text: str, env: str) -> str {
+  hold size = len(text)
+  hold start = sxflowspace(text, 0)
+  when string_eq(sxflowword(text, start), "for") == 0 { give ""
+  }
+  hold p = sxflowspace(text, start + 3)
+  hold name = sxflowword(text, p)
+  when len(name) == 0 { give "seed-min for: invalid binder"
+  }
+  when sx_index(name, 0) >= 48 && sx_index(name, 0) <= 57 { give "seed-min for: invalid binder"
+  }
+  when sxseed_csv_has("true,false,and,or,not,for,in,hold,show,make,give,when,elif,else,otherwise,if,while,break,continue,struct,use", name) == 1 { give "seed-min for: binder cannot be a language keyword"
+  }
+  p = sxflowspace(text, p + len(name))
+  when string_eq(sxflowword(text, p), "in") == 0 { give "seed-min for: expected in"
+  }
+  p = sxflowspace(text, p + 2)
+  hold i = p
+  hold depth = 0
+  hold quote = 0
+  hold range = -1
+  hold body = size
+  hold operator = 0
+  while i < size && body == size {
+    hold c = sx_index(text, i)
+    when quote == 1 {
+      when c == 92 { i = i + 1 } otherwise { when c == 34 { quote = 0 } }
+    } otherwise {
+      when c == 34 { quote = 1 } otherwise {
+        when c == 40 || c == 91 { depth = depth + 1 }
+        when c == 41 || c == 93 { depth = depth - 1 }
+        when depth == 0 {
+          when c == 123 { body = i }
+          when c == 43 || c == 45 || c == 42 || c == 47 || c == 37 { operator = 1 }
+          when c == 46 && i + 1 < size && sx_index(text, i + 1) == 46 {
+            when range >= 0 || (i + 2 < size && sx_index(text, i + 2) == 46) { give "seed-min for: malformed range operator"
+            }
+            range = i
+            i = i + 1
+          }
+        }
+      }
+    }
+    i = i + 1
+  }
+  when body - p >= 65536 { give "seed-min for: 64 KiB lowering limit"
+  }
+  hold expression = sxseed_slice(text, p, body)
+  hold state = []
+  hold binder_kind = "n"
+  when range >= 0 {
+    hold left = sxseed_slice(text, p, range)
+    hold right = sxseed_slice(text, range + 2, body)
+    hold lo = sxeparse(left, 0, env, 0, 0, state)
+    hold hi = sxeparse(right, 0, env, 0, 0, state)
+    when string_eq(sxesegment(lo, 1), "n") == 0 || sxflowspace(left, sxepos(lo)) != len(left) { give "seed-min for: range start must be a complete numeric expression"
+    }
+    when string_eq(sxesegment(hi, 1), "n") == 0 || sxflowspace(right, sxepos(hi)) != len(right) { give "seed-min for: range end must be a complete numeric expression"
+    }
+  } otherwise {
+    when operator == 1 { give "seed-min for: use a string/list value or call, not an unbound operator expression"
+    }
+    hold value = sxeparse(expression, 0, env, 0, 0, state)
+    hold kind = sxesegment(value, 1)
+    when (string_eq(kind, "s") == 0 && string_eq(kind, "l") == 0) || sxflowspace(expression, sxepos(value)) != len(expression) { give "seed-min for: expected a complete string/list iteration value"
+    }
+    when string_eq(kind, "s") { binder_kind = "s" }
+  }
+  when len(sxeenvlookup(env, 0, name, "|")) > 0 {
+    hold prior = sxeparse(name, 0, env, 0, 0, state)
+    when string_eq(sxesegment(prior, 1), binder_kind) == 0 { give "seed-min for: binder type conflicts with existing binding"
+    }
+  }
+  give ""
+}
+// Preserve the seed's generic-argument and literal-agreement contract before
+// mangling discards the source type arguments. Fields are constrained only when
+// the template's field count equals its type-argument count, as in the seed ABI.
+make sxseed_generic_info(text: str, templates: str) -> str {
+  hold i = 0
+  hold size = len(text)
+  hold previous = ""
+  hold error = ""
+  hold types = "|"
+  while i < size {
+    i = gxskip(text, i)
+    when i < size {
+      when sx_index(text, i) == 34 {
+        i = i + 1
+        hold quoted = 1
+        while i < size && quoted == 1 {
+          hold c = sx_index(text, i)
+          i = i + 1
+          when c == 92 { i = i + 1 } otherwise { when c == 34 { quoted = 0 } }
+        }
+      } otherwise {
+        hold word = sxflowword(text, i)
+        when len(word) > 0 {
+          hold next = gxskip(text, i + len(word))
+          hold rec = sxelookup(templates, word, ":")
+          when len(rec) > 0 && string_eq(previous, "struct") == 0 && next < size {
+            when sx_index(text, next) == 123 {
+              hold example = "num"
+              hold argument = 1
+              while argument < sx_index(rec, 0) - 48 {
+                example = concat(example, ",num")
+                argument = argument + 1
+              }
+              error = concat(word, concat(" is a generic struct: write ", concat(word, concat("<", concat(example, "> { ... }")))))
+            }
+            when sx_index(text, next) == 60 {
+              hold parsed = gxargs(text, next, templates, 0)
+              hold code = sxesegment(parsed, 1)
+              hold count = sxesegment(parsed, 2)
+              when len(code) == 0 {
+                hold bad_at = next + 1
+                hold bad_name = ""
+                while bad_at < size && len(bad_name) == 0 && sx_index(text, bad_at) != 123 {
+                  bad_at = gxskip(text, bad_at)
+                  hold candidate = sxflowword(text, bad_at)
+                  when len(candidate) > 0 {
+                    when len(gxkind(candidate)) == 0 && len(sxelookup(templates, candidate, ":")) == 0 { bad_name = candidate }
+                    bad_at = bad_at + len(candidate)
+                  } otherwise { bad_at = bad_at + 1 }
+                }
+                error = concat("a type argument must be num, str, list or an instantiation of a generic struct (got '", concat(bad_name, "')"))
+              } otherwise {
+                when string_eq(count, sxeslice(rec, 0, 1)) == 0 {
+                  hold plural = " type arguments, got "
+                  when sx_index(rec, 0) == 49 { plural = " type argument, got " }
+                  error = concat(word, concat(" takes ", concat(sxeslice(rec, 0, 1), concat(plural, count))))
+                } otherwise {
+                  hold fields = sxeslice(rec, 2, len(rec))
+                  hold field_count = 1
+                  hold k = 0
+                  while k < len(fields) {
+                    when sx_index(fields, k) == 44 { field_count = field_count + 1 }
+                    k = k + 1
+                  }
+                  when field_count == sx_index(rec, 0) - 48 {
+                    hold mangled = concat(word, concat("__", code))
+                    hold arg = next + 1
+                    hold field = 0
+                    hold done = 0
+                    while done < field_count {
+                      arg = gxskip(text, arg)
+                      hold name = sxflowword(text, arg)
+                      hold after = gxskip(text, arg + len(name))
+                      hold kind = gxkind(name)
+                      when after < size && sx_index(text, after) == 60 {
+                        hold nested = gxargs(text, after, templates, 0)
+                        kind = concat(name, concat("__", sxesegment(nested, 1)))
+                        after = sxepos(nested)
+                      }
+                      hold field_name = sxflowword(fields, field)
+                      types = concat(types, concat(mangled, concat(".", concat(field_name, concat("=", concat(kind, "|"))))))
+                      field = field + len(field_name) + 1
+                      arg = gxskip(text, after) + 1
+                      done = done + 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+          previous = word
+          i = i + len(word)
+        } otherwise { i = i + 1 }
+      }
+    }
+  }
+  give concat(error, concat(chr(1), types))
+}
+make sxseed_generic_literal(types: str, owner: str, field: str, kind: num, concrete: str) -> str {
+  hold expected = sxelookup(types, concat(owner, concat(".", field)), "=")
+  when len(expected) == 0 { give ""
+  }
+  when string_eq(expected, "n") && kind == 0 { give ""
+  }
+  when string_eq(expected, "s") && kind == 1 { give ""
+  }
+  when string_eq(expected, "l") && kind == 3 { give ""
+  }
+  when len(expected) > 1 && kind == 2 && string_eq(expected, concrete) { give ""
+  }
+  hold wanted = expected
+  when string_eq(expected, "n") { wanted = "num" }
+  when string_eq(expected, "s") { wanted = "str" }
+  when string_eq(expected, "l") { wanted = "list" }
+  hold actual = "num"
+  when kind == 1 { actual = "str" }
+  when kind == 3 { actual = "list" }
+  when kind == 2 {
+    actual = concat("a ", concrete)
+    wanted = concat("a ", wanted)
+  }
+  hold reason = concat(owner, concat(" field '", concat(field, concat("' is ", concat(wanted, concat(" (its type argument says so), the literal gives ", actual))))))
+  give reason
+}
+
+// The seed C ABI reserves _sx_gen_ for monomorphised function symbols.
+// Rename registered specialisations only, never string contents, struct names,
+// unrelated user identifiers or the default mini-compiler profile's symbols.
+make sxseed_c_symbols(text: str, registered: str) -> str {
+  hold size = len(text)
+  hold i = 0
+  hold copied = 0
+  hold out = ""
+  while i < size {
+    hold c = sx_index(text, i)
+    when c == 34 || c == 39 {
+      hold quote = c
+      i = i + 1
+      hold quoted = 1
+      while i < size && quoted == 1 {
+        c = sx_index(text, i)
+        i = i + 1
+        when c == 92 { i = i + 1 } otherwise { when c == quote { quoted = 0 } }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < size && sx_index(text, i + 1) == 47 {
+        while i < size && sx_index(text, i) != 10 { i = i + 1 }
+      } otherwise {
+        when c == 47 && i + 1 < size && sx_index(text, i + 1) == 42 {
+          i = i + 2
+          hold comment = 1
+          while i + 1 < size && comment == 1 {
+            when sx_index(text, i) == 42 && sx_index(text, i + 1) == 47 { comment = 0 }
+            i = i + 1
+          }
+          i = i + 1
+        } otherwise {
+          hold word = sxflowword(text, i)
+          when len(word) > 0 {
+            when sxecontains(word, "__") && sxecontains(registered, concat(chr(1), concat(word, chr(1)))) {
+              out = concat(out, sxseed_slice(text, copied, i))
+              out = concat(out, concat("_sx_gen_", word))
+              copied = i + len(word)
+            }
+            i = i + len(word)
+          } otherwise { i = i + 1 }
+        }
+      }
+    }
+  }
+  give concat(out, sxseed_slice(text, copied, size))
+}
+
+make sxseed_has_plus(text: str) -> num {
+  hold i = 0
+  hold size = len(text)
+  hold quoted = 0
+  while i < size {
+    hold c = sx_index(text, i)
+    when quoted == 1 {
+      when c == 92 { i = i + 1 } otherwise { when c == 34 { quoted = 0 } }
+    } otherwise {
+      when c == 43 { give 1
+      }
+      when c == 34 { quoted = 1 }
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make sxseed_calls(text: str, env: str, checked: num, declared: str) -> str {
+  hold cached_size_text = len(text)
+  hold i = sxflowspace(text, 0)
+  when string_eq(sxflowword(text, i), "make") == 1 { give ""
+  }
+  when string_eq(sxflowword(text, i), "show") == 1 {
+    hold show_state = []
+    hold show_value = sxeparse(text, i + 4, env, 0, 0, show_state)
+    when string_eq(sxesegment(show_value, 1), "e") { give sxecode(show_value)
+    }
+    hold show_end = sxflowspace(text, sxepos(show_value))
+    when show_end < cached_size_text && sx_index(text, show_end) != 125 { give "incomplete or trailing show expression"
+    }
+  }
+  hold first = sxflowword(text, i)
+  when string_eq(first, "for") { checked = 1 }
+  when string_eq(first, "when") || string_eq(first, "while") || string_eq(first, "elif") || string_eq(first, "if") {
+    hold condition_state = []
+    hold condition_value = sxeparse(text, i + len(first), env, 0, 0, condition_state)
+    when string_eq(sxesegment(condition_value, 1), "n") == 0 { give "condition must be numeric"
+    }
+    hold condition_end = sxflowspace(text, sxepos(condition_value))
+    when condition_end < cached_size_text && sx_index(text, condition_end) != 123 { give "incomplete condition expression"
+    }
+  }
+  hold size = cached_size_text
+  hold returns = ""
+  while i < size {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      i = i + 1
+      hold quote = 1
+      while i < size && quote == 1 {
+        hold qc = sx_index(text, i)
+        i = i + 1
+        when qc == 92 { i = i + 1 } otherwise {
+          when qc == 34 { quote = 0 }
+        }
+      }
+    } otherwise {
+      hold name = sxflowword(text, i)
+      when len(name) > 0 {
+        when len(name) >= 9 && string_eq(sxseed_slice(name, 0, 9), "_sx_iter_") { give "_sx_iter_ prefix is reserved for seed iteration temporaries"
+        }
+        hold next = sxflowspace(text, i + len(name))
+        when checked == 1 && next < size && sx_index(text, next) == 40 && sxseed_csv_has("numstr,sx_numstr,read_line,sx_read_line,read_n,sx_read_n,write_out,sx_write_out,flush_out,sx_flush_out,exit,sx_exit,run_command,sx_run_command,getenv,sx_getenv,read_dir,sx_read_dir,path_kind,sx_path_kind,path_size,sx_path_size,path_real,sx_path_real,spawn,sx_spawn,child_send,sx_child_send,child_recv,sx_child_recv,child_line,sx_child_line,child_close,sx_child_close,make_dir,sx_make_dir,make_link,sx_make_link,remove_path,sx_remove_path,write_bytes,sx_write_bytes,read_bytes,sx_read_bytes,bytes_f64,sx_bytes_f64,bit_and,sx_bit_and,bit_or,sx_bit_or,bit_xor,sx_bit_xor,bit_not,sx_bit_not,shl,sx_shl,shr,sx_shr,sx_cat,sx_mod,sx_lget,sx_llen,sx_lpush", name) {
+          give "seed-min for/producer call names an unknown or unsupported function"
+        }
+        when next < size && sx_index(text, next) == 40 && len(sxelookup(declared, name, "=")) == 0 && sxseed_csv_has("numstr,sx_numstr,read_line,sx_read_line,read_n,sx_read_n,write_out,sx_write_out,flush_out,sx_flush_out,exit,sx_exit,run_command,sx_run_command,getenv,sx_getenv,read_dir,sx_read_dir,path_kind,sx_path_kind,path_size,sx_path_size,path_real,sx_path_real,spawn,sx_spawn,child_send,sx_child_send,child_recv,sx_child_recv,child_line,sx_child_line,child_close,sx_child_close,make_dir,sx_make_dir,make_link,sx_make_link,remove_path,sx_remove_path,write_bytes,sx_write_bytes,read_bytes,sx_read_bytes,bytes_f64,sx_bytes_f64,bit_and,sx_bit_and,bit_or,sx_bit_or,bit_xor,sx_bit_xor,bit_not,sx_bit_not,shl,sx_shl,shr,sx_shr,sx_cat,sx_mod,sx_lget,sx_llen,sx_lpush", name) {
+          give "seed-min call names an unknown function or builtin"
+        }
+        when next < size && sx_index(text, next) == 40 && len(sxeenvlookup(env, 4, name, "=")) > 0 {
+          hold state = []
+          hold value = sxeparse(text, i, env, 0, 0, state)
+          when string_eq(sxesegment(value, 1), "e") == 1 { give sxecode(value)
+          }
+        }
+        i = i + len(name)
+      } otherwise { i = i + 1 }
+    }
+  }
+  give ""
+}
+
 // compiler_min.sa - pure Sayanox mini-compiler (generation 1 source).
 //
 
@@ -2083,6 +2557,8 @@ struct CompilerSourceSize<T> { bytes }
 hold in_path = "selfhost/mini_in.sa"
 hold out_path = "selfhost/mini_out.c"
 hold na = arg_count()
+hold seed_profile = 0
+when na >= 4 { when sx_eq(arg(3), "seed-profile") { hold seed_profile = 1 } }
 when na >= 2 {
   hold in_path = arg(1)
 }
@@ -2103,6 +2579,8 @@ hold n = compiler_source_size.bytes
 hold lgsrc = concat(source, "\n")
 hold lgsn = len(lgsrc)
 hold lgout = ""
+hold lgchunk = ""
+hold lgline_start = 0
 hold lgln = ""
 hold lgp = 0
 hold lgcount = 0
@@ -2149,9 +2627,9 @@ hold lgesc = 0
 while lgp < lgsn {
   hold lgch = sx_index(lgsrc, lgp)
   hold lgp = lgp + 1
-  when lgch != 10 {
-    hold lgln = concat(lgln, chr(lgch))
-  } otherwise {
+  when lgch == 10 {
+    hold lgln = sxseed_slice(lgsrc, lgline_start, lgp - 1)
+    hold lgline_start = lgp
     hold lgnew = concat(lgln, "\n")
     hold lgll = len(lgln)
     hold lgbad = 0
@@ -2454,13 +2932,25 @@ while lgp < lgsn {
       }
       hold lgnew = concat(concat(lgpre, lgnew), "\n")
     }
-    hold lgout = concat(lgout, lgnew)
+    hold lgchunk = concat(lgchunk, lgnew)
+    when len(lgchunk) >= 4096 {
+      hold lgout = concat(lgout, lgchunk)
+      hold lgchunk = ""
+    }
     hold lgln = ""
   }
 }
+hold lgout = concat(lgout, lgchunk)
 // Generic struct templates are collected first, then every instantiation is
 // rewritten to its mangled concrete name before the walker runs (gxscan,
 hold gsdefs = gxscan(lgout)
+hold seed_generic_error = ""
+hold seed_generic_types = "|"
+when seed_profile == 1 && len(gsdefs) > 1 {
+  hold info = sxseed_generic_info(lgout, gsdefs)
+  seed_generic_error = sxesegment(info, 0)
+  seed_generic_types = sxesegment(info, 1)
+}
 hold gxsdefs = ""
 hold source = lgout
 when len(gsdefs) > 1 {
@@ -2492,6 +2982,8 @@ hold saved_body = ""
 hold fn_base = 0
 hold fn_name = ""
 hold fn_params = ""
+hold gquoted = 0
+hold gqc = 0
 hold gexpr = ""
 hold ldecls = "|"
 // Immutable scope records: parent, then lengths of the four name tables.
@@ -2889,6 +3381,7 @@ hold cwlj = 0
 hold cwla = 0
 hold cwlb = 0
 hold fsret2 = 0
+hold flowtyped = 0
 hold fn_retkind = 110
 hold fn_params = ""
 hold fpt2 = ""
@@ -3612,6 +4105,9 @@ while exmore == 1 {
   }
 }
 
+when seed_profile == 1 { hold source = sxseed_normalize(source)
+  hold n = len(source) }
+
 // Expand after textual use splicing, so imported strings see the same rules.
 hold interpprivate = "_sx_interp"
 while sxecontains(source, interpprivate) == 1 {
@@ -3763,6 +4259,8 @@ when interpactive == 1 {
   hold fspk = concat(fspk, interpprivate)
   hold fspk = concat(fspk, "=v|")
 }
+hold seed_function_total = 0
+hold seed_params = ""
 hold fsi = 0
 hold fsstart = 1
 hold fsstr = 0
@@ -3897,11 +4395,19 @@ while fsi < n {
             when fsp < n {
               hold fsc3 = sx_index(source, fsp)
             }
+            when seed_profile == 1 && (fsc3 == 40 || fsc3 == 60) && len(fsname) > 0 {
+              seed_function_total = seed_function_total + 1
+              when seed_function_total > 512 {
+                perr = 1
+                permsg = "function/specialization limit is 512"
+              }
+            }
             when fsc3 == 40 && sx_eq(fsname, "") == 0 {
               hold fsp = fsp + 1
               hold fstx = ""
               hold fspks = ""
               hold fspfirst = 1
+              seed_params = ""
               hold fsprun = 1
               while fsprun == 1 {
                 hold fsc3 = 0
@@ -4023,6 +4529,11 @@ while fsi < n {
                             }
                           }
                         }
+                        when seed_profile == 1 && sxseed_csv_has(seed_params, fspn) == 1 {
+                          perr = 1
+                          permsg = "duplicate function parameter"
+                        }
+                        seed_params = concat(seed_params, concat(fspn, ","))
                         hold fstx = concat(fstx, fspn)
                         when len(fsstructparam) > 0 {
                           hold fspks = concat(fspks, "u")
@@ -4146,6 +4657,10 @@ while fsi < n {
                 } otherwise {
                   hold fsri = fsri + 1
                 }
+              }
+              when seed_profile == 1 && fshave == 1 {
+                perr = 1
+                permsg = concat("duplicate function definition: ", fsname)
               }
               when fshave == 0 {
                 hold fsret = concat(fsret, fsname)
@@ -4353,11 +4868,19 @@ while fgi < n {
                   }
                 }
                 when sx_eq(fgthis, "") == 0 {
+                  when seed_profile == 1 && sxseed_csv_has(fgtys, fgthis) == 1 {
+                    perr = 1
+                    permsg = "duplicate generic type parameter"
+                  }
                   when fgnty > 0 {
                     hold fgtys = concat(fgtys, ",")
                   }
                   hold fgtys = concat(fgtys, fgthis)
                   hold fgnty = fgnty + 1
+                  when seed_profile == 1 && fgnty > 8 {
+                    perr = 1
+                    permsg = "seed-min generic type parameter limit is 8"
+                  }
                 }
                 hold fgrun = 1
                 while fgrun == 1 {
@@ -4616,6 +5139,22 @@ while fgi < n {
                     hold fgretT = 1
                   }
                 }
+                when seed_profile == 1 && fgallt == 1 {
+                  hold seed_ti = 0
+                  while seed_ti < fgnty {
+                    hold seed_used = 0
+                    hold seed_pi = 0
+                    while seed_pi < len(fgpidx) {
+                      when sx_index(fgpidx, seed_pi) - 48 == seed_ti { seed_used = 1 }
+                      seed_pi = seed_pi + 1
+                    }
+                    when seed_used == 0 {
+                      perr = 1
+                      permsg = "generic type parameter cannot be inferred from arguments"
+                    }
+                    seed_ti = seed_ti + 1
+                  }
+                }
                 // a generic: every parameter and the return are T
                 when fgallt == 1 && fgntot > 0 && fgretT == 1 {
                   // capture the body text up to the matching `}`
@@ -4749,6 +5288,8 @@ while fgi < n {
     }
   }
 }
+
+hold source_words = sxsource_pack(source)
 
 while running == 1 {
 
@@ -4974,6 +5515,13 @@ while running == 1 {
           }
         }
         when gdone == 0 {
+        when seed_profile == 1 {
+          seed_function_total = seed_function_total + 1
+          when seed_function_total > 512 {
+            perr = 1
+            permsg = "function/specialization limit is 512"
+          }
+        }
         hold gpkinds = ""
         hold gpc = ""       // C param list for the prototype
         hold gpc2 = ""      // Sayanox param list for the definition
@@ -5039,6 +5587,31 @@ while running == 1 {
         hold gbl = len(gbdy)
         while gbi < gbl {
           hold gbc = sx_index(gbdy, gbi)
+          hold gopaque = 0
+          when gbc == 34 {
+            hold gopaque = 1
+            hold gnew = concat(gnew, chr(gbc))
+            hold gbi = gbi + 1
+            hold gquoted = 1
+            while gbi < gbl && gquoted == 1 {
+              hold gqc = sx_index(gbdy, gbi)
+              hold gnew = concat(gnew, chr(gqc))
+              hold gbi = gbi + 1
+              when gqc == 92 && gbi < gbl {
+                hold gnew = concat(gnew, chr(sx_index(gbdy, gbi)))
+                hold gbi = gbi + 1
+              } otherwise { when gqc == 34 { hold gquoted = 0 } }
+            }
+          }
+          when gbc == 47 && gbi + 1 < gbl && sx_index(gbdy, gbi + 1) == 47 {
+            hold gopaque = 1
+            while gbi < gbl && sx_index(gbdy, gbi) != 10 {
+              hold gnew = concat(gnew, chr(sx_index(gbdy, gbi)))
+              hold gbi = gbi + 1
+            }
+          }
+          when gopaque == 0 {
+          hold gwordstart = gbi
           when (gbc >= 97 && gbc <= 122) || (gbc >= 65 && gbc <= 90) || gbc == 95 {
             hold gwd = ""
             hold grun = 1
@@ -5076,6 +5649,15 @@ while running == 1 {
                 hold gcur2 = concat(gcur2, chr(gtc2))
               }
               hold gts2 = gts2 + 1
+            }
+            // Substitute type annotations, not ordinary identifiers such as
+            // `hold T = 7` / `show T`. Quoted text/comments were copied above.
+            when seed_profile == 1 && gwi2 >= 0 {
+              hold gprev = gwordstart - 1
+              while gprev >= 0 && (sx_index(gbdy, gprev) == 32 || sx_index(gbdy, gprev) == 9 || sx_index(gbdy, gprev) == 10 || sx_index(gbdy, gprev) == 13) { hold gprev = gprev - 1 }
+              when gprev < 0 { hold gwi2 = -1 } otherwise {
+                when sx_index(gbdy, gprev) != 58 && sx_index(gbdy, gprev) != 60 { hold gwi2 = -1 }
+              }
             }
             when gwi2 >= 0 {
               hold gkc = gk0
@@ -5148,6 +5730,7 @@ while running == 1 {
                 // The callee's copy is not emitted yet, so its result kind
                 // has to be recorded here as well: a `hold v: T = callee(..)`
                 hold gqxi = giat + 2
+                hold seed_pending_signature = ""
                 hold gqxrun = 1
                 while gqxrun == 1 {
                   when gqxi >= len(fgnames) {
@@ -5157,9 +5740,17 @@ while running == 1 {
                     when gqxc == 1 {
                       hold gqxrun = 0
                     } otherwise {
+                      hold seed_pending_index = gqxc - 48
+                      when seed_pending_index >= 0 && seed_pending_index < len(gsuf) {
+                        seed_pending_signature = concat(seed_pending_signature, chr(sx_index(gsuf, seed_pending_index)))
+                      }
                       hold gqxi = gqxi + 1
                     }
                   }
+                }
+                when seed_profile == 1 {
+                  fspk = concat(fspk, concat(concat(concat(gwd, "__"), gsuf), "="))
+                  fspk = concat(fspk, concat(seed_pending_signature, "|"))
                 }
                 hold gqxri = 0
                 when gqxi + 1 < len(fgnames) {
@@ -5184,6 +5775,7 @@ while running == 1 {
           } otherwise {
             hold gnew = concat(gnew, chr(gbc))
             hold gbi = gbi + 1
+          }
           }
         }
         // definition + prototype + signature tables for the specialised name
@@ -5224,19 +5816,12 @@ while running == 1 {
       }
     }
     hold gwant = ""
-    // splice the text at the current statement boundary
-    hold gsrc = ""
-    hold gsi = 0
-    while gsi < pos {
-      hold gsrc = concat(gsrc, chr(sx_index(source, gsi)))
-      hold gsi = gsi + 1
-    }
-    hold gsrc = concat(gsrc, gwtxt)
-    while gsi < n {
-      hold gsrc = concat(gsrc, chr(sx_index(source, gsi)))
-      hold gsi = gsi + 1
-    }
+    // Balanced slices keep many-specialization input from repeatedly copying
+    // every source prefix one character at a time (quadratic per splice).
+    hold gsrc = concat(sxseed_slice(source, 0, pos), gwtxt)
+    hold gsrc = concat(gsrc, sxseed_slice(source, pos, n))
     hold source = gsrc
+    hold source_words = sxsource_pack(source)
     hold n = len(source)
   }
 
@@ -5247,7 +5832,7 @@ while running == 1 {
       hold skipw = 0
       hold running = 0
     } otherwise {
-      hold c = sx_index(source,pos)
+      hold c = sxsource_get(source_words,pos)
       hold isspace = 0
       when c == 32 || c == 9 || c == 13 || c == 10 {
         hold isspace = 1
@@ -5258,7 +5843,7 @@ while running == 1 {
         when c == 47 {
           hold c2 = 0
           when pos + 1 < n {
-            hold c2 = sx_index(source,pos + 1)
+            hold c2 = sxsource_get(source_words,pos + 1)
           }
           when c2 == 47 {
             // line comment: run to the end of the line
@@ -5269,7 +5854,7 @@ while running == 1 {
                 hold skipc = 0
                 hold running = 0
               } otherwise {
-                hold c3 = sx_index(source,pos)
+                hold c3 = sxsource_get(source_words,pos)
                 when c3 == 10 {
                   hold skipc = 0
                 } otherwise {
@@ -5289,15 +5874,15 @@ while running == 1 {
 
   // ---- phase 1.5: monomorphise the generic calls of this statement -------
   // `make NAME<T>` is compiled by generating one specialised copy per call.
-  when running == 1 && len(fgnames) > 1 {
+  when running == 1 && (seed_profile == 1 || len(fgnames) > 1) {
     hold zwEnd = pos
-    while zwEnd < n && sx_index(source, zwEnd) != 10 {
+    while zwEnd < n && sxsource_get(source_words, zwEnd) != 10 {
       hold zwEnd = zwEnd + 1
     }
     hold zwT = ""
     hold zwI = pos
     while zwI < zwEnd {
-      hold zwT = concat(zwT, chr(sx_index(source, zwI)))
+      hold zwT = concat(zwT, chr(sxsource_get(source_words, zwI)))
       hold zwI = zwI + 1
     }
     hold zwL = len(zwT)
@@ -5428,6 +6013,10 @@ while running == 1 {
             }
             hold zwAKinds = ""
             hold zwNP = len(zwTidx)
+            when seed_profile == 1 && sxseed_arity(zwT, zwS) != zwNP {
+              perr = 1
+              permsg = "generic call argument count mismatch"
+            }
             hold zwP = 0
             while zwP < zwNP {
               // walk to the start of argument zwP: skip zwP depth-0 commas
@@ -5768,6 +6357,16 @@ while running == 1 {
               when zwTk < len(zwAKinds) {
                 hold zwKc2 = sx_index(zwAKinds, zwTk)
               }
+              when seed_profile == 1 {
+                hold seed_ai = 0
+                while seed_ai < zwNP {
+                  when sx_index(zwTidx, seed_ai) - 48 == zwTj && sx_index(zwAKinds, seed_ai) != zwKc2 {
+                    perr = 1
+                    permsg = "generic call type parameter conflict"
+                  }
+                  seed_ai = seed_ai + 1
+                }
+              }
               hold zwKinds = concat(zwKinds, chr(zwKc2))
               hold zwTj = zwTj + 1
             }
@@ -5809,27 +6408,29 @@ while running == 1 {
         }
       }
     }
+    when seed_profile == 1 {
+      hold seed_call_env = sxseed_env(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+      hold seed_for_error = sxseed_for(zwOut, seed_call_env)
+      when len(seed_for_error) > 0 && perr == 0 { perr = 1
+        permsg = seed_for_error }
+      hold seed_call_error = sxseed_calls(zwOut, seed_call_env, in_fn * flowtyped, fsret)
+      when len(seed_call_error) > 0 && perr == 0 {
+        perr = 1
+        permsg = concat("call type error: ", seed_call_error)
+      }
+    }
     when zwHit == 1 {
-      hold zwSrc = ""
-      hold zwI = 0
-      while zwI < pos {
-        hold zwSrc = concat(zwSrc, chr(sx_index(source, zwI)))
-        hold zwI = zwI + 1
-      }
-      hold zwSrc = concat(zwSrc, zwOut)
-      hold zwI = zwEnd
-      while zwI < n {
-        hold zwSrc = concat(zwSrc, chr(sx_index(source, zwI)))
-        hold zwI = zwI + 1
-      }
+      hold zwSrc = concat(sxseed_slice(source, 0, pos), zwOut)
+      hold zwSrc = concat(zwSrc, sxseed_slice(source, zwEnd, n))
       hold source = zwSrc
+      hold source_words = sxsource_pack(source)
       hold n = len(source)
     }
   }
 
   // ---- phase 2: one statement ----
   when running == 1 {
-    hold c = sx_index(source,pos)
+    hold c = sxsource_get(source_words,pos)
     // per-statement assignment state: `NAME = EXPR`, `NAME.f = EXPR` and
     // `NAME[i] = EXPR` reuse the hold parser (act 1) with asmode = 1
     hold instart = len(body)
@@ -5848,7 +6449,7 @@ while running == 1 {
       hold ki = 0
       while ki < 6 {
         when pos + ki < n {
-          hold kw = concat(kw, chr(sx_index(source, pos + ki)))
+          hold kw = concat(kw, chr(sxsource_get(source_words, pos + ki)))
         }
         hold ki = ki + 1
       }
@@ -5869,7 +6470,7 @@ while running == 1 {
       hold ki = 0
       while ki < 4 {
         when pos + ki < n {
-          hold kw = concat(kw, chr(sx_index(source, pos + ki)))
+          hold kw = concat(kw, chr(sxsource_get(source_words, pos + ki)))
         }
         hold ki = ki + 1
       }
@@ -5884,7 +6485,7 @@ while running == 1 {
           when mkg >= n {
             hold mkrun = 0
           } otherwise {
-            hold mkc = sx_index(source, mkg)
+            hold mkc = sxsource_get(source_words, mkg)
             when mkc == 32 || mkc == 9 {
               hold mkg = mkg + 1
             } otherwise {
@@ -5897,7 +6498,7 @@ while running == 1 {
           when mkg >= n {
             hold mkrun = 0
           } otherwise {
-            hold mkc = sx_index(source, mkg)
+            hold mkc = sxsource_get(source_words, mkg)
             when (mkc >= 97 && mkc <= 122) || (mkc >= 65 && mkc <= 90) || (mkc >= 48 && mkc <= 57) || mkc == 95 {
               hold mknm = concat(mknm, chr(mkc))
               hold mkg = mkg + 1
@@ -5911,7 +6512,7 @@ while running == 1 {
           when mkg >= n {
             hold mkrun = 0
           } otherwise {
-            hold mkc = sx_index(source, mkg)
+            hold mkc = sxsource_get(source_words, mkg)
             when mkc == 32 || mkc == 9 {
               hold mkg = mkg + 1
             } otherwise {
@@ -5921,7 +6522,7 @@ while running == 1 {
         }
         hold mkc = 0
         when mkg < n {
-          hold mkc = sx_index(source, mkg)
+          hold mkc = sxsource_get(source_words, mkg)
         }
         when mkc == 60 {
           hold act = 15
@@ -5936,7 +6537,7 @@ while running == 1 {
       hold ki = 0
       while ki < 4 {
         when pos + ki < n {
-          hold kw = concat(kw, chr(sx_index(source, pos + ki)))
+          hold kw = concat(kw, chr(sxsource_get(source_words, pos + ki)))
         }
         hold ki = ki + 1
       }
@@ -5959,7 +6560,7 @@ while running == 1 {
         when pp >= n {
           hold prun = 0
         } otherwise {
-          hold pc = sx_index(source, pp)
+          hold pc = sxsource_get(source_words, pp)
           when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || (pc >= 48 && pc <= 57) || pc == 95 {
             hold uword = concat(uword, chr(pc))
             hold pp = pp + 1
@@ -5992,7 +6593,7 @@ while running == 1 {
           when pp >= n {
             hold prun = 0
           } otherwise {
-            hold pc = sx_index(source, pp)
+            hold pc = sxsource_get(source_words, pp)
             when pc == 32 || pc == 9 || pc == 13 {
               hold pp = pp + 1
             } otherwise {
@@ -6002,7 +6603,7 @@ while running == 1 {
         }
         hold pc = 0
         when pp < n {
-          hold pc = sx_index(source, pp)
+          hold pc = sxsource_get(source_words, pp)
         }
         hold pnm = ""
         when pc == 40 {
@@ -6012,7 +6613,7 @@ while running == 1 {
             when pp >= n {
               hold prun = 0
             } otherwise {
-              hold pc = sx_index(source, pp)
+              hold pc = sxsource_get(source_words, pp)
               when pc == 32 || pc == 9 || pc == 13 {
                 hold pp = pp + 1
               } otherwise {
@@ -6025,7 +6626,7 @@ while running == 1 {
             when pp >= n {
               hold prun = 0
             } otherwise {
-              hold pc = sx_index(source, pp)
+              hold pc = sxsource_get(source_words, pp)
               when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || (pc >= 48 && pc <= 57) || pc == 95 {
                 hold pnm = concat(pnm, chr(pc))
                 hold pp = pp + 1
@@ -6039,7 +6640,7 @@ while running == 1 {
             when pp >= n {
               hold prun = 0
             } otherwise {
-              hold pc = sx_index(source, pp)
+              hold pc = sxsource_get(source_words, pp)
               when pc == 32 || pc == 9 || pc == 13 {
                 hold pp = pp + 1
               } otherwise {
@@ -6049,7 +6650,7 @@ while running == 1 {
           }
           hold pc = 0
           when pp < n {
-            hold pc = sx_index(source, pp)
+            hold pc = sxsource_get(source_words, pp)
           }
           when pc != 44 {
             hold pnm = ""
@@ -6109,14 +6710,14 @@ while running == 1 {
           when ap >= n {
             hold arun = 0
           } otherwise {
-            hold ac1 = sx_index(source, ap)
+            hold ac1 = sxsource_get(source_words, ap)
             when ac1 == 32 || ac1 == 9 || ac1 == 13 {
               hold ap = ap + 1
             } otherwise {
               when ac1 == 61 {
                 hold ac2 = 0
                 when ap + 1 < n {
-                  hold ac2 = sx_index(source, ap + 1)
+                  hold ac2 = sxsource_get(source_words, ap + 1)
                 }
                 when ac2 == 61 {
                   hold arun = 0
@@ -6128,7 +6729,7 @@ while running == 1 {
                 when ac1 == 43 || ac1 == 45 || ac1 == 42 || ac1 == 47 || ac1 == 37 {
                   hold ac2 = 0
                   when ap + 1 < n {
-                    hold ac2 = sx_index(source, ap + 1)
+                    hold ac2 = sxsource_get(source_words, ap + 1)
                   }
                   when ac2 == 61 {
                     hold aok = 1
@@ -6142,7 +6743,7 @@ while running == 1 {
                       when ap >= n {
                         hold arun2 = 0
                       } otherwise {
-                        hold ac2 = sx_index(source, ap)
+                        hold ac2 = sxsource_get(source_words, ap)
                         when (ac2 >= 97 && ac2 <= 122) || (ac2 >= 65 && ac2 <= 90) || (ac2 >= 48 && ac2 <= 57) || ac2 == 95 {
                           hold ap = ap + 1
                         } otherwise {
@@ -6158,7 +6759,7 @@ while running == 1 {
                         when ap >= n {
                           hold arun2 = 0
                         } otherwise {
-                          hold ac2 = sx_index(source, ap)
+                          hold ac2 = sxsource_get(source_words, ap)
                           when ac2 == 91 {
                             hold abd = abd + 1
                           }
@@ -6197,7 +6798,7 @@ while running == 1 {
           when pos >= n {
             hold prun = 0
           } otherwise {
-            hold pc = sx_index(source, pos)
+            hold pc = sxsource_get(source_words, pos)
             when pc == 10 {
               hold prun = 0
             } otherwise {
@@ -6234,7 +6835,7 @@ while running == 1 {
           when pp >= n {
             hold prun = 0
           } otherwise {
-            hold pc = sx_index(source, pp)
+            hold pc = sxsource_get(source_words, pp)
             when pc == 32 || pc == 9 || pc == 13 {
               hold pp = pp + 1
             } otherwise {
@@ -6249,7 +6850,7 @@ while running == 1 {
             when pp >= n {
               hold prun = 0
             } otherwise {
-              hold pc = sx_index(source, pp)
+              hold pc = sxsource_get(source_words, pp)
               when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || (pc >= 48 && pc <= 57) || pc == 95 {
                 hold pnm = concat(pnm, chr(pc))
                 hold pp = pp + 1
@@ -6263,7 +6864,7 @@ while running == 1 {
             when pp >= n {
               hold prun = 0
             } otherwise {
-              hold pc = sx_index(source, pp)
+              hold pc = sxsource_get(source_words, pp)
               when pc == 32 || pc == 9 || pc == 13 {
                 hold pp = pp + 1
               } otherwise {
@@ -6274,7 +6875,7 @@ while running == 1 {
           // optional `: TYPE` annotation (full language)
           hold pc = 0
           when pp < n {
-            hold pc = sx_index(source, pp)
+            hold pc = sxsource_get(source_words, pp)
           }
           when pc == 58 {
             hold pp = pp + 1
@@ -6283,7 +6884,7 @@ while running == 1 {
               when pp >= n {
                 hold prun = 0
               } otherwise {
-                hold pc = sx_index(source, pp)
+                hold pc = sxsource_get(source_words, pp)
                 when pc == 32 || pc == 9 || pc == 13 {
                   hold pp = pp + 1
                 } otherwise {
@@ -6297,7 +6898,7 @@ while running == 1 {
               when pp >= n {
                 hold prun = 0
               } otherwise {
-                hold pc = sx_index(source, pp)
+                hold pc = sxsource_get(source_words, pp)
                 when (pc >= 97 && pc <= 122) || (pc >= 65 && pc <= 90) || (pc >= 48 && pc <= 57) || pc == 95 {
                   hold aword = concat(aword, chr(pc))
                   hold pp = pp + 1
@@ -6312,7 +6913,7 @@ while running == 1 {
               when pp >= n {
                 hold prun = 0
               } otherwise {
-                hold pc = sx_index(source, pp)
+                hold pc = sxsource_get(source_words, pp)
                 when pc == 32 || pc == 9 || pc == 13 {
                   hold pp = pp + 1
                 } otherwise {
@@ -6322,14 +6923,14 @@ while running == 1 {
             }
           }
           when pp < n {
-            hold pc = sx_index(source, pp)
+            hold pc = sxsource_get(source_words, pp)
             when pc == 61 {
               hold pp = pp + 1
             } otherwise {
               // compound assignment: NAME += EXPR (also -= *= /= %=)
               hold pc2 = 0
               when pp + 1 < n {
-                hold pc2 = sx_index(source, pp + 1)
+                hold pc2 = sxsource_get(source_words, pp + 1)
               }
               when pc2 == 61 {
                 when pc == 43 || pc == 45 || pc == 42 || pc == 47 || pc == 37 {
@@ -6344,7 +6945,7 @@ while running == 1 {
             when pp >= n {
               hold prun = 0
             } otherwise {
-              hold pc = sx_index(source, pp)
+              hold pc = sxsource_get(source_words, pp)
               when pc == 32 || pc == 9 || pc == 13 {
                 hold pp = pp + 1
               } otherwise {
@@ -6375,13 +6976,13 @@ while running == 1 {
           when pp >= n {
             hold prun = 0
           } otherwise {
-            hold pc = sx_index(source, pp)
+            hold pc = sxsource_get(source_words, pp)
             when pq == 1 {
               hold pexpr = concat(pexpr, chr(pc))
               hold pp = pp + 1
               when pc == 92 {
                 when pp < n {
-                  hold pexpr = concat(pexpr, chr(sx_index(source, pp)))
+                  hold pexpr = concat(pexpr, chr(sxsource_get(source_words, pp)))
                   hold pp = pp + 1
                 }
               } otherwise {
@@ -6393,7 +6994,7 @@ while running == 1 {
             } otherwise {
               hold pc2 = 0
               when pp + 1 < n {
-                hold pc2 = sx_index(source, pp + 1)
+                hold pc2 = sxsource_get(source_words, pp + 1)
               }
               when pc == 10 || pc == 13 || (pc == 47 && pc2 == 47) {
                 hold prun = 0
@@ -6453,10 +7054,12 @@ while running == 1 {
           while pwi < pwl {
             hold pwc = sx_index(pexpr, pwi)
             when pwq == 1 {
-              when pwc == 34 {
-                hold pwq = 0
+              when pwc == 92 && pwi + 1 < pwl {
+                hold pwi = pwi + 2
+              } otherwise {
+                when pwc == 34 { hold pwq = 0 }
+                hold pwi = pwi + 1
               }
-              hold pwi = pwi + 1
             } otherwise {
               when pwc == 34 {
                 hold pwq = 1
@@ -6887,12 +7490,12 @@ while running == 1 {
       hold refquote = 0
       hold refrun = 1
       while refi < n && refrun == 1 {
-        hold refc = sx_index(source, refi)
+        hold refc = sxsource_get(source_words, refi)
         when refquote == 1 {
           hold reftext = concat(reftext, chr(refc))
           hold refi = refi + 1
           when refc == 92 && refi < n {
-            hold reftext = concat(reftext, chr(sx_index(source, refi)))
+            hold reftext = concat(reftext, chr(sxsource_get(source_words, refi)))
             hold refi = refi + 1
           } otherwise {
             when refc == 34 {
@@ -6903,8 +7506,8 @@ while running == 1 {
           when refc == 34 {
             hold refquote = 1
           }
-          when refc == 47 && refi + 1 < n && sx_index(source, refi + 1) == 47 {
-            while refi < n && sx_index(source, refi) != 10 {
+          when refc == 47 && refi + 1 < n && sxsource_get(source_words, refi + 1) == 47 {
+            while refi < n && sxsource_get(source_words, refi) != 10 {
               hold refi = refi + 1
             }
             hold refc = 10
@@ -6950,7 +7553,7 @@ while running == 1 {
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 {
               hold pos = pos + 1
             } otherwise {
@@ -6965,7 +7568,7 @@ while running == 1 {
           when pos >= n {
             hold rn = 0
           } otherwise {
-            hold cn = sx_index(source,pos)
+            hold cn = sxsource_get(source_words,pos)
             when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
               hold nm = concat(nm, chr(cn))
               hold pos = pos + 1
@@ -6981,14 +7584,14 @@ while running == 1 {
         while srun == 1 {
           hold srun = 0
           when pos < n {
-            hold sc = sx_index(source, pos)
+            hold sc = sxsource_get(source_words, pos)
             when sc == 46 {
               hold srun2 = 1
               while srun2 == 1 {
                 when pos >= n {
                   hold srun2 = 0
                 } otherwise {
-                  hold sc = sx_index(source, pos)
+                  hold sc = sxsource_get(source_words, pos)
                   when (sc >= 97 && sc <= 122) || (sc >= 65 && sc <= 90) || (sc >= 48 && sc <= 57) || sc == 95 || sc == 46 {
                     hold sufx = concat(sufx, chr(sc))
                     hold pos = pos + 1
@@ -7008,7 +7611,7 @@ while running == 1 {
                   when pos >= n {
                     hold srun2 = 0
                   } otherwise {
-                    hold sc = sx_index(source, pos)
+                    hold sc = sxsource_get(source_words, pos)
                     when sc == 91 {
                       hold sbd = sbd + 1
                     }
@@ -7037,7 +7640,7 @@ while running == 1 {
         // is checked against the value's kind below
         hold pc = 0
         when pos < n {
-          hold pc = sx_index(source,pos)
+          hold pc = sxsource_get(source_words,pos)
         }
         when pc == 58 {
           hold pos = pos + 1
@@ -7046,7 +7649,7 @@ while running == 1 {
             when pos >= n {
               hold sk = 0
             } otherwise {
-              hold cs = sx_index(source,pos)
+              hold cs = sxsource_get(source_words,pos)
               when cs == 32 || cs == 9 || cs == 13 {
                 hold pos = pos + 1
               } otherwise {
@@ -7060,7 +7663,7 @@ while running == 1 {
             when pos >= n {
               hold sk = 0
             } otherwise {
-              hold cs = sx_index(source,pos)
+              hold cs = sxsource_get(source_words,pos)
               when (cs >= 97 && cs <= 122) || (cs >= 65 && cs <= 90) || (cs >= 48 && cs <= 57) || cs == 95 {
                 hold declt = concat(declt, chr(cs))
                 hold pos = pos + 1
@@ -7091,7 +7694,7 @@ while running == 1 {
             when pos >= n {
               hold sk = 0
             } otherwise {
-              hold cs = sx_index(source,pos)
+              hold cs = sxsource_get(source_words,pos)
               when cs == 32 || cs == 9 || cs == 13 {
                 hold pos = pos + 1
               } otherwise {
@@ -7106,7 +7709,7 @@ while running == 1 {
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 {
               hold pos = pos + 1
             } otherwise {
@@ -7115,7 +7718,7 @@ while running == 1 {
               } otherwise {
                 hold cs2 = 0
                 when pos + 1 < n {
-                  hold cs2 = sx_index(source,pos + 1)
+                  hold cs2 = sxsource_get(source_words,pos + 1)
                 }
                 when cs2 == 61 {
                   when cs == 43 || cs == 45 || cs == 42 || cs == 47 || cs == 37 {
@@ -7134,7 +7737,7 @@ while running == 1 {
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 {
               hold pos = pos + 1
             } otherwise {
@@ -7186,7 +7789,7 @@ while running == 1 {
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 {
               hold pos = pos + 1
             } otherwise {
@@ -7201,7 +7804,7 @@ while running == 1 {
       hold rk = 0
       hold c1 = 0
       when pos < n {
-        hold c1 = sx_index(source,pos)
+        hold c1 = sxsource_get(source_words,pos)
       }
 
 
@@ -7214,7 +7817,7 @@ while running == 1 {
           when pos >= n {
             hold rn = 0
           } otherwise {
-            hold cq = sx_index(source,pos)
+            hold cq = sxsource_get(source_words,pos)
             when cq == 34 {
               hold pos = pos + 1
               hold rhs = concat(rhs, q)
@@ -7226,7 +7829,7 @@ while running == 1 {
                 hold rhs = concat(rhs, bs)
                 hold pos = pos + 1
                 when pos < n {
-                  hold cq2 = sx_index(source,pos)
+                  hold cq2 = sxsource_get(source_words,pos)
                   hold rhs = concat(rhs, chr(cq2))
                   hold pos = pos + 1
                 }
@@ -7252,7 +7855,7 @@ while running == 1 {
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
               hold pos = pos + 1
             } otherwise {
@@ -7261,7 +7864,7 @@ while running == 1 {
           }
         }
         when pos < n {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs != 93 {
             hold lr = 1
             while lr == 1 {
@@ -7270,7 +7873,7 @@ while running == 1 {
                 when pos >= n {
                   hold sk = 0
                 } otherwise {
-                  hold cs = sx_index(source,pos)
+                  hold cs = sxsource_get(source_words,pos)
                   when cs == 32 || cs == 9 {
                     hold pos = pos + 1
                   } otherwise {
@@ -7281,7 +7884,7 @@ while running == 1 {
               hold el = ""
               hold ec = 0
               when pos < n {
-                hold ec = sx_index(source,pos)
+                hold ec = sxsource_get(source_words,pos)
               }
               when (ec >= 48 && ec <= 57) || ec == 45 {
                 when ec == 45 {
@@ -7293,11 +7896,11 @@ while running == 1 {
                   when pos >= n {
                     hold rn = 0
                   } otherwise {
-                    hold cd = sx_index(source,pos)
+                    hold cd = sxsource_get(source_words,pos)
                     // a `.` followed by a digit continues the number (2.5)
                     hold cdn = 0
                     when pos + 1 < n {
-                      hold cdn = sx_index(source,pos + 1)
+                      hold cdn = sxsource_get(source_words,pos + 1)
                     }
                     when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
                       hold el = concat(el, chr(cd))
@@ -7314,7 +7917,7 @@ while running == 1 {
                     when pos >= n {
                       hold rn = 0
                     } otherwise {
-                      hold cn = sx_index(source,pos)
+                      hold cn = sxsource_get(source_words,pos)
                       when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                         hold el = concat(el, chr(cn))
                         hold pos = pos + 1
@@ -7337,7 +7940,7 @@ while running == 1 {
                 when pos >= n {
                   hold exr = 0
                 } otherwise {
-                  hold exc = sx_index(source,pos)
+                  hold exc = sxsource_get(source_words,pos)
                   when (exc == 44 || exc == 93) && exd == 0 {
                     hold exr = 0
                   } otherwise {
@@ -7442,7 +8045,7 @@ while running == 1 {
                 when pos >= n {
                   hold sk = 0
                 } otherwise {
-                  hold cs = sx_index(source,pos)
+                  hold cs = sxsource_get(source_words,pos)
                   when cs == 32 || cs == 9 {
                     hold pos = pos + 1
                   } otherwise {
@@ -7451,7 +8054,7 @@ while running == 1 {
                 }
               }
               when pos < n {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 44 {
                   hold pos = pos + 1
                 } otherwise {
@@ -7468,7 +8071,7 @@ while running == 1 {
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 {
               hold pos = pos + 1
             } otherwise {
@@ -7477,7 +8080,7 @@ while running == 1 {
           }
         }
         when pos < n {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 93 {
             hold pos = pos + 1
           }
@@ -7518,11 +8121,11 @@ while running == 1 {
           when pos >= n {
             hold rn = 0
           } otherwise {
-            hold cd = sx_index(source,pos)
+            hold cd = sxsource_get(source_words,pos)
             // a `.` followed by a digit continues the number (2.5)
             hold cdn = 0
             when pos + 1 < n {
-              hold cdn = sx_index(source,pos + 1)
+              hold cdn = sxsource_get(source_words,pos + 1)
             }
             when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
               hold numtxt = concat(numtxt, chr(cd))
@@ -7537,7 +8140,7 @@ while running == 1 {
       }
 
       // RHS: name, name + number, or call(...)
-      when (c1 >= 97 && c1 <= 122) || (c1 >= 65 && c1 <= 90) {
+      when (c1 >= 97 && c1 <= 122) || (c1 >= 65 && c1 <= 90) || c1 == 95 {
         hold fieldbaseat = pos
         hold nm2 = ""
         hold rn = 1
@@ -7545,7 +8148,7 @@ while running == 1 {
           when pos >= n {
             hold rn = 0
           } otherwise {
-            hold cn = sx_index(source,pos)
+            hold cn = sxsource_get(source_words,pos)
             when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
               hold nm2 = concat(nm2, chr(cn))
               hold pos = pos + 1
@@ -7560,7 +8163,7 @@ while running == 1 {
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
               hold pos = pos + 1
             } otherwise {
@@ -7570,7 +8173,7 @@ while running == 1 {
         }
         hold c2 = 0
         when pos < n {
-          hold c2 = sx_index(source,pos)
+          hold c2 = sxsource_get(source_words,pos)
         }
         when c2 == 40 {
           hold iscall = 1
@@ -7655,7 +8258,7 @@ while running == 1 {
                 when pos >= n {
                   hold sk = 0
                 } otherwise {
-                  hold cs = sx_index(source,pos)
+                  hold cs = sxsource_get(source_words,pos)
                   when cs == 32 || cs == 9 || cs == 13 || cs == 10 || cs == 44 {
                     hold pos = pos + 1
                   } otherwise {
@@ -7666,7 +8269,7 @@ while running == 1 {
               when pos >= n {
                 hold lr = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 hold savep2 = pos
                 when cs == 125 {
                   hold pos = pos + 1
@@ -7679,7 +8282,7 @@ while running == 1 {
                     when pos >= n {
                       hold rn = 0
                     } otherwise {
-                      hold cn = sx_index(source,pos)
+                      hold cn = sxsource_get(source_words,pos)
                       when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                         hold lb = concat(lb, chr(cn))
                         hold pos = pos + 1
@@ -7693,7 +8296,7 @@ while running == 1 {
                     when pos >= n {
                       hold sk = 0
                     } otherwise {
-                      hold cs2 = sx_index(source,pos)
+                      hold cs2 = sxsource_get(source_words,pos)
                       when cs2 == 32 || cs2 == 9 {
                         hold pos = pos + 1
                       } otherwise {
@@ -7703,7 +8306,7 @@ while running == 1 {
                   }
                   hold lbl = 0
                   when pos < n {
-                    hold cs2 = sx_index(source,pos)
+                    hold cs2 = sxsource_get(source_words,pos)
                     when cs2 == 58 {
                       hold pos = pos + 1
                       hold lbl = 1
@@ -7739,11 +8342,18 @@ while running == 1 {
                     }
                   }
                   when lbl == 1 {
-                    hold lsame = sx_eq(lb, fname)
-                    when lsame == 0 {
-                      hold exbad7 = 1
+                    when seed_profile == 1 {
+                      hold named_fields_end = fpos
+                      while named_fields_end < fsn && sx_index(sdefs, named_fields_end) != 59 { named_fields_end = named_fields_end + 1 }
+                      hold named_fields = sxseed_slice(sdefs, fpos, named_fields_end)
+                      when sxseed_csv_has(named_fields, lb) == 0 { hold exbad7 = 1 }
+                      hold fname = lb
+                    } otherwise {
+                      hold lsame = sx_eq(lb, fname)
+                      when lsame == 0 { hold exbad7 = 1 }
                     }
                   }
+                  when seed_profile == 1 && sxseed_designator(lelems, fname) { hold exbad7 = 1 }
                   // ---- value: number, string literal or a name ----
                   hold el = ""
                   hold ety = 0
@@ -7754,7 +8364,7 @@ while running == 1 {
                     when pos >= n {
                       hold sk = 0
                     } otherwise {
-                      hold cs2 = sx_index(source,pos)
+                      hold cs2 = sxsource_get(source_words,pos)
                       when cs2 == 32 || cs2 == 9 {
                         hold pos = pos + 1
                       } otherwise {
@@ -7764,7 +8374,7 @@ while running == 1 {
                   }
                   hold ec = 0
                   when pos < n {
-                    hold ec = sx_index(source,pos)
+                    hold ec = sxsource_get(source_words,pos)
                   }
                   // A concrete list field is an sx_list pointer, never an
                   // inline numeric value.  Reuse the checked expression parser
@@ -7838,7 +8448,7 @@ while running == 1 {
                           when flse >= n {
                             hold flruna = 0
                           } otherwise {
-                            hold flca = sx_index(source, flse)
+                            hold flca = sxsource_get(source_words, flse)
                             when (flca >= 97 && flca <= 122) || (flca >= 65 && flca <= 90) || (flca >= 48 && flca <= 57) || flca == 95 {
                               hold flse = flse + 1
                             } otherwise {
@@ -7856,10 +8466,10 @@ while running == 1 {
                           when flse >= n {
                             hold flrunb = 0
                           } otherwise {
-                            hold flcb = sx_index(source, flse)
+                            hold flcb = sxsource_get(source_words, flse)
                             hold flcb2 = 0
                             when flse + 1 < n {
-                              hold flcb2 = sx_index(source, flse + 1)
+                              hold flcb2 = sxsource_get(source_words, flse + 1)
                             }
                             when (flcb >= 48 && flcb <= 57) || (flcb == 46 && flcb2 >= 48 && flcb2 <= 57) {
                               hold flse = flse + 1
@@ -7876,7 +8486,7 @@ while running == 1 {
                           when flse >= n {
                             hold flrunc = 0
                           } otherwise {
-                            hold flcc = sx_index(source, flse)
+                            hold flcc = sxsource_get(source_words, flse)
                             when flcc == 92 {
                               hold flse = flse + 2
                             } otherwise {
@@ -7894,7 +8504,7 @@ while running == 1 {
                         when flsp >= n {
                           hold flrund = 0
                         } otherwise {
-                          hold flcd = sx_index(source, flsp)
+                          hold flcd = sxsource_get(source_words, flsp)
                           when flcd == 32 || flcd == 9 {
                             hold flsp = flsp + 1
                           } otherwise {
@@ -7904,13 +8514,18 @@ while running == 1 {
                       }
                       hold flnc = 0
                       when flsp < n {
-                        hold flnc = sx_index(source, flsp)
+                        hold flnc = sxsource_get(source_words, flsp)
                       }
                       hold flmore = 0
                       when flnc == 43 || flnc == 45 || flnc == 42 || flnc == 47 || flnc == 37 || flnc == 40 {
                         hold flmore = 1
                       }
                       when ec == 40 {
+                        hold flmore = 1
+                      }
+                      // The seed accepted field/index expressions in literals;
+                      // retain the later mini-compiler profile's refusal.
+                      when seed_profile == 1 && (flnc == 46 || flnc == 91) {
                         hold flmore = 1
                       }
                       when flmore == 1 {
@@ -7950,11 +8565,11 @@ while running == 1 {
                       when pos >= n {
                         hold rn = 0
                       } otherwise {
-                        hold cd = sx_index(source,pos)
+                        hold cd = sxsource_get(source_words,pos)
                         // a `.` followed by a digit continues the number (2.5)
                         hold cdn = 0
                         when pos + 1 < n {
-                          hold cdn = sx_index(source,pos + 1)
+                          hold cdn = sxsource_get(source_words,pos + 1)
                         }
                         when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
                           hold el = concat(el, chr(cd))
@@ -7975,7 +8590,7 @@ while running == 1 {
                       when pos >= n {
                         hold rn = 0
                       } otherwise {
-                        hold cd = sx_index(source,pos)
+                        hold cd = sxsource_get(source_words,pos)
                         when cd == 34 {
                           hold pos = pos + 1
                           hold el = concat(el, q)
@@ -7985,7 +8600,7 @@ while running == 1 {
                             hold el = concat(el, bs)
                             hold pos = pos + 1
                             when pos < n {
-                              hold cd2 = sx_index(source,pos)
+                              hold cd2 = sxsource_get(source_words,pos)
                               hold el = concat(el, chr(cd2))
                               hold pos = pos + 1
                             }
@@ -8005,7 +8620,7 @@ while running == 1 {
                       when pos >= n {
                         hold rn = 0
                       } otherwise {
-                        hold cd = sx_index(source,pos)
+                        hold cd = sxsource_get(source_words,pos)
                         when (cd >= 97 && cd <= 122) || (cd >= 65 && cd <= 90) || (cd >= 48 && cd <= 57) || cd == 95 {
                           hold el = concat(el, chr(cd))
                           hold pos = pos + 1
@@ -8097,7 +8712,7 @@ while running == 1 {
                     when pos >= n {
                       hold sk = 0
                     } otherwise {
-                      hold cs3 = sx_index(source,pos)
+                      hold cs3 = sxsource_get(source_words,pos)
                       when cs3 == 32 || cs3 == 9 {
                         hold pos = pos + 1
                       } otherwise {
@@ -8107,7 +8722,7 @@ while running == 1 {
                   }
                   hold cs3 = 0
                   when pos < n {
-                    hold cs3 = sx_index(source,pos)
+                    hold cs3 = sxsource_get(source_words,pos)
                   }
                   when cs3 == 123 {
                     // is el a known struct?
@@ -8179,7 +8794,7 @@ while running == 1 {
                         when pos >= n {
                           hold nst = 0
                         } otherwise {
-                          hold cd3 = sx_index(source,pos)
+                          hold cd3 = sxsource_get(source_words,pos)
                           when ins == 1 {
                             when cd3 == 92 {
                               hold pos = pos + 1
@@ -8223,6 +8838,10 @@ while running == 1 {
                           hold dd = dd - drem
                           hold dd = dd / 10
                         }
+                      }
+                      when seed_profile == 1 {
+                        when nels > 0 { hold lelems = concat(lelems, ",") }
+                        hold lelems = concat(lelems, concat(".", concat(fname, "=")))
                       }
                       hold nstack = concat(nstack, nm2)
                       hold nstack = concat(nstack, nsep)
@@ -8319,6 +8938,9 @@ while running == 1 {
                   }
                   hold fnamelen = len(fname)
                   when (fnamelen > 0) && (isnest == 0) {
+                    when seed_profile == 1 && len(seed_generic_error) == 0 {
+                      seed_generic_error = sxseed_generic_literal(seed_generic_types, nm2, fname, ety, etyname)
+                    }
                     when fprv == -1 {
                       hold ftypes = concat(ftypes, fkey)
                       when ety == 2 {
@@ -8364,6 +8986,7 @@ while running == 1 {
                   when nels > 0 {
                     hold lelems = concat(lelems, ",")
                   }
+                  when seed_profile == 1 { hold lelems = concat(lelems, concat(".", concat(fname, "="))) }
                   hold lelems = concat(lelems, el)
                   hold nels = nels + 1
                   // progress guard: a value must consume at least one char
@@ -8547,6 +9170,10 @@ while running == 1 {
                     }
                   }
                 }
+                when seed_profile == 1 { hold fname = sxseed_pending_field(lelems) }
+                when seed_profile == 1 && len(seed_generic_error) == 0 {
+                  seed_generic_error = sxseed_generic_literal(seed_generic_types, nm2, fname, 2, etyname)
+                }
                 // record |nm2.fname=2:etyname| (the first literal wins)
                 hold fkey = concat("|", nm2)
                 hold fkey = concat(fkey, ".")
@@ -8619,7 +9246,7 @@ while running == 1 {
                     hold exbad6 = 1
                   }
                 }
-                when nels > 0 {
+                when nels > 0 && seed_profile == 0 {
                   hold lelems = concat(lelems, ",")
                 }
                 hold lelems = concat(lelems, el)
@@ -8647,7 +9274,7 @@ hold argbracket = 0
             when pos >= n {
               hold rn = 0
             } otherwise {
-              hold cn = sx_index(source,pos)
+              hold cn = sxsource_get(source_words,pos)
               when cn == 41 && inq == 0 && pdepth == 0 {
                 hold rn = 0
               } otherwise {
@@ -8659,7 +9286,7 @@ hold argbracket = 0
                   }
                   when cn == 92 {
                     when pos < n {
-                      hold cq = sx_index(source,pos)
+                      hold cq = sxsource_get(source_words,pos)
                       hold argv_txt = concat(argv_txt, chr(cq))
                       hold pos = pos + 1
                     }
@@ -9867,7 +10494,7 @@ hold argbracket = 0
             when pos >= n {
               hold sk = 0
             } otherwise {
-              hold cs = sx_index(source,pos)
+              hold cs = sxsource_get(source_words,pos)
               when cs == 32 || cs == 9 || cs == 13 {
                 hold pos = pos + 1
               } otherwise {
@@ -9877,7 +10504,7 @@ hold argbracket = 0
           }
           hold c2 = 0
           when pos < n {
-            hold c2 = sx_index(source,pos)
+            hold c2 = sxsource_get(source_words,pos)
           }
           // a list variable as a whole value: `hold ys = xs` aliases it, as
           // in seed-min and native (it used to emit `double ys = xs;`, which
@@ -9918,7 +10545,7 @@ hold argbracket = 0
               when c2 == 47 {
                 hold lop = 1
                 when pos + 1 < n {
-                  hold pc3 = sx_index(source, pos + 1)
+                  hold pc3 = sxsource_get(source_words, pos + 1)
                   when pc3 == 47 {
                     hold lop = 0
                   }
@@ -9942,7 +10569,7 @@ hold argbracket = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 {
                   hold pos = pos + 1
                 } otherwise {
@@ -9956,7 +10583,7 @@ hold argbracket = 0
             hold ix = ""
             hold c1 = 0
             when pos < n {
-              hold c1 = sx_index(source,pos)
+              hold c1 = sxsource_get(source_words,pos)
             }
             when (c1 >= 48 && c1 <= 57) {
               hold rn = 1
@@ -9964,7 +10591,7 @@ hold argbracket = 0
                 when pos >= n {
                   hold rn = 0
                 } otherwise {
-                  hold cd = sx_index(source,pos)
+                  hold cd = sxsource_get(source_words,pos)
                   when cd >= 48 && cd <= 57 {
                     hold ix = concat(ix, chr(cd))
                     hold pos = pos + 1
@@ -9980,7 +10607,7 @@ hold argbracket = 0
                   when pos >= n {
                     hold rn = 0
                   } otherwise {
-                    hold cn = sx_index(source,pos)
+                    hold cn = sxsource_get(source_words,pos)
                     when (cn >= 97 && cn <= 122) || (cn >= 48 && cn <= 57) {
                       hold ix = concat(ix, chr(cn))
                       hold pos = pos + 1
@@ -9997,7 +10624,7 @@ hold argbracket = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 || cs == 93 {
                   when cs == 93 {
                     hold pos = pos + 1
@@ -10113,7 +10740,7 @@ hold ec = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 || cs == 13 {
                   hold pos = pos + 1
                 } otherwise {
@@ -10123,7 +10750,7 @@ hold ec = 0
             }
             hold c2 = 0
             when pos < n {
-              hold c2 = sx_index(source,pos)
+              hold c2 = sxsource_get(source_words,pos)
             }
             when c2 == 46 {
               hold pos = pos + 1
@@ -10133,7 +10760,7 @@ hold ec = 0
                 when pos >= n {
                   hold rn = 0
                 } otherwise {
-                  hold cn = sx_index(source,pos)
+                  hold cn = sxsource_get(source_words,pos)
                   when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                     hold chfld = concat(chfld, chr(cn))
                     hold pos = pos + 1
@@ -10393,7 +11020,7 @@ hold ec = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 || cs == 13 {
                   hold pos = pos + 1
                 } otherwise {
@@ -10403,7 +11030,7 @@ hold ec = 0
             }
             hold c2 = 0
             when pos < n {
-              hold c2 = sx_index(source,pos)
+              hold c2 = sxsource_get(source_words,pos)
             }
             when c2 == 91 {
               hold flenv = concat(decls, chr(1))
@@ -10445,7 +11072,7 @@ hold ec = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 || cs == 13 {
                   hold pos = pos + 1
                 } otherwise {
@@ -10455,7 +11082,7 @@ hold ec = 0
             }
             hold c2 = 0
             when pos < n {
-              hold c2 = sx_index(source,pos)
+              hold c2 = sxsource_get(source_words,pos)
             }
             when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 {
               hold nerrscop = 1
@@ -10464,7 +11091,7 @@ hold ec = 0
             when c2 == 47 {
               hold c3 = 0
               when pos + 1 < n {
-                hold c3 = sx_index(source,pos + 1)
+                hold c3 = sxsource_get(source_words,pos + 1)
               }
               when c3 != 47 {
                 hold nerrscop = 1
@@ -10478,7 +11105,7 @@ hold ec = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 || cs == 13 {
                   hold pos = pos + 1
                 } otherwise {
@@ -10488,7 +11115,7 @@ hold ec = 0
             }
             hold c2 = 0
             when pos < n {
-              hold c2 = sx_index(source,pos)
+              hold c2 = sxsource_get(source_words,pos)
             }
             when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 {
               hold nerrscop = 1
@@ -10497,7 +11124,7 @@ hold ec = 0
             when c2 == 47 {
               hold c3 = 0
               when pos + 1 < n {
-                hold c3 = sx_index(source,pos + 1)
+                hold c3 = sxsource_get(source_words,pos + 1)
               }
               when c3 != 47 {
                 hold nerrscop = 1
@@ -10521,7 +11148,7 @@ hold ec = 0
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 {
               hold pos = pos + 1
             } otherwise {
@@ -10531,12 +11158,12 @@ hold ec = 0
         }
         hold c2 = 0
         when pos < n {
-          hold c2 = sx_index(source,pos)
+          hold c2 = sxsource_get(source_words,pos)
         }
         // a '/' that starts a // comment is not division
         when c2 == 47 {
           when pos + 1 < n {
-            hold cs = sx_index(source,pos + 1)
+            hold cs = sxsource_get(source_words,pos + 1)
             when cs == 47 {
               hold c2 = 0
             }
@@ -10550,7 +11177,7 @@ hold ec = 0
             when pos >= n {
               hold sk = 0
             } otherwise {
-              hold cs = sx_index(source,pos)
+              hold cs = sxsource_get(source_words,pos)
               when cs == 32 || cs == 9 || cs == 13 {
                 hold pos = pos + 1
               } otherwise {
@@ -10564,7 +11191,7 @@ hold ec = 0
           hold opfldstr = 0
           hold c3 = 0
           when pos < n {
-            hold c3 = sx_index(source,pos)
+            hold c3 = sxsource_get(source_words,pos)
           }
           hold oq = 0
           // number operand
@@ -10578,11 +11205,11 @@ hold ec = 0
               when pos >= n {
                 hold rn = 0
               } otherwise {
-                hold cd = sx_index(source,pos)
+                hold cd = sxsource_get(source_words,pos)
                 // a `.` followed by a digit continues the number (2.5)
                 hold cdn = 0
                 when pos + 1 < n {
-                  hold cdn = sx_index(source,pos + 1)
+                  hold cdn = sxsource_get(source_words,pos + 1)
                 }
                 when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
                   hold numtxt = concat(numtxt, chr(cd))
@@ -10604,7 +11231,7 @@ hold ec = 0
               when pos >= n {
                 hold rn = 0
               } otherwise {
-                hold cq = sx_index(source,pos)
+                hold cq = sxsource_get(source_words,pos)
                 when cq == 34 {
                   hold pos = pos + 1
                   hold opnd = concat(opnd, q)
@@ -10614,7 +11241,7 @@ hold ec = 0
                     hold opnd = concat(opnd, bs)
                     hold pos = pos + 1
                     when pos < n {
-                      hold cq2 = sx_index(source,pos)
+                      hold cq2 = sxsource_get(source_words,pos)
                       hold opnd = concat(opnd, chr(cq2))
                       hold pos = pos + 1
                     }
@@ -10633,7 +11260,7 @@ hold ec = 0
               when pos >= n {
                 hold rn = 0
               } otherwise {
-                hold cn = sx_index(source,pos)
+                hold cn = sxsource_get(source_words,pos)
                 when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                   hold nm3 = concat(nm3, chr(cn))
                   hold pos = pos + 1
@@ -10652,7 +11279,7 @@ hold ec = 0
               when ocp >= n {
                 hold ocsk = 0
               } otherwise {
-                hold ocx = sx_index(source, ocp)
+                hold ocx = sxsource_get(source_words, ocp)
                 when ocx == 32 || ocx == 9 || ocx == 13 {
                   hold ocp = ocp + 1
                 } otherwise {
@@ -10671,13 +11298,13 @@ hold ec = 0
                 when pos >= n {
                   hold ocrun = 0
                 } otherwise {
-                  hold ocx = sx_index(source, pos)
+                  hold ocx = sxsource_get(source_words, pos)
                   when ocq == 1 {
                     hold ocarg = concat(ocarg, chr(ocx))
                     hold pos = pos + 1
                     when ocx == 92 {
                       when pos < n {
-                        hold ocarg = concat(ocarg, chr(sx_index(source, pos)))
+                        hold ocarg = concat(ocarg, chr(sxsource_get(source_words, pos)))
                         hold pos = pos + 1
                       }
                     } otherwise {
@@ -11185,7 +11812,7 @@ hold ec = 0
                 when pos >= n {
                   hold sk = 0
                 } otherwise {
-                  hold cs = sx_index(source,pos)
+                  hold cs = sxsource_get(source_words,pos)
                   when cs == 32 || cs == 9 || cs == 13 {
                     hold pos = pos + 1
                   } otherwise {
@@ -11195,7 +11822,7 @@ hold ec = 0
               }
               hold c2 = 0
               when pos < n {
-                hold c2 = sx_index(source,pos)
+                hold c2 = sxsource_get(source_words,pos)
               }
               when c2 == 46 {
                 hold pos = pos + 1
@@ -11205,7 +11832,7 @@ hold ec = 0
                   when pos >= n {
                     hold rn = 0
                   } otherwise {
-                    hold cn = sx_index(source,pos)
+                    hold cn = sxsource_get(source_words,pos)
                     when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                       hold chfld = concat(chfld, chr(cn))
                       hold pos = pos + 1
@@ -11445,7 +12072,7 @@ hold ec = 0
             }
             hold opcq = 0
             when pos < n {
-              hold opcq = sx_index(source,pos)
+              hold opcq = sxsource_get(source_words,pos)
             }
             // postfix [index]            // postfix [index]
             when opcq == 91 {
@@ -11459,7 +12086,7 @@ hold ec = 0
                 when pos >= n {
                   hold rn = 0
                 } otherwise {
-                  hold cn = sx_index(source,pos)
+                  hold cn = sxsource_get(source_words,pos)
                   when (cn >= 48 && cn <= 57) || (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || cn == 95 {
                     hold opix = concat(opix, chr(cn))
                     hold pos = pos + 1
@@ -11470,7 +12097,7 @@ hold ec = 0
               }
               hold opibad = 1
               when pos < n {
-                hold cn = sx_index(source,pos)
+                hold cn = sxsource_get(source_words,pos)
                 when cn == 93 {
                   hold pos = pos + 1
                   hold opibad = 0
@@ -11716,6 +12343,36 @@ hold ec = 0
         }
       }
 
+      // Seed expressions allow string concatenation inside call arguments,
+      // not just at the outer assignment level. Re-lower the scalar expression
+      // with the typed parser before emitting C pointer arithmetic.
+      when seed_profile == 1 && (rk == 0 || rk == 1) && sxseed_has_plus(rhs) {
+        when inready == 0 {
+          while sxecontains(source, inprivate) { inprivate = concat(inprivate, "x") }
+          inready = 1
+          fsret = concat(fsret, concat(inprivate, "list=l|"))
+        }
+        hold seed_string_serial = len(instate)
+        hold seed_string_env = sxseed_env(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+        hold seed_string_value = sxeparse(rhs, 0, seed_string_env, 0, 0, instate)
+        when (string_eq(sxesegment(seed_string_value, 1), "s") || string_eq(sxesegment(seed_string_value, 1), "n")) && sxflowspace(rhs, sxepos(seed_string_value)) == len(rhs) {
+          rhs = sxecode(seed_string_value)
+          when sxecontains(rhs, "sx_cat(") { rt = 1 }
+          while seed_string_serial < len(instate) {
+            body = concat(body, concat("  double ", concat(inprivate, concat(sxedigits(seed_string_serial), concat(";", nl)))))
+            seed_string_serial = seed_string_serial + 1
+          }
+        } otherwise {
+          perr = 1
+          permsg = concat("seed-min string expression: ", sxecode(seed_string_value))
+        }
+      }
+
+      // The minimal seed permits local annotations only in typed makes.
+      when seed_profile == 1 && in_fn == 1 && flowtyped == 0 && declk >= 0 {
+        perr = 1
+        permsg = "seed-min hold annotation requires a typed make signature"
+      }
       // ---- declared type check (full language) ----
       when declk >= 0 {
         hold dtok = 0
@@ -11737,6 +12394,7 @@ hold ec = 0
           hold nerrscop = 1
           when sx_eq(scopmsg, "") {
             hold scopmsg = concat("type error: '", nm)
+            when seed_profile == 1 { scopmsg = concat("type mismatch: ", scopmsg) }
             hold scopmsg = concat(scopmsg, "' is declared ")
             hold scopmsg = concat(scopmsg, declt)
             when rk == 0 {
@@ -11786,6 +12444,19 @@ hold ec = 0
           hold di = dl
         } otherwise {
           hold di = di + 1
+        }
+      }
+      when seed_profile == 1 && found == 1 && len(sufx) == 0 && liset == 0 {
+        hold seed_old_env = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+        hold seed_old_value = sxeparse(nm, 0, seed_old_env, 0, 0, instate)
+        hold seed_old_kind = sxesegment(seed_old_value, 1)
+        hold seed_new_kind = "n"
+        when rk == 1 { seed_new_kind = "s" }
+        when rk == 2 { seed_new_kind = "l" }
+        when rk == 3 { seed_new_kind = concat("u", stname) }
+        when string_eq(seed_old_kind, seed_new_kind) == 0 {
+          perr = 1
+          permsg = concat(concat(concat("hold/assignment changes the type of ", nm), concat(" from ", seed_old_kind)), concat(" to ", seed_new_kind))
         }
       }
       // an assignment target keeps its `.field` / `[index]` suffix; the
@@ -11935,7 +12606,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 32 || cs == 9 || cs == 13 {
             hold pos = pos + 1
           } otherwise {
@@ -11947,7 +12618,7 @@ hold ec = 0
       hold rk = 0
       hold c1 = 0
       when pos < n {
-        hold c1 = sx_index(source,pos)
+        hold c1 = sxsource_get(source_words,pos)
       }
 
 
@@ -11960,7 +12631,7 @@ hold ec = 0
           when pos >= n {
             hold rn = 0
           } otherwise {
-            hold cq = sx_index(source,pos)
+            hold cq = sxsource_get(source_words,pos)
             when cq == 34 {
               hold pos = pos + 1
               hold rhs = concat(rhs, q)
@@ -11971,7 +12642,7 @@ hold ec = 0
                 hold rhs = concat(rhs, bs)
                 hold pos = pos + 1
                 when pos < n {
-                  hold cq2 = sx_index(source,pos)
+                  hold cq2 = sxsource_get(source_words,pos)
                   hold rhs = concat(rhs, chr(cq2))
                   hold pos = pos + 1
                 }
@@ -11998,11 +12669,11 @@ hold ec = 0
           when pos >= n {
             hold rn = 0
           } otherwise {
-            hold cd = sx_index(source,pos)
+            hold cd = sxsource_get(source_words,pos)
             // a `.` followed by a digit continues the number (2.5)
             hold cdn = 0
             when pos + 1 < n {
-              hold cdn = sx_index(source,pos + 1)
+              hold cdn = sxsource_get(source_words,pos + 1)
             }
             when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
               hold numtxt = concat(numtxt, chr(cd))
@@ -12017,7 +12688,7 @@ hold ec = 0
       }
 
       // name or call
-      when (c1 >= 97 && c1 <= 122) || (c1 >= 65 && c1 <= 90) {
+      when (c1 >= 97 && c1 <= 122) || (c1 >= 65 && c1 <= 90) || c1 == 95 {
         hold fieldbaseat = pos
         hold nm2 = ""
         hold rn = 1
@@ -12025,7 +12696,7 @@ hold ec = 0
           when pos >= n {
             hold rn = 0
           } otherwise {
-            hold cn = sx_index(source,pos)
+            hold cn = sxsource_get(source_words,pos)
             when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
               hold nm2 = concat(nm2, chr(cn))
               hold pos = pos + 1
@@ -12037,7 +12708,7 @@ hold ec = 0
         hold iscall = 0
         hold c2 = 0
         when pos < n {
-          hold c2 = sx_index(source,pos)
+          hold c2 = sxsource_get(source_words,pos)
         }
         when c2 == 40 {
           hold iscall = 1
@@ -12053,7 +12724,7 @@ hold argbracket = 0
             when pos >= n {
               hold rn = 0
             } otherwise {
-              hold cn = sx_index(source,pos)
+              hold cn = sxsource_get(source_words,pos)
               when cn == 41 && inq == 0 && pdepth == 0 {
                 hold rn = 0
               } otherwise {
@@ -12065,7 +12736,7 @@ hold argbracket = 0
                   }
                   when cn == 92 {
                     when pos < n {
-                      hold cq = sx_index(source,pos)
+                      hold cq = sxsource_get(source_words,pos)
                       hold argv_txt = concat(argv_txt, chr(cq))
                       hold pos = pos + 1
                     }
@@ -13087,7 +13758,7 @@ hold argbracket = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 {
                   hold pos = pos + 1
                 } otherwise {
@@ -13097,7 +13768,7 @@ hold argbracket = 0
             }
             hold c2 = 0
             when pos < n {
-              hold c2 = sx_index(source,pos)
+              hold c2 = sxsource_get(source_words,pos)
             }
             when c2 == 46 {
               hold pos = pos + 1
@@ -13107,7 +13778,7 @@ hold argbracket = 0
                 when pos >= n {
                   hold rn = 0
                 } otherwise {
-                  hold cn = sx_index(source,pos)
+                  hold cn = sxsource_get(source_words,pos)
                   when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                     hold chfld = concat(chfld, chr(cn))
                     hold pos = pos + 1
@@ -13365,7 +14036,7 @@ hold argbracket = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 || cs == 13 {
                   hold pos = pos + 1
                 } otherwise {
@@ -13375,7 +14046,7 @@ hold argbracket = 0
             }
             hold c2 = 0
             when pos < n {
-              hold c2 = sx_index(source,pos)
+              hold c2 = sxsource_get(source_words,pos)
             }
             when c2 == 91 {
               hold flenv = concat(decls, chr(1))
@@ -13417,7 +14088,7 @@ hold argbracket = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 || cs == 13 {
                   hold pos = pos + 1
                 } otherwise {
@@ -13427,7 +14098,7 @@ hold argbracket = 0
             }
             hold c2 = 0
             when pos < n {
-              hold c2 = sx_index(source,pos)
+              hold c2 = sxsource_get(source_words,pos)
             }
             when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 {
               hold nerrscop = 1
@@ -13436,7 +14107,7 @@ hold argbracket = 0
             when c2 == 47 {
               hold c3 = 0
               when pos + 1 < n {
-                hold c3 = sx_index(source,pos + 1)
+                hold c3 = sxsource_get(source_words,pos + 1)
               }
               when c3 != 47 {
                 hold nerrscop = 1
@@ -13450,7 +14121,7 @@ hold argbracket = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 {
                   hold pos = pos + 1
                 } otherwise {
@@ -13460,7 +14131,7 @@ hold argbracket = 0
             }
             hold c2 = 0
             when pos < n {
-              hold c2 = sx_index(source,pos)
+              hold c2 = sxsource_get(source_words,pos)
             }
             when c2 == 43 || c2 == 45 || c2 == 42 || c2 == 37 {
               hold nerrscop = 1
@@ -13469,7 +14140,7 @@ hold argbracket = 0
             when c2 == 47 {
               hold c3 = 0
               when pos + 1 < n {
-                hold c3 = sx_index(source,pos + 1)
+                hold c3 = sxsource_get(source_words,pos + 1)
               }
               when c3 != 47 {
                 hold nerrscop = 1
@@ -13562,7 +14233,7 @@ hold argbracket = 0
             when pos >= n {
               hold sk = 0
             } otherwise {
-              hold cs = sx_index(source,pos)
+              hold cs = sxsource_get(source_words,pos)
               when cs == 32 || cs == 9 || cs == 13 {
                 hold pos = pos + 1
               } otherwise {
@@ -13572,7 +14243,7 @@ hold argbracket = 0
           }
           hold c2 = 0
           when pos < n {
-            hold c2 = sx_index(source,pos)
+            hold c2 = sxsource_get(source_words,pos)
           }
           // The outer statement walker historically remembered direct lists
           // only while parsing an index.  Preserve the list kind for a whole
@@ -13587,7 +14258,7 @@ hold argbracket = 0
             when c2 == 47 {
               hold lop = 1
               when pos + 1 < n {
-                hold pc3 = sx_index(source, pos + 1)
+                hold pc3 = sxsource_get(source_words, pos + 1)
                 when pc3 == 47 {
                   hold lop = 0
                 }
@@ -13610,7 +14281,7 @@ hold argbracket = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 {
                   hold pos = pos + 1
                 } otherwise {
@@ -13624,7 +14295,7 @@ hold argbracket = 0
             hold ix = ""
             hold c1 = 0
             when pos < n {
-              hold c1 = sx_index(source,pos)
+              hold c1 = sxsource_get(source_words,pos)
             }
             when (c1 >= 48 && c1 <= 57) {
               hold rn = 1
@@ -13632,7 +14303,7 @@ hold argbracket = 0
                 when pos >= n {
                   hold rn = 0
                 } otherwise {
-                  hold cd = sx_index(source,pos)
+                  hold cd = sxsource_get(source_words,pos)
                   when cd >= 48 && cd <= 57 {
                     hold ix = concat(ix, chr(cd))
                     hold pos = pos + 1
@@ -13648,7 +14319,7 @@ hold argbracket = 0
                   when pos >= n {
                     hold rn = 0
                   } otherwise {
-                    hold cn = sx_index(source,pos)
+                    hold cn = sxsource_get(source_words,pos)
                     when (cn >= 97 && cn <= 122) || (cn >= 48 && cn <= 57) {
                       hold ix = concat(ix, chr(cn))
                       hold pos = pos + 1
@@ -13665,7 +14336,7 @@ hold argbracket = 0
               when pos >= n {
                 hold sk = 0
               } otherwise {
-                hold cs = sx_index(source,pos)
+                hold cs = sxsource_get(source_words,pos)
                 when cs == 32 || cs == 9 || cs == 93 {
                   when cs == 93 {
                     hold pos = pos + 1
@@ -13784,7 +14455,7 @@ hold ec = 0
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 {
               hold pos = pos + 1
             } otherwise {
@@ -13794,12 +14465,12 @@ hold ec = 0
         }
         hold c2 = 0
         when pos < n {
-          hold c2 = sx_index(source,pos)
+          hold c2 = sxsource_get(source_words,pos)
         }
         // a '/' that starts a // comment is not division
         when c2 == 47 {
           when pos + 1 < n {
-            hold cs = sx_index(source,pos + 1)
+            hold cs = sxsource_get(source_words,pos + 1)
             when cs == 47 {
               hold c2 = 0
             }
@@ -13813,7 +14484,7 @@ hold ec = 0
             when pos >= n {
               hold sk = 0
             } otherwise {
-              hold cs = sx_index(source,pos)
+              hold cs = sxsource_get(source_words,pos)
               when cs == 32 || cs == 9 || cs == 13 {
                 hold pos = pos + 1
               } otherwise {
@@ -13827,7 +14498,7 @@ hold ec = 0
           hold opfldstr = 0
           hold c3 = 0
           when pos < n {
-            hold c3 = sx_index(source,pos)
+            hold c3 = sxsource_get(source_words,pos)
           }
           hold oq = 0
           // number operand
@@ -13841,11 +14512,11 @@ hold ec = 0
               when pos >= n {
                 hold rn = 0
               } otherwise {
-                hold cd = sx_index(source,pos)
+                hold cd = sxsource_get(source_words,pos)
                 // a `.` followed by a digit continues the number (2.5)
                 hold cdn = 0
                 when pos + 1 < n {
-                  hold cdn = sx_index(source,pos + 1)
+                  hold cdn = sxsource_get(source_words,pos + 1)
                 }
                 when (cd >= 48 && cd <= 57) || (cd == 46 && cdn >= 48 && cdn <= 57) {
                   hold numtxt = concat(numtxt, chr(cd))
@@ -13867,7 +14538,7 @@ hold ec = 0
               when pos >= n {
                 hold rn = 0
               } otherwise {
-                hold cq = sx_index(source,pos)
+                hold cq = sxsource_get(source_words,pos)
                 when cq == 34 {
                   hold pos = pos + 1
                   hold opnd = concat(opnd, q)
@@ -13877,7 +14548,7 @@ hold ec = 0
                     hold opnd = concat(opnd, bs)
                     hold pos = pos + 1
                     when pos < n {
-                      hold cq2 = sx_index(source,pos)
+                      hold cq2 = sxsource_get(source_words,pos)
                       hold opnd = concat(opnd, chr(cq2))
                       hold pos = pos + 1
                     }
@@ -13896,7 +14567,7 @@ hold ec = 0
               when pos >= n {
                 hold rn = 0
               } otherwise {
-                hold cn = sx_index(source,pos)
+                hold cn = sxsource_get(source_words,pos)
                 when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                   hold nm3 = concat(nm3, chr(cn))
                   hold pos = pos + 1
@@ -13915,7 +14586,7 @@ hold ec = 0
               when ocp >= n {
                 hold ocsk = 0
               } otherwise {
-                hold ocx = sx_index(source, ocp)
+                hold ocx = sxsource_get(source_words, ocp)
                 when ocx == 32 || ocx == 9 || ocx == 13 {
                   hold ocp = ocp + 1
                 } otherwise {
@@ -13934,13 +14605,13 @@ hold ec = 0
                 when pos >= n {
                   hold ocrun = 0
                 } otherwise {
-                  hold ocx = sx_index(source, pos)
+                  hold ocx = sxsource_get(source_words, pos)
                   when ocq == 1 {
                     hold ocarg = concat(ocarg, chr(ocx))
                     hold pos = pos + 1
                     when ocx == 92 {
                       when pos < n {
-                        hold ocarg = concat(ocarg, chr(sx_index(source, pos)))
+                        hold ocarg = concat(ocarg, chr(sxsource_get(source_words, pos)))
                         hold pos = pos + 1
                       }
                     } otherwise {
@@ -14448,7 +15119,7 @@ hold ec = 0
                 when pos >= n {
                   hold sk = 0
                 } otherwise {
-                  hold cs = sx_index(source,pos)
+                  hold cs = sxsource_get(source_words,pos)
                   when cs == 32 || cs == 9 || cs == 13 {
                     hold pos = pos + 1
                   } otherwise {
@@ -14458,7 +15129,7 @@ hold ec = 0
               }
               hold c2 = 0
               when pos < n {
-                hold c2 = sx_index(source,pos)
+                hold c2 = sxsource_get(source_words,pos)
               }
               when c2 == 46 {
                 hold pos = pos + 1
@@ -14468,7 +15139,7 @@ hold ec = 0
                   when pos >= n {
                     hold rn = 0
                   } otherwise {
-                    hold cn = sx_index(source,pos)
+                    hold cn = sxsource_get(source_words,pos)
                     when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                       hold chfld = concat(chfld, chr(cn))
                       hold pos = pos + 1
@@ -14708,7 +15379,7 @@ hold ec = 0
             }
             hold opcq = 0
             when pos < n {
-              hold opcq = sx_index(source,pos)
+              hold opcq = sxsource_get(source_words,pos)
             }
             // postfix [index]            // postfix [index]
             when opcq == 91 {
@@ -14722,7 +15393,7 @@ hold ec = 0
                 when pos >= n {
                   hold rn = 0
                 } otherwise {
-                  hold cn = sx_index(source,pos)
+                  hold cn = sxsource_get(source_words,pos)
                   when (cn >= 48 && cn <= 57) || (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || cn == 95 {
                     hold opix = concat(opix, chr(cn))
                     hold pos = pos + 1
@@ -14733,7 +15404,7 @@ hold ec = 0
               }
               hold opibad = 1
               when pos < n {
-                hold cn = sx_index(source,pos)
+                hold cn = sxsource_get(source_words,pos)
                 when cn == 93 {
                   hold pos = pos + 1
                   hold opibad = 0
@@ -14979,6 +15650,28 @@ hold ec = 0
         }
       }
 
+      when seed_profile == 1 && (rk == 0 || rk == 1) && sxseed_has_plus(rhs) {
+        when inready == 0 {
+          while sxecontains(source, inprivate) { inprivate = concat(inprivate, "x") }
+          inready = 1
+          fsret = concat(fsret, concat(inprivate, "list=l|"))
+        }
+        hold seed_show_serial = len(instate)
+        hold seed_show_env = sxseed_env(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+        hold seed_show_value = sxeparse(rhs, 0, seed_show_env, 0, 0, instate)
+        when (string_eq(sxesegment(seed_show_value, 1), "s") || string_eq(sxesegment(seed_show_value, 1), "n")) && sxflowspace(rhs, sxepos(seed_show_value)) == len(rhs) {
+          rhs = sxecode(seed_show_value)
+          when sxecontains(rhs, "sx_cat(") { rt = 1 }
+          while seed_show_serial < len(instate) {
+            body = concat(body, concat("  double ", concat(inprivate, concat(sxedigits(seed_show_serial), concat(";", nl)))))
+            seed_show_serial = seed_show_serial + 1
+          }
+        } otherwise {
+          perr = 1
+          permsg = concat("seed-min show expression: ", sxecode(seed_show_value))
+        }
+      }
+
       // emit
       hold ind = "  "
       hold wk = 0
@@ -14991,13 +15684,20 @@ hold ec = 0
         hold nerrscop = 1
         hold scopmsg = "show value cannot be a struct"
       }
-      when rk == 2 && nerrscop == 0 {
+      when rk == 2 && nerrscop == 0 && seed_profile == 0 {
         // A list is a pointer-valued runtime object, not a number to cast for
         // printf.  Require an observable scalar operation such as len(xs) or
         // xs[i], which also keeps list-valued struct fields from reaching C as
         // an invalid pointer-to-double conversion.
         hold nerrscop = 1
         hold scopmsg = "show value cannot be a list; use len(xs) or xs[i]"
+      }
+      when rk == 2 && seed_profile == 1 {
+        hold body = concat(body, "printf(\"[list len=%g]\\n\", sx_llen(")
+        hold body = concat(body, rhs)
+        hold body = concat(body, "));")
+        hold body = concat(body, nl)
+        hold rt = 1
       }
       when rk == 1 {
         hold body = concat(body, "puts(")
@@ -15022,13 +15722,13 @@ hold ec = 0
       hold iswhile = 0
       hold c1 = 0
       when pos < n {
-        hold c1 = sx_index(source,pos)
+        hold c1 = sxsource_get(source_words,pos)
       }
 
       when c1 == 104 {
         hold c2 = 0
         when pos + 1 < n {
-          hold c2 = sx_index(source,pos + 1)
+          hold c2 = sxsource_get(source_words,pos + 1)
         }
         when c2 == 105 {
           hold iswhile = 1
@@ -15044,7 +15744,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
             hold pos = pos + 1
           } otherwise {
@@ -15058,7 +15758,7 @@ hold ec = 0
         when pos >= n {
           hold cr = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 123 {
             hold cr = 0
           } otherwise {
@@ -15378,7 +16078,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 32 || cs == 9 || cs == 13 {
             hold pos = pos + 1
           } otherwise {
@@ -15392,7 +16092,7 @@ hold ec = 0
         when pos >= n {
           hold gr = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 10 || cs == 13 {
             hold gr = 0
           } otherwise {
@@ -15401,11 +16101,11 @@ hold ec = 0
               hold pos = pos + 1
               hold gquoted = 1
               while pos < n && gquoted == 1 {
-                hold gqc = sx_index(source, pos)
+                hold gqc = sxsource_get(source_words, pos)
                 hold gexpr = concat(gexpr, chr(gqc))
                 hold pos = pos + 1
                 when gqc == 92 && pos < n {
-                  hold gexpr = concat(gexpr, chr(sx_index(source, pos)))
+                  hold gexpr = concat(gexpr, chr(sxsource_get(source_words, pos)))
                   hold pos = pos + 1
                 } otherwise {
                   when gqc == 34 {
@@ -15417,7 +16117,7 @@ hold ec = 0
             when cs == 47 {
               hold c2 = 0
               when pos + 1 < n {
-                hold c2 = sx_index(source, pos + 1)
+                hold c2 = sxsource_get(source_words, pos + 1)
               }
               when c2 == 47 {
                 hold gr = 0
@@ -15457,6 +16157,17 @@ hold ec = 0
       while gi < gl {
         hold gtrim = concat(gtrim, chr(sx_index(gexpr, gi)))
         hold gi = gi + 1
+      }
+      when seed_profile == 1 && in_fn == 1 {
+        hold seed_env = sxseed_env(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+        hold seed_return = sxeparse(gtrim, 0, seed_env, 0, 0, instate)
+        hold seed_kind = sxesegment(seed_return, 1)
+        when string_eq(seed_kind, "n") || string_eq(seed_kind, "s") || string_eq(seed_kind, "l") {
+          when sx_index(seed_kind, 0) != fn_retkind {
+            perr = 1
+            permsg = "function give type mismatch"
+          }
+        }
       }
       // A complete list literal return reuses the checked hold-expression
       // parser. Insert the temporary at the return itself, never outside its
@@ -15520,7 +16231,7 @@ hold ec = 0
               hold lrok = 1
               hold lrk = 0
               while lrk < lrnl && lrok == 1 {
-                when sx_index(source, lrj + lrk) != sx_index(lrname, lrk) {
+                when sxsource_get(source_words, lrj + lrk) != sx_index(lrname, lrk) {
                   hold lrok = 0
                 }
                 hold lrk = lrk + 1
@@ -15534,12 +16245,7 @@ hold ec = 0
               hold lrname = concat(lrname, "x")
             }
           }
-          hold lrsource = ""
-          hold lri = 0
-          while lri < list_return_start {
-            hold lrsource = concat(lrsource, chr(sx_index(source, lri)))
-            hold lri = lri + 1
-          }
+          hold lrsource = sxseed_slice(source, 0, list_return_start)
           hold lrsource = concat(lrsource, "hold ")
           hold lrsource = concat(lrsource, lrname)
           hold lrsource = concat(lrsource, " = ")
@@ -15548,12 +16254,9 @@ hold ec = 0
           hold lrsource = concat(lrsource, "give ")
           hold lrsource = concat(lrsource, lrname)
           hold lrsource = concat(lrsource, nl)
-          hold lri = pos
-          while lri < n {
-            hold lrsource = concat(lrsource, chr(sx_index(source, lri)))
-            hold lri = lri + 1
-          }
+          hold lrsource = concat(lrsource, sxseed_slice(source, pos, n))
           hold source = lrsource
+          hold source_words = sxsource_pack(source)
           hold n = len(source)
           hold pos = list_return_start
           hold act = 16 // internal retry: do not emit give or consume the inserted hold
@@ -16854,7 +17557,7 @@ hold ec = 0
     // ---- while/when: emit ----
     when act == 3 {
       when pos < n {
-        hold cs = sx_index(source,pos)
+        hold cs = sxsource_get(source_words,pos)
         when cs == 123 {
           hold pos = pos + 1
         }
@@ -17155,7 +17858,7 @@ hold ec = 0
         when wi >= n {
           hold wsc = 0
         } otherwise {
-          hold cw = sx_index(source,wi)
+          hold cw = sxsource_get(source_words,wi)
           when cw == 32 || cw == 9 || cw == 13 || cw == 10 {
             hold wi = wi + 1
           } otherwise {
@@ -17169,7 +17872,7 @@ hold ec = 0
         hold w9 = ""
         hold wk = 0
         while wk < 9 {
-          hold w9 = concat(w9, chr(sx_index(source,wi + wk)))
+          hold w9 = concat(w9, chr(sxsource_get(source_words,wi + wk)))
           hold wk = wk + 1
         }
         hold wfound = sx_eq(w9, "otherwise")
@@ -17183,13 +17886,13 @@ hold ec = 0
           hold w4 = ""
           hold wk = 0
           while wk < 4 {
-            hold w4 = concat(w4, chr(sx_index(source,wi + wk)))
+            hold w4 = concat(w4, chr(sxsource_get(source_words,wi + wk)))
             hold wk = wk + 1
           }
           when sx_eq(w4, "else") {
             hold wok = 1
             when wi + 4 < n {
-              hold we = sx_index(source,wi + 4)
+              hold we = sxsource_get(source_words,wi + 4)
               when (we >= 97 && we <= 122) || (we >= 65 && we <= 90) || (we >= 48 && we <= 57) || we == 95 {
                 hold wok = 0
               }
@@ -17209,13 +17912,13 @@ hold ec = 0
         hold ekw = ""
         hold eki = 0
         while eki < 4 {
-          hold ekw = concat(ekw, chr(sx_index(source, wi + eki)))
+          hold ekw = concat(ekw, chr(sxsource_get(source_words, wi + eki)))
           hold eki = eki + 1
         }
         when sx_eq(ekw, "elif") {
           hold enx = 0
           when wi + 4 < n {
-            hold enx = sx_index(source, wi + 4)
+            hold enx = sxsource_get(source_words, wi + 4)
           }
           hold eident = 0
           when (enx >= 97 && enx <= 122) || (enx >= 65 && enx <= 90) || (enx >= 48 && enx <= 57) || enx == 95 {
@@ -17232,7 +17935,7 @@ hold ec = 0
         hold eki = 0
         while eki < 4 {
           when wi + eki < n {
-            hold ew4 = concat(ew4, chr(sx_index(source, wi + eki)))
+            hold ew4 = concat(ew4, chr(sxsource_get(source_words, wi + eki)))
           }
           hold eki = eki + 1
         }
@@ -17243,7 +17946,7 @@ hold ec = 0
           while eskip == 1 {
             hold eskip = 0
             when ep < n {
-              hold ec2 = sx_index(source, ep)
+              hold ec2 = sxsource_get(source_words, ep)
               when ec2 == 32 || ec2 == 9 || ec2 == 13 {
                 hold ep = ep + 1
                 hold eskip = 1
@@ -17254,14 +17957,14 @@ hold ec = 0
           hold eki = 0
           while eki < 2 {
             when ep + eki < n {
-              hold eif = concat(eif, chr(sx_index(source, ep + eki)))
+              hold eif = concat(eif, chr(sxsource_get(source_words, ep + eki)))
             }
             hold eki = eki + 1
           }
           when sx_eq(eif, "if") {
             hold enx = 0
             when ep + 2 < n {
-              hold enx = sx_index(source, ep + 2)
+              hold enx = sxsource_get(source_words, ep + 2)
             }
             hold eident = 0
             when (enx >= 97 && enx <= 122) || (enx >= 65 && enx <= 90) || (enx >= 48 && enx <= 57) || enx == 95 {
@@ -17279,12 +17982,12 @@ hold ec = 0
             hold ewh = ""
             hold ewk = 0
             while ewk < 4 {
-              hold ewh = concat(ewh, chr(sx_index(source, ep + ewk)))
+              hold ewh = concat(ewh, chr(sxsource_get(source_words, ep + ewk)))
               hold ewk = ewk + 1
             }
             hold enx = 0
             when ep + 4 < n {
-              hold enx = sx_index(source, ep + 4)
+              hold enx = sxsource_get(source_words, ep + 4)
             }
             hold eident = 0
             when (enx >= 97 && enx <= 122) || (enx >= 65 && enx <= 90) || (enx >= 48 && enx <= 57) || enx == 95 {
@@ -17310,23 +18013,16 @@ hold ec = 0
         hold body = concat(body, nl)
         // rewrite the keyword in place: `elif` -> `when`,
         // `else if` -> `when` + blanks (identical byte count)
-        hold src2 = ""
-        hold si = 0
-        while si < wi {
-          hold src2 = concat(src2, chr(sx_index(source, si)))
-          hold si = si + 1
-        }
+        hold src2 = sxseed_slice(source, 0, wi)
         hold src2 = concat(src2, "when")
         hold si = wi + 4
         while si < wi + elen {
           hold src2 = concat(src2, " ")
           hold si = si + 1
         }
-        while si < n {
-          hold src2 = concat(src2, chr(sx_index(source, si)))
-          hold si = si + 1
-        }
+        hold src2 = concat(src2, sxseed_slice(source, si, n))
         hold source = src2
+        hold source_words = sxsource_pack(source)
         hold pos = wi
         hold blk = concat(blk, "E")
       }
@@ -17348,7 +18044,7 @@ hold ec = 0
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 {
               hold pos = pos + 1
             } otherwise {
@@ -17358,7 +18054,7 @@ hold ec = 0
         }
         hold c2 = 0
         when pos < n {
-          hold c2 = sx_index(source,pos)
+          hold c2 = sxsource_get(source_words,pos)
         }
         when c2 == 123 {
           hold pos = pos + 1
@@ -17483,7 +18179,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
             hold pos = pos + 1
           } otherwise {
@@ -17497,7 +18193,7 @@ hold ec = 0
         when pos >= n {
           hold rn = 0
         } otherwise {
-          hold cn = sx_index(source,pos)
+          hold cn = sxsource_get(source_words,pos)
           when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
             hold fn_name = concat(fn_name, chr(cn))
             hold pos = pos + 1
@@ -17511,7 +18207,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
             hold pos = pos + 1
           } otherwise {
@@ -17520,7 +18216,7 @@ hold ec = 0
         }
       }
       when pos < n {
-        hold cs = sx_index(source,pos)
+        hold cs = sxsource_get(source_words,pos)
         when cs == 40 {
           hold pos = pos + 1
         }
@@ -17532,7 +18228,7 @@ hold ec = 0
         when pos >= n {
           hold pr = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 41 {
             hold pos = pos + 1
             hold pr = 0
@@ -17547,7 +18243,7 @@ hold ec = 0
                   when pos >= n {
                     hold rn = 0
                   } otherwise {
-                    hold cn = sx_index(source,pos)
+                    hold cn = sxsource_get(source_words,pos)
                     when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                       hold pn = concat(pn, chr(cn))
                       hold pos = pos + 1
@@ -17574,7 +18270,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
             hold pos = pos + 1
           } otherwise {
@@ -17587,10 +18283,10 @@ hold ec = 0
       hold cs = 0
       hold cs2 = 0
       when pos < n {
-        hold cs = sx_index(source,pos)
+        hold cs = sxsource_get(source_words,pos)
       }
       when pos + 1 < n {
-        hold cs2 = sx_index(source,pos + 1)
+        hold cs2 = sxsource_get(source_words,pos + 1)
       }
       when cs == 45 && cs2 == 62 {
         hold flowtyped = 1
@@ -17600,7 +18296,7 @@ hold ec = 0
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 {
               hold pos = pos + 1
             } otherwise {
@@ -17614,7 +18310,7 @@ hold ec = 0
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when (cs >= 97 && cs <= 122) || (cs >= 65 && cs <= 90) || (cs >= 48 && cs <= 57) || cs == 95 {
               hold rtword = concat(rtword, chr(cs))
               hold pos = pos + 1
@@ -17625,11 +18321,11 @@ hold ec = 0
         }
         hold fnnx = 0
         when pos < n {
-          hold fnnx = sx_index(source,pos)
+          hold fnnx = sxsource_get(source_words,pos)
         }
         hold fnnx2 = 0
         when pos + 1 < n {
-          hold fnnx2 = sx_index(source,pos + 1)
+          hold fnnx2 = sxsource_get(source_words,pos + 1)
         }
         when sx_eq(rtword, "str") && fnnx != 45 {
           hold fn_retkind = 115
@@ -17645,7 +18341,7 @@ hold ec = 0
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 {
               hold pos = pos + 1
             } otherwise {
@@ -17659,7 +18355,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
             hold pos = pos + 1
           } otherwise {
@@ -17668,7 +18364,7 @@ hold ec = 0
         }
       }
       when pos < n {
-        hold cs = sx_index(source,pos)
+        hold cs = sxsource_get(source_words,pos)
         when cs == 123 {
           hold pos = pos + 1
         }
@@ -17791,7 +18487,7 @@ hold ec = 0
         hold gproto = concat(gproto, ");")
         hold gproto = concat(gproto, nl)
       }
-      hold body = concat(body, ") {")
+      when seed_profile == 1 { hold body = concat(body, "){") } otherwise { hold body = concat(body, ") {") }
       hold body = concat(body, nl)
       // Variables are scoped to their function: save the tables of the
       // enclosing (top level) code and start the body with an empty set, so
@@ -17896,7 +18592,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold fc = sx_index(source, pos)
+          hold fc = sxsource_get(source_words, pos)
           when fc == 32 || fc == 9 || fc == 13 {
             hold pos = pos + 1
           } otherwise {
@@ -17910,7 +18606,7 @@ hold ec = 0
         when pos >= n {
           hold rn = 0
         } otherwise {
-          hold fc = sx_index(source, pos)
+          hold fc = sxsource_get(source_words, pos)
           when (fc >= 97 && fc <= 122) || (fc >= 65 && fc <= 90) || fc == 95 {
             hold fvname = concat(fvname, chr(fc))
             hold pos = pos + 1
@@ -17929,7 +18625,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold fc = sx_index(source, pos)
+          hold fc = sxsource_get(source_words, pos)
           when fc == 32 || fc == 9 || fc == 13 {
             hold pos = pos + 1
           } otherwise {
@@ -17943,7 +18639,7 @@ hold ec = 0
         when pos >= n {
           hold rn = 0
         } otherwise {
-          hold fc = sx_index(source, pos)
+          hold fc = sxsource_get(source_words, pos)
           when (fc >= 97 && fc <= 122) || (fc >= 65 && fc <= 90) {
             hold fwin = concat(fwin, chr(fc))
             hold pos = pos + 1
@@ -17963,7 +18659,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold fc = sx_index(source, pos)
+          hold fc = sxsource_get(source_words, pos)
           when fc == 32 || fc == 9 || fc == 13 {
             hold pos = pos + 1
           } otherwise {
@@ -17981,7 +18677,7 @@ hold ec = 0
         when pos >= n {
           hold fvrun = 0
         } otherwise {
-          hold fc = sx_index(source, pos)
+          hold fc = sxsource_get(source_words, pos)
           when fc == 123 {
             // no `..`: this is `for V in LIST {`
             hold pos = pos + 1
@@ -17991,7 +18687,7 @@ hold ec = 0
             when fc == 46 {
               hold fc2 = 0
               when pos + 1 < n {
-                hold fc2 = sx_index(source, pos + 1)
+                hold fc2 = sxsource_get(source_words, pos + 1)
               }
               when fc2 == 46 {
                 hold fvrun = 0
@@ -18014,7 +18710,7 @@ hold ec = 0
       }
       hold fc = 0
       when pos < n {
-        hold fc = sx_index(source, pos)
+        hold fc = sxsource_get(source_words, pos)
       }
       when fvmode == 1 {
         hold pos = pos
@@ -18119,19 +18815,11 @@ hold ec = 0
           hold fvnew = concat(fvnew, " in ")
           hold fvnew = concat(fvnew, fvtmp)
           hold fvnew = concat(fvnew, " {")
-          hold fvsrc = ""
-          hold fvk = 0
-          while fvk < fvstart {
-            hold fvsrc = concat(fvsrc, chr(sx_index(source, fvk)))
-            hold fvk = fvk + 1
-          }
+          hold fvsrc = sxseed_slice(source, 0, fvstart)
           hold fvsrc = concat(fvsrc, fvnew)
-          hold fvk = pos
-          while fvk < n {
-            hold fvsrc = concat(fvsrc, chr(sx_index(source, fvk)))
-            hold fvk = fvk + 1
-          }
+          hold fvsrc = concat(fvsrc, sxseed_slice(source, pos, n))
           hold source = fvsrc
+          hold source_words = sxsource_pack(source)
           hold n = len(source)
           hold fvspl = 1
         }
@@ -18142,7 +18830,7 @@ hold ec = 0
         when pos >= n {
           hold fvrun2 = 0
         } otherwise {
-          hold fc = sx_index(source, pos)
+          hold fc = sxsource_get(source_words, pos)
           when fc == 123 {
             hold pos = pos + 1
             hold fvrun2 = 0
@@ -18462,7 +19150,7 @@ hold ec = 0
           }
         }
         // a string loop declares a new `char *` counter; a number of that name is an error
-        when fvstr == 1 && fvok == 0 {
+        when fvstr == 1 && fvok == 0 && (seed_profile == 0 || fvdup == 0) {
           hold ferr = 1
           hold fmsg = concat("for loop: '", fvname)
           hold fmsg = concat(fmsg, "' is already a number or a list; a string loop needs a new counter name")
@@ -18828,7 +19516,7 @@ hold ec = 0
         when pos >= n {
           hold grun = 0
         } otherwise {
-          hold gc = sx_index(source, pos)
+          hold gc = sxsource_get(source_words, pos)
           when gq == 1 {
             hold pos = pos + 1
             when gc == 92 {
@@ -18935,7 +19623,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
             hold pos = pos + 1
           } otherwise {
@@ -18949,7 +19637,7 @@ hold ec = 0
         when pos >= n {
           hold rn = 0
         } otherwise {
-          hold cn = sx_index(source,pos)
+          hold cn = sxsource_get(source_words,pos)
           when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
             hold stname = concat(stname, chr(cn))
             hold pos = pos + 1
@@ -18963,7 +19651,7 @@ hold ec = 0
         when pos >= n {
           hold sk = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 32 || cs == 9 || cs == 13 || cs == 10 {
             hold pos = pos + 1
           } otherwise {
@@ -18975,11 +19663,11 @@ hold ec = 0
       // registered one concrete struct per instantiation, so the walker only
       gxtpl = 0
       when pos < n {
-        when sx_index(source,pos) == 60 {
+        when sxsource_get(source_words,pos) == 60 {
           when len(sxelookup(gsdefs, stname, ":")) > 0 {
             gxtpl = 1
             hold gxq = pos + 1
-            while gxq < n && sx_index(source,gxq) != 62 {
+            while gxq < n && sxsource_get(source_words,gxq) != 62 {
               hold gxq = gxq + 1
             }
             hold pos = sxflowspace(source, gxq + 1)
@@ -18991,7 +19679,7 @@ hold ec = 0
         }
       }
       when pos < n {
-        hold cs = sx_index(source,pos)
+        hold cs = sxsource_get(source_words,pos)
         when cs == 123 {
           hold pos = pos + 1
         }
@@ -19006,7 +19694,7 @@ hold ec = 0
           when pos >= n {
             hold sk = 0
           } otherwise {
-            hold cs = sx_index(source,pos)
+            hold cs = sxsource_get(source_words,pos)
             when cs == 32 || cs == 9 || cs == 13 || cs == 10 || cs == 44 {
               hold pos = pos + 1
             } otherwise {
@@ -19017,7 +19705,7 @@ hold ec = 0
         when pos >= n {
           hold rn = 0
         } otherwise {
-          hold cs = sx_index(source,pos)
+          hold cs = sxsource_get(source_words,pos)
           when cs == 125 {
             hold pos = pos + 1
             hold rn = 0
@@ -19029,7 +19717,7 @@ hold ec = 0
                 when pos >= n {
                   hold rn2 = 0
                 } otherwise {
-                  hold cn = sx_index(source,pos)
+                  hold cn = sxsource_get(source_words,pos)
                   when (cn >= 97 && cn <= 122) || (cn >= 65 && cn <= 90) || (cn >= 48 && cn <= 57) || cn == 95 {
                     hold sf = concat(sf, chr(cn))
                     hold pos = pos + 1
@@ -19042,21 +19730,21 @@ hold ec = 0
               // a field's type: refuse it instead of registering the type
               // name as another field (which silently changed the arity).
               hold sk2 = pos
-              while sk2 < n && (sx_index(source,sk2) == 32 || sx_index(source,sk2) == 9) {
+              while sk2 < n && (sxsource_get(source_words,sk2) == 32 || sxsource_get(source_words,sk2) == 9) {
                 hold sk2 = sk2 + 1
               }
               when sk2 < n {
-                when sx_index(source,sk2) == 58 {
+                when sxsource_get(source_words,sk2) == 58 {
                   // `k: 2` (a literal after the colon) is the tolerated old
                   // spelling and keeps working; `p: Pt` (a NAME after the
                   // colon) reads as a type annotation, which no backend
                   // checks -- it used to register Pt as an extra field.
                   hold sk3 = sk2 + 1
-                  while sk3 < n && (sx_index(source,sk3) == 32 || sx_index(source,sk3) == 9) {
+                  while sk3 < n && (sxsource_get(source_words,sk3) == 32 || sxsource_get(source_words,sk3) == 9) {
                     hold sk3 = sk3 + 1
                   }
                   when sk3 < n {
-                    hold cc3 = sx_index(source,sk3)
+                    hold cc3 = sxsource_get(source_words,sk3)
                     when (cc3 >= 97 && cc3 <= 122) || (cc3 >= 65 && cc3 <= 90) || cc3 == 95 {
                       hold exerr = concat(exerr, "#error sayanox-min: struct field annotations are not supported")
                       hold exerr = concat(exerr, nl)
@@ -19296,7 +19984,7 @@ when rt == 1 {
   hold out = concat(out, "typedef struct sx_list { double *d; long n; long cap; } sx_list;\ntypedef struct sx_gcb {\n  struct sx_gcb *next;      /* every live block, for the sweep */\n  size_t cls;               /* size class: the free list it goes back to */\n  size_t kind;              /* 0 raw bytes, 1 sx_list, 2 double array */\n  size_t mark;\n} sx_gcb;\n#define SX_GCH ((size_t)32)\n#define SX_NCLS 26\nstatic sx_gcb *sx_gcall = 0;\nstatic sx_gcb *sx_gfree[SX_NCLS];\nstatic char **sx_ghash = 0;               /* payload address -> block */\nstatic sx_gcb **sx_gblk = 0;\nstatic sx_gcb **sx_gsort = 0;             /* blocks by address, for interiors */\nstatic size_t sx_ghcap = 0, sx_ghlive = 0, sx_gsort_n = 0;\nstatic char *sx_stack_bot = 0;\nstatic double sx_gc_n = 0, sx_gc_freed = 0, sx_gc_thresh = 0, sx_gc_bytes = 0;\n\nstatic size_t sx_gc_class_size(size_t c){ return (size_t)32 << c; }\nstatic size_t sx_gc_cls(size_t need){\n")
   hold out = concat(out, "  size_t c = 0, sz = 32;\n  while (sz < need && c + 1 < SX_NCLS){ sz <<= 1; c += 1; }\n  return c;\n}\n\nstatic void sx_gc_rehash(size_t cap){\n  char **nh;\n  sx_gcb **nb;\n  sx_gcb *b;\n  if (cap < 4096) cap = 4096;\n  while (cap < (sx_ghlive + 1) * 4) cap <<= 1;\n  nh = (char**)calloc(cap, sizeof(char*));\n  nb = (sx_gcb**)calloc(cap, sizeof(sx_gcb*));\n  if (!nh || !nb) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  b = sx_gcall;\n  while (b){\n    char *pay = (char*)b + SX_GCH;\n    size_t h = ((size_t)pay >> 4) & (cap - 1);\n    while (nh[h]) h = (h + 1) & (cap - 1);\n    nh[h] = pay; nb[h] = b;\n    b = b->next;\n  }\n  free(sx_ghash); free(sx_gblk);\n  sx_ghash = nh; sx_gblk = nb; sx_ghcap = cap;\n}\n\nstatic void sx_gc_hash_put(char *pay, sx_gcb *b){\n  size_t h;\n  if (!sx_ghcap) sx_gc_rehash(1u << 12);\n  if ((sx_ghlive + 1) * 4 > sx_ghcap){ sx_gc_rehash(sx_ghcap * 2); return; }\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n")
   hold out = concat(out, "  while (sx_ghash[h]) h = (h + 1) & (sx_ghcap - 1);\n  sx_ghash[h] = pay; sx_gblk[h] = b;\n}\n\nstatic sx_gcb *sx_gc_hash_get(char *pay){\n  size_t h;\n  if (!sx_ghcap) return 0;\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n  while (sx_ghash[h] && sx_ghash[h] != pay) h = (h + 1) & (sx_ghcap - 1);\n  return sx_ghash[h] ? sx_gblk[h] : 0;\n}\n\nstatic int sx_gc_cmp(const void *a, const void *b){\n  char *pa = (char*)(*(sx_gcb* const*)a) + SX_GCH;\n  char *pb = (char*)(*(sx_gcb* const*)b) + SX_GCH;\n  return pa < pb ? -1 : (pa > pb ? 1 : 0);\n}\nstatic void sx_gc_sorted(void){\n  size_t i = 0;\n  sx_gcb *b = sx_gcall;\n  if (sx_gsort_n != sx_ghlive){\n    free(sx_gsort);\n    sx_gsort = (sx_gcb**)malloc((sx_ghlive + 1) * sizeof(sx_gcb*));\n    if (!sx_gsort) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  }\n  while (b && i < sx_ghlive){ sx_gsort[i] = b; i += 1; b = b->next; }\n  sx_gsort_n = i;\n  qsort(sx_gsort, i, sizeof(sx_gcb*), sx_gc_cmp);\n}\n")
-  hold out = concat(out, "static sx_gcb *sx_gc_containing(char *p){\n  size_t lo = 0, hi = sx_gsort_n;\n  while (lo < hi){\n    size_t mid = (lo + hi) / 2;\n    char *pay = (char*)sx_gsort[mid] + SX_GCH;\n    size_t sz = sx_gc_class_size(sx_gsort[mid]->cls);\n    if (p < pay) hi = mid;\n    else if (p >= pay + sz) lo = mid + 1;\n    else return sx_gsort[mid];\n  }\n  return 0;\n}\n\nstatic void sx_gc_mark(void *p){\n  sx_gcb *b;\n  if (!p) return;\n  b = sx_gc_hash_get((char*)p);\n  if (!b) b = sx_gc_containing((char*)p);\n  if (!b || b->mark) return;\n  b->mark = 1;\n  if (b->kind == 1){\n    sx_list *L = (sx_list*)((char*)b + SX_GCH);\n    if (L->d) sx_gc_mark((char*)L->d);\n  }\n}\n\nstatic void sx_gc_scan(char *lo, char *hi){\n  lo = (char*)(((size_t)lo + 7u) & ~(size_t)7u);\n  while (lo + 8 <= hi){\n    sx_gc_mark(*(char**)lo);\n    lo += 8;\n  }\n}\n\nstatic void sx_gc_init(void *anchor){\n  sx_stack_bot = (char*)anchor;\n")
+  hold out = concat(out, "static sx_gcb *sx_gc_containing(char *p){\n  size_t lo = 0, hi = sx_gsort_n;\n  while (lo < hi){\n    size_t mid = (lo + hi) / 2;\n    char *pay = (char*)sx_gsort[mid] + SX_GCH;\n    size_t sz = sx_gc_class_size(sx_gsort[mid]->cls);\n    if (p < pay) hi = mid;\n    else if (p >= pay + sz) lo = mid + 1;\n    else return sx_gsort[mid];\n  }\n  return 0;\n}\n\nstatic void sx_gc_mark(void *p){\n  sx_gcb *b;\n  if (!p) return;\n  b = sx_gc_hash_get((char*)p);\n  if (!b) b = sx_gc_containing((char*)p);\n  if (!b || b->mark) return;\n  b->mark = 1;\n  if (b->kind == 1){\n    sx_list *L = (sx_list*)((char*)b + SX_GCH);\n    if (L->d) sx_gc_mark((char*)L->d);\n  }\n}\n\n#ifndef __has_feature\n#define __has_feature(x) 0\n#endif\n#if defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)\n#include <sanitizer/asan_interface.h>\n#define SX_GC_WORD_OK(p) (!__asan_region_is_poisoned((p), sizeof(void*)))\n#else\n#define SX_GC_WORD_OK(p) 1\n#endif\n/* Conservative stack traversal skips ASan redzones; all actual loads remain instrumented. */\nstatic void sx_gc_scan(char *lo, char *hi){\n  lo = (char*)(((size_t)lo + 7u) & ~(size_t)7u);\n  while (lo + 8 <= hi){\n    if (SX_GC_WORD_OK(lo)) sx_gc_mark(*(char**)lo);\n    lo += 8;\n  }\n}\n\nstatic void sx_gc_init(void *anchor){\n  sx_stack_bot = (char*)anchor;\n")
   hold out = concat(out, "  if (!sx_gc_thresh) sx_gc_thresh = (double)(8u << 20);\n}\n\nstatic void sx_gc_collect(void){\n  double before = sx_gc_bytes;\n  sx_gcb **pp;\n  if (!sx_gcall || !sx_stack_bot) return;\n  sx_gc_sorted();\n  {\n    jmp_buf jb;\n    setjmp(jb);\n    sx_gc_scan((char*)&jb, (char*)&jb + sizeof(jb));\n    sx_gc_scan((char*)&jb, sx_stack_bot);\n  }\n  pp = &sx_gcall;\n  while (*pp){\n    sx_gcb *b = *pp;\n    if (b->mark){\n      b->mark = 0;\n      pp = &b->next;\n    } else {\n      size_t c = b->cls;\n      *pp = b->next;\n      sx_gc_bytes -= (double)sx_gc_class_size(c);\n      sx_ghlive -= 1;\n      b->next = sx_gfree[c];\n      sx_gfree[c] = b;\n    }\n  }\n  sx_gc_n += 1.0;\n  sx_gc_freed = before - sx_gc_bytes;\n  sx_gsort_n = 0;\n  sx_gc_rehash(4096);\n  sx_gc_thresh = sx_gc_bytes * 1.5 + (double)(4u << 20);\n}\n\nstatic void *sx_gc_alloc(int kind, size_t payload){\n  size_t need = payload + SX_GCH;\n")
   hold out = concat(out, "  size_t c = sx_gc_cls(need);\n  sx_gcb *b;\n  if (sx_gc_bytes >= sx_gc_thresh) sx_gc_collect();\n  b = sx_gfree[c];\n  if (b) sx_gfree[c] = b->next;\n  else b = (sx_gcb*)malloc(sx_gc_class_size(c));\n  if (!b) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  b->cls = c;\n  b->kind = (size_t)kind;\n  b->mark = 0;\n  b->next = sx_gcall;\n  sx_gcall = b;\n  sx_ghlive += 1;\n  sx_gc_hash_put((char*)b + SX_GCH, b);\n  sx_gc_bytes += (double)sx_gc_class_size(c);\n  return (char*)b + SX_GCH;\n}\n\nstatic double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\nstatic double sx_gc_live(void){ return sx_gc_bytes; }\nstatic double sx_gc_count(void){ return sx_gc_n; }\n\n\n")
   hold out = concat(out, "static int sx_argn=0; static char **sx_argv_p=0;\n")
@@ -19350,7 +20038,7 @@ when rt == 1 {
   hold out = concat(out, "typedef struct sx_list { double *d; long n; long cap; } sx_list;\ntypedef struct sx_gcb {\n  struct sx_gcb *next;      /* every live block, for the sweep */\n  size_t cls;               /* size class: the free list it goes back to */\n  size_t kind;              /* 0 raw bytes, 1 sx_list, 2 double array */\n  size_t mark;\n} sx_gcb;\n#define SX_GCH ((size_t)32)\n#define SX_NCLS 26\nstatic sx_gcb *sx_gcall = 0;\nstatic sx_gcb *sx_gfree[SX_NCLS];\nstatic char **sx_ghash = 0;               /* payload address -> block */\nstatic sx_gcb **sx_gblk = 0;\nstatic sx_gcb **sx_gsort = 0;             /* blocks by address, for interiors */\nstatic size_t sx_ghcap = 0, sx_ghlive = 0, sx_gsort_n = 0;\nstatic char *sx_stack_bot = 0;\nstatic double sx_gc_n = 0, sx_gc_freed = 0, sx_gc_thresh = 0, sx_gc_bytes = 0;\n\nstatic size_t sx_gc_class_size(size_t c){ return (size_t)32 << c; }\nstatic size_t sx_gc_cls(size_t need){\n")
   hold out = concat(out, "  size_t c = 0, sz = 32;\n  while (sz < need && c + 1 < SX_NCLS){ sz <<= 1; c += 1; }\n  return c;\n}\n\nstatic void sx_gc_rehash(size_t cap){\n  char **nh;\n  sx_gcb **nb;\n  sx_gcb *b;\n  if (cap < 4096) cap = 4096;\n  while (cap < (sx_ghlive + 1) * 4) cap <<= 1;\n  nh = (char**)calloc(cap, sizeof(char*));\n  nb = (sx_gcb**)calloc(cap, sizeof(sx_gcb*));\n  if (!nh || !nb) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  b = sx_gcall;\n  while (b){\n    char *pay = (char*)b + SX_GCH;\n    size_t h = ((size_t)pay >> 4) & (cap - 1);\n    while (nh[h]) h = (h + 1) & (cap - 1);\n    nh[h] = pay; nb[h] = b;\n    b = b->next;\n  }\n  free(sx_ghash); free(sx_gblk);\n  sx_ghash = nh; sx_gblk = nb; sx_ghcap = cap;\n}\n\nstatic void sx_gc_hash_put(char *pay, sx_gcb *b){\n  size_t h;\n  if (!sx_ghcap) sx_gc_rehash(1u << 12);\n  if ((sx_ghlive + 1) * 4 > sx_ghcap){ sx_gc_rehash(sx_ghcap * 2); return; }\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n")
   hold out = concat(out, "  while (sx_ghash[h]) h = (h + 1) & (sx_ghcap - 1);\n  sx_ghash[h] = pay; sx_gblk[h] = b;\n}\n\nstatic sx_gcb *sx_gc_hash_get(char *pay){\n  size_t h;\n  if (!sx_ghcap) return 0;\n  h = ((size_t)pay >> 4) & (sx_ghcap - 1);\n  while (sx_ghash[h] && sx_ghash[h] != pay) h = (h + 1) & (sx_ghcap - 1);\n  return sx_ghash[h] ? sx_gblk[h] : 0;\n}\n\nstatic int sx_gc_cmp(const void *a, const void *b){\n  char *pa = (char*)(*(sx_gcb* const*)a) + SX_GCH;\n  char *pb = (char*)(*(sx_gcb* const*)b) + SX_GCH;\n  return pa < pb ? -1 : (pa > pb ? 1 : 0);\n}\nstatic void sx_gc_sorted(void){\n  size_t i = 0;\n  sx_gcb *b = sx_gcall;\n  if (sx_gsort_n != sx_ghlive){\n    free(sx_gsort);\n    sx_gsort = (sx_gcb**)malloc((sx_ghlive + 1) * sizeof(sx_gcb*));\n    if (!sx_gsort) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  }\n  while (b && i < sx_ghlive){ sx_gsort[i] = b; i += 1; b = b->next; }\n  sx_gsort_n = i;\n  qsort(sx_gsort, i, sizeof(sx_gcb*), sx_gc_cmp);\n}\n")
-  hold out = concat(out, "static sx_gcb *sx_gc_containing(char *p){\n  size_t lo = 0, hi = sx_gsort_n;\n  while (lo < hi){\n    size_t mid = (lo + hi) / 2;\n    char *pay = (char*)sx_gsort[mid] + SX_GCH;\n    size_t sz = sx_gc_class_size(sx_gsort[mid]->cls);\n    if (p < pay) hi = mid;\n    else if (p >= pay + sz) lo = mid + 1;\n    else return sx_gsort[mid];\n  }\n  return 0;\n}\n\nstatic void sx_gc_mark(void *p){\n  sx_gcb *b;\n  if (!p) return;\n  b = sx_gc_hash_get((char*)p);\n  if (!b) b = sx_gc_containing((char*)p);\n  if (!b || b->mark) return;\n  b->mark = 1;\n  if (b->kind == 1){\n    sx_list *L = (sx_list*)((char*)b + SX_GCH);\n    if (L->d) sx_gc_mark((char*)L->d);\n  }\n}\n\nstatic void sx_gc_scan(char *lo, char *hi){\n  lo = (char*)(((size_t)lo + 7u) & ~(size_t)7u);\n  while (lo + 8 <= hi){\n    sx_gc_mark(*(char**)lo);\n    lo += 8;\n  }\n}\n\nstatic void sx_gc_init(void *anchor){\n  sx_stack_bot = (char*)anchor;\n")
+  hold out = concat(out, "static sx_gcb *sx_gc_containing(char *p){\n  size_t lo = 0, hi = sx_gsort_n;\n  while (lo < hi){\n    size_t mid = (lo + hi) / 2;\n    char *pay = (char*)sx_gsort[mid] + SX_GCH;\n    size_t sz = sx_gc_class_size(sx_gsort[mid]->cls);\n    if (p < pay) hi = mid;\n    else if (p >= pay + sz) lo = mid + 1;\n    else return sx_gsort[mid];\n  }\n  return 0;\n}\n\nstatic void sx_gc_mark(void *p){\n  sx_gcb *b;\n  if (!p) return;\n  b = sx_gc_hash_get((char*)p);\n  if (!b) b = sx_gc_containing((char*)p);\n  if (!b || b->mark) return;\n  b->mark = 1;\n  if (b->kind == 1){\n    sx_list *L = (sx_list*)((char*)b + SX_GCH);\n    if (L->d) sx_gc_mark((char*)L->d);\n  }\n}\n\n#ifndef __has_feature\n#define __has_feature(x) 0\n#endif\n#if defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)\n#include <sanitizer/asan_interface.h>\n#define SX_GC_WORD_OK(p) (!__asan_region_is_poisoned((p), sizeof(void*)))\n#else\n#define SX_GC_WORD_OK(p) 1\n#endif\n/* Conservative stack traversal skips ASan redzones; all actual loads remain instrumented. */\nstatic void sx_gc_scan(char *lo, char *hi){\n  lo = (char*)(((size_t)lo + 7u) & ~(size_t)7u);\n  while (lo + 8 <= hi){\n    if (SX_GC_WORD_OK(lo)) sx_gc_mark(*(char**)lo);\n    lo += 8;\n  }\n}\n\nstatic void sx_gc_init(void *anchor){\n  sx_stack_bot = (char*)anchor;\n")
   hold out = concat(out, "  if (!sx_gc_thresh) sx_gc_thresh = (double)(8u << 20);\n}\n\nstatic void sx_gc_collect(void){\n  double before = sx_gc_bytes;\n  sx_gcb **pp;\n  if (!sx_gcall || !sx_stack_bot) return;\n  sx_gc_sorted();\n  {\n    jmp_buf jb;\n    setjmp(jb);\n    sx_gc_scan((char*)&jb, (char*)&jb + sizeof(jb));\n    sx_gc_scan((char*)&jb, sx_stack_bot);\n  }\n  pp = &sx_gcall;\n  while (*pp){\n    sx_gcb *b = *pp;\n    if (b->mark){\n      b->mark = 0;\n      pp = &b->next;\n    } else {\n      size_t c = b->cls;\n      *pp = b->next;\n      sx_gc_bytes -= (double)sx_gc_class_size(c);\n      sx_ghlive -= 1;\n      b->next = sx_gfree[c];\n      sx_gfree[c] = b;\n    }\n  }\n  sx_gc_n += 1.0;\n  sx_gc_freed = before - sx_gc_bytes;\n  sx_gsort_n = 0;\n  sx_gc_rehash(4096);\n  sx_gc_thresh = sx_gc_bytes * 1.5 + (double)(4u << 20);\n}\n\nstatic void *sx_gc_alloc(int kind, size_t payload){\n  size_t need = payload + SX_GCH;\n")
   hold out = concat(out, "  size_t c = sx_gc_cls(need);\n  sx_gcb *b;\n  if (sx_gc_bytes >= sx_gc_thresh) sx_gc_collect();\n  b = sx_gfree[c];\n  if (b) sx_gfree[c] = b->next;\n  else b = (sx_gcb*)malloc(sx_gc_class_size(c));\n  if (!b) { fputs(\"sx: out of memory\", stderr); exit(1); }\n  b->cls = c;\n  b->kind = (size_t)kind;\n  b->mark = 0;\n  b->next = sx_gcall;\n  sx_gcall = b;\n  sx_ghlive += 1;\n  sx_gc_hash_put((char*)b + SX_GCH, b);\n  sx_gc_bytes += (double)sx_gc_class_size(c);\n  return (char*)b + SX_GCH;\n}\n\nstatic double sx_gc_run(void){ sx_gc_collect(); return sx_gc_freed; }\nstatic double sx_gc_live(void){ return sx_gc_bytes; }\nstatic double sx_gc_count(void){ return sx_gc_n; }\n\n\n")
   hold out = concat(out, "static double sx_mod(double a,double b){ long x=(long)a, y=(long)b; if(!y){fputs(\"division by zero\\n\",stderr);exit(1);} return (double)(x%y); }\n")
@@ -19516,7 +20204,7 @@ while main_unique == 0 {
     hold main_match = 1
     hold main_char = 0
     while main_char < main_nlen && main_match == 1 {
-      when sx_index(source, main_scan + main_char) != sx_index(main_inner, main_char) {
+      when sxsource_get(source_words, main_scan + main_char) != sx_index(main_inner, main_char) {
         hold main_match = 0
       }
       hold main_char = main_char + 1
@@ -19560,6 +20248,9 @@ when exdeep == 1 {
   hold exerr = concat(exerr, nl)
   show "min: use nesting deeper than 8"
 }
+when seed_profile == 1 && len(seed_generic_error) > 0 {
+  exerr = concat(concat("#error sayanox-min: ", concat(seed_generic_error, nl)), exerr)
+}
 when exbad == 1 {
   hold exerr = concat(exerr, "#error sayanox-min: struct/list literal value must be a number, string, name, or nested struct")
   hold exerr = concat(exerr, nl)
@@ -19571,7 +20262,11 @@ when exbad5 == 1 {
   show "min: use must be followed by a quoted path, e.g. use \"lib.sa\""
 }
 when exbad6 == 1 {
+  when seed_profile == 1 {
+    hold exerr = concat(exerr, "#error sayanox-min: struct field value kind conflicts with an earlier literal (number, string, list, or concrete struct)")
+  } otherwise {
   hold exerr = concat(exerr, "#error sayanox-min: struct field is used with two different value kinds (number, string, list, or concrete struct)")
+  }
   hold exerr = concat(exerr, nl)
   show "min: struct field used with two different value kinds (number, string, list, or concrete struct)"
 }
@@ -20099,6 +20794,7 @@ when fixi > fixflush {
   hold fixflush = fixi
 }
 hold out = fixout
+when seed_profile == 1 && len(gdefs) > 0 { out = sxseed_c_symbols(out, gdefs) }
 hold out = concat(exerr, out)
 hold w = write_file(compiler_paths.output, out)
 

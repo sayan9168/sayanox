@@ -1,0 +1,86 @@
+// Prove native reconstruction in an isolated checkout with no C seed/compiler.
+use "tools/sxgate_lib.sa"
+hold dir = "selfhost/seed_tests/native-bootstrap-test"
+hold clean = gl_clean_dir(dir)
+hold bootstrap = gl_ensure_dir(concat(dir, "/bootstrap"))
+hold tools = gl_ensure_dir(concat(dir, "/tools"))
+hold shims = gl_ensure_dir(concat(dir, "/bin"))
+hold paths = read_file("bootstrap/native.sha256")
+hold pos = 0
+while pos < len(paths) {
+  hold begin = pos
+  while pos < len(paths) && sx_index(paths, pos) != 10 { pos = pos + 1 }
+  hold line = gl_slice(paths, begin, pos)
+  pos = pos + 1
+  when len(line) > 66 {
+    hold source = gl_slice(line, 66, len(line))
+    hold bytes = []
+    hold size = read_bytes(source, bytes)
+    when size <= 0 { hold bad = gl_fail(concat("missing native bootstrap input: ", source)) }
+    hold dest = concat(dir, concat("/", source))
+    when write_bytes(dest, bytes) != 1 { hold bad = gl_fail(concat("cannot copy native bootstrap input: ", source)) }
+  }
+}
+hold manifest = gl_must_write(concat(dir, "/bootstrap/native.sha256"), paths)
+hold mode = gl_assert_eq_num(run_command(concat("chmod +x ", gl_sh_quote(concat(dir, "/bootstrap/sxc_native.bin")))), 0, "copied anchor executable")
+hold marker = concat(path_real(dir), "/forbidden-cc")
+hold poison_source = concat(dir, "/poison.sa")
+hold poison = concat("hold w = write_file(\"", concat(marker, "\", \"C compiler invoked\")\nhold e = exit(99)\n"))
+hold write = gl_must_write(poison_source, poison)
+hold names = "cc\ngcc\nclang\n"
+pos = 0
+while pos < len(names) {
+  hold start = pos
+  while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+  hold name = gl_slice(names, start, pos)
+  pos = pos + 1
+  hold command = concat("./tools/sxc_native ", concat(gl_sh_quote(poison_source), concat(" ", gl_sh_quote(concat(dir, concat("/bin/", name))))))
+  hold compile = gl_assert_eq_num(run_command(command), 0, "native C-compiler poison")
+}
+hold command = concat("cd ", gl_sh_quote(path_real(dir)))
+command = concat(command, " && CC=cc PATH=")
+command = concat(command, gl_sh_quote(concat(path_real(concat(dir, "/bin")), concat(":", getenv("PATH")))))
+command = concat(command, concat(" ", gl_sh_quote(path_real("sx"))))
+command = concat(command, " target sxc-native")
+hold log = concat(path_real("selfhost/seed_tests"), "/native-bootstrap-isolated.log")
+hold status = gl_run_merged(command, log)
+hold ok = gl_assert_eq_num(status, 0, "native bootstrap without C seed/compiler")
+hold untouched = gl_assert_eq_num(path_kind(marker), 0, "C compiler poison never invoked")
+hold no_seed = gl_assert_eq_num(path_kind(concat(dir, "/selfhost/seed")), 0, "no seed directory in isolated bootstrap")
+hold parity = gl_assert_files_eq("bootstrap/sxc_native.bin", concat(dir, "/tools/sxc_native"), "isolated native compiler fixed point")
+// The compatibility seed itself must also rebuild from Sayanox in the same
+// isolated tree. No legacy C source is copied, and CC remains a recording poison.
+hold seed_dir = gl_ensure_dir(concat(dir, "/selfhost/seed"))
+hold module_dir = gl_ensure_dir(concat(dir, "/selfhost/modules"))
+hold inputs = "selfhost/compiler_min.sa\nselfhost/modules/compiler_text.sa\nselfhost/seed/sxc_seed_min.sa\nselfhost/seed/seed_runtime_lib.sa\nselfhost/seed/sxc_seed.sa\n"
+pos = 0
+while pos < len(inputs) {
+  hold start = pos
+  while pos < len(inputs) && sx_index(inputs, pos) != 10 { pos = pos + 1 }
+  hold input = gl_slice(inputs, start, pos)
+  pos = pos + 1
+  hold copied = gl_must_write(concat(dir, concat("/", input)), read_file(input))
+}
+hold seed_command = concat(command, " seed-min-bin")
+status = gl_run_merged(seed_command, log)
+hold seeded = gl_assert_eq_num(status, 0, "Sayanox seed bootstrap without C source/compiler")
+hold unused = gl_assert_eq_num(path_kind(marker), 0, "seed bootstrap never invoked a C compiler")
+hold no_legacy = gl_assert_eq_num(path_kind(concat(dir, "/selfhost/seed/sxc_seed_min.c")), 0, "no legacy C seed input")
+hold cli = gl_assert_eq_num(path_kind(concat(dir, "/selfhost/seed/sxc_seed_min")), 1, "source-built native seed CLI")
+hold frontend = gl_assert_eq_num(path_kind(concat(dir, "/selfhost/native_c_emitter")), 1, "source-built native C-output frontend")
+// A changed source must fail the integrity gate before installation.
+hold compiler = concat(dir, "/tools/sxc_native.sa")
+hold corrupt = gl_must_write(compiler, concat(read_file(compiler), "\n// deliberate integrity mismatch\n"))
+status = gl_run_merged(command, log)
+when status == 0 { hold bad = gl_fail("modified native bootstrap input accepted") }
+hold still_equal = gl_assert_files_eq("bootstrap/sxc_native.bin", concat(dir, "/tools/sxc_native"), "failed bootstrap preserves installed compiler")
+hold restored_source = gl_must_write(compiler, read_file("tools/sxc_native.sa"))
+hold anchor = concat(dir, "/bootstrap/sxc_native.bin")
+hold bytes = []
+hold count = read_bytes(anchor, bytes)
+bytes[len(bytes) - 1] = (bytes[len(bytes) - 1] + 1) % 256
+hold corrupt_anchor = gl_assert_eq_num(write_bytes(anchor, bytes), 1, "corrupt isolated anchor")
+status = gl_run_merged(command, log)
+when status == 0 { hold bad = gl_fail("corrupt native anchor accepted") }
+hold final_equal = gl_assert_files_eq("bootstrap/sxc_native.bin", concat(dir, "/tools/sxc_native"), "corrupt anchor preserves installed compiler")
+show "[OK] native bootstrap: empty compiler workspace and Sayanox seed, no C source, cc/gcc/clang poisons unused, fixed-point parity, corrupt source/anchor refused"
