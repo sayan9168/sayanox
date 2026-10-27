@@ -57,6 +57,9 @@ make rt_run_client(name: str, built: list) -> num {
 
 make rt_run(name: str, built: list) -> num {
   when string_eq(name, "test-driver") == 1 {
+    // CI runs this on a clean checkout, before the full self-hosting job.
+    // The nested three-backend integration must not depend on warm artifacts.
+    hold prerequisites = rt_baseline(built)
     hold driver = target_native_tool("sxbuild")
     hold tool = target_native_tool("sxtargets_test")
     give target_run("./tools/sxtargets_test --without-make", name)

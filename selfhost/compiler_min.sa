@@ -758,7 +758,7 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                 kind = sxeenvlookup(env, 4, name, "=")
                 when len(kind) == 0 { kind = sxelookup(returns, name, "=") }
                 when len(kind) == 0 {
-                  give sxerecord(i, "e", "call has no checked return signature")
+                  give sxerecord(i, "e", concat("unknown function ", concat(name, ": call has no checked return signature")))
                 }
                 hold parameters = sxeenvlookup(env, 5, name, "=")
                 when len(parameters) == 0 { parameters = sxelookup(signatures, name, "=") }
@@ -4660,7 +4660,11 @@ while fsi < n {
               }
               when seed_profile == 1 && fshave == 1 {
                 perr = 1
+                when seed_profile == 1 {
+                  permsg = concat("duplicate function name: ", fsname)
+                } otherwise {
                 permsg = concat("duplicate function definition: ", fsname)
+                }
               }
               when fshave == 0 {
                 hold fsret = concat(fsret, fsname)

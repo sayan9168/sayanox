@@ -12,6 +12,22 @@
 
 make fail(code: num, msg: str) -> num {
   hold w = write_file("/dev/stderr", concat(concat("sxbuild: ", msg), "\n"))
+  // Keep the failing target visible through the checks API even when the
+  // runner's downloadable console log is unavailable. Escape annotation data.
+  when string_eq(getenv("GITHUB_ACTIONS"), "true") {
+    hold escaped = ""
+    hold at = 0
+    while at < len(msg) {
+      hold c = index(msg, at)
+      when c == 37 { escaped = concat(escaped, "%25") } otherwise {
+        when c == 10 { escaped = concat(escaped, "%0A") } otherwise {
+          when c == 13 { escaped = concat(escaped, "%0D") } otherwise { escaped = concat(escaped, chr(c)) }
+        }
+      }
+      at = at + 1
+    }
+    show concat("::error title=Sayanox target failure::", escaped)
+  }
   hold stop = exit(code)
   give 0
 }

@@ -187,6 +187,9 @@ make cmd_target(name: str, built: list) -> num {
   when string_eq(name, "all-sayanox") == 1 { give cmd_all_sayanox() }
   when xa_known(name) == 1 {
     hold deps = target_mask_ready(3, built)
+    // Evidence gates invoke the driver themselves; root sx alone is not
+    // sufficient on a fresh CI checkout.
+    hold driver = target_native_tool("sxbuild")
     when string_eq(name, "test-trust-anchor") == 1 { hold auditor = target_native_tool("sxaudit") }
     give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
   }
@@ -420,9 +423,7 @@ make cmd_target(name: str, built: list) -> num {
     hold gate = target_run("./tools/sxgates test-sxfmt", "test-sxfmt")
   }
   when string_eq(name, "test-sxfmt") == 0 {
-    when path_kind(gen2_bin()) != 1 {
-      hold e = fail(1, "gen2 missing; run sxbuild bootstrap selfhost first")
-    }
+    hold prerequisites = target_mask_ready(2, built)
     when string_eq(name, "test-migrated") == 1 {
       hold a = target_run("./tools/sxgates test-reassign", "test-reassign")
       hold b = target_run("./tools/sxgates test-while", "test-while")
