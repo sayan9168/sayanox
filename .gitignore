@@ -99,3 +99,6 @@ tools/sxdiag.c
 /native-bootstrap-reconstruction.log
 
 /selfhost/native_c_emitter
+
+# Local bootstrap diagnostics
+/bootstrap-work.log
