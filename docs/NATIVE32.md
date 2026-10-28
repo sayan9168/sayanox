@@ -12,7 +12,7 @@ executed by the pure-Sayanox user-mode emulator `tools/sxisaexec.sa` on the
 x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
 
 ```sh
-make tools/native32
+./sx target native32 sxisaexec
 ./tools/native32 selfhost/native32_tests/strings.sa /tmp/strings.rv64 riscv64
 ./tools/sxisaexec --arch riscv64 --out /tmp/strings.out /tmp/strings.rv64
 ```
@@ -57,9 +57,9 @@ this compiler does not yet implement floating-point expression semantics.
 
 ## Verification
 
-`make test-native32`, `make test-native-arm64`, and
-`make test-native-riscv64` check image formats, deterministic output, data
-layout and the documented refusal boundary. `make test-sxisaexec` runs the
+`./sx target test-native32`, `./sx target test-native-arm64`, and
+`./sx target test-native-riscv64` check image formats, deterministic output, data
+layout and the documented refusal boundary. `./sx target test-sxisaexec` runs the
 AArch64 and RV64 output, and includes a six-way parity fixture for static string declaration,
 reassignment, positive and negative string indexing (including arithmetic
 indices and indexed concatenation results), `concat` allocation and

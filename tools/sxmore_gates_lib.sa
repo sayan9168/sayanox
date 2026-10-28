@@ -1,6 +1,7 @@
 // Second regression migration: source-owned fixtures, branches and assertions.
 use "tools/sxpattern_lib.sa"
 use "tools/sxmore_targets_lib.sa"
+use "tools/sxseed_metadata_lib.sa"
 
 make mp_test_push_stmt() -> num {
   hold p0 = gl_assert_eq_num(path_kind("selfhost/gen2"), 1, "compiler present: selfhost/gen2")
@@ -1172,6 +1173,7 @@ make mp_test_seed_collector() -> num {
   hold p13 = pg_capture("./selfhost/seed_tests/sgc_drop_ms", "selfhost/seed_tests/sgc_drop_ms.out")
   hold p14 = gl_assert_files_eq("selfhost/seed_tests/sgc_drop_ms.out", "selfhost/seed_tests/sgc_drop_native.out", "test-seed-collector parity")
   }
+  hold metadata = sgm_test_metadata()
   give 0
 }
 

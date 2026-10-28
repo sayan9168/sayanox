@@ -3,6 +3,48 @@
 Sayanox has two runtimes, and which one a program gets depends on which
 backend compiles it.
 
+## Current seed profile (2026-10-28)
+
+The native-origin seed is maintained in
+`selfhost/seed/seed_runtime_lib.sa`. It traces **strings, list headers and
+backing buffers**, including transitive non-string payload edges. Payloads do
+not move; aliases are not released on assignment. The dated seed measurements
+below describe older implementations, not the current list lifetime policy,
+thresholds or sanitizer scanning mechanism. Current stack scanning skips ASan
+poisoned words rather than disabling instrumentation on the entire scanner.
+
+After a complete sweep, registry buckets are now compacted when occupancy is
+below one quarter. The power-of-two bucket table has a 1,024-entry floor.
+Collector scratch (sorted allocation pointers and mark bytes) also shrinks
+below one-quarter occupancy, to `max(live allocations, 1024)` entries. Empty
+collection avoids passing NULL scratch to `qsort`/`memset`. No live object is
+relocated and no trim runs while marking or sweeping uses the scratch arrays.
+
+Compaction is **best effort**: a failed bucket allocation leaves the old table
+and chains intact. A failed pointer-array realloc retains both old capacities;
+if the pointer array shrinks but the bitmap realloc fails, the common capacity
+is reduced to the smaller array while the larger old bitmap remains valid.
+Later growth can retry both allocations. Metadata, fragmentation, genuinely
+live heaps and conservative false roots still consume memory. This is not
+precise GC, a guaranteed RSS decrease, or bounded memory for arbitrary programs.
+
+`./sx target test-seed-collector` now also builds a compatibility-C probe from
+the **actual seed-emitted runtime**, with the probe maintained as Sayanox source
+in `tools/sxseed_metadata_lib.sa`. It grows over 8,192 live allocations, drops
+most, and asserts bucket/scratch compaction, live alias/cycle identity, exact
+registry membership, foreign/interior pointer rejection, and regrowth. Four
+cases exercise ordinary compaction and injected bucket, pointer-array and
+bitmap allocation failures, including growth after the partial bitmap failure.
+An initially empty collection is checked separately. The existing 64 MiB
+seed/gen2 churn and native parity fixtures remain required. The optional
+`./sx target test-seed-sanitize` includes this probe as its sixth ASan/UBSan
+fixture; **leak detection remains disabled**, not a leak-free claim.
+
+Focused collector/sanitizer gates and new guarded `./sx ci` passed locally.
+Final acceptance additionally requires both new remote jobs to succeed; follow
+[PR #42 checks and completion evidence](https://github.com/sayan9168/sayanox/pull/42).
+Earlier release success is not acceptance for this change.
+
 ## 1. gen2-compiled programs: conservative mark & sweep (the default)
 
 Programs compiled by `selfhost/gen2` — and by `gen1_min`, which emits the same
