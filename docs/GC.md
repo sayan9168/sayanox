@@ -40,7 +40,10 @@ seed/gen2 churn and native parity fixtures remain required. The optional
 `./sx target test-seed-sanitize` includes this probe as its sixth ASan/UBSan
 fixture; **leak detection remains disabled**, not a leak-free claim.
 
-New guarded CI acceptance is **PENDING** while these changes are validated.
+Focused collector/sanitizer gates and new guarded `./sx ci` passed locally.
+Final acceptance additionally requires both new remote jobs to succeed; follow
+[PR #42 checks and completion evidence](https://github.com/sayan9168/sayanox/pull/42).
+Earlier release success is not acceptance for this change.
 
 ## 1. gen2-compiled programs: conservative mark & sweep (the default)
 

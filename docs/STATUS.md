@@ -1,15 +1,15 @@
 # Status
 
-**2026-10-28 — seed metadata compaction: new acceptance PENDING.**
+**2026-10-28 — seed metadata compaction; local CI passed, remote acceptance tracked separately.**
 The baseline already ports all 236 original targets and traces/frees seed list
 headers and buffers. This increment adds best-effort post-sweep registry and
 scratch compaction without moving payloads, plus failure-injection/regrowth
 checks in the existing collector gate and optional sanitizer suite. No precise
-or bounded-heap guarantee is claimed. `./sx migration` currently prints
-`Sayanox driver target coverage: 236 / 236`; that inventory does not substitute
-for running CI. Native entry was rebuilt from Sayanox and `./sx verify-entry`
-passed. Focused `test-seed-collector` and `test-seed-sanitize` passed (six
-ASan/UBSan fixtures, leak detection OFF). Actual metadata output:
+or bounded-heap guarantee is claimed. Native entry was rebuilt from Sayanox;
+`./sx verify-entry` and checksum verification passed.
+
+Focused `test-seed-collector` and `test-seed-sanitize` passed (six ASan/UBSan
+fixtures, leak detection OFF). Actual metadata output:
 
 ```text
 metadata buckets: 16384 -> 1024
@@ -17,11 +17,32 @@ metadata scratch: 8193 -> 1024
 metadata-shrink-ok: 4 cases; aliases, failures, regrowth, empty collection
 ```
 
-Both guarded workflow-equivalent chains are running. Doctor passed;
-true-selfhost/gen3/native-test and final `./sx ci` acceptance for this change
-remain **PENDING**. The first local guard setup lacked `RUNNER_TEMP` and
-refused to arm; the running validation uses a real runner directory,
-`GITHUB_PATH` and the poisoned-tool PATH. Prior success is not new evidence.
+New guarded `./sx ci` **exited 0**, with a fresh gen3/gen4 build. Selected actual
+output (inventory alone is not an acceptance substitute):
+
+```text
+Sayanox driver target coverage: 236 / 236
+[OK] sxbuild doctor passed
+=== TRUE-SELFHOST-MIN-OK ===
+[OK] gen3 == gen4 fixed point
+=== GEN3-OK ===
+=== NATIVE-TEST-OK ===
+[OK] complete original CI acceptance chain
+```
+
+Fresh gen3/gen4 SHA-256:
+`68cd82bbf5f78129f359531853bdbd320edba422f47ca9a63faedb8916f1d0a3`.
+The four broader-language probes passed on both gen2 and gen3; native parity
+also checked 13 positive fixtures and 23 refusals. These are not exhaustive
+full-language conformance.
+
+At this source checkpoint the separate migrated workflow-equivalent chain is
+still running. **Final guarded acceptance requires both new remote jobs to
+succeed**, not just the local CI exit or an older release. Follow the actual
+checks and completion transcript on [PR #42](https://github.com/sayan9168/sayanox/pull/42).
+The first local guard setup lacked `RUNNER_TEMP` and refused to arm; the
+successful CI uses a real runner directory, `GITHUB_PATH` and poisoned-tool
+PATH. No workflow gates were weakened and no interpreter dependency added.
 Full-language self-host remains fail-closed; ARM/RV, LSP, stdlib/packages,
 independent trust, module identity and platform limits have not been promoted.
 See [current GC policy](GC.md#current-seed-profile-2026-10-28).
