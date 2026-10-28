@@ -474,18 +474,65 @@ make gxscan(text: str) -> str {
   }
   give out
 }
+// Find the end of a malformed generic head without consuming a following
+// statement. This diagnostic-only recovery is bounded; the walker remains
+// responsible for longer or incomplete syntax. Numeric '<' is not a head.
+make gxerrorhead(text: str, at: num) -> num {
+  hold p = at
+  hold size = len(text)
+  hold level = 0
+  while p < size && p - at < 4096 {
+    p = gxskip(text, p)
+    when p < size && p - at < 4096 {
+      hold c = sx_index(text, p)
+      when c == 123 || c == 125 || c == 59 || c == 34 {
+        give 0
+      }
+      when c == 60 { level = level + 1 }
+      when c == 62 {
+        level = level - 1
+        when level == 0 {
+          give p + 1
+        }
+      }
+      p = p + 1
+    }
+  }
+  give 0
+}
 // One pass: each instantiation `Box<num> {` becomes `Box__n {`. Gives the
-// mangled structs as sdefs records in first-use order, chr(1), then the
+// mangled structs as sdefs records in first-use order, chr(1), rewritten
+// source, chr(1), expected generic field kinds, chr(1), then a head error.
 make gxpass(text: str, gsdefs: str) -> str {
   hold cached_size_text = len(text)
   hold defs = ""
   hold names = "|"
+  hold expected_types = "|"
+  hold generic_error = ""
+  hold previous = ""
+  hold condition = 0
+  hold brace_depth = 0
+  hold generic_depth = 0
+  hold generic_pending = 0
   hold out = ""
   hold n = cached_size_text
   hold i = 0
   hold cp = 0
   while i < n {
     hold c = sx_index(text, i)
+    when c == 123 {
+      condition = 0
+      brace_depth = brace_depth + 1
+      when generic_pending == 1 {
+        generic_depth = brace_depth
+        generic_pending = 0
+      }
+    }
+    when c == 125 {
+      condition = 0
+      when brace_depth == generic_depth { generic_depth = 0 }
+      brace_depth = brace_depth - 1
+    }
     when c == 34 {
       i = i + 1
       while i < n && sx_index(text, i) != 34 {
@@ -521,9 +568,26 @@ make gxpass(text: str, gsdefs: str) -> str {
             j = j + 1
           }
           hold hit = 0
+          hold nm = sxeslice(text, i, e)
+          when string_eq(nm, "when") || string_eq(nm, "while") { condition = 1 }
+          // Uninstantiated generic function bodies are checked on demand by
+          // the walker. A bound T there is not an escaped type argument.
+          when string_eq(previous, "make") && j < n {
+            when sx_index(text, j) == 60 { generic_pending = 1 }
+          }
+          hold rec = ""
+          when j < n && (sx_index(text, j) == 60 || sx_index(text, j) == 123) {
+            rec = sxelookup(gsdefs, nm, ":")
+          }
+          // A bare template is not a concrete struct. Ignore declarations;
+          // inspect only this head, preserving the walker's existing errors.
+          when len(rec) > 0 && string_eq(previous, "struct") == 0 && generic_depth == 0 && generic_pending == 0 && len(generic_error) == 0 && j < n {
+            when sx_index(text, j) == 123 && condition == 0 {
+              hold info = sxseed_generic_info(sxeslice(text, i, j + 1), gsdefs)
+              generic_error = sxesegment(info, 0)
+            }
+          }
           when j < n && sx_index(text, j) == 60 {
-            hold nm = sxeslice(text, i, e)
-            hold rec = sxelookup(gsdefs, nm, ":")
             when len(rec) > 0 {
               hold ar = gxargs(text, j, gsdefs, 0)
               hold args = sxesegment(ar, 1)
@@ -533,12 +597,29 @@ make gxpass(text: str, gsdefs: str) -> str {
                 acount = sx_index(acs, 0) - 48
               }
               hold p = sxepos(ar)
+              when (len(args) == 0 || acount != sx_index(rec, 0) - 48) && string_eq(previous, "struct") == 0 && generic_depth == 0 && generic_pending == 0 && len(generic_error) == 0 {
+                hold end = p
+                when len(args) == 0 { end = gxerrorhead(text, j) }
+                when end > i {
+                  hold after = gxskip(text, end)
+                  when after < n && sx_index(text, after) == 123 {
+                    hold info = sxseed_generic_info(sxeslice(text, i, end), gsdefs)
+                    generic_error = sxesegment(info, 0)
+                  }
+                }
+              }
               when len(args) > 0 && acount == sx_index(rec, 0) - 48 {
                 hold after = gxskip(text, p)
                 when after < n && sx_index(text, after) == 123 {
                   hold mn = concat(nm, concat("__", args))
                   out = concat(out, sxeslice(text, cp, i))
                   out = concat(out, mn)
+                  // Inspect only this already-parsed head, not the whole source.
+                  // The bounded scan also records nested type arguments.
+                  when tbl_has(names, mn) == 0 {
+                    hold info = sxseed_generic_info(sxeslice(text, i, p), gsdefs)
+                    expected_types = concat(expected_types, sxesegment(info, 1))
+                  }
                   cp = p
                   i = p
                   hit = 1
@@ -551,6 +632,7 @@ make gxpass(text: str, gsdefs: str) -> str {
               }
             }
           }
+          previous = nm
           when hit == 0 {
             i = e
           }
@@ -561,7 +643,7 @@ make gxpass(text: str, gsdefs: str) -> str {
     }
   }
   out = concat(out, sxeslice(text, cp, n))
-  give concat(concat(defs, chr(1)), out)
+  give concat(concat(defs, chr(1)), concat(out, concat(chr(1), concat(expected_types, concat(chr(1), generic_error)))))
 }
 // Identify calls with list/index syntax, without treating quoted '[' as code.
 make sxehaslist(text: str, open: num) -> num {
@@ -2957,6 +3039,10 @@ when len(gsdefs) > 1 {
   hold gxrec = gxpass(lgout, gsdefs)
   hold gxsdefs = sxesegment(gxrec, 0)
   hold source = sxesegment(gxrec, 1)
+  when seed_profile == 0 {
+    seed_generic_types = sxesegment(gxrec, 2)
+    seed_generic_error = sxesegment(gxrec, 3)
+  }
 }
 hold n = len(source)
 hold pos = 0
@@ -8942,7 +9028,7 @@ while running == 1 {
                   }
                   hold fnamelen = len(fname)
                   when (fnamelen > 0) && (isnest == 0) {
-                    when seed_profile == 1 && len(seed_generic_error) == 0 {
+                    when len(seed_generic_error) == 0 {
                       seed_generic_error = sxseed_generic_literal(seed_generic_types, nm2, fname, ety, etyname)
                     }
                     when fprv == -1 {
@@ -9175,7 +9261,7 @@ while running == 1 {
                   }
                 }
                 when seed_profile == 1 { hold fname = sxseed_pending_field(lelems) }
-                when seed_profile == 1 && len(seed_generic_error) == 0 {
+                when len(seed_generic_error) == 0 {
                   seed_generic_error = sxseed_generic_literal(seed_generic_types, nm2, fname, 2, etyname)
                 }
                 // record |nm2.fname=2:etyname| (the first literal wins)
@@ -20252,7 +20338,7 @@ when exdeep == 1 {
   hold exerr = concat(exerr, nl)
   show "min: use nesting deeper than 8"
 }
-when seed_profile == 1 && len(seed_generic_error) > 0 {
+when len(seed_generic_error) > 0 {
   exerr = concat(concat("#error sayanox-min: ", concat(seed_generic_error, nl)), exerr)
 }
 when exbad == 1 {

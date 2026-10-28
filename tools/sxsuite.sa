@@ -503,13 +503,17 @@ make has_generic_refusal_diag(msg: str) -> num {
   give 0
 }
 
-make check_generic_type_limit(dir: str, name: str, ty: str, val: str) -> num {
+make check_generic_type_limit(dir: str, name: str, ty: str, val: str, want: str) -> num {
   hold q = chr(34)
   hold nl = chr(10)
   hold cc = cc_bin()
   hold s = concat("struct Box<T> { v }", nl)
   s = concat(s, concat("struct Pair<A, B> { a, b }", nl))
   s = concat(s, concat("struct Pt { x }", nl))
+  // A preceding generic function must not hide later escaped arguments.
+  s = concat(s, concat("make unused<T>(value: T) -> T {", nl))
+  s = concat(s, concat("  give value", nl))
+  s = concat(s, concat("}", nl))
   s = concat(s, concat("hold good = Box<num> { 7 }", nl))
   s = concat(s, concat("hold text = Box<str> { ", concat(q, concat("safe", concat(q, concat(" }", nl))))))
   s = concat(s, concat("hold nest = Box<Box<num>> { good }", nl))
@@ -530,14 +534,21 @@ make check_generic_type_limit(dir: str, name: str, ty: str, val: str) -> num {
     hold fs2 = fail_suite(1, concat("seed missing diagnostic on ", name))
   }
 
-  hold g2_c = concat(dir, concat("/", concat(name, "-gen2.c")))
-  hold g2_o = concat(dir, concat("/", concat(name, "-gen2.o")))
-  hold rg2 = run_command(concat("./selfhost/gen2 ", concat(sh_q(src), concat(" ", concat(sh_q(g2_c), " >/dev/null 2>&1")))))
-  when contains(read_file(g2_c), "#error sayanox-min:") != 1 {
-    hold fg1 = fail_suite(1, concat("gen2 missing #error on ", name))
-  }
-  when run_command(concat(cc, concat(" -c ", concat(sh_q(g2_c), concat(" -o ", concat(sh_q(g2_o), " >/dev/null 2>&1")))))) == 0 {
-    hold fg2 = fail_suite(1, concat("gen2 C compiled on refused ", name))
+  hold comps = active_c_compilers("GENERIC_LITERAL_COMPILERS")
+  hold ci = 0
+  while ci < len(comps) {
+    hold cname = compiler_name(comps[ci])
+    hold stem = concat(dir, concat("/", concat(name, concat("-", cname))))
+    hold cpath = concat(stem, ".c")
+    hold emit = run_command(concat("./selfhost/", concat(cname, concat(" ", concat(sh_q(src), concat(" ", concat(sh_q(cpath), " >/dev/null 2>&1")))))))
+    hold text = read_file(cpath)
+    when has_line_prefix(text, "#error sayanox-min:") != 1 || contains(text, concat("#error sayanox-min: ", want)) != 1 {
+      hold fg1 = fail_suite(1, concat(cname, concat(" missing precise type-argument diagnostic on ", name)))
+    }
+    when run_command(concat(cc, concat(" -c ", concat(sh_q(cpath), concat(" -o ", concat(sh_q(concat(stem, ".o")), " >/dev/null 2>&1")))))) == 0 {
+      hold fg2 = fail_suite(1, concat(cname, concat(" C compiled on refused ", name)))
+    }
+    ci = ci + 1
   }
 
   hold nat_b = concat(dir, concat("/", concat(name, "-nat")))
@@ -559,6 +570,16 @@ make check_generic_lit_limit(dir: str, name: str, ty: str, val: str, want: str) 
   s = concat(s, concat("hold text = Box<str> { ", concat(q, concat("safe", concat(q, concat(" }", nl))))))
   s = concat(s, concat("hold bad = ", concat(ty, concat(" { ", concat(val, concat(" }", nl))))))
   s = concat(s, concat("show good.v", nl))
+  give check_generic_literal_source(dir, name, s, want)
+}
+
+// Shared refusal contract: seed/native must reject; C emitters must produce
+// the precise semantic #error and the result must not compile as C.
+make check_generic_literal_source(dir: str, name: str, s: str, want: str) -> num {
+  give check_generic_literal_diagnostics(dir, name, s, want, want)
+}
+
+make check_generic_literal_diagnostics(dir: str, name: str, s: str, want: str, native_want: str) -> num {
   hold src = concat(dir, concat("/", concat(name, ".sa")))
   hold mw = must_write(src, s)
 
@@ -571,13 +592,97 @@ make check_generic_lit_limit(dir: str, name: str, ty: str, val: str, want: str) 
     hold fs2 = fail_suite(1, concat("seed wrong diagnostic on ", name))
   }
 
+  hold comps = active_c_compilers("GENERIC_LITERAL_COMPILERS")
+  hold ci = 0
+  while ci < len(comps) {
+    hold cname = compiler_name(comps[ci])
+    hold stem = concat(dir, concat("/", concat(name, concat("-", cname))))
+    hold cpath = concat(stem, ".c")
+    hold cmd = concat("./selfhost/", concat(cname, concat(" ", concat(sh_q(src), concat(" ", concat(sh_q(cpath), " >/dev/null 2>&1"))))))
+    hold emitted = run_command(cmd)
+    hold text = read_file(cpath)
+    when has_line_prefix(text, "#error sayanox-min:") != 1 || contains(text, want) != 1 {
+      hold fc = fail_suite(1, concat(cname, concat(" missing literal-agreement diagnostic on ", name)))
+    }
+    hold cc_cmd = concat(cc_bin(), concat(" -c ", concat(sh_q(cpath), concat(" -o ", concat(sh_q(concat(stem, ".o")), " >/dev/null 2>&1")))))
+    when run_command(cc_cmd) == 0 {
+      hold fa = fail_suite(1, concat(cname, concat(" emitted compilable C for literal mismatch ", name)))
+    }
+    ci = ci + 1
+  }
+
   hold nat_b = concat(dir, concat("/", concat(name, "-nat")))
   hold nat_err = concat(dir, concat("/", concat(name, "-nat.err")))
   when run_command(concat("./selfhost/native_aot ", concat(sh_q(src), concat(" ", concat(sh_q(nat_b), concat(" > ", concat(sh_q(nat_err), " 2>&1"))))))) == 0 {
     hold fn1 = fail_suite(1, concat("native_aot accepted literal mismatch ", name))
   }
-  when contains(read_file(nat_err), want) != 1 {
+  when contains(read_file(nat_err), native_want) != 1 {
     hold fn2 = fail_suite(1, concat("native_aot wrong diagnostic on ", name))
+  }
+  give 0
+}
+
+// Positive companion: strict C compilation at both optimisation levels and
+// byte-identical output, including unchanged unequal-field-count inference.
+make check_generic_literal_positive(dir: str) -> num {
+  hold src = "selfhost/generic_struct_first_literal.sa"
+  hold want = "selfhost/generic_struct_first_literal.want"
+  hold comps = active_c_compilers("GENERIC_LITERAL_COMPILERS")
+  comps = push(comps, 0)
+  hold ci = 0
+  while ci < len(comps) {
+    hold cid = comps[ci]
+    hold stem = concat(dir, concat("/valid-", istr(cid)))
+    hold cpath = concat(stem, ".c")
+    hold cmd = concat("./selfhost/seed/sxc_seed_min ", concat(sh_q(src), concat(" > ", sh_q(cpath))))
+    when cid != 0 {
+      cmd = concat("./selfhost/", concat(compiler_name(cid), concat(" ", concat(sh_q(src), concat(" ", sh_q(cpath))))))
+    }
+    when run_command(cmd) != 0 { hold fe = fail_suite(1, "valid first-literal fixture emission failed") }
+    hold oi = 0
+    while oi < 2 {
+      hold opt = "0"
+      when oi == 1 { opt = "2" }
+      hold exe = concat(stem, concat("-O", opt))
+      hold flags = concat(" -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -O", opt)
+      hold cc_cmd = concat(cc_bin(), concat(flags, concat(" -o ", concat(sh_q(exe), concat(" ", sh_q(cpath))))))
+      when run_command(cc_cmd) != 0 { hold fc = fail_suite(1, "valid first-literal fixture C compilation failed") }
+      when run_command(concat(sh_q(exe), concat(" > ", sh_q(concat(exe, ".out"))))) != 0 { hold fr = fail_suite(1, "valid first-literal fixture runtime failed") }
+      hold same = assert_files_identical(want, concat(exe, ".out"), "valid first-literal C output")
+      oi = oi + 1
+    }
+    ci = ci + 1
+  }
+  hold exe = concat(dir, "/valid-native")
+  when run_command(concat("./selfhost/native_aot ", concat(sh_q(src), concat(" ", sh_q(exe))))) != 0 { hold fn = fail_suite(1, "valid first-literal native compilation failed") }
+  when run_command(concat(sh_q(exe), concat(" > ", sh_q(concat(exe, ".out"))))) != 0 { hold fnr = fail_suite(1, "valid first-literal native runtime failed") }
+  give assert_files_identical(want, concat(exe, ".out"), "valid first-literal native output")
+}
+
+// Preserve default-profile expression bindings that share a template's name.
+// This is a C-profile regression, not an expansion of the seed/native slice.
+make check_generic_head_conditions(dir: str) -> num {
+  hold comps = active_c_compilers("GENERIC_LITERAL_COMPILERS")
+  hold ci = 0
+  while ci < len(comps) {
+    hold cname = compiler_name(comps[ci])
+    hold stem = concat(dir, concat("/conditions-", cname))
+    hold cpath = concat(stem, ".c")
+    hold emit = concat("./selfhost/", concat(cname, concat(" selfhost/generic_head_conditions.sa ", sh_q(cpath))))
+    when run_command(emit) != 0 { hold fe = fail_suite(1, "generic-head condition emission failed") }
+    hold oi = 0
+    while oi < 2 {
+      hold opt = "0"
+      when oi == 1 { opt = "2" }
+      hold exe = concat(stem, concat("-O", opt))
+      hold flags = concat(" -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -O", opt)
+      hold compile = concat(cc_bin(), concat(flags, concat(" -o ", concat(sh_q(exe), concat(" ", sh_q(cpath))))))
+      when run_command(compile) != 0 { hold fc = fail_suite(1, "generic-head recovery mistook an expression for a literal") }
+      when run_command(concat(sh_q(exe), concat(" > ", sh_q(concat(exe, ".out"))))) != 0 { hold fr = fail_suite(1, "generic-head condition runtime failed") }
+      hold same = assert_files_identical("selfhost/generic_head_conditions.want", concat(exe, ".out"), "generic-head expression regression")
+      oi = oi + 1
+    }
+    ci = ci + 1
   }
   give 0
 }
@@ -586,18 +691,38 @@ make suite_generic_struct_limits(base: str) -> num {
   hold q = chr(34)
   hold dir = concat(base, "/generic_struct_limits")
   hold z0 = mk_clean_dir(dir)
-  hold c1 = check_generic_type_limit(dir, "concrete-struct", "Box<Pt>", "7")
-  hold c2 = check_generic_type_limit(dir, "concrete-struct-second", "Pair<num, Pt>", "1, 2")
-  hold c3 = check_generic_type_limit(dir, "unknown-name", "Box<Nope>", "7")
-  hold c4 = check_generic_type_limit(dir, "escaped-parameter", "Box<T>", "7")
-  hold c5 = check_generic_type_limit(dir, "too-many", "Box<num, str>", concat("7, ", concat(q, concat("x", q))))
-  hold c6 = check_generic_type_limit(dir, "too-few", "Pair<num>", concat("1, ", concat(q, concat("x", q))))
-  hold c7 = check_generic_type_limit(dir, "bare-template", "Box", "7")
+  hold c1 = check_generic_type_limit(dir, "concrete-struct", "Box<Pt>", "7", "a type argument must be num, str, list or an instantiation of a generic struct (got 'Pt')")
+  hold c2 = check_generic_type_limit(dir, "concrete-struct-second", "Pair<num, Pt>", "1, 2", "a type argument must be num, str, list or an instantiation of a generic struct (got 'Pt')")
+  hold c3 = check_generic_type_limit(dir, "unknown-name", "Box<Nope>", "7", "a type argument must be num, str, list or an instantiation of a generic struct (got 'Nope')")
+  hold c4 = check_generic_type_limit(dir, "escaped-parameter", "Box<T>", "7", "a type argument must be num, str, list or an instantiation of a generic struct (got 'T')")
+  hold c5 = check_generic_type_limit(dir, "too-many", "Box<num, str>", concat("7, ", concat(q, concat("x", q))), "Box takes 1 type argument, got 2")
+  hold c6 = check_generic_type_limit(dir, "too-few", "Pair<num>", concat("1, ", concat(q, concat("x", q))), "Pair takes 2 type arguments, got 1")
+  hold c7 = check_generic_type_limit(dir, "bare-template", "Box", "7", "Box is a generic struct: write Box<num> { ... }")
+
+  hold c8 = check_generic_type_limit(dir, "bare-pair", "Pair", "1, 2", "Pair is a generic struct: write Pair<num,num> { ... }")
+  hold c9 = check_generic_type_limit(dir, "too-many-pair", "Pair<num, str, list>", "1, 2, 3", "Pair takes 2 type arguments, got 3")
 
   hold a1 = check_generic_lit_limit(dir, "nested-gets-number", "Box<Box<num>>", "7", "its type argument says so")
   hold a2 = check_generic_lit_limit(dir, "nested-wrong-struct", "Box<Box<num>>", "text", "the literal gives a Box__s")
   hold a3 = check_generic_lit_limit(dir, "list-gets-number", "Box<list>", "7", "its type argument says so")
-  show "[OK] sxsuite generic_struct_limits: 7 type-arg refusals (seed/gen2/native) + 3 literal-agreement refusals (seed/native)"
+  // No preceding good instance: these previously escaped gen2's inferred
+  // layout conflict check. Exercise every primitive/list kind direction.
+  hold pre = concat("struct Box<T> { v }", chr(10))
+  hold quoted = concat(q, concat("seven", q))
+  hold f1 = check_generic_literal_source(dir, "first-num-str", concat(pre, concat("hold bad = Box<num> { ", concat(quoted, " }\n"))), "its type argument says so")
+  hold f2 = check_generic_literal_source(dir, "first-str-num", concat(pre, "hold bad = Box<str> { 7 }\n"), "its type argument says so")
+  hold f3 = check_generic_literal_source(dir, "first-list-num", concat(pre, "hold bad = Box<list> { 7 }\n"), "its type argument says so")
+  hold f4 = check_generic_literal_source(dir, "first-num-list", concat(pre, "hold bad = Box<num> { [7] }\n"), "its type argument says so")
+  hold f5 = check_generic_literal_source(dir, "first-str-list", concat(pre, "hold bad = Box<str> { [7] }\n"), "its type argument says so")
+  hold f6 = check_generic_literal_source(dir, "first-list-str", concat(pre, concat("hold bad = Box<list> { ", concat(quoted, " }\n"))), "its type argument says so")
+  hold f7 = check_generic_literal_source(dir, "first-nested-direct", concat(pre, concat("hold text = Box<str> { ", concat(quoted, concat(" }\nhold bad = Box<Box<num>> { Box<str> { ", concat(quoted, " } }\n"))))), "the literal gives a Box__s")
+  hold f8 = check_generic_literal_source(dir, "first-pair-second", "struct Pair<A, B> { a b }\nhold bad = Pair<num, str> { 7, 8 }\n", "its type argument says so")
+  hold f9 = check_generic_literal_source(dir, "first-nested-inner", concat(pre, concat("hold bad = Box<Box<num>> { Box<num> { ", concat(quoted, " } }\n"))), "its type argument says so")
+  hold f10 = check_generic_literal_diagnostics(dir, "first-function-local", concat(pre, concat("make bad() -> num {\nhold local = Box<num> { ", concat(quoted, " }\ngive 0\n}\nshow bad()\n"))), "its type argument says so", "struct field 'Box__n.v' is used with two different types")
+  hold f11 = check_generic_literal_source(dir, "first-pair-nested-second", concat(pre, concat("struct Pair<A, B> { a b }\nhold text = Box<str> { ", concat(quoted, concat(" }\nhold bad = Pair<num, Box<num>> { 7, Box<str> { ", concat(quoted, " } }\n"))))), "the literal gives a Box__s")
+  hold conditions = check_generic_head_conditions(dir)
+  hold positive = check_generic_literal_positive(dir)
+  show "[OK] sxsuite generic_struct_limits: 9 precise type-arg + 14 literal-agreement refusals and positive O0/O2 parity (seed/gen2/native; gen3 when available)"
   give 0
 }
 

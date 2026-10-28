@@ -1,6 +1,7 @@
 # All maintained implementation source in Sayanox
 
-Status (2026-10-27): **source retirement verified; final guarded acceptance pending.**
+Status (2026-10-27): **source retirement and guarded migration acceptance passed**
+([PR #40 CI run](https://github.com/sayan9168/sayanox/actions/runs/40496211582)).
 
 The audit covers all maintained implementation source with an explicit binary trust input and retained C-output compatibility.
 
@@ -66,5 +67,6 @@ boundary when no reviewed exhaustive specification exists.
 
 The historical C exception (Phase E option 2) is retired. Tools such as
 `tools/emit_to_ir.sa` remain genuine Sayanox implementations, not aliases for
-removed host scripts. The complete guarded acceptance run must finish before
-this checkpoint is described as final migration acceptance.
+removed host scripts. The linked PR #40 run passed the complete original and
+migrated acceptance jobs; that is migration evidence, not a claim that every
+remaining language or platform feature is implemented.

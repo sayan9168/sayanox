@@ -1,13 +1,15 @@
 # Incremental types: implementation constraints
 
-**Current contract (2026-10-22):** a generic struct type argument is `num`,
+**Current contract (2026-10-28):** a generic struct type argument is `num`,
 `str`, `list`, or an instantiation of another generic struct. `Box<Box<num>>`
 and `Box<list>` are implemented on seed-min, gen2 and native and gated by
-`make test-generic-structs-nested`; a *concrete* struct name, an unknown name,
+`./sx target test-generic-structs-nested`; a *concrete* struct name, an unknown name,
 an escaped type parameter and the wrong argument count stay refused on all
 three. This replaces the 2026-10-16 "scalar arguments only" decision — see
 [Nested and list type arguments](#nested-and-list-type-arguments-2026-10-22),
 which records what changed and why the earlier decision was reversed.
+First-use literal/type-argument agreement now also holds on gen2/gen3; see
+[First-use literal constraints](#first-use-literal-constraints-2026-10-27).
 Dated implementation notes below are historical where they describe generic
 structs as entirely absent or describe expansion work as still pending.
 
@@ -131,17 +133,16 @@ is good.
   identity; a concrete struct has no parameter list to substitute, so there is
   nothing a `Box<Pt>` instantiation would specialize. Pinned by
   `test-generic-struct-limits` and `test-type-refusals`.
-* **gen2's diagnostics for a bad type argument list** — it refuses, but as
-  `undefined name: Box` or `unexpected '{'` rather than naming the template.
-  The name is known to the pre-pass and not to the two walker sites that report
-  those errors, and threading it there did not fit the byte budget this
-  increment had left (see "Self-host memory ceiling" in
-  [`STATUS.md`](STATUS.md)).
-* **gen2 learns field kinds from literals** — with a *single* literal whose
-  kind contradicts the type argument (`Box<num> { "seven" }` and nothing else)
-  gen2 accepts it and gives `Box__n` a string field, where seed-min and native
-  refuse. A second literal of the other kind is refused by all three. Closing
-  this needs the field's *index* at gen2's two `ftypes` write sites.
+* ~~**gen2's diagnostics for a bad type argument list**~~ — implemented
+  **2026-10-28**: default-profile C emitters now prepend the template-specific
+  reason for wrong counts, unsupported/unknown argument names and bare
+  templates. General walker errors are retained for compatibility. See
+  [Generic-head diagnostics](#generic-head-diagnostics-2026-10-28).
+* ~~**gen2 learns field kinds from literals without checking type arguments**~~ —
+  **fixed 2026-10-27** for the existing positional generic-field contract.
+  A first bad literal now produces a precise semantic `#error`, without needing
+  a previous good literal. The existing two-value-kinds error remains present
+  for programs that also violate that rule. See the new gate coverage below.
 * **Struct-typed calls, returns and reassignment** — concrete `hold` annotations
   are portable now, but parameter/return annotations and reassignment of a
   struct value remain outside the shared slice. In particular, generic-struct
@@ -481,3 +482,118 @@ that contradicts its own type argument gives gen2's `ftypes` the literal's
 kind. Nested arguments inherit it unchanged. A *second* literal of the other
 kind is still refused by all three. `test-generic-struct-limits` asserts the
 two checking backends by name and says in its own output that gen2 diverges.
+
+### First-use literal constraints (2026-10-27)
+
+The C-output frontend used to accept a lone `Box<num> { "seven" }`, inferring
+`Box__n.v` as a string. The shared frontend now checks expected generic field
+kinds at both ordinary-value and completed-nested-literal recording sites.
+For example, gen2/gen3 emit:
+
+```text
+#error sayanox-min: Box__n field 'v' is num (its type argument says so), the literal gives str
+```
+
+`gxpass` collects expectations only from already-parsed, first-use literal
+heads, including their nested type arguments. It does not add a full-source
+scan to the default profile. Repeated instantiations reuse the metadata.
+The seed profile retains its existing full-source type-argument diagnostics.
+This preserves the existing contract: fields map positionally to arguments
+when their counts match; unequal counts keep their inferred layout. This is
+not struct field annotations or arbitrary structural typing.
+
+`./sx target test-generic-struct-limits` retains all seven type-argument
+refusals and the three earlier literal mismatches, extends the latter to the
+C emitters, and adds eleven cases: all six primitive/list mismatch directions,
+a wrong direct nested struct, bad scalar/nested second `Pair` fields, a bad
+nested inner literal and a function-local mismatch. Seed/native must return failure with
+the expected diagnostic (native retains its existing two-types wording for
+the function-local case); C emitters must output the expected semantic
+`#error` and their output must fail host C compilation. For literal and
+positive checks, gen3 participates when available (and can be required with `SXSUITE_REQUIRE_GEN3=1`).
+
+The positive companion `selfhost/generic_struct_first_literal.sa` covers
+num/str/list, `Pair`, nested literals, strings/comments resembling bad
+literals, and unchanged unequal-field-count inference. Seed and C emitters
+compile it at `-O0` and `-O2` with strict pointer/declaration warnings; their
+eight output lines must match the checked-in oracle and native output.
+Existing `test-generic-structs` and `test-generic-structs-nested` remain
+separate positive/negative parity gates.
+
+Acceptance for this increment passed on 2026-10-27:
+
+```sh
+./sx ci
+./sx target test-generic-struct-limits test-generic-structs test-generic-structs-nested test-seed-bootstrap-budget test-recovery
+SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite generic_struct_limits selfhost/seed_tests/generic-types-gen3
+./sx target all-sayanox
+./tools/sxpack verify
+./sx verify-entry
+sha256sum -c bootstrap/sx.sha256
+```
+
+The full CI chain includes gen3 == gen4. The 64 MiB C1 emission is byte-identical
+to the uncapped C output. Recovery parts and the compiler-source checksum pin
+were refreshed; the native compiler anchor and `sx` binary are unchanged.
+
+### Generic-head diagnostics (2026-10-28)
+
+The default C-output profile now carries a semantic error out of the existing
+`gxpass` alongside rewritten source and expected field metadata. It reuses the
+Sayanox diagnostic helper on only the offending head span, rather than adding
+another full-source scan. Invalid heads are recovered only through a balanced
+closing angle bracket followed by a literal brace; the recovered head must end
+within 4096 bytes. Longer or incomplete syntax retains the existing walker errors.
+A previous-word check excludes template declarations; generic function body
+diagnostics remain deferred to the existing on-demand specialization walker;
+quoted strings and comments retain the pass's existing lexical skipping.
+
+Examples of the leading generated-C diagnostics:
+
+```text
+#error sayanox-min: Box takes 1 type argument, got 2
+#error sayanox-min: Pair takes 2 type arguments, got 1
+#error sayanox-min: a type argument must be num, str, list or an instantiation of a generic struct (got 'Nope')
+#error sayanox-min: Box is a generic struct: write Box<num> { ... }
+```
+
+This supplements rather than removes the walker's existing errors. It does not
+introduce concrete-struct type arguments, field annotations, a new generic type
+representation, or a promise to diagnose every malformed syntax form precisely.
+The older measured refusal table above remains historical for gen2's wording.
+
+`tools/sxsuite.sa` keeps all seven earlier type-argument refusals and adds bare
+`Pair` and three-argument `Pair` cases. Each of these nine cases now requires a
+specific semantic `#error` on gen2 and gen3 when available, and the generated C
+must still fail compilation. Seed/native must still reject with a generic
+refusal diagnostic. The fourteen literal-agreement refusals and strict O0/O2
+positive parity companion remain unchanged. All new compiler/test logic is
+Sayanox; no host-language test script or build recipe was added.
+
+`selfhost/generic_head_conditions.sa` additionally preserves the default C
+profile's existing numeric bindings that share a template name. Less-than
+comparisons, bare conditions and compound `when`/`while` conditions must still
+compile at O0/O2 and print the four-line oracle on gen2/gen3. The fixture also
+preserves unused generic bodies with bound `T`, including nested blocks; the
+negative cases place a generic function before the bad literal to verify scope
+restoration. This is explicitly
+a C-profile regression, not a claim to expand the seed/native shared slice.
+
+Acceptance for this increment passed locally on 2026-10-28 with native guards
+armed, their bin directory first on PATH, and `ci-guard-check` at exit:
+
+```sh
+./sx ci
+./sx verify-entry
+./sx target test-native-bootstrap doctor test-driver test-remaining-stdlib test-sxpkg-pubkey test-sxpkg-transfer-hardening test-sxc-native test-sxisaexec test-sxmod-deep
+SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite generic_struct_limits selfhost/seed_tests/generic-diagnostics/gen3
+./sx target test-recovery all-sayanox
+./sx ci-guard-check
+```
+
+These cover both checked-in CI workflow acceptance chains, without changing
+workflow YAML, lowering budgets or disabling a gate. Gen3 == gen4, C1 emission
+under 64 MiB (byte-identical to uncapped output), no-Make/poison-tool integration,
+release-plan validation and offline recovery all passed. Recovery parts and
+the compiler-source checksum pin were refreshed; `sx` and the native compiler
+anchor are unchanged. This does not claim a remote CI run or a published release.

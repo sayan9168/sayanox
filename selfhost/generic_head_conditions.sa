@@ -1,0 +1,28 @@
+// Default C-profile regression: a template name may also name a numeric
+// binding. '<' comparisons and bare/compound guards are not generic literals.
+struct Box<T> { v }
+// Bound type variables in unused generic bodies keep their on-demand checking.
+make unused<T>(value: T) -> T {
+  hold boxed = Box<T> { value }
+  when 1 {
+    hold other = Box<T> { value }
+  }
+  give value
+}
+hold good = Box<num> { 7 }
+hold Box = 1
+when Box < 7 {
+  show 7
+}
+when Box {
+  show 1
+}
+when 1 && Box {
+  show 2
+}
+hold total = 0
+while 1 && Box {
+  hold total = total + 1
+  hold Box = 0
+}
+show total
