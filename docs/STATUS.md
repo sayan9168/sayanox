@@ -5,14 +5,53 @@
 > use Sayanox and explicit pinned native trust inputs. The native-origin
 > own-source C chain passes (C2 == C3), including C1 emission under 64 MiB;
 > the final frozen C seed and its audit have been deleted. All 14 seed gates,
-> GC budgets, isolated poisoned-compiler reconstruction and six actual
-> ASan/UBSan stdout comparisons pass. **Final guarded CI/driver acceptance is
-> pending**; earlier statuses below are historical, not that final evidence.
+> GC budgets, isolated poisoned-compiler reconstruction and five actual
+> ASan/UBSan stdout comparisons pass. **Guarded CI/driver migration acceptance
+> passed in [PR #40](https://github.com/sayan9168/sayanox/actions/runs/40496211582)**;
+> earlier statuses below are historical.
 > See [native bootstrap](NATIVE_BOOTSTRAP.md) and
 > [all-source migration](ALL_SAYANOX_PHASE.md).
 
 
-Last updated: **2026-10-26** (CI/CD repaired and gated; CSV row codec added to
+**2026-10-28 — precise generic-head diagnostics (Sayanox implementation).**
+Gen2/gen3 now prepend template-specific semantic errors for wrong argument
+counts, unsupported/unknown argument names and bare template literals. The
+existing walker errors remain. Diagnostic recovery is local to the head;
+ordinary numeric comparisons/guards and uninstantiated generic bodies keep
+their previous behavior. The compiler helpers stay in the pure-min source
+slice (including standalone `give` statements required by C1).
+
+Both CI workflow acceptance chains passed locally under the native runtime,
+network and build-tool guards: full `./sx ci`, then isolated native bootstrap,
+doctor/driver/no-Make integration, remaining stdlib and 64 MiB bootstrap budget,
+package hardening/public-key verification, native compiler/ISA/module tests.
+Gen3 was explicitly required for the strengthened nine type-argument and
+fourteen literal-agreement refusals, O0/O2 positive parity and C-profile
+expression/deferred-body regressions. Offline recovery, source inventory,
+entry rebuild, recovery-pack verification and checksum pins also passed.
+No gate was disabled or replaced by a smaller acceptance subset. Native trust
+binaries and workflow YAML are unchanged; this is local validation, not a new
+GitHub Actions run or release publication. See
+[generic-head diagnostics](TYPES_ROADMAP.md#generic-head-diagnostics-2026-10-28).
+
+**2026-10-27 — first-use generic literal constraints.** The shared C-output
+frontend now checks positional generic field expectations at both field-kind
+recording sites. A lone `Box<num> { "seven" }` produces a precise semantic
+`#error` on gen2/gen3; the existing two-kinds conflict error is preserved.
+The default profile gathers metadata from first-use literal heads instead of
+adding a full-source scan. Unequal field/parameter counts retain inference.
+
+Validation passed: `./sx ci` (including gen3 == gen4 and native acceptance),
+7 type-argument + 14 literal-agreement refusals with gen3 explicitly required,
+strict O0/O2 positive output parity, existing generic/nested parity gates,
+C1 emission under 64 MiB with byte-identical uncapped output, offline recovery
+and corrupt-bundle refusal, source inventory, recovery-pack verification,
+entry rebuild verification and entry/source checksum pins. Recovery parts
+and the compiler-source pin have been refreshed; neither native trust binary
+changed. See [the types increment](TYPES_ROADMAP.md#first-use-literal-constraints-2026-10-27).
+This closes one language gap, not the entire remaining roadmap.
+
+Historical checkpoint: **2026-10-26** (CI/CD repaired and gated; CSV row codec added to
 the stdlib; C-free self-compiling x86-64 ELF64 compiler &
 toolchain `tools/sxc_native.sa` compiling itself, all 30+ tools including
 `sayanox_lsp`/`sxpkg`/`sxdiag`, and 20,138-line `compiler_min.sa` directly to

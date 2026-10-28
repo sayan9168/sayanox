@@ -1,0 +1,25 @@
+// First-use constraints must not mistake comments or strings for literals.
+// Box<num> { "wrong" }
+struct Box<T> { v }
+struct Pair<A, B> { a b }
+// Parameter/field counts differ: retain the existing inferred layout contract.
+struct Wide<T> { left right }
+hold decoy = "Box<num> { \"wrong\" }"
+hold nums = [4, 5]
+hold number = Box<num> { 7 }
+hold text = Box<str> { "safe" }
+hold boxed = Box<list> { nums }
+hold pair = Pair<num, str> { 9, "nine" }
+hold nested = Box<Box<num>> { Box<num> { 8 } }
+hold wide = Wide<num> { "inferred", nums }
+show number.v
+show text.v
+hold items = boxed.v
+show len(items)
+show pair.a
+show pair.b
+hold inner = nested.v
+show inner.v
+show wide.left
+hold reused = wide.right
+show len(reused)
