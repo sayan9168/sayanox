@@ -1,5 +1,31 @@
 # Status
 
+**2026-10-28 — seed metadata compaction: new acceptance PENDING.**
+The baseline already ports all 236 original targets and traces/frees seed list
+headers and buffers. This increment adds best-effort post-sweep registry and
+scratch compaction without moving payloads, plus failure-injection/regrowth
+checks in the existing collector gate and optional sanitizer suite. No precise
+or bounded-heap guarantee is claimed. `./sx migration` currently prints
+`Sayanox driver target coverage: 236 / 236`; that inventory does not substitute
+for running CI. Native entry was rebuilt from Sayanox and `./sx verify-entry`
+passed. Focused `test-seed-collector` and `test-seed-sanitize` passed (six
+ASan/UBSan fixtures, leak detection OFF). Actual metadata output:
+
+```text
+metadata buckets: 16384 -> 1024
+metadata scratch: 8193 -> 1024
+metadata-shrink-ok: 4 cases; aliases, failures, regrowth, empty collection
+```
+
+Both guarded workflow-equivalent chains are running. Doctor passed;
+true-selfhost/gen3/native-test and final `./sx ci` acceptance for this change
+remain **PENDING**. The first local guard setup lacked `RUNNER_TEMP` and
+refused to arm; the running validation uses a real runner directory,
+`GITHUB_PATH` and the poisoned-tool PATH. Prior success is not new evidence.
+Full-language self-host remains fail-closed; ARM/RV, LSP, stdlib/packages,
+independent trust, module identity and platform limits have not been promoted.
+See [current GC policy](GC.md#current-seed-profile-2026-10-28).
+
 > **2026-10-27 current checkpoint:** all 236 original target names are
 > implemented in the Sayanox driver. Native compiler and seed reconstruction
 > use Sayanox and explicit pinned native trust inputs. The native-origin
@@ -29,9 +55,10 @@ Gen3 was explicitly required for the strengthened nine type-argument and
 fourteen literal-agreement refusals, O0/O2 positive parity and C-profile
 expression/deferred-body regressions. Offline recovery, source inventory,
 entry rebuild, recovery-pack verification and checksum pins also passed.
-No gate was disabled or replaced by a smaller acceptance subset. Native trust
-binaries and workflow YAML are unchanged; this is local validation, not a new
-GitHub Actions run or release publication. See
+No gate was disabled or replaced by a smaller acceptance subset. That diagnostic
+change subsequently passed PR #41, main CI and the v1.0.4 release workflow;
+v1.0.4 was published stable/Latest on 2026-10-28. These prior results do not
+accept the new metadata-compaction changes above. See
 [generic-head diagnostics](TYPES_ROADMAP.md#generic-head-diagnostics-2026-10-28).
 
 **2026-10-27 — first-use generic literal constraints.** The shared C-output

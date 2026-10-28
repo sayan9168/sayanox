@@ -69,7 +69,7 @@ make ag_sanitize(built: list) -> num {
   hold prereqs = ag_targets("test-seed-borrow\ntest-seed-list-budget\ntest-seed-collector\n", built)
   hold flags = getenv("SANITIZER_FLAGS")
   when len(flags) == 0 { flags = "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie" }
-  hold names = "borrow\nborrow-stress\nseed-list-budget\nsgc_drop_ms\nbuilder-registry\n"
+  hold names = "borrow\nborrow-stress\nseed-list-budget\nsgc_drop_ms\nseed-metadata\nbuilder-registry\n"
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -106,7 +106,7 @@ make ag_sanitize(built: list) -> num {
   hold command = concat("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ", sh_quote(concat(probe, ".bad")))
   hold status = gl_run_merged(command, concat(probe, ".bad.err"))
   when status == 0 || mxl_find_sub(read_file(concat(probe, ".bad.err")), "AddressSanitizer") < 0 { give fail(1, "ASan failed to detect the corrupted string read") }
-  show "[OK] ASan/UBSan: five fixtures; leak detection explicitly OFF"
+  show "[OK] ASan/UBSan: six fixtures; leak detection explicitly OFF"
   give 0
 }
 make ag_run(name: str, built: list) -> num {
