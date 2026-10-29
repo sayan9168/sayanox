@@ -13,11 +13,30 @@ below describe older implementations, not the current list lifetime policy,
 thresholds or sanitizer scanning mechanism. Current stack scanning skips ASan
 poisoned words rather than disabling instrumentation on the entire scanner.
 
+Numeric backing buffers (`kind == 2`) are now **pointer-free leaves** in the
+seed collector. List headers (`kind == 1`) still trace the backing-buffer
+pointer; generic pointer-bearing payloads and their cycles remain traced.
+Numeric words are no longer interpreted as heap edges, even if their bits
+happen to equal a managed pointer. Strings remain leaves. This change applies
+to the seed compatibility runtime, not the separate gen2/native collectors.
+Stack/register roots are still conservative: this is not fully precise GC.
+
+The metadata probe explicitly marks a real list header and runs the actual
+heap-trace phase with pointer-shaped bits in its numeric buffer. The referenced
+object must stay unmarked until a genuine generic pointer edge is marked.
+No sweep is performed in this isolated precision check; subsequent real
+collections check list/buffer survival, aliases and buffer growth. It fails
+against the old scan-all-buffer behavior and passes at O0/O2 and ASan+UBSan.
+
 After a complete sweep, registry buckets are now compacted when occupancy is
-below one quarter. The power-of-two bucket table has a 1,024-entry floor.
+below one quarter. For nonempty heaps, the power-of-two bucket table has a 1,024-entry floor.
 Collector scratch (sorted allocation pointers and mark bytes) also shrinks
-below one-quarter occupancy, to `max(live allocations, 1024)` entries. Empty
-collection avoids passing NULL scratch to `qsort`/`memset`. No live object is
+below one-quarter occupancy, to `max(live allocations, 1024)` entries. When the registry is empty, collection frees the bucket table, sorted-pointer
+array and bitmap, resetting all pointers/capacities to zero without allocating.
+This releases the otherwise retained 17 KiB minimum metadata on x86-64 (not an
+RSS-return guarantee). Repeated empty collections remain allocation-free; the
+next allocation rebuilds the registry and later collection regrows scratch. Empty
+collection also avoids passing NULL scratch to `qsort`/`memset`. No live object is
 relocated and no trim runs while marking or sweeping uses the scratch arrays.
 
 Compaction is **best effort**: a failed bucket allocation leaves the old table
@@ -35,7 +54,11 @@ most, and asserts bucket/scratch compaction, live alias/cycle identity, exact
 registry membership, foreign/interior pointer rejection, and regrowth. Four
 cases exercise ordinary compaction and injected bucket, pointer-array and
 bitmap allocation failures, including growth after the partial bitmap failure.
-An initially empty collection is checked separately. The existing 64 MiB
+An initially empty collection is checked separately. Three additional rounds
+explicitly empty the registry with the runtime free helper (so conservative
+stack remnants cannot make the test nondeterministic), assert zero metadata
+under forced allocation failure, repeat empty collection and regrow past 8,192
+allocations. These probes run at O0/O2 and with ASan+UBSan in the collector gate. The existing 64 MiB
 seed/gen2 churn and native parity fixtures remain required. The optional
 `./sx target test-seed-sanitize` includes this probe as its sixth ASan/UBSan
 fixture; **leak detection remains disabled**, not a leak-free claim.

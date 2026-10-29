@@ -1,5 +1,24 @@
 # Status
 
+**2026-10-29 — seed numeric-buffer leaf tracing: focused PASS; full acceptance PENDING.**
+Numeric list buffers no longer contribute pointer-shaped numeric words as heap
+edges. Header-to-buffer ownership, generic pointer-bearing payloads, cycles,
+aliases and buffer growth remain tested. An isolated actual-runtime tracing
+probe fails under the old scan-all behavior and passes at O0/O2 and ASan+UBSan.
+This is seed-runtime-only; stack roots remain conservative and precise/bounded
+GC is not claimed. Full guarded and remote CI for this increment are pending.
+
+**2026-10-29 — seed GC empty-heap metadata release: focused tests PASS; full acceptance PENDING.**
+The seed collector now releases its registry buckets, sorted-pointer array and
+mark bitmap when no managed allocations remain. It resets capacities/pointers
+without allocating, and supports later regrowth. This removes the 17 KiB minimum
+metadata on an empty x86-64 seed heap; it does not guarantee an RSS decrease,
+precise roots or bounded memory for arbitrary programs. The new regression
+failed against the previous runtime and passes at O0/O2 and ASan+UBSan with
+three empty/regrow rounds, forced allocation failures and the existing cycle/alias
+checks. Independent bootstrap source-trust proof remains open. Final guarded
+CI and remote acceptance for this change are still pending.
+
 **2026-10-29 — independent-bootstrap harness, NOT independent proof.**
 The previous main CI repair passed local guarded full acceptance and both
 post-merge main jobs (run 40824025928, commit 6dcbb089). New trust work keeps
