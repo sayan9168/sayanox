@@ -117,7 +117,9 @@ make xl_stage2(d: str) -> num {
   hold gen1 = xr_case(3, source, kp_join(d, "s2_g1"), want, "")
   hold fixed = xb_equal(d, "s2.c", "s2_g1.c")
   hold seed = xr_case(0, source, kp_join(d, "s2_seed"), want, "-O2 -Werror=incompatible-pointer-types")
-  hold pins = "if (!(a == 2.0) && b == 0.0) {\nif (!(sx_eq(s, \"no\") == 1.0)) {\nif (!(a == 1.0) || b == 9.0) {\nif (a == 1.0 && b == 0.0) {\nif (a == 2.0 || b == 0.0) {\nwhile (m < 3.0 && a == 1.0) {\nsx_list *__sx_fv\nfor (double __sx_ix = 0.0; __sx_ix < sx_llen(__sx_fv\nc = sx_chr(sx_idx(__sx_fv\n"
+  // The shared typed lowering compares string contents through sx_cmp.
+  // Keep the exact stdout and gen1/gen2 byte-parity oracles above unchanged.
+  hold pins = "if (!(a == 2.0) && b == 0.0) {\nif ((! (sx_cmp(s,\"no\") == 0.0))) {\nif (!(a == 1.0) || b == 9.0) {\nif (a == 1.0 && b == 0.0) {\nif (a == 2.0 || b == 0.0) {\nwhile (m < 3.0 && a == 1.0) {\nsx_list *__sx_fv\nfor (double __sx_ix = 0.0; __sx_ix < sx_llen(__sx_fv\nc = sx_chr(sx_idx(__sx_fv\n"
   hold shape = xf_pin(kp_join(d, "s2.c"), pins)
   source = xl_fixture(gate, "s2_for.sa", d)
   hold native = xr_case(2, source, kp_join(d, "for_native"), "1\n2", "")
