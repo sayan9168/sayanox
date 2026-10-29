@@ -259,6 +259,13 @@ make builtin_matrix(base: str) -> num {
         hold position = 0
         while position < len(sig) {
           hold expected = chr(sx_index(sig, position))
+          // Both accepted members of each union are executable compile cases.
+          when string_eq(expected, "a") || string_eq(expected, "v") {
+            hold alternate = "[]"
+            when string_eq(expected, "v") { alternate = "1" }
+            hold union_case = compile_case(call_source(name, sig, result, position, alternate, 0), concat(stem, concat("-union-", numstr(position))), compiler, 0)
+            valid = valid + 2
+          }
           hold kind = 0
           while kind < 4 {
             hold actual = chr(sx_index("nslr", kind))
@@ -277,7 +284,7 @@ make builtin_matrix(base: str) -> num {
     }
     generation = generation + 1
   }
-  when valid != 172 || rejected != 948 { give die("incomplete builtin signature execution matrix") }
+  when valid != 184 || rejected != 944 { give die("incomplete builtin signature execution matrix") }
   show concat("[OK] full builtin signatures: ", concat(numstr(valid), concat(" valid C builds; ", concat(numstr(rejected), " checked arity/kind C refusals"))))
   give 0
 }

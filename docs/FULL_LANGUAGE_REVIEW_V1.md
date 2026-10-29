@@ -5,6 +5,10 @@ current implemented increments on 2026-10-29. This is an implementation audit,
 **not independent human certification or a record that execution passed**.
 See STATUS.md for actual final-source evidence.
 
+The pre-existing `test-gen2-list-args` case `sx_index([8,9],1)` also
+retains its list overload; the builtin table's string example is not a
+string-only restriction. The matrix checks both members of every union kind.
+
 ## Census
 
 | Clause group | Forms retained and evidence families |

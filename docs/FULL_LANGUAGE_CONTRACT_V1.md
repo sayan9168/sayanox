@@ -47,7 +47,7 @@ Run `./sx target true-selfhost-full`. Its Sayanox driver:
    programs** under strict C builds. The exact **212 execution/refusal keys**
    (76 positive executions + 136 refused C builds) must be present exactly once.
 5. Compiles valid counterparts for all 43 APIs and every incompatible argument
-   kind/position and missing/extra arity: currently **172 valid C builds and 948 checked
+   kind/position and missing/extra arity: currently **184 valid C builds and 944 checked
    C refusals**, across both generations and optimizations. These compilation
    counts are not mislabeled as runtime executions.
 6. Executes checked numeric, process/stream/file and HTTP failure/body boundaries;

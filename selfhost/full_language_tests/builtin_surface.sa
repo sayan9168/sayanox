@@ -58,3 +58,5 @@ show (remove_path(file))
 show (remove_path(binary))
 show (remove_path(root))
 show (path_kind(root))
+
+show sx_index([8,9], 1)

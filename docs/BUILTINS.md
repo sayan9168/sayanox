@@ -10,7 +10,7 @@ Native AOT coverage and intentional differences are documented in
 | `len(value)` | string/list length | yes | yes | yes |
 | `chr(n)` | one-byte string from numeric code | yes | yes | yes |
 | `string_eq(a, b)` | string equality as numeric 0/1 | yes | yes | yes |
-| `sx_index(s, i)` / `s[i]` | byte at zero-based index | yes | yes | yes |
+| `sx_index(s, i)` / `s[i]` | byte at zero-based index; gen2/gen3 also accept a numeric list (element index) | yes | yes | yes |
 | `arg_count()` / `arg(i)` | process argument count/value | yes | yes | yes |
 | `read_file(path)` | read a file as a string | yes | yes | yes |
 | `write_file(path, data)` | truncate/write a file; numeric status | yes | yes | yes |

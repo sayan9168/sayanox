@@ -3,7 +3,7 @@ concat|sv|s|selfhost/full_language_tests/builtin_surface.sa#concat(
 len|a|n|selfhost/full_language_tests/builtin_surface.sa#len(
 chr|n|s|selfhost/full_language_tests/builtin_surface.sa#chr(
 string_eq|ss|n|selfhost/full_language_tests/builtin_surface.sa#string_eq(
-sx_index|sn|n|selfhost/full_language_tests/builtin_surface.sa#sx_index(
+sx_index|an|n|selfhost/full_language_tests/builtin_surface.sa#sx_index(
 arg_count||n|selfhost/full_language_tests/builtin_surface.sa#arg_count(
 arg|n|s|selfhost/full_language_tests/builtin_surface.sa#arg(
 read_file|s|s|selfhost/full_language_tests/builtin_surface.sa#read_file(
