@@ -456,6 +456,7 @@ make cmd_native(in_sa: str, out_bin: str) -> num {
 // ---- tool <name> [out_bin] ------------------------------------------------
 
 make tool_source_for(name: str) -> str {
+  when string_eq(name, "sxddc") == 1 { give "tools/sxddc.sa" }
   when string_eq(name, "sxtargets_test") == 1 { give "tools/sxtargets_test.sa" }
   when string_eq(name, "sxnative_bootstrap_test") == 1 { give "tools/sxnative_bootstrap_test.sa" }
   when string_eq(name, "sxrecovery_test") == 1 { give "tools/sxrecovery_test.sa" }

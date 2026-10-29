@@ -22,6 +22,11 @@ or a trusting-trust attack. Self-reproduction is not independent diverse
 reconstruction. Reviewers seeking stronger assurance need another independent
 implementation/toolchain; this repository does not claim that proof.
 
+A Sayanox [conditional DDC harness](../docs/DIVERSE_BOOTSTRAP.md) now records
+a reviewed reference, two source-compilation stages and entry comparison, with
+fail-closed controls. No independent reference is supplied or has been tested;
+anchor-built harness tests do not close this trust boundary.
+
 `bootstrap/native.sha256` pins the native compiler anchor and transitive Sayanox
 compiler inputs. `bootstrap/sx.sha256` pins the entry and its bootstrap/source
 boundary. `bootstrap/sxc_native.audit` records the binary's size and Sayanox

@@ -104,3 +104,5 @@ tools/sxdiag.c
 /bootstrap-work.log
 
 /tools/sxfull
+
+/tools/sxddc

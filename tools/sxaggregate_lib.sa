@@ -114,7 +114,10 @@ make ag_run(name: str, built: list) -> num {
   when string_eq(name, "test-native-bootstrap") == 1 {
     hold ready = bt_build(3, built)
     hold runner = target_native_tool("sxnative_bootstrap_test")
-    give target_run("./tools/sxnative_bootstrap_test", "isolated native bootstrap acceptance")
+    hold isolation = target_run("./tools/sxnative_bootstrap_test", "isolated native bootstrap acceptance")
+    // Only harness controls: no independent reference compiler is bundled.
+    hold ddc = target_native_tool("sxddc")
+    give target_run("./tools/sxddc self-test", "conditional DDC harness refusal controls (not independent proof)")
   }
   when string_eq(name, "test-recovery") == 1 {
     hold runner = target_native_tool("sxrecovery_test")

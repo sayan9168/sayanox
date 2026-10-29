@@ -1,5 +1,20 @@
 # Status
 
+**2026-10-29 — independent-bootstrap harness, NOT independent proof.**
+The previous main CI repair passed local guarded full acceptance and both
+post-merge main jobs (run 40824025928, commit 6dcbb089). New trust work keeps
+all maintained source Sayanox: `tools/sxddc.sa` implements the conditional DDC
+protocol and refusal controls, documented in [DIVERSE_BOOTSTRAP](DIVERSE_BOOTSTRAP.md).
+No independent reference compiler is supplied or has been tested. An
+anchor-built harness, byte matches or its self-tests cannot certify provenance.
+The independent-trust item stays OPEN; GC work has not started. Validation
+of this new harness is recorded separately from the earlier main acceptance.
+Standalone refusal controls, entry reproduction and source pins passed.
+Guarded `./sx target test-native-bootstrap test-recovery test-ci-shape` and
+`./sx ci-guard-check` exited 0. Full remote acceptance for the new harness is
+still pending; these controls do not substitute for a genuine DDC run.
+
+
 **2026-10-29 — published-language v1 gate implementation; final acceptance PENDING.**
 String-content conditions and recursive/short-circuit inline-list lowering are
 integrated. Focused C11 O0/O2 tests also verify numeric `concat`, checked bit

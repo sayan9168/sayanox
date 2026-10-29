@@ -1,0 +1,14 @@
+// NEGATIVE CONTROL ONLY. Not an independent compiler: copies its own image.
+// DDC must reject its stage2, not issue a match receipt.
+make quoted(text: str) -> str {
+  hold out = "'"
+  hold i = 0
+  while i < len(text) {
+    when sx_index(text, i) == 39 { out = concat(out, "'\\''") } otherwise { out = concat(out, chr(sx_index(text, i))) }
+    i = i + 1
+  }
+  give concat(out, "'")
+}
+when arg_count() != 3 { hold stopped = exit(2) }
+hold status = run_command(concat("cp -- ", concat(quoted(arg(0)), concat(" ", quoted(arg(2))))))
+hold stopped = exit(status)
