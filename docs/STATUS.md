@@ -1,5 +1,11 @@
 # Status
 
+**2026-10-29 — C-output free-pool cap: focused PASS; full CI PENDING.**
+Both emitted C runtime branches now release oversized cached blocks and retain
+at most two blocks per size class up to 64 KiB after collection. Focused probes
+check actual frees, class bounds, idempotence, warm reuse and aliases at O0/O2
+and ASan+UBSan. This is not an RSS or full bounded-heap guarantee.
+
 **2026-10-29 — seed numeric-buffer leaf tracing: focused PASS; full acceptance PENDING.**
 Numeric list buffers no longer contribute pointer-shaped numeric words as heap
 edges. Header-to-buffer ownership, generic pointer-bearing payloads, cycles,
