@@ -1,0 +1,162 @@
+// Conditional diverse double-compilation. This driver does not certify provenance.
+// For an independent run, compile THIS source with the reviewed reference tool.
+make ddc_fail(message: str) -> num {
+  show concat("sxddc: ", message)
+  hold stopped = exit(2)
+  give 2
+}
+make ddc_quote(text: str) -> str {
+  hold out = "'"
+  hold i = 0
+  while i < len(text) {
+    when sx_index(text, i) == 39 { out = concat(out, "'\\''") } otherwise { out = concat(out, chr(sx_index(text, i))) }
+    i = i + 1
+  }
+  give concat(out, "'")
+}
+make ddc_write(path: str, text: str) -> num {
+  when write_file(path, text) != 1 { give ddc_fail(concat("cannot write ", path)) }
+  give 0
+}
+make ddc_equal(left: str, right: str) -> num {
+  when path_kind(left) != 1 || path_kind(right) != 1 { give 0 }
+  give run_command(concat("cmp -s -- ", concat(ddc_quote(left), concat(" ", ddc_quote(right))))) == 0
+}
+make ddc_hash(path: str, log: str) -> str {
+  when path_kind(path) != 1 { hold failed = ddc_fail(concat("missing file: ", path)) }
+  // stdin avoids sha256sum's filename-escaping prefix for unusual paths.
+  hold command = concat("sha256sum <", concat(ddc_quote(path), concat(" >", ddc_quote(log))))
+  when run_command(command) != 0 { hold failed = ddc_fail("host digest failed") }
+  hold text = read_file(log)
+  hold digest = ""
+  hold i = 0
+  while i < 64 && i < len(text) {
+    hold c = sx_index(text, i)
+    when (c < 48 || c > 57) && (c < 97 || c > 102) { hold failed = ddc_fail("invalid host digest output") }
+    digest = concat(digest, chr(c))
+    i = i + 1
+  }
+  when len(digest) != 64 { hold failed = ddc_fail("short host digest") }
+  give digest
+}
+make ddc_phase(command: str, name: str, work: str) -> num {
+  hold log = concat(work, concat("/", concat(name, ".log")))
+  hold status = run_command(concat(command, concat(" >", concat(ddc_quote(log), " 2>&1"))))
+  when status != 0 {
+    hold record = ddc_write(concat(work, "/report.txt"), concat("FAILED: ", concat(name, "\nNo independent proof established.\n")))
+    give ddc_fail(concat("phase failed; see ", log))
+  }
+  give 0
+}
+make ddc_run(reference: str, expected: str, review: str, work: str) -> num {
+  when path_kind(work) != 0 { give ddc_fail("work directory must not exist; refusing to overwrite evidence") }
+  when path_kind(reference) != 1 || path_kind(review) != 1 || len(read_file(review)) == 0 { give ddc_fail("reference executable and nonempty external review required") }
+  when len(expected) != 64 { give ddc_fail("reviewed reference SHA-256 must contain 64 lowercase hex characters") }
+  hold hi = 0
+  while hi < 64 {
+    hold hc = sx_index(expected, hi)
+    when (hc < 48 || hc > 57) && (hc < 97 || hc > 102) { give ddc_fail("invalid reviewed SHA-256") }
+    hi = hi + 1
+  }
+  // Reject obvious circular inputs even if renamed. A different hash alone is
+  // NOT evidence of independence: external provenance review remains mandatory.
+  when ddc_equal(reference, "bootstrap/sxc_native.bin") || ddc_equal(reference, "sx") { give ddc_fail("known repository trust input is not an independent reference") }
+  when make_dir(work) != 1 { give ddc_fail("cannot create fresh evidence directory") }
+  hold pending = ddc_write(concat(work, "/report.txt"), "INCOMPLETE\nNo independent proof established.\n")
+  hold reference_hash = ddc_hash(reference, concat(work, "/reference.sha256"))
+  when string_eq(reference_hash, expected) == 0 { give ddc_fail("reference digest does not match reviewed value") }
+  hold copied_review = ddc_write(concat(work, "/review.txt"), read_file(review))
+  hold review_hash = ddc_hash(concat(work, "/review.txt"), concat(work, "/review.sha256"))
+  hold source_hash = ddc_hash("bootstrap/native.sha256", concat(work, "/native-manifest.sha256"))
+  hold entry_hash = ddc_hash("bootstrap/sx.sha256", concat(work, "/entry-manifest.sha256"))
+  hold pins = ddc_phase("sha256sum -c bootstrap/native.sha256", "input-native-pins", work)
+  hold entry_pins = ddc_phase("sha256sum -c bootstrap/sx.sha256", "input-entry-pins", work)
+  hold stage1 = concat(work, "/stage1")
+  hold stage2 = concat(work, "/stage2")
+  hold entry = concat(work, "/entry")
+  hold first = ddc_phase(concat(ddc_quote(reference), concat(" tools/sxc_native.sa ", ddc_quote(stage1))), "reference-build", work)
+  hold second = ddc_phase(concat(ddc_quote(stage1), concat(" tools/sxc_native.sa ", ddc_quote(stage2))), "source-build", work)
+  when ddc_equal(stage2, "bootstrap/sxc_native.bin") == 0 { give ddc_fail("stage2 differs from reviewed native anchor; no proof established") }
+  hold third = ddc_phase(concat(ddc_quote(stage2), concat(" tools/sxbuild.sa ", ddc_quote(entry))), "entry-build", work)
+  when ddc_equal(entry, "sx") == 0 { give ddc_fail("reconstructed entry differs; no proof established") }
+  hold final_pins = ddc_phase("sha256sum -c bootstrap/native.sha256", "final-native-pins", work)
+  hold final_entry_pins = ddc_phase("sha256sum -c bootstrap/sx.sha256", "final-entry-pins", work)
+  hold final_reference = ddc_hash(reference, concat(work, "/reference-final.sha256"))
+  when string_eq(final_reference, reference_hash) == 0 { give ddc_fail("reference changed during execution") }
+  hold native_final = ddc_hash("bootstrap/native.sha256", concat(work, "/native-manifest-final.sha256"))
+  hold entry_final = ddc_hash("bootstrap/sx.sha256", concat(work, "/entry-manifest-final.sha256"))
+  when string_eq(native_final, source_hash) == 0 || string_eq(entry_final, entry_hash) == 0 { give ddc_fail("input manifests changed during execution") }
+  hold report = concat("CONDITIONAL_DDC_MATCH\nReference SHA-256: ", reference_hash)
+  report = concat(report, concat("\nReview SHA-256: ", review_hash))
+  report = concat(report, concat("\nNative manifest SHA-256: ", source_hash))
+  report = concat(report, concat("\nEntry manifest SHA-256: ", entry_hash))
+  report = concat(report, "\nStage2 equals anchor; reconstructed entry equals sx.\nThis is conditional on the reference, driver, host and source-review assumptions.\nProvenance is NOT established by this program or by hash differences.\n")
+  hold written = ddc_write(concat(work, "/report.txt"), report)
+  show report
+  give 0
+}
+make ddc_self_test(binary: str) -> num {
+  when path_kind("selfhost/seed_tests") == 0 {
+    when make_dir("selfhost/seed_tests") != 1 { give ddc_fail("cannot create test parent") }
+  }
+  hold base = "selfhost/seed_tests/ddc-controls-"
+  hold serial = 0
+  while path_kind(concat(base, numstr(serial))) != 0 && serial < 1000 { serial = serial + 1 }
+  hold work = concat(base, numstr(serial))
+  when make_dir(work) != 1 { give ddc_fail("cannot create self-test directory") }
+  hold left = concat(work, "/left")
+  hold right = concat(work, "/right")
+  hold w = ddc_write(left, "fixture only; NOT a compiler or proof\n")
+  w = ddc_write(right, "fixture only; NOT a compiler or proof\n")
+  when ddc_equal(left, right) != 1 { give ddc_fail("equal-artifact control failed") }
+  w = ddc_write(right, "corrupted fixture\n")
+  when ddc_equal(left, right) != 0 || ddc_equal(left, concat(work, "/missing")) != 0 { give ddc_fail("corruption/missing-artifact control failed") }
+  hold review = concat(work, "/review")
+  w = ddc_write(review, "TEST ONLY: this is not independent provenance.\n")
+  hold digest = ddc_hash("bootstrap/sxc_native.bin", concat(work, "/anchor.sha256"))
+  hold invocation = concat(ddc_quote(binary), " run bootstrap/sxc_native.bin ")
+  invocation = concat(invocation, concat(digest, concat(" ", concat(ddc_quote(review), concat(" ", ddc_quote(concat(work, "/circular")))))))
+  hold log = concat(work, "/circular.log")
+  when run_command(concat(invocation, concat(" >", concat(ddc_quote(log), " 2>&1")))) != 2 { give ddc_fail("circular trust input accepted") }
+  when string_eq(read_file(log), "sxddc: known repository trust input is not an independent reference\n") == 0 { give ddc_fail("circular control failed for an unexpected reason") }
+  when path_kind(concat(work, "/circular")) != 0 { give ddc_fail("circular refusal created execution evidence") }
+  hold fake = concat(work, "/not-executable")
+  w = ddc_write(fake, "not an executable\n")
+  hold fake_hash = ddc_hash(fake, concat(work, "/fake.sha256"))
+  hold attempted = concat(work, "/failed-run")
+  hold command = concat(ddc_quote(binary), concat(" run ", concat(ddc_quote(fake), concat(" ", concat(fake_hash, concat(" ", concat(ddc_quote(review), concat(" ", ddc_quote(attempted)))))))))
+  when run_command(concat(command, concat(" >", concat(ddc_quote(concat(work, "/failed.log")), " 2>&1")))) != 2 { give ddc_fail("reference execution failure swallowed") }
+  when string_eq(read_file(concat(attempted, "/report.txt")), "FAILED: reference-build\nNo independent proof established.\n") == 0 { give ddc_fail("failed run produced misleading receipt") }
+  // Exercise an executable but deliberately non-independent reference. Its
+  // self-copy output must fail the stage2 comparison, never count as DDC.
+  hold fixture = concat(work, "/copy-self")
+  hold build = concat("./bootstrap/sxc_native.bin selfhost/ddc_tests/copy_self.sa ", ddc_quote(fixture))
+  when run_command(build) != 0 { give ddc_fail("negative fixture build failed") }
+  hold fixture_hash = ddc_hash(fixture, concat(work, "/fixture.sha256"))
+  hold mismatched = concat(work, "/mismatch")
+  command = concat(ddc_quote(binary), concat(" run ", concat(ddc_quote(fixture), concat(" ", concat(fixture_hash, concat(" ", concat(ddc_quote(review), concat(" ", ddc_quote(mismatched)))))))))
+  when run_command(concat(command, concat(" >", concat(ddc_quote(concat(work, "/mismatch.log")), " 2>&1")))) != 2 { give ddc_fail("stage2 mismatch accepted") }
+  when ddc_equal(concat(mismatched, "/stage1"), fixture) != 1 || ddc_equal(concat(mismatched, "/stage2"), fixture) != 1 { give ddc_fail("mismatch control did not reach both compilation stages") }
+  when string_eq(read_file(concat(work, "/mismatch.log")), "sxddc: stage2 differs from reviewed native anchor; no proof established\n") == 0 { give ddc_fail("mismatch control failed for an unexpected reason") }
+  when string_eq(read_file(concat(mismatched, "/report.txt")), "INCOMPLETE\nNo independent proof established.\n") == 0 { give ddc_fail("mismatch produced positive receipt") }
+  // Bad digests and existing evidence must be refused before reference runs.
+  hold wrong = concat(work, "/bad-digest")
+  command = concat(ddc_quote(binary), concat(" run ", concat(ddc_quote(fixture), concat(" ", concat(digest, concat(" ", concat(ddc_quote(review), concat(" ", ddc_quote(wrong)))))))))
+  when run_command(concat(command, " >/dev/null 2>&1")) != 2 || path_kind(concat(wrong, "/stage1")) != 0 { give ddc_fail("digest mismatch executed reference") }
+  command = concat(ddc_quote(binary), concat(" run ", concat(ddc_quote(fixture), concat(" ", concat(fixture_hash, concat(" ", concat(ddc_quote(review), concat(" ", ddc_quote(mismatched)))))))))
+  when run_command(concat(command, " >/dev/null 2>&1")) != 2 { give ddc_fail("existing evidence overwritten") }
+  show "[OK] DDC harness controls only: equality, corruption, missing artifact, circular input, child failure, stage2 mismatch, bad digest and evidence preservation; NO independent compiler tested"
+  give 0
+}
+hold command = arg(1)
+when string_eq(command, "run") && arg_count() == 6 {
+  hold result = ddc_run(arg(2), arg(3), arg(4), arg(5))
+  hold stopped = exit(result)
+}
+when string_eq(command, "self-test") && arg_count() == 2 {
+  hold result = ddc_self_test(arg(0))
+  hold stopped = exit(result)
+}
+show "usage: sxddc run REFERENCE REVIEWED_SHA256 REVIEW_FILE NEW_WORKDIR | self-test"
+show "No independent reference is bundled. Anchor-built driver self-tests are NOT a source-trust proof."
+hold stopped = exit(2)
