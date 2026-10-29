@@ -13,6 +13,21 @@ below describe older implementations, not the current list lifetime policy,
 thresholds or sanitizer scanning mechanism. Current stack scanning skips ASan
 poisoned words rather than disabling instrumentation on the entire scanner.
 
+Numeric backing buffers (`kind == 2`) are now **pointer-free leaves** in the
+seed collector. List headers (`kind == 1`) still trace the backing-buffer
+pointer; generic pointer-bearing payloads and their cycles remain traced.
+Numeric words are no longer interpreted as heap edges, even if their bits
+happen to equal a managed pointer. Strings remain leaves. This change applies
+to the seed compatibility runtime, not the separate gen2/native collectors.
+Stack/register roots are still conservative: this is not fully precise GC.
+
+The metadata probe explicitly marks a real list header and runs the actual
+heap-trace phase with pointer-shaped bits in its numeric buffer. The referenced
+object must stay unmarked until a genuine generic pointer edge is marked.
+No sweep is performed in this isolated precision check; subsequent real
+collections check list/buffer survival, aliases and buffer growth. It fails
+against the old scan-all-buffer behavior and passes at O0/O2 and ASan+UBSan.
+
 After a complete sweep, registry buckets are now compacted when occupancy is
 below one quarter. For nonempty heaps, the power-of-two bucket table has a 1,024-entry floor.
 Collector scratch (sorted allocation pointers and mark bytes) also shrinks

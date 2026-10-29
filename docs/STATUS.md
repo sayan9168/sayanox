@@ -1,5 +1,13 @@
 # Status
 
+**2026-10-29 — seed numeric-buffer leaf tracing: focused PASS; full acceptance PENDING.**
+Numeric list buffers no longer contribute pointer-shaped numeric words as heap
+edges. Header-to-buffer ownership, generic pointer-bearing payloads, cycles,
+aliases and buffer growth remain tested. An isolated actual-runtime tracing
+probe fails under the old scan-all behavior and passes at O0/O2 and ASan+UBSan.
+This is seed-runtime-only; stack roots remain conservative and precise/bounded
+GC is not claimed. Full guarded and remote CI for this increment are pending.
+
 **2026-10-29 — seed GC empty-heap metadata release: focused tests PASS; full acceptance PENDING.**
 The seed collector now releases its registry buckets, sorted-pointer array and
 mark bitmap when no managed allocations remain. It resets capacities/pointers
