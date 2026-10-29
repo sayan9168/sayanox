@@ -1,0 +1,43 @@
+make pickb<T>(a: T, b: T) -> T {
+  give a
+}
+make twice<T>(a: T) -> T {
+  hold x: T = a
+  give pickb(x, x)
+}
+make quad<T>(a: T) -> T {
+  give twice(twice(a))
+}
+make wrap<T>(a: T) -> T {
+  hold t: T = a
+  when len(t) > 0 {
+    hold t = a
+  }
+  give t
+}
+make shout(n: num) -> str {
+  give concat("v=", numstr(n))
+}
+make unused<T>(a: T) -> T {
+  give a
+}
+hold xs = [1, 2, 3]
+hold s = "hi"
+show pickb(3, 7)
+show twice(4)
+show twice(s)
+show quad(2)
+show twice(twice("z"))
+show len(quad(xs))
+show len(twice(s))
+hold y = twice(5)
+show y + 1
+show shout(twice(9))
+show pickb("a", "b")
+when twice(6) == 6 {
+  show 12
+}
+hold q = pickb(xs, xs)
+show len(q)
+show wrap(s)
+show len(wrap("ab"))

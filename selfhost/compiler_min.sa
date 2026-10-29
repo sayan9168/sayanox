@@ -835,8 +835,8 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
               when i < cached_size_text && sx_index(text, i) == 40 {
                 hold returns = ""
                 hold signatures = ""
-                returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_lget=n|sx_llen=n|sx_lpush=l|sx_chr=s|sx_numstr=s|sx_eq=n|sx_mod=n|sx_arg=s|sx_argc=n|sx_read=s|sx_write=n|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|run_command=n|getenv=s|spawn=n|child_send=n|child_recv=s|child_line=s|child_close=n|make_dir=n|make_link=n|remove_path=n|write_bytes=n|bytes_f64=l|read_bytes=n|bit_and=n|bit_or=n|bit_xor=n|bit_not=n|shl=n|shr=n|len=n|index=n|")
-                signatures = concat(signatures, "|sx_cat=ss|sx_len=a|sx_idx=an|sx_lget=ln|sx_llen=l|sx_lpush=ln|sx_chr=n|sx_numstr=n|sx_eq=ss|sx_mod=nn|sx_arg=n|sx_argc=|sx_read=s|sx_write=ss|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_http=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|run_command=s|getenv=s|spawn=s|child_send=ns|child_recv=nn|child_line=n|child_close=n|make_dir=s|make_link=ss|remove_path=s|write_bytes=sl|bytes_f64=ln|read_bytes=sl|bit_and=nn|bit_or=nn|bit_xor=nn|bit_not=n|shl=nn|shr=nn|len=a|index=an|")
+                returns = concat(returns, "|run_command=n|getenv=s|len=n|index=n|concat=s|chr=s|numstr=s|sx_index=n|push=l|string_eq=n|arg=s|arg_count=n|read_file=s|write_file=n|read_line=s|read_n=s|write_out=n|flush_out=n|gc=n|gc_live=n|gc_runs=n|exit=n|http_get=s|read_dir=s|path_kind=n|path_size=n|path_real=s||sx_cat=s|sx_len=n|sx_idx=n|sx_chr=s|sx_read=s|sx_write=n|sx_http=s|sx_arg=s|sx_argc=n|sx_eq=n|sx_cmp=n|sx_numstr=s|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_mod=n|sx_lget=n|sx_llen=n|sx_lpush=l|spawn=n|sx_spawn=n|child_send=n|sx_child_send=n|child_recv=s|sx_child_recv=s|child_line=s|sx_child_line=s|child_close=n|sx_child_close=n|make_dir=n|sx_make_dir=n|make_link=n|sx_make_link=n|remove_path=n|sx_remove_path=n|read_bytes=n|sx_read_bytes=n|write_bytes=n|sx_write_bytes=n|bytes_f64=l|sx_bytes_f64=l|bit_and=n|sx_bit_and=n|bit_or=n|sx_bit_or=n|bit_xor=n|sx_bit_xor=n|bit_not=n|sx_bit_not=n|shl=n|sx_shl=n|shr=n|sx_shr=n|sx_getenv=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|sx_cmp=n|")
+                signatures = concat(signatures, "|run_command=s|getenv=s|len=a|index=an|concat=sv|chr=n|numstr=n|sx_index=an|push=ln|string_eq=ss|arg=n|arg_count=|read_file=s|write_file=ss|read_line=|read_n=n|write_out=s|flush_out=|gc=|gc_live=|gc_runs=|exit=n|http_get=s|read_dir=s|path_kind=s|path_size=s|path_real=s||sx_cat=sv|sx_len=a|sx_idx=an|sx_chr=n|sx_read=s|sx_write=ss|sx_http=s|sx_arg=n|sx_argc=|sx_eq=ss|sx_cmp=ss|sx_numstr=n|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_mod=nn|sx_lget=ln|sx_llen=l|sx_lpush=ln|spawn=s|sx_spawn=s|child_send=ns|sx_child_send=ns|child_recv=nn|sx_child_recv=nn|child_line=n|sx_child_line=n|child_close=n|sx_child_close=n|make_dir=s|sx_make_dir=s|make_link=ss|sx_make_link=ss|remove_path=s|sx_remove_path=s|read_bytes=sl|sx_read_bytes=sl|write_bytes=sl|sx_write_bytes=sl|bytes_f64=ln|sx_bytes_f64=ln|bit_and=nn|sx_bit_and=nn|bit_or=nn|sx_bit_or=nn|bit_xor=nn|sx_bit_xor=nn|bit_not=n|sx_bit_not=n|shl=nn|sx_shl=nn|shr=nn|sx_shr=nn|sx_getenv=s|sx_read_dir=s|sx_path_kind=s|sx_path_size=s|sx_path_real=s|sx_cmp=ss|")
                 kind = sxeenvlookup(env, 4, name, "=")
                 when len(kind) == 0 { kind = sxelookup(returns, name, "=") }
                 when len(kind) == 0 {
@@ -874,7 +874,7 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                       when string_eq(name, "sx_len") || string_eq(name, "len") {
                         name = "sx_llen"
                       }
-                      when string_eq(name, "sx_idx") || string_eq(name, "index") {
+                      when string_eq(name, "sx_idx") || string_eq(name, "sx_index") || string_eq(name, "index") {
                         name = "sx_lget"
                       }
                     }
@@ -913,6 +913,21 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                 when string_eq(name, "index") {
                   name = "sx_idx"
                 }
+                // Checked source expressions must emit runtime names even
+                // inside another lowered call (not just at the outer call).
+                when string_eq(name, "concat") { name = "sx_cat" }
+                when string_eq(name, "sx_index") { name = "sx_idx" }
+                when string_eq(name, "string_eq") { name = "sx_eq" }
+                when string_eq(name, "arg_count") { name = "sx_argc" }
+                when string_eq(name, "read_file") { name = "sx_read" }
+                when string_eq(name, "write_file") { name = "sx_write" }
+                when string_eq(name, "http_get") { name = "sx_http" }
+                when string_eq(name, "push") { name = "sx_lpush" }
+                when string_eq(name, "gc") { name = "sx_gc_run" }
+                when string_eq(name, "gc_runs") { name = "sx_gc_count" }
+                when sxseed_csv_has("chr,arg,numstr,read_line,read_n,write_out,flush_out,gc_live,exit,read_dir,path_kind,path_size,path_real,run_command,getenv,spawn,child_send,child_recv,child_line,child_close,make_dir,make_link,remove_path,write_bytes,bytes_f64,read_bytes,bit_and,bit_or,bit_xor,bit_not,shl,shr", name) == 1 {
+                  name = concat("sx_", name)
+                }
                 code = concat(name, "(")
                 code = concat(code, args)
                 code = concat(code, ")")
@@ -929,8 +944,8 @@ make sxeparse(text: str, at: num, env: str, minimum: num, level: num, state: lis
                   hold strings = sxeenvlookup(env, 1, name, "|")
                   hold lists = sxeenvlookup(env, 2, name, "|")
                   hold structs = sxeenvlookup(env, 3, name, "=")
-                  when len(numeric) == 0 && len(strings) == 0 && len(lists) == 0 {
-                    give sxerecord(i, "e", "unbound expression name")
+                  when len(numeric) == 0 && len(strings) == 0 && len(lists) == 0 && len(structs) == 0 {
+                    give sxerecord(i, "e", concat("unbound expression name: ", name))
                   }
                   when len(strings) > 0 {
                     kind = "s"
@@ -2291,11 +2306,109 @@ make raw_index(source: str, from: num, n: num) -> str {
 
 // Seed-profile checked calls reuse the expression parser and current lexical
 // environment, including original source spellings of the runtime builtins.
+// C blocks must not expire the language's flat main bindings. Hoist only
+// declarations made in nested main blocks, never initializers or loop state.
+// Function bodies are separate and keep their lexical local scopes.
+make sx_hoist_main(text: str, bindings: str, structs: str) -> str {
+  hold declarations = ""
+  hold seen = "|"
+  hold output = ""
+  hold chunk = ""
+  hold depth = 0
+  hold words = sxsource_pack(text)
+  hold size = words[0]
+  hold i = 0
+  while i < size {
+    hold end = i
+    hold line = ""
+    while end < size && sxsource_get(words, end) != 10 {
+      line = concat(line, chr(sxsource_get(words, end)))
+      end = end + 1
+    }
+    hold replacement = line
+    when depth > 0 {
+      hold begin = sxflowspace(line, 0)
+      hold typ = sxflowword(line, begin)
+      hold at = sxflowspace(line, begin + len(typ))
+      while at < len(line) && sx_index(line, at) == 42 { at = sxflowspace(line, at + 1) }
+      hold name = sxflowword(line, at)
+      hold after = sxflowspace(line, at + len(name))
+      hold tag = ""
+      hold declared = 0
+      // Never scan the complete binding table for braces, calls, assignments,
+      // loop headers or empty names. Only real C declarations can be hoisted.
+      when len(name) > 0 && after < len(line) && (sx_index(line, after) == 61 || sx_index(line, after) == 59) {
+        when string_eq(typ, "double") || string_eq(typ, "char") || string_eq(typ, "sx_list") {
+          declared = tbl_has(bindings, name)
+        } otherwise {
+          tag = sxelookup(structs, name, "=")
+          when len(tag) > 0 && string_eq(typ, tag) { declared = 1 }
+        }
+      }
+      when len(name) > 0 && declared == 1 && after < len(line) && (sx_index(line, after) == 61 || sx_index(line, after) == 59) && (string_eq(typ, "double") || string_eq(typ, "char") || string_eq(typ, "sx_list") || (len(tag) > 0 && string_eq(typ, tag))) {
+        when tbl_has(seen, name) == 0 {
+          declarations = concat(declarations, sxeslice(line, begin, after))
+          declarations = concat(declarations, ";\n")
+          seen = concat(seen, concat(name, "|"))
+        }
+        replacement = ""
+        when sx_index(line, after) == 61 {
+          replacement = concat(sxeslice(line, 0, begin), sxeslice(line, at, len(line)))
+        }
+      }
+    }
+    // Count syntactic braces only, never braces inside C quoted data.
+    hold j = 0
+    hold quoted = 0
+    while j < len(line) {
+      hold c = sx_index(line, j)
+      when quoted != 0 {
+        when c == 92 { j = j + 1 } otherwise {
+          when c == quoted { quoted = 0 }
+        }
+      } otherwise {
+        when c == 34 || c == 39 { quoted = c } otherwise {
+          when c == 123 { depth = depth + 1 }
+          when c == 125 { depth = depth - 1 }
+        }
+      }
+      j = j + 1
+    }
+    chunk = concat(chunk, concat(replacement, "\n"))
+    when len(chunk) > 1024 { output = concat(output, chunk)
+      chunk = "" }
+    i = end + 1
+  }
+  give concat(declarations, concat(output, chunk))
+}
+
+make sxseed_has_comparison(text: str) -> num {
+  hold i = 0
+  hold quoted = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when quoted == 1 {
+      when c == 92 { i = i + 1 } otherwise { when c == 34 { quoted = 0 } }
+    } otherwise {
+      when c == 34 { quoted = 1 } otherwise {
+        when c == 60 || c == 62 {
+          give 1
+        }
+        when (c == 61 || c == 33) && i + 1 < len(text) && sx_index(text, i + 1) == 61 {
+          give 1
+        }
+      }
+    }
+    i = i + 1
+  }
+  give 0
+}
+
 make sxseed_env(decls: str, strings: str, lists: str, structs: str, returns: str, params: str, fields: str, private: str) -> str {
-  returns = concat(returns, "|len=n|index=n|concat=s|chr=s|numstr=s|sx_index=n|push=l|string_eq=n|arg=s|arg_count=n|read_file=s|write_file=n|read_line=s|read_n=s|write_out=n|flush_out=n|gc=n|gc_live=n|gc_runs=n|exit=n|http_get=s|read_dir=s|path_kind=n|path_size=n|path_real=s|")
-  params = concat(params, "|len=a|index=an|concat=ss|chr=n|numstr=n|sx_index=an|push=ln|string_eq=ss|arg=n|arg_count=|read_file=s|write_file=ss|read_line=|read_n=n|write_out=s|flush_out=|gc=|gc_live=|gc_runs=|exit=n|http_get=s|read_dir=s|path_kind=s|path_size=s|path_real=s|")
-  returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_chr=s|sx_read=s|sx_write=n|sx_http=s|sx_arg=s|sx_argc=n|sx_eq=n|sx_numstr=s|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_mod=n|sx_lget=n|sx_llen=n|sx_lpush=l|spawn=n|sx_spawn=n|child_send=n|sx_child_send=n|child_recv=s|sx_child_recv=s|child_line=s|sx_child_line=s|child_close=n|sx_child_close=n|make_dir=n|sx_make_dir=n|make_link=n|sx_make_link=n|remove_path=n|sx_remove_path=n|read_bytes=n|sx_read_bytes=n|write_bytes=n|sx_write_bytes=n|bytes_f64=l|sx_bytes_f64=l|bit_and=n|sx_bit_and=n|bit_or=n|sx_bit_or=n|bit_xor=n|sx_bit_xor=n|bit_not=n|sx_bit_not=n|shl=n|sx_shl=n|shr=n|sx_shr=n|sx_getenv=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|")
-  params = concat(params, "|sx_cat=ss|sx_len=a|sx_idx=sn|sx_chr=n|sx_read=s|sx_write=ss|sx_http=s|sx_arg=n|sx_argc=|sx_eq=ss|sx_numstr=n|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_mod=nn|sx_lget=ln|sx_llen=l|sx_lpush=ln|spawn=s|sx_spawn=s|child_send=ns|sx_child_send=ns|child_recv=nn|sx_child_recv=nn|child_line=n|sx_child_line=n|child_close=n|sx_child_close=n|make_dir=s|sx_make_dir=s|make_link=ss|sx_make_link=ss|remove_path=s|sx_remove_path=s|read_bytes=sl|sx_read_bytes=sl|write_bytes=sl|sx_write_bytes=sl|bytes_f64=ln|sx_bytes_f64=ln|bit_and=nn|sx_bit_and=nn|bit_or=nn|sx_bit_or=nn|bit_xor=nn|sx_bit_xor=nn|bit_not=n|sx_bit_not=n|shl=nn|sx_shl=nn|shr=nn|sx_shr=nn|sx_getenv=s|sx_read_dir=s|sx_path_kind=s|sx_path_size=s|sx_path_real=s|")
+  returns = concat(returns, "|run_command=n|getenv=s|len=n|index=n|concat=s|chr=s|numstr=s|sx_index=n|push=l|string_eq=n|arg=s|arg_count=n|read_file=s|write_file=n|read_line=s|read_n=s|write_out=n|flush_out=n|gc=n|gc_live=n|gc_runs=n|exit=n|http_get=s|read_dir=s|path_kind=n|path_size=n|path_real=s|")
+  params = concat(params, "|run_command=s|getenv=s|len=a|index=an|concat=sv|chr=n|numstr=n|sx_index=an|push=ln|string_eq=ss|arg=n|arg_count=|read_file=s|write_file=ss|read_line=|read_n=n|write_out=s|flush_out=|gc=|gc_live=|gc_runs=|exit=n|http_get=s|read_dir=s|path_kind=s|path_size=s|path_real=s|")
+  returns = concat(returns, "|sx_cat=s|sx_len=n|sx_idx=n|sx_chr=s|sx_read=s|sx_write=n|sx_http=s|sx_arg=s|sx_argc=n|sx_eq=n|sx_cmp=n|sx_numstr=s|sx_read_line=s|sx_read_n=s|sx_write_out=n|sx_flush_out=n|sx_gc_run=n|sx_gc_live=n|sx_gc_count=n|sx_exit=n|sx_mod=n|sx_lget=n|sx_llen=n|sx_lpush=l|spawn=n|sx_spawn=n|child_send=n|sx_child_send=n|child_recv=s|sx_child_recv=s|child_line=s|sx_child_line=s|child_close=n|sx_child_close=n|make_dir=n|sx_make_dir=n|make_link=n|sx_make_link=n|remove_path=n|sx_remove_path=n|read_bytes=n|sx_read_bytes=n|write_bytes=n|sx_write_bytes=n|bytes_f64=l|sx_bytes_f64=l|bit_and=n|sx_bit_and=n|bit_or=n|sx_bit_or=n|bit_xor=n|sx_bit_xor=n|bit_not=n|sx_bit_not=n|shl=n|sx_shl=n|shr=n|sx_shr=n|sx_getenv=s|sx_read_dir=s|sx_path_kind=n|sx_path_size=n|sx_path_real=s|")
+  params = concat(params, "|sx_cat=sv|sx_len=a|sx_idx=an|sx_chr=n|sx_read=s|sx_write=ss|sx_http=s|sx_arg=n|sx_argc=|sx_eq=ss|sx_cmp=ss|sx_numstr=n|sx_read_line=|sx_read_n=n|sx_write_out=s|sx_flush_out=|sx_gc_run=|sx_gc_live=|sx_gc_count=|sx_exit=n|sx_mod=nn|sx_lget=ln|sx_llen=l|sx_lpush=ln|spawn=s|sx_spawn=s|child_send=ns|sx_child_send=ns|child_recv=nn|sx_child_recv=nn|child_line=n|sx_child_line=n|child_close=n|sx_child_close=n|make_dir=s|sx_make_dir=s|make_link=ss|sx_make_link=ss|remove_path=s|sx_remove_path=s|read_bytes=sl|sx_read_bytes=sl|write_bytes=sl|sx_write_bytes=sl|bytes_f64=ln|sx_bytes_f64=ln|bit_and=nn|sx_bit_and=nn|bit_or=nn|sx_bit_or=nn|bit_xor=nn|sx_bit_xor=nn|bit_not=n|sx_bit_not=n|shl=nn|sx_shl=nn|shr=nn|sx_shr=nn|sx_getenv=s|sx_read_dir=s|sx_path_kind=s|sx_path_size=s|sx_path_real=s|")
   give sxfenv(decls, strings, lists, structs, returns, params, fields, private)
 }
 // Validate complete iteration headers before the permissive C lowering.
@@ -3506,6 +3619,10 @@ hold cond = ""
 hold cr = 0
 hold cl = 0
 hold ctrim = ""
+hold checked_condition_source = ""
+hold condition_private = ""
+hold condition_main_decls = ""
+hold condition_fn_decls = ""
 hold ci = 0
 hold gr = 0
 hold pmode = 0
@@ -5838,10 +5955,10 @@ while running == 1 {
                     }
                   }
                 }
-                when seed_profile == 1 {
-                  fspk = concat(fspk, concat(concat(concat(gwd, "__"), gsuf), "="))
-                  fspk = concat(fspk, concat(seed_pending_signature, "|"))
-                }
+                // Typed full-profile value checking needs pending callees too:
+                // their specialised definition may be emitted after the caller.
+                fspk = concat(fspk, concat(concat(concat(gwd, "__"), gsuf), "="))
+                fspk = concat(fspk, concat(seed_pending_signature, "|"))
                 hold gqxri = 0
                 when gqxi + 1 < len(fgnames) {
                   hold gqxri = sx_index(fgnames, gqxi + 1) - 48
@@ -6405,7 +6522,7 @@ while running == 1 {
               hold zenv = concat(zenv, "|len=n|concat=s|sx_index=n|index=n|chr=s|numstr=s|push=l|string_eq=n|")
               hold zenv = concat(zenv, chr(1))
               hold zenv = concat(zenv, fspk)
-              hold zenv = concat(zenv, "|len=a|concat=ss|sx_index=an|index=an|chr=n|numstr=n|push=ln|string_eq=ss|")
+              hold zenv = concat(zenv, "|len=a|concat=sv|sx_index=an|index=an|chr=n|numstr=n|push=ln|string_eq=ss|")
               hold zenv = concat(zenv, chr(1))
               hold zenv = concat(zenv, inprivate)
               hold zenv = concat(zenv, chr(1))
@@ -6641,6 +6758,12 @@ while running == 1 {
     hold bpush = 0
     hold pmode = 0
     hold pbad = 0
+    hold atype = ""
+    hold checked_value = 0
+    hold fully_checked_value = 0
+    hold fully_checked_kind = ""
+    hold value_compare_code = ""
+    hold value_compare_end = 0
     hold cmpop = 0
     when (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 {
       hold uword = ""
@@ -7183,6 +7306,52 @@ while running == 1 {
             }
           }
         }
+        // A complete numeric string comparison is also a value, not a
+        // string-returning call followed by stray comparison tokens.
+        when sxseed_has_comparison(pexpr) == 1 {
+          hold pv_private = inprivate
+          when inready == 0 {
+            when len(condition_private) == 0 {
+              condition_private = inprivate
+              while sxecontains(source, condition_private) { condition_private = concat(condition_private, "x") }
+            }
+            pv_private = condition_private
+          }
+          hold pv_env = sxseed_env(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, pv_private)
+          hold pv_state = []
+          hold pv_first = len(instate)
+          hold pv_serial = 0
+          while pv_serial < pv_first { push(pv_state, 0)
+            pv_serial = pv_serial + 1 }
+          hold pv_value = sxeparse(pexpr, 0, pv_env, 0, 0, pv_state)
+          when sxflowspace(pexpr, sxepos(pv_value)) == len(pexpr) {
+            when sx_eq(sxesegment(pv_value, 1), "n") { phas = 1
+              checked_value = 1 }
+            when sx_eq(sxesegment(pv_value, 1), "s") && sxecontains(sxecode(pv_value), "sx_cmp(") {
+              fully_checked_value = 1
+              fully_checked_kind = "s"
+              value_compare_code = sxecode(pv_value)
+              value_compare_end = pp
+              rt = 1
+              when len(pv_state) > pv_first || sxecontains(value_compare_code, concat(pv_private, "list(")) {
+                inprivate = pv_private
+                when inready == 0 {
+                  inready = 1
+                  fsret = concat(fsret, concat(inprivate, "list=l|"))
+                }
+                lt = 1
+                hold pv_decls = ""
+                pv_serial = pv_first
+                while pv_serial < len(pv_state) {
+                  push(instate, 0)
+                  pv_decls = concat(pv_decls, concat("  double ", concat(inprivate, concat(sxedigits(pv_serial), ";\n"))))
+                  pv_serial = pv_serial + 1
+                }
+                when in_fn == 1 { condition_fn_decls = concat(condition_fn_decls, pv_decls) } otherwise { condition_main_decls = concat(condition_main_decls, pv_decls) }
+              }
+            }
+          }
+        }
         when phas == 1 {
           hold pmode = act
           hold act = 8
@@ -7213,7 +7382,7 @@ while running == 1 {
           hold pstk = ""
           hold pprev = 0
           hold pv = 0
-          while pv < cl {
+          while pv < cl && checked_value == 0 {
             hold pc = sx_index(ctrim, pv)
             hold pc2 = 0
             when pv + 1 < cl {
@@ -7303,9 +7472,14 @@ while running == 1 {
               when pc3 == 40 {
                 hold pok2 = 0
                 hold pnumb = 0
-                when sx_eq(pw, "len") || sx_eq(pw, "sx_index") || sx_eq(pw, "string_eq") {
-                  // a numeric builtin (len, sx_index, string_eq): its argument list is
-                  // not validated here (the rewrite maps the name to the C runtime); skip to the matching )
+                hold pcheckednumeric = 0
+                when sxseed_csv_has("arg_count,gc,gc_live,gc_runs,flush_out,write_file,write_out,exit,path_kind,path_size,spawn,child_send,child_close,make_dir,make_link,remove_path,write_bytes,read_bytes,bit_and,bit_or,bit_xor,bit_not,shl,shr,run_command", pw) == 1 {
+                  hold pcheckednumeric = 1
+                }
+                when pcheckednumeric == 1 || sx_eq(pw, "len") || sx_eq(pw, "sx_index") || sx_eq(pw, "string_eq") {
+                  // Locate the complete numeric call. New grouped numeric builtins
+                  // receive checked signature validation below; keep the existing
+                  // len/sx_index/string_eq path unchanged.
                   hold pnumb = 1
                   hold pnumd = 0
                   hold pnume = pv3
@@ -7336,6 +7510,20 @@ while running == 1 {
                 }
                 when sx_eq(pw, "sx_read") || sx_eq(pw, "sx_write") || sx_eq(pw, "sx_arg") || sx_eq(pw, "sx_argc") {
                   hold pok2 = 1
+                }
+                when pcheckednumeric == 1 {
+                  // Reuse checked call signatures: permitting a numeric return
+                  // must not bypass the builtin arity or argument-kind contract.
+                  hold pzenv = sxseed_env(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+                  hold pzstate = []
+                  hold pzvalue = sxeparse(ctrim, pv, pzenv, 100, 0, pzstate)
+                  when sx_eq(sxesegment(pzvalue, 1), "n") == 0 {
+                    hold pbad = 1
+                    hold pmsg = concat("checked numeric builtin call: ", sxecode(pzvalue))
+                  } otherwise {
+                    hold pstep = sxepos(pzvalue) - pv
+                  }
+                  hold pok2 = 0
                 }
                 when pok2 == 1 {
                   hold pmsg = concat("builtin '", pw)
@@ -7897,6 +8085,73 @@ while running == 1 {
         hold c1 = sxsource_get(source_words,pos)
       }
 
+
+      // Numeric/string comparison values also belong in field/element stores.
+      // Keep the existing checked LHS parser and lower just its scalar RHS.
+      when bpush == 0 && (len(sufx) > 0 || liset == 1) {
+        hold store_end = pos
+        hold store_text = ""
+        hold store_quote = 0
+        hold store_braces = 0
+        hold store_run = 1
+        while store_end < n && store_run == 1 {
+          hold store_char = sxsource_get(source_words, store_end)
+          when store_quote == 1 {
+            store_text = concat(store_text, chr(store_char))
+            store_end = store_end + 1
+            when store_char == 92 && store_end < n {
+              store_text = concat(store_text, chr(sxsource_get(source_words, store_end)))
+              store_end = store_end + 1
+            } otherwise { when store_char == 34 { store_quote = 0 } }
+          } otherwise {
+            when store_char == 10 || store_char == 13 || (store_char == 125 && store_braces == 0) || (store_char == 47 && store_end + 1 < n && sxsource_get(source_words, store_end + 1) == 47) {
+              store_run = 0
+            } otherwise {
+              when store_char == 34 { store_quote = 1 }
+              when store_char == 123 { store_braces = store_braces + 1 }
+              when store_char == 125 { store_braces = store_braces - 1 }
+              store_text = concat(store_text, chr(store_char))
+              store_end = store_end + 1
+            }
+          }
+        }
+        when sxseed_has_comparison(store_text) {
+          hold store_private = inprivate
+          when inready == 0 {
+            when len(condition_private) == 0 {
+              condition_private = inprivate
+              while sxecontains(source, condition_private) { condition_private = concat(condition_private, "x") }
+            }
+            store_private = condition_private
+          }
+          hold store_first = len(instate)
+          hold store_env = sxseed_env(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, store_private)
+          hold store_value = sxeparse(store_text, 0, store_env, 0, 0, instate)
+          hold store_kind = sxesegment(store_value, 1)
+          when (sx_eq(store_kind, "n") || sx_eq(store_kind, "s")) && sxflowspace(store_text, sxepos(store_value)) == len(store_text) {
+            rhs = sxecode(store_value)
+            rk = 0
+            when sx_eq(store_kind, "s") { rk = 1 }
+            pos = store_end
+            c1 = 0
+            fully_checked_value = 1
+            fully_checked_kind = store_kind
+            rt = 1
+            when len(instate) > store_first || sxecontains(rhs, concat(store_private, "list(")) {
+              inprivate = store_private
+              when inready == 0 {
+                inready = 1
+                fsret = concat(fsret, concat(inprivate, "list=l|"))
+              }
+              lt = 1
+              while store_first < len(instate) {
+                body = concat(body, concat("  double ", concat(inprivate, concat(sxedigits(store_first), ";\n"))))
+                store_first = store_first + 1
+              }
+            }
+          }
+        }
+      }
 
       // RHS: string literal
       when c1 == 34 {
@@ -12418,7 +12673,7 @@ hold ec = 0
       }
       hold rk = isstr
 
-      when fsstructactive == 1 && sxfneedscheck(rhs, fsret, fspk, svars) == 1 && sxecontains(rhs, chr(123)) == 0 {
+      when fsstructactive == 1 && fully_checked_value == 0 && sxfneedscheck(rhs, fsret, fspk, svars) == 1 && sxecontains(rhs, chr(123)) == 0 {
         hold sfenv = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
         hold sfvalue = sxeparse(rhs, 0, sfenv, 0, 0, instate)
         hold sfkind = sxesegment(sfvalue, 1)
@@ -12436,7 +12691,12 @@ hold ec = 0
       // Seed expressions allow string concatenation inside call arguments,
       // not just at the outer assignment level. Re-lower the scalar expression
       // with the typed parser before emitting C pointer arithmetic.
-      when seed_profile == 1 && (rk == 0 || rk == 1) && sxseed_has_plus(rhs) {
+      when len(value_compare_code) > 0 {
+        rhs = value_compare_code
+        rk = 1
+        pos = value_compare_end
+      }
+      when perr == 0 && (rk == 0 || rk == 1) && sxseed_has_plus(rhs) {
         when inready == 0 {
           while sxecontains(source, inprivate) { inprivate = concat(inprivate, "x") }
           inready = 1
@@ -12447,14 +12707,18 @@ hold ec = 0
         hold seed_string_value = sxeparse(rhs, 0, seed_string_env, 0, 0, instate)
         when (string_eq(sxesegment(seed_string_value, 1), "s") || string_eq(sxesegment(seed_string_value, 1), "n")) && sxflowspace(rhs, sxepos(seed_string_value)) == len(rhs) {
           rhs = sxecode(seed_string_value)
+          fully_checked_value = 1
+          fully_checked_kind = sxesegment(seed_string_value, 1)
           when sxecontains(rhs, "sx_cat(") { rt = 1 }
           while seed_string_serial < len(instate) {
             body = concat(body, concat("  double ", concat(inprivate, concat(sxedigits(seed_string_serial), concat(";", nl)))))
             seed_string_serial = seed_string_serial + 1
           }
         } otherwise {
-          perr = 1
-          permsg = concat("seed-min string expression: ", sxecode(seed_string_value))
+          when seed_profile == 1 || string_eq(sxecode(seed_string_value), "numeric operator requires numeric operands") {
+            perr = 1
+            permsg = concat("string expression: ", sxecode(seed_string_value))
+          }
         }
       }
 
@@ -15725,7 +15989,7 @@ hold ec = 0
       }
       hold rk = isstr
 
-      when fsstructactive == 1 && sxfneedscheck(rhs, fsret, fspk, svars) == 1 && sxecontains(rhs, chr(123)) == 0 {
+      when fsstructactive == 1 && fully_checked_value == 0 && sxfneedscheck(rhs, fsret, fspk, svars) == 1 && sxecontains(rhs, chr(123)) == 0 {
         hold sfenv = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
         hold sfvalue = sxeparse(rhs, 0, sfenv, 0, 0, instate)
         hold sfkind = sxesegment(sfvalue, 1)
@@ -15740,7 +16004,12 @@ hold ec = 0
         }
       }
 
-      when seed_profile == 1 && (rk == 0 || rk == 1) && sxseed_has_plus(rhs) {
+      when len(value_compare_code) > 0 {
+        rhs = value_compare_code
+        rk = 1
+        pos = value_compare_end
+      }
+      when perr == 0 && (rk == 0 || rk == 1) && sxseed_has_plus(rhs) {
         when inready == 0 {
           while sxecontains(source, inprivate) { inprivate = concat(inprivate, "x") }
           inready = 1
@@ -15751,14 +16020,18 @@ hold ec = 0
         hold seed_show_value = sxeparse(rhs, 0, seed_show_env, 0, 0, instate)
         when (string_eq(sxesegment(seed_show_value, 1), "s") || string_eq(sxesegment(seed_show_value, 1), "n")) && sxflowspace(rhs, sxepos(seed_show_value)) == len(rhs) {
           rhs = sxecode(seed_show_value)
+          fully_checked_value = 1
+          fully_checked_kind = sxesegment(seed_show_value, 1)
           when sxecontains(rhs, "sx_cat(") { rt = 1 }
           while seed_show_serial < len(instate) {
             body = concat(body, concat("  double ", concat(inprivate, concat(sxedigits(seed_show_serial), concat(";", nl)))))
             seed_show_serial = seed_show_serial + 1
           }
         } otherwise {
-          perr = 1
-          permsg = concat("seed-min show expression: ", sxecode(seed_show_value))
+          when seed_profile == 1 || string_eq(sxecode(seed_show_value), "numeric operator requires numeric operands") {
+            perr = 1
+            permsg = concat("show expression: ", sxecode(seed_show_value))
+          }
         }
       }
 
@@ -15844,16 +16117,43 @@ hold ec = 0
       }
       hold cond = ""
       hold cr = 1
+      hold condquote = 0
+      hold condescape = 0
       while cr == 1 {
         when pos >= n {
           hold cr = 0
         } otherwise {
           hold cs = sxsource_get(source_words,pos)
-          when cs == 123 {
-            hold cr = 0
-          } otherwise {
+          // Only an unquoted brace opens the control body. Keep escaped
+          // quotes/backslashes verbatim for the shared expression mapper.
+          when condquote == 1 {
             hold cond = concat(cond, chr(cs))
             hold pos = pos + 1
+            when condescape == 1 {
+              hold condescape = 0
+            } otherwise {
+              when cs == 92 {
+                hold condescape = 1
+              } otherwise {
+                when cs == 34 { hold condquote = 0 }
+              }
+            }
+          } otherwise {
+            when cs == 123 {
+              hold cr = 0
+            } otherwise {
+              when cs == 47 && pos + 1 < n && sxsource_get(source_words,pos + 1) == 47 {
+                // A comment is whitespace, including any braces/quotes in it.
+                while pos < n && sxsource_get(source_words,pos) != 10 {
+                  hold pos = pos + 1
+                }
+                hold cond = concat(cond, " ")
+              } otherwise {
+                when cs == 34 { hold condquote = 1 }
+                hold cond = concat(cond, chr(cs))
+                hold pos = pos + 1
+              }
+            }
           }
         }
       }
@@ -15877,6 +16177,7 @@ hold ec = 0
         hold ctrim = concat(ctrim, chr(sx_index(cond,ci)))
         hold ci = ci + 1
       }
+      hold checked_condition_source = ctrim
       // Field-list condition values must be proven numeric before reaching C.
       // In particular, lower a typed field index through sx_lget; a whole
       // list or any unproven list-field operator is a source-level refusal,
@@ -16468,6 +16769,7 @@ hold ec = 0
     // ---- shared rewrite: conditions (act 3), give (act 6) and
     //      parenthesized hold/show expressions (act 8) are verbatim C in
     when act == 3 || act == 6 || act == 8 {
+      when act == 6 || act == 8 { checked_condition_source = ctrim }
       // ---- string == != < <= > >= ----
       // In C, `a == b` and `a < b` on two char* compare addresses, so two
       hold seo = ""
@@ -17642,6 +17944,71 @@ hold ec = 0
           }
         }
       }
+      when (act == 3 || act == 6 || act == 8) && perr == 0 {
+        // Parse the original condition, before legacy comparison rewriting
+        // can split a string operand at +. Public calls lower to sx_* names.
+        hold scprivate = inprivate
+        when inready == 0 {
+          when len(condition_private) == 0 {
+            hold condition_private = inprivate
+            while sxecontains(source, condition_private) { condition_private = concat(condition_private, "x") }
+          }
+          hold scprivate = condition_private
+        }
+        hold scenv = sxseed_env(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, scprivate)
+        hold scstate = []
+        hold scfirst = len(instate)
+        hold scserial = 0
+        while scserial < scfirst {
+          push(scstate, 0)
+          scserial = scserial + 1
+        }
+        hold scinput = checked_condition_source
+        hold scvalue = sxeparse(scinput, 0, scenv, 0, 0, scstate)
+        when (sx_eq(sxesegment(scvalue, 1), "n") == 1 || (act == 6 && sx_eq(sxesegment(scvalue, 1), "s") == 1)) && sxflowspace(scinput, sxepos(scvalue)) == len(scinput) {
+          when sxecontains(sxecode(scvalue), "sx_cmp(") == 1 || (act == 6 && sxecontains(sxecode(scvalue), "sx_cat(") == 1) || (act == 8 && checked_value == 1) {
+            hold crepl = sxecode(scvalue)
+            fully_checked_value = 1
+            fully_checked_kind = sxesegment(scvalue, 1)
+            hold rt = 1
+            when len(scstate) > scfirst || sxecontains(crepl, concat(scprivate, "list(")) == 1 {
+              hold inprivate = scprivate
+              when inready == 0 {
+                hold inready = 1
+                hold fsret = concat(fsret, concat(inprivate, "list=l|"))
+              }
+              hold lt = 1
+              hold scdecls = ""
+              hold scserial = scfirst
+              while scserial < len(scstate) {
+                push(instate, 0)
+                hold scdecls = concat(scdecls, "  double ")
+                hold scdecls = concat(scdecls, inprivate)
+                hold scdecls = concat(scdecls, sxedigits(scserial))
+                hold scdecls = concat(scdecls, ";\n")
+                hold scserial = scserial + 1
+              }
+              // Hoist declarations ONLY, not evaluations. Function locals
+              // survive recursion; main locals also work across else-if.
+              when in_fn == 1 {
+                hold condition_fn_decls = concat(condition_fn_decls, scdecls)
+              } otherwise {
+                hold condition_main_decls = concat(condition_main_decls, scdecls)
+              }
+            }
+          }
+        } otherwise {
+          hold scerror = sxecode(scvalue)
+          when sx_eq(sxesegment(scvalue, 1), "e") == 1 && (sx_eq(scerror, "numeric operator requires numeric operands") || sx_eq(scerror, "call argument type mismatch") || sx_eq(scerror, "too many call arguments") || sx_eq(scerror, "call argument count mismatch") || sx_eq(scerror, "unary operator requires a number") || sx_eq(scerror, "interpolation requires a string or number") || sx_eq(scerror, "length/index requires a string or list") || sxecontains(scerror, "' is not a list")) {
+            hold perr = 1
+            hold permsg = concat("condition expression: ", scerror)
+          }
+          when act == 3 && sx_eq(sxesegment(scvalue, 1), "e") == 0 && sx_eq(sxesegment(scvalue, 1), "n") == 0 && sxflowspace(scinput, sxepos(scvalue)) == len(scinput) {
+            hold perr = 1
+            hold permsg = "condition expression requires a numeric result"
+          }
+        }
+      }
     }
 
     // ---- while/when: emit ----
@@ -17689,12 +18056,24 @@ hold ec = 0
 
     // ---- give: emit ----
     when act == 6 {
+      when fully_checked_value == 1 && in_fn == 1 {
+        hold checked_return_kind = sxelookup(fsret, fn_name, "=")
+        when len(checked_return_kind) > 0 && sx_eq(checked_return_kind, fully_checked_kind) == 0 {
+          perr = 1
+          permsg = "function give type mismatch: expression kind differs from declared return"
+        }
+      }
       when fsstructactive == 1 && in_fn == 1 {
         hold sfenv = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
-        hold sfreturn = sxeparse(crepl, 0, sfenv, 0, 0, instate)
-        hold sfkind = sxesegment(sfreturn, 1)
+        hold sfkind = fully_checked_kind
+        hold sfcomplete = 1
+        when fully_checked_value == 0 {
+          hold sfreturn = sxeparse(crepl, 0, sfenv, 0, 0, instate)
+          sfkind = sxesegment(sfreturn, 1)
+          when sxflowspace(crepl, sxepos(sfreturn)) != len(crepl) { sfcomplete = 0 }
+        }
         hold sfexpected = sxelookup(fsret, fn_name, "=")
-        when string_eq(sfkind, sfexpected) == 0 || sxflowspace(crepl, sxepos(sfreturn)) != len(crepl) {
+        when string_eq(sfkind, sfexpected) == 0 || sfcomplete == 0 {
           hold perr = 1
           hold permsg = "function give type mismatch (named struct identity must match)"
         }
@@ -17708,7 +18087,11 @@ hold ec = 0
     // ================= hold/show with a parenthesized expression =================
     // ctrim was validated in the pre-checks and rewritten into crepl
     when act == 8 {
-      when fsstructactive == 1 && sxfneedscheck(crepl, fsret, fspk, svars) == 1 {
+      when pmode == 1 && len(atype) > 0 && sx_eq(atype, "num") == 0 && sx_eq(atype, "number") == 0 && sx_eq(atype, "bool") == 0 && sx_eq(atype, "double") == 0 {
+        perr = 1
+        permsg = "type mismatch: a numeric comparison/group cannot initialize the declared non-numeric kind"
+      }
+      when fsstructactive == 1 && fully_checked_value == 0 && sxfneedscheck(crepl, fsret, fspk, svars) == 1 {
         hold sfenv = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
         hold sfvalue = sxeparse(crepl, 0, sfenv, 0, 0, instate)
         hold sfkind = sxesegment(sfvalue, 1)
@@ -18205,6 +18588,11 @@ hold ec = 0
         when in_fn == 1 {
           when depth == 0 {
             hold body = concat(body, "}\n\n")
+            when len(condition_fn_decls) > 0 {
+              hold scbrace = 0
+              while scbrace < len(body) && sx_index(body, scbrace) != 123 { scbrace = scbrace + 1 }
+              hold body = concat(sxeslice(body, 0, scbrace + 1), concat("\n", concat(condition_fn_decls, sxeslice(body, scbrace + 1, len(body)))))
+            }
             hold fns = concat(fns, body)
             hold body = saved_body
             hold in_fn = 0
@@ -18473,6 +18861,7 @@ hold ec = 0
       }
       hold saved_body = body
       hold body = ""
+      hold condition_fn_decls = ""
       when fn_retkind == 115 {
         hold body = concat(body, "static char *")
       } otherwise {
@@ -18762,37 +19151,58 @@ hold ec = 0
       // fvstr = 1: `for c in s {` walks a declared string byte by byte (fvmode 1)
       hold fvstr = 0
       hold fvdup = 0
+      hold fvaquote = 0
+      hold fvaescape = 0
       hold fvrun = 1
       while fvrun == 1 {
         when pos >= n {
           hold fvrun = 0
         } otherwise {
           hold fc = sxsource_get(source_words, pos)
-          when fc == 123 {
-            // no `..`: this is `for V in LIST {`
+          // Delimiters in a quoted source are bytes, not range/body syntax.
+          when fvaquote == 1 || fc == 34 {
+            hold fva = concat(fva, chr(fc))
             hold pos = pos + 1
-            hold fvmode = 1
-            hold fvrun = 0
-          } otherwise {
-            when fc == 46 {
-              hold fc2 = 0
-              when pos + 1 < n {
-                hold fc2 = sxsource_get(source_words, pos + 1)
-              }
-              when fc2 == 46 {
-                hold fvrun = 0
-              } otherwise {
-                hold fva = concat(fva, chr(fc))
-                hold pos = pos + 1
-              }
+            when fvaquote == 0 {
+              hold fvaquote = 1
             } otherwise {
-              when fc == 10 || fc == 13 {
-                hold fvrun = 0
-                hold ferr = 1
-                hold fmsg = "for loop: expected `A..B` or a list name before the `{`"
+              when fvaescape == 1 {
+                hold fvaescape = 0
               } otherwise {
-                hold fva = concat(fva, chr(fc))
-                hold pos = pos + 1
+                when fc == 92 {
+                  hold fvaescape = 1
+                } otherwise {
+                  when fc == 34 { hold fvaquote = 0 }
+                }
+              }
+            }
+          } otherwise {
+            when fc == 123 {
+              // no `..`: this is `for V in LIST {`
+              hold pos = pos + 1
+              hold fvmode = 1
+              hold fvrun = 0
+            } otherwise {
+              when fc == 46 {
+                hold fc2 = 0
+                when pos + 1 < n {
+                  hold fc2 = sxsource_get(source_words, pos + 1)
+                }
+                when fc2 == 46 {
+                  hold fvrun = 0
+                } otherwise {
+                  hold fva = concat(fva, chr(fc))
+                  hold pos = pos + 1
+                }
+              } otherwise {
+                when fc == 10 || fc == 13 {
+                  hold fvrun = 0
+                  hold ferr = 1
+                  hold fmsg = "for loop: expected `A..B` or a list name before the `{`"
+                } otherwise {
+                  hold fva = concat(fva, chr(fc))
+                  hold pos = pos + 1
+                }
               }
             }
           }
@@ -19879,7 +20289,7 @@ hold ec = 0
 
     // Lower only the newly emitted statement while lexical kind tables live.
     // This keeps allocations inside expressions, including loop conditions.
-    when act == 1 || act == 2 || act == 3 || act == 6 || act == 8 {
+    when (act == 1 || act == 2 || act == 3 || act == 6 || act == 8) && fully_checked_value == 0 {
       hold inpos = instart
       hold inquote = 0
       hold inprev = 0
@@ -20091,13 +20501,18 @@ when rt == 1 {
   hold out = concat(out, "static double sx_path_size(const char *p){ struct stat st; if(lstat(p,&st)||!S_ISREG(st.st_mode)) return 0.0; return (double)st.st_size; }\n")
   hold out = concat(out, "extern char *realpath(const char *path, char *resolved_path);\n")
   hold out = concat(out, "static char *sx_path_real(const char *p){ char b[PATH_MAX]; if(!realpath(p,b)) return \"\"; size_t n=strlen(b); char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
-  hold out = concat(out, "#include <unistd.h>\n#include <sys/wait.h>\n#include <signal.h>\ntypedef struct sx_proc { pid_t pid; int in; int out; int live; } sx_proc;\nstatic sx_proc sx_procs[8];\nstatic int sx_proc_slot(double h){ long i=(long)h-1; if(i<0||i>=8||!sx_procs[i].live) return -1; return (int)i; }\nstatic double sx_spawn(const char *path){ int i,pin[2],pout[2]; pid_t pid; signal(SIGPIPE,SIG_IGN); for(i=0;i<8;i++){ if(!sx_procs[i].live) break; } if(i>=8) return 0.0; if(pipe(pin)||pipe(pout)) return 0.0; pid=fork(); if(pid<0){ close(pin[0]);close(pin[1]);close(pout[0]);close(pout[1]); return 0.0; } if(pid==0){ dup2(pin[0],0); dup2(pout[1],1); close(pin[0]);close(pin[1]);close(pout[0]);close(pout[1]); execl(path,path,(char*)0); _exit(127); } close(pin[0]); close(pout[1]); sx_procs[i].pid=pid; sx_procs[i].in=pin[1]; sx_procs[i].out=pout[0]; sx_procs[i].live=1; return (double)(i+1); }\nstatic double sx_child_send(double h,const char *s){ int i=sx_proc_slot(h); size_t n=strlen(s),off=0; if(i<0) return 0.0; while(off<n){ ssize_t w=write(sx_procs[i].in,s+off,n-off); if(w<=0) return 0.0; off+=(size_t)w; } return 1.0; }\nstatic char *sx_child_recv(double h,double v){ int i=sx_proc_slot(h); long n=(long)v; char *b; size_t got=0; if(i<0||n<0) return \"\"; b=(char*)sx_gc_alloc(0,(size_t)n+1); while(got<(size_t)n){ ssize_t rd=read(sx_procs[i].out,b+got,(size_t)n-got); if(rd<=0) break; got+=(size_t)rd; } b[got]=0; return b; }\nstatic char *sx_child_line(double h){ int i=sx_proc_slot(h); char buf[4096]; size_t n=0; char *r; if(i<0) return \"\"; for(;;){ ssize_t rd=read(sx_procs[i].out,buf+n,1); if(rd<=0) break; if(buf[n]==10) break; n+=1; if(n+2>sizeof buf) break; } buf[n]=0; if(n&&buf[n-1]==13) buf[n-1]=0; r=(char*)sx_gc_alloc(0,n+1); memcpy(r,buf,n+1); return r; }\nstatic double sx_child_close(double h){ int i=sx_proc_slot(h); int status=0; pid_t r; if(i<0) return -1.0; close(sx_procs[i].in); do { r=waitpid(sx_procs[i].pid,&status,0); } while(r<0); close(sx_procs[i].out); sx_procs[i].live=0; if(WIFEXITED(status)) return (double)WEXITSTATUS(status); return -1.0; }\nstatic double sx_run_command(const char *cmd){ int st=system(cmd); if(st<0) return -1.0; if(WIFEXITED(st)) return (double)WEXITSTATUS(st); return -1.0; }\nstatic char *sx_getenv(const char *n){ const char *v=getenv(n); return v?(char*)v:\"\"; }\nstatic double sx_make_dir(const char *p){ return mkdir(p,0700)==0?1.0:0.0; }\nstatic double sx_make_link(const char *target,const char *path){ return symlink(target,path)==0?1.0:0.0; }\nstatic double sx_remove_path(const char *p){ if(!unlink(p)) return 1.0; return rmdir(p)==0?1.0:0.0; }\n")
-  hold out = concat(out, "#include <time.h>\nstatic struct timespec sx_http_last; static int sx_http_seen=0;\nstatic char *sx_http(const char *u){ size_t L=strlen(u); if(L>3000) return \"\"; if(strncmp(u,\"http://\",7)&&strncmp(u,\"https://\",8)) return \"\"; for(size_t i=0;i<L;i++){ unsigned char c=(unsigned char)u[i]; int ok=(c>=97&&c<=122)||(c>=65&&c<=90)||(c>=48&&c<=57)||(c!=0&&strchr(\"-._~:/?&=%+#@,;\",c)); if(!ok) return \"\"; } if(sx_http_seen){ struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now); double el=(double)(now.tv_sec-sx_http_last.tv_sec)+(double)(now.tv_nsec-sx_http_last.tv_nsec)/1e9; if(el<1.0){ struct timespec w; w.tv_sec=0; w.tv_nsec=(long)((1.0-el)*1e9); nanosleep(&w,NULL); } } sx_http_seen=1; clock_gettime(CLOCK_MONOTONIC,&sx_http_last); char cmd[4096]; snprintf(cmd,sizeof cmd,\"curl -sS -f -m 10 --max-filesize 1000000 -A sayanox-http/0.1 '%s' 2>/dev/null\",u); FILE *p=popen(cmd,\"r\"); if(!p) return \"\"; char *b=(char*)sx_gc_alloc(0,1000001); size_t rd=fread(b,1,1000000,p); b[rd]=0; pclose(p); return b; }\n")
+  hold out = concat(out, "#include <unistd.h>\n#include <fcntl.h>\n#include <errno.h>\n#include <sys/wait.h>\n#include <signal.h>\ntypedef struct sx_proc { pid_t pid; int in; int out; int live; } sx_proc;\nstatic sx_proc sx_procs[8];\nstatic int sx_proc_slot(double h){ long i; if(!(h>=1.0 && h<=8.0)) return -1; i=(long)h-1; if(h!=(double)(i+1)||!sx_procs[i].live) return -1; return (int)i; }\nstatic double sx_spawn(const char *path){ int i,pin[2],pout[2]; pid_t pid; signal(SIGPIPE,SIG_IGN); for(i=0;i<8;i++){ if(!sx_procs[i].live) break; } if(i>=8) return 0.0; if(pipe(pin)) return 0.0; if(pipe(pout)){ close(pin[0]);close(pin[1]); return 0.0; } if(fcntl(pin[0],F_SETFD,FD_CLOEXEC)<0 || fcntl(pin[1],F_SETFD,FD_CLOEXEC)<0 || fcntl(pout[0],F_SETFD,FD_CLOEXEC)<0 || fcntl(pout[1],F_SETFD,FD_CLOEXEC)<0){ close(pin[0]);close(pin[1]);close(pout[0]);close(pout[1]); return 0.0; } pid=fork(); if(pid<0){ close(pin[0]);close(pin[1]);close(pout[0]);close(pout[1]); return 0.0; } if(pid==0){ dup2(pin[0],0); dup2(pout[1],1); close(pin[0]);close(pin[1]);close(pout[0]);close(pout[1]); execl(path,path,(char*)0); _exit(127); } close(pin[0]); close(pout[1]); sx_procs[i].pid=pid; sx_procs[i].in=pin[1]; sx_procs[i].out=pout[0]; sx_procs[i].live=1; return (double)(i+1); }\nstatic double sx_child_send(double h,const char *s){ int i=sx_proc_slot(h); size_t n=strlen(s),off=0; if(i<0) return 0.0; while(off<n){ ssize_t w=write(sx_procs[i].in,s+off,n-off); if(w<=0) return 0.0; off+=(size_t)w; } return 1.0; }\nstatic char *sx_child_recv(double h,double v){ int i=sx_proc_slot(h); long n=(long)v; char *b; size_t got=0; if(i<0||n<0) return \"\"; b=(char*)sx_gc_alloc(0,(size_t)n+1); while(got<(size_t)n){ ssize_t rd=read(sx_procs[i].out,b+got,(size_t)n-got); if(rd<=0) break; got+=(size_t)rd; } b[got]=0; return b; }\nstatic char *sx_child_line(double h){ int i=sx_proc_slot(h); char buf[4096]; size_t n=0; char *r; if(i<0) return \"\"; for(;;){ ssize_t rd=read(sx_procs[i].out,buf+n,1); if(rd<=0) break; if(buf[n]==10) break; n+=1; if(n+2>sizeof buf) break; } buf[n]=0; if(n&&buf[n-1]==13) buf[n-1]=0; r=(char*)sx_gc_alloc(0,n+1); memcpy(r,buf,n+1); return r; }\nstatic double sx_child_close(double h){ int i=sx_proc_slot(h); int status=0; pid_t r; if(i<0) return -1.0; close(sx_procs[i].in); do { r=waitpid(sx_procs[i].pid,&status,0); } while(r<0 && errno==EINTR); close(sx_procs[i].out); sx_procs[i].live=0; if(r<0) return -1.0; if(WIFEXITED(status)) return (double)WEXITSTATUS(status); return -1.0; }\nstatic double sx_run_command(const char *cmd){ int st=system(cmd); if(st<0) return -1.0; if(WIFEXITED(st)) return (double)WEXITSTATUS(st); return -1.0; }\nstatic char *sx_getenv(const char *n){ const char *v=getenv(n); return v?(char*)v:\"\"; }\nstatic double sx_make_dir(const char *p){ return mkdir(p,0700)==0?1.0:0.0; }\nstatic double sx_make_link(const char *target,const char *path){ return symlink(target,path)==0?1.0:0.0; }\nstatic double sx_remove_path(const char *p){ if(!unlink(p)) return 1.0; return rmdir(p)==0?1.0:0.0; }\n")
+  hold out = concat(out, "#include <time.h>\nstatic struct timespec sx_http_last; static int sx_http_seen=0;\nstatic char *sx_http(const char *u){ size_t L=strlen(u); if(L>3000) return \"\"; if(strncmp(u,\"http://\",7)&&strncmp(u,\"https://\",8)) return \"\"; for(size_t i=0;i<L;i++){ unsigned char c=(unsigned char)u[i]; int ok=(c>=97&&c<=122)||(c>=65&&c<=90)||(c>=48&&c<=57)||(c!=0&&strchr(\"-._~:/?&=%+#@,;\",c)); if(!ok) return \"\"; } if(sx_http_seen){ struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now); double el=(double)(now.tv_sec-sx_http_last.tv_sec)+(double)(now.tv_nsec-sx_http_last.tv_nsec)/1e9; if(el<1.0){ struct timespec w; w.tv_sec=0; w.tv_nsec=(long)((1.0-el)*1e9); nanosleep(&w,NULL); } } sx_http_seen=1; clock_gettime(CLOCK_MONOTONIC,&sx_http_last); char cmd[4096]; snprintf(cmd,sizeof cmd,\"curl -sS -f -m 10 --max-filesize 1000000 -A sayanox-http/0.1 '%s' 2>/dev/null\",u); FILE *p=popen(cmd,\"r\"); if(!p) return \"\"; char *b=(char*)sx_gc_alloc(0,1000002); size_t rd=fread(b,1,1000001,p); int st=pclose(p); if(st!=0 || rd>1000000) return \"\"; b[rd]=0; return b; }\n")
   hold out = concat(out, "static char *sx_read_line(void){ char b[4096]; if(!fgets(b,sizeof b,stdin)) return \"\"; size_t n=strlen(b); if(n&&b[n-1]==10) b[n-1]=0; n=strlen(b); if(n&&b[n-1]==13) b[n-1]=0; char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
   hold out = concat(out, "static char *sx_read_n(double v){ long n=(long)v; if(n<0) return \"\"; char *b=(char*)sx_gc_alloc(0,(size_t)n+1); size_t rd=fread(b,1,(size_t)n,stdin); b[rd]=0; return b; }\n")
   hold out = concat(out, "static double sx_write_out(const char *s){ fputs(s,stdout); return 1.0; }\n")
   hold out = concat(out, "static double sx_flush_out(void){ fflush(stdout); return 1.0; }\nstatic double sx_exit(double v){ fflush(stdout); exit((int)(long)v); return 0.0; }\n")
   hold out = concat(out, "static char *sx_numstr(double v){ char b[64]; snprintf(b,sizeof b,\"%g\",v); size_t n=strlen(b); char *r=(char*)sx_gc_alloc(0,n+1); memcpy(r,b,n+1); return r; }\n")
+  // Keep C99 minimum bootstrap string-only; the full profile uses C11.
+  hold cat_identity = "__sx_cat_text"
+  while sxecontains(source, cat_identity) { cat_identity = concat(cat_identity, "x") }
+  hold out = concat(out, concat("#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L\nstatic char *", concat(cat_identity, "(const char *v){return (char*)v;}\n#define sx_cat(a,b) sx_cat((a),_Generic((b),char*: ")))
+  hold out = concat(out, concat(cat_identity, concat(",const char*: ", concat(cat_identity, ",default: sx_numstr)(b))\n#endif\n"))))
   when interpactive == 1 {
     hold out = concat(out, "static char *")
     hold out = concat(out, interpprivate)
@@ -20141,7 +20556,7 @@ when rt == 1 {
 }
 // Byte-buffer and bitwise surface for the native-AOT port. It is emitted after
 // both runtime variants because sx_bytes_f64 needs sx_lpush from either one.
-hold out = concat(out, "static unsigned long long sx_u64(double v){ if(!(v>=0.0)){ fputs(\"sx: bitwise operand out of range\\n\",stderr); exit(1); } if(v>=18446744073709551616.0) return 18446744073709551615ULL; return (unsigned long long)v; }\nstatic double sx_bit_and(double a,double b){ return (double)(sx_u64(a) & sx_u64(b)); }\nstatic double sx_bit_or(double a,double b){ return (double)(sx_u64(a) | sx_u64(b)); }\nstatic double sx_bit_xor(double a,double b){ return (double)(sx_u64(a) ^ sx_u64(b)); }\nstatic double sx_bit_not(double a){ return (double)(~sx_u64(a)); }\nstatic double sx_shl(double a,double b){ long n=(long)b; if(n<0||n>63){ fputs(\"sx: shift count out of range\\n\",stderr); exit(1); } return (double)(sx_u64(a) << n); }\nstatic double sx_shr(double a,double b){ long n=(long)b; if(n<0||n>63){ fputs(\"sx: shift count out of range\\n\",stderr); exit(1); } return (double)(sx_u64(a) >> n); }\nstatic double sx_write_bytes(const char *p,sx_list *L){ FILE *f=fopen(p,\"wb\"); unsigned char buf[4096]; size_t n=0; long i; if(!f) return 0.0; if(L){ for(i=0;i<L->n;i++){ double d=L->d[i]; if(!(d>=0.0 && d<=255.0)){ fclose(f); return 0.0; } buf[n++]=(unsigned char)(long)d; if(n==sizeof buf){ if(fwrite(buf,1,n,f)!=n){ fclose(f); return 0.0; } n=0; } } } if(n && fwrite(buf,1,n,f)!=n){ fclose(f); return 0.0; } return fclose(f)==0?1.0:0.0; }\nstatic sx_list *sx_bytes_f64(sx_list *L,double v){ unsigned long long b; int i; memcpy(&b,&v,8); for(i=0;i<8;i++) L=sx_lpush(L,(double)(unsigned char)(b>>(8*i))); return L; }\nstatic double sx_read_bytes(const char *p,sx_list *L){ FILE *f=fopen(p,\"rb\"); unsigned char buf[8192]; double n=0.0; long i; if(!f) return -1.0; if(!L){ fclose(f); return -1.0; } for(;;){ size_t r=fread(buf,1,sizeof buf,f); if(r==0) break; for(i=0;i<(long)r;i++) L=sx_lpush(L,(double)buf[i]); n+=(double)r; } if(ferror(f)){ fclose(f); return -1.0; } if(fclose(f)!=0) return -1.0; return n; }\n")
+hold out = concat(out, "static unsigned long long sx_u64(double v){ if(!(v>=0.0)){ fputs(\"sx: bitwise operand out of range\\n\",stderr); exit(1); } if(v>18446744073709551616.0){ fputs(\"sx: bitwise operand out of range\\n\",stderr); exit(1); } if(v==18446744073709551616.0) return 18446744073709551615ULL; return (unsigned long long)v; }\nstatic double sx_bit_and(double a,double b){ return (double)(sx_u64(a) & sx_u64(b)); }\nstatic double sx_bit_or(double a,double b){ return (double)(sx_u64(a) | sx_u64(b)); }\nstatic double sx_bit_xor(double a,double b){ return (double)(sx_u64(a) ^ sx_u64(b)); }\nstatic double sx_bit_not(double a){ return (double)(~sx_u64(a)); }\nstatic double sx_shl(double a,double b){ long n=0; if(!(b>=0.0 && b<=63.0)){ fputs(\"sx: shift count out of range\\n\",stderr); exit(1); } n=(long)b; return (double)(sx_u64(a) << n); }\nstatic double sx_shr(double a,double b){ long n=0; if(!(b>=0.0 && b<=63.0)){ fputs(\"sx: shift count out of range\\n\",stderr); exit(1); } n=(long)b; return (double)(sx_u64(a) >> n); }\nstatic double sx_write_bytes(const char *p,sx_list *L){ FILE *f; if(L){ for(long k=0;k<L->n;k++){ if(!(L->d[k]>=0.0 && L->d[k]<=255.0)) return 0.0; } } f=fopen(p,\"wb\"); unsigned char buf[4096]; size_t n=0; long i; if(!f) return 0.0; if(L){ for(i=0;i<L->n;i++){ double d=L->d[i]; if(!(d>=0.0 && d<=255.0)){ fclose(f); return 0.0; } buf[n++]=(unsigned char)(long)d; if(n==sizeof buf){ if(fwrite(buf,1,n,f)!=n){ fclose(f); return 0.0; } n=0; } } } if(n && fwrite(buf,1,n,f)!=n){ fclose(f); return 0.0; } return fclose(f)==0?1.0:0.0; }\nstatic sx_list *sx_bytes_f64(sx_list *L,double v){ unsigned long long b; int i; memcpy(&b,&v,8); for(i=0;i<8;i++) L=sx_lpush(L,(double)(unsigned char)(b>>(8*i))); return L; }\nstatic double sx_read_bytes(const char *p,sx_list *L){ FILE *f=fopen(p,\"rb\"); unsigned char buf[8192]; double n=0.0; long i; sx_list *pending=NULL; if(!f) return -1.0; if(!L){ fclose(f); return -1.0; } for(;;){ size_t r=fread(buf,1,sizeof buf,f); if(r==0) break; for(i=0;i<(long)r;i++) pending=sx_lpush(pending,(double)buf[i]); n+=(double)r; } if(ferror(f)){ fclose(f); return -1.0; } if(fclose(f)!=0) return -1.0; if(pending){ for(i=0;i<pending->n;i++) L=sx_lpush(L,pending->d[i]); } return n; }\n")
 when inready == 1 {
   hold out = concat(out, "static sx_list *")
   hold out = concat(out, inprivate)
@@ -20322,8 +20737,8 @@ hold out = concat(out, main_inner)
 hold out = concat(out, ";\n  sx_gc_init((void*)&sx_gcanchor);\n  int sx_status=sx_entry();\n  sx_gcanchor=0;\n  return sx_status;\n}\nstatic int ")
 hold out = concat(out, main_inner)
 hold out = concat(out, "(void){\n")
-hold out = concat(out, obody)
-hold out = concat(out, body)
+hold out = concat(out, condition_main_decls)
+hold out = concat(out, sx_hoist_main(concat(obody, body), concat(decls, concat(sdecls, ldecls)), svars))
 hold out = concat(out, "  return 0;\n")
 hold out = concat(out, "}\n")
 // ---------------- module errors (clear, never silent) ----------------

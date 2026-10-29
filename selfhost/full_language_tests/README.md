@@ -41,3 +41,24 @@ all four readiness fixtures, interpolation and struct-function GC cases. This
 was re-executed successfully with the seed metadata-compaction changes. The
 own-source compiler still stays in the pure-min bootstrap intersection; these
 probes do not supply the missing reviewed exhaustive full-language contract.
+
+2026-10-28 closure work adds `condition_literals.sa`, `condition_comments.sa`,
+`for_literals.sa`, `builtin_surface.sa`, `zeroarg_expressions.sa` and
+`grouped_numeric_builtin.sa`. Readiness now has **ten behaviors
+at O0/O2 on gen2/gen3 (40 stdout executions)**, while native parity has **15 positives
+and 23 refusals**. It is still readiness, not exhaustive conformance.
+
+The new cases cover quoted braces, escaped quotes/backslashes, comment-like
+string data, control chains, typed function conditions, for-source strings
+containing braces/range dots, and a 42-line file/byte/bitwise/argument/runtime
+builtin oracle. Eleven wrong-arity or argument-kind numeric builtin calls must also emit
+checked source diagnostics and fail C compilation at both O0/O2 on each
+compiler (44 refused C builds). Invalid HTTP scheme testing never contacts a network.
+`condition_comments.sa` is C-output-specific; native_aot still refuses header
+comments, so only the common literal/for cases join native parity. Original
+compiler negative controls fail the new syntax; the source-built fixes match
+the stdout oracles. The earlier four/eight and thirteen counts above are
+historical. Final-source local guarded regression, 64 MiB budget, recovery
+and explicit gen3-required readiness all passed. These do not close the
+known string-call comparison bug or the exhaustive contract. See the
+[agreed scope draft](../../docs/FULL_LANGUAGE_CONTRACT_DRAFT.md).

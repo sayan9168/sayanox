@@ -1,0 +1,34 @@
+// Braces and comment markers inside strings are data, never body delimiters.
+when string_eq("{", "{") == 1 {
+  show "open"
+}
+when string_eq("}", "}") == 1 {
+  show "close"
+}
+when string_eq("\"{", "\"{") == 1 {
+  show "escaped-quote"
+}
+when string_eq("\\{", "\\{") == 1 {
+  show "escaped-backslash"
+}
+when string_eq("//{", "//{") == 1 {
+  show "literal-comment"
+}
+when 0 {
+  show "wrong"
+} otherwise when string_eq("{", "{") == 1 {
+  show "otherwise"
+}
+hold count = 0
+while count < 2 and string_eq("{", "{") == 1 {
+  show count
+  count = count + 1
+}
+make braces(text: str) -> num {
+  when string_eq(text, "{") == 1 {
+    give 7
+  }
+  give 9
+}
+show braces("{")
+show braces("}")

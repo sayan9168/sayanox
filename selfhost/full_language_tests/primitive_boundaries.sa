@@ -1,0 +1,17 @@
+show (bit_and(18446744073709551616, 255) == 255)
+show (shr(shl(1, 63), 63) == 1)
+hold path = "selfhost/seed_tests/full-byte-rejection"
+show (write_file(path, "kept"))
+hold bytes = []
+for i in 0..4097 {
+  push(bytes, 65)
+}
+bytes[4096] = 256
+show (write_bytes(path, bytes))
+show (string_eq(read_file(path), "kept"))
+show (remove_path(path))
+show (bit_and(3.9, 1) == 1)
+show (shl(1, 2.9) == 4)
+hold unchanged = [9]
+show (read_bytes("selfhost/full_language_tests", unchanged))
+show (len(unchanged) == 1 and unchanged[0] == 9)

@@ -30,6 +30,7 @@ make cmd_ci() -> num {
   hold selfhost = cmd_target("true-selfhost", built)
   hold fixed = cmd_target("gen3", built)
   hold native = cmd_target("native-test", built)
-  show "[OK] complete original CI acceptance chain"
+  hold full = cmd_target("true-selfhost-full", built)
+  show "[OK] complete original CI acceptance chain and published-language v1 full acceptance"
   give 0
 }

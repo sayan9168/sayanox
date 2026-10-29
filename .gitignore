@@ -102,3 +102,5 @@ tools/sxdiag.c
 
 # Local bootstrap diagnostics
 /bootstrap-work.log
+
+/tools/sxfull

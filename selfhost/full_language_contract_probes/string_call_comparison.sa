@@ -1,0 +1,10 @@
+// Intended positive: compare string values, never heap/literal addresses.
+make word() -> str {
+  give concat("a", "b")
+}
+when word() == "ab" {
+  show 1
+} otherwise {
+  show 0
+}
+show string_eq(word(), "ab")

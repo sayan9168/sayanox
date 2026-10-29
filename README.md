@@ -99,7 +99,7 @@ cc -o hello hello.c
 
 | Workflow | Current behavior |
 |---|---|
-| [CI](.github/workflows/ci.yml) | Checks the entry/source pins and runs migrated suites; a separate mandatory full-acceptance job refuses incomplete coverage |
+| [CI](.github/workflows/ci.yml) | Checks the entry/source pins and runs migrated suites; a separate mandatory full-acceptance job rejects incomplete migration or published-language v1 coverage |
 | [full-bootstrap](.github/workflows/full-bootstrap.yml) | Clean source-to-native-entry reconstruction, followed by the full-acceptance blocker |
 | [release](.github/workflows/release.yml) | Entry verification and full acceptance before packaging/publication; cannot publish while targets are pending |
 
@@ -195,7 +195,7 @@ for anything to move from the second table to the first.
 
 | # | What is still missing | Exactly what is open | Refusal / record |
 |---|---|---|---|
-| 1 | **Full-language self-host** | String interpolation and struct function signatures now work on `gen2`/`gen3` and `native_aot`, while **seed-min** stays intentionally minimal and the compiler source (`compiler_min.sa`) remains in the pure-min intersection | `./sx target true-selfhost-full` **fails closed** |
+| 1 | **Full-language self-host** | String interpolation and struct function signatures now work on `gen2`/`gen3` and `native_aot`, while **seed-min** stays intentionally minimal and the compiler source (`compiler_min.sa`) remains in the pure-min intersection | `./sx target true-selfhost-full` now runs the [versioned contract](docs/FULL_LANGUAGE_CONTRACT_V1.md); final exact-source local/remote acceptance is **PENDING**, not complete |
 | 2 | **Independent bootstrap trust proof** | Native anchor/entry are explicit binary trust inputs. Hashes and fixed points cannot exclude trusting-trust attacks; independent diverse reconstruction remains future work | [trust boundary](bootstrap/README.md) |
 | 3 | **Precise / bounded-heap GC guarantees** | Seed strings, list headers and backing buffers are traced and collected. Post-sweep registry/scratch shrinking is implemented with allocation-failure probes (acceptance tracked in [STATUS](docs/STATUS.md)); conservative roots can still retain garbage, and live heaps/allocator overhead remain memory limits. Current budget tests do not prove bounded memory for arbitrary programs | [current seed runtime](docs/NATIVE_BOOTSTRAP.md), [historical GC notes](docs/GC.md) |
 | 4 | **Stdlib depth** | `json_write.sa` updates top-level object keys functionally (numbers beyond 6 fractional places are rounded). `pubkey.sa` / `crypto.sa` run on IEEE-754 doubles with no constant-time side-channel claim. HTTP stays optional and outside the bootstrap | [docs/STDLIB.md](docs/STDLIB.md), `./sx target test-network` (optional) |
@@ -212,7 +212,7 @@ These produce an **error**, not a wrong answer, and gates require the error: a
 *concrete* struct name as a generic type argument, an unknown type name, an
 escaped type parameter, a wrong type-argument count, gen2 `push(p.xs, v)` and
 whole-list `show p.xs`, every late builtin on seed-min and native, and the
-tested out-of-subset language forms. `./sx target true-selfhost-full` still refuses an unreviewed exhaustive full-language claim.
+tested out-of-subset language forms. `./sx target true-selfhost-full` requires the pinned published-language v1 inventory, all clause gates, signature/runtime matrices and negative controls. Its implementation is not itself an acceptance result; see [STATUS](docs/STATUS.md).
 `./sx target all-sayanox` audits maintained source and the explicit native binary trust boundary; it does not replace CI.
 
 ---

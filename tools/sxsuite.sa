@@ -178,7 +178,7 @@ make active_c_compilers(env_key: str) -> list {
   }
   when string_eq(getenv("SXSUITE_REQUIRE_GEN3"), "1") == 1 {
     when path_kind("selfhost/gen3") != 1 {
-      hold fg3 = fail_suite(1, "missing compiler ./selfhost/gen3 (run make gen3 first)")
+      hold fg3 = fail_suite(1, "missing compiler ./selfhost/gen3 (run ./sx target gen3 first)")
     }
   }
   out = push(out, 2)
@@ -738,14 +738,37 @@ make full_lang_probe_name(idx: num) -> str {
   when idx == 2 {
     give "field_expression"
   }
-  give "index_call"
+  when idx == 3 { give "index_call" }
+  when idx == 4 { give "condition_literals" }
+  when idx == 5 { give "condition_comments" }
+  when idx == 6 { give "for_literals" }
+  when idx == 7 { give "builtin_surface" }
+  when idx == 8 { give "zeroarg_expressions" }
+  when idx == 9 { give "grouped_numeric_builtin" }
+  when idx == 10 { give "string_call_comparison" }
+  when idx == 11 { give "string_call_matrix" }
+  when idx == 12 { give "string_inline_conditions" }
+  when idx == 13 { give "stream_process" }
+  when idx == 14 { give "exit_status" }
+  when idx == 15 { give "primitive_boundaries" }
+  when idx == 16 { give "string_value_comparison" }
+  when idx == 17 { give "generic_functions" }
+  give "generic_multi"
+}
+
+make full_lang_probe_count() -> num {
+  give 19
 }
 
 make suite_full_lang_ready(base: str) -> num {
   hold dir = concat(base, "/full_lang_ready")
   hold z0 = mk_clean_dir(dir)
   hold cc = cc_bin()
+  hold evidence = ""
   hold comps = active_c_compilers("SXSUITE_COMPILERS")
+  when string_eq(getenv("SXSUITE_REQUIRE_GEN3"), "1") == 1 && len(comps) != 2 {
+    hold incomplete = fail_suite(1, "full readiness requires both gen2 and gen3, not a compiler override")
+  }
   hold ci = 0
   while ci < len(comps) {
     hold cid = comps[ci]
@@ -755,7 +778,7 @@ make suite_full_lang_ready(base: str) -> num {
       hold fm = fail_suite(1, concat("missing compiler ", cbin))
     }
     hold pi = 0
-    while pi < 4 {
+    while pi < full_lang_probe_count() {
       hold pname = full_lang_probe_name(pi)
       hold stem = concat(dir, concat("/", concat(cname, concat("-", pname))))
       hold in_sa = concat("selfhost/full_language_tests/", concat(pname, ".sa"))
@@ -764,17 +787,111 @@ make suite_full_lang_ready(base: str) -> num {
       when run_command(concat(sh_q(cbin), concat(" ", concat(sh_q(in_sa), concat(" ", concat(sh_q(concat(stem, ".c")), " >/dev/null 2>&1")))))) != 0 {
         hold fc = fail_suite(1, concat(cname, concat(" refusal on ", pname)))
       }
-      when run_command(concat(cc, concat(" -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(stem), concat(" ", concat(sh_q(concat(stem, ".c")), " >/dev/null 2>&1")))))) != 0 {
-        hold fcc = fail_suite(1, concat(cname, concat(" C build failed on ", pname)))
+      hold optimization = 0
+      while optimization < 2 {
+        hold opt = "-O0"
+        when optimization == 1 { opt = "-O2" }
+        hold compile_cc = concat(cc, concat(" -std=c11 -D_POSIX_C_SOURCE=200809L ", opt))
+        when run_command(concat(compile_cc, concat(" -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(stem), concat(" ", concat(sh_q(concat(stem, ".c")), " >/dev/null 2>&1")))))) != 0 {
+          hold fcc = fail_suite(1, concat(cname, concat(" C build failed on ", pname)))
+        }
+        hold execute = concat("timeout 20 ", sh_q(stem))
+        hold expected_status = 0
+        when string_eq(pname, "stream_process") {
+          execute = concat("printf 'abcLINE\\n' | SX_CONTRACT_ENV=present ", execute)
+        }
+        when string_eq(pname, "exit_status") { expected_status = 7 }
+        when run_command(concat(execute, concat(" > ", sh_q(out_f)))) != expected_status {
+          hold fr = fail_suite(1, concat(cname, concat(" runtime failed on ", pname)))
+        }
+        hold ca = assert_files_identical(want_f, out_f, concat(cname, concat(" ", pname)))
+        evidence = concat(evidence, concat(cname, concat("|", concat(pname, concat("|", concat(opt, "\n"))))))
+        optimization = optimization + 1
       }
-      when run_command(concat(sh_q(stem), concat(" > ", sh_q(out_f)))) != 0 {
-        hold fr = fail_suite(1, concat(cname, concat(" runtime failed on ", pname)))
-      }
-      hold ca = assert_files_identical(want_f, out_f, concat(cname, concat(" ", pname)))
       pi = pi + 1
     }
-    show concat("[OK] sxsuite full_lang_ready (", concat(cname, "): all 4 closure probes verified"))
+    hold ni = 0
+    while ni < 34 {
+      hold name = "arg_count"
+      when ni == 1 { name = "gc" }
+      when ni == 2 { name = "gc_live" }
+      when ni == 3 { name = "gc_runs" }
+      when ni == 4 { name = "flush_out" }
+      when ni == 5 { name = "bit_and" }
+      when ni == 6 { name = "bit_or" }
+      when ni == 7 { name = "bit_xor" }
+      when ni == 8 { name = "shl" }
+      when ni == 9 { name = "write_file" }
+      when ni == 10 { name = "run_command" }
+      hold bad = concat(dir, concat("/bad-", concat(cname, concat("-", name))))
+      hold invalid = concat("show (", concat(name, "(1))\n"))
+      when ni == 5 { invalid = "show (bit_and(1))\n" }
+      when ni == 6 { invalid = "show (bit_or(1, 2, 3))\n" }
+      when ni == 7 { invalid = "show (bit_xor(\"bad\", 1))\n" }
+      when ni == 8 { invalid = "show (shl([1], 2))\n" }
+      when ni == 9 { invalid = "show (write_file(1, \"bad\"))\n" }
+      when ni == 10 { invalid = "show (run_command(1))\n" }
+      when ni >= 11 {
+        hold condition = "chr(65) == 65"
+        when ni == 12 { condition = "arg_count() == \"x\"" }
+        when ni == 13 { condition = "\"x\" == arg_count()" }
+        when ni == 14 { condition = "concat(\"x\") == \"x\"" }
+        when ni == 15 { condition = "concat(1, \"x\") == \"x\"" }
+        when ni == 16 { condition = "numstr(1)" }
+        when ni == 17 { condition = "not numstr(1)" }
+        when ni == 18 { condition = "\"a\" == len(\"x\")" }
+        name = "condition"
+        invalid = concat("when ", concat(condition, " {\n  show 1\n}\n"))
+      }
+      when ni == 19 { invalid = concat("show ", concat(chr(34), "unterminated\n")) }
+      when ni == 20 { invalid = "show (1 + 2\n" }
+      when ni == 21 { invalid = "hold x = \"a\" + 1\nshow x\n" }
+      when ni == 22 { invalid = "show \"a\" + 1\n" }
+      when ni == 23 { invalid = "make f() -> str {\n  give \"a\" + 1\n}\nshow f()\n" }
+      when ni == 24 { invalid = "struct T { s }\nhold t = T { s: \"a\" + 1 }\nshow t.s\n" }
+      when ni == 25 { invalid = "when (\"a\" + 1) == \"a1\" { show 1 }\n" }
+      when ni == 26 { invalid = "show len(\"a\" + 1)\n" }
+      when ni == 27 { invalid = "make pair<T>(a: T, b: num) -> T {\n  give a\n}\nshow pair(1, 2)\n" }
+      when ni == 28 { invalid = "make f2<T>(a: T) -> U {\n  give a\n}\nshow f2(1)\n" }
+      when ni == 29 { invalid = "struct Box<T> {\n  v\n}\nhold b = Box<num, str> { 7 }\nshow b.v\n" }
+      when ni == 30 { invalid = "struct NumBox {\n  v\n}\nstruct Box<T> {\n  v\n}\nhold n = NumBox { 3 }\nhold b = Box<NumBox> { n }\nshow b.v\n" }
+      when ni == 31 { invalid = "make word() -> str {\n  give concat(\"a\", \"b\")\n}\nmake lied() -> str {\n  give word() == \"ab\"\n}\nshow lied()\n" }
+      when ni == 32 { invalid = "make word() -> str {\n  give concat(\"a\", \"b\")\n}\nhold bad: str = word() == \"ab\"\nshow bad\n" }
+      when ni == 33 { invalid = "hold bad: str = (1 + 2)\nshow bad\n" }
+      bad = concat(bad, concat("-", istr(ni)))
+      when write_file(concat(bad, ".sa"), invalid) != 1 {
+        hold fw = fail_suite(1, "cannot write numeric-call refusal fixture")
+      }
+      hold cmd = concat(sh_q(cbin), concat(" ", concat(sh_q(concat(bad, ".sa")), concat(" ", sh_q(concat(bad, ".c"))))))
+      hold status = run_command(concat(cmd, " >/dev/null 2>&1"))
+      when status != 0 { hold fc = fail_suite(1, "negative fixture compiler process failed unexpectedly") }
+      hold diagnostic = read_file(concat(bad, ".c"))
+      hold expected = "#error sayanox-min: checked numeric builtin call:"
+      when ni >= 11 { expected = "#error sayanox-min: condition expression" }
+      when ni < 19 && has_line_prefix(diagnostic, expected) != 1 {
+        hold fd = fail_suite(1, concat("missing checked numeric-call diagnostic: ", name))
+      }
+      when ni >= 27 && has_line_prefix(diagnostic, "#error sayanox-min:") != 1 {
+        hold fd = fail_suite(1, "generic/return invalid fixture lost its source refusal")
+      }
+      hold oi = 0
+      while oi < 2 {
+        hold opt = "-O0"
+        when oi == 1 { opt = "-O2" }
+        hold build = concat(cc, concat(" -std=c11 -D_POSIX_C_SOURCE=200809L -Werror=implicit-function-declaration -Werror=incompatible-pointer-types ", concat(opt, concat(" -o ", concat(sh_q(bad), concat(" ", sh_q(concat(bad, ".c"))))))))
+        when run_command(concat(build, " >/dev/null 2>&1")) == 0 {
+          hold fa = fail_suite(1, concat("invalid numeric call accepted: ", name))
+        }
+        evidence = concat(evidence, concat(cname, concat("|bad-", concat(istr(ni), concat("|", concat(opt, "\n"))))))
+        oi = oi + 1
+      }
+      ni = ni + 1
+    }
+    show concat("[OK] sxsuite full_lang_ready (", concat(cname, concat("): ", concat(istr(pi), " closure probes verified at O0/O2; 34 checked call/condition/lexical/operator/generic/return/annotation refusals"))))
     ci = ci + 1
+  }
+  when write_file(concat(dir, "/evidence.tsv"), evidence) != 1 {
+    hold lost = fail_suite(1, "cannot record full readiness execution evidence")
   }
   give 0
 }

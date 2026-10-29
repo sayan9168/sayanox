@@ -1,0 +1,20 @@
+# id|executable gates|positive case|negative case|boundary case
+LEX-01|test-comment-quotes|selfhost/full_language_tests/condition_literals.sa#escaped-quote|tools/sxsuite.sa#ni == 19|selfhost/full_language_tests/condition_comments.sa#when
+LEX-02|test-seed-for-range,test-seed-for-literals|selfhost/full_language_tests/for_literals.sa#for|tools/sxsuite.sa#ni == 20|selfhost/full_language_tests/for_literals.sa#..
+NUM-01|test-float,test-mod,test-prec,test-parens|selfhost/full_language_tests/builtin_surface.sa#12.5|tools/sxlast_language_fixtures_lib.sa#ts_floatbad_nat.sa|tools/sxlast_language_fixtures_lib.sa#ts_mod0.sa
+TYPE-01|test-type-refusals,test-typed-sig|selfhost/typed_sig_test.sa#make add|tools/sxremaining_fixtures_lib.sa#ttr_holdann_bad.sa|tools/sxfull.sa#actual = chr
+SCOPE-01|test-name-resolution,test-gen2-function-scope,test-gen2-forward|selfhost/name_resolution_test.sa#make|tools/sxmore_gates_lib.sa#test-gen2-function-scope|selfhost/gen2_scope_test.sa#make
+FLOW-01|test-when,test-while,test-cond-string,test-logic-value,test-return-paths|selfhost/full_language_tests/string_inline_conditions.sa#while encode|tools/sxsuite.sa#not numstr(1)|selfhost/full_language_tests/string_call_matrix.sa#when 1 or
+FOR-01|test-for-str,test-for-paren,test-seed-for-calls,test-seed-for-fields,test-native-range-live|selfhost/full_language_tests/for_literals.sa#for|tools/sxlast_language_fixtures_lib.sa#fs_clash.sa|selfhost/native_for_functions_test.sa#for
+FN-01|test-fn2,test-return-paths,test-struct-functions,test-gen2-forward|selfhost/return_paths_test.sa#make|tools/sxlast_language_fixtures_lib.sa#fle_arity.sa|selfhost/full_language_tests/string_inline_conditions.sa#step(n - 1)
+LIST-01|test-list-expr,test-list-paren,test-gen2-list-return,test-gen2-list-args,test-list-struct-fields,test-inline-runtime,test-inline-expressions,test-list-postfix|selfhost/list_expr_test.sa#make|tools/sxlast_language_fixtures_lib.sa#fle_strcall.sa|selfhost/full_language_tests/string_inline_conditions.sa#sized([])
+STRUCT-01|test-struct2,test-nest,test-struct-logic,test-full-language-expr,test-struct-field-struct|selfhost/full_language_tests/field_expression.sa#struct|tools/sxremaining_fixtures_lib.sa#ttr_fieldann.sa|selfhost/full_language_tests/struct_function.sa#make
+GENERIC-01|test-generics,test-generic-structs,test-generic-structs-nested,test-generic-struct-limits,test-gen2-generic-queue|selfhost/full_language_tests/generic_functions.sa#make quad|tools/sxlast_language_fixtures_lib.sa#gs_arity.sa|selfhost/generic_struct_first_literal.sa#struct
+STRING-01|test-gen2-gaps,test-native-strord,test-string-interpolation|selfhost/interpolation_tests/values.sa#show|tools/sxsuite.sa#interp_bad_source|tools/sxsuite.sa#while k < 17
+EXPR-01|test-gen2-logic-builtin|selfhost/full_language_tests/zeroarg_expressions.sa#flush_out|tools/sxsuite.sa#name = "arg_count"|selfhost/full_language_tests/zeroarg_expressions.sa#gc_runs
+EXPR-02|test-gen2-expr-lowering,test-inline-expressions|selfhost/full_language_tests/grouped_numeric_builtin.sa#bit_and|tools/sxsuite.sa#bit_xor|selfhost/full_language_tests/builtin_surface.sa#bit_not(0)
+STRING-02|test-cond-string|selfhost/full_language_tests/string_call_comparison.sa#word()|tools/sxsuite.sa#concat(1,|selfhost/full_language_tests/string_call_matrix.sa#text(10 / 4)
+IMPORT-01|test-use,test-stdlib-modules|selfhost/interpolation_tests/import.sa#use|tools/sxfull.sa#use unquoted.sa|tools/sxfull.sa#depth-valid
+BUILTIN-01|test-native-io,test-path-builtins,test-proc-builtins,test-read-bytes,test-native-primitives,test-exit-builtin,test-http-get|selfhost/full_language_tests/stream_process.sa#child_recv|tools/sxfull.sa#call_source|selfhost/full_language_tests/stream_process.sa#0..8
+GC-01|test-gc,test-seed-gc,test-gen2-gc-roots|selfhost/gen2_gc_roots_test.sa#gc|selfhost/seed_gc_drop.sa#gc|selfhost/list_struct_fields_gc_test.sa#gc
+HOST-01|test-native-bootstrap,test-seed-bootstrap-budget,test-recovery|tools/sxbootstrap_lib.sa#gen3 == gen4|tools/sxrecovery_test.sa#corrupt|tools/sxci_guard_lib.sa#forbidden bootstrap invocation

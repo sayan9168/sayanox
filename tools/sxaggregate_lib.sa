@@ -172,12 +172,8 @@ make ag_run(name: str, built: list) -> num {
     show "=== SUBSET-SELFHOST-OK ==="
     give 0
   }
+  when string_eq(name, "true-selfhost-full") == 1 { give cmd_full_contract(built) }
   hold minimum = ag_minimum(built)
-  when string_eq(name, "true-selfhost-full") == 1 {
-    hold gen3 = ag_gen3(built)
-    hold ready = cmd_target("test-full-language-readiness", built)
-    give cmd_full_claim_refusal()
-  }
   when string_eq(name, "grammar") == 1 {
     hold grammar = ag_case("./selfhost/gen2", "grammar", "hold n = 0\nwhile n < 3 {\n  hold n = n + 1\n}\nwhen n == 3 {\n  show \"grammar-ok\"\n} otherwise {\n  show \"grammar-fail\"\n}\n", "grammar-ok")
     show "=== GRAMMAR-OK ==="
