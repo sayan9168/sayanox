@@ -1,0 +1,66 @@
+// Intended positives for content comparisons; NOT passing canonical readiness.
+make word() -> str {
+  give concat("a", "b")
+}
+make larger() -> str {
+  give concat("a", "c")
+}
+make text(value: num) -> str {
+  give numstr(value)
+}
+make counted(marks: list) -> str {
+  marks[0] = marks[0] + 1
+  give concat("a", "b")
+}
+struct Label { value }
+hold label = Label{"ab"}
+hold bound = "ab"
+when word() == "ab" { show 1 } otherwise { show 0 }
+when word() != "ac" { show 1 } otherwise { show 0 }
+when word() < "ac" { show 1 } otherwise { show 0 }
+when word() <= "ab" { show 1 } otherwise { show 0 }
+when word() > "aa" { show 1 } otherwise { show 0 }
+when word() >= "ab" { show 1 } otherwise { show 0 }
+when "ab" == word() { show 1 } otherwise { show 0 }
+when "ac" != word() { show 1 } otherwise { show 0 }
+when "aa" < word() { show 1 } otherwise { show 0 }
+when "ab" <= word() { show 1 } otherwise { show 0 }
+when "ac" > word() { show 1 } otherwise { show 0 }
+when "ab" >= word() { show 1 } otherwise { show 0 }
+when bound == word() { show 1 } otherwise { show 0 }
+when word() == bound { show 1 } otherwise { show 0 }
+when label.value == word() { show 1 } otherwise { show 0 }
+when word() == label.value { show 1 } otherwise { show 0 }
+when word() != larger() { show 1 } otherwise { show 0 }
+when word() < larger() { show 1 } otherwise { show 0 }
+when concat("a", chr(98)) == word() { show 1 } otherwise { show 0 }
+when "a" + chr(98) == "ab" { show 1 } otherwise { show 0 }
+when text(10 / 4) == "2.5" { show 1 } otherwise { show 0 }
+when (word()) == "ab" { show 1 } otherwise { show 0 }
+when "ab" == (word()) { show 1 } otherwise { show 0 }
+when word()	==	"ab" { show 1 } otherwise { show 0 }
+when "ab" == word ( ) { show 1 } otherwise { show 0 }
+when getenv("") == "" { show 1 } otherwise { show 0 }
+when concat(getenv(""), "ab") == "ab" { show 1 } otherwise { show 0 }
+when concat(read_file(""), "ab") == "ab" { show 1 } otherwise { show 0 }
+when concat("(double)", "ab") == "(double)ab" { show 1 } otherwise { show 0 }
+when concat("\"", "ab") == "\"ab" { show 1 } otherwise { show 0 }
+when concat("\\", "ab") == "\\ab" { show 1 } otherwise { show 0 }
+hold loops = 0
+while word() == "ab" and loops < 2 { loops = loops + 1 }
+show loops
+hold marks = [0]
+when 0 and counted(marks) == "ab" { show 0 } otherwise { show 1 }
+show marks[0]
+when counted(marks) == "ab" { show 1 } otherwise { show 0 }
+show marks[0]
+when counted(marks) == counted(marks) { show 1 } otherwise { show 0 }
+show marks[0]
+when 1 or counted(marks) != "ab" { show 1 } otherwise { show 0 }
+show marks[0]
+when word() == "a" + "b" { show 1 } otherwise { show 0 }
+when "a" + "b" == word() { show 1 } otherwise { show 0 }
+when word() < "a" + "c" { show 1 } otherwise { show 0 }
+when "a" + "a" < word() { show 1 } otherwise { show 0 }
+when word() == "a" + chr(98) { show 1 } otherwise { show 0 }
+when "a" + chr(98) == word() { show 1 } otherwise { show 0 }

@@ -1,0 +1,17 @@
+// Native stand-in for curl; a marker proves the transport was really invoked.
+hold recorded = write_file(getenv("SX_HTTP_MARKER"), "called")
+when string_eq(getenv("SX_HTTP_OVERSIZE"), "1") == 1 {
+  hold body = ""
+  hold piece = "x"
+  hold remaining = 1000001
+  while remaining > 0 {
+    hold digit = remaining % 2
+    when digit == 1 { body = concat(body, piece) }
+    remaining = (remaining - digit) / 2
+    piece = concat(piece, piece)
+  }
+  hold sent = write_out(body)
+} otherwise {
+  show "partial"
+  hold stopped = exit(7)
+}

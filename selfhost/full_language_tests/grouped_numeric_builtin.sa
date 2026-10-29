@@ -1,0 +1,2 @@
+// Regression for a formerly refused published numeric builtin expression.
+show (bit_and(3, 1) == 1)

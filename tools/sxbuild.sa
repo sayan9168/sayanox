@@ -524,6 +524,7 @@ make tool_source_for(name: str) -> str {
   when string_eq(name, "sxc_native") == 1 {
     give "tools/sxc_native.sa"
   }
+  when string_eq(name, "sxfull") == 1 { give "tools/sxfull.sa" }
   when string_eq(name, "sxsuite") == 1 {
     give "tools/sxsuite.sa"
   }

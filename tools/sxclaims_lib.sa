@@ -1,8 +1,25 @@
-// Honesty boundaries, not success aliases. These commands intentionally refuse
-// claims for which no reviewed exhaustive acceptance specification exists.
-make cmd_full_claim_refusal() -> num {
-  give fail(1, "no reviewed exhaustive full-language acceptance specification; refusing a full-language claim")
+// A full claim is earned by the independently pinned published-language v1
+// inventory, executable closure, paired invalid cases, and negative controls.
+make cmd_full_contract(built: list) -> num {
+  when len(getenv("INTERPOLATION_COMPILERS")) > 0 || len(getenv("STRUCT_FUNCTION_COMPILERS")) > 0 || len(getenv("GENERIC_LITERAL_COMPILERS")) > 0 || len(getenv("SXSUITE_COMPILERS")) > 0 {
+    give target_run("INTERPOLATION_COMPILERS= STRUCT_FUNCTION_COMPILERS= GENERIC_LITERAL_COMPILERS= SXSUITE_COMPILERS= SXSUITE_REQUIRE_GEN3=1 ./sx target true-selfhost-full", "full profile with compiler selectors cleared")
+  }
+  hold tool = target_native_tool("sxfull")
+  hold verified = target_run("./tools/sxfull verify", "reviewed published-language contract and integrity")
+  hold minimum = ag_minimum(built)
+  hold fixed = ag_gen3(built)
+  hold gates = ag_targets(read_file("selfhost/seed_tests/full-contract-targets"), built)
+  hold suite = target_native_tool("sxsuite")
+  hold ready = target_run("SXSUITE_REQUIRE_GEN3=1 ./tools/sxsuite full_lang_ready", "all v1 closure/context programs")
+  hold evidence = target_run("./tools/sxfull check-evidence selfhost/seed_tests/sxsuite/full_lang_ready/evidence.tsv", "complete gen2/gen3 O0/O2 execution ledger")
+  hold signatures = target_run("./tools/sxfull builtin-matrix selfhost/seed_tests/full-contract-builtins", "every public builtin: valid counterpart, every incompatible argument kind and arity")
+  hold runtime = target_run("./tools/sxfull runtime-boundaries selfhost/seed_tests/full-contract-runtime", "checked numeric and failed HTTP boundaries")
+  hold controls = target_run("./tools/sxfull negative-controls selfhost/seed_tests/full-contract-controls selfhost/seed_tests/sxsuite/full_lang_ready/evidence.tsv", "independent omission and corruption controls")
+  hold final_pins = target_run("./tools/sxfull verify", "recheck reviewed sources and oracles after execution")
+  show "=== TRUE-SELFHOST-FULL-V1-OK ==="
+  give 0
 }
+
 make cmd_all_sayanox() -> num {
   show "=== ALL-SAYANOX: maintained source + explicit native binary trust input ==="
   hold dir = gl_ensure_dir("selfhost/seed_tests")

@@ -1,5 +1,57 @@
 # Status
 
+**2026-10-29 — published-language v1 gate implementation; final acceptance PENDING.**
+String-content conditions and recursive/short-circuit inline-list lowering are
+integrated. Focused C11 O0/O2 tests also verify numeric `concat`, checked bit
+ranges, invalid-byte destination preservation, fractional/dead handles and
+independent closure of eight live children. Scalar string comparisons (annotated hold/show/give, arguments, fields, element
+stores and nested formatting) are now integrated too, including composition
+with nominal signature checking. An intermediate own-source strict build passed;
+the current exact-source checkpoint still needs the complete chain.
+
+The reviewed [v1 contract](FULL_LANGUAGE_CONTRACT_V1.md),
+[normative profile](FULL_LANGUAGE_PROFILE_V1.md), [audit](FULL_LANGUAGE_REVIEW_V1.md)
+and independent 19-clause/43-builtin inventories now have a Sayanox executable
+runner. The configured gate requires 19 positive context programs, 34 invalid
+programs, 212 exact execution/refusal keys, all referenced clause gates, complete
+builtin signatures, runtime/import boundaries and omission/corruption controls.
+These are **required counts, not a report that the complete run passed**.
+`./sx ci` now also requires `true-selfhost-full`; there is no success alias.
+
+Final exact-source guarded CI, fresh fixed point, 64 MiB budget, cold recovery,
+full-profile execution and remote CI are **PENDING**. No new release, PR or
+remote success is claimed. Earlier green checkpoints below do not accept the
+current source. Historical entries retain their original context.
+
+**2026-10-28 — full-language closure work started, NOT complete.**
+The user selected the currently published whole language, not future proposals.
+Two real scanner defects are fixed in the Sayanox compiler: braces/escaped
+quotes/comments in control conditions, and braces/range dots inside quoted
+for-sources. Original-compiler negative controls fail both new syntax fixtures;
+the source-built patched compiler matches their stdout oracles. Readiness now
+has ten behaviors at O0/O2 on gen2/gen3 (40 executions), including a 42-line
+builtin/runtime oracle. Native parity has 15 positive fixtures plus the existing
+23 refusals. The header-comments fixture is C-output-specific; native_aot still
+refuses that form, and full native parity is not claimed. Recovery pack (144
+parts) and source pin were refreshed.
+
+The final broader-numeric-source guarded chain **exited 0**: `./sx verify-entry`,
+`./sx ci`, the 64 MiB bootstrap budget, cold recovery, explicit gen3-required
+readiness (40 positive stdout executions and 44 refused C builds), and
+`./sx ci-guard-check`. Fresh gen3/gen4 C is byte-identical, SHA-256
+`b20b993df8cbf732356296f798ab859d6154c03dcdc71945dba505f287b737f6`.
+Checked grouped numeric builtin calls include bitwise, file and command-status
+calls, with 11 arity/kind refusals per compiler. This is a local guarded
+regression pass, **not full-language acceptance or new remote acceptance**.
+`true-selfhost-full` remains fail-closed: the normative contract and exhaustive
+clause coverage are not complete.
+A genuine string-call comparison bug remains: `word() == "ab"` compares
+C addresses instead of contents. Its preserved contract positive prints
+`0/1` on fresh gen3 at O0/O2, where the oracle requires `1/1`. A isolated typed-parser prototype is not
+accepted implementation; the probe is not counted as passing readiness.
+See the [agreed scope](FULL_LANGUAGE_CONTRACT_DRAFT.md) and
+[v1 clause candidate](FULL_LANGUAGE_CONTRACT_V1.md).
+
 **2026-10-28 — seed metadata compaction; local CI passed, remote acceptance tracked separately.**
 The baseline already ports all 236 original targets and traces/frees seed list
 headers and buffers. This increment adds best-effort post-sweep registry and

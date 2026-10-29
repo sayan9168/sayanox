@@ -1,0 +1,60 @@
+// Deterministic C-output builtin contract; no network or extra interpreter.
+hold root = "selfhost/seed_tests/full-language-runtime"
+hold file = concat(root, "/text")
+hold binary = concat(root, "/bytes")
+hold link = concat(root, "/link")
+hold discard = remove_path(link)
+hold discard = remove_path(file)
+hold discard = remove_path(binary)
+hold discard = remove_path(root)
+show (make_dir(root))
+show (path_kind(root))
+show (write_file(file, "ab\n"))
+show (len(read_file(file)))
+show (path_size(file))
+show (path_kind(file))
+show (len(path_real(file)) > 0)
+show (len(read_dir(root)) > 0)
+show (make_link("text", link))
+show (path_kind(link))
+hold bytes = [0, 65, 255, 10]
+show (write_bytes(binary, bytes))
+hold loaded = []
+show (read_bytes(binary, loaded))
+show (len(loaded))
+show loaded[0]
+show loaded[1]
+show loaded[2]
+show loaded[3]
+hold floats = []
+hold floats = bytes_f64(floats, 1)
+show (len(floats))
+show floats[6]
+show floats[7]
+show (bit_and(13, 7))
+show (bit_or(8, 3))
+show (bit_xor(13, 7))
+show (shl(3, 4))
+show (shr(48, 4))
+show (bit_and(bit_not(0), 255))
+show (string_eq(numstr(12.5), "12.5"))
+show (string_eq(concat(chr(65), "b"), "Ab"))
+show (sx_index("Ab", 1))
+hold argc = arg_count()
+show (argc >= 1)
+show (len(arg(100000)))
+show (len(getenv("")))
+show (run_command("exit 7"))
+show (len(http_get("file:///not-a-network-url")))
+hold before = gc_runs()
+hold freed = gc()
+hold after = gc_runs()
+show (after > before)
+hold live = gc_live()
+show (live >= 0)
+show (len(read_file(file)))
+show (remove_path(link))
+show (remove_path(file))
+show (remove_path(binary))
+show (remove_path(root))
+show (path_kind(root))

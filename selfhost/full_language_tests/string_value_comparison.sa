@@ -1,0 +1,74 @@
+// Content comparisons are numeric values in all published scalar contexts.
+make word() -> str {
+  give concat("a", "b")
+}
+make answer() -> num {
+  give word() == "ab"
+}
+make consume(n: num) -> num {
+  give n
+}
+make counted(marks: list) -> str {
+  marks[0] = marks[0] + 1
+  give concat("a", "b")
+}
+make first(xs: list) -> num {
+  give xs[0]
+}
+hold compared = word() == "ab"
+show compared
+compared = word() != "ac"
+show compared
+show (word() == "ab")
+show answer()
+show consume(word() == "ab")
+show concat("n=", word() == "ab")
+hold formatted = concat("n=", word() == "ab")
+show formatted
+hold marks = [0]
+show consume(counted(marks) == "ab")
+show marks[0]
+hold flag = not counted(marks) != "ab" and 1
+show flag
+show marks[0]
+show concat("v=", first([counted(marks) == "ab"]))
+show marks[0]
+struct Flag { value }
+hold box = Flag { value: consume(word() == "ab") }
+show box.value
+// Legal string-plus counterparts for the six mixed-operator refusal contexts.
+make combined() -> str {
+  give "a" + "b"
+}
+hold valid = "a" + "b"
+show valid
+show "a" + "b"
+show combined()
+struct Text { value }
+hold text = Text { value: "a" + "b" }
+show text.value
+when ("a" + "b") == "ab" { show 1 } otherwise { show 0 }
+show len("a" + "b")
+// Keep scalar comparisons/list arguments working with nominal signature checking on.
+make echo_flag(v: Flag) -> Flag {
+  give v
+}
+hold again = echo_flag(box)
+show again.value
+hold typed_flag: num = word() == "ab"
+show typed_flag
+hold typed_text: str = concat("n=", word() == "ab")
+show typed_text
+// Field/element stores use the same numeric content-comparison semantics.
+box.value = word() == "ab"
+show box.value
+hold values = [0]
+values[0] = word() == "ab"
+show values[0]
+text.value = concat("n=", word() == "ab")
+show text.value
+make store(xs: list) -> num {
+  xs[0] = word() == "ab"
+  give xs[0]
+}
+show store([0])

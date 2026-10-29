@@ -1,0 +1,536 @@
+// Published-language contract validator. All policy and tests are Sayanox.
+// Host cc/sha256sum and POSIX process plumbing remain explicit dependencies.
+make die(message: str) -> num {
+  show concat("sxfull: ", message)
+  hold stop = exit(1)
+  give 1
+}
+make cut(text: str, a: num, b: num) -> str {
+  hold out = ""
+  while a < b && a < len(text) { out = concat(out, chr(sx_index(text, a)))
+    a = a + 1 }
+  give out
+}
+make field(text: str, slot: num, delimiter: num) -> str {
+  hold i = 0
+  hold part = 0
+  hold out = ""
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when c == delimiter { part = part + 1 } otherwise {
+      when part == slot { out = concat(out, chr(c)) }
+    }
+    i = i + 1
+  }
+  give out
+}
+make find(text: str, needle: str) -> num {
+  hold i = 0
+  while i + len(needle) <= len(text) {
+    hold j = 0
+    hold matched = 1
+    while j < len(needle) && matched == 1 {
+      when sx_index(text, i + j) != sx_index(needle, j) { matched = 0 }
+      j = j + 1
+    }
+    when matched == 1 { give i }
+    i = i + 1
+  }
+  give -1
+}
+make quote(text: str) -> str {
+  hold q = chr(39)
+  hold out = q
+  hold i = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when c == 39 { out = concat(out, concat(q, concat(chr(92), concat(q, q)))) } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(out, q)
+}
+make must_write(path: str, text: str) -> num {
+  when write_file(path, text) != 1 { hold e = die(concat("cannot write ", path)) }
+  give 0
+}
+make lines(text: str) -> num {
+  hold i = 0
+  hold n = 0
+  while i < len(text) {
+    when sx_index(text, i) == 10 { n = n + 1 }
+    i = i + 1
+  }
+  give n
+}
+make reference(value: str) -> num {
+  hold split = find(value, "#")
+  when split < 1 || split + 1 >= len(value) { give die(concat("missing case reference: ", value)) }
+  hold file = cut(value, 0, split)
+  when path_kind(file) != 1 || find(read_file(file), cut(value, split + 1, len(value))) < 0 {
+    give die(concat("case reference disappeared: ", value))
+  }
+  give 0
+}
+make required_clauses() -> str {
+  give ",LEX-01,LEX-02,NUM-01,TYPE-01,SCOPE-01,FLOW-01,FOR-01,FN-01,LIST-01,STRUCT-01,GENERIC-01,STRING-01,EXPR-01,EXPR-02,STRING-02,IMPORT-01,BUILTIN-01,GC-01,HOST-01,"
+}
+make required_builtins() -> str {
+  give ",concat,len,chr,string_eq,sx_index,arg_count,arg,read_file,write_file,http_get,push,read_line,read_n,write_out,flush_out,numstr,gc,gc_live,gc_runs,exit,read_dir,path_kind,path_size,path_real,spawn,child_send,child_recv,child_line,child_close,make_dir,make_link,remove_path,write_bytes,bytes_f64,read_bytes,bit_and,bit_or,bit_xor,bit_not,shl,shr,run_command,getenv,"
+}
+// Schema: ID|gates (comma-separated)|positive reference|negative reference|boundary reference.
+// Builtins: name|parameter kinds (n/s/l/a/v)|return kind|runtime case reference.
+make check_manifest(path: str, builtin: num) -> str {
+  hold text = read_file(path)
+  hold wanted = required_clauses()
+  when builtin == 1 { wanted = required_builtins() }
+  hold seen = ","
+  hold targets = ""
+  hold i = 0
+  while i < len(text) {
+    hold end = i
+    while end < len(text) && sx_index(text, end) != 10 { end = end + 1 }
+    hold row = cut(text, i, end)
+    i = end + 1
+    when len(row) > 0 && sx_index(row, 0) != 35 {
+      hold id = field(row, 0, 124)
+      hold key = concat(",", concat(id, ","))
+      when len(id) == 0 || find(wanted, key) < 0 || find(seen, key) >= 0 { hold e = die(concat("unknown/duplicate contract ID: ", id)) }
+      seen = concat(seen, concat(id, ","))
+      when builtin == 0 {
+        hold gates = field(row, 1, 124)
+        when len(gates) == 0 { hold e = die(concat("no executable gates: ", id)) }
+        hold gi = 0
+        while gi < len(gates) {
+          hold ge = gi
+          while ge < len(gates) && sx_index(gates, ge) != 44 { ge = ge + 1 }
+          hold gate = cut(gates, gi, ge)
+          when find(concat("\n", targets), concat("\n", concat(gate, "\n"))) < 0 { targets = concat(targets, concat(gate, "\n")) }
+          gi = ge + 1
+        }
+        hold col = 2
+        while col < 5 { hold checked = reference(field(row, col, 124))
+          col = col + 1 }
+      } otherwise {
+        hold signature = field(row, 1, 124)
+        hold k = 0
+        while k < len(signature) {
+          when find("nslav", chr(sx_index(signature, k))) < 0 { hold e = die(concat("bad builtin signature: ", id)) }
+          k = k + 1
+        }
+        hold result = field(row, 2, 124)
+        when len(result) != 1 || find("nsl", result) < 0 { hold e = die(concat("bad result kind: ", id)) }
+        hold checked = reference(field(row, 3, 124))
+      }
+    }
+  }
+  hold k = 1
+  while k < len(wanted) {
+    hold end = k
+    while end < len(wanted) && sx_index(wanted, end) != 44 { end = end + 1 }
+    hold id = cut(wanted, k, end)
+    when len(id) > 0 && find(seen, concat(",", concat(id, ","))) < 0 { hold e = die(concat("missing contract ID: ", id)) }
+    k = end + 1
+  }
+  give targets
+}
+make probe(index: num) -> str {
+  when index == 0 { give "string_interpolation" }
+  when index == 1 { give "struct_function" }
+  when index == 2 { give "field_expression" }
+  when index == 3 { give "index_call" }
+  when index == 4 { give "condition_literals" }
+  when index == 5 { give "condition_comments" }
+  when index == 6 { give "for_literals" }
+  when index == 7 { give "builtin_surface" }
+  when index == 8 { give "zeroarg_expressions" }
+  when index == 9 { give "grouped_numeric_builtin" }
+  when index == 10 { give "string_call_comparison" }
+  when index == 11 { give "string_call_matrix" }
+  when index == 12 { give "string_inline_conditions" }
+  when index == 13 { give "stream_process" }
+  when index == 14 { give "exit_status" }
+  when index == 15 { give "primitive_boundaries" }
+  when index == 16 { give "string_value_comparison" }
+  when index == 17 { give "generic_functions" }
+  give "generic_multi"
+}
+make check_evidence(path: str) -> num {
+  hold actual = read_file(path)
+  when lines(actual) != 212 { give die("incomplete readiness execution ledger") }
+  hold generation = 2
+  while generation <= 3 {
+    hold i = 0
+    while i < 53 {
+      hold name = probe(i)
+      when i >= 19 { name = concat("bad-", numstr(i - 19)) }
+      hold opt = 0
+      while opt <= 2 {
+        hold key = concat("gen", concat(numstr(generation), concat("|", concat(name, concat("|-O", concat(numstr(opt), "\n"))))))
+        hold first = find(actual, key)
+        when first < 0 || find(cut(actual, first + len(key), len(actual)), key) >= 0 { give die(concat("missing/duplicate execution: ", key)) }
+        opt = opt + 2
+      }
+      i = i + 1
+    }
+    generation = generation + 1
+  }
+  show "[OK] full contract: 76 positive executions + 136 checked C refusals witnessed"
+  give 0
+}
+make value(kind: str) -> str {
+  when string_eq(kind, "n") { give "1" }
+  when string_eq(kind, "l") { give "[]" }
+  give "\"\""
+}
+make call_source(name: str, signature: str, result: str, bad: num, wrong: str, arity: num) -> str {
+  hold args = ""
+  hold i = 0
+  while i < len(signature) {
+    when i > 0 { args = concat(args, ",") }
+    hold v = value(chr(sx_index(signature, i)))
+    when i == bad { v = wrong }
+    args = concat(args, v)
+    i = i + 1
+  }
+  when arity == 1 {
+    args = ""
+    when len(signature) == 0 { args = "1" }
+  }
+  when arity == 2 {
+    when len(args) > 0 { args = concat(args, ",") }
+    args = concat(args, "1")
+  }
+  hold typ = "num"
+  when string_eq(result, "s") { typ = "str" }
+  when string_eq(result, "l") { typ = "list" }
+  hold source = "struct ContractValue { n }\nhold contract_bad = ContractValue { n: 1 }\nmake contract_sink(v: "
+  source = concat(source, concat(typ, ") -> num {\n  give 0\n}\nwhen contract_sink("))
+  source = concat(source, concat(name, concat("(", concat(args, ")) == 0 {\n  show 1\n}\n"))))
+  give source
+}
+make compile_case(source: str, stem: str, compiler: str, refused: num) -> num {
+  hold w = must_write(concat(stem, ".sa"), source)
+  hold command = concat(quote(compiler), concat(" ", concat(quote(concat(stem, ".sa")), concat(" ", quote(concat(stem, ".c"))))))
+  when run_command(concat(command, concat(" >", concat(quote(concat(stem, ".emit")), " 2>&1")))) != 0 { give die(concat("compiler process failed: ", stem)) }
+  when refused == 1 && find(read_file(concat(stem, ".c")), "#error sayanox-min:") < 0 { give die(concat("missing source refusal: ", stem)) }
+  hold cc = getenv("CC")
+  when len(cc) == 0 { cc = "cc" }
+  hold opt = 0
+  while opt <= 2 {
+    hold build = concat(cc, concat(" -O", concat(numstr(opt), " -std=c11 -D_POSIX_C_SOURCE=200809L -Werror=implicit-function-declaration -Werror=incompatible-pointer-types ")))
+    build = concat(build, concat(quote(concat(stem, ".c")), concat(" -o ", quote(concat(stem, ".bin")))))
+    hold status = run_command(concat(build, concat(" >", concat(quote(concat(stem, ".build")), " 2>&1"))))
+    when (refused == 1 && status == 0) || (refused == 0 && status != 0) { give die(concat("builtin valid/refusal mismatch: ", stem)) }
+    opt = opt + 2
+  }
+  give 0
+}
+make builtin_matrix(base: str) -> num {
+  when path_kind(base) != 2 && make_dir(base) != 1 { give die("cannot create builtin matrix directory") }
+  hold inventory = check_manifest("docs/FULL_LANGUAGE_BUILTINS_V1.tsv", 1)
+  hold manifest = read_file("docs/FULL_LANGUAGE_BUILTINS_V1.tsv")
+  hold valid = 0
+  hold rejected = 0
+  hold generation = 2
+  while generation <= 3 {
+    hold compiler = concat("./selfhost/gen", numstr(generation))
+    when path_kind(compiler) != 1 { give die(concat("missing compiler: ", compiler)) }
+    hold i = 0
+    while i < len(manifest) {
+      hold end = i
+      while end < len(manifest) && sx_index(manifest, end) != 10 { end = end + 1 }
+      hold row = cut(manifest, i, end)
+      i = end + 1
+      when len(row) > 0 && sx_index(row, 0) != 35 {
+        hold name = field(row, 0, 124)
+        hold sig = field(row, 1, 124)
+        hold result = field(row, 2, 124)
+        hold stem = concat(base, concat("/", concat(numstr(generation), concat("-", name))))
+        hold good = compile_case(call_source(name, sig, result, -1, "", 0), concat(stem, "-valid"), compiler, 0)
+        valid = valid + 2
+        hold bad = compile_case(call_source(name, sig, result, -1, "", 1), concat(stem, "-arity"), compiler, 1)
+        rejected = rejected + 2
+        when len(sig) > 0 {
+          bad = compile_case(call_source(name, sig, result, -1, "", 2), concat(stem, "-extra-arity"), compiler, 1)
+          rejected = rejected + 2
+        }
+        hold position = 0
+        while position < len(sig) {
+          hold expected = chr(sx_index(sig, position))
+          hold kind = 0
+          while kind < 4 {
+            hold actual = chr(sx_index("nslr", kind))
+            when string_eq(actual, expected) == 0 && (string_eq(expected, "a") == 0 || (kind == 0 || kind == 3)) && (string_eq(expected, "v") == 0 || kind >= 2) {
+              hold wrong = value(actual)
+              when kind == 3 { wrong = "contract_bad" }
+              hold key = concat(stem, concat("-", concat(numstr(position), actual)))
+              hold bad = compile_case(call_source(name, sig, result, position, wrong, 0), key, compiler, 1)
+              rejected = rejected + 2
+            }
+            kind = kind + 1
+          }
+          position = position + 1
+        }
+      }
+    }
+    generation = generation + 1
+  }
+  when valid != 172 || rejected != 948 { give die("incomplete builtin signature execution matrix") }
+  show concat("[OK] full builtin signatures: ", concat(numstr(valid), concat(" valid C builds; ", concat(numstr(rejected), " checked arity/kind C refusals"))))
+  give 0
+}
+// Execute all boundary programs at both optimizations, with exact status/output.
+make runtime_case(source: str, stem: str, compiler: str, status: num, output: str, diagnostic: str, prefix: str) -> num {
+  hold compiled = compile_case(source, stem, compiler, 0)
+  hold cc = getenv("CC")
+  when len(cc) == 0 { cc = "cc" }
+  hold opt = 0
+  while opt <= 2 {
+    hold build = concat(cc, concat(" -std=c11 -D_POSIX_C_SOURCE=200809L -O", concat(numstr(opt), " -Werror=implicit-function-declaration -Werror=incompatible-pointer-types ")))
+    build = concat(build, concat(quote(concat(stem, ".c")), concat(" -o ", quote(concat(stem, ".bin")))))
+    when run_command(concat(build, concat(" >", concat(quote(concat(stem, ".build")), " 2>&1")))) != 0 { give die(concat("runtime build failed: ", stem)) }
+    hold environment = prefix
+    hold marker = concat(stem, ".transport")
+    when len(prefix) > 0 {
+      when path_kind(marker) != 0 { hold removed = remove_path(marker) }
+      environment = concat(environment, concat("SX_HTTP_MARKER=", concat(quote(marker), " ")))
+    }
+    hold command = concat(environment, concat("timeout 20 ", concat(quote(concat(stem, ".bin")), concat(" >", concat(quote(concat(stem, ".out")), concat(" 2>", quote(concat(stem, ".err"))))))))
+    when run_command(command) != status { give die(concat("runtime status mismatch: ", stem)) }
+    when len(prefix) > 0 && string_eq(read_file(marker), "called") == 0 { give die("HTTP fixture was not invoked") }
+    when string_eq(read_file(concat(stem, ".out")), output) == 0 { give die(concat("runtime output mismatch: ", stem)) }
+    when len(diagnostic) > 0 && find(read_file(concat(stem, ".err")), diagnostic) < 0 { give die(concat("runtime diagnostic mismatch: ", stem)) }
+    opt = opt + 2
+  }
+  give 0
+}
+make boundary_expression(index: num) -> str {
+  when index == 0 { give "bit_and(-1, 255)" }
+  when index == 1 { give "bit_or(18446744073709555712, 0)" }
+  when index == 2 { give "bit_xor(0, 1000000000000000000000000000000)" }
+  when index == 3 { give "bit_not(0 / 0)" }
+  when index == 4 { give "shl(1, -1)" }
+  when index == 5 { give "shr(1, 64)" }
+  when index == 6 { give "shl(1, 63.5)" }
+  when index == 7 { give "shr(1, 1000000000000000000000000000000)" }
+  when index == 8 { give "shr(1, 1 / 0)" }
+  give "shl(1, 0 / 0)"
+}
+make runtime_boundaries(base: str) -> num {
+  when path_kind(base) != 2 && make_dir(base) != 1 { give die("cannot create runtime directory") }
+  hold stub = concat(base, "/curl")
+  hold build = concat("./bootstrap/sxc_native.bin selfhost/full_language_tests/http_failed_transport.sa ", quote(stub))
+  when run_command(build) != 0 { give die("native HTTP failure fixture failed to build") }
+  hold marker = concat(base, "/transport-baseline")
+  hold body = concat(base, "/transport-body")
+  hold fixture = concat("SX_HTTP_MARKER=", concat(quote(marker), concat(" ", concat(quote(stub), concat(" >", quote(body))))))
+  when run_command(concat("SX_HTTP_OVERSIZE=0 ", fixture)) != 7 || string_eq(read_file(body), "partial\n") == 0 || string_eq(read_file(marker), "called") == 0 { give die("failed-transport fixture baseline failed") }
+  when run_command(concat("SX_HTTP_OVERSIZE=1 ", fixture)) != 0 || path_size(body) != 1000001 { give die("oversize fixture must send exactly 1000001 bytes successfully") }
+  hold generation = 2
+  while generation <= 3 {
+    hold compiler = concat("./selfhost/gen", numstr(generation))
+    hold i = 0
+    while i < 10 {
+      hold stem = concat(base, concat("/gen", concat(numstr(generation), concat("-range-", numstr(i)))))
+      hold checked = runtime_case(concat("show (", concat(boundary_expression(i), ")\n")), stem, compiler, 1, "", "range", "")
+      i = i + 1
+    }
+    // Eight splices succeed; the ninth and a cycle are explicit refusals.
+    hold import_index = 1
+    while import_index < 8 {
+      hold path = concat(path_real(base), concat("/import-", concat(numstr(import_index), ".sa")))
+      hold next = concat(path_real(base), concat("/import-", concat(numstr(import_index + 1), ".sa")))
+      hold w = must_write(path, concat("use ", concat(chr(34), concat(next, concat(chr(34), "\n")))))
+      import_index = import_index + 1
+    }
+    hold last = concat(path_real(base), "/import-8.sa")
+    hold w = must_write(last, "show 8\n")
+    hold first = concat(path_real(base), "/import-1.sa")
+    hold source = concat("use ", concat(chr(34), concat(first, concat(chr(34), "\n"))))
+    hold stem = concat(base, concat("/gen", numstr(generation)))
+    hold checked = runtime_case(source, concat(stem, "-depth-valid"), compiler, 0, "8\n", "", "")
+    hold next = concat(path_real(base), "/import-9.sa")
+    w = must_write(next, "show 9\n")
+    w = must_write(last, concat("use ", concat(chr(34), concat(next, concat(chr(34), "\n")))))
+    checked = compile_case(source, concat(stem, "-depth-invalid"), compiler, 1)
+    w = must_write(last, concat("use ", concat(chr(34), concat(last, concat(chr(34), "\n")))))
+    checked = compile_case(source, concat(stem, "-cycle"), compiler, 1)
+    checked = compile_case("use unquoted.sa\nshow 1\n", concat(stem, "-unquoted"), compiler, 1)
+    checked = compile_case("use \"selfhost/seed_tests/absent-contract-import.sa\"\nshow 1\n", concat(stem, "-missing"), compiler, 1)
+    hold prefix = concat("PATH=", concat(quote(concat(path_real(base), concat(":", getenv("PATH")))), " SX_HTTP_OVERSIZE=0 "))
+    hold stem = concat(base, concat("/gen", concat(numstr(generation), "-http")))
+    hold source = "show (len(http_get(\"http://127.0.0.1/unused\")))\n"
+    hold checked = runtime_case(source, concat(stem, "-failed"), compiler, 0, "0\n", "", prefix)
+    checked = runtime_case(source, concat(stem, "-oversize"), compiler, 0, "0\n", "", concat(prefix, "SX_HTTP_OVERSIZE=1 "))
+    generation = generation + 1
+  }
+  show "[OK] full runtime boundaries: 40 checked range failures + 8 failed/oversize HTTP executions; imports: 4 depth-boundary executions + 16 checked refusals"
+  give 0
+}
+make negative_command(arguments: str, stem: str, diagnostic: str) -> num {
+  hold command = concat(quote(arg(0)), concat(" ", concat(arguments, concat(" >", concat(quote(concat(stem, ".log")), " 2>&1")))))
+  when run_command(command) == 0 || find(read_file(concat(stem, ".log")), diagnostic) < 0 { give die(concat("negative control did not fail as intended: ", stem)) }
+  give 0
+}
+make change_first(text: str, name: str, replacement: str) -> str {
+  hold start = find(text, name)
+  when start < 0 { hold e = die("negative control anchor missing") }
+  hold end = start
+  while end < len(text) && sx_index(text, end) != 10 { end = end + 1 }
+  when end < len(text) { end = end + 1 }
+  give concat(cut(text, 0, start), concat(replacement, cut(text, end, len(text))))
+}
+make negative_controls(base: str, evidence: str) -> num {
+  when path_kind(base) != 2 && make_dir(base) != 1 { give die("cannot create controls directory") }
+  hold command = concat(quote(arg(0)), " check-evidence ")
+  when run_command(concat(command, quote(evidence))) != 0 { give die("controls require real passing execution evidence") }
+  hold kind = 0
+  while kind < 2 {
+    hold file = "docs/FULL_LANGUAGE_CASES_V1.tsv"
+    hold suffix = ""
+    hold anchor = "LEX-01|"
+    when kind == 1 { file = "docs/FULL_LANGUAGE_BUILTINS_V1.tsv"
+      suffix = " builtins"
+      anchor = "concat|" }
+    hold valid = concat(quote(arg(0)), concat(" check-manifest ", concat(quote(file), suffix)))
+    when run_command(valid) != 0 { give die("negative control baseline failed") }
+    hold text = read_file(file)
+    hold stem = concat(base, concat("/manifest-", numstr(kind)))
+    hold path = concat(stem, ".tsv")
+    hold w = must_write(path, change_first(text, anchor, ""))
+    hold rejected = negative_command(concat("check-manifest ", concat(quote(path), suffix)), stem, "missing contract ID")
+    hold at = find(text, anchor)
+    hold end = at
+    while end < len(text) && sx_index(text, end) != 10 { end = end + 1 }
+    w = must_write(path, concat(text, concat(cut(text, at, end), "\n")))
+    rejected = negative_command(concat("check-manifest ", concat(quote(path), suffix)), stem, "unknown/duplicate")
+    hold row = "LEX-01|test-comment-quotes|absent-fixture.sa#missing|absent-fixture.sa#missing|absent-fixture.sa#missing\n"
+    hold message = "case reference disappeared"
+    when kind == 1 { row = "concat|z|s|docs/BUILTINS.md#concat\n"
+      message = "bad builtin signature" }
+    w = must_write(path, change_first(text, anchor, row))
+    rejected = negative_command(concat("check-manifest ", concat(quote(path), suffix)), stem, message)
+    kind = kind + 1
+  }
+  hold text = read_file(evidence)
+  hold end = find(text, "\n") + 1
+  hold path = concat(base, "/evidence.tsv")
+  hold w = must_write(path, cut(text, end, len(text)))
+  hold checked = negative_command(concat("check-evidence ", quote(path)), concat(base, "/evidence-missing"), "incomplete readiness")
+  hold rest = cut(text, end, len(text))
+  hold next = find(rest, "\n") + 1
+  w = must_write(path, concat(rest, cut(rest, 0, next)))
+  checked = negative_command(concat("check-evidence ", quote(path)), concat(base, "/evidence-duplicate"), "missing/duplicate execution")
+  path = concat(base, "/bad.sha256")
+  hold pins = read_file("docs/full-language-v1.sha256")
+  w = must_write(path, concat("0000000000000000000000000000000000000000000000000000000000000000", cut(pins, 64, len(pins))))
+  checked = negative_command(concat("check-pins ", quote(path)), concat(base, "/pins"), "integrity check failed")
+  hold oracle = "selfhost/full_language_tests/string_value_comparison.want"
+  hold copied = concat(base, "/changed-oracle.want")
+  w = must_write(copied, concat(read_file(oracle), "changed\n"))
+  hold at = find(pins, concat("  ", concat(oracle, "\n")))
+  when at < 64 { give die("oracle was not independently pinned") }
+  w = must_write(path, concat(pins, concat(cut(pins, at - 64, at), concat("  ", concat(copied, "\n")))))
+  checked = negative_command(concat("check-pins ", quote(path)), concat(base, "/oracle-corruption"), "integrity check failed")
+  hold begin = at - 64
+  hold finish = at + 2 + len(oracle) + 1
+  w = must_write(path, concat(cut(pins, 0, begin), cut(pins, finish, len(pins))))
+  checked = negative_command(concat("check-pins ", quote(path)), concat(base, "/missing-pin"), "unprotected contract artifact")
+  show "[OK] full contract negative controls: missing/duplicate IDs and executions, stale case, bad kind, corrupted pin rejected"
+  give 0
+}
+make require_pin(pins: str, path: str) -> num {
+  when find(pins, concat("  ", concat(path, "\n"))) < 0 { give die(concat("unprotected contract artifact: ", path)) }
+  give 0
+}
+make policy_pins(pins: str) -> num {
+  hold fixed = "selfhost/compiler_min.sa\ndocs/SYNTAX.md\ndocs/TYPES.md\ndocs/GENERICS.md\ndocs/BUILTINS.md\ndocs/MODULES.md\ndocs/FULL_LANGUAGE_PROFILE_V1.md\ndocs/FULL_LANGUAGE_CONTRACT_V1.md\ndocs/FULL_LANGUAGE_REVIEW_V1.md\ndocs/FULL_LANGUAGE_CASES_V1.tsv\ndocs/FULL_LANGUAGE_BUILTINS_V1.tsv\ntools/sxfull.sa\ntools/sxsuite.sa\ntools/sxclaims_lib.sa\ntools/sxaggregate_lib.sa\ntools/sxentry_lib.sa\nselfhost/full_language_tests/http_failed_transport.sa\n"
+  hold i = 0
+  while i < len(fixed) {
+    hold end = i
+    while end < len(fixed) && sx_index(fixed, end) != 10 { end = end + 1 }
+    hold checked = require_pin(pins, cut(fixed, i, end))
+    i = end + 1
+  }
+  i = 0
+  while i < 19 {
+    hold file = concat("selfhost/full_language_tests/", probe(i))
+    hold checked = require_pin(pins, concat(file, ".sa"))
+    checked = require_pin(pins, concat(file, ".want"))
+    i = i + 1
+  }
+  hold kind = 0
+  while kind < 2 {
+    hold file = "docs/FULL_LANGUAGE_CASES_V1.tsv"
+    when kind == 1 { file = "docs/FULL_LANGUAGE_BUILTINS_V1.tsv" }
+    hold manifest = read_file(file)
+    i = 0
+    while i < len(manifest) {
+      hold end = i
+      while end < len(manifest) && sx_index(manifest, end) != 10 { end = end + 1 }
+      hold row = cut(manifest, i, end)
+      i = end + 1
+      when len(row) > 0 && sx_index(row, 0) != 35 {
+        hold col = 2
+        hold limit = 5
+        when kind == 1 { col = 3
+          limit = 4 }
+        while col < limit {
+          hold ref = field(row, col, 124)
+          hold split = find(ref, "#")
+          when split < 1 { give die("missing pinned case reference") }
+          hold checked = require_pin(pins, cut(ref, 0, split))
+          col = col + 1
+        }
+      }
+    }
+    kind = kind + 1
+  }
+  give 0
+}
+make check_pins(path: str) -> num {
+  hold protected = policy_pins(read_file(path))
+  hold command = concat("sha256sum -c ", concat(quote(path), " >selfhost/seed_tests/full-contract-pins.log 2>&1"))
+  when run_command(command) != 0 { give die("contract/spec/case integrity check failed") }
+  give 0
+}
+
+hold command = arg(1)
+when string_eq(command, "check-manifest") {
+  hold path = arg(2)
+  hold builtin = 0
+  when string_eq(arg(3), "builtins") { builtin = 1 }
+  hold targets = check_manifest(path, builtin)
+  hold stop = exit(0)
+}
+when string_eq(command, "check-evidence") {
+  hold checked = check_evidence(arg(2))
+  hold stop = exit(0)
+}
+when string_eq(command, "verify") {
+  hold pins = check_pins("docs/full-language-v1.sha256")
+  hold targets = check_manifest("docs/FULL_LANGUAGE_CASES_V1.tsv", 0)
+  hold builtins = check_manifest("docs/FULL_LANGUAGE_BUILTINS_V1.tsv", 1)
+  hold w = must_write("selfhost/seed_tests/full-contract-targets", targets)
+  show "[OK] published-language v1: complete clause and builtin inventory, source/case pins"
+  hold stop = exit(0)
+}
+when string_eq(command, "builtin-matrix") {
+  hold checked = builtin_matrix(arg(2))
+  hold stop = exit(0)
+}
+when string_eq(command, "runtime-boundaries") {
+  hold checked = runtime_boundaries(arg(2))
+  hold stop = exit(0)
+}
+when string_eq(command, "negative-controls") {
+  hold checked = negative_controls(arg(2), arg(3))
+  hold stop = exit(0)
+}
+when string_eq(command, "check-pins") {
+  hold checked = check_pins(arg(2))
+  hold stop = exit(0)
+}
+hold usage = die("usage: sxfull verify | check-manifest FILE [builtins] | check-evidence FILE | builtin-matrix DIRECTORY")

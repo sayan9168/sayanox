@@ -1,0 +1,3 @@
+hold written = write_out("before-exit")
+hold stopped = exit(7)
+show "unreachable"

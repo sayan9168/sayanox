@@ -161,13 +161,14 @@ retry into the same buffer. `make test-read-bytes` pins the round trip through
 a NUL byte and a `0xFF` byte, the append-on-second-read contract, the `-1`,
 and the refusal by seed-min and by the native backend.
 
-One known limitation of the comparison lowering, unchanged by this addition:
-`call == "text"` (and `!=`, `<`, `>`, `<=`, `>=`) still lowers to a C pointer
-comparison, so it compares addresses instead of contents and is silently
-wrong. `name == "text"`, where the left side is a plain variable, is lowered
-correctly to `sx_eq`. Use `string_eq(call, "text") == 1` for the call form
-until the condition rewriter learns to classify a call; the gates use that
-form and no gate depends on the broken one.
+String-call comparison lowering was corrected on 2026-10-29 in the
+Sayanox-written C-output compiler: `call == "text"` and `!=`, `<`, `>`, `<=`,
+`>=` compare contents, including two calls, grouped/concatenated string values,
+recursive functions and short-circuit conditions. `string_eq` remains supported;
+it is no longer a required workaround on gen2/gen3. The separate frozen minimum
+seed's older behavior is not silently promoted to full-profile support.
+`selfhost/full_language_tests/string_call_matrix.sa` and
+`string_inline_conditions.sa` preserve the exact stdout/call-count regressions.
 
 A second limitation, found on 2026-10-18 while porting `tools/sxpkg.sa` and
 fixed the same day: **the compiler's signature pre-pass did not understand

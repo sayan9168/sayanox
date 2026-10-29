@@ -1,5 +1,12 @@
 # Full-language self-host
 
+> **Current 2026-10-28:** full-language closure is not complete. The native
+> Sayanox bootstrap has replaced the C seed and Makefile paths described in
+> the historical text below. Use `./sx ci` for current hard gates. The new
+> [contract scope draft](FULL_LANGUAGE_CONTRACT_DRAFT.md) records the required
+> specification/coverage work. The quoted-brace condition divergence described
+> below now has a source fix and regression fixture; new acceptance is pending.
+
 Updated 2026-10-17. The previous version of this file described a Stage-2 C
 host, a `make stage2` target and a `bootstrap_full_language_selfhost.sh`
 one-command bootstrap. **None of those exist in this repository** — see
@@ -269,12 +276,14 @@ record eight unmet checks before the struct-function implementation. The
 **zero on 2026-10-22**: all eight checks (four behaviours × gen2 and gen3) now
 pass, and `make gen3` runs them, so a regression breaks a hard gate.
 
-**This is still not a full-language claim.** Four closure probes are four
-probes; there is no reviewed, versioned acceptance specification, the probes
-say nothing about the forms nobody has written down, and `true-selfhost-full`
-still fails closed on purpose. `make test-full-language-expr` asserts that
-refusal statically so the probes passing cannot quietly turn into a claim.
-No new peak-memory or complete-language claim is made.
+**Historical checkpoint, not a full-language claim.** Four closure probes
+alone are not a certificate. As of 2026-10-29 the reviewed
+[v1 contract](FULL_LANGUAGE_CONTRACT_V1.md) and
+[normative profile](FULL_LANGUAGE_PROFILE_V1.md) have an executable Sayanox
+`./sx target true-selfhost-full` gate. `test-full-language-expr` checks its
+integrity/evidence/control wiring without recursively invoking the full gate.
+Final exact-source guarded and remote acceptance is tracked in [STATUS](STATUS.md);
+the existence of that gate is not a passing result or a new memory guarantee.
 
 
 ## Concrete struct function types (bounded, 2026-10-17)

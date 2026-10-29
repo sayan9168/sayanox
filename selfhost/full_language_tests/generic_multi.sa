@@ -1,0 +1,25 @@
+make pair<A, B>(a: A, b: B) -> A {
+  give a
+}
+make swap<A, B>(a: A, b: B) -> B {
+  give b
+}
+make three<A, B, C>(a: A, b: B, c: C) -> C {
+  give c
+}
+make usefirst<A, B>(a: A, b: B) -> A {
+  hold r: A = pair(a, b)
+  give r
+}
+hold xs = [1, 2, 3]
+hold s = "hi"
+show pair(1, "x")
+show swap(1, "x")
+show swap("x", 1)
+show pair("x", 1)
+show pair(1, 2)
+show len(three(1, "x", xs))
+show usefirst(5, s)
+show len(usefirst(xs, s))
+show len(usefirst(xs, 7))
+show pair(s, xs)

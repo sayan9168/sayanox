@@ -1,0 +1,60 @@
+// Intended positive: inline lists retain order, laziness and recursive locals.
+make sized(xs: list) -> str {
+  give numstr(len(xs))
+}
+make encode(xs: list) -> str {
+  give concat(numstr(xs[0]), numstr(xs[1]))
+}
+make next(marks: list) -> num {
+  hold result = marks[0]
+  marks[0] = result + 1
+  give result
+}
+make step(n: num) -> num {
+  when n <= 0 {
+    give 0
+  }
+  when encode([n, step(n - 1)]) == concat(numstr(n), numstr(n - 1)) {
+    give n
+  }
+  give -1
+}
+when sized([]) == "0" {
+  show 1
+} otherwise {
+  show 0
+}
+when sized([1, 2]) == "2" {
+  show 1
+} otherwise {
+  show 0
+}
+hold marks = [0]
+when 0 {
+  show 0
+} otherwise when encode([next(marks), next(marks)]) == "01" {
+  show 1
+} otherwise {
+  show 0
+}
+show marks[0]
+marks[0] = 0
+hold loops = 0
+while encode([next(marks), next(marks)]) != "45" {
+  loops = loops + 1
+}
+show loops
+show marks[0]
+when 0 and encode([next(marks), next(marks)]) == "67" {
+  show 0
+} otherwise {
+  show 1
+}
+show marks[0]
+when 1 or encode([next(marks), next(marks)]) == "67" {
+  show 1
+} otherwise {
+  show 0
+}
+show marks[0]
+show step(4)

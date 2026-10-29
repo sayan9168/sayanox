@@ -1,0 +1,11 @@
+// C-output compiler conformance; native_aot still refuses header comments.
+when string_eq("x", "x") == 1 // ignored { " }
+{
+  show "comment"
+}
+hold count = 0
+while count < 2 && string_eq("{", "{") == 1 // ignored { " }
+{
+  show count
+  count = count + 1
+}

@@ -104,6 +104,8 @@ make main_run() -> num {
   hold lim_ftr = concat(q, "\n")
   hold wlim = write_file(lim_sa, concat(lim_hdr, concat(holes16, lim_ftr)))
   p = p + check_pos(13, lim_sa, work)
+  p = p + check_pos(14, "selfhost/full_language_tests/condition_literals.sa", work)
+  p = p + check_pos(15, "selfhost/full_language_tests/for_literals.sa", work)
 
   hold r = 0
   hold sh_q = concat("show ", q)

@@ -167,10 +167,12 @@ make xl_full(d: str) -> num {
   hold emit = pg_emit(0, source, kp_join(d, "strcall.seed.c"), 1)
   hold cmd = concat("cc -O2 -o ", concat(gl_sh_quote(kp_join(d, "strcall.seed")), concat(" ", gl_sh_quote(kp_join(d, "strcall.seed.c")))))
   hold c_failure = xb_fail_command(cmd, kp_join(d, "strcall.seed.err"), "")
-  // The independent reviewed full-language acceptance specification is still
-  // absent; the driver must not turn expression coverage into a full claim.
-  hold refuse = pg_contains("tools/sxclaims_lib.sa", "refusing a full-language claim")
-  give pg_contains("tools/sxclaims_lib.sa", "fail(1,")
+  // Expression coverage alone is not a certificate: full claims must verify
+  // pins, the independent inventories, executable evidence and controls.
+  hold contract_pins = pg_contains("tools/sxclaims_lib.sa", "./tools/sxfull verify")
+  hold ledger = pg_contains("tools/sxclaims_lib.sa", "./tools/sxfull check-evidence")
+  hold controls = pg_contains("tools/sxclaims_lib.sa", "./tools/sxfull negative-controls")
+  give pg_contains("tools/sxclaims_lib.sa", "./tools/sxfull builtin-matrix")
 }
 make xl_dispatch(name: str) -> num {
   hold d = concat("selfhost/seed_tests/sxgates/", name)
