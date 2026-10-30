@@ -1,5 +1,15 @@
 # Status
 
+**2026-10-30 — GC CI repair: acceptance PENDING.**
+The cap probe now checks per-class policy and actual tracked frees rather than
+a fixed total, including an unrelated warm block. Remote diagnostics also
+exposed live roots hidden by ASan fake-stack mode; the same failure was
+reproduced locally. Both C-output emitters now discover those roots, and the
+probe additionally forces fake-stack mode without changing the existing
+sanitizer flags. Fresh bootstrap, official GC/driver, guarded full CI and
+remote acceptance must pass before this item or full-language closure is
+marked complete. No later feature has been started.
+
 **2026-10-29 — C-output free-pool cap: focused PASS; full CI PENDING.**
 Both emitted C runtime branches now release oversized cached blocks and retain
 at most two blocks per size class up to 64 KiB after collection. Focused probes

@@ -18,6 +18,22 @@ tracked-block free-versus-membership consistency, idempotence, exact warm reuse 
 list/data aliases at O0/O2 and ASan+UBSan (leak detection off). Both the full
 and list-only runtime emitters are covered by focused development checks.
 
+### ASan fake-stack root discovery (2026-10-30)
+
+The remote sanitizer probe exposed a separate root-discovery bug: ASan can
+move address-taken local roots (including the stack anchor and `jmp_buf`) to
+its fake stack. Scanning only the apparent local-address interval could then
+reclaim a live list and reuse its header as a string. This is reproducible
+with `detect_stack_use_after_return=1`; it is not a free-pool cap violation.
+
+Both C-output emitters now map a fake-stack anchor back to its real frame,
+scan the real caller frames plus the saved registers, and use ASan's public
+fake-stack interface to scan referenced live fake frames. Poisoned words are
+still skipped and actual loads remain instrumented. The existing sanitizer
+mode is unchanged; an additional mandatory probe forces fake-stack mode on.
+No sanitizer suppression, root pinning in the probe, cap relaxation or
+ci-guard change is used. Full CI acceptance remains pending until verified.
+
 Sayanox has two runtimes, and which one a program gets depends on which
 backend compiles it.
 
