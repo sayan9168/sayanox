@@ -1,5 +1,6 @@
 // Memory/collector gate orchestration and assertions in Sayanox.
 use "tools/sxmemory_fixtures_lib.sa"
+use "tools/sxgc_pool_lib.sa"
 
 make nm_known(name: str) -> num {
   when string_eq(name, "test-native-mem") == 1 || string_eq(name, "test-gc") == 1 || string_eq(name, "test-seed-gc") == 1 { give 1 }
@@ -105,6 +106,7 @@ make nm_native() -> num {
 make nm_gc() -> num {
   hold a = nm_build(1, "gc_builtins")
   hold b = nm_out("gc_builtins", "bounded\nran\n6000\nreclaimed\n97", 0)
+  hold pool = gpm_test("selfhost/seed_tests/gc_builtins.c")
   hold native = nm_compile(2, "selfhost/seed_tests/gc_builtins.sa", "gc_builtins_nat")
   give nm_out("gc_builtins_nat", "bounded\nran\n6000\nreclaimed\n97", 0)
 }

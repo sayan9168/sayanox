@@ -1,5 +1,22 @@
 # Sayanox memory management
 
+## C-output free-pool limit (2026-10-29)
+
+After sweeping and rebuilding membership, both C-output runtime branches now
+trim their size-class free lists: retain at most two blocks per class through
+64 KiB, release all larger free blocks with `free`. This bounds the cached
+payload/header block sizes below 256 KiB, excluding allocator overhead, live
+objects, registry/sort metadata and conservative false roots. It is not an RSS
+return guarantee or an arbitrary-program bounded-heap claim. Seed and native
+allocator policies are unchanged. `gc_live()` keeps its existing live-block
+accounting; released cache bytes are not added to its public counters.
+
+`test-gc` runs an actual-emitted-runtime probe maintained in
+`tools/sxgc_pool_lib.sa`: intercept real frees for 60 blocks across 15 classes,
+check the sweep hook, exact per-class limits, idempotence, warm reuse and live
+list/data aliases at O0/O2 and ASan+UBSan (leak detection off). Both the full
+and list-only runtime emitters are covered by focused development checks.
+
 Sayanox has two runtimes, and which one a program gets depends on which
 backend compiles it.
 
