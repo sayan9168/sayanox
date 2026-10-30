@@ -1,14 +1,35 @@
 # Status
 
-**2026-10-30 — GC CI repair: acceptance PENDING.**
-The cap probe now checks per-class policy and actual tracked frees rather than
-a fixed total, including an unrelated warm block. Remote diagnostics also
-exposed live roots hidden by ASan fake-stack mode; the same failure was
-reproduced locally. Both C-output emitters now discover those roots, and the
-probe additionally forces fake-stack mode without changing the existing
-sanitizer flags. Fresh bootstrap, official GC/driver, guarded full CI and
-remote acceptance must pass before this item or full-language closure is
-marked complete. No later feature has been started.
+**2026-10-30 — GC repair and published-language v1 self-host: ACCEPTED.**
+[PR #48](https://github.com/sayan9168/sayanox/pull/48) is merged. Both required
+[post-merge main CI jobs](https://github.com/sayan9168/sayanox/actions/runs/41017856651)
+and their unchanged final guard audits passed on
+`7e1bfec9347ec61e3cf24353148b086612dcc7c8`. This accepts the actual implementation,
+not merely registration of its gates. The complete `./sx ci` requires pure-min
+acceptance, source-built gen3/gen4 equality, native acceptance and
+`true-selfhost-full`; it has no reduced-success alias.
+
+The cap probe checks per-class policy and tracked frees, not a fixed free count.
+Both C-output collectors discover live ASan fake-stack roots and retain real
+stack prologue spills. Existing sanitizer checks and aliases remain mandatory;
+an additional mode forces fake-stack root discovery. No ci-guard weakening or
+sanitizer suppression was used.
+
+Published-language v1 **C-output self-host** acceptance is closed: the required
+19-clause/43-builtin inventory, gen2/gen3 O0/O2 execution ledger, builtin
+signature matrix, runtime/import boundaries, omission/corruption controls,
+64 MiB bootstrap budget, native-origin reconstruction and cold recovery all
+belong to the successful full chain. User programs are not narrowed to the
+pure-min intersection used to implement the compiler.
+[Exact checkpoint and evidence](gate-logs/2026-10-30-gc-full-v1.md).
+
+Independent diverse-bootstrap proof, full native-backend parity, future language
+proposals, precise GC and arbitrary-program bounded-heap/RSS guarantees remain
+open. No optional stronger-GC or native32 slice was added as part of this repair.
+
+**Historical entries below retain their original dated results.** Their PENDING
+labels for this accepted implementation are superseded by the record above,
+not additional current blockers. Separate trust/platform limitations remain open.
 
 **2026-10-29 — C-output free-pool cap: focused PASS; full CI PENDING.**
 Both emitted C runtime branches now release oversized cached blocks and retain
@@ -367,7 +388,9 @@ new code:
   `docs/gate-logs/2026-10-22-crypto-json-signed-packages-lsp/`,
   `docs/gate-logs/2026-10-22-seed-collector/` and
   `docs/gate-logs/2026-10-22-nested-generics/`.
-* **Still open:** row 1 (full-language self-host). Row 10 moved: module
+* **Historical status at this checkpoint:** row 1 (full-language self-host)
+  was still open; it is accepted under published-language v1 in the 2026-10-30
+  record above. Row 10 moved: module
   namespacing exists as a Sayanox source-to-source pass with its own gate
   (`make test-sxmod`), while the *compiler* still has textual `use` splicing
   and one flat name table.

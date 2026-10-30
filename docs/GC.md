@@ -32,7 +32,9 @@ fake-stack interface to scan referenced live fake frames. Poisoned words are
 still skipped and actual loads remain instrumented. The existing sanitizer
 mode is unchanged; an additional mandatory probe forces fake-stack mode on.
 No sanitizer suppression, root pinning in the probe, cap relaxation or
-ci-guard change is used. Full CI acceptance remains pending until verified.
+ci-guard change is used. Full CI acceptance subsequently passed on main
+`7e1bfec` (run [41017856651](https://github.com/sayan9168/sayanox/actions/runs/41017856651));
+see the [checkpoint evidence](gate-logs/2026-10-30-gc-full-v1.md).
 
 Sayanox has two runtimes, and which one a program gets depends on which
 backend compiles it.

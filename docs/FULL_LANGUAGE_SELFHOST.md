@@ -1,11 +1,20 @@
 # Full-language self-host
 
-> **Current 2026-10-28:** full-language closure is not complete. The native
-> Sayanox bootstrap has replaced the C seed and Makefile paths described in
-> the historical text below. Use `./sx ci` for current hard gates. The new
-> [contract scope draft](FULL_LANGUAGE_CONTRACT_DRAFT.md) records the required
-> specification/coverage work. The quoted-brace condition divergence described
-> below now has a source fix and regression fixture; new acceptance is pending.
+> **Current 2026-10-30: published-language v1 C-output self-host accepted.**
+> Both required post-merge main CI jobs passed, including the complete
+> `./sx ci` chain with `true-selfhost-full`, its contract and negative controls,
+> native-origin bootstrap, pure-min acceptance and gen3/gen4 equality.
+> See the [normative contract](FULL_LANGUAGE_CONTRACT_V1.md),
+> [acceptance evidence](gate-logs/2026-10-30-gc-full-v1.md) and [STATUS](STATUS.md).
+> Accepted user programs are not narrowed to the pure-min implementation subset.
+> Independent bootstrap proof, future language support and full native-backend
+> parity are separate open items. Use `./sx ci` and `./sx target ...`; the
+> historical Makefile and C seed described below have been retired.
+
+## Historical implementation log (2026-10-17)
+
+The old subset/refusal descriptions below are historical, not the current v1
+specification or outstanding full-language acceptance blockers.
 
 Updated 2026-10-17. The previous version of this file described a Stage-2 C
 host, a `make stage2` target and a `bootstrap_full_language_selfhost.sh`
