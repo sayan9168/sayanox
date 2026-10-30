@@ -39,6 +39,33 @@ see the [checkpoint evidence](gate-logs/2026-10-30-gc-full-v1.md).
 Sayanox has two runtimes, and which one a program gets depends on which
 backend compiles it.
 
+## Seed fake-stack root reliability (2026-10-30)
+
+The seed collector now uses the same real-stack/fake-stack distinction as the
+C-output collectors, without changing heap tracing or public GC counters.
+`tools/sxseed_roots_lib.sa` generates a regression directly from the maintained
+Sayanox seed-runtime generator. An 8 KiB address-taken frame prevents the test
+from accidentally succeeding because ASan fake-stack size classes happened to
+lie between the old register buffer and anchor. The old implementation misses
+a live root in the forced-fake-stack mode; removing discovery from the fixed
+runtime produces a real ASan heap-use-after-free.
+
+The collector maps a fake anchor back to its real frame, scans the saved
+register buffer and real stack including prologue spills, and uses ASan's
+public interface to scan referenced live fake frames. All loads remain
+instrumented and poisoned words remain skipped. The heap-edge scanner does
+not use fake-frame discovery: numeric buffers remain pointer-free leaves.
+
+`./sx target test-seed-collector` now requires both the new alias/interior-root/
+cycle/child-string probe and the existing metadata/failure/regrowth/numeric-leaf
+probe at O0/O2 and existing ASan+UBSan settings, plus an additional mode forcing
+`detect_stack_use_after_return=1`. No existing sanitizer mode or assertion was
+removed. Fresh full PR CI passed on implementation checkpoint `83a0740`; see
+[the evidence](gate-logs/2026-10-30-seed-fake-stack.md) and STATUS. Documentation
+and post-merge CI are tracked separately in PR #50; earlier main CI was not
+used to accept this increment. Conservative false roots remain possible; this is not
+precise GC, bounded live memory, RSS return or independent bootstrap proof.
+
 ## Current seed profile (2026-10-28)
 
 The native-origin seed is maintained in

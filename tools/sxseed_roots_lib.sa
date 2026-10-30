@@ -1,0 +1,26 @@
+// Actual seed collector root regression, generated and driven by Sayanox.
+// Keep stack discovery separate from heap tracing; do not pin roots globally.
+use "selfhost/seed/seed_runtime_lib.sa"
+
+make sgr_test_roots() -> num {
+  hold base = "selfhost/seed_tests/seed-stack-roots"
+  hold pre = "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <assert.h>\n"
+  hold body = "\nstatic int roots_probe(void){\n  /* Large address-taken frame must not depend on ASan size-class ordering. */\n  volatile unsigned char padding[8192];\n  memset((void*)padding,0,sizeof padding);\n  char *volatile text=sx_sb_from(\"seed-root-alias\");\n  char *volatile alias=text;\n  char *volatile interior=sx_sb_from(\"only-interior-root\")+5;\n  void **volatile cycle=(void**)sx_gc_alloc(1,2*sizeof(void*));\n  cycle[0]=sx_gc_alloc(1,2*sizeof(void*));\n  ((void**)cycle[0])[0]=(void*)cycle;\n  ((void**)cycle[0])[1]=sx_sb_from(\"transitive-child\");\n  cycle[1]=(void*)text;\n  for(int round=0;round<6;round++){\n    sx_gc_collect();\n    assert(padding[round]==0);\n    assert(sx_sb_is((char*)text) && text==alias);\n    assert(strcmp((char*)alias,\"seed-root-alias\")==0);\n    assert(strcmp((char*)interior,\"interior-root\")==0);\n    assert(sx_sb_is((char*)interior-5));\n    assert(sx_sb_is((char*)cycle) && sx_sb_is((char*)cycle[0]));\n    assert(((void**)cycle[0])[0]==(void*)cycle && cycle[1]==(void*)text);\n    assert(sx_sb_is((char*)((void**)cycle[0])[1]));\n    assert(strcmp((char*)((void**)cycle[0])[1],\"transitive-child\")==0);\n    /* Exercise allocation and repeated tracing without exact free-count assumptions. */\n    char *temporary=sx_sb_from(\"unrelated-allocation\");\n    assert(strcmp(temporary,\"unrelated-allocation\")==0);\n  }\n  puts(\"seed-stack-roots-ok: aliases, interior roots, cycles and children survive\");\n  return 0;\n}\nint main(void){\n  char anchor; sx_gc_init(&anchor);\n  int (*volatile entry)(void)=roots_probe;\n  int status=entry();\n  anchor=0;\n  return status;\n}\n"
+  hold written = gl_must_write(concat(base, ".c"), concat(pre, concat(seed_runtime_c(), body)))
+  hold mode = 0
+  while mode < 4 {
+    hold flags = "-O0 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types"
+    when mode == 1 { flags = "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types" }
+    when mode >= 2 { flags = "-O2 -g -fno-pie -no-pie -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all" }
+    hold bin = concat(base, concat("-", numstr(mode)))
+    hold compiled = gl_compile_c(concat(base, ".c"), bin, flags)
+    hold cmd = concat("./", bin)
+    when mode == 2 { cmd = concat("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ", cmd) }
+    when mode == 3 { cmd = concat("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:detect_stack_use_after_return=1 UBSAN_OPTIONS=halt_on_error=1 ", cmd) }
+    hold checked = gpm_run(cmd, concat(bin, ".out"), concat("seed stack roots mode ", numstr(mode)))
+    hold output = gl_assert_eq_str(gl_strip_trailing_nl(read_file(concat(bin, ".out"))), "seed-stack-roots-ok: aliases, interior roots, cycles and children survive", "seed stack roots exact stdout")
+    mode = mode + 1
+  }
+  show "[OK] seed stack roots: O0/O2/ASan+UBSan, including forced fake-stack roots"
+  give 0
+}
