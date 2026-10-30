@@ -1,4 +1,28 @@
 // Actual C-output collector cache probe; maintained in Sayanox.
+// Preserve the exact failing probe/compiler diagnostic in the checks API.
+make gpm_run(cmd: str, log: str, label: str) -> num {
+  hold status = gl_run_merged(cmd, log)
+  when status != 0 {
+    hold detail = concat(label, concat(": ", read_file(log)))
+    show detail
+    when string_eq(getenv("GITHUB_ACTIONS"), "true") {
+      hold escaped = ""
+      hold i = 0
+      while i < len(detail) && i < 6000 {
+        hold c = sx_index(detail, i)
+        when c == 37 { escaped = concat(escaped, "%25") } otherwise {
+          when c == 10 { escaped = concat(escaped, "%0A") } otherwise {
+            when c == 13 { escaped = concat(escaped, "%0D") } otherwise { escaped = concat(escaped, chr(c)) }
+          }
+        }
+        i = i + 1
+      }
+      show concat("::error title=GC pool probe failure::", escaped)
+    }
+    give gl_fail(label)
+  }
+  give 0
+}
 make gpm_test(source: str) -> num {
   hold base = "selfhost/seed_tests/gc-pool"
   hold pre = "#include <stdlib.h>\n#include <assert.h>\n#include <stdint.h>\nstatic uintptr_t pool_nodes[60]; static size_t pool_classes[60]; static unsigned pool_freed[60]; static size_t pool_n;\nstatic void pool_free(void *p){\n  for(size_t i=0;i<pool_n;i++) if(pool_nodes[i]==(uintptr_t)p){ assert(!pool_freed[i]); pool_freed[i]++; }\n  free(p);\n}\n#define free pool_free\n#define main pool_original_main\n"
@@ -10,10 +34,12 @@ make gpm_test(source: str) -> num {
     when mode == 1 { flags = "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types" }
     when mode == 2 { flags = "-O2 -g -fno-pie -no-pie -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all" }
     hold bin = concat(base, numstr(mode))
-    hold built = gl_compile_c(concat(base, ".c"), bin, flags)
+    hold compile = concat(gl_sh_quote(gl_cc()), concat(" -o ", concat(gl_sh_quote(bin), concat(" ", concat(gl_sh_quote(concat(base, ".c")), concat(" ", flags))))))
+    hold built = gpm_run(compile, concat(bin, ".build"), concat("GC pool compile mode ", numstr(mode)))
     hold cmd = concat("./", bin)
     when mode == 2 { cmd = concat("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ", cmd) }
-    hold checked = gl_assert_out(cmd, "gc-pool-ok: oversized blocks freed; small cache bounded; aliases and reuse intact", concat(bin, ".out"))
+    hold checked = gpm_run(cmd, concat(bin, ".out"), concat("GC pool execution mode ", numstr(mode)))
+    hold output = gl_assert_eq_str(gl_strip_trailing_nl(read_file(concat(bin, ".out"))), "gc-pool-ok: oversized blocks freed; small cache bounded; aliases and reuse intact", "GC pool exact stdout")
     mode = mode + 1
   }
   show "[OK] C-output GC free-pool trimming: O0/O2/ASan+UBSan"
