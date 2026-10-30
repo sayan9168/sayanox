@@ -13,7 +13,8 @@ accounting; released cache bytes are not added to its public counters.
 
 `test-gc` runs an actual-emitted-runtime probe maintained in
 `tools/sxgc_pool_lib.sa`: intercept real frees for 60 blocks across 15 classes,
-check the sweep hook, exact per-class limits, idempotence, warm reuse and live
+add an unrelated pre-existing warm block, check the sweep hook, per-class caps,
+tracked-block free-versus-membership consistency, idempotence, exact warm reuse and live
 list/data aliases at O0/O2 and ASan+UBSan (leak detection off). Both the full
 and list-only runtime emitters are covered by focused development checks.
 
