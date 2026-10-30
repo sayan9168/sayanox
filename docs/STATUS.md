@@ -1,18 +1,25 @@
 # Status
 
-**2026-10-30 — seed fake-stack root reliability: focused PASS; full acceptance PENDING.**
-A large address-taken stack frame reproduces a missed live root under forced
-ASan fake-stack mode in the old seed collector. The Sayanox runtime generator
-now maps the anchor to its real frame, scans saved registers plus real stack
-prologue spills, and discovers referenced live fake frames. Heap tracing stays
-separate: strings and numeric buffers remain leaves, and generic edges/cycles
-remain traced. New mandatory O0/O2/default-ASan/forced-fake-stack probes verify
-aliases, an interior-only root, cycles and child strings. Removing fake-frame
-discovery causes an actual ASan heap-use-after-free; the fixed probe passes.
-All maintained implementation and gate source is Sayanox; generated C remains
-compatibility output, not a restored C seed. Existing sanitizer flags and
-ci-guard policy are unchanged. Official collector/sanitizer/driver and fresh
-full local/remote CI for this increment are still required before acceptance.
+**2026-10-30 — seed fake-stack root reliability: full PR acceptance PASS.**
+Both required [PR CI jobs](https://github.com/sayan9168/sayanox/actions/runs/41052510070)
+and their final unchanged guard audits passed on implementation checkpoint
+`83a074039b36077e2ff0f9da57707b4891a1c89a`. This is fresh `./sx ci` acceptance
+for this increment, not reuse of an earlier main result. Local official
+`test-seed-collector`, `test-gc`, `test-seed-sanitize`, `doctor` and `test-driver`
+also passed. A separate local full-CI repeat was still running when this record
+was written; its final result is not claimed here. Documentation-update CI and
+post-merge integration results are tracked separately in
+[PR #50](https://github.com/sayan9168/sayanox/pull/50).
+
+The Sayanox seed-runtime generator now maps ASan fake anchors to real frames,
+scans saved registers plus real stack prologue spills, and discovers referenced
+live fake frames. Mandatory four-mode root and metadata probes retain aliases,
+interior-only roots, cycles, child strings and numeric-leaf/failure/regrowth
+checks. The original collector fails the large-frame forced-fake-stack probe;
+omitting discovery from the fixed version produces actual ASan use-after-free.
+[Reproduction, checkpoint and boundaries](gate-logs/2026-10-30-seed-fake-stack.md).
+All maintained implementation and gate source remains Sayanox, with no restored
+C seed, new interpreter requirement, sanitizer suppression or ci-guard change.
 Independent bootstrap proof and precise/bounded-heap guarantees remain OPEN.
 
 **2026-10-30 — GC repair and published-language v1 self-host: ACCEPTED.**

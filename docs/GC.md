@@ -60,8 +60,10 @@ not use fake-frame discovery: numeric buffers remain pointer-free leaves.
 cycle/child-string probe and the existing metadata/failure/regrowth/numeric-leaf
 probe at O0/O2 and existing ASan+UBSan settings, plus an additional mode forcing
 `detect_stack_use_after_return=1`. No existing sanitizer mode or assertion was
-removed. See STATUS for current acceptance; earlier main CI does not accept
-this new increment. Conservative false roots remain possible; this is not
+removed. Fresh full PR CI passed on implementation checkpoint `83a0740`; see
+[the evidence](gate-logs/2026-10-30-seed-fake-stack.md) and STATUS. Documentation
+and post-merge CI are tracked separately in PR #50; earlier main CI was not
+used to accept this increment. Conservative false roots remain possible; this is not
 precise GC, bounded live memory, RSS return or independent bootstrap proof.
 
 ## Current seed profile (2026-10-28)
