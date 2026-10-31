@@ -534,6 +534,31 @@ make run_probe_part3(bin: str, work: str) -> num {
   give 0
 }
 
+make run_probe_part4(bin: str, work: str) -> num {
+  hold abs_work = path_real(work)
+  when len(abs_work) == 0 {
+    abs_work = work
+  }
+  hold uriM = concat("file://", concat(abs_work, "/multi.sa"))
+  hold init = lsp_frame("~\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":~\"capabilities\":~~||")
+  hold shut = lsp_frame("~\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"shutdown\",\"params\":~~|")
+  hold exitmsg = lsp_frame("~\"jsonrpc\":\"2.0\",\"method\":\"exit\"|")
+  hold openM = lsp_frame(concat("~\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":~\"uri\":", concat(jq(uriM), ",\"text\":\"hold alpha = 1\\nhold beta = 2\\nshow alpha\\n\"||")))
+  // Three change objects in one notification: two range replacements and an
+  // insertion at the end of the buffer. LSP applies them in order.
+  hold chgMulti = lsp_frame(concat("~\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":~\"textDocument\":~\"uri\":", concat(jq(uriM), ",\"version\":2|,\"contentChanges\":[~\"range\":~\"start\":~\"line\":0,\"character\":5|,\"end\":~\"line\":0,\"character\":10||,\"text\":\"gamma\"|,~\"range\":~\"start\":~\"line\":1,\"character\":5|,\"end\":~\"line\":1,\"character\":9||,\"text\":\"delta\"|,~\"range\":~\"start\":~\"line\":3,\"character\":0|,\"end\":~\"line\":3,\"character\":0||,\"text\":\"bogus 1\\n\"|]||")))
+  hold symM = lsp_frame(concat("~\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"textDocument/documentSymbol\",\"params\":~\"uri\":", concat(jq(uriM), "||")))
+  hold diagM = lsp_frame(concat("~\"jsonrpc\":\"2.0\",\"id\":52,\"method\":\"textDocument/diagnostic\",\"params\":~\"uri\":", concat(jq(uriM), "||")))
+
+  hold s8 = concat(init, concat(openM, concat(chgMulti, concat(symM, concat(diagM, concat(shut, exitmsg))))))
+  hold out8 = run_lsp_raw(bin, s8)
+  hold ok = check_has("multiple changes replace the first symbol", out8, "\"id\":51,\"result\":[~\"name\":\"gamma\"")
+  ok = check_has("multiple changes replace the second symbol", out8, "\"name\":\"delta\"")
+  ok = check_lacks("multiple changes drop the replaced symbols", out8, "\"name\":\"alpha\"")
+  ok = check_has("multiple changes insert text at the end", out8, "\"id\":52,\"result\":~\"kind\":\"full\",\"items\":[~")
+  give 0
+}
+
 // ---- Entry ----------------------------------------------------------------
 
 when arg_count() < 3 {
@@ -551,6 +576,7 @@ when string_eq(mode, "probe") == 1 {
   hold r1a = run_probe_part1(lsp_bin, wd)
   hold r1b = run_probe_part2(lsp_bin, wd)
   hold r1c = run_probe_part3(lsp_bin, wd)
+  hold r1d = run_probe_part4(lsp_bin, wd)
   hold e1 = exit(0)
 }
 when string_eq(mode, "robust") == 1 {

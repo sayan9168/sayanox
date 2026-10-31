@@ -567,6 +567,86 @@ make str_field_from(msg: str, key: str, from: num) -> str {
   give unesc(out)
 }
 
+// -------------------------------------------- bounded JSON object scanning
+// R05: one didChange notification may carry several change objects, so field
+// scans have to stay inside the element they belong to. `find_from` re-finds
+// the same key at `at`, which is why the bounded readers can reuse the
+// unbounded ones after the bound check.
+
+make key_lit(key: str) -> str {
+  hold k = concat("\"", key)
+  give concat(k, "\"")
+}
+
+make num_field_between(msg: str, key: str, from: num, to: num, def: num) -> num {
+  hold p = find_from(msg, key_lit(key), from)
+  when p < 0 {
+    give def
+  }
+  when p >= to {
+    give def
+  }
+  give num_field_from(msg, key, p, def)
+}
+
+make str_field_between(msg: str, key: str, from: num, to: num, def: str) -> str {
+  hold p = find_from(msg, key_lit(key), from)
+  when p < 0 {
+    give def
+  }
+  when p >= to {
+    give def
+  }
+  give str_field_from(msg, key, p)
+}
+
+// End offset (just past the closing brace) of the JSON object that opens at
+// `open`. Strings and backslash escapes are skipped, so braces inside a
+// replacement text cannot end the object early. An unterminated object ends at
+// the message end; the caller then clamps with the same helpers it uses for
+// out-of-range positions.
+make obj_end(msg: str, open: num) -> num {
+  hold n = len(msg)
+  hold i = open
+  hold depth = 0
+  hold instr = 0
+  hold c = 0
+  while i < n {
+    c = sx_index(msg, i)
+    when instr == 1 {
+      when c == 92 {
+        i += 2
+      } otherwise {
+        when c == 34 {
+          instr = 0
+        }
+        i += 1
+      }
+    } otherwise {
+      when c == 34 {
+        instr = 1
+        i += 1
+      } otherwise {
+        when c == 123 {
+          depth += 1
+          i += 1
+        } otherwise {
+          when c == 125 {
+            depth -= 1
+            i += 1
+            when depth == 0 {
+              give i
+            }
+          } otherwise {
+            i += 1
+          }
+        }
+      }
+    }
+  }
+  give n
+}
+
 // ------------------------------------------------------------- line access
 
 make line_start(text: str, line: num) -> num {
@@ -4675,47 +4755,79 @@ while running == 1 {
         d = notify("textDocument/publishDiagnostics", params)
       }
       when string_eq(method, "textDocument/didChange") {
-        // Two change forms share this branch so both kinds of client work:
-        // a change object without a `range` replaces the whole buffer (full
-        // sync), and one with a `range` is spliced into the current buffer at
-        // UTF-16 (line, character) positions (the `change: 2` incremental
-        // sync advertised in initialize). An empty change array is a no-op, so
-        // nothing happens unless the body really carries "text". One change
-        // object is applied per notification, the documented limit.
-        when find(body, "\"text\"") >= 0 {
-          hold rngp = find(body, "\"range\"")
-          when rngp >= 0 {
-            hold rsl = num_field_from(body, "line", rngp, 0)
-            hold rsc = num_field_from(body, "character", rngp, 0)
-            hold rel = range_end_line(body, rngp, rsl)
-            hold rec = range_end_char(body, rngp, rsc)
-            when string_eq(uri, uri0) {
-              txt0 = splice(txt0, pos_byte(txt0, rsl, rsc), pos_byte(txt0, rel, rec), text)
-            }
-            when string_eq(uri, uri1) {
-              txt1 = splice(txt1, pos_byte(txt1, rsl, rsc), pos_byte(txt1, rel, rec), text)
-            }
-            when string_eq(uri, uri2) {
-              txt2 = splice(txt2, pos_byte(txt2, rsl, rsc), pos_byte(txt2, rel, rec), text)
-            }
-            when string_eq(uri, uri3) {
-              txt3 = splice(txt3, pos_byte(txt3, rsl, rsc), pos_byte(txt3, rel, rec), text)
-            }
+        // One notification may carry several change objects; they are applied
+        // in order to the current buffer (LSP applies them sequentially). Each
+        // object without a `range` is a full replacement of that document, an
+        // object with a `range` is a UTF-16 splice (the `change: 2` capability
+        // advertised in initialize). At most 8 objects are applied; extra ones
+        // are ignored rather than partially applied. Positions and ranges are
+        // clamped, so a malformed element cannot move text outside the buffer.
+        hold newtxt = ""
+        hold have = 0
+        when string_eq(uri, uri0) {
+          newtxt = txt0
+          have = 1
+        }
+        when string_eq(uri, uri1) {
+          newtxt = txt1
+          have = 1
+        }
+        when string_eq(uri, uri2) {
+          newtxt = txt2
+          have = 1
+        }
+        when string_eq(uri, uri3) {
+          newtxt = txt3
+          have = 1
+        }
+        hold cur = find(body, "\"contentChanges\"")
+        when cur >= 0 {
+          cur = find_from(body, "[", cur)
+        }
+        hold applied = 0
+        while have == 1 && applied < 8 {
+          when cur < 0 {
+            break
+          }
+          hold ob = find_from(body, "{", cur + 1)
+          when ob < 0 {
+            break
+          }
+          hold close = find_from(body, "]", cur + 1)
+          when close >= 0 && close < ob {
+            break
+          }
+          hold oe = obj_end(body, ob)
+          hold rp = find_from(body, "\"range\"", ob)
+          when rp >= 0 && rp < oe {
+            hold rsl = num_field_between(body, "line", ob, oe, 0)
+            hold rsc = num_field_between(body, "character", ob, oe, 0)
+            hold rel = range_end_line(body, rp, rsl)
+            hold rec = range_end_char(body, rp, rsc)
+            hold ins = str_field_between(body, "text", ob, oe, "")
+            newtxt = splice(newtxt, pos_byte(newtxt, rsl, rsc), pos_byte(newtxt, rel, rec), ins)
           } otherwise {
-            when string_eq(uri, uri0) {
-              txt0 = text
-            }
-            when string_eq(uri, uri1) {
-              txt1 = text
-            }
-            when string_eq(uri, uri2) {
-              txt2 = text
-            }
-            when string_eq(uri, uri3) {
-              txt3 = text
-            }
+            // No range: the whole buffer becomes this element's text.
+            newtxt = str_field_between(body, "text", ob, oe, newtxt)
+          }
+          applied += 1
+          cur = oe
+        }
+        when have == 1 && applied > 0 {
+          when string_eq(uri, uri0) {
+            txt0 = newtxt
+          }
+          when string_eq(uri, uri1) {
+            txt1 = newtxt
+          }
+          when string_eq(uri, uri2) {
+            txt2 = newtxt
+          }
+          when string_eq(uri, uri3) {
+            txt3 = newtxt
           }
         }
+
         // Reload, then publish only for a document that is actually open: a
         // change to an unknown uri must not be answered from another buffer.
         placed = 0

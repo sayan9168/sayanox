@@ -14,7 +14,7 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/str_text.sa` | 22 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`, `t_count_char`, `t_starts_with`, `t_ends_with`, `t_normalize_ws`) | seed-min, gen2, native | `test-stdlib-modules`, `test-stdlib-next` |
 | `stdlib/json_util.sa` | flat-object JSON build/read (`j_escape`, `j_kv_text`, `j_kv_number`, `j_kv_flag`, `j_pair`, `j_obj`, `j_arr_numbers`, `j_has`, `j_get_text`, `j_get_number`, `j_get_flag`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/json_deep.sa` | nested JSON reader, any depth (`jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with `[i]` indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep` |
-| `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa` | seed-min, gen2, native | `test-stdlib-json-write` |
+| `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa`; boundary/precision oracle in `selfhost/stdlib_json_boundary.want` | seed-min, gen2, native | `test-stdlib-json-write`, `test-stdlib-next` |
 | `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
 | `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals | seed-min, gen2, native | `test-stdlib-csv` |
 | `stdlib/url.sa` | percent-encoding/decoding (`surl_encode`, `surl_decode`, `surl_decode_ok`) and packed query strings (`surl_query_parse`, `surl_query_write`, `surl_query_push`, `surl_query_count`, `surl_query_key`, `surl_query_value`, `surl_query_get`, `surl_query_has`, `surl_query_empty`) | seed-min, gen2, native | `test-stdlib-next` |
@@ -144,9 +144,19 @@ whitespace, so it is idempotent and maps whitespace-only input to `""`.
 `selfhost/stdlib_text.want`; `test-stdlib-next` compiles it with seed-min, gen2
 and native AOT and requires all three stdout streams to byte-match that file,
 i.e. the expected bytes are not produced by any of the compilers under test.
-Because the native backend currently drops a `\r` escape from a source literal
-(see R13), the CR cases build the byte with `chr(13)` instead; that defect is
-recorded rather than hidden.
+The CR cases used to build the byte with `chr(13)` because the pure-min native
+backend dropped `\r` from a source literal (register R13). That decoder was
+fixed on 2026-10-31 and the fixture now uses source literals, so those two lines
+are the R13 regression test on all three backends.
+
+`selfhost/stdlib_json_boundary_test.sa` is the R07 oracle for the JSON pair: 43
+lines covering minification with whitespace inside strings, updates on an empty
+document, key prefixes (`user` vs `user_id`), first/last/absent/only-key
+deletion, well-formedness of a deleted-to-empty object, nested dotted paths and
+indexes, number policy (six fractional digits with trailing zeros trimmed and
+the sign kept), escaping round-trips and three malformed documents that must
+stay invalid. It is compared with `selfhost/stdlib_json_boundary.want` on
+seed-min, gen2 and native AOT by `test-stdlib-next`.
 
 ### Rules these modules follow
 

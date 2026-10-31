@@ -28,12 +28,14 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   `\\` escapes are supported. Interpolation, numeric/hex/Unicode escapes, NUL
   and arbitrary expressions inside `len()` are refused in this subset. Variable
   lengths are still loaded at runtime, not folded from their initial value.
-  **Known divergence (R13, found 2026-10-31):** `\r` is decoded by seed-min,
-  gen2 and the published C-output contract (`"a\rb"` prints `a`, CR, `b`) but
-  the native backend keeps the length while emitting the bytes `arb`. It is
-  recorded as an open defect rather than silently dropped from this list;
-  fixture code that needs CR builds it with `chr(13)` until the decoder is
-  fixed or `\r` is refused at parse time.
+  **Fixed 2026-10-31 (R13):** the pure-min native decoder used to require
+  full-language mode before mapping `\r` to CR, so `"a\rb"` kept its length
+  while emitting the bytes `arb` and diverged from seed-min, gen2 and the
+  published C-output contract. `tools/sxdata_lib.sa` now decodes `\r` in every
+  mode, the pinned native anchor was rebuilt from source to the new fixed point
+  (three-stage equality plus the DDC controls), and
+  `selfhost/stdlib_text_test.sa` carries the `"a\rb"` / `"\r\t\r"` literals as
+  the regression test on seed-min, gen2 and native AOT.
 - `hold` declarations and same-type assignment for numeric and static-string
   variables. Numeric globals occupy one 32-bit slot.
 - Static string values backed by bytes in the image data segment. A string

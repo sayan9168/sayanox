@@ -1,0 +1,73 @@
+// Boundary/precision fixture for stdlib/json_write.sa + stdlib/json_deep.sa
+// (register R07). Every expected line is in selfhost/stdlib_json_boundary.want;
+// the three backends must reproduce those bytes, so the oracle does not come
+// from any compiler under test.
+use "stdlib/json_write.sa"
+use "stdlib/json_deep.sa"
+
+// 1. Minify: whitespace between tokens goes, whitespace inside strings stays.
+show jw_minify("  { \"a\" : 1 , \"b\" : [ 2 , 3 ] }  ")
+show jw_minify("{}")
+show jw_minify("[]")
+show len(jw_minify("{\"k\": \"v w\"}"))
+
+// 2. Updates on an empty document, and overwriting an existing key.
+hold o0 = jw_obj_empty()
+show jw_obj_set(o0, "a", jw_num(1))
+show jw_obj_set(jw_obj_set(o0, "a", jw_num(1)), "a", jw_num(2))
+
+// 3. A key that is a prefix of another key is never mistaken for it.
+show jw_obj_set(o0, "user", jw_num(7))
+show jw_obj_set(jw_obj_set(o0, "user", jw_num(7)), "user_id", jw_num(8))
+
+// 4. Deletion: first, last, absent, and the only key.
+hold o2 = jw_obj_set(jw_obj_set(o0, "a", jw_num(1)), "b", jw_num(2))
+show o2
+show jw_obj_del(o2, "a")
+show jw_obj_del(o2, "b")
+show jw_obj_del(o2, "zz")
+show jw_obj_del(jw_obj_set(o0, "only", jw_num(1)), "only")
+
+// 5. A deletion still leaves a well-formed document.
+show jd_valid(jw_obj_del(jw_obj_set(o0, "only", jw_num(1)), "only"))
+show jd_valid(jw_obj_del(o2, "a"))
+
+// 6. Nested reads: dotted paths, indexes, types, absent paths.
+hold doc = "{\"a\":{\"b\":[1,2,3]},\"c\":true,\"d\":{\"e\":{\"f\":\"x\"}}}"
+show jd_valid(doc)
+show jd_type(doc, "a")
+show jd_type(doc, "a.b")
+show jd_type(doc, "c")
+show jd_type(doc, "d.e.f")
+show jd_len(doc, "a.b")
+show jd_num(doc, "a.b[2]")
+show jd_flag(doc, "c")
+show jd_text(doc, "d.e.f")
+show jd_has(doc, "a.b[3]")
+show jd_has(doc, "d.e")
+
+// 7. Number policy: six fractional digits, trailing zeros trimmed, sign kept.
+show jw_num(0)
+show jw_num(7)
+show jw_num(0 - 3)
+show jw_num(0.5)
+show jw_num(0.25)
+show jw_num(0 - 0.5)
+show jw_num(0.1)
+
+// 8. Escaping round-trips through the reader.
+hold s = "a\"b\\c"
+show jw_str(s)
+show jd_text(concat("{\"k\":", concat(jw_str(s), "}")), "k")
+show jd_valid(concat("{\"k\":", concat(jw_str(s), "}")))
+
+// 9. Arrays: appending to an empty and a non-empty array.
+show jw_arr_add(jw_arr_empty(), jw_num(1))
+show jw_arr_add(jw_arr_add(jw_arr_empty(), jw_num(1)), jw_num(2))
+show jw_minify("[ 1 , 2 ]")
+
+// 10. Malformed documents stay refused.
+show jd_valid("{\"a\":}")
+show jd_valid("[1,]")
+show jd_valid("{\"a\" 1}")
+show "stdlib-json-ok"
