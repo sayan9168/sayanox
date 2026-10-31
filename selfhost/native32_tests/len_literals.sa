@@ -1,0 +1,28 @@
+show len("")
+show len("hello")
+show len("a\nb\t")
+show len("a\"b")
+show len("a\\b")
+show len("a\rb")
+show len("),[](")
+show len("বাংলা")
+show 2 + len("abc") * 3
+hold word = "x"
+show len ( "abc" ) + len(word)
+word = "longer"
+show len(word) - len("ab")
+when len("abc") == 3 {
+  show 17
+} otherwise {
+  show 99
+}
+hold i = 0
+while i < len("xy") {
+  show i
+  i = i + 1
+}
+show word[len("ab")]
+hold bound = len("abcd")
+show bound
+bound = len("") + 2
+show bound

@@ -22,6 +22,12 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
 - 32-bit integer expressions: `+ - * %`, comparisons, parentheses, unary minus,
   decimal integer constants, global names, and `len(STRING_NAME)` to obtain a
   string variable's current byte length (including after runtime reassignment).
+  `len("literal")` also works in integer expressions, conditions and indices: it
+  folds the decoded byte length without allocating a target string or using the
+  concat heap. Empty literals, raw UTF-8 bytes, and `\n`, `\t`, `\r`, `\"` and
+  `\\` escapes are supported. Interpolation, numeric/hex/Unicode escapes, NUL
+  and arbitrary expressions inside `len()` are refused in this subset. Variable
+  lengths are still loaded at runtime, not folded from their initial value.
 - `hold` declarations and same-type assignment for numeric and static-string
   variables. Numeric globals occupy one 32-bit slot.
 - Static string values backed by bytes in the image data segment. A string
@@ -69,6 +75,12 @@ bounded-heap exhaustion on all runnable targets, retains integer parity, and
 exercises emulator safety negatives plus scalar FP and Linux syscall probes.
 The latter are emulator tests, not native compiler features.
 
+The additional `len_literals.sa` fixture has an independent tracked byte-output
+oracle and runs through the same multi-backend execution comparisons. Each ISA
+gate also checks deterministic images and 16 malformed/type/unsupported literal
+refusals (48 across the three targets). Existing reviewed golden images and
+refusal matrices remain unchanged. See STATUS for this increment's acceptance.
+
 The string fixture compares seed-min, gen2, x86-64 native AOT, the Portable IR
 VM when available, i386 when the host kernel supports it, AArch64 under
 `sxisaexec`, and RV64 under `sxisaexec`. It is end-to-end evidence for this
@@ -101,3 +113,11 @@ string operations beyond the documented subset, lists, structs and functions,
 IEEE-754 code generation, native file I/O, and a mark-and-sweep collector
 remain open, along with broader ISA support and end-to-end parity for each. Do not count
 emulator-only FP/syscall probes as compiler support.
+
+The legacy seed/gen2 reference grammar does not accept a spaced `len (` call or
+`len("literal")` directly inside an index. The six-way harness uses
+`len_literals_common.sa` (ordinary call spacing and a held numeric index) for
+that shared grammar, then separately executes the original native-only forms
+on ARM64/RV64 and on i386 when the kernel supports IA32. Both compare with the
+same independent `len_literals.want`; these native cases are not discarded or
+claimed as new legacy frontend support.

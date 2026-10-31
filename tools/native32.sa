@@ -37,7 +37,7 @@
 //     // comments, blank lines
 //
 //   expressions: + - * % , the six comparisons, parentheses, unary minus,
-//   decimal integer literals, numeric names and `len(STRING_NAME)`. `/` is
+//   decimal integer literals, numeric names and `len(STRING_NAME)` or `len("literal")`. `/` is
 //   refused on purpose: a Sayanox
 //   number is a double, `7 / 2` is 3.5, and this backend has no doubles, so
 //   accepting it would mean printing a different answer than every other
@@ -248,6 +248,37 @@ make is_text_literal(s: str) -> num {
   give 1
 }
 
+// Token integers must not go through numstr's general/scientific formatting.
+make literal_length_digits(value: num) -> str {
+  when value == 0 { give "0" }
+  hold out = ""
+  while value > 0 {
+    hold digit = value % 10
+    out = concat(chr(48 + digit), out)
+    value = (value - digit) / 10
+  }
+  give out
+}
+
+// Literal len folds only byte-count semantics shared by the published runtimes.
+// Reject interpolation and multi-byte/numeric escape spellings rather than guess.
+make literal_byte_length(lit: str) -> num {
+  when is_text_literal(lit) == 0 { give 0 - 1 }
+  hold i = 1
+  hold count = 0
+  while i < len(lit) - 1 {
+    hold c = sx_index(lit, i)
+    when c == 36 && i + 1 < len(lit) - 1 && sx_index(lit, i + 1) == 123 { give 0 - 1 }
+    when c == 92 {
+      hold escaped = sx_index(lit, i + 1)
+      when escaped != 110 && escaped != 116 && escaped != 114 && escaped != 34 && escaped != 92 { give 0 - 1 }
+      i = i + 2
+    } otherwise { i = i + 1 }
+    count = count + 1
+  }
+  give count
+}
+
 // A deliberately bounded dynamic-string operation: concat(NAME_OR_LITERAL,
 // NAME_OR_LITERAL). Arguments are not arbitrary string expressions.
 make split_concat(s: str) -> str {
@@ -363,7 +394,7 @@ make append_text(data: list, lit: str) -> list {
 
 // ---- the expression tokenizer --------------------------------------------
 // Tokens are separated by byte 1. A token is "n<digits>", "v<name>", "o<op>",
-// "(" / ")" / "[" / "]". A refusal comes back as "!<reason>" so the caller can name it.
+// "l<decoded literal length>", "(" / ")" / "[" / "]". A refusal comes back as "!<reason>" so the caller can name it.
 
 make add_tok(out: str, t: str) -> str {
   give concat(concat(out, t), chr(1))
@@ -379,6 +410,28 @@ make tokenize(ex: str) -> str {
     hold done = 0
     when c == 32 || c == 9 {
       i = i + 1
+      done = 1
+    }
+    when done == 0 && c == 34 {
+      hold begin = i
+      i = i + 1
+      hold closed = 0
+      while i < n && closed == 0 {
+        hold byte = sx_index(ex, i)
+        when byte == 92 {
+          when i + 1 < n { i = i + 2 } otherwise { i = n }
+        } otherwise {
+          i = i + 1
+          when byte == 34 { closed = 1 }
+        }
+      }
+      hold literal = sub(ex, begin, i)
+      hold literal_size = literal_byte_length(literal)
+      when closed == 0 || literal_size < 0 || literal_size > 2147483647 {
+        bad = "an invalid, oversized, interpolated, NUL-containing or unsupported-escape literal"
+      } otherwise {
+        out = add_tok(out, concat("l", literal_length_digits(literal_size)))
+      }
       done = 1
     }
     when done == 0 && c >= 48 && c <= 57 {
@@ -1631,6 +1684,9 @@ make run() -> num {
           code = emit_push_imm2(code, arch, v)
           want = 0
         }
+        when t0 == 108 {
+          hold misplaced_literal = fail(1, concat(concat("line ", numstr(lineno)), ": a string literal in a numeric expression is supported only as len()'s argument"))
+        }
         when t0 == 118 {
           when want == 0 {
             hold twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
@@ -1642,27 +1698,36 @@ make run() -> num {
               is_len_call = 1
             }
           }
+          when is_len_call == 0 && string_eq(vname, "len") == 1 && k + 1 < tn {
+            when string_eq(tok_at(toks, k + 1), "(") == 1 {
+              hold bad_len_shape = fail(1, concat(concat("line ", numstr(lineno)), ": len() expects exactly one string variable or literal, not a general expression"))
+            }
+          }
           when is_len_call == 1 {
             hold argtok = tok_at(toks, k + 2)
-            when sx_index(argtok, 0) != 118 {
-              hold bad_len_arg = fail(1, concat(concat("line ", numstr(lineno)), ": this backend's len() accepts a string variable name"))
-            }
-            hold argname = sub(argtok, 1, len(argtok))
-            hold arg_slot = slot_of(names, argname)
-            when arg_slot < 0 {
-              hold bad_len_name = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(argname, "' in len()")))
-            }
-            when slot_of(strnames, argname) < 0 {
-              hold bad_len_type = fail(1, concat(concat("line ", numstr(lineno)), ": len() requires a string variable"))
-            }
-            hold vat = len(code)
-            when arch == 0 {
-              fixsite = push(fixsite, vat + 1)
+            when sx_index(argtok, 0) == 108 {
+              code = emit_push_imm2(code, arch, tok_num(argtok))
             } otherwise {
-              fixsite = push(fixsite, vat)
+              when sx_index(argtok, 0) != 118 {
+                hold bad_len_arg = fail(1, concat(concat("line ", numstr(lineno)), ": len() requires a string variable or literal"))
+              }
+              hold argname = sub(argtok, 1, len(argtok))
+              hold arg_slot = slot_of(names, argname)
+              when arg_slot < 0 {
+                hold bad_len_name = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(argname, "' in len()")))
+              }
+              when slot_of(strnames, argname) < 0 {
+                hold bad_len_type = fail(1, concat(concat("line ", numstr(lineno)), ": len() requires a string variable"))
+              }
+              hold vat = len(code)
+              when arch == 0 {
+                fixsite = push(fixsite, vat + 1)
+              } otherwise {
+                fixsite = push(fixsite, vat)
+              }
+              fixoff = push(fixoff, arg_slot + 4)
+              code = emit_load_global(code, arch)
             }
-            fixoff = push(fixoff, arg_slot + 4)
-            code = emit_load_global(code, arch)
             want = 0
             k = k + 3
           } otherwise {

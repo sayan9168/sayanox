@@ -1,0 +1,2 @@
+hold n = 7
+show len("${n}")

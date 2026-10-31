@@ -136,6 +136,14 @@ make xc_containers(d: str, arch: str) -> num {
     }
   }
   hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 15)
+  hold literal_len_source = "selfhost/native32_tests/len_literals.sa"
+  hold literal_len_file = kp_join(d, "len-literals.elf")
+  hold literal_len_build = pg_command(xc_command(literal_len_source, literal_len_file, arch), "literal len compile")
+  literal_len_build = pg_command(xc_command(literal_len_source, kp_join(d, "len-literals-again.elf"), arch), "literal len deterministic compile")
+  hold literal_len_same = gl_assert_files_eq(literal_len_file, kp_join(d, "len-literals-again.elf"), "literal len deterministic image")
+  hold literal_len_header = xc_header(literal_len_file, arch)
+  hold literal_len_refusals = xc_refusals("selfhost/native32_tests/len_refuse", d, arch, 0, 16)
+
   when string_eq(arch, "arm64") == 1 { hold unknown = xb_fail_command(xc_command("selfhost/native32_tests/expr.sa", kp_join(d, "bad.elf"), "sparc"), kp_join(d, "unknown.err"), "native32: unknown target") }
   when string_eq(arch, "i386") == 1 {
     names = "division\nstrvalue\nnulstring\nfunction\nlist\nconcat_call\nconcat_expression\n"
