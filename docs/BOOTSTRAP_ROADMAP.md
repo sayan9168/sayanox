@@ -2,44 +2,63 @@
 
 ## Current verified path
 
+The maintained compiler, bootstrap, runtimes and driver are Sayanox. The frozen
+C seed and Makefile are retired. A clean checkout starts from the pinned Linux
+x86-64 native anchor; that binary remains an explicit trust input.
+
 ```text
-C seed-min -> gen1-min -> gen2 -> feature tests
-                            \\-> gen3 -> gen4 (byte-identical fixed point)
+bootstrap/sxc_native.bin -> source-built native compiler (anchor equality)
+                        -> Sayanox C-output frontend + Sayanox seed CLI
+                        -> generated C gen1-min -> gen2 -> gen3 -> gen4
+                                                        (gen3.c == gen4.c)
 ```
 
-Use:
+The compiler implementation uses a bounded bootstrap dialect. Accepted user
+programs are **not** narrowed to that implementation dialect: published-language
+v1 C-output self-hosting is accepted. See the normative
+[profile](FULL_LANGUAGE_PROFILE_V1.md), [contract](FULL_LANGUAGE_CONTRACT_V1.md)
+and checkpoint-specific [STATUS](STATUS.md).
 
 ```sh
-make true-selfhost
-make gen3
-make native-test
+./sx verify-entry
+./sx target test-native-bootstrap
+./sx target true-selfhost
+./sx target gen3
+./sx target true-selfhost-full
+./sx ci
 ```
 
-The preferred self-host path compiles `selfhost/compiler_min.sa`, written in
-Sayanox, into C. A host C compiler builds that generated C. The portable user
-program path is therefore `.sa -> .c -> C compiler -> executable`.
+`true-selfhost` checks the pure-min chain; `gen3` requires byte-identical
+compiler output; `true-selfhost-full` additionally requires the pinned published
+inventory, gen2/gen3 O0/O2 executions, builtin and runtime-boundary matrices,
+negative controls and integrity rechecks. A dispatcher or successful C emission
+alone is not acceptance. `./sx ci` retains the complete original hard gates.
 
-For the documented native-AOT subset, `selfhost/native_aot.c` emits x86-64
-Linux machine code directly. Build this bootstrap once with `make native`; it
-then compiles supported `.sa` programs without invoking clang or another C
-compiler for each program.
+## C-output compatibility and native output
 
-## Remaining roadmap
+The portable user-program path remains `.sa -> generated .c -> host C compiler
+-> executable`. Host tools and generated C are allowed; they are not maintained
+C compiler source. Stage-zero native reconstruction does not require a C seed
+or C compiler. See [NATIVE_BOOTSTRAP](NATIVE_BOOTSTRAP.md) for the exact boundary.
 
-1. Expand the Sayanox compiler beyond the pure-min subset, preserving explicit
-   diagnostics and seed-min/gen2/native behavioral tests.
-2. Broaden native AOT or document unsupported language constructs precisely;
-   native output remains x86-64 Linux only.
-3. Grow the tested utility library and improve ownership/memory management
-   within the existing dialect. Namespaces/import aliases are **not planned**
-   for bootstrap; textual use and public-name prefixes remain the contract
-   ([MODULES.md](MODULES.md)).
-4. Extend package tooling beyond the current local registry and URL index.
+`selfhost/native_aot.sa` emits the documented x86-64 Linux native subset.
+`tools/native32.sa` emits the narrower i386/AArch64/RV64IM integer/string subset,
+including literal byte lengths. ARM64/RV64 execution under the Sayanox emulator
+is not full ISA, full-language native support or real-hardware validation.
+See [NATIVE](NATIVE.md) and [NATIVE32](NATIVE32.md).
 
-## Not claimed
+## Remaining work, not completed bootstrap prerequisites
 
-The full Stage-2 language is not self-hosted, the native backend is not
-portable, remote package hosting is not implemented, and a clean checkout
-still needs `make`, a POSIX shell and a C99 compiler to bootstrap. See
-[`STATUS.md`](STATUS.md) for the feature-by-feature verified scope and
-[`COMPLETE.md`](COMPLETE.md) for the current milestone summary.
+The [remaining-work register](REMAINING_WORK.md) separates implemented work,
+acceptance still required, design work and external blockers. In particular:
+
+- Independent diverse reconstruction still needs a reviewed independent
+  reference compiler and genuine DDC execution; hashes and fixed points do not
+  establish source trust. See [DIVERSE_BOOTSTRAP](DIVERSE_BOOTSTRAP.md).
+- Full native parity, precise GC/explicit memory contracts, IDE-complete LSP,
+  language-level module identity, deeper stdlib/package infrastructure and
+  broader platform coverage remain separate projects.
+- Future syntax/type proposals are not missing clauses of the already accepted
+  published-language v1 contract. Unsupported forms must keep clear refusals.
+- Necessary host tools remain dependencies; all-maintained-Sayanox is not a
+  promise to eliminate host utilities, generated C or binary trust inputs.

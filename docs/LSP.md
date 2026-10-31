@@ -1,13 +1,15 @@
 # Sayanox LSP
 
-A language server for `.sa` files: protocol/scanning in Sayanox compiled by
-`gen2`, with a small in-tree POSIX C filesystem bridge for folder enumeration.
+A language server for `.sa` files maintained in Sayanox, including protocol,
+scanning and binder logic. The Sayanox driver builds the native executable;
+there is no maintained C filesystem bridge. Host filesystem/runtime facilities
+remain necessary dependencies.
 There is no Node or Python runtime in the path: the server is a native binary
 that speaks JSON-RPC 2.0 with `Content-Length` framing on stdin/stdout.
 
 ```sh
-make lsp        # tools/sayanox_lsp  (gen2 compiles tools/sayanox_lsp.sa)
-make test-lsp   # a full session, checked fact by fact
+./sx target lsp        # builds tools/sayanox_lsp from Sayanox
+./sx target test-lsp   # a full session, checked fact by fact
 tools/sayanox_lsp < session.txt        # or wire it into an editor
 ```
 
@@ -38,8 +40,8 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 ## Error responses (robustness)
 
 A client should never wait for an answer that will not come. The server
-follows JSON-RPC 2.0 for input it cannot dispatch (`make test-lsp-robust`,
-probe `tools/sayanox-lsp-robust.sh`):
+follows JSON-RPC 2.0 for input it cannot dispatch (`./sx target test-lsp-robust`,
+probe `tools/sxlsp_probe.sa`):
 
 | Input | Response |
 |---|---|
@@ -93,16 +95,16 @@ vim.api.nvim_create_autocmd("FileType", {
   `\uXXXX`), a JSON writer with escaping, the document scanner, the diagnostic
   pass, symbols, completion, hover, definition, references, the formatter and
   the framing loop.
-* `tools/sayanox-lsp-probe.sh` pipes six real sessions into the binary —
+* `tools/sxlsp_probe.sa` pipes six real sessions into the binary —
   (1) initialize, didOpen, hover, definition, documentSymbol, completion,
   diagnostic, didChange, shutdown, exit; (2) a closed document; (3) the
   four-slot cap; (4) references with and without the declaration, plus a
   non-word position; (5) workspace/symbol and formatting; (6) rename across
   the open documents, signature help on a two-parameter call, and the format
   code action (offered, then empty once formatted) — and prints one line
-  per verified fact, 38 in all. `make test-lsp` asserts that exact list, and
+  per verified fact, 38 in all. `./sx target test-lsp` asserts that exact list, and
   the target is part of the `true-selfhost-min` gate — i.e. the LSP is
-  exercised by `make test`.
+  exercised by `./sx target test`.
 * The server keeps up to **four documents** open (full-text sync). It advertises
   UTF-16 positions and converts UTF-8 scanner offsets at the protocol
   boundary.
@@ -136,7 +138,7 @@ each reader answers from the buffer the client asked about.
   folder increment below supersedes that limitation for workspace symbols
   and references only. `use` resolution still uses the served URI directory.
 
-`tools/sayanox-lsp-probe.sh` drives three sessions and `make test-lsp` asserts
+`tools/sxlsp_probe.sa` drives three sessions and `./sx target test-lsp` asserts
 all eighteen lines: two documents open at once with the first still served after
 the second was opened, a closed document answering `"result":[]` and not being
 served from another buffer, and the five-document eviction (`f1` gone, `f5`
@@ -146,7 +148,7 @@ still served).
 
 `tools/sayanox-lsp.sh` was the original dependency-free shell stub (keyword
 completion, one-line diagnostics). It has been removed: the maintained server
-is `tools/sayanox_lsp.sa`, built by gen2. Keeping a sed-based second server
+is `tools/sayanox_lsp.sa`, built through the native Sayanox driver. Keeping a sed-based second server
 would have kept sed on the toolchain boundary for no maintained behaviour.
 
 ### Neovim filetype registration and launch checks
@@ -158,10 +160,10 @@ Python). Put this before the autocmd above:
 vim.filetype.add({ extension = { sa = 'sa' } })
 ```
 
-Run `make lsp` once, then launch the absolute `tools/sayanox_lsp` binary from
-the client. Do **not** launch `make lsp` as the server: build output is not
+Run `./sx target lsp` once, then launch the absolute `tools/sayanox_lsp` binary from
+the client. Do **not** launch `./sx target lsp` as the server: build output is not
 JSON-RPC and would corrupt the stdio transport. The server needs neither
-Python nor a network connection. `make test-lsp test-lsp-robust` runs actual
+Python nor a network connection. `./sx target test-lsp test-lsp-robust` runs actual
 framed request/response sessions, including full-text `didChange`, cleared
 diagnostics, escaped ids and malformed/unknown request errors.
 
@@ -257,7 +259,7 @@ newline when the text ends with one, else to the UTF-16 width of the last line.
 `newText` goes through the existing `json_esc`, so newlines, quotes and
 backslashes are escaped.
 
-The probe feeds it the same badly indented source that `make test-sxfmt` feeds
+The probe feeds it the same badly indented source that `./sx target test-sxfmt` feeds
 the formatter program (`hold x = 1  ` with trailing spaces, a `}` and a `//`
 inside a string literal, a nested block) and asserts the indentation, the
 stripped trailing whitespace and the whole-buffer range, which is what makes
@@ -313,27 +315,27 @@ Sayanox directory builtins (`read_dir`, `path_kind`, `path_size`,
   `node_modules`, `build`, `dist`, `target`, `vendor` are skipped; filenames
   containing CR/LF are skipped by `read_dir`.
 
-The listing is no longer sorted: entries come in filesystem order, which also
-decides which 128 files win when a folder is larger than the cap. The old C
-bridge sorted each directory bytewise, and applied its 4 MiB aggregate-size
-budget during the walk; the Sayanox walk applies the file cap and the 2 MiB
-manifest cap to the finished listing. Both differences are bounds-preserving,
-not behavior-preserving, and the 128-file cap test still pins the bound.
+Traversal delegates directory ordering to the runtime's `read_dir`; the first
+128 eligible files in the resulting walk form the index. Beyond directory
+collection limits, the subset can depend on filesystem enumeration order.
+Do not rely on a stable cross-platform choice of files in an oversized tree.
+The current Sayanox walk applies the 128-file and 2 MiB manifest caps to the
+finished listing; these are index-size limits, not a total traversal-memory
+or hostile-filesystem guarantee. The 128-file cap test pins the index bound.
 
 Unreadable/oversized/skipped files and files beyond a cap simply do not
-contribute. There is **no truncation/progress notification** yet. Within the
-caps traversal is sorted; beyond a directory's collected-name limit the subset
-can depend on filesystem enumeration order. These filters are not a total
+contribute. There is **no truncation/progress notification** yet. These filters are not a total
 process-memory bound, hostile-filesystem sandbox, race-proof symlink defense
 or stable cross-query snapshot: files can change while a query runs.
 
 ### Build and test boundary
 
-There is no C header and no generated-C binder any more. `make lsp` compiles
-`tools/sayanox_lsp.sa` with gen2 and links it; the folder index is ordinary
-Sayanox. This removed `tools/lsp_workspace.h` (119 lines) and
-`tools/lsp_workspace_bind.sa` on 2026-10-17. A standalone compilation of the
-.sa` file therefore has the same folder support as the Makefile build.
+The current build is `./sx target lsp`: the driver compiles
+`tools/sayanox_lsp.sa` with the source-built native Sayanox compiler, with no
+legacy C-emitter fallback. The folder index and binder are ordinary Sayanox.
+The retired header and generated binder are historical implementation details,
+not current build dependencies. Use the supported driver rather than a deleted
+Makefile or old shell wrapper.
 
 Both `test-lsp` and `test-lsp-robust` now require `test-lsp-workspace`.
 The test client `tools/lsp_workspace_test.sa` is Sayanox too: it spawns the
@@ -351,7 +353,7 @@ Logs: [2026-10-16 workspace LSP](gate-logs/2026-10-16-lsp-workspace/).
 
 *Updated 2026-10-24: `hover`, `definition`, and `signatureHelp` now perform
 static type inference and cross-file resolution across `use "..."` imports,
-open overlays, and unopened indexed workspace `.sa` files (`make test-lsp-types`,
+open overlays, and unopened indexed workspace `.sa` files (`./sx target test-lsp-types`,
 `tools/lsp_types_test.sa`), including parameter types, cross-file call return
 types, struct field hover/definition (`p.x`), and single-parameter generic
 struct field substitution (`Box<num>.val -> num`).*
@@ -368,7 +370,7 @@ remain. These improvements do not establish IDE completeness.
 ## Semantic resolution, folder rename and file watching (2026-10-22)
 
 Three gaps closed in one increment, all in `tools/sayanox_lsp.sa`, all checked
-by `make test-lsp-semantic` (required by `test-lsp` and `test-lsp-robust`).
+by `./sx target test-lsp-semantic` (required by `test-lsp` and `test-lsp-robust`).
 
 **Scope.** Five helpers do the work: `brace_delta` reads one line's brace
 balance the way the formatter does (quotes and `//` excluded), `fn_open_line`
@@ -411,3 +413,6 @@ The test client is `tools/lsp_semantic_test.sa`, Sayanox like the folder one,
 driving real framed sessions through `spawn`/`child_send`/`child_recv`. Run
 against the previous server binary it fails on its first check, which is how
 the gate was confirmed to be discriminating rather than decorative.
+
+For compiler-backed/incremental analysis work beyond these limits, see
+[REMAINING_WORK](REMAINING_WORK.md). This server is not IDE-complete.

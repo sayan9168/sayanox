@@ -48,9 +48,88 @@ make xa_absent_list(names: str) -> num {
   }
   give 0
 }
+// Current guides are checked separately from explicitly labelled archives.
+// This catches the regressions found in the audit; it is not a prose theorem.
+make xa_retired_make(text: str) -> num {
+  hold i = 0
+  hold size = len(text)
+  while i + 5 <= size {
+    when (i == 0 || xa_word(sx_index(text, i - 1)) == 0) && sx_index(text, i) == 109 && string_eq(gl_slice(text, i, i + 5), "make ") == 1 {
+      hold start = i + 5
+      hold end = start
+      while end < size && (xa_word(sx_index(text, end)) == 1 || sx_index(text, end) == 45) { end = end + 1 }
+      hold word = gl_slice(text, start, end)
+      hold old = string_eq(word, "doctor") || string_eq(word, "true-selfhost") || string_eq(word, "true-selfhost-full") || string_eq(word, "gen1") || string_eq(word, "gen2") || string_eq(word, "gen3") || string_eq(word, "native") || string_eq(word, "lsp") || string_eq(word, "selfhost") || string_eq(word, "all-sayanox") || string_eq(word, "test") || string_eq(word, "tools")
+      when len(word) >= 5 && string_eq(gl_slice(word, 0, 5), "test-") == 1 { old = 1 }
+      // `make doctor(n)` is language syntax, not a host build command.
+      when old == 1 {
+        hold declaration = 0
+        hold next = end
+        while next < size && (sx_index(text, next) == 32 || sx_index(text, next) == 9) { next = next + 1 }
+        when next < size && (sx_index(text, next) == 40 || sx_index(text, next) == 60) { declaration = 1 }
+        when declaration == 0 { give 1 }
+      }
+    }
+    i = i + 1
+  }
+  give 0
+}
+make xa_current_doc_error(text: str) -> str {
+  when len(text) == 0 { give "empty current guide" }
+  when xa_retired_make(text) == 1 { give "retired build command" }
+  when pg_find(text, "C seed-min ->") >= 0 { give "retired seed architecture" }
+  when pg_find(text, "[ ] Full Stage-2 language self-hosting") >= 0 || pg_find(text, "The full Stage-2 language is not self-hosted") >= 0 || pg_find(text, "The repository does not claim full-language self-hosting here") >= 0 { give "stale self-host claim" }
+  when pg_find(text, "native AOT still bump-allocates") >= 0 || pg_find(text, "the missing collector") >= 0 { give "stale collector claim" }
+  when pg_find(text, "with a small in-tree POSIX C filesystem bridge") >= 0 { give "retired LSP bridge" }
+  when pg_find(text, "`selfhost/native_aot.c` emits") >= 0 { give "retired native implementation" }
+  give ""
+}
+make xa_current_docs() -> num {
+  hold files = "README.md\ndocs/BOOTSTRAP.md\ndocs/BOOTSTRAP_ROADMAP.md\ndocs/COMPLETE.md\ndocs/SELFHOST.md\ndocs/TOOLCHAIN.md\ndocs/NATIVE_BOOTSTRAP.md\ndocs/getting-started.md\ndocs/LSP.md\ndocs/REMAINING_WORK.md\ndocs/NATIVE.md\ndocs/NATIVE_IR.md\ndocs/MAKEFILE_MIGRATION.md\n"
+  hold pos = 0
+  while pos < len(files) {
+    hold start = pos
+    while pos < len(files) && sx_index(files, pos) != 10 { pos = pos + 1 }
+    hold path = gl_slice(files, start, pos)
+    pos = pos + 1
+    when path_kind(path) != 1 { give gl_fail(concat("missing current guide: ", path)) }
+    hold error = xa_current_doc_error(read_file(path))
+    when len(error) > 0 { give gl_fail(concat(path, concat(": ", error))) }
+  }
+  hold positive = "selfhost/doc_claim_tests/current.md"
+  hold good = read_file(positive)
+  when path_kind(positive) != 1 || len(good) == 0 { give gl_fail("missing current-guide positive control") }
+  when len(xa_current_doc_error(good)) != 0 { give gl_fail("current-guide checker rejects valid commands or Sayanox declarations") }
+  hold cases = "empty|empty current guide\nold_make|retired build command\nold_inline_make|retired build command\nold_c_seed|retired seed architecture\nstale_selfhost|stale self-host claim\nstale_readme|stale self-host claim\nmissing_collector|stale collector claim\nold_bridge|retired LSP bridge\nretired_native|retired native implementation\n"
+  pos = 0
+  hold checked = 0
+  while pos < len(cases) {
+    hold start = pos
+    while pos < len(cases) && sx_index(cases, pos) != 124 { pos = pos + 1 }
+    hold name = gl_slice(cases, start, pos)
+    pos = pos + 1
+    start = pos
+    while pos < len(cases) && sx_index(cases, pos) != 10 { pos = pos + 1 }
+    hold want = gl_slice(cases, start, pos)
+    pos = pos + 1
+    hold path = concat("selfhost/doc_claim_tests/", concat(name, ".md"))
+    when path_kind(path) != 1 { give gl_fail(concat("missing doc-claim negative control: ", path)) }
+    hold actual = xa_current_doc_error(read_file(path))
+    when string_eq(actual, want) == 0 { give gl_fail(concat(path, concat(": wrong negative-control reason: ", actual))) }
+    checked = checked + 1
+  }
+  hold count = gl_assert_eq_num(checked, 9, "all current-guide negative controls executed")
+  hold milestone = xf_pin("docs/COMPLETE.md", "Published-language v1\nC-output self-hosting\nexplicit binary trust inputs\n")
+  hold chain = xf_pin("docs/BOOTSTRAP_ROADMAP.md", "bootstrap/sxc_native.bin\n./sx target true-selfhost-full\nIndependent diverse reconstruction\n")
+  hold reference = pg_contains("README.md", "docs/REMAINING_WORK.md")
+  show "[OK] current-guide consistency: supported commands, architecture and 9 negative controls (not exhaustive prose verification)"
+  give 0
+}
+
 make xa_docs(d: str) -> num {
   hold absent = xa_absent_list("Makefile\nselfhost/stage2_template.c\nselfhost/sxc_full.c\nselfhost/sxc_full_minimal.c\nselfhost/restore_stage2.sh\nselfhost/restore_sxc.sh\nselfhost/restore_sxc_full.sh\nselfhost/restore_stage2_template.sh\nselfhost/sx\nselfhost/stage2_src\nselfhost/stage2\nselfhost/native_aot.c\ntools/emit_to_ir.c\n")
   hold docs = xa_docs_walk("docs")
+  hold current = xa_current_docs()
   hold stage2 = pg_contains("docs/FULL_LANGUAGE_SELFHOST.md", "The Stage-2 host is not in this repository")
   hold files = "selfhost/seed/sxc_seed_min.sa\nselfhost/seed/seed_runtime_lib.sa\nbootstrap/sxc_native.audit\nselfhost/compiler_min.sa\nselfhost/native_aot.sa\ndocs/STATUS.md\ndocs/STDLIB.md\ndocs/ALL_SAYANOX_PHASE.md\n"
   hold pos = 0

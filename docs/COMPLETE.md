@@ -1,59 +1,62 @@
 # Sayanox project status
 
-This file summarizes the current supported milestone. The verified feature
-matrix and precise limitations live in [`STATUS.md`](STATUS.md), which is the
-source of truth for compiler behavior.
+## Accepted milestone, not universal language completion
 
-## Verified and complete for this milestone
+All maintained implementation source is Sayanox: compiler/frontends, runtime
+and backend implementations, build/bootstrap/recovery/cleanup logic, tools,
+CI guards and test orchestration. The Makefile, maintained C seed and maintained
+shell scripts are retired. Generated C compatibility output and necessary host
+tools remain supported. The pinned native anchor and generated entry are
+**explicit binary trust inputs**, not an independent trust proof.
 
-- **Reproducible pure-min bootstrap:** `make true-selfhost` builds seed-min,
-  gen1-min and gen2, then runs the shared-dialect feature tests.
-- **Fixed-point rebuild:** `make gen3` verifies that gen3 and gen4 generate
-  byte-identical compiler output.
-- **Portable C backend:** the self-hosted compiler emits C for the documented
-  pure-min dialect; generated user programs are built with a host C compiler.
-- **Native AOT subset:** `selfhost/native_aot.c` emits x86-64 Linux machine
-  code for the subset documented in `STATUS.md`. A C compiler is needed to
-  build the bootstrap binary, but not to compile or run a program after that.
-- **Regression and environment checks:** `make doctor`, `make true-selfhost`,
-  `make gen3`, and `make native-test` are run by CI on a clean checkout.
-- **Interpreter-free maintained toolchain:** no maintained path needs bash,
-  awk, sed, Python, Perl, Node or Ruby (`make test-language-deps`, part of
-  `true-selfhost`). The formatter, package tool, language server and the
-  build-time LSP binder are `.sa` programs.
-- **Next phase recorded:** writing the remaining C pieces (LSP directory
-  bridge, IR tool, native backend, seed) and the build driver in Sayanox is
-  the next phase; `make all-sayanox` prints the inventory and fails closed.
-  See [`ALL_SAYANOX_PHASE.md`](ALL_SAYANOX_PHASE.md).
-- **Numeric consistency fixes:** integer-only arithmetic is evaluated as
-  double across all three backends, and `%` by zero reports the same
-  non-zero-exit `division by zero` diagnostic everywhere.
+Published-language v1 **C-output self-hosting is accepted**. The implementation
+uses a pure-min bootstrap dialect; that does not restrict accepted user programs
+to pure-min. The required 19-clause/43-builtin inventory, gen2/gen3 O0/O2 ledger,
+builtin signature/runtime/import boundaries, negative controls, bootstrap
+budget/recovery and gen3/gen4 fixed point belong to the full acceptance chain.
+See [STATUS](STATUS.md), the [normative profile](FULL_LANGUAGE_PROFILE_V1.md)
+and [contract](FULL_LANGUAGE_CONTRACT_V1.md), not historical demo grammars.
 
-## Not complete / explicit boundaries
+Checkpoint `0fca5622713db82df308f8f77d9589b414c1a901` has completed
+[main CI](https://github.com/sayan9168/sayanox/actions/runs/41162923167): both
+required jobs and both final guard audits succeeded. This historical checkpoint
+is evidence for its exact tree, not advance acceptance of subsequent changes.
 
-- The self-hosted compiler is **not** a full Stage-2 compiler. It implements
-  the pure-min subset, not every Sayanox experiment or demo in the repository.
-- Native AOT output is x86-64 Linux only; the portable path emits C and still
-  requires a C compiler to build the resulting program.
-- String-plus-number and bare function/builtin-call statements are rejected by
-  all three backends (`make test-native-num`, `make test-push-stmt`); the
-  remaining native differences are `hold` inside a function body, the missing
-  collector and the full-language statements (STATUS.md, "Measured
-  divergences").
-- Namespaced/versioned modules, a full standard library and remote package
-  hosting are not implemented as part of this milestone; `use "file.sa"` is a
-  textual splice, `stdlib/tiny.sa` is seven numeric helpers and the
-  `.sayanox/registry` written by `sxpkg` is a local convention (`make
-  test-pkgs`), not a resolver. Garbage collection
-  arrived with the gen2 collector ([`GC.md`](GC.md)) and generic functions
-  monomorphise one or more type parameters (`make NAME<T>`, `make NAME<A,
-  B>`), see [`GENERICS.md`](GENERICS.md).
-
-Run the verified checks with:
+## Supported paths
 
 ```sh
-make doctor
-make true-selfhost
-make gen3
-make native-test
+./sx verify-entry
+./sx target test-native-bootstrap
+./sx target true-selfhost
+./sx target gen3
+./sx target true-selfhost-full
+./sx target all-sayanox
+./sx ci
 ```
+
+- `true-selfhost`: reproducible pure-min bootstrap and shared-dialect tests.
+- `gen3`: source-built gen3/gen4 compiler-output equality.
+- `true-selfhost-full`: complete pinned published-language v1 C-output contract;
+  no reduced-success fallback or replacement by source registration.
+- `all-sayanox`: maintained-source and explicit anchor audit, not a substitute
+  for full language conformance or CI.
+- `ci`: complete original acceptance chain, including full published acceptance.
+
+The x86-64 native AOT compiler is `selfhost/native_aot.sa`; it supports more than
+`tools/native32.sa`, but is still a documented subset compiler. The multi-ISA
+compiler emits i386/AArch64/RV64IM for bounded integer/string operations,
+including static spans, literal/variable byte lengths, checked byte indexing and
+bounded concat. Emulator FP/file-syscall probes do not imply compiler lowering.
+
+## Still open
+
+Independent bootstrap trust, full native backend parity, precise GC/stronger
+memory contracts, deeper standard library and package infrastructure,
+IDE-complete tooling, language-level namespaces and broader platforms remain
+open. Conservative GC already exists; it is not a missing collector. Numeric
+lists and deliberately refused future type forms are not promises of arbitrary
+container types. See [remaining work and acceptance criteria](REMAINING_WORK.md).
+
+Historical C-seed, missing-collector and Makefile descriptions in dated logs
+are not the current milestone. The source of truth for exact feature boundaries
+and accepted checkpoints remains [STATUS](STATUS.md).

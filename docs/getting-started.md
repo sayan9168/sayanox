@@ -7,17 +7,18 @@ For the exact supported subset and backend differences, see
 
 ## 1. Build and verify the compiler
 
-Install `make`, a POSIX shell and a C99 compiler (`cc`, `clang` or `gcc`), then
-run from the repository root:
+Use a Linux x86-64 checkout with the pinned native anchor, necessary POSIX host
+tools and a C compiler (`cc`, `clang` or `gcc`) for generated compatibility
+output. No Makefile or maintained C seed is required. Run from the repository root:
 
 ```sh
-make doctor
-make true-selfhost
-make gen3
+./sx target doctor
+./sx target true-selfhost
+./sx target gen3
 ```
 
-`make true-selfhost` builds gen2 from the Sayanox source and runs its feature
-regressions. `make gen3` checks that the compiler has reached a reproducible
+`./sx target true-selfhost` builds gen2 from the Sayanox source and runs its feature
+regressions. `./sx target gen3` checks that the compiler has reached a reproducible
 fixed point (`gen3 == gen4`).
 
 ## 2. Run your first program
@@ -39,7 +40,7 @@ cc -O2 -o /tmp/hello /tmp/hello.c
 The optional native-AOT subset is available on x86-64 Linux:
 
 ```sh
-make native
+./sx target native
 ./selfhost/native_aot examples/hello.sa /tmp/hello-native
 /tmp/hello-native
 ```
@@ -137,10 +138,17 @@ This is not namespaced or versioned package importing. See
 
 ## 9. Current boundaries
 
-The maintained bootstrap does not yet include every form shown in historical
-examples. Namespaced exports, a full standard library and automatic memory
-management across all backends remain future work; the gen2 path has
-`for`/`for-in`/`elif`, generics with one or more type parameters and a mark
-& sweep collector, while native AOT still bump-allocates. The native-AOT compiler is
-x86-64 Linux only. See
-[`BOOTSTRAP_ROADMAP.md`](BOOTSTRAP_ROADMAP.md) for the larger plan.
+Published-language v1 C-output self-hosting is accepted; its exact grammar and
+checked refusals are in [FULL_LANGUAGE_PROFILE_V1](FULL_LANGUAGE_PROFILE_V1.md).
+This is not a promise to implement every historical experiment or future type
+proposal. Numeric lists, generic constraints and line-oriented grammar retain
+their published boundaries.
+
+The native AOT compiler is maintained in Sayanox and has mark-and-sweep GC, but
+still implements a documented subset on Linux x86-64. The separate multi-ISA
+backend has a narrower integer/string subset and a bounded unreclaimed concat
+heap. Do not generalize that bump-heap policy to every runtime. See
+[NATIVE](NATIVE.md), [NATIVE32](NATIVE32.md) and [GC](GC.md).
+
+Independent bootstrap proof, language-level module scopes, deeper tooling and
+broader platforms remain open in [REMAINING_WORK](REMAINING_WORK.md).

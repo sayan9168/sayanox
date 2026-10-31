@@ -206,6 +206,10 @@ for anything to move from the second table to the first.
 | 9 | **`.sa` on GitHub** | Not registered in github-linguist, so GitHub may not show a Sayanox language bar even after C source retirement. The upstream contribution is prepared but not opened (Linguist wants demonstrated in-the-wild usage) | [docs/LINGUIST.md](docs/LINGUIST.md) |
 | 10 | **Platforms and registry growth** | x86-64 Linux (plus i386 integer subset and portable IR VM) is executed; the package registry is local; the stdlib is twenty-one `.sa` modules, including `csv.sa`, `url.sa`, `datetime.sa` and `hash.sa` | roadmap below |
 
+Current priorities, acceptance criteria and external blockers are tracked in
+[the remaining-work register](docs/REMAINING_WORK.md). Open roadmap items are
+not failed clauses of the accepted published-language v1 C-output contract.
+
 ### What is deliberately refused
 
 These produce an **error**, not a wrong answer, and gates require the error: a
@@ -328,12 +332,12 @@ has the short version.
 - [x] **Pure-Sayanox compiler test suite runner (`tools/sxsuite.sa`)** (`./sx target test-sxsuite`)
 - [x] **User-mode ARM64 & RISC-V 64 ELF64 instruction emulator with 6-way parity (`tools/sxisaexec.sa`)** (`./sx target test-sxisaexec`)
 - [x] **Transitive multi-directory `module` DAG resolution (`tools/sxmod_lib.sa`)** (`./sx target test-sxmod-deep`)
-- [x] **Sayanox CI/CD orchestration** — all 236 original target names ported; complete guarded local CI, no-Make driver integration and release-plan acceptance passed. No remote workflow run or release publication is claimed
+- [x] **Sayanox CI/CD orchestration** — all 236 original target names ported; complete guarded CI and no-Make driver integration passed. See [accepted main checkpoints](docs/STATUS.md); release publication has a separate gated workflow
 - [x] **Portable stdlib data & time batch** — `csv.sa` (rows), `url.sa` (percent-encoding + query strings), `datetime.sa` (Gregorian calendar / JDN), `hash.sa` (rolling hashes, Adler-32, Luhn); 150 oracle-pinned values on seed-min == gen2 == native (`./sx target test-stdlib-csv`, `./sx target test-stdlib-next`)
 - [x] **Extended 5-backend standard library (`map`, `sort`, `path`, `cli`, `bytes`)** (`./sx target test-stdlib-extended`)
 - [x] **Port the remaining 14 tracked POSIX `.sh` scripts to Sayanox**: `sxsuite`, LSP protocol probes, package-transfer security harness, local HTTP/crawler tests, and `sxpack`; `git ls-files '*.sh'` is now empty (`./sx target test-language-deps`, `./sx target test-trust-anchor`)
 - [x] **All maintained implementation source is Sayanox** ([evidence](docs/ALL_SAYANOX_PHASE.md)); the frozen C seed and Makefile are retired. Native-origin own-source fixed point and 64 MiB C1 emission pass. Final guarded acceptance is tracked separately.
-- [ ] Full Stage-2 language self-hosting in `seed-min` bootstrap (`./sx target true-selfhost-full` fails closed)
+- [x] **Published-language v1 C-output self-hosting**: the complete pinned user-language contract is accepted; the compiler implementation remains a bounded pure-min dialect (`./sx target true-selfhost-full`, [checkpoint evidence](docs/STATUS.md))
 - [ ] Full ARM64/RV64 native compiler/runtime beyond the integer subset (strings, lists, structs, `make`/`give`, floats, file I/O, GC); emulator FP/syscall coverage is in progress (`docs/ALL_SAYANOX_PHASE.md`)
 - [ ] Broader platform support
 

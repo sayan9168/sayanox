@@ -9,9 +9,18 @@
 > `selfhost/restore_sxc.sh`, `selfhost/restore_sxc_full.sh` and the `selfhost/sx`
 > CLI wrapper — was **deleted on 2026-10-21**, so it cannot pretend to be one.
 > The supported path is
-> `make doctor && make true-selfhost && make gen3 && make native-test`;
+> `./sx ci` (or `./sx target doctor true-selfhost gen3 native-test`);
 > `docs/FULL_LANGUAGE_SELFHOST.md` says what actually runs and
-> `make test-doc-claims` keeps this banner honest.
+> `./sx target test-doc-claims` keeps this banner honest.
+
+## Historical record — not the current supported milestone
+
+The dated descriptions below retain superseded architecture and commands.
+Published-language v1 C-output self-hosting and all-maintained-Sayanox migration
+are accepted at the checkpoints in [STATUS](STATUS.md). Use [COMPLETE](COMPLETE.md)
+and [BOOTSTRAP_ROADMAP](BOOTSTRAP_ROADMAP.md) for current instructions; historical
+missing-feature descriptions below are not new blockers.
+
 
 Date: 2026-09-25. This was a point-in-time audit of the repository at that
 commit. **It is historical, not the current status:** the compiler, native

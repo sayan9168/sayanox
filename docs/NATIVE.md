@@ -12,7 +12,7 @@ The path is:
 
 The emitted program does not require a generated C file or a second compiler.
 
-The maintained Sayanox native source (`selfhost/native_aot.sa`) covers the pure-min subset PLUS Stage-2 concrete struct-typed `make` functions and `${id}` string interpolation (`make test-native-stage2-parity`): `hold`, `show`, IEEE-double numeric expressions (`+ - * / %`, comparisons, parentheses), `when` / `else` / `otherwise`, `while`, `for`, lists, strings with `${id}` interpolation and the `concat`/`len`/`chr`/`string_eq`/`sx_index` builtins, structs including nested generic instantiations (`Box<Box<num>>`), concrete struct-typed function parameters & returns, `use "file.sa"` module splice (depth <= 8), and top-level `make`/`give` functions with recursion and mark-and-sweep GC. Anything else is a hard error with a clear message — see [`docs/STATUS.md`](STATUS.md) for the exact boundaries. `selfhost/native_src/` (59 historical base64 fragments) was deleted on 2026-10-21, and `selfhost/native_aot.c` was deleted on 2026-10-24.
+The maintained Sayanox native source (`selfhost/native_aot.sa`) covers the pure-min subset PLUS Stage-2 concrete struct-typed `make` functions and `${id}` string interpolation (`./sx target test-native-stage2-parity`): `hold`, `show`, IEEE-double numeric expressions (`+ - * / %`, comparisons, parentheses), `when` / `else` / `otherwise`, `while`, `for`, lists, strings with `${id}` interpolation and the `concat`/`len`/`chr`/`string_eq`/`sx_index` builtins, structs including nested generic instantiations (`Box<Box<num>>`), concrete struct-typed function parameters & returns, `use "file.sa"` module splice (depth <= 8), and top-level `make`/`give` functions with recursion and mark-and-sweep GC. Anything else is a hard error with a clear message — see [`docs/STATUS.md`](STATUS.md) for the exact boundaries. `selfhost/native_src/` (59 historical base64 fragments) was deleted on 2026-10-21, and `selfhost/native_aot.c` was deleted on 2026-10-24.
 
 ## Cranelift status
 
@@ -23,10 +23,9 @@ The active native backend emits Linux x86-64 machine code directly. `docs/CRANEL
 ## Current IR boundary
 
 There is no IR in the SSA sense, and no intermediate program representation at
-all: `selfhost/native_aot.c` is a single-pass compiler whose recursive-descent
-parser emits machine code as it walks the source. The five functions this
-section used to name — `parse_prim`, `parse_term`, `parse_expr`, `estmt`,
-`eblk` — do not exist in the file (corrected 2026-10-13). The emit tree is
+all: `selfhost/native_aot.sa` and its Sayanox libraries run collection and
+kind-inference passes before a recursive emit walk. The old C implementation
+and its obsolete parser descriptions are not current build inputs. The emit tree is
 `emit_prim` → `emit_post` → `emit_term` → `emit_rel` → `emit_expr`, driven by
 `emit_prog` (statements) and `emit_fn` (function bodies). Kind inference is a
 separate earlier pass (`phase 2`, no codegen), so an expression's operand kinds
@@ -41,12 +40,17 @@ The two compilation paths are:
 
 No generated `.c` is required by the native backend.
 
-## The emit seam (2026-10-13)
+## Historical encoder-seam measurements (2026-10-13)
+
+The C-file layout and measurements below are retained as historical design
+notes. That implementation was retired; current encoder/emitter ownership is
+`tools/sxenc_lib.sa`, `tools/sxemit_lib.sa` and their Sayanox pipeline/runtime
+libraries. These notes do not prescribe building the deleted C file.
 
 A second target would not be a new file, and none is claimed: `native_aot.c`
 parses and emits in the same walk. What exists now is a **seam** — the
 machine-specific half of the file is delimited and named, and the language half
-provably does not touch it. `make test-native-emit-split` (part of
+provably does not touch it. `./sx target test-native-emit-split` (part of
 `native-test`) asserts every row of this table:
 
 | Region | Where | What it is |
@@ -90,7 +94,7 @@ SX_EMIT_LOG=/tmp/hello.log ./selfhost/native_aot examples/native_hello.sa /tmp/h
 That file is the instruction list the emit tree produces, and it is the concrete
 thing a second backend is written against. The recorder only reads the
 primitives' arguments, so the emitted ELF is byte-identical with and without it.
-`make test-native-ir-log` (part of `native-test`) pins the list for
+`./sx target test-native-ir-log` (part of `native-test`) pins the list for
 `selfhost/native_ir_log_test.sa` and cmp's both binaries;
 [NATIVE_IR.md](NATIVE_IR.md) documents the format, the value model it exposes
 and what the recorder is *not* — there is still one emitter of machine code here,
@@ -101,7 +105,7 @@ not two.
 Build the native compiler seed once:
 
 ```sh
-make native
+./sx target native
 ```
 
 Compile and run a native program:
@@ -117,7 +121,7 @@ Expected output:
 42
 ```
 
-There is no `bootstrap-native` Makefile target; use `make native`.
+There is no Makefile. Use `./sx target native` to build this backend.
 
 ## Entry points
 
@@ -125,7 +129,7 @@ There is no unified `sx_driver.c` anymore (deleted 2026-10-17: no target built
 it). The two backends are reached directly:
 
 ```sh
-make native
+./sx target native
 ./selfhost/native_aot examples/native_hello.sa out
 ./out
 
@@ -156,18 +160,21 @@ The native backend is currently Linux x86-64 specific.
 
 The native compiler is separate from the pure `gen1` subset path. Native AOT changes must not alter the `.sa -> gen1 -> subset` bootstrap chain.
 
-The C source is used only to build the native compiler executable itself:
+The driver builds the backend from Sayanox through the reviewed native
+bootstrap, not a maintained C source:
 
 ```text
-clang -> native_aot -> .sa -> ELF
+pinned anchor -> source-built native compiler -> native_aot.sa -> native_aot
+                                                            -> user .sa -> ELF
 ```
 
-User programs compiled by `native_aot` do not pass through clang.
+Native user-program compilation does not pass through a C compiler. Host C
+tools remain necessary for the separate generated-C compatibility/test path.
 
 ## Second-ISA decision and IR audit (2026-10-16)
 
 **Superseded in part on 2026-10-23 and extended 2026-10-25 — see
-[NATIVE32.md](NATIVE32.md).** `tools/native32.sa` emits i386, AArch64 and RV64IM ELF for a bounded integer and string subset: static spans, `len`, byte indexing, and variable-to-variable `concat` using a fixed bump heap. The Sayanox `tools/sxisaexec.sa` user-mode emulator executes the AArch64/RV64 images; `make test-sxisaexec` pins six-way parity for integers, string declaration/reassignment, byte indexing, and bounded concatenation as well as fault behavior.
+[NATIVE32.md](NATIVE32.md).** `tools/native32.sa` emits i386, AArch64 and RV64IM ELF for a bounded integer and string subset: static spans, `len`, byte indexing, and variable-to-variable `concat` using a fixed bump heap. The Sayanox `tools/sxisaexec.sa` user-mode emulator executes the AArch64/RV64 images; `./sx target test-sxisaexec` pins six-way parity for integers, string declaration/reassignment, byte indexing, and bounded concatenation as well as fault behavior.
 Scalar IEEE-754 S/D arithmetic and basic Linux file syscalls have separate
 emulator-only probes.
 
