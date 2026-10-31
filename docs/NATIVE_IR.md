@@ -1,5 +1,15 @@
 # Native instruction log and IR analysis listing
 
+> **Current boundary (2026-10-31):** the native compiler pipeline does not
+> materialize portable SSA IR internally, but its post-emission instruction
+> log can be translated and executed by `tools/sxirexec.sa`. The portable VM
+> and the separate i386/AArch64/RV64IM compiler already exist. Dated seam/log
+> notes below preserve earlier design stages; their pre-cutover C-producer,
+> listing-only and missing-second-ISA descriptions are historical, superseded
+> by the current native Sayanox producer and the VM/ISA gates. These are still
+> bounded subsets, not full-language native parity.
+
+
 The native AOT compiler does not materialize a portable program IR. Its
 maintained pipeline is:
 
@@ -33,7 +43,8 @@ native pipeline still has its own bounded subset. See FULL_LANGUAGE_SELFHOST.md
 and GC.md. A separate multi-ISA machine-code compiler exists
 since 2026-10-23 for a documented integer subset only —
 [NATIVE32.md](NATIVE32.md), `./sx target test-native32` — and it is a separate
-program, not this pipeline: nothing below assembles or executes this IR.
+program, not another target of this native emit walk. Post-emission portable
+IR is executable by `tools/sxirexec`; it is not the compiler's internal SSA IR.
 
 ## The instruction list (`SX_EMIT_LOG`, 2026-10-13)
 
@@ -156,7 +167,8 @@ the abstract machine model (`FADD`, `FCMP`, `I2F`, named calls, phase
 markers).
 
 This is the "portable IR docs + tests" half of the second-target item, and it
-is deliberately only that: **no backend assembles or executes the IR.** (The
+was originally listing-only. **That execution limitation was superseded by
+the 2026-10-24 portable VM described below.** (The
 executable second target added on 2026-10-23, `tools/native32.sa`, does not
 read this listing either; it is an independent front end and encoder for a
 documented integer subset — [NATIVE32.md](NATIVE32.md).) The listing exists so the stream can be read, diffed and counted with
@@ -239,7 +251,8 @@ not a second native ISA. (Later: 2026-10-23 added `tools/native32.sa`, an
 i386 backend for a documented integer subset with its own acceptance gate,
 `./sx target test-native32`, and an aarch64 encoder in the same program,
 `./sx target test-native-arm64`, whose images are emitted and byte-pinned but
-never executed here. Still no riscv64 emitter, no cross-execution smoke
+not executed by the translator itself. The historical seam did not include
+a riscv64 emitter or cross-execution smoke
 test for aarch64, and `native_aot` is still x86-64 only.)
 Actual gates: [2026-10-16 IR/modules logs](gate-logs/2026-10-16-ir-modules/).
 

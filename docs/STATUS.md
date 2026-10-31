@@ -16,7 +16,10 @@ LSP expansion, release publication or independent DDC completion is claimed by
 this increment. Fresh guarded official `test-doc-claims`, `all-sayanox`, `lsp`,
 `test-lsp`, `test-lsp-robust`, `test-lsp-types` and `test-lsp-ide` passed. The
 first focused attempt correctly failed on remaining retired native-guide
-commands; those guides were corrected without disabling the check. Complete
+commands; those guides were corrected without disabling the check. The native
+IR guide now distinguishes the existing post-emission VM from historical
+listing-only notes. The register also records a concrete release dispatch
+checkpoint-binding follow-up; no publication was attempted. Complete
 local/remote and post-merge outcomes are tracked in
 [PR #52](https://github.com/sayan9168/sayanox/pull/52), separately from the
 already accepted baseline below. This entry does not predict their results.

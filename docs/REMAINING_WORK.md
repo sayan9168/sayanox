@@ -37,6 +37,18 @@ remaining compiler/runtime/tooling projects below.
 | R11 | **GitHub language recognition — externally gated** | Gather legitimate independent in-the-wild `.sa` use and follow upstream Linguist requirements. Open an evidence-backed contribution only when qualified; upstream review/acceptance is not controlled by this repository. No language-bar relabelling or spam PR. |
 | R12 | **Updated public release — publication pending** | Choose a version for an accepted checkpoint, run the unchanged gated Sayanox release path, verify published tag/assets/evidence and state exact included features. The audit found v1.0.4 behind main; that is not authorization to label unfinished roadmap work complete or bypass release gates. |
 
+## Concrete release follow-up found during this increment
+
+`tools/sxrelease_lib.sa` tests/packages `HEAD`, but its dispatch publication
+command currently calls `gh release create` without explicitly binding a new
+tag to that tested commit or checking an existing tag's commit identity.
+For a new dispatched tag, the GitHub CLI can select the default branch instead
+of the tested checkout. Before publishing an updated release, harden this path
+with explicit tested-commit targeting, existing-tag identity checks and
+negative controls for mismatched/moved tags. Do not treat release-plan output
+as a test of publication identity. No release is published by the current
+documentation increment.
+
 ## Order and working rules
 
 1. Close R01 with regression checks and fresh acceptance before compiler changes.
