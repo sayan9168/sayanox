@@ -1,0 +1,2 @@
+hold n = 3
+show len(n)

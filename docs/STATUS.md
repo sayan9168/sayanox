@@ -1,5 +1,20 @@
 # Status
 
+**2026-10-31 — multi-ISA literal `len`: implementation added; full acceptance PENDING.**
+The Sayanox native32 frontend now lowers decoded literal byte lengths through
+the existing integer immediate encoders for i386/AArch64/RV64IM. Variable len
+loads remain dynamic. A tracked byte-output oracle covers empty/escaped/UTF-8
+literals, arithmetic, conditions, loops, reassignments and string indexing.
+The original golden images/refusals are retained; 16 additional refusal cases
+per ISA protect arity/types, malformed strings, interpolation and unsupported
+escapes. Focused i386/ARM64/RV64 execution against the tracked oracle and 48 cross-ISA
+compiler refusals pass. Decimal-token checks cover zero, one million and the
+maximum signed 32-bit count without scientific formatting.
+Official multi-backend execution, guarded full CI and remote acceptance for
+this increment are not yet claimed. All maintained implementation/tests remain
+Sayanox; no new native floating point, heap reclamation or bootstrap-trust proof
+is implied.
+
 **2026-10-30 — seed fake-stack root reliability: full PR acceptance PASS.**
 Both required [PR CI jobs](https://github.com/sayan9168/sayanox/actions/runs/41052510070)
 and their final unchanged guard audits passed on implementation checkpoint
