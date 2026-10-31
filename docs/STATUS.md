@@ -1,19 +1,28 @@
 # Status
 
-**2026-10-31 — multi-ISA literal `len`: implementation added; full acceptance PENDING.**
-The Sayanox native32 frontend now lowers decoded literal byte lengths through
-the existing integer immediate encoders for i386/AArch64/RV64IM. Variable len
-loads remain dynamic. A tracked byte-output oracle covers empty/escaped/UTF-8
-literals, arithmetic, conditions, loops, reassignments and string indexing.
-The original golden images/refusals are retained; 16 additional refusal cases
-per ISA protect arity/types, malformed strings, interpolation and unsupported
-escapes. Focused i386/ARM64/RV64 execution against the tracked oracle and 48 cross-ISA
-compiler refusals pass. Decimal-token checks cover zero, one million and the
-maximum signed 32-bit count without scientific formatting.
-Official multi-backend execution, guarded full CI and remote acceptance for
-this increment are not yet claimed. All maintained implementation/tests remain
-Sayanox; no new native floating point, heap reclamation or bootstrap-trust proof
-is implied.
+**2026-10-31 — multi-ISA literal `len`: full implementation acceptance PASS.**
+Both required [PR CI jobs](https://github.com/sayan9168/sayanox/actions/runs/41157427551)
+and their final unchanged guard audits passed on implementation/harness checkpoint
+`59c11096b531850c823a5d21a034cfd01db7f5e6`. This is fresh guarded full acceptance
+for this increment, not reuse of PR #50. Local official `test-native32`,
+`test-native-arm64`, `test-native-riscv64`, `test-sxisaexec` and `test-doc-claims`
+also passed. The separate local full-CI repeat was still running when this record
+was written; its final result is not claimed here. Documentation-update CI and
+post-merge integration results are tracked separately in
+[PR #51](https://github.com/sayan9168/sayanox/pull/51).
+
+The all-Sayanox frontend folds bounded decoded literal byte lengths through
+existing i386/AArch64/RV64IM integer encoders; variable lengths remain dynamic.
+The independent oracle covers empty/escaped/raw UTF-8 literals, arithmetic,
+conditions, loops, numeric/string reassignments and indexing. Six-way shared
+reference parity and separate native-only spacing/index-form execution pass.
+The legacy grammar boundary is documented rather than silently dropping cases.
+Original goldens/refusals remain intact; 16 additional refusals per ISA protect
+arity/types, malformed strings, interpolation and unsupported escapes. Decimal
+formatter development checks cover zero, one million and the maximum signed
+32-bit count. See [bounded acceptance evidence](gate-logs/2026-10-31-native-len.md).
+No native floating point, heap reclamation, broader legacy syntax support or
+independent bootstrap-trust proof is implied.
 
 **2026-10-30 — seed fake-stack root reliability: full PR acceptance PASS.**
 Both required [PR CI jobs](https://github.com/sayan9168/sayanox/actions/runs/41052510070)
