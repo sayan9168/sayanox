@@ -11,7 +11,7 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/file_util.sa` | 5 file helpers (`f_read`, `f_write`, `f_size`, `f_exists`, `f_lines`) | seed-min, gen2, native | `test-stdlib` |
 | `stdlib/num_util.sa` | 17 untyped numeric helpers (`nu_trunc`, `nu_floor`, `nu_ceil`, `nu_round`, `nu_frac`, `nu_min`, `nu_max`, `nu_mod_pos`, `nu_int_div`, `nu_wrap`, `nu_map_range`, `nu_avg`, `nu_median3`, `nu_pi`, `nu_deg2rad`, `nu_rad2deg`, `nu_turn`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/list_algo.sa` | 21 typed list algorithms (`la_insert_sorted`, `la_sort`, `la_sorted`, `la_index_of`, `la_append`, `la_slice`, `la_take`, `la_drop`, `la_cumsum`, `la_repeat`, `la_scale`, `la_offset`, `la_zip_add`, `la_count_gt`, `la_remove_at`, `la_insert_at`, `la_distinct`, `la_lower_bound`, `la_upper_bound`, `la_merge_sorted`, `la_rotate`) | seed-min, gen2, native | `test-stdlib-modules` |
-| `stdlib/str_text.sa` | 18 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`) | seed-min, gen2, native | `test-stdlib-modules` |
+| `stdlib/str_text.sa` | 22 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`, `t_count_char`, `t_starts_with`, `t_ends_with`, `t_normalize_ws`) | seed-min, gen2, native | `test-stdlib-modules`, `test-stdlib-next` |
 | `stdlib/json_util.sa` | flat-object JSON build/read (`j_escape`, `j_kv_text`, `j_kv_number`, `j_kv_flag`, `j_pair`, `j_obj`, `j_arr_numbers`, `j_has`, `j_get_text`, `j_get_number`, `j_get_flag`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/json_deep.sa` | nested JSON reader, any depth (`jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with `[i]` indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep` |
 | `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa` | seed-min, gen2, native | `test-stdlib-json-write` |
@@ -133,6 +133,20 @@ documents). `t_index_of`/`t_last_index_of` return `-1` when absent, `t_slice`
 clamps, `t_trim*` strip ASCII space/tab/newline/CR, `t_cmp` gives
 `<0 / 0 / >0`, `t_word_count` counts whitespace-separated runs, `t_replace(s, from, to)` replaces each matching byte, not substrings, `t_hash` is a small `h * 31 + c` fold, and
 `t_parse_uint` stops at the first non-digit.
+
+The four helpers added on 2026-10-31 are oracle-gated:
+`t_count_char(s, c)` counts byte occurrences (an absent byte counts 0),
+`t_starts_with`/`t_ends_with` compare exact byte runs (an empty prefix/suffix
+matches, a longer one never does), and `t_normalize_ws` collapses every run of
+ASCII space/tab/LF/CR to one space while dropping leading and trailing
+whitespace, so it is idempotent and maps whitespace-only input to `""`.
+`selfhost/stdlib_text_test.sa` is a fixture with a hand-written
+`selfhost/stdlib_text.want`; `test-stdlib-next` compiles it with seed-min, gen2
+and native AOT and requires all three stdout streams to byte-match that file,
+i.e. the expected bytes are not produced by any of the compilers under test.
+Because the native backend currently drops a `\r` escape from a source literal
+(see R13), the CR cases build the byte with `chr(13)` instead; that defect is
+recorded rather than hidden.
 
 ### Rules these modules follow
 

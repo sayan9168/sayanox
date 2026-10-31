@@ -24,10 +24,16 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   string variable's current byte length (including after runtime reassignment).
   `len("literal")` also works in integer expressions, conditions and indices: it
   folds the decoded byte length without allocating a target string or using the
-  concat heap. Empty literals, raw UTF-8 bytes, and `\n`, `\t`, `\r`, `\"` and
+  concat heap. Empty literals, raw UTF-8 bytes, and `\n`, `\t`, `\"` and
   `\\` escapes are supported. Interpolation, numeric/hex/Unicode escapes, NUL
   and arbitrary expressions inside `len()` are refused in this subset. Variable
   lengths are still loaded at runtime, not folded from their initial value.
+  **Known divergence (R13, found 2026-10-31):** `\r` is decoded by seed-min,
+  gen2 and the published C-output contract (`"a\rb"` prints `a`, CR, `b`) but
+  the native backend keeps the length while emitting the bytes `arb`. It is
+  recorded as an open defect rather than silently dropped from this list;
+  fixture code that needs CR builds it with `chr(13)` until the decoder is
+  fixed or `\r` is refused at parse time.
 - `hold` declarations and same-type assignment for numeric and static-string
   variables. Numeric globals occupy one 32-bit slot.
 - Static string values backed by bytes in the image data segment. A string

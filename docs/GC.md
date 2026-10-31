@@ -1,5 +1,34 @@
 # Sayanox memory management
 
+## Empty-heap cache release (2026-10-31)
+
+The C-output free lists no longer retain blocks while the managed heap is
+empty. Previously `sx_gc_collect` returned before trimming whenever no block was
+registered, so a program that dropped every value kept its cache forever: two
+blocks per size class through 64 KiB, i.e. `2 x 32 x (2^15 - 1) = 2,097,152`
+bytes across classes 0..14. An empty collection now still trims, and the trim
+keeps nothing when `sx_gcall` is null, so that cache goes back to the allocator.
+
+Measured by `tools/sxgc_pool_lib.sa`, which is generated from the actual emitted
+runtime and compiled at O0, O2 and ASan+UBSan (leak detection off, plus a forced
+fake-stack mode): before any managed allocation exists it injects four blocks in
+each of the fifteen classes (4,194,176 cached bytes), collects, and asserts that
+every free list is empty and every block was freed exactly once. The same probe
+fails against the previous emitter - assertion `sx_gfree[c]==0`, exit 134 - so
+it is a real control and not a restatement of the new code. The previous
+cache-policy assertions (two per class through 64 KiB while a heap is live,
+oversized classes always freed, warm reuse, alias survival, no double free) are
+unchanged. `gc_runs()` now counts an empty collection, because it does work;
+`gc_live()` accounting is untouched because cached blocks were never counted as
+live bytes.
+
+Still open, and not implied by this change: the collector is not precise, an
+empty-heap release is not a bounded-heap guarantee for arbitrary live heaps, it
+is not an RSS-return promise, and a program that keeps one live block keeps the
+two-per-class cache. Allocator overhead, fragmentation, conservative false roots
+and genuinely live data still count against the heap. See R04 in the
+[remaining-work register](REMAINING_WORK.md).
+
 ## C-output free-pool limit (2026-10-29)
 
 After sweeping and rebuilding membership, both C-output runtime branches now

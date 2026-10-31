@@ -1,0 +1,69 @@
+// selfhost/stdlib_text_test.sa -- independent oracle fixture for the byte
+// helpers in stdlib/str_text.sa. Every line printed here is compared, byte for
+// byte, with the checked-in selfhost/stdlib_text.want file on the seed,
+// gen2 and native backends (see `test-stdlib-next`). The .want file was
+// computed from the documented byte semantics by hand, not by running this
+// fixture, so a backend that silently changes a boundary case fails the gate.
+//
+// Strings are byte strings: `len` is a byte count, `chr(n)` builds one byte and
+// a UTF-8 character wider than one byte is several bytes.
+
+use "stdlib/str_text.sa"
+
+// 1. Collapsing ASCII whitespace runs (space, TAB, LF, CR) to one space.
+show t_normalize_ws("  alpha\tbeta\n gamma  ")
+show t_normalize_ws("")
+show t_normalize_ws("   ")
+show t_normalize_ws("\t\n")
+// CR is built at runtime: the native backend currently drops `\\r` from a
+// source literal, which is recorded as an open defect in docs/REMAINING_WORK.md
+// and must not hide a whitespace bug behind an escape bug.
+hold cr = chr(13)
+show t_normalize_ws(concat("a", concat(cr, "b")))
+show t_normalize_ws(concat(cr, concat("\t", cr)))
+show t_normalize_ws("one")
+show t_normalize_ws("a\n\nb")
+show t_normalize_ws(" lead")
+show t_normalize_ws("trail \t")
+// Idempotent: normalizing an already-normalized string changes nothing.
+show t_normalize_ws(t_normalize_ws("x  y"))
+
+// 2. Counting one byte value.
+show t_count_char("banana", 97)
+show t_count_char("banana", 122)
+show t_count_char("", 97)
+show t_count_char("aaaa", 97)
+show t_count_char("abc", 10)
+
+// 3. Prefix and suffix membership, including the empty-string boundaries.
+show t_starts_with("abcdef", "abc")
+show t_starts_with("abcdef", "")
+show t_starts_with("abcdef", "abcdef")
+show t_starts_with("abcdef", "abcdefg")
+show t_starts_with("", "")
+show t_starts_with("", "a")
+show t_starts_with("abc", "abd")
+show t_ends_with("abcdef", "def")
+show t_ends_with("abcdef", "")
+show t_ends_with("abcdef", "abcdef")
+show t_ends_with("abcdef", "xabcdef")
+show t_ends_with("abc", "bc")
+show t_ends_with("abc", "abcabc")
+show t_ends_with("", "")
+show t_ends_with("", "a")
+
+// 4. A two-byte UTF-8 character is two bytes, and each byte is counted
+//    separately: U+00E9 is C3 A9 (195 169). Printed as two `show` lines.
+hold e = concat(chr(195), chr(169))
+show len(e)
+show t_count_char(e, 195)
+show t_count_char(e, 169)
+show t_count_char(concat(e, e), 195)
+show t_starts_with(concat(e, "x"), e)
+show t_ends_with(concat("x", e), e)
+
+// 5. Composition with the helpers that already existed.
+show t_starts_with(t_trim("  hi "), "hi")
+show t_word_count(t_normalize_ws(" a\tb\nc "))
+show t_normalize_ws(t_trim(t_pad_left("v", 3, 32)))
+show "stdlib-text-ok"

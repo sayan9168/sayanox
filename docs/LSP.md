@@ -17,10 +17,10 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 
 | Method | Support |
 |--------|---------|
-| `initialize` | yes — `textDocumentSync: 1` (full), completion/hover/definition/documentSymbol/references/formatting/workspaceSymbol/diagnostic/rename/signatureHelp/codeAction providers, `positionEncoding: utf-16`, `serverInfo: sayanox-lsp 2.0` |
+| `initialize` | yes — `textDocumentSync: {openClose: true, change: 2}` (incremental, full replacements still accepted), completion/hover/definition/documentSymbol/references/formatting/workspaceSymbol/diagnostic/rename/signatureHelp/codeAction providers, `positionEncoding: utf-16`, `serverInfo: sayanox-lsp 2.0` |
 | `initialized` | yes |
 | `textDocument/didOpen` | yes — stores the document in the open-document table (four slots) and publishes diagnostics |
-| `textDocument/didChange` | yes — full-text sync, rewrites that document's slot and re-publishes its diagnostics |
+| `textDocument/didChange` | yes — incremental (one `range` + `text` object) and full-text changes; rewrites that document's slot and re-publishes its diagnostics |
 | `textDocument/didClose` | yes — clears that document's slot, publishes empty diagnostics for its URI and stops serving it |
 | `textDocument/publishDiagnostics` | on every open/change |
 | `textDocument/diagnostic` | pull model (`kind: full`) |
@@ -101,13 +101,41 @@ vim.api.nvim_create_autocmd("FileType", {
   four-slot cap; (4) references with and without the declaration, plus a
   non-word position; (5) workspace/symbol and formatting; (6) rename across
   the open documents, signature help on a two-parameter call, and the format
-  code action (offered, then empty once formatted) — and prints one line
-  per verified fact, 38 in all. `./sx target test-lsp` asserts that exact list, and
+  code action (offered, then empty once formatted); (7) incremental sync — the
+  advertised `change: 2` capability, a range replacement, the dropped old
+  identifier, a line deletion and an out-of-range clamp — and prints one line
+  per verified fact, 43 in all. `./sx target test-lsp` asserts that exact list, and
   the target is part of the `true-selfhost-min` gate — i.e. the LSP is
   exercised by `./sx target test`.
-* The server keeps up to **four documents** open (full-text sync). It advertises
+* The server keeps up to **four documents** open. It applies one `range` edit per
+  `didChange` notification and still accepts full replacements. It advertises
   UTF-16 positions and converts UTF-8 scanner offsets at the protocol
   boundary.
+
+## Incremental text sync (2026-10-31)
+
+`initialize` advertises `textDocumentSync: {"openClose": true, "change": 2}`, and
+`textDocument/didChange` accepts both change forms:
+
+* `contentChanges: [{"text": "..."}]` (no `range`) replaces the whole buffer, so
+  an editor configured for full sync keeps working;
+* `contentChanges: [{"range": {...}, "text": "..."}]` splices the UTF-16
+  `(line, character)` range out of the current buffer and inserts the text.
+
+Positions go through the same UTF-16 helpers hover/definition use. A character
+past the end of its line clamps to the line end, a line past the last line
+clamps to EOF, and a reversed range becomes an insertion at its start, so a
+malformed edit cannot move text outside the document. Diagnostics are
+re-published for the edited document exactly as before.
+
+Limits: one change object is applied per notification (a second object in the
+same array is ignored), the open-buffer cap is still four, and this is text
+splicing - not compiler-grade incremental re-parsing, and not a workspace
+diagnostic push. `test-lsp` drives a real framed session that replaces an
+identifier, deletes a line and appends at an out-of-range position, then checks
+`documentSymbol`, `formatting` and `diagnostic` responses, including that the
+replaced name is gone. The server still is not IDE-complete; R05 in the
+[remaining-work register](REMAINING_WORK.md) lists what is left.
 
 ## Multiple documents (2026-10-13)
 
