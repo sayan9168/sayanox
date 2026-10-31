@@ -616,7 +616,10 @@ make pstr_val_st(src: str, st: list) -> str {
         when x == 116 {
           c = 9
         } otherwise {
-          when st[39] == 1 && x == 114 {
+          when x == 114 {
+            // CR is decoded in every mode: the seed C output and the published
+            // contract both produce 0x0D, so leaving it to `otherwise` (c = x)
+            // silently turned "\r" into the letter r in the pure-min dialect.
             c = 13
           } otherwise {
             c = x

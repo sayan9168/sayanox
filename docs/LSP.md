@@ -20,7 +20,7 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 | `initialize` | yes — `textDocumentSync: {openClose: true, change: 2}` (incremental, full replacements still accepted), completion/hover/definition/documentSymbol/references/formatting/workspaceSymbol/diagnostic/rename/signatureHelp/codeAction providers, `positionEncoding: utf-16`, `serverInfo: sayanox-lsp 2.0` |
 | `initialized` | yes |
 | `textDocument/didOpen` | yes — stores the document in the open-document table (four slots) and publishes diagnostics |
-| `textDocument/didChange` | yes — incremental (one `range` + `text` object) and full-text changes; rewrites that document's slot and re-publishes its diagnostics |
+| `textDocument/didChange` | yes — incremental (up to eight `range` + `text` objects, applied in order) and full-text changes; rewrites that document's slot and re-publishes its diagnostics |
 | `textDocument/didClose` | yes — clears that document's slot, publishes empty diagnostics for its URI and stops serving it |
 | `textDocument/publishDiagnostics` | on every open/change |
 | `textDocument/diagnostic` | pull model (`kind: full`) |
@@ -103,12 +103,14 @@ vim.api.nvim_create_autocmd("FileType", {
   the open documents, signature help on a two-parameter call, and the format
   code action (offered, then empty once formatted); (7) incremental sync — the
   advertised `change: 2` capability, a range replacement, the dropped old
-  identifier, a line deletion and an out-of-range clamp — and prints one line
-  per verified fact, 43 in all. `./sx target test-lsp` asserts that exact list, and
+  identifier, a line deletion and an out-of-range clamp; (8) three change
+  objects in one notification — two replacements and an insertion — and prints
+  one line per verified fact, 47 in all. `./sx target test-lsp` asserts that exact list, and
   the target is part of the `true-selfhost-min` gate — i.e. the LSP is
   exercised by `./sx target test`.
-* The server keeps up to **four documents** open. It applies one `range` edit per
-  `didChange` notification and still accepts full replacements. It advertises
+* The server keeps up to **four documents** open. It applies up to eight `range`
+  edits per `didChange` notification, in order, and still accepts full
+  replacements. It advertises
   UTF-16 positions and converts UTF-8 scanner offsets at the protocol
   boundary.
 
@@ -128,14 +130,22 @@ clamps to EOF, and a reversed range becomes an insertion at its start, so a
 malformed edit cannot move text outside the document. Diagnostics are
 re-published for the edited document exactly as before.
 
-Limits: one change object is applied per notification (a second object in the
-same array is ignored), the open-buffer cap is still four, and this is text
-splicing - not compiler-grade incremental re-parsing, and not a workspace
-diagnostic push. `test-lsp` drives a real framed session that replaces an
-identifier, deletes a line and appends at an out-of-range position, then checks
-`documentSymbol`, `formatting` and `diagnostic` responses, including that the
-replaced name is gone. The server still is not IDE-complete; R05 in the
-[remaining-work register](REMAINING_WORK.md) lists what is left.
+Up to **eight** change objects are applied per notification, in order, each to
+the buffer as the previous one left it; an object without a `range` is a full
+replacement of that document. That bound is a resource limit, not a protocol
+subtlety: a ninth object in the same array is ignored rather than partially
+applied, and the server does not try to re-order or merge overlapping edits
+beyond the sequential rule the protocol specifies.
+
+Limits that remain: the open-buffer cap is still four, and this is text
+splicing - not compiler-grade incremental re-parsing - and not a
+workspace-wide diagnostic push. `test-lsp` drives real framed sessions that
+replace an identifier, delete a line, append at an out-of-range position and
+send three change objects in one notification, then check `documentSymbol`,
+`formatting` and `diagnostic` responses, including that the replaced names are
+gone and that the inserted text is diagnosed. The server still is not
+IDE-complete; R05 in the [remaining-work register](REMAINING_WORK.md) lists what
+is left.
 
 ## Multiple documents (2026-10-13)
 

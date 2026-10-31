@@ -1,5 +1,59 @@
 # Status
 
+**2026-10-31 (second increment) — native CR escape fixed (R13), multi-change LSP notifications, JSON boundary oracle.**
+All three are source changes with gates that fail on the previous tree; no gate,
+fixture or pin was weakened.
+
+*R13 — native `\r` decode.* `tools/sxdata_lib.sa` mapped `\r` to CR only when
+the parser ran in full-language mode, so a pure-min program printed `arb` for
+`"a\rb"` while seed-min, gen2 and the published C-output contract printed
+`a`, CR, `b` (length stayed 3 in both cases, which is why it looked like a byte
+bug). CR now decodes in every mode. The pinned native anchor is a derived
+artifact, so it was rebuilt rather than patched: `bootstrap/sxc_native.bin` came
+from a three-stage chain whose stage 2 and stage 3 are byte-identical
+(`sha256 9cfd3d1d…`), `bootstrap/sxc_native.audit` and both manifests were
+regenerated, and `test-native-bootstrap` re-derives the same fixed point from
+that new anchor. `selfhost/stdlib_text_test.sa` carries `"a\rb"` and `"\r\t\r"`
+as literals again, so the regression is checked on seed-min, gen2 and native AOT
+by `test-stdlib-next` instead of being worked around with `chr(13)`.
+
+*R05 — several changes per notification.* `textDocument/didChange` now applies
+up to eight change objects in order, each to the buffer the previous one left,
+with per-element bounded field scans and a string-aware object extent so a brace
+inside a replacement text cannot end the element early. Objects without a
+`range` still replace the whole buffer. Still not claimed: more than eight
+objects, more than four open buffers, workspace-wide diagnostic push, or
+compiler-grade incremental re-parsing. `test-lsp` now pins 47 facts.
+
+*R07 — JSON boundary/precision oracle.* `selfhost/stdlib_json_boundary_test.sa`
+is compared with the hand-written 43-line `selfhost/stdlib_json_boundary.want`
+(minification with whitespace inside strings, empty-document updates, `user` vs
+`user_id`, first/last/absent/only-key deletion, validity after deleting the only
+key, nested dotted paths and indexes, six-fractional-digit number policy,
+escaping round-trips, three malformed documents) on seed-min, gen2 and native
+AOT through `test-stdlib-next`.
+
+Gates on this tree, all exit 0:
+
+```
+./sx target test-stdlib-next            -> 0  (5 modules x 3 backends, incl. R13 literals and the JSON oracle)
+./sx target test-lsp                    -> 0  (47 facts)
+./sx target test-lsp-robust test-lsp-unicode test-lsp-workspace \
+  test-lsp-semantic test-lsp-types test-lsp-ide -> 0
+./sx target verify-seed                 -> 0
+./sx target test-native-bootstrap       -> 0  (new anchor re-derives the same fixed point; DDC controls)
+./sx target test-doc-claims             -> 0
+```
+
+Still not done, unchanged by this increment: the multi-ISA capability step
+beyond integer plus `len` (R02), precise GC (R04), language-level modules (R06),
+key distribution (R08), a syntax-aware formatter (R10), release publication
+(R12), and the externally blocked trust/hardware/Linguist items (R03/R09/R11).
+The complete `./sx ci` chain ran on this tree and exited 0 (570 `[OK]` lines, no
+`[FAIL]`), ending in `=== TRUE-SELFHOST-FULL-V1-OK ===`, so the rebuilt anchor
+and these three slices pass the published-language v1 acceptance chain locally.
+Remote results are tracked in the pull request and are not predicted here.
+
 **2026-10-31 — three implementation slices: empty-heap GC cache release, LSP incremental sync, oracle-gated text helpers.**
 This increment is implementation, not documentation bookkeeping. All three
 slices are Sayanox source changes with gates that fail on the previous code.

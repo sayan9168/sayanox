@@ -52,11 +52,12 @@ make ep_next() -> num {
   hold dir = "selfhost/seed_tests/stdlib_next"
   hold created = gl_ensure_dir(dir)
   hold index = 0
-  while index < 4 {
+  while index < 5 {
     hold module = "url"
     when index == 1 { module = "datetime" }
     when index == 2 { module = "hash" }
     when index == 3 { module = "text" }
+    when index == 4 { module = "json_boundary" }
     hold source = concat(concat("selfhost/stdlib_", module), "_test.sa")
     hold oracle = concat(concat("selfhost/stdlib_", module), ".want")
     hold expected = bt_require_file(oracle)

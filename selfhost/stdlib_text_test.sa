@@ -15,12 +15,10 @@ show t_normalize_ws("  alpha\tbeta\n gamma  ")
 show t_normalize_ws("")
 show t_normalize_ws("   ")
 show t_normalize_ws("\t\n")
-// CR is built at runtime: the native backend currently drops `\\r` from a
-// source literal, which is recorded as an open defect in docs/REMAINING_WORK.md
-// and must not hide a whitespace bug behind an escape bug.
-hold cr = chr(13)
-show t_normalize_ws(concat("a", concat(cr, "b")))
-show t_normalize_ws(concat(cr, concat("\t", cr)))
+// CR comes from a source literal on purpose: this line is the regression test
+// for R13, where the pure-min native backend used to emit the letter r.
+show t_normalize_ws("a\rb")
+show t_normalize_ws("\r\t\r")
 show t_normalize_ws("one")
 show t_normalize_ws("a\n\nb")
 show t_normalize_ws(" lead")
