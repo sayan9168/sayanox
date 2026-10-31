@@ -147,6 +147,36 @@ make write_deep_fixture(path: str) -> num {
   give 0
 }
 
+// The legacy reference grammar rejects spaced calls and a literal len inside
+// an index. Keep those native-only forms intact and execute them separately;
+// compare with the canonical shared fixture AND its independent byte oracle.
+make verify_native_literal_forms(dir: str) -> num {
+  hold probe_sa = concat(dir, "/literal-probe.sa")
+  hold probe_elf = concat(dir, "/literal-probe.elf")
+  when write_file(probe_sa, "show 1\n") != 1 { hold f = fail_t("literal i386 probe write") }
+  when run_command(concat("./tools/native32 ", concat(sh_q(probe_sa), concat(" ", concat(sh_q(probe_elf), " i386"))))) != 0 { hold f = fail_t("literal i386 probe compile") }
+  hold i386_available = run_command(concat("chmod +x ", concat(sh_q(probe_elf), concat(" && ", concat(sh_q(probe_elf), " >/dev/null 2>&1")))))
+  hold i = 0
+  while i < 3 {
+    hold arch = "i386"
+    when i == 1 { arch = "arm64" }
+    when i == 2 { arch = "riscv64" }
+    hold elf = concat(dir, concat("/literal-forms-", concat(arch, ".elf")))
+    hold out = concat(elf, ".out")
+    when run_command(concat("./tools/native32 selfhost/native32_tests/len_literals.sa ", concat(sh_q(elf), concat(" ", arch)))) != 0 { hold f = fail_t(concat("literal native forms compile: ", arch)) }
+    hold cmd = concat("./tools/sxisaexec --arch ", concat(arch, concat(" --out ", concat(sh_q(out), concat(" ", sh_q(elf))))))
+    when i == 0 { cmd = concat("chmod +x ", concat(sh_q(elf), concat(" && ", concat(sh_q(elf), concat(" > ", sh_q(out)))))) }
+    when i > 0 || i386_available == 0 {
+      when run_command(cmd) != 0 { hold f = fail_t(concat("literal native forms execution: ", arch)) }
+      hold equal = assert_files_eq("selfhost/native32_tests/len_literals.want", out, concat("literal native-only forms oracle: ", arch))
+      equal = assert_files_eq(concat(dir, "/len_literals.seed.out"), out, concat("literal native-only vs canonical reference: ", arch))
+    } otherwise { show "[SKIP] kernel cannot execute i386 native-only forms; image compiled and cross-ISA execution remains mandatory" }
+    i = i + 1
+  }
+  show "[ok] literal native-only spacing/index forms match shared reference and independent oracle"
+  give 0
+}
+
 make verify_six_way(dir: str, name: str, sa_path: str, golden_arm64: str, golden_riscv64: str) -> num {
   hold cc = cc_bin()
   hold stem = concat(dir, concat("/", name))
@@ -934,8 +964,9 @@ hold v1 = verify_six_way(dir, "expr", "selfhost/native32_tests/expr.sa", "selfho
 hold v2 = verify_six_way(dir, "flow", "selfhost/native32_tests/flow.sa", "selfhost/native32_tests/golden/flow.arm64.elf", "selfhost/native32_tests/golden/flow.riscv64.elf")
 hold v3 = verify_six_way(dir, "text", "selfhost/native32_tests/text.sa", "selfhost/native32_tests/golden/text.arm64.elf", "selfhost/native32_tests/golden/text.riscv64.elf")
 hold vstr = verify_six_way(dir, "strings", "selfhost/native32_tests/strings.sa", "", "")
-hold vlit = verify_six_way(dir, "len_literals", "selfhost/native32_tests/len_literals.sa", "", "")
+hold vlit = verify_six_way(dir, "len_literals", "selfhost/native32_tests/len_literals_common.sa", "", "")
 hold vlit_oracle = assert_files_eq("selfhost/native32_tests/len_literals.want", concat(dir, "/len_literals.seed.out"), "literal len independent byte-length oracle")
+hold vlit_forms = verify_native_literal_forms(dir)
 hold vh = test_concat_heap_limit(dir)
 hold vix = test_string_index_bounds(dir)
 

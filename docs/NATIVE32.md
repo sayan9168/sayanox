@@ -113,3 +113,11 @@ string operations beyond the documented subset, lists, structs and functions,
 IEEE-754 code generation, native file I/O, and a mark-and-sweep collector
 remain open, along with broader ISA support and end-to-end parity for each. Do not count
 emulator-only FP/syscall probes as compiler support.
+
+The legacy seed/gen2 reference grammar does not accept a spaced `len (` call or
+`len("literal")` directly inside an index. The six-way harness uses
+`len_literals_common.sa` (ordinary call spacing and a held numeric index) for
+that shared grammar, then separately executes the original native-only forms
+on ARM64/RV64 and on i386 when the kernel supports IA32. Both compare with the
+same independent `len_literals.want`; these native cases are not discarded or
+claimed as new legacy frontend support.
