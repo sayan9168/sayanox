@@ -1,5 +1,87 @@
 # Status
 
+**2026-10-31 — three implementation slices: empty-heap GC cache release, LSP incremental sync, oracle-gated text helpers.**
+This increment is implementation, not documentation bookkeeping. All three
+slices are Sayanox source changes with gates that fail on the previous code.
+
+*Memory (R04).* The emitted C-output collector no longer returns before
+trimming when no managed block is registered, and its trim keeps nothing when
+`sx_gcall` is null. A program that had dropped every value used to keep two
+blocks per size class through 64 KiB - `2 x 32 x (2^15 - 1) = 2,097,152` bytes -
+forever. `tools/sxgc_pool_lib.sa` now injects four blocks into each of the
+fifteen classes (4,194,176 cached bytes) before any managed allocation exists,
+collects, and requires every free list to be empty and every block freed exactly
+once; the previous emitter aborts the same probe at `sx_gfree[c]==0` (exit 134),
+so the control is real. Everything the older probe asserted - two per class
+while a heap is live, oversized classes always freed, warm reuse, alias
+survival, single free - is unchanged, and `gc_runs()` now counts an empty
+collection because it does work. This is **not** precise GC, **not** a bounded
+heap for arbitrary live programs, and **not** an RSS-return claim; a program
+holding one live block still keeps the two-per-class cache. See
+[GC](GC.md), R04 in [the register](REMAINING_WORK.md).
+
+*LSP (R05).* `initialize` advertises `textDocumentSync:
+{"openClose": true, "change": 2}` and `textDocument/didChange` splices a UTF-16
+`range` (with line/character clamping and reversed ranges treated as
+insertions) or still accepts a whole-buffer replacement. `test-lsp` drives a
+seventh framed session that replaces an identifier, checks the old name is gone
+from `documentSymbol`, deletes a line, inserts at line 99 and re-reads
+`formatting` and `diagnostic`; the probe now prints 43 facts. Still open and not
+claimed: one change object per notification, four open buffers, 128 indexed
+files, no compiler-grade incremental re-parse, no workspace-wide diagnostic
+push - the server is **still not IDE-complete**. See [LSP](LSP.md), R05.
+
+*Stdlib (R07).* `stdlib/str_text.sa` gains `t_count_char`, `t_starts_with`,
+`t_ends_with` and `t_normalize_ws` (22 helpers). `selfhost/stdlib_text_test.sa`
+is checked against the hand-written bytes in `selfhost/stdlib_text.want`, and
+`test-stdlib-next` compiles it with seed-min, gen2 and native AOT and requires
+all three stdout streams to match that file - the expected bytes come from
+neither compiler. See [STDLIB](STDLIB.md).
+
+*Defect found, recorded rather than hidden (R13).* `native_aot` keeps
+`len("a\rb")` at 3 but emits the bytes `arb`; seed-min, gen2 and the published
+C-output contract decode CR. The fixture therefore builds CR with `chr(13)` and
+the divergence is registered in [REMAINING_WORK](REMAINING_WORK.md) and
+[NATIVE32](NATIVE32.md) with a two-line reproduction.
+
+Not done in this increment, with reasons: the multi-ISA capability step beyond
+integer-plus-`len` (R02) needs new i386/AArch64/RV64IM encoder paths plus
+`sxisaexec` parity for every new form, which is a separate reviewable slice;
+adding one half-covered form would have been breadth without proof. No
+independent-trust, ARM hardware, or Linguist claim is made.
+
+Commands and exit statuses for this increment, all run on this working tree:
+
+```
+./sx target gen2                                            -> 0 (6m23s, after the compiler_min edit)
+./sx target test-gc                                         -> 0 (O0 / O2 / ASan+UBSan, forced fake-stack roots)
+./sx target test-lsp                                        -> 0 (43-fact probe, incremental session 7)
+./sx target test-lsp-robust test-lsp-unicode test-lsp-workspace \
+  test-lsp-semantic test-lsp-types test-lsp-ide             -> 0
+./sx target doctor test-doc-claims test-stdlib-modules \
+  test-stdlib-next test-gc                                  -> 0
+./sx target pack-compiler                                   -> 0 (150 parts, byte-identical round trip)
+sha256sum -c bootstrap/native.sha256                        -> OK
+sha256sum -c bootstrap/sx.sha256                            -> OK
+sha256sum -c docs/full-language-v1.sha256                   -> OK
+```
+
+The entry `sx` binary was rebuilt from `tools/sxbuild.sa` after the driver
+library changes and `selfhost/compiler_min.sa` was re-packed, so the pins above
+bind this tree rather than the previous one. The complete `./sx ci` chain also ran on this tree and exited 0 (569 `[OK]`
+lines, no `[FAIL]`): migration, `doctor`, `test-ci-shape`, `true-selfhost`,
+`gen3`, `native-test` and `true-selfhost-full`, ending in
+`=== TRUE-SELFHOST-FULL-V1-OK ===` - so the published-language v1 full
+acceptance chain is green with these three slices in it, not only the focused
+gates above. Both required [PR jobs](https://github.com/sayan9168/sayanox/actions/runs/41192778447)
+passed on implementation checkpoint `78a709c` (`Complete original acceptance`
+42m31s, `Sayanox entry and migrated acceptance gates` 27m15s), so this
+increment's local runs are corroborated by remote CI rather than replacing it.
+This record was written after that run; the documentation-only follow-up commit
+and the post-merge integration result are tracked separately in
+[PR #55](https://github.com/sayan9168/sayanox/pull/55) and are not predicted
+here.
+
 **2026-10-31 — roadmap/documentation consistency: implemented; acceptance tracked in PR #52.**
 The current milestone, bootstrap/start/toolchain/LSP guides and README now
 separate accepted published-language v1 C-output self-hosting from native
@@ -1523,7 +1605,7 @@ ships) and `native` (`selfhost/native_aot`, x86-64 Linux only).
 | GC | mark/sweep over the builder registry since 2026-10-22 (strings only; lists never freed) plus the freeing assignment wrapper | mark/sweep, all three runtime allocations checked | mark/sweep | `test-gc`, `test-native-mem`, `test-seed-gc`, `test-seed-collector` | measured 2026-10-22: seed-min collects dropped temporaries (gen1-min peak 1,278,704 → 29,768 KiB, identical gen2 C) and a live set still fails as `sx: out of memory`; the full seed's refcount table never releases in a loop (`SX_GC_DEBUG=1` reports 6000 objects alive after 2000 iterations) and `gc()` there is a no-op; gen2's first collection fires at 8 MiB of managed heap, so it needs more address space than native; conservative native stack scanning |
 | Packages, offline | tool built by gen2 | registry/lock/deps/install-local/verify | not a native-tool claim | `test-pkgs`, `test-sxpkg-polish`, new `test-pkg-errors` | search no longer implicitly syncs; shell still supplies filesystem/process operations; execution failures now propagate |
 | Packages, online | not bootstrap | explicit sync/install/fetch commands, **opt-in** since 2026-10-13 | n/a | `test-sxpkg-online-local`, `test-sxpkg-online-optin` (both in the aggregates, both socket-free) | no cryptographic integrity (`pkgsum` detects edits; it is not a hash anyone should trust for provenance), no signatures, no remote publish; shell `publish`/`fetch` write `sum=` since 2026-10-13, matching the Sayanox implementation, so shell-handled packages verify the same way; `SAYANOX_REGISTRY` says where, `SAYANOX_ONLINE=1`/`--online` says whether |
-| LSP | tool built by gen2 | existing .sa JSON-RPC server | n/a | `test-lsp`, `test-lsp-robust`, `test-lsp-unicode` | **four documents** open at once since 2026-10-13 (a fifth evicts the oldest), each request answered from its own URI's buffer and an unopened URI answered empty; still no workspace index or cross-file analysis: references, workspace/symbol and rename see **open buffers only**, signature help needs the declaration in the same document and the call on the same line, and the only code action is formatting; rename, signature help and the format code action added 2026-10-13 and pinned by the probe's sixth session (`test-lsp`, 38 facts); UTF-16/Unicode and empty changes tested by `test-lsp-unicode` |
+| LSP | tool built by gen2 | existing .sa JSON-RPC server | n/a | `test-lsp`, `test-lsp-robust`, `test-lsp-unicode` | **four documents** open at once since 2026-10-13 (a fifth evicts the oldest), each request answered from its own URI's buffer and an unopened URI answered empty; still no workspace index or cross-file analysis: references, workspace/symbol and rename see **open buffers only**, signature help needs the declaration in the same document and the call on the same line, and the only code action is formatting; rename, signature help and the format code action added 2026-10-13 and pinned by the probe's sixth session (`test-lsp`, 38 facts) and incremental `didChange` UTF-16 range edits by the seventh (`test-lsp`, 43 facts total) since 2026-10-31; UTF-16/Unicode and empty changes tested by `test-lsp-unicode` |
 | Platform | host C | host C | x86-64 Linux only | four bootstrap gates | other native platforms unsupported, not emulated |
 
 ### Changes and verification in this pass

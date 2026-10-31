@@ -454,6 +454,119 @@ make num_field(msg: str, key: str, def: num) -> num {
   give v
 }
 
+// Same scan as num_field/str_field, but starting at `from`, so one message can
+// carry several objects with identically named fields (a change object's
+// `range.start` and `range.end` both have `line`/`character`).
+make num_field_from(msg: str, key: str, from: num, def: num) -> num {
+  hold k = ""
+  hold p = 0
+  hold n = 0
+  hold c = 0
+  hold v = 0
+  hold got = 0
+  hold skip = 1
+  k = concat("\"", key)
+  k = concat(k, "\"")
+  p = find_from(msg, k, from)
+  when p < 0 {
+    give def
+  }
+  p = find_from(msg, ":", p + len(k))
+  when p < 0 {
+    give def
+  }
+  p += 1
+  n = len(msg)
+  while p < n && skip == 1 {
+    c = sx_index(msg, p)
+    when c == 32 || c == 9 {
+      p += 1
+    } otherwise {
+      skip = 0
+    }
+  }
+  while p < n {
+    c = sx_index(msg, p)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      got = 1
+      p += 1
+    } otherwise {
+      break
+    }
+  }
+  when got == 0 {
+    give def
+  }
+  give v
+}
+
+make str_field_from(msg: str, key: str, from: num) -> str {
+  hold k = ""
+  hold p = 0
+  hold n = 0
+  hold c = 0
+  hold out = ""
+  hold run = 1
+  hold nc = 0
+  k = concat("\"", key)
+  k = concat(k, "\"")
+  p = find_from(msg, k, from)
+  when p < 0 {
+    give ""
+  }
+  p = find_from(msg, ":", p + len(k))
+  when p < 0 {
+    give ""
+  }
+  p += 1
+  n = len(msg)
+  while p < n {
+    c = sx_index(msg, p)
+    when c == 32 || c == 9 {
+      p += 1
+    } otherwise {
+      run = 0
+      p = p
+      break
+    }
+  }
+  run = 1
+  when p >= n {
+    give ""
+  }
+  when sx_index(msg, p) != 34 {
+    give ""
+  }
+  p += 1
+  while run == 1 {
+    when p >= n {
+      run = 0
+    } otherwise {
+      c = sx_index(msg, p)
+      when c == 92 {
+        when p + 1 < n {
+          out = out + chr(c)
+          nc = sx_index(msg, p + 1)
+          out = out + chr(nc)
+          p += 2
+        } otherwise {
+          run = 0
+        }
+      } otherwise {
+        when c == 34 {
+          run = 0
+          p += 1
+        } otherwise {
+          out = out + chr(c)
+          p += 1
+        }
+      }
+    }
+  }
+  give unesc(out)
+}
+
 // ------------------------------------------------------------- line access
 
 make line_start(text: str, line: num) -> num {
@@ -1325,6 +1438,56 @@ make sub_str(s: str, a: num, z: num) -> str {
     hold i = i + 1
   }
   give out
+}
+
+// ------------------------------------------------------- incremental edits
+
+// A UTF-16 (line, character) protocol position as a byte offset. A character
+// count past the end of its line clamps to the line end, and a line past the
+// last line clamps to EOF: the same clamping hover/definition already use.
+make pos_byte(text: str, line: num, character: num) -> num {
+  hold a = line_start(text, line)
+  hold b = line_end(text, line)
+  hold col = utf16_byte(sub_str(text, a, b), character)
+  give a + col
+}
+
+// p clamped into [low, len(text)].
+make pos_clamp(text: str, low: num, p: num) -> num {
+  when p < low {
+    give low
+  }
+  when p > len(text) {
+    give len(text)
+  }
+  give p
+}
+
+// Replace [start, stop) with ins. Both ends clamp into the buffer and a
+// reversed range becomes an insertion at its start, so a malformed edit can
+// never move text outside the document.
+make splice(text: str, start: num, stop: num, ins: str) -> str {
+  hold a = pos_clamp(text, 0, start)
+  hold b = pos_clamp(text, a, stop)
+  give concat(sub_str(text, 0, a), concat(ins, sub_str(text, b, len(text))))
+}
+
+// The end position of the change object whose `"range"` starts at from. A
+// missing end re-uses start, which makes the edit a pure insertion.
+make range_end_line(msg: str, from: num, def: num) -> num {
+  hold p = find_from(msg, "\"end\"", from)
+  when p < 0 {
+    give def
+  }
+  give num_field_from(msg, "line", p, def)
+}
+
+make range_end_char(msg: str, from: num, def: num) -> num {
+  hold p = find_from(msg, "\"end\"", from)
+  when p < 0 {
+    give def
+  }
+  give num_field_from(msg, "character", p, def)
 }
 
 // sig_help: signature help for the call at (line, ch) of THIS document.
@@ -2503,7 +2666,7 @@ make watch_registration() -> str {
 
 make capabilities_ext(prep_ren: num) -> str {
   hold c = ""
-  c = "{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":1,\"completionProvider\":{\"triggerCharacters\":[\" \",\".\"]},"
+  c = "{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"completionProvider\":{\"triggerCharacters\":[\" \",\".\"]},"
   c = concat(c, "\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,")
   when prep_ren == 1 {
     c = concat(c, "\"referencesProvider\":true,\"documentFormattingProvider\":true,\"workspaceSymbolProvider\":true,\"renameProvider\":{\"prepareProvider\":true},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"codeActionProvider\":true,")
@@ -4512,20 +4675,45 @@ while running == 1 {
         d = notify("textDocument/publishDiagnostics", params)
       }
       when string_eq(method, "textDocument/didChange") {
-        // Empty text is a replacement; an empty change array is a no-op, so the
-        // buffer is only rewritten when the body really carries "text".
+        // Two change forms share this branch so both kinds of client work:
+        // a change object without a `range` replaces the whole buffer (full
+        // sync), and one with a `range` is spliced into the current buffer at
+        // UTF-16 (line, character) positions (the `change: 2` incremental
+        // sync advertised in initialize). An empty change array is a no-op, so
+        // nothing happens unless the body really carries "text". One change
+        // object is applied per notification, the documented limit.
         when find(body, "\"text\"") >= 0 {
-          when string_eq(uri, uri0) {
-            txt0 = text
-          }
-          when string_eq(uri, uri1) {
-            txt1 = text
-          }
-          when string_eq(uri, uri2) {
-            txt2 = text
-          }
-          when string_eq(uri, uri3) {
-            txt3 = text
+          hold rngp = find(body, "\"range\"")
+          when rngp >= 0 {
+            hold rsl = num_field_from(body, "line", rngp, 0)
+            hold rsc = num_field_from(body, "character", rngp, 0)
+            hold rel = range_end_line(body, rngp, rsl)
+            hold rec = range_end_char(body, rngp, rsc)
+            when string_eq(uri, uri0) {
+              txt0 = splice(txt0, pos_byte(txt0, rsl, rsc), pos_byte(txt0, rel, rec), text)
+            }
+            when string_eq(uri, uri1) {
+              txt1 = splice(txt1, pos_byte(txt1, rsl, rsc), pos_byte(txt1, rel, rec), text)
+            }
+            when string_eq(uri, uri2) {
+              txt2 = splice(txt2, pos_byte(txt2, rsl, rsc), pos_byte(txt2, rel, rec), text)
+            }
+            when string_eq(uri, uri3) {
+              txt3 = splice(txt3, pos_byte(txt3, rsl, rsc), pos_byte(txt3, rel, rec), text)
+            }
+          } otherwise {
+            when string_eq(uri, uri0) {
+              txt0 = text
+            }
+            when string_eq(uri, uri1) {
+              txt1 = text
+            }
+            when string_eq(uri, uri2) {
+              txt2 = text
+            }
+            when string_eq(uri, uri3) {
+              txt3 = text
+            }
           }
         }
         // Reload, then publish only for a document that is actually open: a

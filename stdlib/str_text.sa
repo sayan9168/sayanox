@@ -288,3 +288,75 @@ make t_uint_str(n: num) -> str {
   }
   give digits
 }
+
+// Count of bytes equal to c. An absent byte counts zero.
+make t_count_char(s: str, c: num) -> num {
+  hold n = 0
+  hold i = 0
+  while i < len(s) {
+    hold d = sx_index(s, i)
+    when d == c {
+      hold n = n + 1
+    }
+    hold i = i + 1
+  }
+  give n
+}
+
+// 1 when s begins with the exact byte run p; an empty p matches everything.
+make t_starts_with(s: str, p: str) -> num {
+  when len(p) > len(s) {
+    give 0
+  }
+  hold i = 0
+  while i < len(p) {
+    when sx_index(s, i) != sx_index(p, i) {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// 1 when s ends with the exact byte run p; an empty p matches everything.
+make t_ends_with(s: str, p: str) -> num {
+  hold ns = len(s)
+  hold np = len(p)
+  when np > ns {
+    give 0
+  }
+  hold off = ns - np
+  hold i = 0
+  while i < np {
+    when sx_index(s, off + i) != sx_index(p, i) {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// Collapse each run of ASCII whitespace (space, TAB, LF, CR) to one space and
+// drop leading/trailing whitespace. Whitespace-only input becomes the empty
+// string, and normalizing an already-normalized string changes nothing.
+make t_normalize_ws(s: str) -> str {
+  hold out = ""
+  hold pending = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when t_is_space_byte(c) == 1 {
+      when len(out) > 0 {
+        hold pending = 1
+      }
+    } otherwise {
+      when pending == 1 {
+        hold out = concat(out, " ")
+        hold pending = 0
+      }
+      hold out = concat(out, chr(c))
+    }
+    hold i = i + 1
+  }
+  give out
+}
