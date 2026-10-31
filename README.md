@@ -191,6 +191,9 @@ for anything to move from the second table to the first.
 | 29 | **All-source native build/bootstrap migration** — all 236 baseline targets are implemented; Makefile and frozen C seed retired, with explicit pinned native trust inputs | `./sx target all-sayanox`, [migration acceptance](docs/ALL_SAYANOX_PHASE.md) |
 | 30 | **Precise generic-head diagnostics** — gen2/gen3 report wrong counts, unsupported/unknown type arguments and bare templates; nine specific refusal checks retain fail-closed C output | `./sx target test-generic-struct-limits`, [diagnostics](docs/TYPES_ROADMAP.md#generic-head-diagnostics-2026-10-28) |
 | 31 | **Published-language v1 C-output self-host** — current published language, not just the pure-min compiler implementation subset; complete post-merge main acceptance passed | `./sx target true-selfhost-full`, [contract](docs/FULL_LANGUAGE_CONTRACT_V1.md), [checkpoint evidence](docs/gate-logs/2026-10-30-gc-full-v1.md) |
+| 32 | **GC: an empty managed heap releases the whole free-list cache** — the emitted C-output collector no longer returns before trimming when nothing is registered, and its trim keeps nothing while `sx_gcall` is null, so a program that dropped every value returns the up to 2,097,152 bytes it used to pin (two blocks per class through 64 KiB). The probe fills all fifteen classes (4,194,176 cached bytes) on an empty heap and requires every list empty and every block freed once; the previous emitter aborts it at `sx_gfree[c]==0` | `./sx target test-gc` (O0 / O2 / ASan+UBSan incl. fake-stack roots), [evidence](docs/gate-logs/2026-10-31-gc-lsp-stdlib.md) |
+| 33 | **LSP incremental UTF-16 text sync** — `initialize` advertises `textDocumentSync {"openClose": true, "change": 2}`; `didChange` splices a `range` + `text` (line/character clamped to line end and EOF, reversed range ⇒ insertion) and still accepts whole-buffer replacements, then re-publishes that document's diagnostics. A seventh framed session pins 5 new facts (43 total) | `./sx target test-lsp`, `./sx target test-lsp-robust`, [evidence](docs/gate-logs/2026-10-31-gc-lsp-stdlib.md) |
+| 34 | **`stdlib/str_text.sa` byte helpers against an independent stdout oracle** — `t_count_char`, `t_starts_with`, `t_ends_with` and `t_normalize_ws` (22 helpers total); the fixture `selfhost/stdlib_text_test.sa` is compared to the hand-written `selfhost/stdlib_text.want`, which no compiler under test produces | `./sx target test-stdlib-next` (seed-min / gen2 / native AOT), [evidence](docs/gate-logs/2026-10-31-gc-lsp-stdlib.md) |
 
 ### Remaining — and where the build refuses to claim it
 
@@ -242,7 +245,7 @@ only program it still starts is the transport itself, `curl` or `wget`. Full
 registry support is still evolving — see
 [docs/ONLY_SAYANOX.md](docs/ONLY_SAYANOX.md).
 
-The language server (`tools/sayanox_lsp.sa`) with its folder index and binder,
+The language server (`tools/sayanox_lsp.sa`) with its folder index, binder and incremental UTF-16 `didChange` splicing,
 the IR translator (`tools/emit_to_ir.sa`), four pieces of the native backend —
 its ELF image writer with the rel32 linker (`tools/sxlink.sa`), its x86-64
 instruction encoder (`tools/sxencode.sa`), its front-end phase 1
@@ -275,7 +278,7 @@ the environment the wrappers used to read.
 | `tools/sxmod.sa` | Sayanox module-namespacing pass (`module` / `alias.member`) |
 | `tools/sxaudit.sa` | Sayanox binary/source byte-count and SHA-256 auditor; native-anchor digest pinned in `bootstrap/sxc_native.audit` |
 | `tools/sxdiag.sa` | Sayanox negative-diagnostic suites (replaced four `sh` drivers) |
-| `stdlib/` | Twenty-one Sayanox modules, including `json_deep.sa`, `json_write.sa`, `crypto.sa`, `pubkey.sa`, `csv.sa`, `url.sa`, `datetime.sa`, and `hash.sa` |
+| `stdlib/` | Twenty-one Sayanox modules, including `json_deep.sa`, `json_write.sa`, `crypto.sa`, `pubkey.sa`, `csv.sa`, `url.sa`, `datetime.sa`, `hash.sa`, and `str_text.sa` (22 typed byte-string helpers) |
 | `sx`, `tools/sxbuild.sa` | Native entry and Sayanox bootstrap/build/test driver; incomplete acceptance migration |
 | `docs/` | Status, design notes, language docs |
 | `docs/gate-logs/` | One dated folder per landed change: what was claimed, and the run that proves it |
@@ -338,6 +341,9 @@ has the short version.
 - [x] **Port the remaining 14 tracked POSIX `.sh` scripts to Sayanox**: `sxsuite`, LSP protocol probes, package-transfer security harness, local HTTP/crawler tests, and `sxpack`; `git ls-files '*.sh'` is now empty (`./sx target test-language-deps`, `./sx target test-trust-anchor`)
 - [x] **All maintained implementation source is Sayanox** ([evidence](docs/ALL_SAYANOX_PHASE.md)); the frozen C seed and Makefile are retired. Native-origin own-source fixed point and 64 MiB C1 emission pass. Final guarded acceptance is tracked separately.
 - [x] **Published-language v1 C-output self-hosting**: the complete pinned user-language contract is accepted; the compiler implementation remains a bounded pure-min dialect (`./sx target true-selfhost-full`, [checkpoint evidence](docs/STATUS.md))
+- [x] **GC free-list cache release on an empty heap**: the C-output collector returns the cache instead of pinning two blocks per class, proven by a probe the previous emitter fails (`./sx target test-gc`)
+- [x] **Incremental LSP text sync**: UTF-16 `range` splices with clamping, `change: 2` capability, 43 pinned probe facts (`./sx target test-lsp`)
+- [x] **`str_text.sa` text helpers (22)**: `t_count_char`, `t_starts_with`, `t_ends_with`, `t_normalize_ws` checked against a hand-written stdout oracle on seed-min, gen2 and native AOT (`./sx target test-stdlib-next`)
 - [ ] Full ARM64/RV64 native compiler/runtime beyond the integer subset (strings, lists, structs, `make`/`give`, floats, file I/O, GC); emulator FP/syscall coverage is in progress (`docs/ALL_SAYANOX_PHASE.md`)
 - [ ] Broader platform support
 

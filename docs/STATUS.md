@@ -73,7 +73,10 @@ lines, no `[FAIL]`): migration, `doctor`, `test-ci-shape`, `true-selfhost`,
 `gen3`, `native-test` and `true-selfhost-full`, ending in
 `=== TRUE-SELFHOST-FULL-V1-OK ===` - so the published-language v1 full
 acceptance chain is green with these three slices in it, not only the focused
-gates above. Both required [PR jobs](https://github.com/sayan9168/sayanox/actions/runs/41192778447)
+gates above. The dated evidence record is [docs/gate-logs/2026-10-31-gc-lsp-stdlib.md](gate-logs/2026-10-31-gc-lsp-stdlib.md);
+the README "Done" table now carries these three items as 32–34.
+
+Both required [PR jobs](https://github.com/sayan9168/sayanox/actions/runs/41192778447)
 passed on implementation checkpoint `78a709c` (`Complete original acceptance`
 42m31s, `Sayanox entry and migrated acceptance gates` 27m15s), so this
 increment's local runs are corroborated by remote CI rather than replacing it.
