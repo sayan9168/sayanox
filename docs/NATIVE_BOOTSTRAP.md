@@ -7,8 +7,11 @@ The selected goal is **all maintained source in Sayanox**, retaining compiler C-
 The native compiler and minimal-seed bootstrap implementations now use Sayanox.
 `seed-min-bin`, missing-seed reconstruction and `sx bootstrap` no longer compile
 any maintained C source. The frozen C seed and old C audit have been deleted
-following the native-origin own-source proof below. Final guarded acceptance
-is pending; source retirement is not being substituted for that full run.
+following the native-origin own-source proof below. Guarded full acceptance
+has passed at the checkpoints recorded in [STATUS](STATUS.md), including
+[main 0fca562](https://github.com/sayan9168/sayanox/actions/runs/41162923167).
+That is exact-checkpoint evidence, not advance acceptance of later changes.
+Independent bootstrap trust remains open; source retirement is not its proof.
 
 ## Native compiler reconstruction
 

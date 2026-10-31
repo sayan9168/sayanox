@@ -28,10 +28,11 @@ source .sa
 ## Not implemented here
 
 There is no full Stage-2 C host or concurrent pthread collector in this
-repository. Full-language self-host is not claimed; see
-FULL_LANGUAGE_SELFHOST.md and GC.md. A second machine-code target exists
+repository. Published-language v1 C-output self-hosting is accepted; this
+native pipeline still has its own bounded subset. See FULL_LANGUAGE_SELFHOST.md
+and GC.md. A separate multi-ISA machine-code compiler exists
 since 2026-10-23 for a documented integer subset only —
-[NATIVE32.md](NATIVE32.md), `make test-native32` — and it is a separate
+[NATIVE32.md](NATIVE32.md), `./sx target test-native32` — and it is a separate
 program, not this pipeline: nothing below assembles or executes this IR.
 
 ## The instruction list (`SX_EMIT_LOG`, 2026-10-13)
@@ -47,7 +48,7 @@ SX_EMIT_LOG=/tmp/hello.log ./selfhost/native_aot examples/native_hello.sa /tmp/h
 head -20 /tmp/hello.log
 ```
 
-Every encoder primitive — the ones `make test-native-emit-split` proves are the
+Every encoder primitive — the ones `./sx target test-native-emit-split` proves are the
 only path from the language-level emitter to the machine — writes one line: the
 code offset the instruction starts at, the mnemonic, and the operands in
 assembly order. Lines beginning with `;` are not instructions. They are the
@@ -97,7 +98,7 @@ immediately.
 
 ### What a second backend has to reproduce
 
-* **The vocabulary.** `make test-native-ir-log` pins the mnemonics the
+* **The vocabulary.** `./sx target test-native-ir-log` pins the mnemonics the
   fixture's top level uses —
   `add addsd call cvtsi2sd cvttsd2si jae je jmp lea mov movq movzx mulsd pop push seta ucomisd` —
   and the named call targets (`call make twice`, `call builtin concat`,
@@ -138,7 +139,7 @@ renamed, so the translation never silently drops an instruction.
 
 ```sh
 SX_EMIT_LOG=/tmp/hello.log ./selfhost/native_aot examples/native_hello.sa /tmp/hello
-make tools/emit_to_ir
+./sx tool emit_to_ir
 ./tools/emit_to_ir /tmp/hello.log > /tmp/hello.ir
 ```
 
@@ -148,7 +149,7 @@ Its input is read as a C string, so a NUL byte truncates the log; the script
 `tools/test-emit-to-ir.sh` pins that this truncation shows up as an explicit
 `; UNTRANSLATED:` comment rather than silence.
 
-`make test-native-ir-portable` pins the contract: the translation is
+`./sx target test-native-ir-portable` pins the contract: the translation is
 deterministic (two runs cmp clean), instruction-count preserving (one listing
 instruction per logged instruction), free of x86 register names on instruction lines, and preserves
 the abstract machine model (`FADD`, `FCMP`, `I2F`, named calls, phase
@@ -173,7 +174,7 @@ those choices. This repository still has exactly one emitter of machine code.
 The recorder is inert. It only reads the primitives' arguments, never `code` or
 `cn`, so the emitted ELF is byte-identical with and without `SX_EMIT_LOG` —
 checked against the pre-recorder compiler on six fixtures, and re-checked on
-every run of `make test-native-ir-log`, which also cmp's two logged runs against
+every run of `./sx target test-native-ir-log`, which also cmp's two logged runs against
 each other, checks the log's own invariants (every line is an instruction line
 or a comment line, the offsets never go backwards, every rel32 fixup lands on a
 jump, no call target or operand falls back to a placeholder name, the six phases
@@ -181,7 +182,7 @@ come in order), pins the fixture's output, and asserts that the language emitter
 never touches the recorder state.
 
 The translator is now streaming C99 (one growable line, not a whole-log array).
-`make test-emit-to-ir` checks exact output, token boundaries, named-call
+`./sx target test-emit-to-ir` checks exact output, token boundaries, named-call
 preservation, unknown instructions/lines, long lines, EOF and I/O errors.
 The Python implementation has been removed; `native-test` builds and runs the
 C tool. The baseline fixture translation matches the former Python output
@@ -236,8 +237,8 @@ port, cross-execution smoke test or second-backend acceptance gate had been
 added, and host-C compilation of generated C and abstract register names are
 not a second native ISA. (Later: 2026-10-23 added `tools/native32.sa`, an
 i386 backend for a documented integer subset with its own acceptance gate,
-`make test-native32`, and an aarch64 encoder in the same program,
-`make test-native-arm64`, whose images are emitted and byte-pinned but
+`./sx target test-native32`, and an aarch64 encoder in the same program,
+`./sx target test-native-arm64`, whose images are emitted and byte-pinned but
 never executed here. Still no riscv64 emitter, no cross-execution smoke
 test for aarch64, and `native_aot` is still x86-64 only.)
 Actual gates: [2026-10-16 IR/modules logs](gate-logs/2026-10-16-ir-modules/).
@@ -254,7 +255,7 @@ of the backend. `SX_DEFS_DUMP=<dir>` records the front: it writes
 
 between `collect_defs()` and `infer()`, and changes nothing else — the image
 and every diagnostic are identical with and without it, which
-`make test-native-sxdefs` checks before it compares anything.
+`./sx target test-native-sxdefs` checks before it compares anything.
 
 ```
 ; native_aot phase 1
@@ -311,14 +312,14 @@ against the C source.
 | `meta.txt` | `npc npr cn dn` — the call records come first, and their count is the one thing a reader cannot recover from `patch.bin` |
 
 Like the instruction log, it is off by default and changes no emitted byte;
-`make test-native-sxlink` compiles every fixture twice, with and without the
+`./sx target test-native-sxlink` compiles every fixture twice, with and without the
 variable, and `cmp`s the two executables.
 
 `tools/sxlink.sa` is the consumer:
 
 ```sh
-make tools/sxlink
-./selfhost/native_aot in.sa out.elf                       # the C-linked image
+./sx tool sxlink
+./selfhost/native_aot in.sa out.elf                       # current native pipeline image
 SX_LINK_DUMP=/tmp/d ./selfhost/native_aot in.sa out.elf   # plus the dump
 ./tools/sxlink out.elf /tmp/d sx.elf                      # the Sayanox-linked image
 cmp out.elf sx.elf                                        # identical
@@ -340,11 +341,11 @@ page padding.
   `len(code.bin)` and `len(data.bin)`, and the page arithmetic is recomputed
   from them, but the fixture layout it is compared against is the one
   `write_elf()` uses.
-* It is not wired in as the producer. The executables that `make native` and
-  `make native-test` run are still written by C's `write_elf()`; making the
-  Sayanox linker the producer means the native backend's output path depends on
-  gen2, which is a real ordering change to the bootstrap and belongs to a later
-  cut.
+* The standalone replay command is not a second complete compiler. The current
+  producer is already the Sayanox native pipeline (`selfhost/native_aot.sa`
+  and `tools/sxlink_lib.sa`), not the retired C `write_elf()`. The earlier
+  pre-cutover ordering limitation was resolved by the all-Sayanox migration;
+  it is not a remaining producer-replacement task.
 * It is not a second backend and not a second ISA. For the native subset
   there is still exactly one executable target: x86-64 Linux ELF. (The
   separate i386 backend added on 2026-10-23 compiles a documented integer
@@ -386,13 +387,13 @@ b 69
 | `raw_patch32 <at> <value>` | a rel32 the runtime stubs patch by hand over their own byte sequence; the value is stored, because those bytes are copied rather than encoded |
 
 Like the other two seams it is off by default and changes no emitted byte;
-`make test-native-sxencode` compiles every fixture twice, with and without the
+`./sx target test-native-sxencode` compiles every fixture twice, with and without the
 variable, and `cmp`s the two executables.
 
 `tools/sxencode.sa` is the consumer:
 
 ```sh
-make tools/sxencode
+./sx tool sxencode
 SX_ENCODE_LOG=/tmp/e.log SX_LINK_DUMP=/tmp/d ./selfhost/native_aot in.sa out.elf
 ./tools/sxencode /tmp/e.log /tmp/d/code.bin /tmp/sx/rebuilt.bin
 cmp /tmp/d/code.bin /tmp/sx/rebuilt.bin      # identical
@@ -423,7 +424,7 @@ applying it.
   `tools/sxirexec` loads the portable IR emitted by `tools/emit_to_ir --strict --source-offsets`
   plus `data.bin` (`SX_LINK_DUMP`) and executes the program on a pure-Sayanox register/stack/heap
   VM with zero host x86-64 ELF execution (`compile-and-run` deletes the ELF binary before VM
-  execution). `make test-ir-exec` verifies 4-way parity (`seed-min == gen2 == native_aot == sxirexec`)
+  execution). `./sx target test-ir-exec` verifies 4-way parity (`seed-min == gen2 == native_aot == sxirexec`)
   across SHA-256/HMAC-SHA256 (`stdlib_crypto_test.sa`), `stdlib_json_write_test.sa`,
   `stdlib_growth_test.sa`, and `native_ir_log_test.sa`, plus Stage-2 struct-typed functions and
   `${id}` string interpolation.

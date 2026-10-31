@@ -1,0 +1,1 @@
+- [ ] Full Stage-2 language self-hosting in seed-min

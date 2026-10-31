@@ -42,17 +42,34 @@ Compiler stages are cached within one invocation. Existing generated seed/gen2 b
 
 ## Trust, recovery and honest boundaries
 
-`bootstrap/sx.sha256` contains 49 records covering root `sx` and the transitive driver/native-compiler inputs, compiler source/module, seed audit and frozen seed. Workflows verify these pins before executing the entry. `verify-entry` rebuilds the driver and compares bytes. Root `sx` and `bootstrap/sxc_native.bin` are explicit trusted bootstrap artifacts; checksums and self-rebuild parity are not an independent trust proof. See [bootstrap reconstruction](../bootstrap/README.md).
+`bootstrap/sx.sha256` pins the entry and its reviewed inputs; the transitive
+source/case manifest is `docs/full-language-v1.sha256`. Read the manifests for
+the current record set rather than relying on an obsolete fixed record count.
+Workflows verify pins before entry execution. `verify-entry` rebuilds the
+driver and compares bytes. Root `sx` and `bootstrap/sxc_native.bin` remain
+explicit trusted bootstrap artifacts; hashes/fixed points are not independent
+trust proof. See [bootstrap reconstruction](../bootstrap/README.md).
 
-The frozen C seed remains unchanged (SHA256 `e4cc34b41041044579ee34ab05c32997f3ad45adbe88973d8403ae43a2a01cb9`). Therefore this migration does **not** justify claiming zero C, full-language selfhosting, or an independently eliminated trust anchor. `all-sayanox` and `true-selfhost-full` retain their honest refusal gates rather than falsely reporting success. Those claims are not required by the original minimum-selfhost CI chain.
+The frozen C seed and its old audit are retired. Stage zero now builds the
+Sayanox C-output frontend and compatibility seed CLI from the native anchor;
+necessary host C tools compile generated compatibility output, not a maintained
+C seed. `all-sayanox` audits this boundary and succeeds only when its source and
+anchor checks pass. `true-selfhost-full` requires the reviewed published-language
+v1 contract, actual executions and negative controls; it no longer has a
+permanent refusal in place of implementation. Both are in the accepted main
+chain recorded in [STATUS](STATUS.md). Independent bootstrap trust and full
+native parity remain open, separate from these completed acceptance items.
 
-The network fixture transport is deliberately private: bounded plain HTTP over IPv4 loopback, not a production replacement for curl/TLS. The frozen runtime's curl invocation resolves to the real-socket Sayanox client only inside the harness's private PATH. Native http_get remains an explicit compile refusal, as in the original acceptance contract.
+The network fixture transport is deliberately private: bounded plain HTTP over IPv4 loopback, not a production replacement for curl/TLS. The C-output runtime's curl invocation resolves to the real-socket Sayanox client only inside the harness's private PATH. Native http_get remains an explicit compile refusal, as in the original acceptance contract.
 
 The generated C collector skips ASan-poisoned conservative stack words using the sanitizer interface, keeping actual loads instrumented. The sanitizer gate includes an independently corrupted string-read negative control proving ASan still detects a real fault. Leak detection remains explicitly disabled, matching the original gate.
 
 ## Verification ledger
 
-Previously completed families include bootstrap/native fixed point, no-Make driver integration (with a recording make poison), cleanup/entry reconstruction, package hardening, frontend/IR/language, ISA, backend modules, stdlib growth/resource limits, guarded CI failure propagation and release-plan validation. These are individual acceptance results, not a claim of remote CI success.
+Previously completed families include bootstrap/native fixed point, no-Make driver integration (with a recording make poison), cleanup/entry reconstruction, package hardening, frontend/IR/language, ISA, backend modules, stdlib growth/resource limits, guarded CI failure propagation and release-plan validation. The dated ledger below preserves individual historical results; current guarded
+remote acceptance is recorded in [STATUS](STATUS.md), including
+[main 0fca562](https://github.com/sayan9168/sayanox/actions/runs/41162923167).
+That checkpoint is not advance acceptance for later edits.
 
 Latest measured results:
 

@@ -17,7 +17,7 @@ Verification commands:
 | Command | Role |
 |---|---|
 | `./sx target true-selfhost` | Canonical pure-min bootstrap and feature/tool tests |
-| `./sx target true-selfhost-full` | Runs minimum/gen3 readiness then refuses an unreviewed full-language claim |
+| `./sx target true-selfhost-full` | Requires minimum/gen3 and the complete reviewed published-language v1 C-output contract |
 | `./sx target gen1` / `./sx target seed-min-gen1` | Build gen1-min from the maintained min seed |
 | `./sx target gen2` | Build the maintained gen2 through gen1-min |
 | `./sx target tools` | Build the Sayanox formatter and local package-lock tool |
@@ -37,6 +37,10 @@ Sayanox Base64 codec, 1100-character parts) and verifies the round trip byte-for
 
 ## Scope
 
-The repository does not claim full-language self-hosting here.
-The canonical path covers the pure-min bootstrap only.
+Published-language v1 C-output self-hosting is accepted at the checkpoints in
+[STATUS](STATUS.md). The pure-min implementation bootstrap is one prerequisite,
+not a restriction on published user programs. Full native parity and
+independent bootstrap trust are separate open items.
 The initial executable compiler is the explicit pinned native Sayanox anchor, not maintained C source.
+
+See [remaining work and acceptance criteria](REMAINING_WORK.md).

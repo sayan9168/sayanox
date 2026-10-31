@@ -1,5 +1,21 @@
 # Status
 
+**2026-10-31 — roadmap/documentation consistency: implementation added; fresh acceptance PENDING.**
+The current milestone, bootstrap/start/toolchain/LSP guides and README now
+separate accepted published-language v1 C-output self-hosting from native
+backend limits and independent trust. Retired Makefile/C-seed instructions and
+missing-collector claims are corrected; historical records remain labelled.
+The Sayanox `test-doc-claims` implementation now checks current guides against
+known stale-command/architecture sentinels and executes nine negative controls,
+including empty/missing-content protection, plus a valid Sayanox-declaration
+control. This is regression coverage for known errors, not exhaustive prose
+verification. [The work register](REMAINING_WORK.md) records all twelve audited
+projects, acceptance criteria, sequencing and external blockers; registering
+these projects does not implement them. No native-function, module, precise-GC,
+LSP expansion, release publication or independent DDC completion is claimed by
+this increment. Fresh guarded focused/full and remote acceptance are pending.
+
+
 **2026-10-31 — multi-ISA literal `len`: full implementation acceptance PASS.**
 Both required [PR CI jobs](https://github.com/sayan9168/sayanox/actions/runs/41157427551)
 and their final unchanged guard audits passed on implementation/harness checkpoint
