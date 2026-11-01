@@ -1,0 +1,2 @@
+hold a = "x"
+show string_eq(a)

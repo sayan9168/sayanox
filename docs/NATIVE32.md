@@ -70,13 +70,23 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   between numeric and string values", and an undeclared source is refused as an
   unknown name. Arbitrary string expressions are still not sources: only a
   literal, `concat(...)`, or another string variable.
+- **String equality** (2026-11-01): `string_eq(A, B)` where each argument is a
+  declared string variable or a quoted literal. It is a numeric expression that
+  yields `1` or `0`, so it can drive `when` and `while` conditions, feed `show`,
+  and compose with the numeric operators (`string_eq(a, b) == 1`,
+  `string_eq(a, b) == string_eq(c, d)`). The emitter pushes the two
+  `(pointer, length)` pairs and calls one comparison routine emitted once per
+  image: it rejects different lengths first, then compares bytes. Literal
+  arguments are appended to the data segment and addressed through the per-arch
+  load base, so the data image stays arch-neutral; nothing is allocated, so
+  equality cannot consume the concat heap.
 - `when`, `otherwise`, `while`, comments, and blank lines.
 
 Lists, structs, user functions, floating-point expressions, general file APIs,
-and garbage collection remain unsupported by this compiler. Other general
-string operations such as `chr` and `string_eq` are also not in this subset;
-`string_eq` is still unimplemented, so equality of two runtime string values
-cannot be tested in this dialect.
+and garbage collection remain unsupported by this compiler. `chr` is still not
+in this subset, so a one-byte string cannot be built from a number, and
+`string_eq` arguments are limited to a variable or a literal rather than
+arbitrary string expressions.
 Cross-type assignment and using a string as a numeric value are rejected. `/`
 and fractional literals are rejected because Sayanox numbers are doubles and
 this compiler does not yet implement floating-point expression semantics.
@@ -104,6 +114,17 @@ program's data image is not cross-ISA identical even though each image is
 correct for its own target. The copy fixture therefore avoids `concat`, and the
 cross-ISA data assertion covers programs without `concat`. Recorded as R14 in
 the [remaining-work register](REMAINING_WORK.md).
+
+The `streq.sa` fixture covers `string_eq` on the same six execution paths and in
+the same cross-ISA data comparison: literal/literal, variable/variable,
+mixed, unequal lengths, a differing middle byte, empty strings, a copied value,
+composition with `==`, a `when` branch, an equality test inside a loop body, and
+one equality test as the loop condition itself. While adding it, a real defect
+in the AArch64 emulator surfaced: the 64-bit Add/Subtract (immediate and shifted
+register) forms computed their result but never updated `N`/`Z`/`C`/`V`, so a
+64-bit `cmp` followed by `b.cond` branched on stale flags. `tools/sxisaexec.sa`
+now sets those flags; the six-way `streq` run fails on the previous emulator and
+passes on the fixed one, so the fix is pinned by the same fixture.
 
 The additional `len_literals.sa` fixture has an independent tracked byte-output
 oracle and runs through the same multi-backend execution comparisons. Each ISA
