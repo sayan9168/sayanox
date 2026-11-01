@@ -1,0 +1,61 @@
+// String equality for the multi-ISA emitter: `string_eq(X, Y)` lowers to a
+// length test plus a byte-compare loop and yields 1 or 0 as a number, so it can
+// drive `when`/`while` conditions and `show`. Arguments are declared string
+// variables or string literals; a literal is appended to the data segment and
+// addressed through the per-arch load base, so the data image stays
+// arch-neutral and this fixture is also used for the cross-ISA data comparison.
+hold a = "alpha"
+hold b = a
+hold c = "beta"
+
+// literal on the right, literal on the left, variable pair, unequal pairs
+show string_eq(a, "alpha")
+show string_eq("alpha", a)
+show string_eq(a, b)
+show string_eq(a, c)
+show string_eq(a, "alphb")
+show string_eq(a, "alphaa")
+
+// empty strings are equal to each other and unequal to a non-empty string
+hold empty = ""
+show string_eq(empty, empty)
+show string_eq(empty, a)
+show string_eq(a, empty)
+show string_eq(empty, "")
+
+// a copy of a string compares equal to its source
+hold d = b
+show string_eq(d, a)
+
+// the result composes with an operator in the same expression
+show string_eq(a, "beta") == 0
+
+// a `when` branch driven by string equality
+when string_eq(a, b) == 1 {
+  show "equal"
+} otherwise {
+  show "different"
+}
+
+// equality re-evaluated inside a loop
+hold hits = 0
+hold i = 0
+while i < 3 {
+  when string_eq(a, "alpha") == 1 {
+    hits = hits + 1
+  }
+  i = i + 1
+}
+show hits
+
+// equality as the loop condition itself
+hold left = "same"
+hold right = "same"
+hold rounds = 0
+while string_eq(left, right) == 1 {
+  rounds = rounds + 1
+  when rounds == 2 {
+    right = "other"
+  }
+}
+show rounds

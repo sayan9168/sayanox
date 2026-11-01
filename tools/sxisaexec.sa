@@ -1388,6 +1388,24 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
             cy64 = 1
           }
           res_hi = u32(base_hi + cy64)
+          when s_flag_i == 1 {
+            nf = 0
+            when res_hi >= 2147483648 {
+              nf = 1
+            }
+            zf = 0
+            when res_hi == 0 && res_lo == 0 {
+              zf = 1
+            }
+            cf = 0
+            when base_hi + cy64 >= 4294967296 {
+              cf = 1
+            }
+            vf = 0
+            when bit_and(bit_xor(base_hi, res_hi), bit_and(bit_xor(imm12_i, res_hi), 2147483648)) != 0 {
+              vf = 1
+            }
+          }
         } otherwise {
           res_lo = base_lo - imm12_i
           hold bw64 = 0
@@ -1396,6 +1414,24 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
             bw64 = 1
           }
           res_hi = u32(base_hi - bw64)
+          when s_flag_i == 1 {
+            nf = 0
+            when res_hi >= 2147483648 {
+              nf = 1
+            }
+            zf = 0
+            when res_hi == 0 && res_lo == 0 {
+              zf = 1
+            }
+            cf = 0
+            when base_hi > 0 || (base_hi == 0 && base_lo >= imm12_i) {
+              cf = 1
+            }
+            vf = 0
+            when bit_and(bit_xor(base_hi, imm12_i), bit_and(bit_xor(base_hi, res_hi), 2147483648)) != 0 {
+              vf = 1
+            }
+          }
         }
         when rd == 31 && s_flag_i == 0 {
           sp_lo = res_lo
@@ -1485,6 +1521,33 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
             rbw = 1
           }
           rhi64 = u32(nhi - mhi - rbw)
+        }
+        when s_flag_r == 1 {
+          nf = 0
+          when rhi64 >= 2147483648 {
+            nf = 1
+          }
+          zf = 0
+          when rhi64 == 0 && rlo64 == 0 {
+            zf = 1
+          }
+          cf = 0
+          vf = 0
+          when is_sub_r == 0 {
+            when nhi + mhi + rcy >= 4294967296 {
+              cf = 1
+            }
+            when bit_and(bit_xor(nhi, rhi64), bit_and(bit_xor(mhi, rhi64), 2147483648)) != 0 {
+              vf = 1
+            }
+          } otherwise {
+            when nhi > mhi || (nhi == mhi && nlo >= mlo) {
+              cf = 1
+            }
+            when bit_and(bit_xor(nhi, mhi), bit_and(bit_xor(nhi, rhi64), 2147483648)) != 0 {
+              vf = 1
+            }
+          }
         }
         hold z_asr64 = set_arm_x(rlo, rhi, rd, rlo64, rhi64)
       }

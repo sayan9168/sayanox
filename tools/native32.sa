@@ -248,6 +248,41 @@ make is_text_literal(s: str) -> num {
   give 1
 }
 
+// Body (without its quotes) of the `which`-th double-quoted literal in `s`.
+// Escapes stay verbatim here; append_text() decodes them when the bytes reach
+// the data segment, exactly as a `hold` literal is handled.
+make literal_body(s: str, which: num) -> str {
+  hold n = len(s)
+  hold i = 0
+  hold count = 0
+  hold in_str = 0
+  hold found = 0
+  hold out = ""
+  while i < n {
+    hold c = sx_index(s, i)
+    when in_str == 1 {
+      when c == 34 {
+        in_str = 0
+        found = 0
+      } otherwise {
+        when found == 1 {
+          out = concat(out, chr(c))
+        }
+      }
+    } otherwise {
+      when c == 34 {
+        in_str = 1
+        count = count + 1
+        when count == which + 1 {
+          found = 1
+        }
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
 // Token integers must not go through numstr's general/scientific formatting.
 make literal_length_digits(value: num) -> str {
   when value == 0 { give "0" }
@@ -452,7 +487,7 @@ make tokenize(ex: str) -> str {
         nmtext = concat(nmtext, chr(sx_index(ex, i)))
         i = i + 1
       }
-      when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 {
+      when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 && string_eq(nmtext, "string_eq") == 0 {
         bad = concat(concat("a call to '", nmtext), "' (this backend has no functions)")
       }
       when i < n && sx_index(ex, i) == 46 {
@@ -539,6 +574,13 @@ make tokenize(ex: str) -> str {
       }
       when done == 0 && len(bad) == 0 && c == 93 {
         out = add_tok(out, "]")
+        i = i + 1
+        done = 1
+      }
+      when done == 0 && len(bad) == 0 && c == 44 {
+        // A comma only separates string_eq's two arguments; the parser refuses
+        // it anywhere else rather than guessing.
+        out = add_tok(out, "o,")
         i = i + 1
         done = 1
       }
@@ -1175,6 +1217,153 @@ make emit_call(xs: list, arch: num, target: num) -> list {
   give a_imm26(xs, aat, target - aat)
 }
 
+
+// The string_eq routine, emitted once per image and reached only by `call`.
+// Arguments reach it on the value stack in source order (ptrA, lenA, ptrB,
+// lenB), so they come off in the opposite order; the 1/0 result is pushed back.
+// AArch64 and RISC-V keep the return address in a register, so only the i386
+// twin has to step over the return address that `call` pushed onto the same
+// stack.
+make emit_streq_routine(xs: list, arch: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 90)
+    xs = e1(xs, 89)
+    xs = e1(xs, 91)
+    xs = e1(xs, 95)
+    xs = e1(xs, 94)
+    xs = e1(xs, 57)
+    xs = e1(xs, 207)
+    xs = e1(xs, 15)
+    xs = e1(xs, 133)
+    hold ne1 = len(xs)
+    xs = e32(xs, 0)
+    hold loop = len(xs)
+    xs = e1(xs, 133)
+    xs = e1(xs, 255)
+    xs = e1(xs, 15)
+    xs = e1(xs, 132)
+    hold jz1 = len(xs)
+    xs = e32(xs, 0)
+    xs = e1(xs, 138)
+    xs = e1(xs, 6)
+    xs = e1(xs, 58)
+    xs = e1(xs, 3)
+    xs = e1(xs, 15)
+    xs = e1(xs, 133)
+    hold ne2 = len(xs)
+    xs = e32(xs, 0)
+    xs = e1(xs, 70)
+    xs = e1(xs, 67)
+    xs = e1(xs, 79)
+    xs = e1(xs, 233)
+    hold back = len(xs)
+    xs = e32(xs, 0)
+    hold one = len(xs)
+    xs = e1(xs, 184)
+    xs = e32(xs, 1)
+    xs = e1(xs, 80)
+    xs = e1(xs, 255)
+    xs = e1(xs, 226)
+    hold zero = len(xs)
+    xs = e1(xs, 184)
+    xs = e32(xs, 0)
+    xs = e1(xs, 80)
+    xs = e1(xs, 255)
+    xs = e1(xs, 226)
+    xs = patch32(xs, ne1, zero - (ne1 + 4))
+    xs = patch32(xs, jz1, one - (jz1 + 4))
+    xs = patch32(xs, ne2, zero - (ne2 + 4))
+    xs = patch32(xs, back, loop - (back + 4))
+    give xs
+  }
+  when arch == 2 {
+    xs = e_w(xs, rv_i(0, 2, 2, 13, 3))
+    xs = e_w(xs, rv_i(16, 2, 0, 2, 19))
+    xs = e_w(xs, rv_i(0, 2, 2, 12, 3))
+    xs = e_w(xs, rv_i(16, 2, 0, 2, 19))
+    xs = e_w(xs, rv_i(0, 2, 2, 11, 3))
+    xs = e_w(xs, rv_i(16, 2, 0, 2, 19))
+    xs = e_w(xs, rv_i(0, 2, 2, 10, 3))
+    xs = e_w(xs, rv_i(16, 2, 0, 2, 19))
+    hold bne_a = len(xs)
+    xs = e_w(xs, rv_b_word(0, 13, 11, 1))
+    hold loop = len(xs)
+    hold beq_a = len(xs)
+    xs = e_w(xs, rv_b_word(0, 0, 11, 0))
+    xs = e_w(xs, rv_i(0, 10, 4, 14, 3))
+    xs = e_w(xs, rv_i(1, 10, 0, 10, 19))
+    xs = e_w(xs, rv_i(0, 12, 4, 15, 3))
+    xs = e_w(xs, rv_i(1, 12, 0, 12, 19))
+    hold bne_b = len(xs)
+    xs = e_w(xs, rv_b_word(0, 15, 14, 1))
+    xs = e_w(xs, rv_i(0 - 1, 11, 0, 11, 19))
+    hold back = len(xs)
+    xs = e_w(xs, rv_j_word(0, 0))
+    hold one = len(xs)
+    xs = rv_li32(xs, 10, 1)
+    hold one_j = len(xs)
+    xs = e_w(xs, rv_j_word(0, 0))
+    hold zero = len(xs)
+    xs = rv_li32(xs, 10, 0)
+    hold out = len(xs)
+    xs = rv_push_a0(xs)
+    xs = e_w(xs, rv_i(0, 1, 0, 0, 103))
+    xs = set_w(xs, bne_a, rv_b_word(zero - bne_a, 13, 11, 1))
+    xs = set_w(xs, beq_a, rv_b_word(one - beq_a, 0, 11, 0))
+    xs = set_w(xs, bne_b, rv_b_word(zero - bne_b, 15, 14, 1))
+    xs = set_w(xs, back, rv_j_word(loop - back, 0))
+    xs = set_w(xs, one_j, rv_j_word(out - one_j, 0))
+    give xs
+  }
+  xs = e_w(xs, 4165011427)
+  xs = e_w(xs, 4165011426)
+  xs = e_w(xs, 4165011425)
+  xs = e_w(xs, 4165011424)
+  xs = e_w(xs, 3942842431)
+  hold bne_a = len(xs)
+  xs = e_w(xs, 1409286145)
+  hold loop = len(xs)
+  xs = e_w(xs, 4043309119)
+  hold beq_a = len(xs)
+  xs = e_w(xs, 1409286144)
+  xs = e_w(xs, 960495620)
+  xs = e_w(xs, 960495685)
+  xs = e_w(xs, 1795489951)
+  hold bne_b = len(xs)
+  xs = e_w(xs, 1409286145)
+  xs = e_w(xs, 2432697344)
+  xs = e_w(xs, 2432697410)
+  xs = e_w(xs, 3506439201)
+  hold back = len(xs)
+  xs = e_w(xs, 335544320)
+  hold one = len(xs)
+  xs = e_w(xs, 1384120352)
+  hold one_j = len(xs)
+  xs = e_w(xs, 335544320)
+  hold zero = len(xs)
+  xs = e_w(xs, 1384120320)
+  hold out = len(xs)
+  xs = e_w(xs, 4162785248)
+  xs = e_w(xs, 3596551104)
+  xs = a_imm19(xs, beq_a, one - beq_a)
+  xs = a_imm19(xs, bne_a, zero - bne_a)
+  xs = a_imm19(xs, bne_b, zero - bne_b)
+  xs = a_imm26(xs, back, loop - back)
+  xs = a_imm26(xs, one_j, out - one_j)
+  give xs
+}
+
+// A forward `call` whose target is known only once the whole image is emitted.
+make patch_call(xs: list, arch: num, at: num, target: num) -> list {
+  when arch == 0 {
+    give patch32(xs, at, target - (at + 4))
+  }
+  when arch == 2 {
+    give set_w(xs, at, rv_j_word(target - at, 1))
+  }
+  give a_imm26(xs, at, target - at)
+}
+
 make emit_exit0(xs: list, arch: num) -> list {
   when arch == 0 {
     xs = e1(xs, 184)
@@ -1304,6 +1493,9 @@ make run() -> num {
   hold strnames = ""
   hold heap_on = 0
   hold heap_cursor_slot = 0 - 1
+  // string_eq: one shared comparison routine plus its call sites.
+  hold eq_used = 0
+  hold eq_calls = []
 
   // data 0..31 is the decimal buffer; byte 31 is the newline the routine
   // writes, so digits grow downwards from 30.
@@ -1700,6 +1892,88 @@ make run() -> num {
       while k < tn {
         hold t = tok_at(toks, k)
         hold t0 = sx_index(t, 0)
+        hold is_streq_tok = 0
+        when t0 == 118 && string_eq(sub(t, 1, len(t)), "string_eq") == 1 {
+          is_streq_tok = 1
+        }
+        // string_eq(A, B): push the two (pointer, length) pairs, call the comparison
+        // routine emitted once at the end of the image, and leave its 0/1 result on
+        // the value stack. A literal argument is appended to the data segment and
+        // addressed through the per-arch load base, so the data image stays
+        // arch-neutral; nothing is allocated and no scratch global is needed.
+        when t0 == 118 && is_streq_tok == 1 {
+          when want == 0 {
+            hold streq_twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
+          }
+          hold streq_shape = 0
+          when k + 5 < tn {
+            when string_eq(tok_at(toks, k + 1), "(") == 1 && string_eq(tok_at(toks, k + 3), "o,") == 1 && string_eq(tok_at(toks, k + 5), ")") == 1 {
+              streq_shape = 1
+            }
+          }
+          when streq_shape == 0 {
+            hold bad_streq_shape = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects exactly two string variables or string literals"))
+          }
+          hold eq_base = 4198400
+          when arch == 0 {
+            eq_base = 134516736
+          }
+          hold eq_arg = 0
+          hold eq_lit_index = 0
+          while eq_arg < 2 {
+            hold eq_tok = tok_at(toks, k + 2)
+            when eq_arg == 1 {
+              eq_tok = tok_at(toks, k + 4)
+            }
+            hold eq_kind = sx_index(eq_tok, 0)
+            when eq_kind == 108 {
+              hold eq_litoff = len(data)
+              data = append_text(data, literal_body(extext, eq_lit_index))
+              eq_lit_index = eq_lit_index + 1
+              hold eq_litbytes = len(data) - eq_litoff
+              when eq_litbytes != tok_num(eq_tok) {
+                hold bad_streq_lit = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq and len() disagree about one literal byte length"))
+              }
+              code = emit_push_imm2(code, arch, eq_base + eq_litoff)
+              code = emit_push_imm2(code, arch, eq_litbytes)
+            } otherwise {
+              when eq_kind != 118 {
+                hold bad_streq_arg = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects string variables or string literals"))
+              }
+              hold eq_name = sub(eq_tok, 1, len(eq_tok))
+              hold eq_slot = slot_of(names, eq_name)
+              when eq_slot < 0 {
+                hold eq_unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(eq_name, "' in string_eq")))
+              }
+              when slot_of(strnames, eq_name) < 0 {
+                hold eq_numarg = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq needs string variables, not numeric values"))
+              }
+              hold eqpslot_at = len(code)
+              when arch == 0 {
+                fixsite = push(fixsite, eqpslot_at + 1)
+              } otherwise {
+                fixsite = push(fixsite, eqpslot_at)
+              }
+              fixoff = push(fixoff, eq_slot)
+              code = emit_load_global(code, arch)
+              hold eq_p2off = eq_slot + 4
+              hold eqnslot_at = len(code)
+              when arch == 0 {
+                fixsite = push(fixsite, eqnslot_at + 1)
+              } otherwise {
+                fixsite = push(fixsite, eqnslot_at)
+              }
+              fixoff = push(fixoff, eq_p2off)
+              code = emit_load_global(code, arch)
+            }
+            eq_arg = eq_arg + 1
+          }
+          code = emit_call(code, arch, 0)
+          eq_calls = push(eq_calls, len(code) - 4)
+          eq_used = 1
+          want = 0
+          k = k + 5
+        }
         when t0 == 110 {
           when want == 0 {
             hold twonum = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
@@ -1714,7 +1988,7 @@ make run() -> num {
         when t0 == 108 {
           hold misplaced_literal = fail(1, concat(concat("line ", numstr(lineno)), ": a string literal in a numeric expression is supported only as len()'s argument"))
         }
-        when t0 == 118 {
+        when t0 == 118 && is_streq_tok == 0 {
           when want == 0 {
             hold twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
           }
@@ -1953,6 +2227,9 @@ make run() -> num {
         }
         when t0 == 111 {
           hold oc = op_code(t)
+          when string_eq(t, "o,") == 1 {
+            hold bad_comma = fail(1, concat(concat("line ", numstr(lineno)), ": a ',' is only allowed between the two arguments of string_eq"))
+          }
           when want == 1 {
             when oc == 2 {
               code = emit_push_imm2(code, arch, 0)
@@ -2518,6 +2795,22 @@ make run() -> num {
   }
   when stmts == 0 {
     hold nostmt = fail(1, "the program has no statements this backend can emit")
+  }
+
+  // The string_eq routine, emitted once and reached only by `call`. It sits
+  // behind a jump so the body cannot fall into it, and before the exit sequence
+  // so the image still ends with the process exit that the container check pins.
+  when eq_used == 1 {
+    code = emit_jmp(code, arch)
+    hold eq_skip = len(code) - 4
+    hold eq_routine_at = len(code)
+    code = emit_streq_routine(code, arch)
+    code = patch_jmp(code, arch, eq_skip, len(code))
+    hold qc = 0
+    while qc < len(eq_calls) {
+      code = patch_call(code, arch, eq_calls[qc], eq_routine_at)
+      qc = qc + 1
+    }
   }
 
   // exit(0)

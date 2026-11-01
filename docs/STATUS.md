@@ -1,5 +1,57 @@
 # Status
 
+**2026-11-01 — R02 step 2: `string_eq` in the multi-ISA emitter, and a real AArch64 emulator fix.**
+
+`tools/native32.sa` now compiles `string_eq(A, B)`, where each argument is a declared
+string variable or a quoted literal, into a numeric expression that yields `1` or
+`0`. It works in `when` and `while` conditions, feeds `show`, and composes with the
+numeric operators (`string_eq(a, b) == 1`,
+`string_eq(a, b) == string_eq(c, d)`). The emitter pushes the two
+`(pointer, length)` pairs and calls one comparison routine emitted once per image:
+a length test, then a byte-by-byte loop. Nothing is allocated (so equality cannot
+consume the 60 KiB concat heap), no scratch global is used, and literal arguments
+only append their bytes to the data segment, which keeps the data image
+arch-neutral. Four new refusals cover wrong arity, a numeric argument, an unknown
+name, and a stray `,` (the tokenizer now emits it instead of failing, and refuses
+it anywhere except between `string_eq`'s two arguments).
+
+Evidence: `selfhost/native32_tests/streq.sa` (16 output lines) runs through the
+same six execution paths as the copy fixture (seed-min, gen2, x86-64 native AOT,
+i386, AArch64, RV64) with identical output, its data segment is byte-identical
+across the three ISA images, and it is pinned against reviewed AArch64/RV64IM
+goldens (all three images 4270 B). The refusal matrix rises from 18 to 22.
+
+**R16, found and fixed while adding it.** The AArch64 emulator in
+`tools/sxisaexec.sa` computed 64-bit ADD/SUB results (both immediate and shifted
+register) but only updated `N`/`Z`/`C`/`V` in the 32-bit paths, so the new
+routine's 64-bit `cmp` branched on stale flags: AArch64 printed
+`0,1,1,1,1,1,...` where the other five paths printed `1,1,1,0,0,0,...`. The
+emulator now sets the 64-bit flags (carry/borrow and signed overflow included).
+This is not cosmetic: with the previous emulator restored, `test-sxisaexec` fails
+with "streq seed vs AArch64 sxisaexec: mismatch at byte 0", and passes with the
+fix.
+
+Gates on this tree, all exit 0:
+
+```
+./sx target test-native32          -> 0
+./sx target test-native-arm64      -> 0
+./sx target test-native-riscv64    -> 0
+./sx target test-sxisaexec         -> 0   (6-way parity on streq)
+```
+
+Two negative controls confirm the ISA gates are live: pinning the i386 image size
+to 4240 makes `test-native32` fail with "reviewed i386 image size: got 4270, want
+4240", and flipping one byte of `streq.arm64.elf` makes `test-native-arm64` fail
+with "reviewed machine-code golden". The third control is the emulator revert
+described above. The full `./sx ci` result for this tree is recorded in the pull
+request and in `docs/gate-logs/2026-11-01-native-string-eq.md`.
+
+Still open in R02: `chr`, string-valued expressions beyond literal/`concat`/copy,
+then bounded numeric user functions, aggregates, FP lowering, file/runtime APIs
+and GC. R14 (arch-specific `concat` data image) and R15 (gitignored default
+outputs counted by the sxbuild inventory) remain open as recorded.
+
 **2026-10-31 (third increment) — R02 first step: string-value copy in the multi-ISA emitter.**
 `tools/native32.sa` now compiles `hold b = a` and `b = a`, where `a` is a
 declared string variable, into a copy of the 8-byte `(pointer, length)` pair.
