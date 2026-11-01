@@ -1,0 +1,52 @@
+// String-value copy: `hold b = a` and `b = a` copy the (pointer, length) pair
+// of a string variable. The copy is a value copy - reassigning the source
+// afterwards leaves the destination unchanged - and it allocates nothing, so it
+// cannot exhaust the concat heap. Covers empty strings, a copy inside a `when`
+// body, a copy in a `while` loop, and the numeric copy that already worked.
+//
+// This fixture deliberately avoids concat(): a concat program initialises its
+// literal temp slot in the data segment with an arch-specific absolute address,
+// so its data image is not cross-ISA identical, and this fixture is also used
+// for the cross-ISA data comparison. See docs/NATIVE32.md.
+hold a = "alpha"
+hold b = a
+show b
+show len(b)
+
+// A second copy of the same source is independent of the first.
+hold c = b
+show c
+
+// Reassigning the source must not change any copy.
+hold a = "beta"
+show a
+show b
+show c
+show len(c)
+
+// Empty strings copy as a length-0 value.
+hold z = ""
+hold zz = z
+show len(z)
+show len(zz)
+
+// The numeric copy path is unchanged.
+hold n = 7
+hold m = n
+show m
+
+// A copy inside a `when` body.
+when len(b) == 5 {
+  hold g = b
+  show g
+}
+
+// Assignment (not just `hold`) of a string value, inside a loop.
+hold last = ""
+hold i = 0
+while i < 3 {
+  last = b
+  i = i + 1
+}
+show last
+show len(last)

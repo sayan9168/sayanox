@@ -97,7 +97,7 @@ make xc_containers(d: str, arch: str) -> num {
       show "[SKIP] kernel cannot execute i386; deterministic containers and all byte assertions still run"
     }
   }
-  hold names = "expr\nflow\ntext\n"
+  hold names = "expr\nflow\ntext\nstrcopy\n"
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -123,6 +123,7 @@ make xc_containers(d: str, arch: str) -> num {
       hold expected = 4140
       when string_eq(name, "flow") == 1 { expected = 4172 }
       when string_eq(name, "text") == 1 { expected = 4185 }
+      when string_eq(name, "strcopy") == 1 { expected = 4209 }
       hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
       hold cdir = kp_join(d, name)
       hold oracle = xq_parity_unknown(source, cdir)
@@ -135,7 +136,7 @@ make xc_containers(d: str, arch: str) -> num {
       }
     }
   }
-  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 15)
+  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 18)
   hold literal_len_source = "selfhost/native32_tests/len_literals.sa"
   hold literal_len_file = kp_join(d, "len-literals.elf")
   hold literal_len_build = pg_command(xc_command(literal_len_source, literal_len_file, arch), "literal len compile")
