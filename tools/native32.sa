@@ -1523,6 +1523,7 @@ make run() -> num {
         extext = trim(sub(after, 1, len(after)))
         hold istext = 0
         hold isconcat_hold = 0
+        hold isalias_hold = 0
         when is_text_literal(extext) == 1 {
           istext = 1
         } otherwise {
@@ -1540,10 +1541,20 @@ make run() -> num {
           isconcat_hold = 1
           extext = ""
         }
+        // A bare name that is already a string variable copies the pair
+        // (pointer, length), so `hold b = a` aliases no storage: it is a value
+        // copy, and reassigning `a` afterwards leaves `b` unchanged.
+        when isalias_hold == 0 && istext == 0 && isconcat_hold == 0 && len(extext) > 0 {
+          when slot_of(strnames, extext) >= 0 {
+            isalias_hold = 1
+            callleft = extext
+            extext = ""
+          }
+        }
         slot = slot_of(names, nm)
         when slot < 0 {
           slot = len(data)
-          when istext == 1 || isconcat_hold == 1 {
+          when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 {
             data = put_zeros(data, 8)
             strnames = concat(strnames, concat(concat(concat("|", nm), "="), "1"))
             strnames = concat(strnames, "|")
@@ -1553,7 +1564,7 @@ make run() -> num {
           names = concat(names, concat(concat(concat("|", nm), "="), numstr(slot)))
           names = concat(names, "|")
         } otherwise {
-          when (slot_of(strnames, nm) >= 0 && istext == 0 && isconcat_hold == 0) || (slot_of(strnames, nm) < 0 && (istext == 1 || isconcat_hold == 1)) {
+          when (slot_of(strnames, nm) >= 0 && istext == 0 && isconcat_hold == 0 && isalias_hold == 0) || (slot_of(strnames, nm) < 0 && (istext == 1 || isconcat_hold == 1 || isalias_hold == 1)) {
             hold badtype = fail(1, concat(concat("line ", numstr(lineno)), ": a variable cannot change between numeric and string values"))
           }
         }
@@ -1565,7 +1576,11 @@ make run() -> num {
           when isconcat_hold == 1 {
             act = 10
           } otherwise {
-            act = 1
+            when isalias_hold == 1 {
+              act = 11
+            } otherwise {
+              act = 1
+            }
           }
         }
       }
@@ -1615,6 +1630,7 @@ make run() -> num {
           extext = trim(sub(tail, 1, len(tail)))
           hold assign_text = 0
           hold assign_concat = 0
+          hold assign_alias = 0
           when is_text_literal(extext) == 1 {
             assign_text = 1
           } otherwise {
@@ -1632,7 +1648,14 @@ make run() -> num {
             assign_concat = 1
             extext = ""
           }
-          when (slot_of(strnames, word) >= 0 && assign_text == 0 && assign_concat == 0) || (slot_of(strnames, word) < 0 && (assign_text == 1 || assign_concat == 1)) {
+          when assign_alias == 0 && assign_text == 0 && assign_concat == 0 && len(extext) > 0 {
+            when slot_of(strnames, extext) >= 0 {
+              assign_alias = 1
+              callleft = extext
+              extext = ""
+            }
+          }
+          when (slot_of(strnames, word) >= 0 && assign_text == 0 && assign_concat == 0 && assign_alias == 0) || (slot_of(strnames, word) < 0 && (assign_text == 1 || assign_concat == 1 || assign_alias == 1)) {
             hold badassign_type = fail(1, concat(concat("line ", numstr(lineno)), ": a variable cannot change between numeric and string values"))
           }
           when assign_text == 1 {
@@ -1643,7 +1666,11 @@ make run() -> num {
             when assign_concat == 1 {
               act = 10
             } otherwise {
-              act = 1
+              when assign_alias == 1 {
+                act = 12
+              } otherwise {
+                act = 1
+              }
             }
           }
         }
@@ -2113,6 +2140,34 @@ make run() -> num {
           code = a_movz(code, 1, 8, 64)
           code = e_w(code, 3556769793)
         }
+      }
+    }
+    when act == 11 || act == 12 {
+      // Copy the source string value: two 32-bit fields (pointer at +0, byte
+      // length at +4) through the accumulator, exactly like a literal or a
+      // concat result is stored. No heap is involved, so a copy cannot exhaust
+      // the concat budget and the two variables stay independent.
+      hold copysrc = slot_of(names, callleft)
+      hold off = 0
+      while off < 8 {
+        hold lsite_c = len(code)
+        when arch == 0 {
+          fixsite = push(fixsite, lsite_c + 1)
+        } otherwise {
+          fixsite = push(fixsite, lsite_c)
+        }
+        fixoff = push(fixoff, copysrc + off)
+        code = emit_load_global(code, arch)
+        code = emit_pop_acc(code, arch)
+        hold ssite_c = len(code)
+        when arch == 0 {
+          fixsite = push(fixsite, ssite_c + 1)
+        } otherwise {
+          fixsite = push(fixsite, ssite_c)
+        }
+        fixoff = push(fixoff, slot + off)
+        code = emit_store_global(code, arch)
+        off = off + 4
       }
     }
     when act == 10 {

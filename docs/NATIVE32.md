@@ -60,11 +60,23 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   nested/arbitrary string expressions are not concat operands, and
   embedded-NUL literals remain refused because the existing backends disagree
   on their output semantics.
+- **String-value copy** (2026-10-31): `hold b = a` and `b = a`, where `a` is an
+  already-declared string variable, copy the 8-byte `(pointer, length)` pair
+  through the accumulator. It is a value copy, not an alias: reassigning `a`
+  afterwards leaves `b` at its old bytes, an empty string copies as length 0,
+  and the copy allocates nothing, so it cannot consume the 60 KiB concat heap.
+  Both variables must already be string variables - a numeric source into a
+  string destination, or the reverse, is refused with "a variable cannot change
+  between numeric and string values", and an undeclared source is refused as an
+  unknown name. Arbitrary string expressions are still not sources: only a
+  literal, `concat(...)`, or another string variable.
 - `when`, `otherwise`, `while`, comments, and blank lines.
 
 Lists, structs, user functions, floating-point expressions, general file APIs,
 and garbage collection remain unsupported by this compiler. Other general
-string operations such as `chr` and `string_eq` are also not in this subset.
+string operations such as `chr` and `string_eq` are also not in this subset;
+`string_eq` is still unimplemented, so equality of two runtime string values
+cannot be tested in this dialect.
 Cross-type assignment and using a string as a numeric value are rejected. `/`
 and fractional literals are rejected because Sayanox numbers are doubles and
 this compiler does not yet implement floating-point expression semantics.
@@ -82,6 +94,16 @@ output, and literal output. The gate also checks out-of-range indexing and
 bounded-heap exhaustion on all runnable targets, retains integer parity, and
 exercises emulator safety negatives plus scalar FP and Linux syscall probes.
 The latter are emulator tests, not native compiler features.
+
+The `strcopy.sa` fixture covers the string-value copy on all six execution
+paths (seed-min, gen2, x86-64 native AOT, i386, AArch64, RV64), and its data
+segment is compared across the three ISA images. A known pre-existing limitation
+found while adding it: a program that *uses* `concat` initialises its literal
+temp slot in the data segment with an arch-specific absolute address, so that
+program's data image is not cross-ISA identical even though each image is
+correct for its own target. The copy fixture therefore avoids `concat`, and the
+cross-ISA data assertion covers programs without `concat`. Recorded as R14 in
+the [remaining-work register](REMAINING_WORK.md).
 
 The additional `len_literals.sa` fixture has an independent tracked byte-output
 oracle and runs through the same multi-backend execution comparisons. Each ISA

@@ -1,5 +1,68 @@
 # Status
 
+**2026-10-31 (third increment) — R02 first step: string-value copy in the multi-ISA emitter.**
+`tools/native32.sa` now compiles `hold b = a` and `b = a`, where `a` is a
+declared string variable, into a copy of the 8-byte `(pointer, length)` pair.
+That is a value copy, not an alias: reassigning `a` afterwards leaves `b` at its
+old bytes, an empty string copies as length 0, and nothing is allocated, so a
+copy cannot consume the 60 KiB concat heap. The new code is three
+arch-independent load/store pairs reusing `emit_load_global`/`emit_store_global`
+with the `+4` field offset, so there is no new instruction encoding per ISA.
+
+Refusals stay fail-closed: a numeric source into a string destination (and the
+reverse) now reports "a variable cannot change between numeric and string
+values" - previously a bare string name on the right of a numeric assignment was
+silently read as a number - and an undeclared source is still "unknown name".
+`string_eq`, `chr` and arbitrary string expressions remain unimplemented.
+
+Evidence: `selfhost/native32_tests/strcopy.sa` runs through six execution paths
+(seed-min, gen2, x86-64 native AOT, i386 ELF, AArch64 under `sxisaexec`, RV64
+under `sxisaexec`) and produces the same 13 lines everywhere; the three ISA
+images have identical data segments; `strcopy` is compared against reviewed
+AArch64/RV64IM goldens, and three new refusal fixtures raise the matrix to 18.
+Two negative controls confirm the gate is real: changing the recorded i386 image
+size (4209) makes `test-native32` fail with "reviewed i386 image size: got 4209,
+want 4236", and flipping one byte of `strcopy.arm64.elf` makes
+`test-native-arm64` fail with "reviewed machine-code golden".
+
+Gates on this tree, all exit 0:
+
+```
+./sx target test-native32          -> 0
+./sx target test-native-arm64      -> 0
+./sx target test-native-riscv64    -> 0
+./sx target test-sxisaexec         -> 0
+./sx target test-doc-claims        -> 0
+./sx target test-ci-shape          -> 0
+./sx target doctor                 -> 0
+./sx ci                            -> 0   (569 [OK], 0 [FAIL], TRUE-SELFHOST-FULL-V1-OK)
+```
+
+The first `./sx ci` attempt on this tree exited 1 at `test-sxbuild` with
+"sxbuild_gate/inv.out: pattern assertion: non-anchor .c/.h files: \*0". The cause
+was a leftover build artifact in the working tree, `selfhost/mini_out.c`
+(19061 B, written by an earlier ad-hoc compiler run in this sandbox, never
+tracked); deleting it and re-running the same target gave exit 0, and the full
+chain then printed `=== TRUE-SELFHOST-FULL-V1-OK ===` with exit 0. No gate,
+fixture or pin was changed to get there. The friction itself (a gitignored
+default output being counted as a stray C source) is registered as R15 with a
+fix sketch rather than patched in this increment, because it changes the driver
+and would need its own anchor rebuild and CI run.
+
+Found while adding the fixture, recorded as R14 and **not** fixed here: a
+program that uses `concat` initialises its literal temp slot in the data segment
+with an arch-specific absolute address (`134516736` on i386, `4198400`
+elsewhere), so such a program's data image is not cross-ISA identical even
+though each image is correct for its own target. The copy fixture therefore
+avoids `concat`, and the register states that the cross-ISA data assertion
+covers programs without it.
+
+Still open and unchanged: `string_eq`/`chr` and the rest of R02 (user functions,
+aggregates, FP lowering, file/runtime APIs, GC), precise GC (R04), language-level
+modules (R06), key distribution (R08), a syntax-aware formatter (R10), release
+publication (R12), and the externally blocked trust/hardware/Linguist items
+(R03/R09/R11).
+
 **2026-10-31 (second increment) — native CR escape fixed (R13), multi-change LSP notifications, JSON boundary oracle.**
 All three are source changes with gates that fail on the previous tree; no gate,
 fixture or pin was weakened.
