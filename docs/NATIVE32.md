@@ -80,13 +80,31 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   arguments are appended to the data segment and addressed through the per-arch
   load base, so the data image stays arch-neutral; nothing is allocated, so
   equality cannot consume the concat heap.
+- **`chr(X)`** (2026-11-01): a one-byte string from a numeric code, accepted
+  exactly where a whole string value is expected — `hold s = chr(X)`,
+  `s = chr(X)` and `show chr(X)` — with `X` an integer literal or a declared
+  numeric variable. The low byte is kept (`chr(300)` is byte 44, `chr(-1)`
+  through a variable is byte 255), which is what the C backend's
+  `(char)(long)v` does, and `chr(0)` is empty text with length 0, as the
+  published runtimes define it. Each source occurrence owns a 4-byte cell in the
+  data segment: the byte is written with a one-byte store, the following byte
+  stays a newline (the invariant `show` relies on for every string in this
+  backend), and the stored pointer is `cell + 1 - length`, so an empty `chr`
+  points at that newline and prints exactly one line break. Sites never share a
+  cell, so two live `chr` results are independent; nothing is allocated, so
+  `chr` cannot consume the concat heap, and the cells are zero-filled in the
+  image, which keeps the data segment arch-neutral.
 - `when`, `otherwise`, `while`, comments, and blank lines.
 
 Lists, structs, user functions, floating-point expressions, general file APIs,
-and garbage collection remain unsupported by this compiler. `chr` is still not
-in this subset, so a one-byte string cannot be built from a number, and
-`string_eq` arguments are limited to a variable or a literal rather than
-arbitrary string expressions.
+and garbage collection remain unsupported by this compiler. `chr` has no
+lowering *inside* another call or expression: `concat(chr(65), "x")`,
+`string_eq(chr(65), s)` and `len(chr(65))` are refused, and so is an argument
+that is more than an integer literal or a numeric variable (`chr(n + 1)`, a
+signed literal such as `chr(-1)`); `string_eq` arguments remain a variable or a
+literal rather than arbitrary string expressions. Holding the value first
+(`hold c = chr(65)`) makes all of those work through the ordinary string
+operations.
 Cross-type assignment and using a string as a numeric value are rejected. `/`
 and fractional literals are rejected because Sayanox numbers are doubles and
 this compiler does not yet implement floating-point expression semantics.
@@ -126,6 +144,15 @@ register) forms computed their result but never updated `N`/`Z`/`C`/`V`, so a
 now sets those flags; the six-way `streq` run fails on the previous emulator and
 passes on the fixed one, so the fix is pinned by the same fixture.
 
+The `chr.sa` fixture covers `chr` on the same six execution paths and in the
+same cross-ISA data comparison: literal and variable codes, an out-of-range code
+(300 becomes byte 44), a negative code built through a variable (byte 255),
+`chr(0)` as empty text, assignment into an existing string variable, `len`,
+byte indexing, copy and `string_eq` of a `chr` value, two live results that must
+not share a cell, and a `chr` built inside a loop. The independent oracle is the
+agreement between the seed-min, gen2, x86-64 native AOT, i386, AArch64 and RV64
+outputs, not the emitter's own expectation.
+
 The additional `len_literals.sa` fixture has an independent tracked byte-output
 oracle and runs through the same multi-backend execution comparisons. Each ISA
 gate also checks deterministic images and 16 malformed/type/unsupported literal
@@ -144,8 +171,15 @@ compiler slice, not a claim of complete language or ABI coverage.
 - Numeric and string globals are stored in the writable data segment, addressed
   using the backend's fixed image layout. String pointers fit in the low 4 GiB
   because both ELF64 targets use the fixed `0x400000` base.
-- The generated code must fit in the first mapped page (the backend diagnoses
-  overflow). Static strings and globals enlarge the data segment.
+- **Image layout (2026-11-01, second code page).** i386 maps two text pages at
+  `0x08048000` with the writable data segment at `0x0804A000`; AArch64/RV64IM map
+  two text pages at `0x400000` with data at `0x402000`. Generated code may use up
+  to `8192 - 116` bytes on i386 and `8192 - 176` on the 64-bit targets (the
+  backend diagnoses overflow), because the previous one-page ceiling was
+  completely consumed (the `streq` image ended exactly at `4096 - 116`). Static
+  strings and globals enlarge the data segment. `tools/sxisaexec.sa` therefore
+  maps `0x400000..0x424000` (36 pages) so the 60 KiB concat heap still fits above
+  the moved data segment.
 - The emulator supports only the exercised instruction subsets. It currently
   executes the native32 integer/string images, scalar IEEE-754 F/D arithmetic
   probes, and bounded Linux `openat`/`read`/`write`/`close`/`exit` calls. The

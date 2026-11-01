@@ -1,0 +1,57 @@
+// chr() for the multi-ISA emitter: `chr(X)` builds a one-byte string from a
+// numeric code, with X an integer literal or a numeric variable. The byte goes
+// into a per-occurrence cell in the data segment and the following byte stays a
+// newline, which is the invariant `show` relies on for every string value in
+// this backend. chr(0) is empty text, like the published runtimes: its length is
+// 0, so nothing but the newline is written. The cell is zero-filled in the
+// image, so this fixture is also used for the cross-ISA data comparison.
+hold s = chr(65)
+show s
+show len(s)
+
+// literal, variable and out-of-range codes: the low byte is what is kept, the
+// same rule the C backend uses with (char)(long)v
+show chr(66)
+hold code = 67
+show chr(code)
+hold big = 300
+show chr(big)
+hold neg = 0 - 1
+show chr(neg)
+
+// chr(0) is empty text
+hold nul = chr(0)
+show len(nul)
+show nul
+show chr(0)
+
+// assignment to an existing string variable
+hold e = "x"
+e = chr(90)
+show e
+show len(e)
+
+// a chr value is an ordinary string: len, copy, indexing and equality all work
+hold copyc = s
+show copyc
+show s[0]
+show string_eq(copyc, s) == 1
+
+// several live results must not share one byte
+hold first = chr(70)
+hold second = chr(71)
+show first
+show second
+
+// a chr value built inside a loop, and inside a `when` branch
+hold i = 0
+hold marks = 0
+while i < 3 {
+  hold m = chr(42)
+  show m
+  when len(m) == 1 {
+    marks = marks + 1
+  }
+  i = i + 1
+}
+show marks

@@ -1,0 +1,2 @@
+hold t = "ab"
+hold s = chr(t)

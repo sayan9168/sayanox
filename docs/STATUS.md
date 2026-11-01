@@ -1,5 +1,61 @@
 # Status
 
+**2026-11-01 (second increment) — R02 step 3: `chr(n)` in the multi-ISA emitter, and the second code page it needed.**
+
+`tools/native32.sa` now compiles `chr(X)` into a one-byte string in the three
+positions where a whole string value is expected: `hold s = chr(X)`, `s = chr(X)`
+and `show chr(X)`, with `X` an integer literal or a declared numeric variable.
+The low byte is kept, which is exactly the C backend's `(char)(long)v`
+(`chr(300)` is byte 44, a variable holding `-1` gives byte 255), and `chr(0)` is
+empty text with length 0, as the published runtimes define it. Each source
+occurrence owns a 4-byte cell in the data segment: the byte is written with a
+one-byte store so the newline after it survives — that newline is the invariant
+every `show` in this backend relies on — and the stored pointer is
+`cell + 1 - length`, so an empty `chr` points at that newline and prints exactly
+one line break instead of a NUL byte. Sites never share a cell, so two live
+`chr` results stay independent, nothing is allocated (so `chr` cannot consume
+the 60 KiB concat heap), and the cells are zero-filled in the image, which keeps
+the data segment arch-neutral.
+
+**The second code page is part of this step, not a tidy-up.** The previous
+increment had left the text segment *exactly* on its one-page ceiling: the
+`streq` image was `4096` bytes of header plus code, with zero bytes of headroom,
+so no further lowering could be emitted at all. The text segment is now two
+pages: data begins at `0x0804A000` on i386 and `0x402000` on AArch64/RV64IM, the
+code budget is `8192 - headers`, and `tools/sxisaexec.sa` maps
+`0x400000..0x424000` (36 pages) so the 60 KiB concat heap still fits above the
+moved data segment. Images grow by one page: `streq` 4270 -> 8366 bytes, `chr`
+8354 bytes, all three ISAs agreeing on size for each program.
+
+Evidence: `selfhost/native32_tests/chr.sa` (20 output lines) runs through the
+same six execution paths as the copy and equality fixtures (seed-min, gen2,
+x86-64 native AOT, i386, AArch64, RV64) with identical output — that agreement,
+not an emitter-side expectation, is the oracle. It covers literal and variable
+codes, the out-of-range and negative low-byte rule, `chr(0)`, assignment into an
+existing string variable, `len`, byte indexing, copy and `string_eq` of a `chr`
+value, two live results, and a `chr` inside a loop. Its data segment is
+byte-identical across the three images and both 64-bit images are pinned against
+reviewed goldens. The refusal matrix rises from 22 to 26: wrong arity, a string
+argument, an unknown name, and an argument that is neither an integer literal
+nor a numeric variable.
+
+Gates on this tree, all exit 0:
+
+```
+./sx target test-native32          -> 0
+./sx target test-native-arm64      -> 0
+./sx target test-native-riscv64    -> 0
+./sx target test-sxisaexec         -> 0   (6-way parity on chr)
+```
+
+Still open in R02: `chr` nested inside `concat`, `string_eq` or `len` (and a
+signed literal argument such as `chr(-1)`, which a variable works around), then
+string-valued expressions beyond literal/`concat`/copy/`chr`, bounded numeric
+user functions, aggregates, FP lowering, file/runtime APIs and GC. R14 (an
+arch-specific `concat` data image) and R15 remain open as recorded; the R14
+addresses quoted in the register moved by one page with this increment and are
+updated there.
+
 **2026-11-01 — R02 step 2: `string_eq` in the multi-ISA emitter, and a real AArch64 emulator fix.**
 
 `tools/native32.sa` now compiles `string_eq(A, B)`, where each argument is a declared

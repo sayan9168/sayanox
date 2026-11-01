@@ -283,6 +283,53 @@ make literal_body(s: str, which: num) -> str {
   give out
 }
 
+// ---- chr ---------------------------------------------------------------
+// `chr(X)` has no lowering yet in every position this backend knows; it is
+// accepted exactly where a whole string value is expected (`hold s = chr(X)`,
+// `s = chr(X)`, `show chr(X)`), and X is an integer literal or a numeric
+// variable. Anything else is refused rather than half-supported.
+make all_digits(s: str) -> num {
+  hold n = len(s)
+  when n == 0 { give 0 }
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c < 48 || c > 57 { give 0 }
+    i = i + 1
+  }
+  give 1
+}
+
+make is_bare_name(s: str) -> num {
+  hold n = len(s)
+  when n == 0 { give 0 }
+  hold i = 0
+  while i < n {
+    when is_name_char(sx_index(s, i)) == 0 { give 0 }
+    i = i + 1
+  }
+  give 1
+}
+
+// The argument text of a whole-value `chr(...)`, or "!" when the shape is not
+// exactly one parenthesised argument with nothing around or after it. A paren
+// or a comma inside is refused too, so `chr(a, b)` and nested calls cannot be
+// mistaken for a supported form.
+make chr_arg(s: str) -> str {
+  hold n = len(s)
+  when n < 6 || starts(s, "chr(") == 0 { give "!" }
+  when sx_index(s, n - 1) != 41 { give "!" }
+  hold inner = trim(sub(s, 4, n - 1))
+  when len(inner) == 0 { give "!" }
+  hold i = 0
+  while i < len(inner) {
+    hold c = sx_index(inner, i)
+    when c == 40 || c == 41 || c == 44 { give "!" }
+    i = i + 1
+  }
+  give inner
+}
+
 // Token integers must not go through numstr's general/scientific formatting.
 make literal_length_digits(value: num) -> str {
   when value == 0 { give "0" }
@@ -796,13 +843,13 @@ make elf32(code: list, data: list, entry_off: num, data_mem: num) -> list {
   img = put_u32(img, base)
   img = put_u32(img, base)
   img = put_u32(img, hdr + cn)
-  img = put_u32(img, hdr + cn)
+  img = put_u32(img, 8192)
   img = put_u32(img, 5)
   img = put_u32(img, 4096)
   img = put_u32(img, 1)
-  img = put_u32(img, 4096)
-  img = put_u32(img, base + 4096)
-  img = put_u32(img, base + 4096)
+  img = put_u32(img, 8192)
+  img = put_u32(img, base + 8192)
+  img = put_u32(img, base + 8192)
   img = put_u32(img, dn)
   img = put_u32(img, data_mem)
   img = put_u32(img, 6)
@@ -812,7 +859,7 @@ make elf32(code: list, data: list, entry_off: num, data_mem: num) -> list {
     img = push(img, code[i])
     i = i + 1
   }
-  img = put_zeros(img, 4096 - (hdr + cn))
+  img = put_zeros(img, 8192 - (hdr + cn))
   hold j = 0
   while j < dn {
     img = push(img, data[j])
@@ -1427,13 +1474,13 @@ make elf64_em(code: list, data: list, entry_off: num, em: num, data_mem: num) ->
   img = put_u64(img, base)
   img = put_u64(img, base)
   img = put_u64(img, hdr + cn)
-  img = put_u64(img, hdr + cn)
+  img = put_u64(img, 8192)
   img = put_u64(img, 4096)
   img = put_u32(img, 1)
   img = put_u32(img, 6)
-  img = put_u64(img, 4096)
-  img = put_u64(img, base + 4096)
-  img = put_u64(img, base + 4096)
+  img = put_u64(img, 8192)
+  img = put_u64(img, base + 8192)
+  img = put_u64(img, base + 8192)
   img = put_u64(img, dn)
   img = put_u64(img, data_mem)
   img = put_u64(img, 4096)
@@ -1442,7 +1489,7 @@ make elf64_em(code: list, data: list, entry_off: num, em: num, data_mem: num) ->
     img = push(img, code[i])
     i = i + 1
   }
-  img = put_zeros(img, 4096 - (hdr + cn))
+  img = put_zeros(img, 8192 - (hdr + cn))
   hold j = 0
   while j < dn {
     img = push(img, data[j])
@@ -1496,6 +1543,12 @@ make run() -> num {
   // string_eq: one shared comparison routine plus its call sites.
   hold eq_used = 0
   hold eq_calls = []
+  // chr: one 4-byte cell per source occurrence holds the byte, and `show
+  // chr(...)` reuses one hidden (pointer, length) slot. Both live in the data
+  // segment, so the data image stays arch-neutral.
+  hold chr_has = 0
+  hold chr_text = ""
+  hold chr_show_slot = 0 - 1
 
   // data 0..31 is the decimal buffer; byte 31 is the newline the routine
   // writes, so digits grow downwards from 30.
@@ -1723,6 +1776,15 @@ make run() -> num {
             hold badstringexpr = fail(1, concat(concat("line ", numstr(lineno)), ": only a string literal may initialize a native32 string value"))
           }
         }
+        hold ischr_hold = 0
+        when istext == 0 && len(extext) > 0 && starts(extext, "chr(") == 1 {
+          chr_text = chr_arg(extext)
+          when chr_text == "!" {
+            hold badchrshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
+          }
+          ischr_hold = 1
+          extext = ""
+        }
         when starts(extext, "concat(") == 1 {
           hold parts_hold = split_concat(extext)
           when sx_index(parts_hold, 0) == 33 {
@@ -1746,7 +1808,7 @@ make run() -> num {
         slot = slot_of(names, nm)
         when slot < 0 {
           slot = len(data)
-          when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 {
+          when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1 {
             data = put_zeros(data, 8)
             strnames = concat(strnames, concat(concat(concat("|", nm), "="), "1"))
             strnames = concat(strnames, "|")
@@ -1756,15 +1818,20 @@ make run() -> num {
           names = concat(names, concat(concat(concat("|", nm), "="), numstr(slot)))
           names = concat(names, "|")
         } otherwise {
-          when (slot_of(strnames, nm) >= 0 && istext == 0 && isconcat_hold == 0 && isalias_hold == 0) || (slot_of(strnames, nm) < 0 && (istext == 1 || isconcat_hold == 1 || isalias_hold == 1)) {
+          when (slot_of(strnames, nm) >= 0 && istext == 0 && isconcat_hold == 0 && isalias_hold == 0 && ischr_hold == 0) || (slot_of(strnames, nm) < 0 && (istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1)) {
             hold badtype = fail(1, concat(concat("line ", numstr(lineno)), ": a variable cannot change between numeric and string values"))
           }
         }
-        when istext == 1 {
+        when ischr_hold == 1 {
+          chr_has = 1
+          act = 13
+        }
+        when act == 0 && istext == 1 {
           lit = sub(extext, 1, len(extext) - 1)
           extext = ""
           act = 4
-        } otherwise {
+        }
+        when act == 0 && istext == 0 && ischr_hold == 0 {
           when isconcat_hold == 1 {
             act = 10
           } otherwise {
@@ -1788,13 +1855,28 @@ make run() -> num {
           lit = sub(shown, 1, len(shown) - 1)
           act = 3
         } otherwise {
+          when starts(shown, "chr(") == 1 {
+            chr_text = chr_arg(shown)
+            when chr_text == "!" {
+              hold badchrcshowshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
+            }
+            when chr_show_slot < 0 {
+              chr_show_slot = len(data)
+              data = put_zeros(data, 8)
+            }
+            chr_has = 1
+            slot = chr_show_slot
+            act = 9
+          }
           hold shown_slot = slot_of(names, shown)
-          when shown_slot >= 0 && slot_of(strnames, shown) >= 0 {
+          when act == 0 && shown_slot >= 0 && slot_of(strnames, shown) >= 0 {
             slot = shown_slot
             act = 9
           } otherwise {
-            extext = shown
-            act = 2
+            when act == 0 {
+              extext = shown
+              act = 2
+            }
           }
         }
       }
@@ -1830,7 +1912,16 @@ make run() -> num {
               hold badstrassign = fail(1, concat(concat("line ", numstr(lineno)), ": only a string literal may be assigned to a native32 string value"))
             }
           }
-          when starts(extext, "concat(") == 1 {
+          hold assign_chr = 0
+          when assign_text == 0 && len(extext) > 0 && starts(extext, "chr(") == 1 {
+            chr_text = chr_arg(extext)
+            when chr_text == "!" {
+              hold badchrassignshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
+            }
+            assign_chr = 1
+            extext = ""
+          }
+          when assign_chr == 0 && starts(extext, "concat(") == 1 {
             hold parts_assign = split_concat(extext)
             when sx_index(parts_assign, 0) == 33 {
               hold badconcatassign = fail(1, concat(concat("line ", numstr(lineno)), concat(": ", sub(parts_assign, 1, len(parts_assign)))))
@@ -1847,14 +1938,19 @@ make run() -> num {
               extext = ""
             }
           }
-          when (slot_of(strnames, word) >= 0 && assign_text == 0 && assign_concat == 0 && assign_alias == 0) || (slot_of(strnames, word) < 0 && (assign_text == 1 || assign_concat == 1 || assign_alias == 1)) {
+          when (slot_of(strnames, word) >= 0 && assign_text == 0 && assign_concat == 0 && assign_alias == 0 && assign_chr == 0) || (slot_of(strnames, word) < 0 && (assign_text == 1 || assign_concat == 1 || assign_alias == 1 || assign_chr == 1)) {
             hold badassign_type = fail(1, concat(concat("line ", numstr(lineno)), ": a variable cannot change between numeric and string values"))
           }
-          when assign_text == 1 {
+          when assign_chr == 1 {
+            chr_has = 1
+            act = 13
+          }
+          when act == 0 && assign_text == 1 {
             lit = sub(extext, 1, len(extext) - 1)
             extext = ""
             act = 4
-          } otherwise {
+          }
+          when act == 0 && assign_text == 0 && assign_chr == 0 {
             when assign_concat == 1 {
               act = 10
             } otherwise {
@@ -1914,9 +2010,9 @@ make run() -> num {
           when streq_shape == 0 {
             hold bad_streq_shape = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects exactly two string variables or string literals"))
           }
-          hold eq_base = 4198400
+          hold eq_base = 4202496
           when arch == 0 {
-            eq_base = 134516736
+            eq_base = 134520832
           }
           hold eq_arg = 0
           hold eq_lit_index = 0
@@ -2278,7 +2374,153 @@ make run() -> num {
       code = emit_pop_acc(code, arch)
     }
 
+    // ---- chr: byte, length, pointer into the target's (pointer, length) slot ----
+    // A per-occurrence 4-byte cell in the data segment holds the byte, because
+    // the only store this backend emits is 32 bits wide; only the low byte is
+    // ever read. `chr(0)` is empty text, as in the published runtimes: the byte
+    // cell stays zero and the length is 0, so nothing is read back.
+    when chr_has == 1 {
+      hold chr_kind = 0
+      hold chr_value = 0
+      hold chr_src = 0
+      when all_digits(chr_text) == 1 {
+        chr_value = tok_num(concat("n", chr_text))
+        when chr_value > 2147483647 {
+          hold chrtoobig = fail(1, concat(concat("line ", numstr(lineno)), ": an integer literal of 2^31 or more"))
+        }
+      } otherwise {
+        when is_bare_name(chr_text) == 0 {
+          hold chrcompound = fail(1, concat(concat("line ", numstr(lineno)), ": chr accepts an integer literal or a numeric variable in native32"))
+        }
+        hold chr_src_slot = slot_of(names, chr_text)
+        when chr_src_slot < 0 {
+          hold chrunknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(chr_text, "' in chr")))
+        }
+        when slot_of(strnames, chr_text) >= 0 {
+          hold chrstr = fail(1, concat(concat("line ", numstr(lineno)), ": chr needs a numeric value, not a string"))
+        }
+        chr_src = chr_src_slot
+        chr_kind = 1
+      }
+      // The cell is [byte][newline][0][0]: the byte is written with a
+      // one-byte store, so the newline the `show` path expects right after a
+      // string's bytes survives. `chr(0)` keeps a zero byte and length 0, so
+      // `show` prints the newline alone - the same bytes every other backend
+      // writes for empty text.
+      hold chr_cell = len(data)
+      data = push(data, 0)
+      data = push(data, 10)
+      data = push(data, 0)
+      data = push(data, 0)
+      when chr_kind == 0 {
+        code = emit_push_imm2(code, arch, chr_value)
+        code = emit_pop_acc(code, arch)
+      } otherwise {
+        hold csrc_at = len(code)
+        when arch == 0 {
+          fixsite = push(fixsite, csrc_at + 1)
+        } otherwise {
+          fixsite = push(fixsite, csrc_at)
+        }
+        fixoff = push(fixoff, chr_src)
+        code = emit_load_global(code, arch)
+        code = emit_pop_acc(code, arch)
+      }
+      // The low byte, exactly what (char)(long)v keeps in the C backend.
+      when arch == 0 {
+        code = e1(code, 37)
+        code = e32(code, 255)
+      }
+      when arch == 2 {
+        code = e_w(code, rv_i(255, 10, 7, 10, 19))
+      }
+      when arch == 1 {
+        // and w0, w0, w1 with w1 = 255 (logical shifted register, LSL #0)
+        code = a_movz(code, 0, 1, 255)
+        code = e_w(code, 167837696)
+      }
+      // one-byte store into the cell
+      hold cbyte_at = len(code)
+      when arch == 0 {
+        fixsite = push(fixsite, cbyte_at + 1)
+        code = e1(code, 162)
+        code = e32(code, 0)
+      }
+      when arch == 2 {
+        fixsite = push(fixsite, cbyte_at)
+        code = rv_li32(code, 5, 0)
+        code = e_w(code, rv_s(0, 10, 5, 0))
+      }
+      when arch == 1 {
+        fixsite = push(fixsite, cbyte_at)
+        code = a_addr(code, 9)
+        code = e_w(code, 956301600)
+      }
+      fixoff = push(fixoff, chr_cell)
+      // length = 1 for a nonzero byte, 0 for a NUL (empty text)
+      when arch == 0 {
+        code = e1(code, 133)
+        code = e1(code, 192)
+        code = e1(code, 15)
+        code = e1(code, 149)
+        code = e1(code, 192)
+        code = e1(code, 15)
+        code = e1(code, 182)
+        code = e1(code, 192)
+      }
+      when arch == 2 {
+        code = e_w(code, rv_r(0, 10, 0, 3, 10, 51))
+      }
+      when arch == 1 {
+        // udiv w0, w0, w0: 1 for a nonzero byte, and AArch64 defines division
+        // by zero as 0, so the byte's own zero case yields length 0 with no
+        // flag dependency at all.
+        code = e_w(code, 448792576)
+      }
+      hold clen_at = len(code)
+      when arch == 0 {
+        fixsite = push(fixsite, clen_at + 1)
+      } otherwise {
+        fixsite = push(fixsite, clen_at)
+      }
+      fixoff = push(fixoff, slot + 4)
+      code = emit_store_global(code, arch)
+      hold chr_base = 4202496
+      when arch == 0 {
+        chr_base = 134520832
+      }
+      // ptr = (cell + 1) - len: an empty chr must point at the newline that
+      // follows the byte, because `show` writes len+1 bytes.
+      when arch == 0 {
+        code = e1(code, 247)
+        code = e1(code, 216)
+        code = e1(code, 5)
+        code = e32(code, chr_base + chr_cell + 1)
+      }
+      when arch == 2 {
+        code = rv_li32(code, 6, chr_base + chr_cell + 1)
+        code = e_w(code, rv_r(32, 10, 6, 0, 10, 51))
+      }
+      when arch == 1 {
+        hold cptr_addr_at = len(code)
+        fixsite = push(fixsite, cptr_addr_at)
+        fixoff = push(fixoff, chr_cell + 1)
+        code = a_addr(code, 1)
+        code = e_w(code, 1258291232)
+      }
+      hold cptr_at = len(code)
+      when arch == 0 {
+        fixsite = push(fixsite, cptr_at + 1)
+      } otherwise {
+        fixsite = push(fixsite, cptr_at)
+      }
+      fixoff = push(fixoff, slot)
+      code = emit_store_global(code, arch)
+      chr_has = 0
+    }
+
     // ---- the action ----
+    // act 13: the statement was fully emitted by the chr block above.
     when act == 1 {
       hold sat = len(code)
       when arch == 0 {
@@ -2339,9 +2581,9 @@ make run() -> num {
       when lbytes2 > 65535 {
         hold bigvalue = fail(1, concat(concat("line ", numstr(lineno)), ": a string value of 64 KiB or more"))
       }
-      hold strbase = 4198400
+      hold strbase = 4202496
       when arch == 0 {
-        strbase = 134516736
+        strbase = 134520832
       }
       code = emit_push_imm2(code, arch, strbase + litoff2)
       code = emit_pop_acc(code, arch)
@@ -2456,9 +2698,9 @@ make run() -> num {
         hold leftlitoff = len(data)
         data = append_text(data, sub(callleft, 1, len(callleft) - 1))
         hold leftlitlen = len(data) - leftlitoff
-        hold literal_base = 4198400
+        hold literal_base = 4202496
         when arch == 0 {
-          literal_base = 134516736
+          literal_base = 134520832
         }
         data = set_u32(data, leftslot, literal_base + leftlitoff)
         data = set_u32(data, leftslot + 4, leftlitlen)
@@ -2469,9 +2711,9 @@ make run() -> num {
         hold rightlitoff = len(data)
         data = append_text(data, sub(callright, 1, len(callright) - 1))
         hold rightlitlen = len(data) - rightlitoff
-        hold literal_base2 = 4198400
+        hold literal_base2 = 4202496
         when arch == 0 {
-          literal_base2 = 134516736
+          literal_base2 = 134520832
         }
         data = set_u32(data, rightslot, literal_base2 + rightlitoff)
         data = set_u32(data, rightslot + 4, rightlitlen)
@@ -2527,7 +2769,7 @@ make run() -> num {
         code = e1(code, 64)
         // Refuse a concat that would cross the mapped 60 KiB heap.
         code = e1(code, 61)
-        hold i386_heap_end = 134516736 + heap_end_off
+        hold i386_heap_end = 134520832 + heap_end_off
         code = e32(code, i386_heap_end)
         code = e1(code, 15)
         code = e1(code, 134)
@@ -2689,7 +2931,7 @@ make run() -> num {
           code = e_w(code, rv_r(0, 31, 30, 0, 20, 51))
           code = e_w(code, rv_i(1, 20, 0, 20, 19))
           code = e_w(code, rv_i(1, 20, 0, 20, 19))
-          code = rv_li32(code, 21, 4198400 + heap_end_off)
+          code = rv_li32(code, 21, 4202496 + heap_end_off)
           code = e_w(code, rv_r(0, 20, 21, 3, 22, 51))
           hold r_good_site = len(code)
           code = e_w(code, rv_b_word(0, 0, 22, 0))
@@ -2818,10 +3060,10 @@ make run() -> num {
 
   hold cn = len(code)
   hold hdrsz = 116
-  hold dva = 134512640 + 4096
+  hold dva = 134512640 + 8192
   when arch != 0 {
     hdrsz = 176
-    dva = 4194304 + 4096
+    dva = 4194304 + 8192
   }
   hold data_mem = len(data)
   when heap_on == 1 {
@@ -2831,8 +3073,8 @@ make run() -> num {
     data = patch32(data, heap_cursor_slot, dva + 65536)
     data_mem = 126976
   }
-  when cn + hdrsz > 4096 {
-    hold toolarge = fail(1, concat(concat("the emitted code is ", numstr(cn)), " bytes; a v1 image keeps code in the first page"))
+  when cn + hdrsz > 8192 {
+    hold toolarge = fail(1, concat(concat("the emitted code is ", numstr(cn)), " bytes; a v1 image keeps code in two pages"))
   }
 
   // absolute data addresses, now that the code length is known
