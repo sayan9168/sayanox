@@ -26,8 +26,8 @@ make xc_data(a: str, b: str) -> num {
   hold bb = []
   hold na = read_bytes(a, aa)
   hold nb = read_bytes(b, bb)
-  when na <= 4096 || na != nb { give gl_fail("cross-ISA data segment sizes disagree") }
-  hold i = 4096
+  when na <= 8192 || na != nb { give gl_fail("cross-ISA data segment sizes disagree") }
+  hold i = 8192
   while i < na {
     when aa[i] != bb[i] { give gl_fail("cross-ISA data bytes disagree") }
     i = i + 1
@@ -77,7 +77,7 @@ make xc_header(file: str, arch: str) -> num {
   hold ph = xc_int(file, 56, 2, 2)
   hold ep = xc_int(file, 24, 8, entry)
   hold text = xc_int(file, 80, 8, 4194304)
-  hold data = xc_int(file, 136, 8, 4198400)
+  hold data = xc_int(file, 136, 8, 4202496)
   hold instruction = xc_hex(file, 176, first)
   hold bytes = []
   hold size = read_bytes(file, bytes)
@@ -97,7 +97,7 @@ make xc_containers(d: str, arch: str) -> num {
       show "[SKIP] kernel cannot execute i386; deterministic containers and all byte assertions still run"
     }
   }
-  hold names = "expr\nflow\ntext\nstrcopy\nstreq\n"
+  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nchr\n"
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -120,11 +120,12 @@ make xc_containers(d: str, arch: str) -> num {
         data = xc_data(file, kp_join(d, "arm64.elf"))
       }
     } otherwise {
-      hold expected = 4140
-      when string_eq(name, "flow") == 1 { expected = 4172 }
-      when string_eq(name, "text") == 1 { expected = 4185 }
-      when string_eq(name, "strcopy") == 1 { expected = 4209 }
-      when string_eq(name, "streq") == 1 { expected = 4270 }
+      hold expected = 8236
+      when string_eq(name, "flow") == 1 { expected = 8268 }
+      when string_eq(name, "text") == 1 { expected = 8281 }
+      when string_eq(name, "strcopy") == 1 { expected = 8305 }
+      when string_eq(name, "streq") == 1 { expected = 8366 }
+      when string_eq(name, "chr") == 1 { expected = 8354 }
       hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
       hold cdir = kp_join(d, name)
       hold oracle = xq_parity_unknown(source, cdir)
@@ -137,7 +138,7 @@ make xc_containers(d: str, arch: str) -> num {
       }
     }
   }
-  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 22)
+  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 26)
   hold literal_len_source = "selfhost/native32_tests/len_literals.sa"
   hold literal_len_file = kp_join(d, "len-literals.elf")
   hold literal_len_build = pg_command(xc_command(literal_len_source, literal_len_file, arch), "literal len compile")

@@ -342,8 +342,8 @@ make rd_u64_lo(bs: list, off: num) -> num {
 }
 
 // ---- Virtual Memory Model -------------------------------------------------
-// Image window: [0x400000 .. 0x420000) (131,072 bytes; 32 pages of 4096 B)
-//   page_perm[0..31]: bit 1 = R, bit 2 = W, bit 4 = X (matches ELF PF_X=1, PF_W=2, PF_R=4)
+// Image window: [0x400000 .. 0x424000) (147,456 bytes; 36 pages of 4096 B)
+//   page_perm[0..35]: bit 1 = R, bit 2 = W, bit 4 = X (matches ELF PF_X=1, PF_W=2, PF_R=4)
 // Stack window: [0x7FFF0000 .. 0x80000000) (65,536 bytes, RW)
 
 make mem_check(page_perm: list, addr: num, size: num, req_pf: num) -> num {
@@ -354,8 +354,8 @@ make mem_check(page_perm: list, addr: num, size: num, req_pf: num) -> num {
     give 0
   }
   hold last = addr + size - 1
-  // Image window: 4194304 .. 4325375
-  when addr >= 4194304 && last < 4325376 {
+  // Image window: 4194304 .. 4341759
+  when addr >= 4194304 && last < 4341760 {
     hold p0 = shr(addr - 4194304, 12)
     hold p1 = shr(last - 4194304, 12)
     hold p = p0
@@ -2037,16 +2037,16 @@ make main_isa() -> num {
     hold fph = fail_isa(1, "malformed ELF64 program header table")
   }
 
-  // Allocate 128 KiB image memory + 32 page permission entries + 64 KiB stack
+  // Allocate 144 KiB image memory + 36 page permission entries + 64 KiB stack
   hold img_mem = []
   hold mi = 0
-  while mi < 131072 {
+  while mi < 147456 {
     img_mem = push(img_mem, 0)
     mi = mi + 1
   }
   hold page_perm = []
   hold pi = 0
-  while pi < 32 {
+  while pi < 36 {
     page_perm = push(page_perm, 0)
     pi = pi + 1
   }
@@ -2074,8 +2074,8 @@ make main_isa() -> num {
       when pmemsz < pfilesz || poff + pfilesz > nbytes {
         hold fseg = fail_isa(1, "PT_LOAD segment exceeds ELF file bounds")
       }
-      when pvaddr < 4194304 || pvaddr + pmemsz > 4325376 {
-        hold fva = fail_isa(1, "PT_LOAD virtual address outside user image window 0x400000..0x420000")
+      when pvaddr < 4194304 || pvaddr + pmemsz > 4341760 {
+        hold fva = fail_isa(1, "PT_LOAD virtual address outside user image window 0x400000..0x424000")
       }
       when pmemsz > 0 {
         hold pg0 = shr(pvaddr - 4194304, 12)
