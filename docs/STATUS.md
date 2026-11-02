@@ -106,10 +106,14 @@ compiler run made the inventory report stray C files (reproduced: creating the
 six files moved the count `0 -> 6`). They are now named in
 `is_known_selfhost_c`, next to a comment that ties the list to the
 `selfhost/*.c` entries in `.gitignore`. The `test-sxbuild` gate stopped being a
-clean-tree tautology: it creates all six defaults and asserts the count stays
-`0`, then creates a genuine `selfhost/stray_untracked.c` and asserts the count
-is `1` — so the fix cannot be a blanket "ignore everything in selfhost" — then
-removes all seven. The pre-fix compiler fails that gate.
+clean-tree tautology: it measures the non-anchor count, creates all six
+defaults and asserts the count is unchanged, then creates a genuine
+`selfhost/stray_untracked.c` and asserts the count rose by exactly one — so the
+fix cannot be a blanket "ignore everything in selfhost" — then removes all
+seven and restores the starting state. Both assertions are relative to the tree
+they run in, because a gate that runs after another step has left generated C
+files behind must still work; an absolute "count is 0" assertion failed exactly
+that way in CI. The pre-fix compiler fails the first of the two (delta +6).
 
 Gates on this tree, all exit 0 (the pre-existing goldens were regenerated: the
 entry prologue and the 4-byte cursor slot shift every image by 4 bytes of data):
