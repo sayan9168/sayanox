@@ -1,5 +1,37 @@
 # Status
 
+**2026-11-02 (sixth increment) — R02 step 6: `chr` of an integer
+expression.**
+
+`chr(X)` accepted an integer literal or a bare numeric variable. `X` may now be
+any integer expression this subset compiles: `chr(n + 1)`, `chr(n * 16 + 1)`,
+`chr((n + 60) + 1)`, `chr(len(s) + 62)`. A literal or bare name keeps the direct
+lowering unchanged; for an expression the emitter compiles it first (the value
+is left in the accumulator), parks it in a shared 4-byte scratch word, and reads
+it back through the numeric-slot path, so the per-occurrence `chr` cell keeps
+the `[byte][newline][0][0]` layout that `show` relies on. `chr_arg` now scans its
+argument with parenthesis nesting, so `chr((n + 1) * 2)` parses while a
+top-level comma is still the arity diagnostic.
+
+Still refused, and now covered by fixtures: `chr` of an expression inside
+`concat`, `string_eq` and `len` (those calls parse their arguments by token
+count, so an expression-shaped `chr` argument needs its own lowering — that is
+the next step, not a silent widening), a string variable in the `chr`
+expression, an unknown name, and `chr(n, 1)`.
+
+Fixture `selfhost/native32_tests/chr_expr.sa` (9 output lines) runs on all six
+execution paths with reviewed AArch64/RV64IM goldens and the cross-ISA data
+comparison; i386 image 8313 bytes. The refusal matrix moves from 36 to 39:
+`refuse/chr_expression.sa` is deleted because `chr(n + 1)` is now a legal
+program, and four refusals are added.
+
+```
+./sx target test-native32        -> 0
+./sx target test-native-arm64    -> 0
+./sx target test-native-riscv64  -> 0
+./sx target test-sxisaexec       -> 0
+```
+
 **2026-11-02 (fifth increment) — R02 step 5: general string-valued
 expressions.**
 

@@ -1,0 +1,3 @@
+hold n = 1
+hold f = string_eq(chr(n + 64), "A")
+show f

@@ -329,12 +329,24 @@ make chr_arg(s: str) -> str {
   when sx_index(s, n - 1) != 41 { give "!" }
   hold inner = trim(sub(s, 4, n - 1))
   when len(inner) == 0 { give "!" }
+  // The argument may be a whole integer expression, so parentheses nest; a
+  // comma at depth 0 would be a second argument, which is refused here so the
+  // arity diagnostic stays the one the other positions use.
+  hold depth = 0
   hold i = 0
   while i < len(inner) {
     hold c = sx_index(inner, i)
-    when c == 40 || c == 41 || c == 44 { give "!" }
+    when c == 40 {
+      depth = depth + 1
+    }
+    when c == 41 {
+      when depth == 0 { give "!" }
+      depth = depth - 1
+    }
+    when c == 44 && depth == 0 { give "!" }
     i = i + 1
   }
+  when depth != 0 { give "!" }
   give inner
 }
 
@@ -390,6 +402,11 @@ hold strnames = ""
 hold heap_on = 0
 hold heap_cursor_slot = 0 - 1
 hold concat_show_slot = 0 - 1
+// `chr(<integer expression>)`: the expression leaves its value in the
+// accumulator (the whole-value paths below park it in the per-occurrence cell),
+// so a literal or a bare numeric name keeps the older direct lowering.
+hold chr_acc = 0
+hold chr_acc_slot = 0 - 1
 hold arch = 0
 hold lineno = 0
 
@@ -2450,6 +2467,11 @@ make run() -> num {
           }
           ischr_hold = 1
           extext = ""
+          when is_bare_name(chr_text) == 0 && is_text_literal(chr_text) == 0 {
+            chr_acc = 1
+            extext = chr_text
+            chr_text = ""
+          }
         }
         when starts(extext, "concat(") == 1 {
           hold parts_hold = split_concat(extext)
@@ -2526,6 +2548,11 @@ make run() -> num {
             when chr_text == "!" {
               hold badchrcshowshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
             }
+            when is_bare_name(chr_text) == 0 && is_text_literal(chr_text) == 0 {
+              chr_acc = 1
+              extext = chr_text
+              chr_text = ""
+            }
             when chr_show_slot < 0 {
               chr_show_slot = len(data)
               data = put_zeros(data, 8)
@@ -2596,6 +2623,11 @@ make run() -> num {
             chr_text = chr_arg(extext)
             when chr_text == "!" {
               hold badchrassignshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
+            }
+            when is_bare_name(chr_text) == 0 && is_text_literal(chr_text) == 0 {
+              chr_acc = 1
+              extext = chr_text
+              chr_text = ""
             }
             assign_chr = 1
             extext = ""
@@ -3147,19 +3179,43 @@ make run() -> num {
     // ever read. `chr(0)` is empty text, as in the published runtimes: the byte
     // cell stays zero and the length is 0, so nothing is read back.
     when chr_has == 1 {
-      hold chr_kind = chr_kind_of(chr_text, names, strnames, lineno)
-      hold chr_value = 0
-      hold chr_src = 0
-      when chr_kind == 0 {
-        chr_value = tok_num(concat("n", chr_text))
-      } otherwise {
-        chr_src = slot_of(names, chr_text)
-      }
       hold chr_cell = len(data)
       data = push(data, 0)
       data = push(data, 10)
       data = push(data, 0)
       data = push(data, 0)
+      hold chr_kind = 0
+      hold chr_value = 0
+      hold chr_src = 0
+      when chr_acc == 1 {
+        // chr(<integer expression>): the expression block above already left the
+        // value in the accumulator. Park it in a shared 4-byte scratch word and
+        // read it back through the numeric-slot path; the per-occurrence byte
+        // cell must keep its `[byte][newline][0][0]` layout, so the value cannot
+        // be stored there with the 32-bit store this backend has.
+        when chr_acc_slot < 0 {
+          chr_acc_slot = len(data)
+          data = put_zeros(data, 4)
+        }
+        hold chr_store_site = len(code)
+        when arch == 0 {
+          fixsite = push(fixsite, chr_store_site + 1)
+        } otherwise {
+          fixsite = push(fixsite, chr_store_site)
+        }
+        fixoff = push(fixoff, chr_acc_slot)
+        code = emit_store_global(code, arch)
+        chr_kind = 1
+        chr_src = chr_acc_slot
+        chr_acc = 0
+      } otherwise {
+        chr_kind = chr_kind_of(chr_text, names, strnames, lineno)
+        when chr_kind == 0 {
+          chr_value = tok_num(concat("n", chr_text))
+        } otherwise {
+          chr_src = slot_of(names, chr_text)
+        }
+      }
       code = emit_chr_value(code, arch, chr_spec(chr_kind, chr_value, chr_src), chr_cell, slot)
       chr_has = 0
     }

@@ -1,0 +1,19 @@
+// chr of a general integer expression: the expression is compiled first and its
+// value parked in a shared 4-byte scratch word, then read back through the same
+// numeric-slot path a bare `chr(n)` uses. Literals and bare names keep the
+// direct lowering, so their images are unchanged.
+hold n = 4
+show chr(n + 61)
+show chr(n * 16 + 1)
+show chr((n + 60) + 1)
+hold s = "abc"
+show chr(len(s) + 62)
+show chr(65 + 0)
+hold e = chr(n + 62)
+show e
+hold m = 1
+m = m + 1
+show chr(m + 64)
+hold z = chr(n - 4)
+show z
+show "done"

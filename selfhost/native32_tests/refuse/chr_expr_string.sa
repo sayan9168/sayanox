@@ -1,0 +1,2 @@
+hold s = "x"
+show chr(s + 1)

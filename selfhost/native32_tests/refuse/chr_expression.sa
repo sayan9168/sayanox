@@ -1,2 +1,0 @@
-hold n = 5
-hold s = chr(n + 1)
