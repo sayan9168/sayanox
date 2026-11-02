@@ -1,5 +1,65 @@
 # Status
 
+**2026-11-02 (seventh increment) — R02 step 7: `chr(<expression>)` in every
+position `chr` is accepted in.**
+
+Up to now an expression was only accepted in the three whole-value positions:
+`hold s = chr(n + 1)`, `s = chr(n + 1)`, `show chr(n + 1)`. The calls that scan
+their arguments as tokens — `concat`, `string_eq`, `len` — still required a
+single-token argument, so `concat(chr(n + 1), "x")` and
+`string_eq(chr(n + 61), "A")` were refusals.
+
+The cause was structural: the integer expression emitter lived inside the
+statement loop, so an argument position had no way to compile a sub-expression.
+It is now one function (`emit_expression(extext) -> num`), and the new
+`emit_chr_expr_slot` compiles a `chr` argument through it, parks the value in
+the shared `chr_acc_slot` word and returns that slot to the lowering the
+one-token form already used. `string_eq` and `len(chr(...))` locate the `chr`
+call's closing parenthesis with the new parenthesis-matching `paren_close`
+(instead of assuming `k + 5`), render the inner tokens back into source with
+`tok_range_text`, and hand them to the emitter. A one-token argument keeps the
+old direct lowering, so **no reviewed machine-code golden changed** — the only
+image that moved is the fixture that gained the new lines.
+
+Now accepted: `concat(chr(n + 1), "x")`, `concat("-", chr(n * 16 + 1))`,
+`string_eq(chr(n + 61), "A")`, `string_eq("A", chr(n + 61))`,
+`string_eq(chr(n + 61), chr(n + 62))`, `len(chr(n + 61))`, `len(chr(n - 4))`.
+Still refused and still fixture-covered: `chr` of a string variable, `chr` of an
+unknown name, `chr(n, 1)`, division inside the `chr` argument, and `concat` as
+an operand of another expression.
+
+The refusal matrix moves 39 -> 40: `refuse/chr_nested_expression.sa` and
+`refuse/chr_expr_streq.sa` are deleted because those programs are legal now, and
+three are added (`chr_expr_string_arg.sa`, `chr_expr_len_unknown.sa`,
+`chr_expr_div.sa` — one per newly generalised call site).
+`selfhost/native32_tests/chr_expr.sa` grows from 9 to 18 output lines and pins
+i386 8515 bytes, with regenerated AArch64/RV64IM goldens; the two new lines cover
+a nested call and explicit grouping inside the `chr` argument
+(`string_eq(chr(len(s) + 62), "A")`, `concat(chr((n + 1) * 16 + 1), "!")`).
+
+One defect was found by that test and fixed before the gate run: the first
+version of `tok_range_text` stripped one character from *every* token, so a
+parenthesis token lost itself and `chr(len(s) + 62)` rendered as `lens+62`
+("unknown name 'lens'"). Parentheses are now copied whole; the fixture above
+pins the case.
+
+```
+./sx target test-native32        -> 0
+./sx target test-native-arm64    -> 0
+./sx target test-native-riscv64  -> 0
+./sx target test-sxisaexec       -> 0
+```
+
+Complete guarded CI on this tree: `./sx ci` exit 0, **570 `[OK]`, 0 `[FAIL]`**
+(including `test-native32`, `test-native-arm64`, `test-native-riscv64`,
+`test-sxisaexec`, `test-driver`, `test-doc-claims` and the published-language v1
+acceptance chain, ending in `=== TRUE-SELFHOST-FULL-V1-OK ===`).
+
+Two negative controls confirm the new assertions are real: changing the pinned
+i386 size to 8516 fails with `[FAIL] reviewed i386 image size: got 8515, want
+8516`, and changing the expected refusal count to 41 fails with `[FAIL]
+complete backend refusal matrix: got 40, want 41`.
+
 **2026-11-02 (sixth increment) — R02 step 6: `chr` of an integer
 expression.**
 

@@ -16,4 +16,25 @@ m = m + 1
 show chr(m + 64)
 hold z = chr(n - 4)
 show z
+// the same expression form as an argument of the calls that take strings
+hold c1 = concat(chr(n + 61), "-")
+show c1
+hold c2 = concat("-", chr(n * 16 + 1))
+show c2
+hold c3 = string_eq(chr(n + 61), "A")
+show c3
+hold c4 = string_eq("A", chr(n + 61))
+show c4
+hold c5 = string_eq(chr(n + 61), chr(n + 62))
+show c5
+hold c6 = len(chr(n + 61))
+show c6
+hold c7 = len(chr(n - 4))
+show c7
+// a nested call and explicit grouping inside the argument
+hold s = "abc"
+hold c8 = string_eq(chr(len(s) + 62), "A")
+show c8
+hold c9 = concat(chr((n + 1) * 16 + 1), "!")
+show c9
 show "done"

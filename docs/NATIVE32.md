@@ -101,9 +101,15 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   bare name keeps the direct lowering; an expression is compiled first and its
   value parked in a shared 4-byte scratch word, then read back through the same
   numeric-slot path, so the per-occurrence byte cell keeps its
-  `[byte][newline][0][0]` layout. `chr(X)` is still refused where the argument
-  is shared with a call that parses its arguments by token count
-  (`string_eq(chr(n + 1), …)`, `len(chr(n + 1))`, `concat(chr(n + 1), …)`). The low byte is kept (`chr(300)` is byte 44, `chr(-1)`
+  `[byte][newline][0][0]` layout. Since 2026-11-02 the expression form works in
+  **every** position `chr` is accepted in — as a `concat` operand
+  (`concat(chr(n + 1), "x")`), as a `string_eq` argument
+  (`string_eq(chr(n + 61), "A")`, `string_eq("A", chr(n + 61))`,
+  `string_eq(chr(n + 61), chr(n + 62))`) and inside `len(chr(n + 61))`. That is
+  possible because the integer expression emitter is one function: the calls
+  whose arguments are scanned as tokens find the matching parenthesis, render
+  the inner tokens back into text and compile them, which is the same path the
+  statement-level form uses. The low byte is kept (`chr(300)` is byte 44, `chr(-1)`
   through a variable is byte 255), which is what the C backend's
   `(char)(long)v` does, and `chr(0)` is empty text with length 0, as the
   published runtimes define it. Each source occurrence owns a 4-byte cell in the
@@ -208,7 +214,11 @@ variable as a `concat` operand, a numeric literal operand, a one-argument
 `chr`-of-expression increment took the matrix to 39: `refuse/chr_expression.sa`
 (`chr(n + 1)`) was deleted because that program is now accepted, and four
 refusals were added — a string variable in the `chr` expression, an unknown
-name, a two-argument `chr(n, 1)`, and `string_eq(chr(n + 1), "A")`. The old
+name, a two-argument `chr(n, 1)`, and `string_eq(chr(n + 1), "A")`. The
+argument-position increment moved it to 40: `refuse/chr_nested_expression.sa`
+and `refuse/chr_expr_streq.sa` were deleted because those programs are accepted
+now, and three refusals were added — a string variable, an unknown name and a
+division inside the `chr` argument of `concat`, `len` and `string_eq`. The old
 `concat_call` refusal (`concat(text, chr(121))`) is gone because that program is
 now accepted by this backend - the `chr_nested` fixture is its replacement.
 

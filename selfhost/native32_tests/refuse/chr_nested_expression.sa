@@ -1,3 +1,0 @@
-hold n = 5
-hold s = concat(chr(n + 1), "x")
-show s
