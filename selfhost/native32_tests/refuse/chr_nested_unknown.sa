@@ -1,0 +1,2 @@
+hold s = concat("x", chr(nope))
+show s

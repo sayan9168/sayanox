@@ -1,5 +1,80 @@
 # Status
 
+**2026-11-02 (third increment) — R02 step 4: `chr` nested inside `concat`, `string_eq` and `len`.**
+
+`chr(X)` is no longer a statement-only value. `tools/native32.sa` now accepts it
+as one whole argument of the three calls that take strings:
+`concat(chr(65), "x")`, `concat("x", chr(65))`, `concat(chr(a), chr(b))`,
+`string_eq(chr(65), "A")`, `string_eq("A", chr(65))`,
+`string_eq(chr(a), chr(b))` and `len(chr(65))`.
+
+No new push form was added and `concat`/`string_eq` were not special-cased
+twice. Each nested `chr` argument is *hoisted*: the backend allocates a hidden
+8-byte `(pointer, length)` slot in the data segment and emits the committed
+cell sequence into it (4-byte cell `[byte][newline][0][0]`, one-byte store, the
+`udiv` low-byte mask, pointer `cell + 1 - length`, addresses as absolute
+immediates because the data base is fixed per target), and only then do the
+existing `concat` and `string_eq` push paths run — they see an ordinary
+`(pointer, length)` pair. `len(chr(...))` reads the length half of the same
+slot. The work is in three helpers: `chr_kind_of` (one validation rule shared by
+the whole-value and nested positions), `emit_chr_value` (the sequence, per ISA)
+and `emit_load_abs` (an absolute load with no fixup). Nothing is allocated, so a
+nested `chr` cannot consume the 60 KiB concat heap.
+
+Argument validation is now shared, which closed a real trap: in the first cut,
+`string_eq(chr("A"), "A")` tokenised the string literal as a length token and
+silently compiled it to `chr(1)`. `chr_kind_of` and the nested token checks now
+refuse anything that is not one integer literal or one declared numeric
+variable, so `chr("A")`, `chr(nope)`, `chr(n + 1)` and a string variable are
+refused in the nested positions exactly as they are in the whole-value ones.
+
+Evidence: the new `selfhost/native32_tests/chr_nested.sa` (14 output lines) runs
+through the same six execution paths (seed-min, gen2, x86-64 native AOT, i386,
+AArch64, RV64) with identical output — `Bcd`, `xC`, `DE`, `F!`, `q`, then
+`1 1 0 1 3 75`, then `Aab` and `9` — covering `chr` on either side and on both
+sides of `concat`, `chr` of a numeric variable, an empty `chr(0)` as a `concat`
+operand, `chr` in both positions of `string_eq`, two `chr` arguments,
+`len(chr(...))`, `len`/index of a `concat` result built from a `chr`, and the
+assignment form `a = concat(chr(65), a)` plus a nested `chr` in a `when`
+condition (the assign and branch code paths are patched separately, so they are
+covered explicitly rather than assumed). Both 64-bit images are pinned against
+reviewed goldens; the i386 image size is pinned at 8534 bytes and the data
+segment at 342 bytes.
+
+**One assertion is deliberately narrower for this fixture, and that is R14.**
+A `concat` literal argument stores its pointer (data base + offset) in the data
+segment at layout time, and the data base differs per target, so a `concat`
+program's data image cannot be byte-identical across ISAs yet. `chr_nested` is
+the first program in the acceptance list that hits it. Instead of skipping the
+check, the gate pins the cross-ISA data-segment *size* (342 bytes on all three
+targets) through `xc_data_layout`, and the bytes themselves are covered by the
+reviewed per-arch goldens plus six-way execution parity. The five older
+fixtures keep the full byte-for-byte cross-ISA data comparison. Fixing R14 (make
+those pointers runtime values) is what removes this narrowing.
+
+The refusal matrix rises from 26 to 31: `concat(chr(65, 66), "x")` (wrong `chr`
+arity), `chr("A")` and `chr(nope)` as call arguments, `chr(n + 1)` as a call
+argument, `string_eq(chr(65), n)` with a numeric second argument, and
+`len(chr(t))` with a string argument. `refuse/concat_call.sa` was deleted
+because `concat(text, chr(121))` is now a legal program — `chr_nested.sa` is its
+replacement, and the i386 "what the C backend accepts while native32 refuses"
+list no longer claims it.
+
+Gates on this tree, all exit 0:
+
+```
+./sx target test-native32          -> 0
+./sx target test-native-arm64      -> 0
+./sx target test-native-riscv64    -> 0
+./sx target test-sxisaexec         -> 0   (6-way parity on chr and chr_nested)
+```
+
+Still open in R02: `chr` as an operand of anything other than those three calls
+(it is not a general string expression), string-valued expressions beyond
+literal/`concat`/copy/`chr`, a signed literal argument such as `chr(-1)` (a
+variable works around it), bounded numeric user functions, aggregates, FP
+lowering, file/runtime APIs and GC. R14 and R15 stay open as recorded.
+
 **2026-11-01 (second increment) — R02 step 3: `chr(n)` in the multi-ISA emitter, and the second code page it needed.**
 
 `tools/native32.sa` now compiles `chr(X)` into a one-byte string in the three

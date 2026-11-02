@@ -71,7 +71,7 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   unknown name. Arbitrary string expressions are still not sources: only a
   literal, `concat(...)`, or another string variable.
 - **String equality** (2026-11-01): `string_eq(A, B)` where each argument is a
-  declared string variable or a quoted literal. It is a numeric expression that
+  declared string variable, a quoted literal or a whole `chr(X)` value. It is a numeric expression that
   yields `1` or `0`, so it can drive `when` and `while` conditions, feed `show`,
   and compose with the numeric operators (`string_eq(a, b) == 1`,
   `string_eq(a, b) == string_eq(c, d)`). The emitter pushes the two
@@ -94,17 +94,36 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   cell, so two live `chr` results are independent; nothing is allocated, so
   `chr` cannot consume the concat heap, and the cells are zero-filled in the
   image, which keeps the data segment arch-neutral.
+- **Nested `chr`** (2026-11-02): `chr(X)` is now a first-class value inside the
+  three calls that take string arguments, so `concat(chr(65), "x")`,
+  `concat("x", chr(65))`, `concat(chr(65), chr(66))`, `string_eq(chr(65), "A")`,
+  `string_eq("A", chr(65))`, `string_eq(chr(65), chr(66))` and `len(chr(65))`
+  all compile. No new push form was added: the backend materialises each
+  argument into a hidden `(pointer, length)` slot in the data segment with the
+  same cell/`udiv`/`cell + 1 - length` sequence the whole-value form uses, then
+  feeds that slot to the existing `concat`/`string_eq` push paths, so the
+  argument is a plain pair by the time those paths run. Every address is an
+  absolute immediate (the data base is fixed per target), so no fixup is
+  involved and nothing is allocated. `emit_chr_value` takes five parameters
+  because the published language allows at most six per `make` — the per-site
+  values travel in a `chr_spec(kind, value, src)` list, and `test-native-sxdefs`
+  (which compiles this emitter with `native_aot`) is what enforces the limit. The argument inside `chr(...)` is still
+  one integer literal or one declared numeric variable: `chr(n + 1)`,
+  `chr("A")`, `chr(nope)` and a numeric variable are refused in the nested
+  positions exactly as they are in the whole-value positions, and a `chr`
+  argument is not accepted anywhere else (it is not a general string
+  expression).
 - `when`, `otherwise`, `while`, comments, and blank lines.
 
 Lists, structs, user functions, floating-point expressions, general file APIs,
-and garbage collection remain unsupported by this compiler. `chr` has no
-lowering *inside* another call or expression: `concat(chr(65), "x")`,
-`string_eq(chr(65), s)` and `len(chr(65))` are refused, and so is an argument
-that is more than an integer literal or a numeric variable (`chr(n + 1)`, a
-signed literal such as `chr(-1)`); `string_eq` arguments remain a variable or a
-literal rather than arbitrary string expressions. Holding the value first
-(`hold c = chr(65)`) makes all of those work through the ordinary string
-operations.
+and garbage collection remain unsupported by this compiler. `chr` is accepted as
+a whole string value and as one whole argument of `concat`, `string_eq` and
+`len`, and nowhere else: an argument that is more than an integer literal or a
+numeric variable (`chr(n + 1)`, a signed literal such as `chr(-1)`, `chr("A")`,
+`chr(nope)`) is refused in both positions, and `string_eq` arguments remain a
+variable, a literal or a `chr(...)` value rather than arbitrary string
+expressions, so `concat(chr(65), concat("a", "b"))` is still refused. Holding
+the value first (`hold c = chr(65)`) remains the way to use it anywhere else.
 Cross-type assignment and using a string as a numeric value are rejected. `/`
 and fractional literals are rejected because Sayanox numbers are doubles and
 this compiler does not yet implement floating-point expression semantics.
@@ -153,6 +172,23 @@ not share a cell, and a `chr` built inside a loop. The independent oracle is the
 agreement between the seed-min, gen2, x86-64 native AOT, i386, AArch64 and RV64
 outputs, not the emitter's own expectation.
 
+The `chr_nested.sa` fixture covers the nested forms on the same six execution
+paths: `chr` on the left, on the right and on both sides of `concat`, `chr` of a
+variable, an empty `chr(0)` as a `concat` operand, `string_eq` with a `chr`
+argument on either side and with two `chr` arguments, `len(chr(...))`, and the
+`len`/index of a `concat` result built from `chr`. Its data segment is *not*
+compared byte-for-byte across the three ISA images: a `concat` literal stores
+its pointer (data base + offset) in the data segment at layout time, so only the
+layout is cross-ISA identical until that becomes a runtime value (R14). The
+gate therefore pins the data-segment *size* (297 bytes) on each target and
+relies on the reviewed per-arch goldens plus six-way execution parity for the
+bytes that matter. The refusal matrix rises from 26 to 31: `concat(chr(65, 66),
+"x")` (wrong `chr` arity), `chr("A")` and `chr(nope)` as `string_eq`/`concat`
+arguments, `chr(n + 1)` as a `concat` argument, `string_eq(chr(65), n)` with a
+numeric second argument, and `len(chr(t))` with a string argument. The old
+`concat_call` refusal (`concat(text, chr(121))`) is gone because that program is
+now accepted by this backend - the `chr_nested` fixture is its replacement.
+
 The additional `len_literals.sa` fixture has an independent tracked byte-output
 oracle and runs through the same multi-backend execution comparisons. Each ISA
 gate also checks deterministic images and 16 malformed/type/unsupported literal
@@ -194,7 +230,8 @@ compiler slice, not a claim of complete language or ABI coverage.
 This work is an incremental step toward full AArch64 and RV64GC native compiler
 and runtime support. Bounded `concat` and byte indexing extend the original
 integer/static-string backend, but do not complete that roadmap item. General
-string operations beyond the documented subset, lists, structs and functions,
+string operations beyond the documented subset (nested `chr` is now lowered),
+lists, structs and functions,
 IEEE-754 code generation, native file I/O, and a mark-and-sweep collector
 remain open, along with broader ISA support and end-to-end parity for each. Do not count
 emulator-only FP/syscall probes as compiler support.
