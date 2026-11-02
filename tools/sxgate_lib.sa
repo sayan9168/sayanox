@@ -298,7 +298,7 @@ make gl_compile_c(c_path: str, bin_path: str, flags: str) -> num {
   hold cc = gl_cc()
   hold cmd = concat("LC_ALL=C ", concat(gl_sh_quote(cc), " -o "))
   cmd = concat(cmd, concat(gl_sh_quote(bin_path), concat(" ", gl_sh_quote(c_path))))
-  cmd = concat(cmd, concat(" ", flags))
+  cmd = concat(cmd, concat(" -std=gnu11 ", flags))
   when run_command(cmd) != 0 {
     hold f = gl_fail(concat("C compilation failed for ", c_path))
   }

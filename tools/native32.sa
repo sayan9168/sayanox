@@ -37,6 +37,12 @@
 //     while <expression> { ... }
 //     // comments, blank lines
 //
+//   The integer expression emitter is one function (emit_expression), so an
+//   argument position can compile an expression of its own: `chr(X)` accepts a
+//   whole integer expression wherever it is accepted at all - as a `hold`,
+//   assignment or `show` value, as a `concat` operand, as a `string_eq`
+//   argument and inside `len(chr(...))`.
+//
 //   A concat argument is a string variable, a string literal, a chr(...) value
 //   or another concat(...) call: a nested call is emitted first into a hidden
 //   (pointer, length) slot that then stands in for the operand, up to seven
@@ -351,6 +357,71 @@ make chr_arg(s: str) -> str {
 }
 
 // A name token (`v` + the spelling) that spells `name`.
+// Index of the ')' that closes the '(' at `at`, or -1 when the parentheses do
+// not balance. Used to accept a whole `chr(<integer expression>)` argument in
+// the calls whose arguments are scanned token by token.
+make paren_close(toks: str, at: num, tn: num) -> num {
+  hold depth = 0
+  hold i = at
+  while i < tn {
+    hold t = tok_at(toks, i)
+    when string_eq(t, "(") == 1 {
+      depth = depth + 1
+    }
+    when string_eq(t, ")") == 1 {
+      depth = depth - 1
+      when depth == 0 { give i }
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+// Render a token range back into expression source. Only the kinds an integer
+// expression contains are accepted: numbers, names, parentheses and operators.
+make tok_range_text(toks: str, from: num, upto: num) -> str {
+  hold out = ""
+  hold i = from
+  while i < upto {
+    hold t = tok_at(toks, i)
+    hold t0 = sx_index(t, 0)
+    when t0 == 40 || t0 == 41 {
+      // a parenthesis token carries no one-letter prefix, so it is copied whole
+      out = concat(out, t)
+    } otherwise {
+      when t0 == 110 || t0 == 118 || t0 == 111 {
+        out = concat(out, sub(t, 1, len(t)))
+      } otherwise {
+        hold badtok = fail(1, concat(concat("line ", numstr(lineno)), ": only an integer expression is accepted as a chr argument here"))
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+// Compile `chr(<integer expression>)` for a call that scanned its arguments as
+// tokens: render the inner tokens, compile them with the expression emitter,
+// park the value in the shared scratch word and return its slot so the caller
+// can use the numeric-slot lowering.
+make emit_chr_expr_slot(toks: str, from: num, upto: num) -> num {
+  hold text = tok_range_text(toks, from, upto)
+  when chr_acc_slot < 0 {
+    chr_acc_slot = len(data)
+    data = put_zeros(data, 4)
+  }
+  hold done = emit_expression(text)
+  hold site = len(code)
+  when arch == 0 {
+    fixsite = push(fixsite, site + 1)
+  } otherwise {
+    fixsite = push(fixsite, site)
+  }
+  fixoff = push(fixoff, chr_acc_slot)
+  code = emit_store_global(code, arch)
+  give chr_acc_slot
+}
+
 make tok_name_is(t: str, name: str) -> num {
   when len(t) < 2 || sx_index(t, 0) != 118 { give 0 }
   when string_eq(sub(t, 1, len(t)), name) == 1 { give 1 }
@@ -409,6 +480,8 @@ hold chr_acc = 0
 hold chr_acc_slot = 0 - 1
 hold arch = 0
 hold lineno = 0
+hold eq_used = 0
+hold eq_calls = []
 
 // The string-show sequence for a resolved (pointer, length) pair: load both
 // fields, move the pointer into the argument register and the length into the
@@ -801,14 +874,6 @@ make materialize_concat_operand(text: str) -> num {
     when argtext == "!" {
       hold badshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
     }
-    hold kind = chr_kind_of(argtext, names, strnames, lineno)
-    hold val = 0
-    hold src = 0
-    when kind == 0 {
-      val = tok_num(concat("n", argtext))
-    } otherwise {
-      src = slot_of(names, argtext)
-    }
     hold cell = len(data)
     data = push(data, 0)
     data = push(data, 10)
@@ -816,6 +881,36 @@ make materialize_concat_operand(text: str) -> num {
     data = push(data, 0)
     hold pairslot_chr = len(data)
     data = put_zeros(data, 8)
+    hold kind = 0
+    hold val = 0
+    hold src = 0
+    when all_digits(argtext) == 1 || is_bare_name(argtext) == 1 {
+      kind = chr_kind_of(argtext, names, strnames, lineno)
+      when kind == 0 {
+        val = tok_num(concat("n", argtext))
+      } otherwise {
+        src = slot_of(names, argtext)
+      }
+    } otherwise {
+      // A whole integer expression: compile it here (the expression emitter is a
+      // function, so an argument position can call it), park the result in the
+      // shared scratch word and read it back through the numeric-slot path.
+      when chr_acc_slot < 0 {
+        chr_acc_slot = len(data)
+        data = put_zeros(data, 4)
+      }
+      hold chr_expr_done = emit_expression(argtext)
+      hold chr_expr_site = len(code)
+      when arch == 0 {
+        fixsite = push(fixsite, chr_expr_site + 1)
+      } otherwise {
+        fixsite = push(fixsite, chr_expr_site)
+      }
+      fixoff = push(fixoff, chr_acc_slot)
+      code = emit_store_global(code, arch)
+      kind = 1
+      src = chr_acc_slot
+    }
     code = emit_chr_value(code, arch, chr_spec(kind, val, src), cell, pairslot_chr)
     give pairslot_chr
   }
@@ -2153,6 +2248,540 @@ make elf64_em(code: list, data: list, entry_off: num, em: num, data_mem: num) ->
   give img
 }
 
+// The one integer expression emitter. It leaves the result in the accumulator,
+// which is where every caller (numeric `hold`/assignment, `show`, a `when`/
+// `while` condition, `chr(<expression>)`, and the index of `s[i]`) expects it.
+// It is a function so an argument position can compile an expression of its
+// own, including one nested inside a call.
+make emit_expression(extext: str) -> num {
+  // Operator stack for the shunting-yard pass. It is per call: every slot is
+  // written before it is read, so a fresh stack is equivalent to the shared one
+  // the inline loop used.
+  hold ops = []
+  hold toks = tokenize(extext)
+    when len(toks) > 0 && sx_index(toks, 0) == 33 {
+      hold badex = fail(1, concat(concat(concat("line ", numstr(lineno)), ": the native32 subset does not accept "), sub(toks, 1, len(toks))))
+    }
+    hold tn = tok_count(toks)
+    when tn == 0 {
+      hold emptyex = fail(1, concat(concat("line ", numstr(lineno)), ": an empty expression"))
+    }
+    hold want = 1
+    hold depth = 0
+    hold pending_string_index = 0
+    hold k = 0
+    while k < tn {
+      hold t = tok_at(toks, k)
+      hold t0 = sx_index(t, 0)
+      hold is_streq_tok = 0
+      when t0 == 118 && string_eq(sub(t, 1, len(t)), "string_eq") == 1 {
+        is_streq_tok = 1
+      }
+      // string_eq(A, B): push the two (pointer, length) pairs, call the comparison
+      // routine emitted once at the end of the image, and leave its 0/1 result on
+      // the value stack. A literal argument is appended to the data segment and
+      // addressed through the per-arch load base, so the data image stays
+      // arch-neutral; nothing is allocated and no scratch global is needed.
+      when t0 == 118 && is_streq_tok == 1 {
+        when want == 0 {
+          hold streq_twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
+        }
+        // Each argument is one token (a literal or a name) or a whole
+        // chr(<literal or numeric variable>) spanning four tokens.
+        hold eq_ok = 0
+        hold eq_a1 = k + 2
+        hold eq_n1 = 1
+        when k + 1 < tn && string_eq(tok_at(toks, k + 1), "(") == 1 {
+          eq_ok = 1
+          when eq_a1 + 1 < tn && tok_name_is(tok_at(toks, eq_a1), "chr") == 1 && string_eq(tok_at(toks, eq_a1 + 1), "(") == 1 {
+            hold eq_close1 = paren_close(toks, eq_a1 + 1, tn)
+            when eq_close1 < 0 {
+              eq_ok = 0
+            } otherwise {
+              eq_n1 = eq_close1 + 1 - eq_a1
+            }
+          }
+        }
+        hold eq_c1 = eq_a1 + eq_n1
+        when eq_ok == 1 && (eq_c1 >= tn || string_eq(tok_at(toks, eq_c1), "o,") == 0) {
+          eq_ok = 0
+        }
+        hold eq_a2 = eq_c1 + 1
+        hold eq_n2 = 1
+        when eq_ok == 1 && eq_a2 + 1 < tn && tok_name_is(tok_at(toks, eq_a2), "chr") == 1 && string_eq(tok_at(toks, eq_a2 + 1), "(") == 1 {
+          hold eq_close2 = paren_close(toks, eq_a2 + 1, tn)
+          when eq_close2 < 0 {
+            eq_ok = 0
+          } otherwise {
+            eq_n2 = eq_close2 + 1 - eq_a2
+          }
+        }
+        hold eq_c2 = eq_a2 + eq_n2
+        when eq_ok == 1 && (eq_c2 >= tn || string_eq(tok_at(toks, eq_c2), ")") == 0) {
+          eq_ok = 0
+        }
+        when eq_ok == 0 {
+          hold bad_streq_shape = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects exactly two string values (a string variable, a string literal or chr(...))"))
+        }
+        hold eq_base = 4202496
+        when arch == 0 {
+          eq_base = 134520832
+        }
+        hold eq_arg = 0
+        hold eq_lit_index = 0
+        while eq_arg < 2 {
+          hold eq_at0 = eq_a1
+          hold eq_cnt = eq_n1
+          when eq_arg == 1 {
+            eq_at0 = eq_a2
+            eq_cnt = eq_n2
+          }
+          when eq_cnt >= 4 {
+            // chr(...) argument: build the cell, then push both halves of the pair.
+            // A literal or a bare numeric name keeps the direct lowering; a whole
+            // integer expression is compiled first into the shared scratch word.
+            hold eq_ckind = 0
+            hold eq_cval = 0
+            hold eq_csrc = 0
+            hold eq_inner_n = eq_cnt - 3
+            when eq_inner_n == 1 {
+              hold eq_intok = tok_at(toks, eq_at0 + 2)
+              hold eq_inkind = sx_index(eq_intok, 0)
+              when eq_inkind != 110 && eq_inkind != 118 {
+                hold bad_streq_chr = fail(1, concat(concat("line ", numstr(lineno)), ": chr accepts an integer literal or a numeric variable in native32"))
+              }
+              hold eq_inner = sub(eq_intok, 1, len(eq_intok))
+              eq_ckind = chr_kind_of(eq_inner, names, strnames, lineno)
+              when eq_ckind == 0 {
+                eq_cval = tok_num(concat("n", eq_inner))
+              } otherwise {
+                eq_csrc = slot_of(names, eq_inner)
+              }
+            } otherwise {
+              eq_csrc = emit_chr_expr_slot(toks, eq_at0 + 2, eq_at0 + 2 + eq_inner_n)
+              eq_ckind = 1
+            }
+            hold eq_ccell = len(data)
+            data = push(data, 0)
+            data = push(data, 10)
+            data = push(data, 0)
+            data = push(data, 0)
+            hold eq_cdst = len(data)
+            data = put_zeros(data, 8)
+            code = emit_chr_value(code, arch, chr_spec(eq_ckind, eq_cval, eq_csrc), eq_ccell, eq_cdst)
+            code = emit_load_abs(code, arch, eq_base + eq_cdst)
+            code = emit_load_abs(code, arch, eq_base + eq_cdst + 4)
+          } otherwise {
+            hold eq_tok = tok_at(toks, eq_at0)
+            hold eq_kind = sx_index(eq_tok, 0)
+            when eq_kind == 108 {
+            hold eq_litoff = len(data)
+            data = append_text(data, literal_body(extext, eq_lit_index))
+            eq_lit_index = eq_lit_index + 1
+            hold eq_litbytes = len(data) - eq_litoff
+            when eq_litbytes != tok_num(eq_tok) {
+              hold bad_streq_lit = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq and len() disagree about one literal byte length"))
+            }
+            code = emit_push_imm2(code, arch, eq_base + eq_litoff)
+            code = emit_push_imm2(code, arch, eq_litbytes)
+          } otherwise {
+            when eq_kind != 118 {
+              hold bad_streq_arg = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects string variables or string literals"))
+            }
+            hold eq_name = sub(eq_tok, 1, len(eq_tok))
+            hold eq_slot = slot_of(names, eq_name)
+            when eq_slot < 0 {
+              hold eq_unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(eq_name, "' in string_eq")))
+            }
+            when slot_of(strnames, eq_name) < 0 {
+              hold eq_numarg = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq needs string variables, not numeric values"))
+            }
+            hold eqpslot_at = len(code)
+            when arch == 0 {
+              fixsite = push(fixsite, eqpslot_at + 1)
+            } otherwise {
+              fixsite = push(fixsite, eqpslot_at)
+            }
+            fixoff = push(fixoff, eq_slot)
+            code = emit_load_global(code, arch)
+            hold eq_p2off = eq_slot + 4
+            hold eqnslot_at = len(code)
+            when arch == 0 {
+              fixsite = push(fixsite, eqnslot_at + 1)
+            } otherwise {
+              fixsite = push(fixsite, eqnslot_at)
+            }
+            fixoff = push(fixoff, eq_p2off)
+            code = emit_load_global(code, arch)
+            }
+          }
+          eq_arg = eq_arg + 1
+        }
+        code = emit_call(code, arch, 0)
+        eq_calls = push(eq_calls, len(code) - 4)
+        eq_used = 1
+        want = 0
+        k = eq_c2
+      }
+      when t0 == 110 {
+        when want == 0 {
+          hold twonum = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
+        }
+        hold v = tok_num(t)
+        when v > 2147483647 {
+          hold toobig = fail(1, concat(concat("line ", numstr(lineno)), ": an integer literal of 2^31 or more"))
+        }
+        code = emit_push_imm2(code, arch, v)
+        want = 0
+      }
+      when t0 == 108 {
+        hold misplaced_literal = fail(1, concat(concat("line ", numstr(lineno)), ": a string literal in a numeric expression is supported only as len()'s argument"))
+      }
+      when t0 == 118 && is_streq_tok == 0 {
+        when want == 0 {
+          hold twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
+        }
+        hold vname = sub(t, 1, len(t))
+        hold is_len_call = 0
+        when string_eq(vname, "len") == 1 && k + 3 < tn {
+          when string_eq(tok_at(toks, k + 1), "(") == 1 && string_eq(tok_at(toks, k + 3), ")") == 1 {
+            is_len_call = 1
+          }
+        }
+        hold is_chr_len = 0
+        hold chr_len_close = 0 - 1
+        when is_len_call == 0 && string_eq(vname, "len") == 1 && k + 3 < tn {
+          when string_eq(tok_at(toks, k + 1), "(") == 1 && tok_name_is(tok_at(toks, k + 2), "chr") == 1 && string_eq(tok_at(toks, k + 3), "(") == 1 {
+            hold close_inner = paren_close(toks, k + 3, tn)
+            when close_inner > 0 && close_inner + 1 < tn {
+              when string_eq(tok_at(toks, close_inner + 1), ")") == 1 {
+                is_chr_len = 1
+                chr_len_close = close_inner
+              }
+            }
+          }
+        }
+        when is_chr_len == 1 {
+          // len(chr(...)): build the cell, then read its length half. The argument
+          // is one token (literal or numeric name) or a whole integer expression.
+          hold len_inner_n = chr_len_close - (k + 4)
+          hold len_kind = 0
+          hold len_val = 0
+          hold len_src = 0
+          when len_inner_n == 1 {
+            hold len_intok = tok_at(toks, k + 4)
+            hold len_inkind = sx_index(len_intok, 0)
+            when len_inkind != 110 && len_inkind != 118 {
+              hold bad_len_chr = fail(1, concat(concat("line ", numstr(lineno)), ": chr accepts an integer literal or a numeric variable in native32"))
+            }
+            hold len_inner = sub(len_intok, 1, len(len_intok))
+            len_kind = chr_kind_of(len_inner, names, strnames, lineno)
+            when len_kind == 0 {
+              len_val = tok_num(concat("n", len_inner))
+            } otherwise {
+              len_src = slot_of(names, len_inner)
+            }
+          } otherwise {
+            len_src = emit_chr_expr_slot(toks, k + 4, chr_len_close)
+            len_kind = 1
+          }
+          hold len_cell = len(data)
+          data = push(data, 0)
+          data = push(data, 10)
+          data = push(data, 0)
+          data = push(data, 0)
+          hold len_dst = len(data)
+          data = put_zeros(data, 8)
+          code = emit_chr_value(code, arch, chr_spec(len_kind, len_val, len_src), len_cell, len_dst)
+          hold len_base = 4202496
+          when arch == 0 {
+            len_base = 134520832
+          }
+          code = emit_load_abs(code, arch, len_base + len_dst + 4)
+          want = 0
+          k = chr_len_close + 1
+        }
+        when is_len_call == 0 && is_chr_len == 0 && string_eq(vname, "len") == 1 && k + 1 < tn {
+          when string_eq(tok_at(toks, k + 1), "(") == 1 {
+            hold bad_len_shape = fail(1, concat(concat("line ", numstr(lineno)), ": len() expects exactly one string variable, string literal or chr(...), not a general expression"))
+          }
+        }
+        when is_len_call == 1 {
+          hold argtok = tok_at(toks, k + 2)
+          when sx_index(argtok, 0) == 108 {
+            code = emit_push_imm2(code, arch, tok_num(argtok))
+          } otherwise {
+            when sx_index(argtok, 0) != 118 {
+              hold bad_len_arg = fail(1, concat(concat("line ", numstr(lineno)), ": len() requires a string variable or literal"))
+            }
+            hold argname = sub(argtok, 1, len(argtok))
+            hold arg_slot = slot_of(names, argname)
+            when arg_slot < 0 {
+              hold bad_len_name = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(argname, "' in len()")))
+            }
+            when slot_of(strnames, argname) < 0 {
+              hold bad_len_type = fail(1, concat(concat("line ", numstr(lineno)), ": len() requires a string variable"))
+            }
+            hold vat = len(code)
+            when arch == 0 {
+              fixsite = push(fixsite, vat + 1)
+            } otherwise {
+              fixsite = push(fixsite, vat)
+            }
+            fixoff = push(fixoff, arg_slot + 4)
+            code = emit_load_global(code, arch)
+          }
+          want = 0
+          k = k + 3
+        }
+        when is_len_call == 0 && is_chr_len == 0 {
+          hold vslot = slot_of(names, vname)
+          when vslot < 0 {
+            hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(vname, "'")))
+          }
+          when slot_of(strnames, vname) >= 0 {
+            when k + 1 >= tn || string_eq(tok_at(toks, k + 1), "[") == 0 {
+              hold stringnum = fail(1, concat(concat(concat("line ", numstr(lineno)), ": string variable '"), concat(vname, "' used as a number (index it with [i])")))
+            }
+            hold svat = len(code)
+            when arch == 0 {
+              fixsite = push(fixsite, svat + 1)
+            } otherwise {
+              fixsite = push(fixsite, svat)
+            }
+            fixoff = push(fixoff, vslot)
+            code = emit_load_global(code, arch)
+            hold slat = len(code)
+            when arch == 0 {
+              fixsite = push(fixsite, slat + 1)
+            } otherwise {
+              fixsite = push(fixsite, slat)
+            }
+            fixoff = push(fixoff, vslot + 4)
+            code = emit_load_global(code, arch)
+            want = 0
+            pending_string_index = 1
+          } otherwise {
+            hold vat2 = len(code)
+            when arch == 0 {
+              fixsite = push(fixsite, vat2 + 1)
+            } otherwise {
+              fixsite = push(fixsite, vat2)
+            }
+            fixoff = push(fixoff, vslot)
+            code = emit_load_global(code, arch)
+            want = 0
+          }
+        }
+      }
+      when t0 == 40 {
+        when want == 0 {
+          hold badparen = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' where an operator was expected"))
+        }
+        when depth < len(ops) {
+          ops[depth] = 0
+        } otherwise {
+          ops = push(ops, 0)
+        }
+        depth = depth + 1
+      }
+      when t0 == 41 {
+        when want == 1 {
+          hold badclose = fail(1, concat(concat("line ", numstr(lineno)), ": a ')' where a value was expected"))
+        }
+        hold open = 0
+        while depth > 0 && open == 0 {
+          depth = depth - 1
+          when ops[depth] == 0 {
+            open = 1
+          } otherwise {
+            code = emit_op2(code, arch, ops[depth])
+          }
+        }
+        when open == 0 {
+          hold unbal = fail(1, concat(concat("line ", numstr(lineno)), ": a ')' with no '('"))
+        }
+      }
+      when t0 == 91 {
+        when want == 1 || pending_string_index == 0 {
+          hold badindexopen = fail(1, concat(concat("line ", numstr(lineno)), ": `[` must index a string variable"))
+        }
+        pending_string_index = 0
+        when depth < len(ops) {
+          ops[depth] = 0 - 1
+        } otherwise {
+          ops = push(ops, 0 - 1)
+        }
+        depth = depth + 1
+        want = 1
+      }
+      when t0 == 93 {
+        when want == 1 {
+          hold emptyindex = fail(1, concat(concat("line ", numstr(lineno)), ": an empty string index"))
+        }
+        hold close_index = 0
+        while depth > 0 && close_index == 0 {
+          depth = depth - 1
+          when ops[depth] == 0 - 1 {
+            close_index = 1
+          } otherwise {
+            when ops[depth] == 0 {
+              hold unclosed_paren_index = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' with no ')' inside a string index"))
+            }
+            code = emit_op2(code, arch, ops[depth])
+          }
+        }
+        when close_index == 0 {
+          hold unclosed_index = fail(1, concat(concat("line ", numstr(lineno)), ": a ']' with no '['"))
+        }
+        when arch == 0 {
+          code = e1(code, 90)
+          code = e1(code, 89)
+          code = e1(code, 88)
+          code = e1(code, 133)
+          code = e1(code, 210)
+          code = e1(code, 15)
+          code = e1(code, 137)
+          hold neg_index_site = len(code)
+          code = e32(code, 0)
+          code = e1(code, 1)
+          code = e1(code, 202)
+          hold neg_index_done = len(code)
+          code = patch32(code, neg_index_site, neg_index_done - (neg_index_site + 4))
+          code = e1(code, 59)
+          code = e1(code, 209)
+          hold bad_index_site = len(code)
+          code = e1(code, 15)
+          code = e1(code, 131)
+          code = e32(code, 0)
+          code = e1(code, 15)
+          code = e1(code, 182)
+          code = e1(code, 4)
+          code = e1(code, 16)
+          code = e1(code, 80)
+          hold done_index_site = len(code)
+          code = e1(code, 233)
+          code = e32(code, 0)
+          hold bad_index = len(code)
+          code = e1(code, 184)
+          code = e32(code, 1)
+          code = e1(code, 187)
+          code = e32(code, 1)
+          code = e1(code, 205)
+          code = e1(code, 128)
+          hold done_index = len(code)
+          code = patch32(code, bad_index_site + 2, bad_index - (bad_index_site + 6))
+          code = patch32(code, done_index_site + 1, done_index - (done_index_site + 5))
+        } otherwise {
+          when arch == 1 {
+            code = emit_pop_acc(code, arch)
+            code = e_w(code, 2852127724)
+            code = emit_pop_acc(code, arch)
+            code = e_w(code, 2852127723)
+            code = emit_pop_acc(code, arch)
+            code = e_w(code, 2852127722)
+            code = e_w(code, 1895825823)
+            hold neg_a64_site = len(code)
+            code = e_w(code, 1409286154)
+            code = e_w(code, 185270668)
+            hold neg_a64_done = len(code)
+            code = a_imm19(code, neg_a64_site, neg_a64_done - neg_a64_site)
+            code = e_w(code, 1795883423)
+            hold bad_a64_site = len(code)
+            code = e_w(code, 1409286146)
+            code = e_w(code, 2332819786)
+            code = e_w(code, 960495936)
+            code = e_w(code, 4162785248)
+            hold done_a64_site = len(code)
+            code = e_w(code, 335544320)
+            hold bad_a64 = len(code)
+            code = a_movz(code, 1, 0, 1)
+            code = a_movz(code, 1, 8, 93)
+            code = e_w(code, 3556769793)
+            hold done_a64 = len(code)
+            code = a_imm19(code, bad_a64_site, bad_a64 - bad_a64_site)
+            code = a_imm26(code, done_a64_site, done_a64 - done_a64_site)
+          } otherwise {
+            code = rv_pop_reg(code, 12)
+            code = rv_pop_reg(code, 11)
+            code = rv_pop_reg(code, 10)
+            hold neg_rv_site = len(code)
+            code = e_w(code, rv_b_word(0, 0, 12, 5))
+            code = e_w(code, rv_r(0, 11, 12, 0, 12, 59))
+            hold neg_rv_done = len(code)
+            code = set_w(code, neg_rv_site, rv_b_word(neg_rv_done - neg_rv_site, 0, 12, 5))
+            hold bad_rv_site = len(code)
+            code = e_w(code, rv_b_word(0, 11, 12, 7))
+            code = e_w(code, rv_r(0, 12, 10, 0, 10, 51))
+            code = e_w(code, rv_i(0, 10, 4, 10, 3))
+            code = rv_push_a0(code)
+            hold done_rv_site = len(code)
+            code = e_w(code, rv_j_word(0, 0))
+            hold bad_rv = len(code)
+            code = e_w(code, rv_i(1, 0, 0, 10, 19))
+            code = e_w(code, rv_i(93, 0, 0, 17, 19))
+            code = e_w(code, 115)
+            hold done_rv = len(code)
+            code = set_w(code, bad_rv_site, rv_b_word(bad_rv - bad_rv_site, 11, 12, 7))
+            code = set_w(code, done_rv_site, rv_j_word(done_rv - done_rv_site, 0))
+          }
+        }
+        want = 0
+      }
+      when t0 == 111 {
+        hold oc = op_code(t)
+        when string_eq(t, "o,") == 1 {
+          hold bad_comma = fail(1, concat(concat("line ", numstr(lineno)), ": a ',' is only allowed between the two arguments of string_eq"))
+        }
+        when want == 1 {
+          when oc == 2 {
+            code = emit_push_imm2(code, arch, 0)
+          } otherwise {
+            hold badop = fail(1, concat(concat(concat("line ", numstr(lineno)), ": the operator '"), concat(sub(t, 1, len(t)), "' where a value was expected")))
+          }
+        }
+        hold pr = op_prec(oc)
+        hold more = 1
+        while more == 1 {
+          when depth == 0 {
+            more = 0
+          } otherwise {
+            when ops[depth - 1] == 0 {
+              more = 0
+            } otherwise {
+              when op_prec(ops[depth - 1]) >= pr {
+                depth = depth - 1
+                code = emit_op2(code, arch, ops[depth])
+              } otherwise {
+                more = 0
+              }
+            }
+          }
+        }
+        when depth < len(ops) {
+          ops[depth] = oc
+        } otherwise {
+          ops = push(ops, oc)
+        }
+        depth = depth + 1
+        want = 1
+      }
+      k = k + 1
+    }
+    when want == 1 {
+      hold trailing = fail(1, concat(concat("line ", numstr(lineno)), ": an expression that ends with an operator"))
+    }
+    while depth > 0 {
+      depth = depth - 1
+      when ops[depth] == 0 {
+        hold openleft = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' with no ')'"))
+      }
+      code = emit_op2(code, arch, ops[depth])
+    }
+    code = emit_pop_acc(code, arch)
+  give 0
+}
+
 make run() -> num {
   when arg_count() < 3 {
     hold usage = fail(2, "usage: native32 <program.sa> <out> [i386|arm64|riscv64]")
@@ -2190,9 +2819,11 @@ make run() -> num {
   // code, data, fixsite, fixoff, names, strnames, heap_on, heap_cursor_slot and
   // concat_show_slot are file-scope state (declared above): the concat operand
   // resolver and the show/copy helpers are functions and have to reach it.
-  // string_eq: one shared comparison routine plus its call sites.
-  hold eq_used = 0
-  hold eq_calls = []
+  // string_eq: one shared comparison routine plus its call sites. Both are
+  // file-scope because the expression emitter that records the call sites is a
+  // function.
+  eq_used = 0
+  eq_calls = []
   // chr: one 4-byte cell per source occurrence holds the byte, and `show
   // chr(...)` reuses one hidden (pointer, length) slot. Both live in the data
   // segment, so the data image stays arch-neutral.
@@ -2684,493 +3315,7 @@ make run() -> num {
 
     // ---- compile the expression, if this statement has one ----
     when len(extext) > 0 {
-      hold toks = tokenize(extext)
-      when len(toks) > 0 && sx_index(toks, 0) == 33 {
-        hold badex = fail(1, concat(concat(concat("line ", numstr(lineno)), ": the native32 subset does not accept "), sub(toks, 1, len(toks))))
-      }
-      hold tn = tok_count(toks)
-      when tn == 0 {
-        hold emptyex = fail(1, concat(concat("line ", numstr(lineno)), ": an empty expression"))
-      }
-      hold want = 1
-      hold depth = 0
-      hold pending_string_index = 0
-      hold k = 0
-      while k < tn {
-        hold t = tok_at(toks, k)
-        hold t0 = sx_index(t, 0)
-        hold is_streq_tok = 0
-        when t0 == 118 && string_eq(sub(t, 1, len(t)), "string_eq") == 1 {
-          is_streq_tok = 1
-        }
-        // string_eq(A, B): push the two (pointer, length) pairs, call the comparison
-        // routine emitted once at the end of the image, and leave its 0/1 result on
-        // the value stack. A literal argument is appended to the data segment and
-        // addressed through the per-arch load base, so the data image stays
-        // arch-neutral; nothing is allocated and no scratch global is needed.
-        when t0 == 118 && is_streq_tok == 1 {
-          when want == 0 {
-            hold streq_twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
-          }
-          // Each argument is one token (a literal or a name) or a whole
-          // chr(<literal or numeric variable>) spanning four tokens.
-          hold eq_ok = 0
-          hold eq_a1 = k + 2
-          hold eq_n1 = 1
-          when k + 1 < tn && string_eq(tok_at(toks, k + 1), "(") == 1 {
-            eq_ok = 1
-            when eq_a1 + 1 < tn && tok_name_is(tok_at(toks, eq_a1), "chr") == 1 && string_eq(tok_at(toks, eq_a1 + 1), "(") == 1 {
-              eq_n1 = 4
-            }
-          }
-          hold eq_c1 = eq_a1 + eq_n1
-          when eq_ok == 1 && (eq_c1 >= tn || string_eq(tok_at(toks, eq_c1), "o,") == 0) {
-            eq_ok = 0
-          }
-          hold eq_a2 = eq_c1 + 1
-          hold eq_n2 = 1
-          when eq_ok == 1 && eq_a2 + 1 < tn && tok_name_is(tok_at(toks, eq_a2), "chr") == 1 && string_eq(tok_at(toks, eq_a2 + 1), "(") == 1 {
-            eq_n2 = 4
-          }
-          hold eq_c2 = eq_a2 + eq_n2
-          when eq_ok == 1 && (eq_c2 >= tn || string_eq(tok_at(toks, eq_c2), ")") == 0) {
-            eq_ok = 0
-          }
-          when eq_ok == 0 {
-            hold bad_streq_shape = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects exactly two string values (a string variable, a string literal or chr(...))"))
-          }
-          hold eq_base = 4202496
-          when arch == 0 {
-            eq_base = 134520832
-          }
-          hold eq_arg = 0
-          hold eq_lit_index = 0
-          while eq_arg < 2 {
-            hold eq_at0 = eq_a1
-            hold eq_cnt = eq_n1
-            when eq_arg == 1 {
-              eq_at0 = eq_a2
-              eq_cnt = eq_n2
-            }
-            when eq_cnt == 4 {
-              // chr(...) argument: build the cell, then push both halves of the pair.
-              hold eq_intok = tok_at(toks, eq_at0 + 2)
-              hold eq_inkind = sx_index(eq_intok, 0)
-              when eq_inkind != 110 && eq_inkind != 118 {
-                hold bad_streq_chr = fail(1, concat(concat("line ", numstr(lineno)), ": chr accepts an integer literal or a numeric variable in native32"))
-              }
-              hold eq_inner = sub(eq_intok, 1, len(eq_intok))
-              hold eq_ckind = chr_kind_of(eq_inner, names, strnames, lineno)
-              hold eq_cval = 0
-              hold eq_csrc = 0
-              when eq_ckind == 0 {
-                eq_cval = tok_num(concat("n", eq_inner))
-              } otherwise {
-                eq_csrc = slot_of(names, eq_inner)
-              }
-              hold eq_ccell = len(data)
-              data = push(data, 0)
-              data = push(data, 10)
-              data = push(data, 0)
-              data = push(data, 0)
-              hold eq_cdst = len(data)
-              data = put_zeros(data, 8)
-              code = emit_chr_value(code, arch, chr_spec(eq_ckind, eq_cval, eq_csrc), eq_ccell, eq_cdst)
-              code = emit_load_abs(code, arch, eq_base + eq_cdst)
-              code = emit_load_abs(code, arch, eq_base + eq_cdst + 4)
-            } otherwise {
-              hold eq_tok = tok_at(toks, eq_at0)
-              hold eq_kind = sx_index(eq_tok, 0)
-              when eq_kind == 108 {
-              hold eq_litoff = len(data)
-              data = append_text(data, literal_body(extext, eq_lit_index))
-              eq_lit_index = eq_lit_index + 1
-              hold eq_litbytes = len(data) - eq_litoff
-              when eq_litbytes != tok_num(eq_tok) {
-                hold bad_streq_lit = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq and len() disagree about one literal byte length"))
-              }
-              code = emit_push_imm2(code, arch, eq_base + eq_litoff)
-              code = emit_push_imm2(code, arch, eq_litbytes)
-            } otherwise {
-              when eq_kind != 118 {
-                hold bad_streq_arg = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects string variables or string literals"))
-              }
-              hold eq_name = sub(eq_tok, 1, len(eq_tok))
-              hold eq_slot = slot_of(names, eq_name)
-              when eq_slot < 0 {
-                hold eq_unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(eq_name, "' in string_eq")))
-              }
-              when slot_of(strnames, eq_name) < 0 {
-                hold eq_numarg = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq needs string variables, not numeric values"))
-              }
-              hold eqpslot_at = len(code)
-              when arch == 0 {
-                fixsite = push(fixsite, eqpslot_at + 1)
-              } otherwise {
-                fixsite = push(fixsite, eqpslot_at)
-              }
-              fixoff = push(fixoff, eq_slot)
-              code = emit_load_global(code, arch)
-              hold eq_p2off = eq_slot + 4
-              hold eqnslot_at = len(code)
-              when arch == 0 {
-                fixsite = push(fixsite, eqnslot_at + 1)
-              } otherwise {
-                fixsite = push(fixsite, eqnslot_at)
-              }
-              fixoff = push(fixoff, eq_p2off)
-              code = emit_load_global(code, arch)
-              }
-            }
-            eq_arg = eq_arg + 1
-          }
-          code = emit_call(code, arch, 0)
-          eq_calls = push(eq_calls, len(code) - 4)
-          eq_used = 1
-          want = 0
-          k = eq_c2
-        }
-        when t0 == 110 {
-          when want == 0 {
-            hold twonum = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
-          }
-          hold v = tok_num(t)
-          when v > 2147483647 {
-            hold toobig = fail(1, concat(concat("line ", numstr(lineno)), ": an integer literal of 2^31 or more"))
-          }
-          code = emit_push_imm2(code, arch, v)
-          want = 0
-        }
-        when t0 == 108 {
-          hold misplaced_literal = fail(1, concat(concat("line ", numstr(lineno)), ": a string literal in a numeric expression is supported only as len()'s argument"))
-        }
-        when t0 == 118 && is_streq_tok == 0 {
-          when want == 0 {
-            hold twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
-          }
-          hold vname = sub(t, 1, len(t))
-          hold is_len_call = 0
-          when string_eq(vname, "len") == 1 && k + 3 < tn {
-            when string_eq(tok_at(toks, k + 1), "(") == 1 && string_eq(tok_at(toks, k + 3), ")") == 1 {
-              is_len_call = 1
-            }
-          }
-          hold is_chr_len = 0
-          when is_len_call == 0 && string_eq(vname, "len") == 1 && k + 6 < tn {
-            when string_eq(tok_at(toks, k + 1), "(") == 1 && tok_name_is(tok_at(toks, k + 2), "chr") == 1 && string_eq(tok_at(toks, k + 3), "(") == 1 && string_eq(tok_at(toks, k + 5), ")") == 1 && string_eq(tok_at(toks, k + 6), ")") == 1 {
-              is_chr_len = 1
-            }
-          }
-          when is_chr_len == 1 {
-            // len(chr(...)): build the cell, then read its length half.
-            hold len_intok = tok_at(toks, k + 4)
-            hold len_inkind = sx_index(len_intok, 0)
-            when len_inkind != 110 && len_inkind != 118 {
-              hold bad_len_chr = fail(1, concat(concat("line ", numstr(lineno)), ": chr accepts an integer literal or a numeric variable in native32"))
-            }
-            hold len_inner = sub(len_intok, 1, len(len_intok))
-            hold len_kind = chr_kind_of(len_inner, names, strnames, lineno)
-            hold len_val = 0
-            hold len_src = 0
-            when len_kind == 0 {
-              len_val = tok_num(concat("n", len_inner))
-            } otherwise {
-              len_src = slot_of(names, len_inner)
-            }
-            hold len_cell = len(data)
-            data = push(data, 0)
-            data = push(data, 10)
-            data = push(data, 0)
-            data = push(data, 0)
-            hold len_dst = len(data)
-            data = put_zeros(data, 8)
-            code = emit_chr_value(code, arch, chr_spec(len_kind, len_val, len_src), len_cell, len_dst)
-            hold len_base = 4202496
-            when arch == 0 {
-              len_base = 134520832
-            }
-            code = emit_load_abs(code, arch, len_base + len_dst + 4)
-            want = 0
-            k = k + 6
-          }
-          when is_len_call == 0 && is_chr_len == 0 && string_eq(vname, "len") == 1 && k + 1 < tn {
-            when string_eq(tok_at(toks, k + 1), "(") == 1 {
-              hold bad_len_shape = fail(1, concat(concat("line ", numstr(lineno)), ": len() expects exactly one string variable, string literal or chr(...), not a general expression"))
-            }
-          }
-          when is_len_call == 1 {
-            hold argtok = tok_at(toks, k + 2)
-            when sx_index(argtok, 0) == 108 {
-              code = emit_push_imm2(code, arch, tok_num(argtok))
-            } otherwise {
-              when sx_index(argtok, 0) != 118 {
-                hold bad_len_arg = fail(1, concat(concat("line ", numstr(lineno)), ": len() requires a string variable or literal"))
-              }
-              hold argname = sub(argtok, 1, len(argtok))
-              hold arg_slot = slot_of(names, argname)
-              when arg_slot < 0 {
-                hold bad_len_name = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(argname, "' in len()")))
-              }
-              when slot_of(strnames, argname) < 0 {
-                hold bad_len_type = fail(1, concat(concat("line ", numstr(lineno)), ": len() requires a string variable"))
-              }
-              hold vat = len(code)
-              when arch == 0 {
-                fixsite = push(fixsite, vat + 1)
-              } otherwise {
-                fixsite = push(fixsite, vat)
-              }
-              fixoff = push(fixoff, arg_slot + 4)
-              code = emit_load_global(code, arch)
-            }
-            want = 0
-            k = k + 3
-          }
-          when is_len_call == 0 && is_chr_len == 0 {
-            hold vslot = slot_of(names, vname)
-            when vslot < 0 {
-              hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(vname, "'")))
-            }
-            when slot_of(strnames, vname) >= 0 {
-              when k + 1 >= tn || string_eq(tok_at(toks, k + 1), "[") == 0 {
-                hold stringnum = fail(1, concat(concat(concat("line ", numstr(lineno)), ": string variable '"), concat(vname, "' used as a number (index it with [i])")))
-              }
-              hold svat = len(code)
-              when arch == 0 {
-                fixsite = push(fixsite, svat + 1)
-              } otherwise {
-                fixsite = push(fixsite, svat)
-              }
-              fixoff = push(fixoff, vslot)
-              code = emit_load_global(code, arch)
-              hold slat = len(code)
-              when arch == 0 {
-                fixsite = push(fixsite, slat + 1)
-              } otherwise {
-                fixsite = push(fixsite, slat)
-              }
-              fixoff = push(fixoff, vslot + 4)
-              code = emit_load_global(code, arch)
-              want = 0
-              pending_string_index = 1
-            } otherwise {
-              hold vat2 = len(code)
-              when arch == 0 {
-                fixsite = push(fixsite, vat2 + 1)
-              } otherwise {
-                fixsite = push(fixsite, vat2)
-              }
-              fixoff = push(fixoff, vslot)
-              code = emit_load_global(code, arch)
-              want = 0
-            }
-          }
-        }
-        when t0 == 40 {
-          when want == 0 {
-            hold badparen = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' where an operator was expected"))
-          }
-          when depth < len(ops) {
-            ops[depth] = 0
-          } otherwise {
-            ops = push(ops, 0)
-          }
-          depth = depth + 1
-        }
-        when t0 == 41 {
-          when want == 1 {
-            hold badclose = fail(1, concat(concat("line ", numstr(lineno)), ": a ')' where a value was expected"))
-          }
-          hold open = 0
-          while depth > 0 && open == 0 {
-            depth = depth - 1
-            when ops[depth] == 0 {
-              open = 1
-            } otherwise {
-              code = emit_op2(code, arch, ops[depth])
-            }
-          }
-          when open == 0 {
-            hold unbal = fail(1, concat(concat("line ", numstr(lineno)), ": a ')' with no '('"))
-          }
-        }
-        when t0 == 91 {
-          when want == 1 || pending_string_index == 0 {
-            hold badindexopen = fail(1, concat(concat("line ", numstr(lineno)), ": `[` must index a string variable"))
-          }
-          pending_string_index = 0
-          when depth < len(ops) {
-            ops[depth] = 0 - 1
-          } otherwise {
-            ops = push(ops, 0 - 1)
-          }
-          depth = depth + 1
-          want = 1
-        }
-        when t0 == 93 {
-          when want == 1 {
-            hold emptyindex = fail(1, concat(concat("line ", numstr(lineno)), ": an empty string index"))
-          }
-          hold close_index = 0
-          while depth > 0 && close_index == 0 {
-            depth = depth - 1
-            when ops[depth] == 0 - 1 {
-              close_index = 1
-            } otherwise {
-              when ops[depth] == 0 {
-                hold unclosed_paren_index = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' with no ')' inside a string index"))
-              }
-              code = emit_op2(code, arch, ops[depth])
-            }
-          }
-          when close_index == 0 {
-            hold unclosed_index = fail(1, concat(concat("line ", numstr(lineno)), ": a ']' with no '['"))
-          }
-          when arch == 0 {
-            code = e1(code, 90)
-            code = e1(code, 89)
-            code = e1(code, 88)
-            code = e1(code, 133)
-            code = e1(code, 210)
-            code = e1(code, 15)
-            code = e1(code, 137)
-            hold neg_index_site = len(code)
-            code = e32(code, 0)
-            code = e1(code, 1)
-            code = e1(code, 202)
-            hold neg_index_done = len(code)
-            code = patch32(code, neg_index_site, neg_index_done - (neg_index_site + 4))
-            code = e1(code, 59)
-            code = e1(code, 209)
-            hold bad_index_site = len(code)
-            code = e1(code, 15)
-            code = e1(code, 131)
-            code = e32(code, 0)
-            code = e1(code, 15)
-            code = e1(code, 182)
-            code = e1(code, 4)
-            code = e1(code, 16)
-            code = e1(code, 80)
-            hold done_index_site = len(code)
-            code = e1(code, 233)
-            code = e32(code, 0)
-            hold bad_index = len(code)
-            code = e1(code, 184)
-            code = e32(code, 1)
-            code = e1(code, 187)
-            code = e32(code, 1)
-            code = e1(code, 205)
-            code = e1(code, 128)
-            hold done_index = len(code)
-            code = patch32(code, bad_index_site + 2, bad_index - (bad_index_site + 6))
-            code = patch32(code, done_index_site + 1, done_index - (done_index_site + 5))
-          } otherwise {
-            when arch == 1 {
-              code = emit_pop_acc(code, arch)
-              code = e_w(code, 2852127724)
-              code = emit_pop_acc(code, arch)
-              code = e_w(code, 2852127723)
-              code = emit_pop_acc(code, arch)
-              code = e_w(code, 2852127722)
-              code = e_w(code, 1895825823)
-              hold neg_a64_site = len(code)
-              code = e_w(code, 1409286154)
-              code = e_w(code, 185270668)
-              hold neg_a64_done = len(code)
-              code = a_imm19(code, neg_a64_site, neg_a64_done - neg_a64_site)
-              code = e_w(code, 1795883423)
-              hold bad_a64_site = len(code)
-              code = e_w(code, 1409286146)
-              code = e_w(code, 2332819786)
-              code = e_w(code, 960495936)
-              code = e_w(code, 4162785248)
-              hold done_a64_site = len(code)
-              code = e_w(code, 335544320)
-              hold bad_a64 = len(code)
-              code = a_movz(code, 1, 0, 1)
-              code = a_movz(code, 1, 8, 93)
-              code = e_w(code, 3556769793)
-              hold done_a64 = len(code)
-              code = a_imm19(code, bad_a64_site, bad_a64 - bad_a64_site)
-              code = a_imm26(code, done_a64_site, done_a64 - done_a64_site)
-            } otherwise {
-              code = rv_pop_reg(code, 12)
-              code = rv_pop_reg(code, 11)
-              code = rv_pop_reg(code, 10)
-              hold neg_rv_site = len(code)
-              code = e_w(code, rv_b_word(0, 0, 12, 5))
-              code = e_w(code, rv_r(0, 11, 12, 0, 12, 59))
-              hold neg_rv_done = len(code)
-              code = set_w(code, neg_rv_site, rv_b_word(neg_rv_done - neg_rv_site, 0, 12, 5))
-              hold bad_rv_site = len(code)
-              code = e_w(code, rv_b_word(0, 11, 12, 7))
-              code = e_w(code, rv_r(0, 12, 10, 0, 10, 51))
-              code = e_w(code, rv_i(0, 10, 4, 10, 3))
-              code = rv_push_a0(code)
-              hold done_rv_site = len(code)
-              code = e_w(code, rv_j_word(0, 0))
-              hold bad_rv = len(code)
-              code = e_w(code, rv_i(1, 0, 0, 10, 19))
-              code = e_w(code, rv_i(93, 0, 0, 17, 19))
-              code = e_w(code, 115)
-              hold done_rv = len(code)
-              code = set_w(code, bad_rv_site, rv_b_word(bad_rv - bad_rv_site, 11, 12, 7))
-              code = set_w(code, done_rv_site, rv_j_word(done_rv - done_rv_site, 0))
-            }
-          }
-          want = 0
-        }
-        when t0 == 111 {
-          hold oc = op_code(t)
-          when string_eq(t, "o,") == 1 {
-            hold bad_comma = fail(1, concat(concat("line ", numstr(lineno)), ": a ',' is only allowed between the two arguments of string_eq"))
-          }
-          when want == 1 {
-            when oc == 2 {
-              code = emit_push_imm2(code, arch, 0)
-            } otherwise {
-              hold badop = fail(1, concat(concat(concat("line ", numstr(lineno)), ": the operator '"), concat(sub(t, 1, len(t)), "' where a value was expected")))
-            }
-          }
-          hold pr = op_prec(oc)
-          hold more = 1
-          while more == 1 {
-            when depth == 0 {
-              more = 0
-            } otherwise {
-              when ops[depth - 1] == 0 {
-                more = 0
-              } otherwise {
-                when op_prec(ops[depth - 1]) >= pr {
-                  depth = depth - 1
-                  code = emit_op2(code, arch, ops[depth])
-                } otherwise {
-                  more = 0
-                }
-              }
-            }
-          }
-          when depth < len(ops) {
-            ops[depth] = oc
-          } otherwise {
-            ops = push(ops, oc)
-          }
-          depth = depth + 1
-          want = 1
-        }
-        k = k + 1
-      }
-      when want == 1 {
-        hold trailing = fail(1, concat(concat("line ", numstr(lineno)), ": an expression that ends with an operator"))
-      }
-      while depth > 0 {
-        depth = depth - 1
-        when ops[depth] == 0 {
-          hold openleft = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' with no ')'"))
-        }
-        code = emit_op2(code, arch, ops[depth])
-      }
-      code = emit_pop_acc(code, arch)
+      hold expr_done = emit_expression(extext)
     }
 
     // ---- chr: byte, length, pointer into the target's (pointer, length) slot ----

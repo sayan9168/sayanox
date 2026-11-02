@@ -213,7 +213,7 @@ make run_http_get(gen2: str, seed_min: str, seed_bin: str, nat_bin: str) -> num 
   when net_run(concat(sh_q(gen2), concat(" ", concat(sh_q(t_sa), concat(" ", concat(sh_q(g2_c), " >/dev/null")))))) != 0 {
     hold fg1 = fail_with_cleanup("gen2 compile failed on http_get", pid_f, "")
   }
-  when net_run(concat(cc, concat(" -O2 -o ", concat(sh_q(g2_b), concat(" ", sh_q(g2_c)))))) != 0 {
+  when net_run(concat(cc, concat(" -std=gnu11 -O2 -o ", concat(sh_q(g2_b), concat(" ", sh_q(g2_c)))))) != 0 {
     hold fg2 = fail_with_cleanup("gen2 C build failed on http_get", pid_f, "")
   }
   when net_run(concat(sh_q(g2_b), concat(" > ", sh_q(g2_o)))) != 0 {
@@ -233,7 +233,7 @@ make run_http_get(gen2: str, seed_min: str, seed_bin: str, nat_bin: str) -> num 
   when net_run(concat(sh_q(seed_min), concat(" ", concat(sh_q(t_sa), concat(" > ", sh_q(sm_c)))))) != 0 {
     hold fsm1 = fail_with_cleanup("seed_min compile failed on http_get", pid_f, "")
   }
-  when net_run(concat(cc, concat(" -O2 -o ", concat(sh_q(sm_b), concat(" ", sh_q(sm_c)))))) != 0 {
+  when net_run(concat(cc, concat(" -std=gnu11 -O2 -o ", concat(sh_q(sm_b), concat(" ", sh_q(sm_c)))))) != 0 {
     hold fsm2 = fail_with_cleanup("seed_min C build failed on http_get", pid_f, "")
   }
   when net_run(concat(sh_q(sm_b), concat(" > ", sh_q(sm_o)))) != 0 {
@@ -250,7 +250,7 @@ make run_http_get(gen2: str, seed_min: str, seed_bin: str, nat_bin: str) -> num 
   when net_run(concat(sh_q(seed_bin), concat(" ", concat(sh_q(t_sa), concat(" > ", sh_q(sd_c)))))) != 0 {
     hold fsd1 = fail_with_cleanup("sxc_seed compile failed on http_get", pid_f, "")
   }
-  when net_run(concat(cc, concat(" -std=gnu99 -O2 -o ", concat(sh_q(sd_b), concat(" ", concat(sh_q(sd_c), " -lm")))))) != 0 {
+  when net_run(concat(cc, concat(" -std=gnu11 -O2 -o ", concat(sh_q(sd_b), concat(" ", concat(sh_q(sd_c), " -lm")))))) != 0 {
     hold fsd2 = fail_with_cleanup("sxc_seed C build failed on http_get", pid_f, "")
   }
   when net_run(concat(sh_q(sd_b), concat(" > ", sh_q(sd_o)))) != 0 {
@@ -292,7 +292,7 @@ make run_sayacrawl(gen2: str, crawl_sa: str) -> num {
   when net_run(c_cmd1) != 0 {
     hold fc1 = fail_with_cleanup("gen2 failed to compile sayascrape/crawl.sa", "", "")
   }
-  hold c_cmd2 = concat(cc, concat(" -O2 -o ", concat(sh_q(crawl_b), concat(" ", concat(sh_q(crawl_c), " -lm")))))
+  hold c_cmd2 = concat(cc, concat(" -std=gnu11 -O2 -o ", concat(sh_q(crawl_b), concat(" ", concat(sh_q(crawl_c), " -lm")))))
   when net_run(c_cmd2) != 0 {
     hold fc2 = fail_with_cleanup("C build failed on sayascrape/crawl.c", "", "")
   }

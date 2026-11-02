@@ -11,7 +11,7 @@ make ep_compile(kind: num, source: str, bin: str) -> num {
     hold c = concat(bin, ".c")
     hold emitted = pg_emit(kind, source, c, 0)
     // -lm follows the C input so both as-needed and traditional linkers work.
-    hold cmd = concat(sh_quote(cc_cmd()), " -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ")
+    hold cmd = concat(sh_quote(cc_cmd()), " -std=gnu11 -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ")
     cmd = concat(cmd, concat(sh_quote(bin), " "))
     cmd = concat(cmd, concat(sh_quote(c), " -lm"))
     give target_run(cmd, concat("compile ", source))

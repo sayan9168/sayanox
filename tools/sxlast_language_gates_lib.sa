@@ -167,7 +167,7 @@ make xl_full(d: str) -> num {
   rejected = xl_reject(1, source, kp_join(d, "strcall.gen2"), "#error sayanox-min:")
   rejected = xl_reject(2, source, kp_join(d, "strcall.native"), "")
   hold emit = pg_emit(0, source, kp_join(d, "strcall.seed.c"), 1)
-  hold cmd = concat("cc -O2 -o ", concat(gl_sh_quote(kp_join(d, "strcall.seed")), concat(" ", gl_sh_quote(kp_join(d, "strcall.seed.c")))))
+  hold cmd = concat("cc -std=gnu11 -O2 -o ", concat(gl_sh_quote(kp_join(d, "strcall.seed")), concat(" ", gl_sh_quote(kp_join(d, "strcall.seed.c")))))
   hold c_failure = xb_fail_command(cmd, kp_join(d, "strcall.seed.err"), "")
   // Expression coverage alone is not a certificate: full claims must verify
   // pins, the independent inventories, executable evidence and controls.

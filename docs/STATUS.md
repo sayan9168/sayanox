@@ -1,5 +1,121 @@
 # Status
 
+**2026-11-02 (eighth increment) — the CI runner image moved to Ubuntu 26 / gcc
+15, so the generated C is compiled with an explicit dialect.**
+
+Both CI jobs on the first push of the step-7 commit failed inside
+`test-gen2-boolean-args` (reported as `target failed: test-typed-sig`, which
+contains it), and the failure was invisible locally: the sandbox has gcc 12.2.0,
+the runner now reports `cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0` — gcc 15 defaults to
+`-std=gnu23`. There `true` and `false` are keywords, and
+`selfhost/gen2_boolean_args_test.sa` deliberately uses them as *identifiers*
+(`struct Flags { true, false }`, `Flags { true: 4, false: 5 }`), which the C
+backend emits verbatim:
+
+```
+typedef struct { double true; double false; } Flags;
+```
+
+```
+selfhost/seed_tests/g2b.c:300:25: error: expected identifier or '(' before 'true'
+selfhost/seed_tests/g2b.c:340:30: warning: excess elements in struct initializer
+[FAIL] C compilation failed for selfhost/seed_tests/g2b.c
+```
+
+The program is legal C17 and the repo had never stated which C dialect it emits
+for. The contract is now explicit: **generated C is compiled as C11**, so every
+gate-side compile of generated C passes `-std=gnu11` (this follows
+`tools/sxbootstrap_lib.sa`, which already pinned `-std=gnu99`). That covers the
+central helper (`gl_compile_c`), the bootstrap stage compiles, the parity,
+GC-pool, ISA, last-language, net, package-key and stage-2 helpers, and the
+`sxsuite`/`sxirexec` compiles that had no dialect flag. Nothing about the C the
+compiler emits changed, so no golden moved.
+
+The underlying gap is recorded rather than papered over: emitted identifiers are
+not C23-clean, because a field or variable named `true`/`false`/`bool` would be a
+keyword there. Closing it needs identifier mangling in every C emitter and a gate
+that compiles the emitted C under both dialects — register item **R17** in
+[REMAINING_WORK](REMAINING_WORK.md).
+
+Locally (gcc 12.2.0) the C23 reinterpretation cannot be reproduced, so this
+increment is verified two ways: the whole local chain still passes under
+`-std=gnu11`, and the CI jobs on the gcc 15.2.0 image are the real oracle for the
+dialect pin.
+
+```
+./sx ci                     -> 0   (569 [OK] lines, 0 [FAIL], === TRUE-SELFHOST-FULL-V1-OK ===)
+CI "Complete original acceptance"                  -> pass, 51m06s   (gcc 15.2.0)
+CI "Sayanox entry and migrated acceptance gates"    -> pass, 29m30s   (gcc 15.2.0)
+```
+
+(The local run prints one `[OK]` line fewer than the previous run only because
+the `sxpkg` tool was already built and its rebuild line was not printed; no gate
+was skipped — the two logs differ in exactly that one line.)
+
+The same image also exercises the step-7 work end to end: `test-native32`,
+`test-native-arm64`, `test-native-riscv64` and `test-sxisaexec` all pass there,
+including the i386 execution parity that the C-backed oracle provides.
+
+**2026-11-02 (seventh increment) — R02 step 7: `chr(<expression>)` in every
+position `chr` is accepted in.**
+
+Up to now an expression was only accepted in the three whole-value positions:
+`hold s = chr(n + 1)`, `s = chr(n + 1)`, `show chr(n + 1)`. The calls that scan
+their arguments as tokens — `concat`, `string_eq`, `len` — still required a
+single-token argument, so `concat(chr(n + 1), "x")` and
+`string_eq(chr(n + 61), "A")` were refusals.
+
+The cause was structural: the integer expression emitter lived inside the
+statement loop, so an argument position had no way to compile a sub-expression.
+It is now one function (`emit_expression(extext) -> num`), and the new
+`emit_chr_expr_slot` compiles a `chr` argument through it, parks the value in
+the shared `chr_acc_slot` word and returns that slot to the lowering the
+one-token form already used. `string_eq` and `len(chr(...))` locate the `chr`
+call's closing parenthesis with the new parenthesis-matching `paren_close`
+(instead of assuming `k + 5`), render the inner tokens back into source with
+`tok_range_text`, and hand them to the emitter. A one-token argument keeps the
+old direct lowering, so **no reviewed machine-code golden changed** — the only
+image that moved is the fixture that gained the new lines.
+
+Now accepted: `concat(chr(n + 1), "x")`, `concat("-", chr(n * 16 + 1))`,
+`string_eq(chr(n + 61), "A")`, `string_eq("A", chr(n + 61))`,
+`string_eq(chr(n + 61), chr(n + 62))`, `len(chr(n + 61))`, `len(chr(n - 4))`.
+Still refused and still fixture-covered: `chr` of a string variable, `chr` of an
+unknown name, `chr(n, 1)`, division inside the `chr` argument, and `concat` as
+an operand of another expression.
+
+The refusal matrix moves 39 -> 40: `refuse/chr_nested_expression.sa` and
+`refuse/chr_expr_streq.sa` are deleted because those programs are legal now, and
+three are added (`chr_expr_string_arg.sa`, `chr_expr_len_unknown.sa`,
+`chr_expr_div.sa` — one per newly generalised call site).
+`selfhost/native32_tests/chr_expr.sa` grows from 9 to 18 output lines and pins
+i386 8515 bytes, with regenerated AArch64/RV64IM goldens; the two new lines cover
+a nested call and explicit grouping inside the `chr` argument
+(`string_eq(chr(len(s) + 62), "A")`, `concat(chr((n + 1) * 16 + 1), "!")`).
+
+One defect was found by that test and fixed before the gate run: the first
+version of `tok_range_text` stripped one character from *every* token, so a
+parenthesis token lost itself and `chr(len(s) + 62)` rendered as `lens+62`
+("unknown name 'lens'"). Parentheses are now copied whole; the fixture above
+pins the case.
+
+```
+./sx target test-native32        -> 0
+./sx target test-native-arm64    -> 0
+./sx target test-native-riscv64  -> 0
+./sx target test-sxisaexec       -> 0
+```
+
+Complete guarded CI on this tree: `./sx ci` exit 0, **570 `[OK]`, 0 `[FAIL]`**
+(including `test-native32`, `test-native-arm64`, `test-native-riscv64`,
+`test-sxisaexec`, `test-driver`, `test-doc-claims` and the published-language v1
+acceptance chain, ending in `=== TRUE-SELFHOST-FULL-V1-OK ===`).
+
+Two negative controls confirm the new assertions are real: changing the pinned
+i386 size to 8516 fails with `[FAIL] reviewed i386 image size: got 8515, want
+8516`, and changing the expected refusal count to 41 fails with `[FAIL]
+complete backend refusal matrix: got 40, want 41`.
+
 **2026-11-02 (sixth increment) — R02 step 6: `chr` of an integer
 expression.**
 

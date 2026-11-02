@@ -128,7 +128,7 @@ make xc_containers(d: str, arch: str) -> num {
       when string_eq(name, "chr") == 1 { expected = 8358 }
       when string_eq(name, "chr_nested") == 1 { expected = 8534 }
       when string_eq(name, "concat_expr") == 1 { expected = 8590 }
-      when string_eq(name, "chr_expr") == 1 { expected = 8313 }
+      when string_eq(name, "chr_expr") == 1 { expected = 8515 }
       hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
       hold cdir = kp_join(d, name)
       hold oracle = xq_parity_unknown(source, cdir)
@@ -141,7 +141,7 @@ make xc_containers(d: str, arch: str) -> num {
       }
     }
   }
-  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 39)
+  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 40)
   hold literal_len_source = "selfhost/native32_tests/len_literals.sa"
   hold literal_len_file = kp_join(d, "len-literals.elf")
   hold literal_len_build = pg_command(xc_command(literal_len_source, literal_len_file, arch), "literal len compile")
@@ -188,7 +188,7 @@ make xc_module(d: str) -> num {
   hold flat = "selfhost/sxmod_tests/collide_flat.sa"
   hold seed = xl_reject(0, flat, kp_join(d, "collision.seed"), "duplicate function name")
   hold gen2 = pg_emit(1, flat, kp_join(d, "collision.gen2.c"), 1)
-  hold cc = concat("LC_ALL=C cc -O2 -o ", concat(gl_sh_quote(kp_join(d, "collision.gen2")), concat(" ", gl_sh_quote(kp_join(d, "collision.gen2.c")))))
+  hold cc = concat("LC_ALL=C cc -std=gnu11 -O2 -o ", concat(gl_sh_quote(kp_join(d, "collision.gen2")), concat(" ", gl_sh_quote(kp_join(d, "collision.gen2.c")))))
   hold rejected = xb_fail_command(cc, kp_join(d, "collision.cc.err"), "'add'")
   hold native = xl_reject(2, flat, kp_join(d, "collision.native"), "declared twice")
   hold command = concat("./tools/sxmod selfhost/sxmod_tests/app.sa ", gl_sh_quote(kp_join(d, "app.sa")))
