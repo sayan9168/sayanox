@@ -316,7 +316,7 @@ make suite_stage2_interp(base: str) -> num {
       when has_line_prefix(ctext, "#error sayanox-min:") != 1 {
         hold fe = fail_suite(1, concat(cname, concat(" interpolation bad case ", concat(istr(bi), " lacks #error sayanox-min:"))))
       }
-      when run_command(concat(cc, concat(" -O2 -o ", concat(sh_q(bad_exe), concat(" ", concat(sh_q(bad_c), " >/dev/null 2>&1")))))) == 0 {
+      when run_command(concat(cc, concat(" -std=gnu11 -O2 -o ", concat(sh_q(bad_exe), concat(" ", concat(sh_q(bad_c), " >/dev/null 2>&1")))))) == 0 {
         hold fa = fail_suite(1, concat(cname, concat(" accepted bad interpolation case ", istr(bi))))
       }
       bi = bi + 1
@@ -340,7 +340,7 @@ make suite_stage2_interp(base: str) -> num {
     when run_command(concat(sh_q(cbin), concat(" ", concat(sh_q(lim_sa), concat(" ", concat(sh_q(lim_c), " >/dev/null 2>&1")))))) != 0 {
       hold fl1 = fail_suite(1, concat(cname, " 16-hole limit failed to compile"))
     }
-    when run_command(concat(cc, concat(" -O2 -o ", concat(sh_q(lim_exe), concat(" ", sh_q(lim_c)))))) != 0 {
+    when run_command(concat(cc, concat(" -std=gnu11 -O2 -o ", concat(sh_q(lim_exe), concat(" ", sh_q(lim_c)))))) != 0 {
       hold fl2 = fail_suite(1, concat(cname, " 16-hole C failed to compile"))
     }
     when run_command(concat(sh_q(lim_exe), concat(" > ", sh_q(lim_out)))) != 0 {
@@ -452,7 +452,7 @@ make suite_struct_fn(base: str) -> num {
         }
         hold exe = concat(stem, concat("-O", opt))
         hold out_f = concat(exe, ".out")
-        hold cmd_cc = concat(cc, concat(" -O", concat(opt, concat(" -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(exe), concat(" ", sh_q(concat(stem, ".c"))))))))
+        hold cmd_cc = concat(cc, concat(" -std=gnu11 -O", concat(opt, concat(" -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(exe), concat(" ", sh_q(concat(stem, ".c"))))))))
         when run_command(cmd_cc) != 0 {
           hold fcc = fail_suite(1, concat(cname, concat(" struct_fn cc failed: ", pname)))
         }
@@ -474,7 +474,7 @@ make suite_struct_fn(base: str) -> num {
       when has_line_prefix(read_file(bad_c), "#error sayanox-min:") != 1 {
         hold fe = fail_suite(1, concat(cname, concat(" struct_fn bad ", concat(istr(bi), " lacks #error sayanox-min:"))))
       }
-      when run_command(concat(cc, concat(" -O2 -o ", concat(sh_q(bad_exe), concat(" ", concat(sh_q(bad_c), " >/dev/null 2>&1")))))) == 0 {
+      when run_command(concat(cc, concat(" -std=gnu11 -O2 -o ", concat(sh_q(bad_exe), concat(" ", concat(sh_q(bad_c), " >/dev/null 2>&1")))))) == 0 {
         hold fa = fail_suite(1, concat(cname, concat(" accepted struct_fn bad case ", istr(bi))))
       }
       bi = bi + 1
@@ -545,7 +545,7 @@ make check_generic_type_limit(dir: str, name: str, ty: str, val: str, want: str)
     when has_line_prefix(text, "#error sayanox-min:") != 1 || contains(text, concat("#error sayanox-min: ", want)) != 1 {
       hold fg1 = fail_suite(1, concat(cname, concat(" missing precise type-argument diagnostic on ", name)))
     }
-    when run_command(concat(cc, concat(" -c ", concat(sh_q(cpath), concat(" -o ", concat(sh_q(concat(stem, ".o")), " >/dev/null 2>&1")))))) == 0 {
+    when run_command(concat(cc, concat(" -std=gnu11 -c ", concat(sh_q(cpath), concat(" -o ", concat(sh_q(concat(stem, ".o")), " >/dev/null 2>&1")))))) == 0 {
       hold fg2 = fail_suite(1, concat(cname, concat(" C compiled on refused ", name)))
     }
     ci = ci + 1
@@ -1007,7 +1007,7 @@ make suite_compiler_features(base: str) -> num {
       when run_command(concat(sh_q(gbin), concat(" selfhost/compiler_text_test.sa ", concat(sh_q(concat(stem, ".c")), " >/dev/null 2>&1")))) != 0 {
         hold fc = fail_suite(1, concat(gname, " failed compiler_text_test.sa"))
       }
-      when run_command(concat(cc, concat(" -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(stem), concat(" ", sh_q(concat(stem, ".c"))))))) != 0 {
+      when run_command(concat(cc, concat(" -std=gnu11 -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ", concat(sh_q(stem), concat(" ", sh_q(concat(stem, ".c"))))))) != 0 {
         hold fcc = fail_suite(1, concat(gname, " compiler_text_test C build failed"))
       }
       when run_command(concat(sh_q(stem), concat(" > ", sh_q(out_f)))) != 0 {

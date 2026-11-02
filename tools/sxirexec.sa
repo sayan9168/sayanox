@@ -1949,7 +1949,7 @@ make check_4way_parity(src: str, work: str) -> num {
   when rc_s1 != 0 {
     hold fs1 = fail_ir(1, concat("seed-min failed on: ", src))
   }
-  hold rc_s2 = run_command(concat("cc -O2 -o ", concat(work, concat("/seed.bin ", concat(work, "/seed.c")))))
+  hold rc_s2 = run_command(concat("cc -std=gnu11 -O2 -o ", concat(work, concat("/seed.bin ", concat(work, "/seed.c")))))
   when rc_s2 != 0 {
     hold fs2 = fail_ir(1, concat("cc failed on seed.c for: ", src))
   }
@@ -1963,7 +1963,7 @@ make check_4way_parity(src: str, work: str) -> num {
   when rc_g1 != 0 {
     hold fg1 = fail_ir(1, concat("gen2 failed on: ", src))
   }
-  hold rc_g2 = run_command(concat("cc -O2 -o ", concat(work, concat("/gen2.bin ", concat(work, "/gen2.c")))))
+  hold rc_g2 = run_command(concat("cc -std=gnu11 -O2 -o ", concat(work, concat("/gen2.bin ", concat(work, "/gen2.c")))))
   when rc_g2 != 0 {
     hold fg2 = fail_ir(1, concat("cc failed on gen2.c for: ", src))
   }

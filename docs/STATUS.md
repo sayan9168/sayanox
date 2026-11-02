@@ -1,5 +1,47 @@
 # Status
 
+**2026-11-02 (eighth increment) — the CI runner image moved to Ubuntu 26 / gcc
+15, so the generated C is compiled with an explicit dialect.**
+
+Both CI jobs on the first push of the step-7 commit failed inside
+`test-gen2-boolean-args` (reported as `target failed: test-typed-sig`, which
+contains it), and the failure was invisible locally: the sandbox has gcc 12.2.0,
+the runner now reports `cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0` — gcc 15 defaults to
+`-std=gnu23`. There `true` and `false` are keywords, and
+`selfhost/gen2_boolean_args_test.sa` deliberately uses them as *identifiers*
+(`struct Flags { true, false }`, `Flags { true: 4, false: 5 }`), which the C
+backend emits verbatim:
+
+```
+typedef struct { double true; double false; } Flags;
+```
+
+```
+selfhost/seed_tests/g2b.c:300:25: error: expected identifier or '(' before 'true'
+selfhost/seed_tests/g2b.c:340:30: warning: excess elements in struct initializer
+[FAIL] C compilation failed for selfhost/seed_tests/g2b.c
+```
+
+The program is legal C17 and the repo had never stated which C dialect it emits
+for. The contract is now explicit: **generated C is compiled as C11**, so every
+gate-side compile of generated C passes `-std=gnu11` (this follows
+`tools/sxbootstrap_lib.sa`, which already pinned `-std=gnu99`). That covers the
+central helper (`gl_compile_c`), the bootstrap stage compiles, the parity,
+GC-pool, ISA, last-language, net, package-key and stage-2 helpers, and the
+`sxsuite`/`sxirexec` compiles that had no dialect flag. Nothing about the C the
+compiler emits changed, so no golden moved.
+
+The underlying gap is recorded rather than papered over: emitted identifiers are
+not C23-clean, because a field or variable named `true`/`false`/`bool` would be a
+keyword there. Closing it needs identifier mangling in every C emitter and a gate
+that compiles the emitted C under both dialects — register item **R17** in
+[REMAINING_WORK](REMAINING_WORK.md).
+
+Locally (gcc 12.2.0) the C23 reinterpretation cannot be reproduced, so this
+increment is verified two ways: `./sx target test-sxbuild` and the affected
+gates still pass under `-std=gnu11` here, and the CI jobs on the gcc 15.2.0 image
+are the real oracle for the dialect pin.
+
 **2026-11-02 (seventh increment) — R02 step 7: `chr(<expression>)` in every
 position `chr` is accepted in.**
 

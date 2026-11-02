@@ -31,7 +31,7 @@ make ag_full_gen1(binary: num, built: list) -> num {
     built[12] = 1
   }
   when binary == 1 {
-    hold cmd = concat(sh_quote(cc_cmd()), " -O2 -o selfhost/gen1 selfhost/gen1.c -lm")
+    hold cmd = concat(sh_quote(cc_cmd()), " -std=gnu11 -O2 -o selfhost/gen1 selfhost/gen1.c -lm")
     hold cc = target_run(cmd, "full-seed gen1 compiler")
   }
   give 0

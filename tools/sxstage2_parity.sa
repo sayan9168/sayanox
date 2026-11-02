@@ -35,7 +35,7 @@ make check_pos(idx: num, src: str, work: str) -> num {
   when rc3 != 0 {
     hold f3 = fail_msg(concat("gen2 failed on: ", src))
   }
-  hold rc4 = run_command(concat(concat("cc -O2 -o ", gen_bin), concat(" ", gen_c)))
+  hold rc4 = run_command(concat(concat("cc -std=gnu11 -O2 -o ", gen_bin), concat(" ", gen_c)))
   when rc4 != 0 {
     hold f4 = fail_msg(concat("cc failed on gen2 C output for: ", src))
   }

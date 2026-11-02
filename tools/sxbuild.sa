@@ -334,7 +334,7 @@ make compile_sa_via_c(compiler_bin: str, in_sa: str, out_bin: str, c_tmp: str) -
   }
 
   hold cc = cc_cmd()
-  hold cmd2 = concat(sh_quote(cc), " -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ")
+  hold cmd2 = concat(sh_quote(cc), " -std=gnu11 -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ")
   cmd2 = concat(cmd2, concat(sh_quote(out_bin), " "))
   cmd2 = concat(cmd2, sh_quote(c_tmp))
   hold rc2 = run_command(cmd2)
@@ -669,7 +669,7 @@ make cmd_parity(in_sa: str, work_dir: str) -> num {
   when run_command(c1) != 0 {
     hold es1 = fail(1, concat("seed-min failed on ", in_sa))
   }
-  hold c1b = concat(sh_quote(cc), " -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ")
+  hold c1b = concat(sh_quote(cc), " -std=gnu11 -O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -o ")
   c1b = concat(c1b, concat(sh_quote(ms_bin), " "))
   c1b = concat(c1b, sh_quote(ms_c))
   when run_command(c1b) != 0 {
@@ -762,7 +762,7 @@ make cmd_bootstrap(out_dir: str) -> num {
   when run_command(g1_cmd) != 0 {
     hold eg1 = fail(1, "bootstrap step 2 failed: seed-min -> gen1_min.c")
   }
-  hold g1_cc = concat(sh_quote(cc), " -O2 -o ")
+  hold g1_cc = concat(sh_quote(cc), " -std=gnu11 -O2 -o ")
   g1_cc = concat(g1_cc, concat(sh_quote(g1_bin), " "))
   g1_cc = concat(g1_cc, sh_quote(g1_c))
   when run_command(g1_cc) != 0 {
@@ -781,7 +781,7 @@ make cmd_bootstrap(out_dir: str) -> num {
   when len(err2) > 0 {
     hold eg2e = fail(1, concat("bootstrap step 3 #error: ", err2))
   }
-  hold g2_cc = concat(sh_quote(cc), " -O2 -o ")
+  hold g2_cc = concat(sh_quote(cc), " -std=gnu11 -O2 -o ")
   g2_cc = concat(g2_cc, concat(sh_quote(g2_bin), " "))
   g2_cc = concat(g2_cc, sh_quote(g2_c))
   when run_command(g2_cc) != 0 {
@@ -799,7 +799,7 @@ make cmd_bootstrap(out_dir: str) -> num {
   when len(err3) > 0 {
     hold eg3e = fail(1, concat("bootstrap step 4 #error: ", err3))
   }
-  hold g3_cc = concat(sh_quote(cc), " -O2 -o ")
+  hold g3_cc = concat(sh_quote(cc), " -std=gnu11 -O2 -o ")
   g3_cc = concat(g3_cc, concat(sh_quote(g3_bin), " "))
   g3_cc = concat(g3_cc, sh_quote(g3_c))
   when run_command(g3_cc) != 0 {

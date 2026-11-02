@@ -34,7 +34,7 @@ make gpm_test(source: str) -> num {
     when mode == 1 { flags = "-O2 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types" }
     when mode >= 2 { flags = "-O2 -g -fno-pie -no-pie -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all" }
     hold bin = concat(base, numstr(mode))
-    hold compile = concat(gl_sh_quote(gl_cc()), concat(" -o ", concat(gl_sh_quote(bin), concat(" ", concat(gl_sh_quote(concat(base, ".c")), concat(" ", flags))))))
+    hold compile = concat(gl_sh_quote(gl_cc()), concat(" -std=gnu11 -o ", concat(gl_sh_quote(bin), concat(" ", concat(gl_sh_quote(concat(base, ".c")), concat(" ", flags))))))
     hold built = gpm_run(compile, concat(bin, ".build"), concat("GC pool compile mode ", numstr(mode)))
     hold cmd = concat("./", bin)
     when mode == 2 { cmd = concat("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ", cmd) }
