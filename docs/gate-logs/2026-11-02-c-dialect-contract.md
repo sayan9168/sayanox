@@ -73,4 +73,21 @@ $ ./sx target test-sxbuild
 [OK] sxbuild target: test-sxbuild          -> 0
 ```
 
-The real oracle is the gcc 15.2.0 CI image; both jobs are re-run on this commit.
+The real oracle is the gcc 15.2.0 CI image, and both jobs pass on it:
+
+| job | result | duration |
+| --- | --- | --- |
+| Complete original acceptance (`./sx ci` on the runner) | **pass** | 51m06s |
+| Sayanox entry and migrated acceptance gates (`doctor test-driver` + the migrated acceptance executables) | **pass** | 29m30s |
+
+The same two jobs had failed on the identical tree before the pin, at 7m28s and
+6m32s inside `test-gen2-boolean-args`.
+
+The complete local chain on gcc 12.2.0 also passes with the new flags:
+
+```
+$ ./sx ci
+[OK] complete original CI acceptance chain and published-language v1 full acceptance
+=== TRUE-SELFHOST-FULL-V1-OK ===
+CI EXIT 0        (569 [OK] lines, 0 [FAIL])
+```

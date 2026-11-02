@@ -38,9 +38,23 @@ that compiles the emitted C under both dialects — register item **R17** in
 [REMAINING_WORK](REMAINING_WORK.md).
 
 Locally (gcc 12.2.0) the C23 reinterpretation cannot be reproduced, so this
-increment is verified two ways: `./sx target test-sxbuild` and the affected
-gates still pass under `-std=gnu11` here, and the CI jobs on the gcc 15.2.0 image
-are the real oracle for the dialect pin.
+increment is verified two ways: the whole local chain still passes under
+`-std=gnu11`, and the CI jobs on the gcc 15.2.0 image are the real oracle for the
+dialect pin.
+
+```
+./sx ci                     -> 0   (569 [OK] lines, 0 [FAIL], === TRUE-SELFHOST-FULL-V1-OK ===)
+CI "Complete original acceptance"                  -> pass, 51m06s   (gcc 15.2.0)
+CI "Sayanox entry and migrated acceptance gates"    -> pass, 29m30s   (gcc 15.2.0)
+```
+
+(The local run prints one `[OK]` line fewer than the previous run only because
+the `sxpkg` tool was already built and its rebuild line was not printed; no gate
+was skipped — the two logs differ in exactly that one line.)
+
+The same image also exercises the step-7 work end to end: `test-native32`,
+`test-native-arm64`, `test-native-riscv64` and `test-sxisaexec` all pass there,
+including the i386 execution parity that the C-backed oracle provides.
 
 **2026-11-02 (seventh increment) — R02 step 7: `chr(<expression>)` in every
 position `chr` is accepted in.**
