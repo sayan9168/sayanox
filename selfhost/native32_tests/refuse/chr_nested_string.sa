@@ -1,0 +1,2 @@
+hold v = string_eq(chr("A"), "A")
+show v

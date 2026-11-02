@@ -966,6 +966,7 @@ hold v3 = verify_six_way(dir, "text", "selfhost/native32_tests/text.sa", "selfho
 hold vcopy = verify_six_way(dir, "strcopy", "selfhost/native32_tests/strcopy.sa", "selfhost/native32_tests/golden/strcopy.arm64.elf", "selfhost/native32_tests/golden/strcopy.riscv64.elf")
 hold veq = verify_six_way(dir, "streq", "selfhost/native32_tests/streq.sa", "selfhost/native32_tests/golden/streq.arm64.elf", "selfhost/native32_tests/golden/streq.riscv64.elf")
 hold vchr = verify_six_way(dir, "chr", "selfhost/native32_tests/chr.sa", "selfhost/native32_tests/golden/chr.arm64.elf", "selfhost/native32_tests/golden/chr.riscv64.elf")
+hold vchrn = verify_six_way(dir, "chr_nested", "selfhost/native32_tests/chr_nested.sa", "selfhost/native32_tests/golden/chr_nested.arm64.elf", "selfhost/native32_tests/golden/chr_nested.riscv64.elf")
 hold vstr = verify_six_way(dir, "strings", "selfhost/native32_tests/strings.sa", "", "")
 hold vlit = verify_six_way(dir, "len_literals", "selfhost/native32_tests/len_literals_common.sa", "", "")
 hold vlit_oracle = assert_files_eq("selfhost/native32_tests/len_literals.want", concat(dir, "/len_literals.seed.out"), "literal len independent byte-length oracle")

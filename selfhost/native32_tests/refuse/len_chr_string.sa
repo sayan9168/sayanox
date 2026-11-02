@@ -1,0 +1,3 @@
+hold t = "ab"
+hold v = len(chr(t))
+show v

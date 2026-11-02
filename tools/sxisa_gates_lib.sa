@@ -34,6 +34,18 @@ make xc_data(a: str, b: str) -> num {
   }
   give gl_assert_eq_num(gl_files_equal(a, b), 0, "encoders must emit distinct text")
 }
+// The data-segment *layout* of a target that cannot be byte-identical across ISAs
+// yet: same size, and the size itself pinned. This is what R14 leaves of the full
+// byte comparison for programs whose data holds `concat` literal pointers.
+make xc_data_layout(a: str, b: str, want: num) -> num {
+  hold aa = []
+  hold bb = []
+  hold na = read_bytes(a, aa)
+  hold nb = read_bytes(b, bb)
+  when na != nb { give gl_fail("cross-ISA data segment sizes disagree") }
+  when na <= 8192 { give gl_fail("cross-ISA data segment sizes disagree") }
+  give gl_assert_eq_num(na - 8192, want, concat("reviewed data segment size: ", a))
+}
 make xc_refusals(source_dir: str, d: str, arch: str, module: num, expected: num) -> num {
   hold names = read_dir(source_dir)
   hold total = 0
@@ -97,7 +109,7 @@ make xc_containers(d: str, arch: str) -> num {
       show "[SKIP] kernel cannot execute i386; deterministic containers and all byte assertions still run"
     }
   }
-  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nchr\n"
+  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nchr\nchr_nested\n"
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -114,10 +126,21 @@ make xc_containers(d: str, arch: str) -> num {
       hold golden = kp_join("selfhost/native32_tests/golden", concat(name, concat(".", concat(arch, ".elf"))))
       equal = gl_assert_files_eq(file, golden, "reviewed machine-code golden")
       compile = pg_command(xc_command(source, kp_join(d, "i386.elf"), "i386"), "alternate encoder")
-      hold data = xc_data(file, kp_join(d, "i386.elf"))
-      when string_eq(arch, "riscv64") == 1 {
-        compile = pg_command(xc_command(source, kp_join(d, "arm64.elf"), "arm64"), "third encoder")
-        data = xc_data(file, kp_join(d, "arm64.elf"))
+      // R14: a `concat` literal argument stores its pointer (data base + offset) in
+      // the data segment at layout time, so only the layout can be pinned across
+      // ISAs until those pointers become runtime values.
+      when string_eq(name, "chr_nested") == 1 {
+        hold layout = xc_data_layout(file, kp_join(d, "i386.elf"), 342)
+        when string_eq(arch, "riscv64") == 1 {
+          compile = pg_command(xc_command(source, kp_join(d, "arm64.elf"), "arm64"), "third encoder")
+          layout = xc_data_layout(file, kp_join(d, "arm64.elf"), 342)
+        }
+      } otherwise {
+        hold data = xc_data(file, kp_join(d, "i386.elf"))
+        when string_eq(arch, "riscv64") == 1 {
+          compile = pg_command(xc_command(source, kp_join(d, "arm64.elf"), "arm64"), "third encoder")
+          data = xc_data(file, kp_join(d, "arm64.elf"))
+        }
       }
     } otherwise {
       hold expected = 8236
@@ -126,6 +149,7 @@ make xc_containers(d: str, arch: str) -> num {
       when string_eq(name, "strcopy") == 1 { expected = 8305 }
       when string_eq(name, "streq") == 1 { expected = 8366 }
       when string_eq(name, "chr") == 1 { expected = 8354 }
+      when string_eq(name, "chr_nested") == 1 { expected = 8534 }
       hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
       hold cdir = kp_join(d, name)
       hold oracle = xq_parity_unknown(source, cdir)
@@ -138,7 +162,7 @@ make xc_containers(d: str, arch: str) -> num {
       }
     }
   }
-  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 26)
+  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 31)
   hold literal_len_source = "selfhost/native32_tests/len_literals.sa"
   hold literal_len_file = kp_join(d, "len-literals.elf")
   hold literal_len_build = pg_command(xc_command(literal_len_source, literal_len_file, arch), "literal len compile")
@@ -149,7 +173,7 @@ make xc_containers(d: str, arch: str) -> num {
 
   when string_eq(arch, "arm64") == 1 { hold unknown = xb_fail_command(xc_command("selfhost/native32_tests/expr.sa", kp_join(d, "bad.elf"), "sparc"), kp_join(d, "unknown.err"), "native32: unknown target") }
   when string_eq(arch, "i386") == 1 {
-    names = "division\nstrvalue\nnulstring\nfunction\nlist\nconcat_call\nconcat_expression\n"
+    names = "division\nstrvalue\nnulstring\nfunction\nlist\nconcat_expression\n"
     pos = 0
     while pos < len(names) {
       hold start = pos

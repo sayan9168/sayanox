@@ -330,6 +330,165 @@ make chr_arg(s: str) -> str {
   give inner
 }
 
+// A name token (`v` + the spelling) that spells `name`.
+make tok_name_is(t: str, name: str) -> num {
+  when len(t) < 2 || sx_index(t, 0) != 118 { give 0 }
+  when string_eq(sub(t, 1, len(t)), name) == 1 { give 1 }
+  give 0
+}
+
+// A concat argument this backend can build a pair for: a quoted literal, a bare
+// variable name, or one whole `chr(<literal or variable>)`.
+make arg_is_static_string(x: str) -> num {
+  when len(x) == 0 { give 0 }
+  when is_text_literal(x) == 1 { give 1 }
+  when string_eq(first_word(x), x) == 1 { give 1 }
+  when starts(x, "chr(") == 1 && string_eq(chr_arg(x), "!") == 0 { give 1 }
+  give 0
+}
+
+// Kind of a chr() argument: 0 for an integer literal, 1 for a numeric variable.
+// Every unsupported form is a diagnostic, never a guess.
+make chr_kind_of(arg: str, names: str, strnames: str, lineno: num) -> num {
+  when all_digits(arg) == 1 {
+    hold big = tok_num(concat("n", arg))
+    when big > 2147483647 {
+      hold toobig = fail(1, concat(concat("line ", numstr(lineno)), ": an integer literal of 2^31 or more"))
+    }
+    give 0
+  }
+  when is_bare_name(arg) == 0 {
+    hold compound = fail(1, concat(concat("line ", numstr(lineno)), ": chr accepts an integer literal or a numeric variable in native32"))
+  }
+  when slot_of(names, arg) < 0 {
+    hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(arg, "' in chr")))
+  }
+  when slot_of(strnames, arg) >= 0 {
+    hold strarg = fail(1, concat(concat("line ", numstr(lineno)), ": chr needs a numeric value, not a string"))
+  }
+  give 1
+}
+
+// A 32-bit absolute address in an immediate (no fixup needed: the data base is
+// fixed per target, so every data offset is known when the code is emitted).
+make a_abs(xs: list, rd: num, v: num) -> list {
+  xs = a_movz(xs, 1, rd, bit_and(v, 65535))
+  xs = a_movk16(xs, 1, rd, bit_and(shr(v, 16), 65535))
+  give xs
+}
+
+// Load the 32-bit word at an absolute address and push it, without a fixup.
+make emit_load_abs(xs: list, arch: num, addr: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 161)
+    xs = e32(xs, addr)
+    xs = e1(xs, 80)
+    give xs
+  }
+  when arch == 2 {
+    xs = rv_li32(xs, 5, addr)
+    xs = e_w(xs, rv_i(0, 5, 2, 10, 3))
+    give rv_push_a0(xs)
+  }
+  xs = a_abs(xs, 9, addr)
+  xs = e_w(xs, 3107979552)
+  xs = e_w(xs, 4162785248)
+  give xs
+}
+
+// `chr(code)` into the (pointer, length) slot `dst`, using the 4-byte cell
+// `cell`. The cell is [byte][newline][0][0]: the byte is written with a
+// one-byte store so the newline after it survives, and the pointer is
+// cell + 1 - length, so an empty chr points at the newline. Every address is an
+// absolute immediate, because the data base is fixed per target.
+// A chr() code spec: [kind, literal value, source slot]. Bundled so the emitter
+// stays inside the published six-parameter limit (`make` takes at most 6).
+make chr_spec(kind: num, val: num, src: num) -> list {
+  hold out = []
+  out = push(out, kind)
+  out = push(out, val)
+  out = push(out, src)
+  give out
+}
+
+make emit_chr_value(xs: list, arch: num, spec: list, cell: num, dst: num) -> list {
+  hold kind = spec[0]
+  hold val = spec[1]
+  hold srcslot = spec[2]
+  hold base = 4202496
+  when arch == 0 {
+    base = 134520832
+  }
+  when arch == 0 {
+    when kind == 0 {
+      xs = emit_push_imm2(xs, 0, val)
+      xs = emit_pop_acc(xs, 0)
+    } otherwise {
+      xs = e1(xs, 161)
+      xs = e32(xs, base + srcslot)
+    }
+    xs = e1(xs, 37)
+    xs = e32(xs, 255)
+    xs = e1(xs, 162)
+    xs = e32(xs, base + cell)
+    xs = e1(xs, 133)
+    xs = e1(xs, 192)
+    xs = e1(xs, 15)
+    xs = e1(xs, 149)
+    xs = e1(xs, 192)
+    xs = e1(xs, 15)
+    xs = e1(xs, 182)
+    xs = e1(xs, 192)
+    xs = e1(xs, 163)
+    xs = e32(xs, base + dst + 4)
+    xs = e1(xs, 247)
+    xs = e1(xs, 216)
+    xs = e1(xs, 5)
+    xs = e32(xs, base + cell + 1)
+    xs = e1(xs, 163)
+    xs = e32(xs, base + dst)
+    give xs
+  }
+  when arch == 2 {
+    when kind == 0 {
+      xs = rv_li32(xs, 10, val)
+    } otherwise {
+      xs = rv_li32(xs, 5, base + srcslot)
+      xs = e_w(xs, rv_i(0, 5, 2, 10, 3))
+    }
+    xs = e_w(xs, rv_i(255, 10, 7, 10, 19))
+    xs = rv_li32(xs, 5, base + cell)
+    xs = e_w(xs, rv_s(0, 10, 5, 0))
+    xs = e_w(xs, rv_r(0, 10, 0, 3, 10, 51))
+    xs = rv_li32(xs, 5, base + dst + 4)
+    xs = e_w(xs, rv_s(0, 10, 5, 2))
+    xs = rv_li32(xs, 6, base + cell + 1)
+    xs = e_w(xs, rv_r(32, 10, 6, 0, 10, 51))
+    xs = rv_li32(xs, 5, base + dst)
+    xs = e_w(xs, rv_s(0, 10, 5, 2))
+    give xs
+  }
+  when kind == 0 {
+    xs = a_movz(xs, 0, 0, bit_and(val, 65535))
+    xs = a_movk16(xs, 0, 0, bit_and(shr(val, 16), 65535))
+  } otherwise {
+    xs = a_abs(xs, 9, base + srcslot)
+    xs = e_w(xs, 3107979552)
+  }
+  xs = a_movz(xs, 0, 1, 255)
+  xs = e_w(xs, 167837696)
+  xs = a_abs(xs, 9, base + cell)
+  xs = e_w(xs, 956301600)
+  xs = e_w(xs, 448792576)
+  xs = a_abs(xs, 9, base + dst + 4)
+  xs = e_w(xs, 3103785248)
+  xs = a_abs(xs, 1, base + cell + 1)
+  xs = e_w(xs, 1258291232)
+  xs = a_abs(xs, 9, base + dst)
+  xs = e_w(xs, 3103785248)
+  give xs
+}
+
 // Token integers must not go through numstr's general/scientific formatting.
 make literal_length_digits(value: num) -> str {
   when value == 0 { give "0" }
@@ -394,7 +553,7 @@ make split_concat(s: str) -> str {
       } otherwise {
         when c == 44 {
           when comma >= 0 {
-            give "!concat accepts exactly two string arguments"
+            give "!concat accepts exactly two arguments"
           }
           comma = i
         }
@@ -407,8 +566,8 @@ make split_concat(s: str) -> str {
   }
   hold left = trim(sub(body, 0, comma))
   hold right = trim(sub(body, comma + 1, bn))
-  when len(left) == 0 || len(right) == 0 || (is_text_literal(left) == 0 && string_eq(first_word(left), left) == 0) || (is_text_literal(right) == 0 && string_eq(first_word(right), right) == 0) {
-    give "!concat arguments must be string variable names or string literals"
+  when len(left) == 0 || len(right) == 0 || (arg_is_static_string(left) == 0) || (arg_is_static_string(right) == 0) {
+    give "!concat arguments must be string variables, string literals or chr(...) values"
   }
   give concat(concat(left, chr(1)), right)
 }
@@ -534,7 +693,7 @@ make tokenize(ex: str) -> str {
         nmtext = concat(nmtext, chr(sx_index(ex, i)))
         i = i + 1
       }
-      when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 && string_eq(nmtext, "string_eq") == 0 {
+      when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 && string_eq(nmtext, "string_eq") == 0 && string_eq(nmtext, "chr") == 0 {
         bad = concat(concat("a call to '", nmtext), "' (this backend has no functions)")
       }
       when i < n && sx_index(ex, i) == 46 {
@@ -1549,6 +1708,14 @@ make run() -> num {
   hold chr_has = 0
   hold chr_text = ""
   hold chr_show_slot = 0 - 1
+  // chr(...) used as a concat argument: a hidden (pointer, length) slot per
+  // side, filled by the concat action before it reads the two spans.
+  hold chrc_lon = 0
+  hold chrc_ltext = ""
+  hold chrc_lslot = 0
+  hold chrc_ron = 0
+  hold chrc_rtext = ""
+  hold chrc_rslot = 0
 
   // data 0..31 is the decimal buffer; byte 31 is the newline the routine
   // writes, so digits grow downwards from 30.
@@ -1794,6 +1961,24 @@ make run() -> num {
           callright = concat_right(parts_hold)
           isconcat_hold = 1
           extext = ""
+          when starts(callleft, "chr(") == 1 {
+            chrc_ltext = chr_arg(callleft)
+            when chrc_ltext == "!" {
+              hold badclchr = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
+            }
+            chrc_lon = 1
+            chrc_lslot = len(data)
+            data = put_zeros(data, 8)
+          }
+          when starts(callright, "chr(") == 1 {
+            chrc_rtext = chr_arg(callright)
+            when chrc_rtext == "!" {
+              hold badcrchr = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
+            }
+            chrc_ron = 1
+            chrc_rslot = len(data)
+            data = put_zeros(data, 8)
+          }
         }
         // A bare name that is already a string variable copies the pair
         // (pointer, length), so `hold b = a` aliases no storage: it is a value
@@ -1930,6 +2115,24 @@ make run() -> num {
             callright = concat_right(parts_assign)
             assign_concat = 1
             extext = ""
+            when starts(callleft, "chr(") == 1 {
+              chrc_ltext = chr_arg(callleft)
+              when chrc_ltext == "!" {
+                hold badaclchr = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
+              }
+              chrc_lon = 1
+              chrc_lslot = len(data)
+              data = put_zeros(data, 8)
+            }
+            when starts(callright, "chr(") == 1 {
+              chrc_rtext = chr_arg(callright)
+              when chrc_rtext == "!" {
+                hold badacrchr = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
+              }
+              chrc_ron = 1
+              chrc_rslot = len(data)
+              data = put_zeros(data, 8)
+            }
           }
           when assign_alias == 0 && assign_text == 0 && assign_concat == 0 && len(extext) > 0 {
             when slot_of(strnames, extext) >= 0 {
@@ -2001,14 +2204,32 @@ make run() -> num {
           when want == 0 {
             hold streq_twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
           }
-          hold streq_shape = 0
-          when k + 5 < tn {
-            when string_eq(tok_at(toks, k + 1), "(") == 1 && string_eq(tok_at(toks, k + 3), "o,") == 1 && string_eq(tok_at(toks, k + 5), ")") == 1 {
-              streq_shape = 1
+          // Each argument is one token (a literal or a name) or a whole
+          // chr(<literal or numeric variable>) spanning four tokens.
+          hold eq_ok = 0
+          hold eq_a1 = k + 2
+          hold eq_n1 = 1
+          when k + 1 < tn && string_eq(tok_at(toks, k + 1), "(") == 1 {
+            eq_ok = 1
+            when eq_a1 + 1 < tn && tok_name_is(tok_at(toks, eq_a1), "chr") == 1 && string_eq(tok_at(toks, eq_a1 + 1), "(") == 1 {
+              eq_n1 = 4
             }
           }
-          when streq_shape == 0 {
-            hold bad_streq_shape = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects exactly two string variables or string literals"))
+          hold eq_c1 = eq_a1 + eq_n1
+          when eq_ok == 1 && (eq_c1 >= tn || string_eq(tok_at(toks, eq_c1), "o,") == 0) {
+            eq_ok = 0
+          }
+          hold eq_a2 = eq_c1 + 1
+          hold eq_n2 = 1
+          when eq_ok == 1 && eq_a2 + 1 < tn && tok_name_is(tok_at(toks, eq_a2), "chr") == 1 && string_eq(tok_at(toks, eq_a2 + 1), "(") == 1 {
+            eq_n2 = 4
+          }
+          hold eq_c2 = eq_a2 + eq_n2
+          when eq_ok == 1 && (eq_c2 >= tn || string_eq(tok_at(toks, eq_c2), ")") == 0) {
+            eq_ok = 0
+          }
+          when eq_ok == 0 {
+            hold bad_streq_shape = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects exactly two string values (a string variable, a string literal or chr(...))"))
           }
           hold eq_base = 4202496
           when arch == 0 {
@@ -2017,12 +2238,42 @@ make run() -> num {
           hold eq_arg = 0
           hold eq_lit_index = 0
           while eq_arg < 2 {
-            hold eq_tok = tok_at(toks, k + 2)
+            hold eq_at0 = eq_a1
+            hold eq_cnt = eq_n1
             when eq_arg == 1 {
-              eq_tok = tok_at(toks, k + 4)
+              eq_at0 = eq_a2
+              eq_cnt = eq_n2
             }
-            hold eq_kind = sx_index(eq_tok, 0)
-            when eq_kind == 108 {
+            when eq_cnt == 4 {
+              // chr(...) argument: build the cell, then push both halves of the pair.
+              hold eq_intok = tok_at(toks, eq_at0 + 2)
+              hold eq_inkind = sx_index(eq_intok, 0)
+              when eq_inkind != 110 && eq_inkind != 118 {
+                hold bad_streq_chr = fail(1, concat(concat("line ", numstr(lineno)), ": chr accepts an integer literal or a numeric variable in native32"))
+              }
+              hold eq_inner = sub(eq_intok, 1, len(eq_intok))
+              hold eq_ckind = chr_kind_of(eq_inner, names, strnames, lineno)
+              hold eq_cval = 0
+              hold eq_csrc = 0
+              when eq_ckind == 0 {
+                eq_cval = tok_num(concat("n", eq_inner))
+              } otherwise {
+                eq_csrc = slot_of(names, eq_inner)
+              }
+              hold eq_ccell = len(data)
+              data = push(data, 0)
+              data = push(data, 10)
+              data = push(data, 0)
+              data = push(data, 0)
+              hold eq_cdst = len(data)
+              data = put_zeros(data, 8)
+              code = emit_chr_value(code, arch, chr_spec(eq_ckind, eq_cval, eq_csrc), eq_ccell, eq_cdst)
+              code = emit_load_abs(code, arch, eq_base + eq_cdst)
+              code = emit_load_abs(code, arch, eq_base + eq_cdst + 4)
+            } otherwise {
+              hold eq_tok = tok_at(toks, eq_at0)
+              hold eq_kind = sx_index(eq_tok, 0)
+              when eq_kind == 108 {
               hold eq_litoff = len(data)
               data = append_text(data, literal_body(extext, eq_lit_index))
               eq_lit_index = eq_lit_index + 1
@@ -2061,6 +2312,7 @@ make run() -> num {
               }
               fixoff = push(fixoff, eq_p2off)
               code = emit_load_global(code, arch)
+              }
             }
             eq_arg = eq_arg + 1
           }
@@ -2068,7 +2320,7 @@ make run() -> num {
           eq_calls = push(eq_calls, len(code) - 4)
           eq_used = 1
           want = 0
-          k = k + 5
+          k = eq_c2
         }
         when t0 == 110 {
           when want == 0 {
@@ -2095,9 +2347,47 @@ make run() -> num {
               is_len_call = 1
             }
           }
-          when is_len_call == 0 && string_eq(vname, "len") == 1 && k + 1 < tn {
+          hold is_chr_len = 0
+          when is_len_call == 0 && string_eq(vname, "len") == 1 && k + 6 < tn {
+            when string_eq(tok_at(toks, k + 1), "(") == 1 && tok_name_is(tok_at(toks, k + 2), "chr") == 1 && string_eq(tok_at(toks, k + 3), "(") == 1 && string_eq(tok_at(toks, k + 5), ")") == 1 && string_eq(tok_at(toks, k + 6), ")") == 1 {
+              is_chr_len = 1
+            }
+          }
+          when is_chr_len == 1 {
+            // len(chr(...)): build the cell, then read its length half.
+            hold len_intok = tok_at(toks, k + 4)
+            hold len_inkind = sx_index(len_intok, 0)
+            when len_inkind != 110 && len_inkind != 118 {
+              hold bad_len_chr = fail(1, concat(concat("line ", numstr(lineno)), ": chr accepts an integer literal or a numeric variable in native32"))
+            }
+            hold len_inner = sub(len_intok, 1, len(len_intok))
+            hold len_kind = chr_kind_of(len_inner, names, strnames, lineno)
+            hold len_val = 0
+            hold len_src = 0
+            when len_kind == 0 {
+              len_val = tok_num(concat("n", len_inner))
+            } otherwise {
+              len_src = slot_of(names, len_inner)
+            }
+            hold len_cell = len(data)
+            data = push(data, 0)
+            data = push(data, 10)
+            data = push(data, 0)
+            data = push(data, 0)
+            hold len_dst = len(data)
+            data = put_zeros(data, 8)
+            code = emit_chr_value(code, arch, chr_spec(len_kind, len_val, len_src), len_cell, len_dst)
+            hold len_base = 4202496
+            when arch == 0 {
+              len_base = 134520832
+            }
+            code = emit_load_abs(code, arch, len_base + len_dst + 4)
+            want = 0
+            k = k + 6
+          }
+          when is_len_call == 0 && is_chr_len == 0 && string_eq(vname, "len") == 1 && k + 1 < tn {
             when string_eq(tok_at(toks, k + 1), "(") == 1 {
-              hold bad_len_shape = fail(1, concat(concat("line ", numstr(lineno)), ": len() expects exactly one string variable or literal, not a general expression"))
+              hold bad_len_shape = fail(1, concat(concat("line ", numstr(lineno)), ": len() expects exactly one string variable, string literal or chr(...), not a general expression"))
             }
           }
           when is_len_call == 1 {
@@ -2127,7 +2417,8 @@ make run() -> num {
             }
             want = 0
             k = k + 3
-          } otherwise {
+          }
+          when is_len_call == 0 && is_chr_len == 0 {
             hold vslot = slot_of(names, vname)
             when vslot < 0 {
               hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(vname, "'")))
@@ -2380,142 +2671,20 @@ make run() -> num {
     // ever read. `chr(0)` is empty text, as in the published runtimes: the byte
     // cell stays zero and the length is 0, so nothing is read back.
     when chr_has == 1 {
-      hold chr_kind = 0
+      hold chr_kind = chr_kind_of(chr_text, names, strnames, lineno)
       hold chr_value = 0
       hold chr_src = 0
-      when all_digits(chr_text) == 1 {
+      when chr_kind == 0 {
         chr_value = tok_num(concat("n", chr_text))
-        when chr_value > 2147483647 {
-          hold chrtoobig = fail(1, concat(concat("line ", numstr(lineno)), ": an integer literal of 2^31 or more"))
-        }
       } otherwise {
-        when is_bare_name(chr_text) == 0 {
-          hold chrcompound = fail(1, concat(concat("line ", numstr(lineno)), ": chr accepts an integer literal or a numeric variable in native32"))
-        }
-        hold chr_src_slot = slot_of(names, chr_text)
-        when chr_src_slot < 0 {
-          hold chrunknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(chr_text, "' in chr")))
-        }
-        when slot_of(strnames, chr_text) >= 0 {
-          hold chrstr = fail(1, concat(concat("line ", numstr(lineno)), ": chr needs a numeric value, not a string"))
-        }
-        chr_src = chr_src_slot
-        chr_kind = 1
+        chr_src = slot_of(names, chr_text)
       }
-      // The cell is [byte][newline][0][0]: the byte is written with a
-      // one-byte store, so the newline the `show` path expects right after a
-      // string's bytes survives. `chr(0)` keeps a zero byte and length 0, so
-      // `show` prints the newline alone - the same bytes every other backend
-      // writes for empty text.
       hold chr_cell = len(data)
       data = push(data, 0)
       data = push(data, 10)
       data = push(data, 0)
       data = push(data, 0)
-      when chr_kind == 0 {
-        code = emit_push_imm2(code, arch, chr_value)
-        code = emit_pop_acc(code, arch)
-      } otherwise {
-        hold csrc_at = len(code)
-        when arch == 0 {
-          fixsite = push(fixsite, csrc_at + 1)
-        } otherwise {
-          fixsite = push(fixsite, csrc_at)
-        }
-        fixoff = push(fixoff, chr_src)
-        code = emit_load_global(code, arch)
-        code = emit_pop_acc(code, arch)
-      }
-      // The low byte, exactly what (char)(long)v keeps in the C backend.
-      when arch == 0 {
-        code = e1(code, 37)
-        code = e32(code, 255)
-      }
-      when arch == 2 {
-        code = e_w(code, rv_i(255, 10, 7, 10, 19))
-      }
-      when arch == 1 {
-        // and w0, w0, w1 with w1 = 255 (logical shifted register, LSL #0)
-        code = a_movz(code, 0, 1, 255)
-        code = e_w(code, 167837696)
-      }
-      // one-byte store into the cell
-      hold cbyte_at = len(code)
-      when arch == 0 {
-        fixsite = push(fixsite, cbyte_at + 1)
-        code = e1(code, 162)
-        code = e32(code, 0)
-      }
-      when arch == 2 {
-        fixsite = push(fixsite, cbyte_at)
-        code = rv_li32(code, 5, 0)
-        code = e_w(code, rv_s(0, 10, 5, 0))
-      }
-      when arch == 1 {
-        fixsite = push(fixsite, cbyte_at)
-        code = a_addr(code, 9)
-        code = e_w(code, 956301600)
-      }
-      fixoff = push(fixoff, chr_cell)
-      // length = 1 for a nonzero byte, 0 for a NUL (empty text)
-      when arch == 0 {
-        code = e1(code, 133)
-        code = e1(code, 192)
-        code = e1(code, 15)
-        code = e1(code, 149)
-        code = e1(code, 192)
-        code = e1(code, 15)
-        code = e1(code, 182)
-        code = e1(code, 192)
-      }
-      when arch == 2 {
-        code = e_w(code, rv_r(0, 10, 0, 3, 10, 51))
-      }
-      when arch == 1 {
-        // udiv w0, w0, w0: 1 for a nonzero byte, and AArch64 defines division
-        // by zero as 0, so the byte's own zero case yields length 0 with no
-        // flag dependency at all.
-        code = e_w(code, 448792576)
-      }
-      hold clen_at = len(code)
-      when arch == 0 {
-        fixsite = push(fixsite, clen_at + 1)
-      } otherwise {
-        fixsite = push(fixsite, clen_at)
-      }
-      fixoff = push(fixoff, slot + 4)
-      code = emit_store_global(code, arch)
-      hold chr_base = 4202496
-      when arch == 0 {
-        chr_base = 134520832
-      }
-      // ptr = (cell + 1) - len: an empty chr must point at the newline that
-      // follows the byte, because `show` writes len+1 bytes.
-      when arch == 0 {
-        code = e1(code, 247)
-        code = e1(code, 216)
-        code = e1(code, 5)
-        code = e32(code, chr_base + chr_cell + 1)
-      }
-      when arch == 2 {
-        code = rv_li32(code, 6, chr_base + chr_cell + 1)
-        code = e_w(code, rv_r(32, 10, 6, 0, 10, 51))
-      }
-      when arch == 1 {
-        hold cptr_addr_at = len(code)
-        fixsite = push(fixsite, cptr_addr_at)
-        fixoff = push(fixoff, chr_cell + 1)
-        code = a_addr(code, 1)
-        code = e_w(code, 1258291232)
-      }
-      hold cptr_at = len(code)
-      when arch == 0 {
-        fixsite = push(fixsite, cptr_at + 1)
-      } otherwise {
-        fixsite = push(fixsite, cptr_at)
-      }
-      fixoff = push(fixoff, slot)
-      code = emit_store_global(code, arch)
+      code = emit_chr_value(code, arch, chr_spec(chr_kind, chr_value, chr_src), chr_cell, slot)
       chr_has = 0
     }
 
@@ -2690,6 +2859,38 @@ make run() -> num {
       }
     }
     when act == 10 {
+      when chrc_lon == 1 {
+        hold clkind = chr_kind_of(chrc_ltext, names, strnames, lineno)
+        hold clval = 0
+        hold clsrc = 0
+        when clkind == 0 {
+          clval = tok_num(concat("n", chrc_ltext))
+        } otherwise {
+          clsrc = slot_of(names, chrc_ltext)
+        }
+        hold clcell = len(data)
+        data = push(data, 0)
+        data = push(data, 10)
+        data = push(data, 0)
+        data = push(data, 0)
+        code = emit_chr_value(code, arch, chr_spec(clkind, clval, clsrc), clcell, chrc_lslot)
+      }
+      when chrc_ron == 1 {
+        hold crkind = chr_kind_of(chrc_rtext, names, strnames, lineno)
+        hold crval = 0
+        hold crsrc = 0
+        when crkind == 0 {
+          crval = tok_num(concat("n", chrc_rtext))
+        } otherwise {
+          crsrc = slot_of(names, chrc_rtext)
+        }
+        hold crcell = len(data)
+        data = push(data, 0)
+        data = push(data, 10)
+        data = push(data, 0)
+        data = push(data, 0)
+        code = emit_chr_value(code, arch, chr_spec(crkind, crval, crsrc), crcell, chrc_rslot)
+      }
       hold leftslot = slot_of(names, callleft)
       hold rightslot = slot_of(names, callright)
       when leftslot < 0 && is_text_literal(callleft) == 1 {
@@ -2718,8 +2919,16 @@ make run() -> num {
         data = set_u32(data, rightslot, literal_base2 + rightlitoff)
         data = set_u32(data, rightslot + 4, rightlitlen)
       }
+      when chrc_lon == 1 {
+        leftslot = chrc_lslot
+      }
+      when chrc_ron == 1 {
+        rightslot = chrc_rslot
+      }
+      chrc_lon = 0
+      chrc_ron = 0
       when leftslot < 0 || rightslot < 0 {
-        hold missing_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat inputs must be declared string variables or string literals"))
+        hold missing_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat inputs must be declared string variables, string literals or chr(...) values"))
       }
       when (slot_of(names, callleft) >= 0 && slot_of(strnames, callleft) < 0) || (slot_of(names, callright) >= 0 && slot_of(strnames, callright) < 0) {
         hold nonstring_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat variable arguments must be strings"))

@@ -1,0 +1,30 @@
+// nested chr: a chr value used inside another call or expression
+hold s = concat(chr(66), "cd")
+show s
+hold t = concat("x", chr(67))
+show t
+hold u = concat(chr(68), chr(69))
+show u
+hold n = 70
+hold v = concat(chr(n), "!")
+show v
+hold z = concat(chr(0), "q")
+show z
+hold e = string_eq(chr(65), "A")
+show e
+hold f = string_eq("B", chr(66))
+show f
+hold g = string_eq(chr(67), chr(68))
+show g
+hold m = len(chr(72))
+show m
+hold w = concat(chr(74), "KL")
+show len(w)
+show w[1]
+hold a = "ab"
+a = concat(chr(65), a)
+show a
+hold ff = "F"
+when string_eq(chr(70), ff) {
+  show 9
+}

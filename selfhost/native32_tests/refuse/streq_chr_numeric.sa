@@ -1,0 +1,3 @@
+hold n = 65
+hold v = string_eq(chr(65), n)
+show v
