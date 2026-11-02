@@ -1220,12 +1220,102 @@ make mp_test_stdlib_json_write() -> num {
   give 0
 }
 
+// The non-anchor `.c`/`.h` count reported by `sxbuild inventory`, read out of a
+// captured run. The R15 regression compares counts around files it creates, so
+// it never depends on how clean the tree happens to be: a gate that runs after
+// another step has left generated C files behind must still work.
+make mp_inv_count(file: str) -> num {
+  hold text = read_file(file)
+  hold needle = "non-anchor .c/.h files:"
+  hold n = len(text)
+  hold nl = len(needle)
+  hold pos = 0
+  hold at = 0 - 1
+  while pos + nl <= n && at < 0 {
+    when string_eq(gl_slice(text, pos, pos + nl), needle) == 1 {
+      at = pos + nl
+    }
+    pos = pos + 1
+  }
+  when at < 0 {
+    hold nocount = gl_fail(concat("inventory output has no count: ", file))
+    give 0 - 1
+  }
+  hold value = 0
+  hold seen = 0
+  hold done = 0
+  hold i = at
+  while i < n && done == 0 {
+    hold c = sx_index(text, i)
+    when c >= 48 && c <= 57 {
+      value = value * 10 + (c - 48)
+      seen = 1
+    } otherwise {
+      when seen == 1 {
+        done = 1
+      }
+    }
+    i = i + 1
+  }
+  when seen == 0 {
+    hold novalue = gl_fail(concat("inventory output has no number: ", file))
+    give 0 - 1
+  }
+  give value
+}
+
 make mp_test_sxbuild() -> num {
   hold p0 = gl_ensure_dir("selfhost/seed_tests/sxbuild_gate")
+  // An interrupted earlier run can leave these behind; the R15 assertions below
+  // are relative, and starting from a known state keeps the delta meaningful.
+  hold c0 = remove_path("selfhost/mini_out.c")
+  hold c1 = remove_path("selfhost/_smoke.c")
+  hold c2 = remove_path("selfhost/_out.c")
+  hold c3 = remove_path("selfhost/hello_out.c")
+  hold c4 = remove_path("selfhost/boot.c")
+  hold c5 = remove_path("selfhost/boot2.c")
+  hold c6 = remove_path("selfhost/stray_untracked.c")
   hold p1 = pg_command("./tools/sxbuild doctor >/dev/null", "test-sxbuild child command")
   hold p2 = pg_command("./tools/sxbuild inventory > selfhost/seed_tests/sxbuild_gate/inv.out", "test-sxbuild child command")
   hold p3 = pr_assert("selfhost/seed_tests/sxbuild_gate/inv.out", "native_aot.c present: *0", 0, 0, 0, 0, 1)
-  hold p4 = pr_assert("selfhost/seed_tests/sxbuild_gate/inv.out", "non-anchor .c/.h files: *0", 0, 0, 0, 0, 1)
+  hold before = mp_inv_count("selfhost/seed_tests/sxbuild_gate/inv.out")
+  // R15 regression: the compiler's gitignored default C outputs live in
+  // selfhost/ without a `.sa` peer, so they must be named in sxbuild. Create
+  // them for real, prove the count is unchanged, then prove a genuine stray
+  // file is still counted (so the fix is not a blanket ignore), then remove
+  // them. The no-Makefile integration workspace symlinks `selfhost`, and the
+  // inventory walker does not follow a symlinked directory, so first check that
+  // this run can see a file created here at all; if it cannot, the regression
+  // is skipped with an explicit line rather than reported as a pass or a fail.
+  hold probe = write_file("selfhost/r15_probe.c", "int x;\n")
+  hold probe_cmd = pg_command("./tools/sxbuild inventory > selfhost/seed_tests/sxbuild_gate/inv_probe.out", "test-sxbuild walk probe")
+  hold probe_count = mp_inv_count("selfhost/seed_tests/sxbuild_gate/inv_probe.out")
+  hold probe_gone = remove_path("selfhost/r15_probe.c")
+  when probe_count <= before {
+    show "[SKIP] R15 inventory regression: this run walks a symlinked workspace, so a file created here is invisible to sxbuild inventory"
+  }
+  when probe_count > before {
+  hold d0 = write_file("selfhost/mini_out.c", "int main(void){return 0;}\n")
+  hold d1 = write_file("selfhost/_smoke.c", "int main(void){return 0;}\n")
+  hold d2 = write_file("selfhost/_out.c", "int main(void){return 0;}\n")
+  hold d3 = write_file("selfhost/hello_out.c", "int main(void){return 0;}\n")
+  hold d4 = write_file("selfhost/boot.c", "int main(void){return 0;}\n")
+  hold d5 = write_file("selfhost/boot2.c", "int main(void){return 0;}\n")
+  hold p4a = pg_command("./tools/sxbuild inventory > selfhost/seed_tests/sxbuild_gate/inv_defaults.out", "test-sxbuild gitignored defaults")
+  hold mid = mp_inv_count("selfhost/seed_tests/sxbuild_gate/inv_defaults.out")
+  hold p4b = gl_assert_eq_num(mid, before, "gitignored compiler outputs stay uncounted")
+  hold d6 = write_file("selfhost/stray_untracked.c", "int x;\n")
+  hold p4c = pg_command("./tools/sxbuild inventory > selfhost/seed_tests/sxbuild_gate/inv_stray.out", "test-sxbuild stray file")
+  hold after = mp_inv_count("selfhost/seed_tests/sxbuild_gate/inv_stray.out")
+  hold p4d = gl_assert_eq_num(after, before + 1, "a genuine stray source is still counted")
+  hold d7 = remove_path("selfhost/mini_out.c")
+  hold d8 = remove_path("selfhost/_smoke.c")
+  hold d9 = remove_path("selfhost/_out.c")
+  hold d10 = remove_path("selfhost/hello_out.c")
+  hold d11 = remove_path("selfhost/boot.c")
+  hold d12 = remove_path("selfhost/boot2.c")
+  hold d13 = remove_path("selfhost/stray_untracked.c")
+  }
   hold p5 = pg_command("./tools/sxbuild parity selfhost/native_ir_log_test.sa selfhost/seed_tests/sxbuild_gate/parity", "test-sxbuild child command")
   give 0
 }

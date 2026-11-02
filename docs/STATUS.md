@@ -1,5 +1,134 @@
 # Status
 
+**2026-11-02 (sixth increment) — R02 step 6: `chr` of an integer
+expression.**
+
+`chr(X)` accepted an integer literal or a bare numeric variable. `X` may now be
+any integer expression this subset compiles: `chr(n + 1)`, `chr(n * 16 + 1)`,
+`chr((n + 60) + 1)`, `chr(len(s) + 62)`. A literal or bare name keeps the direct
+lowering unchanged; for an expression the emitter compiles it first (the value
+is left in the accumulator), parks it in a shared 4-byte scratch word, and reads
+it back through the numeric-slot path, so the per-occurrence `chr` cell keeps
+the `[byte][newline][0][0]` layout that `show` relies on. `chr_arg` now scans its
+argument with parenthesis nesting, so `chr((n + 1) * 2)` parses while a
+top-level comma is still the arity diagnostic.
+
+Still refused, and now covered by fixtures: `chr` of an expression inside
+`concat`, `string_eq` and `len` (those calls parse their arguments by token
+count, so an expression-shaped `chr` argument needs its own lowering — that is
+the next step, not a silent widening), a string variable in the `chr`
+expression, an unknown name, and `chr(n, 1)`.
+
+Fixture `selfhost/native32_tests/chr_expr.sa` (9 output lines) runs on all six
+execution paths with reviewed AArch64/RV64IM goldens and the cross-ISA data
+comparison; i386 image 8313 bytes. The refusal matrix moves from 36 to 39:
+`refuse/chr_expression.sa` is deleted because `chr(n + 1)` is now a legal
+program, and four refusals are added.
+
+```
+./sx target test-native32        -> 0
+./sx target test-native-arm64    -> 0
+./sx target test-native-riscv64  -> 0
+./sx target test-sxisaexec       -> 0
+```
+
+**2026-11-02 (fifth increment) — R02 step 5: general string-valued
+expressions.**
+
+`show concat(A, B)` now prints a concatenation without naming a variable, and a
+`concat` operand may itself be a `concat(...)` call. Both fall out of one
+refactor rather than two special cases: the copy routine and the string-print
+sequence became functions over the compiler's file-scope state
+(`emit_concat_copy`, `emit_show_string_slot`), and a new resolver
+(`materialize_concat_operand`) turns each operand into a `(pointer, length)`
+pair — a variable's own pair, a literal pair whose pointer and length are
+written at run time (so the data image stays arch-neutral, R14), a `chr` cell,
+or a nested call emitted first into a hidden pair slot. `emit_concat_pair`
+resolves both operands and then calls the single copy routine, so the machine
+code of a plain `concat(a, b)` is unchanged while arbitrary mixtures of
+variables, literals, `chr(...)` values and nested calls work.
+
+Nesting is capped at seven levels (one hidden pair slot per level, and it
+bounds the emitter's own recursion); a numeric operand, a numeric variable
+operand, a one-argument call and eight-level nesting are refused with
+line-numbered diagnostics. `concat` remains a statement-level form: used inside
+another expression (for example as a `string_eq` argument) it is refused, and
+that refusal now says what is wrong instead of claiming the backend "has no
+functions".
+
+Fixtures and refusals: `selfhost/native32_tests/concat_expr.sa` (13 output
+lines: `show concat(a, b)`, `show concat("A", "B")`, `show concat("x", a)`,
+left- and right-nested calls, two nested calls in one call, `chr` operands
+inside nesting, four-level nesting with `len`, a copy and `string_eq` of a
+concat result) runs on all six execution paths — seed-min, gen2, x86-64 native
+AOT, Portable IR VM, i386 ELF32 and AArch64/RV64IM under `sxisaexec` — with
+reviewed AArch64 and RV64IM goldens and the full cross-ISA data comparison. The
+refusal matrix rises from 31 to 36.
+
+Because `chr` operand slots are now allocated during emission instead of during
+parsing, the reviewed goldens of the two `concat` fixtures were regenerated;
+every pinned image size is unchanged (`chr_nested` 8534, `concat_expr` 8590,
+data 398 bytes, identical on all three targets).
+
+```
+./sx target test-native32        -> 0
+./sx target test-native-arm64    -> 0
+./sx target test-native-riscv64  -> 0
+./sx target test-sxisaexec       -> 0
+```
+
+**2026-11-02 (fourth increment) — R14 and R15: two recorded defects fixed.**
+
+**R14 — a `concat` program's data image is now identical on i386, AArch64 and
+RV64IM.** Two arch-specific values used to be baked into the data segment while
+the image was being laid out: each `concat` literal argument's `(pointer, len)`
+pair (`literal_base + offset`, and `literal_base` is `134520832` on i386 but
+`4202496` on the 64-bit targets) and the heap bump pointer's initial value. Both
+are now runtime values. A literal argument's pair is stored by the program at
+the call site — `emit_push_imm2(base + offset)` into the accumulator, then a
+fixup-addressed 4-byte store into the pair, and the same for the length — and
+the pair itself stays zero-filled in the image. The bump pointer lives in a
+4-byte slot at data offset 32 that the entry code initialises once with the
+target's own data base (`134586368` / `4268032`), so the layout-time
+`patch32(data, heap_cursor_slot, …)` is gone. Data segments are now
+byte-identical on all three targets, `chr_nested` — the first accepted `concat`
+program — is back on the **full** cross-ISA byte comparison, and the
+layout-only pin (`xc_data_layout`) that had narrowed that assertion is deleted.
+Image sizes grew by 4 bytes (the always-present cursor slot); execution output
+is unchanged on all six paths, and the bounded-heap exhaustion test still exits
+1 on AArch64 and RV64 because the cursor starts exactly where it used to.
+
+**R15 — `sxbuild inventory` no longer counts the compiler's gitignored C
+outputs.** `is_generated_c_artifact` knew the checked-in generator names and a
+"has a `.sa` peer" rule, but not the default output paths (`selfhost/boot.c`,
+`boot2.c`, `_smoke.c`, `_out.c`, `mini_out.c`, `hello_out.c`), so any ad-hoc
+compiler run made the inventory report stray C files (reproduced: creating the
+six files moved the count `0 -> 6`). They are now named in
+`is_known_selfhost_c`, next to a comment that ties the list to the
+`selfhost/*.c` entries in `.gitignore`. The `test-sxbuild` gate stopped being a
+clean-tree tautology: it measures the non-anchor count, creates all six
+defaults and asserts the count is unchanged, then creates a genuine
+`selfhost/stray_untracked.c` and asserts the count rose by exactly one — so the
+fix cannot be a blanket "ignore everything in selfhost" — then removes all
+seven and restores the starting state. Both assertions are relative to the tree
+they run in, because a gate that runs after another step has left generated C
+files behind must still work; an absolute "count is 0" assertion failed exactly
+that way in CI. The pre-fix compiler fails the first of the two (delta +6).
+
+Gates on this tree, all exit 0 (the pre-existing goldens were regenerated: the
+entry prologue and the 4-byte cursor slot shift every image by 4 bytes of data):
+
+```
+./sx target test-native32          -> 0
+./sx target test-native-arm64      -> 0
+./sx target test-native-riscv64    -> 0
+./sx target test-sxisaexec         -> 0
+./sx target test-sxbuild           -> 0
+```
+
+Written up with its live before/after and negative controls in
+[docs/gate-logs/2026-11-02-r14-r15.md](gate-logs/2026-11-02-r14-r15.md).
+
 **2026-11-02 (third increment) — R02 step 4: `chr` nested inside `concat`, `string_eq` and `len`.**
 
 `chr(X)` is no longer a statement-only value. `tools/native32.sa` now accepts it

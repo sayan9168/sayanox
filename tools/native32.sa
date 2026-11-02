@@ -30,11 +30,19 @@
 //     show "literal"                       the literal, then a newline
 //     show STRING_NAME                     writes the string's current span
 //     STRING_NAME[INDEX_EXPR]              byte value; negative index from end
-//     concat(STRING_ARG, STRING_ARG)       bounded heap-backed concatenation; each arg is a variable or literal
+//     concat(STRING_ARG, STRING_ARG)       bounded heap-backed concatenation
+//     show concat(STRING_ARG, STRING_ARG)  print a concatenation without a name
 //     when <expression> { ... }            zero is false, anything else true
 //     } otherwise { ... }
 //     while <expression> { ... }
 //     // comments, blank lines
+//
+//   A concat argument is a string variable, a string literal, a chr(...) value
+//   or another concat(...) call: a nested call is emitted first into a hidden
+//   (pointer, length) slot that then stands in for the operand, up to seven
+//   levels. `concat` is a statement-level form: it is accepted as the whole
+//   value of a `hold`, an assignment or a `show`, and refused inside any other
+//   expression.
 //
 //   expressions: + - * % , the six comparisons, parentheses, unary minus,
 //   decimal integer literals, numeric names and `len(STRING_NAME)` or `len("literal")`. `/` is
@@ -321,12 +329,24 @@ make chr_arg(s: str) -> str {
   when sx_index(s, n - 1) != 41 { give "!" }
   hold inner = trim(sub(s, 4, n - 1))
   when len(inner) == 0 { give "!" }
+  // The argument may be a whole integer expression, so parentheses nest; a
+  // comma at depth 0 would be a second argument, which is refused here so the
+  // arity diagnostic stays the one the other positions use.
+  hold depth = 0
   hold i = 0
   while i < len(inner) {
     hold c = sx_index(inner, i)
-    when c == 40 || c == 41 || c == 44 { give "!" }
+    when c == 40 {
+      depth = depth + 1
+    }
+    when c == 41 {
+      when depth == 0 { give "!" }
+      depth = depth - 1
+    }
+    when c == 44 && depth == 0 { give "!" }
     i = i + 1
   }
+  when depth != 0 { give "!" }
   give inner
 }
 
@@ -344,6 +364,7 @@ make arg_is_static_string(x: str) -> num {
   when is_text_literal(x) == 1 { give 1 }
   when string_eq(first_word(x), x) == 1 { give 1 }
   when starts(x, "chr(") == 1 && string_eq(chr_arg(x), "!") == 0 { give 1 }
+  when starts(x, "concat(") == 1 { give 1 }
   give 0
 }
 
@@ -367,6 +388,463 @@ make chr_kind_of(arg: str, names: str, strnames: str, lineno: num) -> num {
     hold strarg = fail(1, concat(concat("line ", numstr(lineno)), ": chr needs a numeric value, not a string"))
   }
   give 1
+}
+// ---- file-scope compiler state -------------------------------------------------
+// The emitter is one pass inside run(), but the operand resolver and the copy /
+// show helpers are separate functions, so the state they share lives here.
+// One run() per process, so this is a single translation unit's state.
+hold code = []
+hold data = []
+hold fixsite = []
+hold fixoff = []
+hold names = ""
+hold strnames = ""
+hold heap_on = 0
+hold heap_cursor_slot = 0 - 1
+hold concat_show_slot = 0 - 1
+// `chr(<integer expression>)`: the expression leaves its value in the
+// accumulator (the whole-value paths below park it in the per-occurrence cell),
+// so a literal or a bare numeric name keeps the older direct lowering.
+hold chr_acc = 0
+hold chr_acc_slot = 0 - 1
+hold arch = 0
+hold lineno = 0
+
+// The string-show sequence for a resolved (pointer, length) pair: load both
+// fields, move the pointer into the argument register and the length into the
+// count, then write. Shared by `show NAME`, `show chr(...)` and
+// `show concat(...)`.
+make emit_show_string_slot(s: num) -> num {
+  hold pvat = len(code)
+  when arch == 0 {
+    fixsite = push(fixsite, pvat + 1)
+  } otherwise {
+    fixsite = push(fixsite, pvat)
+  }
+  fixoff = push(fixoff, s)
+  code = emit_load_global(code, arch)
+  code = emit_pop_acc(code, arch)
+  when arch == 0 {
+    code = e1(code, 137)
+    code = e1(code, 193)
+  } otherwise {
+    when arch == 2 {
+      code = e_w(code, rv_i(0, 10, 0, 11, 19))
+    } otherwise {
+      code = e_w(code, 2852127713)
+    }
+  }
+  hold lvat = len(code)
+  when arch == 0 {
+    fixsite = push(fixsite, lvat + 1)
+  } otherwise {
+    fixsite = push(fixsite, lvat)
+  }
+  fixoff = push(fixoff, s + 4)
+  code = emit_load_global(code, arch)
+  code = emit_pop_acc(code, arch)
+  when arch == 0 {
+    code = e1(code, 137)
+    code = e1(code, 194)
+    code = e1(code, 66)
+    code = e1(code, 184)
+    code = e32(code, 4)
+    code = e1(code, 187)
+    code = e32(code, 1)
+    code = e1(code, 205)
+    code = e1(code, 128)
+  } otherwise {
+    when arch == 2 {
+      code = e_w(code, rv_i(0, 10, 0, 12, 19))
+      code = e_w(code, rv_i(1, 12, 0, 12, 19))
+      code = e_w(code, rv_i(1, 0, 0, 10, 19))
+      code = e_w(code, rv_i(64, 0, 0, 17, 19))
+      code = e_w(code, 115)
+    } otherwise {
+      code = e_w(code, 2852127714)
+      code = e_w(code, 2432697410)
+      code = a_movz(code, 1, 0, 1)
+      code = a_movz(code, 1, 8, 64)
+      code = e_w(code, 3556769793)
+    }
+  }
+  give 0
+}
+
+// Copy a resolved left pair and right pair into the bounded bump heap and
+// publish the result pair at `dest`. There is exactly one copy routine; what
+// the two source pairs are is decided by `materialize_concat_operand`.
+make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
+  when heap_on == 0 {
+    heap_on = 1
+  }
+  hold heap_start_off = 65536
+  hold heap_end_off = 126976
+  when arch == 0 {
+    // Load both (pointer,length) pairs into esi/ecx and ebp/edx.
+    code = e1(code, 139)
+    code = e1(code, 53)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, leftslot)
+    code = e32(code, 0)
+    code = e1(code, 139)
+    code = e1(code, 13)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, leftslot + 4)
+    code = e32(code, 0)
+    code = e1(code, 139)
+    code = e1(code, 45)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, rightslot)
+    code = e32(code, 0)
+    code = e1(code, 139)
+    code = e1(code, 21)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, rightslot + 4)
+    code = e32(code, 0)
+    // EAX is the old bump pointer; EBX preserves the result pointer.
+    code = e1(code, 139)
+    code = e1(code, 5)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, heap_cursor_slot)
+    code = e32(code, 0)
+    code = e1(code, 137)
+    code = e1(code, 195)
+    code = e1(code, 1)
+    code = e1(code, 202)
+    code = e1(code, 1)
+    code = e1(code, 208)
+    code = e1(code, 64)
+    code = e1(code, 64)
+    // Refuse a concat that would cross the mapped 60 KiB heap.
+    code = e1(code, 61)
+    hold i386_heap_end = 134520832 + heap_end_off
+    code = e32(code, i386_heap_end)
+    code = e1(code, 15)
+    code = e1(code, 134)
+    hold i386_good_disp = len(code)
+    code = e32(code, 0)
+    code = e1(code, 184)
+    code = e32(code, 1)
+    code = e1(code, 187)
+    code = e32(code, 1)
+    code = e1(code, 205)
+    code = e1(code, 128)
+    hold i386_good = len(code)
+    code = patch32(code, i386_good_disp, i386_good - (i386_good_disp + 4))
+    code = e1(code, 163)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, heap_cursor_slot)
+    code = e32(code, 0)
+    // Copy with REP MOVSB, then terminate and publish the new pair.
+    code = e1(code, 137)
+    code = e1(code, 223)
+    code = e1(code, 243)
+    code = e1(code, 164)
+    code = e1(code, 137)
+    code = e1(code, 238)
+    code = e1(code, 139)
+    code = e1(code, 13)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, rightslot + 4)
+    code = e32(code, 0)
+    code = e1(code, 243)
+    code = e1(code, 164)
+    code = e1(code, 198)
+    code = e1(code, 7)
+    code = e1(code, 10)
+    code = e1(code, 71)
+    code = e1(code, 198)
+    code = e1(code, 7)
+    code = e1(code, 0)
+    code = e1(code, 137)
+    code = e1(code, 29)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, dest)
+    code = e32(code, 0)
+    code = e1(code, 137)
+    code = e1(code, 21)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, dest + 4)
+    code = e32(code, 0)
+  } otherwise {
+    when arch == 1 {
+      // AArch64: w10/w11 and w12/w13 are source pairs; w14 is the
+      // destination and w15 the total length.
+      hold afix0 = len(code)
+      fixsite = push(fixsite, afix0)
+      fixoff = push(fixoff, leftslot)
+      code = a_addr(code, 9)
+      code = e_w(code, 3107979562)
+      code = e_w(code, 3107980587)
+      hold afix1 = len(code)
+      fixsite = push(fixsite, afix1)
+      fixoff = push(fixoff, rightslot)
+      code = a_addr(code, 9)
+      code = e_w(code, 3107979564)
+      code = e_w(code, 3107980589)
+      hold afix2 = len(code)
+      fixsite = push(fixsite, afix2)
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = a_addr(code, 9)
+      code = e_w(code, 3107979566)
+      code = e_w(code, 185401711)
+      code = e_w(code, 185532880)
+      code = e_w(code, 285214224)
+      code = e_w(code, 285214224)
+      code = a_movz(code, 0, 17, 0)
+      code = a_movk16(code, 0, 17, 66)
+      code = e_w(code, 1796276767)
+      hold a_good_site = len(code)
+      code = e_w(code, 1409286153)
+      code = a_movz(code, 1, 0, 1)
+      code = a_movz(code, 1, 8, 93)
+      code = e_w(code, 3556769793)
+      hold a_good = len(code)
+      code = a_imm19(code, a_good_site, a_good - a_good_site)
+      hold afix3 = len(code)
+      fixsite = push(fixsite, afix3)
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = a_addr(code, 9)
+      code = e_w(code, 3103785264)
+      // Publish the original allocation base (w14); w16 is already the
+      // advanced heap cursor and must not become the string pointer.
+      hold aoutfix = len(code)
+      fixsite = push(fixsite, aoutfix)
+      fixoff = push(fixoff, dest)
+      code = a_addr(code, 9)
+      code = e_w(code, 3103785262)
+      hold a_left_cmp = len(code)
+      code = e_w(code, 1895825791)
+      hold a_left_skip_site = len(code)
+      code = e_w(code, 1409286144)
+      hold a_left_loop = len(code)
+      code = e_w(code, 960495953)
+      code = e_w(code, 956301777)
+      code = e_w(code, 2432697674)
+      code = e_w(code, 2432697806)
+      code = e_w(code, 1358955883)
+      code = e_w(code, 1895825791)
+      hold a_left_back_site = len(code)
+      code = e_w(code, 1409286145)
+      hold a_left_done = len(code)
+      code = a_imm19(code, a_left_skip_site, a_left_done - a_left_skip_site)
+      code = a_imm19(code, a_left_back_site, a_left_loop - a_left_back_site)
+      hold a_right_cmp = len(code)
+      code = e_w(code, 1895825855)
+      hold a_right_skip_site = len(code)
+      code = e_w(code, 1409286144)
+      hold a_right_loop = len(code)
+      code = e_w(code, 960496017)
+      code = e_w(code, 956301777)
+      code = e_w(code, 2432697740)
+      code = e_w(code, 2432697806)
+      code = e_w(code, 1358955949)
+      code = e_w(code, 1895825855)
+      hold a_right_back_site = len(code)
+      code = e_w(code, 1409286145)
+      hold a_right_done = len(code)
+      code = a_imm19(code, a_right_skip_site, a_right_done - a_right_skip_site)
+      code = a_imm19(code, a_right_back_site, a_right_loop - a_right_back_site)
+      code = a_movz(code, 0, 17, 10)
+      code = e_w(code, 956301777)
+      code = e_w(code, 2432697806)
+      code = e_w(code, 956301791)
+      hold afix5 = len(code)
+      fixsite = push(fixsite, afix5)
+      fixoff = push(fixoff, dest + 4)
+      // The fixup already targets dest+4, so store at [x9] (offset 0).
+      code = a_addr(code, 9)
+      code = e_w(code, 3103785263)
+    } otherwise {
+      // RV64: t1/t2 and t3/t4 are the source pairs; t5 holds the
+      // destination pointer and t6 the total length.
+      hold rfix0 = len(code)
+      code = rv_li32(code, 5, 0)
+      fixsite = push(fixsite, rfix0)
+      fixoff = push(fixoff, leftslot)
+      code = e_w(code, rv_i(0, 5, 2, 6, 3))
+      code = e_w(code, rv_i(4, 5, 2, 7, 3))
+      hold rfix1 = len(code)
+      code = rv_li32(code, 5, 0)
+      fixsite = push(fixsite, rfix1)
+      fixoff = push(fixoff, rightslot)
+      code = e_w(code, rv_i(0, 5, 2, 28, 3))
+      code = e_w(code, rv_i(4, 5, 2, 29, 3))
+      hold rfix2 = len(code)
+      code = rv_li32(code, 5, 0)
+      fixsite = push(fixsite, rfix2)
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = e_w(code, rv_i(0, 5, 2, 30, 3))
+      code = e_w(code, rv_r(0, 29, 7, 0, 31, 51))
+      code = e_w(code, rv_r(0, 31, 30, 0, 20, 51))
+      code = e_w(code, rv_i(1, 20, 0, 20, 19))
+      code = e_w(code, rv_i(1, 20, 0, 20, 19))
+      code = rv_li32(code, 21, 4202496 + heap_end_off)
+      code = e_w(code, rv_r(0, 20, 21, 3, 22, 51))
+      hold r_good_site = len(code)
+      code = e_w(code, rv_b_word(0, 0, 22, 0))
+      code = e_w(code, rv_i(1, 0, 0, 10, 19))
+      code = e_w(code, rv_i(93, 0, 0, 17, 19))
+      code = e_w(code, 115)
+      hold r_good = len(code)
+      code = set_w(code, r_good_site, rv_b_word(r_good - r_good_site, 0, 22, 0))
+      hold rfix3 = len(code)
+      code = rv_li32(code, 5, 0)
+      fixsite = push(fixsite, rfix3)
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = e_w(code, rv_s(0, 20, 5, 2))
+      code = e_w(code, rv_i(0, 30, 0, 19, 19))
+      hold r_left_skip_site = len(code)
+      code = e_w(code, rv_b_word(0, 0, 7, 0))
+      hold r_left_loop = len(code)
+      code = e_w(code, rv_i(0, 6, 4, 23, 3))
+      code = e_w(code, rv_s(0, 23, 19, 0))
+      code = e_w(code, rv_i(1, 6, 0, 6, 19))
+      code = e_w(code, rv_i(1, 19, 0, 19, 19))
+      code = e_w(code, rv_i(0 - 1, 7, 0, 7, 19))
+      hold r_left_back_site = len(code)
+      code = e_w(code, rv_b_word(0, 0, 7, 1))
+      hold r_left_done = len(code)
+      code = set_w(code, r_left_skip_site, rv_b_word(r_left_done - r_left_skip_site, 0, 7, 0))
+      code = set_w(code, r_left_back_site, rv_b_word(r_left_loop - r_left_back_site, 0, 7, 1))
+      hold r_right_skip_site = len(code)
+      code = e_w(code, rv_b_word(0, 0, 29, 0))
+      hold r_right_loop = len(code)
+      code = e_w(code, rv_i(0, 28, 4, 23, 3))
+      code = e_w(code, rv_s(0, 23, 19, 0))
+      code = e_w(code, rv_i(1, 28, 0, 28, 19))
+      code = e_w(code, rv_i(1, 19, 0, 19, 19))
+      code = e_w(code, rv_i(0 - 1, 29, 0, 29, 19))
+      hold r_right_back_site = len(code)
+      code = e_w(code, rv_b_word(0, 0, 29, 1))
+      hold r_right_done = len(code)
+      code = set_w(code, r_right_skip_site, rv_b_word(r_right_done - r_right_skip_site, 0, 29, 0))
+      code = set_w(code, r_right_back_site, rv_b_word(r_right_loop - r_right_back_site, 0, 29, 1))
+      code = e_w(code, rv_i(10, 0, 0, 23, 19))
+      code = e_w(code, rv_s(0, 23, 19, 0))
+      code = e_w(code, rv_i(1, 19, 0, 19, 19))
+      code = e_w(code, rv_s(0, 0, 19, 0))
+      hold rfix4 = len(code)
+      code = rv_li32(code, 5, 0)
+      fixsite = push(fixsite, rfix4)
+      fixoff = push(fixoff, dest)
+      // x30 retains the original heap allocation base for the result.
+      code = e_w(code, rv_s(0, 30, 5, 2))
+      hold rfix5 = len(code)
+      code = rv_li32(code, 5, 0)
+      fixsite = push(fixsite, rfix5)
+      fixoff = push(fixoff, dest + 4)
+      code = e_w(code, rv_s(0, 31, 5, 2))
+    }
+  }
+  give 0
+}
+
+
+// How deeply a concat call may nest inside another concat call: seven levels,
+// the outermost at depth 0. One hidden pair slot per level lives in the data
+// segment, so the limit also bounds data use and the recursion in the emitter.
+hold concat_depth = 0
+
+// Resolve one concat operand to a (pointer, length) pair slot in the data
+// segment, emitting whatever code is needed to fill it:
+//   NAME            -> the variable's own pair;
+//   "literal"       -> a hidden pair whose pointer/length are written at run
+//                      time, so the data image stays arch-neutral (R14);
+//   chr(<arg>)      -> a hidden pair filled by the chr helper;
+//   concat(L, R)     -> a hidden pair written by the nested call itself.
+// Anything else is a diagnostic, never a guess.
+make materialize_concat_operand(text: str) -> num {
+  when slot_of(strnames, text) >= 0 {
+    // strnames records only that the name holds a string; the data offset is
+    // the name's entry in `names`.
+    give slot_of(names, text)
+  }
+  when slot_of(names, text) >= 0 {
+    hold nonstring = fail(1, concat(concat("line ", numstr(lineno)), ": concat variable arguments must be strings"))
+  }
+  when is_text_literal(text) == 1 {
+    hold pairslot = len(data)
+    data = put_zeros(data, 8)
+    hold litoff = len(data)
+    data = append_text(data, sub(text, 1, len(text) - 1))
+    hold litlen = len(data) - litoff
+    hold litbase = 4202496
+    when arch == 0 {
+      litbase = 134520832
+    }
+    code = emit_push_imm2(code, arch, litbase + litoff)
+    code = emit_pop_acc(code, arch)
+    hold psite = len(code)
+    when arch == 0 {
+      fixsite = push(fixsite, psite + 1)
+    } otherwise {
+      fixsite = push(fixsite, psite)
+    }
+    fixoff = push(fixoff, pairslot)
+    code = emit_store_global(code, arch)
+    code = emit_push_imm2(code, arch, litlen)
+    code = emit_pop_acc(code, arch)
+    hold lsite = len(code)
+    when arch == 0 {
+      fixsite = push(fixsite, lsite + 1)
+    } otherwise {
+      fixsite = push(fixsite, lsite)
+    }
+    fixoff = push(fixoff, pairslot + 4)
+    code = emit_store_global(code, arch)
+    give pairslot
+  }
+  when starts(text, "chr(") == 1 {
+    hold argtext = chr_arg(text)
+    when argtext == "!" {
+      hold badshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
+    }
+    hold kind = chr_kind_of(argtext, names, strnames, lineno)
+    hold val = 0
+    hold src = 0
+    when kind == 0 {
+      val = tok_num(concat("n", argtext))
+    } otherwise {
+      src = slot_of(names, argtext)
+    }
+    hold cell = len(data)
+    data = push(data, 0)
+    data = push(data, 10)
+    data = push(data, 0)
+    data = push(data, 0)
+    hold pairslot_chr = len(data)
+    data = put_zeros(data, 8)
+    code = emit_chr_value(code, arch, chr_spec(kind, val, src), cell, pairslot_chr)
+    give pairslot_chr
+  }
+  when starts(text, "concat(") == 1 {
+    when concat_depth >= 6 {
+      hold toodeep = fail(1, concat(concat("line ", numstr(lineno)), ": concat nesting is limited to seven levels"))
+    }
+    hold parts = split_concat(text)
+    when sx_index(parts, 0) == 33 {
+      hold badinner = fail(1, concat(concat("line ", numstr(lineno)), concat(": ", sub(parts, 1, len(parts)))))
+    }
+    hold nested = len(data)
+    data = put_zeros(data, 8)
+    concat_depth = concat_depth + 1
+    hold inner_done = emit_concat_pair(concat_left(parts), concat_right(parts), nested)
+    concat_depth = concat_depth - 1
+    give nested
+  }
+  hold badoperand = fail(1, concat(concat("line ", numstr(lineno)), ": concat inputs must be declared string variables, string literals, chr(...) values or nested concat calls"))
+  give 0 - 1
+}
+
+// One concat call: resolve both operands, then copy them into the bump heap and
+// publish the result pair at `dest`.
+make emit_concat_pair(left: str, right: str, dest: num) -> num {
+  hold leftslot = materialize_concat_operand(left)
+  hold rightslot = materialize_concat_operand(right)
+  hold copied = emit_concat_copy(leftslot, rightslot, dest)
+  give 0
 }
 
 // A 32-bit absolute address in an immediate (no fixup needed: the data base is
@@ -532,6 +1010,9 @@ make split_concat(s: str) -> str {
   hold comma = 0 - 1
   hold quoted = 0
   hold escaped = 0
+  // Parentheses nest: `concat(concat(a, b), c)` has a comma inside the first
+  // argument, so only a comma at depth 0 separates the two operands.
+  hold depth = 0
   hold i = 0
   while i < bn {
     hold c = sx_index(body, i)
@@ -551,11 +1032,21 @@ make split_concat(s: str) -> str {
       when c == 34 {
         quoted = 1
       } otherwise {
-        when c == 44 {
-          when comma >= 0 {
-            give "!concat accepts exactly two arguments"
+        when c == 40 {
+          depth = depth + 1
+        } otherwise {
+          when c == 41 {
+            when depth > 0 {
+              depth = depth - 1
+            }
+          } otherwise {
+            when c == 44 && depth == 0 {
+              when comma >= 0 {
+                give "!concat accepts exactly two arguments"
+              }
+              comma = i
+            }
           }
-          comma = i
         }
       }
     }
@@ -694,7 +1185,12 @@ make tokenize(ex: str) -> str {
         i = i + 1
       }
       when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 && string_eq(nmtext, "string_eq") == 0 && string_eq(nmtext, "chr") == 0 {
+        // concat is a statement-level form, not an expression: say so instead of
+        // claiming the function does not exist.
         bad = concat(concat("a call to '", nmtext), "' (this backend has no functions)")
+        when string_eq(nmtext, "concat") == 1 {
+          bad = "`concat(...)` inside another expression (only as the whole value of a `hold`, an assignment or a `show`)"
+        }
       }
       when i < n && sx_index(ex, i) == 46 {
         bad = concat(concat("a field of '", nmtext), "' (this backend has no structs)")
@@ -1666,7 +2162,7 @@ make run() -> num {
 
   // arch 0 is i386 (the default, and the one this repository can run);
   // arch 1 is arm64 and arch 2 is riscv64, emitted and byte-checked here.
-  hold arch = 0
+  arch = 0
   when arg_count() >= 4 {
     hold want_arch = arg(3)
     when string_eq(want_arch, "arm64") == 1 {
@@ -1691,14 +2187,9 @@ make run() -> num {
   hold tag_other = concat(chr(125), concat(" otherwise ", chr(123)))
   hold tag_other2 = concat(chr(125), concat("otherwise", chr(123)))
 
-  hold code = []
-  hold data = []
-  hold fixsite = []
-  hold fixoff = []
-  hold names = ""
-  hold strnames = ""
-  hold heap_on = 0
-  hold heap_cursor_slot = 0 - 1
+  // code, data, fixsite, fixoff, names, strnames, heap_on, heap_cursor_slot and
+  // concat_show_slot are file-scope state (declared above): the concat operand
+  // resolver and the show/copy helpers are functions and have to reach it.
   // string_eq: one shared comparison routine plus its call sites.
   hold eq_used = 0
   hold eq_calls = []
@@ -1708,20 +2199,21 @@ make run() -> num {
   hold chr_has = 0
   hold chr_text = ""
   hold chr_show_slot = 0 - 1
-  // chr(...) used as a concat argument: a hidden (pointer, length) slot per
-  // side, filled by the concat action before it reads the two spans.
-  hold chrc_lon = 0
-  hold chrc_ltext = ""
-  hold chrc_lslot = 0
-  hold chrc_ron = 0
-  hold chrc_rtext = ""
-  hold chrc_rslot = 0
+  concat_show_slot = 0 - 1
 
   // data 0..31 is the decimal buffer; byte 31 is the newline the routine
   // writes, so digits grow downwards from 30.
   data = put_zeros(data, 32)
   hold bufnl = 31
   hold bufend = 32
+
+  // The concat bump pointer. The image stores zero here and the entry code
+  // writes the target's own value (data base + 64 KiB) once, so no data
+  // address is baked into the data segment: the data image stays byte-identical
+  // across i386/AArch64/RV64IM (R14). Programs without concat pay 4 zero bytes
+  // and one dead word.
+  heap_cursor_slot = len(data)
+  data = put_zeros(data, 4)
 
   // ---- the print-decimal routine, emitted once at code offset 0 ----
   // eax = value. Prints it in decimal with a trailing newline, then returns.
@@ -1884,11 +2376,35 @@ make run() -> num {
   }
 
   hold entry_off = len(code)
+  // Initialise the concat bump pointer at entry, with the target's own data base.
+  when arch == 0 {
+    fixsite = push(fixsite, len(code) + 2)
+    fixoff = push(fixoff, heap_cursor_slot)
+    code = e1(code, 199)
+    code = e1(code, 5)
+    code = e32(code, 0)
+    code = e32(code, 134520832 + 65536)
+  } otherwise {
+    when arch == 2 {
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = rv_li32(code, 5, 0)
+      code = rv_li32(code, 6, 4268032)
+      code = e_w(code, rv_s(0, 6, 5, 2))
+    } otherwise {
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = a_addr(code, 9)
+      code = a_movz(code, 0, 1, bit_and(4268032, 65535))
+      code = a_movk16(code, 0, 1, bit_and(shr(4268032, 16), 65535))
+      code = e_w(code, 3103785249)
+    }
+  }
 
   // ---- the statement walk ----
   hold n = len(src)
   hold pos = 0
-  hold lineno = 0
+  lineno = 0
   hold bkind = []
   hold bsite = []
   hold bstart = []
@@ -1951,6 +2467,11 @@ make run() -> num {
           }
           ischr_hold = 1
           extext = ""
+          when is_bare_name(chr_text) == 0 && is_text_literal(chr_text) == 0 {
+            chr_acc = 1
+            extext = chr_text
+            chr_text = ""
+          }
         }
         when starts(extext, "concat(") == 1 {
           hold parts_hold = split_concat(extext)
@@ -1961,24 +2482,6 @@ make run() -> num {
           callright = concat_right(parts_hold)
           isconcat_hold = 1
           extext = ""
-          when starts(callleft, "chr(") == 1 {
-            chrc_ltext = chr_arg(callleft)
-            when chrc_ltext == "!" {
-              hold badclchr = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
-            }
-            chrc_lon = 1
-            chrc_lslot = len(data)
-            data = put_zeros(data, 8)
-          }
-          when starts(callright, "chr(") == 1 {
-            chrc_rtext = chr_arg(callright)
-            when chrc_rtext == "!" {
-              hold badcrchr = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
-            }
-            chrc_ron = 1
-            chrc_rslot = len(data)
-            data = put_zeros(data, 8)
-          }
         }
         // A bare name that is already a string variable copies the pair
         // (pointer, length), so `hold b = a` aliases no storage: it is a value
@@ -2045,6 +2548,11 @@ make run() -> num {
             when chr_text == "!" {
               hold badchrcshowshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
             }
+            when is_bare_name(chr_text) == 0 && is_text_literal(chr_text) == 0 {
+              chr_acc = 1
+              extext = chr_text
+              chr_text = ""
+            }
             when chr_show_slot < 0 {
               chr_show_slot = len(data)
               data = put_zeros(data, 8)
@@ -2052,6 +2560,19 @@ make run() -> num {
             chr_has = 1
             slot = chr_show_slot
             act = 9
+          }
+          when act == 0 && starts(shown, "concat(") == 1 {
+            hold parts_show = split_concat(shown)
+            when sx_index(parts_show, 0) == 33 {
+              hold badconcatshow = fail(1, concat(concat("line ", numstr(lineno)), concat(": ", sub(parts_show, 1, len(parts_show)))))
+            }
+            callleft = concat_left(parts_show)
+            callright = concat_right(parts_show)
+            when concat_show_slot < 0 {
+              concat_show_slot = len(data)
+              data = put_zeros(data, 8)
+            }
+            act = 14
           }
           hold shown_slot = slot_of(names, shown)
           when act == 0 && shown_slot >= 0 && slot_of(strnames, shown) >= 0 {
@@ -2103,6 +2624,11 @@ make run() -> num {
             when chr_text == "!" {
               hold badchrassignshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
             }
+            when is_bare_name(chr_text) == 0 && is_text_literal(chr_text) == 0 {
+              chr_acc = 1
+              extext = chr_text
+              chr_text = ""
+            }
             assign_chr = 1
             extext = ""
           }
@@ -2115,24 +2641,6 @@ make run() -> num {
             callright = concat_right(parts_assign)
             assign_concat = 1
             extext = ""
-            when starts(callleft, "chr(") == 1 {
-              chrc_ltext = chr_arg(callleft)
-              when chrc_ltext == "!" {
-                hold badaclchr = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
-              }
-              chrc_lon = 1
-              chrc_lslot = len(data)
-              data = put_zeros(data, 8)
-            }
-            when starts(callright, "chr(") == 1 {
-              chrc_rtext = chr_arg(callright)
-              when chrc_rtext == "!" {
-                hold badacrchr = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
-              }
-              chrc_ron = 1
-              chrc_rslot = len(data)
-              data = put_zeros(data, 8)
-            }
           }
           when assign_alias == 0 && assign_text == 0 && assign_concat == 0 && len(extext) > 0 {
             when slot_of(strnames, extext) >= 0 {
@@ -2671,19 +3179,43 @@ make run() -> num {
     // ever read. `chr(0)` is empty text, as in the published runtimes: the byte
     // cell stays zero and the length is 0, so nothing is read back.
     when chr_has == 1 {
-      hold chr_kind = chr_kind_of(chr_text, names, strnames, lineno)
-      hold chr_value = 0
-      hold chr_src = 0
-      when chr_kind == 0 {
-        chr_value = tok_num(concat("n", chr_text))
-      } otherwise {
-        chr_src = slot_of(names, chr_text)
-      }
       hold chr_cell = len(data)
       data = push(data, 0)
       data = push(data, 10)
       data = push(data, 0)
       data = push(data, 0)
+      hold chr_kind = 0
+      hold chr_value = 0
+      hold chr_src = 0
+      when chr_acc == 1 {
+        // chr(<integer expression>): the expression block above already left the
+        // value in the accumulator. Park it in a shared 4-byte scratch word and
+        // read it back through the numeric-slot path; the per-occurrence byte
+        // cell must keep its `[byte][newline][0][0]` layout, so the value cannot
+        // be stored there with the 32-bit store this backend has.
+        when chr_acc_slot < 0 {
+          chr_acc_slot = len(data)
+          data = put_zeros(data, 4)
+        }
+        hold chr_store_site = len(code)
+        when arch == 0 {
+          fixsite = push(fixsite, chr_store_site + 1)
+        } otherwise {
+          fixsite = push(fixsite, chr_store_site)
+        }
+        fixoff = push(fixoff, chr_acc_slot)
+        code = emit_store_global(code, arch)
+        chr_kind = 1
+        chr_src = chr_acc_slot
+        chr_acc = 0
+      } otherwise {
+        chr_kind = chr_kind_of(chr_text, names, strnames, lineno)
+        when chr_kind == 0 {
+          chr_value = tok_num(concat("n", chr_text))
+        } otherwise {
+          chr_src = slot_of(names, chr_text)
+        }
+      }
       code = emit_chr_value(code, arch, chr_spec(chr_kind, chr_value, chr_src), chr_cell, slot)
       chr_has = 0
     }
@@ -2776,59 +3308,7 @@ make run() -> num {
       code = emit_store_global(code, arch)
     }
     when act == 9 {
-      hold pvat = len(code)
-      when arch == 0 {
-        fixsite = push(fixsite, pvat + 1)
-      } otherwise {
-        fixsite = push(fixsite, pvat)
-      }
-      fixoff = push(fixoff, slot)
-      code = emit_load_global(code, arch)
-      code = emit_pop_acc(code, arch)
-      when arch == 0 {
-        code = e1(code, 137)
-        code = e1(code, 193)
-      } otherwise {
-        when arch == 2 {
-          code = e_w(code, rv_i(0, 10, 0, 11, 19))
-        } otherwise {
-          code = e_w(code, 2852127713)
-        }
-      }
-      hold lvat = len(code)
-      when arch == 0 {
-        fixsite = push(fixsite, lvat + 1)
-      } otherwise {
-        fixsite = push(fixsite, lvat)
-      }
-      fixoff = push(fixoff, slot + 4)
-      code = emit_load_global(code, arch)
-      code = emit_pop_acc(code, arch)
-      when arch == 0 {
-        code = e1(code, 137)
-        code = e1(code, 194)
-        code = e1(code, 66)
-        code = e1(code, 184)
-        code = e32(code, 4)
-        code = e1(code, 187)
-        code = e32(code, 1)
-        code = e1(code, 205)
-        code = e1(code, 128)
-      } otherwise {
-        when arch == 2 {
-          code = e_w(code, rv_i(0, 10, 0, 12, 19))
-          code = e_w(code, rv_i(1, 12, 0, 12, 19))
-          code = e_w(code, rv_i(1, 0, 0, 10, 19))
-          code = e_w(code, rv_i(64, 0, 0, 17, 19))
-          code = e_w(code, 115)
-        } otherwise {
-          code = e_w(code, 2852127714)
-          code = e_w(code, 2432697410)
-          code = a_movz(code, 1, 0, 1)
-          code = a_movz(code, 1, 8, 64)
-          code = e_w(code, 3556769793)
-        }
-      }
+      hold shown_slot_done = emit_show_string_slot(slot)
     }
     when act == 11 || act == 12 {
       // Copy the source string value: two 32-bit fields (pointer at +0, byte
@@ -2858,345 +3338,17 @@ make run() -> num {
         off = off + 4
       }
     }
-    when act == 10 {
-      when chrc_lon == 1 {
-        hold clkind = chr_kind_of(chrc_ltext, names, strnames, lineno)
-        hold clval = 0
-        hold clsrc = 0
-        when clkind == 0 {
-          clval = tok_num(concat("n", chrc_ltext))
-        } otherwise {
-          clsrc = slot_of(names, chrc_ltext)
-        }
-        hold clcell = len(data)
-        data = push(data, 0)
-        data = push(data, 10)
-        data = push(data, 0)
-        data = push(data, 0)
-        code = emit_chr_value(code, arch, chr_spec(clkind, clval, clsrc), clcell, chrc_lslot)
+    // concat(...) in a `hold`, an assignment or a `show`. A `show` writes the
+    // result into a hidden pair slot and then prints it; the operands themselves
+    // are resolved (and nested calls emitted) by emit_concat_pair.
+    when act == 10 || act == 14 {
+      hold concatdest = slot
+      when act == 14 {
+        concatdest = concat_show_slot
       }
-      when chrc_ron == 1 {
-        hold crkind = chr_kind_of(chrc_rtext, names, strnames, lineno)
-        hold crval = 0
-        hold crsrc = 0
-        when crkind == 0 {
-          crval = tok_num(concat("n", chrc_rtext))
-        } otherwise {
-          crsrc = slot_of(names, chrc_rtext)
-        }
-        hold crcell = len(data)
-        data = push(data, 0)
-        data = push(data, 10)
-        data = push(data, 0)
-        data = push(data, 0)
-        code = emit_chr_value(code, arch, chr_spec(crkind, crval, crsrc), crcell, chrc_rslot)
-      }
-      hold leftslot = slot_of(names, callleft)
-      hold rightslot = slot_of(names, callright)
-      when leftslot < 0 && is_text_literal(callleft) == 1 {
-        leftslot = len(data)
-        data = put_zeros(data, 8)
-        hold leftlitoff = len(data)
-        data = append_text(data, sub(callleft, 1, len(callleft) - 1))
-        hold leftlitlen = len(data) - leftlitoff
-        hold literal_base = 4202496
-        when arch == 0 {
-          literal_base = 134520832
-        }
-        data = set_u32(data, leftslot, literal_base + leftlitoff)
-        data = set_u32(data, leftslot + 4, leftlitlen)
-      }
-      when rightslot < 0 && is_text_literal(callright) == 1 {
-        rightslot = len(data)
-        data = put_zeros(data, 8)
-        hold rightlitoff = len(data)
-        data = append_text(data, sub(callright, 1, len(callright) - 1))
-        hold rightlitlen = len(data) - rightlitoff
-        hold literal_base2 = 4202496
-        when arch == 0 {
-          literal_base2 = 134520832
-        }
-        data = set_u32(data, rightslot, literal_base2 + rightlitoff)
-        data = set_u32(data, rightslot + 4, rightlitlen)
-      }
-      when chrc_lon == 1 {
-        leftslot = chrc_lslot
-      }
-      when chrc_ron == 1 {
-        rightslot = chrc_rslot
-      }
-      chrc_lon = 0
-      chrc_ron = 0
-      when leftslot < 0 || rightslot < 0 {
-        hold missing_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat inputs must be declared string variables, string literals or chr(...) values"))
-      }
-      when (slot_of(names, callleft) >= 0 && slot_of(strnames, callleft) < 0) || (slot_of(names, callright) >= 0 && slot_of(strnames, callright) < 0) {
-        hold nonstring_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat variable arguments must be strings"))
-      }
-      when heap_on == 0 {
-        heap_cursor_slot = len(data)
-        data = put_zeros(data, 4)
-        heap_on = 1
-      }
-      hold heap_start_off = 65536
-      hold heap_end_off = 126976
-      when arch == 0 {
-        // Load both (pointer,length) pairs into esi/ecx and ebp/edx.
-        code = e1(code, 139)
-        code = e1(code, 53)
-        fixsite = push(fixsite, len(code))
-        fixoff = push(fixoff, leftslot)
-        code = e32(code, 0)
-        code = e1(code, 139)
-        code = e1(code, 13)
-        fixsite = push(fixsite, len(code))
-        fixoff = push(fixoff, leftslot + 4)
-        code = e32(code, 0)
-        code = e1(code, 139)
-        code = e1(code, 45)
-        fixsite = push(fixsite, len(code))
-        fixoff = push(fixoff, rightslot)
-        code = e32(code, 0)
-        code = e1(code, 139)
-        code = e1(code, 21)
-        fixsite = push(fixsite, len(code))
-        fixoff = push(fixoff, rightslot + 4)
-        code = e32(code, 0)
-        // EAX is the old bump pointer; EBX preserves the result pointer.
-        code = e1(code, 139)
-        code = e1(code, 5)
-        fixsite = push(fixsite, len(code))
-        fixoff = push(fixoff, heap_cursor_slot)
-        code = e32(code, 0)
-        code = e1(code, 137)
-        code = e1(code, 195)
-        code = e1(code, 1)
-        code = e1(code, 202)
-        code = e1(code, 1)
-        code = e1(code, 208)
-        code = e1(code, 64)
-        code = e1(code, 64)
-        // Refuse a concat that would cross the mapped 60 KiB heap.
-        code = e1(code, 61)
-        hold i386_heap_end = 134520832 + heap_end_off
-        code = e32(code, i386_heap_end)
-        code = e1(code, 15)
-        code = e1(code, 134)
-        hold i386_good_disp = len(code)
-        code = e32(code, 0)
-        code = e1(code, 184)
-        code = e32(code, 1)
-        code = e1(code, 187)
-        code = e32(code, 1)
-        code = e1(code, 205)
-        code = e1(code, 128)
-        hold i386_good = len(code)
-        code = patch32(code, i386_good_disp, i386_good - (i386_good_disp + 4))
-        code = e1(code, 163)
-        fixsite = push(fixsite, len(code))
-        fixoff = push(fixoff, heap_cursor_slot)
-        code = e32(code, 0)
-        // Copy with REP MOVSB, then terminate and publish the new pair.
-        code = e1(code, 137)
-        code = e1(code, 223)
-        code = e1(code, 243)
-        code = e1(code, 164)
-        code = e1(code, 137)
-        code = e1(code, 238)
-        code = e1(code, 139)
-        code = e1(code, 13)
-        fixsite = push(fixsite, len(code))
-        fixoff = push(fixoff, rightslot + 4)
-        code = e32(code, 0)
-        code = e1(code, 243)
-        code = e1(code, 164)
-        code = e1(code, 198)
-        code = e1(code, 7)
-        code = e1(code, 10)
-        code = e1(code, 71)
-        code = e1(code, 198)
-        code = e1(code, 7)
-        code = e1(code, 0)
-        code = e1(code, 137)
-        code = e1(code, 29)
-        fixsite = push(fixsite, len(code))
-        fixoff = push(fixoff, slot)
-        code = e32(code, 0)
-        code = e1(code, 137)
-        code = e1(code, 21)
-        fixsite = push(fixsite, len(code))
-        fixoff = push(fixoff, slot + 4)
-        code = e32(code, 0)
-      } otherwise {
-        when arch == 1 {
-          // AArch64: w10/w11 and w12/w13 are source pairs; w14 is the
-          // destination and w15 the total length.
-          hold afix0 = len(code)
-          fixsite = push(fixsite, afix0)
-          fixoff = push(fixoff, leftslot)
-          code = a_addr(code, 9)
-          code = e_w(code, 3107979562)
-          code = e_w(code, 3107980587)
-          hold afix1 = len(code)
-          fixsite = push(fixsite, afix1)
-          fixoff = push(fixoff, rightslot)
-          code = a_addr(code, 9)
-          code = e_w(code, 3107979564)
-          code = e_w(code, 3107980589)
-          hold afix2 = len(code)
-          fixsite = push(fixsite, afix2)
-          fixoff = push(fixoff, heap_cursor_slot)
-          code = a_addr(code, 9)
-          code = e_w(code, 3107979566)
-          code = e_w(code, 185401711)
-          code = e_w(code, 185532880)
-          code = e_w(code, 285214224)
-          code = e_w(code, 285214224)
-          code = a_movz(code, 0, 17, 0)
-          code = a_movk16(code, 0, 17, 66)
-          code = e_w(code, 1796276767)
-          hold a_good_site = len(code)
-          code = e_w(code, 1409286153)
-          code = a_movz(code, 1, 0, 1)
-          code = a_movz(code, 1, 8, 93)
-          code = e_w(code, 3556769793)
-          hold a_good = len(code)
-          code = a_imm19(code, a_good_site, a_good - a_good_site)
-          hold afix3 = len(code)
-          fixsite = push(fixsite, afix3)
-          fixoff = push(fixoff, heap_cursor_slot)
-          code = a_addr(code, 9)
-          code = e_w(code, 3103785264)
-          // Publish the original allocation base (w14); w16 is already the
-          // advanced heap cursor and must not become the string pointer.
-          hold aoutfix = len(code)
-          fixsite = push(fixsite, aoutfix)
-          fixoff = push(fixoff, slot)
-          code = a_addr(code, 9)
-          code = e_w(code, 3103785262)
-          hold a_left_cmp = len(code)
-          code = e_w(code, 1895825791)
-          hold a_left_skip_site = len(code)
-          code = e_w(code, 1409286144)
-          hold a_left_loop = len(code)
-          code = e_w(code, 960495953)
-          code = e_w(code, 956301777)
-          code = e_w(code, 2432697674)
-          code = e_w(code, 2432697806)
-          code = e_w(code, 1358955883)
-          code = e_w(code, 1895825791)
-          hold a_left_back_site = len(code)
-          code = e_w(code, 1409286145)
-          hold a_left_done = len(code)
-          code = a_imm19(code, a_left_skip_site, a_left_done - a_left_skip_site)
-          code = a_imm19(code, a_left_back_site, a_left_loop - a_left_back_site)
-          hold a_right_cmp = len(code)
-          code = e_w(code, 1895825855)
-          hold a_right_skip_site = len(code)
-          code = e_w(code, 1409286144)
-          hold a_right_loop = len(code)
-          code = e_w(code, 960496017)
-          code = e_w(code, 956301777)
-          code = e_w(code, 2432697740)
-          code = e_w(code, 2432697806)
-          code = e_w(code, 1358955949)
-          code = e_w(code, 1895825855)
-          hold a_right_back_site = len(code)
-          code = e_w(code, 1409286145)
-          hold a_right_done = len(code)
-          code = a_imm19(code, a_right_skip_site, a_right_done - a_right_skip_site)
-          code = a_imm19(code, a_right_back_site, a_right_loop - a_right_back_site)
-          code = a_movz(code, 0, 17, 10)
-          code = e_w(code, 956301777)
-          code = e_w(code, 2432697806)
-          code = e_w(code, 956301791)
-          hold afix5 = len(code)
-          fixsite = push(fixsite, afix5)
-          fixoff = push(fixoff, slot + 4)
-          // The fixup already targets slot+4, so store at [x9] (offset 0).
-          code = a_addr(code, 9)
-          code = e_w(code, 3103785263)
-        } otherwise {
-          // RV64: t1/t2 and t3/t4 are the source pairs; t5 holds the
-          // destination pointer and t6 the total length.
-          hold rfix0 = len(code)
-          code = rv_li32(code, 5, 0)
-          fixsite = push(fixsite, rfix0)
-          fixoff = push(fixoff, leftslot)
-          code = e_w(code, rv_i(0, 5, 2, 6, 3))
-          code = e_w(code, rv_i(4, 5, 2, 7, 3))
-          hold rfix1 = len(code)
-          code = rv_li32(code, 5, 0)
-          fixsite = push(fixsite, rfix1)
-          fixoff = push(fixoff, rightslot)
-          code = e_w(code, rv_i(0, 5, 2, 28, 3))
-          code = e_w(code, rv_i(4, 5, 2, 29, 3))
-          hold rfix2 = len(code)
-          code = rv_li32(code, 5, 0)
-          fixsite = push(fixsite, rfix2)
-          fixoff = push(fixoff, heap_cursor_slot)
-          code = e_w(code, rv_i(0, 5, 2, 30, 3))
-          code = e_w(code, rv_r(0, 29, 7, 0, 31, 51))
-          code = e_w(code, rv_r(0, 31, 30, 0, 20, 51))
-          code = e_w(code, rv_i(1, 20, 0, 20, 19))
-          code = e_w(code, rv_i(1, 20, 0, 20, 19))
-          code = rv_li32(code, 21, 4202496 + heap_end_off)
-          code = e_w(code, rv_r(0, 20, 21, 3, 22, 51))
-          hold r_good_site = len(code)
-          code = e_w(code, rv_b_word(0, 0, 22, 0))
-          code = e_w(code, rv_i(1, 0, 0, 10, 19))
-          code = e_w(code, rv_i(93, 0, 0, 17, 19))
-          code = e_w(code, 115)
-          hold r_good = len(code)
-          code = set_w(code, r_good_site, rv_b_word(r_good - r_good_site, 0, 22, 0))
-          hold rfix3 = len(code)
-          code = rv_li32(code, 5, 0)
-          fixsite = push(fixsite, rfix3)
-          fixoff = push(fixoff, heap_cursor_slot)
-          code = e_w(code, rv_s(0, 20, 5, 2))
-          code = e_w(code, rv_i(0, 30, 0, 19, 19))
-          hold r_left_skip_site = len(code)
-          code = e_w(code, rv_b_word(0, 0, 7, 0))
-          hold r_left_loop = len(code)
-          code = e_w(code, rv_i(0, 6, 4, 23, 3))
-          code = e_w(code, rv_s(0, 23, 19, 0))
-          code = e_w(code, rv_i(1, 6, 0, 6, 19))
-          code = e_w(code, rv_i(1, 19, 0, 19, 19))
-          code = e_w(code, rv_i(0 - 1, 7, 0, 7, 19))
-          hold r_left_back_site = len(code)
-          code = e_w(code, rv_b_word(0, 0, 7, 1))
-          hold r_left_done = len(code)
-          code = set_w(code, r_left_skip_site, rv_b_word(r_left_done - r_left_skip_site, 0, 7, 0))
-          code = set_w(code, r_left_back_site, rv_b_word(r_left_loop - r_left_back_site, 0, 7, 1))
-          hold r_right_skip_site = len(code)
-          code = e_w(code, rv_b_word(0, 0, 29, 0))
-          hold r_right_loop = len(code)
-          code = e_w(code, rv_i(0, 28, 4, 23, 3))
-          code = e_w(code, rv_s(0, 23, 19, 0))
-          code = e_w(code, rv_i(1, 28, 0, 28, 19))
-          code = e_w(code, rv_i(1, 19, 0, 19, 19))
-          code = e_w(code, rv_i(0 - 1, 29, 0, 29, 19))
-          hold r_right_back_site = len(code)
-          code = e_w(code, rv_b_word(0, 0, 29, 1))
-          hold r_right_done = len(code)
-          code = set_w(code, r_right_skip_site, rv_b_word(r_right_done - r_right_skip_site, 0, 29, 0))
-          code = set_w(code, r_right_back_site, rv_b_word(r_right_loop - r_right_back_site, 0, 29, 1))
-          code = e_w(code, rv_i(10, 0, 0, 23, 19))
-          code = e_w(code, rv_s(0, 23, 19, 0))
-          code = e_w(code, rv_i(1, 19, 0, 19, 19))
-          code = e_w(code, rv_s(0, 0, 19, 0))
-          hold rfix4 = len(code)
-          code = rv_li32(code, 5, 0)
-          fixsite = push(fixsite, rfix4)
-          fixoff = push(fixoff, slot)
-          // x30 retains the original heap allocation base for the result.
-          code = e_w(code, rv_s(0, 30, 5, 2))
-          hold rfix5 = len(code)
-          code = rv_li32(code, 5, 0)
-          fixsite = push(fixsite, rfix5)
-          fixoff = push(fixoff, slot + 4)
-          code = e_w(code, rv_s(0, 31, 5, 2))
-        }
+      hold concat_done = emit_concat_pair(callleft, callright, concatdest)
+      when act == 14 {
+        hold concat_shown = emit_show_string_slot(concatdest)
       }
     }
     when act == 7 || act == 8 {
@@ -3279,7 +3431,6 @@ make run() -> num {
     when len(data) >= 65536 {
       hold static_too_large = fail(1, "static globals and strings reach the concat heap reservation")
     }
-    data = patch32(data, heap_cursor_slot, dva + 65536)
     data_mem = 126976
   }
   when cn + hdrsz > 8192 {
