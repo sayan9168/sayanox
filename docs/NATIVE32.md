@@ -48,18 +48,31 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   zero-based; negative indices count back from the end, matching the language
   runtime. An out-of-range index exits with status 1. The index expression can
   use the numeric operators supported by this subset.
-- `concat(STRING_ARG, STRING_ARG)` in a string declaration or assignment, where
-  each argument is either a previously declared string variable or a quoted
-  string literal. Variables contribute their current runtime byte spans;
+- `concat(STRING_ARG, STRING_ARG)` in a string declaration, an assignment or a
+  `show`, where each argument is a previously declared string variable, a
+  quoted string literal, a whole `chr(X)` value or another `concat(...)` call. Variables contribute their current runtime byte spans;
   literals are decoded into the image's static data segment. Each execution
   copies both spans into a bounded 60 KiB bump heap, writes a newline and NUL
   terminator after the bytes, then updates the destination's pointer and raw
   length. `len()` excludes the display newline. The heap is private to each
   generated image and is not reclaimed; exhaustion exits the generated program
   with status 1. This remains narrower than general dynamic string support:
-  nested/arbitrary string expressions are not concat operands, and
-  embedded-NUL literals remain refused because the existing backends disagree
-  on their output semantics.
+  `concat` is a statement-level form (it is refused inside any other expression,
+  including as a `string_eq` argument), and embedded-NUL literals remain refused
+  because the existing backends disagree on their output semantics.
+- **General string expressions** (2026-11-02): `show concat(A, B)` prints a
+  concatenation without naming a variable, and a `concat` operand may itself be
+  a `concat(...)` call, so `concat(concat(a, "-"), b)`,
+  `concat("pre-", concat(a, "!"))` and
+  `concat(concat("1", "2"), concat("3", "4"))` all lower. A nested call is
+  emitted first into a hidden `(pointer, length)` slot in the data segment; that
+  slot then stands in for the operand, so the emitter keeps one copy routine
+  whatever the mixture of variables, literals, `chr(...)` values and nested
+  calls. Nesting is limited to seven levels (one hidden pair slot per level);
+  deeper nesting, a numeric operand, a numeric variable operand and a
+  one-argument call are all refused with a line-numbered diagnostic. The
+  `concat_expr` fixture exercises all of these forms on the six execution paths
+  with reviewed AArch64/RV64IM goldens.
 - **String-value copy** (2026-10-31): `hold b = a` and `b = a`, where `a` is an
   already-declared string variable, copy the 8-byte `(pointer, length)` pair
   through the accumulator. It is a value copy, not an alias: reassigning `a`
@@ -178,10 +191,13 @@ argument on either side and with two `chr` arguments, `len(chr(...))`, and the
 `len`/index of a `concat` result built from `chr`. It is the first accepted
 `concat` program, so it is also the fixture that proves the *data segment* is
 byte-identical across i386, AArch64 and RV64IM for a program with `concat`
-(R14, fixed 2026-11-02). The refusal matrix rises from 26 to 31: `concat(chr(65, 66),
-"x")` (wrong `chr` arity), `chr("A")` and `chr(nope)` as `string_eq`/`concat`
-arguments, `chr(n + 1)` as a `concat` argument, `string_eq(chr(65), n)` with a
-numeric second argument, and `len(chr(t))` with a string argument. The old
+(R14, fixed 2026-11-02). Nested `chr` raised the refusal matrix from 26 to 31:
+`concat(chr(65, 66), "x")` (wrong `chr` arity), `chr("A")` and `chr(nope)` as
+`string_eq`/`concat` arguments, `chr(n + 1)` as a `concat` argument,
+`string_eq(chr(65), n)` with a numeric second argument, and `len(chr(t))` with a
+string argument. The `concat_expr` increment raised it further to 36: a numeric
+variable as a `concat` operand, a numeric literal operand, a one-argument
+`concat`, eight-level nesting, and `concat(...)` used inside `string_eq`. The old
 `concat_call` refusal (`concat(text, chr(121))`) is gone because that program is
 now accepted by this backend - the `chr_nested` fixture is its replacement.
 
@@ -229,8 +245,9 @@ compiler slice, not a claim of complete language or ABI coverage.
 This work is an incremental step toward full AArch64 and RV64GC native compiler
 and runtime support. Bounded `concat` and byte indexing extend the original
 integer/static-string backend, but do not complete that roadmap item. General
-string operations beyond the documented subset (nested `chr` is now lowered),
-lists, structs and functions,
+string operations beyond the documented subset (nested `chr`, `show concat(...)`
+and nested `concat` operands are now lowered; `concat` inside other expressions
+is not), lists, structs and functions,
 IEEE-754 code generation, native file I/O, and a mark-and-sweep collector
 remain open, along with broader ISA support and end-to-end parity for each. Do not count
 emulator-only FP/syscall probes as compiler support.

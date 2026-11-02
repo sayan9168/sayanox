@@ -1,0 +1,27 @@
+// General string-valued expressions in the multi-ISA backend: `concat` inside
+// `show`, and `concat` nested as an argument of another `concat`. A nested call
+// is emitted first into a hidden (pointer, length) slot in the data segment,
+// which then stands in for that operand, so the emitter has one copy routine
+// and any mix of variables, literals, chr(...) values and nested calls works.
+hold a = "left"
+hold b = "right"
+show concat(a, b)
+show concat("A", "B")
+show concat("x", a)
+hold c = concat(concat(a, "-"), b)
+show c
+hold d = concat("pre-", concat(a, "!"))
+show d
+hold e = concat(concat("1", "2"), concat("3", "4"))
+show e
+show concat(concat("p", "q"), "r")
+show concat(chr(65), b)
+show concat(a, chr(66))
+hold deep = concat(concat(concat("a", "b"), concat("c", "d")), concat("e", "f"))
+show deep
+show len(deep)
+hold n = 3
+show n
+hold ab = concat(a, b)
+hold f = string_eq(ab, "leftright")
+show f

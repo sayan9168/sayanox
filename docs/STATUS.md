@@ -1,5 +1,50 @@
 # Status
 
+**2026-11-02 (fifth increment) — R02 step 5: general string-valued
+expressions.**
+
+`show concat(A, B)` now prints a concatenation without naming a variable, and a
+`concat` operand may itself be a `concat(...)` call. Both fall out of one
+refactor rather than two special cases: the copy routine and the string-print
+sequence became functions over the compiler's file-scope state
+(`emit_concat_copy`, `emit_show_string_slot`), and a new resolver
+(`materialize_concat_operand`) turns each operand into a `(pointer, length)`
+pair — a variable's own pair, a literal pair whose pointer and length are
+written at run time (so the data image stays arch-neutral, R14), a `chr` cell,
+or a nested call emitted first into a hidden pair slot. `emit_concat_pair`
+resolves both operands and then calls the single copy routine, so the machine
+code of a plain `concat(a, b)` is unchanged while arbitrary mixtures of
+variables, literals, `chr(...)` values and nested calls work.
+
+Nesting is capped at seven levels (one hidden pair slot per level, and it
+bounds the emitter's own recursion); a numeric operand, a numeric variable
+operand, a one-argument call and eight-level nesting are refused with
+line-numbered diagnostics. `concat` remains a statement-level form: used inside
+another expression (for example as a `string_eq` argument) it is refused, and
+that refusal now says what is wrong instead of claiming the backend "has no
+functions".
+
+Fixtures and refusals: `selfhost/native32_tests/concat_expr.sa` (13 output
+lines: `show concat(a, b)`, `show concat("A", "B")`, `show concat("x", a)`,
+left- and right-nested calls, two nested calls in one call, `chr` operands
+inside nesting, four-level nesting with `len`, a copy and `string_eq` of a
+concat result) runs on all six execution paths — seed-min, gen2, x86-64 native
+AOT, Portable IR VM, i386 ELF32 and AArch64/RV64IM under `sxisaexec` — with
+reviewed AArch64 and RV64IM goldens and the full cross-ISA data comparison. The
+refusal matrix rises from 31 to 36.
+
+Because `chr` operand slots are now allocated during emission instead of during
+parsing, the reviewed goldens of the two `concat` fixtures were regenerated;
+every pinned image size is unchanged (`chr_nested` 8534, `concat_expr` 8590,
+data 398 bytes, identical on all three targets).
+
+```
+./sx target test-native32        -> 0
+./sx target test-native-arm64    -> 0
+./sx target test-native-riscv64  -> 0
+./sx target test-sxisaexec       -> 0
+```
+
 **2026-11-02 (fourth increment) — R14 and R15: two recorded defects fixed.**
 
 **R14 — a `concat` program's data image is now identical on i386, AArch64 and
