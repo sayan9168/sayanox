@@ -144,13 +144,12 @@ The latter are emulator tests, not native compiler features.
 
 The `strcopy.sa` fixture covers the string-value copy on all six execution
 paths (seed-min, gen2, x86-64 native AOT, i386, AArch64, RV64), and its data
-segment is compared across the three ISA images. A known pre-existing limitation
-found while adding it: a program that *uses* `concat` initialises its literal
-temp slot in the data segment with an arch-specific absolute address, so that
-program's data image is not cross-ISA identical even though each image is
-correct for its own target. The copy fixture therefore avoids `concat`, and the
-cross-ISA data assertion covers programs without `concat`. Recorded as R14 in
-the [remaining-work register](REMAINING_WORK.md).
+segment is compared across the three ISA images. Every fixture in the list now
+has a byte-identical data segment on all three targets, `concat` programs
+included: the arch-specific values such a program needs (literal argument
+pointers and the heap bump pointer) are written at run time instead of being
+baked into the image (R14, fixed 2026-11-02, see the
+[remaining-work register](REMAINING_WORK.md)).
 
 The `streq.sa` fixture covers `string_eq` on the same six execution paths and in
 the same cross-ISA data comparison: literal/literal, variable/variable,
@@ -176,13 +175,10 @@ The `chr_nested.sa` fixture covers the nested forms on the same six execution
 paths: `chr` on the left, on the right and on both sides of `concat`, `chr` of a
 variable, an empty `chr(0)` as a `concat` operand, `string_eq` with a `chr`
 argument on either side and with two `chr` arguments, `len(chr(...))`, and the
-`len`/index of a `concat` result built from `chr`. Its data segment is *not*
-compared byte-for-byte across the three ISA images: a `concat` literal stores
-its pointer (data base + offset) in the data segment at layout time, so only the
-layout is cross-ISA identical until that becomes a runtime value (R14). The
-gate therefore pins the data-segment *size* (297 bytes) on each target and
-relies on the reviewed per-arch goldens plus six-way execution parity for the
-bytes that matter. The refusal matrix rises from 26 to 31: `concat(chr(65, 66),
+`len`/index of a `concat` result built from `chr`. It is the first accepted
+`concat` program, so it is also the fixture that proves the *data segment* is
+byte-identical across i386, AArch64 and RV64IM for a program with `concat`
+(R14, fixed 2026-11-02). The refusal matrix rises from 26 to 31: `concat(chr(65, 66),
 "x")` (wrong `chr` arity), `chr("A")` and `chr(nope)` as `string_eq`/`concat`
 arguments, `chr(n + 1)` as a `concat` argument, `string_eq(chr(65), n)` with a
 numeric second argument, and `len(chr(t))` with a string argument. The old
@@ -213,9 +209,12 @@ compiler slice, not a claim of complete language or ABI coverage.
   to `8192 - 116` bytes on i386 and `8192 - 176` on the 64-bit targets (the
   backend diagnoses overflow), because the previous one-page ceiling was
   completely consumed (the `streq` image ended exactly at `4096 - 116`). Static
-  strings and globals enlarge the data segment. `tools/sxisaexec.sa` therefore
-  maps `0x400000..0x424000` (36 pages) so the 60 KiB concat heap still fits above
-  the moved data segment.
+  strings and globals enlarge the data segment. Data offsets `0..31` are the
+  decimal print buffer and `32..35` hold the `concat` bump pointer, which the
+  entry code initialises from the target's own data base, so no data address is
+  baked into the image. `tools/sxisaexec.sa` therefore maps
+  `0x400000..0x424000` (36 pages) so the 60 KiB concat heap still fits above the
+  moved data segment.
 - The emulator supports only the exercised instruction subsets. It currently
   executes the native32 integer/string images, scalar IEEE-754 F/D arithmetic
   probes, and bounded Linux `openat`/`read`/`write`/`close`/`exit` calls. The

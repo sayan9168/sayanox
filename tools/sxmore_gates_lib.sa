@@ -1226,6 +1226,28 @@ make mp_test_sxbuild() -> num {
   hold p2 = pg_command("./tools/sxbuild inventory > selfhost/seed_tests/sxbuild_gate/inv.out", "test-sxbuild child command")
   hold p3 = pr_assert("selfhost/seed_tests/sxbuild_gate/inv.out", "native_aot.c present: *0", 0, 0, 0, 0, 1)
   hold p4 = pr_assert("selfhost/seed_tests/sxbuild_gate/inv.out", "non-anchor .c/.h files: *0", 0, 0, 0, 0, 1)
+  // R15 regression: the compiler's gitignored default C outputs live in
+  // selfhost/ without a `.sa` peer, so they must be named in sxbuild. Create
+  // them for real, prove the count stays 0, then prove a genuine stray file is
+  // still counted (so the fix is not a blanket ignore), then remove them.
+  hold d0 = write_file("selfhost/mini_out.c", "int main(void){return 0;}\n")
+  hold d1 = write_file("selfhost/_smoke.c", "int main(void){return 0;}\n")
+  hold d2 = write_file("selfhost/_out.c", "int main(void){return 0;}\n")
+  hold d3 = write_file("selfhost/hello_out.c", "int main(void){return 0;}\n")
+  hold d4 = write_file("selfhost/boot.c", "int main(void){return 0;}\n")
+  hold d5 = write_file("selfhost/boot2.c", "int main(void){return 0;}\n")
+  hold p4a = pg_command("./tools/sxbuild inventory > selfhost/seed_tests/sxbuild_gate/inv_defaults.out", "test-sxbuild gitignored defaults")
+  hold p4b = pr_assert("selfhost/seed_tests/sxbuild_gate/inv_defaults.out", "non-anchor .c/.h files: *0", 0, 0, 0, 0, 1)
+  hold d6 = write_file("selfhost/stray_untracked.c", "int x;\n")
+  hold p4c = pg_command("./tools/sxbuild inventory > selfhost/seed_tests/sxbuild_gate/inv_stray.out", "test-sxbuild stray file")
+  hold p4d = pr_assert("selfhost/seed_tests/sxbuild_gate/inv_stray.out", "non-anchor .c/.h files: *1", 0, 0, 0, 0, 1)
+  hold d7 = remove_path("selfhost/mini_out.c")
+  hold d8 = remove_path("selfhost/_smoke.c")
+  hold d9 = remove_path("selfhost/_out.c")
+  hold d10 = remove_path("selfhost/hello_out.c")
+  hold d11 = remove_path("selfhost/boot.c")
+  hold d12 = remove_path("selfhost/boot2.c")
+  hold d13 = remove_path("selfhost/stray_untracked.c")
   hold p5 = pg_command("./tools/sxbuild parity selfhost/native_ir_log_test.sa selfhost/seed_tests/sxbuild_gate/parity", "test-sxbuild child command")
   give 0
 }

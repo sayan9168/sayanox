@@ -1723,6 +1723,14 @@ make run() -> num {
   hold bufnl = 31
   hold bufend = 32
 
+  // The concat bump pointer. The image stores zero here and the entry code
+  // writes the target's own value (data base + 64 KiB) once, so no data
+  // address is baked into the data segment: the data image stays byte-identical
+  // across i386/AArch64/RV64IM (R14). Programs without concat pay 4 zero bytes
+  // and one dead word.
+  heap_cursor_slot = len(data)
+  data = put_zeros(data, 4)
+
   // ---- the print-decimal routine, emitted once at code offset 0 ----
   // eax = value. Prints it in decimal with a trailing newline, then returns.
   when arch == 0 {
@@ -1884,6 +1892,30 @@ make run() -> num {
   }
 
   hold entry_off = len(code)
+  // Initialise the concat bump pointer at entry, with the target's own data base.
+  when arch == 0 {
+    fixsite = push(fixsite, len(code) + 2)
+    fixoff = push(fixoff, heap_cursor_slot)
+    code = e1(code, 199)
+    code = e1(code, 5)
+    code = e32(code, 0)
+    code = e32(code, 134520832 + 65536)
+  } otherwise {
+    when arch == 2 {
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = rv_li32(code, 5, 0)
+      code = rv_li32(code, 6, 4268032)
+      code = e_w(code, rv_s(0, 6, 5, 2))
+    } otherwise {
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = a_addr(code, 9)
+      code = a_movz(code, 0, 1, bit_and(4268032, 65535))
+      code = a_movk16(code, 0, 1, bit_and(shr(4268032, 16), 65535))
+      code = e_w(code, 3103785249)
+    }
+  }
 
   // ---- the statement walk ----
   hold n = len(src)
@@ -2893,18 +2925,41 @@ make run() -> num {
       }
       hold leftslot = slot_of(names, callleft)
       hold rightslot = slot_of(names, callright)
+      // A literal argument's (pointer, length) pair is written by the program, not
+      // into the image: the pointer carries the per-target data base, and a value
+      // baked into the data segment would make the image differ between ISAs
+      // (R14). The slot itself stays zero-filled, so the data image is identical on
+      // every target and the pair is correct on the target that runs it.
       when leftslot < 0 && is_text_literal(callleft) == 1 {
         leftslot = len(data)
         data = put_zeros(data, 8)
         hold leftlitoff = len(data)
         data = append_text(data, sub(callleft, 1, len(callleft) - 1))
         hold leftlitlen = len(data) - leftlitoff
-        hold literal_base = 4202496
+        hold leftlitbase = 4202496
         when arch == 0 {
-          literal_base = 134520832
+          leftlitbase = 134520832
         }
-        data = set_u32(data, leftslot, literal_base + leftlitoff)
-        data = set_u32(data, leftslot + 4, leftlitlen)
+        code = emit_push_imm2(code, arch, leftlitbase + leftlitoff)
+        code = emit_pop_acc(code, arch)
+        hold leftpsite = len(code)
+        when arch == 0 {
+          fixsite = push(fixsite, leftpsite + 1)
+        } otherwise {
+          fixsite = push(fixsite, leftpsite)
+        }
+        fixoff = push(fixoff, leftslot)
+        code = emit_store_global(code, arch)
+        code = emit_push_imm2(code, arch, leftlitlen)
+        code = emit_pop_acc(code, arch)
+        hold leftlsite = len(code)
+        when arch == 0 {
+          fixsite = push(fixsite, leftlsite + 1)
+        } otherwise {
+          fixsite = push(fixsite, leftlsite)
+        }
+        fixoff = push(fixoff, leftslot + 4)
+        code = emit_store_global(code, arch)
       }
       when rightslot < 0 && is_text_literal(callright) == 1 {
         rightslot = len(data)
@@ -2912,12 +2967,30 @@ make run() -> num {
         hold rightlitoff = len(data)
         data = append_text(data, sub(callright, 1, len(callright) - 1))
         hold rightlitlen = len(data) - rightlitoff
-        hold literal_base2 = 4202496
+        hold rightlitbase = 4202496
         when arch == 0 {
-          literal_base2 = 134520832
+          rightlitbase = 134520832
         }
-        data = set_u32(data, rightslot, literal_base2 + rightlitoff)
-        data = set_u32(data, rightslot + 4, rightlitlen)
+        code = emit_push_imm2(code, arch, rightlitbase + rightlitoff)
+        code = emit_pop_acc(code, arch)
+        hold rightpsite = len(code)
+        when arch == 0 {
+          fixsite = push(fixsite, rightpsite + 1)
+        } otherwise {
+          fixsite = push(fixsite, rightpsite)
+        }
+        fixoff = push(fixoff, rightslot)
+        code = emit_store_global(code, arch)
+        code = emit_push_imm2(code, arch, rightlitlen)
+        code = emit_pop_acc(code, arch)
+        hold rightlsite = len(code)
+        when arch == 0 {
+          fixsite = push(fixsite, rightlsite + 1)
+        } otherwise {
+          fixsite = push(fixsite, rightlsite)
+        }
+        fixoff = push(fixoff, rightslot + 4)
+        code = emit_store_global(code, arch)
       }
       when chrc_lon == 1 {
         leftslot = chrc_lslot
@@ -2934,8 +3007,6 @@ make run() -> num {
         hold nonstring_concat_input = fail(1, concat(concat("line ", numstr(lineno)), ": concat variable arguments must be strings"))
       }
       when heap_on == 0 {
-        heap_cursor_slot = len(data)
-        data = put_zeros(data, 4)
         heap_on = 1
       }
       hold heap_start_off = 65536
@@ -3279,7 +3350,6 @@ make run() -> num {
     when len(data) >= 65536 {
       hold static_too_large = fail(1, "static globals and strings reach the concat heap reservation")
     }
-    data = patch32(data, heap_cursor_slot, dva + 65536)
     data_mem = 126976
   }
   when cn + hdrsz > 8192 {

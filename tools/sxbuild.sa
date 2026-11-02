@@ -820,11 +820,30 @@ make cmd_bootstrap(out_dir: str) -> num {
 
 // ---- inventory ------------------------------------------------------------
 
+// The C files the bootstrap scripts and quick compiler runs write into
+// selfhost/. Most of them have no `.sa` peer, so they need naming here or the
+// inventory counts them as workspace clutter (R15). Keep this list in step with
+// the `selfhost/*.c` entries in .gitignore.
+make is_known_selfhost_c(p: str) -> num {
+  when string_eq(p, "selfhost/gen1.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/gen1_min.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/gen2.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/gen3.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/gen4.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/boot_from_gen2.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/boot.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/boot2.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/_smoke.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/_out.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/mini_out.c") == 1 { give 1 }
+  when string_eq(p, "selfhost/hello_out.c") == 1 { give 1 }
+  give 0
+}
 make is_generated_c_artifact(p: str) -> num {
   when ends_with(p, ".h") == 1 {
     give 0
   }
-  when string_eq(p, "selfhost/gen1.c") == 1 || string_eq(p, "selfhost/gen1_min.c") == 1 || string_eq(p, "selfhost/gen2.c") == 1 || string_eq(p, "selfhost/gen3.c") == 1 || string_eq(p, "selfhost/gen4.c") == 1 || string_eq(p, "selfhost/boot_from_gen2.c") == 1 {
+  when is_known_selfhost_c(p) == 1 {
     give 1
   }
   when ends_with(p, ".c") == 1 {

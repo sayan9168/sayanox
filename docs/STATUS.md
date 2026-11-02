@@ -1,5 +1,53 @@
 # Status
 
+**2026-11-02 (fourth increment) — R14 and R15: two recorded defects fixed.**
+
+**R14 — a `concat` program's data image is now identical on i386, AArch64 and
+RV64IM.** Two arch-specific values used to be baked into the data segment while
+the image was being laid out: each `concat` literal argument's `(pointer, len)`
+pair (`literal_base + offset`, and `literal_base` is `134520832` on i386 but
+`4202496` on the 64-bit targets) and the heap bump pointer's initial value. Both
+are now runtime values. A literal argument's pair is stored by the program at
+the call site — `emit_push_imm2(base + offset)` into the accumulator, then a
+fixup-addressed 4-byte store into the pair, and the same for the length — and
+the pair itself stays zero-filled in the image. The bump pointer lives in a
+4-byte slot at data offset 32 that the entry code initialises once with the
+target's own data base (`134586368` / `4268032`), so the layout-time
+`patch32(data, heap_cursor_slot, …)` is gone. Data segments are now
+byte-identical on all three targets, `chr_nested` — the first accepted `concat`
+program — is back on the **full** cross-ISA byte comparison, and the
+layout-only pin (`xc_data_layout`) that had narrowed that assertion is deleted.
+Image sizes grew by 4 bytes (the always-present cursor slot); execution output
+is unchanged on all six paths, and the bounded-heap exhaustion test still exits
+1 on AArch64 and RV64 because the cursor starts exactly where it used to.
+
+**R15 — `sxbuild inventory` no longer counts the compiler's gitignored C
+outputs.** `is_generated_c_artifact` knew the checked-in generator names and a
+"has a `.sa` peer" rule, but not the default output paths (`selfhost/boot.c`,
+`boot2.c`, `_smoke.c`, `_out.c`, `mini_out.c`, `hello_out.c`), so any ad-hoc
+compiler run made the inventory report stray C files (reproduced: creating the
+six files moved the count `0 -> 6`). They are now named in
+`is_known_selfhost_c`, next to a comment that ties the list to the
+`selfhost/*.c` entries in `.gitignore`. The `test-sxbuild` gate stopped being a
+clean-tree tautology: it creates all six defaults and asserts the count stays
+`0`, then creates a genuine `selfhost/stray_untracked.c` and asserts the count
+is `1` — so the fix cannot be a blanket "ignore everything in selfhost" — then
+removes all seven. The pre-fix compiler fails that gate.
+
+Gates on this tree, all exit 0 (the pre-existing goldens were regenerated: the
+entry prologue and the 4-byte cursor slot shift every image by 4 bytes of data):
+
+```
+./sx target test-native32          -> 0
+./sx target test-native-arm64      -> 0
+./sx target test-native-riscv64    -> 0
+./sx target test-sxisaexec         -> 0
+./sx target test-sxbuild           -> 0
+```
+
+Written up with its live before/after and negative controls in
+[docs/gate-logs/2026-11-02-r14-r15.md](gate-logs/2026-11-02-r14-r15.md).
+
 **2026-11-02 (third increment) — R02 step 4: `chr` nested inside `concat`, `string_eq` and `len`.**
 
 `chr(X)` is no longer a statement-only value. `tools/native32.sa` now accepts it
