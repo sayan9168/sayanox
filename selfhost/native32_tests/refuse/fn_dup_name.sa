@@ -1,0 +1,7 @@
+make f(n: num) -> num {
+  give n
+}
+make f(n: num) -> num {
+  give n
+}
+show f(1)

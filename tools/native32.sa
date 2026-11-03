@@ -16,10 +16,11 @@
 // bounded string operations are checked end-to-end rather than only pinned.
 //
 // What it is NOT. This is still a bounded AOT subset, not the complete
-// Sayanox runtime. It supports static strings, len, byte indexing, and a
-// bounded bump-heap concat; it has no lists, structs, user functions,
-// collector, general file API, or floating-point expression code. Unsupported
-// forms are refused with a diagnostic and non-zero exit.
+// Sayanox runtime. It supports static strings, len, byte indexing, a bounded
+// bump-heap concat and bounded numeric functions; it has no lists, structs,
+// string-valued functions, recursion, collector, general file API, or
+// floating-point expression code. Unsupported forms are refused with a
+// diagnostic and non-zero exit.
 //
 // The subset, exactly:
 //
@@ -35,7 +36,24 @@
 //     when <expression> { ... }            zero is false, anything else true
 //     } otherwise { ... }
 //     while <expression> { ... }
+//
+//     make NAME(a: num, b: num) -> num {   numeric function, up to 6 parameters
+//       give <integer expression>          return; may also appear early, in a
+//     }                                    `when` branch, for an early return
+//     NAME(<arg>, ...)                     call, as a whole value: `hold x =`,
+//                                          an assignment, `show`, a `when`/`while`
+//                                          condition, another call's argument
+//
 //     // comments, blank lines
+//
+//   A `make` body is lifted out of the program text, emitted after the main
+//   program behind a jump and reached with a real `call`; arguments are
+//   evaluated on the value stack and stored into the callee's parameter slots,
+//   so no ABI registers and no frame layout are involved. Bounds that are
+//   checked: at most 8 functions, at most 6 parameters each, `num` parameters
+//   and `-> num` only, no recursion, and a make body may not call another
+//   function (a nested call needs a saved link register on arm64 and riscv64).
+//   Every body must end with a top-level `give`.
 //
 //   The integer expression emitter is one function (emit_expression), so an
 //   argument position can compile an expression of its own: `chr(X)` accepts a
@@ -49,6 +67,10 @@
 //   levels. `concat` is a statement-level form: it is accepted as the whole
 //   value of a `hold`, an assignment or a `show`, and refused inside any other
 //   expression.
+//
+//   A call is a whole value, not an operand: `f(1) + 1` is refused, and so is a
+//   call inside a `concat` argument. The same is true of `concat`, which stays a
+//   statement-level form.
 //
 //   expressions: + - * % , the six comparisons, parentheses, unary minus,
 //   decimal integer literals, numeric names and `len(STRING_NAME)` or `len("literal")`. `/` is
@@ -482,6 +504,370 @@ hold arch = 0
 hold lineno = 0
 hold eq_used = 0
 hold eq_calls = []
+// The statement walk keeps its own state: the program text, the block stack and
+// the counters. run() resets them, and each `make` body is walked with a fresh
+// block stack.
+hold src = ""
+hold bkind = []
+hold bsite = []
+hold bstart = []
+hold bdepth = 0
+hold ops = []
+hold stmts = 0
+// `} otherwise {` has to be built from chr(123)/chr(125): a literal brace in a
+// `when` condition would be read as the block opener by gen2.
+hold tag_other = ""
+hold tag_other2 = ""
+// `show chr(...)` reuses one hidden (pointer, length) slot; chr_has records
+// whether that slot exists and chr_text carries the chr argument text.
+hold chr_has = 0
+hold chr_text = ""
+hold chr_show_slot = 0 - 1
+
+// ---- user functions -----------------------------------------------------
+// A `make NAME(p: num, ...) -> num { ... }` body is lifted out of the main
+// program text, emitted after it behind a jump, and reached with a real `call`.
+// Arguments travel on the value stack and are stored into the callee's
+// parameter slots, so no ABI registers and no frame layout are involved.
+// Bounds that are checked, not assumed: at most 8 functions, at most 6
+// parameters each, no recursion and no call from inside another make body
+// (a nested call needs a saved link register on arm64 and riscv64).
+hold fn_names = ""
+hold fn_nametbl = ""
+hold fn_paramtbl = ""
+hold fn_bodytbl = ""
+hold fn_arity = []
+hold fn_line = []
+hold fn_off = []
+hold fn_pflat = []
+hold fn_pbase = []
+hold fn_count = 0
+hold fn_active = 0 - 1
+hold fn_gave = 0
+hold fn_last_give = 0
+hold call_site = []
+hold call_fn = []
+
+// Position of the first occurrence of a byte value, or -1.
+make find_byte(s: str, code: num) -> num {
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) == code { give i }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+// `{` minus `}` in one source line, ignoring quoted text.
+make brace_delta(line: str) -> num {
+  hold n = len(line)
+  hold i = 0
+  hold inq = 0
+  hold d = 0
+  while i < n {
+    hold c = sx_index(line, i)
+    when c == 34 { inq = 1 - inq }
+    when inq == 0 && c == 123 { d = d + 1 }
+    when inq == 0 && c == 125 { d = d - 1 }
+    i = i + 1
+  }
+  give d
+}
+
+// Return from the routine in the accumulator (i386 ret, AArch64 RET,
+// RV64IM `jalr x0, 0(x1)`).
+make emit_ret(xs: list, arch: num) -> list {
+  when arch == 0 { give e1(xs, 195) }
+  when arch == 2 { give e_w(xs, 32871) }
+  give e_w(xs, 3596551104)
+}
+
+// Push the accumulator on the value stack.
+make emit_push_acc(xs: list, arch: num) -> list {
+  when arch == 0 { give e1(xs, 80) }
+  when arch == 2 { give rv_push_a0(xs) }
+  give e_w(xs, 4162785248)
+}
+
+// Emit a `call` whose target is not known yet; return the offset patch_call
+// wants.
+make emit_call_here(arch: num) -> num {
+  when arch == 0 {
+    code = e1(code, 232)
+    hold d0 = len(code)
+    code = e32(code, 0)
+    give d0
+  }
+  when arch == 2 {
+    hold d2 = len(code)
+    code = e_w(code, rv_j_word(0, 1))
+    give d2
+  }
+  hold d3 = len(code)
+  code = e_w(code, 2483027968)
+  give d3
+}
+
+// The fi-th newline-separated field of a table string.
+make nth_field(tbl: str, idx: num) -> str {
+  hold n = len(tbl)
+  hold i = 0
+  hold k = 0
+  hold out = ""
+  while i < n {
+    hold c = sx_index(tbl, i)
+    when c == 10 {
+      when k == idx { give out }
+      k = k + 1
+      out = ""
+    } otherwise {
+      when k == idx { out = concat(out, chr(c)) }
+    }
+    i = i + 1
+  }
+  when k == idx { give out }
+  give ""
+}
+
+// The fi-th field of a table separated by chr(1) (a control byte no source line
+// contains), because a make body is multi-line text.
+make nth_part(tbl: str, idx: num) -> str {
+  hold n = len(tbl)
+  hold i = 0
+  hold k = 0
+  hold out = ""
+  while i < n {
+    hold c = sx_index(tbl, i)
+    when c == 1 {
+      when k == idx { give out }
+      k = k + 1
+      out = ""
+    } otherwise {
+      when k == idx { out = concat(out, chr(c)) }
+    }
+    i = i + 1
+  }
+  when k == idx { give out }
+  give ""
+}
+
+make fn_param_slot(fi: num, p: num) -> num {
+  give fn_pflat[fn_pbase[fi] + p]
+}
+
+// If the whole expression text is one call of a declared function, emit it and
+// give 1; otherwise give 0 and let the expression emitter handle the text.
+make try_user_call(extext: str) -> num {
+  hold toks = tokenize(extext)
+  hold tn = tok_count(toks)
+  when tn < 3 { give 0 }
+  hold t0 = tok_at(toks, 0)
+  when sx_index(t0, 0) != 118 { give 0 }
+  hold nm = sub(t0, 1, len(t0))
+  when string_eq(tok_at(toks, 1), "(") != 1 { give 0 }
+  hold fi = slot_of(fn_names, nm)
+  hold close = paren_close(toks, 1, tn)
+  when close < 0 || close != tn - 1 { give 0 }
+  when fi < 0 {
+    when fn_count > 0 || string_eq(nm, "len") == 0 {
+      // A call shape that names no declared function is a diagnostic, not a
+      // silently mis-parsed expression -- but only when the program declares
+      // functions at all, so the older subset keeps its own messages.
+      when fn_count > 0 && string_eq(nm, "len") == 0 && string_eq(nm, "chr") == 0 && string_eq(nm, "concat") == 0 && string_eq(nm, "string_eq") == 0 && string_eq(nm, "sx_index") == 0 && string_eq(nm, "numstr") == 0 {
+        hold unknownfn = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": unknown function '", nm)), "'"))
+      }
+    }
+    give 0
+  }
+  // split the arguments at top-level commas
+  hold afrom = []
+  hold aupto = []
+  hold adepth = 0
+  hold at = 2
+  hold astart = 2
+  while at < close {
+    hold t = tok_at(toks, at)
+    when string_eq(t, "(") == 1 { adepth = adepth + 1 }
+    when string_eq(t, ")") == 1 { adepth = adepth - 1 }
+    when adepth == 0 && string_eq(t, "o,") == 1 {
+      afrom = push(afrom, astart)
+      aupto = push(aupto, at)
+      astart = at + 1
+    }
+    at = at + 1
+  }
+  when close > astart {
+    afrom = push(afrom, astart)
+    aupto = push(aupto, close)
+  }
+  hold nargs = len(afrom)
+  when nargs != fn_arity[fi] {
+    hold badarity = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": '", nm)), concat(concat("' takes ", numstr(fn_arity[fi])), concat(concat(" numeric arguments, not ", numstr(nargs)), ""))))
+  }
+  when fn_active >= 0 {
+    hold badnested = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": '", nm)), "' is called from inside a make body; native32 v1 only lets the main program call a function"))
+  }
+  hold a = 0
+  while a < nargs {
+    hold pre = afrom[a]
+    while pre < aupto[a] {
+      when sx_index(tok_at(toks, pre), 0) == 108 {
+        hold strarg = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": a call argument to '", nm)), "' must be a number, not a string"))
+      }
+      pre = pre + 1
+    }
+    hold argtext = tok_range_text(toks, afrom[a], aupto[a])
+    hold argdone = emit_expression(argtext)
+    code = emit_push_acc(code, arch)
+    a = a + 1
+  }
+  hold pp = nargs - 1
+  while pp >= 0 {
+    code = emit_pop_acc(code, arch)
+    hold psite = len(code)
+    when arch == 0 {
+      fixsite = push(fixsite, psite + 1)
+    } otherwise {
+      fixsite = push(fixsite, psite)
+    }
+    fixoff = push(fixoff, fn_param_slot(fi, pp))
+    code = emit_store_global(code, arch)
+    pp = pp - 1
+  }
+  hold cdisp = emit_call_here(arch)
+  call_site = push(call_site, cdisp)
+  call_fn = push(call_fn, fi)
+  give 1
+}
+
+// Lift every `make` body out of the program text. The body text is stored per
+// function and the header and body lines are blanked in the returned text, so
+// the main walk keeps the original line numbers for diagnostics.
+make lift_functions() -> str {
+  hold out = ""
+  hold n = len(src)
+  hold pos = 0
+  hold inbody = 0
+  hold depth = 0
+  hold body = ""
+  hold fname = ""
+  while pos <= n {
+    hold raw = ""
+    while pos < n && sx_index(src, pos) != 10 {
+      raw = concat(raw, chr(sx_index(src, pos)))
+      pos = pos + 1
+    }
+    pos = pos + 1
+    hold line = trim(raw)
+    when inbody == 0 && starts(line, "make ") == 1 {
+      hold hdr = trim(sub(line, 5, len(line)))
+      hold op = find_byte(hdr, 40)
+      when op < 0 {
+        hold badhdr = fail(1, concat(concat("line ", numstr(lineno + 1)), ": a make header needs a parameter list"))
+      }
+      fname = trim(sub(hdr, 0, op))
+      when is_bare_name(fname) == 0 {
+        hold badname = fail(1, concat(concat("line ", numstr(lineno + 1)), ": a make needs a plain name"))
+      }
+      when slot_of(fn_names, fname) >= 0 {
+        hold dupfn = fail(1, concat(concat(concat("line ", numstr(lineno + 1)), concat(": '", fname)), "' is declared twice"))
+      }
+      when fn_count >= 8 {
+        hold toomanyfn = fail(1, "native32 v1 accepts at most 8 make declarations")
+      }
+      hold cp = find_byte(hdr, 41)
+      when cp < op {
+        hold badcp = fail(1, concat(concat("line ", numstr(lineno + 1)), ": a make header needs a closing parenthesis"))
+      }
+      hold ptext = trim(sub(hdr, op + 1, cp))
+      hold rest = trim(sub(hdr, cp + 1, len(hdr)))
+      when string_eq(rest, "-> num {") != 1 {
+        hold badret = fail(1, concat(concat("line ", numstr(lineno + 1)), ": native32 only accepts `make NAME(a: num) -> num {`"))
+      }
+      hold parms = ""
+      hold arity = 0
+      when len(ptext) > 0 {
+        hold ppos = 0
+        while ppos <= len(ptext) {
+          hold piece = ""
+          while ppos < len(ptext) && sx_index(ptext, ppos) != 44 {
+            piece = concat(piece, chr(sx_index(ptext, ppos)))
+            ppos = ppos + 1
+          }
+          ppos = ppos + 1
+          hold one = trim(piece)
+          hold colon = find_byte(one, 58)
+          when colon < 0 {
+            hold untyped = fail(1, concat(concat("line ", numstr(lineno + 1)), ": every parameter needs a type, as in `a: num`"))
+          }
+          hold pname = trim(sub(one, 0, colon))
+          hold ptype = trim(sub(one, colon + 1, len(one)))
+          when is_bare_name(pname) == 0 || string_eq(ptype, "num") == 0 {
+            hold badparam = fail(1, concat(concat("line ", numstr(lineno + 1)), ": native32 parameters are `name: num` only"))
+          }
+          when slot_of(parms, pname) >= 0 {
+            hold dupparam = fail(1, concat(concat("line ", numstr(lineno + 1)), ": a parameter is declared twice"))
+          }
+          when arity >= 6 {
+            hold toomanyargs = fail(1, "native32 v1 accepts at most 6 parameters per make")
+          }
+          hold pslot = len(data)
+          data = put_zeros(data, 4)
+          parms = concat(parms, concat(concat(concat("|", pname), "="), numstr(pslot)))
+          parms = concat(parms, "|")
+          fn_pflat = push(fn_pflat, pslot)
+          arity = arity + 1
+        }
+      }
+      fn_pbase = push(fn_pbase, len(fn_pflat) - arity)
+      fn_nametbl = concat(fn_nametbl, concat(fname, "\n"))
+      fn_paramtbl = concat(fn_paramtbl, concat(parms, "\n"))
+      fn_arity = push(fn_arity, arity)
+      fn_line = push(fn_line, lineno + 1)
+      fn_off = push(fn_off, 0)
+      fn_names = concat(fn_names, concat(concat(concat("|", fname), "="), numstr(fn_count)))
+      fn_names = concat(fn_names, "|")
+      fn_count = fn_count + 1
+      body = ""
+      depth = brace_delta(line)
+      when depth > 0 {
+        inbody = 1
+      } otherwise {
+        when depth < 0 {
+          hold badbrace = fail(1, concat(concat("line ", numstr(lineno + 1)), ": a make header has an unbalanced brace"))
+        }
+        hold emptybody = fail(1, concat(concat("line ", numstr(lineno + 1)), ": a make body cannot be empty"))
+      }
+      out = concat(out, "\n")
+    } otherwise {
+      when inbody == 1 {
+        hold d2 = brace_delta(raw)
+        when depth + d2 <= 0 {
+          // the closing brace must be alone on its line
+          when string_eq(line, "}") == 0 {
+            hold badclose = fail(1, concat(concat("line ", numstr(lineno + 1)), ": a make body must close with a `}` on its own line"))
+          }
+          fn_bodytbl = concat(fn_bodytbl, concat(body, chr(1)))
+          inbody = 0
+          out = concat(out, "\n")
+        } otherwise {
+          body = concat(body, concat(raw, "\n"))
+          depth = depth + d2
+          out = concat(out, "\n")
+        }
+      } otherwise {
+        out = concat(out, concat(raw, "\n"))
+      }
+    }
+    lineno = lineno + 1
+  }
+  when inbody == 1 {
+    hold unclosedfn = fail(1, "a make body is not closed before the end of the program")
+  }
+  give out
+}
+
 
 // The string-show sequence for a resolved (pointer, length) pair: load both
 // fields, move the pointer into the argument register and the length into the
@@ -1279,10 +1665,13 @@ make tokenize(ex: str) -> str {
         nmtext = concat(nmtext, chr(sx_index(ex, i)))
         i = i + 1
       }
-      when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 && string_eq(nmtext, "string_eq") == 0 && string_eq(nmtext, "chr") == 0 {
+      when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 && string_eq(nmtext, "string_eq") == 0 && string_eq(nmtext, "chr") == 0 && slot_of(fn_names, nmtext) < 0 {
         // concat is a statement-level form, not an expression: say so instead of
         // claiming the function does not exist.
         bad = concat(concat("a call to '", nmtext), "' (this backend has no functions)")
+        when fn_count > 0 {
+          bad = concat(concat("a call to '", nmtext), "': no make with that name is declared")
+        }
         when string_eq(nmtext, "concat") == 1 {
           bad = "`concat(...)` inside another expression (only as the whole value of a `hold`, an assignment or a `show`)"
         }
@@ -2254,6 +2643,10 @@ make elf64_em(code: list, data: list, entry_off: num, em: num, data_mem: num) ->
 // It is a function so an argument position can compile an expression of its
 // own, including one nested inside a call.
 make emit_expression(extext: str) -> num {
+  // A call of a declared function in whole-value position is emitted here: the
+  // caller's expression text is exactly `NAME(...)`, so the arguments are
+  // rendered and compiled by this same emitter.
+  when try_user_call(extext) == 1 { give 0 }
   // Operator stack for the shunting-yard pass. It is per call: every slot is
   // written before it is read, so a fresh stack is equivalent to the shared one
   // the inline loop used.
@@ -2782,266 +3175,19 @@ make emit_expression(extext: str) -> num {
   give 0
 }
 
-make run() -> num {
-  when arg_count() < 3 {
-    hold usage = fail(2, "usage: native32 <program.sa> <out> [i386|arm64|riscv64]")
-  }
-  hold srcpath = arg(1)
-  hold outpath = arg(2)
-
-  // arch 0 is i386 (the default, and the one this repository can run);
-  // arch 1 is arm64 and arch 2 is riscv64, emitted and byte-checked here.
-  arch = 0
-  when arg_count() >= 4 {
-    hold want_arch = arg(3)
-    when string_eq(want_arch, "arm64") == 1 {
-      arch = 1
-    }
-    when string_eq(want_arch, "riscv64") == 1 {
-      arch = 2
-    }
-    when string_eq(want_arch, "arm64") == 0 && string_eq(want_arch, "riscv64") == 0 && string_eq(want_arch, "i386") == 0 {
-      hold badarch = fail(2, concat(concat("unknown target '", want_arch), "' (i386, arm64 or riscv64)"))
-    }
-  }
-  hold src = read_file(srcpath)
-  when len(src) == 0 {
-    hold nosrc = fail(1, concat(concat("cannot read ", srcpath), " (or it is empty)"))
-  }
-
-  // A '{' inside a string literal that sits in a `when` CONDITION is read by
-  // gen2 as the block opener, so `} otherwise {` has to be built out of
-  // chr(123)/chr(125) rather than written as a literal. (A literal brace in a
-  // statement, or a bare "}", is fine; it is the condition scanner.)
-  hold tag_other = concat(chr(125), concat(" otherwise ", chr(123)))
-  hold tag_other2 = concat(chr(125), concat("otherwise", chr(123)))
-
-  // code, data, fixsite, fixoff, names, strnames, heap_on, heap_cursor_slot and
-  // concat_show_slot are file-scope state (declared above): the concat operand
-  // resolver and the show/copy helpers are functions and have to reach it.
-  // string_eq: one shared comparison routine plus its call sites. Both are
-  // file-scope because the expression emitter that records the call sites is a
-  // function.
-  eq_used = 0
-  eq_calls = []
-  // chr: one 4-byte cell per source occurrence holds the byte, and `show
-  // chr(...)` reuses one hidden (pointer, length) slot. Both live in the data
-  // segment, so the data image stays arch-neutral.
-  hold chr_has = 0
-  hold chr_text = ""
-  hold chr_show_slot = 0 - 1
-  concat_show_slot = 0 - 1
-
-  // data 0..31 is the decimal buffer; byte 31 is the newline the routine
-  // writes, so digits grow downwards from 30.
-  data = put_zeros(data, 32)
-  hold bufnl = 31
-  hold bufend = 32
-
-  // The concat bump pointer. The image stores zero here and the entry code
-  // writes the target's own value (data base + 64 KiB) once, so no data
-  // address is baked into the data segment: the data image stays byte-identical
-  // across i386/AArch64/RV64IM (R14). Programs without concat pay 4 zero bytes
-  // and one dead word.
-  heap_cursor_slot = len(data)
-  data = put_zeros(data, 4)
-
-  // ---- the print-decimal routine, emitted once at code offset 0 ----
-  // eax = value. Prints it in decimal with a trailing newline, then returns.
-  when arch == 0 {
-    code = e1(code, 49)
-    code = e1(code, 219)
-    code = e1(code, 133)
-    code = e1(code, 192)
-    code = e1(code, 15)
-    code = e1(code, 141)
-    hold jge_site = len(code)
-    code = e32(code, 0)
-    code = e1(code, 247)
-    code = e1(code, 216)
-    code = e1(code, 187)
-    code = e32(code, 1)
-    code = patch32(code, jge_site, len(code) - (jge_site + 4))
-    code = e1(code, 191)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, bufnl)
-    code = e32(code, 0)
-    hold loop_at = len(code)
-    code = e1(code, 49)
-    code = e1(code, 210)
-    code = e1(code, 185)
-    code = e32(code, 10)
-    code = e1(code, 247)
-    code = e1(code, 241)
-    code = e1(code, 131)
-    code = e1(code, 194)
-    code = e1(code, 48)
-    code = e1(code, 79)
-    code = e1(code, 136)
-    code = e1(code, 23)
-    code = e1(code, 133)
-    code = e1(code, 192)
-    code = e1(code, 15)
-    code = e1(code, 133)
-    hold jnz_site = len(code)
-    code = e32(code, 0)
-    code = patch32(code, jnz_site, loop_at - (jnz_site + 4))
-    code = e1(code, 133)
-    code = e1(code, 219)
-    code = e1(code, 15)
-    code = e1(code, 132)
-    hold jz_site = len(code)
-    code = e32(code, 0)
-    code = e1(code, 79)
-    code = e1(code, 198)
-    code = e1(code, 7)
-    code = e1(code, 45)
-    code = patch32(code, jz_site, len(code) - (jz_site + 4))
-    code = e1(code, 198)
-    code = e1(code, 5)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, bufnl)
-    code = e32(code, 0)
-    code = e1(code, 10)
-    code = e1(code, 137)
-    code = e1(code, 249)
-    code = e1(code, 186)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, bufend)
-    code = e32(code, 0)
-    code = e1(code, 41)
-    code = e1(code, 202)
-    code = e1(code, 187)
-    code = e32(code, 1)
-    code = e1(code, 184)
-    code = e32(code, 4)
-    code = e1(code, 205)
-    code = e1(code, 128)
-    code = e1(code, 195)
-  } otherwise {
-    // 33 words; the i386 twin above is 86 bytes. w0 in, decimal out with a
-    // trailing newline, x9 walking down the buffer from the newline slot.
-    code = e_w(code, 704644068)
-    code = a_movz(code, 0, 5, 0)
-    code = e_w(code, 1895825439)
-    hold a_jge = len(code)
-    code = e_w(code, 1409286154)
-    code = e_w(code, 1258292196)
-    code = a_movz(code, 0, 5, 1)
-    code = a_imm19(code, a_jge, len(code) - a_jge)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, bufnl)
-    code = a_addr(code, 9)
-    code = a_movz(code, 0, 6, 10)
-    hold a_loop = len(code)
-    code = e_w(code, 449185927)
-    code = e_w(code, 453415139)
-    code = e_w(code, 285261923)
-    code = e_w(code, 3506439465)
-    code = e_w(code, 956301603)
-    code = e_w(code, 705102820)
-    code = e_w(code, 1895825567)
-    hold a_jne = len(code)
-    code = e_w(code, 1409286145)
-    code = a_imm19(code, a_jne, a_loop - a_jne)
-    code = e_w(code, 1895825599)
-    hold a_jz = len(code)
-    code = e_w(code, 1409286144)
-    code = e_w(code, 3506439465)
-    code = a_movz(code, 0, 3, 45)
-    code = e_w(code, 956301603)
-    code = a_imm19(code, a_jz, len(code) - a_jz)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, bufnl)
-    code = a_addr(code, 10)
-    code = a_movz(code, 0, 3, 10)
-    code = e_w(code, 956301635)
-    code = e_w(code, 2432697674)
-    code = e_w(code, 3406364994)
-    code = e_w(code, 2852717537)
-    code = a_movz(code, 1, 0, 1)
-    code = a_movz(code, 1, 8, 64)
-    code = e_w(code, 3556769793)
-    code = e_w(code, 3596551104)
-  }
-  when arch == 2 {
-    // RV64IM decimal print routine: 27 words (108 bytes). a0 in, writes
-    // signed decimal + '\n' via Linux write(1, ptr, len) (a7=64), returns.
-    code = []
-    fixsite = []
-    fixoff = []
-    code = e_w(code, rv_i(0, 10, 0, 5, 27))
-    code = e_w(code, rv_i(0, 0, 0, 6, 19))
-    code = e_w(code, rv_b_word(12, 0, 5, 5))
-    code = e_w(code, rv_r(32, 5, 0, 0, 5, 59))
-    code = e_w(code, rv_i(1, 0, 0, 6, 19))
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, bufnl)
-    code = rv_li32(code, 7, 0)
-    code = e_w(code, rv_i(10, 0, 0, 12, 19))
-    hold rv_loop = len(code)
-    code = e_w(code, rv_r(1, 12, 5, 5, 13, 59))
-    code = e_w(code, rv_r(1, 12, 5, 7, 14, 59))
-    code = e_w(code, rv_i(48, 14, 0, 14, 19))
-    code = e_w(code, rv_i(0 - 1, 7, 0, 7, 19))
-    code = e_w(code, rv_s(0, 14, 7, 0))
-    code = e_w(code, rv_i(0, 13, 0, 5, 27))
-    hold rv_bne = len(code)
-    code = e_w(code, rv_b_word(rv_loop - rv_bne, 0, 5, 1))
-    code = e_w(code, rv_b_word(16, 0, 6, 0))
-    code = e_w(code, rv_i(0 - 1, 7, 0, 7, 19))
-    code = e_w(code, rv_i(45, 0, 0, 14, 19))
-    code = e_w(code, rv_s(0, 14, 7, 0))
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, bufnl)
-    code = rv_li32(code, 15, 0)
-    code = e_w(code, rv_i(10, 0, 0, 14, 19))
-    code = e_w(code, rv_s(0, 14, 15, 0))
-    code = e_w(code, rv_i(1, 15, 0, 12, 19))
-    code = e_w(code, rv_r(32, 7, 12, 0, 12, 51))
-    code = e_w(code, rv_i(0, 7, 0, 11, 19))
-    code = e_w(code, rv_i(1, 0, 0, 10, 19))
-    code = e_w(code, rv_i(64, 0, 0, 17, 19))
-    code = e_w(code, 115)
-    code = e_w(code, 32871)
-  }
-
-  hold entry_off = len(code)
-  // Initialise the concat bump pointer at entry, with the target's own data base.
-  when arch == 0 {
-    fixsite = push(fixsite, len(code) + 2)
-    fixoff = push(fixoff, heap_cursor_slot)
-    code = e1(code, 199)
-    code = e1(code, 5)
-    code = e32(code, 0)
-    code = e32(code, 134520832 + 65536)
-  } otherwise {
-    when arch == 2 {
-      fixsite = push(fixsite, len(code))
-      fixoff = push(fixoff, heap_cursor_slot)
-      code = rv_li32(code, 5, 0)
-      code = rv_li32(code, 6, 4268032)
-      code = e_w(code, rv_s(0, 6, 5, 2))
-    } otherwise {
-      fixsite = push(fixsite, len(code))
-      fixoff = push(fixoff, heap_cursor_slot)
-      code = a_addr(code, 9)
-      code = a_movz(code, 0, 1, bit_and(4268032, 65535))
-      code = a_movk16(code, 0, 1, bit_and(shr(4268032, 16), 65535))
-      code = e_w(code, 3103785249)
-    }
-  }
-
-  // ---- the statement walk ----
+// The statement walk over one program text. It is a function, not a block
+// inside run(), because a `make` body is walked by this same code: user
+// functions are emitted after the main program, each body separately.
+make emit_statements() -> num {
   hold n = len(src)
   hold pos = 0
   lineno = 0
-  hold bkind = []
-  hold bsite = []
-  hold bstart = []
-  hold bdepth = 0
-  hold ops = []
-  hold stmts = 0
+  bkind = []
+  bsite = []
+  bstart = []
+  bdepth = 0
+  ops = []
+  stmts = 0
 
   while pos <= n {
     // one line, without its newline
@@ -3066,6 +3212,7 @@ make run() -> num {
       act = 0
     } otherwise {
       stmts = stmts + 1
+      fn_last_give = 0
       when string_eq(line, "}") == 1 {
         act = 5
       }
@@ -3305,6 +3452,20 @@ make run() -> num {
           }
         }
       }
+      when act == 0 && starts(line, "give ") == 1 {
+        when fn_active < 0 {
+          hold badgive = fail(1, concat(concat("line ", numstr(lineno)), ": `give` is only accepted inside a make body"))
+        }
+        hold gv = trim(sub(line, 5, len(line)))
+        when len(gv) == 0 {
+          hold badgive2 = fail(1, concat(concat("line ", numstr(lineno)), ": `give` with no value"))
+        }
+        extext = gv
+        act = 15
+      }
+      when act == 0 && starts(line, "make ") == 1 {
+        hold badmake = fail(1, concat(concat("line ", numstr(lineno)), ": a make body cannot declare another make"))
+      }
       when act == 0 {
         hold badstmt = fail(1, concat(concat(concat("line ", numstr(lineno)), ": '"), concat(word, "' is not in the native32 subset (hold, show, when, otherwise, while only -- see the header of tools/native32.sa)")))
       }
@@ -3367,6 +3528,11 @@ make run() -> num {
 
     // ---- the action ----
     // act 13: the statement was fully emitted by the chr block above.
+    when act == 15 {
+      code = emit_ret(code, arch)
+      fn_gave = 1
+      fn_last_give = 1
+    }
     when act == 1 {
       hold sat = len(code)
       when arch == 0 {
@@ -3544,6 +3710,267 @@ make run() -> num {
   when stmts == 0 {
     hold nostmt = fail(1, "the program has no statements this backend can emit")
   }
+  give 0
+}
+
+make run() -> num {
+  when arg_count() < 3 {
+    hold usage = fail(2, "usage: native32 <program.sa> <out> [i386|arm64|riscv64]")
+  }
+  hold srcpath = arg(1)
+  hold outpath = arg(2)
+
+  // arch 0 is i386 (the default, and the one this repository can run);
+  // arch 1 is arm64 and arch 2 is riscv64, emitted and byte-checked here.
+  arch = 0
+  when arg_count() >= 4 {
+    hold want_arch = arg(3)
+    when string_eq(want_arch, "arm64") == 1 {
+      arch = 1
+    }
+    when string_eq(want_arch, "riscv64") == 1 {
+      arch = 2
+    }
+    when string_eq(want_arch, "arm64") == 0 && string_eq(want_arch, "riscv64") == 0 && string_eq(want_arch, "i386") == 0 {
+      hold badarch = fail(2, concat(concat("unknown target '", want_arch), "' (i386, arm64 or riscv64)"))
+    }
+  }
+  src = read_file(srcpath)
+  when len(src) == 0 {
+    hold nosrc = fail(1, concat(concat("cannot read ", srcpath), " (or it is empty)"))
+  }
+
+  // A '{' inside a string literal that sits in a `when` CONDITION is read by
+  // gen2 as the block opener, so `} otherwise {` has to be built out of
+  // chr(123)/chr(125) rather than written as a literal. (A literal brace in a
+  // statement, or a bare "}", is fine; it is the condition scanner.)
+  tag_other = concat(chr(125), concat(" otherwise ", chr(123)))
+  tag_other2 = concat(chr(125), concat("otherwise", chr(123)))
+
+  // code, data, fixsite, fixoff, names, strnames, heap_on, heap_cursor_slot and
+  // concat_show_slot are file-scope state (declared above): the concat operand
+  // resolver and the show/copy helpers are functions and have to reach it.
+  // string_eq: one shared comparison routine plus its call sites. Both are
+  // file-scope because the expression emitter that records the call sites is a
+  // function.
+  eq_used = 0
+  eq_calls = []
+  // chr: one 4-byte cell per source occurrence holds the byte, and `show
+  // chr(...)` reuses one hidden (pointer, length) slot. Both live in the data
+  // segment, so the data image stays arch-neutral.
+  chr_has = 0
+  chr_text = ""
+  chr_show_slot = 0 - 1
+  concat_show_slot = 0 - 1
+
+  // data 0..31 is the decimal buffer; byte 31 is the newline the routine
+  // writes, so digits grow downwards from 30.
+  data = put_zeros(data, 32)
+  hold bufnl = 31
+  hold bufend = 32
+
+  // The concat bump pointer. The image stores zero here and the entry code
+  // writes the target's own value (data base + 64 KiB) once, so no data
+  // address is baked into the data segment: the data image stays byte-identical
+  // across i386/AArch64/RV64IM (R14). Programs without concat pay 4 zero bytes
+  // and one dead word.
+  heap_cursor_slot = len(data)
+  data = put_zeros(data, 4)
+
+  // ---- the print-decimal routine, emitted once at code offset 0 ----
+  // eax = value. Prints it in decimal with a trailing newline, then returns.
+  when arch == 0 {
+    code = e1(code, 49)
+    code = e1(code, 219)
+    code = e1(code, 133)
+    code = e1(code, 192)
+    code = e1(code, 15)
+    code = e1(code, 141)
+    hold jge_site = len(code)
+    code = e32(code, 0)
+    code = e1(code, 247)
+    code = e1(code, 216)
+    code = e1(code, 187)
+    code = e32(code, 1)
+    code = patch32(code, jge_site, len(code) - (jge_site + 4))
+    code = e1(code, 191)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = e32(code, 0)
+    hold loop_at = len(code)
+    code = e1(code, 49)
+    code = e1(code, 210)
+    code = e1(code, 185)
+    code = e32(code, 10)
+    code = e1(code, 247)
+    code = e1(code, 241)
+    code = e1(code, 131)
+    code = e1(code, 194)
+    code = e1(code, 48)
+    code = e1(code, 79)
+    code = e1(code, 136)
+    code = e1(code, 23)
+    code = e1(code, 133)
+    code = e1(code, 192)
+    code = e1(code, 15)
+    code = e1(code, 133)
+    hold jnz_site = len(code)
+    code = e32(code, 0)
+    code = patch32(code, jnz_site, loop_at - (jnz_site + 4))
+    code = e1(code, 133)
+    code = e1(code, 219)
+    code = e1(code, 15)
+    code = e1(code, 132)
+    hold jz_site = len(code)
+    code = e32(code, 0)
+    code = e1(code, 79)
+    code = e1(code, 198)
+    code = e1(code, 7)
+    code = e1(code, 45)
+    code = patch32(code, jz_site, len(code) - (jz_site + 4))
+    code = e1(code, 198)
+    code = e1(code, 5)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = e32(code, 0)
+    code = e1(code, 10)
+    code = e1(code, 137)
+    code = e1(code, 249)
+    code = e1(code, 186)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufend)
+    code = e32(code, 0)
+    code = e1(code, 41)
+    code = e1(code, 202)
+    code = e1(code, 187)
+    code = e32(code, 1)
+    code = e1(code, 184)
+    code = e32(code, 4)
+    code = e1(code, 205)
+    code = e1(code, 128)
+    code = e1(code, 195)
+  } otherwise {
+    // 33 words; the i386 twin above is 86 bytes. w0 in, decimal out with a
+    // trailing newline, x9 walking down the buffer from the newline slot.
+    code = e_w(code, 704644068)
+    code = a_movz(code, 0, 5, 0)
+    code = e_w(code, 1895825439)
+    hold a_jge = len(code)
+    code = e_w(code, 1409286154)
+    code = e_w(code, 1258292196)
+    code = a_movz(code, 0, 5, 1)
+    code = a_imm19(code, a_jge, len(code) - a_jge)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = a_addr(code, 9)
+    code = a_movz(code, 0, 6, 10)
+    hold a_loop = len(code)
+    code = e_w(code, 449185927)
+    code = e_w(code, 453415139)
+    code = e_w(code, 285261923)
+    code = e_w(code, 3506439465)
+    code = e_w(code, 956301603)
+    code = e_w(code, 705102820)
+    code = e_w(code, 1895825567)
+    hold a_jne = len(code)
+    code = e_w(code, 1409286145)
+    code = a_imm19(code, a_jne, a_loop - a_jne)
+    code = e_w(code, 1895825599)
+    hold a_jz = len(code)
+    code = e_w(code, 1409286144)
+    code = e_w(code, 3506439465)
+    code = a_movz(code, 0, 3, 45)
+    code = e_w(code, 956301603)
+    code = a_imm19(code, a_jz, len(code) - a_jz)
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = a_addr(code, 10)
+    code = a_movz(code, 0, 3, 10)
+    code = e_w(code, 956301635)
+    code = e_w(code, 2432697674)
+    code = e_w(code, 3406364994)
+    code = e_w(code, 2852717537)
+    code = a_movz(code, 1, 0, 1)
+    code = a_movz(code, 1, 8, 64)
+    code = e_w(code, 3556769793)
+    code = e_w(code, 3596551104)
+  }
+  when arch == 2 {
+    // RV64IM decimal print routine: 27 words (108 bytes). a0 in, writes
+    // signed decimal + '\n' via Linux write(1, ptr, len) (a7=64), returns.
+    code = []
+    fixsite = []
+    fixoff = []
+    code = e_w(code, rv_i(0, 10, 0, 5, 27))
+    code = e_w(code, rv_i(0, 0, 0, 6, 19))
+    code = e_w(code, rv_b_word(12, 0, 5, 5))
+    code = e_w(code, rv_r(32, 5, 0, 0, 5, 59))
+    code = e_w(code, rv_i(1, 0, 0, 6, 19))
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = rv_li32(code, 7, 0)
+    code = e_w(code, rv_i(10, 0, 0, 12, 19))
+    hold rv_loop = len(code)
+    code = e_w(code, rv_r(1, 12, 5, 5, 13, 59))
+    code = e_w(code, rv_r(1, 12, 5, 7, 14, 59))
+    code = e_w(code, rv_i(48, 14, 0, 14, 19))
+    code = e_w(code, rv_i(0 - 1, 7, 0, 7, 19))
+    code = e_w(code, rv_s(0, 14, 7, 0))
+    code = e_w(code, rv_i(0, 13, 0, 5, 27))
+    hold rv_bne = len(code)
+    code = e_w(code, rv_b_word(rv_loop - rv_bne, 0, 5, 1))
+    code = e_w(code, rv_b_word(16, 0, 6, 0))
+    code = e_w(code, rv_i(0 - 1, 7, 0, 7, 19))
+    code = e_w(code, rv_i(45, 0, 0, 14, 19))
+    code = e_w(code, rv_s(0, 14, 7, 0))
+    fixsite = push(fixsite, len(code))
+    fixoff = push(fixoff, bufnl)
+    code = rv_li32(code, 15, 0)
+    code = e_w(code, rv_i(10, 0, 0, 14, 19))
+    code = e_w(code, rv_s(0, 14, 15, 0))
+    code = e_w(code, rv_i(1, 15, 0, 12, 19))
+    code = e_w(code, rv_r(32, 7, 12, 0, 12, 51))
+    code = e_w(code, rv_i(0, 7, 0, 11, 19))
+    code = e_w(code, rv_i(1, 0, 0, 10, 19))
+    code = e_w(code, rv_i(64, 0, 0, 17, 19))
+    code = e_w(code, 115)
+    code = e_w(code, 32871)
+  }
+
+  hold entry_off = len(code)
+  // Initialise the concat bump pointer at entry, with the target's own data base.
+  when arch == 0 {
+    fixsite = push(fixsite, len(code) + 2)
+    fixoff = push(fixoff, heap_cursor_slot)
+    code = e1(code, 199)
+    code = e1(code, 5)
+    code = e32(code, 0)
+    code = e32(code, 134520832 + 65536)
+  } otherwise {
+    when arch == 2 {
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = rv_li32(code, 5, 0)
+      code = rv_li32(code, 6, 4268032)
+      code = e_w(code, rv_s(0, 6, 5, 2))
+    } otherwise {
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, heap_cursor_slot)
+      code = a_addr(code, 9)
+      code = a_movz(code, 0, 1, bit_and(4268032, 65535))
+      code = a_movk16(code, 0, 1, bit_and(shr(4268032, 16), 65535))
+      code = e_w(code, 3103785249)
+    }
+  }
+
+  // `make` bodies are lifted out of the program text first: the main walk then
+  // sees only the program, with the make blocks blanked so diagnostics keep
+  // their original line numbers.
+  lineno = 0
+  hold main_only = lift_functions()
+  src = main_only
+  lineno = 0
+  hold em_walk = emit_statements()
 
   // The string_eq routine, emitted once and reached only by `call`. It sits
   // behind a jump so the body cannot fall into it, and before the exit sequence
@@ -3558,6 +3985,45 @@ make run() -> num {
     while qc < len(eq_calls) {
       code = patch_call(code, arch, eq_calls[qc], eq_routine_at)
       qc = qc + 1
+    }
+  }
+
+  // User functions, emitted after the main program behind a jump and reached
+  // only by `call`. Each body is walked by the same statement walk, with the
+  // function's parameters as the visible name table.
+  when fn_count > 0 {
+    code = emit_jmp(code, arch)
+    hold fn_skip = len(code) - 4
+    hold fi = 0
+    while fi < fn_count {
+      fn_off[fi] = len(code)
+      hold saved_names = names
+      hold saved_strnames = strnames
+      names = nth_field(fn_paramtbl, fi)
+      strnames = ""
+      fn_active = fi
+      fn_gave = 0
+      fn_last_give = 0
+      src = nth_part(fn_bodytbl, fi)
+      lineno = fn_line[fi]
+      hold body_walk = emit_statements()
+      when fn_gave == 0 {
+        hold nogive = fail(1, concat(concat(concat(concat("line ", numstr(fn_line[fi])), ": the body of '"), nth_field(fn_nametbl, fi)), "' never gives a value with give"))
+      }
+      when fn_last_give == 0 {
+        hold notlast = fail(1, concat(concat(concat(concat("line ", numstr(fn_line[fi])), ": the body of '"), nth_field(fn_nametbl, fi)), "' must end with a `give` statement"))
+      }
+      code = emit_ret(code, arch)
+      fn_active = 0 - 1
+      names = saved_names
+      strnames = saved_strnames
+      fi = fi + 1
+    }
+    code = patch_jmp(code, arch, fn_skip, len(code))
+    hold cs = 0
+    while cs < len(call_site) {
+      code = patch_call(code, arch, call_site[cs], fn_off[call_fn[cs]])
+      cs = cs + 1
     }
   }
 

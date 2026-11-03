@@ -1,5 +1,62 @@
 # Status
 
+**2026-11-02 (ninth increment) — R02 step 8: bounded numeric user functions in
+`native32`.**
+
+`make` did not exist in the multi-ISA backend: any `NAME(...)` shape was refused
+with "this backend has no functions". Numeric functions with up to six `num`
+parameters and one `num` result now compile for i386, AArch64 and RV64IM.
+
+How it works. The statement walk was first extracted out of `run()` into
+`emit_statements()`, because a function body is walked by the same code. A new
+lift pass (`lift_functions`) then takes every `make` block out of the program
+text, parses `make NAME(a: num, …) -> num {`, allocates one 4-byte data slot per
+parameter and blanks the block in the text the main walk sees, so diagnostics
+keep their original line numbers. The bodies are emitted after the main program
+behind a jump, each one behind a real `call`: `emit_ret` and `emit_push_acc` add
+`ret`/`push rax` (i386), `RET`/`str x0,[sp,#-16]!` (AArch64) and
+`JALR x0,0(x1)`/stack-push (RV64IM), and `emit_call_here` + the existing
+`patch_call` resolve forward references once every body offset is known.
+Arguments are evaluated on the value stack and popped into the callee's
+parameter slots, so no ABI registers, no frame layout and no relocation are
+involved; the call-graph is acyclic by construction because a body may not call
+another function.
+
+Accepted: `hold x = f(1, 2)`, `x = f(…)`, `show f(…)`, a call as a
+`when`/`while` condition, a call as another call's argument
+(`show add(seven(), twice(3))`), zero-argument functions, `when`/`while` and
+local `hold`s inside a body, assignment to a parameter, and an early `give`
+inside a `when` branch (the body must still end with a top-level `give`).
+Refused with a specific diagnostic: recursion, a call from inside a make body,
+an undeclared callee, wrong arity, a string argument, an untyped or non-`num`
+parameter, a non-`num` return type, a duplicate name, a body with no `give`, a
+body that does not end with `give`, more than 8 functions or 6 parameters, and
+`give` outside a body. `f(1) + 1` stays refused: a call is a whole value.
+
+Fixture `selfhost/native32_tests/fn.sa` (12 output lines: `5 30 6 10 3 7 10 7 8
+yes 13 done`) runs on all six execution paths with reviewed AArch64/RV64IM
+goldens, cross-ISA data comparison and an i386 image pin of 8285 bytes; the
+three ISAs produce byte-identical output (`md5 63ceeec45623c9563d616d5d384d2f35`).
+The refusal matrix moves from 40 to 51: `refuse/function.sa` is deleted because
+`make twice(v: num) { give v * 2 }` is a legal program now, and twelve refusals
+were added, one per bound above.
+
+```
+./sx target test-native32        -> 0
+./sx target test-native-arm64    -> 0
+./sx target test-native-riscv64  -> 0
+```
+
+Negative controls: pinning the `fn` i386 size to 8286 fails with `[FAIL]
+reviewed i386 image size: got 8285, want 8286`, and expecting 52 refusals fails
+with `[FAIL] complete backend refusal matrix: got 51, want 52`; both were
+restored and the gate returned to 0.
+
+Still open in R02: a call inside another expression (`f(1) + 1`), a call from a
+make body (needs a saved link register on arm64/riscv64), bounded recursion with
+a depth cap, string-valued functions, then aggregates, floating point, file and
+runtime APIs, and the collector.
+
 **2026-11-02 (eighth increment) — the CI runner image moved to Ubuntu 26 / gcc
 15, so the generated C is compiled with an explicit dialect.**
 

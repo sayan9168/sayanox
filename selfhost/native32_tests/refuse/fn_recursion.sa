@@ -1,0 +1,4 @@
+make fact(n: num) -> num {
+  give fact(n - 1)
+}
+show fact(3)

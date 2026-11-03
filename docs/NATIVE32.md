@@ -140,9 +140,27 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   argument is not accepted anywhere else (it is not a general string
   expression).
 - `when`, `otherwise`, `while`, comments, and blank lines.
+- **Numeric user functions (2026-11-02):** `make NAME(a: num, b: num) -> num { … }`
+  with up to 6 `num` parameters and one `num` result, called from the main
+  program as a whole value (`hold x = f(1, 2)`, `x = f(…)`, `show f(…)`, a
+  `when`/`while` condition, or an argument of another call). A body is lifted
+  out of the program text, emitted after the main program behind a jump and
+  reached with a real `call`; arguments are evaluated on the value stack and
+  stored into the callee's parameter slots, so no ABI registers and no frame
+  layout are involved, and `call`/`ret` are the only new instructions per ISA
+  (i386 `E8`/`C3`, AArch64 `BL`/`RET`, RV64IM `JAL`/`JALR x0,0(x1)`). `give`
+  returns; it may also sit inside a `when` branch for an early return, and every
+  body must end with a top-level `give`. Refused, each with its own diagnostic:
+  recursion, a call from inside another make body (that needs a saved link
+  register on arm64 and riscv64), a call to an undeclared name, wrong arity, a
+  string argument, an untyped or non-`num` parameter, a non-`num` return type, a
+  duplicate name, a body without a `give`, a body that does not end with one,
+  more than 8 functions or 6 parameters, and `give` outside a body. A call is a
+  whole value: `f(1) + 1` and a call inside a `concat` argument are still
+  refused.
 
-Lists, structs, user functions, floating-point expressions, general file APIs,
-and garbage collection remain unsupported by this compiler. `chr` is accepted as
+Lists, structs, string-valued functions, recursion, floating-point expressions,
+general file APIs, and garbage collection remain unsupported by this compiler. `chr` is accepted as
 a whole string value and as one whole argument of `concat`, `string_eq` and
 `len`, and nowhere else: an argument that is more than an integer literal or a
 numeric variable (`chr(n + 1)`, a signed literal such as `chr(-1)`, `chr("A")`,
