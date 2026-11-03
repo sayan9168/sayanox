@@ -1,8 +1,0 @@
-make one() -> num {
-  give 1
-}
-make two() -> num {
-  hold a = one()
-  give a + a
-}
-show two()

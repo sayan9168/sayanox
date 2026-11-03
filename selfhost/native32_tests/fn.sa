@@ -27,6 +27,13 @@ make countdown(n: num) -> num {
 make seven() -> num {
   give 7
 }
+// A make body may call another function: the call graph must stay acyclic.
+make inc(n: num) -> num {
+  give n + 1
+}
+make apply2(n: num) -> num {
+  give add(inc(n), inc(n))
+}
 
 hold x = add(2, 3)
 show x
@@ -43,4 +50,5 @@ when add(1, 1) {
   show "yes"
 }
 show add(seven(), twice(3))
+show apply2(3)
 show "done"

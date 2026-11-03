@@ -1,5 +1,54 @@
 # Status
 
+**2026-11-02 (tenth increment) — R02 step 9: a `make` body may call another
+function; recursion is refused by an acyclic-call-graph check.**
+
+Step 8 let only the main program call a function, because `bl` (AArch64) and
+`jal` (RV64IM) overwrite the link register, so a nested call would return to the
+wrong place. Each body now has a prologue that saves it and an epilogue that
+restores it before returning: `str x30,[sp,#-16]!` / `ldr x30,[sp],#16` on
+AArch64, `addi sp,sp,-16` + `sd ra,8(sp)` / `ld ra,8(sp)` + `addi sp,sp,16` on
+RV64IM, and nothing on i386, where `call` already pushes the return address on
+the same stack the expression evaluator uses.
+
+Calls from a body then record a call-graph edge, and after all bodies are emitted
+the graph is checked with a reachability walk (`reaches`): a cycle would run a
+second invocation of a function whose parameter slot is still live, so **self and
+mutual recursion are refused** with `'ping' takes part in a recursive call chain,
+which native32 v1 refuses: one parameter slot per function`. Acyclic nesting is
+accepted at any depth.
+
+`selfhost/native32_tests/fn.sa` gained `inc` and `apply2`
+(`give add(inc(n), inc(n))`), so the fixture now covers a body calling another
+function twice in one expression and a three-level chain
+(`show apply2(3)` -> `8`). It is 13 output lines (`5 30 6 10 3 7 10 7 8 yes 13 8
+done`), pins i386 8293 bytes, and its AArch64/RV64IM goldens were regenerated for
+the new prologue/epilogue. All three ISAs print identical bytes
+(`md5 2e736a8d5a204e7fd540801a4f77b6ca` was the three-function probe; the fixture
+is compared in the gate).
+
+Refusals stay at 51: `refuse/fn_call_in_body.sa` is a legal program now and was
+deleted, and `refuse/fn_mutual_recursion.sa` (`ping`/`pong`) was added;
+`refuse/fn_recursion.sa` now reports the cycle diagnostic instead of the old
+"only the main program can call" message.
+
+```
+./sx target test-native32        -> 0
+./sx target test-native-arm64    -> 0
+./sx target test-native-riscv64  -> 0
+```
+
+Two defects were found and fixed while building this, both caught by running the
+generated AArch64 image rather than by reading the encoder: the `str x30`
+prologue constant was one bit-field off (`0xF81F1FFE`, which stores at
+`[sp,#-15]!`) and the RV64IM `ret` in step 8 had been `JAL`. Both now execute
+correctly on `sxisaexec`, and the three-ISA output equality in the gate is what
+keeps them honest.
+
+Still open in R02: a call inside another expression (`f(1) + 1`), bounded
+recursion with a depth cap and per-depth frames, string-valued functions, then
+aggregates, floating point, file and runtime APIs, and the collector.
+
 **2026-11-02 (ninth increment) — R02 step 8: bounded numeric user functions in
 `native32`.**
 
