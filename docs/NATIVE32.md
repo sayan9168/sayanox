@@ -141,9 +141,11 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   expression).
 - `when`, `otherwise`, `while`, comments, and blank lines.
 - **Numeric user functions (2026-11-02):** `make NAME(a: num, b: num) -> num { … }`
-  with up to 6 `num` parameters and one `num` result, called from the main
-  program as a whole value (`hold x = f(1, 2)`, `x = f(…)`, `show f(…)`, a
-  `when`/`while` condition, or an argument of another call). A body is lifted
+  with up to 6 `num` parameters and one `num` result, called as a whole value
+  (`hold x = f(1, 2)`, `x = f(…)`, `show f(…)`, a `when`/`while` condition, an
+  argument of another call) and **as an operand of any integer expression**
+  (`f(1) + 1`, `2 * f(3) - 1`, `f(1) * g(2)`, `add(inc(1) + 1, inc(2))`,
+  `when f(1) + 1 == 3`). A body is lifted
   out of the program text, emitted after the main program behind a jump and
   reached with a real `call`; arguments are evaluated on the value stack and
   stored into the callee's parameter slots, so no ABI registers and no frame
@@ -151,21 +153,25 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   (i386 `E8`/`C3`, AArch64 `BL`/`RET`, RV64IM `JAL`/`JALR x0,0(x1)`). `give`
   returns; it may also sit inside a `when` branch for an early return, and every
   body must end with a top-level `give`. Refused, each with its own diagnostic:
-  recursion, a call from inside another make body (that needs a saved link
-  register on arm64 and riscv64), a call to an undeclared name, wrong arity, a
-  string argument, an untyped or non-`num` parameter, a non-`num` return type, a
-  duplicate name, a body without a `give`, a body that does not end with one,
-  more than 8 functions or 6 parameters, and `give` outside a body. A call is a
-  whole value: `f(1) + 1` and a call inside a `concat` argument are still
-  refused.
+  recursion (including recursion reached through an operand, `give f(n) + 1`), a
+  call to an undeclared name, wrong arity, a string argument, an untyped or
+  non-`num` parameter, a non-`num` return type, a duplicate name, a body without
+  a `give`, a body that does not end with one, more than 8 functions or 6
+  parameters, and `give` outside a body. `concat` is still a statement-level
+  form, so a call result can feed a call, an operator or a condition but not a
+  `concat` argument.
   **Since 2026-11-02 a body may also call another function.** AArch64 and RV64IM
   save the link register in the body's prologue (`str x30,[sp,#-16]!` /
   `addi sp,sp,-16` + `sd ra,8(sp)`) and restore it before every return, because
   `bl`/`jal` overwrite it; i386 already keeps the return address on the same
   stack. The call graph is then checked to be **acyclic** — a cycle would reuse
   the parameter slot of a call that is still live — so self and mutual recursion
-  are refused with one diagnostic, and `f(1) + 1` remains refused because a call
-  is still a whole value rather than an operand.
+  are refused with one diagnostic. **Since 2026-11-03 a call is also an operand.**
+  The call is emitted where the token stands and its result is pushed like any
+  other value, so `f(1) + 1`, `2 * f(3) - 1`, `f(1) * g(2)`, a call inside a
+  call's argument expression and a call in a condition all lower; the value
+  stack stays balanced because a call pops its own arguments before `call` and
+  the callee's expression leaves one value in the accumulator.
 
 Lists, structs, string-valued functions, recursion, floating-point expressions,
 general file APIs, and garbage collection remain unsupported by this compiler. `chr` is accepted as

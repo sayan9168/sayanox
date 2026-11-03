@@ -51,4 +51,14 @@ when add(1, 1) {
 }
 show add(seven(), twice(3))
 show apply2(3)
+// A call is an operand: its result joins the expression like any other value.
+show add(2, 3) + 1
+show 1 + twice(3)
+show add(1, 1) * add(2, 2)
+show (inc(1) + inc(2)) * 2
+hold deep = 100 - seven() * 3
+show deep
+when inc(1) + 1 == 3 {
+  show "operand"
+}
 show "done"
