@@ -1,0 +1,7 @@
+make ping(n: num) -> num {
+  give pong(n)
+}
+make pong(n: num) -> num {
+  give ping(n)
+}
+show ping(1)

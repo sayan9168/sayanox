@@ -49,10 +49,13 @@
 //   A `make` body is lifted out of the program text, emitted after the main
 //   program behind a jump and reached with a real `call`; arguments are
 //   evaluated on the value stack and stored into the callee's parameter slots,
-//   so no ABI registers and no frame layout are involved. Bounds that are
-//   checked: at most 8 functions, at most 6 parameters each, `num` parameters
-//   and `-> num` only, no recursion, and a make body may not call another
-//   function (a nested call needs a saved link register on arm64 and riscv64).
+//   so no ABI registers and no frame layout are involved. A body may call
+//   another function: arm64 and riscv64 save the link register in the body's
+//   prologue (`str x30,[sp,#-16]!` / `sd ra,8(sp)`) and restore it before every
+//   return, and i386 keeps the return address on the same stack. The call graph
+//   is checked to be acyclic, so recursion is refused instead of silently
+//   reusing a parameter slot. Bounds that are checked: at most 8 functions, at
+//   most 6 parameters each, `num` parameters and `-> num` only, no recursion.
 //   Every body must end with a top-level `give`.
 //
 //   The integer expression emitter is one function (emit_expression), so an
@@ -547,6 +550,11 @@ hold fn_gave = 0
 hold fn_last_give = 0
 hold call_site = []
 hold call_fn = []
+// Call-graph edges (caller, callee). The caller is -1 for the main program, and
+// the graph must stay acyclic: a cycle would reuse a parameter slot that is
+// still live, so recursion is refused rather than silently wrong.
+hold edge_from = []
+hold edge_to = []
 
 // Position of the first occurrence of a byte value, or -1.
 make find_byte(s: str, code: num) -> num {
@@ -581,6 +589,34 @@ make emit_ret(xs: list, arch: num) -> list {
   when arch == 0 { give e1(xs, 195) }
   when arch == 2 { give e_w(xs, 32871) }
   give e_w(xs, 3596551104)
+}
+
+// Save the link register at the top of a function body. i386 `call` already
+// pushes the return address on the same stack the value evaluator uses, so only
+// the two register-link targets need this: `bl`/`jal` overwrite x30/ra, and a
+// body is now allowed to call another function.
+make emit_fn_prologue(xs: list, arch: num) -> list {
+  when arch == 0 { give xs }
+  when arch == 2 {
+    // addi sp,sp,-16 ; sd ra,8(sp)
+    xs = e_w(xs, rv_i(0 - 16, 2, 0, 2, 19))
+    give e_w(xs, rv_s(8, 1, 2, 3))
+  }
+  // str x30,[sp,#-16]!
+  xs = e_w(xs, 4162785278)
+  give xs
+}
+
+// Restore the link register and return.
+make emit_fn_ret(xs: list, arch: num) -> list {
+  when arch == 0 { give emit_ret(xs, arch) }
+  when arch == 2 {
+    xs = e_w(xs, rv_i(8, 2, 3, 1, 3))
+    xs = e_w(xs, rv_i(16, 2, 0, 2, 19))
+    give emit_ret(xs, arch)
+  }
+  xs = e_w(xs, 4165011454)
+  give emit_ret(xs, arch)
 }
 
 // Push the accumulator on the value stack.
@@ -705,9 +741,8 @@ make try_user_call(extext: str) -> num {
   when nargs != fn_arity[fi] {
     hold badarity = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": '", nm)), concat(concat("' takes ", numstr(fn_arity[fi])), concat(concat(" numeric arguments, not ", numstr(nargs)), ""))))
   }
-  when fn_active >= 0 {
-    hold badnested = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": '", nm)), "' is called from inside a make body; native32 v1 only lets the main program call a function"))
-  }
+  edge_from = push(edge_from, fn_active)
+  edge_to = push(edge_to, fi)
   hold a = 0
   while a < nargs {
     hold pre = afrom[a]
@@ -739,6 +774,29 @@ make try_user_call(extext: str) -> num {
   call_site = push(call_site, cdisp)
   call_fn = push(call_fn, fi)
   give 1
+}
+
+// Can the call graph reach `to` from `from`? Used to refuse recursion: the
+// parameter slots are one per function, so a second live invocation of the same
+// function would overwrite the first one's arguments.
+make reaches(from: num, to: num, seen: list) -> num {
+  when from == to { give 1 }
+  hold i = 0
+  hold already = 0
+  while i < len(seen) {
+    when seen[i] == from { already = 1 }
+    i = i + 1
+  }
+  when already == 1 { give 0 }
+  seen = push(seen, from)
+  i = 0
+  while i < len(edge_from) {
+    when edge_from[i] == from {
+      when reaches(edge_to[i], to, seen) == 1 { give 1 }
+    }
+    i = i + 1
+  }
+  give 0
 }
 
 // Lift every `make` body out of the program text. The body text is stored per
@@ -3529,7 +3587,7 @@ make emit_statements() -> num {
     // ---- the action ----
     // act 13: the statement was fully emitted by the chr block above.
     when act == 15 {
-      code = emit_ret(code, arch)
+      code = emit_fn_ret(code, arch)
       fn_gave = 1
       fn_last_give = 1
     }
@@ -4004,6 +4062,7 @@ make run() -> num {
       fn_active = fi
       fn_gave = 0
       fn_last_give = 0
+      code = emit_fn_prologue(code, arch)
       src = nth_part(fn_bodytbl, fi)
       lineno = fn_line[fi]
       hold body_walk = emit_statements()
@@ -4013,13 +4072,24 @@ make run() -> num {
       when fn_last_give == 0 {
         hold notlast = fail(1, concat(concat(concat(concat("line ", numstr(fn_line[fi])), ": the body of '"), nth_field(fn_nametbl, fi)), "' must end with a `give` statement"))
       }
-      code = emit_ret(code, arch)
+      code = emit_fn_ret(code, arch)
       fn_active = 0 - 1
       names = saved_names
       strnames = saved_strnames
       fi = fi + 1
     }
     code = patch_jmp(code, arch, fn_skip, len(code))
+    // The call graph must stay acyclic: a cycle would reuse a parameter slot
+    // whose value is still live.
+    hold ea = 0
+    while ea < len(edge_from) {
+      when edge_from[ea] >= 0 {
+        when reaches(edge_to[ea], edge_from[ea], []) == 1 {
+          hold recursive = fail(1, concat(concat(concat("line ", numstr(fn_line[edge_from[ea]])), concat(": '", nth_field(fn_nametbl, edge_from[ea]))), concat("' takes part in a recursive call chain, which native32 v1 refuses: one parameter slot per function", "")))
+        }
+      }
+      ea = ea + 1
+    }
     hold cs = 0
     while cs < len(call_site) {
       code = patch_call(code, arch, call_site[cs], fn_off[call_fn[cs]])

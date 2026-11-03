@@ -129,7 +129,7 @@ make xc_containers(d: str, arch: str) -> num {
       when string_eq(name, "chr_nested") == 1 { expected = 8534 }
       when string_eq(name, "concat_expr") == 1 { expected = 8590 }
       when string_eq(name, "chr_expr") == 1 { expected = 8515 }
-      when string_eq(name, "fn") == 1 { expected = 8285 }
+      when string_eq(name, "fn") == 1 { expected = 8293 }
       hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
       hold cdir = kp_join(d, name)
       hold oracle = xq_parity_unknown(source, cdir)

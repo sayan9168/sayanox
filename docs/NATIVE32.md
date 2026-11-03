@@ -158,6 +158,14 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   more than 8 functions or 6 parameters, and `give` outside a body. A call is a
   whole value: `f(1) + 1` and a call inside a `concat` argument are still
   refused.
+  **Since 2026-11-02 a body may also call another function.** AArch64 and RV64IM
+  save the link register in the body's prologue (`str x30,[sp,#-16]!` /
+  `addi sp,sp,-16` + `sd ra,8(sp)`) and restore it before every return, because
+  `bl`/`jal` overwrite it; i386 already keeps the return address on the same
+  stack. The call graph is then checked to be **acyclic** — a cycle would reuse
+  the parameter slot of a call that is still live — so self and mutual recursion
+  are refused with one diagnostic, and `f(1) + 1` remains refused because a call
+  is still a whole value rather than an operand.
 
 Lists, structs, string-valued functions, recursion, floating-point expressions,
 general file APIs, and garbage collection remain unsupported by this compiler. `chr` is accepted as
