@@ -1,0 +1,46 @@
+// Numeric user functions: `make NAME(a: num, ...) -> num { ... give ... }`,
+// called from the main program only, with arguments evaluated on the value
+// stack and stored into the callee's parameter slots.
+make add(a: num, b: num) -> num {
+  give a + b
+}
+make twice(n: num) -> num {
+  give n * 2
+}
+make clamp7(n: num) -> num {
+  when n > 7 {
+    give 7
+  }
+  give n
+}
+make sum4(a: num, b: num, c: num, d: num) -> num {
+  give a + b + c + d
+}
+make countdown(n: num) -> num {
+  hold total = 0
+  while n > 0 {
+    total = total + n
+    n = n - 1
+  }
+  give total
+}
+make seven() -> num {
+  give 7
+}
+
+hold x = add(2, 3)
+show x
+show add(10, 20)
+show twice(add(1, 2))
+show sum4(1, 2, 3, 4)
+show clamp7(3)
+show clamp7(30)
+show countdown(4)
+show seven()
+hold y = seven()
+show y + 1
+when add(1, 1) {
+  show "yes"
+}
+show add(seven(), twice(3))
+show "done"

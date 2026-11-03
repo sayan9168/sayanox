@@ -1,4 +1,0 @@
-make twice(v: num) -> num {
-  give v * 2
-}
-show twice(4)

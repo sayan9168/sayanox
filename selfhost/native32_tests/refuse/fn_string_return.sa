@@ -1,0 +1,4 @@
+make f(n: num) -> str {
+  give "x"
+}
+show f(1)

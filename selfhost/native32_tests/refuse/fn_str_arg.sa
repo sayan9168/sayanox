@@ -1,0 +1,4 @@
+make f(n: num) -> num {
+  give n
+}
+show f("x")

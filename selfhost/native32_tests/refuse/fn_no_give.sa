@@ -1,0 +1,4 @@
+make f(n: num) -> num {
+  hold x = n + 1
+}
+show f(3)
