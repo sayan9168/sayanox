@@ -40,9 +40,10 @@
 //     make NAME(a: num, b: num) -> num {   numeric function, up to 6 parameters
 //       give <integer expression>          return; may also appear early, in a
 //     }                                    `when` branch, for an early return
-//     NAME(<arg>, ...)                     call, as a whole value: `hold x =`,
+//     NAME(<arg>, ...)                     call: as a whole value (`hold x =`,
 //                                          an assignment, `show`, a `when`/`while`
-//                                          condition, another call's argument
+//                                          condition, another call's argument) and
+//                                          as an operand inside an expression
 //
 //     // comments, blank lines
 //
@@ -71,9 +72,10 @@
 //   value of a `hold`, an assignment or a `show`, and refused inside any other
 //   expression.
 //
-//   A call is a whole value, not an operand: `f(1) + 1` is refused, and so is a
-//   call inside a `concat` argument. The same is true of `concat`, which stays a
-//   statement-level form.
+//   A call is also an operand: `f(1) + 1`, `f(x) * g(y)` and `2 - f(f(3))` are
+//   accepted, because a call leaves its result in the accumulator and the
+//   expression emitter pushes it like any other value. `concat` stays a
+//   statement-level form and is still refused inside other expressions.
 //
 //   expressions: + - * % , the six comparisons, parentheses, unary minus,
 //   decimal integer literals, numeric names and `len(STRING_NAME)` or `len("literal")`. `/` is
@@ -692,36 +694,19 @@ make fn_param_slot(fi: num, p: num) -> num {
   give fn_pflat[fn_pbase[fi] + p]
 }
 
-// If the whole expression text is one call of a declared function, emit it and
-// give 1; otherwise give 0 and let the expression emitter handle the text.
-make try_user_call(extext: str) -> num {
-  hold toks = tokenize(extext)
-  hold tn = tok_count(toks)
-  when tn < 3 { give 0 }
-  hold t0 = tok_at(toks, 0)
-  when sx_index(t0, 0) != 118 { give 0 }
-  hold nm = sub(t0, 1, len(t0))
-  when string_eq(tok_at(toks, 1), "(") != 1 { give 0 }
-  hold fi = slot_of(fn_names, nm)
-  hold close = paren_close(toks, 1, tn)
-  when close < 0 || close != tn - 1 { give 0 }
-  when fi < 0 {
-    when fn_count > 0 || string_eq(nm, "len") == 0 {
-      // A call shape that names no declared function is a diagnostic, not a
-      // silently mis-parsed expression -- but only when the program declares
-      // functions at all, so the older subset keeps its own messages.
-      when fn_count > 0 && string_eq(nm, "len") == 0 && string_eq(nm, "chr") == 0 && string_eq(nm, "concat") == 0 && string_eq(nm, "string_eq") == 0 && string_eq(nm, "sx_index") == 0 && string_eq(nm, "numstr") == 0 {
-        hold unknownfn = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": unknown function '", nm)), "'"))
-      }
-    }
-    give 0
-  }
+// Emit a call at a known token position: `openat` is the index of the '(' and
+// `close` the index of its matching ')'. Arguments are split at top-level
+// commas, compiled by the expression emitter (so an argument may itself hold a
+// call), pushed on the value stack, popped into the callee's parameter slots,
+// and the `call` is emitted. Both the whole-value path and the operand path go
+// through here, so `hold x = f(1)` and `hold x = f(1) + 1` emit the same call.
+make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str) -> num {
   // split the arguments at top-level commas
   hold afrom = []
   hold aupto = []
   hold adepth = 0
-  hold at = 2
-  hold astart = 2
+  hold at = openat + 1
+  hold astart = openat + 1
   while at < close {
     hold t = tok_at(toks, at)
     when string_eq(t, "(") == 1 { adepth = adepth + 1 }
@@ -773,6 +758,46 @@ make try_user_call(extext: str) -> num {
   hold cdisp = emit_call_here(arch)
   call_site = push(call_site, cdisp)
   call_fn = push(call_fn, fi)
+  give 0
+}
+
+// Is the token at `k` a call of a declared function? The expression emitter
+// asks this before treating a name as a variable, so `f(1) + 1` reaches the
+// operand path instead of failing with "unknown name 'f'".
+make call_shape_at(toks: str, k: num, tn: num) -> num {
+  when k + 1 >= tn { give 0 }
+  hold t = tok_at(toks, k)
+  when sx_index(t, 0) != 118 { give 0 }
+  when string_eq(tok_at(toks, k + 1), "(") != 1 { give 0 }
+  when slot_of(fn_names, sub(t, 1, len(t))) < 0 { give 0 }
+  give 1
+}
+
+// If the whole expression text is one call of a declared function, emit it and
+// give 1; otherwise give 0 and let the expression emitter handle the text.
+make try_user_call(extext: str) -> num {
+  hold toks = tokenize(extext)
+  hold tn = tok_count(toks)
+  when tn < 3 { give 0 }
+  hold t0 = tok_at(toks, 0)
+  when sx_index(t0, 0) != 118 { give 0 }
+  hold nm = sub(t0, 1, len(t0))
+  when string_eq(tok_at(toks, 1), "(") != 1 { give 0 }
+  hold fi = slot_of(fn_names, nm)
+  hold close = paren_close(toks, 1, tn)
+  when close < 0 || close != tn - 1 { give 0 }
+  when fi < 0 {
+    when fn_count > 0 || string_eq(nm, "len") == 0 {
+      // A call shape that names no declared function is a diagnostic, not a
+      // silently mis-parsed expression -- but only when the program declares
+      // functions at all, so the older subset keeps its own messages.
+      when fn_count > 0 && string_eq(nm, "len") == 0 && string_eq(nm, "chr") == 0 && string_eq(nm, "concat") == 0 && string_eq(nm, "string_eq") == 0 && string_eq(nm, "sx_index") == 0 && string_eq(nm, "numstr") == 0 {
+        hold unknownfn = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": unknown function '", nm)), "'"))
+      }
+    }
+    give 0
+  }
+  hold done = emit_call_tokens(toks, 1, close, fi, nm)
   give 1
 }
 
@@ -2888,7 +2913,27 @@ make emit_expression(extext: str) -> num {
       when t0 == 108 {
         hold misplaced_literal = fail(1, concat(concat("line ", numstr(lineno)), ": a string literal in a numeric expression is supported only as len()'s argument"))
       }
-      when t0 == 118 && is_streq_tok == 0 {
+      // A call of a declared function is a value: emit the call, which leaves
+      // its result in the accumulator, push that like any other operand and
+      // carry on with the rest of the expression.
+      hold call_done = 0
+      when t0 == 118 && is_streq_tok == 0 && call_shape_at(toks, k, tn) == 1 {
+        when want == 0 {
+          hold twoval_call = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
+        }
+        hold cfname = sub(t, 1, len(t))
+        hold cfi = slot_of(fn_names, cfname)
+        hold cclose = paren_close(toks, k + 1, tn)
+        when cclose < 0 {
+          hold unclosed_call = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": a call to '", cfname)), "' has no closing ')'"))
+        }
+        hold ccall_done = emit_call_tokens(toks, k + 1, cclose, cfi, cfname)
+        code = emit_push_acc(code, arch)
+        want = 0
+        k = cclose
+        call_done = 1
+      }
+      when call_done == 0 && t0 == 118 && is_streq_tok == 0 && call_shape_at(toks, k, tn) == 0 {
         when want == 0 {
           hold twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
         }

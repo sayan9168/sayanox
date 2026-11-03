@@ -1,5 +1,55 @@
 # Status
 
+**2026-11-03 (eleventh increment) — R02 step 10: a call is an operand, not only a
+whole value.**
+
+Step 8 and step 9 let a call stand where a whole value was expected (`hold x =
+f(1)`, `show f(1)`, a condition, another call's argument). `f(1) + 1` was still
+refused with `unknown name 'f'`, because the expression emitter looked the name
+up in the variable table and never asked the function table.
+
+Now the emitter asks first: the token stream is scanned for a name that the
+function table knows and that is followed by `(`, and such a subterm is emitted
+where it stands — arguments evaluated, `call` emitted — and the result pushed on
+the value stack like any other operand. The call itself is not new code: the
+whole-value path and the operand path both go through one function,
+`emit_call_tokens`, so `hold x = f(1)` and `hold x = f(1) + 1` build exactly the
+same call sequence. Calls are therefore accepted in every position an integer
+value is accepted:
+
+```
+f(1) + 1                2 * f(3) - 1           (f(1) + f(2)) * 2
+f(1) * g(2)             100 - seven() * 3      add(inc(1) + 1, inc(2))
+when f(1) + 1 == 3      s[f(1)]                chr(f(1))
+```
+
+The value stack stays balanced because `call` only happens after the callee's
+arguments have been popped into parameter slots, and the callee's expression
+leaves one value in the accumulator; nothing else about the calling convention
+changed. Recursion is still refused, and the acyclic check now also covers an
+edge discovered inside an operand — `give f(n) + 1` reports `'f' takes part in a
+recursive call chain, which native32 v1 refuses: one parameter slot per
+function` instead of compiling a call that would overwrite its own arguments.
+
+`selfhost/native32_tests/fn.sa` gained six operand lines (grouped calls,
+precedence, a call as one argument subterm, a condition, and a negative-multiples
+case) and prints 19 lines now: `5 30 6 10 3 7 10 7 8 yes 13 8 6 7 8 10 79 operand
+done`, pinned at i386 8305 bytes with regenerated AArch64/RV64IM goldens. A probe
+with ten operand forms printed identical bytes on all three ISAs
+(`md5 3b0a843d2f180b531431718c62fd6e36`). Refusals move 51 -> 52:
+`refuse/fn_recursion_in_operand.sa` is new.
+
+One real defect was found on the way: the emitter's new block mutated the token
+cursor `k`, and the blocks that follow in the same iteration still tested the
+stale token index, so `f(1) + 1` failed with a bogus `two values in a row`. The
+blocks after the call path are now guarded by a per-iteration `call_done` flag.
+
+```
+./sx target test-native32        -> 0
+./sx target test-native-arm64    -> 0
+./sx target test-native-riscv64  -> 0
+```
+
 **2026-11-02 (tenth increment) — R02 step 9: a `make` body may call another
 function; recursion is refused by an acyclic-call-graph check.**
 
