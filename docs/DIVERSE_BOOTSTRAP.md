@@ -88,9 +88,9 @@ independently-built-verifier verify NEW_WORKDIR [REFERENCE]
 `verify` recomputes the reference and review digests, requires the recorded
 source/entry manifest digests to equal the current pinned manifests, and repeats
 both final byte comparisons (`cmp NEW_WORKDIR/stage2 bootstrap/sxc_native.bin`,
-`cmp NEW_WORKDIR/entry sx`). It refuses `INCOMPLETE`/`FAILED` receipts, a review
-edited after the receipt, a missing artifact and a live reference that is not the
-one the receipt names. It proves only that the recorded bytes agree: a receipt
+`cmp NEW_WORKDIR/entry sx`). It refuses `INCOMPLETE`/`FAILED` receipts, a reference
+record that disagrees with the receipt, a review edited after the receipt, a
+missing artifact and a live reference that is not the one the receipt names. It proves only that the recorded bytes agree: a receipt
 can be fabricated by anyone who can write the directory, so the assumptions in
 step 7 are still reviewed by hand. The executable request, provenance material
 and acceptance record are specified in [DDC_REFERENCE_REQUEST](DDC_REFERENCE_REQUEST.md).
@@ -118,8 +118,9 @@ runs the same harness controls in CI. Controls cover equal/corrupted/missing
 artifacts, known circular inputs, child failure, stage2 mismatch, incorrect
 reference digests and refusal to overwrite existing evidence, plus eight
 returned-evidence recheck controls (a consistent synthetic receipt passes; a
-corrupted stage2, a foreign manifest digest, an incomplete receipt, a tampered
-review, a missing artifact and a live reference mismatch are refused). The negative
+corrupted stage2, a reference record that disagrees with the receipt, a foreign
+manifest digest, an incomplete receipt, a tampered review, a missing artifact
+and a live reference mismatch are refused). The negative
 `selfhost/ddc_tests/copy_self.sa` executable intentionally copies itself; it
 must be rejected and is not a reference compiler. No success-path reconstruction
 with a genuine independent T has been performed. Neither hashes, passing these

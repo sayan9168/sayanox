@@ -87,9 +87,10 @@ This rechecks, with the host's own `sha256sum` and `cmp`:
 - every artifact the receipt names is present.
 
 Eight controls for this checker run in `./tools/sxddc self-test`: a consistent
-synthetic receipt passes, and a corrupted `stage2`, a foreign manifest digest,
-an `INCOMPLETE` receipt, a review edited after the receipt, a missing artifact,
-and a live reference that does not match the recorded digest are all refused.
+synthetic receipt passes, and a corrupted `stage2`, a reference record that
+disagrees with the receipt, a foreign manifest digest, an `INCOMPLETE` receipt,
+a review edited after the receipt, a missing artifact, and a live reference that
+does not match the recorded digest are all refused.
 
 **What `verify` does not do.** It cannot prove that `T` ran, that `T` is
 independent, that the review is truthful, or that the source is harmless.

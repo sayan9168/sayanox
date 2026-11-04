@@ -285,6 +285,10 @@ make ddc_self_test(binary: str) -> num {
   hold bad_stage2 = run_command(concat("cp ", concat(ddc_quote(fixture), concat(" ", ddc_quote(concat(evidence, "/stage2"))))))
   when bad_stage2 != 0 { give ddc_fail("cannot corrupt evidence fixture stage2") }
   when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), " >/dev/null 2>&1")))) != 2 { give ddc_fail("stage2 corruption accepted by verify") }
+  // A receipt whose own reference record disagrees with it.
+  hold zero_ref = ddc_write(concat(evidence, "/reference.sha256"), "0000000000000000000000000000000000000000000000000000000000000000")
+  when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), " >/dev/null 2>&1")))) != 2 { give ddc_fail("reference record mismatch accepted by verify") }
+  hold fixed_ref = ddc_write(concat(evidence, "/reference.sha256"), fixture_hash)
   // A receipt for another source tree.
   when run_command(concat("cp ", concat(ddc_quote(stage2_good), concat(" ", ddc_quote(concat(evidence, "/stage2")))))) != 0 { give ddc_fail("cannot restore evidence fixture stage2") }
   hold wrong_tree = concat("CONDITIONAL_DDC_MATCH\nReference SHA-256: ", fixture_hash)

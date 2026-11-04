@@ -21,9 +21,10 @@ pinned manifests; and `stage2`/`entry` must be byte-identical to
 reference mismatch are refused with exit 2.
 
 Eight new controls in `./tools/sxddc self-test` pin that behaviour: a synthetic
-consistent receipt passes, and a corrupted `stage2`, foreign manifest digest,
-incomplete receipt, tampered review, missing artifact and live-reference
-mismatch are each rejected. The synthetic fixture is deleted afterwards. These
+consistent receipt passes, and a corrupted `stage2`, a reference record that
+disagrees with the receipt, a foreign manifest digest, an incomplete receipt, a
+tampered review, a missing artifact and a live-reference mismatch are each
+rejected. The synthetic fixture is deleted afterwards. These
 controls run in `./sx target test-native-bootstrap`.
 
 `docs/DDC_REFERENCE_REQUEST.md` now states exactly what an external supply must
