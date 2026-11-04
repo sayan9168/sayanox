@@ -41,6 +41,23 @@ remaining compiler/runtime/tooling projects below.
 | R15 | **`sxbuild inventory` counted gitignored default outputs — FIXED 2026-11-02** | `is_generated_c_artifact` knew the checked-in generator names plus a "has a `.sa` peer" rule, but not the gitignored default output paths of the compiler (`selfhost/mini_out.c`, `_smoke.c`, `_out.c`, `hello_out.c`, `boot.c`, `boot2.c`), so any ad-hoc compiler run left the inventory reporting stray C files. Those six names are now listed in `is_known_selfhost_c`, documented as "keep in step with the `selfhost/*.c` entries in .gitignore". `test-sxbuild` grew a real regression: it measures the non-anchor count, creates all six files and asserts the count is unchanged, then creates a genuine stray `.c` and asserts the count rose by exactly one (so the fix is not a blanket ignore), then removes them — the pre-fix compiler fails that gate with a delta of six. The assertions are relative, so the gate also works in a tree another step has already populated with generated C files. |
 | R16 | **AArch64 64-bit add/subtract never set flags — FIXED 2026-11-01** | `tools/sxisaexec.sa` computed 64-bit ADD/SUB (immediate and shifted register) results but updated `N`/`Z`/`C`/`V` only in the 32-bit paths, so any 64-bit `cmp` followed by `b.cond` branched on stale flags. The `streq` fixture reproduced it (`string_eq` on AArch64 printed `0,1,1,1,…` instead of `1,1,1,0,…`), and `test-sxisaexec` fails on the previous emulator and passes on the fixed one, so the regression is pinned. Reopen only if a new flag-consuming 64-bit form is added. |
 | R17 | **Emitted C identifiers are not C23-clean — FIXED 2026-11-02 as a dialect contract, open as a mangling project** | The C backends write a Sayanox identifier straight into C, so a struct field or variable named `true`, `false` or `bool` is a legal C17 identifier but a reserved keyword in C23. The gates now compile generated C with an explicit dialect (`-std=gnu11`, the same way `sxbootstrap_lib` already pinned `gnu99`) so a compiler whose *default* dialect moved to C23 cannot reinterpret our identifiers; the runner image that exposed this is gcc 15.2.0 on Ubuntu 26. Required completion evidence for closing it as a language feature: identifier mangling (or a documented refusal) in every C emitter, with a program that uses `true`/`false`/`bool`/`int`-like names as fields, locals, parameters and function names, compiled by seed, gen2 and native anchors under both `-std=gnu11` and `-std=gnu23`, plus a gate that pins both dialects. |
+| R18 | **Release publication identity — FIXED 2026-11-04** | `tools/sxrelease_lib.sa` tested and packaged `HEAD` and called `gh release create` without binding a new tag to the tested commit, so a dispatch could tag the default branch instead of the accepted checkout, and an existing tag was never checked. The tested commit is now resolved to a full 40-character id before packaging: the checkout must equal `GITHUB_SHA` when it is set, any existing remote tag (`git ls-remote --tags`) must already name that commit, an unreadable remote fails closed, the archive is cut from the resolved id (`git archive ... <commit>`, never `HEAD`), a new tag is created with `--target <commit>`, an existing or pushed tag is only verified (`--verify-tag`), and the remote tag is re-read after publication so a moved tag fails the run. The decisions and argv live in `tools/sxrelease_identity_lib.sa`; `./sx release-identity` runs the same resolution without packaging or calling `gh`. Evidence: `./sx target test-release-identity` executes 3 wiring facts, 30 pure decision/argv/parser facts and 9 real `./sx release-identity` sessions against a recording mock `git`/`gh` PATH (new tag, dispatch mismatch, tag mismatch, matching tag, annotated tag, tag-push event, unreadable remote, unresolvable HEAD, no dispatch commit), including "the identity audit never runs `gh`" and "no archive/publish command is printed on failure"; `test-ci-shape` now requires acceptance before publication, identity before packaging, and the argv in the identity module. Reopen only if a new publication path is added that bypasses `rl_identity_problem`/`rl_published_problem`. |
+
+### Increment log - 2026-11-04 (release publication identity)
+
+* **R18 — tested-commit release identity:** the release path used to archive
+  `HEAD` and call `gh release create` with no commit binding. It now resolves
+  `HEAD` to a full commit id, refuses a checkout that differs from `GITHUB_SHA`,
+  refuses an existing remote tag that names another commit, refuses an
+  unreadable remote instead of treating it as an absent tag, archives the
+  resolved id, binds a new tag with `--target <commit>`, only verifies a tag
+  that already exists, and re-reads the remote tag after publication so a moved
+  tag fails. `tools/sxrelease_identity_lib.sa` holds the decisions and argv
+  (pure where it can be) and `./sx release-identity` runs the same resolution
+  without packaging or `gh`. New gate `./sx target test-release-identity`
+  (39 facts: wiring, pure decisions/argv/listing parser, and 9 real mock-PATH
+  sessions) is part of the migrated-gates CI job. No release was published and
+  no tag was created by this increment.
 
 ### Increment log - 2026-11-01 (slices outside the audit list)
 
@@ -236,15 +253,9 @@ reviewable increment, not a completed one.
 
 ## Concrete release follow-up found during this increment
 
-`tools/sxrelease_lib.sa` tests/packages `HEAD`, but its dispatch publication
-command currently calls `gh release create` without explicitly binding a new
-tag to that tested commit or checking an existing tag's commit identity.
-For a new dispatched tag, the GitHub CLI can select the default branch instead
-of the tested checkout. Before publishing an updated release, harden this path
-with explicit tested-commit targeting, existing-tag identity checks and
-negative controls for mismatched/moved tags. Do not treat release-plan output
-as a test of publication identity. No release is published by the current
-documentation increment.
+Resolved by **R18** below. The older wording is kept in the register row so the
+finding and the fix stay together; the publication path no longer archives or
+tags `HEAD` implicitly.
 
 ## Order and working rules
 
@@ -257,7 +268,8 @@ documentation increment.
    more success labels. Track each actual implementation and its fresh CI.
 4. R03 and R11 need external provenance/evidence; R08/R09 also need appropriate
    review/execution resources before their strongest claims can close.
-5. Publish R12 only through the gated release path for the exact accepted tree.
+5. Publish R12 only through the gated release path for the exact accepted
+   commit; `./sx release-identity` is the check-only form of that binding.
 
 For each completed increment record the source checkpoint, actual commands and
 exit statuses, output/refusal evidence, unchanged source/entry pins, complete

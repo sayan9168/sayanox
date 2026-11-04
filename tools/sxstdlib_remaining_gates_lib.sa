@@ -136,7 +136,13 @@ make xq_ci() -> num {
   hold publish = pg_contains(".github/workflows/release.yml", "contents: write")
   hold release_gate = pg_contains("tools/sxrelease_lib.sa", "hold acceptance = cmd_ci()")
   hold release_source = read_file("tools/sxrelease_lib.sa")
-  hold gated_release = gl_assert_eq_num(pg_find(release_source, "hold acceptance = cmd_ci()") < pg_find(release_source, "gh release create "), 1, "acceptance before publication")
+  // Publication argv lives in the release identity module; the driver must
+  // still run acceptance first, resolve identity, and only then package.
+  hold gated_release = gl_assert_eq_num(pg_find(release_source, "hold acceptance = cmd_ci()") < pg_find(release_source, "target_run(rl_publish_command("), 1, "acceptance before publication")
+  hold identity_first = gl_assert_eq_num(pg_find(release_source, "rl_identity_problem(tested, getenv(\"GITHUB_SHA\"), existing)") < pg_find(release_source, "rl_archive_command(tag, tested)"), 1, "release identity before packaging")
+  hold publish_lib = pg_contains("tools/sxrelease_identity_lib.sa", "gh release create ")
+  hold archive_lib = pg_contains("tools/sxrelease_identity_lib.sa", "git archive --format=tar.gz")
+  hold target_binding = pg_contains("tools/sxrelease_identity_lib.sa", "--target ")
   hold source = "tools/sxentry_lib.sa"
   hold migration = pg_contains(source, "hold audit = cmd_migration()")
   hold doctor = pg_contains(source, "cmd_target(\"doctor\", built)")

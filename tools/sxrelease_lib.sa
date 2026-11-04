@@ -38,11 +38,34 @@ make cmd_release_plan() -> num {
   show concat("Release tag: ", tag)
   show "Required: complete migration -> doctor -> workflow shape -> true-selfhost -> gen3 -> native-test"
   show "Required: clean tracked tree, native entry/source pins, equal gen3/gen4 C, no forbidden bootstrap invocation"
+  show "Required: checkout HEAD, GITHUB_SHA and any existing tag all name the same tested commit"
   show concat("Source archive: dist/sayanox-", concat(tag, "-src.tar.gz"))
+  show "Archive input: the resolved tested commit id, never the symbolic HEAD"
   show "Evidence: dist/fixed-point.sha256, dist/gen3.c, dist/gen4.c, dist/BUILD_INFO.md"
   show "Plan only: no archive, tag or release was created"
   give 0
 }
+
+// Resolve the tested commit and enforce the publication identity contract.
+// Returns the tested commit id, or fails: an unresolvable HEAD, a checkout that
+// differs from the dispatched commit, a tag that already names another commit,
+// or an unreadable remote all stop a release before anything is packaged.
+// `remote_log` receives the authoritative `git ls-remote` listing so callers
+// can report the tag without a second network query.
+make rl_identity_gate(tag: str, remote_log: str) -> str {
+  hold work = ensure_dir_p("selfhost/seed_tests")
+  when work != 1 { hold e = fail(1, "cannot create release identity workspace") }
+  hold tested = rl_commit_at("HEAD", "selfhost/seed_tests/release-identity.head")
+  hold head_problem = rl_identity_problem(tested, "", "")
+  when len(head_problem) > 0 { hold e = fail(1, concat("release identity: ", head_problem)) }
+  hold query = rl_remote_tag_query(tag, remote_log)
+  when query != 0 { hold e = fail(1, concat("cannot read remote tag state for ", tag)) }
+  hold existing = rl_remote_tag_commit(tag, read_file(remote_log))
+  hold identity = rl_identity_problem(tested, getenv("GITHUB_SHA"), existing)
+  when len(identity) > 0 { hold e = fail(1, concat("release identity: ", identity)) }
+  give tested
+}
+
 make cmd_release() -> num {
   hold tag = rl_tag()
   // Never turn an unported hard gate into a smaller successful release gate.
@@ -57,6 +80,15 @@ make cmd_release() -> num {
   when len(read_file(cfiles)) != 0 { hold e = fail(1, "tracked C/header source in all-Sayanox release") }
   hold dir = ensure_dir_p("dist")
   when dir != 1 { hold e = fail(1, "cannot create release output directory") }
+  // Identity before packaging: the tag, the checkout and the dispatched commit
+  // must all name the commit acceptance just passed.
+  hold remote_log = "selfhost/seed_tests/release-identity.remote"
+  hold tested = rl_identity_gate(tag, remote_log)
+  hold existing = rl_remote_tag_commit(tag, read_file(remote_log))
+  hold tag_exists = 0
+  when len(existing) > 0 { tag_exists = 1 }
+  show concat("Tested commit: ", tested)
+  when tag_exists == 1 { show concat("Existing tag commit: ", existing) } otherwise { show "Existing tag commit: none; the tag will be created at the tested commit" }
   hold auditor = target_native_tool("sxaudit")
   hold gen2 = rl_digest("selfhost/gen2.c")
   hold gen3 = rl_digest("selfhost/gen3.c")
@@ -67,27 +99,45 @@ make cmd_release() -> num {
   hold sumfile = gl_must_write("dist/fixed-point.sha256", sums)
   hold copy3 = pg_copy("selfhost/gen3.c", "dist/gen3.c")
   hold copy4 = pg_copy("selfhost/gen4.c", "dist/gen4.c")
-  hold archive = concat("dist/sayanox-", concat(tag, "-src.tar.gz"))
-  hold prefix = concat("sayanox-", concat(tag, "/"))
-  hold command = concat("git archive --format=tar.gz --prefix=", sh_quote(prefix))
-  command = concat(command, concat(" -o ", sh_quote(archive)))
-  command = concat(command, " HEAD")
-  hold pack = target_run(command, "release source archive")
-  hold notes = concat("# Sayanox ", concat(tag, "\n\n"))
-  notes = concat(notes, "Built from a clean tracked tree through the Sayanox release driver.\n")
-  notes = concat(notes, "Complete baseline migration and all original hard gates passed.\n")
-  notes = concat(notes, "The fixed point is byte-identical: gen3.c == gen4.c.\n\n```\n")
-  notes = concat(notes, concat(sums, "```\n"))
+  // The archive is cut from the tested commit id, not from the moving HEAD.
+  hold pack = target_run(rl_archive_command(tag, tested), "release source archive")
+  hold notes = rl_build_info(tag, tested, tag_exists, sums)
   hold info = gl_must_write("dist/BUILD_INFO.md", notes)
   // No token is read, stored, printed or interpolated; gh inherits its own
   // authentication environment from the workflow's existing GitHub grant.
-  command = concat("gh release create ", sh_quote(tag))
-  command = concat(command, concat(" ", sh_quote(archive)))
-  command = concat(command, " dist/fixed-point.sha256 dist/gen3.c dist/gen4.c dist/BUILD_INFO.md")
-  command = concat(command, concat(" --title ", sh_quote(concat("Sayanox ", tag))))
-  command = concat(command, " --notes-file dist/BUILD_INFO.md")
-  when string_eq(getenv("GITHUB_EVENT_NAME"), "push") == 1 { command = concat(command, " --verify-tag") }
-  hold publish = target_run(command, "publish gated GitHub release")
-  show concat("[OK] released ", tag)
+  hold tag_event = 0
+  when string_eq(getenv("GITHUB_EVENT_NAME"), "push") == 1 { tag_event = 1 }
+  hold publish = target_run(rl_publish_command(tag, tested, tag_exists, tag_event), "publish gated GitHub release")
+  // A release that published a different commit than the one accepted is a
+  // failure, not a warning: a moved tag is detected by re-reading the remote.
+  hold requery = rl_remote_tag_query(tag, remote_log)
+  when requery != 0 { hold e = fail(1, concat("cannot re-read the published tag ", tag)) }
+  hold observed = rl_remote_tag_commit(tag, read_file(remote_log))
+  hold moved = rl_published_problem(tag, tested, observed)
+  when len(moved) > 0 { hold e = fail(1, concat("release identity: ", moved)) }
+  show concat("[OK] released ", concat(tag, concat(" at tested commit ", tested)))
+  give 0
+}
+
+// Check-only identity audit: runs the same resolution and decisions as the
+// publishing path without packaging, tagging or calling gh. `./sx release`
+// calls it in-line; this entry point exists so the identity contract can be
+// executed against a controlled git/gh environment.
+make cmd_release_identity() -> num {
+  hold tag = rl_tag()
+  hold remote_log = "selfhost/seed_tests/release-identity.remote"
+  hold tested = rl_identity_gate(tag, remote_log)
+  hold existing = rl_remote_tag_commit(tag, read_file(remote_log))
+  hold tag_exists = 0
+  when len(existing) > 0 { tag_exists = 1 }
+  hold event = 0
+  when string_eq(getenv("GITHUB_EVENT_NAME"), "push") == 1 { event = 1 }
+  show concat("Release tag: ", tag)
+  show concat("Tested commit: ", tested)
+  when len(getenv("GITHUB_SHA")) > 0 { show concat("Dispatched commit: ", getenv("GITHUB_SHA")) }
+  when tag_exists == 1 { show concat("Existing tag commit: ", existing) } otherwise { show "Existing tag commit: none; the tag would be created at the tested commit" }
+  show concat("Archive command: ", rl_archive_command(tag, tested))
+  show concat("Publish command: ", rl_publish_command(tag, tested, tag_exists, event))
+  show "[OK] release identity: checkout, dispatch and tag agree on the tested commit"
   give 0
 }

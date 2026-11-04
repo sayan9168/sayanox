@@ -42,5 +42,27 @@ self-hosting is accepted at the checkpoints in [STATUS](STATUS.md). Native
 backend coverage remains separately bounded in [NATIVE](NATIVE.md) and
 [NATIVE32](NATIVE32.md). All-source inventory is an audit, not a conformance test.
 
+## Release publication
+
+A release is cut by the gated workflow and by `/sx release` only after the
+complete acceptance chain passes. Packaging is bound to a commit id, not to the
+symbolic `HEAD`:
+
+```sh
+RELEASE_TAG=v0.3.30 ./sx release-identity   # check only; never packages or calls gh
+```
+
+`release-identity` resolves `HEAD` to a full 40-character commit id, refuses a
+checkout that differs from `GITHUB_SHA`, refuses an existing remote tag
+(`git ls-remote --tags origin refs/tags/<tag>`) that names another commit, and
+fails closed when the remote cannot be read. `release` then archives that id,
+creates a new tag with `--target <commit>`, only verifies a tag that already
+exists, and re-reads the remote tag after publication so a moved tag fails the
+run. Argument shaping and identity decisions are Sayanox in
+`tools/sxrelease_identity_lib.sa`; `git` and `gh` remain leaf host boundaries.
+`./sx target test-release-identity` proves the contract against a recording mock
+`git`/`gh` PATH, including mismatched and moved tags. Release-plan output is a
+plan, not a test of publication identity.
+
 See [BOOTSTRAP_ROADMAP](BOOTSTRAP_ROADMAP.md) for the real chain and
 [REMAINING_WORK](REMAINING_WORK.md) for open projects and external blockers.

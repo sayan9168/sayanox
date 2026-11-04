@@ -1,5 +1,43 @@
 # Status
 
+**2026-11-04 (twelfth increment) — R18: a release is bound to the tested commit,
+not to `HEAD`.**
+
+The release path had a real hole: `tools/sxrelease_lib.sa` ran acceptance, then
+packaged with `git archive ... HEAD` and called `gh release create <tag>` with no
+commit binding. A dispatched run whose checkout differed from the accepted tree
+could therefore tag the default branch, and a tag that already existed on some
+other commit was never checked at all.
+
+The identity is now resolved and checked before anything is packaged. `HEAD` is
+resolved with `git rev-parse --verify HEAD^{commit}` and must be a full
+40-character lowercase object name; when `GITHUB_SHA` is present it must be the
+same commit; the tag is read from the repository with
+`git ls-remote --tags origin refs/tags/<tag>` (an annotated tag's peeled `^{}`
+line is its commit) and, when it exists, must already name the tested commit. An
+unreadable remote fails closed instead of being treated as an absent tag. The
+archive is then cut from the resolved id, a new tag is created with `--target
+<commit>`, an existing or tag-push tag is only verified (`--verify-tag`), and the
+remote tag is re-read after publication so a moved tag fails the run.
+`dist/BUILD_INFO.md` records the tested commit.
+
+The decisions and argv live in `tools/sxrelease_identity_lib.sa`: pure functions
+(`rl_identity_problem`, `rl_published_problem`, `rl_archive_command`,
+`rl_publish_command`, `rl_remote_tag_commit`, `rl_build_info`) plus the two host
+reads, each writing to a caller-named log so the parse is testable. A new
+check-only entry, `./sx release-identity`, runs the same resolution without
+packaging, tagging or calling `gh`.
+
+New gate `./sx target test-release-identity` (39 facts) executes the pure
+decisions and argv, the `ls-remote` parser (plain, annotated, same-prefix decoy,
+absent), a source audit that the driver checks identity before packaging and
+keeps publication argv in the module, and nine real `./sx release-identity`
+sessions against a recording mock `git`/`gh` private PATH: new tag, dispatch
+mismatch, tag mismatch, matching tag, annotated tag, tag-push event, unreadable
+remote, unresolvable `HEAD`, and no dispatch commit. It also asserts the audit
+never runs `gh` and prints no archive or publish command when it fails. No
+release was published and no tag was created by this increment.
+
 **2026-11-03 (eleventh increment) — R02 step 10: a call is an operand, not only a
 whole value.**
 

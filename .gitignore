@@ -63,6 +63,7 @@ tools/sxsuite
 tools/sxisaexec
 tools/sxisaexec_test
 tools/sxmod_deep_test
+tools/sxrelease_identity_test
 tools/lsp_ide_test
 tools/sxpack
 tools/sxlsp_probe

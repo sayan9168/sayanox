@@ -102,6 +102,7 @@ show "[OK] native Sayanox CI guards: eight tools, exit 99, append evidence and s
 rc = gl_run_merged("RELEASE_TAG=v0.0.0-test ./sx release-plan", log)
 hold plan_ok = gl_assert_eq_num(rc, 0, "release dry plan")
 hold plan_text = pg_contains(log, "Plan only: no archive, tag or release was created")
+hold plan_identity = pg_contains(log, "checkout HEAD, GITHUB_SHA and any existing tag all name the same tested commit")
 rc = gl_run_merged("RELEASE_TAG='v1;not-a-command' ./sx release-plan", log)
 hold unsafe_tag = gl_assert_eq_num(rc, 2, "unsafe release tag rejected")
 rc = gl_run_merged("RELEASE_TAG='' ./sx release-plan", log)
