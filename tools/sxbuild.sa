@@ -565,6 +565,9 @@ make tool_source_for(name: str) -> str {
   when string_eq(name, "sxpkg_pubkey_test") == 1 {
     give "tools/sxpkg_pubkey_test.sa"
   }
+  when string_eq(name, "sxrelease_identity_test") == 1 {
+    give "tools/sxrelease_identity_test.sa"
+  }
   give ""
 }
 
@@ -951,6 +954,7 @@ use "tools/sxtargets_lib.sa"
 use "tools/sxmigration_lib.sa"
 use "tools/sxci_guard_lib.sa"
 use "tools/sxentry_lib.sa"
+use "tools/sxrelease_identity_lib.sa"
 use "tools/sxrelease_lib.sa"
 
 make usage_exit() -> num {
@@ -967,6 +971,7 @@ make usage_exit() -> num {
   m = concat(m, "  sx verify-entry\n")
   m = concat(m, "  sx ci-guard | ci-guard-check\n")
   m = concat(m, "  sx release-plan | release  (RELEASE_TAG required)\n")
+  m = concat(m, "  sx release-identity  (checkout/tag/commit agreement; never publishes)\n")
   m = concat(m, "  sx ci  (fail-closed full migration/CI gate)\n")
   hold w = write_file("/dev/stderr", m)
   hold stop = exit(2)
@@ -987,6 +992,10 @@ when string_eq(subcmd, "release-plan") == 1 {
 when string_eq(subcmd, "release") == 1 {
   handled = 1
   hold release = cmd_release()
+}
+when string_eq(subcmd, "release-identity") == 1 {
+  handled = 1
+  hold identity = cmd_release_identity()
 }
 when string_eq(subcmd, "ci-guard") == 1 {
   handled = 1

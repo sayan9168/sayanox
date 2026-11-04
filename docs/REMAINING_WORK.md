@@ -26,7 +26,7 @@ remaining compiler/runtime/tooling projects below.
 |---|---|---|
 | R01 | **Current documentation consistency — current increment** | Correct current README/bootstrap/milestone/LSP/start guides; preserve clearly labelled historical records. Actual current-source `test-doc-claims` with stale-command/architecture negative controls, source audit and fresh guarded complete CI. A prose sentinel is not a proof of every documentation claim. |
 | R02 | **Full native parity — open implementation project; string-value copy landed 2026-10-31, `string_eq` landed 2026-11-01, general string expressions and `chr(<integer expression>)` in every `chr` position landed 2026-11-02, bounded numeric user functions landed 2026-11-02, calls between functions (acyclic call graph, recursion refused) landed 2026-11-02, and a call as an operand of any integer expression landed 2026-11-03 (still open: `concat` inside another expression, bounded recursion with per-depth frames, string-valued functions, aggregates, FP, file/runtime APIs, GC)** | Start with bounded numeric user functions in `native32`, then aggregates/general strings, FP lowering, file/runtime APIs and GC. Each stage needs independent output oracles, cross-backend execution, deterministic images, type/arity/unsupported-form refusals, recursion/stack/cap tests where applicable, and complete guarded CI. ARM/RV emulator FP/syscalls alone do not close compiler lowering. Do not label one bounded function slice full parity. **Landed:** `hold b = a` / `b = a` copy a string variable's `(pointer, length)` pair on i386/AArch64/RV64IM, with a six-way parity fixture, cross-ISA data comparison, reviewed goldens and three new refusals. **Landed 2026-11-01:** `string_eq(A, B)` compiles to one shared comparison routine per image (length test, then a byte loop) returning 0/1, works in `when`/`while` conditions and composes with numeric operators, with its own six-way fixture, cross-ISA data comparison, reviewed goldens and four new refusals (matrix 22). Adding it exposed and fixed a real AArch64 emulator defect (64-bit add/subtract never set N/Z/C/V). **Landed 2026-11-01 (second step):** `chr(X)` builds a one-byte string from an integer literal or a numeric variable in the three whole-value positions (`hold s = chr(X)`, `s = chr(X)`, `show chr(X)`), with the C backend's low-byte rule, `chr(0)` as empty text, per-occurrence data cells, six-way parity and four more refusals (matrix 26). That step also moved the text segment to two pages (the `streq` image had consumed the first page exactly, leaving zero code bytes) and widened the emulator's image window to `0x400000..0x424000`. **Landed 2026-11-02 (third step):** `chr(X)` now also lowers as one whole argument of `concat`, `string_eq` and `len` (`concat(chr(a), "x")`, `concat(chr(a), chr(b))`, `string_eq(chr(65), s)`, `string_eq(chr(a), chr(b))`, `len(chr(65))`) by hoisting the existing cell/`udiv`/`cell + 1 - length` sequence into a hidden `(pointer, length)` slot before the existing push paths run, with five more refusals (matrix 26 -> 31; the old `concat_call` refusal became a legal program and was removed). Fixture `chr_nested.sa` (hold, assign and `when`-condition forms) runs on all six execution paths with reviewed AArch64/RV64IM goldens; its data segment is pinned by size rather than byte equality because a `concat` literal still stores an arch-specific pointer in the data image (R14). **Landed 2026-11-02 (fourth step):** the integer expression emitter became one function (`emit_expression`), and `chr(<expression>)` now works in *every* position `chr` is accepted: `concat`, `string_eq` on either side and `len(chr(...))` find the matching parenthesis (`paren_close`), render the inner tokens (`tok_range_text`) and compile them (`emit_chr_expr_slot` into the shared `chr_acc_slot`). Matrix 39 -> 40 (two now-legal programs deleted, three refusals added), fixture `chr_expr.sa` extended to 18 lines / i386 8515 bytes on all six execution paths. `chr` as an operand of anything else and `concat` inside another expression still have no lowering; the next step remains bounded numeric user functions. |
-| R03 | **Independent bootstrap — externally blocked** | Supply and independently review a reference compiler, verifier and build provenance that do not descend from the repository anchor; execute the actual conditional DDC protocol and independently check final bytes. The selected reference-supply path has no supplied reference. No C/Rust reference implementation exception is authorized. Harness controls, renaming a binary and same-anchor fixed points are not substitutes. |
+| R03 | **Independent bootstrap — externally blocked; returned-evidence recheck and submission package landed 2026-11-04** | Supply and independently review a reference compiler, verifier and build provenance that do not descend from the repository anchor; execute the actual conditional DDC protocol and independently check final bytes. The selected reference-supply path has no supplied reference. No C/Rust reference implementation exception is authorized. Harness controls, renaming a binary and same-anchor fixed points are not substitutes. **Landed 2026-11-04:** `./tools/sxddc verify EVIDENCE_DIR [REFERENCE]` makes step 7 executable — it recomputes the reference and review digests, requires the receipt's recorded source/entry manifest digests to equal the current pinned manifests, and repeats both final byte comparisons with host `cmp`; it refuses `INCOMPLETE`/`FAILED` receipts, a reference record that disagrees with the receipt, a review edited after the receipt, a missing artifact and a reference that does not match the recorded digest. Eight controls in `./tools/sxddc self-test` cover a consistent synthetic receipt plus every refusal, and run in `test-native-bootstrap`. The exact external ask, provenance material and acceptance record are specified in [DDC_REFERENCE_REQUEST](DDC_REFERENCE_REQUEST.md). This does not establish independence: a receipt can be fabricated by anyone who can write its directory, so the checker proves only that the recorded bytes agree. Closure still needs a supplied, independently built `T` and a reviewed run. |
 | R04 | **Precise GC and stronger memory contracts — open design/implementation; one bounded fix landed 2026-10-31** | Define root/type maps and exact pointer-bearing fields for the selected runtime; retain aliases/interior-root policy, cycles and children under O0/O2 and ASan+UBSan including forced fake-stack mode. Test failure/recovery and resource limits. State bounded workloads/allocator assumptions explicitly: arbitrary unbounded live programs cannot have an unconditional finite heap/RSS guarantee. Existing conservative GC is implemented, not absent. **Landed:** an empty managed heap now releases the whole free-list cache instead of retaining two blocks per class (up to 2,097,152 bytes), with a negative control that fails on the previous emitter. Precise roots, type maps and bounded-heap claims remain open — see [GC](GC.md). |
 | R05 | **IDE-complete LSP — open implementation project; incremental sync landed 2026-10-31** | Reuse compiler semantics where supported; incremental UTF-16 edits, multi-file diagnostics, invalidation and scalable bounded indexing need real protocol/session tests, disk/open-overlay precedence, malformed-request and resource-limit controls. Existing four-buffer and bounded workspace behavior must stay green. **Landed:** `didChange` range splicing with clamping, a capability of `change: 2`, and up to eight change objects per notification applied in order (2026-10-31), driven by real framed sessions in `test-lsp` (47 facts). Still open: four buffers, no workspace-wide diagnostic push, no compiler-grade incremental re-parse, no edit merging beyond the sequential rule — the server is still not IDE-complete. |
 | R06 | **Language-level modules — open language design** | Specify canonical module identities, scopes, visibility/export and import caching/cycle policy; implement qualified binding across functions/types/fields/generics and all promised backends. Add collision/privacy/cycle/import tests. `sxmod` rewriting and path renaming do not establish these semantics. Preserve the current bootstrap splice dialect. |
@@ -41,6 +41,35 @@ remaining compiler/runtime/tooling projects below.
 | R15 | **`sxbuild inventory` counted gitignored default outputs — FIXED 2026-11-02** | `is_generated_c_artifact` knew the checked-in generator names plus a "has a `.sa` peer" rule, but not the gitignored default output paths of the compiler (`selfhost/mini_out.c`, `_smoke.c`, `_out.c`, `hello_out.c`, `boot.c`, `boot2.c`), so any ad-hoc compiler run left the inventory reporting stray C files. Those six names are now listed in `is_known_selfhost_c`, documented as "keep in step with the `selfhost/*.c` entries in .gitignore". `test-sxbuild` grew a real regression: it measures the non-anchor count, creates all six files and asserts the count is unchanged, then creates a genuine stray `.c` and asserts the count rose by exactly one (so the fix is not a blanket ignore), then removes them — the pre-fix compiler fails that gate with a delta of six. The assertions are relative, so the gate also works in a tree another step has already populated with generated C files. |
 | R16 | **AArch64 64-bit add/subtract never set flags — FIXED 2026-11-01** | `tools/sxisaexec.sa` computed 64-bit ADD/SUB (immediate and shifted register) results but updated `N`/`Z`/`C`/`V` only in the 32-bit paths, so any 64-bit `cmp` followed by `b.cond` branched on stale flags. The `streq` fixture reproduced it (`string_eq` on AArch64 printed `0,1,1,1,…` instead of `1,1,1,0,…`), and `test-sxisaexec` fails on the previous emulator and passes on the fixed one, so the regression is pinned. Reopen only if a new flag-consuming 64-bit form is added. |
 | R17 | **Emitted C identifiers are not C23-clean — FIXED 2026-11-02 as a dialect contract, open as a mangling project** | The C backends write a Sayanox identifier straight into C, so a struct field or variable named `true`, `false` or `bool` is a legal C17 identifier but a reserved keyword in C23. The gates now compile generated C with an explicit dialect (`-std=gnu11`, the same way `sxbootstrap_lib` already pinned `gnu99`) so a compiler whose *default* dialect moved to C23 cannot reinterpret our identifiers; the runner image that exposed this is gcc 15.2.0 on Ubuntu 26. Required completion evidence for closing it as a language feature: identifier mangling (or a documented refusal) in every C emitter, with a program that uses `true`/`false`/`bool`/`int`-like names as fields, locals, parameters and function names, compiled by seed, gen2 and native anchors under both `-std=gnu11` and `-std=gnu23`, plus a gate that pins both dialects. |
+| R18 | **Release publication identity — FIXED 2026-11-04** | `tools/sxrelease_lib.sa` tested and packaged `HEAD` and called `gh release create` without binding a new tag to the tested commit, so a dispatch could tag the default branch instead of the accepted checkout, and an existing tag was never checked. The tested commit is now resolved to a full 40-character id before packaging: the checkout must equal `GITHUB_SHA` when it is set, any existing remote tag (`git ls-remote --tags`) must already name that commit, an unreadable remote fails closed, the archive is cut from the resolved id (`git archive ... <commit>`, never `HEAD`), a new tag is created with `--target <commit>`, an existing or pushed tag is only verified (`--verify-tag`), and the remote tag is re-read after publication so a moved tag fails the run. The decisions and argv live in `tools/sxrelease_identity_lib.sa`; `./sx release-identity` runs the same resolution without packaging or calling `gh`. Evidence: `./sx target test-release-identity` executes 3 wiring facts, 30 pure decision/argv/parser facts and 9 real `./sx release-identity` sessions against a recording mock `git`/`gh` PATH (new tag, dispatch mismatch, tag mismatch, matching tag, annotated tag, tag-push event, unreadable remote, unresolvable HEAD, no dispatch commit), including "the identity audit never runs `gh`" and "no archive/publish command is printed on failure"; `test-ci-shape` now requires acceptance before publication, identity before packaging, and the argv in the identity module. Reopen only if a new publication path is added that bypasses `rl_identity_problem`/`rl_published_problem`. |
+
+### Increment log - 2026-11-04 (release publication identity)
+
+* **R03 — returned-evidence recheck (external supply still missing):**
+  `tools/sxddc.sa` now has `verify EVIDENCE_DIR [REFERENCE]`, the executable
+  form of protocol step 7: it refuses complete-looking receipts whose artifacts
+  disagree (`stage2` vs `bootstrap/sxc_native.bin`, `entry` vs `sx`), whose
+  review changed after the receipt, whose own reference record disagrees with
+  the receipt, whose manifest digests belong to another tree, whose reference
+  file is not the recorded one, and whose first line is `INCOMPLETE`/`FAILED`.
+  Eight new self-test controls pin the checker (one consistent synthetic
+  receipt passes; seven lies are refused; the fixture is deleted afterwards). `docs/DDC_REFERENCE_REQUEST.md` states the exact supply,
+  provenance and acceptance requirements. Independence is still not
+  established and R03 remains externally blocked: no reference compiler exists
+  in this repository or was supplied to it.
+* **R18 — tested-commit release identity:** the release path used to archive
+  `HEAD` and call `gh release create` with no commit binding. It now resolves
+  `HEAD` to a full commit id, refuses a checkout that differs from `GITHUB_SHA`,
+  refuses an existing remote tag that names another commit, refuses an
+  unreadable remote instead of treating it as an absent tag, archives the
+  resolved id, binds a new tag with `--target <commit>`, only verifies a tag
+  that already exists, and re-reads the remote tag after publication so a moved
+  tag fails. `tools/sxrelease_identity_lib.sa` holds the decisions and argv
+  (pure where it can be) and `./sx release-identity` runs the same resolution
+  without packaging or `gh`. New gate `./sx target test-release-identity`
+  (39 facts: wiring, pure decisions/argv/listing parser, and 9 real mock-PATH
+  sessions) is part of the migrated-gates CI job. No release was published and
+  no tag was created by this increment.
 
 ### Increment log - 2026-11-01 (slices outside the audit list)
 
@@ -236,15 +265,9 @@ reviewable increment, not a completed one.
 
 ## Concrete release follow-up found during this increment
 
-`tools/sxrelease_lib.sa` tests/packages `HEAD`, but its dispatch publication
-command currently calls `gh release create` without explicitly binding a new
-tag to that tested commit or checking an existing tag's commit identity.
-For a new dispatched tag, the GitHub CLI can select the default branch instead
-of the tested checkout. Before publishing an updated release, harden this path
-with explicit tested-commit targeting, existing-tag identity checks and
-negative controls for mismatched/moved tags. Do not treat release-plan output
-as a test of publication identity. No release is published by the current
-documentation increment.
+Resolved by **R18** below. The older wording is kept in the register row so the
+finding and the fix stay together; the publication path no longer archives or
+tags `HEAD` implicitly.
 
 ## Order and working rules
 
@@ -257,7 +280,8 @@ documentation increment.
    more success labels. Track each actual implementation and its fresh CI.
 4. R03 and R11 need external provenance/evidence; R08/R09 also need appropriate
    review/execution resources before their strongest claims can close.
-5. Publish R12 only through the gated release path for the exact accepted tree.
+5. Publish R12 only through the gated release path for the exact accepted
+   commit; `./sx release-identity` is the check-only form of that binding.
 
 For each completed increment record the source checkpoint, actual commands and
 exit statuses, output/refusal evidence, unchanged source/entry pins, complete
@@ -268,7 +292,8 @@ as a substitute for doing the listed work.
 ## Current references
 
 - [Milestone](COMPLETE.md), [bootstrap chain](BOOTSTRAP_ROADMAP.md),
-  [native trust boundary](NATIVE_BOOTSTRAP.md), [DDC protocol](DIVERSE_BOOTSTRAP.md).
+  [native trust boundary](NATIVE_BOOTSTRAP.md), [DDC protocol](DIVERSE_BOOTSTRAP.md),
+  [DDC reference request](DDC_REFERENCE_REQUEST.md).
 - [Native x86-64](NATIVE.md), [multi-ISA subset](NATIVE32.md), [GC](GC.md).
 - [LSP](LSP.md), [module semantics](MODULES.md), [stdlib](STDLIB.md),
   [registry](REGISTRY.md), [Linguist](LINGUIST.md).

@@ -101,7 +101,7 @@ cc -o hello hello.c
 |---|---|
 | [CI](.github/workflows/ci.yml) | Checks the entry/source pins and runs migrated suites; a separate mandatory full-acceptance job rejects incomplete migration or published-language v1 coverage |
 | [full-bootstrap](.github/workflows/full-bootstrap.yml) | Clean source-to-native-entry reconstruction, followed by the full-acceptance blocker |
-| [release](.github/workflows/release.yml) | Entry verification and full acceptance before packaging/publication; cannot publish while targets are pending |
+| [release](.github/workflows/release.yml) | Entry verification and full acceptance before packaging/publication; packaging is bound to the resolved tested commit id, an existing tag must already name it, and the published tag is re-read afterwards (`./sx release-identity` runs the check only) |
 
 ```sh
 ./sx ci  # exits 1 until the entire original acceptance surface is implemented
@@ -360,6 +360,7 @@ has the short version.
 - [x] **String-value copy in the multi-ISA emitter**: `hold b = a` / `b = a` copy a string variable's `(pointer, length)` pair on i386, AArch64 and RV64IM with six-way execution parity, golden images and three new refusals (`./sx target test-native32`, `test-native-arm64`, `test-native-riscv64`, `test-sxisaexec`)
 - [x] **JSON boundary/precision oracle**: 43 hand-written lines for `json_write.sa` + `json_deep.sa` on seed-min, gen2 and native AOT (`./sx target test-stdlib-next`)
 - [x] **Native `\r` literal escape (R13)**: CR decodes in every mode and the native anchor was rebuilt to a new three-stage fixed point (`./sx target test-stdlib-next`, `./sx target test-native-bootstrap`)
+- [x] **Release publication identity (R18)**: the release path archives the resolved tested commit instead of `HEAD`, refuses a checkout that differs from `GITHUB_SHA`, refuses an existing tag on another commit, creates a new tag with `--target <commit>`, only verifies an existing tag, and fails a moved tag after publication (`./sx target test-release-identity`, `./sx release-identity`)
 - [ ] Full ARM64/RV64 native compiler/runtime beyond the integer subset (strings, lists, structs, `make`/`give`, floats, file I/O, GC); emulator FP/syscall coverage is in progress (`docs/ALL_SAYANOX_PHASE.md`)
 - [ ] Broader platform support
 

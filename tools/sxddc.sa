@@ -48,6 +48,43 @@ make ddc_phase(command: str, name: str, work: str) -> num {
   }
   give 0
 }
+make ddc_cut(text: str, first: num, last: num) -> str {
+  hold n = len(text)
+  when first < 0 { first = 0 }
+  when last > n { last = n }
+  hold out = ""
+  hold i = first
+  while i < last {
+    out = concat(out, chr(sx_index(text, i)))
+    i = i + 1
+  }
+  give out
+}
+// The value of the first `prefix` line in a receipt, or "" when absent.
+make ddc_field(text: str, prefix: str) -> str {
+  hold pos = 0
+  while pos < len(text) {
+    hold start = pos
+    while pos < len(text) && sx_index(text, pos) != 10 { pos = pos + 1 }
+    hold line = ddc_cut(text, start, pos)
+    pos = pos + 1
+    hold at = 0
+    while at < len(line) && at < len(prefix) && sx_index(line, at) == sx_index(prefix, at) { at = at + 1 }
+    when at == len(prefix) { give ddc_cut(line, at, len(line)) }
+  }
+  give ""
+}
+make ddc_first_line(text: str) -> str {
+  hold end = 0
+  while end < len(text) && sx_index(text, end) != 10 { end = end + 1 }
+  give ddc_cut(text, 0, end)
+}
+make ddc_digest_record(path: str, log: str) -> str {
+  when path_kind(path) != 1 { give "" }
+  hold text = read_file(path)
+  when len(text) < 64 { give "" }
+  give ddc_cut(text, 0, 64)
+}
 make ddc_run(reference: str, expected: str, review: str, work: str) -> num {
   when path_kind(work) != 0 { give ddc_fail("work directory must not exist; refusing to overwrite evidence") }
   when path_kind(reference) != 1 || path_kind(review) != 1 || len(read_file(review)) == 0 { give ddc_fail("reference executable and nonempty external review required") }
@@ -93,6 +130,71 @@ make ddc_run(reference: str, expected: str, review: str, work: str) -> num {
   report = concat(report, "\nStage2 equals anchor; reconstructed entry equals sx.\nThis is conditional on the reference, driver, host and source-review assumptions.\nProvenance is NOT established by this program or by hash differences.\n")
   hold written = ddc_write(concat(work, "/report.txt"), report)
   show report
+  give 0
+}
+// Re-check a returned DDC evidence directory with host tools. This is the
+// independent step-7 inspection made executable: it recomputes every digest,
+// repeats both byte comparisons against the pinned repository artifacts, and
+// refuses any receipt whose claims its own files do not support.
+//
+// It cannot establish that a reference really ran, that the reference is
+// independent, or that the source is harmless. A receipt and its artifacts can
+// be fabricated by anyone who can write the directory; this check only proves
+// the recorded bytes agree. Provenance review stays external and manual.
+make ddc_verify(work: str, live_reference: str) -> num {
+  when path_kind(work) != 2 { give ddc_fail("evidence directory does not exist") }
+  hold report_path = concat(work, "/report.txt")
+  when path_kind(report_path) != 1 { give ddc_fail("evidence directory has no report.txt") }
+  hold report = read_file(report_path)
+  hold verdict = ddc_first_line(report)
+  when string_eq(verdict, "CONDITIONAL_DDC_MATCH") == 0 {
+    give ddc_fail(concat("evidence is not a conditional match receipt: ", verdict))
+  }
+  // A receipt is only meaningful together with its artifacts.
+  hold names = "review.txt\nreference.sha256\nreview.sha256\nnative-manifest.sha256\nentry-manifest.sha256\nstage1\nstage2\nentry\n"
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = ddc_cut(names, start, pos)
+    pos = pos + 1
+    when len(name) > 0 && path_kind(concat(work, concat("/", name))) != 1 {
+      give ddc_fail(concat("evidence is incomplete, missing ", name))
+    }
+  }
+  hold scratch = "selfhost/seed_tests"
+  when path_kind(scratch) == 0 {
+    when make_dir(scratch) != 1 { give ddc_fail("cannot create verification scratch directory") }
+  }
+  hold log = concat(scratch, "/ddc-verify.sha256")
+  // 1. the reference the receipt names is the reference it ran.
+  hold recorded = ddc_digest_record(concat(work, "/reference.sha256"), log)
+  hold claimed = ddc_field(report, "Reference SHA-256: ")
+  when len(recorded) != 64 || string_eq(recorded, claimed) == 0 { give ddc_fail("receipt and reference.sha256 disagree") }
+  when len(live_reference) > 0 {
+    hold live = ddc_hash(live_reference, log)
+    when string_eq(live, recorded) == 0 { give ddc_fail("live reference file does not match the recorded reference digest") }
+  }
+  // 2. the review that was recorded is the review that is present.
+  hold review_digest = ddc_hash(concat(work, "/review.txt"), log)
+  hold claimed_review = ddc_field(report, "Review SHA-256: ")
+  when string_eq(review_digest, claimed_review) == 0 { give ddc_fail("receipt and review.txt disagree") }
+  when string_eq(ddc_digest_record(concat(work, "/review.sha256"), log), review_digest) == 0 { give ddc_fail("review.sha256 does not match review.txt") }
+  when len(read_file(concat(work, "/review.txt"))) == 0 { give ddc_fail("recorded review is empty") }
+  // 3. the receipt belongs to this source tree, not to some other snapshot.
+  hold native_now = ddc_hash("bootstrap/native.sha256", log)
+  hold entry_now = ddc_hash("bootstrap/sx.sha256", log)
+  when string_eq(native_now, ddc_field(report, "Native manifest SHA-256: ")) == 0 { give ddc_fail("receipt was produced against a different native manifest") }
+  when string_eq(entry_now, ddc_field(report, "Entry manifest SHA-256: ")) == 0 { give ddc_fail("receipt was produced against a different entry manifest") }
+  when string_eq(ddc_digest_record(concat(work, "/native-manifest.sha256"), log), native_now) == 0 { give ddc_fail("recorded native manifest digest does not match") }
+  when string_eq(ddc_digest_record(concat(work, "/entry-manifest.sha256"), log), entry_now) == 0 { give ddc_fail("recorded entry manifest digest does not match") }
+  // 4. the final bytes, compared again with the host's own tool.
+  when ddc_equal(concat(work, "/stage2"), "bootstrap/sxc_native.bin") != 1 { give ddc_fail("stage2 does not equal the reviewed native anchor") }
+  when ddc_equal(concat(work, "/entry"), "sx") != 1 { give ddc_fail("reconstructed entry does not equal sx") }
+  show concat("[OK] receipt claims a conditional match under reference ", recorded)
+  show concat("[OK] review digest, source manifests and both final byte comparisons rechecked for ", work)
+  show "[OK] CONDITIONAL_DDC_MATCH rechecked with host tools; independence, provenance and source safety are NOT established here"
+  show "Recheck the receipt's assumptions by hand; a fabricated evidence directory passes this consistency check."
   give 0
 }
 make ddc_self_test(binary: str) -> num {
@@ -145,7 +247,76 @@ make ddc_self_test(binary: str) -> num {
   when run_command(concat(command, " >/dev/null 2>&1")) != 2 || path_kind(concat(wrong, "/stage1")) != 0 { give ddc_fail("digest mismatch executed reference") }
   command = concat(ddc_quote(binary), concat(" run ", concat(ddc_quote(fixture), concat(" ", concat(fixture_hash, concat(" ", concat(ddc_quote(review), concat(" ", ddc_quote(mismatched)))))))))
   when run_command(concat(command, " >/dev/null 2>&1")) != 2 { give ddc_fail("existing evidence overwritten") }
-  show "[OK] DDC harness controls only: equality, corruption, missing artifact, circular input, child failure, stage2 mismatch, bad digest and evidence preservation; NO independent compiler tested"
+  // The returned-evidence recheck (`sxddc verify`). A synthetic receipt whose
+  // bytes genuinely agree must pass the consistency recheck, and every lie the
+  // checker exists to catch must be refused. The fixture is deleted afterwards
+  // and is never a DDC run: it copies the pinned artifacts.
+  hold evidence = concat(work, "/verify-fixture")
+  hold mk = run_command(concat("mkdir -p ", ddc_quote(evidence)))
+  when mk != 0 { give ddc_fail("cannot create evidence fixture") }
+  hold cp2 = run_command(concat("cp ", concat(ddc_quote("bootstrap/sxc_native.bin"), concat(" ", ddc_quote(concat(evidence, "/stage2.keep"))))))
+  hold cpe = run_command(concat("cp ", concat(ddc_quote("sx"), concat(" ", ddc_quote(concat(evidence, "/entry"))))))
+  hold cp1 = run_command(concat("cp ", concat(ddc_quote(fixture), concat(" ", ddc_quote(concat(evidence, "/stage1"))))))
+  when cp2 != 0 || cpe != 0 || cp1 != 0 { give ddc_fail("cannot stage evidence fixture artifacts") }
+  hold stage2_good = concat(evidence, "/stage2.keep")
+  hold w = ddc_write(concat(evidence, "/review.txt"), "SYNTHETIC SELF-TEST FIXTURE: not a review and not a DDC run.\n")
+  hold ev_review = ddc_hash(concat(evidence, "/review.txt"), concat(work, "/ev-review.sha256"))
+  hold wf = ddc_write(concat(evidence, "/review.sha256"), ev_review)
+  hold ev_native = ddc_hash("bootstrap/native.sha256", concat(work, "/ev-native.sha256"))
+  hold ev_entry = ddc_hash("bootstrap/sx.sha256", concat(work, "/ev-entry.sha256"))
+  hold wm = ddc_write(concat(evidence, "/native-manifest.sha256"), ev_native)
+  wm = ddc_write(concat(evidence, "/entry-manifest.sha256"), ev_entry)
+  hold wref = ddc_write(concat(evidence, "/reference.sha256"), fixture_hash)
+  hold receipt = concat("CONDITIONAL_DDC_MATCH\nReference SHA-256: ", fixture_hash)
+  receipt = concat(receipt, concat("\nReview SHA-256: ", ev_review))
+  receipt = concat(receipt, concat("\nNative manifest SHA-256: ", ev_native))
+  receipt = concat(receipt, concat("\nEntry manifest SHA-256: ", ev_entry))
+  receipt = concat(receipt, "\nSYNTHETIC SELF-TEST FIXTURE; no reference compiler ran.\n")
+  hold wr = ddc_write(concat(evidence, "/report.txt"), receipt)
+  hold restore = run_command(concat("cp ", concat(ddc_quote(stage2_good), concat(" ", ddc_quote(concat(evidence, "/stage2"))))))
+  when restore != 0 { give ddc_fail("cannot stage evidence fixture stage2") }
+  // Consistent receipt: accepted, but the checker must say what it did not prove.
+  hold verify_log = concat(work, "/verify.log")
+  when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), concat(" >", concat(ddc_quote(verify_log), " 2>&1")))))) != 0 { give ddc_fail("consistent evidence receipt was rejected") }
+  when string_eq(ddc_field(read_file(verify_log), "[OK] CONDITIONAL_DDC_MATCH rechecked"), "") == 1 { give ddc_fail("verify did not report the rechecked comparison") }
+  hold ev_ok = run_command(concat("grep -q 'independence, provenance and source safety are NOT established' ", concat(ddc_quote(verify_log), " >/dev/null 2>&1")))
+  when ev_ok != 0 { give ddc_fail("verify overclaimed a recheck") }
+  // A lying receipt: report says match, stage2 is not the anchor.
+  hold bad_stage2 = run_command(concat("cp ", concat(ddc_quote(fixture), concat(" ", ddc_quote(concat(evidence, "/stage2"))))))
+  when bad_stage2 != 0 { give ddc_fail("cannot corrupt evidence fixture stage2") }
+  when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), " >/dev/null 2>&1")))) != 2 { give ddc_fail("stage2 corruption accepted by verify") }
+  // A receipt whose own reference record disagrees with it.
+  hold zero_ref = ddc_write(concat(evidence, "/reference.sha256"), "0000000000000000000000000000000000000000000000000000000000000000")
+  when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), " >/dev/null 2>&1")))) != 2 { give ddc_fail("reference record mismatch accepted by verify") }
+  hold fixed_ref = ddc_write(concat(evidence, "/reference.sha256"), fixture_hash)
+  // A receipt for another source tree.
+  when run_command(concat("cp ", concat(ddc_quote(stage2_good), concat(" ", ddc_quote(concat(evidence, "/stage2")))))) != 0 { give ddc_fail("cannot restore evidence fixture stage2") }
+  hold wrong_tree = concat("CONDITIONAL_DDC_MATCH\nReference SHA-256: ", fixture_hash)
+  wrong_tree = concat(wrong_tree, concat("\nReview SHA-256: ", ev_review))
+  wrong_tree = concat(wrong_tree, "\nNative manifest SHA-256: 0000000000000000000000000000000000000000000000000000000000000000")
+  wrong_tree = concat(wrong_tree, concat("\nEntry manifest SHA-256: ", ev_entry))
+  hold ww = ddc_write(concat(evidence, "/report.txt"), wrong_tree)
+  when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), " >/dev/null 2>&1")))) != 2 { give ddc_fail("foreign manifest receipt accepted") }
+  // A failed or incomplete receipt is never a conditional match.
+  ww = ddc_write(concat(evidence, "/report.txt"), "INCOMPLETE\nNo independent proof established.\n")
+  when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), " >/dev/null 2>&1")))) != 2 { give ddc_fail("incomplete receipt accepted by verify") }
+  ww = ddc_write(concat(evidence, "/report.txt"), receipt)
+  // A changed review after the receipt.
+  hold tampered = run_command(concat("printf 'edited after the receipt\\n' >> ", ddc_quote(concat(evidence, "/review.txt"))))
+  when tampered != 0 { give ddc_fail("cannot tamper with evidence fixture review") }
+  when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), " >/dev/null 2>&1")))) != 2 { give ddc_fail("review tampering accepted by verify") }
+  ww = ddc_write(concat(evidence, "/review.txt"), "SYNTHETIC SELF-TEST FIXTURE: not a review and not a DDC run.\n")
+  // A missing artifact.
+  hold gone = run_command(concat("rm -f ", ddc_quote(concat(evidence, "/entry"))))
+  when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), " >/dev/null 2>&1")))) != 2 { give ddc_fail("incomplete evidence accepted by verify") }
+  hold back = run_command(concat("cp ", concat(ddc_quote("sx"), concat(" ", ddc_quote(concat(evidence, "/entry"))))))
+  // A live reference file that is not the reference the receipt names.
+  hold other = concat(work, "/other-reference")
+  hold wother = ddc_write(other, "different bytes\n")
+  when run_command(concat(ddc_quote(binary), concat(" verify ", concat(ddc_quote(evidence), concat(" ", concat(ddc_quote(other), " >/dev/null 2>&1")))))) != 2 { give ddc_fail("live reference mismatch accepted by verify") }
+  hold cleaned = run_command(concat("rm -rf ", ddc_quote(evidence)))
+  when cleaned != 0 { give ddc_fail("cannot remove the self-test evidence fixture") }
+  show "[OK] DDC harness controls only: equality, corruption, missing artifact, circular input, child failure, stage2 mismatch, bad digest, evidence preservation and eight returned-evidence recheck controls; NO independent compiler tested"
   give 0
 }
 hold command = arg(1)
@@ -153,10 +324,16 @@ when string_eq(command, "run") && arg_count() == 6 {
   hold result = ddc_run(arg(2), arg(3), arg(4), arg(5))
   hold stopped = exit(result)
 }
+when string_eq(command, "verify") && (arg_count() == 3 || arg_count() == 4) {
+  hold live = ""
+  when arg_count() == 4 { live = arg(3) }
+  hold result = ddc_verify(arg(2), live)
+  hold stopped = exit(result)
+}
 when string_eq(command, "self-test") && arg_count() == 2 {
   hold result = ddc_self_test(arg(0))
   hold stopped = exit(result)
 }
-show "usage: sxddc run REFERENCE REVIEWED_SHA256 REVIEW_FILE NEW_WORKDIR | self-test"
+show "usage: sxddc run REFERENCE REVIEWED_SHA256 REVIEW_FILE NEW_WORKDIR | verify EVIDENCE_DIR [REFERENCE] | self-test"
 show "No independent reference is bundled. Anchor-built driver self-tests are NOT a source-trust proof."
 hold stopped = exit(2)

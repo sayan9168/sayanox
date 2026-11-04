@@ -1,0 +1,331 @@
+// tools/sxrelease_identity_test.sa -- Release publication identity gate.
+//
+// A published release must name the commit the acceptance gates tested. This
+// suite proves that contract without publishing anything:
+//
+//   * pure decisions: checkout/dispatch/tag disagreement, moved tag, missing
+//     remote observation, short or uppercase object names;
+//   * pure command text: the archive is cut from the resolved commit id (never
+//     the symbolic HEAD), a new tag is bound with `--target <tested commit>`,
+//     an existing or pushed tag is only ever verified (`--verify-tag`), and
+//     neither flag is emitted together;
+//   * the `git ls-remote` parser: plain tags, annotated (peeled) tags, and
+//     same-prefix decoy refs that must be ignored;
+//   * real executions of `./sx release-identity` against a recording mock
+//     `git`/`gh` private PATH: success, dispatch mismatch, tag mismatch,
+//     annotated tag, tag-push event, unreadable remote (fails closed),
+//     unresolvable HEAD, and the guarantee that the identity audit never runs
+//     `gh` and never emits an archive or publish command on failure.
+//
+// The mock binary is this file itself: a copy installed as `git` or `gh` on the
+// private PATH dispatches on argv[0] and records every invocation. There is no
+// POSIX shell test script and no host byte tool.
+//
+// Run from the repository root: ./tools/sxrelease_identity_test [work_dir]
+
+use "tools/sxgate_lib.sa"
+use "tools/sxport_lib.sa"
+use "tools/sxrelease_identity_lib.sa"
+
+// ---- mock host binaries ----------------------------------------------------
+
+make ri_basename(path: str) -> str {
+  hold n = len(path)
+  hold last = 0
+  hold i = 0
+  while i < n {
+    when sx_index(path, i) == 47 { last = i + 1 }
+    i = i + 1
+  }
+  give gl_slice(path, last, n)
+}
+
+make ri_record(file: str, tool: str) -> num {
+  when len(file) == 0 { give 0 }
+  hold line = tool
+  hold i = 1
+  while i < arg_count() {
+    line = concat(line, concat(" ", arg(i)))
+    i = i + 1
+  }
+  hold previous = ""
+  when path_kind(file) == 1 { previous = read_file(file) }
+  hold written = write_file(file, concat(previous, concat(line, "\n")))
+  give 0
+}
+
+make ri_mock_git() -> num {
+  hold recorded = ri_record(getenv("MOCK_GIT_LOG"), "git")
+  hold first = ""
+  when arg_count() > 1 { first = arg(1) }
+  hold last = ""
+  when arg_count() > 0 { last = arg(arg_count() - 1) }
+  when string_eq(first, "rev-parse") == 1 {
+    when string_eq(getenv("MOCK_REV_PARSE"), "fail") == 1 { hold e = exit(128) }
+    when rl_find(last, "refs/tags/") >= 0 {
+      hold tag_sha = getenv("MOCK_TAG_SHA")
+      when len(tag_sha) == 0 { hold f = exit(128) }
+      show tag_sha
+      hold g = exit(0)
+    }
+    hold head_sha = getenv("MOCK_HEAD_SHA")
+    when len(head_sha) == 0 { hold h = exit(128) }
+    show head_sha
+    hold k = exit(0)
+  }
+  when string_eq(first, "ls-remote") == 1 {
+    when string_eq(getenv("MOCK_LS_REMOTE"), "fail") == 1 { hold e = exit(128) }
+    hold sha = getenv("MOCK_REMOTE_SHA")
+    hold peeled = getenv("MOCK_REMOTE_PEELED")
+    when len(sha) > 0 {
+      show concat(sha, concat(chr(9), last))
+      // A same-prefix ref must never be mistaken for the release tag.
+      show concat(sha, concat(chr(9), concat(last, "-decoy")))
+    }
+    when len(peeled) > 0 { show concat(peeled, concat(chr(9), concat(last, "^{}"))) }
+    hold m = exit(0)
+  }
+  hold n = exit(0)
+  give 0
+}
+
+make ri_mock_gh() -> num {
+  hold recorded = ri_record(getenv("MOCK_GH_LOG"), "gh")
+  hold e = exit(0)
+  give 0
+}
+
+make ri_mock_main(role: str) -> num {
+  when string_eq(role, "git") == 1 { give ri_mock_git() }
+  give ri_mock_gh()
+}
+
+// ---- driver helpers --------------------------------------------------------
+
+// Every variable is assigned explicitly, empty ones included: a CI runner
+// exports GITHUB_SHA, GITHUB_ACTIONS and GITHUB_EVENT_NAME, and an inherited
+// value would silently turn "no dispatch commit" into a mismatch case.
+make ri_env(name: str, value: str) -> str {
+  give concat(concat(name, "="), concat(gl_sh_quote(value), " "))
+}
+
+make ri_case(d: str, name: str, head: str, dispatched: str, tag: str, remote: str, peeled: str, rev: str, ls: str, event: str) -> num {
+  hold bin = path_real(concat(d, "/bin"))
+  hold log = concat(concat(d, "/logs/"), concat(name, ".log"))
+  hold git_log = concat(concat(d, "/logs/"), concat(name, ".git"))
+  hold gh_log = concat(concat(d, "/logs/"), concat(name, ".gh"))
+  hold env = concat("PATH=", concat(gl_sh_quote(bin), " "))
+  env = concat(env, ri_env("MOCK_HEAD_SHA", head))
+  env = concat(env, ri_env("MOCK_TAG_SHA", tag))
+  env = concat(env, ri_env("MOCK_REMOTE_SHA", remote))
+  env = concat(env, ri_env("MOCK_REMOTE_PEELED", peeled))
+  env = concat(env, ri_env("MOCK_REV_PARSE", rev))
+  env = concat(env, ri_env("MOCK_LS_REMOTE", ls))
+  env = concat(env, ri_env("GITHUB_SHA", dispatched))
+  env = concat(env, ri_env("GITHUB_EVENT_NAME", event))
+  env = concat(env, ri_env("GITHUB_ACTIONS", ""))
+  env = concat(env, ri_env("MOCK_GIT_LOG", git_log))
+  env = concat(env, ri_env("MOCK_GH_LOG", gh_log))
+  env = concat(env, "RELEASE_TAG='v0.3.30' ")
+  hold command = concat(env, concat("./sx release-identity > ", concat(gl_sh_quote(log), " 2>&1")))
+  give run_command(command)
+}
+
+make ri_out(d: str, name: str) -> str {
+  give read_file(concat(concat(d, "/logs/"), concat(name, ".log")))
+}
+
+make ri_has(d: str, name: str, text: str, label: str) -> num {
+  hold text_out = ri_out(d, name)
+  when rl_find(text_out, text) < 0 {
+    show concat("--- output of case ", name)
+    show text_out
+    hold f = gl_fail(concat(label, concat(": missing text: ", text)))
+  }
+  give 0
+}
+
+make ri_lacks(d: str, name: str, text: str, label: str) -> num {
+  hold text_out = ri_out(d, name)
+  when rl_find(text_out, text) >= 0 {
+    show concat("--- output of case ", name)
+    show text_out
+    hold f = gl_fail(concat(label, concat(": unexpected text: ", text)))
+  }
+  give 0
+}
+
+make ri_calls(file: str) -> num {
+  hold text = ""
+  when path_kind(file) == 1 { text = read_file(file) }
+  hold count = 0
+  hold i = 0
+  while i < len(text) {
+    when sx_index(text, i) == 10 { count = count + 1 }
+    i = i + 1
+  }
+  give count
+}
+
+// ---- pure contract ---------------------------------------------------------
+
+make ri_pure(d: str) -> num {
+  hold a = "1111111111111111111111111111111111111111"
+  hold b = "2222222222222222222222222222222222222222"
+  hold short = "111111111111111111111111111111111111111"
+  hold upper = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+  // 1. agreement is silent; every disagreement is named and never accepted.
+  hold ok = gl_assert_eq_str(rl_identity_problem(a, a, ""), "", "checkout and dispatch agree")
+  hold ok_tag = gl_assert_eq_str(rl_identity_problem(a, a, a), "", "existing tag names the tested commit")
+  hold queued = gl_assert_eq_str(rl_identity_problem(a, "", ""), "", "dispatch context is optional")
+  hold dispatch = gl_assert_eq_str(rl_identity_problem(a, b, ""), "checkout commit 1111111111111111111111111111111111111111 is not the dispatched commit 2222222222222222222222222222222222222222", "dispatch mismatch is refused")
+  hold tag = gl_assert_eq_str(rl_identity_problem(a, a, b), "tag commit 2222222222222222222222222222222222222222 is not the tested commit 1111111111111111111111111111111111111111", "tag mismatch is refused")
+  hold short_id = gl_assert_eq_str(rl_identity_problem(short, "", ""), "tested commit is not a full 40-character commit id", "abbreviated commit id is refused")
+  hold upper_id = gl_assert_eq_str(rl_identity_problem(upper, "", ""), "tested commit is not a full 40-character commit id", "uppercase commit id is refused")
+  hold bad_dispatch = gl_assert_eq_str(rl_identity_problem(a, short, ""), "dispatched commit is not a full 40-character commit id", "abbreviated dispatch commit is refused")
+  hold bad_tag = gl_assert_eq_str(rl_identity_problem(a, a, short), "existing tag commit is not a full 40-character commit id", "abbreviated tag commit is refused")
+
+  // 2. the published tag is re-checked after publication, so a moved tag fails.
+  hold published = gl_assert_eq_str(rl_published_problem("v0.3.30", a, a), "", "published tag still names the tested commit")
+  hold moved = gl_assert_eq_str(rl_published_problem("v0.3.30", a, b), "published tag v0.3.30 points at 2222222222222222222222222222222222222222, not the tested commit 1111111111111111111111111111111111111111", "moved tag is refused after publication")
+  hold absent = gl_assert_eq_str(rl_published_problem("v0.3.30", a, ""), "published tag v0.3.30 has no readable remote commit", "unreadable published tag is refused")
+  hold garbage = gl_assert_eq_str(rl_published_problem("v0.3.30", a, "not-a-commit"), "published tag v0.3.30 does not name a full commit id", "invalid published tag object is refused")
+
+  // 3. the archive is cut from the resolved id, never from the symbolic HEAD.
+  hold archive = rl_archive_command("v0.3.30", a)
+  hold archive_exact = gl_assert_eq_str(archive, "git archive --format=tar.gz --prefix='sayanox-v0.3.30/' -o 'dist/sayanox-v0.3.30-src.tar.gz' '1111111111111111111111111111111111111111'", "archive command names the tested commit")
+  hold no_head = gl_assert_eq_num(rl_find(archive, "HEAD"), 0 - 1, "archive command never uses symbolic HEAD")
+
+  // 4. a new tag is bound with --target; an existing or pushed tag is only
+  //    verified; the two flags are never emitted together.
+  hold new_tag = rl_publish_command("v0.3.30", a, 0, 0)
+  hold target = gl_assert_eq_num(rl_find(new_tag, concat("--target '", concat(a, "'"))) > 0, 1, "new tag is bound to the tested commit")
+  hold no_verify = gl_assert_eq_num(rl_find(new_tag, "--verify-tag"), 0 - 1, "new tag is not claimed to exist")
+  hold existing = rl_publish_command("v0.3.30", a, 1, 0)
+  hold verified = gl_assert_eq_num(rl_find(existing, "--verify-tag") > 0, 1, "existing tag is verified, not re-created")
+  hold no_target = gl_assert_eq_num(rl_find(existing, "--target"), 0 - 1, "existing tag is not re-pointed")
+  hold pushed = rl_publish_command("v0.3.30", a, 1, 1)
+  hold pushed_verify = gl_assert_eq_num(rl_find(pushed, "--verify-tag") > 0, 1, "tag-push event verifies the pushed tag")
+  hold assets = gl_assert_eq_num(rl_find(new_tag, "dist/fixed-point.sha256 dist/gen3.c dist/gen4.c dist/BUILD_INFO.md") > 0, 1, "release assets are unchanged")
+
+  // 5. BUILD_INFO records the tested commit, so the archive is traceable.
+  hold notes = rl_build_info("v0.3.30", a, 0, "sum  gen2.c\n")
+  hold notes_commit = gl_assert_eq_num(rl_find(notes, concat("Tested commit: ", a)) > 0, 1, "build info names the tested commit")
+  hold notes_tag = gl_assert_eq_num(rl_find(notes, "Tag: created at the tested commit") > 0, 1, "build info states how the tag was bound")
+
+  // 6. the remote tag listing parser: plain, annotated, decoy and malformed.
+  hold a_ref = "refs/tags/v0.3.30"
+  hold plain = concat(a, concat(chr(9), a_ref))
+  hold plain_parse = gl_assert_eq_str(rl_remote_tag_commit("v0.3.30", plain), a, "lightweight tag parses")
+  hold annotated = concat(concat(b, concat(chr(9), a_ref)), concat(chr(10), concat(concat(a, concat(chr(9), a_ref)), "^{}")))
+  hold peeled_parse = gl_assert_eq_str(rl_remote_tag_commit("v0.3.30", annotated), a, "annotated tag parses to its peeled commit")
+  hold decoy = concat(concat(b, concat(chr(9), concat(a_ref, "-decoy"))), concat(chr(10), concat(a, concat(chr(9), concat(a_ref, "^{}")))))
+  hold decoy_parse = gl_assert_eq_str(rl_remote_tag_commit("v0.3.30", decoy), a, "sibling tag is ignored")
+  hold unrelated = concat(b, concat(chr(9), "refs/tags/v9.9.9"))
+  hold absent_parse = gl_assert_eq_str(rl_remote_tag_commit("v0.3.30", unrelated), "", "absent tag parses as absent")
+  hold empty_parse = gl_assert_eq_str(rl_remote_tag_commit("v0.3.30", ""), "", "empty listing parses as absent")
+  give 0
+}
+
+// ---- release driver wiring -------------------------------------------------
+
+make ri_wiring(d: str) -> num {
+  hold driver = read_file("tools/sxrelease_lib.sa")
+  hold lib = read_file("tools/sxrelease_identity_lib.sa")
+  hold acceptance = rl_find(driver, "hold acceptance = cmd_ci()")
+  hold publish = rl_find(driver, "target_run(rl_publish_command(")
+  hold archive = rl_find(driver, "target_run(rl_archive_command(")
+  hold identity = rl_find(driver, "rl_identity_problem(tested, getenv(\"GITHUB_SHA\"), existing)")
+  hold gated = gl_assert_eq_num(acceptance >= 0 && publish > acceptance, 1, "acceptance precedes publication")
+  hold identified = gl_assert_eq_num(identity >= 0 && archive > identity && publish > archive, 1, "identity check precedes packaging and publication")
+  hold from_commit = gl_assert_eq_num(rl_find(driver, "rl_archive_command(tag, tested)") > archive, 1, "archive input is the resolved commit")
+  // The command text lives in the identity module, not in the driver.
+  hold moved = gl_assert_eq_num(rl_find(driver, "git archive --format"), 0 - 1, "driver does not build archive argv inline")
+  hold gh = gl_assert_eq_num(rl_find(driver, "gh release create "), 0 - 1, "driver does not build publish argv inline")
+  hold builder = gl_assert_eq_num(rl_find(lib, "gh release create ") > 0, 1, "publish argv is built in the identity module")
+  hold requery = gl_assert_eq_num(rl_find(driver, "rl_published_problem(tag, tested, observed)") > 0, 1, "publication is verified after the fact")
+  hold no_head = gl_assert_eq_num(rl_find(driver, "\" HEAD\")"), 0 - 1, "driver never appends symbolic HEAD to a command")
+  give 0
+}
+
+// ---- real executions -------------------------------------------------------
+
+make ri_execute(d: str) -> num {
+  hold a = "1111111111111111111111111111111111111111"
+  hold b = "2222222222222222222222222222222222222222"
+
+  // Clean, new tag: the tag is created at the tested commit and gh is untouched.
+  hold rc0 = gl_assert_eq_num(ri_case(d, "new_tag", a, a, "", "", "", "", "", ""), 0, "new tag passes identity")
+  hold seen = ri_has(d, "new_tag", concat("Tested commit: ", a), "new tag")
+  hold none = ri_has(d, "new_tag", "Existing tag commit: none", "new tag")
+  hold bound = ri_has(d, "new_tag", concat("--target '", concat(a, "'")), "new tag")
+  hold queries = gl_assert_eq_num(ri_calls(concat(d, "/logs/new_tag.git")), 2, "identity audit runs one rev-parse and one ls-remote")
+  hold git_calls = ri_has(d, "new_tag", "Archive command:", "new tag")
+  hold no_gh = gl_assert_eq_num(path_kind(concat(d, "/logs/new_tag.gh")), 0, "identity audit never runs gh")
+
+  // Dispatch mismatch: fail closed, and print no archive/publish command.
+  hold rc1 = gl_assert_eq_num(ri_case(d, "dispatch_mismatch", a, b, "", "", "", "", "", ""), 1, "dispatch mismatch fails")
+  hold dispatch = ri_has(d, "dispatch_mismatch", "is not the dispatched commit 2222222222222222222222222222222222222222", "dispatch mismatch")
+  hold no_archive = ri_lacks(d, "dispatch_mismatch", "Archive command:", "dispatch mismatch")
+  hold no_publish = ri_lacks(d, "dispatch_mismatch", "Publish command:", "dispatch mismatch")
+
+  // Existing tag on another commit: fail closed before packaging.
+  hold rc2 = gl_assert_eq_num(ri_case(d, "tag_mismatch", a, a, "", b, "", "", "", ""), 1, "tag mismatch fails")
+  hold tag = ri_has(d, "tag_mismatch", "is not the tested commit 1111111111111111111111111111111111111111", "tag mismatch")
+  hold no_archive2 = ri_lacks(d, "tag_mismatch", "Archive command:", "tag mismatch")
+
+  // Existing tag on the tested commit: verified, never re-pointed.
+  hold rc3 = gl_assert_eq_num(ri_case(d, "tag_matches", a, a, "", a, "", "", "", ""), 0, "matching tag passes identity")
+  hold verify = ri_has(d, "tag_matches", "--verify-tag", "matching tag")
+  hold existing = ri_has(d, "tag_matches", concat("Existing tag commit: ", a), "matching tag")
+  hold no_target = ri_lacks(d, "tag_matches", "--target", "matching tag")
+
+  // An annotated tag lists the tag object and the peeled commit; the commit wins.
+  hold rc4 = gl_assert_eq_num(ri_case(d, "annotated_tag", a, a, "", b, a, "", "", ""), 0, "annotated tag resolves to the tested commit")
+  hold peeled = ri_has(d, "annotated_tag", concat("Existing tag commit: ", a), "annotated tag")
+
+  // A tag-push event names the tag that triggered the run: verify, do not create.
+  hold rc5 = gl_assert_eq_num(ri_case(d, "tag_push", a, a, "", a, "", "", "", "push"), 0, "tag-push event passes identity")
+  hold push_verify = ri_has(d, "tag_push", "--verify-tag", "tag-push event")
+  hold push_target = ri_lacks(d, "tag_push", "--target", "tag-push event")
+
+  // An unreadable remote is not an absent tag: fail, do not create the tag.
+  hold rc6 = gl_assert_eq_num(ri_case(d, "remote_unreadable", a, a, "", "", "", "", "fail", ""), 1, "unreadable remote fails closed")
+  hold unreadable = ri_has(d, "remote_unreadable", "cannot read remote tag state for v0.3.30", "unreadable remote")
+  hold no_archive3 = ri_lacks(d, "remote_unreadable", "Archive command:", "unreadable remote")
+
+  // HEAD itself unresolvable: the release has no tested commit to name.
+  hold rc7 = gl_assert_eq_num(ri_case(d, "head_unresolved", "", "", "", "", "", "fail", "", ""), 1, "unresolvable HEAD fails")
+  hold head = ri_has(d, "head_unresolved", "tested commit is not a full 40-character commit id", "unresolvable HEAD")
+  hold no_ls = gl_assert_eq_num(path_kind(concat(d, "/logs/head_unresolved.git")) == 1, 1, "HEAD resolution was attempted")
+  hold two_lines = gl_assert_eq_num(ri_calls(concat(d, "/logs/head_unresolved.git")), 1, "no remote query after an unresolvable HEAD")
+
+  // No tag: the previous release code published from HEAD with no --target.
+  hold empty_tag_rc = gl_assert_eq_num(ri_case(d, "no_ci_tag", a, "", "", "", "", "", "", ""), 0, "no dispatch commit passes identity")
+  hold no_dispatch_line = ri_lacks(d, "no_ci_tag", "Dispatched commit:", "no dispatch commit")
+  give 0
+}
+
+// ---- entry -----------------------------------------------------------------
+
+hold role = ""
+when arg_count() > 0 { role = ri_basename(arg(0)) }
+when string_eq(role, "git") == 1 || string_eq(role, "gh") == 1 {
+  hold served = ri_mock_main(role)
+} otherwise {
+  hold d = "selfhost/seed_tests/release_identity_gate"
+  when arg_count() > 1 { d = arg(1) }
+  hold clean = gl_clean_dir(d)
+  hold bindir = gl_ensure_dir(concat(d, "/bin"))
+  hold logdir = gl_ensure_dir(concat(d, "/logs"))
+  hold self = path_real(arg(0))
+  when len(self) == 0 { hold f = gl_fail("cannot resolve the test binary path") }
+  hold cp_git = run_command(concat("cp ", concat(gl_sh_quote(self), concat(" ", gl_sh_quote(concat(concat(d, "/bin"), "/git"))))))
+  hold cp_gh = run_command(concat("cp ", concat(gl_sh_quote(self), concat(" ", gl_sh_quote(concat(concat(d, "/bin"), "/gh"))))))
+  when cp_git != 0 || cp_gh != 0 { hold f2 = gl_fail("cannot install mock host binaries") }
+  hold pure = ri_pure(d)
+  hold wiring = ri_wiring(d)
+  hold executed = ri_execute(d)
+  show "RELEASE-IDENTITY-OK"
+}

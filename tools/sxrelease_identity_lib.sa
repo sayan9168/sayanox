@@ -1,0 +1,245 @@
+// Release publication identity.
+//
+// A release must describe the commit the acceptance gates actually tested, not
+// whatever the dispatch checkout happened to contain, and a tag that already
+// exists must already name that commit. This module owns the decisions and the
+// exact command text; `git` and `gh` remain leaf host boundaries. No token is
+// read, stored, printed or interpolated here.
+//
+// The decision helpers (`rl_identity_problem`, `rl_published_problem`), the
+// command builders and the `git ls-remote` parser are pure: they take strings
+// and numbers, never run a process, and are tested directly by
+// tools/sxrelease_identity_test.sa. Only `rl_commit_at` and
+// `rl_remote_tag_query` execute a host command, and each writes its answer to
+// a caller-named log so the parse stays testable.
+//
+// Self-contained on purpose: this file uses Sayanox builtins plus the helpers
+// below, so it can be included by the native entry (tools/sxbuild.sa) and by a
+// standalone Sayanox test binary that does not define the driver's helpers.
+
+make rl_slice(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  when a < 0 { a = 0 }
+  when b > n { b = n }
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make rl_is_space(c: num) -> num {
+  when c == 32 || c == 9 || c == 10 || c == 13 { give 1 }
+  give 0
+}
+
+make rl_trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  hold b = n
+  while a < b && rl_is_space(sx_index(s, a)) == 1 { a = a + 1 }
+  while b > a && rl_is_space(sx_index(s, b - 1)) == 1 { b = b - 1 }
+  give rl_slice(s, a, b)
+}
+
+// POSIX single-quote quoting, so a tag can never become a second shell word.
+make rl_quote(s: str) -> str {
+  hold sq = chr(39)
+  hold escaped = concat(sq, concat(chr(92), concat(sq, sq)))
+  hold out = sq
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 39 {
+      out = concat(out, escaped)
+    } otherwise {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give concat(out, sq)
+}
+
+// The first offset of `part` in `text`, or -1.
+make rl_find(text: str, part: str) -> num {
+  hold n = len(text)
+  hold m = len(part)
+  when m == 0 { give 0 }
+  when m > n { give 0 - 1 }
+  hold i = 0
+  while i + m <= n {
+    hold j = 0
+    while j < m && sx_index(text, i + j) == sx_index(part, j) { j = j + 1 }
+    when j == m { give i }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+// A full 40-character lowercase hexadecimal object name. Short names,
+// uppercase, whitespace and abbreviated output are rejected: a release tag
+// must not be bound to an ambiguous object name.
+make rl_hex40(s: str) -> str {
+  when len(s) != 40 { give "not a full 40-character commit id" }
+  hold i = 0
+  while i < 40 {
+    hold c = sx_index(s, i)
+    hold digit = c >= 48 && c <= 57
+    hold letter = c >= 97 && c <= 102
+    when digit == 0 && letter == 0 { give "not a full 40-character commit id" }
+    i = i + 1
+  }
+  give ""
+}
+
+// "" when the checked-out commit may be released under this tag, otherwise the
+// reason it may not. `tag_commit` is the commit a remote tag already names, or
+// "" when the tag does not exist yet and will be created at `head`.
+make rl_identity_problem(head: str, dispatched: str, tag_commit: str) -> str {
+  hold bad_head = rl_hex40(head)
+  when len(bad_head) > 0 {
+    give concat("tested commit is ", bad_head)
+  }
+  when len(dispatched) > 0 {
+    hold bad_dispatch = rl_hex40(dispatched)
+    when len(bad_dispatch) > 0 {
+      give concat("dispatched commit is ", bad_dispatch)
+    }
+    when string_eq(dispatched, head) == 0 {
+      give concat("checkout commit ", concat(head, concat(" is not the dispatched commit ", dispatched)))
+    }
+  }
+  when len(tag_commit) > 0 {
+    hold bad_tag = rl_hex40(tag_commit)
+    when len(bad_tag) > 0 {
+      give concat("existing tag commit is ", bad_tag)
+    }
+    when string_eq(tag_commit, head) == 0 {
+      give concat("tag commit ", concat(tag_commit, concat(" is not the tested commit ", head)))
+    }
+  }
+  give ""
+}
+
+// "" when the published tag still names the tested commit, otherwise the
+// reason `gh release create` may have published something else (a moved tag, a
+// tag on another branch, or a tag whose commit cannot be read).
+make rl_published_problem(tag: str, tested: str, observed: str) -> str {
+  hold bad_tested = rl_hex40(tested)
+  when len(bad_tested) > 0 {
+    give concat("tested commit is ", bad_tested)
+  }
+  when len(observed) == 0 {
+    give concat("published tag ", concat(tag, " has no readable remote commit"))
+  }
+  hold bad_observed = rl_hex40(observed)
+  when len(bad_observed) > 0 {
+    give concat("published tag ", concat(tag, " does not name a full commit id"))
+  }
+  when string_eq(observed, tested) == 0 {
+    give concat("published tag ", concat(tag, concat(" points at ", concat(observed, concat(", not the tested commit ", tested)))))
+  }
+  give ""
+}
+
+// The archive is made from the resolved commit id, never from the symbolic
+// `HEAD`, so a checkout that moves between acceptance and packaging cannot
+// change what is published.
+make rl_archive_command(tag: str, commit: str) -> str {
+  hold archive = concat("dist/sayanox-", concat(tag, "-src.tar.gz"))
+  hold prefix = concat("sayanox-", concat(tag, "/"))
+  hold command = concat("git archive --format=tar.gz --prefix=", rl_quote(prefix))
+  command = concat(command, concat(" -o ", rl_quote(archive)))
+  give concat(command, concat(" ", rl_quote(commit)))
+}
+
+// `--target` binds a tag that does not exist yet to the tested commit; a tag
+// that already exists must instead be verified, and `--verify-tag` never
+// re-creates it. Both are refused together because gh rejects the pair.
+make rl_publish_command(tag: str, commit: str, tag_exists: num, tag_event: num) -> str {
+  hold archive = concat("dist/sayanox-", concat(tag, "-src.tar.gz"))
+  hold command = concat("gh release create ", rl_quote(tag))
+  command = concat(command, concat(" ", rl_quote(archive)))
+  command = concat(command, " dist/fixed-point.sha256 dist/gen3.c dist/gen4.c dist/BUILD_INFO.md")
+  command = concat(command, concat(" --title ", rl_quote(concat("Sayanox ", tag))))
+  command = concat(command, " --notes-file dist/BUILD_INFO.md")
+  when tag_exists == 0 {
+    command = concat(command, concat(" --target ", rl_quote(commit)))
+  }
+  when tag_exists == 1 || tag_event == 1 {
+    command = concat(command, " --verify-tag")
+  }
+  give command
+}
+
+// The commit a `git ls-remote --tags origin refs/tags/<tag>` listing names, or
+// "" when the listing has no such tag. An annotated tag prints both the tag
+// object and the peeled `^{}` line; the peeled line is the commit. Lines for
+// other refs (for example a same-prefix tag) are ignored.
+make rl_remote_tag_commit(tag: str, listing: str) -> str {
+  hold want = concat("refs/tags/", tag)
+  hold peeled = concat(want, "^{}")
+  hold plain = ""
+  hold commit = ""
+  hold pos = 0
+  hold n = len(listing)
+  while pos < n {
+    hold start = pos
+    while pos < n && sx_index(listing, pos) != 10 { pos = pos + 1 }
+    hold line = rl_trim(rl_slice(listing, start, pos))
+    pos = pos + 1
+    when len(line) > 41 {
+      hold sha = rl_slice(line, 0, 40)
+      hold ref = rl_trim(rl_slice(line, 40, len(line)))
+      when len(rl_hex40(sha)) == 0 {
+        when string_eq(ref, want) == 1 { plain = sha }
+        when string_eq(ref, peeled) == 1 { commit = sha }
+      }
+    }
+  }
+  when len(commit) > 0 { give commit }
+  give plain
+}
+
+// Run `git ls-remote --tags origin refs/tags/<tag>`; 0 means the listing in
+// `log` is authoritative (an absent tag is an empty listing). A nonzero status
+// must fail the release: an unreadable remote is not an absent tag.
+make rl_remote_tag_query(tag: str, log: str) -> num {
+  hold pattern = concat("refs/tags/", tag)
+  hold command = concat("LC_ALL=C GIT_TERMINAL_PROMPT=0 git ls-remote --tags origin ", rl_quote(pattern))
+  command = concat(command, concat(" > ", rl_quote(log)))
+  command = concat(command, " 2>/dev/null")
+  give run_command(command)
+}
+
+// Resolve `ref` to a full commit id through git, or "" when it does not exist.
+// The trace goes to `log` for evidence and for the failure diagnostic.
+make rl_commit_at(ref: str, log: str) -> str {
+  hold name = concat(ref, "^{commit}")
+  hold command = concat("LC_ALL=C GIT_TERMINAL_PROMPT=0 git rev-parse --verify ", rl_quote(name))
+  command = concat(command, concat(" > ", rl_quote(log)))
+  command = concat(command, " 2>/dev/null")
+  when run_command(command) != 0 { give "" }
+  hold text = rl_trim(read_file(log))
+  when len(rl_hex40(text)) > 0 { give "" }
+  give text
+}
+
+// BUILD_INFO names the identity the release was cut from, so a published
+// archive can be traced back to the acceptance run.
+make rl_build_info(tag: str, commit: str, tag_exists: num, sums: str) -> str {
+  hold notes = concat("# Sayanox ", concat(tag, "\n\n"))
+  notes = concat(notes, "Built from a clean tracked tree through the Sayanox release driver.\n")
+  notes = concat(notes, "Complete baseline migration and all original hard gates passed.\n")
+  notes = concat(notes, concat("Tested commit: ", concat(commit, "\n")))
+  when tag_exists == 1 {
+    notes = concat(notes, "Tag: existing, verified to name the tested commit\n")
+  } otherwise {
+    notes = concat(notes, "Tag: created at the tested commit (--target)\n")
+  }
+  notes = concat(notes, "The fixed point is byte-identical: gen3.c == gen4.c.\n\n```\n")
+  give concat(notes, concat(sums, "```\n"))
+}

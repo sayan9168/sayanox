@@ -18,7 +18,7 @@ Implementation families:
 - `sxpattern_lib.sa`: the pattern subset required by the gates, rather than grep-based assertion orchestration. Not a general POSIX regex implementation.
 - `sxlimit_lib.sa`: a small emitted Linux x86-64 kernel binding for resource limits and exec; no shell `ulimit` recipe.
 - `sxnet_io_lib.sa`, `sxnet_server.sa`, `sxnet_curl.sa`, `sxnet_test.sa`: bounded native socket binding, real HTTP fixture server/client and network assertions. HTTP policy is in Sayanox; the emitted machine code is the syscall binding. No Python fixture server or skip-on-missing-Python path remains.
-- `sxci_guard_lib.sa`, `sxentry_lib.sa`, `sxrelease_lib.sa`: guarded CI, entry rebuild verification and release planning/orchestration.
+- `sxci_guard_lib.sa`, `sxentry_lib.sa`, `sxrelease_lib.sa`, `sxrelease_identity_lib.sa`: guarded CI, entry rebuild verification, release planning/orchestration and tested-commit publication identity.
 - `sxclean_lib.sa`: explicit generated-output allowlist; preserves sources, root `sx` and unrelated files, and refuses a directory where an output file was expected.
 
 ## Commands

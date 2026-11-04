@@ -19,7 +19,7 @@ make rt_lsp_client(name: str) -> str {
 make rt_known(name: str) -> num {
   when string_eq(name, "test-driver") == 1 { give 1 }
   when len(rt_suite(name)) > 0 || len(rt_lsp_client(name)) > 0 { give 1 }
-  when string_eq(name, "test-native-stage2-parity") == 1 || string_eq(name, "test-sxpkg-pubkey") == 1 || string_eq(name, "test-sxpkg-transfer-hardening") == 1 || string_eq(name, "test-sxc-native") == 1 || string_eq(name, "test-sxisaexec") == 1 || string_eq(name, "test-sxmod-deep") == 1 || string_eq(name, "test-lsp") == 1 || string_eq(name, "test-lsp-robust") == 1 {
+  when string_eq(name, "test-native-stage2-parity") == 1 || string_eq(name, "test-sxpkg-pubkey") == 1 || string_eq(name, "test-sxpkg-transfer-hardening") == 1 || string_eq(name, "test-sxc-native") == 1 || string_eq(name, "test-sxisaexec") == 1 || string_eq(name, "test-sxmod-deep") == 1 || string_eq(name, "test-lsp") == 1 || string_eq(name, "test-lsp-robust") == 1 || string_eq(name, "test-release-identity") == 1 {
     give 1
   }
   give 0
@@ -99,6 +99,12 @@ make rt_run(name: str, built: list) -> num {
     hold a = target_native_tool("sxpkg")
     hold b = target_native_tool("sxpkg_pubkey_test")
     give target_run("./tools/sxpkg_pubkey_test selfhost/seed_tests/sxpkg_pubkey", name)
+  }
+  when string_eq(name, "test-release-identity") == 1 {
+    hold tool = target_native_tool("sxrelease_identity_test")
+    hold folder = "selfhost/seed_tests/release_identity_gate"
+    hold dir = gl_clean_dir(folder)
+    give target_run(concat("./tools/sxrelease_identity_test ", sh_quote(folder)), name)
   }
   hold runner = "sxc_native_test"
   hold folder = "selfhost/seed_tests/sxc_native_gate"

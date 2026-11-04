@@ -1,5 +1,79 @@
 # Status
 
+**2026-11-04 (thirteenth increment) — R03: the returned DDC evidence can now be
+rechecked, and the external ask is written down.**
+
+R03 stays blocked: independence is not something this repository can create.
+What was missing around the blocker was the *check* side. Protocol step 7 said
+"independently inspect the evidence and repeat the final comparisons with
+trusted host tools", but the only checker was the anchor-built driver that
+wrote the receipt in the first place.
+
+`tools/sxddc.sa` now has `verify EVIDENCE_DIR [REFERENCE]`. It re-derives
+everything it can from the receipt's own artifacts and the pinned repository
+state: the first line must be `CONDITIONAL_DDC_MATCH`; the recorded reference
+digest must equal `reference.sha256` and, when a reference file is supplied, its
+live digest; the review digest must equal the receipt, `review.sha256` and the
+review file; the recorded native/entry manifest digests must equal the current
+pinned manifests; and `stage2`/`entry` must be byte-identical to
+`bootstrap/sxc_native.bin`/`sx` under the host's `cmp`. Missing artifacts,
+`INCOMPLETE`/`FAILED` receipts, a review edited after the receipt and a live
+reference mismatch are refused with exit 2.
+
+Eight new controls in `./tools/sxddc self-test` pin that behaviour: a synthetic
+consistent receipt passes, and a corrupted `stage2`, a reference record that
+disagrees with the receipt, a foreign manifest digest, an incomplete receipt, a
+tampered review, a missing artifact and a live-reference mismatch are each
+rejected. The synthetic fixture is deleted afterwards. These
+controls run in `./sx target test-native-bootstrap`.
+
+`docs/DDC_REFERENCE_REQUEST.md` now states exactly what an external supply must
+contain — the `T INPUT.sa OUTPUT` contract, build-chain provenance, review
+scope, digests, reviewer identity and trust assumptions — how the protocol is
+run, how the returned directory is checked, and what `verify` does *not* prove.
+A receipt can be fabricated by anyone able to write the directory; the checker
+proves byte agreement, not independence, provenance or source safety.
+
+No reference compiler exists here, none was supplied, and no run was performed.
+
+**2026-11-04 (twelfth increment) — R18: a release is bound to the tested commit,
+not to `HEAD`.**
+
+The release path had a real hole: `tools/sxrelease_lib.sa` ran acceptance, then
+packaged with `git archive ... HEAD` and called `gh release create <tag>` with no
+commit binding. A dispatched run whose checkout differed from the accepted tree
+could therefore tag the default branch, and a tag that already existed on some
+other commit was never checked at all.
+
+The identity is now resolved and checked before anything is packaged. `HEAD` is
+resolved with `git rev-parse --verify HEAD^{commit}` and must be a full
+40-character lowercase object name; when `GITHUB_SHA` is present it must be the
+same commit; the tag is read from the repository with
+`git ls-remote --tags origin refs/tags/<tag>` (an annotated tag's peeled `^{}`
+line is its commit) and, when it exists, must already name the tested commit. An
+unreadable remote fails closed instead of being treated as an absent tag. The
+archive is then cut from the resolved id, a new tag is created with `--target
+<commit>`, an existing or tag-push tag is only verified (`--verify-tag`), and the
+remote tag is re-read after publication so a moved tag fails the run.
+`dist/BUILD_INFO.md` records the tested commit.
+
+The decisions and argv live in `tools/sxrelease_identity_lib.sa`: pure functions
+(`rl_identity_problem`, `rl_published_problem`, `rl_archive_command`,
+`rl_publish_command`, `rl_remote_tag_commit`, `rl_build_info`) plus the two host
+reads, each writing to a caller-named log so the parse is testable. A new
+check-only entry, `./sx release-identity`, runs the same resolution without
+packaging, tagging or calling `gh`.
+
+New gate `./sx target test-release-identity` (39 facts) executes the pure
+decisions and argv, the `ls-remote` parser (plain, annotated, same-prefix decoy,
+absent), a source audit that the driver checks identity before packaging and
+keeps publication argv in the module, and nine real `./sx release-identity`
+sessions against a recording mock `git`/`gh` private PATH: new tag, dispatch
+mismatch, tag mismatch, matching tag, annotated tag, tag-push event, unreadable
+remote, unresolvable `HEAD`, and no dispatch commit. It also asserts the audit
+never runs `gh` and prints no archive or publish command when it fails. No
+release was published and no tag was created by this increment.
+
 **2026-11-03 (eleventh increment) — R02 step 10: a call is an operand, not only a
 whole value.**
 
