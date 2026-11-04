@@ -102,8 +102,10 @@ make ri_mock_main(role: str) -> num {
 
 // ---- driver helpers --------------------------------------------------------
 
+// Every variable is assigned explicitly, empty ones included: a CI runner
+// exports GITHUB_SHA, GITHUB_ACTIONS and GITHUB_EVENT_NAME, and an inherited
+// value would silently turn "no dispatch commit" into a mismatch case.
 make ri_env(name: str, value: str) -> str {
-  when len(value) == 0 { give "" }
   give concat(concat(name, "="), concat(gl_sh_quote(value), " "))
 }
 
