@@ -32,6 +32,21 @@ make gate_formatter(d: str) -> num {
   cmd = concat("./tools/sxfmt ", concat(gl_sh_quote(input), concat(" ", gl_sh_quote(output))))
   hold r3 = gl_assert_eq_num(run_command(cmd), 0, "formatter final-newline status")
   hold a3 = gl_assert_eq_str(read_file(output), "hold x = 7\n", "formatter final newline")
+
+  // Malformed input must fail without replacing an existing destination.
+  hold malformed_cases = "when x {\n}\n}\nshow \"unterminated\n"
+  hold case_index = 0
+  while case_index < 3 {
+    hold bad_source = "when x {\n"
+    when case_index == 1 { bad_source = "}\nshow 1\n" }
+    when case_index == 2 { bad_source = "show \"unterminated\n" }
+    hold bad_write = gl_must_write(input, bad_source)
+    hold sentinel = gl_must_write(output, "sentinel\n")
+    cmd = concat("./tools/sxfmt ", concat(gl_sh_quote(input), concat(" ", gl_sh_quote(output))))
+    hold refused = gl_assert_eq_num(run_command(cmd) != 0, 1, "malformed source refusal")
+    hold preserved = gl_assert_eq_str(read_file(output), "sentinel\n", "refusal preserves output")
+    case_index = case_index + 1
+  }
   give 0
 }
 
@@ -118,8 +133,6 @@ when nm_known(name) == 1 {
       show concat("[OK] Sayanox gate: ", name)
     }
   }
-}
-
 }
 
 }

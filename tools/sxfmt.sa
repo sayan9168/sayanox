@@ -3,7 +3,8 @@
 // The formatter is intentionally conservative: it preserves tokens and
 // comments, normalizes indentation from braces to two spaces, strips trailing
 // whitespace, and ensures a final newline. Braces inside strings and //
-// comments do not affect indentation.
+// comments do not affect indentation. It fails closed on unterminated strings
+// and structurally unbalanced braces instead of rewriting malformed input.
 
 hold argn = arg_count()
 hold t = 0
@@ -26,6 +27,7 @@ when source_len > 0 {
 hold source_len = len(source)
 hold pos = 0
 hold depth = 0
+hold malformed = 0
 hold result = ""
 hold line = ""
 
@@ -97,9 +99,11 @@ while pos < source_len {
       }
     }
 
-    // Count braces while ignoring quoted strings and // comments.
+    // Count braces while ignoring quoted strings and // comments. scan_depth
+    // also rejects a close brace that appears before its matching opener.
     hold open_count = 0
     hold close_count = 0
+    hold scan_depth = depth
     hold in_quote = 0
     hold escaped = 0
     hold in_comment = 0
@@ -132,15 +136,24 @@ while pos < source_len {
             } otherwise {
               when sc == 123 {
                 hold open_count = open_count + 1
+                hold scan_depth = scan_depth + 1
               }
               when sc == 125 {
                 hold close_count = close_count + 1
+                when scan_depth > 0 {
+                  hold scan_depth = scan_depth - 1
+                } otherwise {
+                  hold malformed = 1
+                }
               }
             }
           }
         }
         hold scan_pos = scan_pos + 1
       }
+    }
+    when in_quote == 1 {
+      hold malformed = 1
     }
 
     // Blank lines stay blank. Nonblank lines receive two spaces per level.
@@ -160,10 +173,7 @@ while pos < source_len {
     }
     hold result = concat(result, "\n")
 
-    hold depth = depth + open_count - close_count
-    when depth < 0 {
-      hold depth = 0
-    }
+    hold depth = scan_depth
     hold line = ""
   } otherwise {
     hold line = concat(line, chr(c))
@@ -171,7 +181,16 @@ while pos < source_len {
   hold pos = pos + 1
 }
 
+when depth > 0 {
+  hold malformed = 1
+}
+when malformed == 1 {
+  show "sxfmt: malformed source (unterminated string or unbalanced braces)"
+  hold e = exit(1)
+}
+
 hold written = write_file(output_path, result)
 when written == 0 {
   show "sxfmt: failed to write output"
+  hold e2 = exit(1)
 }
