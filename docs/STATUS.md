@@ -1,5 +1,69 @@
 # Status
 
+**2026-11-06 (fourteenth increment) — R10: the formatter reads tokens, not
+braces per line.**
+
+The formatter only ever counted `{` and `}` per line while skipping strings and
+`//` comments. That is enough to re-indent a well-formed file and nothing else:
+nothing checks that the file is balanced, nothing knows that `(` and `[` open
+blocks, and a stray byte is copied through into output that merely *looks*
+formatted.
+
+`tools/sxfmt_syntax_lib.sa` now scans the whole file as tokens and `sxfmt`
+gives it a mode: `sxfmt --syntax INPUT [OUTPUT]` formats, `sxfmt --check INPUT`
+writes nothing and reports. The plain `sxfmt INPUT [OUTPUT]` form is untouched,
+so the reviewed preview case in `gate_formatter` and the LSP's `format_text`
+port still describe the same rules.
+
+What the scan gives that line counting cannot:
+
+* `(`, `[` and `{` are one real bracket stack, so indentation follows every
+  kind of bracket — a continued `concat(` argument is indented, not left
+  flat — and a line that closes a block is indented where that block began.
+* closers must match the top of the stack, and the file must be balanced at
+  EOF. A stray `}`, a `]` closing a `(`, and an unclosed bracket are refusals
+  with a line diagnostic that names the line the bracket was *opened* on, not
+  the end of the file.
+* a raw newline inside a string literal is refused. Before this increment
+  `gen2` accepted it and emitted the byte verbatim, producing C that cannot
+  compile; the formatter now names it instead of copying it.
+* strings (escapes and `${...}` holes included) and `//` comments are copied
+  byte for byte; only trailing whitespace at the end of a line is dropped.
+* horizontal whitespace runs collapse to one space, spaces that cannot matter
+  are dropped, a closer is separated from a following word (`}otherwise{`
+  becomes `} otherwise {`), tabs become spaces, trailing whitespace goes, runs
+  of blank lines collapse to one and the file ends with exactly one newline.
+  No token, line break or line is added, removed or reordered, so the output
+  holds the input's token stream and means the same thing.
+
+`test-sxfmt-syntax` pins all of that and runs in CI next to `test-sxfmt`: a
+canonical oracle for a file with tabs, double spaces, trailing spaces, blank
+runs, nested blocks, `}otherwise{`, multi-line brackets, a comment holding
+`{ } "quotes"` and a string holding `${}` holes; idempotence; no line ending in
+whitespace; exactly one final newline; token preservation (every space, tab and
+line break removed, input and output are byte identical); the syntax mode
+reproducing the legacy pinned case byte for byte; eight refusals with their
+exact diagnostics; a refused file leaving its `OUTPUT` untouched; the
+`--check` 0/1/2 contract and an unknown flag as a usage error; and semantic
+parity — a fixture is formatted, both versions compiled by `gen2`, the emitted
+C compared byte for byte and both programs run against the same stdout. With
+the previous `sxfmt` binary in place the gate fails, so it is not satisfiable by
+line counting.
+
+A sweep of all 532 tracked `.sa` files refused exactly six, and every one of
+them is the repository's own deliberately malformed fixture
+(`selfhost/native32_tests/refuse/`, `selfhost/native32_tests/len_refuse/`,
+`selfhost/sxdefs_tests/refuse/`, `selfhost/sxinfer_tests/refuse/`). Every other
+tracked source, including `selfhost/compiler_min.sa`, is accepted.
+
+Honest limits. The scan is lexical, not a parse: a file whose tokens are fine is
+formatted even if the parser would reject a construct (a multi-line list
+literal, for example). Indexing a Sayanox string costs its length, so scanning is
+quadratic in the file size: about a second for a 139 KB tool source and 36
+seconds for the 773 KB `selfhost/compiler_min.sa`, which the formatter does
+accept. That limit is the runtime's, not a rule; the gate formats fixtures and
+small files.
+
 **2026-11-04 (thirteenth increment) — R03: the returned DDC evidence can now be
 rechecked, and the external ask is written down.**
 

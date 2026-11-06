@@ -15,6 +15,7 @@ use "tools/sxaudit_gates_lib.sa"
 use "tools/sxlast_language_gates_lib.sa"
 use "tools/sxisa_gates_lib.sa"
 use "tools/sxnative_acceptance_gates_lib.sa"
+use "tools/sxfmt_gate_lib.sa"
 
 make gate_formatter(d: str) -> num {
   hold input = concat(d, "/input.sa")
@@ -64,7 +65,7 @@ when string_eq(name, "native-test-body") == 1 {
   hold original_native = ng_dispatch()
   hold success = exit(0)
 }
-hold known = pg_known(name) || mp_known(name) || nm_known(name) || xr_known(name) || xb_known(name) || xq_known(name) || kp_known(name) || xf_known(name) || xi_known(name) || xa_known(name) || xl_known(name) || xc_known(name)
+hold known = fx_known(name) || pg_known(name) || mp_known(name) || nm_known(name) || xr_known(name) || xb_known(name) || xq_known(name) || kp_known(name) || xf_known(name) || xi_known(name) || xa_known(name) || xl_known(name) || xc_known(name)
 when string_eq(name, "test-sxfmt") == 1 || string_eq(name, "test-reassign") == 1 || string_eq(name, "test-while") == 1 || string_eq(name, "test-when") == 1 {
   known = 1
 }
@@ -74,6 +75,9 @@ when known == 0 {
 }
 hold dir = concat("selfhost/seed_tests/sxgates/", name)
 hold clean = gl_clean_dir(dir)
+when fx_known(name) == 1 {
+  hold formatted = fx_dispatch(name)
+} otherwise {
 when xc_known(name) == 1 {
   hold isa = xc_dispatch(name)
 } otherwise {
@@ -135,4 +139,5 @@ when nm_known(name) == 1 {
 }
 }
 
+}
 }
