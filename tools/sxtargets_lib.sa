@@ -97,7 +97,7 @@ make target_known(name: str) -> num {
   when string_eq(name, "tools") == 1 || string_eq(name, "sxfmt") == 1 || string_eq(name, "sxpkg") == 1 || string_eq(name, "seed-bin") == 1 || string_eq(name, "pack-compiler") == 1 || string_eq(name, "test-migrated") == 1 {
     give 1
   }
-  when string_eq(name, "test-sxfmt") == 1 || string_eq(name, "test-reassign") == 1 || string_eq(name, "test-while") == 1 || string_eq(name, "test-when") == 1 {
+  when string_eq(name, "test-sxfmt") == 1 || string_eq(name, "test-sxfmt-syntax") == 1 || string_eq(name, "test-reassign") == 1 || string_eq(name, "test-while") == 1 || string_eq(name, "test-when") == 1 {
     give 1
   }
   give 0
@@ -418,6 +418,12 @@ make cmd_target(name: str, built: list) -> num {
     give 0
   }
   hold runner = target_native_tool("sxgates")
+  when string_eq(name, "test-sxfmt-syntax") == 1 {
+    hold prerequisites = target_mask_ready(2, built)
+    hold fmt = target_native_tool("sxfmt")
+    hold gate = target_run("./tools/sxgates test-sxfmt-syntax", "test-sxfmt-syntax")
+    give 0
+  }
   when string_eq(name, "test-sxfmt") == 1 || string_eq(name, "test-migrated") == 1 {
     hold fmt = target_native_tool("sxfmt")
     hold gate = target_run("./tools/sxgates test-sxfmt", "test-sxfmt")

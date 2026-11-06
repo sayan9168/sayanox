@@ -1,19 +1,118 @@
 // Sayanox source formatter.
 //
-// The formatter is intentionally conservative: it preserves tokens and
-// comments, normalizes indentation from braces to two spaces, strips trailing
-// whitespace, and ensures a final newline. Braces inside strings and //
-// comments do not affect indentation.
+// Two modes:
+//
+//   sxfmt [INPUT [OUTPUT]]                 brace/whitespace formatter (legacy)
+//   sxfmt --syntax|--check INPUT [OUTPUT]  token/structure-aware formatter
+//
+// The legacy mode is unchanged: it preserves tokens and comments, normalizes
+// indentation from braces to two spaces, strips trailing whitespace and ensures
+// a final newline; braces inside strings and // comments do not affect
+// indentation.
+//
+// The syntax mode scans the whole file as tokens (tools/sxfmt_syntax_lib.sa):
+// indentation follows every bracket kind, closers must match and the file must
+// be balanced, strings and comments are copied byte for byte, horizontal
+// whitespace is normalized, and malformed source is refused with a line
+// diagnostic instead of being rewritten. `--check` writes nothing and exits 1
+// when the file is not already canonical, so a caller can gate formatting.
+
+use "tools/sxfmt_syntax_lib.sa"
+
+make fmt_usage() -> num {
+  hold w = write_file("/dev/stderr", "usage: sxfmt [--syntax|--check] INPUT [OUTPUT]\n")
+  hold e = exit(2)
+  give 0
+}
+
+make fmt_first_difference(left: str, right: str) -> num {
+  hold n = len(left)
+  when len(right) < n {
+    n = len(right)
+  }
+  hold i = 0
+  while i < n {
+    when sx_index(left, i) != sx_index(right, i) {
+      give i
+    }
+    i = i + 1
+  }
+  give n
+}
+
+make fmt_line_of(text: str, offset: num) -> num {
+  hold line = 1
+  hold i = 0
+  while i < offset && i < len(text) {
+    when sx_index(text, i) == 10 {
+      line = line + 1
+    }
+    i = i + 1
+  }
+  give line
+}
 
 hold argn = arg_count()
-hold t = 0
+hold mode = 0
+hold check = 0
+hold scan = 1
+hold flags_done = 0
+while scan < argn && flags_done == 0 {
+  hold flag = arg(scan)
+  when len(flag) > 0 && sx_index(flag, 0) == 45 {
+    when string_eq(flag, "--syntax") == 1 {
+      mode = 1
+    } otherwise {
+      when string_eq(flag, "--check") == 1 {
+        mode = 1
+        check = 1
+      } otherwise {
+        hold bad = fmt_usage()
+      }
+    }
+    scan = scan + 1
+  } otherwise {
+    flags_done = 1
+  }
+}
+
 hold input_path = "examples/hello.sa"
-when argn >= 2 {
-  hold input_path = arg(1)
+when argn > scan {
+  input_path = arg(scan)
 }
 hold output_path = input_path
-when argn >= 3 {
-  hold output_path = arg(2)
+when argn > scan + 1 {
+  output_path = arg(scan + 1)
+}
+when check == 1 && argn > scan + 1 {
+  hold stray = fmt_usage()
+}
+when mode == 1 {
+  hold source = read_file(input_path)
+  hold result = sf_format(source)
+  when sf_ok(result) == 0 {
+    hold message = concat(concat("sxfmt: ", input_path), concat(": ", sf_error(result)))
+    hold w = write_file("/dev/stderr", concat(message, "\n"))
+    hold e = exit(2)
+  }
+  hold formatted = sf_text(result)
+  when check == 1 {
+    when string_eq(formatted, source) == 1 {
+      hold ok = exit(0)
+    }
+    hold at_off = fmt_first_difference(source, formatted)
+    hold at_line = fmt_line_of(source, at_off)
+    hold message2 = concat(concat("sxfmt: ", input_path), concat(": not formatted, first difference on line ", concat(sf_istr(at_line), "\n")))
+    hold w2 = write_file("/dev/stderr", message2)
+    hold e2 = exit(1)
+  }
+  hold wrote = write_file(output_path, formatted)
+  when wrote != 1 {
+    hold message3 = concat(concat("sxfmt: cannot write ", output_path), "\n")
+    hold w3 = write_file("/dev/stderr", message3)
+    hold e3 = exit(2)
+  }
+  hold done = exit(0)
 }
 
 hold source = read_file(input_path)

@@ -1,0 +1,245 @@
+// R10 gate: the syntax-aware formatter.
+//
+// The legacy formatter (tools/sxfmt.sa default mode) counts braces per line.
+// The syntax mode (tools/sxfmt_syntax_lib.sa) scans tokens, so this gate has to
+// fail if the syntax mode ever regresses to line counting, loses a comment or a
+// string byte, accepts malformed source, or changes what a program means:
+//
+//   * a pinned canonical oracle for a file with tabs, double spaces, trailing
+//     spaces, blank runs, nested blocks, `}otherwise{`, multi-line brackets, a
+//     comment holding `{ } "quotes"` and a string holding `${}` holes;
+//   * idempotence, and no line may end in whitespace, and exactly one final
+//     newline;
+//   * token preservation: with every space and tab removed the input and the
+//     output are byte identical, so no token was added, dropped or reordered;
+//   * the syntax mode reproduces the legacy pinned case byte for byte;
+//   * malformed source is refused with a line diagnostic and the output file is
+//     left untouched;
+//   * `--check` reports 0/1/2 and an unknown flag is a usage error;
+//   * semantic preservation: a fixture is formatted, both versions are compiled
+//     with gen2, the emitted C is byte identical and the programs print the same
+//     stdout.
+use "tools/sxfmt_syntax_lib.sa"
+
+make fx_dollar() -> str {
+  give "$"
+}
+
+make fx_tab() -> str {
+  give chr(9)
+}
+
+// The oracle input. Everything the rules rewrite is here at least once.
+make fx_source() -> str {
+  hold src = "// header  comment with { } and \"quotes\"\n"
+  src = concat(src, concat(fx_tab(), "hold  name=\"Sayanox\"\n"))
+  src = concat(src, "\n\nhold n=3\nwhen n>2{\n")
+  src = concat(src, concat(concat("show \"hello ", concat(fx_dollar(), "{name}  count=")), concat(fx_dollar(), "{n}\"   \n")))
+  src = concat(src, "show  \"brace } and // slashes\"\nwhen n==3{\nshow 42\n}otherwise{\nshow 0\n}\n}\n")
+  src = concat(src, "hold xs=[1,2,\n3,4]\n")
+  src = concat(src, "show concat(\"a\",\n\"b\")\n")
+  give src
+}
+
+// The canonical form of fx_source(). A rule change has to be a deliberate edit
+// of this constant, never a silent one.
+make fx_want() -> str {
+  hold want = "// header  comment with { } and \"quotes\"\nhold name=\"Sayanox\"\n\n"
+  want = concat(want, "hold n=3\nwhen n>2 {\n")
+  want = concat(want, concat(concat("  show \"hello ", concat(fx_dollar(), "{name}  count=")), concat(fx_dollar(), "{n}\"\n")))
+  want = concat(want, "  show \"brace } and // slashes\"\n  when n==3 {\n    show 42\n  } otherwise {\n    show 0\n  }\n}\n")
+  want = concat(want, "hold xs=[1,2,\n  3,4]\n")
+  want = concat(want, "show concat(\"a\",\n  \"b\")\n")
+  give want
+}
+
+// The case the legacy gate pins. The syntax mode must agree with it byte for
+// byte, so the new mode is a superset of the reviewed behaviour.
+make fx_legacy_source() -> str {
+  give "hold x = 1  \nwhen x > 0 {  \nshow \"brace } // not comment\"\n// comment { }\nwhen x == 1 {\n  show 42   \n}\n}\n"
+}
+
+make fx_legacy_want() -> str {
+  give "hold x = 1\nwhen x > 0 {\n  show \"brace } // not comment\"\n  // comment { }\n  when x == 1 {\n    show 42\n  }\n}\n"
+}
+
+// The parity fixture: valid for gen2, badly formatted on purpose.
+make fx_parity_source() -> str {
+  hold src = "// parity: comments, strings and nesting\n"
+  src = concat(src, "make pick(a: num,b: num) -> num{\n    when a>b{\n        give a\n    }otherwise{\n        give b\n    }\n}\n")
+  src = concat(src, "hold items=[3,1,2]\nhold total=0\nhold i=0\nwhile i<len(items){\n    total=total+items[i]\n    i=i+1\n}\n")
+  src = concat(src, "show total\nshow pick(4,9)\nshow \"brackets ) ] } stay inside strings\"\n")
+  give src
+}
+
+make fx_parity_want() -> str {
+  give "6\n9\nbrackets ) ] } stay inside strings\n"
+}
+
+// Every space, tab and line break removed: equal for two texts that hold the
+// same non-whitespace bytes in the same order. Blank-line runs are collapsed on
+// purpose, so line breaks are not part of the token-preservation claim.
+make fx_squeeze(text: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when c != 32 {
+      when c != 9 {
+        when c != 10 {
+          when c != 13 {
+            out = concat(out, chr(c))
+          }
+        }
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+// Count lines that end in a space or a tab.
+make fx_trailing_ws_lines(text: str) -> num {
+  hold bad = 0
+  hold i = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when c == 10 {
+      hold prev = 0
+      when i > 0 {
+        prev = sx_index(text, i - 1)
+      }
+      when prev == 32 || prev == 9 {
+        bad = bad + 1
+      }
+    }
+    i = i + 1
+  }
+  give bad
+}
+
+make fx_format(source: str) -> str {
+  hold result = sf_format(source)
+  when sf_ok(result) == 0 {
+    hold f = gl_fail(concat("formatter refused valid source: ", sf_error(result)))
+  }
+  give sf_text(result)
+}
+
+make fx_reject(source: str, message: str, label: str) -> num {
+  hold result = sf_format(source)
+  hold ok = gl_assert_eq_num(sf_ok(result), 0, concat(label, ": refusal"))
+  give gl_assert_eq_str(sf_error(result), message, concat(label, ": diagnostic"))
+}
+
+// The pinned canonical text, and its invariants.
+make fx_oracle(d: str) -> num {
+  hold source = fx_source()
+  hold want = fx_want()
+  hold got = fx_format(source)
+  hold a = gl_assert_eq_str(got, want, "syntax formatter canonical output")
+  hold b = gl_assert_eq_str(fx_squeeze(got), fx_squeeze(source), "syntax formatter preserves every token")
+  hold c = gl_assert_eq_num(fx_trailing_ws_lines(got), 0, "syntax formatter strips trailing whitespace")
+  hold last = sx_index(got, len(got) - 1)
+  hold e = gl_assert_eq_num(last, 10, "syntax formatter ends with a newline")
+  hold before = sx_index(got, len(got) - 2)
+  hold f = gl_assert_eq_num(before != 10, 1, "syntax formatter ends with exactly one newline")
+  hold again = fx_format(got)
+  hold g = gl_assert_eq_str(again, got, "syntax formatter is idempotent")
+  hold path = concat(d, "/oracle.sa")
+  hold wrote = gl_must_write(path, source)
+  hold out = concat(d, "/oracle.out")
+  hold cmd = concat("./tools/sxfmt --syntax ", concat(gl_sh_quote(path), concat(" ", gl_sh_quote(out))))
+  hold h = gl_assert_eq_num(run_command(cmd), 0, "sxfmt --syntax status")
+  give gl_assert_eq_str(read_file(out), want, "sxfmt --syntax writes the canonical text")
+}
+
+// The reviewed legacy case, formatted by the syntax mode.
+make fx_legacy(d: str) -> num {
+  hold got = fx_format(fx_legacy_source())
+  hold a = gl_assert_eq_str(got, fx_legacy_want(), "syntax mode reproduces the pinned legacy case")
+  hold again = fx_format(got)
+  give gl_assert_eq_str(again, got, "pinned legacy case is stable")
+}
+
+// Malformed source is refused, never rewritten.
+make fx_refusals(d: str) -> num {
+  hold a = fx_reject("show \"abc\n", "line 1: unterminated string literal (a raw newline inside a string is not supported)", "raw newline in string")
+  hold b = fx_reject("show \"abc", "line 1: unterminated string literal at end of file", "string at eof")
+  hold c = fx_reject("}\n", "line 1: unexpected '}' with nothing open", "stray closer")
+  hold e = fx_reject("hold x = (1]\n", "line 1: unexpected ']' closing '(' opened on line 1", "mismatched closer")
+  hold f = fx_reject("hold x = (1\n", "line 1: unclosed '(' at end of file", "unclosed paren")
+  hold g = fx_reject("when 1 {\nshow 2\n", "line 1: unclosed '{' at end of file", "unclosed brace")
+  hold h = fx_reject("hold x = 1)\n", "line 1: unexpected ')' with nothing open", "stray paren")
+  hold i = fx_reject("hold x = [1, 2\n", "line 1: unclosed '[' at end of file", "unclosed bracket")
+  // A refused file must not be rewritten, not even truncated.
+  hold path = concat(d, "/refused.sa")
+  hold wrote = gl_must_write(path, "show \"abc\n")
+  hold out = concat(d, "/refused.out")
+  hold sentinel = gl_must_write(out, "keep me\n")
+  hold cmd = concat("./tools/sxfmt --syntax ", concat(gl_sh_quote(path), concat(" ", gl_sh_quote(out))))
+  hold j = gl_assert_eq_num(run_command(cmd), 2, "sxfmt --syntax refusal status")
+  give gl_assert_eq_str(read_file(out), "keep me\n", "a refused file leaves the output untouched")
+}
+
+// The command line contract: --check reports without writing, usage errors are
+// usage errors.
+make fx_cli(d: str) -> num {
+  hold canonical = concat(d, "/canonical.sa")
+  hold wrote = gl_must_write(canonical, fx_want())
+  hold check_ok = concat("./tools/sxfmt --check ", gl_sh_quote(canonical))
+  hold a = gl_assert_eq_num(run_command(check_ok), 0, "sxfmt --check on canonical text")
+  hold raw = concat(d, "/raw.sa")
+  hold wrote2 = gl_must_write(raw, fx_source())
+  hold check_bad = concat("./tools/sxfmt --check ", gl_sh_quote(raw))
+  hold b = gl_assert_eq_num(run_command(check_bad), 1, "sxfmt --check on unformatted text")
+  hold after = gl_assert_eq_str(read_file(raw), fx_source(), "sxfmt --check writes nothing")
+  hold flag = concat("./tools/sxfmt --nonsense ", gl_sh_quote(raw))
+  hold c = gl_assert_eq_num(run_command(flag), 2, "sxfmt rejects an unknown flag")
+  // Legacy mode stays byte identical to its own pin.
+  hold legacy_out = concat(d, "/legacy.out")
+  hold legacy = concat("./tools/sxfmt ", concat(gl_sh_quote(raw), concat(" ", gl_sh_quote(legacy_out))))
+  hold e = gl_assert_eq_num(run_command(legacy), 0, "sxfmt legacy status")
+  hold f = gl_assert_eq_num(run_command(check_ok), 0, "sxfmt --check is repeatable")
+  give 0
+}
+
+// Semantics: formatted and unformatted source compile to the same C and run the
+// same way.
+make fx_parity(d: str) -> num {
+  hold raw = concat(d, "/parity_raw.sa")
+  hold wrote = gl_must_write(raw, fx_parity_source())
+  hold fmt = concat(d, "/parity_fmt.sa")
+  hold cmd = concat("./tools/sxfmt --syntax ", concat(gl_sh_quote(raw), concat(" ", gl_sh_quote(fmt))))
+  hold a = gl_assert_eq_num(run_command(cmd), 0, "sxfmt --syntax on the parity fixture")
+  hold raw_c = concat(d, "/parity_raw.c")
+  hold raw_bin = concat(d, "/parity_raw")
+  hold b = gl_build_gen2(raw, raw_c, raw_bin, "")
+  hold fmt_c = concat(d, "/parity_fmt.c")
+  hold fmt_bin = concat(d, "/parity_fmt")
+  hold c = gl_build_gen2(fmt, fmt_c, fmt_bin, "")
+  hold e = gl_assert_files_eq(raw_c, fmt_c, "formatted source emits the same C")
+  hold f = gl_assert_out(gl_sh_quote(raw_bin), fx_parity_want(), concat(d, "/raw.stdout"))
+  hold g = gl_assert_out(gl_sh_quote(fmt_bin), fx_parity_want(), concat(d, "/fmt.stdout"))
+  give gl_assert_files_eq(concat(d, "/raw.stdout"), concat(d, "/fmt.stdout"), "formatted program prints the same stdout")
+}
+
+make fx_known(name: str) -> num {
+  when string_eq(name, "test-sxfmt-syntax") == 1 {
+    give 1
+  }
+  give 0
+}
+
+make fx_dispatch(name: str) -> num {
+  hold d = concat("selfhost/seed_tests/fx/", name)
+  hold clean = gl_clean_dir(d)
+  hold status = 0
+  status = fx_oracle(d)
+  status = fx_legacy(d)
+  status = fx_refusals(d)
+  status = fx_cli(d)
+  status = fx_parity(d)
+  show concat("[OK] Sayanox gate: ", name)
+  give status
+}

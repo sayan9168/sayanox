@@ -1,0 +1,402 @@
+// Syntax-aware Sayanox source formatter.
+//
+// The legacy formatter in tools/sxfmt.sa counts braces per line and rewrites
+// indentation. This module instead scans the whole file as tokens:
+//
+//   * a string literal is copied byte for byte (escapes and `${...}` holes
+//     included), and a raw newline inside one is a diagnostic, not output;
+//   * a `//` comment is copied byte for byte to the end of its line;
+//   * `(`, `[` and `{` are tracked as a real bracket stack, so indentation is
+//     the open depth of every kind of bracket, not only braces;
+//   * closers must match the top of the stack and the file must be balanced at
+//     EOF, so malformed source is refused instead of being rewritten into
+//     something that only looks formatted;
+//   * horizontal whitespace runs collapse to one space, spaces that cannot
+//     matter (inside brackets, before `,`/`)`/`]`) are dropped, tabs become
+//     spaces, trailing whitespace is stripped, runs of blank lines collapse to
+//     one and the file ends with exactly one newline.
+//
+// No token is added, removed or reordered and no line break is invented or
+// deleted, so the token stream of the output equals the input's: the formatted
+// program means the same thing. The rules are a function of the tokens alone,
+// so formatting is idempotent.
+//
+// `sf_format` returns a tagged result instead of failing, so the scanner is
+// directly testable: "OK\n" + text, or "ERR\n" + a one-line diagnostic.
+//
+// The output is accumulated through a flush buffer (see SF_FLUSH) because a
+// Sayanox string is immutable and `concat` copies; appending every byte to one
+// growing string would be quadratic in the file size.
+
+// Bytes are held in the line buffer until this many have been consumed, then
+// appended to the output in one `concat`.
+make sf_flush_cap() -> num {
+  give 1024
+}
+
+make sf_slice(s: str, first: num, last: num) -> str {
+  hold n = len(s)
+  when first < 0 {
+    first = 0
+  }
+  when last > n {
+    last = n
+  }
+  hold out = ""
+  hold i = first
+  while i < last {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make sf_istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold n = v
+  when n < 0 {
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  give out
+}
+
+make sf_ok(result: str) -> num {
+  when len(result) >= 2 && sx_index(result, 0) == 79 && sx_index(result, 1) == 75 {
+    give 1
+  }
+  give 0
+}
+
+make sf_text(result: str) -> str {
+  when len(result) < 3 {
+    give ""
+  }
+  give sf_slice(result, 3, len(result))
+}
+
+make sf_error(result: str) -> str {
+  when len(result) < 4 {
+    give ""
+  }
+  give sf_slice(result, 4, len(result))
+}
+
+make sf_fail(line: num, message: str) -> str {
+  give concat("ERR\n", concat(concat("line ", sf_istr(line)), concat(": ", message)))
+}
+
+make sf_is_space(c: num) -> num {
+  when c == 32 || c == 9 || c == 13 {
+    give 1
+  }
+  give 0
+}
+
+make sf_closer_for(c: num) -> num {
+  when c == 41 {
+    give 40
+  }
+  when c == 93 {
+    give 91
+  }
+  when c == 125 {
+    give 123
+  }
+  give 0
+}
+
+make sf_bracket(c: num) -> num {
+  when c == 40 || c == 91 || c == 123 {
+    give 1
+  }
+  when c == 41 || c == 93 || c == 125 {
+    give 1
+  }
+  give 0
+}
+
+// One space is allowed between `prev` and `next`; a space that cannot matter is
+// dropped. No rule ever merges two tokens, so the token stream is unchanged.
+make sf_space_allowed(prev: num, next: num) -> num {
+  when prev == 40 || prev == 91 {
+    give 0
+  }
+  when next == 41 || next == 93 || next == 44 {
+    give 0
+  }
+  give 1
+}
+
+make sf_indent(units: num) -> str {
+  hold out = ""
+  hold i = 0
+  while i < units {
+    out = concat(out, "  ")
+    i = i + 1
+  }
+  give out
+}
+
+// Trailing whitespace never matters: a line cannot end inside a string (that is
+// a diagnostic) and a comment keeps its own bytes otherwise.
+make sf_trim_right(text: str) -> str {
+  hold n = len(text)
+  while n > 0 && (sx_index(text, n - 1) == 32 || sx_index(text, n - 1) == 9) {
+    n = n - 1
+  }
+  when n == len(text) {
+    give text
+  }
+  give sf_slice(text, 0, n)
+}
+
+// Render one line. `depth` is the open-bracket count at the line start and
+// `closers` counts the closers that begin it, so a line that closes a block is
+// indented where that block began. An empty line renders as nothing.
+make sf_line(content: str, depth: num, closers: num) -> str {
+  hold body = sf_trim_right(content)
+  when len(body) == 0 {
+    give ""
+  }
+  hold units = depth - closers
+  when units < 0 {
+    units = 0
+  }
+  give concat(sf_indent(units), concat(body, "\n"))
+}
+
+// Append one byte to the line buffer, inserting a single space first when the
+// input had a gap there and the space cannot matter.
+make sf_put(content: str, gap: num, c: num) -> str {
+  hold prev = 0
+  when len(content) > 0 {
+    prev = sx_index(content, len(content) - 1)
+  }
+  // A closer always ends the token before it, so the next word is separated
+  // even when the input wrote `}otherwise`. This never merges or splits a
+  // token, it only restores a break the tokenizer already makes.
+  hold need = gap
+  when prev == 41 || prev == 93 || prev == 125 {
+    need = 1
+  }
+  hold piece = ""
+  when need == 1 && len(content) > 0 && sf_space_allowed(prev, c) == 1 {
+    piece = " "
+  }
+  give concat(content, concat(piece, chr(c)))
+}
+
+// Exactly one space before an opening brace, never at the start of a line and
+// never doubled after another opener.
+make sf_put_brace(content: str) -> str {
+  when len(content) == 0 {
+    give "{"
+  }
+  hold last = sx_index(content, len(content) - 1)
+  when last == 123 || last == 40 || last == 91 {
+    give concat(content, "{")
+  }
+  give concat(content, " {")
+}
+
+// The stack keeps one byte per open bracket; a parallel fixed-width decimal
+// tag keeps the line each one was opened on, so a refusal points at the bracket
+// that is still open instead of at the end of the file.
+make sf_tag(n: num) -> str {
+  hold out = ""
+  hold v = n
+  hold i = 0
+  while i < 8 {
+    hold d = v % 10
+    out = concat(chr(48 + d), out)
+    v = (v - d) / 10
+    i = i + 1
+  }
+  give out
+}
+
+make sf_tag_at(tags: str, at: num) -> num {
+  hold v = 0
+  hold i = at
+  while i < at + 8 && i < len(tags) {
+    hold d = sx_index(tags, i) - 48
+    when d >= 0 {
+      when d <= 9 {
+        v = v * 10 + d
+      }
+    }
+    i = i + 1
+  }
+  give v
+}
+
+make sf_format(source: str) -> str {
+  hold n = len(source)
+  hold cap = sf_flush_cap()
+  hold out = ""
+  hold buf = ""
+  hold content = ""
+  hold stack = ""
+  hold tags = ""
+  hold line = 1
+  hold line_depth = 0
+  hold line_closers = 0
+  hold non_closer = 0
+  hold gap = 0
+  hold in_string = 0
+  hold escaped = 0
+  hold in_comment = 0
+  hold was_blank = 1
+  hold pos = 0
+  while pos < n {
+    hold c = sx_index(source, pos)
+    when in_string == 1 && c == 10 {
+      give sf_fail(line, "unterminated string literal (a raw newline inside a string is not supported)")
+    }
+    when c == 10 {
+      hold rendered = sf_line(content, line_depth, line_closers)
+      when len(rendered) > 0 {
+        buf = concat(buf, rendered)
+        was_blank = 0
+      } otherwise {
+        when was_blank == 0 {
+          buf = concat(buf, "\n")
+          was_blank = 1
+        }
+      }
+      when len(buf) >= cap {
+        out = concat(out, buf)
+        buf = ""
+      }
+      line = line + 1
+      content = ""
+      gap = 0
+      non_closer = 0
+      line_closers = 0
+      line_depth = len(stack)
+      in_comment = 0
+    } otherwise {
+      when in_comment == 1 {
+        content = concat(content, chr(c))
+      } otherwise {
+        when in_string == 1 {
+          content = concat(content, chr(c))
+          when escaped == 1 {
+            escaped = 0
+          } otherwise {
+            when c == 92 {
+              escaped = 1
+            } otherwise {
+              when c == 34 {
+                in_string = 0
+              }
+            }
+          }
+        } otherwise {
+          when sf_is_space(c) == 1 {
+            when len(content) > 0 {
+              gap = 1
+            }
+          } otherwise {
+            when sf_bracket(c) == 1 {
+              hold want = sf_closer_for(c)
+              when want > 0 {
+                when len(stack) == 0 {
+                  give sf_fail(line, concat("unexpected '", concat(chr(c), "' with nothing open")))
+                }
+                hold top = sx_index(stack, len(stack) - 1)
+                when top != want {
+                  hold opened = sf_tag_at(tags, len(tags) - 8)
+                  give sf_fail(line, concat("unexpected '", concat(chr(c), concat("' closing '", concat(chr(top), concat("' opened on line ", sf_istr(opened)))))))
+                }
+                content = concat(content, chr(c))
+                stack = sf_slice(stack, 0, len(stack) - 1)
+                tags = sf_slice(tags, 0, len(tags) - 8)
+                gap = 0
+                when non_closer == 0 {
+                  line_closers = line_closers + 1
+                }
+              } otherwise {
+                when c == 123 {
+                  content = sf_put_brace(content)
+                } otherwise {
+                  content = sf_put(content, gap, c)
+                }
+                stack = concat(stack, chr(c))
+                tags = concat(tags, sf_tag(line))
+                gap = 0
+                non_closer = 1
+              }
+            } otherwise {
+              when c == 34 {
+                content = sf_put(content, gap, c)
+                gap = 0
+                non_closer = 1
+                in_string = 1
+                escaped = 0
+              } otherwise {
+                when c == 47 && pos + 1 < n && sx_index(source, pos + 1) == 47 {
+                  hold prev = 0
+                  when len(content) > 0 {
+                    prev = sx_index(content, len(content) - 1)
+                  }
+                  when gap == 1 && len(content) > 0 && sf_space_allowed(prev, 47) == 1 {
+                    content = concat(content, " ")
+                  }
+                  content = concat(content, "//")
+                  gap = 0
+                  non_closer = 1
+                  in_comment = 1
+                  pos = pos + 1
+                } otherwise {
+                  content = sf_put(content, gap, c)
+                  gap = 0
+                  non_closer = 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    pos = pos + 1
+  }
+  when in_string == 1 {
+    give sf_fail(line, "unterminated string literal at end of file")
+  }
+  when len(stack) > 0 {
+    hold open = sx_index(stack, len(stack) - 1)
+    hold opened = sf_tag_at(tags, len(tags) - 8)
+    give sf_fail(opened, concat("unclosed '", concat(chr(open), "' at end of file")))
+  }
+  hold tail = sf_line(content, line_depth, line_closers)
+  when len(tail) > 0 {
+    buf = concat(buf, tail)
+  }
+  // Exactly one final newline: drop the trailing run of line breaks.
+  hold end = len(buf)
+  while end > 0 && sx_index(buf, end - 1) == 10 {
+    end = end - 1
+  }
+  when end < len(buf) {
+    buf = sf_slice(buf, 0, end)
+  }
+  when len(buf) == 0 && len(out) > 0 {
+    // The buffer was flushed at a line boundary, so the output already ends
+    // with the single newline the file is allowed to end with.
+    give concat("OK\n", out)
+  }
+  hold text = concat(out, buf)
+  when len(text) > 0 {
+    text = concat(text, "\n")
+  }
+  give concat("OK\n", text)
+}

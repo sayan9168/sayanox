@@ -39,6 +39,8 @@ jobs:
         run: ./sx target test-remaining-stdlib
       - name: Remaining implemented acceptance executables
         run: ./sx target test-sxpkg-pubkey test-sxpkg-transfer-hardening test-sxc-native test-sxisaexec test-sxmod-deep test-release-identity
+      - name: Formatter acceptance (legacy pin and syntax-aware mode)
+        run: ./sx target test-sxfmt test-sxfmt-syntax
       - name: Check forbidden invocation evidence, even after a failed gate
         if: always()
         run: ./sx ci-guard-check
