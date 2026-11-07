@@ -17,10 +17,10 @@
 //
 // What it is NOT. This is still a bounded AOT subset, not the complete
 // Sayanox runtime. It supports static strings, len, byte indexing, a bounded
-// bump-heap concat and bounded numeric functions; it has no lists, structs,
-// string-valued functions, recursion, collector, general file API, or
-// floating-point expression code. Unsupported forms are refused with a
-// diagnostic and non-zero exit.
+// bump-heap concat, and numeric functions with per-depth call frames; it has
+// no lists, structs, string-valued functions or string parameters, collector,
+// general file API, or floating-point expression code. Unsupported forms are
+// refused with a diagnostic and non-zero exit.
 //
 // The subset, exactly:
 //
@@ -49,15 +49,22 @@
 //
 //   A `make` body is lifted out of the program text, emitted after the main
 //   program behind a jump and reached with a real `call`; arguments are
-//   evaluated on the value stack and stored into the callee's parameter slots,
-//   so no ABI registers and no frame layout are involved. A body may call
-//   another function: arm64 and riscv64 save the link register in the body's
-//   prologue (`str x30,[sp,#-16]!` / `sd ra,8(sp)`) and restore it before every
-//   return, and i386 keeps the return address on the same stack. The call graph
-//   is checked to be acyclic, so recursion is refused instead of silently
-//   reusing a parameter slot. Bounds that are checked: at most 8 functions, at
-//   most 6 parameters each, `num` parameters and `-> num` only, no recursion.
-//   Every body must end with a top-level `give`.
+//   evaluated on the value stack and stay there across the `call`, so the
+//   callee reads its parameters above its own frame and no ABI registers and
+//   no fixed parameter slots are involved. Every live invocation owns a frame:
+//   the prologue saves the caller's frame base (a data word, not a register --
+//   the concat copy routine on i386 uses every general register), records the
+//   new base, and zero-fills the body's local words below it. All names inside
+//   a body -- parameters above the frame base, locals below it -- are addressed
+//   relative to that base, so self- and mutual recursion are sound: a deeper
+//   invocation cannot touch an earlier one's parameters or locals. Recursion is
+//   bounded, not unbounded: a depth counter (a data word) is checked against a
+//   fixed cap on every entry, and a program that recurses deeper than the cap
+//   exits 1 with no output, exactly like the concat-heap and index-bounds
+//   faults. Bounds that are checked, not assumed: at most 8 functions, at most
+//   6 parameters each, `num` parameters and `-> num` only, at most 60 frame
+//   words of locals per body, and the runtime depth cap of 64 frames. Every
+//   body must end with a top-level `give`.
 //
 //   The integer expression emitter is one function (emit_expression), so an
 //   argument position can compile an expression of its own: `chr(X)` accepts a
@@ -532,11 +539,12 @@ hold chr_show_slot = 0 - 1
 // ---- user functions -----------------------------------------------------
 // A `make NAME(p: num, ...) -> num { ... }` body is lifted out of the main
 // program text, emitted after it behind a jump, and reached with a real `call`.
-// Arguments travel on the value stack and are stored into the callee's
-// parameter slots, so no ABI registers and no frame layout are involved.
-// Bounds that are checked, not assumed: at most 8 functions, at most 6
-// parameters each, no recursion and no call from inside another make body
-// (a nested call needs a saved link register on arm64 and riscv64).
+// Arguments travel on the value stack and are read by the callee above its own
+// frame, so nothing is stored through a fixed parameter slot and a second live
+// invocation is sound. Bounds that are checked, not assumed: at most 8
+// functions, at most 6 parameters each, `num` parameters and `-> num` only, at
+// most 60 frame words of locals per body, and a runtime recursion cap of 64
+// live frames.
 hold fn_names = ""
 hold fn_nametbl = ""
 hold fn_paramtbl = ""
@@ -544,19 +552,32 @@ hold fn_bodytbl = ""
 hold fn_arity = []
 hold fn_line = []
 hold fn_off = []
-hold fn_pflat = []
-hold fn_pbase = []
+hold fn_frame_words = []
 hold fn_count = 0
 hold fn_active = 0 - 1
 hold fn_gave = 0
 hold fn_last_give = 0
 hold call_site = []
 hold call_fn = []
-// Call-graph edges (caller, callee). The caller is -1 for the main program, and
-// the graph must stay acyclic: a cycle would reuse a parameter slot that is
-// still live, so recursion is refused rather than silently wrong.
-hold edge_from = []
-hold edge_to = []
+// Every name inside a body is addressed through the current frame base. The
+// base itself lives in a data word, not a register: the i386 concat copy
+// sequence uses every general register, so no register could be dedicated.
+// A body slot value is the frame mark plus the signed byte displacement from
+// the frame base -- parameters above it (positive), locals below it
+// (negative) -- which keeps frame slots distinguishable from absolute data
+// offsets by value alone.
+hold fn_frame_mark = 655360
+hold fn_depth_cap = 64
+hold depth_slot = 0 - 1
+hold fp_slot = 0 - 1
+// Frame-base scratch register per target: i386 keeps it in ebx, AArch64 in
+// x10, RV64IM in x6. The zero-fill immediate of the body being emitted is
+// patched after its walk (the local count is only known then), and every
+// depth-check branch is patched once the shared overflow stub exists.
+hold fill_site = 0 - 1
+hold ov_sites = []
+hold ov_stub_at = 0 - 1
+hold ov_stub_skip = 0 - 1
 
 // Position of the first occurrence of a byte value, or -1.
 make find_byte(s: str, code: num) -> num {
@@ -593,35 +614,338 @@ make emit_ret(xs: list, arch: num) -> list {
   give e_w(xs, 3596551104)
 }
 
-// Save the link register at the top of a function body. i386 `call` already
-// pushes the return address on the same stack the value evaluator uses, so only
-// the two register-link targets need this: `bl`/`jal` overwrite x30/ra, and a
-// body is now allowed to call another function.
-make emit_fn_prologue(xs: list, arch: num) -> list {
-  when arch == 0 { give xs }
-  when arch == 2 {
-    // addi sp,sp,-16 ; sd ra,8(sp)
-    xs = e_w(xs, rv_i(0 - 16, 2, 0, 2, 19))
-    give e_w(xs, rv_s(8, 1, 2, 3))
+// The data-segment base of the current target, for baked absolute addresses.
+// The data-segment base of the current target, for baked absolute addresses.
+make dva_of(off: num) -> num {
+  when arch == 0 { give 134520832 + off }
+  give 4202496 + off
+}
+
+// AArch64: x9 = x{base} + disp (the base register holds the frame base; the
+// displacement always fits the 12-bit immediate because bodies keep at most 60
+// local words).
+make a_fp_disp(xs: list, fbase: num, disp: num) -> list {
+  when disp >= 0 {
+    give e_w(xs, 2432696329 + fbase * 32 + disp * 1024)
   }
-  // str x30,[sp,#-16]!
-  xs = e_w(xs, 4162785278)
-  give xs
+  give e_w(xs, 3506438153 + fbase * 32 + (0 - disp) * 1024)
+}
+
+// Load the word at frame displacement `disp` (from the current frame base)
+// into the accumulator, without pushing. The base is re-read from the data
+// word on every access, so no register stays dedicated across statements.
+make emit_load_frame_word(xs: list, arch: num, disp: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 139)
+    xs = e1(xs, 29)
+    xs = e32(xs, dva_of(fp_slot))
+    xs = e1(xs, 139)
+    xs = e1(xs, 131)
+    xs = e32(xs, disp)
+    give xs
+  }
+  when arch == 2 {
+    xs = rv_li32(xs, 5, dva_of(fp_slot))
+    xs = e_w(xs, rv_i(0, 5, 2, 6, 3))
+    give e_w(xs, rv_i(disp, 6, 2, 10, 3))
+  }
+  xs = a_abs(xs, 9, dva_of(fp_slot))
+  xs = e_w(xs, 3107979562)
+  xs = a_fp_disp(xs, 10, disp)
+  // the accumulator is w0: emit_push_acc pushes x0 after this
+  give e_w(xs, 3107979552)
+}
+
+// Store the accumulator at frame displacement `disp`. The accumulator is
+// preserved on every target.
+make emit_store_frame_word(xs: list, arch: num, disp: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 139)
+    xs = e1(xs, 29)
+    xs = e32(xs, dva_of(fp_slot))
+    xs = e1(xs, 137)
+    xs = e1(xs, 131)
+    xs = e32(xs, disp)
+    give xs
+  }
+  when arch == 2 {
+    xs = rv_li32(xs, 5, dva_of(fp_slot))
+    xs = e_w(xs, rv_i(0, 5, 2, 6, 3))
+    give e_w(xs, rv_s(disp, 10, 6, 2))
+  }
+  xs = a_abs(xs, 9, dva_of(fp_slot))
+  xs = e_w(xs, 3107979562)
+  xs = a_fp_disp(xs, 10, disp)
+  give e_w(xs, 3103785248)
+}
+
+// A variable access inside a make body goes through the current frame; outside
+// one it is an absolute data offset. Frame slots carry the frame mark, so the
+// two forms can never be confused by value. The absolute path records the same
+// fixup the old inline sites pushed.
+make emit_load_var(xs: list, arch: num, s: num) -> list {
+  when fn_active >= 0 {
+    xs = emit_load_frame_word(xs, arch, s - fn_frame_mark)
+    give emit_push_acc(xs, arch)
+  }
+  hold at = len(xs)
+  when arch == 0 {
+    fixsite = push(fixsite, at + 1)
+  } otherwise {
+    fixsite = push(fixsite, at)
+  }
+  fixoff = push(fixoff, s)
+  give emit_load_global(xs, arch)
+}
+
+make emit_store_var(xs: list, arch: num, s: num) -> list {
+  when fn_active >= 0 {
+    give emit_store_frame_word(xs, arch, s - fn_frame_mark)
+  }
+  hold at = len(xs)
+  when arch == 0 {
+    fixsite = push(fixsite, at + 1)
+  } otherwise {
+    fixsite = push(fixsite, at)
+  }
+  fixoff = push(fixoff, s)
+  give emit_store_global(xs, arch)
+}
+
+// Load the word at an absolute data address into the accumulator, no push.
+make emit_load_abs_word(xs: list, arch: num, addr: num) -> list {
+  when arch == 0 {
+    xs = e1(xs, 161)
+    give e32(xs, addr)
+  }
+  when arch == 2 {
+    xs = rv_li32(xs, 5, addr)
+    give e_w(xs, rv_i(0, 5, 2, 10, 3))
+  }
+  xs = a_abs(xs, 9, addr)
+  give e_w(xs, 3107979552)
+}
+
+// Load the 32-bit word of variable slot `s` (absolute offset or frame slot)
+// into i386 register number `reg` (0..7), used by the concat copy sequence
+// whose register set is fixed. The frame path borrows ebx as the base.
+make emit_load_word_i386(xs: list, s: num, reg: num) -> list {
+  when s >= fn_frame_mark {
+    xs = e1(xs, 139)
+    xs = e1(xs, 29)
+    xs = e32(xs, dva_of(fp_slot))
+    xs = e1(xs, 139)
+    xs = e1(xs, 192 + reg * 8 + 3)
+    give e32(xs, s - fn_frame_mark)
+  }
+  xs = e1(xs, 139)
+  xs = e1(xs, 5 + reg * 8)
+  fixsite = push(fixsite, len(xs))
+  fixoff = push(fixoff, s)
+  give e32(xs, 0)
+}
+
+// Save the link register at the top of a function body, then open the frame:
+// the caller's frame base is saved (read from the data word -- no register
+// stays dedicated), the new base is recorded, and the body's local words below
+// it are zero-filled so a local read before its first assignment sees zero on
+// every invocation, as on the C backends. The recursion depth is checked
+// against the cap first: a deeper call exits 1 with no output, like the other
+// runtime bounds. Stack shapes after the prologue, with n arguments and f
+// zero-filled local words:
+//   i386:   [fp+8+4k]   argument k   [fp] caller base   [fp-f*4 .. fp) locals
+//   arm/rv: [fp+16n+16-16k] argument k                   locals below fp
+make emit_fn_prologue(xs: list, arch: num) -> list {
+  // depth check: load the depth word, compare with the cap, branch to the stub
+  when arch == 0 {
+    xs = e1(xs, 161)
+    xs = e32(xs, dva_of(depth_slot))
+    xs = e1(xs, 61)
+    xs = e32(xs, fn_depth_cap)
+    xs = e1(xs, 15)
+    xs = e1(xs, 141)
+    ov_sites = push(ov_sites, len(xs))
+    xs = e32(xs, 0)
+  } otherwise {
+    when arch == 2 {
+      xs = rv_li32(xs, 5, dva_of(depth_slot))
+      xs = e_w(xs, rv_i(0, 5, 2, 10, 3))
+      xs = e_w(xs, rv_i(fn_depth_cap, 0, 0, 11, 19))
+      ov_sites = push(ov_sites, len(xs))
+      xs = e_w(xs, rv_b_word(0, 11, 10, 5))
+    } otherwise {
+      xs = a_abs(xs, 9, dva_of(depth_slot))
+      xs = e_w(xs, 3107979562)
+      xs = e_w(xs, 1895891295)
+      ov_sites = push(ov_sites, len(xs))
+      xs = e_w(xs, 1409286154)
+    }
+  }
+  // save the caller's frame base, then record ours
+  when arch == 0 {
+    // mov eax,[fp] ; push eax ; mov [fp],esp
+    xs = e1(xs, 161)
+    xs = e32(xs, dva_of(fp_slot))
+    xs = e1(xs, 80)
+    xs = e1(xs, 137)
+    xs = e1(xs, 37)
+    xs = e32(xs, dva_of(fp_slot))
+  } otherwise {
+    when arch == 2 {
+      // addi sp,sp,-16 ; sd ra,8(sp)
+      xs = e_w(xs, rv_i(0 - 16, 2, 0, 2, 19))
+      xs = e_w(xs, rv_s(8, 1, 2, 3))
+      // lw x6,0(fp) ; addi sp,sp,-16 ; sd x6,0(sp) ; sw sp,0(fp)
+      xs = rv_li32(xs, 5, dva_of(fp_slot))
+      xs = e_w(xs, rv_i(0, 5, 2, 6, 3))
+      xs = e_w(xs, rv_i(0 - 16, 2, 0, 2, 19))
+      xs = e_w(xs, rv_s(0, 6, 2, 3))
+      xs = e_w(xs, rv_i(0, 2, 0, 6, 19))
+      xs = e_w(xs, rv_s(0, 6, 5, 2))
+    } otherwise {
+      // str x30,[sp,#-16]! ; ldr w10,[fp] ; str x10,[sp,#-16]!
+      xs = e_w(xs, 4162785278)
+      xs = a_abs(xs, 9, dva_of(fp_slot))
+      xs = e_w(xs, 3107979562)
+      xs = e_w(xs, 4162785258)
+      // add x10,sp,#0 ; str w10,[fp]
+      xs = e_w(xs, 2432697322)
+      xs = e_w(xs, 3103785258)
+    }
+  }
+  // zero-fill the frame's local words (count patched after the body walk)
+  when arch == 0 {
+    // xor eax,eax ; mov ecx,count ; jecxz done ; L: push eax ; loop L
+    xs = e1(xs, 49)
+    xs = e1(xs, 192)
+    xs = e1(xs, 185)
+    fill_site = len(xs)
+    xs = e32(xs, 1)
+    xs = e1(xs, 227)
+    hold jcx_at = len(xs)
+    hold fill_at = jcx_at + 1
+    xs = e1(xs, fill_at + 3 - (jcx_at + 1))
+    xs = e1(xs, 80)
+    xs = e1(xs, 226)
+    xs = e1(xs, fill_at - (len(xs) + 1))
+  } otherwise {
+    when arch == 2 {
+      // addi x6,x0,count ; beq x6,x0,done ; L: addi sp,sp,-8 ; sd x0,0(sp)
+      // addi x6,x6,-1 ; bne x6,x0,L
+      fill_site = len(xs)
+      xs = e_w(xs, rv_i(0, 0, 0, 6, 19))
+      hold skip_rv = len(xs)
+      xs = e_w(xs, rv_b_word(0, 0, 6, 0))
+      hold fill_rv = len(xs)
+      xs = e_w(xs, rv_i(0 - 8, 2, 0, 2, 19))
+      xs = e_w(xs, rv_s(0, 0, 2, 3))
+      xs = e_w(xs, rv_i(0 - 1, 6, 0, 6, 19))
+      hold back_rv = len(xs)
+      xs = e_w(xs, rv_b_word(0, 0, 6, 1))
+      hold done_rv = len(xs)
+      xs = set_w(xs, skip_rv, rv_b_word(done_rv - skip_rv, 0, 6, 0))
+      xs = set_w(xs, back_rv, rv_b_word(fill_rv - back_rv, 0, 6, 1))
+    } otherwise {
+      // movz w6,count ; cmp w6,#0 ; b.eq done ; L: str xzr,[sp,#-16]!
+      // subs w6,w6,#1 ; b.ne L
+      fill_site = len(xs)
+      xs = a_movz(xs, 0, 6, 0)
+      xs = e_w(xs, 1895825631)
+      hold skip_a = len(xs)
+      xs = e_w(xs, 1409286144)
+      hold fill_a = len(xs)
+      xs = e_w(xs, 4162785279)
+      xs = e_w(xs, 1895826630)
+      hold back_a = len(xs)
+      xs = e_w(xs, 1409286145)
+      hold done_a = len(xs)
+      xs = a_imm19(xs, skip_a, done_a - skip_a)
+      xs = a_imm19(xs, back_a, fill_a - back_a)
+    }
+  }
+  // depth += 1
+  when arch == 0 {
+    xs = e1(xs, 161)
+    xs = e32(xs, dva_of(depth_slot))
+    xs = e1(xs, 64)
+    xs = e1(xs, 163)
+    xs = e32(xs, dva_of(depth_slot))
+    give xs
+  }
+  when arch == 2 {
+    xs = rv_li32(xs, 5, dva_of(depth_slot))
+    xs = e_w(xs, rv_i(0, 5, 2, 10, 3))
+    xs = e_w(xs, rv_i(1, 10, 0, 10, 19))
+    give e_w(xs, rv_s(0, 10, 5, 2))
+  }
+  xs = a_abs(xs, 9, dva_of(depth_slot))
+  xs = e_w(xs, 3107979552)
+  xs = e_w(xs, 285213696)
+  give e_w(xs, 3103785248)
 }
 
 // Restore the link register and return.
 make emit_fn_ret(xs: list, arch: num) -> list {
-  when arch == 0 { give emit_ret(xs, arch) }
-  when arch == 2 {
-    xs = e_w(xs, rv_i(8, 2, 3, 1, 3))
-    xs = e_w(xs, rv_i(16, 2, 0, 2, 19))
+  // depth -= 1. i386 shares eax between the result and this decrement, so the
+  // result moves to ebx first; arm64 and riscv64 run the decrement in w11/x11.
+  when arch == 0 {
+    xs = e1(xs, 137)
+    xs = e1(xs, 195)
+    xs = e1(xs, 161)
+    xs = e32(xs, dva_of(depth_slot))
+    xs = e1(xs, 72)
+    xs = e1(xs, 163)
+    xs = e32(xs, dva_of(depth_slot))
+  } otherwise {
+    when arch == 2 {
+      xs = rv_li32(xs, 5, dva_of(depth_slot))
+      xs = e_w(xs, rv_i(0, 5, 2, 11, 3))
+      xs = e_w(xs, rv_i(0 - 1, 11, 0, 11, 19))
+      xs = e_w(xs, rv_s(0, 11, 5, 2))
+    } otherwise {
+      xs = a_abs(xs, 9, dva_of(depth_slot))
+      xs = e_w(xs, 3107979563)
+      xs = e_w(xs, 1895826795)
+      xs = e_w(xs, 3103785259)
+    }
+  }
+  // sp = frame base, restore the caller's frame base, return. The result in
+  // the accumulator survives: i386 parks it in ebx, arm64 and riscv64 pop the
+  // saved words into x11/w11 instead of x0/w0.
+  when arch == 0 {
+    // mov esp,[fp] ; pop eax ; mov [fp],eax ; mov eax,ebx ; ret
+    xs = e1(xs, 139)
+    xs = e1(xs, 37)
+    xs = e32(xs, dva_of(fp_slot))
+    xs = e1(xs, 88)
+    xs = e1(xs, 163)
+    xs = e32(xs, dva_of(fp_slot))
+    xs = e1(xs, 137)
+    xs = e1(xs, 216)
     give emit_ret(xs, arch)
   }
+  when arch == 2 {
+    // lfp: lw x9,0(fp) ; mv sp,x9 ; pop x11 ; sw x11,0(fp) ; ret
+    xs = rv_li32(xs, 5, dva_of(fp_slot))
+    xs = e_w(xs, rv_i(0, 5, 2, 9, 3))
+    xs = e_w(xs, rv_i(0, 9, 0, 2, 19))
+    xs = rv_pop_reg(xs, 11)
+    xs = rv_li32(xs, 5, dva_of(fp_slot))
+    xs = e_w(xs, rv_s(0, 11, 5, 2))
+    give emit_ret(xs, arch)
+  }
+  // ldr w9,[fp] ; mov sp,x9 ; pop x11 ; str w11,[fp] ; ldr x30,[sp],#16 ; ret
+  // sp must come from the reloaded fp, not x10: after a nested body call x10
+  // still holds the callee's frame base.
+  xs = a_abs(xs, 9, dva_of(fp_slot))
+  xs = e_w(xs, 3107979561)
+  xs = e_w(xs, 2432696639)
+  xs = e_w(xs, 4165011435)
+  xs = a_abs(xs, 9, dva_of(fp_slot))
+  xs = e_w(xs, 3103785259)
   xs = e_w(xs, 4165011454)
   give emit_ret(xs, arch)
 }
-
-// Push the accumulator on the value stack.
 make emit_push_acc(xs: list, arch: num) -> list {
   when arch == 0 { give e1(xs, 80) }
   when arch == 2 { give rv_push_a0(xs) }
@@ -690,8 +1014,41 @@ make nth_part(tbl: str, idx: num) -> str {
   give ""
 }
 
-make fn_param_slot(fi: num, p: num) -> num {
-  give fn_pflat[fn_pbase[fi] + p]
+// The stored parameter table carries the frame mark plus the parameter's
+// index; the frame displacement needs the whole arity, so the body's name
+// table is rebuilt here, at emit time. i386 `call`/`push` move the stack in
+// 4-byte steps, arm64 and riscv64 pushes in 16-byte steps; argument k was
+// pushed first, so it sits highest.
+make body_parm_names(parms: str, arity: num) -> str {
+  hold out = ""
+  hold n = len(parms)
+  hold i = 0
+  while i < n {
+    when sx_index(parms, i) == 124 {
+      hold j = i + 1
+      hold nm = ""
+      while j < n && sx_index(parms, j) != 61 {
+        nm = concat(nm, chr(sx_index(parms, j)))
+        j = j + 1
+      }
+      hold k = j + 1
+      hold v = 0
+      while k < n && sx_index(parms, k) >= 48 && sx_index(parms, k) <= 57 {
+        v = v * 10 + (sx_index(parms, k) - 48)
+        k = k + 1
+      }
+      hold idx = v - fn_frame_mark
+      hold disp = 8 + 4 * (arity - 1 - idx)
+      when arch != 0 {
+        disp = 16 * (arity - idx) + 16
+      }
+      out = concat(out, concat(concat(concat("|", nm), "="), numstr(fn_frame_mark + disp)))
+      i = k
+    } otherwise {
+      i = i + 1
+    }
+  }
+  give out
 }
 
 // Emit a call at a known token position: `openat` is the index of the '(' and
@@ -726,8 +1083,6 @@ make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str) -> n
   when nargs != fn_arity[fi] {
     hold badarity = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": '", nm)), concat(concat("' takes ", numstr(fn_arity[fi])), concat(concat(" numeric arguments, not ", numstr(nargs)), ""))))
   }
-  edge_from = push(edge_from, fn_active)
-  edge_to = push(edge_to, fi)
   hold a = 0
   while a < nargs {
     hold pre = afrom[a]
@@ -742,22 +1097,27 @@ make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str) -> n
     code = emit_push_acc(code, arch)
     a = a + 1
   }
-  hold pp = nargs - 1
-  while pp >= 0 {
-    code = emit_pop_acc(code, arch)
-    hold psite = len(code)
-    when arch == 0 {
-      fixsite = push(fixsite, psite + 1)
-    } otherwise {
-      fixsite = push(fixsite, psite)
-    }
-    fixoff = push(fixoff, fn_param_slot(fi, pp))
-    code = emit_store_global(code, arch)
-    pp = pp - 1
-  }
+  // The arguments stay on the stack across the call: the callee reads them
+  // above its own frame, so no fixed parameter slot is ever written and a
+  // second live invocation of the same function is sound. The caller pops
+  // them after the call returns, into a scratch register so the result in the
+  // accumulator survives.
   hold cdisp = emit_call_here(arch)
   call_site = push(call_site, cdisp)
   call_fn = push(call_fn, fi)
+  hold popped = 0
+  while popped < nargs {
+    when arch == 0 {
+      code = e1(code, 89)
+    } otherwise {
+      when arch == 2 {
+        code = rv_pop_reg(code, 11)
+      } otherwise {
+        code = e_w(code, 4165011435)
+      }
+    }
+    popped = popped + 1
+  }
   give 0
 }
 
@@ -799,29 +1159,6 @@ make try_user_call(extext: str) -> num {
   }
   hold done = emit_call_tokens(toks, 1, close, fi, nm)
   give 1
-}
-
-// Can the call graph reach `to` from `from`? Used to refuse recursion: the
-// parameter slots are one per function, so a second live invocation of the same
-// function would overwrite the first one's arguments.
-make reaches(from: num, to: num, seen: list) -> num {
-  when from == to { give 1 }
-  hold i = 0
-  hold already = 0
-  while i < len(seen) {
-    when seen[i] == from { already = 1 }
-    i = i + 1
-  }
-  when already == 1 { give 0 }
-  seen = push(seen, from)
-  i = 0
-  while i < len(edge_from) {
-    when edge_from[i] == from {
-      when reaches(edge_to[i], to, seen) == 1 { give 1 }
-    }
-    i = i + 1
-  }
-  give 0
 }
 
 // Lift every `make` body out of the program text. The body text is stored per
@@ -870,6 +1207,7 @@ make lift_functions() -> str {
       }
       hold parms = ""
       hold arity = 0
+      hold pcount = 0
       when len(ptext) > 0 {
         hold ppos = 0
         while ppos <= len(ptext) {
@@ -895,15 +1233,18 @@ make lift_functions() -> str {
           when arity >= 6 {
             hold toomanyargs = fail(1, "native32 v1 accepts at most 6 parameters per make")
           }
-          hold pslot = len(data)
-          data = put_zeros(data, 4)
-          parms = concat(parms, concat(concat(concat("|", pname), "="), numstr(pslot)))
+          // A parameter lives in the caller-pushed argument area above the
+          // callee's frame. The displacement from the frame base needs the
+          // function's whole arity, which is only known after the header, so
+          // the table stores the frame mark plus the parameter's index and
+          // body_parm_names rewrites it when the body is emitted.
+          parms = concat(parms, concat(concat(concat("|", pname), "="), numstr(fn_frame_mark + pcount)))
           parms = concat(parms, "|")
-          fn_pflat = push(fn_pflat, pslot)
+          pcount = pcount + 1
           arity = arity + 1
         }
       }
-      fn_pbase = push(fn_pbase, len(fn_pflat) - arity)
+      fn_frame_words = push(fn_frame_words, 0)
       fn_nametbl = concat(fn_nametbl, concat(fname, "\n"))
       fn_paramtbl = concat(fn_paramtbl, concat(parms, "\n"))
       fn_arity = push(fn_arity, arity)
@@ -957,14 +1298,7 @@ make lift_functions() -> str {
 // count, then write. Shared by `show NAME`, `show chr(...)` and
 // `show concat(...)`.
 make emit_show_string_slot(s: num) -> num {
-  hold pvat = len(code)
-  when arch == 0 {
-    fixsite = push(fixsite, pvat + 1)
-  } otherwise {
-    fixsite = push(fixsite, pvat)
-  }
-  fixoff = push(fixoff, s)
-  code = emit_load_global(code, arch)
+  code = emit_load_var(code, arch, s)
   code = emit_pop_acc(code, arch)
   when arch == 0 {
     code = e1(code, 137)
@@ -976,14 +1310,7 @@ make emit_show_string_slot(s: num) -> num {
       code = e_w(code, 2852127713)
     }
   }
-  hold lvat = len(code)
-  when arch == 0 {
-    fixsite = push(fixsite, lvat + 1)
-  } otherwise {
-    fixsite = push(fixsite, lvat)
-  }
-  fixoff = push(fixoff, s + 4)
-  code = emit_load_global(code, arch)
+  code = emit_load_var(code, arch, s + 4)
   code = emit_pop_acc(code, arch)
   when arch == 0 {
     code = e1(code, 137)
@@ -1024,26 +1351,10 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
   hold heap_end_off = 126976
   when arch == 0 {
     // Load both (pointer,length) pairs into esi/ecx and ebp/edx.
-    code = e1(code, 139)
-    code = e1(code, 53)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, leftslot)
-    code = e32(code, 0)
-    code = e1(code, 139)
-    code = e1(code, 13)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, leftslot + 4)
-    code = e32(code, 0)
-    code = e1(code, 139)
-    code = e1(code, 45)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, rightslot)
-    code = e32(code, 0)
-    code = e1(code, 139)
-    code = e1(code, 21)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, rightslot + 4)
-    code = e32(code, 0)
+    code = emit_load_word_i386(code, leftslot, 6)
+    code = emit_load_word_i386(code, leftslot + 4, 1)
+    code = emit_load_word_i386(code, rightslot, 5)
+    code = emit_load_word_i386(code, rightslot + 4, 2)
     // EAX is the old bump pointer; EBX preserves the result pointer.
     code = e1(code, 139)
     code = e1(code, 5)
@@ -1085,11 +1396,7 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
     code = e1(code, 164)
     code = e1(code, 137)
     code = e1(code, 238)
-    code = e1(code, 139)
-    code = e1(code, 13)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, rightslot + 4)
-    code = e32(code, 0)
+    code = emit_load_word_i386(code, rightslot + 4, 1)
     code = e1(code, 243)
     code = e1(code, 164)
     code = e1(code, 198)
@@ -1099,32 +1406,69 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
     code = e1(code, 198)
     code = e1(code, 7)
     code = e1(code, 0)
-    code = e1(code, 137)
-    code = e1(code, 29)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, dest)
-    code = e32(code, 0)
-    code = e1(code, 137)
-    code = e1(code, 21)
-    fixsite = push(fixsite, len(code))
-    fixoff = push(fixoff, dest + 4)
-    code = e32(code, 0)
+    when dest >= fn_frame_mark {
+      // mov ecx,ebx ; mov ebx,[fp] ; mov [ebx+disp],ecx
+      code = e1(code, 137)
+      code = e1(code, 217)
+      code = e1(code, 139)
+      code = e1(code, 29)
+      code = e32(code, dva_of(fp_slot))
+      code = e1(code, 137)
+      code = e1(code, 139)
+      code = e32(code, dest - fn_frame_mark)
+      // mov ecx,edx ; mov ebx,[fp] ; mov [ebx+disp+4],ecx
+      code = e1(code, 137)
+      code = e1(code, 209)
+      code = e1(code, 139)
+      code = e1(code, 29)
+      code = e32(code, dva_of(fp_slot))
+      code = e1(code, 137)
+      code = e1(code, 139)
+      code = e32(code, dest + 4 - fn_frame_mark)
+    } otherwise {
+      code = e1(code, 137)
+      code = e1(code, 29)
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, dest)
+      code = e32(code, 0)
+      code = e1(code, 137)
+      code = e1(code, 21)
+      fixsite = push(fixsite, len(code))
+      fixoff = push(fixoff, dest + 4)
+      code = e32(code, 0)
+    }
   } otherwise {
     when arch == 1 {
       // AArch64: w10/w11 and w12/w13 are source pairs; w14 is the
       // destination and w15 the total length.
-      hold afix0 = len(code)
-      fixsite = push(fixsite, afix0)
-      fixoff = push(fixoff, leftslot)
-      code = a_addr(code, 9)
-      code = e_w(code, 3107979562)
-      code = e_w(code, 3107980587)
-      hold afix1 = len(code)
-      fixsite = push(fixsite, afix1)
-      fixoff = push(fixoff, rightslot)
-      code = a_addr(code, 9)
-      code = e_w(code, 3107979564)
-      code = e_w(code, 3107980589)
+      when leftslot >= fn_frame_mark {
+        code = a_abs(code, 9, dva_of(fp_slot))
+        code = e_w(code, 3107979562)
+        code = a_fp_disp(code, 10, leftslot - fn_frame_mark)
+        code = e_w(code, 3107979562)
+        code = e_w(code, 3107980587)
+      } otherwise {
+        hold afix0 = len(code)
+        fixsite = push(fixsite, afix0)
+        fixoff = push(fixoff, leftslot)
+        code = a_addr(code, 9)
+        code = e_w(code, 3107979562)
+        code = e_w(code, 3107980587)
+      }
+      when rightslot >= fn_frame_mark {
+        code = a_abs(code, 9, dva_of(fp_slot))
+        code = e_w(code, 3107979562)
+        code = a_fp_disp(code, 10, rightslot - fn_frame_mark)
+        code = e_w(code, 3107979564)
+        code = e_w(code, 3107980589)
+      } otherwise {
+        hold afix1 = len(code)
+        fixsite = push(fixsite, afix1)
+        fixoff = push(fixoff, rightslot)
+        code = a_addr(code, 9)
+        code = e_w(code, 3107979564)
+        code = e_w(code, 3107980589)
+      }
       hold afix2 = len(code)
       fixsite = push(fixsite, afix2)
       fixoff = push(fixoff, heap_cursor_slot)
@@ -1151,11 +1495,19 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
       code = e_w(code, 3103785264)
       // Publish the original allocation base (w14); w16 is already the
       // advanced heap cursor and must not become the string pointer.
-      hold aoutfix = len(code)
-      fixsite = push(fixsite, aoutfix)
-      fixoff = push(fixoff, dest)
-      code = a_addr(code, 9)
-      code = e_w(code, 3103785262)
+      when dest >= fn_frame_mark {
+        // ldr w17,[fp] ; add x9,x17,#disp ; str w14,[x9]
+        code = a_abs(code, 9, dva_of(fp_slot))
+        code = e_w(code, 3107979569)
+        code = a_fp_disp(code, 17, dest - fn_frame_mark)
+        code = e_w(code, 3103785262)
+      } otherwise {
+        hold aoutfix = len(code)
+        fixsite = push(fixsite, aoutfix)
+        fixoff = push(fixoff, dest)
+        code = a_addr(code, 9)
+        code = e_w(code, 3103785262)
+      }
       hold a_left_cmp = len(code)
       code = e_w(code, 1895825791)
       hold a_left_skip_site = len(code)
@@ -1192,27 +1544,49 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
       code = e_w(code, 956301777)
       code = e_w(code, 2432697806)
       code = e_w(code, 956301791)
-      hold afix5 = len(code)
-      fixsite = push(fixsite, afix5)
-      fixoff = push(fixoff, dest + 4)
-      // The fixup already targets dest+4, so store at [x9] (offset 0).
-      code = a_addr(code, 9)
-      code = e_w(code, 3103785263)
+      when dest >= fn_frame_mark {
+        // ldr w17,[fp] ; add x9,x17,#disp+4 ; str w15,[x9]
+        code = a_abs(code, 9, dva_of(fp_slot))
+        code = e_w(code, 3107979569)
+        code = a_fp_disp(code, 17, dest + 4 - fn_frame_mark)
+        code = e_w(code, 3103785263)
+      } otherwise {
+        hold afix5 = len(code)
+        fixsite = push(fixsite, afix5)
+        fixoff = push(fixoff, dest + 4)
+        // The fixup already targets dest+4, so store at [x9] (offset 0).
+        code = a_addr(code, 9)
+        code = e_w(code, 3103785263)
+      }
     } otherwise {
       // RV64: t1/t2 and t3/t4 are the source pairs; t5 holds the
       // destination pointer and t6 the total length.
-      hold rfix0 = len(code)
-      code = rv_li32(code, 5, 0)
-      fixsite = push(fixsite, rfix0)
-      fixoff = push(fixoff, leftslot)
-      code = e_w(code, rv_i(0, 5, 2, 6, 3))
-      code = e_w(code, rv_i(4, 5, 2, 7, 3))
-      hold rfix1 = len(code)
-      code = rv_li32(code, 5, 0)
-      fixsite = push(fixsite, rfix1)
-      fixoff = push(fixoff, rightslot)
-      code = e_w(code, rv_i(0, 5, 2, 28, 3))
-      code = e_w(code, rv_i(4, 5, 2, 29, 3))
+      when leftslot >= fn_frame_mark {
+        code = rv_li32(code, 5, dva_of(fp_slot))
+        code = e_w(code, rv_i(0, 5, 2, 6, 3))
+        code = e_w(code, rv_i(leftslot - fn_frame_mark, 6, 2, 6, 3))
+        code = e_w(code, rv_i(leftslot + 4 - fn_frame_mark, 6, 2, 7, 3))
+      } otherwise {
+        hold rfix0 = len(code)
+        code = rv_li32(code, 5, 0)
+        fixsite = push(fixsite, rfix0)
+        fixoff = push(fixoff, leftslot)
+        code = e_w(code, rv_i(0, 5, 2, 6, 3))
+        code = e_w(code, rv_i(4, 5, 2, 7, 3))
+      }
+      when rightslot >= fn_frame_mark {
+        code = rv_li32(code, 5, dva_of(fp_slot))
+        code = e_w(code, rv_i(0, 5, 2, 28, 3))
+        code = e_w(code, rv_i(rightslot - fn_frame_mark, 28, 2, 28, 3))
+        code = e_w(code, rv_i(rightslot + 4 - fn_frame_mark, 28, 2, 29, 3))
+      } otherwise {
+        hold rfix1 = len(code)
+        code = rv_li32(code, 5, 0)
+        fixsite = push(fixsite, rfix1)
+        fixoff = push(fixoff, rightslot)
+        code = e_w(code, rv_i(0, 5, 2, 28, 3))
+        code = e_w(code, rv_i(4, 5, 2, 29, 3))
+      }
       hold rfix2 = len(code)
       code = rv_li32(code, 5, 0)
       fixsite = push(fixsite, rfix2)
@@ -1267,17 +1641,26 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
       code = e_w(code, rv_s(0, 23, 19, 0))
       code = e_w(code, rv_i(1, 19, 0, 19, 19))
       code = e_w(code, rv_s(0, 0, 19, 0))
-      hold rfix4 = len(code)
-      code = rv_li32(code, 5, 0)
-      fixsite = push(fixsite, rfix4)
-      fixoff = push(fixoff, dest)
-      // x30 retains the original heap allocation base for the result.
-      code = e_w(code, rv_s(0, 30, 5, 2))
-      hold rfix5 = len(code)
-      code = rv_li32(code, 5, 0)
-      fixsite = push(fixsite, rfix5)
-      fixoff = push(fixoff, dest + 4)
-      code = e_w(code, rv_s(0, 31, 5, 2))
+      when dest >= fn_frame_mark {
+        // li32 x6,fp ; lw x6,0(x6) ; sw x30,disp(x6) ; sw x31,disp+4(x6)
+        code = rv_li32(code, 6, dva_of(fp_slot))
+        code = e_w(code, rv_i(0, 6, 2, 6, 3))
+        // x30 retains the original heap allocation base for the result.
+        code = e_w(code, rv_s(dest - fn_frame_mark, 30, 6, 2))
+        code = e_w(code, rv_s(dest + 4 - fn_frame_mark, 31, 6, 2))
+      } otherwise {
+        hold rfix4 = len(code)
+        code = rv_li32(code, 5, 0)
+        fixsite = push(fixsite, rfix4)
+        fixoff = push(fixoff, dest)
+        // x30 retains the original heap allocation base for the result.
+        code = e_w(code, rv_s(0, 30, 5, 2))
+        hold rfix5 = len(code)
+        code = rv_li32(code, 5, 0)
+        fixsite = push(fixsite, rfix5)
+        fixoff = push(fixoff, dest + 4)
+        code = e_w(code, rv_s(0, 31, 5, 2))
+      }
     }
   }
   give 0
@@ -1402,12 +1785,70 @@ make materialize_concat_operand(text: str) -> num {
   give 0 - 1
 }
 
+// A fresh absolute (pointer, length) scratch pair in the data segment.
+make abs_pair_scratch() -> num {
+  hold s = len(data)
+  data = put_zeros(data, 8)
+  give s
+}
+
+// Copy a frame pair into a fresh absolute scratch pair, so the concat copy
+// sequence -- which reads its operands through fixed registers -- can treat a
+// frame-resident operand like any static pair.
+make frame_pair_to_abs(s: num) -> num {
+  hold a = abs_pair_scratch()
+  hold off = 0
+  while off < 8 {
+    code = emit_load_var(code, arch, s + off)
+    code = emit_pop_acc(code, arch)
+    hold st = len(code)
+    when arch == 0 {
+      fixsite = push(fixsite, st + 1)
+    } otherwise {
+      fixsite = push(fixsite, st)
+    }
+    fixoff = push(fixoff, a + off)
+    code = emit_store_global(code, arch)
+    off = off + 4
+  }
+  give a
+}
+
+// Copy an absolute pair into a frame pair (the concat result is published).
+make abs_pair_to_frame(a: num, s: num) -> num {
+  hold off = 0
+  while off < 8 {
+    code = emit_load_abs_word(code, arch, dva_of(a + off))
+    code = emit_store_var(code, arch, s + off)
+    off = off + 4
+  }
+  give 0
+}
+
 // One concat call: resolve both operands, then copy them into the bump heap and
-// publish the result pair at `dest`.
+// publish the result pair at `dest`. Inside a make body every name is
+// frame-resident, so frame operands and frame destinations are bounced through
+// absolute scratch pairs and the copy sequence itself stays unchanged.
 make emit_concat_pair(left: str, right: str, dest: num) -> num {
   hold leftslot = materialize_concat_operand(left)
   hold rightslot = materialize_concat_operand(right)
-  hold copied = emit_concat_copy(leftslot, rightslot, dest)
+  hold destslot = dest
+  hold copied = 0
+  when fn_active >= 0 {
+    when leftslot >= fn_frame_mark {
+      leftslot = frame_pair_to_abs(leftslot)
+    }
+    when rightslot >= fn_frame_mark {
+      rightslot = frame_pair_to_abs(rightslot)
+    }
+    when destslot >= fn_frame_mark {
+      destslot = abs_pair_scratch()
+    }
+  }
+  copied = emit_concat_copy(leftslot, rightslot, destslot)
+  when fn_active >= 0 && destslot != dest {
+    copied = abs_pair_to_frame(destslot, dest)
+  }
   give 0
 }
 
@@ -1466,8 +1907,12 @@ make emit_chr_value(xs: list, arch: num, spec: list, cell: num, dst: num) -> lis
       xs = emit_push_imm2(xs, 0, val)
       xs = emit_pop_acc(xs, 0)
     } otherwise {
-      xs = e1(xs, 161)
-      xs = e32(xs, base + srcslot)
+      when srcslot >= fn_frame_mark {
+        xs = emit_load_frame_word(xs, 0, srcslot - fn_frame_mark)
+      } otherwise {
+        xs = e1(xs, 161)
+        xs = e32(xs, base + srcslot)
+      }
     }
     xs = e1(xs, 37)
     xs = e32(xs, 255)
@@ -1495,8 +1940,12 @@ make emit_chr_value(xs: list, arch: num, spec: list, cell: num, dst: num) -> lis
     when kind == 0 {
       xs = rv_li32(xs, 10, val)
     } otherwise {
-      xs = rv_li32(xs, 5, base + srcslot)
-      xs = e_w(xs, rv_i(0, 5, 2, 10, 3))
+      when srcslot >= fn_frame_mark {
+        xs = emit_load_frame_word(xs, 2, srcslot - fn_frame_mark)
+      } otherwise {
+        xs = rv_li32(xs, 5, base + srcslot)
+        xs = e_w(xs, rv_i(0, 5, 2, 10, 3))
+      }
     }
     xs = e_w(xs, rv_i(255, 10, 7, 10, 19))
     xs = rv_li32(xs, 5, base + cell)
@@ -1514,8 +1963,12 @@ make emit_chr_value(xs: list, arch: num, spec: list, cell: num, dst: num) -> lis
     xs = a_movz(xs, 0, 0, bit_and(val, 65535))
     xs = a_movk16(xs, 0, 0, bit_and(shr(val, 16), 65535))
   } otherwise {
-    xs = a_abs(xs, 9, base + srcslot)
-    xs = e_w(xs, 3107979552)
+    when srcslot >= fn_frame_mark {
+      xs = emit_load_frame_word(xs, 1, srcslot - fn_frame_mark)
+    } otherwise {
+      xs = a_abs(xs, 9, base + srcslot)
+      xs = e_w(xs, 3107979552)
+    }
   }
   xs = a_movz(xs, 0, 1, 255)
   xs = e_w(xs, 167837696)
@@ -2872,23 +3325,8 @@ make emit_expression(extext: str) -> num {
             when slot_of(strnames, eq_name) < 0 {
               hold eq_numarg = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq needs string variables, not numeric values"))
             }
-            hold eqpslot_at = len(code)
-            when arch == 0 {
-              fixsite = push(fixsite, eqpslot_at + 1)
-            } otherwise {
-              fixsite = push(fixsite, eqpslot_at)
-            }
-            fixoff = push(fixoff, eq_slot)
-            code = emit_load_global(code, arch)
-            hold eq_p2off = eq_slot + 4
-            hold eqnslot_at = len(code)
-            when arch == 0 {
-              fixsite = push(fixsite, eqnslot_at + 1)
-            } otherwise {
-              fixsite = push(fixsite, eqnslot_at)
-            }
-            fixoff = push(fixoff, eq_p2off)
-            code = emit_load_global(code, arch)
+            code = emit_load_var(code, arch, eq_slot)
+            code = emit_load_var(code, arch, eq_slot + 4)
             }
           }
           eq_arg = eq_arg + 1
@@ -3018,14 +3456,7 @@ make emit_expression(extext: str) -> num {
             when slot_of(strnames, argname) < 0 {
               hold bad_len_type = fail(1, concat(concat("line ", numstr(lineno)), ": len() requires a string variable"))
             }
-            hold vat = len(code)
-            when arch == 0 {
-              fixsite = push(fixsite, vat + 1)
-            } otherwise {
-              fixsite = push(fixsite, vat)
-            }
-            fixoff = push(fixoff, arg_slot + 4)
-            code = emit_load_global(code, arch)
+            code = emit_load_var(code, arch, arg_slot + 4)
           }
           want = 0
           k = k + 3
@@ -3039,33 +3470,12 @@ make emit_expression(extext: str) -> num {
             when k + 1 >= tn || string_eq(tok_at(toks, k + 1), "[") == 0 {
               hold stringnum = fail(1, concat(concat(concat("line ", numstr(lineno)), ": string variable '"), concat(vname, "' used as a number (index it with [i])")))
             }
-            hold svat = len(code)
-            when arch == 0 {
-              fixsite = push(fixsite, svat + 1)
-            } otherwise {
-              fixsite = push(fixsite, svat)
-            }
-            fixoff = push(fixoff, vslot)
-            code = emit_load_global(code, arch)
-            hold slat = len(code)
-            when arch == 0 {
-              fixsite = push(fixsite, slat + 1)
-            } otherwise {
-              fixsite = push(fixsite, slat)
-            }
-            fixoff = push(fixoff, vslot + 4)
-            code = emit_load_global(code, arch)
+            code = emit_load_var(code, arch, vslot)
+            code = emit_load_var(code, arch, vslot + 4)
             want = 0
             pending_string_index = 1
           } otherwise {
-            hold vat2 = len(code)
-            when arch == 0 {
-              fixsite = push(fixsite, vat2 + 1)
-            } otherwise {
-              fixsite = push(fixsite, vat2)
-            }
-            fixoff = push(fixoff, vslot)
-            code = emit_load_global(code, arch)
+            code = emit_load_var(code, arch, vslot)
             want = 0
           }
         }
@@ -3376,13 +3786,30 @@ make emit_statements() -> num {
         }
         slot = slot_of(names, nm)
         when slot < 0 {
-          slot = len(data)
-          when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1 {
-            data = put_zeros(data, 8)
-            strnames = concat(strnames, concat(concat(concat("|", nm), "="), "1"))
-            strnames = concat(strnames, "|")
+          when fn_active >= 0 {
+            // A body local lives in the current frame, below the frame base.
+            // Its stored slot value is the frame mark plus a negative byte
+            // displacement; a string value keeps a (pointer, length) pair.
+            hold fwords = 1
+            when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1 {
+              fwords = 2
+              strnames = concat(strnames, concat(concat(concat("|", nm), "="), "1"))
+              strnames = concat(strnames, "|")
+            }
+            slot = fn_frame_mark + 0 - 4 * (fn_frame_words[fn_active] + fwords)
+            fn_frame_words[fn_active] = fn_frame_words[fn_active] + fwords
+            when fn_frame_words[fn_active] > 60 {
+              hold bigframe = fail(1, concat(concat("line ", numstr(lineno)), ": a make body keeps at most 60 words of locals in a frame"))
+            }
           } otherwise {
-            data = put_zeros(data, 4)
+            slot = len(data)
+            when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1 {
+              data = put_zeros(data, 8)
+              strnames = concat(strnames, concat(concat(concat("|", nm), "="), "1"))
+              strnames = concat(strnames, "|")
+            } otherwise {
+              data = put_zeros(data, 4)
+            }
           }
           names = concat(names, concat(concat(concat("|", nm), "="), numstr(slot)))
           names = concat(names, "|")
@@ -3625,7 +4052,18 @@ make emit_statements() -> num {
           chr_src = slot_of(names, chr_text)
         }
       }
-      code = emit_chr_value(code, arch, chr_spec(chr_kind, chr_value, chr_src), chr_cell, slot)
+      // Inside a body the target slot is frame-resident: emit into a fresh
+      // absolute pair and copy the two words into the frame.
+      hold chr_dst = slot
+      hold chr_tmp = 0 - 1
+      when slot >= fn_frame_mark {
+        chr_tmp = abs_pair_scratch()
+        chr_dst = chr_tmp
+      }
+      code = emit_chr_value(code, arch, chr_spec(chr_kind, chr_value, chr_src), chr_cell, chr_dst)
+      when chr_tmp >= 0 {
+        hold chr_copy = abs_pair_to_frame(chr_tmp, slot)
+      }
       chr_has = 0
     }
 
@@ -3637,14 +4075,7 @@ make emit_statements() -> num {
       fn_last_give = 1
     }
     when act == 1 {
-      hold sat = len(code)
-      when arch == 0 {
-        fixsite = push(fixsite, sat + 1)
-      } otherwise {
-        fixsite = push(fixsite, sat)
-      }
-      fixoff = push(fixoff, slot)
-      code = emit_store_global(code, arch)
+      code = emit_store_var(code, arch, slot)
     }
     when act == 2 {
       code = emit_call(code, arch, 0)
@@ -3702,24 +4133,10 @@ make emit_statements() -> num {
       }
       code = emit_push_imm2(code, arch, strbase + litoff2)
       code = emit_pop_acc(code, arch)
-      hold psite = len(code)
-      when arch == 0 {
-        fixsite = push(fixsite, psite + 1)
-      } otherwise {
-        fixsite = push(fixsite, psite)
-      }
-      fixoff = push(fixoff, slot)
-      code = emit_store_global(code, arch)
+      code = emit_store_var(code, arch, slot)
       code = emit_push_imm2(code, arch, lbytes2)
       code = emit_pop_acc(code, arch)
-      hold lsite = len(code)
-      when arch == 0 {
-        fixsite = push(fixsite, lsite + 1)
-      } otherwise {
-        fixsite = push(fixsite, lsite)
-      }
-      fixoff = push(fixoff, slot + 4)
-      code = emit_store_global(code, arch)
+      code = emit_store_var(code, arch, slot + 4)
     }
     when act == 9 {
       hold shown_slot_done = emit_show_string_slot(slot)
@@ -3732,23 +4149,9 @@ make emit_statements() -> num {
       hold copysrc = slot_of(names, callleft)
       hold off = 0
       while off < 8 {
-        hold lsite_c = len(code)
-        when arch == 0 {
-          fixsite = push(fixsite, lsite_c + 1)
-        } otherwise {
-          fixsite = push(fixsite, lsite_c)
-        }
-        fixoff = push(fixoff, copysrc + off)
-        code = emit_load_global(code, arch)
+        code = emit_load_var(code, arch, copysrc + off)
         code = emit_pop_acc(code, arch)
-        hold ssite_c = len(code)
-        when arch == 0 {
-          fixsite = push(fixsite, ssite_c + 1)
-        } otherwise {
-          fixsite = push(fixsite, ssite_c)
-        }
-        fixoff = push(fixoff, slot + off)
-        code = emit_store_global(code, arch)
+        code = emit_store_var(code, arch, slot + off)
         off = off + 4
       }
     }
@@ -4068,12 +4471,20 @@ make run() -> num {
 
   // `make` bodies are lifted out of the program text first: the main walk then
   // sees only the program, with the make blocks blanked so diagnostics keep
-  // their original line numbers.
+  // their original line numbers. The recursion depth counter and the frame
+  // base word are allocated after the main walk, only when the program has
+  // functions, so function-free programs keep a byte-identical data image.
   lineno = 0
   hold main_only = lift_functions()
   src = main_only
   lineno = 0
   hold em_walk = emit_statements()
+  when fn_count > 0 {
+    depth_slot = len(data)
+    data = put_zeros(data, 4)
+    fp_slot = len(data)
+    data = put_zeros(data, 4)
+  }
 
   // The string_eq routine, emitted once and reached only by `call`. It sits
   // behind a jump so the body cannot fall into it, and before the exit sequence
@@ -4093,8 +4504,36 @@ make run() -> num {
 
   // User functions, emitted after the main program behind a jump and reached
   // only by `call`. Each body is walked by the same statement walk, with the
-  // function's parameters as the visible name table.
+  // function's parameters as the visible name table. The zero-fill immediate
+  // of the prologue is patched after the walk, when the body's local word
+  // count is final; recursion is legal because every invocation owns a frame.
   when fn_count > 0 {
+    // The shared recursion-overflow stub sits behind its own jump so the main
+    // program cannot fall into it: reached only by the depth-check branches in
+    // the prologues, it exits 1 with no output, exactly like the concat-heap
+    // and index-bounds faults. The image still ends with the process exit that
+    // the container check pins.
+    code = emit_jmp(code, arch)
+    ov_stub_skip = len(code) - 4
+    ov_stub_at = len(code)
+    when arch == 0 {
+      code = e1(code, 184)
+      code = e32(code, 1)
+      code = e1(code, 187)
+      code = e32(code, 1)
+      code = e1(code, 205)
+      code = e1(code, 128)
+    } otherwise {
+      when arch == 2 {
+        code = e_w(code, rv_i(1, 0, 0, 10, 19))
+        code = e_w(code, rv_i(93, 0, 0, 17, 19))
+        code = e_w(code, 115)
+      } otherwise {
+        code = a_movz(code, 1, 0, 1)
+        code = a_movz(code, 1, 8, 93)
+        code = e_w(code, 3556769793)
+      }
+    }
     code = emit_jmp(code, arch)
     hold fn_skip = len(code) - 4
     hold fi = 0
@@ -4102,15 +4541,30 @@ make run() -> num {
       fn_off[fi] = len(code)
       hold saved_names = names
       hold saved_strnames = strnames
-      names = nth_field(fn_paramtbl, fi)
+      names = body_parm_names(nth_field(fn_paramtbl, fi), fn_arity[fi])
       strnames = ""
       fn_active = fi
       fn_gave = 0
       fn_last_give = 0
+      fill_site = 0 - 1
       code = emit_fn_prologue(code, arch)
       src = nth_part(fn_bodytbl, fi)
       lineno = fn_line[fi]
       hold body_walk = emit_statements()
+      when fill_site >= 0 {
+        when arch == 0 {
+          code = patch32(code, fill_site, fn_frame_words[fi])
+        } otherwise {
+          when arch == 2 {
+            // one 8-byte store per two words, rounded up
+            code = set_w(code, fill_site, rv_i(shr(fn_frame_words[fi] + 1, 1), 0, 0, 6, 19))
+          } otherwise {
+            // one 16-byte store per four words, rounded up
+            code = set_w(code, fill_site, w_at(a_movz([], 0, 6, shr(fn_frame_words[fi] + 3, 2)), 0))
+          }
+        }
+        fill_site = 0 - 1
+      }
       when fn_gave == 0 {
         hold nogive = fail(1, concat(concat(concat(concat("line ", numstr(fn_line[fi])), ": the body of '"), nth_field(fn_nametbl, fi)), "' never gives a value with give"))
       }
@@ -4124,26 +4578,33 @@ make run() -> num {
       fi = fi + 1
     }
     code = patch_jmp(code, arch, fn_skip, len(code))
-    // The call graph must stay acyclic: a cycle would reuse a parameter slot
-    // whose value is still live.
-    hold ea = 0
-    while ea < len(edge_from) {
-      when edge_from[ea] >= 0 {
-        when reaches(edge_to[ea], edge_from[ea], []) == 1 {
-          hold recursive = fail(1, concat(concat(concat("line ", numstr(fn_line[edge_from[ea]])), concat(": '", nth_field(fn_nametbl, edge_from[ea]))), concat("' takes part in a recursive call chain, which native32 v1 refuses: one parameter slot per function", "")))
-        }
-      }
-      ea = ea + 1
-    }
     hold cs = 0
     while cs < len(call_site) {
       code = patch_call(code, arch, call_site[cs], fn_off[call_fn[cs]])
       cs = cs + 1
     }
+    hold os = 0
+    while os < len(ov_sites) {
+      when arch == 0 {
+        code = patch32(code, ov_sites[os], ov_stub_at - (ov_sites[os] + 4))
+      } otherwise {
+        when arch == 2 {
+          code = set_w(code, ov_sites[os], rv_b_word(ov_stub_at - ov_sites[os], 11, 10, 5))
+        } otherwise {
+          code = a_imm19(code, ov_sites[os], ov_stub_at - ov_sites[os])
+        }
+      }
+      os = os + 1
+    }
   }
 
   // exit(0)
+  hold exit0_at = len(code)
   code = emit_exit0(code, arch)
+  when fn_count > 0 {
+    // Now the jump over the recursion-overflow stub can target the exit.
+    code = patch_jmp(code, arch, ov_stub_skip, exit0_at)
+  }
 
   hold cn = len(code)
   hold hdrsz = 116
