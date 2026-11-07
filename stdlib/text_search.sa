@@ -1,0 +1,77 @@
+// Byte-based substring search and replacement. Empty needles match at the
+// requested clamped position for search; count and replace treat them as no-op.
+// Positions must be whole byte indexes (under 1e15); fractional positions fail.
+make ts_match_at(s: str, needle: str, pos: num) -> num {
+  when pos < 0 {
+    give 0
+  }
+  when pos + len(needle) > len(s) {
+    give 0
+  }
+  when pos != pos % 1000000000000000 {
+    give 0
+  }
+  hold i = 0
+  while i < len(needle) {
+    when sx_index(s, pos + i) != sx_index(needle, i) {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+make ts_find_from(s: str, needle: str, start: num) -> num {
+  hold pos = start
+  when pos < 0 {
+    hold pos = 0
+  }
+  when pos > len(s) {
+    give 0 - 1
+  }
+  when pos != pos % 1000000000000000 {
+    give 0 - 1
+  }
+  while pos + len(needle) <= len(s) {
+    when ts_match_at(s, needle, pos) == 1 {
+      give pos
+    }
+    hold pos = pos + 1
+  }
+  give 0 - 1
+}
+make ts_find(s: str, needle: str) -> num {
+  give ts_find_from(s, needle, 0)
+}
+// Counts non-overlapping matches, left to right.
+make ts_count(s: str, needle: str) -> num {
+  when len(needle) == 0 {
+    give 0
+  }
+  hold pos = 0
+  hold count = 0
+  hold found = ts_find_from(s, needle, pos)
+  while found >= 0 {
+    hold count = count + 1
+    hold pos = found + len(needle)
+    hold found = ts_find_from(s, needle, pos)
+  }
+  give count
+}
+make ts_replace(s: str, needle: str, replacement: str) -> str {
+  when len(needle) == 0 {
+    give s
+  }
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    when ts_match_at(s, needle, i) == 1 {
+      hold out = concat(out, replacement)
+      hold i = i + len(needle)
+    }
+    otherwise {
+      hold out = concat(out, chr(sx_index(s, i)))
+      hold i = i + 1
+    }
+  }
+  give out
+}

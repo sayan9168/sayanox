@@ -9,6 +9,16 @@
 // a UTF-8 character wider than one byte is several bytes.
 
 use "stdlib/str_text.sa"
+use "stdlib/statistics.sa"
+use "stdlib/text_search.sa"
+use "stdlib/hex_text.sa"
+use "stdlib/geometry.sa"
+use "stdlib/ascii.sa"
+use "stdlib/vector.sa"
+use "stdlib/interval.sa"
+use "stdlib/fields.sa"
+use "stdlib/duration.sa"
+use "stdlib/running.sa"
 
 // 1. Collapsing ASCII whitespace runs (space, TAB, LF, CR) to one space.
 show t_normalize_ws("  alpha\tbeta\n gamma  ")
@@ -65,3 +75,132 @@ show t_starts_with(t_trim("  hi "), "hi")
 show t_word_count(t_normalize_ws(" a\tb\nc "))
 show t_normalize_ws(t_trim(t_pad_left("v", 3, 32)))
 show "stdlib-text-ok"
+
+// Additional toolbox modules, compared to the same hand-written oracle.
+hold xs = [1, 2, 3, 4]
+hold ys = [4, 3, 2, 1]
+hold empty = []
+show stats_sum(xs)
+show stats_mean(xs)
+show stats_min(xs)
+show stats_max(xs)
+show stats_variance(xs)
+show stats_dot(xs, ys)
+show stats_mean(empty)
+show stats_variance(empty)
+show stats_dot(xs, empty)
+show ts_find("banana", "ana")
+show ts_find_from("banana", "ana", 2)
+show ts_find("banana", "xyz")
+show ts_find_from("abc", "", 3)
+show ts_find_from("abc", "", 4)
+show ts_find_from("abc", "a", 0 - 2)
+show ts_count("aaaaa", "aa")
+show ts_count("abc", "")
+show ts_replace("aaaaa", "aa", "X")
+show ts_replace("abc", "", "X")
+show ts_replace("abc", "b", "")
+show hx_encode("Hello!")
+show hx_decode("48656C6C6F21")
+show hx_encode(hx_decode("ff7F"))
+show hx_valid("")
+show hx_valid("0")
+show hx_valid("0g")
+show hx_valid("00")
+show len(hx_decode("610062"))
+show geo_distance_squared(0, 0, 3, 4)
+show geo_cross(1, 2, 3, 4)
+show geo_rect_area(5, 4, 1, 2)
+show geo_rect_contains(5, 4, 1, 2, 1, 4)
+show geo_rect_contains(5, 4, 1, 2, 0, 4)
+show geo_overlap(5, 1, 3, 7)
+show geo_overlap(0, 1, 2, 3)
+show ts_find_from("abc", "", 1.5)
+show ts_match_at("abc", "a", 0.5)
+show ascii_is_digit(57)
+show ascii_is_digit(58)
+show ascii_is_alpha(90)
+show ascii_is_alpha(233)
+show ascii_is_alnum(48)
+show ascii_upper("Hello, z9!")
+show ascii_lower("HELLO, Z9!")
+show ascii_identifier("_hello9")
+show ascii_identifier("9hello")
+show ascii_identifier("")
+show ascii_identifier("a-b")
+show "toolbox-ok"
+
+// Additional vectors, intervals, fields, elapsed time and running lists.
+hold va = [1, 2, 3]
+hold vb = [4, 5, 6]
+hold vc = vec_add(va, vb)
+show len(vc)
+show vc[0]
+show vc[2]
+hold vd = vec_sub(vb, va)
+hold vs = vec_scale(va, 2)
+show vd[1]
+show vs[2]
+show vec_dot(va, vb)
+show vec_length_squared(va)
+show vec_distance_squared(va, vb)
+show len(vec_add(va, empty))
+show va[0]
+show iv_contains(5, 1, 1)
+show iv_contains(5, 1, 6)
+show iv_clamp(5, 1, 7)
+show iv_overlaps(1, 2, 2, 3)
+show iv_overlaps(1, 2, 3, 4)
+show iv_overlap_length(5, 1, 3, 7)
+show iv_lerp(10, 20, 0.25)
+show fields_count("a,,b,", 44)
+show fields_get("a,,b,", 44, 0)
+show len(fields_get("a,,b,", 44, 1))
+show fields_get("a,,b,", 44, 2)
+show len(fields_get("a,,b,", 44, 3))
+show fields_count("", 44)
+show fields_count("a", 0)
+show len(fields_get("a,b", 44, 0.5))
+show dur_format(0)
+show dur_format(59)
+show dur_format(3601)
+show dur_format(90061)
+show dur_valid(0 - 1)
+show dur_valid(1.5)
+show dur_valid(1000000000000000)
+show len(dur_format(1.5))
+hold rv = [3, 1, 4, 2]
+hold rm = run_prefix_max(rv)
+hold rn = run_prefix_min(rv)
+hold rd = run_differences(rv)
+show rm[0]
+show rm[3]
+show rn[3]
+show len(rd)
+show rd[0]
+show rd[1]
+show rd[2]
+show len(run_differences(empty))
+// Additional boundary and independence checks.
+push(vc, 99)
+show len(va)
+show len(vb)
+show len(vec_sub(empty, empty))
+show vec_distance_squared(va, empty)
+show iv_contains(2, 2, 2)
+show iv_overlap_length(1, 2, 2, 4)
+show fields_count(",,", 44)
+show len(fields_get(",,", 44, 2))
+show fields_count("a", 44.5)
+show fields_count("a", 256)
+show fields_get("a|b", 124, 1)
+show dur_format(60)
+show dur_format(3600)
+show dur_hours(90061)
+show dur_minutes(90061)
+show dur_seconds(90061)
+hold one = [5]
+show len(run_differences(one))
+show len(run_prefix_max(empty))
+show len(run_prefix_min(empty))
+show "more-libraries-ok"

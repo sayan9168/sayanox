@@ -1,0 +1,49 @@
+// Closed numeric intervals. Bounds may be reversed; touching counts as overlap.
+make iv_min(a: num, b: num) -> num {
+  when a < b {
+    give a
+  }
+  give b
+}
+make iv_max(a: num, b: num) -> num {
+  when a > b {
+    give a
+  }
+  give b
+}
+make iv_contains(a: num, b: num, x: num) -> num {
+  when x < iv_min(a, b) {
+    give 0
+  }
+  when x > iv_max(a, b) {
+    give 0
+  }
+  give 1
+}
+make iv_clamp(a: num, b: num, x: num) -> num {
+  when x < iv_min(a, b) {
+    give iv_min(a, b)
+  }
+  when x > iv_max(a, b) {
+    give iv_max(a, b)
+  }
+  give x
+}
+make iv_overlaps(a: num, b: num, c: num, d: num) -> num {
+  when iv_max(a, b) < iv_min(c, d) {
+    give 0
+  }
+  when iv_max(c, d) < iv_min(a, b) {
+    give 0
+  }
+  give 1
+}
+make iv_overlap_length(a: num, b: num, c: num, d: num) -> num {
+  when iv_overlaps(a, b, c, d) == 0 {
+    give 0
+  }
+  give iv_min(iv_max(a, b), iv_max(c, d)) - iv_max(iv_min(a, b), iv_min(c, d))
+}
+make iv_lerp(a: num, b: num, t: num) -> num {
+  give a + (b - a) * t
+}

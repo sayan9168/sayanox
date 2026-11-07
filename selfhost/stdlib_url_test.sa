@@ -1,3 +1,5 @@
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
 // stdlib/url.sa fixture. Every line is a label=value pair; the full stdout is
 // pinned by selfhost/stdlib_url.want and must be byte-identical on seed-min,
 // gen2 and native_aot (make test-stdlib-next).
@@ -51,3 +53,69 @@ show concat("q.badcount=", surl_istr(surl_query_count(surl_query_parse("bad=%ZZ"
 show concat("q.badwrite=", surl_query_write(surl_query_parse("bad=%ZZ")))
 show concat("q.eqvalue=", surl_query_value(surl_query_parse("a=1=2"), 0))
 show "url-done"
+
+hold empty = []
+// Small transformer primitives with independent, hand-computed expectations.
+hold token_ids = llm_bytes("Az")
+show len(token_ids)
+show token_ids[0]
+show token_ids[1]
+hold embeddings = [1, 2, 3, 4, 5, 6]
+hold looked = llm_embed([2, 0], embeddings, 2)
+show llm_embedding_valid([2, 0], embeddings, 2)
+show len(looked)
+show looked[0]
+show looked[1]
+show looked[2]
+show looked[3]
+show llm_embedding_valid([3], embeddings, 2)
+show llm_embedding_valid([0.5], embeddings, 2)
+show llm_embedding_valid([0 - 1], embeddings, 2)
+show llm_embedding_valid([0], embeddings, 0)
+show llm_embedding_valid([0], embeddings, 1.5)
+show len(llm_embed([3], embeddings, 2))
+// Uniform logits: first token sees only itself, second sees both.
+hold q = [0, 0]
+hold k = [0, 0]
+hold v = [2, 4]
+hold attention = llm_attention(q, k, v, 1)
+show llm_attention_valid(q, k, v, 1)
+show len(attention)
+show attention[0]
+show attention[1]
+// Changing a future value cannot affect the first result.
+hold altered = llm_attention(q, k, [2, 100], 1)
+show altered[0]
+show altered[1]
+show llm_attention_valid(q, [0], v, 1)
+show llm_attention_valid(q, k, v, 1.5)
+show llm_attention_valid(q, k, v, 65)
+show len(llm_attention(q, [0], v, 1))
+show len(llm_attention(empty, empty, empty, 1))
+show llm_width_sqrt(2) > 1.41421
+show llm_width_sqrt(2) < 1.41422
+hold logits = llm_logits([2, 3], [1, 0, 0, 2], [1, 0 - 1])
+show logits[0]
+show logits[1]
+show llm_greedy(logits)
+show llm_greedy(empty)
+// Non-uniform two-dimensional attention verifies the sqrt(width) scale.
+hold att2 = llm_attention([1, 0, 0, 1], [1, 0, 0, 1], [1, 2, 3, 4], 2)
+show att2[0]
+show att2[1]
+show att2[2] > 2.339
+show att2[2] < 2.340
+show att2[3] > 3.339
+show att2[3] < 3.340
+// Reject overlong contexts, while the boundary itself is valid.
+hold long_q = []
+hold count_q = 0
+while count_q < 64 {
+  push(long_q, 0)
+  hold count_q = count_q + 1
+}
+show llm_attention_valid(long_q, long_q, long_q, 1)
+push(long_q, 0)
+show llm_attention_valid(long_q, long_q, long_q, 1)
+show len(llm_attention(long_q, long_q, long_q, 1))
+show "llm-primitives-ok"

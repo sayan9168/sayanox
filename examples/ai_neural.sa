@@ -1,0 +1,14 @@
+// Train a one-hidden-layer classifier on XOR, a non-linear problem.
+use "stdlib/ai.sa"
+
+hold inputs = [0, 0, 0, 1, 1, 0, 1, 1]
+hold labels = [0, 1, 1, 0]
+// Two inputs, two hidden units; hidden-major weights, hidden biases,
+// output weights, then output bias. Nonzero initialization breaks symmetry.
+hold initial = [1, 1, 1, 1, 0, 0 - 1, 1, 0 - 2, 0 - 0.5]
+hold before = ai_nn_predict(inputs, initial, 2, 2)
+hold model = ai_nn_fit(inputs, labels, initial, 2, 0.5, 300)
+hold probabilities = ai_nn_predict(inputs, model, 2, 2)
+hold classes = ai_threshold(probabilities, 0.5)
+show ai_accuracy(classes, labels)
+show ai_binary_loss(probabilities, labels) < ai_binary_loss(before, labels)

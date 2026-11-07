@@ -1,0 +1,43 @@
+// Prefix operations on numeric lists, returning new lists without mutation.
+make run_prefix_max(xs: list) -> list {
+  hold out = []
+  when len(xs) == 0 {
+    give out
+  }
+  hold best = xs[0]
+  hold i = 0
+  while i < len(xs) {
+    when xs[i] > best {
+      hold best = xs[i]
+    }
+    push(out, best)
+    hold i = i + 1
+  }
+  give out
+}
+make run_prefix_min(xs: list) -> list {
+  hold out = []
+  when len(xs) == 0 {
+    give out
+  }
+  hold best = xs[0]
+  hold i = 0
+  while i < len(xs) {
+    when xs[i] < best {
+      hold best = xs[i]
+    }
+    push(out, best)
+    hold i = i + 1
+  }
+  give out
+}
+// Consecutive differences; a list of n items gives max(0, n-1) items.
+make run_differences(xs: list) -> list {
+  hold out = []
+  hold i = 1
+  while i < len(xs) {
+    push(out, xs[i] - xs[i - 1])
+    hold i = i + 1
+  }
+  give out
+}
