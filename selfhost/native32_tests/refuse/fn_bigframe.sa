@@ -1,0 +1,67 @@
+// A make body keeps at most 60 words of locals: a frame is addressed with
+// signed byte displacements from the frame base, so 61 locals is refused.
+make big(n: num) -> num {
+  hold base = n
+  hold v0 = base + 0
+  hold v1 = base + 1
+  hold v2 = base + 2
+  hold v3 = base + 3
+  hold v4 = base + 4
+  hold v5 = base + 5
+  hold v6 = base + 6
+  hold v7 = base + 7
+  hold v8 = base + 8
+  hold v9 = base + 9
+  hold v10 = base + 10
+  hold v11 = base + 11
+  hold v12 = base + 12
+  hold v13 = base + 13
+  hold v14 = base + 14
+  hold v15 = base + 15
+  hold v16 = base + 16
+  hold v17 = base + 17
+  hold v18 = base + 18
+  hold v19 = base + 19
+  hold v20 = base + 20
+  hold v21 = base + 21
+  hold v22 = base + 22
+  hold v23 = base + 23
+  hold v24 = base + 24
+  hold v25 = base + 25
+  hold v26 = base + 26
+  hold v27 = base + 27
+  hold v28 = base + 28
+  hold v29 = base + 29
+  hold v30 = base + 30
+  hold v31 = base + 31
+  hold v32 = base + 32
+  hold v33 = base + 33
+  hold v34 = base + 34
+  hold v35 = base + 35
+  hold v36 = base + 36
+  hold v37 = base + 37
+  hold v38 = base + 38
+  hold v39 = base + 39
+  hold v40 = base + 40
+  hold v41 = base + 41
+  hold v42 = base + 42
+  hold v43 = base + 43
+  hold v44 = base + 44
+  hold v45 = base + 45
+  hold v46 = base + 46
+  hold v47 = base + 47
+  hold v48 = base + 48
+  hold v49 = base + 49
+  hold v50 = base + 50
+  hold v51 = base + 51
+  hold v52 = base + 52
+  hold v53 = base + 53
+  hold v54 = base + 54
+  hold v55 = base + 55
+  hold v56 = base + 56
+  hold v57 = base + 57
+  hold v58 = base + 58
+  hold v59 = base + 59
+  give v0
+}
+show big(1)

@@ -1,0 +1,5 @@
+// At most 6 parameters per make.
+make wide(a: num, b: num, c: num, d: num, e: num, f: num, g: num) -> num {
+  give a
+}
+show wide(1, 2, 3, 4, 5, 6, 7)

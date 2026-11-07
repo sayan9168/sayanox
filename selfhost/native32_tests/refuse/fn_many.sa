@@ -1,0 +1,29 @@
+// At most 8 make declarations per program.
+make f0(n: num) -> num {
+  give n
+}
+make f1(n: num) -> num {
+  give n
+}
+make f2(n: num) -> num {
+  give n
+}
+make f3(n: num) -> num {
+  give n
+}
+make f4(n: num) -> num {
+  give n
+}
+make f5(n: num) -> num {
+  give n
+}
+make f6(n: num) -> num {
+  give n
+}
+make f7(n: num) -> num {
+  give n
+}
+make f8(n: num) -> num {
+  give n
+}
+show f0(1)
