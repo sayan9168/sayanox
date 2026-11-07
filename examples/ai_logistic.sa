@@ -1,0 +1,11 @@
+// Binary classification of two one-feature examples.
+use "stdlib/ai.sa"
+
+hold inputs = [0 - 1, 1]
+hold labels = [0, 1]
+hold initial = [0, 0]
+hold model = ai_logistic_fit(inputs, labels, initial, 1, 20)
+hold probabilities = ai_logistic_predict(inputs, model)
+hold classes = ai_threshold(probabilities, 0.5)
+show ai_accuracy(classes, labels)
+show ai_binary_loss(probabilities, labels) < 0.1

@@ -1,0 +1,63 @@
+// Numeric list vectors. Operations return fresh lists, never mutate inputs.
+// Pairwise operations require equal lengths and return [] on mismatch.
+make vec_add(a: list, b: list) -> list {
+  hold out = []
+  when len(a) != len(b) {
+    give out
+  }
+  hold i = 0
+  while i < len(a) {
+    push(out, a[i] + b[i])
+    hold i = i + 1
+  }
+  give out
+}
+make vec_sub(a: list, b: list) -> list {
+  hold out = []
+  when len(a) != len(b) {
+    give out
+  }
+  hold i = 0
+  while i < len(a) {
+    push(out, a[i] - b[i])
+    hold i = i + 1
+  }
+  give out
+}
+make vec_scale(a: list, factor: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(a) {
+    push(out, a[i] * factor)
+    hold i = i + 1
+  }
+  give out
+}
+make vec_dot(a: list, b: list) -> num {
+  when len(a) != len(b) {
+    give 0
+  }
+  hold result = 0
+  hold i = 0
+  while i < len(a) {
+    hold result = result + a[i] * b[i]
+    hold i = i + 1
+  }
+  give result
+}
+make vec_length_squared(a: list) -> num {
+  give vec_dot(a, a)
+}
+make vec_distance_squared(a: list, b: list) -> num {
+  when len(a) != len(b) {
+    give 0
+  }
+  hold result = 0
+  hold i = 0
+  while i < len(a) {
+    hold d = a[i] - b[i]
+    hold result = result + d * d
+    hold i = i + 1
+  }
+  give result
+}

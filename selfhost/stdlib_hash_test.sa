@@ -1,3 +1,4 @@
+use "stdlib/ai.sa"
 // stdlib/hash.sa fixture. Every line is a label=value pair; the full stdout is
 // pinned by selfhost/stdlib_hash.want and must be byte-identical on seed-min,
 // gen2 and native_aot (make test-stdlib-next).
@@ -30,3 +31,190 @@ show concat("luhn.empty=", sh_istr(sh_luhn_check_digit("")))
 show concat("luhn.valid.0=", sh_istr(sh_luhn_valid("0")))
 show concat("luhn.check.0=", sh_istr(sh_luhn_check_digit("0")))
 show "hash-done"
+
+// AI tests use an independent checked-in oracle.
+hold empty = []
+// Linear model with two features: y = 2*x0 + 3*x1 + 1.
+hold ai_data = [1, 0, 0, 1, 1, 1]
+hold ai_targets = [3, 4, 6]
+hold ai_model = [2, 3, 1]
+hold ai_pred = ai_predict(ai_data, ai_model)
+show ai_matrix_valid(ai_data, 2)
+show ai_matrix_valid(ai_data, 4)
+show ai_matrix_valid(ai_data, 1.5)
+show ai_model_valid(ai_data, ai_targets, ai_model)
+show ai_model_valid(ai_data, empty, ai_model)
+show ai_pred[0]
+show ai_pred[1]
+show ai_pred[2]
+show ai_mse(ai_pred, ai_targets)
+show ai_mae(ai_pred, ai_targets)
+show ai_linear([1, 1], ai_model)
+show ai_dot([1, 2], [3, 4])
+show ai_argmax([3, 5, 5])
+show ai_argmax(empty)
+hold relu = ai_relu_list([0 - 2, 0, 3])
+show relu[0]
+show relu[2]
+hold classes = ai_threshold([0.2, 0.5, 0.8], 0.5)
+show classes[0]
+show classes[1]
+show ai_accuracy(classes, [0, 1, 0])
+show ai_mse([1, 3], [2, 1])
+show ai_mae([1, 3], [2, 1])
+// Hand-computed one-step gradient for y=2x+1 from the zero model.
+hold train_x = [0, 1]
+hold train_y = [1, 3]
+hold initial = [0, 0]
+hold step = ai_linear_step(train_x, train_y, initial, 0.5)
+show step[0]
+show step[1]
+show initial[0]
+show initial[1]
+hold trained = ai_linear_fit(train_x, train_y, initial, 0.1, 100)
+hold trained_pred = ai_predict(train_x, trained)
+show ai_mse(trained_pred, train_y) < 0.001
+show ai_mse(trained_pred, train_y) < ai_mse(ai_predict(train_x, initial), train_y)
+hold copy = ai_linear_fit(train_x, train_y, initial, 0.1, 0)
+push(copy, 9)
+show len(initial)
+show len(copy)
+show len(ai_predict([1, 2, 3], ai_model))
+show len(ai_linear_step(train_x, empty, initial, 0.1))
+show len(ai_linear_step(train_x, train_y, initial, 0))
+show len(ai_linear_fit(train_x, train_y, initial, 0.1, 1.5))
+show len(ai_linear_fit(train_x, train_y, initial, 0.1, 10001))
+show len(ai_linear_fit(empty, empty, initial, 0.1, 1))
+// Dense inference, feature scaling and nearest-neighbour inference.
+hold dense = ai_dense([2, 3], [1, 0, 0, 2], [1, 0 - 1])
+show len(dense)
+show dense[0]
+show dense[1]
+show len(ai_dense([1, 2], [1, 2, 3], [1]))
+show len(ai_dense(empty, empty, empty))
+hold scaled = ai_standardize([1, 10, 3, 14], [2, 12], [1, 2])
+show scaled[0]
+show scaled[1]
+show scaled[2]
+show scaled[3]
+show len(ai_standardize([1, 2], [1, 2], [1, 0]))
+show len(ai_standardize([1, 2], [1, 2], [1]))
+show ai_nearest([0, 0, 3, 4, 3, 4], [3, 4])
+show ai_nearest([0, 0, 2, 0], [1, 0])
+show ai_nearest([1, 2, 3], [1, 2])
+show ai_nearest(empty, [1])
+// Transcendental approximations and stable multiclass probabilities.
+show ai_exp(0)
+show ai_exp(1) > 2.71828
+show ai_exp(1) < 2.71829
+show ai_exp(0 - 1) > 0.36787
+show ai_exp(0 - 1) < 0.36789
+show ai_exp(100) == ai_exp(30)
+show ai_exp(0 - 100) == ai_exp(0 - 30)
+show ai_sigmoid(0)
+show ai_sigmoid(2) > 0.88079
+show ai_sigmoid(2) < 0.88081
+show ai_sigmoid(0 - 2) > 0.11919
+show ai_sigmoid(0 - 2) < 0.11921
+hold probabilities = ai_softmax([1000, 1001, 1002])
+show ai_argmax(probabilities)
+show probabilities[0] > 0.09002
+show probabilities[0] < 0.09004
+show probabilities[1] > 0.24472
+show probabilities[1] < 0.24474
+show probabilities[2] > 0.66523
+show probabilities[2] < 0.66525
+show probabilities[0] + probabilities[1] + probabilities[2] > 0.99999
+show probabilities[0] + probabilities[1] + probabilities[2] < 1.00001
+show len(ai_softmax(empty))
+show ai_binary_labels_valid([0, 1, 0])
+show ai_binary_labels_valid([0, 2])
+hold binary_x = [0 - 1, 1]
+hold binary_y = [0, 1]
+hold binary_zero = [0, 0]
+hold binary_step = ai_logistic_step(binary_x, binary_y, binary_zero, 1)
+show binary_step[0]
+show binary_step[1]
+hold binary_model = ai_logistic_fit(binary_x, binary_y, binary_zero, 1, 20)
+hold binary_p = ai_logistic_predict(binary_x, binary_model)
+hold binary_class = ai_threshold(binary_p, 0.5)
+show ai_accuracy(binary_class, binary_y)
+show binary_p[0] < 0.1
+show binary_p[1] > 0.9
+show binary_zero[0]
+show len(ai_logistic_step(binary_x, [0, 2], binary_zero, 1))
+show len(ai_logistic_fit(binary_x, binary_y, binary_zero, 0, 1))
+show len(ai_logistic_fit(binary_x, binary_y, binary_zero, 1, 1.5))
+show len(ai_logistic_fit(binary_x, binary_y, binary_zero, 1, 10001))
+show len(ai_logistic_fit(empty, empty, binary_zero, 1, 0))
+hold binary_copy = ai_logistic_fit(binary_x, binary_y, binary_zero, 1, 0)
+push(binary_copy, 1)
+show len(binary_zero)
+show len(binary_copy)
+// Cross-entropy checks: exact half-probabilities and endpoint protection.
+show ai_binary_loss_valid([0.5, 0.5], [0, 1])
+show ai_binary_loss([0.5, 0.5], [0, 1]) > 0.69314
+show ai_binary_loss([0.5, 0.5], [0, 1]) < 0.69316
+show ai_binary_loss(binary_p, binary_y) < ai_binary_loss([0.5, 0.5], binary_y)
+show ai_binary_loss([0, 1], [0, 1]) < 0.00001
+show ai_binary_loss([0, 1], [1, 0]) > 27
+show ai_binary_loss_valid([0 - 0.1], [0])
+show ai_binary_loss_valid([1.1], [1])
+show ai_binary_loss_valid([0.5], [2])
+show ai_binary_loss_valid(empty, empty)
+show ai_binary_loss_valid([0.5, 0.5], [0])
+// Hand-calculated one-unit backprop: sigmoid(1) = 0.7310586.
+hold nn_model = [1, 0, 1, 0]
+hold nn_step = ai_nn_step([1], [1], nn_model, 1, 1)
+show ai_nn_shape_valid([1], nn_model, 1, 1)
+show len(nn_step)
+show nn_step[0] > 1.26893
+show nn_step[0] < 1.26895
+show nn_step[1] > 0.26893
+show nn_step[1] < 0.26895
+show nn_step[2] > 1.26893
+show nn_step[2] < 1.26895
+show nn_step[3] > 0.26893
+show nn_step[3] < 0.26895
+show nn_model[0]
+// ReLU derivative at exactly zero is zero, including hidden bias.
+hold nn_dead = ai_nn_step([1], [1], [0, 0, 1, 0], 1, 1)
+show nn_dead[0]
+show nn_dead[1]
+show nn_dead[2]
+show nn_dead[3]
+// Learn the OR function on all four input rows.
+hold or_data = [0, 0, 0, 1, 1, 0, 1, 1]
+hold or_labels = [0, 1, 1, 1]
+hold or_start = [1, 0, 0, 1, 0, 0, 0.1, 0.1, 0]
+hold or_before = ai_nn_predict(or_data, or_start, 2, 2)
+hold or_model = ai_nn_fit(or_data, or_labels, or_start, 2, 1, 200)
+hold or_probs = ai_nn_predict(or_data, or_model, 2, 2)
+hold or_classes = ai_threshold(or_probs, 0.5)
+show ai_accuracy(or_classes, or_labels)
+show ai_binary_loss(or_probs, or_labels) < ai_binary_loss(or_before, or_labels)
+show len(or_start)
+show len(ai_nn_predict(or_data, or_start, 3, 2))
+show len(ai_nn_step(or_data, [0, 1, 2, 1], or_start, 2, 1))
+show len(ai_nn_step(or_data, or_labels, or_start, 2, 0))
+show len(ai_nn_step(or_data, or_labels, or_start, 2.5, 1))
+show len(ai_nn_fit(or_data, or_labels, or_start, 2, 1, 10001))
+show len(ai_nn_fit(empty, empty, or_start, 2, 1, 1))
+hold or_copy = ai_nn_fit(or_data, or_labels, or_start, 2, 1, 0)
+push(or_copy, 1)
+show len(or_start)
+show len(or_copy)
+// Nonlinear XOR plus additional shape and step boundaries.
+hold xor_y = [0, 1, 1, 0]
+hold xor_start = [1, 1, 1, 1, 0, 0 - 1, 1, 0 - 2, 0 - 0.5]
+hold xor_before = ai_nn_predict(or_data, xor_start, 2, 2)
+hold xor_model = ai_nn_fit(or_data, xor_y, xor_start, 2, 0.5, 300)
+hold xor_pred = ai_nn_predict(or_data, xor_model, 2, 2)
+show ai_accuracy(ai_threshold(xor_pred, 0.5), xor_y)
+show ai_binary_loss(xor_pred, xor_y) < ai_binary_loss(xor_before, xor_y)
+show ai_nn_shape_valid(or_data, xor_start, 2, 65)
+show ai_nn_shape_valid(or_data, xor_start, 0, 2)
+show len(ai_nn_step([1, 2, 3], [0, 1], xor_start, 2, 1))
+show len(ai_nn_fit(or_data, xor_y, xor_start, 2, 1, 0.5))
+show len(ai_nn_fit(or_data, xor_y, xor_start, 2, 1, 0 - 1))
+show "ai-library-ok"

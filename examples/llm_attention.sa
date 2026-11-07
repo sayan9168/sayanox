@@ -1,0 +1,14 @@
+// A tiny deterministic token -> embedding -> causal attention -> logits path.
+// This demonstrates inference primitives with toy weights, not a trained LLM.
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+
+hold ids = [0, 1]
+hold table = [1, 0, 0, 1]
+hold embeddings = llm_embed(ids, table, 2)
+// For illustration, Q, K and V share these same toy embeddings.
+hold result = llm_attention(embeddings, embeddings, embeddings, 2)
+// Project the last attention row to two vocabulary scores.
+hold last = [result[2], result[3]]
+hold scores = llm_logits(last, [1, 0, 0, 1], [0, 0])
+show llm_greedy(scores)

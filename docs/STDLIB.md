@@ -13,13 +13,201 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/list_algo.sa` | 21 typed list algorithms (`la_insert_sorted`, `la_sort`, `la_sorted`, `la_index_of`, `la_append`, `la_slice`, `la_take`, `la_drop`, `la_cumsum`, `la_repeat`, `la_scale`, `la_offset`, `la_zip_add`, `la_count_gt`, `la_remove_at`, `la_insert_at`, `la_distinct`, `la_lower_bound`, `la_upper_bound`, `la_merge_sorted`, `la_rotate`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/str_text.sa` | 22 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`, `t_count_char`, `t_starts_with`, `t_ends_with`, `t_normalize_ws`) | seed-min, gen2, native | `test-stdlib-modules`, `test-stdlib-next` |
 | `stdlib/json_util.sa` | flat-object JSON build/read (`j_escape`, `j_kv_text`, `j_kv_number`, `j_kv_flag`, `j_pair`, `j_obj`, `j_arr_numbers`, `j_has`, `j_get_text`, `j_get_number`, `j_get_flag`) | seed-min, gen2, native | `test-stdlib-modules` |
-| `stdlib/json_deep.sa` | nested JSON reader, any depth (`jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with `[i]` indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep` |
+| `stdlib/json_deep.sa` | nested JSON reader and bounded mutations (`jd_set_raw`, `jd_delete_raw`, `jd_object_put_raw`, `jd_array_insert_raw`, `jd_object_ensure_raw`, `jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with dot-separated numeric indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep` |
 | `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa`; boundary/precision oracle in `selfhost/stdlib_json_boundary.want` | seed-min, gen2, native | `test-stdlib-json-write`, `test-stdlib-next` |
 | `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
 | `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals | seed-min, gen2, native | `test-stdlib-csv` |
 | `stdlib/url.sa` | percent-encoding/decoding (`surl_encode`, `surl_decode`, `surl_decode_ok`) and packed query strings (`surl_query_parse`, `surl_query_write`, `surl_query_push`, `surl_query_count`, `surl_query_key`, `surl_query_value`, `surl_query_get`, `surl_query_has`, `surl_query_empty`) | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/datetime.sa` | proleptic Gregorian calendar: `dt_is_leap`, `dt_days_in_month`, `dt_valid`, `dt_jdn`, `dt_from_jdn`, `dt_weekday`, `dt_weekday_name`, `dt_month_name`, `dt_day_of_year`, `dt_days_between`, `dt_add_days`, `dt_format`, `dt_parse`, `dt_istr` | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/hash.sa` | non-cryptographic checksums: `sh_sum_bytes`, `sh_is_digits`, `sh_poly`, `sh_djb2`, `sh_poly131`, `sh_sdbm`, `sh_adler32`, `sh_luhn_sum`, `sh_luhn_check_digit`, `sh_luhn_valid`, `sh_istr` | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/statistics.sa` | numeric list sum, mean, minimum, maximum, population variance and dot product | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/text_search.sa` | byte substring search, non-overlapping count and replacement | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/hex_text.sa` | hexadecimal codec for NUL-free byte strings, with explicit validation | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/geometry.sa` | 2D squared distance, cross product, rectangle area/containment and interval overlap | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/ascii.sa` | ASCII classification, byte-wise case conversion and identifier validation | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/vector.sa` | numeric vector add, subtract, scale, dot product and squared lengths/distances | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/interval.sa` | closed intervals: containment, clamping, overlap and interpolation | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/fields.sa` | unquoted byte-delimited field count and indexed access | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/duration.sa` | elapsed whole seconds as hours, minutes, seconds or H:MM:SS | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/running.sa` | prefix minima/maxima and consecutive differences of numeric lists | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/ai.sa` | flat matrices, regression and one-hidden-layer training, dense inference, activations, metrics, normalization and nearest-neighbour primitives | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/llm.sa` | byte tokens, bounded embedding lookup, single-head causal attention and greedy logits | seed-min, gen2, native | `test-stdlib-next` |
+
+## Toolbox modules
+
+```sayanox
+use "stdlib/statistics.sa"
+use "stdlib/text_search.sa"
+use "stdlib/hex_text.sa"
+use "stdlib/geometry.sa"
+use "stdlib/ascii.sa"
+
+hold readings = [1, 2, 3, 4]
+show stats_mean(readings)                 // 2.5
+show ts_replace("one one", "one", "1")  // 1 1
+show hx_encode("Hi")                     // 4869
+show geo_distance_squared(0, 0, 3, 4)   // 25
+show ascii_identifier("name_1")           // 1
+```
+
+* Statistics use IEEE doubles. Empty aggregates and mismatched dot products
+  return zero; `stats_variance` is population variance, not sample variance.
+* Text search is byte-based, not Unicode-aware. Search accepts whole byte
+  positions under 1e15 (negative positions clamp to zero); empty needles match
+  at the requested position. Counting and replacing use non-overlapping
+  matches, and an empty needle counts zero or leaves the string unchanged.
+* Hex output is lowercase and input accepts either case. `hx_valid` rejects
+  malformed, odd-length and NUL-containing decoded input; `hx_decode` returns
+  an empty string on failure, so use `hx_valid` to distinguish failure from a
+  valid empty string. This is a codec, not cryptography.
+* Geometry normalizes rectangle bounds and includes edges for containment;
+  `geo_overlap` returns interval overlap length, zero for touching/disjoint.
+* ASCII helpers do not perform Unicode case folding. Bytes outside ASCII are
+  unchanged by case conversion and rejected by identifier validation.
+
+### Additional modules
+
+```sayanox
+use "stdlib/vector.sa"
+use "stdlib/interval.sa"
+use "stdlib/fields.sa"
+use "stdlib/duration.sa"
+use "stdlib/running.sa"
+
+hold a = [1, 2, 3]
+hold b = [4, 5, 6]
+show vec_dot(a, b)                 // 32
+show iv_contains(5, 1, 3)         // 1
+show fields_get("red|blue", 124, 1) // blue
+show dur_format(90061)            // 25:01:01
+hold highs = run_prefix_max(a)
+show highs[2]                     // 3
+```
+
+* Vector and running transforms create new numeric lists. Pairwise vector
+  operations require equal lengths: list operations return an empty list on
+  mismatch, scalar operations return zero. Callers can compare lengths first
+  to distinguish a mismatch from a legitimate empty/zero result.
+* Intervals are closed and normalize reversed bounds; touching intervals
+  overlap with zero overlap length. `iv_lerp` is not clamped.
+* Fields are byte-delimited, without CSV escaping or quoting. Delimiters must
+  be integral bytes 1–255; empty and trailing fields are retained. An empty
+  result from `fields_get` can mean either an empty or an absent field; use
+  `fields_count` to distinguish them.
+* Duration helpers accept non-negative integral seconds below 10^15, use
+  elapsed rather than clock hours, and return zero or an empty string for
+  invalid input. Use `dur_valid` to distinguish invalid input from zero.
+* Running helpers produce prefix extrema or consecutive differences; empty
+  inputs produce empty lists. All numeric operations use IEEE doubles.
+
+`selfhost/stdlib_text.want` includes a hand-written toolbox oracle exercised by
+`test-stdlib-next` on seed-min, gen2 and native.
+
+## AI and machine-learning primitives
+
+`stdlib/ai.sa` provides a small, deterministic numeric foundation for ML, not
+an LLM, an automatic differentiation framework, or a GPU runtime. Lists contain
+numbers (IEEE doubles); matrices are flattened **row-major**. A linear model
+has one weight per feature followed by a bias. For example:
+
+```sayanox
+use "stdlib/ai.sa"
+hold inputs = [0, 1]        // two rows, one feature
+hold targets = [1, 3]
+hold initial = [0, 0]       // weight, bias
+hold model = ai_linear_fit(inputs, targets, initial, 0.1, 100)
+hold predictions = ai_predict(inputs, model)
+show ai_mse(predictions, targets) < 0.001  // 1
+```
+
+The complete runnable example is `examples/ai_linear.sa`. API overview:
+
+* `ai_is_integer`, `ai_matrix_valid`, `ai_model_valid` validate dimensions;
+  `ai_dot`, `ai_argmax`, `ai_relu`/`ai_relu_list` and `ai_threshold` are
+  basic inference utilities. `ai_argmax` returns the first maximum or -1.
+* `ai_linear` predicts one row; `ai_predict` predicts a flat matrix.
+  `ai_linear_step` performs one full-batch gradient step on mean squared
+  error; `ai_linear_fit` repeats it at most 10,000 times. Both use fresh
+  models, never mutate inputs, and return `[]` on invalid shape, empty
+  training data, or non-positive learning rate. Zero steps returns a copy.
+* `ai_mse`, `ai_mae`, and exact-label `ai_accuracy` return zero for empty or
+  mismatched inputs, so validate lengths before interpreting the result.
+* `ai_sigmoid`, `ai_sigmoid_list`, and `ai_softmax` provide activation
+  functions. `ai_exp` is a dependency-free approximation: it clamps its input
+  to [-30, 30], applies a degree-16 Taylor expansion after range reduction,
+  and squares five times. Softmax subtracts the maximum logit before applying
+  it; differences below -30 are floored, so tiny probabilities are approximate.
+* `ai_logistic_predict`, `ai_logistic_step`, and `ai_logistic_fit` provide
+  binary logistic inference and full-batch gradient training with labels 0/1,
+  the same model layout and limits as linear training, and no regularization.
+  Sigmoid saturation makes the computed gradient an approximation at extreme
+  logits. `ai_binary_loss_valid` validates probabilities and labels;
+  `ai_binary_loss` computes mean cross-entropy with approximate logarithms
+  and clamps endpoint probabilities to [1e-12, 1-1e-12]. Invalid or empty
+  inputs return zero, so check validity first. See `examples/ai_logistic.sa`.
+* `ai_dense` performs one affine layer with output-major flat weights and one
+  bias per output. Compose it with `ai_relu_list` for inference. It does not
+  train this layer directly.
+* `ai_nn_shape_valid`, `ai_nn_predict`, `ai_nn_step` and `ai_nn_fit` implement
+  a **one-hidden-layer binary classifier**: hidden ReLU and a sigmoid output,
+  trained by full-batch cross-entropy backpropagation. For C input features
+  and H hidden units, the flat model contains H*C hidden-major input weights,
+  H hidden biases, H output weights, then one output bias. C and H are each
+  limited to 1–64; the training feature count is inferred from the data and
+  label lengths. Training requires binary labels, nonempty data, a positive
+  rate and 0–10,000 integer steps. Invalid input returns `[]`; zero steps
+  copies the model. ReLU has derivative zero at exactly zero. Initialize
+  hidden units asymmetrically to avoid identical units; all-zero initialization
+  can prevent learning. The example `examples/ai_neural.sa` trains XOR.
+* `ai_standardize` applies supplied means and nonzero scales to each feature;
+  fit preprocessing parameters on training data and reuse them during
+  inference. `ai_nearest` returns the first nearest row by squared Euclidean
+  distance, or -1 on invalid/empty data.
+
+List-returning operations return `[]` on shape errors, which is also a valid
+empty result in some cases. Validate inputs explicitly when that distinction
+matters. Callers must provide finite values; floating-point overflow and NaN
+are not detected. Gradient descent is sensitive to data scale and learning
+rate and is not guaranteed to converge. This is a small-data, CPU-only
+implementation, with no model persistence, autodifferentiation, GPU, or pretrained model. Its checked-in hand-computed oracle tests linear, logistic and neural training,
+including one analytically checked backprop step and XOR, shape refusals,
+metrics, ties, standardization and dense inference on all three backends via
+`test-stdlib-next`.
+
+## LLM inference building blocks
+
+`stdlib/llm.sa` is an experimental **CPU-only** set of transformer building
+blocks, not a complete language model. Import `stdlib/ai.sa` before it:
+
+```sayanox
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+hold ids = [0, 1]
+hold embeddings = llm_embed(ids, [1, 0, 0, 1], 2)
+hold result = llm_attention(embeddings, embeddings, embeddings, 2)
+```
+
+* `llm_bytes` yields NUL-free input bytes as numeric token IDs; this is not
+  BPE or compatible with a pretrained tokenizer.
+* `llm_embedding_valid` checks IDs and a flat vocabulary-by-width embedding
+  table. `llm_embed` looks up rows, with limits of 256 tokens, vocabulary rows
+  and embedding dimensions. Invalid input and empty input both return `[]`.
+* `llm_attention_valid` and `llm_attention` implement single-head scaled
+  causal attention on equal-shaped, row-major Q/K/V matrices, limited to 64
+  tokens and 64 dimensions. Each position sees only itself and earlier tokens.
+  Softmax uses `ai_exp`'s documented approximate -30 floor. The implementation
+  is quadratic in context length and does not use a KV cache.
+* `llm_logits` applies an output-major affine projection; `llm_greedy` chooses
+  the first largest score or -1 for empty logits. `examples/llm_attention.sa`
+  demonstrates the path with toy weights; those weights are not trained.
+
+Callers must provide finite numeric values. The validators check dimensions
+and token IDs, not NaN/overflow. Tests cover causal masking, scaling, invalid
+shapes, caps and the toy projection using independent expected outputs on
+seed-min, gen2 and native (`test-stdlib-next`). No pretrained weights,
+full transformer blocks, tokenizer, text generation loop, GPU kernels or GPU
+device runtime are provided. GPU support would require an actual device
+backend and hardware tests; CPU execution must not be described as GPU support.
 
 ## Why two kinds of module
 
@@ -245,8 +433,8 @@ checked on all three backends by their own gate.
 
 ### `stdlib/json_deep.sa` -- reading nested JSON
 
-`jd_*` reads a value at a **path**: `"user.name"`, `"items[2].id"`,
-`"a.b[0][1].c"`. Nine helpers: `jd_valid` (whole-document check), `jd_type`
+`jd_*` reads a value at a **path**: `"user.name"`, `"items.2.id"`,
+`"a.b.0.1.c"`. Reader helpers: `jd_valid` (whole-document check), `jd_type`
 (`object`/`array`/`string`/`number`/`bool`/`null`/`none`), `jd_has`, `jd_raw`
 (the exact source slice of the value), `jd_text` (a string value, escapes
 decoded, `\uXXXX` folded to UTF-8), `jd_num`, `jd_flag`, `jd_len` (members of
@@ -263,9 +451,25 @@ escape, and the mismatched closers `[1}` and `{"a":1}}`. The same gate feeds fla
 through both `json_util.sa` and `json_deep.sa` and requires the two to agree,
 so the new module cannot drift away from the old one on the cases both cover.
 
-Not provided: writing nested JSON (`json_util.sa` still builds flat objects
-only), mutation, pretty-printing, duplicate-key policy beyond "first wins", or
-numbers outside what the runtime's double can hold.
+`jd_set_raw(doc, path, raw_val)` replaces an **existing** value at a path,
+including the root (empty path). Both the document and replacement must be
+complete valid JSON; invalid inputs or a missing path return the empty string.
+It preserves surrounding source bytes and exact number text, uses the reader's
+first-duplicate-key and raw-key matching rules, and does not create missing
+members or array elements. `jd_delete_raw` removes an existing non-root
+value, returning an empty string for invalid input or a missing path.
+`jd_object_put_raw` inserts or replaces a member in an existing object at a
+parent path; its key is a complete JSON string and matches by raw escape
+spelling. Both operations preserve unrelated bytes and do not create missing
+containers. `jd_object_ensure_raw` sets an object-only dotted path and creates
+missing intermediate objects. It refuses traversal through existing arrays or
+scalars, validates raw JSON key spellings, and replaces the root for an empty
+path. `jd_array_insert_raw(doc, parent_path, index, raw_val)` inserts
+before an integer index or appends at the array length; invalid JSON, a missing
+or non-array parent, and fractional or out-of-range indexes return the empty
+string. Keys containing dots cannot be addressed by path, but can be
+inserted with `jd_object_put_raw`. For pretty-printing see `json_write.sa`.
+`jd_num` still converts to an IEEE double; use `jd_raw` for exact number text.
 
 ### `stdlib/crypto.sa` -- SHA-256 and HMAC-SHA256
 

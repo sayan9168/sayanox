@@ -1,0 +1,49 @@
+// Two-dimensional geometry over IEEE doubles. Rectangle bounds may be given
+// in either order. Edges are inclusive for containment and intersection.
+make geo_min(a: num, b: num) -> num {
+  when a < b {
+    give a
+  }
+  give b
+}
+make geo_max(a: num, b: num) -> num {
+  when a > b {
+    give a
+  }
+  give b
+}
+make geo_distance_squared(x1: num, y1: num, x2: num, y2: num) -> num {
+  hold x = x2 - x1
+  hold y = y2 - y1
+  give x * x + y * y
+}
+make geo_cross(ax: num, ay: num, bx: num, by: num) -> num {
+  give ax * by - ay * bx
+}
+make geo_rect_area(x1: num, y1: num, x2: num, y2: num) -> num {
+  give (geo_max(x1, x2) - geo_min(x1, x2)) * (geo_max(y1, y2) - geo_min(y1, y2))
+}
+make geo_rect_contains(x1: num, y1: num, x2: num, y2: num, x: num, y: num) -> num {
+  when x < geo_min(x1, x2) {
+    give 0
+  }
+  when x > geo_max(x1, x2) {
+    give 0
+  }
+  when y < geo_min(y1, y2) {
+    give 0
+  }
+  when y > geo_max(y1, y2) {
+    give 0
+  }
+  give 1
+}
+// Overlap length of two closed intervals; touching edges have length zero.
+make geo_overlap(a1: num, a2: num, b1: num, b2: num) -> num {
+  hold lo = geo_max(geo_min(a1, a2), geo_min(b1, b2))
+  hold hi = geo_min(geo_max(a1, a2), geo_max(b1, b2))
+  when hi < lo {
+    give 0
+  }
+  give hi - lo
+}

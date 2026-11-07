@@ -1,0 +1,71 @@
+// Hex codec for NUL-free byte strings. Decode rejects malformed text or a
+// decoded NUL, because Sayanox strings cannot represent that byte. The
+// separate validator distinguishes invalid input from a valid empty string.
+make hx_digit(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give c - 48
+    }
+  }
+  when c >= 65 {
+    when c <= 70 {
+      give c - 55
+    }
+  }
+  when c >= 97 {
+    when c <= 102 {
+      give c - 87
+    }
+  }
+  give 0 - 1
+}
+make hx_valid(s: str) -> num {
+  when len(s) % 2 != 0 {
+    give 0
+  }
+  hold i = 0
+  while i < len(s) {
+    hold a = hx_digit(sx_index(s, i))
+    hold b = hx_digit(sx_index(s, i + 1))
+    when a < 0 {
+      give 0
+    }
+    when b < 0 {
+      give 0
+    }
+    when a == 0 {
+      when b == 0 {
+        give 0
+      }
+    }
+    hold i = i + 2
+  }
+  give 1
+}
+make hx_encode(s: str) -> str {
+  hold digits = "0123456789abcdef"
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    hold low = c % 16
+    hold high = (c - low) / 16
+    hold out = concat(out, chr(sx_index(digits, high)))
+    hold out = concat(out, chr(sx_index(digits, low)))
+    hold i = i + 1
+  }
+  give out
+}
+make hx_decode(s: str) -> str {
+  when hx_valid(s) == 0 {
+    give ""
+  }
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = hx_digit(sx_index(s, i)) * 16 + hx_digit(sx_index(s, i + 1))
+    hold out = concat(out, chr(c))
+    hold i = i + 2
+  }
+  give out
+}

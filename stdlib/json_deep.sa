@@ -21,8 +21,8 @@
 // such keys instead.
 //
 // HONEST SCOPE:
-//   * Reading and validating. There is no nested BUILDER here; json_util.sa
-//     builds flat objects and this module reads any depth.
+//   * Reading and validating, replacement/deletion by path, and insertion into
+//     existing objects and arrays. Object-only paths can create missing objects.
 //   * jd_valid is a full grammar check of one complete value: strings and
 //     their escapes, RFC 8259 numbers including exponents, true/false/null,
 //     commas, colons and the brace/bracket pairing, with only whitespace
@@ -1269,4 +1269,264 @@ make jd_valid(doc: str) -> num {
     }
   }
   give ok
+}
+
+// Replace an existing value at a dotted path (array indexes are dot segments).
+// Both inputs must be complete valid JSON; an absent path or invalid input
+// returns the empty string. No containers or missing members are created.
+// Unchanged bytes, including whitespace and numeric spellings, are preserved.
+make jd_set_raw(doc: str, path: str, raw_val: str) -> str {
+  when jd_valid(doc) == 0 {
+    give ""
+  }
+  when jd_valid(raw_val) == 0 {
+    give ""
+  }
+  hold start = jd_find(doc, path)
+  when start < 0 {
+    give ""
+  }
+  hold end = jd_skip_value(doc, start)
+  when end < 0 {
+    give ""
+  }
+  give concat(concat(jd_slice(doc, 0, start), raw_val), jd_slice(doc, end, len(doc) - end))
+}
+
+// Remove an existing object member or array element by dotted path. The root
+// cannot be removed. Invalid JSON, missing paths and non-container parents
+// return the empty string. As with jd_find, the first duplicate key wins.
+make jd_delete_raw(doc: str, path: str) -> str {
+  when jd_valid(doc) == 0 {
+    give ""
+  }
+  when len(path) == 0 {
+    give ""
+  }
+  hold target = jd_find(doc, path)
+  when target < 0 {
+    give ""
+  }
+  // Walk parent segments directly: an empty segment is an object key, while
+  // the empty path denotes the root, so slicing a parent path is ambiguous.
+  hold parent = jd_skip_ws(doc, 0)
+  hold count = jd_seg_count(path)
+  hold k = 0
+  while k < count - 1 {
+    hold seg = jd_seg(path, k)
+    hold c = sx_index(doc, parent)
+    when c == 123 {
+      hold parent = jd_member(doc, parent, seg)
+    } otherwise {
+      when c == 91 {
+        hold idx = jd_seg_index(seg)
+        when idx < 0 {
+          give ""
+        }
+        hold parent = jd_element(doc, parent, idx)
+      } otherwise {
+        give ""
+      }
+    }
+    when parent < 0 {
+      give ""
+    }
+    hold k = k + 1
+  }
+  hold kind = sx_index(doc, parent)
+  when kind != 123 {
+    when kind != 91 {
+      give ""
+    }
+  }
+  hold i = jd_skip_ws(doc, parent + 1)
+  hold previous_comma = 0 - 1
+  hold done = 0
+  while done == 0 {
+    hold item = i
+    hold value = i
+    when kind == 123 {
+      hold key_end = jd_skip_string(doc, i)
+      hold colon = jd_skip_ws(doc, key_end)
+      hold value = jd_skip_ws(doc, colon + 1)
+    }
+    hold end = jd_skip_value(doc, value)
+    when end < 0 {
+      give ""
+    }
+    hold after = jd_skip_ws(doc, end)
+    when value == target {
+      hold from = item
+      hold to = end
+      when sx_index(doc, after) == 44 {
+        hold to = jd_skip_ws(doc, after + 1)
+      } otherwise {
+        when previous_comma >= 0 {
+          hold from = previous_comma
+        }
+      }
+      give concat(jd_slice(doc, 0, from), jd_slice(doc, to, len(doc) - to))
+    }
+    when sx_index(doc, after) != 44 {
+      hold done = 1
+    } otherwise {
+      hold previous_comma = after
+      hold i = jd_skip_ws(doc, after + 1)
+    }
+  }
+  give ""
+}
+
+// Set or insert a member in an existing object. raw_key must be a complete
+// JSON string; matching uses its raw escape spelling, just like jd_member.
+// This permits keys containing dots without changing dotted-path semantics.
+// Invalid inputs or a missing/non-object parent return the empty string.
+make jd_object_put_raw(doc: str, parent_path: str, raw_key: str, raw_val: str) -> str {
+  when jd_valid(doc) == 0 {
+    give ""
+  }
+  when jd_valid(raw_key) == 0 {
+    give ""
+  }
+  when jd_valid(raw_val) == 0 {
+    give ""
+  }
+  hold key_start = jd_skip_ws(raw_key, 0)
+  when sx_index(raw_key, key_start) != 34 {
+    give ""
+  }
+  hold key_end = jd_skip_string(raw_key, key_start)
+  hold key = jd_slice(raw_key, key_start + 1, key_end - key_start - 2)
+  hold parent = jd_find(doc, parent_path)
+  when parent < 0 {
+    give ""
+  }
+  when sx_index(doc, parent) != 123 {
+    give ""
+  }
+  hold value = jd_member(doc, parent, key)
+  when value >= 0 {
+    hold end = jd_skip_value(doc, value)
+    give concat(concat(jd_slice(doc, 0, value), raw_val), jd_slice(doc, end, len(doc) - end))
+  }
+  hold end = jd_skip_value(doc, parent)
+  hold close = end - 1
+  hold comma = ""
+  when sx_index(doc, jd_skip_ws(doc, parent + 1)) != 125 {
+    hold comma = ","
+  }
+  hold pair = concat(concat(jd_slice(raw_key, key_start, key_end - key_start), ":"), raw_val)
+  give concat(concat(jd_slice(doc, 0, close), concat(comma, pair)), jd_slice(doc, close, len(doc) - close))
+}
+
+// Insert raw_val before index in an existing array, or append at its length.
+// Index must be an integer in [0, length]. Invalid JSON, a missing/non-array
+// parent, or an invalid index returns the empty string. Existing bytes are
+// preserved; no intermediate containers are created.
+make jd_array_insert_raw(doc: str, parent_path: str, index: num, raw_val: str) -> str {
+  when jd_valid(doc) == 0 {
+    give ""
+  }
+  when jd_valid(raw_val) == 0 {
+    give ""
+  }
+  when index < 0 {
+    give ""
+  }
+  hold parent = jd_find(doc, parent_path)
+  when parent < 0 {
+    give ""
+  }
+  when sx_index(doc, parent) != 91 {
+    give ""
+  }
+  hold count = jd_count(doc, parent)
+  when index > count {
+    give ""
+  }
+  // Compare with integer positions instead of truncating fractional indexes.
+  hold pos = 0
+  while pos < count {
+    when index == pos {
+      hold at = jd_element(doc, parent, pos)
+      give concat(concat(jd_slice(doc, 0, at), concat(raw_val, ",")), jd_slice(doc, at, len(doc) - at))
+    }
+    hold pos = pos + 1
+  }
+  when index != count {
+    give ""
+  }
+  hold end = jd_skip_value(doc, parent)
+  hold close = end - 1
+  hold comma = ""
+  when count > 0 {
+    hold comma = ","
+  }
+  give concat(concat(jd_slice(doc, 0, close), concat(comma, raw_val)), jd_slice(doc, close, len(doc) - close))
+}
+
+// Set an object-only dotted path, creating missing intermediate objects.
+// The empty path replaces the root. Existing intermediate values must be
+// objects: arrays and scalars are never overwritten to force traversal.
+// Segments are raw JSON key spellings, as in jd_member. Each must form a
+// valid JSON string when surrounded by quotes. Invalid inputs return "".
+make jd_object_ensure_raw(doc: str, path: str, raw_val: str) -> str {
+  when jd_valid(doc) == 0 {
+    give ""
+  }
+  when jd_valid(raw_val) == 0 {
+    give ""
+  }
+  when len(path) == 0 {
+    give jd_set_raw(doc, path, raw_val)
+  }
+  hold count = jd_seg_count(path)
+  // Validate all key spellings before doing any work, including existing keys.
+  hold k = 0
+  while k < count {
+    hold segment = jd_seg(path, k)
+    hold quoted = concat(concat("\"", segment), "\"")
+    when jd_valid(quoted) == 0 {
+      give ""
+    }
+    hold k = k + 1
+  }
+  hold parent = jd_skip_ws(doc, 0)
+  hold k = 0
+  while k < count {
+    when sx_index(doc, parent) != 123 {
+      give ""
+    }
+    hold segment = jd_seg(path, k)
+    hold value = jd_member(doc, parent, segment)
+    when value >= 0 {
+      when k == count - 1 {
+        hold end = jd_skip_value(doc, value)
+        give concat(concat(jd_slice(doc, 0, value), raw_val), jd_slice(doc, end, len(doc) - end))
+      }
+      hold parent = value
+      hold k = k + 1
+    } otherwise {
+      // Build the missing tail from the leaf upwards, then insert one member
+      // into the existing parent. No recursion or path re-parsing is needed.
+      hold subtree = raw_val
+      hold j = count - 1
+      while j > k {
+        hold seg = jd_seg(path, j)
+        hold key = concat(concat("\"", seg), "\"")
+        hold subtree = concat(concat(concat("{", key), concat(":", subtree)), "}")
+        hold j = j - 1
+      }
+      hold key = concat(concat("\"", segment), "\"")
+      hold pair = concat(concat(key, ":"), subtree)
+      hold end = jd_skip_value(doc, parent)
+      hold close = end - 1
+      hold comma = ""
+      when sx_index(doc, jd_skip_ws(doc, parent + 1)) != 125 {
+        hold comma = ","
+      }
+      give concat(concat(jd_slice(doc, 0, close), concat(comma, pair)), jd_slice(doc, close, len(doc) - close))
+    }
+  }
+  give ""
 }

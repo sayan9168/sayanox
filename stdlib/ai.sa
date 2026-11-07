@@ -1,0 +1,802 @@
+// AI/ML primitives for small numeric datasets. All data is in numeric lists;
+// matrices are row-major flat lists. Models are [weight0, ..., weightN, bias].
+// Arithmetic uses IEEE doubles. Callers must supply finite values; this module
+// does not detect overflow or NaN, provide autodiff, GPUs, neural-network
+// training, or pre-trained models. Functions return fresh lists where noted.
+// Shape validators distinguish invalid inputs from valid zero-valued results.
+
+make ai_is_integer(n: num) -> num {
+  when n < 0 {
+    give 0
+  }
+  when n >= 1000000000000000 {
+    give 0
+  }
+  when n != n % 1000000000000000 {
+    give 0
+  }
+  give 1
+}
+
+// Empty matrices may have zero rows, but feature width must be positive.
+make ai_matrix_valid(data: list, cols: num) -> num {
+  when ai_is_integer(cols) == 0 {
+    give 0
+  }
+  when cols < 1 {
+    give 0
+  }
+  when len(data) % cols != 0 {
+    give 0
+  }
+  give 1
+}
+
+make ai_model_valid(data: list, targets: list, model: list) -> num {
+  hold cols = len(model) - 1
+  when ai_matrix_valid(data, cols) == 0 {
+    give 0
+  }
+  when len(data) / cols != len(targets) {
+    give 0
+  }
+  give 1
+}
+
+make ai_dot(a: list, b: list) -> num {
+  when len(a) != len(b) {
+    give 0
+  }
+  hold total = 0
+  hold i = 0
+  while i < len(a) {
+    hold total = total + a[i] * b[i]
+    hold i = i + 1
+  }
+  give total
+}
+
+// Index of the first maximum, or -1 for an empty input.
+make ai_argmax(values: list) -> num {
+  when len(values) == 0 {
+    give 0 - 1
+  }
+  hold best = 0
+  hold i = 1
+  while i < len(values) {
+    when values[i] > values[best] {
+      hold best = i
+    }
+    hold i = i + 1
+  }
+  give best
+}
+
+make ai_relu(x: num) -> num {
+  when x < 0 {
+    give 0
+  }
+  give x
+}
+
+make ai_relu_list(values: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(values) {
+    push(out, ai_relu(values[i]))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Clamp predictions to binary 0/1 according to a caller-supplied threshold.
+make ai_threshold(values: list, threshold: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(values) {
+    when values[i] >= threshold {
+      push(out, 1)
+    } otherwise {
+      push(out, 0)
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// Return zero on empty or mismatched inputs. These routines are metrics, not
+// shape validators; compare lengths and check non-empty before relying on 0.
+make ai_mse(predictions: list, targets: list) -> num {
+  when len(predictions) != len(targets) {
+    give 0
+  }
+  when len(targets) == 0 {
+    give 0
+  }
+  hold sum = 0
+  hold i = 0
+  while i < len(targets) {
+    hold d = predictions[i] - targets[i]
+    hold sum = sum + d * d
+    hold i = i + 1
+  }
+  give sum / len(targets)
+}
+
+make ai_mae(predictions: list, targets: list) -> num {
+  when len(predictions) != len(targets) {
+    give 0
+  }
+  when len(targets) == 0 {
+    give 0
+  }
+  hold sum = 0
+  hold i = 0
+  while i < len(targets) {
+    hold d = predictions[i] - targets[i]
+    when d < 0 {
+      hold d = 0 - d
+    }
+    hold sum = sum + d
+    hold i = i + 1
+  }
+  give sum / len(targets)
+}
+
+make ai_accuracy(predictions: list, targets: list) -> num {
+  when len(predictions) != len(targets) {
+    give 0
+  }
+  when len(targets) == 0 {
+    give 0
+  }
+  hold correct = 0
+  hold i = 0
+  while i < len(targets) {
+    when predictions[i] == targets[i] {
+      hold correct = correct + 1
+    }
+    hold i = i + 1
+  }
+  give correct / len(targets)
+}
+
+// Affine prediction for one feature vector. Mismatch returns zero.
+make ai_linear(features: list, model: list) -> num {
+  when len(model) != len(features) + 1 {
+    give 0
+  }
+  hold sum = model[len(features)]
+  hold i = 0
+  while i < len(features) {
+    hold sum = sum + features[i] * model[i]
+    hold i = i + 1
+  }
+  give sum
+}
+
+// Internal row evaluation. Caller validates matrix shape and row bounds.
+make ai_row(data: list, cols: num, row: num, model: list) -> num {
+  hold sum = model[cols]
+  hold j = 0
+  while j < cols {
+    hold sum = sum + data[row * cols + j] * model[j]
+    hold j = j + 1
+  }
+  give sum
+}
+
+// Predict each row of a row-major matrix. Invalid shape returns [].
+make ai_predict(data: list, model: list) -> list {
+  hold out = []
+  hold cols = len(model) - 1
+  when ai_matrix_valid(data, cols) == 0 {
+    give out
+  }
+  hold rows = len(data) / cols
+  hold i = 0
+  while i < rows {
+    push(out, ai_row(data, cols, i, model))
+    hold i = i + 1
+  }
+  give out
+}
+
+// One batch gradient descent step minimizing mean squared error. The model is
+// never mutated. Invalid shape, empty data, or non-positive learning rate
+// returns []; ai_model_valid checks shape, not the learning-rate condition.
+make ai_linear_step(data: list, targets: list, model: list, rate: num) -> list {
+  hold out = []
+  when ai_model_valid(data, targets, model) == 0 {
+    give out
+  }
+  when len(targets) == 0 {
+    give out
+  }
+  when rate <= 0 {
+    give out
+  }
+  hold cols = len(model) - 1
+  hold rows = len(targets)
+  hold j = 0
+  while j < cols {
+    hold grad = 0
+    hold i = 0
+    while i < rows {
+      hold error = ai_row(data, cols, i, model) - targets[i]
+      hold grad = grad + error * data[i * cols + j]
+      hold i = i + 1
+    }
+    push(out, model[j] - rate * 2 * grad / rows)
+    hold j = j + 1
+  }
+  hold bias_grad = 0
+  hold i = 0
+  while i < rows {
+    hold bias_grad = bias_grad + ai_row(data, cols, i, model) - targets[i]
+    hold i = i + 1
+  }
+  push(out, model[cols] - rate * 2 * bias_grad / rows)
+  give out
+}
+
+// Repeated batch steps. Maximum 10000 steps; zero steps returns a copy.
+// Reject invalid shape, empty data, invalid rate, and invalid step counts.
+make ai_linear_fit(data: list, targets: list, model: list, rate: num, steps: num) -> list {
+  hold out = []
+  when ai_model_valid(data, targets, model) == 0 {
+    give out
+  }
+  when len(targets) == 0 {
+    give out
+  }
+  when rate <= 0 {
+    give out
+  }
+  when ai_is_integer(steps) == 0 {
+    give out
+  }
+  when steps > 10000 {
+    give out
+  }
+  hold i = 0
+  while i < len(model) {
+    push(out, model[i])
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < steps {
+    hold out = ai_linear_step(data, targets, out, rate)
+    hold i = i + 1
+  }
+  give out
+}
+
+// Dense layer inference: weights are output-major, one row per output, and
+// biases has one value per output. Invalid shape or no inputs returns [].
+make ai_dense(inputs: list, weights: list, biases: list) -> list {
+  hold out = []
+  hold cols = len(inputs)
+  when cols == 0 {
+    give out
+  }
+  when ai_matrix_valid(weights, cols) == 0 {
+    give out
+  }
+  when len(weights) / cols != len(biases) {
+    give out
+  }
+  hold i = 0
+  while i < len(biases) {
+    hold sum = biases[i]
+    hold j = 0
+    while j < cols {
+      hold sum = sum + inputs[j] * weights[i * cols + j]
+      hold j = j + 1
+    }
+    push(out, sum)
+    hold i = i + 1
+  }
+  give out
+}
+
+// Apply caller-provided feature means and scales to a row-major matrix.
+// All three shapes must agree and every scale must be nonzero. Returns a
+// fresh list or [] on invalid inputs. Statistics should be fitted on training
+// data only and reused for test/inference data to avoid data leakage.
+make ai_standardize(data: list, means: list, scales: list) -> list {
+  hold out = []
+  hold cols = len(means)
+  when ai_matrix_valid(data, cols) == 0 {
+    give out
+  }
+  when len(scales) != cols {
+    give out
+  }
+  hold j = 0
+  while j < cols {
+    when scales[j] == 0 {
+      give out
+    }
+    hold j = j + 1
+  }
+  hold i = 0
+  while i < len(data) {
+    hold j = i % cols
+    push(out, (data[i] - means[j]) / scales[j])
+    hold i = i + 1
+  }
+  give out
+}
+
+// Nearest row by squared Euclidean distance. Returns the first row on ties,
+// or -1 for empty data or a shape mismatch. No square root is necessary.
+make ai_nearest(data: list, query: list) -> num {
+  hold cols = len(query)
+  when ai_matrix_valid(data, cols) == 0 {
+    give 0 - 1
+  }
+  when len(data) == 0 {
+    give 0 - 1
+  }
+  hold rows = len(data) / cols
+  hold best_index = 0
+  hold best_distance = 0
+  hold i = 0
+  while i < rows {
+    hold distance = 0
+    hold j = 0
+    while j < cols {
+      hold d = data[i * cols + j] - query[j]
+      hold distance = distance + d * d
+      hold j = j + 1
+    }
+    when i == 0 {
+      hold best_distance = distance
+    } otherwise {
+      when distance < best_distance {
+        hold best_distance = distance
+        hold best_index = i
+      }
+    }
+    hold i = i + 1
+  }
+  give best_index
+}
+
+// Exponential approximation: clamp x to [-30, 30], evaluate a Taylor
+// series through degree 16 at x/32, then square five times. This is a bounded numerical helper,
+// not a replacement for an IEEE libm exp; inputs must be finite.
+make ai_exp(x: num) -> num {
+  hold bounded = x
+  when bounded > 30 {
+    hold bounded = 30
+  }
+  when bounded < 0 - 30 {
+    hold bounded = 0 - 30
+  }
+  hold z = bounded / 32
+  hold term = 1
+  hold result = 1
+  hold i = 1
+  while i <= 16 {
+    hold term = term * z / i
+    hold result = result + term
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < 5 {
+    hold result = result * result
+    hold i = i + 1
+  }
+  give result
+}
+
+// Stable sigmoid with saturation at +/-30 via ai_exp.
+make ai_sigmoid(x: num) -> num {
+  when x >= 0 {
+    hold e = ai_exp(0 - x)
+    give 1 / (1 + e)
+  }
+  hold e = ai_exp(x)
+  give e / (1 + e)
+}
+
+make ai_sigmoid_list(values: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(values) {
+    push(out, ai_sigmoid(values[i]))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Stable softmax subtracts the largest logit first. The exponential helper
+// clamps differences below -30, so very small probabilities are floored;
+// empty input yields []. No input list is modified.
+make ai_softmax(logits: list) -> list {
+  hold out = []
+  when len(logits) == 0 {
+    give out
+  }
+  hold max_index = ai_argmax(logits)
+  hold maximum = logits[max_index]
+  hold total = 0
+  hold i = 0
+  while i < len(logits) {
+    hold e = ai_exp(logits[i] - maximum)
+    push(out, e)
+    hold total = total + e
+    hold i = i + 1
+  }
+  hold normalized = []
+  hold i = 0
+  while i < len(out) {
+    push(normalized, out[i] / total)
+    hold i = i + 1
+  }
+  give normalized
+}
+
+// Strict binary label validation; empty lists are valid but training also
+// requires at least one row.
+make ai_binary_labels_valid(targets: list) -> num {
+  hold i = 0
+  while i < len(targets) {
+    when targets[i] != 0 {
+      when targets[i] != 1 {
+        give 0
+      }
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// Probabilities for a linear classifier, same row-major layout as ai_predict.
+// As with ai_predict, invalid shapes return [].
+make ai_logistic_predict(data: list, model: list) -> list {
+  give ai_sigmoid_list(ai_predict(data, model))
+}
+
+// Full-batch gradient of binary logistic cross-entropy, no regularization.
+// Labels must be 0 or 1. Returns a fresh model or [] on invalid inputs.
+make ai_logistic_step(data: list, targets: list, model: list, rate: num) -> list {
+  hold out = []
+  when ai_model_valid(data, targets, model) == 0 {
+    give out
+  }
+  when len(targets) == 0 {
+    give out
+  }
+  when ai_binary_labels_valid(targets) == 0 {
+    give out
+  }
+  when rate <= 0 {
+    give out
+  }
+  hold cols = len(model) - 1
+  hold rows = len(targets)
+  hold j = 0
+  while j < cols {
+    hold grad = 0
+    hold i = 0
+    while i < rows {
+      hold error = ai_sigmoid(ai_row(data, cols, i, model)) - targets[i]
+      hold grad = grad + error * data[i * cols + j]
+      hold i = i + 1
+    }
+    push(out, model[j] - rate * grad / rows)
+    hold j = j + 1
+  }
+  hold bias_grad = 0
+  hold i = 0
+  while i < rows {
+    hold error = ai_sigmoid(ai_row(data, cols, i, model)) - targets[i]
+    hold bias_grad = bias_grad + error
+    hold i = i + 1
+  }
+  push(out, model[cols] - rate * bias_grad / rows)
+  give out
+}
+
+// At most 10000 full-batch steps; zero steps copies the input model.
+make ai_logistic_fit(data: list, targets: list, model: list, rate: num, steps: num) -> list {
+  hold out = []
+  when ai_model_valid(data, targets, model) == 0 {
+    give out
+  }
+  when len(targets) == 0 {
+    give out
+  }
+  when ai_binary_labels_valid(targets) == 0 {
+    give out
+  }
+  when rate <= 0 {
+    give out
+  }
+  when ai_is_integer(steps) == 0 {
+    give out
+  }
+  when steps > 10000 {
+    give out
+  }
+  hold i = 0
+  while i < len(model) {
+    push(out, model[i])
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < steps {
+    hold out = ai_logistic_step(data, targets, out, rate)
+    hold i = i + 1
+  }
+  give out
+}
+
+// Natural log for inputs in [1e-12, 1]. Repeated doubling reduces to [1, 2),
+// then an atanh series approximates ln(m). Internal helper for binary loss.
+make ai_log_probability(p: num) -> num {
+  hold x = p
+  when x < 0.000000000001 {
+    hold x = 0.000000000001
+  }
+  when x > 1 {
+    hold x = 1
+  }
+  hold powers = 0
+  while x < 1 {
+    hold x = x * 2
+    hold powers = powers + 1
+  }
+  hold z = (x - 1) / (x + 1)
+  hold z2 = z * z
+  hold term = z
+  hold sum = 0
+  hold divisor = 1
+  hold i = 0
+  while i < 16 {
+    hold sum = sum + term / divisor
+    hold term = term * z2
+    hold divisor = divisor + 2
+    hold i = i + 1
+  }
+  give 2 * sum - powers * 0.6931471805599453
+}
+
+// Mean binary cross-entropy for probabilities in [0,1] and binary labels.
+// Endpoints are clamped to [1e-12, 1-1e-12]. Invalid/empty input returns 0;
+// ai_binary_loss_valid distinguishes that from a valid near-zero loss.
+make ai_binary_loss_valid(probabilities: list, targets: list) -> num {
+  when len(probabilities) == 0 {
+    give 0
+  }
+  when len(probabilities) != len(targets) {
+    give 0
+  }
+  when ai_binary_labels_valid(targets) == 0 {
+    give 0
+  }
+  hold i = 0
+  while i < len(probabilities) {
+    when probabilities[i] < 0 {
+      give 0
+    }
+    when probabilities[i] > 1 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+make ai_binary_loss(probabilities: list, targets: list) -> num {
+  when ai_binary_loss_valid(probabilities, targets) == 0 {
+    give 0
+  }
+  hold total = 0
+  hold i = 0
+  while i < len(targets) {
+    when targets[i] == 1 {
+      hold total = total - ai_log_probability(probabilities[i])
+    } otherwise {
+      hold total = total - ai_log_probability(1 - probabilities[i])
+    }
+    hold i = i + 1
+  }
+  give total / len(targets)
+}
+
+// One-hidden-layer binary classifier. Model layout for C inputs and H hidden
+// units: H*C input weights (hidden-major), H hidden biases, H output weights,
+// then one output bias. Hidden activation is ReLU; output is sigmoid.
+// Widths are bounded to 1..64; flat lists and all values must be finite.
+make ai_nn_shape_valid(data: list, model: list, cols: num, hidden: num) -> num {
+  when ai_is_integer(cols) == 0 {
+    give 0
+  }
+  when ai_is_integer(hidden) == 0 {
+    give 0
+  }
+  when cols < 1 {
+    give 0
+  }
+  when hidden < 1 {
+    give 0
+  }
+  when cols > 64 {
+    give 0
+  }
+  when hidden > 64 {
+    give 0
+  }
+  when ai_matrix_valid(data, cols) == 0 {
+    give 0
+  }
+  when len(model) != hidden * cols + hidden * 2 + 1 {
+    give 0
+  }
+  give 1
+}
+
+// Internal helpers require a previously validated shape and a valid row/unit.
+make ai_nn_hidden(data: list, model: list, cols: num, hidden: num, row: num, unit: num) -> num {
+  hold total = model[hidden * cols + unit]
+  hold j = 0
+  while j < cols {
+    hold total = total + data[row * cols + j] * model[unit * cols + j]
+    hold j = j + 1
+  }
+  give total
+}
+
+make ai_nn_output(data: list, model: list, cols: num, hidden: num, row: num) -> num {
+  hold output_base = hidden * cols + hidden
+  hold total = model[output_base + hidden]
+  hold unit = 0
+  while unit < hidden {
+    hold activation = ai_relu(ai_nn_hidden(data, model, cols, hidden, row, unit))
+    hold total = total + activation * model[output_base + unit]
+    hold unit = unit + 1
+  }
+  give ai_sigmoid(total)
+}
+
+// Probability for each row; an invalid shape yields [].
+make ai_nn_predict(data: list, model: list, cols: num, hidden: num) -> list {
+  hold out = []
+  when ai_nn_shape_valid(data, model, cols, hidden) == 0 {
+    give out
+  }
+  hold rows = len(data) / cols
+  hold i = 0
+  while i < rows {
+    push(out, ai_nn_output(data, model, cols, hidden, i))
+    hold i = i + 1
+  }
+  give out
+}
+
+// One batch cross-entropy gradient step. Feature width is inferred from
+// len(data)/len(targets). Returns [] on invalid input, binary labels, shape,
+// or non-positive rate. ReLU's derivative at zero is defined here as zero.
+// Sigmoid clamping makes extreme-logit gradients approximate.
+make ai_nn_step(data: list, targets: list, model: list, hidden: num, rate: num) -> list {
+  hold out = []
+  hold rows = len(targets)
+  when rows == 0 {
+    give out
+  }
+  when len(data) % rows != 0 {
+    give out
+  }
+  hold cols = len(data) / rows
+  when ai_nn_shape_valid(data, model, cols, hidden) == 0 {
+    give out
+  }
+  when ai_binary_labels_valid(targets) == 0 {
+    give out
+  }
+  when rate <= 0 {
+    give out
+  }
+  hold hidden_base = hidden * cols
+  hold output_base = hidden_base + hidden
+  // Gradients for each input weight, followed by each hidden bias.
+  hold unit = 0
+  while unit < hidden {
+    hold j = 0
+    while j < cols {
+      hold grad = 0
+      hold row = 0
+      while row < rows {
+        hold pre = ai_nn_hidden(data, model, cols, hidden, row, unit)
+        when pre > 0 {
+          hold error = ai_nn_output(data, model, cols, hidden, row) - targets[row]
+          hold grad = grad + error * model[output_base + unit] * data[row * cols + j]
+        }
+        hold row = row + 1
+      }
+      push(out, model[unit * cols + j] - rate * grad / rows)
+      hold j = j + 1
+    }
+    hold unit = unit + 1
+  }
+  hold unit = 0
+  while unit < hidden {
+    hold grad = 0
+    hold row = 0
+    while row < rows {
+      hold pre = ai_nn_hidden(data, model, cols, hidden, row, unit)
+      when pre > 0 {
+        hold error = ai_nn_output(data, model, cols, hidden, row) - targets[row]
+        hold grad = grad + error * model[output_base + unit]
+      }
+      hold row = row + 1
+    }
+    push(out, model[hidden_base + unit] - rate * grad / rows)
+    hold unit = unit + 1
+  }
+  // Output weights and bias use the same old model, not updated parameters.
+  hold unit = 0
+  while unit < hidden {
+    hold grad = 0
+    hold row = 0
+    while row < rows {
+      hold activation = ai_relu(ai_nn_hidden(data, model, cols, hidden, row, unit))
+      hold error = ai_nn_output(data, model, cols, hidden, row) - targets[row]
+      hold grad = grad + error * activation
+      hold row = row + 1
+    }
+    push(out, model[output_base + unit] - rate * grad / rows)
+    hold unit = unit + 1
+  }
+  hold grad = 0
+  hold row = 0
+  while row < rows {
+    hold grad = grad + ai_nn_output(data, model, cols, hidden, row) - targets[row]
+    hold row = row + 1
+  }
+  push(out, model[output_base + hidden] - rate * grad / rows)
+  give out
+}
+
+// Full-batch training, maximum 10000 steps. Zero steps returns a fresh copy.
+make ai_nn_fit(data: list, targets: list, model: list, hidden: num, rate: num, steps: num) -> list {
+  hold out = []
+  hold rows = len(targets)
+  when rows == 0 {
+    give out
+  }
+  when len(data) % rows != 0 {
+    give out
+  }
+  hold cols = len(data) / rows
+  when ai_nn_shape_valid(data, model, cols, hidden) == 0 {
+    give out
+  }
+  when ai_binary_labels_valid(targets) == 0 {
+    give out
+  }
+  when rate <= 0 {
+    give out
+  }
+  when ai_is_integer(steps) == 0 {
+    give out
+  }
+  when steps > 10000 {
+    give out
+  }
+  hold i = 0
+  while i < len(model) {
+    push(out, model[i])
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < steps {
+    hold out = ai_nn_step(data, targets, out, hidden, rate)
+    hold i = i + 1
+  }
+  give out
+}

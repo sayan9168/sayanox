@@ -1,0 +1,10 @@
+// Fit a small linear regression model for y = 2*x + 1.
+use "stdlib/ai.sa"
+
+hold inputs = [0, 1]
+hold targets = [1, 3]
+// The last number is the bias; this model has one feature.
+hold initial = [0, 0]
+hold model = ai_linear_fit(inputs, targets, initial, 0.1, 100)
+hold predictions = ai_predict(inputs, model)
+show ai_mse(predictions, targets) < 0.001
