@@ -147,34 +147,58 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   (`f(1) + 1`, `2 * f(3) - 1`, `f(1) * g(2)`, `add(inc(1) + 1, inc(2))`,
   `when f(1) + 1 == 3`). A body is lifted
   out of the program text, emitted after the main program behind a jump and
-  reached with a real `call`; arguments are evaluated on the value stack and
-  stored into the callee's parameter slots, so no ABI registers and no frame
-  layout are involved, and `call`/`ret` are the only new instructions per ISA
-  (i386 `E8`/`C3`, AArch64 `BL`/`RET`, RV64IM `JAL`/`JALR x0,0(x1)`). `give`
-  returns; it may also sit inside a `when` branch for an early return, and every
-  body must end with a top-level `give`. Refused, each with its own diagnostic:
-  recursion (including recursion reached through an operand, `give f(n) + 1`), a
-  call to an undeclared name, wrong arity, a string argument, an untyped or
-  non-`num` parameter, a non-`num` return type, a duplicate name, a body without
-  a `give`, a body that does not end with one, more than 8 functions or 6
-  parameters, and `give` outside a body. `concat` is still a statement-level
+  reached with a real `call`, so `call`/`ret` are the only new control-transfer
+  instructions per ISA (i386 `E8`/`C3`, AArch64 `BL`/`RET`, RV64IM
+  `JAL`/`JALR x0,0(x1)`). `give` returns; it may also sit inside a `when` branch
+  for an early return, and every body must end with a top-level `give`. Refused,
+  each with its own diagnostic: a call to an undeclared name, wrong arity, a
+  string argument, an untyped or non-`num` parameter, a non-`num` return type, a
+  duplicate name, a body without a `give`, a body that does not end with one,
+  more than 8 functions, more than 6 parameters, more than 60 words of locals in
+  one frame, and `give` outside a body. `concat` is still a statement-level
   form, so a call result can feed a call, an operator or a condition but not a
   `concat` argument.
-  **Since 2026-11-02 a body may also call another function.** AArch64 and RV64IM
-  save the link register in the body's prologue (`str x30,[sp,#-16]!` /
-  `addi sp,sp,-16` + `sd ra,8(sp)`) and restore it before every return, because
-  `bl`/`jal` overwrite it; i386 already keeps the return address on the same
-  stack. The call graph is then checked to be **acyclic** — a cycle would reuse
-  the parameter slot of a call that is still live — so self and mutual recursion
-  are refused with one diagnostic. **Since 2026-11-03 a call is also an operand.**
+  **Since 2026-11-02 a body may also call another function**, and **since
+  2026-11-07 every invocation owns its own frame**, so direct and mutual
+  recursion are legal:
+  * The caller evaluates the arguments left to right and pushes them on the
+    value stack; they stay there across the call and the caller pops them after
+    the return, so the result register is never clobbered. A callee reads
+    argument *k* relative to its own frame base, never through a global slot.
+  * The prologue saves the caller's frame base in the frame, records the new
+    base in one data word, zero-fills the body's local words (so a local read
+    before its first assignment sees zero on every invocation, as on the C
+    backends) and bumps a shared depth word. The epilogue restores the stack
+    pointer, the caller's frame base and the return address, then decrements
+    depth.
+  * Frame slots are addressed as `frame_base + disp` through that one data
+    word, never through a dedicated register: the i386 `concat` copy sequence
+    already uses every general register.
+  * **Recursion is bounded, not unbounded:** a call that would open the 65th
+    live frame jumps to a shared overflow stub that exits 1 without writing any
+    output, the same contract as the other native32 runtime bounds. The cap is
+    a depth counter, not a timer, and a refused program produces no partial
+    output.
+  * i386 uses `push`/`pop` on the same stack as `ret`; AArch64 and RV64IM save
+    the link register and the caller's frame base in 16-byte slots below it,
+    because `bl`/`jal` overwrite the link register. The RV64 prologue stores
+    `ra` at displacement 0 of its slot and the epilogue reloads it: an earlier
+    `sd ra,8(sp)` left the reloaded slot empty, which stayed invisible until one
+    body called another (the nested `jal` clobbered `x1`, and the outer `ret`
+    then jumped through the uninitialised word — `unmapped memory access at
+    vaddr 0` in the emulator). The `fn` and `recursion` fixtures fail on that
+    build and pass on the current one.
+  **Since 2026-11-03 a call is also an operand.**
   The call is emitted where the token stands and its result is pushed like any
   other value, so `f(1) + 1`, `2 * f(3) - 1`, `f(1) * g(2)`, a call inside a
   call's argument expression and a call in a condition all lower; the value
   stack stays balanced because a call pops its own arguments before `call` and
   the callee's expression leaves one value in the accumulator.
 
-Lists, structs, string-valued functions, recursion, floating-point expressions,
-general file APIs, and garbage collection remain unsupported by this compiler. `chr` is accepted as
+Lists, structs, string-valued functions, floating-point expressions, general
+file APIs, and garbage collection remain unsupported by this compiler; recursion
+is supported but capped at 64 live frames, so an unbounded recurrence is a
+runtime exit, not a compile-time guarantee. `chr` is accepted as
 a whole string value and as one whole argument of `concat`, `string_eq` and
 `len`, and nowhere else: an argument that is more than an integer literal or a
 numeric variable (`chr(n + 1)`, a signed literal such as `chr(-1)`, `chr("A")`,
@@ -254,6 +278,19 @@ division inside the `chr` argument of `concat`, `len` and `string_eq`. The old
 `concat_call` refusal (`concat(text, chr(121))`) is gone because that program is
 now accepted by this backend - the `chr_nested` fixture is its replacement.
 
+The `fn.sa` fixture is the numeric-function contract: whole-value and operand
+calls, a body calling another body, a three-level chain and a call inside a
+condition, run through seed-min, gen2, x86-64 native AOT, i386, AArch64 and
+RV64IM. `recursion.sa` is the step-11 contract: `fact`, `fib`, mutual
+`even`/`odd`, a recursive accumulator whose per-depth locals would collapse if a
+frame were shared, a recursive body that reassigns its parameter, and recursion
+inside an operand and a condition — identical output on all six execution paths,
+with reviewed AArch64/RV64IM goldens. `fn_depth_cap.sa` is the negative control
+for the cap: `give down(n + 1)` runs until the 65th live frame and exits 1 with
+an empty output file on i386, AArch64 and RV64IM. Both goldens are pinned by
+byte equality, so the old RV64 prologue (`sd ra,8(sp)` with no `ld ra`) fails
+`test-sxisaexec` on `fn` instead of passing silently.
+
 The additional `len_literals.sa` fixture has an independent tracked byte-output
 oracle and runs through the same multi-backend execution comparisons. Each ISA
 gate also checks deterministic images and 16 malformed/type/unsupported literal
@@ -269,6 +306,12 @@ compiler slice, not a claim of complete language or ABI coverage.
 
 - Integer values are 32-bit two's complement. Keep computed arithmetic in
   range; overflow behavior differs from double-based backends.
+- **Recursion and stack budget.** Every live `make` invocation costs its own
+  frame: the caller-pushed arguments (4 bytes each on i386, 16 on AArch64 and
+  RV64IM), the saved linkage (4 bytes of caller base on i386, 32 on the 64-bit
+  targets) and at most 60 words of locals. At most 64 frames can be live, so a
+  recursive program's stack use is bounded by construction and the 65th call is
+  a clean exit 1, not a stack overflow.
 - Numeric and string globals are stored in the writable data segment, addressed
   using the backend's fixed image layout. String pointers fit in the low 4 GiB
   because both ELF64 targets use the fixed `0x400000` base.

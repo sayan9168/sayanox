@@ -97,7 +97,7 @@ make xc_containers(d: str, arch: str) -> num {
       show "[SKIP] kernel cannot execute i386; deterministic containers and all byte assertions still run"
     }
   }
-  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\n"
+  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\nrecursion\n"
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -129,7 +129,8 @@ make xc_containers(d: str, arch: str) -> num {
       when string_eq(name, "chr_nested") == 1 { expected = 8534 }
       when string_eq(name, "concat_expr") == 1 { expected = 8590 }
       when string_eq(name, "chr_expr") == 1 { expected = 8515 }
-      when string_eq(name, "fn") == 1 { expected = 8305 }
+      when string_eq(name, "fn") == 1 { expected = 8265 }
+      when string_eq(name, "recursion") == 1 { expected = 8259 }
       hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
       hold cdir = kp_join(d, name)
       hold oracle = xq_parity_unknown(source, cdir)
@@ -166,7 +167,7 @@ make xc_containers(d: str, arch: str) -> num {
       hold run = pg_capture(gl_sh_quote(kp_join(d, "legal")), kp_join(d, "legal.out"))
       when string_eq(name, "division") == 1 { hold value = kp_eq(d, "legal.out", "3.5\n") }
     }
-    names = "heap_exhaust\nstring_index_oob\n"
+    names = "heap_exhaust\nstring_index_oob\nfn_depth_cap\n"
     pos = 0
     while pos < len(names) {
       hold start = pos

@@ -410,6 +410,54 @@ make test_string_index_bounds(dir: str) -> num {
   give 0
 }
 
+make test_fn_depth_cap(dir: str) -> num {
+  // Recursion is legal but bounded: the 65th live make frame jumps to the
+  // shared overflow stub, which exits 1 before any output is written.
+  hold stem = concat(dir, "/fn_depth_cap")
+  hold arm_elf = concat(stem, ".arm64.elf")
+  hold rv_elf = concat(stem, ".riscv64.elf")
+  hold arm_stats = concat(stem, ".arm64.stats")
+  hold rv_stats = concat(stem, ".riscv64.stats")
+  hold arm_out = concat(stem, ".arm64.out")
+  hold rv_out = concat(stem, ".riscv64.out")
+  when run_command(concat("./tools/native32 selfhost/native32_tests/fn_depth_cap.sa ", concat(sh_q(arm_elf), " arm64"))) != 0 {
+    hold f1 = fail_t("native32 could not emit the AArch64 recursion depth-cap fixture")
+  }
+  when run_command(concat("./tools/native32 selfhost/native32_tests/fn_depth_cap.sa ", concat(sh_q(rv_elf), " riscv64"))) != 0 {
+    hold f2 = fail_t("native32 could not emit the RV64 recursion depth-cap fixture")
+  }
+  hold arm_cmd = concat("./tools/sxisaexec --arch arm64 --out ", sh_q(arm_out))
+  arm_cmd = concat(arm_cmd, concat(" --stats ", sh_q(arm_stats)))
+  arm_cmd = concat(arm_cmd, concat(" ", sh_q(arm_elf)))
+  hold arm_rc = run_command(arm_cmd)
+  when arm_rc != 1 {
+    hold f3 = fail_t(concat("AArch64 recursion depth cap returned ", istr(arm_rc)))
+  }
+  hold arm_s = read_file(arm_stats)
+  when text_has(arm_s, "arch=arm64 ") == 0 || text_has(arm_s, "exit=1") == 0 {
+    hold f4 = fail_t("AArch64 recursion depth cap did not record exit=1")
+  }
+  when len(read_file(arm_out)) != 0 {
+    hold f5 = fail_t("AArch64 recursion depth-cap fixture reached its unreachable output")
+  }
+  hold rv_cmd = concat("./tools/sxisaexec --arch riscv64 --out ", sh_q(rv_out))
+  rv_cmd = concat(rv_cmd, concat(" --stats ", sh_q(rv_stats)))
+  rv_cmd = concat(rv_cmd, concat(" ", sh_q(rv_elf)))
+  hold rv_rc = run_command(rv_cmd)
+  when rv_rc != 1 {
+    hold f6 = fail_t(concat("RV64 recursion depth cap returned ", istr(rv_rc)))
+  }
+  hold rv_s = read_file(rv_stats)
+  when text_has(rv_s, "arch=riscv64 ") == 0 || text_has(rv_s, "exit=1") == 0 {
+    hold f7 = fail_t("RV64 recursion depth cap did not record exit=1")
+  }
+  when len(read_file(rv_out)) != 0 {
+    hold f8 = fail_t("RV64 recursion depth-cap fixture reached its unreachable output")
+  }
+  show "[ok] recursion is capped at 64 frames and exits 1 with no output on AArch64 and RV64"
+  give 0
+}
+
 make t_put_u16(bs: list, v: num) -> list {
   bs = push(bs, bit_and(v, 255))
   bs = push(bs, bit_and(shr(v, 8), 255))
@@ -973,6 +1021,9 @@ hold vstr = verify_six_way(dir, "strings", "selfhost/native32_tests/strings.sa",
 hold vlit = verify_six_way(dir, "len_literals", "selfhost/native32_tests/len_literals_common.sa", "", "")
 hold vlit_oracle = assert_files_eq("selfhost/native32_tests/len_literals.want", concat(dir, "/len_literals.seed.out"), "literal len independent byte-length oracle")
 hold vlit_forms = verify_native_literal_forms(dir)
+hold vfn = verify_six_way(dir, "fn", "selfhost/native32_tests/fn.sa", "selfhost/native32_tests/golden/fn.arm64.elf", "selfhost/native32_tests/golden/fn.riscv64.elf")
+hold vrec = verify_six_way(dir, "recursion", "selfhost/native32_tests/recursion.sa", "selfhost/native32_tests/golden/recursion.arm64.elf", "selfhost/native32_tests/golden/recursion.riscv64.elf")
+hold vcap = test_fn_depth_cap(dir)
 hold vh = test_concat_heap_limit(dir)
 hold vix = test_string_index_bounds(dir)
 
