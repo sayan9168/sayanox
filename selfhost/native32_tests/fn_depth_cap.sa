@@ -1,0 +1,8 @@
+// Runtime bound: recursion is capped at 64 live frames. The 65th invocation
+// jumps to the shared overflow stub, which exits 1 before any `show` runs, so
+// a runaway recursion produces no output instead of corrupting the stack.
+make down(n: num) -> num {
+  give down(n + 1)
+}
+show down(1)
+show "unreachable"

@@ -1,0 +1,66 @@
+// Bounded recursion in native32: every invocation owns a frame, so a body may
+// call itself or another body, directly or from inside an expression. Depth is
+// capped at 64 live frames; every call below stays well inside that cap.
+make fact(n: num) -> num {
+  when n <= 1 {
+    give 1
+  }
+  give n * fact(n - 1)
+}
+make fib(n: num) -> num {
+  when n < 2 {
+    give n
+  }
+  give fib(n - 1) + fib(n - 2)
+}
+// Mutual recursion: the two bodies call each other and share no slot.
+make even(n: num) -> num {
+  when n == 0 {
+    give 1
+  }
+  give odd(n - 1)
+}
+make odd(n: num) -> num {
+  when n == 0 {
+    give 0
+  }
+  give even(n - 1)
+}
+// Per-depth frames: each invocation keeps its own `acc`; a shared parameter
+// slot would make this collapse to n * 1.
+make sumto(n: num) -> num {
+  hold acc = 0
+  when n > 0 {
+    acc = n + sumto(n - 1)
+  }
+  give acc
+}
+// Parameter reassignment in a recursive body: the local `n` belongs to this
+// frame only, so the caller's value survives the call.
+make doublings(n: num) -> num {
+  hold steps = 0
+  while n < 64 {
+    n = n * 2
+    steps = steps + 1
+  }
+  give steps
+}
+show fact(5)
+// every shown value stays under 10^6: the C backends print a num with six
+// significant digits, so 3628800 would appear as 3.6288e+06
+show fact(8)
+show fib(10)
+show even(10)
+show odd(9)
+show sumto(5)
+show doublings(2)
+hold r = sumto(4)
+show r + 1
+when even(8) == 1 {
+  show "even"
+}
+show fib(6) * fact(3)
+when fact(4) + sumto(2) == 27 {
+  show "operands"
+}
+show "done"

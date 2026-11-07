@@ -1,4 +1,0 @@
-make f(n: num) -> num {
-  give f(n) + 1
-}
-show f(2)
