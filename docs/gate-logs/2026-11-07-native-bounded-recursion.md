@@ -174,3 +174,30 @@ exactly what the merged tree still had):
 $ ./sx target test-native32
 [FAIL] negative backend control unexpectedly passed            -> EXIT 1
 ```
+
+## Reviewed-pin refresh
+
+`./tools/sxfull verify` hashes every file in `docs/full-language-v1.sha256`,
+and this increment edits five of them, so the first push failed the
+`Complete original acceptance` job at `reviewed published-language contract and
+integrity`:
+
+```
+tools/native32.sa: FAILED
+tools/sxisa_gates_lib.sa: FAILED
+tools/sxisaexec_test.sa: FAILED
+README.md: FAILED
+docs/REMAINING_WORK.md: FAILED
+sha256sum: WARNING: 5 computed checksums did NOT match
+```
+
+Those five entries were repinned, and `bootstrap/sx.sha256` — which pins the
+manifest itself — was updated with the manifest's new digest. Nothing else in
+either manifest changed, and no binary trust input was touched:
+
+```
+$ sha256sum -c docs/full-language-v1.sha256   -> all OK
+$ sha256sum -c bootstrap/sx.sha256            -> all OK
+$ ./tools/sxfull verify                       -> [OK] published-language v1 ...
+$ ./sx verify-entry                           -> [OK] native sx entry matches the Sayanox source rebuild
+```

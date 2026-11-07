@@ -65,7 +65,13 @@ Fixtures and gates:
 
 Acceptance (fresh, this checkout): `./sx target test-native32`,
 `test-native-arm64`, `test-native-riscv64` and `test-sxisaexec` each exit 0;
-the four gates rebuild `tools/native32` from source first. What remains open in
+the four gates rebuild `tools/native32` from source first. Because this
+increment edits reviewed sources, `docs/full-language-v1.sha256` repins five
+entries — `tools/native32.sa`, `tools/sxisa_gates_lib.sa`,
+`tools/sxisaexec_test.sa`, `README.md`, `docs/REMAINING_WORK.md` — and
+`bootstrap/sx.sha256` is updated with the new manifest digest, so
+`./tools/sxfull verify` and `sha256sum -c bootstrap/sx.sha256` are green again
+instead of reporting stale pins. What remains open in
 R02 is unchanged: string-valued functions, aggregates, floating point, file and
 runtime APIs, GC, and `concat` as an operand of another expression.
 
