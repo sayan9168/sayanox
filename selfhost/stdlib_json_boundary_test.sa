@@ -171,7 +171,7 @@ show jd_object_ensure_raw("{ }", "x", " null ")
 show "stdlib-json-ok"
 
 // Portable bounded model JSON: fixture bytes are independently authored.
-hold model_doc = read_file("examples/llm_toy_model.json")
+hold model_doc = "{\"format\":\"sayanox-llm-v1\",\"config\":[3,2,1,2,0.000001,3,2,5],\"weights\":[1,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0]}"
 show llm_io_valid(model_doc)
 hold model_cfg = llm_io_config(model_doc)
 hold model_weights = llm_io_weights(model_doc)
