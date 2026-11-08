@@ -1,0 +1,7 @@
+// Exact string-based arithmetic, independent of IEEE floating-point numbers.
+use "stdlib/decimal.sa"
+
+show dec_add("0.1", "0.2")
+show dec_mul("-12.50", "0.04")
+show dec_add("9007199254740993", "1")
+show dec_div("1", "8", 3)

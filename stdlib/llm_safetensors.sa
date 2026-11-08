@@ -1,0 +1,263 @@
+// Bounded SafeTensors reader for the custom Sayanox one-block CPU model.
+// Import json_deep.sa, ai.sa and llm.sa first. Accepts byte lists so callers
+// on backends without read_bytes can supply bytes another way. This is not a
+// general GPT, Hugging Face, GGUF or arbitrary SafeTensors model importer.
+// Required tensor names: config and weights, both rank-one F32 little-endian;
+// __metadata__.format must be sayanox-llm-v1. Numeric values must be finite
+// with absolute value <= 1e6. File cap 1 MiB, header cap 64 KiB.
+
+// Internal helpers below expect byte lists and previously checked bounds.
+make lsf_header_len(bytes: list) -> num {
+  when len(bytes) < 8 {
+    give 0 - 1
+  }
+  hold i = 4
+  while i < 8 {
+    when bytes[i] != 0 {
+      give 0 - 1
+    }
+    hold i = i + 1
+  }
+  hold size = bytes[0] + bytes[1] * 256 + bytes[2] * 65536 + bytes[3] * 16777216
+  when size < 2 {
+    give 0 - 1
+  }
+  when size > 65536 {
+    give 0 - 1
+  }
+  when size + 8 > len(bytes) {
+    give 0 - 1
+  }
+  give size
+}
+
+make lsf_header(bytes: list, size: num) -> str {
+  hold out = ""
+  hold i = 8
+  while i < size + 8 {
+    hold b = bytes[i]
+    when b == 0 {
+      give ""
+    }
+    hold out = concat(out, chr(b))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Parse a non-negative decimal integer of at most seven digits. Refuses
+// fractional, signed and exponent forms without evaluating huge exponents.
+make lsf_uint(doc: str, path: str) -> num {
+  hold raw = jd_raw(doc, path)
+  when len(raw) == 0 {
+    give 0 - 1
+  }
+  when len(raw) > 7 {
+    give 0 - 1
+  }
+  hold value = 0
+  hold i = 0
+  while i < len(raw) {
+    hold c = sx_index(raw, i)
+    when jd_is_digit(c) == 0 {
+      give 0 - 1
+    }
+    hold value = value * 10 + c - 48
+    hold i = i + 1
+  }
+  give value
+}
+
+// Decode one finite IEEE-754 binary32 value into the language's double.
+// The caller checks exponent != 255. This also handles subnormal values.
+make lsf_f32(bytes: list, at: num) -> num {
+  hold b0 = bytes[at]
+  hold b1 = bytes[at + 1]
+  hold b2 = bytes[at + 2]
+  hold b3 = bytes[at + 3]
+  hold low = b2 % 128
+  hold exponent = (b3 % 128) * 2 + (b2 - low) / 128
+  hold mantissa = b0 + b1 * 256 + low * 65536
+  hold value = mantissa / 8388608
+  hold power = 0 - 126
+  when exponent > 0 {
+    hold value = value + 1
+    hold power = exponent - 127
+  }
+  while power > 0 {
+    hold value = value * 2
+    hold power = power - 1
+  }
+  while power < 0 {
+    hold value = value / 2
+    hold power = power + 1
+  }
+  when b3 >= 128 {
+    hold value = 0 - value
+  }
+  give value
+}
+
+// Validate the metadata for one required rank-one F32 tensor, and return its
+// element count. Expected begin offset ensures tensors have no gaps/overlap.
+make lsf_tensor_count(header: str, name: str, begin: num, total: num) -> num {
+  hold raw = jd_raw(header, name)
+  when string_eq(jd_type(raw, ""), "object") == 0 {
+    give 0 - 1
+  }
+  when jd_len(raw, "") != 3 {
+    give 0 - 1
+  }
+  when string_eq(jd_type(raw, "dtype"), "string") == 0 {
+    give 0 - 1
+  }
+  when string_eq(jd_text(raw, "dtype"), "F32") == 0 {
+    give 0 - 1
+  }
+  when string_eq(jd_type(raw, "shape"), "array") == 0 {
+    give 0 - 1
+  }
+  when jd_len(raw, "shape") != 1 {
+    give 0 - 1
+  }
+  when string_eq(jd_type(raw, "data_offsets"), "array") == 0 {
+    give 0 - 1
+  }
+  when jd_len(raw, "data_offsets") != 2 {
+    give 0 - 1
+  }
+  hold count = lsf_uint(raw, "shape.0")
+  hold lo = lsf_uint(raw, "data_offsets.0")
+  hold hi = lsf_uint(raw, "data_offsets.1")
+  when count < 1 {
+    give 0 - 1
+  }
+  when count > 8192 {
+    give 0 - 1
+  }
+  when lo != begin {
+    give 0 - 1
+  }
+  when hi != lo + count * 4 {
+    give 0 - 1
+  }
+  when hi > total {
+    give 0 - 1
+  }
+  give count
+}
+
+// Convert a previously bounds-checked F32 range. Invalid IEEE values or
+// magnitudes produce []; valid configuration and weight tensors are nonempty.
+make lsf_values(bytes: list, start: num, count: num) -> list {
+  hold out = []
+  hold empty = []
+  hold i = 0
+  while i < count {
+    hold at = start + i * 4
+    hold b2 = bytes[at + 2]
+    hold b3 = bytes[at + 3]
+    hold low = b2 % 128
+    hold exponent = (b3 % 128) * 2 + (b2 - low) / 128
+    when exponent == 255 {
+      give empty
+    }
+    hold value = lsf_f32(bytes, at)
+    when value < 0 - 1000000 {
+      give empty
+    }
+    when value > 1000000 {
+      give empty
+    }
+    push(out, value)
+    hold i = i + 1
+  }
+  give out
+}
+
+// Validates the standard SafeTensors header framing, custom architecture
+// metadata, tensor shapes, contiguous offsets, F32 data and model dimensions.
+// Bytes must be numeric integers 0..255; the caller must bound file reads.
+make llm_safetensors_valid(bytes: list) -> num {
+  when len(bytes) > 1048576 {
+    give 0
+  }
+  hold i = 0
+  while i < len(bytes) {
+    hold b = bytes[i]
+    when b < 0 {
+      give 0
+    }
+    when b > 255 {
+      give 0
+    }
+    when b != b % 256 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  hold size = lsf_header_len(bytes)
+  when size < 0 {
+    give 0
+  }
+  hold header = lsf_header(bytes, size)
+  when jd_valid(header) == 0 {
+    give 0
+  }
+  when string_eq(jd_type(header, ""), "object") == 0 {
+    give 0
+  }
+  when jd_len(header, "") != 3 {
+    give 0
+  }
+  when string_eq(jd_type(header, "__metadata__"), "object") == 0 {
+    give 0
+  }
+  when jd_len(header, "__metadata__") != 1 {
+    give 0
+  }
+  when string_eq(jd_text(header, "__metadata__.format"), "sayanox-llm-v1") == 0 {
+    give 0
+  }
+  hold total = len(bytes) - 8 - size
+  hold nc = lsf_tensor_count(header, "config", 0, total)
+  when nc != 8 {
+    give 0
+  }
+  hold nw = lsf_tensor_count(header, "weights", 32, total)
+  when nw < 0 {
+    give 0
+  }
+  when 32 + nw * 4 != total {
+    give 0
+  }
+  hold config = lsf_values(bytes, 8 + size, nc)
+  hold weights = lsf_values(bytes, 8 + size + 32, nw)
+  when len(config) != nc {
+    give 0
+  }
+  when len(weights) != nw {
+    give 0
+  }
+  hold prompt = [0]
+  give llm_model_valid(prompt, weights, config)
+}
+
+// Fresh lists from a validated container. Invalid input returns [].
+make llm_safetensors_config(bytes: list) -> list {
+  hold empty = []
+  when llm_safetensors_valid(bytes) == 0 {
+    give empty
+  }
+  hold size = lsf_header_len(bytes)
+  give lsf_values(bytes, 8 + size, 8)
+}
+make llm_safetensors_weights(bytes: list) -> list {
+  hold empty = []
+  when llm_safetensors_valid(bytes) == 0 {
+    give empty
+  }
+  hold size = lsf_header_len(bytes)
+  hold count = (len(bytes) - 8 - size - 32) / 4
+  give lsf_values(bytes, 8 + size + 32, count)
+}

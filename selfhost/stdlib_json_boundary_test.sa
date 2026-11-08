@@ -4,6 +4,36 @@
 // from any compiler under test.
 use "stdlib/json_write.sa"
 use "stdlib/json_deep.sa"
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+use "stdlib/llm_model_io.sa"
+use "stdlib/llm_safetensors.sa"
+use "stdlib/decimal.sa"
+use "stdlib/json_decimal.sa"
+
+// Fixture helpers create modified copies without mutating shared lists.
+make test_sf_patch(source: list, index: num, value: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(source) {
+    when i == index {
+      push(out, value)
+    } otherwise {
+      push(out, source[i])
+    }
+    hold i = i + 1
+  }
+  give out
+}
+make test_sf_prefix(source: list, n: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < n {
+    push(out, source[i])
+    hold i = i + 1
+  }
+  give out
+}
 
 // 1. Minify: whitespace between tokens goes, whitespace inside strings stays.
 show jw_minify("  { \"a\" : 1 , \"b\" : [ 2 , 3 ] }  ")
@@ -139,3 +169,108 @@ show jd_object_ensure_raw("{\"a\":{},\"a\":{}}", "a.x", "1")
 show jd_object_ensure_raw("{}", "a..b", "0")
 show jd_object_ensure_raw("{ }", "x", " null ")
 show "stdlib-json-ok"
+
+// Portable bounded model JSON: fixture bytes are independently authored.
+hold model_doc = "{\"format\":\"sayanox-llm-v1\",\"config\":[3,2,1,2,0.000001,3,2,5],\"weights\":[1,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0]}"
+show llm_io_valid(model_doc)
+hold model_cfg = llm_io_config(model_doc)
+hold model_weights = llm_io_weights(model_doc)
+show len(model_cfg)
+show len(model_weights)
+hold model_output = llm_generate([0], model_weights, model_cfg)
+show len(model_output)
+show model_output[0]
+show model_output[1]
+show llm_io_valid("")
+show llm_io_valid("{}")
+show llm_io_valid("{\"format\":\"sayanox-llm-v1\",\"config\":[],\"weights\":[]}")
+show llm_io_valid("{\"format\":\"other\",\"config\":[],\"weights\":[]}")
+show llm_io_valid("{\"format\":\"sayanox-llm-v1\",\"config\":[1e999],\"weights\":[]}")
+show llm_io_valid("{\"format\":\"sayanox-llm-v1\",\"config\":[true],\"weights\":[]}")
+show llm_io_valid("{\"format\":\"sayanox-llm-v1\",\"config\":[1000001],\"weights\":[]}")
+show len(llm_io_config("{}"))
+show len(llm_io_weights("{}"))
+// Corrupt valid models, including exponent bombs and wrong array types.
+show llm_io_valid(jw_obj_set(model_doc, "weights", "[1e999999999]"))
+show llm_io_valid(jw_obj_set(model_doc, "weights", "[0,\"x\"]"))
+show llm_io_valid(jw_obj_set(model_doc, "weights", "[1000001]"))
+show llm_io_valid(jw_obj_set(model_doc, "weights", "[0.00000000000000000000001]"))
+show llm_io_valid(jw_obj_set(model_doc, "config", "[3,2,1,2,0.000001,3,2,65]"))
+show llm_io_valid(jw_obj_set(model_doc, "extra", "1"))
+show llm_io_valid("{\"format\":\"sayanox-llm-v1\",\"format\":\"sayanox-llm-v1\",\"config\":[]}")
+hold too_big = "x"
+hold grow = 0
+while grow < 19 {
+  hold too_big = concat(too_big, too_big)
+  hold grow = grow + 1
+}
+show llm_io_valid(too_big)
+show "llm-model-io-ok"
+
+// Actual SafeTensors fixture bytes, checked independently with struct.
+hold safe_bytes = [168, 0, 0, 0, 0, 0, 0, 0, 123, 34, 95, 95, 109, 101, 116, 97, 100, 97, 116, 97, 95, 95, 34, 58, 123, 34, 102, 111, 114, 109, 97, 116, 34, 58, 34, 115, 97, 121, 97, 110, 111, 120, 45, 108, 108, 109, 45, 118, 49, 34, 125, 44, 34, 99, 111, 110, 102, 105, 103, 34, 58, 123, 34, 100, 116, 121, 112, 101, 34, 58, 34, 70, 51, 50, 34, 44, 34, 115, 104, 97, 112, 101, 34, 58, 91, 56, 93, 44, 34, 100, 97, 116, 97, 95, 111, 102, 102, 115, 101, 116, 115, 34, 58, 91, 48, 44, 51, 50, 93, 125, 44, 34, 119, 101, 105, 103, 104, 116, 115, 34, 58, 123, 34, 100, 116, 121, 112, 101, 34, 58, 34, 70, 51, 50, 34, 44, 34, 115, 104, 97, 112, 101, 34, 58, 91, 54, 48, 93, 44, 34, 100, 97, 116, 97, 95, 111, 102, 102, 115, 101, 116, 115, 34, 58, 91, 51, 50, 44, 50, 55, 50, 93, 125, 125, 32, 32, 0, 0, 64, 64, 0, 0, 0, 64, 0, 0, 128, 63, 0, 0, 0, 64, 189, 55, 134, 53, 0, 0, 64, 64, 0, 0, 0, 64, 0, 0, 160, 64, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 128, 63, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+show llm_safetensors_valid(safe_bytes)
+hold safe_cfg = llm_safetensors_config(safe_bytes)
+hold safe_weights = llm_safetensors_weights(safe_bytes)
+show len(safe_cfg)
+show len(safe_weights)
+hold safe_output = llm_generate([0], safe_weights, safe_cfg)
+show len(safe_output)
+show safe_output[0]
+show safe_output[1]
+show llm_safetensors_valid([])
+show llm_safetensors_valid([0, 0, 0, 0, 0, 0, 0, 0])
+show llm_safetensors_valid([1.5, 0, 0, 0, 0, 0, 0, 0])
+show len(llm_safetensors_config([0]))
+show len(llm_safetensors_weights([0]))
+// Framing, JSON, dtype, offset and IEEE failure controls.
+show llm_safetensors_valid(test_sf_prefix(safe_bytes, 447))
+show llm_safetensors_valid(test_sf_patch(safe_bytes, 4, 1))
+show llm_safetensors_valid(test_sf_patch(safe_bytes, 8, 0))
+show llm_safetensors_valid(test_sf_patch(safe_bytes, 71, 88))
+show llm_safetensors_valid(test_sf_patch(safe_bytes, 211, 127))
+show llm_safetensors_valid(test_sf_patch(safe_bytes, 0, 0))
+show llm_safetensors_valid(test_sf_patch(safe_bytes, 447, 256))
+show llm_safetensors_valid(test_sf_patch(safe_bytes, 447, 0.5))
+show lsf_f32([0, 0, 128, 191], 0)
+show lsf_f32([0, 0, 0, 63], 0)
+show lsf_f32([1, 0, 0, 0], 0) > 0
+// Offset mismatches, padding/trailing bytes, and F32 exceptional values.
+show llm_safetensors_valid(test_sf_patch(safe_bytes, 107, 49))
+show llm_safetensors_valid(test_sf_patch(safe_bytes, 166, 49))
+hold safe_extra = test_sf_prefix(safe_bytes, 448)
+push(safe_extra, 0)
+show llm_safetensors_valid(safe_extra)
+show len(lsf_values([0, 0, 128, 127], 0, 1))
+show len(lsf_values([1, 0, 128, 127], 0, 1))
+show len(lsf_values([0, 0, 128, 201], 0, 1))
+show len(safe_bytes)
+show "llm-safetensors-ok"
+
+// Exact decimal JSON updates: no double conversion, and untouched bytes stay.
+hold price_doc = " {\"id\":9007199254740993, \"prices\":[0.1,-2.50], \"id\":7} "
+show jdec_read(price_doc, "id")
+show jdec_read(price_doc, "prices.1")
+show concat(jdec_add(price_doc, "id", "1"), "|")
+show concat(jdec_add(price_doc, "prices.0", "0.2"), "|")
+show concat(jdec_sub(price_doc, "prices.1", "0.5"), "|")
+show concat(jdec_mul(price_doc, "prices.1", "0.2"), "|")
+show concat(jdec_div(price_doc, "prices.1", "2", 2), "|")
+show concat(jdec_round(price_doc, "prices.1", 0), "|")
+show concat(jdec_set(price_doc, "prices.0", "000.2500"), "|")
+show jdec_add("1.50", "", "0.5")
+show jd_valid(jdec_add(price_doc, "prices.0", "0.2"))
+show len(jdec_read("{\"x\":1e3}", "x"))
+show len(jdec_add("{\"x\":1e3}", "x", "1"))
+show len(jdec_add("{\"x\":1}", "x", "1e3"))
+show len(jdec_add("{\"x\":\"1\"}", "x", "1"))
+show len(jdec_add("{\"x\":1}", "missing", "1"))
+show len(jdec_add("{\"x\":}", "x", "1"))
+show len(jdec_div("{\"x\":1}", "x", "0", 2))
+show len(jdec_div("{\"x\":1}", "x", "2", 1.5))
+show len(jdec_set("{\"x\":true}", "x", "1"))
+// Overflow and the division rounding policy remain explicit.
+show len(jdec_add("{\"n\":9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999}", "n", "1"))
+show jdec_div("{\"n\":1}", "n", "3", 4)
+show jdec_read("{\"n\":-0.00}", "n")
+show "json-decimal-ok"

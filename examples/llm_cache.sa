@@ -1,0 +1,18 @@
+// Two-token CPU incremental attention, using caller-owned key/value caches.
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+
+hold keys = []
+hold values = []
+// Append the first projected key/value before evaluating its query.
+keys = llm_cache_append(keys, [0, 0], 2)
+values = llm_cache_append(values, [2, 10], 2)
+hold first = llm_attention_step([0, 0], keys, values, 2)
+show first[0]
+show first[1]
+// Append the second token and evaluate only its query.
+keys = llm_cache_append(keys, [0, 1], 2)
+values = llm_cache_append(values, [4, 20], 2)
+hold second = llm_attention_step([0, 1], keys, values, 2)
+show second[0]
+show second[1] > 17.31

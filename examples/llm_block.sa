@@ -1,0 +1,13 @@
+// A deterministic pre-norm transformer block with toy, untrained weights.
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+
+hold input = [1, 3, 4, 8]
+// Width 2, feed-forward width 2: 44 parameters in the documented layout.
+hold weights = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 1, 0, 0, 1, 0, 0]
+hold output = llm_block(input, weights, 2, 2, 2, 0.000001)
+show len(output)
+show output[0]
+show output[1]
+show output[2]
+show output[3]

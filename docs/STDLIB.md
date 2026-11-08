@@ -10,6 +10,8 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/list_util.sa` | 9 list helpers (`l_len`, `l_get`, `l_sum`, `l_max`, `l_min`, `l_count`, `l_contains`, `l_reverse`, `l_range`) | seed-min, gen2, native | `test-stdlib` |
 | `stdlib/file_util.sa` | 5 file helpers (`f_read`, `f_write`, `f_size`, `f_exists`, `f_lines`) | seed-min, gen2, native | `test-stdlib` |
 | `stdlib/num_util.sa` | 17 untyped numeric helpers (`nu_trunc`, `nu_floor`, `nu_ceil`, `nu_round`, `nu_frac`, `nu_min`, `nu_max`, `nu_mod_pos`, `nu_int_div`, `nu_wrap`, `nu_map_range`, `nu_avg`, `nu_median3`, `nu_pi`, `nu_deg2rad`, `nu_rad2deg`, `nu_turn`) | seed-min, gen2, native | `test-stdlib-modules` |
+| `stdlib/decimal.sa` | exact, bounded decimal-string validation, normalization, comparison, addition, subtraction, multiplication, rounded division and rounding | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/json_decimal.sa` | exact decimal reads and updates of existing JSON numbers | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/list_algo.sa` | 21 typed list algorithms (`la_insert_sorted`, `la_sort`, `la_sorted`, `la_index_of`, `la_append`, `la_slice`, `la_take`, `la_drop`, `la_cumsum`, `la_repeat`, `la_scale`, `la_offset`, `la_zip_add`, `la_count_gt`, `la_remove_at`, `la_insert_at`, `la_distinct`, `la_lower_bound`, `la_upper_bound`, `la_merge_sorted`, `la_rotate`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/str_text.sa` | 22 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`, `t_count_char`, `t_starts_with`, `t_ends_with`, `t_normalize_ws`) | seed-min, gen2, native | `test-stdlib-modules`, `test-stdlib-next` |
 | `stdlib/json_util.sa` | flat-object JSON build/read (`j_escape`, `j_kv_text`, `j_kv_number`, `j_kv_flag`, `j_pair`, `j_obj`, `j_arr_numbers`, `j_has`, `j_get_text`, `j_get_number`, `j_get_flag`) | seed-min, gen2, native | `test-stdlib-modules` |
@@ -17,6 +19,8 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa`; boundary/precision oracle in `selfhost/stdlib_json_boundary.want` | seed-min, gen2, native | `test-stdlib-json-write`, `test-stdlib-next` |
 | `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
 | `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals | seed-min, gen2, native | `test-stdlib-csv` |
+| `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/csv_query.sa` | stable CSV joins, distinct, sorting and exact decimal aggregates | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/url.sa` | percent-encoding/decoding (`surl_encode`, `surl_decode`, `surl_decode_ok`) and packed query strings (`surl_query_parse`, `surl_query_write`, `surl_query_push`, `surl_query_count`, `surl_query_key`, `surl_query_value`, `surl_query_get`, `surl_query_has`, `surl_query_empty`) | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/datetime.sa` | proleptic Gregorian calendar: `dt_is_leap`, `dt_days_in_month`, `dt_valid`, `dt_jdn`, `dt_from_jdn`, `dt_weekday`, `dt_weekday_name`, `dt_month_name`, `dt_day_of_year`, `dt_days_between`, `dt_add_days`, `dt_format`, `dt_parse`, `dt_istr` | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/hash.sa` | non-cryptographic checksums: `sh_sum_bytes`, `sh_is_digits`, `sh_poly`, `sh_djb2`, `sh_poly131`, `sh_sdbm`, `sh_adler32`, `sh_luhn_sum`, `sh_luhn_check_digit`, `sh_luhn_valid`, `sh_istr` | seed-min, gen2, native | `test-stdlib-next` |
@@ -31,7 +35,9 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/duration.sa` | elapsed whole seconds as hours, minutes, seconds or H:MM:SS | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/running.sa` | prefix minima/maxima and consecutive differences of numeric lists | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/ai.sa` | flat matrices, regression and one-hidden-layer training, dense inference, activations, metrics, normalization and nearest-neighbour primitives | seed-min, gen2, native | `test-stdlib-next` |
-| `stdlib/llm.sa` | byte tokens, bounded embedding lookup, single-head causal attention and greedy logits | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/llm.sa` | byte tokens, bounded embedding lookup, multi-head attention, transformer-block inference and toy autoregressive generation | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/llm_model_io.sa` | bounded versioned JSON model interchange for the one-block CPU model | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/llm_safetensors.sa` | bounded SafeTensors F32 reader for the custom one-block model | seed-min, gen2, native (byte-list parser); file reading on gen2 | `test-stdlib-next` |
 
 ## Toolbox modules
 
@@ -174,6 +180,107 @@ including one analytically checked backprop step and XOR, shape refusals,
 metrics, ties, standardization and dense inference on all three backends via
 `test-stdlib-next`.
 
+## CSV documents and tables
+
+`stdlib/csv_table.sa` builds on `stdlib/csv.sa` for complete multi-row CSV
+rather than single records. Import the row module before the table module:
+
+```sayanox
+use "stdlib/csv.sa"
+use "stdlib/csv_table.sa"
+hold table = ct_parse("name,role\r\nAda,engineer\r\nMina,designer\r\n")
+hold engineers = ct_filter_eq(table, 1, "engineer", 1)
+show ct_cell(engineers, 1, 0)  // Ada
+```
+
+* `ct_parse` accepts LF and CRLF record separators, with commas, doubled
+  quotes and CR/LF inside quoted fields. Bare CR outside quotes, unclosed
+  quotes, quotes in unquoted fields and text after a closing quote are refused.
+  Rows may have different widths. Empty input has zero rows; a blank line is
+  one empty field; a final record separator adds no extra row.
+* Tables are opaque packed strings containing the existing packed-row format.
+  `ct_valid` validates both levels even for malformed caller-supplied data.
+  `ct_row_count` and `ct_columns` return -1 for invalid/missing data;
+  `ct_row` and `ct_cell` return an empty string for missing data, so use the
+  counts to distinguish a missing cell from an empty one.
+* `ct_append` and `ct_set` return new tables; `ct_header_index` finds the first
+  exact header match. `ct_filter_eq` can preserve the header and skips rows
+  missing the selected column. `ct_select` projects an ordered list of column
+  indexes, allowing duplicates but refusing a missing column in any row.
+  Invalid updates return `!`, which `ct_valid` rejects.
+* `ct_write` emits CRLF separators and quotes fields as needed. A final empty
+  record is terminated so parse/write preserves it; the single literal `!`
+  is quoted to reserve the error marker. An invalid table or output over the
+  byte cap returns `!`.
+
+Inputs and packed/output strings are capped at 262144 bytes, with at most
+1024 rows and 1024 fields per row. This is an in-memory implementation, not a
+streaming parser; repeated packed-string construction and lookups can be
+costly for large tables. Strings are byte strings, not Unicode-aware text.
+Boundary, malformed-frame and parse/write round-trip tests are checked across
+seed-min, gen2 and native via `test-stdlib-next`. See `examples/csv_table.sa`.
+
+### CSV table queries
+
+`stdlib/csv_query.sa` adds relational-style operations. Import `csv.sa`,
+`csv_table.sa` and `decimal.sa` before it; see `examples/csv_query.sa`.
+
+* `cq_join(left, right, left_col, right_col, keep_header)` is a stable inner
+  join on exact byte-string keys, emitting all left fields followed by all
+  right fields. Duplicate keys produce all matches in left-major/right-major
+  order. Missing join keys in data rows are skipped. With `keep_header = 1`,
+  both headers must exist and contain their join columns.
+* `cq_distinct(table, col, keep_header)` retains the first row per exact key.
+  `cq_sort(table, col, descending, keep_header)` performs stable bytewise
+  lexical sorting; this is neither numeric nor locale/Unicode collation. Both
+  reject data rows missing the selected column.
+* `cq_sum` and `cq_mean` aggregate string-encoded decimals without double
+  conversion. Mean accepts a precision and uses nearest/ties-away-from-zero
+  rounding. Sum of an empty data set is `0`; mean of one is invalid.
+  `cq_group_sum(table, key_col, value_col, keep_header)` returns two columns
+  in first-seen key order. Its header, when requested, uses the original
+  column names. Missing cells, invalid decimal values, sums beyond 256 digits
+  and invalid flags are refused rather than silently skipped. `cq_sum` and
+  `cq_mean` signal errors with the empty string; table operations return `!`.
+
+All `keep_header`, `skip_header` and `descending` flags are 0 or 1. Join and
+group results obey the 1024-row, 1024-field and 262144-byte table caps. These
+are bounded in-memory operations; join, distinct, grouping and sorting can be
+quadratic or worse due to packed-string scans and should be used for small
+tables. They do not implement SQL or streaming. Tests exercise ordering, ties,
+ragged rows, invalid input, join expansion limits, exact large values and
+rounding on seed-min, gen2 and native via `test-stdlib-next`.
+
+## Exact decimals in JSON
+
+`stdlib/json_decimal.sa` composes `json_deep.sa` with `decimal.sa` to update
+existing JSON numeric values without conversion through `jd_num` or IEEE
+floating-point numbers. Import both dependencies before the module:
+
+```sayanox
+use "stdlib/json_deep.sa"
+use "stdlib/decimal.sa"
+use "stdlib/json_decimal.sa"
+hold doc = "{\"id\":9007199254740993,\"price\":0.1}"
+show jdec_add(doc, "price", "0.2")
+// {"id":9007199254740993,"price":0.3}
+```
+
+`jdec_read` returns the canonical exact decimal string. `jdec_set`, `jdec_add`,
+`jdec_sub`, `jdec_mul`, `jdec_div` and `jdec_round` return updated JSON while
+preserving all bytes outside the target. Every operation validates the full
+JSON document and requires an existing number at the dotted raw-key/array-index
+path; duplicate keys follow the reader's first-match rule. Empty string means
+failure, including malformed JSON, absent or nonnumeric paths, invalid or
+overflowing decimal operands and division by zero. Decimal numbers with JSON
+exponent notation are valid JSON but **not supported** by this decimal
+representation and are refused; normal `jd_num` still uses IEEE doubles.
+Division and rounding follow `decimal.sa`'s nearest, ties-away-from-zero rule.
+The existing 256-digit decimal limit applies. The boundary oracle exercises
+large integers, precision, whitespace preservation, duplicate keys, failure
+cases and rounding on seed-min, gen2 and native via `test-stdlib-next`. See
+`examples/json_exact_decimal.sa`.
+
 ## LLM inference building blocks
 
 `stdlib/llm.sa` is an experimental **CPU-only** set of transformer building
@@ -195,19 +302,183 @@ hold result = llm_attention(embeddings, embeddings, embeddings, 2)
 * `llm_attention_valid` and `llm_attention` implement single-head scaled
   causal attention on equal-shaped, row-major Q/K/V matrices, limited to 64
   tokens and 64 dimensions. Each position sees only itself and earlier tokens.
-  Softmax uses `ai_exp`'s documented approximate -30 floor. The implementation
-  is quadratic in context length and does not use a KV cache.
+  Softmax uses `ai_exp`'s documented approximate -30 floor. The full-sequence implementation
+  is quadratic in context length.
+* `llm_multihead_valid` and `llm_multihead` apply independent causal attention
+  to adjacent head slices of pre-projected Q/K/V. The number of heads must
+  divide the width; token and width caps remain 64. The output concatenates
+  heads in feature order and does not apply an output projection.
+* `llm_cache_append` returns a fresh K or V cache with one projected row
+  appended (maximum 64 rows, width 1–64). `llm_attention_step_valid` and
+  `llm_attention_step` evaluate one query against caller-owned K/V caches,
+  including the current token's already-appended K/V. For the same prefix,
+  the step equals the corresponding row of full causal multi-head attention.
+  Both caches must have equal shape; invalid inputs return `[]`. This is an
+  inference primitive, not an automatic cache manager or generation loop.
+  Copying on append is linear in cache size; no GPU or in-place optimization
+  is implied. See `examples/llm_cache.sa`.
+* `llm_bytes_valid` and `llm_bytes_decode` provide a byte-token round trip.
+  NUL, nonintegral and out-of-range IDs are rejected; valid empty output and
+  invalid input both decode to an empty string. This is not UTF-8 validation.
+* `llm_layernorm_valid` and `llm_layernorm` perform per-row population layer
+  normalization with gamma and beta. Width and row count are limited to 64;
+  input values must lie in [-1e6, 1e6] and epsilon in [1e-12, 1e6]. The
+  bounded square root is approximate. Gamma, beta and all inputs must be
+  finite; validators do not test for NaN. Invalid or empty results are `[]`.
+* `llm_project_valid` and `llm_project` apply output-major affine weights to
+  each row (up to 64 tokens and 64 input/output features). `llm_add` adds
+  equal-length flat lists for residual connections or positional embeddings.
+  Invalid shapes and valid empty data may both produce `[]`.
+* `llm_block_valid` and `llm_block` implement one **pre-norm** CPU inference
+  block: layernorm, Q/K/V projections, multi-head causal attention and output
+  projection plus residual; then layernorm, affine-ReLU-affine feed-forward
+  plus residual. For width W and feed-forward width F the flat parameters are,
+  in order: norm1 gamma and beta (W each); Q, K, V, O output-major weights
+  (W*W) and biases (W), interleaved; norm2 gamma and beta (W each); FF1
+  output-major weights (F*W) and bias (F); FF2 output-major weights (W*F)
+  and bias (W). The total is `4*W*W + 2*W*F + 9*W + F`. W is 1–16, F is
+  1–64, heads must divide W, context is at most 64. Layernorm epsilon and
+  numeric bounds are as above. The second layernorm can refuse an out-of-range
+  intermediate even when `llm_block_valid` accepted the initial inputs.
+  Empty input and invalid execution both return `[]`. This implements a
+  particular ReLU pre-norm architecture, not general model compatibility,
+  training, positional encoding or cached block decoding. See
+  `examples/llm_block.sa` for toy weights.
+* `llm_model_valid`, `llm_model_logits` and `llm_generate` implement a small
+  one-block **greedy autoregressive** CPU model. The config is
+  `[vocab, width, ff_width, heads, epsilon, context, eos, max_new_tokens]`;
+  the flat model is token embeddings `[vocab,width]`, learned positional
+  embeddings `[context,width]`, the block parameters described above,
+  output-major logits weights `[vocab,width]`, then logits biases `[vocab]`.
+  Vocab/context <=64, width <=16, FF width <=64, and max tokens <=64. The
+  prompt must contain at least one in-vocabulary integer ID and fit in the
+  context. EOS is -1 to disable it; otherwise a generated EOS is included in
+  the output and stops generation. When the context is already full, one
+  final token can still be predicted. Invalid inputs, zero output length or
+  a numerical range refusal may all return `[]`. Values must be finite;
+  there is no overflow/NaN detection. `llm_model_valid` checks structure,
+  not every intermediate. The entire prefix is recomputed at each step; this
+  is deterministic but not an optimized or pretrained LLM. See
+  `examples/llm_generate.sa` for a small hand-constructed model.
+* `llm_bigram_valid` and `llm_bigram_generate` provide deterministic greedy
+  decoding from a supplied V-by-V bigram logits table (V <= 64, at most 256
+  generated tokens). The prompt token is not included, the emitted EOS is
+  included, and -1 disables EOS; ties choose the lowest ID. A zero limit and
+  invalid requests both return `[]`, so validate first. This is a toy bigram
+  model and **not** a transformer generation loop. See `examples/llm_bigram.sa`.
 * `llm_logits` applies an output-major affine projection; `llm_greedy` chooses
   the first largest score or -1 for empty logits. `examples/llm_attention.sa`
   demonstrates the path with toy weights; those weights are not trained.
+  `examples/llm_multihead.sa` composes projection, multi-head attention, a
+  residual connection and layer normalization using toy weights.
+
+### Bounded CPU model interchange
+
+`stdlib/llm_model_io.sa` imports and validates the **custom** one-block model
+format shown in `examples/llm_toy_model.json`. Import `stdlib/json_deep.sa`,
+`stdlib/ai.sa`, `stdlib/llm.sa` and then `stdlib/llm_model_io.sa`:
+
+```sayanox
+hold doc = read_file("examples/llm_toy_model.json")
+hold valid = llm_io_valid(doc)
+hold config = llm_io_config(doc)
+hold weights = llm_io_weights(doc)
+hold output = llm_generate([0], weights, config)
+```
+
+The JSON object must have exactly `format`, `config`, and `weights` fields.
+`format` is `sayanox-llm-v1`; the other arrays use the exact flat model
+layout and configuration described above. Documents are capped at 256 KiB,
+weights at 8192 numbers, and each numeric token at 24 bytes. Only ordinary
+JSON decimal notation is supported (no exponent), with absolute value at most
+one million. Values become IEEE doubles. Validation checks the complete JSON,
+shapes, dimensions, and token bounds; inference can still reject out-of-range
+intermediates. Invalid data returns `0` from `llm_io_valid` and empty lists
+from the accessors. The accessors validate independently and return fresh
+lists. **Enforce a file size limit before `read_file` for untrusted files:**
+the built-in reads the file before the in-memory size check can run.
+
+The sample contains hand-authored toy weights, not pretrained weights. This
+JSON format does **not** import GGUF, safetensors, Hugging Face, ONNX or arbitrary
+pretrained architectures, and it cannot execute on a GPU. Those capabilities
+require model-specific architecture/tokenizer support, binary loaders, GPU
+device/kernel integration and real-hardware testing. See
+`examples/llm_model_file.sa` for the complete runnable CPU example.
+
+### SafeTensors for the custom CPU model
+
+`stdlib/llm_safetensors.sa` reads a standard SafeTensors byte container for
+**this repository's specific one-block architecture**, not arbitrary
+pretrained models. Import `json_deep.sa`, `ai.sa`, `llm.sa` and then
+`llm_safetensors.sa`. Provide a list of integer bytes to:
+
+* `llm_safetensors_valid(bytes)` checks framing, JSON, required metadata,
+  F32 tensor shapes, contiguous offsets, finite values and model dimensions.
+* `llm_safetensors_config(bytes)` and `llm_safetensors_weights(bytes)` return
+  fresh lists or `[]` on invalid data, usable with `llm_generate`.
+
+The header must have exactly `__metadata__`, `config`, and `weights` entries;
+metadata is `{ "format": "sayanox-llm-v1" }`. Both tensors are rank-one
+little-endian F32, with config of length eight followed by weights in the
+layout above. Exponents, offsets and shape integers use strict unsigned decimal
+header notation; NaN, infinity, magnitudes above 1e6, gaps, overlap, trailing
+bytes, unsupported dtypes and malformed shapes are rejected. F32 values are
+converted to IEEE doubles, including subnormals. The parser caps the entire
+buffer at 1 MiB, header at 64 KiB, and each tensor at 8192 elements; these are
+small-model limits, not a general large-model loader. Byte inputs must be
+finite integers 0–255. Parsing, not reading, is bounded: enforce file-size
+limits before loading an untrusted file.
+
+`examples/llm_toy_model.safetensors` is a tiny hand-authored example, not a
+pretrained model. `examples/llm_safetensors_file.sa` uses `read_bytes` and runs
+on gen2; seed-min and native AOT do not support `read_bytes`. The byte-list
+parser itself is checked on all three backends against a pinned binary fixture,
+plus malformed framing, offsets, dtype, NaN, infinity and truncation controls.
+The example file was also read with the independent Python `safetensors` 0.8.0
+parser. Actual pretrained models still need matching architectures, tokenizers,
+parameter mappings and tests with real weights. No GPU execution is provided.
 
 Callers must provide finite numeric values. The validators check dimensions
-and token IDs, not NaN/overflow. Tests cover causal masking, scaling, invalid
-shapes, caps and the toy projection using independent expected outputs on
+and token IDs, not NaN/overflow. Tests cover causal masking, per-head scaling, normalization, invalid
+shapes, caps and projection using independent expected outputs on
 seed-min, gen2 and native (`test-stdlib-next`). No pretrained weights,
-full transformer blocks, tokenizer, text generation loop, GPU kernels or GPU
+general pretrained model compatibility, a pretrained tokenizer, GPU kernels or GPU
 device runtime are provided. GPU support would require an actual device
 backend and hardware tests; CPU execution must not be described as GPU support.
+
+## Exact decimal strings
+
+`stdlib/decimal.sa` is a **separate representation**, not a change to the
+language's IEEE-double `num` type. It stores decimal values as strings:
+
+```sayanox
+use "stdlib/decimal.sa"
+show dec_add("0.1", "0.2")              // 0.3
+show dec_mul("-12.50", "0.04")          // -0.5
+show dec_add("9007199254740993", "1")   // 9007199254740994
+```
+
+`dec_valid` accepts optional minus, one or more ASCII integer digits and an
+optional point followed by digits. Leading and trailing zeros are permitted;
+whitespace, plus signs and exponents are not. `dec_normalize` canonicalizes
+zeros and sign; `dec_negate`, `dec_add`, `dec_sub`, `dec_mul`, `dec_div` and `dec_round` return
+canonical strings. `dec_round` takes 0–255 fractional places and rounds to
+nearest, with ties away from zero; it does not pad trailing zeros.
+`dec_div(a, b, places)` uses decimal long division and the same rounding
+rule, returning an empty string for division by zero or invalid places.
+For example `dec_div("1", "8", 3)` is `0.125` and `dec_div("1", "3", 2)`
+is `0.33`; this is rounded decimal division, not an exact rational type. `dec_compare` returns -1, 0 or 1, and **2 on invalid
+input**. Other public operations return an empty string on invalid input or a
+result exceeding 256 digits. Inputs are limited to 256 digits excluding sign
+and point. Arithmetic is exact within those limits and uses no decimal-to-num
+conversion; multiplication and division use bounded grade-school digit
+arithmetic and may be slow near the limits. Exponent notation and arbitrary
+unbounded precision are not provided.
+
+`selfhost/stdlib_text.want` includes boundary cases and deterministic vectors
+independently calculated using Python's `decimal` module; `test-stdlib-next`
+checks byte-identical results on seed-min, gen2 and native. See
+`examples/exact_decimal.sa` for a runnable example.
 
 ## Why two kinds of module
 

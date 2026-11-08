@@ -1,0 +1,12 @@
+// Toy one-block autoregressive generation, not a pretrained model.
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+
+// Vocab 3, width 2, FF width 1, two heads, context 3, EOS 2, max 5.
+hold config = [3, 2, 1, 2, 0.000001, 3, 2, 5]
+// Embeddings, positions, block weights, logits weights, logits biases.
+hold weights = [1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0]
+hold tokens = llm_generate([0], weights, config)
+show len(tokens)
+show tokens[0]
+show tokens[1]

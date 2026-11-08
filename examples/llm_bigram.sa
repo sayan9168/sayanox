@@ -1,0 +1,10 @@
+// Toy greedy generation from a three-token bigram transition table.
+// Scores are row-major: token 0 -> 1, token 1 -> 2 (EOS).
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+
+hold scores = [0, 5, 1, 0, 0, 4, 1, 1, 0]
+hold tokens = llm_bigram_generate(scores, 3, 0, 2, 10)
+show len(tokens)
+show tokens[0]
+show tokens[1]

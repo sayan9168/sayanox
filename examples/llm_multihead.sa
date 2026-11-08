@@ -1,0 +1,16 @@
+// CPU-only toy inference pipeline; not a trained transformer model.
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+
+hold states = [1, 0, 0, 1]
+hold identity = [1, 0, 0, 1]
+hold bias = [0, 0]
+hold q = llm_project(states, identity, bias, 2)
+hold k = llm_project(states, identity, bias, 2)
+hold v = llm_project(states, identity, bias, 2)
+hold attention = llm_multihead(q, k, v, 2, 2)
+hold residual = llm_add(states, attention)
+hold result = llm_layernorm(residual, [1, 1], [0, 0], 0.000001)
+show len(result)
+show result[0] > 0.99
+show result[1] < 0 - 0.99

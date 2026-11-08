@@ -1,1 +1,1 @@
-show len(concat("a", "b"))
+show len(concat("a"))

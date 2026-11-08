@@ -1,0 +1,15 @@
+// Load the documented toy model format and generate two token IDs.
+// A production caller should enforce a file-size limit before read_file.
+use "stdlib/json_deep.sa"
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+use "stdlib/llm_model_io.sa"
+
+hold doc = read_file("examples/llm_toy_model.json")
+show llm_io_valid(doc)
+hold config = llm_io_config(doc)
+hold weights = llm_io_weights(doc)
+hold result = llm_generate([0], weights, config)
+show len(result)
+show result[0]
+show result[1]

@@ -1,0 +1,17 @@
+// Read a tiny SafeTensors example on a backend supporting read_bytes (gen2).
+// Enforce an external file-size limit before reading untrusted files.
+use "stdlib/json_deep.sa"
+use "stdlib/ai.sa"
+use "stdlib/llm.sa"
+use "stdlib/llm_safetensors.sa"
+
+hold bytes = []
+hold count = read_bytes("examples/llm_toy_model.safetensors", bytes)
+show count
+show llm_safetensors_valid(bytes)
+hold config = llm_safetensors_config(bytes)
+hold weights = llm_safetensors_weights(bytes)
+hold result = llm_generate([0], weights, config)
+show len(result)
+show result[0]
+show result[1]

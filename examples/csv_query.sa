@@ -1,0 +1,12 @@
+// Query a CSV table with exact decimal aggregation.
+use "stdlib/csv.sa"
+use "stdlib/csv_table.sa"
+use "stdlib/decimal.sa"
+use "stdlib/csv_query.sa"
+
+hold sales = ct_parse("team,amount\nred,0.1\nblue,2\nred,0.2\n")
+hold grouped = cq_group_sum(sales, 0, 1, 1)
+show cq_sum(sales, 1, 1)
+show ct_cell(grouped, 1, 0)
+show ct_cell(grouped, 1, 1)
+show cq_mean(sales, 1, 1, 2)
