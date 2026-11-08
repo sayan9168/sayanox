@@ -1,0 +1,479 @@
+// Whole-document CSV for byte strings. Import stdlib/csv.sa first.
+// A table is a packed string of packed rows: each row is a csv.sa packed
+// field sequence, framed with the same decimal-length-colon scheme. "!" is
+// the parse-error marker; "" is a valid empty table. Input and packed data
+// are capped at 262144 bytes, with at most 1024 rows and 1024 fields per row.
+// Public accessors validate packed frames rather than trusting csv_count on
+// arbitrary input. All updates are functional and leave their inputs intact.
+
+// Internal: validated frame bounds [start,end], or [-1,-1].
+make ct_frame(s: str, pos: num) -> list {
+  hold bad = [0 - 1, 0 - 1]
+  when pos < 0 {
+    give bad
+  }
+  when pos >= len(s) {
+    give bad
+  }
+  hold i = pos
+  hold value = 0
+  hold digits = 0
+  hold go = 1
+  while go == 1 {
+    when i >= len(s) {
+      give bad
+    }
+    hold c = sx_index(s, i)
+    when c == 58 {
+      hold go = 0
+    } otherwise {
+      when c < 48 {
+        give bad
+      }
+      when c > 57 {
+        give bad
+      }
+      when digits == 1 {
+        when sx_index(s, pos) == 48 {
+          give bad
+        }
+      }
+      hold value = value * 10 + c - 48
+      hold digits = digits + 1
+      when value > 262144 {
+        give bad
+      }
+      hold i = i + 1
+    }
+  }
+  when digits == 0 {
+    give bad
+  }
+  hold start = i + 1
+  hold end = start + value
+  when end > len(s) {
+    give bad
+  }
+  give [start, end]
+}
+
+// Validate an opaque packed row; each actual CSV row has at least one field.
+make ct_row_valid(row: str) -> num {
+  when len(row) == 0 {
+    give 0
+  }
+  when len(row) > 262144 {
+    give 0
+  }
+  hold pos = 0
+  hold count = 0
+  while pos < len(row) {
+    hold frame = ct_frame(row, pos)
+    when frame[0] < 0 {
+      give 0
+    }
+    hold pos = frame[1]
+    hold count = count + 1
+    when count > 1024 {
+      give 0
+    }
+  }
+  give 1
+}
+
+// A valid empty table is ""; all other bytes must be well-formed row frames.
+make ct_valid(table: str) -> num {
+  when len(table) > 262144 {
+    give 0
+  }
+  hold pos = 0
+  hold count = 0
+  while pos < len(table) {
+    hold frame = ct_frame(table, pos)
+    when frame[0] < 0 {
+      give 0
+    }
+    hold row = csv_sub(table, frame[0], frame[1])
+    when ct_row_valid(row) == 0 {
+      give 0
+    }
+    hold pos = frame[1]
+    hold count = count + 1
+    when count > 1024 {
+      give 0
+    }
+  }
+  give 1
+}
+
+// Each record separator is LF or CRLF; a bare CR outside quoted data is an
+// error. Quoted CR/LF and doubled quotes are preserved by csv_parse_row.
+// Empty input is zero rows; a final line separator does not create another
+// row; a blank line is one row with one empty field. Unequal row widths are
+// allowed. Invalid grammar or resource-limit overflow returns "!".
+make ct_parse(doc: str) -> str {
+  when len(doc) > 262144 {
+    give "!"
+  }
+  hold out = ""
+  hold start = 0
+  hold i = 0
+  // states: 0 field start, 1 unquoted, 2 quoted, 3 after closing quote.
+  hold state = 0
+  hold rows = 0
+  while i < len(doc) {
+    hold c = sx_index(doc, i)
+    when state == 2 {
+      when c == 34 {
+        when i + 1 < len(doc) {
+          when sx_index(doc, i + 1) == 34 {
+            hold i = i + 2
+          } otherwise {
+            hold state = 3
+            hold i = i + 1
+          }
+        } otherwise {
+          hold state = 3
+          hold i = i + 1
+        }
+      } otherwise {
+        hold i = i + 1
+      }
+    } otherwise {
+      when c == 10 or c == 13 {
+        hold next = i + 1
+        when c == 13 {
+          when next >= len(doc) {
+            give "!"
+          }
+          when sx_index(doc, next) != 10 {
+            give "!"
+          }
+          hold next = next + 1
+        }
+        hold row = csv_parse_row(csv_sub(doc, start, i))
+        when ct_row_valid(row) == 0 {
+          give "!"
+        }
+        hold out = csv_push(out, row)
+        hold rows = rows + 1
+        when rows > 1024 {
+          give "!"
+        }
+        when len(out) > 262144 {
+          give "!"
+        }
+        hold i = next
+        hold start = next
+        hold state = 0
+      } otherwise {
+        when state == 0 {
+          when c == 34 {
+            hold state = 2
+          } otherwise {
+            when c != 44 {
+              hold state = 1
+            }
+          }
+        } otherwise {
+          when state == 1 {
+            when c == 34 {
+              give "!"
+            }
+            when c == 44 {
+              hold state = 0
+            }
+          } otherwise {
+            when c != 44 {
+              give "!"
+            }
+            hold state = 0
+          }
+        }
+        hold i = i + 1
+      }
+    }
+  }
+  when state == 2 {
+    give "!"
+  }
+  when start < len(doc) {
+    hold row = csv_parse_row(csv_sub(doc, start, len(doc)))
+    when ct_row_valid(row) == 0 {
+      give "!"
+    }
+    hold out = csv_push(out, row)
+    hold rows = rows + 1
+    when rows > 1024 {
+      give "!"
+    }
+    when len(out) > 262144 {
+      give "!"
+    }
+  }
+  give out
+}
+
+make ct_index_valid(index: num) -> num {
+  when index < 0 {
+    give 0
+  }
+  when index > 1024 {
+    give 0
+  }
+  when index != index % 2048 {
+    give 0
+  }
+  give 1
+}
+
+// Return -1 for invalid tables; zero is a valid empty table.
+make ct_row_count(table: str) -> num {
+  when ct_valid(table) == 0 {
+    give 0 - 1
+  }
+  give csv_count(table)
+}
+
+// Invalid or absent row returns ""; use ct_row_count to disambiguate.
+make ct_row(table: str, index: num) -> str {
+  when ct_valid(table) == 0 {
+    give ""
+  }
+  when ct_index_valid(index) == 0 {
+    give ""
+  }
+  give csv_at(table, index)
+}
+
+// -1 for an invalid or absent row; otherwise the number of fields.
+make ct_columns(table: str, row_index: num) -> num {
+  hold row = ct_row(table, row_index)
+  when len(row) == 0 {
+    give 0 - 1
+  }
+  give csv_count(row)
+}
+
+// Empty or missing cells return ""; use ct_columns to distinguish them.
+make ct_cell(table: str, row_index: num, col_index: num) -> str {
+  when ct_index_valid(col_index) == 0 {
+    give ""
+  }
+  hold row = ct_row(table, row_index)
+  when len(row) == 0 {
+    give ""
+  }
+  give csv_at(row, col_index)
+}
+
+// Append a valid nonempty packed row. Returns "!" on invalid input or caps.
+make ct_append(table: str, row: str) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  when ct_row_valid(row) == 0 {
+    give "!"
+  }
+  when csv_count(table) >= 1024 {
+    give "!"
+  }
+  hold out = csv_push(table, row)
+  when len(out) > 262144 {
+    give "!"
+  }
+  give out
+}
+
+// Replace one existing cell. Missing indexes, malformed input, excessive
+// packed output or a field too large returns "!". Other rows are unchanged.
+make ct_set(table: str, row_index: num, col_index: num, field: str) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  when ct_index_valid(row_index) == 0 {
+    give "!"
+  }
+  when ct_index_valid(col_index) == 0 {
+    give "!"
+  }
+  when len(field) > 262144 {
+    give "!"
+  }
+  hold row = ct_row(table, row_index)
+  when len(row) == 0 {
+    give "!"
+  }
+  hold columns = csv_count(row)
+  when col_index >= columns {
+    give "!"
+  }
+  hold newrow = ""
+  hold col = 0
+  while col < columns {
+    when col == col_index {
+      hold newrow = csv_push(newrow, field)
+    } otherwise {
+      hold newrow = csv_push(newrow, csv_at(row, col))
+    }
+    hold col = col + 1
+  }
+  hold out = ""
+  hold rows = csv_count(table)
+  hold r = 0
+  while r < rows {
+    when r == row_index {
+      hold out = csv_push(out, newrow)
+    } otherwise {
+      hold out = csv_push(out, csv_at(table, r))
+    }
+    hold r = r + 1
+  }
+  when len(out) > 262144 {
+    give "!"
+  }
+  give out
+}
+
+// Serialize with CRLF between records. An empty final record receives a
+// final CRLF so it reparses as a row. A single literal ! field is quoted to
+// keep the error marker unambiguous. Invalid data/oversized output returns !.
+make ct_write(table: str) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  hold out = ""
+  hold rows = csv_count(table)
+  hold i = 0
+  hold last = ""
+  while i < rows {
+    when i > 0 {
+      hold out = concat(out, "\r\n")
+    }
+    hold last = csv_write_row(csv_at(table, i))
+    hold out = concat(out, last)
+    when len(out) > 262144 {
+      give "!"
+    }
+    hold i = i + 1
+  }
+  when rows > 0 {
+    when len(last) == 0 {
+      hold out = concat(out, "\r\n")
+    }
+  }
+  when len(out) > 262144 {
+    give "!"
+  }
+  when string_eq(out, "!") == 1 {
+    give "\"!\""
+  }
+  give out
+}
+
+// Find the first exact header field in row zero. Missing/invalid returns -1;
+// duplicate names resolve to the first column, including empty names.
+make ct_header_index(table: str, name: str) -> num {
+  hold row = ct_row(table, 0)
+  when len(row) == 0 {
+    give 0 - 1
+  }
+  hold count = csv_count(row)
+  hold col = 0
+  while col < count {
+    when string_eq(csv_at(row, col), name) == 1 {
+      give col
+    }
+    hold col = col + 1
+  }
+  give 0 - 1
+}
+
+// Filter exact byte-string matches. keep_header must be 0 or 1; with 1,
+// row zero is copied unchanged and only later rows are filtered. Rows that
+// have no such column are skipped, not treated as an empty cell.
+make ct_filter_eq(table: str, col: num, value: str, keep_header: num) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  when ct_index_valid(col) == 0 {
+    give "!"
+  }
+  when keep_header != 0 {
+    when keep_header != 1 {
+      give "!"
+    }
+  }
+  hold out = ""
+  hold rows = csv_count(table)
+  hold i = 0
+  while i < rows {
+    hold row = csv_at(table, i)
+    hold include = 0
+    when i == 0 {
+      when keep_header == 1 {
+        hold include = 1
+      }
+    }
+    when include == 0 {
+      when col < csv_count(row) {
+        when string_eq(csv_at(row, col), value) == 1 {
+          hold include = 1
+        }
+      }
+    }
+    when include == 1 {
+      hold out = csv_push(out, row)
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// Project each row to selected column indexes in the given order. Duplicate
+// indexes are allowed; the list must be nonempty and every row must contain
+// every selected column. Invalid input or resource overflow returns "!".
+make ct_select(table: str, columns: list) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  when len(columns) == 0 {
+    give "!"
+  }
+  when len(columns) > 1024 {
+    give "!"
+  }
+  hold i = 0
+  while i < len(columns) {
+    when ct_index_valid(columns[i]) == 0 {
+      give "!"
+    }
+    hold i = i + 1
+  }
+  hold out = ""
+  hold r = 0
+  hold rows = csv_count(table)
+  while r < rows {
+    hold row = csv_at(table, r)
+    hold n = csv_count(row)
+    hold newrow = ""
+    hold i = 0
+    while i < len(columns) {
+      hold index = columns[i]
+      when index >= n {
+        give "!"
+      }
+      hold newrow = csv_push(newrow, csv_at(row, index))
+      when len(newrow) > 262144 {
+        give "!"
+      }
+      hold i = i + 1
+    }
+    hold out = csv_push(out, newrow)
+    when len(out) > 262144 {
+      give "!"
+    }
+    hold r = r + 1
+  }
+  give out
+}

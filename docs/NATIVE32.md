@@ -26,7 +26,8 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   folds the decoded byte length without allocating a target string or using the
   concat heap. Empty literals, raw UTF-8 bytes, and `\n`, `\t`, `\"` and
   `\\` escapes are supported. Interpolation, numeric/hex/Unicode escapes, NUL
-  and arbitrary expressions inside `len()` are refused in this subset. Variable
+  and arbitrary expressions inside `len()` are refused in this subset, except
+  for the bounded `len(concat(...))` form described below. Variable
   lengths are still loaded at runtime, not folded from their initial value.
   **Fixed 2026-10-31 (R13):** the pure-min native decoder used to require
   full-language mode before mapping `\r` to CR, so `"a\rb"` kept its length
@@ -57,8 +58,11 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   length. `len()` excludes the display newline. The heap is private to each
   generated image and is not reclaimed; exhaustion exits the generated program
   with status 1. This remains narrower than general dynamic string support:
-  `concat` is a statement-level form (it is refused inside any other expression,
-  including as a `string_eq` argument), and embedded-NUL literals remain refused
+  `concat` is also accepted directly inside `len(concat(...))` in numeric
+  expressions, using the same heap and operand limits. Calls to user functions
+  inside those concat operands are refused to avoid clobbering shared scratch
+  pairs during recursion. Other expression positions, including `string_eq`
+  arguments, remain refused, and embedded-NUL literals remain refused
   because the existing backends disagree on their output semantics.
 - **General string expressions** (2026-11-02): `show concat(A, B)` prints a
   concatenation without naming a variable, and a `concat` operand may itself be
@@ -72,7 +76,11 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   deeper nesting, a numeric operand, a numeric variable operand and a
   one-argument call are all refused with a line-numbered diagnostic. The
   `concat_expr` fixture exercises all of these forms on the six execution paths
-  with reviewed AArch64/RV64IM goldens.
+  with reviewed AArch64/RV64IM goldens. `concat_len` additionally exercises
+  nested concat lengths, escaped literals and function-local strings on all six
+  execution paths. Local slots use a negative frame displacement; string and
+  `chr` lowering recognizes those slots rather than treating them as absolute
+  data offsets.
 - **String-value copy** (2026-10-31): `hold b = a` and `b = a`, where `a` is an
   already-declared string variable, copy the 8-byte `(pointer, length)` pair
   through the accumulator. It is a value copy, not an alias: reassigning `a`
@@ -155,9 +163,8 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   string argument, an untyped or non-`num` parameter, a non-`num` return type, a
   duplicate name, a body without a `give`, a body that does not end with one,
   more than 8 functions, more than 6 parameters, more than 60 words of locals in
-  one frame, and `give` outside a body. `concat` is still a statement-level
-  form, so a call result can feed a call, an operator or a condition but not a
-  `concat` argument.
+  one frame, and `give` outside a body. A call result can feed a call, an
+  operator or a condition, but not a `concat` argument.
   **Since 2026-11-02 a body may also call another function**, and **since
   2026-11-07 every invocation owns its own frame**, so direct and mutual
   recursion are legal:
@@ -342,8 +349,8 @@ This work is an incremental step toward full AArch64 and RV64GC native compiler
 and runtime support. Bounded `concat` and byte indexing extend the original
 integer/static-string backend, but do not complete that roadmap item. General
 string operations beyond the documented subset (nested `chr`, `show concat(...)`
-and nested `concat` operands are now lowered; `concat` inside other expressions
-is not), lists, structs and functions,
+nested `concat` operands, and `len(concat(...))` are now lowered; concat in
+other expression positions is not), lists, structs and string-valued functions,
 IEEE-754 code generation, native file I/O, and a mark-and-sweep collector
 remain open, along with broader ISA support and end-to-end parity for each. Do not count
 emulator-only FP/syscall probes as compiler support.

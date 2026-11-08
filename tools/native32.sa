@@ -75,14 +75,14 @@
 //   A concat argument is a string variable, a string literal, a chr(...) value
 //   or another concat(...) call: a nested call is emitted first into a hidden
 //   (pointer, length) slot that then stands in for the operand, up to seven
-//   levels. `concat` is a statement-level form: it is accepted as the whole
-//   value of a `hold`, an assignment or a `show`, and refused inside any other
-//   expression.
+//   levels. It is accepted as the whole value of a `hold`, an assignment or a
+//   `show`, and directly inside `len(concat(...))`; other numeric-expression
+//   positions are refused.
 //
 //   A call is also an operand: `f(1) + 1`, `f(x) * g(y)` and `2 - f(f(3))` are
 //   accepted, because a call leaves its result in the accumulator and the
-//   expression emitter pushes it like any other value. `concat` stays a
-//   statement-level form and is still refused inside other expressions.
+//   expression emitter pushes it like any other value. User function calls
+//   inside concat operands of len are refused while scratch pairs are shared.
 //
 //   expressions: + - * % , the six comparisons, parentheses, unary minus,
 //   decimal integer literals, numeric names and `len(STRING_NAME)` or `len("literal")`. `/` is
@@ -681,7 +681,9 @@ make emit_store_frame_word(xs: list, arch: num, disp: num) -> list {
 
 // A variable access inside a make body goes through the current frame; outside
 // one it is an absolute data offset. Frame slots carry the frame mark, so the
-// two forms can never be confused by value. The absolute path records the same
+// two forms can never be confused by value. Frame locals have negative
+// displacements (at most 240 bytes), so mark - 256 is the frame threshold.
+// The absolute path records the same
 // fixup the old inline sites pushed.
 make emit_load_var(xs: list, arch: num, s: num) -> list {
   when fn_active >= 0 {
@@ -730,7 +732,7 @@ make emit_load_abs_word(xs: list, arch: num, addr: num) -> list {
 // into i386 register number `reg` (0..7), used by the concat copy sequence
 // whose register set is fixed. The frame path borrows ebx as the base.
 make emit_load_word_i386(xs: list, s: num, reg: num) -> list {
-  when s >= fn_frame_mark {
+  when s >= fn_frame_mark - 256 {
     xs = e1(xs, 139)
     xs = e1(xs, 29)
     xs = e32(xs, dva_of(fp_slot))
@@ -1416,7 +1418,7 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
     code = e1(code, 198)
     code = e1(code, 7)
     code = e1(code, 0)
-    when dest >= fn_frame_mark {
+    when dest >= fn_frame_mark - 256 {
       // mov ecx,ebx ; mov ebx,[fp] ; mov [ebx+disp],ecx
       code = e1(code, 137)
       code = e1(code, 217)
@@ -1451,7 +1453,7 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
     when arch == 1 {
       // AArch64: w10/w11 and w12/w13 are source pairs; w14 is the
       // destination and w15 the total length.
-      when leftslot >= fn_frame_mark {
+      when leftslot >= fn_frame_mark - 256 {
         code = a_abs(code, 9, dva_of(fp_slot))
         code = e_w(code, 3107979562)
         code = a_fp_disp(code, 10, leftslot - fn_frame_mark)
@@ -1465,7 +1467,7 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
         code = e_w(code, 3107979562)
         code = e_w(code, 3107980587)
       }
-      when rightslot >= fn_frame_mark {
+      when rightslot >= fn_frame_mark - 256 {
         code = a_abs(code, 9, dva_of(fp_slot))
         code = e_w(code, 3107979562)
         code = a_fp_disp(code, 10, rightslot - fn_frame_mark)
@@ -1505,7 +1507,7 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
       code = e_w(code, 3103785264)
       // Publish the original allocation base (w14); w16 is already the
       // advanced heap cursor and must not become the string pointer.
-      when dest >= fn_frame_mark {
+      when dest >= fn_frame_mark - 256 {
         // ldr w17,[fp] ; add x9,x17,#disp ; str w14,[x9]
         code = a_abs(code, 9, dva_of(fp_slot))
         code = e_w(code, 3107979569)
@@ -1554,7 +1556,7 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
       code = e_w(code, 956301777)
       code = e_w(code, 2432697806)
       code = e_w(code, 956301791)
-      when dest >= fn_frame_mark {
+      when dest >= fn_frame_mark - 256 {
         // ldr w17,[fp] ; add x9,x17,#disp+4 ; str w15,[x9]
         code = a_abs(code, 9, dva_of(fp_slot))
         code = e_w(code, 3107979569)
@@ -1571,7 +1573,7 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
     } otherwise {
       // RV64: t1/t2 and t3/t4 are the source pairs; t5 holds the
       // destination pointer and t6 the total length.
-      when leftslot >= fn_frame_mark {
+      when leftslot >= fn_frame_mark - 256 {
         code = rv_li32(code, 5, dva_of(fp_slot))
         code = e_w(code, rv_i(0, 5, 2, 6, 3))
         code = e_w(code, rv_i(leftslot - fn_frame_mark, 6, 2, 6, 3))
@@ -1584,7 +1586,7 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
         code = e_w(code, rv_i(0, 5, 2, 6, 3))
         code = e_w(code, rv_i(4, 5, 2, 7, 3))
       }
-      when rightslot >= fn_frame_mark {
+      when rightslot >= fn_frame_mark - 256 {
         code = rv_li32(code, 5, dva_of(fp_slot))
         code = e_w(code, rv_i(0, 5, 2, 28, 3))
         code = e_w(code, rv_i(rightslot - fn_frame_mark, 28, 2, 28, 3))
@@ -1651,7 +1653,7 @@ make emit_concat_copy(leftslot: num, rightslot: num, dest: num) -> num {
       code = e_w(code, rv_s(0, 23, 19, 0))
       code = e_w(code, rv_i(1, 19, 0, 19, 19))
       code = e_w(code, rv_s(0, 0, 19, 0))
-      when dest >= fn_frame_mark {
+      when dest >= fn_frame_mark - 256 {
         // li32 x6,fp ; lw x6,0(x6) ; sw x30,disp(x6) ; sw x31,disp+4(x6)
         code = rv_li32(code, 6, dva_of(fp_slot))
         code = e_w(code, rv_i(0, 6, 2, 6, 3))
@@ -1845,13 +1847,13 @@ make emit_concat_pair(left: str, right: str, dest: num) -> num {
   hold destslot = dest
   hold copied = 0
   when fn_active >= 0 {
-    when leftslot >= fn_frame_mark {
+    when leftslot >= fn_frame_mark - 256 {
       leftslot = frame_pair_to_abs(leftslot)
     }
-    when rightslot >= fn_frame_mark {
+    when rightslot >= fn_frame_mark - 256 {
       rightslot = frame_pair_to_abs(rightslot)
     }
-    when destslot >= fn_frame_mark {
+    when destslot >= fn_frame_mark - 256 {
       destslot = abs_pair_scratch()
     }
   }
@@ -1917,7 +1919,7 @@ make emit_chr_value(xs: list, arch: num, spec: list, cell: num, dst: num) -> lis
       xs = emit_push_imm2(xs, 0, val)
       xs = emit_pop_acc(xs, 0)
     } otherwise {
-      when srcslot >= fn_frame_mark {
+      when srcslot >= fn_frame_mark - 256 {
         xs = emit_load_frame_word(xs, 0, srcslot - fn_frame_mark)
       } otherwise {
         xs = e1(xs, 161)
@@ -1950,7 +1952,7 @@ make emit_chr_value(xs: list, arch: num, spec: list, cell: num, dst: num) -> lis
     when kind == 0 {
       xs = rv_li32(xs, 10, val)
     } otherwise {
-      when srcslot >= fn_frame_mark {
+      when srcslot >= fn_frame_mark - 256 {
         xs = emit_load_frame_word(xs, 2, srcslot - fn_frame_mark)
       } otherwise {
         xs = rv_li32(xs, 5, base + srcslot)
@@ -1973,7 +1975,7 @@ make emit_chr_value(xs: list, arch: num, spec: list, cell: num, dst: num) -> lis
     xs = a_movz(xs, 0, 0, bit_and(val, 65535))
     xs = a_movk16(xs, 0, 0, bit_and(shr(val, 16), 65535))
   } otherwise {
-    when srcslot >= fn_frame_mark {
+    when srcslot >= fn_frame_mark - 256 {
       xs = emit_load_frame_word(xs, 1, srcslot - fn_frame_mark)
     } otherwise {
       xs = a_abs(xs, 9, base + srcslot)
@@ -2211,15 +2213,10 @@ make tokenize(ex: str) -> str {
         nmtext = concat(nmtext, chr(sx_index(ex, i)))
         i = i + 1
       }
-      when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 && string_eq(nmtext, "string_eq") == 0 && string_eq(nmtext, "chr") == 0 && slot_of(fn_names, nmtext) < 0 {
-        // concat is a statement-level form, not an expression: say so instead of
-        // claiming the function does not exist.
+      when i < n && sx_index(ex, i) == 40 && string_eq(nmtext, "len") == 0 && string_eq(nmtext, "string_eq") == 0 && string_eq(nmtext, "chr") == 0 && string_eq(nmtext, "concat") == 0 && slot_of(fn_names, nmtext) < 0 {
         bad = concat(concat("a call to '", nmtext), "' (this backend has no functions)")
         when fn_count > 0 {
           bad = concat(concat("a call to '", nmtext), "': no make with that name is declared")
-        }
-        when string_eq(nmtext, "concat") == 1 {
-          bad = "`concat(...)` inside another expression (only as the whole value of a `hold`, an assignment or a `show`)"
         }
       }
       when i < n && sx_index(ex, i) == 46 {
@@ -3183,6 +3180,93 @@ make elf64_em(code: list, data: list, entry_off: num, em: num, data_mem: num) ->
   give img
 }
 
+// Return the raw body of the indexed string literal, respecting escapes.
+// Tokenization stores only each literal's decoded length, so reconstructing
+// a nested concat needs its original source spelling, not a length token.
+make concat_literal_body(source: str, want: num) -> str {
+  hold i = 0
+  hold count = 0
+  while i < len(source) {
+    when sx_index(source, i) == 34 {
+      hold current = count
+      count = count + 1
+      i = i + 1
+      hold body = ""
+      hold done = 0
+      while i < len(source) && done == 0 {
+        hold c = sx_index(source, i)
+        when c == 92 {
+          when i + 1 >= len(source) {
+            hold bad_escape = fail(1, "unterminated string escape in concat")
+          }
+          body = concat(body, chr(c))
+          body = concat(body, chr(sx_index(source, i + 1)))
+          i = i + 2
+        } otherwise {
+          when c == 34 {
+            done = 1
+            i = i + 1
+          } otherwise {
+            body = concat(body, chr(c))
+            i = i + 1
+          }
+        }
+      }
+      when done == 0 {
+        hold bad_quote = fail(1, "unterminated string literal in concat")
+      }
+      when current == want { give body }
+    } otherwise {
+      i = i + 1
+    }
+  }
+  hold missing = fail(1, "missing concat string literal")
+  give ""
+}
+
+// Render the selected token range, using original literal bodies. The literal
+// ordinal includes all literals before the range in the enclosing expression.
+make concat_token_text(toks: str, source: str, from: num, upto: num) -> str {
+  hold ordinal = 0
+  hold i = 0
+  while i < from {
+    hold prior = tok_at(toks, i)
+    when sx_index(prior, 0) == 108 { ordinal = ordinal + 1 }
+    i = i + 1
+  }
+  hold out = ""
+  i = from
+  while i < upto {
+    hold token = tok_at(toks, i)
+    hold kind = sx_index(token, 0)
+    // An operand evaluated by a recursive user call could overwrite the
+    // absolute scratch pairs of an enclosing concat. Refuse until those
+    // temporaries are frame-local.
+    when kind == 118 && i + 1 < upto && string_eq(tok_at(toks, i + 1), "(") == 1 {
+      when slot_of(fn_names, sub(token, 1, len(token))) >= 0 {
+        hold nested_call = fail(1, concat(concat("line ", numstr(lineno)), ": user function calls inside concat in len are not supported"))
+      }
+    }
+    when kind == 108 {
+      hold body = concat_literal_body(source, ordinal)
+      ordinal = ordinal + 1
+      out = concat(out, concat(concat("\"", body), "\""))
+    } otherwise {
+      when kind == 110 || kind == 118 || kind == 111 {
+        out = concat(out, sub(token, 1, len(token)))
+      } otherwise {
+        when string_eq(token, "(") == 1 || string_eq(token, ")") == 1 || string_eq(token, "[") == 1 || string_eq(token, "]") == 1 {
+          out = concat(out, token)
+        } otherwise {
+          hold invalid = fail(1, "unsupported token in concat inside len")
+        }
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
 // The one integer expression emitter. It leaves the result in the accumulator,
 // which is where every caller (numeric `hold`/assignment, `show`, a `when`/
 // `while` condition, `chr(<expression>)`, and the index of `s[i]`) expects it.
@@ -3445,7 +3529,33 @@ make emit_expression(extext: str) -> num {
           want = 0
           k = chr_len_close + 1
         }
-        when is_len_call == 0 && is_chr_len == 0 && string_eq(vname, "len") == 1 && k + 1 < tn {
+        // len(concat(...)) materializes the same bounded string pair as a
+        // whole-value concat, then pushes its runtime length onto the stack.
+        hold is_concat_len = 0
+        when is_len_call == 0 && is_chr_len == 0 && string_eq(vname, "len") == 1 && k + 3 < tn {
+          when string_eq(tok_at(toks, k + 1), "(") == 1 && tok_name_is(tok_at(toks, k + 2), "concat") == 1 && string_eq(tok_at(toks, k + 3), "(") == 1 {
+            hold concat_close = paren_close(toks, k + 3, tn)
+            when concat_close > 0 && concat_close + 1 < tn {
+              when string_eq(tok_at(toks, concat_close + 1), ")") == 1 {
+                hold text = concat_token_text(toks, extext, k + 2, concat_close + 1)
+                hold parts = split_concat(text)
+                when sx_index(parts, 0) == 33 {
+                  hold invalid_concat = fail(1, concat(concat("line ", numstr(lineno)), concat(": ", sub(parts, 1, len(parts)))))
+                }
+                hold pair = len(data)
+                data = put_zeros(data, 8)
+                hold emitted = emit_concat_pair(concat_left(parts), concat_right(parts), pair)
+                hold base = 4202496
+                when arch == 0 { base = 134520832 }
+                code = emit_load_abs(code, arch, base + pair + 4)
+                want = 0
+                k = concat_close + 1
+                is_concat_len = 1
+              }
+            }
+          }
+        }
+        when is_len_call == 0 && is_chr_len == 0 && is_concat_len == 0 && string_eq(vname, "len") == 1 && k + 1 < tn {
           when string_eq(tok_at(toks, k + 1), "(") == 1 {
             hold bad_len_shape = fail(1, concat(concat("line ", numstr(lineno)), ": len() expects exactly one string variable, string literal or chr(...), not a general expression"))
           }
@@ -3471,7 +3581,7 @@ make emit_expression(extext: str) -> num {
           want = 0
           k = k + 3
         }
-        when is_len_call == 0 && is_chr_len == 0 {
+        when is_len_call == 0 && is_chr_len == 0 && is_concat_len == 0 {
           hold vslot = slot_of(names, vname)
           when vslot < 0 {
             hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(vname, "'")))
@@ -4066,7 +4176,7 @@ make emit_statements() -> num {
       // absolute pair and copy the two words into the frame.
       hold chr_dst = slot
       hold chr_tmp = 0 - 1
-      when slot >= fn_frame_mark {
+      when slot >= fn_frame_mark - 256 {
         chr_tmp = abs_pair_scratch()
         chr_dst = chr_tmp
       }

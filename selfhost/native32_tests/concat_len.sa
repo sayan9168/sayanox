@@ -1,0 +1,25 @@
+make local_strings(n: num) -> num {
+  hold left = "abc"
+  hold right = chr(n)
+  hold combined = concat(left, right)
+  combined = concat(combined, "!")
+  give len(combined) + len(chr(n))
+}
+make lengths(n: num) -> num {
+  hold local = "xy"
+  when n == 0 {
+    give len(concat(local, "!"))
+  }
+  give len(concat(local, chr(n + 64))) + lengths(n - 1)
+}
+hold a = "abc"
+hold b = "d"
+show len(concat(a, b))
+show len(concat("", "hello")) + 1
+show len("before") + len(concat("a\"b", "\\c"))
+show len(concat(concat(a, "-"), concat(b, "!")))
+show 2 * len(concat(chr(65 + 1), a))
+a = "z"
+show len(concat(a, b)) + len(concat(b, a))
+show lengths(3)
+show local_strings(65)

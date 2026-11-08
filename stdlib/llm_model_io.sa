@@ -1,0 +1,143 @@
+// Versioned JSON interchange for the bounded CPU model in llm.sa. Import
+// stdlib/json_deep.sa, stdlib/ai.sa and stdlib/llm.sa before this module.
+// The supported architecture is exactly llm_generate's one-block pre-norm
+// model; this is NOT GGUF, safetensors, Hugging Face, ONNX, or GPU support.
+// For untrusted paths, note read_file has no pre-read size bound: callers
+// must arrange external file size limits before reading into a string.
+
+// Internal helpers expect an already validated JSON document. Numeric tokens
+// must be ordinary decimals (no exponent), at most 24 bytes, with absolute
+// value <= 1e6. This avoids jd_num's potentially unbounded exponent loop,
+// and bounds the input magnitude; IEEE double rounding still applies.
+make lmio_array_valid(doc: str, path: str, limit: num) -> num {
+  hold pos = jd_find(doc, path)
+  when pos < 0 {
+    give 0
+  }
+  when sx_index(doc, pos) != 91 {
+    give 0
+  }
+  hold pos = jd_skip_ws(doc, pos + 1)
+  hold count = 0
+  hold done = 0
+  while done == 0 {
+    when sx_index(doc, pos) == 93 {
+      hold done = 1
+    } otherwise {
+      hold first = sx_index(doc, pos)
+      when first != 45 {
+        when jd_is_digit(first) == 0 {
+          give 0
+        }
+      }
+      hold end = jd_skip_value(doc, pos)
+      when end <= pos {
+        give 0
+      }
+      when end - pos > 24 {
+        give 0
+      }
+      hold i = pos
+      while i < end {
+        hold c = sx_index(doc, i)
+        when c == 101 {
+          give 0
+        }
+        when c == 69 {
+          give 0
+        }
+        hold i = i + 1
+      }
+      hold number = jd_num(jd_slice(doc, pos, end - pos), "")
+      when number < 0 - 1000000 {
+        give 0
+      }
+      when number > 1000000 {
+        give 0
+      }
+      hold count = count + 1
+      when count > limit {
+        give 0
+      }
+      hold pos = jd_skip_ws(doc, end)
+      when sx_index(doc, pos) == 44 {
+        hold pos = jd_skip_ws(doc, pos + 1)
+      }
+    }
+  }
+  give 1
+}
+
+// Internal: convert a previously validated numeric array, preserving order.
+make lmio_array(doc: str, path: str) -> list {
+  hold out = []
+  hold pos = jd_find(doc, path)
+  hold pos = jd_skip_ws(doc, pos + 1)
+  hold done = 0
+  while done == 0 {
+    when sx_index(doc, pos) == 93 {
+      hold done = 1
+    } otherwise {
+      hold end = jd_skip_value(doc, pos)
+      hold raw = jd_slice(doc, pos, end - pos)
+      push(out, jd_num(raw, ""))
+      hold pos = jd_skip_ws(doc, end)
+      when sx_index(doc, pos) == 44 {
+        hold pos = jd_skip_ws(doc, pos + 1)
+      }
+    }
+  }
+  give out
+}
+
+// Accept exactly three top-level fields: format, config and weights. Limit
+// input text to 256 KiB and weights to 8192 numbers before conversion.
+// Config and model layout must pass llm_model_valid with token 0 as a probe.
+make llm_io_valid(doc: str) -> num {
+  when len(doc) > 262144 {
+    give 0
+  }
+  when jd_valid(doc) == 0 {
+    give 0
+  }
+  when string_eq(jd_type(doc, ""), "object") == 0 {
+    give 0
+  }
+  when jd_len(doc, "") != 3 {
+    give 0
+  }
+  when string_eq(jd_type(doc, "format"), "string") == 0 {
+    give 0
+  }
+  when string_eq(jd_text(doc, "format"), "sayanox-llm-v1") == 0 {
+    give 0
+  }
+  when lmio_array_valid(doc, "config", 8) == 0 {
+    give 0
+  }
+  when lmio_array_valid(doc, "weights", 8192) == 0 {
+    give 0
+  }
+  hold config = lmio_array(doc, "config")
+  hold weights = lmio_array(doc, "weights")
+  hold probe = [0]
+  give llm_model_valid(probe, weights, config)
+}
+
+// Validated accessors return [] on invalid input; call llm_io_valid first to
+// distinguish invalid data. Both lists are fresh and need no trusted casts.
+make llm_io_config(doc: str) -> list {
+  hold empty = []
+  when llm_io_valid(doc) == 0 {
+    give empty
+  }
+  give lmio_array(doc, "config")
+}
+
+make llm_io_weights(doc: str) -> list {
+  hold empty = []
+  when llm_io_valid(doc) == 0 {
+    give empty
+  }
+  give lmio_array(doc, "weights")
+}

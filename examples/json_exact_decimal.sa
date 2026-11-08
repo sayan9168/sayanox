@@ -1,0 +1,9 @@
+// Exact arithmetic on JSON numeric tokens, without conversion to double.
+use "stdlib/json_deep.sa"
+use "stdlib/decimal.sa"
+use "stdlib/json_decimal.sa"
+
+hold doc = "{\"id\":9007199254740993,\"prices\":[0.1,0.2]}"
+hold next = jdec_add(doc, "prices.0", "0.2")
+hold updated = jdec_add(next, "id", "1")
+show updated

@@ -159,3 +159,804 @@ make llm_logits(hidden: list, weights: list, biases: list) -> list {
 make llm_greedy(logits: list) -> num {
   give ai_argmax(logits)
 }
+
+// Multi-head scaled causal attention. Adjacent feature slices form heads;
+// Q/K/V are already projected and concatenated in row-major order. Width and
+// context are capped at 64 as for single-head attention. No output projection
+// is applied. Invalid shapes or a non-divisor head count return [].
+make llm_multihead_valid(q: list, k: list, v: list, width: num, heads: num) -> num {
+  when llm_attention_valid(q, k, v, width) == 0 {
+    give 0
+  }
+  when ai_is_integer(heads) == 0 {
+    give 0
+  }
+  when heads < 1 {
+    give 0
+  }
+  when heads > width {
+    give 0
+  }
+  when width % heads != 0 {
+    give 0
+  }
+  give 1
+}
+
+make llm_multihead(q: list, k: list, v: list, width: num, heads: num) -> list {
+  hold out = []
+  when llm_multihead_valid(q, k, v, width, heads) == 0 {
+    give out
+  }
+  hold rows = len(q) / width
+  hold head_width = width / heads
+  hold scale = llm_width_sqrt(head_width)
+  hold row = 0
+  while row < rows {
+    hold head = 0
+    while head < heads {
+      hold logits = []
+      hold previous = 0
+      while previous <= row {
+        hold dot = 0
+        hold d = 0
+        while d < head_width {
+          hold offset = head * head_width + d
+          hold dot = dot + q[row * width + offset] * k[previous * width + offset]
+          hold d = d + 1
+        }
+        push(logits, dot / scale)
+        hold previous = previous + 1
+      }
+      hold weights = ai_softmax(logits)
+      hold d = 0
+      while d < head_width {
+        hold value = 0
+        hold previous = 0
+        while previous <= row {
+          hold offset = head * head_width + d
+          hold value = value + weights[previous] * v[previous * width + offset]
+          hold previous = previous + 1
+        }
+        push(out, value)
+        hold d = d + 1
+      }
+      hold head = head + 1
+    }
+    hold row = row + 1
+  }
+  give out
+}
+
+// Internal bounded square root: x is positive and at most 4e12 + 1e6.
+// Scaling by powers of four puts the Newton iteration in [1,4).
+make llm_norm_sqrt(x: num) -> num {
+  hold scaled = x
+  hold factor = 1
+  while scaled >= 4 {
+    hold scaled = scaled / 4
+    hold factor = factor * 2
+  }
+  while scaled < 1 {
+    hold scaled = scaled * 4
+    hold factor = factor / 2
+  }
+  hold estimate = scaled
+  hold i = 0
+  while i < 12 {
+    hold estimate = (estimate + scaled / estimate) / 2
+    hold i = i + 1
+  }
+  give estimate * factor
+}
+
+// Per-row layer normalization with learned gamma and beta, using population
+// variance and epsilon in [1e-12,1e6]. Width/rows <=64, data values in
+// [-1e6,1e6], finite gamma/beta required. Returns [] on validation failure;
+// empty data is also valid. The bounded square root is an approximation.
+make llm_layernorm_valid(data: list, gamma: list, beta: list, epsilon: num) -> num {
+  hold width = len(gamma)
+  when width < 1 {
+    give 0
+  }
+  when width > 64 {
+    give 0
+  }
+  when len(beta) != width {
+    give 0
+  }
+  when ai_matrix_valid(data, width) == 0 {
+    give 0
+  }
+  when len(data) / width > 64 {
+    give 0
+  }
+  when epsilon < 0.000000000001 {
+    give 0
+  }
+  when epsilon > 1000000 {
+    give 0
+  }
+  hold i = 0
+  while i < len(data) {
+    when data[i] < 0 - 1000000 {
+      give 0
+    }
+    when data[i] > 1000000 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+make llm_layernorm(data: list, gamma: list, beta: list, epsilon: num) -> list {
+  hold out = []
+  when llm_layernorm_valid(data, gamma, beta, epsilon) == 0 {
+    give out
+  }
+  hold width = len(gamma)
+  hold rows = len(data) / width
+  hold row = 0
+  while row < rows {
+    hold sum = 0
+    hold j = 0
+    while j < width {
+      hold sum = sum + data[row * width + j]
+      hold j = j + 1
+    }
+    hold mean = sum / width
+    hold variance = 0
+    hold j = 0
+    while j < width {
+      hold d = data[row * width + j] - mean
+      hold variance = variance + d * d
+      hold j = j + 1
+    }
+    hold denom = llm_norm_sqrt(variance / width + epsilon)
+    hold j = 0
+    while j < width {
+      hold delta = data[row * width + j] - mean
+      hold value = delta / denom
+      push(out, value * gamma[j] + beta[j])
+      hold j = j + 1
+    }
+    hold row = row + 1
+  }
+  give out
+}
+
+// Apply an output-major affine projection to each row. Data is
+// [tokens,input_width], weights [output_width,input_width], biases
+// [output_width]. All widths and token count are capped at 64.
+make llm_project_valid(data: list, weights: list, biases: list, input_width: num) -> num {
+  when ai_is_integer(input_width) == 0 {
+    give 0
+  }
+  when input_width < 1 {
+    give 0
+  }
+  when input_width > 64 {
+    give 0
+  }
+  when len(biases) < 1 {
+    give 0
+  }
+  when len(biases) > 64 {
+    give 0
+  }
+  when ai_matrix_valid(data, input_width) == 0 {
+    give 0
+  }
+  when len(data) / input_width > 64 {
+    give 0
+  }
+  when len(weights) != len(biases) * input_width {
+    give 0
+  }
+  give 1
+}
+
+make llm_project(data: list, weights: list, biases: list, input_width: num) -> list {
+  hold out = []
+  when llm_project_valid(data, weights, biases, input_width) == 0 {
+    give out
+  }
+  hold rows = len(data) / input_width
+  hold row = 0
+  while row < rows {
+    hold unit = 0
+    while unit < len(biases) {
+      hold value = biases[unit]
+      hold j = 0
+      while j < input_width {
+        hold value = value + data[row * input_width + j] * weights[unit * input_width + j]
+        hold j = j + 1
+      }
+      push(out, value)
+      hold unit = unit + 1
+    }
+    hold row = row + 1
+  }
+  give out
+}
+
+// Add identically shaped flat tensors, useful for residual connections or
+// position embeddings. Returns a fresh list, or [] on length mismatch.
+make llm_add(a: list, b: list) -> list {
+  hold out = []
+  when len(a) != len(b) {
+    give out
+  }
+  hold i = 0
+  while i < len(a) {
+    push(out, a[i] + b[i])
+    hold i = i + 1
+  }
+  give out
+}
+
+// Validate a byte-token sequence for reconstruction as a Sayanox string.
+// Empty tokens are valid. NUL, fractional and out-of-range values are not.
+make llm_bytes_valid(ids: list) -> num {
+  hold i = 0
+  while i < len(ids) {
+    hold token = ids[i]
+    when ai_is_integer(token) == 0 {
+      give 0
+    }
+    when token < 1 {
+      give 0
+    }
+    when token > 255 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// Convert byte IDs back to text. Invalid IDs yield ""; call llm_bytes_valid
+// to distinguish invalid IDs from a valid empty string. Not UTF-8 validation.
+make llm_bytes_decode(ids: list) -> str {
+  when llm_bytes_valid(ids) == 0 {
+    give ""
+  }
+  hold out = ""
+  hold i = 0
+  while i < len(ids) {
+    hold out = concat(out, chr(ids[i]))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Append a single projected K or V row to a flat row-major cache, returning
+// a fresh list. A cache holds at most 64 rows, width is 1..64. [] is returned
+// for invalid inputs; the input cache and row are not mutated. Maintain K and
+// V separately, append the current row to both before calling attention_step.
+make llm_cache_append(cache: list, row: list, width: num) -> list {
+  hold out = []
+  when ai_is_integer(width) == 0 {
+    give out
+  }
+  when width < 1 {
+    give out
+  }
+  when width > 64 {
+    give out
+  }
+  when len(row) != width {
+    give out
+  }
+  when ai_matrix_valid(cache, width) == 0 {
+    give out
+  }
+  when len(cache) / width >= 64 {
+    give out
+  }
+  hold i = 0
+  while i < len(cache) {
+    push(out, cache[i])
+    hold i = i + 1
+  }
+  hold i = 0
+  while i < width {
+    push(out, row[i])
+    hold i = i + 1
+  }
+  give out
+}
+
+// One query against cached keys and values including the current token.
+// This computes exactly the last row of llm_multihead for the same Q/K/V,
+// without recomputing prior query rows. The cache is caller-owned. Queries
+// and cache values must be finite; this is CPU inference, not a GPU kernel.
+make llm_attention_step_valid(query: list, keys: list, values: list, heads: num) -> num {
+  hold width = len(query)
+  when width < 1 {
+    give 0
+  }
+  when width > 64 {
+    give 0
+  }
+  when ai_is_integer(heads) == 0 {
+    give 0
+  }
+  when heads < 1 {
+    give 0
+  }
+  when heads > width {
+    give 0
+  }
+  when width % heads != 0 {
+    give 0
+  }
+  when ai_matrix_valid(keys, width) == 0 {
+    give 0
+  }
+  when len(keys) != len(values) {
+    give 0
+  }
+  when len(keys) == 0 {
+    give 0
+  }
+  when len(keys) / width > 64 {
+    give 0
+  }
+  give 1
+}
+
+make llm_attention_step(query: list, keys: list, values: list, heads: num) -> list {
+  hold out = []
+  when llm_attention_step_valid(query, keys, values, heads) == 0 {
+    give out
+  }
+  hold width = len(query)
+  hold rows = len(keys) / width
+  hold head_width = width / heads
+  hold scale = llm_width_sqrt(head_width)
+  hold head = 0
+  while head < heads {
+    hold logits = []
+    hold row = 0
+    while row < rows {
+      hold dot = 0
+      hold d = 0
+      while d < head_width {
+        hold offset = head * head_width + d
+        hold dot = dot + query[offset] * keys[row * width + offset]
+        hold d = d + 1
+      }
+      push(logits, dot / scale)
+      hold row = row + 1
+    }
+    hold weights = ai_softmax(logits)
+    hold d = 0
+    while d < head_width {
+      hold value = 0
+      hold row = 0
+      while row < rows {
+        hold offset = head * head_width + d
+        hold value = value + weights[row] * values[row * width + offset]
+        hold row = row + 1
+      }
+      push(out, value)
+      hold d = d + 1
+    }
+    hold head = head + 1
+  }
+  give out
+}
+
+// Validate a toy bigram generation request. The flat table has V*V logits,
+// one output row per previous token, V is 1..64. EOS is -1 (disabled) or a
+// valid token ID. Up to 256 output tokens may be generated. Input logits
+// must be finite; this is a toy transition model, not transformer inference.
+make llm_bigram_valid(table: list, vocab: num, start: num, eos: num, limit: num) -> num {
+  when ai_is_integer(vocab) == 0 {
+    give 0
+  }
+  when vocab < 1 {
+    give 0
+  }
+  when vocab > 64 {
+    give 0
+  }
+  when len(table) != vocab * vocab {
+    give 0
+  }
+  when ai_is_integer(start) == 0 {
+    give 0
+  }
+  when start >= vocab {
+    give 0
+  }
+  when eos != 0 - 1 {
+    when ai_is_integer(eos) == 0 {
+      give 0
+    }
+    when eos >= vocab {
+      give 0
+    }
+  }
+  when ai_is_integer(limit) == 0 {
+    give 0
+  }
+  when limit > 256 {
+    give 0
+  }
+  give 1
+}
+
+// Greedy bigram decoding, selecting the first maximum on ties. The result
+// excludes the prompt token but includes an emitted EOS token, then stops.
+// Zero limit is valid and yields []. Invalid requests also yield []; call
+// llm_bigram_valid to distinguish them. Inputs are not mutated.
+make llm_bigram_generate(table: list, vocab: num, start: num, eos: num, limit: num) -> list {
+  hold out = []
+  when llm_bigram_valid(table, vocab, start, eos, limit) == 0 {
+    give out
+  }
+  hold token = start
+  hold count = 0
+  hold done = 0
+  while count < limit {
+    when done == 1 {
+      give out
+    }
+    hold best = 0
+    hold best_score = table[token * vocab]
+    hold candidate = 1
+    while candidate < vocab {
+      hold score = table[token * vocab + candidate]
+      when score > best_score {
+        hold best = candidate
+        hold best_score = score
+      }
+      hold candidate = candidate + 1
+    }
+    push(out, best)
+    hold token = best
+    when token == eos {
+      hold done = 1
+    }
+    hold count = count + 1
+  }
+  give out
+}
+
+// Internal flat parameter slice; callers supply validated bounds.
+make llm_block_slice(params: list, start: num, count: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < count {
+    push(out, params[start + i])
+    hold i = i + 1
+  }
+  give out
+}
+
+// A small pre-norm transformer block for CPU inference. Flat parameters:
+// norm1 gamma,beta (W each); Q,K,V,O output-major weights (W*W) and bias
+// (W) interleaved; norm2 gamma,beta (W each); FF1 weights (F*W), bias (F);
+// FF2 weights (W*F), bias (W). Total: 4*W*W + 2*W*F + 9*W + F.
+// W <= 16, F <= 64, heads divides W, context <= 64. Values must be finite.
+make llm_block_valid(data: list, params: list, width: num, ff: num, heads: num, epsilon: num) -> num {
+  when ai_is_integer(width) == 0 {
+    give 0
+  }
+  when ai_is_integer(ff) == 0 {
+    give 0
+  }
+  when ai_is_integer(heads) == 0 {
+    give 0
+  }
+  when width < 1 {
+    give 0
+  }
+  when width > 16 {
+    give 0
+  }
+  when ff < 1 {
+    give 0
+  }
+  when ff > 64 {
+    give 0
+  }
+  when heads < 1 {
+    give 0
+  }
+  when heads > width {
+    give 0
+  }
+  when width % heads != 0 {
+    give 0
+  }
+  when ai_matrix_valid(data, width) == 0 {
+    give 0
+  }
+  when len(data) / width > 64 {
+    give 0
+  }
+  when len(params) != 4 * width * width + 2 * width * ff + 9 * width + ff {
+    give 0
+  }
+  when epsilon < 0.000000000001 {
+    give 0
+  }
+  when epsilon > 1000000 {
+    give 0
+  }
+  hold i = 0
+  while i < len(data) {
+    when data[i] < 0 - 1000000 {
+      give 0
+    }
+    when data[i] > 1000000 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// Helpers for a validated nonempty block. Keeping stages separate also keeps
+// local variable use within the native backend's current bounded limit.
+make llm_block_attention(data: list, params: list, width: num, heads: num, epsilon: num) -> list {
+  hold at = 0
+  hold gamma = llm_block_slice(params, at, width)
+  hold at = at + width
+  hold beta = llm_block_slice(params, at, width)
+  hold at = at + width
+  hold norm = llm_layernorm(data, gamma, beta, epsilon)
+  hold qw = llm_block_slice(params, at, width * width)
+  hold at = at + width * width
+  hold qb = llm_block_slice(params, at, width)
+  hold at = at + width
+  hold kw = llm_block_slice(params, at, width * width)
+  hold at = at + width * width
+  hold kb = llm_block_slice(params, at, width)
+  hold at = at + width
+  hold vw = llm_block_slice(params, at, width * width)
+  hold at = at + width * width
+  hold vb = llm_block_slice(params, at, width)
+  hold at = at + width
+  hold ow = llm_block_slice(params, at, width * width)
+  hold at = at + width * width
+  hold ob = llm_block_slice(params, at, width)
+  hold q = llm_project(norm, qw, qb, width)
+  hold k = llm_project(norm, kw, kb, width)
+  hold v = llm_project(norm, vw, vb, width)
+  hold att = llm_multihead(q, k, v, width, heads)
+  hold projected = llm_project(att, ow, ob, width)
+  give llm_add(data, projected)
+}
+
+make llm_block_feed(residual: list, params: list, width: num, ff: num, epsilon: num) -> list {
+  hold empty = []
+  hold at = 4 * width * width + 6 * width
+  hold gamma = llm_block_slice(params, at, width)
+  hold at = at + width
+  hold beta = llm_block_slice(params, at, width)
+  hold at = at + width
+  when llm_layernorm_valid(residual, gamma, beta, epsilon) == 0 {
+    give empty
+  }
+  hold norm = llm_layernorm(residual, gamma, beta, epsilon)
+  hold fw = llm_block_slice(params, at, ff * width)
+  hold at = at + ff * width
+  hold fb = llm_block_slice(params, at, ff)
+  hold at = at + ff
+  hold sw = llm_block_slice(params, at, width * ff)
+  hold at = at + width * ff
+  hold sb = llm_block_slice(params, at, width)
+  hold hidden = llm_project(norm, fw, fb, width)
+  hold activated = ai_relu_list(hidden)
+  hold feed = llm_project(activated, sw, sb, ff)
+  give llm_add(residual, feed)
+}
+
+// Pre-norm attention + residual, then pre-norm ReLU feed-forward + residual.
+// Full-sequence causal inference only; no training, dropout, embeddings,
+// positional encoding, cached decoding, or model-file loader. Invalid shape
+// and intermediate layernorm range violations return []; empty input also
+// gives []. Numerical overflow/NaN detection is not provided.
+make llm_block(data: list, params: list, width: num, ff: num, heads: num, epsilon: num) -> list {
+  hold empty = []
+  when llm_block_valid(data, params, width, ff, heads, epsilon) == 0 {
+    give empty
+  }
+  when len(data) == 0 {
+    give empty
+  }
+  hold residual = llm_block_attention(data, params, width, heads, epsilon)
+  give llm_block_feed(residual, params, width, ff, epsilon)
+}
+
+// Tiny one-block autoregressive model: config contains exactly eight numbers
+// [vocab, width, ff_width, heads, epsilon, context, eos, max_new_tokens].
+// The flat weights contain, in order: token embeddings [vocab,width], learned
+// positional embeddings [context,width], llm_block parameters, output-major
+// logits weights [vocab,width], and logits biases [vocab].
+// Dimensions: vocab/context <=64, width <=16, ff_width <=64, new tokens <=64.
+// EOS is -1 (disabled) or a token ID. Inputs and weights must be finite.
+make llm_model_valid(prompt: list, weights: list, config: list) -> num {
+  when len(config) != 8 {
+    give 0
+  }
+  hold vocab = config[0]
+  hold width = config[1]
+  hold ff = config[2]
+  hold heads = config[3]
+  hold epsilon = config[4]
+  hold context = config[5]
+  hold eos = config[6]
+  hold steps = config[7]
+  when ai_is_integer(vocab) == 0 {
+    give 0
+  }
+  when vocab < 1 {
+    give 0
+  }
+  when vocab > 64 {
+    give 0
+  }
+  when ai_is_integer(width) == 0 {
+    give 0
+  }
+  when width < 1 {
+    give 0
+  }
+  when width > 16 {
+    give 0
+  }
+  when ai_is_integer(ff) == 0 {
+    give 0
+  }
+  when ff < 1 {
+    give 0
+  }
+  when ff > 64 {
+    give 0
+  }
+  when ai_is_integer(heads) == 0 {
+    give 0
+  }
+  when heads < 1 {
+    give 0
+  }
+  when heads > width {
+    give 0
+  }
+  when width % heads != 0 {
+    give 0
+  }
+  when epsilon < 0.000000000001 {
+    give 0
+  }
+  when epsilon > 1000000 {
+    give 0
+  }
+  when ai_is_integer(context) == 0 {
+    give 0
+  }
+  when context < 1 {
+    give 0
+  }
+  when context > 64 {
+    give 0
+  }
+  when len(prompt) < 1 {
+    give 0
+  }
+  when len(prompt) > context {
+    give 0
+  }
+  when eos != 0 - 1 {
+    when ai_is_integer(eos) == 0 {
+      give 0
+    }
+    when eos >= vocab {
+      give 0
+    }
+  }
+  when ai_is_integer(steps) == 0 {
+    give 0
+  }
+  when steps > 64 {
+    give 0
+  }
+  hold block_size = 4 * width * width + 2 * width * ff + 9 * width + ff
+  hold expected = vocab * width + context * width + block_size + vocab * width + vocab
+  when len(weights) != expected {
+    give 0
+  }
+  hold i = 0
+  while i < len(prompt) {
+    hold token = prompt[i]
+    when ai_is_integer(token) == 0 {
+      give 0
+    }
+    when token >= vocab {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// Run the model on a prefix and return its next-token logits. Caller supplies
+// validated shape, nonempty prefix and context; returns [] if block inference
+// refuses an intermediate. Full prefix attention is recomputed each time.
+make llm_model_logits(tokens: list, weights: list, config: list) -> list {
+  hold empty = []
+  when llm_model_valid(tokens, weights, config) == 0 {
+    give empty
+  }
+  hold vocab = config[0]
+  hold width = config[1]
+  hold ff = config[2]
+  hold heads = config[3]
+  hold epsilon = config[4]
+  hold context = config[5]
+  hold at = 0
+  hold embeddings = llm_block_slice(weights, at, vocab * width)
+  hold at = at + vocab * width
+  hold positions = llm_block_slice(weights, at, len(tokens) * width)
+  hold at = at + context * width
+  hold size = 4 * width * width + 2 * width * ff + 9 * width + ff
+  hold block = llm_block_slice(weights, at, size)
+  hold at = at + size
+  hold output_weights = llm_block_slice(weights, at, vocab * width)
+  hold at = at + vocab * width
+  hold output_bias = llm_block_slice(weights, at, vocab)
+  hold states = llm_add(llm_embed(tokens, embeddings, width), positions)
+  hold result = llm_block(states, block, width, ff, heads, epsilon)
+  when len(result) != len(tokens) * width {
+    give empty
+  }
+  hold last = llm_block_slice(result, len(result) - width, width)
+  give llm_logits(last, output_weights, output_bias)
+}
+
+// Greedy generation. Returns only newly emitted IDs, including EOS if one
+// is selected. With EOS disabled, it emits until the step cap or the context
+// limit; a full context can still predict one final token. Zero steps returns
+// []. Invalid inputs and numeric/range refusal also return []; use the shape
+// validator for the former. No input is mutated; no GPU or KV cache is used.
+make llm_generate(prompt: list, weights: list, config: list) -> list {
+  hold out = []
+  when llm_model_valid(prompt, weights, config) == 0 {
+    give out
+  }
+  hold context = config[5]
+  hold eos = config[6]
+  hold steps = config[7]
+  hold history = llm_block_slice(prompt, 0, len(prompt))
+  hold count = 0
+  hold done = 0
+  while count < steps {
+    when done == 1 {
+      give out
+    }
+    hold logits = llm_model_logits(history, weights, config)
+    when len(logits) != config[0] {
+      hold invalid = []
+      give invalid
+    }
+    hold token = llm_greedy(logits)
+    push(out, token)
+    when token == eos {
+      hold done = 1
+    } otherwise {
+      when len(history) >= context {
+        hold done = 1
+      } otherwise {
+        push(history, token)
+      }
+    }
+    hold count = count + 1
+  }
+  give out
+}

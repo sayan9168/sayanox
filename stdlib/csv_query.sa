@@ -1,0 +1,388 @@
+// In-memory CSV table operations. Import csv.sa, csv_table.sa, decimal.sa
+// first. Tables and output are limited by csv_table.sa: 262144 packed bytes,
+// 1024 rows and 1024 fields per row. No SQL parser, indexes or streaming.
+
+make cq_flag_valid(flag: num) -> num {
+  when flag == 0 {
+    give 1
+  }
+  when flag == 1 {
+    give 1
+  }
+  give 0
+}
+
+// Internal: first exact match in a trusted packed field sequence, or -1.
+make cq_find(fields: str, value: str) -> num {
+  hold count = csv_count(fields)
+  hold i = 0
+  while i < count {
+    when string_eq(csv_at(fields, i), value) == 1 {
+      give i
+    }
+    hold i = i + 1
+  }
+  give 0 - 1
+}
+
+// Internal: replace one field in an already-validated packed row.
+make cq_replace(fields: str, index: num, value: str) -> str {
+  hold out = ""
+  hold i = 0
+  hold count = csv_count(fields)
+  while i < count {
+    when i == index {
+      hold out = csv_push(out, value)
+    } otherwise {
+      hold out = csv_push(out, csv_at(fields, i))
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// Sum a numeric column exactly. skip_header is 0 or 1; missing columns,
+// invalid decimal cells, overflowing sums or invalid parameters return "".
+// An empty data set sums to "0". Input is never converted to double.
+make cq_sum(table: str, col: num, skip_header: num) -> str {
+  when ct_valid(table) == 0 {
+    give ""
+  }
+  when ct_index_valid(col) == 0 {
+    give ""
+  }
+  when cq_flag_valid(skip_header) == 0 {
+    give ""
+  }
+  hold sum = "0"
+  hold rows = csv_count(table)
+  hold i = skip_header
+  while i < rows {
+    hold row = csv_at(table, i)
+    when col >= csv_count(row) {
+      give ""
+    }
+    hold sum = dec_add(sum, csv_at(row, col))
+    when len(sum) == 0 {
+      give ""
+    }
+    hold i = i + 1
+  }
+  give sum
+}
+
+// Stable distinct rows by exact byte key. Missing key columns are errors.
+// keep_header=1 copies row zero unchanged and deduplicates subsequent rows.
+// Empty tables are valid even with keep_header=1. Invalid requests return !.
+make cq_distinct(table: str, col: num, keep_header: num) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  when ct_index_valid(col) == 0 {
+    give "!"
+  }
+  when cq_flag_valid(keep_header) == 0 {
+    give "!"
+  }
+  hold out = ""
+  hold keys = ""
+  hold rows = csv_count(table)
+  hold i = 0
+  while i < rows {
+    hold row = csv_at(table, i)
+    when i == 0 and keep_header == 1 {
+      hold out = csv_push(out, row)
+    } otherwise {
+      when col >= csv_count(row) {
+        give "!"
+      }
+      hold key = csv_at(row, col)
+      when cq_find(keys, key) < 0 {
+        hold keys = csv_push(keys, key)
+        hold out = csv_push(out, row)
+      }
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// Stable inner join on byte-equal keys: left-major, then right-major. Output
+// concatenates all left fields then all right fields. When keep_header=1,
+// both tables must have headers and they are concatenated once; header keys
+// must exist. Data rows missing their join key are skipped. Duplicate keys
+// produce the Cartesian set of matches. Caps and invalid inputs return !.
+make cq_join(left: str, right: str, lcol: num, rcol: num, keep_header: num) -> str {
+  when ct_valid(left) == 0 {
+    give "!"
+  }
+  when ct_valid(right) == 0 {
+    give "!"
+  }
+  when ct_index_valid(lcol) == 0 {
+    give "!"
+  }
+  when ct_index_valid(rcol) == 0 {
+    give "!"
+  }
+  when cq_flag_valid(keep_header) == 0 {
+    give "!"
+  }
+  hold nl = csv_count(left)
+  hold nr = csv_count(right)
+  hold out = ""
+  hold count = 0
+  when keep_header == 1 {
+    when nl == 0 {
+      give "!"
+    }
+    when nr == 0 {
+      give "!"
+    }
+    hold lh = csv_at(left, 0)
+    hold rh = csv_at(right, 0)
+    when lcol >= csv_count(lh) {
+      give "!"
+    }
+    when rcol >= csv_count(rh) {
+      give "!"
+    }
+    when csv_count(lh) + csv_count(rh) > 1024 {
+      give "!"
+    }
+    hold out = csv_push(out, concat(lh, rh))
+    hold count = 1
+  }
+  hold i = keep_header
+  while i < nl {
+    hold lrow = csv_at(left, i)
+    when lcol < csv_count(lrow) {
+      hold lkey = csv_at(lrow, lcol)
+      hold j = keep_header
+      while j < nr {
+        hold rrow = csv_at(right, j)
+        when rcol < csv_count(rrow) {
+          when string_eq(lkey, csv_at(rrow, rcol)) == 1 {
+            when csv_count(lrow) + csv_count(rrow) > 1024 {
+              give "!"
+            }
+            hold out = csv_push(out, concat(lrow, rrow))
+            hold count = count + 1
+            when count > 1024 {
+              give "!"
+            }
+            when len(out) > 262144 {
+              give "!"
+            }
+          }
+        }
+        hold j = j + 1
+      }
+    }
+    hold i = i + 1
+  }
+  when len(out) > 262144 {
+    give "!"
+  }
+  give out
+}
+
+// Group by exact byte key and sum decimal values, preserving first-seen order.
+// Output has two columns: key and canonical decimal sum. keep_header=1 emits
+// the corresponding input header names; it requires a header containing both
+// columns. Missing columns, invalid decimals and overflow return !; no rows are
+// silently dropped. Empty input without a header returns an empty table.
+make cq_group_sum(table: str, key_col: num, value_col: num, keep_header: num) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  when ct_index_valid(key_col) == 0 {
+    give "!"
+  }
+  when ct_index_valid(value_col) == 0 {
+    give "!"
+  }
+  when cq_flag_valid(keep_header) == 0 {
+    give "!"
+  }
+  hold rows = csv_count(table)
+  hold out = ""
+  when keep_header == 1 {
+    when rows == 0 {
+      give "!"
+    }
+    hold header = csv_at(table, 0)
+    when key_col >= csv_count(header) {
+      give "!"
+    }
+    when value_col >= csv_count(header) {
+      give "!"
+    }
+    hold h = csv_push("", csv_at(header, key_col))
+    hold h = csv_push(h, csv_at(header, value_col))
+    hold out = csv_push(out, h)
+  }
+  hold keys = ""
+  hold sums = ""
+  hold i = keep_header
+  while i < rows {
+    hold row = csv_at(table, i)
+    hold cols = csv_count(row)
+    when key_col >= cols {
+      give "!"
+    }
+    when value_col >= cols {
+      give "!"
+    }
+    hold key = csv_at(row, key_col)
+    hold value = dec_normalize(csv_at(row, value_col))
+    when len(value) == 0 {
+      give "!"
+    }
+    hold index = cq_find(keys, key)
+    when index < 0 {
+      hold keys = csv_push(keys, key)
+      hold sums = csv_push(sums, value)
+    } otherwise {
+      hold sum = dec_add(csv_at(sums, index), value)
+      when len(sum) == 0 {
+        give "!"
+      }
+      hold sums = cq_replace(sums, index, sum)
+    }
+    hold i = i + 1
+  }
+  hold groups = csv_count(keys)
+  hold i = 0
+  while i < groups {
+    hold row = csv_push("", csv_at(keys, i))
+    hold row = csv_push(row, csv_at(sums, i))
+    hold out = csv_push(out, row)
+    when len(out) > 262144 {
+      give "!"
+    }
+    hold i = i + 1
+  }
+  when groups + keep_header > 1024 {
+    give "!"
+  }
+  give out
+}
+
+// Bytewise lexicographic comparison: returns -1, 0 or 1, without locale or
+// Unicode collation. Bytes are compared as returned by sx_index.
+make cq_compare_bytes(a: str, b: str) -> num {
+  hold limit = len(a)
+  when len(b) < limit {
+    hold limit = len(b)
+  }
+  hold i = 0
+  while i < limit {
+    hold x = sx_index(a, i)
+    hold y = sx_index(b, i)
+    when x < y {
+      give 0 - 1
+    }
+    when x > y {
+      give 1
+    }
+    hold i = i + 1
+  }
+  when len(a) < len(b) {
+    give 0 - 1
+  }
+  when len(a) > len(b) {
+    give 1
+  }
+  give 0
+}
+
+// Stable insertion sort by bytewise cell value. descending and keep_header
+// must be 0 or 1. With keep_header=1 the first row is never sorted. A data
+// row missing the column, malformed input or invalid flag returns !. Work is
+// quadratic in row count and packed-string scans, so use for small tables.
+make cq_sort(table: str, col: num, descending: num, keep_header: num) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  when ct_index_valid(col) == 0 {
+    give "!"
+  }
+  when cq_flag_valid(descending) == 0 {
+    give "!"
+  }
+  when cq_flag_valid(keep_header) == 0 {
+    give "!"
+  }
+  hold rows = csv_count(table)
+  hold sorted = ""
+  hold i = keep_header
+  while i < rows {
+    hold row = csv_at(table, i)
+    when col >= csv_count(row) {
+      give "!"
+    }
+    hold key = csv_at(row, col)
+    hold count = csv_count(sorted)
+    hold merged = ""
+    hold inserted = 0
+    hold j = 0
+    while j < count {
+      hold other = csv_at(sorted, j)
+      hold cmp = cq_compare_bytes(key, csv_at(other, col))
+      hold before = 0
+      when descending == 0 {
+        when cmp < 0 {
+          hold before = 1
+        }
+      } otherwise {
+        when cmp > 0 {
+          hold before = 1
+        }
+      }
+      when inserted == 0 {
+        when before == 1 {
+          hold merged = csv_push(merged, row)
+          hold inserted = 1
+        }
+      }
+      hold merged = csv_push(merged, other)
+      hold j = j + 1
+    }
+    when inserted == 0 {
+      hold merged = csv_push(merged, row)
+    }
+    hold sorted = merged
+    hold i = i + 1
+  }
+  when keep_header == 1 {
+    when rows > 0 {
+      hold sorted = concat(csv_push("", csv_at(table, 0)), sorted)
+    }
+  }
+  when len(sorted) > 262144 {
+    give "!"
+  }
+  give sorted
+}
+
+// Mean of a decimal column, using dec_div's nearest/ties-away rounding at
+// 0..255 fractional places. Empty data, missing/invalid cells, overflowing
+// intermediate sum or invalid flags/precision return "".
+make cq_mean(table: str, col: num, skip_header: num, places: num) -> str {
+  when ct_valid(table) == 0 {
+    give ""
+  }
+  when cq_flag_valid(skip_header) == 0 {
+    give ""
+  }
+  hold count = csv_count(table) - skip_header
+  when count <= 0 {
+    give ""
+  }
+  hold sum = cq_sum(table, col, skip_header)
+  when len(sum) == 0 {
+    give ""
+  }
+  give dec_div(sum, csv_istr(count), places)
+}

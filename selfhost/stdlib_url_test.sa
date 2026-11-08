@@ -118,4 +118,126 @@ show llm_attention_valid(long_q, long_q, long_q, 1)
 push(long_q, 0)
 show llm_attention_valid(long_q, long_q, long_q, 1)
 show len(llm_attention(long_q, long_q, long_q, 1))
+// Multi-head tests: separate head scaling and causal masking.
+hold mhq = [0, 0, 0, 1]
+hold mhk = [0, 0, 0, 1]
+hold mhv = [2, 10, 4, 20]
+hold mh = llm_multihead(mhq, mhk, mhv, 2, 2)
+show llm_multihead_valid(mhq, mhk, mhv, 2, 2)
+show len(mh)
+show mh[0]
+show mh[1]
+show mh[2]
+show mh[3] > 17.310
+show mh[3] < 17.312
+show len(llm_multihead(mhq, mhk, mhv, 2, 0))
+show len(llm_multihead(mhq, mhk, mhv, 2, 1.5))
+show len(llm_multihead(mhq, mhk, mhv, 2, 3))
+show len(llm_multihead([1, 2, 3], [1, 2, 3], [1, 2, 3], 3, 2))
+// One head must match the original attention; future rows remain masked.
+hold mh_one = llm_multihead([1, 0, 0, 1], [1, 0, 0, 1], [1, 2, 3, 4], 2, 1)
+show mh_one[2] > 2.339
+show mh_one[2] < 2.340
+hold mh_future = llm_multihead(mhq, mhk, [2, 10, 400, 2000], 2, 2)
+show mh_future[0]
+show mh_future[1]
+// Per-row population normalization and learned scale/offset.
+hold normalized = llm_layernorm([1, 3, 7, 7], [2, 3], [1, 0 - 1], 0.000001)
+show len(normalized)
+show normalized[0] > 0 - 1.001
+show normalized[0] < 0 - 0.999
+show normalized[1] > 1.999
+show normalized[1] < 2.001
+show normalized[2]
+show normalized[3]
+show llm_layernorm_valid([1, 3], [1, 1], [0, 0], 0.000001)
+show llm_layernorm_valid([1, 3], [1, 1], [0], 0.000001)
+show llm_layernorm_valid([1, 3], [1, 1], [0, 0], 0)
+show llm_layernorm_valid([1000001], [1], [0], 0.1)
+show len(llm_layernorm([1, 3], [1, 1], [0], 0.1))
+show len(llm_layernorm(empty, [1], [0], 0.1))
+// Row-major projection, positions/residual addition and shape refusals.
+hold projected = llm_project([1, 2, 3, 4], [1, 0, 0, 2, 1, 1], [1, 0 - 1, 0], 2)
+show len(projected)
+show projected[0]
+show projected[1]
+show projected[2]
+show projected[3]
+show projected[4]
+show projected[5]
+show llm_project_valid([1, 2], [1, 2], [0], 2)
+show llm_project_valid([1, 2, 3], [1, 2], [0], 2)
+show llm_project_valid([1, 2], [1], [0], 2)
+show len(llm_project([1, 2], [1], [0], 2))
+hold residual = llm_add([1, 2], [3, 4])
+show residual[0]
+show residual[1]
+show len(llm_add([1], [1, 2]))
+// Byte token round-trip and invalid/NUL refusal.
+show llm_bytes_decode(llm_bytes("Sayanox!"))
+show llm_bytes_valid(empty)
+show llm_bytes_valid([0])
+show llm_bytes_valid([256])
+show llm_bytes_valid([1.5])
+show len(llm_bytes_decode([65, 0, 66]))
+// Incremental K/V cache: compare each new query to full causal attention.
+hold keys1 = llm_cache_append(empty, [0, 0], 2)
+hold vals1 = llm_cache_append(empty, [2, 10], 2)
+hold keys2 = llm_cache_append(keys1, [0, 1], 2)
+hold vals2 = llm_cache_append(vals1, [4, 20], 2)
+hold first_step = llm_attention_step([0, 0], keys1, vals1, 2)
+hold next_step = llm_attention_step([0, 1], keys2, vals2, 2)
+show len(keys1)
+show len(keys2)
+show first_step[0]
+show first_step[1]
+show next_step[0] == mh[2]
+show next_step[1] == mh[3]
+show llm_attention_step_valid([0, 1], keys2, vals2, 2)
+show llm_attention_step_valid([0, 1], empty, empty, 2)
+show llm_attention_step_valid([0, 1], keys2, vals1, 2)
+show llm_attention_step_valid([0, 1], keys2, vals2, 1.5)
+show len(llm_cache_append([1], [1, 2], 2))
+show len(llm_cache_append(empty, [1], 2))
+show len(llm_cache_append(long_q, [0], 1))
+show len(llm_attention_step([0], long_q, long_q, 1))
+// One-head equivalence and cache boundaries at 64 rows.
+hold step_one = llm_attention_step([0, 1], [1, 0, 0, 1], [1, 2, 3, 4], 1)
+show step_one[0] == att2[2]
+show step_one[1] == att2[3]
+hold full_cache = []
+hold cache_i = 0
+while cache_i < 64 {
+  push(full_cache, 0)
+  hold cache_i = cache_i + 1
+}
+show llm_attention_step_valid([0], full_cache, full_cache, 1)
+show len(llm_attention_step([0], full_cache, full_cache, 1))
+show len(llm_cache_append(full_cache, [0], 1))
+push(keys2, 9)
+show len(keys1)
+show len(vals2)
+show llm_bytes_valid([195, 169])
+show len(llm_bytes_decode([195, 169]))
+// Toy deterministic bigram generation: 0 -> 1 -> 2 (EOS).
+hold transitions = [0, 5, 1, 0, 0, 4, 1, 1, 0]
+hold generated = llm_bigram_generate(transitions, 3, 0, 2, 10)
+show llm_bigram_valid(transitions, 3, 0, 2, 10)
+show len(generated)
+show generated[0]
+show generated[1]
+hold no_eos = llm_bigram_generate(transitions, 3, 0, 0 - 1, 4)
+show len(no_eos)
+show no_eos[2]
+show no_eos[3]
+show len(llm_bigram_generate(transitions, 3, 0, 2, 0))
+show llm_bigram_valid(transitions, 3, 0, 2, 0)
+show llm_bigram_valid(transitions, 3, 3, 2, 1)
+show llm_bigram_valid(transitions, 3, 0, 3, 1)
+show llm_bigram_valid(transitions, 3, 0, 0 - 2, 1)
+show llm_bigram_valid(transitions, 3, 0, 2, 1.5)
+show llm_bigram_valid(transitions, 3, 0, 2, 257)
+show llm_bigram_valid([0], 3, 0, 2, 1)
+show len(llm_bigram_generate([0], 3, 0, 2, 1))
+show transitions[1]
 show "llm-primitives-ok"

@@ -1,0 +1,10 @@
+// Parse, filter and project a multi-row CSV document.
+use "stdlib/csv.sa"
+use "stdlib/csv_table.sa"
+
+hold table = ct_parse("name,role\r\nAda,engineer\r\nMina,designer\r\n")
+hold engineers = ct_filter_eq(table, 1, "engineer", 1)
+hold names = ct_select(engineers, [0])
+show ct_row_count(names)
+show ct_cell(names, 1, 0)
+show ct_write(names)

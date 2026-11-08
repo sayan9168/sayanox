@@ -1,0 +1,556 @@
+// Exact decimal strings, independent of the language's IEEE double numbers.
+// Grammar: optional '-', one or more ASCII digits, optional '.' followed by
+// one or more digits. Leading/trailing zeros are allowed. No exponent or '+'.
+// Inputs and canonical results are limited to 256 digits (excluding sign and
+// point). Invalid or oversized operations return the empty string. Helpers
+// perform only small digit arithmetic; they never convert a decimal to num.
+
+make dec_valid(s: str) -> num {
+  hold n = len(s)
+  when n == 0 {
+    give 0
+  }
+  hold i = 0
+  when sx_index(s, 0) == 45 {
+    hold i = 1
+  }
+  when i == n {
+    give 0
+  }
+  hold before = 0
+  hold after = 0
+  hold dot = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 46 {
+      when dot == 1 {
+        give 0
+      }
+      when before == 0 {
+        give 0
+      }
+      hold dot = 1
+    } otherwise {
+      when c < 48 {
+        give 0
+      }
+      when c > 57 {
+        give 0
+      }
+      when dot == 0 {
+        hold before = before + 1
+      } otherwise {
+        hold after = after + 1
+      }
+      when before + after > 256 {
+        give 0
+      }
+    }
+    hold i = i + 1
+  }
+  when dot == 1 {
+    when after == 0 {
+      give 0
+    }
+  }
+  give 1
+}
+
+// Internal byte slice with known in-range endpoints, exclusive end.
+make dec_slice(s: str, start: num, end: num) -> str {
+  hold out = ""
+  hold i = start
+  while i < end {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Canonical form removes redundant zeros, a redundant point, and negative 0.
+make dec_normalize(s: str) -> str {
+  when dec_valid(s) == 0 {
+    give ""
+  }
+  hold start = 0
+  hold negative = 0
+  when sx_index(s, 0) == 45 {
+    hold start = 1
+    hold negative = 1
+  }
+  hold point = start
+  hold scanning = 1
+  while scanning == 1 {
+    when point >= len(s) {
+      hold scanning = 0
+    } otherwise {
+      when sx_index(s, point) == 46 {
+        hold scanning = 0
+      } otherwise {
+        hold point = point + 1
+      }
+    }
+  }
+  hold first = 0
+  when sx_index(s, 0) == 45 {
+    hold first = 1
+  }
+  hold go = 1
+  while go == 1 {
+    when first + 1 < point {
+      when sx_index(s, first) == 48 {
+        hold first = first + 1
+      } otherwise {
+        hold go = 0
+      }
+    } otherwise {
+      hold go = 0
+    }
+  }
+  hold last = len(s)
+  when point < len(s) {
+    hold go = 1
+    while go == 1 {
+      when last > point + 1 {
+        when sx_index(s, last - 1) == 48 {
+          hold last = last - 1
+        } otherwise {
+          hold go = 0
+        }
+      } otherwise {
+        hold go = 0
+      }
+    }
+  }
+  hold out = dec_slice(s, first, point)
+  when last > point + 1 {
+    hold out = concat(out, dec_slice(s, point, last))
+  }
+  when negative == 1 {
+    when string_eq(out, "0") == 0 {
+      hold out = concat("-", out)
+    }
+  }
+  give out
+}
+
+// Internal fraction length of a valid canonical decimal.
+make dec_scale(s: str) -> num {
+  hold i = 0
+  while i < len(s) {
+    when sx_index(s, i) == 46 {
+      give len(s) - i - 1
+    }
+    hold i = i + 1
+  }
+  give 0
+}
+
+make dec_trim_digits(s: str) -> str {
+  hold i = 0
+  hold go = 1
+  while go == 1 {
+    when i + 1 < len(s) {
+      when sx_index(s, i) == 48 {
+        hold i = i + 1
+      } otherwise {
+        hold go = 0
+      }
+    } otherwise {
+      hold go = 0
+    }
+  }
+  give dec_slice(s, i, len(s))
+}
+
+// Internal absolute integer magnitude rescaled by decimal places.
+make dec_unscaled(s: str, scale: num) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c != 45 {
+      when c != 46 {
+        hold out = concat(out, chr(c))
+      }
+    }
+    hold i = i + 1
+  }
+  hold extra = scale - dec_scale(s)
+  while extra > 0 {
+    hold out = concat(out, "0")
+    hold extra = extra - 1
+  }
+  give dec_trim_digits(out)
+}
+
+// Compare nonnegative integer digit strings without converting to numbers.
+make dec_cmp_digits(a: str, b: str) -> num {
+  when len(a) < len(b) {
+    give 0 - 1
+  }
+  when len(a) > len(b) {
+    give 1
+  }
+  hold i = 0
+  while i < len(a) {
+    hold x = sx_index(a, i)
+    hold y = sx_index(b, i)
+    when x < y {
+      give 0 - 1
+    }
+    when x > y {
+      give 1
+    }
+    hold i = i + 1
+  }
+  give 0
+}
+
+// -1/0/1 ordering, or 2 if either decimal is invalid.
+make dec_compare(a: str, b: str) -> num {
+  hold x = dec_normalize(a)
+  hold y = dec_normalize(b)
+  when len(x) == 0 {
+    give 2
+  }
+  when len(y) == 0 {
+    give 2
+  }
+  hold xn = sx_index(x, 0) == 45
+  hold yn = sx_index(y, 0) == 45
+  when xn != yn {
+    when xn == 1 {
+      give 0 - 1
+    }
+    give 1
+  }
+  hold scale = dec_scale(x)
+  when dec_scale(y) > scale {
+    hold scale = dec_scale(y)
+  }
+  hold cmp = dec_cmp_digits(dec_unscaled(x, scale), dec_unscaled(y, scale))
+  when xn == 1 {
+    give 0 - cmp
+  }
+  give cmp
+}
+
+make dec_add_digits(a: str, b: str) -> str {
+  hold i = len(a) - 1
+  hold j = len(b) - 1
+  hold carry = 0
+  hold out = ""
+  while i >= 0 or j >= 0 or carry > 0 {
+    hold sum = carry
+    when i >= 0 {
+      hold sum = sum + sx_index(a, i) - 48
+      hold i = i - 1
+    }
+    when j >= 0 {
+      hold sum = sum + sx_index(b, j) - 48
+      hold j = j - 1
+    }
+    hold digit = sum % 10
+    hold carry = (sum - digit) / 10
+    hold out = concat(chr(48 + digit), out)
+  }
+  give dec_trim_digits(out)
+}
+
+// a >= b, both nonnegative integer strings.
+make dec_sub_digits(a: str, b: str) -> str {
+  hold i = len(a) - 1
+  hold j = len(b) - 1
+  hold borrow = 0
+  hold out = ""
+  while i >= 0 {
+    hold digit = sx_index(a, i) - 48 - borrow
+    when j >= 0 {
+      hold digit = digit - (sx_index(b, j) - 48)
+      hold j = j - 1
+    }
+    hold borrow = 0
+    when digit < 0 {
+      hold digit = digit + 10
+      hold borrow = 1
+    }
+    hold out = concat(chr(48 + digit), out)
+    hold i = i - 1
+  }
+  give dec_trim_digits(out)
+}
+
+// Restore the decimal point and sign, trimming fractional zeros before
+// checking the 256-digit result bound. A zero result is always canonical 0.
+make dec_place(digits: str, scale: num, negative: num) -> str {
+  hold sc = scale
+  hold d = dec_trim_digits(digits)
+  when string_eq(d, "0") == 1 {
+    give "0"
+  }
+  hold n = len(d)
+  hold go = 1
+  while go == 1 {
+    when sc > 0 {
+      when sx_index(d, n - 1) == 48 {
+        hold n = n - 1
+        hold sc = sc - 1
+      } otherwise {
+        hold go = 0
+      }
+    } otherwise {
+      hold go = 0
+    }
+  }
+  hold d = dec_slice(d, 0, n)
+  while len(d) <= sc {
+    hold d = concat("0", d)
+  }
+  when len(d) > 256 {
+    give ""
+  }
+  hold out = d
+  when sc > 0 {
+    hold point = len(d) - sc
+    hold out = concat(concat(dec_slice(d, 0, point), "."), dec_slice(d, point, len(d)))
+  }
+  when negative == 1 {
+    hold out = concat("-", out)
+  }
+  give out
+}
+
+make dec_negate(s: str) -> str {
+  hold n = dec_normalize(s)
+  when len(n) == 0 {
+    give ""
+  }
+  when string_eq(n, "0") == 1 {
+    give n
+  }
+  when sx_index(n, 0) == 45 {
+    give dec_slice(n, 1, len(n))
+  }
+  give concat("-", n)
+}
+
+make dec_add(a: str, b: str) -> str {
+  hold x = dec_normalize(a)
+  hold y = dec_normalize(b)
+  when len(x) == 0 {
+    give ""
+  }
+  when len(y) == 0 {
+    give ""
+  }
+  hold xn = sx_index(x, 0) == 45
+  hold yn = sx_index(y, 0) == 45
+  hold scale = dec_scale(x)
+  when dec_scale(y) > scale {
+    hold scale = dec_scale(y)
+  }
+  hold xd = dec_unscaled(x, scale)
+  hold yd = dec_unscaled(y, scale)
+  when xn == yn {
+    give dec_place(dec_add_digits(xd, yd), scale, xn)
+  }
+  hold cmp = dec_cmp_digits(xd, yd)
+  when cmp == 0 {
+    give "0"
+  }
+  when cmp > 0 {
+    give dec_place(dec_sub_digits(xd, yd), scale, xn)
+  }
+  give dec_place(dec_sub_digits(yd, xd), scale, yn)
+}
+
+make dec_sub(a: str, b: str) -> str {
+  hold neg = dec_negate(b)
+  when len(neg) == 0 {
+    give ""
+  }
+  give dec_add(a, neg)
+}
+
+// Grade-school integer multiplication on nonnegative digit strings. Work is
+// bounded by the 256-digit inputs and uses only single-digit numeric math.
+make dec_mul_digits(a: str, b: str) -> str {
+  hold result = "0"
+  hold j = len(b) - 1
+  hold zeros = ""
+  while j >= 0 {
+    hold factor = sx_index(b, j) - 48
+    hold carry = 0
+    hold part = ""
+    hold i = len(a) - 1
+    while i >= 0 {
+      hold product = (sx_index(a, i) - 48) * factor + carry
+      hold digit = product % 10
+      hold carry = (product - digit) / 10
+      hold part = concat(chr(48 + digit), part)
+      hold i = i - 1
+    }
+    when carry > 0 {
+      hold part = concat(chr(48 + carry), part)
+    }
+    hold part = concat(part, zeros)
+    hold result = dec_add_digits(result, dec_trim_digits(part))
+    hold zeros = concat(zeros, "0")
+    hold j = j - 1
+  }
+  give dec_trim_digits(result)
+}
+
+// Exact multiplication. Canonical results above 256 digits return "".
+make dec_mul(a: str, b: str) -> str {
+  hold x = dec_normalize(a)
+  hold y = dec_normalize(b)
+  when len(x) == 0 {
+    give ""
+  }
+  when len(y) == 0 {
+    give ""
+  }
+  hold xs = dec_scale(x)
+  hold ys = dec_scale(y)
+  hold negative = 0
+  when sx_index(x, 0) == 45 {
+    hold negative = 1 - negative
+  }
+  when sx_index(y, 0) == 45 {
+    hold negative = 1 - negative
+  }
+  hold xd = dec_unscaled(x, xs)
+  hold yd = dec_unscaled(y, ys)
+  give dec_place(dec_mul_digits(xd, yd), xs + ys, negative)
+}
+
+// Round to at most `places` fractional digits, nearest with ties away from
+// zero. Results remain canonical (not zero-padded). places must be an integer
+// 0..255; invalid input, invalid places or an oversized result yields "".
+make dec_round(s: str, places: num) -> str {
+  hold x = dec_normalize(s)
+  when len(x) == 0 {
+    give ""
+  }
+  when places < 0 {
+    give ""
+  }
+  when places > 255 {
+    give ""
+  }
+  when places != places % 256 {
+    give ""
+  }
+  hold scale = dec_scale(x)
+  when scale <= places {
+    give x
+  }
+  hold point = len(x) - scale - 1
+  hold end = point + 1 + places
+  when places == 0 {
+    hold end = point
+  }
+  hold discarded = sx_index(x, point + 1 + places)
+  hold kept = dec_slice(x, 0, end)
+  when discarded < 53 {
+    give dec_normalize(kept)
+  }
+  hold unit = "1"
+  when places > 0 {
+    hold unit = "0."
+    hold i = 1
+    while i < places {
+      hold unit = concat(unit, "0")
+      hold i = i + 1
+    }
+    hold unit = concat(unit, "1")
+  }
+  when sx_index(x, 0) == 45 {
+    hold unit = concat("-", unit)
+  }
+  give dec_add(kept, unit)
+}
+
+// Internal integer long division: returns quotient|remainder. Inputs are
+// nonnegative digit strings and divisor is nonzero. Each quotient digit
+// requires at most nine subtractions because the previous remainder is less
+// than the divisor. No string-to-num conversion of the operands is used.
+make dec_divmod_digits(numerator: str, divisor: str) -> str {
+  hold quotient = ""
+  hold remainder = "0"
+  hold i = 0
+  while i < len(numerator) {
+    hold remainder = dec_trim_digits(concat(remainder, chr(sx_index(numerator, i))))
+    hold digit = 0
+    while dec_cmp_digits(remainder, divisor) >= 0 {
+      hold remainder = dec_sub_digits(remainder, divisor)
+      hold digit = digit + 1
+    }
+    hold quotient = concat(quotient, chr(48 + digit))
+    hold i = i + 1
+  }
+  give concat(concat(dec_trim_digits(quotient), "|"), remainder)
+}
+
+// Decimal division rounded to at most places fractional digits, nearest with
+// ties away from zero. Canonical output is not padded. Inputs and final output
+// are limited to 256 digits; places must be an integer 0..255. Division by
+// zero, invalid inputs, invalid places and oversized results return "".
+make dec_div(a: str, b: str, places: num) -> str {
+  hold x = dec_normalize(a)
+  hold y = dec_normalize(b)
+  when len(x) == 0 {
+    give ""
+  }
+  when len(y) == 0 {
+    give ""
+  }
+  when string_eq(y, "0") == 1 {
+    give ""
+  }
+  when places < 0 {
+    give ""
+  }
+  when places > 255 {
+    give ""
+  }
+  when places != places % 256 {
+    give ""
+  }
+  hold xs = dec_scale(x)
+  hold ys = dec_scale(y)
+  hold numerator = dec_unscaled(x, xs)
+  hold denominator = dec_unscaled(y, ys)
+  hold shift = ys + places - xs
+  while shift > 0 {
+    hold numerator = concat(numerator, "0")
+    hold shift = shift - 1
+  }
+  while shift < 0 {
+    hold denominator = concat(denominator, "0")
+    hold shift = shift + 1
+  }
+  hold numerator = dec_trim_digits(numerator)
+  hold denominator = dec_trim_digits(denominator)
+  hold pair = dec_divmod_digits(numerator, denominator)
+  hold separator = 0
+  while sx_index(pair, separator) != 124 {
+    hold separator = separator + 1
+  }
+  hold quotient = dec_slice(pair, 0, separator)
+  hold remainder = dec_slice(pair, separator + 1, len(pair))
+  hold twice = dec_add_digits(remainder, remainder)
+  when dec_cmp_digits(twice, denominator) >= 0 {
+    hold quotient = dec_add_digits(quotient, "1")
+  }
+  hold negative = 0
+  when sx_index(x, 0) == 45 {
+    hold negative = 1 - negative
+  }
+  when sx_index(y, 0) == 45 {
+    hold negative = 1 - negative
+  }
+  give dec_place(quotient, places, negative)
+}

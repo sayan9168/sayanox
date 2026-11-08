@@ -1,0 +1,94 @@
+// Exact decimal updates of existing JSON numbers. Import stdlib/json_deep.sa
+// and stdlib/decimal.sa before this module. Path syntax is the dotted raw-key
+// and array-index syntax of jd_find. All operations validate the entire JSON
+// document and require an existing number at the path. JSON exponent notation
+// is valid JSON but deliberately outside decimal.sa's grammar and is refused.
+// Empty string denotes failure; successful results are nonempty JSON strings.
+// Other source bytes, duplicate-key first-match policy and number spellings
+// outside the target are preserved. No missing path/container is created.
+
+// Read and normalize an exact decimal JSON number, without calling jd_num.
+make jdec_read(doc: str, path: str) -> str {
+  when jd_valid(doc) == 0 {
+    give ""
+  }
+  when string_eq(jd_type(doc, path), "number") == 0 {
+    give ""
+  }
+  give dec_normalize(jd_raw(doc, path))
+}
+
+// Replace an existing decimal number, validating both the old value and the
+// decimal argument. A valid numeric string is normalized before inserting.
+make jdec_set(doc: str, path: str, value: str) -> str {
+  hold old = jdec_read(doc, path)
+  when len(old) == 0 {
+    give ""
+  }
+  hold normalized = dec_normalize(value)
+  when len(normalized) == 0 {
+    give ""
+  }
+  give jd_set_raw(doc, path, normalized)
+}
+
+make jdec_add(doc: str, path: str, operand: str) -> str {
+  hold old = jdec_read(doc, path)
+  when len(old) == 0 {
+    give ""
+  }
+  hold value = dec_add(old, operand)
+  when len(value) == 0 {
+    give ""
+  }
+  give jd_set_raw(doc, path, value)
+}
+
+make jdec_sub(doc: str, path: str, operand: str) -> str {
+  hold old = jdec_read(doc, path)
+  when len(old) == 0 {
+    give ""
+  }
+  hold value = dec_sub(old, operand)
+  when len(value) == 0 {
+    give ""
+  }
+  give jd_set_raw(doc, path, value)
+}
+
+make jdec_mul(doc: str, path: str, operand: str) -> str {
+  hold old = jdec_read(doc, path)
+  when len(old) == 0 {
+    give ""
+  }
+  hold value = dec_mul(old, operand)
+  when len(value) == 0 {
+    give ""
+  }
+  give jd_set_raw(doc, path, value)
+}
+
+// Division uses dec_div's specified precision and nearest/ties-away rounding.
+make jdec_div(doc: str, path: str, operand: str, places: num) -> str {
+  hold old = jdec_read(doc, path)
+  when len(old) == 0 {
+    give ""
+  }
+  hold value = dec_div(old, operand, places)
+  when len(value) == 0 {
+    give ""
+  }
+  give jd_set_raw(doc, path, value)
+}
+
+make jdec_round(doc: str, path: str, places: num) -> str {
+  hold old = jdec_read(doc, path)
+  when len(old) == 0 {
+    give ""
+  }
+  hold value = dec_round(old, places)
+  when len(value) == 0 {
+    give ""
+  }
+  give jd_set_raw(doc, path, value)
+}
