@@ -20,6 +20,19 @@ Sayanox regression checks to `test-doc-claims`. Its implementation/testing
 status is tracked in [STATUS](STATUS.md); it is not an implementation of the
 remaining compiler/runtime/tooling projects below.
 
+## Local increment: validated nested value replacement
+
+`jd_set_raw` replaces an existing dotted-path value after validating both JSON
+inputs, preserving the surrounding bytes and exact numeric text. Missing paths
+and malformed inputs return an empty string. `jd_delete_raw` removes an
+existing non-root value; `jd_object_put_raw` inserts or replaces a member of
+an existing object using a JSON-encoded key. `jd_array_insert_raw` inserts at
+a validated index in an existing array or appends at its length. Creation of
+missing intermediate objects is supported by `jd_object_ensure_raw`; creating
+missing arrays or inferring container types remains open. The expanded hand-written boundary oracle passed
+`./sx target test-stdlib-next` locally on seed-min, gen2 and native. This is
+not fresh guarded complete CI or closure of R07.
+
 ## Work register
 
 | ID | Project and current state | Required completion evidence |

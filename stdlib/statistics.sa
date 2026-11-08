@@ -1,0 +1,72 @@
+// Descriptive statistics for lists of numbers. Empty inputs return 0.
+// IEEE double arithmetic; variance is population variance, not sample variance.
+make stats_sum(xs: list) -> num {
+  hold sum = 0
+  hold i = 0
+  while i < len(xs) {
+    hold sum = sum + xs[i]
+    hold i = i + 1
+  }
+  give sum
+}
+make stats_mean(xs: list) -> num {
+  when len(xs) == 0 {
+    give 0
+  }
+  give stats_sum(xs) / len(xs)
+}
+make stats_min(xs: list) -> num {
+  when len(xs) == 0 {
+    give 0
+  }
+  hold result = xs[0]
+  hold i = 1
+  while i < len(xs) {
+    when xs[i] < result {
+      hold result = xs[i]
+    }
+    hold i = i + 1
+  }
+  give result
+}
+make stats_max(xs: list) -> num {
+  when len(xs) == 0 {
+    give 0
+  }
+  hold result = xs[0]
+  hold i = 1
+  while i < len(xs) {
+    when xs[i] > result {
+      hold result = xs[i]
+    }
+    hold i = i + 1
+  }
+  give result
+}
+make stats_variance(xs: list) -> num {
+  when len(xs) == 0 {
+    give 0
+  }
+  hold mean = stats_mean(xs)
+  hold sum = 0
+  hold i = 0
+  while i < len(xs) {
+    hold d = xs[i] - mean
+    hold sum = sum + d * d
+    hold i = i + 1
+  }
+  give sum / len(xs)
+}
+// Returns zero for mismatched lengths or empty lists.
+make stats_dot(a: list, b: list) -> num {
+  when len(a) != len(b) {
+    give 0
+  }
+  hold sum = 0
+  hold i = 0
+  while i < len(a) {
+    hold sum = sum + a[i] * b[i]
+    hold i = i + 1
+  }
+  give sum
+}

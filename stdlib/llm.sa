@@ -1,0 +1,161 @@
+// Small CPU-only transformer inference primitives. Import stdlib/ai.sa first.
+// Matrices are flat row-major numeric lists; arithmetic uses finite doubles.
+// These functions do not load model files or execute on a GPU.
+
+// Convert a NUL-free Sayanox string into byte token IDs in [1,255]. This is
+// byte-level tokenization, not BPE, WordPiece, or a pretrained vocabulary.
+make llm_bytes(text: str) -> list {
+  hold out = []
+  hold i = 0
+  while i < len(text) {
+    push(out, sx_index(text, i))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Validate a flat vocabulary-by-width embedding table and token IDs.
+// Width and vocabulary are limited to 1..256 and input to 256 tokens.
+make llm_embedding_valid(ids: list, table: list, width: num) -> num {
+  when ai_is_integer(width) == 0 {
+    give 0
+  }
+  when width < 1 {
+    give 0
+  }
+  when width > 256 {
+    give 0
+  }
+  when len(ids) > 256 {
+    give 0
+  }
+  when ai_matrix_valid(table, width) == 0 {
+    give 0
+  }
+  hold vocab = len(table) / width
+  when vocab < 1 {
+    give 0
+  }
+  when vocab > 256 {
+    give 0
+  }
+  hold i = 0
+  while i < len(ids) {
+    hold token = ids[i]
+    when ai_is_integer(token) == 0 {
+      give 0
+    }
+    when token >= vocab {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// Look up each token's row. Invalid input or empty ids yields [].
+make llm_embed(ids: list, table: list, width: num) -> list {
+  hold out = []
+  when llm_embedding_valid(ids, table, width) == 0 {
+    give out
+  }
+  hold i = 0
+  while i < len(ids) {
+    hold j = 0
+    while j < width {
+      push(out, table[ids[i] * width + j])
+      hold j = j + 1
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// Deterministic square root for an integer attention width in [1,64].
+// Internal caller validates the range. Twelve Newton iterations are ample
+// for this bounded domain, not an unrestricted IEEE sqrt implementation.
+make llm_width_sqrt(width: num) -> num {
+  hold estimate = width
+  hold i = 0
+  while i < 12 {
+    hold estimate = (estimate + width / estimate) / 2
+    hold i = i + 1
+  }
+  give estimate
+}
+
+// Single-head scaled causal self-attention. Q, K, V are row-major matrices
+// with equal shape [tokens,width], token and width caps are 64. Each row can
+// attend only to itself and earlier rows. Values are not mutated. ai_softmax
+// supplies stabilized approximate probabilities with a -30 logit floor.
+make llm_attention_valid(q: list, k: list, v: list, width: num) -> num {
+  when ai_is_integer(width) == 0 {
+    give 0
+  }
+  when width < 1 {
+    give 0
+  }
+  when width > 64 {
+    give 0
+  }
+  when ai_matrix_valid(q, width) == 0 {
+    give 0
+  }
+  when len(q) != len(k) {
+    give 0
+  }
+  when len(q) != len(v) {
+    give 0
+  }
+  when len(q) / width > 64 {
+    give 0
+  }
+  give 1
+}
+
+make llm_attention(q: list, k: list, v: list, width: num) -> list {
+  hold out = []
+  when llm_attention_valid(q, k, v, width) == 0 {
+    give out
+  }
+  hold rows = len(q) / width
+  hold scale = llm_width_sqrt(width)
+  hold row = 0
+  while row < rows {
+    hold logits = []
+    hold previous = 0
+    while previous <= row {
+      hold dot = 0
+      hold d = 0
+      while d < width {
+        hold dot = dot + q[row * width + d] * k[previous * width + d]
+        hold d = d + 1
+      }
+      push(logits, dot / scale)
+      hold previous = previous + 1
+    }
+    hold weights = ai_softmax(logits)
+    hold d = 0
+    while d < width {
+      hold value = 0
+      hold previous = 0
+      while previous <= row {
+        hold value = value + weights[previous] * v[previous * width + d]
+        hold previous = previous + 1
+      }
+      push(out, value)
+      hold d = d + 1
+    }
+    hold row = row + 1
+  }
+  give out
+}
+
+// Output vocabulary scores from a hidden vector and output-major weights.
+// Greedy selection returns -1 for empty or malformed logits (see ai_dense).
+make llm_logits(hidden: list, weights: list, biases: list) -> list {
+  give ai_dense(hidden, weights, biases)
+}
+make llm_greedy(logits: list) -> num {
+  give ai_argmax(logits)
+}

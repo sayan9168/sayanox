@@ -1,0 +1,66 @@
+// Delimited byte fields (not CSV): no quoting or escaping. Delimiter is a
+// numeric byte from 1 to 255. Empty input is one empty field; trailing and
+// adjacent delimiters preserve empty fields. Invalid delimiters return 0/"".
+make fields_valid_delimiter(delim: num) -> num {
+  when delim < 1 {
+    give 0
+  }
+  when delim > 255 {
+    give 0
+  }
+  when delim != delim % 256 {
+    give 0
+  }
+  give 1
+}
+make fields_count(s: str, delim: num) -> num {
+  when fields_valid_delimiter(delim) == 0 {
+    give 0
+  }
+  hold count = 1
+  hold i = 0
+  while i < len(s) {
+    when sx_index(s, i) == delim {
+      hold count = count + 1
+    }
+    hold i = i + 1
+  }
+  give count
+}
+// Return the zero-based field; out-of-range and empty fields both return "".
+// Use fields_count when the distinction is important.
+make fields_get(s: str, delim: num, index: num) -> str {
+  when fields_valid_delimiter(delim) == 0 {
+    give ""
+  }
+  when index < 0 {
+    give ""
+  }
+  when index > len(s) {
+    give ""
+  }
+  when index != index % 1000000000000000 {
+    give ""
+  }
+  hold out = ""
+  hold at = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c == delim {
+      when at == index {
+        give out
+      }
+      hold at = at + 1
+    } otherwise {
+      when at == index {
+        hold out = concat(out, chr(c))
+      }
+    }
+    hold i = i + 1
+  }
+  when at == index {
+    give out
+  }
+  give ""
+}

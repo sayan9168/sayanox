@@ -1,0 +1,61 @@
+// Non-negative whole seconds below 1e15. Formatting is elapsed H:MM:SS,
+// not wall-clock time; hours can exceed 23. Invalid input formats as "".
+make dur_valid(seconds: num) -> num {
+  when seconds < 0 {
+    give 0
+  }
+  when seconds >= 1000000000000000 {
+    give 0
+  }
+  when seconds != seconds % 1000000000000000 {
+    give 0
+  }
+  give 1
+}
+make dur_uint(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold out = ""
+  hold v = n
+  while v > 0 {
+    hold d = v % 10
+    hold out = concat(chr(48 + d), out)
+    hold v = (v - d) / 10
+  }
+  give out
+}
+make dur_two(n: num) -> str {
+  when n < 10 {
+    give concat("0", dur_uint(n))
+  }
+  give dur_uint(n)
+}
+make dur_hours(seconds: num) -> num {
+  when dur_valid(seconds) == 0 {
+    give 0
+  }
+  give (seconds - seconds % 3600) / 3600
+}
+make dur_minutes(seconds: num) -> num {
+  when dur_valid(seconds) == 0 {
+    give 0
+  }
+  hold rem = seconds % 3600
+  give (rem - rem % 60) / 60
+}
+make dur_seconds(seconds: num) -> num {
+  when dur_valid(seconds) == 0 {
+    give 0
+  }
+  give seconds % 60
+}
+make dur_format(seconds: num) -> str {
+  when dur_valid(seconds) == 0 {
+    give ""
+  }
+  hold h = dur_uint(dur_hours(seconds))
+  hold m = dur_two(dur_minutes(seconds))
+  hold s = dur_two(dur_seconds(seconds))
+  give concat(concat(concat(concat(h, ":"), m), ":"), s)
+}

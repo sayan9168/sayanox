@@ -1,0 +1,87 @@
+// ASCII byte classification and case conversion, not Unicode case folding.
+make ascii_is_digit(c: num) -> num {
+  when c >= 48 {
+    when c <= 57 {
+      give 1
+    }
+  }
+  give 0
+}
+make ascii_is_upper(c: num) -> num {
+  when c >= 65 {
+    when c <= 90 {
+      give 1
+    }
+  }
+  give 0
+}
+make ascii_is_lower(c: num) -> num {
+  when c >= 97 {
+    when c <= 122 {
+      give 1
+    }
+  }
+  give 0
+}
+make ascii_is_alpha(c: num) -> num {
+  when ascii_is_upper(c) == 1 {
+    give 1
+  }
+  give ascii_is_lower(c)
+}
+make ascii_is_alnum(c: num) -> num {
+  when ascii_is_alpha(c) == 1 {
+    give 1
+  }
+  give ascii_is_digit(c)
+}
+make ascii_upper(s: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when ascii_is_lower(c) == 1 {
+      hold c = c - 32
+    }
+    hold out = concat(out, chr(c))
+    hold i = i + 1
+  }
+  give out
+}
+make ascii_lower(s: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when ascii_is_upper(c) == 1 {
+      hold c = c + 32
+    }
+    hold out = concat(out, chr(c))
+    hold i = i + 1
+  }
+  give out
+}
+// ASCII identifier: initial letter or underscore; remaining bytes may include
+// digits. Non-ASCII bytes and empty strings are rejected.
+make ascii_identifier(s: str) -> num {
+  when len(s) == 0 {
+    give 0
+  }
+  hold c = sx_index(s, 0)
+  when ascii_is_alpha(c) == 0 {
+    when c != 95 {
+      give 0
+    }
+  }
+  hold i = 1
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when ascii_is_alnum(c) == 0 {
+      when c != 95 {
+        give 0
+      }
+    }
+    hold i = i + 1
+  }
+  give 1
+}
