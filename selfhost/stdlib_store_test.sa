@@ -1,0 +1,184 @@
+use "stdlib/ai.sa"
+// stdlib/store.sa fixture. Every line is a label=value pair; the full stdout is
+// pinned by selfhost/stdlib_store.want and must be byte-identical on seed-min,
+// gen2 and native_aot (make test-stdlib-store).
+use "stdlib/store.sa"
+
+// --- shape -----------------------------------------------------------------
+
+hold t = db_new(3)
+show concat("new.rows=", db_istr(db_count(t)))
+show concat("new.cols=", db_istr(db_cols(t)))
+show concat("new.ok=", db_istr(db_ok(t)))
+show concat("new.empty=", db_istr(len(db_rows(t))))
+
+// --- insert ----------------------------------------------------------------
+
+t = db_insert(t, "1,Ana,34")
+t = db_insert(t, "2,Bob,28")
+t = db_insert(t, "3,Carla,41")
+t = db_insert(t, "4,Dan,28")
+t = db_insert(t, "5,Eve,52")
+show concat("insert.rows=", db_istr(db_count(t)))
+show concat("insert.rows.text=", db_rows(t))
+
+// Arity, empty rows and unstorable cells are refused, and a refusal leaves the
+// table untouched because it returns "" rather than a shorter table.
+show concat("insert.two.fields=", db_istr(len(db_insert(t, "6,Frank"))))
+show concat("insert.four.fields=", db_istr(len(db_insert(t, "6,Frank,30,extra"))))
+show concat("insert.empty.row=", db_istr(len(db_insert(t, ""))))
+hold comma_cell = db_insert(t, concat("6,Ha", concat(chr(44), "rdy,30")))
+show concat("insert.comma.cell=", db_istr(len(comma_cell)))
+hold nl_cell = db_insert(t, concat("6,Ha", concat(chr(10), "rdy,30")))
+show concat("insert.newline.cell=", db_istr(len(nl_cell)))
+hold us_cell = db_insert(t, concat("6,Ha", concat(chr(31), "rdy,30")))
+show concat("insert.unitsep.cell=", db_istr(len(us_cell)))
+
+// A NULL cell is stored as an empty field and still counts as a column.
+hold sparse = db_insert(db_new(3), "7,,31")
+show concat("insert.null.rows=", db_istr(db_count(sparse)))
+show concat("insert.null.cell=", db_get(sparse, 0, 1))
+show concat("insert.null.cell.len=", db_istr(len(db_get(sparse, 0, 1))))
+show concat("insert.null.cols=", db_istr(db_cols(sparse)))
+
+// --- reading cells ---------------------------------------------------------
+
+show concat("cell.0.0=", db_get(t, 0, 0))
+show concat("cell.1.1=", db_get(t, 1, 1))
+show concat("cell.4.2=", db_get(t, 4, 2))
+show concat("cell.row.oob=", db_istr(len(db_get(t, 9, 0))))
+show concat("cell.col.oob=", db_istr(len(db_get(t, 0, 9))))
+show concat("cell.neg.row=", db_istr(len(db_get(t, 0 - 1, 0))))
+show concat("num.4.2=", db_istr(db_get_n(t, 4, 2)))
+show concat("num.empty=", db_istr(db_get_n(sparse, 0, 1)))
+show concat("num.isnum.2=", db_istr(db_cell_num(t, 0, 2)))
+show concat("num.isnum.name=", db_istr(db_cell_num(t, 0, 1)))
+
+// --- equality and text predicates -----------------------------------------
+
+show concat("where.id.eq=", db_istr(db_hit(db_where(t, "0:=:3"))))
+show concat("where.id.eq.miss=", db_istr(db_hit(db_where(t, "0:=:30"))))
+show concat("where.eq.number=", db_hits(db_where_n(t, "2:=:28")))
+show concat("where.ne.number=", db_hits(db_where_n(t, "2:!=:28")))
+show concat("where.ne.null=", db_hits(db_where_n(sparse, "1:!=:")))
+show concat("where.has=", db_hits(db_where_n(t, "1:has:a")))
+show concat("where.has.miss=", db_hits(db_where_n(t, "1:has:zz")))
+show concat("where.has.empty=", db_hits(db_where_n(t, "1:has:")))
+show concat("where.prefix=", db_hits(db_where_n(t, "1:^:A")))
+show concat("where.prefix.none=", db_hits(db_where_n(t, "1:^:a")))
+show concat("where.suffix=", db_hits(db_where_n(t, "1:$:n")))
+show concat("where.angle.eq=", db_hits(db_where_n(t, "2:<>:28")))
+
+// --- numeric ordering ------------------------------------------------------
+
+// Numeric comparison is by value, not by bytes: "9" is below "10". The ids are
+// stored as text, so a byte comparison would order them the other way round.
+hold ids = db_insert(db_insert(db_insert(db_new(1), "9"), "10"), "2")
+show concat("num.order.rows=", db_rows(ids))
+show concat("num.order.ge10=", db_hits(db_where_n(ids, "0:>=:10")))
+show concat("num.order.lt2=", db_hits(db_where_n(ids, "0:<:2")))
+show concat("num.order.gt9=", db_hits(db_where_n(ids, "0:>:9")))
+// Equal magnitudes of different widths and a repeated row keep stable order.
+show concat("num.order.eq=", db_hits(db_where_n(ids, "0:<=:2")))
+hold negs = db_insert(db_insert(db_insert(db_new(1), "-5"), "-10"), "0")
+show concat("num.neg.rows=", db_rows(negs))
+show concat("num.neg.lt0=", db_hits(db_where_n(negs, "0:<:0")))
+show concat("num.neg.gt=", db_hits(db_where_n(negs, "0:>:-6")))
+show concat("num.neg.sorted=", db_rows(db_sort(negs, 0)))
+
+// --- filtered update -------------------------------------------------------
+
+hold u = db_where_n(t, "2:=:28")
+show concat("update.hits=", db_hits(u))
+hold u2 = db_update(u, 2, "29")
+show concat("update.rows=", db_rows(u2))
+show concat("update.only.cursor=", db_get(u2, 0, 2))
+show concat("update.untouched=", db_get(u2, 2, 2))
+// An empty cursor is a refusal, never a whole-table write.
+show concat("update.no.cursor=", db_istr(len(db_update(t, 2, "1"))))
+show concat("update.bad.col=", db_istr(len(db_update(u, 7, "1"))))
+show concat("update.bad.cell=", db_istr(len(db_update(u, 2, concat("1", chr(31))))))
+
+// --- filtered delete -------------------------------------------------------
+
+hold d = db_delete(db_where_n(t, "2:<:30"))
+show concat("delete.rows=", db_istr(db_count(d)))
+show concat("delete.left=", db_rows(d))
+show concat("delete.cols.kept=", db_istr(db_cols(d)))
+// Deleting the first row compacts without disturbing the rest.
+hold d2 = db_delete(db_where(t, "0:=:1"))
+show concat("delete.first=", db_rows(d2))
+hold d3 = db_where_n(t, "0:>=:1")
+show concat("delete.cursor=", db_hits(d3))
+// Deleting every row leaves an empty table that keeps its column count.
+hold d4 = db_delete(d3)
+show concat("delete.all.rows=", db_istr(db_count(d4)))
+show concat("delete.all.cols=", db_istr(db_cols(d4)))
+show concat("delete.all.empty=", db_istr(len(db_rows(d4))))
+show concat("delete.all.reinsert=", db_rows(db_insert(d4, "9,Zed,60")))
+
+// --- projection ------------------------------------------------------------
+
+show concat("project.swap=", db_rows(db_project(t, "1,0")))
+show concat("project.repeat=", db_rows(db_project(t, "2,2")))
+show concat("project.drop=", db_rows(db_project(t, "1")))
+show concat("project.cols=", db_istr(db_cols(db_project(t, "1,0"))))
+show concat("project.bad.col=", db_istr(len(db_project(t, "0,9"))))
+show concat("project.empty=", db_istr(len(db_project(t, ""))))
+
+// --- sort ------------------------------------------------------------------
+
+show concat("sort.by.age=", db_rows(db_sort(t, 2)))
+show concat("sort.by.name=", db_rows(db_sort(t, 1)))
+show concat("sort.cursor.cleared=", db_hits(db_sort(t, 2)))
+show concat("sort.sorted.flag.col=", db_istr(db_sort_col(db_sort(t, 2))))
+show concat("sort.bad.col=", db_istr(len(db_sort(t, 9))))
+
+// --- expressions -----------------------------------------------------------
+
+// A `~` value is evaluated per row against that row's own cells (`a` = cell 0,
+// `b` = cell 1, `c` = cell 2), so one query compares a cell with a row formula.
+show concat("expr.age.gt.id30=", db_hits(db_where_n(t, "2:>:~a+30")))
+show concat("expr.age.lt.double=", db_hits(db_where_n(t, "2:<:~2*a")))
+show concat("expr.self.plus=", db_hits(db_where_n(t, "2:=:~c")))
+show concat("expr.age.minus=", db_hits(db_where_n(t, "2:=:~b-1")))
+show concat("expr.literal.left=", db_hits(db_where_n(t, "2:>:~30")))
+show concat("expr.cell.left=", db_hits(db_where_n(t, "0:=:~a")))
+show concat("expr.chained=", db_istr(len(db_where_n(t, "2:>:~a+1+1"))))
+show concat("expr.bad.op=", db_istr(len(db_where_n(t, "2:>:~a/2"))))
+show concat("expr.bad.col=", db_istr(len(db_where_n(t, "2:>:~z"))))
+show concat("expr.bad.literal=", db_istr(len(db_where_n(t, "2:>:~1x"))))
+show concat("expr.no.op=", db_istr(len(db_where_n(t, "2:~a+30"))))
+
+// --- refusals --------------------------------------------------------------
+
+show concat("refuse.bad.op=", db_istr(len(db_where_n(t, "2:~~:1"))))
+show concat("refuse.bad.col=", db_istr(len(db_where_n(t, "9:=:1"))))
+show concat("refuse.no.op=", db_istr(len(db_where_n(t, "2"))))
+show concat("refuse.empty.query=", db_istr(len(db_where_n(t, ""))))
+show concat("refuse.new.zero.cols=", db_istr(len(db_new(0))))
+show concat("refuse.new.65.cols=", db_istr(len(db_new(65))))
+show concat("refuse.insert.into.empty=", db_istr(len(db_insert(db_new(0), "1"))))
+
+// --- row round trip --------------------------------------------------------
+
+hold rows_text = db_rows(t)
+show concat("roundtrip.text=", rows_text)
+hold back = db_from_rows(rows_text, 3)
+show concat("roundtrip.rows=", db_istr(db_count(back)))
+show concat("roundtrip.equal=", db_istr(string_eq(db_rows(back), rows_text)))
+show concat("roundtrip.cols.mismatch=", db_istr(len(db_from_rows(rows_text, 2))))
+show concat("roundtrip.empty.text=", db_istr(len(db_rows(db_from_rows("", 3)))))
+show concat("roundtrip.blank.lines=", db_istr(db_count(db_from_rows(concat(rows_text, chr(10)), 3))))
+
+// --- frame round trip ------------------------------------------------------
+
+hold frame = db_table_frame(db_where(t, "2:=:28"))
+hold rebuilt = db_frame_table(frame)
+show concat("frame.ok=", db_istr(db_ok(rebuilt)))
+show concat("frame.rows=", db_rows(rebuilt))
+hold full = db_frame(db_where_n(t, "2:=:28"))
+show concat("frame.state.cursor=", db_hits(db_frame_table(full)))
+show concat("frame.bad=", db_istr(len(db_frame_table("garbage"))))
+
+show "store-done"
