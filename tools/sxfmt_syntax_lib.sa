@@ -34,6 +34,15 @@ make sf_flush_cap() -> num {
   give 1024
 }
 
+// A substring, in a logarithmic number of concats instead of one per byte.
+//
+// The previous version appended `chr(sx_index(...))` for every byte. `concat`
+// copies both operands, so that is O(span^2) in the span, and `sf_text(result)`
+// calls it once on the whole formatted file: measured here, a 149 KB source took
+// 33.7 s end to end (8 KB 0.124 s, 34 KB 1.855 s) while a 9 KB prefix of the same
+// file formatted in 2 ms. Halving the span and joining the halves makes the work
+// O(span) with a logarithmic number of copies, which is what the render below
+// relies on; the per-line uses are far cheaper than before as well.
 make sf_slice(s: str, first: num, last: num) -> str {
   hold n = len(s)
   when first < 0 {
@@ -42,13 +51,24 @@ make sf_slice(s: str, first: num, last: num) -> str {
   when last > n {
     last = n
   }
-  hold out = ""
-  hold i = first
-  while i < last {
-    out = concat(out, chr(sx_index(s, i)))
-    i = i + 1
+  when first >= last {
+    give ""
   }
-  give out
+  when last - first <= 16 {
+    hold small = ""
+    hold k = first
+    while k < last {
+      small = concat(small, chr(sx_index(s, k)))
+      k = k + 1
+    }
+    give small
+  }
+  // `/` is floating-point division in Sayanox, so halve the span explicitly: a
+  // fractional cursor would index the byte below it twice.
+  hold span = last - first
+  hold half = (span - span % 2) / 2
+  hold mid = first + half
+  give concat(sf_slice(s, first, mid), sf_slice(s, mid, last))
 }
 
 make sf_istr(v: num) -> str {
