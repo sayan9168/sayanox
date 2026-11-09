@@ -21,6 +21,7 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals | seed-min, gen2, native | `test-stdlib-csv` |
 | `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_query.sa` | stable CSV joins, distinct, sorting and exact decimal aggregates | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/store.sa` | in-memory relational store (`db_*`): typed table shape, `db_insert`, filtered `db_update`/`db_delete`, `db_project`, stable `db_sort`, comparison and text predicates, per-row arithmetic filters, and packed-row/frame round trips; 58 `make` definitions (21 public helpers plus the encoding and predicate helpers they are built on), every operation bounded and every refusal returning `""` | seed-min, gen2, native | `test-stdlib-store` |
 | `stdlib/url.sa` | percent-encoding/decoding (`surl_encode`, `surl_decode`, `surl_decode_ok`) and packed query strings (`surl_query_parse`, `surl_query_write`, `surl_query_push`, `surl_query_count`, `surl_query_key`, `surl_query_value`, `surl_query_get`, `surl_query_has`, `surl_query_empty`) | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/datetime.sa` | proleptic Gregorian calendar: `dt_is_leap`, `dt_days_in_month`, `dt_valid`, `dt_jdn`, `dt_from_jdn`, `dt_weekday`, `dt_weekday_name`, `dt_month_name`, `dt_day_of_year`, `dt_days_between`, `dt_add_days`, `dt_format`, `dt_parse`, `dt_istr` | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/hash.sa` | non-cryptographic checksums: `sh_sum_bytes`, `sh_is_digits`, `sh_poly`, `sh_djb2`, `sh_poly131`, `sh_sdbm`, `sh_adler32`, `sh_luhn_sum`, `sh_luhn_check_digit`, `sh_luhn_valid`, `sh_istr` | seed-min, gen2, native | `test-stdlib-next` |
@@ -250,6 +251,66 @@ quadratic or worse due to packed-string scans and should be used for small
 tables. They do not implement SQL or streaming. Tests exercise ordering, ties,
 ragged rows, invalid input, join expansion limits, exact large values and
 rounding on seed-min, gen2 and native via `test-stdlib-next`.
+
+## Relational store
+
+`stdlib/store.sa` is the database module: an in-memory relational store with
+insert, filtered update and delete, projection, sorting and predicates. It is
+independent of the CSV modules -- it does not parse CSV -- but it exchanges data
+with them through the same packed row form and can be written to a file as a
+single frame.
+
+```sayanox
+use "stdlib/store.sa"
+hold staff = db_insert(db_new(3), "1,Ada,36")
+staff = db_insert(staff, "2,Mina,41")
+hold older = db_where_n(staff, "2:>:38")
+show db_hits(older)                        // 1
+show db_get(staff, db_hit(older), 1)       // Mina
+show db_rows(db_update(older, 2, "42"))    // 1,Ada,36 then 2,Mina,42
+```
+
+* A table is one flat string: a row count, a column count and the cells in
+  row-major order, separated by `chr(31)`. `db_new(cols)` fixes the shape, so an
+  empty table still knows its column count, and `db_insert` refuses a row with
+  the wrong arity, an empty row, or a cell containing a separator byte, a newline,
+  a tab or a comma. Those refusals are what make every later scan unambiguous.
+* A query is `column:operator:value`. `=` and `!=` compare stored bytes, which
+  keeps identifiers exact; `<`, `<=`, `>` and `>=` compare numerically when both
+  sides are decimal numbers and bytewise otherwise, so `"9"` sorts below `"10"`
+  while names still sort by byte. `has`, `^` and `$` are byte-exact substring,
+  prefix and suffix tests -- there is no case folding and no Unicode awareness.
+* A value may start with `~` to name an arithmetic expression over the matching
+  row's own cells (`a` is its first cell, `b` its second): `2:>:~a+30` selects
+  rows whose third cell exceeds their first cell plus 30. Exactly one operator and
+  two operands are supported; a chained expression such as `~a+1+1` is refused
+  rather than given an invented precedence.
+* `db_where` selects the first matching row and `db_where_n` selects all of them.
+  The selection lives in the returned state (table, then `chr(30)`, then a
+  comma-separated row list, then `chr(30)`, then the sort column), so a filtered
+  result feeds straight back into `db_update`, `db_delete` or `db_project`. An
+  empty selection is a refusal, never a whole-table write: `db_update` and
+  `db_delete` on an unselected table return `""`.
+* `db_sort` returns a new table in ascending stable order and clears the
+  selection. `db_project` returns a new table with the listed column indexes in
+  the listed order, so a repeated index duplicates a column.
+* `db_rows` and `db_from_rows` convert to and from the `a,b,c` line per row form
+  used by `stdlib/csv_table.sa`; `db_table_frame` and `db_frame` produce strings
+  for `write_file`, and `db_frame_table` reads either back.
+
+Bounds are explicit and refusals are empty strings, so checking `len(x) == 0`
+is always safe: 64 columns, 4096 rows, 1024 bytes per cell, 8 selected rows (a
+ninth match refuses the query) and 128 rows for a sort, which is a stable
+insertion sort over string-encoded rows. Malformed queries, unknown operators
+and impossible column indexes are refused rather than answered wrongly; the
+fixture's 23 refusal lines pin each one.
+
+There is no persistence engine, no transactions, no secondary index, no wire
+protocol and no SQL parser: this is a bounded in-memory store for small
+datasets, and every operation rebuilds a string. The full 150-line fixture
+(`selfhost/stdlib_store_test.sa`) is compared byte for byte against
+`selfhost/stdlib_store.want`, an oracle computed by an independent Python
+implementation, on seed-min, gen2 and native via `test-stdlib-store`.
 
 ## Exact decimals in JSON
 
