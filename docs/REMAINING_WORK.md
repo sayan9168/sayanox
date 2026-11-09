@@ -389,7 +389,7 @@ Delivered, with a gate that fails on the previous code:
 * **Output is unchanged.** Byte-identical to the committed formatter on both
   fixtures and on every pinned case; `test-sxfmt` and `test-sxfmt-syntax` pass.
 * **Manifest pins refreshed, not bypassed.** `docs/full-language-v1.sha256` pins
-  `tools/sxfmt_syntax_lib.sa` byte for byte and `bootstrap/sx.hash256` pins that
+  `tools/sxfmt_syntax_lib.sa` byte for byte and `bootstrap/sx.sha256` pins that
   manifest, so both hashes were regenerated from the new tree. `./tools/sxfull
   verify`, `sha256sum -c bootstrap/sx.sha256`, `bootstrap/native.sha256` and the
   `sxddc` harness self-test (which asserts its failure receipts name the exact
