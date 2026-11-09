@@ -224,6 +224,149 @@ make fx_parity(d: str) -> num {
   give gl_assert_files_eq(concat(d, "/raw.stdout"), concat(d, "/fmt.stdout"), "formatted program prints the same stdout")
 }
 
+// R10 linear-time render gate (2026-11-08).
+//
+// `sf_slice` used to append one byte per `concat`. Because `concat` copies both
+// operands that is quadratic in the span, and `sf_text` slices the whole
+// formatted file, so the formatter was O(n^2): 8 KB 0.124 s, 34 KB 1.855 s,
+// 149 KB 33.703 s. It now halves the span and joins the halves. The two checks
+// below are the halves of the evidence: `fx_linear` proves the bytes are still
+// exactly right on a 25,000-line file, and `fx_scale` renders four sizes 2x apart
+// through the shipped binary and prints the measured bytes and milliseconds.
+//
+// Neither check asserts a time *ratio* between sizes: on a shared CI host that is
+// flaky. Each asserts an absolute bound the quadratic implementation could not
+// meet at these sizes (it needed 33.7 s for a quarter of the smallest scale
+// input), which is what makes them usable negative controls.
+make fx_big_source(lines: num) -> str {
+  hold src = ""
+  hold i = 0
+  while i < lines {
+    src = concat(src, "hold v")
+    src = concat(src, sf_istr(i))
+    src = concat(src, " = ")
+    src = concat(src, sf_istr(i))
+    src = concat(src, "\nwhen v")
+    src = concat(src, sf_istr(i))
+    src = concat(src, " > 0 {\nshow  v")
+    src = concat(src, sf_istr(i))
+    src = concat(src, "\n}\n")
+    i = i + 1
+  }
+  give src
+}
+
+// The same lines already formatted. Written out independently of the formatter so
+// it is an oracle, not a restatement of the implementation: the only difference
+// from the input above is the collapsed `show  v` -> `show v` and the indentation
+// of that line.
+make fx_big_want(lines: num) -> str {
+  hold want = ""
+  hold i = 0
+  while i < lines {
+    want = concat(want, "hold v")
+    want = concat(want, sf_istr(i))
+    want = concat(want, " = ")
+    want = concat(want, sf_istr(i))
+    want = concat(want, "\nwhen v")
+    want = concat(want, sf_istr(i))
+    want = concat(want, " > 0 {\n  show v")
+    want = concat(want, sf_istr(i))
+    want = concat(want, "\n}\n")
+    i = i + 1
+  }
+  give want
+}
+
+// A rendered file must equal the independent rebuild byte for byte, preserve
+// every token and be idempotent, and the shipped binary must agree with the
+// library.
+make fx_linear(d: str, lines: num) -> num {
+  hold source = fx_big_source(lines)
+  hold want = fx_big_want(lines)
+  hold got = fx_format(source)
+  hold a = gl_assert_eq_str(got, want, "linear formatter output at 25k lines")
+  hold b = gl_assert_eq_str(fx_squeeze(got), fx_squeeze(source), "linear formatter preserves every token at 25k lines")
+  hold again = fx_format(got)
+  hold c = gl_assert_eq_str(again, got, "linear formatter is idempotent at 25k lines")
+  hold path = concat(d, "/big.sa")
+  hold wrote = gl_must_write(path, source)
+  hold out = concat(d, "/big.out")
+  hold cmd = concat("./tools/sxfmt --syntax ", concat(gl_sh_quote(path), concat(" ", gl_sh_quote(out))))
+  hold e = gl_assert_eq_num(run_command(cmd), 0, "sxfmt --syntax on the large input")
+  give gl_assert_eq_str(read_file(out), want, "sxfmt --syntax large output")
+}
+
+make fx_scale_budget_ms() -> num {
+  give 60000
+}
+
+make fx_digits_only(line: str) -> num {
+  hold n = len(line)
+  // The measurement file ends with a newline: skip trailing non-digits.
+  while n > 0 && sx_index(line, n - 1) < 48 {
+    n = n - 1
+  }
+  while n > 0 && sx_index(line, n - 1) > 57 {
+    n = n - 1
+  }
+  hold digits = ""
+  hold i = n
+  hold stop = 0
+  while i > 0 && stop == 0 {
+    hold c = sx_index(line, i - 1)
+    when c >= 48 && c <= 57 {
+      digits = concat(chr(c), digits)
+    } otherwise {
+      stop = 1
+    }
+    i = i - 1
+  }
+  when len(digits) == 0 {
+    give 0 - 1
+  }
+  hold v = 0
+  hold k = 0
+  while k < len(digits) {
+    v = v * 10 + (sx_index(digits, k) - 48)
+    k = k + 1
+  }
+  give v
+}
+
+// Four sizes 2x apart (58 KB, 121 KB, 246 KB, 496 KB of source) rendered through
+// `./tools/sxfmt --syntax`, so the measurement covers the shipped binary. The
+// measured bytes and milliseconds go to the CI log; the assertion is an absolute
+// budget per render.
+make fx_scale(d: str) -> num {
+  hold sizes = "1250\n2500\n5000\n10000\n"
+  hold pos = 0
+  while pos < len(sizes) {
+    hold start = pos
+    while pos < len(sizes) && sx_index(sizes, pos) != 10 { pos = pos + 1 }
+    hold text = gl_slice(sizes, start, pos)
+    pos = pos + 1
+    when len(text) > 0 {
+      hold count = fx_digits_only(text)
+      hold path = concat(d, "/scale.sa")
+      hold source = fx_big_source(count)
+      hold wrote = gl_must_write(path, source)
+      hold out = concat(d, "/scale.out")
+      hold cmd = concat("./tools/sxfmt --syntax ", concat(gl_sh_quote(path), concat(" ", gl_sh_quote(out))))
+      hold tap = concat(d, "/scale.ms")
+      hold timed = concat("sh -c 's=$(date +%s%N); ", concat(cmd, "; e=$(date +%s%N); echo $(( (e-s)/1000000 ))' > "))
+      hold status = run_command(concat(timed, gl_sh_quote(tap)))
+      hold a = gl_assert_eq_num(status, 0, concat("large render status at ", text))
+      hold elapsed = fx_digits_only(read_file(tap))
+      hold label = concat(concat("sxfmt --syntax ", gl_istr(len(source))), concat(" bytes in ", concat(gl_istr(elapsed), " ms")))
+      show label
+      hold budget = gl_assert_eq_num(elapsed <= fx_scale_budget_ms(), 1, concat("linear render budget at ", text))
+      hold library = fx_linear(d, count)
+    }
+  }
+  give 0
+}
+
 make fx_known(name: str) -> num {
   when string_eq(name, "test-sxfmt-syntax") == 1 {
     give 1
@@ -240,6 +383,8 @@ make fx_dispatch(name: str) -> num {
   status = fx_refusals(d)
   status = fx_cli(d)
   status = fx_parity(d)
+  status = fx_linear(d, 6250)
+  status = fx_scale(d)
   show concat("[OK] Sayanox gate: ", name)
   give status
 }
