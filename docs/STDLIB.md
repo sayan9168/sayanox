@@ -23,6 +23,7 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/csv_query.sa` | stable CSV joins, distinct, sorting and exact decimal aggregates | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/store.sa` | in-memory relational store (`db_*`): typed table shape, `db_insert`, filtered `db_update`/`db_delete`, `db_project`, stable `db_sort`, comparison and text predicates, per-row arithmetic filters, and packed-row/frame round trips; 58 `make` definitions (21 public helpers plus the encoding and predicate helpers they are built on), every operation bounded and every refusal returning `""` | seed-min, gen2, native | `test-stdlib-store` |
 | `stdlib/store_index.sa` | derived indexes over `stdlib/store.sa` tables (`ix_*`): `ix_hash_build`/`ix_ordered_build`, exact-key `ix_lookup`/`ix_rows_for`/`ix_count_key`, binary-searched `ix_range`/`ix_between`, `ix_min_key`/`ix_max_key`/`ix_rows`, and staleness detection (`ix_stale`/`ix_valid`) that refuses to answer from a snapshot the table has outgrown; 43 `make` definitions | seed-min, gen2, native | `test-stdlib-store` |
+| `stdlib/store_rel.sa` | relational algebra over `stdlib/store.sa` tables (`sr_*`): `sr_join`/`sr_left_join` on exact keys, `sr_group_count`/`sr_group_sum`/`sr_group_min`/`sr_group_max`/`sr_group_avg` (integer average with visible remainder), `sr_distinct`/`sr_distinct_rows`, and `sr_union`/`sr_intersect`/`sr_except`/`sr_same_rows`; accepts table frames and store states alike; 36 `make` definitions | seed-min, gen2, native | `test-stdlib-store` |
 | `stdlib/url.sa` | percent-encoding/decoding (`surl_encode`, `surl_decode`, `surl_decode_ok`) and packed query strings (`surl_query_parse`, `surl_query_write`, `surl_query_push`, `surl_query_count`, `surl_query_key`, `surl_query_value`, `surl_query_get`, `surl_query_has`, `surl_query_empty`) | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/datetime.sa` | proleptic Gregorian calendar: `dt_is_leap`, `dt_days_in_month`, `dt_valid`, `dt_jdn`, `dt_from_jdn`, `dt_weekday`, `dt_weekday_name`, `dt_month_name`, `dt_day_of_year`, `dt_days_between`, `dt_add_days`, `dt_format`, `dt_parse`, `dt_istr` | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/hash.sa` | non-cryptographic checksums: `sh_sum_bytes`, `sh_is_digits`, `sh_poly`, `sh_djb2`, `sh_poly131`, `sh_sdbm`, `sh_adler32`, `sh_luhn_sum`, `sh_luhn_check_digit`, `sh_luhn_valid`, `sh_istr` | seed-min, gen2, native | `test-stdlib-next` |
@@ -359,6 +360,56 @@ show ix_key_at(by_age, 0)                    // 29
 `selfhost/stdlib_store_index_test.sa` (89 lines) is compared byte for byte
 against `selfhost/stdlib_store_index.want`, again computed from an independent
 Python reference, on seed-min, gen2 and native by `test-stdlib-store`.
+
+## Joins, grouping and set operations
+
+`stdlib/store_rel.sa` answers the questions that need two tables or a grouping
+pass. Import `store.sa` first; `store_index.sa` is independent of it.
+
+```sayanox
+use "stdlib/store.sa"
+use "stdlib/store_rel.sa"
+hold staff = db_insert(db_new(3), "1,Ada,10")
+staff = db_insert(staff, "4,Ravi,10")
+hold dept = db_insert(db_new(2), "10,eng")
+show db_rows(sr_join(staff, 2, dept, 0))       // 1,Ada,10,10,eng then 4,Ravi,10,10,eng
+show db_rows(sr_left_join(staff, 2, dept, 0))  // adds an unmatched row when there is one
+hold sales = db_insert(db_new(3), "eng,Ada,10")
+sales = db_insert(sales, "eng,Mina,20")
+show db_rows(sr_group_sum(sales, 0, 2))        // eng,30
+show db_rows(sr_group_avg(sales, 0, 2))        // eng,15,0,2
+```
+
+* **Keys match on exact bytes.** `"42"` and `"042"` are different keys even though
+  the store's ordering predicates call them numerically equal: matching is
+  equality, and equality here is byte equality. A NULL key (empty cell) matches
+  only another NULL key.
+* **`sr_join`** emits all left cells then all right cells, one row per matching
+  pair, left-major then right-major. **`sr_left_join`** emits an all-NULL right
+  half for an unmatched left row, so the output width never varies and a fixed
+  column list stays valid.
+* **Aggregates** report groups in first-seen key order. `sr_group_avg` returns
+  four columns — quotient, remainder, count — because the average is integer
+  division and hiding the truncation would be a lie. `sr_group_min`/`sr_group_max`
+  seed from the first non-NULL value, so an all-NULL group reports NULL rather
+  than 0, while `sr_group_sum` treats NULL as 0 and keeps the group.
+* **An aggregate over text is refused**, not evaluated: summing names would
+  silently add zeros. The whole call returns `""`.
+* **Set operations keep duplicates**: `sr_union` is concatenation, `sr_intersect`
+  and `sr_except` are the `ALL` variants that keep left-side duplicates, and
+  `sr_distinct_rows` removes whole-row duplicates in first-seen order.
+  `sr_same_rows` compares two tables ignoring order and duplicates.
+* **Frames and states both work.** Every function accepts what `db_insert` returns
+  (a state) and what `db_table_frame` returns (a bare frame); the fixture pins
+  that both give the same answer, so a caller never has to remember which one it
+  is holding.
+* A join result is capped at 4096 rows, so a cartesian product of two wide tables
+  is refused rather than materialised; 64 x 64 is inside the cap and produces
+  every pair.
+
+`selfhost/stdlib_store_rel_test.sa` (104 lines) is compared byte for byte against
+`selfhost/stdlib_store_rel.want`, computed from a third independent Python
+reference, on seed-min, gen2 and native by `test-stdlib-store`.
 
 ## Exact decimals in JSON
 
