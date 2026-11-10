@@ -1,0 +1,1090 @@
+// stdlib/store.sa -- In-memory relational store (prefix `db_`), written in
+// portable Sayanox.
+//
+// Portable across seed-min, gen2, native_aot and sxc_native: at most six
+// parameters per `make`, one statement per line, numeric lists only, and strings
+// built with `concat`/`chr`.
+//
+// This is the "database" module of the R07 standard-library surface: a bounded,
+// dependency-free relational engine -- tables, typed columns, row insert,
+// filtered update and delete, projection and sort -- rather than a stub. It is
+// in memory only. It does not speak a wire protocol and it does not persist by
+// itself; `db_rows`/`db_from_rows` convert to the packed row form that
+// `stdlib/csv_table.sa` and the JSON writers already exchange, and
+// `db_frame`/`db_table_frame` round-trip a table through a single string for
+// `write_file`/`read_file`.
+//
+// ---------------------------------------------------------------------------
+// Table frame
+// ---------------------------------------------------------------------------
+//
+// A table is one flat string of US-separated fields (US is 0x1F). Field 0 is the
+// live row count and field 1 is the column count; every field after that is one
+// cell, in row-major order, and the frame ends with a separator:
+//
+//     count | cols | r0c0 | r0c1 | ... | r0c(C-1) | r1c0 | ... |
+//
+// Row r, column c therefore lives in field 2 + r * C + c. An empty field is a
+// NULL cell. Because the column count is stored rather than inferred, an empty
+// table keeps its shape and `db_insert` can check arity without guessing.
+//
+// Keeping the whole store in one string makes every operation a pure function of
+// its input, which is what lets the same fixture run byte-identically on the
+// seed, gen2 and native AOT compilers: nothing here depends on a host allocator,
+// on a list representation, or on a mutable global.
+//
+// ---------------------------------------------------------------------------
+// State frame
+// ---------------------------------------------------------------------------
+//
+// `db_where` has to leave a selection behind. It returns a state: the table, a
+// cursor (the selected rows) and the current sort column, separated by FS (0x1E)
+// so a cursor is never confused with a cell:
+//
+//     table | cursor | sortcol
+//
+// The table itself is returned unchanged by every query, so a filtered state can
+// be fed straight back into `db_update`, `db_delete` or `db_project`, and the
+// rows selected by one query can be narrowed by the next.
+//
+//     db_new(cols)              an empty table with `cols` columns
+//     db_insert(state, row)     append "a,b,c" (exactly `cols` fields)
+//     db_where(state, q)        cursor = first matching row
+//     db_where_n(state, q)      cursor = every matching row (comma separated)
+//     db_count(state)           live row count
+//     db_hit(state)             first cursor row, -1 when nothing matched
+//     db_hits(state)            cursor as "a,b,c"
+//     db_get(state, r, c)       a cell as text
+//     db_get_n(state, r, c)     a cell as a number ("" reads as 0)
+//     db_update(state, c, v)    write column `c` of every cursor row
+//     db_delete(state)          remove every cursor row, compacting the rest
+//     db_project(state, cols)   a new table with the listed columns
+//     db_sort(state, c)         ascending, stable
+//     db_rows(state)            packed row form, one "a,b,c" line per row
+//     db_from_rows(rows, cols)  build a table from the packed row form
+//     db_table_frame(state)     table frame alone, for `write_file`
+//     db_frame(state)           state frame alone, for `write_file`
+//     db_frame_table(frame)     rebuild a state from a written frame
+//
+// ---------------------------------------------------------------------------
+// Query language
+// ---------------------------------------------------------------------------
+//
+// A query is `col:op:value`. The column is named once and compared numerically
+// or as text depending on the operator:
+//
+//     `2:>:30`    cell 2 >= 30         `0:=:42`   cell 0 == "42"
+//     `1:has:an`  text contains "an"   `2:!=:`    NULL (empty) cell
+//     `1:^:A`     text starts with A   `1:$:z`    text ends with z
+//     `2:>:~a+1`  cell 2 > a+1 (the row's own cell 0 is named `a`, then `b`, ...)
+//
+// Numeric operators (`>`, `>=`, `<`, `<=`) compare by value, so "9" < "10"; the
+// `=` operators compare the stored bytes, which keeps ids exact, and `<`/`>`
+// compare numerically when both sides are numbers and bytewise otherwise. A value
+// may also start with `~`: the rest is an arithmetic expression over the current
+// row's cells (`a` is its first cell, `b` its second), with one of `+`, `-`, `*`
+// and exactly two operands. Chained expressions are refused rather than given an
+// invented precedence.
+//
+// Every operation is explicitly bounded: at most 64 columns, 4096 rows, 1024
+// bytes per cell and 8 cursor rows (a ninth match refuses the query), plus 128
+// rows for `db_sort`, which is an insertion sort over a string-encoded table and
+// would otherwise be needlessly quadratic in both rows and bytes. A malformed
+// query or a shape mismatch returns "" instead of a wrong answer, so a caller
+// that checks `len(x) == 0` never silently accepts garbage.
+
+// ---------------------------------------------------------------------------
+// Bytes and numbers
+// ---------------------------------------------------------------------------
+
+make db_us() -> num {
+  give 31
+}
+
+make db_fs() -> num {
+  give 30
+}
+
+make db_istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold n = v
+  when n < 0 {
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when v < 0 {
+    give concat("-", out)
+  }
+  give out
+}
+
+make db_sub(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  hold lo = a
+  when lo < 0 {
+    lo = 0
+  }
+  hold hi = b
+  when hi > n {
+    hi = n
+  }
+  when lo >= hi {
+    give ""
+  }
+  hold out = ""
+  hold i = lo
+  while i < hi {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make db_at(s: str, i: num) -> num {
+  when i < 0 or i >= len(s) {
+    give 0 - 1
+  }
+  give sx_index(s, i)
+}
+
+make db_is_digit(c: num) -> num {
+  when c >= 48 and c <= 57 {
+    give 1
+  }
+  give 0
+}
+
+make db_digits(s: str) -> num {
+  hold n = len(s)
+  when n == 0 {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    when db_is_digit(db_at(s, i)) == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make db_int(s: str, fallback: num) -> num {
+  when db_digits(s) == 0 {
+    give fallback
+  }
+  hold v = 0
+  hold i = 0
+  while i < len(s) {
+    v = v * 10 + (sx_index(s, i) - 48)
+    i = i + 1
+  }
+  give v
+}
+
+// Find the next `want` at or after `from`, or `len(s)` when there is none.
+make db_find(s: str, from: num, want: num) -> num {
+  hold i = from
+  while i < len(s) {
+    when sx_index(s, i) == want {
+      give i
+    }
+    i = i + 1
+  }
+  give len(s)
+}
+
+// 1 when a byte may appear inside a cell. US and FS are the structural
+// separators and the packed row form spends LF, CR, TAB and comma, so a cell
+// holds none of them. That refusal is what makes every scan unambiguous.
+make db_is_delim(c: num) -> num {
+  when c == 31 or c == 30 or c == 10 or c == 13 or c == 9 or c == 44 {
+    give 1
+  }
+  give 0
+}
+
+make db_has(hay: str, needle: str) -> num {
+  hold hn = len(hay)
+  hold nn = len(needle)
+  when nn == 0 {
+    give 1
+  }
+  when nn > hn {
+    give 0
+  }
+  hold i = 0
+  while i + nn <= hn {
+    hold j = 0
+    hold same = 1
+    while j < nn and same == 1 {
+      when sx_index(hay, i + j) != sx_index(needle, j) {
+        same = 0
+      }
+      j = j + 1
+    }
+    when same == 1 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make db_prefix(s: str, p: str) -> num {
+  when len(p) > len(s) {
+    give 0
+  }
+  hold i = 0
+  while i < len(p) {
+    when sx_index(s, i) != sx_index(p, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make db_suffix(s: str, p: str) -> num {
+  when len(p) > len(s) {
+    give 0
+  }
+  hold off = len(s) - len(p)
+  hold i = 0
+  while i < len(p) {
+    when sx_index(s, off + i) != sx_index(p, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// Numeric comparison of two decimal texts: -1, 0 or 1. Signs are handled first,
+// then magnitudes by (length, bytes) so no cell is ever converted to a host
+// integer -- a 300-digit cell still orders correctly.
+make db_num_cmp(a: str, b: str) -> num {
+  hold na = 0
+  hold nb = 0
+  hold da = a
+  hold db = b
+  when db_digits(a) == 0 and len(a) > 0 and db_at(a, 0) == 45 and db_digits(db_sub(a, 1, len(a))) == 1 {
+    na = 1
+    da = db_sub(a, 1, len(a))
+  }
+  when db_digits(b) == 0 and len(b) > 0 and db_at(b, 0) == 45 and db_digits(db_sub(b, 1, len(b))) == 1 {
+    nb = 1
+    db = db_sub(b, 1, len(b))
+  }
+  hold mag = 0
+  when len(da) < len(db) {
+    mag = 0 - 1
+  }
+  when len(da) > len(db) {
+    mag = 1
+  }
+  when len(da) == len(db) {
+    hold i = 0
+    while i < len(da) and mag == 0 {
+      hold x = sx_index(da, i)
+      hold y = sx_index(db, i)
+      when x < y {
+        mag = 0 - 1
+      }
+      when x > y {
+        mag = 1
+      }
+      i = i + 1
+    }
+  }
+  when na == 1 and nb == 0 {
+    give 0 - mag
+  }
+  when na == 0 and nb == 1 {
+    give mag
+  }
+  when na == 1 and nb == 1 {
+    give 0 - mag
+  }
+  give mag
+}
+
+make db_text_cmp(a: str, b: str) -> num {
+  hold n = len(a)
+  when len(b) < n {
+    n = len(b)
+  }
+  hold i = 0
+  while i < n {
+    hold x = sx_index(a, i)
+    hold y = sx_index(b, i)
+    when x < y {
+      give 0 - 1
+    }
+    when x > y {
+      give 1
+    }
+    i = i + 1
+  }
+  when len(a) < len(b) {
+    give 0 - 1
+  }
+  when len(a) > len(b) {
+    give 1
+  }
+  give 0
+}
+
+// Total order used by every `<`, `<=`, `>` and `>=` and by `db_sort`: numeric
+// when both sides are decimal numbers, bytewise otherwise. Keeping one rule means
+// an age column and a name column sort the way a reader expects, and it is what
+// lets `stdlib/store.sa` order ids by value ("9" below "10") while still ordering
+// text by byte.
+make db_order_cmp(a: str, b: str) -> num {
+  when db_digits(a) == 1 and db_digits(b) == 1 {
+    give db_num_cmp(a, b)
+  }
+  give db_text_cmp(a, b)
+}
+
+// ---------------------------------------------------------------------------
+// Table frame access
+// ---------------------------------------------------------------------------
+
+// Field `k` of a US-delimited frame, "" when the frame is shorter.
+make db_field(frame: str, k: num) -> str {
+  hold n = len(frame)
+  hold pos = 0
+  hold idx = 0
+  while pos < n {
+    hold end = db_find(frame, pos, 31)
+    when idx == k {
+      give db_sub(frame, pos, end)
+    }
+    idx = idx + 1
+    pos = end + 1
+  }
+  give ""
+}
+
+// Number of fields in a frame. A trailing separator opens one last, empty field,
+// which canonical frames then leave as the empty tail after the last cell.
+make db_fields(frame: str) -> num {
+  hold n = len(frame)
+  when n == 0 {
+    give 0
+  }
+  hold count = 1
+  hold i = 0
+  while i < n {
+    when sx_index(frame, i) == 31 {
+      count = count + 1
+    }
+    i = i + 1
+  }
+  give count
+}
+
+make db_frame_count(frame: str) -> num {
+  give db_int(db_field(frame, 0), 0)
+}
+
+make db_frame_cols(frame: str) -> num {
+  give db_int(db_field(frame, 1), 0)
+}
+
+// 1 when `frame` really is a `count` x `cols` US chain. A frame written by
+// `db_table_frame` ends with a separator; one that has been through a line-based
+// file round trip may not, so both forms count as canonical.
+make db_frame_ok(frame: str) -> num {
+  when len(frame) == 0 {
+    give 0
+  }
+  hold count = db_frame_count(frame)
+  hold cols = db_frame_cols(frame)
+  when cols < 1 or cols > 64 or count < 0 or count > 4096 {
+    give 0
+  }
+  hold fields = db_fields(frame)
+  hold want = 2 + count * cols
+  when fields == want {
+    give 1
+  }
+  when fields == want + 1 and sx_index(frame, len(frame) - 1) == 31 {
+    give 1
+  }
+  give 0
+}
+
+make db_new(cols: num) -> str {
+  when cols < 1 or cols > 64 {
+    give ""
+  }
+  give concat(db_istr(0), concat(chr(31), concat(db_istr(cols), chr(31))))
+}
+
+// ---------------------------------------------------------------------------
+// State frame
+// ---------------------------------------------------------------------------
+
+make db_state(table: str, cursor: str, sortcol: num) -> str {
+  give concat(table, concat(chr(30), concat(cursor, concat(chr(30), db_istr(sortcol)))))
+}
+
+// The table part of a state. A bare table frame has no FS and is returned as-is,
+// which lets `db_new` output be used directly as a state.
+make db_table(state: str) -> str {
+  hold cut = db_find(state, 0, 30)
+  give db_sub(state, 0, cut)
+}
+
+make db_cursor(state: str) -> str {
+  hold first = db_find(state, 0, 30)
+  when first >= len(state) {
+    give ""
+  }
+  hold second = db_find(state, first + 1, 30)
+  give db_sub(state, first + 1, second)
+}
+
+make db_sort_col(state: str) -> num {
+  hold first = db_find(state, 0, 30)
+  when first >= len(state) {
+    give 0
+  }
+  hold second = db_find(state, first + 1, 30)
+  give db_int(db_sub(state, second + 1, len(state)), 0)
+}
+
+// 1 when row `r` is in the cursor "a,b,c". An empty cursor selects nothing: the
+// caller must have run `db_where` first, so a stray `db_delete` cannot wipe a
+// table by accident.
+make db_in_cursor(cursor: str, r: num) -> num {
+  hold n = len(cursor)
+  hold pos = 0
+  while pos < n {
+    hold end = db_find(cursor, pos, 44)
+    when db_int(db_sub(cursor, pos, end), 0 - 1) == r {
+      give 1
+    }
+    pos = end + 1
+  }
+  give 0
+}
+
+// ---------------------------------------------------------------------------
+// Rows
+// ---------------------------------------------------------------------------
+
+// 1 when `v` can be stored as a cell, 0 when it holds a structural byte or is
+// longer than the 1024-byte budget.
+make db_cell_ok(v: str) -> num {
+  when len(v) > 1024 {
+    give 0
+  }
+  hold i = 0
+  while i < len(v) {
+    when db_is_delim(sx_index(v, i)) == 1 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// "a,b,c" -> "a|b|c|" (US for the comma). `db_insert` needs the cell count to
+// check arity, and the tail separator keeps the last empty cell visible.
+make db_parse_row(row: str) -> str {
+  hold out = ""
+  hold n = len(row)
+  hold pos = 0
+  while pos <= n {
+    hold end = db_find(row, pos, 44)
+    out = concat(out, db_sub(row, pos, end))
+    out = concat(out, chr(31))
+    pos = end + 1
+  }
+  give out
+}
+
+// Append a row. Rejects a wrong arity, a cell that cannot be stored, a full table
+// and a state that is not a table -- all as "".
+make db_insert(state: str, row: str) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  when count >= 4096 {
+    give ""
+  }
+  hold cells = db_parse_row(row)
+  hold got = db_fields(cells) - 1
+  when got != cols {
+    give ""
+  }
+  hold k = 0
+  while k < cols {
+    when db_cell_ok(db_field(cells, k)) == 0 {
+      give ""
+    }
+    k = k + 1
+  }
+  hold out = concat(db_istr(count + 1), concat(chr(31), concat(db_istr(cols), chr(31))))
+  hold f = 2
+  hold fields = 2 + count * cols
+  while f < fields {
+    out = concat(out, db_field(table, f))
+    out = concat(out, chr(31))
+    f = f + 1
+  }
+  out = concat(out, cells)
+  give db_state(out, "", 0)
+}
+
+// Write column `c` of every cursor row in place; every other cell is copied
+// through untouched, so column order and NULL cells survive.
+make db_update(state: str, c: num, v: str) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  when c < 0 or c >= cols {
+    give ""
+  }
+  when db_cell_ok(v) == 0 {
+    give ""
+  }
+  hold cursor = db_cursor(state)
+  when len(cursor) == 0 {
+    give ""
+  }
+  hold out = ""
+  hold r = 0
+  while r < count {
+    hold hit = db_in_cursor(cursor, r)
+    hold k = 0
+    while k < cols {
+      when hit == 1 and k == c {
+        out = concat(out, v)
+      } otherwise {
+        out = concat(out, db_field(table, 2 + r * cols + k))
+      }
+      out = concat(out, chr(31))
+      k = k + 1
+    }
+    r = r + 1
+  }
+  hold head = concat(db_istr(count), concat(chr(31), concat(db_istr(cols), chr(31))))
+  give db_state(concat(head, out), "", db_sort_col(state))
+}
+
+// Remove every cursor row and compact the rest in order.
+make db_delete(state: str) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  hold cursor = db_cursor(state)
+  when len(cursor) == 0 {
+    give ""
+  }
+  hold out = ""
+  hold kept = 0
+  hold r = 0
+  while r < count {
+    when db_in_cursor(cursor, r) == 0 {
+      hold k = 0
+      while k < cols {
+        out = concat(out, db_field(table, 2 + r * cols + k))
+        out = concat(out, chr(31))
+        k = k + 1
+      }
+      kept = kept + 1
+    }
+    r = r + 1
+  }
+  hold head = concat(db_istr(kept), concat(chr(31), concat(db_istr(cols), chr(31))))
+  give db_state(concat(head, out), "", db_sort_col(state))
+}
+
+// ---------------------------------------------------------------------------
+// Predicates
+// ---------------------------------------------------------------------------
+
+make db_query_col(q: str) -> num {
+  hold end = db_find(q, 0, 58)
+  give db_int(db_sub(q, 0, end), 0 - 1)
+}
+
+make db_query_op(q: str) -> str {
+  hold first = db_find(q, 0, 58)
+  hold end = db_find(q, first + 1, 58)
+  give db_sub(q, first + 1, end)
+}
+
+make db_query_val(q: str) -> str {
+  hold first = db_find(q, 0, 58)
+  hold end = db_find(q, first + 1, 58)
+  give db_sub(q, end + 1, len(q))
+}
+
+// One operand of a filter expression: a digit run is a literal, a single letter
+// names a cell of the current row (`a` = cell 0), and "" is NULL (0).
+make db_operand(text: str, table: str, r: num, cols: num) -> str {
+  hold n = len(text)
+  when n == 0 {
+    give "!"
+  }
+  hold first = sx_index(text, 0)
+  when db_is_digit(first) == 1 {
+    when db_digits(text) == 1 {
+      give text
+    }
+    give "!"
+  }
+  when n != 1 {
+    give "!"
+  }
+  hold col = 0 - 1
+  when first >= 97 and first <= 122 {
+    col = first - 97
+  }
+  when first >= 65 and first <= 90 {
+    col = first - 65
+  }
+  when col < 0 or col >= cols {
+    give "!"
+  }
+  hold cell = db_field(table, 2 + r * cols + col)
+  when len(cell) == 0 {
+    give "0"
+  }
+  give cell
+}
+
+// Evaluate `left op right` for a single binary operator. "!" means the
+// expression is not one this module defines, so the whole query is refused
+// instead of being evaluated with a guessed precedence.
+make db_expr(expr: str, table: str, r: num, cols: num) -> str {
+  hold n = len(expr)
+  when n == 0 {
+    give "!"
+  }
+  hold pos = db_find(expr, 0, 43)
+  hold plus = pos
+  hold mul = db_find(expr, 0, 42)
+  hold min = db_find(expr, 0, 45)
+  hold op = 0
+  hold at = plus
+  when mul < at {
+    at = mul
+  }
+  when min < at {
+    at = min
+  }
+  when at >= n {
+    give db_operand(expr, table, r, cols)
+  }
+  when plus == at {
+    op = 43
+  }
+  when mul == at {
+    op = 42
+  }
+  when min == at {
+    op = 45
+  }
+  // No second operator: a chained expression would need precedence rules, so it
+  // is refused rather than mis-associated.
+  hold rest = db_sub(expr, at + 1, n)
+  when db_find(rest, 0, 43) < len(rest) {
+    give "!"
+  }
+  when db_find(rest, 0, 42) < len(rest) {
+    give "!"
+  }
+  when db_find(rest, 0, 45) < len(rest) {
+    give "!"
+  }
+  hold lv = db_operand(db_sub(expr, 0, at), table, r, cols)
+  hold rv = db_operand(rest, table, r, cols)
+  when string_eq(lv, "!") == 1 or string_eq(rv, "!") == 1 {
+    give "!"
+  }
+  hold a = db_int(lv, 0)
+  hold b = db_int(rv, 0)
+  when op == 43 {
+    give db_istr(a + b)
+  }
+  when op == 45 {
+    give db_istr(a - b)
+  }
+  give db_istr(a * b)
+}
+
+// Resolve a query value against the current row: a leading `~` compiles the rest
+// as an expression, otherwise the text is the literal value.
+make db_value_for(val: str, table: str, r: num, cols: num) -> str {
+  when len(val) > 0 and sx_index(val, 0) == 126 {
+    give db_expr(db_sub(val, 1, len(val)), table, r, cols)
+  }
+  give val
+}
+
+// 1 match, 0 no match, -1 unknown operator.
+make db_match(op: str, cell: str, val: str) -> num {
+  when string_eq(op, "=") == 1 {
+    when string_eq(cell, val) == 1 {
+      give 1
+    }
+    give 0
+  }
+  when string_eq(op, "==") == 1 {
+    when string_eq(cell, val) == 1 {
+      give 1
+    }
+    give 0
+  }
+  when string_eq(op, "!=") == 1 {
+    when string_eq(cell, val) == 0 {
+      give 1
+    }
+    give 0
+  }
+  when string_eq(op, "<>") == 1 {
+    when string_eq(cell, val) == 0 {
+      give 1
+    }
+    give 0
+  }
+  when string_eq(op, ">") == 1 {
+    when db_order_cmp(cell, val) > 0 {
+      give 1
+    }
+    give 0
+  }
+  when string_eq(op, ">=") == 1 {
+    when db_order_cmp(cell, val) >= 0 {
+      give 1
+    }
+    give 0
+  }
+  when string_eq(op, "<") == 1 {
+    when db_order_cmp(cell, val) < 0 {
+      give 1
+    }
+    give 0
+  }
+  when string_eq(op, "<=") == 1 {
+    when db_order_cmp(cell, val) <= 0 {
+      give 1
+    }
+    give 0
+  }
+  when string_eq(op, "has") == 1 {
+    give db_has(cell, val)
+  }
+  when string_eq(op, "^") == 1 {
+    give db_prefix(cell, val)
+  }
+  when string_eq(op, "$") == 1 {
+    give db_suffix(cell, val)
+  }
+  give 0 - 1
+}
+
+make db_row_matches(q: str, table: str, r: num, cols: num) -> num {
+  hold c = db_query_col(q)
+  when c < 0 or c >= cols {
+    give 0 - 1
+  }
+  hold val = db_value_for(db_query_val(q), table, r, cols)
+  when string_eq(val, "!") == 1 {
+    give 0 - 1
+  }
+  give db_match(db_query_op(q), db_field(table, 2 + r * cols + c), val)
+}
+
+// Cursor = the first matching row. A valid query that matches nothing still
+// returns a state (empty cursor); a malformed one returns "".
+make db_where(state: str, q: str) -> str {
+  give db_select(state, q, 1)
+}
+
+// Cursor = every matching row, at most 8.
+make db_where_n(state: str, q: str) -> str {
+  give db_select(state, q, 0)
+}
+
+make db_select(state: str, q: str, first_only: num) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 or len(q) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  hold out = ""
+  hold hits = 0
+  hold r = 0
+  while r < count {
+    hold hit = db_row_matches(q, table, r, cols)
+    when hit < 0 {
+      give ""
+    }
+    when hit == 1 {
+      when hits > 0 {
+        out = concat(out, ",")
+      }
+      out = concat(out, db_istr(r))
+      hits = hits + 1
+      when hits > 8 {
+        give ""
+      }
+      when first_only == 1 {
+        give db_state(table, out, db_sort_col(state))
+      }
+    }
+    r = r + 1
+  }
+  give db_state(table, out, db_sort_col(state))
+}
+
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
+
+make db_get(state: str, r: num, c: num) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  when r < 0 or r >= count or c < 0 or c >= cols {
+    give ""
+  }
+  give db_field(table, 2 + r * cols + c)
+}
+
+// A cell as a number. "" and non-numeric text read as 0 so arithmetic over a
+// sparse table cannot fail at runtime; `db_cell_num` reports the distinction.
+make db_get_n(state: str, r: num, c: num) -> num {
+  give db_int(db_get(state, r, c), 0)
+}
+
+// 1 when row r, column c holds a decimal number.
+make db_cell_num(state: str, r: num, c: num) -> num {
+  give db_digits(db_get(state, r, c))
+}
+
+make db_hits(state: str) -> str {
+  give db_cursor(state)
+}
+
+make db_hit(state: str) -> num {
+  hold cursor = db_cursor(state)
+  when len(cursor) == 0 {
+    give 0 - 1
+  }
+  hold end = db_find(cursor, 0, 44)
+  give db_int(db_sub(cursor, 0, end), 0 - 1)
+}
+
+make db_count(state: str) -> num {
+  give db_frame_count(db_table(state))
+}
+
+make db_cols(state: str) -> num {
+  give db_frame_cols(db_table(state))
+}
+
+// 1 when `state` is a well formed table state.
+make db_ok(state: str) -> num {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give 0
+  }
+  give 1
+}
+
+// ---------------------------------------------------------------------------
+// Projection, sort, serialisation
+// ---------------------------------------------------------------------------
+
+// A new table holding only the listed columns, in the listed order. The list is
+// comma separated column indices; a repeated index duplicates a column, which is
+// how `db_project(s, "1,0,1")` builds a reordered and repeated shape.
+make db_project(state: str, list: str) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  hold picks = []
+  hold pos = 0
+  hold n = len(list)
+  while pos <= n {
+    hold end = db_find(list, pos, 44)
+    hold one = db_int(db_sub(list, pos, end), 0 - 1)
+    when one < 0 or one >= cols {
+      give ""
+    }
+    picks = push(picks, one)
+    pos = end + 1
+  }
+  hold kept = len(picks)
+  when kept < 1 {
+    give ""
+  }
+  hold out = ""
+  hold r = 0
+  while r < count {
+    hold k = 0
+    while k < kept {
+      out = concat(out, db_field(table, 2 + r * cols + picks[k]))
+      out = concat(out, chr(31))
+      k = k + 1
+    }
+    r = r + 1
+  }
+  hold head = concat(db_istr(count), concat(chr(31), concat(db_istr(kept), chr(31))))
+  give db_state(concat(head, out), "", 0)
+}
+
+// Ascending sort by column `c`, stable, as a new table. The cursor is cleared so a
+// sorted table cannot be fed into `db_update`/`db_delete` and hit every row by
+// accident. Insertion sort over an index list keeps this quadratic but bounded
+// (4096 rows) and representation-free -- `push` is numeric, so a list of rows is
+// not available to sort in place, which is why the row cap for a sort is 128.
+make db_sort(state: str, c: num) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  when c < 0 or c >= cols {
+    give ""
+  }
+  when count > 128 {
+    give ""
+  }
+  hold order = []
+  hold r = 0
+  while r < count {
+    hold key = db_field(table, 2 + r * cols + c)
+    hold at = len(order)
+    while at > 0 and db_order_cmp(db_field(table, 2 + order[at - 1] * cols + c), key) > 0 {
+      at = at - 1
+    }
+    hold list = []
+    hold i = 0
+    while i < at {
+      list = push(list, order[i])
+      i = i + 1
+    }
+    list = push(list, r)
+    i = at
+    while i < len(order) {
+      list = push(list, order[i])
+      i = i + 1
+    }
+    order = list
+    r = r + 1
+  }
+  hold out = ""
+  hold i2 = 0
+  while i2 < len(order) {
+    hold k = 0
+    while k < cols {
+      out = concat(out, db_field(table, 2 + order[i2] * cols + k))
+      out = concat(out, chr(31))
+      k = k + 1
+    }
+    i2 = i2 + 1
+  }
+  hold head = concat(db_istr(count), concat(chr(31), concat(db_istr(cols), chr(31))))
+  give db_state(concat(head, out), "", 0)
+}
+
+// The packed row form: one "a,b,c" line per row, no trailing newline.
+make db_rows(state: str) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  hold out = ""
+  hold r = 0
+  while r < count {
+    when r > 0 {
+      out = concat(out, chr(10))
+    }
+    hold k = 0
+    while k < cols {
+      when k > 0 {
+        out = concat(out, ",")
+      }
+      out = concat(out, db_field(table, 2 + r * cols + k))
+      k = k + 1
+    }
+    r = r + 1
+  }
+  give out
+}
+
+// Build a table from the packed row form. Empty lines are skipped; a row whose
+// width differs from `cols` refuses the whole import (""), so a truncated file
+// cannot silently produce a short table.
+make db_from_rows(rows: str, cols: num) -> str {
+  when cols < 1 or cols > 64 {
+    give ""
+  }
+  hold state = db_new(cols)
+  hold n = len(rows)
+  hold pos = 0
+  while pos <= n {
+    hold end = db_find(rows, pos, 10)
+    hold line = db_sub(rows, pos, end)
+    when len(line) > 0 {
+      state = db_insert(state, line)
+      when len(state) == 0 {
+        give ""
+      }
+    }
+    pos = end + 1
+  }
+  give state
+}
+
+make db_table_frame(state: str) -> str {
+  give db_table(state)
+}
+
+// The whole state, for `write_file`; `db_frame_table` reads it back.
+make db_frame(state: str) -> str {
+  give db_state(db_table(state), db_cursor(state), db_sort_col(state))
+}
+
+make db_frame_table(frame: str) -> str {
+  hold table = db_table(frame)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  give db_state(table, db_cursor(frame), db_sort_col(frame))
+}

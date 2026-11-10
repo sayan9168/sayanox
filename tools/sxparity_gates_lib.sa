@@ -3,6 +3,7 @@ use "tools/sxport_lib.sa"
 
 make ep_known(name: str) -> num {
   when string_eq(name, "test-stdlib-next") == 1 || string_eq(name, "test-stdlib-csv") == 1 || string_eq(name, "test-stdlib-extended") == 1 || string_eq(name, "test-ir-exec") == 1 { give 1 }
+  when string_eq(name, "test-stdlib-store") == 1 { give 1 }
   give 0
 }
 
@@ -141,6 +142,7 @@ make ep_run(name: str, built: list) -> num {
   hold baseline = rt_baseline(built)
   when string_eq(name, "test-stdlib-next") == 1 { give ep_next() }
   when string_eq(name, "test-stdlib-csv") == 1 { give ep_csv() }
+  when string_eq(name, "test-stdlib-store") == 1 { give ep_store() }
   hold ir = target_native_tool("sxirexec")
   hold emitter = target_native_tool("emit_to_ir")
   when string_eq(name, "test-stdlib-extended") == 1 { give ep_extended() }
@@ -165,5 +167,49 @@ make ep_csv() -> num {
   hold done = ep_has_line(concat(dir, "/program0.out"), "csv-done")
   hold alone = ep_snippet("use \"stdlib/csv.sa\"\nshow csv_count(csv_parse_row(\"x,y\"))\nshow csv_is_valid_row(\"a,b\")\nshow csv_is_valid_row(concat(chr(34), \"a,b\"))\n", "2\n1\n0", concat(dir, "/alone"))
   hold coexist = ep_snippet("use \"stdlib/csv.sa\"\nuse \"stdlib/str_text.sa\"\nshow csv_at(csv_parse_row(\"p,q\"), 1)\nshow t_trim(\"  hi  \" )\n", "q\nhi", concat(dir, "/coexist"))
+  give 0
+}
+
+// stdlib/store.sa and stdlib/store_index.sa: the relational store and its derived
+// indexes. Every backend must reproduce the independently computed oracle byte for
+// byte, and the seed, gen2 and native AOT outputs must agree with each other, so a
+// silently divergent cell or key layout cannot pass by matching only the oracle.
+make ep_store() -> num {
+  hold dir = "selfhost/seed_tests/stdlib_store"
+  hold created = gl_ensure_dir(dir)
+  hold index = 0
+  while index < 3 {
+    hold module = "store"
+    when index == 1 { module = "store_index" }
+    when index == 2 { module = "store_rel" }
+    hold source = concat(concat("selfhost/stdlib_", module), "_test.sa")
+    hold oracle = concat(concat("selfhost/stdlib_", module), ".want")
+    hold expected = bt_require_file(oracle)
+    hold kind = 0
+    while kind < 3 {
+      hold bin = concat(concat(concat(dir, "/"), module), gl_istr(kind))
+      hold c = ep_compile(kind, source, bin)
+      hold r = pg_capture(sh_quote(bin), concat(bin, ".out"))
+      hold a = gl_assert_files_eq(concat(bin, ".out"), oracle, concat(concat(module, " independently computed oracle (kind "), concat(gl_istr(kind), ")")))
+      when kind > 0 {
+        hold parity = gl_assert_files_eq(concat(concat(concat(dir, "/"), module), "0.out"), concat(bin, ".out"), concat(concat(module, " backend parity (kind "), concat(gl_istr(kind), ")")))
+      }
+      kind = kind + 1
+    }
+    index = index + 1
+  }
+  hold done = ep_has_line(concat(dir, "/store0.out"), "store-done")
+  hold done_index = ep_has_line(concat(dir, "/store_index0.out"), "store-index-done")
+  hold done_rel = ep_has_line(concat(dir, "/store_rel0.out"), "store-rel-done")
+  // The modules have to survive being imported alone, without the fixture's other
+  // imports, and next to unrelated modules in one program.
+  hold alone = ep_snippet("use \"stdlib/store.sa\"\nhold t = db_insert(db_new(2), \"1,Ana\")\nshow db_istr(db_count(t))\nshow db_hits(db_where_n(t, \"0:=:1\"))\nshow db_get(t, db_hit(db_where(t, \"1:has:na\")), 1)\n", "1\n0\nAna", concat(dir, "/alone"))
+  hold coexist = ep_snippet("use \"stdlib/store.sa\"\nuse \"stdlib/csv.sa\"\nuse \"stdlib/hash.sa\"\nhold t = db_insert(db_new(2), \"7,zed\")\nshow db_rows(db_project(t, \"0\"))\nshow csv_count(csv_parse_row(\"x,y\"))\nshow db_istr(sh_adler32(\"Wiki\"))\n", "7\n2\n64618901", concat(dir, "/coexist"))
+  // The index module depends on the store, so it is checked in one program that
+  // imports both, and the index answer must equal the scan answer.
+  hold indexed = ep_snippet("use \"stdlib/store.sa\"\nuse \"stdlib/store_index.sa\"\nhold t = db_insert(db_insert(db_new(2), \"1,a\"), \"2,b\")\nhold ix = ix_hash_build(t, 0)\nhold ord = ix_ordered_build(t, 0)\nshow ix_rows_for(ix, t, \"2\")\nshow db_hits(db_where_n(t, \"0:=:2\"))\nshow ix_range(ord, t, \">=\", \"2\")\nshow ix_summary(ix)\n", "1\n1\n1\nkind=1 keys=2", concat(dir, "/alone_index"))
+  // The relational module needs the store, and its join/group answers must agree
+  // with the single-table reads they replace.
+  hold rel = ep_snippet("use \"stdlib/store.sa\"\nuse \"stdlib/store_rel.sa\"\nhold t = db_insert(db_insert(db_new(2), \"1,a\"), \"2,b\")\nhold u = db_insert(db_insert(db_new(2), \"a,x\"), \"b,y\")\nshow db_rows(sr_join(t, 1, u, 0))\nshow db_rows(sr_group_count(t, 1))\nshow db_istr(sr_same_rows(t, t))\n", "1,a,a,x\n2,b,b,y\na,1\nb,1\n1", concat(dir, "/alone_rel"))
   give 0
 }

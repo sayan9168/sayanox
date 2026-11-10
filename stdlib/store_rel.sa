@@ -1,0 +1,868 @@
+// stdlib/store_rel.sa -- joins, grouping and set operations over
+// `stdlib/store.sa` tables (prefix `sr_`), written in portable Sayanox.
+//
+// Import `stdlib/store.sa` before this module. Everything here is a pure function
+// from tables to tables: no table is mutated, and every result is a new table in
+// the same frame format, so it can be fed straight back into `db_project`,
+// `db_sort`, `db_rows`, or another `sr_` call.
+//
+// ---------------------------------------------------------------------------
+// What this adds to the store
+// ---------------------------------------------------------------------------
+//
+// `stdlib/store.sa` answers single-table questions. This module answers the
+// questions that need two tables or a grouping pass:
+//
+//     sr_join(left, lcol, right, rcol)          inner join, left-major
+//     sr_left_join(left, lcol, right, rcol)     with NULL row for unmatched keys
+//     sr_group_count(table, col)                distinct keys and their counts
+//     sr_group_sum(table, key_col, val_col)     distinct keys and sums
+//     sr_group_min/max/avg(table, key_col, val) per group
+//     sr_distinct(table, col)                   the distinct keys, in table order
+//     sr_union(a, b)                            concatenation, duplicates kept
+//     sr_intersect(a, b)                        rows of `a` also present in `b`
+//     sr_except(a, b)                           rows of `a` absent from `b`
+//     sr_union_all(a, b)                        alias of sr_union, kept explicit
+//
+// A join takes the two column indexes, not column names: the store has no header
+// row, so a "name" would be a caller convention the module cannot check.
+//
+// ---------------------------------------------------------------------------
+// Semantics that matter
+// ---------------------------------------------------------------------------
+//
+//   * Keys match on exact bytes. `"42"` and `"042"` are different keys here even
+//     though the store's ordering predicates consider them numerically equal --
+//     matching is equality, and equality is byte equality.
+//   * A NULL key (an empty cell) matches only another NULL key. It does not match
+//     everything, and it does not match nothing: a left join pairs NULL keys.
+//   * `sr_join` emits all left fields followed by all right fields, one row per
+//     matching pair, in left-major then right-major order. With no matches the
+//     result has the combined width and zero rows.
+//   * `sr_left_join` emits an all-NULL right half for an unmatched left row, so
+//     the result width never varies. That is what makes the output safe to feed
+//     into `db_project` with a fixed column list.
+//   * `sr_union` is concatenation, not SQL UNION DISTINCT: duplicates survive, and
+//     `sr_distinct_rows` is the way to remove them. `sr_intersect` and `sr_except`
+//     likewise keep duplicates from the left side, so they are the ALL variants.
+//   * Grouping preserves first-seen key order, so a fixture is stable without a
+//     sort (sort the result with `db_sort` if you want key order).
+//   * `sr_group_avg` is integer division of the exact sum by the count, reported
+//     with the remainder so a caller can see the truncation instead of guessing:
+//     the value column holds `quotient` and a companion `sr_group_remainder`
+//     reports the remainder column.
+//
+// Bounds match the store: 64 columns per input, 4096 rows per input, 1024-byte
+// cells. A join result is capped at 4096 rows and 64 output columns, which is
+// reachable with a small table on both sides, so a cartesian product of two wide
+// tables is refused rather than materialised. Every refusal returns "".
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+make sr_us() -> num {
+  give 31
+}
+
+make sr_comma() -> num {
+  give 44
+}
+
+make sr_at(s: str, i: num) -> num {
+  when i < 0 or i >= len(s) {
+    give 0 - 1
+  }
+  give sx_index(s, i)
+}
+
+make sr_istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold n = v
+  when n < 0 {
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when v < 0 {
+    give concat("-", out)
+  }
+  give out
+}
+
+make sr_digits(s: str) -> num {
+  when len(s) == 0 {
+    give 0
+  }
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c < 48 or c > 57 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make sr_int(s: str, fallback: num) -> num {
+  when sr_digits(s) == 0 {
+    give fallback
+  }
+  hold v = 0
+  hold i = 0
+  while i < len(s) {
+    v = v * 10 + (sx_index(s, i) - 48)
+    i = i + 1
+  }
+  give v
+}
+
+make sr_find(s: str, from: num, want: num) -> num {
+  hold i = from
+  while i < len(s) {
+    when sx_index(s, i) == want {
+      give i
+    }
+    i = i + 1
+  }
+  give len(s)
+}
+
+make sr_sub(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  hold lo = a
+  when lo < 0 {
+    lo = 0
+  }
+  hold hi = b
+  when hi > n {
+    hi = n
+  }
+  when lo >= hi {
+    give ""
+  }
+  hold out = ""
+  hold i = lo
+  while i < hi {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// 1 when `k` can be compared as a join or group key: any byte except the two
+// structural separators the store and this module use inside a frame.
+make sr_key_ok(k: str) -> num {
+  when len(k) > 1024 {
+    give 0
+  }
+  hold i = 0
+  while i < len(k) {
+    hold c = sx_index(k, i)
+    when c == 30 or c == 31 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// ---------------------------------------------------------------------------
+// Row assembly
+// ---------------------------------------------------------------------------
+
+// Append fields `from`..`from+count-1` of `table` to `out`, US terminated.
+make sr_append_cells(table: str, from: num, count: num, out: str) -> str {
+  hold k = 0
+  while k < count {
+    out = concat(out, db_field(table, from + k))
+    out = concat(out, chr(31))
+    k = k + 1
+  }
+  give out
+}
+
+// Append `count` NULL (empty) cells to `out`.
+make sr_append_nulls(count: num, out: str) -> str {
+  hold k = 0
+  while k < count {
+    out = concat(out, chr(31))
+    k = k + 1
+  }
+  give out
+}
+
+// `out` holds `count` rows of `cols` cells each, US terminated, with no header.
+// Wrap it as a table frame, or "" when the shape is impossible.
+make sr_wrap(cells: str, count: num, cols: num) -> str {
+  when cols < 1 or cols > 64 or count < 0 or count > 4096 {
+    give ""
+  }
+  hold want = count * cols
+  hold got = 0
+  hold i = 0
+  while i < len(cells) {
+    when sx_index(cells, i) == 31 {
+      got = got + 1
+    }
+    i = i + 1
+  }
+  when got != want {
+    give ""
+  }
+  hold table = concat(db_istr(count), concat(chr(31), concat(db_istr(cols), chr(31))))
+  give db_frame_table(concat(table, cells))
+}
+
+// Is row `r` of `table` byte-identical to row `rr` of `other` (same width)?
+make sr_row_eq(table: str, r: num, other: str, rr: num, cols: num) -> num {
+  hold k = 0
+  while k < cols {
+    when string_eq(db_field(table, 2 + r * cols + k), db_field(other, 2 + rr * cols + k)) == 0 {
+      give 0
+    }
+    k = k + 1
+  }
+  give 1
+}
+
+// Does the row run `run` (the thing `sr_append_cells` builds) hold a row equal to
+// `cells`, comparing `cols` fields? Both are runs, not table frames, so both start
+// at field 0 -- the offset is a parameter rather than a convention, which is what
+// an earlier version of this helper got wrong when one side was a frame.
+make sr_run_has_cells(run: str, cells: str, cols: num, count: num) -> num {
+  hold r = 0
+  while r < count {
+    hold same = 1
+    hold k = 0
+    while k < cols {
+      when string_eq(db_field(run, r * cols + k), db_field(cells, k)) == 0 {
+        same = 0
+      }
+      k = k + 1
+    }
+    when same == 1 {
+      give 1
+    }
+    r = r + 1
+  }
+  give 0
+}
+
+// Does table frame `frame` hold a row equal to the row run `cells`? Absent when
+// the frame is not a frame.
+make sr_frame_has_cells(frame: str, cells: str, cols: num, count: num) -> num {
+  hold r = 0
+  while r < count {
+    hold same = 1
+    hold k = 0
+    while k < cols {
+      when string_eq(db_field(frame, 2 + r * cols + k), db_field(cells, k)) == 0 {
+        same = 0
+      }
+      k = k + 1
+    }
+    when same == 1 {
+      give 1
+    }
+    r = r + 1
+  }
+  give 0
+}
+
+// Accept either a bare table frame or a store state (the thing `db_insert` and
+// `db_where` return): `db_table` strips the state suffix and leaves a frame alone.
+// Callers therefore never have to remember which one they are holding.
+make sr_table(t: str) -> str {
+  give db_table(t)
+}
+
+make sr_input_ok(table: str, col: num) -> num {
+  when db_frame_ok(table) == 0 {
+    give 0
+  }
+  when col < 0 or col >= db_frame_cols(table) {
+    give 0
+  }
+  give 1
+}
+
+// ---------------------------------------------------------------------------
+// Joins
+// ---------------------------------------------------------------------------
+
+// Inner join on exact key bytes. Emits all left cells then all right cells, one
+// row per matching pair, left-major.
+make sr_join(left: str, lcol: num, right: str, rcol: num) -> str {
+  hold lt = sr_table(left)
+  hold rt = sr_table(right)
+  when sr_input_ok(lt, lcol) == 0 or sr_input_ok(rt, rcol) == 0 {
+    give ""
+  }
+  hold lc = db_frame_cols(lt)
+  hold rc = db_frame_cols(rt)
+  when lc + rc > 64 {
+    give ""
+  }
+  hold ln = db_frame_count(lt)
+  hold rn = db_frame_count(rt)
+  hold cells = ""
+  hold rows = 0
+  hold i = 0
+  while i < ln {
+    hold key = db_field(lt, 2 + i * lc + lcol)
+    hold j = 0
+    while j < rn {
+      when string_eq(key, db_field(rt, 2 + j * rc + rcol)) == 1 {
+        rows = rows + 1
+        when rows > 4096 {
+          give ""
+        }
+        cells = sr_append_cells(lt, 2 + i * lc, lc, cells)
+        cells = sr_append_cells(rt, 2 + j * rc, rc, cells)
+      }
+      j = j + 1
+    }
+    i = i + 1
+  }
+  give sr_wrap(cells, rows, lc + rc)
+}
+
+// Left outer join: every left row appears at least once, with an all-NULL right
+// half when it has no match, so the result width is always lc + rc.
+make sr_left_join(left: str, lcol: num, right: str, rcol: num) -> str {
+  hold lt = sr_table(left)
+  hold rt = sr_table(right)
+  when sr_input_ok(lt, lcol) == 0 or sr_input_ok(rt, rcol) == 0 {
+    give ""
+  }
+  hold lc = db_frame_cols(lt)
+  hold rc = db_frame_cols(rt)
+  when lc + rc > 64 {
+    give ""
+  }
+  hold ln = db_frame_count(lt)
+  hold rn = db_frame_count(rt)
+  hold cells = ""
+  hold rows = 0
+  hold i = 0
+  while i < ln {
+    hold key = db_field(lt, 2 + i * lc + lcol)
+    hold matched = 0
+    hold j = 0
+    while j < rn {
+      when string_eq(key, db_field(rt, 2 + j * rc + rcol)) == 1 {
+        matched = 1
+        rows = rows + 1
+        when rows > 4096 {
+          give ""
+        }
+        cells = sr_append_cells(lt, 2 + i * lc, lc, cells)
+        cells = sr_append_cells(rt, 2 + j * rc, rc, cells)
+      }
+      j = j + 1
+    }
+    when matched == 0 {
+      rows = rows + 1
+      when rows > 4096 {
+        give ""
+      }
+      cells = sr_append_cells(lt, 2 + i * lc, lc, cells)
+      cells = sr_append_nulls(rc, cells)
+    }
+    i = i + 1
+  }
+  give sr_wrap(cells, rows, lc + rc)
+}
+
+// ---------------------------------------------------------------------------
+// Grouping
+// ---------------------------------------------------------------------------
+
+// Distinct keys of `col` in first-seen order, one column, one row per key.
+make sr_distinct(table: str, col: num) -> str {
+  hold tb = sr_table(table)
+  when sr_input_ok(tb, col) == 0 {
+    give ""
+  }
+  hold cols = db_frame_cols(tb)
+  hold count = db_frame_count(tb)
+  hold seen = ""
+  hold keys = 0
+  hold cells = ""
+  hold r = 0
+  while r < count {
+    hold key = db_field(tb, 2 + r * cols + col)
+    when sr_seen_index(seen, key) < 0 {
+      keys = keys + 1
+      when keys > 4096 {
+        give ""
+      }
+      seen = concat(seen, concat(key, chr(31)))
+      cells = concat(cells, concat(key, chr(31)))
+    }
+    r = r + 1
+  }
+  give sr_wrap(cells, keys, 1)
+}
+
+// Position of `key` in a US-delimited key run, -1 when absent.
+make sr_seen_index(seen: str, key: str) -> num {
+  hold pos = 0
+  hold idx = 0
+  while pos < len(seen) {
+    hold end = sr_find(seen, pos, 31)
+    when string_eq(sr_sub(seen, pos, end), key) == 1 {
+      give idx
+    }
+    idx = idx + 1
+    pos = end + 1
+  }
+  give 0 - 1
+}
+
+// How many rows hold each distinct key of `col`, in first-seen order. Columns:
+// key, count.
+make sr_group_count(table: str, col: num) -> str {
+  hold tb = sr_table(table)
+  when sr_input_ok(tb, col) == 0 {
+    give ""
+  }
+  hold cols = db_frame_cols(tb)
+  hold count = db_frame_count(tb)
+  hold keys = ""
+  hold tallies = ""
+  hold r = 0
+  while r < count {
+    hold key = db_field(tb, 2 + r * cols + col)
+    hold at = sr_seen_index(keys, key)
+    when at < 0 {
+      keys = concat(keys, concat(key, chr(31)))
+      tallies = concat(tallies, concat("1", chr(31)))
+    } otherwise {
+      tallies = sr_bump(tallies, at)
+    }
+    r = r + 1
+  }
+  hold groups = 0
+  hold cells = ""
+  hold pos = 0
+  while pos < len(keys) {
+    hold end = sr_find(keys, pos, 31)
+    cells = concat(cells, sr_sub(keys, pos, end))
+    cells = concat(cells, chr(31))
+    cells = concat(cells, db_field(tallies, groups))
+    cells = concat(cells, chr(31))
+    groups = groups + 1
+    pos = end + 1
+  }
+  when groups > 4096 {
+    give ""
+  }
+  give sr_wrap(cells, groups, 2)
+}
+
+// Add one to field `at` of a US run of decimal counts.
+make sr_bump(run: str, at: num) -> str {
+  hold n = len(run)
+  hold pos = 0
+  hold idx = 0
+  while pos < n {
+    hold end = sr_find(run, pos, 31)
+    when idx == at {
+      hold v = sr_int(sr_sub(run, pos, end), 0) + 1
+      give concat(sr_sub(run, 0, pos), concat(sr_istr(v), sr_sub(run, end, n)))
+    }
+    idx = idx + 1
+    pos = end + 1
+  }
+  give run
+}
+
+// The value column kind used by the aggregates: 1 when every non-empty cell of
+// `col` is a decimal number, 0 otherwise. An aggregate over text is refused, so a
+// SUM over names cannot silently add zeros.
+make sr_numeric_col(table: str, col: num) -> num {
+  hold cols = db_frame_cols(table)
+  hold count = db_frame_count(table)
+  hold r = 0
+  while r < count {
+    hold cell = db_field(table, 2 + r * cols + col)
+    when len(cell) > 0 and sr_digits(cell) == 0 {
+      give 0
+    }
+    r = r + 1
+  }
+  give 1
+}
+
+// Per-group sum of `val` over `key`. Columns: key, sum. A NULL value counts as 0
+// but does not remove the group, so a group of all NULLs reports 0.
+make sr_group_sum(table: str, key: num, val: num) -> str {
+  hold tb = sr_table(table)
+  when sr_input_ok(tb, key) == 0 or sr_input_ok(tb, val) == 0 {
+    give ""
+  }
+  when sr_numeric_col(tb, val) == 0 {
+    give ""
+  }
+  hold cols = db_frame_cols(tb)
+  hold count = db_frame_count(tb)
+  hold keys = ""
+  hold sums = ""
+  hold r = 0
+  while r < count {
+    hold k = db_field(tb, 2 + r * cols + key)
+    hold v = sr_int(db_field(tb, 2 + r * cols + val), 0)
+    hold at = sr_seen_index(keys, k)
+    when at < 0 {
+      keys = concat(keys, concat(k, chr(31)))
+      sums = concat(sums, concat(sr_istr(v), chr(31)))
+    } otherwise {
+      sums = sr_add_at(sums, at, v)
+    }
+    r = r + 1
+  }
+  hold groups = 0
+  hold cells = ""
+  hold pos = 0
+  while pos < len(keys) {
+    hold end = sr_find(keys, pos, 31)
+    cells = concat(cells, sr_sub(keys, pos, end))
+    cells = concat(cells, chr(31))
+    cells = concat(cells, db_field(sums, groups))
+    cells = concat(cells, chr(31))
+    groups = groups + 1
+    pos = end + 1
+  }
+  give sr_wrap(cells, groups, 2)
+}
+
+// Add `v` to field `at` of a US run of decimal numbers.
+make sr_add_at(run: str, at: num, v: num) -> str {
+  hold n = len(run)
+  hold pos = 0
+  hold idx = 0
+  while pos < n {
+    hold end = sr_find(run, pos, 31)
+    when idx == at {
+      hold sum = sr_int(sr_sub(run, pos, end), 0) + v
+      give concat(sr_sub(run, 0, pos), concat(sr_istr(sum), sr_sub(run, end, n)))
+    }
+    idx = idx + 1
+    pos = end + 1
+  }
+  give run
+}
+
+// Per-group minimum of `val`. Columns: key, min. The first value of a group seeds
+// it, so an all-NULL group reports NULL ("") rather than 0.
+make sr_group_min(table: str, key: num, val: num) -> str {
+  hold tb = sr_table(table)
+  when sr_input_ok(tb, key) == 0 or sr_input_ok(tb, val) == 0 {
+    give ""
+  }
+  when sr_numeric_col(tb, val) == 0 {
+    give ""
+  }
+  hold cols = db_frame_cols(tb)
+  hold count = db_frame_count(tb)
+  hold keys = ""
+  hold best = ""
+  hold seeded = ""
+  hold r = 0
+  while r < count {
+    hold k = db_field(tb, 2 + r * cols + key)
+    hold v = db_field(tb, 2 + r * cols + val)
+    hold at = sr_seen_index(keys, k)
+    when at < 0 {
+      keys = concat(keys, concat(k, chr(31)))
+      best = concat(best, concat(v, chr(31)))
+      seeded = concat(seeded, concat("1", chr(31)))
+    } otherwise {
+      when len(v) > 0 and (len(db_field(best, at)) == 0 or sr_int(v, 0) < sr_int(db_field(best, at), 0)) {
+        best = sr_set_at(best, at, v)
+      }
+    }
+    r = r + 1
+  }
+  give sr_zip_groups(keys, best)
+}
+
+// Per-group maximum of `val`. Columns: key, max.
+make sr_group_max(table: str, key: num, val: num) -> str {
+  hold tb = sr_table(table)
+  when sr_input_ok(tb, key) == 0 or sr_input_ok(tb, val) == 0 {
+    give ""
+  }
+  when sr_numeric_col(tb, val) == 0 {
+    give ""
+  }
+  hold cols = db_frame_cols(tb)
+  hold count = db_frame_count(tb)
+  hold keys = ""
+  hold best = ""
+  hold r = 0
+  while r < count {
+    hold k = db_field(tb, 2 + r * cols + key)
+    hold v = db_field(tb, 2 + r * cols + val)
+    hold at = sr_seen_index(keys, k)
+    when at < 0 {
+      keys = concat(keys, concat(k, chr(31)))
+      best = concat(best, concat(v, chr(31)))
+    } otherwise {
+      when len(v) > 0 and (len(db_field(best, at)) == 0 or sr_int(v, 0) > sr_int(db_field(best, at), 0)) {
+        best = sr_set_at(best, at, v)
+      }
+    }
+    r = r + 1
+  }
+  give sr_zip_groups(keys, best)
+}
+
+// Per-group integer average of `val`. Columns: key, quotient, remainder, count,
+// so the truncation is visible instead of rounded away.
+make sr_group_avg(table: str, key: num, val: num) -> str {
+  hold tb = sr_table(table)
+  when sr_input_ok(tb, key) == 0 or sr_input_ok(tb, val) == 0 {
+    give ""
+  }
+  when sr_numeric_col(tb, val) == 0 {
+    give ""
+  }
+  hold cols = db_frame_cols(tb)
+  hold count = db_frame_count(tb)
+  hold keys = ""
+  hold sums = ""
+  hold counts = ""
+  hold r = 0
+  while r < count {
+    hold k = db_field(tb, 2 + r * cols + key)
+    hold v = sr_int(db_field(tb, 2 + r * cols + val), 0)
+    hold at = sr_seen_index(keys, k)
+    when at < 0 {
+      keys = concat(keys, concat(k, chr(31)))
+      sums = concat(sums, concat(sr_istr(v), chr(31)))
+      counts = concat(counts, concat("1", chr(31)))
+    } otherwise {
+      sums = sr_add_at(sums, at, v)
+      counts = sr_bump(counts, at)
+    }
+    r = r + 1
+  }
+  hold groups = 0
+  hold cells = ""
+  hold pos = 0
+  while pos < len(keys) {
+    hold end = sr_find(keys, pos, 31)
+    hold total = sr_int(db_field(sums, groups), 0)
+    hold n = sr_int(db_field(counts, groups), 0)
+    hold q = 0
+    hold rem = 0
+    when n > 0 {
+      q = (total - total % n) / n
+      rem = total - q * n
+    }
+    cells = concat(cells, sr_sub(keys, pos, end))
+    cells = concat(cells, chr(31))
+    cells = concat(cells, sr_istr(q))
+    cells = concat(cells, chr(31))
+    cells = concat(cells, sr_istr(rem))
+    cells = concat(cells, chr(31))
+    cells = concat(cells, sr_istr(n))
+    cells = concat(cells, chr(31))
+    groups = groups + 1
+    pos = end + 1
+  }
+  give sr_wrap(cells, groups, 4)
+}
+
+// Set field `at` of a US run.
+make sr_set_at(run: str, at: num, v: str) -> str {
+  hold n = len(run)
+  hold pos = 0
+  hold idx = 0
+  while pos < n {
+    hold end = sr_find(run, pos, 31)
+    when idx == at {
+      give concat(sr_sub(run, 0, pos), concat(v, sr_sub(run, end, n)))
+    }
+    idx = idx + 1
+    pos = end + 1
+  }
+  give run
+}
+
+// Two equal-width runs of fields, zipped into a two column table.
+make sr_zip_groups(keys: str, values: str) -> str {
+  hold groups = 0
+  hold cells = ""
+  hold pos = 0
+  while pos < len(keys) {
+    hold end = sr_find(keys, pos, 31)
+    cells = concat(cells, sr_sub(keys, pos, end))
+    cells = concat(cells, chr(31))
+    cells = concat(cells, db_field(values, groups))
+    cells = concat(cells, chr(31))
+    groups = groups + 1
+    pos = end + 1
+  }
+  give sr_wrap(cells, groups, 2)
+}
+
+// ---------------------------------------------------------------------------
+// Set operations
+// ---------------------------------------------------------------------------
+
+// Concatenation of two tables of the same width. Row order is left then right.
+make sr_union(in_a: str, in_b: str) -> str {
+  hold ta = sr_table(in_a)
+  hold tb = sr_table(in_b)
+  when db_frame_ok(ta) == 0 or db_frame_ok(tb) == 0 {
+    give ""
+  }
+  hold ac = db_frame_cols(ta)
+  hold bc = db_frame_cols(tb)
+  when ac != bc {
+    give ""
+  }
+  hold an = db_frame_count(ta)
+  hold bn = db_frame_count(tb)
+  when an + bn > 4096 {
+    give ""
+  }
+  hold cells = ""
+  hold i = 0
+  while i < an {
+    cells = sr_append_cells(ta, 2 + i * ac, ac, cells)
+    i = i + 1
+  }
+  hold j = 0
+  while j < bn {
+    cells = sr_append_cells(tb, 2 + j * bc, bc, cells)
+    j = j + 1
+  }
+  give sr_wrap(cells, an + bn, ac)
+}
+
+// Rows of `a` that also appear in `b`, in left order. Duplicates in `a` are kept:
+// this is `INTERSECT ALL`, not `DISTINCT`, so a caller can count them.
+make sr_intersect(in_a: str, in_b: str) -> str {
+  hold ta = sr_table(in_a)
+  hold tb = sr_table(in_b)
+  when db_frame_ok(ta) == 0 or db_frame_ok(tb) == 0 {
+    give ""
+  }
+  hold ac = db_frame_cols(ta)
+  hold bc = db_frame_cols(tb)
+  when ac != bc {
+    give ""
+  }
+  hold an = db_frame_count(ta)
+  hold bn = db_frame_count(tb)
+  hold cells = ""
+  hold rows = 0
+  hold i = 0
+  while i < an {
+    hold row = sr_append_cells(ta, 2 + i * ac, ac, "")
+    when sr_frame_has_cells(tb, row, bc, bn) == 1 {
+      cells = concat(cells, row)
+      rows = rows + 1
+    }
+    i = i + 1
+  }
+  give sr_wrap(cells, rows, ac)
+}
+
+// Rows of `a` that do not appear in `b`, in left order.
+make sr_except(in_a: str, in_b: str) -> str {
+  hold ta = sr_table(in_a)
+  hold tb = sr_table(in_b)
+  when db_frame_ok(ta) == 0 or db_frame_ok(tb) == 0 {
+    give ""
+  }
+  hold ac = db_frame_cols(ta)
+  hold bc = db_frame_cols(tb)
+  when ac != bc {
+    give ""
+  }
+  hold an = db_frame_count(ta)
+  hold bn = db_frame_count(tb)
+  hold cells = ""
+  hold rows = 0
+  hold i = 0
+  while i < an {
+    hold row = sr_append_cells(ta, 2 + i * ac, ac, "")
+    when sr_frame_has_cells(tb, row, bc, bn) == 0 {
+      cells = concat(cells, row)
+      rows = rows + 1
+    }
+    i = i + 1
+  }
+  give sr_wrap(cells, rows, ac)
+}
+
+// Distinct rows of `a` (whole-row duplicates removed), first-seen order.
+make sr_distinct_rows(in_a: str) -> str {
+  hold ta = sr_table(in_a)
+  when db_frame_ok(ta) == 0 {
+    give ""
+  }
+  hold ac = db_frame_cols(ta)
+  hold an = db_frame_count(ta)
+  // `seen` holds earlier rows in the same field layout `cells` uses; comparing
+  // against `cells` itself would compare every row with the one appended just
+  // before it as the run grows, which is exactly the bug this shape avoids.
+  hold seen = ""
+  hold seen_rows = 0
+  hold cells = ""
+  hold rows = 0
+  hold i = 0
+  while i < an {
+    hold row = sr_append_cells(ta, 2 + i * ac, ac, "")
+    when sr_run_has_cells(seen, row, ac, seen_rows) == 0 {
+      seen = concat(seen, row)
+      seen_rows = seen_rows + 1
+      cells = concat(cells, row)
+      rows = rows + 1
+    }
+    i = i + 1
+  }
+  give sr_wrap(cells, rows, ac)
+}
+
+// 1 when the two tables hold the same rows, ignoring order and duplicates.
+make sr_same_rows(in_a: str, in_b: str) -> num {
+  hold ta = sr_table(in_a)
+  hold tb = sr_table(in_b)
+  when db_frame_ok(ta) == 0 or db_frame_ok(tb) == 0 {
+    give 0
+  }
+  when db_frame_cols(ta) != db_frame_cols(tb) {
+    give 0
+  }
+  hold da = sr_distinct_rows(ta)
+  hold dbb = sr_distinct_rows(tb)
+  when db_frame_count(da) != db_frame_count(dbb) {
+    give 0
+  }
+  hold ac = db_frame_cols(ta)
+  hold an = db_frame_count(da)
+  hold bn = db_frame_count(dbb)
+  hold i = 0
+  while i < an {
+    hold row = sr_append_cells(da, 2 + i * ac, ac, "")
+    when sr_frame_has_cells(dbb, row, ac, bn) == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}

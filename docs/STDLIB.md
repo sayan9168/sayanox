@@ -21,6 +21,9 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals | seed-min, gen2, native | `test-stdlib-csv` |
 | `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_query.sa` | stable CSV joins, distinct, sorting and exact decimal aggregates | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/store.sa` | in-memory relational store (`db_*`): typed table shape, `db_insert`, filtered `db_update`/`db_delete`, `db_project`, stable `db_sort`, comparison and text predicates, per-row arithmetic filters, and packed-row/frame round trips; 58 `make` definitions (21 public helpers plus the encoding and predicate helpers they are built on), every operation bounded and every refusal returning `""` | seed-min, gen2, native | `test-stdlib-store` |
+| `stdlib/store_index.sa` | derived indexes over `stdlib/store.sa` tables (`ix_*`): `ix_hash_build`/`ix_ordered_build`, exact-key `ix_lookup`/`ix_rows_for`/`ix_count_key`, binary-searched `ix_range`/`ix_between`, `ix_min_key`/`ix_max_key`/`ix_rows`, and staleness detection (`ix_stale`/`ix_valid`) that refuses to answer from a snapshot the table has outgrown; 43 `make` definitions | seed-min, gen2, native | `test-stdlib-store` |
+| `stdlib/store_rel.sa` | relational algebra over `stdlib/store.sa` tables (`sr_*`): `sr_join`/`sr_left_join` on exact keys, `sr_group_count`/`sr_group_sum`/`sr_group_min`/`sr_group_max`/`sr_group_avg` (integer average with visible remainder), `sr_distinct`/`sr_distinct_rows`, and `sr_union`/`sr_intersect`/`sr_except`/`sr_same_rows`; accepts table frames and store states alike; 36 `make` definitions | seed-min, gen2, native | `test-stdlib-store` |
 | `stdlib/url.sa` | percent-encoding/decoding (`surl_encode`, `surl_decode`, `surl_decode_ok`) and packed query strings (`surl_query_parse`, `surl_query_write`, `surl_query_push`, `surl_query_count`, `surl_query_key`, `surl_query_value`, `surl_query_get`, `surl_query_has`, `surl_query_empty`) | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/datetime.sa` | proleptic Gregorian calendar: `dt_is_leap`, `dt_days_in_month`, `dt_valid`, `dt_jdn`, `dt_from_jdn`, `dt_weekday`, `dt_weekday_name`, `dt_month_name`, `dt_day_of_year`, `dt_days_between`, `dt_add_days`, `dt_format`, `dt_parse`, `dt_istr` | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/hash.sa` | non-cryptographic checksums: `sh_sum_bytes`, `sh_is_digits`, `sh_poly`, `sh_djb2`, `sh_poly131`, `sh_sdbm`, `sh_adler32`, `sh_luhn_sum`, `sh_luhn_check_digit`, `sh_luhn_valid`, `sh_istr` | seed-min, gen2, native | `test-stdlib-next` |
@@ -250,6 +253,163 @@ quadratic or worse due to packed-string scans and should be used for small
 tables. They do not implement SQL or streaming. Tests exercise ordering, ties,
 ragged rows, invalid input, join expansion limits, exact large values and
 rounding on seed-min, gen2 and native via `test-stdlib-next`.
+
+## Relational store
+
+`stdlib/store.sa` is the database module: an in-memory relational store with
+insert, filtered update and delete, projection, sorting and predicates. It is
+independent of the CSV modules -- it does not parse CSV -- but it exchanges data
+with them through the same packed row form and can be written to a file as a
+single frame.
+
+```sayanox
+use "stdlib/store.sa"
+hold staff = db_insert(db_new(3), "1,Ada,36")
+staff = db_insert(staff, "2,Mina,41")
+hold older = db_where_n(staff, "2:>:38")
+show db_hits(older)                        // 1
+show db_get(staff, db_hit(older), 1)       // Mina
+show db_rows(db_update(older, 2, "42"))    // 1,Ada,36 then 2,Mina,42
+```
+
+* A table is one flat string: a row count, a column count and the cells in
+  row-major order, separated by `chr(31)`. `db_new(cols)` fixes the shape, so an
+  empty table still knows its column count, and `db_insert` refuses a row with
+  the wrong arity, an empty row, or a cell containing a separator byte, a newline,
+  a tab or a comma. Those refusals are what make every later scan unambiguous.
+* A query is `column:operator:value`. `=` and `!=` compare stored bytes, which
+  keeps identifiers exact; `<`, `<=`, `>` and `>=` compare numerically when both
+  sides are decimal numbers and bytewise otherwise, so `"9"` sorts below `"10"`
+  while names still sort by byte. `has`, `^` and `$` are byte-exact substring,
+  prefix and suffix tests -- there is no case folding and no Unicode awareness.
+* A value may start with `~` to name an arithmetic expression over the matching
+  row's own cells (`a` is its first cell, `b` its second): `2:>:~a+30` selects
+  rows whose third cell exceeds their first cell plus 30. Exactly one operator and
+  two operands are supported; a chained expression such as `~a+1+1` is refused
+  rather than given an invented precedence.
+* `db_where` selects the first matching row and `db_where_n` selects all of them.
+  The selection lives in the returned state (table, then `chr(30)`, then a
+  comma-separated row list, then `chr(30)`, then the sort column), so a filtered
+  result feeds straight back into `db_update`, `db_delete` or `db_project`. An
+  empty selection is a refusal, never a whole-table write: `db_update` and
+  `db_delete` on an unselected table return `""`.
+* `db_sort` returns a new table in ascending stable order and clears the
+  selection. `db_project` returns a new table with the listed column indexes in
+  the listed order, so a repeated index duplicates a column.
+* `db_rows` and `db_from_rows` convert to and from the `a,b,c` line per row form
+  used by `stdlib/csv_table.sa`; `db_table_frame` and `db_frame` produce strings
+  for `write_file`, and `db_frame_table` reads either back.
+
+Bounds are explicit and refusals are empty strings, so checking `len(x) == 0`
+is always safe: 64 columns, 4096 rows, 1024 bytes per cell, 8 selected rows (a
+ninth match refuses the query) and 128 rows for a sort, which is a stable
+insertion sort over string-encoded rows. Malformed queries, unknown operators
+and impossible column indexes are refused rather than answered wrongly; the
+fixture's 23 refusal lines pin each one.
+
+There is no persistence engine, no transactions, no secondary index, no wire
+protocol and no SQL parser: this is a bounded in-memory store for small
+datasets, and every operation rebuilds a string. The full 150-line fixture
+(`selfhost/stdlib_store_test.sa`) is compared byte for byte against
+`selfhost/stdlib_store.want`, an oracle computed by an independent Python
+implementation, on seed-min, gen2 and native via `test-stdlib-store`.
+
+## Derived indexes
+
+`stdlib/store_index.sa` builds indexes over a `stdlib/store.sa` table. Import
+`store.sa` first.
+
+```sayanox
+use "stdlib/store.sa"
+use "stdlib/store_index.sa"
+hold staff = db_insert(db_new(3), "1,Ada,36")
+staff = db_insert(staff, "2,Mina,41")
+staff = db_insert(staff, "3,Ada,29")
+hold by_name = ix_hash_build(staff, 1)
+show ix_rows_for(by_name, staff, "Ada")      // 0,2
+hold by_age = ix_ordered_build(staff, 2)
+show ix_range(by_age, staff, ">=", "36")     // 0,1  (key order, not table order)
+show ix_key_at(by_age, 0)                    // 29
+```
+
+* `ix_hash_build(table, col)` keeps one entry per distinct key with the rows
+  holding it, in first-seen order: `ix_lookup` returns the first such row, and
+  `ix_rows_for`/`ix_count_key` return all of them and their count. Keys repeat
+  freely, which is why a key maps to a row list rather than to a single row.
+* `ix_ordered_build(table, col)` keeps every row in ascending key order.
+  `ix_range(index, table, op, value)` binary-searches it for `=`, `>`, `>=`,
+  `<` and `<=`, and `ix_between(index, table, lo, hi)` answers an inclusive
+  range. Rows come back in **key order**, which is not the order `db_where_n`
+  reports; `parity.*` lines in the fixture pin the sets and the bounds both.
+* Ordering uses the store's own rule (numeric when both sides are numbers,
+  bytewise otherwise), so `"9"` orders below `"10"` and `"A"` before `"a"`. An
+  index and a scan therefore never disagree about what "greater" means.
+* An index is a **snapshot**: it records the table's row count, column count and
+  a folded byte sum. `ix_stale(index, table)` reports a mutation and
+  `ix_valid` is its inverse; every lookup, count and range on a stale index
+  returns `""` rather than a row number that no longer means anything. Rebuild
+  after a mutation instead of trusting the old index.
+* Bounds are the store's bounds plus an index-specific cap of 128 distinct keys
+  (hash) and 128 rows (ordered), because past that the bookkeeping costs more
+  than the scan it replaces. Keys may hold any byte except `chr(28)`-`chr(31)`;
+  an empty key is a legitimate entry for a NULL cell.
+* This is not a durable database index: there is no B-tree, no page layout, no
+  incremental maintenance, and no concurrency. Every build is a full pass, so it
+  pays off when one index answers many queries.
+
+`selfhost/stdlib_store_index_test.sa` (89 lines) is compared byte for byte
+against `selfhost/stdlib_store_index.want`, again computed from an independent
+Python reference, on seed-min, gen2 and native by `test-stdlib-store`.
+
+## Joins, grouping and set operations
+
+`stdlib/store_rel.sa` answers the questions that need two tables or a grouping
+pass. Import `store.sa` first; `store_index.sa` is independent of it.
+
+```sayanox
+use "stdlib/store.sa"
+use "stdlib/store_rel.sa"
+hold staff = db_insert(db_new(3), "1,Ada,10")
+staff = db_insert(staff, "4,Ravi,10")
+hold dept = db_insert(db_new(2), "10,eng")
+show db_rows(sr_join(staff, 2, dept, 0))       // 1,Ada,10,10,eng then 4,Ravi,10,10,eng
+show db_rows(sr_left_join(staff, 2, dept, 0))  // adds an unmatched row when there is one
+hold sales = db_insert(db_new(3), "eng,Ada,10")
+sales = db_insert(sales, "eng,Mina,20")
+show db_rows(sr_group_sum(sales, 0, 2))        // eng,30
+show db_rows(sr_group_avg(sales, 0, 2))        // eng,15,0,2
+```
+
+* **Keys match on exact bytes.** `"42"` and `"042"` are different keys even though
+  the store's ordering predicates call them numerically equal: matching is
+  equality, and equality here is byte equality. A NULL key (empty cell) matches
+  only another NULL key.
+* **`sr_join`** emits all left cells then all right cells, one row per matching
+  pair, left-major then right-major. **`sr_left_join`** emits an all-NULL right
+  half for an unmatched left row, so the output width never varies and a fixed
+  column list stays valid.
+* **Aggregates** report groups in first-seen key order. `sr_group_avg` returns
+  four columns — quotient, remainder, count — because the average is integer
+  division and hiding the truncation would be a lie. `sr_group_min`/`sr_group_max`
+  seed from the first non-NULL value, so an all-NULL group reports NULL rather
+  than 0, while `sr_group_sum` treats NULL as 0 and keeps the group.
+* **An aggregate over text is refused**, not evaluated: summing names would
+  silently add zeros. The whole call returns `""`.
+* **Set operations keep duplicates**: `sr_union` is concatenation, `sr_intersect`
+  and `sr_except` are the `ALL` variants that keep left-side duplicates, and
+  `sr_distinct_rows` removes whole-row duplicates in first-seen order.
+  `sr_same_rows` compares two tables ignoring order and duplicates.
+* **Frames and states both work.** Every function accepts what `db_insert` returns
+  (a state) and what `db_table_frame` returns (a bare frame); the fixture pins
+  that both give the same answer, so a caller never has to remember which one it
+  is holding.
+* A join result is capped at 4096 rows, so a cartesian product of two wide tables
+  is refused rather than materialised; 64 x 64 is inside the cap and produces
+  every pair.
+
+`selfhost/stdlib_store_rel_test.sa` (104 lines) is compared byte for byte against
+`selfhost/stdlib_store_rel.want`, computed from a third independent Python
+reference, on seed-min, gen2 and native by `test-stdlib-store`.
 
 ## Exact decimals in JSON
 

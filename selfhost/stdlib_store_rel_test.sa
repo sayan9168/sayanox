@@ -1,0 +1,173 @@
+use "stdlib/ai.sa"
+// stdlib/store_rel.sa fixture. Every line is a label=value pair; the full stdout is
+// pinned by selfhost/stdlib_store_rel.want and must be byte-identical on seed-min,
+// gen2 and native_aot (make test-stdlib-store).
+use "stdlib/store.sa"
+use "stdlib/store_rel.sa"
+
+// --- fixture tables -------------------------------------------------------
+// staff: id, name, dept_id.  dept: id, name.  sales: dept, person, amount.
+// Dept 3 and dept 9 exist only on one side, so the join cases are all covered:
+// matched, unmatched-left and unmatched-right.
+
+hold staff = db_new(3)
+staff = db_insert(staff, "1,Ada,10")
+staff = db_insert(staff, "2,Mina,20")
+staff = db_insert(staff, "3,Zed,30")
+staff = db_insert(staff, "4,Ravi,10")
+hold dept = db_new(2)
+dept = db_insert(dept, "10,eng")
+dept = db_insert(dept, "20,design")
+dept = db_insert(dept, "40,ops")
+hold sales = db_new(3)
+sales = db_insert(sales, "eng,Ada,10")
+sales = db_insert(sales, "eng,Mina,20")
+sales = db_insert(sales, "design,Zed,5")
+sales = db_insert(sales, "eng,Ada,7")
+sales = db_insert(sales, "design,Ravi,")
+
+// --- inner join -----------------------------------------------------------
+
+show concat("join.rows=", db_rows(sr_join(staff, 2, dept, 0)))
+show concat("join.count=", db_istr(db_count(sr_join(staff, 2, dept, 0))))
+show concat("join.cols=", db_istr(db_cols(sr_join(staff, 2, dept, 0))))
+// Left-major then right-major order: both eng rows precede both design rows.
+show concat("join.first=", db_get(sr_join(staff, 2, dept, 0), 0, 1))
+show concat("join.last=", db_get(sr_join(staff, 2, dept, 0), 2, 1))
+// A join on a column with no matches has the combined width and no rows.
+show concat("join.nomatch.rows=", db_istr(db_count(sr_join(staff, 0, dept, 0))))
+show concat("join.nomatch.cols=", db_istr(db_cols(sr_join(staff, 0, dept, 0))))
+show concat("join.nomatch.text=", db_istr(len(db_rows(sr_join(staff, 0, dept, 0)))))
+
+// --- left outer join ------------------------------------------------------
+
+show concat("leftjoin.rows=", db_rows(sr_left_join(staff, 2, dept, 0)))
+show concat("leftjoin.count=", db_istr(db_count(sr_left_join(staff, 2, dept, 0))))
+show concat("leftjoin.cols=", db_istr(db_cols(sr_left_join(staff, 2, dept, 0))))
+// The unmatched row keeps its left half and gets two NULL cells, so the width
+// never varies and a fixed column list stays valid.
+hold lj = sr_left_join(staff, 2, dept, 0)
+show concat("leftjoin.unmatched=", concat(db_get(lj, 2, 1), concat(",", concat(db_get(lj, 2, 2), concat(",", concat(db_get(lj, 2, 3), concat("|", concat(db_get(lj, 2, 3), db_get(lj, 2, 4)))))))))
+
+show concat("leftjoin.unmatched.right1=", db_istr(len(db_get(sr_left_join(staff, 2, dept, 0), 2, 3))))
+show concat("leftjoin.unmatched.right2=", db_istr(len(db_get(sr_left_join(staff, 2, dept, 0), 2, 4))))
+
+// --- NULL keys ------------------------------------------------------------
+// A NULL key matches only another NULL key: never everything, never nothing.
+hold lon = db_insert(db_insert(db_new(2), "a,"), "b,x")
+hold ron = db_insert(db_insert(db_new(2), "-,q"), "b,y")
+hold pair = db_insert(db_new(2), ",sql")
+show concat("nullkey.join=", db_rows(sr_join(lon, 1, pair, 0)))
+show concat("nullkey.leftjoin.rows=", db_istr(db_count(sr_left_join(lon, 1, ron, 0))))
+show concat("nullkey.leftjoin.text=", db_rows(sr_left_join(lon, 1, ron, 0)))
+
+// --- distinct and grouping -----------------------------------------------
+
+show concat("distinct.dept=", db_rows(sr_distinct(staff, 2)))
+show concat("distinct.count=", db_istr(db_count(sr_distinct(staff, 2))))
+show concat("distinct.all=", db_rows(sr_distinct(staff, 1)))
+show concat("group.count=", db_rows(sr_group_count(sales, 0)))
+show concat("group.count.cols=", db_istr(db_cols(sr_group_count(sales, 0))))
+show concat("group.count.person=", db_rows(sr_group_count(sales, 1)))
+show concat("group.sum=", db_rows(sr_group_sum(sales, 0, 2)))
+show concat("group.sum.person=", db_rows(sr_group_sum(sales, 1, 2)))
+// A NULL amount counts as 0 but keeps the group, so design still appears.
+show concat("group.sum.null.kept=", db_istr(db_count(sr_group_sum(sales, 0, 2))))
+show concat("group.min=", db_rows(sr_group_min(sales, 0, 2)))
+show concat("group.max=", db_rows(sr_group_max(sales, 0, 2)))
+show concat("group.avg=", db_rows(sr_group_avg(sales, 0, 2)))
+// Integer average reports quotient, remainder and count, so truncation is visible.
+show concat("group.avg.cols=", db_istr(db_cols(sr_group_avg(sales, 0, 2))))
+show concat("group.avg.eng.q=", db_get(sr_group_avg(sales, 0, 2), 0, 1))
+show concat("group.avg.eng.rem=", db_get(sr_group_avg(sales, 0, 2), 0, 2))
+show concat("group.avg.eng.n=", db_get(sr_group_avg(sales, 0, 2), 0, 3))
+
+// --- aggregates refuse text ----------------------------------------------
+// SUM over names would silently add zeros, so it is refused instead.
+show concat("refuse.sum.text=", db_istr(len(sr_group_sum(sales, 0, 1))))
+show concat("refuse.min.text=", db_istr(len(sr_group_min(sales, 0, 1))))
+show concat("refuse.avg.text=", db_istr(len(sr_group_avg(sales, 0, 1))))
+
+// --- set operations -------------------------------------------------------
+
+hold a = db_insert(db_insert(db_new(2), "1,x"), "2,y")
+hold b = db_insert(db_insert(db_new(2), "2,y"), "3,z")
+show concat("union.rows=", db_rows(sr_union(a, b)))
+show concat("union.count=", db_istr(db_count(sr_union(a, b))))
+show concat("intersect.rows=", db_rows(sr_intersect(a, b)))
+show concat("except.rows=", db_rows(sr_except(a, b)))
+show concat("except.count=", db_istr(db_count(sr_except(a, b))))
+hold dup = db_insert(db_insert(db_insert(db_new(2), "1,x"), "1,x"), "2,y")
+show concat("distinct.rows=", db_rows(sr_distinct_rows(dup)))
+show concat("distinct.rows.count=", db_istr(db_count(sr_distinct_rows(dup))))
+show concat("same.reordered=", db_istr(sr_same_rows(a, db_insert(db_insert(db_new(2), "2,y"), "1,x"))))
+show concat("same.different=", db_istr(sr_same_rows(a, b)))
+show concat("same.width=", db_istr(sr_same_rows(a, db_insert(db_new(3), "1,x,z"))))
+
+// --- states as well as frames --------------------------------------------
+// Every function accepts what `db_insert` returns (a state) and what
+// `db_table_frame` returns (a bare frame); the answers must be identical.
+hold frame = db_table_frame(staff)
+show concat("state.vs.frame.rows=", db_istr(db_count(sr_distinct(staff, 2))))
+show concat("state.vs.frame.frame=", db_istr(db_count(sr_distinct(frame, 2))))
+show concat("state.vs.frame.join=", db_istr(db_count(sr_join(staff, 2, dept, 0))))
+show concat("state.vs.frame.join.frame=", db_istr(db_count(sr_join(frame, 2, db_table_frame(dept), 0))))
+// A selected state carries its cursor; the relational functions ignore it.
+hold picked = db_where_n(staff, "2:=:10")
+show concat("state.with.cursor=", db_istr(db_count(sr_distinct(picked, 2))))
+
+// --- feeding a result back in --------------------------------------------
+// A grouped result is a normal table: project it, sort it, read a cell.
+hold totals = sr_group_sum(sales, 0, 2)
+show concat("chain.sorted=", db_rows(db_sort(totals, 1)))
+show concat("chain.project=", db_rows(db_project(totals, "0")))
+show concat("chain.cell=", db_get(totals, 0, 1))
+show concat("chain.where=", db_hits(db_where_n(totals, "1:>:6")))
+
+// --- refusals -------------------------------------------------------------
+
+show concat("refuse.join.bad.col=", db_istr(len(sr_join(staff, 9, dept, 0))))
+show concat("refuse.join.bad.right=", db_istr(len(sr_join(staff, 2, dept, 9))))
+show concat("refuse.join.garbage=", db_istr(len(sr_join("garbage", 0, dept, 0))))
+show concat("refuse.group.bad.col=", db_istr(len(sr_group_count(staff, 9))))
+show concat("refuse.set.width=", db_istr(len(sr_union(a, db_insert(db_new(3), "1,x,z")))))
+show concat("refuse.set.garbage=", db_istr(len(sr_except(a, "garbage"))))
+show concat("refuse.wrap.zero.cols=", db_istr(len(sr_wrap("", 0, 0))))
+show concat("refuse.wrap.bad.shape=", db_istr(len(sr_wrap(concat("a", chr(31)), 2, 1))))
+
+// A wide cartesian product is refused rather than materialised: 65 rows joined to
+// 65 rows would be 4225 pairs, past the 4096 row cap.
+hold widea = db_new(1)
+hold i = 0
+while i < 65 {
+  widea = db_insert(widea, "k")
+  i = i + 1
+}
+hold wideb = db_new(1)
+i = 0
+while i < 65 {
+  wideb = db_insert(wideb, "k")
+  i = i + 1
+}
+show concat("refuse.join.cartesian=", db_istr(len(sr_join(widea, 0, wideb, 0))))
+// 64 x 64 is inside the cap and produces every pair.
+hold finea = db_new(1)
+i = 0
+while i < 64 {
+  finea = db_insert(finea, "k")
+  i = i + 1
+}
+show concat("join.cartesian.64=", db_istr(db_count(sr_join(finea, 0, finea, 0))))
+
+// --- empty inputs ---------------------------------------------------------
+
+hold none = db_new(2)
+show concat("empty.join=", db_istr(db_count(sr_join(none, 0, dept, 0))))
+show concat("empty.join.cols=", db_istr(db_cols(sr_join(none, 0, dept, 0))))
+show concat("empty.leftjoin=", db_istr(db_count(sr_left_join(none, 0, dept, 0))))
+show concat("empty.distinct=", db_istr(db_count(sr_distinct(none, 0))))
+show concat("empty.group=", db_istr(db_count(sr_group_count(none, 0))))
+show concat("empty.right.leftjoin=", db_istr(db_count(sr_left_join(staff, 2, none, 0))))
+show concat("empty.right.leftjoin.rows=", db_rows(sr_left_join(staff, 2, none, 0)))
+
+show "store-rel-done"

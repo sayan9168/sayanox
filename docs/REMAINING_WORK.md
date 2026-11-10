@@ -77,7 +77,7 @@ close stdlib depth or replace complete guarded CI.
 | R04 | **Precise GC and stronger memory contracts — open design/implementation; one bounded fix landed 2026-10-31** | Define root/type maps and exact pointer-bearing fields for the selected runtime; retain aliases/interior-root policy, cycles and children under O0/O2 and ASan+UBSan including forced fake-stack mode. Test failure/recovery and resource limits. State bounded workloads/allocator assumptions explicitly: arbitrary unbounded live programs cannot have an unconditional finite heap/RSS guarantee. Existing conservative GC is implemented, not absent. **Landed:** an empty managed heap now releases the whole free-list cache instead of retaining two blocks per class (up to 2,097,152 bytes), with a negative control that fails on the previous emitter. Precise roots, type maps and bounded-heap claims remain open — see [GC](GC.md). |
 | R05 | **IDE-complete LSP — open implementation project; incremental sync landed 2026-10-31** | Reuse compiler semantics where supported; incremental UTF-16 edits, multi-file diagnostics, invalidation and scalable bounded indexing need real protocol/session tests, disk/open-overlay precedence, malformed-request and resource-limit controls. Existing four-buffer and bounded workspace behavior must stay green. **Landed:** `didChange` range splicing with clamping, a capability of `change: 2`, and up to eight change objects per notification applied in order (2026-10-31), driven by real framed sessions in `test-lsp` (47 facts). Still open: four buffers, no workspace-wide diagnostic push, no compiler-grade incremental re-parse, no edit merging beyond the sequential rule — the server is still not IDE-complete. |
 | R06 | **Language-level modules — open language design** | Specify canonical module identities, scopes, visibility/export and import caching/cycle policy; implement qualified binding across functions/types/fields/generics and all promised backends. Add collision/privacy/cycle/import tests. `sxmod` rewriting and path renaming do not establish these semantics. Preserve the current bootstrap splice dialect. |
-| R07 | **Stdlib depth — open implementation project; oracle-gated text helpers landed 2026-10-31** | Extend nested JSON updates/round trips with explicit number-precision policy, malformed/boundary inputs and cross-backend output oracles. Preserve the published IEEE-double contract; exact decimal facilities require an explicit separate representation, not a silent numeric-semantic change. Existing reader/crypto/data/time modules are not missing. **Landed:** `t_count_char`, `t_starts_with`, `t_ends_with`, `t_normalize_ws` in `stdlib/str_text.sa`, checked against a hand-written `selfhost/stdlib_text.want`, plus the 43-line JSON boundary/precision oracle `selfhost/stdlib_json_boundary.want` (minification, key prefixes, deletion cases, nested paths, number policy, escaping, malformed refusals) — both on seed-min, gen2 and native AOT by `test-stdlib-next`. Depth remains open: the local JSON mutations and bounded exact-decimal string arithmetic are implemented, but broader nested writes, additional decimal operations and acceptance remain open. |
+| R07 | **Stdlib depth — open implementation project; oracle-gated text helpers landed 2026-10-31** | Extend nested JSON updates/round trips with explicit number-precision policy, malformed/boundary inputs and cross-backend output oracles. Preserve the published IEEE-double contract; exact decimal facilities require an explicit separate representation, not a silent numeric-semantic change. Existing reader/crypto/data/time modules are not missing. **Landed:** `t_count_char`, `t_starts_with`, `t_ends_with`, `t_normalize_ws` in `stdlib/str_text.sa`, checked against a hand-written `selfhost/stdlib_text.want`, plus the 43-line JSON boundary/precision oracle `selfhost/stdlib_json_boundary.want` (minification, key prefixes, deletion cases, nested paths, number policy, escaping, malformed refusals) — both on seed-min, gen2 and native AOT by `test-stdlib-next`. Depth remains open: the local JSON mutations and bounded exact-decimal string arithmetic are implemented, but broader nested writes, additional decimal operations and acceptance remain open. **Landed 2026-11-09:** `stdlib/store.sa`, an in-memory relational store (`db_*`) — typed table shape, insert, filtered update and delete, projection, stable sort, comparison/text predicates, per-row arithmetic filters and packed-row/frame round trips — with a 150-line fixture (`selfhost/stdlib_store_test.sa`) checked byte for byte against an independently written Python reference (`selfhost/stdlib_store.want`) on seed-min, gen2 and native AOT by the new `test-stdlib-store` gate. It is a bounded in-memory engine with no persistence, transactions, secondary indexes or SQL parser, so R07 stays open. **Second step (same day):** `stdlib/store_index.sa` adds derived indexes over those tables — a distinct-key hash index and a binary-searched ordered index, with `ix_range`/`ix_between` predicates and `ix_stale`/`ix_valid` staleness detection — gated by the same `test-stdlib-store` target against a second independent Python oracle (89 lines). **Third step (same day):** `stdlib/store_rel.sa` adds relational algebra — exact-key inner and left joins, five grouping aggregates, whole-column and whole-row distinct, and union/intersect/except/same-rows — against a third independent oracle (104 lines), so nine backend/oracle combinations now agree. |
 | R08 | **Package transport, key distribution and crypto assurance — open; security review needed** | Define authenticated trust-root/key rotation/revocation and transport policy; execute malicious index/archive/key/path/downgrade/offline controls. Optional HTTP is not a bootstrap dependency. Any transport replacement must preserve verification before installation. A constant-time claim additionally needs an appropriate integer/runtime design and independent security review; passing ordinary arithmetic/timing smoke tests does not certify it. Current pinned-key offline signatures already work. |
 | R09 | **Broader platforms and hardware — open; execution environments needed** | Define OS/ABI support and implement the required runtime/object/container paths. Run actual native programs on each promised OS/CPU, including syscall/error/resource and bootstrap tests. Existing x86-host ARM/RV emulation is not real-hardware evidence. Do not add a CI matrix that merely skips unsupported binaries. |
 | R10 | **Syntax-aware formatter — token-aware `--syntax` mode landed 2026-11-06; parser structure and a linear scan still open** | Use token/parser structure with explicit malformed-source behavior; preserve strings/comments and program meaning. Require idempotence, formatting oracles and compile/execute parity, including multiline/Unicode/nested cases. Existing brace/whitespace formatter remains supported. **Landed 2026-11-06:** `tools/sxfmt_syntax_lib.sa` scans the file as tokens — one bracket stack over `(`/`[`/`{` with closer matching and EOF balance, strings (escapes and `${...}` holes) and `//` comments copied byte for byte, a raw newline in a string refused instead of copied through to invalid C, and whitespace normalized without adding, dropping or reordering a token. `sxfmt --syntax INPUT [OUTPUT]` formats, `sxfmt --check INPUT` writes nothing and exits 1 (2 on malformed source), and the plain `sxfmt` mode is unchanged, so the legacy pin and the LSP port stay valid. `test-sxfmt-syntax` runs in CI beside `test-sxfmt`: canonical oracle, idempotence, token preservation, eight refusals with exact diagnostics, an untouched output on refusal, the `--check` 0/1/2 contract, and gen2 compile/execute parity (byte-identical C, identical stdout); the gate fails against the previous formatter. **Landed 2026-11-08 (linear render):** the \"scanning is quadratic\" note was the right symptom and the wrong cause. The token scan never rewrote a whole buffer per byte: an early-stop measurement put the scan of the first 3,200 lines of a 149 KB file at 2 ms. The quadratic term was `sf_slice`, which appended `chr(sx_index(...))` once per byte; because `concat` copies both operands that is quadratic in the span, and `sf_text(result)` calls it on the whole formatted output, so 43 s of a 43.5 s run was inside that one slice. `sf_slice` now halves the span and joins the halves, making the concat count logarithmic in the span. Measured with the same fixtures on this tree: 8 KB 0.124 s -> 0.005 s, 34 KB 1.855 s -> 0.019 s, 149 KB 33.703 s -> 0.108 s, and the output is byte-identical to the previous implementation (`cmp` clean on both fixtures) as well as to the gate's pinned oracle, legacy pin and `--check` contract. `test-sxfmt-syntax` now pins the behaviour instead of only the bytes: a 25,000-line (308 KB) fixture must equal an independently rebuilt expectation, preserve every token, be idempotent and match `./tools/sxfmt --syntax`; four sizes 2x apart (58/121/246/496 KB) are rendered through the shipped binary with the measured bytes/milliseconds printed to the CI log and an absolute 60 s budget asserted per render. The gate's own wall time fell from about 600 s to about 300 s. **Still open:** the scan is lexical rather than a parse (a multi-line list literal tokenizes fine and is formatted even though the parser refuses it), and there is no Unicode width/column awareness beyond copying UTF-8 bytes. The performance item is closed with the measurements above. |
@@ -403,3 +403,93 @@ Delivered, with a gate that fails on the previous code:
 Not claimed by this increment: a real parser instead of a lexer, Unicode display
 widths, or any change to comment/blank-line policy. Those stay open in the
 register row.
+
+## Increment log: R07 relational store (2026-11-09)
+
+Delivered, with a gate that fails without it:
+
+* **The gap.** R07 listed a database module as missing and `stdlib/` had none:
+  `csv_table.sa` and `csv_query.sa` parse and join CSV documents, but there was no
+  general table with typed shape, filtered mutation and projection.
+* **`stdlib/store.sa`.** One string-encoded table (row count, column count, then
+  US-separated cells) behind a state frame that carries a selection, so the result
+  of `db_where`/`db_where_n` feeds straight into `db_update`, `db_delete` and
+  `db_project`. Queries are `column:operator:value`, with byte-exact `=`/`!=`,
+  numeric-when-numeric `<`/`<=`/`>`/`>=`, `has`/`^`/`$` text predicates, and a `~`
+  value that evaluates an arithmetic expression over the matching row's own cells.
+  Every bound is explicit (64 columns, 4096 rows, 8 selected rows, 128 sort rows,
+  1024-byte cells) and every refusal returns `""` rather than a wrong answer.
+* **Conditions use `and`/`or`, not `&&`/`||`.** The seed and the C backend accept
+  both spellings, but `native_aot` rejects `&&` with "unexpected text in when
+  condition"; the module is written in the documented spelling so all three
+  backends compile it. That divergence was found by running the gate, not by
+  reading it.
+* **The oracle is independent.** `selfhost/stdlib_store.want` was produced by a
+  Python reference written against the documented semantics with lists of lists —
+  not a transcription of the flattened string encoding — and the fixture carries
+  23 refusal lines. Three backends then had to agree with it *and* with each
+  other, so a shared misreading of the encoding cannot pass.
+* **Gate.** `test-stdlib-store` (`ep_store`) compiles the fixture on seed C, gen2
+  and native AOT, compares each output with the oracle, cross-compares the
+  backends, and additionally imports the module alone and next to `csv.sa` and
+  `hash.sa`. `test-stdlib-next` was deliberately left at its five pinned modules
+  instead of growing a sixth.
+
+Not claimed by this increment: persistence, transactions, indexes, a SQL parser,
+Unicode collation, or sizes beyond the stated bounds. Those stay open in the
+register row.
+
+## Second increment: derived indexes over the store (2026-11-09)
+
+* **A measured motivation, not a guess.** `db_field` walks from the start of the
+  frame, so a store scan costs O(n^2 * c) bytes touched for n rows of c columns.
+  An index projects one column into its own field run, so a key probe reads keys
+  and never reconstructs a cell.
+* **`stdlib/store_index.sa`.** `ix_hash_build` keeps distinct keys with their row
+  lists; `ix_ordered_build` keeps rows in ascending key order behind
+  `ix_lower_bound`/`ix_upper_bound`, so `ix_range` (`=`, `>`, `>=`, `<`, `<=`) and
+  `ix_between` are binary searches and `ix_min_row`/`ix_max_row` are O(1). Ordering
+  reuses the store's numeric-when-numeric rule, so an index and a scan cannot
+  disagree about "greater".
+* **Staleness is explicit.** The header carries the table's row count, column
+  count and a folded byte sum; `ix_stale` reports a mutation and every lookup on a
+  stale index returns `""` instead of a row number that no longer means anything.
+  The fixture pins update, insert and delete staleness plus a rebuild.
+* **Measured cost of the alternative.** The first ordered-index implementation
+  tried to rebuild a key list with indexed assignment, which the seed compiler
+  rejects; the working version keeps keys as one US-delimited run and inserts by
+  string splicing, which is what the module now documents.
+* **Gate.** `test-stdlib-store` loops over both fixtures, compares seed, gen2 and
+  native AOT against two independent Python oracles, cross-compares backends,
+  imports each module alone (and the pair together), and asserts the index and the
+  scan answer the same question. Six backend/oracle combinations agree.
+
+Still open in R07: persistence, transactions, incremental index maintenance, and
+anything beyond the stated bounds.
+
+## Third increment: joins, grouping and set operations (2026-11-09)
+
+* **`stdlib/store_rel.sa` (36 definitions, prefix `sr_`).** `sr_join` and
+  `sr_left_join` match on exact key bytes; `sr_group_count`/`sum`/`min`/`max`/
+  `avg` report groups in first-seen order; `sr_distinct`/`sr_distinct_rows` and
+  `sr_union`/`sr_intersect`/`sr_except`/`sr_same_rows` cover the set algebra.
+  `sr_group_avg` returns quotient, remainder and count so integer truncation is
+  visible rather than rounded away, and an aggregate over a text column is
+  refused instead of summing zeros.
+* **Frames and states are both accepted.** `db_insert` and `db_where` return a
+  state; `db_table_frame` returns a frame. `sr_table` normalises at entry, and the
+  fixture pins that both give identical answers — the first version of the module
+  silently returned `""` for every state, which the fault-injection pass caught.
+* **Two real bugs, both found by the independent oracle.** `sr_distinct_rows`
+  compared each row against an accumulating run that shifted as it grew, so
+  duplicates survived; and the row-presence helper addressed a cells run as if it
+  were a table frame (offset 2 instead of 0), so `sr_intersect`/`sr_except` and
+  the distinct paths were wrong in different ways. Both are now separated into
+  `sr_run_has_cells` and `sr_frame_has_cells` with the offset difference named.
+* **Gate.** `test-stdlib-store` now loops over three fixtures, comparing seed,
+  gen2 and native AOT against three independent Python oracles and against each
+  other — nine backend/oracle combinations — plus an import-alone snippet that
+  joins, groups and compares in one program.
+
+Still open in R07: persistence, transactions, incremental index maintenance,
+multi-column keys, and anything beyond the stated bounds.
