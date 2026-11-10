@@ -1,0 +1,700 @@
+// stdlib/store_index.sa -- derived indexes over `stdlib/store.sa` tables
+// (prefix `ix_`), written in portable Sayanox.
+//
+// Import `stdlib/store.sa` before this module. An index is a projection of one
+// column, never a copy of the table: a mutation invalidates it, and `ix_stale`
+// says so instead of answering from a stale structure.
+//
+// ---------------------------------------------------------------------------
+// What an index actually buys, measured honestly
+// ---------------------------------------------------------------------------
+//
+// `stdlib/store.sa` answers a query by scanning and calling `db_field` once per
+// cell; `db_field` walks from the start of the frame every time, so a scan over n
+// rows of c columns costs O(n^2 * c) bytes touched. That is invisible for a few
+// dozen rows and painful for a few thousand, which is exactly the table size this
+// library targets. An index is a flat projection of the key column:
+//
+//   * `ix_hash_build` -- one field per distinct key plus the rows holding it.
+//     A key lookup reads key fields only, so it never reconstructs a cell.
+//   * `ix_ordered_build` -- the same rows in ascending key order. `ix_range`
+//     binary-searches that order, so `>=`, `>`, `<`, `<=` and `= ` cost
+//     O(log n) key reads plus the rows returned, and `ix_range2` answers an
+//     inclusive BETWEEN.
+//   * `ix_count_key` -- exact-key frequency without materialising rows.
+//
+// Both kinds are snapshots. The header carries the table's row count, column
+// count and a folded byte sum, so an unnoticed insert, update or delete is
+// reported by `ix_stale` rather than silently answered from stale keys.
+//
+// ---------------------------------------------------------------------------
+// Representation
+// ---------------------------------------------------------------------------
+//
+// An index is one string of US-separated fields (US is 0x1f):
+//
+//   kind | cols | stamp | count | field... 
+//
+// `kind` is 1 for a hash index and 2 for an ordered one. A hash index then holds,
+// for each distinct key in first-seen order, the key followed by its rows as a
+// comma-separated list. An ordered index holds `count` keys in ascending order
+// followed by `count` row numbers. Keys may not contain US, RS or GS (0x1c-0x1f),
+// so no field scan can misread a boundary; empty keys are allowed because a NULL
+// cell is a legitimate entry.
+//
+// Bounds match the store: 64 columns, 4096 rows, 1024-byte keys and at most 128
+// distinct keys per index -- beyond that the bookkeeping costs more than the scan
+// it replaces. Every refusal returns "" instead of a wrong answer.
+
+// ---------------------------------------------------------------------------
+// Encoding helpers
+// ---------------------------------------------------------------------------
+
+make ix_us() -> num {
+  give 31
+}
+
+make ix_at(s: str, i: num) -> num {
+  when i < 0 or i >= len(s) {
+    give 0 - 1
+  }
+  give sx_index(s, i)
+}
+
+make ix_istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold n = v
+  when n < 0 {
+    n = 0 - n
+  }
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  when v < 0 {
+    give concat("-", out)
+  }
+  give out
+}
+
+make ix_digits(s: str) -> num {
+  when len(s) == 0 {
+    give 0
+  }
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c < 48 or c > 57 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make ix_int(s: str, fallback: num) -> num {
+  when ix_digits(s) == 0 {
+    give fallback
+  }
+  hold v = 0
+  hold i = 0
+  while i < len(s) {
+    v = v * 10 + (sx_index(s, i) - 48)
+    i = i + 1
+  }
+  give v
+}
+
+make ix_find(s: str, from: num, want: num) -> num {
+  hold i = from
+  while i < len(s) {
+    when sx_index(s, i) == want {
+      give i
+    }
+    i = i + 1
+  }
+  give len(s)
+}
+
+make ix_sub(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  hold lo = a
+  when lo < 0 {
+    lo = 0
+  }
+  hold hi = b
+  when hi > n {
+    hi = n
+  }
+  when lo >= hi {
+    give ""
+  }
+  hold out = ""
+  hold i = lo
+  while i < hi {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// 1 when `k` can be stored as a key: no structural byte and within the cell cap.
+make ix_key_ok(k: str) -> num {
+  when len(k) > 1024 {
+    give 0
+  }
+  hold i = 0
+  while i < len(k) {
+    hold c = sx_index(k, i)
+    when c >= 28 and c <= 31 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// Ascending comparison, matching `db_order_cmp` in store.sa: numeric when both
+// sides are decimal numbers, bytewise otherwise, so an index and a scan agree on
+// what "greater" means and `"9"` orders below `"10"`.
+make ix_num_cmp(a: str, b: str) -> num {
+  hold na = 0
+  hold nb = 0
+  hold da = a
+  hold db = b
+  when ix_digits(a) == 0 and len(a) > 1 and ix_at(a, 0) == 45 and ix_digits(ix_sub(a, 1, len(a))) == 1 {
+    na = 1
+    da = ix_sub(a, 1, len(a))
+  }
+  when ix_digits(b) == 0 and len(b) > 1 and ix_at(b, 0) == 45 and ix_digits(ix_sub(b, 1, len(b))) == 1 {
+    nb = 1
+    db = ix_sub(b, 1, len(b))
+  }
+  hold mag = 0
+  when len(da) < len(db) {
+    mag = 0 - 1
+  }
+  when len(da) > len(db) {
+    mag = 1
+  }
+  when len(da) == len(db) {
+    hold i = 0
+    while i < len(da) and mag == 0 {
+      hold x = sx_index(da, i)
+      hold y = sx_index(db, i)
+      when x < y {
+        mag = 0 - 1
+      }
+      when x > y {
+        mag = 1
+      }
+      i = i + 1
+    }
+  }
+  when na == 1 and nb == 0 {
+    give 0 - mag
+  }
+  when na == 0 and nb == 1 {
+    give mag
+  }
+  when na == 1 and nb == 1 {
+    give 0 - mag
+  }
+  give mag
+}
+
+make ix_text_cmp(a: str, b: str) -> num {
+  hold n = len(a)
+  when len(b) < n {
+    n = len(b)
+  }
+  hold i = 0
+  while i < n {
+    hold x = sx_index(a, i)
+    hold y = sx_index(b, i)
+    when x < y {
+      give 0 - 1
+    }
+    when x > y {
+      give 1
+    }
+    i = i + 1
+  }
+  when len(a) < len(b) {
+    give 0 - 1
+  }
+  when len(a) > len(b) {
+    give 1
+  }
+  give 0
+}
+
+make ix_cmp(a: str, b: str) -> num {
+  when ix_digits(a) == 1 and ix_digits(b) == 1 {
+    give ix_num_cmp(a, b)
+  }
+  give ix_text_cmp(a, b)
+}
+
+// ---------------------------------------------------------------------------
+// Stamps
+// ---------------------------------------------------------------------------
+
+// A change detector for the table's bytes: row count, column count and a folded
+// byte sum. It is not a cryptographic digest; it exists so a caller that keeps an
+// index across a mutation is told the index is stale instead of receiving an
+// answer computed from old keys.
+make ix_table_stamp(table: str) -> str {
+  hold sum = 0
+  hold i = 0
+  while i < len(table) {
+    sum = (sum * 31 + sx_index(table, i)) % 2147483629
+    i = i + 1
+  }
+  give concat(db_istr(db_frame_count(table)), concat("/", concat(db_istr(db_frame_cols(table)), concat("/", ix_istr(sum)))))
+}
+
+make ix_head(state: str, kind: num) -> str {
+  hold table = db_table(state)
+  give concat(ix_istr(kind), concat(chr(31), concat(db_istr(db_frame_cols(table)), concat(chr(31), concat(ix_table_stamp(table), chr(31))))))
+}
+
+// ---------------------------------------------------------------------------
+// Field access
+// ---------------------------------------------------------------------------
+
+make ix_field(index: str, k: num) -> str {
+  hold n = len(index)
+  hold pos = 0
+  hold idx = 0
+  while pos < n {
+    hold end = ix_find(index, pos, 31)
+    when idx == k {
+      give ix_sub(index, pos, end)
+    }
+    idx = idx + 1
+    pos = end + 1
+  }
+  give ""
+}
+
+// Everything from field `k` to the end of the index: the hash index keeps its
+// key/rows pairs there, so they are read as one run rather than field by field.
+make ix_tail(index: str, k: num) -> str {
+  hold n = len(index)
+  hold pos = 0
+  hold idx = 0
+  while pos < n and idx < k {
+    pos = ix_find(index, pos, 31) + 1
+    idx = idx + 1
+  }
+  give ix_sub(index, pos, n)
+}
+
+make ix_count(index: str) -> num {
+  give ix_int(ix_field(index, 3), 0)
+}
+
+make ix_kind(index: str) -> num {
+  give ix_int(ix_field(index, 0), 0)
+}
+
+make ix_cols(index: str) -> num {
+  give ix_int(ix_field(index, 1), 0)
+}
+
+// 1 when the index is a hash index, 2 when ordered, 0 when it is not an index.
+make ix_ok(index: str) -> num {
+  hold kind = ix_kind(index)
+  when kind != 1 and kind != 2 {
+    give 0
+  }
+  give 1
+}
+
+// 1 when `index` no longer describes `state`'s table.
+make ix_stale(index: str, state: str) -> num {
+  when ix_ok(index) == 0 {
+    give 1
+  }
+  hold table = db_table(state)
+  when string_eq(ix_field(index, 2), ix_table_stamp(table)) == 1 {
+    give 0
+  }
+  give 1
+}
+
+make ix_valid(index: str, state: str) -> num {
+  when ix_stale(index, state) == 0 {
+    give 1
+  }
+  give 0
+}
+
+// ---------------------------------------------------------------------------
+// Hash index
+// ---------------------------------------------------------------------------
+
+// Distinct-key index over column `col`: `key | rows` pairs in first-seen order.
+// `rows` is a comma separated list because one key can legitimately repeat.
+make ix_hash_build(state: str, col: num) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  when col < 0 or col >= cols {
+    give ""
+  }
+  hold pairs = ""
+  hold keys = 0
+  hold r = 0
+  while r < count {
+    hold k = db_field(table, 2 + r * cols + col)
+    when ix_key_ok(k) == 0 {
+      give ""
+    }
+    hold hit = ix_hash_slot(pairs, k)
+    when hit < 0 {
+      keys = keys + 1
+      when keys > 128 {
+        give ""
+      }
+      pairs = concat(pairs, concat(k, concat(chr(31), concat(db_istr(r), chr(31)))))
+    } otherwise {
+      pairs = ix_hash_append(pairs, hit, r)
+    }
+    r = r + 1
+  }
+  give concat(concat(ix_head(state, 1), db_istr(keys)), concat(chr(31), pairs))
+}
+
+// Position of the pair holding key `k` in a `key|rows` run, -1 when absent.
+make ix_hash_slot(pairs: str, k: str) -> num {
+  hold n = len(pairs)
+  hold pos = 0
+  hold idx = 0
+  while pos < n {
+    hold key_end = ix_find(pairs, pos, 31)
+    when string_eq(ix_sub(pairs, pos, key_end), k) == 1 {
+      give idx
+    }
+    idx = idx + 1
+    pos = ix_find(pairs, key_end + 1, 31) + 1
+  }
+  give 0 - 1
+}
+
+// Append row `r` to pair number `slot`'s row list, leaving every other byte alone.
+make ix_hash_append(pairs: str, slot: num, r: num) -> str {
+  hold n = len(pairs)
+  hold pos = 0
+  hold idx = 0
+  while pos < n {
+    hold key_end = ix_find(pairs, pos, 31)
+    hold rows_end = ix_find(pairs, key_end + 1, 31)
+    when idx == slot {
+      hold rows = ix_sub(pairs, key_end + 1, rows_end)
+      give concat(ix_sub(pairs, 0, rows_end), concat(concat(",", db_istr(r)), ix_sub(pairs, rows_end, n)))
+    }
+    idx = idx + 1
+    pos = rows_end + 1
+  }
+  give pairs
+}
+
+// The rows holding exactly `key`, comma separated, "" when absent. A stale index
+// answers "" rather than a stale row list.
+make ix_rows_for(index: str, state: str, key: str) -> str {
+  when ix_valid(index, state) == 0 {
+    give ""
+  }
+  when ix_kind(index) == 2 {
+    give ix_ordered_rows_for(index, key)
+  }
+  hold pairs = ix_tail(index, 4)
+  hold slot = ix_hash_slot(pairs, key)
+  when slot < 0 {
+    give ""
+  }
+  hold pos = 0
+  hold idx = 0
+  while pos < len(pairs) {
+    hold key_end = ix_find(pairs, pos, 31)
+    hold rows_end = ix_find(pairs, key_end + 1, 31)
+    when idx == slot {
+      give ix_sub(pairs, key_end + 1, rows_end)
+    }
+    idx = idx + 1
+    pos = rows_end + 1
+  }
+  give ""
+}
+
+// The first row holding exactly `key`, -1 when absent.
+make ix_lookup(index: str, state: str, key: str) -> num {
+  hold found = ix_rows_for(index, state, key)
+  when len(found) == 0 {
+    give 0 - 1
+  }
+  hold end = ix_find(found, 0, 44)
+  give ix_int(ix_sub(found, 0, end), 0 - 1)
+}
+
+// How many rows hold exactly `key`.
+make ix_count_key(index: str, state: str, key: str) -> num {
+  hold found = ix_rows_for(index, state, key)
+  when len(found) == 0 {
+    give 0
+  }
+  hold n = 1
+  hold i = 0
+  while i < len(found) {
+    when sx_index(found, i) == 44 {
+      n = n + 1
+    }
+    i = i + 1
+  }
+  give n
+}
+
+// ---------------------------------------------------------------------------
+// Ordered index
+// ---------------------------------------------------------------------------
+
+// Ascending index over column `col`. The keys are kept in an index list and
+// sorted by insertion, carrying their row numbers alongside, so the result is
+// stable: equal keys keep table order.
+make ix_ordered_build(state: str, col: num) -> str {
+  hold table = db_table(state)
+  when db_frame_ok(table) == 0 {
+    give ""
+  }
+  hold count = db_frame_count(table)
+  hold cols = db_frame_cols(table)
+  when col < 0 or col >= cols {
+    give ""
+  }
+  hold kk = ""
+  hold rr = ""
+  hold r = 0
+  while r < count {
+    hold k = db_field(table, 2 + r * cols + col)
+    when ix_key_ok(k) == 0 {
+      give ""
+    }
+    hold at = ix_fields(rr)
+    while at > 0 and ix_cmp(ix_field(kk, at - 1), k) > 0 {
+      at = at - 1
+    }
+    kk = ix_list_insert(kk, at, k)
+    rr = ix_list_insert(rr, at, db_istr(r))
+    r = r + 1
+  }
+  hold total = ix_fields(rr)
+  when total > 128 {
+    give ""
+  }
+  give concat(concat(ix_head(state, 2), db_istr(total)), concat(chr(31), concat(kk, rr)))
+}
+
+// Numeric lists hold numbers, not strings, so the ordered key column is carried
+// as one US-delimited field run and addressed by field position.
+make ix_fields(run: str) -> num {
+  hold n = len(run)
+  when n == 0 {
+    give 0
+  }
+  hold count = 1
+  hold i = 0
+  while i < n {
+    when sx_index(run, i) == 31 {
+      count = count + 1
+    }
+    i = i + 1
+  }
+  give count - 1
+}
+
+make ix_list_insert(list: str, at: num, v: str) -> str {
+  hold n = len(list)
+  when at >= n {
+    when n == 0 {
+      give concat(v, chr(31))
+    }
+    give concat(list, concat(v, chr(31)))
+  }
+  hold pos = 0
+  hold idx = 0
+  while idx < at and pos < n {
+    pos = ix_find(list, pos, 31) + 1
+    idx = idx + 1
+  }
+  give concat(concat(ix_sub(list, 0, pos), v), concat(chr(31), ix_sub(list, pos, n)))
+}
+
+// Row number stored at sorted position `i`, -1 when out of range.
+make ix_row_at(index: str, i: num) -> num {
+  when i < 0 or i >= ix_count(index) {
+    give 0 - 1
+  }
+  give ix_int(ix_field(index, 4 + ix_count(index) + i), 0 - 1)
+}
+
+// Key stored at sorted position `i`, "" when out of range.
+make ix_key_at(index: str, i: num) -> str {
+  when i < 0 or i >= ix_count(index) {
+    give ""
+  }
+  give ix_field(index, 4 + i)
+}
+
+// First sorted position whose key is >= `k` (lower bound), and the first whose
+// key is > `k` (upper bound). Binary search: O(log n) field reads.
+make ix_lower_bound(index: str, k: str) -> num {
+  hold lo = 0
+  hold hi = ix_count(index)
+  while lo < hi {
+    hold mid = lo + (hi - lo - (hi - lo) % 2) / 2
+    when ix_cmp(ix_field(index, 4 + mid), k) < 0 {
+      lo = mid + 1
+    } otherwise {
+      hi = mid
+    }
+  }
+  give lo
+}
+
+make ix_upper_bound(index: str, k: str) -> num {
+  hold lo = 0
+  hold hi = ix_count(index)
+  while lo < hi {
+    hold mid = lo + (hi - lo - (hi - lo) % 2) / 2
+    when ix_cmp(ix_field(index, 4 + mid), k) <= 0 {
+      lo = mid + 1
+    } otherwise {
+      hi = mid
+    }
+  }
+  give lo
+}
+
+// Rows selected by `op` against `value` on an ordered index, in key order.
+// Supported operators: `=`, `>`, `>=`, `<`, `<=`. Anything else, a hash index or
+// a stale index returns "".
+make ix_range(index: str, state: str, op: str, value: str) -> str {
+  when ix_valid(index, state) == 0 or ix_kind(index) != 2 {
+    give ""
+  }
+  hold from = 0
+  hold to = ix_count(index)
+  when string_eq(op, "=") == 1 {
+    from = ix_lower_bound(index, value)
+    to = ix_upper_bound(index, value)
+  }
+  when string_eq(op, ">") == 1 {
+    from = ix_upper_bound(index, value)
+  }
+  when string_eq(op, ">=") == 1 {
+    from = ix_lower_bound(index, value)
+  }
+  when string_eq(op, "<") == 1 {
+    to = ix_lower_bound(index, value)
+  }
+  when string_eq(op, "<=") == 1 {
+    to = ix_upper_bound(index, value)
+  }
+  when string_eq(op, "=") == 0 and string_eq(op, ">") == 0 and string_eq(op, ">=") == 0 and string_eq(op, "<") == 0 and string_eq(op, "<=") == 0 {
+    give ""
+  }
+  hold out = ""
+  hold i = from
+  while i < to {
+    when i > from {
+      out = concat(out, ",")
+    }
+    out = concat(out, db_istr(ix_row_at(index, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// Inclusive BETWEEN: `lo <= key <= hi`.
+make ix_between(index: str, state: str, lo: str, hi: str) -> str {
+  when ix_valid(index, state) == 0 or ix_kind(index) != 2 {
+    give ""
+  }
+  hold from = ix_lower_bound(index, lo)
+  hold to = ix_upper_bound(index, hi)
+  hold out = ""
+  hold i = from
+  while i < to {
+    when i > from {
+      out = concat(out, ",")
+    }
+    out = concat(out, db_istr(ix_row_at(index, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// The ordered rows holding exactly `key`, comma separated.
+make ix_ordered_rows_for(index: str, key: str) -> str {
+  hold from = ix_lower_bound(index, key)
+  hold to = ix_upper_bound(index, key)
+  hold out = ""
+  hold i = from
+  while i < to {
+    when i > from {
+      out = concat(out, ",")
+    }
+    out = concat(out, db_istr(ix_row_at(index, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// The smallest and largest keys and their first rows, for `MIN`/`MAX` without a
+// scan. An empty index returns "" and -1.
+make ix_min_key(index: str) -> str {
+  give ix_key_at(index, 0)
+}
+
+make ix_max_key(index: str) -> str {
+  give ix_key_at(index, ix_count(index) - 1)
+}
+
+make ix_min_row(index: str) -> num {
+  give ix_row_at(index, 0)
+}
+
+make ix_max_row(index: str) -> num {
+  give ix_row_at(index, ix_count(index) - 1)
+}
+
+// Every row number in key order, comma separated.
+make ix_rows(index: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < ix_count(index) {
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, db_istr(ix_row_at(index, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// A one line diagnostic, stable enough to pin in a fixture.
+make ix_summary(index: str) -> str {
+  when ix_ok(index) == 0 {
+    give "kind=0 keys=0"
+  }
+  give concat(concat("kind=", ix_istr(ix_kind(index))), concat(" keys=", ix_istr(ix_count(index))))
+}

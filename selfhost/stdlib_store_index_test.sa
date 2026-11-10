@@ -1,0 +1,187 @@
+use "stdlib/ai.sa"
+// stdlib/store_index.sa fixture. Every line is a label=value pair; the full
+// stdout is pinned by selfhost/stdlib_store_index.want and must be byte-identical
+// on seed-min, gen2 and native_aot (make test-stdlib-store).
+use "stdlib/store.sa"
+use "stdlib/store_index.sa"
+
+// --- fixture table ---------------------------------------------------------
+// 6 rows: id, name, age. Ages repeat (28 twice, 34 twice) so duplicate keys,
+// stable ordering and per-key counts are all exercised.
+
+hold t = db_new(3)
+t = db_insert(t, "1,Ana,34")
+t = db_insert(t, "2,Bob,28")
+t = db_insert(t, "3,Carla,41")
+t = db_insert(t, "4,Dan,28")
+t = db_insert(t, "5,Eve,52")
+t = db_insert(t, "6,Ana,34")
+
+// --- hash index over a column with repeats --------------------------------
+
+hold h = ix_hash_build(t, 2)
+show concat("hash.summary=", ix_summary(h))
+show concat("hash.kind=", ix_istr(ix_kind(h)))
+show concat("hash.cols=", ix_istr(ix_cols(h)))
+show concat("hash.ok=", ix_istr(ix_ok(h)))
+show concat("hash.count=", ix_istr(ix_count(h)))
+show concat("hash.lookup.28=", ix_istr(ix_lookup(h, t, "28")))
+show concat("hash.rows.28=", ix_rows_for(h, t, "28"))
+show concat("hash.count.28=", ix_istr(ix_count_key(h, t, "28")))
+show concat("hash.count.34=", ix_istr(ix_count_key(h, t, "34")))
+show concat("hash.count.99=", ix_istr(ix_count_key(h, t, "99")))
+show concat("hash.lookup.99=", ix_istr(ix_lookup(h, t, "99")))
+
+// The same index over the name column: keys that repeat across rows.
+hold hn = ix_hash_build(t, 1)
+show concat("hash.name.summary=", ix_summary(hn))
+show concat("hash.name.ana=", ix_rows_for(hn, t, "Ana"))
+show concat("hash.name.ana.count=", ix_istr(ix_count_key(hn, t, "Ana")))
+show concat("hash.name.case=", ix_istr(ix_count_key(hn, t, "ana")))
+
+// --- ordered index --------------------------------------------------------
+
+hold o = ix_ordered_build(t, 2)
+show concat("ord.summary=", ix_summary(o))
+show concat("ord.rows=", ix_rows(o))
+show concat("ord.keys=", concat(ix_key_at(o, 0), concat(",", concat(ix_key_at(o, 1), concat(",", concat(ix_key_at(o, 2), concat(",", ix_key_at(o, 3))))))))
+show concat("ord.min=", concat(ix_min_key(o), concat("/", ix_istr(ix_min_row(o)))))
+show concat("ord.max=", concat(ix_max_key(o), concat("/", ix_istr(ix_max_row(o)))))
+show concat("ord.row.at.0=", ix_istr(ix_row_at(o, 0)))
+show concat("ord.row.at.5=", ix_istr(ix_row_at(o, 5)))
+show concat("ord.row.oob=", ix_istr(ix_row_at(o, 6)))
+show concat("ord.row.neg=", ix_istr(ix_row_at(o, 0 - 1)))
+
+// --- range predicates -----------------------------------------------------
+
+show concat("ord.eq.28=", ix_range(o, t, "=", "28"))
+show concat("ord.gt.28=", ix_range(o, t, ">", "28"))
+show concat("ord.ge.34=", ix_range(o, t, ">=", "34"))
+show concat("ord.lt.34=", ix_range(o, t, "<", "34"))
+show concat("ord.le.34=", ix_range(o, t, "<=", "34"))
+show concat("ord.ge.99=", ix_range(o, t, ">=", "99"))
+show concat("ord.le.1=", ix_range(o, t, "<=", "1"))
+show concat("ord.between.28.41=", ix_between(o, t, "28", "41"))
+show concat("ord.between.29.33=", ix_between(o, t, "29", "33"))
+show concat("ord.between.inverted=", ix_between(o, t, "41", "28"))
+show concat("ord.range.bad.op=", ix_range(o, t, "!=", "28"))
+
+// --- index and scan must agree --------------------------------------------
+// The point of an index is that it answers the same question as the scan. Each
+// pair below runs `db_where_n` and the matching index probe on the same table.
+
+show concat("parity.eq.28.scan=", db_hits(db_where_n(t, "2:=:28")))
+show concat("parity.eq.28.index=", ix_rows_for(h, t, "28"))
+show concat("parity.eq.34.scan=", db_hits(db_where_n(t, "2:=:34")))
+show concat("parity.eq.34.index=", ix_rows_for(o, t, "34"))
+show concat("parity.ge.34.scan=", db_hits(db_where_n(t, "2:>=:34")))
+// The scan reports table order, the index key order; the sets must be equal.
+show concat("parity.ge.34.index.keysorted=", ix_range(o, t, ">=", "34"))
+show concat("parity.lt.34.scan=", db_hits(db_where_n(t, "2:<:34")))
+show concat("parity.lt.34.bound=", ix_istr(ix_lower_bound(o, "34")))
+show concat("parity.ge.34.bound=", ix_istr(ix_count(o) - ix_lower_bound(o, "34")))
+show concat("parity.gt.34.bound=", ix_istr(ix_count(o) - ix_upper_bound(o, "34")))
+
+// --- numeric versus byte ordering -----------------------------------------
+// An ordered index has to order ids by value, not by bytes: "9" is below "10".
+hold ids = db_new(2)
+ids = db_insert(ids, "9,z")
+ids = db_insert(ids, "10,a")
+ids = db_insert(ids, "2,m")
+ids = db_insert(ids, "100,b")
+hold oi = ix_ordered_build(ids, 0)
+show concat("numorder.keys=", concat(ix_key_at(oi, 0), concat(",", concat(ix_key_at(oi, 1), concat(",", concat(ix_key_at(oi, 2), concat(",", ix_key_at(oi, 3))))))))
+show concat("numorder.ge.10=", ix_range(oi, ids, ">=", "10"))
+// Text keys sort by byte, so a capital sorts before a lower-case letter.
+hold names = db_insert(db_insert(db_insert(db_new(1), "b"), "A"), "a")
+hold ot = ix_ordered_build(names, 0)
+show concat("textorder.keys=", concat(ix_key_at(ot, 0), concat(",", concat(ix_key_at(ot, 1), concat(",", concat(ix_key_at(ot, 2), ""))))))
+show concat("textorder.le.A=", ix_range(ot, names, "<=", "A"))
+show concat("textorder.gt.A=", ix_range(ot, names, ">", "A"))
+
+// --- staleness ------------------------------------------------------------
+// An index is a snapshot. A mutation must be reported, not hidden.
+
+hold aged = db_update(db_where_n(t, "0:=:2"), 2, "29")
+show concat("stale.after.update=", ix_istr(ix_stale(o, aged)))
+show concat("stale.original=", ix_istr(ix_stale(o, t)))
+show concat("stale.valid=", ix_istr(ix_valid(o, t)))
+show concat("stale.lookup.after=", ix_istr(ix_lookup(h, aged, "28")))
+show concat("stale.rows.after=", ix_rows_for(h, aged, "28"))
+show concat("stale.range.after=", ix_range(o, aged, ">=", "28"))
+hold rebuilt = ix_ordered_build(aged, 2)
+show concat("stale.rebuilt.valid=", ix_istr(ix_valid(rebuilt, aged)))
+show concat("stale.rebuilt.rows=", ix_rows(rebuilt))
+// The hash index must notice a fresh insert too.
+hold grown = db_insert(t, "7,Zoe,28")
+show concat("stale.after.insert=", ix_istr(ix_stale(h, grown)))
+show concat("stale.insert.rebuild=", ix_istr(ix_count_key(ix_hash_build(grown, 2), grown, "28")))
+// And a delete.
+hold shrunk = db_delete(db_where_n(t, "0:=:1"))
+show concat("stale.after.delete=", ix_istr(ix_stale(h, shrunk)))
+
+// --- empty and boundary tables --------------------------------------------
+hold empty = db_new(2)
+show concat("empty.hash=", ix_summary(ix_hash_build(empty, 0)))
+show concat("empty.ordered=", ix_summary(ix_ordered_build(empty, 0)))
+show concat("empty.rows=", ix_istr(len(ix_rows(ix_ordered_build(empty, 0)))))
+show concat("empty.min=", ix_istr(len(ix_min_key(ix_ordered_build(empty, 0)))))
+show concat("empty.lookup=", ix_istr(ix_lookup(ix_hash_build(empty, 0), empty, "x")))
+hold fresh = db_new(2)
+show concat("empty.truly.empty=", ix_istr(ix_valid(ix_hash_build(fresh, 0), fresh)))
+
+// A NULL cell is a legitimate key, and distinct from any text key.
+hold nulls = db_insert(db_insert(db_new(2), ",x"), "a,y")
+show concat("null.ordered.keys=", ix_istr(ix_count(ix_ordered_build(nulls, 0))))
+show concat("null.lookup=", ix_rows_for(ix_hash_build(nulls, 0), nulls, ""))
+show concat("null.count=", ix_istr(ix_count_key(ix_hash_build(nulls, 0), nulls, "")))
+show concat("null.text.key=", ix_rows_for(ix_hash_build(nulls, 0), nulls, "a"))
+
+// --- refusals -------------------------------------------------------------
+show concat("refuse.hash.bad.col=", ix_istr(len(ix_hash_build(t, 9))))
+show concat("refuse.hash.neg.col=", ix_istr(len(ix_hash_build(t, 0 - 1))))
+show concat("refuse.ord.bad.col=", ix_istr(len(ix_ordered_build(t, 9))))
+show concat("refuse.not.a.table=", ix_istr(len(ix_hash_build("garbage", 0))))
+show concat("refuse.summary.garbage=", ix_summary("garbage"))
+show concat("refuse.stale.garbage=", ix_istr(ix_stale("garbage", t)))
+show concat("refuse.range.on.hash=", ix_istr(len(ix_range(h, t, ">=", "28"))))
+show concat("refuse.between.on.hash=", ix_istr(len(ix_between(h, t, "1", "9"))))
+hold longkey = ""
+hold lk = 0
+while lk < 1025 {
+  longkey = concat(longkey, "a")
+  lk = lk + 1
+}
+show concat("refuse.key.1025.bytes=", ix_istr(ix_key_ok(longkey)))
+hold shortkey = ""
+lk = 0
+while lk < 1024 {
+  shortkey = concat(shortkey, "a")
+  lk = lk + 1
+}
+show concat("accept.key.1024.bytes=", ix_istr(ix_key_ok(shortkey)))
+
+// 129 distinct keys is past the hash cap, and 129 rows past the ordered cap.
+hold wide = db_new(1)
+hold i = 0
+while i < 129 {
+  wide = db_insert(wide, db_istr(i))
+  i = i + 1
+}
+show concat("refuse.hash.129.keys=", ix_istr(len(ix_hash_build(wide, 0))))
+show concat("refuse.ord.129.rows=", ix_istr(len(ix_ordered_build(wide, 0))))
+
+// 128 distinct keys is inside it and both indexes still answer.
+hold fits = db_new(1)
+i = 0
+while i < 128 {
+  fits = db_insert(fits, db_istr(i))
+  i = i + 1
+}
+show concat("fits.hash.summary=", ix_summary(ix_hash_build(fits, 0)))
+show concat("fits.ord.summary=", ix_summary(ix_ordered_build(fits, 0)))
+show concat("fits.ord.lookup.100=", ix_istr(ix_lookup(ix_ordered_build(fits, 0), fits, "100")))
+show concat("fits.ord.range.125=", ix_range(ix_ordered_build(fits, 0), fits, ">=", "125"))
+show concat("fits.hash.lookup.127=", ix_istr(ix_lookup(ix_hash_build(fits, 0), fits, "127")))
+
+show "store-index-done"
