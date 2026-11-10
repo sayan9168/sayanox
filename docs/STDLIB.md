@@ -22,6 +22,7 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_query.sa` | stable CSV joins, distinct, sorting and exact decimal aggregates | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/store.sa` | in-memory relational store (`db_*`): typed table shape, `db_insert`, filtered `db_update`/`db_delete`, `db_project`, stable `db_sort`, comparison and text predicates, per-row arithmetic filters, and packed-row/frame round trips; 58 `make` definitions (21 public helpers plus the encoding and predicate helpers they are built on), every operation bounded and every refusal returning `""` | seed-min, gen2, native | `test-stdlib-store` |
+| `stdlib/store_index.sa` | derived indexes over `stdlib/store.sa` tables (`ix_*`): `ix_hash_build`/`ix_ordered_build`, exact-key `ix_lookup`/`ix_rows_for`/`ix_count_key`, binary-searched `ix_range`/`ix_between`, `ix_min_key`/`ix_max_key`/`ix_rows`, and staleness detection (`ix_stale`/`ix_valid`) that refuses to answer from a snapshot the table has outgrown; 43 `make` definitions | seed-min, gen2, native | `test-stdlib-store` |
 | `stdlib/url.sa` | percent-encoding/decoding (`surl_encode`, `surl_decode`, `surl_decode_ok`) and packed query strings (`surl_query_parse`, `surl_query_write`, `surl_query_push`, `surl_query_count`, `surl_query_key`, `surl_query_value`, `surl_query_get`, `surl_query_has`, `surl_query_empty`) | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/datetime.sa` | proleptic Gregorian calendar: `dt_is_leap`, `dt_days_in_month`, `dt_valid`, `dt_jdn`, `dt_from_jdn`, `dt_weekday`, `dt_weekday_name`, `dt_month_name`, `dt_day_of_year`, `dt_days_between`, `dt_add_days`, `dt_format`, `dt_parse`, `dt_istr` | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/hash.sa` | non-cryptographic checksums: `sh_sum_bytes`, `sh_is_digits`, `sh_poly`, `sh_djb2`, `sh_poly131`, `sh_sdbm`, `sh_adler32`, `sh_luhn_sum`, `sh_luhn_check_digit`, `sh_luhn_valid`, `sh_istr` | seed-min, gen2, native | `test-stdlib-next` |
@@ -311,6 +312,53 @@ datasets, and every operation rebuilds a string. The full 150-line fixture
 (`selfhost/stdlib_store_test.sa`) is compared byte for byte against
 `selfhost/stdlib_store.want`, an oracle computed by an independent Python
 implementation, on seed-min, gen2 and native via `test-stdlib-store`.
+
+## Derived indexes
+
+`stdlib/store_index.sa` builds indexes over a `stdlib/store.sa` table. Import
+`store.sa` first.
+
+```sayanox
+use "stdlib/store.sa"
+use "stdlib/store_index.sa"
+hold staff = db_insert(db_new(3), "1,Ada,36")
+staff = db_insert(staff, "2,Mina,41")
+staff = db_insert(staff, "3,Ada,29")
+hold by_name = ix_hash_build(staff, 1)
+show ix_rows_for(by_name, staff, "Ada")      // 0,2
+hold by_age = ix_ordered_build(staff, 2)
+show ix_range(by_age, staff, ">=", "36")     // 0,1  (key order, not table order)
+show ix_key_at(by_age, 0)                    // 29
+```
+
+* `ix_hash_build(table, col)` keeps one entry per distinct key with the rows
+  holding it, in first-seen order: `ix_lookup` returns the first such row, and
+  `ix_rows_for`/`ix_count_key` return all of them and their count. Keys repeat
+  freely, which is why a key maps to a row list rather than to a single row.
+* `ix_ordered_build(table, col)` keeps every row in ascending key order.
+  `ix_range(index, table, op, value)` binary-searches it for `=`, `>`, `>=`,
+  `<` and `<=`, and `ix_between(index, table, lo, hi)` answers an inclusive
+  range. Rows come back in **key order**, which is not the order `db_where_n`
+  reports; `parity.*` lines in the fixture pin the sets and the bounds both.
+* Ordering uses the store's own rule (numeric when both sides are numbers,
+  bytewise otherwise), so `"9"` orders below `"10"` and `"A"` before `"a"`. An
+  index and a scan therefore never disagree about what "greater" means.
+* An index is a **snapshot**: it records the table's row count, column count and
+  a folded byte sum. `ix_stale(index, table)` reports a mutation and
+  `ix_valid` is its inverse; every lookup, count and range on a stale index
+  returns `""` rather than a row number that no longer means anything. Rebuild
+  after a mutation instead of trusting the old index.
+* Bounds are the store's bounds plus an index-specific cap of 128 distinct keys
+  (hash) and 128 rows (ordered), because past that the bookkeeping costs more
+  than the scan it replaces. Keys may hold any byte except `chr(28)`-`chr(31)`;
+  an empty key is a legitimate entry for a NULL cell.
+* This is not a durable database index: there is no B-tree, no page layout, no
+  incremental maintenance, and no concurrency. Every build is a full pass, so it
+  pays off when one index answers many queries.
+
+`selfhost/stdlib_store_index_test.sa` (89 lines) is compared byte for byte
+against `selfhost/stdlib_store_index.want`, again computed from an independent
+Python reference, on seed-min, gen2 and native by `test-stdlib-store`.
 
 ## Exact decimals in JSON
 
