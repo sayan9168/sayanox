@@ -63,12 +63,6 @@ make rp_err(s: str) -> num {
   give 0
 }
 
-make rp_usage() -> num {
-  hold w = write_file("/dev/stderr", "usage: sxrepl [--compiler CMD] [--no-prompt] [--limit N]\n")
-  hold stop = exit(2)
-  give 0
-}
-
 // ---- text helpers ---------------------------------------------------------
 
 make rp_space(c: num) -> num {
