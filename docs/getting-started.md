@@ -136,7 +136,44 @@ show answer()
 This is not namespaced or versioned package importing. See
 [`REGISTRY.md`](REGISTRY.md) for the separate package-tooling status.
 
-## 9. Current boundaries
+## 9. Trying things out: the REPL, and a project
+
+Build the developers' loop once:
+
+```sh
+./sx target tools/sxrepl
+./sx target tools/sxcli
+```
+
+Then the REPL keeps state across lines:
+
+```
+$ ./tools/sxrepl
+sa> hold n = 6
+sa> show concat("n squared is ", numstr(n * n))
+n squared is 36
+sa> :quit
+```
+
+Each prompt recompiles the whole session, which is why `n` is still there on the
+second line and why a fragment that does not compile is refused without ending
+the session. `:help` lists the directives.
+
+A scaffolded project builds and tests as-is:
+
+```sh
+./tools/sxcli new hello demo
+./selfhost/gen2 hello/main.sa /tmp/hello.c
+cc -std=gnu11 -O2 -o /tmp/hello /tmp/hello.c -lm
+/tmp/hello                    # hello, demo
+./tools/sxcli test hello      # demo: 1 tests, 1 passed
+```
+
+A test passes when it compiles, builds and exits 0; there is no runner API,
+because failing from inside a program is a language feature and not a tool.
+Details and limits: [`REPL.md`](REPL.md).
+
+## 10. Current boundaries
 
 Published-language v1 C-output self-hosting is accepted; its exact grammar and
 checked refusals are in [FULL_LANGUAGE_PROFILE_V1](FULL_LANGUAGE_PROFILE_V1.md).

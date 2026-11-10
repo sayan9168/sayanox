@@ -235,7 +235,18 @@ tested out-of-subset language forms. `./sx target true-selfhost-full` requires t
 ./tools/sxpkg init                      # package manager
 ./tools/sxpkg add math 0.1.0
 ./tools/sxpkg list
+
+./sx target tools/sxrepl && ./tools/sxrepl   # read-eval-print loop
+./tools/sxcli new hello demo                # project scaffold
+./tools/sxcli test hello                    # compile and run its tests
 ```
+
+The REPL and the project CLI are the developer loop added on 2026-11-10: the
+loop recompiles the whole session on each prompt (that is what keeps earlier
+bindings visible) and prints only the new output, a fragment that does not
+compile is refused and dropped without ending the session, and the scaffold
+writes a project that builds and tests as-is. Both are pinned by the `calc`
+suite of `test-sxdiag`; see [docs/REPL.md](docs/REPL.md).
 
 The formatter currently handles whitespace. The package tool is one Sayanox
 program, `tools/sxpkg.sa` (built to `./tools/sxpkg` by `./sx target sxpkg`): `init`,
@@ -279,7 +290,9 @@ the environment the wrappers used to read.
 | `tools/native32.sa` | Sayanox i386 / AArch64 / RV64IM ELF emitter (integer, static strings, `len`, bounded `concat`) |
 | `tools/sxmod.sa` | Sayanox module-namespacing pass (`module` / `alias.member`) |
 | `tools/sxaudit.sa` | Sayanox binary/source byte-count and SHA-256 auditor; native-anchor digest pinned in `bootstrap/sxc_native.audit` |
-| `tools/sxdiag.sa` | Sayanox negative-diagnostic suites (replaced four `sh` drivers) |
+| `tools/sxdiag.sa` | Sayanox negative-diagnostic suites (replaced four `sh` drivers); the `calc` suite pins the REPL and the project CLI |
+| `tools/sxrepl.sa` | Sayanox read-eval-print loop: one fragment per line, session recompiled per prompt ([docs/REPL.md](docs/REPL.md)) |
+| `tools/sxcli.sa` | Sayanox project scaffold (`new`) and project test runner (`test`) |
 | `stdlib/` | Twenty-one Sayanox modules, including `json_deep.sa`, `json_write.sa`, `crypto.sa`, `pubkey.sa`, `csv.sa`, `url.sa`, `datetime.sa`, `hash.sa`, and `str_text.sa` (22 typed byte-string helpers) |
 | `sx`, `tools/sxbuild.sa` | Native entry and Sayanox bootstrap/build/test driver; incomplete acceptance migration |
 | `docs/` | Status, design notes, language docs |

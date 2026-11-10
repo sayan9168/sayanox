@@ -45,6 +45,10 @@ tools/emit_to_ir
 tools/sxlink
 tools/sxencode
 tools/sxdiag
+tools/sxrepl
+tools/sxrepl.c
+tools/sxcli
+tools/sxcli.c
 tools/native32
 tools/sxmod
 tools/sxaudit
@@ -107,3 +111,6 @@ tools/sxdiag.c
 /tools/sxfull
 
 /tools/sxddc
+
+# REPL session scratch directory
+/.sxrepl/

@@ -66,3 +66,22 @@ plan, not a test of publication identity.
 
 See [BOOTSTRAP_ROADMAP](BOOTSTRAP_ROADMAP.md) for the real chain and
 [REMAINING_WORK](REMAINING_WORK.md) for open projects and external blockers.
+
+## Developer loop: REPL, scaffolding, project tests
+
+Two tools close the loop between writing a program and running it:
+
+```sh
+./sx target tools/sxrepl
+./sx target tools/sxcli
+./tools/sxrepl                     # read-eval-print loop, :help for directives
+./tools/sxcli new hello demo       # scaffold Sayanox.toml, main.sa, tests/, README
+./tools/sxcli test hello           # compile and run every tests/*.sa
+```
+
+Both are plain Sayanox programs over documented builtins, so they added no
+language or backend surface. The REPL recompiles the whole session on each prompt
+(that is what keeps earlier bindings visible) and prints only the new output; a
+fragment that does not compile is refused and dropped without ending the session.
+`./sx target test-sxdiag` runs their 16-case `calc` suite. See
+[`REPL.md`](REPL.md).

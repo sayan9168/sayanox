@@ -89,6 +89,7 @@ close stdlib depth or replace complete guarded CI.
 | R16 | **AArch64 64-bit add/subtract never set flags — FIXED 2026-11-01** | `tools/sxisaexec.sa` computed 64-bit ADD/SUB (immediate and shifted register) results but updated `N`/`Z`/`C`/`V` only in the 32-bit paths, so any 64-bit `cmp` followed by `b.cond` branched on stale flags. The `streq` fixture reproduced it (`string_eq` on AArch64 printed `0,1,1,1,…` instead of `1,1,1,0,…`), and `test-sxisaexec` fails on the previous emulator and passes on the fixed one, so the regression is pinned. Reopen only if a new flag-consuming 64-bit form is added. |
 | R17 | **Emitted C identifiers are not C23-clean — FIXED 2026-11-02 as a dialect contract, open as a mangling project** | The C backends write a Sayanox identifier straight into C, so a struct field or variable named `true`, `false` or `bool` is a legal C17 identifier but a reserved keyword in C23. The gates now compile generated C with an explicit dialect (`-std=gnu11`, the same way `sxbootstrap_lib` already pinned `gnu99`) so a compiler whose *default* dialect moved to C23 cannot reinterpret our identifiers; the runner image that exposed this is gcc 15.2.0 on Ubuntu 26. Required completion evidence for closing it as a language feature: identifier mangling (or a documented refusal) in every C emitter, with a program that uses `true`/`false`/`bool`/`int`-like names as fields, locals, parameters and function names, compiled by seed, gen2 and native anchors under both `-std=gnu11` and `-std=gnu23`, plus a gate that pins both dialects. |
 | R18 | **Release publication identity — FIXED 2026-11-04** | `tools/sxrelease_lib.sa` tested and packaged `HEAD` and called `gh release create` without binding a new tag to the tested commit, so a dispatch could tag the default branch instead of the accepted checkout, and an existing tag was never checked. The tested commit is now resolved to a full 40-character id before packaging: the checkout must equal `GITHUB_SHA` when it is set, any existing remote tag (`git ls-remote --tags`) must already name that commit, an unreadable remote fails closed, the archive is cut from the resolved id (`git archive ... <commit>`, never `HEAD`), a new tag is created with `--target <commit>`, an existing or pushed tag is only verified (`--verify-tag`), and the remote tag is re-read after publication so a moved tag fails the run. The decisions and argv live in `tools/sxrelease_identity_lib.sa`; `./sx release-identity` runs the same resolution without packaging or calling `gh`. Evidence: `./sx target test-release-identity` executes 3 wiring facts, 30 pure decision/argv/parser facts and 9 real `./sx release-identity` sessions against a recording mock `git`/`gh` PATH (new tag, dispatch mismatch, tag mismatch, matching tag, annotated tag, tag-push event, unreadable remote, unresolvable HEAD, no dispatch commit), including "the identity audit never runs `gh`" and "no archive/publish command is printed on failure"; `test-ci-shape` now requires acceptance before publication, identity before packaging, and the argv in the identity module. Reopen only if a new publication path is added that bypasses `rl_identity_problem`/`rl_published_problem`. |
+| R19 | **Developer loop: REPL, project scaffolding, project tests — landed 2026-11-10; debugger and profiler still missing** | The audit for this increment found the tooling surface complete except for the loop a developer actually uses: there was no REPL, no project scaffold and no project test runner anywhere in `tools/`. `tools/sxrepl.sa` is a REPL that recompiles the whole session on every prompt (which is what keeps earlier `hold`/`make`/`struct`/`use` lines visible), prints only the output past the previous run's byte count so a prompt does not replay earlier answers, continues a fragment while braces are open, and refuses a fragment that does not compile while keeping the session state. `tools/sxcli.sa` scaffolds a four-file project (`Sayanox.toml`, `main.sa`, `tests/basic.sa`, `README.md`), refuses to overwrite an existing project, and runs every `tests/*.sa` through the real toolchain, naming the failing stage and the failing file. Both are plain Sayanox over documented builtins, so no compiler or backend surface was added. Evidence: the new `calc` suite of `tools/sxdiag.sa` (16 cases: binding across prompts, multi-line fragment, refused fragment, `:show`/`:save`, a saved session compiling on its own, `--limit`, unknown directive, missing compiler, the four scaffold files, the scaffolded program's output, a passing run, a failing test, a test that does not compile, a non-project, refusing to overwrite, usage status 2), run by `test-sxdiag` in CI and asserted on its `calc: 16` line; both tools are `./sx target` targets. Documented in [REPL](REPL.md), [TOOLCHAIN](TOOLCHAIN.md), [getting-started](getting-started.md), [ONLY_SAYANOX](ONLY_SAYANOX.md) and the README. **Still open:** no debugger, no profiler, no breakpoints or step execution, no multi-line fragment without open braces, no completion/history in the REPL, and the REPL is a recompile-per-prompt loop rather than an incremental evaluator, so it makes no speed claim. |
 
 ### Increment log - 2026-11-04 (release publication identity)
 
@@ -493,3 +494,38 @@ anything beyond the stated bounds.
 
 Still open in R07: persistence, transactions, incremental index maintenance,
 multi-column keys, and anything beyond the stated bounds.
+
+## Ecosystem increment: REPL, project scaffold, project test runner (2026-11-10)
+
+* **The gap was real.** `grep -ril repl tools/ docs/` matched only the word
+  "replacement"; there was no REPL, debugger, profiler or `new`/`init`
+  subcommand anywhere. Formatting, LSP, packages and a registry already existed,
+  so the missing piece was the loop a developer uses before any of those.
+* **`tools/sxrepl.sa`** recompiles the whole session per prompt. That is the
+  design, not a shortcut: it is what makes earlier bindings, functions, structs
+  and `use` lines visible on later lines while keeping the semantics identical to
+  a normal program, and it means the REPL has no evaluator that could disagree
+  with the compiler. Only the new output is printed, by comparing the run's stdout
+  length with the previous prompt's; no marker lines are injected into the
+  generated program.
+* **`tools/sxcli.sa`** scaffolds and tests a project. A test passes when it
+  compiles, builds and exits 0 — deliberately no matcher API, because failing
+  from inside a program is a language feature, not a tool.
+* **Three real defects found while gating it.** `write_file("/dev/stdout", s)`
+  returns 1 and prints nothing (opening `/dev/stdout` truncates it), so the REPL
+  uses `write_out`; a refused fragment kept its buffer pending, so end of input
+  was never seen and the loop spun (caught by a timeout, now impossible because a
+  refusal clears the buffer); and `gen2` reports a frontend refusal by writing
+  `#error` into the emitted C and exiting 0, so the test runner classified a
+  source error as a C build error until it read the emitted file.
+* **Language limits that shaped the tools, recorded so they are not rediscovered:**
+  `read_line()` returns `""` both at end of input and on a blank line, so the REPL
+  ends on two consecutive empty reads; there is no string-to-number builtin, so
+  flags are parsed digit by digit; `concat` accepted three arguments and emitted a
+  two-argument `sx_cat(...)`, so nested `concat` is mandatory; and the same
+  function cannot use one name as a loop variable and as a string, which silently
+  replaced a project name with a file name until the gate compared the output.
+* **Gate.** `tools/sxdiag.sa` gained the `calc` suite (16 cases) and
+  `test-sxdiag` now builds `sxrepl`/`sxcli` first, runs the suite and asserts the
+  `calc: 16` line. Both tools are `./sx target` targets, so they are built by the
+  same driver as every other tool.

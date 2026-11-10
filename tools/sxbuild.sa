@@ -486,6 +486,12 @@ make tool_source_for(name: str) -> str {
   when string_eq(name, "sxdiag") == 1 {
     give "tools/sxdiag.sa"
   }
+  when string_eq(name, "sxrepl") == 1 {
+    give "tools/sxrepl.sa"
+  }
+  when string_eq(name, "sxcli") == 1 {
+    give "tools/sxcli.sa"
+  }
   when string_eq(name, "sxmod") == 1 {
     give "tools/sxmod.sa"
   }
