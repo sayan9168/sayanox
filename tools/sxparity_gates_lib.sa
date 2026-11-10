@@ -178,9 +178,10 @@ make ep_store() -> num {
   hold dir = "selfhost/seed_tests/stdlib_store"
   hold created = gl_ensure_dir(dir)
   hold index = 0
-  while index < 2 {
+  while index < 3 {
     hold module = "store"
     when index == 1 { module = "store_index" }
+    when index == 2 { module = "store_rel" }
     hold source = concat(concat("selfhost/stdlib_", module), "_test.sa")
     hold oracle = concat(concat("selfhost/stdlib_", module), ".want")
     hold expected = bt_require_file(oracle)
@@ -199,6 +200,7 @@ make ep_store() -> num {
   }
   hold done = ep_has_line(concat(dir, "/store0.out"), "store-done")
   hold done_index = ep_has_line(concat(dir, "/store_index0.out"), "store-index-done")
+  hold done_rel = ep_has_line(concat(dir, "/store_rel0.out"), "store-rel-done")
   // The modules have to survive being imported alone, without the fixture's other
   // imports, and next to unrelated modules in one program.
   hold alone = ep_snippet("use \"stdlib/store.sa\"\nhold t = db_insert(db_new(2), \"1,Ana\")\nshow db_istr(db_count(t))\nshow db_hits(db_where_n(t, \"0:=:1\"))\nshow db_get(t, db_hit(db_where(t, \"1:has:na\")), 1)\n", "1\n0\nAna", concat(dir, "/alone"))
@@ -206,5 +208,8 @@ make ep_store() -> num {
   // The index module depends on the store, so it is checked in one program that
   // imports both, and the index answer must equal the scan answer.
   hold indexed = ep_snippet("use \"stdlib/store.sa\"\nuse \"stdlib/store_index.sa\"\nhold t = db_insert(db_insert(db_new(2), \"1,a\"), \"2,b\")\nhold ix = ix_hash_build(t, 0)\nhold ord = ix_ordered_build(t, 0)\nshow ix_rows_for(ix, t, \"2\")\nshow db_hits(db_where_n(t, \"0:=:2\"))\nshow ix_range(ord, t, \">=\", \"2\")\nshow ix_summary(ix)\n", "1\n1\n1\nkind=1 keys=2", concat(dir, "/alone_index"))
+  // The relational module needs the store, and its join/group answers must agree
+  // with the single-table reads they replace.
+  hold rel = ep_snippet("use \"stdlib/store.sa\"\nuse \"stdlib/store_rel.sa\"\nhold t = db_insert(db_insert(db_new(2), \"1,a\"), \"2,b\")\nhold u = db_insert(db_insert(db_new(2), \"a,x\"), \"b,y\")\nshow db_rows(sr_join(t, 1, u, 0))\nshow db_rows(sr_group_count(t, 1))\nshow db_istr(sr_same_rows(t, t))\n", "1,a,a,x\n2,b,b,y\na,1\nb,1\n1", concat(dir, "/alone_rel"))
   give 0
 }
