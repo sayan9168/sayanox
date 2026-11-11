@@ -354,6 +354,310 @@ make name_callee(dir: str, gen2: str) -> num {
   give count
 }
 
+
+// ---- calc: the REPL and the project scaffold ---------------------------------
+//
+// `tools/sxrepl.sa` and `tools/sxcli.sa` are the two ecosystem tools added on
+// 2026-11-10: a read-eval-print loop and a project scaffold/test runner. Both
+// drive the toolchain through `run_command`, so both can silently stop working
+// when the compiler or the C build changes shape. This suite pins their
+// observable protocol rather than their internals:
+//
+//   * the REPL carries a binding across prompts, ignores a blank line, keeps the
+//     session alive after a refused fragment, and honours its fragment limit;
+//   * `:show` and `:save` print exactly the session source that would compile;
+//   * the scaffold writes the four files, refuses to overwrite a project, and
+//     its generated program builds and prints what it should;
+//   * `sxcli test` passes a good project, fails a bad one, and says which stage
+//     failed.
+//
+// Every command is run through `/bin/sh` with its stdin redirected from a file,
+// because the REPL reads decisions from stdin and the gate must not depend on the
+// gate runner's own stdin. A missing binary is a failure, not a skip: the point
+// of the suite is that these tools exist and work.
+
+// Write `text` to `path` and refuse to continue if that failed.
+make calc_fixture(path: str, text: str) -> num {
+  hold w = write_file(path, text)
+  when w != 1 {
+    hold stop = fail(1, concat("cannot write the fixture ", path))
+  }
+  give 0
+}
+
+// Run `cmd` with stdin from `infile` and combined output to `outfile`; gives the
+// exit status.
+make calc_run(cmd: str, infile: str, outfile: str) -> num {
+  hold full = concat(cmd, concat(" < ", concat(infile, concat(" > ", concat(outfile, " 2>&1")))))
+  give run_command(full)
+}
+
+// Same, but the command must succeed; the output is still captured for a
+// follow-up assertion.
+make calc_must(cmd: str, infile: str, outfile: str, what: str) -> num {
+  hold rc = calc_run(cmd, infile, outfile)
+  when rc != 0 {
+    hold said = trim_tail(read_file(outfile))
+    hold stop = fail(1, concat(concat(concat(what, " exited "), numstr(rc)), concat(": ", said)))
+  }
+  give 0
+}
+
+// A whole output file must equal `want` (trailing newline ignored).
+make calc_out(path: str, want: str, what: str) -> num {
+  hold got = trim_tail(calc_stdout(read_file(path)))
+  when string_eq(got, want) == 0 {
+    hold stop = fail(1, concat(concat(what, " printed the wrong output: got ["), concat(got, concat("] want [", concat(want, "]")))))
+  }
+  give 0
+}
+
+// A file must contain `needle`.
+make calc_has(path: str, needle: str, what: str) -> num {
+  hold text = read_file(path)
+  when contains(text, needle) == 0 {
+    hold stop = fail(1, concat(what, concat(": no [", concat(needle, "]"))))
+  }
+  give 0
+}
+
+// The program's own stdout, without the REPL's `sxrepl:` status lines. Those go
+// to stderr and are merged into the capture file on purpose (a failure has to be
+// visible), so the comparison filters them rather than the run hiding them.
+make calc_stdout(text: str) -> str {
+  hold out = ""
+  hold n = len(text)
+  hold pos = 0
+  while pos < n {
+    hold end = pos
+    while end < n && sx_index(text, end) != 10 {
+      end = end + 1
+    }
+    hold row = slice(text, pos, end)
+    when len(row) > 0 && contains(row, "sxrepl:") == 0 {
+      when len(out) > 0 {
+        out = concat(out, "\n")
+      }
+      out = concat(out, row)
+    }
+    pos = end + 1
+  }
+  give out
+}
+
+// Cut the final newline so comparisons are not sensitive to it.
+make trim_tail(s: str) -> str {
+  hold n = len(s)
+  when n == 0 {
+    give ""
+  }
+  when sx_index(s, n - 1) == 10 {
+    give slice(s, 0, n - 1)
+  }
+  give s
+}
+
+// Build every tool this suite drives. They are built here rather than assumed so
+// that a checkout without `tools/sxrepl` fails with a clear message instead of a
+// confusing empty output.
+make calc_tools(dir: str) -> num {
+  hold stop = 0
+  when path_kind("./tools/sxrepl") != 1 {
+    hold b1 = shell("./sx target tools/sxrepl", concat(dir, "/build-repl.log"))
+    hold stop1 = need(path_kind("./tools/sxrepl") == 1, "sxrepl did not build")
+  }
+  when path_kind("./tools/sxcli") != 1 {
+    hold b2 = shell("./sx target tools/sxcli", concat(dir, "/build-cli.log"))
+    hold stop2 = need(path_kind("./tools/sxcli") == 1, "sxcli did not build")
+  }
+  give 0
+}
+
+make suite_calc(dir: str, seed: str, gen2: str) -> num {
+  hold t0 = calc_tools(dir)
+  hold cases = 0
+  // The scaffold refuses an existing project on purpose, so a re-run has to start
+  // from a clean slate; otherwise the second run of the gate fails on the state
+  // the first run left behind.
+  hold clean = run_command(concat(concat("rm -rf ", dir), "/calcproj"))
+
+  // -- 1. a binding survives across prompts, and a blank line does not end it.
+  hold f1 = concat(dir, "/calc_basic.in")
+  hold w1 = calc_fixture(f1, "hold x = 1 + 2\nshow x\nshow concat(\"twice \", numstr(x * 2))\nhold y = x + 10\nshow y\n\n\n")
+  hold o1 = concat(dir, "/calc_basic.out")
+  hold r1 = calc_must(concat("./tools/sxrepl --no-prompt --compiler ", gen2), f1, o1, "sxrepl basic session")
+  hold c1 = calc_out(o1, "3\ntwice 6\n13", "sxrepl carrying a binding across prompts")
+  cases = cases + 1
+
+  // -- 2. a multi-line fragment continues while braces are open.
+  hold f2 = concat(dir, "/calc_multi.in")
+  hold w2 = calc_fixture(f2, "make twice(n: num) -> num {\n  give n * 2\n}\nshow twice(21)\n\n\n")
+  hold o2 = concat(dir, "/calc_multi.out")
+  hold r2 = calc_must(concat("./tools/sxrepl --no-prompt --compiler ", gen2), f2, o2, "sxrepl multi-line fragment")
+  hold c2 = calc_out(o2, "42", "sxrepl a multi-line function definition")
+  cases = cases + 1
+
+  // -- 3. a refused fragment leaves the session unchanged and does not end it.
+  hold f3 = concat(dir, "/calc_bad.in")
+  hold w3 = calc_fixture(f3, "hold x = 7\nthis is not sayanox\nshow x\n\n\n")
+  hold o3 = concat(dir, "/calc_bad.out")
+  hold r3 = calc_must(concat("./tools/sxrepl --no-prompt --compiler ", gen2), f3, o3, "sxrepl refused fragment")
+  hold c3 = calc_has(o3, "does not compile", "sxrepl refuses a fragment that does not compile")
+  hold c3b = calc_has(o3, "7", "sxrepl keeps the state it had after a refusal")
+  cases = cases + 1
+
+  // -- 4. :show prints the whole session and :save writes the same bytes.
+  hold f4 = concat(dir, "/calc_show.in")
+  hold save = concat(dir, "/calc_saved.sa")
+  hold w4 = calc_fixture(f4, concat(concat("hold a = 1\n:save ", save), "\n:show\n\n\n"))
+  hold o4 = concat(dir, "/calc_show.out")
+  hold r4 = calc_must(concat("./tools/sxrepl --no-prompt --compiler ", gen2), f4, o4, "sxrepl :show")
+  hold c4 = calc_has(save, "hold a = 1", "sxrepl :save writes the session source")
+  hold c4b = calc_has(save, "// generated by sxrepl", "sxrepl :save writes the banner")
+  hold c4c = calc_has(o4, "hold a = 1", "sxrepl :show prints the session source")
+  cases = cases + 1
+
+  // -- 5. the saved session compiles on its own, which is the claim :save makes.
+  hold saved_c = concat(dir, "/calc_saved.c")
+  hold r5 = shell(concat(concat(concat(gen2, " "), save), concat(" ", saved_c)), concat(dir, "/calc_saved.log"))
+  hold c5 = need(r5 == 0, "a session saved by sxrepl does not compile")
+  cases = cases + 1
+
+  // -- 6. the fragment limit is real and is reported.
+  hold f6 = concat(dir, "/calc_limit.in")
+  hold w6 = calc_fixture(f6, "hold a1 = 1\nhold a2 = 2\nhold a3 = 3\nhold a4 = 4\nhold a5 = 5\n\n\n")
+  hold o6 = concat(dir, "/calc_limit.out")
+  hold r6 = calc_run(concat("./tools/sxrepl --no-prompt --limit 3 --compiler ", gen2), f6, o6)
+  hold c6 = calc_has(o6, "session limit reached", "sxrepl honours --limit")
+  cases = cases + 1
+
+  // -- 7. an unknown directive is refused by name, and never compiled.
+  hold f7 = concat(dir, "/calc_dir.in")
+  hold w7 = calc_fixture(f7, ":bogus\nhold z = 5\nshow z\n\n\n")
+  hold o7 = concat(dir, "/calc_dir.out")
+  hold r7 = calc_must(concat("./tools/sxrepl --no-prompt --compiler ", gen2), f7, o7, "sxrepl directive")
+  hold c7 = calc_has(o7, "unknown directive: bogus", "sxrepl refuses an unknown directive")
+  hold c7b = calc_out_tail(o7, "5", "sxrepl keeps going after an unknown directive")
+  cases = cases + 1
+
+  // -- 8. no compiler at the given path is refused before anything runs.
+  hold o8 = concat(dir, "/calc_nocc.out")
+  hold r8 = calc_run("./tools/sxrepl --no-prompt --compiler /nonexistent/sxc", f7, o8)
+  hold c8 = need(r8 != 0, "sxrepl accepted a missing compiler")
+  hold c8b = calc_has(o8, "no compiler at", "sxrepl says which compiler is missing")
+  cases = cases + 1
+
+  // -- 9. the scaffold writes the four files and the generated program runs.
+  hold proj = concat(dir, "/calcproj")
+  hold o9 = concat(dir, "/calc_new.out")
+  hold f9 = concat(dir, "/calc_new.in")
+  hold w9 = calc_fixture(f9, "")
+  hold r9 = calc_must(concat(concat("./tools/sxcli new ", proj), " demo"), f9, o9, "sxcli new")
+  hold c9 = need(path_kind(concat(proj, "/Sayanox.toml")) == 1, "sxcli new did not write Sayanox.toml")
+  hold c9b = need(path_kind(concat(proj, "/main.sa")) == 1, "sxcli new did not write main.sa")
+  hold c9c = need(path_kind(concat(proj, "/README.md")) == 1, "sxcli new did not write README.md")
+  hold c9d = need(path_kind(concat(proj, "/tests/basic.sa")) == 1, "sxcli new did not write tests/basic.sa")
+  hold c9e = calc_has(concat(proj, "/Sayanox.toml"), "name = \"demo\"", "sxcli new writes the package name")
+  cases = cases + 1
+
+  // -- 10. the generated program builds with the compiler this gate was given.
+  hold main_c = concat(dir, "/calc_main.c")
+  hold main_bin = concat(dir, "/calc_main")
+  hold r10 = shell(concat(concat(concat(gen2, " "), concat(proj, "/main.sa ")), main_c), concat(dir, "/calc_main.log"))
+  hold c10 = need(r10 == 0, "the scaffolded main.sa does not compile")
+  hold c10b = shell(concat(concat("cc -std=gnu11 -O2 -o ", main_bin), concat(" ", concat(main_c, " -lm"))), concat(dir, "/calc_main_cc.log"))
+  hold c10c = need(c10b == 0, "the scaffolded main.sa did not build")
+  hold c10d = calc_out_run(main_bin, concat(dir, "/calc_main.out"), "hello, demo", "the scaffolded program")
+  cases = cases + 1
+
+  // -- 11. sxcli test passes a good project, with the count and the name.
+  hold o11 = concat(dir, "/calc_test.out")
+  hold f11 = concat(dir, "/calc_test.in")
+  hold w11 = calc_fixture(f11, "")
+  hold r11 = calc_must(concat("./tools/sxcli test ", proj), f11, o11, "sxcli test")
+  hold c11 = calc_has(o11, "demo: 1 tests, 1 passed", "sxcli test reports the project name and count")
+  hold c11b = calc_has(o11, "PASS basic.sa", "sxcli test names the passing test")
+  cases = cases + 1
+
+  // -- 12. a failing test fails the run, is named, and the good test still ran.
+  hold bad = concat(proj, "/tests/failing.sa")
+  hold wbad = calc_fixture(bad, "show \"about to fail\"\nhold bad = exit(1)\n")
+  hold o12 = concat(dir, "/calc_test_bad.out")
+  hold r12 = calc_run(concat("./tools/sxcli test ", proj), f11, o12)
+  hold c12 = need(r12 != 0, "sxcli test passed a project with a failing test")
+  hold c12b = calc_has(o12, "FAIL failing.sa", "sxcli test names the failing test")
+  hold c12c = calc_has(o12, "demo: 2 tests, 1 passed", "sxcli test counts the failing test too")
+  hold c12d = calc_has(o12, "PASS basic.sa", "sxcli test still ran the passing test")
+  hold rm = shell(concat("rm -f ", bad), concat(dir, "/calc_rm.log"))
+  cases = cases + 1
+
+  // -- 13. a test that does not compile fails with the compiler's own words.
+  hold broken = concat(proj, "/tests/broken.sa")
+  hold wbroken = calc_fixture(broken, "this is not sayanox\n")
+  hold o13 = concat(dir, "/calc_test_broken.out")
+  hold r13 = calc_run(concat("./tools/sxcli test ", proj), f11, o13)
+  hold c13 = need(r13 != 0, "sxcli test passed a test that does not compile")
+  hold c13b = calc_has(o13, "FAIL broken.sa: does not compile", "sxcli test reports the compile stage")
+  hold rm2 = shell(concat("rm -f ", broken), concat(dir, "/calc_rm2.log"))
+  cases = cases + 1
+
+  // -- 14. a directory that is not a project is refused, not half-run.
+  hold notproj = concat(dir, "/calcnotproj")
+  hold mk = shell(concat("mkdir -p ", notproj), concat(dir, "/calc_mkdir.log"))
+  hold o14 = concat(dir, "/calc_notproj.out")
+  hold r14 = calc_run(concat("./tools/sxcli test ", notproj), f11, o14)
+  hold c14 = need(r14 != 0, "sxcli accepted a directory with no manifest")
+  hold c14b = calc_has(o14, "no project at", "sxcli test says the directory is not a project")
+  cases = cases + 1
+
+  // -- 15. an existing project is never overwritten.
+  hold o15 = concat(dir, "/calc_again.out")
+  hold r15 = calc_run(concat(concat("./tools/sxcli new ", proj), " demo"), f9, o15)
+  hold c15 = need(r15 != 0, "sxcli new overwrote an existing project")
+  hold c15b = calc_has(o15, "is already a project", "sxcli new refuses an existing project")
+  cases = cases + 1
+
+  // -- 16. usage is refused with status 2, the same shape as sxdiag itself.
+  hold o16 = concat(dir, "/calc_usage.out")
+  hold r16 = calc_run("./tools/sxcli bogus", f9, o16)
+  hold c16 = need(r16 == 2, "sxcli did not refuse an unknown command with status 2")
+  cases = cases + 1
+
+  give cases
+}
+
+// The last non-empty line of a file must be `want`. Used where a tool prints
+// progress before its answer and only the answer's presence matters.
+make calc_out_tail(path: str, want: str, what: str) -> num {
+  hold text = trim_tail(calc_stdout(read_file(path)))
+  hold at = 0 - 1
+  hold i = 0
+  while i < len(text) {
+    when sx_index(text, i) == 10 {
+      at = i
+    }
+    i = i + 1
+  }
+  hold last = slice(text, at + 1, len(text))
+  when string_eq(last, want) == 0 {
+    hold stop = fail(1, concat(what, concat(": last line was [", concat(last, "]"))))
+  }
+  give 0
+}
+
+// Run a built binary and compare its whole output.
+make calc_out_run(bin: str, out: str, want: str, what: str) -> num {
+  hold rc = run_command(concat(bin, concat(" > ", out)))
+  when rc != 0 {
+    hold stop = fail(1, concat(what, " exited nonzero"))
+  }
+  hold got = trim_tail(read_file(out))
+  when string_eq(got, want) == 0 {
+    hold stop2 = fail(1, concat(concat(what, " printed ["), concat(got, concat("] not [", concat(want, "]")))))
+  }
+  give 0
+}
+
 // ---- entry point ----------------------------------------------------------
 
 make known(suite: str) -> num {
@@ -370,12 +674,15 @@ make known(suite: str) -> num {
   when string_eq(suite, "name") == 1 {
     r = 1
   }
+  when string_eq(suite, "calc") == 1 {
+    r = 1
+  }
   give r
 }
 
 make drive_all() -> num {
   when arg_count() < 6 {
-    hold stop = fail(2, "usage: sxdiag <inline|postfix|return|name> <seed> <gen2> <native> <workdir>")
+    hold stop = fail(2, "usage: sxdiag <inline|postfix|return|name|calc> <seed> <gen2> <native> <workdir>")
   }
   hold suite = arg(1)
   hold seed = arg(2)
@@ -409,6 +716,10 @@ make drive_all() -> num {
     hold refs = name_reference(dir, gen2)
     hold callees = name_callee(dir, gen2)
     hold said = say_ok("name", refs + callees, " unbound names and unknown callees refused with the right diagnostic")
+  }
+  when string_eq(suite, "calc") == 1 {
+    hold n = suite_calc(dir, seed, gen2)
+    hold said = say_ok("calc", n, " REPL sessions, project scaffolding and project tests behave as documented")
   }
   give 0
 }

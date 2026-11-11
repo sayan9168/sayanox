@@ -60,8 +60,12 @@ is written in Sayanox.
   `make test-stdlib-crypto`.
 - `tools/sxdiag.sa` — the four negative-diagnostic suites (inline list
   arguments, list postfix arguments, unproved return paths, unbound names and
-  unknown callees), which were four `.sh` drivers until 2026-10-21; covered by
-  `make test-sxdiag`.
+  unknown callees), which were four `.sh` drivers until 2026-10-21, plus the
+  `calc` suite that pins the REPL and the project CLI; covered by
+  `test-sxdiag`.
+- `tools/sxrepl.sa` — the read-eval-print loop, and `tools/sxcli.sa` — the
+  project scaffold and project test runner (2026-11-10). Both are plain Sayanox
+  over the documented builtins, so no host program is involved.
 - `examples/*.sa` and `registry/*/main.sa` — sample programs and packages.
 - Many files in `selfhost/*.sa` are compiler-stage experiments; most are not
   yet wired into the maintained build.

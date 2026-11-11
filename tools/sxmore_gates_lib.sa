@@ -525,6 +525,12 @@ make mp_test_sxdiag() -> num {
   hold p25 = pg_expect_failure("./selfhost/seed/sxc_seed_min selfhost/seed_tests/sxdiag_env.sa >/dev/null 2>selfhost/seed_tests/sxdiag_env_seed.err", "test-sxdiag refusal")
   hold p26 = pr_assert("selfhost/seed_tests/sxdiag_env_seed.err", "unknown function or builtin", 0, 0, 0, 0, 1)
   hold p27 = pg_expect_failure("./selfhost/native_aot selfhost/seed_tests/sxdiag_env.sa selfhost/seed_tests/sxdiag_env_native 2>/dev/null", "test-sxdiag refusal")
+  // The `calc` suite pins the ecosystem tools: the REPL's session protocol and
+  // the scaffolding/test-runner CLI. It needs the native backend next to the
+  // other three arguments, so it runs after they exist.
+  hold p28 = pg_command("./tools/sxdiag calc ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-calc", "test-sxdiag child command")
+  hold p29 = pg_probe("./tools/sxdiag calc ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-calc", 1, "selfhost/seed_tests/sxdiag-calc.log")
+  hold p30 = pr_assert("selfhost/seed_tests/sxdiag-calc.log", "calc: 16", 0, 0, 0, 0, 1)
   give 0
 }
 

@@ -1,0 +1,439 @@
+// tools/sxrepl.sa -- a Sayanox read-eval-print loop (2026-11-10).
+//
+//   sxrepl [--compiler CMD] [--no-prompt] [--limit N]
+//
+// Reads one program fragment per line, appends it to the session source, compiles
+// the whole session with a real Sayanox compiler and runs it. State persists
+// between prompts because every prompt compiles everything typed so far: earlier
+// `hold`, `make`, `struct` and `use` lines are still in the program, which is what
+// makes a binding visible on the next line. Nothing is interpreted here -- the
+// REPL has no evaluator of its own, so it cannot print an answer the compiler
+// would not produce.
+//
+// Only the *new* output is printed. Each run's stdout is compared with the
+// previous run's byte count, and only the tail past that count is shown, so
+// recompiling from the top does not replay earlier answers. That is why the loop
+// needs no marker lines inside the generated program and no analysis of what a
+// line prints.
+//
+// Directives start with ':' and are never compiled:
+//
+//   :help                 list the directives
+//   :show                 print the session source
+//   :save FILE            write the session source to FILE
+//   :reset                forget everything typed so far
+//   :quit  (or :q)        leave
+//
+// Rules that matter:
+//
+//   * A fragment that fails to compile is refused and dropped; the session keeps
+//     the state it had, so a typo does not end the session.
+//   * Blank lines are ignored. Because `read_line()` cannot distinguish an empty
+//     line from end of input, end of input is **two consecutive empty reads**;
+//     a piped script therefore needs one blank line at the end, and an
+//     interactive user just presses Enter twice (or types :quit).
+//   * A fragment spanning several lines is not supported: one line is one
+//     fragment, which keeps the model simple and the failure obvious.
+//   * The session is bounded at 200 fragments by default (--limit changes it),
+//     because one prompt costs one full compile.
+//
+// Output goes through `write_out`, not `write_file("/dev/stdout")`: the latter
+// returns 0 and prints nothing, because opening /dev/stdout with truncation
+// discards what it was handed. `write_out` is the documented stdout path.
+//
+// Honest limits: this is not an incremental evaluator and makes no speed claim.
+// Interactive echo of a fragment's output is only what the fragment itself
+// printed -- the REPL never prints an expression's value for you, because doing
+// that would require knowing which expression it was, i.e. a parser it does not
+// have.
+
+make rp_nl() -> str {
+  give chr(10)
+}
+
+make rp_say(s: str) -> num {
+  hold w = write_out(s)
+  hold n = write_out(rp_nl())
+  hold f = flush_out()
+  give 0
+}
+
+make rp_err(s: str) -> num {
+  hold w = write_file("/dev/stderr", concat(s, rp_nl()))
+  give 0
+}
+
+// ---- text helpers ---------------------------------------------------------
+
+make rp_space(c: num) -> num {
+  when c == 32 || c == 9 || c == 13 || c == 10 {
+    give 1
+  }
+  give 0
+}
+
+make rp_slice(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  hold lo = a
+  when lo < 0 {
+    lo = 0
+  }
+  hold hi = b
+  when hi > n {
+    hi = n
+  }
+  when lo >= hi {
+    give ""
+  }
+  hold out = ""
+  hold i = lo
+  while i < hi {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make rp_trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  while a < n && rp_space(sx_index(s, a)) == 1 {
+    a = a + 1
+  }
+  hold b = n
+  while b > a && rp_space(sx_index(s, b - 1)) == 1 {
+    b = b - 1
+  }
+  give rp_slice(s, a, b)
+}
+
+make rp_starts(s: str, p: str) -> num {
+  when len(p) > len(s) {
+    give 0
+  }
+  hold i = 0
+  while i < len(p) {
+    when sx_index(s, i) != sx_index(p, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// How many braces are still open at the end of `text`? Braces inside string
+// literals and after `//` do not count, so a fragment that prints "}" does not
+// look unfinished. A non-zero result means the fragment continues on the next
+// line, which is what lets `make`, `struct` and multi-statement bodies be typed
+// at the prompt one line at a time.
+make rp_balance(text: str) -> num {
+  hold depth = 0
+  hold quote = 0
+  hold comment = 0
+  hold i = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when c == 10 {
+      comment = 0
+    }
+    when comment == 0 {
+      when quote == 0 && c == 47 && i + 1 < len(text) && sx_index(text, i + 1) == 47 {
+        comment = 1
+      }
+      when comment == 0 {
+        when c == 34 {
+          when quote == 1 {
+            quote = 0
+          } otherwise {
+            quote = 1
+          }
+        }
+        when quote == 0 && c == 123 {
+          depth = depth + 1
+        }
+        when quote == 0 && c == 125 {
+          depth = depth - 1
+        }
+      }
+    }
+    i = i + 1
+  }
+  give depth
+}
+
+make rp_num(v: num) -> str {
+  give numstr(v)
+}
+
+// `--limit`'s value, or the value already in force when the text is not a
+// positive decimal. Kept as a separate function so the argument loop has no
+// nested `when`, which the return-path check rejects.
+make rp_limit_or(raw: str, was: num) -> num {
+  hold v = rp_digits(raw)
+  when v > 0 {
+    give v
+  }
+  give was
+}
+
+// Decimal digits to a number, and 0 when anything else appears. The language has
+// no string-to-number builtin, so the REPL parses its own flags; a value that is
+// not all digits is refused by giving 0, which the caller treats as "keep the
+// default".
+make rp_digits(s: str) -> num {
+  when len(s) == 0 {
+    give 0
+  }
+  hold v = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c < 48 || c > 57 {
+      give 0
+    }
+    v = v * 10 + (c - 48)
+    i = i + 1
+  }
+  give v
+}
+
+// ---- session source -------------------------------------------------------
+//
+// The session is a list of accepted lines plus a preamble that defines the one
+// helper the loop relies on. Rebuilding the source from the list keeps `:show`
+// and `:save` honest: they print exactly what would be compiled.
+
+make rp_append(lines: str, line: str) -> str {
+  when len(lines) == 0 {
+    give line
+  }
+  give concat(lines, concat(rp_nl(), line))
+}
+
+make rp_count(lines: str) -> num {
+  hold n = len(lines)
+  when n == 0 {
+    give 0
+  }
+  hold c = 1
+  hold i = 0
+  while i < n {
+    when sx_index(lines, i) == 10 {
+      c = c + 1
+    }
+    i = i + 1
+  }
+  give c
+}
+
+make rp_source(lines: str) -> str {
+  hold p = "// generated by sxrepl -- one line per accepted fragment"
+  p = concat(p, rp_nl())
+  p = concat(p, lines)
+  give concat(p, rp_nl())
+}
+
+// ---- driving the toolchain ------------------------------------------------
+
+// Compile and run the session source. Prints nothing; gives the byte count of the
+// run's stdout, or -1 when the fragment does not compile or does not build. The
+// build log is left in `dir` for the caller to show.
+make rp_run(compiler: str, source: str, dir: str) -> num {
+  hold src = concat(dir, "/session.sa")
+  hold cfile = concat(dir, "/session.c")
+  hold bin = concat(dir, "/session.bin")
+  hold out = concat(dir, "/session.out")
+  hold log = concat(dir, "/session.log")
+  hold w = write_file(src, source)
+  hold elog = concat(dir, "/emit.log")
+  hold emit = run_command(concat(compiler, concat(" ", concat(src, concat(" ", concat(cfile, concat(" 2>", elog)))))))
+  when emit != 0 {
+    give 0 - 1
+  }
+  hold cc = "cc -std=gnu11 -O2 -o "
+  cc = concat(cc, concat(bin, concat(" ", cfile)))
+  cc = concat(cc, concat(" -lm 2>", log))
+  when run_command(cc) != 0 {
+    give 0 - 1
+  }
+  when run_command(concat(bin, concat(" > ", out))) < 0 {
+    give 0 - 1
+  }
+  give len(read_file(out))
+}
+
+// The bytes of `out` past `seen`, which is what this prompt printed.
+make rp_delta(out: str, seen: num) -> str {
+  when seen < 0 || seen >= len(out) {
+    give ""
+  }
+  give rp_slice(out, seen, len(out))
+}
+
+make rp_help() -> num {
+  hold h0 = rp_say("sayanox repl: one program fragment per line, state persists across prompts")
+  hold h1 = rp_say("  :help        this list")
+  hold h2 = rp_say("  :show        print the session source")
+  hold h3 = rp_say("  :save FILE   write the session source to FILE")
+  hold h4 = rp_say("  :reset       forget everything typed so far")
+  hold h5 = rp_say("  :quit        leave (also :q, or two blank lines at end of input)")
+  give 0
+}
+
+// ---- main -----------------------------------------------------------------
+
+make rp_main() -> num {
+  hold compiler = "./selfhost/gen2"
+  hold prompt = 1
+  hold limit = 200
+  hold i = 1
+  while i < arg_count() {
+    hold a = arg(i)
+    when string_eq(a, "--compiler") == 1 && i + 1 < arg_count() {
+      compiler = arg(i + 1)
+      i = i + 1
+    }
+    when string_eq(a, "--no-prompt") == 1 {
+      prompt = 0
+    }
+    when string_eq(a, "--limit") == 1 && i + 1 < arg_count() {
+      limit = rp_limit_or(arg(i + 1), limit)
+      i = i + 1
+    }
+    i = i + 1
+  }
+  when path_kind(compiler) != 1 {
+    hold e = rp_err(concat("sxrepl: no compiler at ", compiler))
+    hold stop = exit(1)
+  }
+  hold dir = ".sxrepl"
+  when path_kind(dir) != 2 {
+    hold made = make_dir(dir)
+  }
+  when path_kind(dir) != 2 {
+    hold e = rp_err("sxrepl: cannot create .sxrepl")
+    hold stop = exit(1)
+  }
+  hold accepted = ""
+  hold pending = ""
+  hold seen = 0
+  hold empties = 0
+  hold live = 1
+  when prompt == 1 {
+    hold hello = rp_err("sayanox repl -- :help for directives, :quit to leave")
+  }
+  while live == 1 {
+    when prompt == 1 {
+      when len(pending) > 0 {
+        hold w2 = write_out("..> ")
+      } otherwise {
+        hold w = write_out("sa> ")
+      }
+      hold f = flush_out()
+    }
+    hold raw = read_line()
+    hold line = rp_trim(raw)
+    when len(line) == 0 && len(pending) == 0 {
+      empties = empties + 1
+      when empties >= 2 {
+        live = 0
+      }
+    }
+    when len(line) > 0 {
+      empties = 0
+    }
+    when len(line) > 0 && rp_starts(line, ":") == 1 {
+      hold cmd = rp_trim(rp_slice(line, 1, len(line)))
+      when string_eq(cmd, "quit") == 1 || string_eq(cmd, "q") == 1 {
+        live = 0
+      }
+      when string_eq(cmd, "help") == 1 {
+        hold h = rp_help()
+      }
+      when string_eq(cmd, "show") == 1 {
+        hold w = write_out(rp_source(accepted))
+        hold f = flush_out()
+      }
+      when string_eq(cmd, "reset") == 1 {
+        accepted = ""
+        seen = 0
+        hold s = rp_say("session reset")
+      }
+      when rp_starts(cmd, "save ") == 1 {
+        hold path = rp_trim(rp_slice(cmd, 5, len(cmd)))
+        hold w = write_file(path, rp_source(accepted))
+        hold s = rp_say(concat("saved ", path))
+      }
+      when string_eq(cmd, "env") == 1 {
+        // Declared in the earlier draft and never implemented; say so instead of
+        // answering with something that looks like a feature.
+        hold e = rp_err("sxrepl: :env is not implemented -- use :show to read the session source")
+      }
+      when rp_starts(line, ":") == 1 {
+        hold known = rp_known(cmd)
+        when known == 0 && string_eq(cmd, "env") == 0 {
+          hold e = rp_err(concat("sxrepl: unknown directive: ", cmd))
+        }
+      }
+    }
+    when len(line) > 0 && rp_starts(line, ":") == 0 {
+      when rp_count(accepted) >= limit {
+        hold e = rp_err(concat(concat("sxrepl: session limit reached (", numstr(limit)), " fragments); :reset to start over"))
+        live = 0
+      }
+      when rp_count(accepted) < limit {
+        // A fragment continues while braces are open, so a `make`, a `struct` or
+        // a multi-statement body can be typed over several lines.
+        when len(pending) == 0 {
+          pending = line
+        } otherwise {
+          pending = concat(pending, concat(rp_nl(), line))
+        }
+        when rp_balance(pending) <= 0 {
+          hold attempt = rp_append(accepted, pending)
+          hold total = rp_run(compiler, rp_source(attempt), dir)
+          when total < 0 {
+            hold diag = rp_trim(read_file(concat(dir, "/emit.log")))
+            when len(diag) == 0 {
+              diag = rp_trim(read_file(concat(dir, "/session.log")))
+            }
+            when len(diag) > 0 {
+              hold e = rp_err(diag)
+            }
+            hold e2 = rp_err("sxrepl: that fragment does not compile; it was dropped and the session is unchanged")
+            // Clear the buffer: keeping a refused fragment pending would swallow
+            // the next lines and never see the end of input.
+            pending = ""
+          }
+          when total >= 0 {
+            hold out = read_file(concat(dir, "/session.out"))
+            hold fresh = rp_delta(out, seen)
+            when len(fresh) > 0 {
+              hold w = write_out(fresh)
+              hold f = flush_out()
+            }
+            accepted = attempt
+            seen = total
+            pending = ""
+          }
+        }
+      }
+    }
+  }
+  hold bye = rp_err("sxrepl: session ended")
+  give 0
+}
+
+// Directives that take no argument, plus the one that does.
+make rp_known(cmd: str) -> num {
+  when string_eq(cmd, "help") == 1 || string_eq(cmd, "show") == 1 || string_eq(cmd, "reset") == 1 || string_eq(cmd, "quit") == 1 || string_eq(cmd, "q") == 1 {
+    give 1
+  }
+  when rp_starts(cmd, "save ") == 1 && len(rp_trim(rp_slice(cmd, 5, len(cmd)))) > 0 {
+    give 1
+  }
+  give 0
+}
+
+hold done = rp_main()
+hold stop = exit(0)
