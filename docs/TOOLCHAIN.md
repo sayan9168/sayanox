@@ -83,5 +83,7 @@ Both are plain Sayanox programs over documented builtins, so they added no
 language or backend surface. The REPL recompiles the whole session on each prompt
 (that is what keeps earlier bindings visible) and prints only the new output; a
 fragment that does not compile is refused and dropped without ending the session.
-`./sx target test-sxdiag` runs their 16-case `calc` suite. See
+`./sx target test-sxdiag` runs their 19-case `calc` suite and the 3-case
+`calc-backend` suite, which builds the same source by `gen2` -> `cc` and by the
+shipped native path and requires identical answers. See
 [`REPL.md`](REPL.md).
