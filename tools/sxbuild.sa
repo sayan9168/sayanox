@@ -57,8 +57,15 @@ make istr(v: num) -> str {
 }
 
 make sh_quote(s: str) -> str {
-  hold out = "'"
   hold n = len(s)
+  // Cap input to 64 KiB to prevent O(N^2) concat chain from exhausting
+  // the runtime string slot limit or causing heap exhaustion in gen2/native.
+  // If the input exceeds the cap, return an empty quoted string to fail closed
+  // in the shell command (which will trigger the `fail` handler).
+  when n > 65536 {
+    give "''"
+  }
+  hold out = "'"
   hold i = 0
   while i < n {
     hold c = sx_index(s, i)

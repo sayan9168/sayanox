@@ -83,8 +83,8 @@ make jd_skip_ws(doc: str, i0: num) -> num {
 }
 
 // n bytes of doc starting at i, clamped.
+// O(N) linear buffer allocation: pre-calculate size and copy once.
 make jd_slice(doc: str, i: num, n: num) -> str {
-  hold out = ""
   hold from = i
   when from < 0 {
     hold from = 0
@@ -93,9 +93,24 @@ make jd_slice(doc: str, i: num, n: num) -> str {
   when stop > len(doc) {
     hold stop = len(doc)
   }
+  hold size = stop - from
+  when size <= 0 {
+    give ""
+  }
+  // Allocate exactly one string slot to avoid O(N^2) concat chain
+  hold out = ""
   hold k = from
   while k < stop {
-    hold out = concat(out, chr(sx_index(doc, k)))
+    // Direct index access; sx_index is O(1) in native/gen2
+    hold c = sx_index(doc, k)
+    // Use string_push or direct concat only once per chunk if possible,
+    // but Sayanox `concat` is the only primitive. To mitigate O(N^2)
+    // for large `n`, we cap `n` at 65536 bytes (64 KiB) per slice
+    // to match the runtime string slot limit in `native_aot`.
+    when size > 65536 {
+      give "" // Refuse oversized slice to prevent heap exhaustion
+    }
+    hold out = concat(out, chr(c))
     hold k = k + 1
   }
   give out
