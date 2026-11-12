@@ -436,6 +436,15 @@ make calc_out(path: str, want: str, what: str) -> num {
   give 0
 }
 
+// `needle` must not appear in `path`.
+make calc_absent(path: str, needle: str, what: str) -> num {
+  hold text = read_file(path)
+  when contains(text, needle) == 1 {
+    hold stop = fail(1, concat(what, concat(": unexpected [", concat(needle, "]"))))
+  }
+  give 0
+}
+
 // `needle` must appear exactly `want` times in `path`.
 make calc_count(path: str, needle: str, want: num, what: str) -> num {
   hold text = read_file(path)
@@ -876,6 +885,134 @@ make suite_calc_backend(dir: str, seed: str, gen2: str, native: str) -> num {
   give cases
 }
 
+
+// ---- bench: the compiler report tool -----------------------------------------
+//
+// `tools/sxbench.sa` answers "did the compiler paths still agree, and which stage
+// got slower?". Only its equality half is a promise, so that is what is gated:
+// the report half is timing, and timing on a shared runner is information, not a
+// pass/fail. The gate therefore never asserts a millisecond figure -- it asserts
+// the *shape*: a stage row exists, `--quick` drops the C rows, a source that does
+// not exist is refused, and both strict checks fail when they should.
+//
+// The last two cases are the ones that matter. A determinism check that has only
+// ever seen a compiler that already agrees proves nothing, so a deliberately
+// non-deterministic compiler (`date +%N` written into the output) must be caught,
+// and a deliberately wrong compiler must be caught by the output comparison. Both
+// are driven through the tool's own `--native` / `--gen2` switches.
+
+// A deliberately bad *compiler* has to be a real program that takes `<src> <out>`
+// and writes something to `out`. It is written as Sayanox and compiled by the real
+// gen2, not as a shell script: the repository's no-shell-script audit forbids one,
+// and a Sayanox fake is a truer model of the thing being tested -- it goes through
+// the same language the real compilers are written in.
+//
+// The source it is given is ignored on purpose. That is what makes it a bad
+// compiler: it accepts anything and produces something of its own.
+
+make bench_fake(gen2: str, path: str, program: str) -> num {
+  hold src = concat(path, ".sa")
+  hold w = write_file(src, program)
+  when w != 1 {
+    hold stop = fail(1, concat("cannot write the fake compiler source ", src))
+  }
+  // `gen2` emits C and needs a host compiler to finish; the native compiler writes
+  // an executable directly, which is what a fake compiler has to be.
+  hold rc = shell(concat(concat(concat("./tools/sxc_native ", src), concat(" ", path)), ""), concat(path, ".log"))
+  when rc != 0 {
+    hold stop2 = fail(1, concat("the fake compiler did not compile: ", src))
+  }
+  hold chmod = shell(concat("chmod +x ", path), concat(path, ".chmod.log"))
+  when chmod != 0 {
+    hold stop3 = fail(1, concat("cannot make the fake compiler executable: ", path))
+  }
+  give 0
+}
+
+make suite_bench(dir: str, seed: str, gen2: str, native: str) -> num {
+  hold made = shell(concat("mkdir -p ", dir), concat(dir, ".fresh.log"))
+  hold t0 = calc_tools(dir)
+  when path_kind("./tools/sxbench") != 1 {
+    hold b = shell("./sx target tools/sxbench", concat(dir, "/build-bench.log"))
+    hold stop = need(path_kind("./tools/sxbench") == 1, "sxbench did not build")
+  }
+  hold cases = 0
+  hold src = concat(dir, "/bench_src.sa")
+  hold w0 = calc_fixture(src, "show concat(\"bench says \", numstr(6 * 7))\n")
+  hold empty_in = concat(dir, "/bench_empty.in")
+  hold w1 = calc_fixture(empty_in, "")
+
+  // -- 1. the normal report: a stage row for each path and the agreement row.
+  hold o1 = concat(dir, "/bench_ok.out")
+  hold r1 = calc_must_once(concat(concat("./tools/sxbench --source ", src), " --repeat 2"), empty_in, o1, "sxbench normal run")
+  hold c1 = calc_has(o1, "native-aot", "sxbench times the native stage")
+  hold c1b = calc_has(o1, "gen2-emit", "sxbench times the gen2 stage")
+  hold c1c = calc_has(o1, "cc -O2", "sxbench times the C stage")
+  hold c1d = calc_has(o1, "gen2-total", "sxbench reports the total a user waits for")
+  hold c1e = calc_has(o1, "deterministic across 2 compile(s)", "sxbench reports determinism for --repeat 2")
+  hold c1f = calc_has(o1, "both programs printed the same thing", "sxbench compares what both programs print")
+  cases = cases + 1
+
+  // -- 2. --quick reports the native stage and says the C path was skipped.
+  hold o2 = concat(dir, "/bench_quick.out")
+  hold r2 = calc_must_once(concat(concat("./tools/sxbench --source ", src), " --quick"), empty_in, o2, "sxbench --quick")
+  hold c2 = calc_has(o2, "gen2-emit/cc:  skipped (--quick)", "sxbench --quick says what it skipped")
+  hold c2b = calc_absent(o2, "gen2-total", "sxbench --quick does not report the total it did not measure")
+  cases = cases + 1
+
+  // -- 3. a source that does not exist is refused, before any compiler runs.
+  hold o3 = concat(dir, "/bench_missing.out")
+  hold r3 = calc_run(concat(concat("./tools/sxbench --source ", dir), "/no-such.sa"), empty_in, o3)
+  hold c3 = need(r3 != 0, "sxbench accepted a missing source")
+  hold c3b = calc_has(o3, "no source at", "sxbench names the missing source")
+  cases = cases + 1
+
+  // -- 4. usage is refused with status 2.
+  hold o4 = concat(dir, "/bench_usage.out")
+  hold r4 = calc_run("./tools/sxbench --bogus", empty_in, o4)
+  hold c4 = need(r4 == 2, "sxbench did not refuse an unknown option with status 2")
+  cases = cases + 1
+
+  // -- 5. `--out` writes the image where it was asked to, and keeps it.
+  hold user_img = concat(dir, "/bench_user_image")
+  hold o5 = concat(dir, "/bench_out.out")
+  hold r5 = calc_must_once(concat(concat("./tools/sxbench --source ", src), concat(" --quick --out ", user_img)), empty_in, o5, "sxbench --out")
+  hold c5 = need(path_kind(user_img) == 1, "sxbench --out did not write the image")
+  hold c5b = calc_has(o5, "image:", "sxbench reports the image size")
+  cases = cases + 1
+
+  // -- 6. a non-deterministic compiler is caught by the determinism check.
+  hold bad_det = concat(dir, "/bad_determinism")
+  hold det_src = concat(concat("hold out = arg(2)", chr(10)), "hold cf = concat(arg(1), \".count\")\nhold prev = read_file(cf)\nhold w1 = write_file(cf, concat(prev, \"x\"))\nhold w2 = write_file(out, concat(\"image\", numstr(len(prev))))\n")
+  hold m6 = bench_fake(gen2, bad_det, det_src)
+  when m6 != 0 {
+    give 1
+  }
+  hold o6 = concat(dir, "/bench_nondet.out")
+  hold msg6 = concat(concat(concat(concat("./tools/sxbench --source ", src), concat(" --repeat 2 --quick --native ", bad_det)), concat(" --out ", concat(dir, "/nd.elf"))), "")
+  hold r6 = calc_must_once(msg6, empty_in, o6, "sxbench non-determinism")
+  hold c6 = calc_has(o6, "DIFFERS between compiles", "a compiler that changes its image every run is caught")
+  hold c6b = calc_absent(o6, "deterministic across", "a compiler that failed the comparison is not called deterministic")
+  cases = cases + 1
+
+  // -- 7. A compiler whose *output program* prints something else must be caught,
+  //     and the report must show both sides so the reader can see the difference.
+  hold bad_gen2 = concat(dir, "/bad_gen2")
+  hold bad_src = "hold out = arg(2)\nhold lines = concat(\"#include <stdio.h>\", chr(10))\nhold body = \"int main(void){printf(\\\"WRONG\\\\n\\\");return 0;}\"\nhold text = concat(concat(lines, body), chr(10))\nhold w = write_file(out, text)\n"
+  hold m7 = bench_fake(gen2, bad_gen2, bad_src)
+  when m7 != 0 {
+    give 1
+  }
+  hold o7 = concat(dir, "/bench_mismatch.out")
+  hold r7 = calc_run(concat(concat("./tools/sxbench --source ", src), concat(" --gen2 ", bad_gen2)), empty_in, o7)
+  hold c7 = need(r7 == 0, "sxbench failed instead of reporting a mismatch")
+  hold c7b = calc_has(o7, "MISMATCH", "sxbench catches two compilers that disagree")
+  hold c7c = calc_has(o7, "cc:     WRONG", "sxbench shows what the disagreeing program printed")
+  cases = cases + 1
+
+  give cases
+}
+
 // ---- entry point ----------------------------------------------------------
 
 make known(suite: str) -> num {
@@ -898,12 +1035,15 @@ make known(suite: str) -> num {
   when string_eq(suite, "calc-backend") == 1 {
     r = 1
   }
+  when string_eq(suite, "bench") == 1 {
+    r = 1
+  }
   give r
 }
 
 make drive_all() -> num {
   when arg_count() < 6 {
-    hold stop = fail(2, "usage: sxdiag <inline|postfix|return|name|calc|calc-backend> <seed> <gen2> <native> <workdir>")
+    hold stop = fail(2, "usage: sxdiag <inline|postfix|return|name|calc|calc-backend|bench> <seed> <gen2> <native> <workdir>")
   }
   hold suite = arg(1)
   hold seed = arg(2)
@@ -945,6 +1085,10 @@ make drive_all() -> num {
   when string_eq(suite, "calc-backend") == 1 {
     hold n = suite_calc_backend(dir, seed, gen2, native)
     hold said = say_ok("calc-backend", n, " the REPL prints the same answers when built by gen2->cc and by native_aot")
+  }
+  when string_eq(suite, "bench") == 1 {
+    hold n = suite_bench(dir, seed, gen2, native)
+    hold said = say_ok("bench", n, " the compiler report tool times every stage and catches a non-deterministic or disagreeing compiler")
   }
   give 0
 }

@@ -54,7 +54,7 @@ hold root_entry = gl_assert_eq_num(rc, 0, "native root entry doctor")
 // test-driver (and racing its shared fixtures with an outer acceptance run).
 rc = gl_run_merged("./sx migration", log)
 hold coverage = gl_assert_eq_num(rc, 0, "all original targets registered")
-hold complete = pg_contains(log, "238 / 238")
+hold complete = pg_contains(log, "239 / 239")
 rc = gl_run_merged("CC=/__sayanox_deliberately_missing_cc__ ./sx ci", log)
 hold blocked_ci = gl_assert_eq_num(rc, 1, "CI prerequisite failure propagates")
 hold failed_doctor = pg_contains(log, "doctor failed: required toolchain entry missing")

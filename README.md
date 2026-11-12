@@ -239,6 +239,8 @@ tested out-of-subset language forms. `./sx target true-selfhost-full` requires t
 ./sx target tools/sxrepl && ./tools/sxrepl   # read-eval-print loop
 ./tools/sxcli new hello demo                # project scaffold
 ./tools/sxcli test hello                    # compile and run its tests
+
+./sx target tools/sxbench && ./tools/sxbench --source examples/hello.sa --repeat 3
 ```
 
 The REPL and the project CLI are the developer loop added on 2026-11-10: the
@@ -293,6 +295,7 @@ the environment the wrappers used to read.
 | `tools/sxdiag.sa` | Sayanox negative-diagnostic suites (replaced four `sh` drivers); the `calc` suite pins the REPL and the project CLI |
 | `tools/sxrepl.sa` | Sayanox read-eval-print loop: one fragment per line, session recompiled per prompt, `:history`/`:env` queries ([docs/REPL.md](docs/REPL.md)) |
 | `tools/sxcli.sa` | Sayanox project scaffold (`new`) and project test runner (`test`) |
+| `tools/sxbench.sa` | Sayanox compiler report tool: times the native and `gen2`→`cc` stages, checks image determinism, compares what both programs print ([docs/BENCH.md](docs/BENCH.md)) |
 | `stdlib/` | Twenty-one Sayanox modules, including `json_deep.sa`, `json_write.sa`, `crypto.sa`, `pubkey.sa`, `csv.sa`, `url.sa`, `datetime.sa`, `hash.sa`, and `str_text.sa` (22 typed byte-string helpers) |
 | `sx`, `tools/sxbuild.sa` | Native entry and Sayanox bootstrap/build/test driver; incomplete acceptance migration |
 | `docs/` | Status, design notes, language docs |

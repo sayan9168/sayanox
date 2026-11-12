@@ -87,3 +87,8 @@ fragment that does not compile is refused and dropped without ending the session
 `calc-backend` suite, which builds the same source by `gen2` -> `cc` and by the
 shipped native path and requires identical answers. See
 [`REPL.md`](REPL.md).
+
+`tools/sxbench.sa` is the report tool for a compiler change: it times the native
+stage and the `gen2` -> `cc` stages, recompiles to check the image is still
+deterministic, and runs both programs to check they print the same thing. Its
+timing is a report; its equality checks are strict. See [`BENCH.md`](BENCH.md).

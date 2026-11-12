@@ -112,7 +112,7 @@ make mp_mask(name: str) -> num {
 }
 make mp_tools(name: str) -> str {
   when string_eq(name, "test-typed-sig") == 1 { give "sxdiag\n" }
-  when string_eq(name, "test-sxdiag") == 1 { give "sxdiag\nsxrepl\nsxcli\n" }
+  when string_eq(name, "test-sxdiag") == 1 { give "sxdiag\nsxrepl\nsxcli\nsxbench\n" }
   when string_eq(name, "test-pkg-errors") == 1 { give "sxpkg\n" }
   when string_eq(name, "test-return-paths") == 1 { give "sxdiag\n" }
   when string_eq(name, "test-name-resolution") == 1 { give "sxdiag\n" }
