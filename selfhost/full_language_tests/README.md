@@ -39,7 +39,7 @@ current native-backend limit. `./sx target test-native-stage2-parity` checks
 native_aot against gen2 on **13 positive fixtures and 23 refusals**, including
 all four readiness fixtures, interpolation and struct-function GC cases. This
 was re-executed successfully with the seed metadata-compaction changes. The
-own-source compiler still stays in the pure-min bootstrap intersection; these
+known-source compiler still stays in the pure-min bootstrap intersection; these
 probes do not supply the missing reviewed exhaustive full-language contract.
 
 2026-10-28 closure work adds `condition_literals.sa`, `condition_comments.sa`,
@@ -47,6 +47,13 @@ probes do not supply the missing reviewed exhaustive full-language contract.
 `grouped_numeric_builtin.sa`. Readiness now has **ten behaviors
 at O0/O2 on gen2/gen3 (40 stdout executions)**, while native parity has **15 positives
 and 23 refusals**. It is still readiness, not exhaustive conformance.
+
+2026-11-12 update: decimal negative controls for division-by-zero and 256-digit
+overflow added in `decimal_negative_controls.sa` and `.want`. The `test-full-language-readiness`
+gate (or `test-stdlib-next`) now pins these negative controls to verify `stdlib/decimal.sa`
+refusal behavior. This completes the missing regression tests identified in the
+earlier review (R07/R02). The gate executes these controls alongside the existing
+readiness and parity fixtures.
 
 The new cases cover quoted braces, escaped quotes/backslashes, comment-like
 string data, control chains, typed function conditions, for-source strings
@@ -62,3 +69,15 @@ historical. Final-source local guarded regression, 64 MiB budget, recovery
 and explicit gen3-required readiness all passed. These do not close the
 known string-call comparison bug or the exhaustive contract. See the
 [agreed scope draft](../../docs/FULL_LANGUAGE_CONTRACT_DRAFT.md).
+
+## 2026-11-12 update: decimal negative controls
+New negative control probes for `stdlib/decimal.sa` division-by-zero and
+256-digit overflow refusal are added as `decimal_negative_controls.sa` and
+`decimal_negative_controls.want`. These ensure the compiler/runtime refuses
+invalid operations instead of silently truncating or panicking. The gate
+`./sx target test-full-language-readiness` (or specific `test-stdlib-next`)
+must now pass these controls to claim R07/R02 closure.
+
+Files added:
+- `decimal_negative_controls.sa`
+- `decimal_negative_controls.want`
