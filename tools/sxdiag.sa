@@ -930,6 +930,7 @@ make bench_fake(gen2: str, path: str, program: str) -> num {
 }
 
 make suite_bench(dir: str, seed: str, gen2: str, native: str) -> num {
+  hold made = shell(concat("mkdir -p ", dir), concat(dir, ".fresh.log"))
   hold t0 = calc_tools(dir)
   when path_kind("./tools/sxbench") != 1 {
     hold b = shell("./sx target tools/sxbench", concat(dir, "/build-bench.log"))

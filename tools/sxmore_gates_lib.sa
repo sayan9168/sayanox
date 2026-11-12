@@ -538,6 +538,11 @@ make mp_test_sxdiag() -> num {
   hold p33 = pr_assert("selfhost/seed_tests/sxdiag-calc-backend.log", "calc-backend: 3", 0, 0, 0, 0, 1)
   // The compiler report tool: only its equality half is a promise, so the gate
   // asserts the report shape and both strict checks, never a millisecond figure.
+  // The work directory is wiped first: this gate leaves fake compilers behind, and
+  // a stale one from an older build would be reused by the next run -- the
+  // repository's no-shell-script audit walks this tree too, so an artefact from a
+  // build that no longer exists can fail an unrelated check.
+  hold p33b = gl_assert_eq_num(gl_run_merged("rm -rf selfhost/seed_tests/sxdiag-bench", "selfhost/seed_tests/sxdiag-bench.wipe.log"), 0, "stale bench work directory removed")
   hold p34 = pg_command("./tools/sxdiag bench ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-bench", "test-sxdiag child command")
   hold p35 = pg_probe("./tools/sxdiag bench ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-bench", 1, "selfhost/seed_tests/sxdiag-bench.log")
   hold p36 = pr_assert("selfhost/seed_tests/sxdiag-bench.log", "bench: 7", 0, 0, 0, 0, 1)
