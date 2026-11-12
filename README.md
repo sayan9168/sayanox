@@ -291,7 +291,7 @@ the environment the wrappers used to read.
 | `tools/sxmod.sa` | Sayanox module-namespacing pass (`module` / `alias.member`) |
 | `tools/sxaudit.sa` | Sayanox binary/source byte-count and SHA-256 auditor; native-anchor digest pinned in `bootstrap/sxc_native.audit` |
 | `tools/sxdiag.sa` | Sayanox negative-diagnostic suites (replaced four `sh` drivers); the `calc` suite pins the REPL and the project CLI |
-| `tools/sxrepl.sa` | Sayanox read-eval-print loop: one fragment per line, session recompiled per prompt ([docs/REPL.md](docs/REPL.md)) |
+| `tools/sxrepl.sa` | Sayanox read-eval-print loop: one fragment per line, session recompiled per prompt, `:history`/`:env` queries ([docs/REPL.md](docs/REPL.md)) |
 | `tools/sxcli.sa` | Sayanox project scaffold (`new`) and project test runner (`test`) |
 | `stdlib/` | Twenty-one Sayanox modules, including `json_deep.sa`, `json_write.sa`, `crypto.sa`, `pubkey.sa`, `csv.sa`, `url.sa`, `datetime.sa`, `hash.sa`, and `str_text.sa` (22 typed byte-string helpers) |
 | `sx`, `tools/sxbuild.sa` | Native entry and Sayanox bootstrap/build/test driver; incomplete acceptance migration |

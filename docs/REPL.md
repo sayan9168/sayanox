@@ -53,11 +53,40 @@ recompiling from the top does not replay earlier answers.
 | `:help` | list the directives |
 | `:show` | print the session source |
 | `:save FILE` | write the session source to `FILE` |
+| `:history [N]` | show the last `N` accepted fragments, numbered, default 10 |
+| `:env` | list the names introduced by top-level `hold`/`make` lines |
 | `:reset` | forget every fragment accepted so far |
 | `:quit`, `:q` | leave |
 
 A line starting with `:` is never compiled. An unknown directive is refused by
 name and does not end the session.
+
+`:history` and `:env` are queries, so they say the same thing however often they
+are asked, and they survive `:reset`: forgetting the program is not the same as
+forgetting what was typed.
+
+```
+sa> hold n = 6
+sa> show n * n
+36
+sa> :history
+history: 2 of 2 fragments
+1: hold n = 6
+2: show n * n
+sa> :env
+env: names introduced by top-level hold/make lines
+n
+```
+
+`:history` numbers lines that stay stable for the whole session, so a reader can
+see that `:reset` dropped fragments. Its store is bounded at 64 KB and drops the
+oldest bytes; when it has, the header says `oldest N dropped` instead of
+pretending line 1 is still there.
+
+`:env` is a line scan, not a parser, and its output says which question it
+answers: it lists the name a top-level `hold` or `make` line introduced, with the
+annotation written on that line. It cannot know about a binding created inside a
+`when` body or a loop, and a rebound name appears twice.
 
 ### Options
 
@@ -169,16 +198,26 @@ The compiler default is `./selfhost/gen2`; set `SX` to point at another one.
 * `tools/sxrepl.sa`, `tools/sxcli.sa` — the implementations.
 * `tools/sxbuild.sa` — both are targets, so `./sx target tools/sxrepl` and
   `./sx target tools/sxcli` work, and `test-sxdiag` builds them before running.
-* `tools/sxdiag.sa` — the `calc` suite, 16 cases: the session protocol
+* `tools/sxdiag.sa` — the `calc` suite, 19 cases: the session protocol
   (carrying a binding, multi-line fragments, a refused fragment, `:show`/`:save`,
   a saved session compiling, `--limit`, an unknown directive, a missing compiler)
   and the CLI (the four scaffold files, the scaffolded program's output, a passing
   run, a failing test, a test that does not compile, a non-project, refusing to
-  overwrite, usage status 2).
-* `tools/sxmore_gates_lib.sa` — `test-sxdiag` runs the suite and asserts the
-  `calc: 16` line.
+  overwrite, usage status 2), plus the two session queries (`:history` numbering,
+  `N` and its survival across `:reset`; `:env` on a plain hold, an annotated hold,
+  a function, and on an empty session).
+  **Every case that produces a session runs twice** and must print identical
+  output, because a tool whose answer depends on which run it is passes once and
+  fails the next.
+* `tools/sxdiag.sa` — the `calc-backend` suite, 3 cases: the same source built by
+  `gen2` -> `cc` and by `tools/sxc_native` must print exactly what the shipped
+  `./tools/sxrepl` prints. `selfhost/native_aot` cannot build this tool at all (it
+  has no `exit` builtin), which the suite records rather than leans on.
+* `tools/sxmore_gates_lib.sa` — `test-sxdiag` runs both suites and asserts the
+  `calc: 19` and `calc-backend: 3` lines.
 
 ```sh
 ./sx target test-sxdiag
 ./tools/sxdiag calc ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot /tmp/calc
+./tools/sxdiag calc-backend ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot /tmp/calc
 ```

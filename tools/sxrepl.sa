@@ -21,6 +21,8 @@
 //   :help                 list the directives
 //   :show                 print the session source
 //   :save FILE            write the session source to FILE
+//   :history [N]          show the last N accepted fragments (default 10)
+//   :env                  list the names introduced by top-level hold/make lines
 //   :reset                forget everything typed so far
 //   :quit  (or :q)        leave
 //
@@ -233,6 +235,291 @@ make rp_source(lines: str) -> str {
   give concat(p, rp_nl())
 }
 
+// ---- :history -------------------------------------------------------------
+//
+// History is kept as two plain text accumulators plus two counters, not as a
+// struct: a struct cannot cross a function boundary here (the native backend's
+// parameters take numbers and `native_aot` refuses a struct parameter outright),
+// and the REPL is built by `sxc_native`, so plain values are what it can carry.
+//
+// Numbering is global, so a reader can see that `:reset` dropped lines. The text
+// is bounded at 64 KB per accumulator by dropping the oldest bytes, which is why
+// `:history` can report fewer stored lines than the highest number it shows --
+// the header says so instead of pretending the oldest lines are still there.
+
+make rp_min(a: num, b: num) -> num {
+  when a < b {
+    give a
+  }
+  give b
+}
+
+// The last `n` lines of `text`, still newline-terminated. Counting backwards
+// from the total rather than forwards keeps this one pass short and exactly
+// agrees with the numbering the header reports.
+make rp_tail_lines(text: str, n: num) -> str {
+  hold total = 0
+  hold i = 0
+  while i < len(text) {
+    when sx_index(text, i) == 10 {
+      total = total + 1
+    }
+    i = i + 1
+  }
+  hold skip = total - n
+  when skip <= 0 {
+    give text
+  }
+  hold seen = 0
+  hold at = 0
+  hold j = 0
+  while j < len(text) {
+    when sx_index(text, j) == 10 {
+      seen = seen + 1
+      when seen == skip {
+        at = j + 1
+      }
+    }
+    j = j + 1
+  }
+  hold out = ""
+  hold k = at
+  while k < len(text) {
+    out = concat(out, chr(sx_index(text, k)))
+    k = k + 1
+  }
+  give out
+}
+
+// The newest `n` bytes of `text`, cut at a line boundary so a history line is
+// never shown half-dropped. A single line longer than `n` is cut anyway rather
+// than returned whole: the bound is the promise.
+make rp_tail_bytes(text: str, n: num) -> str {
+  when len(text) <= n {
+    give text
+  }
+  hold cut = len(text) - n
+  hold at = cut
+  while at < len(text) && sx_index(text, at) != 10 {
+    at = at + 1
+  }
+  when at >= len(text) {
+    give rp_slice(text, cut, len(text))
+  }
+  give rp_slice(text, at + 1, len(text))
+}
+
+// Index of `needle` in `text`, or -1. Needed by `:env` to cut a line at its `=`,
+// `:` and `->` markers.
+make rp_find(text: str, needle: str) -> num {
+  hold n = len(text)
+  hold m = len(needle)
+  when m == 0 {
+    give 0
+  }
+  hold i = 0
+  while i + m <= n {
+    hold k = 0
+    hold same = 1
+    while k < m && same == 1 {
+      when sx_index(text, i + k) != sx_index(needle, k) {
+        same = 0
+      }
+      k = k + 1
+    }
+    when same == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make rp_nl_count(text: str) -> num {
+  hold n = 0
+  hold i = 0
+  while i < len(text) {
+    when sx_index(text, i) == 10 {
+      n = n + 1
+    }
+    i = i + 1
+  }
+  give n
+}
+
+// One history line, numbered globally and newline-terminated.
+make rp_hist_line(number: num, line: str) -> str {
+  hold head = concat(numstr(number), ": ")
+  give concat(head, concat(line, rp_nl()))
+}
+
+// `kept` is the stored history (already bounded), `total` how many fragments the
+// session has ever accepted. When the bound has dropped lines, the header says so
+// instead of implying the oldest line is number 1.
+make rp_hist_report(kept: str, want: num, total: num) -> num {
+  when total == 0 {
+    hold s0 = rp_say("history: empty")
+    give 0
+  }
+  // Every stored line is newline-terminated, so the line count is the number of
+  // newlines -- not rp_count(), which also counts a non-terminated tail.
+  hold stored = rp_nl_count(kept)
+  hold n = rp_min(want, stored)
+  hold head = concat("history: ", concat(numstr(n), concat(" of ", concat(numstr(total), " fragments"))))
+  hold lost = total - stored
+  when lost > 0 {
+    head = concat(head, concat(", oldest ", concat(numstr(lost), " dropped")))
+  }
+  hold s = rp_say(head)
+  hold w = write_out(rp_tail_lines(kept, n))
+  hold f = flush_out()
+  give 0
+}
+
+// ---- :env -----------------------------------------------------------------
+//
+// A line scan, not a parser, and it says so in the output: `:env` lists the
+// names a top-level `hold` or `make` line introduced and the type annotation when
+// the line carried one. It cannot know about a binding created inside a `when`
+// body or a loop, and it will list a name twice if the session rebound it. That
+// is enough to answer "what have I got", which is the question it exists for.
+
+make rp_word_char(c: num) -> num {
+  when c >= 48 && c <= 57 {
+    give 1
+  }
+  when c >= 65 && c <= 90 {
+    give 1
+  }
+  when c >= 97 && c <= 122 {
+    give 1
+  }
+  when c == 95 {
+    give 1
+  }
+  give 0
+}
+
+// The first identifier in `text`, which is the declared name in `hold x = ...`
+// and `make f(...)`.
+make rp_first_word(text: str) -> str {
+  hold i = 0
+  while i < len(text) && rp_word_char(sx_index(text, i)) == 0 {
+    i = i + 1
+  }
+  hold start = i
+  while i < len(text) && rp_word_char(sx_index(text, i)) == 1 {
+    i = i + 1
+  }
+  give rp_slice(text, start, i)
+}
+
+// `: num` / `: str` on a `hold`, or `-> num` on a `make`, as written. `""` when
+// the line had no annotation.
+make rp_annot(type_text: str) -> str {
+  hold t = rp_trim(type_text)
+  when len(t) == 0 {
+    give ""
+  }
+  give t
+}
+
+// The text between `open` and its matching `close`, starting the search at `from`.
+make rp_between(text: str, from: num, open: num, close: num) -> str {
+  hold i = from
+  while i < len(text) && sx_index(text, i) != open {
+    i = i + 1
+  }
+  when i >= len(text) {
+    give ""
+  }
+  hold depth = 0
+  hold start = i + 1
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when c == open {
+      depth = depth + 1
+    }
+    when c == close {
+      depth = depth - 1
+      when depth == 0 {
+        give rp_slice(text, start, i)
+      }
+    }
+    i = i + 1
+  }
+  give ""
+}
+
+// One `name (type)` row for each `hold`/`make` line in the session source.
+make rp_env_rows(source: str) -> str {
+  hold out = ""
+  hold n = len(source)
+  hold pos = 0
+  while pos < n {
+    hold end = pos
+    while end < n && sx_index(source, end) != 10 {
+      end = end + 1
+    }
+    hold row = rp_trim(rp_slice(source, pos, end))
+    pos = end + 1
+    hold kind = ""
+    hold rest = ""
+    when rp_starts(row, "hold ") == 1 {
+      kind = "hold"
+      rest = rp_slice(row, 5, len(row))
+    }
+    when rp_starts(row, "make ") == 1 {
+      kind = "make"
+      rest = rp_slice(row, 5, len(row))
+    }
+    when len(kind) > 0 {
+      hold name = rp_first_word(rest)
+      when len(name) > 0 {
+        hold type_text = ""
+        when string_eq(kind, "hold") == 1 {
+          // `x: num = ...` -- the annotation sits before the first `=`.
+          hold eq = rp_find(rest, "=")
+          hold decl = rest
+          when eq >= 0 {
+            decl = rp_slice(rest, 0, eq)
+          }
+          hold colon = rp_find(decl, ":")
+          when colon >= 0 {
+            type_text = rp_annot(rp_slice(decl, colon + 1, len(decl)))
+          }
+        }
+        when string_eq(kind, "make") == 1 {
+          hold arrow = rp_find(rest, "->")
+          when arrow >= 0 {
+            hold after = rp_slice(rest, arrow + 2, len(rest))
+            hold brace = rp_find(after, "{")
+            when brace >= 0 {
+              type_text = rp_annot(rp_slice(after, 0, brace))
+            } otherwise {
+              type_text = rp_annot(after)
+            }
+          }
+        }
+        hold value = name
+        when string_eq(kind, "make") == 1 {
+          value = concat(name, concat("(", rp_between(rest, 0, 40, 41)))
+          value = concat(value, concat(") -> ", type_text))
+        } otherwise {
+          when len(type_text) > 0 {
+            value = concat(name, concat(": ", type_text))
+          }
+        }
+        when len(out) > 0 {
+          out = concat(out, rp_nl())
+        }
+        out = concat(out, value)
+      }
+    }
+  }
+  give out
+}
+
 // ---- driving the toolchain ------------------------------------------------
 
 // Compile and run the session source. Prints nothing; gives the byte count of the
@@ -276,7 +563,9 @@ make rp_help() -> num {
   hold h2 = rp_say("  :show        print the session source")
   hold h3 = rp_say("  :save FILE   write the session source to FILE")
   hold h4 = rp_say("  :reset       forget everything typed so far")
-  hold h5 = rp_say("  :quit        leave (also :q, or two blank lines at end of input)")
+  hold h5 = rp_say("  :history [N] show the last N accepted fragments (default 10)")
+  hold h5b = rp_say("  :env         list the names the session introduced")
+  hold h6 = rp_say("  :quit        leave (also :q, or two blank lines at end of input)")
   give 0
 }
 
@@ -316,6 +605,10 @@ make rp_main() -> num {
   }
   hold accepted = ""
   hold pending = ""
+  // History survives `:reset` on purpose: `:reset` forgets the program, not what
+  // was typed, and keeping it separate is what lets `:history` be repeatable.
+  hold hist = ""
+  hold hcount = 0
   hold seen = 0
   hold empties = 0
   hold live = 1
@@ -354,7 +647,20 @@ make rp_main() -> num {
         hold w = write_out(rp_source(accepted))
         hold f = flush_out()
       }
+      when string_eq(cmd, "history") == 1 || rp_starts(cmd, "history ") == 1 {
+        hold want = 10
+        when rp_starts(cmd, "history ") == 1 {
+          want = rp_digits(rp_trim(rp_slice(cmd, 8, len(cmd))))
+          when want <= 0 {
+            want = 10
+          }
+        }
+        hold rep = rp_hist_report(hist, want, hcount)
+      }
       when string_eq(cmd, "reset") == 1 {
+        // The program and the output baseline are dropped; the typed history is
+        // kept, because "what did I type before the reset" is exactly what a
+        // reader wants afterwards.
         accepted = ""
         seen = 0
         hold s = rp_say("session reset")
@@ -365,13 +671,19 @@ make rp_main() -> num {
         hold s = rp_say(concat("saved ", path))
       }
       when string_eq(cmd, "env") == 1 {
-        // Declared in the earlier draft and never implemented; say so instead of
-        // answering with something that looks like a feature.
-        hold e = rp_err("sxrepl: :env is not implemented -- use :show to read the session source")
+        hold rows = rp_env_rows(accepted)
+        when len(rows) == 0 {
+          hold s0 = rp_say("env: no bindings yet")
+        }
+        when len(rows) > 0 {
+          hold s1 = rp_say("env: names introduced by top-level hold/make lines")
+          hold w = write_out(concat(rows, rp_nl()))
+          hold f = flush_out()
+        }
       }
       when rp_starts(line, ":") == 1 {
         hold known = rp_known(cmd)
-        when known == 0 && string_eq(cmd, "env") == 0 {
+        when known == 0 {
           hold e = rp_err(concat("sxrepl: unknown directive: ", cmd))
         }
       }
@@ -414,6 +726,9 @@ make rp_main() -> num {
             }
             accepted = attempt
             seen = total
+            hold entry = rp_hist_line(hcount + 1, pending)
+            hist = rp_tail_bytes(concat(hist, entry), 65536)
+            hcount = hcount + 1
             pending = ""
           }
         }
@@ -429,7 +744,13 @@ make rp_known(cmd: str) -> num {
   when string_eq(cmd, "help") == 1 || string_eq(cmd, "show") == 1 || string_eq(cmd, "reset") == 1 || string_eq(cmd, "quit") == 1 || string_eq(cmd, "q") == 1 {
     give 1
   }
+  when string_eq(cmd, "history") == 1 || string_eq(cmd, "env") == 1 {
+    give 1
+  }
   when rp_starts(cmd, "save ") == 1 && len(rp_trim(rp_slice(cmd, 5, len(cmd)))) > 0 {
+    give 1
+  }
+  when rp_starts(cmd, "history ") == 1 && rp_digits(rp_trim(rp_slice(cmd, 8, len(cmd)))) > 0 {
     give 1
   }
   give 0
