@@ -49,6 +49,8 @@ tools/sxrepl
 tools/sxrepl.c
 tools/sxcli
 tools/sxcli.c
+tools/sxbench
+tools/sxbench.c
 tools/native32
 tools/sxmod
 tools/sxaudit
@@ -114,3 +116,6 @@ tools/sxdiag.c
 
 # REPL session scratch directory
 /.sxrepl/
+
+# sxbench scratch directory
+/.sxbench/
