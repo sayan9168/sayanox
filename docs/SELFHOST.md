@@ -43,3 +43,24 @@ The [native bootstrap](NATIVE_BOOTSTRAP.md) starts from an explicit pinned
 binary anchor. Self-reproduction and gen3/gen4 equality are determinism checks,
 not independent trust proof. See [DIVERSE_BOOTSTRAP](DIVERSE_BOOTSTRAP.md) and
 the [remaining-work register](REMAINING_WORK.md).
+
+## Native AOT Debugging Guide (R02/R19)
+
+When debugging `./sx target native` failures or compiler bugs (e.g., `sx_index`
+bounds, `concat` data image mismatches):
+
+1. **Verify Seed Integrity**: Run `./sx target test-full-language-readiness` or
+   `./sx target test-stdlib-next` to ensure `[OK] verify-seed` and component
+   integrity checks pass.
+2. **Inspect Logs**: Check `/tmp/test_out*.txt` or process logs for seed
+   verification and component integrity (`bootstrap/sxc_native.bin: OK`,
+   `tools/sxc_native.sa: OK`, etc.).
+3. **Trace Native AOT**: Use `./sx target native --debug` (if available) or
+   inspect `selfhost/native_aot.sa` for `sx_index` or `concat` data image mismatches.
+4. **CI/CD Integration**: Ensure `.github/workflows/ci.yml` and
+   `full-bootstrap.yml` include Vercel preview deployment steps for
+   documentation consistency (R01) and developer experience (R19).
+
+See [REMAINING_WORK.md](REMAINING_WORK.md) for the current increment log and
+[STATUS.md](STATUS.md) for the 2026-11-12 decimal negative controls update.
+
