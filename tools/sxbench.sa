@@ -1,0 +1,477 @@
+// tools/sxbench.sa -- build one program with each compiler path, compare what the
+// programs print, and report how long each stage took (2026-11-12).
+//
+//   sxbench [--source FILE] [--repeat N] [--out BIN] [--keep DIR] [--quick]
+//           [--native CMD] [--gen2 CMD]
+//
+// The question is the one a developer asks after a compiler change: "do the other
+// paths still produce a program that behaves the same, and which stage got
+// slower?" The behaviour half is strict -- two compilers that disagree about the
+// same source are a defect -- while the timing half is a report, because a number
+// that moves is information, not a failure.
+//
+// Stages:
+//
+//   native-aot   SOURCE -> ELF image, timed
+//   gen2-emit    SOURCE -> C, timed
+//   cc           that C -> executable at -O2, timed
+//   gen2-total   the sum of the two, which is what a user waits for
+//
+// The encoder is deterministic, so `--repeat N` compiles N times and requires every
+// image to be byte-identical to the first (`cmp`). That is the determinism claim
+// exercised on the user's own source instead of on a fixture.
+//
+// The two programs are compared by what they print, not by their bytes: one is an
+// ELF written directly and the other is C compiled by cc, so byte equality is not
+// expected and is not claimed.
+//
+// Honest limits:
+//
+//   * A stage's time covers the compiler plus this program's own process, file and
+//     shell work, so the numbers compare stages on one machine; they are not
+//     compiler throughput to quote.
+//   * The clock is `date +%s%N` read through `run_command`, because the language
+//     has no clock builtin. A machine whose `date` lacks `%N` gives non-numeric
+//     text, so every stage reports `n/a` and the report says the clock was
+//     unavailable instead of printing confident zeroes.
+//   * A missing compiler is named, not silently skipped. `--quick` skips the C path.
+//   * `selfhost/native_aot` is not used here: it has no `exit` builtin, and a tool
+//     command line needs one. `tools/sxc_native` is the native path the build
+//     driver itself ships.
+//   * `--native` and `--gen2` exist so the determinism and equality checks can be
+//     exercised with a deliberately bad compiler. Without them the "must be
+//     byte-identical" rule would only ever be tested against a compiler that
+//     already obeys it, which is not a test.
+
+make bn_nl() -> str {
+  give chr(10)
+}
+
+make bn_say(s: str) -> num {
+  hold w = write_out(s)
+  hold n = write_out(bn_nl())
+  hold f = flush_out()
+  give 0
+}
+
+make bn_err(s: str) -> num {
+  hold w = write_file("/dev/stderr", concat(s, bn_nl()))
+  give 0
+}
+
+make bn_space(c: num) -> num {
+  when c == 32 || c == 9 || c == 10 || c == 13 {
+    give 1
+  }
+  give 0
+}
+
+make bn_slice(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  hold lo = a
+  when lo < 0 {
+    lo = 0
+  }
+  hold hi = b
+  when hi > n {
+    hi = n
+  }
+  when lo >= hi {
+    give ""
+  }
+  hold out = ""
+  hold i = lo
+  while i < hi {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make bn_trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  while a < n && bn_space(sx_index(s, a)) == 1 {
+    a = a + 1
+  }
+  hold b = n
+  while b > a && bn_space(sx_index(s, b - 1)) == 1 {
+    b = b - 1
+  }
+  give bn_slice(s, a, b)
+}
+
+// Decimal digits to a number, 0 when anything else appears.
+make bn_digits(s: str) -> num {
+  when len(s) == 0 {
+    give 0
+  }
+  hold v = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c < 48 || c > 57 {
+      give 0
+    }
+    v = v * 10 + (c - 48)
+    i = i + 1
+  }
+  give v
+}
+
+// Options that consume the next argument.
+make bn_takes_value(a: str) -> num {
+  when string_eq(a, "--source") == 1 || string_eq(a, "--repeat") == 1 || string_eq(a, "--out") == 1 || string_eq(a, "--keep") == 1 || string_eq(a, "--native") == 1 || string_eq(a, "--gen2") == 1 {
+    give 1
+  }
+  give 0
+}
+
+make bn_known_flag(a: str) -> num {
+  when bn_takes_value(a) == 1 {
+    give 1
+  }
+  when string_eq(a, "--quick") == 1 {
+    give 1
+  }
+  give 0
+}
+
+make bn_usage() -> num {
+  hold w = write_file("/dev/stderr", "usage: sxbench [--source FILE] [--repeat N] [--out BIN] [--keep DIR] [--quick] [--native CMD] [--gen2 CMD]\n")
+  hold stop = exit(2)
+  give 0
+}
+
+// ---- clock ---------------------------------------------------------------
+
+make bn_stamp(path: str) -> num {
+  give run_command(concat("date +%s%N > ", path))
+}
+
+// Nanoseconds between two stamps, or -1 when either is unreadable. Non-numeric
+// clock text parses as 0 and is reported as -1, so an unavailable clock never
+// looks like a fast stage.
+make bn_elapsed(a_path: str, b_path: str) -> num {
+  hold av = bn_digits(bn_trim(read_file(a_path)))
+  hold bv = bn_digits(bn_trim(read_file(b_path)))
+  when av <= 0 || bv <= 0 {
+    give 0 - 1
+  }
+  when bv < av {
+    give 0 - 1
+  }
+  give bv - av
+}
+
+// Nanoseconds as milliseconds with three decimals, or `n/a`. Sub-millisecond
+// stages keep their microseconds instead of being shown as 0 ms.
+make bn_ms(ns: num) -> str {
+  when ns < 0 {
+    give "n/a"
+  }
+  hold us = (ns - ns % 1000) / 1000
+  hold whole = (us - us % 1000) / 1000
+  hold frac = us - whole * 1000
+  hold tail = numstr(frac)
+  when frac < 10 {
+    tail = concat("00", tail)
+  }
+  when frac < 100 && frac >= 10 {
+    tail = concat("0", tail)
+  }
+  give concat(numstr(whole), concat(".", tail))
+}
+
+// An exact decimal string for a non-negative whole number. `numstr` is `%g`, which
+// switches to exponent notation (`2.1e+08`) once a value passes a million -- well
+// below one compile in nanoseconds -- so these values need their own formatter.
+make bn_intstr(n: num) -> str {
+  when n < 0 {
+    give "0"
+  }
+  when n == 0 {
+    give "0"
+  }
+  hold digits = ""
+  hold v = n
+  while v > 0 {
+    hold d = v - (v - v % 10)
+    hold rest = (v - v % 10) / 10
+    digits = concat(chr(48 + (v - rest * 10)), digits)
+    v = rest
+  }
+  give digits
+}
+
+make bn_size(bytes: num) -> str {
+  when bytes < 1024 {
+    give concat(numstr(bytes), " B")
+  }
+  hold kb = (bytes - bytes % 1024) / 1024
+  when kb < 1024 {
+    give concat(numstr(kb), " KB")
+  }
+  hold mb = (kb - kb % 1024) / 1024
+  give concat(numstr(mb), " MB")
+}
+
+// ---- report lines --------------------------------------------------------
+//
+// Each line is built here, not in one long expression: a nested `concat` must have
+// exactly two arguments here, and a deep nest is where unbalanced parentheses go
+// wrong. `bn_add` appends, so the caller reads as a list of rows.
+
+make bn_add(report: str, line: str) -> str {
+  when len(report) == 0 {
+    give line
+  }
+  give concat(report, line)
+}
+
+make bn_stage(name: str, ns: num, note: str) -> str {
+  hold pad = name
+  while len(pad) < 14 {
+    pad = concat(pad, " ")
+  }
+  hold line = concat(pad, bn_ms(ns))
+  line = concat(line, " ms")
+  when len(note) > 0 {
+    line = concat(line, "  ")
+    line = concat(line, note)
+  }
+  give concat(line, bn_nl())
+}
+
+// `label: value` padded so a column of values lines up.
+make bn_row(label: str, value: str) -> str {
+  hold pad = label
+  while len(pad) < 15 {
+    pad = concat(pad, " ")
+  }
+  give concat(concat(pad, value), bn_nl())
+}
+
+// ---- stages --------------------------------------------------------------
+
+// Compile `source` `repeat` times, keeping the first image and requiring the rest
+// to match it byte for byte. Gives the total nanoseconds, or -1 when the clock was
+// unavailable; `same` is left in `dir/same` as "1" or "0" because a number cannot
+// carry two answers here.
+make bn_native_stage(compiler: str, source: str, image: str, dir: str, repeat: num) -> num {
+  hold first = concat(dir, "/image.first")
+  hold total = 0
+  hold clock = 1
+  hold r = 0
+  while r < repeat {
+    hold t0 = concat(dir, "/t0")
+    hold t1 = concat(dir, "/t1")
+    hold s0 = bn_stamp(t0)
+    hold build = run_command(concat(concat(compiler, " "), concat(source, concat(" ", image))))
+    hold s1 = bn_stamp(t1)
+    when build != 0 {
+      hold e = bn_err(concat("sxbench: the native compiler refused ", source))
+      hold stop = exit(1)
+    }
+    hold el = bn_elapsed(t0, t1)
+    when el < 0 {
+      clock = 0
+    }
+    when el > 0 {
+      total = total + el
+    }
+    when r == 0 {
+      hold cp = run_command(concat(concat("cp ", image), concat(" ", first)))
+    }
+    when r > 0 {
+      hold cmp_rc = run_command(concat(concat(concat("cmp -s ", image), " "), first))
+      when cmp_rc != 0 {
+        hold w0 = write_file(concat(dir, "/same"), "0")
+      }
+    }
+    r = r + 1
+  }
+  when clock == 0 {
+    give 0 - 1
+  }
+  give total
+}
+
+// gen2 emits C; cc builds it. Gives emit nanoseconds in `dir/emit_ns` and cc
+// nanoseconds in `dir/cc_ns` as decimal text, and -1 when the clock is unavailable.
+make bn_c_stage(gen2: str, source: str, cfile: str, cbin: str, dir: str) -> num {
+  hold t0 = concat(dir, "/t0")
+  hold t1 = concat(dir, "/t1")
+  hold e0 = bn_stamp(t0)
+  hold emit = run_command(concat(concat(gen2, " "), concat(source, concat(" ", cfile))))
+  hold e1 = bn_stamp(t1)
+  when emit != 0 {
+    hold er = bn_err(concat("sxbench: gen2 refused ", source))
+    hold stop = exit(1)
+  }
+  hold emit_ns = bn_elapsed(t0, t1)
+  hold c0 = bn_stamp(t0)
+  hold cc = concat("cc -std=gnu11 -O2 -o ", cbin)
+  hold build = run_command(concat(concat(cc, " "), concat(cfile, " -lm")))
+  hold c1 = bn_stamp(t1)
+  when build != 0 {
+    hold e2 = bn_err("sxbench: the host C compiler failed")
+    hold stop2 = exit(1)
+  }
+  hold cc_ns = bn_elapsed(t0, t1)
+  hold w1 = write_file(concat(dir, "/emit_ns"), bn_intstr(emit_ns))
+  hold w2 = write_file(concat(dir, "/cc_ns"), bn_intstr(cc_ns))
+  when emit_ns < 0 || cc_ns < 0 {
+    give 0 - 1
+  }
+  give 0
+}
+
+// Run both programs and compare what they print, byte for byte. Gives 1 when they
+// agree, 0 when they differ or a program failed. Uses `cmp` so trailing bytes
+// matter: two programs that differ only in a final newline still disagree.
+make bn_compare_runs(native: str, cbin: str, dir: str) -> num {
+  hold nout = concat(dir, "/native.out")
+  hold cout = concat(dir, "/cc.out")
+  hold r1 = run_command(concat(native, concat(" > ", nout)))
+  when r1 != 0 {
+    give 0
+  }
+  hold r2 = run_command(concat(cbin, concat(" > ", cout)))
+  when r2 != 0 {
+    give 0
+  }
+  hold rc = run_command(concat(concat(concat("cmp -s ", nout), " "), cout))
+  when rc != 0 {
+    give 0
+  }
+  give 1
+}
+
+// ---- main ----------------------------------------------------------------
+
+make bn_main() -> num {
+  hold source = "examples/hello.sa"
+  hold repeat = 1
+  hold out_bin = ""
+  hold keep = ""
+  hold quick = 0
+  hold native_cc = "./tools/sxc_native"
+  hold gen2 = "./selfhost/gen2"
+  hold i = 1
+  while i < arg_count() {
+    hold a = arg(i)
+    when string_eq(a, "--source") == 1 && i + 1 < arg_count() {
+      source = arg(i + 1)
+      i = i + 1
+    }
+    when string_eq(a, "--repeat") == 1 && i + 1 < arg_count() {
+      hold rv = bn_digits(arg(i + 1))
+      when rv > 0 {
+        repeat = rv
+      }
+      i = i + 1
+    }
+    when string_eq(a, "--out") == 1 && i + 1 < arg_count() {
+      out_bin = arg(i + 1)
+      i = i + 1
+    }
+    when string_eq(a, "--keep") == 1 && i + 1 < arg_count() {
+      keep = arg(i + 1)
+      i = i + 1
+    }
+    when string_eq(a, "--quick") == 1 {
+      quick = 1
+    }
+    when string_eq(a, "--native") == 1 && i + 1 < arg_count() {
+      native_cc = arg(i + 1)
+      i = i + 1
+    }
+    when string_eq(a, "--gen2") == 1 && i + 1 < arg_count() {
+      gen2 = arg(i + 1)
+      i = i + 1
+    }
+    // Refuse an option this program does not know, and name it: silently ignoring
+    // it is how a typo turns into "the measurement I did not ask for".
+    when bn_known_flag(a) == 0 {
+      hold u = bn_usage()
+      hold stop = exit(2)
+    }
+    i = i + 1
+  }
+  when path_kind(source) != 1 {
+    hold e = bn_err(concat("sxbench: no source at ", source))
+    hold stop = exit(1)
+  }
+  hold dir = ".sxbench"
+  when len(keep) > 0 {
+    dir = keep
+  }
+  hold made = run_command(concat("mkdir -p ", dir))
+  when path_kind(dir) != 2 {
+    hold e2 = bn_err(concat("sxbench: cannot create ", dir))
+    hold stop2 = exit(1)
+  }
+  hold image = concat(dir, "/image.elf")
+  when len(out_bin) > 0 {
+    image = out_bin
+  }
+  hold cfile = concat(dir, "/program.c")
+  hold cbin = concat(dir, "/program.cc")
+  hold same_file = concat(dir, "/same")
+  hold wsame = write_file(same_file, "1")
+
+  hold native_ns = bn_native_stage(native_cc, source, image, dir, repeat)
+  hold report = ""
+  hold head = concat("sxbench: ", source)
+  head = concat(head, concat("  (repeat ", numstr(repeat)))
+  head = concat(head, ")")
+  report = bn_add(report, concat(head, bn_nl()))
+  report = bn_add(report, bn_stage("native-aot", native_ns, image))
+  when string_eq(bn_trim(read_file(same_file)), "1") == 1 {
+    hold det = concat("deterministic across ", numstr(repeat))
+    report = bn_add(report, bn_row("native image:", concat(det, " compile(s)")))
+  } otherwise {
+    report = bn_add(report, bn_row("native image:", "DIFFERS between compiles"))
+  }
+
+  when quick == 0 {
+    hold cst = bn_c_stage(gen2, source, cfile, cbin, dir)
+    hold emit_ns = bn_digits(bn_trim(read_file(concat(dir, "/emit_ns"))))
+    hold cc_ns = bn_digits(bn_trim(read_file(concat(dir, "/cc_ns"))))
+    when cst == 0 {
+      report = bn_add(report, bn_stage("gen2-emit", emit_ns, cfile))
+      report = bn_add(report, bn_stage("cc -O2", cc_ns, cbin))
+      report = bn_add(report, bn_stage("gen2-total", emit_ns + cc_ns, "what a user waits for"))
+    }
+    when cst != 0 {
+      report = bn_add(report, bn_stage("gen2-emit", 0 - 1, cfile))
+    }
+    when bn_compare_runs(image, cbin, dir) == 1 {
+      report = bn_add(report, bn_row("output:", "both programs printed the same thing"))
+    } otherwise {
+      report = bn_add(report, bn_row("output:", "MISMATCH or a program failed"))
+      report = bn_add(report, concat("  native: ", concat(bn_trim(read_file(concat(dir, "/native.out"))), bn_nl())))
+      report = bn_add(report, concat("  cc:     ", concat(bn_trim(read_file(concat(dir, "/cc.out"))), bn_nl())))
+    }
+  }
+  when quick == 1 {
+    report = bn_add(report, bn_row("gen2-emit/cc:", "skipped (--quick)"))
+  }
+
+  report = bn_add(report, bn_row("image:", bn_size(path_size(image))))
+  when native_ns < 0 {
+    report = bn_add(report, bn_row("clock:", "unavailable (date +%s%N); stages ran but are not timed"))
+  }
+  hold w = write_out(report)
+  hold f = flush_out()
+  when len(keep) > 0 {
+    hold s = bn_err(concat("sxbench: artefacts kept in ", dir))
+    give 0
+  }
+  hold clean = run_command(concat("rm -rf ", dir))
+  give 0
+}
+
+hold done = bn_main()
+hold stop = exit(0)

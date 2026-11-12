@@ -536,6 +536,11 @@ make mp_test_sxdiag() -> num {
   hold p31 = pg_command("./tools/sxdiag calc-backend ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-calc-backend", "test-sxdiag child command")
   hold p32 = pg_probe("./tools/sxdiag calc-backend ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-calc-backend", 1, "selfhost/seed_tests/sxdiag-calc-backend.log")
   hold p33 = pr_assert("selfhost/seed_tests/sxdiag-calc-backend.log", "calc-backend: 3", 0, 0, 0, 0, 1)
+  // The compiler report tool: only its equality half is a promise, so the gate
+  // asserts the report shape and both strict checks, never a millisecond figure.
+  hold p34 = pg_command("./tools/sxdiag bench ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-bench", "test-sxdiag child command")
+  hold p35 = pg_probe("./tools/sxdiag bench ./selfhost/seed/sxc_seed_min ./selfhost/gen2 ./selfhost/native_aot selfhost/seed_tests/sxdiag-bench", 1, "selfhost/seed_tests/sxdiag-bench.log")
+  hold p36 = pr_assert("selfhost/seed_tests/sxdiag-bench.log", "bench: 7", 0, 0, 0, 0, 1)
   give 0
 }
 
