@@ -428,11 +428,17 @@ make bn_main() -> num {
   head = concat(head, ")")
   report = bn_add(report, concat(head, bn_nl()))
   report = bn_add(report, bn_stage("native-aot", native_ns, image))
-  when string_eq(bn_trim(read_file(same_file)), "1") == 1 {
-    hold det = concat("deterministic across ", numstr(repeat))
-    report = bn_add(report, bn_row("native image:", concat(det, " compile(s)")))
+  // With a single compile there is nothing to compare against, and saying
+  // "deterministic across 1 compile" is a claim the run did not earn.
+  when repeat < 2 {
+    report = bn_add(report, bn_row("native image:", "one compile only; pass --repeat 2 or more to compare"))
   } otherwise {
-    report = bn_add(report, bn_row("native image:", "DIFFERS between compiles"))
+    when string_eq(bn_trim(read_file(same_file)), "1") == 1 {
+      hold det = concat("deterministic across ", numstr(repeat))
+      report = bn_add(report, bn_row("native image:", concat(det, " compile(s)")))
+    } otherwise {
+      report = bn_add(report, bn_row("native image:", "DIFFERS between compiles"))
+    }
   }
 
   when quick == 0 {

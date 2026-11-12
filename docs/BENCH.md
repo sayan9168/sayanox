@@ -61,6 +61,9 @@ defect, so:
   deterministic, and this exercises that on *your* source instead of on a fixture.
   A non-deterministic compiler is caught and reported as
   `native image: DIFFERS between compiles`.
+  With `--repeat 1` (the default) there is nothing to compare, so the report says
+  `one compile only; pass --repeat 2 or more to compare` rather than claiming
+  determinism from a run that never compared anything.
 * The native image and the `gen2` → `cc` executable are both run, and their output
   is compared byte for byte. A disagreement is reported as `MISMATCH` with both
   outputs shown.
@@ -75,10 +78,22 @@ obeys it proves nothing. These switches let `test-sxdiag` plug in a deliberately
 bad compiler and require the tool to catch it, which is what the `bench` suite
 does:
 
+A fake compiler must be a program taking `<source> <output>` and writing the
+output. The suite writes two of them in Sayanox and builds them with the native
+compiler, which is deliberately not a shell script: the repository's
+no-shell-script audit forbids one, and a Sayanox fake models the real thing.
+
+```sx
+// one that writes a different image on every run
+hold out = arg(2)
+hold cf = concat(arg(1), ".count")
+hold prev = read_file(cf)
+hold w1 = write_file(cf, concat(prev, "x"))
+hold w2 = write_file(out, concat("image", numstr(len(prev))))
+```
+
 ```sh
-# a "compiler" that writes a fresh timestamp into its output
-printf '#!/bin/sh\ndate +%%N > "$2"\n' > /tmp/bad.sh && chmod +x /tmp/bad.sh
-./tools/sxbench --source examples/hello.sa --repeat 2 --native /tmp/bad.sh
+./tools/sxbench --source examples/hello.sa --repeat 2 --native /tmp/bad_det
 ```
 
 ```
@@ -93,6 +108,8 @@ native image:  DIFFERS between compiles
   the point of having both.
 * A missing compiler is named and fails the run; it is never silently skipped.
 * The determinism check compares the image bytes, not the program's behaviour.
+* The fake compilers are built with `tools/sxc_native`, not `gen2`: `gen2` emits C
+  and needs a host compiler to finish, and the point is to produce an executable.
   Two different images can behave identically — that is a determinism defect, not
   a correctness one, and it is reported as such.
 

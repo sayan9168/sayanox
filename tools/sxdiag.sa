@@ -901,17 +901,30 @@ make suite_calc_backend(dir: str, seed: str, gen2: str, native: str) -> num {
 // and a deliberately wrong compiler must be caught by the output comparison. Both
 // are driven through the tool's own `--native` / `--gen2` switches.
 
-// Write a shell script that ignores its arguments and always exits 0. Used to
-// build the two deliberately bad compilers; the tool under test never runs these
-// as its real compiler.
-make bench_script(path: str, body: str) -> num {
-  hold w = write_file(path, concat("#!/bin/sh\n", body))
+// A deliberately bad *compiler* has to be a real program that takes `<src> <out>`
+// and writes something to `out`. It is written as Sayanox and compiled by the real
+// gen2, not as a shell script: the repository's no-shell-script audit forbids one,
+// and a Sayanox fake is a truer model of the thing being tested -- it goes through
+// the same language the real compilers are written in.
+//
+// The source it is given is ignored on purpose. That is what makes it a bad
+// compiler: it accepts anything and produces something of its own.
+
+make bench_fake(gen2: str, path: str, program: str) -> num {
+  hold src = concat(path, ".sa")
+  hold w = write_file(src, program)
   when w != 1 {
-    hold stop = fail(1, concat("cannot write the fake compiler ", path))
+    hold stop = fail(1, concat("cannot write the fake compiler source ", src))
+  }
+  // `gen2` emits C and needs a host compiler to finish; the native compiler writes
+  // an executable directly, which is what a fake compiler has to be.
+  hold rc = shell(concat(concat(concat("./tools/sxc_native ", src), concat(" ", path)), ""), concat(path, ".log"))
+  when rc != 0 {
+    hold stop2 = fail(1, concat("the fake compiler did not compile: ", src))
   }
   hold chmod = shell(concat("chmod +x ", path), concat(path, ".chmod.log"))
   when chmod != 0 {
-    hold stop2 = fail(1, concat("cannot make the fake compiler executable: ", path))
+    hold stop3 = fail(1, concat("cannot make the fake compiler executable: ", path))
   }
   give 0
 }
@@ -968,18 +981,27 @@ make suite_bench(dir: str, seed: str, gen2: str, native: str) -> num {
   cases = cases + 1
 
   // -- 6. a non-deterministic compiler is caught by the determinism check.
-  hold bad_det = concat(dir, "/bad_determinism.sh")
-  hold m6 = bench_script(bad_det, "date +%N > \"$2\"\n")
+  hold bad_det = concat(dir, "/bad_determinism")
+  hold det_src = concat(concat("hold out = arg(2)", chr(10)), "hold cf = concat(arg(1), \".count\")\nhold prev = read_file(cf)\nhold w1 = write_file(cf, concat(prev, \"x\"))\nhold w2 = write_file(out, concat(\"image\", numstr(len(prev))))\n")
+  hold m6 = bench_fake(gen2, bad_det, det_src)
+  when m6 != 0 {
+    give 1
+  }
   hold o6 = concat(dir, "/bench_nondet.out")
-  hold r6 = calc_run(concat(concat("./tools/sxbench --source ", src), concat(" --repeat 2 --native ", bad_det)), empty_in, o6)
-  hold c6 = need(r6 == 0, "sxbench failed instead of reporting a non-deterministic compiler")
-  hold c6b = calc_has(o6, "DIFFERS between compiles", "sxbench catches a non-deterministic compiler")
+  hold msg6 = concat(concat(concat(concat("./tools/sxbench --source ", src), concat(" --repeat 2 --quick --native ", bad_det)), concat(" --out ", concat(dir, "/nd.elf"))), "")
+  hold r6 = calc_must_once(msg6, empty_in, o6, "sxbench non-determinism")
+  hold c6 = calc_has(o6, "DIFFERS between compiles", "a compiler that changes its image every run is caught")
+  hold c6b = calc_absent(o6, "deterministic across", "a compiler that failed the comparison is not called deterministic")
   cases = cases + 1
 
-  // -- 7. a compiler whose program prints something else is caught by the
-  // output comparison, and the report shows both sides.
-  hold bad_gen2 = concat(dir, "/bad_gen2.sh")
-  hold m7 = bench_script(bad_gen2, "printf 'int main(void){printf(\"WRONG\\\\n\");return 0;}\\n#include <stdio.h>\\n' > \"$2\"\n")
+  // -- 7. A compiler whose *output program* prints something else must be caught,
+  //     and the report must show both sides so the reader can see the difference.
+  hold bad_gen2 = concat(dir, "/bad_gen2")
+  hold bad_src = "hold out = arg(2)\nhold lines = concat(\"#include <stdio.h>\", chr(10))\nhold body = \"int main(void){printf(\\\"WRONG\\\\n\\\");return 0;}\"\nhold text = concat(concat(lines, body), chr(10))\nhold w = write_file(out, text)\n"
+  hold m7 = bench_fake(gen2, bad_gen2, bad_src)
+  when m7 != 0 {
+    give 1
+  }
   hold o7 = concat(dir, "/bench_mismatch.out")
   hold r7 = calc_run(concat(concat("./tools/sxbench --source ", src), concat(" --gen2 ", bad_gen2)), empty_in, o7)
   hold c7 = need(r7 == 0, "sxbench failed instead of reporting a mismatch")
