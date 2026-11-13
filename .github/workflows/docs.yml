@@ -1,0 +1,78 @@
+name: Docs
+
+# Documentation previews live in their own workflow on purpose.
+#
+# `./sx ci-guard` replaces `node`, `python`, `curl`, `wget`, `make`, ... with
+# failing shims for every later step of a job, to prove the bootstrap never
+# calls a host runtime. The Vercel CLI and this site generator are ordinary
+# host tools, so they cannot run inside an armed job: they belong here, where
+# no acceptance gate is being protected.
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "assets/**"
+      - "tools/docsite.mjs"
+      - ".github/workflows/docs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "assets/**"
+      - "tools/docsite.mjs"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: sayanox-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-site:
+    name: Render docs/ and publish the preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render the documentation site
+        run: |
+          node tools/docsite.mjs docs site
+          test -s site/index.html
+      - name: Deploy the documentation site to Vercel
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          if [ -z "${VERCEL_TOKEN}" ]; then
+            echo "::notice title=Vercel skipped::VERCEL_TOKEN is not configured for this repository"
+            echo "url=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [ -n "${VERCEL_ORG_ID}" ] && [ -n "${VERCEL_PROJECT_ID}" ]; then
+            mkdir -p .vercel
+            printf '{"projectId":"%s","orgId":"%s"}\n' "${VERCEL_PROJECT_ID}" "${VERCEL_ORG_ID}" > .vercel/project.json
+          fi
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            url="$(npx --yes vercel@latest deploy site --yes --token "${VERCEL_TOKEN}")"
+          else
+            url="$(npx --yes vercel@latest deploy site --yes --prod --token "${VERCEL_TOKEN}")"
+          fi
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+          echo "### Documentation site: ${url}" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Comment the preview URL on the pull request
+        if: github.event_name == 'pull_request' && steps.deploy.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIEW_URL: ${{ steps.deploy.outputs.url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "${PR_NUMBER}" --body "Documentation preview: ${PREVIEW_URL}"

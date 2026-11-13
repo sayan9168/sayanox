@@ -119,3 +119,9 @@ tools/sxdiag.c
 
 # sxbench scratch directory
 /.sxbench/
+
+# Generated documentation site for Vercel previews (tools/docsite.mjs)
+/site/
+
+# Local Vercel CLI project link
+/.vercel/

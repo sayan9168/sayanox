@@ -7,8 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Read-only by default. Documentation previews are published with the Vercel
+# token, so nothing here needs to write to this repository.
 permissions:
-  contents: write  # Required for Vercel deployment preview and status checks
+  contents: read
 
 concurrency:
   group: sayanox-ci-${{ github.workflow }}-${{ github.ref }}
@@ -44,15 +46,6 @@ jobs:
       - name: Check forbidden invocation evidence, even after a failed gate
         if: always()
         run: ./sx ci-guard-check
-      - name: Vercel preview deployment for documentation
-        if: github.event_name == 'pull_request'
-        run: |
-          echo "Deploying documentation preview to Vercel..."
-          # Vercel deployment logic for docs/ (REMAINING_WORK.md, STATUS.md, etc.)
-          # Assuming Vercel CLI or API is configured via secrets
-          # npx vercel --prod --token ${{ secrets.VERCEL_TOKEN }} --scope sayanox --env preview
-          echo "Preview deployment triggered for PR ${{ github.event.pull_request.number }}"
-
 
   full-acceptance-blocker:
     name: Complete original acceptance
