@@ -86,6 +86,19 @@ Without `VERCEL_ORG_ID`/`VERCEL_PROJECT_ID` the CLI creates (or reuses) a
 project named after the deployed directory and prints its preview URL, which the
 workflow comments on the pull request.
 
+A token is optional too. If you would rather let Vercel build on push, connect
+this repository to a project in the Vercel dashboard and set:
+
+| Setting | Value |
+| --- | --- |
+| Framework preset | `Other` |
+| Build command | `node tools/docsite.mjs docs site` |
+| Output directory | `site` |
+| Install command | *(empty)* |
+
+Both routes produce the same site; `docs.yml` simply skips its own deploy when
+`VERCEL_TOKEN` is absent, so the two never fight over one project.
+
 `.vercel/` and `site/` are ignored by git; the site is a build artifact.
 
 ## Permissions
