@@ -56,10 +56,3 @@ jobs:
       - name: Check forbidden invocation evidence, even after a failed gate
         if: always()
         run: ./sx ci-guard-check
-
-      - name: Vercel release documentation preview
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
-        run: |
-          echo "Deploying release documentation preview to Vercel..."
-          # Vercel deployment logic for docs/ (REMAINING_WORK.md, STATUS.md, etc.)
-          echo "Preview deployment triggered for release tag ${{ env.RELEASE_TAG }}"

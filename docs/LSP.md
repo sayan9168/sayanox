@@ -336,17 +336,18 @@ The LSP implementation (`tools/sayanox_lsp.sa`) currently supports:
 **Missing Module Import Matrix Documentation:**
 - Explicit matrix for `module ... from` request support across different
   backends (C-output vs Native AOT) and IDE plugin reliability.
-- Integration with Vercel documentation preview for `docs/LSP.md` changes.
+- Documentation preview for `docs/LSP.md` changes, published by
+  `.github/workflows/docs.yml`.
 - Verification that `tools/sayanox_lsp.sa` handles `module ... from` imports
   in the `workspace/symbol` and `references` queries (currently limited to
   four open buffers and 128-file folder index).
 
 **CI/CD Integration:**
-- Ensure `.github/workflows/ci.yml` and `full-bootstrap.yml` include steps
-  to verify LSP module import matrix tests (`./sx target test-lsp-module-matrix`)
-  and deploy documentation previews to Vercel for PRs and releases.
-- The Vercel preview deployment should trigger on `pull_request` events for
-  `ci.yml` and on `workflow_dispatch`/tags for `release.yml`.
+- The LSP module import matrix belongs to the acceptance chain
+  (`./sx target test-lsp-module-matrix`), never to a deployment recipe.
+- Documentation previews are published by `.github/workflows/docs.yml` on
+  `pull_request` and on `main`; the deployment lives there because an armed
+  `ci.yml` job forbids `node` and `curl` after `./sx ci-guard` runs. See [CI](CI.md).
 
 See [REMAINING_WORK.md](REMAINING_WORK.md) for the R05 gap register and
 [STATUS.md](STATUS.md) for the 2026-11-12 decimal negative controls update.
@@ -585,17 +586,18 @@ The LSP implementation (`tools/sayanox_lsp.sa`) currently supports:
 **Missing Module Import Matrix Documentation:**
 - Explicit matrix for `module ... from` request support across different
   backends (C-output vs Native AOT) and IDE plugin reliability.
-- Integration with Vercel documentation preview for `docs/LSP.md` changes.
+- Documentation preview for `docs/LSP.md` changes, published by
+  `.github/workflows/docs.yml`.
 - Verification that `tools/sayanox_lsp.sa` handles `module ... from` imports
   in the `workspace/symbol` and `references` queries (currently limited to
   four open buffers and 128-file folder index).
 
 **CI/CD Integration:**
-- Ensure `.github/workflows/ci.yml` and `full-bootstrap.yml` include steps
-  to verify LSP module import matrix tests (`./sx target test-lsp-module-matrix`)
-  and deploy documentation previews to Vercel for PRs and releases.
-- The Vercel preview deployment should trigger on `pull_request` events for
-  `ci.yml` and on `workflow_dispatch`/tags for `release.yml`.
+- The LSP module import matrix belongs to the acceptance chain
+  (`./sx target test-lsp-module-matrix`), never to a deployment recipe.
+- Documentation previews are published by `.github/workflows/docs.yml` on
+  `pull_request` and on `main`; the deployment lives there because an armed
+  `ci.yml` job forbids `node` and `curl` after `./sx ci-guard` runs. See [CI](CI.md).
 
 See [REMAINING_WORK.md](REMAINING_WORK.md) for the R05 gap register and
 [STATUS.md](STATUS.md) for the 2026-11-12 decimal negative controls update.

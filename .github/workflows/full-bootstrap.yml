@@ -35,9 +35,3 @@ jobs:
       - name: Check forbidden invocation evidence, even after a failed gate
         if: always()
         run: ./sx ci-guard-check
-      - name: Vercel preview deployment for full bootstrap
-        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
-        run: |
-          echo "Deploying full bootstrap documentation preview to Vercel..."
-          # Vercel deployment logic for docs/ (REMAINING_WORK.md, STATUS.md, etc.)
-          echo "Preview deployment triggered for full-bootstrap"

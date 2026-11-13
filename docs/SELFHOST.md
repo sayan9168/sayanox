@@ -57,9 +57,11 @@ bounds, `concat` data image mismatches):
    `tools/sxc_native.sa: OK`, etc.).
 3. **Trace Native AOT**: Use `./sx target native --debug` (if available) or
    inspect `selfhost/native_aot.sa` for `sx_index` or `concat` data image mismatches.
-4. **CI/CD Integration**: Ensure `.github/workflows/ci.yml` and
-   `full-bootstrap.yml` include Vercel preview deployment steps for
-   documentation consistency (R01) and developer experience (R19).
+4. **CI/CD Integration**: Documentation previews are published by the separate
+   `.github/workflows/docs.yml` workflow, never from a `ci.yml` job:
+   `./sx ci-guard` replaces `node`, `curl` and `npx` with failing shims for
+   every later step, so a deployment step inside an armed job would trip the
+   guard. See [CI](CI.md).
 
 See [REMAINING_WORK.md](REMAINING_WORK.md) for the current increment log and
 [STATUS.md](STATUS.md) for the 2026-11-12 decimal negative controls update.
