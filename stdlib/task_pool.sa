@@ -1,0 +1,128 @@
+// stdlib/task_pool.sa -- bounded child-process fan-out over spawn/child_*.
+//
+// Layout: [active, handle0, ..., handle7]. A zero slot is free. The pool owns
+// only handles returned by tp_spawn and stored in a slot; foreign/dead handles
+// are refused instead of being sent to the runtime. This is process-level
+// concurrency, not threads, shared memory, async/await or a scheduler.
+//
+// child_close waits for the child and returns its exit status. tp_close_all
+// closes slots in handle order and returns one status per live child; it always
+// clears the pool, including after a nonzero child status.
+
+make tp_new() -> list {
+  give [0, 0, 0, 0, 0, 0, 0, 0, 0]
+}
+
+make tp_valid(pool: list) -> num {
+  when len(pool) != 9 {
+    give 0
+  }
+  when pool[0] < 0  or  pool[0] > 8 {
+    give 0
+  }
+  hold i = 1
+  hold seen = 0
+  while i < 9 {
+    hold h = pool[i]
+    when h != 0 {
+      when h < 1  or  h > 8 {
+        give 0
+      }
+      seen = seen + 1
+    }
+    i = i + 1
+  }
+  when seen != pool[0] {
+    give 0
+  }
+  give 1
+}
+
+make tp_active(pool: list) -> num {
+  when tp_valid(pool) == 0 {
+    give 0
+  }
+  give pool[0]
+}
+
+make tp_spawn(pool: list, path: str) -> num {
+  when tp_valid(pool) == 0  or  pool[0] >= 8  or  len(path) == 0 {
+    give 0
+  }
+  hold h = spawn(path)
+  when h < 1  or  h > 8 {
+    give 0
+  }
+  hold i = 1
+  while i < 9 {
+    when pool[i] == 0 {
+      pool[i] = h
+      pool[0] = pool[0] + 1
+      give h
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make tp_slot(pool: list, h: num) -> num {
+  when tp_valid(pool) == 0  or  h < 1  or  h > 8 {
+    give 0
+  }
+  hold i = 1
+  while i < 9 {
+    when pool[i] == h {
+      give i
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make tp_send(pool: list, h: num, text: str) -> num {
+  when tp_slot(pool, h) == 0 {
+    give 0
+  }
+  give child_send(h, text)
+}
+
+make tp_line(pool: list, h: num) -> str {
+  when tp_slot(pool, h) == 0 {
+    give ""
+  }
+  give child_line(h)
+}
+
+make tp_recv(pool: list, h: num, n: num) -> str {
+  when tp_slot(pool, h) == 0  or  n < 0 {
+    give ""
+  }
+  give child_recv(h, n)
+}
+
+make tp_close(pool: list, h: num) -> num {
+  hold slot = tp_slot(pool, h)
+  when slot == 0 {
+    give 0 - 1
+  }
+  hold status = child_close(h)
+  pool[slot] = 0
+  pool[0] = pool[0] - 1
+  give status
+}
+
+make tp_close_all(pool: list) -> list {
+  hold out = []
+  when tp_valid(pool) == 0 {
+    give out
+  }
+  hold h = 1
+  while h <= 8 {
+    when tp_slot(pool, h) != 0 {
+      hold status = tp_close(pool, h)
+      out = push(out, status)
+    }
+    h = h + 1
+  }
+  give out
+}

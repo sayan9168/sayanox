@@ -25,7 +25,7 @@ tools/sayanox_lsp < session.txt        # or wire it into an editor
 | `textDocument/publishDiagnostics` | on every open/change |
 | `textDocument/diagnostic` | pull model (`kind: full`) |
 | `textDocument/documentSymbol` | `make` (Function), `struct` (Class), `hold` (Variable) |
-| `textDocument/completion` | keywords and the builtin list |
+| `textDocument/completion` | keywords/builtins plus lexical document/import symbols and namespaced module members; prefix-filtered user symbols, duplicate labels suppressed |
 | `textDocument/hover` | builtin documentation, a `make` signature, or the variable's declaration |
 | `textDocument/definition` | jumps to the **binder** of the word under the cursor: a parameter or a `hold` in the enclosing function body, else the top-level `make` / `hold` / `struct` line (2026-10-22) |
 | `textDocument/references` | every occurrence of the word under the cursor **in the scope that binds it**: a local or parameter is reported inside its own function body only, a top-level name across **open documents plus eligible workspace disk files**, as `Location[]` with UTF-16 columns that cover the whole word. Words inside string literals and `//` comments are not occurrences. `context.includeDeclaration: false` leaves out the binder; a position that is not on a word answers `[]` |

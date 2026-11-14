@@ -1,0 +1,189 @@
+// stdlib/deque.sa -- fixed-capacity numeric ring deque (persistent/value API).
+//
+// A Deque is a nominal struct: capacity, head, length and a numeric slot list.
+// Operations return a new Deque rather than mutating the caller's value, so the
+// module stays portable across seed-min, gen2 and native_aot. Capacity is an
+// integer in 1..4096. Push returns an invalid deque (capacity 0) on refusal.
+// Pop returns a DequePop struct: the updated queue, an ok flag and the value.
+// The original queue is never changed. This is not a thread-safe queue.
+
+struct Deque {
+  capacity
+  head
+  length
+  slots
+}
+
+struct DequePop {
+  queue
+  ok
+  value
+}
+
+// Layout witnesses: the published compiler requires a concrete field layout
+// before functions read or construct these structs.
+hold dq_slots0 = [0]
+hold dq_witness = Deque { capacity: 1, head: 0, length: 0, slots: dq_slots0 }
+hold dq_pop_witness = DequePop { queue: dq_witness, ok: 0, value: 0 }
+
+make dq_int(v: num) -> num {
+  when v >= 0 and v < 1000000000000000 {
+    when v % 1000000000000000 == v {
+      give 1
+    }
+  }
+  give 0
+}
+
+make dq_invalid() -> Deque {
+  hold slots = [0]
+  hold out = Deque { capacity: 0, head: 0, length: 0, slots: slots }
+  give out
+}
+
+make dq_new(capacity: num) -> Deque {
+  when dq_int(capacity) == 0 or capacity < 1 or capacity > 4096 {
+    give dq_invalid()
+  }
+  hold slots = []
+  hold i = 0
+  while i < capacity {
+    slots = push(slots, 0)
+    i = i + 1
+  }
+  hold out = Deque { capacity: capacity, head: 0, length: 0, slots: slots }
+  give out
+}
+
+make dq_valid(q: Deque) -> num {
+  hold cap = q.capacity
+  when dq_int(cap) == 0 or cap < 1 or cap > 4096 {
+    give 0
+  }
+  hold slots = q.slots
+  when len(slots) != cap {
+    give 0
+  }
+  hold head = q.head
+  hold count = q.length
+  when dq_int(head) == 0 or head >= cap {
+    give 0
+  }
+  when dq_int(count) == 0 or count > cap {
+    give 0
+  }
+  give 1
+}
+
+make dq_len(q: Deque) -> num {
+  when dq_valid(q) == 0 {
+    give 0
+  }
+  give q.length
+}
+
+make dq_empty(q: Deque) -> num {
+  when dq_valid(q) == 1 and q.length == 0 {
+    give 1
+  }
+  give 0
+}
+
+make dq_full(q: Deque) -> num {
+  when dq_valid(q) == 1 and q.length == q.capacity {
+    give 1
+  }
+  give 0
+}
+
+make dq_at(q: Deque, index: num, fallback: num) -> num {
+  when dq_valid(q) == 0 or dq_int(index) == 0 or index >= q.length {
+    give fallback
+  }
+  hold head = q.head
+  hold cap = q.capacity
+  hold slot = (head + index) % cap
+  hold slots = q.slots
+  give slots[slot]
+}
+
+make dq_set_slot(q: Deque, slot: num, value: num, head: num, count: num) -> Deque {
+  hold cap = q.capacity
+  hold old = q.slots
+  hold slots = []
+  hold i = 0
+  while i < cap {
+    when i == slot {
+      slots = push(slots, value)
+    } otherwise {
+      slots = push(slots, old[i])
+    }
+    i = i + 1
+  }
+  hold out = Deque { capacity: cap, head: head, length: count, slots: slots }
+  give out
+}
+
+make dq_push_back(q: Deque, value: num) -> Deque {
+  when dq_valid(q) == 0 or q.length == q.capacity {
+    give dq_invalid()
+  }
+  hold head = q.head
+  hold count = q.length
+  hold cap = q.capacity
+  hold slot = (head + count) % cap
+  give dq_set_slot(q, slot, value, head, count + 1)
+}
+
+make dq_push_front(q: Deque, value: num) -> Deque {
+  when dq_valid(q) == 0 or q.length == q.capacity {
+    give dq_invalid()
+  }
+  hold old_head = q.head
+  hold count = q.length
+  hold cap = q.capacity
+  hold head = (old_head + cap - 1) % cap
+  give dq_set_slot(q, head, value, head, count + 1)
+}
+
+make dq_pop_refusal(q: Deque) -> DequePop {
+  hold out = DequePop { queue: q, ok: 0, value: 0 }
+  give out
+}
+
+make dq_pop_front(q: Deque) -> DequePop {
+  when dq_valid(q) == 0 or q.length == 0 {
+    give dq_pop_refusal(q)
+  }
+  hold head = q.head
+  hold count = q.length
+  hold cap = q.capacity
+  hold slots = q.slots
+  hold value = slots[head]
+  hold next_head = (head + 1) % cap
+  hold updated = dq_set_slot(q, head, 0, next_head, count - 1)
+  hold out = DequePop { queue: updated, ok: 1, value: value }
+  give out
+}
+
+make dq_pop_back(q: Deque) -> DequePop {
+  when dq_valid(q) == 0 or q.length == 0 {
+    give dq_pop_refusal(q)
+  }
+  hold head = q.head
+  hold count = q.length
+  hold cap = q.capacity
+  hold slot = (head + count - 1) % cap
+  hold slots = q.slots
+  hold value = slots[slot]
+  hold updated = dq_set_slot(q, slot, 0, head, count - 1)
+  hold out = DequePop { queue: updated, ok: 1, value: value }
+  give out
+}
+
+make dq_clear(q: Deque) -> Deque {
+  when dq_valid(q) == 0 {
+    give dq_invalid()
+  }
+  give dq_new(q.capacity)
+}

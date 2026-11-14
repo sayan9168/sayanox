@@ -1,0 +1,21 @@
+// Portable vNext stdlib tour: explicit results, persistent deque, lexical paths.
+// Build: ./sx target gen2 && ./selfhost/gen2 examples/vnext_stdlib.sa /tmp/vnext.c
+//        cc -std=gnu11 -O2 -o /tmp/vnext /tmp/vnext.c -lm && /tmp/vnext
+use "stdlib/result.sa"
+use "stdlib/deque.sa"
+use "stdlib/winpath.sa"
+
+hold ok = res_ok(42)
+hold err = res_err(7)
+show res_value_or(ok, 0)
+show res_error_or(err, 0)
+
+hold q0 = dq_new(2)
+hold q1 = dq_push_back(q0, 10)
+hold q2 = dq_push_front(q1, 5)
+hold popped = dq_pop_front(q2)
+show popped.value
+show dq_len(popped.queue)
+
+show wp_clean("C:\\Users\\sayan\\..\\docs\\file.txt")
+show wp_child("C:/base", "sub\\file.txt")

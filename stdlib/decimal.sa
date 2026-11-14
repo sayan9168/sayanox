@@ -554,3 +554,268 @@ make dec_div(a: str, b: str, places: num) -> str {
   }
   give dec_place(quotient, places, negative)
 }
+
+// ---- mature decimal surface (exact, portable) -----------------------------
+// All helpers below reuse the exact digit primitives above. They never convert
+// a decimal to a language num. Invalid input yields "" (strings) or the
+// documented sentinel (numeric predicates). The 256-digit bound still applies.
+
+// Absolute value; "" on invalid input.
+make dec_abs(s: str) -> str {
+  hold n = dec_normalize(s)
+  when len(n) == 0 {
+    give ""
+  }
+  when sx_index(n, 0) == 45 {
+    give dec_slice(n, 1, len(n))
+  }
+  give n
+}
+
+// -1, 0, 1 for negative/zero/positive; 2 on invalid input.
+make dec_sign(s: str) -> num {
+  hold n = dec_normalize(s)
+  when len(n) == 0 {
+    give 2
+  }
+  when string_eq(n, "0") == 1 {
+    give 0
+  }
+  when sx_index(n, 0) == 45 {
+    give 0 - 1
+  }
+  give 1
+}
+
+make dec_is_zero(s: str) -> num {
+  when dec_sign(s) == 0 {
+    give 1
+  }
+  give 0
+}
+
+make dec_is_negative(s: str) -> num {
+  when dec_sign(s) == 0 - 1 {
+    give 1
+  }
+  give 0
+}
+
+// 1 if the canonical value has no fractional part, else 0 (0 on invalid).
+make dec_is_integer(s: str) -> num {
+  hold n = dec_normalize(s)
+  when len(n) == 0 {
+    give 0
+  }
+  when dec_scale(n) == 0 {
+    give 1
+  }
+  give 0
+}
+
+// Ordering predicates return 1/0. An invalid operand makes every predicate 0;
+// use dec_compare (which returns 2) when the invalid case must be distinguished.
+make dec_eq(a: str, b: str) -> num {
+  when dec_compare(a, b) == 0 {
+    give 1
+  }
+  give 0
+}
+
+make dec_lt(a: str, b: str) -> num {
+  when dec_compare(a, b) == 0 - 1 {
+    give 1
+  }
+  give 0
+}
+
+make dec_le(a: str, b: str) -> num {
+  hold c = dec_compare(a, b)
+  when c == 0 - 1 or c == 0 {
+    give 1
+  }
+  give 0
+}
+
+make dec_gt(a: str, b: str) -> num {
+  when dec_compare(a, b) == 1 {
+    give 1
+  }
+  give 0
+}
+
+make dec_ge(a: str, b: str) -> num {
+  hold c = dec_compare(a, b)
+  when c == 1 or c == 0 {
+    give 1
+  }
+  give 0
+}
+
+// Smaller/larger canonical operand; "" if either input is invalid.
+make dec_min(a: str, b: str) -> str {
+  hold c = dec_compare(a, b)
+  when c == 2 {
+    give ""
+  }
+  when c <= 0 {
+    give dec_normalize(a)
+  }
+  give dec_normalize(b)
+}
+
+make dec_max(a: str, b: str) -> str {
+  hold c = dec_compare(a, b)
+  when c == 2 {
+    give ""
+  }
+  when c >= 0 {
+    give dec_normalize(a)
+  }
+  give dec_normalize(b)
+}
+
+// Truncate toward zero to an integer. "-0.x" becomes canonical "0".
+make dec_trunc(s: str) -> str {
+  hold n = dec_normalize(s)
+  when len(n) == 0 {
+    give ""
+  }
+  hold sc = dec_scale(n)
+  when sc == 0 {
+    give n
+  }
+  hold intlen = len(n) - sc - 1
+  hold ip = dec_slice(n, 0, intlen)
+  when string_eq(ip, "-0") == 1 {
+    give "0"
+  }
+  give ip
+}
+
+// Round toward negative infinity.
+make dec_floor(s: str) -> str {
+  hold t = dec_trunc(s)
+  when len(t) == 0 {
+    give ""
+  }
+  hold n = dec_normalize(s)
+  when dec_is_integer(n) == 1 {
+    give t
+  }
+  when sx_index(n, 0) == 45 {
+    give dec_sub(t, "1")
+  }
+  give t
+}
+
+// Round toward positive infinity.
+make dec_ceil(s: str) -> str {
+  hold t = dec_trunc(s)
+  when len(t) == 0 {
+    give ""
+  }
+  hold n = dec_normalize(s)
+  when dec_is_integer(n) == 1 {
+    give t
+  }
+  when sx_index(n, 0) == 45 {
+    give t
+  }
+  give dec_add(t, "1")
+}
+
+// Remainder of truncated division; the result carries the dividend's sign.
+// a == dec_add(dec_mul(dec_trunc_div(a,b), b), dec_mod(a,b)). Division by zero,
+// invalid inputs and oversized results return "".
+make dec_mod(a: str, b: str) -> str {
+  hold x = dec_normalize(a)
+  hold y = dec_normalize(b)
+  when len(x) == 0 {
+    give ""
+  }
+  when len(y) == 0 {
+    give ""
+  }
+  when string_eq(y, "0") == 1 {
+    give ""
+  }
+  hold xs = dec_scale(x)
+  hold ys = dec_scale(y)
+  hold scale = xs
+  when ys > scale {
+    hold scale = ys
+  }
+  hold xd = dec_unscaled(x, scale)
+  hold yd = dec_unscaled(y, scale)
+  hold pair = dec_divmod_digits(xd, yd)
+  hold separator = 0
+  while sx_index(pair, separator) != 124 {
+    hold separator = separator + 1
+  }
+  hold remainder = dec_slice(pair, separator + 1, len(pair))
+  hold xn = sx_index(x, 0) == 45
+  give dec_place(remainder, scale, xn)
+}
+
+// Exact integer power by repeated squaring. exp must be an integer 0..4096.
+// Any intermediate or final result above 256 digits returns "".
+make dec_pow(base: str, exp: num) -> str {
+  hold b = dec_normalize(base)
+  when len(b) == 0 {
+    give ""
+  }
+  when exp < 0 {
+    give ""
+  }
+  when exp > 4096 {
+    give ""
+  }
+  when exp != exp % 4097 {
+    give ""
+  }
+  hold result = "1"
+  hold acc = b
+  hold e = exp
+  while e > 0 {
+    when e % 2 == 1 {
+      hold result = dec_mul(result, acc)
+      when len(result) == 0 {
+        give ""
+      }
+    }
+    hold e = (e - (e % 2)) / 2
+    when e > 0 {
+      hold acc = dec_mul(acc, acc)
+      when len(acc) == 0 {
+        give ""
+      }
+    }
+  }
+  give result
+}
+
+// Format with exactly `places` fractional digits (zero padded), rounding
+// nearest with ties away from zero. places must be an integer 0..255. This is
+// the money/display form; dec_round stays canonical (unpadded). Invalid input,
+// invalid places or an oversized rounded value return "".
+make dec_to_fixed(s: str, places: num) -> str {
+  hold r = dec_round(s, places)
+  when len(r) == 0 {
+    give ""
+  }
+  when places == 0 {
+    give r
+  }
+  hold sc = dec_scale(r)
+  hold out = r
+  when sc == 0 {
+    hold out = concat(out, ".")
+  }
+  hold need = places - sc
+  while need > 0 {
+    hold out = concat(out, "0")
+    hold need = need - 1
+  }
+  give out
+}

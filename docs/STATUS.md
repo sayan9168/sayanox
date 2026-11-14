@@ -1,14 +1,42 @@
 # Status
 
-**2026-11-12 update: decimal negative controls in full-language tests**
-The test suite `selfhost/full_language_tests/` now includes `decimal_negative_controls.sa`
-and `decimal_negative_controls.want` to verify division-by-zero and 256-digit
-overflow refusal in `stdlib/decimal.sa`. The `test-full-language-readiness` gate
-(or `test-stdlib-next`) now pins these negative controls. This closes the gap
-identified in R07/R02 regarding missing regression tests for exact decimal
-arithmetic edge cases. The `selfhost/full_language_tests/README.md` has been
-updated to reflect this increment. The documentation consistency increment (R01)
-now tracks these files in the `test-doc-claims` suite.
+**2026-11-13 update (second increment): mature exact-decimal surface**
+`stdlib/decimal.sa` now provides a complete exact-decimal API beyond the earlier
+add/sub/mul/div/round core: `dec_abs`, `dec_sign`, `dec_is_zero`,
+`dec_is_negative`, `dec_is_integer`, the ordering predicates `dec_eq`/`dec_lt`/
+`dec_le`/`dec_gt`/`dec_ge`, `dec_min`/`dec_max`, `dec_trunc`/`dec_floor`/
+`dec_ceil`, `dec_mod` (truncated-division remainder with the dividend's sign),
+`dec_pow` (exact integer power by repeated squaring), and `dec_to_fixed` (round
+then pad to exactly N fractional digits for money/display). All reuse the exact
+digit primitives, never convert through IEEE doubles, and keep the 256-digit
+bound. `selfhost/stdlib_decimal_mature_test.sa` pins **201 checks** against an
+independent Python-`Fraction` oracle on seed-min, gen2 and native_aot through
+`./sx target test-stdlib-next`; `examples/decimal_money.sa` shows an invoice that
+splits to the exact cent. Irrational/transcendental ops are explicitly out of
+scope. The `sx` entry and `bootstrap/sx.sha256` were rebuilt/reviewed for the gate
+change; `./sx verify-entry` passes. This matures the decimal third of R07; it is
+not JSON/CSV closure, precise GC, or complete guarded CI.
+
+**2026-11-13 update: vNext stdlib, executable decimal controls, and LSP completion**
+`stdlib/result.sa`, `stdlib/deque.sa`, `stdlib/fs_safe.sa`, `stdlib/task_pool.sa`
+and `stdlib/winpath.sa` add explicit numeric results, a persistent ring deque,
+checked filesystem helpers, a bounded child-process pool, and lexical
+Windows/POSIX path helpers. `selfhost/stdlib_vnext_test.sa` runs the portable
+subset on seed-min, gen2 and native_aot; `selfhost/stdlib_vnext_io_test.sa` runs
+the filesystem/process subset on gen2 and the full native compiler. Both are
+wired into `./sx target test-stdlib-next` with byte-for-byte oracles.
+
+The earlier decimal-negative-control claim was not executable: the fixture used
+nonexistent `decimal_*` aliases and was not run by the named gate. It is now
+rewritten against the real `dec_*` API and executed by `test-stdlib-next` on
+seed-min, gen2 and native_aot. This is a focused regression repair, not closure
+of R07 or full guarded CI.
+
+LSP completion now adds document/import symbols and namespaced module members
+with prefix filtering, while preserving the standard keyword/builtin list.
+`test-lsp-ide` pins module-member completion and prefix filtering. The checked-in
+`sx` entry and `bootstrap/sx.sha256` were rebuilt/reviewed for the gate change;
+`./sx verify-entry` and `./sx doctor` pass on this source.
 
 **2026-11-07 (fifteenth increment) — R02 step 11: recursion is legal because
 every invocation owns a frame.**

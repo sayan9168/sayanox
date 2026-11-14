@@ -1,0 +1,221 @@
+// stdlib/winpath.sa -- pure lexical Windows/POSIX path helpers.
+//
+// This module does not perform I/O and does not claim a Windows runtime port.
+// It lets tools and tests reason about Windows-style paths on every supported
+// host. Separators normalize to '/', '.' and '..' are resolved lexically, UNC
+// roots keep their leading two slashes, and drive roots keep their colon.
+// Lexical normalization is not symlink resolution or a security boundary.
+
+make wp_char_at(s: str, i: num) -> num {
+  when i < 0  or  i >= len(s) {
+    give 0
+  }
+  give sx_index(s, i)
+}
+
+make wp_slice(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make wp_drive(s: str) -> num {
+  when len(s) >= 2  and  wp_char_at(s, 1) == 58 {
+    hold c = wp_char_at(s, 0)
+    when (c >= 65  and  c <= 90)  or  (c >= 97  and  c <= 122) {
+      give 1
+    }
+  }
+  give 0
+}
+
+make wp_unc(s: str) -> num {
+  when len(s) >= 3  and  wp_char_at(s, 0) == 47  and  wp_char_at(s, 1) == 47 {
+    when wp_char_at(s, 2) != 47 {
+      give 1
+    }
+  }
+  give 0
+}
+
+make wp_is_abs(s: str) -> num {
+  when len(s) == 0 {
+    give 0
+  }
+  when wp_char_at(s, 0) == 47 {
+    give 1
+  }
+  when wp_drive(s) == 1  and  len(s) >= 3  and  wp_char_at(s, 2) == 47 {
+    give 1
+  }
+  give 0
+}
+
+// Split on '/', returning a length-prefixed packed string so numeric lists do
+// not have to carry text. Empty segments are omitted by the caller's scan.
+make wp_clean(path: str) -> str {
+  hold n = len(path)
+  when n == 0 {
+    give ""
+  }
+  hold slash = ""
+  hold i = 0
+  while i < n {
+    hold c = sx_index(path, i)
+    when c == 92 {
+      c = 47
+    }
+    slash = concat(slash, chr(c))
+    i = i + 1
+  }
+  hold unc = wp_unc(slash)
+  hold drive = 0
+  hold root = ""
+  hold body_start = 0
+  when wp_drive(slash) == 1 {
+    drive = 1
+    root = wp_slice(slash, 0, 2)
+    body_start = 2
+    when wp_char_at(slash, 2) == 47 {
+      root = concat(root, "/")
+      body_start = 3
+    }
+  } otherwise {
+    when unc == 1 {
+      root = "//"
+      body_start = 2
+    } otherwise {
+      when wp_char_at(slash, 0) == 47 {
+        root = "/"
+        body_start = 1
+      }
+    }
+  }
+  // A drive-relative path such as C:foo is preserved as a distinct lexical
+  // form; wp_child refuses it because its meaning depends on the current drive.
+  hold acc = ""
+  hold count = 0
+  i = body_start
+  while i <= n {
+    hold start = i
+    while i < n  and  wp_char_at(slash, i) != 47 {
+      i = i + 1
+    }
+    hold seg = wp_slice(slash, start, i)
+    when len(seg) > 0  and  string_eq(seg, ".") == 0 {
+      when string_eq(seg, "..") == 1 {
+        hold poppable = 0
+        when count > 0 {
+          hold j = len(acc) - 1
+          while j >= 0  and  wp_char_at(acc, j) != 47 {
+            j = j - 1
+          }
+          hold tail = wp_slice(acc, j + 1, len(acc))
+          when string_eq(tail, "..") == 0 {
+            poppable = 1
+            acc = wp_slice(acc, 0, j + 1)
+            when j >= 0 {
+              acc = wp_slice(acc, 0, j)
+            }
+            count = count - 1
+          }
+        }
+        when poppable == 0  and  len(root) == 0 {
+          when len(acc) == 0 {
+            acc = ".."
+          } otherwise {
+            acc = concat(acc, "/..")
+          }
+          count = count + 1
+        }
+      } otherwise {
+        when count > 0 {
+          acc = concat(acc, "/")
+        }
+        acc = concat(acc, seg)
+        count = count + 1
+      }
+    }
+    i = i + 1
+  }
+  when len(root) > 0 {
+    give concat(root, acc)
+  }
+  when len(acc) == 0 {
+    give "."
+  }
+  give acc
+}
+
+make wp_join(base: str, child: str) -> str {
+  hold normalized = child
+  hold i = 0
+  while i < len(normalized) {
+    when sx_index(normalized, i) == 92 {
+      // wp_clean handles separators; inspect a converted copy for absoluteness.
+      hold converted = ""
+      hold j = 0
+      while j < len(normalized) {
+        hold c = sx_index(normalized, j)
+        when c == 92 {
+          c = 47
+        }
+        converted = concat(converted, chr(c))
+        j = j + 1
+      }
+      normalized = converted
+      i = len(normalized)
+    } otherwise {
+      i = i + 1
+    }
+  }
+  when wp_is_abs(normalized) == 1 {
+    give wp_clean(child)
+  }
+  when len(base) == 0 {
+    give wp_clean(child)
+  }
+  give wp_clean(concat(base, concat("/", child)))
+}
+
+// A lexical child join that refuses absolute/drive-relative/UNC children and
+// any parent segment. It is still the caller's job to avoid symlink races.
+make wp_child(base: str, child: str) -> str {
+  when len(base) == 0  or  len(child) == 0 {
+    give ""
+  }
+  hold converted = ""
+  hold i = 0
+  while i < len(child) {
+    hold c = sx_index(child, i)
+    when c == 92 {
+      c = 47
+    }
+    when c == 10  or  c == 13 {
+      give ""
+    }
+    converted = concat(converted, chr(c))
+    i = i + 1
+  }
+  when wp_is_abs(converted) == 1  or  wp_drive(converted) == 1  or  wp_unc(converted) == 1 {
+    give ""
+  }
+  hold n = len(converted)
+  i = 0
+  while i <= n {
+    hold start = i
+    while i < n and wp_char_at(converted, i) != 47 {
+      i = i + 1
+    }
+    hold seg = wp_slice(converted, start, i)
+    when string_eq(seg, "..") == 1 {
+      give ""
+    }
+    i = i + 1
+  }
+  give wp_join(base, converted)
+}

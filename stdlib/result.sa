@@ -1,0 +1,95 @@
+// stdlib/result.sa -- explicit numeric results for fallible operations.
+//
+// Representation: [tag, value, error], where tag is 1 for success and 0 for
+// failure. A success carries a numeric value and error 0. A failure carries
+// value 0 and a positive integer error code below 1e15. The all-zero list is
+// the canonical invalid result. This is not an exception mechanism and it does
+// not carry string payloads; use a separate domain table when messages matter.
+//
+// Portable pure-min Sayanox: seed-min, gen2, native_aot and sxc_native.
+
+make res_invalid() -> list {
+  give [0, 0, 0]
+}
+
+make res_code_valid(code: num) -> num {
+  when code > 0  and  code < 1000000000000000 {
+    when code % 1000000000000000 == code {
+      give 1
+    }
+  }
+  give 0
+}
+
+make res_ok(value: num) -> list {
+  give [1, value, 0]
+}
+
+make res_err(code: num) -> list {
+  when res_code_valid(code) == 0 {
+    give res_invalid()
+  }
+  give [0, 0, code]
+}
+
+make res_valid(r: list) -> num {
+  when len(r) != 3 {
+    give 0
+  }
+  when r[0] == 1  and  r[2] == 0 {
+    give 1
+  }
+  when r[0] == 0  and  r[1] == 0 {
+    give res_code_valid(r[2])
+  }
+  give 0
+}
+
+make res_is_ok(r: list) -> num {
+  when res_valid(r) == 1  and  r[0] == 1 {
+    give 1
+  }
+  give 0
+}
+
+make res_is_err(r: list) -> num {
+  when res_valid(r) == 1  and  r[0] == 0 {
+    give 1
+  }
+  give 0
+}
+
+make res_value_or(r: list, fallback: num) -> num {
+  when res_is_ok(r) == 1 {
+    give r[1]
+  }
+  give fallback
+}
+
+make res_error_or(r: list, fallback: num) -> num {
+  when res_is_err(r) == 1 {
+    give r[2]
+  }
+  give fallback
+}
+
+// Prefer the first valid result; otherwise return the fallback unchanged.
+// The caller can validate the fallback if a valid result is required.
+make res_or(r: list, fallback: list) -> list {
+  when res_valid(r) == 1 {
+    give r
+  }
+  give fallback
+}
+
+// Replace a successful value without discarding an error. There are no
+// closures in the published language, so mapping takes a value, not a function.
+make res_replace(r: list, value: num) -> list {
+  when res_is_ok(r) == 1 {
+    give res_ok(value)
+  }
+  when res_is_err(r) == 1 {
+    give res_err(r[2])
+  }
+  give res_invalid()
+}

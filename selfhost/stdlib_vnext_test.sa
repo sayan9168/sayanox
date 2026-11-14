@@ -1,0 +1,66 @@
+// Independent boundary oracle for the vNext stdlib additions.
+// Runs on seed-min, gen2 and native_aot through ./sx target test-stdlib-next.
+use "stdlib/result.sa"
+use "stdlib/deque.sa"
+use "stdlib/winpath.sa"
+
+make sv_check(ok: num, label: str) -> num {
+  when ok == 0 {
+    show label
+  }
+  give 0
+}
+
+make main_sv() -> num {
+  hold ok = res_ok(42)
+  hold err = res_err(7)
+  hold c0 = sv_check(res_is_ok(ok) == 1  and  res_value_or(ok, 0) == 42, "result ok")
+  hold c1 = sv_check(res_is_err(err) == 1  and  res_error_or(err, 0) == 7, "result error")
+  hold c2 = sv_check(res_valid(res_err(0)) == 0  and  res_valid(res_err(1.5)) == 0, "result invalid code")
+  hold c3 = sv_check(res_valid([]) == 0  and  res_value_or(err, 9) == 9, "result malformed/missing")
+  hold replaced = res_replace(ok, 5)
+  hold c4 = sv_check(res_value_or(replaced, 0) == 5  and  res_error_or(res_replace(err, 5), 0) == 7, "result replace")
+  hold c5 = sv_check(res_is_ok(res_or(res_invalid(), ok)) == 1, "result fallback")
+
+  hold q0 = dq_new(3)
+  hold c6 = sv_check(dq_valid(q0) == 1 and dq_len(q0) == 0 and dq_empty(q0) == 1, "deque new")
+  hold q1 = dq_push_back(q0, 10)
+  hold q2 = dq_push_back(q1, 20)
+  hold q3 = dq_push_front(q2, 5)
+  hold c7 = sv_check(dq_valid(q3) == 1 and dq_len(q0) == 0, "deque persistent fill")
+  hold c8 = sv_check(dq_len(q3) == 3 and dq_at(q3, 0, 0) == 5 and dq_at(q3, 2, 0) == 20, "deque order")
+  hold front = dq_pop_front(q3)
+  hold q4 = front.queue
+  hold c9 = sv_check(front.ok == 1 and front.value == 5 and dq_len(q3) == 3, "deque persistent pop")
+  hold q5 = dq_push_back(q4, 30)
+  hold back = dq_pop_back(q5)
+  hold q6 = back.queue
+  hold c10 = sv_check(back.ok == 1 and back.value == 30, "deque pop back")
+  hold q7 = dq_push_back(q6, 40)
+  hold refused = dq_push_back(q7, 99)
+  hold c11 = sv_check(dq_full(q7) == 1 and dq_valid(refused) == 0 and dq_at(q7, 1, 0) == 20, "deque full refusal")
+  hold p0 = dq_pop_front(q7)
+  hold p1 = dq_pop_front(p0.queue)
+  hold p2 = dq_pop_front(p1.queue)
+  hold drained = p2.queue
+  hold c12 = sv_check(p0.value == 10 and p1.value == 20 and p2.value == 40 and dq_empty(drained) == 1, "deque drain/wrap")
+  hold empty = dq_pop_front(drained)
+  hold bad0 = dq_new(0)
+  hold bad4097 = dq_new(4097)
+  hold c13 = sv_check(empty.ok == 0 and dq_valid(bad0) == 0 and dq_valid(bad4097) == 0, "deque boundaries")
+  hold seven = dq_push_back(drained, 7)
+  hold cleared = dq_clear(seven)
+  hold c14 = sv_check(dq_len(cleared) == 0, "deque clear")
+
+  hold c22 = sv_check(string_eq(wp_clean("C:\\Users\\sayan\\..\\docs\\file.txt"), "C:/Users/docs/file.txt") == 1, "windows drive")
+  hold c23 = sv_check(string_eq(wp_clean("\\\\server\\share\\a\\..\\b"), "//server/share/b") == 1, "windows UNC")
+  hold c24 = sv_check(string_eq(wp_clean("a\\b\\..\\..\\..\\c"), "../c") == 1  and  string_eq(wp_clean("/a/../.."), "/") == 1, "windows parent bounds")
+  hold c25 = sv_check(string_eq(wp_join("C:/base", "D:/other"), "D:/other") == 1  and  string_eq(wp_join("C:/base", "sub/./x"), "C:/base/sub/x") == 1, "windows join")
+  hold c26 = sv_check(len(wp_child("C:/base", "..\\escape")) == 0  and  len(wp_child("C:/base", "D:other")) == 0, "windows child refusal")
+  hold c27 = sv_check(string_eq(wp_child("C:/base", "sub\\file.txt"), "C:/base/sub/file.txt") == 1, "windows child")
+
+  show "stdlib-vnext-ok"
+  give 0
+}
+
+hold run_sv = main_sv()

@@ -77,6 +77,66 @@ make ep_next() -> num {
   hold b = ep_snippet("use \"stdlib/datetime.sa\"\nshow dt_format(2024, 2, 29)\n", "2024-02-29", concat(dir, "/alone_dt"))
   hold c = ep_snippet("use \"stdlib/hash.sa\"\nshow sh_istr(sh_adler32(\"Wikipedia\"))\n", "300286872", concat(dir, "/alone_hash"))
   hold d = ep_snippet("use \"stdlib/csv.sa\"\nuse \"stdlib/url.sa\"\nuse \"stdlib/datetime.sa\"\nuse \"stdlib/hash.sa\"\nshow surl_encode(\"a b\")\nshow dt_format(2024, 2, 29)\nshow sh_sum_bytes(\"ab\")\nshow csv_count(csv_parse_row(\"x,y\"))\n", "a%20b\n2024-02-29\n195\n2", concat(dir, "/all"))
+
+  // vNext portable stdlib: explicit results, persistent deque, lexical Windows
+  // paths, and the repaired exact-decimal negative controls. These run on the
+  // same three backends as the existing next-generation stdlib oracles.
+  hold vnext_src = "selfhost/stdlib_vnext_test.sa"
+  hold vnext_want = "selfhost/stdlib_vnext.want"
+  hold vnext_present = bt_require_file(vnext_want)
+  hold vkind = 0
+  while vkind < 3 {
+    hold vbin = concat(concat(dir, "/vnext"), gl_istr(vkind))
+    hold vc = ep_compile(vkind, vnext_src, vbin)
+    hold vr = pg_capture(sh_quote(vbin), concat(vbin, ".out"))
+    hold va = gl_assert_files_eq(concat(vbin, ".out"), vnext_want, "stdlib vNext portable oracle")
+    vkind = vkind + 1
+  }
+  hold dec_src = "selfhost/full_language_tests/decimal_negative_controls.sa"
+  hold dec_want = "selfhost/full_language_tests/decimal_negative_controls.want"
+  hold dec_present = bt_require_file(dec_want)
+  hold dkind = 0
+  while dkind < 3 {
+    hold dbin = concat(concat(dir, "/decimal_controls"), gl_istr(dkind))
+    hold dc = ep_compile(dkind, dec_src, dbin)
+    hold dr = pg_capture(sh_quote(dbin), concat(dbin, ".out"))
+    hold da = gl_assert_files_eq(concat(dbin, ".out"), dec_want, "decimal negative controls")
+    dkind = dkind + 1
+  }
+
+  // Mature decimal surface: abs/sign/predicates/min/max/trunc/floor/ceil/mod/
+  // pow/to_fixed, checked against an independent Python-Fraction oracle on the
+  // same three backends. 201 exact checks plus the closing sentinel.
+  hold dm_src = "selfhost/stdlib_decimal_mature_test.sa"
+  hold dm_want = "selfhost/stdlib_decimal_mature.want"
+  hold dm_present = bt_require_file(dm_want)
+  hold mkind = 0
+  while mkind < 3 {
+    hold mbin = concat(concat(dir, "/decimal_mature"), gl_istr(mkind))
+    hold mc = ep_compile(mkind, dm_src, mbin)
+    hold mr = pg_capture(sh_quote(mbin), concat(mbin, ".out"))
+    hold ma = gl_assert_files_eq(concat(mbin, ".out"), dm_want, "mature decimal independent oracle")
+    mkind = mkind + 1
+  }
+
+  // Filesystem/process helpers need the fuller runtime. The bounded native_aot
+  // and seed-min profiles are intentionally excluded; gen2 and the full native
+  // compiler must agree. The worker is a Sayanox program compiled by this gate.
+  hold worker = concat(dir, "/worker")
+  hold wc = ep_compile(1, "selfhost/stdlib_vnext_worker.sa", worker)
+  hold io_src = "selfhost/stdlib_vnext_io_test.sa"
+  hold io_want = "selfhost/stdlib_vnext_io.want"
+  hold io_present = bt_require_file(io_want)
+  hold ik = 1
+  while ik < 4 {
+    when ik == 1 or ik == 3 {
+      hold ibin = concat(concat(dir, "/io"), gl_istr(ik))
+      hold ic = ep_compile(ik, io_src, ibin)
+      hold ir = pg_capture(sh_quote(ibin), concat(ibin, ".out"))
+      hold ia = gl_assert_files_eq(concat(ibin, ".out"), io_want, "stdlib vNext filesystem/process oracle")
+    }
+    ik = ik + 1
+  }
   give 0
 }
 
