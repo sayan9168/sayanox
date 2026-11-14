@@ -13,7 +13,12 @@ make svio_check(ok: num, label: str) -> num {
 }
 
 make main_svio() -> num {
-  hold dir = "selfhost/seed_tests/stdlib_vnext_io"
+  // The no-Makefile driver runs from a workspace whose selfhost/ entry is a
+  // symlink. fs_safe deliberately refuses symlink components, so canonicalize
+  // the scratch base first instead of weakening the filesystem contract.
+  hold base = path_real("selfhost/seed_tests")
+  hold cbase = svio_check(len(base) > 0, "io scratch base")
+  hold dir = concat(base, "/stdlib_vnext_io")
   hold made = fsx_ensure_dir(dir)
   hold nested = fsx_ensure_dir(concat(dir, "/nested/deeper"))
   hold c0 = svio_check(made == 1 and nested == 1 and path_kind(concat(dir, "/nested/deeper")) == 2, "fs ensure dir")
