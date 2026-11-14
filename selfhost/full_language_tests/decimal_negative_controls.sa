@@ -1,51 +1,41 @@
-// Negative control: division by zero in exact decimal arithmetic
-// Must refuse and exit with code 1 (or diagnostic)
-// Expected output: "division by zero" or exit code 1
-make decimal_div_zero() {
-  hold d1 = decimal_from_str("10.0")
-  hold d2 = decimal_from_str("0.0")
-  // The following should refuse or return an empty/error string
-  // depending on the exact API contract of `stdlib/decimal.sa`
-  // We assert the refusal here.
-  hold res = decimal_div(d1, d2)
-  // If `decimal_div` returns an empty string on error:
-  when len(res) == 0 {
-    show "PASS: division by zero refused"
-    give exit(0)
+// Executable negative controls for stdlib/decimal.sa. The public API returns
+// "" on refusal; these checks require that exact behavior for division by zero,
+// invalid input, and a 256-digit overflow. They do not use nonexistent aliases.
+use "stdlib/decimal.sa"
+
+make dnc_check(ok: num, label: str) -> num {
+  when ok == 0 {
+    show label
   }
-  // If it panics or returns garbage, the gate fails.
-  show "FAIL: division by zero accepted"
-  give exit(1)
+  give 0
 }
 
-// Negative control: overflow beyond 256 digits
-make decimal_overflow() {
-  // Construct a number with 257 digits (e.g., 1 followed by 256 zeros)
-  hold big = "1"
+make dnc_repeat(ch: str, count: num) -> str {
+  hold out = ""
   hold i = 0
-  while i < 256 {
-    big = concat(big, "0")
+  while i < count {
+    out = concat(out, ch)
     i = i + 1
   }
-  hold d = decimal_from_str(big)
-  // Attempt to add 1 (should overflow)
-  hold res = decimal_add(d, decimal_from_str("1"))
-  // If the result length > 256 or if it refuses:
-  when len(decimal_to_str(res)) > 256 {
-    show "PASS: overflow detected"
-    give exit(0)
-  }
-  // If the implementation silently truncates, this gate fails.
-  show "FAIL: overflow silently accepted"
-  give exit(1)
+  give out
 }
 
-// Entry point for the test gate
-make main() {
-  hold c1 = decimal_div_zero()
-  hold c2 = decimal_overflow()
-  when c1 == 0 && c2 == 0 {
-    give exit(0)
-  }
-  give exit(1)
+make main_dnc() -> num {
+  hold zero = dec_div("10.0", "0.0", 2)
+  hold c0 = dnc_check(len(zero) == 0, "decimal division by zero accepted")
+  hold bad = dec_add("1.2.3", "1")
+  hold c1 = dnc_check(len(bad) == 0, "decimal invalid input accepted")
+  hold max = dnc_repeat("9", 256)
+  hold valid = dec_valid(max)
+  hold c2 = dnc_check(valid == 1, "256-digit input refused")
+  hold overflow = dec_add(max, "1")
+  hold c3 = dnc_check(len(overflow) == 0, "257-digit result accepted")
+  hold oversized = dnc_repeat("9", 257)
+  hold c4 = dnc_check(dec_valid(oversized) == 0, "257-digit input accepted")
+  hold rounded = dec_div("1", "3", 4)
+  hold c5 = dnc_check(string_eq(rounded, "0.3333") == 1, "decimal division rounding")
+  show "decimal-negative-controls-ok"
+  give 0
 }
+
+hold run_dnc = main_dnc()

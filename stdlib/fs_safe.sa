@@ -1,0 +1,148 @@
+// stdlib/fs_safe.sa -- checked filesystem helpers over the published builtins.
+//
+// Status convention: 1 success, 0 refusal/failure. Reads distinguish a missing
+// or non-regular path from a readable empty file: fsx_read_ok(path) is true for
+// an empty regular file, while fsx_read(path) returns "" for both empty content
+// and refusal. Callers that must tell those cases apart check fsx_read_ok first.
+//
+// Paths are byte strings. The runtime has no rename/replace builtin, so this
+// module deliberately does not claim atomic replacement. Symlinks are reported
+// as kind 3 by path_kind and are refused by the checked helpers.
+
+make fsx_read_ok(path: str) -> num {
+  when path_kind(path) == 1 {
+    give 1
+  }
+  give 0
+}
+
+make fsx_read(path: str) -> str {
+  when fsx_read_ok(path) == 0 {
+    give ""
+  }
+  give read_file(path)
+}
+
+make fsx_write_ok(path: str) -> num {
+  hold kind = path_kind(path)
+  when kind == 0  or  kind == 1 {
+    give 1
+  }
+  give 0
+}
+
+make fsx_write(path: str, text: str) -> num {
+  when fsx_write_ok(path) == 0 {
+    give 0
+  }
+  give write_file(path, text)
+}
+
+make fsx_copy(source: str, destination: str) -> num {
+  when path_kind(source) != 1  or  fsx_write_ok(destination) == 0 {
+    give 0
+  }
+  hold bytes = []
+  hold count = read_bytes(source, bytes)
+  when count < 0 {
+    give 0
+  }
+  give write_bytes(destination, bytes)
+}
+
+make fsx_ensure_dir(path: str) -> num {
+  when len(path) == 0 {
+    give 0
+  }
+  when path_kind(path) == 2 {
+    give 1
+  }
+  when path_kind(path) != 0 {
+    give 0
+  }
+  hold n = len(path)
+  hold i = 1
+  while i < n {
+    when sx_index(path, i) == 47 {
+      hold prefix = ""
+      hold j = 0
+      while j < i {
+        prefix = concat(prefix, chr(sx_index(path, j)))
+        j = j + 1
+      }
+      when path_kind(prefix) == 0 {
+        hold made = make_dir(prefix)
+        when made != 1 {
+          give 0
+        }
+      } otherwise {
+        when path_kind(prefix) != 2 {
+          give 0
+        }
+      }
+    }
+    i = i + 1
+  }
+  hold created = make_dir(path)
+  when created == 1  and  path_kind(path) == 2 {
+    give 1
+  }
+  give 0
+}
+
+// Join a relative child path without allowing escape from base. Backslashes,
+// drive-like prefixes, absolute paths, empty segments and `..` are refused;
+// `.` segments are skipped. The result is lexical, not a symlink-proof open.
+make fsx_join(base: str, child: str) -> str {
+  when len(base) == 0  or  len(child) == 0 {
+    give ""
+  }
+  when sx_index(child, 0) == 47  or  sx_index(child, 0) == 92 {
+    give ""
+  }
+  hold out = base
+  when sx_index(out, len(out) - 1) == 47 {
+    out = concat(out, "")
+  } otherwise {
+    out = concat(out, "/")
+  }
+  hold i = 0
+  hold n = len(child)
+  hold first = 1
+  while i < n {
+    hold start = i
+    while i < n  and  sx_index(child, i) != 47 {
+      hold c = sx_index(child, i)
+      when c == 92  or  c == 10  or  c == 13  or  c == 58 {
+        give ""
+      }
+      i = i + 1
+    }
+    hold seg = ""
+    hold k = start
+    while k < i {
+      seg = concat(seg, chr(sx_index(child, k)))
+      k = k + 1
+    }
+    when string_eq(seg, "..") == 1  or  len(seg) == 0 {
+      give ""
+    }
+    when string_eq(seg, ".") == 0 {
+      when first == 0 {
+        out = concat(out, "/")
+      }
+      out = concat(out, seg)
+      first = 0
+    }
+    when i < n {
+      i = i + 1
+      when i == n {
+        give ""
+      }
+    }
+  }
+  when first == 1 {
+    give ""
+  }
+  give out
+}

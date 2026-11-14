@@ -1,0 +1,54 @@
+// C-output/full-native oracle for checked filesystem helpers and the bounded
+// child-process pool. The bounded native_aot and seed-min profiles deliberately
+// lack these runtime builtins, so the gate runs this file on gen2 and sxc_native.
+use "stdlib/fs_safe.sa"
+use "stdlib/task_pool.sa"
+
+make svio_check(ok: num, label: str) -> num {
+  when ok == 0 {
+    show label
+    hold stop = exit(1)
+  }
+  give 0
+}
+
+make main_svio() -> num {
+  // The no-Makefile driver runs from a workspace whose selfhost/ entry is a
+  // symlink. fs_safe deliberately refuses symlink components, so canonicalize
+  // the scratch base first instead of weakening the filesystem contract.
+  hold base = path_real("selfhost/seed_tests")
+  hold cbase = svio_check(len(base) > 0, "io scratch base")
+  hold dir = concat(base, "/stdlib_vnext_io")
+  hold made = fsx_ensure_dir(dir)
+  hold nested = fsx_ensure_dir(concat(dir, "/nested/deeper"))
+  hold c0 = svio_check(made == 1 and nested == 1 and path_kind(concat(dir, "/nested/deeper")) == 2, "fs ensure dir")
+  hold file = concat(dir, "/empty.txt")
+  hold c1 = svio_check(fsx_write(file, "") == 1 and fsx_read_ok(file) == 1 and len(fsx_read(file)) == 0, "fs empty file")
+  hold c2 = svio_check(fsx_write(file, "abc") == 1 and fsx_copy(file, concat(dir, "/copy.bin")) == 1, "fs write/copy")
+  hold copied = fsx_read(concat(dir, "/copy.bin"))
+  hold c3 = svio_check(string_eq(copied, "abc") == 1 and fsx_read(concat(dir, "/missing")) == "", "fs copy/read")
+  hold c4 = svio_check(fsx_write(dir, "x") == 0 and fsx_copy(concat(dir, "/missing"), file) == 0, "fs refusal")
+  hold joined = fsx_join(dir, "nested/./child.sa")
+  hold c5 = svio_check(string_eq(joined, concat(dir, "/nested/child.sa")) == 1, "fs join")
+  hold c6 = svio_check(len(fsx_join(dir, "../escape")) == 0 and len(fsx_join(dir, "/absolute")) == 0 and len(fsx_join(dir, "a//b")) == 0, "fs traversal")
+
+  hold pool = tp_new()
+  hold c7 = svio_check(tp_valid(pool) == 1 and tp_active(pool) == 0, "pool new")
+  hold worker = "selfhost/seed_tests/stdlib_next/worker"
+  hold h = tp_spawn(pool, worker)
+  hold c8 = svio_check(h >= 1 and h <= 8 and tp_active(pool) == 1, "pool spawn")
+  hold c9 = svio_check(tp_send(pool, h, "hello\n") == 1, "pool send")
+  hold line = tp_line(pool, h)
+  hold c10 = svio_check(string_eq(line, "echo:hello") == 1, "pool line")
+  hold c11 = svio_check(tp_send(pool, 999, "x") == 0 and tp_send(pool, h, "quit\n") == 1, "pool foreign handle")
+  hold status = tp_close(pool, h)
+  hold c12 = svio_check(status == 0 and tp_active(pool) == 0 and tp_close(pool, h) == -1, "pool close")
+  hold h2 = tp_spawn(pool, worker)
+  hold c13 = svio_check(h2 >= 1 and tp_send(pool, h2, "quit\n") == 1, "pool respawn")
+  hold statuses = tp_close_all(pool)
+  hold c14 = svio_check(len(statuses) == 1 and statuses[0] == 0 and tp_active(pool) == 0, "pool close all")
+  show "stdlib-vnext-io-ok"
+  give 0
+}
+
+hold run_svio = main_svio()

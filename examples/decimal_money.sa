@@ -1,0 +1,28 @@
+// Exact money arithmetic with stdlib/decimal.sa -- no floating point.
+// An invoice: two line items, 8.25% tax, rounded to cents (ties away from zero),
+// then a 3-way split with the remainder assigned to the first share.
+// Build: ./selfhost/gen2 examples/decimal_money.sa /tmp/money.c
+//        cc -std=gnu11 -O2 -o /tmp/money /tmp/money.c -lm && /tmp/money
+use "stdlib/decimal.sa"
+
+make line_total(qty: str, unit: str) -> str {
+  give dec_mul(qty, unit)
+}
+
+hold item1 = line_total("3", "19.99")
+hold item2 = line_total("2", "4.50")
+hold subtotal = dec_add(item1, item2)
+hold tax = dec_mul(subtotal, "0.0825")
+hold total = dec_to_fixed(dec_add(subtotal, tax), 2)
+
+// Split the exact-cent total three ways; first share absorbs the odd cent.
+hold share = dec_div(total, "3", 2)
+hold two_shares = dec_mul(share, "2")
+hold first_share = dec_sub(total, two_shares)
+
+show subtotal
+show dec_to_fixed(tax, 2)
+show total
+show share
+show first_share
+show dec_add(first_share, two_shares)

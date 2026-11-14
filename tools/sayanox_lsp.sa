@@ -2083,42 +2083,146 @@ make code_actions(text: str, uri: str) -> str {
 
 // ------------------------------------------------------------- completion
 
-make completion_items() -> str {
-  hold words = ""
-  hold arr = ""
-  hold count = 0
-  hold n = 0
-  hold i = 0
-  hold c = 0
-  hold d = 0
-  hold w = ""
-  hold item = ""
-  words = "hold show when otherwise else elif while for break continue make give struct use true false and or not push concat len chr sx_index string_eq read_file write_file arg arg_count read_line read_n write_out flush_out numstr gc gc_live gc_runs"
-  n = len(words)
-  while i < n {
-    c = sx_index(words, i)
-    when is_ident(c) == 1 {
-      w = ""
-      while i < n {
-        d = sx_index(words, i)
-        when is_ident(d) == 1 {
-          w = w + chr(d)
-          i += 1
+make completion_item(label: str, kind: num, detail: str, first: num) -> str {
+  hold b = ""
+  when first > 0 {
+    b = ","
+  }
+  b = concat(b, "{\"label\":\"")
+  b = concat(b, json_esc(label))
+  b = concat(b, "\",\"kind\":")
+  b = concat(b, numstr(kind))
+  b = concat(b, ",\"detail\":\"")
+  b = concat(b, json_esc(detail))
+  b = concat(b, "\"}")
+  give b
+}
+
+// Append lexical completion candidates from one source to an existing JSON
+// item array body. Duplicate labels are suppressed by searching the array body;
+// this is intentionally the same lightweight scan shape as documentSymbol.
+make completion_scan(text: str, prefix: str, detail: str, arr: str) -> str {
+  hold out = arr
+  hold lines = count_lines(text)
+  hold l = 0
+  hold lp = lower(prefix)
+  while l < lines {
+    hold raw = line_text(text, l)
+    hold t = trim_str(strip_line_comment(raw))
+    hold kind = 0
+    hold skip = 0
+    when starts(t, 0, "make ") == 1 {
+      kind = 3
+      skip = 5
+    }
+    when starts(t, 0, "struct ") == 1 {
+      kind = 22
+      skip = 7
+    }
+    when starts(t, 0, "hold ") == 1 {
+      kind = 6
+      skip = 5
+    }
+    when kind != 0 {
+      hold w = ""
+      hold q = skip
+      hold n = len(t)
+      while q < n {
+        hold c = sx_index(t, q)
+        when is_ident(c) == 1 {
+          w = concat(w, chr(c))
+          q = q + 1
         } otherwise {
           break
         }
       }
-      item = ""
-      when count > 0 {
-        item = ","
+      when len(w) > 0 {
+        hold label_key = concat("\"label\":\"", concat(json_esc(w), "\""))
+        when find(out, label_key) < 0 {
+          when len(lp) == 0 or find(lower(w), lp) >= 0 {
+            out = concat(out, completion_item(w, kind, detail, len(out)))
+          }
+        }
       }
-      item = item + "{\"label\":\""
-      item = item + w
-      item = item + "\",\"kind\":14,\"detail\":\"standard\"}"
-      arr = arr + item
-      count += 1
+    }
+    l = l + 1
+  }
+  give out
+}
+
+// Context-aware completion. The standard keyword/builtin list is preserved for
+// legacy clients; user symbols from the current buffer, textual imports and
+// namespaced module members are added with LSP symbol kinds.
+make completion_items(doc: str, docuri: str, ln: num, ch: num, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
+  hold words = "hold show when otherwise else elif while for break continue make give struct use true false and or not push concat len chr sx_index string_eq read_file write_file arg arg_count read_line read_n write_out flush_out numstr gc gc_live gc_runs"
+  hold arr = ""
+  hold n = len(words)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(words, i)
+    when is_ident(c) == 1 {
+      hold w = ""
+      while i < n {
+        hold d = sx_index(words, i)
+        when is_ident(d) == 1 {
+          w = concat(w, chr(d))
+          i = i + 1
+        } otherwise {
+          break
+        }
+      }
+      arr = concat(arr, completion_item(w, 14, "standard", len(arr)))
     } otherwise {
-      i += 1
+      i = i + 1
+    }
+  }
+  hold lt = line_text(doc, ln)
+  hold bytepos = utf16_byte(lt, ch)
+  hold start = bytepos
+  while start > 0 {
+    hold pc = sx_index(lt, start - 1)
+    when is_ident(pc) == 1 {
+      start = start - 1
+    } otherwise {
+      break
+    }
+  }
+  hold prefix = sub_str(lt, start, bytepos)
+  arr = completion_scan(doc, prefix, "this document", arr)
+  hold uses = doc_use_manifest(doc, docuri)
+  hold rows = count_lines(uses)
+  hold r = 0
+  while r + 1 < rows {
+    hold uu = line_text(uses, r)
+    hold up = line_text(uses, r + 1)
+    hold usrc = open_or_disk(uu, up, u0, t0, u1, t1, u2, t2, u3, t3)
+    when len(usrc) > 0 {
+      arr = completion_scan(usrc, prefix, "import", arr)
+    }
+    r = r + 2
+  }
+  // Module member completion: `alias.` or `alias.pre` offers top-level names
+  // from the resolved module source, not unrelated workspace symbols.
+  hold dot = start - 1
+  when dot >= 0 and sx_index(lt, dot) == 46 {
+    hold rs = dot
+    while rs > 0 {
+      hold rc = sx_index(lt, rs - 1)
+      when is_ident(rc) == 1 {
+        rs = rs - 1
+      } otherwise {
+        break
+      }
+    }
+    hold recv = sub_str(lt, rs, dot)
+    hold mhit = doc_module_lookup(doc, docuri, recv)
+    when len(mhit) > 0 {
+      hold mu = line_text(mhit, 2)
+      hold mp = line_text(mhit, 3)
+      hold msrc = open_or_disk(mu, mp, u0, t0, u1, t1, u2, t2, u3, t3)
+      when len(msrc) > 0 {
+        arr = completion_scan(msrc, prefix, concat("module ", recv), arr)
+      }
     }
   }
   give concat("[", concat(arr, "]"))
@@ -4889,7 +4993,7 @@ while running == 1 {
         d = reply(idraw, symbols(doc, docuri))
       }
       when string_eq(method, "textDocument/completion") {
-        res = concat("{\"isIncomplete\":false,\"items\":", completion_items())
+        res = concat("{\"isIncomplete\":false,\"items\":", completion_items(doc, docuri, ln, ch, uri0, txt0, uri1, txt1, uri2, txt2, uri3, txt3))
         res = concat(res, "}")
         d = reply(idraw, res)
       }

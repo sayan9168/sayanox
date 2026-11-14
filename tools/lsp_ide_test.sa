@@ -282,6 +282,7 @@ make run_ide_tests(server: str, scratch: str) -> num {
   main_src = concat(main_src, "  p\n")
   main_src = concat(main_src, ")\n")
   main_src = concat(main_src, "show p.x // comment_tok\n")
+  main_src = concat(main_src, "hold q = vc.dot(p, p)\n")
   hold wm = check(write_file(main_p, main_src) == 1, "write main.sa")
   hold main_u = uri(main_p)
 
@@ -371,6 +372,16 @@ make run_ide_tests(server: str, scratch: str) -> num {
   hold r14 = answer(h, id_key(14, q))
   hold cp4 = check(has(r14, "\"result\":null") == 1, "prepareRename refuses // comment")
   show "prepareRename: accepts user identifiers and refuses keywords, string literals, and comments"
+
+  // 6. Context-aware completion: module members after `vc.` and prefix filtering.
+  hold scomp1 = check(send_frame(h, request_body(16, "textDocument/completion", pos_params(main_u, 14, 12, q), q)) == 1, "completion vc.")
+  hold rcomp1 = answer(h, id_key(16, q))
+  hold cc1 = check(has(rcomp1, "\"label\":\"dot\"") == 1 && has(rcomp1, "module vc") == 1, "completion offers module vc.dot")
+  hold cc2 = check(has(rcomp1, "\"label\":\"make_vec\"") == 1 && has(rcomp1, "\"label\":\"demo\"") == 1, "completion mixes module and document symbols")
+  hold scomp2 = check(send_frame(h, request_body(17, "textDocument/completion", pos_params(main_u, 14, 15, q), q)) == 1, "completion vc.do")
+  hold rcomp2 = answer(h, id_key(17, q))
+  hold cc3 = check(has(rcomp2, "\"label\":\"dot\"") == 1 && has(rcomp2, "\"label\":\"make_vec\"") == 0, "completion prefix filters module members")
+  show "completion: module members, document symbols, and prefix filtering"
 
   // Clean shutdown + exit
   hold s17 = check(send_frame(h, request_body(15, "shutdown", "null", q)) == 1, "shutdown")

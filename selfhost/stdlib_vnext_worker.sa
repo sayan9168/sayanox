@@ -1,0 +1,17 @@
+// Echo worker for the bounded process-pool oracle. One line in, one line out;
+// "quit" or EOF ends the child cleanly.
+make main_worker() -> num {
+  hold go = 1
+  while go == 1 {
+    hold line = read_line()
+    when len(line) == 0 or string_eq(line, "quit") == 1 {
+      go = 0
+    } otherwise {
+      show concat("echo:", line)
+      hold flushed = flush_out()
+    }
+  }
+  give 0
+}
+
+hold run_worker = main_worker()

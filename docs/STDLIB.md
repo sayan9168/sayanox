@@ -1,7 +1,7 @@
 # Standard library (stdlib/)
 
 Modules, split by what they need from the compiler. Every helper is checked
-by a `make` target; the backend columns below say what is verified.
+by a `./sx target` gate; the backend columns below say what is verified.
 
 | Module | Helpers | Backends | Gate |
 |---|---|---|---|
@@ -10,7 +10,7 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/list_util.sa` | 9 list helpers (`l_len`, `l_get`, `l_sum`, `l_max`, `l_min`, `l_count`, `l_contains`, `l_reverse`, `l_range`) | seed-min, gen2, native | `test-stdlib` |
 | `stdlib/file_util.sa` | 5 file helpers (`f_read`, `f_write`, `f_size`, `f_exists`, `f_lines`) | seed-min, gen2, native | `test-stdlib` |
 | `stdlib/num_util.sa` | 17 untyped numeric helpers (`nu_trunc`, `nu_floor`, `nu_ceil`, `nu_round`, `nu_frac`, `nu_min`, `nu_max`, `nu_mod_pos`, `nu_int_div`, `nu_wrap`, `nu_map_range`, `nu_avg`, `nu_median3`, `nu_pi`, `nu_deg2rad`, `nu_rad2deg`, `nu_turn`) | seed-min, gen2, native | `test-stdlib-modules` |
-| `stdlib/decimal.sa` | exact, bounded decimal-string validation, normalization, comparison, addition, subtraction, multiplication, rounded division and rounding | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/decimal.sa` | exact, bounded decimal-string arithmetic: validation, normalization, comparison predicates, add/sub/mul/div, rounding, `abs`/`sign`/`min`/`max`, `trunc`/`floor`/`ceil`, `mod`, integer `pow`, and fixed-point formatting (`dec_to_fixed`) | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/json_decimal.sa` | exact decimal reads and updates of existing JSON numbers | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/list_algo.sa` | 21 typed list algorithms (`la_insert_sorted`, `la_sort`, `la_sorted`, `la_index_of`, `la_append`, `la_slice`, `la_take`, `la_drop`, `la_cumsum`, `la_repeat`, `la_scale`, `la_offset`, `la_zip_add`, `la_count_gt`, `la_remove_at`, `la_insert_at`, `la_distinct`, `la_lower_bound`, `la_upper_bound`, `la_merge_sorted`, `la_rotate`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/str_text.sa` | 22 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`, `t_count_char`, `t_starts_with`, `t_ends_with`, `t_normalize_ws`) | seed-min, gen2, native | `test-stdlib-modules`, `test-stdlib-next` |
@@ -41,6 +41,11 @@ by a `make` target; the backend columns below say what is verified.
 | `stdlib/llm.sa` | byte tokens, bounded embedding lookup, multi-head attention, transformer-block inference and toy autoregressive generation | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/llm_model_io.sa` | bounded versioned JSON model interchange for the one-block CPU model | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/llm_safetensors.sa` | bounded SafeTensors F32 reader for the custom one-block model | seed-min, gen2, native (byte-list parser); file reading on gen2 | `test-stdlib-next` |
+| `stdlib/result.sa` | explicit numeric success/error results with validation, fallback and replacement helpers | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/deque.sa` | persistent fixed-capacity numeric ring deque (`Deque`, `DequePop`) | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/winpath.sa` | lexical Windows/POSIX path normalization, join and checked child join; no I/O or OS port claim | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/fs_safe.sa` | checked read/write/copy/ensure-dir and relative child join over the published filesystem builtins; no atomic replace | gen2, full native | `test-stdlib-next` |
+| `stdlib/task_pool.sa` | bounded child-process fan-out over `spawn`/`child_*`; process concurrency, not threads | gen2, full native | `test-stdlib-next` |
 
 ## Toolbox modules
 
@@ -410,6 +415,58 @@ show db_rows(sr_group_avg(sales, 0, 2))        // eng,15,0,2
 `selfhost/stdlib_store_rel_test.sa` (104 lines) is compared byte for byte against
 `selfhost/stdlib_store_rel.want`, computed from a third independent Python
 reference, on seed-min, gen2 and native by `test-stdlib-store`.
+
+## Mature exact decimals
+
+`stdlib/decimal.sa` is a complete exact-decimal arithmetic surface over canonical
+strings (optional `-`, digits, optional `.digits`; no exponent; up to 256
+significant digits). It never converts a decimal to a language `num`, so it is
+exact where IEEE doubles are not — the right tool for money, ledgers and
+fixed-point scientific work. Every operation returns the canonical string, or
+`""` on invalid input / overflow / division by zero.
+
+Arithmetic and rounding:
+
+* `dec_add`, `dec_sub`, `dec_mul` — exact; result above 256 digits gives `""`.
+* `dec_div(a, b, places)` — rounded to `places` fractional digits, nearest with
+  ties away from zero; `places` is an integer 0..255.
+* `dec_round(s, places)` — same rounding, canonical (unpadded) output.
+* `dec_mod(a, b)` — remainder of truncated division, carrying the dividend's
+  sign, so `a == dec_add(dec_mul(dec_trunc(a/b), b), dec_mod(a, b))`.
+* `dec_pow(base, exp)` — exact integer power by repeated squaring; `exp` is an
+  integer 0..4096; any intermediate/final overflow gives `""`.
+
+Sign, magnitude and ordering:
+
+* `dec_abs`, `dec_negate`, `dec_sign` (`-1`/`0`/`1`, or `2` on invalid input).
+* `dec_is_zero`, `dec_is_negative`, `dec_is_integer`.
+* `dec_compare` (`-1`/`0`/`1`, or `2` on invalid) and the predicates `dec_eq`,
+  `dec_lt`, `dec_le`, `dec_gt`, `dec_ge` (each `1`/`0`; an invalid operand makes
+  every predicate `0` — use `dec_compare` to detect the invalid case).
+* `dec_min`, `dec_max` — the smaller/larger canonical operand.
+
+Integer rounding and display:
+
+* `dec_trunc` (toward zero), `dec_floor` (toward −∞), `dec_ceil` (toward +∞).
+* `dec_to_fixed(s, places)` — round then pad to **exactly** `places` fractional
+  digits, e.g. `dec_to_fixed("2", 3)` → `2.000`, `dec_to_fixed("-1.5", 2)` →
+  `-1.50`. This is the money/display form; `dec_round` stays unpadded.
+
+```sayanox
+use "stdlib/decimal.sa"
+show dec_mul("3", "19.99")            // 59.97
+show dec_to_fixed("74.660025", 2)     // 74.66
+show dec_mod("-7", "3")               // -1
+show dec_pow("1.5", 3)                // 3.375
+show dec_max("-3.5", "2")             // 2
+```
+
+Irrational/transcendental operations (`sqrt`, `log`, `exp`) are intentionally out
+of scope: they do not fit the exact terminating-decimal contract. The mature
+surface is pinned by `selfhost/stdlib_decimal_mature_test.sa` (201 checks) against
+an independent Python-`Fraction` oracle on seed-min, gen2 and native_aot through
+`test-stdlib-next`; `examples/decimal_money.sa` shows an invoice that splits to
+the exact cent.
 
 ## Exact decimals in JSON
 
@@ -1012,3 +1069,30 @@ byte-for-byte, and also checks that each module stands alone and that the
   (`B * 65536 + A`). `sh_luhn_check_digit` computes a Luhn check digit for an
   all-digit payload and `sh_luhn_valid` validates a complete number; both
   refuse non-digit input.
+
+## vNext helpers (2026-11-13)
+
+The new helpers keep failure explicit and stay inside the published runtime:
+
+* `result.sa` represents a fallible numeric operation as `[tag, value, error]`.
+  `res_ok`/`res_err` construct valid results, `res_valid` rejects malformed or
+  non-integer error codes, and `res_value_or`/`res_error_or` provide fallbacks.
+  It is not an exception mechanism and does not carry string payloads.
+* `deque.sa` is a persistent ring deque. Push/pop return new `Deque`/`DequePop`
+  structs instead of mutating the caller's value, which keeps it portable across
+  seed-min, gen2 and bounded native_aot. Capacity is bounded to 1..4096.
+* `fs_safe.sa` distinguishes a readable empty file from a missing/non-regular
+  path via `fsx_read_ok`, refuses directories/symlinks for checked writes, and
+  provides a lexical relative-child join. It does not provide atomic rename or
+  symlink-race-proof open.
+* `task_pool.sa` owns up to eight child handles and refuses foreign/dead handles.
+  `tp_close_all` always clears the pool and returns one status per live child.
+  This is process-level concurrency; there are no threads or shared-memory
+  synchronization primitives in the published runtime.
+* `winpath.sa` normalizes Windows separators, drive roots and UNC roots purely
+  lexically. It is useful for tools/tests on any host, but it is not a Windows
+  runtime port and does not resolve symlinks.
+
+Executable oracles: `selfhost/stdlib_vnext_test.sa` (portable subset) and
+`selfhost/stdlib_vnext_io_test.sa` + `selfhost/stdlib_vnext_worker.sa`
+(filesystem/process subset), run by `./sx target test-stdlib-next`.
