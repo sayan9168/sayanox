@@ -1,0 +1,169 @@
+// stdlib/text_wrap.sa -- deterministic byte-oriented text wrapping (prefix tw_).
+//
+// Whitespace means ASCII space, tab, LF, CR, vertical tab and form feed.
+// tw_normalize collapses whitespace runs to one space and trims the ends.
+// tw_wrap greedily wraps normalized words at an integral width 1..4096,
+// hard-splitting words longer than the width, and joins lines with LF.
+// tw_wrap_indent treats width as the total line width including the indent.
+// tw_truncate is a byte truncation with a suffix; it refuses when the suffix
+// does not fit. These are byte helpers, not Unicode grapheme-aware wrappers.
+
+make tw_width_ok(width: num) -> num {
+  when width >= 1 and width <= 4096 {
+    when width % 9007199254740992 == width {
+      give 1
+    }
+  }
+  give 0
+}
+
+make tw_is_space(c: num) -> num {
+  when c == 32 or c == 9 or c == 10 or c == 13 or c == 11 or c == 12 {
+    give 1
+  }
+  give 0
+}
+
+make tw_slice(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make tw_normalize(s: str) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold in_word = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when tw_is_space(c) == 1 {
+      when in_word == 1 {
+        out = concat(out, " ")
+        in_word = 0
+      }
+    } otherwise {
+      out = concat(out, chr(c))
+      in_word = 1
+    }
+    i = i + 1
+  }
+  // The loop appends a separator only after a word, so a trailing separator
+  // can appear only when the input ended with whitespace after a word.
+  hold m = len(out)
+  when m > 0 {
+    when sx_index(out, m - 1) == 32 {
+      out = tw_slice(out, 0, m - 1)
+    }
+  }
+  give out
+}
+
+make tw_append_line(out: str, line: str) -> str {
+  when len(out) == 0 {
+    give line
+  }
+  give concat(concat(out, "\n"), line)
+}
+
+make tw_wrap(s: str, width: num) -> str {
+  when tw_width_ok(width) == 0 {
+    give ""
+  }
+  hold text = tw_normalize(s)
+  hold n = len(text)
+  hold out = ""
+  hold line = ""
+  hold i = 0
+  while i < n {
+    // Extract one normalized word.
+    hold start = i
+    while i < n and sx_index(text, i) != 32 {
+      i = i + 1
+    }
+    hold word = tw_slice(text, start, i)
+    when i < n {
+      i = i + 1
+    }
+    hold wlen = len(word)
+    when len(line) == 0 {
+      while wlen > width {
+        out = tw_append_line(out, tw_slice(word, 0, width))
+        word = tw_slice(word, width, wlen)
+        wlen = len(word)
+      }
+      line = word
+    } otherwise {
+      hold need = len(line) + 1 + wlen
+      when need <= width {
+        line = concat(concat(line, " "), word)
+      } otherwise {
+        out = tw_append_line(out, line)
+        line = ""
+        while wlen > width {
+          out = tw_append_line(out, tw_slice(word, 0, width))
+          word = tw_slice(word, width, wlen)
+          wlen = len(word)
+        }
+        line = word
+      }
+    }
+  }
+  when len(line) > 0 {
+    out = tw_append_line(out, line)
+  }
+  give out
+}
+
+make tw_indent_lines(text: str, indent: str) -> str {
+  hold n = len(text)
+  when n == 0 {
+    give ""
+  }
+  hold out = ""
+  hold start = 0
+  hold i = 0
+  while i < n {
+    when sx_index(text, i) == 10 {
+      hold line = tw_slice(text, start, i)
+      out = tw_append_line(out, concat(indent, line))
+      start = i + 1
+    }
+    i = i + 1
+  }
+  hold tail = tw_slice(text, start, n)
+  out = tw_append_line(out, concat(indent, tail))
+  give out
+}
+
+make tw_wrap_indent(s: str, width: num, indent: str) -> str {
+  when tw_width_ok(width) == 0 {
+    give ""
+  }
+  hold inner = width - len(indent)
+  when inner < 1 {
+    give ""
+  }
+  hold wrapped = tw_wrap(s, inner)
+  give tw_indent_lines(wrapped, indent)
+}
+
+make tw_truncate(s: str, width: num, suffix: str) -> str {
+  when width < 0 or width > 1000000 or width % 9007199254740992 != width {
+    give ""
+  }
+  hold n = len(s)
+  when n <= width {
+    give s
+  }
+  hold slen = len(suffix)
+  when slen > width {
+    give ""
+  }
+  hold keep = width - slen
+  give concat(tw_slice(s, 0, keep), suffix)
+}

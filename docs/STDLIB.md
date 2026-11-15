@@ -18,8 +18,8 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/json_deep.sa` | nested JSON reader and bounded mutations (`jd_set_raw`, `jd_delete_raw`, `jd_object_put_raw`, `jd_array_insert_raw`, `jd_object_ensure_raw`, `jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with dot-separated numeric indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep` |
 | `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa`; boundary/precision oracle in `selfhost/stdlib_json_boundary.want` | seed-min, gen2, native | `test-stdlib-json-write`, `test-stdlib-next` |
 | `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
-| `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded commas/CR/LF, doubled quotes, three malformed-row refusals | seed-min, gen2, native | `test-stdlib-csv` |
-| `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded separators/CR/LF, doubled quotes, three malformed-row refusals; delimiter-parameterized `_d` variants and `csv_delim_ok` for TSV/semicolon/pipe | seed-min, gen2, native | `test-stdlib-csv`, `test-stdlib-next` |
+| `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection; `ct_parse_d`/`ct_write_d` read and write any supported delimiter | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_query.sa` | stable CSV joins, distinct, sorting and exact decimal aggregates | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/store.sa` | in-memory relational store (`db_*`): typed table shape, `db_insert`, filtered `db_update`/`db_delete`, `db_project`, stable `db_sort`, comparison and text predicates, per-row arithmetic filters, and packed-row/frame round trips; 58 `make` definitions (21 public helpers plus the encoding and predicate helpers they are built on), every operation bounded and every refusal returning `""` | seed-min, gen2, native | `test-stdlib-store` |
 | `stdlib/store_index.sa` | derived indexes over `stdlib/store.sa` tables (`ix_*`): `ix_hash_build`/`ix_ordered_build`, exact-key `ix_lookup`/`ix_rows_for`/`ix_count_key`, binary-searched `ix_range`/`ix_between`, `ix_min_key`/`ix_max_key`/`ix_rows`, and staleness detection (`ix_stale`/`ix_valid`) that refuses to answer from a snapshot the table has outgrown; 43 `make` definitions | seed-min, gen2, native | `test-stdlib-store` |
@@ -46,6 +46,16 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/winpath.sa` | lexical Windows/POSIX path normalization, join and checked child join; no I/O or OS port claim | seed-min, gen2, native_aot | `test-stdlib-next` |
 | `stdlib/fs_safe.sa` | checked read/write/copy/ensure-dir and relative child join over the published filesystem builtins; no atomic replace | gen2, full native | `test-stdlib-next` |
 | `stdlib/task_pool.sa` | bounded child-process fan-out over `spawn`/`child_*`; process concurrency, not threads | gen2, full native | `test-stdlib-next` |
+| `stdlib/set.sa` | persistent strictly-ascending numeric set (`set_*`): membership by binary search, add/remove, union/intersect/difference/symmetric difference, subset/equality, min/max; cap 4096, invalid input returns `[]` | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/heap.sa` | persistent binary min-heap (`heap_*`, `HeapPop`): push/peek/pop, heapify, heap sort, k-smallest/k-largest; cap 4096, pop refusal keeps the input heap | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/intmath.sa` | checked exact integer math (`im_*`) over `stdlib/result.sa`: add/sub/mul/div/mod, gcd/lcm, pow, isqrt, factorial, combination/permutation, prime factors/divisors, base 2–36 conversion; ±9007199254740991 window and explicit error codes | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/graph.sa` | bounded weighted graph algorithms (`gr_*`): BFS, Dijkstra distances/path, undirected components, DAG toposort; flat numeric graph, ≤64 nodes / ≤4096 edges, nonnegative integer weights | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/text_metric.sa` | byte-string similarity (`tm_*`): Hamming, Levenshtein, LCS length, common prefix/suffix, subsequence, integer similarity percent; edit/LCS inputs bounded at 256 bytes | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/text_wrap.sa` | deterministic byte-oriented wrapping (`tw_*`): whitespace normalization, greedy wrap with hard word splitting, indented wrap, suffix truncation; width 1–4096, not Unicode grapheme-aware | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/base32.sa` | RFC 4648 base32 codec (`b32_*`) for byte lists and NUL-free strings; canonical padding/pad-bit validation, case-insensitive decode, `b32_valid` separates failure from empty text | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/net.sa` | lexical IPv4/CIDR/hostname helpers (`net_*`): strict dotted-quad, CIDR network/broadcast/containment, RFC1918/loopback/link-local/multicast/reserved predicates, LDH hostname and port validation; address math, not sockets | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/template.sa` | safe `{name}` templates (`tpl_*`) over `stdlib/map.sa`: one-pass substitution, doubled-brace escapes, strict render, fallback render, syntax validation and escaping | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/money.sa` | exact decimal money helpers (`mo_*`) over `stdlib/decimal.sa`: packed amount lists, sum, largest-remainder allocation/split, tax/discount/rate rounding; never converts amounts through IEEE doubles | seed-min, gen2, native_aot | `test-stdlib-next` |
 
 ## Toolbox modules
 
@@ -116,6 +126,39 @@ show highs[2]                     // 3
 
 `selfhost/stdlib_text.want` includes a hand-written toolbox oracle exercised by
 `test-stdlib-next` on seed-min, gen2 and native.
+
+## Library pack
+
+The library pack adds ten bounded, persistent helpers: `set`, `heap`,
+`intmath`, `graph`, `text_metric`, `text_wrap`, `base32`, `net`, `template`
+and `money`. Import dependencies explicitly: `result.sa` before `intmath.sa`,
+`map.sa` before `template.sa`, and `decimal.sa` before `money.sa`.
+`examples/library_pack.sa` is a runnable tour.
+
+* Sets and heaps are numeric and persistent: operations return new lists, and
+  the empty list is both a valid empty container and the usual refusal marker.
+  Use `set_valid` / `heap_valid` when that distinction matters. Heaps are
+  min-heaps; store negated priorities for a max-heap.
+* `intmath` returns `res_ok` / `res_err` lists and refuses outside the exact
+  ±9007199254740991 window. Division/modulo truncate toward zero; the remainder
+  carries the dividend's sign. Error codes are 1 invalid argument, 2 overflow,
+  3 divide-by-zero, 4 bad base, 5 negative where nonnegative is required.
+* `graph` is an in-memory small-tool graph, not a database: at most 64 nodes and
+  4096 edges, nonnegative integer weights, and algorithm results shaped as
+  `[1, values...]` or `[0]`. Unreachable distances are -1.
+* Text metrics and wrapping are byte-oriented, not Unicode grapheme-aware.
+  `base32` is RFC 4648 with canonical padding/pad-bit checks; the string API is
+  NUL-free like the other string codecs, while the byte-list API handles NUL.
+* `net` validates and computes IPv4/CIDR/hostname facts; it does not open
+  sockets. `template` substitutes once and never rescans inserted values.
+  `money` keeps amounts as exact decimal strings and allocates by largest
+  remainder so the parts sum back to the total.
+
+The independent Python oracle is `selfhost/stdlib_library_pack_oracle.py`. It
+generates nine fixtures (`set`, `heap`, `graph`, `intmath`, `text`, `base32`,
+`net`, `template`, `money`) with **1,617 oracle expectations** including closing
+sentinels. The split keeps each fixture inside the bounded native_aot limits;
+`test-stdlib-next` runs every fixture on seed-min, gen2 and native_aot.
 
 ## AI and machine-learning primitives
 
@@ -227,6 +270,57 @@ streaming parser; repeated packed-string construction and lookups can be
 costly for large tables. Strings are byte strings, not Unicode-aware text.
 Boundary, malformed-frame and parse/write round-trip tests are checked across
 seed-min, gen2 and native via `test-stdlib-next`. See `examples/csv_table.sa`.
+
+### CSV dialects (TSV, semicolon, pipe)
+
+The comma API is the default dialect. Every separator-sensitive operation also
+has a `_d` variant that takes the **delimiter byte**, so one codec reads and
+writes TSV, semicolon and pipe files with identical RFC 4180 quoting rules:
+
+| Function | Default form |
+| --- | --- |
+| `csv_parse_row_d(line, delim)` | `csv_parse_row(line)` |
+| `csv_is_valid_row_d(line, delim)` | `csv_is_valid_row(line)` |
+| `csv_write_row_d(packed, delim)` | `csv_write_row(packed)` |
+| `csv_needs_quote_d(s, delim)` | `csv_needs_quote(s)` |
+| `ct_parse_d(doc, delim)` | `ct_parse(doc)` |
+| `ct_write_d(table, delim)` | `ct_write(table)` |
+
+`csv_delim_ok(delim)` accepts **TAB (9)** or a printable ASCII byte in 33..126
+other than the double quote (34). Common values: comma 44, semicolon 59, pipe
+124. The quote byte cannot separate fields, CR/LF are the record terminators,
+and space (32) is refused because leading/trailing spaces are significant field
+data in this codec. An unsupported delimiter makes the `_d` readers return the
+`!` error marker and the `_d` writers return `""`.
+
+Quoting is decided **per dialect**: a field containing the active delimiter, a
+double quote, CR or LF is quoted and its quotes doubled. A comma is ordinary
+data in a TSV file, and a tab is ordinary data in a comma file:
+
+```sayanox
+use "stdlib/csv.sa"
+use "stdlib/csv_table.sa"
+hold tsv = "name\tnote\r\nwidget\tred, large\r\n"
+hold table = ct_parse_d(tsv, 9)
+show ct_cell(table, 1, 1)      // red, large
+show ct_write_d(table, 44)     // name,note\r\nwidget,"red, large"
+show ct_write_d(table, 59)     // name;note\r\nwidget;red, large
+```
+
+The packed table format is delimiter-independent, so a table parsed from one
+dialect can be written in another and all cells survive. Record separators,
+caps, refusals and the `!` marker behave exactly as in the comma dialect.
+
+One documented divergence from Python's `csv` module: for a row whose only
+field is empty this codec writes the empty string, while Python writes `""`.
+Both forms parse back to one empty field here.
+
+`selfhost/stdlib_csv_dialect_test.sa` pins **473 checks** against Python's own
+`csv` module — an implementation independent of this codec — over comma, TAB,
+semicolon and pipe, including randomized fields containing separators, quotes,
+CR/LF and UTF-8 bytes, malformed-row refusals, refused delimiters and
+document round trips. It runs on seed-min, gen2 and native_aot through
+`test-stdlib-next`. See `examples/csv_dialect.sa`.
 
 ### CSV table queries
 

@@ -119,6 +119,67 @@ make ep_next() -> num {
     mkind = mkind + 1
   }
 
+  // Condition precedence regression: comparison mixed with and/or, user calls
+  // and inline len() as operands. The vNext notes recorded a miscompile here
+  // that does not reproduce on this tree; this pins the correct behaviour so a
+  // future change cannot silently reintroduce it. 21 checks plus a sentinel.
+  hold cp_src = "selfhost/stdlib_condition_precedence_test.sa"
+  hold cp_want = "selfhost/stdlib_condition_precedence.want"
+  hold cp_present = bt_require_file(cp_want)
+  hold pkind = 0
+  while pkind < 3 {
+    hold pbin = concat(concat(dir, "/cond_precedence"), gl_istr(pkind))
+    hold pc = ep_compile(pkind, cp_src, pbin)
+    hold pr = pg_capture(sh_quote(pbin), concat(pbin, ".out"))
+    hold pa = gl_assert_files_eq(concat(pbin, ".out"), cp_want, "condition precedence oracle")
+    pkind = pkind + 1
+  }
+
+  // CSV dialects: the same RFC 4180 quoting rules with an explicit delimiter
+  // byte (comma/TAB/semicolon/pipe), checked against Python's own csv module
+  // on the same three backends. 473 checks plus the closing sentinel.
+  hold cd_src = "selfhost/stdlib_csv_dialect_test.sa"
+  hold cd_want = "selfhost/stdlib_csv_dialect.want"
+  hold cd_present = bt_require_file(cd_want)
+  hold ckind = 0
+  while ckind < 3 {
+    hold cbin = concat(concat(dir, "/csv_dialect"), gl_istr(ckind))
+    hold cc = ep_compile(ckind, cd_src, cbin)
+    hold cr = pg_capture(sh_quote(cbin), concat(cbin, ".out"))
+    hold ca = gl_assert_files_eq(concat(cbin, ".out"), cd_want, "CSV dialect independent oracle")
+    ckind = ckind + 1
+  }
+
+  // Library pack: collections, graph, checked integer math, text metrics/wrap,
+  // base32, IPv4/CIDR/hostname validation, templates and exact money helpers.
+  // The independent Python oracle is split by module group so each fixture stays
+  // inside the bounded native_aot variable/patch limits. Every group runs on the
+  // same three backends as the other portable stdlib oracles.
+  hold lp_index = 0
+  while lp_index < 9 {
+    hold lp_name = "set"
+    when lp_index == 1 { lp_name = "heap" }
+    when lp_index == 2 { lp_name = "graph" }
+    when lp_index == 3 { lp_name = "intmath" }
+    when lp_index == 4 { lp_name = "text" }
+    when lp_index == 5 { lp_name = "base32" }
+    when lp_index == 6 { lp_name = "net" }
+    when lp_index == 7 { lp_name = "template" }
+    when lp_index == 8 { lp_name = "money" }
+    hold lp_src = concat(concat("selfhost/stdlib_library_pack_", lp_name), "_test.sa")
+    hold lp_want = concat(concat("selfhost/stdlib_library_pack_", lp_name), ".want")
+    hold lp_present = bt_require_file(lp_want)
+    hold lp_kind = 0
+    while lp_kind < 3 {
+      hold lp_bin = concat(concat(concat(concat(dir, "/library_pack_"), lp_name), "_"), gl_istr(lp_kind))
+      hold lp_c = ep_compile(lp_kind, lp_src, lp_bin)
+      hold lp_r = pg_capture(sh_quote(lp_bin), concat(lp_bin, ".out"))
+      hold lp_a = gl_assert_files_eq(concat(lp_bin, ".out"), lp_want, concat(concat("library pack ", lp_name), " independent oracle"))
+      lp_kind = lp_kind + 1
+    }
+    lp_index = lp_index + 1
+  }
+
   // Filesystem/process helpers need the fuller runtime. The bounded native_aot
   // and seed-min profiles are intentionally excluded; gen2 and the full native
   // compiler must agree. The worker is a Sayanox program compiled by this gate.

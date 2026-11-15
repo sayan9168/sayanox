@@ -1,0 +1,243 @@
+// stdlib/heap.sa -- persistent binary min-heap / priority queue (prefix heap_).
+//
+// A heap is a flat numeric list in the usual array layout: children of i are
+// 2*i+1 and 2*i+2, and every parent is <= its children. Operations return new
+// lists; the caller's list is never mutated. Capacity is 4096. heap_pop returns
+// a HeapPop struct with the updated heap, an ok flag and the removed minimum.
+// Equal values are allowed. This is a min-heap; for max-heap behaviour store
+// negated priorities. It is not thread-safe and does not support decrease-key.
+
+struct HeapPop {
+  heap
+  ok
+  value
+}
+
+hold heap_slots0 = [0]
+hold heap_witness = HeapPop { heap: heap_slots0, ok: 0, value: 0 }
+
+make heap_len(h: list) -> num {
+  give len(h)
+}
+
+make heap_valid(h: list) -> num {
+  hold n = len(h)
+  when n > 4096 {
+    give 0
+  }
+  hold i = 1
+  while i < n {
+    hold parent = (i - 1 - ((i - 1) % 2)) / 2
+    when h[parent] > h[i] {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make heap_swap(xs: list, i: num, j: num) -> list {
+  hold out = []
+  hold n = len(xs)
+  hold k = 0
+  while k < n {
+    when k == i {
+      out = push(out, xs[j])
+    } otherwise {
+      when k == j {
+        out = push(out, xs[i])
+      } otherwise {
+        out = push(out, xs[k])
+      }
+    }
+    k = k + 1
+  }
+  give out
+}
+
+make heap_sift_up(xs: list, start: num) -> list {
+  hold out = xs
+  hold child = start
+  while child > 0 {
+    hold parent = (child - 1 - ((child - 1) % 2)) / 2
+    when out[parent] <= out[child] {
+      give out
+    }
+    out = heap_swap(out, parent, child)
+    child = parent
+  }
+  give out
+}
+
+make heap_sift_down(xs: list, start: num, count: num) -> list {
+  hold out = xs
+  hold parent = start
+  hold go = 1
+  while go == 1 {
+    hold left = parent * 2 + 1
+    when left >= count {
+      hold go = 0
+    } otherwise {
+      hold best = left
+      hold right = left + 1
+      when right < count {
+        when out[right] < out[left] {
+          best = right
+        }
+      }
+      when out[parent] <= out[best] {
+        hold go = 0
+      } otherwise {
+        out = heap_swap(out, parent, best)
+        parent = best
+      }
+    }
+  }
+  give out
+}
+
+make heap_from_list(xs: list) -> list {
+  hold n = len(xs)
+  when n > 4096 {
+    give []
+  }
+  hold out = []
+  hold i = 0
+  while i < n {
+    out = push(out, xs[i])
+    i = i + 1
+  }
+  when n <= 1 {
+    give out
+  }
+  hold start = (n - 2 - ((n - 2) % 2)) / 2
+  while start >= 0 {
+    out = heap_sift_down(out, start, n)
+    start = start - 1
+  }
+  give out
+}
+
+make heap_push(h: list, value: num) -> list {
+  when heap_valid(h) == 0 {
+    give []
+  }
+  hold n = len(h)
+  when n >= 4096 {
+    give []
+  }
+  hold out = push(h, value)
+  give heap_sift_up(out, n)
+}
+
+make heap_peek(h: list, fallback: num) -> num {
+  when heap_valid(h) == 0 or len(h) == 0 {
+    give fallback
+  }
+  give h[0]
+}
+
+make heap_pop_refusal(h: list) -> HeapPop {
+  hold out = HeapPop { heap: h, ok: 0, value: 0 }
+  give out
+}
+
+make heap_pop(h: list) -> HeapPop {
+  when heap_valid(h) == 0 or len(h) == 0 {
+    give heap_pop_refusal(h)
+  }
+  hold n = len(h)
+  hold value = h[0]
+  when n == 1 {
+    hold empty = []
+    hold out = HeapPop { heap: empty, ok: 1, value: value }
+    give out
+  }
+  hold last = h[n - 1]
+  hold shrunk = []
+  hold i = 0
+  while i < n - 1 {
+    shrunk = push(shrunk, h[i])
+    i = i + 1
+  }
+  // Put the former last element at the root without mutating shrunk.
+  hold rooted = []
+  hold k = 0
+  while k < n - 1 {
+    when k == 0 {
+      rooted = push(rooted, last)
+    } otherwise {
+      rooted = push(rooted, shrunk[k])
+    }
+    k = k + 1
+  }
+  hold updated = heap_sift_down(rooted, 0, n - 1)
+  hold out = HeapPop { heap: updated, ok: 1, value: value }
+  give out
+}
+
+make heap_clear(h: list) -> list {
+  when heap_valid(h) == 0 {
+    give []
+  }
+  give []
+}
+
+make heap_sort(xs: list) -> list {
+  hold h = heap_from_list(xs)
+  hold out = []
+  hold go = 1
+  while go == 1 {
+    hold step = heap_pop(h)
+    when step.ok == 0 {
+      hold go = 0
+    } otherwise {
+      out = push(out, step.value)
+      h = step.heap
+    }
+  }
+  give out
+}
+
+make heap_k_smallest(xs: list, k: num) -> list {
+  when k < 0 or k != k % 4097 {
+    give []
+  }
+  hold sorted = heap_sort(xs)
+  hold n = len(sorted)
+  when k > n {
+    give []
+  }
+  hold out = []
+  hold i = 0
+  while i < k {
+    out = push(out, sorted[i])
+    i = i + 1
+  }
+  give out
+}
+
+make heap_k_largest(xs: list, k: num) -> list {
+  when k < 0 or k != k % 4097 {
+    give []
+  }
+  hold sorted = heap_sort(xs)
+  hold n = len(sorted)
+  when k > n {
+    give []
+  }
+  hold out = []
+  hold i = n - k
+  while i < n {
+    out = push(out, sorted[i])
+    i = i + 1
+  }
+  // Return largest first.
+  hold desc = []
+  hold j = len(out) - 1
+  while j >= 0 {
+    desc = push(desc, out[j])
+    j = j - 1
+  }
+  give desc
+}

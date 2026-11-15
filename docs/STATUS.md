@@ -1,5 +1,54 @@
 # Status
 
+**2026-11-15 update: library pack — collections, graph, integer math, text, codecs, templates, money**
+Ten new stdlib modules landed: `stdlib/set.sa`, `stdlib/heap.sa`,
+`stdlib/intmath.sa`, `stdlib/graph.sa`, `stdlib/text_metric.sa`,
+`stdlib/text_wrap.sa`, `stdlib/base32.sa`, `stdlib/net.sa`,
+`stdlib/template.sa` and `stdlib/money.sa`. They provide persistent numeric
+sets/heaps, checked exact integer arithmetic over `result.sa`, bounded weighted
+graph algorithms, byte-string similarity and wrapping, RFC 4648 base32,
+IPv4/CIDR/hostname validation, safe `{name}` templates over `map.sa`, and exact
+decimal money allocation/tax/discount helpers over `decimal.sa`. The independent
+Python oracle `selfhost/stdlib_library_pack_oracle.py` generates nine split
+fixtures with **1,617 oracle expectations**; all nine match byte-for-byte on
+seed-min, gen2 and native_aot and are wired into `test-stdlib-next`.
+`examples/library_pack.sa` is a runnable tour. This is stdlib depth, not socket
+networking, Unicode-aware text, precise GC, or closure of R07. The `sx` entry and
+pin manifests were refreshed for the gate change.
+
+**2026-11-15 update: CSV dialects (TSV, semicolon, pipe)**
+`stdlib/csv.sa` and `stdlib/csv_table.sa` now support an explicit delimiter byte
+alongside the unchanged comma API: `csv_parse_row_d`, `csv_is_valid_row_d`,
+`csv_write_row_d`, `csv_needs_quote_d`, `csv_delim_ok`, `ct_parse_d` and
+`ct_write_d`. One RFC 4180 quoting engine serves comma, TAB, semicolon and pipe;
+quoting is decided per dialect, so a comma is data in TSV and a tab is data in
+CSV. The packed table format is delimiter-independent, so tables convert
+between dialects with every cell preserved. The comma functions now delegate to
+the same cores with delimiter 44, and the existing `test-stdlib-csv` and
+`test-stdlib-next` oracles are unchanged and still pass.
+`selfhost/stdlib_csv_dialect_test.sa` pins **473 checks** against Python's own
+`csv` module on seed-min, gen2 and native_aot through `test-stdlib-next`;
+`examples/csv_dialect.sa` converts one TSV export to semicolon and comma CSV.
+The `sx` entry and **both** pin manifests (`bootstrap/sx.sha256`,
+`docs/full-language-v1.sha256`) were refreshed for the gate change. This is CSV
+dialect maturity, not a streaming parser, not Unicode-aware text, and not
+JSON/CSV closure overall.
+
+**2026-11-15 audit: the recorded gen2 condition miscompile does not reproduce**
+The vNext notes recorded `while i < len(x) and f(x,i) != k` miscompiling to
+`while (i < (sx_len(x) && ...))`, with a `hold n = len(x)` workaround in
+`stdlib/winpath.sa`. On this tree the shape emits correct C
+(`while (i < sx_len(s) && char_at(s, i) != k)`), the un-hoisted `winpath` variant
+produces identical output, and a 21-check precedence sweep (comparison mixed
+with `and`/`or`, user calls, inline `len()`, `and`-before-`or`) matches an
+independent oracle on gen2 and native_aot. The workaround is therefore left in
+place as harmless, and **no compiler fix is claimed**. The earlier observation
+is not reproducible with these shapes. The sweep is now a tracked gate oracle,
+`selfhost/stdlib_condition_precedence_test.sa` (21 checks), so a future change
+that reintroduces the defect fails `test-stdlib-next` instead of silently
+changing a loop.
+
+
 **2026-11-13 update (second increment): mature exact-decimal surface**
 `stdlib/decimal.sa` now provides a complete exact-decimal API beyond the earlier
 add/sub/mul/div/round core: `dec_abs`, `dec_sign`, `dec_is_zero`,

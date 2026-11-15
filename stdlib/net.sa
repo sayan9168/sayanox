@@ -1,0 +1,410 @@
+// stdlib/net.sa -- IPv4, CIDR and hostname validation (prefix net_).
+//
+// This is a lexical/address-math library, not a socket API. IPv4 parsing is
+// strict dotted-quad: four decimal octets 0..255, no leading zeros, no spaces.
+// CIDR parsing is strict by default (host bits must be zero); net_cidr_parse_any
+// masks host bits. Prefixes are 0..32. Hostnames are ASCII LDH labels, 1..63
+// bytes per label, 1..253 bytes total, with an optional single trailing dot.
+// Invalid list/string results are [] / ""; numeric predicates return -1 when
+// an input is invalid and 0/1 otherwise.
+
+make net_div(a: num, b: num) -> num {
+  hold r = a % b
+  give (a - r) / b
+}
+
+make net_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold v = n
+  hold out = ""
+  while v > 0 {
+    hold d = v % 10
+    out = concat(chr(48 + d), out)
+    v = (v - d) / 10
+  }
+  give out
+}
+
+make net_byte_ok(v: num) -> num {
+  when v >= 0 and v <= 255 {
+    when v % 9007199254740992 == v {
+      give 1
+    }
+  }
+  give 0
+}
+
+make net_ipv4_parse(s: str) -> list {
+  hold n = len(s)
+  when n == 0 or n > 15 {
+    give []
+  }
+  hold out = []
+  hold part = ""
+  hold i = 0
+  while i <= n {
+    hold c = 0
+    when i < n {
+      c = sx_index(s, i)
+    }
+    when i == n or c == 46 {
+      hold plen = len(part)
+      when plen == 0 or plen > 3 {
+        give []
+      }
+      when plen > 1 and sx_index(part, 0) == 48 {
+        give []
+      }
+      hold value = 0
+      hold k = 0
+      while k < plen {
+        hold d = sx_index(part, k)
+        when d < 48 or d > 57 {
+          give []
+        }
+        value = value * 10 + d - 48
+        k = k + 1
+      }
+      when value > 255 {
+        give []
+      }
+      out = push(out, value)
+      when len(out) > 4 {
+        give []
+      }
+      part = ""
+    } otherwise {
+      part = concat(part, chr(c))
+    }
+    i = i + 1
+  }
+  when len(out) != 4 {
+    give []
+  }
+  give out
+}
+
+make net_ipv4_format(xs: list) -> str {
+  when len(xs) != 4 {
+    give ""
+  }
+  hold i = 0
+  while i < 4 {
+    when net_byte_ok(xs[i]) == 0 {
+      give ""
+    }
+    i = i + 1
+  }
+  hold out = net_istr(xs[0])
+  out = concat(concat(out, "."), net_istr(xs[1]))
+  out = concat(concat(out, "."), net_istr(xs[2]))
+  out = concat(concat(out, "."), net_istr(xs[3]))
+  give out
+}
+
+make net_ipv4_to_num(s: str) -> num {
+  hold xs = net_ipv4_parse(s)
+  when len(xs) != 4 {
+    give 0 - 1
+  }
+  give xs[0] * 16777216 + xs[1] * 65536 + xs[2] * 256 + xs[3]
+}
+
+make net_pow2(exp: num) -> num {
+  hold out = 1
+  hold i = 0
+  while i < exp {
+    out = out * 2
+    i = i + 1
+  }
+  give out
+}
+
+make net_ipv4_from_num(n: num) -> str {
+  when n < 0 or n > 4294967295 or n % 9007199254740992 != n {
+    give ""
+  }
+  hold a = net_div(n, 16777216)
+  hold b = net_div(n % 16777216, 65536)
+  hold c = net_div(n % 65536, 256)
+  hold d = n % 256
+  hold xs = [a, b, c, d]
+  give net_ipv4_format(xs)
+}
+
+make net_ipv4_is_private(s: str) -> num {
+  hold xs = net_ipv4_parse(s)
+  when len(xs) != 4 {
+    give 0 - 1
+  }
+  when xs[0] == 10 {
+    give 1
+  }
+  when xs[0] == 172 and xs[1] >= 16 and xs[1] <= 31 {
+    give 1
+  }
+  when xs[0] == 192 and xs[1] == 168 {
+    give 1
+  }
+  give 0
+}
+
+make net_ipv4_is_loopback(s: str) -> num {
+  hold xs = net_ipv4_parse(s)
+  when len(xs) != 4 {
+    give 0 - 1
+  }
+  when xs[0] == 127 {
+    give 1
+  }
+  give 0
+}
+
+make net_ipv4_is_link_local(s: str) -> num {
+  hold xs = net_ipv4_parse(s)
+  when len(xs) != 4 {
+    give 0 - 1
+  }
+  when xs[0] == 169 and xs[1] == 254 {
+    give 1
+  }
+  give 0
+}
+
+make net_ipv4_is_multicast(s: str) -> num {
+  hold xs = net_ipv4_parse(s)
+  when len(xs) != 4 {
+    give 0 - 1
+  }
+  when xs[0] >= 224 and xs[0] <= 239 {
+    give 1
+  }
+  give 0
+}
+
+make net_ipv4_is_reserved(s: str) -> num {
+  hold xs = net_ipv4_parse(s)
+  when len(xs) != 4 {
+    give 0 - 1
+  }
+  when xs[0] >= 240 {
+    give 1
+  }
+  give 0
+}
+
+make net_ipv4_is_unspecified(s: str) -> num {
+  hold n = net_ipv4_to_num(s)
+  when n < 0 {
+    give 0 - 1
+  }
+  when n == 0 {
+    give 1
+  }
+  give 0
+}
+
+make net_ipv4_is_broadcast(s: str) -> num {
+  hold n = net_ipv4_to_num(s)
+  when n < 0 {
+    give 0 - 1
+  }
+  when n == 4294967295 {
+    give 1
+  }
+  give 0
+}
+
+make net_prefix_parse(s: str) -> num {
+  hold n = len(s)
+  when n == 0 or n > 2 {
+    give 0 - 1
+  }
+  when n > 1 and sx_index(s, 0) == 48 {
+    give 0 - 1
+  }
+  hold v = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c < 48 or c > 57 {
+      give 0 - 1
+    }
+    v = v * 10 + c - 48
+    i = i + 1
+  }
+  when v > 32 {
+    give 0 - 1
+  }
+  give v
+}
+
+make net_cidr_parse_core(s: str, strict: num) -> list {
+  hold n = len(s)
+  when n == 0 or n > 18 {
+    give []
+  }
+  hold slash = 0 - 1
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) == 47 {
+      when slash >= 0 {
+        give []
+      }
+      slash = i
+    }
+    i = i + 1
+  }
+  when slash < 1 or slash == n - 1 {
+    give []
+  }
+  hold ip = ""
+  hold k = 0
+  while k < slash {
+    ip = concat(ip, chr(sx_index(s, k)))
+    k = k + 1
+  }
+  hold ps = ""
+  hold j = slash + 1
+  while j < n {
+    ps = concat(ps, chr(sx_index(s, j)))
+    j = j + 1
+  }
+  hold prefix = net_prefix_parse(ps)
+  when prefix < 0 {
+    give []
+  }
+  hold num = net_ipv4_to_num(ip)
+  when num < 0 {
+    give []
+  }
+  hold block = net_pow2(32 - prefix)
+  hold network = net_div(num, block) * block
+  when strict == 1 and network != num {
+    give []
+  }
+  give [network, prefix]
+}
+
+make net_cidr_parse(s: str) -> list {
+  give net_cidr_parse_core(s, 1)
+}
+
+make net_cidr_parse_any(s: str) -> list {
+  give net_cidr_parse_core(s, 0)
+}
+
+make net_cidr_valid(xs: list) -> num {
+  when len(xs) != 2 {
+    give 0
+  }
+  hold network = xs[0]
+  hold prefix = xs[1]
+  when network < 0 or network > 4294967295 or network % 9007199254740992 != network {
+    give 0
+  }
+  when prefix < 0 or prefix > 32 or prefix % 9007199254740992 != prefix {
+    give 0
+  }
+  hold block = net_pow2(32 - prefix)
+  when net_div(network, block) * block != network {
+    give 0
+  }
+  give 1
+}
+
+make net_cidr_format(xs: list) -> str {
+  when net_cidr_valid(xs) == 0 {
+    give ""
+  }
+  hold ip = net_ipv4_from_num(xs[0])
+  give concat(concat(ip, "/"), net_istr(xs[1]))
+}
+
+make net_cidr_size(prefix: num) -> num {
+  when prefix < 0 or prefix > 32 or prefix % 9007199254740992 != prefix {
+    give 0 - 1
+  }
+  give net_pow2(32 - prefix)
+}
+
+make net_cidr_network(xs: list) -> str {
+  when net_cidr_valid(xs) == 0 {
+    give ""
+  }
+  give net_ipv4_from_num(xs[0])
+}
+
+make net_cidr_broadcast(xs: list) -> str {
+  when net_cidr_valid(xs) == 0 {
+    give ""
+  }
+  hold size = net_pow2(32 - xs[1])
+  give net_ipv4_from_num(xs[0] + size - 1)
+}
+
+make net_cidr_contains(xs: list, ip: str) -> num {
+  when net_cidr_valid(xs) == 0 {
+    give 0 - 1
+  }
+  hold num = net_ipv4_to_num(ip)
+  when num < 0 {
+    give 0 - 1
+  }
+  hold block = net_pow2(32 - xs[1])
+  when net_div(num, block) * block == xs[0] {
+    give 1
+  }
+  give 0
+}
+
+make net_port_valid(n: num) -> num {
+  when n >= 0 and n <= 65535 and n % 9007199254740992 == n {
+    give 1
+  }
+  give 0
+}
+
+make net_hostname_valid(s: str) -> num {
+  hold n = len(s)
+  when n == 0 or n > 254 {
+    give 0
+  }
+  hold end = n
+  when sx_index(s, n - 1) == 46 {
+    end = n - 1
+  }
+  when end == 0 or end > 253 {
+    give 0
+  }
+  hold label_len = 0
+  hold i = 0
+  while i <= end {
+    hold c = 0
+    when i < end {
+      c = sx_index(s, i)
+    }
+    when i == end or c == 46 {
+      when label_len == 0 or label_len > 63 {
+        give 0
+      }
+      when sx_index(s, i - label_len) == 45 {
+        give 0
+      }
+      when sx_index(s, i - 1) == 45 {
+        give 0
+      }
+      label_len = 0
+    } otherwise {
+      when (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57) or c == 45 {
+        label_len = label_len + 1
+      } otherwise {
+        give 0
+      }
+    }
+    i = i + 1
+  }
+  give 1
+}

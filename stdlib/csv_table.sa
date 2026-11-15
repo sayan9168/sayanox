@@ -111,7 +111,10 @@ make ct_valid(table: str) -> num {
 // Empty input is zero rows; a final line separator does not create another
 // row; a blank line is one row with one empty field. Unequal row widths are
 // allowed. Invalid grammar or resource-limit overflow returns "!".
-make ct_parse(doc: str) -> str {
+make ct_parse_d(doc: str, d: num) -> str {
+  when csv_delim_ok(d) == 0 {
+    give "!"
+  }
   when len(doc) > 262144 {
     give "!"
   }
@@ -151,7 +154,7 @@ make ct_parse(doc: str) -> str {
           }
           hold next = next + 1
         }
-        hold row = csv_parse_row(csv_sub(doc, start, i))
+        hold row = csv_parse_row_d(csv_sub(doc, start, i), d)
         when ct_row_valid(row) == 0 {
           give "!"
         }
@@ -171,7 +174,7 @@ make ct_parse(doc: str) -> str {
           when c == 34 {
             hold state = 2
           } otherwise {
-            when c != 44 {
+            when c != d {
               hold state = 1
             }
           }
@@ -180,11 +183,11 @@ make ct_parse(doc: str) -> str {
             when c == 34 {
               give "!"
             }
-            when c == 44 {
+            when c == d {
               hold state = 0
             }
           } otherwise {
-            when c != 44 {
+            when c != d {
               give "!"
             }
             hold state = 0
@@ -198,7 +201,7 @@ make ct_parse(doc: str) -> str {
     give "!"
   }
   when start < len(doc) {
-    hold row = csv_parse_row(csv_sub(doc, start, len(doc)))
+    hold row = csv_parse_row_d(csv_sub(doc, start, len(doc)), d)
     when ct_row_valid(row) == 0 {
       give "!"
     }
@@ -212,6 +215,10 @@ make ct_parse(doc: str) -> str {
     }
   }
   give out
+}
+
+make ct_parse(doc: str) -> str {
+  give ct_parse_d(doc, 44)
 }
 
 make ct_index_valid(index: num) -> num {
@@ -338,7 +345,10 @@ make ct_set(table: str, row_index: num, col_index: num, field: str) -> str {
 // Serialize with CRLF between records. An empty final record receives a
 // final CRLF so it reparses as a row. A single literal ! field is quoted to
 // keep the error marker unambiguous. Invalid data/oversized output returns !.
-make ct_write(table: str) -> str {
+make ct_write_d(table: str, d: num) -> str {
+  when csv_delim_ok(d) == 0 {
+    give "!"
+  }
   when ct_valid(table) == 0 {
     give "!"
   }
@@ -350,7 +360,7 @@ make ct_write(table: str) -> str {
     when i > 0 {
       hold out = concat(out, "\r\n")
     }
-    hold last = csv_write_row(csv_at(table, i))
+    hold last = csv_write_row_d(csv_at(table, i), d)
     hold out = concat(out, last)
     when len(out) > 262144 {
       give "!"
@@ -373,6 +383,10 @@ make ct_write(table: str) -> str {
 
 // Find the first exact header field in row zero. Missing/invalid returns -1;
 // duplicate names resolve to the first column, including empty names.
+make ct_write(table: str) -> str {
+  give ct_write_d(table, 44)
+}
+
 make ct_header_index(table: str, name: str) -> num {
   hold row = ct_row(table, 0)
   when len(row) == 0 {

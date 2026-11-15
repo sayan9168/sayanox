@@ -1,0 +1,151 @@
+// stdlib/template.sa -- safe {name} string templates (prefix tpl_).
+//
+// Import stdlib/map.sa first; values is an smap packed string map. A
+// placeholder is {name}, where name matches [A-Za-z_][A-Za-z0-9_]{0,63}.
+// Literal braces are escaped by doubling: {{ and }}. Substitution is one
+// pass: inserted values are not scanned for more placeholders. tpl_render is
+// strict and returns "" for invalid syntax or a missing key. tpl_render_or
+// substitutes a caller-supplied fallback for missing keys but still refuses
+// invalid syntax. Because "" can also be a legitimate rendered result, use
+// tpl_valid to check syntax separately when needed.
+
+make tpl_name_start(c: num) -> num {
+  when (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95 {
+    give 1
+  }
+  give 0
+}
+
+make tpl_name_char(c: num) -> num {
+  when tpl_name_start(c) == 1 {
+    give 1
+  }
+  when c >= 48 and c <= 57 {
+    give 1
+  }
+  give 0
+}
+
+make tpl_name_valid(s: str) -> num {
+  hold n = len(s)
+  when n == 0 or n > 64 {
+    give 0
+  }
+  when tpl_name_start(sx_index(s, 0)) == 0 {
+    give 0
+  }
+  hold i = 1
+  while i < n {
+    when tpl_name_char(sx_index(s, i)) == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make tpl_slice(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make tpl_render_core(tpl: str, values: str, fallback: str, strict: num) -> str {
+  hold n = len(tpl)
+  when n > 65536 {
+    give ""
+  }
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold c = sx_index(tpl, i)
+    when c == 123 {
+      when i + 1 < n and sx_index(tpl, i + 1) == 123 {
+        out = concat(out, "{")
+        i = i + 2
+      } otherwise {
+        hold close = i + 1
+        while close < n and sx_index(tpl, close) != 125 {
+          close = close + 1
+        }
+        when close >= n {
+          give ""
+        }
+        hold name = tpl_slice(tpl, i + 1, close)
+        when tpl_name_valid(name) == 0 {
+          give ""
+        }
+        when smap_has(values, name) == 1 {
+          out = concat(out, smap_get(values, name, ""))
+        } otherwise {
+          when strict == 1 {
+            give ""
+          }
+          out = concat(out, fallback)
+        }
+        i = close + 1
+      }
+    } otherwise {
+      when c == 125 {
+        when i + 1 < n and sx_index(tpl, i + 1) == 125 {
+          out = concat(out, "}")
+          i = i + 2
+        } otherwise {
+          give ""
+        }
+      } otherwise {
+        out = concat(out, chr(c))
+        i = i + 1
+      }
+    }
+  }
+  give out
+}
+
+make tpl_render(tpl: str, values: str) -> str {
+  give tpl_render_core(tpl, values, "", 1)
+}
+
+make tpl_render_or(tpl: str, values: str, fallback: str) -> str {
+  give tpl_render_core(tpl, values, fallback, 0)
+}
+
+make tpl_valid(tpl: str) -> num {
+  // Syntax-only check: render with an empty map and a fallback. Missing keys
+  // are allowed here; invalid syntax still returns "".
+  hold rendered = tpl_render_core(tpl, "", "?", 0)
+  // A valid template may legitimately render to "" only when the template
+  // itself is empty; any nonempty template produces at least one byte because
+  // placeholders are replaced by the one-byte fallback.
+  when len(tpl) == 0 {
+    give 1
+  }
+  when len(rendered) == 0 {
+    give 0
+  }
+  give 1
+}
+
+make tpl_escape(s: str) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 123 {
+      out = concat(out, "{{")
+    } otherwise {
+      when c == 125 {
+        out = concat(out, "}}")
+      } otherwise {
+        out = concat(out, chr(c))
+      }
+    }
+    i = i + 1
+  }
+  give out
+}

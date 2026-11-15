@@ -1,0 +1,104 @@
+// Condition precedence regression: a comparison mixed with and/or, user
+// calls as operands, inline len(), and and-binding-tighter-than-or.
+//
+// The vNext notes recorded `while i < len(x) and f(x,i) != k` miscompiling to
+// `while (i < (sx_len(x) && ...))`. That shape does NOT reproduce on this
+// tree; this oracle pins the correct behaviour so a future change that
+// reintroduces it fails a gate instead of silently changing a loop.
+// Expected values are computed independently in Python (see the increment log
+// for 2026-11-15 in docs/REMAINING_WORK.md). The accessor is bounds-safe
+// because some shapes evaluate it before the length test.
+make at(xs: list, i: num) -> num {
+  when i < 0 or i >= len(xs) {
+    give 0
+  }
+  give xs[i]
+}
+
+make f0(xs: list, k: num) -> num {
+  hold i = 0
+  hold steps = 0
+  while steps < 12 and (i < len(xs) and at(xs, i) != k) {
+    i = i + 1
+    steps = steps + 1
+  }
+  give i
+}
+make f1(xs: list, k: num) -> num {
+  hold i = 0
+  hold steps = 0
+  while steps < 12 and (i < len(xs) and at(xs, i) == k) {
+    i = i + 1
+    steps = steps + 1
+  }
+  give i
+}
+make f2(xs: list, k: num) -> num {
+  hold i = 0
+  hold steps = 0
+  while steps < 12 and (i < len(xs) or at(xs, i) != k) {
+    i = i + 1
+    steps = steps + 1
+  }
+  give i
+}
+make f3(xs: list, k: num) -> num {
+  hold i = 0
+  hold steps = 0
+  while steps < 12 and (at(xs, i) != k and i < len(xs)) {
+    i = i + 1
+    steps = steps + 1
+  }
+  give i
+}
+make f4(xs: list, k: num) -> num {
+  hold i = 0
+  hold steps = 0
+  while steps < 12 and (i < len(xs) and at(xs, i) > k) {
+    i = i + 1
+    steps = steps + 1
+  }
+  give i
+}
+make f5(xs: list, k: num) -> num {
+  hold i = 0
+  hold steps = 0
+  while steps < 12 and (i + 1 < len(xs) and at(xs, i) != k) {
+    i = i + 1
+    steps = steps + 1
+  }
+  give i
+}
+make f6(xs: list, k: num) -> num {
+  hold i = 0
+  hold steps = 0
+  while steps < 12 and (i < len(xs) and at(xs, i) != k or i == 0) {
+    i = i + 1
+    steps = steps + 1
+  }
+  give i
+}
+
+hold xs = [5, 4, 3, 0, 7]
+show f0(xs, 3)
+show f0(xs, 99)
+show f0(xs, 0)
+show f1(xs, 3)
+show f1(xs, 99)
+show f1(xs, 0)
+show f2(xs, 3)
+show f2(xs, 99)
+show f2(xs, 0)
+show f3(xs, 3)
+show f3(xs, 99)
+show f3(xs, 0)
+show f4(xs, 3)
+show f4(xs, 99)
+show f4(xs, 0)
+show f5(xs, 3)
+show f5(xs, 99)
+show f5(xs, 0)
+show f6(xs, 3)
+show f6(xs, 99)
+show f6(xs, 0)
+show "sweep-ok"

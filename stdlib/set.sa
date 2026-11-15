@@ -1,0 +1,289 @@
+// stdlib/set.sa -- persistent ordered numeric sets (prefix set_).
+//
+// A set is a flat numeric list kept strictly ascending with no duplicates.
+// The empty list is the empty set. Operations return new lists and never
+// mutate the caller. Inputs are bounded at 4096 elements; an operation that
+// would exceed the bound returns the empty list, so validate large results
+// with set_valid when the empty set is also a meaningful answer. Values are
+// ordinary Sayanox numbers; use finite, totally ordered values (integers are
+// the safest choice). This is not a hash set and not a string set.
+
+make set_bound() -> num {
+  give 4096
+}
+
+make set_len(xs: list) -> num {
+  give len(xs)
+}
+
+make set_valid(xs: list) -> num {
+  hold n = len(xs)
+  when n > 4096 {
+    give 0
+  }
+  hold i = 1
+  while i < n {
+    when xs[i - 1] >= xs[i] {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make set_has(xs: list, value: num) -> num {
+  hold lo = 0
+  hold hi = len(xs)
+  while lo < hi {
+    hold span = hi - lo
+    hold half = (span - (span % 2)) / 2
+    hold mid = lo + half
+    when xs[mid] < value {
+      lo = mid + 1
+    } otherwise {
+      hi = mid
+    }
+  }
+  when lo < len(xs) {
+    when xs[lo] == value {
+      give 1
+    }
+  }
+  give 0
+}
+
+make set_add(xs: list, value: num) -> list {
+  when set_valid(xs) == 0 {
+    give []
+  }
+  hold n = len(xs)
+  when set_has(xs, value) == 1 {
+    give xs
+  }
+  when n >= 4096 {
+    give []
+  }
+  hold out = []
+  hold inserted = 0
+  hold i = 0
+  while i < n {
+    when inserted == 0 and value < xs[i] {
+      out = push(out, value)
+      inserted = 1
+    }
+    out = push(out, xs[i])
+    i = i + 1
+  }
+  when inserted == 0 {
+    out = push(out, value)
+  }
+  give out
+}
+
+make set_remove(xs: list, value: num) -> list {
+  when set_valid(xs) == 0 {
+    give []
+  }
+  hold out = []
+  hold n = len(xs)
+  hold i = 0
+  while i < n {
+    when xs[i] != value {
+      out = push(out, xs[i])
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make set_from_list(xs: list) -> list {
+  hold n = len(xs)
+  when n > 4096 {
+    give []
+  }
+  hold out = []
+  hold i = 0
+  while i < n {
+    hold before = len(out)
+    out = set_add(out, xs[i])
+    when before > 0 and len(out) == 0 {
+      give []
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make set_union(a: list, b: list) -> list {
+  when set_valid(a) == 0 or set_valid(b) == 0 {
+    give []
+  }
+  hold out = []
+  hold i = 0
+  hold j = 0
+  hold na = len(a)
+  hold nb = len(b)
+  while i < na or j < nb {
+    when i >= na {
+      when len(out) >= 4096 {
+        give []
+      }
+      out = push(out, b[j])
+      j = j + 1
+    } otherwise {
+      when j >= nb {
+        when len(out) >= 4096 {
+          give []
+        }
+        out = push(out, a[i])
+        i = i + 1
+      } otherwise {
+        when a[i] < b[j] {
+          when len(out) >= 4096 {
+            give []
+          }
+          out = push(out, a[i])
+          i = i + 1
+        } otherwise {
+          when b[j] < a[i] {
+            when len(out) >= 4096 {
+              give []
+            }
+            out = push(out, b[j])
+            j = j + 1
+          } otherwise {
+            when len(out) >= 4096 {
+              give []
+            }
+            out = push(out, a[i])
+            i = i + 1
+            j = j + 1
+          }
+        }
+      }
+    }
+  }
+  give out
+}
+
+make set_intersect(a: list, b: list) -> list {
+  when set_valid(a) == 0 or set_valid(b) == 0 {
+    give []
+  }
+  hold out = []
+  hold i = 0
+  hold j = 0
+  hold na = len(a)
+  hold nb = len(b)
+  while i < na and j < nb {
+    when a[i] < b[j] {
+      i = i + 1
+    } otherwise {
+      when b[j] < a[i] {
+        j = j + 1
+      } otherwise {
+        out = push(out, a[i])
+        i = i + 1
+        j = j + 1
+      }
+    }
+  }
+  give out
+}
+
+make set_difference(a: list, b: list) -> list {
+  when set_valid(a) == 0 or set_valid(b) == 0 {
+    give []
+  }
+  hold out = []
+  hold i = 0
+  hold j = 0
+  hold na = len(a)
+  hold nb = len(b)
+  while i < na {
+    when j >= nb {
+      out = push(out, a[i])
+      i = i + 1
+    } otherwise {
+      when a[i] < b[j] {
+        out = push(out, a[i])
+        i = i + 1
+      } otherwise {
+        when a[i] == b[j] {
+          i = i + 1
+          j = j + 1
+        } otherwise {
+          j = j + 1
+        }
+      }
+    }
+  }
+  give out
+}
+
+make set_symmetric_difference(a: list, b: list) -> list {
+  hold left = set_difference(a, b)
+  hold right = set_difference(b, a)
+  give set_union(left, right)
+}
+
+make set_is_subset(a: list, b: list) -> num {
+  when set_valid(a) == 0 or set_valid(b) == 0 {
+    give 0
+  }
+  hold n = len(a)
+  hold i = 0
+  while i < n {
+    when set_has(b, a[i]) == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make set_eq(a: list, b: list) -> num {
+  when set_valid(a) == 0 or set_valid(b) == 0 {
+    give 0
+  }
+  hold n = len(a)
+  when n != len(b) {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    when a[i] != b[i] {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make set_min(xs: list, fallback: num) -> num {
+  when set_valid(xs) == 0 or len(xs) == 0 {
+    give fallback
+  }
+  give xs[0]
+}
+
+make set_max(xs: list, fallback: num) -> num {
+  when set_valid(xs) == 0 or len(xs) == 0 {
+    give fallback
+  }
+  give xs[len(xs) - 1]
+}
+
+make set_to_list(xs: list) -> list {
+  when set_valid(xs) == 0 {
+    give []
+  }
+  hold out = []
+  hold n = len(xs)
+  hold i = 0
+  while i < n {
+    out = push(out, xs[i])
+    i = i + 1
+  }
+  give out
+}

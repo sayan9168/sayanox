@@ -1,0 +1,293 @@
+// stdlib/base32.sa -- RFC 4648 base32 codec (prefix b32_).
+//
+// Alphabet: A-Z and 2-7, with '=' padding. Decoding accepts upper or lower
+// case but requires canonical padding and zero unused pad bits; the output of
+// encoding is always uppercase. The byte-list API handles arbitrary bytes,
+// including NUL. The string API is NUL-free, matching the rest of the string
+// codecs: b32_encode refuses NUL input and b32_decode returns "" if the decoded
+// bytes contain NUL. Use b32_valid to distinguish failure from a valid empty
+// string. Inputs are bounded at 65536 bytes (1048576 encoded characters).
+
+make b32_div(a: num, b: num) -> num {
+  hold r = a % b
+  give (a - r) / b
+}
+
+make b32_char(v: num) -> str {
+  when v < 26 {
+    give chr(65 + v)
+  }
+  give chr(50 + v - 26)
+}
+
+make b32_value(c: num) -> num {
+  when c >= 65 and c <= 90 {
+    give c - 65
+  }
+  when c >= 97 and c <= 122 {
+    give c - 97
+  }
+  when c >= 50 and c <= 55 {
+    give c - 50 + 26
+  }
+  give 0 - 1
+}
+
+make b32_upper(s: str) -> str {
+  hold out = ""
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c >= 97 and c <= 122 {
+      c = c - 32
+    }
+    out = concat(out, chr(c))
+    i = i + 1
+  }
+  give out
+}
+
+make b32_byte_ok(v: num) -> num {
+  when v >= 0 and v <= 255 {
+    when v % 9007199254740992 == v {
+      give 1
+    }
+  }
+  give 0
+}
+
+make b32_encode_bytes(bs: list) -> str {
+  hold n = len(bs)
+  when n > 65536 {
+    give ""
+  }
+  hold i = 0
+  while i < n {
+    when b32_byte_ok(bs[i]) == 0 {
+      give ""
+    }
+    i = i + 1
+  }
+  hold out = ""
+  hold pos = 0
+  while pos < n {
+    hold b0 = bs[pos]
+    hold b1 = 0
+    hold b2 = 0
+    hold b3 = 0
+    hold b4 = 0
+    hold rem = n - pos
+    when rem > 1 {
+      b1 = bs[pos + 1]
+    }
+    when rem > 2 {
+      b2 = bs[pos + 2]
+    }
+    when rem > 3 {
+      b3 = bs[pos + 3]
+    }
+    when rem > 4 {
+      b4 = bs[pos + 4]
+    }
+    hold i0 = b32_div(b0, 8)
+    hold i1 = (b0 % 8) * 4 + b32_div(b1, 64)
+    hold i2 = b32_div(b1 % 64, 2)
+    hold i3 = (b1 % 2) * 16 + b32_div(b2, 16)
+    hold i4 = (b2 % 16) * 2 + b32_div(b3, 128)
+    hold i5 = b32_div(b3 % 128, 4)
+    hold i6 = (b3 % 4) * 8 + b32_div(b4, 32)
+    hold i7 = b4 % 32
+    hold chars = 8
+    when rem == 1 {
+      chars = 2
+    }
+    when rem == 2 {
+      chars = 4
+    }
+    when rem == 3 {
+      chars = 5
+    }
+    when rem == 4 {
+      chars = 7
+    }
+    hold vals = [i0, i1, i2, i3, i4, i5, i6, i7]
+    hold k = 0
+    while k < chars {
+      out = concat(out, b32_char(vals[k]))
+      k = k + 1
+    }
+    while k < 8 {
+      out = concat(out, "=")
+      k = k + 1
+    }
+    pos = pos + 5
+  }
+  give out
+}
+
+make b32_bytes_from_str(s: str) -> list {
+  hold out = []
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    out = push(out, sx_index(s, i))
+    i = i + 1
+  }
+  give out
+}
+
+make b32_encode(s: str) -> str {
+  hold n = len(s)
+  when n > 65536 {
+    give ""
+  }
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) == 0 {
+      give ""
+    }
+    i = i + 1
+  }
+  hold bs = b32_bytes_from_str(s)
+  give b32_encode_bytes(bs)
+}
+
+make b32_pad_count(block: str) -> num {
+  hold n = len(block)
+  when n != 8 {
+    give 0 - 1
+  }
+  hold pads = 0
+  hold i = 7
+  while i >= 0 {
+    when sx_index(block, i) == 61 {
+      pads = pads + 1
+      i = i - 1
+    } otherwise {
+      give pads
+    }
+  }
+  give pads
+}
+
+make b32_decode_bytes(s: str) -> list {
+  hold n = len(s)
+  when n > 1048576 or n % 8 != 0 {
+    give []
+  }
+  hold out = []
+  hold pos = 0
+  while pos < n {
+    hold block = ""
+    hold k = 0
+    while k < 8 {
+      block = concat(block, chr(sx_index(s, pos + k)))
+      k = k + 1
+    }
+    hold pads = b32_pad_count(block)
+    when pads < 0 {
+      give []
+    }
+    when pads != 0 and pads != 1 and pads != 3 and pads != 4 and pads != 6 {
+      give []
+    }
+    hold chars = 8 - pads
+    hold vals = []
+    hold j = 0
+    while j < 8 {
+      hold c = sx_index(block, j)
+      when j < chars {
+        hold v = b32_value(c)
+        when v < 0 {
+          give []
+        }
+        vals = push(vals, v)
+      } otherwise {
+        when c != 61 {
+          give []
+        }
+        vals = push(vals, 0)
+      }
+      j = j + 1
+    }
+    hold v0 = vals[0]
+    hold v1 = vals[1]
+    hold v2 = vals[2]
+    hold v3 = vals[3]
+    hold v4 = vals[4]
+    hold v5 = vals[5]
+    hold v6 = vals[6]
+    hold v7 = vals[7]
+    hold b0 = v0 * 8 + b32_div(v1, 4)
+    hold b1 = (v1 % 4) * 64 + v2 * 2 + b32_div(v3, 16)
+    hold b2 = (v3 % 16) * 16 + b32_div(v4, 2)
+    hold b3 = (v4 % 2) * 128 + v5 * 4 + b32_div(v6, 8)
+    hold b4 = (v6 % 8) * 32 + v7
+    hold count = 5
+    when chars == 2 {
+      count = 1
+    }
+    when chars == 4 {
+      count = 2
+    }
+    when chars == 5 {
+      count = 3
+    }
+    when chars == 7 {
+      count = 4
+    }
+    hold bytes = [b0, b1, b2, b3, b4]
+    hold t = 0
+    while t < count {
+      out = push(out, bytes[t])
+      t = t + 1
+    }
+    pos = pos + 8
+  }
+  // Require canonical pad bits and padding by re-encoding.
+  hold canonical = b32_encode_bytes(out)
+  when string_eq(canonical, b32_upper(s)) == 0 {
+    give []
+  }
+  give out
+}
+
+make b32_str_ok(bs: list) -> num {
+  hold n = len(bs)
+  hold i = 0
+  while i < n {
+    when bs[i] == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make b32_decode(s: str) -> str {
+  hold bs = b32_decode_bytes(s)
+  when b32_str_ok(bs) == 0 {
+    give ""
+  }
+  hold out = ""
+  hold n = len(bs)
+  hold i = 0
+  while i < n {
+    out = concat(out, chr(bs[i]))
+    i = i + 1
+  }
+  give out
+}
+
+make b32_valid(s: str) -> num {
+  hold n = len(s)
+  when n == 0 {
+    give 1
+  }
+  hold bs = b32_decode_bytes(s)
+  when len(bs) == 0 {
+    give 0
+  }
+  give b32_str_ok(bs)
+}

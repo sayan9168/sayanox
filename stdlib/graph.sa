@@ -1,0 +1,494 @@
+// stdlib/graph.sa -- bounded weighted graph algorithms (prefix gr_).
+//
+// A graph is a flat numeric list [n, directed, m, u0,v0,w0, u1,v1,w1, ...].
+// n is 0..64, m is 0..4096, directed is 0/1, endpoints are integers in [0,n),
+// and weights are integers 0..1e12. Undirected graphs store each edge once and
+// algorithms traverse it both ways. Operations are persistent: adding an edge
+// returns a new graph. Algorithm results are [1, values...] on success and [0]
+// on refusal/no answer; use gr_ok and gr_values. Distances use -1 for
+// unreachable nodes. Dijkstra requires nonnegative weights (enforced). This is
+// an in-memory teaching/small-tool library, not a graph database.
+
+make gr_inf() -> num {
+  give 1000000000000000
+}
+
+make gr_int(v: num) -> num {
+  when v >= 0 and v < 1000000000000000 {
+    when v % 9007199254740992 == v {
+      give 1
+    }
+  }
+  give 0
+}
+
+make gr_new(n: num, directed: num) -> list {
+  when gr_int(n) == 0 or n > 64 {
+    give []
+  }
+  when directed != 0 and directed != 1 {
+    give []
+  }
+  give [n, directed, 0]
+}
+
+make gr_node_count(g: list) -> num {
+  when len(g) < 3 {
+    give 0 - 1
+  }
+  give g[0]
+}
+
+make gr_edge_count(g: list) -> num {
+  when len(g) < 3 {
+    give 0 - 1
+  }
+  give g[2]
+}
+
+make gr_valid(g: list) -> num {
+  when len(g) < 3 {
+    give 0
+  }
+  hold n = g[0]
+  hold directed = g[1]
+  hold m = g[2]
+  when gr_int(n) == 0 or n > 64 {
+    give 0
+  }
+  when directed != 0 and directed != 1 {
+    give 0
+  }
+  when gr_int(m) == 0 or m > 4096 {
+    give 0
+  }
+  when len(g) != 3 + m * 3 {
+    give 0
+  }
+  hold i = 0
+  while i < m {
+    hold base = 3 + i * 3
+    hold u = g[base]
+    hold v = g[base + 1]
+    hold w = g[base + 2]
+    when gr_int(u) == 0 or u >= n {
+      give 0
+    }
+    when gr_int(v) == 0 or v >= n {
+      give 0
+    }
+    when gr_int(w) == 0 or w > 1000000000000 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make gr_add_edge(g: list, u: num, v: num, w: num) -> list {
+  when gr_valid(g) == 0 {
+    give []
+  }
+  hold n = g[0]
+  hold m = g[2]
+  when gr_int(u) == 0 or u >= n or gr_int(v) == 0 or v >= n {
+    give []
+  }
+  when gr_int(w) == 0 or w > 1000000000000 or m >= 4096 {
+    give []
+  }
+  hold out = g
+  out = push(out, u)
+  out = push(out, v)
+  out = push(out, w)
+  // Update the edge count functionally.
+  hold rebuilt = []
+  hold total = len(out)
+  hold i = 0
+  while i < total {
+    when i == 2 {
+      rebuilt = push(rebuilt, m + 1)
+    } otherwise {
+      rebuilt = push(rebuilt, out[i])
+    }
+    i = i + 1
+  }
+  give rebuilt
+}
+
+make gr_set(xs: list, index: num, value: num) -> list {
+  hold out = []
+  hold n = len(xs)
+  hold i = 0
+  while i < n {
+    when i == index {
+      out = push(out, value)
+    } otherwise {
+      out = push(out, xs[i])
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make gr_ok(result: list) -> num {
+  when len(result) > 0 and result[0] == 1 {
+    give 1
+  }
+  give 0
+}
+
+make gr_values(result: list) -> list {
+  when gr_ok(result) == 0 {
+    give []
+  }
+  hold out = []
+  hold n = len(result)
+  hold i = 1
+  while i < n {
+    out = push(out, result[i])
+    i = i + 1
+  }
+  give out
+}
+
+make gr_neighbors(g: list, v: num) -> list {
+  when gr_valid(g) == 0 {
+    give []
+  }
+  hold n = g[0]
+  when gr_int(v) == 0 or v >= n {
+    give []
+  }
+  hold directed = g[1]
+  hold m = g[2]
+  hold out = []
+  hold i = 0
+  while i < m {
+    hold base = 3 + i * 3
+    hold u = g[base]
+    hold t = g[base + 1]
+    when u == v {
+      out = push(out, t)
+    }
+    when directed == 0 and t == v and u != v {
+      out = push(out, u)
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make gr_bfs(g: list, src: num) -> list {
+  when gr_valid(g) == 0 {
+    give [0]
+  }
+  hold n = g[0]
+  when gr_int(src) == 0 or src >= n {
+    give [0]
+  }
+  hold dist = []
+  hold i = 0
+  while i < n {
+    dist = push(dist, 0 - 1)
+    i = i + 1
+  }
+  dist = gr_set(dist, src, 0)
+  hold queue = [src]
+  hold head = 0
+  hold directed = g[1]
+  hold m = g[2]
+  while head < len(queue) {
+    hold v = queue[head]
+    head = head + 1
+    hold e = 0
+    while e < m {
+      hold base = 3 + e * 3
+      hold u = g[base]
+      hold t = g[base + 1]
+      hold to = 0 - 1
+      when u == v {
+        to = t
+      }
+      when directed == 0 and t == v {
+        to = u
+      }
+      when to >= 0 {
+        when dist[to] < 0 {
+          dist = gr_set(dist, to, dist[v] + 1)
+          queue = push(queue, to)
+        }
+      }
+      e = e + 1
+    }
+  }
+  hold out = [1]
+  hold k = 0
+  while k < n {
+    out = push(out, dist[k])
+    k = k + 1
+  }
+  give out
+}
+
+// Internal Dijkstra: [1, dist0..dist(n-1), prev0..prev(n-1)], or [0].
+make gr_shortest(g: list, src: num) -> list {
+  when gr_valid(g) == 0 {
+    give [0]
+  }
+  hold n = g[0]
+  when gr_int(src) == 0 or src >= n {
+    give [0]
+  }
+  hold inf = gr_inf()
+  hold dist = []
+  hold prev = []
+  hold visited = []
+  hold i = 0
+  while i < n {
+    dist = push(dist, inf)
+    prev = push(prev, 0 - 1)
+    visited = push(visited, 0)
+    i = i + 1
+  }
+  dist = gr_set(dist, src, 0)
+  hold directed = g[1]
+  hold m = g[2]
+  hold step = 0
+  while step < n {
+    hold best = 0 - 1
+    hold best_dist = inf
+    hold v = 0
+    while v < n {
+      when visited[v] == 0 and dist[v] < best_dist {
+        best = v
+        best_dist = dist[v]
+      }
+      v = v + 1
+    }
+    when best < 0 {
+      step = n
+    } otherwise {
+      visited = gr_set(visited, best, 1)
+      hold e = 0
+      while e < m {
+        hold base = 3 + e * 3
+        hold u = g[base]
+        hold t = g[base + 1]
+        hold w = g[base + 2]
+        hold to = 0 - 1
+        when u == best {
+          to = t
+        }
+        when directed == 0 and t == best {
+          to = u
+        }
+        when to >= 0 {
+          hold nd = best_dist + w
+          when nd < dist[to] {
+            dist = gr_set(dist, to, nd)
+            prev = gr_set(prev, to, best)
+          }
+        }
+        e = e + 1
+      }
+      step = step + 1
+    }
+  }
+  hold out = [1]
+  hold k = 0
+  while k < n {
+    when dist[k] == inf {
+      out = push(out, 0 - 1)
+    } otherwise {
+      out = push(out, dist[k])
+    }
+    k = k + 1
+  }
+  hold j = 0
+  while j < n {
+    out = push(out, prev[j])
+    j = j + 1
+  }
+  give out
+}
+
+make gr_distances(g: list, src: num) -> list {
+  hold full = gr_shortest(g, src)
+  when gr_ok(full) == 0 {
+    give [0]
+  }
+  hold n = g[0]
+  hold out = [1]
+  hold i = 0
+  while i < n {
+    out = push(out, full[1 + i])
+    i = i + 1
+  }
+  give out
+}
+
+make gr_path(g: list, src: num, dst: num) -> list {
+  hold full = gr_shortest(g, src)
+  when gr_ok(full) == 0 {
+    give [0]
+  }
+  hold n = g[0]
+  when gr_int(dst) == 0 or dst >= n {
+    give [0]
+  }
+  when full[1 + dst] < 0 {
+    give [0]
+  }
+  hold rev = []
+  hold cur = dst
+  while cur >= 0 {
+    rev = push(rev, cur)
+    when cur == src {
+      cur = 0 - 1
+    } otherwise {
+      cur = full[1 + n + cur]
+    }
+  }
+  hold out = [1]
+  hold i = len(rev) - 1
+  while i >= 0 {
+    out = push(out, rev[i])
+    i = i - 1
+  }
+  give out
+}
+
+make gr_components(g: list) -> list {
+  when gr_valid(g) == 0 {
+    give [0]
+  }
+  when g[1] != 0 {
+    give [0]
+  }
+  hold n = g[0]
+  hold labels = []
+  hold i = 0
+  while i < n {
+    labels = push(labels, 0 - 1)
+    i = i + 1
+  }
+  hold component = 0
+  hold start = 0
+  while start < n {
+    when labels[start] < 0 {
+      labels = gr_set(labels, start, component)
+      hold queue = [start]
+      hold head = 0
+      hold m = g[2]
+      while head < len(queue) {
+        hold v = queue[head]
+        head = head + 1
+        hold e = 0
+        while e < m {
+          hold base = 3 + e * 3
+          hold u = g[base]
+          hold t = g[base + 1]
+          hold to = 0 - 1
+          when u == v {
+            to = t
+          }
+          when t == v {
+            to = u
+          }
+          when to >= 0 {
+            when labels[to] < 0 {
+              labels = gr_set(labels, to, component)
+              queue = push(queue, to)
+            }
+          }
+          e = e + 1
+        }
+      }
+      component = component + 1
+    }
+    start = start + 1
+  }
+  hold out = [1]
+  hold k = 0
+  while k < n {
+    out = push(out, labels[k])
+    k = k + 1
+  }
+  give out
+}
+
+make gr_toposort(g: list) -> list {
+  when gr_valid(g) == 0 {
+    give [0]
+  }
+  when g[1] != 1 {
+    give [0]
+  }
+  hold n = g[0]
+  hold m = g[2]
+  hold indeg = []
+  hold i = 0
+  while i < n {
+    indeg = push(indeg, 0)
+    i = i + 1
+  }
+  hold e = 0
+  while e < m {
+    hold base = 3 + e * 3
+    hold v = g[base + 1]
+    indeg = gr_set(indeg, v, indeg[v] + 1)
+    e = e + 1
+  }
+  hold queue = []
+  hold k = 0
+  while k < n {
+    when indeg[k] == 0 {
+      queue = push(queue, k)
+    }
+    k = k + 1
+  }
+  hold order = []
+  hold head = 0
+  while head < len(queue) {
+    hold v = queue[head]
+    head = head + 1
+    order = push(order, v)
+    hold j = 0
+    while j < m {
+      hold base = 3 + j * 3
+      when g[base] == v {
+        hold to = g[base + 1]
+        indeg = gr_set(indeg, to, indeg[to] - 1)
+        when indeg[to] == 0 {
+          queue = push(queue, to)
+        }
+      }
+      j = j + 1
+    }
+  }
+  when len(order) != n {
+    give [0]
+  }
+  hold out = [1]
+  hold t = 0
+  while t < n {
+    out = push(out, order[t])
+    t = t + 1
+  }
+  give out
+}
+
+make gr_is_dag(g: list) -> num {
+  when gr_valid(g) == 0 {
+    give 0 - 1
+  }
+  when g[1] != 1 {
+    give 0
+  }
+  hold ts = gr_toposort(g)
+  when gr_ok(ts) == 1 {
+    give 1
+  }
+  give 0
+}

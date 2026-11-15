@@ -1,0 +1,528 @@
+1
+1
+1
+1
+1
+1
+0
+0
+0
+0
+0
+0
+0
+0
+a,b,c
+3
+a
+b
+c
+1
+,,
+3
+
+
+
+1
+plain
+1
+plain
+1
+"has,sep",tail
+2
+has,sep
+tail
+1
+"has""quote",tail
+2
+has"quote
+tail
+1
+"both""and,",x
+2
+both"and,
+x
+1
+"line
+break",after
+2
+line
+break
+after
+1
+  spaced  ,trim?
+2
+  spaced  
+trim?
+1
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,,z
+3
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+z
+1
+"	
+,""",mixed
+2
+	
+,"
+mixed
+1
+,";|;,
+Z,",;;
+3
+
+;|;,
+Z,
+;;
+1
+;ba,",Z","b","Z|;;,,"
+4
+;ba
+,Z
+b
+Z|;;,,
+1
+"	,,Z",
+2
+	,,Z
+
+1
+"a, ||","
+,""|,",;,|ba,",b	,	,"
+5
+a, ||
+
+,"|,
+;
+|ba
+,b	,	,
+1
+0,b,"
+ |
+",",aa Z",", ,Z"
+5
+0
+b
+
+ |
+
+,aa Z
+, ,Z
+1
+",Z","Z,,b	","
+ 
+b","
+ba""	Z",00
+5
+,Z
+Z,,b	
+
+ 
+b
+
+ba"	Z
+00
+1
+a	b	c
+3
+a
+b
+c
+1
+		
+3
+
+
+
+1
+plain
+1
+plain
+1
+"has	sep"	tail
+2
+has	sep
+tail
+1
+"has""quote"	tail
+2
+has"quote
+tail
+1
+"both""and	"	x
+2
+both"and	
+x
+1
+"line
+break"	after
+2
+line
+break
+after
+1
+  spaced  	trim?
+2
+  spaced  
+trim?
+1
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa		z
+3
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+z
+1
+"	
+	"""	mixed
+2
+	
+	"
+mixed
+1
+"|""a"""	 	"|""a"	""	""
+5
+|"a"
+ 
+|"a
+
+
+1
+"
+a "	"""	"
+2
+
+a 
+"	
+1
+"bZ""
+	a"	"0b;a"	"	"
+3
+bZ"
+	a
+0b;a
+	
+1
+",
+"	",	a;|"	""" |"
+3
+,
+
+,	a;|
+" |
+1
+"	|b	 ,0"
+1
+	|b	 ,0
+1
+0 ,
+1
+0 ,
+1
+a;b;c
+3
+a
+b
+c
+1
+;;
+3
+
+
+
+1
+plain
+1
+plain
+1
+"has;sep";tail
+2
+has;sep
+tail
+1
+"has""quote";tail
+2
+has"quote
+tail
+1
+"both""and;";x
+2
+both"and;
+x
+1
+"line
+break";after
+2
+line
+break
+after
+1
+  spaced  ;trim?
+2
+  spaced  
+trim?
+1
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;;z
+3
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+z
+1
+"	
+;""";mixed
+2
+	
+;"
+mixed
+1
+";; Z"
+1
+;; Z
+1
+";"; b
+2
+;
+ b
+1
+	,a;"	""	;
+ZZ";"	
+;a;";
+4
+	,a
+	"	;
+ZZ
+	
+;a;
+
+1
+"
+0Z;	"; ba0;";|,	b	";";b|;";"0Zb"
+5
+
+0Z;	
+ ba0
+;|,	b	
+;b|;
+0Zb
+1
+"ab0Z;";;"0;
+";"a;Z|0"
+4
+ab0Z;
+
+0;
+
+a;Z|0
+1
+"	b0
+ 0";b
+2
+	b0
+ 0
+b
+1
+a|b|c
+3
+a
+b
+c
+1
+||
+3
+
+
+
+1
+plain
+1
+plain
+1
+"has|sep"|tail
+2
+has|sep
+tail
+1
+"has""quote"|tail
+2
+has"quote
+tail
+1
+"both""and|"|x
+2
+both"and|
+x
+1
+"line
+break"|after
+2
+line
+break
+after
+1
+  spaced  |trim?
+2
+  spaced  
+trim?
+1
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa||z
+3
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+z
+1
+"	
+|"""|mixed
+2
+	
+|"
+mixed
+1
+"|""""Z"|"||	0"|"bZ|0	"|"
+,|;
+Z"|,b b b
+5
+|""Z
+||	0
+bZ|0	
+
+,|;
+Z
+,b b b
+1
+"	|00|;a"|ab|",	|a
+|"|"Z|;|ZZ|"
+4
+	|00|;a
+ab
+,	|a
+|
+Z|;|ZZ|
+1
+|";|, |;b"||"Z,b	|a0"|"""Z"
+5
+
+;|, |;b
+
+Z,b	|a0
+"Z
+1
+Z ;Z	b
+1
+Z ;Z	b
+1
+"Z	b|"
+1
+Z	b|
+1
+"|	
+"|"|,""	"""
+2
+|	
+
+|,"	"
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+0
+0
+0
+0
+1
+0
+0
+0
+0
+1
+0
+0
+0
+0
+1
+0
+0
+0
+0
+1
+a,b	c
+a	b,c
+2
+a,b
+1
+3
+h1
+h2
+h3
+v1
+v,2
+v3
+x
+q"t
+
+3
+v,2
+0
+1
+3
+h1
+h2
+h3
+v1
+v	2
+v3
+x
+q"t
+
+3
+v	2
+0
+1
+3
+h1
+h2
+h3
+v1
+v;2
+v3
+x
+q"t
+
+3
+v;2
+0
+1
+3
+h1
+h2
+h3
+v1
+v|2
+v3
+x
+q"t
+
+3
+v|2
+0
+café,বাংলা,ok
+3
+বাংলা
+café	বাংলা	ok
+3
+বাংলা
+café;বাংলা;ok
+3
+বাংলা
+café|বাংলা|ok
+3
+বাংলা
+csv-dialect-ok

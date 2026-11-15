@@ -1,0 +1,46 @@
+// Tour of the library-pack stdlib modules. Import dependencies first:
+// result before intmath, map before template, decimal before money.
+use "stdlib/result.sa"
+use "stdlib/intmath.sa"
+use "stdlib/map.sa"
+use "stdlib/template.sa"
+use "stdlib/decimal.sa"
+use "stdlib/money.sa"
+use "stdlib/set.sa"
+use "stdlib/heap.sa"
+use "stdlib/graph.sa"
+use "stdlib/text_metric.sa"
+use "stdlib/text_wrap.sa"
+use "stdlib/base32.sa"
+use "stdlib/net.sa"
+
+hold nums = set_from_list([3, 1, 2, 1])
+show set_len(nums)              // 3
+show set_has(nums, 2)           // 1
+
+hold h = heap_from_list([5, 2, 9])
+show heap_peek(h, 0)            // 2
+hold popped = heap_pop(h)
+show popped.value               // 2
+
+hold g = gr_add_edge(gr_add_edge(gr_new(3, 0), 0, 1, 5), 1, 2, 7)
+hold dist = gr_distances(g, 0)
+show gr_ok(dist)                // 1
+hold dv = gr_values(dist)
+show dv[2]                      // 12
+
+show res_is_ok(im_factorial(18)) // 1
+show im_to_base(255, 16)         // FF
+show tm_levenshtein("kitten", "sitting") // 3
+show tw_wrap("hello world again", 7)
+show b32_encode("foobar")       // MZXW6YTBOI======
+show b32_decode("MZXW6YTBOI======") // foobar
+show net_cidr_format(net_cidr_parse("10.0.0.0/8")) // 10.0.0.0/8
+
+hold values = smap_put(smap_put(smap_empty(), "name", "Sayanox"), "ver", "1")
+show tpl_render("Hello {name} v{ver}!", values)
+
+hold alloc = mo_allocate("10.00", [1, 1, 1], 2)
+show mo_at(alloc, 0)            // 3.34
+show mo_add_tax("100", "8.25", 2) // 108.25
+show "library-pack-example-ok"
