@@ -1,0 +1,407 @@
+// stdlib/intmath.sa -- checked exact integer math (prefix im_).
+//
+// Import stdlib/result.sa first. Every fallible operation returns a result.sa
+// list: [1, value] on success, [0, code] on failure. Codes: 1 invalid argument,
+// 2 overflow, 3 division by zero, 4 unsupported base, 5 negative input where a
+// nonnegative integer is required. The exact integer window is
+// -9007199254740991..9007199254740991 (the signed 53-bit IEEE-double integer
+// range). Operations refuse rather than silently rounding. Factorization and
+// divisor enumeration are additionally bounded at 1e12; combinatorics accept
+// k <= 1000. This is not arbitrary-precision arithmetic; use decimal.sa for
+// large exact decimal strings.
+
+make im_max() -> num {
+  give 9007199254740991
+}
+
+make im_int(v: num) -> num {
+  when v >= 0 - 9007199254740991 and v <= 9007199254740991 {
+    when v % 9007199254740992 == v {
+      give 1
+    }
+  }
+  give 0
+}
+
+make im_abs(v: num) -> num {
+  when v < 0 {
+    give 0 - v
+  }
+  give v
+}
+
+make im_add(a: num, b: num) -> list {
+  when im_int(a) == 0 or im_int(b) == 0 {
+    give res_err(1)
+  }
+  when b > 0 and a > 9007199254740991 - b {
+    give res_err(2)
+  }
+  when b < 0 and a < (0 - 9007199254740991) - b {
+    give res_err(2)
+  }
+  give res_ok(a + b)
+}
+
+make im_sub(a: num, b: num) -> list {
+  when im_int(b) == 0 {
+    give res_err(1)
+  }
+  give im_add(a, 0 - b)
+}
+
+make im_mul(a: num, b: num) -> list {
+  when im_int(a) == 0 or im_int(b) == 0 {
+    give res_err(1)
+  }
+  when a == 0 or b == 0 {
+    give res_ok(0)
+  }
+  hold aa = im_abs(a)
+  hold ab = im_abs(b)
+  when aa > 9007199254740991 / ab {
+    give res_err(2)
+  }
+  hold sign = 1
+  when a < 0 {
+    sign = 0 - sign
+  }
+  when b < 0 {
+    sign = 0 - sign
+  }
+  give res_ok(sign * aa * ab)
+}
+
+make im_div(a: num, b: num) -> list {
+  when im_int(a) == 0 or im_int(b) == 0 {
+    give res_err(1)
+  }
+  when b == 0 {
+    give res_err(3)
+  }
+  hold aa = im_abs(a)
+  hold ab = im_abs(b)
+  hold rem = aa % ab
+  hold q = (aa - rem) / ab
+  when a < 0 {
+    q = 0 - q
+  }
+  when b < 0 {
+    q = 0 - q
+  }
+  give res_ok(q)
+}
+
+make im_mod(a: num, b: num) -> list {
+  when im_int(a) == 0 or im_int(b) == 0 {
+    give res_err(1)
+  }
+  when b == 0 {
+    give res_err(3)
+  }
+  hold aa = im_abs(a)
+  hold ab = im_abs(b)
+  hold r = aa % ab
+  when a < 0 {
+    r = 0 - r
+  }
+  give res_ok(r)
+}
+
+make im_gcd(a: num, b: num) -> list {
+  when im_int(a) == 0 or im_int(b) == 0 {
+    give res_err(1)
+  }
+  hold x = im_abs(a)
+  hold y = im_abs(b)
+  while y != 0 {
+    hold r = x % y
+    x = y
+    y = r
+  }
+  give res_ok(x)
+}
+
+make im_lcm(a: num, b: num) -> list {
+  hold g = im_gcd(a, b)
+  when g[0] == 0 {
+    give g
+  }
+  when a == 0 or b == 0 {
+    give res_ok(0)
+  }
+  hold aa = im_abs(a)
+  hold ab = im_abs(b)
+  hold q = aa / g[1]
+  when q > 9007199254740991 / ab {
+    give res_err(2)
+  }
+  give res_ok(q * ab)
+}
+
+make im_pow(base: num, exp: num) -> list {
+  when im_int(base) == 0 or im_int(exp) == 0 or exp < 0 or exp > 1024 {
+    give res_err(1)
+  }
+  hold acc = res_ok(1)
+  hold bv = base
+  hold e = exp
+  while e > 0 {
+    when e % 2 == 1 {
+      acc = im_mul(acc[1], bv)
+      when acc[0] == 0 {
+        give acc
+      }
+    }
+    e = (e - (e % 2)) / 2
+    when e > 0 {
+      hold squared = im_mul(bv, bv)
+      when squared[0] == 0 {
+        give squared
+      }
+      bv = squared[1]
+    }
+  }
+  give acc
+}
+
+make im_isqrt(n: num) -> list {
+  when im_int(n) == 0 {
+    give res_err(1)
+  }
+  when n < 0 {
+    give res_err(5)
+  }
+  when n == 0 {
+    give res_ok(0)
+  }
+  hold lo = 0
+  hold hi = 94906266
+  while lo < hi {
+    hold span = hi - lo + 1
+    hold mid = lo + (span - (span % 2)) / 2
+    when mid <= n / mid {
+      lo = mid
+    } otherwise {
+      hi = mid - 1
+    }
+  }
+  give res_ok(lo)
+}
+
+make im_factorial(n: num) -> list {
+  when im_int(n) == 0 {
+    give res_err(1)
+  }
+  when n < 0 {
+    give res_err(5)
+  }
+  when n > 18 {
+    give res_err(2)
+  }
+  hold acc = res_ok(1)
+  hold i = 2
+  while i <= n {
+    acc = im_mul(acc[1], i)
+    when acc[0] == 0 {
+      give acc
+    }
+    i = i + 1
+  }
+  give acc
+}
+
+make im_combination(n: num, k: num) -> list {
+  when im_int(n) == 0 or im_int(k) == 0 {
+    give res_err(1)
+  }
+  when n < 0 or k < 0 {
+    give res_err(5)
+  }
+  when k > n {
+    give res_ok(0)
+  }
+  when k > 1000 {
+    give res_err(1)
+  }
+  hold kk = k
+  when n - k < k {
+    kk = n - k
+  }
+  hold acc = 1
+  hold i = 1
+  while i <= kk {
+    hold num = n - kk + i
+    hold g = im_gcd(acc, i)
+    hold a = acc / g[1]
+    hold den = i / g[1]
+    hold g2 = im_gcd(num, den)
+    hold b = num / g2[1]
+    hold d = den / g2[1]
+    when d != 1 {
+      give res_err(2)
+    }
+    hold step = im_mul(a, b)
+    when step[0] == 0 {
+      give step
+    }
+    acc = step[1]
+    i = i + 1
+  }
+  give res_ok(acc)
+}
+
+make im_permutation(n: num, k: num) -> list {
+  when im_int(n) == 0 or im_int(k) == 0 {
+    give res_err(1)
+  }
+  when n < 0 or k < 0 {
+    give res_err(5)
+  }
+  when k > n {
+    give res_ok(0)
+  }
+  when k > 1000 {
+    give res_err(1)
+  }
+  hold acc = res_ok(1)
+  hold i = 0
+  while i < k {
+    hold term = n - i
+    acc = im_mul(acc[1], term)
+    when acc[0] == 0 {
+      give acc
+    }
+    i = i + 1
+  }
+  give acc
+}
+
+make im_prime_factors(n: num) -> list {
+  when im_int(n) == 0 or n < 2 or n > 1000000000000 {
+    give []
+  }
+  hold out = []
+  hold x = n
+  while x % 2 == 0 {
+    out = push(out, 2)
+    x = x / 2
+  }
+  hold d = 3
+  while d * d <= x {
+    while x % d == 0 {
+      out = push(out, d)
+      x = x / d
+    }
+    d = d + 2
+  }
+  when x > 1 {
+    out = push(out, x)
+  }
+  give out
+}
+
+make im_divisors(n: num) -> list {
+  when im_int(n) == 0 or n < 1 or n > 1000000000000 {
+    give []
+  }
+  hold small = []
+  hold large = []
+  hold i = 1
+  while i * i <= n {
+    when n % i == 0 {
+      small = push(small, i)
+      hold pair = n / i
+      when pair != i {
+        large = push(large, pair)
+      }
+    }
+    i = i + 1
+  }
+  hold out = small
+  hold j = len(large) - 1
+  while j >= 0 {
+    out = push(out, large[j])
+    j = j - 1
+  }
+  give out
+}
+
+make im_digit_char(v: num) -> str {
+  when v < 10 {
+    give chr(48 + v)
+  }
+  give chr(55 + v)
+}
+
+make im_digit_value(c: num) -> num {
+  when c >= 48 and c <= 57 {
+    give c - 48
+  }
+  when c >= 65 and c <= 90 {
+    give c - 55
+  }
+  when c >= 97 and c <= 122 {
+    give c - 87
+  }
+  give 0 - 1
+}
+
+make im_to_base(n: num, base: num) -> str {
+  when im_int(n) == 0 or im_int(base) == 0 or base < 2 or base > 36 {
+    give ""
+  }
+  when n == 0 {
+    give "0"
+  }
+  hold x = im_abs(n)
+  hold out = ""
+  while x > 0 {
+    hold d = x % base
+    out = concat(im_digit_char(d), out)
+    x = (x - d) / base
+  }
+  when n < 0 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make im_from_base(s: str, base: num) -> list {
+  when im_int(base) == 0 or base < 2 or base > 36 {
+    give res_err(4)
+  }
+  hold n = len(s)
+  when n == 0 or n > 64 {
+    give res_err(1)
+  }
+  hold i = 0
+  hold negative = 0
+  when sx_index(s, 0) == 45 {
+    negative = 1
+    i = 1
+  }
+  when i >= n {
+    give res_err(1)
+  }
+  hold acc = res_ok(0)
+  while i < n {
+    hold d = im_digit_value(sx_index(s, i))
+    when d < 0 or d >= base {
+      give res_err(1)
+    }
+    hold scaled = im_mul(acc[1], base)
+    when scaled[0] == 0 {
+      give scaled
+    }
+    acc = im_add(scaled[1], d)
+    when acc[0] == 0 {
+      give acc
+    }
+    i = i + 1
+  }
+  when negative == 1 {
+    acc = im_sub(0, acc[1])
+  }
+  give acc
+}

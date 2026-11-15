@@ -1,0 +1,35 @@
+// Reading and writing delimited text with one codec: comma CSV, TSV,
+// semicolon (common in European exports) and pipe-separated files.
+// The quoting rules are identical in every dialect -- only the separator
+// byte changes, so a comma is ordinary data in a TSV file.
+//
+// Build: ./selfhost/gen2 examples/csv_dialect.sa /tmp/dialect.c
+//        cc -std=gnu11 -O2 -o /tmp/dialect /tmp/dialect.c -lm && /tmp/dialect
+use "stdlib/csv.sa"
+use "stdlib/csv_table.sa"
+
+// A TSV export whose second field contains a comma: no quoting needed.
+hold tsv = "name\tnote\tqty\r\nwidget\tred, large\t3\r\ngadget\t\"best\"\t7\r\n"
+hold table = ct_parse_d(tsv, 9)
+show ct_valid(table)
+show ct_row_count(table)
+show ct_cell(table, 1, 0)
+show ct_cell(table, 1, 1)
+show ct_cell(table, 2, 1)
+
+// The same rows written as semicolon CSV: the embedded comma still does not
+// need quoting, but the embedded quotes are doubled.
+show ct_write_d(table, 59)
+
+// And as comma CSV: now the comma field must be quoted.
+show ct_write_d(table, 44)
+
+// Round-tripping a dialect preserves every cell.
+hold again = ct_parse_d(ct_write_d(table, 124), 124)
+show ct_cell(again, 1, 1)
+show ct_cell(again, 2, 1)
+
+// Refused delimiters: the quote byte and the record terminators cannot
+// separate fields.
+show csv_delim_ok(34)
+show csv_delim_ok(10)

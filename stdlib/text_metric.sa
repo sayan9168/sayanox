@@ -1,0 +1,175 @@
+// stdlib/text_metric.sa -- byte-string similarity metrics (prefix tm_).
+//
+// All comparisons are byte-wise, not Unicode-aware. Edit-distance and LCS
+// inputs are bounded at 256 bytes each; overlong inputs return -1. Hamming
+// distance returns -1 for unequal lengths. Prefix/suffix helpers count bytes.
+// The dynamic-programming tables are rebuilt functionally so the module runs
+// on seed-min, gen2 and native_aot without list-element assignment.
+
+make tm_max_len() -> num {
+  give 256
+}
+
+make tm_min(a: num, b: num) -> num {
+  when a < b {
+    give a
+  }
+  give b
+}
+
+make tm_hamming(a: str, b: str) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  when na != nb {
+    give 0 - 1
+  }
+  when na > 65536 {
+    give 0 - 1
+  }
+  hold dist = 0
+  hold i = 0
+  while i < na {
+    when sx_index(a, i) != sx_index(b, i) {
+      dist = dist + 1
+    }
+    i = i + 1
+  }
+  give dist
+}
+
+make tm_levenshtein(a: str, b: str) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  when na > 256 or nb > 256 {
+    give 0 - 1
+  }
+  hold prev = []
+  hold j = 0
+  while j <= nb {
+    prev = push(prev, j)
+    j = j + 1
+  }
+  hold i = 1
+  while i <= na {
+    hold cur = [i]
+    hold j = 1
+    while j <= nb {
+      hold cost = 1
+      when sx_index(a, i - 1) == sx_index(b, j - 1) {
+        cost = 0
+      }
+      hold del = prev[j] + 1
+      hold ins = cur[j - 1] + 1
+      hold sub = prev[j - 1] + cost
+      hold best = tm_min(del, ins)
+      best = tm_min(best, sub)
+      cur = push(cur, best)
+      j = j + 1
+    }
+    prev = cur
+    i = i + 1
+  }
+  give prev[nb]
+}
+
+make tm_lcs_len(a: str, b: str) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  when na > 256 or nb > 256 {
+    give 0 - 1
+  }
+  hold prev = []
+  hold j = 0
+  while j <= nb {
+    prev = push(prev, 0)
+    j = j + 1
+  }
+  hold i = 1
+  while i <= na {
+    hold cur = [0]
+    hold j = 1
+    while j <= nb {
+      when sx_index(a, i - 1) == sx_index(b, j - 1) {
+        cur = push(cur, prev[j - 1] + 1)
+      } otherwise {
+        hold best = prev[j]
+        when cur[j - 1] > best {
+          best = cur[j - 1]
+        }
+        cur = push(cur, best)
+      }
+      j = j + 1
+    }
+    prev = cur
+    i = i + 1
+  }
+  give prev[nb]
+}
+
+make tm_common_prefix_len(a: str, b: str) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  hold n = tm_min(na, nb)
+  hold i = 0
+  while i < n {
+    when sx_index(a, i) != sx_index(b, i) {
+      give i
+    }
+    i = i + 1
+  }
+  give n
+}
+
+make tm_common_suffix_len(a: str, b: str) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  hold n = tm_min(na, nb)
+  hold i = 0
+  while i < n {
+    when sx_index(a, na - 1 - i) != sx_index(b, nb - 1 - i) {
+      give i
+    }
+    i = i + 1
+  }
+  give n
+}
+
+make tm_is_subsequence(a: str, b: str) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  when na > 65536 or nb > 65536 {
+    give 0
+  }
+  hold i = 0
+  hold j = 0
+  while i < na and j < nb {
+    when sx_index(a, i) == sx_index(b, j) {
+      i = i + 1
+    }
+    j = j + 1
+  }
+  when i == na {
+    give 1
+  }
+  give 0
+}
+
+make tm_similarity_percent(a: str, b: str) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  when na > 256 or nb > 256 {
+    give 0 - 1
+  }
+  hold max = na
+  when nb > max {
+    max = nb
+  }
+  when max == 0 {
+    give 100
+  }
+  hold dist = tm_levenshtein(a, b)
+  when dist < 0 {
+    give 0 - 1
+  }
+  give ((max - dist) * 100 - (((max - dist) * 100) % max)) / max
+}

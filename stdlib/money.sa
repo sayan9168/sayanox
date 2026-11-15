@@ -1,0 +1,394 @@
+// stdlib/money.sa -- exact decimal money helpers (prefix mo_).
+//
+// Import stdlib/decimal.sa first. Amounts are canonical decimal strings and
+// never pass through IEEE doubles. A money list is a packed string of decimal
+// amounts (decimal byte length, colon, bytes); "!" is the error marker and ""
+// is a valid empty list. mo_allocate distributes a nonnegative total across
+// integer weights using the largest-remainder method at a fixed number of
+// fractional places, so the parts sum back to the total exactly. Ties go to
+// the lower index. Tax/discount percentages are decimal strings and rounding
+// is nearest with ties away from zero, matching decimal.sa. Places are 0..12;
+// lists are bounded at 1024 items / 262144 packed bytes.
+
+make mo_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold v = n
+  hold out = ""
+  while v > 0 {
+    hold d = v % 10
+    out = concat(chr(48 + d), out)
+    v = (v - d) / 10
+  }
+  give out
+}
+
+make mo_empty() -> str {
+  give ""
+}
+
+make mo_push_raw(packed: str, s: str) -> str {
+  give concat(packed, concat(mo_istr(len(s)), concat(":", s)))
+}
+
+make mo_read_rec(packed: str, pos: num) -> list {
+  hold n = len(packed)
+  hold i = pos
+  hold ln = 0
+  hold go = 1
+  while go == 1 {
+    when i >= n {
+      hold go = 0
+    } otherwise {
+      when sx_index(packed, i) == 58 {
+        hold go = 0
+      } otherwise {
+        ln = ln * 10 + sx_index(packed, i) - 48
+        i = i + 1
+      }
+    }
+  }
+  give [i + 1, i + 1 + ln]
+}
+
+make mo_ok(packed: str) -> num {
+  when len(packed) == 0 {
+    give 1
+  }
+  when sx_index(packed, 0) == 33 {
+    give 0
+  }
+  give 1
+}
+
+make mo_count(packed: str) -> num {
+  when mo_ok(packed) == 0 {
+    give 0
+  }
+  hold n = len(packed)
+  hold pos = 0
+  hold count = 0
+  while pos < n {
+    hold r = mo_read_rec(packed, pos)
+    pos = r[1]
+    count = count + 1
+  }
+  give count
+}
+
+make mo_at(packed: str, index: num) -> str {
+  when mo_ok(packed) == 0 or index < 0 {
+    give ""
+  }
+  hold n = len(packed)
+  hold pos = 0
+  hold cur = 0
+  while pos < n {
+    hold r = mo_read_rec(packed, pos)
+    when cur == index {
+      hold out = ""
+      hold i = r[0]
+      while i < r[1] {
+        out = concat(out, chr(sx_index(packed, i)))
+        i = i + 1
+      }
+      give out
+    }
+    pos = r[1]
+    cur = cur + 1
+  }
+  give ""
+}
+
+make mo_push(packed: str, amount: str) -> str {
+  when mo_ok(packed) == 0 {
+    give "!"
+  }
+  hold x = dec_normalize(amount)
+  when len(x) == 0 {
+    give "!"
+  }
+  when mo_count(packed) >= 1024 {
+    give "!"
+  }
+  hold out = mo_push_raw(packed, x)
+  when len(out) > 262144 {
+    give "!"
+  }
+  give out
+}
+
+make mo_sum(packed: str) -> str {
+  when mo_ok(packed) == 0 {
+    give ""
+  }
+  hold total = "0"
+  hold n = mo_count(packed)
+  hold i = 0
+  while i < n {
+    hold x = mo_at(packed, i)
+    total = dec_add(total, x)
+    when len(total) == 0 {
+      give ""
+    }
+    i = i + 1
+  }
+  give total
+}
+
+make mo_places_ok(places: num) -> num {
+  when places >= 0 and places <= 12 and places % 9007199254740992 == places {
+    give 1
+  }
+  give 0
+}
+
+make mo_units(fixed: str) -> str {
+  hold out = ""
+  hold n = len(fixed)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(fixed, i)
+    when c != 46 {
+      out = concat(out, chr(c))
+    }
+    i = i + 1
+  }
+  give dec_trim_digits(out)
+}
+
+make mo_small_num(s: str) -> num {
+  hold n = len(s)
+  when n == 0 or n > 4 {
+    give 0 - 1
+  }
+  hold v = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c < 48 or c > 57 {
+      give 0 - 1
+    }
+    v = v * 10 + c - 48
+    when v > 1024 {
+      give 0 - 1
+    }
+    i = i + 1
+  }
+  give v
+}
+
+make mo_pair_left(pair: str) -> str {
+  hold i = 0
+  hold n = len(pair)
+  while i < n {
+    when sx_index(pair, i) == 124 {
+      give dec_slice(pair, 0, i)
+    }
+    i = i + 1
+  }
+  give ""
+}
+
+make mo_pair_right(pair: str) -> str {
+  hold i = 0
+  hold n = len(pair)
+  while i < n {
+    when sx_index(pair, i) == 124 {
+      give dec_slice(pair, i + 1, n)
+    }
+    i = i + 1
+  }
+  give ""
+}
+
+make mo_weight_ok(w: num) -> num {
+  when w >= 0 and w <= 1000000000000 and w % 9007199254740992 == w {
+    give 1
+  }
+  give 0
+}
+
+make mo_allocate(total: str, weights: list, places: num) -> str {
+  when mo_places_ok(places) == 0 {
+    give "!"
+  }
+  hold x = dec_normalize(total)
+  when len(x) == 0 or dec_is_negative(x) == 1 {
+    give "!"
+  }
+  hold rounded = dec_round(x, places)
+  when string_eq(rounded, x) == 0 {
+    give "!"
+  }
+  hold n = len(weights)
+  when n == 0 or n > 1024 {
+    give "!"
+  }
+  hold sum = 0
+  hold i = 0
+  while i < n {
+    when mo_weight_ok(weights[i]) == 0 {
+      give "!"
+    }
+    sum = sum + weights[i]
+    when sum > 1000000000000000 {
+      give "!"
+    }
+    i = i + 1
+  }
+  when sum == 0 {
+    give "!"
+  }
+  hold fixed = dec_to_fixed(x, places)
+  hold units = mo_units(fixed)
+  hold sum_str = mo_istr(sum)
+  hold quotas = ""
+  hold remainders = ""
+  hold quota_sum = "0"
+  hold k = 0
+  while k < n {
+    hold wstr = mo_istr(weights[k])
+    hold numerator = dec_mul_digits(units, wstr)
+    hold pair = dec_divmod_digits(numerator, sum_str)
+    hold q = mo_pair_left(pair)
+    hold r = mo_pair_right(pair)
+    when len(q) == 0 or len(r) == 0 {
+      give "!"
+    }
+    quotas = mo_push_raw(quotas, q)
+    remainders = mo_push_raw(remainders, r)
+    quota_sum = dec_add_digits(quota_sum, q)
+    k = k + 1
+  }
+  hold leftover_str = dec_sub_digits(units, quota_sum)
+  hold leftover = mo_small_num(leftover_str)
+  when leftover < 0 or leftover > n {
+    give "!"
+  }
+  hold awarded = []
+  hold a = 0
+  while a < n {
+    awarded = push(awarded, 0)
+    a = a + 1
+  }
+  hold given = 0
+  while given < leftover {
+    hold best = 0 - 1
+    hold best_rem = ""
+    hold j = 0
+    while j < n {
+      when awarded[j] == 0 {
+        hold rem = mo_at(remainders, j)
+        when best < 0 {
+          best = j
+          best_rem = rem
+        } otherwise {
+          when dec_cmp_digits(rem, best_rem) > 0 {
+            best = j
+            best_rem = rem
+          }
+        }
+      }
+      j = j + 1
+    }
+    when best < 0 {
+      give "!"
+    }
+    // Rebuild the award flags functionally.
+    hold next_awarded = []
+    hold t = 0
+    while t < n {
+      when t == best {
+        next_awarded = push(next_awarded, 1)
+      } otherwise {
+        next_awarded = push(next_awarded, awarded[t])
+      }
+      t = t + 1
+    }
+    awarded = next_awarded
+    given = given + 1
+  }
+  hold out = ""
+  hold m = 0
+  while m < n {
+    hold q = mo_at(quotas, m)
+    when awarded[m] == 1 {
+      q = dec_add_digits(q, "1")
+    }
+    hold amount = dec_place(q, places, 0)
+    amount = dec_to_fixed(amount, places)
+    when len(amount) == 0 {
+      give "!"
+    }
+    out = mo_push_raw(out, amount)
+    m = m + 1
+  }
+  give out
+}
+
+make mo_split(total: str, count: num, places: num) -> str {
+  when count < 1 or count > 1024 or count % 9007199254740992 != count {
+    give "!"
+  }
+  hold weights = []
+  hold i = 0
+  while i < count {
+    weights = push(weights, 1)
+    i = i + 1
+  }
+  give mo_allocate(total, weights, places)
+}
+
+make mo_rate_ok(rate: str) -> num {
+  hold r = dec_normalize(rate)
+  when len(r) == 0 or dec_is_negative(r) == 1 {
+    give 0
+  }
+  give 1
+}
+
+make mo_add_tax(amount: str, rate_percent: str, places: num) -> str {
+  when mo_places_ok(places) == 0 or mo_rate_ok(rate_percent) == 0 {
+    give ""
+  }
+  hold x = dec_normalize(amount)
+  when len(x) == 0 or dec_is_negative(x) == 1 {
+    give ""
+  }
+  hold r = dec_normalize(rate_percent)
+  hold factor = dec_add("100", r)
+  hold scaled = dec_mul(x, factor)
+  give dec_div(scaled, "100", places)
+}
+
+make mo_apply_discount(amount: str, percent: str, places: num) -> str {
+  when mo_places_ok(places) == 0 or mo_rate_ok(percent) == 0 {
+    give ""
+  }
+  hold p = dec_normalize(percent)
+  when dec_gt(p, "100") == 1 {
+    give ""
+  }
+  hold x = dec_normalize(amount)
+  when len(x) == 0 or dec_is_negative(x) == 1 {
+    give ""
+  }
+  hold factor = dec_sub("100", p)
+  hold scaled = dec_mul(x, factor)
+  give dec_div(scaled, "100", places)
+}
+
+make mo_mul_rate(amount: str, factor: str, places: num) -> str {
+  when mo_places_ok(places) == 0 or mo_rate_ok(factor) == 0 {
+    give ""
+  }
+  hold x = dec_normalize(amount)
+  when len(x) == 0 {
+    give ""
+  }
+  hold f = dec_normalize(factor)
+  hold product = dec_mul(x, f)
+  give dec_round(product, places)
+}
