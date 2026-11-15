@@ -20,13 +20,32 @@ make cmd_full_contract(built: list) -> num {
   give 0
 }
 
+// Every suffix that would make GitHub's language bar credit an implementation
+// language other than Sayanox. The inventory below walks *all* tracked paths, so
+// a new language cannot slip in unnoticed the way tools/docsite.mjs and the
+// library-pack Python oracle did while this audit only globbed *.c/*.h/*.sh/*.sa.
+make as_foreign_suffix(path: str) -> str {
+  hold suffixes = ".js\n.mjs\n.cjs\n.jsx\n.ts\n.tsx\n.py\n.pyi\n.rb\n.pl\n.pm\n.php\n.lua\n.sh\n.bash\n.zsh\n.fish\n.ps1\n.bat\n.cmd\n.c\n.h\n.cc\n.cpp\n.cxx\n.hpp\n.hh\n.m\n.mm\n.cs\n.go\n.rs\n.java\n.kt\n.kts\n.scala\n.swift\n.dart\n.vb\n.fs\n.fsx\n.ex\n.exs\n.erl\n.hrl\n.hs\n.ml\n.mli\n.clj\n.cljs\n.lisp\n.scm\n.rkt\n.r\n.R\n.jl\n.groovy\n.nim\n.zig\n.d\n.pas\n.pp\n.f\n.f90\n.asm\n.s\n.S\n.sql\n.tcl\n.awk\n.sed\n.vim\n.el\n.coffee\n.sol\n.vy\n.move\n.cairo\n.wat\n.wast\n"
+  hold pos = 0
+  while pos < len(suffixes) {
+    hold begin = pos
+    while pos < len(suffixes) && sx_index(suffixes, pos) != 10 { pos = pos + 1 }
+    hold suffix = gl_slice(suffixes, begin, pos)
+    pos = pos + 1
+    when len(suffix) > 0 && ends_with(path, suffix) == 1 { give suffix }
+  }
+  give ""
+}
+
 make cmd_all_sayanox() -> num {
   show "=== ALL-SAYANOX: maintained source + explicit native binary trust input ==="
   hold dir = gl_ensure_dir("selfhost/seed_tests")
   hold inventory = "selfhost/seed_tests/all-sayanox-tracked.out"
-  hold tracked = pg_capture("git ls-files '*.c' '*.h' '*.sh' '*.sa'", inventory)
+  // No glob: every tracked path is classified, so an added language is visible.
+  hold tracked = pg_capture("git ls-files", inventory)
   hold names = read_file(inventory)
-  hold counts = [0, 0, 0]
+  hold counts = [0, 0, 0, 0]
+  hold foreign = ""
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -37,12 +56,22 @@ make cmd_all_sayanox() -> num {
       when ends_with(path, ".c") == 1 || ends_with(path, ".h") == 1 { counts[0] = counts[0] + 1 }
       when ends_with(path, ".sh") == 1 { counts[1] = counts[1] + 1 }
       when ends_with(path, ".sa") == 1 { counts[2] = counts[2] + 1 }
+      hold suffix = as_foreign_suffix(path)
+      when len(suffix) > 0 {
+        counts[3] = counts[3] + 1
+        foreign = concat(foreign, concat(path, "\n"))
+      }
     }
   }
   show concat("  maintained tracked C/H files: ", istr(counts[0]))
   show concat("  tracked shell scripts: ", istr(counts[1]))
   show concat("  tracked Sayanox sources: ", istr(counts[2]))
+  show concat("  tracked non-Sayanox implementation files: ", istr(counts[3]))
   show concat("  build-driver entry-source lines (tools/sxbuild.sa): ", istr(count_lines_in_file("tools/sxbuild.sa")))
+  when counts[3] != 0 {
+    show foreign
+    hold rejected = fail(1, "non-Sayanox implementation source remains; refusing an all-in-Sayanox claim")
+  }
   when counts[0] != 0 || counts[1] != 0 || path_kind("Makefile") != 0 || path_kind("selfhost/seed/sxc_seed_min.c") != 0 {
     give fail(1, "maintained C/header, shell script or Makefile remains; refusing an all-in-Sayanox claim")
   }

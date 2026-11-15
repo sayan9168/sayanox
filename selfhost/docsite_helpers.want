@@ -1,0 +1,35 @@
+esc 0: 
+esc 1: plain
+esc 2: a&lt;b&gt;c&amp;d&quot;e'f
+esc 3: &lt;script&gt;alert(1)&lt;/script&gt;
+esc 4: &amp;amp; already
+esc 5: tab	here
+esc 6: x &quot; ' &amp; &lt; &gt;
+href 0: 
+href 1: #frag
+href 2: ./rel/path.md
+href 3: ../up.md
+href 4: https://example.com/a?b=1
+href 5: HTTPS://EXAMPLE.COM/x
+href 6: 
+href 7: 
+href 8: 
+href 9: docs/PAGE.md
+href 10: 
+href 11: 
+href 12: //cdn.example.com/x
+href 13: 
+href 14: 
+href 15: 
+href 16: 
+href 17: path/with-under_score.md
+href 18: 
+href 19: https://ok.example/x
+href 20: 
+title 0: Real Title
+title 1: fb.md
+title 2: First
+title 3: spaced
+title 4: # ok
+title 5: Later Title
+title 6: a `b` *c*

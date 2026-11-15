@@ -1,0 +1,32 @@
+<h1>Title with <code>code</code> and <strong>bold</strong></h1>
+<p>Intro paragraph spans two source lines and has <em>emphasis</em>, <em>under</em>, a <a href="https://example.com/a?b=1">link</a>, a doc, a bad) and <img src="img.png" alt="alt">.</p>
+<h2>Escapes &amp; entities</h2>
+<p>Raw &lt;b&gt;bold&lt;/b&gt; &amp; &quot;quotes&quot; and 'apostrophes' must be escaped.</p>
+<p>Inline <code>a &lt; b &amp; c &gt; d</code> stays literal; `<code> </code> `<code> edge; unterminated </code> tick.</p>
+<h3>Links and images</h3>
+<ul>
+<li><a href="./rel/path.md">safe</a> and <a href="#section">anchor</a></li>
+<li>unsafe becomes plain label</li>
+<li><img src="https://example.com/i.png" alt="pic"> and no</li>
+<li>item with a continuation line that folds into the same li and again</li>
+</ul>
+<ol>
+<li>first ordered</li>
+<li>second ordered continued here</li>
+</ol>
+<blockquote><p>quoted <strong>bold</strong> line second quoted line</p>
+<p>quoted paragraph two</p></blockquote>
+<pre><code>fenced &lt;code&gt; &amp; &quot;stuff&quot;
+  indented inside fence</code></pre>
+<pre><code>indented code block
+second line</code></pre>
+<table>
+<thead><tr><th>Col A</th><th>Col B</th></tr></thead>
+<tbody>
+<tr><td>`x</td><td>y`</td><td>plain</td></tr>
+<tr><td>a</td><td>b</td></tr>
+</tbody>
+</table>
+<hr>
+<h6>Six</h6>
+<p>Text with <strong>bold <em>and em</em> inside</strong> plus a_n_b identifiers.</p>

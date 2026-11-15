@@ -8,21 +8,29 @@ snippet, the upstream PR checklist and the draft PR text, see
 
 Sayanox files use `.sa`, but the upstream GitHub Linguist language registry
 currently has neither a `Sayanox` language entry nor a `.sa` extension mapping.
-Verified against `lib/linguist/languages.yml` on 2026-10-09: no `Sayanox:` entry
-exists, and no language claims `.sa`. GitHub's language API for the repository
-consequently reports C, Makefile, Shell and C++, but not Sayanox.
+A project-local `.gitattributes` cannot create a new Linguist language, so
+`*.sa linguist-language=Sayanox` stays inert until an upstream entry lands.
 
-Because `.sa` files are invisible to Linguist, the roughly 758 KB of Sayanox
-source in this repository — about 65% of its source bytes — does not reach the
-language bar at all. What the bar shows is what is left: the hand-written C
-bootstrap seed and native backend, the `Makefile` and the shell scripts.
+**Every tracked implementation file is now Sayanox.** The last two
+foreign-language sources were retired:
 
-A project-local `.gitattributes` file cannot create a new Linguist language.
-The upstream Linguist override guide explicitly says an unregistered language
-will not appear in language statistics even when `linguist-language` and
-`linguist-detectable` are set. Setting `.sa` to Rust, SAS, Python, C or another
-existing language would only mislabel the source, so this repository does not do
-that.
+| Retired file | Replacement |
+| --- | --- |
+| `tools/docsite.mjs` (JavaScript, 354 lines) | `tools/docsite.sa` + `tools/sxdoc_lib.sa` |
+| `selfhost/stdlib_library_pack_oracle.py` (Python, 832 lines) | frozen `.want` oracles, computed outside Sayanox before retirement |
+
+Before that change GitHub's language API reported exactly one language for this
+repository — `JavaScript`, 12,741 bytes — because the Sayanox source was invisible
+to Linguist and the docsite generator was the only detectable file. With it gone
+the bar has no detectable implementation language to credit at all. That is the
+honest outcome: **the bar will stay empty until Linguist registers Sayanox**, and
+this repository will not mislabel `.sa` as Python, C, Rust or SAS to fill it.
+
+`./sx target all-sayanox` now walks *every* tracked path rather than globbing
+`*.c *.h *.sh *.sa`, classifies it against a suffix table covering JavaScript,
+TypeScript, Python, Ruby, Perl, PHP, Lua, shell, C/C++, Go, Rust, JVM and .NET
+languages, and refuses the claim if any remains. The old glob is exactly why the
+two files above went unnoticed: they were never in its field of view.
 
 ## What this repository has done
 

@@ -1,0 +1,13 @@
+// selfhost/docsite_markdown_test.sa -- block/inline Markdown against a frozen
+// Node-generated oracle (selfhost/docsite_markdown.want), rendered from
+// selfhost/docsite_fixture.md. See selfhost/docsite_test.sa for provenance.
+
+use "tools/sxdoc_lib.sa"
+
+make dm_run() -> num {
+  hold source = read_file("selfhost/docsite_fixture.md")
+  show ds_markdown(source)
+  give 0
+}
+
+hold run_dm = dm_run()

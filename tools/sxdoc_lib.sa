@@ -1,0 +1,1183 @@
+// tools/sxdoc_lib.sa -- Markdown -> HTML for the documentation site, in Sayanox.
+//
+// This replaces the former Node renderer (tools/docsite.mjs). It is a pure
+// library: no top-level side effects, so a gate can `use` it directly.
+//
+// There is no regex engine in Sayanox, so every construct the old renderer
+// expressed as a regular expression is a bounded byte scan here. The pass order
+// is deliberately the same as the retired renderer (escape, code spans, images,
+// links, bold, emphasis, restore code) because that order is observable in the
+// published HTML. Whitespace means the ASCII set space/TAB/LF/CR/VT/FF.
+//
+// Lists of strings are packed as repeated `len:text` records; numeric lists hold
+// line extents as start/length pairs. Slicing halves the span instead of
+// appending byte by byte, so a 77 KB document does not render quadratically.
+
+make ds_is_ws(c: num) -> num {
+  when c == 32 or c == 9 or c == 10 or c == 13 or c == 11 or c == 12 {
+    give 1
+  }
+  give 0
+}
+
+make ds_slice(s: str, first: num, last: num) -> str {
+  hold n = len(s)
+  when first < 0 {
+    first = 0
+  }
+  when last > n {
+    last = n
+  }
+  when first >= last {
+    give ""
+  }
+  when last - first <= 16 {
+    hold small = ""
+    hold k = first
+    while k < last {
+      small = concat(small, chr(sx_index(s, k)))
+      k = k + 1
+    }
+    give small
+  }
+  // `/` is floating point in Sayanox, so halve the span explicitly.
+  hold span = last - first
+  hold half = (span - (span % 2)) / 2
+  hold mid = first + half
+  give concat(ds_slice(s, first, mid), ds_slice(s, mid, last))
+}
+
+make ds_istr(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold n = v
+  hold out = ""
+  while n > 0 {
+    hold d = n % 10
+    out = concat(chr(48 + d), out)
+    n = (n - d) / 10
+  }
+  give out
+}
+
+make ds_trim_left_at(s: str) -> num {
+  hold i = 0
+  hold n = len(s)
+  while i < n {
+    when ds_is_ws(sx_index(s, i)) == 0 {
+      give i
+    }
+    i = i + 1
+  }
+  give n
+}
+
+make ds_trim_right_at(s: str) -> num {
+  hold i = len(s)
+  while i > 0 {
+    when ds_is_ws(sx_index(s, i - 1)) == 0 {
+      give i
+    }
+    i = i - 1
+  }
+  give 0
+}
+
+make ds_trim(s: str) -> str {
+  give ds_slice(s, ds_trim_left_at(s), ds_trim_right_at(s))
+}
+
+make ds_blank(s: str) -> num {
+  when ds_trim_left_at(s) == len(s) {
+    give 1
+  }
+  give 0
+}
+
+make ds_has_char(s: str, c: num) -> num {
+  hold i = 0
+  hold n = len(s)
+  while i < n {
+    when sx_index(s, i) == c {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make ds_starts(s: str, p: str) -> num {
+  hold n = len(p)
+  when len(s) < n {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) != sx_index(p, i) {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// ---- HTML escaping --------------------------------------------------------
+
+make ds_escape_html(s: str) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold run = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    hold entity = ""
+    when c == 38 {
+      entity = "&amp;"
+    }
+    when c == 60 {
+      entity = "&lt;"
+    }
+    when c == 62 {
+      entity = "&gt;"
+    }
+    when c == 34 {
+      entity = "&quot;"
+    }
+    when len(entity) > 0 {
+      out = concat(out, ds_slice(s, run, i))
+      out = concat(out, entity)
+      run = i + 1
+    }
+    i = i + 1
+  }
+  give concat(out, ds_slice(s, run, n))
+}
+
+make ds_escape_attr(s: str) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold run = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    hold entity = ""
+    when c == 38 {
+      entity = "&amp;"
+    }
+    when c == 60 {
+      entity = "&lt;"
+    }
+    when c == 62 {
+      entity = "&gt;"
+    }
+    when c == 34 {
+      entity = "&quot;"
+    }
+    when c == 39 {
+      entity = "&#39;"
+    }
+    when len(entity) > 0 {
+      out = concat(out, ds_slice(s, run, i))
+      out = concat(out, entity)
+      run = i + 1
+    }
+    i = i + 1
+  }
+  give concat(out, ds_slice(s, run, n))
+}
+
+// Only relative links and absolute https URLs survive, so a docs page cannot
+// pull an arbitrary scheme (javascript:, data:) into the preview origin.
+make ds_safe_href(href: str) -> str {
+  hold t = ds_trim(href)
+  hold n = len(t)
+  when n == 0 {
+    give ""
+  }
+  when sx_index(t, 0) == 35 {
+    give t
+  }
+  when ds_starts(t, "./") == 1 or ds_starts(t, "../") == 1 {
+    give t
+  }
+  // https:// followed by at least one non-whitespace byte, case-insensitive.
+  when n > 8 {
+    hold scheme = ds_lower_ascii(ds_slice(t, 0, 8))
+    when string_eq(scheme, "https://") == 1 {
+      hold i = 8
+      hold ok = 1
+      while i < n {
+        when ds_is_ws(sx_index(t, i)) == 1 {
+          ok = 0
+        }
+        i = i + 1
+      }
+      when ok == 1 {
+        give t
+      }
+    }
+  }
+  // A bare relative path: [A-Za-z0-9._/-]+ and no "://" anywhere.
+  hold i = 0
+  hold bare = 1
+  while i < n {
+    hold c = sx_index(t, i)
+    hold allowed = 0
+    when c >= 65 and c <= 90 {
+      allowed = 1
+    }
+    when c >= 97 and c <= 122 {
+      allowed = 1
+    }
+    when c >= 48 and c <= 57 {
+      allowed = 1
+    }
+    when c == 46 or c == 95 or c == 47 or c == 45 {
+      allowed = 1
+    }
+    when allowed == 0 {
+      bare = 0
+    }
+    i = i + 1
+  }
+  when bare == 1 and ds_find(t, "://") < 0 {
+    give t
+  }
+  give ""
+}
+
+make ds_lower_ascii(s: str) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c >= 65 and c <= 90 {
+      c = c + 32
+    }
+    out = concat(out, chr(c))
+    i = i + 1
+  }
+  give out
+}
+
+make ds_find(s: str, needle: str) -> num {
+  hold n = len(s)
+  hold m = len(needle)
+  when m == 0 {
+    give 0
+  }
+  hold i = 0
+  while i + m <= n {
+    when string_eq(ds_slice(s, i, i + m), needle) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+// ---- packed string lists --------------------------------------------------
+
+make ds_pack_push(buf: str, s: str) -> str {
+  give concat(buf, concat(ds_istr(len(s)), concat(":", s)))
+}
+
+// Returns [value_start, value_end] for record `want`, or [-1,-1].
+make ds_pack_locate(buf: str, want: num) -> list {
+  hold n = len(buf)
+  hold pos = 0
+  hold index = 0
+  while pos < n {
+    hold digits = pos
+    while digits < n and sx_index(buf, digits) != 58 {
+      digits = digits + 1
+    }
+    when digits >= n {
+      give [0 - 1, 0 - 1]
+    }
+    hold size = 0
+    hold k = pos
+    while k < digits {
+      size = size * 10 + sx_index(buf, k) - 48
+      k = k + 1
+    }
+    hold start = digits + 1
+    hold end = start + size
+    when end > n {
+      give [0 - 1, 0 - 1]
+    }
+    when index == want {
+      give [start, end]
+    }
+    index = index + 1
+    pos = end
+  }
+  give [0 - 1, 0 - 1]
+}
+
+make ds_pack_at(buf: str, want: num) -> str {
+  hold loc = ds_pack_locate(buf, want)
+  when loc[0] < 0 {
+    give ""
+  }
+  give ds_slice(buf, loc[0], loc[1])
+}
+
+make ds_pack_count(buf: str) -> num {
+  hold n = len(buf)
+  hold pos = 0
+  hold count = 0
+  while pos < n {
+    hold digits = pos
+    while digits < n and sx_index(buf, digits) != 58 {
+      digits = digits + 1
+    }
+    when digits >= n {
+      give count
+    }
+    hold size = 0
+    hold k = pos
+    while k < digits {
+      size = size * 10 + sx_index(buf, k) - 48
+      k = k + 1
+    }
+    pos = digits + 1 + size
+    count = count + 1
+  }
+  give count
+}
+
+// ---- inline passes --------------------------------------------------------
+
+// Sayanox strings are byte strings without NUL: concat() drops a chr(0)
+// outright. The placeholder delimiter is therefore a control byte chosen at
+// runtime as the lowest of 1..31 that the document does not already contain, so
+// it cannot collide with real bytes.
+make ds_pick_sentinel(s: str) -> num {
+  hold c = 1
+  while c <= 31 {
+    when ds_has_char(s, c) == 0 {
+      give c
+    }
+    c = c + 1
+  }
+  give 1
+}
+
+// Replace every backtick span with a sentinel-delimited index.
+// Returns `len(buffer):buffer` followed by the transformed text.
+make ds_code_extract(s: str, mark: num) -> str {
+  hold n = len(s)
+  hold buf = ""
+  hold out = ""
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) == 96 {
+      hold j = i + 1
+      when j < n and sx_index(s, j) != 96 {
+        while j < n and sx_index(s, j) != 96 {
+          j = j + 1
+        }
+        when j < n {
+          hold index = ds_pack_count(buf)
+          buf = ds_pack_push(buf, ds_slice(s, i + 1, j))
+          out = concat(out, concat(chr(mark), concat(ds_istr(index), chr(mark))))
+          i = j + 1
+        } otherwise {
+          out = concat(out, "`")
+          i = i + 1
+        }
+      } otherwise {
+        out = concat(out, "`")
+        i = i + 1
+      }
+    } otherwise {
+      hold start = i
+      while i < n and sx_index(s, i) != 96 {
+        i = i + 1
+      }
+      out = concat(out, ds_slice(s, start, i))
+    }
+  }
+  give concat(concat(ds_istr(len(buf)), ":"), concat(buf, out))
+}
+
+make ds_code_restore(s: str, buf: str, mark: num) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold run = 0
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) == mark {
+      hold j = i + 1
+      hold value = 0
+      hold digits = 0
+      while j < n and sx_index(s, j) >= 48 and sx_index(s, j) <= 57 {
+        value = value * 10 + sx_index(s, j) - 48
+        digits = digits + 1
+        j = j + 1
+      }
+      when digits > 0 and j < n and sx_index(s, j) == mark {
+        out = concat(out, ds_slice(s, run, i))
+        out = concat(out, concat("<code>", concat(ds_pack_at(buf, value), "</code>")))
+        i = j + 1
+        run = i
+      } otherwise {
+        i = i + 1
+      }
+    } otherwise {
+      i = i + 1
+    }
+  }
+  give concat(out, ds_slice(s, run, n))
+}
+
+// ![alt](src) -- alt may be empty, src may not contain ')' or whitespace.
+make ds_images(s: str) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold run = 0
+  hold i = 0
+  while i < n {
+    hold matched = 0
+    when sx_index(s, i) == 33 and i + 1 < n and sx_index(s, i + 1) == 91 {
+      hold j = i + 2
+      while j < n and sx_index(s, j) != 93 {
+        j = j + 1
+      }
+      when j + 1 < n and sx_index(s, j + 1) == 40 {
+        hold k = j + 2
+        while k < n and sx_index(s, k) != 41 and ds_is_ws(sx_index(s, k)) == 0 {
+          k = k + 1
+        }
+        when k > j + 2 and k < n and sx_index(s, k) == 41 {
+          hold alt = ds_slice(s, i + 2, j)
+          hold src = ds_slice(s, j + 2, k)
+          hold safe = ds_safe_href(src)
+          out = concat(out, ds_slice(s, run, i))
+          when len(safe) == 0 {
+            out = concat(out, ds_escape_html(alt))
+          } otherwise {
+            hold attr_src = ds_escape_attr(safe)
+            hold attr_alt = ds_escape_attr(alt)
+            hold tag = concat("<img src=\"", attr_src)
+            tag = concat(tag, "\" alt=\"")
+            tag = concat(tag, attr_alt)
+            tag = concat(tag, "\">")
+            out = concat(out, tag)
+          }
+          i = k + 1
+          run = i
+          matched = 1
+        }
+      }
+    }
+    when matched == 0 {
+      i = i + 1
+    }
+  }
+  give concat(out, ds_slice(s, run, n))
+}
+
+// [label](href) -- label must be non-empty.
+make ds_links(s: str) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold run = 0
+  hold i = 0
+  while i < n {
+    hold matched = 0
+    when sx_index(s, i) == 91 {
+      hold j = i + 1
+      while j < n and sx_index(s, j) != 93 {
+        j = j + 1
+      }
+      when j > i + 1 and j + 1 < n and sx_index(s, j + 1) == 40 {
+        hold k = j + 2
+        while k < n and sx_index(s, k) != 41 and ds_is_ws(sx_index(s, k)) == 0 {
+          k = k + 1
+        }
+        when k > j + 2 and k < n and sx_index(s, k) == 41 {
+          hold label = ds_slice(s, i + 1, j)
+          hold href = ds_slice(s, j + 2, k)
+          hold safe = ds_safe_href(href)
+          out = concat(out, ds_slice(s, run, i))
+          when len(safe) == 0 {
+            out = concat(out, label)
+          } otherwise {
+            hold attr_href = ds_escape_attr(safe)
+            hold tag = concat("<a href=\"", attr_href)
+            tag = concat(tag, "\">")
+            tag = concat(tag, label)
+            tag = concat(tag, "</a>")
+            out = concat(out, tag)
+          }
+          i = k + 1
+          run = i
+          matched = 1
+        }
+      }
+    }
+    when matched == 0 {
+      i = i + 1
+    }
+  }
+  give concat(out, ds_slice(s, run, n))
+}
+
+make ds_bold(s: str) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold run = 0
+  hold i = 0
+  while i < n {
+    hold matched = 0
+    when sx_index(s, i) == 42 and i + 1 < n and sx_index(s, i + 1) == 42 {
+      hold k = i + 2
+      while k < n and sx_index(s, k) != 42 {
+        k = k + 1
+      }
+      when k > i + 2 and k + 1 < n and sx_index(s, k + 1) == 42 {
+        out = concat(out, ds_slice(s, run, i))
+        out = concat(out, concat("<strong>", concat(ds_slice(s, i + 2, k), "</strong>")))
+        i = k + 2
+        run = i
+        matched = 1
+      }
+    }
+    when matched == 0 {
+      i = i + 1
+    }
+  }
+  give concat(out, ds_slice(s, run, n))
+}
+
+// (^|[\s(])<delim>([^<delim>\n]+)<delim> -> "$1<em>$2</em>"
+// The prefix alternative is tried empty at position 0 first, then one byte.
+make ds_emphasis(s: str, delim: num) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold run = 0
+  hold i = 0
+  while i < n {
+    hold matched = 0
+    hold prefix = 0 - 1
+    when i == 0 {
+      prefix = 0
+    }
+    when prefix < 0 {
+      hold c = sx_index(s, i)
+      when ds_is_ws(c) == 1 or c == 40 {
+        prefix = 1
+      }
+    }
+    when prefix >= 0 {
+      hold star = i + prefix
+      when star < n and sx_index(s, star) == delim {
+        hold k = star + 1
+        while k < n and sx_index(s, k) != delim and sx_index(s, k) != 10 {
+          k = k + 1
+        }
+        when k > star + 1 and k < n and sx_index(s, k) == delim {
+          out = concat(out, ds_slice(s, run, i))
+          out = concat(out, ds_slice(s, i, star))
+          out = concat(out, concat("<em>", concat(ds_slice(s, star + 1, k), "</em>")))
+          i = k + 1
+          run = i
+          matched = 1
+        }
+      }
+    }
+    when matched == 0 {
+      // At position 0 the empty-prefix alternative can fail while the
+      // one-byte prefix still matches, so try it before giving up.
+      when i == 0 and n > 1 {
+        hold c = sx_index(s, 0)
+        when ds_is_ws(c) == 1 or c == 40 {
+          when sx_index(s, 1) == delim {
+            hold k = 2
+            while k < n and sx_index(s, k) != delim and sx_index(s, k) != 10 {
+              k = k + 1
+            }
+            when k > 2 and k < n and sx_index(s, k) == delim {
+              out = concat(out, ds_slice(s, 0, 1))
+              out = concat(out, concat("<em>", concat(ds_slice(s, 2, k), "</em>")))
+              i = k + 1
+              run = i
+              matched = 1
+            }
+          }
+        }
+      }
+      when matched == 0 {
+        i = i + 1
+      }
+    }
+  }
+  give concat(out, ds_slice(s, run, n))
+}
+
+make ds_inline(text: str) -> str {
+  hold escaped = ds_escape_html(text)
+  hold mark = ds_pick_sentinel(escaped)
+  hold packed = ds_code_extract(escaped, mark)
+  hold colon = ds_find(packed, ":")
+  hold size = 0
+  hold i = 0
+  while i < colon {
+    size = size * 10 + sx_index(packed, i) - 48
+    i = i + 1
+  }
+  hold buf = ds_slice(packed, colon + 1, colon + 1 + size)
+  hold out = ds_slice(packed, colon + 1 + size, len(packed))
+  out = ds_images(out)
+  out = ds_links(out)
+  out = ds_bold(out)
+  out = ds_emphasis(out, 42)
+  out = ds_emphasis(out, 95)
+  give ds_code_restore(out, buf, mark)
+}
+
+// ---- line table -----------------------------------------------------------
+
+make ds_norm_lf(s: str) -> str {
+  hold n = len(s)
+  hold out = ""
+  hold run = 0
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) == 13 and i + 1 < n and sx_index(s, i + 1) == 10 {
+      out = concat(out, ds_slice(s, run, i))
+      run = i + 1
+    }
+    i = i + 1
+  }
+  give concat(out, ds_slice(s, run, n))
+}
+
+// [start0, len0, start1, len1, ...]; a trailing newline yields a final empty
+// line, exactly like String.split("\n").
+make ds_line_table(s: str) -> list {
+  hold tab = []
+  hold n = len(s)
+  hold start = 0
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) == 10 {
+      tab = push(tab, start)
+      tab = push(tab, i - start)
+      start = i + 1
+    }
+    i = i + 1
+  }
+  tab = push(tab, start)
+  tab = push(tab, n - start)
+  give tab
+}
+
+make ds_line(s: str, tab: list, i: num) -> str {
+  hold start = tab[i * 2]
+  give ds_slice(s, start, start + tab[i * 2 + 1])
+}
+
+// ---- block predicates -----------------------------------------------------
+
+make ds_fence(s: str) -> num {
+  hold i = ds_trim_left_at(s)
+  when i + 2 < len(s) {
+    when sx_index(s, i) == 96 and sx_index(s, i + 1) == 96 and sx_index(s, i + 2) == 96 {
+      give 1
+    }
+  }
+  give 0
+}
+
+make ds_heading_level(s: str) -> num {
+  hold n = len(s)
+  hold i = 0
+  while i < n and i < 7 and sx_index(s, i) == 35 {
+    i = i + 1
+  }
+  when i == 0 or i > 6 {
+    give 0
+  }
+  when i < n and ds_is_ws(sx_index(s, i)) == 1 {
+    give i
+  }
+  give 0
+}
+
+make ds_hr(s: str) -> num {
+  hold n = len(s)
+  hold i = ds_trim_left_at(s)
+  when i >= n {
+    give 0
+  }
+  hold c = sx_index(s, i)
+  when c != 45 and c != 42 and c != 95 {
+    give 0
+  }
+  i = i + 1
+  i = i + ds_trim_left_at(ds_slice(s, i, n))
+  when i >= n or sx_index(s, i) != c {
+    give 0
+  }
+  i = i + 1
+  i = i + ds_trim_left_at(ds_slice(s, i, n))
+  when i >= n or sx_index(s, i) != c {
+    give 0
+  }
+  i = i + 1
+  while i < n {
+    hold t = sx_index(s, i)
+    when ds_is_ws(t) == 0 and t != 45 and t != 42 and t != 95 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make ds_quote(s: str) -> num {
+  hold i = ds_trim_left_at(s)
+  when i < len(s) and sx_index(s, i) == 62 {
+    give 1
+  }
+  give 0
+}
+
+make ds_strip_quote(s: str) -> str {
+  hold n = len(s)
+  hold i = ds_trim_left_at(s)
+  i = i + 1
+  when i < n and ds_is_ws(sx_index(s, i)) == 1 {
+    i = i + 1
+  }
+  give ds_slice(s, i, n)
+}
+
+// Content offset after `^\s*\d+\.\s+` (ordered) or `^\s*[-*+]\s+`, else -1.
+make ds_list_start(s: str, ordered: num) -> num {
+  hold n = len(s)
+  hold i = ds_trim_left_at(s)
+  when ordered == 1 {
+    hold digits = 0
+    while i < n and sx_index(s, i) >= 48 and sx_index(s, i) <= 57 {
+      digits = digits + 1
+      i = i + 1
+    }
+    when digits == 0 or i >= n or sx_index(s, i) != 46 {
+      give 0 - 1
+    }
+    i = i + 1
+  } otherwise {
+    when i >= n {
+      give 0 - 1
+    }
+    hold c = sx_index(s, i)
+    when c != 45 and c != 42 and c != 43 {
+      give 0 - 1
+    }
+    i = i + 1
+  }
+  when i >= n or ds_is_ws(sx_index(s, i)) == 0 {
+    give 0 - 1
+  }
+  while i < n and ds_is_ws(sx_index(s, i)) == 1 {
+    i = i + 1
+  }
+  give i
+}
+
+make ds_list_any(s: str) -> num {
+  when ds_list_start(s, 0) >= 0 or ds_list_start(s, 1) >= 0 {
+    give 1
+  }
+  give 0
+}
+
+// `^\s{4}\S` -- exactly four whitespace bytes then a non-whitespace byte.
+make ds_indent_code(s: str) -> num {
+  hold n = len(s)
+  when n < 5 {
+    give 0
+  }
+  hold i = 0
+  while i < 4 {
+    when ds_is_ws(sx_index(s, i)) == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  when ds_is_ws(sx_index(s, 4)) == 1 {
+    give 0
+  }
+  give 1
+}
+
+make ds_indent_cont(s: str) -> num {
+  when len(s) < 4 {
+    give 0
+  }
+  hold i = 0
+  while i < 4 {
+    when ds_is_ws(sx_index(s, i)) == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// `replace(/^ {4}/, "")` -- four literal spaces only.
+make ds_strip4(s: str) -> str {
+  when len(s) < 4 {
+    give s
+  }
+  hold i = 0
+  while i < 4 {
+    when sx_index(s, i) != 32 {
+      give s
+    }
+    i = i + 1
+  }
+  give ds_slice(s, 4, len(s))
+}
+
+// `^\s{2,}\S`
+make ds_indent2(s: str) -> num {
+  hold n = len(s)
+  when n < 3 {
+    give 0
+  }
+  when ds_is_ws(sx_index(s, 0)) == 0 or ds_is_ws(sx_index(s, 1)) == 0 {
+    give 0
+  }
+  hold i = 2
+  while i < n and ds_is_ws(sx_index(s, i)) == 1 {
+    i = i + 1
+  }
+  when i < n {
+    give 1
+  }
+  give 0
+}
+
+// `^\s*\|?[\s:-]*-[-\s:|]*$` plus a required '-'.
+make ds_table_divider(s: str) -> num {
+  hold n = len(s)
+  when ds_has_char(s, 45) == 0 {
+    give 0
+  }
+  hold i = ds_trim_left_at(s)
+  when i < n and sx_index(s, i) == 124 {
+    i = i + 1
+  }
+  hold j = i
+  hold in_run = 1
+  while in_run == 1 and j < n {
+    hold c = sx_index(s, j)
+    when ds_is_ws(c) == 1 or c == 58 or c == 45 {
+      j = j + 1
+    } otherwise {
+      in_run = 0
+    }
+  }
+  // Every byte in the run is [\s:-]; a dash must exist inside it, and the tail
+  // after the run may only add '|'. That is the same condition as the greedy
+  // match plus backtracking, without implementing a regex engine.
+  hold dash = 0
+  hold k = i
+  while k < j {
+    when sx_index(s, k) == 45 {
+      dash = 1
+    }
+    k = k + 1
+  }
+  when dash == 0 {
+    give 0
+  }
+  while j < n {
+    hold c = sx_index(s, j)
+    when ds_is_ws(c) == 0 and c != 45 and c != 58 and c != 124 {
+      give 0
+    }
+    j = j + 1
+  }
+  give 1
+}
+
+make ds_table_cells(s: str) -> str {
+  hold t = ds_trim(s)
+  when len(t) > 0 and sx_index(t, 0) == 124 {
+    t = ds_slice(t, 1, len(t))
+  }
+  when len(t) > 0 and sx_index(t, len(t) - 1) == 124 {
+    t = ds_slice(t, 0, len(t) - 1)
+  }
+  hold cells = ""
+  hold n = len(t)
+  hold start = 0
+  hold i = 0
+  while i < n {
+    when sx_index(t, i) == 124 {
+      cells = ds_pack_push(cells, ds_trim(ds_slice(t, start, i)))
+      start = i + 1
+    }
+    i = i + 1
+  }
+  cells = ds_pack_push(cells, ds_trim(ds_slice(t, start, n)))
+  give cells
+}
+
+// ---- block renderer -------------------------------------------------------
+
+make ds_markdown(source: str) -> str {
+  hold src = ds_norm_lf(source)
+  hold tab = ds_line_table(src)
+  hold count = len(tab) / 2
+  hold out = ""
+  hold blocks = 0
+  hold i = 0
+  while i < count {
+    hold line = ds_line(src, tab, i)
+    hold emit = ""
+    when ds_blank(line) == 1 {
+      i = i + 1
+    } otherwise {
+      when ds_fence(line) == 1 {
+        i = i + 1
+        hold body = ""
+        hold parts = 0
+        while i < count and ds_fence(ds_line(src, tab, i)) == 0 {
+          when parts > 0 {
+            body = concat(body, "\n")
+          }
+          body = concat(body, ds_line(src, tab, i))
+          parts = parts + 1
+          i = i + 1
+        }
+        i = i + 1
+        emit = concat("<pre><code>", concat(ds_escape_html(body), "</code></pre>"))
+      } otherwise {
+        hold level = ds_heading_level(line)
+        when level > 0 {
+          hold tag = concat("h", ds_istr(level))
+          emit = concat(concat("<", tag), concat(">", concat(ds_inline(ds_trim(ds_slice(line, level, len(line)))), concat("</", concat(tag, ">")))))
+          i = i + 1
+        } otherwise {
+          when ds_hr(line) == 1 {
+            emit = "<hr>"
+            i = i + 1
+          } otherwise {
+            when ds_quote(line) == 1 {
+              hold body = ""
+              hold parts = 0
+              while i < count and ds_quote(ds_line(src, tab, i)) == 1 {
+                when parts > 0 {
+                  body = concat(body, "\n")
+                }
+                body = concat(body, ds_strip_quote(ds_line(src, tab, i)))
+                parts = parts + 1
+                i = i + 1
+              }
+              emit = concat("<blockquote>", concat(ds_markdown(body), "</blockquote>"))
+            } otherwise {
+              hold table = 0
+              when ds_has_char(line, 124) == 1 and i + 1 < count {
+                when ds_table_divider(ds_line(src, tab, i + 1)) == 1 {
+                  table = 1
+                }
+              }
+              when table == 1 {
+                hold head = ds_table_cells(line)
+                i = i + 2
+                hold head_html = ""
+                hold hc = ds_pack_count(head)
+                hold k = 0
+                while k < hc {
+                  head_html = concat(head_html, concat("<th>", concat(ds_inline(ds_pack_at(head, k)), "</th>")))
+                  k = k + 1
+                }
+                hold rows_html = ""
+                hold rows = 0
+                hold rows_go = 1
+                while rows_go == 1 and i < count {
+                  hold row = ds_line(src, tab, i)
+                  when ds_has_char(row, 124) == 0 or ds_blank(row) == 1 {
+                    rows_go = 0
+                  } otherwise {
+                    hold cells = ds_table_cells(row)
+                    hold cc = ds_pack_count(cells)
+                    hold row_html = "<tr>"
+                    hold t = 0
+                    while t < cc {
+                      row_html = concat(row_html, concat("<td>", concat(ds_inline(ds_pack_at(cells, t)), "</td>")))
+                      t = t + 1
+                    }
+                    row_html = concat(row_html, "</tr>")
+                    when rows > 0 {
+                      rows_html = concat(rows_html, "\n")
+                    }
+                    rows_html = concat(rows_html, row_html)
+                    rows = rows + 1
+                    i = i + 1
+                  }
+                }
+                emit = concat("<table>\n<thead><tr>", concat(head_html, concat("</tr></thead>\n<tbody>\n", concat(rows_html, "\n</tbody>\n</table>"))))
+              } otherwise {
+                hold ordered = 0
+                hold list_at = ds_list_start(line, 1)
+                when list_at >= 0 {
+                  ordered = 1
+                } otherwise {
+                  list_at = ds_list_start(line, 0)
+                }
+                when list_at >= 0 {
+                  hold items = ""
+                  hold item_count = 0
+                  hold go = 1
+                  while go == 1 and i < count {
+                    hold cur = ds_line(src, tab, i)
+                    hold at = ds_list_start(cur, ordered)
+                    when at < 0 {
+                      go = 0
+                    } otherwise {
+                      when item_count > 0 {
+                        items = concat(items, "\n")
+                      }
+                      items = concat(items, concat("<li>", concat(ds_inline(ds_slice(cur, at, len(cur))), "</li>")))
+                      item_count = item_count + 1
+                      i = i + 1
+                      hold cont = 1
+                      while cont == 1 and i < count {
+                        hold next = ds_line(src, tab, i)
+                        when ds_indent2(next) == 0 or ds_list_any(next) == 1 {
+                          cont = 0
+                        } otherwise {
+                          items = concat(ds_slice(items, 0, len(items) - 5), concat(" ", concat(ds_inline(ds_trim(next)), "</li>")))
+                          i = i + 1
+                        }
+                      }
+                    }
+                  }
+                  hold tag = "ul"
+                  when ordered == 1 {
+                    tag = "ol"
+                  }
+                  emit = concat(concat("<", tag), concat(">\n", concat(items, concat("\n</", concat(tag, ">")))))
+                } otherwise {
+                  when ds_indent_code(line) == 1 {
+                    hold body = ""
+                    hold parts = 0
+                    hold code_go = 1
+                    while code_go == 1 and i < count {
+                      hold cur = ds_line(src, tab, i)
+                      when ds_indent_cont(cur) == 0 and ds_blank(cur) == 0 {
+                        code_go = 0
+                      } otherwise {
+                        when parts > 0 {
+                          body = concat(body, "\n")
+                        }
+                        body = concat(body, ds_strip4(cur))
+                        parts = parts + 1
+                        i = i + 1
+                      }
+                    }
+                    // strip trailing newlines, like replace(/\n+$/, "")
+                    hold end = len(body)
+                    while end > 0 and sx_index(body, end - 1) == 10 {
+                      end = end - 1
+                    }
+                    emit = concat("<pre><code>", concat(ds_escape_html(ds_slice(body, 0, end)), "</code></pre>"))
+                  } otherwise {
+                    hold para = ""
+                    hold parts = 0
+                    hold go = 1
+                    while go == 1 and i < count {
+                      hold cur = ds_line(src, tab, i)
+                      when ds_blank(cur) == 1 or ds_heading_level(cur) > 0 or ds_fence(cur) == 1 or ds_quote(cur) == 1 or ds_list_any(cur) == 1 {
+                        go = 0
+                      } otherwise {
+                        when parts > 0 {
+                          para = concat(para, " ")
+                        }
+                        para = concat(para, ds_trim(cur))
+                        parts = parts + 1
+                        i = i + 1
+                      }
+                    }
+                    emit = concat("<p>", concat(ds_inline(para), "</p>"))
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      when blocks > 0 {
+        out = concat(out, "\n")
+      }
+      out = concat(out, emit)
+      blocks = blocks + 1
+    }
+  }
+  give out
+}
+
+make ds_is_eol(c: num) -> num {
+  when c == 10 or c == 13 {
+    give 1
+  }
+  give 0
+}
+
+// /^#\s+(.+)$/m executed against the raw source. Two details are easy to get
+// wrong and are pinned by the helper oracle: `\s` includes newlines, so a lone
+// `#` can borrow the heading text from a following line; and the match succeeds
+// even when the captured text is only whitespace, yielding "" rather than the
+// fallback. `\s+` is greedy, so the scan takes the longest whitespace run first
+// and only then backs off until `.+` can match a non-newline byte.
+make ds_title(source: str, fallback: str) -> str {
+  hold n = len(source)
+  hold i = 0
+  while i < n {
+    hold at_start = 0
+    when i == 0 {
+      at_start = 1
+    } otherwise {
+      when ds_is_eol(sx_index(source, i - 1)) == 1 {
+        at_start = 1
+      }
+    }
+    when at_start == 1 and sx_index(source, i) == 35 {
+      hold j = i + 1
+      hold k = j
+      while k < n and ds_is_ws(sx_index(source, k)) == 1 {
+        k = k + 1
+      }
+      when k > j {
+        hold p = k
+        hold found = 0
+        while found == 0 and p > j {
+          when p < n and ds_is_eol(sx_index(source, p)) == 0 {
+            found = 1
+          } otherwise {
+            p = p - 1
+          }
+        }
+        when found == 1 {
+          hold end = p
+          while end < n and ds_is_eol(sx_index(source, end)) == 0 {
+            end = end + 1
+          }
+          give ds_trim(ds_slice(source, p, end))
+        }
+      }
+    }
+    i = i + 1
+  }
+  give fallback
+}

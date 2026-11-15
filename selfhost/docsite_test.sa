@@ -1,0 +1,86 @@
+// selfhost/docsite_test.sa -- the documentation renderer against a frozen oracle.
+//
+// The expected bytes in selfhost/docsite_helpers.want were produced by the
+// retired Node renderer (tools/docsite.mjs) before it was deleted, so this is an
+// independent oracle and not the Sayanox port grading its own homework. The
+// inputs below are the exact inputs that oracle was generated from; changing one
+// without regenerating the oracle fails the gate.
+//
+// Inputs travel as packed `len:text` records because a pure-min list may only
+// hold numbers.
+
+use "tools/sxdoc_lib.sa"
+
+make dt_esc_inputs() -> str {
+  hold b = ""
+  b = ds_pack_push(b, "")
+  b = ds_pack_push(b, "plain")
+  b = ds_pack_push(b, "a<b>c&d\"e'f")
+  b = ds_pack_push(b, "<script>alert(1)</script>")
+  b = ds_pack_push(b, "&amp; already")
+  b = ds_pack_push(b, "tab\there")
+  b = ds_pack_push(b, "x \" ' & < >")
+  give b
+}
+
+make dt_href_inputs() -> str {
+  hold b = ""
+  b = ds_pack_push(b, "")
+  b = ds_pack_push(b, "#frag")
+  b = ds_pack_push(b, "./rel/path.md")
+  b = ds_pack_push(b, "../up.md")
+  b = ds_pack_push(b, "https://example.com/a?b=1")
+  b = ds_pack_push(b, "HTTPS://EXAMPLE.COM/x")
+  b = ds_pack_push(b, "http://example.com")
+  b = ds_pack_push(b, "javascript:alert(1)")
+  b = ds_pack_push(b, "data:text/html,x")
+  b = ds_pack_push(b, "docs/PAGE.md")
+  b = ds_pack_push(b, "a b.md")
+  b = ds_pack_push(b, "https://ex.com/a b")
+  b = ds_pack_push(b, "//cdn.example.com/x")
+  b = ds_pack_push(b, "mailto:a@b.c")
+  b = ds_pack_push(b, "page.md#sec")
+  b = ds_pack_push(b, "ftp://x/y")
+  b = ds_pack_push(b, "https://")
+  b = ds_pack_push(b, "path/with-under_score.md")
+  b = ds_pack_push(b, "C:\\win\\path")
+  b = ds_pack_push(b, "  https://ok.example/x  ")
+  b = ds_pack_push(b, "https://a\tb")
+  give b
+}
+
+make dt_title_inputs() -> str {
+  hold b = ""
+  b = ds_pack_push(b, "# Real Title\ntext")
+  b = ds_pack_push(b, "no heading here")
+  b = ds_pack_push(b, "## Second Level\n# First")
+  b = ds_pack_push(b, "#    spaced   ")
+  b = ds_pack_push(b, "#\n# ok")
+  b = ds_pack_push(b, "text\n\n# Later Title")
+  b = ds_pack_push(b, "# a `b` *c*\n")
+  give b
+}
+
+make dt_run() -> num {
+  hold esc = dt_esc_inputs()
+  hold i = 0
+  while i < ds_pack_count(esc) {
+    show concat(concat("esc ", ds_istr(i)), concat(": ", ds_escape_html(ds_pack_at(esc, i))))
+    i = i + 1
+  }
+  hold href = dt_href_inputs()
+  i = 0
+  while i < ds_pack_count(href) {
+    show concat(concat("href ", ds_istr(i)), concat(": ", ds_safe_href(ds_pack_at(href, i))))
+    i = i + 1
+  }
+  hold titles = dt_title_inputs()
+  i = 0
+  while i < ds_pack_count(titles) {
+    show concat(concat("title ", ds_istr(i)), concat(": ", ds_title(ds_pack_at(titles, i), "fb.md")))
+    i = i + 1
+  }
+  give 0
+}
+
+hold run_dt = dt_run()

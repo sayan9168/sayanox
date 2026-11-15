@@ -5,14 +5,18 @@
 # Sayanox is NOT yet a language in github-linguist's languages.yml and `.sa` is
 # not claimed by any entry there (verified against lib/linguist/languages.yml).
 # A repository-local .gitattributes cannot register a new language, so until an
-# upstream entry is merged the language bar will keep showing C; the build file and tracked shell
-# scripts have been removed. The two `*.sa` rules below are inert today and become effective the
+# upstream entry is merged the language bar shows nothing: the Makefile, the
+# tracked shell scripts, the C sources and the last JavaScript/Python files have
+# all been removed. The two `*.sa` rules below are inert today and become effective the
 # moment Linguist learns the language -- `linguist-language=Sayanox` resolves to
 # nothing while "Sayanox" is unknown to Linguist, and is simply ignored.
+# Every tracked implementation file is Sayanox as of the pure-Sayanox bootstrap:
+# tools/docsite.mjs and selfhost/stdlib_library_pack_oracle.py were retired, so
+# there is no foreign-language source left for the bar to credit either.
 #
 # `*.sa` is deliberately NOT mapped to Python, C, Rust, SAS or any other
 # existing language: that would inflate the statistics by mislabelling the
-# repository's 173 Sayanox source files as something they are not.
+# repository's Sayanox source files as something they are not.
 #
 # The rest of this file marks machine-generated artifacts as generated, so they
 # are excluded from language statistics, from diffs and from blame.
