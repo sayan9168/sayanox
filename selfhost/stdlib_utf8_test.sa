@@ -68,6 +68,10 @@ make fx_repeat(n: num) -> str {
   give out
 }
 
+make fx_chr(b: num) -> str {
+  give chr(b)
+}
+
 make fx_say(tag: str, body: str) -> num {
   hold line = concat(tag, body)
   show line

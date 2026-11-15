@@ -69,6 +69,10 @@ make fx_repeat(n: num) -> str {
   give out
 }
 
+make fx_chr(b: num) -> str {
+  give chr(b)
+}
+
 make fx_say(tag: str, body: str) -> num {
   hold line = concat(tag, body)
   show line
@@ -480,4 +484,39 @@ hold a = fx_num_say("count empty needle: ", ut_count("abc", ""))
 hold over_cap = fx_repeat(65537)
 hold a = fx_num_say("len over cap: ", ut_len(over_cap))
 hold a = fx_say("trim over cap: ", ut_trim(over_cap))
+hold a = fx_num_say("find 0: ", ut_index_of("ábáb", "b"))
+hold a = fx_num_say("count 0: ", ut_count("ábáb", "b"))
+hold a = fx_num_say("find 1: ", ut_index_of("xábáb", "áb"))
+hold a = fx_num_say("count 1: ", ut_count("xábáb", "áb"))
+hold a = fx_num_say("find 2: ", ut_index_of("aaa", "aa"))
+hold a = fx_num_say("count 2: ", ut_count("aaa", "aa"))
+hold a = fx_num_say("find 3: ", ut_index_of("aaaa", "aa"))
+hold a = fx_num_say("count 3: ", ut_count("aaaa", "aa"))
+hold a = fx_num_say("find 4: ", ut_index_of("abc", "abc"))
+hold a = fx_num_say("count 4: ", ut_count("abc", "abc"))
+hold a = fx_num_say("find 5: ", ut_index_of("abc", "abcd"))
+hold a = fx_num_say("count 5: ", ut_count("abc", "abcd"))
+hold a = fx_num_say("find 6: ", ut_index_of("abc", "c"))
+hold a = fx_num_say("count 6: ", ut_count("abc", "c"))
+hold a = fx_num_say("find 7: ", ut_index_of("abc", "a"))
+hold a = fx_num_say("count 7: ", ut_count("abc", "a"))
+hold a = fx_num_say("find 8: ", ut_index_of("নমস্কার", "স্"))
+hold a = fx_num_say("count 8: ", ut_count("নমস্কার", "স্"))
+hold a = fx_num_say("find 9: ", ut_index_of("नमस्ते नमस्ते", "नम"))
+hold a = fx_num_say("count 9: ", ut_count("नमस्ते नमस्ते", "नम"))
+hold a = fx_num_say("find 10: ", ut_index_of("🇮🇳🇮🇳", "🇮"))
+hold a = fx_num_say("count 10: ", ut_count("🇮🇳🇮🇳", "🇮"))
+hold a = fx_num_say("find 11: ", ut_index_of("café cafe", "fé"))
+hold a = fx_num_say("count 11: ", ut_count("café cafe", "fé"))
+hold a = fx_num_say("find 12: ", ut_index_of("éé", "́"))
+hold a = fx_num_say("count 12: ", ut_count("éé", "́"))
+hold a = fx_num_say("find 13: ", ut_index_of("a​b", "​"))
+hold a = fx_num_say("count 13: ", ut_count("a​b", "​"))
+hold a = fx_num_say("find 14: ", ut_index_of("", "a"))
+hold a = fx_num_say("count 14: ", ut_count("", "a"))
+hold a = fx_num_say("find 15: ", ut_index_of("abc", ""))
+hold a = fx_num_say("count 15: ", ut_count("abc", ""))
+hold a = fx_num_say("find 16: ", ut_index_of("  ", " "))
+hold a = fx_num_say("count 16: ", ut_count("  ", " "))
+hold a = fx_num_say("interior refused: ", ut_index_of("éé", fx_chr(169)))
 show "utext-oracle-ok"

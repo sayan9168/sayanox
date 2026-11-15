@@ -379,4 +379,39 @@ index empty needle: 0
 count empty needle: -1
 len over cap: -1
 trim over cap: 
+find 0: 1
+count 0: 2
+find 1: 1
+count 1: 2
+find 2: 0
+count 2: 1
+find 3: 0
+count 3: 2
+find 4: 0
+count 4: 1
+find 5: -1
+count 5: 0
+find 6: 2
+count 6: 1
+find 7: 0
+count 7: 1
+find 8: 2
+count 8: 1
+find 9: 0
+count 9: 2
+find 10: 0
+count 10: 2
+find 11: 2
+count 11: 1
+find 12: 1
+count 12: 2
+find 13: 1
+count 13: 1
+find 14: -1
+count 14: 0
+find 15: 0
+count 15: -1
+find 16: 0
+count 16: 2
+interior refused: -1
 utext-oracle-ok

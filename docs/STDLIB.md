@@ -179,7 +179,7 @@ replacement character, while the surrogate `ED A0 80` becomes three, because
   `u8_encode`/`u8_from`; `u8_bytes`/`u8_from_bytes` are the byte-list escape hatch.
 
 Two frozen fixtures (`selfhost/stdlib_utf8_test.sa`, `stdlib_utext_test.sa`) hold
-this to **1,412 expectations** computed outside Sayanox from Python's UTF-8 codec
+this to **1,447 expectations** computed outside Sayanox from Python's UTF-8 codec
 and the `White_Space` property, including randomized malformed-byte and
 round-trip vectors. Both match byte-for-byte on seed-min, gen2 and native_aot
 through `test-stdlib-next`. `examples/unicode.sa` is a runnable tour that shows a

@@ -306,6 +306,23 @@ make ut_truncate(s: str, width: num, suffix: str) -> str {
 
 // Code-point index of the first occurrence of `needle`, or -1. An empty needle
 // matches at 0, matching the byte-oriented convention. Malformed gives -1.
+// Does needle occur in s at byte offset b? Only called at code-point
+// boundaries; for valid UTF-8 a byte match there is a code-point match, because
+// a valid sequence cannot end inside another one.
+make ut_bytes_match_at(s: str, b: num, needle: str, nb: num) -> num {
+  hold k = 0
+  while k < nb {
+    hold x = sx_index(s, b + k)
+    hold y = sx_index(needle, k)
+    when x == y {
+      k = k + 1
+    } otherwise {
+      give 0
+    }
+  }
+  give 1
+}
+
 make ut_index_of(s: str, needle: str) -> num {
   hold n = u8_len(s)
   when n < 0 {
@@ -321,13 +338,23 @@ make ut_index_of(s: str, needle: str) -> num {
   when m > n {
     give 0 - 1
   }
-  hold i = 0
-  while i + m <= n {
-    hold window = u8_slice(s, i, i + m)
-    when string_eq(window, needle) == 1 {
-      give i
+  // Walk byte boundaries once. Re-slicing per candidate index would restart
+  // from byte 0 every time, making a 64 KiB search quadratic.
+  hold nb = len(needle)
+  hold sb = len(s)
+  hold b = 0
+  hold cp = 0
+  while b + nb <= sb {
+    hold hit = ut_bytes_match_at(s, b, needle, nb)
+    when hit == 1 {
+      give cp
     }
-    i = i + 1
+    hold span = u8_span(s, b)
+    when span < 1 {
+      give 0 - 1
+    }
+    b = b + span
+    cp = cp + 1
   }
   give 0 - 1
 }
@@ -346,15 +373,22 @@ make ut_count(s: str, needle: str) -> num {
   when m > n {
     give 0
   }
-  hold i = 0
+  // Non-overlapping count, walking byte boundaries once (see ut_index_of).
+  hold nb = len(needle)
+  hold sb = len(s)
+  hold b = 0
   hold hits = 0
-  while i + m <= n {
-    hold window = u8_slice(s, i, i + m)
-    when string_eq(window, needle) == 1 {
+  while b + nb <= sb {
+    hold hit = ut_bytes_match_at(s, b, needle, nb)
+    when hit == 1 {
       hits = hits + 1
-      i = i + m
+      b = b + nb
     } otherwise {
-      i = i + 1
+      hold span = u8_span(s, b)
+      when span < 1 {
+        give 0 - 1
+      }
+      b = b + span
     }
   }
   give hits
