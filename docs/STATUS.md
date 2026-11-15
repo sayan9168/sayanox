@@ -1,5 +1,26 @@
 # Status
 
+**2026-11-13 update: native32 string parameters and string-valued functions**
+The multi-ISA machine-code backend (`tools/native32.sa`, i386/AArch64/RV64IM)
+accepted only `num` parameters and `num` results. A parameter may now be
+`name: str` and a body may return `-> str`, including a mixed `num, str, num`
+list. A string is a `(pointer, length)` pair and so occupies two pushed words
+where a num occupies one; every parameter displacement is computed from those
+widths. Because a 64-bit push is 16 bytes while a pair's fields are 4, the
+prologue copies each string argument into a compact local pair instead of
+reading it in place. A `-> str` body publishes one shared absolute pair that the
+caller copies out before any other call can run, which makes `f(g(x))` and
+recursion sound with a single slot. Two new fixtures agree byte-for-byte on all
+**six** execution paths (seed-min, gen2, native_aot, i386, AArch64, RV64IM) with
+reviewed ARM64/RV64 goldens and pinned i386 sizes; the refusal matrix grew
+52 -> 63 and two old refusals became legal programs. Every pre-existing golden
+and all eleven pinned i386 sizes are unchanged. Three real defects surfaced:
+a `-> str` call as a numeric operand was silently accepted, a returned literal
+lacked the trailing newline `show` writes, and the result copy used the frame
+store path for an absolute destination inside a body, losing every nested
+result. **R02 is not closed:** aggregates, FP, file/runtime APIs, GC and `concat`
+in general expressions remain open.
+
 **2026-11-13 update: Unicode text layer — UTF-8 codec and code-point text**
 `stdlib/utf8.sa` and `stdlib/utext.sa` add the scalar-value layer the byte-oriented
 text modules never had. Validation is strict RFC 3629: overlong forms, UTF-16

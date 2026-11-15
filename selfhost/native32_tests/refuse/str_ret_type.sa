@@ -1,0 +1,4 @@
+make f() -> bool {
+  give 1
+}
+show f()

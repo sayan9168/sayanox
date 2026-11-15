@@ -202,7 +202,34 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   stack stays balanced because a call pops its own arguments before `call` and
   the callee's expression leaves one value in the accumulator.
 
-Lists, structs, string-valued functions, floating-point expressions, general
+- **String parameters and string-valued functions (2026-11-13):** a parameter may
+  be `name: str` and a body may return `-> str`, so `make wrap(s: str) -> str`
+  and a mixed `make pad(n: num, s: str, k: num) -> str` both lower on all three
+  targets. A string is a `(pointer, length)` pair and therefore occupies **two**
+  pushed words where a `num` occupies one; every parameter displacement is
+  computed from those widths, which is what makes a mixed parameter list work.
+  The caller pushes a pair length-first so the pointer lands at the lower
+  address. A 64-bit push is 16 bytes while a pair's fields are 4, so the prologue
+  copies each string argument into a compact local pair and the body then reads
+  it like any other string local — no string parameter is read in place.
+  A `-> str` body publishes its result in one shared absolute pair which the
+  caller copies out **immediately**, before any other call can run; that
+  ordering is what makes `f(g(x))` and recursion sound with a single slot.
+  Accepted positions for a `-> str` call: `show f(…)`, `hold s = f(…)`,
+  `s = f(…)`, `len(f(…))`, either `concat` operand, a `str` argument of another
+  call, and `give f(…)` in a `-> str` body. A `give` in a `-> str` body takes a
+  literal, a string name, `chr(…)`, `concat(…)` or another `-> str` call.
+  A string value's storage carries a trailing newline because `show` writes
+  length + 1 bytes, so a literal bound as an argument or returned from a body is
+  pooled with that newline; a `concat` operand is not, which is why every
+  pre-existing image stayed byte-identical.
+  Refused with a line-numbered diagnostic: a number or numeric variable as a
+  `str` argument, a string as a `num` argument, a number as a `-> str` result, a
+  string as a `-> num` result, `f() + 1` or any other numeric use of a `-> str`
+  call, a `-> str` result assigned to a numeric variable, a num-returning call as
+  a `concat` operand, and any parameter or result type other than `num`/`str`.
+
+Lists, structs, floating-point expressions, general
 file APIs, and garbage collection remain unsupported by this compiler; recursion
 is supported but capped at 64 live frames, so an unbounded recurrence is a
 runtime exit, not a compile-time guarantee. `chr` is accepted as
@@ -350,7 +377,7 @@ and runtime support. Bounded `concat` and byte indexing extend the original
 integer/static-string backend, but do not complete that roadmap item. General
 string operations beyond the documented subset (nested `chr`, `show concat(...)`
 nested `concat` operands, and `len(concat(...))` are now lowered; concat in
-other expression positions is not), lists, structs and string-valued functions,
+other expression positions is not), lists, structs,
 IEEE-754 code generation, native file I/O, and a mark-and-sweep collector
 remain open, along with broader ISA support and end-to-end parity for each. Do not count
 emulator-only FP/syscall probes as compiler support.

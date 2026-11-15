@@ -1,4 +1,0 @@
-make f(s: str) -> num {
-  give 1
-}
-show f("x")

@@ -1,0 +1,4 @@
+make f() -> str {
+  give 5
+}
+show f()

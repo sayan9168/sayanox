@@ -1,0 +1,10 @@
+// The 64-frame cap still holds when frames carry string pairs: the 65th
+// entry exits 1 with no output, exactly like the numeric cap fixture.
+make rep(s: str, n: num) -> str {
+  when n < 1 {
+    give ""
+  }
+  hold rest = rep(s, n - 1)
+  give concat(s, rest)
+}
+show rep("a", 200)

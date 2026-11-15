@@ -1,0 +1,39 @@
+// String parameters and `-> str` results: a mixed num/str/num parameter list
+// (so the pushed-word displacement math is exercised), early return from a
+// `when` branch, len() of a call, and two calls as concat operands.
+make pad(n: num, s: str, k: num) -> str {
+  hold out = s
+  hold i = 0
+  while i < n {
+    out = concat(out, s)
+    i = i + 1
+  }
+  give concat(out, chr(65 + k))
+}
+make pick(a: str, b: str, which: num) -> str {
+  when which == 0 {
+    give a
+  }
+  give b
+}
+make ident(s: str) -> str {
+  give s
+}
+// A str parameter with a num result, and a num parameter with a str result:
+// both were refusals before this increment.
+make count(s: str) -> num {
+  give len(s)
+}
+make fixed(n: num) -> str {
+  give "tag"
+}
+show count("abcd")
+show fixed(9)
+show pad(2, "xy", 1)
+show pick("left", "right", 0)
+show pick("left", "right", 7)
+show ident("plain")
+show len(ident("mn"))
+hold mixed = pad(0, ident("solo"), 0)
+show mixed
+show concat(ident("A"), ident("B"))

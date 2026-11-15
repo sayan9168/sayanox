@@ -17,8 +17,8 @@
 //
 // What it is NOT. This is still a bounded AOT subset, not the complete
 // Sayanox runtime. It supports static strings, len, byte indexing, a bounded
-// bump-heap concat, and numeric functions with per-depth call frames; it has
-// no lists, structs, string-valued functions or string parameters, collector,
+// bump-heap concat, and functions with per-depth call frames whose parameters
+// and results may be numbers or strings; it has no lists, structs, collector,
 // general file API, or floating-point expression code. Unsupported forms are
 // refused with a diagnostic and non-zero exit.
 //
@@ -37,9 +37,13 @@
 //     } otherwise { ... }
 //     while <expression> { ... }
 //
-//     make NAME(a: num, b: num) -> num {   numeric function, up to 6 parameters
+//     make NAME(a: num, s: str) -> num {   up to 6 parameters, each num or str
+//     make NAME(s: str) -> str {           a body may return a string instead
 //       give <integer expression>          return; may also appear early, in a
 //     }                                    `when` branch, for an early return
+//     give <string value>                  in a `-> str` body: a literal, a
+//                                          string name, chr(...), concat(...)
+//                                          or a call of another `-> str`
 //     NAME(<arg>, ...)                     call: as a whole value (`hold x =`,
 //                                          an assignment, `show`, a `when`/`while`
 //                                          condition, another call's argument) and
@@ -65,6 +69,28 @@
 //   6 parameters each, `num` parameters and `-> num` only, at most 60 frame
 //   words of locals per body, and the runtime depth cap of 64 frames. Every
 //   body must end with a top-level `give`.
+//
+//   String parameters and results. A string is a (pointer, length) pair, so it
+//   occupies two pushed words where a num occupies one; every parameter
+//   displacement is computed from those widths, which is what makes a mixed
+//   `num, str, num` list work. The caller pushes a pair length-first so the
+//   pointer lands at the lower address. Because a 64-bit push is 16 bytes but a
+//   pair's fields are 4, the prologue copies each string argument into a compact
+//   local pair, and the body then reads it like any other string local.
+//
+//   A `-> str` body publishes its pair in one shared absolute slot and the
+//   caller copies it out immediately, before any other call can run. That
+//   ordering is what makes `f(g(x))` and recursion sound with a single slot: a
+//   deeper call cannot overwrite a value the caller has not yet taken.
+//
+//   A string value's storage carries a trailing newline, because `show` writes
+//   length + 1 bytes. A literal bound as an argument or returned from a body is
+//   therefore pooled with that newline; a concat operand is not, which keeps
+//   every pre-existing image byte-identical.
+//
+//   A `-> str` call is a string value, not a number: `show f()`, `hold s = f()`,
+//   `s = f()`, `len(f())`, a concat operand, a string argument and `give f()`
+//   are accepted, while `f() + 1` and a numeric parameter are refused.
 //
 //   The integer expression emitter is one function (emit_expression), so an
 //   argument position can compile an expression of its own: `chr(X)` accepts a
@@ -470,6 +496,13 @@ make arg_is_static_string(x: str) -> num {
   when string_eq(first_word(x), x) == 1 { give 1 }
   when starts(x, "chr(") == 1 && string_eq(chr_arg(x), "!") == 0 { give 1 }
   when starts(x, "concat(") == 1 { give 1 }
+  // Any other call shape is passed through to the operand resolver, which knows
+  // the declared functions and reports a precise diagnostic if it is not a
+  // `-> str` call. Accepting the shape here keeps `concat(f(x), "y")` legal.
+  hold op = find_byte(x, 40)
+  when op > 0 && sx_index(x, len(x) - 1) == 41 {
+    when is_bare_name(trim(sub(x, 0, op))) == 1 { give 1 }
+  }
   give 0
 }
 
@@ -550,6 +583,24 @@ hold fn_nametbl = ""
 hold fn_paramtbl = ""
 hold fn_bodytbl = ""
 hold fn_arity = []
+// Per-function string typing: fn_retstr[fi] is 1 for `-> str`, and fn_ptypetbl
+// holds one "|name=0|name=1|" row per function (1 = str). A string argument or
+// result is a (pointer, length) pair, so it occupies two pushed words while a
+// num occupies one; every displacement below is computed from those widths.
+hold fn_retstr = []
+hold fn_ptypetbl = ""
+// The single absolute pair a `-> str` body publishes its result in. The caller
+// copies it out immediately after the call, before any other call can run, so
+// one slot is enough even under recursion.
+hold fn_retpair = 0 - 1
+// String parameters are copied out of the caller-pushed argument area into
+// ordinary local frame pairs by the prologue, so the body reads them exactly
+// like any other string local. These lists carry the pending copies.
+hold sp_local = []
+hold sp_arg = []
+hold sp_names = ""
+// The call text of a string-returning call used as a whole statement value.
+hold strcall_text = ""
 hold fn_line = []
 hold fn_off = []
 hold fn_frame_words = []
@@ -1031,10 +1082,76 @@ make nth_part(tbl: str, idx: num) -> str {
 // table is rebuilt here, at emit time. i386 `call`/`push` move the stack in
 // 4-byte steps, arm64 and riscv64 pushes in 16-byte steps; argument k was
 // pushed first, so it sits highest.
-make body_parm_names(parms: str, arity: num) -> str {
+make ptype_at(ptypes: str, idx: num) -> num {
+  hold n = len(ptypes)
+  hold i = 0
+  hold k = 0
+  while i < n {
+    when sx_index(ptypes, i) == 124 {
+      hold j = i + 1
+      while j < n && sx_index(ptypes, j) != 61 {
+        j = j + 1
+      }
+      hold v = 0
+      j = j + 1
+      while j < n && sx_index(ptypes, j) >= 48 && sx_index(ptypes, j) <= 57 {
+        v = v * 10 + (sx_index(ptypes, j) - 48)
+        j = j + 1
+      }
+      when k == idx {
+        give v
+      }
+      k = k + 1
+      i = j
+    } otherwise {
+      i = i + 1
+    }
+  }
+  give 0
+}
+
+// Pushed words per parameter: a num is one word, a string pair is two. The
+// caller pushes a pair length-first so the pointer lands at the lower address
+// and the two fields keep the usual (pointer at +0, length at +4) order on
+// i386; on the 64-bit targets each push is 16 bytes, which is why a string
+// parameter is copied into a compact local pair instead of being read in place.
+make parm_words(ptypes: str, idx: num) -> num {
+  when ptype_at(ptypes, idx) == 1 {
+    give 2
+  }
+  give 1
+}
+
+make parm_after(ptypes: str, arity: num, idx: num) -> num {
+  hold total = 0
+  hold k = idx + 1
+  while k < arity {
+    total = total + parm_words(ptypes, k)
+    k = k + 1
+  }
+  give total
+}
+
+make parm_disp(ptypes: str, arity: num, idx: num) -> num {
+  hold after = parm_after(ptypes, arity, idx)
+  when arch != 0 {
+    give 32 + 16 * after
+  }
+  give 8 + 4 * after
+}
+
+// The stored parameter table carries the frame mark plus the parameter's
+// index; the frame displacement needs the whole arity and every parameter's
+// width, so the body's name table is rebuilt here, at emit time. i386
+// `call`/`push` move the stack in 4-byte steps, arm64 and riscv64 in 16-byte
+// steps; argument k was pushed first, so it sits highest.
+make body_parm_names(parms: str, arity: num, ptypes: str, fi: num) -> str {
   hold out = ""
   hold n = len(parms)
   hold i = 0
+  sp_local = []
+  sp_arg = []
+  sp_names = ""
   while i < n {
     when sx_index(parms, i) == 124 {
       hold j = i + 1
@@ -1050,11 +1167,19 @@ make body_parm_names(parms: str, arity: num) -> str {
         k = k + 1
       }
       hold idx = v - fn_frame_mark
-      hold disp = 8 + 4 * (arity - 1 - idx)
-      when arch != 0 {
-        disp = 16 * (arity - idx) + 16
+      hold disp = parm_disp(ptypes, arity, idx)
+      hold slot = fn_frame_mark + disp
+      when ptype_at(ptypes, idx) == 1 {
+        // A compact local pair, filled by emit_strparm_copies right after the
+        // prologue. Allocating it here keeps it below every body local.
+        slot = fn_frame_mark + 0 - 4 * (fn_frame_words[fi] + 2)
+        fn_frame_words[fi] = fn_frame_words[fi] + 2
+        sp_local = push(sp_local, slot - fn_frame_mark)
+        sp_arg = push(sp_arg, disp)
+        sp_names = concat(sp_names, concat(concat(concat("|", nm), "=1"), "|"))
       }
-      out = concat(out, concat(concat(concat("|", nm), "="), numstr(fn_frame_mark + disp)))
+      out = concat(out, concat(concat(concat("|", nm), "="), numstr(slot)))
+      out = concat(out, "|")
       i = k
     } otherwise {
       i = i + 1
@@ -1063,13 +1188,153 @@ make body_parm_names(parms: str, arity: num) -> str {
   give out
 }
 
+// Move each string argument into its local pair. On the 64-bit targets the two
+// pushed words are 16 bytes apart, so the length is read at +16 rather than +4.
+make emit_strparm_copies() -> num {
+  hold i = 0
+  hold step = 4
+  when arch != 0 {
+    step = 16
+  }
+  while i < len(sp_local) {
+    code = emit_load_frame_word(code, arch, sp_arg[i])
+    code = emit_store_frame_word(code, arch, sp_local[i])
+    code = emit_load_frame_word(code, arch, sp_arg[i] + step)
+    code = emit_store_frame_word(code, arch, sp_local[i] + 4)
+    i = i + 1
+  }
+  give 0
+}
+
+// Copy one absolute pair into another absolute pair, word by word, through the
+// accumulator with the same fixup the other absolute stores record.
+make abs_pair_copy(a: num, dst: num) -> num {
+  hold off = 0
+  while off < 8 {
+    code = emit_load_abs_word(code, arch, dva_of(a + off))
+    hold st = len(code)
+    when arch == 0 {
+      fixsite = push(fixsite, st + 1)
+    } otherwise {
+      fixsite = push(fixsite, st)
+    }
+    fixoff = push(fixoff, dst + off)
+    code = emit_store_global(code, arch)
+    off = off + 4
+  }
+  give 0
+}
+
+// A hidden (pointer, length) slot in the current scope, so a string result can
+// be shown without introducing a source-level name.
+make temp_pair_slot() -> num {
+  when fn_active >= 0 {
+    hold s = fn_frame_mark + 0 - 4 * (fn_frame_words[fn_active] + 2)
+    fn_frame_words[fn_active] = fn_frame_words[fn_active] + 2
+    when fn_frame_words[fn_active] > 60 {
+      hold bigframe = fail(1, concat(concat("line ", numstr(lineno)), ": a make body keeps at most 60 words of locals in a frame"))
+    }
+    give s
+  }
+  hold a = len(data)
+  data = put_zeros(data, 8)
+  give a
+}
+
+// Render one call argument from its token range, restoring string literals from
+// the enclosing expression text (the tokenizer keeps only a literal's byte
+// length). Unlike concat_token_text this keeps user calls, because a string
+// argument may itself be a call of a `-> str` function.
+make arg_token_text(toks: str, source: str, from: num, upto: num) -> str {
+  hold ordinal = 0
+  hold i = 0
+  while i < from {
+    hold prior = tok_at(toks, i)
+    when sx_index(prior, 0) == 108 {
+      ordinal = ordinal + 1
+    }
+    i = i + 1
+  }
+  hold out = ""
+  i = from
+  while i < upto {
+    hold token = tok_at(toks, i)
+    hold kind = sx_index(token, 0)
+    when kind == 108 {
+      hold body = concat_literal_body(source, ordinal)
+      ordinal = ordinal + 1
+      out = concat(out, concat(concat("\"", body), "\""))
+    } otherwise {
+      when kind == 110 || kind == 118 || kind == 111 {
+        out = concat(out, sub(token, 1, len(token)))
+      } otherwise {
+        out = concat(out, token)
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+// Push one word of a (pointer, length) pair that may live in the current frame
+// or at an absolute data offset. Inside a body emit_load_var always reads
+// frame-relative, so an absolute pair has to go through the absolute loader.
+make push_pair_field(s: num, off: num) -> num {
+  when fn_active >= 0 && s < fn_frame_mark - 256 {
+    code = emit_load_abs_word(code, arch, dva_of(s + off))
+    code = emit_push_acc(code, arch)
+    give 0
+  }
+  code = emit_load_var(code, arch, s + off)
+  give 0
+}
+
+// Is `text` exactly a call of a declared `-> str` function? Returns its index,
+// or -1. Used to route a string result away from the numeric expression path.
+make str_call_index(text: str) -> num {
+  hold toks = tokenize(text)
+  hold tn = tok_count(toks)
+  when tn < 3 { give 0 - 1 }
+  hold t0 = tok_at(toks, 0)
+  when sx_index(t0, 0) != 118 { give 0 - 1 }
+  hold nm = sub(t0, 1, len(t0))
+  when string_eq(tok_at(toks, 1), "(") != 1 { give 0 - 1 }
+  hold fi = slot_of(fn_names, nm)
+  when fi < 0 { give 0 - 1 }
+  hold close = paren_close(toks, 1, tn)
+  when close < 0 || close != tn - 1 { give 0 - 1 }
+  when fn_retstr[fi] == 0 { give 0 - 1 }
+  give fi
+}
+
+// Emit a string-returning call and publish its result in a fresh absolute pair.
+// The shared return pair is copied out immediately, before any other call can
+// overwrite it, which is what makes nested and recursive calls sound.
+make emit_str_call(text: str) -> num {
+  hold fi = str_call_index(text)
+  when fi < 0 {
+    hold notstr = fail(1, concat(concat("line ", numstr(lineno)), ": expected a call of a `-> str` function"))
+  }
+  hold toks = tokenize(text)
+  hold tn = tok_count(toks)
+  hold nm = nth_field(fn_nametbl, fi)
+  hold close = paren_close(toks, 1, tn)
+  hold done = emit_call_tokens(toks, 1, close, fi, nm, text)
+  hold out = abs_pair_scratch()
+  // Both pairs are absolute. abs_pair_to_frame would route the store through
+  // the frame inside a body (emit_store_var keys off fn_active, not the slot),
+  // which silently wrote to a wild displacement and lost every nested result.
+  hold copied = abs_pair_copy(fn_retpair, out)
+  give out
+}
+
 // Emit a call at a known token position: `openat` is the index of the '(' and
 // `close` the index of its matching ')'. Arguments are split at top-level
-// commas, compiled by the expression emitter (so an argument may itself hold a
-// call), pushed on the value stack, popped into the callee's parameter slots,
-// and the `call` is emitted. Both the whole-value path and the operand path go
-// through here, so `hold x = f(1)` and `hold x = f(1) + 1` emit the same call.
-make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str) -> num {
+// commas and compiled by type: a num argument by the expression emitter, a str
+// argument by the string-operand resolver, pushed as a (pointer, length) pair.
+// The arguments stay on the stack across the call and the caller pops one word
+// per num and two per str afterwards.
+make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str, source: str) -> num {
   // split the arguments at top-level commas
   hold afrom = []
   hold aupto = []
@@ -1095,18 +1360,45 @@ make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str) -> n
   when nargs != fn_arity[fi] {
     hold badarity = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": '", nm)), concat(concat("' takes ", numstr(fn_arity[fi])), concat(concat(" numeric arguments, not ", numstr(nargs)), ""))))
   }
+  hold ptypes = nth_field(fn_ptypetbl, fi)
   hold a = 0
+  hold pushed = 0
   while a < nargs {
-    hold pre = afrom[a]
-    while pre < aupto[a] {
-      when sx_index(tok_at(toks, pre), 0) == 108 {
-        hold strarg = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": a call argument to '", nm)), "' must be a number, not a string"))
+    hold argtext = arg_token_text(toks, source, afrom[a], aupto[a])
+    when ptype_at(ptypes, a) == 1 {
+      // A string argument is pushed as a pair, length first, so the pointer
+      // ends up at the lower address and the callee's local pair copy reads
+      // (pointer, length) in the usual order.
+      when all_digits(argtext) == 1 {
+        hold numasstr = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": a string argument to '", nm)), "' must be a string, not a number"))
       }
-      pre = pre + 1
+      when slot_of(names, argtext) >= 0 {
+        when slot_of(strnames, argtext) < 0 {
+          hold numvarasstr = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": a string argument to '", nm)), "' must be a string, not a numeric variable"))
+        }
+      }
+      hold aslot = materialize_str_value(argtext)
+      hold ldone = push_pair_field(aslot, 4)
+      hold pdone = push_pair_field(aslot, 0)
+      pushed = pushed + 2
+    } otherwise {
+      hold pre = afrom[a]
+      while pre < aupto[a] {
+        when sx_index(tok_at(toks, pre), 0) == 108 {
+          hold strarg = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": a call argument to '", nm)), "' must be a number, not a string"))
+        }
+        pre = pre + 1
+      }
+      when slot_of(strnames, argtext) >= 0 {
+        hold strvararg = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": a call argument to '", nm)), "' must be a number, not a string"))
+      }
+      when str_call_index(argtext) >= 0 {
+        hold strcallarg = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": a call argument to '", nm)), "' must be a number, not a string"))
+      }
+      hold argdone = emit_expression(argtext)
+      code = emit_push_acc(code, arch)
+      pushed = pushed + 1
     }
-    hold argtext = tok_range_text(toks, afrom[a], aupto[a])
-    hold argdone = emit_expression(argtext)
-    code = emit_push_acc(code, arch)
     a = a + 1
   }
   // The arguments stay on the stack across the call: the callee reads them
@@ -1118,7 +1410,7 @@ make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str) -> n
   call_site = push(call_site, cdisp)
   call_fn = push(call_fn, fi)
   hold popped = 0
-  while popped < nargs {
+  while popped < pushed {
     when arch == 0 {
       code = e1(code, 89)
     } otherwise {
@@ -1169,7 +1461,10 @@ make try_user_call(extext: str) -> num {
     }
     give 0
   }
-  hold done = emit_call_tokens(toks, 1, close, fi, nm)
+  when fn_retstr[fi] == 1 {
+    hold strasnum = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": '", nm)), "' returns a string, so it is not a numeric value (use len(...) or show it)"))
+  }
+  hold done = emit_call_tokens(toks, 1, close, fi, nm, extext)
   give 1
 }
 
@@ -1214,10 +1509,16 @@ make lift_functions() -> str {
       }
       hold ptext = trim(sub(hdr, op + 1, cp))
       hold rest = trim(sub(hdr, cp + 1, len(hdr)))
-      when string_eq(rest, "-> num {") != 1 {
-        hold badret = fail(1, concat(concat("line ", numstr(lineno + 1)), ": native32 only accepts `make NAME(a: num) -> num {`"))
+      hold retstr = 0
+      when string_eq(rest, "-> str {") == 1 {
+        retstr = 1
+      } otherwise {
+        when string_eq(rest, "-> num {") != 1 {
+          hold badret = fail(1, concat(concat("line ", numstr(lineno + 1)), ": a make returns `-> num` or `-> str`"))
+        }
       }
       hold parms = ""
+      hold ptypes = ""
       hold arity = 0
       hold pcount = 0
       when len(ptext) > 0 {
@@ -1236,9 +1537,15 @@ make lift_functions() -> str {
           }
           hold pname = trim(sub(one, 0, colon))
           hold ptype = trim(sub(one, colon + 1, len(one)))
-          when is_bare_name(pname) == 0 || string_eq(ptype, "num") == 0 {
-            hold badparam = fail(1, concat(concat("line ", numstr(lineno + 1)), ": native32 parameters are `name: num` only"))
+          hold pisstr = 0
+          when string_eq(ptype, "str") == 1 {
+            pisstr = 1
           }
+          when is_bare_name(pname) == 0 || (string_eq(ptype, "num") == 0 && pisstr == 0) {
+            hold badparam = fail(1, concat(concat("line ", numstr(lineno + 1)), ": native32 parameters are `name: num` or `name: str`"))
+          }
+          ptypes = concat(ptypes, concat(concat(concat("|", pname), "="), numstr(pisstr)))
+          ptypes = concat(ptypes, "|")
           when slot_of(parms, pname) >= 0 {
             hold dupparam = fail(1, concat(concat("line ", numstr(lineno + 1)), ": a parameter is declared twice"))
           }
@@ -1259,6 +1566,12 @@ make lift_functions() -> str {
       fn_frame_words = push(fn_frame_words, 0)
       fn_nametbl = concat(fn_nametbl, concat(fname, "\n"))
       fn_paramtbl = concat(fn_paramtbl, concat(parms, "\n"))
+      fn_ptypetbl = concat(fn_ptypetbl, concat(ptypes, "\n"))
+      fn_retstr = push(fn_retstr, retstr)
+      when retstr == 1 && fn_retpair < 0 {
+        fn_retpair = len(data)
+        data = put_zeros(data, 8)
+      }
       fn_arity = push(fn_arity, arity)
       fn_line = push(fn_line, lineno + 1)
       fn_off = push(fn_off, 0)
@@ -1692,6 +2005,58 @@ hold concat_depth = 0
 //   chr(<arg>)      -> a hidden pair filled by the chr helper;
 //   concat(L, R)     -> a hidden pair written by the nested call itself.
 // Anything else is a diagnostic, never a guess.
+// A string literal in the static pool as a (pointer, length) pair. `pad` adds
+// the trailing newline a shown value needs; a concat operand does not, and
+// omitting it there keeps every existing image byte-identical.
+make materialize_literal_pair(text: str, pad: num) -> num {
+  hold pairslot = len(data)
+  data = put_zeros(data, 8)
+  hold litoff = len(data)
+  data = append_text(data, sub(text, 1, len(text) - 1))
+  hold litlen = len(data) - litoff
+  when pad == 1 {
+    // `show` writes length + 1 bytes, so a value that may be shown needs
+    // its trailing newline in the pool exactly like `hold s = "literal"`.
+    data = push(data, 10)
+  }
+  hold litbase = 4202496
+  when arch == 0 {
+    litbase = 134520832
+  }
+  code = emit_push_imm2(code, arch, litbase + litoff)
+  code = emit_pop_acc(code, arch)
+  hold psite = len(code)
+  when arch == 0 {
+    fixsite = push(fixsite, psite + 1)
+  } otherwise {
+    fixsite = push(fixsite, psite)
+  }
+  fixoff = push(fixoff, pairslot)
+  code = emit_store_global(code, arch)
+  code = emit_push_imm2(code, arch, litlen)
+  code = emit_pop_acc(code, arch)
+  hold lsite = len(code)
+  when arch == 0 {
+    fixsite = push(fixsite, lsite + 1)
+  } otherwise {
+    fixsite = push(fixsite, lsite)
+  }
+  fixoff = push(fixoff, pairslot + 4)
+  code = emit_store_global(code, arch)
+  give pairslot
+}
+
+// A string operand that may be shown or returned, so its storage carries the
+// trailing newline. Every other form already has one: a concat result reserves
+// it on the heap, a chr cell is [byte][newline][0][0], and a named value was
+// stored with it.
+make materialize_str_value(text: str) -> num {
+  when is_text_literal(text) == 1 {
+    give materialize_literal_pair(text, 1)
+  }
+  give materialize_concat_operand(text)
+}
+
 make materialize_concat_operand(text: str) -> num {
   when slot_of(strnames, text) >= 0 {
     // strnames records only that the name holds a string; the data offset is
@@ -1702,36 +2067,7 @@ make materialize_concat_operand(text: str) -> num {
     hold nonstring = fail(1, concat(concat("line ", numstr(lineno)), ": concat variable arguments must be strings"))
   }
   when is_text_literal(text) == 1 {
-    hold pairslot = len(data)
-    data = put_zeros(data, 8)
-    hold litoff = len(data)
-    data = append_text(data, sub(text, 1, len(text) - 1))
-    hold litlen = len(data) - litoff
-    hold litbase = 4202496
-    when arch == 0 {
-      litbase = 134520832
-    }
-    code = emit_push_imm2(code, arch, litbase + litoff)
-    code = emit_pop_acc(code, arch)
-    hold psite = len(code)
-    when arch == 0 {
-      fixsite = push(fixsite, psite + 1)
-    } otherwise {
-      fixsite = push(fixsite, psite)
-    }
-    fixoff = push(fixoff, pairslot)
-    code = emit_store_global(code, arch)
-    code = emit_push_imm2(code, arch, litlen)
-    code = emit_pop_acc(code, arch)
-    hold lsite = len(code)
-    when arch == 0 {
-      fixsite = push(fixsite, lsite + 1)
-    } otherwise {
-      fixsite = push(fixsite, lsite)
-    }
-    fixoff = push(fixoff, pairslot + 4)
-    code = emit_store_global(code, arch)
-    give pairslot
+    give materialize_literal_pair(text, 0)
   }
   when starts(text, "chr(") == 1 {
     hold argtext = chr_arg(text)
@@ -1793,7 +2129,10 @@ make materialize_concat_operand(text: str) -> num {
     concat_depth = concat_depth - 1
     give nested
   }
-  hold badoperand = fail(1, concat(concat("line ", numstr(lineno)), ": concat inputs must be declared string variables, string literals, chr(...) values or nested concat calls"))
+  when str_call_index(text) >= 0 {
+    give emit_str_call(text)
+  }
+  hold badoperand = fail(1, concat(concat("line ", numstr(lineno)), ": concat inputs must be declared string variables, string literals, chr(...) values, nested concat calls or calls of a `-> str` function"))
   give 0 - 1
 }
 
@@ -3459,7 +3798,10 @@ make emit_expression(extext: str) -> num {
         when cclose < 0 {
           hold unclosed_call = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": a call to '", cfname)), "' has no closing ')'"))
         }
-        hold ccall_done = emit_call_tokens(toks, k + 1, cclose, cfi, cfname)
+        when fn_retstr[cfi] == 1 {
+          hold strasnum2 = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": '", cfname)), "' returns a string, so it is not a numeric operand (use len(...) around it)"))
+        }
+        hold ccall_done = emit_call_tokens(toks, k + 1, cclose, cfi, cfname, extext)
         code = emit_push_acc(code, arch)
         want = 0
         k = cclose
@@ -3555,9 +3897,33 @@ make emit_expression(extext: str) -> num {
             }
           }
         }
-        when is_len_call == 0 && is_chr_len == 0 && is_concat_len == 0 && string_eq(vname, "len") == 1 && k + 1 < tn {
+        // len(f(...)) where f returns a string: emit the call, then push the
+        // length field of the pair it published.
+        hold is_call_len = 0
+        when is_len_call == 0 && is_chr_len == 0 && is_concat_len == 0 && string_eq(vname, "len") == 1 && k + 3 < tn {
+          when string_eq(tok_at(toks, k + 1), "(") == 1 && string_eq(tok_at(toks, k + 3), "(") == 1 {
+            hold inner_close = paren_close(toks, k + 3, tn)
+            when inner_close > 0 && inner_close + 1 < tn {
+              when string_eq(tok_at(toks, inner_close + 1), ")") == 1 {
+                hold calltext = arg_token_text(toks, extext, k + 2, inner_close + 1)
+                when str_call_index(calltext) >= 0 {
+                  hold cpair = emit_str_call(calltext)
+                  hold cbase = 4202496
+                  when arch == 0 {
+                    cbase = 134520832
+                  }
+                  code = emit_load_abs(code, arch, cbase + cpair + 4)
+                  want = 0
+                  k = inner_close + 1
+                  is_call_len = 1
+                }
+              }
+            }
+          }
+        }
+        when is_len_call == 0 && is_chr_len == 0 && is_concat_len == 0 && is_call_len == 0 && string_eq(vname, "len") == 1 && k + 1 < tn {
           when string_eq(tok_at(toks, k + 1), "(") == 1 {
-            hold bad_len_shape = fail(1, concat(concat("line ", numstr(lineno)), ": len() expects exactly one string variable, string literal or chr(...), not a general expression"))
+            hold bad_len_shape = fail(1, concat(concat("line ", numstr(lineno)), ": len() expects a string variable, string literal, chr(...), concat(...) or a `-> str` call"))
           }
         }
         when is_len_call == 1 {
@@ -3581,7 +3947,7 @@ make emit_expression(extext: str) -> num {
           want = 0
           k = k + 3
         }
-        when is_len_call == 0 && is_chr_len == 0 && is_concat_len == 0 {
+        when is_len_call == 0 && is_chr_len == 0 && is_concat_len == 0 && is_call_len == 0 {
           hold vslot = slot_of(names, vname)
           when vslot < 0 {
             hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(vname, "'")))
@@ -3870,8 +4236,14 @@ make emit_statements() -> num {
             hold badstringexpr = fail(1, concat(concat("line ", numstr(lineno)), ": only a string literal may initialize a native32 string value"))
           }
         }
+        hold iscallstr_hold = 0
+        when istext == 0 && str_call_index(extext) >= 0 {
+          iscallstr_hold = 1
+          strcall_text = extext
+          extext = ""
+        }
         hold ischr_hold = 0
-        when istext == 0 && len(extext) > 0 && starts(extext, "chr(") == 1 {
+        when istext == 0 && iscallstr_hold == 0 && len(extext) > 0 && starts(extext, "chr(") == 1 {
           chr_text = chr_arg(extext)
           when chr_text == "!" {
             hold badchrshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
@@ -3884,7 +4256,7 @@ make emit_statements() -> num {
             chr_text = ""
           }
         }
-        when starts(extext, "concat(") == 1 {
+        when iscallstr_hold == 0 && starts(extext, "concat(") == 1 {
           hold parts_hold = split_concat(extext)
           when sx_index(parts_hold, 0) == 33 {
             hold badconcat = fail(1, concat(concat("line ", numstr(lineno)), concat(": ", sub(parts_hold, 1, len(parts_hold)))))
@@ -3911,7 +4283,7 @@ make emit_statements() -> num {
             // Its stored slot value is the frame mark plus a negative byte
             // displacement; a string value keeps a (pointer, length) pair.
             hold fwords = 1
-            when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1 {
+            when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1 || iscallstr_hold == 1 {
               fwords = 2
               strnames = concat(strnames, concat(concat(concat("|", nm), "="), "1"))
               strnames = concat(strnames, "|")
@@ -3923,7 +4295,7 @@ make emit_statements() -> num {
             }
           } otherwise {
             slot = len(data)
-            when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1 {
+            when istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1 || iscallstr_hold == 1 {
               data = put_zeros(data, 8)
               strnames = concat(strnames, concat(concat(concat("|", nm), "="), "1"))
               strnames = concat(strnames, "|")
@@ -3934,7 +4306,7 @@ make emit_statements() -> num {
           names = concat(names, concat(concat(concat("|", nm), "="), numstr(slot)))
           names = concat(names, "|")
         } otherwise {
-          when (slot_of(strnames, nm) >= 0 && istext == 0 && isconcat_hold == 0 && isalias_hold == 0 && ischr_hold == 0) || (slot_of(strnames, nm) < 0 && (istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1)) {
+          when (slot_of(strnames, nm) >= 0 && istext == 0 && isconcat_hold == 0 && isalias_hold == 0 && ischr_hold == 0 && iscallstr_hold == 0) || (slot_of(strnames, nm) < 0 && (istext == 1 || isconcat_hold == 1 || isalias_hold == 1 || ischr_hold == 1 || iscallstr_hold == 1)) {
             hold badtype = fail(1, concat(concat("line ", numstr(lineno)), ": a variable cannot change between numeric and string values"))
           }
         }
@@ -3947,7 +4319,10 @@ make emit_statements() -> num {
           extext = ""
           act = 4
         }
-        when act == 0 && istext == 0 && ischr_hold == 0 {
+        when act == 0 && iscallstr_hold == 1 {
+          act = 17
+        }
+        when act == 0 && istext == 0 && ischr_hold == 0 && iscallstr_hold == 0 {
           when isconcat_hold == 1 {
             act = 10
           } otherwise {
@@ -4002,6 +4377,10 @@ make emit_statements() -> num {
             }
             act = 14
           }
+          when act == 0 && str_call_index(shown) >= 0 {
+            strcall_text = shown
+            act = 16
+          }
           hold shown_slot = slot_of(names, shown)
           when act == 0 && shown_slot >= 0 && slot_of(strnames, shown) >= 0 {
             slot = shown_slot
@@ -4046,8 +4425,14 @@ make emit_statements() -> num {
               hold badstrassign = fail(1, concat(concat("line ", numstr(lineno)), ": only a string literal may be assigned to a native32 string value"))
             }
           }
+          hold assign_callstr = 0
+          when assign_text == 0 && str_call_index(extext) >= 0 {
+            assign_callstr = 1
+            strcall_text = extext
+            extext = ""
+          }
           hold assign_chr = 0
-          when assign_text == 0 && len(extext) > 0 && starts(extext, "chr(") == 1 {
+          when assign_text == 0 && assign_callstr == 0 && len(extext) > 0 && starts(extext, "chr(") == 1 {
             chr_text = chr_arg(extext)
             when chr_text == "!" {
               hold badchrassignshape = fail(1, concat(concat("line ", numstr(lineno)), ": chr expects exactly one numeric argument"))
@@ -4060,7 +4445,7 @@ make emit_statements() -> num {
             assign_chr = 1
             extext = ""
           }
-          when assign_chr == 0 && starts(extext, "concat(") == 1 {
+          when assign_chr == 0 && assign_callstr == 0 && starts(extext, "concat(") == 1 {
             hold parts_assign = split_concat(extext)
             when sx_index(parts_assign, 0) == 33 {
               hold badconcatassign = fail(1, concat(concat("line ", numstr(lineno)), concat(": ", sub(parts_assign, 1, len(parts_assign)))))
@@ -4077,7 +4462,7 @@ make emit_statements() -> num {
               extext = ""
             }
           }
-          when (slot_of(strnames, word) >= 0 && assign_text == 0 && assign_concat == 0 && assign_alias == 0 && assign_chr == 0) || (slot_of(strnames, word) < 0 && (assign_text == 1 || assign_concat == 1 || assign_alias == 1 || assign_chr == 1)) {
+          when (slot_of(strnames, word) >= 0 && assign_text == 0 && assign_concat == 0 && assign_alias == 0 && assign_chr == 0 && assign_callstr == 0) || (slot_of(strnames, word) < 0 && (assign_text == 1 || assign_concat == 1 || assign_alias == 1 || assign_chr == 1 || assign_callstr == 1)) {
             hold badassign_type = fail(1, concat(concat("line ", numstr(lineno)), ": a variable cannot change between numeric and string values"))
           }
           when assign_chr == 1 {
@@ -4089,7 +4474,10 @@ make emit_statements() -> num {
             extext = ""
             act = 4
           }
-          when act == 0 && assign_text == 0 && assign_chr == 0 {
+          when act == 0 && assign_callstr == 1 {
+            act = 17
+          }
+          when act == 0 && assign_text == 0 && assign_chr == 0 && assign_callstr == 0 {
             when assign_concat == 1 {
               act = 10
             } otherwise {
@@ -4110,8 +4498,26 @@ make emit_statements() -> num {
         when len(gv) == 0 {
           hold badgive2 = fail(1, concat(concat("line ", numstr(lineno)), ": `give` with no value"))
         }
-        extext = gv
-        act = 15
+        when fn_retstr[fn_active] == 1 {
+          when all_digits(gv) == 1 {
+            hold numasret = fail(1, concat(concat("line ", numstr(lineno)), ": this make returns `-> str`, so give needs a string, not a number"))
+          }
+          when slot_of(names, gv) >= 0 {
+            when slot_of(strnames, gv) < 0 {
+              hold numvarret = fail(1, concat(concat("line ", numstr(lineno)), ": this make returns `-> str`, so give needs a string, not a numeric variable"))
+            }
+          }
+          // A string result is published in the shared return pair; the caller
+          // copies it out before any other call can run.
+          strcall_text = gv
+          act = 18
+        } otherwise {
+          when str_call_index(gv) >= 0 {
+            hold badnumret = fail(1, concat(concat("line ", numstr(lineno)), ": this make returns `-> num`, so give needs a number"))
+          }
+          extext = gv
+          act = 15
+        }
       }
       when act == 0 && starts(line, "make ") == 1 {
         hold badmake = fail(1, concat(concat("line ", numstr(lineno)), ": a make body cannot declare another make"))
@@ -4190,6 +4596,29 @@ make emit_statements() -> num {
     // ---- the action ----
     // act 13: the statement was fully emitted by the chr block above.
     when act == 15 {
+      code = emit_fn_ret(code, arch)
+      fn_gave = 1
+      fn_last_give = 1
+    }
+    // act 16: show the result of a `-> str` call.
+    when act == 16 {
+      hold scp = emit_str_call(strcall_text)
+      hold scslot = temp_pair_slot()
+      hold sccopy = abs_pair_to_frame(scp, scslot)
+      hold scshow = emit_show_string_slot(scslot)
+    }
+    // act 17: bind or assign the result of a `-> str` call.
+    when act == 17 {
+      hold bcp = emit_str_call(strcall_text)
+      hold bccopy = abs_pair_to_frame(bcp, slot)
+    }
+    // act 18: a `-> str` body publishes its pair and returns.
+    when act == 18 {
+      hold rp = materialize_str_value(strcall_text)
+      when fn_active >= 0 && rp >= fn_frame_mark - 256 {
+        rp = frame_pair_to_abs(rp)
+      }
+      hold rcopy = abs_pair_copy(rp, fn_retpair)
       code = emit_fn_ret(code, arch)
       fn_gave = 1
       fn_last_give = 1
@@ -4661,13 +5090,14 @@ make run() -> num {
       fn_off[fi] = len(code)
       hold saved_names = names
       hold saved_strnames = strnames
-      names = body_parm_names(nth_field(fn_paramtbl, fi), fn_arity[fi])
-      strnames = ""
+      names = body_parm_names(nth_field(fn_paramtbl, fi), fn_arity[fi], nth_field(fn_ptypetbl, fi), fi)
+      strnames = sp_names
       fn_active = fi
       fn_gave = 0
       fn_last_give = 0
       fill_site = 0 - 1
       code = emit_fn_prologue(code, arch)
+      hold sp_done = emit_strparm_copies()
       src = nth_part(fn_bodytbl, fi)
       lineno = fn_line[fi]
       hold body_walk = emit_statements()

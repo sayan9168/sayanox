@@ -1,0 +1,4 @@
+make t() -> str {
+  give "x"
+}
+show t() + 1

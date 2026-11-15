@@ -1,0 +1,7 @@
+make t() -> str {
+  give "x"
+}
+make f() -> num {
+  give t()
+}
+show f()
