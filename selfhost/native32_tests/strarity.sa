@@ -1,0 +1,14 @@
+// The documented maximum: 6 parameters, alternating num and str, so the
+// argument area holds 9 pushed words (3 nums + 3 pairs). This is the widest
+// displacement the width-aware parameter math has to produce.
+make six(a: num, b: str, c: num, d: str, e: num, f: str) -> str {
+  hold out = concat(b, d)
+  out = concat(out, f)
+  give concat(out, chr(48 + a + c + e))
+}
+make allstr(a: str, b: str, c: str, d: str, e: str, f: str) -> str {
+  give concat(concat(a, b), concat(concat(c, d), concat(e, f)))
+}
+show six(1, "A", 2, "B", 3, "C")
+show len(six(0, "x", 0, "y", 0, "z"))
+show allstr("a", "b", "c", "d", "e", "f")

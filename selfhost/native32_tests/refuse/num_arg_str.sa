@@ -1,0 +1,4 @@
+make g(n: num) -> num {
+  give n
+}
+show g("x")

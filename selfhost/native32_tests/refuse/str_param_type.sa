@@ -1,0 +1,4 @@
+make f(s: bool) -> str {
+  give "x"
+}
+show f("y")

@@ -1,0 +1,17 @@
+// String recursion: each frame owns its parameter pair and its locals, and the
+// shared return pair is copied out before the next call can overwrite it.
+// Also a call whose argument is another call's result.
+make rep(s: str, n: num) -> str {
+  when n < 1 {
+    give ""
+  }
+  hold rest = rep(s, n - 1)
+  give concat(s, rest)
+}
+make wrap(s: str) -> str {
+  give concat("[", concat(s, "]"))
+}
+show rep("ab", 3)
+show rep("z", 0)
+show wrap(rep("q", 2))
+show len(rep("mn", 4))

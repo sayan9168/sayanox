@@ -1,0 +1,5 @@
+make g(n: num) -> num {
+  give n
+}
+hold s = "x"
+show g(s)

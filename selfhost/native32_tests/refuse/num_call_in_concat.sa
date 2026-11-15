@@ -1,0 +1,4 @@
+make g() -> num {
+  give 1
+}
+show concat(g(), "x")

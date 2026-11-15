@@ -1,0 +1,5 @@
+make f(s: str) -> str {
+  give s
+}
+hold n = 3
+show f(n)

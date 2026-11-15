@@ -97,7 +97,7 @@ make xc_containers(d: str, arch: str) -> num {
       show "[SKIP] kernel cannot execute i386; deterministic containers and all byte assertions still run"
     }
   }
-  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\nrecursion\n"
+  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\nrecursion\nstrfn\nstrrec\nstrarity\n"
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -131,6 +131,9 @@ make xc_containers(d: str, arch: str) -> num {
       when string_eq(name, "chr_expr") == 1 { expected = 8515 }
       when string_eq(name, "fn") == 1 { expected = 8265 }
       when string_eq(name, "recursion") == 1 { expected = 8259 }
+      when string_eq(name, "strfn") == 1 { expected = 8608 }
+      when string_eq(name, "strrec") == 1 { expected = 8433 }
+      when string_eq(name, "strarity") == 1 { expected = 8572 }
       hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
       hold cdir = kp_join(d, name)
       hold oracle = xq_parity_unknown(source, cdir)
@@ -143,7 +146,7 @@ make xc_containers(d: str, arch: str) -> num {
       }
     }
   }
-  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 52)
+  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 64)
   hold literal_len_source = "selfhost/native32_tests/len_literals.sa"
   hold literal_len_file = kp_join(d, "len-literals.elf")
   hold literal_len_build = pg_command(xc_command(literal_len_source, literal_len_file, arch), "literal len compile")
@@ -167,7 +170,7 @@ make xc_containers(d: str, arch: str) -> num {
       hold run = pg_capture(gl_sh_quote(kp_join(d, "legal")), kp_join(d, "legal.out"))
       when string_eq(name, "division") == 1 { hold value = kp_eq(d, "legal.out", "3.5\n") }
     }
-    names = "heap_exhaust\nstring_index_oob\nfn_depth_cap\n"
+    names = "heap_exhaust\nstring_index_oob\nfn_depth_cap\nstr_depth_cap\n"
     pos = 0
     while pos < len(names) {
       hold start = pos
