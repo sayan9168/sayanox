@@ -63,16 +63,26 @@ Consequences:
 
 ## Documentation previews (`docs.yml`)
 
-`tools/docsite.mjs` renders `docs/*.md` into a static site with no dependencies
-beyond the Node runtime that GitHub runners already provide:
+`tools/docsite.sa` renders `docs/*.md` into a static site. It is Sayanox, built
+by the same compiler as everything else, so rendering needs no host runtime:
 
 ```sh
-node tools/docsite.mjs docs site   # every docs/*.md -> site/
+./sx tool docsite          # build the renderer with the Sayanox toolchain
+./tools/docsite docs site  # every docs/*.md -> site/
 ```
+
+The Markdown engine lives in `tools/sxdoc_lib.sa` and is checked against frozen
+oracles (`selfhost/docsite_helpers.want`, `selfhost/docsite_markdown.want`) that
+were produced by the retired Node renderer before it was deleted, plus a
+byte-for-byte comparison of all 48 generated files against that renderer's
+output. `./sx target test-docsite` runs the fixtures on gen2, seed-min and
+native_aot and rebuilds the real site.
 
 `docs.yml` renders that site and publishes it with the Vercel CLI. It skips the
 deploy - without failing the workflow - when the token is absent, so a fork or a
-fresh clone never turns the pipeline red.
+fresh clone never turns the pipeline red. The Vercel CLI is an external
+publishing boundary, not tracked source: it is the one host tool left in this
+workflow, and it never runs inside a `ci-guard`-armed acceptance job.
 
 To enable real deployments, configure the repository:
 
@@ -92,7 +102,7 @@ this repository to a project in the Vercel dashboard and set:
 | Setting | Value |
 | --- | --- |
 | Framework preset | `Other` |
-| Build command | `node tools/docsite.mjs docs site` |
+| Build command | `./sx tool docsite && ./tools/docsite docs site` |
 | Output directory | `site` |
 | Install command | *(empty)* |
 

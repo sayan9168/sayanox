@@ -146,9 +146,8 @@ close stdlib depth or replace complete guarded CI.
   `text_metric`, `text_wrap`, `base32`, `net`, `template`, `money`) add
   persistent collections, checked integer math, bounded graph algorithms,
   byte-text metrics/wrapping, RFC 4648 base32, IPv4/CIDR/hostname validation,
-  safe templates and exact decimal money helpers. The independent Python oracle
-  `selfhost/stdlib_library_pack_oracle.py` generates nine split fixtures with
-  1,617 expectations; all match on seed-min, gen2 and native_aot through
-  `test-stdlib-next`. `examples/library_pack.sa` demonstrates the pack. This is
+  safe templates and exact decimal money helpers. Nine split fixtures carry 1,617 frozen
+  expectations computed outside Sayanox and pinned as `.want` bytes; all match
+  on seed-min, gen2 and native_aot through `test-stdlib-next`. `examples/library_pack.sa` demonstrates the pack. This is
   bounded in-memory/library depth, not sockets, Unicode text, transactions,
   precise GC, or closure of R07.

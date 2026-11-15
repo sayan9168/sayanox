@@ -1,5 +1,20 @@
 # Status
 
+**2026-11-13 update: pure-Sayanox source tree — JavaScript and Python retired**
+Every tracked implementation file is Sayanox. `tools/docsite.mjs` (JavaScript)
+was ported to `tools/docsite.sa` + `tools/sxdoc_lib.sa`; rendering the original
+`docs/` with the Sayanox renderer reproduces the retired Node renderer's output
+**byte-for-byte on all 48 files** (only the generator credit in the footer
+changes), and 2,000 generated adversarial Markdown cases agreed exactly before
+the JS was deleted. `selfhost/stdlib_library_pack_oracle.py` (Python) was retired
+with its 1,617 expectations kept as frozen `.want` oracles. `cmd_all_sayanox` now
+classifies every tracked path instead of globbing four suffixes, so a new
+language cannot reappear unnoticed; `test-docsite` runs the renderer's frozen
+oracles on seed-min, gen2 and native_aot and is wired into the migrated
+acceptance aggregate. The Vercel CLI remains an external publishing boundary in
+`docs.yml`, not tracked source. GitHub's language bar will show nothing until
+Linguist registers Sayanox — see `docs/GITHUB_LANGUAGE.md`.
+
 **2026-11-15 update: library pack — collections, graph, integer math, text, codecs, templates, money**
 Ten new stdlib modules landed: `stdlib/set.sa`, `stdlib/heap.sa`,
 `stdlib/intmath.sa`, `stdlib/graph.sa`, `stdlib/text_metric.sa`,
@@ -8,10 +23,11 @@ Ten new stdlib modules landed: `stdlib/set.sa`, `stdlib/heap.sa`,
 sets/heaps, checked exact integer arithmetic over `result.sa`, bounded weighted
 graph algorithms, byte-string similarity and wrapping, RFC 4648 base32,
 IPv4/CIDR/hostname validation, safe `{name}` templates over `map.sa`, and exact
-decimal money allocation/tax/discount helpers over `decimal.sa`. The independent
-Python oracle `selfhost/stdlib_library_pack_oracle.py` generates nine split
-fixtures with **1,617 oracle expectations**; all nine match byte-for-byte on
-seed-min, gen2 and native_aot and are wired into `test-stdlib-next`.
+decimal money allocation/tax/discount helpers over `decimal.sa`. Nine split fixtures carry **1,617 frozen
+oracle expectations** computed outside Sayanox (Python `ipaddress`/`base64`/
+`Decimal`) and pinned as `.want` bytes; all nine match byte-for-byte on seed-min,
+gen2 and native_aot and are wired into `test-stdlib-next`. The generator was
+retired when the repository became pure Sayanox.
 `examples/library_pack.sa` is a runnable tour. This is stdlib depth, not socket
 networking, Unicode-aware text, precise GC, or closure of R07. The `sx` entry and
 pin manifests were refreshed for the gate change.

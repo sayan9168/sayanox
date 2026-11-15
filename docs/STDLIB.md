@@ -154,10 +154,12 @@ and `money`. Import dependencies explicitly: `result.sa` before `intmath.sa`,
   `money` keeps amounts as exact decimal strings and allocates by largest
   remainder so the parts sum back to the total.
 
-The independent Python oracle is `selfhost/stdlib_library_pack_oracle.py`. It
-generates nine fixtures (`set`, `heap`, `graph`, `intmath`, `text`, `base32`,
-`net`, `template`, `money`) with **1,617 oracle expectations** including closing
-sentinels. The split keeps each fixture inside the bounded native_aot limits;
+Nine frozen fixtures (`set`, `heap`, `graph`, `intmath`, `text`, `base32`,
+`net`, `template`, `money`) carry **1,617 oracle expectations** including closing
+sentinels. Those expectations were computed outside Sayanox with Python's
+`ipaddress`, `base64` and `Decimal`, then pinned in the paired `.want` files; the
+generator itself was retired so that every tracked implementation file is
+Sayanox. The `.want` bytes, not the retired generator, are the oracle. The split keeps each fixture inside the bounded native_aot limits;
 `test-stdlib-next` runs every fixture on seed-min, gen2 and native_aot.
 
 ## AI and machine-learning primitives

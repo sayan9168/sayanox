@@ -5,6 +5,18 @@ Status (2026-10-27): **source retirement and guarded migration acceptance passed
 
 The audit covers all maintained implementation source with an explicit binary trust input and retained C-output compatibility.
 
+Update (2026-11-13): the audit is now **whole-tree**. `cmd_all_sayanox` previously
+globbed `git ls-files '*.c' '*.h' '*.sh' '*.sa'`, so `tools/docsite.mjs`
+(JavaScript) and `selfhost/stdlib_library_pack_oracle.py` (Python) were invisible
+to it and the claim was narrower than it read. Both are retired: the docsite
+renderer is now `tools/docsite.sa` over `tools/sxdoc_lib.sa`, verified
+byte-for-byte against the retired Node renderer on all 48 generated files, and
+the library-pack expectations stay pinned as `.want` bytes computed outside
+Sayanox. The inventory now walks every tracked path and refuses any of ~80
+foreign implementation suffixes; `tracked non-Sayanox implementation files: 0`
+is pinned by `test-doc-claims`, and `test-docsite` holds the renderer to its
+frozen oracles on seed-min, gen2 and native_aot.
+
 The Makefile and final frozen C seed have been removed. The maintained compiler,
 frontends, runtimes/backends, build/bootstrap logic, dependency handling, recovery,
 cleanup, audits, tests, package/LSP tooling, CI guard and release implementation

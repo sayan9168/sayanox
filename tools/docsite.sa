@@ -1,0 +1,435 @@
+// tools/docsite.sa -- render docs/*.md into a static site, entirely in Sayanox.
+//
+//   ./sx tool docsite && ./tools/docsite docs site
+//   ./sx target tools/docsite
+//
+// This replaces tools/docsite.mjs. The renderer lives in tools/sxdoc_lib.sa so a
+// gate can exercise it without running the CLI. Nothing here needs Node, npm, a
+// framework preset or a Vercel build image: the published preview is produced by
+// the same Sayanox toolchain that builds the compiler.
+
+use "tools/sxdoc_lib.sa"
+
+make ds_fail(msg: str) -> num {
+  hold w = write_file("/dev/stderr", concat(concat("docsite: ", msg), "\n"))
+  hold stop = exit(1)
+  give 1
+}
+
+make ds_join(dir: str, name: str) -> str {
+  give concat(concat(dir, "/"), name)
+}
+
+make ds_basename(s: str) -> str {
+  hold i = len(s)
+  while i > 0 {
+    when sx_index(s, i - 1) == 47 {
+      give ds_slice(s, i, len(s))
+    }
+    i = i - 1
+  }
+  give s
+}
+
+make ds_stem(name: str) -> str {
+  hold n = len(name)
+  when n > 3 {
+    when string_eq(ds_slice(name, n - 3, n), ".md") == 1 {
+      give ds_slice(name, 0, n - 3)
+    }
+  }
+  give name
+}
+
+make ds_slug_ok(c: num) -> num {
+  when c >= 97 and c <= 122 {
+    give 1
+  }
+  when c >= 48 and c <= 57 {
+    give 1
+  }
+  when c == 46 or c == 95 or c == 45 {
+    give 1
+  }
+  give 0
+}
+
+// basename.toLowerCase().replace(/[^a-z0-9._-]+/g, "-")
+make ds_slug(name: str) -> str {
+  hold base = ds_lower_ascii(ds_stem(name))
+  hold n = len(base)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    when ds_slug_ok(sx_index(base, i)) == 1 {
+      out = concat(out, chr(sx_index(base, i)))
+      i = i + 1
+    } otherwise {
+      out = concat(out, "-")
+      while i < n and ds_slug_ok(sx_index(base, i)) == 0 {
+        i = i + 1
+      }
+    }
+  }
+  give out
+}
+
+make ds_cmp(a: str, b: str) -> num {
+  hold na = len(a)
+  hold nb = len(b)
+  hold n = na
+  when nb < n {
+    n = nb
+  }
+  hold i = 0
+  while i < n {
+    hold ca = sx_index(a, i)
+    hold cb = sx_index(b, i)
+    when ca < cb {
+      give 0 - 1
+    }
+    when ca > cb {
+      give 1
+    }
+    i = i + 1
+  }
+  when na < nb {
+    give 0 - 1
+  }
+  when na > nb {
+    give 1
+  }
+  give 0
+}
+
+// The retired renderer sorted with localeCompare. For these ASCII document
+// names that collation is: punctuation first (in the ICU order below), then
+// digits, then case-folded letters. A raw byte sort gets both NATIVE.md vs
+// NATIVE32.md and BOOTSTRAP.md vs BOOTSTRAP_ROADMAP.md wrong, so the punctuation
+// ranks are pinned here and checked against the reference ordering by the gate.
+make ds_punct_rank(c: num) -> num {
+  hold order = [32, 95, 45, 44, 59, 58, 33, 63, 46, 34, 40, 41, 91, 93, 123, 125, 64, 42, 47, 92, 38, 35, 37, 96, 94, 43, 60, 61, 62, 124, 126, 36]
+  hold i = 0
+  while i < len(order) {
+    when order[i] == c {
+      give i + 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+// Key bytes: 1..32 punctuation, 33..42 digits, 43..68 letters. Every key byte is
+// a printable ASCII character so the packed key buffer stays NUL-free.
+make ds_collate_key(name: str) -> str {
+  hold base = ds_lower_ascii(name)
+  hold n = len(base)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold c = sx_index(base, i)
+    when c >= 97 and c <= 122 {
+      out = concat(out, chr(43 + c - 97))
+    } otherwise {
+      when c >= 48 and c <= 57 {
+        out = concat(out, chr(33 + c - 48))
+      } otherwise {
+        hold rank = ds_punct_rank(c)
+        when rank > 0 {
+          out = concat(out, chr(rank))
+        } otherwise {
+          out = concat(out, chr(69))
+        }
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+// Insertion sort over parallel packed buffers, keyed by collation key.
+make ds_sort_names(names: str) -> str {
+  hold count = ds_pack_count(names)
+  hold keys = ""
+  hold i = 0
+  while i < count {
+    keys = ds_pack_push(keys, ds_collate_key(ds_pack_at(names, i)))
+    i = i + 1
+  }
+  hold order = []
+  i = 0
+  while i < count {
+    hold key = ds_pack_at(keys, i)
+    hold at = 0
+    hold placed = 0
+    while placed == 0 and at < len(order) {
+      hold other = ds_pack_at(keys, order[at])
+      hold c = ds_cmp(key, other)
+      when c < 0 {
+        placed = 1
+      } otherwise {
+        when c == 0 and ds_cmp(ds_pack_at(names, i), ds_pack_at(names, order[at])) < 0 {
+          placed = 1
+        } otherwise {
+          at = at + 1
+        }
+      }
+    }
+    hold next = []
+    hold k = 0
+    while k < len(order) {
+      when k == at {
+        next = push(next, i)
+      }
+      next = push(next, order[k])
+      k = k + 1
+    }
+    when at == len(order) {
+      next = push(next, i)
+    }
+    order = next
+    i = i + 1
+  }
+  hold out = ""
+  i = 0
+  while i < len(order) {
+    out = ds_pack_push(out, ds_pack_at(names, order[i]))
+    i = i + 1
+  }
+  give out
+}
+
+make ds_rmtree(path: str) -> num {
+  hold kind = path_kind(path)
+  when kind == 0 {
+    give 1
+  }
+  when kind == 2 {
+    hold names = read_dir(path)
+    hold n = len(names)
+    hold pos = 0
+    while pos < n {
+      hold start = pos
+      while pos < n and sx_index(names, pos) != 10 {
+        pos = pos + 1
+      }
+      hold entry = ds_slice(names, start, pos)
+      pos = pos + 1
+      when len(entry) > 0 {
+        hold gone = ds_rmtree(ds_join(path, entry))
+      }
+    }
+  }
+  give remove_path(path)
+}
+
+make ds_ensure_dir(path: str) -> num {
+  when path_kind(path) == 2 {
+    give 1
+  }
+  hold slash = 0
+  hold i = len(path)
+  while i > 0 {
+    when slash == 0 and sx_index(path, i - 1) == 47 {
+      slash = i - 1
+    }
+    i = i - 1
+  }
+  when slash > 0 {
+    hold parent = ds_ensure_dir(ds_slice(path, 0, slash))
+    when parent == 0 {
+      give 0
+    }
+  }
+  give make_dir(path)
+}
+
+make ds_write(path: str, text: str) -> num {
+  when write_file(path, text) != 1 {
+    give ds_fail(concat("cannot write ", path))
+  }
+  give 1
+}
+
+make ds_page(title: str, body: str, home: num) -> str {
+  hold up = "../"
+  hold brand = "../index.html"
+  when home == 1 {
+    up = ""
+    brand = "index.html"
+  }
+  hold out = "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+  out = concat(out, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+  out = concat(out, concat("<title>", concat(ds_escape_html(title), "</title>\n")))
+  out = concat(out, concat("<link rel=\"stylesheet\" href=\"", concat(up, "assets/docsite.css\">\n")))
+  out = concat(out, "</head>\n<body>\n<header class=\"docsite-header\">\n")
+  out = concat(out, concat("<a class=\"docsite-brand\" href=\"", concat(brand, "\">Sayanox</a>\n")))
+  out = concat(out, concat("<nav><a href=\"", concat(up, "index.html#documents\">All documents</a></nav>\n")))
+  out = concat(out, "</header>\n<main class=\"docsite-main\">\n")
+  out = concat(out, concat(body, "\n</main>\n"))
+  out = concat(out, "<footer class=\"docsite-footer\">Generated from the repository documentation by <code>tools/docsite.sa</code>.</footer>\n")
+  out = concat(out, "</body>\n</html>\n")
+  give out
+}
+
+// href="TARGET.md[#fragment]" -> href="target-page.html[#fragment]" when TARGET
+// names a document in this site; anything else is left exactly as written.
+make ds_link_pages(html: str, keys: str, pages: str) -> str {
+  hold n = len(html)
+  hold out = ""
+  hold run = 0
+  hold i = 0
+  while i < n {
+    when sx_index(html, i) == 104 and string_eq(ds_slice(html, i, i + 6), "href=\"") == 1 {
+      hold j = i + 6
+      hold q = j
+      while q < n and sx_index(html, q) != 34 {
+        q = q + 1
+      }
+      when q < n {
+        hold value = ds_slice(html, j, q)
+        hold hash = ds_find(value, "#")
+        hold head = value
+        hold frag = ""
+        when hash >= 0 {
+          head = ds_slice(value, 0, hash)
+          frag = ds_slice(value, hash, len(value))
+        }
+        hold hl = len(head)
+        hold rewritten = 0
+        when hl > 3 and string_eq(ds_slice(head, hl - 3, hl), ".md") == 1 {
+          hold target = ds_lower_ascii(ds_basename(ds_slice(head, 0, hl - 3)))
+          hold count = ds_pack_count(keys)
+          hold k = 0
+          while rewritten == 0 and k < count {
+            when string_eq(ds_pack_at(keys, k), target) == 1 {
+              out = concat(out, ds_slice(html, run, i))
+              out = concat(out, concat("href=\"", concat(ds_pack_at(pages, k), concat(frag, "\""))))
+              i = q + 1
+              run = i
+              rewritten = 1
+            }
+            k = k + 1
+          }
+        }
+        when rewritten == 0 {
+          i = q + 1
+        }
+      } otherwise {
+        i = i + 1
+      }
+    } otherwise {
+      i = i + 1
+    }
+  }
+  give concat(out, ds_slice(html, run, n))
+}
+
+make ds_stylesheet() -> str {
+  give ":root {\n  color-scheme: light dark;\n  --bg: #ffffff;\n  --fg: #1c1e21;\n  --muted: #5c6470;\n  --line: #e3e6ea;\n  --code: #f4f6f8;\n  --accent: #0b6b53;\n}\n@media (prefers-color-scheme: dark) {\n  :root { --bg: #14171a; --fg: #e8eaed; --muted: #9aa4b0; --line: #2a2f35; --code: #1d2126; --accent: #6fd3b4; }\n}\n* { box-sizing: border-box; }\nbody {\n  margin: 0;\n  background: var(--bg);\n  color: var(--fg);\n  font: 16px/1.65 -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif;\n}\n.docsite-header {\n  display: flex;\n  gap: 1.5rem;\n  align-items: baseline;\n  padding: 0.9rem 1.25rem;\n  border-bottom: 1px solid var(--line);\n  position: sticky;\n  top: 0;\n  background: var(--bg);\n}\n.docsite-brand { font-weight: 700; color: var(--accent); text-decoration: none; letter-spacing: 0.02em; }\n.docsite-header nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; }\n.docsite-main { max-width: 60rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }\n.docsite-footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 0.85rem; padding: 1.25rem; text-align: center; }\nh1, h2, h3, h4 { line-height: 1.25; margin: 2rem 0 0.75rem; }\nh1 { margin-top: 0; font-size: 2rem; }\nh2 { font-size: 1.45rem; border-bottom: 1px solid var(--line); padding-bottom: 0.35rem; }\nh3 { font-size: 1.15rem; }\na { color: var(--accent); }\ncode { background: var(--code); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.88em; }\npre { background: var(--code); padding: 1rem; border-radius: 8px; overflow-x: auto; }\npre code { background: none; padding: 0; }\nblockquote { margin: 1rem 0; padding: 0.25rem 1rem; border-left: 3px solid var(--accent); color: var(--muted); }\ntable { border-collapse: collapse; width: 100%; margin: 1rem 0; display: block; overflow-x: auto; }\nth, td { border: 1px solid var(--line); padding: 0.45rem 0.7rem; text-align: left; vertical-align: top; }\nhr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }\nul, ol { padding-left: 1.4rem; }\nimg { max-width: 100%; }\n.docindex { list-style: none; padding: 0; display: grid; gap: 0.5rem; }\n.docindex li a { display: block; padding: 0.7rem 0.9rem; border: 1px solid var(--line); border-radius: 8px; text-decoration: none; }\n.docindex li a:hover { border-color: var(--accent); }\n.docindex .docname { display: block; font-weight: 600; }\n.docindex .docdesc { display: block; color: var(--muted); font-size: 0.85rem; }\n"
+}
+
+make ds_build(source_dir: str, out_dir: str) -> num {
+  when path_kind(source_dir) != 2 {
+    give ds_fail(concat("source directory not found: ", source_dir))
+  }
+  hold entries = read_dir(source_dir)
+  hold names = ""
+  hold n = len(entries)
+  hold pos = 0
+  while pos < n {
+    hold start = pos
+    while pos < n and sx_index(entries, pos) != 10 {
+      pos = pos + 1
+    }
+    hold entry = ds_slice(entries, start, pos)
+    pos = pos + 1
+    when len(entry) > 3 {
+      when string_eq(ds_slice(entry, len(entry) - 3, len(entry)), ".md") == 1 {
+        when path_kind(ds_join(source_dir, entry)) == 1 {
+          names = ds_pack_push(names, entry)
+        }
+      }
+    }
+  }
+  hold count = ds_pack_count(names)
+  when count == 0 {
+    give ds_fail(concat("no Markdown documents found in ", source_dir))
+  }
+  names = ds_sort_names(names)
+
+  hold cleared = ds_rmtree(out_dir)
+  when ds_ensure_dir(ds_join(out_dir, "assets")) == 0 {
+    give ds_fail(concat("cannot create ", ds_join(out_dir, "assets")))
+  }
+  when ds_ensure_dir(ds_join(out_dir, "docs")) == 0 {
+    give ds_fail(concat("cannot create ", ds_join(out_dir, "docs")))
+  }
+  hold css = ds_write(ds_join(ds_join(out_dir, "assets"), "docsite.css"), ds_stylesheet())
+
+  hold titles = ""
+  hold slugs = ""
+  hold keys = ""
+  hold pages = ""
+  hold i = 0
+  while i < count {
+    hold name = ds_pack_at(names, i)
+    hold source = read_file(ds_join(source_dir, name))
+    hold stem = ds_stem(name)
+    titles = ds_pack_push(titles, ds_title(source, stem))
+    hold slug = ds_slug(name)
+    slugs = ds_pack_push(slugs, slug)
+    keys = ds_pack_push(keys, ds_lower_ascii(stem))
+    pages = ds_pack_push(pages, concat(slug, ".html"))
+    i = i + 1
+  }
+
+  i = 0
+  while i < count {
+    hold name = ds_pack_at(names, i)
+    hold source = read_file(ds_join(source_dir, name))
+    hold body = ds_link_pages(ds_markdown(source), keys, pages)
+    hold page = ds_write(ds_join(ds_join(out_dir, "docs"), concat(ds_pack_at(slugs, i), ".html")), ds_page(ds_pack_at(titles, i), body, 0))
+    i = i + 1
+  }
+
+  hold items = ""
+  i = 0
+  while i < count {
+    when i > 0 {
+      items = concat(items, "\n")
+    }
+    hold line = concat("  <li><a href=\"docs/", concat(ds_escape_attr(ds_pack_at(slugs, i)), ".html\">"))
+    line = concat(line, concat("<span class=\"docname\">", concat(ds_escape_html(ds_pack_at(titles, i)), "</span>")))
+    line = concat(line, concat("<span class=\"docdesc\">docs/", concat(ds_escape_html(ds_pack_at(names, i)), "</span></a></li>")))
+    items = concat(items, line)
+    i = i + 1
+  }
+
+  hold home = "<h1>Sayanox documentation</h1>\n"
+  home = concat(home, "<p>A self-hosting compiler and toolchain. Every document below is generated from\n")
+  home = concat(home, "<code>docs/*.md</code> in this repository at build time.</p>\n")
+  home = concat(home, "<ul class=\"docindex\" id=\"documents\">\n")
+  home = concat(home, concat(items, "\n</ul>"))
+  hold index = ds_write(ds_join(out_dir, "index.html"), ds_page("Sayanox documentation", home, 1))
+  give count
+}
+
+make main() -> num {
+  hold source_dir = "docs"
+  hold out_dir = "site"
+  when arg_count() > 1 {
+    source_dir = arg(1)
+  }
+  when arg_count() > 2 {
+    out_dir = arg(2)
+  }
+  when arg_count() > 3 {
+    give ds_fail("usage: docsite [SOURCE_DIR] [OUT_DIR]")
+  }
+  hold count = ds_build(source_dir, out_dir)
+  show concat(concat("[OK] documentation site: ", ds_istr(count)), concat(" document(s) -> ", out_dir))
+  give 0
+}
+
+hold run_docsite = main()

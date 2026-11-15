@@ -143,7 +143,7 @@ make xa_docs(d: str) -> num {
   hold link = pg_contains("README.md", "ALL_SAYANOX_PHASE.md")
   hold phase = xf_pin("docs/ALL_SAYANOX_PHASE.md", "all maintained implementation source\nexplicit binary trust input\nC-output compatibility\ntools/emit_to_ir.sa\n")
   hold claim = pg_capture("./tools/sxbuild target all-sayanox", kp_join(d, "claim.log"))
-  hold metrics = xf_pin(kp_join(d, "claim.log"), "maintained tracked C/H files: 0\ntracked shell scripts: 0\ntracked Sayanox sources:\nbuild-driver entry-source lines (tools/sxbuild.sa):\nall maintained implementation source is Sayanox\n")
+  hold metrics = xf_pin(kp_join(d, "claim.log"), "maintained tracked C/H files: 0\ntracked shell scripts: 0\ntracked Sayanox sources:\ntracked non-Sayanox implementation files: 0\nbuild-driver entry-source lines (tools/sxbuild.sa):\nall maintained implementation source is Sayanox\n")
   // `stage2` must not appear as a runnable placeholder in the new driver.
   hold no_placeholder = xb_fail_command("./tools/sxbuild target stage2", kp_join(d, "stage2.log"), "target not migrated")
   give 0
@@ -177,11 +177,123 @@ make xa_anchor(d: str) -> num {
   when path_size(kp_join(d, "c1.c")) <= 100000 { give gl_fail("implausibly small emitted compiler") }
   give pg_command("./tools/sxbuild target all-sayanox", "all-maintained-Sayanox source/anchor audit")
 }
+// Computed here rather than by calling the renderer: a gate that asks the
+// implementation for its own expected answer proves nothing. docs/ names are
+// ASCII, so this is a direct lowercase + [^a-z0-9._-]+ -> "-" fold.
+make xa_doc_slug(stem: str) -> str {
+  hold out = ""
+  hold i = 0
+  hold n = len(stem)
+  while i < n {
+    hold c = sx_index(stem, i)
+    when c >= 65 && c <= 90 { c = c + 32 }
+    hold ok = 0
+    when (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 46 || c == 95 || c == 45 { ok = 1 }
+    when ok == 1 {
+      out = concat(out, chr(c))
+      i = i + 1
+    } otherwise {
+      out = concat(out, "-")
+      hold stop = 0
+      while stop == 0 && i < n {
+        hold d = sx_index(stem, i)
+        when d >= 65 && d <= 90 { d = d + 32 }
+        hold good = 0
+        when (d >= 97 && d <= 122) || (d >= 48 && d <= 57) || d == 46 || d == 95 || d == 45 { good = 1 }
+        when good == 1 { stop = 1 } otherwise { i = i + 1 }
+      }
+    }
+  }
+  give out
+}
+// The documentation renderer is Sayanox. This gate holds it to oracles that
+// were produced by the retired Node renderer, rebuilds the real site, and
+// refuses a renderer that quietly drops documents or leaves a host runtime in
+// the publishing path.
+make xa_docsite(d: str) -> num {
+  hold made = gl_ensure_dir(d)
+  hold dir = d
+  hold fixtures = "selfhost/docsite_test.sa\nselfhost/docsite_markdown_test.sa\n"
+  hold oracles = "selfhost/docsite_helpers.want\nselfhost/docsite_markdown.want\n"
+  hold index = 0
+  hold pos = 0
+  while pos < len(fixtures) {
+    hold begin = pos
+    while pos < len(fixtures) && sx_index(fixtures, pos) != 10 { pos = pos + 1 }
+    hold source = gl_slice(fixtures, begin, pos)
+    pos = pos + 1
+    hold ostart = index
+    index = index + 1
+    hold opos = 0
+    hold oracle = ""
+    hold seen = 0
+    while seen <= ostart && opos < len(oracles) {
+      hold obegin = opos
+      while opos < len(oracles) && sx_index(oracles, opos) != 10 { opos = opos + 1 }
+      when seen == ostart { oracle = gl_slice(oracles, obegin, opos) }
+      opos = opos + 1
+      seen = seen + 1
+    }
+    when path_kind(oracle) != 1 || path_size(oracle) == 0 { give gl_fail(concat("docsite oracle absent/empty: ", oracle)) }
+    hold kind = 0
+    while kind < 3 {
+      hold base = concat(concat(dir, "/fx"), concat(gl_istr(ostart), gl_istr(kind)))
+      hold compiled = xr_case(kind, source, base, read_file(oracle), xr_strict_flags())
+      kind = kind + 1
+    }
+  }
+  // Build and run the real renderer, then require the whole documented tree.
+  hold built = pg_command("./sx tool docsite", "documentation renderer builds from Sayanox")
+  hold site = kp_join(dir, "site")
+  hold rendered = pg_capture(concat("./tools/docsite docs ", gl_sh_quote(site)), kp_join(dir, "render.log"))
+  hold index_page = kp_join(site, "index.html")
+  when path_kind(index_page) != 1 || path_size(index_page) == 0 { give gl_fail("docsite produced no index.html") }
+  hold css = kp_join(site, "assets/docsite.css")
+  when path_kind(css) != 1 || path_size(css) == 0 { give gl_fail("docsite produced no stylesheet") }
+  hold home = read_file(index_page)
+  hold listed = pg_contains(css, "docsite-main")
+  // Every docs/*.md must appear as a page and as an index entry.
+  hold names = read_dir("docs")
+  hold npos = 0
+  hold pages = 0
+  while npos < len(names) {
+    hold start = npos
+    while npos < len(names) && sx_index(names, npos) != 10 { npos = npos + 1 }
+    hold name = gl_slice(names, start, npos)
+    npos = npos + 1
+    when len(name) > 3 && string_eq(gl_slice(name, len(name) - 3, len(name)), ".md") == 1 && path_kind(kp_join("docs", name)) == 1 {
+      hold stem = gl_slice(name, 0, len(name) - 3)
+      hold slug = xa_doc_slug(stem)
+      hold page = kp_join(kp_join(site, "docs"), concat(slug, ".html"))
+      when path_kind(page) != 1 || path_size(page) == 0 { give gl_fail(concat("missing rendered page for ", name)) }
+      hold entry = pg_contains(index_page, concat("docs/", concat(slug, ".html")))
+      hold body = read_file(page)
+      hold credit = pg_contains(page, "tools/docsite.sa")
+      pages = pages + 1
+    }
+  }
+  when pages == 0 { give gl_fail("docsite rendered no documents") }
+  show concat("  docsite rendered documents: ", gl_istr(pages))
+  // A second render must be byte-identical: the site is a build artifact.
+  hold again = kp_join(dir, "site2")
+  hold rerun = pg_capture(concat("./tools/docsite docs ", gl_sh_quote(again)), kp_join(dir, "render2.log"))
+  hold stable = gl_assert_files_eq(index_page, kp_join(again, "index.html"), "docsite index is deterministic")
+  // Unsafe schemes must never reach an href, and the empty-directory case must
+  // fail rather than publish an empty site.
+  hold empty = kp_join(dir, "empty")
+  hold empty_made = gl_ensure_dir(empty)
+  hold refused = xb_fail_command(concat(concat("./tools/docsite ", gl_sh_quote(empty)), concat(" ", gl_sh_quote(kp_join(dir, "nosite")))), kp_join(dir, "empty.log"), "no Markdown documents found")
+  hold no_node = pg_not_contains(".github/workflows/docs.yml", "node tools/docsite")
+  hold no_mjs = xa_absent_list("tools/docsite.mjs\nselfhost/stdlib_library_pack_oracle.py\n")
+  give 0
+}
 make xa_dispatch(name: str) -> num {
   hold d = concat("selfhost/seed_tests/sxgates/", name)
   hold clean = gl_clean_dir(d)
   hold result = 0
-  when string_eq(name, "test-doc-claims") == 1 { result = xa_docs(d) } otherwise { result = xa_anchor(d) }
+  when string_eq(name, "test-doc-claims") == 1 { result = xa_docs(d) }
+  when string_eq(name, "test-docsite") == 1 { result = xa_docsite(d) }
+  when string_eq(name, "test-trust-anchor") == 1 { result = xa_anchor(d) }
   show concat("[OK] Sayanox evidence audit: ", name)
   give result
 }

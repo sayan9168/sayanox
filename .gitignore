@@ -120,7 +120,13 @@ tools/sxdiag.c
 # sxbench scratch directory
 /.sxbench/
 
-# Generated documentation site for Vercel previews (tools/docsite.mjs)
+# Built documentation renderer (./sx tool docsite)
+/tools/docsite
+
+# Staged rebuild of the tracked native entry, before it is installed over /sx
+/sx.new
+
+# Generated documentation site for Vercel previews (tools/docsite.sa)
 /site/
 
 # Local Vercel CLI project link
