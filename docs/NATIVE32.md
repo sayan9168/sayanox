@@ -223,6 +223,7 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   length + 1 bytes, so a literal bound as an argument or returned from a body is
   pooled with that newline; a `concat` operand is not, which is why every
   pre-existing image stayed byte-identical.
+  The 6-parameter maximum is pinned with alternating `num`/`str` (9 pushed words) and with six `str` parameters.
   Refused with a line-numbered diagnostic: a number or numeric variable as a
   `str` argument, a string as a `num` argument, a number as a `-> str` result, a
   string as a `-> num` result, `f() + 1` or any other numeric use of a `-> str`

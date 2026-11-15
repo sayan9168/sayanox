@@ -1,0 +1,4 @@
+make seven(a: str, b: num, c: str, d: num, e: str, f: num, g: str) -> str {
+  give a
+}
+show seven("a", 1, "b", 2, "c", 3, "d")
