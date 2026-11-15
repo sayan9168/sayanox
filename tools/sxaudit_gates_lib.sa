@@ -129,6 +129,11 @@ make xa_current_docs() -> num {
 make xa_docs(d: str) -> num {
   hold absent = xa_absent_list("Makefile\nselfhost/stage2_template.c\nselfhost/sxc_full.c\nselfhost/sxc_full_minimal.c\nselfhost/restore_stage2.sh\nselfhost/restore_sxc.sh\nselfhost/restore_sxc_full.sh\nselfhost/restore_stage2_template.sh\nselfhost/sx\nselfhost/stage2_src\nselfhost/stage2\nselfhost/native_aot.c\ntools/emit_to_ir.c\n")
   hold docs = xa_docs_walk("docs")
+  // A past edit wrote markdown structure as literal backslash-n, which collapsed
+  // the whole work-register table into one 26,920-character line. Pin the shape
+  // so it cannot silently happen again.
+  hold no_literal_nl = pg_not_contains("docs/REMAINING_WORK.md", "\\n")
+  hold register_rows = xf_pin("docs/REMAINING_WORK.md", "\n| R01 |\n| R07 |\n| R19 |\n")
   hold current = xa_current_docs()
   hold stage2 = pg_contains("docs/FULL_LANGUAGE_SELFHOST.md", "The Stage-2 host is not in this repository")
   hold files = "selfhost/seed/sxc_seed_min.sa\nselfhost/seed/seed_runtime_lib.sa\nbootstrap/sxc_native.audit\nselfhost/compiler_min.sa\nselfhost/native_aot.sa\ndocs/STATUS.md\ndocs/STDLIB.md\ndocs/ALL_SAYANOX_PHASE.md\n"

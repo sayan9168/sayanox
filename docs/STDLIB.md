@@ -56,6 +56,8 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/net.sa` | lexical IPv4/CIDR/hostname helpers (`net_*`): strict dotted-quad, CIDR network/broadcast/containment, RFC1918/loopback/link-local/multicast/reserved predicates, LDH hostname and port validation; address math, not sockets | seed-min, gen2, native_aot | `test-stdlib-next` |
 | `stdlib/template.sa` | safe `{name}` templates (`tpl_*`) over `stdlib/map.sa`: one-pass substitution, doubled-brace escapes, strict render, fallback render, syntax validation and escaping | seed-min, gen2, native_aot | `test-stdlib-next` |
 | `stdlib/money.sa` | exact decimal money helpers (`mo_*`) over `stdlib/decimal.sa`: packed amount lists, sum, largest-remainder allocation/split, tax/discount/rate rounding; never converts amounts through IEEE doubles | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/utf8.sa` | strict RFC 3629 UTF-8 codec (`u8_*`): validation, scalar encode/decode, byte-offset ↔ code-point-index navigation, slicing, list/byte round trips, BOM strip, and maximal-subpart repair; refuses overlong forms, surrogates and > U+10FFFF; NUL-free strings, cap 65536 bytes | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/utext.sa` | code-point-aware text (`ut_*`) over `stdlib/utf8.sa`: length, at/slice/take/drop, reverse, ASCII-only case mapping, exact Unicode `White_Space` trimming, non-splitting truncation, search/count/prefix/suffix; code points not graphemes, no normalization or display width | seed-min, gen2, native_aot | `test-stdlib-next` |
 
 ## Toolbox modules
 
@@ -127,6 +129,62 @@ show highs[2]                     // 3
 `selfhost/stdlib_text.want` includes a hand-written toolbox oracle exercised by
 `test-stdlib-next` on seed-min, gen2 and native.
 
+## Unicode text
+
+`stdlib/utf8.sa` is the scalar-value layer the byte-oriented text modules never
+had. It validates **strict RFC 3629** UTF-8 — overlong forms (`C0`/`C1` leads,
+padded ASCII), UTF-16 surrogates (`ED A0`..`ED BF`) and anything above U+10FFFF
+(`F4 90`.., `F5`..`FF` leads) are all refused, not merely "decoded leniently".
+
+```sayanox
+use "stdlib/utf8.sa"
+use "stdlib/utext.sa"          // import utf8 first; utext names its functions
+
+hold text = "নমস্কার world"
+show len(text)                 // 22 -- bytes
+show ut_len(text)              // 13 -- characters
+show ut_take(text, 7)          // "নমস্কার" -- never half a sequence
+show ut_truncate(text, 10, "…") // fits the suffix inside the width
+show u8_valid("ok")            // 1
+```
+
+Navigation converts between the two coordinate systems explicitly:
+`u8_byte_index(s, i)` maps a code-point index to a byte offset, `u8_at(s, i)`
+reads the scalar at a code-point index, and `u8_decode_at(s, b)` reads the scalar
+at a *byte* offset. `u8_next`/`u8_prev` walk boundaries. Malformed input is
+refused with `-1` (counts) or `""` (text) rather than guessed at.
+
+`u8_sanitize` repairs malformed text with the **Unicode maximal-subpart rule**:
+one U+FFFD for the longest prefix that is either a valid partial sequence or a
+single byte that cannot lead. A truncated `E0 A0` therefore becomes one
+replacement character, while the surrogate `ED A0 80` becomes three, because
+`ED`'s second byte is already illegal. This matches Python's
+`bytes.decode("utf-8", errors="replace")`, which is what the frozen oracle used.
+
+`ut_trim` uses the exact Unicode `White_Space` property, so NBSP (U+00A0), NEL
+(U+0085) and IDEOGRAPHIC SPACE (U+3000) trim while ZWSP (U+200B) and BOM
+(U+FEFF) do not.
+
+**Deliberate limits, not oversights:**
+
+* A "character" is one **code point**, not one grapheme cluster. `"e"` + U+0301
+  counts as 2, `ut_reverse` separates them, and the flag 🇮 counts as 2 regional
+  indicators. Grapheme clustering needs the Unicode break tables.
+* `ut_lower`/`ut_upper` are **ASCII-only**. Full casing is locale- and
+  context-sensitive (Turkish dotless i, Greek final sigma, German sharp s) and is
+  not approximated; non-ASCII scalars pass through unchanged.
+* No normalization (NFC/NFD) and no display width: combining marks are not
+  composed and East Asian wide characters are not counted as two columns.
+* Strings are NUL-free like the other string codecs, so U+0000 is refused by
+  `u8_encode`/`u8_from`; `u8_bytes`/`u8_from_bytes` are the byte-list escape hatch.
+
+Two frozen fixtures (`selfhost/stdlib_utf8_test.sa`, `stdlib_utext_test.sa`) hold
+this to **1,412 expectations** computed outside Sayanox from Python's UTF-8 codec
+and the `White_Space` property, including randomized malformed-byte and
+round-trip vectors. Both match byte-for-byte on seed-min, gen2 and native_aot
+through `test-stdlib-next`. `examples/unicode.sa` is a runnable tour that shows a
+byte slice producing invalid UTF-8 where a code-point slice does not.
+
 ## Library pack
 
 The library pack adds ten bounded, persistent helpers: `set`, `heap`,
@@ -146,7 +204,9 @@ and `money`. Import dependencies explicitly: `result.sa` before `intmath.sa`,
 * `graph` is an in-memory small-tool graph, not a database: at most 64 nodes and
   4096 edges, nonnegative integer weights, and algorithm results shaped as
   `[1, values...]` or `[0]`. Unreachable distances are -1.
-* Text metrics and wrapping are byte-oriented, not Unicode grapheme-aware.
+* Text metrics and wrapping are byte-oriented, not Unicode grapheme-aware. For
+  text that may contain non-ASCII, `stdlib/utf8.sa` and `stdlib/utext.sa` provide
+  the code-point layer underneath; they still do not cluster graphemes.
   `base32` is RFC 4648 with canonical padding/pad-bit checks; the string API is
   NUL-free like the other string codecs, while the byte-list API handles NUL.
 * `net` validates and computes IPv4/CIDR/hostname facts; it does not open

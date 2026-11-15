@@ -1,0 +1,422 @@
+// stdlib/utext.sa -- code-point-aware text helpers (prefix ut_).
+//
+// The byte-oriented modules (str_text, text_metric, text_wrap, text_search)
+// count bytes. These helpers count Unicode scalar values instead, so slicing
+// never cuts a multi-byte sequence in half and a length is what a reader would
+// call the number of characters.
+//
+// Scope, stated plainly:
+//   * A "character" here is one code point, NOT one grapheme cluster. "e" plus
+//     U+0301 counts as 2 and ut_reverse separates them. Grapheme clustering
+//     needs the Unicode break tables, which this library does not carry.
+//   * Case mapping is ASCII-only. Non-ASCII scalars pass through unchanged.
+//     Full case mapping is locale- and context-sensitive (Turkish dotless i,
+//     Greek final sigma, German sharp s) and is deliberately not approximated.
+//   * Trimming uses the exact Unicode White_Space property set, not "anything
+//     that looks blank".
+//   * No normalization and no display width: combining marks are not composed
+//     and East Asian wide characters are not counted as two columns.
+//
+// Malformed UTF-8 is refused rather than silently repaired: functions returning
+// a count give -1, functions returning text give "". Call u8_sanitize first if
+// you want replacement characters instead. Inputs are bounded at 65536 bytes.
+//
+// Dependency: import stdlib/utf8.sa BEFORE this module. Like money.sa over
+// decimal.sa and template.sa over map.sa, this module names its dependency's
+// functions without importing it, because the module loader does not dedupe a
+// diamond and a second import would declare every u8_ function twice.
+
+
+// The Unicode White_Space property, exactly. Note U+0085 (NEL) and U+00A0
+// (NBSP) are included, while U+200B (zero width space) and U+FEFF are not.
+make ut_is_space(cp: num) -> num {
+  when cp >= 9 and cp <= 13 {
+    give 1
+  }
+  when cp == 32 {
+    give 1
+  }
+  when cp == 133 {
+    give 1
+  }
+  when cp == 160 {
+    give 1
+  }
+  when cp == 5760 {
+    give 1
+  }
+  when cp >= 8192 and cp <= 8202 {
+    give 1
+  }
+  when cp == 8232 {
+    give 1
+  }
+  when cp == 8233 {
+    give 1
+  }
+  when cp == 8239 {
+    give 1
+  }
+  when cp == 8287 {
+    give 1
+  }
+  when cp == 12288 {
+    give 1
+  }
+  give 0
+}
+
+// Code-point count, or -1 for malformed/oversized input.
+make ut_len(s: str) -> num {
+  give u8_len(s)
+}
+
+// One code point as text, or "" when idx is out of range or input is malformed.
+make ut_at(s: str, idx: num) -> str {
+  hold cp = u8_at(s, idx)
+  when cp < 0 {
+    give ""
+  }
+  give u8_encode(cp)
+}
+
+// Substring by code-point indices [first, last), clamped like a slice.
+make ut_slice(s: str, first: num, last: num) -> str {
+  give u8_slice(s, first, last)
+}
+
+// First `count` code points. Negative count gives "".
+make ut_take(s: str, count: num) -> str {
+  when count < 0 {
+    give ""
+  }
+  give u8_slice(s, 0, count)
+}
+
+// Everything after the first `count` code points.
+make ut_drop(s: str, count: num) -> str {
+  hold n = u8_len(s)
+  when n < 0 {
+    give ""
+  }
+  hold start = count
+  when start < 0 {
+    start = 0
+  }
+  give u8_slice(s, start, n)
+}
+
+// Code points in reverse order. This reverses scalars, not grapheme clusters,
+// so a combining mark ends up before the letter it modified.
+make ut_reverse(s: str) -> str {
+  when u8_valid(s) == 0 {
+    give ""
+  }
+  hold n = len(s)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold span = u8_span(s, i)
+    hold piece = ut_bytes_between(s, i, i + span)
+    out = concat(piece, out)
+    i = i + span
+  }
+  give out
+}
+
+// ASCII A-Z -> a-z. Every other scalar, including non-ASCII letters, is copied
+// unchanged; this is not Unicode lowercasing.
+make ut_lower(s: str) -> str {
+  when u8_valid(s) == 0 {
+    give ""
+  }
+  hold n = len(s)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c >= 65 and c <= 90 {
+      c = c + 32
+    }
+    hold piece = chr(c)
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+// ASCII a-z -> A-Z. See ut_lower for what this deliberately does not do.
+make ut_upper(s: str) -> str {
+  when u8_valid(s) == 0 {
+    give ""
+  }
+  hold n = len(s)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c >= 97 and c <= 122 {
+      c = c - 32
+    }
+    hold piece = chr(c)
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+// Byte offset just past the leading White_Space run, or -1 when malformed.
+make ut_trim_start_at(s: str) -> num {
+  hold n = len(s)
+  when n > 65536 {
+    give 0 - 1
+  }
+  hold i = 0
+  while i < n {
+    hold span = u8_span(s, i)
+    when span == 0 {
+      give 0 - 1
+    }
+    hold cp = u8_decode_at(s, i)
+    when ut_is_space(cp) == 0 {
+      give i
+    }
+    i = i + span
+  }
+  give n
+}
+
+// Byte offset where the trailing White_Space run begins, or -1 when malformed.
+make ut_trim_end_at(s: str) -> num {
+  hold n = len(s)
+  when n > 65536 {
+    give 0 - 1
+  }
+  hold i = 0
+  hold end = 0
+  hold seen_non_space = 0
+  while i < n {
+    hold span = u8_span(s, i)
+    when span == 0 {
+      give 0 - 1
+    }
+    hold cp = u8_decode_at(s, i)
+    when ut_is_space(cp) == 0 {
+      seen_non_space = 1
+      end = i + span
+    }
+    i = i + span
+  }
+  when seen_non_space == 0 {
+    give 0
+  }
+  give end
+}
+
+make ut_bytes_between(s: str, from: num, to: num) -> str {
+  hold out = ""
+  hold i = from
+  while i < to {
+    hold piece = chr(sx_index(s, i))
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+make ut_trim_start(s: str) -> str {
+  hold from = ut_trim_start_at(s)
+  when from < 0 {
+    give ""
+  }
+  give ut_bytes_between(s, from, len(s))
+}
+
+make ut_trim_end(s: str) -> str {
+  hold to = ut_trim_end_at(s)
+  when to < 0 {
+    give ""
+  }
+  give ut_bytes_between(s, 0, to)
+}
+
+make ut_trim(s: str) -> str {
+  hold from = ut_trim_start_at(s)
+  when from < 0 {
+    give ""
+  }
+  hold to = ut_trim_end_at(s)
+  when to < 0 {
+    give ""
+  }
+  when from >= to {
+    give ""
+  }
+  give ut_bytes_between(s, from, to)
+}
+
+// 1 when the text has no leading or trailing White_Space. Malformed gives 0.
+make ut_is_trimmed(s: str) -> num {
+  hold from = ut_trim_start_at(s)
+  when from < 0 {
+    give 0
+  }
+  hold to = ut_trim_end_at(s)
+  when to < 0 {
+    give 0
+  }
+  when from == 0 and to == len(s) {
+    give 1
+  }
+  when len(s) == 0 {
+    give 1
+  }
+  give 0
+}
+
+// Shorten to at most `width` code points INCLUDING the suffix, never splitting
+// a sequence. When the text already fits it is returned unchanged. A suffix
+// longer than the width is refused with "" rather than silently overflowing;
+// width 0 gives "". Malformed input gives "".
+make ut_truncate(s: str, width: num, suffix: str) -> str {
+  hold n = u8_len(s)
+  when n < 0 {
+    give ""
+  }
+  when width < 0 {
+    give ""
+  }
+  hold mark = u8_len(suffix)
+  when mark < 0 {
+    give ""
+  }
+  when n <= width {
+    give s
+  }
+  when width == 0 {
+    give ""
+  }
+  when mark > width {
+    give ""
+  }
+  hold keep = width - mark
+  hold head = u8_slice(s, 0, keep)
+  give concat(head, suffix)
+}
+
+// Code-point index of the first occurrence of `needle`, or -1. An empty needle
+// matches at 0, matching the byte-oriented convention. Malformed gives -1.
+make ut_index_of(s: str, needle: str) -> num {
+  hold n = u8_len(s)
+  when n < 0 {
+    give 0 - 1
+  }
+  hold m = u8_len(needle)
+  when m < 0 {
+    give 0 - 1
+  }
+  when m == 0 {
+    give 0
+  }
+  when m > n {
+    give 0 - 1
+  }
+  hold i = 0
+  while i + m <= n {
+    hold window = u8_slice(s, i, i + m)
+    when string_eq(window, needle) == 1 {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+// Non-overlapping occurrence count, counted in code points. Empty needle or
+// malformed input gives -1 so it cannot be confused with "no matches".
+make ut_count(s: str, needle: str) -> num {
+  hold n = u8_len(s)
+  when n < 0 {
+    give 0 - 1
+  }
+  hold m = u8_len(needle)
+  when m < 1 {
+    give 0 - 1
+  }
+  when m > n {
+    give 0
+  }
+  hold i = 0
+  hold hits = 0
+  while i + m <= n {
+    hold window = u8_slice(s, i, i + m)
+    when string_eq(window, needle) == 1 {
+      hits = hits + 1
+      i = i + m
+    } otherwise {
+      i = i + 1
+    }
+  }
+  give hits
+}
+
+make ut_starts_with(s: str, prefix: str) -> num {
+  hold n = u8_len(s)
+  when n < 0 {
+    give 0
+  }
+  hold m = u8_len(prefix)
+  when m < 0 {
+    give 0
+  }
+  when m > n {
+    give 0
+  }
+  hold head = u8_slice(s, 0, m)
+  give string_eq(head, prefix)
+}
+
+make ut_ends_with(s: str, suffix: str) -> num {
+  hold n = u8_len(s)
+  when n < 0 {
+    give 0
+  }
+  hold m = u8_len(suffix)
+  when m < 0 {
+    give 0
+  }
+  when m > n {
+    give 0
+  }
+  hold tail = u8_slice(s, n - m, n)
+  give string_eq(tail, suffix)
+}
+
+// 1 when every scalar is a letter or digit in the ASCII sense, else 0. This is
+// an ASCII predicate despite living in the Unicode layer; it is here so callers
+// can branch before deciding whether byte-oriented helpers are safe.
+make ut_is_ascii_alnum(s: str) -> num {
+  when u8_is_ascii(s) == 0 {
+    give 0
+  }
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    hold ok = 0
+    when c >= 65 and c <= 90 {
+      ok = 1
+    }
+    when c >= 97 and c <= 122 {
+      ok = 1
+    }
+    when c >= 48 and c <= 57 {
+      ok = 1
+    }
+    when ok == 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}

@@ -1,0 +1,606 @@
+// stdlib/utf8.sa -- strict RFC 3629 UTF-8 codec (prefix u8_).
+//
+// Every other text module in this library is byte-oriented. This one is the
+// scalar-value layer underneath them: it validates UTF-8 strictly, converts
+// between byte offsets and code-point indices, and encodes/decodes single
+// scalars. It does not do grapheme clustering, normalization, collation or
+// case folding; those need tables this library does not carry.
+//
+// "Strict" means RFC 3629, not the original 1993 UTF-8: overlong forms (C0/C1
+// leads and padded ASCII), UTF-16 surrogates (ED A0..ED BF) and anything above
+// U+10FFFF (F4 90.. and F5..FF leads) are all refused.
+//
+// Strings here are NUL-free like the rest of the string codecs, because a
+// Sayanox string cannot hold byte 0. U+0000 is therefore refused by u8_encode
+// and u8_from; use the byte-list API (u8_bytes/u8_from_bytes) when NUL matters.
+// Every function that can fail says so in its own comment and returns a value
+// that cannot be confused with a valid answer.
+//
+// Inputs are bounded at 65536 bytes, matching stdlib/base32.sa.
+
+// Maximum accepted input length in bytes.
+make u8_max_bytes() -> num {
+  give 65536
+}
+
+// Largest Unicode scalar value: U+10FFFF.
+make u8_max_cp() -> num {
+  give 1114111
+}
+
+// U+FFFD REPLACEMENT CHARACTER.
+make u8_replacement() -> num {
+  give 65533
+}
+
+// Integer division; `/` is floating point in Sayanox.
+make u8_div(a: num, b: num) -> num {
+  hold r = a % b
+  give (a - r) / b
+}
+
+// 1 when cp is a Unicode scalar value: 0..U+10FFFF without the surrogate gap.
+make u8_cp_valid(cp: num) -> num {
+  when cp < 0 {
+    give 0
+  }
+  when cp > 1114111 {
+    give 0
+  }
+  when cp >= 55296 and cp <= 57343 {
+    give 0
+  }
+  give 1
+}
+
+make u8_is_surrogate(cp: num) -> num {
+  when cp >= 55296 and cp <= 57343 {
+    give 1
+  }
+  give 0
+}
+
+// Expected sequence length from a lead byte, or 0 when the byte cannot lead.
+// C0/C1 would only produce overlong ASCII and F5..FF would exceed U+10FFFF, so
+// neither is a legal lead even though both look like multi-byte starts.
+make u8_seq_len(b: num) -> num {
+  when b >= 0 and b <= 127 {
+    give 1
+  }
+  when b >= 194 and b <= 223 {
+    give 2
+  }
+  when b >= 224 and b <= 239 {
+    give 3
+  }
+  when b >= 240 and b <= 244 {
+    give 4
+  }
+  give 0
+}
+
+// Legal range for the second byte. The four special leads are exactly the ones
+// that exclude overlong forms, surrogates and out-of-range scalars; every other
+// multi-byte lead accepts the plain 80..BF continuation range.
+make u8_second_lo(lead: num) -> num {
+  when lead == 224 {
+    give 160
+  }
+  when lead == 240 {
+    give 144
+  }
+  give 128
+}
+
+make u8_second_hi(lead: num) -> num {
+  when lead == 237 {
+    give 159
+  }
+  when lead == 244 {
+    give 143
+  }
+  give 191
+}
+
+// Number of bytes of a well-formed sequence starting at byte offset i, or 0
+// when the bytes there do not form one. This is the single place that decides
+// validity; every other function asks it.
+make u8_span(s: str, i: num) -> num {
+  hold n = len(s)
+  when i < 0 {
+    give 0
+  }
+  when i >= n {
+    give 0
+  }
+  hold lead = sx_index(s, i)
+  hold want = u8_seq_len(lead)
+  when want == 0 {
+    give 0
+  }
+  when want == 1 {
+    give 1
+  }
+  when i + want > n {
+    give 0
+  }
+  hold second = sx_index(s, i + 1)
+  hold lo = u8_second_lo(lead)
+  hold hi = u8_second_hi(lead)
+  when second < lo {
+    give 0
+  }
+  when second > hi {
+    give 0
+  }
+  hold k = 2
+  while k < want {
+    hold c = sx_index(s, i + k)
+    when c < 128 {
+      give 0
+    }
+    when c > 191 {
+      give 0
+    }
+    k = k + 1
+  }
+  give want
+}
+
+// 1 when s is well-formed UTF-8 within the byte cap, else 0. The empty string
+// is well-formed.
+make u8_valid(s: str) -> num {
+  hold n = len(s)
+  when n > 65536 {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    hold span = u8_span(s, i)
+    when span == 0 {
+      give 0
+    }
+    i = i + span
+  }
+  give 1
+}
+
+// 1 when every byte is ASCII. This is a byte test, so it also answers 1 for
+// text that merely happens to be valid UTF-8 with no non-ASCII scalars.
+make u8_is_ascii(s: str) -> num {
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) > 127 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// Code-point count of well-formed text, or -1 when s is not well-formed.
+// -1 is deliberate: 0 is a real answer for the empty string.
+make u8_len(s: str) -> num {
+  hold n = len(s)
+  when n > 65536 {
+    give 0 - 1
+  }
+  hold i = 0
+  hold count = 0
+  while i < n {
+    hold span = u8_span(s, i)
+    when span == 0 {
+      give 0 - 1
+    }
+    i = i + span
+    count = count + 1
+  }
+  give count
+}
+
+// Scalar value at byte offset i, or -1 when no well-formed sequence starts
+// there. i must be a byte offset, not a code-point index.
+make u8_decode_at(s: str, i: num) -> num {
+  hold span = u8_span(s, i)
+  when span == 0 {
+    give 0 - 1
+  }
+  hold lead = sx_index(s, i)
+  when span == 1 {
+    give lead
+  }
+  hold cp = 0
+  when span == 2 {
+    cp = lead - 192
+  }
+  when span == 3 {
+    cp = lead - 224
+  }
+  when span == 4 {
+    cp = lead - 240
+  }
+  hold k = 1
+  while k < span {
+    hold c = sx_index(s, i + k)
+    cp = cp * 64 + c - 128
+    k = k + 1
+  }
+  give cp
+}
+
+// UTF-8 text for one scalar value, or "" when cp is not a scalar. U+0000 also
+// gives "" because a Sayanox string cannot carry byte 0; use u8_bytes for it.
+// Test cp with u8_cp_valid before calling if "" would be ambiguous.
+make u8_encode(cp: num) -> str {
+  when u8_cp_valid(cp) == 0 {
+    give ""
+  }
+  when cp == 0 {
+    give ""
+  }
+  when cp < 128 {
+    give chr(cp)
+  }
+  when cp < 2048 {
+    hold a = chr(192 + u8_div(cp, 64))
+    hold b = chr(128 + cp % 64)
+    give concat(a, b)
+  }
+  when cp < 65536 {
+    hold a = chr(224 + u8_div(cp, 4096))
+    hold b = chr(128 + u8_div(cp, 64) % 64)
+    hold c = chr(128 + cp % 64)
+    hold ab = concat(a, b)
+    give concat(ab, c)
+  }
+  hold a = chr(240 + u8_div(cp, 262144))
+  hold b = chr(128 + u8_div(cp, 4096) % 64)
+  hold c = chr(128 + u8_div(cp, 64) % 64)
+  hold d = chr(128 + cp % 64)
+  hold ab = concat(a, b)
+  hold abc = concat(ab, c)
+  give concat(abc, d)
+}
+
+// Byte list for one scalar value, including U+0000. Empty list when cp is not
+// a scalar value.
+make u8_bytes(cp: num) -> list {
+  when u8_cp_valid(cp) == 0 {
+    give []
+  }
+  when cp < 128 {
+    give [cp]
+  }
+  // Each byte is computed into a hold first: the seed-min C emitter renders a
+  // `%` inside a list literal as double % double, which is not valid C.
+  hold tail = 128 + cp % 64
+  when cp < 2048 {
+    hold lead = 192 + u8_div(cp, 64)
+    give [lead, tail]
+  }
+  hold mid = 128 + u8_div(cp, 64) % 64
+  when cp < 65536 {
+    hold lead = 224 + u8_div(cp, 4096)
+    give [lead, mid, tail]
+  }
+  hold lead = 240 + u8_div(cp, 262144)
+  hold high = 128 + u8_div(cp, 4096) % 64
+  give [lead, high, mid, tail]
+}
+
+// Code-point index -> byte offset, or -1 when idx is past the end or the text
+// is malformed. idx == u8_len(s) gives len(s), the end offset.
+make u8_byte_index(s: str, idx: num) -> num {
+  when idx < 0 {
+    give 0 - 1
+  }
+  hold n = len(s)
+  when n > 65536 {
+    give 0 - 1
+  }
+  // Validate the whole string, not just the prefix walked to reach idx:
+  // "malformed gives -1" has to hold for idx 0 too.
+  when u8_valid(s) == 0 {
+    give 0 - 1
+  }
+  hold i = 0
+  hold seen = 0
+  while i < n {
+    when seen == idx {
+      give i
+    }
+    hold span = u8_span(s, i)
+    when span == 0 {
+      give 0 - 1
+    }
+    i = i + span
+    seen = seen + 1
+  }
+  when seen == idx {
+    give n
+  }
+  give 0 - 1
+}
+
+// Scalar at code-point index idx, or -1 when out of range or malformed.
+make u8_at(s: str, idx: num) -> num {
+  hold off = u8_byte_index(s, idx)
+  when off < 0 {
+    give 0 - 1
+  }
+  when off == len(s) {
+    give 0 - 1
+  }
+  give u8_decode_at(s, off)
+}
+
+// First code-point index holding cp, or -1. Malformed text gives -1.
+make u8_index_of(s: str, cp: num) -> num {
+  hold n = len(s)
+  when n > 65536 {
+    give 0 - 1
+  }
+  hold i = 0
+  hold seen = 0
+  while i < n {
+    hold span = u8_span(s, i)
+    when span == 0 {
+      give 0 - 1
+    }
+    hold got = u8_decode_at(s, i)
+    when got == cp {
+      give seen
+    }
+    i = i + span
+    seen = seen + 1
+  }
+  give 0 - 1
+}
+
+// Next code-point boundary strictly after byte offset i, or -1. Starting at 0
+// and repeating walks the text; a malformed sequence stops the walk.
+make u8_next(s: str, i: num) -> num {
+  hold span = u8_span(s, i)
+  when span == 0 {
+    give 0 - 1
+  }
+  give i + span
+}
+
+// Previous code-point boundary strictly before byte offset i, or -1. i may be
+// len(s). This scans from the start rather than guessing from continuation
+// bytes, so it cannot land inside a malformed sequence.
+make u8_prev(s: str, i: num) -> num {
+  hold n = len(s)
+  when i <= 0 {
+    give 0 - 1
+  }
+  when i > n {
+    give 0 - 1
+  }
+  hold at = 0
+  hold last = 0 - 1
+  while at < i {
+    hold span = u8_span(s, at)
+    when span == 0 {
+      give 0 - 1
+    }
+    last = at
+    at = at + span
+  }
+  give last
+}
+
+// Substring by code-point indices [first, last), clamped to the text like a
+// slice. "" when the text is malformed or first >= last.
+make u8_slice(s: str, first: num, last: num) -> str {
+  hold count = u8_len(s)
+  when count < 0 {
+    give ""
+  }
+  hold a = first
+  hold b = last
+  when a < 0 {
+    a = 0
+  }
+  when b > count {
+    b = count
+  }
+  when a >= b {
+    give ""
+  }
+  hold from = u8_byte_index(s, a)
+  hold to = u8_byte_index(s, b)
+  when from < 0 {
+    give ""
+  }
+  when to < 0 {
+    give ""
+  }
+  hold out = ""
+  hold i = from
+  while i < to {
+    hold piece = chr(sx_index(s, i))
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+// Code points of well-formed text as a numeric list. Malformed text gives an
+// empty list, which is also the answer for ""; call u8_valid to tell them apart.
+make u8_to_list(s: str) -> list {
+  hold out = []
+  hold n = len(s)
+  when n > 65536 {
+    give []
+  }
+  hold i = 0
+  while i < n {
+    hold span = u8_span(s, i)
+    when span == 0 {
+      give []
+    }
+    hold cp = u8_decode_at(s, i)
+    out = push(out, cp)
+    i = i + span
+  }
+  give out
+}
+
+// Text from a list of scalar values. "" when any entry is not a scalar, any
+// entry is U+0000, or the result would exceed the byte cap.
+make u8_from(cps: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(cps) {
+    hold cp = cps[i]
+    when u8_cp_valid(cp) == 0 {
+      give ""
+    }
+    when cp == 0 {
+      give ""
+    }
+    hold piece = u8_encode(cp)
+    out = concat(out, piece)
+    when len(out) > 65536 {
+      give ""
+    }
+    i = i + 1
+  }
+  give out
+}
+
+// Text from a list of raw bytes. "" when the bytes are not well-formed UTF-8,
+// contain byte 0, or exceed the byte cap.
+make u8_from_bytes(bs: list) -> str {
+  hold out = ""
+  hold i = 0
+  when len(bs) > 65536 {
+    give ""
+  }
+  while i < len(bs) {
+    hold b = bs[i]
+    when b < 1 {
+      give ""
+    }
+    when b > 255 {
+      give ""
+    }
+    hold piece = chr(b)
+    out = concat(out, piece)
+    i = i + 1
+  }
+  when u8_valid(out) == 0 {
+    give ""
+  }
+  give out
+}
+
+// Repair malformed text by substituting U+FFFD for each maximal subpart, the
+// Unicode recommended practice: one replacement for the longest prefix that is
+// either a valid partial sequence or a single byte that cannot lead. So a
+// truncated "E0 A0" becomes one U+FFFD, while the surrogate "ED A0 80" becomes
+// three, because ED's second byte is already illegal. Well-formed input is
+// returned unchanged. Over-cap input gives "".
+make u8_sanitize(s: str) -> str {
+  hold n = len(s)
+  when n > 65536 {
+    give ""
+  }
+  hold mark = u8_encode(65533)
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold span = u8_span(s, i)
+    when span > 0 {
+      hold k = 0
+      while k < span {
+        hold piece = chr(sx_index(s, i + k))
+        out = concat(out, piece)
+        k = k + 1
+      }
+      i = i + span
+    } otherwise {
+      // Consume the longest partial sequence, but always at least one byte.
+      hold lead = sx_index(s, i)
+      hold want = u8_seq_len(lead)
+      hold used = 1
+      when want > 1 {
+        hold lo = u8_second_lo(lead)
+        hold hi = u8_second_hi(lead)
+        hold k = 1
+        hold go = 1
+        while go == 1 and k < want {
+          when i + k >= n {
+            go = 0
+          } otherwise {
+            hold c = sx_index(s, i + k)
+            hold ok = 1
+            when k == 1 {
+              when c < lo {
+                ok = 0
+              }
+              when c > hi {
+                ok = 0
+              }
+            } otherwise {
+              when c < 128 {
+                ok = 0
+              }
+              when c > 191 {
+                ok = 0
+              }
+            }
+            when ok == 1 {
+              used = used + 1
+              k = k + 1
+            } otherwise {
+              go = 0
+            }
+          }
+        }
+      }
+      out = concat(out, mark)
+      i = i + used
+    }
+  }
+  give out
+}
+
+// U+FEFF encoded as UTF-8. A leading BOM is legal text, not an error; strip it
+// only when a format says to.
+make u8_bom() -> str {
+  give u8_encode(65279)
+}
+
+// Remove one leading BOM if present. Internal and trailing BOMs are data and
+// are kept.
+make u8_strip_bom(s: str) -> str {
+  hold bom = u8_bom()
+  hold n = len(bom)
+  when len(s) < n {
+    give s
+  }
+  hold i = 0
+  hold same = 1
+  while i < n {
+    when sx_index(s, i) != sx_index(bom, i) {
+      same = 0
+    }
+    i = i + 1
+  }
+  when same == 0 {
+    give s
+  }
+  hold out = ""
+  hold k = n
+  hold total = len(s)
+  while k < total {
+    hold piece = chr(sx_index(s, k))
+    out = concat(out, piece)
+    k = k + 1
+  }
+  give out
+}
