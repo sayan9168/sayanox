@@ -1,0 +1,66 @@
+ascii count=3 width=3 sum=3 mono=1
+ascii rev=cba at1=b take1=a drop1=bc
+ascii pad=abc   |trunc=abc|gtrunc=a~|slice=bc
+crlf count=2 width=1 sum=1 mono=0
+crlf rev=A
+ at1=A take1=
+ drop1=A
+crlf pad=
+A     |trunc=
+A|gtrunc=
+A|slice=A
+mark count=2 width=2 sum=2 mono=0
+mark rev=fé at1=f take1=é drop1=f
+mark pad=éf    |trunc=éf|gtrunc=éf|slice=f
+jamo count=1 width=2 sum=4 mono=0
+jamo rev=각 at1= take1=각 drop1=
+jamo pad=각  |trunc=각|gtrunc=각|slice=
+syllable count=2 width=4 sum=4 mono=0
+syllable rev=각가 at1=각 take1=가 drop1=각
+syllable pad=가각  |trunc=가각|gtrunc=가각|slice=각
+conjunct count=1 width=1 sum=3 mono=0
+conjunct rev=क्ष्त at1= take1=क्ष्त drop1=
+conjunct pad=क्ष्त   |trunc=क्ष्त|gtrunc=क्ष्त|slice=
+bengali count=4 width=4 sum=6 mono=0
+bengali rev=রস্কামন at1=ম take1=ন drop1=মস্কার
+bengali pad=নমস্কার|trunc=নমস্ক.|gtrunc=ন~|slice=মস্কা
+spacing count=2 width=2 sum=3 mono=1
+spacing rev=खका at1=ख take1=का drop1=ख
+spacing pad=काख   |trunc=काख|gtrunc=काख|slice=ख
+prepend count=2 width=1 sum=2 mono=0
+prepend rev=ة؀ب at1=ة take1=؀ب drop1=ة
+prepend pad=؀بة    |trunc=؀بة|gtrunc=؀بة|slice=ة
+family count=1 width=2 sum=6 mono=0
+family rev=👨‍👩‍👧 at1= take1=👨‍👩‍👧 drop1=
+family pad=👨‍👩‍👧|trunc=👨‍👩‍.|gtrunc=👨‍👩‍👧|slice=
+flag2 count=1 width=1 sum=2 mono=1
+flag2 rev=🇮🇳 at1= take1=🇮🇳 drop1=
+flag2 pad=🇮🇳    |trunc=🇮🇳|gtrunc=🇮🇳|slice=
+flag3 count=2 width=2 sum=3 mono=1
+flag3 rev=🇧🇮🇳 at1=🇧 take1=🇮🇳 drop1=🇧
+flag3 pad=🇮🇳🇧   |trunc=🇮🇳🇧|gtrunc=🇮🇳🇧|slice=🇧
+flag4 count=2 width=2 sum=4 mono=1
+flag4 rev=🇧🇩🇮🇳 at1=🇧🇩 take1=🇮🇳 drop1=🇧🇩
+flag4 pad=🇮🇳🇧🇩  |trunc=🇮🇳🇧🇩|gtrunc=🇮🇳🇧🇩|slice=🇧🇩
+keycap count=2 width=2 sum=2 mono=0
+keycap rev=21️⃣ at1=2 take1=1️⃣ drop1=2
+keycap pad=1️⃣2    |trunc=1️⃣2|gtrunc=1️⃣2|slice=2
+modifier count=2 width=4 sum=6 mono=0
+modifier rev=👎👍🏽 at1=👎 take1=👍🏽 drop1=👎
+modifier pad=👍🏽👎|trunc=👍🏽.|gtrunc=👍🏽👎|slice=👎
+cjk count=3 width=6 sum=6 mono=0
+cjk rev=字文中 at1=文 take1=中 drop1=文字
+cjk pad=中文字|trunc=中文.|gtrunc=中~|slice=文字
+mixed count=4 width=6 sum=6 mono=0
+mixed rev=é👍中a at1=中 take1=a drop1=中👍é
+mixed pad=a中👍é|trunc=a中.|gtrunc=a~|slice=中👍
+bad count -1
+bad sum -1
+class neg -1
+class surr -1
+width surr -1
+extpict 1
+incb linker 1
+incb cons 2
+empty 0
+unicode_compact-oracle-ok

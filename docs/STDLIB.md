@@ -58,6 +58,8 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/money.sa` | exact decimal money helpers (`mo_*`) over `stdlib/decimal.sa`: packed amount lists, sum, largest-remainder allocation/split, tax/discount/rate rounding; never converts amounts through IEEE doubles | seed-min, gen2, native_aot | `test-stdlib-next` |
 | `stdlib/utf8.sa` | strict RFC 3629 UTF-8 codec (`u8_*`): validation, scalar encode/decode, byte-offset ↔ code-point-index navigation, slicing, list/byte round trips, BOM strip, and maximal-subpart repair; refuses overlong forms, surrogates and > U+10FFFF; NUL-free strings, cap 65536 bytes | seed-min, gen2, native_aot | `test-stdlib-next` |
 | `stdlib/utext.sa` | code-point-aware text (`ut_*`) over `stdlib/utf8.sa`: length, at/slice/take/drop, reverse, ASCII-only case mapping, exact Unicode `White_Space` trimming, non-splitting truncation, search/count/prefix/suffix; code points not graphemes, no normalization or display width | seed-min, gen2, native_aot | `test-stdlib-next` |
+| `stdlib/uwidth.sa` | terminal display width (`uw_*`) over `stdlib/utf8.sa`: 0/1/2 columns per code point from Unicode 17.0.0 `EastAsianWidth` and `General_Category`, string width, monospace test, column padding and non-splitting column truncation; Ambiguous is 1, controls are 0; sums code points, so use `ug_width` for ZWJ sequences | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/ugraph.sa` | extended grapheme clusters (`ug_*`) over `stdlib/utf8.sa` + `stdlib/uwidth.sa`: UAX #29 GB1–GB999 including GB9c Indic conjuncts, GB11 emoji ZWJ and GB12/13 regional-indicator pairing; boundary offsets, count, at/slice/take/drop, reverse, per-cluster truncation and cluster width | seed-min, gen2, native | `test-stdlib-next` |
 
 ## Toolbox modules
 
@@ -169,12 +171,12 @@ replacement character, while the surrogate `ED A0 80` becomes three, because
 
 * A "character" is one **code point**, not one grapheme cluster. `"e"` + U+0301
   counts as 2, `ut_reverse` separates them, and the flag 🇮 counts as 2 regional
-  indicators. Grapheme clustering needs the Unicode break tables.
+  indicators. Use `stdlib/ugraph.sa` when the unit should be what a reader sees.
 * `ut_lower`/`ut_upper` are **ASCII-only**. Full casing is locale- and
   context-sensitive (Turkish dotless i, Greek final sigma, German sharp s) and is
   not approximated; non-ASCII scalars pass through unchanged.
-* No normalization (NFC/NFD) and no display width: combining marks are not
-  composed and East Asian wide characters are not counted as two columns.
+* No normalization (NFC/NFD): combining marks are not composed. Display width
+  lives in `stdlib/uwidth.sa` and clustering in `stdlib/ugraph.sa`, not here.
 * Strings are NUL-free like the other string codecs, so U+0000 is refused by
   `u8_encode`/`u8_from`; `u8_bytes`/`u8_from_bytes` are the byte-list escape hatch.
 
@@ -184,6 +186,91 @@ and the `White_Space` property, including randomized malformed-byte and
 round-trip vectors. Both match byte-for-byte on seed-min, gen2 and native_aot
 through `test-stdlib-next`. `examples/unicode.sa` is a runnable tour that shows a
 byte slice producing invalid UTF-8 where a code-point slice does not.
+
+## Grapheme clusters and display width
+
+`stdlib/utext.sa` counts code points, which is the right unit for storage and the
+wrong unit for a reader. Two modules sit on top of it:
+
+```sayanox
+use "stdlib/utf8.sa"
+use "stdlib/uwidth.sa"          // import utf8 first; uwidth names its functions
+use "stdlib/ugraph.sa"          // import utf8 and uwidth first, in that order
+
+hold family = u8_from([128104, 8205, 128105, 8205, 128103])
+show u8_len(family)             // 5 code points
+show ug_count(family)           // 1 user-perceived character
+show uw_str_width(family)       // 6 -- the code-point sum over-counts
+show ug_width(family)           // 2 -- one glyph, two columns
+
+hold conjunct = u8_from([2325, 2381, 2359])   // क + virama + ष
+show ug_count(conjunct)         // 1, by GB9c
+show ug_reverse(family)         // reversing never splits a cluster
+```
+
+`ug_breaks` returns byte offsets, always including `0` and `len(s)`, so
+`len(ug_breaks(s)) == ug_count(s) + 1`. Every other cluster function is expressed
+in those terms, which is why a slice can never cut a combining mark off its base
+or leave half a flag behind.
+
+**Which rules are implemented.** GB3 through GB999 of UAX #29, including the
+Unicode 15.1 Indic conjunct rule GB9c (via the `InCB` property, so क्ष and ক্ত are
+one cluster each), the emoji ZWJ rule GB11, and GB12/GB13 regional-indicator
+pairing, so four indicators are two flags and three are a flag plus a loose
+indicator. Hangul `LV`/`LVT` are computed from the syllable block arithmetic
+instead of tabulated, which keeps 798 ranges out of the data.
+
+**Which width rule is implemented.** A code point is 0 columns if it is `Mn`,
+`Me` or `Cf` (combining marks, ZWJ, variation selectors, tag characters), 2 if
+`East_Asian_Width` is `W` or `F`, and 1 otherwise. `Ambiguous` is 1: the wide
+ambiguous setting of some East Asian terminals is a locale choice this module
+does not guess at. Controls are 0 rather than -1, because a column count is for
+layout, not a `wcwidth()` return code.
+
+**Deliberate limits, not oversights:**
+
+* `uw_str_width` sums code points. That is already right for a base plus marks,
+  because marks are 0, but a family emoji is three wide emoji joined by ZWJ, so
+  the sum is 6 where a terminal draws one 2-column glyph. `ug_width` measures one
+  cluster at a time and is the function to use for emoji text.
+* `uw_truncate` cuts on a code-point boundary, so it can leave a trailing ZWJ or
+  drop a mark whose base survived. `ug_truncate` cuts on a cluster boundary and
+  is the safe one for display.
+* No normalization, no bidi reordering, no locale collation, and no
+  `Emoji_Presentation` heuristic: width comes from the UCD properties alone, so
+  a text-presentation emoji without VS16 still measures 2 if it is Wide.
+* The tables are Unicode 17.0.0 and are not tailorable. There is no runtime
+  override for ambiguous width or for a custom cluster rule.
+
+**How this is verified.** The tables are generated from the Unicode 17.0.0 UCD
+files themselves (`GraphemeBreakProperty.txt`, `emoji/emoji-data.txt`,
+`DerivedCoreProperties.txt`, `DerivedEastAsianWidth.txt`,
+`DerivedGeneralCategory.txt`), not from a host library. Three frozen fixtures hold
+the behaviour to **5,463 expectations**:
+
+| Fixture | Expectations | What it proves | Backends |
+| --- | --- | --- | --- |
+| `selfhost/stdlib_ugraph_test.sa` | 4,042 | all 766 cases of the official Unicode 17.0.0 `GraphemeBreakTest.txt`, a whole-range sweep of the class/`Extended_Pictographic`/`InCB` lookups, and the cluster API against an independent rule-regex reference | seed-min, gen2, native |
+| `selfhost/stdlib_uwidth_test.sa` | 1,360 | a sweep of all 1,114,112 code points frozen as run-length transitions against the UCD read independently, plus the text API | seed-min, gen2, native |
+| `selfhost/stdlib_unicode_compact_test.sa` | 61 | the same rule set small enough for the bounded profile | seed-min, gen2, native_aot, native |
+
+The two large fixtures exceed `native_aot`'s bounded 64-slot profile by design --
+one carries a 26 KB conformance data literal -- so the compact companion exists to
+keep that backend covered. All of it runs through `test-stdlib-next`.
+
+Two host-library traps are worth recording, because both were caught by
+cross-checking rather than by reading code: the `regex` module reports
+`East_Asian_Width=W` for *every* unassigned code point — a table built from it
+gives two columns to 814,042 scalars that should not — and neither `regex`'s `\X`
+nor `uniseg` passes the official 17.0.0 conformance file (16 and 9 failures). The
+official test file is the oracle here; host libraries are cross-checks only.
+`wcwidth` disagrees on a further ~4,500 scalars by convention (it treats spacing
+marks and Hangul Jamo V/T as zero and soft hyphen as one); those are documented
+convention differences, not defects, and none of them sets an expectation.
+
+74 of the 766 official cases contain U+0000, which a Sayanox string cannot carry.
+U+0001 is substituted in those cases: both are `Grapheme_Cluster_Break=Control`,
+so rule coverage is unchanged. `examples/graphemes.sa` is a runnable tour.
 
 ## Library pack
 
@@ -206,7 +293,8 @@ and `money`. Import dependencies explicitly: `result.sa` before `intmath.sa`,
   `[1, values...]` or `[0]`. Unreachable distances are -1.
 * Text metrics and wrapping are byte-oriented, not Unicode grapheme-aware. For
   text that may contain non-ASCII, `stdlib/utf8.sa` and `stdlib/utext.sa` provide
-  the code-point layer underneath; they still do not cluster graphemes.
+  the code-point layer and `stdlib/ugraph.sa` / `stdlib/uwidth.sa` the cluster and
+  column layers; `tw_*` itself still counts bytes.
   `base32` is RFC 4648 with canonical padding/pad-bit checks; the string API is
   NUL-free like the other string codecs, while the byte-list API handles NUL.
 * `net` validates and computes IPv4/CIDR/hostname facts; it does not open
