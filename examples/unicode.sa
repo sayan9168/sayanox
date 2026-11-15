@@ -1,0 +1,105 @@
+// examples/unicode.sa -- why a byte slice is not a character slice.
+//
+//   ./sx run examples/unicode.sa
+//
+// Every older text module in this library counts bytes. That is fine for ASCII
+// and wrong for everything else: it cuts multi-byte sequences in half and
+// reports lengths no reader would agree with. stdlib/utf8.sa and
+// stdlib/utext.sa are the code-point layer that fixes both.
+
+use "stdlib/utf8.sa"
+use "stdlib/utext.sa"
+
+make demo_int(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make demo_line(label: str, value: str) -> num {
+  hold line = concat(label, value)
+  show line
+  give 0
+}
+
+make demo_count(label: str, v: num) -> num {
+  hold text = demo_int(v)
+  give demo_line(label, text)
+}
+
+// ED A0 80 is a UTF-16 surrogate smuggled into UTF-8: illegal under RFC 3629.
+// It cannot be written as a string literal, so it is built from raw bytes.
+make demo_surrogate() -> str {
+  hold a = chr(237)
+  hold b = chr(160)
+  hold c = chr(128)
+  hold ab = concat(a, b)
+  give concat(ab, c)
+}
+
+make demo() -> num {
+  hold text = "নমস্কার world — café 🇮🇳"
+
+  show "== bytes vs characters =="
+  hold a = demo_count("bytes:      ", len(text))
+  hold b = demo_count("characters: ", ut_len(text))
+
+  show "== a byte slice cuts a character in half =="
+  // The first 13 bytes land inside a multi-byte sequence, so the result is not
+  // valid UTF-8. That is the corruption this layer exists to prevent.
+  hold cut = ""
+  hold i = 0
+  while i < 13 {
+    hold piece = chr(sx_index(text, i))
+    cut = concat(cut, piece)
+    i = i + 1
+  }
+  hold c = demo_count("byte cut is valid UTF-8 (1/0): ", u8_valid(cut))
+  hold d = demo_line("code-point slice: ", ut_take(text, 12))
+
+  show "== truncation that a reader can read =="
+  hold e = demo_line("width 14: ", ut_truncate(text, 14, "…"))
+  hold f = demo_line("width 24: ", ut_truncate(text, 24, "…"))
+
+  show "== trimming uses the real White_Space set =="
+  // U+00A0 NBSP and U+3000 IDEOGRAPHIC SPACE are whitespace. U+200B ZWSP is
+  // not, so it survives the trim rather than being silently eaten.
+  hold padded = u8_from([160, 12288, 32, 104, 105, 32, 8203])
+  hold g = demo_line("trimmed: ", ut_trim(padded))
+  hold trimmed = ut_trim(padded)
+  hold h = demo_count("last scalar kept (U+200B=8203): ", u8_at(trimmed, 3))
+
+  show "== repair, do not guess =="
+  hold bad = demo_surrogate()
+  hold j = demo_count("surrogate is valid (1/0): ", u8_valid(bad))
+  hold k = demo_line("repaired: ", u8_sanitize(bad))
+  hold m = demo_count("repaired character count: ", ut_len(u8_sanitize(bad)))
+
+  show "== case mapping is ASCII-only, on purpose =="
+  // Full Unicode casing is locale- and context-sensitive. Pretending otherwise
+  // would be worse than saying plainly what this does.
+  hold n = demo_line("lower(STRASSE): ", ut_lower("STRASSE"))
+  hold p = demo_line("lower(ПРИВЕТ):  ", ut_lower("ПРИВЕТ"))
+
+  show "unicode-example-ok"
+  give 0
+}
+
+hold run_unicode_demo = demo()

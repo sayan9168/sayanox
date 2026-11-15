@@ -180,6 +180,27 @@ make ep_next() -> num {
     lp_index = lp_index + 1
   }
 
+  // Unicode layer: strict RFC 3629 codec and code-point-aware text. The frozen
+  // oracle came from Python's UTF-8 codec (maximal-subpart replacement) and the
+  // Unicode White_Space set, so the expectations are independent of this code.
+  hold un_index = 0
+  while un_index < 2 {
+    hold un_name = "utf8"
+    when un_index == 1 { un_name = "utext" }
+    hold un_src = concat(concat("selfhost/stdlib_", un_name), "_test.sa")
+    hold un_want = concat(concat("selfhost/stdlib_", un_name), ".want")
+    hold un_present = bt_require_file(un_want)
+    hold un_kind = 0
+    while un_kind < 3 {
+      hold un_bin = concat(concat(concat(concat(dir, "/unicode_"), un_name), "_"), gl_istr(un_kind))
+      hold un_c = ep_compile(un_kind, un_src, un_bin)
+      hold un_r = pg_capture(sh_quote(un_bin), concat(un_bin, ".out"))
+      hold un_a = gl_assert_files_eq(concat(un_bin, ".out"), un_want, concat(concat("unicode ", un_name), " independent oracle"))
+      un_kind = un_kind + 1
+    }
+    un_index = un_index + 1
+  }
+
   // Filesystem/process helpers need the fuller runtime. The bounded native_aot
   // and seed-min profiles are intentionally excluded; gen2 and the full native
   // compiler must agree. The worker is a Sayanox program compiled by this gate.

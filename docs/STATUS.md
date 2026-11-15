@@ -1,5 +1,29 @@
 # Status
 
+**2026-11-13 update: Unicode text layer — UTF-8 codec and code-point text**
+`stdlib/utf8.sa` and `stdlib/utext.sa` add the scalar-value layer the byte-oriented
+text modules never had. Validation is strict RFC 3629: overlong forms, UTF-16
+surrogates and anything above U+10FFFF are refused. `u8_sanitize` repairs with the
+Unicode maximal-subpart rule (one U+FFFD per longest valid prefix), matching
+Python's `errors="replace"`. `utext` counts code points, so slicing and truncation
+never split a sequence, and trimming uses the exact Unicode `White_Space` set.
+Two frozen fixtures carry **1,447 expectations** computed outside Sayanox from
+Python's UTF-8 codec and the `White_Space` property, including randomized
+malformed-byte and round-trip vectors; both match byte-for-byte on seed-min, gen2
+and native_aot through `test-stdlib-next`. `examples/unicode.sa` shows a byte
+slice producing invalid UTF-8 where a code-point slice does not. **Not** grapheme
+clustering, normalization, display width or Unicode casing — those limits are
+stated in `docs/STDLIB.md`. `ut_index_of`/`ut_count` walk byte boundaries in a single pass: the
+first version re-sliced from byte 0 per candidate, which took 7.6 s on a 6 KB
+string and would have been minutes at the 64 KiB cap; the same search now takes
+0.014 s with identical output, pinned by boundary-alignment and non-overlapping
+count cases. Two portability defects were found and fixed by the
+cross-backend run: `%` inside a list literal emits invalid C on seed-min, and a
+diamond `use` declares every function twice, so `utext` follows the existing
+caller-composes convention. Also repaired: `docs/REMAINING_WORK.md` had 33 literal
+backslash-n sequences that collapsed its work-register table into one
+26,920-character line; `test-doc-claims` now pins the table shape.
+
 **2026-11-13 update: pure-Sayanox source tree — JavaScript and Python retired**
 Every tracked implementation file is Sayanox. `tools/docsite.mjs` (JavaScript)
 was ported to `tools/docsite.sa` + `tools/sxdoc_lib.sa`; rendering the original

@@ -1,0 +1,417 @@
+space 0: 0
+space 8: 0
+space 9: 1
+space 13: 1
+space 14: 0
+space 31: 0
+space 32: 1
+space 33: 0
+space 133: 1
+space 160: 1
+space 161: 0
+space 5760: 1
+space 5761: 0
+space 8192: 1
+space 8202: 1
+space 8203: 0
+space 8232: 1
+space 8233: 1
+space 8239: 1
+space 8287: 1
+space 8288: 0
+space 12288: 1
+space 12289: 0
+space 65279: 0
+len 0: 0
+reverse 0: 
+lower 0: 
+upper 0: 
+trim_start 0: 
+trim_end 0: 
+trim 0: 
+is_trimmed 0: 1
+take2 0: 
+drop2 0: 
+slice13 0: 
+at1 0: 
+alnum 0: 1
+trunc 0/0: 
+trunc 0/1: 
+trunc 0/3: 
+trunc 0/6: 
+trunc 0/100: 
+len 1: 5
+reverse 1: olleh
+lower 1: hello
+upper 1: HELLO
+trim_start 1: hello
+trim_end 1: hello
+trim 1: hello
+is_trimmed 1: 1
+take2 1: he
+drop2 1: llo
+slice13 1: el
+at1 1: e
+alnum 1: 1
+trunc 1/0: 
+trunc 1/1: …
+trunc 1/3: he…
+trunc 1/6: hello
+trunc 1/100: hello
+len 2: 5
+reverse 2: z𝄞€éa
+lower 2: aé€𝄞z
+upper 2: Aé€𝄞Z
+trim_start 2: aé€𝄞z
+trim_end 2: aé€𝄞z
+trim 2: aé€𝄞z
+is_trimmed 2: 1
+take2 2: aé
+drop2 2: €𝄞z
+slice13 2: é€
+at1 2: é
+alnum 2: 0
+trunc 2/0: 
+trunc 2/1: …
+trunc 2/3: aé…
+trunc 2/6: aé€𝄞z
+trunc 2/100: aé€𝄞z
+len 3: 7
+reverse 3: トスキテ語本日
+lower 3: 日本語テキスト
+upper 3: 日本語テキスト
+trim_start 3: 日本語テキスト
+trim_end 3: 日本語テキスト
+trim 3: 日本語テキスト
+is_trimmed 3: 1
+take2 3: 日本
+drop2 3: 語テキスト
+slice13 3: 本語
+at1 3: 本
+alnum 3: 0
+trunc 3/0: 
+trunc 3/1: …
+trunc 3/3: 日本…
+trunc 3/6: 日本語テキ…
+trunc 3/100: 日本語テキスト
+len 4: 7
+reverse 4: galf 🇳🇮
+lower 4: 🇮🇳 flag
+upper 4: 🇮🇳 FLAG
+trim_start 4: 🇮🇳 flag
+trim_end 4: 🇮🇳 flag
+trim 4: 🇮🇳 flag
+is_trimmed 4: 1
+take2 4: 🇮🇳
+drop2 4:  flag
+slice13 4: 🇳 
+at1 4: 🇳
+alnum 4: 0
+trunc 4/0: 
+trunc 4/1: …
+trunc 4/3: 🇮🇳…
+trunc 4/6: 🇮🇳 fl…
+trunc 4/100: 🇮🇳 flag
+len 5: 7
+reverse 5: rialće
+lower 5: éclair
+upper 5: ÉCLAIR
+trim_start 5: éclair
+trim_end 5: éclair
+trim 5: éclair
+is_trimmed 5: 1
+take2 5: é
+drop2 5: clair
+slice13 5: ́c
+at1 5: ́
+alnum 5: 0
+trunc 5/0: 
+trunc 5/1: …
+trunc 5/3: é…
+trunc 5/6: écla…
+trunc 5/100: éclair
+len 6: 10
+reverse 6:   decaps  
+lower 6:   spaced  
+upper 6:   SPACED  
+trim_start 6: spaced  
+trim_end 6:   spaced
+trim 6: spaced
+is_trimmed 6: 0
+take2 6:   
+drop2 6: spaced  
+slice13 6:  s
+at1 6:  
+alnum 6: 0
+trunc 6/0: 
+trunc 6/1: …
+trunc 6/3:   …
+trunc 6/6:   spa…
+trunc 6/100:   spaced  
+len 7: 7
+reverse 7:   psbn 
+lower 7:  nbsp  
+upper 7:  NBSP  
+trim_start 7: nbsp  
+trim_end 7:  nbsp
+trim 7: nbsp
+is_trimmed 7: 0
+take2 7:  n
+drop2 7: bsp  
+slice13 7: nb
+at1 7: n
+alnum 7: 0
+trunc 7/0: 
+trunc 7/1: …
+trunc 7/3:  n…
+trunc 7/6:  nbsp…
+trunc 7/100:  nbsp  
+len 8: 13
+reverse 8: 　cihpargoedi　
+lower 8: 　ideographic　
+upper 8: 　IDEOGRAPHIC　
+trim_start 8: ideographic　
+trim_end 8: 　ideographic
+trim 8: ideographic
+is_trimmed 8: 0
+take2 8: 　i
+drop2 8: deographic　
+slice13 8: id
+at1 8: i
+alnum 8: 0
+trunc 8/0: 
+trunc 8/1: …
+trunc 8/3: 　i…
+trunc 8/6: 　ideo…
+trunc 8/100: 　ideographic　
+len 9: 5
+reverse 9: len
+lower 9: nel
+upper 9: NEL
+trim_start 9: nel
+trim_end 9: nel
+trim 9: nel
+is_trimmed 9: 0
+take2 9: n
+drop2 9: el
+slice13 9: ne
+at1 9: n
+alnum 9: 0
+trunc 9/0: 
+trunc 9/1: …
+trunc 9/3: n…
+trunc 9/6: nel
+trunc 9/100: nel
+len 10: 10
+reverse 10:  arap enil
+lower 10: line para 
+upper 10: LINE PARA 
+trim_start 10: line para 
+trim_end 10: line para
+trim 10: line para
+is_trimmed 10: 0
+take2 10: li
+drop2 10: ne para 
+slice13 10: in
+at1 10: i
+alnum 10: 0
+trunc 10/0: 
+trunc 10/1: …
+trunc 10/3: li…
+trunc 10/6: line …
+trunc 10/100: line para 
+len 11: 6
+reverse 11: ​pswz​
+lower 11: ​zwsp​
+upper 11: ​ZWSP​
+trim_start 11: ​zwsp​
+trim_end 11: ​zwsp​
+trim 11: ​zwsp​
+is_trimmed 11: 1
+take2 11: ​z
+drop2 11: wsp​
+slice13 11: zw
+at1 11: z
+alnum 11: 0
+trunc 11/0: 
+trunc 11/1: …
+trunc 11/3: ​z…
+trunc 11/6: ​zwsp​
+trunc 11/100: ​zwsp​
+len 12: 14
+reverse 12: 321 ESAC dexiM
+lower 12: mixed case 123
+upper 12: MIXED CASE 123
+trim_start 12: Mixed CASE 123
+trim_end 12: Mixed CASE 123
+trim 12: Mixed CASE 123
+is_trimmed 12: 1
+take2 12: Mi
+drop2 12: xed CASE 123
+slice13 12: ix
+at1 12: i
+alnum 12: 0
+trunc 12/0: 
+trunc 12/1: …
+trunc 12/3: Mi…
+trunc 12/6: Mixed…
+trunc 12/100: Mixed CASE 123
+len 13: 6
+reverse 13: eßartS
+lower 13: straße
+upper 13: STRAßE
+trim_start 13: Straße
+trim_end 13: Straße
+trim 13: Straße
+is_trimmed 13: 1
+take2 13: St
+drop2 13: raße
+slice13 13: tr
+at1 13: t
+alnum 13: 0
+trunc 13/0: 
+trunc 13/1: …
+trunc 13/3: St…
+trunc 13/6: Straße
+trunc 13/100: Straße
+len 14: 8
+reverse 14: lubnatsİ
+lower 14: İstanbul
+upper 14: İSTANBUL
+trim_start 14: İstanbul
+trim_end 14: İstanbul
+trim 14: İstanbul
+is_trimmed 14: 1
+take2 14: İs
+drop2 14: tanbul
+slice13 14: st
+at1 14: s
+alnum 14: 0
+trunc 14/0: 
+trunc 14/1: …
+trunc 14/3: İs…
+trunc 14/6: İstan…
+trunc 14/100: İstanbul
+len 15: 5
+reverse 15: ςαΣΣΑ
+lower 15: ΑΣΣας
+upper 15: ΑΣΣας
+trim_start 15: ΑΣΣας
+trim_end 15: ΑΣΣας
+trim 15: ΑΣΣας
+is_trimmed 15: 1
+take2 15: ΑΣ
+drop2 15: Σας
+slice13 15: ΣΣ
+at1 15: Σ
+alnum 15: 0
+trunc 15/0: 
+trunc 15/1: …
+trunc 15/3: ΑΣ…
+trunc 15/6: ΑΣΣας
+trunc 15/100: ΑΣΣας
+len 16: 6
+reverse 16: тевирП
+lower 16: Привет
+upper 16: Привет
+trim_start 16: Привет
+trim_end 16: Привет
+trim 16: Привет
+is_trimmed 16: 1
+take2 16: Пр
+drop2 16: ивет
+slice13 16: ри
+at1 16: р
+alnum 16: 0
+trunc 16/0: 
+trunc 16/1: …
+trunc 16/3: Пр…
+trunc 16/6: Привет
+trunc 16/100: Привет
+index : 0
+count : -1
+starts : 1
+ends : 1
+index café: 0
+count café: 2
+starts café: 1
+ends café: 0
+index au: 5
+count au: 1
+starts au: 0
+ends au: 0
+index noir: 19
+count noir: 1
+starts noir: 0
+ends noir: 1
+index x: -1
+count x: 0
+starts x: 0
+ends x: 0
+index é: 3
+count é: 2
+starts é: 0
+ends é: 0
+index CAFÉ: -1
+count CAFÉ: 0
+starts CAFÉ: 0
+ends CAFÉ: 0
+bad len: -1
+bad reverse: 
+bad trim: 
+bad lower: 
+bad index: -1
+bad starts: 0
+bad trunc: 
+suffix too long: 
+negative take: 0
+slice clamp wide: abcdef
+slice reversed: 
+take zero: 
+drop past end: 
+trunc exact fit: abc
+trunc width zero: 
+trunc empty suffix: ab
+is_trimmed empty: 1
+starts empty: 1
+ends empty: 1
+index empty needle: 0
+count empty needle: -1
+len over cap: -1
+trim over cap: 
+find 0: 1
+count 0: 2
+find 1: 1
+count 1: 2
+find 2: 0
+count 2: 1
+find 3: 0
+count 3: 2
+find 4: 0
+count 4: 1
+find 5: -1
+count 5: 0
+find 6: 2
+count 6: 1
+find 7: 0
+count 7: 1
+find 8: 2
+count 8: 1
+find 9: 0
+count 9: 2
+find 10: 0
+count 10: 2
+find 11: 2
+count 11: 1
+find 12: 1
+count 12: 2
+find 13: 1
+count 13: 1
+find 14: -1
+count 14: 0
+find 15: 0
+count 15: -1
+find 16: 0
+count 16: 2
+interior refused: -1
+utext-oracle-ok
