@@ -201,6 +201,47 @@ make ep_next() -> num {
     un_index = un_index + 1
   }
 
+  // Unicode depth: terminal display width and UAX #29 extended grapheme
+  // clusters. These two oracles are large by design -- uwidth sweeps all 1114112
+  // code points and ugraph runs the 766 official Unicode 17.0.0
+  // GraphemeBreakTest.txt cases plus a whole-range property sweep -- so they
+  // exceed the bounded native_aot profile's 64 slots. They run on seed-min, gen2
+  // and the full native compiler; the compact companion below covers the same
+  // rule set on native_aot as well, so no backend is blind to these modules.
+  hold ud_index = 0
+  while ud_index < 2 {
+    hold ud_name = "uwidth"
+    when ud_index == 1 { ud_name = "ugraph" }
+    hold ud_src = concat(concat("selfhost/stdlib_", ud_name), "_test.sa")
+    hold ud_want = concat(concat("selfhost/stdlib_", ud_name), ".want")
+    hold ud_present = bt_require_file(ud_want)
+    hold ud_kind = 0
+    while ud_kind < 4 {
+      when ud_kind != 2 {
+        hold ud_bin = concat(concat(concat(concat(dir, "/udepth_"), ud_name), "_"), gl_istr(ud_kind))
+        hold ud_c = ep_compile(ud_kind, ud_src, ud_bin)
+        hold ud_r = pg_capture(sh_quote(ud_bin), concat(ud_bin, ".out"))
+        hold ud_a = gl_assert_files_eq(concat(ud_bin, ".out"), ud_want, concat(concat("unicode depth ", ud_name), " independent oracle"))
+      }
+      ud_kind = ud_kind + 1
+    }
+    ud_index = ud_index + 1
+  }
+
+  // Bounded-backend companion: same rules, small enough for native_aot, and it
+  // runs on all four backends so the profiles are compared against one oracle.
+  hold uc_src = "selfhost/stdlib_unicode_compact_test.sa"
+  hold uc_want = "selfhost/stdlib_unicode_compact.want"
+  hold uc_present = bt_require_file(uc_want)
+  hold uc_kind = 0
+  while uc_kind < 4 {
+    hold uc_bin = concat(concat(dir, "/unicode_compact_"), gl_istr(uc_kind))
+    hold uc_c = ep_compile(uc_kind, uc_src, uc_bin)
+    hold uc_r = pg_capture(sh_quote(uc_bin), concat(uc_bin, ".out"))
+    hold uc_a = gl_assert_files_eq(concat(uc_bin, ".out"), uc_want, "unicode compact four-backend oracle")
+    uc_kind = uc_kind + 1
+  }
+
   // Filesystem/process helpers need the fuller runtime. The bounded native_aot
   // and seed-min profiles are intentionally excluded; gen2 and the full native
   // compiler must agree. The worker is a Sayanox program compiled by this gate.

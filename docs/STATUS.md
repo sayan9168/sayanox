@@ -22,6 +22,40 @@ store path for an absolute destination inside a body, losing every nested
 result. **R02 is not closed:** aggregates, FP, file/runtime APIs, GC and `concat`
 in general expressions remain open.
 
+**2026-11-13 update: grapheme clusters and display width — the reader's unit**
+`stdlib/ugraph.sa` implements UAX #29 extended grapheme clusters (GB1–GB999,
+including the Unicode 15.1 Indic conjunct rule GB9c, the emoji ZWJ rule GB11 and
+GB12/13 regional-indicator pairing) and `stdlib/uwidth.sa` answers the separate
+question of terminal columns (0 for `Mn`/`Me`/`Cf`, 2 for East Asian `W`/`F`, 1
+otherwise, Ambiguous treated as 1). A cluster count now says one for क्ष, for a
+Hangul L+V+T syllable and for a family emoji, where the code-point layer says
+three, three and five. Slicing, reversing and truncation are expressed in cluster
+boundaries, so no operation can strand a combining mark or half a flag.
+Verification is **5,463 frozen expectations** in three fixtures: all **766 cases
+of the official Unicode 17.0.0 `GraphemeBreakTest.txt`**, a sweep of **all
+1,114,112 code points** through the real bisection for width and for the
+class/`Extended_Pictographic`/`InCB` lookups (frozen as run-length transitions, so
+a million checks cost about a thousand oracle lines), and the cluster/text API
+against an independent rule-regex reference that is itself proven against all 766
+official cases first. The two large fixtures exceed `native_aot`'s bounded 64-slot
+profile, so a 61-expectation compact companion runs on **all four** backends;
+the large ones match on seed-min, gen2 and the full native compiler through
+`test-stdlib-next`. Tables are generated from the Unicode 17.0.0 UCD files
+themselves, not from a host library — and that mattered: the `regex` module
+reports `East_Asian_Width=W` for *every* unassigned code point, so a table built
+from it wrongly gave two columns to 814,042 scalars until the whole-range sweep
+caught it, and neither
+`regex`'s `\X` nor `uniseg` passes the official conformance file (16 and 9
+failures). Three negative controls confirm the oracles bite: disabling GB9c
+changes 8 expectations, breaking the bisection midpoint back to exact `/` changes
+835, and dropping the GB11 picture flag across ZWJ changes 18 including official
+cases 741–743; each module was restored byte-exact afterwards. One portability
+defect was found by the cross-backend run and fixed: gen2 rejects `give` and `}`
+on the same source line, so the 17 one-line class-constant bodies in `ugraph.sa`
+were expanded. `examples/graphemes.sa` is a runnable tour and agrees on gen2,
+native_aot and the full native compiler. **Not** normalization (NFC/NFD), bidi,
+collation or Unicode casing — those limits are stated in `docs/STDLIB.md`.
+
 **2026-11-13 update: Unicode text layer — UTF-8 codec and code-point text**
 `stdlib/utf8.sa` and `stdlib/utext.sa` add the scalar-value layer the byte-oriented
 text modules never had. Validation is strict RFC 3629: overlong forms, UTF-16

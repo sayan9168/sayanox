@@ -1,0 +1,144 @@
+// examples/graphemes.sa -- what a reader counts is not what a string stores.
+//
+//   ./sx run examples/graphemes.sa
+//
+// stdlib/utf8.sa gives code points and stdlib/utext.sa slices them. Neither is
+// the unit a reader sees: "e" plus a combining acute is two code points and one
+// character, a Hangul syllable can be three Jamo, an Indic conjunct is a
+// consonant plus virama plus consonant, a flag is two regional indicators, and a
+// family emoji is three emoji glued with ZWJ. stdlib/ugraph.sa implements the
+// Unicode UAX #29 rules; stdlib/uwidth.sa answers the separate question of how
+// many terminal columns the text occupies.
+
+use "stdlib/utf8.sa"
+use "stdlib/utext.sa"
+use "stdlib/uwidth.sa"
+use "stdlib/ugraph.sa"
+
+make demo_int(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make demo_line(label: str, cps: num, clusters: num, cols: num) -> num {
+  hold a = demo_int(cps)
+  hold b = demo_int(clusters)
+  hold c = demo_int(cols)
+  hold p1 = concat(label, ": ")
+  hold p2 = concat(p1, a)
+  hold p3 = concat(p2, " code points, ")
+  hold p4 = concat(p3, b)
+  hold p5 = concat(p4, " clusters, ")
+  hold p6 = concat(p5, c)
+  hold line = concat(p6, " columns")
+  show line
+  give 0
+}
+
+make demo_show(label: str, cps: list) -> num {
+  hold s = u8_from(cps)
+  hold n = u8_len(s)
+  hold g = ug_count(s)
+  hold w = ug_width(s)
+  hold z = demo_line(label, n, g, w)
+  hold rev = ug_reverse(s)
+  hold r1 = concat(label, " reversed: ")
+  hold r2 = concat(r1, rev)
+  show r2
+  give 0
+}
+
+// One character, two code points: reversing code points would move the accent
+// onto the wrong base, reversing clusters does not.
+hold accented = [101, 769, 102]
+hold z = demo_show("e-acute then f", accented)
+
+// GB6-GB8: a leading consonant, a vowel and a trailing consonant are one
+// syllable even though they are three scalars.
+hold jamo = [4352, 4449, 4520]
+hold z = demo_show("Hangul jamo", jamo)
+
+// GB9c: Devanagari ka + virama + ssa is one conjunct, not two letters. This is
+// the Unicode 15.1 rule; a code-point count says 3 and a naive cluster count
+// says 2.
+hold conjunct = [2325, 2381, 2359]
+hold z = demo_show("Devanagari kssa", conjunct)
+
+// GB11: three emoji joined by ZWJ draw as one glyph. Note the column counts:
+// summing code points gives 6 because each emoji is Wide and each ZWJ is zero,
+// while the cluster is a single 2-column glyph.
+hold family = [128104, 8205, 128105, 8205, 128103]
+hold z = demo_show("family emoji", family)
+hold fs = u8_from(family)
+hold sum = uw_str_width(fs)
+hold a1 = demo_int(sum)
+hold a2 = concat("code-point width sum: ", a1)
+show a2
+hold cl = ug_width(fs)
+hold b1 = demo_int(cl)
+hold b2 = concat("cluster width: ", b1)
+show b2
+
+// GB12/GB13: regional indicators pair up. Four make two flags; five make two
+// flags and one loose indicator, which is why the count is not simply half.
+hold two_flags = [127470, 127475, 127463, 127465]
+hold z = demo_show("four indicators", two_flags)
+hold three = [127470, 127475, 127463]
+hold z = demo_show("three indicators", three)
+
+// GB3: CR LF is one cluster, so a Windows line ending is never split.
+hold crlf = [13, 10, 65]
+hold z = demo_show("CRLF then A", crlf)
+
+// Slicing by cluster cannot leave half a character behind. Compare a
+// code-point take with a cluster take on the same conjunct text.
+hold cs = u8_from(conjunct)
+hold cp_take = ut_take(cs, 2)
+hold g_take = ug_take(cs, 1)
+hold t1 = concat("code-point take 2: ", cp_take)
+show t1
+hold t2 = concat("cluster take 1: ", g_take)
+show t2
+
+// Column padding for a table cell. CJK is two columns per character, so a
+// byte-count or code-point-count pad would misalign the row.
+hold cjk = u8_from([20013, 25991])
+hold padded = uw_pad(cjk, 8)
+hold p1 = concat("[", padded)
+hold p2 = concat(p1, "]")
+show p2
+hold pw = uw_str_width(padded)
+hold p3 = demo_int(pw)
+hold p4 = concat("padded width: ", p3)
+show p4
+
+// Truncation respects the budget and never splits a cluster. The suffix counts
+// against the budget, so a two-cluster budget with a one-column suffix keeps
+// one cluster.
+hold mixed = u8_from([20013, 25991, 23383, 65, 66])
+hold cut = ug_truncate(mixed, 2, "~")
+hold c1 = concat("cluster truncate: ", cut)
+show c1
+hold colcut = uw_truncate(mixed, 5, ".")
+hold c2 = concat("column truncate: ", colcut)
+show c2
+
+show "graphemes-ok"

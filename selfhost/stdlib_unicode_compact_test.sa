@@ -1,0 +1,190 @@
+// Frozen independent expectations; do not edit by hand.
+// Unicode module group: compact companion to uwidth + ugraph.
+// The two large fixtures exceed native_aot's bounded 64-slot profile, so this one
+// carries the same rule set to all four backends. Expectations come from the same
+// validated rule-regex reference and the same direct reading of the UCD width
+// rule. The generator is a host-side tool and is not tracked; the .want bytes are
+// the oracle.
+
+use "stdlib/utf8.sa"
+use "stdlib/uwidth.sa"
+use "stdlib/ugraph.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_csv(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    hold piece = fx_i(xs[i])
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+make fx_say(tag: str, body: str) -> num {
+  hold line = concat(tag, body)
+  show line
+  give 0
+}
+
+make fx_num(tag: str, v: num) -> num {
+  hold body = fx_i(v)
+  give fx_say(tag, body)
+}
+
+make fx_two(tag: str, body: str, v: num) -> num {
+  hold n = fx_i(v)
+  hold p = concat(body, " n=")
+  hold q = concat(p, n)
+  give fx_say(tag, q)
+}
+
+
+make cp_nums(tag: str, cps: list) -> num {
+  hold s = u8_from(cps)
+  hold a = fx_i(ug_count(s))
+  hold b = fx_i(ug_width(s))
+  hold c = fx_i(uw_str_width(s))
+  hold d = fx_i(uw_is_monospace(s))
+  hold p1 = concat(tag, " count=")
+  hold p2 = concat(p1, a)
+  hold p3 = concat(p2, " width=")
+  hold p4 = concat(p3, b)
+  hold p5 = concat(p4, " sum=")
+  hold p6 = concat(p5, c)
+  hold p7 = concat(p6, " mono=")
+  hold line = concat(p7, d)
+  show line
+  give 0
+}
+
+make cp_text(tag: str, cps: list) -> num {
+  hold s = u8_from(cps)
+  hold rev = ug_reverse(s)
+  hold one = ug_at(s, 1)
+  hold take = ug_take(s, 1)
+  hold drop = ug_drop(s, 1)
+  hold p1 = concat(tag, " rev=")
+  hold p2 = concat(p1, rev)
+  hold p3 = concat(p2, " at1=")
+  hold p4 = concat(p3, one)
+  hold p5 = concat(p4, " take1=")
+  hold p6 = concat(p5, take)
+  hold p7 = concat(p6, " drop1=")
+  hold line = concat(p7, drop)
+  show line
+  give 0
+}
+
+make cp_pad(tag: str, cps: list) -> num {
+  hold s = u8_from(cps)
+  hold pad = uw_pad(s, 6)
+  hold trunc = uw_truncate(s, 5, ".")
+  hold gtr = ug_truncate(s, 2, "~")
+  hold sl = ug_slice(s, 1, 3)
+  hold p1 = concat(tag, " pad=")
+  hold p2 = concat(p1, pad)
+  hold p3 = concat(p2, "|trunc=")
+  hold p4 = concat(p3, trunc)
+  hold p5 = concat(p4, "|gtrunc=")
+  hold p6 = concat(p5, gtr)
+  hold p7 = concat(p6, "|slice=")
+  hold line = concat(p7, sl)
+  show line
+  give 0
+}
+
+hold acc = 0
+
+acc = cp_nums("ascii", [97, 98, 99])
+acc = cp_text("ascii", [97, 98, 99])
+acc = cp_pad("ascii", [97, 98, 99])
+acc = cp_nums("crlf", [13, 10, 65])
+acc = cp_text("crlf", [13, 10, 65])
+acc = cp_pad("crlf", [13, 10, 65])
+acc = cp_nums("mark", [101, 769, 102])
+acc = cp_text("mark", [101, 769, 102])
+acc = cp_pad("mark", [101, 769, 102])
+acc = cp_nums("jamo", [4352, 4449, 4520])
+acc = cp_text("jamo", [4352, 4449, 4520])
+acc = cp_pad("jamo", [4352, 4449, 4520])
+acc = cp_nums("syllable", [44032, 44033])
+acc = cp_text("syllable", [44032, 44033])
+acc = cp_pad("syllable", [44032, 44033])
+acc = cp_nums("conjunct", [2325, 2381, 2359, 2381, 2340])
+acc = cp_text("conjunct", [2325, 2381, 2359, 2381, 2340])
+acc = cp_pad("conjunct", [2325, 2381, 2359, 2381, 2340])
+acc = cp_nums("bengali", [2472, 2478, 2488, 2509, 2453, 2494, 2480])
+acc = cp_text("bengali", [2472, 2478, 2488, 2509, 2453, 2494, 2480])
+acc = cp_pad("bengali", [2472, 2478, 2488, 2509, 2453, 2494, 2480])
+acc = cp_nums("spacing", [2325, 2366, 2326])
+acc = cp_text("spacing", [2325, 2366, 2326])
+acc = cp_pad("spacing", [2325, 2366, 2326])
+acc = cp_nums("prepend", [1536, 1576, 1577])
+acc = cp_text("prepend", [1536, 1576, 1577])
+acc = cp_pad("prepend", [1536, 1576, 1577])
+acc = cp_nums("family", [128104, 8205, 128105, 8205, 128103])
+acc = cp_text("family", [128104, 8205, 128105, 8205, 128103])
+acc = cp_pad("family", [128104, 8205, 128105, 8205, 128103])
+acc = cp_nums("flag2", [127470, 127475])
+acc = cp_text("flag2", [127470, 127475])
+acc = cp_pad("flag2", [127470, 127475])
+acc = cp_nums("flag3", [127470, 127475, 127463])
+acc = cp_text("flag3", [127470, 127475, 127463])
+acc = cp_pad("flag3", [127470, 127475, 127463])
+acc = cp_nums("flag4", [127470, 127475, 127463, 127465])
+acc = cp_text("flag4", [127470, 127475, 127463, 127465])
+acc = cp_pad("flag4", [127470, 127475, 127463, 127465])
+acc = cp_nums("keycap", [49, 65039, 8419, 50])
+acc = cp_text("keycap", [49, 65039, 8419, 50])
+acc = cp_pad("keycap", [49, 65039, 8419, 50])
+acc = cp_nums("modifier", [128077, 127997, 128078])
+acc = cp_text("modifier", [128077, 127997, 128078])
+acc = cp_pad("modifier", [128077, 127997, 128078])
+acc = cp_nums("cjk", [20013, 25991, 23383])
+acc = cp_text("cjk", [20013, 25991, 23383])
+acc = cp_pad("cjk", [20013, 25991, 23383])
+acc = cp_nums("mixed", [97, 20013, 128077, 101, 769])
+acc = cp_text("mixed", [97, 20013, 128077, 101, 769])
+acc = cp_pad("mixed", [97, 20013, 128077, 101, 769])
+hold mb1 = chr(237)
+hold mb2 = chr(160)
+hold mb3 = chr(128)
+hold mp = concat(mb1, mb2)
+hold bad = concat(mp, mb3)
+acc = fx_num("bad count ", ug_count(bad))
+acc = fx_num("bad sum ", uw_str_width(bad))
+acc = fx_num("class neg ", ug_class(0 - 1))
+acc = fx_num("class surr ", ug_class(55296))
+acc = fx_num("width surr ", uw_cp_width(55296))
+acc = fx_num("extpict ", ug_is_extpict(128077))
+acc = fx_num("incb linker ", ug_incb(2381))
+acc = fx_num("incb cons ", ug_incb(2325))
+acc = fx_num("empty ", ug_count(""))
+show "unicode_compact-oracle-ok"
