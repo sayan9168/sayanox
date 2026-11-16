@@ -1,0 +1,186 @@
+// Frozen independent expectations; do not edit by hand.
+// Unicode module group: unorm, bounded-backend companion. The same rules
+// as selfhost/stdlib_unorm_test.sa, cut down to what native_aot's 64
+// globals and 64 locals allow, so no backend is blind to this module.
+// Every expectation comes from the independent Python reference that
+// reproduces all 20034 official NormalizationTest rows first.
+
+use "stdlib/utf8.sa"
+use "stdlib/unorm.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_csv(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    hold piece = fx_i(xs[i])
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+make fx_say(tag: str, body: str) -> num {
+  hold line = concat(tag, body)
+  show line
+  give 0
+}
+
+make fx_num(tag: str, v: num) -> num {
+  hold line = concat(tag, fx_i(v))
+  show line
+  give 0
+}
+
+// The text form of a code point list: a leading bar, then the decimal CSV, so
+// an empty list still prints one visible character.
+make fx_text(xs: list) -> str {
+  hold body = fx_csv(xs)
+  give concat("|", body)
+}
+
+  hold z = fx_say("nfc 0 ", fx_text(un_nfc_list([])))
+  hold z = fx_say("nfd 0 ", fx_text(un_nfd_list([])))
+  hold z = fx_say("nfc 1 ", fx_text(un_nfc_list([97])))
+  hold z = fx_say("nfd 1 ", fx_text(un_nfd_list([97])))
+  hold z = fx_say("nfc 2 ", fx_text(un_nfc_list([233])))
+  hold z = fx_say("nfd 2 ", fx_text(un_nfd_list([233])))
+  hold z = fx_say("nfc 3 ", fx_text(un_nfc_list([101, 769])))
+  hold z = fx_say("nfd 3 ", fx_text(un_nfd_list([101, 769])))
+  hold z = fx_say("nfc 4 ", fx_text(un_nfc_list([97, 779, 769])))
+  hold z = fx_say("nfd 4 ", fx_text(un_nfd_list([97, 779, 769])))
+  hold z = fx_say("nfc 5 ", fx_text(un_nfc_list([111, 779, 769])))
+  hold z = fx_say("nfd 5 ", fx_text(un_nfd_list([111, 779, 769])))
+  hold z = fx_say("nfc 6 ", fx_text(un_nfc_list([97, 769, 768])))
+  hold z = fx_say("nfd 6 ", fx_text(un_nfd_list([97, 769, 768])))
+  hold z = fx_say("nfc 7 ", fx_text(un_nfc_list([97, 769, 790])))
+  hold z = fx_say("nfd 7 ", fx_text(un_nfd_list([97, 769, 790])))
+  hold z = fx_say("nfc 8 ", fx_text(un_nfc_list([97, 790, 769])))
+  hold z = fx_say("nfd 8 ", fx_text(un_nfd_list([97, 790, 769])))
+  hold z = fx_say("nfc 9 ", fx_text(un_nfc_list([97, 918, 790])))
+  hold z = fx_say("nfd 9 ", fx_text(un_nfd_list([97, 918, 790])))
+  hold z = fx_say("nfc 10 ", fx_text(un_nfc_list([107, 770, 769])))
+  hold z = fx_say("nfd 10 ", fx_text(un_nfd_list([107, 770, 769])))
+  hold z = fx_say("nfc 11 ", fx_text(un_nfc_list([107, 769, 790])))
+  hold z = fx_say("nfd 11 ", fx_text(un_nfd_list([107, 769, 790])))
+  hold z = fx_say("nfc 12 ", fx_text(un_nfc_list([8066])))
+  hold z = fx_say("nfd 12 ", fx_text(un_nfd_list([8066])))
+  hold z = fx_say("nfc 13 ", fx_text(un_nfc_list([469])))
+  hold z = fx_say("nfd 13 ", fx_text(un_nfd_list([469])))
+  hold z = fx_say("nfc 14 ", fx_text(un_nfc_list([7700])))
+  hold z = fx_say("nfd 14 ", fx_text(un_nfd_list([7700])))
+  hold z = fx_say("nfc 15 ", fx_text(un_nfc_list([836])))
+  hold z = fx_say("nfd 15 ", fx_text(un_nfd_list([836])))
+  hold z = fx_say("nfc 16 ", fx_text(un_nfc_list([65, 769, 768])))
+  hold z = fx_say("nfd 16 ", fx_text(un_nfd_list([65, 769, 768])))
+  hold z = fx_say("nfc 17 ", fx_text(un_nfc_list([769])))
+  hold z = fx_say("nfd 17 ", fx_text(un_nfd_list([769])))
+  hold z = fx_say("nfc 18 ", fx_text(un_nfc_list([97, 918, 769])))
+  hold z = fx_say("nfd 18 ", fx_text(un_nfd_list([97, 918, 769])))
+  hold z = fx_say("nfc 19 ", fx_text(un_nfc_list([97, 769, 918])))
+  hold z = fx_say("nfd 19 ", fx_text(un_nfd_list([97, 769, 918])))
+  hold z = fx_say("nfc 20 ", fx_text(un_nfc_list([2460])))
+  hold z = fx_say("nfd 20 ", fx_text(un_nfd_list([2460])))
+  hold z = fx_say("nfc 21 ", fx_text(un_nfc_list([105, 775])))
+  hold z = fx_say("nfd 21 ", fx_text(un_nfd_list([105, 775])))
+  hold z = fx_say("nfc 22 ", fx_text(un_nfc_list([7838])))
+  hold z = fx_say("nfd 22 ", fx_text(un_nfd_list([7838])))
+  hold z = fx_say("nfc 23 ", fx_text(un_nfc_list([64256])))
+  hold z = fx_say("nfd 23 ", fx_text(un_nfd_list([64256])))
+  hold z = fx_say("nfc 24 ", fx_text(un_nfc_list([44032])))
+  hold z = fx_say("nfd 24 ", fx_text(un_nfd_list([44032])))
+  hold z = fx_say("nfc 25 ", fx_text(un_nfc_list([4352, 4449])))
+  hold z = fx_say("nfd 25 ", fx_text(un_nfd_list([4352, 4449])))
+  hold z = fx_say("nfc 26 ", fx_text(un_nfc_list([4352, 4449, 4519])))
+  hold z = fx_say("nfd 26 ", fx_text(un_nfd_list([4352, 4449, 4519])))
+  hold z = fx_say("nfc 27 ", fx_text(un_nfc_list([437, 769])))
+  hold z = fx_say("nfd 27 ", fx_text(un_nfd_list([437, 769])))
+  hold z = fx_say("nfc 28 ", fx_text(un_nfc_list([4352, 44032, 4520])))
+  hold z = fx_say("nfd 28 ", fx_text(un_nfd_list([4352, 44032, 4520])))
+  hold z = fx_say("nfc 29 ", fx_text(un_nfc_list([119808])))
+  hold z = fx_say("nfd 29 ", fx_text(un_nfd_list([119808])))
+  hold z = fx_say("nfc 30 ", fx_text(un_nfc_list([65279, 97, 768])))
+  hold z = fx_say("nfd 30 ", fx_text(un_nfd_list([65279, 97, 768])))
+  hold z = fx_num("ccc 0 ", un_ccc(0))
+  hold z = fx_num("ccc 97 ", un_ccc(97))
+  hold z = fx_num("ccc 768 ", un_ccc(768))
+  hold z = fx_num("ccc 769 ", un_ccc(769))
+  hold z = fx_num("ccc 837 ", un_ccc(837))
+  hold z = fx_num("ccc 1425 ", un_ccc(1425))
+  hold z = fx_num("ccc 2364 ", un_ccc(2364))
+  hold z = fx_num("ccc 2381 ", un_ccc(2381))
+  hold z = fx_num("ccc 4142 ", un_ccc(4142))
+  hold z = fx_num("ccc 12441 ", un_ccc(12441))
+  hold z = fx_num("ccc 44032 ", un_ccc(44032))
+  hold z = fx_num("ccc 4352 ", un_ccc(4352))
+  hold z = fx_num("ccc 4449 ", un_ccc(4449))
+  hold z = fx_num("ccc 4520 ", un_ccc(4520))
+  hold z = fx_num("ccc 119141 ", un_ccc(119141))
+  hold z = fx_num("ccc 917760 ", un_ccc(917760))
+  hold z = fx_num("ccc 1114111 ", un_ccc(1114111))
+  hold z = fx_num("excluded 832 ", un_excluded(832))
+  hold z = fx_num("excluded 836 ", un_excluded(836))
+  hold z = fx_num("excluded 884 ", un_excluded(884))
+  hold z = fx_num("excluded 903 ", un_excluded(903))
+  hold z = fx_num("excluded 8126 ", un_excluded(8126))
+  hold z = fx_num("excluded 8486 ", un_excluded(8486))
+  hold z = fx_num("excluded 8491 ", un_excluded(8491))
+  hold z = fx_num("excluded 9312 ", un_excluded(9312))
+  hold z = fx_num("excluded 64285 ", un_excluded(64285))
+  hold z = fx_num("excluded 2392 ", un_excluded(2392))
+  hold z = fx_num("excluded 194560 ", un_excluded(194560))
+  hold z = fx_num("excluded 44032 ", un_excluded(44032))
+  hold z = fx_num("excluded 65 ", un_excluded(65))
+  hold z = fx_say("decomp 192 ", fx_text(un_decomp(192)))
+  hold z = fx_say("decomp 233 ", fx_text(un_decomp(233)))
+  hold z = fx_say("decomp 7700 ", fx_text(un_decomp(7700)))
+  hold z = fx_say("decomp 836 ", fx_text(un_decomp(836)))
+  hold z = fx_say("decomp 44032 ", fx_text(un_decomp(44032)))
+  hold z = fx_say("decomp 44033 ", fx_text(un_decomp(44033)))
+  hold z = fx_say("decomp 9312 ", fx_text(un_decomp(9312)))
+  hold z = fx_say("decomp 65 ", fx_text(un_decomp(65)))
+  hold z = fx_say("decomp 1114111 ", fx_text(un_decomp(1114111)))
+  hold z = fx_num("compose 65 768 ", un_compose_pair(65, 768))
+  hold z = fx_num("compose 65 769 ", un_compose_pair(65, 769))
+  hold z = fx_num("compose 97 779 ", un_compose_pair(97, 779))
+  hold z = fx_num("compose 111 769 ", un_compose_pair(111, 769))
+  hold z = fx_num("compose 4352 4449 ", un_compose_pair(4352, 4449))
+  hold z = fx_num("compose 44032 4520 ", un_compose_pair(44032, 4520))
+  hold z = fx_num("compose 4352 4520 ", un_compose_pair(4352, 4520))
+  hold z = fx_num("compose 65 66 ", un_compose_pair(65, 66))
+  hold z = fx_num("compose 768 65 ", un_compose_pair(768, 65))
+  hold z = fx_num("max_bytes ", un_max_bytes())
+  hold z = fx_num("ccc_surrogate ", un_ccc(55296))
+  hold z = fx_num("nfd_list_surrogate ", len(un_nfd_list([97, 55296])))
+  hold z = fx_num("nfc_list_empty ", len(un_nfc_list([])))
+  hold z = fx_num("equal 114 ", un_equal(u8_from([233]), u8_from([101, 769])))
+  hold z = fx_num("equal 115 ", un_equal(u8_from([8486]), u8_from([969])))
+  hold z = fx_num("equal 116 ", un_equal(u8_from([44032]), u8_from([4352, 4449])))
+  hold z = fx_num("equal 117 ", un_equal(u8_from([97, 779, 769]), u8_from([97, 779, 769])))
+  hold z = fx_num("equal 118 ", un_equal(u8_from([97, 779, 769]), u8_from([111, 779, 769])))
+  show "unorm-compact-ok"

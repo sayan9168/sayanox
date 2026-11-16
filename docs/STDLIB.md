@@ -60,6 +60,7 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/utext.sa` | code-point-aware text (`ut_*`) over `stdlib/utf8.sa`: length, at/slice/take/drop, reverse, ASCII-only case mapping, exact Unicode `White_Space` trimming, non-splitting truncation, search/count/prefix/suffix; code points not graphemes, no normalization or display width | seed-min, gen2, native_aot | `test-stdlib-next` |
 | `stdlib/uwidth.sa` | terminal display width (`uw_*`) over `stdlib/utf8.sa`: 0/1/2 columns per code point from Unicode 17.0.0 `EastAsianWidth` and `General_Category`, string width, monospace test, column padding and non-splitting column truncation; Ambiguous is 1, controls are 0; sums code points, so use `ug_width` for ZWJ sequences | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/ugraph.sa` | extended grapheme clusters (`ug_*`) over `stdlib/utf8.sa` + `stdlib/uwidth.sa`: UAX #29 GB1–GB999 including GB9c Indic conjuncts, GB11 emoji ZWJ and GB12/13 regional-indicator pairing; boundary offsets, count, at/slice/take/drop, reverse, per-cluster truncation and cluster width | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/unorm.sa` | canonical Unicode normalization (`un_*`) over `stdlib/utf8.sa`: NFC and NFD built from the Unicode 17.0.0 UCD files themselves (968 combining classes in 403 ranges, 2081 canonical decompositions, 961 primary composites, 73 Full_Composition_Exclusion ranges), recursive decomposition, stable canonical ordering, blocked composition, Hangul arithmetic in both directions, code-point and string APIs, `un_is_nfc`/`un_is_nfd`/`un_equal`; canonical only -- no NFKC/NFKD, no case folding, no collation, no bidi | seed-min, gen2, native | `test-stdlib-next` |
 
 ## Toolbox modules
 
@@ -271,6 +272,80 @@ convention differences, not defects, and none of them sets an expectation.
 74 of the 766 official cases contain U+0000, which a Sayanox string cannot carry.
 U+0001 is substituted in those cases: both are `Grapheme_Cluster_Break=Control`,
 so rule coverage is unchanged. `examples/graphemes.sa` is a runnable tour.
+
+## Canonical normalization
+
+`stdlib/utext.sa` compares code points, so two strings that read the same can
+still differ byte for byte. Normalization removes that difference:
+
+```sayanox
+use "stdlib/utf8.sa"
+use "stdlib/unorm.sa"           // import utf8 first; unorm names its functions
+
+hold precomposed = u8_from([233])              // e-acute as one code point
+hold decomposed = u8_from([101, 769])          // e + combining acute
+show string_eq(precomposed, decomposed)        // 0 -- different bytes
+show un_equal(precomposed, decomposed)         // 1 -- the same text
+show un_nfc(decomposed)                        // e-acute, composed
+show un_nfd(precomposed)                       // e + combining acute
+
+hold hangul = u8_from([44032])                 // one syllable
+show un_equal(hangul, u8_from([4352, 4449]))   // 1 -- L + V compose to it
+```
+
+**What the two forms guarantee.** NFD recursively applies every canonical
+decomposition and then sorts each run of marks by combining class, keeping
+equal classes in their original order, so ordering is stable instead of
+arbitrary. NFC does the same and then recomposes: a mark composes with the
+pending starter only when no intervening mark is a starter or has a combining
+class greater than or equal to its own. The two properties that make a form
+useful both hold and are tested: both are idempotent, and `un_equal(a, b) == 1`
+exactly when `un_nfc(a)` and `un_nfc(b)` are the same bytes.
+
+**Which characters are canonical equivalents.** Precomposed letters and their
+base-plus-marks spellings, the Ohm sign and Greek omega, Angstrom sign and
+e-acute-like variants, the Kelvin sign and `K`, and Hangul syllables and their
+Jamo. Composition exclusions decompose but never recompose, so they survive NFC
+as their decomposition (U+0344 stays `U+0308 U+0301`, U+2126 stays U+03A9) --
+that is the UCD `Full_Composition_Exclusion` list, 1,120 code points in 73
+ranges here.
+
+**Deliberate limits, not oversights:**
+
+* Canonical only. There is no NFKC/NFKD, so compatibility characters are never
+  folded: the `fi` ligature, superscript two and fullwidth A pass through NFC
+  unchanged, and `un_equal` says they differ from their compatibility
+  decompositions. No case folding either -- `un_equal` is not `un_nfkc_casefold`.
+* No collation and no bidi reordering. The name is normalization only.
+* The tables are Unicode 17.0.0 and are not tailorable; there is no override for
+  a custom composition. Hangul is arithmetic, not tabulated, so the whole AC00
+  block costs no table space.
+* Failure contract matches the rest of the text layer: a text function returns
+  `""` and a predicate `-1` for malformed or over-long input (`un_max_bytes()`
+  is 65536, shared with `stdlib/utf8.sa`); a list function returns `[]` when any
+  element is not a scalar. U+0000 is a valid scalar for the list API but cannot
+  travel in a Sayanox string.
+
+**How this is verified.** The tables are generated from `UnicodeData.txt` and
+`DerivedNormalizationProps.txt` themselves, not from a host library, and the
+behaviour is held by **1,544 frozen expectations** in three fixtures:
+
+| Fixture | Expectations | What it proves | Backends |
+| --- | --- | --- | --- |
+| `selfhost/stdlib_unorm_test.sa` | 1,321 | all **20,034 cases** of the official Unicode 17.0.0 `NormalizationTest.txt`, read at run time from `selfhost/stdlib_unorm_cases.txt`, plus the whole API against an independent Python reference that reproduces every column of those 20,034 rows first | seed-min, gen2, native |
+| `selfhost/stdlib_unorm_compact_test.sa` | 112 | the same rule set small enough for the bounded profile | seed-min, gen2, native_aot, native |
+| `examples/normalization.sa` | 111 lines | a runnable tour; output identical on gen2, native_aot and native | gen2, native_aot, native |
+
+The conformance payload is a **588,057-byte data file read at run time**, not a
+source literal: as a literal the same bytes turned a 4-second gen2 build into
+minutes for no extra coverage. Four negative controls confirm the oracles bite:
+disabling canonical ordering changes 4 expectations, disabling the blocked-mark
+test 4, disabling Hangul composition 10, and cutting recursive decomposition
+back to one step 6. The list API and the string API are cross-checked against
+each other on every shape, so a defect has to survive both spellings to pass.
+`examples/normalization.sa` shows the `string_eq` 0 versus `un_equal` 1 contrast,
+mark reordering across combining classes, blocked composition, Hangul in both
+directions, and compatibility text passing through untouched.
 
 ## Library pack
 

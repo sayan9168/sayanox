@@ -1,5 +1,32 @@
 # Status
 
+**2026-11-13 update: canonical normalization — NFC and NFD**
+
+`stdlib/unorm.sa` adds UAX #15 canonical normalization, so two spellings of the
+same text compare equal. NFC composes, NFD decomposes and canonically orders,
+`un_equal` answers "do these say the same thing", `un_is_nfc`/`un_is_nfd`
+answer "is this already in that form", and the list API (`un_nfc_list`,
+`un_nfd_list`, `un_ccc`, `un_decomp`, `un_compose_pair`, `un_excluded`) exposes
+the tables directly. Verification is **1,544 expectations**: the depth fixture
+runs **all 20,034 cases of the official Unicode 17.0.0 `NormalizationTest.txt`**
+through the real NFC/NFD and adds an API layer checked against an independent
+Python reference that reproduces every column of those 20,034 rows before any
+expectation is frozen, and the compact companion carries the same rules to the
+bounded `native_aot` profile — **all four backends** on one oracle. The payload
+is a 588 KB run-time data file rather than a literal, which took the gen2 build
+from minutes to four seconds. Four negative controls confirm coverage rather
+than assuming it: disabling canonical ordering changes 4 expectations, the
+blocked-mark test 4, Hangul composition 10, and one-step-only decomposition 6;
+each module version was restored byte-exact afterwards. Building it also
+re-found a real rule: composition must try the pending starter for starters as
+well as marks, because 961 pairs include 59 whose second element has combining
+class 0 (Indic vowel signs such as U+0B47 + U+0B3E), and blocking must be
+decided by the last *non-composing* mark, not by the last character seen. The
+first version of both was wrong and the official file is what caught it.
+`examples/normalization.sa` is a runnable tour and agrees on gen2, native_aot
+and the full native compiler. **Not** NFKC/NFKD, case folding, collation or
+bidi — those limits are stated in `docs/STDLIB.md`, and R07 stays open.
+
 **2026-11-13 update: native32 string parameters and string-valued functions**
 The multi-ISA machine-code backend (`tools/native32.sa`, i386/AArch64/RV64IM)
 accepted only `num` parameters and `num` results. A parameter may now be

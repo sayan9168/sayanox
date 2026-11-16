@@ -1,0 +1,157 @@
+// examples/normalization.sa -- same text, same bytes, or two different strings.
+//
+//   ./sx run examples/normalization.sa
+//
+// stdlib/utf8.sa compares bytes. Two strings a reader cannot tell apart are
+// routinely different byte sequences: an "e" plus a combining acute versus the
+// precomposed e-acute, an Ohm sign versus Greek omega, a Hangul syllable versus
+// the three Jamo it decomposes to. stdlib/unorm.sa implements UAX #15, so NFC
+// gives one spelling of the text and NFD gives another, and un_equal answers the
+// question a person actually asks: do these say the same thing?
+//
+// Canonical only: compatibility characters such as the "fi" ligature, a
+// superscript two or a fullwidth A are left exactly as they are.
+
+use "stdlib/utf8.sa"
+use "stdlib/unorm.sa"
+
+make demo_int(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make demo_csv(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    hold piece = demo_int(xs[i])
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+make demo_cps(s: str) -> str {
+  hold xs = u8_to_list(s)
+  give demo_csv(xs)
+}
+
+make demo_same(label: str, a: str, b: str) -> num {
+  hold bytes = 0
+  when string_eq(a, b) == 1 {
+    bytes = 1
+  }
+  hold canon = un_equal(a, b)
+  hold p1 = concat(label, ": string_eq ")
+  hold p2 = concat(p1, demo_int(bytes))
+  hold p3 = concat(p2, ", un_equal ")
+  hold line = concat(p3, demo_int(canon))
+  show line
+  give 0
+}
+
+// 1. The same letter typed two ways. This is where a naive byte comparison
+// fails and normalization earns its keep.
+hold precomposed = u8_from([233])
+hold decomposed = u8_from([101, 769])
+hold h1 = demo_same("e-acute as one code point vs two", precomposed, decomposed)
+hold joined = un_nfc(decomposed)
+hold p1 = concat("NFC of e + acute: ", demo_cps(joined))
+show p1
+hold split = un_nfd(precomposed)
+hold p2 = concat("NFD of e-acute: ", demo_cps(split))
+show p2
+
+// 2. Marks of the same combining class keep their order, and order still
+// matters to a byte comparison. Both spellings here are already in NFC.
+hold acute_then_grave = u8_from([97, 769, 768])
+hold grave_then_acute = u8_from([97, 768, 769])
+hold h2 = demo_same("acute then grave vs grave then acute", acute_then_grave, grave_then_acute)
+
+// 3. A mark with a lower class is moved in front: below both (ccc 220) must
+// sort before acute (ccc 230), so the second spelling here becomes the first.
+hold below_then_acute = u8_from([97, 790, 769])
+hold acute_then_below = u8_from([97, 769, 790])
+hold sorted = un_nfd(acute_then_below)
+hold p3 = concat("NFD reorders by combining class: ", demo_cps(sorted))
+hold h3 = demo_same("marks of different classes", below_then_acute, acute_then_below)
+
+// 4. Composition is blocked, not skipped. An acute already sitting on the
+// starter stops a later mark of the same class from composing, so this stays
+// three code points even though 770 composes with a.
+hold blocked = u8_from([97, 769, 770])
+hold nb = un_nfc(blocked)
+hold p4 = concat("blocked composition stays put: ", demo_cps(nb))
+show p4
+hold p4b = concat("still NFC after normalizing: ", demo_int(un_is_nfc(nb)))
+show p4b
+
+// 5. Hangul is arithmetic, both directions.
+hold syllable = u8_from([44032])
+hold jamo = u8_from([4352, 4449])
+hold h5 = demo_same("Hangul syllable vs its Jamo", syllable, jamo)
+hold p5 = concat("NFD of the syllable: ", demo_cps(un_nfd(syllable)))
+show p5
+hold p6 = concat("NFC of the Jamo: ", demo_cps(un_nfc(jamo)))
+show p6
+
+// 6. A compatibility character is not a canonical equivalent. Ohm sign and
+// Greek omega ARE canonical equivalents, and the ligature "fi" is not.
+hold ohm = u8_from([8486])
+hold omega = u8_from([937])
+hold h6 = demo_same("Ohm sign vs Greek omega", ohm, omega)
+hold ligature = u8_from([64257])
+hold fi = u8_from([102, 105])
+hold h7 = demo_same("fi ligature vs f + i", ligature, fi)
+hold compat = u8_from([64257, 178, 65313])
+hold kept = un_nfc(compat)
+hold p7 = concat("compatibility text untouched by NFC: ", demo_cps(kept))
+show p7
+hold h8 = demo_same("so NFC keeps it distinct", compat, u8_from([102, 105, 50, 65]))
+
+// 7. Text mixing scripts, and the predicates on the results.
+hold mixed = u8_from([233, 32, 44032, 32, 937, 32, 97, 769])
+hold mn = un_nfc(mixed)
+hold p8 = concat("mixed NFC: ", demo_cps(mn))
+show p8
+hold p9 = concat("is_nfc after NFC, is_nfd after NFD: ", demo_int(un_is_nfc(mn)))
+show p9
+hold md = un_nfd(mixed)
+hold p10 = concat("is_nfd: ", demo_int(un_is_nfd(md)))
+show p10
+
+// 8. Idempotence, the property a canonical form must have.
+hold twice = un_nfc(un_nfc(mixed))
+hold h9 = demo_same("NFC is idempotent", mn, twice)
+hold twice_d = un_nfd(un_nfd(mixed))
+hold h10 = demo_same("NFD is idempotent", md, twice_d)
+
+// 9. The failure contract: malformed UTF-8 gives "", not a guess.
+hold bad = u8_from_bytes([233, 101])
+hold p11 = concat("malformed input: len ", demo_int(len(un_nfc(bad))))
+show p11
+hold p12 = concat("max bytes: ", demo_int(un_max_bytes()))
+show p12
+
+show "normalization-ok"
