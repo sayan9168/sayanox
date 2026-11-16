@@ -66,7 +66,7 @@ swapped until the cross-check failed. **Not** modelled, deliberately: the sixtee
 conditional entries (Turkish/Azeri dot rules, `Final_Sigma`, Lithuanian, Dutch
 `ij`), `NFKC_Casefold`, sentence titlecasing and collation. `examples/casing.sa`
 is a runnable tour and agrees on gen2, native_aot and the full native compiler.
-NFKC/NFKD, bidi, collation and streaming CSV stay open, so R07 stays open.
+Bidi, collation and streaming CSV stay open (NFKC/NFKD landed 2026-11-16), so R07 stays open.
 
 **2026-11-13 update: native32 string parameters and string-valued functions**
 The multi-ISA machine-code backend (`tools/native32.sa`, i386/AArch64/RV64IM)
