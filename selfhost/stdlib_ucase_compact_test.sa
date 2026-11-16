@@ -1,0 +1,151 @@
+// Frozen independent expectations; do not edit by hand.
+// Unicode module group: ucase, the bounded-backend companion.
+// The oracle is an independent Python reference that reads the Unicode
+// 17.0.0 Character Database files directly: UnicodeData.txt for the simple
+// one-code-point mappings, SpecialCasing.txt for the multi-code-point ones
+// (sharp s -> SS, the ligatures, Greek iota-subscript forms) and
+// CaseFolding.txt for the folds. That reference is cross-checked against
+// CPython's own case tables on every SpecialCasing entry before any
+// expectation is frozen, which is how a wrong column order in the parser
+// was caught. The generator is a host-side tool and is not tracked, so the
+// .want bytes are the oracle.
+
+use "stdlib/utf8.sa"
+use "stdlib/ucase.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_csv(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    hold piece = fx_i(xs[i])
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+make fx_say(tag: str, body: str) -> num {
+  hold line = concat(tag, body)
+  show line
+  give 0
+}
+
+make fx_num(tag: str, v: num) -> num {
+  hold line = concat(tag, fx_i(v))
+  show line
+  give 0
+}
+
+// A leading bar, then the decimal CSV, so an empty list is still visible.
+make fx_text(xs: list) -> str {
+  hold body = fx_csv(xs)
+  give concat("|", body)
+}
+
+// One simple-casing group, read back out of the module's own compressed table
+// as [lo, hi, du, dl, dt] so the fixture compares the table, not just its
+// effect.
+// The fields are bound to plain numbers first: the seed-min profile refuses a
+// list literal whose elements are index expressions, and this fixture has to
+// compile there too.
+make fx_group(lo: num) -> str {
+  hold tbl = uc_case_groups()
+  hold at = uc_find(tbl, lo, 5)
+  when at < 0 {
+    give "|"
+  }
+  hold a = tbl[at * 5]
+  hold b = tbl[at * 5 + 1]
+  hold c = tbl[at * 5 + 2]
+  hold d = tbl[at * 5 + 3]
+  hold e = tbl[at * 5 + 4]
+  give concat("|", fx_csv([a, b, c, d, e]))
+}
+
+  hold z = fx_say("upper 0 ", fx_text(uc_upper_list([223])))
+  hold z = fx_say("title 1 ", fx_text(uc_title_list([223])))
+  hold z = fx_say("fold 2 ", fx_text(uc_fold_list([223])))
+  hold z = fx_say("lower 3 ", fx_text(uc_lower_list([304])))
+  hold z = fx_say("upper 4 ", fx_text(uc_upper_list([64257])))
+  hold z = fx_say("upper 5 ", fx_text(uc_upper_list([64256])))
+  hold z = fx_say("upper 6 ", fx_text(uc_upper_list([64259])))
+  hold z = fx_say("upper 7 ", fx_text(uc_upper_list([1415])))
+  hold z = fx_say("upper 8 ", fx_text(uc_upper_list([329])))
+  hold z = fx_say("upper 9 ", fx_text(uc_upper_list([700])))
+  hold z = fx_say("upper 10 ", fx_text(uc_upper_list([962])))
+  hold z = fx_say("lower 11 ", fx_text(uc_lower_list([931])))
+  hold z = fx_say("upper 12 ", fx_text(uc_upper_list([8064])))
+  hold z = fx_say("upper 13 ", fx_text(uc_upper_list([97, 98, 99])))
+  hold z = fx_say("lower 14 ", fx_text(uc_lower_list([65, 66, 67])))
+  hold z = fx_say("upper 15 ", fx_text(uc_upper_list([97, 223, 98])))
+  hold z = fx_say("upper 16 ", fx_text(uc_upper_list([105])))
+  hold z = fx_say("lower 17 ", fx_text(uc_lower_list([8486])))
+  hold z = fx_say("lower 18 ", fx_text(uc_lower_list([66560])))
+  hold z = fx_say("upper 19 ", fx_text(uc_upper_list([125184])))
+  hold z = fx_say("upper 20 ", fx_text(uc_upper_list([])))
+  hold z = fx_num("cased 97 ", uc_cased(97))
+  hold z = fx_num("cased 65 ", uc_cased(65))
+  hold z = fx_num("cased 48 ", uc_cased(48))
+  hold z = fx_num("cased 768 ", uc_cased(768))
+  hold z = fx_num("cased 769 ", uc_cased(769))
+  hold z = fx_num("cased 1524 ", uc_cased(1524))
+  hold z = fx_num("cased 127995 ", uc_cased(127995))
+  hold z = fx_num("cased 305 ", uc_cased(305))
+  hold z = fx_num("cased 304 ", uc_cased(304))
+  hold z = fx_num("cased 66560 ", uc_cased(66560))
+  hold z = fx_num("ignorable 768 ", uc_case_ignorable(768))
+  hold z = fx_num("ignorable 769 ", uc_case_ignorable(769))
+  hold z = fx_num("ignorable 39 ", uc_case_ignorable(39))
+  hold z = fx_num("ignorable 45 ", uc_case_ignorable(45))
+  hold z = fx_num("ignorable 95 ", uc_case_ignorable(95))
+  hold z = fx_num("ignorable 97 ", uc_case_ignorable(97))
+  hold z = fx_num("ignorable 8232 ", uc_case_ignorable(8232))
+  hold z = fx_num("special 223 ", uc_is_special(223))
+  hold z = fx_num("special 304 ", uc_is_special(304))
+  hold z = fx_num("special 64257 ", uc_is_special(64257))
+  hold z = fx_num("special 97 ", uc_is_special(97))
+  hold z = fx_num("special 65 ", uc_is_special(65))
+  hold z = fx_num("special 125184 ", uc_is_special(125184))
+  hold z = fx_num("fold_equal 44 ", uc_fold_equal(u8_from([83, 116, 114, 97, 223, 101]), u8_from([83, 84, 82, 65, 83, 83, 69])))
+  hold z = fx_num("fold_equal 45 ", uc_fold_equal(u8_from([223]), u8_from([115, 115])))
+  hold z = fx_num("fold_equal 46 ", uc_fold_equal(u8_from([223]), u8_from([115])))
+  hold z = fx_num("fold_equal 47 ", uc_fold_equal(u8_from([]), u8_from([])))
+  hold z = fx_num("fold_equal 48 ", uc_fold_equal(u8_from([64257]), u8_from([70, 73])))
+  hold z = fx_num("fold_equal 49 ", uc_fold_equal(u8_from([962]), u8_from([963])))
+  hold idem_a = [97, 223, 8064]
+  hold idem_ua = uc_upper_list(idem_a)
+  hold z = fx_num("upper_idem ", uc_lists_eq(uc_upper_list(idem_ua), idem_ua))
+  hold idem_b = [223, 64257]
+  hold idem_fb = uc_fold_list(idem_b)
+  hold z = fx_num("fold_idem ", uc_lists_eq(uc_fold_list(idem_fb), idem_fb))
+  hold z = fx_num("max_bytes ", uc_max_bytes())
+  hold z = fx_num("upper_surrogate ", len(uc_upper_list([97, 55296])))
+  hold z = fx_num("upper_empty ", len(uc_upper_list([])))
+  hold z = fx_num("cased_surrogate ", uc_cased(55296))
+  show "ucase-compact-ok"

@@ -1,0 +1,57 @@
+upper 0 |83,83
+title 1 |83,115
+fold 2 |115,115
+lower 3 |105,775
+upper 4 |70,73
+upper 5 |70,70
+upper 6 |70,70,73
+upper 7 |1333,1362
+upper 8 |700,78
+upper 9 |700
+upper 10 |931
+lower 11 |963
+upper 12 |7944,921
+upper 13 |65,66,67
+lower 14 |97,98,99
+upper 15 |65,83,83,66
+upper 16 |73
+lower 17 |969
+lower 18 |66600
+upper 19 |125184
+upper 20 |
+cased 97 1
+cased 65 1
+cased 48 0
+cased 768 0
+cased 769 0
+cased 1524 0
+cased 127995 0
+cased 305 1
+cased 304 1
+cased 66560 1
+ignorable 768 1
+ignorable 769 1
+ignorable 39 0
+ignorable 45 0
+ignorable 95 0
+ignorable 97 0
+ignorable 8232 0
+special 223 1
+special 304 1
+special 64257 1
+special 97 0
+special 65 0
+special 125184 0
+fold_equal 44 1
+fold_equal 45 1
+fold_equal 46 0
+fold_equal 47 1
+fold_equal 48 1
+fold_equal 49 1
+upper_idem 1
+fold_idem 1
+max_bytes 65536
+upper_surrogate 0
+upper_empty 0
+cased_surrogate -1
+ucase-compact-ok

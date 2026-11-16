@@ -263,6 +263,41 @@ make ep_next() -> num {
     un_uc_kind = un_uc_kind + 1
   }
 
+  // Case conversion: the depth fixture replays one row per simple-casing group,
+  // per full fold and per SpecialCasing direction from the independent Python
+  // reference, plus the properties and the folding invariants. Like uwidth and
+  // ugraph it exceeds the bounded native_aot profile, so kind 2 is skipped here
+  // and covered by the compact companion below; seed-min, gen2 and gen1_min all
+  // run it. The fixture is generator-shaped for seed-min: every list literal is
+  // built from plain numeric names, and 0x literals are written in decimal.
+  hold kc_src = "selfhost/stdlib_ucase_test.sa"
+  hold kc_want = "selfhost/stdlib_ucase.want"
+  hold kc_present = bt_require_file(kc_want)
+  hold kc_kind = 0
+  while kc_kind < 4 {
+    when kc_kind != 2 {
+      hold kc_bin = concat(concat(dir, "/ucase_depth_"), gl_istr(kc_kind))
+      hold kc_c = ep_compile(kc_kind, kc_src, kc_bin)
+      hold kc_r = pg_capture(sh_quote(kc_bin), concat(kc_bin, ".out"))
+      hold kc_a = gl_assert_files_eq(concat(kc_bin, ".out"), kc_want, "case conversion depth oracle")
+      when kc_kind > 0 {
+        hold kc_p = gl_assert_files_eq(concat(dir, "/ucase_depth_0.out"), concat(kc_bin, ".out"), "case conversion backend parity")
+      }
+    }
+    kc_kind = kc_kind + 1
+  }
+  hold kc_uc_src = "selfhost/stdlib_ucase_compact_test.sa"
+  hold kc_uc_want = "selfhost/stdlib_ucase_compact.want"
+  hold kc_uc_present = bt_require_file(kc_uc_want)
+  hold kc_uc_kind = 0
+  while kc_uc_kind < 4 {
+    hold kc_uc_bin = concat(concat(dir, "/ucase_compact_"), gl_istr(kc_uc_kind))
+    hold kc_uc_c = ep_compile(kc_uc_kind, kc_uc_src, kc_uc_bin)
+    hold kc_uc_r = pg_capture(sh_quote(kc_uc_bin), concat(kc_uc_bin, ".out"))
+    hold kc_uc_a = gl_assert_files_eq(concat(kc_uc_bin, ".out"), kc_uc_want, "case conversion compact four-backend oracle")
+    kc_uc_kind = kc_uc_kind + 1
+  }
+
   // Bounded-backend companion: same rules, small enough for native_aot, and it
   // runs on all four backends so the profiles are compared against one oracle.
   hold uc_src = "selfhost/stdlib_unicode_compact_test.sa"
