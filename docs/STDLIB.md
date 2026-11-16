@@ -251,13 +251,17 @@ the behaviour to **5,463 expectations**:
 
 | Fixture | Expectations | What it proves | Backends |
 | --- | --- | --- | --- |
-| `selfhost/stdlib_ugraph_test.sa` | 4,042 | all 766 cases of the official Unicode 17.0.0 `GraphemeBreakTest.txt`, a whole-range sweep of the class/`Extended_Pictographic`/`InCB` lookups, and the cluster API against an independent rule-regex reference | seed-min, gen2, native |
+| `selfhost/stdlib_ugraph_test.sa` | 4,042 | all 766 cases of the official Unicode 17.0.0 `GraphemeBreakTest.txt` (read at run time from `selfhost/stdlib_ugraph_cases.txt`), a whole-range sweep of the class/`Extended_Pictographic`/`InCB` lookups, and the cluster API against an independent rule-regex reference | seed-min, gen2, native |
 | `selfhost/stdlib_uwidth_test.sa` | 1,360 | a sweep of all 1,114,112 code points frozen as run-length transitions against the UCD read independently, plus the text API | seed-min, gen2, native |
 | `selfhost/stdlib_unicode_compact_test.sa` | 61 | the same rule set small enough for the bounded profile | seed-min, gen2, native_aot, native |
 
-The two large fixtures exceed `native_aot`'s bounded 64-slot profile by design --
-one carries a 26 KB conformance data literal -- so the compact companion exists to
-keep that backend covered. All of it runs through `test-stdlib-next`.
+The two large fixtures exceed `native_aot`'s bounded 64-slot profile by design, so
+the compact companion exists to keep that backend covered. Their conformance
+payloads are data files read at run time (`selfhost/stdlib_ugraph_cases.txt`,
+`selfhost/stdlib_unorm_cases.txt`), not source literals: the same bytes emitted
+several times faster on gen2 and seed-min for identical output, which matters
+because this gate runs inside the 90-minute acceptance job. All of it runs
+through `test-stdlib-next`.
 
 Two host-library traps are worth recording, because both were caught by
 cross-checking rather than by reading code: the `regex` module reports
