@@ -1,5 +1,18 @@
 # Status
 
+**2026-11-13 update: both Unicode conformance payloads are run-time data files**
+
+The grapheme and normalization fixtures each carried their official
+conformance corpus as one enormous source literal. That cost the gen2 and
+seed-min emit step on every gate run for no coverage: bytes in a literal are
+not bytes in a program. Both are now read at run time --
+`selfhost/stdlib_ugraph_cases.txt` (766 rows, one case per line: code points,
+then expected byte offsets) and `selfhost/stdlib_unorm_cases.txt` (20,034 rows:
+source, NFC, NFD) -- and both `.want` files are byte-identical to before, so
+nothing about the oracle changed. The ugraph fixture's emit step fell from
+about 24 seconds to 9 on gen2, half of what buys the headroom in the 90-minute
+acceptance job.
+
 **2026-11-13 update: canonical normalization — NFC and NFD**
 
 `stdlib/unorm.sa` adds UAX #15 canonical normalization, so two spellings of the
