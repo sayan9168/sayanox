@@ -1,0 +1,157 @@
+// Frozen independent expectations; do not edit by hand.
+// stdlib/csv_stream.sa, bounded-backend companion. The same streaming rules as
+// selfhost/stdlib_csv_stream_test.sa, cut down to what native_aot's 64 globals
+// and 64 locals allow, so no backend is blind to this module. Rows come from
+// Python's own csv module over the same bytes; chunk independence and the
+// status contract are asserted here and frozen.
+
+use "stdlib/csv.sa"
+use "stdlib/csv_stream.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_bytes(s: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, fx_i(sx_index(s, i)))
+    i = i + 1
+  }
+  give concat("|", out)
+}
+
+make fx_say(tag: str, body: str) -> num {
+  hold line = concat(tag, body)
+  show line
+  give 0
+}
+
+make fx_num(tag: str, v: num) -> num {
+  hold line = concat(tag, fx_i(v))
+  show line
+  give 0
+}
+
+make fx_sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make fx_same(a: str, b: str) -> num {
+  when string_eq(a, b) == 1 {
+    give 1
+  }
+  give 0
+}
+
+// 1 when the string ends with CR LF, else 0.
+make fx_crlf(s: str) -> num {
+  when len(s) < 2 {
+    give 0
+  }
+  when sx_index(s, len(s) - 2) != 13 {
+    give 0
+  }
+  when sx_index(s, len(s) - 1) != 10 {
+    give 0
+  }
+  give 1
+}
+
+// 1 when the bundle holds exactly one row and that row is `want`.
+make fx_single(bundle: str, want: str) -> num {
+  when csv_count(bundle) != 1 {
+    give 0
+  }
+  give fx_same(csv_at(bundle, 0), want)
+}
+
+// One byte at a time: the strictest chunking. Returns the rows bundle.
+make fx_bytes_stream(doc: str) -> str {
+  hold acc = ""
+  hold state = cs_new()
+  hold i = 0
+  while i < len(doc) {
+    hold fed = cs_feed(state, fx_sub(doc, i, i + 1))
+    acc = concat(acc, cs_rows(fed))
+    state = cs_state(fed)
+    i = i + 1
+  }
+  give acc
+}
+
+  hold crlf = concat(chr(13), chr(10))
+  hold doc = concat("a,\"b,c\"", crlf)
+  doc = concat(doc, "\"x\"\"y\",")
+  doc = concat(doc, chr(10))
+  hold z0 = fx_num("small bytes ", len(doc))
+  hold rows = fx_bytes_stream(doc)
+  hold z1 = fx_num("small rows ", csv_count(rows))
+  hold z2 = fx_say("s r0 f0 ", fx_bytes(csv_at(csv_at(rows, 0), 0)))
+  hold z3 = fx_say("s r0 f1 ", fx_bytes(csv_at(csv_at(rows, 0), 1)))
+  hold z4 = fx_say("s r1 f0 ", fx_bytes(csv_at(csv_at(rows, 1), 0)))
+  hold z5 = fx_say("s r1 f1 ", fx_bytes(csv_at(csv_at(rows, 1), 1)))
+  hold whole = cs_feed(cs_new(), doc)
+  hold z6 = fx_num("small status ", cs_status(whole))
+  hold z7 = fx_num("small leftover ", len(cs_state(whole)))
+  hold z8 = fx_num("whole same ", fx_same(cs_rows(whole), rows))
+
+  // An unterminated quoted field is refused at end of input instead of
+  // inventing a record.
+  hold badf = cs_feed(cs_new(), "\"open")
+  hold bad = cs_flush(cs_state(badf))
+  hold z9 = fx_num("bad flush status ", cs_status(bad))
+  hold z10 = fx_num("bad flush ok ", csv_ok(csv_at(cs_rows(bad), 0)))
+
+  // A record past the 64 KiB cap is refused and the buffer is dropped.
+  hold capdoc = concat("\"", "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmn")
+  hold q = 0
+  while q < 1200 {
+    capdoc = concat(capdoc, "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmn")
+    q = q + 1
+  }
+  hold capf = cs_feed(cs_new(), capdoc)
+  hold z11 = fx_num("cap status ", cs_status(capf))
+  hold z12 = fx_num("cap leftover ", len(cs_state(capf)))
+
+  // Writer round trip through the same reader.
+  hold pack = csv_push(csv_push("", "a"), "b,c")
+  hold written = cs_row_out(pack)
+  hold z13 = fx_num("out bytes ", len(written))
+  hold z14 = fx_num("out crlf ", fx_crlf(written))
+  hold back = cs_feed(cs_new(), written)
+  hold z15 = fx_num("roundtrip same ", fx_single(cs_rows(back), pack))
+
+  hold z16 = fx_num("state new ", len(cs_new()))
+  hold z17 = fx_num("scan none ", cs_scan_d("abc", 44))
+  hold z18 = fx_num("max bytes ", cs_max_bytes())
+  show "csv-stream-compact-ok"

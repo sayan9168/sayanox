@@ -1,0 +1,96 @@
+doc bytes 64
+base status 0
+base leftover 0
+doc rows 6
+doc r0 ok 1
+doc r0 fields 2
+doc r0 f0 |97
+doc r0 f1 |98
+doc r1 ok 1
+doc r1 fields 2
+doc r1 f0 |120,44,121
+doc r1 f1 |104,101,32,115,97,105,100,32,34,104,105,34
+doc r2 ok 1
+doc r2 fields 2
+doc r2 f0 |108,105,110,101,49,13,10,108,105,110,101,50
+doc r2 f1 |122
+doc r3 ok 1
+doc r3 fields 3
+doc r3 f0 |
+doc r3 f1 |
+doc r3 f2 |
+doc r4 ok 1
+doc r4 fields 2
+doc r4 f0 |195,169
+doc r4 f1 |
+doc r5 ok 1
+doc r5 fields 1
+doc r5 f0 |108,97,115,116
+flush status 0
+tail rows 0
+chunk 2 same 1
+chunk 2 status 0
+chunk 2 leftover 0
+chunk 3 same 1
+chunk 3 status 0
+chunk 3 leftover 0
+chunk 5 same 1
+chunk 5 status 0
+chunk 5 leftover 0
+chunk 7 same 1
+chunk 7 status 0
+chunk 7 leftover 0
+chunk 13 same 1
+chunk 13 status 0
+chunk 13 leftover 0
+chunk 64 same 1
+chunk 64 status 0
+chunk 64 leftover 0
+chunk 1000 same 1
+chunk 1000 status 0
+chunk 1000 leftover 0
+whole same 1
+whole status 0
+lf crlf same 1
+bad status 0
+bad rows 0
+bad leftover kept 1
+bad flush status 2
+bad flush rows 1
+bad flush row ok 0
+stray status 2
+stray row ok 0
+delim status 2
+delim rows 0
+delim state 0
+big bytes 72002
+big status 1
+big feeds before refusal 17
+big leftover at refusal 0
+big rows 0
+out bytes 10
+out ends crlf 1
+roundtrip same 1
+roundtrip leftover 0
+tsv rows 3
+tsv r0 ok 1
+tsv r0 fields 2
+tsv r0 f0 |97
+tsv r0 f1 |98
+tsv r1 ok 1
+tsv r1 fields 2
+tsv r1 f0 |120,9,121
+tsv r1 f1 |113,32,34,122,34
+tsv r2 ok 1
+tsv r2 fields 2
+tsv r2 f0 |49
+tsv r2 f1 |
+tsv status 0
+tsv chunk4 same 1
+empty status 0
+empty rows 0
+max bytes 65536
+new state 0
+scan none -1
+scan quoted 5
+csv-stream-ok

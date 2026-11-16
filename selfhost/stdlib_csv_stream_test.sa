@@ -1,0 +1,308 @@
+// Frozen independent expectations; do not edit by hand.
+// stdlib/csv_stream.sa: incremental RFC 4180 parsing over chunked input.
+//
+// Layer 1 feeds the same document at chunk sizes 1, 2, 3, 5, 7, 13, 64 and
+// whole and requires every chunking to produce the same rows, because a
+// parser that depends on where a chunk boundary fell passes one size and
+// fails the next. The dump printed below is the 1-byte-at-a-time run.
+// Layer 2 pins the boundaries where a streaming parser can be wrong: a quoted
+// field containing CRLF, a doubled quote, a record spanning chunks, CRLF and
+// bare LF terminating the same way, an unterminated quote at EOF, a stray
+// quote in an unquoted field, a record over the buffer cap, an invalid
+// delimiter, and the writer round trip through the same reader.
+// Every row, field and status is checked against an independent Python
+// reference that reads the same bytes chunk by chunk through the stdlib `csv`
+// module with `newline=''`.
+
+use "stdlib/csv.sa"
+use "stdlib/csv_stream.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+// The decimal byte values of a field, so a dump line never contains a raw
+// comma, quote or newline and can be compared byte for byte.
+make fx_bytes(s: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, fx_i(sx_index(s, i)))
+    i = i + 1
+  }
+  give concat("|", out)
+}
+
+make fx_say(tag: str, body: str) -> num {
+  hold line = concat(tag, body)
+  show line
+  give 0
+}
+
+make fx_num(tag: str, v: num) -> num {
+  hold line = concat(tag, fx_i(v))
+  show line
+  give 0
+}
+
+// Byte sub-range by copy, independent of csv.sa's helper so a defect in that
+// helper cannot hide itself in the fixture.
+make fx_sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make fx_same(a: str, b: str) -> num {
+  when string_eq(a, b) == 1 {
+    give 1
+  }
+  give 0
+}
+
+make fx_nonzero(s: str) -> num {
+  when len(s) > 0 {
+    give 1
+  }
+  give 0
+}
+
+// 1 when the string ends with CR LF, else 0.
+make fx_crlf_tail(s: str) -> num {
+  when len(s) < 2 {
+    give 0
+  }
+  when sx_index(s, len(s) - 2) != 13 {
+    give 0
+  }
+  when sx_index(s, len(s) - 1) != 10 {
+    give 0
+  }
+  give 1
+}
+
+// Feed `doc` at `size` bytes per call (size <= 0 means one call) and return
+// the same status + state + rows shape cs_feed_d uses, so cs_status(),
+// cs_state() and cs_rows() read it and a list never has to hold a string.
+make fx_stream(doc: str, size: num, delim: num) -> str {
+  hold acc = ""
+  hold worst = 0
+  hold state = cs_new()
+  hold n = len(doc)
+  hold step = size
+  when step <= 0 {
+    step = n
+  }
+  when step < 1 {
+    step = 1
+  }
+  hold i = 0
+  while i < n {
+    hold stop = i + step
+    when stop > n {
+      stop = n
+    }
+    hold fed = cs_feed_d(state, fx_sub(doc, i, stop), delim)
+    hold status = cs_status(fed)
+    when status > worst {
+      worst = status
+    }
+    acc = concat(acc, cs_rows(fed))
+    state = cs_state(fed)
+    i = stop
+  }
+  give cs_pack(worst, state, acc)
+}
+
+// Dump every row and field of a rows bundle: row counts, then per row its
+// field count and per field its byte values.
+make fx_dump(tag: str, rows: str) -> num {
+  hold n = csv_count(rows)
+  hold a = fx_num(concat(tag, " rows "), n)
+  hold i = 0
+  while i < n {
+    hold row = csv_at(rows, i)
+    hold okf = csv_ok(row)
+    hold a1 = fx_num(concat(concat(tag, " r"), concat(fx_i(i), " ok ")), okf)
+    hold m = csv_count(row)
+    hold a2 = fx_num(concat(concat(concat(tag, " r"), fx_i(i)), " fields "), m)
+    hold j = 0
+    while j < m {
+      hold pre = concat(concat(concat(tag, " r"), fx_i(i)), concat(concat(" f", fx_i(j)), " "))
+      hold a3 = fx_say(pre, fx_bytes(csv_at(row, j)))
+      j = j + 1
+    }
+    i = i + 1
+  }
+  give n
+}
+
+// A document that uses every quoting feature at once. Bytes are written as
+// escaped literals so the file itself stays ASCII-safe apart from the accented
+// field, which is built from its UTF-8 bytes.
+make fx_doc() -> str {
+  hold crlf = concat(chr(13), chr(10))
+  hold d = concat("a,b", crlf)
+  d = concat(d, "\"x,y\",\"he said \"\"hi\"\"\"")
+  d = concat(d, crlf)
+  d = concat(d, "\"line1")
+  d = concat(d, crlf)
+  d = concat(d, "line2\",z")
+  d = concat(d, crlf)
+  d = concat(d, ",,")
+  d = concat(d, chr(10))
+  d = concat(d, "\"")
+  d = concat(d, chr(195))
+  d = concat(d, chr(169))
+  d = concat(d, "\",\"\"")
+  d = concat(d, crlf)
+  d = concat(d, "last")
+  d = concat(d, chr(10))
+  give d
+}
+
+make fx_doc_tsv() -> str {
+  hold d = "a\tb\n"
+  d = concat(d, "\"x\ty\"\t\"q \"\"z\"\"\"\n")
+  d = concat(d, "1\t\n")
+  give d
+}
+
+  // ---- layer 1: chunk-size independence on the comma document ----
+  hold doc = fx_doc()
+  hold base = fx_stream(doc, 1, 44)
+  hold base_rows = cs_rows(base)
+  hold z0 = fx_num("doc bytes ", len(doc))
+  hold z1 = fx_num("base status ", cs_status(base))
+  hold z2 = fx_num("base leftover ", len(cs_state(base)))
+  hold z3 = fx_dump("doc", base_rows)
+  hold fl = cs_flush_d(cs_state(base), 44)
+  hold z4 = fx_num("flush status ", cs_status(fl))
+  hold z5 = fx_dump("tail", cs_rows(fl))
+
+  hold sizes = [2, 3, 5, 7, 13, 64, 1000]
+  hold k = 0
+  while k < len(sizes) {
+    hold size = sizes[k]
+    hold r = fx_stream(doc, size, 44)
+    hold s1 = fx_num(concat(concat("chunk ", fx_i(size)), " same "), fx_same(cs_rows(r), base_rows))
+    hold s2 = fx_num(concat(concat("chunk ", fx_i(size)), " status "), cs_status(r))
+    hold s3 = fx_num(concat(concat("chunk ", fx_i(size)), " leftover "), len(cs_state(r)))
+    k = k + 1
+  }
+  hold whole = fx_stream(doc, 0, 44)
+  hold w1 = fx_num("whole same ", fx_same(cs_rows(whole), base_rows))
+  hold w2 = fx_num("whole status ", cs_status(whole))
+
+  // A bare LF and a CRLF must terminate identically.
+  hold lf_run = fx_stream("a,b\nc,d\n", 1, 44)
+  hold crlf_run = fx_stream("a,b\r\nc,d\r\n", 1, 44)
+  hold t1 = fx_num("lf crlf same ", fx_same(cs_rows(lf_run), cs_rows(crlf_run)))
+
+  // ---- layer 2: the boundaries ----
+  // Unterminated quoted field at end of input.
+  hold bad = fx_stream("\"open,never closed\nsecond,row\n", 3, 44)
+  hold b1 = fx_num("bad status ", cs_status(bad))
+  hold b2 = fx_num("bad rows ", csv_count(cs_rows(bad)))
+  hold b3 = fx_num("bad leftover kept ", fx_nonzero(cs_state(bad)))
+  hold bf = cs_flush_d(cs_state(bad), 44)
+  hold b4 = fx_num("bad flush status ", cs_status(bf))
+  hold b5 = fx_num("bad flush rows ", csv_count(cs_rows(bf)))
+  hold b6 = fx_num("bad flush row ok ", csv_ok(csv_at(cs_rows(bf), 0)))
+
+  // A stray quote inside an unquoted field: malformed, not silently accepted.
+  hold stray = fx_stream("a,b\"c,d\n", 0, 44)
+  hold c1 = fx_num("stray status ", cs_status(stray))
+  hold c2 = fx_num("stray row ok ", csv_ok(csv_at(cs_rows(stray), 0)))
+
+  // An invalid delimiter is refused before any parsing happens.
+  hold dv = cs_feed_d("", "a,b\n", 34)
+  hold d1 = fx_num("delim status ", cs_status(dv))
+  hold d2 = fx_num("delim rows ", csv_count(cs_rows(dv)))
+  hold d3 = fx_num("delim state ", len(cs_state(dv)))
+
+  // A record over the cap is refused instead of buffered without bound.
+  // A record over the cap is refused at the moment it crosses 64 KiB: the
+  // buffer is dropped then (leftover 0) and the caller is expected to stop.
+  hold big = "\""
+  hold q = 0
+  while q < 1200 {
+    big = concat(big, "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmn")
+    q = q + 1
+  }
+  big = concat(big, "\"")
+  hold r1 = fx_num("big bytes ", len(big))
+  hold bigstate = cs_new()
+  hold bigstatus = 0
+  hold bigleft = 0
+  hold sent = 0
+  hold one = ""
+  hold at = 0
+  while at < len(big) && bigstatus == 0 {
+    hold stopat = at + 4096
+    when stopat > len(big) {
+      stopat = len(big)
+    }
+    one = cs_feed(bigstate, fx_sub(big, at, stopat))
+    when cs_status(one) > 0 {
+      bigstatus = cs_status(one)
+      bigleft = len(cs_state(one))
+    } otherwise {
+      bigstate = cs_state(one)
+    }
+    sent = sent + 1
+    at = stopat
+  }
+  hold r2 = fx_num("big status ", bigstatus)
+  hold r3 = fx_num("big feeds before refusal ", sent)
+  hold r4 = fx_num("big leftover at refusal ", bigleft)
+  hold r5 = fx_num("big rows ", csv_count(cs_rows(one)))
+
+  // ---- writer round trip through the same reader ----
+  hold pack = csv_push(csv_push(csv_push("", "a"), "b,c"), "")
+  hold written = cs_row_out(pack)
+  hold u1 = fx_num("out bytes ", len(written))
+  hold u2 = fx_num("out ends crlf ", fx_crlf_tail(written))
+  hold back = fx_stream(written, 1, 44)
+  hold u3 = fx_num("roundtrip same ", fx_same(cs_rows(back), csv_push("", pack)))
+  hold u4 = fx_num("roundtrip leftover ", len(cs_state(back)))
+
+  // ---- dialect and empty input ----
+  hold tsv_base = fx_stream(fx_doc_tsv(), 1, 9)
+  hold v1 = fx_dump("tsv", cs_rows(tsv_base))
+  hold v2 = fx_num("tsv status ", cs_status(tsv_base))
+  hold tsv4 = fx_stream(fx_doc_tsv(), 4, 9)
+  hold v3 = fx_num("tsv chunk4 same ", fx_same(cs_rows(tsv4), cs_rows(tsv_base)))
+  hold e1 = fx_num("empty status ", cs_status(cs_flush(cs_new())))
+  hold e2 = fx_num("empty rows ", csv_count(cs_rows(cs_flush(cs_new()))))
+  hold e3 = fx_num("max bytes ", cs_max_bytes())
+  hold e4 = fx_num("new state ", len(cs_new()))
+  hold e5 = fx_num("scan none ", cs_scan_d("abc", 44))
+  hold e6 = fx_num("scan quoted ", cs_scan_d("\"a\nb\"\nc", 44))
+  show "csv-stream-ok"

@@ -1,0 +1,210 @@
+// stdlib/csv_stream.sa -- incremental (chunked) RFC 4180 CSV reading, prefix cs_.
+//
+// Dependency: import stdlib/csv.sa BEFORE this module. Like money.sa over
+// decimal.sa this module names its dependency's functions without importing
+// it, because the loader does not dedupe a diamond and a second import would
+// declare every csv_ function twice.
+//
+// What this is. csv_parse_row() needs one whole record in memory, and
+// csv_table.sa needs the whole document. Both are fine for a file you already
+// hold and wrong for a stream: a log tail, a socket, a pipe, or a 2 GB export
+// you must not materialise. This module consumes the document in chunks and
+// keeps only the *unfinished* record, so memory is bounded by the longest
+// single record, not by the document.
+//
+// How the state travels. A Sayanox list cannot hold a string, so nothing is
+// returned as a list. feed/flush return ONE string whose first byte is the
+// status digit ('0' ok, '2' malformed record, '1' record over the cap) and
+// whose remainder is a two-element BUNDLE in csv.sa's own packed
+// representation (decimal length, colon, bytes): element 0 is the leftover
+// state to pass to the next call, element 1 is the bundle of completed rows.
+// cs_state() and cs_rows() read those two elements. csv_count()/csv_at() read
+// the rows bundle directly, so csv_at(rows, i) is the packed row that
+// csv_ok/csv_count/csv_at and csv_write_row already understand.
+//
+// Bounded means bounded. A record that grows past cs_max_bytes() (64 KiB) is
+// refused with status 1 and the buffer is dropped rather than silently
+// truncated or grown without limit; an unterminated quoted field at end of
+// input is refused with status 2, and a malformed record inside the stream
+// yields the csv.sa error marker for that row plus status 2 for the call.
+//
+// Record ends are found by scanning the pending buffer, so a quoted field may
+// contain CR, LF and doubled quotes and may be split across any number of
+// chunks; CRLF and a bare LF both terminate a record. The scan restarts at the
+// buffer each call, which is why the buffer cap is the cost bound: per-record
+// work is linear in that record, never in the document.
+//
+// Not modelled: encodings (bytes are bytes, like the rest of the stdlib), the
+// "backslash escapes" pseudo-dialect some tools emit, and a resumable
+// mid-record position for a record larger than the cap -- such a record is
+// refused instead.
+
+make cs_max_bytes() -> num {
+  give 65536
+}
+
+make cs_new() -> str {
+  give ""
+}
+
+// Status of a feed/flush result: 0 ok, 1 record over the cap, 2 malformed.
+make cs_status(fed: str) -> num {
+  when len(fed) == 0 {
+    give 3
+  }
+  give sx_index(fed, 0) - 48
+}
+
+// The leftover state of a feed, to pass to the next feed or to flush.
+make cs_state(fed: str) -> str {
+  when len(fed) == 0 {
+    give ""
+  }
+  give csv_at(csv_sub(fed, 1, len(fed)), 0)
+}
+
+// The completed rows of a feed/flush: a bundle, one packed row per element.
+make cs_rows(fed: str) -> str {
+  when len(fed) == 0 {
+    give ""
+  }
+  give csv_at(csv_sub(fed, 1, len(fed)), 1)
+}
+
+make cs_pack(status: num, state: str, rows: str) -> str {
+  give concat(chr(48 + status), csv_push(csv_push("", state), rows))
+}
+
+// Byte offset of the first LF that is not inside a quoted field, or -1 when
+// the buffer ends mid-record. A quote opens a quoted field only at the start
+// of a record or right after a delimiter; a doubled quote inside a quoted
+// field is data and does not close it. A stray quote elsewhere is left for
+// csv_parse_row to reject.
+make cs_scan_d(buf: str, d: num) -> num {
+  hold n = len(buf)
+  hold i = 0
+  hold inq = 0
+  while i < n {
+    hold c = sx_index(buf, i)
+    when inq == 1 {
+      when c == 34 {
+        hold doubled = 0
+        when i + 1 < n {
+          when sx_index(buf, i + 1) == 34 {
+            doubled = 1
+          }
+        }
+        when doubled == 1 {
+          i = i + 1
+        } otherwise {
+          inq = 0
+        }
+      }
+    } otherwise {
+      when c == 10 {
+        give i
+      }
+      when c == 34 {
+        hold atstart = 0
+        when i == 0 {
+          atstart = 1
+        } otherwise {
+          when sx_index(buf, i - 1) == d {
+            atstart = 1
+          }
+        }
+        when atstart == 1 {
+          inq = 1
+        }
+      }
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+// One record without its terminator: a trailing CR before the LF is dropped,
+// so CRLF and LF terminate the same way.
+make cs_record(buf: str, at: num) -> str {
+  hold stop = at
+  when at > 0 {
+    when sx_index(buf, at - 1) == 13 {
+      stop = at - 1
+    }
+  }
+  give csv_sub(buf, 0, stop)
+}
+
+// Append `chunk` to `state`, emit every record it completes and return
+// status + bundle of the completed rows plus the remaining state. The rows
+// come out in document order, one packed row per element; a malformed record
+// appears as the csv.sa error marker so the caller can see which row it was.
+make cs_feed_d(state: str, chunk: str, d: num) -> str {
+  hold rows = ""
+  when csv_delim_ok(d) == 0 {
+    give cs_pack(2, state, rows)
+  }
+  hold buf = concat(state, chunk)
+  hold err = 0
+  hold more = 1
+  while more == 1 {
+    hold at = cs_scan_d(buf, d)
+    when at < 0 {
+      more = 0
+    } otherwise {
+      hold parsed = csv_parse_row_d(cs_record(buf, at), d)
+      when csv_ok(parsed) == 0 {
+        err = 2
+      }
+      rows = csv_push(rows, parsed)
+      buf = csv_sub(buf, at + 1, len(buf))
+    }
+  }
+  when len(buf) > cs_max_bytes() {
+    err = 1
+    buf = ""
+  }
+  give cs_pack(err, buf, rows)
+}
+
+make cs_feed(state: str, chunk: str) -> str {
+  give cs_feed_d(state, chunk, 44)
+}
+
+// End of input: emit the last record even though no LF terminated it, and
+// refuse an unterminated quoted field instead of inventing a record. An empty
+// state means the document ended on a record terminator and yields no rows.
+make cs_flush_d(state: str, d: num) -> str {
+  hold rows = ""
+  when len(state) == 0 {
+    give cs_pack(0, state, rows)
+  }
+  when csv_delim_ok(d) == 0 {
+    give cs_pack(2, state, rows)
+  }
+  hold stop = len(state)
+  when sx_index(state, stop - 1) == 13 {
+    stop = stop - 1
+  }
+  hold parsed = csv_parse_row_d(csv_sub(state, 0, stop), d)
+  hold err = 0
+  when csv_ok(parsed) == 0 {
+    err = 2
+  }
+  give cs_pack(err, "", csv_push(rows, parsed))
+}
+
+make cs_flush(state: str) -> str {
+  give cs_flush_d(state, 44)
+}
+
+// The writer side of a stream: one packed row as a CRLF-terminated record,
+// quoting through csv.sa's rules. Chunking output is the caller's business
+// because a record is the only unit that must be written whole.
+make cs_row_out_d(packed: str, d: num) -> str {
+  give concat(csv_write_row_d(packed, d), concat(chr(13), chr(10)))
+}
+
+make cs_row_out(packed: str) -> str {
+  give cs_row_out_d(packed, 44)
+}

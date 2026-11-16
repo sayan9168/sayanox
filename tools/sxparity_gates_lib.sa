@@ -263,6 +263,41 @@ make ep_next() -> num {
     un_uc_kind = un_uc_kind + 1
   }
 
+  // Streaming CSV: the same document at 1, 2, 3, 5, 7, 13, 64 and whole-byte
+  // chunks must produce identical rows, against rows from Python's own csv
+  // module over the same bytes. The depth fixture also pins the boundaries
+  // (quoted CRLF across chunks, unterminated quote, stray quote, the 64 KiB
+  // record cap, invalid delimiter) and the writer round trip. The 65 KB cap
+  // record keeps it out of native_aot's bounded profile, so kind 2 is skipped
+  // here and covered by the compact companion below.
+  hold cs_src = "selfhost/stdlib_csv_stream_test.sa"
+  hold cs_want = "selfhost/stdlib_csv_stream.want"
+  hold cs_present = bt_require_file(cs_want)
+  hold cs_kind = 0
+  while cs_kind < 4 {
+    when cs_kind != 2 {
+      hold cs_bin = concat(concat(dir, "/csv_stream_"), gl_istr(cs_kind))
+      hold cs_c = ep_compile(cs_kind, cs_src, cs_bin)
+      hold cs_r = pg_capture(sh_quote(cs_bin), concat(cs_bin, ".out"))
+      hold cs_p = gl_assert_files_eq(concat(cs_bin, ".out"), cs_want, "streaming CSV depth oracle")
+      when cs_kind > 0 {
+        hold cs_q = gl_assert_files_eq(concat(dir, "/csv_stream_0.out"), concat(cs_bin, ".out"), "streaming CSV backend parity")
+      }
+    }
+    cs_kind = cs_kind + 1
+  }
+  hold cs_uc_src = "selfhost/stdlib_csv_stream_compact_test.sa"
+  hold cs_uc_want = "selfhost/stdlib_csv_stream_compact.want"
+  hold cs_uc_present = bt_require_file(cs_uc_want)
+  hold cs_uc_kind = 0
+  while cs_uc_kind < 4 {
+    hold cs_uc_bin = concat(concat(dir, "/csv_stream_compact_"), gl_istr(cs_uc_kind))
+    hold cs_uc_c = ep_compile(cs_uc_kind, cs_uc_src, cs_uc_bin)
+    hold cs_uc_r = pg_capture(sh_quote(cs_uc_bin), concat(cs_uc_bin, ".out"))
+    hold cs_uc_p = gl_assert_files_eq(concat(cs_uc_bin, ".out"), cs_uc_want, "streaming CSV compact four-backend oracle")
+    cs_uc_kind = cs_uc_kind + 1
+  }
+
   // Compatibility forms: the same 20034 official rows, now through NFKC and
   // NFKD, split into two payloads read at run time. The depth fixture is too
   // big for native_aot, so kind 2 is skipped here and covered by the compact
