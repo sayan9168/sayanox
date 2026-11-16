@@ -1,0 +1,20 @@
+small bytes 17
+small rows 2
+s r0 f0 |97
+s r0 f1 |98,44,99
+s r1 f0 |120,34,121
+s r1 f1 |
+small status 0
+small leftover 0
+whole same 1
+bad flush status 2
+bad flush ok 0
+cap status 1
+cap leftover 0
+out bytes 9
+out crlf 1
+roundtrip same 1
+state new 0
+scan none -1
+max bytes 65536
+csv-stream-compact-ok
