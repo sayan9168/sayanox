@@ -61,6 +61,7 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/uwidth.sa` | terminal display width (`uw_*`) over `stdlib/utf8.sa`: 0/1/2 columns per code point from Unicode 17.0.0 `EastAsianWidth` and `General_Category`, string width, monospace test, column padding and non-splitting column truncation; Ambiguous is 1, controls are 0; sums code points, so use `ug_width` for ZWJ sequences | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/ugraph.sa` | extended grapheme clusters (`ug_*`) over `stdlib/utf8.sa` + `stdlib/uwidth.sa`: UAX #29 GB1–GB999 including GB9c Indic conjuncts, GB11 emoji ZWJ and GB12/13 regional-indicator pairing; boundary offsets, count, at/slice/take/drop, reverse, per-cluster truncation and cluster width | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/unorm.sa` | canonical Unicode normalization (`un_*`) over `stdlib/utf8.sa`: NFC and NFD built from the Unicode 17.0.0 UCD files themselves (968 combining classes in 403 ranges, 2081 canonical decompositions, 961 primary composites, 73 Full_Composition_Exclusion ranges), recursive decomposition, stable canonical ordering, blocked composition, Hangul arithmetic in both directions, code-point and string APIs, `un_is_nfc`/`un_is_nfd`/`un_equal`; canonical only -- no NFKC/NFKD, no case folding, no collation, no bidi | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/ucase.sa` | full Unicode case conversion and case folding (`uc_*`) over `stdlib/utf8.sa`: UAX #44 default `uc_upper`/`uc_lower`/`uc_title` built from the Unicode 17.0.0 UCD files themselves (1,368 simple-casing groups over 2,989 code points, 103 `SpecialCasing` entries with multi-code-point mappings, 1,585 case-folding entries), `uc_fold` for caseless comparison, `uc_cased`/`uc_case_ignorable`, `uc_fold_equal`, code-point and string APIs; default mapping only -- no Turkish/Azeri, Final_Sigma, Lithuanian or Dutch tailoring, no NFKC_Casefold, no locale collation | seed-min, gen2, native | `test-stdlib-next` |
 
 ## Toolbox modules
 
@@ -350,6 +351,84 @@ each other on every shape, so a defect has to survive both spellings to pass.
 `examples/normalization.sa` shows the `string_eq` 0 versus `un_equal` 1 contrast,
 mark reordering across combining classes, blocked composition, Hangul in both
 directions, and compatibility text passing through untouched.
+
+## Unicode casing
+
+`stdlib/utext.sa` maps case for ASCII only, which is enough for identifiers and
+wrong for text. `stdlib/ucase.sa` implements the Unicode default case
+conversion: one code point may map to several, which is why `uc_upper` is a
+string function built on a list function.
+
+```sayanox
+use "stdlib/utf8.sa"
+use "stdlib/ucase.sa"            // import utf8 first; ucase names its functions
+
+hold sharp_s = u8_from([223])                    // the German sharp s
+show uc_upper(sharp_s)                           // SS    -- two code points
+show uc_title(sharp_s)                           // Ss    -- one capital, one small
+show uc_lower(sharp_s)                           // the sharp s itself
+show uc_fold(sharp_s)                            // ss    -- folding, not lowering
+
+hold ligature = u8_from([64257])                 // "fi"
+show uc_upper(ligature)                          // FI    -- not the ligature
+
+show uc_fold_equal(u8_from([83, 116, 114, 97, 223, 101]),
+                   u8_from([83, 84, 82, 65, 83, 83, 69]))   // 1: Strasse == STRASSE
+show uc_cased(97)                                // 1
+show uc_case_ignorable(769)                      // 1: a combining acute
+```
+
+**The four operations, and why they are four.** `uc_lower` and `uc_upper` are
+the mappings a reader expects; `uc_title` is the mapping of a single code point
+in title position, so it is *not* `uc_upper` (the sharp s titles to `Ss` and
+uppercases to `SS`) and it does *not* titlecase a sentence — every code point is
+mapped on its own, with no word or sentence context. `uc_fold` is Unicode
+default case folding, which is a different operation from lowercasing: a
+lowercase sharp s does not exist, so `uc_lower("ß")` is unchanged while
+`uc_fold("ß")` is `ss`. Folding is what `uc_fold_equal` uses, and it is
+idempotent, so a folded string is a stable comparison key: `"Straße"` and
+`"STRASSE"` compare equal, `"Straße"` and `"Straße"` with a long s do too, and
+`"ﬁ"` matches `fi`.
+
+**What is deliberately not modelled.** The sixteen conditional `SpecialCasing`
+entries need locale or context that a table alone cannot supply, so they are
+excluded rather than guessed: no Turkish/Azeri dot rules (`uc_upper("i")` is
+always `I`, `uc_lower("I")` is always `i`), no `Final_Sigma` (a word-final
+capital sigma lowercases to the plain sigma, never the final form), no
+Lithuanian or Dutch `ij` tailoring. There is no `NFKC_Casefold` — that is
+`uc_fold` followed by NFKC from `stdlib/unorm.sa`, and the two are separate on
+purpose — no language-sensitive sentence titlecasing, no CLDR data, and no
+collation.
+
+**Failure contract.** The same as the rest of the text layer: a text function
+returns `""` and a predicate `-1` for malformed or over-long input
+(`uc_max_bytes()` is 65536, shared with `stdlib/utf8.sa`); a list function
+returns `[]` when any element is not a scalar. A Sayanox string is a C string,
+so U+0000 can travel in a list but never in a string — which means the malformed
+`-1` branches of the string functions are defensive: the codec helpers refuse to
+build malformed bytes in the first place.
+
+**How this is verified.** The tables are generated from `UnicodeData.txt`,
+`SpecialCasing.txt` and `CaseFolding.txt` themselves, not from a host library,
+and the independent Python reference is cross-checked against CPython's own
+tables on every `SpecialCasing` entry (206 mapping directions) and every fold
+(1,530) before any expectation is frozen — which is exactly how a wrong column
+order in the parser was caught, because `SpecialCasing.txt` writes
+`lower; title; upper` while `UnicodeData.txt` writes `upper; lower; title`.
+**4,241 expectations** in two fixtures hold the behaviour:
+
+| Fixture | Expectations | What it proves | Backends |
+| --- | --- | --- | --- |
+| `selfhost/stdlib_ucase_test.sa` | 4,184 | one row per simple-casing group read back out of the module's own compressed table (1,368), every case fold (1,585), every `SpecialCasing` direction (309), every `uc_is_special` answer (103), the shape of all four packed tables, the property and invariant sweeps, and the failure contract | seed-min, gen2, native |
+| `selfhost/stdlib_ucase_compact_test.sa` | 57 | the same rule set small enough for the bounded profile | seed-min, gen2, native_aot, native |
+
+The depth fixture exceeds `native_aot`'s bounded 64-slot profile, so the compact
+companion exists to keep that backend covered; the other three run the full one.
+The fixture is written in the generator-shaped subset the `seed-min` profile
+accepts — list literals are built from plain numeric names and hexadecimal is
+written in decimal — because the three-way parity is worth more than the nicer
+spelling. `examples/casing.sa` is a runnable tour and agrees on gen2, native_aot
+and the full native compiler.
 
 ## Library pack
 

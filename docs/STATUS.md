@@ -40,6 +40,34 @@ first version of both was wrong and the official file is what caught it.
 and the full native compiler. **Not** NFKC/NFKD, case folding, collation or
 bidi — those limits are stated in `docs/STDLIB.md`, and R07 stays open.
 
+**2026-11-13 update: Unicode casing — upper, lower, title and case folding**
+
+`stdlib/ucase.sa` adds UAX #44 default case conversion, so text can be
+uppercased, lowercased, titlecased and case-folded the way Unicode means it
+rather than the way ASCII means it. One code point may map to several:
+`uc_upper("ß")` is `SS`, `uc_title("ß")` is `Ss`, `uc_upper("ﬁ")` is `FI`, and a
+Greek iota-subscript form uppercases to two code points. `uc_fold` is case
+folding, a different operation from lowercasing (`uc_lower("ß")` is unchanged,
+`uc_fold("ß")` is `ss`), and `uc_fold_equal` is the caseless comparison built on
+it, alongside the two UAX #44 properties `uc_cased` and `uc_case_ignorable`.
+Verification is **4,241 expectations** in two fixtures: the depth fixture pins
+one row per simple-casing group (read back out of the module's own compressed
+table, not just its effect), every one of the 1,585 case folds, all three
+directions of all 103 unconditional `SpecialCasing` entries, the shape of the
+four packed tables, and the property, invariant and failure-contract sweeps; the
+57-expectation compact companion carries the same rules to the bounded
+`native_aot` profile, so all four backends answer to one oracle. The tables come
+from `UnicodeData.txt`, `SpecialCasing.txt` and `CaseFolding.txt` themselves, and
+the independent Python reference is cross-checked against CPython's tables on
+206 mapping directions and 1,530 folds before anything is frozen — which caught
+a real bug: `SpecialCasing.txt` writes `lower; title; upper` while
+`UnicodeData.txt` writes `upper; lower; title`, so the parser had `ß` and `İ`
+swapped until the cross-check failed. **Not** modelled, deliberately: the sixteen
+conditional entries (Turkish/Azeri dot rules, `Final_Sigma`, Lithuanian, Dutch
+`ij`), `NFKC_Casefold`, sentence titlecasing and collation. `examples/casing.sa`
+is a runnable tour and agrees on gen2, native_aot and the full native compiler.
+NFKC/NFKD, bidi, collation and streaming CSV stay open, so R07 stays open.
+
 **2026-11-13 update: native32 string parameters and string-valued functions**
 The multi-ISA machine-code backend (`tools/native32.sa`, i386/AArch64/RV64IM)
 accepted only `num` parameters and `num` results. A parameter may now be

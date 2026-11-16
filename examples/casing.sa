@@ -1,0 +1,157 @@
+// examples/casing.sa -- upper, lower, title and fold the way Unicode means them.
+//
+//   ./sx run examples/casing.sa
+//
+// stdlib/utext.sa has ASCII-only case mapping, which is fine for identifiers and
+// wrong for text: it cannot spell the German sharp s, the "fi" ligature or a
+// Greek iota-subscript form, because each of those maps one code point to more
+// than one. stdlib/ucase.sa implements the Unicode default case conversion from
+// the Unicode 17.0.0 Character Database, plus case folding -- the recipe for
+// asking whether two strings are the same word ignoring case.
+//
+// Default only: no Turkish dotted-i tailoring, no Final_Sigma rule, no Dutch ij.
+// uc_upper("i") is "I" everywhere and a word-final sigma lowercases to the plain
+// sigma.
+
+use "stdlib/utf8.sa"
+use "stdlib/ucase.sa"
+
+make demo_int(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make demo_csv(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    hold piece = demo_int(xs[i])
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+make demo_cps(s: str) -> str {
+  hold xs = u8_to_list(s)
+  give demo_csv(xs)
+}
+
+// One line per direction: the code points, so the output does not depend on a
+// terminal rendering the result.
+make demo_show(label: str, s: str) -> num {
+  hold u = uc_upper(s)
+  hold l = uc_lower(s)
+  hold t = uc_title(s)
+  hold f = uc_fold(s)
+  hold p1 = concat(label, " upper ")
+  hold p2 = concat(p1, demo_cps(u))
+  hold p3 = concat(p2, " lower ")
+  hold p4 = concat(p3, demo_cps(l))
+  hold p5 = concat(p4, " title ")
+  hold p6 = concat(p5, demo_cps(t))
+  hold line = concat(p6, concat(" fold ", demo_cps(f)))
+  show line
+  give 0
+}
+
+// 1. The case every language course opens with: one character in, two out.
+hold sharp_s = u8_from([223])
+hold h1 = demo_show("sharp s", sharp_s)
+
+// 2. The ligature is not a special case of the alphabet -- it is a compatibility
+// character, and uppercasing it is two ordinary letters.
+hold h2 = demo_show("fi ligature", u8_from([64257]))
+
+// 3. A Greek iota-subscript form uppercases to three code points, which is why
+// the API has to be a list function under the string wrapper.
+hold h3 = demo_show("iota subscript", u8_from([8064]))
+
+// 4. Dotless i vs dotted capital I: the one pair a Turkish tailor would change,
+// and this module deliberately does not.
+hold h4 = demo_show("dotless i", u8_from([305]))
+hold h5 = demo_show("dotted capital I", u8_from([304]))
+
+// 5. Titlecasing is not uppercasing, and it is not word segmentation either.
+// "ß" titles to "Ss" -- one capital, one small -- while it uppercases to "SS".
+// uc_title maps every code point on its own, so "salt" titled is "SALT": the
+// per-code-point answer, with no sentence context. Using it to capitalize a word
+// means uppercasing the first code point and leaving the rest alone.
+hold st = u8_from([223, 97, 108, 116])
+hold p1 = concat("title of a lowercase word: ", demo_cps(uc_title(st)))
+show p1
+hold word = u8_from([115, 97, 108, 116])
+hold first = u8_from([115])
+hold rest = u8_from([97, 108, 116])
+hold capitalized = concat(uc_upper(first), uc_lower(rest))
+hold p2 = concat("capitalize the first code point only: ", demo_cps(capitalized))
+hold p2b = concat("is that 'Salt'? string_eq ", demo_int(string_eq(capitalized, u8_from([83, 97, 108, 116]))))
+show p2
+show p2b
+
+// 6. Case folding and lowercasing are different jobs. Lowercasing a sharp s
+// leaves it alone (there is no lowercase sharp s); folding it becomes "ss".
+hold fold_s = uc_fold(sharp_s)
+hold lower_s = uc_lower(sharp_s)
+hold p3 = concat("fold(sharp s) ", demo_cps(fold_s))
+hold p4 = concat("lower(sharp s) ", demo_cps(lower_s))
+show p3
+show p4
+
+// 7. The question folding exists to answer: is this the same word? Byte
+// comparison and case-insensitive comparison disagree here, and un_equal from
+// stdlib/unorm.sa would not help -- different case is not different spelling.
+hold a = u8_from([83, 116, 114, 97, 223, 101])          // Strasse with a sharp s
+hold b = u8_from([83, 84, 82, 65, 83, 83, 69])          // STRASSE
+hold bytes = 0
+when string_eq(a, b) == 1 {
+  bytes = 1
+}
+hold p5 = concat("Strasse vs STRASSE: string_eq ", demo_int(bytes))
+hold p6 = concat("Strasse vs STRASSE: uc_fold_equal ", demo_int(uc_fold_equal(a, b)))
+show p5
+show p6
+
+// 8. A fold is idempotent: folding a folded string is a no-op, which is what
+// makes it usable as a comparison key.
+hold once = uc_fold(u8_from([7838, 64257, 8064]))
+hold twice = uc_fold(once)
+hold p7 = concat("fold twice is the same: ", demo_int(string_eq(once, twice)))
+show p7
+
+// 9. The two UAX #44 properties behind a comparison. Cased characters are the
+// ones case mapping applies to; case-ignorable ones are the marks and format
+// characters that must not break a case pair apart.
+hold p8 = concat("cased 'a' ", demo_int(uc_cased(97)))
+hold p9 = concat("cased '0' ", demo_int(uc_cased(48)))
+hold p10 = concat("case_ignorable combining acute ", demo_int(uc_case_ignorable(769)))
+hold p11 = concat("case_ignorable 'a' ", demo_int(uc_case_ignorable(97)))
+show p8
+show p9
+show p10
+show p11
+
+// 10. Failure contract: a non-scalar is refused, not silently dropped.
+hold p12 = concat("upper of a surrogate list: len ", demo_int(len(uc_upper_list([97, 55296]))))
+show p12
