@@ -1,0 +1,82 @@
+nfkc 0 |
+nfkd 0 |
+nfkc 1 |97
+nfkd 1 |97
+nfkc 2 |102,105
+nfkd 2 |102,105
+nfkc 3 |102,102
+nfkd 3 |102,102
+nfkc 4 |65
+nfkd 4 |65
+nfkc 5 |50
+nfkd 5 |50
+nfkc 6 |32
+nfkd 6 |32
+nfkc 7 |49
+nfkd 7 |49
+nfkc 8 |12452,12491,12531,12464
+nfkd 8 |12452,12491,12531,12463,12441
+nfkc 9 |88,73,73
+nfkd 9 |88,73,73
+nfkc 10 |1589,1604,1609,32,1575,1604,1604,1607,32,1593,1604,1610,1607,32,1608,1587,1604,1605
+nfkd 10 |1589,1604,1609,32,1575,1604,1604,1607,32,1593,1604,1610,1607,32,1608,1587,1604,1605
+nfkc 11 |937
+nfkd 11 |937
+nfkc 12 |7838
+nfkd 12 |7838
+nfkc 13 |2460
+nfkd 13 |2460
+nfkc 14 |44032,4519
+nfkd 14 |4352,4449,4519
+nfkc 15 |44033
+nfkd 15 |4352,4449,4520
+nfkc 16 |233
+nfkd 16 |101,769
+nfkc 17 |233
+nfkd 17 |101,769
+nfkc 18 |97,779,769
+nfkd 18 |97,779,769
+nfkc 19 |65279,224
+nfkd 19 |65279,97,768
+nfkc 20 |102,105,65
+nfkd 20 |102,105,65
+nfkc 21 |49,50
+nfkd 21 |49,50
+nfkc 22 |32,102,105
+nfkd 22 |32,102,105
+nfkc 23 |911
+nfkd 23 |937,769
+nfkc 24 |1114111
+nfkd 24 |1114111
+compat 64257 2
+compat 64257 text |102,105
+compat 65018 len 18
+compat 233 0
+compat 65 0
+compat 1114112 0
+compat 44032 0
+compat surrogate 0
+compat rows 3833
+compat pool 5613
+compat index 11499
+is_nfkc ligature 0
+is_nfkc folded 1
+is_nfkc malformed -1
+is_nfkd composed 0
+is_nfkd decomposed 1
+compat_equal 1 1
+compat_equal 2 0
+compat_equal 3 1
+compat_equal 4 1
+compat_equal 5 0
+compat_equal 6 -1
+nfkc malformed 
+nfkd malformed 
+nfkc nul 
+nfkc string fiA2
+nfkd string fiA2
+nfkc twice fiA2
+nfkc invalid_list 0
+nfkd invalid_list 0
+max_bytes 65536
+nfkc-compact-ok

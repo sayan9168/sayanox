@@ -60,7 +60,7 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/utext.sa` | code-point-aware text (`ut_*`) over `stdlib/utf8.sa`: length, at/slice/take/drop, reverse, ASCII-only case mapping, exact Unicode `White_Space` trimming, non-splitting truncation, search/count/prefix/suffix; code points not graphemes, no normalization or display width | seed-min, gen2, native_aot | `test-stdlib-next` |
 | `stdlib/uwidth.sa` | terminal display width (`uw_*`) over `stdlib/utf8.sa`: 0/1/2 columns per code point from Unicode 17.0.0 `EastAsianWidth` and `General_Category`, string width, monospace test, column padding and non-splitting column truncation; Ambiguous is 1, controls are 0; sums code points, so use `ug_width` for ZWJ sequences | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/ugraph.sa` | extended grapheme clusters (`ug_*`) over `stdlib/utf8.sa` + `stdlib/uwidth.sa`: UAX #29 GB1–GB999 including GB9c Indic conjuncts, GB11 emoji ZWJ and GB12/13 regional-indicator pairing; boundary offsets, count, at/slice/take/drop, reverse, per-cluster truncation and cluster width | seed-min, gen2, native | `test-stdlib-next` |
-| `stdlib/unorm.sa` | canonical Unicode normalization (`un_*`) over `stdlib/utf8.sa`: NFC and NFD built from the Unicode 17.0.0 UCD files themselves (968 combining classes in 403 ranges, 2081 canonical decompositions, 961 primary composites, 73 Full_Composition_Exclusion ranges), recursive decomposition, stable canonical ordering, blocked composition, Hangul arithmetic in both directions, code-point and string APIs, `un_is_nfc`/`un_is_nfd`/`un_equal`; canonical only -- no NFKC/NFKD, no case folding, no collation, no bidi | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/unorm.sa` | Unicode normalization (`un_*`) over `stdlib/utf8.sa`: NFC, NFD, NFKC and NFKD built from the Unicode 17.0.0 UCD files themselves (968 combining classes in 403 ranges, 2081 canonical decompositions, 961 primary composites, 73 Full_Composition_Exclusion ranges, 3833 tagged compatibility mappings), recursive decomposition, stable canonical ordering, blocked composition, Hangul arithmetic in both directions, code-point and string APIs, `un_is_nfc`/`un_is_nfd`/`un_is_nfkc`/`un_is_nfkd`, `un_equal` and `un_compat_equal`; no case folding, no collation, no bidi | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/ucase.sa` | full Unicode case conversion and case folding (`uc_*`) over `stdlib/utf8.sa`: UAX #44 default `uc_upper`/`uc_lower`/`uc_title` built from the Unicode 17.0.0 UCD files themselves (1,368 simple-casing groups over 2,989 code points, 103 `SpecialCasing` entries with multi-code-point mappings, 1,585 case-folding entries), `uc_fold` for caseless comparison, `uc_cased`/`uc_case_ignorable`, `uc_fold_equal`, code-point and string APIs; default mapping only -- no Turkish/Azeri, Final_Sigma, Lithuanian or Dutch tailoring, no NFKC_Casefold, no locale collation | seed-min, gen2, native | `test-stdlib-next` |
 
 ## Toolbox modules
@@ -278,7 +278,7 @@ convention differences, not defects, and none of them sets an expectation.
 U+0001 is substituted in those cases: both are `Grapheme_Cluster_Break=Control`,
 so rule coverage is unchanged. `examples/graphemes.sa` is a runnable tour.
 
-## Canonical normalization
+## Normalization (NFC/NFD and NFKC/NFKD)
 
 `stdlib/utext.sa` compares code points, so two strings that read the same can
 still differ byte for byte. Normalization removes that difference:
@@ -296,6 +296,13 @@ show un_nfd(precomposed)                       // e + combining acute
 
 hold hangul = u8_from([44032])                 // one syllable
 show un_equal(hangul, u8_from([4352, 4449]))   // 1 -- L + V compose to it
+
+// The compatibility family folds what canonical form deliberately keeps.
+hold ligature = u8_from([64257])               // the "fi" ligature
+show un_compat_equal(ligature, "fi")           // 1 -- compatibility equivalent
+show un_equal(ligature, "fi")                  // 0 -- NOT canonically equivalent
+show un_nfkc(u8_from([65313]))                 // "A" -- fullwidth folded
+show un_nfkd(u8_from([160]))                   // " " -- no-break space folded
 ```
 
 **What the two forms guarantee.** NFD recursively applies every canonical
@@ -317,10 +324,13 @@ ranges here.
 
 **Deliberate limits, not oversights:**
 
-* Canonical only. There is no NFKC/NFKD, so compatibility characters are never
-  folded: the `fi` ligature, superscript two and fullwidth A pass through NFC
-  unchanged, and `un_equal` says they differ from their compatibility
-  decompositions. No case folding either -- `un_equal` is not `un_nfkc_casefold`.
+* Two families, one engine. NFC/NFD use the canonical decompositions only; a
+  compatibility character such as the `fi` ligature, superscript two or
+  fullwidth A passes through NFC unchanged and `un_equal` says it differs from
+  its compatibility spelling. NFKC/NFKD use the tagged mappings as well, so
+  `un_nfkc` folds those to `fi`, `2` and `A` and `un_compat_equal` calls them
+  equal. No case folding in either family -- `un_compat_equal` is not
+  `un_nfkc_casefold`, and `uc_fold` from `stdlib/ucase.sa` is a separate step.
 * No collation and no bidi reordering. The name is normalization only.
 * The tables are Unicode 17.0.0 and are not tailorable; there is no override for
   a custom composition. Hangul is arithmetic, not tabulated, so the whole AC00
@@ -333,12 +343,14 @@ ranges here.
 
 **How this is verified.** The tables are generated from `UnicodeData.txt` and
 `DerivedNormalizationProps.txt` themselves, not from a host library, and the
-behaviour is held by **1,544 frozen expectations** in three fixtures:
+behaviour is held by **2,027 frozen expectations** in five fixtures:
 
 | Fixture | Expectations | What it proves | Backends |
 | --- | --- | --- | --- |
 | `selfhost/stdlib_unorm_test.sa` | 1,321 | all **20,034 cases** of the official Unicode 17.0.0 `NormalizationTest.txt`, read at run time from `selfhost/stdlib_unorm_cases.txt`, plus the whole API against an independent Python reference that reproduces every column of those 20,034 rows first | seed-min, gen2, native |
 | `selfhost/stdlib_unorm_compact_test.sa` | 112 | the same rule set small enough for the bounded profile | seed-min, gen2, native_aot, native |
+| `selfhost/stdlib_nfkc_test.sa` | 401 | all **20,034 cases** of the same official file checked through **all four** columns, from two payloads read at run time, plus the compatibility table shape, the folding cases, the predicates, `un_compat_equal` and the failure contract | seed-min, gen2, native |
+| `selfhost/stdlib_nfkc_compact_test.sa` | 82 | the compatibility rule set small enough for the bounded profile | seed-min, gen2, native_aot, native |
 | `examples/normalization.sa` | 111 lines | a runnable tour; output identical on gen2, native_aot and native | gen2, native_aot, native |
 
 The conformance payload is a **588,057-byte data file read at run time**, not a

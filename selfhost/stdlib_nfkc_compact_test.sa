@@ -1,0 +1,149 @@
+// Frozen independent expectations; do not edit by hand.
+// Unicode module group: unorm compatibility forms, bounded-backend companion.
+// The same NFKC/NFKD rules as selfhost/stdlib_nfkc_test.sa, cut down to what
+// native_aot's 64 globals and 64 locals allow, so no backend is blind to the
+// compatibility layer. Every expectation comes from the official Unicode
+// 17.0.0 NormalizationTest columns, read through the independent Python
+// reference that reproduces all 20034 official rows first.
+
+use "stdlib/utf8.sa"
+use "stdlib/unorm.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_csv(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    hold piece = fx_i(xs[i])
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+make fx_say(tag: str, body: str) -> num {
+  hold line = concat(tag, body)
+  show line
+  give 0
+}
+
+make fx_num(tag: str, v: num) -> num {
+  hold line = concat(tag, fx_i(v))
+  show line
+  give 0
+}
+
+// A leading bar, then the decimal CSV, so an empty list still prints one
+// visible character.
+make fx_text(xs: list) -> str {
+  hold body = fx_csv(xs)
+  give concat("|", body)
+}
+
+  hold z = fx_say("nfkc 0 ", fx_text(un_nfkc_list([])))
+  hold z = fx_say("nfkd 0 ", fx_text(un_nfkd_list([])))
+  hold z = fx_say("nfkc 1 ", fx_text(un_nfkc_list([97])))
+  hold z = fx_say("nfkd 1 ", fx_text(un_nfkd_list([97])))
+  hold z = fx_say("nfkc 2 ", fx_text(un_nfkc_list([64257])))
+  hold z = fx_say("nfkd 2 ", fx_text(un_nfkd_list([64257])))
+  hold z = fx_say("nfkc 3 ", fx_text(un_nfkc_list([64256])))
+  hold z = fx_say("nfkd 3 ", fx_text(un_nfkd_list([64256])))
+  hold z = fx_say("nfkc 4 ", fx_text(un_nfkc_list([65313])))
+  hold z = fx_say("nfkd 4 ", fx_text(un_nfkd_list([65313])))
+  hold z = fx_say("nfkc 5 ", fx_text(un_nfkc_list([178])))
+  hold z = fx_say("nfkd 5 ", fx_text(un_nfkd_list([178])))
+  hold z = fx_say("nfkc 6 ", fx_text(un_nfkc_list([160])))
+  hold z = fx_say("nfkd 6 ", fx_text(un_nfkd_list([160])))
+  hold z = fx_say("nfkc 7 ", fx_text(un_nfkc_list([9312])))
+  hold z = fx_say("nfkd 7 ", fx_text(un_nfkd_list([9312])))
+  hold z = fx_say("nfkc 8 ", fx_text(un_nfkc_list([13060])))
+  hold z = fx_say("nfkd 8 ", fx_text(un_nfkd_list([13060])))
+  hold z = fx_say("nfkc 9 ", fx_text(un_nfkc_list([8555])))
+  hold z = fx_say("nfkd 9 ", fx_text(un_nfkd_list([8555])))
+  hold z = fx_say("nfkc 10 ", fx_text(un_nfkc_list([65018])))
+  hold z = fx_say("nfkd 10 ", fx_text(un_nfkd_list([65018])))
+  hold z = fx_say("nfkc 11 ", fx_text(un_nfkc_list([8486])))
+  hold z = fx_say("nfkd 11 ", fx_text(un_nfkd_list([8486])))
+  hold z = fx_say("nfkc 12 ", fx_text(un_nfkc_list([7838])))
+  hold z = fx_say("nfkd 12 ", fx_text(un_nfkd_list([7838])))
+  hold z = fx_say("nfkc 13 ", fx_text(un_nfkc_list([2460])))
+  hold z = fx_say("nfkd 13 ", fx_text(un_nfkd_list([2460])))
+  hold z = fx_say("nfkc 14 ", fx_text(un_nfkc_list([4352, 4449, 4519])))
+  hold z = fx_say("nfkd 14 ", fx_text(un_nfkd_list([4352, 4449, 4519])))
+  hold z = fx_say("nfkc 15 ", fx_text(un_nfkc_list([44032, 4520])))
+  hold z = fx_say("nfkd 15 ", fx_text(un_nfkd_list([44032, 4520])))
+  hold z = fx_say("nfkc 16 ", fx_text(un_nfkc_list([233])))
+  hold z = fx_say("nfkd 16 ", fx_text(un_nfkd_list([233])))
+  hold z = fx_say("nfkc 17 ", fx_text(un_nfkc_list([101, 769])))
+  hold z = fx_say("nfkd 17 ", fx_text(un_nfkd_list([101, 769])))
+  hold z = fx_say("nfkc 18 ", fx_text(un_nfkc_list([97, 779, 769])))
+  hold z = fx_say("nfkd 18 ", fx_text(un_nfkd_list([97, 779, 769])))
+  hold z = fx_say("nfkc 19 ", fx_text(un_nfkc_list([65279, 97, 768])))
+  hold z = fx_say("nfkd 19 ", fx_text(un_nfkd_list([65279, 97, 768])))
+  hold z = fx_say("nfkc 20 ", fx_text(un_nfkc_list([64257, 65313])))
+  hold z = fx_say("nfkd 20 ", fx_text(un_nfkd_list([64257, 65313])))
+  hold z = fx_say("nfkc 21 ", fx_text(un_nfkc_list([9312, 178])))
+  hold z = fx_say("nfkd 21 ", fx_text(un_nfkd_list([9312, 178])))
+  hold z = fx_say("nfkc 22 ", fx_text(un_nfkc_list([160, 64257])))
+  hold z = fx_say("nfkd 22 ", fx_text(un_nfkd_list([160, 64257])))
+  hold z = fx_say("nfkc 23 ", fx_text(un_nfkc_list([8486, 769])))
+  hold z = fx_say("nfkd 23 ", fx_text(un_nfkd_list([8486, 769])))
+  hold z = fx_say("nfkc 24 ", fx_text(un_nfkc_list([1114111])))
+  hold z = fx_say("nfkd 24 ", fx_text(un_nfkd_list([1114111])))
+  hold z = fx_num("compat 64257 ", len(un_compat(64257)))
+  hold z = fx_say("compat 64257 text ", fx_text(un_compat(64257)))
+  hold z = fx_say("compat 65018 len ", fx_i(len(un_compat(65018))))
+  hold z = fx_num("compat 233 ", len(un_compat(233)))
+  hold z = fx_num("compat 65 ", len(un_compat(65)))
+  hold z = fx_num("compat 1114112 ", len(un_compat(1114112)))
+  hold z = fx_num("compat 44032 ", len(un_compat(44032)))
+  hold z = fx_num("compat surrogate ", len(un_compat(55296)))
+  hold z = fx_num("compat rows ", u8_div(len(un_compat_index()), 3))
+  hold z = fx_num("compat pool ", len(un_compat_pool()))
+  hold z = fx_num("compat index ", len(un_compat_index()))
+  hold z = fx_num("is_nfkc ligature ", un_is_nfkc(u8_from([64257])))
+  hold z = fx_num("is_nfkc folded ", un_is_nfkc(u8_from([102, 105])))
+  hold z = fx_num("is_nfkc malformed ", un_is_nfkc(chr(255)))
+  hold z = fx_num("is_nfkd composed ", un_is_nfkd(u8_from([233])))
+  hold z = fx_num("is_nfkd decomposed ", un_is_nfkd(u8_from([101, 769])))
+  hold z = fx_num("compat_equal 1 ", un_compat_equal(u8_from([64257]), u8_from([102, 105])))
+  hold z = fx_num("compat_equal 2 ", un_compat_equal(u8_from([64257]), u8_from([102, 73])))
+  hold z = fx_num("compat_equal 3 ", un_compat_equal(u8_from([9312]), u8_from([49])))
+  hold z = fx_num("compat_equal 4 ", un_compat_equal(u8_from([233]), u8_from([101, 769])))
+  hold z = fx_num("compat_equal 5 ", un_compat_equal(u8_from([64257]), u8_from([102, 106])))
+  hold z = fx_num("compat_equal 6 ", un_compat_equal(chr(255), u8_from([102])))
+  hold z = fx_say("nfkc malformed ", un_nfkc(chr(255)))
+  hold z = fx_say("nfkd malformed ", un_nfkd(chr(255)))
+  hold z = fx_say("nfkc nul ", un_nfkc(u8_from([0])))
+  hold z = fx_say("nfkc string ", un_nfkc(u8_from([64257, 65313, 178])))
+  hold z = fx_say("nfkd string ", un_nfkd(u8_from([64257, 65313, 178])))
+  hold z = fx_say("nfkc twice ", un_nfkc(un_nfkc(u8_from([64257, 65313, 178]))))
+  hold z = fx_num("nfkc invalid_list ", len(un_nfkc_list([97, 1114112])))
+  hold z = fx_num("nfkd invalid_list ", len(un_nfkd_list([1114112])))
+  hold z = fx_num("max_bytes ", un_max_bytes())
+  show "nfkc-compact-ok"

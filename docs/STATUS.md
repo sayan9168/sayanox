@@ -37,7 +37,7 @@ class 0 (Indic vowel signs such as U+0B47 + U+0B3E), and blocking must be
 decided by the last *non-composing* mark, not by the last character seen. The
 first version of both was wrong and the official file is what caught it.
 `examples/normalization.sa` is a runnable tour and agrees on gen2, native_aot
-and the full native compiler. **Not** NFKC/NFKD, case folding, collation or
+and the full native compiler. **Not** case folding, collation or
 bidi — those limits are stated in `docs/STDLIB.md`, and R07 stays open.
 
 **2026-11-13 update: Unicode casing — upper, lower, title and case folding**
