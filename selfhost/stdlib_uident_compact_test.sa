@@ -1,0 +1,74 @@
+// Frozen independent expectations; do not edit by hand.
+// Unicode module group: uident, bounded-backend companion. The same UAX #31
+// rules as selfhost/stdlib_uident_test.sa, cut down to what native_aot's 64
+// globals and 64 locals allow, so no backend is blind to this module. Every
+// expectation comes from Unicode 17.0.0 DerivedCoreProperties.txt, and the
+// identifier strings are cross-checked against CPython's str.isidentifier.
+
+use "stdlib/utf8.sa"
+use "stdlib/unorm.sa"
+use "stdlib/uident.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_num(tag: str, v: num) -> num {
+  hold line = concat(tag, fx_i(v))
+  show line
+  give 0
+}
+
+  hold z = fx_num("ranges start ", u8_div(len(uid_start_ranges()), 2))
+  hold z = fx_num("ranges continue ", u8_div(len(uid_continue_ranges()), 2))
+  hold z = fx_num("start A ", uid_xid_start(65))
+  hold z = fx_num("start _ ", uid_xid_start(95))
+  hold z = fx_num("continue _ ", uid_xid_continue(95))
+  hold z = fx_num("start 1 ", uid_xid_start(49))
+  hold z = fx_num("continue 1 ", uid_xid_continue(49))
+  hold z = fx_num("start eacute ", uid_xid_start(233))
+  hold z = fx_num("start cjk ", uid_xid_start(20013))
+  hold z = fx_num("start emoji ", uid_xid_start(128512))
+  hold z = fx_num("continue zwj ", uid_xid_continue(8205))
+  hold z = fx_num("continue nbsp ", uid_xid_continue(160))
+  hold z = fx_num("start surrogate ", uid_xid_start(55296))
+  hold z = fx_num("continue surrogate ", uid_xid_continue(55296))
+  hold z = fx_num("start too big ", uid_xid_start(1114112))
+  hold z = fx_num("valid a ", uid_valid("a"))
+  hold z = fx_num("valid _ ", uid_valid("_"))
+  hold z = fx_num("valid 1abc ", uid_valid("1abc"))
+  hold z = fx_num("valid a-b ", uid_valid("a-b"))
+  hold z = fx_num("valid empty ", uid_valid(""))
+  hold z = fx_num("valid cjk ", uid_valid(u8_from([20013, 25991])))
+  hold z = fx_num("valid e+acute ", uid_valid(u8_from([101, 769])))
+  hold z = fx_num("nfkc eacute ", uid_valid_nfkc(u8_from([233])))
+  hold z = fx_num("nfkc e+acute ", uid_valid_nfkc(u8_from([101, 769])))
+  hold z = fx_num("nfkc ligature ", uid_valid_nfkc(u8_from([64257])))
+  hold z = fx_num("same nfd ", uid_same(u8_from([233]), u8_from([101, 769])))
+  hold z = fx_num("same differ ", uid_same("abc", "abd"))
+  hold z = fx_num("same malformed ", uid_same(chr(255), "a"))
+  hold z = fx_num("list ok ", uid_valid_list([95, 97, 49]))
+  hold z = fx_num("list surrogate ", uid_valid_list([97, 55296]))
+  hold z = fx_num("list empty ", uid_valid_list([]))
+  hold z = fx_num("malformed ", uid_valid(chr(255)))
+  hold z = fx_num("max bytes ", uid_max_bytes())
+  show "uident-compact-ok"

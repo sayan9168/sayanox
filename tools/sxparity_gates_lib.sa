@@ -263,6 +263,39 @@ make ep_next() -> num {
     un_uc_kind = un_uc_kind + 1
   }
 
+  // UAX #31 identifier syntax: both properties swept over all 1114112 code
+  // points and frozen as run-length transitions, plus the leading-underscore
+  // rule, the property-only versus NFKC reading and the failure contract. The
+  // sweep is too big for native_aot, so kind 2 is skipped here and covered by
+  // the compact companion below.
+  hold ui_src = "selfhost/stdlib_uident_test.sa"
+  hold ui_want = "selfhost/stdlib_uident.want"
+  hold ui_present = bt_require_file(ui_want)
+  hold ui_kind = 0
+  while ui_kind < 4 {
+    when ui_kind != 2 {
+      hold ui_bin = concat(concat(dir, "/uident_"), gl_istr(ui_kind))
+      hold ui_c = ep_compile(ui_kind, ui_src, ui_bin)
+      hold ui_r = pg_capture(sh_quote(ui_bin), concat(ui_bin, ".out"))
+      hold ui_p = gl_assert_files_eq(concat(ui_bin, ".out"), ui_want, "UAX #31 identifier depth oracle")
+      when ui_kind > 0 {
+        hold ui_q = gl_assert_files_eq(concat(dir, "/uident_0.out"), concat(ui_bin, ".out"), "UAX #31 identifier backend parity")
+      }
+    }
+    ui_kind = ui_kind + 1
+  }
+  hold ui_uc_src = "selfhost/stdlib_uident_compact_test.sa"
+  hold ui_uc_want = "selfhost/stdlib_uident_compact.want"
+  hold ui_uc_present = bt_require_file(ui_uc_want)
+  hold ui_uc_kind = 0
+  while ui_uc_kind < 4 {
+    hold ui_uc_bin = concat(concat(dir, "/uident_compact_"), gl_istr(ui_uc_kind))
+    hold ui_uc_c = ep_compile(ui_uc_kind, ui_uc_src, ui_uc_bin)
+    hold ui_uc_r = pg_capture(sh_quote(ui_uc_bin), concat(ui_uc_bin, ".out"))
+    hold ui_uc_p = gl_assert_files_eq(concat(ui_uc_bin, ".out"), ui_uc_want, "UAX #31 identifier compact four-backend oracle")
+    ui_uc_kind = ui_uc_kind + 1
+  }
+
   // Streaming CSV: the same document at 1, 2, 3, 5, 7, 13, 64 and whole-byte
   // chunks must produce identical rows, against rows from Python's own csv
   // module over the same bytes. The depth fixture also pins the boundaries

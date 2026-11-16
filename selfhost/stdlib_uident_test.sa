@@ -1,0 +1,188 @@
+// Frozen independent expectations; do not edit by hand.
+// Unicode module group: uident (UAX #31 identifier syntax).
+//
+// Layer 1 sweeps all 1,114,112 code points through the real bisection for both
+// properties and prints the answer as run-length transitions, so a single
+// wrong range cannot hide behind a sampled subset. The expectation comes from
+// DerivedCoreProperties.txt itself (779 XID_Start ranges, 1422 XID_Continue
+// ranges), not from this code and not from a host library.
+// Layer 2 pins the API: the leading-underscore rule, the property-only versus
+// NFKC reading of an identifier, the list API, non-scalars, malformed UTF-8 and
+// the over-long refusal. `uid_valid` is the property-only answer and matches
+// CPython's str.isidentifier (which also tests the XID properties only); the
+// `uid_valid_nfkc` lines are the stricter UAX #31 reading, so `nfkc 3` is 0
+// for e + U+0301 where `case 13` is 1.
+// The sweep is why kind 2 (bounded native_aot) is skipped by the gate and
+// covered by the compact companion instead.
+
+use "stdlib/utf8.sa"
+use "stdlib/unorm.sa"
+use "stdlib/uident.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_say(tag: str, body: str) -> num {
+  hold line = concat(tag, body)
+  show line
+  give 0
+}
+
+make fx_num(tag: str, v: num) -> num {
+  hold line = concat(tag, fx_i(v))
+  show line
+  give 0
+}
+
+make fx_sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// One property over the whole code space, printed as run-length transitions:
+// tag, first code point, value, length.
+make fx_sweep(tag: str, which: num) -> num {
+  hold start = 0
+  hold cur = uid_xid_continue(0)
+  when which == 0 {
+    cur = uid_xid_start(0)
+  }
+  hold cp = 1
+  while cp <= 1114111 {
+    hold v = uid_xid_continue(cp)
+    when which == 0 {
+      v = uid_xid_start(cp)
+    }
+    when v != cur {
+      hold line = concat(concat(tag, " "), concat(fx_i(start), " "))
+      line = concat(line, concat(fx_i(cur), " "))
+      line = concat(line, fx_i(cp - start))
+      show line
+      start = cp
+      cur = v
+    }
+    cp = cp + 1
+  }
+  hold last = concat(concat(tag, " "), concat(fx_i(start), " "))
+  last = concat(last, concat(fx_i(cur), " "))
+  last = concat(last, fx_i(1114112 - start))
+  show last
+  give 0
+}
+
+  hold r1 = fx_num("ranges start ", u8_div(len(uid_start_ranges()), 2))
+  hold r2 = fx_num("ranges continue ", u8_div(len(uid_continue_ranges()), 2))
+  hold r3 = fx_num("max cp ", uid_max_cp())
+  hold r4 = fx_num("max bytes ", uid_max_bytes())
+  hold sw1 = fx_sweep("sweep-start", 0)
+  hold sw2 = fx_sweep("sweep-continue", 1)
+
+  // The leading-underscore rule and the ASCII cases.
+  hold c1 = fx_num("case 1 ", uid_valid("a"))
+  hold c2 = fx_num("case 2 ", uid_valid("_"))
+  hold c3 = fx_num("case 3 ", uid_valid("__"))
+  hold c4 = fx_num("case 4 ", uid_valid("1"))
+  hold c5 = fx_num("case 5 ", uid_valid("a1"))
+  hold c6 = fx_num("case 6 ", uid_valid("a-b"))
+  hold c7 = fx_num("case 7 ", uid_valid("-a"))
+  hold c8 = fx_num("case 8 ", uid_valid("_1"))
+  hold c9 = fx_num("case 9 ", uid_valid("1_"))
+  hold c10 = fx_num("case 10 ", uid_valid(""))
+  hold c11 = fx_num("case 11 ", uid_valid("a b"))
+
+  // Non-ASCII, built from code points so the fixture itself stays ASCII.
+  hold s12 = u8_from([233])
+  hold s13 = u8_from([101, 769])
+  hold s14 = u8_from([768])
+  hold s15 = u8_from([44032])
+  hold s16 = u8_from([4352, 4449])
+  hold s17 = u8_from([128512])
+  hold s18 = u8_from([97, 160])
+  hold s19 = u8_from([97, 8205])
+  hold s20 = u8_from([20013])
+  hold s21 = u8_from([20013, 25991])
+  hold s22 = u8_from([2325, 2367])
+  hold s23 = u8_from([95, 49])
+  hold s24 = u8_from([64257])
+  hold c12 = fx_num("case 12 ", uid_valid(s12))
+  hold c13 = fx_num("case 13 ", uid_valid(s13))
+  hold c14 = fx_num("case 14 ", uid_valid(s14))
+  hold c15 = fx_num("case 15 ", uid_valid(s15))
+  hold c16 = fx_num("case 16 ", uid_valid(s16))
+  hold c17 = fx_num("case 17 ", uid_valid(s17))
+  hold c18 = fx_num("case 18 ", uid_valid(s18))
+  hold c19 = fx_num("case 19 ", uid_valid(s19))
+  hold c20 = fx_num("case 20 ", uid_valid(s20))
+  hold c21 = fx_num("case 21 ", uid_valid(s21))
+  hold c22 = fx_num("case 22 ", uid_valid(s22))
+  hold c23 = fx_num("case 23 ", uid_valid(s23))
+  hold c24 = fx_num("case 24 ", uid_valid(s24))
+
+  // The same strings under the stricter UAX #31 reading: NFKC or nothing.
+  hold n1 = fx_num("nfkc 1 ", uid_valid_nfkc("a"))
+  hold n2 = fx_num("nfkc 2 ", uid_valid_nfkc(s12))
+  hold n3 = fx_num("nfkc 3 ", uid_valid_nfkc(s13))
+  hold n4 = fx_num("nfkc 4 ", uid_valid_nfkc(s14))
+  hold n5 = fx_num("nfkc 5 ", uid_valid_nfkc(s15))
+  hold n6 = fx_num("nfkc 6 ", uid_valid_nfkc(s16))
+  hold n7 = fx_num("nfkc 7 ", uid_valid_nfkc(s17))
+  hold n8 = fx_num("nfkc 8 ", uid_valid_nfkc(s23))
+  hold n9 = fx_num("nfkc 9 ", uid_valid_nfkc(s24))
+  hold n10 = fx_num("nfkc 10 ", uid_valid_nfkc(""))
+
+  // Same identifier after NFKC, not a caseless comparison.
+  hold m1 = fx_num("same 1 ", uid_same(s12, s13))
+  hold m2 = fx_num("same 2 ", uid_same("abc", "abd"))
+  hold m3 = fx_num("same 3 ", uid_same("abc", "abc"))
+  hold m4 = fx_num("same 4 ", uid_same(s13, s13))
+
+  // Non-scalars, malformed UTF-8 and the over-long refusal.
+  hold l1 = fx_num("list surrogate ", uid_valid_list([97, 55296]))
+  hold l2 = fx_num("list too big ", uid_valid_list([1114112]))
+  hold l3 = fx_num("list negative ", uid_valid_list([0 - 1]))
+  hold l4 = fx_num("list empty ", uid_valid_list([]))
+  hold l5 = fx_num("list ok ", uid_valid_list([95, 97, 49]))
+  hold l6 = fx_num("start surrogate ", uid_xid_start(55296))
+  hold l7 = fx_num("continue surrogate ", uid_xid_continue(55296))
+  hold l8 = fx_num("start too big ", uid_xid_start(1114112))
+  hold l9 = fx_num("start negative ", uid_xid_start(0 - 1))
+  hold f1 = fx_num("malformed ", uid_valid(chr(255)))
+  hold f2 = fx_num("malformed nfkc ", uid_valid_nfkc(chr(255)))
+  hold f3 = fx_num("malformed same ", uid_same(chr(255), "a"))
+
+  // 65,537 bytes is past the shared cap: refused, not scanned.
+  hold big = "a"
+  hold k = 0
+  while k < 17 {
+    big = concat(big, big)
+    k = k + 1
+  }
+  hold f4 = fx_num("long bytes ", len(big))
+  hold f5 = fx_num("long valid ", uid_valid(big))
+  hold f6 = fx_num("capped valid ", uid_valid(fx_sub(big, 0, 65536)))
+  show "uident-ok"

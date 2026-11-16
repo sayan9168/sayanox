@@ -131,3 +131,6 @@ tools/sxdiag.c
 
 # Local Vercel CLI project link
 /.vercel/
+
+# Host-side generators and downloaded UCD files (never part of the build).
+.cache/

@@ -1,5 +1,34 @@
 # Status
 
+**2026-11-16 update: identifier syntax — UAX #31 XID properties**
+
+`stdlib/uident.sa` adds the Unicode identifier properties a lexer, linter or
+rename tool needs, so a name can be checked against the standard instead of
+against ASCII. `uid_xid_start` and `uid_xid_continue` answer one code point from
+the 779 `XID_Start` and 1,422 `XID_Continue` ranges of Unicode 17.0.0
+`DerivedCoreProperties.txt`; `uid_valid` answers a whole string and
+`uid_valid_list` a code point list. Verification sweeps **all 1,114,112 code
+points** (surrogates included, where the contract is -1) twice — once per
+property — against run-length output frozen from an independent Python
+reference, and the 3,058-line depth fixture plus its 34-expectation compact
+companion run on **all four backends** from one oracle. U+005F is the case worth
+naming: LOW LINE is `XID_Continue` but not `XID_Start`, yet every language using
+these properties lets an identifier *begin* with an underscore, so `uid_valid`
+accepts exactly one leading U+005F and nothing else outside the properties; the
+compact companion pins `start _ 0` next to `continue _ 1`. Two readings of
+"valid" are kept apart on purpose: UAX #31 asks an identifier to be in NFKC, but
+CPython's `str.isidentifier` does not enforce it (it answers `True` for
+`e` + U+0301 while rejecting the ZWJ join the newer UCD allows), so `uid_valid`
+is the Python-agreeing, property-only answer and `uid_valid_nfkc` is the stricter
+one a compiler canonicalising tokens wants. Getting this wrong in the other
+direction first — the header claimed CPython enforced NFKC — is worth recording
+because the sweep is what disproved it. The failure contract is the text layer's:
+-1 for a non-scalar, malformed UTF-8 or input over the shared 64 KiB cap, 0 for
+well formed but not an identifier. **Not** modelled: identifier equivalence
+(`uid_valid_nfkc` plus case folding), the Pattern_Syntax/Pattern_White_Space
+profiles as separate APIs, and any script restriction. Bidi, collation and real
+sockets stay open, so R07 stays open.
+
 **2026-11-13 update: both Unicode conformance payloads are run-time data files**
 
 The grapheme and normalization fixtures each carried their official

@@ -1,0 +1,34 @@
+ranges start 779
+ranges continue 1422
+start A 1
+start _ 0
+continue _ 1
+start 1 0
+continue 1 1
+start eacute 1
+start cjk 1
+start emoji 0
+continue zwj 1
+continue nbsp 0
+start surrogate -1
+continue surrogate -1
+start too big -1
+valid a 1
+valid _ 1
+valid 1abc 0
+valid a-b 0
+valid empty 0
+valid cjk 1
+valid e+acute 1
+nfkc eacute 1
+nfkc e+acute 0
+nfkc ligature 0
+same nfd 1
+same differ 0
+same malformed -1
+list ok 1
+list surrogate -1
+list empty 0
+malformed -1
+max bytes 65536
+uident-compact-ok
