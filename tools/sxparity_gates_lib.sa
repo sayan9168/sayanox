@@ -228,6 +228,41 @@ make ep_next() -> num {
     ud_index = ud_index + 1
   }
 
+  // Canonical normalization: the depth fixture replays all 20034 official
+  // NormalizationTest rows read at run time from selfhost/stdlib_unorm_cases.txt
+  // and adds an API layer from the independent Python reference. It is too big
+  // for native_aot, so kind 2 is skipped here and covered by the compact
+  // companion below; gen1_min (kind 3) is a C backend and runs the depth
+  // fixture like the other two.
+  hold un_src = "selfhost/stdlib_unorm_test.sa"
+  hold un_want = "selfhost/stdlib_unorm.want"
+  hold un_present = bt_require_file(un_want)
+  hold un_data = bt_require_file("selfhost/stdlib_unorm_cases.txt")
+  hold un_kind = 0
+  while un_kind < 4 {
+    when un_kind != 2 {
+      hold un_bin = concat(concat(dir, "/unorm_depth_"), gl_istr(un_kind))
+      hold un_c = ep_compile(un_kind, un_src, un_bin)
+      hold un_r = pg_capture(sh_quote(un_bin), concat(un_bin, ".out"))
+      hold un_a = gl_assert_files_eq(concat(un_bin, ".out"), un_want, "canonical normalization depth oracle")
+      when un_kind > 0 {
+        hold un_p = gl_assert_files_eq(concat(dir, "/unorm_depth_0.out"), concat(un_bin, ".out"), "canonical normalization backend parity")
+      }
+    }
+    un_kind = un_kind + 1
+  }
+  hold un_uc_src = "selfhost/stdlib_unorm_compact_test.sa"
+  hold un_uc_want = "selfhost/stdlib_unorm_compact.want"
+  hold un_uc_present = bt_require_file(un_uc_want)
+  hold un_uc_kind = 0
+  while un_uc_kind < 4 {
+    hold un_uc_bin = concat(concat(dir, "/unorm_compact_"), gl_istr(un_uc_kind))
+    hold un_uc_c = ep_compile(un_uc_kind, un_uc_src, un_uc_bin)
+    hold un_uc_r = pg_capture(sh_quote(un_uc_bin), concat(un_uc_bin, ".out"))
+    hold un_uc_a = gl_assert_files_eq(concat(un_uc_bin, ".out"), un_uc_want, "canonical normalization compact four-backend oracle")
+    un_uc_kind = un_uc_kind + 1
+  }
+
   // Bounded-backend companion: same rules, small enough for native_aot, and it
   // runs on all four backends so the profiles are compared against one oracle.
   hold uc_src = "selfhost/stdlib_unicode_compact_test.sa"

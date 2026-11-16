@@ -1,0 +1,120 @@
+nfc 0 |
+nfd 0 |
+nfc 1 |97
+nfd 1 |97
+nfc 2 |233
+nfd 2 |101,769
+nfc 3 |233
+nfd 3 |101,769
+nfc 4 |97,779,769
+nfd 4 |97,779,769
+nfc 5 |337,769
+nfd 5 |111,779,769
+nfc 6 |225,768
+nfd 6 |97,769,768
+nfc 7 |225,790
+nfd 7 |97,790,769
+nfc 8 |225,790
+nfd 8 |97,790,769
+nfc 9 |97,918,790
+nfd 9 |97,918,790
+nfc 10 |107,770,769
+nfd 10 |107,770,769
+nfc 11 |7729,790
+nfd 11 |107,790,769
+nfc 12 |8066
+nfd 12 |945,787,768,837
+nfc 13 |469
+nfd 13 |85,776,772
+nfc 14 |7700
+nfd 14 |69,772,768
+nfc 15 |776,769
+nfd 15 |776,769
+nfc 16 |193,768
+nfd 16 |65,769,768
+nfc 17 |769
+nfd 17 |769
+nfc 18 |97,918,769
+nfd 18 |97,918,769
+nfc 19 |225,918
+nfd 19 |97,769,918
+nfc 20 |2460
+nfd 20 |2460
+nfc 21 |105,775
+nfd 21 |105,775
+nfc 22 |7838
+nfd 22 |7838
+nfc 23 |64256
+nfd 23 |64256
+nfc 24 |44032
+nfd 24 |4352,4449
+nfc 25 |44032
+nfd 25 |4352,4449
+nfc 26 |44032,4519
+nfd 26 |4352,4449,4519
+nfc 27 |437,769
+nfd 27 |437,769
+nfc 28 |4352,44033
+nfd 28 |4352,4352,4449,4520
+nfc 29 |119808
+nfd 29 |119808
+nfc 30 |65279,224
+nfd 30 |65279,97,768
+ccc 0 0
+ccc 97 0
+ccc 768 230
+ccc 769 230
+ccc 837 240
+ccc 1425 220
+ccc 2364 7
+ccc 2381 9
+ccc 4142 0
+ccc 12441 8
+ccc 44032 0
+ccc 4352 0
+ccc 4449 0
+ccc 4520 0
+ccc 119141 216
+ccc 917760 0
+ccc 1114111 0
+excluded 832 1
+excluded 836 1
+excluded 884 1
+excluded 903 1
+excluded 8126 1
+excluded 8486 1
+excluded 8491 1
+excluded 9312 0
+excluded 64285 1
+excluded 2392 1
+excluded 194560 1
+excluded 44032 0
+excluded 65 0
+decomp 192 |65,768
+decomp 233 |101,769
+decomp 7700 |274,768
+decomp 836 |776,769
+decomp 44032 |4352,4449
+decomp 44033 |4352,4449,4520
+decomp 9312 |
+decomp 65 |
+decomp 1114111 |
+compose 65 768 192
+compose 65 769 193
+compose 97 779 -1
+compose 111 769 243
+compose 4352 4449 44032
+compose 44032 4520 44033
+compose 4352 4520 -1
+compose 65 66 -1
+compose 768 65 -1
+max_bytes 65536
+ccc_surrogate -1
+nfd_list_surrogate 0
+nfc_list_empty 0
+equal 114 1
+equal 115 0
+equal 116 1
+equal 117 1
+equal 118 0
+unorm-compact-ok
