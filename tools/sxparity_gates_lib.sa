@@ -263,6 +263,40 @@ make ep_next() -> num {
     un_uc_kind = un_uc_kind + 1
   }
 
+  // Compatibility forms: the same 20034 official rows, now through NFKC and
+  // NFKD, split into two payloads read at run time. The depth fixture is too
+  // big for native_aot, so kind 2 is skipped here and covered by the compact
+  // companion below; seed-min, gen2 and gen1_min run it.
+  hold nk_src = "selfhost/stdlib_nfkc_test.sa"
+  hold nk_want = "selfhost/stdlib_nfkc.want"
+  hold nk_present = bt_require_file(nk_want)
+  hold nk_a = bt_require_file("selfhost/stdlib_nfkc_cases_a.txt")
+  hold nk_b = bt_require_file("selfhost/stdlib_nfkc_cases_b.txt")
+  hold nk_kind = 0
+  while nk_kind < 4 {
+    when nk_kind != 2 {
+      hold nk_bin = concat(concat(dir, "/nfkc_depth_"), gl_istr(nk_kind))
+      hold nk_c = ep_compile(nk_kind, nk_src, nk_bin)
+      hold nk_r = pg_capture(sh_quote(nk_bin), concat(nk_bin, ".out"))
+      hold nk_p = gl_assert_files_eq(concat(nk_bin, ".out"), nk_want, "compatibility normalization depth oracle")
+      when nk_kind > 0 {
+        hold nk_q = gl_assert_files_eq(concat(dir, "/nfkc_depth_0.out"), concat(nk_bin, ".out"), "compatibility normalization backend parity")
+      }
+    }
+    nk_kind = nk_kind + 1
+  }
+  hold nk_uc_src = "selfhost/stdlib_nfkc_compact_test.sa"
+  hold nk_uc_want = "selfhost/stdlib_nfkc_compact.want"
+  hold nk_uc_present = bt_require_file(nk_uc_want)
+  hold nk_uc_kind = 0
+  while nk_uc_kind < 4 {
+    hold nk_uc_bin = concat(concat(dir, "/nfkc_compact_"), gl_istr(nk_uc_kind))
+    hold nk_uc_c = ep_compile(nk_uc_kind, nk_uc_src, nk_uc_bin)
+    hold nk_uc_r = pg_capture(sh_quote(nk_uc_bin), concat(nk_uc_bin, ".out"))
+    hold nk_uc_p = gl_assert_files_eq(concat(nk_uc_bin, ".out"), nk_uc_want, "compatibility normalization compact four-backend oracle")
+    nk_uc_kind = nk_uc_kind + 1
+  }
+
   // Case conversion: the depth fixture replays one row per simple-casing group,
   // per full fold and per SpecialCasing direction from the independent Python
   // reference, plus the properties and the folding invariants. Like uwidth and

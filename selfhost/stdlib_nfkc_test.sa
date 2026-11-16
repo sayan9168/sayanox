@@ -1,0 +1,253 @@
+// Frozen independent expectations; do not edit by hand.
+// Unicode module group: unorm compatibility forms (UAX #15 NFKC/NFKD).
+// Layer 1 is the official Unicode 17.0.0 NormalizationTest.txt conformance
+// file: all 20034 cases, split into two payloads read at run time
+// (selfhost/stdlib_nfkc_cases_{a,b}.txt, source|nfc|nfd|nfkc|nfkd in decimal
+// code points) so no compiler has to chew a megabyte literal. Every expected
+// column comes from the official file itself, not from this code.
+// Layer 2 pins the compatibility layer's own surface -- the generated table
+// shape, the tagged mappings, the folding cases NFKC exists for (ligature,
+// fullwidth, superscript, no-break space, circled and squared forms, Hangul),
+// the predicates, the equivalence test and the failure contract -- against an
+// independent Python reference that reproduces all five official columns of
+// all 20034 rows before any expectation is frozen.
+//
+// The 60 detail rows cover the start of the file; the counters cover every
+// row of both payloads, so a mismatch anywhere fails the gate.
+
+use "stdlib/utf8.sa"
+use "stdlib/unorm.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_csv(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    hold piece = fx_i(xs[i])
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, piece)
+    i = i + 1
+  }
+  give out
+}
+
+make fx_say(tag: str, body: str) -> num {
+  hold line = concat(tag, body)
+  show line
+  give 0
+}
+
+make fx_num(tag: str, v: num) -> num {
+  hold line = concat(tag, fx_i(v))
+  show line
+  give 0
+}
+
+// A leading bar, then the decimal CSV, so an empty list still prints one
+// visible character and cannot be confused with a missing line.
+make fx_text(xs: list) -> str {
+  hold body = fx_csv(xs)
+  give concat("|", body)
+}
+
+// Replay one payload file. Row format: source|nfc|nfd|nfkc|nfkd.
+// Returns [cases, nfc_fail, nfd_fail, nfkc_fail, nfkd_fail].
+make fx_pass(path: str, detail: num) -> list {
+  hold text = read_file(path)
+  hold n = len(text)
+  hold i = 0
+  hold src = []
+  hold want_nfc = []
+  hold want_nfd = []
+  hold want_kc = []
+  hold want_kd = []
+  hold phase = 0
+  hold v = 0
+  hold innum = 0
+  hold cases = 0
+  hold nfail = 0
+  hold dfail = 0
+  hold kcfail = 0
+  hold kdfail = 0
+  while i < n {
+    hold ch = sx_index(text, i)
+    hold stop = 0
+    when ch == 44 {
+      stop = 1
+    }
+    when ch == 124 {
+      stop = 2
+    }
+    when ch == 10 {
+      stop = 3
+    }
+    when stop != 0 {
+      when innum == 1 {
+        when phase == 0 {
+          src = push(src, v)
+        }
+        when phase == 1 {
+          want_nfc = push(want_nfc, v)
+        }
+        when phase == 2 {
+          want_nfd = push(want_nfd, v)
+        }
+        when phase == 3 {
+          want_kc = push(want_kc, v)
+        }
+        when phase == 4 {
+          want_kd = push(want_kd, v)
+        }
+        v = 0
+        innum = 0
+      }
+      when stop == 2 {
+        phase = phase + 1
+      }
+      when stop == 3 {
+        cases = cases + 1
+        hold got_nfc = un_nfc_list(src)
+        hold got_nfd = un_nfd_list(src)
+        hold got_kc = un_nfkc_list(src)
+        hold got_kd = un_nfkd_list(src)
+        when un_lists_equal(got_nfc, want_nfc) == 0 {
+          nfail = nfail + 1
+        }
+        when un_lists_equal(got_nfd, want_nfd) == 0 {
+          dfail = dfail + 1
+        }
+        when un_lists_equal(got_kc, want_kc) == 0 {
+          kcfail = kcfail + 1
+        }
+        when un_lists_equal(got_kd, want_kd) == 0 {
+          kdfail = kdfail + 1
+        }
+        when detail == 1 {
+          when cases <= 60 {
+            hold idx = fx_i(cases - 1)
+            hold a = fx_say(concat(concat("nfkc_list ", idx), " "), fx_text(got_kc))
+            hold b = fx_num(concat(concat("nfkc_len ", idx), " "), len(got_kc))
+            hold c = fx_say(concat(concat("nfkd_list ", idx), " "), fx_text(got_kd))
+            hold d = fx_num(concat(concat("nfkd_len ", idx), " "), len(got_kd))
+            // The string API must agree with the list API on the same row.
+            hold s = u8_from(src)
+            hold ks = un_nfkc(s)
+            hold ds = un_nfkd(s)
+            hold ka = 0
+            hold da = 0
+            when string_eq(ks, u8_from(got_kc)) == 1 {
+              ka = 1
+            }
+            when string_eq(ds, u8_from(got_kd)) == 1 {
+              da = 1
+            }
+            hold e = fx_num(concat(concat("agree_nfkc ", idx), " "), ka)
+            hold f = fx_num(concat(concat("agree_nfkd ", idx), " "), da)
+          }
+        }
+        src = []
+        want_nfc = []
+        want_nfd = []
+        want_kc = []
+        want_kd = []
+        phase = 0
+      }
+    } otherwise {
+      v = v * 10 + (ch - 48)
+      innum = 1
+    }
+    i = i + 1
+  }
+  give [cases, nfail, dfail, kcfail, kdfail]
+}
+
+  hold ra = fx_pass("selfhost/stdlib_nfkc_cases_a.txt", 1)
+  hold rb = fx_pass("selfhost/stdlib_nfkc_cases_b.txt", 0)
+  hold total = ra[0] + rb[0]
+  hold nfail = ra[1] + rb[1]
+  hold dfail = ra[2] + rb[2]
+  hold kcfail = ra[3] + rb[3]
+  hold kdfail = ra[4] + rb[4]
+  hold s1 = fx_num("cases: ", total)
+  hold s2 = fx_num("nfc failures: ", nfail)
+  hold s3 = fx_num("nfd failures: ", dfail)
+  hold s4 = fx_num("nfkc failures: ", kcfail)
+  hold s5 = fx_num("nfkd failures: ", kdfail)
+
+  // Table shape: 3833 tagged mappings in [cp, start, len] triples over a
+  // 5613-code-point pool, so the longest record (U+FDFA, 18 code points)
+  // costs what its own length costs and nothing more.
+  hold t1 = fx_num("compat rows ", u8_div(len(un_compat_index()), 3))
+  hold t2 = fx_num("compat pool ", len(un_compat_pool()))
+  hold t3 = fx_num("compat index ", len(un_compat_index()))
+
+  // Direct mappings one at a time: a tagged one, the longest one, a code
+  // point with only a canonical decomposition, a plain letter and a value
+  // that is not a scalar.
+  hold t4 = fx_say("compat ligature ", fx_text(un_compat(64257)))
+  hold t5 = fx_num("compat fdfa len ", len(un_compat(65018)))
+  hold t6 = fx_say("compat canonical_only ", fx_text(un_compat(7690)))
+  hold t7 = fx_say("compat plain ", fx_text(un_compat(65)))
+  hold t8 = fx_num("compat invalid ", len(un_compat(1114112)))
+  hold t9 = fx_num("compat negative ", len(un_compat(0 - 1)))
+
+  // The folds NFKC exists for: ligature, fullwidth, superscript, no-break
+  // space, circled digit, squared CJK word, roman numeral and Hangul jamo
+  // already composed with a trailing consonant.
+  hold t10 = fx_say("nfkc ligature ", fx_text(u8_to_list(un_nfkc(u8_from([64257])))))
+  hold t11 = fx_say("nfkc fullwidth ", fx_text(u8_to_list(un_nfkc(u8_from([65313])))))
+  hold t12 = fx_say("nfkc superscript ", fx_text(u8_to_list(un_nfkc(u8_from([178])))))
+  hold t13 = fx_say("nfkd nbsp ", fx_text(u8_to_list(un_nfkd(u8_from([160])))))
+  hold t14 = fx_say("nfkc circled ", fx_text(u8_to_list(un_nfkc(u8_from([9312])))))
+  hold t15 = fx_say("nfkc squared ", fx_text(u8_to_list(un_nfkc(u8_from([13060])))))
+  hold t16 = fx_say("nfkc roman ", fx_text(u8_to_list(un_nfkc(u8_from([8555])))))
+  hold t17 = fx_say("nfkc hangul ", fx_text(u8_to_list(un_nfkc(u8_from([44032, 4520])))))
+  hold t18 = fx_say("nfkc composed ", fx_text(u8_to_list(un_nfkc(u8_from([233])))))
+  hold t19 = fx_say("nfkc greek ", fx_text(u8_to_list(un_nfkc(u8_from([8486])))))
+  hold t20 = fx_num("nfkd fdfa len ", len(u8_to_list(un_nfkd(u8_from([65018])))))
+
+  // Idempotence and the canonical/compatibility difference: NFC keeps the
+  // ligature, NFKC folds it, and NFKC of an NFC result is itself.
+  hold t21 = fx_say("nfc ligature ", fx_text(u8_to_list(un_nfc(u8_from([64257])))))
+  hold t22 = fx_say("nfkc twice ", un_nfkc(un_nfkc(u8_from([64257, 65313]))))
+  hold t23 = fx_num("is_nfkc ligature ", un_is_nfkc(u8_from([64257])))
+  hold t24 = fx_num("is_nfkc folded ", un_is_nfkc(u8_from([102, 105])))
+  hold t25 = fx_num("is_nfkc malformed ", un_is_nfkc(chr(255)))
+  hold t26 = fx_num("is_nfkd composed ", un_is_nfkd(u8_from([233])))
+  hold t27 = fx_num("compat_equal ligature ", un_compat_equal(u8_from([64257]), u8_from([102, 105])))
+  hold t28 = fx_num("compat_equal case ", un_compat_equal(u8_from([64257]), u8_from([102, 73])))
+  hold t29 = fx_num("compat_equal malformed ", un_compat_equal(chr(255), u8_from([102])))
+  hold t30 = fx_num("compat_equal canon ", un_compat_equal(u8_from([233]), u8_from([101, 769])))
+
+  // Failure contract: malformed input and a NUL are refused, not folded.
+  hold t31 = fx_say("nfkc malformed ", un_nfkc(chr(255)))
+  hold t32 = fx_say("nfkd malformed ", un_nfkd(chr(255)))
+  hold t33 = fx_say("nfkc nul ", un_nfkc(u8_from([0])))
+  hold t34 = fx_say("nfkc empty ", fx_text(u8_to_list(un_nfkc(""))))
+  hold t35 = fx_say("nfkc invalid_list ", fx_text(un_nfkc_list([1114112])))
+
+  hold done = fx_say("nfkc-ok", "")
