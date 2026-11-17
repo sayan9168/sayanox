@@ -21,6 +21,7 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded separators/CR/LF, doubled quotes, three malformed-row refusals; delimiter-parameterized `_d` variants and `csv_delim_ok` for TSV/semicolon/pipe | seed-min, gen2, native | `test-stdlib-csv`, `test-stdlib-next` |
 | `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection; `ct_parse_d`/`ct_write_d` read and write any supported delimiter | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_stream.sa` | incremental RFC 4180 reading (`cs_*`) over `stdlib/csv.sa`: `cs_feed`/`cs_feed_d` take a chunk and return the status, the leftover state and the completed rows, so memory is bounded by the longest record instead of the document; quoted CRLF and doubled quotes may be split across any chunk boundary, CRLF and bare LF terminate identically, `cs_flush` refuses an unterminated quoted field instead of inventing a record, and a record past `cs_max_bytes()` (64 KiB) is refused rather than buffered without bound | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/uident.sa` | UAX #31 identifier syntax (`uid_*`) over `stdlib/utf8.sa`: `uid_xid_start`/`uid_xid_continue` for one code point from the Unicode 17.0.0 `DerivedCoreProperties.txt` tables (779 XID_Start ranges, 1422 XID_Continue ranges), `uid_valid` for a whole string with the explicit leading-underscore rule, `uid_valid_nfkc` for the stricter NFKC reading UAX #31 asks for, `uid_valid_list`, and `uid_same` for same-after-NFKC; `uid_valid` is the property-only answer that agrees with CPython's `str.isidentifier` | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_query.sa` | stable CSV joins, distinct, sorting and exact decimal aggregates | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/store.sa` | in-memory relational store (`db_*`): typed table shape, `db_insert`, filtered `db_update`/`db_delete`, `db_project`, stable `db_sort`, comparison and text predicates, per-row arithmetic filters, and packed-row/frame round trips; 58 `make` definitions (21 public helpers plus the encoding and predicate helpers they are built on), every operation bounded and every refusal returning `""` | seed-min, gen2, native | `test-stdlib-store` |
 | `stdlib/store_index.sa` | derived indexes over `stdlib/store.sa` tables (`ix_*`): `ix_hash_build`/`ix_ordered_build`, exact-key `ix_lookup`/`ix_rows_for`/`ix_count_key`, binary-searched `ix_range`/`ix_between`, `ix_min_key`/`ix_max_key`/`ix_rows`, and staleness detection (`ix_stale`/`ix_valid`) that refuses to answer from a snapshot the table has outgrown; 43 `make` definitions | seed-min, gen2, native | `test-stdlib-store` |
@@ -342,9 +343,10 @@ ranges here.
   element is not a scalar. U+0000 is a valid scalar for the list API but cannot
   travel in a Sayanox string.
 
-**How this is verified.** The tables are generated from `UnicodeData.txt` and
-`DerivedNormalizationProps.txt` themselves, not from a host library, and the
-behaviour is held by **2,027 frozen expectations** in five fixtures:
+**How this is verified.** The tables are generated from `UnicodeData.txt`,
+`DerivedNormalizationProps.txt` and `DerivedCoreProperties.txt` themselves, not
+from a host library, and the behaviour is held by **5,124 frozen expectations**
+in eight fixtures:
 
 | Fixture | Expectations | What it proves | Backends |
 | --- | --- | --- | --- |
@@ -354,6 +356,8 @@ behaviour is held by **2,027 frozen expectations** in five fixtures:
 | `selfhost/stdlib_nfkc_compact_test.sa` | 82 | the compatibility rule set small enough for the bounded profile | seed-min, gen2, native_aot, native |
 | `selfhost/stdlib_csv_stream_test.sa` | 96 | one document fed at 1, 2, 3, 5, 7, 13, 64 and whole-byte chunks must produce identical rows, checked against Python's own `csv` module over the same bytes, plus quoted CRLF across chunk boundaries, an unterminated quote, a stray quote, an invalid delimiter, the 64 KiB record cap and the writer round trip | seed-min, gen2, native |
 | `selfhost/stdlib_csv_stream_compact_test.sa` | 20 | the same streaming rules small enough for the bounded profile | seed-min, gen2, native_aot, native |
+| `selfhost/stdlib_uident_test.sa` | 3,058 | both XID properties swept over all 1,114,112 code points and frozen as run-length transitions, from `DerivedCoreProperties.txt` itself, plus the underscore rule, the property-only versus NFKC reading, the list API, non-scalars, malformed UTF-8 and the 64 KiB refusal; the identifier cases are cross-checked against CPython's `str.isidentifier` | seed-min, gen2, native |
+| `selfhost/stdlib_uident_compact_test.sa` | 34 | the same rules small enough for the bounded profile | seed-min, gen2, native_aot, native |
 | `examples/normalization.sa` | 111 lines | a runnable tour; output identical on gen2, native_aot and native | gen2, native_aot, native |
 
 The conformance payload is a **588,057-byte data file read at run time**, not a
