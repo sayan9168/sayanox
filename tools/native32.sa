@@ -1291,6 +1291,48 @@ make push_pair_field(s: num, off: num) -> num {
 
 // Is `text` exactly a call of a declared `-> str` function? Returns its index,
 // or -1. Used to route a string result away from the numeric expression path.
+// True when the token at <at> opens a multi-token string expression that
+// string_eq accepts as one whole argument: chr(...), concat(...) or a call to a
+// `-> str` function. The caller finds the span with paren_close().
+// How many string literals precede token <at> in this expression. A literal
+// argument is pooled by ordinal, and an argument that is itself a call
+// (concat(...) or a `-> str` call) may contain literals of its own, so the
+// ordinal has to be counted from the text instead of from the arguments seen
+// so far.
+make literal_ordinal_before(toks: str, at: num) -> num {
+  hold n = 0
+  hold i = 0
+  while i < at {
+    when sx_index(tok_at(toks, i), 0) == 108 {
+      n = n + 1
+    }
+    i = i + 1
+  }
+  give n
+}
+
+make string_expr_starts(toks: str, at: num, tn: num) -> num {
+  when at + 1 >= tn {
+    give 0
+  }
+  hold head = tok_at(toks, at)
+  when sx_index(head, 0) != 118 {
+    give 0
+  }
+  when string_eq(tok_at(toks, at + 1), "(") != 1 {
+    give 0
+  }
+  hold nm = sub(head, 1, len(head))
+  when string_eq(nm, "chr") == 1 || string_eq(nm, "concat") == 1 {
+    give 1
+  }
+  hold fi = slot_of(fn_names, nm)
+  when fi >= 0 && fn_retstr[fi] == 1 {
+    give 1
+  }
+  give 0
+}
+
 make str_call_index(text: str) -> num {
   hold toks = tokenize(text)
   hold tn = tok_count(toks)
@@ -3648,14 +3690,23 @@ make emit_expression(extext: str) -> num {
         when want == 0 {
           hold streq_twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
         }
-        // Each argument is one token (a literal or a name) or a whole
-        // chr(<literal or numeric variable>) spanning four tokens.
+        // The shared comparison routine is emitted after the main program but
+        // the `make` bodies are emitted after it, and the call sites are
+        // patched when the routine is placed, so a comparison inside a body
+        // used to leave an unpatched call behind. Refuse it until the bodies
+        // are emitted before the routine; a wrong comparison would be silent.
+        when fn_active >= 0 {
+          hold streq_in_body = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq inside a make body is not supported yet (compare the value after the body returns)"))
+        }
+        // Each argument is one token (a literal or a name) or a whole string
+        // expression spanning several tokens: chr(<expr>), concat(<a>, <b>) or
+        // a `-> str` call.
         hold eq_ok = 0
         hold eq_a1 = k + 2
         hold eq_n1 = 1
         when k + 1 < tn && string_eq(tok_at(toks, k + 1), "(") == 1 {
           eq_ok = 1
-          when eq_a1 + 1 < tn && tok_name_is(tok_at(toks, eq_a1), "chr") == 1 && string_eq(tok_at(toks, eq_a1 + 1), "(") == 1 {
+          when eq_a1 + 1 < tn && string_expr_starts(toks, eq_a1, tn) == 1 {
             hold eq_close1 = paren_close(toks, eq_a1 + 1, tn)
             when eq_close1 < 0 {
               eq_ok = 0
@@ -3670,7 +3721,7 @@ make emit_expression(extext: str) -> num {
         }
         hold eq_a2 = eq_c1 + 1
         hold eq_n2 = 1
-        when eq_ok == 1 && eq_a2 + 1 < tn && tok_name_is(tok_at(toks, eq_a2), "chr") == 1 && string_eq(tok_at(toks, eq_a2 + 1), "(") == 1 {
+        when eq_ok == 1 && eq_a2 + 1 < tn && string_expr_starts(toks, eq_a2, tn) == 1 {
           hold eq_close2 = paren_close(toks, eq_a2 + 1, tn)
           when eq_close2 < 0 {
             eq_ok = 0
@@ -3683,7 +3734,7 @@ make emit_expression(extext: str) -> num {
           eq_ok = 0
         }
         when eq_ok == 0 {
-          hold bad_streq_shape = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects exactly two string values (a string variable, a string literal or chr(...))"))
+          hold bad_streq_shape = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq expects exactly two string expressions (a string variable, a string literal, chr(...), concat(...) or a `-> str` call)"))
         }
         hold eq_base = 4202496
         when arch == 0 {
@@ -3699,6 +3750,43 @@ make emit_expression(extext: str) -> num {
             eq_cnt = eq_n2
           }
           when eq_cnt >= 4 {
+            // A multi-token argument is one whole string expression. `concat`
+            // materializes a pair in the data segment, a `-> str` call leaves
+            // its result pair in the shared slot, and `chr(...)` builds the
+            // one-byte cell; all three are pushed as (pointer, length).
+            hold eq_head = tok_at(toks, eq_at0)
+            hold eq_headname = ""
+            when sx_index(eq_head, 0) == 118 {
+              eq_headname = sub(eq_head, 1, len(eq_head))
+            }
+            hold eq_done = 0
+            when string_eq(eq_headname, "concat") == 1 {
+              hold eq_ctext2 = concat_token_text(toks, extext, eq_at0, eq_at0 + eq_cnt)
+              hold eq_cparts = split_concat(eq_ctext2)
+              when sx_index(eq_cparts, 0) == 33 {
+                hold bad_streq_concat = fail(1, concat(concat("line ", numstr(lineno)), concat(": ", sub(eq_cparts, 1, len(eq_cparts)))))
+              }
+              hold eq_cpair = len(data)
+              data = put_zeros(data, 8)
+              hold eq_cpair_emit = emit_concat_pair(concat_left(eq_cparts), concat_right(eq_cparts), eq_cpair)
+              code = emit_load_abs(code, arch, eq_base + eq_cpair)
+              code = emit_load_abs(code, arch, eq_base + eq_cpair + 4)
+              eq_done = 1
+            }
+            when eq_done == 0 {
+              hold eq_ctext = arg_token_text(toks, extext, eq_at0, eq_at0 + eq_cnt)
+              hold eq_sci = str_call_index(eq_ctext)
+              when eq_sci >= 0 {
+                hold eq_spair = emit_str_call(eq_ctext)
+                code = emit_load_abs(code, arch, eq_base + eq_spair)
+                code = emit_load_abs(code, arch, eq_base + eq_spair + 4)
+                eq_done = 1
+              }
+            }
+            when eq_done == 1 {
+              // both halves are on the value stack already
+            }
+            when eq_done == 0 {
             // chr(...) argument: build the cell, then push both halves of the pair.
             // A literal or a bare numeric name keeps the direct lowering; a whole
             // integer expression is compiled first into the shared scratch word.
@@ -3733,12 +3821,14 @@ make emit_expression(extext: str) -> num {
             code = emit_chr_value(code, arch, chr_spec(eq_ckind, eq_cval, eq_csrc), eq_ccell, eq_cdst)
             code = emit_load_abs(code, arch, eq_base + eq_cdst)
             code = emit_load_abs(code, arch, eq_base + eq_cdst + 4)
+            }
           } otherwise {
             hold eq_tok = tok_at(toks, eq_at0)
             hold eq_kind = sx_index(eq_tok, 0)
             when eq_kind == 108 {
             hold eq_litoff = len(data)
-            data = append_text(data, literal_body(extext, eq_lit_index))
+            hold eq_litord = literal_ordinal_before(toks, eq_at0)
+            data = append_text(data, literal_body(extext, eq_litord))
             eq_lit_index = eq_lit_index + 1
             hold eq_litbytes = len(data) - eq_litoff
             when eq_litbytes != tok_num(eq_tok) {

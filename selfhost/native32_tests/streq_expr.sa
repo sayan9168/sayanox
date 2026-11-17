@@ -1,0 +1,37 @@
+// String equality over whole string expressions: `string_eq` takes anything a
+// `concat` operand or a `-> str` result can be, and each argument is
+// materialized as a (pointer, length) pair before the shared comparison
+// routine runs. The data image stays arch-neutral, so this fixture is checked
+// against the same reviewed machine-code goldens as `streq.sa`.
+hold a = "alpha"
+hold c = "beta"
+
+// a concat(...) argument on either side, nested and with chr(...) operands
+show string_eq(concat(a, c), "alphabeta")
+show string_eq("alphabeta", concat(a, c))
+show string_eq(concat(a, c), concat("alpha", "beta"))
+show string_eq(concat(a, c), concat(a, c))
+show string_eq(concat(a, c), "alpha")
+show string_eq(concat(concat(a, "-"), c), "alpha-beta")
+show string_eq(concat(chr(65), "lpha"), "Alpha")
+show string_eq(concat("lpha", chr(65)), "lphaA")
+show string_eq(concat("lpha", chr(65)), a)
+
+// empty operands keep the pair shape
+show string_eq(concat(a, ""), a)
+show string_eq(concat("", a), a)
+
+// a `-> str` call is a whole argument too
+make wrap(s: str) -> str {
+  give concat("[", s)
+}
+show string_eq(wrap(a), "[alpha")
+show string_eq("[alpha", wrap(a))
+show string_eq(wrap(a), wrap(a))
+show string_eq(wrap(a), a)
+
+// the result still composes and drives control flow
+show string_eq(concat(a, c), "alphabeta") == 0
+when string_eq(concat(a, ""), a) == 1 {
+  show "equal"
+}
