@@ -113,8 +113,10 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   that carries literals of its own (`string_eq(concat(a, "x"), "abx")`) still
   indexes the right literal. The new `streq_expr` fixture covers these forms on
   the six execution paths (i386 8664 bytes, reviewed AArch64/RV64IM goldens,
-  output compared against the x86-64 native AOT lane) and the refusal matrix
-  grew from 64 to 65.
+  output compared against the x86-64 native AOT lane). The refusal matrix
+  stays 64: `refuse/concat_streq_arg.sa` (a `concat` inside `string_eq`) became
+  a legal program and was deleted, its form moved into `streq_expr`, and
+  `refuse/streq_in_body.sa` was added.
 
   The same increment fixed a **silent miscompile**: a `string_eq` inside a
   `make` body emitted its argument pushes and left the call site unpatched — the
@@ -343,7 +345,7 @@ byte-identical across i386, AArch64 and RV64IM for a program with `concat`
 `string_eq(chr(65), n)` with a numeric second argument, and `len(chr(t))` with a
 string argument. The `concat_expr` increment raised it further to 36: a numeric
 variable as a `concat` operand, a numeric literal operand, a one-argument
-`concat`, eight-level nesting, and `concat(...)` used inside `string_eq`. The
+`concat`, eight-level nesting, and `concat(...)` used inside `string_eq` (that last one became a legal program in the *string equality over string expressions* step and its fixture, `refuse/concat_streq_arg.sa`, was deleted). The
 `chr`-of-expression increment took the matrix to 39: `refuse/chr_expression.sa`
 (`chr(n + 1)`) was deleted because that program is now accepted, and four
 refusals were added — a string variable in the `chr` expression, an unknown
