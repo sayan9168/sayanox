@@ -1,0 +1,27 @@
+cases 20
+failures 0
+string failures 0
+class count 19
+class a 10
+class space 18
+class colon 14
+class hebrew 9
+class kana 8
+class underscore 17
+class ri 6
+class zwj 5
+class surrogate -1
+extpict emoji 1
+extpict letter 0
+count ab cd 3
+breaks 3.14 0 4 
+take 2 ab 
+drop 2 cd
+word1 start 2
+word2 end 5
+slice cd
+empty breaks 1
+bad count -1
+overlong count -1
+bad text -1
+uword-compact-ok

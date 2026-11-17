@@ -1,0 +1,88 @@
+// examples/words.sa -- where a word ends is not where a space is.
+//
+//   ./sx run examples/words.sa
+//
+// stdlib/ugraph.sa answers what a reader sees as one character; a word is the
+// next unit up and it does not follow from spaces either. "don't" is one word
+// and three clusters, "3.14" is one number and four clusters, a flag is two
+// regional indicators and an emoji family is one cluster, and CJK text has no
+// spaces at all. stdlib/uword.sa implements the Unicode UAX #29 word rules, so
+// the answer comes from the standard's own property tables.
+
+use "stdlib/utf8.sa"
+use "stdlib/utext.sa"
+use "stdlib/uwidth.sa"
+use "stdlib/ugraph.sa"
+use "stdlib/uword.sa"
+
+make demo_int(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+// The words of a string, printed between bars so the spaces stay visible.
+make demo_words(label: str, s: str) -> num {
+  hold words = uwb_count(s)
+  hold g = ug_count(s)
+  hold line = concat(concat(label, ": "), demo_int(words))
+  line = concat(line, " words, ")
+  line = concat(line, demo_int(g))
+  line = concat(line, " clusters:")
+  hold k = 0
+  while k < words {
+    hold a = uwb_word_start(s, k)
+    hold z = uwb_word_end(s, k)
+    line = concat(line, concat(" |", uwb_slice(s, a, z)))
+    k = k + 1
+  }
+  line = concat(line, " |")
+  show line
+  give 0
+}
+
+// WB6/WB7: an apostrophe inside letters keeps the word together, and WB7a
+// keeps a Hebrew letter and a single quote together too.
+hold z = demo_words("don't stop", "don't stop")
+
+// WB11/WB12: a full stop between digits is part of the number, the same
+// character between letters is not.
+hold z = demo_words("3.14 and 42", "3.14 and 42")
+
+// WB13a/WB13b: underlines and the other ExtendNumLet characters join both ways.
+hold z = demo_words("a_b", "a_b")
+
+// WB15/WB16: regional indicators pair up, so three flags are not three words.
+hold z = demo_words("three flags", u8_from([127467, 127479, 127465, 127466, 127464, 127462]))
+
+// No spaces, and no help from the rules either: Han ideographs are Word_Break=Other,
+// so UAX #29 puts a boundary between them and a useful CJK word count needs the
+// dictionary-based tailoring the standard describes but does not define. Hiragana
+// is ALetter, which is why the count is 5 rather than 4 or 1.
+hold z = demo_words("no spaces", u8_from([26481, 20140, 12392, 22823, 38442]))
+
+// WB3c: an emoji joined by ZWJ is one word and one cluster.
+hold z = demo_words("joined emoji", u8_from([128104, 8205, 128105, 8205, 128103]))
+
+// The words themselves, and a single word out of the middle.
+hold z = demo_words(concat("take 2 ", uwb_take("don't stop", 2)), uwb_take("don't stop", 2))
+hold z = demo_words(concat("drop 2 ", uwb_drop("don't stop", 2)), uwb_drop("don't stop", 2))
+
+show "done"

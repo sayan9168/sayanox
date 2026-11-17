@@ -1,0 +1,67 @@
+corpus cases 1944
+corpus failures 0
+string cases 1826
+string failures 0
+string skipped 118
+wb entries 1432
+wb parse errors 0
+extpict entries 451
+extpict parse errors 0
+wb merged rows 1100
+extpict merged rows 156
+wb table rows 1100
+extpict table rows 156
+wb table mismatches 0
+wb table elements 3300
+extpict table mismatches 0
+extpict table elements 312
+class sweep mismatches 0
+class sweep points 4328
+extpict sweep mismatches 0
+extpict sweep points 4328
+class count 19
+max cps 4096
+class a 10
+class space 18
+class apostrophe 11
+class dquote 12
+class hyphen 0
+class hebrew 9
+class kana 8
+class digit 16
+class underscore 17
+class zwj 5
+class cr 1
+class lf 2
+class nul 0
+class surrogate -1
+class too big -1
+class negative -1
+extpict emoji 1
+extpict heart 1
+extpict letter 0
+extpict surrogate -1
+empty breaks 1
+empty count 0
+bad breaks 0
+bad count -1
+overlong breaks 0
+overlong count -1
+bad text -1
+empty text 0
+bad text breaks 0
+breaks dont 0 5 6 10 
+take 2 don't 
+drop 2 stop
+take 0 
+drop 0 don't stop
+take all don't stop
+drop all 
+word0 start 0
+word0 end 5
+word2 start 6
+word2 end 10
+word9 start -1
+slice stop
+slice bad 
+uword-ok

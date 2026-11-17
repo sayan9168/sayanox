@@ -296,6 +296,47 @@ make ep_next() -> num {
     ui_uc_kind = ui_uc_kind + 1
   }
 
+  // UAX #29 word boundaries: all 1944 cases of the official Unicode 17.0.0
+  // WordBreakTest.txt, read at run time from selfhost/stdlib_uword_cases.txt,
+  // each judged twice -- over its code points and, unless it carries U+0000
+  // (which a Sayanox string cannot hold), over a string built from them. The
+  // same fixture then cross-checks the generated tables element by element
+  // against WordBreakProperty.txt and emoji/emoji-data.txt and sweeps both
+  // lookups at every 257th code point. That is three data files and a sweep, so
+  // it exceeds the bounded native_aot profile's 64 globals: kind 2 is skipped
+  // here and covered by the compact companion below, and every other backend
+  // must agree with the frozen .want byte for byte.
+  hold uw_src = "selfhost/stdlib_uword_test.sa"
+  hold uw_want = "selfhost/stdlib_uword.want"
+  hold uw_present = bt_require_file(uw_want)
+  hold uw_cases = bt_require_file("selfhost/stdlib_uword_cases.txt")
+  hold uw_props = bt_require_file("selfhost/stdlib_uword_props.txt")
+  hold uw_emoji = bt_require_file("selfhost/stdlib_uword_emoji.txt")
+  hold uw_kind = 0
+  while uw_kind < 4 {
+    when uw_kind != 2 {
+      hold uw_bin = concat(concat(dir, "/uword_depth_"), gl_istr(uw_kind))
+      hold uw_c = ep_compile(uw_kind, uw_src, uw_bin)
+      hold uw_r = pg_capture(sh_quote(uw_bin), concat(uw_bin, ".out"))
+      hold uw_a = gl_assert_files_eq(concat(uw_bin, ".out"), uw_want, "UAX #29 word boundary depth oracle")
+      when uw_kind > 0 {
+        hold uw_p = gl_assert_files_eq(concat(dir, "/uword_depth_0.out"), concat(uw_bin, ".out"), "UAX #29 word boundary backend parity")
+      }
+    }
+    uw_kind = uw_kind + 1
+  }
+  hold uw_uc_src = "selfhost/stdlib_uword_compact_test.sa"
+  hold uw_uc_want = "selfhost/stdlib_uword_compact.want"
+  hold uw_uc_present = bt_require_file(uw_uc_want)
+  hold uw_uc_kind = 0
+  while uw_uc_kind < 4 {
+    hold uw_uc_bin = concat(concat(dir, "/uword_compact_"), gl_istr(uw_uc_kind))
+    hold uw_uc_c = ep_compile(uw_uc_kind, uw_uc_src, uw_uc_bin)
+    hold uw_uc_r = pg_capture(sh_quote(uw_uc_bin), concat(uw_uc_bin, ".out"))
+    hold uw_uc_a = gl_assert_files_eq(concat(uw_uc_bin, ".out"), uw_uc_want, "UAX #29 word boundary compact four-backend oracle")
+    uw_uc_kind = uw_uc_kind + 1
+  }
+
   // Streaming CSV: the same document at 1, 2, 3, 5, 7, 13, 64 and whole-byte
   // chunks must produce identical rows, against rows from Python's own csv
   // module over the same bytes. The depth fixture also pins the boundaries

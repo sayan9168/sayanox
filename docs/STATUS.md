@@ -1,5 +1,51 @@
 # Status
 
+**2026-11-16 update: word boundaries — UAX #29**
+
+`stdlib/uword.sa` (`uwb_*`) answers where words begin and end, which is the
+question a reader's "select word" and a tokenizer both actually ask: `don't` is
+three grapheme clusters and one word, `3.14` is four clusters and one number, and
+CJK text has no spaces, so only the standard's rules can say where a word ends.
+It implements WB1-WB999 of UAX #29 for Unicode 17.0.0 from the Character
+Database itself: 1,432 `WordBreakProperty.txt` entries merged into 1,100 class
+ranges over 19 classes, plus 451 `emoji/emoji-data.txt` entries merged into 156
+`Extended_Pictographic` ranges for WB3c (`ZWJ` x pictograph), all searched by
+bisection. WB4 is handled the way the rule is written rather than by rewriting
+the text: the engine keeps a previous/next significant index per position, so
+`Extend`, `Format` and `ZWJ` are looked past on both sides of a candidate
+boundary. The API is the text layer's shape — `uwb_class`/`uwb_is_extpict` for
+one code point (-1 for a non-scalar), `uwb_breaks_cp`/`uwb_count_cp` over a code
+point list, `uwb_breaks`/`uwb_count` over a string in **byte** offsets, and
+`uwb_word_start`/`uwb_word_end`/`uwb_slice`/`uwb_take`/`uwb_drop` for the words
+themselves; malformed UTF-8 and text over 4,096 code points give `[]`, -1 and
+`""`.
+
+Verification is **all 1,944 cases of the official `WordBreakTest.txt`**, read at
+run time, and every case is judged **twice**: once over its code points and, when
+it does not contain U+0000 (a string cannot carry a zero byte), once over a
+string built from them, where the expected byte offsets are the official
+code-point offsets mapped through UTF-8 lengths rather than through the module's
+own offset helper. The same fixture then cross-checks the generated tables
+element by element against `WordBreakProperty.txt` and `emoji-data.txt` (sorted,
+merged and compared, so a missing, extra or mis-classed range fails even where no
+test case reaches it) and sweeps both lookups at every 257th scalar — 4,328
+points. The 67-line depth oracle matches on seed-min, gen2 and the full native
+compiler, and a 27-expectation compact companion carrying one verbatim official
+case per rule matches on **all four backends** including the bounded
+`native_aot`.
+
+Two rule bugs were found by the oracle and are worth recording. WB3 (`CR` x `LF`)
+has to win over WB3a/WB3b, so the "nothing joins to a newline" test must run
+first and be overridden, not the other way round. WB13a/WB13b include
+`ExtendNumLet` on *both* sides, so `a__b` is one word — leaving it out of the left
+set split a run of underscores. Two backend facts were also forced by this
+module: `native_aot` has no list element assignment, so the three scratch lists
+are built with `push` alone (and the backwards pass is reversed by a second
+pass), and `/` is float division, so every integer division goes through
+`u8_div`. **Not** modelled: sentence boundaries (the SB rules of the same UAX),
+line breaking (UAX #14), locale tailoring and collation. Bidi and collation stay
+open, so R07 stays open.
+
 **2026-11-16 update: identifier syntax — UAX #31 XID properties**
 
 `stdlib/uident.sa` adds the Unicode identifier properties a lexer, linter or

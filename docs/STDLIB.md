@@ -22,6 +22,7 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection; `ct_parse_d`/`ct_write_d` read and write any supported delimiter | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_stream.sa` | incremental RFC 4180 reading (`cs_*`) over `stdlib/csv.sa`: `cs_feed`/`cs_feed_d` take a chunk and return the status, the leftover state and the completed rows, so memory is bounded by the longest record instead of the document; quoted CRLF and doubled quotes may be split across any chunk boundary, CRLF and bare LF terminate identically, `cs_flush` refuses an unterminated quoted field instead of inventing a record, and a record past `cs_max_bytes()` (64 KiB) is refused rather than buffered without bound | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/uident.sa` | UAX #31 identifier syntax (`uid_*`) over `stdlib/utf8.sa`: `uid_xid_start`/`uid_xid_continue` for one code point from the Unicode 17.0.0 `DerivedCoreProperties.txt` tables (779 XID_Start ranges, 1422 XID_Continue ranges), `uid_valid` for a whole string with the explicit leading-underscore rule, `uid_valid_nfkc` for the stricter NFKC reading UAX #31 asks for, `uid_valid_list`, and `uid_same` for same-after-NFKC; `uid_valid` is the property-only answer that agrees with CPython's `str.isidentifier` | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/uword.sa` | UAX #29 word boundaries (`uwb_*`) over `stdlib/utf8.sa`: 19 `Word_Break` classes and `Extended_Pictographic` from the Unicode 17.0.0 data files (1,432 property entries merged to 1,100 class triples, 451 emoji entries to 156 pairs, bisection), WB1-WB999 including WB3c `ZWJ` x pictograph, WB4 skipping of `Extend`/`Format`/`ZWJ` on both sides, WB7a/b/c Hebrew quotes, WB11/WB12 decimals, WB13a/b `ExtendNumLet` and WB15/16 regional-indicator pairing; `uwb_class`/`uwb_is_extpict` for one code point, `uwb_breaks_cp`/`uwb_count_cp` over a code-point list, `uwb_breaks`/`uwb_count` over a string in byte offsets, and `uwb_word_start`/`uwb_word_end`/`uwb_slice`/`uwb_take`/`uwb_drop`; refuses malformed UTF-8 and text over 4,096 code points | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_query.sa` | stable CSV joins, distinct, sorting and exact decimal aggregates | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/store.sa` | in-memory relational store (`db_*`): typed table shape, `db_insert`, filtered `db_update`/`db_delete`, `db_project`, stable `db_sort`, comparison and text predicates, per-row arithmetic filters, and packed-row/frame round trips; 58 `make` definitions (21 public helpers plus the encoding and predicate helpers they are built on), every operation bounded and every refusal returning `""` | seed-min, gen2, native | `test-stdlib-store` |
 | `stdlib/store_index.sa` | derived indexes over `stdlib/store.sa` tables (`ix_*`): `ix_hash_build`/`ix_ordered_build`, exact-key `ix_lookup`/`ix_rows_for`/`ix_count_key`, binary-searched `ix_range`/`ix_between`, `ix_min_key`/`ix_max_key`/`ix_rows`, and staleness detection (`ix_stale`/`ix_valid`) that refuses to answer from a snapshot the table has outgrown; 43 `make` definitions | seed-min, gen2, native | `test-stdlib-store` |
@@ -280,6 +281,39 @@ convention differences, not defects, and none of them sets an expectation.
 U+0001 is substituted in those cases: both are `Grapheme_Cluster_Break=Control`,
 so rule coverage is unchanged. `examples/graphemes.sa` is a runnable tour.
 
+## Word boundaries
+
+A word is the unit above a grapheme cluster and it does not follow from spaces.
+`stdlib/uword.sa` implements the UAX #29 word rules on the same property tables
+the rest of the text layer uses:
+
+```sayanox
+use "stdlib/utf8.sa"
+use "stdlib/uwidth.sa"          // import utf8 first; uwidth names its functions
+use "stdlib/uword.sa"           // import utf8 and uwidth first, in that order
+
+show uwb_count("don't stop")            // 3 -- "don't", " ", "stop"
+show uwb_breaks("3.14")                 // 0 4 -- the decimal is one word
+show uwb_take("don't stop", 2)          // "don't " -- first two words
+show uwb_drop("don't stop", 2)          // "stop"
+show uwb_word_end("don't stop", 0)      // 5, the byte end of word 0
+
+hold flags = u8_from([127467, 127479, 127465, 127466])
+show uwb_count(flags)                   // 2 -- WB15/16 pair up indicators
+```
+
+Boundaries are **byte** offsets, like `ug_breaks` and the rest of the text layer;
+`uwb_breaks_cp` answers the same question for a code-point list. `Extend`,
+`Format` and `ZWJ` never start a new word (WB4), and the rules on either side of a
+boundary look past them instead of rewriting the text, so an accent or a ZWJ join
+inside a word does not split it. Three things the standard leaves to tailoring are
+documented limits rather than defects: Han ideographs are `Word_Break=Other`, so
+unsegmented CJK gets a boundary between each character and a useful count needs
+the dictionary-based tailoring UAX #29 describes but does not define; sentence
+boundaries (the SB rules) and line breaking (UAX #14) are different algorithms and
+are not modelled; and there is no locale tailoring. `examples/words.sa` is a
+runnable tour.
+
 ## Normalization (NFC/NFD and NFKC/NFKD)
 
 `stdlib/utext.sa` compares code points, so two strings that read the same can
@@ -358,6 +392,9 @@ in eight fixtures:
 | `selfhost/stdlib_csv_stream_compact_test.sa` | 20 | the same streaming rules small enough for the bounded profile | seed-min, gen2, native_aot, native |
 | `selfhost/stdlib_uident_test.sa` | 3,058 | both XID properties swept over all 1,114,112 code points and frozen as run-length transitions, from `DerivedCoreProperties.txt` itself, plus the underscore rule, the property-only versus NFKC reading, the list API, non-scalars, malformed UTF-8 and the 64 KiB refusal; the identifier cases are cross-checked against CPython's `str.isidentifier` | seed-min, gen2, native |
 | `selfhost/stdlib_uident_compact_test.sa` | 34 | the same rules small enough for the bounded profile | seed-min, gen2, native_aot, native |
+| `selfhost/stdlib_uword_test.sa` | 67 | all **1,944 cases** of the official Unicode 17.0.0 `WordBreakTest.txt`, read at run time from `selfhost/stdlib_uword_cases.txt` and judged twice per case — over its code points and, unless it carries U+0000, over a string built from them — plus the generated tables compared element by element against `WordBreakProperty.txt` and `emoji/emoji-data.txt` and both lookups swept at every 257th scalar (4,328 points), the properties, the string API and the failure contract | seed-min, gen2, native |
+| `selfhost/stdlib_uword_compact_test.sa` | 27 | one verbatim official case per rule (WB3 through WB999, including WB3c, WB3d, WB7a/b/c and WB15/16) so the same rule set runs small enough for the bounded profile | seed-min, gen2, native_aot, native |
+| `examples/words.sa` | 88 lines | a runnable tour: apostrophes, decimals, `ExtendNumLet`, regional-indicator flags, a ZWJ emoji, `take`/`drop` and the documented CJK limit; output identical on gen2, native_aot and native | gen2, native_aot, native |
 | `examples/normalization.sa` | 111 lines | a runnable tour; output identical on gen2, native_aot and native | gen2, native_aot, native |
 
 The conformance payload is a **588,057-byte data file read at run time**, not a
