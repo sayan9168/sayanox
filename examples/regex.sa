@@ -1,0 +1,109 @@
+// examples/regex.sa -- a tour of stdlib/regex.sa on byte strings.
+//
+// Patterns are Python's `re` spelling, matched byte by byte with Python's
+// preference order (`re.ASCII` classes). Every line here is ordinary Sayanox;
+// run it with `./sx build examples/regex.sa /tmp/regex && /tmp/regex`.
+use "stdlib/regex.sa"
+
+// A tiny number formatter, because lists hold numbers and `show` prints them
+// as `[list len=N]`.
+make ex_num(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold x = v
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    out = concat(chr(48 + d), out)
+    x = (x - d) / 10
+  }
+  give out
+}
+
+make ex_spans(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, ex_num(xs[i]))
+    i = i + 1
+  }
+  give out
+}
+
+make ex_log(line: str) -> num {
+  show line
+  give 0
+}
+
+make ex_texts() -> num {
+  hold log = "2026-11-17 INFO  worker: job 41 finished in 120ms"
+  hold level = rx_group("^(\\d{4}-\\d{2}-\\d{2})\\s+(\\w+)", log, 2)
+  hold job = rx_group("job (\\d+)", log, 1)
+  hold stamp = rx_group("^(\\d{4}-\\d{2}-\\d{2})", log, 1)
+  show concat(concat(stamp, " "), level)
+  show job
+  show rx_text("\\d+ms", log)
+  give 0
+}
+
+make ex_matches() -> num {
+  // Spans are [start, end] byte offsets, ready to slice with.
+  show ex_spans(rx_find_all("[0-9]+", "a1b22c333"))
+  show ex_spans(rx_span("worker", "2026-11-17 INFO  worker"))
+  show rx_text("[a-z]+@[a-z.]+", "write to ada@example.org today")
+  show ex_num(rx_count("\\b\\w+\\b", "one two three"))
+  show ex_num(rx_full("[a-z]+", "hello"))
+  show ex_num(rx_full("[a-z]+", "hello1"))
+  give 0
+}
+
+make ex_rewrite() -> num {
+  // \1..\9 are capture texts, & is the whole match, \\ is a literal backslash.
+  hold csv = "10,20,30"
+  show rx_replace("(\\d+)", csv, "[&]")
+  hold swapped = rx_replace("(\\w+)\\s+(\\w+)", "left right", "\\2 \\1")
+  show swapped
+  hold slug = rx_replace("\\s+", "  Hello   Bounded  World  ", "-")
+  show rx_replace("^-+|-+$", slug, "")
+  show rx_replace_first("a", "banana", "o")
+  give 0
+}
+
+make ex_quoted() -> num {
+  // rx_escape turns arbitrary text into a pattern that matches it literally.
+  hold raw = "cost = 3.50 (approx.)"
+  hold pattern = rx_escape(raw)
+  show pattern
+  show ex_num(rx_full(pattern, raw))
+  show ex_num(rx_search("cost = 3x50", raw))
+  hold twice = rx_replace("a", "banana", "o")
+  show concat(twice, concat(" / ", rx_text("[aeiou]+", "sequoia")))
+  give 0
+}
+
+make ex_limits() -> num {
+  // Refusals are explicit: rx_valid answers 0 and every matcher answers -1.
+  show ex_num(rx_valid("(a*)*"))
+  show ex_num(rx_valid("(?=a)"))
+  show ex_num(rx_valid("[[:alpha:]]"))
+  hold refused = rx_find("(", "anything")
+  show ex_num(len(refused))
+  show concat("pattern limit ", ex_num(rx_max_pattern()))
+  show concat("input limit ", ex_num(rx_max_input()))
+  give 0
+}
+
+make ex_run() -> num {
+  hold a = ex_texts()
+  hold b = ex_matches()
+  hold c = ex_rewrite()
+  hold d = ex_quoted()
+  hold e = ex_limits()
+  give 0
+}
+
+hold ex_done = ex_run()

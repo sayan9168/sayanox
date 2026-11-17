@@ -23,6 +23,7 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/csv_stream.sa` | incremental RFC 4180 reading (`cs_*`) over `stdlib/csv.sa`: `cs_feed`/`cs_feed_d` take a chunk and return the status, the leftover state and the completed rows, so memory is bounded by the longest record instead of the document; quoted CRLF and doubled quotes may be split across any chunk boundary, CRLF and bare LF terminate identically, `cs_flush` refuses an unterminated quoted field instead of inventing a record, and a record past `cs_max_bytes()` (64 KiB) is refused rather than buffered without bound | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/uident.sa` | UAX #31 identifier syntax (`uid_*`) over `stdlib/utf8.sa`: `uid_xid_start`/`uid_xid_continue` for one code point from the Unicode 17.0.0 `DerivedCoreProperties.txt` tables (779 XID_Start ranges, 1422 XID_Continue ranges), `uid_valid` for a whole string with the explicit leading-underscore rule, `uid_valid_nfkc` for the stricter NFKC reading UAX #31 asks for, `uid_valid_list`, and `uid_same` for same-after-NFKC; `uid_valid` is the property-only answer that agrees with CPython's `str.isidentifier` | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/uword.sa` | UAX #29 word boundaries (`uwb_*`) over `stdlib/utf8.sa`: 19 `Word_Break` classes and `Extended_Pictographic` from the Unicode 17.0.0 data files (1,432 property entries merged to 1,100 class triples, 451 emoji entries to 156 pairs, bisection), WB1-WB999 including WB3c `ZWJ` x pictograph, WB4 skipping of `Extend`/`Format`/`ZWJ` on both sides, WB7a/b/c Hebrew quotes, WB11/WB12 decimals, WB13a/b `ExtendNumLet` and WB15/16 regional-indicator pairing; `uwb_class`/`uwb_is_extpict` for one code point, `uwb_breaks_cp`/`uwb_count_cp` over a code-point list, `uwb_breaks`/`uwb_count` over a string in byte offsets, and `uwb_word_start`/`uwb_word_end`/`uwb_slice`/`uwb_take`/`uwb_drop`; refuses malformed UTF-8 and text over 4,096 code points | seed-min, gen2, native | `test-stdlib-next` |
+| `stdlib/regex.sa` | bounded byte-oriented regular expressions (`rx_*`): literals, `.`, ASCII classes and ranges with the `\d`/`\w`/`\s` complements, `\xHH` and control escapes, capturing and `(?:` non-capturing groups, alternation, greedy and lazy `*` `+` `?` `{m}` `{m,}` `{m,n}`, and the `^` `$` `\A` `\Z` `\b` `\B` anchors; `rx_find`/`rx_span`/`rx_groups`/`rx_group`/`rx_text`/`rx_match`/`rx_full`/`rx_search`/`rx_find_all`/`rx_count`/`rx_replace`/`rx_replace_first`/`rx_escape`; Python `re` preference order in `re.ASCII` mode over bytes, with stated limits (200-byte pattern, 1024-byte subject, 16 groups, 256 matches, per-attempt step budget). Backreferences, lookaround, inline flags, possessive quantifiers, POSIX classes and an unbounded repetition of an empty-matching body are refused, not guessed at | seed-min, gen2, native_aot | `test-stdlib-next` |
 | `stdlib/csv_query.sa` | stable CSV joins, distinct, sorting and exact decimal aggregates | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/store.sa` | in-memory relational store (`db_*`): typed table shape, `db_insert`, filtered `db_update`/`db_delete`, `db_project`, stable `db_sort`, comparison and text predicates, per-row arithmetic filters, and packed-row/frame round trips; 58 `make` definitions (21 public helpers plus the encoding and predicate helpers they are built on), every operation bounded and every refusal returning `""` | seed-min, gen2, native | `test-stdlib-store` |
 | `stdlib/store_index.sa` | derived indexes over `stdlib/store.sa` tables (`ix_*`): `ix_hash_build`/`ix_ordered_build`, exact-key `ix_lookup`/`ix_rows_for`/`ix_count_key`, binary-searched `ix_range`/`ix_between`, `ix_min_key`/`ix_max_key`/`ix_rows`, and staleness detection (`ix_stale`/`ix_valid`) that refuses to answer from a snapshot the table has outgrown; 43 `make` definitions | seed-min, gen2, native | `test-stdlib-store` |
@@ -1554,3 +1555,129 @@ The new helpers keep failure explicit and stay inside the published runtime:
 Executable oracles: `selfhost/stdlib_vnext_test.sa` (portable subset) and
 `selfhost/stdlib_vnext_io_test.sa` + `selfhost/stdlib_vnext_worker.sa`
 (filesystem/process subset), run by `./sx target test-stdlib-next`.
+
+## Byte regular expressions (2026-11-17)
+
+`stdlib/regex.sa` answers "does this text contain that shape, and where" without
+leaving Sayanox and without a host regex engine. It matches **bytes**, because a
+Sayanox string is a NUL-free byte string: `.` is one byte and a class covers
+0..255. Use the text layer (`stdlib/utf8.sa`, `stdlib/ugraph.sa`) first when the
+question is about characters rather than the bytes that carry them.
+
+```sayanox
+use "stdlib/regex.sa"
+
+hold log = "2026-11-17 INFO worker: job 41 finished"
+show rx_text("\\d+ms|\\d+", "took 120ms, retry 41")   // "120ms": the left alternative wins
+show rx_span("\\d+", log)                                // [0, 4]: byte offsets, ready to slice
+show rx_group("(\\w+): job (\\d+)", log, 2)             // "41"
+show rx_replace("(\\w+) (\\w+)", "left right", "\\2 \\1")  // "right left"
+show rx_full("[a-z]+", "hello")                           // 1
+show rx_valid("(a*)*")                                    // 0: refused, not guessed at
+```
+
+### Syntax
+
+| Form | Meaning |
+| --- | --- |
+| `abc` | literal bytes |
+| `.` | any byte except LF (`\n`) |
+| `[a-z0-9_]`, `[^abc]` | class, negated class; `]` first is a literal `]` |
+| `\d` `\D` `\w` `\W` `\s` `\S` | ASCII classes and their complements |
+| `\n` `\r` `\t` `\f` `\v` `\a` `\xHH` | escapes; `\` before punctuation is that punctuation |
+| `(x)`, `(?:x)` | capturing and non-capturing group |
+| `x|y` | alternation, left preferred |
+| `x*` `x+` `x?` | greedy repetition; `x*?` `x+?` `x??` are the lazy forms |
+| `x{m}` `x{m,}` `x{m,n}` | counted repetition (m, n <= 64); `?` suffix makes it lazy |
+| `^` `$` `\A` `\Z` `\b` `\B` | start, end (also before a final LF), absolute start/end, word boundary/not |
+
+Preference order is Python's backtracking order, not POSIX leftmost-longest:
+`a|ab` on `"ab"` matches `"a"`, `a*` is greedy, and `re.fullmatch`'s
+backtrack-until-the-end rule is what `rx_full` implements. `\d`, `\w` and `\s`
+are the ASCII sets (`re.ASCII`), so the result does not depend on the host
+locale or on Unicode tables being present.
+
+### API
+
+Spans are byte offsets, ready to slice; a capture vector is
+`2*(groups+1)` numbers where group 0 is the whole match and an unset group is
+`-1`. Lists hold numbers only, so the API returns spans and one group's text at a
+time instead of a list of strings.
+
+| Call | Answer |
+| --- | --- |
+| `rx_valid(p)` | 1 when the pattern compiles, 0 when it is refused |
+| `rx_find(p, s)` / `rx_find_from(p, s, at)` | `[1, start, end, g0s, g0e, g1s, ...]`, `[0]` no match, `[-1]` refused or out of budget |
+| `rx_span(p, s)` / `rx_groups(p, s)` | `[start, end]` / the flat capture vector; `[]` when there is no match |
+| `rx_text(p, s)` / `rx_group(p, s, k)` | the matched text / group `k`'s text (`""` when unset) |
+| `rx_slice_s(s, a, b)` | `s[a:b]` with Python's clamping, for turning a span into text |
+| `rx_search(p, s)` | 1 when a match exists anywhere |
+| `rx_match(p, s)` / `rx_full(p, s)` | anchored at 0 / anchored and covering the subject |
+| `rx_find_all(p, s)` / `rx_count(p, s)` | flat `[s0, e0, s1, e1, ...]` / how many |
+| `rx_replace(p, s, r)` / `rx_replace_first` | text with every / the first match replaced |
+| `rx_escape(s)` | a pattern that matches `s` literally |
+
+In a replacement, `&` is the whole match, `\1`..`\9` are group texts, and `\\`
+is a literal backslash. `rx_find_all` follows Python's post-3.7 rule: after an
+empty match the search resumes at the same offset with an empty match refused,
+so a non-empty match may start where the empty one did (`.*?` on `"ab"` yields
+`(0,0)`, `(0,1)`, `(1,1)`, `(1,2)`, `(2,2)`).
+
+### Refusals and limits
+
+An engine that silently reinterprets a pattern is worse than one that says no.
+`rx_valid` answers 0 and `rx_find`/`rx_find_from` answer `[-1]` for:
+backreferences (`\1`), lookaround (`(?=`, `(?!`, `(?<=`, `(?<!`), inline flags
+(`(?i)`), named groups,
+possessive quantifiers (`x*+`), POSIX classes (`[[:alpha:]]`), unknown letter
+escapes (`\q`), a class range whose end is below its start, an unterminated
+class or group, a quantifier with nothing to repeat, `{m,n}` with `m > n`, and
+an **unbounded** repetition whose body can match the empty string (`(a*)*`,
+`(a?)+`) — that last one would loop forever, so it is refused instead of
+hanging. The helpers that have no -1 channel are precise about it: `rx_search`,
+`rx_match` and `rx_full` answer 0, `rx_span`, `rx_groups` and `rx_find_all`
+answer `[]`, and `rx_replace` returns the subject unchanged — the same answer
+they give for "no match", which is why `rx_valid` and `rx_find` exist to tell
+the two cases apart. `a{,3}`, `a{` and `a{1,2,3}` are literals, the same reading
+Python gives them.
+
+Limits are stated: `rx_max_pattern()` 200 bytes, `rx_max_input()` 1024 bytes,
+`rx_max_groups()` 16, `rx_max_matches()` 256 per find-all/replace,
+`rx_max_repeat()` 64 for one counted repetition, `rx_max_output()` 65,536 bytes
+for a replacement result (a longer one is cut at the cap), and `rx_budget()`
+250,000 steps per anchored attempt. The VM is a real backtracking
+engine, so a pathological pattern can still need exponential time; the step
+budget turns that into an answer of -1 instead of a hang, and -1 is reported
+apart from "no match". A whole search tries up to `len(subject)+1` offsets, so
+the budget is per attempt and not a promise about one `rx_find` call.
+
+### Verification
+
+`selfhost/stdlib_regex_test.sa` carries **288 frozen expectations** and its
+`.want` bytes are the oracle:
+
+| Lines | Oracle |
+| --- | --- |
+| 64 | pattern acceptance, form by form |
+| 92 | first-match spans and captures |
+| 20 | anchored match and full match (including fullmatch backtracking) |
+| 24 | non-overlapping matches and counts, including the empty-match rule |
+| 32 | replacements, `&` and `\1`..`\9` |
+| 24 | `rx_escape` and each escaped pattern matching its own text |
+| 20 | the refusal contract, hand-written because Python accepts those forms |
+| 12 | the limit contract: subject, pattern, match and step caps, pinned |
+
+Everything except the two contract sections is computed outside Sayanox with
+Python 3.11's own `re` module in `re.ASCII` mode. Beyond the frozen fixture, the
+implementation was fuzzed against the same oracle on 3,520 generated
+pattern/subject pairs (spans, capture vectors, anchored, full, find-all) and 720
+replacement pairs, with **zero disagreements**; those fuzz corpora are not
+tracked. The fixture matches byte for byte on seed-min, gen2 and `native_aot`
+through `test-stdlib-next`, and `examples/regex.sa` is a runnable tour whose
+output is identical on seed-min, gen2, native_aot and the full native compiler.
+
+**Not** implemented: Unicode-aware classes (`\w` is ASCII even on UTF-8 text),
+case-insensitive matching, multiline mode, backreferences, lookaround, named
+groups, streaming over a subject larger than the input cap, and a
+`rx_split` that would need a list of strings — that list type does not exist
+here, so callers split with `rx_find_all` spans plus `rx_slice_s`.
